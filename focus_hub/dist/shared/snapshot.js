@@ -5,14 +5,9 @@ exports.formatClock = formatClock;
 exports.formatDateTime = formatDateTime;
 exports.formatAgo = formatAgo;
 exports.collectSnapshot = collectSnapshot;
-const ROOT = "/sdcard/Download/Operit";
-exports.PATHS = {
-    taskState: `${ROOT}/drift/task_state.txt`,
-    eventsDir: `${ROOT}/events`,
-    execRules: `${ROOT}/events/EXEC_RULES.tsv`,
-    activeRules: `${ROOT}/events/ACTIVE_RULES.md`,
-    actionLog: `${ROOT}/events/ACTION_LOG.tsv`,
-};
+const paths_js_1 = require("./paths.js");
+Object.defineProperty(exports, "PATHS", { enumerable: true, get: function () { return paths_js_1.PATHS; } });
+const progress_js_1 = require("./progress.js");
 // WorkManager 不接受小于 15 分钟的周期，宿主会把间隔抬到 15 分钟
 const MIN_SCHEDULE_INTERVAL_MS = 15 * 60 * 1000;
 const STALE_GRACE_MS = 5 * 60 * 1000;
@@ -283,10 +278,10 @@ async function loadEvents(now, appNames) {
     const today = dateKey(new Date(now));
     const yesterday = dateKey(new Date(now - 24 * 3600 * 1000));
     let date = today;
-    let path = `${exports.PATHS.eventsDir}/${today}/events.jsonl`;
+    let path = `${paths_js_1.PATHS.eventsDir}/${today}/events.jsonl`;
     try {
         if (!(await fileExists(path))) {
-            const fallback = `${exports.PATHS.eventsDir}/${yesterday}/events.jsonl`;
+            const fallback = `${paths_js_1.PATHS.eventsDir}/${yesterday}/events.jsonl`;
             if (!(await fileExists(fallback))) {
                 return { value: null, source: { label: "事件流", status: "MISSING", detail: `今天和昨天都没有事件文件：${path}` } };
             }
@@ -336,12 +331,24 @@ async function loadEvents(now, appNames) {
 function splitColumns(line) {
     return line.split(/\t+|\s{2,}/).map((cell) => cell.trim()).filter(Boolean);
 }
+// 进展文件不存在只说明还没人记过，不算数据源缺失
+async function loadProgress(now) {
+    const label = "用户进展";
+    try {
+        const records = await (0, progress_js_1.readRecentProgress)(8, now);
+        return { value: records, source: { label, status: "OK", detail: `${records.length} 条` } };
+    }
+    catch (error) {
+        return { value: null, source: { label, status: "ERROR", detail: errorText(error) } };
+    }
+}
 async function collectSnapshot() {
     const now = Date.now();
-    const [task, workflows, usage] = await Promise.all([
-        loadFile("当前任务", exports.PATHS.taskState, async () => parseTaskState((await readHead(exports.PATHS.taskState, 50)).lines)),
+    const [task, workflows, usage, progress] = await Promise.all([
+        loadFile("当前任务", paths_js_1.PATHS.taskState, async () => parseTaskState((await readHead(paths_js_1.PATHS.taskState, 50)).lines)),
         loadWorkflows(now),
         loadUsage(),
+        loadProgress(now),
     ]);
     const appNames = new Map();
     for (const row of usage.value?.rows ?? []) {
@@ -349,17 +356,17 @@ async function collectSnapshot() {
     }
     const [events, actions, execRules, activeRules] = await Promise.all([
         loadEvents(now, appNames),
-        loadFile("动作审计", exports.PATHS.actionLog, async () => {
-            const tail = await readTail(exports.PATHS.actionLog, ACTION_TAIL_LINES);
+        loadFile("动作审计", paths_js_1.PATHS.actionLog, async () => {
+            const tail = await readTail(paths_js_1.PATHS.actionLog, ACTION_TAIL_LINES);
             const rows = tail.lines.filter((line) => line.trim()).map(splitColumns);
             rows.reverse();
             return { totalLines: tail.totalLines, rows };
         }),
-        loadFile("行动规则表", exports.PATHS.execRules, async () => (await readHead(exports.PATHS.execRules, 60)).lines
+        loadFile("行动规则表", paths_js_1.PATHS.execRules, async () => (await readHead(paths_js_1.PATHS.execRules, 60)).lines
             .filter((line) => line.trim() && !line.trim().startsWith("#"))
             .map(splitColumns)),
-        loadFile("生效规则", exports.PATHS.activeRules, async () => {
-            const head = await readHead(exports.PATHS.activeRules, 400);
+        loadFile("生效规则", paths_js_1.PATHS.activeRules, async () => {
+            const head = await readHead(paths_js_1.PATHS.activeRules, 400);
             const tagCounts = {};
             const lines = [];
             for (const tag of RULE_TAGS)
@@ -385,6 +392,7 @@ async function collectSnapshot() {
         actions: actions.value,
         execRules: execRules.value,
         activeRules: activeRules.value,
-        sources: [task.source, workflows.source, usage.source, events.source, actions.source, execRules.source, activeRules.source],
+        progress: progress.value,
+        sources: [task.source, progress.source, workflows.source, usage.source, events.source, actions.source, execRules.source, activeRules.source],
     };
 }

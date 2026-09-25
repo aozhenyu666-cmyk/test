@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.default = Screen;
 const snapshot_js_1 = require("../../shared/snapshot.js");
 const format_js_1 = require("../../shared/format.js");
+const progress_js_1 = require("../../shared/progress.js");
 const nav_js_1 = require("../../shared/nav.js");
 const COLLAPSED_WORKFLOWS = 6;
 const RECENT_CHATS = 30;
@@ -31,6 +32,9 @@ function Screen(ctx) {
     const [chatsError, setChatsError] = ctx.useState("chatsError", "");
     const [query, setQuery] = ctx.useState("query", "");
     const [openingId, setOpeningId] = ctx.useState("openingId", "");
+    const [progressKind, setProgressKind] = ctx.useState("progressKind", "progress");
+    const [progressText, setProgressText] = ctx.useState("progressText", "");
+    const [savingProgress, setSavingProgress] = ctx.useState("savingProgress", false);
     const loadingRef = ctx.useRef("loadingRef", false);
     const chatsLoadingRef = ctx.useRef("chatsLoadingRef", false);
     const autoLoadedRef = ctx.useRef("autoLoadedRef", false);
@@ -90,6 +94,30 @@ function Screen(ctx) {
         }
         finally {
             setOpeningId("");
+        }
+    }
+    async function saveProgress() {
+        const text = progressText.trim();
+        if (!text || savingProgress)
+            return;
+        setSavingProgress(true);
+        try {
+            const result = await (0, progress_js_1.recordProgress)({ kind: progressKind, userQuote: text, via: "dashboard" });
+            if (result.status === "REJECTED") {
+                await ctx.showToast(result.reason);
+                return;
+            }
+            setProgressText("");
+            await ctx.showToast(result.status === "DUPLICATE" ? "刚刚已经记过这一句" : `已记下：${progress_js_1.KIND_LABEL[result.record.kind]}`);
+            const records = await (0, progress_js_1.readRecentProgress)(8);
+            if (snap)
+                setSnap({ ...snap, progress: records });
+        }
+        catch (error) {
+            await ctx.showToast(`记录失败：${errorText(error)}`);
+        }
+        finally {
+            setSavingProgress(false);
         }
     }
     // ---------- 基础组件 ----------
@@ -168,6 +196,40 @@ function Screen(ctx) {
                 tile("今日事件", s.events ? `${s.events.totalLines} 条` : "未读取到", latestEvent ? `最新 ${latestEvent.time.split("–").pop()} ${latestEvent.type}` : "—"),
                 tile("用得最多", topApp ? topApp.appName : "—", topApp ? `${topApp.foregroundMinutes} 分钟 · 过去 24 小时` : "没有记录"),
             ]),
+        ]);
+    }
+    function progressSection(s) {
+        const kinds = ["progress", "stuck", "done", "pause"];
+        const kindButton = (kind) => progressKind === kind
+            ? UI.Button({ text: progress_js_1.KIND_LABEL[kind], weight: 1, onClick: () => setProgressKind(kind) })
+            : UI.OutlinedButton({ weight: 1, onClick: () => setProgressKind(kind) }, UI.Text({ text: progress_js_1.KIND_LABEL[kind] }));
+        const records = s.progress ?? [];
+        return card([
+            sectionTitle("我的进展"),
+            muted("在这里记，或在任何对话里直接说，AI 会用 report_progress 帮你记。判断和提醒会先看这里。"),
+            UI.Row({ fillMaxWidth: true, spacing: 6 }, kinds.map(kindButton)),
+            UI.TextField({
+                fillMaxWidth: true,
+                value: progressText,
+                onValueChange: setProgressText,
+                placeholder: "比如：投了两家 / 简历卡在项目经历",
+            }),
+            UI.Button({
+                fillMaxWidth: true,
+                text: savingProgress ? "记录中…" : `记下（${progress_js_1.KIND_LABEL[progressKind]}）`,
+                enabled: !savingProgress && progressText.trim().length > 0,
+                onClick: saveProgress,
+            }),
+            ...(records.length === 0
+                ? [muted(s.progress ? "今天和昨天还没有记录" : "进展记录读取失败，见数据源")]
+                : records.slice(0, 5).map((r) => UI.Column({ fillMaxWidth: true, spacing: 1 }, [
+                    UI.Row({ fillMaxWidth: true, spacing: 8 }, [
+                        UI.Text({ text: progress_js_1.KIND_LABEL[r.kind] ?? r.kind, style: "labelLarge", color: r.kind === "stuck" ? colors.error : colors.primary }),
+                        UI.Text({ text: r.iso.slice(5, 16), style: "labelMedium", color: colors.onSurfaceVariant, weight: 1 }),
+                        UI.Text({ text: r.via === "dashboard" ? "主控台" : "对话", style: "labelSmall", color: colors.onSurfaceVariant }),
+                    ]),
+                    UI.Text({ text: `「${r.user_quote}」`, style: "bodyMedium", color: colors.onSurface, maxLines: 3 }),
+                ]))),
         ]);
     }
     function sourceWarning(s) {
@@ -318,6 +380,7 @@ function Screen(ctx) {
             items.push(overview(snap));
             if (warning)
                 items.push(warning);
+            items.push(progressSection(snap));
             items.push(workflowSection(snap), usageSection(snap), eventsSection(snap), moreSection(snap));
         }
         return UI.LazyColumn({ weight: 1, fillMaxWidth: true, padding: { horizontal: 16, vertical: 12 }, spacing: 12 }, items);

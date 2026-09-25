@@ -81,6 +81,11 @@ global.Tools = {
   Files: {
     exists: async (p) => ({ exists: p in FILES, isDirectory: false }),
     readPart: async (p, s, e) => readPart(p, s, e),
+    write: async (p, content, append) => {
+      record("write", p, append);
+      FILES[p] = append && FILES[p] ? FILES[p] + content : content;
+      return { successful: true, details: "" };
+    },
   },
   Workflow: {
     getAll: async () => ({ workflows, totalCount: workflows.length }),
@@ -140,6 +145,7 @@ global.Intent = class {
   }
 };
 
+global.getChatId = () => "chat-xyz";
 global.Icons = new Proxy({}, { get: (_, k) => String(k) });
 global.ToolPkg = { registered: [], registerUiRoute(d) { this.registered.push(["route", d.id, d.route]); }, registerNavigationEntry(d) { this.registered.push(["nav", d.id, d.surface, d.icon]); } };
 
@@ -210,6 +216,28 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   assert(empty.sources.filter((s) => s.status === "MISSING").length === 5 && empty.task === null, "missing files reported as MISSING, not fabricated");
   Object.assign(FILES, saved);
 
+  // ---------- progress ----------
+  const prog = require(path.join(DIST, "packages/focus_hub_progress.js"));
+  const progPath = `/sdcard/Download/Operit/progress/${today}.jsonl`;
+  const bad1 = await prog.report_progress({ kind: "maybe", user_quote: "x" });
+  const bad2 = await prog.report_progress({ kind: "done", user_quote: "  " });
+  assert(!bad1.success && !bad2.success && !(progPath in FILES), "rejects unknown kind and empty quote without writing");
+  const ok1 = await prog.report_progress({ kind: "done", user_quote: "投了两家", note: "Boss 直聘" });
+  const rec = JSON.parse(FILES[progPath].trim().split("\n")[0]);
+  assert(ok1.success && ok1.status === "RECORDED", "report_progress records");
+  assert(rec.type === "USER_PROGRESS" && rec.origin === "REAL_USER" && rec.via === "chat_ai" && rec.kind === "done", "record carries type/origin/via/kind");
+  assert(rec.user_quote === "投了两家" && rec.task === "求职投递" && rec.ptr === "T_1789439490890_tma07.txt" && rec.chat_id === "chat-xyz", "record carries verbatim quote, task, PTR and chat id");
+  assert(calls.some((c) => c[0] === "write" && c[1] === progPath && c[2] === true), "append-only write to progress/<date>.jsonl");
+  const dup = await prog.report_progress({ kind: "done", user_quote: "投了两家" });
+  assert(dup.status === "DUPLICATE" && FILES[progPath].trim().split("\n").length === 1, "same sentence within 10 min not written twice");
+  await prog.report_progress({ kind: "stuck", user_quote: "简历项目经历写不下去" });
+  const recent = await prog.get_recent_progress({ limit: 5 });
+  assert(recent.success && recent.records.split("\n")[0].includes("卡住") && recent.records.includes("投了两家"), "get_recent_progress newest first");
+  const snap2 = await collectSnapshot();
+  assert(snap2.progress.length === 2 && snap2.sources.find((x) => x.label === "用户进展").status === "OK", "snapshot includes progress");
+  const out2 = await data.get_dashboard_snapshot();
+  assert(out2.snapshot.includes("用户最近亲口说的进展") && out2.snapshot.includes("「简历项目经历写不下去」"), "AI snapshot surfaces progress first");
+
   // ---------- nav tools ----------
   const nav = require(path.join(DIST, "packages/focus_hub_nav.js"));
   calls.length = 0;
@@ -252,6 +280,22 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   const before = calls.filter((c) => c[0] === "usage").length;
   await tree.props.onLoad();
   assert(calls.filter((c) => c[0] === "usage").length === before, "onLoad does not reload twice");
+
+  // ---------- UI: progress card ----------
+  await tree.props.onLoad.call(null);
+  ctx.state.set("snap", await collectSnapshot());
+  tree = Screen(ctx);
+  t = texts(tree);
+  assert(t.includes("我的进展") && t.includes("「简历项目经历写不下去」"), "progress card shows recent records");
+  const saveBtn = find(tree, (n) => n.type === "Button" && String(n.props.text).startsWith("记下"));
+  assert(saveBtn.props.enabled === false, "记下 disabled while text empty");
+  await button(tree, "提交").props.onClick();
+  ctx.state.set("progressText", "又投了一家");
+  tree = Screen(ctx);
+  await find(tree, (n) => n.type === "Button" && String(n.props.text).startsWith("记下（提交）")).props.onClick();
+  const lines = FILES[progPath].trim().split("\n").map((l) => JSON.parse(l));
+  assert(lines.length === 3 && lines[2].via === "dashboard" && lines[2].kind === "done" && lines[2].user_quote === "又投了一家", "dashboard writes via=dashboard");
+  assert(ctx.state.get("progressText") === "" && ctx.state.get("snap").progress[0].user_quote === "又投了一家", "input cleared and card refreshed");
 
   // ---------- UI: chats ----------
   calls.length = 0;

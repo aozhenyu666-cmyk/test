@@ -7,6 +7,7 @@ import {
   type WorkflowHealth,
   type WorkflowRow,
 } from "./snapshot.js";
+import { KIND_LABEL } from "./progress.js";
 
 export const HEALTH_LABEL: Record<WorkflowHealth, string> = {
   FAILED: "最近失败",
@@ -47,6 +48,15 @@ export function snapshotToText(snap: Snapshot): string {
     );
   } else {
     out.push("未读取到");
+  }
+
+  out.push("", "■ 用户最近亲口说的进展（REAL_USER，新的在前；判断和提醒前先看这里）");
+  if (snap.progress && snap.progress.length > 0) {
+    for (const r of snap.progress) {
+      out.push(`- ${r.iso} ${KIND_LABEL[r.kind] ?? r.kind}：「${r.user_quote}」${r.note ? `（${r.note}）` : ""}`);
+    }
+  } else {
+    out.push(snap.progress ? "今天和昨天没有记录" : "未读取到");
   }
 
   out.push("", "■ 工作流（SUCCESS 只代表执行层成功，不代表动作生效或用户已看到）");

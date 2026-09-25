@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "toolpkg_id": "local.focus_hub",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "api_version": "1.0.0",
   "main": "dist/main.js",
   "display_name": {
@@ -10,7 +10,7 @@
     "default": "Focus Hub"
   },
   "description": {
-    "zh": "只读看板 + 会话导航。汇总当前任务、工作流运行、App 使用、最近事件、规则和动作审计；会话页按固定入口和最近活跃整理所有对话，点开即在主界面打开。附带页面跳转工具，可在工作流里把用户带到主控台。不冻结、不解冻、不触发工作流。",
+    "zh": "只读看板 + 会话导航。汇总当前任务、工作流运行、App 使用、最近事件、规则和动作审计；会话页按固定入口和最近活跃整理所有对话，点开即在主界面打开。附带用户进展统一入口（report_progress，只追加写 /sdcard/Download/Operit/progress/）和页面跳转工具，可在工作流里把用户带到主控台。不冻结、不解冻、不触发工作流。",
     "en": "Read-only dashboard plus a chat navigator, with navigation tools for workflows. Performs no freeze, unfreeze or workflow actions.",
     "default": "Read-only dashboard plus a chat navigator."
   },
@@ -27,6 +27,19 @@
       "description": {
         "zh": "给 AI 用的只读工具：读取看板快照。",
         "en": "Read-only tool for the AI: read the dashboard snapshot."
+      }
+    },
+    {
+      "id": "focus_hub_progress",
+      "entry": "dist/packages/focus_hub_progress.js",
+      "enabled_by_default": true,
+      "display_name": {
+        "zh": "用户进展",
+        "en": "User Progress"
+      },
+      "description": {
+        "zh": "用户进展的统一入口：对话里的 AI 记录用户亲口说的进展，判断和提醒前先读。只追加写 progress 目录。",
+        "en": "Single entry for user-stated progress. Append-only."
       }
     },
     {

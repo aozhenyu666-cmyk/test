@@ -14,6 +14,12 @@ import {
 } from "../../shared/snapshot.js";
 import { HEALTH_LABEL, SOURCE_LABEL } from "../../shared/format.js";
 import {
+  KIND_LABEL,
+  readRecentProgress,
+  recordProgress,
+  type ProgressKind,
+} from "../../shared/progress.js";
+import {
   isPinned,
   listChats,
   LONG_CHAT_MESSAGES,
@@ -55,6 +61,10 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
   const [chatsError, setChatsError] = ctx.useState("chatsError", "");
   const [query, setQuery] = ctx.useState("query", "");
   const [openingId, setOpeningId] = ctx.useState("openingId", "");
+
+  const [progressKind, setProgressKind] = ctx.useState<ProgressKind>("progressKind", "progress");
+  const [progressText, setProgressText] = ctx.useState("progressText", "");
+  const [savingProgress, setSavingProgress] = ctx.useState("savingProgress", false);
 
   const loadingRef = ctx.useRef("loadingRef", false);
   const chatsLoadingRef = ctx.useRef("chatsLoadingRef", false);
@@ -108,6 +118,27 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
       await ctx.showToast(`打开失败：${errorText(error)}`);
     } finally {
       setOpeningId("");
+    }
+  }
+
+  async function saveProgress() {
+    const text = progressText.trim();
+    if (!text || savingProgress) return;
+    setSavingProgress(true);
+    try {
+      const result = await recordProgress({ kind: progressKind, userQuote: text, via: "dashboard" });
+      if (result.status === "REJECTED") {
+        await ctx.showToast(result.reason);
+        return;
+      }
+      setProgressText("");
+      await ctx.showToast(result.status === "DUPLICATE" ? "刚刚已经记过这一句" : `已记下：${KIND_LABEL[result.record.kind]}`);
+      const records = await readRecentProgress(8);
+      if (snap) setSnap({ ...snap, progress: records });
+    } catch (error) {
+      await ctx.showToast(`记录失败：${errorText(error)}`);
+    } finally {
+      setSavingProgress(false);
     }
   }
 
@@ -221,6 +252,44 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
           topApp ? `${topApp.foregroundMinutes} 分钟 · 过去 24 小时` : "没有记录"
         ),
       ]),
+    ]);
+  }
+
+  function progressSection(s: Snapshot): ComposeNode {
+    const kinds: ProgressKind[] = ["progress", "stuck", "done", "pause"];
+    const kindButton = (kind: ProgressKind) =>
+      progressKind === kind
+        ? UI.Button({ text: KIND_LABEL[kind], weight: 1, onClick: () => setProgressKind(kind) })
+        : UI.OutlinedButton({ weight: 1, onClick: () => setProgressKind(kind) }, UI.Text({ text: KIND_LABEL[kind] }));
+    const records = s.progress ?? [];
+    return card([
+      sectionTitle("我的进展"),
+      muted("在这里记，或在任何对话里直接说，AI 会用 report_progress 帮你记。判断和提醒会先看这里。"),
+      UI.Row({ fillMaxWidth: true, spacing: 6 }, kinds.map(kindButton)),
+      UI.TextField({
+        fillMaxWidth: true,
+        value: progressText,
+        onValueChange: setProgressText,
+        placeholder: "比如：投了两家 / 简历卡在项目经历",
+      }),
+      UI.Button({
+        fillMaxWidth: true,
+        text: savingProgress ? "记录中…" : `记下（${KIND_LABEL[progressKind]}）`,
+        enabled: !savingProgress && progressText.trim().length > 0,
+        onClick: saveProgress,
+      }),
+      ...(records.length === 0
+        ? [muted(s.progress ? "今天和昨天还没有记录" : "进展记录读取失败，见数据源")]
+        : records.slice(0, 5).map((r) =>
+            UI.Column({ fillMaxWidth: true, spacing: 1 }, [
+              UI.Row({ fillMaxWidth: true, spacing: 8 }, [
+                UI.Text({ text: KIND_LABEL[r.kind] ?? r.kind, style: "labelLarge", color: r.kind === "stuck" ? colors.error : colors.primary }),
+                UI.Text({ text: r.iso.slice(5, 16), style: "labelMedium", color: colors.onSurfaceVariant, weight: 1 }),
+                UI.Text({ text: r.via === "dashboard" ? "主控台" : "对话", style: "labelSmall", color: colors.onSurfaceVariant }),
+              ]),
+              UI.Text({ text: `「${r.user_quote}」`, style: "bodyMedium", color: colors.onSurface, maxLines: 3 }),
+            ])
+          )),
     ]);
   }
 
@@ -383,6 +452,7 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
       const warning = sourceWarning(snap);
       items.push(overview(snap));
       if (warning) items.push(warning);
+      items.push(progressSection(snap));
       items.push(workflowSection(snap), usageSection(snap), eventsSection(snap), moreSection(snap));
     }
     return UI.LazyColumn(

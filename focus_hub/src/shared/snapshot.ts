@@ -1,11 +1,7 @@
-const ROOT = "/sdcard/Download/Operit";
-export const PATHS = {
-  taskState: `${ROOT}/drift/task_state.txt`,
-  eventsDir: `${ROOT}/events`,
-  execRules: `${ROOT}/events/EXEC_RULES.tsv`,
-  activeRules: `${ROOT}/events/ACTIVE_RULES.md`,
-  actionLog: `${ROOT}/events/ACTION_LOG.tsv`,
-};
+import { PATHS } from "./paths.js";
+import { readRecentProgress, type ProgressRecord } from "./progress.js";
+
+export { PATHS };
 
 // WorkManager 不接受小于 15 分钟的周期，宿主会把间隔抬到 15 分钟
 const MIN_SCHEDULE_INTERVAL_MS = 15 * 60 * 1000;
@@ -74,6 +70,7 @@ export interface Snapshot {
   actions: { totalLines: number; rows: string[][] } | null;
   execRules: string[][] | null;
   activeRules: { tagCounts: Record<string, number>; lines: string[] } | null;
+  progress: ProgressRecord[] | null;
   sources: SourceInfo[];
 }
 
@@ -418,13 +415,25 @@ function splitColumns(line: string): string[] {
   return line.split(/\t+|\s{2,}/).map((cell) => cell.trim()).filter(Boolean);
 }
 
+// 进展文件不存在只说明还没人记过，不算数据源缺失
+async function loadProgress(now: number): Promise<Loaded<ProgressRecord[]>> {
+  const label = "用户进展";
+  try {
+    const records = await readRecentProgress(8, now);
+    return { value: records, source: { label, status: "OK", detail: `${records.length} 条` } };
+  } catch (error) {
+    return { value: null, source: { label, status: "ERROR", detail: errorText(error) } };
+  }
+}
+
 export async function collectSnapshot(): Promise<Snapshot> {
   const now = Date.now();
 
-  const [task, workflows, usage] = await Promise.all([
+  const [task, workflows, usage, progress] = await Promise.all([
     loadFile("当前任务", PATHS.taskState, async () => parseTaskState((await readHead(PATHS.taskState, 50)).lines)),
     loadWorkflows(now),
     loadUsage(),
+    loadProgress(now),
   ]);
 
   const appNames = new Map<string, string>();
@@ -469,6 +478,7 @@ export async function collectSnapshot(): Promise<Snapshot> {
     actions: actions.value,
     execRules: execRules.value,
     activeRules: activeRules.value,
-    sources: [task.source, workflows.source, usage.source, events.source, actions.source, execRules.source, activeRules.source],
+    progress: progress.value,
+    sources: [task.source, progress.source, workflows.source, usage.source, events.source, actions.source, execRules.source, activeRules.source],
   };
 }
