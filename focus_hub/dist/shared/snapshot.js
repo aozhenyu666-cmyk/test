@@ -1,11 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PATHS = exports.FIXED_CHAT_TITLE = void 0;
+exports.PATHS = void 0;
 exports.formatClock = formatClock;
 exports.formatDateTime = formatDateTime;
 exports.formatAgo = formatAgo;
 exports.collectSnapshot = collectSnapshot;
-exports.FIXED_CHAT_TITLE = "主控台";
 const ROOT = "/sdcard/Download/Operit";
 exports.PATHS = {
     taskState: `${ROOT}/drift/task_state.txt`,
@@ -116,21 +115,66 @@ function parseTaskState(lines) {
         syncedAt: map.SYNCED_AT ?? "",
     };
 }
-async function loadScheduleIntervalMs(workflowId) {
+// 与宿主 WorkflowScheduler.calculateCronInterval 的简化规则一致
+function cronSchedule(expression) {
+    const parts = expression.trim().split(/\s+/);
+    if (parts.length < 5)
+        return { label: `cron ${expression}`, intervalMs: null };
+    const [minute, hour] = parts;
+    if (/^\d+$/.test(minute) && /^\d+$/.test(hour)) {
+        return { label: `每天 ${pad2(Number(hour))}:${pad2(Number(minute))}`, intervalMs: 24 * 3600 * 1000 };
+    }
+    if (minute === "0" && hour.startsWith("*/")) {
+        const n = Number(hour.slice(2));
+        if (n > 0)
+            return { label: `每 ${n} 小时`, intervalMs: n * 3600 * 1000 };
+    }
+    if (minute.startsWith("*/") && hour === "*") {
+        const n = Number(minute.slice(2));
+        if (n > 0)
+            return { label: `每 ${n} 分钟`, intervalMs: n * 60 * 1000 };
+    }
+    return { label: `cron ${expression}`, intervalMs: null };
+}
+async function loadSchedule(workflowId) {
     const detail = await Tools.Workflow.get(workflowId);
     for (const node of detail.nodes ?? []) {
+        // get_workflow 返回的节点可能只有 __type 没有 type 字段，按 triggerType 识别
         const trigger = node;
-        if (trigger.type !== "trigger" || trigger.triggerType !== "schedule")
+        if (trigger.triggerType !== "schedule")
             continue;
         const config = trigger.triggerConfig ?? {};
         if (config.enabled === "false")
             continue;
-        if (config.schedule_type !== "interval")
-            return null;
-        const interval = Number(config.interval_ms);
-        return Number.isFinite(interval) && interval > 0 ? interval : null;
+        const repeat = config.repeat !== "false";
+        let info;
+        if (config.schedule_type === "interval") {
+            const interval = Math.max(Number(config.interval_ms) || 0, MIN_SCHEDULE_INTERVAL_MS);
+            info = { label: `每 ${Math.round(interval / 60000)} 分钟`, intervalMs: interval };
+        }
+        else if (config.schedule_type === "cron" && config.cron_expression) {
+            info = cronSchedule(config.cron_expression);
+        }
+        else if (config.schedule_type === "specific_time") {
+            return { label: `一次性 ${config.specific_time ?? ""}`.trim(), intervalMs: null };
+        }
+        else {
+            continue;
+        }
+        if (!repeat)
+            return { label: `${info.label}（不重复）`, intervalMs: null };
+        if (info.intervalMs != null) {
+            info.intervalMs = Math.max(info.intervalMs, MIN_SCHEDULE_INTERVAL_MS);
+        }
+        return info;
     }
     return null;
+}
+function staleThresholdMs(intervalMs) {
+    // 短周期容忍错过一拍；日级任务只多给一小时左右的余量
+    if (intervalMs <= 3600 * 1000)
+        return intervalMs * 2 + STALE_GRACE_MS;
+    return intervalMs + Math.max(3600 * 1000, intervalMs / 8);
 }
 async function loadWorkflows(now) {
     const label = "工作流";
@@ -166,14 +210,13 @@ async function loadWorkflows(now) {
                 return row;
             }
             try {
-                const interval = await loadScheduleIntervalMs(row.id);
-                if (interval == null) {
-                    row.note = "非间隔定时，不判断迟到";
+                const schedule = await loadSchedule(row.id);
+                if (schedule == null) {
+                    row.note = "手动触发";
                     return row;
                 }
-                const effective = Math.max(interval, MIN_SCHEDULE_INTERVAL_MS);
-                row.note = `每 ${Math.round(effective / 60000)} 分钟`;
-                if (now - row.lastExecutionTime > effective * 2 + STALE_GRACE_MS) {
+                row.note = schedule.label;
+                if (schedule.intervalMs != null && now - row.lastExecutionTime > staleThresholdMs(schedule.intervalMs)) {
                     row.health = "STALE";
                 }
             }

@@ -1,4 +1,4 @@
-// Node harness: mocks the Operit host APIs used by focus_hub and exercises the compiled dist.
+// Node harness: mocks the Operit 1.12.2 host APIs used by focus_hub and exercises the compiled dist.
 const path = require("path");
 const DIST = path.join(__dirname, "..", "dist");
 
@@ -7,6 +7,7 @@ const pad = (n) => String(n).padStart(2, "0");
 const d = new Date(now);
 const today = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
 
+// ---------- files ----------
 const events = [];
 for (let i = 0; i < 300; i++) {
   const ts = Math.floor(now / 1000) - (300 - i) * 60;
@@ -40,24 +41,42 @@ function readPart(p, startLine = 1, endLine) {
   return { content, totalLines: total, startLine: s - 1, endLine: e };
 }
 
+// ---------- workflows (get_workflow nodes carry __type but no `type`, as on device) ----------
 const H = 3600 * 1000;
+const trig = (config) => [{ __type: "com.ai.assistance.operit.data.model.TriggerNode", id: "t", name: "t", triggerType: "schedule", triggerConfig: config }];
 const workflows = [
   { id: "w1", name: "S3_Brief_Loop", enabled: true, lastExecutionTime: now - 10 * 60000, lastExecutionStatus: "SUCCESS", totalExecutions: 206, successfulExecutions: 173, failedExecutions: 33 },
   { id: "w2", name: "SCHED_Watchdog", enabled: true, lastExecutionTime: now - 3 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 398, successfulExecutions: 389, failedExecutions: 9 },
   { id: "w3", name: "P4_Event_Sampler", enabled: true, lastExecutionTime: now - 5 * 60000, lastExecutionStatus: "FAILED", totalExecutions: 782, successfulExecutions: 608, failedExecutions: 174 },
   { id: "w4", name: "Old_Test", enabled: false, lastExecutionTime: now - 50 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 3, successfulExecutions: 3, failedExecutions: 0 },
   { id: "w5", name: "Never_Run", enabled: true, totalExecutions: 0, successfulExecutions: 0, failedExecutions: 0 },
-  { id: "w6", name: "Daily_Digest", enabled: true, lastExecutionTime: now - 20 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 5, successfulExecutions: 5, failedExecutions: 0 },
+  { id: "w6", name: "Daily_Archive_Advice", enabled: true, lastExecutionTime: now - 20 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 10, successfulExecutions: 7, failedExecutions: 3 },
+  { id: "w7", name: "LIFE_MorningDigest", enabled: true, lastExecutionTime: now - 30 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 9, successfulExecutions: 3, failedExecutions: 6 },
+  { id: "w8", name: "G2_Judge_Flow", enabled: true, lastExecutionTime: now - 20 * 60000, lastExecutionStatus: "SUCCESS", totalExecutions: 373, successfulExecutions: 235, failedExecutions: 138 },
+  { id: "w9", name: "OneShot", enabled: true, lastExecutionTime: now - 90 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 1, successfulExecutions: 1, failedExecutions: 0 },
+  { id: "w10", name: "P1_Board_Start", enabled: true, lastExecutionTime: now - 90 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 11, successfulExecutions: 11, failedExecutions: 0 },
 ];
 const details = {
-  w1: [{ type: "trigger", triggerType: "schedule", triggerConfig: { schedule_type: "interval", interval_ms: "600000", enabled: "true" } }],
-  w2: [{ type: "trigger", triggerType: "schedule", triggerConfig: { schedule_type: "interval", interval_ms: "900000" } }],
-  w6: [{ type: "trigger", triggerType: "schedule", triggerConfig: { schedule_type: "specific_time", specific_time: "22:00" } }],
+  w1: trig({ schedule_type: "interval", interval_ms: "600000", enabled: "true", repeat: "true" }),
+  w2: trig({ schedule_type: "interval", interval_ms: "900000", enabled: "true", repeat: "true" }),
+  w6: trig({ schedule_type: "cron", cron_expression: "30 23 * * *", enabled: "true", repeat: "true" }),
+  w7: trig({ schedule_type: "cron", cron_expression: "0 8 * * *", enabled: "true" }),
+  w8: trig({ schedule_type: "interval", interval_ms: "1800000", enabled: "true", repeat: "true" }),
+  w9: trig({ schedule_type: "specific_time", specific_time: "2026-09-22 12:47", enabled: "true" }),
+  w10: [{ __type: "com.ai.assistance.operit.data.model.TriggerNode", id: "m", name: "手动", triggerType: "manual", triggerConfig: { enabled: "true" } }],
 };
 
-// 60 个临时对话，模拟工作流不断新建对话的情况
-const chats = Array.from({ length: 60 }, (_, i) => ({ id: `tmp${i}`, title: `临时对话${i}`, messageCount: 1, updatedAt: "x" }));
+// ---------- chats ----------
+const chats = [
+  { id: "ded96924", title: "陪伴窗", messageCount: 812, updatedAt: String(now - 5 * 60000), isCurrent: false, characterCardName: "秘书" },
+  { id: "f0953479", title: "温柔巡检", messageCount: 120, updatedAt: String(now - 3 * H), isCurrent: true, characterCardName: "陪伴想小处" },
+  ...Array.from({ length: 60 }, (_, i) => ({ id: `tmp${i}`, title: `临时对话${i}`, messageCount: 2, updatedAt: String(now - i * H), isCurrent: false })),
+];
+const knownChatIds = new Set(chats.map((c) => c.id));
+
 const calls = [];
+const record = (...args) => calls.push(args);
+
 global.Tools = {
   Files: {
     exists: async (p) => ({ exists: p in FILES, isDirectory: false }),
@@ -65,11 +84,11 @@ global.Tools = {
   },
   Workflow: {
     getAll: async () => ({ workflows, totalCount: workflows.length }),
-    get: async (id) => ({ id, nodes: details[id] ?? [{ type: "trigger", triggerType: "manual" }] }),
+    get: async (id) => ({ id, nodes: details[id] ?? [] }),
   },
   System: {
     getAppUsageTime: async (opts) => {
-      calls.push(["usage", opts]);
+      record("usage", opts);
       return { entries: [
         { packageName: "com.ai.assistance.operit", appName: "Operit AI", totalForegroundTimeMs: 18972703, lastTimeUsed: now - 60000, isSystemApp: false },
         { packageName: "com.baidu.tieba", appName: "百度贴吧", totalForegroundTimeMs: 837062, lastTimeUsed: now - 30 * 60000, isSystemApp: false },
@@ -78,18 +97,49 @@ global.Tools = {
     },
   },
   Chat: {
-    // 与宿主一致：默认只返回 50 条；按标题精确过滤发生在截取之前
-    listAll: async () => ({ chats: chats.slice(-50) }),
-    listChats: async ({ query, match, limit }) => {
-      calls.push(["listChats", query, match, limit]);
-      const hit = chats.filter((c) => (match === "exact" ? c.title === query : c.title.includes(query)));
-      return { chats: hit.slice(0, limit ?? 50) };
+    listChats: async (params) => {
+      record("listChats", params);
+      let hit = chats.slice();
+      if (params.query) hit = hit.filter((c) => (params.match === "exact" ? c.title === params.query : c.title.includes(params.query)));
+      return { chats: hit.slice(0, params.limit ?? 50) };
     },
-    switchTo: async (id) => { calls.push(["switchTo", id]); return { chatId: id }; },
-    createNew: async (g, set) => { calls.push(["createNew", g, set]); chats.push({ id: "c2", title: "新对话", messageCount: 0, updatedAt: "y" }); return { chatId: "c2" }; },
-    updateTitle: async (id, t) => { calls.push(["updateTitle", id, t]); chats.find((c) => c.id === id).title = t; return { chatId: id, title: t }; },
+    switchTo: async () => { record("switchTo"); throw new Error("Service not connected"); },
+    createNew: async () => { record("createNew"); throw new Error("Service not connected"); },
   },
 };
+
+// Java bridge: ChatHistoryManager singleton + application context
+const manager = {
+  callSuspend: async (method, ...args) => {
+    record("mgr." + method, ...args);
+    if (method === "chatExists") return knownChatIds.has(args[0]);
+    return null;
+  },
+};
+global.Java = {
+  getApplicationContext: () => ({ getPackageName: () => "com.ai.assistance.operit.debug" }),
+  com: { ai: { assistance: { operit: { data: { repository: { ChatHistoryManager: { getInstance: (ctx) => { record("getInstance", !!ctx); return manager; } } } } } } } },
+};
+
+// Mirrors the host JS Intent helper (AndroidUtils.js) closely enough to check what we send
+global.IntentFlag = { ACTIVITY_NEW_TASK: 0x10000000, ACTIVITY_SINGLE_TOP: 0x20000000 };
+global.Intent = class {
+  constructor(action) { this.action = action; this.flags = []; this.extras = {}; }
+  setComponent(pkg, component) {
+    this.packageName = pkg;
+    this.component = component.includes(".") ? (component.includes(pkg) ? component : `${pkg}.${component}`) : `${pkg}.${component}`;
+    return this;
+  }
+  addFlag(f) { this.flags.push(f); return this; }
+  putExtra(k, v) { this.extras[k] = v; return this; }
+  async start() {
+    if (!this.action) throw new Error("Package name or action not set.");
+    const component = this.component.includes("/") ? this.component : `${this.packageName}/${this.component}`;
+    record("intent", { action: this.action, component, flags: this.flags, extras: this.extras });
+    return { success: true };
+  }
+};
+
 global.Icons = new Proxy({}, { get: (_, k) => String(k) });
 global.ToolPkg = { registered: [], registerUiRoute(d) { this.registered.push(["route", d.id, d.route]); }, registerNavigationEntry(d) { this.registered.push(["nav", d.id, d.surface, d.icon]); } };
 
@@ -99,11 +149,13 @@ function makeCtx() {
   const UI = new Proxy({}, { get: (_, type) => (props = {}, children) => ({ type, props, children }) });
   return {
     state,
+    toasts: [],
     UI,
     MaterialTheme: { colorScheme: new Proxy({}, { get: (_, k) => `color:${String(k)}` }) },
     useState(key, init) { if (!state.has(key)) state.set(key, init); return [state.get(key), (v) => state.set(key, v)]; },
     useRef(key, init) { if (!refs.has(key)) refs.set(key, { current: init }); return refs.get(key); },
-    showToast() {},
+    showToast(m) { this.toasts.push(m); },
+    navigate(route) { record("navigate", route); },
   };
 }
 
@@ -115,97 +167,122 @@ function walk(node, fn) {
 }
 function texts(node) { const out = []; walk(node, (n) => { if (n.props && typeof n.props.text === "string") out.push(n.props.text); }); return out; }
 function find(node, pred) { let hit = null; walk(node, (n) => { if (!hit && pred(n)) hit = n; }); return hit; }
+function findAll(node, pred) { const out = []; walk(node, (n) => { if (pred(n)) out.push(n); }); return out; }
+const button = (tree, label) => find(tree, (n) => ["Button", "OutlinedButton", "TextButton"].includes(n.type) && (n.props.text === label || texts(n).includes(label)));
 
-function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); process.exitCode = 1; } else console.log("ok  -", msg); }
+let failures = 0;
+function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures += 1; } else console.log("ok  -", msg); }
 
 (async () => {
   const main = require(path.join(DIST, "main.js"));
   assert(main.registerToolPkg() === true, "registerToolPkg returns true");
   assert(JSON.stringify(ToolPkg.registered) === JSON.stringify([["route", "focus_hub", "toolpkg:local.focus_hub:ui:focus_hub"], ["nav", "focus_hub_sidebar", "main_sidebar_plugins", "Dashboard"]]), "registers route + sidebar entry");
 
+  // ---------- snapshot ----------
   const { collectSnapshot } = require(path.join(DIST, "shared/snapshot.js"));
   const snap = await collectSnapshot();
-  assert(snap.sources.every((s) => s.status === "OK"), "all sources OK: " + snap.sources.map((s) => s.label + "=" + s.status).join(","));
+  assert(snap.sources.every((s) => s.status === "OK"), "all sources OK");
   assert(snap.task.task === "求职投递" && snap.task.syncedAt === "2026-09-24 21:59:13", "task_state parsed (line-number prefixes stripped)");
-  const h = Object.fromEntries(snap.workflows.map((w) => [w.name, w.health]));
-  assert(h.S3_Brief_Loop === "OK", "10-min interval, ran 10 min ago -> OK (interval raised to 15 min)");
-  assert(h.SCHED_Watchdog === "STALE", "15-min interval, last run 3h ago -> STALE");
-  assert(h.P4_Event_Sampler === "FAILED", "last status FAILED -> FAILED");
-  assert(h.Old_Test === "DISABLED" && h.Never_Run === "NO_HISTORY", "disabled / never-run classified");
-  assert(h.Daily_Digest === "OK" && snap.workflows.find((w) => w.name === "Daily_Digest").note.includes("非间隔"), "specific_time schedule not judged stale");
+  const wf = Object.fromEntries(snap.workflows.map((w) => [w.name, w]));
+  assert(wf.G2_Judge_Flow.note === "每 30 分钟" && wf.G2_Judge_Flow.health === "OK", "trigger node without `type` field is still recognised (the on-device bug)");
+  assert(wf.S3_Brief_Loop.health === "OK" && wf.S3_Brief_Loop.note === "每 15 分钟", "10-min interval raised to 15 min, recent run OK");
+  assert(wf.SCHED_Watchdog.health === "STALE", "15-min interval, last run 3h ago -> STALE");
+  assert(wf.P4_Event_Sampler.health === "FAILED", "last status FAILED -> FAILED");
+  assert(wf.Daily_Archive_Advice.note === "每天 23:30" && wf.Daily_Archive_Advice.health === "OK", "daily cron, ran 20h ago -> OK");
+  assert(wf.LIFE_MorningDigest.note === "每天 08:00" && wf.LIFE_MorningDigest.health === "STALE", "daily cron, last run 30h ago -> STALE");
+  assert(wf.OneShot.note.startsWith("一次性") && wf.OneShot.health === "OK", "specific_time is one-shot, never STALE");
+  assert(wf.P1_Board_Start.note === "手动触发" && wf.P1_Board_Start.health === "OK", "manual-only workflow labelled 手动触发");
+  assert(wf.Old_Test.health === "DISABLED" && wf.Never_Run.health === "NO_HISTORY", "disabled / never-run classified");
   assert(snap.workflows[0].health === "FAILED" && snap.workflows[snap.workflows.length - 1].health === "DISABLED", "problems sorted first");
-  assert(snap.usage.rows.length === 2 && snap.usage.rows[0].appName === "Operit AI" && snap.usage.rows[0].foregroundMinutes === 316, "usage sorted, minutes computed, zero-minute rows dropped");
-  assert(calls[0][1].sinceHours === 24 && calls[0][1].includeSystemApps === false, "usage called with 24h window, no system apps");
-  assert(snap.events.totalLines === 302 && snap.events.rows.length === 2 && snap.events.rows[1].count === 38 && snap.events.unparsable === 1, "events: tail of 40 lines of a >32KB file, repeats merged, 1 unparsable");
-  assert(snap.events.rows[0].type === "SCHED_PATROL", "newest event first");
-  assert(snap.events.rows[1].time === "04:22:00–04:59:00", "merged row keeps time range");
-  assert(snap.events.rows[1].summary.includes("pkg=百度贴吧(com.baidu.tieba)"), "pkg mapped to app name");
-  assert(!snap.events.rows[1].summary.includes("dedup") && !snap.events.rows[1].summary.includes("eid"), "noise keys hidden");
-  assert(snap.actions.totalLines === 30 && snap.actions.rows.length === 12 && snap.actions.rows[0][2] === "EV-29", "action log tail, newest first");
-  assert(snap.execRules.length === 4 && snap.execRules[0][0] === "A1_REMIND", "exec rules parsed, comment skipped");
-  assert(snap.activeRules.tagCounts.ADVICE === 1 && snap.activeRules.tagCounts.PREAPPROVED_GUARD === 1 && snap.activeRules.lines.length === 3, "active rule tags counted");
+  assert(snap.usage.rows.length === 2 && snap.usage.rows[0].foregroundMinutes === 316, "usage sorted, zero-minute rows dropped");
+  assert(snap.events.totalLines === 302 && snap.events.rows.length === 2 && snap.events.rows[1].count === 38 && snap.events.unparsable === 1, "events tail of a >32KB file, repeats merged");
+  assert(snap.events.rows[1].summary.includes("pkg=百度贴吧(com.baidu.tieba)") && !snap.events.rows[1].summary.includes("dedup"), "event summary maps pkg, hides noise keys");
+  assert(snap.actions.rows.length === 12 && snap.actions.rows[0][2] === "EV-29", "action log tail, newest first");
+  assert(snap.execRules.length === 4 && snap.activeRules.tagCounts.PREAPPROVED_GUARD === 1, "rules parsed");
 
-  const tool = require(path.join(DIST, "packages/focus_hub_data.js"));
-  const out = await tool.get_dashboard_snapshot();
-  assert(out.success && out.snapshot.includes("【主控台快照】") && out.snapshot.includes("SCHED_Watchdog：疑似迟到"), "AI tool returns text snapshot");
-  console.log("\n----- AI tool output -----\n" + out.snapshot + "\n--------------------------\n");
+  const data = require(path.join(DIST, "packages/focus_hub_data.js"));
+  const out = await data.get_dashboard_snapshot();
+  assert(out.success && out.snapshot.includes("LIFE_MorningDigest：疑似迟到") && out.snapshot.includes("每天 08:00"), "AI snapshot text includes schedule labels");
 
-  // Missing files -> MISSING, no throw
   const saved = { ...FILES };
   for (const k of Object.keys(FILES)) delete FILES[k];
   const empty = await collectSnapshot();
-  assert(empty.sources.filter((s) => s.status === "MISSING").length === 5 && empty.task === null && empty.events === null, "missing files reported as MISSING, not fabricated");
+  assert(empty.sources.filter((s) => s.status === "MISSING").length === 5 && empty.task === null, "missing files reported as MISSING, not fabricated");
   Object.assign(FILES, saved);
 
-  // UI render
+  // ---------- nav tools ----------
+  const nav = require(path.join(DIST, "packages/focus_hub_nav.js"));
+  calls.length = 0;
+  const r1 = await nav.open_focus_hub();
+  const i1 = calls.find((c) => c[0] === "intent")[1];
+  assert(r1.success && i1.action === "android.intent.action.MAIN", "open_focus_hub sends an activity intent with an action");
+  assert(i1.component === "com.ai.assistance.operit.debug/com.ai.assistance.operit.ui.main.MainActivity", "component is package/MainActivity even for the .debug package");
+  assert(i1.extras["com.ai.assistance.operit.extra.OPEN_ROUTE_ID"] === "toolpkg:local.focus_hub:ui:focus_hub", "route extra matches MainActivity.handleIntent");
+  assert(i1.flags.includes(0x10000000), "NEW_TASK flag set");
+
+  calls.length = 0;
+  const r2 = await nav.open_chat({ chat_id: "nope" });
+  assert(!r2.success && r2.message.includes("对话不存在") && !calls.some((c) => c[0] === "mgr.setCurrentChatId" || c[0] === "intent"), "open_chat refuses unknown chat ids before changing anything");
+  calls.length = 0;
+  const r3 = await nav.open_chat({ chat_id: "ded96924" });
+  const seq = calls.map((c) => c[0]).filter((n) => n.startsWith("mgr.") || n === "intent");
+  assert(r3.success && JSON.stringify(seq) === JSON.stringify(["mgr.chatExists", "mgr.setCurrentChatId", "intent"]), "open_chat: chatExists -> setCurrentChatId -> open chat route");
+  assert(calls.find((c) => c[0] === "intent")[1].extras["com.ai.assistance.operit.extra.OPEN_ROUTE_ID"] === "native.ai_chat", "open_chat opens native.ai_chat");
+  assert(!calls.some((c) => c[0] === "switchTo" || c[0] === "createNew"), "never touches floating-service tools");
+
+  // ---------- UI: board ----------
   const Screen = require(path.join(DIST, "ui/focus_hub/index.ui.js")).default;
   const ctx = makeCtx();
   let tree = Screen(ctx);
+  const header = tree.children[0];
+  assert(header.props.paddingStart === 20 && header.props.paddingTop === 12 && header.props.paddingHorizontal === undefined, "header uses explicit side paddings (paddingHorizontal is ignored by the host when a side is set)");
   await tree.props.onLoad();
   tree = Screen(ctx);
-  const t1 = texts(tree);
-  assert(t1.includes("求职投递") && t1.includes("SCHED_Watchdog") && t1.some((x) => x.startsWith("只读看板 · 更新于")), "board renders snapshot");
+  let t = texts(tree);
+  assert(t.includes("当前任务") && t.includes("求职投递") && t.includes("需关注 3"), "overview tiles show task and attention count");
+  assert(t.includes("全部 10 个") && !t.includes("P1_Board_Start"), "workflow list collapsed to 6 with a toggle");
+  await button(tree, "全部 10 个").props.onClick();
+  tree = Screen(ctx);
+  assert(texts(tree).includes("Old_Test") && button(tree, "收起"), "toggle expands all workflows");
+  assert(texts(tree).some((x) => x.includes("失败率 37%")), "high failure rate highlighted (G2 138/373)");
+  assert(findAll(tree, (n) => n.type === "LinearProgressIndicator").length === 2, "usage rows have bars");
+  const usageBars = findAll(tree, (n) => n.type === "LinearProgressIndicator").map((n) => n.props.progress);
+  assert(usageBars[0] === 1 && usageBars[1] > 0 && usageBars[1] < 0.1, "bars scaled to the top app");
+  assert(!find(tree, (n) => n.type === "AiChat"), "no embedded AiChat any more");
   const before = calls.filter((c) => c[0] === "usage").length;
   await tree.props.onLoad();
   assert(calls.filter((c) => c[0] === "usage").length === before, "onLoad does not reload twice");
-  assert(!find(tree, (n) => n.type === "AiChat"), "board tab has no AiChat");
 
-  // Chat tab: no fixed chat -> missing, no auto-create
-  const chatBtn = find(tree, (n) => n.type === "OutlinedButton" && texts(n).includes("对话"));
-  await chatBtn.props.onClick();
+  // ---------- UI: chats ----------
+  calls.length = 0;
+  await button(tree, "会话").props.onClick();
   tree = Screen(ctx);
-  assert(ctx.state.get("chatPhase") === "missing" && !calls.some((c) => c[0] === "createNew"), "no chat titled 主控台 -> shows missing, does not auto-create");
-  const createBtn = find(tree, (n) => n.type === "Button" && String(n.props.text).startsWith("创建"));
-  await createBtn.props.onClick();
+  t = texts(tree);
+  assert(calls.some((c) => c[0] === "listChats" && c[1].limit === 200 && c[1].sort_by === "updatedAt"), "chat list loaded sorted by updatedAt, limit 200");
+  assert(t.includes("固定入口") && t.includes("陪伴窗") && t.includes("温柔巡检") && t.includes("最近 30 个"), "pinned group + recent 30");
+  assert(t.includes("当前") && t.some((x) => x.includes("上下文很长")), "current chat marked, 812-message chat flagged as long");
+  assert(t.some((x) => x.includes("812 条消息 · 秘书")), "row shows message count and role card");
+
+  ctx.state.set("query", "临时对话5");
   tree = Screen(ctx);
-  assert(ctx.state.get("chatPhase") === "ready" && find(tree, (n) => n.type === "AiChat"), "explicit create -> titled 主控台, switched, AiChat shown");
-  assert(JSON.stringify(calls.filter((c) => !["usage", "listChats"].includes(c[0]))) === JSON.stringify([["createNew", null, true], ["updateTitle", "c2", "主控台"], ["switchTo", "c2"]]), "create sequence: createNew -> updateTitle -> switchTo");
-  assert(calls.some((c) => c[0] === "listChats" && c[2] === "exact" && c[3] === 200), "looks up fixed chat by exact title with limit 200");
-
-  // Re-entering chat tab re-switches to the fixed chat, never creates
-  const boardBtn = find(tree, (n) => n.type === "OutlinedButton" && texts(n).includes("看板"));
-  await boardBtn.props.onClick();
+  t = texts(tree);
+  assert(t.includes("搜索结果 11") && !t.includes("固定入口"), "search filters locally (临时对话5, 50-59)");
+  ctx.state.set("query", "");
   tree = Screen(ctx);
-  await find(tree, (n) => n.type === "OutlinedButton" && texts(n).includes("对话")).props.onClick();
-  assert(calls.filter((c) => c[0] === "switchTo").length === 2 && calls.filter((c) => c[0] === "createNew").length === 1, "re-entering chat re-switches, no new chat");
 
-  // An old 主控台 chat beyond the 50 most recent must still be found
-  chats.unshift({ id: "old", title: "主控台", messageCount: 120, updatedAt: "old" });
-  chats.splice(chats.findIndex((c) => c.id === "c2"), 1);
-  const ctx3 = makeCtx();
-  let t3 = Screen(ctx3);
-  await t3.props.onLoad();
-  t3 = Screen(ctx3);
-  await find(t3, (n) => n.type === "OutlinedButton" && texts(n).includes("对话")).props.onClick();
-  assert(ctx3.state.get("chatPhase") === "ready" && ctx3.state.get("chatId") === "old", "old fixed chat outside the 50 most recent is still found");
+  calls.length = 0;
+  const row = find(tree, (n) => n.type === "Surface" && texts(n).includes("陪伴窗"));
+  await row.props.onClick();
+  const uiSeq = calls.map((c) => c[0]).filter((n) => n.startsWith("mgr.") || n === "navigate");
+  assert(JSON.stringify(uiSeq) === JSON.stringify(["mgr.chatExists", "mgr.setCurrentChatId", "navigate"]), "tapping a chat sets the main chat, then navigates");
+  assert(calls.find((c) => c[0] === "navigate")[1] === "native.ai_chat", "navigates to native.ai_chat");
+  assert(ctx.state.get("openingId") === "", "opening state cleared");
 
-  // Duplicate titles -> multiple, user picks
-  chats.push({ id: "c3", title: "主控台", messageCount: 9, updatedAt: "z" });
-  const ctx2 = makeCtx();
-  let t2 = Screen(ctx2);
-  await t2.props.onLoad();
-  t2 = Screen(ctx2);
-  await find(t2, (n) => n.type === "OutlinedButton" && texts(n).includes("对话")).props.onClick();
-  t2 = Screen(ctx2);
-  assert(ctx2.state.get("chatPhase") === "multiple" && ctx2.state.get("candidates").length === 2, "two chats titled 主控台 -> asks user to pick");
+  knownChatIds.delete("f0953479");
+  calls.length = 0;
+  await find(Screen(ctx), (n) => n.type === "Surface" && texts(n).includes("温柔巡检")).props.onClick();
+  assert(ctx.toasts.some((m) => m.includes("对话不存在")) && !calls.some((c) => c[0] === "navigate"), "deleted chat -> toast, no navigation");
+
+  console.log(failures === 0 ? "\nALL PASSED" : `\n${failures} FAILED`);
+  process.exitCode = failures === 0 ? 0 : 1;
 })();

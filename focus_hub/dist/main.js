@@ -5,11 +5,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerToolPkg = registerToolPkg;
 const index_ui_js_1 = __importDefault(require("./ui/focus_hub/index.ui.js"));
-const FOCUS_HUB_ROUTE = "toolpkg:local.focus_hub:ui:focus_hub";
+const nav_js_1 = require("./shared/nav.js");
 function registerToolPkg() {
     ToolPkg.registerUiRoute({
         id: "focus_hub",
-        route: FOCUS_HUB_ROUTE,
+        route: nav_js_1.FOCUS_HUB_ROUTE,
         runtime: "compose_dsl",
         screen: index_ui_js_1.default,
         params: {},
@@ -21,7 +21,7 @@ function registerToolPkg() {
     });
     ToolPkg.registerNavigationEntry({
         id: "focus_hub_sidebar",
-        route: FOCUS_HUB_ROUTE,
+        route: nav_js_1.FOCUS_HUB_ROUTE,
         surface: "main_sidebar_plugins",
         title: {
             zh: "主控台",

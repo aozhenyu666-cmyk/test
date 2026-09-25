@@ -1,6 +1,5 @@
 import focusHubScreen from "./ui/focus_hub/index.ui.js";
-
-const FOCUS_HUB_ROUTE = "toolpkg:local.focus_hub:ui:focus_hub";
+import { FOCUS_HUB_ROUTE } from "./shared/nav.js";
 
 export function registerToolPkg(): boolean {
   ToolPkg.registerUiRoute({

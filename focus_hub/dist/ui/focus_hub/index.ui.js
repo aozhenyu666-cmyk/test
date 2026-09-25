@@ -3,11 +3,20 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.default = Screen;
 const snapshot_js_1 = require("../../shared/snapshot.js");
 const format_js_1 = require("../../shared/format.js");
+const nav_js_1 = require("../../shared/nav.js");
+const COLLAPSED_WORKFLOWS = 6;
+const RECENT_CHATS = 30;
 function errorText(error) {
     if (error && typeof error === "object" && "message" in error) {
         return String(error.message);
     }
     return String(error);
+}
+function parseTime(value) {
+    if (!value)
+        return null;
+    const n = /^\d+$/.test(value) ? Number(value) : Date.parse(value);
+    return Number.isFinite(n) && n > 0 ? n : null;
 }
 function Screen(ctx) {
     const { UI } = ctx;
@@ -16,13 +25,16 @@ function Screen(ctx) {
     const [snap, setSnap] = ctx.useState("snap", null);
     const [loading, setLoading] = ctx.useState("loading", false);
     const [loadError, setLoadError] = ctx.useState("loadError", "");
-    const [chatPhase, setChatPhase] = ctx.useState("chatPhase", "idle");
-    const [chatId, setChatId] = ctx.useState("chatId", "");
-    const [chatError, setChatError] = ctx.useState("chatError", "");
-    const [candidates, setCandidates] = ctx.useState("candidates", []);
+    const [showAllWorkflows, setShowAllWorkflows] = ctx.useState("showAllWorkflows", false);
+    const [showMore, setShowMore] = ctx.useState("showMore", false);
+    const [chats, setChats] = ctx.useState("chats", null);
+    const [chatsError, setChatsError] = ctx.useState("chatsError", "");
+    const [query, setQuery] = ctx.useState("query", "");
+    const [openingId, setOpeningId] = ctx.useState("openingId", "");
     const loadingRef = ctx.useRef("loadingRef", false);
+    const chatsLoadingRef = ctx.useRef("chatsLoadingRef", false);
     const autoLoadedRef = ctx.useRef("autoLoadedRef", false);
-    async function refresh() {
+    async function refreshBoard() {
         if (loadingRef.current)
             return;
         loadingRef.current = true;
@@ -39,68 +51,69 @@ function Screen(ctx) {
             setLoading(false);
         }
     }
-    async function enterChat(id) {
-        setChatPhase("binding");
+    async function refreshChats() {
+        if (chatsLoadingRef.current)
+            return;
+        chatsLoadingRef.current = true;
+        setChatsError("");
         try {
-            await Tools.Chat.switchTo(id);
-            setChatId(id);
-            setChatPhase("ready");
+            setChats(await (0, nav_js_1.listChats)(""));
         }
         catch (error) {
-            setChatError(errorText(error));
-            setChatPhase("error");
+            setChatsError(errorText(error));
+        }
+        finally {
+            chatsLoadingRef.current = false;
         }
     }
-    async function bindChat() {
-        setChatPhase("binding");
-        setChatError("");
-        try {
-            // listAll 默认只返回最近 50 个对话；按标题精确过滤后再取，避免漏掉较旧的固定对话
-            const list = await Tools.Chat.listChats({ query: snapshot_js_1.FIXED_CHAT_TITLE, match: "exact", limit: 200 });
-            const matches = (list.chats ?? []).filter((chat) => String(chat.title ?? "").trim() === snapshot_js_1.FIXED_CHAT_TITLE);
-            if (matches.length === 0) {
-                setChatPhase("missing");
-                return;
-            }
-            if (matches.length > 1) {
-                setCandidates(matches.map((chat) => ({
-                    id: chat.id,
-                    messageCount: chat.messageCount,
-                    updatedAt: String(chat.updatedAt ?? ""),
-                })));
-                setChatPhase("multiple");
-                return;
-            }
-            await enterChat(matches[0].id);
-        }
-        catch (error) {
-            setChatError(errorText(error));
-            setChatPhase("error");
-        }
-    }
-    async function createFixedChat() {
-        setChatPhase("binding");
-        try {
-            const created = await Tools.Chat.createNew(undefined, true);
-            await Tools.Chat.updateTitle(created.chatId, snapshot_js_1.FIXED_CHAT_TITLE);
-            await enterChat(created.chatId);
-        }
-        catch (error) {
-            setChatError(errorText(error));
-            setChatPhase("error");
-        }
+    async function refreshCurrent() {
+        if (tab === "chats")
+            await refreshChats();
+        else
+            await refreshBoard();
     }
     async function openTab(next) {
         setTab(next);
-        if (next !== "chat")
+        if (next === "chats" && chats == null)
+            await refreshChats();
+    }
+    async function openChat(entry) {
+        if (openingId)
             return;
-        // 主界面可能已切到别的对话，每次进入都重新切回固定对话
-        if (chatId) {
-            await enterChat(chatId);
+        setOpeningId(entry.id);
+        try {
+            await (0, nav_js_1.setMainChat)(entry.id);
+            await ctx.navigate(nav_js_1.NATIVE_CHAT_ROUTE);
         }
-        else {
-            await bindChat();
+        catch (error) {
+            await ctx.showToast(`打开失败：${errorText(error)}`);
         }
+        finally {
+            setOpeningId("");
+        }
+    }
+    // ---------- 基础组件 ----------
+    function muted(text, maxLines) {
+        return UI.Text({ text, style: "bodySmall", color: colors.onSurfaceVariant, maxLines });
+    }
+    function card(children, spacing = 8) {
+        return UI.Card({ fillMaxWidth: true, containerColor: colors.surface, elevation: 1 }, UI.Column({ fillMaxWidth: true, padding: 16, spacing }, children));
+    }
+    function sectionTitle(title, trailing) {
+        return UI.Row({ fillMaxWidth: true, verticalAlignment: "center" }, [
+            UI.Text({ text: title, style: "titleMedium", color: colors.onSurface, weight: 1 }),
+            ...(trailing ? [trailing] : []),
+        ]);
+    }
+    function textButton(label, onClick) {
+        return UI.TextButton({ onClick }, UI.Text({ text: label, style: "labelLarge", color: colors.primary }));
+    }
+    function tile(label, value, caption, valueColor) {
+        return UI.Card({ weight: 1, containerColor: colors.surfaceVariant, elevation: 0 }, UI.Column({ fillMaxWidth: true, padding: 12, spacing: 2 }, [
+            UI.Text({ text: label, style: "labelMedium", color: colors.onSurfaceVariant }),
+            UI.Text({ text: value, style: "titleMedium", color: valueColor ?? colors.onSurface, maxLines: 1 }),
+            muted(caption, 1),
+        ]));
     }
     function healthColor(health) {
         if (health === "FAILED" || health === "STALE")
@@ -109,181 +122,278 @@ function Screen(ctx) {
             return colors.primary;
         return colors.onSurfaceVariant;
     }
-    function muted(text) {
-        return UI.Text({ text, style: "bodySmall", color: colors.onSurfaceVariant });
-    }
-    function body(text) {
-        return UI.Text({ text, style: "bodyMedium", color: colors.onSurface });
-    }
-    function section(title, subtitle, children) {
-        return UI.Card({ fillMaxWidth: true, containerColor: colors.surface, elevation: 1 }, UI.Column({ fillMaxWidth: true, padding: 14, spacing: 6 }, [
-            UI.Text({ text: title, style: "titleMedium", color: colors.onSurface }),
-            ...(subtitle ? [muted(subtitle)] : []),
-            ...children,
-        ]));
-    }
+    // ---------- 顶部 ----------
     function header() {
-        const status = loading
-            ? "正在读取…"
-            : snap
-                ? `只读看板 · 更新于 ${(0, snapshot_js_1.formatClock)(snap.generatedAt)}`
-                : "只读看板";
-        return UI.Row({ fillMaxWidth: true, paddingHorizontal: 16, paddingTop: 12, verticalAlignment: "center" }, [
+        let status = "只读看板";
+        if (tab === "chats") {
+            status = chats ? `共 ${chats.length} 个对话` : "正在读取对话…";
+        }
+        else if (loading) {
+            status = "正在读取…";
+        }
+        else if (snap) {
+            status = `更新于 ${(0, snapshot_js_1.formatClock)(snap.generatedAt)}`;
+        }
+        return UI.Row(
+        // 单边 padding 会让宿主忽略 paddingHorizontal，所以三边都显式写
+        { fillMaxWidth: true, paddingStart: 20, paddingEnd: 8, paddingTop: 12, verticalAlignment: "center" }, [
             UI.Column({ weight: 1, spacing: 2 }, [
                 UI.Text({ text: "主控台", style: "headlineSmall", color: colors.onSurface }),
                 muted(status),
             ]),
-            UI.IconButton({ icon: Icons.Refresh, enabled: !loading, onClick: refresh }),
+            UI.IconButton({ icon: Icons.Refresh, enabled: !loading, onClick: refreshCurrent }),
         ]);
     }
     function tabs() {
         const item = (value, label) => tab === value
             ? UI.Button({ text: label, weight: 1, onClick: () => openTab(value) })
             : UI.OutlinedButton({ weight: 1, onClick: () => openTab(value) }, UI.Text({ text: label }));
-        return UI.Row({ fillMaxWidth: true, paddingHorizontal: 16, spacing: 8 }, [
+        return UI.Row({ fillMaxWidth: true, padding: { horizontal: 16 }, spacing: 8 }, [
             item("board", "看板"),
-            item("chat", "对话"),
+            item("chats", "会话"),
         ]);
     }
-    function taskSection(s) {
-        if (!s.task)
-            return section("当前任务", "task_state.txt", [muted("未读取到，见底部数据源")]);
-        return section("当前任务", `同步于 ${s.task.syncedAt || "未记录"}`, [
-            UI.Text({ text: s.task.task || "未记录", style: "titleLarge", color: colors.primary }),
-            body(`状态 ${s.task.state || "未记录"} · 模式 ${s.task.mode || "未记录"}`),
-        ]);
-    }
-    function workflowSection(s) {
+    // ---------- 看板 ----------
+    function overview(s) {
         const attention = s.workflows.filter((w) => w.health === "FAILED" || w.health === "STALE").length;
-        const rows = s.workflows.map((row) => UI.Column({ fillMaxWidth: true, spacing: 2, paddingVertical: 4 }, [
+        const enabled = s.workflows.filter((w) => w.enabled).length;
+        const latestEvent = s.events?.rows[0];
+        const topApp = s.usage?.rows[0];
+        return UI.Column({ fillMaxWidth: true, spacing: 8 }, [
             UI.Row({ fillMaxWidth: true, spacing: 8 }, [
+                tile("当前任务", s.task?.task || "未读取到", s.task ? `${s.task.state || "?"} · ${s.task.mode || "?"}` : "task_state.txt", s.task ? colors.primary : colors.error),
+                tile("工作流", attention > 0 ? `需关注 ${attention}` : "全部正常", `共 ${s.workflows.length} · 启用 ${enabled}`, attention > 0 ? colors.error : colors.primary),
+            ]),
+            UI.Row({ fillMaxWidth: true, spacing: 8 }, [
+                tile("今日事件", s.events ? `${s.events.totalLines} 条` : "未读取到", latestEvent ? `最新 ${latestEvent.time.split("–").pop()} ${latestEvent.type}` : "—"),
+                tile("用得最多", topApp ? topApp.appName : "—", topApp ? `${topApp.foregroundMinutes} 分钟 · 过去 24 小时` : "没有记录"),
+            ]),
+        ]);
+    }
+    function sourceWarning(s) {
+        const bad = s.sources.filter((source) => source.status !== "OK");
+        if (bad.length === 0)
+            return null;
+        return card([
+            UI.Text({ text: `${bad.length} 个数据源没读到`, style: "titleSmall", color: colors.error }),
+            ...bad.map((source) => muted(`${source.label}：${format_js_1.SOURCE_LABEL[source.status]} · ${source.detail}`, 2)),
+        ]);
+    }
+    function workflowMeta(row, now) {
+        const parts = [];
+        if (row.lastExecutionTime != null) {
+            parts.push(`${(0, snapshot_js_1.formatDateTime)(row.lastExecutionTime)} · ${(0, snapshot_js_1.formatAgo)(row.lastExecutionTime, now)}`);
+        }
+        if (row.note)
+            parts.push(row.note);
+        return parts.join(" · ") || "—";
+    }
+    function workflowRow(row, now) {
+        const failRate = row.total > 0 ? row.failed / row.total : 0;
+        const counts = row.total > 0 ? `成功 ${row.success} · 失败 ${row.failed} · 累计 ${row.total}` : "";
+        return UI.Column({ fillMaxWidth: true, spacing: 2, padding: { vertical: 6 } }, [
+            UI.Row({ fillMaxWidth: true, spacing: 8, verticalAlignment: "center" }, [
                 UI.Text({ text: row.name, style: "bodyLarge", color: colors.onSurface, weight: 1, maxLines: 1 }),
                 UI.Text({ text: format_js_1.HEALTH_LABEL[row.health], style: "labelLarge", color: healthColor(row.health) }),
             ]),
-            muted((0, format_js_1.workflowLine)(row, s.generatedAt)),
-        ]));
-        return section("工作流", `共 ${s.workflows.length} 个，需要关注 ${attention} 个。成功只代表执行层返回成功，不代表动作生效或你已看到。`, rows.length > 0 ? rows : [muted("没有工作流，或读取失败")]);
+            muted(workflowMeta(row, now), 2),
+            ...(counts
+                ? [
+                    UI.Text({
+                        text: failRate >= 0.2 ? `${counts} · 失败率 ${Math.round(failRate * 100)}%` : counts,
+                        style: "bodySmall",
+                        color: failRate >= 0.2 ? colors.error : colors.onSurfaceVariant,
+                    }),
+                ]
+                : []),
+        ]);
+    }
+    function workflowSection(s) {
+        const rows = s.workflows;
+        const visible = showAllWorkflows ? rows : rows.slice(0, COLLAPSED_WORKFLOWS);
+        const toggle = rows.length > COLLAPSED_WORKFLOWS
+            ? textButton(showAllWorkflows ? "收起" : `全部 ${rows.length} 个`, () => setShowAllWorkflows(!showAllWorkflows))
+            : undefined;
+        return card([
+            sectionTitle("工作流", toggle),
+            muted("有问题的排在前面。成功只代表执行层返回成功，不代表动作生效或你已看到。"),
+            ...visible.map((row, index) => index === 0 ? workflowRow(row, s.generatedAt) : UI.Column({ fillMaxWidth: true }, [
+                UI.HorizontalDivider({ color: colors.surfaceVariant }),
+                workflowRow(row, s.generatedAt),
+            ])),
+        ], 4);
     }
     function usageSection(s) {
         if (!s.usage)
-            return section("App 使用", "", [muted("未读取到，见底部数据源")]);
-        const rows = s.usage.rows.map((row) => UI.Row({ fillMaxWidth: true, spacing: 8 }, [
-            UI.Text({ text: row.appName, style: "bodyMedium", color: colors.onSurface, weight: 1, maxLines: 1 }),
-            UI.Text({ text: `${row.foregroundMinutes} 分钟`, style: "bodyMedium", color: colors.onSurface }),
-            UI.Text({ text: `最近 ${(0, snapshot_js_1.formatClock)(row.lastTimeUsed)}`, style: "bodySmall", color: colors.onSurfaceVariant }),
-        ]));
-        return section("App 使用", `过去 ${s.usage.windowHours} 小时 · 系统使用记录。"最近"是系统最后记录的使用时间，不代表现在还在前台。`, rows.length > 0 ? rows : [muted("统计窗口内没有记录")]);
+            return card([sectionTitle("App 使用"), muted("未读取到")]);
+        const max = Math.max(1, ...s.usage.rows.map((row) => row.foregroundMinutes));
+        return card([
+            sectionTitle("App 使用"),
+            muted(`过去 ${s.usage.windowHours} 小时 · 系统使用记录。"最近"不代表现在还在前台。`),
+            ...s.usage.rows.map((row) => UI.Column({ fillMaxWidth: true, spacing: 4 }, [
+                UI.Row({ fillMaxWidth: true, spacing: 8, verticalAlignment: "center" }, [
+                    UI.Text({ text: row.appName, style: "bodyMedium", color: colors.onSurface, weight: 1, maxLines: 1 }),
+                    UI.Text({ text: `${row.foregroundMinutes} 分钟`, style: "labelLarge", color: colors.onSurface }),
+                    UI.Text({ text: `最近 ${(0, snapshot_js_1.formatClock)(row.lastTimeUsed)}`, style: "bodySmall", color: colors.onSurfaceVariant }),
+                ]),
+                UI.LinearProgressIndicator({ fillMaxWidth: true, progress: row.foregroundMinutes / max }),
+            ])),
+        ]);
     }
     function eventsSection(s) {
         if (!s.events)
-            return section("最近事件", "", [muted("未读取到，见底部数据源")]);
-        const rows = s.events.rows.slice(0, 15).map((row) => UI.Column({ fillMaxWidth: true, spacing: 1, paddingVertical: 3 }, [
-            UI.Text({
-                text: `${row.time}${row.count > 1 ? ` ×${row.count}` : ""}  ${row.type}  [${row.src}]`,
-                style: "labelLarge",
-                color: colors.onSurface,
-            }),
-            ...(row.summary ? [muted(row.summary)] : []),
+            return card([sectionTitle("最近事件"), muted("未读取到")]);
+        const rows = s.events.rows.slice(0, 12).map((row) => UI.Column({ fillMaxWidth: true, spacing: 1 }, [
+            UI.Row({ fillMaxWidth: true, spacing: 8 }, [
+                UI.Text({ text: row.type, style: "labelLarge", color: colors.primary }),
+                UI.Text({
+                    text: `${row.time}${row.count > 1 ? ` ×${row.count}` : ""}`,
+                    style: "labelMedium",
+                    color: colors.onSurfaceVariant,
+                    weight: 1,
+                }),
+                UI.Text({ text: row.src, style: "labelSmall", color: colors.onSurfaceVariant, maxLines: 1 }),
+            ]),
+            ...(row.summary ? [muted(row.summary, 2)] : []),
         ]));
-        const extra = s.events.unparsable > 0 ? [muted(`另有 ${s.events.unparsable} 行无法解析`)] : [];
-        return section("最近事件", `${s.events.date} · 文件共 ${s.events.totalLines} 行 · 新的在前。缺少的字段不会补写。`, [...(rows.length > 0 ? rows : [muted("没有事件")]), ...extra]);
+        return card([
+            sectionTitle("最近事件"),
+            muted(`${s.events.date} · 文件共 ${s.events.totalLines} 行 · 连续相同的合并显示`),
+            ...(rows.length > 0 ? rows : [muted("没有事件")]),
+            ...(s.events.unparsable > 0 ? [muted(`另有 ${s.events.unparsable} 行无法解析`)] : []),
+        ]);
     }
-    function rulesSection(s) {
-        const children = [];
+    function moreSection(s) {
+        const toggle = textButton(showMore ? "收起" : "展开", () => setShowMore(!showMore));
+        if (!showMore) {
+            return card([sectionTitle("规则与动作审计", toggle), muted("规则表、生效规则标记、最近动作、数据源明细")]);
+        }
+        const children = [sectionTitle("规则与动作审计", toggle)];
         children.push(UI.Text({ text: "行动规则表", style: "titleSmall", color: colors.onSurface }));
         if (s.execRules && s.execRules.length > 0) {
             for (const cells of s.execRules)
-                children.push(body(cells.join(" · ")));
+                children.push(muted(cells.join(" · ")));
         }
         else {
             children.push(muted(s.execRules ? "没有规则" : "未读取到"));
         }
         children.push(UI.Text({ text: "生效规则标记", style: "titleSmall", color: colors.onSurface }));
         if (s.activeRules) {
-            const counts = Object.entries(s.activeRules.tagCounts)
-                .map(([tag, count]) => `${tag} ${count}`)
-                .join(" · ");
-            children.push(body(counts));
+            children.push(muted(Object.entries(s.activeRules.tagCounts).map(([tag, count]) => `${tag} ${count}`).join(" · ")));
             for (const line of s.activeRules.lines)
-                children.push(muted(line));
+                children.push(muted(line, 2));
         }
         else {
             children.push(muted("未读取到"));
         }
-        return section("规则", "规则存在只表示允许，不表示已经执行。过期规则需要以文件内说明为准。", children);
-    }
-    function actionsSection(s) {
-        if (!s.actions)
-            return section("动作审计", "", [muted("未读取到，见底部数据源")]);
-        const rows = s.actions.rows.map((cells) => muted(cells.join(" · ")));
-        return section("动作审计", `ACTION_LOG.tsv 最后 ${s.actions.rows.length} 条 · 新的在前。历史记录，不代表当前状态。`, rows.length > 0 ? rows : [muted("没有记录")]);
-    }
-    function sourcesSection(s) {
-        const rows = s.sources.map((source) => UI.Column({ fillMaxWidth: true, spacing: 1 }, [
-            UI.Text({
+        children.push(UI.Text({ text: "最近动作（历史记录，不代表当前状态）", style: "titleSmall", color: colors.onSurface }));
+        if (s.actions && s.actions.rows.length > 0) {
+            for (const cells of s.actions.rows)
+                children.push(muted(cells.join(" · "), 2));
+        }
+        else {
+            children.push(muted(s.actions ? "没有记录" : "未读取到"));
+        }
+        children.push(UI.Text({ text: "数据源", style: "titleSmall", color: colors.onSurface }));
+        for (const source of s.sources) {
+            children.push(UI.Text({
                 text: `${source.label}：${format_js_1.SOURCE_LABEL[source.status]}`,
-                style: "bodyMedium",
-                color: source.status === "OK" ? colors.onSurface : colors.error,
-            }),
-            ...(source.status === "OK" ? [] : [muted(source.detail)]),
-        ]));
-        return section("数据源", `读取于 ${(0, snapshot_js_1.formatDateTime)(s.generatedAt)}（${(0, snapshot_js_1.formatAgo)(s.generatedAt, Date.now())}）`, rows);
+                style: "bodySmall",
+                color: source.status === "OK" ? colors.onSurfaceVariant : colors.error,
+            }));
+        }
+        children.push(muted(`读取于 ${(0, snapshot_js_1.formatDateTime)(s.generatedAt)}`));
+        return card(children);
     }
     function board() {
         const items = [];
         if (loadError) {
-            items.push(section("读取失败", "", [UI.Text({ text: loadError, style: "bodyMedium", color: colors.error })]));
+            items.push(card([UI.Text({ text: `读取失败：${loadError}`, style: "bodyMedium", color: colors.error })]));
         }
         if (!snap) {
-            items.push(UI.Row({ fillMaxWidth: true, padding: 24, horizontalArrangement: "center" }, [
-                UI.CircularProgressIndicator({}),
-            ]));
+            items.push(UI.Row({ fillMaxWidth: true, padding: 32, horizontalArrangement: "center" }, [UI.CircularProgressIndicator({})]));
         }
         else {
-            items.push(taskSection(snap), workflowSection(snap), usageSection(snap), eventsSection(snap), rulesSection(snap), actionsSection(snap), sourcesSection(snap));
+            const warning = sourceWarning(snap);
+            items.push(overview(snap));
+            if (warning)
+                items.push(warning);
+            items.push(workflowSection(snap), usageSection(snap), eventsSection(snap), moreSection(snap));
         }
-        return UI.LazyColumn({ weight: 1, fillMaxWidth: true, padding: { horizontal: 12, vertical: 8 }, spacing: 10 }, items);
+        return UI.LazyColumn({ weight: 1, fillMaxWidth: true, padding: { horizontal: 16, vertical: 12 }, spacing: 12 }, items);
     }
-    function chat() {
-        if (chatPhase === "ready") {
-            return UI.Column({ weight: 1, fillMaxWidth: true, spacing: 4 }, [
-                UI.Text({
-                    text: `固定对话「${snapshot_js_1.FIXED_CHAT_TITLE}」· 想让 AI 看看板时，让它调用 focus_hub_data 的 get_dashboard_snapshot`,
-                    style: "bodySmall",
-                    color: colors.onSurfaceVariant,
-                    paddingHorizontal: 16,
-                }),
-                UI.AiChat({ weight: 1, fillMaxWidth: true }),
-            ]);
+    // ---------- 会话 ----------
+    function chatRow(entry) {
+        const updated = parseTime(entry.updatedAt);
+        const meta = [
+            `${entry.messageCount} 条消息`,
+            ...(entry.characterCardName ? [entry.characterCardName] : []),
+            updated ? (0, snapshot_js_1.formatAgo)(updated, Date.now()) : entry.updatedAt,
+        ].join(" · ");
+        const isLong = entry.messageCount >= nav_js_1.LONG_CHAT_MESSAGES;
+        const opening = openingId === entry.id;
+        return UI.Surface({
+            fillMaxWidth: true,
+            containerColor: colors.surface,
+            onClick: () => openChat(entry),
+        }, UI.Column({ fillMaxWidth: true, padding: { horizontal: 16, vertical: 12 }, spacing: 2 }, [
+            UI.Row({ fillMaxWidth: true, spacing: 8, verticalAlignment: "center" }, [
+                UI.Text({ text: entry.title, style: "bodyLarge", color: colors.onSurface, weight: 1, maxLines: 1 }),
+                ...(opening
+                    ? [UI.Text({ text: "打开中…", style: "labelMedium", color: colors.primary })]
+                    : entry.isCurrent
+                        ? [UI.Text({ text: "当前", style: "labelMedium", color: colors.primary })]
+                        : []),
+            ]),
+            muted(meta, 1),
+            ...(isLong
+                ? [UI.Text({ text: "上下文很长：新话题建议另开对话", style: "bodySmall", color: colors.error })]
+                : []),
+        ]));
+    }
+    function chatGroup(title, entries) {
+        return UI.Card({ fillMaxWidth: true, containerColor: colors.surface, elevation: 1 }, UI.Column({ fillMaxWidth: true, padding: { vertical: 8 } }, [
+            UI.Text({
+                text: title,
+                style: "titleSmall",
+                color: colors.onSurfaceVariant,
+                padding: { horizontal: 16, vertical: 4 },
+            }),
+            ...entries.flatMap((entry, index) => index === 0 ? [chatRow(entry)] : [UI.HorizontalDivider({ color: colors.surfaceVariant }), chatRow(entry)]),
+        ]));
+    }
+    function chatsView() {
+        const items = [
+            UI.TextField({
+                fillMaxWidth: true,
+                value: query,
+                onValueChange: setQuery,
+                placeholder: "按标题搜索对话",
+                singleLine: true,
+            }),
+            muted("点一下就在主界面打开那个对话。这里只负责找和进，不会新建对话。"),
+        ];
+        if (chatsError) {
+            items.push(card([UI.Text({ text: `读取对话失败：${chatsError}`, style: "bodyMedium", color: colors.error })]));
         }
-        let content;
-        if (chatPhase === "missing") {
-            content = [
-                body(`还没有标题为「${snapshot_js_1.FIXED_CHAT_TITLE}」的对话。`),
-                muted("点下面的按钮会新建一个并命名为「主控台」，以后每次都进入这一个，不会再新建。也可以把已有对话改名为「主控台」后回来点重试。"),
-                UI.Button({ text: `创建「${snapshot_js_1.FIXED_CHAT_TITLE}」对话`, onClick: createFixedChat }),
-                UI.OutlinedButton({ onClick: bindChat }, UI.Text({ text: "重试" })),
-            ];
-        }
-        else if (chatPhase === "multiple") {
-            content = [
-                body(`有 ${candidates.length} 个对话都叫「${snapshot_js_1.FIXED_CHAT_TITLE}」。先选一个用，建议把其余的改名，下次就不会再问。`),
-                ...candidates.map((candidate) => UI.OutlinedButton({ fillMaxWidth: true, onClick: () => enterChat(candidate.id) }, UI.Text({ text: `${candidate.messageCount} 条消息 · 更新于 ${candidate.updatedAt}` }))),
-            ];
-        }
-        else if (chatPhase === "error") {
-            content = [
-                UI.Text({ text: `进入固定对话失败：${chatError}`, style: "bodyMedium", color: colors.error }),
-                UI.Button({ text: "重试", onClick: bindChat }),
-            ];
+        if (chats == null) {
+            items.push(UI.Row({ fillMaxWidth: true, padding: 32, horizontalArrangement: "center" }, [UI.CircularProgressIndicator({})]));
         }
         else {
-            content = [
-                UI.Row({ fillMaxWidth: true, horizontalArrangement: "center" }, [UI.CircularProgressIndicator({})]),
-                muted("正在进入固定对话…"),
-            ];
+            const keyword = query.trim();
+            if (keyword) {
+                const matches = chats.filter((entry) => entry.title.includes(keyword));
+                items.push(matches.length > 0 ? chatGroup(`搜索结果 ${matches.length}`, matches) : muted("没有匹配的对话"));
+            }
+            else {
+                const pinned = chats.filter(nav_js_1.isPinned);
+                const recent = chats.filter((entry) => !(0, nav_js_1.isPinned)(entry)).slice(0, RECENT_CHATS);
+                if (pinned.length > 0)
+                    items.push(chatGroup("固定入口", pinned));
+                items.push(chatGroup(`最近 ${recent.length} 个`, recent));
+            }
         }
-        return UI.Column({ weight: 1, fillMaxWidth: true, padding: 16, spacing: 10 }, content);
+        return UI.LazyColumn({ weight: 1, fillMaxWidth: true, padding: { horizontal: 16, vertical: 12 }, spacing: 12 }, items);
     }
     return UI.Column({
         fillMaxSize: true,
@@ -292,7 +402,7 @@ function Screen(ctx) {
             if (autoLoadedRef.current)
                 return;
             autoLoadedRef.current = true;
-            await refresh();
+            await refreshBoard();
         },
-    }, [header(), tabs(), tab === "board" ? board() : chat()]);
+    }, [header(), tabs(), tab === "board" ? board() : chatsView()]);
 }
