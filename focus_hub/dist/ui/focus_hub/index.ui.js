@@ -5,6 +5,19 @@ const snapshot_js_1 = require("../../shared/snapshot.js");
 const format_js_1 = require("../../shared/format.js");
 const progress_js_1 = require("../../shared/progress.js");
 const nav_js_1 = require("../../shared/nav.js");
+const companion_js_1 = require("../../shared/companion.js");
+const insight_js_1 = require("../../shared/insight.js");
+// 心情四档固定配色：安心 / 在意 / 担心 / 要谈谈
+const MOOD_COLOR = ["#7FAE8E", "#E2B25A", "#E0876B", "#C75A6B"];
+const MOOD_TINT = ["#E4F0E8", "#FBF1DC", "#FBE6DE", "#F8E0E4"];
+const MOOD_INK = ["#3F7A52", "#A2741D", "#B5553A", "#A23A4C"];
+const ZONE_WEIGHTS = [20, 25, 25, 30];
+const ACTIONS = [
+    { kind: "progress", icon: "▶" },
+    { kind: "stuck", icon: "◼" },
+    { kind: "done", icon: "✓" },
+    { kind: "pause", icon: "Ⅱ" },
+];
 const COLLAPSED_WORKFLOWS = 6;
 const RECENT_CHATS = 30;
 function errorText(error) {
@@ -22,23 +35,29 @@ function parseTime(value) {
 function Screen(ctx) {
     const { UI } = ctx;
     const colors = ctx.MaterialTheme.colorScheme;
-    const [tab, setTab] = ctx.useState("tab", "board");
+    const [page, setPage] = ctx.useState("page", "today");
     const [snap, setSnap] = ctx.useState("snap", null);
     const [loading, setLoading] = ctx.useState("loading", false);
     const [loadError, setLoadError] = ctx.useState("loadError", "");
-    const [showAllWorkflows, setShowAllWorkflows] = ctx.useState("showAllWorkflows", false);
-    const [showMore, setShowMore] = ctx.useState("showMore", false);
+    const [progressKind, setProgressKind] = ctx.useState("progressKind", "progress");
+    const [progressText, setProgressText] = ctx.useState("progressText", "");
+    const [savingProgress, setSavingProgress] = ctx.useState("savingProgress", false);
+    const [herSaid, setHerSaid] = ctx.useState("herSaid", "");
+    const [asking, setAsking] = ctx.useState("asking", false);
+    const [voiceBusy, setVoiceBusy] = ctx.useState("voiceBusy", false);
     const [chats, setChats] = ctx.useState("chats", null);
     const [chatsError, setChatsError] = ctx.useState("chatsError", "");
     const [query, setQuery] = ctx.useState("query", "");
     const [openingId, setOpeningId] = ctx.useState("openingId", "");
-    const [progressKind, setProgressKind] = ctx.useState("progressKind", "progress");
-    const [progressText, setProgressText] = ctx.useState("progressText", "");
-    const [savingProgress, setSavingProgress] = ctx.useState("savingProgress", false);
+    const [showAllWorkflows, setShowAllWorkflows] = ctx.useState("showAllWorkflows", false);
+    const [showMore, setShowMore] = ctx.useState("showMore", false);
     const loadingRef = ctx.useRef("loadingRef", false);
     const chatsLoadingRef = ctx.useRef("chatsLoadingRef", false);
     const autoLoadedRef = ctx.useRef("autoLoadedRef", false);
-    async function refreshBoard() {
+    const mood = snap ? (0, format_js_1.moodOf)(snap) : null;
+    const companionName = snap?.companion?.name ?? "小妹";
+    // ---------- 动作 ----------
+    async function refresh() {
         if (loadingRef.current)
             return;
         loadingRef.current = true;
@@ -70,23 +89,17 @@ function Screen(ctx) {
             chatsLoadingRef.current = false;
         }
     }
-    async function refreshCurrent() {
-        if (tab === "chats")
-            await refreshChats();
-        else
-            await refreshBoard();
-    }
-    async function openTab(next) {
-        setTab(next);
+    async function openPage(next) {
+        setPage(next);
         if (next === "chats" && chats == null)
             await refreshChats();
     }
-    async function openChat(entry) {
+    async function openChat(chatId) {
         if (openingId)
             return;
-        setOpeningId(entry.id);
+        setOpeningId(chatId);
         try {
-            await (0, nav_js_1.setMainChat)(entry.id);
+            await (0, nav_js_1.setMainChat)(chatId);
             await ctx.navigate(nav_js_1.NATIVE_CHAT_ROUTE);
         }
         catch (error) {
@@ -96,376 +109,457 @@ function Screen(ctx) {
             setOpeningId("");
         }
     }
-    async function saveProgress() {
-        const text = progressText.trim();
-        if (!text || savingProgress)
+    async function talkToHer() {
+        const chat = snap?.companion?.chat;
+        if (!chat) {
+            await ctx.showToast(`没找到标题含「${companion_js_1.COMPANION_TITLE_KEYWORD}」的对话`);
             return;
+        }
+        await openChat(chat.id);
+    }
+    async function voice() {
+        if (voiceBusy)
+            return;
+        setVoiceBusy(true);
+        try {
+            await (0, nav_js_1.startVoiceWith)(snap?.companion?.chat?.id ?? null);
+        }
+        catch (error) {
+            await ctx.showToast(`语音没打开：${errorText(error)}`);
+        }
+        finally {
+            setVoiceBusy(false);
+        }
+    }
+    async function letHerTalk() {
+        if (!snap || asking)
+            return;
+        setAsking(true);
+        try {
+            const text = await (0, insight_js_1.askHer)(companionName, (0, format_js_1.snapshotToText)(snap));
+            setHerSaid(text || "（她没说话……稍后再试）");
+        }
+        catch (error) {
+            await ctx.showToast(`她没回应：${errorText(error)}`);
+        }
+        finally {
+            setAsking(false);
+        }
+    }
+    async function saveProgress() {
+        if (savingProgress)
+            return;
+        const text = progressText.trim();
+        if (progressKind === "pause" && !text) {
+            await ctx.showToast("暂停要写一句为什么～");
+            return;
+        }
         setSavingProgress(true);
         try {
-            const result = await (0, progress_js_1.recordProgress)({ kind: progressKind, userQuote: text, via: "dashboard" });
+            const pending = mood?.pendingCheckin;
+            const result = await (0, progress_js_1.recordProgress)({
+                kind: progressKind,
+                userQuote: text || `（点了「${progress_js_1.KIND_LABEL[progressKind]}」）`,
+                note: pending ? `回应 ${pending.iso.slice(11, 16)} 的打卡` : "",
+                via: "dashboard",
+            });
             if (result.status === "REJECTED") {
                 await ctx.showToast(result.reason);
                 return;
             }
             setProgressText("");
-            await ctx.showToast(result.status === "DUPLICATE" ? "刚刚已经记过这一句" : `已记下：${progress_js_1.KIND_LABEL[result.record.kind]}`);
-            const records = await (0, progress_js_1.readRecentProgress)(8);
+            setHerSaid("");
+            await ctx.showToast(result.status === "DUPLICATE" ? "刚刚已经记过这一句啦" : `记下了：${progress_js_1.KIND_LABEL[result.record.kind]}`);
+            const records = await (0, progress_js_1.readRecentProgress)(20);
             if (snap)
                 setSnap({ ...snap, progress: records });
         }
         catch (error) {
-            await ctx.showToast(`记录失败：${errorText(error)}`);
+            await ctx.showToast(`没记上：${errorText(error)}`);
         }
         finally {
             setSavingProgress(false);
         }
     }
     // ---------- 基础组件 ----------
-    function muted(text, maxLines) {
-        return UI.Text({ text, style: "bodySmall", color: colors.onSurfaceVariant, maxLines });
+    function text(value, style, color, extra = {}) {
+        return UI.Text({ text: value, style: style, color, ...extra });
     }
-    function card(children, spacing = 8) {
-        return UI.Card({ fillMaxWidth: true, containerColor: colors.surface, elevation: 1 }, UI.Column({ fillMaxWidth: true, padding: 16, spacing }, children));
+    function muted(value, maxLines) {
+        return text(value, "bodySmall", colors.onSurfaceVariant, maxLines ? { maxLines } : {});
     }
-    function sectionTitle(title, trailing) {
-        return UI.Row({ fillMaxWidth: true, verticalAlignment: "center" }, [
-            UI.Text({ text: title, style: "titleMedium", color: colors.onSurface, weight: 1 }),
-            ...(trailing ? [trailing] : []),
+    function card(children, spacing = 10, containerColor = colors.surface) {
+        return UI.Card({ fillMaxWidth: true, containerColor, elevation: 0, shape: { cornerRadius: 20 } }, UI.Column({ fillMaxWidth: true, padding: 18, spacing }, children));
+    }
+    function label(value) {
+        return text(value, "labelMedium", colors.onSurfaceVariant);
+    }
+    function block(color, props) {
+        return UI.Box({ background: color, backgroundShape: { cornerRadius: 5 }, ...props });
+    }
+    function pill(value, bg, ink, onClick) {
+        const inner = text(value, "labelMedium", ink, { paddingHorizontal: 12, paddingVertical: 5 });
+        return UI.Surface({ containerColor: bg, shape: { type: "pill" }, ...(onClick ? { onClick } : {}) }, inner);
+    }
+    function pageColumn(items) {
+        return UI.LazyColumn({ weight: 1, fillMaxWidth: true, padding: { horizontal: 16, vertical: 8 }, spacing: 12 }, items);
+    }
+    function pageHeader(title, trailing = []) {
+        return UI.Row({ fillMaxWidth: true, paddingStart: 4, paddingTop: 8, paddingBottom: 4, verticalAlignment: "center", spacing: 8 }, [
+            text(title, "headlineSmall", colors.onSurface, { weight: 1 }),
+            ...trailing,
+            UI.IconButton({ icon: Icons.Refresh, enabled: !loading, onClick: page === "chats" ? refreshChats : refresh }),
         ]);
     }
-    function textButton(label, onClick) {
-        return UI.TextButton({ onClick }, UI.Text({ text: label, style: "labelLarge", color: colors.primary }));
+    function spinner() {
+        return UI.Row({ fillMaxWidth: true, padding: 32, horizontalArrangement: "center" }, [UI.CircularProgressIndicator({})]);
     }
-    function tile(label, value, caption, valueColor) {
-        return UI.Card({ weight: 1, containerColor: colors.surfaceVariant, elevation: 0 }, UI.Column({ fillMaxWidth: true, padding: 12, spacing: 2 }, [
-            UI.Text({ text: label, style: "labelMedium", color: colors.onSurfaceVariant }),
-            UI.Text({ text: value, style: "titleMedium", color: valueColor ?? colors.onSurface, maxLines: 1 }),
-            muted(caption, 1),
+    // ---------- 今天 ----------
+    function systemIssues(s) {
+        const health = s.health.filter((h) => h.status === "STALE" || h.status === "MISSING").length;
+        const flows = s.workflows.filter((w) => w.health === "FAILED" || w.health === "STALE").length;
+        return health + flows;
+    }
+    function pendingBanner() {
+        const pending = mood?.pendingCheckin;
+        if (!pending)
+            return null;
+        return card([
+            text(`🌸 ${pending.iso.slice(11, 16)} ${companionName}来找过你`, "titleSmall", MOOD_INK[1]),
+            text(`“${pending.line}”`, "bodyMedium", colors.onSurface),
+            muted("点下面任意一个动作回应她，她就知道你看到了。"),
+        ], 6, MOOD_TINT[1]);
+    }
+    function avatar(level) {
+        return UI.Card({
+            width: 64,
+            height: 64,
+            containerColor: "#FBE4DC",
+            shape: { type: "circle" },
+            border: { width: 3, color: MOOD_COLOR[level] },
+            elevation: 0,
+        }, UI.Box({ fillMaxSize: true, contentAlignment: "center" }, [text("🌸", "headlineMedium", colors.onSurface)]));
+    }
+    function meter(score, level) {
+        const left = Math.max(score, 0.5);
+        const right = Math.max(100 - score, 0.5);
+        return UI.Column({ fillMaxWidth: true, spacing: 4 }, [
+            UI.Row({ fillMaxWidth: true, verticalAlignment: "center" }, [
+                UI.Box({ weight: left, height: 14 }),
+                UI.Box({ width: 14, height: 14, background: MOOD_COLOR[level], backgroundShape: { type: "circle" } }),
+                UI.Box({ weight: right, height: 14 }),
+            ]),
+            UI.Row({ fillMaxWidth: true, spacing: 3 }, ZONE_WEIGHTS.map((w, i) => block(MOOD_COLOR[i], { weight: w, height: 10, backgroundShape: { type: "pill" } }))),
+            UI.Row({ fillMaxWidth: true }, ["安心", "在意", "担心", "要谈谈"].map((name, i) => text(name, "labelSmall", i === level ? MOOD_INK[i] : colors.onSurfaceVariant, { weight: ZONE_WEIGHTS[i] }))),
+        ]);
+    }
+    function herCard(s) {
+        const m = (0, format_js_1.moodOf)(s);
+        const hasChat = Boolean(s.companion?.chat);
+        return card([
+            UI.Row({ fillMaxWidth: true, spacing: 14, verticalAlignment: "center" }, [
+                avatar(m.level),
+                UI.Column({ weight: 1, spacing: 6 }, [
+                    text(companionName, "titleLarge", colors.onSurface),
+                    UI.Row({ spacing: 6 }, [pill(m.name, MOOD_TINT[m.level], MOOD_INK[m.level])]),
+                ]),
+            ]),
+            text(`“${herSaid || m.line}”`, "bodyLarge", colors.onSurface, { paddingTop: 4 }),
+            ...(herSaid ? [muted("↑ 她细说的")] : []),
+            muted(`为什么是「${m.name}」：${m.reasons.join(" · ")}`, 3),
+            meter(m.score, m.level),
+            UI.Surface({ fillMaxWidth: true, containerColor: colors.surfaceVariant, shape: { cornerRadius: 12 } }, text(m.next, "bodyMedium", colors.onSurface, { padding: 12 })),
+            UI.Row({ fillMaxWidth: true, spacing: 8 }, [
+                UI.Button({ text: openingId ? "打开中…" : "找她聊", weight: 1, enabled: hasChat && !openingId, onClick: talkToHer }),
+                UI.FilledTonalButton({ weight: 1, enabled: !voiceBusy, onClick: voice }, text(voiceBusy ? "…" : "🎙 语音", "labelLarge", colors.onSurface)),
+                UI.FilledTonalButton({ enabled: !asking, onClick: letHerTalk }, text(asking ? "她在想…" : "让她细说", "labelLarge", colors.onSurface)),
+            ]),
+            ...(hasChat ? [] : [muted(`没找到标题含「${companion_js_1.COMPANION_TITLE_KEYWORD}」的对话，"找她聊"暂时不可用`)]),
+        ]);
+    }
+    function actionTile(kind, icon) {
+        const on = progressKind === kind;
+        return UI.Surface({
+            weight: 1,
+            containerColor: on ? colors.primaryContainer : colors.surfaceVariant,
+            shape: { cornerRadius: 14 },
+            onClick: () => setProgressKind(kind),
+        }, UI.Column({ fillMaxWidth: true, paddingVertical: 10, horizontalAlignment: "center", spacing: 2 }, [
+            text(icon, "titleMedium", on ? colors.primary : colors.onSurface),
+            text(progress_js_1.KIND_LABEL[kind], "labelLarge", on ? colors.primary : colors.onSurface),
         ]));
     }
-    function healthColor(health) {
-        if (health === "FAILED" || health === "STALE")
-            return colors.error;
-        if (health === "OK" || health === "RUNNING_NOW")
-            return colors.primary;
-        return colors.onSurfaceVariant;
-    }
-    // ---------- 顶部 ----------
-    function header() {
-        let status = "只读看板";
-        if (tab === "chats") {
-            status = chats ? `共 ${chats.length} 个对话` : "正在读取对话…";
-        }
-        else if (loading) {
-            status = "正在读取…";
-        }
-        else if (snap) {
-            status = `更新于 ${(0, snapshot_js_1.formatClock)(snap.generatedAt)}`;
-        }
-        return UI.Row(
-        // 单边 padding 会让宿主忽略 paddingHorizontal，所以三边都显式写
-        { fillMaxWidth: true, paddingStart: 20, paddingEnd: 8, paddingTop: 12, verticalAlignment: "center" }, [
-            UI.Column({ weight: 1, spacing: 2 }, [
-                UI.Text({ text: "主控台", style: "headlineSmall", color: colors.onSurface }),
-                muted(status),
-            ]),
-            UI.IconButton({ icon: Icons.Refresh, enabled: !loading, onClick: refreshCurrent }),
-        ]);
-    }
-    function tabs() {
-        const item = (value, label) => tab === value
-            ? UI.Button({ text: label, weight: 1, onClick: () => openTab(value) })
-            : UI.OutlinedButton({ weight: 1, onClick: () => openTab(value) }, UI.Text({ text: label }));
-        return UI.Row({ fillMaxWidth: true, padding: { horizontal: 16 }, spacing: 8 }, [
-            item("board", "看板"),
-            item("chats", "会话"),
-        ]);
-    }
-    // ---------- 看板 ----------
-    function overview(s) {
-        const attention = s.workflows.filter((w) => w.health === "FAILED" || w.health === "STALE").length;
-        const enabled = s.workflows.filter((w) => w.enabled).length;
-        const latestEvent = s.events?.rows[0];
-        const topApp = s.usage?.rows[0];
-        return UI.Column({ fillMaxWidth: true, spacing: 8 }, [
-            UI.Row({ fillMaxWidth: true, spacing: 8 }, [
-                tile("当前任务", s.task?.task || "未读取到", s.task ? `${s.task.state || "?"} · ${s.task.mode || "?"}` : "task_state.txt", s.task ? colors.primary : colors.error),
-                tile("工作流", attention > 0 ? `需关注 ${attention}` : "全部正常", `共 ${s.workflows.length} · 启用 ${enabled}`, attention > 0 ? colors.error : colors.primary),
-            ]),
-            UI.Row({ fillMaxWidth: true, spacing: 8 }, [
-                tile("今日事件", s.events ? `${s.events.totalLines} 条` : "未读取到", latestEvent ? `最新 ${latestEvent.time.split("–").pop()} ${latestEvent.type}` : "—"),
-                tile("用得最多", topApp ? topApp.appName : "—", topApp ? `${topApp.foregroundMinutes} 分钟 · 过去 24 小时` : "没有记录"),
-            ]),
-        ]);
-    }
-    function progressSection(s) {
-        const kinds = ["progress", "stuck", "done", "pause"];
-        const kindButton = (kind) => progressKind === kind
-            ? UI.Button({ text: progress_js_1.KIND_LABEL[kind], weight: 1, onClick: () => setProgressKind(kind) })
-            : UI.OutlinedButton({ weight: 1, onClick: () => setProgressKind(kind) }, UI.Text({ text: progress_js_1.KIND_LABEL[kind] }));
-        const records = s.progress ?? [];
+    function taskCard(s) {
         return card([
-            sectionTitle("我的进展"),
-            muted("在这里记，或在任何对话里直接说，AI 会用 report_progress 帮你记。判断和提醒会先看这里。"),
-            UI.Row({ fillMaxWidth: true, spacing: 6 }, kinds.map(kindButton)),
+            label("当前任务"),
+            text(s.task?.task || "还没有声明任务", "titleLarge", colors.onSurface),
+            UI.Row({ fillMaxWidth: true, spacing: 8 }, ACTIONS.map((a) => actionTile(a.kind, a.icon))),
             UI.TextField({
                 fillMaxWidth: true,
                 value: progressText,
                 onValueChange: setProgressText,
-                placeholder: "比如：投了两家 / 简历卡在项目经历",
+                placeholder: progressKind === "pause" ? "暂停要说为什么" : "一句话（可不写），比如：又投了一家",
             }),
             UI.Button({
                 fillMaxWidth: true,
-                text: savingProgress ? "记录中…" : `记下（${progress_js_1.KIND_LABEL[progressKind]}）`,
-                enabled: !savingProgress && progressText.trim().length > 0,
+                text: savingProgress ? "记录中…" : `记下「${progress_js_1.KIND_LABEL[progressKind]}」`,
+                enabled: !savingProgress,
                 onClick: saveProgress,
             }),
-            ...(records.length === 0
-                ? [muted(s.progress ? "今天和昨天还没有记录" : "进展记录读取失败，见数据源")]
-                : records.slice(0, 5).map((r) => UI.Column({ fillMaxWidth: true, spacing: 1 }, [
-                    UI.Row({ fillMaxWidth: true, spacing: 8 }, [
-                        UI.Text({ text: progress_js_1.KIND_LABEL[r.kind] ?? r.kind, style: "labelLarge", color: r.kind === "stuck" ? colors.error : colors.primary }),
-                        UI.Text({ text: r.iso.slice(5, 16), style: "labelMedium", color: colors.onSurfaceVariant, weight: 1 }),
-                        UI.Text({ text: r.via === "dashboard" ? "主控台" : "对话", style: "labelSmall", color: colors.onSurfaceVariant }),
-                    ]),
-                    UI.Text({ text: `「${r.user_quote}」`, style: "bodyMedium", color: colors.onSurface, maxLines: 3 }),
-                ]))),
         ]);
     }
-    function sourceWarning(s) {
-        const bad = s.sources.filter((source) => source.status !== "OK");
-        if (bad.length === 0)
-            return null;
-        return card([
-            UI.Text({ text: `${bad.length} 个数据源没读到`, style: "titleSmall", color: colors.error }),
-            ...bad.map((source) => muted(`${source.label}：${format_js_1.SOURCE_LABEL[source.status]} · ${source.detail}`, 2)),
-        ]);
+    function hourColor(bucket) {
+        if (bucket.on === 0 && bucket.off === 0)
+            return colors.surfaceVariant;
+        if (bucket.on > bucket.off)
+            return MOOD_COLOR[0];
+        if (bucket.off > bucket.on)
+            return MOOD_COLOR[2];
+        return MOOD_COLOR[1];
     }
-    function workflowMeta(row, now) {
-        const parts = [];
-        if (row.lastExecutionTime != null) {
-            parts.push(`${(0, snapshot_js_1.formatDateTime)(row.lastExecutionTime)} · ${(0, snapshot_js_1.formatAgo)(row.lastExecutionTime, now)}`);
+    function dayCard(s) {
+        const focus = s.events?.focus;
+        const known = focus ? focus.onTask + focus.offTask : 0;
+        const today = new Date(s.generatedAt).toDateString();
+        const todayProgress = (s.progress ?? []).filter((p) => new Date(p.ts * 1000).toDateString() === today);
+        const stat = (value, key) => UI.Surface({ weight: 1, containerColor: colors.surfaceVariant, shape: { cornerRadius: 12 } }, UI.Column({ fillMaxWidth: true, padding: 10, spacing: 2 }, [
+            text(value, "titleMedium", colors.onSurface, { maxLines: 1 }),
+            text(key, "labelSmall", colors.onSurfaceVariant),
+        ]));
+        const children = [label("今天的你")];
+        if (focus) {
+            children.push(UI.Row({ fillMaxWidth: true, spacing: 2 }, focus.hours.map((b) => block(hourColor(b), { weight: 1, height: 24, backgroundShape: { cornerRadius: 4 } }))), UI.Row({ fillMaxWidth: true }, ["0", "6", "12", "18", "24"].map((h, i) => text(h, "labelSmall", colors.onSurfaceVariant, i < 4 ? { weight: 1 } : {}))));
         }
-        if (row.note)
-            parts.push(row.note);
-        return parts.join(" · ") || "—";
+        else {
+            children.push(muted("今天的采样没读到，见系统页"));
+        }
+        children.push(UI.Row({ fillMaxWidth: true, spacing: 8 }, [
+            stat(known > 0 ? `${Math.round(((focus?.onTask ?? 0) / known) * 100)}%` : "—", "采样在任务上"),
+            stat(String(todayProgress.length), "条进展"),
+            stat(focus?.offApps[0]?.name ?? "—", "偏离时最常开"),
+        ]));
+        for (const p of todayProgress.slice(0, 5)) {
+            children.push(UI.Row({ fillMaxWidth: true, spacing: 10, verticalAlignment: "center" }, [
+                text(p.iso.slice(11, 16), "labelMedium", colors.onSurfaceVariant),
+                pill(progress_js_1.KIND_LABEL[p.kind] ?? p.kind, p.kind === "stuck" ? MOOD_TINT[3] : colors.primaryContainer, p.kind === "stuck" ? MOOD_INK[3] : colors.primary),
+                text(`「${p.user_quote}」`, "bodyMedium", colors.onSurface, { weight: 1, maxLines: 2 }),
+            ]));
+        }
+        children.push(muted("色块是前台采样口径：绿=在任务上，橙=不在，灰=没数据或看不出"));
+        return card(children);
+    }
+    function todayPage() {
+        const issues = snap ? systemIssues(snap) : 0;
+        const chip = snap
+            ? issues > 0
+                ? pill(`系统 · ${issues} 处要看`, MOOD_TINT[3], MOOD_INK[3], () => openPage("sys"))
+                : pill("系统正常", MOOD_TINT[0], MOOD_INK[0], () => openPage("sys"))
+            : null;
+        const items = [pageHeader("今天", chip ? [chip] : [])];
+        if (loadError)
+            items.push(card([text(`读取失败：${loadError}`, "bodyMedium", colors.error)]));
+        if (!snap) {
+            items.push(spinner());
+        }
+        else {
+            const banner = pendingBanner();
+            if (banner)
+                items.push(banner);
+            items.push(herCard(snap), taskCard(snap), dayCard(snap));
+        }
+        return pageColumn(items);
+    }
+    // ---------- 会话 ----------
+    function chatRow(entry, icon) {
+        const updated = parseTime(entry.updatedAt);
+        const meta = [
+            `${entry.messageCount} 条`,
+            ...(entry.characterCardName ? [entry.characterCardName] : []),
+            updated ? (0, snapshot_js_1.formatAgo)(updated, Date.now()) : entry.updatedAt,
+        ].join(" · ");
+        return UI.Surface({ fillMaxWidth: true, containerColor: colors.surface, onClick: () => openChat(entry.id) }, UI.Row({ fillMaxWidth: true, paddingVertical: 10, spacing: 12, verticalAlignment: "center" }, [
+            UI.Surface({ width: 40, height: 40, containerColor: colors.surfaceVariant, shape: { type: "circle" } }, UI.Box({ fillMaxSize: true, contentAlignment: "center" }, [text(icon, "titleMedium", colors.onSurface)])),
+            UI.Column({ weight: 1, spacing: 2 }, [
+                text(entry.title, "bodyLarge", colors.onSurface, { maxLines: 1 }),
+                muted(meta, 1),
+            ]),
+            ...(openingId === entry.id
+                ? [text("打开中…", "labelMedium", colors.primary)]
+                : entry.messageCount >= nav_js_1.LONG_CHAT_MESSAGES
+                    ? [text("太长了", "labelMedium", MOOD_INK[3])]
+                    : entry.isCurrent
+                        ? [text("当前", "labelMedium", colors.primary)]
+                        : []),
+        ]));
+    }
+    function chatGroup(title, rows, note) {
+        return card([label(title), ...(note ? [muted(note)] : []), ...rows], 2);
+    }
+    function chatsPage() {
+        const items = [
+            pageHeader("会话"),
+            UI.TextField({ fillMaxWidth: true, value: query, onValueChange: setQuery, placeholder: "搜索对话", singleLine: true }),
+        ];
+        if (chatsError)
+            items.push(card([text(`读取对话失败：${chatsError}`, "bodyMedium", colors.error)]));
+        if (chats == null) {
+            items.push(spinner());
+            return pageColumn(items);
+        }
+        const keyword = query.trim();
+        if (keyword) {
+            const matches = chats.filter((c) => c.title.includes(keyword));
+            items.push(matches.length > 0 ? chatGroup(`搜索结果 ${matches.length}`, matches.map((c) => chatRow(c, "💬"))) : muted("没有匹配的对话"));
+            return pageColumn(items);
+        }
+        const her = chats.filter((c) => c.title.includes(companion_js_1.COMPANION_TITLE_KEYWORD));
+        const backstage = chats.filter((c) => (0, nav_js_1.isPinned)(c) && !c.title.includes(companion_js_1.COMPANION_TITLE_KEYWORD));
+        const recent = chats.filter((c) => !(0, nav_js_1.isPinned)(c)).slice(0, RECENT_CHATS);
+        if (her.length > 0)
+            items.push(chatGroup("她（主入口）", her.map((c) => chatRow(c, "🌸"))));
+        if (backstage.length > 0) {
+            items.push(chatGroup("后台角色", backstage.map((c) => chatRow(c, "⚙")), "平时不用直接找它们"));
+        }
+        items.push(chatGroup(`最近 ${recent.length} 个`, recent.map((c) => chatRow(c, "💬"))));
+        return pageColumn(items);
+    }
+    // ---------- 系统 ----------
+    function healthRow(h, now) {
+        const statusText = { FRESH: "正常", STALE: "偏旧", MISSING: "缺失", UNKNOWN: "未知" }[h.status];
+        const color = h.status === "FRESH" ? MOOD_INK[0] : h.status === "STALE" ? MOOD_INK[2] : MOOD_INK[3];
+        return UI.Row({ fillMaxWidth: true, paddingVertical: 6, spacing: 10, verticalAlignment: "center" }, [
+            UI.Column({ weight: 1, spacing: 1 }, [
+                text(h.label, "bodyLarge", colors.onSurface),
+                muted([h.cadence, h.note].filter(Boolean).join(" · "), 1),
+            ]),
+            UI.Column({ horizontalAlignment: "end", spacing: 1 }, [
+                text(statusText, "labelLarge", color),
+                muted(h.modifiedAt != null ? (0, snapshot_js_1.formatAgo)(h.modifiedAt, now) : "—"),
+            ]),
+        ]);
+    }
+    function healthColor(health) {
+        if (health === "FAILED" || health === "STALE")
+            return MOOD_INK[3];
+        if (health === "OK" || health === "RUNNING_NOW")
+            return MOOD_INK[0];
+        return colors.onSurfaceVariant;
     }
     function workflowRow(row, now) {
         const failRate = row.total > 0 ? row.failed / row.total : 0;
-        const counts = row.total > 0 ? `成功 ${row.success} · 失败 ${row.failed} · 累计 ${row.total}` : "";
-        return UI.Column({ fillMaxWidth: true, spacing: 2, padding: { vertical: 6 } }, [
+        const meta = [
+            row.lastExecutionTime != null ? `${(0, snapshot_js_1.formatDateTime)(row.lastExecutionTime)}（${(0, snapshot_js_1.formatAgo)(row.lastExecutionTime, now)}）` : "",
+            row.note,
+        ].filter(Boolean).join(" · ");
+        return UI.Column({ fillMaxWidth: true, spacing: 2, paddingVertical: 6 }, [
             UI.Row({ fillMaxWidth: true, spacing: 8, verticalAlignment: "center" }, [
-                UI.Text({ text: row.name, style: "bodyLarge", color: colors.onSurface, weight: 1, maxLines: 1 }),
-                UI.Text({ text: format_js_1.HEALTH_LABEL[row.health], style: "labelLarge", color: healthColor(row.health) }),
+                text(row.name, "bodyLarge", colors.onSurface, { weight: 1, maxLines: 1 }),
+                text(format_js_1.HEALTH_LABEL[row.health], "labelLarge", healthColor(row.health)),
             ]),
-            muted(workflowMeta(row, now), 2),
-            ...(counts
+            ...(meta ? [muted(meta, 2)] : []),
+            ...(row.total > 0
                 ? [
-                    UI.Text({
-                        text: failRate >= 0.2 ? `${counts} · 失败率 ${Math.round(failRate * 100)}%` : counts,
-                        style: "bodySmall",
-                        color: failRate >= 0.2 ? colors.error : colors.onSurfaceVariant,
-                    }),
+                    text(`成功 ${row.success} · 失败 ${row.failed} · 累计 ${row.total}${failRate >= 0.2 ? ` · 失败率 ${Math.round(failRate * 100)}%` : ""}`, "bodySmall", failRate >= 0.2 ? MOOD_INK[3] : colors.onSurfaceVariant),
                 ]
                 : []),
         ]);
     }
-    function workflowSection(s) {
+    function sysPage() {
+        const items = [pageHeader("系统")];
+        if (!snap) {
+            items.push(spinner());
+            return pageColumn(items);
+        }
+        const s = snap;
+        const now = s.generatedAt;
+        items.push(card([label("体检 · 看关键文件多久没更新"), ...s.health.map((h) => healthRow(h, now)), muted("更新了不代表内容一定对；没更新基本说明那条链停了。")], 2));
         const rows = s.workflows;
         const visible = showAllWorkflows ? rows : rows.slice(0, COLLAPSED_WORKFLOWS);
-        const toggle = rows.length > COLLAPSED_WORKFLOWS
-            ? textButton(showAllWorkflows ? "收起" : `全部 ${rows.length} 个`, () => setShowAllWorkflows(!showAllWorkflows))
-            : undefined;
-        return card([
-            sectionTitle("工作流", toggle),
-            muted("有问题的排在前面。成功只代表执行层返回成功，不代表动作生效或你已看到。"),
-            ...visible.map((row, index) => index === 0 ? workflowRow(row, s.generatedAt) : UI.Column({ fillMaxWidth: true }, [
-                UI.HorizontalDivider({ color: colors.surfaceVariant }),
-                workflowRow(row, s.generatedAt),
-            ])),
-        ], 4);
-    }
-    function usageSection(s) {
-        if (!s.usage)
-            return card([sectionTitle("App 使用"), muted("未读取到")]);
-        const max = Math.max(1, ...s.usage.rows.map((row) => row.foregroundMinutes));
-        return card([
-            sectionTitle("App 使用"),
-            muted(`过去 ${s.usage.windowHours} 小时 · 系统使用记录。"最近"不代表现在还在前台。`),
-            ...s.usage.rows.map((row) => UI.Column({ fillMaxWidth: true, spacing: 4 }, [
-                UI.Row({ fillMaxWidth: true, spacing: 8, verticalAlignment: "center" }, [
-                    UI.Text({ text: row.appName, style: "bodyMedium", color: colors.onSurface, weight: 1, maxLines: 1 }),
-                    UI.Text({ text: `${row.foregroundMinutes} 分钟`, style: "labelLarge", color: colors.onSurface }),
-                    UI.Text({ text: `最近 ${(0, snapshot_js_1.formatClock)(row.lastTimeUsed)}`, style: "bodySmall", color: colors.onSurfaceVariant }),
-                ]),
-                UI.LinearProgressIndicator({ fillMaxWidth: true, progress: row.foregroundMinutes / max }),
-            ])),
-        ]);
-    }
-    function eventsSection(s) {
-        if (!s.events)
-            return card([sectionTitle("最近事件"), muted("未读取到")]);
-        const rows = s.events.rows.slice(0, 12).map((row) => UI.Column({ fillMaxWidth: true, spacing: 1 }, [
-            UI.Row({ fillMaxWidth: true, spacing: 8 }, [
-                UI.Text({ text: row.type, style: "labelLarge", color: colors.primary }),
-                UI.Text({
-                    text: `${row.time}${row.count > 1 ? ` ×${row.count}` : ""}`,
-                    style: "labelMedium",
-                    color: colors.onSurfaceVariant,
-                    weight: 1,
-                }),
-                UI.Text({ text: row.src, style: "labelSmall", color: colors.onSurfaceVariant, maxLines: 1 }),
+        items.push(card([
+            UI.Row({ fillMaxWidth: true, verticalAlignment: "center" }, [
+                text("工作流", "titleMedium", colors.onSurface, { weight: 1 }),
+                ...(rows.length > COLLAPSED_WORKFLOWS
+                    ? [UI.TextButton({ onClick: () => setShowAllWorkflows(!showAllWorkflows) }, text(showAllWorkflows ? "收起" : `全部 ${rows.length} 个`, "labelLarge", colors.primary))]
+                    : []),
             ]),
-            ...(row.summary ? [muted(row.summary, 2)] : []),
-        ]));
-        return card([
-            sectionTitle("最近事件"),
-            muted(`${s.events.date} · 文件共 ${s.events.totalLines} 行 · 连续相同的合并显示`),
-            ...(rows.length > 0 ? rows : [muted("没有事件")]),
-            ...(s.events.unparsable > 0 ? [muted(`另有 ${s.events.unparsable} 行无法解析`)] : []),
-        ]);
-    }
-    function moreSection(s) {
-        const toggle = textButton(showMore ? "收起" : "展开", () => setShowMore(!showMore));
-        if (!showMore) {
-            return card([sectionTitle("规则与动作审计", toggle), muted("规则表、生效规则标记、最近动作、数据源明细")]);
+            muted("有问题的排前面。成功只代表执行层返回成功，不代表动作生效或你已看到。"),
+            ...visible.map((row) => workflowRow(row, now)),
+        ], 2));
+        if (s.usage) {
+            const max = Math.max(1, ...s.usage.rows.map((r) => r.foregroundMinutes));
+            items.push(card([
+                label(`App 使用 · 过去 ${s.usage.windowHours} 小时（系统记录）`),
+                ...s.usage.rows.map((r) => UI.Column({ fillMaxWidth: true, spacing: 4 }, [
+                    UI.Row({ fillMaxWidth: true, spacing: 8 }, [
+                        text(r.appName, "bodyMedium", colors.onSurface, { weight: 1, maxLines: 1 }),
+                        text(`${r.foregroundMinutes} 分钟`, "labelLarge", colors.onSurface),
+                        muted(`最近 ${(0, snapshot_js_1.formatClock)(r.lastTimeUsed)}`),
+                    ]),
+                    UI.LinearProgressIndicator({ fillMaxWidth: true, progress: r.foregroundMinutes / max }),
+                ])),
+            ]));
         }
-        const children = [sectionTitle("规则与动作审计", toggle)];
-        children.push(UI.Text({ text: "行动规则表", style: "titleSmall", color: colors.onSurface }));
-        if (s.execRules && s.execRules.length > 0) {
-            for (const cells of s.execRules)
-                children.push(muted(cells.join(" · ")));
+        if (s.events) {
+            items.push(card([
+                label(`最近事件 · ${s.events.date} · 共 ${s.events.totalLines} 行`),
+                ...s.events.rows.slice(0, 10).map((r) => UI.Column({ fillMaxWidth: true, spacing: 1 }, [
+                    UI.Row({ fillMaxWidth: true, spacing: 8 }, [
+                        text(r.type, "labelLarge", colors.primary),
+                        text(`${r.time}${r.count > 1 ? ` ×${r.count}` : ""}`, "labelMedium", colors.onSurfaceVariant, { weight: 1 }),
+                        muted(r.src, 1),
+                    ]),
+                    ...(r.summary ? [muted(r.summary, 2)] : []),
+                ])),
+            ]));
         }
-        else {
-            children.push(muted(s.execRules ? "没有规则" : "未读取到"));
-        }
-        children.push(UI.Text({ text: "生效规则标记", style: "titleSmall", color: colors.onSurface }));
-        if (s.activeRules) {
-            children.push(muted(Object.entries(s.activeRules.tagCounts).map(([tag, count]) => `${tag} ${count}`).join(" · ")));
-            for (const line of s.activeRules.lines)
-                children.push(muted(line, 2));
-        }
-        else {
-            children.push(muted("未读取到"));
-        }
-        children.push(UI.Text({ text: "最近动作（历史记录，不代表当前状态）", style: "titleSmall", color: colors.onSurface }));
-        if (s.actions && s.actions.rows.length > 0) {
-            for (const cells of s.actions.rows)
-                children.push(muted(cells.join(" · "), 2));
-        }
-        else {
-            children.push(muted(s.actions ? "没有记录" : "未读取到"));
-        }
-        children.push(UI.Text({ text: "数据源", style: "titleSmall", color: colors.onSurface }));
-        for (const source of s.sources) {
-            children.push(UI.Text({
-                text: `${source.label}：${format_js_1.SOURCE_LABEL[source.status]}`,
-                style: "bodySmall",
-                color: source.status === "OK" ? colors.onSurfaceVariant : colors.error,
-            }));
-        }
-        children.push(muted(`读取于 ${(0, snapshot_js_1.formatDateTime)(s.generatedAt)}`));
-        return card(children);
-    }
-    function board() {
-        const items = [];
-        if (loadError) {
-            items.push(card([UI.Text({ text: `读取失败：${loadError}`, style: "bodyMedium", color: colors.error })]));
-        }
-        if (!snap) {
-            items.push(UI.Row({ fillMaxWidth: true, padding: 32, horizontalArrangement: "center" }, [UI.CircularProgressIndicator({})]));
-        }
-        else {
-            const warning = sourceWarning(snap);
-            items.push(overview(snap));
-            if (warning)
-                items.push(warning);
-            items.push(progressSection(snap));
-            items.push(workflowSection(snap), usageSection(snap), eventsSection(snap), moreSection(snap));
-        }
-        return UI.LazyColumn({ weight: 1, fillMaxWidth: true, padding: { horizontal: 16, vertical: 12 }, spacing: 12 }, items);
-    }
-    // ---------- 会话 ----------
-    function chatRow(entry) {
-        const updated = parseTime(entry.updatedAt);
-        const meta = [
-            `${entry.messageCount} 条消息`,
-            ...(entry.characterCardName ? [entry.characterCardName] : []),
-            updated ? (0, snapshot_js_1.formatAgo)(updated, Date.now()) : entry.updatedAt,
-        ].join(" · ");
-        const isLong = entry.messageCount >= nav_js_1.LONG_CHAT_MESSAGES;
-        const opening = openingId === entry.id;
-        return UI.Surface({
-            fillMaxWidth: true,
-            containerColor: colors.surface,
-            onClick: () => openChat(entry),
-        }, UI.Column({ fillMaxWidth: true, padding: { horizontal: 16, vertical: 12 }, spacing: 2 }, [
-            UI.Row({ fillMaxWidth: true, spacing: 8, verticalAlignment: "center" }, [
-                UI.Text({ text: entry.title, style: "bodyLarge", color: colors.onSurface, weight: 1, maxLines: 1 }),
-                ...(opening
-                    ? [UI.Text({ text: "打开中…", style: "labelMedium", color: colors.primary })]
-                    : entry.isCurrent
-                        ? [UI.Text({ text: "当前", style: "labelMedium", color: colors.primary })]
-                        : []),
+        const more = [
+            UI.Row({ fillMaxWidth: true, verticalAlignment: "center" }, [
+                text("规则、动作审计、数据源", "titleMedium", colors.onSurface, { weight: 1 }),
+                UI.TextButton({ onClick: () => setShowMore(!showMore) }, text(showMore ? "收起" : "展开", "labelLarge", colors.primary)),
             ]),
-            muted(meta, 1),
-            ...(isLong
-                ? [UI.Text({ text: "上下文很长：新话题建议另开对话", style: "bodySmall", color: colors.error })]
-                : []),
-        ]));
-    }
-    function chatGroup(title, entries) {
-        return UI.Card({ fillMaxWidth: true, containerColor: colors.surface, elevation: 1 }, UI.Column({ fillMaxWidth: true, padding: { vertical: 8 } }, [
-            UI.Text({
-                text: title,
-                style: "titleSmall",
-                color: colors.onSurfaceVariant,
-                padding: { horizontal: 16, vertical: 4 },
-            }),
-            ...entries.flatMap((entry, index) => index === 0 ? [chatRow(entry)] : [UI.HorizontalDivider({ color: colors.surfaceVariant }), chatRow(entry)]),
-        ]));
-    }
-    function chatsView() {
-        const items = [
-            UI.TextField({
-                fillMaxWidth: true,
-                value: query,
-                onValueChange: setQuery,
-                placeholder: "按标题搜索对话",
-                singleLine: true,
-            }),
-            muted("点一下就在主界面打开那个对话。这里只负责找和进，不会新建对话。"),
         ];
-        if (chatsError) {
-            items.push(card([UI.Text({ text: `读取对话失败：${chatsError}`, style: "bodyMedium", color: colors.error })]));
-        }
-        if (chats == null) {
-            items.push(UI.Row({ fillMaxWidth: true, padding: 32, horizontalArrangement: "center" }, [UI.CircularProgressIndicator({})]));
-        }
-        else {
-            const keyword = query.trim();
-            if (keyword) {
-                const matches = chats.filter((entry) => entry.title.includes(keyword));
-                items.push(matches.length > 0 ? chatGroup(`搜索结果 ${matches.length}`, matches) : muted("没有匹配的对话"));
+        if (showMore) {
+            more.push(label("行动规则表"));
+            for (const cells of s.execRules ?? [])
+                more.push(muted(cells.join(" · ")));
+            if (s.activeRules) {
+                more.push(label("生效规则标记"));
+                more.push(muted(Object.entries(s.activeRules.tagCounts).map(([k, v]) => `${k} ${v}`).join(" · ")));
+                for (const line of s.activeRules.lines)
+                    more.push(muted(line, 2));
             }
-            else {
-                const pinned = chats.filter(nav_js_1.isPinned);
-                const recent = chats.filter((entry) => !(0, nav_js_1.isPinned)(entry)).slice(0, RECENT_CHATS);
-                if (pinned.length > 0)
-                    items.push(chatGroup("固定入口", pinned));
-                items.push(chatGroup(`最近 ${recent.length} 个`, recent));
+            more.push(label("最近动作（历史记录，不代表当前状态）"));
+            for (const cells of s.actions?.rows ?? [])
+                more.push(muted(cells.join(" · "), 2));
+            more.push(label("数据源"));
+            for (const src of s.sources) {
+                more.push(text(`${src.label}：${format_js_1.SOURCE_LABEL[src.status]}${src.status === "OK" ? "" : ` · ${src.detail}`}`, "bodySmall", src.status === "OK" ? colors.onSurfaceVariant : colors.error));
             }
+            more.push(muted(`心情档位由看板按采样、偏移和你的进展计算，只用来呈现，不会执行动作；真正的提醒和冻结由规则链决定。读取于 ${(0, snapshot_js_1.formatDateTime)(now)}。`));
         }
-        return UI.LazyColumn({ weight: 1, fillMaxWidth: true, padding: { horizontal: 16, vertical: 12 }, spacing: 12 }, items);
+        items.push(card(more, 6));
+        return pageColumn(items);
     }
+    // ---------- 底栏 ----------
+    function navItem(target, icon, name) {
+        const on = page === target;
+        return UI.Surface({ weight: 1, containerColor: colors.surface, onClick: () => openPage(target) }, UI.Column({ fillMaxWidth: true, paddingTop: 8, paddingBottom: 10, horizontalAlignment: "center", spacing: 2 }, [
+            text(icon, "titleMedium", on ? colors.primary : colors.onSurfaceVariant),
+            text(name, "labelMedium", on ? colors.primary : colors.onSurfaceVariant),
+        ]));
+    }
+    const body = page === "today" ? todayPage() : page === "chats" ? chatsPage() : sysPage();
     return UI.Column({
         fillMaxSize: true,
-        spacing: 8,
         onLoad: async () => {
             if (autoLoadedRef.current)
                 return;
             autoLoadedRef.current = true;
-            await refreshBoard();
+            await refresh();
         },
-    }, [header(), tabs(), tab === "board" ? board() : chatsView()]);
+    }, [
+        body,
+        UI.HorizontalDivider({ color: colors.surfaceVariant }),
+        UI.Row({ fillMaxWidth: true }, [navItem("today", "☀", "今天"), navItem("chats", "💬", "会话"), navItem("sys", "⚙", "系统")]),
+    ]);
 }

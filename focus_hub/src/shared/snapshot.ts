@@ -1,5 +1,8 @@
 import { PATHS } from "./paths.js";
 import { readRecentProgress, type ProgressRecord } from "./progress.js";
+import { loadHealth, type HealthCheck } from "./health.js";
+import { readRecentCheckins, type CheckinRecord } from "./checkin.js";
+import { findCompanion, type Companion } from "./companion.js";
 
 export { PATHS };
 
@@ -7,6 +10,8 @@ export { PATHS };
 const MIN_SCHEDULE_INTERVAL_MS = 15 * 60 * 1000;
 const STALE_GRACE_MS = 5 * 60 * 1000;
 const EVENT_TAIL_LINES = 40;
+const EVENT_MAX_LINES = 3000;
+const RECENT_WINDOW_SEC = 60 * 60;
 const ACTION_TAIL_LINES = 12;
 const RULE_TAGS = ["ADVICE", "PROMPT", "PREAPPROVED_GUARD"];
 
@@ -61,16 +66,36 @@ export interface EventRow {
   count: number;
 }
 
+export interface HourBucket {
+  on: number;
+  off: number;
+  unknown: number;
+}
+
+export interface FocusDay {
+  samples: number;
+  onTask: number;
+  offTask: number;
+  unknown: number;
+  hours: HourBucket[];
+  offApps: { pkg: string; name: string; count: number }[];
+  recent: { on: number; off: number; offApps: string[] };
+  drifts: { ts: number; summary: string }[];
+}
+
 export interface Snapshot {
   generatedAt: number;
   task: TaskState | null;
   workflows: WorkflowRow[];
-  usage: { windowHours: number; rows: AppUsageRow[] } | null;
-  events: { date: string; totalLines: number; rows: EventRow[]; unparsable: number } | null;
+  usage: { windowHours: number; rows: AppUsageRow[]; names: Record<string, string> } | null;
+  events: { date: string; totalLines: number; rows: EventRow[]; unparsable: number; focus: FocusDay } | null;
   actions: { totalLines: number; rows: string[][] } | null;
   execRules: string[][] | null;
   activeRules: { tagCounts: Record<string, number>; lines: string[] } | null;
   progress: ProgressRecord[] | null;
+  health: HealthCheck[];
+  checkins: CheckinRecord[];
+  companion: Companion | null;
   sources: SourceInfo[];
 }
 
@@ -128,6 +153,26 @@ async function readTail(path: string, count: number): Promise<FileLines> {
     totalLines,
     truncated: part.content.includes(TRUNCATED_MARK),
   };
+}
+
+// 宿主单次最多返回 32KB，按块读完整个文件；块内被截断就减半重读
+async function readAll(path: string, maxLines: number): Promise<FileLines> {
+  const probe = await Tools.Files.readPart(path, 1, 1);
+  const totalLines = probe.totalLines;
+  const lines: string[] = [];
+  let start = Math.max(1, totalLines - maxLines + 1);
+  let chunk = 60;
+  while (totalLines > 0 && start <= totalLines) {
+    const end = Math.min(totalLines, start + chunk - 1);
+    const part = await Tools.Files.readPart(path, start, end);
+    if (part.content.includes(TRUNCATED_MARK) && chunk > 1) {
+      chunk = Math.max(1, Math.floor(chunk / 2));
+      continue;
+    }
+    lines.push(...stripLineNumbers(part.content));
+    start = end + 1;
+  }
+  return { lines, totalLines, truncated: false };
 }
 
 type Loaded<T> = { value: T | null; source: SourceInfo };
@@ -310,15 +355,19 @@ async function loadWorkflows(now: number): Promise<Loaded<WorkflowRow[]>> {
   }
 }
 
-async function loadUsage(): Promise<Loaded<{ windowHours: number; rows: AppUsageRow[] }>> {
+async function loadUsage(): Promise<Loaded<{ windowHours: number; rows: AppUsageRow[]; names: Record<string, string> }>> {
   const label = "App 使用时长";
   const windowHours = 24;
   try {
     const result = await Tools.System.getAppUsageTime({
       sinceHours: windowHours,
-      limit: 30,
+      limit: 60,
       includeSystemApps: false,
     });
+    const names: Record<string, string> = {};
+    for (const entry of result.entries ?? []) {
+      if (entry.packageName && entry.appName) names[entry.packageName] = entry.appName;
+    }
     const rows = (result.entries ?? [])
       .map((entry) => ({
         packageName: entry.packageName,
@@ -329,7 +378,7 @@ async function loadUsage(): Promise<Loaded<{ windowHours: number; rows: AppUsage
       .filter((row) => row.foregroundMinutes > 0)
       .sort((a, b) => b.foregroundMinutes - a.foregroundMinutes)
       .slice(0, 12);
-    return { value: { windowHours, rows }, source: { label, status: "OK", detail: `过去 ${windowHours} 小时` } };
+    return { value: { windowHours, rows, names }, source: { label, status: "OK", detail: `过去 ${windowHours} 小时` } };
   } catch (error) {
     return { value: null, source: { label, status: "ERROR", detail: errorText(error) } };
   }
@@ -357,10 +406,70 @@ function eventTime(event: Record<string, unknown>): string {
   return Number.isFinite(ts) && ts > 0 ? formatClock(ts * 1000) : "时间未记录";
 }
 
+function eventHour(event: Record<string, unknown>): number | null {
+  const iso = typeof event.iso === "string" ? event.iso : "";
+  if (iso.length >= 13) {
+    const h = Number(iso.slice(11, 13));
+    if (Number.isInteger(h) && h >= 0 && h < 24) return h;
+  }
+  const ts = Number(event.ts);
+  return Number.isFinite(ts) && ts > 0 ? new Date(ts * 1000).getHours() : null;
+}
+
+// 只统计前台采样：ontask=1 在任务上，ontask=0 不在；pkg=none、息屏或缺字段一律算未知，不推断
+function computeFocus(events: Record<string, unknown>[], now: number, appNames: Map<string, string>): FocusDay {
+  const hours: HourBucket[] = Array.from({ length: 24 }, () => ({ on: 0, off: 0, unknown: 0 }));
+  const offCounts = new Map<string, number>();
+  const recent = { on: 0, off: 0, offApps: [] as string[] };
+  const drifts: { ts: number; summary: string }[] = [];
+  let onTask = 0;
+  let offTask = 0;
+  let unknown = 0;
+  const nowSec = Math.floor(now / 1000);
+  for (const event of events) {
+    const ts = Number(event.ts) || 0;
+    if (event.type === "DRIFT") {
+      drifts.push({ ts, summary: summarizeEvent(event, appNames) });
+      continue;
+    }
+    if (event.type !== "FOREGROUND") continue;
+    const hour = eventHour(event);
+    const pkg = String(event.pkg ?? "");
+    const ontask = String(event.ontask ?? "");
+    const known = pkg && pkg !== "none" && event.screen !== "OFF" && (ontask === "0" || ontask === "1");
+    const bucket = hour == null ? null : hours[hour];
+    const isRecent = ts > 0 && nowSec - ts <= RECENT_WINDOW_SEC;
+    if (!known) {
+      unknown += 1;
+      if (bucket) bucket.unknown += 1;
+      continue;
+    }
+    if (ontask === "1") {
+      onTask += 1;
+      if (bucket) bucket.on += 1;
+      if (isRecent) recent.on += 1;
+    } else {
+      offTask += 1;
+      if (bucket) bucket.off += 1;
+      offCounts.set(pkg, (offCounts.get(pkg) ?? 0) + 1);
+      if (isRecent) {
+        recent.off += 1;
+        const name = appNames.get(pkg) ?? pkg;
+        if (!recent.offApps.includes(name)) recent.offApps.push(name);
+      }
+    }
+  }
+  const offApps = [...offCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([pkg, count]) => ({ pkg, name: appNames.get(pkg) ?? pkg, count }));
+  return { samples: onTask + offTask + unknown, onTask, offTask, unknown, hours, offApps, recent, drifts };
+}
+
 async function loadEvents(
   now: number,
   appNames: Map<string, string>
-): Promise<Loaded<{ date: string; totalLines: number; rows: EventRow[]; unparsable: number }>> {
+): Promise<Loaded<{ date: string; totalLines: number; rows: EventRow[]; unparsable: number; focus: FocusDay }>> {
   const today = dateKey(new Date(now));
   const yesterday = dateKey(new Date(now - 24 * 3600 * 1000));
   let date = today;
@@ -378,18 +487,20 @@ async function loadEvents(
     return { value: null, source: { label: "事件流", status: "ERROR", detail: errorText(error) } };
   }
   return loadFile("事件流", path, async () => {
-    const tail = await readTail(path, EVENT_TAIL_LINES);
-    const rows: EventRow[] = [];
+    const all = await readAll(path, EVENT_MAX_LINES);
+    const parsed: Record<string, unknown>[] = [];
     let unparsable = 0;
-    for (const line of tail.lines) {
+    for (const line of all.lines) {
       if (!line.trim()) continue;
-      let event: Record<string, unknown>;
       try {
-        event = JSON.parse(line) as Record<string, unknown>;
+        parsed.push(JSON.parse(line) as Record<string, unknown>);
       } catch {
         unparsable += 1;
-        continue;
       }
+    }
+    const focus = computeFocus(parsed, now, appNames);
+    const rows: EventRow[] = [];
+    for (const event of parsed.slice(-EVENT_TAIL_LINES)) {
       const row: EventRow = {
         time: eventTime(event),
         type: String(event.type ?? "未记录"),
@@ -407,7 +518,7 @@ async function loadEvents(
       }
     }
     rows.reverse();
-    return { date, totalLines: tail.totalLines, rows, unparsable };
+    return { date, totalLines: all.totalLines, rows, unparsable, focus };
   });
 }
 
@@ -419,7 +530,7 @@ function splitColumns(line: string): string[] {
 async function loadProgress(now: number): Promise<Loaded<ProgressRecord[]>> {
   const label = "用户进展";
   try {
-    const records = await readRecentProgress(8, now);
+    const records = await readRecentProgress(20, now);
     return { value: records, source: { label, status: "OK", detail: `${records.length} 条` } };
   } catch (error) {
     return { value: null, source: { label, status: "ERROR", detail: errorText(error) } };
@@ -429,16 +540,19 @@ async function loadProgress(now: number): Promise<Loaded<ProgressRecord[]>> {
 export async function collectSnapshot(): Promise<Snapshot> {
   const now = Date.now();
 
-  const [task, workflows, usage, progress] = await Promise.all([
+  const [task, workflows, usage, progress, health, checkins, companion] = await Promise.all([
     loadFile("当前任务", PATHS.taskState, async () => parseTaskState((await readHead(PATHS.taskState, 50)).lines)),
     loadWorkflows(now),
     loadUsage(),
     loadProgress(now),
+    loadHealth(now).catch(() => [] as HealthCheck[]),
+    readRecentCheckins(now).catch(() => [] as CheckinRecord[]),
+    findCompanion().catch(() => null),
   ]);
 
   const appNames = new Map<string, string>();
-  for (const row of usage.value?.rows ?? []) {
-    appNames.set(row.packageName, row.appName);
+  for (const [pkg, name] of Object.entries(usage.value?.names ?? {})) {
+    appNames.set(pkg, name);
   }
 
   const [events, actions, execRules, activeRules] = await Promise.all([
@@ -479,6 +593,9 @@ export async function collectSnapshot(): Promise<Snapshot> {
     execRules: execRules.value,
     activeRules: activeRules.value,
     progress: progress.value,
+    health,
+    checkins,
+    companion,
     sources: [task.source, progress.source, workflows.source, usage.source, events.source, actions.source, execRules.source, activeRules.source],
   };
 }

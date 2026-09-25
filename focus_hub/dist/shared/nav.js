@@ -5,6 +5,7 @@ exports.listChats = listChats;
 exports.isPinned = isPinned;
 exports.setMainChat = setMainChat;
 exports.openRouteViaIntent = openRouteViaIntent;
+exports.startVoiceWith = startVoiceWith;
 exports.FOCUS_HUB_ROUTE = "toolpkg:local.focus_hub:ui:focus_hub";
 exports.NATIVE_CHAT_ROUTE = "native.ai_chat";
 // 与宿主 ToolPkgDesktopWidgetHost.EXTRA_OPEN_ROUTE_ID 一致，MainActivity.handleIntent 读取它打开路由
@@ -57,4 +58,10 @@ async function openRouteViaIntent(routeId) {
         .addFlag(536870912 /* IntentFlag.ACTIVITY_SINGLE_TOP */)
         .putExtra(EXTRA_OPEN_ROUTE_ID, routeId);
     await intent.start();
+}
+// 语音入口走悬浮窗服务：先显式启动语音球，再把悬浮窗里的对话切到她（这里 switchTo 正是切悬浮窗）
+async function startVoiceWith(chatId) {
+    await Tools.Chat.startService({ initial_mode: "VOICE_BALL", keep_if_exists: true });
+    if (chatId)
+        await Tools.Chat.switchTo(chatId);
 }

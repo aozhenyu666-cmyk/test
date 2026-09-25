@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "toolpkg_id": "local.focus_hub",
-  "version": "0.3.0",
-  "api_version": "1.0.0",
+  "version": "0.4.0",
+  "api_version": "1.0.1",
   "main": "dist/main.js",
   "display_name": {
     "zh": "主控台",
@@ -10,9 +10,9 @@
     "default": "Focus Hub"
   },
   "description": {
-    "zh": "只读看板 + 会话导航。汇总当前任务、工作流运行、App 使用、最近事件、规则和动作审计；会话页按固定入口和最近活跃整理所有对话，点开即在主界面打开。附带用户进展统一入口（report_progress，只追加写 /sdcard/Download/Operit/progress/）和页面跳转工具，可在工作流里把用户带到主控台。不冻结、不解冻、不触发工作流。",
-    "en": "Read-only dashboard plus a chat navigator, with navigation tools for workflows. Performs no freeze, unfreeze or workflow actions.",
-    "default": "Read-only dashboard plus a chat navigator."
+    "zh": "陪伴式主控台：首页是她（心情按规则阶梯呈现）、你的四个动作和今天的专注色条；会话页只有她一个主入口；系统页收纳体检、工作流、用量、事件和规则。附带用户进展入口、\"她来找你\"打卡（语音+弹窗+待回应）和跳转工具。不冻结、不解冻、不触发工作流；只追加写进展和打卡记录。",
+    "en": "Companion-style hub: mood, four actions, daily focus strip; chats and system pages; progress entry and companion check-ins.",
+    "default": "Companion-style hub."
   },
   "enabled_by_default": false,
   "subpackages": [
@@ -56,7 +56,26 @@
       }
     }
   ],
-  "resources": [],
-  "workflow_templates": [],
+  "resources": [
+    {
+      "key": "workflow_checkin",
+      "path": "resources/workflow_checkin.json",
+      "mime": "application/json"
+    }
+  ],
+  "workflow_templates": [
+    {
+      "id": "companion_checkin",
+      "display_name": {
+        "zh": "陪伴打卡（每小时）",
+        "en": "Companion Check-in (hourly)"
+      },
+      "description": {
+        "zh": "每小时让她来找你：语音 + 弹出主控台 + 待回应。深夜和刚找过时自动跳过。",
+        "en": "Hourly companion check-in with voice and popup."
+      },
+      "resource_key": "workflow_checkin"
+    }
+  ],
   "workspace_templates": []
 }

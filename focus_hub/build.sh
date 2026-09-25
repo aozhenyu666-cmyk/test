@@ -17,8 +17,11 @@ if missing:
 os.makedirs("build", exist_ok=True)
 out = "build/focus_hub.toolpkg"
 files = ["manifest.json"] + sorted(
-    os.path.join(root, f) for root, _, fs in os.walk("dist") for f in fs
+    os.path.join(root, f) for d in ("dist", "resources") for root, _, fs in os.walk(d) for f in fs
 )
+for r in m.get("resources", []):
+    if not os.path.exists(r["path"]):
+        raise SystemExit(f"resource missing: {r['path']}")
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
     for f in files:
         info = zipfile.ZipInfo(f, date_time=(2026, 1, 1, 0, 0, 0))

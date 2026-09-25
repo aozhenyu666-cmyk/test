@@ -75,3 +75,9 @@ export async function openRouteViaIntent(routeId: string): Promise<void> {
     .putExtra(EXTRA_OPEN_ROUTE_ID, routeId);
   await intent.start();
 }
+
+// 语音入口走悬浮窗服务：先显式启动语音球，再把悬浮窗里的对话切到她（这里 switchTo 正是切悬浮窗）
+export async function startVoiceWith(chatId: string | null): Promise<void> {
+  await Tools.Chat.startService({ initial_mode: "VOICE_BALL", keep_if_exists: true });
+  if (chatId) await Tools.Chat.switchTo(chatId);
+}

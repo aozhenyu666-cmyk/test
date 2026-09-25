@@ -60,7 +60,8 @@
    - `kind`：`progress` 继续 / `stuck` 卡住 / `done` 提交 / `pause` 暂停 / `note` 说明；`via`：`dashboard` 或 `chat_ai`。
    - 写入工具：`focus_hub_progress:report_progress(kind, user_quote, note?)`；读取：`focus_hub_progress:get_recent_progress(limit?)`。
 2. **主控台只读的文件**：`drift/task_state.txt`、`events/<日期>/events.jsonl`、`events/EXEC_RULES.tsv`、`events/ACTIVE_RULES.md`、`events/ACTION_LOG.tsv`。**改这些文件的格式前，先通知主界面线。**
-3. **（提议，待定）统一状态文件**：主界面改版要把"规则阶梯"画成陪伴角色的心情（安心 → 在意 A1 → 担心 A2 → 要谈谈 A3，见 `design/focus_hub_redesign_mockup.html`）。希望流程线产出一个状态文件，例如 `/sdcard/Download/Operit/state/now.json`，包含当前偏离等级、连续次数、最近一次动作及其四态、下一步会触发的动作。字段请你在摸清 `drift_scan.sh` 后提议，双方确认后再定。
+3. **打卡（主控台 v0.4 已实现）**：`focus_hub_nav:check_in(message?, force?, speak?, popup?)` = 语音念一句 + 弹出主控台 + 记一条待回应的打卡，写入 `/sdcard/Download/Operit/companion/checkins/<YYYYMMDD>.jsonl`（`type: "CHECKIN"`，带 `level`、`line`、`speak`/`popup` 各自的 ACCEPTED/FAILED/SKIPPED）。用户在首页点任意动作即算回应，并记成一条进展。自带深夜、冷却和"状态好就不打扰"的节制。**流程线梳理提醒渠道时，可以考虑让 S3 秘书等提醒改为调用它（可以传 `message` 指定要说的话）**，这样提醒、语音、弹窗和用户回应就合成同一条链。
+4. **（提议，待定）统一状态文件**：主界面改版要把"规则阶梯"画成陪伴角色的心情（安心 → 在意 A1 → 担心 A2 → 要谈谈 A3，见 `design/focus_hub_redesign_mockup.html`）。希望流程线产出一个状态文件，例如 `/sdcard/Download/Operit/state/now.json`，包含当前偏离等级、连续次数、最近一次动作及其四态、下一步会触发的动作。字段请你在摸清 `drift_scan.sh` 后提议，双方确认后再定。
 
 ---
 

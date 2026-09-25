@@ -8,10 +8,15 @@ exports.collectSnapshot = collectSnapshot;
 const paths_js_1 = require("./paths.js");
 Object.defineProperty(exports, "PATHS", { enumerable: true, get: function () { return paths_js_1.PATHS; } });
 const progress_js_1 = require("./progress.js");
+const health_js_1 = require("./health.js");
+const checkin_js_1 = require("./checkin.js");
+const companion_js_1 = require("./companion.js");
 // WorkManager 不接受小于 15 分钟的周期，宿主会把间隔抬到 15 分钟
 const MIN_SCHEDULE_INTERVAL_MS = 15 * 60 * 1000;
 const STALE_GRACE_MS = 5 * 60 * 1000;
 const EVENT_TAIL_LINES = 40;
+const EVENT_MAX_LINES = 3000;
+const RECENT_WINDOW_SEC = 60 * 60;
 const ACTION_TAIL_LINES = 12;
 const RULE_TAGS = ["ADVICE", "PROMPT", "PREAPPROVED_GUARD"];
 function errorText(error) {
@@ -57,6 +62,25 @@ async function readTail(path, count) {
         totalLines,
         truncated: part.content.includes(TRUNCATED_MARK),
     };
+}
+// 宿主单次最多返回 32KB，按块读完整个文件；块内被截断就减半重读
+async function readAll(path, maxLines) {
+    const probe = await Tools.Files.readPart(path, 1, 1);
+    const totalLines = probe.totalLines;
+    const lines = [];
+    let start = Math.max(1, totalLines - maxLines + 1);
+    let chunk = 60;
+    while (totalLines > 0 && start <= totalLines) {
+        const end = Math.min(totalLines, start + chunk - 1);
+        const part = await Tools.Files.readPart(path, start, end);
+        if (part.content.includes(TRUNCATED_MARK) && chunk > 1) {
+            chunk = Math.max(1, Math.floor(chunk / 2));
+            continue;
+        }
+        lines.push(...stripLineNumbers(part.content));
+        start = end + 1;
+    }
+    return { lines, totalLines, truncated: false };
 }
 async function loadFile(label, path, read) {
     try {
@@ -234,9 +258,14 @@ async function loadUsage() {
     try {
         const result = await Tools.System.getAppUsageTime({
             sinceHours: windowHours,
-            limit: 30,
+            limit: 60,
             includeSystemApps: false,
         });
+        const names = {};
+        for (const entry of result.entries ?? []) {
+            if (entry.packageName && entry.appName)
+                names[entry.packageName] = entry.appName;
+        }
         const rows = (result.entries ?? [])
             .map((entry) => ({
             packageName: entry.packageName,
@@ -247,7 +276,7 @@ async function loadUsage() {
             .filter((row) => row.foregroundMinutes > 0)
             .sort((a, b) => b.foregroundMinutes - a.foregroundMinutes)
             .slice(0, 12);
-        return { value: { windowHours, rows }, source: { label, status: "OK", detail: `过去 ${windowHours} 小时` } };
+        return { value: { windowHours, rows, names }, source: { label, status: "OK", detail: `过去 ${windowHours} 小时` } };
     }
     catch (error) {
         return { value: null, source: { label, status: "ERROR", detail: errorText(error) } };
@@ -274,6 +303,72 @@ function eventTime(event) {
     const ts = Number(event.ts);
     return Number.isFinite(ts) && ts > 0 ? formatClock(ts * 1000) : "时间未记录";
 }
+function eventHour(event) {
+    const iso = typeof event.iso === "string" ? event.iso : "";
+    if (iso.length >= 13) {
+        const h = Number(iso.slice(11, 13));
+        if (Number.isInteger(h) && h >= 0 && h < 24)
+            return h;
+    }
+    const ts = Number(event.ts);
+    return Number.isFinite(ts) && ts > 0 ? new Date(ts * 1000).getHours() : null;
+}
+// 只统计前台采样：ontask=1 在任务上，ontask=0 不在；pkg=none、息屏或缺字段一律算未知，不推断
+function computeFocus(events, now, appNames) {
+    const hours = Array.from({ length: 24 }, () => ({ on: 0, off: 0, unknown: 0 }));
+    const offCounts = new Map();
+    const recent = { on: 0, off: 0, offApps: [] };
+    const drifts = [];
+    let onTask = 0;
+    let offTask = 0;
+    let unknown = 0;
+    const nowSec = Math.floor(now / 1000);
+    for (const event of events) {
+        const ts = Number(event.ts) || 0;
+        if (event.type === "DRIFT") {
+            drifts.push({ ts, summary: summarizeEvent(event, appNames) });
+            continue;
+        }
+        if (event.type !== "FOREGROUND")
+            continue;
+        const hour = eventHour(event);
+        const pkg = String(event.pkg ?? "");
+        const ontask = String(event.ontask ?? "");
+        const known = pkg && pkg !== "none" && event.screen !== "OFF" && (ontask === "0" || ontask === "1");
+        const bucket = hour == null ? null : hours[hour];
+        const isRecent = ts > 0 && nowSec - ts <= RECENT_WINDOW_SEC;
+        if (!known) {
+            unknown += 1;
+            if (bucket)
+                bucket.unknown += 1;
+            continue;
+        }
+        if (ontask === "1") {
+            onTask += 1;
+            if (bucket)
+                bucket.on += 1;
+            if (isRecent)
+                recent.on += 1;
+        }
+        else {
+            offTask += 1;
+            if (bucket)
+                bucket.off += 1;
+            offCounts.set(pkg, (offCounts.get(pkg) ?? 0) + 1);
+            if (isRecent) {
+                recent.off += 1;
+                const name = appNames.get(pkg) ?? pkg;
+                if (!recent.offApps.includes(name))
+                    recent.offApps.push(name);
+            }
+        }
+    }
+    const offApps = [...offCounts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([pkg, count]) => ({ pkg, name: appNames.get(pkg) ?? pkg, count }));
+    return { samples: onTask + offTask + unknown, onTask, offTask, unknown, hours, offApps, recent, drifts };
+}
 async function loadEvents(now, appNames) {
     const today = dateKey(new Date(now));
     const yesterday = dateKey(new Date(now - 24 * 3600 * 1000));
@@ -293,20 +388,22 @@ async function loadEvents(now, appNames) {
         return { value: null, source: { label: "事件流", status: "ERROR", detail: errorText(error) } };
     }
     return loadFile("事件流", path, async () => {
-        const tail = await readTail(path, EVENT_TAIL_LINES);
-        const rows = [];
+        const all = await readAll(path, EVENT_MAX_LINES);
+        const parsed = [];
         let unparsable = 0;
-        for (const line of tail.lines) {
+        for (const line of all.lines) {
             if (!line.trim())
                 continue;
-            let event;
             try {
-                event = JSON.parse(line);
+                parsed.push(JSON.parse(line));
             }
             catch {
                 unparsable += 1;
-                continue;
             }
+        }
+        const focus = computeFocus(parsed, now, appNames);
+        const rows = [];
+        for (const event of parsed.slice(-EVENT_TAIL_LINES)) {
             const row = {
                 time: eventTime(event),
                 type: String(event.type ?? "未记录"),
@@ -325,7 +422,7 @@ async function loadEvents(now, appNames) {
             }
         }
         rows.reverse();
-        return { date, totalLines: tail.totalLines, rows, unparsable };
+        return { date, totalLines: all.totalLines, rows, unparsable, focus };
     });
 }
 function splitColumns(line) {
@@ -335,7 +432,7 @@ function splitColumns(line) {
 async function loadProgress(now) {
     const label = "用户进展";
     try {
-        const records = await (0, progress_js_1.readRecentProgress)(8, now);
+        const records = await (0, progress_js_1.readRecentProgress)(20, now);
         return { value: records, source: { label, status: "OK", detail: `${records.length} 条` } };
     }
     catch (error) {
@@ -344,15 +441,18 @@ async function loadProgress(now) {
 }
 async function collectSnapshot() {
     const now = Date.now();
-    const [task, workflows, usage, progress] = await Promise.all([
+    const [task, workflows, usage, progress, health, checkins, companion] = await Promise.all([
         loadFile("当前任务", paths_js_1.PATHS.taskState, async () => parseTaskState((await readHead(paths_js_1.PATHS.taskState, 50)).lines)),
         loadWorkflows(now),
         loadUsage(),
         loadProgress(now),
+        (0, health_js_1.loadHealth)(now).catch(() => []),
+        (0, checkin_js_1.readRecentCheckins)(now).catch(() => []),
+        (0, companion_js_1.findCompanion)().catch(() => null),
     ]);
     const appNames = new Map();
-    for (const row of usage.value?.rows ?? []) {
-        appNames.set(row.packageName, row.appName);
+    for (const [pkg, name] of Object.entries(usage.value?.names ?? {})) {
+        appNames.set(pkg, name);
     }
     const [events, actions, execRules, activeRules] = await Promise.all([
         loadEvents(now, appNames),
@@ -393,6 +493,9 @@ async function collectSnapshot() {
         execRules: execRules.value,
         activeRules: activeRules.value,
         progress: progress.value,
+        health,
+        checkins,
+        companion,
         sources: [task.source, progress.source, workflows.source, usage.source, events.source, actions.source, execRules.source, activeRules.source],
     };
 }

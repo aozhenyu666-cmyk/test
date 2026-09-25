@@ -2,41 +2,31 @@
 
 目标 Operit 版本：**1.12.2**（类型定义取自 Operit `v1.12.2` 标签，见仓库根目录 `types/`）。
 
-侧边栏里的一个页面，两个标签：
+侧边栏里的一个页面，底部三个标签：
 
-- **看板**：顶部四格概览（当前任务、需关注的工作流、今日事件、用得最多的 App），下面是"我的进展"、工作流、App 使用、最近事件；规则、动作审计、数据源明细收在"展开"里。除了"我的进展"可以记录，其余只读。
-- **会话**：把所有对话整理成"固定入口"（陪伴窗、温柔巡检、判断官等）和"最近 30 个"，可以按标题搜索。点一下就在主界面打开那个对话。消息超过 300 条的会标出"上下文很长"。
+- **今天**：首页是"她"（标题含「陪伴窗」的对话，名字取它绑定的角色卡）。
+  - **心情**四档：安心 / 在意 / 担心 / 要谈谈，按最近一小时采样、偏移、你说的进展和未回应的打卡计算，"为什么"一行写着依据。每一档对应规则阶梯的下一步（取自 `EXEC_RULES.tsv`）。心情只用来呈现，不执行任何动作。
+  - **找她聊**：在主界面打开陪伴窗。**语音**：启动语音球，并把悬浮窗对话切到她。**让她细说**：按需调用一次模型，用她的口吻说三句以内。
+  - **四个动作**：继续 / 卡住 / 提交 / 暂停，点一下再"记下"就是一条进展；暂停必须写原因。
+  - **今天的你**：24 小时专注色条（采样口径）、在任务上的比例、今天的进展。
+- **会话**：她是唯一主入口；判断官、温柔巡检等列为"后台角色"；另有最近 30 个对话和搜索。
+- **系统**：体检（关键文件多久没更新）、工作流、App 使用、最近事件、规则/审计/数据源。
 
-另有三个工具包：
+**她来找你（打卡）**：`focus_hub_nav:check_in` 一次做三件事：用 Operit 当前配置的语音念出一句话、弹出主控台、记一条待回应的打卡。你在首页点任意一个动作就算回应。深夜（23:30–08:00）、45 分钟内刚找过、或者你状态很好且 2 小时内报过进展时，会自动跳过。包里自带工作流模板「陪伴打卡（每小时）」，在 Operit「工作流 → 从模板新建」里选它即可。
+
+工具一览：
 
 | 工具 | 用途 |
 |---|---|
-| `focus_hub_data:get_dashboard_snapshot` | 只读，让 AI 读到和看板同一份数据 |
+| `focus_hub_data:get_dashboard_snapshot` | 只读，让 AI 读到和主控台同一份状态（含心情、专注、体检） |
 | `focus_hub_progress:report_progress(kind, user_quote, note?)` | 用户进展统一入口：AI 在对话里记下你亲口说的进展 |
-| `focus_hub_progress:get_recent_progress(limit?)` | 读最近进展（今天和昨天），判断和提醒前先看 |
-| `focus_hub_nav:open_focus_hub` | 把界面带到主控台，可放在工作流末尾代替新建临时对话 |
-| `focus_hub_nav:open_chat(chat_id)` | 在主界面打开指定对话 |
+| `focus_hub_progress:get_recent_progress(limit?)` | 读最近进展，判断和提醒前先看 |
+| `focus_hub_nav:check_in(message?, force?, speak?, popup?)` | 她来找你：语音 + 弹窗 + 待回应 |
+| `focus_hub_nav:open_focus_hub` / `open_chat(chat_id)` | 打开主控台 / 在主界面打开指定对话 |
 
-**不做的事**：不冻结、不解冻、不触发或修改工作流、不发消息、不新建对话。唯一的写入是进展记录，只追加到 `/sdcard/Download/Operit/progress/<日期>.jsonl`。
+**不做的事**：不冻结、不解冻、不触发或修改工作流、不新建对话。写入只有两处，都是只追加：`progress/<日期>.jsonl`（进展）和 `companion/checkins/<日期>.jsonl`（打卡）。
 
-## 用户进展统一入口
-
-每条记录一行 JSON：
-
-```json
-{"id":"PROG-1790312345-4821","ts":1790312345,"iso":"2026-09-25 14:05:45","date":"20260925","type":"USER_PROGRESS","origin":"REAL_USER","via":"chat_ai","kind":"done","user_quote":"投了两家","note":"Boss 直聘","task":"求职投递","ptr":"T_1789439490890_tma07.txt","chat_id":"ded96924-..."}
-```
-
-- `kind`：`progress` 继续 / `stuck` 卡住 / `done` 提交 / `pause` 暂停 / `note` 说明。
-- `user_quote` 必须是你的原话；`via` 区分是主控台手记（`dashboard`）还是对话里 AI 代记（`chat_ai`）。
-- `task`、`ptr` 取记录时的 `task_state.txt`，所以能对上"说这句话时在做哪件事"。
-- 同一句话 10 分钟内重复上报只记一次。
-
-让 AI 会用它：在陪伴窗、秘书、温柔巡检等角色卡里加一句——
-
-> 我在对话里说自己做了什么、卡住了、提交了或要暂停时，用 focus_hub_progress 的 report_progress 记下来，user_quote 填我的原话。准备提醒或判断我是否偏离任务之前，先用 get_recent_progress 看我最近说过什么，已经做完的事不要再催。
-
-**还没接上的部分**：判断官（G2）是用 shell 脚本组装证据包的，不会自动读这个目录。要让它读到，需要在 `gen_pack.sh` 里加上读取当天 progress 文件的逻辑——等拿到脚本再改。
+语音走的是 Operit"设置"里配置的 TTS。如果你的 MiniMax 语音已经配在那里，打卡会直接用它；如果是脚本自己调用的，之后再接入，密钥不需要给任何人。
 
 ## 安装
 
@@ -45,6 +35,10 @@
 3. 启用「主控台」，主侧边栏会出现入口。
 
 旧版本直接导入覆盖即可（`toolpkg_id` 不变）。SHA-256 见 `build/focus_hub.toolpkg.sha256`。
+
+## v0.4 新增
+
+陪伴式改版：首页是她（心情 = 规则阶梯的呈现）、四个动作、今日专注色条；会话页只留一个主入口；系统页收纳工程信息；"她来找你"打卡（语音 + 弹窗 + 待回应），附每小时工作流模板；"让她细说"按需调用模型（需要 ToolPkg API 1.0.1）。
 
 ## v0.3 新增
 
@@ -62,11 +56,16 @@
 | 项目 | 状态 | 依据 |
 |---|---|---|
 | 类型检查（v1.12.2 类型） | VERIFIED | `tsc` 0 错误 |
-| 数据解析、调度判断、事件合并、缺文件处理 | VERIFIED（模拟宿主） | `test/harness.js` 60 项通过；调度用例按真机 `get_workflow` 格式（无 `type` 字段）构造 |
+| 数据解析、调度判断、事件合并、缺文件处理 | VERIFIED（模拟宿主） | `test/harness.js` 59 项通过；调度用例按真机 `get_workflow` 格式（无 `type` 字段）构造 |
 | 看板在真机加载、各数据源读取 | VERIFIED（v0.1 真机截图） | 26 个工作流、当前任务均显示 |
 | 会话列表（`list_chats`，不依赖悬浮窗服务） | AVAILABLE_UNTESTED | 源码确认读聊天记录库 |
 | 点开对话（Java 桥 `ChatHistoryManager.setCurrentChatId` + `native.ai_chat`） | AVAILABLE_UNTESTED | 源码确认路由名和主界面跟随机制；调用宿主内部类，跨版本可能失效 |
 | 进展记录：校验、追加写入、去重、读取、看板卡片 | VERIFIED（模拟宿主） | harness 覆盖 |
+| 心情计算、打卡决策（深夜/冷却/状态好）、整天事件分块读取、体检 | VERIFIED（模拟宿主） | harness 覆盖，时钟固定在 14:30 |
+| 打卡语音 `SoftwareSettings.testTtsPlayback` | AVAILABLE_UNTESTED | 类型定义存在；走 Operit 当前 TTS 配置 |
+| "让她细说" `Tools.Chat.call` | AVAILABLE_UNTESTED | 需要 API 1.0.1，1.12.2 支持；manifest 已声明 |
+| 语音按钮（`startService VOICE_BALL` + `switchTo`） | AVAILABLE_UNTESTED | 显式启动悬浮窗服务后再切换，避开 Service not connected |
+| 工作流模板导入后是否自动启用和调度 | AVAILABLE_UNTESTED | 格式照官方 template_try |
 | 进展记录在真机写入 `/sdcard/.../progress/` | AVAILABLE_UNTESTED | 宿主 `write_file` 源码确认 append 原样追加、自动建目录 |
 | 对话里的 AI 会主动调用 report_progress | AVAILABLE_UNTESTED | 取决于角色卡提示和模型 |
 | `open_focus_hub` 从工作流拉起页面 | AVAILABLE_UNTESTED | `MainActivity.handleIntent` 读取 `OPEN_ROUTE_ID`；Operit 在后台时系统可能拦截 Activity 启动 |

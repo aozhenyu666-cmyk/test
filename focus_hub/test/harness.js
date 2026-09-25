@@ -1,31 +1,60 @@
 // Node harness: mocks the Operit 1.12.2 host APIs used by focus_hub and exercises the compiled dist.
 const path = require("path");
+const fs = require("fs");
 const DIST = path.join(__dirname, "..", "dist");
 
-const now = Date.now();
-const pad = (n) => String(n).padStart(2, "0");
-const d = new Date(now);
-const today = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+// Fixed clock: today 14:30 local, so quiet hours / cooldown are deterministic
+const base = new Date();
+base.setHours(14, 30, 0, 0);
+const now = base.getTime();
+Date.now = () => now;
 
-// ---------- files ----------
+const pad = (n) => String(n).padStart(2, "0");
+const dkey = (t) => { const x = new Date(t); return `${x.getFullYear()}${pad(x.getMonth() + 1)}${pad(x.getDate())}`; };
+const iso = (t) => { const x = new Date(t); return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())} ${pad(x.getHours())}:${pad(x.getMinutes())}:${pad(x.getSeconds())}`; };
+const mtime = (t) => `${iso(t)}.000`;
+const today = dkey(now);
+const yesterday = dkey(now - 24 * 3600 * 1000);
+const MIN = 60000, H = 3600000;
+
+// ---------- events: a day of 15-min samples, a drift, long filler lines, one broken line ----------
 const events = [];
-for (let i = 0; i < 300; i++) {
-  const ts = Math.floor(now / 1000) - (300 - i) * 60;
-  events.push(JSON.stringify({ eid: `FOREGROUND-${ts}`, id: `FOREGROUND-${ts}`, ts, iso: `2026-09-25 ${pad(Math.floor(i / 60))}:${pad(i % 60)}:00`, date: today, type: "FOREGROUND", pkg: "com.baidu.tieba", task: "求职投递", state: "ACTIVE", mode: "JOB_SEARCH", ontask: "0", src: "P3_OBS", screen: "ON", dedup: `fg-${i}` }));
+const fg = (t, pkg, ontask, extra = {}) => events.push(JSON.stringify({ eid: `FG-${t}`, ts: Math.floor(t / 1000), iso: iso(t), date: today, type: "FOREGROUND", pkg, task: "求职投递", state: "ACTIVE", mode: "JOB_SEARCH", ontask, src: "P3_OBS", screen: "ON", dedup: `fg-${t}`, ...extra }));
+for (let i = 0; i < 120; i++) {
+  events.push(JSON.stringify({ eid: `UR-${i}`, ts: Math.floor((now - 6 * H + i * MIN) / 1000), iso: iso(now - 6 * H + i * MIN), type: "USAGE_REFRESH", status: "ok", src: "publish_usage", pad: "x".repeat(900), dedup: `ur-${i}` }));
 }
-events.push(JSON.stringify({ eid: "SCHED_PATROL-1", ts: Math.floor(now / 1000), iso: "2026-09-25 23:59:00", type: "SCHED_PATROL", late: "0", rescue: "0", src: "sched_watchdog", dedup: "sp-1" }));
+for (let t = now - 5 * H; t < now - 60 * MIN; t += 15 * MIN) fg(t, "com.boss.zhipin", "1");
+fg(now - 4 * H, "none", "");
+fg(now - 3 * H, "com.kurogame.mingchao", "0");
+fg(now - 45 * MIN, "com.boss.zhipin", "1");
+fg(now - 30 * MIN, "com.baidu.tieba", "0");
+fg(now - 20 * MIN, "com.boss.zhipin", "1");
+fg(now - 5 * MIN, "com.baidu.tieba", "0");
+events.push(JSON.stringify({ eid: "DRIFT-1", ts: Math.floor((now - 20 * MIN) / 1000), iso: iso(now - 20 * MIN), type: "DRIFT", pkg: "com.baidu.tieba", kind: "streak", src: "drift_scan", dedup: "d1" }));
 events.push("{broken json");
 
+const P = "/sdcard/Download/Operit";
 const FILES = {
-  "/sdcard/Download/Operit/drift/task_state.txt": "STATE=ACTIVE\nTASK=求职投递\nMODE=JOB_SEARCH\nPTR=T_1789439490890_tma07.txt\nDERIVED_FROM=PTR.txt+task_card(单向投影)\nSYNCED_AT=2026-09-24 21:59:13\n",
-  [`/sdcard/Download/Operit/events/${today}/events.jsonl`]: events.join("\n") + "\n",
-  "/sdcard/Download/Operit/events/EXEC_RULES.tsv": "# id\tcond\taction\nA1_REMIND\tdrift_level=1\t提醒\nA2_ASK\tdrift_level=2\t追问\nA3_STOP_APP\tdrift_level=3\t停止/冻结干扰应用\nA4_LOCK_SCREEN\tdrift_streak>=3\t锁屏10分钟\n",
-  "/sdcard/Download/Operit/events/ACTIVE_RULES.md": "# 生效规则\n\n- [ADVICE] 贴吧超过30分钟提醒\n- [PROMPT] 偏移时追问\n- [PREAPPROVED_GUARD] 冻结抖音\n普通说明行\n",
-  "/sdcard/Download/Operit/events/ACTION_LOG.tsv": Array.from({ length: 30 }, (_, i) => `2026-09-25 10:${pad(i)}\t${i % 2 ? "unfreeze" : "freeze"}\tEV-${i}\tcom.ss.android.ugc.aweme\tok\t${i % 3 ? "VERIFIED_SUCCESS" : "UNKNOWN"}`).join("\n") + "\n",
+  [`${P}/drift/task_state.txt`]: "STATE=ACTIVE\nTASK=求职投递\nMODE=JOB_SEARCH\nPTR=T_1789439490890_tma07.txt\nDERIVED_FROM=PTR.txt+task_card(单向投影)\nSYNCED_AT=2026-09-24 21:59:13\n",
+  [`${P}/events/${today}/events.jsonl`]: events.join("\n") + "\n",
+  [`${P}/events/EXEC_RULES.tsv`]: "# id\tcond\taction\nA1_REMIND\tdrift_level=1\t提醒\nA2_ASK\tdrift_level=2\t追问\nA3_STOP_APP\tdrift_level=3\t停止/冻结干扰应用\nA4_LOCK_SCREEN\tdrift_streak>=3\t锁屏10分钟\n",
+  [`${P}/events/ACTIVE_RULES.md`]: "# 生效规则\n\n- [ADVICE] 贴吧超过30分钟提醒\n- [PROMPT] 偏移时追问\n- [PREAPPROVED_GUARD] 冻结抖音\n普通说明行\n",
+  [`${P}/events/ACTION_LOG.tsv`]: Array.from({ length: 30 }, (_, i) => `2026-09-25 10:${pad(i)}\t${i % 2 ? "unfreeze" : "freeze"}\tEV-${i}\tcom.ss.android.ugc.aweme\tok\t${i % 3 ? "VERIFIED_SUCCESS" : "UNKNOWN"}`).join("\n") + "\n",
+};
+const MTIMES = {
+  [`${P}/p2/obs_log.txt`]: now - 5 * MIN,
+  [`${P}/events/${today}/events.jsonl`]: now - 5 * MIN,
+  [`${P}/selfreview/.usage_fresh`]: now - 42 * MIN,
+  [`${P}/judge/${yesterday}.jsonl`]: now - 30 * H,
+  [`${P}/drift/channel_health.tsv`]: now - 12 * MIN,
+  [`${P}/events/${yesterday}/digest.txt`]: now - 14 * H,
+  [`${P}/drift/task_state.txt`]: now - 3 * H,
 };
 
 // Mirrors StandardFileSystemTools.readFilePart + addLineNumbers(content, startIndex, totalLines)
+let readPartCalls = 0;
 function readPart(p, startLine = 1, endLine) {
+  readPartCalls += 1;
   if (!(p in FILES)) throw new Error(`File does not exist or is not a regular file: ${p}`);
   const all = FILES[p].split("\n");
   if (all[all.length - 1] === "") all.pop();
@@ -42,17 +71,16 @@ function readPart(p, startLine = 1, endLine) {
 }
 
 // ---------- workflows (get_workflow nodes carry __type but no `type`, as on device) ----------
-const H = 3600 * 1000;
 const trig = (config) => [{ __type: "com.ai.assistance.operit.data.model.TriggerNode", id: "t", name: "t", triggerType: "schedule", triggerConfig: config }];
 const workflows = [
-  { id: "w1", name: "S3_Brief_Loop", enabled: true, lastExecutionTime: now - 10 * 60000, lastExecutionStatus: "SUCCESS", totalExecutions: 206, successfulExecutions: 173, failedExecutions: 33 },
+  { id: "w1", name: "S3_Brief_Loop", enabled: true, lastExecutionTime: now - 10 * MIN, lastExecutionStatus: "SUCCESS", totalExecutions: 206, successfulExecutions: 173, failedExecutions: 33 },
   { id: "w2", name: "SCHED_Watchdog", enabled: true, lastExecutionTime: now - 3 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 398, successfulExecutions: 389, failedExecutions: 9 },
-  { id: "w3", name: "P4_Event_Sampler", enabled: true, lastExecutionTime: now - 5 * 60000, lastExecutionStatus: "FAILED", totalExecutions: 782, successfulExecutions: 608, failedExecutions: 174 },
+  { id: "w3", name: "P4_Event_Sampler", enabled: true, lastExecutionTime: now - 5 * MIN, lastExecutionStatus: "FAILED", totalExecutions: 782, successfulExecutions: 608, failedExecutions: 174 },
   { id: "w4", name: "Old_Test", enabled: false, lastExecutionTime: now - 50 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 3, successfulExecutions: 3, failedExecutions: 0 },
   { id: "w5", name: "Never_Run", enabled: true, totalExecutions: 0, successfulExecutions: 0, failedExecutions: 0 },
-  { id: "w6", name: "Daily_Archive_Advice", enabled: true, lastExecutionTime: now - 20 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 10, successfulExecutions: 7, failedExecutions: 3 },
+  { id: "w6", name: "Daily_Archive_Advice", enabled: true, lastExecutionTime: now - 15 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 10, successfulExecutions: 7, failedExecutions: 3 },
   { id: "w7", name: "LIFE_MorningDigest", enabled: true, lastExecutionTime: now - 30 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 9, successfulExecutions: 3, failedExecutions: 6 },
-  { id: "w8", name: "G2_Judge_Flow", enabled: true, lastExecutionTime: now - 20 * 60000, lastExecutionStatus: "SUCCESS", totalExecutions: 373, successfulExecutions: 235, failedExecutions: 138 },
+  { id: "w8", name: "G2_Judge_Flow", enabled: true, lastExecutionTime: now - 20 * MIN, lastExecutionStatus: "SUCCESS", totalExecutions: 373, successfulExecutions: 235, failedExecutions: 138 },
   { id: "w9", name: "OneShot", enabled: true, lastExecutionTime: now - 90 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 1, successfulExecutions: 1, failedExecutions: 0 },
   { id: "w10", name: "P1_Board_Start", enabled: true, lastExecutionTime: now - 90 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 11, successfulExecutions: 11, failedExecutions: 0 },
 ];
@@ -68,14 +96,16 @@ const details = {
 
 // ---------- chats ----------
 const chats = [
-  { id: "ded96924", title: "陪伴窗", messageCount: 812, updatedAt: String(now - 5 * 60000), isCurrent: false, characterCardName: "秘书" },
+  { id: "ded96924", title: "陪伴窗", messageCount: 812, updatedAt: String(now - 5 * MIN), isCurrent: false, characterCardName: "小处" },
   { id: "f0953479", title: "温柔巡检", messageCount: 120, updatedAt: String(now - 3 * H), isCurrent: true, characterCardName: "陪伴想小处" },
+  { id: "28f6fbb9", title: "判断官", messageCount: 400, updatedAt: String(now - 20 * MIN), isCurrent: false },
   ...Array.from({ length: 60 }, (_, i) => ({ id: `tmp${i}`, title: `临时对话${i}`, messageCount: 2, updatedAt: String(now - i * H), isCurrent: false })),
 ];
 const knownChatIds = new Set(chats.map((c) => c.id));
 
 const calls = [];
 const record = (...args) => calls.push(args);
+let floatingServiceRunning = false;
 
 global.Tools = {
   Files: {
@@ -84,8 +114,10 @@ global.Tools = {
     write: async (p, content, append) => {
       record("write", p, append);
       FILES[p] = append && FILES[p] ? FILES[p] + content : content;
+      MTIMES[p] = now;
       return { successful: true, details: "" };
     },
+    info: async (p) => (p in MTIMES ? { exists: true, lastModified: mtime(MTIMES[p]) } : { exists: false, lastModified: "" }),
   },
   Workflow: {
     getAll: async () => ({ workflows, totalCount: workflows.length }),
@@ -95,11 +127,14 @@ global.Tools = {
     getAppUsageTime: async (opts) => {
       record("usage", opts);
       return { entries: [
-        { packageName: "com.ai.assistance.operit", appName: "Operit AI", totalForegroundTimeMs: 18972703, lastTimeUsed: now - 60000, isSystemApp: false },
-        { packageName: "com.baidu.tieba", appName: "百度贴吧", totalForegroundTimeMs: 837062, lastTimeUsed: now - 30 * 60000, isSystemApp: false },
-        { packageName: "com.zero", appName: "零分钟", totalForegroundTimeMs: 1000, lastTimeUsed: now, isSystemApp: false },
+        { packageName: "com.ai.assistance.operit", appName: "Operit AI", totalForegroundTimeMs: 18972703, lastTimeUsed: now - MIN, isSystemApp: false },
+        { packageName: "com.baidu.tieba", appName: "百度贴吧", totalForegroundTimeMs: 837062, lastTimeUsed: now - 5 * MIN, isSystemApp: false },
+        { packageName: "com.kurogame.mingchao", appName: "鸣潮", totalForegroundTimeMs: 1000, lastTimeUsed: now - 3 * H, isSystemApp: false },
       ] };
     },
+  },
+  SoftwareSettings: {
+    testTtsPlayback: async (text, opts) => { record("tts", text, opts); return { playbackTriggered: true, initialized: true }; },
   },
   Chat: {
     listChats: async (params) => {
@@ -108,12 +143,13 @@ global.Tools = {
       if (params.query) hit = hit.filter((c) => (params.match === "exact" ? c.title === params.query : c.title.includes(params.query)));
       return { chats: hit.slice(0, params.limit ?? 50) };
     },
-    switchTo: async () => { record("switchTo"); throw new Error("Service not connected"); },
+    switchTo: async (id) => { record("switchTo", id); if (!floatingServiceRunning) throw new Error("Service not connected"); return { chatId: id }; },
     createNew: async () => { record("createNew"); throw new Error("Service not connected"); },
+    startService: async (opts) => { record("startService", opts); floatingServiceRunning = true; return {}; },
+    call: async (opts) => { record("chatCall", opts); return { text: "  我看到你刚才在贴吧啦～先投一家好不好？  ", turns: [] }; },
   },
 };
 
-// Java bridge: ChatHistoryManager singleton + application context
 const manager = {
   callSuspend: async (method, ...args) => {
     record("mgr." + method, ...args);
@@ -126,7 +162,6 @@ global.Java = {
   com: { ai: { assistance: { operit: { data: { repository: { ChatHistoryManager: { getInstance: (ctx) => { record("getInstance", !!ctx); return manager; } } } } } } } },
 };
 
-// Mirrors the host JS Intent helper (AndroidUtils.js) closely enough to check what we send
 global.IntentFlag = { ACTIVITY_NEW_TASK: 0x10000000, ACTIVITY_SINGLE_TOP: 0x20000000 };
 global.Intent = class {
   constructor(action) { this.action = action; this.flags = []; this.extras = {}; }
@@ -171,10 +206,11 @@ function walk(node, fn) {
   const kids = node.children == null ? [] : Array.isArray(node.children) ? node.children : [node.children];
   kids.forEach((k) => walk(k, fn));
 }
-function texts(node) { const out = []; walk(node, (n) => { if (n.props && typeof n.props.text === "string") out.push(n.props.text); }); return out; }
-function find(node, pred) { let hit = null; walk(node, (n) => { if (!hit && pred(n)) hit = n; }); return hit; }
-function findAll(node, pred) { const out = []; walk(node, (n) => { if (pred(n)) out.push(n); }); return out; }
-const button = (tree, label) => find(tree, (n) => ["Button", "OutlinedButton", "TextButton"].includes(n.type) && (n.props.text === label || texts(n).includes(label)));
+const texts = (node) => { const out = []; walk(node, (n) => { if (n.props && typeof n.props.text === "string") out.push(n.props.text); }); return out; };
+const find = (node, pred) => { let hit = null; walk(node, (n) => { if (!hit && pred(n)) hit = n; }); return hit; };
+const findAll = (node, pred) => { const out = []; walk(node, (n) => { if (pred(n)) out.push(n); }); return out; };
+const clickable = (tree, label) => find(tree, (n) => n.props && typeof n.props.onClick === "function" && (n.props.text === label || texts(n).includes(label)));
+const has = (tree, sub) => texts(tree).some((t) => t.includes(sub));
 
 let failures = 0;
 function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures += 1; } else console.log("ok  -", msg); }
@@ -184,148 +220,163 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   assert(main.registerToolPkg() === true, "registerToolPkg returns true");
   assert(JSON.stringify(ToolPkg.registered) === JSON.stringify([["route", "focus_hub", "toolpkg:local.focus_hub:ui:focus_hub"], ["nav", "focus_hub_sidebar", "main_sidebar_plugins", "Dashboard"]]), "registers route + sidebar entry");
 
+  // ---------- manifest + workflow template ----------
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
+  assert(manifest.api_version === "1.0.1", "manifest declares ToolPkg API 1.0.1 (needed by Tools.Chat.call)");
+  const tpl = JSON.parse(fs.readFileSync(path.join(__dirname, "..", manifest.resources[0].path), "utf8"));
+  const exec = tpl.nodes.find((n) => n.type === "execute");
+  assert(manifest.workflow_templates[0].resource_key === manifest.resources[0].key, "workflow template points at a declared resource");
+  assert(tpl.nodes.every((n) => n.__type && n.type) && exec.actionType === "focus_hub_nav:check_in", "template nodes carry __type + type and call focus_hub_nav:check_in");
+  assert(tpl.nodes.some((n) => n.triggerType === "schedule" && n.triggerConfig.interval_ms === "3600000"), "template runs hourly");
+
   // ---------- snapshot ----------
   const { collectSnapshot } = require(path.join(DIST, "shared/snapshot.js"));
+  readPartCalls = 0;
   const snap = await collectSnapshot();
   assert(snap.sources.every((s) => s.status === "OK"), "all sources OK");
-  assert(snap.task.task === "求职投递" && snap.task.syncedAt === "2026-09-24 21:59:13", "task_state parsed (line-number prefixes stripped)");
+  assert(snap.task.task === "求职投递", "task_state parsed");
   const wf = Object.fromEntries(snap.workflows.map((w) => [w.name, w]));
-  assert(wf.G2_Judge_Flow.note === "每 30 分钟" && wf.G2_Judge_Flow.health === "OK", "trigger node without `type` field is still recognised (the on-device bug)");
-  assert(wf.S3_Brief_Loop.health === "OK" && wf.S3_Brief_Loop.note === "每 15 分钟", "10-min interval raised to 15 min, recent run OK");
-  assert(wf.SCHED_Watchdog.health === "STALE", "15-min interval, last run 3h ago -> STALE");
-  assert(wf.P4_Event_Sampler.health === "FAILED", "last status FAILED -> FAILED");
-  assert(wf.Daily_Archive_Advice.note === "每天 23:30" && wf.Daily_Archive_Advice.health === "OK", "daily cron, ran 20h ago -> OK");
-  assert(wf.LIFE_MorningDigest.note === "每天 08:00" && wf.LIFE_MorningDigest.health === "STALE", "daily cron, last run 30h ago -> STALE");
-  assert(wf.OneShot.note.startsWith("一次性") && wf.OneShot.health === "OK", "specific_time is one-shot, never STALE");
-  assert(wf.P1_Board_Start.note === "手动触发" && wf.P1_Board_Start.health === "OK", "manual-only workflow labelled 手动触发");
-  assert(wf.Old_Test.health === "DISABLED" && wf.Never_Run.health === "NO_HISTORY", "disabled / never-run classified");
-  assert(snap.workflows[0].health === "FAILED" && snap.workflows[snap.workflows.length - 1].health === "DISABLED", "problems sorted first");
-  assert(snap.usage.rows.length === 2 && snap.usage.rows[0].foregroundMinutes === 316, "usage sorted, zero-minute rows dropped");
-  assert(snap.events.totalLines === 302 && snap.events.rows.length === 2 && snap.events.rows[1].count === 38 && snap.events.unparsable === 1, "events tail of a >32KB file, repeats merged");
-  assert(snap.events.rows[1].summary.includes("pkg=百度贴吧(com.baidu.tieba)") && !snap.events.rows[1].summary.includes("dedup"), "event summary maps pkg, hides noise keys");
-  assert(snap.actions.rows.length === 12 && snap.actions.rows[0][2] === "EV-29", "action log tail, newest first");
-  assert(snap.execRules.length === 4 && snap.activeRules.tagCounts.PREAPPROVED_GUARD === 1, "rules parsed");
+  assert(wf.G2_Judge_Flow.note === "每 30 分钟" && wf.SCHED_Watchdog.health === "STALE" && wf.LIFE_MorningDigest.health === "STALE", "schedule detection (no `type` field) + staleness");
+  assert(wf.P1_Board_Start.note === "手动触发" && wf.OneShot.note.startsWith("一次性"), "manual / one-shot labelled");
 
-  const data = require(path.join(DIST, "packages/focus_hub_data.js"));
-  const out = await data.get_dashboard_snapshot();
-  assert(out.success && out.snapshot.includes("LIFE_MorningDigest：疑似迟到") && out.snapshot.includes("每天 08:00"), "AI snapshot text includes schedule labels");
+  const f = snap.events.focus;
+  assert(snap.events.unparsable === 1 && snap.events.totalLines === events.length, "whole day read in chunks (long lines forced chunk halving), 1 unparsable");
+  assert(f.onTask === 18 && f.offTask === 3 && f.unknown === 1, `focus counts from FOREGROUND only (on ${f.onTask} off ${f.offTask} unk ${f.unknown})`);
+  assert(f.recent.on === 2 && f.recent.off === 2 && f.recent.offApps[0] === "百度贴吧", "last-hour window maps pkg to app name");
+  assert(f.offApps[0].name === "百度贴吧" && f.offApps[0].count === 2 && f.offApps[1].name === "鸣潮", "off-task apps ranked, names from full usage list");
+  assert(f.hours[14].off === 2 && f.hours[14].on === 1 && f.hours.reduce((a, b) => a + b.on + b.off + b.unknown, 0) === 22, "hourly buckets");
+  assert(f.drifts.length === 1, "DRIFT events collected");
 
-  const saved = { ...FILES };
-  for (const k of Object.keys(FILES)) delete FILES[k];
-  const empty = await collectSnapshot();
-  assert(empty.sources.filter((s) => s.status === "MISSING").length === 5 && empty.task === null, "missing files reported as MISSING, not fabricated");
-  Object.assign(FILES, saved);
+  const hc = Object.fromEntries(snap.health.map((h) => [h.label, h]));
+  assert(hc["前台采样"].status === "FRESH" && hc["用量刷新"].status === "FRESH" && hc["提醒通道"].status === "FRESH", "fresh artifacts");
+  assert(hc["判断官"].status === "STALE" && hc["判断官"].path.endsWith(`${yesterday}.jsonl`), "judge falls back to yesterday's file and is STALE (30h)");
+  assert(hc["日报"].status === "FRESH" && hc["当前任务"].status === "FRESH", "yesterday's digest OK, task_state has no staleness rule");
+  assert(snap.companion.name === "小处" && snap.companion.chat.id === "ded96924", "companion = 陪伴窗 chat, name from its role card");
+
+  // ---------- mood ----------
+  const { moodOf, snapshotToText } = require(path.join(DIST, "shared/format.js"));
+  let mood = moodOf(snap);
+  assert(mood.score === 50 && mood.name === "担心", `mood: 2/4 off (+25) + drift (+15) + no progress after 11:00 (+10) = 50 担心 (got ${mood.score})`);
+  assert(mood.reasons.some((r) => r.includes("近 1 小时 4 次采样有 2 次")) && mood.reasons.some((r) => r.includes("偏移 1 次")), "reasons explain the score");
+  assert(mood.line.includes("求职投递") && mood.next.includes("追问"), "line in her voice; next step from EXEC_RULES (A2 追问)");
+  const aiText = snapshotToText(snap);
+  assert(aiText.includes("陪伴状态：担心") && aiText.includes("今日专注") && aiText.includes("系统体检"), "AI snapshot includes mood, focus and health");
+
+  const { computeMood } = require(path.join(DIST, "shared/mood.js"));
+  const nowSec = Math.floor(now / 1000);
+  const m2 = computeMood({ now, task: "求职投递", focus: f, progress: [{ ts: nowSec - 600, kind: "stuck", user_quote: "简历写不下去", type: "USER_PROGRESS" }], checkins: [], execRules: null });
+  assert(m2.score === 55 && m2.line.includes("简历写不下去"), "stuck adds 15 and changes her line to ask about it");
+  const m3 = computeMood({ now, task: "求职投递", focus: f, progress: [{ ts: nowSec - 600, kind: "pause", user_quote: "去吃饭", type: "USER_PROGRESS" }], checkins: [], execRules: null });
+  assert(m3.score === 20 && m3.name === "在意", "pause with a reason relieves 20");
+
+  // ---------- check-in decision ----------
+  const { decideCheckin } = require(path.join(DIST, "shared/checkin.js"));
+  const at = (h, m) => { const x = new Date(now); x.setHours(h, m, 0, 0); return x.getTime(); };
+  assert(decideCheckin(at(23, 45), 2, null, null) === "SKIP_QUIET" && decideCheckin(at(7, 59), 2, null, null) === "SKIP_QUIET", "quiet hours 23:30–08:00");
+  assert(decideCheckin(at(14, 0), 1, { ts: Math.floor(at(13, 30) / 1000) }, null) === "SKIP_COOLDOWN", "45-minute cooldown");
+  assert(decideCheckin(at(14, 0), 0, null, Math.floor(at(13, 30) / 1000)) === "SKIP_FINE", "doing fine + recent progress -> leave them alone");
+  assert(decideCheckin(at(14, 0), 1, null, null) === "GO", "otherwise GO");
+
+  // ---------- check_in tool ----------
+  const nav = require(path.join(DIST, "packages/focus_hub_nav.js"));
+  calls.length = 0;
+  const ci = await nav.check_in({});
+  const tts = calls.find((c) => c[0] === "tts");
+  const intent = calls.find((c) => c[0] === "intent");
+  assert(ci.status === "CHECKED_IN" && ci.speak === "ACCEPTED" && ci.popup === "ACCEPTED", "check_in speaks and pops up");
+  assert(tts && tts[1] === mood.line && intent[1].extras["com.ai.assistance.operit.extra.OPEN_ROUTE_ID"] === "toolpkg:local.focus_hub:ui:focus_hub", "same line is spoken; popup opens the hub route");
+  const ckPath = `${P}/companion/checkins/${today}.jsonl`;
+  const ckRec = JSON.parse(FILES[ckPath].trim());
+  assert(ckRec.type === "CHECKIN" && ckRec.level === 2 && ckRec.trigger === "workflow", "check-in logged with level and trigger");
+  assert(ci.message.includes("ACCEPTED 只代表已发出"), "result is honest about ACCEPTED vs seen");
+  const again = await nav.check_in({});
+  assert(again.status === "SKIP_COOLDOWN", "second check-in right away is skipped");
+  const forced = await nav.check_in({ force: "true", speak: "false", message: "我在呢" });
+  assert(forced.status === "CHECKED_IN" && forced.speak === "SKIPPED" && forced.line === "我在呢", "force + custom message + speak=false (string flags from workflows)");
 
   // ---------- progress ----------
   const prog = require(path.join(DIST, "packages/focus_hub_progress.js"));
-  const progPath = `/sdcard/Download/Operit/progress/${today}.jsonl`;
-  const bad1 = await prog.report_progress({ kind: "maybe", user_quote: "x" });
-  const bad2 = await prog.report_progress({ kind: "done", user_quote: "  " });
-  assert(!bad1.success && !bad2.success && !(progPath in FILES), "rejects unknown kind and empty quote without writing");
-  const ok1 = await prog.report_progress({ kind: "done", user_quote: "投了两家", note: "Boss 直聘" });
-  const rec = JSON.parse(FILES[progPath].trim().split("\n")[0]);
-  assert(ok1.success && ok1.status === "RECORDED", "report_progress records");
-  assert(rec.type === "USER_PROGRESS" && rec.origin === "REAL_USER" && rec.via === "chat_ai" && rec.kind === "done", "record carries type/origin/via/kind");
-  assert(rec.user_quote === "投了两家" && rec.task === "求职投递" && rec.ptr === "T_1789439490890_tma07.txt" && rec.chat_id === "chat-xyz", "record carries verbatim quote, task, PTR and chat id");
-  assert(calls.some((c) => c[0] === "write" && c[1] === progPath && c[2] === true), "append-only write to progress/<date>.jsonl");
-  const dup = await prog.report_progress({ kind: "done", user_quote: "投了两家" });
-  assert(dup.status === "DUPLICATE" && FILES[progPath].trim().split("\n").length === 1, "same sentence within 10 min not written twice");
-  await prog.report_progress({ kind: "stuck", user_quote: "简历项目经历写不下去" });
-  const recent = await prog.get_recent_progress({ limit: 5 });
-  assert(recent.success && recent.records.split("\n")[0].includes("卡住") && recent.records.includes("投了两家"), "get_recent_progress newest first");
-  const snap2 = await collectSnapshot();
-  assert(snap2.progress.length === 2 && snap2.sources.find((x) => x.label === "用户进展").status === "OK", "snapshot includes progress");
-  const out2 = await data.get_dashboard_snapshot();
-  assert(out2.snapshot.includes("用户最近亲口说的进展") && out2.snapshot.includes("「简历项目经历写不下去」"), "AI snapshot surfaces progress first");
+  const progPath = `${P}/progress/${today}.jsonl`;
+  const bad = await prog.report_progress({ kind: "maybe", user_quote: "x" });
+  assert(!bad.success && !(progPath in FILES), "rejects unknown kind without writing");
 
   // ---------- nav tools ----------
-  const nav = require(path.join(DIST, "packages/focus_hub_nav.js"));
-  calls.length = 0;
-  const r1 = await nav.open_focus_hub();
-  const i1 = calls.find((c) => c[0] === "intent")[1];
-  assert(r1.success && i1.action === "android.intent.action.MAIN", "open_focus_hub sends an activity intent with an action");
-  assert(i1.component === "com.ai.assistance.operit.debug/com.ai.assistance.operit.ui.main.MainActivity", "component is package/MainActivity even for the .debug package");
-  assert(i1.extras["com.ai.assistance.operit.extra.OPEN_ROUTE_ID"] === "toolpkg:local.focus_hub:ui:focus_hub", "route extra matches MainActivity.handleIntent");
-  assert(i1.flags.includes(0x10000000), "NEW_TASK flag set");
-
   calls.length = 0;
   const r2 = await nav.open_chat({ chat_id: "nope" });
-  assert(!r2.success && r2.message.includes("对话不存在") && !calls.some((c) => c[0] === "mgr.setCurrentChatId" || c[0] === "intent"), "open_chat refuses unknown chat ids before changing anything");
-  calls.length = 0;
-  const r3 = await nav.open_chat({ chat_id: "ded96924" });
-  const seq = calls.map((c) => c[0]).filter((n) => n.startsWith("mgr.") || n === "intent");
-  assert(r3.success && JSON.stringify(seq) === JSON.stringify(["mgr.chatExists", "mgr.setCurrentChatId", "intent"]), "open_chat: chatExists -> setCurrentChatId -> open chat route");
-  assert(calls.find((c) => c[0] === "intent")[1].extras["com.ai.assistance.operit.extra.OPEN_ROUTE_ID"] === "native.ai_chat", "open_chat opens native.ai_chat");
-  assert(!calls.some((c) => c[0] === "switchTo" || c[0] === "createNew"), "never touches floating-service tools");
+  assert(!r2.success && !calls.some((c) => c[0] === "mgr.setCurrentChatId"), "open_chat refuses unknown chat ids");
 
-  // ---------- UI: board ----------
+  // ---------- UI: today ----------
   const Screen = require(path.join(DIST, "ui/focus_hub/index.ui.js")).default;
   const ctx = makeCtx();
   let tree = Screen(ctx);
-  const header = tree.children[0];
-  assert(header.props.paddingStart === 20 && header.props.paddingTop === 12 && header.props.paddingHorizontal === undefined, "header uses explicit side paddings (paddingHorizontal is ignored by the host when a side is set)");
   await tree.props.onLoad();
   tree = Screen(ctx);
-  let t = texts(tree);
-  assert(t.includes("当前任务") && t.includes("求职投递") && t.includes("需关注 3"), "overview tiles show task and attention count");
-  assert(t.includes("全部 10 个") && !t.includes("P1_Board_Start"), "workflow list collapsed to 6 with a toggle");
-  await button(tree, "全部 10 个").props.onClick();
-  tree = Screen(ctx);
-  assert(texts(tree).includes("Old_Test") && button(tree, "收起"), "toggle expands all workflows");
-  assert(texts(tree).some((x) => x.includes("失败率 37%")), "high failure rate highlighted (G2 138/373)");
-  assert(findAll(tree, (n) => n.type === "LinearProgressIndicator").length === 2, "usage rows have bars");
-  const usageBars = findAll(tree, (n) => n.type === "LinearProgressIndicator").map((n) => n.props.progress);
-  assert(usageBars[0] === 1 && usageBars[1] > 0 && usageBars[1] < 0.1, "bars scaled to the top app");
-  assert(!find(tree, (n) => n.type === "AiChat"), "no embedded AiChat any more");
-  const before = calls.filter((c) => c[0] === "usage").length;
-  await tree.props.onLoad();
-  assert(calls.filter((c) => c[0] === "usage").length === before, "onLoad does not reload twice");
+  assert(has(tree, "小处") && has(tree, "担心") && has(tree, "为什么是「担心」"), "her card: name, mood, reasons");
+  assert(has(tree, `${new Date(forced ? now : now).getHours()}:30 小处来找过你`) || has(tree, "小处来找过你"), "pending check-in banner shows");
+  assert(has(tree, "系统 · 4 处要看"), "system chip counts stale health (1) + attention workflows (3)");
+  assert(findAll(tree, (n) => n.type === "Box" && n.props.height === 24).length === 24, "24-hour strip");
+  assert(has(tree, "采样在任务上") && has(tree, "86%"), "stats: 18/21 on task");
 
-  // ---------- UI: progress card ----------
-  await tree.props.onLoad.call(null);
-  ctx.state.set("snap", await collectSnapshot());
+  // pause needs a reason
+  await clickable(tree, "暂停").props.onClick();
   tree = Screen(ctx);
-  t = texts(tree);
-  assert(t.includes("我的进展") && t.includes("「简历项目经历写不下去」"), "progress card shows recent records");
-  const saveBtn = find(tree, (n) => n.type === "Button" && String(n.props.text).startsWith("记下"));
-  assert(saveBtn.props.enabled === false, "记下 disabled while text empty");
-  await button(tree, "提交").props.onClick();
-  ctx.state.set("progressText", "又投了一家");
+  calls.length = 0;
+  await clickable(tree, "记下「暂停」").props.onClick();
+  assert(ctx.toasts.some((t) => t.includes("暂停要写一句为什么")) && !calls.some((c) => c[0] === "write"), "pause without a reason is refused");
+
+  // one-tap 继续 with empty text
+  await clickable(Screen(ctx), "继续").props.onClick();
+  await clickable(Screen(ctx), "记下「继续」").props.onClick();
+  let lines = FILES[progPath].trim().split("\n").map((l) => JSON.parse(l));
+  assert(lines[0].user_quote === "（点了「继续」）" && lines[0].via === "dashboard" && lines[0].note.startsWith("回应"), "one tap records an honest quote and answers the check-in");
   tree = Screen(ctx);
-  await find(tree, (n) => n.type === "Button" && String(n.props.text).startsWith("记下（提交）")).props.onClick();
-  const lines = FILES[progPath].trim().split("\n").map((l) => JSON.parse(l));
-  assert(lines.length === 3 && lines[2].via === "dashboard" && lines[2].kind === "done" && lines[2].user_quote === "又投了一家", "dashboard writes via=dashboard");
-  assert(ctx.state.get("progressText") === "" && ctx.state.get("snap").progress[0].user_quote === "又投了一家", "input cleared and card refreshed");
+  assert(!has(tree, "来找过你"), "banner disappears once answered");
+
+  // 提交 with text lowers the mood
+  await clickable(tree, "提交").props.onClick();
+  ctx.state.set("progressText", "投了两家");
+  await clickable(Screen(ctx), "记下「提交」").props.onClick();
+  tree = Screen(ctx);
+  const moodNow = moodOf(ctx.state.get("snap"));
+  assert(moodNow.score < 50 && has(tree, "「投了两家」"), `recording progress lowers her mood (${moodNow.score}) and shows in the day log`);
+
+  // her buttons
+  calls.length = 0;
+  await clickable(tree, "找她聊").props.onClick();
+  assert(JSON.stringify(calls.filter((c) => c[0].startsWith("mgr.") || c[0] === "navigate").map((c) => [c[0], c[1]])) === JSON.stringify([["mgr.chatExists", "ded96924"], ["mgr.setCurrentChatId", "ded96924"], ["navigate", "native.ai_chat"]]), "找她聊 opens 陪伴窗 in the main chat screen");
+  calls.length = 0;
+  floatingServiceRunning = false;
+  await clickable(tree, "🎙 语音").props.onClick();
+  const seq = calls.filter((c) => ["startService", "switchTo"].includes(c[0]));
+  assert(seq[0][0] === "startService" && seq[0][1].initial_mode === "VOICE_BALL" && seq[1][1] === "ded96924" && !ctx.toasts.some((t) => t.includes("语音没打开")), "语音 starts the voice ball, then switches the floating chat to her");
+  calls.length = 0;
+  await clickable(Screen(ctx), "让她细说").props.onClick();
+  const cc = calls.find((c) => c[0] === "chatCall")[1];
+  assert(cc.functionType === "CHAT" && cc.turns[0].kind === "SYSTEM" && cc.turns[0].content.includes("小处") && cc.turns[1].content.includes("陪伴状态"), "让她细说 calls the model with persona + snapshot");
+  tree = Screen(ctx);
+  assert(has(tree, "我看到你刚才在贴吧啦～先投一家好不好？") && has(tree, "她细说的"), "her reply shown (trimmed)");
 
   // ---------- UI: chats ----------
-  calls.length = 0;
-  await button(tree, "会话").props.onClick();
+  await clickable(tree, "会话").props.onClick();
   tree = Screen(ctx);
-  t = texts(tree);
-  assert(calls.some((c) => c[0] === "listChats" && c[1].limit === 200 && c[1].sort_by === "updatedAt"), "chat list loaded sorted by updatedAt, limit 200");
-  assert(t.includes("固定入口") && t.includes("陪伴窗") && t.includes("温柔巡检") && t.includes("最近 30 个"), "pinned group + recent 30");
-  assert(t.includes("当前") && t.some((x) => x.includes("上下文很长")), "current chat marked, 812-message chat flagged as long");
-  assert(t.some((x) => x.includes("812 条消息 · 秘书")), "row shows message count and role card");
+  assert(has(tree, "她（主入口）") && has(tree, "后台角色") && has(tree, "最近 30 个"), "chats grouped: her / backstage / recent");
+  const herGroup = find(tree, (n) => n.type === "Card" && texts(n).includes("她（主入口）"));
+  const backGroup = find(tree, (n) => n.type === "Card" && texts(n).includes("后台角色"));
+  assert(texts(herGroup).includes("陪伴窗") && !texts(herGroup).includes("温柔巡检"), "陪伴窗 is the only main entry");
+  assert(texts(backGroup).includes("温柔巡检") && texts(backGroup).includes("判断官"), "other roles listed as backstage");
+  assert(has(tree, "太长了"), "812-message chat flagged");
 
-  ctx.state.set("query", "临时对话5");
+  // ---------- UI: system ----------
+  await clickable(tree, "系统").props.onClick();
   tree = Screen(ctx);
-  t = texts(tree);
-  assert(t.includes("搜索结果 11") && !t.includes("固定入口"), "search filters locally (临时对话5, 50-59)");
-  ctx.state.set("query", "");
+  assert(has(tree, "体检") && has(tree, "判断官") && has(tree, "偏旧"), "health list");
+  assert(has(tree, "全部 10 个") && !has(tree, "P1_Board_Start"), "workflows collapsed");
+  await clickable(tree, "全部 10 个").props.onClick();
   tree = Screen(ctx);
-
-  calls.length = 0;
-  const row = find(tree, (n) => n.type === "Surface" && texts(n).includes("陪伴窗"));
-  await row.props.onClick();
-  const uiSeq = calls.map((c) => c[0]).filter((n) => n.startsWith("mgr.") || n === "navigate");
-  assert(JSON.stringify(uiSeq) === JSON.stringify(["mgr.chatExists", "mgr.setCurrentChatId", "navigate"]), "tapping a chat sets the main chat, then navigates");
-  assert(calls.find((c) => c[0] === "navigate")[1] === "native.ai_chat", "navigates to native.ai_chat");
-  assert(ctx.state.get("openingId") === "", "opening state cleared");
-
-  knownChatIds.delete("f0953479");
-  calls.length = 0;
-  await find(Screen(ctx), (n) => n.type === "Surface" && texts(n).includes("温柔巡检")).props.onClick();
-  assert(ctx.toasts.some((m) => m.includes("对话不存在")) && !calls.some((c) => c[0] === "navigate"), "deleted chat -> toast, no navigation");
+  assert(has(tree, "P1_Board_Start") && has(tree, "失败率 37%"), "workflows expand; failure rate flagged");
+  await clickable(tree, "展开").props.onClick();
+  tree = Screen(ctx);
+  assert(has(tree, "只用来呈现，不会执行动作"), "mood disclaimer in system details");
 
   console.log(failures === 0 ? "\nALL PASSED" : `\n${failures} FAILED`);
   process.exitCode = failures === 0 ? 0 : 1;

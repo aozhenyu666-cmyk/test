@@ -8,6 +8,18 @@ import {
   type WorkflowRow,
 } from "./snapshot.js";
 import { KIND_LABEL } from "./progress.js";
+import { computeMood } from "./mood.js";
+
+export function moodOf(snap: Snapshot) {
+  return computeMood({
+    now: snap.generatedAt,
+    task: snap.task?.task ?? "",
+    focus: snap.events?.focus ?? null,
+    progress: snap.progress ?? [],
+    checkins: snap.checkins,
+    execRules: snap.execRules,
+  });
+}
 
 export const HEALTH_LABEL: Record<WorkflowHealth, string> = {
   FAILED: "最近失败",
@@ -50,9 +62,24 @@ export function snapshotToText(snap: Snapshot): string {
     out.push("未读取到");
   }
 
+  const mood = moodOf(snap);
+  out.push("", `■ 陪伴状态：${mood.name}（${mood.score}/100，看板按数据计算，不执行动作）`);
+  out.push(`依据：${mood.reasons.join("；")}`);
+  if (mood.pendingCheckin) out.push(`${mood.pendingCheckin.iso.slice(11, 16)} 打卡过一次，用户还没回应：「${mood.pendingCheckin.line}」`);
+
+  const focus = snap.events?.focus;
+  if (focus) {
+    const known = focus.onTask + focus.offTask;
+    out.push(
+      "",
+      `■ 今日专注（前台采样口径，不是时长）：在任务上 ${focus.onTask}/${known}${known > 0 ? `（${Math.round((focus.onTask / known) * 100)}%）` : ""}，未知 ${focus.unknown}`
+    );
+    if (focus.offApps.length > 0) out.push(`偏离时最常开：${focus.offApps.map((a) => `${a.name} ${a.count} 次`).join("、")}`);
+  }
+
   out.push("", "■ 用户最近亲口说的进展（REAL_USER，新的在前；判断和提醒前先看这里）");
   if (snap.progress && snap.progress.length > 0) {
-    for (const r of snap.progress) {
+    for (const r of snap.progress.slice(0, 8)) {
       out.push(`- ${r.iso} ${KIND_LABEL[r.kind] ?? r.kind}：「${r.user_quote}」${r.note ? `（${r.note}）` : ""}`);
     }
   } else {
@@ -93,6 +120,12 @@ export function snapshotToText(snap: Snapshot): string {
     for (const cells of snap.actions.rows.slice(0, 8)) out.push(`- ${cells.join(" · ")}`);
   } else {
     out.push(snap.actions ? "没有记录" : "未读取到");
+  }
+
+  out.push("", "■ 系统体检（文件多久没更新）");
+  for (const h of snap.health) {
+    const age = h.modifiedAt != null ? formatAgo(h.modifiedAt, now) : "—";
+    out.push(`- ${h.label}：${h.status === "FRESH" ? "正常" : h.status === "STALE" ? "偏旧" : h.status === "MISSING" ? "缺失" : "未知"} · ${age}${h.note ? ` · ${h.note}` : ""}`);
   }
 
   out.push("", "■ 数据源");

@@ -1,0 +1,76 @@
+{
+  "id": "focus-hub-checkin-seed",
+  "name": "陪伴打卡",
+  "description": "每小时让她来找你一次：语音念一句、弹出主控台、留一条待回应。深夜、刚找过、或你状态很好时自动跳过（由 focus_hub_nav:check_in 判断）。",
+  "nodes": [
+    {
+      "__type": "com.ai.assistance.operit.data.model.TriggerNode",
+      "id": "t_hourly",
+      "type": "trigger",
+      "name": "每小时",
+      "description": "",
+      "position": {
+        "x": 120.0,
+        "y": 80.0
+      },
+      "triggerType": "schedule",
+      "triggerConfig": {
+        "enabled": "true",
+        "repeat": "true",
+        "schedule_type": "interval",
+        "interval_ms": "3600000"
+      }
+    },
+    {
+      "__type": "com.ai.assistance.operit.data.model.TriggerNode",
+      "id": "t_manual",
+      "type": "trigger",
+      "name": "手动",
+      "description": "",
+      "position": {
+        "x": 120.0,
+        "y": 260.0
+      },
+      "triggerType": "manual",
+      "triggerConfig": {
+        "enabled": "true"
+      }
+    },
+    {
+      "__type": "com.ai.assistance.operit.data.model.ExecuteNode",
+      "id": "e_checkin",
+      "type": "execute",
+      "name": "她来找你",
+      "description": "focus_hub_nav:check_in",
+      "position": {
+        "x": 480.0,
+        "y": 170.0
+      },
+      "actionType": "focus_hub_nav:check_in",
+      "actionConfig": {},
+      "jsCode": null
+    }
+  ],
+  "connections": [
+    {
+      "id": "k1",
+      "sourceNodeId": "t_hourly",
+      "targetNodeId": "e_checkin",
+      "condition": null
+    },
+    {
+      "id": "k2",
+      "sourceNodeId": "t_manual",
+      "targetNodeId": "e_checkin",
+      "condition": null
+    }
+  ],
+  "createdAt": 0,
+  "updatedAt": 0,
+  "enabled": true,
+  "lastExecutionTime": null,
+  "lastExecutionStatus": null,
+  "totalExecutions": 0,
+  "successfulExecutions": 0,
+  "failedExecutions": 0
+}
