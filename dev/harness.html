@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>SP plugin harness</title>
+<style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%}</style>
+</head>
+<body>
+<iframe id="f" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"></iframe>
+<script>
+// Fake Super Productivity host. Mirrors what SP does for iframe plugins:
+// the plugin HTML is loaded via srcdoc with the same sandbox flags, and
+// window.PluginAPI is injected at the top of <head>.
+// ?native=1 simulates the Android app: Capacitor present and window.fetch
+// replaced by a CORS-free "native" implementation (here: routed through Node).
+const params = new URLSearchParams(location.search);
+const NATIVE = params.get('native') === '1';
+window.__log = { native: 0, proxy: 0, actions: [] };
+const hostFetch = window.fetch.bind(window);
+
+async function nodeFetch(url, init) {
+  const r = await window.__nodeFetch(url, { method: init?.method || 'GET', headers: init?.headers || {}, body: init?.body });
+  return new Response(r.text, { status: r.status, headers: r.headers });
+}
+if (NATIVE) {
+  window.Capacitor = { isNativePlatform: () => true };
+  window.fetch = (url, init) => { window.__log.native++; return nodeFetch(url, init); };
+}
+
+const pad = (n) => String(n).padStart(2, '0');
+const ymd = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+const today = ymd(new Date());
+let seq = 100;
+window.store = {
+  tasks: [
+    { id: 't1', title: '买牛奶', isDone: false, projectId: 'INBOX', tagIds: [], subTaskIds: [], timeSpentOnDay: { [today]: 600000 }, timeSpent: 600000, timeEstimate: 0, dueDay: today },
+    { id: 't2', title: '看书', isDone: true, projectId: 'p1', tagIds: [], subTaskIds: [], timeSpentOnDay: {}, timeSpent: 0, timeEstimate: 0, dueDay: today },
+  ],
+  projects: [{ id: 'INBOX', title: 'Inbox', taskIds: ['t1'] }, { id: 'p1', title: '学习', taskIds: ['t2'] }],
+  tags: [{ id: 'TODAY', title: 'Today', taskIds: [] }],
+  counters: { c1: { id: 'c1', title: '喝水', type: 'ClickCounter', isEnabled: true, countOnDay: { [today]: 2 } } },
+};
+const clone = (x) => JSON.parse(JSON.stringify(x));
+
+window.makePluginApi = () => ({
+  cfg: { theme: 'dark', appVersion: '19.1.0', platform: NATIVE ? 'android' : 'web' },
+  getTasks: async () => clone(store.tasks),
+  getArchivedTasks: async () => [],
+  getAllProjects: async () => clone(store.projects),
+  getAllTags: async () => clone(store.tags),
+  addTag: async (t) => { const id = 'tag' + seq++; store.tags.push({ id, title: t.title, taskIds: [] }); return id; },
+  addProject: async (p) => { const id = 'p' + seq++; store.projects.push({ id, title: p.title, taskIds: [] }); return id; },
+  addTask: async (d) => {
+    const id = 'n' + seq++;
+    store.tasks.push({ isDone: false, tagIds: [], subTaskIds: [], timeSpentOnDay: {}, timeSpent: 0, timeEstimate: 0, projectId: 'INBOX', ...d, id });
+    return id;
+  },
+  updateTask: async (id, patch) => {
+    const t = store.tasks.find((x) => x.id === id);
+    if (!t) throw new Error('Task not found');
+    Object.assign(t, patch);
+  },
+  deleteTask: async (id) => { store.tasks = store.tasks.filter((x) => x.id !== id); },
+  dispatchAction: (a) => { window.__log.actions.push(a); },
+  getAppState: async () => ({ simpleCounters: clone(store.counters) }),
+  incrementCounter: async (id, by) => { const c = store.counters[id]; c.countOnDay[today] = (c.countOnDay[today] || 0) + by; return c.countOnDay[today]; },
+  registerHook: () => {},
+  request: async (url, opts) => {
+    window.__log.proxy++;
+    const r = await window.__nodeFetch(url, { method: opts.method, headers: opts.headers, body: opts.body });
+    if (r.status < 200 || r.status >= 300) throw new Error('Http failure response: ' + r.status);
+    return r.text;
+  },
+});
+
+hostFetch('/plugin/index.html').then((r) => r.text()).then((html) => {
+  const inject = '<script>window.PluginAPI = window.parent.makePluginApi();<\/script>';
+  document.getElementById('f').srcdoc = html.replace(/<head[^>]*>/i, (m) => m + inject);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "name": "AI 助手（手机可用）",
+  "id": "sp-ai-assistant",
+  "manifestVersion": 1,
+  "version": "0.2.0",
+  "minSupVersion": "14.0.0",
+  "description": "在 Super Productivity 里用自然语言管理任务。手机端直接调用大模型 API，工具在本机执行；可选连接远程 MCP 服务器。",
+  "author": "local",
+  "hooks": ["currentTaskChange"],
+  "permissions": ["http"],
+  "allowedHosts": [
+    "api.deepseek.com",
+    "dashscope.aliyuncs.com",
+    "api.moonshot.cn",
+    "open.bigmodel.cn",
+    "api.siliconflow.cn",
+    "openrouter.ai",
+    "api.openai.com",
+    "api.anthropic.com"
+  ],
+  "iFrame": true,
+  "uiKit": false,
+  "icon": "icon.svg"
+}

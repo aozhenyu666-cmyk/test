@@ -1,0 +1,1163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>AI 助手</title>
+<style>
+  :root {
+    --bg: #17181c; --panel: #131418; --fg: #e9eaee; --dim: #9aa0aa; --line: #2c2e36;
+    --me: #2f3a52; --ai: #202229; --tool: #1d1f25; --input: #101114; --btn: #262831;
+    --accent: #3a6ea5; --err-bg: #2a1d1e; --err-line: #5a2e2c; --err-fg: #f0c3c1;
+    --ok: #4c9a6a; --warn: #c79a3a; --bad: #b4453f; --code: #0d0e11;
+  }
+  :root[data-theme="light"] {
+    --bg: #f6f7f9; --panel: #eceef2; --fg: #1d2026; --dim: #6b7280; --line: #d9dce3;
+    --me: #dbe7fb; --ai: #ffffff; --tool: #f0f1f4; --input: #ffffff; --btn: #ffffff;
+    --accent: #2f6fb8; --err-bg: #fdeceb; --err-line: #efb9b5; --err-fg: #8a2620; --code: #eef0f4;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 15px/1.55 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  #app { display: flex; flex-direction: column; height: 100%; height: 100dvh; }
+  header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex: none; }
+  header b { font-size: 14px; font-weight: 600; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.err { background: var(--bad); }
+  #meta { color: var(--dim); font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  button { background: var(--btn); color: var(--fg); border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+  button:disabled { opacity: .5; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #log { flex: 1; overflow-y: auto; padding: 10px 12px; -webkit-overflow-scrolling: touch; }
+  .msg { margin: 0 0 10px; max-width: 92%; padding: 8px 11px; border-radius: 10px; white-space: pre-wrap; word-break: break-word; }
+  .msg.me { background: var(--me); margin-left: auto; border-bottom-right-radius: 3px; }
+  .msg.ai { background: var(--ai); border: 1px solid var(--line); border-bottom-left-radius: 3px; }
+  .msg code { background: var(--code); padding: 1px 4px; border-radius: 3px; font: 12px ui-monospace, Menlo, Consolas, monospace; }
+  .msg pre { background: var(--code); padding: 8px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; }
+  .msg.err { background: var(--err-bg); border: 1px solid var(--err-line); color: var(--err-fg); font-size: 13px; }
+  .msg.note { color: var(--dim); font-size: 12px; background: none; padding: 2px 0; max-width: 100%; }
+  details.tool { margin: 0 0 8px; font-size: 12px; color: var(--dim); background: var(--tool); border-left: 2px solid var(--line); border-radius: 4px; padding: 4px 8px; }
+  details.tool.fail { border-left-color: var(--bad); }
+  details.tool summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  details.tool pre { margin: 6px 0 2px; white-space: pre-wrap; word-break: break-all; font: 11px ui-monospace, Menlo, Consolas, monospace; max-height: 30vh; overflow-y: auto; }
+  footer { flex: none; border-top: 1px solid var(--line); padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); display: flex; gap: 8px; align-items: flex-end; }
+  textarea { flex: 1; min-width: 0; background: var(--input); color: var(--fg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 11px; font: inherit; resize: none; max-height: 34vh; outline: none; }
+  #cfg { border-bottom: 1px solid var(--line); padding: 4px 12px 12px; background: var(--panel); display: none; flex: none; max-height: 70vh; overflow-y: auto; }
+  #cfg.open { display: block; }
+  #cfg h4 { margin: 12px 0 0; font-size: 13px; }
+  #cfg label { display: block; color: var(--dim); font-size: 12px; margin: 8px 0 3px; }
+  #cfg input, #cfg select { width: 100%; background: var(--input); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font: inherit; font-size: 13px; }
+  #cfg .row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .hint { color: var(--dim); font-size: 12px; margin-top: 4px; }
+  .empty { color: var(--dim); text-align: center; margin-top: 22vh; font-size: 13px; padding: 0 24px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <span class="dot" id="dot"></span>
+    <b>AI 助手</b>
+    <span id="meta">未配置</span>
+    <button id="btnCfg" title="设置">设置</button>
+    <button id="btnClear" title="清空对话">清空</button>
+  </header>
+
+  <div id="cfg">
+    <h4>大模型（必填）</h4>
+    <label for="fPreset">服务商</label>
+    <select id="fPreset"></select>
+    <label for="fBase">API 地址（OpenAI 兼容，填到 /v1 为止）</label>
+    <input id="fBase" placeholder="https://api.deepseek.com/v1" autocomplete="off" spellcheck="false" />
+    <label for="fKey">API Key（只存在本机，不参与同步）</label>
+    <input id="fKey" type="password" autocomplete="off" spellcheck="false" />
+    <label for="fModel">模型</label>
+    <input id="fModel" list="modelList" placeholder="deepseek-chat" autocomplete="off" spellcheck="false" />
+    <datalist id="modelList"></datalist>
+
+    <h4>远程 MCP 服务器（可选）</h4>
+    <label for="fMcpUrl">MCP 地址（Streamable HTTP，留空则只用本机工具）</label>
+    <input id="fMcpUrl" placeholder="https://example.com/mcp" autocomplete="off" spellcheck="false" />
+    <label for="fMcpToken">MCP Token（可选，作为 Bearer 发送）</label>
+    <input id="fMcpToken" type="password" autocomplete="off" spellcheck="false" />
+
+    <h4>高级</h4>
+    <label for="fTransport">网络通道</label>
+    <select id="fTransport">
+      <option value="auto">自动（推荐）</option>
+      <option value="native">原生 HTTP（仅安卓/iOS，无 CORS 限制，可访问局域网）</option>
+      <option value="fetch">浏览器 fetch（需要服务端允许 CORS）</option>
+      <option value="proxy">SP 宿主代理（只能访问 manifest 里的公网域名，单次 30 秒超时）</option>
+    </select>
+    <div class="row">
+      <button id="btnModels">获取模型列表</button>
+      <button id="btnTest">测试连接</button>
+      <button id="btnSave" class="primary">保存</button>
+    </div>
+    <div class="hint">配置保存在本机 localStorage；对话记录也只保存在本机。</div>
+  </div>
+
+  <div id="log"><div class="empty">先点「设置」填好大模型 API，然后直接说人话，例如：<br>「明天下午 3 点提醒我写周报，预估 30 分钟」<br>「今天还剩哪些没做完？」</div></div>
+  <footer>
+    <textarea id="input" rows="1" placeholder="说点什么…"></textarea>
+    <button id="btnSend" class="primary">发送</button>
+  </footer>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var API = window.PluginAPI;
+  var STORE_KEY = 'sp-ai-assistant:v1';
+  var MAX_ROUNDS = 8;
+  var KEEP_USER_TURNS = 12;
+  var TOOL_RESULT_MAX = 8000;
+  var LLM_TIMEOUT = 120000;
+
+  var PRESETS = [
+    { id: 'deepseek', label: 'DeepSeek', base: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+    { id: 'dashscope', label: '阿里云百炼（通义千问）', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+    { id: 'moonshot', label: 'Kimi（月之暗面）', base: 'https://api.moonshot.cn/v1', model: '' },
+    { id: 'zhipu', label: '智谱 GLM', base: 'https://open.bigmodel.cn/api/paas/v4', model: '' },
+    { id: 'siliconflow', label: '硅基流动', base: 'https://api.siliconflow.cn/v1', model: '' },
+    { id: 'openrouter', label: 'OpenRouter', base: 'https://openrouter.ai/api/v1', model: '' },
+    { id: 'openai', label: 'OpenAI', base: 'https://api.openai.com/v1', model: '' },
+    { id: 'anthropic', label: 'Claude（Anthropic，OpenAI 兼容接口）', base: 'https://api.anthropic.com/v1', model: '' },
+    { id: 'custom', label: '自定义 / 自建网关', base: '', model: '' },
+  ];
+
+  var cfg = { preset: 'deepseek', llmBase: '', apiKey: '', model: '', mcpUrl: '', mcpToken: '', transport: 'auto' };
+  var state = { history: [], busy: false, stop: false, currentTaskId: null, mcp: null, goodTransport: {} };
+
+  var $ = function (id) { return document.getElementById(id); };
+  var els = {
+    log: $('log'), input: $('input'), dot: $('dot'), meta: $('meta'), cfg: $('cfg'), send: $('btnSend'),
+    preset: $('fPreset'), base: $('fBase'), key: $('fKey'), model: $('fModel'), models: $('modelList'),
+    mcpUrl: $('fMcpUrl'), mcpToken: $('fMcpToken'), transport: $('fTransport'),
+  };
+
+  // ------------------------------------------------------------------ 小工具
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function ymd(d) { d = d || new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+  function hm(d) { d = d || new Date(); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+  function fmtTs(ms) { var d = new Date(ms); return ymd(d) + ' ' + hm(d); }
+  function minutes(ms) { return ms ? Math.round(ms / 60000) : 0; }
+  function errMsg(e) { return (e && (e.message || e.error)) || String(e); }
+  function compact(o) {
+    Object.keys(o).forEach(function (k) {
+      var v = o[k];
+      if (v === undefined || v === null || v === '' || v === false || (Array.isArray(v) && !v.length)) delete o[k];
+    });
+    return o;
+  }
+  function withTimeout(p, ms, what) {
+    return new Promise(function (resolve, reject) {
+      var t = setTimeout(function () { reject(new Error((what || '请求') + '超时（' + Math.round(ms / 1000) + ' 秒）')); }, ms);
+      Promise.resolve(p).then(function (v) { clearTimeout(t); resolve(v); }, function (e) { clearTimeout(t); reject(e); });
+    });
+  }
+
+  function storageGet() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}; } catch (e) { return {}; }
+  }
+  function storageSet(patch) {
+    try { var cur = storageGet(); Object.assign(cur, patch); localStorage.setItem(STORE_KEY, JSON.stringify(cur)); } catch (e) { /* 私密模式等：不持久化也能用 */ }
+  }
+
+  // ------------------------------------------------------------------ 渲染
+
+  function escapeHtml(s) {
+    return String(s).replace(/[<>&"']/g, function (c) {
+      return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  // 只支持极小的 markdown 子集；先转义，模型输出无法注入 HTML
+  function renderRich(node, text) {
+    node.innerHTML = escapeHtml(text)
+      .replace(/```[a-z]*\n?([\s\S]*?)```/g, function (_, c) { return '<pre>' + c + '</pre>'; })
+      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
+      .replace(/^#{1,4} +(.*)$/gm, '<b>$1</b>')
+      .replace(/^[-*] +/gm, '• ');
+  }
+
+  function clearEmpty() { var e = els.log.querySelector('.empty'); if (e) e.remove(); }
+  function scrollDown() { els.log.scrollTop = els.log.scrollHeight; }
+
+  function addMsg(role, text) {
+    clearEmpty();
+    var n = document.createElement('div');
+    n.className = 'msg ' + role;
+    if (role === 'ai') renderRich(n, text); else n.textContent = text;
+    els.log.appendChild(n);
+    scrollDown();
+    return n;
+  }
+
+  function addToolChip(name, args) {
+    clearEmpty();
+    var d = document.createElement('details');
+    d.className = 'tool';
+    var s = document.createElement('summary');
+    s.textContent = '⋯ ' + name + ' ' + JSON.stringify(args);
+    var pre = document.createElement('pre');
+    pre.textContent = '参数：' + JSON.stringify(args, null, 1);
+    d.appendChild(s); d.appendChild(pre);
+    els.log.appendChild(d);
+    scrollDown();
+    return {
+      done: function (ok, text) {
+        s.textContent = (ok ? '✓ ' : '✗ ') + name + ' ' + JSON.stringify(args);
+        if (!ok) d.classList.add('fail');
+        pre.textContent += '\n\n结果：' + text;
+      },
+    };
+  }
+
+  function setStatus(kind, text) {
+    els.dot.className = 'dot' + (kind ? ' ' + kind : '');
+    els.meta.textContent = text || '';
+  }
+
+  function setBusy(b) {
+    state.busy = b;
+    els.send.textContent = b ? '停止' : '发送';
+    els.send.classList.toggle('primary', !b);
+  }
+
+  function rebuildLog() {
+    els.log.innerHTML = '';
+    state.history.forEach(function (m) {
+      if (m.role === 'user') addMsg('me', m.content);
+      else if (m.role === 'assistant' && m.content) addMsg('ai', m.content);
+    });
+    if (!state.history.length) {
+      els.log.innerHTML = '<div class="empty">直接说人话，例如「把写周报排到今天，预估 30 分钟」。</div>';
+    }
+  }
+
+  // ------------------------------------------------------------------ 网络层
+  //
+  // 为什么需要三条通道（全部来自 super-productivity 源码的约束）：
+  //  - proxy：PluginAPI.request 由宿主发请求，但它硬性拒绝局域网/回环 IP（plugin-http.service
+  //    的 _validateUrl，非内置插件无法放开），要求主机写在 manifest.allowedHosts，读不到响应头，
+  //    且 iframe 里每次 PluginAPI 调用都有 30 秒硬超时（plugin-iframe.util 的 callApi）。
+  //  - native：插件 iframe 带 allow-same-origin，与宿主同源，可以直接用宿主窗口的 fetch。
+  //    安卓/iOS 上 SP 开启了 CapacitorHttp，宿主 fetch 被替换为原生 HTTP：没有 CORS、能访问
+  //    局域网、没有 30 秒限制。这是手机端最可靠的通道。
+  //  - fetch：iframe 自己的 fetch，受 CORS 约束，桌面/网页版上用。
+
+  function hostWindow() {
+    try { var w = window.parent; if (w && w !== window && typeof w.fetch === 'function') return w; } catch (e) { /* 跨源 */ }
+    return null;
+  }
+
+  function isNativeHost() {
+    try {
+      var C = window.parent && window.parent.Capacitor;
+      if (C && typeof C.isNativePlatform === 'function') return !!C.isNativePlatform();
+    } catch (e) { /* 跨源 */ }
+    var p = API && API.cfg && API.cfg.platform;
+    return p === 'android' || p === 'ios';
+  }
+
+  function transportOrder(origin, needHeaders) {
+    var order = cfg.transport !== 'auto' ? [cfg.transport]
+      : (isNativeHost() && hostWindow() ? ['native', 'fetch', 'proxy'] : ['fetch', 'native', 'proxy']);
+    var good = state.goodTransport[origin];
+    // MCP 需要读 Mcp-Session-Id 响应头，宿主代理读不到，所以它永远只做最后的退路
+    if (good && order.indexOf(good) > 0 && !(needHeaders && good === 'proxy')) {
+      order = [good].concat(order.filter(function (t) { return t !== good; }));
+    }
+    return order;
+  }
+
+  var TRANSPORT_NAME = { native: '原生 HTTP', fetch: '浏览器 fetch', proxy: 'SP 宿主代理' };
+
+  function viaFetch(fetchFn, thisArg, url, opt) {
+    return withTimeout(fetchFn.call(thisArg, url, { method: opt.method, headers: opt.headers, body: opt.body }), opt.timeout)
+      .then(function (res) {
+        return withTimeout(res.text(), opt.timeout).then(function (text) {
+          return {
+            status: res.status,
+            text: text,
+            header: function (n) { try { return res.headers.get(n); } catch (e) { return null; } },
+          };
+        });
+      });
+  }
+
+  function viaProxy(url, opt) {
+    if (!API || typeof API.request !== 'function') return Promise.reject(new Error('没有 PluginAPI.request'));
+    return withTimeout(API.request(url, {
+      method: opt.method, headers: opt.headers, body: opt.body,
+      timeout: Math.min(opt.timeout, 120000), responseType: 'text',
+    }), Math.min(opt.timeout, 31000), 'SP 宿主代理').then(function (data) {
+      return { status: 200, text: typeof data === 'string' ? data : JSON.stringify(data), header: function () { return null; } };
+    });
+  }
+
+  function runTransport(t, url, opt) {
+    if (t === 'native' || t === 'fetch') {
+      var w = t === 'native' ? hostWindow() : window;
+      if (!w) return Promise.reject(new Error('当前环境没有宿主窗口'));
+      return viaFetch(w.fetch, w, url, opt);
+    }
+    if (t === 'proxy') return viaProxy(url, opt);
+    return Promise.reject(new Error('未知通道 ' + t));
+  }
+
+  // 只有“连不上”才换通道；拿到 HTTP 状态码（哪怕 4xx/5xx）就说明通道是通的
+  function http(url, opt) {
+    opt = Object.assign({ method: 'GET', headers: {}, timeout: 30000 }, opt);
+    var origin; try { origin = new URL(url).origin; } catch (e) { return Promise.reject(new Error('地址无效：' + url)); }
+    var order = transportOrder(origin, opt.needHeaders);
+    var errors = [];
+    var i = 0;
+    function next() {
+      if (i >= order.length) {
+        return Promise.reject(new Error('连不上 ' + origin + '：\n' + errors.join('\n')));
+      }
+      var t = order[i++];
+      return runTransport(t, url, opt).then(function (r) {
+        if (!(opt.needHeaders && t === 'proxy')) state.goodTransport[origin] = t;
+        r.transport = t;
+        return r;
+      }, function (e) {
+        var m = errMsg(e);
+        errors.push('· ' + TRANSPORT_NAME[t] + '：' + m);
+        if (/超时/.test(m) && t !== 'proxy') return Promise.reject(new Error(m + '（' + TRANSPORT_NAME[t] + '）'));
+        return next();
+      });
+    }
+    return next();
+  }
+
+  function parseJson(r, what) {
+    try { return JSON.parse(r.text); } catch (e) {
+      throw new Error(what + '返回的不是 JSON（HTTP ' + r.status + '）：' + String(r.text).slice(0, 200));
+    }
+  }
+
+  // ------------------------------------------------------------------ 大模型（OpenAI 兼容）
+
+  function llmUrl(path) { return cfg.llmBase.replace(/\/+$/, '') + path; }
+  function llmHeaders() {
+    var h = { 'Content-Type': 'application/json' };
+    if (cfg.apiKey) h.Authorization = 'Bearer ' + cfg.apiKey;
+    return h;
+  }
+
+  function chatCompletion(messages, tools) {
+    var body = { model: cfg.model, messages: messages, temperature: 0.3, stream: false };
+    if (tools.length) { body.tools = tools; body.tool_choice = 'auto'; }
+    return http(llmUrl('/chat/completions'), {
+      method: 'POST', headers: llmHeaders(), body: JSON.stringify(body), timeout: LLM_TIMEOUT,
+    }).then(function (r) {
+      var data = parseJson(r, '模型接口');
+      if (r.status >= 400 || data.error) {
+        var em = data.error && (data.error.message || data.error.msg || JSON.stringify(data.error));
+        throw new Error('模型接口报错（HTTP ' + r.status + '）：' + (em || String(r.text).slice(0, 300)));
+      }
+      var msg = data.choices && data.choices[0] && data.choices[0].message;
+      if (!msg) throw new Error('模型没有返回 message：' + String(r.text).slice(0, 300));
+      return msg;
+    });
+  }
+
+  function fetchModels() {
+    return http(llmUrl('/models'), { headers: llmHeaders(), timeout: 20000 }).then(function (r) {
+      var data = parseJson(r, '模型列表接口');
+      if (r.status >= 400) throw new Error('HTTP ' + r.status + '：' + String(r.text).slice(0, 200));
+      return ((data && data.data) || []).map(function (m) { return m.id; }).filter(Boolean).sort();
+    });
+  }
+
+  // ------------------------------------------------------------------ 远程 MCP 客户端（Streamable HTTP）
+
+  function McpClient(url, token) {
+    this.url = url;
+    this.token = token;
+    this.sid = null;
+    this.protocol = null;
+    this.tools = [];
+    this.nextId = 1;
+  }
+
+  McpClient.prototype._post = function (msg) {
+    var h = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' };
+    if (this.token) h.Authorization = 'Bearer ' + this.token;
+    if (this.sid) h['Mcp-Session-Id'] = this.sid;
+    if (this.protocol) h['MCP-Protocol-Version'] = this.protocol;
+    var self = this;
+    return http(this.url, { method: 'POST', headers: h, body: JSON.stringify(msg), timeout: 60000, needHeaders: true }).then(function (r) {
+      self.transport = r.transport;
+      var sid = r.header('mcp-session-id');
+      if (sid) self.sid = sid;
+      if (msg.id === undefined) return null; // 通知：服务器回 202，无正文
+      if (r.status === 404 && self.sid) { var e404 = new Error('MCP 会话已失效'); e404.sessionExpired = true; throw e404; }
+      if (r.status === 401 || r.status === 403) throw new Error('MCP 服务器拒绝访问（HTTP ' + r.status + '），检查 Token');
+      var reply = McpClient.pickReply(r.text, msg.id, r.header('content-type'));
+      if (!reply) throw new Error('MCP 无法解析响应（HTTP ' + r.status + '）：' + String(r.text).slice(0, 200));
+      if (reply.error) throw new Error('MCP 错误：' + (reply.error.message || JSON.stringify(reply.error)));
+      return reply.result;
+    });
+  };
+
+  // 服务器可以回普通 JSON，也可以回一段 SSE（text/event-stream），两种都要能读
+  McpClient.pickReply = function (text, id, ctype) {
+    var candidates = [];
+    var body = String(text || '').trim();
+    if (!body) return null;
+    if (/event-stream/i.test(ctype || '') || /^(event|data|id|:)/m.test(body) && body.charAt(0) !== '{' && body.charAt(0) !== '[') {
+      body.split(/\r?\n\r?\n/).forEach(function (block) {
+        var data = block.split(/\r?\n/).filter(function (l) { return l.indexOf('data:') === 0; })
+          .map(function (l) { return l.slice(5).replace(/^ /, ''); }).join('\n');
+        if (data) { try { candidates.push(JSON.parse(data)); } catch (e) { /* 忽略非 JSON 事件 */ } }
+      });
+    } else {
+      try { candidates.push(JSON.parse(body)); } catch (e) { return null; }
+    }
+    var flat = [];
+    candidates.forEach(function (c) { flat = flat.concat(Array.isArray(c) ? c : [c]); });
+    return flat.find(function (m) { return m && m.id === id && (m.result !== undefined || m.error); }) || null;
+  };
+
+  McpClient.prototype.request = function (method, params) {
+    return this._post({ jsonrpc: '2.0', id: this.nextId++, method: method, params: params || {} });
+  };
+
+  McpClient.prototype.connect = function () {
+    var self = this;
+    self.sid = null; self.protocol = null;
+    return self.request('initialize', {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'sp-ai-assistant', version: '0.2.0' },
+    }).then(function (res) {
+      self.protocol = (res && res.protocolVersion) || '2025-06-18';
+      self.serverName = (res && res.serverInfo && res.serverInfo.name) || 'MCP';
+      return self._post({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    }).then(function () { return self._listTools(undefined, []); })
+      .then(function (tools) { self.tools = tools; return tools; })
+      .catch(function (e) {
+        if (self.transport === 'proxy' && !self.sid) {
+          e.message = errMsg(e) + '\n（当前走的是 SP 宿主代理，它读不到 Mcp-Session-Id 响应头。有状态的 MCP 服务器需要：手机上用原生 HTTP 通道，'
+            + '或服务器开 CORS 并设置 Access-Control-Allow-Headers: Authorization, Content-Type, Mcp-Session-Id 和 Access-Control-Expose-Headers: Mcp-Session-Id）';
+        }
+        throw e;
+      });
+  };
+
+  McpClient.prototype._listTools = function (cursor, acc) {
+    var self = this;
+    return self.request('tools/list', cursor ? { cursor: cursor } : {}).then(function (res) {
+      acc = acc.concat((res && res.tools) || []);
+      return res && res.nextCursor && acc.length < 200 ? self._listTools(res.nextCursor, acc) : acc;
+    });
+  };
+
+  McpClient.prototype.callTool = function (name, args, retried) {
+    var self = this;
+    return self.request('tools/call', { name: name, arguments: args || {} }).then(function (res) {
+      var text = ((res && res.content) || []).map(function (c) {
+        return c.type === 'text' ? c.text : '[' + c.type + ']';
+      }).join('\n');
+      if (!text && res && res.structuredContent) text = JSON.stringify(res.structuredContent);
+      if (res && res.isError) throw new Error(text || '远程工具执行失败');
+      return text || '(无输出)';
+    }, function (e) {
+      if (e.sessionExpired && !retried) return self.connect().then(function () { return self.callTool(name, args, true); });
+      throw e;
+    });
+  };
+
+  function ensureMcp() {
+    if (!cfg.mcpUrl) { state.mcp = null; return Promise.resolve(null); }
+    if (state.mcp && state.mcp.url === cfg.mcpUrl && state.mcp.ready) return Promise.resolve(state.mcp);
+    var c = new McpClient(cfg.mcpUrl, cfg.mcpToken);
+    return c.connect().then(function () {
+      c.ready = true;
+      state.mcp = c;
+      addMsg('note', '已连接 MCP：' + c.serverName + '，' + c.tools.length + ' 个远程工具');
+      return c;
+    }).catch(function (e) {
+      // MCP 只是加分项：连不上就只用本机工具，对话照常进行
+      state.mcp = null;
+      addMsg('note', 'MCP 未连接（本次只用本机工具）：' + errMsg(e));
+      return null;
+    });
+  }
+
+  function mcpToolName(n) { return ('mcp_' + n).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64); }
+
+  // ------------------------------------------------------------------ 本机工具（直接操作这台设备上的 SP 数据）
+
+  function need(fn) {
+    if (!API || typeof API[fn] !== 'function') throw new Error('当前 SP 版本的插件 API 不支持 ' + fn);
+    return API[fn].bind(API);
+  }
+
+  function loadLookups() {
+    return Promise.all([need('getAllProjects')(), need('getAllTags')()]).then(function (r) {
+      var projects = {}, tags = {};
+      (r[0] || []).forEach(function (p) { projects[p.id] = p; });
+      (r[1] || []).forEach(function (t) { tags[t.id] = t; });
+      return { projects: projects, tags: tags };
+    });
+  }
+
+  function resolveByName(map, key, kind) {
+    var list = Object.keys(map).map(function (k) { return map[k]; });
+    if (map[key]) return map[key];
+    var low = String(key).trim().toLowerCase();
+    var exact = list.filter(function (x) { return String(x.title).toLowerCase() === low; });
+    if (exact.length === 1) return exact[0];
+    var partial = list.filter(function (x) { return String(x.title).toLowerCase().indexOf(low) >= 0; });
+    if (partial.length === 1) return partial[0];
+    var names = list.map(function (x) { return x.title; }).slice(0, 30).join('、');
+    throw new Error((partial.length > 1 ? kind + '「' + key + '」不唯一' : '找不到' + kind + '「' + key + '」') + '。现有' + kind + '：' + names);
+  }
+
+  function parseDay(s) {
+    if (!s) return null;
+    var v = String(s).trim().toLowerCase();
+    var d = new Date();
+    if (v === 'today' || v === '今天') return ymd(d);
+    if (v === 'tomorrow' || v === '明天') { d.setDate(d.getDate() + 1); return ymd(d); }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+    throw new Error('日期格式要用 YYYY-MM-DD（或 today / tomorrow），收到：' + s);
+  }
+
+  function parseTime(day, t) {
+    if (!/^\d{1,2}:\d{2}$/.test(String(t))) throw new Error('时间格式要用 HH:MM，收到：' + t);
+    var p = String(t).split(':');
+    var parts = day.split('-');
+    return new Date(+parts[0], +parts[1] - 1, +parts[2], +p[0], +p[1], 0, 0).getTime();
+  }
+
+  function isDueOn(t, day) {
+    if (t.dueWithTime) return ymd(new Date(t.dueWithTime)) === day;
+    return t.dueDay === day;
+  }
+
+  function dueOf(t) {
+    if (t.dueWithTime) return fmtTs(t.dueWithTime);
+    return t.dueDay || null;
+  }
+
+  function briefTask(t, lk, withNotes) {
+    var today = ymd();
+    return compact({
+      id: t.id,
+      title: t.title,
+      done: !!t.isDone,
+      project: t.projectId && lk.projects[t.projectId] ? lk.projects[t.projectId].title : null,
+      tags: (t.tagIds || []).filter(function (id) { return lk.tags[id] && id !== 'TODAY'; }).map(function (id) { return lk.tags[id].title; }),
+      due: dueOf(t),
+      deadline: t.deadlineWithTime ? fmtTs(t.deadlineWithTime) : (t.deadlineDay || null),
+      priority: t.priority || null,
+      estimateMin: minutes(t.timeEstimate) || null,
+      spentMin: minutes(t.timeSpent) || null,
+      spentTodayMin: minutes(t.timeSpentOnDay && t.timeSpentOnDay[today]) || null,
+      parentId: t.parentId || null,
+      subtasks: (t.subTaskIds || []).length || null,
+      running: t.id === state.currentTaskId || null,
+      notes: withNotes && t.notes ? String(t.notes).slice(0, 300) : null,
+    });
+  }
+
+  function findTask(id) {
+    return need('getTasks')().then(function (all) {
+      var t = (all || []).find(function (x) { return x.id === id; });
+      if (t) return t;
+      throw new Error('找不到任务 ' + id + '（先用 list_tasks 查 id）');
+    });
+  }
+
+  function addTagsByName(names, lk) {
+    var ids = [];
+    return names.reduce(function (p, name) {
+      return p.then(function () {
+        var hit = Object.keys(lk.tags).map(function (k) { return lk.tags[k]; })
+          .find(function (t) { return String(t.title).toLowerCase() === String(name).trim().toLowerCase(); });
+        if (hit) { ids.push(hit.id); return; }
+        return need('addTag')({ title: String(name).trim() }).then(function (id) {
+          lk.tags[id] = { id: id, title: String(name).trim() };
+          ids.push(id);
+        });
+      });
+    }, Promise.resolve()).then(function () { return ids; });
+  }
+
+  var LOCAL_TOOLS = [
+    {
+      name: 'list_tasks',
+      description: '查询本设备上的任务。回答“今天要做什么/还剩什么/某项目有哪些任务”时先调用它；修改任务前也用它拿 id。',
+      parameters: {
+        type: 'object',
+        properties: {
+          scope: { type: 'string', enum: ['today', 'overdue', 'open', 'done', 'all', 'archived'], description: 'today=今天到期/排期；overdue=已逾期未完成；open=所有未完成（默认）' },
+          query: { type: 'string', description: '按标题/备注关键字过滤' },
+          project: { type: 'string', description: '项目名或 id' },
+          tag: { type: 'string', description: '标签名或 id' },
+          limit: { type: 'integer', description: '默认 30，最多 100' },
+        },
+      },
+      run: function (a) {
+        var scope = a.scope || 'open';
+        return Promise.all([
+          scope === 'archived' ? need('getArchivedTasks')() : need('getTasks')(),
+          loadLookups(),
+        ]).then(function (r) {
+          var list = r[0] || [], lk = r[1], today = ymd();
+          if (scope === 'today') list = list.filter(function (t) { return isDueOn(t, today); });
+          else if (scope === 'overdue') list = list.filter(function (t) {
+            if (t.isDone) return false;
+            if (t.dueWithTime) return t.dueWithTime < Date.now();
+            return t.dueDay && t.dueDay < today;
+          });
+          else if (scope === 'open') list = list.filter(function (t) { return !t.isDone; });
+          else if (scope === 'done') list = list.filter(function (t) { return t.isDone; });
+          if (a.project) { var p = resolveByName(lk.projects, a.project, '项目'); list = list.filter(function (t) { return t.projectId === p.id; }); }
+          if (a.tag) { var tg = resolveByName(lk.tags, a.tag, '标签'); list = list.filter(function (t) { return (t.tagIds || []).indexOf(tg.id) >= 0; }); }
+          if (a.query) {
+            var q = String(a.query).toLowerCase();
+            list = list.filter(function (t) { return (String(t.title) + ' ' + String(t.notes || '')).toLowerCase().indexOf(q) >= 0; });
+          }
+          var lim = Math.max(1, Math.min(Number(a.limit) || 30, 100));
+          return { total: list.length, shown: Math.min(lim, list.length), tasks: list.slice(0, lim).map(function (t) { return briefTask(t, lk, !!a.query); }) };
+        });
+      },
+    },
+    {
+      name: 'get_task',
+      description: '查看单个任务的完整信息（含备注和子任务）。',
+      parameters: { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'] },
+      run: function (a) {
+        return Promise.all([need('getTasks')(), loadLookups()]).then(function (r) {
+          var all = r[0] || [], lk = r[1];
+          var t = all.find(function (x) { return x.id === a.task_id; });
+          if (!t) throw new Error('找不到任务 ' + a.task_id);
+          var out = briefTask(t, lk, true);
+          out.notes = t.notes || undefined;
+          out.subtaskList = (t.subTaskIds || []).map(function (id) {
+            var s = all.find(function (x) { return x.id === id; });
+            return s ? { id: s.id, title: s.title, done: !!s.isDone } : { id: id };
+          });
+          return compact(out);
+        });
+      },
+    },
+    {
+      name: 'create_task',
+      description: '新建任务。project/tags 用名字即可；标签不存在会自动创建，项目不存在会报错并列出现有项目。',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          notes: { type: 'string' },
+          project: { type: 'string', description: '项目名或 id，不填则进收件箱' },
+          tags: { type: 'array', items: { type: 'string' }, description: '标签名列表' },
+          due_day: { type: 'string', description: 'YYYY-MM-DD，或 today / tomorrow。排进今天就填 today' },
+          due_time: { type: 'string', description: 'HH:MM（24 小时制），需要同时给 due_day' },
+          estimate_min: { type: 'number', description: '预估分钟数' },
+          priority: { type: 'string', enum: ['high', 'medium', 'low'] },
+          parent_id: { type: 'string', description: '作为子任务时填父任务 id' },
+        },
+        required: ['title'],
+      },
+      run: function (a) {
+        var lk, day = a.due_day ? parseDay(a.due_day) : (a.due_time ? ymd() : null);
+        var when = a.due_time ? parseTime(day, a.due_time) : null;
+        return loadLookups().then(function (l) {
+          lk = l;
+          return a.tags && a.tags.length ? addTagsByName(a.tags, lk) : [];
+        }).then(function (tagIds) {
+          var data = { title: String(a.title) };
+          if (a.notes) data.notes = a.notes;
+          if (a.project) data.projectId = resolveByName(lk.projects, a.project, '项目').id;
+          if (tagIds.length) data.tagIds = tagIds;
+          if (a.estimate_min) data.timeEstimate = Math.round(a.estimate_min * 60000);
+          if (a.parent_id) data.parentId = a.parent_id;
+          if (day && !when) data.dueDay = day;
+          return need('addTask')(data);
+        }).then(function (id) {
+          var patch = {};
+          if (when) { patch.dueWithTime = when; patch.dueDay = null; patch.hasPlannedTime = true; }
+          if (a.priority) patch.priority = a.priority;
+          return (Object.keys(patch).length ? need('updateTask')(id, patch) : Promise.resolve())
+            .then(function () { return compact({ ok: true, id: id, due: when ? fmtTs(when) : day }); });
+        });
+      },
+    },
+    {
+      name: 'update_task',
+      description: '修改任务。只传需要改的字段。',
+      parameters: {
+        type: 'object',
+        properties: {
+          task_id: { type: 'string' },
+          title: { type: 'string' },
+          notes: { type: 'string' },
+          due_day: { type: 'string', description: 'YYYY-MM-DD / today / tomorrow' },
+          due_time: { type: 'string', description: 'HH:MM，不给 due_day 时默认今天' },
+          clear_due: { type: 'boolean', description: 'true = 取消排期' },
+          estimate_min: { type: 'number' },
+          priority: { type: 'string', enum: ['high', 'medium', 'low', 'none'] },
+          project: { type: 'string', description: '移动到该项目（名或 id）' },
+          add_tags: { type: 'array', items: { type: 'string' } },
+          remove_tags: { type: 'array', items: { type: 'string' } },
+          done: { type: 'boolean', description: 'true = 完成，false = 重新打开' },
+        },
+        required: ['task_id'],
+      },
+      run: function (a) {
+        var lk, task;
+        return Promise.all([findTask(a.task_id), loadLookups()]).then(function (r) {
+          task = r[0]; lk = r[1];
+          return a.add_tags && a.add_tags.length ? addTagsByName(a.add_tags, lk) : [];
+        }).then(function (addIds) {
+          var p = {};
+          if (a.title !== undefined) p.title = a.title;
+          if (a.notes !== undefined) p.notes = a.notes;
+          if (a.clear_due) { p.dueDay = null; p.dueWithTime = null; p.hasPlannedTime = false; }
+          else if (a.due_time) {
+            p.dueWithTime = parseTime(a.due_day ? parseDay(a.due_day) : ymd(), a.due_time);
+            p.dueDay = null; p.hasPlannedTime = true;
+          } else if (a.due_day) { p.dueDay = parseDay(a.due_day); p.dueWithTime = null; p.hasPlannedTime = false; }
+          if (a.estimate_min !== undefined) p.timeEstimate = Math.round(a.estimate_min * 60000);
+          if (a.priority) p.priority = a.priority === 'none' ? null : a.priority;
+          if (a.project) p.projectId = resolveByName(lk.projects, a.project, '项目').id;
+          if (a.done === true) { p.isDone = true; p.doneOn = Date.now(); }
+          if (a.done === false) { p.isDone = false; p.doneOn = null; }
+          if (addIds.length || (a.remove_tags && a.remove_tags.length)) {
+            var removeIds = (a.remove_tags || []).map(function (n) { return resolveByName(lk.tags, n, '标签').id; });
+            var cur = (task.tagIds || []).filter(function (id) { return removeIds.indexOf(id) < 0; });
+            addIds.forEach(function (id) { if (cur.indexOf(id) < 0) cur.push(id); });
+            p.tagIds = cur;
+          }
+          if (!Object.keys(p).length) throw new Error('没有要修改的字段');
+          return need('updateTask')(a.task_id, p).then(function () { return { ok: true, changed: Object.keys(p) }; });
+        });
+      },
+    },
+    {
+      name: 'complete_task',
+      description: '把任务标记为完成。',
+      parameters: { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'] },
+      run: function (a) {
+        return findTask(a.task_id).then(function (t) {
+          return need('updateTask')(t.id, { isDone: true, doneOn: Date.now() }).then(function () { return { ok: true, title: t.title }; });
+        });
+      },
+    },
+    {
+      name: 'delete_task',
+      description: '删除任务（不可恢复）。只有用户明确要求删除时才调用；会弹窗让用户确认。',
+      parameters: { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'] },
+      run: function (a) {
+        return findTask(a.task_id).then(function (t) {
+          var ok = true;
+          try { ok = window.confirm('确定删除任务「' + t.title + '」？此操作不可恢复。'); } catch (e) { ok = true; }
+          if (!ok) return { ok: false, cancelled: true, reason: '用户在确认框里取消了删除' };
+          return need('deleteTask')(t.id).then(function () { return { ok: true, deleted: t.title }; });
+        });
+      },
+    },
+    {
+      name: 'start_timer',
+      description: '开始为某个任务计时（会自动切换掉正在计时的任务）。',
+      parameters: { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'] },
+      run: function (a) {
+        return findTask(a.task_id).then(function (t) {
+          if (t.isDone) throw new Error('已完成的任务不能计时');
+          if (t.subTaskIds && t.subTaskIds.length) throw new Error('父任务不能直接计时，请选择它的子任务');
+          return Promise.resolve(need('dispatchAction')({ type: '[Task] SetCurrentTask', id: t.id })).then(function () {
+            state.currentTaskId = t.id;
+            return { ok: true, running: t.title };
+          });
+        });
+      },
+    },
+    {
+      name: 'stop_timer',
+      description: '停止当前计时。',
+      parameters: { type: 'object', properties: {} },
+      run: function () {
+        return Promise.resolve(need('dispatchAction')({ type: '[Task] SetCurrentTask', id: null })).then(function () {
+          state.currentTaskId = null;
+          return { ok: true };
+        });
+      },
+    },
+    {
+      name: 'today_summary',
+      description: '今日概况：今天排期的任务完成情况、今天已记录的工时、逾期数量、正在计时的任务。回答“我今天干了啥/还剩多少”先看这里。',
+      parameters: { type: 'object', properties: {} },
+      run: function () {
+        return Promise.all([need('getTasks')(), loadLookups()]).then(function (r) {
+          var all = r[0] || [], lk = r[1], today = ymd();
+          var due = all.filter(function (t) { return !t.parentId && isDueOn(t, today); });
+          var spent = 0;
+          all.forEach(function (t) { if (!t.parentId) spent += (t.timeSpentOnDay && t.timeSpentOnDay[today]) || 0; });
+          var overdue = all.filter(function (t) {
+            return !t.isDone && (t.dueWithTime ? t.dueWithTime < Date.now() && ymd(new Date(t.dueWithTime)) !== today : t.dueDay && t.dueDay < today);
+          });
+          var cur = state.currentTaskId && all.find(function (t) { return t.id === state.currentTaskId; });
+          return compact({
+            date: today,
+            todayPlanned: due.length,
+            todayDone: due.filter(function (t) { return t.isDone; }).length,
+            todayOpen: due.filter(function (t) { return !t.isDone; }).map(function (t) { return briefTask(t, lk); }),
+            trackedTodayMin: minutes(spent),
+            overdueCount: overdue.length,
+            running: cur ? cur.title : null,
+          });
+        });
+      },
+    },
+    {
+      name: 'list_projects',
+      description: '列出项目。',
+      parameters: { type: 'object', properties: {} },
+      run: function () {
+        return need('getAllProjects')().then(function (list) {
+          return (list || []).map(function (p) { return compact({ id: p.id, title: p.title, archived: !!p.isArchived, tasks: (p.taskIds || []).length }); });
+        });
+      },
+    },
+    {
+      name: 'create_project',
+      description: '新建项目。',
+      parameters: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] },
+      run: function (a) { return need('addProject')({ title: a.title }).then(function (id) { return { ok: true, id: id }; }); },
+    },
+    {
+      name: 'list_tags',
+      description: '列出标签。',
+      parameters: { type: 'object', properties: {} },
+      run: function () {
+        return need('getAllTags')().then(function (list) {
+          return (list || []).filter(function (t) { return t.id !== 'TODAY'; })
+            .map(function (t) { return { id: t.id, title: t.title, tasks: (t.taskIds || []).length }; });
+        });
+      },
+    },
+    {
+      name: 'list_habits',
+      description: '列出习惯/计数器及今天的数值。',
+      parameters: { type: 'object', properties: {} },
+      run: function () {
+        return need('getAppState')().then(function (s) {
+          var today = ymd(), map = (s && s.simpleCounters) || {};
+          return Object.keys(map).map(function (k) {
+            var c = map[k];
+            return compact({ id: c.id, title: c.title, type: c.type, enabled: c.isEnabled !== false, today: (c.countOnDay || {})[today] || 0 });
+          });
+        });
+      },
+    },
+    {
+      name: 'check_habit',
+      description: '习惯打卡：给计数器今天的数值 +1（或指定增量）。',
+      parameters: { type: 'object', properties: { habit_id: { type: 'string' }, by: { type: 'integer', description: '默认 1' } }, required: ['habit_id'] },
+      run: function (a) {
+        return need('incrementCounter')(a.habit_id, Number(a.by) || 1).then(function (v) { return { ok: true, today: v }; });
+      },
+    },
+  ];
+
+  var LOCAL_BY_NAME = {};
+  LOCAL_TOOLS.forEach(function (t) { LOCAL_BY_NAME[t.name] = t; });
+
+  function toolDefs() {
+    var defs = LOCAL_TOOLS.map(function (t) {
+      return { type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } };
+    });
+    if (state.mcp) {
+      state.mcp.tools.forEach(function (t) {
+        defs.push({ type: 'function', function: {
+          name: mcpToolName(t.name),
+          description: '[远程 MCP] ' + (t.description || t.name),
+          parameters: t.inputSchema && t.inputSchema.type ? t.inputSchema : { type: 'object', properties: {} },
+        } });
+      });
+    }
+    return defs;
+  }
+
+  function runTool(name, args) {
+    var local = LOCAL_BY_NAME[name];
+    if (local) return Promise.resolve().then(function () { return local.run(args || {}); });
+    if (state.mcp) {
+      var remote = state.mcp.tools.find(function (t) { return mcpToolName(t.name) === name; });
+      if (remote) return state.mcp.callTool(remote.name, args);
+    }
+    return Promise.reject(new Error('没有这个工具：' + name));
+  }
+
+  // ------------------------------------------------------------------ 对话主循环
+
+  function systemPrompt() {
+    var d = new Date();
+    var wk = '日一二三四五六'.charAt(d.getDay());
+    return [
+      '你是嵌入在 Super Productivity（待办 + 时间追踪应用）里的助手，通过工具直接读写用户的任务数据。',
+      '现在是 ' + ymd(d) + ' 星期' + wk + ' ' + hm(d) + '（时区 ' + Intl.DateTimeFormat().resolvedOptions().timeZone + '）。“明天/下周一”之类要换算成具体日期。',
+      '规则：',
+      '- 需要任务 id 时先用 list_tasks 查，绝不编造 id；同名任务有多个时先问用户是哪一个。',
+      '- “排到今天”= due_day 设为今天；有具体时间点再填 due_time。',
+      '- 删除只在用户明确要求时做。',
+      '- 工具出错时根据报错修正参数重试一次，仍失败就如实告诉用户。',
+      '- 做完后用一两句中文简短汇报结果，不要复述工具的原始 JSON。',
+      state.mcp ? '- 以 mcp_ 开头的是远程 MCP 服务器提供的工具。' : '',
+    ].filter(Boolean).join('\n');
+  }
+
+  // 按“用户轮次”裁剪，保证不会把 assistant(tool_calls) 与对应的 tool 结果拆开
+  function trimHistory() {
+    var userIdx = [];
+    state.history.forEach(function (m, i) { if (m.role === 'user') userIdx.push(i); });
+    if (userIdx.length > KEEP_USER_TURNS) state.history = state.history.slice(userIdx[userIdx.length - KEEP_USER_TURNS]);
+  }
+
+  function saveHistory() { storageSet({ history: state.history }); }
+
+  function assistantEntry(msg) {
+    var e = { role: 'assistant', content: msg.content || null };
+    if (msg.tool_calls && msg.tool_calls.length) {
+      e.tool_calls = msg.tool_calls.map(function (c, i) {
+        return { id: c.id || ('call_' + Date.now() + '_' + i), type: 'function', function: { name: c.function.name, arguments: c.function.arguments || '{}' } };
+      });
+    } else if (e.content === null) {
+      e.content = '';
+    }
+    return e;
+  }
+
+  function send() {
+    if (state.busy) { state.stop = true; setStatus('warn', '正在停止…'); return; }
+    var text = (els.input.value || '').trim();
+    if (!text) return;
+    if (!cfg.llmBase || !cfg.model) {
+      els.cfg.classList.add('open');
+      addMsg('err', '先在设置里填好大模型的 API 地址和模型名');
+      return;
+    }
+    els.input.value = '';
+    autoGrow();
+    state.stop = false;
+    setBusy(true);
+    addMsg('me', text);
+    state.history.push({ role: 'user', content: text });
+    trimHistory();
+    saveHistory();
+    setStatus('warn', '思考中…');
+
+    ensureMcp().then(function () { return loop(0); }).catch(function (e) {
+      addMsg('err', errMsg(e));
+      setStatus('err', '出错 ' + hm());
+    }).then(function () {
+      setBusy(false);
+      saveHistory();
+      els.input.focus();
+    });
+  }
+
+  function loop(round) {
+    if (state.stop) { addMsg('note', '已停止'); setStatus('', '已停止'); return Promise.resolve(); }
+    if (round >= MAX_ROUNDS) { addMsg('note', '工具调用轮数达到上限，已暂停。可以继续说“接着做”。'); setStatus('warn', '轮数上限'); return Promise.resolve(); }
+    var messages = [{ role: 'system', content: systemPrompt() }].concat(state.history);
+    return chatCompletion(messages, toolDefs()).then(function (msg) {
+      var entry = assistantEntry(msg);
+      state.history.push(entry);
+      if (entry.content) addMsg('ai', entry.content);
+      if (!entry.tool_calls) {
+        setStatus('ok', modelLabel() + ' · ' + hm());
+        return null;
+      }
+      setStatus('warn', '执行工具…');
+      // 顺序执行：避免并发创建同名标签之类的竞争
+      return entry.tool_calls.reduce(function (p, call) {
+        return p.then(function () { return execToolCall(call); });
+      }, Promise.resolve()).then(function () { saveHistory(); return loop(round + 1); });
+    });
+  }
+
+  function execToolCall(call) {
+    var name = call.function.name, args = {};
+    var chip;
+    try { args = JSON.parse(call.function.arguments || '{}') || {}; } catch (e) {
+      chip = addToolChip(name, call.function.arguments);
+      var bad = '参数不是合法 JSON：' + call.function.arguments;
+      chip.done(false, bad);
+      state.history.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: bad }) });
+      return Promise.resolve();
+    }
+    chip = addToolChip(name, args);
+    if (state.stop) {
+      state.history.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: '用户已停止' }) });
+      chip.done(false, '已停止');
+      return Promise.resolve();
+    }
+    return runTool(name, args).then(function (out) {
+      var txt = typeof out === 'string' ? out : JSON.stringify(out === undefined ? { ok: true } : out);
+      if (txt.length > TOOL_RESULT_MAX) txt = txt.slice(0, TOOL_RESULT_MAX) + '…（已截断）';
+      state.history.push({ role: 'tool', tool_call_id: call.id, content: txt });
+      chip.done(true, txt);
+    }, function (e) {
+      var m = errMsg(e);
+      state.history.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: m }) });
+      chip.done(false, m);
+    });
+  }
+
+  function modelLabel() { return cfg.model || '未选模型'; }
+
+  // ------------------------------------------------------------------ 设置
+
+  function presetById(id) { return PRESETS.find(function (p) { return p.id === id; }) || PRESETS[PRESETS.length - 1]; }
+
+  function fillForm() {
+    els.preset.value = cfg.preset;
+    els.base.value = cfg.llmBase;
+    els.key.value = cfg.apiKey;
+    els.model.value = cfg.model;
+    els.mcpUrl.value = cfg.mcpUrl;
+    els.mcpToken.value = cfg.mcpToken;
+    els.transport.value = cfg.transport;
+  }
+
+  function readForm() {
+    return {
+      preset: els.preset.value,
+      llmBase: (els.base.value || '').trim().replace(/\/+$/, '').replace(/\/chat\/completions$/, ''),
+      apiKey: (els.key.value || '').trim(),
+      model: (els.model.value || '').trim(),
+      mcpUrl: (els.mcpUrl.value || '').trim(),
+      mcpToken: (els.mcpToken.value || '').trim(),
+      transport: els.transport.value || 'auto',
+    };
+  }
+
+  function showCfgStatus() {
+    if (!cfg.llmBase || !cfg.model) setStatus('err', '未配置');
+    else setStatus('', modelLabel() + ' · 未测试');
+  }
+
+  function saveCfg() {
+    cfg = readForm();
+    state.mcp = null;
+    state.goodTransport = {};
+    storageSet({ cfg: cfg });
+    addMsg('note', '设置已保存');
+    showCfgStatus();
+  }
+
+  function testConn() {
+    var saved = cfg;
+    cfg = readForm();
+    setStatus('warn', '测试中…');
+    var report = [];
+    return chatCompletion([{ role: 'user', content: '只回复 OK' }], []).then(function (msg) {
+      report.push('✓ 大模型可用（' + TRANSPORT_NAME[state.goodTransport[new URL(cfg.llmBase).origin]] + '），回复：' + String(msg.content || '').slice(0, 40));
+    }, function (e) {
+      report.push('✗ 大模型：' + errMsg(e));
+    }).then(function () {
+      if (!cfg.mcpUrl) return;
+      var c = new McpClient(cfg.mcpUrl, cfg.mcpToken);
+      return c.connect().then(function (tools) {
+        report.push('✓ MCP：' + c.serverName + '，' + tools.length + ' 个工具' + (c.sid ? '' : '（无会话 id）'));
+      }, function (e) { report.push('✗ MCP：' + errMsg(e)); });
+    }).then(function () {
+      var ok = report.every(function (l) { return l.charAt(0) === '✓'; });
+      addMsg(ok ? 'note' : 'err', report.join('\n'));
+      setStatus(ok ? 'ok' : 'err', ok ? modelLabel() + ' · 连接正常' : '连接有问题');
+      cfg = saved;
+    });
+  }
+
+  function loadModels() {
+    var saved = cfg;
+    cfg = readForm();
+    setStatus('warn', '获取模型…');
+    fetchModels().then(function (ids) {
+      els.models.innerHTML = '';
+      ids.forEach(function (id) { var o = document.createElement('option'); o.value = id; els.models.appendChild(o); });
+      addMsg('note', '可用模型 ' + ids.length + ' 个：' + ids.slice(0, 40).join('、') + (ids.length > 40 ? '…' : '') + '\n点模型输入框可以从列表里选。');
+      setStatus('', '');
+    }).catch(function (e) {
+      addMsg('err', '获取模型列表失败（部分服务商不支持，可手动填写模型名）：' + errMsg(e));
+      setStatus('err', '获取失败');
+    }).then(function () { cfg = saved; });
+  }
+
+  // ------------------------------------------------------------------ 启动
+
+  function autoGrow() {
+    els.input.style.height = 'auto';
+    els.input.style.height = Math.min(els.input.scrollHeight, Math.round(window.innerHeight * 0.34)) + 'px';
+  }
+
+  function init() {
+    PRESETS.forEach(function (p) {
+      var o = document.createElement('option'); o.value = p.id; o.textContent = p.label; els.preset.appendChild(o);
+    });
+    var stored = storageGet();
+    if (stored.cfg) cfg = Object.assign(cfg, stored.cfg);
+    if (!cfg.llmBase && cfg.preset !== 'custom') { var p0 = presetById(cfg.preset); cfg.llmBase = p0.base; cfg.model = cfg.model || p0.model; }
+    state.history = Array.isArray(stored.history) ? stored.history : [];
+    fillForm();
+    rebuildLog();
+    showCfgStatus();
+    if (!cfg.apiKey && cfg.preset !== 'custom') els.cfg.classList.add('open');
+
+    if (API && API.cfg && API.cfg.theme) document.documentElement.setAttribute('data-theme', API.cfg.theme);
+    if (API && typeof API.registerHook === 'function') {
+      try {
+        API.registerHook('currentTaskChange', function (payload) {
+          var cur = payload && payload.current;
+          state.currentTaskId = cur ? (typeof cur === 'string' ? cur : cur.id) : null;
+        });
+      } catch (e) { /* 旧版本没有这个钩子也无妨 */ }
+    }
+
+    els.preset.addEventListener('change', function () {
+      var p = presetById(els.preset.value);
+      if (p.base) els.base.value = p.base;
+      els.model.value = p.model || '';
+      els.models.innerHTML = '';
+    });
+    $('btnCfg').addEventListener('click', function () { els.cfg.classList.toggle('open'); });
+    $('btnSave').addEventListener('click', function () { saveCfg(); testConn(); });
+    $('btnTest').addEventListener('click', testConn);
+    $('btnModels').addEventListener('click', loadModels);
+    els.send.addEventListener('click', send);
+    $('btnClear').addEventListener('click', function () {
+      if (state.busy) return;
+      state.history = [];
+      saveHistory();
+      rebuildLog();
+    });
+    els.input.addEventListener('input', autoGrow);
+    els.input.addEventListener('keydown', function (e) {
+      // 手机输入法回车应当换行；桌面上 Enter 发送、Shift+Enter 换行
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !isNativeHost()) { e.preventDefault(); send(); }
+    });
+
+    if (!API) addMsg('err', '未检测到 PluginAPI：这个页面需要作为 Super Productivity 插件运行。');
+  }
+
+  // 暴露给开发测试用
+  window.__spAiAssistant = { McpClient: McpClient, state: state, tools: LOCAL_BY_NAME, http: http };
+
+  init();
+})();
+</script>
+</body>
+</html>
