@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>主控台改版草图</title>
+<style>
+  :root {
+    --bg: #f6f2ee;
+    --card: #ffffff;
+    --ink: #2b2a33;
+    --muted: #7b7684;
+    --line: #ece6e1;
+    --primary: #4e5a92;
+    --primary-soft: #e7e9f5;
+    --calm: #7fae8e;
+    --care: #e2b25a;
+    --worry: #e0876b;
+    --talk: #c75a6b;
+    --radius: 18px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17161b; --card: #221f27; --ink: #eeebf2; --muted: #a39dab; --line: #2f2b35;
+      --primary: #9aa6e6; --primary-soft: #2c2f45;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .phone { max-width: 420px; margin: 0 auto; min-height: 100vh; padding-bottom: 88px; }
+  .note {
+    margin: 12px 16px 0; padding: 10px 12px; border-radius: 12px; font-size: 12px; line-height: 1.5;
+    background: var(--primary-soft); color: var(--primary);
+  }
+  header { display: flex; align-items: center; padding: 16px 20px 4px; }
+  header h1 { margin: 0; font-size: 22px; flex: 1; letter-spacing: .5px; }
+  header .sys {
+    font-size: 12px; padding: 6px 10px; border-radius: 999px; background: #fdecea; color: var(--talk);
+    border: 0; cursor: pointer;
+  }
+  section { margin: 12px 16px; background: var(--card); border-radius: var(--radius); padding: 18px; }
+  .label { font-size: 12px; color: var(--muted); margin-bottom: 8px; letter-spacing: .5px; }
+
+  /* 她 */
+  .she { display: flex; gap: 14px; align-items: center; }
+  .avatar {
+    width: 64px; height: 64px; border-radius: 50%; flex: none; display: grid; place-items: center;
+    font-size: 30px; background: #fbe4dc; box-shadow: 0 0 0 4px #fff, 0 0 0 6px var(--care);
+  }
+  .she .name { font-size: 18px; font-weight: 600; }
+  .mood { display: inline-block; margin-top: 4px; font-size: 13px; padding: 3px 10px; border-radius: 999px; background: #fbf1dc; color: #a2741d; }
+  .say { margin: 16px 0 6px; font-size: 16px; line-height: 1.6; }
+  .why { font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .meter { margin-top: 16px; }
+  .zones { display: flex; gap: 3px; height: 10px; }
+  .zones span { border-radius: 5px; }
+  .z1 { background: var(--calm); flex: 20; } .z2 { background: var(--care); flex: 25; }
+  .z3 { background: var(--worry); flex: 25; } .z4 { background: var(--talk); flex: 30; }
+  .ticks { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .marker { position: relative; height: 0; }
+  .marker i { position: absolute; top: -17px; left: 32%; width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 3px solid var(--care); transform: translateX(-50%); }
+  .next { margin-top: 12px; font-size: 13px; padding: 10px 12px; border-radius: 12px; background: var(--bg); }
+  .next b { color: var(--worry); font-weight: 600; }
+  .row { display: flex; gap: 8px; margin-top: 14px; }
+  .btn { flex: 1; border: 0; border-radius: 14px; padding: 13px 0; font-size: 15px; cursor: pointer; }
+  .btn.primary { background: var(--primary); color: #fff; }
+  .btn.ghost { background: var(--primary-soft); color: var(--primary); }
+  .btn.small { flex: none; padding: 8px 12px; font-size: 13px; }
+
+  /* 你 */
+  .task { font-size: 13px; color: var(--muted); }
+  .task b { color: var(--ink); font-size: 17px; display: block; margin-top: 2px; }
+  .acts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 14px; }
+  .act { border: 1.5px solid var(--line); background: var(--card); color: var(--ink); border-radius: 14px; padding: 12px 0 10px; font-size: 14px; cursor: pointer; }
+  .act small { display: block; font-size: 18px; margin-bottom: 2px; }
+  .act.on { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); }
+  .input { display: flex; gap: 8px; margin-top: 10px; }
+  .input input { flex: 1; min-width: 0; border: 1.5px solid var(--line); border-radius: 12px; padding: 11px 12px; font-size: 14px; background: var(--card); color: var(--ink); }
+
+  .strip { display: flex; gap: 2px; margin-top: 12px; }
+  .strip span { flex: 1; height: 26px; border-radius: 4px; background: var(--line); }
+  .strip .on { background: var(--calm); } .strip .off { background: var(--worry); } .strip .mix { background: var(--care); }
+  .strip .now { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .hours { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); margin-top: 4px; }
+  .stats { display: flex; gap: 10px; margin-top: 14px; }
+  .stat { flex: 1; background: var(--bg); border-radius: 12px; padding: 10px 12px; }
+  .stat .v { font-size: 20px; font-weight: 600; }
+  .stat .k { font-size: 11px; color: var(--muted); }
+  .log { margin-top: 12px; }
+  .log div { display: flex; gap: 10px; font-size: 13px; padding: 8px 0; border-top: 1px solid var(--line); }
+  .log time { color: var(--muted); width: 42px; flex: none; }
+  .tag { font-size: 11px; padding: 1px 7px; border-radius: 6px; background: var(--primary-soft); color: var(--primary); flex: none; height: 18px; }
+  .tag.stuck { background: #fdecea; color: var(--talk); }
+
+  /* tabs */
+  nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 1px solid var(--line); }
+  nav div { max-width: 420px; margin: 0 auto; display: flex; }
+  nav button { flex: 1; border: 0; background: none; padding: 12px 0 16px; font-size: 12px; color: var(--muted); cursor: pointer; }
+  nav button b { display: block; font-size: 20px; margin-bottom: 2px; font-weight: 400; }
+  nav button.on { color: var(--primary); }
+  .page { display: none; } .page.on { display: block; }
+
+  /* 会话 / 系统 */
+  .item { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+  .item:first-of-type { border-top: 0; }
+  .item .dot { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--bg); flex: none; }
+  .item .t { flex: 1; min-width: 0; }
+  .item .t b { display: block; font-weight: 500; }
+  .item .t span { font-size: 12px; color: var(--muted); }
+  .warn { color: var(--talk); font-size: 12px; }
+  .ok { color: var(--calm); } .bad { color: var(--talk); } .mid { color: #b8862a; }
+  .health .item span.st { font-size: 12px; }
+  .search { width: 100%; border: 1.5px solid var(--line); border-radius: 12px; padding: 11px 12px; font-size: 14px; background: var(--card); color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="phone">
+  <div class="note">草图：数据是按你交接文档编的示例。所有元素都只用 Operit 页面能画出来的东西（卡片、文字、色块、按钮），做出来会是这个样子。</div>
+
+  <!-- 今天 -->
+  <div class="page on" id="p-today">
+    <header>
+      <h1>今天</h1>
+      <button class="sys" onclick="go('sys')">系统 · 2 处要看</button>
+    </header>
+
+    <section>
+      <div class="she">
+        <div class="avatar">🌸</div>
+        <div>
+          <div class="name">陪伴窗</div>
+          <span class="mood">在意</span>
+        </div>
+      </div>
+      <div class="say">"贴吧已经刷了 14 分钟啦。投递今天记了两家，再投一家我们就收工？"</div>
+      <div class="why">为什么是"在意"：近 1 小时 4 次采样有 2 次不在任务上 · 14:05 你说「投了两家」，已经扣掉一些</div>
+      <div class="meter">
+        <div class="zones"><span class="z1"></span><span class="z2"></span><span class="z3"></span><span class="z4"></span></div>
+        <div class="marker"><i></i></div>
+        <div class="ticks"><span>安心</span><span>在意</span><span>担心</span><span>要谈谈</span></div>
+      </div>
+      <div class="next">再偏离一次：<b>她会发提醒</b>（规则 A1）· 到"要谈谈"会暂停贴吧（A3）</div>
+      <div class="row">
+        <button class="btn primary">找她聊</button>
+        <button class="btn ghost">🎙 语音</button>
+        <button class="btn ghost small">让她细说</button>
+      </div>
+    </section>
+
+    <section>
+      <div class="task">当前任务<b>求职投递</b></div>
+      <div class="acts">
+        <button class="act on"><small>▶</small>继续</button>
+        <button class="act"><small>◼</small>卡住</button>
+        <button class="act"><small>✓</small>提交</button>
+        <button class="act"><small>Ⅱ</small>暂停</button>
+      </div>
+      <div class="input">
+        <input placeholder="一句话，比如：又投了一家">
+        <button class="btn primary small">记下</button>
+      </div>
+    </section>
+
+    <section>
+      <div class="label">今天的你</div>
+      <div class="strip" id="strip"></div>
+      <div class="hours"><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
+      <div class="stats">
+        <div class="stat"><div class="v">75%</div><div class="k">采样在任务上</div></div>
+        <div class="stat"><div class="v">3</div><div class="k">条进展</div></div>
+        <div class="stat"><div class="v">贴吧</div><div class="k">偏离时最常开</div></div>
+      </div>
+      <div class="log">
+        <div><time>14:05</time><span class="tag">提交</span><span>「投了两家」</span></div>
+        <div><time>11:40</time><span class="tag stuck">卡住</span><span>「简历项目经历写不下去」</span></div>
+        <div><time>09:12</time><span class="tag">继续</span><span>「开始看岗位」</span></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- 会话 -->
+  <div class="page" id="p-chats">
+    <header><h1>会话</h1></header>
+    <section>
+      <input class="search" placeholder="搜索对话">
+    </section>
+    <section>
+      <div class="label">她（主入口）</div>
+      <div class="item"><div class="dot">🌸</div><div class="t"><b>陪伴窗</b><span>812 条 · 5 分钟前</span></div><span class="warn">太长了</span></div>
+      <div class="label" style="margin-top:14px">后台角色（平时不用直接找）</div>
+      <div class="item"><div class="dot">⚖️</div><div class="t"><b>判断官</b><span>每 30 分钟 · 结果交给她转达</span></div></div>
+      <div class="item"><div class="dot">📝</div><div class="t"><b>复盘者</b><span>每天 23:10</span></div></div>
+      <div class="item"><div class="dot">🔓</div><div class="t"><b>解锁审讯官</b><span>申请解锁时</span></div></div>
+    </section>
+    <section>
+      <div class="label">最近</div>
+      <div class="item"><div class="dot">💬</div><div class="t"><b>简历修改</b><span>36 条 · 2 小时前</span></div></div>
+      <div class="item"><div class="dot">💬</div><div class="t"><b>临时对话</b><span>2 条 · 昨天</span></div></div>
+    </section>
+  </div>
+
+  <!-- 系统 -->
+  <div class="page" id="p-sys">
+    <header><h1>系统</h1></header>
+    <section class="health">
+      <div class="label">体检（看文件多久没更新）</div>
+      <div class="item"><div class="t"><b>前台采样</b><span>每 15 分钟</span></div><span class="st ok">5 分钟前</span></div>
+      <div class="item"><div class="t"><b>用量刷新</b><span>每小时</span></div><span class="st ok">42 分钟前</span></div>
+      <div class="item"><div class="t"><b>判断官</b><span>每 30 分钟</span></div><span class="st bad">2 天前</span></div>
+      <div class="item"><div class="t"><b>提醒通道</b><span>每 30 分钟</span></div><span class="st ok">12 分钟前</span></div>
+      <div class="item"><div class="t"><b>日报</b><span>每天 23:55</span></div><span class="st ok">昨天 23:58</span></div>
+    </section>
+    <section>
+      <div class="label">工作流 · 需要看</div>
+      <div class="item"><div class="t"><b>G2_Judge_Flow</b><span>失败 138 / 373</span></div><span class="st bad">失败率 37%</span></div>
+      <div class="item"><div class="t"><b>LIFE_MorningDigest</b><span>每天 08:00 · 30 小时没跑</span></div><span class="st mid">疑似迟到</span></div>
+      <div class="label" style="margin-top:14px">其余 19 个正常 · 5 个已停用 ›</div>
+    </section>
+    <section>
+      <div class="label">更多</div>
+      <div class="item"><div class="t"><b>App 使用</b><span>过去 24 小时</span></div>›</div>
+      <div class="item"><div class="t"><b>事件流</b><span>今天 199 条</span></div>›</div>
+      <div class="item"><div class="t"><b>规则与动作审计</b><span>A1–A4 · 最近 12 条动作</span></div>›</div>
+    </section>
+  </div>
+</div>
+
+<nav><div>
+  <button class="on" id="t-today" onclick="go('today')"><b>☀</b>今天</button>
+  <button id="t-chats" onclick="go('chats')"><b>💬</b>会话</button>
+  <button id="t-sys" onclick="go('sys')"><b>⚙</b>系统</button>
+</div></nav>
+
+<script>
+  const hours = ["", "", "", "", "", "", "", "on", "on", "on", "mix", "off", "on", "mix", "on", "off", "", "", "", "", "", "", "", ""];
+  const strip = document.getElementById("strip");
+  hours.forEach((c, i) => {
+    const s = document.createElement("span");
+    if (c) s.className = c;
+    if (i === 15) s.classList.add("now");
+    strip.appendChild(s);
+  });
+  function go(p) {
+    for (const id of ["today", "chats", "sys"]) {
+      document.getElementById("p-" + id).classList.toggle("on", id === p);
+      document.getElementById("t-" + id).classList.toggle("on", id === p);
+    }
+    window.scrollTo(0, 0);
+  }
+  document.querySelectorAll(".act").forEach((b) => b.addEventListener("click", () => {
+    document.querySelectorAll(".act").forEach((x) => x.classList.remove("on"));
+    b.classList.add("on");
+  }));
+</script>
+</body>
+</html>
