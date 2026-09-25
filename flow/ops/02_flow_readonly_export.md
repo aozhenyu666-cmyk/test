@@ -1,8 +1,11 @@
-# 给 Operit AI 的指令：整体流程线只读导出
+# 给 Operit AI 的指令：整体流程线只读导出（v2）
 
-> 用法：把"指令正文"整段复制给 Operit AI。本轮**只读**：只新建一个脚本文件和导出文件，不改其他任何东西。
+> 用法：把"指令正文"整段复制给 Operit AI。本轮**只读**：只新建一个脚本文件和一个导出文件，不改其他任何东西。
+>
+> v2 改动：v1 让 Operit AI 把脚本逐字抄进文件，实测抄错了（sed 那行字符集变了，第 22 行多了一个 `a`）。v2 改成直接从 GitHub 下载脚本原文件，再用 sha256 校验，全程不需要抄写。
+>
+> 脚本源码：[`flow/ops/flow_export.sh`](flow_export.sh)，下载链接固定在提交 `9464af8`，文件内容不会变。
 > 导出内容通过 shell 直接写进文件，不经过对话上下文，所以即使文件很大也不费 token。
-> 如果已经按 `ops/01` 做过 `scripts_export_20260925.txt`，这份仍然要做：它包含那份的全部内容，还多了提醒通道、语音、事件和进展。
 
 ---
 
@@ -12,110 +15,42 @@
 
 ### 禁止事项
 
-- 不修改、不删除、不移动 `/sdcard/Download/Operit/` 下任何已有文件。唯一允许新建的是下面两个文件：
-  - `/sdcard/Download/Operit/00_AGENT_HANDOVER/flow_export.sh`
+- 不修改、不删除、不移动 `/sdcard/Download/Operit/` 下任何已有文件。上一轮写坏的 `00_AGENT_HANDOVER/flow_export.sh` 保持原样，不运行、不删除。
+- 唯一允许新建的是：
+  - `/sdcard/Download/Operit/00_AGENT_HANDOVER/flow_export_v2.sh`（下载得到）
   - `/sdcard/Download/Operit/00_AGENT_HANDOVER/flow_export_<日期>.txt`（由脚本生成）
+- **不要自己写或改脚本内容**，只能用下载工具获取。
 - 不触发、不启用、不停用、不修改任何工作流。
 - 不调用 `app_suspender` 的任何工具，不改变任何 App 的冻结状态。
 - 不向任何会话发消息，不发通知。
-- 不"改进"下面的脚本：一个字符都不要改。脚本有问题就停下来报告。
 
 ### 步骤
 
-**第 1 步：写入脚本。** 把下面代码块里的内容**原样**写入 `/sdcard/Download/Operit/00_AGENT_HANDOVER/flow_export.sh`（不含代码块的三个反引号）。
+**第 1 步：下载脚本。** 调用 `download_file`：
+
+- url：`https://raw.githubusercontent.com/aozhenyu666-cmyk/test/9464af8312bb71df8ca3f637f34e6a9e4fb5aeb0/flow/ops/flow_export.sh`
+- destination：`/sdcard/Download/Operit/00_AGENT_HANDOVER/flow_export_v2.sh`
+
+下载失败就停止，报告错误原文。
+
+**第 2 步：校验。** 用 `super_admin:shell` 执行：
 
 ```sh
-#!/system/bin/sh
-# 只读导出：给"整体流程线"用。只写 00_AGENT_HANDOVER/ 下的一个导出文件，不改其他任何东西。
-R=/sdcard/Download/Operit
-D=$(date +%Y%m%d)
-OUT=$R/00_AGENT_HANDOVER/flow_export_$D.txt
-mkdir -p "$R/00_AGENT_HANDOVER"
-
-# 打码：token/secret/key/Bearer 后面的值、sk- 开头的密钥
-redact() {
-  sed -E 's/(Bearer|bearer) +[[:alnum:]._+\/=-]{6,}/\1 <REDACTED>/g; s/(token|TOKEN|Token|secret|SECRET|Secret|api_key|API_KEY|apikey|apiKey|ApiKey|password|PASSWORD)([^[:alnum:]]{1,4})[[:alnum:]._+\/=-]{6,}/\1\2<REDACTED>/g; s/sk-[[:alnum:]_-]{8,}/sk-<REDACTED>/g'
-}
-
-# dump 路径 [只取末尾 N 行]
-dump() {
-  if [ -f "$1" ]; then
-    echo "===== $1 ===== size=$(wc -c <"$1") mtime=$(date -r "$1" '+%F %T' 2>/dev/null)"
-    if [ -n "$2" ]; then tail -n "$2" "$1"; else cat "$1"; fi | redact
-  else
-    echo "===== $1 ===== NOT_FOUND"
-  fi
-  echo
-}
-
-{
-echo "##### FLOW_EXPORT $(date '+%F %T')"
-
-echo "##### A. 目录结构（两层，不展开每日事件目录）"
-find "$R" -maxdepth 2 -not -path "$R/events/20*/*" 2>/dev/null | sort
-echo
-
-echo "##### B. 全部 .sh 脚本"
-find "$R" -maxdepth 4 -name '*.sh' -not -path '*00_AGENT_HANDOVER*' -not -path '*backup*' -not -path '*_bak*' 2>/dev/null | sort | while read -r f; do dump "$f"; done
-
-echo "##### C. 规则和通道配置"
-for f in drift/task_state.txt drift/channel.txt events/EXEC_RULES.tsv events/ACTIVE_RULES.md \
-         events/UNLOCK_POLICY.tsv events/README.md judge/sched_chains.tsv p2/ent.list p2/protect.deny; do
-  dump "$R/$f"
-done
-for f in drift/channel_health.tsv drift/outbox_unsent.tsv events/ACTION_LOG.tsv lock_freeze/freeze_queue.tsv; do
-  dump "$R/$f" 40
-done
-
-echo "##### D. judge/ 和 drift/ 下最近 3 天改过的非脚本文件（每个取末尾 40 行）"
-find "$R/judge" "$R/drift" -maxdepth 2 -type f -mtime -3 -not -name '*.sh' 2>/dev/null | sort | while read -r f; do dump "$f" 40; done
-
-echo "##### E. 工作流盘上 JSON"
-for id in b3b65845 8f675f75 4008f0e8 5d51a05b b078ed53 c9ae5f71; do
-  set -- "$R"/workflow/"$id"*.json
-  if [ -f "$1" ]; then for f in "$@"; do dump "$f"; done; else echo "===== $R/workflow/$id*.json ===== NOT_FOUND"; echo; fi
-done
-
-echo "##### F. 最近两天事件"
-for d in $(ls -d "$R"/events/20* 2>/dev/null | tail -n 2); do dump "$d/digest.txt"; done
-LAST=$(ls -d "$R"/events/20* 2>/dev/null | tail -n 1)
-[ -n "$LAST" ] && dump "$LAST/events.jsonl" 150
-
-echo "##### G. 用户进展 progress/"
-ls -la "$R/progress" 2>&1
-for f in $(ls "$R"/progress/*.jsonl 2>/dev/null | tail -n 3); do dump "$f"; done
-
-echo "##### H. 执行日志里 G2 最近的记录"
-ls -la "$R/workflow/_execution_logs" 2>&1 | tail -n 20
-for f in $(ls -t "$R"/workflow/_execution_logs/* 2>/dev/null | head -n 60 | xargs grep -l b3b65845 2>/dev/null | head -n 3); do dump "$f" 80; done
-
-echo "##### I. 谁在对用户说话：关键词和会话 ID 在脚本/工作流里的出现位置"
-find "$R" -maxdepth 4 \( -name '*.sh' -o -name '*.json' -o -name 'channel*.txt' \) -not -path '*/events/20*' -not -path '*_execution_logs*' -not -path '*00_AGENT_HANDOVER*' 2>/dev/null \
-  | xargs grep -n -E 'chat_with_agent|speak|tts|TTS|VOICE|show_floating|sendNotification|startService|简历|投递|ded96924|28f6fbb9|f0953479' 2>/dev/null \
-  | cut -c1-240 | redact
-
-echo "##### END"
-} >"$OUT" 2>&1
-
-echo "OUT=$OUT"
-echo "SIZE=$(wc -c <"$OUT")"
-echo "FILES=$(grep -c '^===== ' "$OUT")"
-echo "NOT_FOUND=$(grep -c ' NOT_FOUND$' "$OUT")"
-# END_OF_FLOW_EXPORT
+sha256sum /sdcard/Download/Operit/00_AGENT_HANDOVER/flow_export_v2.sh; md5sum /sdcard/Download/Operit/00_AGENT_HANDOVER/flow_export_v2.sh; wc -l < /sdcard/Download/Operit/00_AGENT_HANDOVER/flow_export_v2.sh
 ```
 
-**第 2 步：回读脚本。** 用 `super_admin:shell` 执行：
+必须同时满足：
 
-```sh
-wc -l /sdcard/Download/Operit/00_AGENT_HANDOVER/flow_export.sh; head -n 3 /sdcard/Download/Operit/00_AGENT_HANDOVER/flow_export.sh; tail -n 1 /sdcard/Download/Operit/00_AGENT_HANDOVER/flow_export.sh
-```
+- sha256 = `5b480f71b8cd499ab3f3dfd7ddf575a90bc273578e25fd9e1de72674922f7168`
+- md5 = `1ba68463b9ff68731cc4fae2529a3d8b`（如果 `sha256sum` 命令不存在，就只看这一项）
+- 行数 = `77`
 
-最后一行必须是 `# END_OF_FLOW_EXPORT`，行数应为 77 行左右。不符合就停止并报告。
+任何一项不符就停止，报告三项的实际值，不要运行脚本。
 
 **第 3 步：运行。** 用 `super_admin:shell` 执行：
 
 ```sh
-sh /sdcard/Download/Operit/00_AGENT_HANDOVER/flow_export.sh
+sh /sdcard/Download/Operit/00_AGENT_HANDOVER/flow_export_v2.sh
 ```
 
 它只输出四行：`OUT`、`SIZE`、`FILES`、`NOT_FOUND`。**不要读取导出文件的内容**（没必要，而且费 token）。
@@ -129,10 +64,11 @@ sh /sdcard/Download/Operit/00_AGENT_HANDOVER/flow_export.sh
 
 ### 输出格式
 
-只输出下面三部分，不要写其他内容：
+只输出下面四部分，不要写其他内容：
 
-1. 第 3 步的四行原文。
-2. 第 4 步的表。
-3. 第 5 步的结果表或"未执行"。
+1. 第 2 步三项校验的实际值，以及是否一致。
+2. 第 3 步的四行原文。
+3. 第 4 步的表。
+4. 第 5 步的结果表或"未执行"。
 
 最后一句提醒用户：把 `/sdcard/Download/Operit/00_AGENT_HANDOVER/flow_export_<日期>.txt` 这个文件发给外部 Agent。
