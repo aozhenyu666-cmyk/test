@@ -47,3 +47,11 @@
 - **手机时区（VERIFIED）**：`persist.sys.timezone=America/Los_Angeles`，`date` 输出 PDT（UTC-7）。
   - 事件脚本写死了 `TZ=Asia/Shanghai`；其他没设 TZ 的脚本，以及 focus_hub 的 JS，都按洛杉矶时间走。两边相差 15 小时。
   - 以哪个时区为准，要看用户人在哪里，需要用户确认。
+
+## 补充：T01 执行结果（2026-09-26，设备时间 06:40）
+
+- 目标 A～C 全部达成，替换前、备份、替换后的 9 个 sha256 与预期逐一吻合。
+- 判断官恢复：`save_log.tsv` 新增 `SAVED verdict=INSUFFICIENT conf=0`，是 09-23 00:06 之后的第一条 SAVED（VERIFIED）。
+- P1 生效：证据包里出现了"用户本人说的进展"3 条（含主控台"继续"按钮 7 分钟前的记录）和判读准则（VERIFIED）。
+- `persist_turn=false` 生效：会话 50fb0680 的消息数在判断前后都是 1（VERIFIED）。
+- 待观察：第一条判断是 `INSUFFICIENT conf=0`，WHY 没有取到。可能是证据真的不足（前台采样少），也可能是判断官角色卡的提示词和新证据包不匹配。需要看 `judge/<日期>.jsonl` 里的 WHY 和后面几轮的结果。
