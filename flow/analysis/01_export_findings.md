@@ -36,3 +36,14 @@
 - `Lock_Freeze_Lock`、`Lock_Freeze_Unlock` 当前 `enabled=false`，但 `ops/01` 回报"未执行"，是谁停的不清楚（INCONCLUSIVE）。
 - `P4_Drift_Alert`、`PROBE_Terminal_Channel`、`f6cc5199` 一次性任务仍是 `enabled=true`。
 - 导出脚本的缺陷：执行日志是按工作流分子目录存的，H 段没进子目录，所以没取到 G2 日志。已在 ops/03 补上。
+
+---
+
+## 补充：ops/03 诊断结果（2026-09-26）
+
+- **G2 根因已确认（VERIFIED）**：最近两次执行日志都是 `AskJudge` 失败，错误原文 `读取对话消息失败: Chat not found by query: 28f6fbb9-e08c-4536-8500-60cde7647094`。判断官会话已不存在。角色卡"判断官"还在，id `1bd093cf-1a17-459f-92ed-6e8c8ea788a7`（共 10 张卡）。
+  - 谁删的查不到。`plugins/moodlet/data.json` 给这个会话标了"会话轮换建档"，只是个标签。
+  - 修复指令：`ops/04_g2_rebind_judge_chat.md`，需要用户批准。
+- **手机时区（VERIFIED）**：`persist.sys.timezone=America/Los_Angeles`，`date` 输出 PDT（UTC-7）。
+  - 事件脚本写死了 `TZ=Asia/Shanghai`；其他没设 TZ 的脚本，以及 focus_hub 的 JS，都按洛杉矶时间走。两边相差 15 小时。
+  - 以哪个时区为准，要看用户人在哪里，需要用户确认。
