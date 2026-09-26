@@ -18,7 +18,6 @@ const EVENT_TAIL_LINES = 40;
 const EVENT_MAX_LINES = 3000;
 const RECENT_WINDOW_SEC = 60 * 60;
 const ACTION_TAIL_LINES = 12;
-const RULE_TAGS = ["ADVICE", "PROMPT", "PREAPPROVED_GUARD"];
 function errorText(error) {
     if (error && typeof error === "object" && "message" in error) {
         return String(error.message);
@@ -454,33 +453,13 @@ async function collectSnapshot() {
     for (const [pkg, name] of Object.entries(usage.value?.names ?? {})) {
         appNames.set(pkg, name);
     }
-    const [events, actions, execRules, activeRules] = await Promise.all([
+    const [events, actions] = await Promise.all([
         loadEvents(now, appNames),
         loadFile("动作审计", paths_js_1.PATHS.actionLog, async () => {
             const tail = await readTail(paths_js_1.PATHS.actionLog, ACTION_TAIL_LINES);
             const rows = tail.lines.filter((line) => line.trim()).map(splitColumns);
             rows.reverse();
             return { totalLines: tail.totalLines, rows };
-        }),
-        loadFile("行动规则表", paths_js_1.PATHS.execRules, async () => (await readHead(paths_js_1.PATHS.execRules, 60)).lines
-            .filter((line) => line.trim() && !line.trim().startsWith("#"))
-            .map(splitColumns)),
-        loadFile("生效规则", paths_js_1.PATHS.activeRules, async () => {
-            const head = await readHead(paths_js_1.PATHS.activeRules, 400);
-            const tagCounts = {};
-            const lines = [];
-            for (const tag of RULE_TAGS)
-                tagCounts[tag] = 0;
-            for (const line of head.lines) {
-                const hits = RULE_TAGS.filter((tag) => line.includes(tag));
-                if (hits.length === 0)
-                    continue;
-                for (const tag of hits)
-                    tagCounts[tag] += 1;
-                if (lines.length < 15)
-                    lines.push(line.trim().replace(/^[-*]\s+/, ""));
-            }
-            return { tagCounts, lines };
         }),
     ]);
     return {
@@ -490,12 +469,10 @@ async function collectSnapshot() {
         usage: usage.value,
         events: events.value,
         actions: actions.value,
-        execRules: execRules.value,
-        activeRules: activeRules.value,
         progress: progress.value,
         health,
         checkins,
         companion,
-        sources: [task.source, progress.source, workflows.source, usage.source, events.source, actions.source, execRules.source, activeRules.source],
+        sources: [task.source, progress.source, workflows.source, usage.source, events.source, actions.source],
     };
 }

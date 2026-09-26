@@ -60,17 +60,24 @@ async function appendCheckin(record) {
 exports.QUIET_START_MIN = 23 * 60 + 30;
 exports.QUIET_END_MIN = 8 * 60;
 const COOLDOWN_SEC = 45 * 60;
-// 打扰要有节制：深夜不打扰；刚找过不重复找；你状态好、最近也报过进展就不打扰
+const SAME_LEVEL_SEC = 2 * 3600;
+const CALM_GAP_SEC = 3 * 3600;
+// 打扰要有节制：深夜不打扰；刚找过不重复找；心情没变就不重复说；安心时很久没动静才问一句
 function decideCheckin(now, level, lastCheckin, lastProgressTs) {
     const d = new Date(now);
     const minutes = d.getHours() * 60 + d.getMinutes();
     if (minutes >= exports.QUIET_START_MIN || minutes < exports.QUIET_END_MIN)
         return "SKIP_QUIET";
     const nowSec = Math.floor(now / 1000);
-    if (lastCheckin && nowSec - lastCheckin.ts < COOLDOWN_SEC)
+    const sinceLast = lastCheckin ? nowSec - lastCheckin.ts : Infinity;
+    if (sinceLast < COOLDOWN_SEC)
         return "SKIP_COOLDOWN";
-    if (level === 0 && lastProgressTs != null && nowSec - lastProgressTs < 2 * 3600)
-        return "SKIP_FINE";
+    if (level === 0) {
+        const recentProgress = lastProgressTs != null && nowSec - lastProgressTs < 2 * 3600;
+        return recentProgress || sinceLast < CALM_GAP_SEC ? "SKIP_FINE" : "GO";
+    }
+    if (lastCheckin && lastCheckin.level === level && level < 3 && sinceLast < SAME_LEVEL_SEC)
+        return "SKIP_SAME";
     return "GO";
 }
 function newCheckinId(ts) {

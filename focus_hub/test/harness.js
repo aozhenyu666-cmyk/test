@@ -241,7 +241,7 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
 
   // ---------- manifest + workflow template ----------
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
-  assert(manifest.api_version === "1.0.0" && manifest.version === "0.4.2", "v0.4.1 back on ToolPkg API 1.0.0 (Chat.call no longer used)");
+  assert(manifest.api_version === "1.0.0" && manifest.version === "0.5.0", "v0.4.1 back on ToolPkg API 1.0.0 (Chat.call no longer used)");
   const tpl = JSON.parse(fs.readFileSync(path.join(__dirname, "..", manifest.resources[0].path), "utf8"));
   const exec = tpl.nodes.find((n) => n.type === "execute");
   assert(manifest.workflow_templates[0].resource_key === manifest.resources[0].key, "workflow template points at a declared resource");
@@ -274,18 +274,23 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
 
   // ---------- mood ----------
   const { moodOf, snapshotToText } = require(path.join(DIST, "shared/format.js"));
+  const { computeMood } = require(path.join(DIST, "shared/mood.js"));
+  function computeMoodFor(lastLine) {
+    return computeMood({ now, task: "求职投递", focus: snap.events.focus, progress: snap.progress ?? [], checkins: [{ ts: Math.floor(now / 1000) - 7200, line: lastLine, level: 2 }] });
+  }
   let mood = moodOf(snap);
   assert(mood.score === 50 && mood.name === "担心", `mood: 2/4 off (+25) + drift (+15) + no progress after 11:00 (+10) = 50 担心 (got ${mood.score})`);
   assert(mood.reasons.some((r) => r.includes("近 1 小时 4 次采样有 2 次")) && mood.reasons.some((r) => r.includes("偏移 1 次")), "reasons explain the score");
-  assert(mood.line.includes("求职投递") && mood.next.includes("追问"), "line in her voice; next step from EXEC_RULES (A2 追问)");
+  assert(mood.line.includes("求职投递") && mood.next === undefined, "line in her voice; no rule hint exposed");
+  const repeat = computeMoodFor(mood.line);
+  assert(repeat.line !== mood.line && repeat.level === mood.level, "never repeats the line she said at the last check-in");
   const aiText = snapshotToText(snap);
   assert(aiText.includes("陪伴状态：担心") && aiText.includes("今日专注") && aiText.includes("系统体检"), "AI snapshot includes mood, focus and health");
 
-  const { computeMood } = require(path.join(DIST, "shared/mood.js"));
   const nowSec = Math.floor(now / 1000);
-  const m2 = computeMood({ now, task: "求职投递", focus: f, progress: [{ ts: nowSec - 600, kind: "stuck", user_quote: "简历写不下去", type: "USER_PROGRESS" }], checkins: [], execRules: null });
+  const m2 = computeMood({ now, task: "求职投递", focus: f, progress: [{ ts: nowSec - 600, kind: "stuck", user_quote: "简历写不下去", type: "USER_PROGRESS" }], checkins: [] });
   assert(m2.score === 55 && m2.line.includes("简历写不下去"), "stuck adds 15 and changes her line to ask about it");
-  const m3 = computeMood({ now, task: "求职投递", focus: f, progress: [{ ts: nowSec - 600, kind: "pause", user_quote: "去吃饭", type: "USER_PROGRESS" }], checkins: [], execRules: null });
+  const m3 = computeMood({ now, task: "求职投递", focus: f, progress: [{ ts: nowSec - 600, kind: "pause", user_quote: "去吃饭", type: "USER_PROGRESS" }], checkins: [] });
   assert(m3.score === 20 && m3.name === "在意", "pause with a reason relieves 20");
 
   // ---------- check-in decision ----------
@@ -295,6 +300,10 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   assert(decideCheckin(at(14, 0), 1, { ts: Math.floor(at(13, 30) / 1000) }, null) === "SKIP_COOLDOWN", "45-minute cooldown");
   assert(decideCheckin(at(14, 0), 0, null, Math.floor(at(13, 30) / 1000)) === "SKIP_FINE", "doing fine + recent progress -> leave them alone");
   assert(decideCheckin(at(14, 0), 1, null, null) === "GO", "otherwise GO");
+  assert(decideCheckin(at(14, 0), 1, { ts: Math.floor(at(13, 0) / 1000), level: 1 }, null) === "SKIP_SAME", "same mood as an hour ago -> don't repeat yourself");
+  assert(decideCheckin(at(14, 0), 2, { ts: Math.floor(at(13, 0) / 1000), level: 1 }, null) === "GO", "mood got worse -> speak");
+  assert(decideCheckin(at(14, 0), 3, { ts: Math.floor(at(13, 0) / 1000), level: 3 }, null) === "GO", "at 要谈谈 she keeps coming back");
+  assert(decideCheckin(at(14, 0), 0, { ts: Math.floor(at(10, 0) / 1000), level: 0 }, null) === "GO" && decideCheckin(at(14, 0), 0, { ts: Math.floor(at(12, 0) / 1000), level: 0 }, null) === "SKIP_FINE", "at 安心 only a gentle check after 3 quiet hours");
 
   // ---------- check_in tool ----------
   const nav = require(path.join(DIST, "packages/focus_hub_nav.js"));
@@ -398,6 +407,7 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   ttsFails = false;
   tree = Screen(ctx);
   assert(!has(tree, "让她细说") && !has(tree, "她细说的"), "让她细说 removed");
+  assert(!has(tree, "再这样下去") && !has(tree, "A1") && !has(tree, "追问"), "no rule hints on the home page");
   assert(has(tree, "她 = 「秘书」"), "card says which chat she is");
 
   // ---------- UI: chats ----------
@@ -434,6 +444,7 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   await clickable(tree, "展开").props.onClick();
   tree = Screen(ctx);
   assert(has(tree, "只用来呈现，不会执行动作"), "mood disclaimer in system details");
+  assert(!has(tree, "行动规则表") && !has(tree, "生效规则标记") && !has(tree, "drift_level"), "rules not shown on the system page");
 
   console.log(failures === 0 ? "\nALL PASSED" : `\n${failures} FAILED`);
   process.exitCode = failures === 0 ? 0 : 1;

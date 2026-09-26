@@ -13,7 +13,6 @@ const EVENT_TAIL_LINES = 40;
 const EVENT_MAX_LINES = 3000;
 const RECENT_WINDOW_SEC = 60 * 60;
 const ACTION_TAIL_LINES = 12;
-const RULE_TAGS = ["ADVICE", "PROMPT", "PREAPPROVED_GUARD"];
 
 export type SourceStatus = "OK" | "MISSING" | "ERROR";
 
@@ -90,8 +89,6 @@ export interface Snapshot {
   usage: { windowHours: number; rows: AppUsageRow[]; names: Record<string, string> } | null;
   events: { date: string; totalLines: number; rows: EventRow[]; unparsable: number; focus: FocusDay } | null;
   actions: { totalLines: number; rows: string[][] } | null;
-  execRules: string[][] | null;
-  activeRules: { tagCounts: Record<string, number>; lines: string[] } | null;
   progress: ProgressRecord[] | null;
   health: HealthCheck[];
   checkins: CheckinRecord[];
@@ -555,31 +552,13 @@ export async function collectSnapshot(): Promise<Snapshot> {
     appNames.set(pkg, name);
   }
 
-  const [events, actions, execRules, activeRules] = await Promise.all([
+  const [events, actions] = await Promise.all([
     loadEvents(now, appNames),
     loadFile("动作审计", PATHS.actionLog, async () => {
       const tail = await readTail(PATHS.actionLog, ACTION_TAIL_LINES);
       const rows = tail.lines.filter((line) => line.trim()).map(splitColumns);
       rows.reverse();
       return { totalLines: tail.totalLines, rows };
-    }),
-    loadFile("行动规则表", PATHS.execRules, async () =>
-      (await readHead(PATHS.execRules, 60)).lines
-        .filter((line) => line.trim() && !line.trim().startsWith("#"))
-        .map(splitColumns)
-    ),
-    loadFile("生效规则", PATHS.activeRules, async () => {
-      const head = await readHead(PATHS.activeRules, 400);
-      const tagCounts: Record<string, number> = {};
-      const lines: string[] = [];
-      for (const tag of RULE_TAGS) tagCounts[tag] = 0;
-      for (const line of head.lines) {
-        const hits = RULE_TAGS.filter((tag) => line.includes(tag));
-        if (hits.length === 0) continue;
-        for (const tag of hits) tagCounts[tag] += 1;
-        if (lines.length < 15) lines.push(line.trim().replace(/^[-*]\s+/, ""));
-      }
-      return { tagCounts, lines };
     }),
   ]);
 
@@ -590,12 +569,10 @@ export async function collectSnapshot(): Promise<Snapshot> {
     usage: usage.value,
     events: events.value,
     actions: actions.value,
-    execRules: execRules.value,
-    activeRules: activeRules.value,
     progress: progress.value,
     health,
     checkins,
     companion,
-    sources: [task.source, progress.source, workflows.source, usage.source, events.source, actions.source, execRules.source, activeRules.source],
+    sources: [task.source, progress.source, workflows.source, usage.source, events.source, actions.source],
   };
 }

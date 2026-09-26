@@ -64,7 +64,8 @@
 4. **"她" = 秘书会话（2026-09-26 用户确认）**：主控台默认把 `d20b4e22-f6ab-4766-bc83-54e96c99bb44`（S3 投递目标）当作唯一的"她"，用户可在主控台改选，选择存在 `/sdcard/Download/Operit/companion/config.json`（`{"chat_id": ...}`）。**流程线投递给用户的提醒请以这个文件为准，不要再硬编码 chat_id。**
    - 用户反馈：秘书"会重复，甚至自己和自己对话"。原因大概率是 S3 用 `chat_with_agent` 把工作流组装的提示词以用户消息形式发进了她的会话。可选修法：`Tools.Chat.sendMessage` 有 `hide_user_message` / `persist_turn` 选项（见 `types/chat.d.ts`），或让秘书在后台会话里生成、只把最终那句话投到她的会话。
    - 真机日志：判断官会话 `28f6fbb9…` 已 `Chat not found`；G2 从 373 次到 394 次，新增 21 次全部失败。
-5. **（提议，待定）统一状态文件**：主界面改版要把"规则阶梯"画成陪伴角色的心情（安心 → 在意 A1 → 担心 A2 → 要谈谈 A3，见 `design/focus_hub_redesign_mockup.html`）。希望流程线产出一个状态文件，例如 `/sdcard/Download/Operit/state/now.json`，包含当前偏离等级、连续次数、最近一次动作及其四态、下一步会触发的动作。字段请你在摸清 `drift_scan.sh` 后提议，双方确认后再定。
+5. **花火角色卡与档位提案（2026-09-26）**：用户选定以花火为原型的陪伴角色，卡在 `cards/huahuo.json`；档位→动作与强度的立法提案在 `handover/LADDER_PROPOSAL.md`，**用户确认数值后**再改规则表。用户要求规则不在任何界面显示。
+6. **（提议，待定）统一状态文件**（字段草案见 `LADDER_PROPOSAL.md`）：主界面改版要把"规则阶梯"画成陪伴角色的心情（安心 → 在意 A1 → 担心 A2 → 要谈谈 A3，见 `design/focus_hub_redesign_mockup.html`）。希望流程线产出一个状态文件，例如 `/sdcard/Download/Operit/state/now.json`，包含当前偏离等级、连续次数、最近一次动作及其四态、下一步会触发的动作。字段请你在摸清 `drift_scan.sh` 后提议，双方确认后再定。
 
 ---
 

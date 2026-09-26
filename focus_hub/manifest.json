@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "toolpkg_id": "local.focus_hub",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "api_version": "1.0.0",
   "main": "dist/main.js",
   "display_name": {
@@ -10,7 +10,7 @@
     "default": "Focus Hub"
   },
   "description": {
-    "zh": "陪伴式主控台：首页是她（心情按规则阶梯呈现）、你的四个动作和今天的专注色条；会话页只有她一个主入口；系统页收纳体检、工作流、用量、事件和规则。附带用户进展入口、\"她来找你\"打卡（语音+弹窗+待回应）和跳转工具。不冻结、不解冻、不触发工作流；只追加写进展和打卡记录。",
+    "zh": "陪伴式主控台：首页是她（心情四档、你的四个动作、今天的专注色条），会话页只有她一个主入口，系统页收纳体检、工作流、用量、事件和动作记录；规则不在界面上显示。附带用户进展入口、\"她来找你\"打卡（用你的 voice_bar 发声，有节制地弹窗）和跳转工具。不冻结、不解冻、不触发工作流。",
     "en": "Companion-style hub: mood, four actions, daily focus strip; chats and system pages; progress entry and companion check-ins.",
     "default": "Companion-style hub."
   },

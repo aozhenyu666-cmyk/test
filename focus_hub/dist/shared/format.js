@@ -14,7 +14,6 @@ function moodOf(snap) {
         focus: snap.events?.focus ?? null,
         progress: snap.progress ?? [],
         checkins: snap.checkins,
-        execRules: snap.execRules,
     });
 }
 exports.HEALTH_LABEL = {

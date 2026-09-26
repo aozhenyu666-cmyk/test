@@ -12,7 +12,42 @@ export interface MoodInput {
   focus: FocusDay | null;
   progress: ProgressRecord[];
   checkins: CheckinRecord[];
-  execRules: string[][] | null;
+}
+
+// 花火的口吻：每档几种说法，按时段轮换，并避开上一次打卡说过的那句
+const LINES = {
+  goodWithProgress: [
+    "{task}今天已经推进了 {n} 步，这出戏越来越好看了。",
+    "嗯哼，{n} 条进展——主角状态不错嘛，接着演。",
+    "照这个节奏，今天能有个好结局。",
+  ],
+  idle: [
+    "舞台都搭好了，主角怎么还没登场？",
+    "今天的{task}，打算从哪一幕开始？",
+    "我在台下等着呢，先说说今天想做什么。",
+  ],
+  fresh: ["今天还没看到你的动静呢——在忙什么呀？", "幕布还没拉开？我可等着看呢。"],
+  drifting: [
+    "{app}那一幕看挺久了吧？该回{task}了哦。",
+    "嘘——{task}那边的观众还在等主角呢。",
+    "这段剧情有点拖了，我们换回{task}好不好？",
+  ],
+  driftingNoApp: ["好像有点走神啦，{task}那边还等着你呢。", "这一幕节奏慢下来了哦，{task}还记得吗？"],
+  stuck: ["卡在「{quote}」了？说说看，也许换个演法就过去了。", "「{quote}」这一关，要不要我陪你拆一拆？"],
+  worried: [
+    "离开{task}有一阵了……是剧本卡住了，还是演员跑了？",
+    "台下有点安静了呢。{task}那边，发生什么了？",
+  ],
+  talk: ["{app}先放下。这一幕，我们得好好谈谈。", "再这样演下去，这一幕可要换布景了哦——先停一下？"],
+  talkNoApp: ["先停一下好不好？我们聊聊。", "这一幕得暂停了，过来跟我说说。"],
+};
+
+function pickLine(options: string[], seed: number, avoid: string, fill: (t: string) => string): string {
+  for (let i = 0; i < options.length; i++) {
+    const line = fill(options[(seed + i) % options.length]);
+    if (line !== avoid) return line;
+  }
+  return fill(options[seed % options.length]);
 }
 
 export interface Mood {
@@ -21,7 +56,6 @@ export interface Mood {
   name: string;
   line: string;
   reasons: string[];
-  next: string;
   pendingCheckin: CheckinRecord | null;
 }
 
@@ -45,13 +79,6 @@ export function pendingCheckinOf(checkins: CheckinRecord[], progress: ProgressRe
   if (!last || nowSec - last.ts > 3 * 3600) return null;
   const answered = progress.some((p) => p.ts >= last.ts);
   return answered ? null : last;
-}
-
-function ruleAction(execRules: string[][] | null, index: number, fallback: string): string {
-  const row = execRules?.[index];
-  const action = row && row.length >= 3 ? row[row.length - 1] : "";
-  const id = row?.[0] ?? "";
-  return action ? `${action}${id ? `（${id.split("_")[0]}）` : ""}` : fallback;
 }
 
 export function computeMood(input: MoodInput): Mood {
@@ -110,33 +137,25 @@ export function computeMood(input: MoodInput): Mood {
 
   const task = input.task || "正事";
   const app = recent?.offApps[0] ?? "";
-  let line: string;
+  const seed = Math.floor(input.now / 3600000);
+  const avoid = input.checkins[0]?.line ?? "";
+  const fill = (t: string) =>
+    t
+      .replace(/\{task\}/g, task)
+      .replace(/\{app\}/g, app)
+      .replace(/\{n\}/g, String(todayProgress.length))
+      .replace(/\{quote\}/g, latest?.user_quote ?? "");
+  let options: string[];
   if (level === 0) {
-    line =
-      todayProgress.length > 0
-        ? `${task}今天已经记了 ${todayProgress.length} 条啦，好厉害～ 我就在旁边陪着你。`
-        : recentTotal === 0
-        ? "今天还没看到你的动静呢～ 在忙什么呀？"
-        : `我在这儿呢～ ${task}先从哪一步开始？`;
+    options = todayProgress.length > 0 ? LINES.goodWithProgress : recentTotal === 0 ? LINES.fresh : LINES.idle;
   } else if (level === 1) {
-    line = app
-      ? `${app}已经开了一会儿啦～ ${task}那边还等着你，我们先回去好不好？`
-      : `好像有点走神啦～ ${task}那边还等着你呢。`;
+    options = app ? LINES.drifting : LINES.driftingNoApp;
   } else if (level === 2) {
-    line =
-      latest?.kind === "stuck"
-        ? `你说卡在「${latest.user_quote}」……要不要跟我说说卡在哪？我们一起想办法。`
-        : `离开${task}挺久了哦……是不是遇到什么麻烦了？跟我说说嘛。`;
+    options = latest?.kind === "stuck" ? LINES.stuck : LINES.worried;
   } else {
-    line = app ? `不可以再刷${app}了！先停一下，我们聊聊好不好？` : "先停一下好不好？我们聊聊。";
+    options = app ? LINES.talk : LINES.talkNoApp;
   }
-
-  const next = [
-    "保持就好；偏离了我会先提醒你",
-    `再偏离下去：${ruleAction(input.execRules, 0, "会提醒你")}`,
-    `再这样下去：${ruleAction(input.execRules, 1, "会来追问你")}`,
-    `再这样下去：${ruleAction(input.execRules, 2, "可能暂停干扰应用")}`,
-  ][level];
+  const line = pickLine(options, seed, avoid, fill);
 
   return {
     score,
@@ -144,7 +163,6 @@ export function computeMood(input: MoodInput): Mood {
     name: MOOD_LEVELS[level],
     line,
     reasons: reasons.length > 0 ? reasons : ["现在没有需要在意的事"],
-    next,
     pendingCheckin: pending,
   };
 }

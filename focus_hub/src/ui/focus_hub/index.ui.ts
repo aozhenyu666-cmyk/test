@@ -289,7 +289,7 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
     if (!pending) return null;
     return card(
       [
-        text(`🌸 ${pending.iso.slice(11, 16)} ${companionName}来找过你`, "titleSmall", MOOD_INK[1]),
+        text(`🎭 ${pending.iso.slice(11, 16)} ${companionName}来找过你`, "titleSmall", MOOD_INK[1]),
         text(`“${pending.line}”`, "bodyMedium", colors.onSurface),
         muted("点下面任意一个动作回应她，她就知道你看到了。"),
       ],
@@ -308,7 +308,7 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
         border: { width: 3, color: MOOD_COLOR[level] },
         elevation: 0,
       },
-      UI.Box({ fillMaxSize: true, contentAlignment: "center" }, [text("🌸", "headlineMedium", colors.onSurface)])
+      UI.Box({ fillMaxSize: true, contentAlignment: "center" }, [text("🎭", "headlineMedium", colors.onSurface)])
     );
   }
 
@@ -348,10 +348,6 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
       text(`“${m.line}”`, "bodyLarge", colors.onSurface, { paddingTop: 4 }),
       muted(`为什么是「${m.name}」：${m.reasons.join(" · ")}`, 3),
       meter(m.score, m.level),
-      UI.Surface(
-        { fillMaxWidth: true, containerColor: colors.surfaceVariant, shape: { cornerRadius: 12 } },
-        text(m.next, "bodyMedium", colors.onSurface, { padding: 12 })
-      ),
       UI.Row({ fillMaxWidth: true, spacing: 8 }, [
         UI.Button({ text: openingId ? "打开中…" : "找她聊", weight: 1, enabled: hasChat && !openingId, onClick: talkToHer }),
         UI.FilledTonalButton({ weight: 1, enabled: !voiceBusy, onClick: voice }, text(voiceBusy ? "打开中…" : "🎙 语音聊", "labelLarge", colors.onSurface)),
@@ -528,7 +524,7 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
     const recent = chats.filter((c) => !isPinned(c) && c.id !== herId).slice(0, RECENT_CHATS);
     items.push(
       her.length > 0
-        ? chatGroup("她（主入口）", her.map((c) => chatRow(c, "🌸")))
+        ? chatGroup("她（主入口）", her.map((c) => chatRow(c, "🎭")))
         : chatGroup("她（主入口）", [muted("还没认出她，在下面点一个对话的「设为她」")])
     );
     if (backstage.length > 0) {
@@ -652,25 +648,18 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
 
     const more: ComposeNode[] = [
       UI.Row({ fillMaxWidth: true, verticalAlignment: "center" }, [
-        text("规则、动作审计、数据源", "titleMedium", colors.onSurface, { weight: 1 }),
+        text("动作记录与数据源", "titleMedium", colors.onSurface, { weight: 1 }),
         UI.TextButton({ onClick: () => setShowMore(!showMore) }, text(showMore ? "收起" : "展开", "labelLarge", colors.primary)),
       ]),
     ];
     if (showMore) {
-      more.push(label("行动规则表"));
-      for (const cells of s.execRules ?? []) more.push(muted(cells.join(" · ")));
-      if (s.activeRules) {
-        more.push(label("生效规则标记"));
-        more.push(muted(Object.entries(s.activeRules.tagCounts).map(([k, v]) => `${k} ${v}`).join(" · ")));
-        for (const line of s.activeRules.lines) more.push(muted(line, 2));
-      }
       more.push(label("最近动作（历史记录，不代表当前状态）"));
       for (const cells of s.actions?.rows ?? []) more.push(muted(cells.join(" · "), 2));
       more.push(label("数据源"));
       for (const src of s.sources) {
         more.push(text(`${src.label}：${SOURCE_LABEL[src.status]}${src.status === "OK" ? "" : ` · ${src.detail}`}`, "bodySmall", src.status === "OK" ? colors.onSurfaceVariant : colors.error));
       }
-      more.push(muted(`心情档位由看板按采样、偏移和你的进展计算，只用来呈现，不会执行动作；真正的提醒和冻结由规则链决定。读取于 ${formatDateTime(now)}。`));
+      more.push(muted(`心情由采样、偏移和你的进展算出，只用来呈现，不会执行动作。读取于 ${formatDateTime(now)}。`));
     }
     items.push(card(more, 6));
     return pageColumn(items);

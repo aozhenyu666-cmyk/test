@@ -17,7 +17,6 @@ export function moodOf(snap: Snapshot) {
     focus: snap.events?.focus ?? null,
     progress: snap.progress ?? [],
     checkins: snap.checkins,
-    execRules: snap.execRules,
   });
 }
 
