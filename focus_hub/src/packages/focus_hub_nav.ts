@@ -127,12 +127,15 @@ export async function check_in(params: {
 
     const line = String(params?.message ?? "").trim() || mood.line;
     let speak: ChannelStatus = "SKIPPED";
+    let speakError = "";
     if (flag(params?.speak, true)) {
       try {
         const result = await Tools.SoftwareSettings.testTtsPlayback(line, { interrupt: false });
         speak = result?.playbackTriggered ? "ACCEPTED" : "FAILED";
-      } catch {
+        if (speak === "FAILED") speakError = String(result?.errorMessage ?? result?.errorType ?? "playbackTriggered=false");
+      } catch (error) {
         speak = "FAILED";
+        speakError = errorText(error);
       }
     }
     let popup: ChannelStatus = "SKIPPED";
@@ -156,6 +159,7 @@ export async function check_in(params: {
       line,
       speak,
       popup,
+      ...(speakError ? { speak_error: speakError } : {}),
       trigger: flag(params?.force, false) ? "manual" : "workflow",
     };
     await appendCheckin(record);
@@ -166,7 +170,7 @@ export async function check_in(params: {
       line,
       speak,
       popup,
-      message: `语音 ${speak}，弹窗 ${popup}。ACCEPTED 只代表已发出；用户是否听到/看到，以用户在主控台回应为准（回应会记成一条进展）。`,
+      message: `语音 ${speak}${speakError ? `（${speakError}）` : ""}，弹窗 ${popup}。ACCEPTED 只代表已发出；用户是否听到/看到，以用户在主控台回应为准（回应会记成一条进展）。`,
     };
   } catch (error) {
     return { success: false, status: "ERROR", message: errorText(error) };

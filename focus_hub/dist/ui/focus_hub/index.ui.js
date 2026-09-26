@@ -6,7 +6,6 @@ const format_js_1 = require("../../shared/format.js");
 const progress_js_1 = require("../../shared/progress.js");
 const nav_js_1 = require("../../shared/nav.js");
 const companion_js_1 = require("../../shared/companion.js");
-const insight_js_1 = require("../../shared/insight.js");
 // 心情四档固定配色：安心 / 在意 / 担心 / 要谈谈
 const MOOD_COLOR = ["#7FAE8E", "#E2B25A", "#E0876B", "#C75A6B"];
 const MOOD_TINT = ["#E4F0E8", "#FBF1DC", "#FBE6DE", "#F8E0E4"];
@@ -42,9 +41,9 @@ function Screen(ctx) {
     const [progressKind, setProgressKind] = ctx.useState("progressKind", "progress");
     const [progressText, setProgressText] = ctx.useState("progressText", "");
     const [savingProgress, setSavingProgress] = ctx.useState("savingProgress", false);
-    const [herSaid, setHerSaid] = ctx.useState("herSaid", "");
-    const [asking, setAsking] = ctx.useState("asking", false);
     const [voiceBusy, setVoiceBusy] = ctx.useState("voiceBusy", false);
+    // 按钮结果留在卡片上，不只靠一闪而过的提示
+    const [status, setStatus] = ctx.useState("status", null);
     const [chats, setChats] = ctx.useState("chats", null);
     const [chatsError, setChatsError] = ctx.useState("chatsError", "");
     const [query, setQuery] = ctx.useState("query", "");
@@ -101,8 +100,10 @@ function Screen(ctx) {
         try {
             await (0, nav_js_1.setMainChat)(chatId);
             await ctx.navigate(nav_js_1.NATIVE_CHAT_ROUTE);
+            setStatus({ ok: true, text: `已请求打开对话（${(0, snapshot_js_1.formatClock)(Date.now())}）` });
         }
         catch (error) {
+            setStatus({ ok: false, text: `打开对话失败：${errorText(error)}` });
             await ctx.showToast(`打开失败：${errorText(error)}`);
         }
         finally {
@@ -112,7 +113,7 @@ function Screen(ctx) {
     async function talkToHer() {
         const chat = snap?.companion?.chat;
         if (!chat) {
-            await ctx.showToast(`没找到标题含「${companion_js_1.COMPANION_TITLE_KEYWORD}」的对话`);
+            setStatus({ ok: false, text: "还没认出她是哪个对话：去「会话」页点一个对话的「设为她」" });
             return;
         }
         await openChat(chat.id);
@@ -123,27 +124,26 @@ function Screen(ctx) {
         setVoiceBusy(true);
         try {
             await (0, nav_js_1.startVoiceWith)(snap?.companion?.chat?.id ?? null);
+            setStatus({ ok: true, text: `已请求打开语音球并切到她（${(0, snapshot_js_1.formatClock)(Date.now())}）` });
         }
         catch (error) {
-            await ctx.showToast(`语音没打开：${errorText(error)}`);
+            setStatus({ ok: false, text: `语音没打开：${errorText(error)}` });
         }
         finally {
             setVoiceBusy(false);
         }
     }
-    async function letHerTalk() {
-        if (!snap || asking)
-            return;
-        setAsking(true);
+    async function chooseCompanion(entry) {
         try {
-            const text = await (0, insight_js_1.askHer)(companionName, (0, format_js_1.snapshotToText)(snap));
-            setHerSaid(text || "（她没说话……稍后再试）");
+            await (0, companion_js_1.setCompanionChat)(entry.id);
+            const companion = await (0, companion_js_1.findCompanion)(chats ?? undefined);
+            if (snap)
+                setSnap({ ...snap, companion });
+            setStatus({ ok: true, text: `以后「她」就是「${entry.title}」` });
+            await ctx.showToast(`已设为她：${entry.title}`);
         }
         catch (error) {
-            await ctx.showToast(`她没回应：${errorText(error)}`);
-        }
-        finally {
-            setAsking(false);
+            await ctx.showToast(`没设上：${errorText(error)}`);
         }
     }
     async function saveProgress() {
@@ -168,7 +168,6 @@ function Screen(ctx) {
                 return;
             }
             setProgressText("");
-            setHerSaid("");
             await ctx.showToast(result.status === "DUPLICATE" ? "刚刚已经记过这一句啦" : `记下了：${progress_js_1.KIND_LABEL[result.record.kind]}`);
             const records = await (0, progress_js_1.readRecentProgress)(20);
             if (snap)
@@ -264,17 +263,16 @@ function Screen(ctx) {
                     UI.Row({ spacing: 6 }, [pill(m.name, MOOD_TINT[m.level], MOOD_INK[m.level])]),
                 ]),
             ]),
-            text(`“${herSaid || m.line}”`, "bodyLarge", colors.onSurface, { paddingTop: 4 }),
-            ...(herSaid ? [muted("↑ 她细说的")] : []),
+            text(`“${m.line}”`, "bodyLarge", colors.onSurface, { paddingTop: 4 }),
             muted(`为什么是「${m.name}」：${m.reasons.join(" · ")}`, 3),
             meter(m.score, m.level),
             UI.Surface({ fillMaxWidth: true, containerColor: colors.surfaceVariant, shape: { cornerRadius: 12 } }, text(m.next, "bodyMedium", colors.onSurface, { padding: 12 })),
             UI.Row({ fillMaxWidth: true, spacing: 8 }, [
                 UI.Button({ text: openingId ? "打开中…" : "找她聊", weight: 1, enabled: hasChat && !openingId, onClick: talkToHer }),
-                UI.FilledTonalButton({ weight: 1, enabled: !voiceBusy, onClick: voice }, text(voiceBusy ? "…" : "🎙 语音", "labelLarge", colors.onSurface)),
-                UI.FilledTonalButton({ enabled: !asking, onClick: letHerTalk }, text(asking ? "她在想…" : "让她细说", "labelLarge", colors.onSurface)),
+                UI.FilledTonalButton({ weight: 1, enabled: !voiceBusy, onClick: voice }, text(voiceBusy ? "打开中…" : "🎙 语音聊", "labelLarge", colors.onSurface)),
             ]),
-            ...(hasChat ? [] : [muted(`没找到标题含「${companion_js_1.COMPANION_TITLE_KEYWORD}」的对话，"找她聊"暂时不可用`)]),
+            ...(status ? [text(status.text, "bodySmall", status.ok ? MOOD_INK[0] : MOOD_INK[3])] : []),
+            ...(hasChat ? [muted(`她 = 「${s.companion?.chat?.title}」${s.companion?.source === "chosen" ? "（你选的）" : ""}`, 1)] : [muted("还没认出她是哪个对话，去「会话」页点「设为她」")]),
         ]);
     }
     function actionTile(kind, icon) {
@@ -370,7 +368,7 @@ function Screen(ctx) {
         return pageColumn(items);
     }
     // ---------- 会话 ----------
-    function chatRow(entry, icon) {
+    function chatRow(entry, icon, canChoose = false) {
         const updated = parseTime(entry.updatedAt);
         const meta = [
             `${entry.messageCount} 条`,
@@ -390,6 +388,9 @@ function Screen(ctx) {
                     : entry.isCurrent
                         ? [text("当前", "labelMedium", colors.primary)]
                         : []),
+            ...(canChoose
+                ? [UI.TextButton({ onClick: () => chooseCompanion(entry) }, text("设为她", "labelMedium", colors.primary))]
+                : []),
         ]));
     }
     function chatGroup(title, rows, note) {
@@ -406,21 +407,23 @@ function Screen(ctx) {
             items.push(spinner());
             return pageColumn(items);
         }
+        const herId = snap?.companion?.chat?.id ?? "";
         const keyword = query.trim();
         if (keyword) {
             const matches = chats.filter((c) => c.title.includes(keyword));
-            items.push(matches.length > 0 ? chatGroup(`搜索结果 ${matches.length}`, matches.map((c) => chatRow(c, "💬"))) : muted("没有匹配的对话"));
+            items.push(matches.length > 0 ? chatGroup(`搜索结果 ${matches.length}`, matches.map((c) => chatRow(c, "💬", c.id !== herId))) : muted("没有匹配的对话"));
             return pageColumn(items);
         }
-        const her = chats.filter((c) => c.title.includes(companion_js_1.COMPANION_TITLE_KEYWORD));
-        const backstage = chats.filter((c) => (0, nav_js_1.isPinned)(c) && !c.title.includes(companion_js_1.COMPANION_TITLE_KEYWORD));
-        const recent = chats.filter((c) => !(0, nav_js_1.isPinned)(c)).slice(0, RECENT_CHATS);
-        if (her.length > 0)
-            items.push(chatGroup("她（主入口）", her.map((c) => chatRow(c, "🌸"))));
+        const her = chats.filter((c) => c.id === herId);
+        const backstage = chats.filter((c) => (0, nav_js_1.isPinned)(c) && c.id !== herId);
+        const recent = chats.filter((c) => !(0, nav_js_1.isPinned)(c) && c.id !== herId).slice(0, RECENT_CHATS);
+        items.push(her.length > 0
+            ? chatGroup("她（主入口）", her.map((c) => chatRow(c, "🌸")))
+            : chatGroup("她（主入口）", [muted("还没认出她，在下面点一个对话的「设为她」")]));
         if (backstage.length > 0) {
-            items.push(chatGroup("后台角色", backstage.map((c) => chatRow(c, "⚙")), "平时不用直接找它们"));
+            items.push(chatGroup("后台角色", backstage.map((c) => chatRow(c, "⚙", true)), "平时不用直接找它们"));
         }
-        items.push(chatGroup(`最近 ${recent.length} 个`, recent.map((c) => chatRow(c, "💬"))));
+        items.push(chatGroup(`最近 ${recent.length} 个`, recent.map((c) => chatRow(c, "💬", true))));
         return pageColumn(items);
     }
     // ---------- 系统 ----------

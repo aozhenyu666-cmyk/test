@@ -4,12 +4,12 @@
 
 侧边栏里的一个页面，底部三个标签：
 
-- **今天**：首页是"她"（标题含「陪伴窗」的对话，名字取它绑定的角色卡）。
+- **今天**：首页是"她"。默认是秘书会话（S3 的投递目标）；在「会话」页任意对话上点「设为她」可以换人，选择存在 `companion/config.json`。名字取该对话绑定的角色卡。
   - **心情**四档：安心 / 在意 / 担心 / 要谈谈，按最近一小时采样、偏移、你说的进展和未回应的打卡计算，"为什么"一行写着依据。每一档对应规则阶梯的下一步（取自 `EXEC_RULES.tsv`）。心情只用来呈现，不执行任何动作。
-  - **找她聊**：在主界面打开陪伴窗。**语音**：启动语音球，并把悬浮窗对话切到她。**让她细说**：按需调用一次模型，用她的口吻说三句以内。
+  - **找她聊**：在主界面打开她的对话。**🎙 语音聊**：启动语音球，并把悬浮窗对话切到她。按钮结果（含错误原文）会留在卡片上。
   - **四个动作**：继续 / 卡住 / 提交 / 暂停，点一下再"记下"就是一条进展；暂停必须写原因。
   - **今天的你**：24 小时专注色条（采样口径）、在任务上的比例、今天的进展。
-- **会话**：她是唯一主入口；判断官、温柔巡检等列为"后台角色"；另有最近 30 个对话和搜索。
+- **会话**：她是唯一主入口；判断官、温柔巡检、陪伴窗等列为"后台角色"；另有最近 30 个对话和搜索。除她以外每个对话都有「设为她」。
 - **系统**：体检（关键文件多久没更新）、工作流、App 使用、最近事件、规则/审计/数据源。
 
 **她来找你（打卡）**：`focus_hub_nav:check_in` 一次做三件事：用 Operit 当前配置的语音念出一句话、弹出主控台、记一条待回应的打卡。你在首页点任意一个动作就算回应。深夜（23:30–08:00）、45 分钟内刚找过、或者你状态很好且 2 小时内报过进展时，会自动跳过。包里自带工作流模板「陪伴打卡（每小时）」，在 Operit「工作流 → 从模板新建」里选它即可。
@@ -24,7 +24,7 @@
 | `focus_hub_nav:check_in(message?, force?, speak?, popup?)` | 她来找你：语音 + 弹窗 + 待回应 |
 | `focus_hub_nav:open_focus_hub` / `open_chat(chat_id)` | 打开主控台 / 在主界面打开指定对话 |
 
-**不做的事**：不冻结、不解冻、不触发或修改工作流、不新建对话。写入只有两处，都是只追加：`progress/<日期>.jsonl`（进展）和 `companion/checkins/<日期>.jsonl`（打卡）。
+**不做的事**：不冻结、不解冻、不触发或修改工作流、不新建对话。写入只有三处：`progress/<日期>.jsonl`（进展，追加）、`companion/checkins/<日期>.jsonl`（打卡，追加）、`companion/config.json`（你选的"她"）。
 
 语音走的是 Operit"设置"里配置的 TTS。如果你的 MiniMax 语音已经配在那里，打卡会直接用它；如果是脚本自己调用的，之后再接入，密钥不需要给任何人。
 
@@ -35,6 +35,15 @@
 3. 启用「主控台」，主侧边栏会出现入口。
 
 旧版本直接导入覆盖即可（`toolpkg_id` 不变）。SHA-256 见 `build/focus_hub.toolpkg.sha256`。
+
+## v0.4.1
+
+按真机只读核查报告修正：
+- "她"默认改为秘书会话，并可在会话页「设为她」。
+- 删除"让她细说"（真机点击无反应、用途不清）；ToolPkg API 回到 1.0.0。
+- 语音按钮改名「🎙 语音聊」（真机确认能唤出语音球）。
+- 按钮结果和错误原文持续显示在卡片上。
+- 打卡语音失败时记录宿主返回的错误原文（`speak_error`）。**已知：本机 `test_tts_playback` 返回 `Unknown error`，打卡目前念不出声，待改走你的 `voice_bar:say`。**
 
 ## v0.4 新增
 
@@ -56,14 +65,14 @@
 | 项目 | 状态 | 依据 |
 |---|---|---|
 | 类型检查（v1.12.2 类型） | VERIFIED | `tsc` 0 错误 |
-| 数据解析、调度判断、事件合并、缺文件处理 | VERIFIED（模拟宿主） | `test/harness.js` 59 项通过；调度用例按真机 `get_workflow` 格式（无 `type` 字段）构造 |
+| 数据解析、调度判断、事件合并、缺文件处理 | VERIFIED（模拟宿主） | `test/harness.js` 65 项通过；调度用例按真机 `get_workflow` 格式（无 `type` 字段）构造 |
 | 看板在真机加载、各数据源读取 | VERIFIED（v0.1 真机截图） | 26 个工作流、当前任务均显示 |
 | 会话列表（`list_chats`，不依赖悬浮窗服务） | AVAILABLE_UNTESTED | 源码确认读聊天记录库 |
 | 点开对话（Java 桥 `ChatHistoryManager.setCurrentChatId` + `native.ai_chat`） | AVAILABLE_UNTESTED | 源码确认路由名和主界面跟随机制；调用宿主内部类，跨版本可能失效 |
 | 进展记录：校验、追加写入、去重、读取、看板卡片 | VERIFIED（模拟宿主） | harness 覆盖 |
 | 心情计算、打卡决策（深夜/冷却/状态好）、整天事件分块读取、体检 | VERIFIED（模拟宿主） | harness 覆盖，时钟固定在 14:30 |
-| 打卡语音 `SoftwareSettings.testTtsPlayback` | AVAILABLE_UNTESTED | 类型定义存在；走 Operit 当前 TTS 配置 |
-| "让她细说" `Tools.Chat.call` | AVAILABLE_UNTESTED | 需要 API 1.0.1，1.12.2 支持；manifest 已声明 |
+| 打卡语音 `SoftwareSettings.testTtsPlayback` | NOT_AVAILABLE（本机） | 真机核查 `test_tts_playback` 返回 `Unknown error`；需改走 `voice_bar:say` |
+| 语音按钮能唤出语音球 | VERIFIED（用户观察） | 切到她的对话、能否正常通话仍待确认 |
 | 语音按钮（`startService VOICE_BALL` + `switchTo`） | AVAILABLE_UNTESTED | 显式启动悬浮窗服务后再切换，避开 Service not connected |
 | 工作流模板导入后是否自动启用和调度 | AVAILABLE_UNTESTED | 格式照官方 template_try |
 | 进展记录在真机写入 `/sdcard/.../progress/` | AVAILABLE_UNTESTED | 宿主 `write_file` 源码确认 append 原样追加、自动建目录 |

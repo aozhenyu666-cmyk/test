@@ -96,7 +96,8 @@ const details = {
 
 // ---------- chats ----------
 const chats = [
-  { id: "ded96924", title: "陪伴窗", messageCount: 812, updatedAt: String(now - 5 * MIN), isCurrent: false, characterCardName: "小处" },
+  { id: "d20b4e22-f6ab-4766-bc83-54e96c99bb44", title: "秘书", messageCount: 530, updatedAt: String(now - 2 * MIN), isCurrent: false, characterCardName: "小处" },
+  { id: "ded96924", title: "陪伴窗", messageCount: 812, updatedAt: String(now - 5 * MIN), isCurrent: false, characterCardName: "陪伴" },
   { id: "f0953479", title: "温柔巡检", messageCount: 120, updatedAt: String(now - 3 * H), isCurrent: true, characterCardName: "陪伴想小处" },
   { id: "28f6fbb9", title: "判断官", messageCount: 400, updatedAt: String(now - 20 * MIN), isCurrent: false },
   ...Array.from({ length: 60 }, (_, i) => ({ id: `tmp${i}`, title: `临时对话${i}`, messageCount: 2, updatedAt: String(now - i * H), isCurrent: false })),
@@ -106,6 +107,7 @@ const knownChatIds = new Set(chats.map((c) => c.id));
 const calls = [];
 const record = (...args) => calls.push(args);
 let floatingServiceRunning = false;
+let ttsFails = false;
 
 global.Tools = {
   Files: {
@@ -134,7 +136,7 @@ global.Tools = {
     },
   },
   SoftwareSettings: {
-    testTtsPlayback: async (text, opts) => { record("tts", text, opts); return { playbackTriggered: true, initialized: true }; },
+    testTtsPlayback: async (text, opts) => { record("tts", text, opts); if (ttsFails) throw new Error("Unknown error"); return { playbackTriggered: true, initialized: true }; },
   },
   Chat: {
     listChats: async (params) => {
@@ -222,7 +224,7 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
 
   // ---------- manifest + workflow template ----------
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
-  assert(manifest.api_version === "1.0.1", "manifest declares ToolPkg API 1.0.1 (needed by Tools.Chat.call)");
+  assert(manifest.api_version === "1.0.0" && manifest.version === "0.4.1", "v0.4.1 back on ToolPkg API 1.0.0 (Chat.call no longer used)");
   const tpl = JSON.parse(fs.readFileSync(path.join(__dirname, "..", manifest.resources[0].path), "utf8"));
   const exec = tpl.nodes.find((n) => n.type === "execute");
   assert(manifest.workflow_templates[0].resource_key === manifest.resources[0].key, "workflow template points at a declared resource");
@@ -251,7 +253,7 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   assert(hc["前台采样"].status === "FRESH" && hc["用量刷新"].status === "FRESH" && hc["提醒通道"].status === "FRESH", "fresh artifacts");
   assert(hc["判断官"].status === "STALE" && hc["判断官"].path.endsWith(`${yesterday}.jsonl`), "judge falls back to yesterday's file and is STALE (30h)");
   assert(hc["日报"].status === "FRESH" && hc["当前任务"].status === "FRESH", "yesterday's digest OK, task_state has no staleness rule");
-  assert(snap.companion.name === "小处" && snap.companion.chat.id === "ded96924", "companion = 陪伴窗 chat, name from its role card");
+  assert(snap.companion.source === "secretary" && snap.companion.chat.title === "秘书" && snap.companion.name === "小处", "companion defaults to the secretary chat (S3 target), name from its role card");
 
   // ---------- mood ----------
   const { moodOf, snapshotToText } = require(path.join(DIST, "shared/format.js"));
@@ -293,6 +295,11 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   assert(again.status === "SKIP_COOLDOWN", "second check-in right away is skipped");
   const forced = await nav.check_in({ force: "true", speak: "false", message: "我在呢" });
   assert(forced.status === "CHECKED_IN" && forced.speak === "SKIPPED" && forced.line === "我在呢", "force + custom message + speak=false (string flags from workflows)");
+  ttsFails = true;
+  const failed = await nav.check_in({ force: true });
+  const lastCk = JSON.parse(FILES[ckPath].trim().split("\n").pop());
+  assert(failed.speak === "FAILED" && lastCk.speak_error === "Unknown error" && failed.message.includes("Unknown error"), "TTS failure is recorded with the host's error text");
+  ttsFails = false;
 
   // ---------- progress ----------
   const prog = require(path.join(DIST, "packages/focus_hub_progress.js"));
@@ -343,18 +350,16 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   // her buttons
   calls.length = 0;
   await clickable(tree, "找她聊").props.onClick();
-  assert(JSON.stringify(calls.filter((c) => c[0].startsWith("mgr.") || c[0] === "navigate").map((c) => [c[0], c[1]])) === JSON.stringify([["mgr.chatExists", "ded96924"], ["mgr.setCurrentChatId", "ded96924"], ["navigate", "native.ai_chat"]]), "找她聊 opens 陪伴窗 in the main chat screen");
+  assert(JSON.stringify(calls.filter((c) => c[0].startsWith("mgr.") || c[0] === "navigate").map((c) => [c[0], c[1]])) === JSON.stringify([["mgr.chatExists", "d20b4e22-f6ab-4766-bc83-54e96c99bb44"], ["mgr.setCurrentChatId", "d20b4e22-f6ab-4766-bc83-54e96c99bb44"], ["navigate", "native.ai_chat"]]), "找她聊 opens the secretary chat in the main screen");
+  assert(has(Screen(ctx), "已请求打开对话"), "status line records the result");
   calls.length = 0;
   floatingServiceRunning = false;
-  await clickable(tree, "🎙 语音").props.onClick();
+  await clickable(tree, "🎙 语音聊").props.onClick();
   const seq = calls.filter((c) => ["startService", "switchTo"].includes(c[0]));
-  assert(seq[0][0] === "startService" && seq[0][1].initial_mode === "VOICE_BALL" && seq[1][1] === "ded96924" && !ctx.toasts.some((t) => t.includes("语音没打开")), "语音 starts the voice ball, then switches the floating chat to her");
-  calls.length = 0;
-  await clickable(Screen(ctx), "让她细说").props.onClick();
-  const cc = calls.find((c) => c[0] === "chatCall")[1];
-  assert(cc.functionType === "CHAT" && cc.turns[0].kind === "SYSTEM" && cc.turns[0].content.includes("小处") && cc.turns[1].content.includes("陪伴状态"), "让她细说 calls the model with persona + snapshot");
+  assert(seq[0][0] === "startService" && seq[0][1].initial_mode === "VOICE_BALL" && seq[1][1] === "d20b4e22-f6ab-4766-bc83-54e96c99bb44" && has(Screen(ctx), "已请求打开语音球"), "语音聊 starts the voice ball, switches the floating chat to her, status shown");
   tree = Screen(ctx);
-  assert(has(tree, "我看到你刚才在贴吧啦～先投一家好不好？") && has(tree, "她细说的"), "her reply shown (trimmed)");
+  assert(!has(tree, "让她细说") && !has(tree, "她细说的"), "让她细说 removed");
+  assert(has(tree, "她 = 「秘书」"), "card says which chat she is");
 
   // ---------- UI: chats ----------
   await clickable(tree, "会话").props.onClick();
@@ -362,8 +367,21 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   assert(has(tree, "她（主入口）") && has(tree, "后台角色") && has(tree, "最近 30 个"), "chats grouped: her / backstage / recent");
   const herGroup = find(tree, (n) => n.type === "Card" && texts(n).includes("她（主入口）"));
   const backGroup = find(tree, (n) => n.type === "Card" && texts(n).includes("后台角色"));
-  assert(texts(herGroup).includes("陪伴窗") && !texts(herGroup).includes("温柔巡检"), "陪伴窗 is the only main entry");
-  assert(texts(backGroup).includes("温柔巡检") && texts(backGroup).includes("判断官"), "other roles listed as backstage");
+  assert(texts(herGroup).includes("秘书") && !texts(herGroup).includes("陪伴窗"), "the secretary is the only main entry");
+  assert(texts(backGroup).includes("陪伴窗") && texts(backGroup).includes("温柔巡检") && texts(backGroup).includes("判断官"), "other roles listed as backstage");
+  const chooseBtn = (g) => find(g, (n) => n.type === "TextButton" && texts(n).includes("设为她"));
+  assert(!chooseBtn(herGroup) && chooseBtn(backGroup), "设为她 offered on other chats only");
+
+  // choose 陪伴窗 instead
+  const peiRow = find(backGroup, (n) => n.type === "Surface" && texts(n).includes("陪伴窗"));
+  await find(peiRow, (n) => n.type === "TextButton" && texts(n).includes("设为她")).props.onClick();
+  const cfg = JSON.parse(FILES[`${P}/companion/config.json`].trim());
+  assert(cfg.chat_id === "ded96924", "设为她 writes companion/config.json");
+  tree = Screen(ctx);
+  const herGroup2 = find(tree, (n) => n.type === "Card" && texts(n).includes("她（主入口）"));
+  assert(texts(herGroup2).includes("陪伴窗") && ctx.state.get("snap").companion.source === "chosen", "chosen chat becomes her");
+  const fresh = await collectSnapshot();
+  assert(fresh.companion.chat.id === "ded96924" && fresh.companion.source === "chosen", "choice survives a fresh snapshot (read from config)");
   assert(has(tree, "太长了"), "812-message chat flagged");
 
   // ---------- UI: system ----------

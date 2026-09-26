@@ -15,6 +15,7 @@ export interface CheckinRecord {
   line: string;
   speak: ChannelStatus;
   popup: ChannelStatus;
+  speak_error?: string;
   trigger: "workflow" | "manual";
 }
 
