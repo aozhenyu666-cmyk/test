@@ -1,0 +1,80 @@
+【指令 05：P1 让用户进展进入判断官】（纯文本版，整段复制）
+
+用户批准执行本指令。
+
+本轮替换 /sdcard/Download/Operit/judge/ 下的 3 个脚本：gen_pack.sh、hash_gate.sh、judge_save2.sh。严格按步骤执行，共 6 步，每一步都要有工具回读证据；遇到任何与预期不符的情况，立即停止并报告，不要自行变通。
+
+禁止事项：
+- 不修改这 3 个脚本以外的任何文件；不自己编辑脚本内容，新版只能用 download_file 下载。
+- 不触发、不修改任何工作流。
+- 不调用 app_suspender 的任何工具，不向任何会话发消息。
+
+---------------------------------
+第 1 步：确认设备上的原文件没变过。
+用 super_admin:shell 执行下面这一行命令：
+
+cd /sdcard/Download/Operit/judge && sha256sum gen_pack.sh hash_gate.sh judge_save2.sh
+
+三个值必须完全等于：
+gen_pack.sh     13015b651ed328f33d1cab33b4d9f5349e3ecc2b6dd39d1bb9a0c1c8f2513f3b
+hash_gate.sh    83fd294aa1cb2a7a8cc3103af70c95a7cd8fbc692bbc5e14b314c2631dabc759
+judge_save2.sh  a90e134939d66d063b633ca62e252d8434c2df02a7100781c6a89589a17f53e6
+有任何一个不同就停止，报告三个实际值。
+
+---------------------------------
+第 2 步：备份。
+用 super_admin:shell 执行下面这一行命令：
+
+mkdir -p /sdcard/Download/Operit/00_AGENT_HANDOVER/p1_backup_20260926 && cd /sdcard/Download/Operit/judge && cp gen_pack.sh hash_gate.sh judge_save2.sh /sdcard/Download/Operit/00_AGENT_HANDOVER/p1_backup_20260926/ && cd /sdcard/Download/Operit/00_AGENT_HANDOVER/p1_backup_20260926 && sha256sum gen_pack.sh hash_gate.sh judge_save2.sh
+
+三个值必须和第 1 步的预期值一致。
+
+---------------------------------
+第 3 步：下载新版到暂存目录。
+调用 download_file 三次，每次一个文件：
+
+(1) url：https://raw.githubusercontent.com/aozhenyu666-cmyk/test/a4807c6f239445b2abf758c694719d8ec14aac72/flow/patches/p1/new/gen_pack.sh
+    destination：/sdcard/Download/Operit/00_AGENT_HANDOVER/p1_new/gen_pack.sh
+(2) url：https://raw.githubusercontent.com/aozhenyu666-cmyk/test/a4807c6f239445b2abf758c694719d8ec14aac72/flow/patches/p1/new/hash_gate.sh
+    destination：/sdcard/Download/Operit/00_AGENT_HANDOVER/p1_new/hash_gate.sh
+(3) url：https://raw.githubusercontent.com/aozhenyu666-cmyk/test/a4807c6f239445b2abf758c694719d8ec14aac72/flow/patches/p1/new/judge_save2.sh
+    destination：/sdcard/Download/Operit/00_AGENT_HANDOVER/p1_new/judge_save2.sh
+
+任何一次下载失败就停止，报告错误原文。
+
+---------------------------------
+第 4 步：校验新版。
+用 super_admin:shell 执行下面这一行命令：
+
+cd /sdcard/Download/Operit/00_AGENT_HANDOVER/p1_new && sha256sum gen_pack.sh hash_gate.sh judge_save2.sh
+
+三个值必须完全等于：
+gen_pack.sh     4cb9f253fde7932d6a71d697f370a08ae4bb1f51c3ec0d2f9b41e15ac6c3ec8c
+hash_gate.sh    5c753e2448b33686b0fa01aaed6431f9e8650b96279042f8148b3a4fc6718cc0
+judge_save2.sh  d21ff929627c711aaea841c3479b0e9f28d584379f645f73222f1e561cc9e4de
+不一致就停止，不要进行第 5 步。
+
+---------------------------------
+第 5 步：替换并回读。
+用 super_admin:shell 执行下面这一行命令：
+
+cd /sdcard/Download/Operit/00_AGENT_HANDOVER/p1_new && cp gen_pack.sh hash_gate.sh judge_save2.sh /sdcard/Download/Operit/judge/ && cd /sdcard/Download/Operit/judge && sha256sum gen_pack.sh hash_gate.sh judge_save2.sh
+
+三个值必须等于第 4 步的预期值。
+
+---------------------------------
+第 6 步：只读试跑证据包（gen_pack.sh 只往屏幕输出，不写任何文件）。
+用 super_admin:shell 执行下面这一行命令：
+
+sh /sdcard/Download/Operit/judge/gen_pack.sh 2>&1 | sed -n '/用户本人进展指纹/,/才可判 DRIFT_RISK/p'
+
+原样贴出输出。预期能看到"用户本人进展指纹""用户本人说的进展""进展判读准则"三段；最近 24 小时没报过进展时，会显示"（最近 24 小时无）"。
+
+---------------------------------
+输出格式：
+先逐步列出第 1～6 步，每步一行，写明：结果（OK / STOPPED / FAILED）和证据（实际哈希值或错误原文）。
+然后原样贴出第 6 步的输出。
+最后写一句结论。
+
+回滚（只在用户要求时执行，这一轮不要执行）：
+cd /sdcard/Download/Operit/00_AGENT_HANDOVER/p1_backup_20260926 && cp gen_pack.sh hash_gate.sh judge_save2.sh /sdcard/Download/Operit/judge/
