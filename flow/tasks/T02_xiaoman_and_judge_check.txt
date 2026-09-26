@@ -1,0 +1,89 @@
+【任务书 T02：创建"小满"角色卡 + 检查判断官的判断质量】
+
+用户批准执行本任务书的全部内容。
+
+你（Operit AI）是执行者。本任务书只给目标、红线、已知事实和验收标准；具体用哪些工具、按什么顺序，由你根据自己的工具包判断。只有碰到"红线"或"无法达成验收标准"时才停下来报告。全部完成后，按文末模板写报告文件。
+
+====================
+一、背景
+====================
+- T01 已完成：判断官（G2）已恢复，第一次判断结果是 INSUFFICIENT conf=0。需要看它的完整理由，确认是证据真的不足，还是判断官的角色设定和新证据包对不上。
+- 用户决定：以后只让一个角色对他说话（"一张脸"），新建一个叫"小满"的角色卡。本任务只创建卡片，不接入任何工作流（接入在下一份任务书）。
+
+====================
+二、目标与验收标准
+====================
+目标 A：导出判断官最近的判断（只读）
+  找到 /sdcard/Download/Operit/judge/ 下最近修改的两个 YYYYMMDD.jsonl 文件，各取最后 10 行原文。
+  再取 save_log.tsv 最后 10 行原文。
+  验收：报告里贴出这些原文。
+
+目标 B：导出相关角色卡的设定（只读）
+  读取以下角色卡的完整内容：判断官、秘书、陪伴想小处。需要的字段：name、description、character_setting、other_content_chat、other_content_voice、advanced_custom_prompt（有哪个给哪个）。
+  提示：内置工具 get_character_card（参数 character_card_id）可以读取；卡片 ID 可以用 extended_chat:list_character_cards 或 list_character_cards_settings 查。
+  把三张卡的内容原样写入 /sdcard/Download/Operit/00_AGENT_HANDOVER/reports/T02_cards.txt，每张卡之前加一行 ===== 卡片名 =====。
+  验收：文件存在，三张卡都有；某张卡找不到就写 NOT_FOUND；读不到的字段写 NOT_AVAILABLE。
+
+目标 C：创建角色卡"小满"
+  设定文本已放在 GitHub（固定版本，内容不会变），先用 download_file 下载到 /sdcard/Download/Operit/00_AGENT_HANDOVER/cards/xiaoman/：
+    https://raw.githubusercontent.com/aozhenyu666-cmyk/test/1157411e9778f0d3de0181d8fe6005408eeb7d9e/flow/cards/xiaoman/character_setting.txt    sha256 a05cf86b9a9bca7ff8e03b2bff1dc4e37646ccbc9112884dd4e367f7ca11a890
+    https://raw.githubusercontent.com/aozhenyu666-cmyk/test/1157411e9778f0d3de0181d8fe6005408eeb7d9e/flow/cards/xiaoman/other_content_voice.txt  sha256 93930c97e4b1e6bce9776998c76891abbc629ce1b51ff9a40cc975b786b95e11
+    https://raw.githubusercontent.com/aozhenyu666-cmyk/test/1157411e9778f0d3de0181d8fe6005408eeb7d9e/flow/cards/xiaoman/description.txt          sha256 636176920fd1972e4d8c4ef6523cb417548bd42ef66d78854586917f94388070
+  校验三个 sha256 全部一致后，用内置工具 create_character_card 创建角色卡：
+    name = 小满
+    character_setting = character_setting.txt 的完整内容
+    other_content_voice = other_content_voice.txt 的完整内容
+    description = description.txt 的完整内容
+    marks = 整体流程线 T02 创建；来源 github aozhenyu666-cmyk/test flow/cards/xiaoman
+  其他字段保持默认（模型、记忆都跟随全局）。
+  验收：
+  - 已存在名为"小满"的角色卡；报告它的 ID。
+  - 用 get_character_card 回读：character_setting 的开头是"你是小满，陪他一起找工作的伙伴"，结尾是"并且愿意回来跟你说实话。"，中间没有被截断或改写。
+  - 如果 create_character_card 不可用：不要用别的方式凑合创建，在报告里写明，并告诉用户在"角色卡"界面手动新建，内容就用下载下来的三个文件。
+
+目标 D：小满的一次试聊（验证角色是否像样）
+  给小满发 3 条测试消息（用 extended_chat:chat_with_agent，character_card_name=小满，不传 chat_id，persist_turn=false，每条消息都新开会话，互不影响），逐条记录她的回复原文：
+    消息 1：【测试·非真实】我刚投了两家，Boss 直聘上的。
+    消息 2：【测试·非真实】等会再弄吧。
+    消息 3：【测试·非真实】今天好累，不想弄了。
+  验收：报告里贴出三条回复原文。回复好不好不用你评价，由外部 Agent 看。
+  这 3 条测试消息都带"测试·非真实"前缀，不要当作用户真实进展记录，也不要写进 progress 或事件账本。
+
+====================
+三、红线（碰到就停，报告后等用户）
+====================
+1. 不删除、不修改任何已有角色卡（包括判断官、秘书、陪伴想小处），只新建"小满"。
+2. 不修改任何工作流，不触发任何工作流。
+3. 不调用 app_suspender 的任何工具，不改任何规则文件。
+4. 除目标 D 的 3 条测试消息外，不向任何会话发消息。
+5. 下载文件 sha256 不符：停止目标 C，不创建卡片。
+
+====================
+四、报告（写成文件，并同时贴在对话里）
+====================
+写入：/sdcard/Download/Operit/00_AGENT_HANDOVER/reports/T02_report.txt
+格式（纯文本，逐项填写）：
+
+T02 报告
+完成时间：
+总体结论：全部达成 / 部分达成 / 停止（原因）
+
+目标A：达成/未达成
+  judge 文件 1 名称及最后 10 行（原文）=
+  judge 文件 2 名称及最后 10 行（原文）=
+  save_log.tsv 最后 10 行（原文）=
+目标B：达成/未达成
+  T02_cards.txt 字节数=  包含的卡片=
+目标C：达成/未达成
+  三个下载文件 sha256=
+  小满卡片 ID=
+  回读 character_setting 开头 20 字=  结尾 20 字=  总字数=
+目标D：达成/未达成
+  回复 1（原文）=
+  回复 2（原文）=
+  回复 3（原文）=
+
+偏差与自行处理的问题（没有就写"无"）：
+需要用户决定的事（没有就写"无"）：
+
+完成后提醒用户：把 T02_report.txt 和 T02_cards.txt 两个文件都发给外部 Agent。
