@@ -30,6 +30,7 @@ import {
   type ChatEntry,
 } from "../../shared/nav.js";
 import { findCompanion, setCompanionChat } from "../../shared/companion.js";
+import { speak } from "../../shared/speech.js";
 import type { HealthCheck } from "../../shared/health.js";
 
 type Page = "today" | "chats" | "sys";
@@ -77,6 +78,7 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
   const [savingProgress, setSavingProgress] = ctx.useState("savingProgress", false);
 
   const [voiceBusy, setVoiceBusy] = ctx.useState("voiceBusy", false);
+  const [speaking, setSpeaking] = ctx.useState("speaking", false);
   // 按钮结果留在卡片上，不只靠一闪而过的提示
   const [status, setStatus] = ctx.useState<{ ok: boolean; text: string } | null>("status", null);
 
@@ -164,6 +166,24 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
       setStatus({ ok: false, text: `语音没打开：${errorText(error)}` });
     } finally {
       setVoiceBusy(false);
+    }
+  }
+
+  async function sayLine() {
+    if (!mood || speaking) return;
+    setSpeaking(true);
+    setStatus({ ok: true, text: "她在开口…" });
+    try {
+      const result = await speak(mood.line, `主控台 ${formatClock(Date.now())}`);
+      setStatus(
+        result.status === "ACCEPTED"
+          ? { ok: true, text: result.via === "voice_bar" ? "念完了（用你的 voice_bar）" : "念完了（系统 TTS）" }
+          : { ok: false, text: `没念出来：${result.error}` }
+      );
+    } catch (error) {
+      setStatus({ ok: false, text: `没念出来：${errorText(error)}` });
+    } finally {
+      setSpeaking(false);
     }
   }
 
@@ -335,6 +355,7 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
       UI.Row({ fillMaxWidth: true, spacing: 8 }, [
         UI.Button({ text: openingId ? "打开中…" : "找她聊", weight: 1, enabled: hasChat && !openingId, onClick: talkToHer }),
         UI.FilledTonalButton({ weight: 1, enabled: !voiceBusy, onClick: voice }, text(voiceBusy ? "打开中…" : "🎙 语音聊", "labelLarge", colors.onSurface)),
+        UI.FilledTonalButton({ weight: 1, enabled: !speaking, onClick: sayLine }, text(speaking ? "念着…" : "🔈 念一句", "labelLarge", colors.onSurface)),
       ]),
       ...(status ? [text(status.text, "bodySmall", status.ok ? MOOD_INK[0] : MOOD_INK[3])] : []),
       ...(hasChat ? [muted(`她 = 「${s.companion?.chat?.title}」${s.companion?.source === "chosen" ? "（你选的）" : ""}`, 1)] : [muted("还没认出她是哪个对话，去「会话」页点「设为她」")]),

@@ -57,6 +57,7 @@
 
 import { FOCUS_HUB_ROUTE, NATIVE_CHAT_ROUTE, openRouteViaIntent, setMainChat } from "../shared/nav.js";
 import { collectSnapshot } from "../shared/snapshot.js";
+import { speak as speakLine } from "../shared/speech.js";
 import { moodOf } from "../shared/format.js";
 import {
   appendCheckin,
@@ -128,15 +129,12 @@ export async function check_in(params: {
     const line = String(params?.message ?? "").trim() || mood.line;
     let speak: ChannelStatus = "SKIPPED";
     let speakError = "";
+    let speakVia = "";
     if (flag(params?.speak, true)) {
-      try {
-        const result = await Tools.SoftwareSettings.testTtsPlayback(line, { interrupt: false });
-        speak = result?.playbackTriggered ? "ACCEPTED" : "FAILED";
-        if (speak === "FAILED") speakError = String(result?.errorMessage ?? result?.errorType ?? "playbackTriggered=false");
-      } catch (error) {
-        speak = "FAILED";
-        speakError = errorText(error);
-      }
+      const said = await speakLine(line, `打卡 ${isoLocal(new Date(now)).slice(11, 16)}`);
+      speak = said.status;
+      speakVia = said.via;
+      speakError = said.error ?? "";
     }
     let popup: ChannelStatus = "SKIPPED";
     if (flag(params?.popup, true)) {
@@ -159,6 +157,7 @@ export async function check_in(params: {
       line,
       speak,
       popup,
+      ...(speakVia && speakVia !== "none" ? { speak_via: speakVia } : {}),
       ...(speakError ? { speak_error: speakError } : {}),
       trigger: flag(params?.force, false) ? "manual" : "workflow",
     };
@@ -170,7 +169,7 @@ export async function check_in(params: {
       line,
       speak,
       popup,
-      message: `语音 ${speak}${speakError ? `（${speakError}）` : ""}，弹窗 ${popup}。ACCEPTED 只代表已发出；用户是否听到/看到，以用户在主控台回应为准（回应会记成一条进展）。`,
+      message: `语音 ${speak}${speakVia && speakVia !== "none" ? `（${speakVia}）` : ""}${speakError ? `（${speakError}）` : ""}，弹窗 ${popup}。ACCEPTED 只代表已发出；用户是否听到/看到，以用户在主控台回应为准（回应会记成一条进展）。`,
     };
   } catch (error) {
     return { success: false, status: "ERROR", message: errorText(error) };

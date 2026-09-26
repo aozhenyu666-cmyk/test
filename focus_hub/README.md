@@ -6,7 +6,7 @@
 
 - **今天**：首页是"她"。默认是秘书会话（S3 的投递目标）；在「会话」页任意对话上点「设为她」可以换人，选择存在 `companion/config.json`。名字取该对话绑定的角色卡。
   - **心情**四档：安心 / 在意 / 担心 / 要谈谈，按最近一小时采样、偏移、你说的进展和未回应的打卡计算，"为什么"一行写着依据。每一档对应规则阶梯的下一步（取自 `EXEC_RULES.tsv`）。心情只用来呈现，不执行任何动作。
-  - **找她聊**：在主界面打开她的对话。**🎙 语音聊**：启动语音球，并把悬浮窗对话切到她。按钮结果（含错误原文）会留在卡片上。
+  - **找她聊**：在主界面打开她的对话。**🎙 语音聊**：启动语音球，并把悬浮窗对话切到她。**🔈 念一句**：用你的 `voice_bar` 把卡片上那句话念出来。按钮结果（含错误原文）会留在卡片上。
   - **四个动作**：继续 / 卡住 / 提交 / 暂停，点一下再"记下"就是一条进展；暂停必须写原因。
   - **今天的你**：24 小时专注色条（采样口径）、在任务上的比例、今天的进展。
 - **会话**：她是唯一主入口；判断官、温柔巡检、陪伴窗等列为"后台角色"；另有最近 30 个对话和搜索。除她以外每个对话都有「设为她」。
@@ -26,7 +26,7 @@
 
 **不做的事**：不冻结、不解冻、不触发或修改工作流、不新建对话。写入只有三处：`progress/<日期>.jsonl`（进展，追加）、`companion/checkins/<日期>.jsonl`（打卡，追加）、`companion/config.json`（你选的"她"）。
 
-语音走的是 Operit"设置"里配置的 TTS。如果你的 MiniMax 语音已经配在那里，打卡会直接用它；如果是脚本自己调用的，之后再接入，密钥不需要给任何人。
+**发声**：先调用你的 `voice_bar:say` 合成音频（MiniMax 等，密钥在 voice_bar 自己的环境变量里），从返回结果里找出音频文件，用安卓 MediaPlayer 播放完再返回；`voice_bar` 不可用时退回 Operit 自带 TTS。两条都失败时，错误原文会写进打卡记录的 `speak_error` 和卡片状态行。
 
 ## 安装
 
@@ -35,6 +35,11 @@
 3. 启用「主控台」，主侧边栏会出现入口。
 
 旧版本直接导入覆盖即可（`toolpkg_id` 不变）。SHA-256 见 `build/focus_hub.toolpkg.sha256`。
+
+## v0.4.2
+
+- 发声改走 `voice_bar:say` + MediaPlayer 播放，系统 TTS 作为后备；打卡记录新增 `speak_via`。
+- 首页新增「🔈 念一句」，随时测试她的声音。
 
 ## v0.4.1
 
@@ -65,13 +70,14 @@
 | 项目 | 状态 | 依据 |
 |---|---|---|
 | 类型检查（v1.12.2 类型） | VERIFIED | `tsc` 0 错误 |
-| 数据解析、调度判断、事件合并、缺文件处理 | VERIFIED（模拟宿主） | `test/harness.js` 65 项通过；调度用例按真机 `get_workflow` 格式（无 `type` 字段）构造 |
+| 数据解析、调度判断、事件合并、缺文件处理 | VERIFIED（模拟宿主） | `test/harness.js` 72 项通过；调度用例按真机 `get_workflow` 格式（无 `type` 字段）构造 |
 | 看板在真机加载、各数据源读取 | VERIFIED（v0.1 真机截图） | 26 个工作流、当前任务均显示 |
 | 会话列表（`list_chats`，不依赖悬浮窗服务） | AVAILABLE_UNTESTED | 源码确认读聊天记录库 |
 | 点开对话（Java 桥 `ChatHistoryManager.setCurrentChatId` + `native.ai_chat`） | AVAILABLE_UNTESTED | 源码确认路由名和主界面跟随机制；调用宿主内部类，跨版本可能失效 |
 | 进展记录：校验、追加写入、去重、读取、看板卡片 | VERIFIED（模拟宿主） | harness 覆盖 |
 | 心情计算、打卡决策（深夜/冷却/状态好）、整天事件分块读取、体检 | VERIFIED（模拟宿主） | harness 覆盖，时钟固定在 14:30 |
-| 打卡语音 `SoftwareSettings.testTtsPlayback` | NOT_AVAILABLE（本机） | 真机核查 `test_tts_playback` 返回 `Unknown error`；需改走 `voice_bar:say` |
+| 系统 TTS `test_tts_playback` | NOT_AVAILABLE（本机） | 真机核查返回 `Unknown error`，仅作后备 |
+| `voice_bar:say` 合成 + MediaPlayer 播放 | AVAILABLE_UNTESTED | 参数按真机导出的 METADATA；返回结构未知，路径提取兼容字段和 `<voice>` 标签属性两种写法 |
 | 语音按钮能唤出语音球 | VERIFIED（用户观察） | 切到她的对话、能否正常通话仍待确认 |
 | 语音按钮（`startService VOICE_BALL` + `switchTo`） | AVAILABLE_UNTESTED | 显式启动悬浮窗服务后再切换，避开 Service not connected |
 | 工作流模板导入后是否自动启用和调度 | AVAILABLE_UNTESTED | 格式照官方 template_try |
@@ -85,7 +91,8 @@
 2. 看有没有工作流被标成"疑似迟到"，对照你知道的实际情况判断对不对。
 3. 切到"会话"：能看到固定入口和最近对话。
 4. 点一个对话 → 应跳到主界面聊天页，并且是那个对话。
-5. 在"我的进展"里选"提交"，写一句，点记下：卡片里出现这条；文件管理器里 `Download/Operit/progress/<今天>.jsonl` 多了一行。
+5. 点「🔈 念一句」：应该听到你的 MiniMax 声音；卡片状态行会写"念完了（用你的 voice_bar）"，失败则写出原因。
+6. 在"我的进展"里选"提交"，写一句，点记下：卡片里出现这条；文件管理器里 `Download/Operit/progress/<今天>.jsonl` 多了一行。
 6. 在陪伴窗里（角色卡加了那句话之后）说"刚投了一家"，看 AI 是否调用 report_progress，看板刷新后能看到"来自 对话"的记录。
 7. 新建一个只有"手动触发 → 执行 `focus_hub_nav:open_focus_hub`"的测试工作流，分别在 Operit 前台和切到别的 App 后手动触发，看主控台会不会弹出来。
 

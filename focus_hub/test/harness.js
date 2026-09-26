@@ -108,6 +108,22 @@ const calls = [];
 const record = (...args) => calls.push(args);
 let floatingServiceRunning = false;
 let ttsFails = false;
+let voiceBarMode = "tag"; // tag | field | fail | noaudio
+global.toolCall = async (name, params) => {
+  record("toolCall", name, params);
+  if (name !== "voice_bar:say") throw new Error(`unknown tool ${name}`);
+  if (voiceBarMode === "fail") throw new Error("Tool not found: voice_bar:say");
+  if (voiceBarMode === "noaudio") return { success: true, voice_tag: "<voice text=\"x\"/>" };
+  if (voiceBarMode === "field") return { success: true, data: { audio_path: "/sdcard/Download/Operit/voice/b.mp3" } };
+  return { success: true, voice_tag: `<voice src="file:///sdcard/Download/Operit/voice/a.mp3" text="${params.text}"/>` };
+};
+class MockMediaPlayer {
+  setDataSource(p) { record("mp.setDataSource", p); }
+  prepare() { record("mp.prepare"); }
+  start() { record("mp.start"); }
+  getDuration() { return 100; }
+  release() { record("mp.release"); }
+}
 
 global.Tools = {
   Files: {
@@ -160,6 +176,7 @@ const manager = {
   },
 };
 global.Java = {
+  type: (name) => { if (name === "android.media.MediaPlayer") return MockMediaPlayer; throw new Error(`no class ${name}`); },
   getApplicationContext: () => ({ getPackageName: () => "com.ai.assistance.operit.debug" }),
   com: { ai: { assistance: { operit: { data: { repository: { ChatHistoryManager: { getInstance: (ctx) => { record("getInstance", !!ctx); return manager; } } } } } } } },
 };
@@ -224,7 +241,7 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
 
   // ---------- manifest + workflow template ----------
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
-  assert(manifest.api_version === "1.0.0" && manifest.version === "0.4.1", "v0.4.1 back on ToolPkg API 1.0.0 (Chat.call no longer used)");
+  assert(manifest.api_version === "1.0.0" && manifest.version === "0.4.2", "v0.4.1 back on ToolPkg API 1.0.0 (Chat.call no longer used)");
   const tpl = JSON.parse(fs.readFileSync(path.join(__dirname, "..", manifest.resources[0].path), "utf8"));
   const exec = tpl.nodes.find((n) => n.type === "execute");
   assert(manifest.workflow_templates[0].resource_key === manifest.resources[0].key, "workflow template points at a declared resource");
@@ -283,10 +300,12 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   const nav = require(path.join(DIST, "packages/focus_hub_nav.js"));
   calls.length = 0;
   const ci = await nav.check_in({});
-  const tts = calls.find((c) => c[0] === "tts");
+  const vb = calls.find((c) => c[0] === "toolCall" && c[1] === "voice_bar:say");
   const intent = calls.find((c) => c[0] === "intent");
   assert(ci.status === "CHECKED_IN" && ci.speak === "ACCEPTED" && ci.popup === "ACCEPTED", "check_in speaks and pops up");
-  assert(tts && tts[1] === mood.line && intent[1].extras["com.ai.assistance.operit.extra.OPEN_ROUTE_ID"] === "toolpkg:local.focus_hub:ui:focus_hub", "same line is spoken; popup opens the hub route");
+  assert(vb && vb[2].text === mood.line && vb[2].title.startsWith("打卡 ") && !calls.some((c) => c[0] === "tts"), "speaks via voice_bar:say with the mood line (system TTS not needed)");
+  assert(calls.some((c) => c[0] === "mp.setDataSource" && c[1] === "/sdcard/Download/Operit/voice/a.mp3") && calls.some((c) => c[0] === "mp.start") && calls.some((c) => c[0] === "mp.release"), "audio path pulled from the <voice> tag (file:// stripped), played and released");
+  assert(intent[1].extras["com.ai.assistance.operit.extra.OPEN_ROUTE_ID"] === "toolpkg:local.focus_hub:ui:focus_hub", "popup opens the hub route");
   const ckPath = `${P}/companion/checkins/${today}.jsonl`;
   const ckRec = JSON.parse(FILES[ckPath].trim());
   assert(ckRec.type === "CHECKIN" && ckRec.level === 2 && ckRec.trigger === "workflow", "check-in logged with level and trigger");
@@ -295,11 +314,22 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   assert(again.status === "SKIP_COOLDOWN", "second check-in right away is skipped");
   const forced = await nav.check_in({ force: "true", speak: "false", message: "我在呢" });
   assert(forced.status === "CHECKED_IN" && forced.speak === "SKIPPED" && forced.line === "我在呢", "force + custom message + speak=false (string flags from workflows)");
+  const { speak, findAudioPath } = require(path.join(DIST, "shared/speech.js"));
+  voiceBarMode = "field";
+  calls.length = 0;
+  const viaField = await speak("你好", "t");
+  assert(viaField.via === "voice_bar" && viaField.audioPath === "/sdcard/Download/Operit/voice/b.mp3", "audio path also found in a nested field");
+  voiceBarMode = "noaudio";
+  const viaTts = await speak("你好", "t");
+  assert(viaTts.via === "tts" && viaTts.status === "ACCEPTED", "falls back to system TTS when voice_bar returns no audio");
+  assert(findAudioPath('{"x":{"y":"/storage/emulated/0/a.wav"}}') === "/storage/emulated/0/a.wav" && findAudioPath("hello.mp3") === null, "path finder: JSON strings yes, relative names no");
+  voiceBarMode = "fail";
   ttsFails = true;
   const failed = await nav.check_in({ force: true });
   const lastCk = JSON.parse(FILES[ckPath].trim().split("\n").pop());
-  assert(failed.speak === "FAILED" && lastCk.speak_error === "Unknown error" && failed.message.includes("Unknown error"), "TTS failure is recorded with the host's error text");
+  assert(failed.speak === "FAILED" && lastCk.speak_error.includes("Tool not found") && lastCk.speak_error.includes("Unknown error"), "both voice_bar and TTS errors recorded verbatim");
   ttsFails = false;
+  voiceBarMode = "tag";
 
   // ---------- progress ----------
   const prog = require(path.join(DIST, "packages/focus_hub_progress.js"));
@@ -357,6 +387,15 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   await clickable(tree, "🎙 语音聊").props.onClick();
   const seq = calls.filter((c) => ["startService", "switchTo"].includes(c[0]));
   assert(seq[0][0] === "startService" && seq[0][1].initial_mode === "VOICE_BALL" && seq[1][1] === "d20b4e22-f6ab-4766-bc83-54e96c99bb44" && has(Screen(ctx), "已请求打开语音球"), "语音聊 starts the voice ball, switches the floating chat to her, status shown");
+  calls.length = 0;
+  await clickable(Screen(ctx), "🔈 念一句").props.onClick();
+  assert(calls.some((c) => c[0] === "toolCall" && c[2].text === moodOf(ctx.state.get("snap")).line) && has(Screen(ctx), "念完了（用你的 voice_bar）"), "念一句 speaks her line and reports how");
+  voiceBarMode = "fail";
+  ttsFails = true;
+  await clickable(Screen(ctx), "🔈 念一句").props.onClick();
+  assert(has(Screen(ctx), "没念出来：voice_bar：Tool not found"), "failure reason stays on the card");
+  voiceBarMode = "tag";
+  ttsFails = false;
   tree = Screen(ctx);
   assert(!has(tree, "让她细说") && !has(tree, "她细说的"), "让她细说 removed");
   assert(has(tree, "她 = 「秘书」"), "card says which chat she is");

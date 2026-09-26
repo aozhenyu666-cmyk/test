@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "toolpkg_id": "local.focus_hub",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "api_version": "1.0.0",
   "main": "dist/main.js",
   "display_name": {

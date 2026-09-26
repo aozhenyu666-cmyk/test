@@ -61,6 +61,7 @@ exports.open_chat = open_chat;
 exports.check_in = check_in;
 const nav_js_1 = require("../shared/nav.js");
 const snapshot_js_1 = require("../shared/snapshot.js");
+const speech_js_1 = require("../shared/speech.js");
 const format_js_1 = require("../shared/format.js");
 const checkin_js_1 = require("../shared/checkin.js");
 function errorText(error) {
@@ -117,17 +118,12 @@ async function check_in(params) {
         const line = String(params?.message ?? "").trim() || mood.line;
         let speak = "SKIPPED";
         let speakError = "";
+        let speakVia = "";
         if (flag(params?.speak, true)) {
-            try {
-                const result = await Tools.SoftwareSettings.testTtsPlayback(line, { interrupt: false });
-                speak = result?.playbackTriggered ? "ACCEPTED" : "FAILED";
-                if (speak === "FAILED")
-                    speakError = String(result?.errorMessage ?? result?.errorType ?? "playbackTriggered=false");
-            }
-            catch (error) {
-                speak = "FAILED";
-                speakError = errorText(error);
-            }
+            const said = await (0, speech_js_1.speak)(line, `打卡 ${(0, checkin_js_1.isoLocal)(new Date(now)).slice(11, 16)}`);
+            speak = said.status;
+            speakVia = said.via;
+            speakError = said.error ?? "";
         }
         let popup = "SKIPPED";
         if (flag(params?.popup, true)) {
@@ -150,6 +146,7 @@ async function check_in(params) {
             line,
             speak,
             popup,
+            ...(speakVia && speakVia !== "none" ? { speak_via: speakVia } : {}),
             ...(speakError ? { speak_error: speakError } : {}),
             trigger: flag(params?.force, false) ? "manual" : "workflow",
         };
@@ -161,7 +158,7 @@ async function check_in(params) {
             line,
             speak,
             popup,
-            message: `语音 ${speak}${speakError ? `（${speakError}）` : ""}，弹窗 ${popup}。ACCEPTED 只代表已发出；用户是否听到/看到，以用户在主控台回应为准（回应会记成一条进展）。`,
+            message: `语音 ${speak}${speakVia && speakVia !== "none" ? `（${speakVia}）` : ""}${speakError ? `（${speakError}）` : ""}，弹窗 ${popup}。ACCEPTED 只代表已发出；用户是否听到/看到，以用户在主控台回应为准（回应会记成一条进展）。`,
         };
     }
     catch (error) {
