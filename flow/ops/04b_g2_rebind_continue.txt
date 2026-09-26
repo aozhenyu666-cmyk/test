@@ -1,0 +1,69 @@
+【指令 04b：修复判断官会话 · 从第 3 步续跑】（纯文本版，整段复制）
+
+用户批准执行本指令。
+
+背景：指令 04 的第 1、2 步已经完成（前提确认通过；备份在 /sdcard/Download/Operit/00_AGENT_HANDOVER/g2_backup_20260926/b3b65845-74ad-4834-9806-73d859775284.json，4603 字节）。第 3 步失败，因为 create_new_chat 不在 extended_chat 包里。本指令改用 extended_chat 包内的工具完成第 3、4 步，第 5～7 步不变。
+
+严格按步骤执行，共 5 步（编号接着 04，从 3 到 7）；遇到任何与预期不符的情况，立即停止并报告，不要自行变通。
+
+禁止事项：
+- 只修改 G2_Judge_Flow 的 e_judge 节点里的 chat_id 和 persist_turn 两个参数。不改其他节点、连线、触发器、开关，也不改其他工作流。
+- 不删除任何会话、工作流或文件。
+- 不手动触发任何工作流。
+- 不调用 app_suspender 的任何工具。
+- 除第 3 步的这一条初始化消息外，不向任何会话发消息。
+
+---------------------------------
+第 3 步：新建判断官会话。
+调用 extended_chat:chat_with_agent，只传下面 4 个参数，特别注意【不要传 chat_id】（不传 chat_id 时，工具会自动新建一个绑定该角色卡的会话）：
+character_card_name = 判断官
+message = 【会话初始化】这是新会话的初始化消息，只回复 OK，不做任何判断。
+persist_turn = false
+timeout = 60
+
+从返回的 data.chat_id 取出新会话 ID，下文称为 NEW。
+- 返回里有 data.chat_id：继续（即使同时提示等待响应超时，也算成功，只要拿到了 chat_id）。
+- 没有 chat_id 或报错：停止，报告错误原文。
+
+---------------------------------
+第 4 步：改标题，防止被误删。
+调用 extended_chat:rename_chat，参数：
+chat_id = NEW
+new_title = 判断官·G2后台（勿删）
+
+---------------------------------
+第 5 步：回读新会话。
+调用 extended_chat:find_chat，参数 query = NEW，match = exact。确认能找到、标题已改、绑定的角色卡名字是 判断官；同时报告消息数量。不符合就停止，不要进行第 6 步。
+
+---------------------------------
+第 6 步：改节点。
+调用 workflow:patch_workflow，只传两个参数：
+workflow_id = b3b65845-74ad-4834-9806-73d859775284
+node_patches = 下面这一行 JSON，把其中的 NEW 替换成第 3 步的真实 chatId，其他字符一个都不要改：
+
+[{"op":"update","id":"e_judge","node":{"actionConfig":{"chat_id":"NEW","persist_turn":"false"}}}]
+
+不要传 name、description、enabled、connection_patches。
+
+---------------------------------
+第 7 步：回读工作流。
+再调用一次 workflow:get_workflow（同一个 workflow_id），逐项核对：
+- e_judge 的 chat_id = NEW
+- e_judge 的 persist_turn = false
+- e_judge 的 character_card_name = 判断官，message 仍引用节点 e_pack，timeout = 240
+- 节点数 9、连线数 8、enabled = true（与备份一致）
+任何一项不符：用备份里 e_judge 原来的 chat_id（28f6fbb9-e08c-4536-8500-60cde7647094）和 persist_turn（true）再 patch 回去，然后停止并报告。
+
+---------------------------------
+输出格式：
+逐步列出第 3～7 步，每步一行，写明：结果（OK / STOPPED / FAILED）和证据（ID、回读值或错误原文）。
+第 3 步额外报告：判断官对初始化消息的回复原文（如果有）。
+最后写一句结论。
+
+=================================
+验证（30～60 分钟后，另外单独发，这一轮不要执行）：
+用 super_admin:shell 执行下面这一行命令，原样贴出输出：
+
+tail -n 5 /sdcard/Download/Operit/judge/save_log.tsv; ls -t /sdcard/Download/Operit/workflow/_execution_logs/b3b65845-74ad-4834-9806-73d859775284 | head -3
+
+再调用 extended_chat:find_chat（query = NEW，match = exact），报告消息数量（预期仍是 0 或接近 0；如果每 30 分钟涨一轮，说明 persist_turn=false 没生效）。
