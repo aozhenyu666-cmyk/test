@@ -1,0 +1,98 @@
+【任务书 T01：让判断官重新上岗，并能听到用户的进展】
+
+用户批准执行本任务书的全部内容。
+
+你（Operit AI）是执行者。本任务书只给目标、红线、已知事实和验收标准；具体用哪些工具、按什么顺序、遇到小问题怎么绕过，由你根据自己的工具包判断。只有碰到"红线"或"无法达成验收标准"时才停下来报告。全部完成后，按文末模板写报告文件。
+
+====================
+一、背景（为什么做）
+====================
+判断官工作流 G2_Judge_Flow（ID b3b65845-74ad-4834-9806-73d859775284）从 2026-09-23 00:06 起每次都失败，原因是它的 e_judge 节点指向的会话 28f6fbb9-e08c-4536-8500-60cde7647094 已被删除。这两天多，提醒链一直拿不到新判断。另外，用户在主控台报的进展（/sdcard/Download/Operit/progress/*.jsonl）从来没进过判断官的证据包，所以判断官会一直催已经做完的事。
+
+====================
+二、已完成的事实（不要重做）
+====================
+- G2 备份：/sdcard/Download/Operit/00_AGENT_HANDOVER/g2_backup_20260926/b3b65845-74ad-4834-9806-73d859775284.json（4603 字节；9 个节点、8 条连线、enabled=true）。
+- 已新建判断官会话：50fb0680-268e-4340-bd12-0a6f3a7acf53（用 extended_chat:chat_with_agent 不传 chat_id 创建）。初始化时判断官回复了 "VERDICT=INSUFFICIENT … 缺少证据包"，这正常，说明角色卡生效，不是错误。
+- 角色卡"判断官"的 ID：1bd093cf-1a17-459f-92ed-6e8c8ea788a7。
+
+====================
+三、目标与验收标准
+====================
+目标 A：新会话受保护
+  验收：会话 50fb0680-268e-4340-bd12-0a6f3a7acf53 的标题是"判断官·G2后台（勿删）"，绑定的角色卡是"判断官"。
+
+目标 B：G2 改指向新会话，并且不再在会话里累积历史
+  验收：
+  - G2 的 e_judge 节点 actionConfig 里，chat_id = 50fb0680-268e-4340-bd12-0a6f3a7acf53，persist_turn = false（字符串或布尔均可）。
+  - e_judge 的其他参数不变（character_card_name=判断官、message 引用 e_pack、timeout=240、hide_user_message=true）。
+  - 其余节点、连线、触发器、enabled 与备份一致（仍是 9 个节点、8 条连线、enabled=true）。
+  提示：workflow:patch_workflow 的 node_patches 支持 [{"op":"update","id":"e_judge","node":{"actionConfig":{...}}}]，只会合并你给出的键。
+
+目标 C：部署 P1（三个脚本换成新版）
+  文件都在 /sdcard/Download/Operit/judge/ 下：gen_pack.sh、hash_gate.sh、judge_save2.sh。
+  新版下载地址（固定版本，内容不会变）：
+    https://raw.githubusercontent.com/aozhenyu666-cmyk/test/a4807c6f239445b2abf758c694719d8ec14aac72/flow/patches/p1/new/gen_pack.sh
+    https://raw.githubusercontent.com/aozhenyu666-cmyk/test/a4807c6f239445b2abf758c694719d8ec14aac72/flow/patches/p1/new/hash_gate.sh
+    https://raw.githubusercontent.com/aozhenyu666-cmyk/test/a4807c6f239445b2abf758c694719d8ec14aac72/flow/patches/p1/new/judge_save2.sh
+  验收：
+  - 替换前，三个原文件的 sha256 分别是下面的值（不是就说明文件在导出后被改过，这是红线，停止）：
+      gen_pack.sh     13015b651ed328f33d1cab33b4d9f5349e3ecc2b6dd39d1bb9a0c1c8f2513f3b
+      hash_gate.sh    83fd294aa1cb2a7a8cc3103af70c95a7cd8fbc692bbc5e14b314c2631dabc759
+      judge_save2.sh  a90e134939d66d063b633ca62e252d8434c2df02a7100781c6a89589a17f53e6
+  - 原文件已备份到 /sdcard/Download/Operit/00_AGENT_HANDOVER/p1_backup_20260926/，备份的 sha256 与上面一致。
+  - 替换后，三个文件的 sha256 分别是：
+      gen_pack.sh     4cb9f253fde7932d6a71d697f370a08ae4bb1f51c3ec0d2f9b41e15ac6c3ec8c
+      hash_gate.sh    5c753e2448b33686b0fa01aaed6431f9e8650b96279042f8148b3a4fc6718cc0
+      judge_save2.sh  d21ff929627c711aaea841c3479b0e9f28d584379f645f73222f1e561cc9e4de
+  - 不允许手工编辑脚本内容；只能下载后校验再替换。
+
+目标 D：端到端验收（判断官真的恢复工作了）
+  允许你手动触发 G2_Judge_Flow 一次（workflow:trigger_workflow），用于验收。这等同于它平时每 30 分钟的一次定时运行，由此引起的后续动作都属于已批准的正常流程。
+  验收：
+  - G2 这次执行成功（执行日志在 /sdcard/Download/Operit/workflow/_execution_logs/b3b65845-74ad-4834-9806-73d859775284/ 下，取最新一个文件）。
+  - /sdcard/Download/Operit/judge/save_log.tsv 末尾出现一行新的 SAVED（或 REJECTED_OUTPUT 并附原因；GATE_SKIP 不算，出现 GATE_SKIP 说明证据没变，请等下一次定时运行后再查）。
+  - 本次证据包（/sdcard/Download/Operit/judge/.pack_last.txt）里有"用户本人说的进展"和"进展判读准则"两段。
+  - 会话 50fb0680 的消息数量没有因为这次判断而增加（用于验证 persist_turn=false 生效）；如果增加了，照实报告，不算失败。
+
+====================
+四、红线（碰到就停，报告后等用户）
+====================
+1. 不删除任何会话、工作流、文件。
+2. 不调用 app_suspender 的任何工具，不改任何 App 的冻结状态；不新增或修改任何处罚、冻结、锁屏、解锁规则。
+3. 除 G2_Judge_Flow 的 e_judge 节点外，不修改任何工作流；除上面三个脚本外，不修改 /sdcard/Download/Operit/ 下的任何已有文件（新建备份和报告文件可以）。
+4. 除目标 D 允许的一次 G2 手动触发外，不触发任何工作流。
+5. 原文件校验值不符、下载文件校验值不符、patch 后回读与备份的差异超出目标 B 允许的范围：停止，并把改动恢复到备份状态。
+
+====================
+五、你可以自己决定的事
+====================
+- 用哪个工具、按什么顺序、参数怎么传；某个工具不可用时，换一个能达到同样验收效果的工具。
+- 初始化消息之类的小偏差，只要不影响验收标准，就不必停止，在报告里写一句即可。
+
+====================
+六、报告（必须写成文件，并同时贴在对话里）
+====================
+写入：/sdcard/Download/Operit/00_AGENT_HANDOVER/reports/T01_report.txt
+格式如下（纯文本，逐项填写，不要省略）：
+
+T01 报告
+完成时间：
+总体结论：全部达成 / 部分达成 / 停止（原因）
+
+目标A：达成/未达成
+  证据：会话标题=  绑定角色卡=
+目标B：达成/未达成
+  证据：e_judge.chat_id=  persist_turn=  timeout=  节点数=  连线数=  enabled=
+目标C：达成/未达成
+  证据：替换前 sha256（3 个）=
+        备份 sha256（3 个）=
+        替换后 sha256（3 个）=
+目标D：达成/未达成/待下次定时运行
+  证据：G2 最新执行日志文件名=  执行结果=
+        save_log.tsv 最后 3 行（原文）=
+        .pack_last.txt 中"用户本人说的进展"整段（原文）=
+        会话 50fb0680 消息数量：触发前=  触发后=
+
+偏差与自行处理的问题（没有就写"无"）：
+需要用户决定的事（没有就写"无"）：
