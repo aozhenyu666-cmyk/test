@@ -123,7 +123,7 @@ interface FileLines {
   truncated: boolean;
 }
 
-async function fileExists(path: string): Promise<boolean> {
+export async function fileExists(path: string): Promise<boolean> {
   const result = await Tools.Files.exists(path);
   return Boolean(result && result.exists && !result.isDirectory);
 }
@@ -153,7 +153,7 @@ async function readTail(path: string, count: number): Promise<FileLines> {
 }
 
 // 宿主单次最多返回 32KB，按块读完整个文件；块内被截断就减半重读
-async function readAll(path: string, maxLines: number): Promise<FileLines> {
+export async function readAll(path: string, maxLines: number): Promise<FileLines> {
   const probe = await Tools.Files.readPart(path, 1, 1);
   const totalLines = probe.totalLines;
   const lines: string[] = [];
@@ -257,7 +257,7 @@ function cronSchedule(expression: string): ScheduleInfo {
   return { label: `cron ${expression}`, intervalMs: null };
 }
 
-async function loadSchedule(workflowId: string): Promise<ScheduleInfo | null> {
+export async function loadSchedule(workflowId: string): Promise<ScheduleInfo | null> {
   const detail = await Tools.Workflow.get(workflowId);
   for (const node of detail.nodes ?? []) {
     // get_workflow 返回的节点可能只有 __type 没有 type 字段，按 triggerType 识别

@@ -23,6 +23,8 @@ function toEntry(chat) {
         updatedAt: String(chat.updatedAt ?? ""),
         isCurrent: Boolean(chat.isCurrent),
         characterCardName: String(chat.characterCardName ?? ""),
+        inputTokens: Number(chat.inputTokens) || 0,
+        outputTokens: Number(chat.outputTokens) || 0,
     };
 }
 // list_chats 读聊天记录库，不依赖悬浮窗服务

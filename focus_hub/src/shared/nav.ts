@@ -18,6 +18,8 @@ export interface ChatEntry {
   updatedAt: string;
   isCurrent: boolean;
   characterCardName: string;
+  inputTokens: number;
+  outputTokens: number;
 }
 
 function toEntry(chat: {
@@ -27,6 +29,8 @@ function toEntry(chat: {
   updatedAt?: string;
   isCurrent?: boolean;
   characterCardName?: string | null;
+  inputTokens?: number;
+  outputTokens?: number;
 }): ChatEntry {
   return {
     id: chat.id,
@@ -35,6 +39,8 @@ function toEntry(chat: {
     updatedAt: String(chat.updatedAt ?? ""),
     isCurrent: Boolean(chat.isCurrent),
     characterCardName: String(chat.characterCardName ?? ""),
+    inputTokens: Number(chat.inputTokens) || 0,
+    outputTokens: Number(chat.outputTokens) || 0,
   };
 }
 

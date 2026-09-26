@@ -85,8 +85,9 @@ const workflows = [
   { id: "w10", name: "P1_Board_Start", enabled: true, lastExecutionTime: now - 90 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 11, successfulExecutions: 11, failedExecutions: 0 },
 ];
 const details = {
-  w1: trig({ schedule_type: "interval", interval_ms: "600000", enabled: "true", repeat: "true" }),
-  w2: trig({ schedule_type: "interval", interval_ms: "900000", enabled: "true", repeat: "true" }),
+  w1: [...trig({ schedule_type: "interval", interval_ms: "600000", enabled: "true", repeat: "true" }), { __type: "ExecuteNode", id: "e", actionType: "focus_hub_nav:check_in", actionConfig: {} }],
+  w2: [...trig({ schedule_type: "interval", interval_ms: "900000", enabled: "true", repeat: "true" }), { __type: "ExecuteNode", id: "e", actionType: "super_admin:terminal", actionConfig: { command: { value: "sh /sdcard/Download/Operit/lock_freeze/worker.sh" } } }],
+  w4: [{ __type: "ExecuteNode", id: "e", actionType: "super_admin:terminal", actionConfig: { command: { value: "sh /sdcard/Download/Operit/legacy_lock.sh" } } }],
   w6: trig({ schedule_type: "cron", cron_expression: "30 23 * * *", enabled: "true", repeat: "true" }),
   w7: trig({ schedule_type: "cron", cron_expression: "0 8 * * *", enabled: "true" }),
   w8: trig({ schedule_type: "interval", interval_ms: "1800000", enabled: "true", repeat: "true" }),
@@ -96,13 +97,44 @@ const details = {
 
 // ---------- chats ----------
 const chats = [
-  { id: "d20b4e22-f6ab-4766-bc83-54e96c99bb44", title: "秘书", messageCount: 530, updatedAt: String(now - 2 * MIN), isCurrent: false, characterCardName: "小处" },
-  { id: "ded96924", title: "陪伴窗", messageCount: 812, updatedAt: String(now - 5 * MIN), isCurrent: false, characterCardName: "陪伴" },
-  { id: "f0953479", title: "温柔巡检", messageCount: 120, updatedAt: String(now - 3 * H), isCurrent: true, characterCardName: "陪伴想小处" },
-  { id: "28f6fbb9", title: "判断官", messageCount: 400, updatedAt: String(now - 20 * MIN), isCurrent: false },
-  ...Array.from({ length: 60 }, (_, i) => ({ id: `tmp${i}`, title: `临时对话${i}`, messageCount: 2, updatedAt: String(now - i * H), isCurrent: false })),
+  { id: "d20b4e22-f6ab-4766-bc83-54e96c99bb44", title: "秘书", messageCount: 530, updatedAt: String(now - 2 * MIN), isCurrent: false, characterCardName: "小处", inputTokens: 21000000, outputTokens: 90000 },
+  { id: "ded96924", title: "陪伴窗", messageCount: 812, updatedAt: String(now - 5 * MIN), isCurrent: false, characterCardName: "陪伴", inputTokens: 9000000, outputTokens: 120000 },
+  { id: "f0953479", title: "温柔巡检", messageCount: 120, updatedAt: String(now - 3 * H), isCurrent: true, characterCardName: "陪伴想小处", inputTokens: 800000, outputTokens: 20000 },
+  { id: "28f6fbb9", title: "判断官", messageCount: 400, updatedAt: String(now - 20 * MIN), isCurrent: false, characterCardName: "判断官", inputTokens: 30000000, outputTokens: 60000 },
+  ...Array.from({ length: 60 }, (_, i) => ({ id: `tmp${i}`, title: `临时对话${i}`, messageCount: 2, updatedAt: String(now - i * 6 * H), isCurrent: false, inputTokens: 3000, outputTokens: 200 })),
 ];
 const knownChatIds = new Set(chats.map((c) => c.id));
+
+// ---------- 省流：包、角色卡、模型配置、目录 ----------
+const packages = [
+  { packageName: "ask", displayName: "问答", description: "一个非常长的描述".repeat(40), isBuiltIn: false, enabled: true, toolCount: 3 },
+  { packageName: "focus_hub_nav", displayName: "主控台跳转", description: "打开主控台或对话", isBuiltIn: false, enabled: true, toolCount: 3 },
+  { packageName: "focus_hub_data", displayName: "主控台数据", description: "只读快照", isBuiltIn: false, enabled: true, toolCount: 1 },
+  { packageName: "voice_bar", displayName: "语音条", description: "合成语音", isBuiltIn: false, enabled: true, toolCount: 2 },
+  { packageName: "super_admin", displayName: "超级管理员", description: "terminal and shell access for scripts", isBuiltIn: true, enabled: true, toolCount: 5 },
+  { packageName: "old_pkg", displayName: "旧包", description: "old", isBuiltIn: false, enabled: false, toolCount: 1 },
+];
+const noAccess = () => ({ enabled: false, allowedBuiltinTools: [], allowedPackages: [], allowedSkills: [], allowedMcpServers: [] });
+const cards = [
+  { id: "card-judge", name: "判断官", description: "判断", characterSetting: "你是判断官".repeat(100), otherContentChat: "", advancedCustomPrompt: "", toolAccessConfig: noAccess() },
+  { id: "card-sec", name: "小处", description: "", characterSetting: "秘书", otherContentChat: "", advancedCustomPrompt: "", toolAccessConfig: noAccess() },
+  { id: "card-unused", name: "闲置", description: "", characterSetting: "x", otherContentChat: "", advancedCustomPrompt: "", toolAccessConfig: noAccess() },
+];
+const cardAccess = (c) => JSON.parse(JSON.stringify(c.toolAccessConfig));
+const DIRS = {
+  [P]: [
+    { name: "events", isDirectory: true, lastModified: mtime(now - 5 * MIN) },
+    { name: "old_probe", isDirectory: true, lastModified: mtime(now - 20 * 24 * H) },
+    { name: "lock_freeze", isDirectory: true, lastModified: mtime(now - 30 * 24 * H) },
+    { name: "legacy_lock.sh", isDirectory: false, lastModified: mtime(now - 12 * 24 * H) },
+    { name: "notes_old.md", isDirectory: false, lastModified: mtime(now - 9 * 24 * H) },
+    { name: "companion", isDirectory: true, lastModified: mtime(now - 40 * 24 * H) },
+    { name: "selfreview", isDirectory: true, lastModified: mtime(now - 20 * 24 * H) },
+    { name: ".nomedia", isDirectory: false, lastModified: mtime(now - 90 * 24 * H) },
+  ],
+  [`${P}/old_probe`]: [{ name: "a.txt", isDirectory: false, lastModified: mtime(now - 15 * 24 * H) }],
+  [`${P}/selfreview`]: [{ name: ".usage_fresh", isDirectory: false, lastModified: mtime(now - 42 * MIN) }],
+};
 
 const calls = [];
 const record = (...args) => calls.push(args);
@@ -136,6 +168,7 @@ global.Tools = {
       return { successful: true, details: "" };
     },
     info: async (p) => (p in MTIMES ? { exists: true, lastModified: mtime(MTIMES[p]) } : { exists: false, lastModified: "" }),
+    list: async (p) => { if (!(p in DIRS)) throw new Error(`not a directory: ${p}`); return { path: p, entries: DIRS[p] }; },
   },
   Workflow: {
     getAll: async () => ({ workflows, totalCount: workflows.length }),
@@ -153,6 +186,24 @@ global.Tools = {
   },
   SoftwareSettings: {
     testTtsPlayback: async (text, opts) => { record("tts", text, opts); if (ttsFails) throw new Error("Unknown error"); return { playbackTriggered: true, initialized: true }; },
+    listSandboxPackages: async () => ({ packages: packages.map((p) => ({ ...p })) }),
+    setSandboxPackageEnabled: async (name, enabled) => {
+      record("setPkg", name, enabled);
+      const p = packages.find((x) => x.packageName === name);
+      const previousEnabled = p.enabled;
+      p.enabled = enabled;
+      return { packageName: name, requestedEnabled: enabled, previousEnabled, currentEnabled: p.enabled, message: "ok" };
+    },
+    listCharacterCards: async () => ({ cards: cards.map((c) => ({ ...c, toolAccessConfig: cardAccess(c) })) }),
+    getCharacterCard: async (id) => ({ card: { ...cards.find((c) => c.id === id), toolAccessConfig: cardAccess(cards.find((c) => c.id === id)) } }),
+    updateCharacterCard: async (id, u) => {
+      record("updateCard", id, u);
+      const c = cards.find((x) => x.id === id);
+      c.toolAccessConfig = { enabled: u.tool_access_enabled, allowedBuiltinTools: u.allowed_builtin_tools, allowedPackages: u.allowed_packages, allowedSkills: u.allowed_skills, allowedMcpServers: u.allowed_mcp_servers };
+      return { card: { ...c, toolAccessConfig: cardAccess(c) } };
+    },
+    getFunctionModelConfig: async (fn) => ({ functionType: fn, configId: "cfg1", configName: "DeepSeek" }),
+    listModelConfigs: async () => ({ configs: [{ id: "cfg1", name: "DeepSeek", contextLength: 64, enableSummary: true, summaryTokenThreshold: 0.7, enableSummaryByMessageCount: false, summaryMessageCountThreshold: 16 }] }),
   },
   Chat: {
     listChats: async (params) => {
@@ -172,6 +223,7 @@ const manager = {
   callSuspend: async (method, ...args) => {
     record("mgr." + method, ...args);
     if (method === "chatExists") return knownChatIds.has(args[0]);
+    if (method === "getLatestSummaryTimestamp") return args[0] === "ded96924" ? now - 3 * H : null;
     return null;
   },
 };
@@ -241,7 +293,9 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
 
   // ---------- manifest + workflow template ----------
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
-  assert(manifest.api_version === "1.0.0" && manifest.version === "0.5.0", "v0.4.1 back on ToolPkg API 1.0.0 (Chat.call no longer used)");
+  assert(manifest.api_version === "1.0.0" && manifest.version === "0.6.0", "ToolPkg API 1.0.0, version 0.6.0");
+  const slimSub = manifest.subpackages.find((x) => x.id === "focus_hub_slim");
+  assert(slimSub && slimSub.enabled_by_default === false && fs.existsSync(path.join(__dirname, "..", slimSub.entry)), "slim report subpackage ships disabled (does not add to every prompt by default)");
   const tpl = JSON.parse(fs.readFileSync(path.join(__dirname, "..", manifest.resources[0].path), "utf8"));
   const exec = tpl.nodes.find((n) => n.type === "execute");
   assert(manifest.workflow_templates[0].resource_key === manifest.resources[0].key, "workflow template points at a declared resource");
@@ -445,6 +499,105 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   tree = Screen(ctx);
   assert(has(tree, "只用来呈现，不会执行动作"), "mood disclaimer in system details");
   assert(!has(tree, "行动规则表") && !has(tree, "生效规则标记") && !has(tree, "drift_level"), "rules not shown on the system page");
+
+
+  // ---------- 省流 ----------
+  const slimMod = require(path.join(DIST, "shared/slim.js"));
+  const TOKEN_LOG = `${P}/companion/slim/token_snapshots.jsonl`;
+  FILES[TOKEN_LOG] = JSON.stringify({ ts: Math.floor((now - 25 * H) / 1000), chats: { "28f6fbb9": 29000000, "d20b4e22-f6ab-4766-bc83-54e96c99bb44": 20500000 } }) + "\n" + "{bad\n";
+  calls.length = 0;
+  const rep = await slimMod.collectSlimReport(now);
+  assert(rep.errors.length === 0, `slim report reads every source (${rep.errors.join(" | ")})`);
+  const top = rep.chats.rows;
+  assert(top[0].title === "判断官" && top[1].title === "秘书" && top[0].perMessage === 75000, "chats ranked by input tokens with per-message average");
+  assert(top[0].growth === 1000000 && top[1].growth === 500000 && top[2].growth === 9000000, "growth vs the ~24h-old snapshot (new chats count fully)");
+  assert(rep.chats.baselineAt === now - 25 * H, "baseline picked from the token log, bad line skipped");
+  assert(top.find((r) => r.title === "陪伴窗").lastSummaryAt === now - 3 * H && top[0].lastSummaryAt === null, "last summary time probed via ChatHistoryManager");
+  assert(top.find((r) => r.title === "陪伴窗").isHer && !top[1].isHer && top[0].backstage, "flags: her (the chat chosen earlier) / backstage role");
+  assert(rep.chats.idleChats > 0 && rep.chats.idleChats < 60, `idle chats counted (${rep.chats.idleChats})`);
+  const logLines = FILES[TOKEN_LOG].trim().split("\n");
+  assert(logLines.length === 3 && JSON.parse(logLines[2]).chats["28f6fbb9"] === 30000000, "writes a new token snapshot (append) when the last one is old");
+  await slimMod.collectSlimReport(now);
+  assert(FILES[TOKEN_LOG].trim().split("\n").length === 3, "no second snapshot within 2 hours");
+
+  const pk = rep.packages;
+  assert(pk.enabled[0].name === "ask" && pk.enabled.length === 5 && !pk.enabled.some((x) => x.name === "old_pkg"), "enabled packages ranked by prompt weight");
+  assert(pk.enabled.find((x) => x.name === "focus_hub_nav").usedBy.includes("S3_Brief_Loop") && pk.enabled.find((x) => x.name === "super_admin").usedBy.includes("SCHED_Watchdog") && pk.enabled.find((x) => x.name === "ask").usedBy.length === 0, "packages used by enabled workflows are marked");
+  assert(rep.summary.contextLength === 64 && slimMod.summaryCeiling(rep.summary) === 44800 && slimMod.describeSummary(rep.summary) === "上下文 64K，用到 70% 时总结", "summary settings read (context in K, threshold as ratio)");
+  assert(rep.cards[0].name === "判断官" || rep.cards[0].name === "小处", "cards with chats first");
+  assert(rep.cards.find((c) => c.name === "判断官").promptTokens > 300, "card prompt size estimated");
+  const slimText = slimMod.slimReportToText(rep);
+  assert(slimText.includes("判断官[后台角色/从没压缩]") && slimText.includes("启用工具包 5 个") && slimText.includes("最多约 4.5 万"), "AI text summary of the slim report");
+  const slimTool = require(path.join(DIST, "packages/focus_hub_slim.js"));
+  const toolOut = await slimTool.get_slim_report({});
+  assert(toolOut.success && toolOut.report.includes("省流报告") && !toolOut.report.includes("冗余候选"), "get_slim_report tool (no scan by default)");
+
+  // 停用 / 启用 包
+  const actionLog = `${P}/companion/slim/actions.jsonl`;
+  await slimMod.setPackageEnabled("ask", false);
+  let rep2 = await slimMod.collectSlimReport(now);
+  assert(!rep2.packages.enabled.some((x) => x.name === "ask") && rep2.packages.disabledByHub[0].name === "ask", "disabled package moves to the hub's undo list");
+  const act = JSON.parse(FILES[actionLog].trim().split("\n")[0]);
+  assert(act.kind === "package" && act.before === true && act.after === false && act.ok, "action logged with before/after");
+  await slimMod.setPackageEnabled("ask", true);
+  rep2 = await slimMod.collectSlimReport(now);
+  assert(rep2.packages.disabledByHub.length === 0 && packages.find((x) => x.packageName === "ask").enabled, "re-enable restores it");
+
+  // 角色卡预设 + 恢复
+  calls.length = 0;
+  await slimMod.applyCardPreset("card-judge", "chat_only");
+  const upd = calls.find((c) => c[0] === "updateCard");
+  assert(upd[2].tool_access_enabled === true && upd[2].allowed_builtin_tools.length === 0 && upd[2].allowed_packages.length === 0, "只聊天 = whitelist with nothing in it");
+  rep2 = await slimMod.collectSlimReport(now);
+  const judgeCard = rep2.cards.find((c) => c.id === "card-judge");
+  assert(judgeCard.access.enabled && judgeCard.hasBackup && slimMod.describeAccess(judgeCard.access) === "白名单（内置 0 · 包 0）", "card shows as trimmed with a backup");
+  await slimMod.applyCardPreset("card-judge", "companion");
+  assert(JSON.stringify(cards[0].toolAccessConfig.allowedPackages) === JSON.stringify(["focus_hub_data", "focus_hub_nav", "voice_bar"]) && cards[0].toolAccessConfig.allowedBuiltinTools[0] === "use_package", "陪伴 keeps only hub + voice packages that are enabled (focus_hub_progress not installed here)");
+  await slimMod.applyCardPreset("card-judge", "restore");
+  assert(cards[0].toolAccessConfig.enabled === false && cards[0].toolAccessConfig.allowedPackages.length === 0, "恢复 goes back to the state before the FIRST change");
+  rep2 = await slimMod.collectSlimReport(now);
+  assert(!rep2.cards.find((c) => c.id === "card-judge").hasBackup, "backup consumed after restore");
+  let restoreErr = "";
+  try { await slimMod.applyCardPreset("card-sec", "restore"); } catch (e) { restoreErr = e.message; }
+  assert(restoreErr.includes("没有这张卡的备份"), "restore without a backup refuses");
+
+  // 冗余扫描
+  const sc = await slimMod.scanRedundancy(now);
+  const names = sc.candidates.map((c) => c.name);
+  assert(names.includes("old_probe") && names.includes("notes_old.md") && names.includes("legacy_lock.sh"), `stale unreferenced entries listed (${names.join(",")})`);
+  assert(!names.includes("lock_freeze") && !names.includes("events") && !names.includes("companion") && !names.includes("selfreview") && !names.includes(".nomedia"), "kept: referenced by enabled workflow / recent / recent child / own dir / hidden");
+  assert(sc.candidates.find((c) => c.name === "legacy_lock.sh").disabledRefs[0] === "Old_Test", "notes entries only referenced by disabled workflows");
+  assert(sc.workflows.some((w) => w.name === "OneShot" && w.why.includes("时间已过")) && sc.workflows.some((w) => w.name === "Never_Run" && w.why.includes("从没运行过")) && !sc.workflows.some((w) => w.name === "P1_Board_Start"), "workflow hints: expired one-shot, never-run manual; recent manual kept");
+  assert(FILES[sc.reportPath].includes("old_probe") && sc.reportPath.startsWith(`${P}/companion/slim/redundancy_`), "report file written");
+  assert(!calls.some((c) => c[0] === "delete" || c[0] === "move"), "scan never moves or deletes");
+
+  // 省流页
+  const sctx = makeCtx();
+  let st = Screen(sctx);
+  await st.props.onLoad();
+  st = Screen(sctx);
+  await clickable(st, "省流").props.onClick();
+  st = Screen(sctx);
+  assert(has(st, "最费的对话") && has(st, "判断官") && has(st, "每句话都带的工具包清单") && has(st, "自动压缩") && has(st, "角色卡带多少工具"), "slim page sections render");
+  assert(has(st, "上下文 64K") && has(st, "调到 16–32K"), "summary advice shown");
+  assert(has(st, "从没压缩"), "never-summarised flag shown");
+  calls.length = 0;
+  const pkgRow = find(st, (n) => n.type === "Row" && texts(n).includes("问答"));
+  await find(pkgRow, (n) => n.type === "TextButton").props.onClick();
+  st = Screen(sctx);
+  assert(!calls.some((c) => c[0] === "setPkg") && has(st, "再点确认"), "first tap only arms the button");
+  const armed = find(st, (n) => n.type === "TextButton" && texts(n).includes("再点确认"));
+  await armed.props.onClick();
+  st = Screen(sctx);
+  assert(calls.some((c) => c[0] === "setPkg" && c[1] === "ask" && c[2] === false) && has(st, "已停用 ask") && has(st, "主控台停用过的"), "second tap disables and shows an undo entry");
+  await clickable(st, "重新启用").props.onClick();
+  await clickable(Screen(sctx), "再点确认").props.onClick();
+  st = Screen(sctx);
+  assert(packages.find((x) => x.packageName === "ask").enabled && has(st, "已重新启用 ask"), "undo from the page");
+  await clickable(st, "扫描").props.onClick();
+  st = Screen(sctx);
+  assert(has(st, "old_probe") && has(st, "可以考虑停用的工作流") && has(st, "redundancy_"), "scan results on the page");
+  assert(has(st, "主控台做过的改动"), "change history listed");
 
   console.log(failures === 0 ? "\nALL PASSED" : `\n${failures} FAILED`);
   process.exitCode = failures === 0 ? 0 : 1;

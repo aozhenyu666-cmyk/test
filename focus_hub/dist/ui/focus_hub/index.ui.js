@@ -7,6 +7,7 @@ const progress_js_1 = require("../../shared/progress.js");
 const nav_js_1 = require("../../shared/nav.js");
 const companion_js_1 = require("../../shared/companion.js");
 const speech_js_1 = require("../../shared/speech.js");
+const slim_js_1 = require("../../shared/slim.js");
 // 心情四档固定配色：安心 / 在意 / 担心 / 要谈谈
 const MOOD_COLOR = ["#7FAE8E", "#E2B25A", "#E0876B", "#C75A6B"];
 const MOOD_TINT = ["#E4F0E8", "#FBF1DC", "#FBE6DE", "#F8E0E4"];
@@ -19,6 +20,7 @@ const ACTIONS = [
     { kind: "pause", icon: "Ⅱ" },
 ];
 const COLLAPSED_WORKFLOWS = 6;
+const COLLAPSED_PACKAGES = 10;
 const RECENT_CHATS = 30;
 function errorText(error) {
     if (error && typeof error === "object" && "message" in error) {
@@ -52,7 +54,15 @@ function Screen(ctx) {
     const [openingId, setOpeningId] = ctx.useState("openingId", "");
     const [showAllWorkflows, setShowAllWorkflows] = ctx.useState("showAllWorkflows", false);
     const [showMore, setShowMore] = ctx.useState("showMore", false);
+    const [slim, setSlim] = ctx.useState("slim", null);
+    const [slimError, setSlimError] = ctx.useState("slimError", "");
+    const [slimStatus, setSlimStatus] = ctx.useState("slimStatus", null);
+    const [confirmKey, setConfirmKey] = ctx.useState("confirmKey", "");
+    const [busyKey, setBusyKey] = ctx.useState("busyKey", "");
+    const [scan, setScan] = ctx.useState("scan", null);
+    const [showAllPackages, setShowAllPackages] = ctx.useState("showAllPackages", false);
     const loadingRef = ctx.useRef("loadingRef", false);
+    const slimLoadingRef = ctx.useRef("slimLoadingRef", false);
     const chatsLoadingRef = ctx.useRef("chatsLoadingRef", false);
     const autoLoadedRef = ctx.useRef("autoLoadedRef", false);
     const mood = snap ? (0, format_js_1.moodOf)(snap) : null;
@@ -90,10 +100,62 @@ function Screen(ctx) {
             chatsLoadingRef.current = false;
         }
     }
+    async function refreshSlim() {
+        if (slimLoadingRef.current)
+            return;
+        slimLoadingRef.current = true;
+        setSlimError("");
+        try {
+            setSlim(await (0, slim_js_1.collectSlimReport)());
+        }
+        catch (error) {
+            setSlimError(errorText(error));
+        }
+        finally {
+            slimLoadingRef.current = false;
+        }
+    }
     async function openPage(next) {
         setPage(next);
         if (next === "chats" && chats == null)
             await refreshChats();
+        if (next === "slim" && slim == null)
+            await refreshSlim();
+    }
+    // 会改设置的按钮都要点两次：第一次只把按钮变成"再点确认"
+    async function confirmThen(key, run) {
+        if (busyKey)
+            return;
+        if (confirmKey !== key) {
+            setConfirmKey(key);
+            return;
+        }
+        setConfirmKey("");
+        setBusyKey(key);
+        try {
+            setSlimStatus({ ok: true, text: await run() });
+            await refreshSlim();
+        }
+        catch (error) {
+            setSlimStatus({ ok: false, text: `没改成：${errorText(error)}` });
+        }
+        finally {
+            setBusyKey("");
+        }
+    }
+    async function runScan() {
+        if (busyKey)
+            return;
+        setBusyKey("scan");
+        try {
+            setScan(await (0, slim_js_1.scanRedundancy)());
+        }
+        catch (error) {
+            setSlimStatus({ ok: false, text: `扫描失败：${errorText(error)}` });
+        }
+        finally {
+            setBusyKey("");
+        }
     }
     async function openChat(chatId) {
         if (openingId)
@@ -227,7 +289,7 @@ function Screen(ctx) {
         return UI.Row({ fillMaxWidth: true, paddingStart: 4, paddingTop: 8, paddingBottom: 4, verticalAlignment: "center", spacing: 8 }, [
             text(title, "headlineSmall", colors.onSurface, { weight: 1 }),
             ...trailing,
-            UI.IconButton({ icon: Icons.Refresh, enabled: !loading, onClick: page === "chats" ? refreshChats : refresh }),
+            UI.IconButton({ icon: Icons.Refresh, enabled: !loading, onClick: page === "chats" ? refreshChats : page === "slim" ? refreshSlim : refresh }),
         ]);
     }
     function spinner() {
@@ -554,6 +616,178 @@ function Screen(ctx) {
         items.push(card(more, 6));
         return pageColumn(items);
     }
+    // ---------- 省流 ----------
+    function actionButton(key, labelText, onClick, danger = false) {
+        const confirming = confirmKey === key;
+        const busy = busyKey === key;
+        const shown = busy ? "处理中…" : confirming ? "再点确认" : labelText;
+        return UI.TextButton({ enabled: !busyKey || busy, onClick }, text(shown, "labelLarge", confirming || danger ? MOOD_INK[3] : colors.primary));
+    }
+    function flag(value, level) {
+        return pill(value, MOOD_TINT[level], MOOD_INK[level]);
+    }
+    function chatCostRow(row, baselineAt) {
+        const flags = [];
+        if (row.isHer)
+            flags.push(flag("她", 0));
+        if (row.backstage)
+            flags.push(flag("后台角色", 1));
+        if (row.lastSummaryAt === null && row.messages > 30)
+            flags.push(flag("从没压缩", 3));
+        const growth = row.growth != null && baselineAt != null && row.growth > 0 ? ` · 自 ${(0, snapshot_js_1.formatDateTime)(baselineAt)} +${(0, slim_js_1.formatTokens)(row.growth)}` : "";
+        return UI.Column({ fillMaxWidth: true, spacing: 3, paddingVertical: 6 }, [
+            UI.Row({ fillMaxWidth: true, spacing: 6, verticalAlignment: "center" }, [
+                text(row.title, "bodyLarge", colors.onSurface, { weight: 1, maxLines: 1 }),
+                ...flags,
+            ]),
+            muted(`${row.messages} 条 · 累计输入 ${(0, slim_js_1.formatTokens)(row.input)} · 平均每条 ${(0, slim_js_1.formatTokens)(row.perMessage)}${growth}`, 2),
+            ...(row.card ? [muted(`角色卡：${row.card}`, 1)] : []),
+        ]);
+    }
+    function cardRow(c) {
+        const run = (preset) => () => confirmThen(`card:${c.id}:${preset}`, () => (0, slim_js_1.applyCardPreset)(c.id, preset));
+        return UI.Column({ fillMaxWidth: true, spacing: 2, paddingVertical: 6 }, [
+            UI.Row({ fillMaxWidth: true, spacing: 6, verticalAlignment: "center" }, [
+                text(c.name, "bodyLarge", colors.onSurface, { weight: 1, maxLines: 1 }),
+                text(c.access.enabled ? "已精简" : "全部工具", "labelMedium", c.access.enabled ? MOOD_INK[0] : colors.onSurfaceVariant),
+            ]),
+            muted(`人设约 ${(0, slim_js_1.formatTokens)(c.promptTokens)} tokens · ${(0, slim_js_1.describeAccess)(c.access)} · ${c.chats} 个对话`, 2),
+            UI.Row({ fillMaxWidth: true, spacing: 2 }, [
+                actionButton(`card:${c.id}:chat_only`, "只聊天", run("chat_only")),
+                actionButton(`card:${c.id}:companion`, "陪伴", run("companion")),
+                ...(c.hasBackup ? [actionButton(`card:${c.id}:restore`, "恢复", run("restore"))] : []),
+            ]),
+        ]);
+    }
+    function packageRow(p) {
+        const key = `pkg:${p.name}`;
+        const used = p.usedBy.length > 0;
+        return UI.Row({ fillMaxWidth: true, spacing: 8, paddingVertical: 4, verticalAlignment: "center" }, [
+            UI.Column({ weight: 1, spacing: 1 }, [
+                text(p.displayName, "bodyMedium", colors.onSurface, { maxLines: 1 }),
+                muted(`${p.name} · 约 ${p.tokens} tokens${used ? ` · 工作流在用：${p.usedBy.slice(0, 2).join("、")}${p.usedBy.length > 2 ? " 等" : ""}` : ""}`, 2),
+            ]),
+            actionButton(key, "停用", () => confirmThen(key, () => (0, slim_js_1.setPackageEnabled)(p.name, false)), used),
+        ]);
+    }
+    function slimPage() {
+        const items = [pageHeader("省流")];
+        if (slimStatus) {
+            items.push(card([text(slimStatus.text, "bodyMedium", slimStatus.ok ? MOOD_INK[0] : colors.error)], 4, slimStatus.ok ? MOOD_TINT[0] : MOOD_TINT[3]));
+        }
+        if (slimError)
+            items.push(card([text(`读取失败：${slimError}`, "bodyMedium", colors.error)]));
+        if (!slim) {
+            items.push(spinner());
+            return pageColumn(items);
+        }
+        const r = slim;
+        const ceiling = r.summary ? (0, slim_js_1.summaryCeiling)(r.summary) : null;
+        // 一句话讲清楚钱花在哪
+        const head = [
+            label("每次和 AI 说一句话，发出去的是：人设 + 工具说明 + 这段对话的历史"),
+            muted("历史越长，每一句越贵；后台角色被工作流每半小时喂一次，最容易越滚越大。"),
+        ];
+        if (r.chats) {
+            head.push(UI.Row({ fillMaxWidth: true, spacing: 16 }, [
+                UI.Column({ weight: 1, spacing: 0 }, [text((0, slim_js_1.formatTokens)(r.chats.totalInput), "headlineSmall", colors.onSurface), muted("所有对话累计输入")]),
+                UI.Column({ weight: 1, spacing: 0 }, [
+                    text(r.chats.grownSince != null ? `+${(0, slim_js_1.formatTokens)(r.chats.grownSince)}` : "—", "headlineSmall", MOOD_INK[2]),
+                    muted(r.chats.baselineAt != null ? `自 ${(0, snapshot_js_1.formatDateTime)(r.chats.baselineAt)}` : "明天再看就有增长数字"),
+                ]),
+            ]));
+        }
+        if (ceiling)
+            head.push(muted(`按现在的设置，长对话每一句最多带约 ${(0, slim_js_1.formatTokens)(ceiling)} tokens 历史才会压缩。`));
+        items.push(card(head, 8));
+        if (r.chats) {
+            items.push(card([
+                text("最费的对话", "titleMedium", colors.onSurface),
+                ...r.chats.rows.map((row) => chatCostRow(row, r.chats?.baselineAt ?? null)),
+                muted(`共 ${r.chats.totalChats} 个对话，${r.chats.idleChats} 个 7 天没动过（归档建议工作流会处理，主控台不删对话）。`),
+            ], 2));
+        }
+        if (r.summary) {
+            const s = r.summary;
+            const advice = [];
+            if (!s.enableSummary)
+                advice.push("自动总结关着：对话会一直带着全部历史，建议打开。");
+            if (s.contextLength >= 32)
+                advice.push(`上下文 ${s.contextLength}K 对后台角色偏大，调到 16–32K 能直接砍掉大半费用。`);
+            if (!s.byMessageCount)
+                advice.push("可以再打开「按条数总结」，让后台角色的历史不再越滚越长。");
+            items.push(card([
+                text("自动压缩", "titleMedium", colors.onSurface),
+                text(`「${s.configName}」：${(0, slim_js_1.describeSummary)(s)}`, "bodyMedium", colors.onSurface),
+                ...(advice.length ? advice.map((a) => muted(`· ${a}`)) : [muted("设置已经比较省。")]),
+                muted("这是全局模型设置，主控台只读；在 Operit 设置 → 模型配置里改。"),
+            ], 6));
+        }
+        if (r.cards) {
+            const used = r.cards.filter((c) => c.chats > 0 || c.hasBackup || c.access.enabled).slice(0, 10);
+            items.push(card([
+                text("角色卡带多少工具", "titleMedium", colors.onSurface),
+                muted(`「全部工具」的角色每句话都带内置工具说明（约 ${slim_js_1.BUILTIN_TOOL_TOKENS} tokens）和整张工具包清单。`),
+                muted("只聊天 = 不带任何工具，适合判断官、秘书这种只输出文字的角色；它的工作流要是需要它读文件，就别选。陪伴 = 只留主控台和语音。改之前自动备份，随时点「恢复」。"),
+                ...used.map(cardRow),
+            ], 2));
+        }
+        if (r.packages) {
+            const pk = r.packages;
+            const visible = showAllPackages ? pk.enabled : pk.enabled.slice(0, COLLAPSED_PACKAGES);
+            const rows = [
+                UI.Row({ fillMaxWidth: true, verticalAlignment: "center" }, [
+                    text("每句话都带的工具包清单", "titleMedium", colors.onSurface, { weight: 1 }),
+                    ...(pk.enabled.length > COLLAPSED_PACKAGES
+                        ? [UI.TextButton({ onClick: () => setShowAllPackages(!showAllPackages) }, text(showAllPackages ? "收起" : `全部 ${pk.enabled.length} 个`, "labelLarge", colors.primary))]
+                        : []),
+                ]),
+                muted(`开着 ${pk.enabled.length} 个，清单每句约 ${(0, slim_js_1.formatTokens)(pk.listTokens)} tokens。停用只是关掉，随时可以在这里或包管理里重新启用。标红的是工作流在用的，别停。`),
+                ...visible.map(packageRow),
+            ];
+            if (pk.disabledByHub.length) {
+                rows.push(label("主控台停用过的"));
+                for (const p of pk.disabledByHub) {
+                    const key = `pkg-on:${p.name}`;
+                    rows.push(UI.Row({ fillMaxWidth: true, spacing: 8, verticalAlignment: "center" }, [
+                        text(p.displayName, "bodyMedium", colors.onSurfaceVariant, { weight: 1, maxLines: 1 }),
+                        actionButton(key, "重新启用", () => confirmThen(key, () => (0, slim_js_1.setPackageEnabled)(p.name, true))),
+                    ]));
+                }
+            }
+            items.push(card(rows, 2));
+        }
+        const scanRows = [
+            UI.Row({ fillMaxWidth: true, verticalAlignment: "center" }, [
+                text("外面的冗余", "titleMedium", colors.onSurface, { weight: 1 }),
+                actionButton("scan", scan ? "重新扫描" : "扫描", runScan),
+            ]),
+            muted("只读：找 Operit 目录里没被启用中工作流用到、7 天没动过的东西，和过期的一次性/长期不用的手动工作流。不移动、不删除。"),
+        ];
+        if (scan) {
+            scanRows.push(label(`文件与目录 · ${scan.candidates.length} 个候选（${scan.kept} 个在用或最近动过）`));
+            for (const c of scan.candidates.slice(0, 15)) {
+                scanRows.push(muted(`${c.isDirectory ? "📁" : "📄"} ${c.name} · ${c.newest ? `最近改动 ${(0, snapshot_js_1.formatDateTime)(c.newest)}` : "时间未知"}${c.disabledRefs.length ? ` · 只被停用的「${c.disabledRefs[0]}」提到` : ""}`, 2));
+            }
+            if (scan.workflows.length) {
+                scanRows.push(label("可以考虑停用的工作流"));
+                for (const w of scan.workflows)
+                    scanRows.push(muted(`${w.name}：${w.why}`, 2));
+            }
+            scanRows.push(muted(`完整清单写在 ${scan.reportPath}，可以直接交给 Operit AI 或流程线核对。`));
+        }
+        items.push(card(scanRows, 4));
+        if (r.actions.length) {
+            items.push(card([
+                label("主控台做过的改动"),
+                ...r.actions.map((a) => muted(`${a.iso} · ${a.label} · ${a.kind === "card" ? `角色卡「${a.detail}」` : a.target}${a.ok ? "" : " · 未生效"}`, 2)),
+                muted("全部记录在 companion/slim/actions.jsonl。"),
+            ], 4));
+        }
+        for (const e of r.errors)
+            items.push(muted(`读取失败：${e}`));
+        return pageColumn(items);
+    }
     // ---------- 底栏 ----------
     function navItem(target, icon, name) {
         const on = page === target;
@@ -562,7 +796,7 @@ function Screen(ctx) {
             text(name, "labelMedium", on ? colors.primary : colors.onSurfaceVariant),
         ]));
     }
-    const body = page === "today" ? todayPage() : page === "chats" ? chatsPage() : sysPage();
+    const body = page === "today" ? todayPage() : page === "chats" ? chatsPage() : page === "slim" ? slimPage() : sysPage();
     return UI.Column({
         fillMaxSize: true,
         onLoad: async () => {
@@ -574,6 +808,6 @@ function Screen(ctx) {
     }, [
         body,
         UI.HorizontalDivider({ color: colors.surfaceVariant }),
-        UI.Row({ fillMaxWidth: true }, [navItem("today", "☀", "今天"), navItem("chats", "💬", "会话"), navItem("sys", "⚙", "系统")]),
+        UI.Row({ fillMaxWidth: true }, [navItem("today", "☀", "今天"), navItem("chats", "💬", "会话"), navItem("slim", "🍃", "省流"), navItem("sys", "⚙", "系统")]),
     ]);
 }
