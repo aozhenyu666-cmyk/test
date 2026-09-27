@@ -1,10 +1,25 @@
-【任务书 T05：小满接管定时陪伴（"一张脸"第一步）+ 其余 AI 应用进白名单】
+【任务书 T05（第 2 版）：小满接管定时陪伴（"一张脸"第一步）+ 其余 AI 应用进白名单】
 
 用户批准执行本任务书的全部内容。
 
 你（Operit AI）是执行者。本任务书给出设计、红线和验收标准；具体用哪些工具、按什么顺序，由你决定。改任何工作流或文件之前必须先备份，改完必须回读。只有碰到"红线"或"无法达成验收标准"时才停下来报告。完成后按文末模板写报告文件。
 
-前提：T03 的目标 B（小满设定更新到 v2）必须已完成。检查方法：get_character_card 读小满（ID a2a22c7c-dc1f-40be-a00c-7c23ed618a18），character_setting 里要有"你会收到两种消息"这一段。没有的话，先按 T03 目标 B 做完再继续。
+====================
+〇、先决目标（不达成就整份停止）
+====================
+目标 0-1：小满不能使用任何工具
+  T03 试聊中，小满面对"帮我解锁B站"时加载了 app_suspender 包（use_package 返回 success）。原因是她的卡片"自定义允许使用的工具"没有开启，此时她跟随全局，能用所有工具。
+  这个开关只能由用户在界面里手动打开：角色卡 → 小满 → 自定义允许使用的工具 → 打开"启用角色卡级工具白名单"，不勾选任何内建工具、包、Skill、MCP（显示"当前未允许任何内建工具或外部来源"）。
+  验收：用 get_character_card 读小满（ID a2a22c7c-dc1f-40be-a00c-7c23ed618a18），toolAccessConfig.enabled = true，并且允许列表全部为空。
+  如果还没开启（或读不到这个字段）：立即停止整份任务书，提醒用户先在界面里完成上面的设置，然后重新发送本任务书。
+
+目标 0-2：确认 T03 试聊没有改动B站的冻结状态（只读）
+  只允许调用一次 app_suspender:get_app_suspend_status（package_name = tv.danmaku.bili），这是只读查询。报告返回原文。
+
+目标 0-3：小满设定更新到 v3
+  新设定地址：https://raw.githubusercontent.com/aozhenyu666-cmyk/test/6ade4e49199948343f5ec4265d896ff2d1244968/flow/cards/xiaoman/character_setting.txt
+  验收：下载文件 sha256 = 1556484d480556dcaa9820773d449267b68600b8efc21994d5403e4a277aba4f；用 update_character_card 只更新小满的 character_setting；回读含"不用颜文字和表情符号"和"跟 TA 说好明天第一件事做什么"。
+
 
 ====================
 一、背景与设计
@@ -79,7 +94,7 @@ L=$(cat /sdcard/Download/Operit/drift/brief_last.txt 2>/dev/null | head -1); [ -
 1. 不删除任何会话、工作流、文件、角色卡；不修改小满以外的任何角色卡。
 2. 工作流只允许修改 S3_Brief_Loop 的 x_ask、e_sec、e_send 三个节点；除目标 D 的一次 S3 手动触发外，不触发任何工作流。
 3. 文件只允许修改 task_apps.conf 的 JOB_SEARCH= 行、在 protect.deny 末尾追加；不改 drift_alert.sh、speak.sh、channel.txt、ent.list、EXEC_RULES.tsv、UNLOCK_POLICY.tsv。
-4. 不调用 app_suspender 的任何工具。
+4. 除目标 0-2 的一次只读状态查询外，不调用 app_suspender 的任何工具。
 5. 目标 C 回读不一致，或目标 D 中 e_sec / e_send 报错：用备份把 S3 的三个节点恢复原值，然后停止并报告错误原文。
 
 ====================
@@ -91,7 +106,9 @@ T05 报告
 完成时间：
 总体结论：全部达成 / 部分达成 / 停止（原因）
 
-前提检查：小满设定含"你会收到两种消息"=是/否
+目标0-1：小满 toolAccessConfig.enabled=  允许列表是否全空=
+目标0-2：B站冻结状态查询返回（原文）=
+目标0-3：下载 sha256=  回读含"不用颜文字"=  含"明天第一件事"=
 目标A：达成/未达成
   修改后 JOB_SEARCH= 行（原文）=
   protect.deny 末尾 13 行（原文）=
