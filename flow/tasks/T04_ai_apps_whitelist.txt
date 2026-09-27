@@ -1,0 +1,74 @@
+【任务书 T04：AI 助手类 App 进白名单（用户立法）】
+
+用户批准执行本任务书的全部内容。用户原话："GPT、Claude 这些东西应该在白名单里面，不参与锁机进程。"这是用户亲自批准的规则修改。
+
+你（Operit AI）是执行者。本任务书只给目标、红线和验收标准；具体用哪些工具、怎么改文件，由你决定。必须先备份、改完回读。全部完成后按文末模板写报告文件。可以和 T03 分开执行，先后都可以。
+
+====================
+一、背景
+====================
+- 采样脚本 /sdcard/Download/Operit/events/sample.sh 判定"是否在任务上"（ontask）的规则：当前任务模式为 JOB_SEARCH 时，只有 /sdcard/Download/Operit/p2/task_apps.conf 里 JOB_SEARCH= 这一行列出的包算 ontask=1，其余一律 ontask=0（偏离）。
+- 所以 ChatGPT、Claude 现在被记为偏离，判断官据此判 DRIFT_RISK。
+- 冻结保护名单 /sdcard/Download/Operit/p2/protect.deny 里已有 com.openai.chatgpt 和 com.google.android.apps.bard（Gemini），但没有 Claude。
+- 冻结对象清单 /sdcard/Download/Operit/p2/ent.list 里没有这几个 AI 应用（不需要改）。
+
+====================
+二、目标与验收标准
+====================
+目标 A：先读后改的依据（只读）
+  报告 task_apps.conf 的完整原文，以及 protect.deny 的完整原文。
+
+目标 B：把以下 3 个包加入 task_apps.conf 的 JOB_SEARCH= 这一行（算作"在任务上"）
+    com.openai.chatgpt
+    com.anthropic.claude
+    com.google.android.apps.bard
+  要求：
+  - 先把 task_apps.conf 备份到 /sdcard/Download/Operit/00_AGENT_HANDOVER/t04_backup_20260927/task_apps.conf。
+  - 只在 JOB_SEARCH= 这一行末尾追加（用英文逗号分隔，已存在的不重复加），其他行、注释、顺序一律不动。
+  - 如果文件里没有 JOB_SEARCH= 这一行，或者格式和"JOB_SEARCH=包1,包2,..."不同：停止本目标，把原文贴进报告。
+  验收：回读后 JOB_SEARCH= 行包含这 3 个包；用 diff 或逐行比较证明除这一行外与备份完全一致。
+
+目标 C：把 com.anthropic.claude 加入 protect.deny（永不冻结）
+  要求：先备份到 /sdcard/Download/Operit/00_AGENT_HANDOVER/t04_backup_20260927/protect.deny；在文件末尾追加一行 com.anthropic.claude（已存在就不加）；其他行不动。
+  验收：回读后含 com.anthropic.claude；除末尾新增行外与备份一致。
+
+目标 D：列出手机上其他 AI 助手类 App（只读，不修改任何文件）
+  用你可用的方式（例如列出已安装应用）找出手机上安装的其他 AI 对话类 App，例如 RikkaHub、腾讯元宝/混元、豆包、Kimi、通义、文心、DeepSeek 等。报告"应用名 + 包名"。
+  这些【不要】加进任何名单，只列出来给用户决定。
+
+目标 E：验证采样口径（只读）
+  用 super_admin:shell 执行：sed -n 's/^JOB_SEARCH=//p' /sdcard/Download/Operit/p2/task_apps.conf | tr ',' '\n'
+  把输出原样贴进报告。
+
+====================
+三、红线（碰到就停，报告后等用户）
+====================
+1. 只允许修改 task_apps.conf 的 JOB_SEARCH= 这一行，以及在 protect.deny 末尾追加一行。不改 sample.sh、ent.list、EXEC_RULES.tsv、UNLOCK_POLICY.tsv 或任何其他文件。
+2. 不调用 app_suspender 的任何工具；不冻结、不解冻任何 App。
+3. 不修改、不触发任何工作流；不向任何会话发消息。
+4. 回读与备份的差异超出上面允许的范围：用备份恢复原文件，然后停止并报告。
+
+====================
+四、报告（写成文件，并同时贴在对话里）
+====================
+写入：/sdcard/Download/Operit/00_AGENT_HANDOVER/reports/T04_report.txt
+
+T04 报告
+完成时间：
+总体结论：全部达成 / 部分达成 / 停止（原因）
+
+目标A：
+  task_apps.conf 原文=
+  protect.deny 原文=
+目标B：达成/未达成
+  修改后 JOB_SEARCH= 行（原文）=
+  除该行外与备份一致=是/否
+目标C：达成/未达成
+  protect.deny 末尾 3 行（原文）=
+目标D：
+  其他 AI 类 App（应用名 + 包名）=
+目标E：
+  输出原文=
+
+偏差与自行处理的问题（没有就写"无"）：
+需要用户决定的事（没有就写"无"）：
