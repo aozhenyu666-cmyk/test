@@ -1,0 +1,115 @@
+【任务书 T05：小满接管定时陪伴（"一张脸"第一步）+ 其余 AI 应用进白名单】
+
+用户批准执行本任务书的全部内容。
+
+你（Operit AI）是执行者。本任务书给出设计、红线和验收标准；具体用哪些工具、按什么顺序，由你决定。改任何工作流或文件之前必须先备份，改完必须回读。只有碰到"红线"或"无法达成验收标准"时才停下来报告。完成后按文末模板写报告文件。
+
+前提：T03 的目标 B（小满设定更新到 v2）必须已完成。检查方法：get_character_card 读小满（ID a2a22c7c-dc1f-40be-a00c-7c23ed618a18），character_setting 里要有"你会收到两种消息"这一段。没有的话，先按 T03 目标 B 做完再继续。
+
+====================
+一、背景与设计
+====================
+现状（S3_Brief_Loop，ID 8f675f75-0648-4924-9cbb-ebfeabbe46e8，每 30 分钟）：
+  e_pack 收集事实 → e_gate 事实没变就跳过 → x_ask 拼提示 → e_sec 问"秘书"写一句话 → e_raw 落盘 → e_ing 洗成一句 → e_send 调 drift_alert.sh 把这句话当成用户消息发进陪伴窗，陪伴窗的角色再回一次，另外 speak.sh 念秘书那句 → e_commit。
+  问题：用户看到、听到的是两个不同角色，而且每次提醒要调用 3 次模型（秘书、陪伴窗、念语音）。
+
+改成：
+  x_ask 改成给小满的【可用事实】格式；e_sec 改成直接问"小满"，在她自己的固定会话里说（用户看不到事实原文，只看到她的话；她记得自己说过什么）；Operit 不在前台时，她的话作为系统通知弹出；e_send 不再把话发进任何会话，只把她这句话念出来，并记一条 ALERT 事件。
+  本任务不动 drift_alert.sh、channel.txt、旧的陪伴窗和秘书卡片（那条"规则提醒"链路在下一份任务书再迁移）。
+
+====================
+二、目标与验收标准
+====================
+目标 A：其余 AI 应用进白名单（用户已批准："这些东西都不会纳入锁机名单"）
+  把下面 12 个包追加到 /sdcard/Download/Operit/p2/task_apps.conf 的 JOB_SEARCH= 行末尾，并逐行追加到 /sdcard/Download/Operit/p2/protect.deny 末尾（已存在的不重复加）：
+    com.deepseek.chat
+    com.tencent.hunyuan.app.chat
+    com.larus.nova
+    com.aliyun.tongyi
+    com.dingfeng_sf106.app
+    com.example.flutter_sf106
+    ai.x.grok
+    xyz.chatboxapp.chatbox
+    me.rerere.rikkahub
+    com.tencent.ima
+    com.google.android.apps.labs.language.tailwind
+    com.qoder.mobile.cn
+  要求：两个文件先备份到 /sdcard/Download/Operit/00_AGENT_HANDOVER/t05_backup_20260927/；只改 JOB_SEARCH= 一行、只在 protect.deny 末尾追加；其他内容不动。
+  验收：回读确认 12 个包都在两处；除允许的改动外与备份一致。
+
+目标 B：给小满建一个固定会话，并让她第一次开口
+  用 extended_chat:chat_with_agent，不传 chat_id（会自动新建绑定小满的会话），参数：
+    character_card_name = 小满
+    persist_turn = true
+    hide_user_message = true
+    notify_reply = true
+    timeout = 120
+    message = 下面这段，一字不改：
+【可用事实】这是你第一次出现在 TA 的手机上。从现在起，提醒和陪伴都由你来说，之前的秘书和陪伴窗不再对 TA 开口。当前任务：求职投递。请用两三句话跟 TA 打个招呼，说说你之后会怎么陪 TA、TA 可以怎么找你。
+  记下返回的 chat_id（下文称 XM）和她的回复原文。然后用 extended_chat:rename_chat 把 XM 的标题改成：小满
+  验收：find_chat 查 XM 能找到，标题=小满，绑定角色卡=小满。
+
+目标 C：改造 S3_Brief_Loop
+  先用 workflow:get_workflow 取完整 JSON，原样备份到 /sdcard/Download/Operit/00_AGENT_HANDOVER/t05_backup_20260927/8f675f75-0648-4924-9cbb-ebfeabbe46e8.json。
+  然后用 workflow:patch_workflow（op=update，只合并给出的键）做下面 3 处修改，其余节点、连线、触发器一律不动：
+  (1) 节点 x_ask：expression 改成（注意末尾是一个换行）：
+【可用事实】
+  (2) 节点 e_sec：actionConfig 改为
+      character_card_name = 小满
+      chat_id = XM
+      persist_turn = true
+      hide_user_message = true
+      notify_reply = true
+      （message、timeout、disable_warning 保持原值不动）
+  (3) 节点 e_send：actionConfig.command 改成下面这一行（一字不改），节点名可改为"小满出声"：
+L=$(cat /sdcard/Download/Operit/drift/brief_last.txt 2>/dev/null | head -1); [ -n "$L" ] || { echo NO_LINE; exit 1; }; SPEAK_FORCE=on sh /sdcard/Download/Operit/drift/speak.sh "$L"; sh /sdcard/Download/Operit/events/eventd.sh add ALERT src=xiaoman_brief via=notify+tts --dedup "xmb-$(date +%s)" >/dev/null 2>&1; echo "SENT_XIAOMAN $L"
+  验收：get_workflow 回读，上述 3 处与要求一致；节点数、连线数、enabled 与备份一致。
+
+目标 D：验收运行
+  手动触发 S3_Brief_Loop 一次（workflow:trigger_workflow）。
+  验收（逐项报告实际值）：
+  - 本次执行日志（/sdcard/Download/Operit/workflow/_execution_logs/8f675f75-0648-4924-9cbb-ebfeabbe46e8/ 下最新文件）中各节点的成功/失败/跳过情况。
+  - 如果 e_gate 显示事实未变化而跳过（BRIEF 相关的 SKIP），这不算失败：报告"待下次事实变化"，不要为了验收去改文件。
+  - 如果走到了 e_sec：报告小满这次说的话（/sdcard/Download/Operit/drift/brief_last.txt 的内容）、XM 会话的消息数量变化、alert_log.tsv 最后 3 行（看有没有 SPEAK_OK）。
+  - 请用户确认：是否收到了小满的通知、是否听到了声音（报告里写"待用户确认"即可）。
+
+====================
+三、红线（碰到就停，报告后等用户）
+====================
+1. 不删除任何会话、工作流、文件、角色卡；不修改小满以外的任何角色卡。
+2. 工作流只允许修改 S3_Brief_Loop 的 x_ask、e_sec、e_send 三个节点；除目标 D 的一次 S3 手动触发外，不触发任何工作流。
+3. 文件只允许修改 task_apps.conf 的 JOB_SEARCH= 行、在 protect.deny 末尾追加；不改 drift_alert.sh、speak.sh、channel.txt、ent.list、EXEC_RULES.tsv、UNLOCK_POLICY.tsv。
+4. 不调用 app_suspender 的任何工具。
+5. 目标 C 回读不一致，或目标 D 中 e_sec / e_send 报错：用备份把 S3 的三个节点恢复原值，然后停止并报告错误原文。
+
+====================
+四、报告（写成文件，并同时贴在对话里）
+====================
+写入：/sdcard/Download/Operit/00_AGENT_HANDOVER/reports/T05_report.txt
+
+T05 报告
+完成时间：
+总体结论：全部达成 / 部分达成 / 停止（原因）
+
+前提检查：小满设定含"你会收到两种消息"=是/否
+目标A：达成/未达成
+  修改后 JOB_SEARCH= 行（原文）=
+  protect.deny 末尾 13 行（原文）=
+目标B：达成/未达成
+  XM=  标题=  角色卡=
+  小满第一次开口（原文）=
+目标C：达成/未达成
+  x_ask.expression（原文）=
+  e_sec.actionConfig（全部键值）=
+  e_send.command（原文）=
+  节点数/连线数/enabled（改前 → 改后）=
+目标D：达成/未达成/待下次事实变化
+  执行日志文件名=
+  各节点结果=
+  小满这次说的话（brief_last.txt 原文）=
+  XM 消息数：触发前=  触发后=
+  alert_log.tsv 最后 3 行（原文）=
+  通知与声音：待用户确认
+
+偏差与自行处理的问题（没有就写"无"）：
+需要用户决定的事（没有就写"无"）：
