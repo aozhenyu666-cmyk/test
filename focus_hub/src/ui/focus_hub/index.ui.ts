@@ -49,8 +49,17 @@ import {
   type RedundancyReport,
   type SlimReport,
 } from "../../shared/slim.js";
+import {
+  clearAssignment,
+  collectWarden,
+  recordDelivery,
+  setAssignment,
+  stageLabel,
+  type StandardType,
+  type WardenReport,
+} from "../../shared/warden.js";
 
-type Page = "today" | "chats" | "sys" | "slim";
+type Page = "today" | "chats" | "warden" | "slim" | "sys";
 
 // 心情四档固定配色：安心 / 在意 / 担心 / 要谈谈
 const MOOD_COLOR = ["#7FAE8E", "#E2B25A", "#E0876B", "#C75A6B"];
@@ -116,8 +125,20 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
   const [scan, setScan] = ctx.useState<RedundancyReport | null>("scan", null);
   const [showAllPackages, setShowAllPackages] = ctx.useState("showAllPackages", false);
 
+  const [warden, setWarden] = ctx.useState<WardenReport | null>("warden", null);
+  const [wardenError, setWardenError] = ctx.useState("wardenError", "");
+  const [wardenStatus, setWardenStatus] = ctx.useState<{ ok: boolean; text: string } | null>("wardenStatus", null);
+  const [assignTask, setAssignTask] = ctx.useState("assignTask", "");
+  const [assignStd, setAssignStd] = ctx.useState<StandardType>("assignStd", "product");
+  const [assignFile, setAssignFile] = ctx.useState("assignFile", "");
+  const [deliverQuote, setDeliverQuote] = ctx.useState("deliverQuote", "");
+  const [deliverFile, setDeliverFile] = ctx.useState("deliverFile", "");
+  const [wardenBusy, setWardenBusy] = ctx.useState("wardenBusy", false);
+  const [showContract, setShowContract] = ctx.useState("showContract", false);
+
   const loadingRef = ctx.useRef("loadingRef", false);
   const slimLoadingRef = ctx.useRef("slimLoadingRef", false);
+  const wardenLoadingRef = ctx.useRef("wardenLoadingRef", false);
   const chatsLoadingRef = ctx.useRef("chatsLoadingRef", false);
   const autoLoadedRef = ctx.useRef("autoLoadedRef", false);
 
@@ -167,10 +188,82 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
     }
   }
 
+  async function refreshWarden() {
+    if (wardenLoadingRef.current) return;
+    wardenLoadingRef.current = true;
+    setWardenError("");
+    try {
+      const report = await collectWarden();
+      setWarden(report);
+      if (report.view.assignment) setAssignTask(report.view.assignment.task);
+    } catch (error) {
+      setWardenError(errorText(error));
+    } finally {
+      wardenLoadingRef.current = false;
+    }
+  }
+
   async function openPage(next: Page) {
     setPage(next);
     if (next === "chats" && chats == null) await refreshChats();
     if (next === "slim" && slim == null) await refreshSlim();
+    if (next === "warden" && warden == null) await refreshWarden();
+  }
+
+  async function createAssignment(deadlineMs: number) {
+    if (wardenBusy) return;
+    const task = assignTask.trim() || snap?.task?.task || "当前任务";
+    setWardenBusy(true);
+    try {
+      await setAssignment({ task, deadlineMs, standard: { type: assignStd, detail: "", filePath: assignFile.trim() } });
+      setWardenStatus({ ok: true, text: `派活：${task}（演练，不会真锁）` });
+      await refreshWarden();
+    } catch (error) {
+      setWardenStatus({ ok: false, text: `没派上：${errorText(error)}` });
+    } finally {
+      setWardenBusy(false);
+    }
+  }
+
+  async function stopAssignment() {
+    if (wardenBusy) return;
+    setWardenBusy(true);
+    try {
+      await clearAssignment();
+      setWardenStatus({ ok: true, text: "撤下了这次督促" });
+      await refreshWarden();
+    } catch (error) {
+      setWardenStatus({ ok: false, text: `没撤下：${errorText(error)}` });
+    } finally {
+      setWardenBusy(false);
+    }
+  }
+
+  async function deliver() {
+    if (wardenBusy) return;
+    const quote = deliverQuote.trim();
+    if (!quote && !deliverFile.trim()) {
+      await ctx.showToast("写一句你交的是什么，或填个文件路径～");
+      return;
+    }
+    setWardenBusy(true);
+    try {
+      const { delivery, reason } = await recordDelivery(quote || "（交了文件）", deliverFile.trim());
+      if (!delivery) {
+        setWardenStatus({ ok: false, text: reason ?? "没记上" });
+        return;
+      }
+      setDeliverQuote("");
+      setDeliverFile("");
+      const verdict =
+        delivery.autoCheck === "PRODUCT_OK" ? "产物核对通过，这次收工" : delivery.autoCheck === "PRODUCT_MISSING" ? "没找到产物或它还是派活前的" : "已收下，够不够要核对模型看（后续阶段）";
+      setWardenStatus({ ok: delivery.autoCheck !== "PRODUCT_MISSING", text: verdict });
+      await refreshWarden();
+    } catch (error) {
+      setWardenStatus({ ok: false, text: `没记上：${errorText(error)}` });
+    } finally {
+      setWardenBusy(false);
+    }
   }
 
   // 会改设置的按钮都要点两次：第一次只把按钮变成"再点确认"
@@ -340,7 +433,7 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
     return UI.Row({ fillMaxWidth: true, paddingStart: 4, paddingTop: 8, paddingBottom: 4, verticalAlignment: "center", spacing: 8 }, [
       text(title, "headlineSmall", colors.onSurface, { weight: 1 }),
       ...trailing,
-      UI.IconButton({ icon: Icons.Refresh, enabled: !loading, onClick: page === "chats" ? refreshChats : page === "slim" ? refreshSlim : refresh }),
+      UI.IconButton({ icon: Icons.Refresh, enabled: !loading, onClick: page === "chats" ? refreshChats : page === "slim" ? refreshSlim : page === "warden" ? refreshWarden : refresh }),
     ]);
   }
 
@@ -934,6 +1027,149 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
     return pageColumn(items);
   }
 
+  // ---------- 督促（演练） ----------
+
+  function stdChip(type: StandardType, name: string, hint: string): ComposeNode {
+    const on = assignStd === type;
+    return UI.Surface(
+      { weight: 1, containerColor: on ? MOOD_TINT[0] : colors.surfaceVariant, shape: { cornerRadius: 12 }, onClick: () => setAssignStd(type) },
+      UI.Column({ fillMaxWidth: true, padding: 10, spacing: 1 }, [
+        text(name, "labelLarge", on ? MOOD_INK[0] : colors.onSurface),
+        muted(hint, 2),
+      ])
+    );
+  }
+
+  function deadlineButton(labelText: string, minutes: number | "tonight"): ComposeNode {
+    return UI.Button({
+      weight: 1,
+      text: labelText,
+      enabled: !wardenBusy,
+      onClick: () => {
+        const now = Date.now();
+        let deadline = now + (typeof minutes === "number" ? minutes * 60000 : 0);
+        if (minutes === "tonight") {
+          const d = new Date(now);
+          d.setHours(21, 0, 0, 0);
+          if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+          deadline = d.getTime();
+        }
+        return createAssignment(deadline);
+      },
+    });
+  }
+
+  function wardenBanner(r: WardenReport): ComposeNode {
+    const v = r.view;
+    const level = v.stage === "TIER2" ? 3 : v.stage === "TIER1" ? 2 : v.stage === "GRACE" ? 1 : 0;
+    const lines: ComposeNode[] = [
+      UI.Row({ fillMaxWidth: true, spacing: 8, verticalAlignment: "center" }, [
+        text(stageLabel(v.stage), "titleMedium", MOOD_INK[level], { weight: 1 }),
+        ...(v.minutesToDeadline != null
+          ? [text(v.minutesToDeadline >= 0 ? `还剩 ${v.minutesToDeadline} 分钟` : `超时 ${-v.minutesToDeadline} 分钟`, "labelLarge", v.minutesToDeadline >= 0 ? colors.onSurfaceVariant : MOOD_INK[2])]
+          : []),
+      ]),
+    ];
+    if (v.line) lines.push(text(`“${v.line}”`, "bodyMedium", colors.onSurface));
+    if (v.wouldLock.length) {
+      lines.push(text(`演练：这一拍本来会锁 ${v.wouldLock.map((a) => a.name).join("、")}`, "bodyMedium", MOOD_INK[3]));
+      lines.push(muted("第一阶段不会真锁，只是记下来。等你觉得判断准了，我们再开真锁。"));
+    }
+    if (v.reasons.length) lines.push(muted(v.reasons.join("；")));
+    return card(lines, 6, MOOD_TINT[level]);
+  }
+
+  function wardenPage(): ComposeNode {
+    const items: ComposeNode[] = [pageHeader("督促")];
+    items.push(card([
+      text("演练模式：只记录，不锁任何 App", "titleSmall", MOOD_INK[0]),
+      muted("它按你签的契约和时间，算出到点没交差时本来会锁什么，写进日志给你核对。真锁要你逐项确认契约后单独开。这手机始终是你的，系统设置里随时能停用 Operit——它做的是让放弃有代价、被记下，把你拉回来面对任务。"),
+    ], 4, MOOD_TINT[0]));
+
+    if (wardenStatus) items.push(card([text(wardenStatus.text, "bodyMedium", wardenStatus.ok ? MOOD_INK[0] : colors.error)], 4, wardenStatus.ok ? MOOD_TINT[0] : MOOD_TINT[3]));
+    if (wardenError) items.push(card([text(`读取失败：${wardenError}`, "bodyMedium", colors.error)]));
+    if (!warden) {
+      items.push(spinner());
+      return pageColumn(items);
+    }
+    const r = warden;
+
+    if (r.view.assignment) {
+      items.push(wardenBanner(r));
+      // 交差
+      items.push(card([
+        text("交差", "titleMedium", colors.onSurface),
+        muted("交你为这个任务做出来的东西。产物型会核对文件是不是派活之后改的；其它类型先收下，够不够以后交给核对模型。"),
+        UI.TextField({ fillMaxWidth: true, value: deliverQuote, onValueChange: setDeliverQuote, placeholder: "一句话：我做了什么 / 投了哪几家" }),
+        UI.TextField({ fillMaxWidth: true, value: deliverFile, onValueChange: setDeliverFile, placeholder: "产物文件路径（可选）", singleLine: true }),
+        UI.Row({ fillMaxWidth: true, spacing: 8 }, [
+          UI.Button({ weight: 1, text: wardenBusy ? "记录中…" : "交差", enabled: !wardenBusy, onClick: deliver }),
+          UI.TextButton({ enabled: !wardenBusy, onClick: stopAssignment }, text("撤下", "labelLarge", colors.onSurfaceVariant)),
+        ]),
+      ], 8));
+    } else {
+      items.push(card([
+        text("给自己派个活", "titleMedium", colors.onSurface),
+        UI.TextField({ fillMaxWidth: true, value: assignTask, onValueChange: setAssignTask, placeholder: snap?.task?.task || "要推进的任务", singleLine: true }),
+        muted("怎么算完成："),
+        UI.Row({ fillMaxWidth: true, spacing: 6 }, [
+          stdChip("product", "产物", "有文件，代码能核对"),
+          stdChip("count", "计数", "投几家之类，交截图"),
+          stdChip("self", "自述", "只说想清楚了，最弱"),
+        ]),
+        ...(assignStd === "product" ? [UI.TextField({ fillMaxWidth: true, value: assignFile, onValueChange: setAssignFile, placeholder: "产物文件路径（可选）", singleLine: true })] : []),
+        muted("截止时间："),
+        UI.Row({ fillMaxWidth: true, spacing: 6 }, [deadlineButton("30 分钟", 30), deadlineButton("1 小时", 60), deadlineButton("2 小时", 120), deadlineButton("今晚 21 点", "tonight")]),
+      ], 8));
+    }
+
+    // 契约（你签的，可折叠）
+    const c = r.contract;
+    const contractHead: ComposeNode[] = [
+      UI.Row({ fillMaxWidth: true, verticalAlignment: "center" }, [
+        text("契约", "titleMedium", colors.onSurface, { weight: 1 }),
+        UI.TextButton({ onClick: () => setShowContract(!showContract) }, text(showContract ? "收起" : "看看", "labelLarge", colors.primary)),
+      ]),
+      muted(`一级 ${c.tier1.length} 个 · 二级 ${c.tier2.length} 个 · 保护 ${c.protectedApps.length} 个${r.unconfirmed.length ? ` · ${r.unconfirmed.length} 项待你拍板` : " · 已全部确认"}`),
+    ];
+    if (showContract) {
+      const appList = (title: string, apps: { name: string; verified: boolean }[], level: number) =>
+        UI.Column({ fillMaxWidth: true, spacing: 1, paddingVertical: 4 }, [
+          label(title),
+          text(apps.map((a) => `${a.name}${a.verified ? "" : "?"}`).join("　"), "bodyMedium", MOOD_INK[level]),
+        ]);
+      contractHead.push(appList("一级（先锁）", c.tier1, 2));
+      contractHead.push(appList("二级（升级后锁）", c.tier2, 3));
+      contractHead.push(appList("观望（只提醒）", c.watch, 1));
+      contractHead.push(muted(`名字后带 ? 的包名还没在真机核对过；真锁前要确认。`));
+      contractHead.push(muted(`时间：超时 ${c.timing.graceMinutes} 分钟宽限后一级，再过 ${c.timing.tier2AfterMinutes} 分钟升二级，每天 ${c.timing.dailyUnlockHour} 点全部自动解开。`));
+      contractHead.push(muted(`额度：每天暂停 ${c.limits.pausePerDay} 次、人工解锁 ${c.limits.unlockPerDay} 次，每周急停 ${c.limits.emergencyPerWeek} 次（冷静期 ${c.limits.coolDownMinutes} 分钟）。核对模型 ${c.judgeModel}。`));
+      if (r.unconfirmed.length) contractHead.push(text(`还没拍板：${r.unconfirmed.join("、")}`, "bodySmall", MOOD_INK[2]));
+      contractHead.push(muted("改契约要在 companion/warden/contract.json 里写，或交给我/流程线；这里只显示。"));
+    }
+    items.push(card(contractHead, 4));
+
+    // 演练日志
+    if (r.dryRun.length) {
+      items.push(card([
+        label(`演练记录 · ${r.dryRun.length} 条（本来会锁什么，没真锁）`),
+        ...r.dryRun.slice(0, 12).map((row) =>
+          UI.Column({ fillMaxWidth: true, spacing: 1 }, [
+            UI.Row({ fillMaxWidth: true, spacing: 8 }, [
+              text(stageLabel(row.stage as never) || row.stage, "labelLarge", MOOD_INK[3]),
+              muted(`${row.iso}${row.overdueMin != null ? ` · 超时 ${row.overdueMin} 分钟` : ""}`, 1),
+            ]),
+            muted(`${row.task || "—"} → ${row.wouldLock.join("、") || "—"}`, 2),
+          ])
+        ),
+        muted("写在 companion/warden/dryrun.jsonl。"),
+      ], 6));
+    } else {
+      items.push(card([muted("还没有演练记录。派个活、把截止时间调短，等打点工作流跑一拍（或到点后打开这页），就能看到它本来会锁什么。")], 4));
+    }
+    return pageColumn(items);
+  }
+
   // ---------- 底栏 ----------
 
   function navItem(target: Page, icon: string, name: string): ComposeNode {
@@ -947,7 +1183,7 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
     );
   }
 
-  const body = page === "today" ? todayPage() : page === "chats" ? chatsPage() : page === "slim" ? slimPage() : sysPage();
+  const body = page === "today" ? todayPage() : page === "chats" ? chatsPage() : page === "warden" ? wardenPage() : page === "slim" ? slimPage() : sysPage();
 
   return UI.Column(
     {
@@ -961,7 +1197,7 @@ export default function Screen(ctx: ComposeDslContext): ComposeNode {
     [
       body,
       UI.HorizontalDivider({ color: colors.surfaceVariant }),
-      UI.Row({ fillMaxWidth: true }, [navItem("today", "☀", "今天"), navItem("chats", "💬", "会话"), navItem("slim", "🍃", "省流"), navItem("sys", "⚙", "系统")]),
+      UI.Row({ fillMaxWidth: true }, [navItem("today", "☀", "今天"), navItem("chats", "💬", "会话"), navItem("warden", "⏱", "督促"), navItem("slim", "🍃", "省流"), navItem("sys", "⚙", "系统")]),
     ]
   );
 }

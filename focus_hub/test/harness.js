@@ -293,9 +293,15 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
 
   // ---------- manifest + workflow template ----------
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
-  assert(manifest.api_version === "1.0.0" && manifest.version === "0.6.0", "ToolPkg API 1.0.0, version 0.6.0");
+  assert(manifest.api_version === "1.0.0" && manifest.version === "0.7.0", "ToolPkg API 1.0.0, version 0.7.0");
   const slimSub = manifest.subpackages.find((x) => x.id === "focus_hub_slim");
   assert(slimSub && slimSub.enabled_by_default === false && fs.existsSync(path.join(__dirname, "..", slimSub.entry)), "slim report subpackage ships disabled (does not add to every prompt by default)");
+  const wardenSub = manifest.subpackages.find((x) => x.id === "focus_hub_warden");
+  assert(wardenSub && wardenSub.enabled_by_default === false && fs.existsSync(path.join(__dirname, "..", wardenSub.entry)), "warden subpackage ships disabled");
+  const wtplRes = manifest.resources.find((x) => x.key === "workflow_warden_tick");
+  const wtpl = JSON.parse(fs.readFileSync(path.join(__dirname, "..", wtplRes.path), "utf8"));
+  const tickExec = wtpl.nodes.find((n) => n.type === "execute");
+  assert(tickExec.actionType === "focus_hub_warden:tick" && wtpl.nodes.some((n) => n.triggerType === "schedule" && n.triggerConfig.interval_ms === "900000"), "warden tick template calls focus_hub_warden:tick every 15 min");
   const tpl = JSON.parse(fs.readFileSync(path.join(__dirname, "..", manifest.resources[0].path), "utf8"));
   const exec = tpl.nodes.find((n) => n.type === "execute");
   assert(manifest.workflow_templates[0].resource_key === manifest.resources[0].key, "workflow template points at a declared resource");
@@ -598,6 +604,90 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   st = Screen(sctx);
   assert(has(st, "old_probe") && has(st, "可以考虑停用的工作流") && has(st, "redundancy_"), "scan results on the page");
   assert(has(st, "主控台做过的改动"), "change history listed");
+
+
+  // ---------- 督促（演练，绝不真锁） ----------
+  const wardenMod = require(path.join(DIST, "shared/warden.js"));
+  const wardenTool = require(path.join(DIST, "packages/focus_hub_warden.js"));
+  const WD = `${P}/companion/warden`;
+  const clearWarden = () => { for (const k of Object.keys(FILES)) if (k.startsWith(WD)) delete FILES[k]; delete FILES[`${P}/progress/${today}.jsonl`]; };
+
+  clearWarden();
+  const idle = await wardenTool.get_warden_status();
+  assert(idle.success && idle.status.includes("没有在督促的任务") && idle.status.includes("演练模式"), "no assignment: status is idle and labelled dry-run");
+  const idleTick = await wardenTool.tick();
+  assert(idleTick.result.includes("未冻结") && idleTick.result.includes("无"), "tick with no assignment does nothing");
+
+  // 派活：已超时 40 分钟，产物型
+  await wardenMod.setAssignment({ task: "改简历", deadlineMs: now - 40 * MIN, standard: { type: "product", detail: "", filePath: "" } });
+  calls.length = 0;
+  const t1 = await wardenTool.tick();
+  assert(t1.result.includes("TIER1") && t1.result.includes("抖音") && t1.result.includes("B站"), "40 min overdue, ignored -> would lock tier 1");
+  assert(!calls.some((c) => String(c[0]).includes("app_suspender") || (c[0] === "toolCall" && String(c[1]).includes("app_suspender"))), "PHASE 1: tick never calls app_suspender");
+  const dry = FILES[`${WD}/dryrun.jsonl`];
+  assert(dry && JSON.parse(dry.trim().split("\n").pop()).note.includes("未执行任何冻结") && JSON.parse(dry.trim().split("\n").pop()).would_lock.length === 6, "dry-run log records what WOULD be locked, marked not executed");
+
+  // 升二级：超时 70 分钟（宽限30 + 一级到二级30 = 60）
+  await wardenMod.setAssignment({ task: "改简历", deadlineMs: now - 70 * MIN, standard: { type: "product", detail: "", filePath: "" } });
+  const t2 = await wardenMod.tick(now);
+  assert(t2.stage === "TIER2" && t2.wouldLock.length === 10, "70 min overdue -> tier2 would lock tier1+tier2");
+
+  // 进行中
+  await wardenMod.setAssignment({ task: "改简历", deadlineMs: now + 60 * MIN, standard: { type: "product", detail: "", filePath: "" } });
+  const onTrack = await wardenMod.collectWarden(now);
+  assert(onTrack.view.stage === "ON_TRACK" && onTrack.view.minutesToDeadline === 60 && onTrack.view.wouldLock.length === 0, "before deadline: on track, nothing would lock");
+
+  // 交差：产物文件存在且在派活后修改 -> 通过并撤下
+  const prodFile = `${P}/drafts/resume.md`;
+  await wardenMod.setAssignment({ task: "改简历", deadlineMs: now - 40 * MIN, standard: { type: "product", detail: "", filePath: prodFile } });
+  MTIMES[prodFile] = now; FILES[prodFile] = "resume\n";
+  const okDel = await wardenMod.recordDelivery("改完了", prodFile);
+  assert(okDel.delivery.autoCheck === "PRODUCT_OK", "product delivery with a fresh file passes auto-check");
+  const afterOk = await wardenMod.collectWarden(now);
+  assert(afterOk.view.assignment === null, "passing delivery clears the assignment");
+
+  // 交差：产物文件缺失 -> 不通过、派活保留
+  await wardenMod.setAssignment({ task: "改简历", deadlineMs: now - 40 * MIN, standard: { type: "product", detail: "", filePath: `${P}/drafts/missing.md` } });
+  const missDel = await wardenMod.recordDelivery("交了", `${P}/drafts/missing.md`);
+  assert(missDel.delivery.autoCheck === "PRODUCT_MISSING", "product delivery with a missing file does not pass");
+  const afterMiss = await wardenMod.collectWarden(now);
+  assert(afterMiss.view.assignment && afterMiss.view.stage === "GRACE", "unproven delivery keeps the assignment (grace, waiting on check)");
+
+  // 契约默认值来自 METADATA 第八节
+  const contract = afterMiss.contract;
+  assert(contract.judgeModel === "gpt-6-sol" && contract.limits.unlockPerDay === 2 && contract.confirmed.protectedApps === true && contract.confirmed.tier1 === false, "default contract carries confirmed + unconfirmed items from the METADATA");
+  assert(afterMiss.unconfirmed.includes("tier1") && afterMiss.unconfirmed.includes("dailyUnlockHour"), "unconfirmed contract items surfaced for the user to ratify");
+
+  // 督促页
+  clearWarden();
+  await wardenMod.setAssignment({ task: "改简历", deadlineMs: now - 40 * MIN, standard: { type: "product", detail: "", filePath: "" } });
+  const wctx = makeCtx();
+  let wt = Screen(wctx);
+  await wt.props.onLoad();
+  wt = Screen(wctx);
+  await clickable(wt, "督促").props.onClick();
+  wt = Screen(wctx);
+  assert(has(wt, "演练模式：只记录，不锁任何 App") && has(wt, "本来会锁") && has(wt, "抖音"), "warden page: dry-run banner shows what would lock");
+  assert(has(wt, "交差"), "active assignment shows the deliver form");
+  await clickable(wt, "看看").props.onClick();
+  wt = Screen(wctx);
+  assert(has(wt, "一级（先锁）") && has(wt, "待你拍板"), "contract expands with tiers and pending items");
+  // 交差（自述，无文件路径，写一句）
+  wctx.state.set("deliverQuote", "投了三家，截图在相册");
+  await clickable(Screen(wctx), "交差").props.onClick();
+  wt = Screen(wctx);
+  assert(has(wt, "已收下") || has(wt, "没找到产物"), "delivering records and reports a verdict");
+  // 撤下后回到派活
+  const wctx2 = makeCtx();
+  let wt2 = Screen(wctx2);
+  await wt2.props.onLoad();
+  await clickable(Screen(wctx2), "督促").props.onClick();
+  wt2 = Screen(wctx2);
+  if (clickable(wt2, "撤下")) { await clickable(wt2, "撤下").props.onClick(); wt2 = Screen(wctx2); }
+  assert(has(wt2, "给自己派个活") && has(wt2, "今晚 21 点"), "no assignment: shows the assign form with deadline buttons");
+  await clickable(wt2, "1 小时").props.onClick();
+  wt2 = Screen(wctx2);
+  assert(has(wt2, "进行中") && wctx2.state.get("warden").view.assignment, "creating an assignment moves to on-track");
 
   console.log(failures === 0 ? "\nALL PASSED" : `\n${failures} FAILED`);
   process.exitCode = failures === 0 ? 0 : 1;
