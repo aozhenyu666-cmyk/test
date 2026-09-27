@@ -1,0 +1,73 @@
+【任务书 T07：理顺两张"小满"卡的名字 + 让陪伴角色能记下用户亲口说的进展】
+
+用户批准执行本任务书的全部内容。用户已同意：给陪伴角色开放唯一一个工具包 focus_hub_progress（只能追加记录用户进展）。
+
+你（Operit AI）是执行者。本任务书给出目标、红线和验收标准；具体做法由你决定。改之前先备份（记下原值），改完回读。完成后按文末模板写报告文件。
+
+====================
+一、背景
+====================
+- 卡片 7dbdd1d0…（原名"小满"，persona.py 导入）是用户的【主对话卡】。T05 执行时被改名为"Xiaoman (Original)"，需要恢复原名。
+- 卡片 a2a22c7c-dc1f-40be-a00c-7c23ed618a18（现名"小满"）是外部 Agent 建的【陪伴角色】，受限卡，负责定时陪伴。改名为"小满·陪伴"，避免和主对话卡重名。
+- S3_Brief_Loop（8f675f75-0648-4924-9cbb-ebfeabbe46e8）的 e_sec 节点按名字 character_card_name 找卡，改名后必须同步。
+- 陪伴角色的固定会话：52a18815-2c07-4f6d-bbae-ae5d040daffb（标题"小满"，下文称 XM）。
+- 用户希望：用户在 XM 里跟陪伴角色说的真实进展，能被记进 /sdcard/Download/Operit/progress/，判断官就能看到。做法是给陪伴角色只开放 focus_hub_progress 包（report_progress / get_recent_progress）。
+
+====================
+二、目标与验收标准
+====================
+目标 0（先决，不满足就整份停止并提醒用户）：陪伴角色的工具白名单
+  用户需先在界面里设置好：卡片 a2a22c7c → 自定义允许使用的工具 → 启用角色卡级工具白名单 → "包"里只勾 focus_hub_progress；内建工具、Skill、MCP 都不勾。
+  验收：get_character_card 读 a2a22c7c，toolAccessConfig.enabled=true，allowedPackages 只有 focus_hub_progress（或其等价名称），allowedBuiltinTools / allowedSkills / allowedMcpServers 为空。报告完整的 toolAccessConfig。
+  顺带只读报告：判断官卡的 toolAccessConfig（用户也会把它设为空白名单）。
+
+目标 A：改名（顺序很重要，避免同名冲突）
+  1) 卡片 a2a22c7c-dc1f-40be-a00c-7c23ed618a18：name 改为 小满·陪伴
+  2) 卡片 7dbdd1d0…（现名 Xiaoman (Original)）：name 改回 小满
+  3) S3_Brief_Loop 的 e_sec 节点：actionConfig.character_card_name 改为 小满·陪伴（用 workflow:patch_workflow 只改这一个键；改前先备份 S3 完整 JSON 到 /sdcard/Download/Operit/00_AGENT_HANDOVER/t07_backup_20260927/）
+  只允许改 name 字段，两张卡的其他字段一律不动。
+  验收：list_character_cards 里"小满"只有一张且 ID 以 7dbdd1d0 开头；"小满·陪伴"的 ID 是 a2a22c7c；find_chat 查 XM，绑定角色卡名 = 小满·陪伴；S3 回读 e_sec.character_card_name = 小满·陪伴，其他键不变。
+
+目标 B：陪伴角色设定更新到 v4（加入"唯一工具 report_progress 的使用规则"）
+  地址：https://raw.githubusercontent.com/aozhenyu666-cmyk/test/b81bb1343ca35f473e711924135727298075b2f2/flow/cards/xiaoman/character_setting.txt
+  验收：下载 sha256 = b9545a81f7468268eead6a72bd340a2a531dd1f7d4238d7d36734aef96d72290；用 update_character_card 只更新 a2a22c7c 的 character_setting；回读含"你只有一个工具：report_progress"。
+
+目标 C：记录功能的反向测试（确认她不会乱记）
+  用 extended_chat:chat_with_agent，character_card_name=小满·陪伴，不传 chat_id，persist_turn=false，发下面这条（一字不改）：
+【可用事实】当前任务：求职投递。TA 最近报的进展：20 分钟前说"投了两家"。判断：最近一次看到 TA 在 Boss 直聘。下一步会触发的动作：无。
+  验收：她的回复原文；并用 super_admin:shell 执行 tail -n 3 /sdcard/Download/Operit/progress/$(ls /sdcard/Download/Operit/progress | tail -n 1) 确认 progress 里【没有】因为这条消息新增记录（报告执行前后的最后 3 行）。
+
+====================
+三、红线（碰到就停，报告后等用户）
+====================
+1. 角色卡只允许：a2a22c7c 改 name 和 character_setting；7dbdd1d0 改 name。不改任何卡的工具白名单（那是用户在界面里做的），不改其他卡。
+2. 工作流只允许改 S3 的 e_sec.character_card_name；不触发任何工作流。
+3. 不调用 app_suspender 的任何工具；不修改 /sdcard/Download/Operit/ 下任何已有文件（新建备份和报告可以）。
+4. 目标 C 如果她真的调用了 report_progress、往 progress 里写了记录：照实报告那一行原文，不要删除（由用户决定）。
+
+====================
+四、报告（写成文件，并同时贴在对话里）
+====================
+写入：/sdcard/Download/Operit/00_AGENT_HANDOVER/reports/T07_report.txt
+
+T07 报告
+完成时间：
+总体结论：全部达成 / 部分达成 / 停止（原因）
+
+目标0：陪伴角色 toolAccessConfig（完整）=
+       判断官 toolAccessConfig（完整）=
+目标A：a2a22c7c 现名=  7dbdd1d0 现名=  名为"小满"的卡数量=
+       XM 绑定角色卡名=  S3 e_sec.character_card_name=
+目标B：下载 sha256=  回读含"你只有一个工具"=
+目标C：她的回复（原文）=
+       progress 最后 3 行：执行前=  执行后=  是否新增=
+
+偏差与自行处理的问题（没有就写"无"）：
+需要用户决定的事（没有就写"无"）：
+
+=================================
+【第二段：用户在 XM 里说完一句真实进展之后，再单独发送以下内容】
+T07 验证：用户刚在"小满·陪伴"的会话（XM，52a18815-2c07-4f6d-bbae-ae5d040daffb）里亲口说了一句真实进展。请只读检查并报告：
+1. tail -n 3 最新的 /sdcard/Download/Operit/progress/*.jsonl，是否新增了一条 via=chat_ai、user_quote 是用户原话的记录（贴原文）。
+2. sh /sdcard/Download/Operit/judge/gen_pack.sh 2>&1 | sed -n '/用户本人说的进展/,/进展判读准则/p' 的输出（贴原文），看这条进展有没有进入证据包。
+不修改任何东西，不触发任何工作流。
