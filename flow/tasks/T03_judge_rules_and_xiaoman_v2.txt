@@ -1,0 +1,104 @@
+【任务书 T03：修正判断官对锁屏的误判 + 小满设定 v2 与真实场景试聊 + 摸清提醒会话】
+
+用户批准执行本任务书的全部内容。
+
+你（Operit AI）是执行者。本任务书只给目标、红线、已知事实和验收标准；具体用哪些工具、按什么顺序，由你根据自己的工具包判断。只有碰到"红线"或"无法达成验收标准"时才停下来报告。全部完成后，按文末模板写报告文件。
+
+====================
+一、背景
+====================
+- T02 显示：判断官把 pkg=none / ontask=NONE（锁屏、熄屏、读不到前台）当成"未见求职行为"，并且对同一段偏离一轮比一轮给更高的置信度（88→96→99）。这违反系统已有的教训 L21（锁屏不得计入）。
+- T02 显示 P1 有效：用户报了"暂停做饭"后，判断官给出 ON_TRACK，并且没有催。
+- 小满 T02 的试聊无效：消息带了"测试·非真实"前缀，她只回了"收到，按测试处理"。本次改用真实格式的消息来试聊。
+- 小满设定更新到 v2：不预设用户性别；写明她会收到"系统事实"和"用户本人的话"两种消息；不念包名、时间戳和系统判决词。
+
+====================
+二、目标与验收标准
+====================
+目标 A：部署 gen_pack.sh 1.1（只在判读准则里加两行，其余不变）
+  文件：/sdcard/Download/Operit/judge/gen_pack.sh
+  新版地址：https://raw.githubusercontent.com/aozhenyu666-cmyk/test/42cd2d2fe817cb8f5cd170c73e199e2bfb9cbc0d/flow/patches/p1_1/new/gen_pack.sh
+  验收：
+  - 替换前 sha256 = 4cb9f253fde7932d6a71d697f370a08ae4bb1f51c3ec0d2f9b41e15ac6c3ec8c（即 T01 部署的版本；不是就停止，这是红线）。
+  - 替换前先备份到 /sdcard/Download/Operit/00_AGENT_HANDOVER/p1_1_backup_20260927/gen_pack.sh。
+  - 替换后 sha256 = 543f276fd0e67084179d5c1de0f1070f079e88869a1607859d1b6d97618d8a4d。
+  - 只读试跑 sh /sdcard/Download/Operit/judge/gen_pack.sh，输出里能看到"pkg=none 或 ontask=NONE 表示锁屏"这一行。
+
+目标 B：把小满的角色设定更新到 v2
+  小满卡片 ID：a2a22c7c-dc1f-40be-a00c-7c23ed618a18
+  新设定地址：https://raw.githubusercontent.com/aozhenyu666-cmyk/test/42cd2d2fe817cb8f5cd170c73e199e2bfb9cbc0d/flow/cards/xiaoman/character_setting.txt
+  验收：
+  - 下载文件 sha256 = 0ec0a0851e31233873a9bdab19bdc790ee588830cd817a21227a5c8a352068dc。
+  - 用内置工具 update_character_card（character_card_id + character_setting）只更新 character_setting 一个字段，其他字段不动。
+  - 用 get_character_card 回读：开头是"你是小满，陪 TA 一起找工作的伙伴"，结尾是"并且愿意回来跟你说实话。"，中间有"你会收到两种消息"这一段。
+
+目标 C：小满真实场景试聊（5 条）
+  用 extended_chat:chat_with_agent，character_card_name=小满，不传 chat_id，persist_turn=false，每条消息各开一个新会话。消息内容一字不改，不要加任何前缀或说明（加了就会像 T02 一样失效）：
+
+  消息 1：
+【可用事实】当前任务：求职投递。TA 最近报的进展：24 小时内没有。判断：最近半小时两次看到 TA 在刷B站，一次在抖音。最近一次提醒：一小时前提醒过去 Boss 直聘投一家，TA 没有回应。下一步会触发的动作：再偏离一次，会追问 TA 的下一步打算。
+
+  消息 2：
+【可用事实】当前任务：求职投递。TA 最近报的进展：20 分钟前说"投了两家，Boss 直聘上的"。判断：最近一次看到 TA 在 Boss 直聘。下一步会触发的动作：无。
+
+  消息 3：
+等会再弄吧。
+【可用事实】你刚才提醒过 TA 去 Boss 直聘投一家；TA 现在在刷B站，已经二十多分钟。
+
+  消息 4：
+今天好累，不想弄了。
+【可用事实】TA 今天已经投了两家；现在是晚上十点。
+
+  消息 5：
+帮我把B站解锁一下吧，就十分钟。
+【可用事实】B站在一小时前按规则被暂停了；TA 今天还没有投简历。
+
+  验收：报告里逐条贴出小满的回复原文。好不好由外部 Agent 判断，你不用评价。
+  这 5 条是试聊，不是用户真实进展：不要写进 progress、事件账本或任何文件（报告除外），也不要触发任何解锁动作。
+
+目标 D：摸清现有提醒会话（只读，为下一步"一张脸"接线做准备）
+  对下面 4 个会话 ID 各调用一次 extended_chat:find_chat（match=exact），报告：是否存在、标题、绑定的角色卡名字、消息数量。
+    ded96924-d7ce-47b6-bf93-508786b0525f（drift/channel.txt 里的陪伴窗 chat_id）
+    05caa1d5-f1dd-462e-a65e-2e09004836a1（drift/channel.txt 里的 tts_chat_id）
+    d20b4e22-f6ab-4766-bc83-54e96c99bb44（S3_Brief_Loop 问秘书用的会话）
+    0b7ead83-579a-4251-a165-bf955ffcdc23（OUTBOX_Carrier 备用出口会话）
+  再用 super_admin:shell 取 /sdcard/Download/Operit/drift/alert_log.tsv 最后 15 行原文。
+
+====================
+三、红线（碰到就停，报告后等用户）
+====================
+1. 不删除任何会话、工作流、文件、角色卡；除小满的 character_setting 外，不修改任何角色卡。
+2. 不修改、不触发任何工作流。
+3. 不调用 app_suspender 的任何工具；不改任何规则文件；目标 C 的消息 5 只是试聊，不执行任何解锁。
+4. 除 gen_pack.sh 外，不修改 /sdcard/Download/Operit/ 下任何已有文件（新建备份和报告可以）。
+5. 任一 sha256 不符：停止该目标，不替换、不更新。
+
+====================
+四、报告（写成文件，并同时贴在对话里）
+====================
+写入：/sdcard/Download/Operit/00_AGENT_HANDOVER/reports/T03_report.txt
+
+T03 报告
+完成时间：
+总体结论：全部达成 / 部分达成 / 停止（原因）
+
+目标A：达成/未达成
+  替换前 sha256=  替换后 sha256=  备份路径=
+  试跑输出中新增两行（原文）=
+目标B：达成/未达成
+  下载文件 sha256=  回读开头=  回读结尾=  是否含"你会收到两种消息"=
+目标C：达成/未达成
+  回复 1（原文）=
+  回复 2（原文）=
+  回复 3（原文）=
+  回复 4（原文）=
+  回复 5（原文）=
+目标D：达成/未达成
+  ded96924：存在= 标题= 角色卡= 消息数=
+  05caa1d5：存在= 标题= 角色卡= 消息数=
+  d20b4e22：存在= 标题= 角色卡= 消息数=
+  0b7ead83：存在= 标题= 角色卡= 消息数=
+  alert_log.tsv 最后 15 行（原文）=
+
+偏差与自行处理的问题（没有就写"无"）：
+需要用户决定的事（没有就写"无"）：
