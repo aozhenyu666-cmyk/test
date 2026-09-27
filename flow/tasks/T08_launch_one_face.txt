@@ -1,0 +1,54 @@
+【任务书 T08：上线 · 规则提醒也交给"小满·陪伴"，语音提速】
+
+用户批准执行本任务书的全部内容。用户要求尽快上线：按下面的目标一次做完，能并行的并行；只在碰到红线时停。每改一个文件先备份，改完做一次回读即可。
+
+====================
+一、背景（一句话）
+====================
+定时陪伴（S3）已由"小满·陪伴"（卡 a2a22c7c，会话 52a18815-2c07-4f6d-bbae-ae5d040daffb，下文 XM）接管。规则阶梯的提醒（A1 等，经 /sdcard/Download/Operit/drift/drift_alert.sh）还发往旧陪伴窗（秘书）。本次把它也切到 XM，实现"一张脸"。
+
+====================
+二、目标
+====================
+目标 A：替换 drift_alert.sh
+  文件：/sdcard/Download/Operit/drift/drift_alert.sh
+  新版：https://raw.githubusercontent.com/aozhenyu666-cmyk/test/c30a34d5e100b5eaef28c37534696de2f60f40bf/flow/patches/t08/new/drift_alert.sh
+  - 替换前 sha256 应为 df8804775d435b10a4d9ed448c6f20dd2364cf1e4b02dbc5e10fb2625fc444aa；不是就停止本目标（说明文件在导出后被改过），报告实际值。
+  - 备份到 /sdcard/Download/Operit/00_AGENT_HANDOVER/t08_backup_20260927/drift_alert.sh。
+  - 替换后 sha256 应为 014eb7f74fe9fd1d785874b581f48209feffbaeb7bc791e9b4251487ba697e7e。
+  改动说明：给每条提醒加【可用事实】前缀，让小满·陪伴用自己的话转告；出声改为念她的回复，不再念系统原文。
+
+目标 B：把提醒通道切到 XM
+  备份 /sdcard/Download/Operit/drift/channel.txt 到同一备份目录，然后执行系统自带的改轨工具：
+  sh /sdcard/Download/Operit/drift/rotate_channel.sh 52a18815-2c07-4f6d-bbae-ae5d040daffb
+  验收：channel.txt 里 chat_id=52a18815-2c07-4f6d-bbae-ae5d040daffb。
+
+目标 C：换一个干净的出声会话（解决 SPEAK_FAIL 超时）
+  旧出声会话 05caa1d5-f1dd-462e-a65e-2e09004836a1 已有 300 多条历史，每次念一句都很慢。
+  - 用 extended_chat:chat_with_agent（character_card_name=Operit，不传 chat_id，persist_turn=false，message=只回复 OK）新建一个会话，记下 chat_id（下文 TTS2），用 extended_chat:rename_chat 改标题为：【内部】出声信道2
+  - 把 channel.txt 里 tts_chat_id= 这一行的值改成 TTS2，其他行不动。
+  旧会话保留不删。
+
+目标 D：上线验收（一次）
+  执行：sh /sdcard/Download/Operit/drift/drift_alert.sh T08-LAUNCH 上线：从现在起跑偏提醒也由你来说。请用一句话告诉 TA，以后跑偏时是你来提醒、TA 可以直接回你。
+  报告：脚本最后几行输出；XM 最新一条回复原文（extended_chat:read_messages 或 find_chat 看最后一条）；alert_log.tsv 最后 3 行（看 SPEAK_OK / SPEAK_FAIL）。请用户确认：是否在"小满"会话里看到她的话、是否听到声音。
+
+====================
+三、红线
+====================
+1. 不删除任何文件、会话、工作流、角色卡。
+2. 文件只允许改 drift_alert.sh（整体替换）和 channel.txt 的 chat_id=、tts_chat_id= 两行。
+3. 不调用 app_suspender；不改 EXEC_RULES.tsv、UNLOCK_POLICY.tsv、ent.list；不改任何工作流。
+4. 目标 D 失败（HTTP 不是 200/202，或 XM 没有新回复）：用备份恢复 drift_alert.sh 和 channel.txt，报告错误原文。
+
+====================
+四、报告（写成文件并贴在对话里）
+====================
+写入：/sdcard/Download/Operit/00_AGENT_HANDOVER/reports/T08_report.txt
+T08 报告
+总体结论：
+A：替换前 sha256=  替换后 sha256=
+B：channel.txt 全文（回读）=
+C：TTS2=
+D：脚本输出=  XM 最新回复=  alert_log 最后 3 行=  用户确认：看到/听到=
+偏差：
