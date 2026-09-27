@@ -1,0 +1,81 @@
+【任务书 T06：小满的安全关 + 语音直连（补 T05 旧版的尾巴）】
+
+用户批准执行本任务书的全部内容。
+
+你（Operit AI）是执行者。本任务书给出设计、红线和验收标准；具体用哪些工具、按什么顺序，由你决定。改任何东西之前先备份，改完回读。只有碰到"红线"或"无法达成验收标准"时才停下来报告。完成后按文末模板写报告文件。
+
+====================
+一、背景
+====================
+- T05（旧版）已完成：S3_Brief_Loop（8f675f75-0648-4924-9cbb-ebfeabbe46e8）现在由小满（卡片 a2a22c7c-dc1f-40be-a00c-7c23ed618a18）在她的会话 52a18815-2c07-4f6d-bbae-ae5d040daffb 里开口。
+- 风险：T03 试聊时，小满面对"帮我解锁B站"加载了 app_suspender 包（use_package 返回 success）。原因是她的卡片"自定义允许使用的工具"没开启，此时跟随全局，能用所有工具。现在她每 30 分钟收一次事实，这个口子必须先堵上。
+- 语音失败：她那句话 SPEAK_FAIL tts_http_000。speak.sh 为了念一句话，要让"【内部】出声信道"会话（已有 300 多条历史）里的模型去调用 TTS，太慢，超时。改为在工作流里直接调用 operit_editor:test_tts_playback，不经过模型。
+- T05 执行时，你把设备上原有的另一张"小满"卡（7dbdd1d0…，persona.py 导入）改名成了"Xiaoman (Original)"。这张卡本轮不要再动，等用户决定。
+
+====================
+二、目标与验收标准
+====================
+目标 0-1（先决，不达成就整份停止）：小满不能使用任何工具
+  这个开关只能由用户在界面里手动打开：角色卡 → 小满 → 自定义允许使用的工具 → 打开"启用角色卡级工具白名单"，什么都不勾选（显示"当前未允许任何内建工具或外部来源"）。
+  验收：get_character_card 读小满（a2a22c7c-dc1f-40be-a00c-7c23ed618a18），toolAccessConfig.enabled = true，允许列表全部为空。
+  不满足（或读不到这个字段）：立即停止整份任务书，提醒用户先在界面完成设置，再重新发送本任务书。
+  顺带只读报告：判断官、秘书两张卡的 toolAccessConfig.enabled 当前值（只报告，不修改）。
+
+目标 0-2：确认B站冻结状态没有被试聊改动（只读）
+  只允许调用一次 app_suspender:get_app_suspend_status（package_name = tv.danmaku.bili）。报告返回原文。
+
+目标 A：小满设定更新到 v3
+  地址：https://raw.githubusercontent.com/aozhenyu666-cmyk/test/6ade4e49199948343f5ec4265d896ff2d1244968/flow/cards/xiaoman/character_setting.txt
+  验收：下载文件 sha256 = 1556484d480556dcaa9820773d449267b68600b8efc21994d5403e4a277aba4f；用 update_character_card 只更新小满的 character_setting；回读含"不用颜文字和表情符号"和"跟 TA 说好明天第一件事做什么"。
+
+目标 B：语音直连
+  先确认工具可用：直接调用一次 operit_editor:test_tts_playback，text = 小满语音测试，interrupt = true。报告返回原文（用户会告诉外部 Agent 有没有听到）。如果这个工具不可用或报错：停止目标 B，报告错误原文，不改工作流。
+  然后先把 S3 的完整 JSON 备份到 /sdcard/Download/Operit/00_AGENT_HANDOVER/t06_backup_20260927/8f675f75-0648-4924-9cbb-ebfeabbe46e8.json，再用 workflow:patch_workflow 做 3 处修改：
+  (1) node_patches 更新节点 e_send 的 actionConfig.command 为下面这一行（一字不改；它只取出小满那句话、记一条 ALERT、并把这句话原样输出给下一个节点，不再调用 speak.sh）：
+L=$(head -n 1 /sdcard/Download/Operit/drift/brief_last.txt 2>/dev/null); [ -n "$L" ] || { echo NO_LINE; exit 1; }; sh /sdcard/Download/Operit/events/eventd.sh add ALERT src=xiaoman_brief via=notify+tts --dedup "xmb-$(date +%s)" >/dev/null 2>&1; printf '%s' "$L"
+  (2) node_patches 新增节点：
+[{"op":"add","node":{"id":"e_tts","type":"execute","name":"小满出声(直连TTS)","actionType":"operit_editor:test_tts_playback","actionConfig":{"text":{"nodeId":"e_send"},"interrupt":"true"}}}]
+  (3) connection_patches 新增连线（保留原来 e_send → e_commit 那条不动）：
+[{"op":"add","connection":{"id":"k_tts","sourceNodeId":"e_send","targetNodeId":"e_tts","condition":"on_success"}}]
+  （(1) 和 (2) 可以放在同一个 node_patches 数组里一起提交。）
+  验收：get_workflow 回读，e_send.command 与上面一致；存在 e_tts 节点，actionType=operit_editor:test_tts_playback，text 引用 e_send；存在 e_send→e_tts（on_success）和原有的 e_send→e_commit；节点数 = 备份 + 1，连线数 = 备份 + 1，enabled 不变。
+
+目标 C：验收运行
+  手动触发 S3_Brief_Loop 一次。
+  - 走到 e_sec 的话：报告小满这次说的话（brief_last.txt）、e_send 与 e_tts 的结果、XM 会话消息数变化；请用户确认是否收到通知、是否听到声音。
+  - 如果 e_gate 显示事实未变化而跳过：写"待下次事实变化"，不要为验收去改文件。
+
+====================
+三、红线（碰到就停，报告后等用户）
+====================
+1. 不删除任何会话、工作流、文件、角色卡。角色卡只允许更新小满（a2a22c7c）的 character_setting；"Xiaoman (Original)"、判断官、秘书等其他卡一律不动。
+2. 工作流只允许按目标 B 修改 S3_Brief_Loop；除目标 C 的一次 S3 手动触发外，不触发任何工作流。
+3. 不修改 /sdcard/Download/Operit/ 下任何已有文件（新建备份和报告可以）。
+4. 除目标 0-2 的一次只读查询外，不调用 app_suspender 的任何工具。
+5. 目标 B 回读不一致，或目标 C 中 e_sec / e_send / e_tts 报错：用备份把 S3 恢复（删掉新增的 e_tts 节点和 k_tts 连线，e_send 恢复原命令），然后停止并报告错误原文。
+
+====================
+四、报告（写成文件，并同时贴在对话里）
+====================
+写入：/sdcard/Download/Operit/00_AGENT_HANDOVER/reports/T06_report.txt
+
+T06 报告
+完成时间：
+总体结论：全部达成 / 部分达成 / 停止（原因）
+
+目标0-1：小满 toolAccessConfig.enabled=  允许列表是否全空=
+         判断官 enabled=  秘书 enabled=
+目标0-2：B站状态查询返回（原文）=
+目标A：下载 sha256=  回读含"不用颜文字"=  含"明天第一件事"=
+目标B：test_tts_playback 直接调用返回（原文）=
+       e_send.command（回读原文）=
+       e_tts 节点（回读）=
+       节点数/连线数（改前 → 改后）=
+目标C：达成/待下次事实变化
+       各节点结果=
+       小满这次说的话=
+       XM 消息数：触发前=  触发后=
+       通知与声音：待用户确认
+
+偏差与自行处理的问题（没有就写"无"）：
+需要用户决定的事（没有就写"无"）：
