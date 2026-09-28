@@ -1,0 +1,76 @@
+{
+  "id": "companion-brain-tick-seed",
+  "name": "BRAIN_Tick",
+  "description": "小满的大脑：每15分钟调用 companion_brain:tick（看事实与记忆 → 规则层定上限 → 思考 → 开口/打开App/派活/记承诺/入锁队列）。",
+  "nodes": [
+    {
+      "__type": "com.ai.assistance.operit.data.model.TriggerNode",
+      "id": "t_sched",
+      "type": "trigger",
+      "name": "每15分钟",
+      "description": "",
+      "position": {
+        "x": 120.0,
+        "y": 80.0
+      },
+      "triggerType": "schedule",
+      "triggerConfig": {
+        "enabled": "true",
+        "repeat": "true",
+        "schedule_type": "interval",
+        "interval_ms": "900000"
+      }
+    },
+    {
+      "__type": "com.ai.assistance.operit.data.model.TriggerNode",
+      "id": "t_manual",
+      "type": "trigger",
+      "name": "手动",
+      "description": "",
+      "position": {
+        "x": 120.0,
+        "y": 260.0
+      },
+      "triggerType": "manual",
+      "triggerConfig": {
+        "enabled": "true"
+      }
+    },
+    {
+      "__type": "com.ai.assistance.operit.data.model.ExecuteNode",
+      "id": "e_tick",
+      "type": "execute",
+      "name": "小满想一想",
+      "description": "companion_brain:tick",
+      "position": {
+        "x": 480.0,
+        "y": 170.0
+      },
+      "actionType": "companion_brain:tick",
+      "actionConfig": {},
+      "jsCode": null
+    }
+  ],
+  "connections": [
+    {
+      "id": "k1",
+      "sourceNodeId": "t_sched",
+      "targetNodeId": "e_tick",
+      "condition": null
+    },
+    {
+      "id": "k2",
+      "sourceNodeId": "t_manual",
+      "targetNodeId": "e_tick",
+      "condition": null
+    }
+  ],
+  "createdAt": 0,
+  "updatedAt": 0,
+  "enabled": true,
+  "lastExecutionTime": null,
+  "lastExecutionStatus": null,
+  "totalExecutions": 0,
+  "successfulExecutions": 0,
+  "failedExecutions": 0
+}

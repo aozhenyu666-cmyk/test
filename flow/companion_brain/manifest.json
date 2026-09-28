@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "toolpkg_id": "local.companion_brain",
+  "version": "0.1.0",
+  "api_version": "1.0.1",
+  "main": "dist/main.js",
+  "display_name": {
+    "zh": "小满的大脑",
+    "en": "Companion Brain",
+    "default": "Companion Brain"
+  },
+  "description": {
+    "zh": "陪伴角色的思考、记忆和行动。每 15 分钟看一次事实与记忆，按用户批准的契约决定开口、打开招聘 App、派活、记承诺或把分心 App 放进现有锁队列；给小满·陪伴的会话自动注入记忆；每晚复盘。锁只走现有锁队列（S4 + app_suspender）。",
+    "en": "Thinking, memory and actions for the companion. Locks only go through the existing lock queue.",
+    "default": "Thinking, memory and actions for the companion."
+  },
+  "enabled_by_default": false,
+  "subpackages": [
+    {
+      "id": "companion_brain",
+      "entry": "dist/packages/companion_brain.js",
+      "enabled_by_default": true,
+      "display_name": { "zh": "小满的大脑", "en": "Companion Brain" },
+      "description": { "zh": "tick / record_commitment / get_status / reflect", "en": "tick / record_commitment / get_status / reflect" }
+    }
+  ],
+  "resources": [
+    { "key": "workflow_brain_tick", "path": "resources/workflow_brain_tick.json", "mime": "application/json" }
+  ],
+  "workflow_templates": [
+    {
+      "id": "brain_tick",
+      "display_name": { "zh": "小满的大脑（每15分钟）", "en": "Companion Brain tick (15 min)" },
+      "description": { "zh": "每 15 分钟思考一次；安静时段、冷却、情况没变时自动跳过。", "en": "Think every 15 minutes." },
+      "resource_key": "workflow_brain_tick"
+    }
+  ]
+}
