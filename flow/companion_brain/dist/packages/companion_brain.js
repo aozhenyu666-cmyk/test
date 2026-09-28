@@ -45,6 +45,18 @@
       "parameters": []
     },
     {
+      "name": "drill",
+      "description": {
+        "zh": "演练：用模拟场景跑一遍读取→规则→思考→行动，看小满会怎么判断、怎么说。不写记忆、不改大脑状态。execute=true 时真的开口/打开App/把App放进锁队列。",
+        "en": "Drill a simulated scenario through rules, thinking and (optionally) actions."
+      },
+      "parameters": [
+        { "name": "scenario", "description": { "zh": "nudge 刚跑偏 / ask 提醒后没回来 / lock 提醒30分钟没回应 / pause 用户说了暂停 / commitment 承诺到点 / quiet 深夜 / working 正在招聘App里", "en": "scenario" }, "type": "string", "required": true },
+        { "name": "execute", "description": { "zh": "可选：true 时真的执行动作（开口、打开App、入锁队列）", "en": "Optional: really act" }, "type": "boolean", "required": false },
+        { "name": "app", "description": { "zh": "可选：模拟正在刷的 App 包名，默认 com.baidu.tieba（贴吧）", "en": "Optional package" }, "type": "string", "required": false }
+      ]
+    },
+    {
       "name": "reflect",
       "description": {
         "zh": "立即做一次今日复盘，把观察写进 profile.md（平时每晚 23 点后自动做）。",
@@ -60,6 +72,7 @@ exports.tick = tick;
 exports.record_commitment = record_commitment;
 exports.get_status = get_status;
 exports.reflect = reflect;
+exports.drill = drill;
 const brain_js_1 = require("../shared/brain.js");
 const fsx_js_1 = require("../shared/fsx.js");
 function flag(value) {
@@ -93,6 +106,18 @@ async function get_status() {
 async function reflect() {
     try {
         return { success: true, notes: await (0, brain_js_1.reflect)(Date.now()) };
+    }
+    catch (error) {
+        return { success: false, message: (0, fsx_js_1.errorText)(error) };
+    }
+}
+const SCENARIOS = ["nudge", "ask", "lock", "pause", "commitment", "quiet", "working"];
+async function drill(params) {
+    try {
+        const scenario = String(params?.scenario ?? "").trim();
+        if (!SCENARIOS.includes(scenario))
+            return { success: false, message: `scenario 只能是 ${SCENARIOS.join(" / ")}` };
+        return { success: true, result: await (0, brain_js_1.drill)(scenario, { execute: flag(params?.execute), app: params?.app ? String(params.app) : undefined }) };
     }
     catch (error) {
         return { success: false, message: (0, fsx_js_1.errorText)(error) };

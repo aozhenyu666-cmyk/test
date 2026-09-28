@@ -365,6 +365,42 @@ async function check(name, fn) {
     assert.strictEqual(JSON.stringify(Object.keys(FILES).filter((f) => !f.endsWith("profile.md")).sort()), JSON.stringify(JSON.parse(before).sort()));
   });
 
+
+  await check("drill: every scenario reaches the expected stage without touching state or memory", async () => {
+    reset();
+    NOW = Date.UTC(2026, 8, 28, 6, 0, 0);
+    FILES[`${R}/companion/brain/state.json`] = JSON.stringify({ speaks: [NOW - 5 * MIN] });
+    const stateBefore = FILES[`${R}/companion/brain/state.json`];
+    state.modelReply = reply({ speak: true, line: "演练里的一句话", action: "none" });
+    const want = { nudge: "nudge", ask: "ask", lock: "lock", pause: "none", commitment: "commitment_due", quiet: "lock", working: "none" };
+    for (const [sc, stage] of Object.entries(want)) {
+      const r = await brain.drill({ scenario: sc });
+      assert(r.success, JSON.stringify(r));
+      assert.strictEqual(r.result.plan.stage, stage, `${sc}: ${JSON.stringify(r.result.plan)}`);
+    }
+    const q = await brain.drill({ scenario: "quiet" });
+    assert.strictEqual(q.result.plan.canSpeak, false);
+    assert.strictEqual(FILES[`${R}/companion/brain/state.json`], stateBefore, "state untouched");
+    assert(!FILES[`${R}/companion/brain/said.jsonl`], "said untouched");
+    assert(!(FILES[`${R}/events/lock_queue.txt`] ?? "").length, "no lock without execute");
+    assert.strictEqual(tools("focus_hub_nav:check_in").length, 0, "no speaking without execute");
+  });
+
+  await check("drill lock with execute=true queues the lock and speaks", async () => {
+    reset();
+    state.modelReply = reply({ speak: true, line: "说好的，贴吧先暂停了。", action: "none" });
+    const r = await brain.drill({ scenario: "lock", execute: true });
+    assert.strictEqual(r.result.decision.action, "lock");
+    assert.strictEqual(FILES[`${R}/events/lock_queue.txt`], "lock com.baidu.tieba\n");
+    assert.strictEqual(tools("focus_hub_nav:check_in").length, 1);
+    assert(!FILES[`${R}/companion/brain/said.jsonl`], "drill not written to said");
+  });
+
+  await check("drill rejects unknown scenario", async () => {
+    const r = await brain.drill({ scenario: "whatever" });
+    assert.strictEqual(r.success, false);
+  });
+
   console.log(failed ? `\n${failed} FAILED` : "\nall passed");
   process.exit(failed ? 1 : 0);
 })();

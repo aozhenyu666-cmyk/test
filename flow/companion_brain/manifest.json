@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "toolpkg_id": "local.companion_brain",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "api_version": "1.0.1",
   "main": "dist/main.js",
   "display_name": {
@@ -21,7 +21,7 @@
       "entry": "dist/packages/companion_brain.js",
       "enabled_by_default": true,
       "display_name": { "zh": "小满的大脑", "en": "Companion Brain" },
-      "description": { "zh": "tick / record_commitment / get_status / reflect", "en": "tick / record_commitment / get_status / reflect" }
+      "description": { "zh": "tick / record_commitment / get_status / drill / reflect", "en": "tick / record_commitment / get_status / drill / reflect" }
     }
   ],
   "resources": [

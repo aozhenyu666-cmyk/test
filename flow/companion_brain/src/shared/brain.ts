@@ -237,3 +237,65 @@ export async function status(): Promise<Record<string, unknown>> {
     verdict: facts.verdict,
   };
 }
+
+// ---------- 演练：用模拟场景跑一遍"读取 → 规则 → 思考 → 行动"，不写记忆、不改状态 ----------
+
+export type DrillScenario = "nudge" | "ask" | "lock" | "pause" | "commitment" | "quiet" | "working";
+
+export async function drill(scenario: DrillScenario, options: { execute?: boolean; app?: string } = {}): Promise<Record<string, unknown>> {
+  const MIN = 60000;
+  const cfg = await loadConfig();
+  const real = await loadState();
+  let now = Date.now();
+  if (scenario === "quiet") {
+    // 挪到北京时间当天 00:30（安静时段）
+    const p = bjParts(now);
+    now = Date.UTC(p.y, p.mo - 1, p.d, 0, 30) - 8 * 3600 * 1000 + 24 * 3600 * 1000;
+  }
+  const facts = await gatherFacts(now);
+  facts.now = now;
+  const app = options.app || "com.baidu.tieba";
+  const off = (m: number) => ({ ts: now - m * MIN, pkg: app, ontask: "0", screen: "ON" });
+  facts.samples = scenario === "working" ? [{ ts: now - 5 * MIN, pkg: facts.jobApps[0] ?? "com.hpbr.bosszhipin", ontask: "1", screen: "ON" }] : [off(3), off(18), off(33)];
+  facts.otherAlerts = [];
+  facts.progress = scenario === "pause" ? [{ ts: now - 5 * MIN, kind: "pause", quote: "我去吃个饭，一小时后开始", note: "", via: "drill" }] : [];
+
+  const state = { ...real, speaks: [] as number[], last_sig: "", locks: {} as Record<string, number>, asked_commitments: {} as Record<string, number> };
+  state.episode =
+    scenario === "ask"
+      ? { start_ts: now - 33 * MIN, pkg: app, nudges: 1, first_nudge_ts: now - 12 * MIN, last_nudge_ts: now - 12 * MIN, locked: false }
+      : scenario === "lock" || scenario === "quiet"
+        ? { start_ts: now - 50 * MIN, pkg: app, nudges: 2, first_nudge_ts: now - 35 * MIN, last_nudge_ts: now - 12 * MIN, locked: false }
+        : null;
+
+  const commitments =
+    scenario === "commitment"
+      ? [{ id: "C-drill", ts: now - 60 * MIN, text: "投一家", due_ts: now - 2 * MIN, quote: "三点前我投一家", source: "user" as const, status: "open" as const }]
+      : [];
+  if (scenario === "commitment") facts.samples = [{ ts: now - 5 * MIN, pkg: "none", ontask: "NONE", screen: "OFF" }];
+
+  const { plan } = makePlan(facts, state, cfg, commitments, {});
+  const out: Record<string, unknown> = {
+    scenario,
+    note: "演练：事实是模拟的，规则层和模型是真的；不写记忆、不改大脑状态",
+    plan: { stage: plan.stage, reason: plan.reason, allowed: plan.allowed, canSpeak: plan.canSpeak, lockPkg: plan.lockPkg },
+  };
+  if (plan.stage === "none" || !plan.canSpeak) return { ...out, decision: "不开口" };
+
+  const d = await think(facts, plan, await loadProfile(), commitments, await recentSaid(5));
+  out.decision = { speak: d.speak, line: d.line, action: d.action, openApp: d.openApp, assign: d.assign, commitment: d.commitment, why: d.why, source: d.source, error: d.error ?? "" };
+
+  const done: string[] = [];
+  if (options.execute) {
+    if (d.action === "lock" && plan.lockPkg) done.push(`lock ${plan.lockPkg}: ${await enqueueLock(plan.lockPkg, facts.protectedPkgs, facts.lockable)}`);
+    if (d.speak && d.line) {
+      const del = await speak(d.line, "小满", ["ask", "lock", "commitment_due"].includes(plan.stage));
+      done.push(`speak: ${del.via.join("+")}${del.errors.length ? ` | ${del.errors.join("; ")}` : ""}`);
+    }
+    if (d.action === "open_app" && d.openApp) done.push(`open ${d.openApp}: ${await openApp(d.openApp)}`);
+    if (d.action === "assign" && d.assign) done.push(`assign（演练不写派活文件）：${d.assign.task} ${d.assign.minutes} 分钟`);
+  }
+  out.executed = options.execute ? done : "没有执行（execute=false）";
+  await logAction({ ts: Date.now(), type: "DRILL", scenario, stage: plan.stage, line: d.line, action: d.action, executed: done });
+  return out;
+}
