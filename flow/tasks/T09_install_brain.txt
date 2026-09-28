@@ -18,9 +18,9 @@
 二、先由用户在界面完成（你先检查，没完成就提醒用户，等用户做完再继续）
 ====================
 U1. 下载安装包（这一步你来做）：download_file
-    url：https://raw.githubusercontent.com/aozhenyu666-cmyk/test/8484eb679599de21465b5d197972ba73dc4686c1/flow/companion_brain/build/companion_brain.toolpkg
+    url：https://raw.githubusercontent.com/aozhenyu666-cmyk/test/efba02c99cbfc7b560a30db552ea853a891f0f7c/flow/companion_brain/build/companion_brain.toolpkg
     destination：/sdcard/Download/Operit/00_AGENT_HANDOVER/brain/companion_brain.toolpkg
-    校验 sha256 = 55c39badc2134ec3e8b8e8349ba4806529f37213a7efc40911e123849cfd2212，不符就停止。
+    校验 sha256 = 80e892a27fa90c014867397213878f34e050747558b09d3b134b9f681ae0642a，不符就停止。
 U2. 用户在 Operit 的包管理里导入这个 .toolpkg，并启用"小满的大脑"（主包和子包都启用）。
 U3. 用户在 角色卡 → 小满·陪伴 → 自定义允许使用的工具 → 包，再勾上 companion_brain（保留原有的 focus_hub_progress 和内建 use_package，其它不动）。
 
@@ -29,7 +29,7 @@ U3. 用户在 角色卡 → 小满·陪伴 → 自定义允许使用的工具 �
 ====================
 A. 确认可用：调用 companion_brain:get_status，返回 success=true。报告其中的 plan 和 config。
 B. 建工作流：优先用"工作流 → 从模板新建 → 小满的大脑（每15分钟）"；模板不可用时，用 workflow:create_workflow 按这个文件的 nodes/connections 创建（名称 BRAIN_Tick，enabled=true）：
-   https://raw.githubusercontent.com/aozhenyu666-cmyk/test/8484eb679599de21465b5d197972ba73dc4686c1/flow/companion_brain/resources/workflow_brain_tick.json
+   https://raw.githubusercontent.com/aozhenyu666-cmyk/test/efba02c99cbfc7b560a30db552ea853a891f0f7c/flow/companion_brain/resources/workflow_brain_tick.json
    建好后 get_workflow 回读，报告 ID。
 C. 停用 S3_Brief_Loop（8f675f75-0648-4924-9cbb-ebfeabbe46e8）：先 get_workflow 备份到 /sdcard/Download/Operit/00_AGENT_HANDOVER/t09_backup/，再 workflow:disable_workflow，回读 enabled=false。不删除。
 D. 让主控台的"她"指向小满·陪伴：如果 /sdcard/Download/Operit/companion/ 目录存在（说明主控台 v0.7 已安装），把 /sdcard/Download/Operit/companion/config.json 写成：

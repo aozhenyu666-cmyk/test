@@ -1,0 +1,69 @@
+【任务书 T10：测试"小满的大脑"：读取 → 判断 → 说话 → 锁机】
+
+用户批准执行本任务书的全部内容，包括第三部分的一次真锁测试（锁贴吧，测完立刻解开）。
+前提：T09 已完成（"小满的大脑" 0.1.1 已导入并启用，companion_brain:drill 可调用）。如果 companion_brain:drill 不存在，说明装的是 0.1.0，请先按 T09（已更新为 0.1.1）重新下载导入。
+
+你（Operit AI）是执行者，按步骤调用工具，每一步把工具返回的原文记进报告。
+
+====================
+第一部分：读取（只读）
+====================
+1. 调用 companion_brain:get_status。报告：latestSample（最近一次采样）、verdict（判断官最新结论）、plan、episode、openCommitments。
+   目的：确认大脑读到的是真实数据（时间、App、判断都对得上）。
+
+====================
+第二部分：判断与思考（演练，不动手机）
+====================
+依次调用 companion_brain:drill，execute 不传（默认不执行），scenario 分别是：
+  nudge、ask、lock、pause、commitment、quiet、working
+每个场景报告：plan.stage、plan.reason、plan.allowed、decision.line、decision.action、decision.why、decision.source。
+
+预期（用于对照，不对的照实报告）：
+  nudge → stage=nudge，轻提醒一句
+  ask → stage=ask，追问要具体时间，可能派活
+  lock → stage=lock，action=lock，说明暂停了贴吧、怎么解
+  pause → stage=none，不开口
+  commitment → stage=commitment_due，问"三点前投一家"做了没
+  quiet → stage=lock 但 canSpeak=false，不开口不锁（深夜）
+  working → stage=none，不打扰
+
+====================
+第三部分：真的说一句 + 真锁一次（会动手机）
+====================
+3.1 听声音：调用 companion_brain:drill，scenario=nudge，execute=true。
+    报告 executed 原文。请用户确认：听到声音了吗？看到通知了吗？主控台弹出来了吗（nudge 不弹是正常的）？
+
+3.2 真锁：调用 companion_brain:drill，scenario=lock，execute=true（默认 app 是贴吧 com.baidu.tieba）。
+    报告 executed 原文，应含 "lock com.baidu.tieba: QUEUED"。
+3.3 用 super_admin:shell 执行：tail -n 3 /sdcard/Download/Operit/events/lock_queue.txt
+3.4 手动触发一次 S4_Lock_Queue_Worker（33619a6c-…）。等它执行完。
+3.5 调用 app_suspender:get_app_suspend_status（package_name=com.baidu.tieba），报告原文。预期 suspended=true。
+    请用户确认：点贴吧是不是打不开了。
+3.6 清理（用户已批准，这一步直接解锁）：调用 app_suspender:unsuspend_app（package_name=com.baidu.tieba），再调用一次 get_app_suspend_status 确认 suspended=false。
+    用 super_admin:shell 执行：tail -n 5 /sdcard/Download/Operit/events/lock_queue.out 并报告。
+
+====================
+第四部分：承诺（需要用户配合）
+====================
+4.1 请用户在"小满"会话里对她说一句带时间的打算，例如："十分钟后我投一家"。
+4.2 调用 companion_brain:get_status，报告 openCommitments（应出现这条，到点时间约 10 分钟后）。
+4.3 十分钟后手动触发一次 BRAIN_Tick，报告 get_status 里的 recentSaid 最后一条（应是她来问这件事）。如果当时手机正停在招聘 App 里，她也会问；如果你在 23:30 之后测，她不会说话（安静时段）。
+
+====================
+红线
+====================
+1. 除 3.6 的清理解锁外，不调用 app_suspender 的 suspend/unsuspend；只锁贴吧，其他 App 不动。
+2. 不修改任何工作流、规则文件、角色卡；只允许手动触发 S4_Lock_Queue_Worker 一次、BRAIN_Tick 一次。
+3. 3.5 如果贴吧没有被锁，不要重试，照实报告 lock_queue.out 最后 5 行；3.6 解锁失败时立刻告诉用户。
+
+====================
+报告（写成文件并贴在对话里）
+====================
+写入：/sdcard/Download/Operit/00_AGENT_HANDOVER/reports/T10_report.txt
+T10 报告
+第一部分 get_status=
+第二部分（每个场景一行）：场景 | stage | reason | line | action | why | source
+第三部分：3.1 executed=  用户确认=
+          3.2 executed=  3.3 lock_queue=  3.5 状态=  用户确认=  3.6 解锁后状态=  lock_queue.out=
+第四部分：4.2 openCommitments=  4.3 recentSaid 最后一条=
+异常与偏差：
