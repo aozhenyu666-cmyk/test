@@ -1,0 +1,21 @@
+【任务书 T11：大脑更新到 0.1.2 + 补测承诺】
+
+用户批准执行本任务书的全部内容。
+
+修了两处（T10 发现）：
+- 主控台 check_in 返回字符串时被误判为失败，导致又用系统 TTS 念一遍（可能念两遍）；
+- 判断官结论的时间被多算了 15 小时，大脑一直把它当"刚刚"的判断。
+
+A. 下载新包：download_file
+   url：https://raw.githubusercontent.com/aozhenyu666-cmyk/test/ae28c68a828edc93561d282b5192ffb04226addc/flow/companion_brain/build/companion_brain.toolpkg
+   destination：/sdcard/Download/Operit/00_AGENT_HANDOVER/brain/companion_brain_0.1.2.toolpkg
+   校验 sha256 = 5f2a79cb635db2da5f7bfc074c7026c61918cff35b3de7c777fb5aa1540151a5，不符就停止。
+B. 提醒用户：在包管理里导入这个新包（覆盖旧版），保持启用。用户导入后继续。
+C. 调用 companion_brain:get_status，报告 verdict.ts 对应的北京时间和 latestSample.ts 对应的北京时间（两者应该都不晚于现在）。
+D. 调用 companion_brain:drill，scenario=nudge，execute=true。报告 executed 原文：应看到 "check_in(speak=ACCEPTED)"，并且没有 "tts"。请用户确认：这次只念了一遍吗？
+E. 补测承诺：提醒用户在"小满"会话里对她说一句"十分钟后我投一家"（或类似带时间的话）。用户说完后调用 companion_brain:get_status，报告 openCommitments。
+
+红线：不改工作流、规则文件、角色卡；不调用 app_suspender。
+
+报告写入 /sdcard/Download/Operit/00_AGENT_HANDOVER/reports/T11_report.txt 并贴在对话里：
+A sha256=  C verdict 北京时间=  latestSample 北京时间=  D executed=  用户确认念了几遍=  E openCommitments=
