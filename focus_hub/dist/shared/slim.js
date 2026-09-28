@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PRESET_LABEL = exports.BUILTIN_TOOL_TOKENS = exports.SLIM_DIR = void 0;
 exports.estimateTokens = estimateTokens;
 exports.formatTokens = formatTokens;
+exports.workflowTexts = workflowTexts;
 exports.describeAccess = describeAccess;
 exports.summaryCeiling = summaryCeiling;
 exports.describeSummary = describeSummary;

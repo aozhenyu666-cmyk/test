@@ -88,7 +88,7 @@ const details = {
   w1: [...trig({ schedule_type: "interval", interval_ms: "600000", enabled: "true", repeat: "true" }), { __type: "ExecuteNode", id: "e", actionType: "focus_hub_nav:check_in", actionConfig: {} }],
   w2: [...trig({ schedule_type: "interval", interval_ms: "900000", enabled: "true", repeat: "true" }), { __type: "ExecuteNode", id: "e", actionType: "super_admin:terminal", actionConfig: { command: { value: "sh /sdcard/Download/Operit/lock_freeze/worker.sh" } } }],
   w4: [{ __type: "ExecuteNode", id: "e", actionType: "super_admin:terminal", actionConfig: { command: { value: "sh /sdcard/Download/Operit/legacy_lock.sh" } } }],
-  w6: trig({ schedule_type: "cron", cron_expression: "30 23 * * *", enabled: "true", repeat: "true" }),
+  w6: [...trig({ schedule_type: "cron", cron_expression: "30 23 * * *", enabled: "true", repeat: "true" }), { __type: "ExecuteNode", id: "e", actionType: "chat:send", actionConfig: { chat_id: { value: "f0953479" } } }],
   w7: trig({ schedule_type: "cron", cron_expression: "0 8 * * *", enabled: "true" }),
   w8: trig({ schedule_type: "interval", interval_ms: "1800000", enabled: "true", repeat: "true" }),
   w9: trig({ schedule_type: "specific_time", specific_time: "2026-09-22 12:47", enabled: "true" }),
@@ -102,6 +102,10 @@ const chats = [
   { id: "f0953479", title: "温柔巡检", messageCount: 120, updatedAt: String(now - 3 * H), isCurrent: true, characterCardName: "陪伴想小处", inputTokens: 800000, outputTokens: 20000 },
   { id: "28f6fbb9", title: "判断官", messageCount: 400, updatedAt: String(now - 20 * MIN), isCurrent: false, characterCardName: "判断官", inputTokens: 30000000, outputTokens: 60000 },
   ...Array.from({ length: 60 }, (_, i) => ({ id: `tmp${i}`, title: `临时对话${i}`, messageCount: 2, updatedAt: String(now - i * 6 * H), isCurrent: false, inputTokens: 3000, outputTokens: 200 })),
+  { id: "dup-a", title: "日报生成", messageCount: 12, updatedAt: String(now - 30 * H), isCurrent: false, inputTokens: 50000, outputTokens: 3000 },
+  { id: "dup-b", title: "日报生成 2", messageCount: 9, updatedAt: String(now - 29 * H), isCurrent: false, inputTokens: 40000, outputTokens: 2000 },
+  { id: "test-voice", title: "测试语音播报", messageCount: 6, updatedAt: String(now - 50 * H), isCurrent: false, inputTokens: 20000, outputTokens: 1000 },
+  { id: "tagged", title: "[工作流] 早报", messageCount: 20, updatedAt: String(now - 50 * H), isCurrent: false, inputTokens: 20000, outputTokens: 1000 },
 ];
 const knownChatIds = new Set(chats.map((c) => c.id));
 
@@ -210,7 +214,27 @@ global.Tools = {
       record("listChats", params);
       let hit = chats.slice();
       if (params.query) hit = hit.filter((c) => (params.match === "exact" ? c.title === params.query : c.title.includes(params.query)));
-      return { chats: hit.slice(0, params.limit ?? 50) };
+      if (params.sort_by === "messageCount") hit.sort((a, b) => (params.sort_order === "asc" ? a.messageCount - b.messageCount : b.messageCount - a.messageCount));
+      return { chats: hit.slice(0, params.limit ?? 50).map((c) => ({ ...c })), totalCount: hit.length };
+    },
+    deleteChat: async (id) => {
+      record("deleteChat", id);
+      const i = chats.findIndex((c) => c.id === id);
+      if (i < 0) throw new Error(`Chat does not exist: ${id}`);
+      chats.splice(i, 1);
+      knownChatIds.delete(id);
+      return { chatId: id };
+    },
+    updateTitle: async (id, title) => {
+      record("updateTitle", id, title);
+      const c = chats.find((x) => x.id === id);
+      if (!c) throw new Error(`Chat does not exist: ${id}`);
+      c.title = title;
+      return { chatId: id, title };
+    },
+    getMessages: async (id, opts) => {
+      record("getMessages", id, opts);
+      return { chatId: id, messages: [{ sender: "user", content: `hello from ${id}`, timestamp: now }] };
     },
     switchTo: async (id) => { record("switchTo", id); if (!floatingServiceRunning) throw new Error("Service not connected"); return { chatId: id }; },
     createNew: async () => { record("createNew"); throw new Error("Service not connected"); },
@@ -293,7 +317,7 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
 
   // ---------- manifest + workflow template ----------
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
-  assert(manifest.api_version === "1.0.0" && manifest.version === "0.7.0", "ToolPkg API 1.0.0, version 0.7.0");
+  assert(manifest.api_version === "1.0.0" && manifest.version === "0.8.0", "ToolPkg API 1.0.0, version 0.8.0");
   const slimSub = manifest.subpackages.find((x) => x.id === "focus_hub_slim");
   assert(slimSub && slimSub.enabled_by_default === false && fs.existsSync(path.join(__dirname, "..", slimSub.entry)), "slim report subpackage ships disabled (does not add to every prompt by default)");
   const wardenSub = manifest.subpackages.find((x) => x.id === "focus_hub_warden");
@@ -688,6 +712,65 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   await clickable(wt2, "1 小时").props.onClick();
   wt2 = Screen(wctx2);
   assert(has(wt2, "进行中") && wctx2.state.get("warden").view.assignment, "creating an assignment moves to on-track");
+
+
+  // ---------- 对话整理 ----------
+  const tidyMod = require(path.join(DIST, "shared/tidy.js"));
+  calls.length = 0;
+  const td = await tidyMod.scanChats(now);
+  const byId = Object.fromEntries(td.chats.map((c) => [c.id, c]));
+  assert(td.complete && td.totalCount === chats.length && td.listed === chats.length, `inventory covers every chat (${td.listed}/${td.totalCount})`);
+  assert(!calls.some((c) => c[0] === "getMessages" || c[0] === "deleteChat" || c[0] === "updateTitle"), "scan reads metadata only: no message reads, no deletes, no renames");
+  assert(byId.tmp3.cls === "A" && byId["28f6fbb9"].cls === "C" && byId["dup-a"].cls === "B" && byId["dup-b"].cls === "B" && byId["test-voice"].cls === "D", "classes: A short, C long, B duplicate titles, D normal");
+  assert(byId.ded96924.guard === "她的对话" && byId.f0953479.guard.startsWith("工作流在用") && byId["28f6fbb9"].guard === "后台角色", "guards: her chat, chat id written in an enabled workflow, backstage role");
+  assert(td.topTokens[0].title === "判断官" && td.topTokens[0].share > 0.4 && td.topTokens[0].share < 0.6, `token share computed (${Math.round(td.topTokens[0].share * 100)}%)`);
+  assert(FILES[td.reportPath] && FILES[td.reportPath].includes("| 类 | 标题 |") && FILES[td.reportPath].includes("日报生成 / 日报生成 2"), "markdown inventory written with table and duplicate groups");
+  assert(byId["test-voice"].proposedTitle === "[测试] 测试语音播报" && byId.ded96924.proposedTitle === "[她] 陪伴窗" && byId.f0953479.proposedTitle === "[工作流] 温柔巡检" && byId["28f6fbb9"].proposedTitle === "[角色] 判断官", "rename plan by category");
+  assert(byId.tmp3.proposedTitle === null && byId.tagged.proposedTitle === null, "no rename for short chats or titles already prefixed");
+  assert(tidyMod.distillPrompt(byId["28f6fbb9"]).includes("read_messages_range") && tidyMod.distillPrompt(byId["28f6fbb9"]).includes("约 10 段"), "distill instruction for Operit AI (segments of 40)");
+
+  // 删除：只删 A 且无保护；先备份
+  calls.length = 0;
+  const delRes = await tidyMod.deleteShortChats([byId.tmp3, byId["28f6fbb9"], { ...byId.tmp4, guard: "当前对话" }]);
+  assert(delRes.deleted.length === 1 && delRes.skipped.length === 2, "only unguarded short chats are deleted");
+  const getIdx = calls.findIndex((c) => c[0] === "getMessages" && c[1] === "tmp3");
+  const delIdx = calls.findIndex((c) => c[0] === "deleteChat" && c[1] === "tmp3");
+  assert(getIdx >= 0 && delIdx > getIdx && FILES[`${P}/companion/slim/deleted_chats.jsonl`].includes("hello from tmp3"), "content backed up before delete");
+  assert(!calls.some((c) => c[0] === "deleteChat" && c[1] !== "tmp3"), "no other chat deleted");
+
+  // 改名 + 撤销
+  const td2 = await tidyMod.scanChats(now);
+  const toRename = td2.chats.filter((c) => c.proposedTitle);
+  const rn = await tidyMod.applyRenames(toRename);
+  assert(rn.renamed === toRename.length && chats.find((c) => c.id === "test-voice").title === "[测试] 测试语音播报", "renames applied");
+  const lb = await tidyMod.lastRenameBatch();
+  assert(lb && lb.count === toRename.length, "last rename batch known");
+  const un = await tidyMod.undoLastRenames();
+  assert(un.restored === toRename.length && chats.find((c) => c.id === "test-voice").title === "测试语音播报" && (await tidyMod.lastRenameBatch()) === null, "undo restores every title in the batch");
+
+  // 页面：盘点 → 删除两次确认
+  const tctx = makeCtx();
+  let tt = Screen(tctx);
+  await tt.props.onLoad();
+  await clickable(Screen(tctx), "省流").props.onClick();
+  tt = Screen(tctx);
+  await clickable(tt, "盘点").props.onClick();
+  tt = Screen(tctx);
+  const shortCount = tctx.state.get("tidy").chats.filter((c) => c.cls === "A" && !c.guard).length;
+  assert(has(tt, "对话整理") && has(tt, `A · 空的或 1–2 句`) && has(tt, `删除勾选的 ${shortCount} 个`) && has(tt, "改名方案"), "tidy card shows classes, delete button and rename plan");
+  // 取消勾选一个
+  const firstShort = tctx.state.get("tidy").chats.find((c) => c.cls === "A" && !c.guard);
+  const pickRow = find(tt, (n) => n.type === "Surface" && typeof n.props.onClick === "function" && texts(n).includes(firstShort.title));
+  await pickRow.props.onClick();
+  tt = Screen(tctx);
+  calls.length = 0;
+  await clickable(tt, `删除勾选的 ${shortCount - 1} 个`).props.onClick();
+  tt = Screen(tctx);
+  assert(!calls.some((c) => c[0] === "deleteChat") && has(tt, "再点确认"), "first tap only arms delete");
+  await find(tt, (n) => n.type === "TextButton" && texts(n).includes("再点确认")).props.onClick();
+  tt = Screen(tctx);
+  const dels = calls.filter((c) => c[0] === "deleteChat").map((c) => c[1]);
+  assert(dels.length === shortCount - 1 && !dels.includes(firstShort.id) && has(tt, `删了 ${shortCount - 1} 个`), "second tap deletes the ticked ones only, unticked kept");
 
   console.log(failures === 0 ? "\nALL PASSED" : `\n${failures} FAILED`);
   process.exitCode = failures === 0 ? 0 : 1;

@@ -8,6 +8,7 @@ const nav_js_1 = require("../../shared/nav.js");
 const companion_js_1 = require("../../shared/companion.js");
 const speech_js_1 = require("../../shared/speech.js");
 const slim_js_1 = require("../../shared/slim.js");
+const tidy_js_1 = require("../../shared/tidy.js");
 const warden_js_1 = require("../../shared/warden.js");
 // 心情四档固定配色：安心 / 在意 / 担心 / 要谈谈
 const MOOD_COLOR = ["#7FAE8E", "#E2B25A", "#E0876B", "#C75A6B"];
@@ -62,6 +63,11 @@ function Screen(ctx) {
     const [busyKey, setBusyKey] = ctx.useState("busyKey", "");
     const [scan, setScan] = ctx.useState("scan", null);
     const [showAllPackages, setShowAllPackages] = ctx.useState("showAllPackages", false);
+    const [tidy, setTidy] = ctx.useState("tidy", null);
+    const [tidyPicked, setTidyPicked] = ctx.useState("tidyPicked", []);
+    const [tidyNote, setTidyNote] = ctx.useState("tidyNote", null);
+    const [renameBatch, setRenameBatch] = ctx.useState("renameBatch", null);
+    const [showAllRenames, setShowAllRenames] = ctx.useState("showAllRenames", false);
     const [warden, setWarden] = ctx.useState("warden", null);
     const [wardenError, setWardenError] = ctx.useState("wardenError", "");
     const [wardenStatus, setWardenStatus] = ctx.useState("wardenStatus", null);
@@ -231,6 +237,51 @@ function Screen(ctx) {
         }
         catch (error) {
             setSlimStatus({ ok: false, text: `没改成：${errorText(error)}` });
+        }
+        finally {
+            setBusyKey("");
+        }
+    }
+    async function runTidyScan() {
+        if (busyKey)
+            return;
+        setBusyKey("tidy-scan");
+        try {
+            const report = await (0, tidy_js_1.scanChats)();
+            setTidy(report);
+            // 默认勾上所有没有保护的空对话
+            setTidyPicked(report.chats.filter((c) => c.cls === "A" && !c.guard).map((c) => c.id));
+            setRenameBatch(await (0, tidy_js_1.lastRenameBatch)().catch(() => null));
+        }
+        catch (error) {
+            setTidyNote({ ok: false, text: `盘点失败：${errorText(error)}` });
+        }
+        finally {
+            setBusyKey("");
+        }
+    }
+    function togglePick(id) {
+        setTidyPicked(tidyPicked.includes(id) ? tidyPicked.filter((x) => x !== id) : [...tidyPicked, id]);
+    }
+    async function tidyAction(key, run) {
+        if (busyKey)
+            return;
+        if (confirmKey !== key) {
+            setConfirmKey(key);
+            return;
+        }
+        setConfirmKey("");
+        setBusyKey(key);
+        try {
+            const text = await run();
+            setTidyNote({ ok: true, text });
+            const report = await (0, tidy_js_1.scanChats)();
+            setTidy(report);
+            setTidyPicked(report.chats.filter((c) => c.cls === "A" && !c.guard).map((c) => c.id));
+            setRenameBatch(await (0, tidy_js_1.lastRenameBatch)().catch(() => null));
+        }
+        catch (error) {
+            setTidyNote({ ok: false, text: `没做成：${errorText(error)}` });
         }
         finally {
             setBusyKey("");
@@ -763,6 +814,109 @@ function Screen(ctx) {
             actionButton(key, "停用", () => confirmThen(key, () => (0, slim_js_1.setPackageEnabled)(p.name, false)), used),
         ]);
     }
+    function tidyCard() {
+        const rows = [
+            UI.Row({ fillMaxWidth: true, verticalAlignment: "center" }, [
+                text("对话整理", "titleMedium", colors.onSurface, { weight: 1 }),
+                actionButton("tidy-scan", tidy ? "重新盘点" : "盘点", runTidyScan),
+            ]),
+            muted("只看条数、token、更新时间，不读内容，不花模型 token。删除和改名都要点两次；删除前先把内容备份，改名可以整批撤销。"),
+        ];
+        if (tidyNote)
+            rows.push(text(tidyNote.text, "bodySmall", tidyNote.ok ? MOOD_INK[0] : colors.error));
+        if (!tidy)
+            return card(rows, 4);
+        const t = tidy;
+        rows.push(text(`共 ${t.totalCount} 个${t.complete ? "" : `（列出 ${t.listed} 个，有遗漏）`}：A ${t.counts.A} · B ${t.counts.B} · C ${t.counts.C} · D ${t.counts.D}`, "bodyMedium", colors.onSurface));
+        rows.push(muted(`A=${tidy_js_1.CLASS_LABEL.A}  B=${tidy_js_1.CLASS_LABEL.B}  C=${tidy_js_1.CLASS_LABEL.C}（>100 条或输入 >100 万）  D=${tidy_js_1.CLASS_LABEL.D}`));
+        if (t.topTokens.length) {
+            rows.push(label("token 主要花在"));
+            for (const x of t.topTokens)
+                rows.push(muted(`${x.title} · ${(0, slim_js_1.formatTokens)(x.tokens)} · ${Math.round(x.share * 100)}%`, 1));
+        }
+        // A：空对话，勾选后删除
+        const shorts = t.chats.filter((c) => c.cls === "A");
+        if (shorts.length) {
+            rows.push(label(`A · 空的或 1–2 句 · ${shorts.length} 个（勾选的会删除）`));
+            for (const c of shorts.slice(0, 40)) {
+                const picked = tidyPicked.includes(c.id);
+                rows.push(UI.Surface({ fillMaxWidth: true, containerColor: colors.surface, onClick: c.guard ? undefined : () => togglePick(c.id) }, UI.Row({ fillMaxWidth: true, spacing: 8, paddingVertical: 4, verticalAlignment: "center" }, [
+                    text(c.guard ? "🔒" : picked ? "☑" : "☐", "titleMedium", c.guard ? colors.onSurfaceVariant : colors.primary),
+                    UI.Column({ weight: 1, spacing: 0 }, [
+                        text(c.title, "bodyMedium", colors.onSurface, { maxLines: 1 }),
+                        muted(`${c.messageCount} 条${c.guard ? ` · ${c.guard}` : ""}`, 1),
+                    ]),
+                ])));
+            }
+            if (shorts.length > 40)
+                rows.push(muted(`还有 ${shorts.length - 40} 个没显示，完整清单在盘点文件里。`));
+            const picked = shorts.filter((c) => tidyPicked.includes(c.id) && !c.guard);
+            rows.push(actionButton(`tidy-del:${picked.length}`, `删除勾选的 ${picked.length} 个`, () => tidyAction(`tidy-del:${picked.length}`, async () => {
+                const r = await (0, tidy_js_1.deleteShortChats)(picked);
+                return `删了 ${r.deleted.length} 个${r.skipped.length ? `，跳过 ${r.skipped.length} 个（${r.skipped.slice(0, 2).map((x) => `${x.title}：${x.reason}`).join("；")}）` : ""}。内容备份在 companion/slim/deleted_chats.jsonl`;
+            }), true));
+        }
+        // B：标题重复
+        if (t.duplicates.length) {
+            rows.push(label(`B · 标题重复 · ${t.duplicates.length} 组`));
+            for (const g of t.duplicates.slice(0, 8))
+                rows.push(muted(`${g.ids.length} 个：${g.titles.slice(0, 3).join(" / ")}${g.titles.length > 3 ? " …" : ""}`, 2));
+            rows.push(muted("重复的先不自动处理：其中空的已经在 A 里；有内容的看一眼再决定。"));
+        }
+        // C：超长，生成提炼指令
+        const longs = t.chats.filter((c) => c.cls === "C");
+        if (longs.length) {
+            rows.push(label(`C · 超长 · ${longs.length} 个`));
+            for (const c of longs.slice(0, 10)) {
+                const key = `distill:${c.id}`;
+                rows.push(UI.Row({ fillMaxWidth: true, spacing: 8, verticalAlignment: "center" }, [
+                    UI.Column({ weight: 1, spacing: 0 }, [
+                        text(c.title, "bodyMedium", colors.onSurface, { maxLines: 1 }),
+                        muted(`${c.messageCount} 条 · ${(0, slim_js_1.formatTokens)(c.tokens)} tokens${c.guard ? ` · ${c.guard}` : ""}`, 1),
+                    ]),
+                    actionButton(key, "提炼指令", async () => {
+                        if (busyKey)
+                            return;
+                        setBusyKey(key);
+                        try {
+                            const path = await (0, tidy_js_1.writeDistillPrompt)(c);
+                            setTidyNote({ ok: true, text: `提炼指令写在 ${path}，打开复制给 Operit AI 就行（它只读、写说明、问你之后才动）` });
+                        }
+                        catch (error) {
+                            setTidyNote({ ok: false, text: `没写成：${errorText(error)}` });
+                        }
+                        finally {
+                            setBusyKey("");
+                        }
+                    }),
+                ]));
+            }
+        }
+        // 改名方案
+        const renames = t.chats.filter((c) => c.proposedTitle);
+        if (renames.length) {
+            rows.push(label(`改名方案 · ${renames.length} 个（"[类别] 原标题"）`));
+            const shown = showAllRenames ? renames : renames.slice(0, 8);
+            for (const c of shown)
+                rows.push(muted(`${c.title} → ${c.proposedTitle}`, 1));
+            if (renames.length > 8) {
+                rows.push(UI.TextButton({ onClick: () => setShowAllRenames(!showAllRenames) }, text(showAllRenames ? "收起" : `看全部 ${renames.length} 个`, "labelLarge", colors.primary)));
+            }
+            rows.push(muted("类别只按标题和用途判断（她 / 工作流 / 角色 / 测试 / 长对话 / 日常），看不出内容；不合适的可以之后手动改。"));
+            rows.push(actionButton(`tidy-rename:${renames.length}`, `全部改名（${renames.length}）`, () => tidyAction(`tidy-rename:${renames.length}`, async () => {
+                const r = await (0, tidy_js_1.applyRenames)(renames);
+                return `改了 ${r.renamed} 个${r.failed.length ? `，失败 ${r.failed.length} 个` : ""}。可以点「撤销上次改名」恢复`;
+            })));
+        }
+        if (renameBatch) {
+            rows.push(actionButton("tidy-undo", `撤销上次改名（${renameBatch.count} 个）`, () => tidyAction("tidy-undo", async () => {
+                const r = await (0, tidy_js_1.undoLastRenames)();
+                return `恢复了 ${r.restored} 个标题${r.failed.length ? `，失败 ${r.failed.length} 个` : ""}`;
+            })));
+        }
+        rows.push(muted(`完整盘点表写在 ${t.reportPath}。`));
+        return card(rows, 4);
+    }
     function slimPage() {
         const items = [pageHeader("省流")];
         if (slimStatus) {
@@ -793,6 +947,7 @@ function Screen(ctx) {
         if (ceiling)
             head.push(muted(`按现在的设置，长对话每一句最多带约 ${(0, slim_js_1.formatTokens)(ceiling)} tokens 历史才会压缩。`));
         items.push(card(head, 8));
+        items.push(tidyCard());
         if (r.chats) {
             items.push(card([
                 text("最费的对话", "titleMedium", colors.onSurface),

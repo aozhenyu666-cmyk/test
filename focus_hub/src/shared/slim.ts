@@ -190,7 +190,7 @@ export interface PackageBill {
   listTokens: number;
 }
 
-async function workflowTexts(): Promise<{ name: string; enabled: boolean; text: string; id: string }[]> {
+export async function workflowTexts(): Promise<{ name: string; enabled: boolean; text: string; id: string }[]> {
   const list = await Tools.Workflow.getAll();
   const out: { name: string; enabled: boolean; text: string; id: string }[] = [];
   for (const wf of list.workflows ?? []) {
