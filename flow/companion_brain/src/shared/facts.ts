@@ -1,6 +1,6 @@
 import { listNames, parseJsonl, readJson, readLines, tailLines } from "./fsx.js";
 import { ROOT } from "./memory.js";
-import { bjDateKey, parseDeviceLocal } from "./time.js";
+import { bjDateKey, parseScriptTime } from "./time.js";
 
 export interface Sample {
   ts: number; // ms
@@ -115,7 +115,7 @@ async function readEvents(now: number): Promise<RawEvent[]> {
   });
 }
 
-async function readVerdict(): Promise<Verdict | null> {
+async function readVerdict(now: number): Promise<Verdict | null> {
   const names = (await listNames(`${ROOT}/judge`)).filter((n) => /^\d{8}\.jsonl$/.test(n));
   // 文件名按设备日期命名，最新的不一定排最后；取最后两个里时间最新的一行
   let best: Verdict | null = null;
@@ -123,7 +123,7 @@ async function readVerdict(): Promise<Verdict | null> {
     const [line] = (await tailLines(`${ROOT}/judge/${name}`, 1)).slice(-1);
     if (!line) continue;
     const [time, body = ""] = line.split("\t");
-    const ts = parseDeviceLocal(time);
+    const ts = parseScriptTime(time, now);
     const m = /^([A-Z_]+)\s+CONF=(\d+)/.exec(body.trim());
     if (!ts || !m) continue;
     const field = (key: string) => {
@@ -163,7 +163,7 @@ export async function gatherFacts(now: number): Promise<Facts> {
   const [taskKv, events, verdict, progress, assignmentRaw, lockable, protectedPkgs, taskApps, shots] = await Promise.all([
     keyValues(`${ROOT}/drift/task_state.txt`),
     readEvents(now),
-    readVerdict(),
+    readVerdict(now),
     readProgress(now),
     readJson<Assignment>(`${ROOT}/companion/warden/assignment.json`),
     pkgList(`${ROOT}/p2/ent.list`),

@@ -401,6 +401,34 @@ async function check(name, fn) {
     assert.strictEqual(r.success, false);
   });
 
+
+  await check("check_in result as JSON string: no second TTS", async () => {
+    reset();
+    const orig = global.toolCall;
+    global.toolCall = async (name, params) => {
+      if (name === "focus_hub_nav:check_in") return JSON.stringify({ success: true, status: "CHECKED_IN", speak: "ACCEPTED", popup: "SKIPPED" });
+      return orig(name, params);
+    };
+    sample(25, "com.baidu.tieba", "0");
+    sample(5, "com.baidu.tieba", "0");
+    state.modelReply = reply({ speak: true, line: "又在贴吧啦，先投一家？", action: "none" });
+    const r = await brain.tick({});
+    global.toolCall = orig;
+    assert(r.delivered.startsWith("check_in(speak=ACCEPTED)"), r.delivered);
+    assert.strictEqual(state.calls.filter((c) => c[0] === "tts").length, 0, "no double speech");
+  });
+
+  await check("judge verdict written in Beijing time is not read as 15 hours in the future", async () => {
+    reset();
+    NOW = Date.UTC(2026, 8, 28, 6, 0, 0); // 北京 14:00
+    // 北京时间 12:00 写的一行（两小时前）；设备时区若按洛杉矶解析会变成未来
+    FILES[`${R}/judge/20260928.jsonl`] = "2026-09-28 12:00:00\tDRIFT_RISK CONF=90 WHY=刷贴吧 NEXT=去投\n";
+    const s = await brain.get_status();
+    const v = s.status.verdict;
+    assert(v.ts <= NOW, `verdict ts in the future: ${v.ts - NOW}`);
+    assert(NOW - v.ts < 3 * 3600 * 1000, `verdict too old: ${(NOW - v.ts) / 3600000}h`);
+  });
+
   console.log(failed ? `\n${failed} FAILED` : "\nall passed");
   process.exit(failed ? 1 : 0);
 })();

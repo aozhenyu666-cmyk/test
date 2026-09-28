@@ -60,7 +60,7 @@ async function readEvents(now) {
         return true;
     });
 }
-async function readVerdict() {
+async function readVerdict(now) {
     const names = (await (0, fsx_js_1.listNames)(`${memory_js_1.ROOT}/judge`)).filter((n) => /^\d{8}\.jsonl$/.test(n));
     // 文件名按设备日期命名，最新的不一定排最后；取最后两个里时间最新的一行
     let best = null;
@@ -69,7 +69,7 @@ async function readVerdict() {
         if (!line)
             continue;
         const [time, body = ""] = line.split("\t");
-        const ts = (0, time_js_1.parseDeviceLocal)(time);
+        const ts = (0, time_js_1.parseScriptTime)(time, now);
         const m = /^([A-Z_]+)\s+CONF=(\d+)/.exec(body.trim());
         if (!ts || !m)
             continue;
@@ -102,7 +102,7 @@ async function gatherFacts(now) {
     const [taskKv, events, verdict, progress, assignmentRaw, lockable, protectedPkgs, taskApps, shots] = await Promise.all([
         keyValues(`${memory_js_1.ROOT}/drift/task_state.txt`),
         readEvents(now),
-        readVerdict(),
+        readVerdict(now),
         readProgress(now),
         (0, fsx_js_1.readJson)(`${memory_js_1.ROOT}/companion/warden/assignment.json`),
         pkgList(`${memory_js_1.ROOT}/p2/ent.list`),

@@ -80,3 +80,17 @@ export function minutesAgoText(ms: number, nowMs: number): string {
   const h = Math.floor(min / 60);
   return h < 24 ? `${h} 小时前` : `${Math.floor(h / 24)} 天前`;
 }
+
+// 脚本写的时间字符串可能是设备时区，也可能是北京时间（有的脚本设了 TZ=Asia/Shanghai）。
+// 两种都算一遍，取不晚于现在、且最接近现在的那个。
+export function parseScriptTime(value: string | undefined | null, nowMs: number): number | null {
+  if (!value) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(value.trim());
+  if (!m) return null;
+  const [y, mo, d, h, mi, s] = m.slice(1).map(Number);
+  const device = new Date(y, mo - 1, d, h, mi, s).getTime();
+  const beijing = Date.UTC(y, mo - 1, d, h, mi, s) - BJ_OFFSET_MS;
+  const ok = [device, beijing].filter((t) => Number.isFinite(t) && t <= nowMs + 2 * 60 * 1000);
+  if (ok.length) return Math.max(...ok);
+  return Math.min(device, beijing);
+}

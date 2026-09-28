@@ -30,12 +30,15 @@ export async function speak(line: string, title: string, popup: boolean): Promis
   let spoken = false;
   try {
     const r = await call("focus_hub_nav:check_in", { message: line, force: true, speak: true, popup });
-    const status = String(r?.status ?? r?.result?.status ?? "");
-    if (status === "CHECKED_IN") {
-      out.via.push(`check_in(speak=${r?.speak ?? r?.result?.speak ?? "?"},popup=${r?.popup ?? r?.result?.popup ?? "?"})`);
-      spoken = String(r?.speak ?? r?.result?.speak ?? "") === "ACCEPTED";
+    // toolCall 的返回可能是对象、包了一层 result，或者是 JSON 字符串；统一转成文本再判断
+    const text = typeof r === "string" ? r : JSON.stringify(r ?? {});
+    if (text.includes("CHECKED_IN")) {
+      const speakAccepted = /"speak"\s*:\s*"ACCEPTED"|语音 ACCEPTED/.test(text);
+      out.via.push(`check_in(speak=${speakAccepted ? "ACCEPTED" : "?"})`);
+      // 主控台已经受理了语音就不再用系统 TTS 重念，避免念两遍
+      spoken = speakAccepted || !/"speak"\s*:\s*"FAILED"|语音 FAILED/.test(text);
     } else {
-      out.errors.push(`check_in:${status || "无状态"}`);
+      out.errors.push(`check_in:${text.slice(0, 120) || "空返回"}`);
     }
   } catch (error) {
     out.errors.push(`check_in:${errorText(error)}`);
