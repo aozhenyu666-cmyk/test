@@ -1,0 +1,66 @@
+【任务书 T09：安装"小满的大脑"并上线】
+
+用户批准执行本任务书的全部内容，包括：大脑可以说话、打开招聘 App、派活、记承诺、看屏幕；跑偏提醒后 30 分钟没有回应时，可以把 ent.list 里已批准的 App（B站、抖音、贴吧等）放进现有锁队列真锁（用户原话："直接开真锁"）。安静时段按北京时间 23:30–08:00；每小时最多主动开口 4 次。
+
+你（Operit AI）是执行者，按目标自行选择工具；能并行就并行；只在红线处停。
+
+====================
+一、是什么
+====================
+新 ToolPkg"小满的大脑"（local.companion_brain），源码与说明：github aozhenyu666-cmyk/test 的 flow/companion_brain 与 flow/design/brain_v1.md。
+- 每 15 分钟一次（工作流 BRAIN_Tick 调用 companion_brain:tick）：看事实和记忆 → 代码按契约算出允许的动作 → 模型决定说什么、做什么 → 代码执行。
+- 开口：调用 focus_hub_nav:check_in（念 + 弹主控台 + 待回应），再发一条系统通知；主控台不可用时退回系统 TTS。
+- 锁：只往现有 events/lock_queue.txt 追加一行，由 S4_Lock_Queue_Worker 执行并回读；保护名单和不在 ent.list 里的 App 一律不锁；解锁仍走原有解锁流程。
+- 记忆：/sdcard/Download/Operit/companion/brain/（profile.md、commitments.jsonl、said.jsonl、state.json）；会话 52a18815-2c07-4f6d-bbae-ae5d040daffb（小满·陪伴）的每一轮对话都会自动带上这些记忆。
+- 它取代 S3_Brief_Loop 的定时陪伴。
+
+====================
+二、先由用户在界面完成（你先检查，没完成就提醒用户，等用户做完再继续）
+====================
+U1. 下载安装包（这一步你来做）：download_file
+    url：https://raw.githubusercontent.com/aozhenyu666-cmyk/test/8484eb679599de21465b5d197972ba73dc4686c1/flow/companion_brain/build/companion_brain.toolpkg
+    destination：/sdcard/Download/Operit/00_AGENT_HANDOVER/brain/companion_brain.toolpkg
+    校验 sha256 = 55c39badc2134ec3e8b8e8349ba4806529f37213a7efc40911e123849cfd2212，不符就停止。
+U2. 用户在 Operit 的包管理里导入这个 .toolpkg，并启用"小满的大脑"（主包和子包都启用）。
+U3. 用户在 角色卡 → 小满·陪伴 → 自定义允许使用的工具 → 包，再勾上 companion_brain（保留原有的 focus_hub_progress 和内建 use_package，其它不动）。
+
+====================
+三、你来做
+====================
+A. 确认可用：调用 companion_brain:get_status，返回 success=true。报告其中的 plan 和 config。
+B. 建工作流：优先用"工作流 → 从模板新建 → 小满的大脑（每15分钟）"；模板不可用时，用 workflow:create_workflow 按这个文件的 nodes/connections 创建（名称 BRAIN_Tick，enabled=true）：
+   https://raw.githubusercontent.com/aozhenyu666-cmyk/test/8484eb679599de21465b5d197972ba73dc4686c1/flow/companion_brain/resources/workflow_brain_tick.json
+   建好后 get_workflow 回读，报告 ID。
+C. 停用 S3_Brief_Loop（8f675f75-0648-4924-9cbb-ebfeabbe46e8）：先 get_workflow 备份到 /sdcard/Download/Operit/00_AGENT_HANDOVER/t09_backup/，再 workflow:disable_workflow，回读 enabled=false。不删除。
+D. 让主控台的"她"指向小满·陪伴：如果 /sdcard/Download/Operit/companion/ 目录存在（说明主控台 v0.7 已安装），把 /sdcard/Download/Operit/companion/config.json 写成：
+   {"chat_id":"52a18815-2c07-4f6d-bbae-ae5d040daffb","chosen_at":"<当前时间 ISO>"}
+   写前如果已有这个文件，先备份到 t09_backup/。
+E. 首次运行：手动触发 BRAIN_Tick 一次，然后调用 companion_brain:get_status。报告：tick 的返回（在执行日志里）、get_status 的 plan / episode / recentSaid；/sdcard/Download/Operit/companion/brain/ 下有哪些文件；actions.jsonl 最后 3 行。
+
+====================
+四、红线
+====================
+1. 不删除任何东西；不改 EXEC_RULES.tsv、UNLOCK_POLICY.tsv、ent.list、protect.deny。
+2. 工作流只允许：新建 BRAIN_Tick、停用 S3_Brief_Loop。
+3. 你自己不调用 app_suspender，不往 lock_queue.txt 写东西（那是大脑的事）。
+4. 首次运行如果大脑报错（get_status 或 tick 返回 success=false）：停用 BRAIN_Tick、重新启用 S3_Brief_Loop，报告错误原文。
+
+====================
+五、报告（写成文件并贴在对话里）
+====================
+写入：/sdcard/Download/Operit/00_AGENT_HANDOVER/reports/T09_report.txt
+T09 报告
+总体结论：
+U1 sha256=   U2 已导入并启用=   U3 小满·陪伴白名单（完整 toolAccessConfig）=
+A get_status（plan、config）=
+B BRAIN_Tick ID=   创建方式=
+C S3 enabled（回读）=
+D companion/config.json（回读，或"主控台未安装"）=
+E tick 返回=   get_status=   brain 目录文件=   actions.jsonl 最后 3 行=
+偏差：
+
+=================================
+【用户在 T09 之后可以自己试的】
+1. 在"小满"会话里跟她说一句带时间的打算，比如"三点前我投一家"。她应该会记下来，到点来问你。
+2. 问她"你记得我什么？"。她会根据档案回答；档案在 /sdcard/Download/Operit/companion/brain/profile.md，"TA 自己写的"一节随你改。
+3. 刷一会儿 B站/抖音/贴吧：先会被轻提醒；10 分钟后追问（可能派一个小活）；提醒后 30 分钟一直不回应，就会按约定把它锁上。回她一句话就能把时间延后。
