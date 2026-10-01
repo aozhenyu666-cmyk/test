@@ -3,13 +3,19 @@
 // - 删除空对话（0–2 条），删之前把内容备份到 slim/deleted_chats.jsonl
 // - 按"[类别] 原标题"改名，记下旧标题，可以整批撤销
 // 长对话的提炼需要读内容，交给 Operit AI：这里只生成一份现成的指令文件。
-import { isPinned, listChats, type ChatEntry } from "./nav.js";
+import { isArchived, isPinned, type ChatEntry } from "./nav.js";
 import { findCompanion } from "./companion.js";
 import { formatDateTime, fileExists, readAll } from "./snapshot.js";
-import { SLIM_DIR, workflowTexts } from "./slim.js";
+import { SLIM_DIR, scanRedundancy, workflowTexts } from "./slim.js";
 
 const DELETED_LOG = `${SLIM_DIR}/deleted_chats.jsonl`;
 const RENAME_LOG = `${SLIM_DIR}/renames.jsonl`;
+const WORKFLOW_LOG = `${SLIM_DIR}/workflow_toggles.jsonl`;
+
+// 一小时内刚建或刚动过的空对话可能马上要用，不删
+const FRESH_MS = 3600 * 1000;
+// 超长又 7 天没动的对话归入"归档"
+const IDLE_MS = 7 * 24 * 3600 * 1000;
 
 export const SHORT_MAX_MESSAGES = 2;
 export const LONG_MIN_MESSAGES = 100;
@@ -86,6 +92,7 @@ async function listEverything(): Promise<{ chats: ChatEntry[]; totalCount: numbe
         characterCardName: String(c.characterCardName ?? ""),
         inputTokens: Number(c.inputTokens) || 0,
         outputTokens: Number(c.outputTokens) || 0,
+        characterCardId: String(c.characterCardId ?? ""),
       });
     }
     // 一次就拿全了，后面两次不用再查
@@ -106,19 +113,27 @@ export function titleKey(title: string): string {
 
 const TEST_PATTERN = /测试|试试|试一下|test|probe|探针|demo|调试|debug/i;
 
-function categoryFor(c: TidyChat, herId: string): string | null {
+function parseUpdated(value: string): number | null {
+  const t = /^\d+$/.test(value) ? Number(value) : Date.parse(value);
+  return Number.isFinite(t) && t > 0 ? t : null;
+}
+
+function categoryFor(c: TidyChat, herId: string, now: number): string | null {
   if (c.id === herId) return "她";
   if (c.guard.startsWith("工作流")) return "工作流";
   if (isPinned(c)) return "角色";
   if (TEST_PATTERN.test(c.title)) return "测试";
-  if (c.cls === "C") return "长对话";
+  if (c.cls === "C") {
+    const updated = parseUpdated(c.updatedAt);
+    return updated != null && now - updated > IDLE_MS ? "归档" : "长对话";
+  }
   return "日常";
 }
 
-export function proposeTitle(c: TidyChat, herId: string): string | null {
+export function proposeTitle(c: TidyChat, herId: string, now: number = Date.now()): string | null {
   if (c.cls === "A") return null; // 空对话是删除候选，不改名
-  if (/^\s*[\[【]/.test(c.title)) return null; // 已经有类别前缀
-  const cat = categoryFor(c, herId);
+  if (/^\s*[\[【]/.test(c.title) || isArchived(c)) return null; // 已经有类别前缀或已归档
+  const cat = categoryFor(c, herId, now);
   if (!cat) return null;
   const topic = c.title.length > 24 ? `${c.title.slice(0, 24)}…` : c.title;
   return `[${cat}] ${topic}`;
@@ -142,16 +157,19 @@ export async function scanChats(now: number = Date.now()): Promise<TidyReport> {
 
   const groups = new Map<string, TidyChat[]>();
   const rows: TidyChat[] = chats.map((c) => {
+    const updated = parseUpdated(c.updatedAt);
     const guard =
       c.id === herId
         ? "她的对话"
         : usedByFlow.has(c.id)
           ? `工作流在用：${usedByFlow.get(c.id)}`
-          : isPinned(c)
+          : isPinned(c) && !isArchived(c)
             ? "后台角色"
             : c.isCurrent
               ? "当前对话"
-              : "";
+              : updated != null && now - updated < FRESH_MS && c.messageCount <= SHORT_MAX_MESSAGES
+                ? "一小时内刚建"
+                : "";
     const tokens = c.inputTokens + c.outputTokens;
     let cls: ChatClass = "D";
     if (c.messageCount <= SHORT_MAX_MESSAGES) cls = "A";
@@ -172,7 +190,7 @@ export async function scanChats(now: number = Date.now()): Promise<TidyReport> {
     for (const r of list) if (r.cls === "D") r.cls = "B";
   }
   duplicates.sort((a, b) => b.ids.length - a.ids.length);
-  for (const r of rows) r.proposedTitle = proposeTitle(r, herId);
+  for (const r of rows) r.proposedTitle = proposeTitle(r, herId, now);
 
   rows.sort((a, b) => b.messageCount - a.messageCount);
   const counts: Record<ChatClass, number> = { A: 0, B: 0, C: 0, D: 0 };
@@ -295,7 +313,7 @@ interface RenameRecord {
 }
 
 export async function applyRenames(targets: TidyChat[]): Promise<{ renamed: number; failed: string[] }> {
-  const batch = `R-${Date.now()}`;
+  const batch = `R-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   let renamed = 0;
   const failed: string[] = [];
   for (const c of targets) {
@@ -379,4 +397,118 @@ export async function writeDistillPrompt(c: TidyChat): Promise<string> {
   const path = `${SLIM_DIR}/distill_prompt_${c.id.slice(0, 8)}.md`;
   await Tools.Files.write(path, distillPrompt(c), false);
   return path;
+}
+
+// ---------- 工作流：只停用明确过期的，可撤销 ----------
+
+interface WorkflowToggle {
+  batch: string;
+  ts: number;
+  id: string;
+  name: string;
+  why: string;
+  undone?: boolean;
+}
+
+const PROBE_PATTERN = /probe|探针|一次性|test|测试/i;
+
+// 一键整理只停两种：时间已过的一次性定时，和名字就是探针/测试的手动流程。其余只提示。
+export async function disableExpiredWorkflows(now: number = Date.now()): Promise<{ disabled: string[]; suggested: string[] }> {
+  const scan = await scanRedundancy(now);
+  const all = await Tools.Workflow.getAll();
+  const byName = new Map((all.workflows ?? []).map((w) => [w.name, w]));
+  const batch = `W-${now}-${Math.random().toString(36).slice(2, 8)}`;
+  const disabled: string[] = [];
+  const suggested: string[] = [];
+  for (const hint of scan.workflows) {
+    const wf = byName.get(hint.name);
+    if (!wf || !wf.enabled) continue;
+    const expired = hint.why.includes("时间已过");
+    const probe = hint.why.startsWith("手动流程") && PROBE_PATTERN.test(hint.name);
+    if (!expired && !probe) {
+      suggested.push(`${hint.name}（${hint.why}）`);
+      continue;
+    }
+    try {
+      const after = await Tools.Workflow.setEnabled(wf.id, false);
+      if (after && after.enabled === false) {
+        const rec: WorkflowToggle = { batch, ts: Math.floor(now / 1000), id: wf.id, name: wf.name, why: hint.why };
+        await Tools.Files.write(WORKFLOW_LOG, JSON.stringify(rec) + "\n", true);
+        disabled.push(wf.name);
+      }
+    } catch {
+      suggested.push(`${hint.name}（停用失败，${hint.why}）`);
+    }
+  }
+  return { disabled, suggested };
+}
+
+async function readToggles(): Promise<WorkflowToggle[]> {
+  if (!(await fileExists(WORKFLOW_LOG))) return [];
+  const { lines } = await readAll(WORKFLOW_LOG, 500);
+  const out: WorkflowToggle[] = [];
+  for (const line of lines) {
+    try {
+      out.push(JSON.parse(line) as WorkflowToggle);
+    } catch {
+      // 跳过坏行
+    }
+  }
+  return out;
+}
+
+function liveToggles(all: WorkflowToggle[]): WorkflowToggle[] {
+  const undone = new Set(all.filter((r) => r.undone).map((r) => `${r.batch}:${r.id}`));
+  return all.filter((r) => !r.undone && !undone.has(`${r.batch}:${r.id}`));
+}
+
+export async function lastWorkflowBatch(): Promise<{ batch: string; names: string[] } | null> {
+  const live = liveToggles(await readToggles());
+  const last = live[live.length - 1];
+  if (!last) return null;
+  return { batch: last.batch, names: live.filter((r) => r.batch === last.batch).map((r) => r.name) };
+}
+
+export async function undoWorkflowBatch(): Promise<string[]> {
+  const live = liveToggles(await readToggles());
+  const last = live[live.length - 1];
+  if (!last) return [];
+  const restored: string[] = [];
+  for (const r of live.filter((x) => x.batch === last.batch)) {
+    await Tools.Workflow.setEnabled(r.id, true);
+    await Tools.Files.write(WORKFLOW_LOG, JSON.stringify({ ...r, undone: true }) + "\n", true);
+    restored.push(r.name);
+  }
+  return restored;
+}
+
+// ---------- 一键整理 ----------
+
+export interface OneClickResult {
+  deleted: string[];
+  skipped: number;
+  renamed: number;
+  workflowsDisabled: string[];
+  workflowsSuggested: string[];
+  report: TidyReport;
+}
+
+// 删空对话（先备份）→ 按类别改名（可撤销）→ 停用过期的一次性/探针工作流（可撤销）→ 重新盘点
+export async function oneClickTidy(now: number = Date.now()): Promise<OneClickResult> {
+  const before = await scanChats(now);
+  const shorts = before.chats.filter((c) => c.cls === "A" && !c.guard);
+  const del = await deleteShortChats(shorts);
+  const mid = await scanChats(now);
+  const ren = await applyRenames(mid.chats.filter((c) => c.proposedTitle));
+  let workflowsDisabled: string[] = [];
+  let workflowsSuggested: string[] = [];
+  try {
+    const wf = await disableExpiredWorkflows(now);
+    workflowsDisabled = wf.disabled;
+    workflowsSuggested = wf.suggested;
+  } catch {
+    // 工作流读不到就只整理对话
+  }
+  const report = await scanChats(now);
+  return { deleted: del.deleted, skipped: del.skipped.length, renamed: ren.renamed, workflowsDisabled, workflowsSuggested, report };
 }

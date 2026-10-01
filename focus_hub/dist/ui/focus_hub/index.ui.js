@@ -8,6 +8,7 @@ const nav_js_1 = require("../../shared/nav.js");
 const companion_js_1 = require("../../shared/companion.js");
 const speech_js_1 = require("../../shared/speech.js");
 const slim_js_1 = require("../../shared/slim.js");
+const handover_js_1 = require("../../shared/handover.js");
 const tidy_js_1 = require("../../shared/tidy.js");
 const warden_js_1 = require("../../shared/warden.js");
 // 心情四档固定配色：安心 / 在意 / 担心 / 要谈谈
@@ -68,6 +69,9 @@ function Screen(ctx) {
     const [tidyNote, setTidyNote] = ctx.useState("tidyNote", null);
     const [renameBatch, setRenameBatch] = ctx.useState("renameBatch", null);
     const [showAllRenames, setShowAllRenames] = ctx.useState("showAllRenames", false);
+    const [wfBatch, setWfBatch] = ctx.useState("wfBatch", null);
+    const [handover, setHandover] = ctx.useState("handover", null);
+    const [handoverNote, setHandoverNote] = ctx.useState("handoverNote", null);
     const [warden, setWarden] = ctx.useState("warden", null);
     const [wardenError, setWardenError] = ctx.useState("wardenError", "");
     const [wardenStatus, setWardenStatus] = ctx.useState("wardenStatus", null);
@@ -155,6 +159,8 @@ function Screen(ctx) {
         setPage(next);
         if (next === "chats" && chats == null)
             await refreshChats();
+        if (next === "chats")
+            setHandover(await (0, handover_js_1.lastHandover)().catch(() => null));
         if (next === "slim" && slim == null)
             await refreshSlim();
         if (next === "warden" && warden == null)
@@ -242,6 +248,57 @@ function Screen(ctx) {
             setBusyKey("");
         }
     }
+    async function afterCompanionChange() {
+        setChats(await (0, nav_js_1.listChats)(""));
+        const companion = await (0, companion_js_1.findCompanion)();
+        if (snap)
+            setSnap({ ...snap, companion });
+        setHandover(await (0, handover_js_1.lastHandover)().catch(() => null));
+    }
+    async function freshChat() {
+        const key = "handover";
+        if (busyKey)
+            return;
+        if (confirmKey !== key) {
+            setConfirmKey(key);
+            return;
+        }
+        setConfirmKey("");
+        setBusyKey(key);
+        try {
+            const { notes } = await (0, handover_js_1.startFreshCompanionChat)();
+            setHandoverNote({ ok: true, text: notes.join("；") });
+            await afterCompanionChange();
+        }
+        catch (error) {
+            setHandoverNote({ ok: false, text: `没换成：${errorText(error)}` });
+        }
+        finally {
+            setBusyKey("");
+        }
+    }
+    async function undoFreshChat() {
+        const key = "handover-undo";
+        if (busyKey)
+            return;
+        if (confirmKey !== key) {
+            setConfirmKey(key);
+            return;
+        }
+        setConfirmKey("");
+        setBusyKey(key);
+        try {
+            const notes = await (0, handover_js_1.undoLastHandover)();
+            setHandoverNote({ ok: true, text: notes.join("；") });
+            await afterCompanionChange();
+        }
+        catch (error) {
+            setHandoverNote({ ok: false, text: `没撤销成：${errorText(error)}` });
+        }
+        finally {
+            setBusyKey("");
+        }
+    }
     async function runTidyScan() {
         if (busyKey)
             return;
@@ -252,6 +309,7 @@ function Screen(ctx) {
             // 默认勾上所有没有保护的空对话
             setTidyPicked(report.chats.filter((c) => c.cls === "A" && !c.guard).map((c) => c.id));
             setRenameBatch(await (0, tidy_js_1.lastRenameBatch)().catch(() => null));
+            setWfBatch(await (0, tidy_js_1.lastWorkflowBatch)().catch(() => null));
         }
         catch (error) {
             setTidyNote({ ok: false, text: `盘点失败：${errorText(error)}` });
@@ -279,6 +337,7 @@ function Screen(ctx) {
             setTidy(report);
             setTidyPicked(report.chats.filter((c) => c.cls === "A" && !c.guard).map((c) => c.id));
             setRenameBatch(await (0, tidy_js_1.lastRenameBatch)().catch(() => null));
+            setWfBatch(await (0, tidy_js_1.lastWorkflowBatch)().catch(() => null));
         }
         catch (error) {
             setTidyNote({ ok: false, text: `没做成：${errorText(error)}` });
@@ -499,6 +558,9 @@ function Screen(ctx) {
             ]),
             ...(status ? [text(status.text, "bodySmall", status.ok ? MOOD_INK[0] : MOOD_INK[3])] : []),
             ...(hasChat ? [muted(`她 = 「${s.companion?.chat?.title}」${s.companion?.source === "chosen" ? "（你选的）" : ""}`, 1)] : [muted("还没认出她是哪个对话，去「会话」页点「设为她」")]),
+            ...(hasChat && (s.companion?.archived || (s.companion?.chat?.messageCount ?? 0) >= nav_js_1.LONG_CHAT_MESSAGES)
+                ? [text(s.companion?.archived ? "她现在用的是归档对话，去「会话」页点「换个新对话」" : `她的对话已经 ${s.companion?.chat?.messageCount} 条了，每说一句都要带着这些历史；去「会话」页点「换个新对话」`, "bodySmall", MOOD_INK[2])]
+                : []),
         ]);
     }
     function actionTile(kind, icon) {
@@ -641,15 +703,27 @@ function Screen(ctx) {
             return pageColumn(items);
         }
         const her = chats.filter((c) => c.id === herId);
-        const backstage = chats.filter((c) => (0, nav_js_1.isPinned)(c) && c.id !== herId);
-        const recent = chats.filter((c) => !(0, nav_js_1.isPinned)(c) && c.id !== herId).slice(0, RECENT_CHATS);
+        const archived = chats.filter((c) => (0, nav_js_1.isArchived)(c) && c.id !== herId);
+        const backstage = chats.filter((c) => (0, nav_js_1.isPinned)(c) && !(0, nav_js_1.isArchived)(c) && c.id !== herId);
+        const recent = chats.filter((c) => !(0, nav_js_1.isPinned)(c) && !(0, nav_js_1.isArchived)(c) && c.id !== herId).slice(0, RECENT_CHATS);
+        const herControls = [
+            UI.Row({ fillMaxWidth: true, spacing: 4, verticalAlignment: "center" }, [
+                actionButton("handover", "换个新对话", freshChat),
+                ...(handover ? [actionButton("handover-undo", "撤销上次换", undoFreshChat)] : []),
+            ]),
+            muted("新建一个绑定同一张角色卡的对话当她，老的改名「[归档]」留着不删；提醒通道里写着老对话的，一起换成新的。"),
+            ...(handoverNote ? [text(handoverNote.text, "bodySmall", handoverNote.ok ? MOOD_INK[0] : colors.error)] : []),
+        ];
         items.push(her.length > 0
-            ? chatGroup("她（主入口）", her.map((c) => chatRow(c, "🎭")))
-            : chatGroup("她（主入口）", [muted("还没认出她，在下面点一个对话的「设为她」")]));
+            ? chatGroup("她（主入口）", [...her.map((c) => chatRow(c, "🎭")), ...herControls])
+            : chatGroup("她（主入口）", [muted("还没认出她，在下面点一个对话的「设为她」，或者直接新建一个："), ...herControls]));
         if (backstage.length > 0) {
             items.push(chatGroup("后台角色", backstage.map((c) => chatRow(c, "⚙", true)), "平时不用直接找它们"));
         }
         items.push(chatGroup(`最近 ${recent.length} 个`, recent.map((c) => chatRow(c, "💬", true))));
+        if (archived.length > 0) {
+            items.push(chatGroup(`已归档 ${archived.length} 个`, archived.map((c) => chatRow(c, "🗄")), "只读留底，不再被当作她或后台角色"));
+        }
         return pageColumn(items);
     }
     // ---------- 系统 ----------
@@ -821,6 +895,16 @@ function Screen(ctx) {
                 actionButton("tidy-scan", tidy ? "重新盘点" : "盘点", runTidyScan),
             ]),
             muted("只看条数、token、更新时间，不读内容，不花模型 token。删除和改名都要点两次；删除前先把内容备份，改名可以整批撤销。"),
+            actionButton("tidy-all", "一键整理", () => tidyAction("tidy-all", async () => {
+                const r = await (0, tidy_js_1.oneClickTidy)();
+                const parts = [`删了 ${r.deleted.length} 个空对话`, `改名 ${r.renamed} 个`];
+                if (r.workflowsDisabled.length)
+                    parts.push(`停用 ${r.workflowsDisabled.length} 个过期工作流（${r.workflowsDisabled.join("、")}）`);
+                if (r.workflowsSuggested.length)
+                    parts.push(`另有 ${r.workflowsSuggested.length} 个工作流建议你看看：${r.workflowsSuggested.slice(0, 3).join("；")}`);
+                return `${parts.join("；")}。删掉的内容备份在 companion/slim/deleted_chats.jsonl，改名和停用都能撤销`;
+            })),
+            muted("一键整理 = 删空对话（受保护的和一小时内刚建的不删）+ 按类别改名（超长且 7 天没动的标「[归档]」）+ 停用时间已过的一次性和探针工作流。"),
         ];
         if (tidyNote)
             rows.push(text(tidyNote.text, "bodySmall", tidyNote.ok ? MOOD_INK[0] : colors.error));
@@ -912,6 +996,12 @@ function Screen(ctx) {
             rows.push(actionButton("tidy-undo", `撤销上次改名（${renameBatch.count} 个）`, () => tidyAction("tidy-undo", async () => {
                 const r = await (0, tidy_js_1.undoLastRenames)();
                 return `恢复了 ${r.restored} 个标题${r.failed.length ? `，失败 ${r.failed.length} 个` : ""}`;
+            })));
+        }
+        if (wfBatch) {
+            rows.push(actionButton("tidy-wf-undo", `恢复上次停用的工作流（${wfBatch.names.length} 个）`, () => tidyAction("tidy-wf-undo", async () => {
+                const restored = await (0, tidy_js_1.undoWorkflowBatch)();
+                return `重新启用了 ${restored.length} 个：${restored.join("、")}`;
             })));
         }
         rows.push(muted(`完整盘点表写在 ${t.reportPath}。`));

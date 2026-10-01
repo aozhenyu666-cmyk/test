@@ -20,6 +20,7 @@ export interface ChatEntry {
   characterCardName: string;
   inputTokens: number;
   outputTokens: number;
+  characterCardId: string;
 }
 
 function toEntry(chat: {
@@ -31,6 +32,7 @@ function toEntry(chat: {
   characterCardName?: string | null;
   inputTokens?: number;
   outputTokens?: number;
+  characterCardId?: string | null;
 }): ChatEntry {
   return {
     id: chat.id,
@@ -41,6 +43,7 @@ function toEntry(chat: {
     characterCardName: String(chat.characterCardName ?? ""),
     inputTokens: Number(chat.inputTokens) || 0,
     outputTokens: Number(chat.outputTokens) || 0,
+    characterCardId: String(chat.characterCardId ?? ""),
   };
 }
 
@@ -53,6 +56,11 @@ export async function listChats(query: string): Promise<ChatEntry[]> {
   }
   const result = await Tools.Chat.listChats(params as Parameters<typeof Tools.Chat.listChats>[0]);
   return (result.chats ?? []).map(toEntry);
+}
+
+// 标题里带"归档"的对话已经退役：不再当作她，也不放进后台角色
+export function isArchived(entry: { title: string }): boolean {
+  return /归档|archived?/i.test(entry.title);
 }
 
 export function isPinned(entry: ChatEntry): boolean {

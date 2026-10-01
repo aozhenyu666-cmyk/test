@@ -11,6 +11,10 @@ exports.lastRenameBatch = lastRenameBatch;
 exports.undoLastRenames = undoLastRenames;
 exports.distillPrompt = distillPrompt;
 exports.writeDistillPrompt = writeDistillPrompt;
+exports.disableExpiredWorkflows = disableExpiredWorkflows;
+exports.lastWorkflowBatch = lastWorkflowBatch;
+exports.undoWorkflowBatch = undoWorkflowBatch;
+exports.oneClickTidy = oneClickTidy;
 // 对话整理：用 list_chats 返回的元数据盘点所有对话，不读内容、不花模型 token。
 // 能自动做的只有两件，而且都要点两次确认：
 // - 删除空对话（0–2 条），删之前把内容备份到 slim/deleted_chats.jsonl
@@ -22,6 +26,11 @@ const snapshot_js_1 = require("./snapshot.js");
 const slim_js_1 = require("./slim.js");
 const DELETED_LOG = `${slim_js_1.SLIM_DIR}/deleted_chats.jsonl`;
 const RENAME_LOG = `${slim_js_1.SLIM_DIR}/renames.jsonl`;
+const WORKFLOW_LOG = `${slim_js_1.SLIM_DIR}/workflow_toggles.jsonl`;
+// 一小时内刚建或刚动过的空对话可能马上要用，不删
+const FRESH_MS = 3600 * 1000;
+// 超长又 7 天没动的对话归入"归档"
+const IDLE_MS = 7 * 24 * 3600 * 1000;
 exports.SHORT_MAX_MESSAGES = 2;
 exports.LONG_MIN_MESSAGES = 100;
 exports.LONG_MIN_TOKENS = 1000000;
@@ -65,6 +74,7 @@ async function listEverything() {
                 characterCardName: String(c.characterCardName ?? ""),
                 inputTokens: Number(c.inputTokens) || 0,
                 outputTokens: Number(c.outputTokens) || 0,
+                characterCardId: String(c.characterCardId ?? ""),
             });
         }
         // 一次就拿全了，后面两次不用再查
@@ -83,7 +93,11 @@ function titleKey(title) {
         .trim();
 }
 const TEST_PATTERN = /测试|试试|试一下|test|probe|探针|demo|调试|debug/i;
-function categoryFor(c, herId) {
+function parseUpdated(value) {
+    const t = /^\d+$/.test(value) ? Number(value) : Date.parse(value);
+    return Number.isFinite(t) && t > 0 ? t : null;
+}
+function categoryFor(c, herId, now) {
     if (c.id === herId)
         return "她";
     if (c.guard.startsWith("工作流"))
@@ -92,16 +106,18 @@ function categoryFor(c, herId) {
         return "角色";
     if (TEST_PATTERN.test(c.title))
         return "测试";
-    if (c.cls === "C")
-        return "长对话";
+    if (c.cls === "C") {
+        const updated = parseUpdated(c.updatedAt);
+        return updated != null && now - updated > IDLE_MS ? "归档" : "长对话";
+    }
     return "日常";
 }
-function proposeTitle(c, herId) {
+function proposeTitle(c, herId, now = Date.now()) {
     if (c.cls === "A")
         return null; // 空对话是删除候选，不改名
-    if (/^\s*[\[【]/.test(c.title))
-        return null; // 已经有类别前缀
-    const cat = categoryFor(c, herId);
+    if (/^\s*[\[【]/.test(c.title) || (0, nav_js_1.isArchived)(c))
+        return null; // 已经有类别前缀或已归档
+    const cat = categoryFor(c, herId, now);
     if (!cat)
         return null;
     const topic = c.title.length > 24 ? `${c.title.slice(0, 24)}…` : c.title;
@@ -127,15 +143,18 @@ async function scanChats(now = Date.now()) {
     }
     const groups = new Map();
     const rows = chats.map((c) => {
+        const updated = parseUpdated(c.updatedAt);
         const guard = c.id === herId
             ? "她的对话"
             : usedByFlow.has(c.id)
                 ? `工作流在用：${usedByFlow.get(c.id)}`
-                : (0, nav_js_1.isPinned)(c)
+                : (0, nav_js_1.isPinned)(c) && !(0, nav_js_1.isArchived)(c)
                     ? "后台角色"
                     : c.isCurrent
                         ? "当前对话"
-                        : "";
+                        : updated != null && now - updated < FRESH_MS && c.messageCount <= exports.SHORT_MAX_MESSAGES
+                            ? "一小时内刚建"
+                            : "";
         const tokens = c.inputTokens + c.outputTokens;
         let cls = "D";
         if (c.messageCount <= exports.SHORT_MAX_MESSAGES)
@@ -163,7 +182,7 @@ async function scanChats(now = Date.now()) {
     }
     duplicates.sort((a, b) => b.ids.length - a.ids.length);
     for (const r of rows)
-        r.proposedTitle = proposeTitle(r, herId);
+        r.proposedTitle = proposeTitle(r, herId, now);
     rows.sort((a, b) => b.messageCount - a.messageCount);
     const counts = { A: 0, B: 0, C: 0, D: 0 };
     for (const r of rows)
@@ -260,7 +279,7 @@ async function deleteShortChats(targets) {
     return out;
 }
 async function applyRenames(targets) {
-    const batch = `R-${Date.now()}`;
+    const batch = `R-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let renamed = 0;
     const failed = [];
     for (const c of targets) {
@@ -345,4 +364,96 @@ async function writeDistillPrompt(c) {
     const path = `${slim_js_1.SLIM_DIR}/distill_prompt_${c.id.slice(0, 8)}.md`;
     await Tools.Files.write(path, distillPrompt(c), false);
     return path;
+}
+const PROBE_PATTERN = /probe|探针|一次性|test|测试/i;
+// 一键整理只停两种：时间已过的一次性定时，和名字就是探针/测试的手动流程。其余只提示。
+async function disableExpiredWorkflows(now = Date.now()) {
+    const scan = await (0, slim_js_1.scanRedundancy)(now);
+    const all = await Tools.Workflow.getAll();
+    const byName = new Map((all.workflows ?? []).map((w) => [w.name, w]));
+    const batch = `W-${now}-${Math.random().toString(36).slice(2, 8)}`;
+    const disabled = [];
+    const suggested = [];
+    for (const hint of scan.workflows) {
+        const wf = byName.get(hint.name);
+        if (!wf || !wf.enabled)
+            continue;
+        const expired = hint.why.includes("时间已过");
+        const probe = hint.why.startsWith("手动流程") && PROBE_PATTERN.test(hint.name);
+        if (!expired && !probe) {
+            suggested.push(`${hint.name}（${hint.why}）`);
+            continue;
+        }
+        try {
+            const after = await Tools.Workflow.setEnabled(wf.id, false);
+            if (after && after.enabled === false) {
+                const rec = { batch, ts: Math.floor(now / 1000), id: wf.id, name: wf.name, why: hint.why };
+                await Tools.Files.write(WORKFLOW_LOG, JSON.stringify(rec) + "\n", true);
+                disabled.push(wf.name);
+            }
+        }
+        catch {
+            suggested.push(`${hint.name}（停用失败，${hint.why}）`);
+        }
+    }
+    return { disabled, suggested };
+}
+async function readToggles() {
+    if (!(await (0, snapshot_js_1.fileExists)(WORKFLOW_LOG)))
+        return [];
+    const { lines } = await (0, snapshot_js_1.readAll)(WORKFLOW_LOG, 500);
+    const out = [];
+    for (const line of lines) {
+        try {
+            out.push(JSON.parse(line));
+        }
+        catch {
+            // 跳过坏行
+        }
+    }
+    return out;
+}
+function liveToggles(all) {
+    const undone = new Set(all.filter((r) => r.undone).map((r) => `${r.batch}:${r.id}`));
+    return all.filter((r) => !r.undone && !undone.has(`${r.batch}:${r.id}`));
+}
+async function lastWorkflowBatch() {
+    const live = liveToggles(await readToggles());
+    const last = live[live.length - 1];
+    if (!last)
+        return null;
+    return { batch: last.batch, names: live.filter((r) => r.batch === last.batch).map((r) => r.name) };
+}
+async function undoWorkflowBatch() {
+    const live = liveToggles(await readToggles());
+    const last = live[live.length - 1];
+    if (!last)
+        return [];
+    const restored = [];
+    for (const r of live.filter((x) => x.batch === last.batch)) {
+        await Tools.Workflow.setEnabled(r.id, true);
+        await Tools.Files.write(WORKFLOW_LOG, JSON.stringify({ ...r, undone: true }) + "\n", true);
+        restored.push(r.name);
+    }
+    return restored;
+}
+// 删空对话（先备份）→ 按类别改名（可撤销）→ 停用过期的一次性/探针工作流（可撤销）→ 重新盘点
+async function oneClickTidy(now = Date.now()) {
+    const before = await scanChats(now);
+    const shorts = before.chats.filter((c) => c.cls === "A" && !c.guard);
+    const del = await deleteShortChats(shorts);
+    const mid = await scanChats(now);
+    const ren = await applyRenames(mid.chats.filter((c) => c.proposedTitle));
+    let workflowsDisabled = [];
+    let workflowsSuggested = [];
+    try {
+        const wf = await disableExpiredWorkflows(now);
+        workflowsDisabled = wf.disabled;
+        workflowsSuggested = wf.suggested;
+    }
+    catch {
+        // 工作流读不到就只整理对话
+    }
+    const report = await scanChats(now);
+    return { deleted: del.deleted, skipped: del.skipped.length, renamed: ren.renamed, workflowsDisabled, workflowsSuggested, report };
 }

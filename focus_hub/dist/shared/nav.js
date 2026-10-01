@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.LONG_CHAT_MESSAGES = exports.PINNED_TITLE_KEYWORDS = exports.NATIVE_CHAT_ROUTE = exports.FOCUS_HUB_ROUTE = void 0;
 exports.listChats = listChats;
+exports.isArchived = isArchived;
 exports.isPinned = isPinned;
 exports.setMainChat = setMainChat;
 exports.openRouteViaIntent = openRouteViaIntent;
@@ -25,6 +26,7 @@ function toEntry(chat) {
         characterCardName: String(chat.characterCardName ?? ""),
         inputTokens: Number(chat.inputTokens) || 0,
         outputTokens: Number(chat.outputTokens) || 0,
+        characterCardId: String(chat.characterCardId ?? ""),
     };
 }
 // list_chats 读聊天记录库，不依赖悬浮窗服务
@@ -36,6 +38,10 @@ async function listChats(query) {
     }
     const result = await Tools.Chat.listChats(params);
     return (result.chats ?? []).map(toEntry);
+}
+// 标题里带"归档"的对话已经退役：不再当作她，也不放进后台角色
+function isArchived(entry) {
+    return /归档|archived?/i.test(entry.title);
 }
 function isPinned(entry) {
     return exports.PINNED_TITLE_KEYWORDS.some((keyword) => entry.title.includes(keyword));

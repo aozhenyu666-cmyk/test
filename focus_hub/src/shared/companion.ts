@@ -1,4 +1,4 @@
-import { listChats, type ChatEntry } from "./nav.js";
+import { isArchived, listChats, type ChatEntry } from "./nav.js";
 
 // 主界面只有一张脸。判定顺序：用户在会话页"设为她"选过的 → 秘书会话（S3 投递目标）→ 标题含"秘书" → 标题含"陪伴窗"
 const CONFIG_PATH = "/sdcard/Download/Operit/companion/config.json";
@@ -11,6 +11,8 @@ export interface Companion {
   name: string;
   chat: ChatEntry | null;
   source: "chosen" | "secretary" | "title" | "none";
+  // 你选中的对话已经归档了（只在 chosen 时可能为真；兜底顺序会跳过归档对话）
+  archived?: boolean;
 }
 
 async function readChosenChatId(): Promise<string> {
@@ -37,13 +39,14 @@ export async function setCompanionChat(chatId: string): Promise<void> {
 export async function findCompanion(allChats?: ChatEntry[]): Promise<Companion> {
   const chats = allChats ?? (await listChats(""));
   const byId = (id: string) => (id ? chats.find((c) => c.id === id) ?? null : null);
+  const live = (chat: ChatEntry | null) => (chat && !isArchived(chat) ? chat : null);
   const pick = (chat: ChatEntry | null, source: Companion["source"]): Companion | null =>
-    chat ? { name: chat.characterCardName || DEFAULT_NAME, chat, source } : null;
+    chat ? { name: chat.characterCardName || DEFAULT_NAME, chat, source, archived: isArchived(chat) } : null;
 
   return (
     pick(byId(await readChosenChatId()), "chosen") ??
-    pick(byId(SECRETARY_CHAT_ID), "secretary") ??
-    TITLE_FALLBACKS.map((keyword) => pick(chats.find((c) => c.title.includes(keyword)) ?? null, "title")).find(Boolean) ??
+    pick(live(byId(SECRETARY_CHAT_ID)), "secretary") ??
+    TITLE_FALLBACKS.map((keyword) => pick(chats.find((c) => c.title.includes(keyword) && !isArchived(c)) ?? null, "title")).find(Boolean) ??
     { name: DEFAULT_NAME, chat: null, source: "none" }
   );
 }

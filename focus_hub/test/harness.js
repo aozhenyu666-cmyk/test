@@ -83,16 +83,18 @@ const workflows = [
   { id: "w8", name: "G2_Judge_Flow", enabled: true, lastExecutionTime: now - 20 * MIN, lastExecutionStatus: "SUCCESS", totalExecutions: 373, successfulExecutions: 235, failedExecutions: 138 },
   { id: "w9", name: "OneShot", enabled: true, lastExecutionTime: now - 90 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 1, successfulExecutions: 1, failedExecutions: 0 },
   { id: "w10", name: "P1_Board_Start", enabled: true, lastExecutionTime: now - 90 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 11, successfulExecutions: 11, failedExecutions: 0 },
+  { id: "w11", name: "PROBE_Terminal_Channel", enabled: true, lastExecutionTime: now - 240 * H, lastExecutionStatus: "SUCCESS", totalExecutions: 1, successfulExecutions: 1, failedExecutions: 0 },
 ];
 const details = {
   w1: [...trig({ schedule_type: "interval", interval_ms: "600000", enabled: "true", repeat: "true" }), { __type: "ExecuteNode", id: "e", actionType: "focus_hub_nav:check_in", actionConfig: {} }],
   w2: [...trig({ schedule_type: "interval", interval_ms: "900000", enabled: "true", repeat: "true" }), { __type: "ExecuteNode", id: "e", actionType: "super_admin:terminal", actionConfig: { command: { value: "sh /sdcard/Download/Operit/lock_freeze/worker.sh" } } }],
   w4: [{ __type: "ExecuteNode", id: "e", actionType: "super_admin:terminal", actionConfig: { command: { value: "sh /sdcard/Download/Operit/legacy_lock.sh" } } }],
   w6: [...trig({ schedule_type: "cron", cron_expression: "30 23 * * *", enabled: "true", repeat: "true" }), { __type: "ExecuteNode", id: "e", actionType: "chat:send", actionConfig: { chat_id: { value: "f0953479" } } }],
-  w7: trig({ schedule_type: "cron", cron_expression: "0 8 * * *", enabled: "true" }),
+  w7: [...trig({ schedule_type: "cron", cron_expression: "0 8 * * *", enabled: "true" }), { __type: "ExecuteNode", id: "e", actionType: "chat:send", actionConfig: { chat_id: { value: "ded96924" } } }],
   w8: trig({ schedule_type: "interval", interval_ms: "1800000", enabled: "true", repeat: "true" }),
   w9: trig({ schedule_type: "specific_time", specific_time: "2026-09-22 12:47", enabled: "true" }),
   w10: [{ __type: "com.ai.assistance.operit.data.model.TriggerNode", id: "m", name: "手动", triggerType: "manual", triggerConfig: { enabled: "true" } }],
+  w11: [{ __type: "com.ai.assistance.operit.data.model.TriggerNode", id: "m", name: "手动", triggerType: "manual", triggerConfig: { enabled: "true" } }],
 };
 
 // ---------- chats ----------
@@ -175,7 +177,8 @@ global.Tools = {
     list: async (p) => { if (!(p in DIRS)) throw new Error(`not a directory: ${p}`); return { path: p, entries: DIRS[p] }; },
   },
   Workflow: {
-    getAll: async () => ({ workflows, totalCount: workflows.length }),
+    getAll: async () => ({ workflows: workflows.map((w) => ({ ...w })), totalCount: workflows.length }),
+    setEnabled: async (id, enabled) => { record("wfSetEnabled", id, enabled); const w = workflows.find((x) => x.id === id); w.enabled = enabled; return { ...w }; },
     get: async (id) => ({ id, nodes: details[id] ?? [] }),
   },
   System: {
@@ -243,11 +246,19 @@ global.Tools = {
   },
 };
 
+let newChatSeq = 0;
 const manager = {
   callSuspend: async (method, ...args) => {
     record("mgr." + method, ...args);
     if (method === "chatExists") return knownChatIds.has(args[0]);
     if (method === "getLatestSummaryTimestamp") return args[0] === "ded96924" ? now - 3 * H : null;
+    if (method === "createNewChat") {
+      newChatSeq += 1;
+      const id = `new-${newChatSeq}`;
+      chats.push({ id, title: "新对话 14:30:00", messageCount: 0, updatedAt: String(now), isCurrent: false, characterCardName: args[2] ?? null, inputTokens: 0, outputTokens: 0 });
+      knownChatIds.add(id);
+      return { id };
+    }
     return null;
   },
 };
@@ -317,7 +328,7 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
 
   // ---------- manifest + workflow template ----------
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
-  assert(manifest.api_version === "1.0.0" && manifest.version === "0.8.0", "ToolPkg API 1.0.0, version 0.8.0");
+  assert(manifest.api_version === "1.0.0" && manifest.version === "0.9.0", "ToolPkg API 1.0.0, version 0.9.0");
   const slimSub = manifest.subpackages.find((x) => x.id === "focus_hub_slim");
   assert(slimSub && slimSub.enabled_by_default === false && fs.existsSync(path.join(__dirname, "..", slimSub.entry)), "slim report subpackage ships disabled (does not add to every prompt by default)");
   const wardenSub = manifest.subpackages.find((x) => x.id === "focus_hub_warden");
@@ -521,8 +532,8 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   await clickable(tree, "系统").props.onClick();
   tree = Screen(ctx);
   assert(has(tree, "体检") && has(tree, "判断官") && has(tree, "偏旧"), "health list");
-  assert(has(tree, "全部 10 个") && !has(tree, "P1_Board_Start"), "workflows collapsed");
-  await clickable(tree, "全部 10 个").props.onClick();
+  assert(has(tree, "全部 11 个") && !has(tree, "P1_Board_Start"), "workflows collapsed");
+  await clickable(tree, "全部 11 个").props.onClick();
   tree = Screen(ctx);
   assert(has(tree, "P1_Board_Start") && has(tree, "失败率 37%"), "workflows expand; failure rate flagged");
   await clickable(tree, "展开").props.onClick();
@@ -771,6 +782,89 @@ function assert(cond, msg) { if (!cond) { console.error("FAIL:", msg); failures 
   tt = Screen(tctx);
   const dels = calls.filter((c) => c[0] === "deleteChat").map((c) => c[1]);
   assert(dels.length === shortCount - 1 && !dels.includes(firstShort.id) && has(tt, `删了 ${shortCount - 1} 个`), "second tap deletes the ticked ones only, unticked kept");
+
+
+  // ---------- 归档对话不当作她 ----------
+  const companionMod = require(path.join(DIST, "shared/companion.js"));
+  const navMod = require(path.join(DIST, "shared/nav.js"));
+  assert(navMod.isArchived({ title: "【归档】秘书旧·已迁陪伴" }) && navMod.isArchived({ title: "[归档] 跑偏提醒" }) && !navMod.isArchived({ title: "秘书" }), "archived titles recognised");
+  const savedCfg = FILES[`${P}/companion/config.json`];
+  delete FILES[`${P}/companion/config.json`];
+  const secChat = chats.find((c) => c.id === "d20b4e22-f6ab-4766-bc83-54e96c99bb44");
+  secChat.title = "【归档】秘书旧·已迁陪伴";
+  const fallback = await companionMod.findCompanion();
+  assert(fallback.chat.id === "ded96924" && fallback.source === "title" && !fallback.archived, "an archived secretary chat is skipped; falls through to 陪伴窗");
+  FILES[`${P}/companion/config.json`] = savedCfg;
+
+  // 会话页：归档单独成组，不在后台角色里
+  const cctx = makeCtx();
+  let ct = Screen(cctx);
+  await ct.props.onLoad();
+  await clickable(Screen(cctx), "会话").props.onClick();
+  ct = Screen(cctx);
+  const back2 = find(ct, (n) => n.type === "Card" && texts(n).includes("后台角色"));
+  const arch2 = find(ct, (n) => n.type === "Card" && texts(n).some((x) => x.startsWith("已归档")));
+  assert(arch2 && texts(arch2).includes("【归档】秘书旧·已迁陪伴") && !texts(back2).includes("【归档】秘书旧·已迁陪伴"), "archived chats get their own group, out of backstage");
+  assert(has(ct, "换个新对话"), "her group offers 换个新对话");
+
+  // ---------- 换个新对话 ----------
+  const hoMod = require(path.join(DIST, "shared/handover.js"));
+  const CH = `${P}/drift/channel.txt`;
+  FILES[CH] = "title=陪伴窗\nmode=WINDOW\nchat_id=ded96924\nspeak=true\n";
+  calls.length = 0;
+  const ho = await hoMod.startFreshCompanionChat(now);
+  const newChat = chats.find((c) => c.id === ho.record.newId);
+  assert(newChat && newChat.characterCardName === "陪伴" && newChat.title.startsWith("[她] "), "new chat created via ChatHistoryManager with her card, titled [她] MM-DD");
+  assert(!calls.some((c) => c[0] === "startService"), "no floating service needed");
+  assert(chats.find((c) => c.id === "ded96924").title === "[归档] 陪伴窗", "old chat renamed [归档], not deleted");
+  assert(JSON.parse(FILES[`${P}/companion/config.json`].trim()).chat_id === ho.record.newId, "hub now treats the new chat as her");
+  assert(FILES[CH].includes(`chat_id=${ho.record.newId}`) && !FILES[CH].includes("ded96924") && FILES[ho.record.channelBackup].includes("ded96924"), "channel.txt repointed, original backed up");
+  assert(ho.record.flowsStillOnOld.includes("LIFE_MorningDigest") && ho.notes.some((n) => n.includes("交给流程线")), "workflows still hard-wired to the old chat are listed, not edited");
+  assert(!calls.some((c) => c[0] === "wfSetEnabled"), "handover never edits workflows");
+  const herNow = await companionMod.findCompanion();
+  assert(herNow.chat.id === ho.record.newId && herNow.source === "chosen", "findCompanion returns the new chat");
+  // 撤销
+  const undoNotes = await hoMod.undoLastHandover();
+  assert(chats.find((c) => c.id === "ded96924").title === "陪伴窗" && JSON.parse(FILES[`${P}/companion/config.json`].trim()).chat_id === "ded96924", "undo: her back to the old chat, title restored");
+  assert(FILES[CH].includes("chat_id=ded96924") && !chats.some((c) => c.id === ho.record.newId) && undoNotes.some((n) => n.includes("空对话已删除")), "undo: channel restored, empty new chat removed");
+  assert((await hoMod.lastHandover()) === null, "nothing left to undo");
+
+  // 页面按钮：两次确认
+  calls.length = 0;
+  await clickable(ct, "换个新对话").props.onClick();
+  ct = Screen(cctx);
+  assert(!calls.some((c) => c[0] === "mgr.createNewChat") && has(ct, "再点确认"), "first tap only arms 换个新对话");
+  await find(ct, (n) => n.type === "TextButton" && texts(n).includes("再点确认")).props.onClick();
+  ct = Screen(cctx);
+  assert(calls.some((c) => c[0] === "mgr.createNewChat") && has(ct, "新对话「[她] ") && has(ct, "撤销上次换"), "second tap switches; notes and undo shown");
+  await hoMod.undoLastHandover();
+
+  // ---------- 一键整理 ----------
+  const tidy2 = require(path.join(DIST, "shared/tidy.js"));
+  chats.push({ id: "just-made", title: "新对话 14:20", messageCount: 0, updatedAt: String(now - 10 * MIN), isCurrent: false, inputTokens: 0, outputTokens: 0 });
+  chats.push({ id: "old-long", title: "简历改写", messageCount: 180, updatedAt: String(now - 20 * 24 * H), isCurrent: false, inputTokens: 2000000, outputTokens: 50000 });
+  calls.length = 0;
+  const oc = await tidy2.oneClickTidy(now);
+  assert(oc.deleted.length > 0 && chats.some((c) => c.id === "just-made"), "one-click deletes empty chats but keeps one made in the last hour");
+  assert(chats.find((c) => c.id === "old-long").title === "[归档] 简历改写", "long chat idle for 7+ days is renamed [归档]");
+  assert(oc.workflowsDisabled.includes("OneShot") && oc.workflowsDisabled.includes("PROBE_Terminal_Channel") && !oc.workflowsDisabled.includes("Never_Run"), "only expired one-shot and probe workflows are disabled");
+  assert(oc.workflowsSuggested.some((x) => x.startsWith("Never_Run")), "other stale workflows are only suggested");
+  assert(oc.report.counts.A === oc.report.chats.filter((c) => c.cls === "A" && c.guard).length, "after one-click, every remaining short chat is a protected one");
+  const wb = await tidy2.lastWorkflowBatch();
+  assert(wb && wb.names.length === 2, "workflow batch recorded for undo");
+  const back = await tidy2.undoWorkflowBatch();
+  assert(back.length === 2 && workflows.find((w) => w.name === "OneShot").enabled && workflows.find((w) => w.name === "PROBE_Terminal_Channel").enabled, "undo re-enables both workflows");
+  // 页面上的一键整理
+  const octx = makeCtx();
+  let ot = Screen(octx);
+  await ot.props.onLoad();
+  await clickable(Screen(octx), "省流").props.onClick();
+  ot = Screen(octx);
+  assert(has(ot, "一键整理"), "一键整理 is visible before any scan");
+  await clickable(ot, "一键整理").props.onClick();
+  await find(Screen(octx), (n) => n.type === "TextButton" && texts(n).includes("再点确认")).props.onClick();
+  ot = Screen(octx);
+  assert(has(ot, "停用 2 个过期工作流") && has(ot, "恢复上次停用的工作流（2 个）"), "one-click from the page reports and offers workflow undo");
 
   console.log(failures === 0 ? "\nALL PASSED" : `\n${failures} FAILED`);
   process.exitCode = failures === 0 ? 0 : 1;
