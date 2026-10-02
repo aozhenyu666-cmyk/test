@@ -1,0 +1,9 @@
+{
+  "name": "operit-lean-context",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "node test/compactor.test.js && node test/hooks.test.js",
+    "pack": "node scripts/pack.js"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "toolpkg_id": "com.lean.context_slimmer",
+  "version": "0.1.0",
+  "api_version": "1.0.0",
+  "author": ["aozhenyu666"],
+  "main": "main.js",
+  "display_name": {
+    "zh": "精简上下文",
+    "en": "Lean Context"
+  },
+  "description": {
+    "zh": "发送前自动压缩旧的工具结果和长消息、按批次截断过长历史（照顾缓存命中）、让自动总结更短更省、可选精简工具说明和简洁回答规则；另带清理测试/一次性对话、长对话接力到新对话的工具。聊天记录本身不会被修改。",
+    "en": "Compacts old tool output and long messages before sending, trims long histories in cache-friendly batches, makes auto-summary shorter, optionally slims tool descriptions and adds terse-answer rules; plus tools to clean throwaway chats and hand long chats off to new ones. Stored chat records are never modified."
+  },
+  "enabled_by_default": true,
+  "subpackages": [
+    {
+      "id": "lean_context_tools",
+      "entry": "packages/lean_tools.js",
+      "enabled_by_default": true,
+      "display_name": {
+        "zh": "精简上下文工具",
+        "en": "Lean Context Tools"
+      },
+      "description": {
+        "zh": "查看/调整精简模式、清理一次性对话、接力新对话、调整自动总结阈值",
+        "en": "Lean mode settings, throwaway-chat cleanup, chat hand-off, auto-summary tuning"
+      }
+    }
+  ]
+}
