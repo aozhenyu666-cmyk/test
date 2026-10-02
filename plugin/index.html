@@ -3,1159 +3,1948 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>AI 助手</title>
+<title>AI 参谋</title>
 <style>
   :root {
-    --bg: #17181c; --panel: #131418; --fg: #e9eaee; --dim: #9aa0aa; --line: #2c2e36;
-    --me: #2f3a52; --ai: #202229; --tool: #1d1f25; --input: #101114; --btn: #262831;
-    --accent: #3a6ea5; --err-bg: #2a1d1e; --err-line: #5a2e2c; --err-fg: #f0c3c1;
-    --ok: #4c9a6a; --warn: #c79a3a; --bad: #b4453f; --code: #0d0e11;
+    --bg: #111216; --surface: #1a1c22; --surface2: #23262e; --line: #2c3039; --fg: #ececf1; --dim: #9aa1ad; --faint: #6b7280;
+    --accent: #7383ff; --accent2: #a78bfa; --accent-soft: rgba(115,131,255,.14); --user: #2c3554;
+    --ok: #34c38f; --warn: #f5b84a; --bad: #ef6461; --code: #0c0d10; --shadow: 0 8px 24px rgba(0,0,0,.35);
   }
   :root[data-theme="light"] {
-    --bg: #f6f7f9; --panel: #eceef2; --fg: #1d2026; --dim: #6b7280; --line: #d9dce3;
-    --me: #dbe7fb; --ai: #ffffff; --tool: #f0f1f4; --input: #ffffff; --btn: #ffffff;
-    --accent: #2f6fb8; --err-bg: #fdeceb; --err-line: #efb9b5; --err-fg: #8a2620; --code: #eef0f4;
+    --bg: #f6f7fb; --surface: #ffffff; --surface2: #eff1f6; --line: #e2e5ec; --fg: #1d2129; --dim: #646b78; --faint: #9aa0aa;
+    --accent: #4f5ff5; --accent2: #8b5cf6; --accent-soft: rgba(79,95,245,.10); --user: #e7ebff;
+    --code: #f1f3f7; --shadow: 0 8px 24px rgba(20,24,40,.10);
   }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
-    font: 15px/1.55 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
-  #app { display: flex; flex-direction: column; height: 100%; height: 100dvh; }
-  header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex: none; }
-  header b { font-size: 14px; font-weight: 600; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
+    font: 15px/1.6 system-ui, -apple-system, "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei", sans-serif; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  input, select, textarea { font: inherit; color: var(--fg); }
+  #app { display: flex; flex-direction: column; height: 100%; height: 100dvh; max-width: 860px; margin: 0 auto; }
+
+  /* ---------- header & tabs ---------- */
+  header { display: flex; align-items: center; gap: 10px; padding: 10px 14px 6px; flex: none; }
+  .avatar { width: 32px; height: 32px; border-radius: 50%; flex: none; display: grid; place-items: center; color: #fff;
+    background: linear-gradient(135deg, var(--accent), var(--accent2)); font-size: 15px; font-weight: 700; }
+  .avatar.sm { width: 26px; height: 26px; font-size: 12px; }
+  .title { flex: 1; min-width: 0; }
+  .title b { display: block; font-size: 16px; line-height: 1.2; }
+  .title span { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
   .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.err { background: var(--bad); }
-  #meta { color: var(--dim); font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  button { background: var(--btn); color: var(--fg); border: 1px solid var(--line); border-radius: 6px;
-    padding: 6px 10px; font: inherit; font-size: 13px; cursor: pointer; }
-  button:disabled { opacity: .5; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  #log { flex: 1; overflow-y: auto; padding: 10px 12px; -webkit-overflow-scrolling: touch; }
-  .msg { margin: 0 0 10px; max-width: 92%; padding: 8px 11px; border-radius: 10px; white-space: pre-wrap; word-break: break-word; }
-  .msg.me { background: var(--me); margin-left: auto; border-bottom-right-radius: 3px; }
-  .msg.ai { background: var(--ai); border: 1px solid var(--line); border-bottom-left-radius: 3px; }
-  .msg code { background: var(--code); padding: 1px 4px; border-radius: 3px; font: 12px ui-monospace, Menlo, Consolas, monospace; }
-  .msg pre { background: var(--code); padding: 8px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; }
-  .msg.err { background: var(--err-bg); border: 1px solid var(--err-line); color: var(--err-fg); font-size: 13px; }
-  .msg.note { color: var(--dim); font-size: 12px; background: none; padding: 2px 0; max-width: 100%; }
-  details.tool { margin: 0 0 8px; font-size: 12px; color: var(--dim); background: var(--tool); border-left: 2px solid var(--line); border-radius: 4px; padding: 4px 8px; }
-  details.tool.fail { border-left-color: var(--bad); }
-  details.tool summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  details.tool pre { margin: 6px 0 2px; white-space: pre-wrap; word-break: break-all; font: 11px ui-monospace, Menlo, Consolas, monospace; max-height: 30vh; overflow-y: auto; }
-  footer { flex: none; border-top: 1px solid var(--line); padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); display: flex; gap: 8px; align-items: flex-end; }
-  textarea { flex: 1; min-width: 0; background: var(--input); color: var(--fg); border: 1px solid var(--line); border-radius: 8px;
-    padding: 9px 11px; font: inherit; resize: none; max-height: 34vh; outline: none; }
-  #cfg { border-bottom: 1px solid var(--line); padding: 4px 12px 12px; background: var(--panel); display: none; flex: none; max-height: 70vh; overflow-y: auto; }
-  #cfg.open { display: block; }
-  #cfg h4 { margin: 12px 0 0; font-size: 13px; }
-  #cfg label { display: block; color: var(--dim); font-size: 12px; margin: 8px 0 3px; }
-  #cfg input, #cfg select { width: 100%; background: var(--input); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font: inherit; font-size: 13px; }
-  #cfg .row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-  .hint { color: var(--dim); font-size: 12px; margin-top: 4px; }
-  .empty { color: var(--dim); text-align: center; margin-top: 22vh; font-size: 13px; padding: 0 24px; }
+  .icon-btn { width: 36px; height: 36px; border-radius: 10px; border: 0; background: transparent; display: grid; place-items: center; color: var(--dim); }
+  .icon-btn:active { background: var(--surface2); }
+  .icon-btn svg { width: 20px; height: 20px; }
+  nav.tabs { display: flex; gap: 4px; margin: 2px 14px 6px; padding: 3px; background: var(--surface2); border-radius: 12px; flex: none; }
+  nav.tabs button { flex: 1; border: 0; background: transparent; border-radius: 9px; padding: 6px 0; font-size: 13px; color: var(--dim); }
+  nav.tabs button.on { background: var(--surface); color: var(--fg); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .view { flex: 1; min-height: 0; display: none; flex-direction: column; }
+  .view.on { display: flex; }
+  .scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 8px 14px 16px; }
+
+  /* ---------- chat ---------- */
+  .row { display: flex; gap: 10px; margin: 0 0 16px; }
+  .row.me { justify-content: flex-end; }
+  .bubble-me { max-width: 85%; background: var(--user); padding: 9px 14px; border-radius: 18px 18px 4px 18px; white-space: pre-wrap; word-break: break-word; }
+  .ai-body { flex: 1; min-width: 0; padding-top: 2px; }
+  .md { word-break: break-word; }
+  .md p { margin: 0 0 8px; } .md p:last-child { margin-bottom: 0; }
+  .md h1, .md h2, .md h3, .md h4 { margin: 12px 0 6px; font-size: 15.5px; line-height: 1.4; }
+  .md h1:first-child, .md h2:first-child, .md h3:first-child { margin-top: 0; }
+  .md ul, .md ol { margin: 4px 0 8px; padding-left: 22px; } .md li { margin: 2px 0; }
+  .md li.task { list-style: none; margin-left: -20px; }
+  .md code { background: var(--code); padding: 1px 5px; border-radius: 4px; font: 12.5px ui-monospace, Menlo, Consolas, monospace; }
+  .md pre { background: var(--code); padding: 10px 12px; border-radius: 10px; overflow-x: auto; font: 12.5px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+  .md blockquote { margin: 6px 0; padding: 2px 12px; border-left: 3px solid var(--accent); color: var(--dim); }
+  .md table { border-collapse: collapse; margin: 6px 0 10px; font-size: 13.5px; display: block; overflow-x: auto; }
+  .md th, .md td { border: 1px solid var(--line); padding: 5px 9px; text-align: left; }
+  .md th { background: var(--surface2); }
+  .md hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
+  .acts { display: flex; gap: 2px; margin-top: 4px; }
+  .acts button { border: 0; background: transparent; color: var(--faint); font-size: 12px; padding: 3px 6px; border-radius: 6px; display: flex; align-items: center; gap: 4px; }
+  .acts button svg { width: 14px; height: 14px; }
+  .acts button:active { background: var(--surface2); }
+  .steps { margin: 0 0 8px; font-size: 12.5px; color: var(--dim); }
+  .steps summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 8px;
+    background: var(--surface2); border-radius: 999px; }
+  .steps summary::-webkit-details-marker { display: none; }
+  .steps .spin { width: 12px; height: 12px; border: 2px solid var(--faint); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+  .steps ul { list-style: none; margin: 6px 0 0; padding: 0 0 0 4px; }
+  .steps li { margin: 3px 0; display: flex; gap: 6px; }
+  .steps li.fail { color: var(--bad); }
+  .steps li small { color: var(--faint); word-break: break-all; }
+  .choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .choices button { border: 1px solid var(--accent); color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 6px 14px; font-size: 14px; }
+  .choices button:disabled { opacity: .45; }
+  .confirm { margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  .confirm .btns { display: flex; gap: 8px; margin-top: 10px; }
+  .typing { display: inline-flex; align-items: center; gap: 8px; color: var(--dim); font-size: 13px; }
+  .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); display: inline-block; animation: blink 1.2s infinite both; }
+  .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: .2; transform: scale(.8); } 40% { opacity: 1; transform: scale(1); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .err-card { margin: 0 0 14px; padding: 10px 12px; border-radius: 12px; background: rgba(239,100,97,.10); border: 1px solid rgba(239,100,97,.35); font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+  .note { text-align: center; color: var(--faint); font-size: 12px; margin: 0 0 14px; white-space: pre-wrap; }
+
+  .hero { padding: 18px 4px 6px; }
+  .hero h2 { margin: 0 0 4px; font-size: 22px; }
+  .hero p { margin: 0 0 14px; color: var(--dim); }
+  .stat-strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 14px; }
+  .stat { flex: none; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 9px 13px; min-width: 104px; }
+  .stat b { display: block; font-size: 19px; line-height: 1.25; }
+  .stat span { font-size: 12px; color: var(--dim); }
+  .starter { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .starter button { text-align: left; border: 1px solid var(--line); background: var(--surface); border-radius: 14px; padding: 11px 12px; }
+  .starter button b { display: block; font-size: 14px; }
+  .starter button span { font-size: 12px; color: var(--dim); }
+
+  .composer { flex: none; padding: 6px 12px calc(10px + env(safe-area-inset-bottom)); }
+  .chips { display: flex; gap: 6px; overflow-x: auto; padding: 2px 2px 8px; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chips button { flex: none; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 12px; font-size: 13px; color: var(--dim); }
+  .inputbox { display: flex; align-items: flex-end; gap: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 24px; padding: 6px 6px 6px 16px; box-shadow: var(--shadow); }
+  .inputbox textarea { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; resize: none; padding: 7px 0; max-height: 34vh; line-height: 1.5; }
+  .send { width: 38px; height: 38px; border-radius: 50%; border: 0; background: var(--accent); color: #fff; display: grid; place-items: center; flex: none; }
+  .send:disabled { background: var(--surface2); color: var(--faint); }
+  .send svg { width: 18px; height: 18px; }
+  .send.stop { background: var(--fg); color: var(--bg); }
+
+  /* ---------- cards (today / goals / settings) ---------- */
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin: 0 0 12px; }
+  .card h3 { margin: 0 0 10px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .card h3 .sp { flex: 1; }
+  .card h3 small { font-weight: 400; color: var(--dim); font-size: 12px; }
+  .muted { color: var(--dim); font-size: 13px; }
+  .btn { border: 1px solid var(--line); background: var(--surface2); border-radius: 10px; padding: 7px 12px; font-size: 13px; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.ghost { background: transparent; }
+  .btn.danger { color: var(--bad); }
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .daynav { display: flex; align-items: center; gap: 8px; margin: 2px 0 12px; }
+  .daynav b { flex: 1; text-align: center; font-size: 16px; }
+  .countdowns { display: flex; gap: 8px; overflow-x: auto; margin: 0 0 12px; }
+  .cd { flex: none; border-radius: 14px; padding: 8px 12px; background: var(--accent-soft); min-width: 108px; }
+  .cd b { font-size: 20px; } .cd span { display: block; font-size: 12px; color: var(--dim); }
+  .plan-item { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; border-top: 1px dashed var(--line); }
+  .plan-item:first-of-type { border-top: 0; }
+  .check { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--faint); flex: none; margin-top: 3px; display: grid; place-items: center; }
+  .check.on { background: var(--ok); border-color: var(--ok); color: #fff; font-size: 11px; }
+  .plan-item .t { flex: 1; } .plan-item .t small { display: block; color: var(--dim); font-size: 12px; }
+  .done-t { text-decoration: line-through; color: var(--dim); }
+  .bars { display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: var(--surface2); margin: 8px 0; }
+  .legend { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; font-size: 13px; }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; }
+  .timeline { position: relative; height: 26px; background: var(--surface2); border-radius: 7px; margin: 10px 0 4px; overflow: hidden; }
+  .timeline .seg { position: absolute; top: 3px; bottom: 3px; border-radius: 4px; min-width: 2px; }
+  .timeline .seg.away { top: 0; bottom: 0; background: repeating-linear-gradient(45deg, rgba(160,160,160,.55) 0 3px, transparent 3px 6px); }
+  .ticks { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--faint); }
+  .seglist { margin-top: 8px; font-size: 13px; }
+  .seglist div { display: flex; gap: 8px; padding: 3px 0; }
+  .seglist time { color: var(--dim); font-variant-numeric: tabular-nums; flex: none; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; }
+  .kv dt { color: var(--dim); } .kv dd { margin: 0; white-space: pre-wrap; }
+  .pills { display: flex; flex-wrap: wrap; gap: 6px; }
+  .pill { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--surface2); color: var(--dim); }
+  .pill.on { background: var(--accent-soft); color: var(--accent); }
+
+  .goal { cursor: pointer; }
+  .goal-head { display: flex; align-items: center; gap: 10px; }
+  .goal-emoji { width: 38px; height: 38px; border-radius: 12px; background: var(--surface2); display: grid; place-items: center; font-size: 20px; flex: none; }
+  .goal-head .t { flex: 1; min-width: 0; }
+  .goal-head .t b { display: block; }
+  .goal-head .t span { font-size: 12.5px; color: var(--dim); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .goal-days { text-align: right; } .goal-days b { font-size: 20px; display: block; line-height: 1.1; } .goal-days span { font-size: 11px; color: var(--dim); }
+  .goal-body { margin-top: 12px; display: none; }
+  .goal.open .goal-body { display: block; }
+  .ms { display: flex; gap: 8px; align-items: center; font-size: 14px; padding: 3px 0; }
+
+  .field { margin: 0 0 10px; }
+  .field label { display: block; font-size: 12px; color: var(--dim); margin: 0 0 4px; }
+  .field input, .field select, .field textarea { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; font-size: 14px; outline: none; }
+  .field textarea { resize: vertical; min-height: 64px; }
+  .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+  .switch { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+  .switch:first-of-type { border-top: 0; }
+  .switch .t { flex: 1; } .switch .t small { display: block; color: var(--dim); font-size: 12px; }
+  .switch select { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font-size: 13px; }
+  .provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; margin-bottom: 10px; }
+  .provider-grid button { border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 8px; font-size: 13px; }
+  .provider-grid button.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .status-line { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; padding: 8px 10px; border-radius: 10px; background: var(--surface2); margin-top: 10px; white-space: pre-wrap; word-break: break-word; }
+  .status-line .dot { margin-top: 6px; }
+  .empty-hint { text-align: center; color: var(--dim); font-size: 13px; padding: 14px 0; }
 </style>
 </head>
 <body>
 <div id="app">
   <header>
-    <span class="dot" id="dot"></span>
-    <b>AI 助手</b>
-    <span id="meta">未配置</span>
-    <button id="btnCfg" title="设置">设置</button>
-    <button id="btnClear" title="清空对话">清空</button>
+    <div class="avatar">参</div>
+    <div class="title"><b>AI 参谋</b><span><i class="dot" id="dot"></i><em id="meta" style="font-style:normal">未配置</em></span></div>
+    <button class="icon-btn" id="btnNew" title="新对话" aria-label="新对话"></button>
   </header>
+  <nav class="tabs" id="tabs">
+    <button data-tab="chat" class="on">对话</button>
+    <button data-tab="today">今日</button>
+    <button data-tab="goals">目标</button>
+    <button data-tab="settings">设置</button>
+  </nav>
 
-  <div id="cfg">
-    <h4>大模型（必填）</h4>
-    <label for="fPreset">服务商</label>
-    <select id="fPreset"></select>
-    <label for="fBase">API 地址（OpenAI 兼容，填到 /v1 为止）</label>
-    <input id="fBase" placeholder="https://api.deepseek.com/v1" autocomplete="off" spellcheck="false" />
-    <label for="fKey">API Key（只存在本机，不参与同步）</label>
-    <input id="fKey" type="password" autocomplete="off" spellcheck="false" />
-    <label for="fModel">模型</label>
-    <input id="fModel" list="modelList" placeholder="deepseek-chat" autocomplete="off" spellcheck="false" />
-    <datalist id="modelList"></datalist>
-
-    <h4>远程 MCP 服务器（可选）</h4>
-    <label for="fMcpUrl">MCP 地址（Streamable HTTP，留空则只用本机工具）</label>
-    <input id="fMcpUrl" placeholder="https://example.com/mcp" autocomplete="off" spellcheck="false" />
-    <label for="fMcpToken">MCP Token（可选，作为 Bearer 发送）</label>
-    <input id="fMcpToken" type="password" autocomplete="off" spellcheck="false" />
-
-    <h4>高级</h4>
-    <label for="fTransport">网络通道</label>
-    <select id="fTransport">
-      <option value="auto">自动（推荐）</option>
-      <option value="native">原生 HTTP（仅安卓/iOS，无 CORS 限制，可访问局域网）</option>
-      <option value="fetch">浏览器 fetch（需要服务端允许 CORS）</option>
-      <option value="proxy">SP 宿主代理（只能访问 manifest 里的公网域名，单次 30 秒超时）</option>
-    </select>
-    <div class="row">
-      <button id="btnModels">获取模型列表</button>
-      <button id="btnTest">测试连接</button>
-      <button id="btnSave" class="primary">保存</button>
+  <section class="view on" id="view-chat">
+    <div class="scroll" id="log"></div>
+    <div class="composer">
+      <div class="chips" id="chips"></div>
+      <div class="inputbox">
+        <textarea id="input" rows="1" placeholder="和参谋说点什么（可用输入法语音输入）"></textarea>
+        <button class="send" id="btnSend" aria-label="发送"></button>
+      </div>
     </div>
-    <div class="hint">配置保存在本机 localStorage；对话记录也只保存在本机。</div>
-  </div>
+  </section>
 
-  <div id="log"><div class="empty">先点「设置」填好大模型 API，然后直接说人话，例如：<br>「明天下午 3 点提醒我写周报，预估 30 分钟」<br>「今天还剩哪些没做完？」</div></div>
-  <footer>
-    <textarea id="input" rows="1" placeholder="说点什么…"></textarea>
-    <button id="btnSend" class="primary">发送</button>
-  </footer>
+  <section class="view" id="view-today"><div class="scroll" id="today"></div></section>
+  <section class="view" id="view-goals"><div class="scroll" id="goals"></div></section>
+  <section class="view" id="view-settings"><div class="scroll" id="settings"></div></section>
 </div>
 
 <script>
 (function () {
   'use strict';
 
-  var API = window.PluginAPI;
-  var STORE_KEY = 'sp-ai-assistant:v1';
-  var MAX_ROUNDS = 8;
-  var KEEP_USER_TURNS = 12;
-  var TOOL_RESULT_MAX = 8000;
-  var LLM_TIMEOUT = 120000;
+  const API = window.PluginAPI;
+  const VERSION = '0.3.0';
+  const LS_KEY = 'sp-ai-assistant:v1';
+  const LS = 'sp-ai-assistant:';
+  const MAX_ROUNDS = 10;
+  const KEEP_USER_TURNS = 10;
+  const FULL_TOOL_TURNS = 2;
+  const TOOL_RESULT_MAX = 6000;
+  const LLM_TIMEOUT = 120000;
+  const RITUAL_PREFIX = '🧭 参谋';
 
-  var PRESETS = [
+  const ICON = {
+    send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
+    stop: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+    edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+    copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+    retry: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>',
+  };
+
+  const PRESETS = [
     { id: 'deepseek', label: 'DeepSeek', base: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
-    { id: 'dashscope', label: '阿里云百炼（通义千问）', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
-    { id: 'moonshot', label: 'Kimi（月之暗面）', base: 'https://api.moonshot.cn/v1', model: '' },
+    { id: 'dashscope', label: '通义千问', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+    { id: 'moonshot', label: 'Kimi', base: 'https://api.moonshot.cn/v1', model: '' },
     { id: 'zhipu', label: '智谱 GLM', base: 'https://open.bigmodel.cn/api/paas/v4', model: '' },
     { id: 'siliconflow', label: '硅基流动', base: 'https://api.siliconflow.cn/v1', model: '' },
     { id: 'openrouter', label: 'OpenRouter', base: 'https://openrouter.ai/api/v1', model: '' },
     { id: 'openai', label: 'OpenAI', base: 'https://api.openai.com/v1', model: '' },
-    { id: 'anthropic', label: 'Claude（Anthropic，OpenAI 兼容接口）', base: 'https://api.anthropic.com/v1', model: '' },
-    { id: 'custom', label: '自定义 / 自建网关', base: '', model: '' },
+    { id: 'anthropic', label: 'Claude', base: 'https://api.anthropic.com/v1', model: '' },
+    { id: 'custom', label: '自定义 / 网关', base: '', model: '' },
   ];
 
-  var cfg = { preset: 'deepseek', llmBase: '', apiKey: '', model: '', mcpUrl: '', mcpToken: '', transport: 'auto' };
-  var state = { history: [], busy: false, stop: false, currentTaskId: null, mcp: null, goodTransport: {} };
-
-  var $ = function (id) { return document.getElementById(id); };
-  var els = {
-    log: $('log'), input: $('input'), dot: $('dot'), meta: $('meta'), cfg: $('cfg'), send: $('btnSend'),
-    preset: $('fPreset'), base: $('fBase'), key: $('fKey'), model: $('fModel'), models: $('modelList'),
-    mcpUrl: $('fMcpUrl'), mcpToken: $('fMcpToken'), transport: $('fTransport'),
+  const DEFAULT_SETTINGS = {
+    morningTime: '08:30', eveningTime: '21:30',
+    awayCheck: null, awayMinutes: 10, ritualTask: null, openPrompt: true, timeline: null,
   };
 
-  // ------------------------------------------------------------------ 小工具
+  const GOAL_COLORS = ['#7383ff', '#34c38f', '#f5b84a', '#ef6461', '#22b8cf', '#c084fc', '#f97316', '#84cc16'];
 
-  function pad(n) { return (n < 10 ? '0' : '') + n; }
-  function ymd(d) { d = d || new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
-  function hm(d) { d = d || new Date(); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
-  function fmtTs(ms) { var d = new Date(ms); return ymd(d) + ' ' + hm(d); }
-  function minutes(ms) { return ms ? Math.round(ms / 60000) : 0; }
-  function errMsg(e) { return (e && (e.message || e.error)) || String(e); }
+  // 国考 / 四川省考：日期按往年规律估算，公告出来后请在“目标”页改成官方日期
+  const DEFAULT_GOALS = [
+    { id: 'study', emoji: '📚', title: '学习', tag: '学习', why: '', focus: '', targetDate: '', keyDates: [], milestones: [] },
+    { id: 'job', emoji: '💼', title: '找工作', tag: '求职', why: '', focus: '', targetDate: '', keyDates: [], milestones: [] },
+    { id: 'mind', emoji: '🧠', title: '思维习惯突破', tag: '思维', why: '', focus: '', targetDate: '', keyDates: [], milestones: [] },
+    { id: 'social', emoji: '🤝', title: '社交突破', tag: '社交', why: '', focus: '', targetDate: '', keyDates: [], milestones: [] },
+    {
+      id: 'guokao', emoji: '🏛️', title: '国考（2027 年度）', tag: '国考', why: '', focus: '', targetDate: '2026-11-29',
+      keyDates: [
+        { label: '公告', date: '2026-10-14', estimated: true },
+        { label: '报名截止', date: '2026-10-24', estimated: true },
+        { label: '笔试', date: '2026-11-29', estimated: true },
+      ],
+      milestones: [],
+    },
+    {
+      id: 'sckao', emoji: '🏔️', title: '四川省考（2027 年度）', tag: '省考', why: '', focus: '', targetDate: '2026-12-06',
+      keyDates: [
+        { label: '公告', date: '2026-10-30', estimated: true },
+        { label: '报名', date: '2026-11-05', estimated: true },
+        { label: '笔试', date: '2026-12-06', estimated: true },
+      ],
+      milestones: [],
+    },
+  ];
+
+  let cfg = { preset: 'deepseek', llmBase: '', apiKey: '', model: '', mcpUrl: '', mcpToken: '', transport: 'auto', stream: true };
+  const state = {
+    history: [], busy: false, abort: null, mcp: null, goodTransport: {}, streamOk: {},
+    tab: 'chat', todayDay: null, openGoal: null,
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const els = { log: $('log'), input: $('input'), send: $('btnSend'), chips: $('chips'), dot: $('dot'), meta: $('meta') };
+
+  // ================================================================== utils
+
+  const pad = (n) => (n < 10 ? '0' : '') + n;
+  const ymd = (d = new Date()) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  const hm = (d = new Date()) => pad(d.getHours()) + ':' + pad(d.getMinutes());
+  const fmtTs = (ms) => { const d = new Date(ms); return ymd(d) + ' ' + hm(d); };
+  const WEEK = '日一二三四五六';
+  const weekday = (day) => '周' + WEEK.charAt(parseDayDate(day).getDay());
+  const parseDayDate = (day) => { const p = day.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); };
+  const addDays = (day, n) => { const d = parseDayDate(day); d.setDate(d.getDate() + n); return ymd(d); };
+  const daysUntil = (day) => Math.round((parseDayDate(day) - parseDayDate(ymd())) / 86400000);
+  const minutes = (ms) => (ms ? Math.round(ms / 60000) : 0);
+  const fmtDur = (ms) => { const m = minutes(ms); if (m < 60) return m + ' 分'; return Math.floor(m / 60) + ' 小时' + (m % 60 ? ' ' + (m % 60) + ' 分' : ''); };
+  const errMsg = (e) => (e && (e.message || e.error)) || String(e);
+  const h = (s) => String(s == null ? '' : s).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
   function compact(o) {
-    Object.keys(o).forEach(function (k) {
-      var v = o[k];
-      if (v === undefined || v === null || v === '' || v === false || (Array.isArray(v) && !v.length)) delete o[k];
-    });
+    Object.keys(o).forEach((k) => { const v = o[k]; if (v === undefined || v === null || v === '' || v === false || (Array.isArray(v) && !v.length)) delete o[k]; });
     return o;
   }
+  const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+  function lsRead() { try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}') || {}; } catch (e) { return {}; } }
+  function lsWrite(patch) { try { const cur = lsRead(); Object.assign(cur, patch); localStorage.setItem(LS_KEY, JSON.stringify(cur)); } catch (e) { /* ignore */ } }
+  function lsGet(k, def) { try { const v = localStorage.getItem(LS + k); return v ? JSON.parse(v) : def; } catch (e) { return def; } }
+  function lsSet(k, v) { try { localStorage.setItem(LS + k, JSON.stringify(v)); } catch (e) { /* ignore */ } }
+
+  function abortError() { const e = new Error('已停止'); e.aborted = true; return e; }
+  function abortable(p, signal) {
+    if (!signal) return p;
+    return new Promise((resolve, reject) => {
+      if (signal.aborted) return reject(abortError());
+      const on = () => reject(abortError());
+      signal.addEventListener('abort', on, { once: true });
+      p.then((v) => { signal.removeEventListener('abort', on); resolve(v); }, (e) => { signal.removeEventListener('abort', on); reject(e); });
+    });
+  }
   function withTimeout(p, ms, what) {
-    return new Promise(function (resolve, reject) {
-      var t = setTimeout(function () { reject(new Error((what || '请求') + '超时（' + Math.round(ms / 1000) + ' 秒）')); }, ms);
-      Promise.resolve(p).then(function (v) { clearTimeout(t); resolve(v); }, function (e) { clearTimeout(t); reject(e); });
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error((what || '请求') + '超时（' + Math.round(ms / 1000) + ' 秒）')), ms);
+      Promise.resolve(p).then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
     });
   }
 
-  function storageGet() {
-    try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}; } catch (e) { return {}; }
-  }
-  function storageSet(patch) {
-    try { var cur = storageGet(); Object.assign(cur, patch); localStorage.setItem(STORE_KEY, JSON.stringify(cur)); } catch (e) { /* 私密模式等：不持久化也能用 */ }
-  }
+  // ================================================================== synced data (goals / journal / log / settings)
 
-  // ------------------------------------------------------------------ 渲染
-
-  function escapeHtml(s) {
-    return String(s).replace(/[<>&"']/g, function (c) {
-      return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c];
-    });
+  async function loadKey(key, def) {
+    if (!API || typeof API.loadSyncedData !== 'function') return lsGet('mem-' + key, def);
+    try { const raw = await API.loadSyncedData(key); return raw ? JSON.parse(raw) : def; } catch (e) { return def; }
+  }
+  async function saveKey(key, val) {
+    if (!API || typeof API.persistDataSynced !== 'function') return lsSet('mem-' + key, val);
+    return API.persistDataSynced(JSON.stringify(val), key);
   }
 
-  // 只支持极小的 markdown 子集；先转义，模型输出无法注入 HTML
-  function renderRich(node, text) {
-    node.innerHTML = escapeHtml(text)
-      .replace(/```[a-z]*\n?([\s\S]*?)```/g, function (_, c) { return '<pre>' + c + '</pre>'; })
-      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
-      .replace(/^#{1,4} +(.*)$/gm, '<b>$1</b>')
-      .replace(/^[-*] +/gm, '• ');
-  }
+  async function getSettings() { return Object.assign({}, DEFAULT_SETTINGS, (await loadKey('settings', {})) || {}); }
 
-  function clearEmpty() { var e = els.log.querySelector('.empty'); if (e) e.remove(); }
-  function scrollDown() { els.log.scrollTop = els.log.scrollHeight; }
-
-  function addMsg(role, text) {
-    clearEmpty();
-    var n = document.createElement('div');
-    n.className = 'msg ' + role;
-    if (role === 'ai') renderRich(n, text); else n.textContent = text;
-    els.log.appendChild(n);
-    scrollDown();
-    return n;
-  }
-
-  function addToolChip(name, args) {
-    clearEmpty();
-    var d = document.createElement('details');
-    d.className = 'tool';
-    var s = document.createElement('summary');
-    s.textContent = '⋯ ' + name + ' ' + JSON.stringify(args);
-    var pre = document.createElement('pre');
-    pre.textContent = '参数：' + JSON.stringify(args, null, 1);
-    d.appendChild(s); d.appendChild(pre);
-    els.log.appendChild(d);
-    scrollDown();
-    return {
-      done: function (ok, text) {
-        s.textContent = (ok ? '✓ ' : '✗ ') + name + ' ' + JSON.stringify(args);
-        if (!ok) d.classList.add('fail');
-        pre.textContent += '\n\n结果：' + text;
-      },
-    };
-  }
-
-  function setStatus(kind, text) {
-    els.dot.className = 'dot' + (kind ? ' ' + kind : '');
-    els.meta.textContent = text || '';
-  }
-
-  function setBusy(b) {
-    state.busy = b;
-    els.send.textContent = b ? '停止' : '发送';
-    els.send.classList.toggle('primary', !b);
-  }
-
-  function rebuildLog() {
-    els.log.innerHTML = '';
-    state.history.forEach(function (m) {
-      if (m.role === 'user') addMsg('me', m.content);
-      else if (m.role === 'assistant' && m.content) addMsg('ai', m.content);
-    });
-    if (!state.history.length) {
-      els.log.innerHTML = '<div class="empty">直接说人话，例如「把写周报排到今天，预估 30 分钟」。</div>';
+  async function getGoalsDoc() {
+    let doc = await loadKey('goals', null);
+    if (!doc || !Array.isArray(doc.goals)) {
+      doc = { goals: JSON.parse(JSON.stringify(DEFAULT_GOALS)), memory: [] };
+      await saveKey('goals', doc);
     }
+    doc.memory = doc.memory || [];
+    return doc;
+  }
+  const saveGoalsDoc = (doc) => saveKey('goals', doc);
+
+  async function getJournalMonth(day) { const j = await loadKey('journal-' + day.slice(0, 7), { days: {} }); j.days = j.days || {}; return j; }
+  async function getDay(day) { return (await getJournalMonth(day)).days[day] || {}; }
+  async function patchDay(day, fn) {
+    const j = await getJournalMonth(day);
+    j.days[day] = j.days[day] || {};
+    fn(j.days[day]);
+    await saveKey('journal-' + day.slice(0, 7), j);
+    return j.days[day];
+  }
+  async function getLog(day) {
+    const l = await loadKey('log-' + day.slice(0, 7), { days: {} });
+    const d = (l.days || {})[day] || {};
+    const res = { segs: (d.segs || []).slice(), away: (d.away || []).slice() };
+    // 正在进行中的计时段（只在本设备的 localStorage 里）
+    const open = lsGet('open', null);
+    if (open && ymd(new Date(open.s)) === day) res.segs.push({ s: open.s, e: Date.now(), taskId: open.taskId, title: open.title, live: true });
+    return res;
   }
 
-  // ------------------------------------------------------------------ 网络层
-  //
-  // 为什么需要三条通道（全部来自 super-productivity 源码的约束）：
-  //  - proxy：PluginAPI.request 由宿主发请求，但它硬性拒绝局域网/回环 IP（plugin-http.service
-  //    的 _validateUrl，非内置插件无法放开），要求主机写在 manifest.allowedHosts，读不到响应头，
-  //    且 iframe 里每次 PluginAPI 调用都有 30 秒硬超时（plugin-iframe.util 的 callApi）。
-  //  - native：插件 iframe 带 allow-same-origin，与宿主同源，可以直接用宿主窗口的 fetch。
-  //    安卓/iOS 上 SP 开启了 CapacitorHttp，宿主 fetch 被替换为原生 HTTP：没有 CORS、能访问
-  //    局域网、没有 30 秒限制。这是手机端最可靠的通道。
-  //  - fetch：iframe 自己的 fetch，受 CORS 约束，桌面/网页版上用。
-
-  function hostWindow() {
-    try { var w = window.parent; if (w && w !== window && typeof w.fetch === 'function') return w; } catch (e) { /* 跨源 */ }
-    return null;
-  }
-
-  function isNativeHost() {
-    try {
-      var C = window.parent && window.parent.Capacitor;
-      if (C && typeof C.isNativePlatform === 'function') return !!C.isNativePlatform();
-    } catch (e) { /* 跨源 */ }
-    var p = API && API.cfg && API.cfg.platform;
-    return p === 'android' || p === 'ios';
-  }
-
-  function transportOrder(origin, needHeaders) {
-    var order = cfg.transport !== 'auto' ? [cfg.transport]
-      : (isNativeHost() && hostWindow() ? ['native', 'fetch', 'proxy'] : ['fetch', 'native', 'proxy']);
-    var good = state.goodTransport[origin];
-    // MCP 需要读 Mcp-Session-Id 响应头，宿主代理读不到，所以它永远只做最后的退路
-    if (good && order.indexOf(good) > 0 && !(needHeaders && good === 'proxy')) {
-      order = [good].concat(order.filter(function (t) { return t !== good; }));
-    }
-    return order;
-  }
-
-  var TRANSPORT_NAME = { native: '原生 HTTP', fetch: '浏览器 fetch', proxy: 'SP 宿主代理' };
-
-  function viaFetch(fetchFn, thisArg, url, opt) {
-    return withTimeout(fetchFn.call(thisArg, url, { method: opt.method, headers: opt.headers, body: opt.body }), opt.timeout)
-      .then(function (res) {
-        return withTimeout(res.text(), opt.timeout).then(function (text) {
-          return {
-            status: res.status,
-            text: text,
-            header: function (n) { try { return res.headers.get(n); } catch (e) { return null; } },
-          };
-        });
-      });
-  }
-
-  function viaProxy(url, opt) {
-    if (!API || typeof API.request !== 'function') return Promise.reject(new Error('没有 PluginAPI.request'));
-    return withTimeout(API.request(url, {
-      method: opt.method, headers: opt.headers, body: opt.body,
-      timeout: Math.min(opt.timeout, 120000), responseType: 'text',
-    }), Math.min(opt.timeout, 31000), 'SP 宿主代理').then(function (data) {
-      return { status: 200, text: typeof data === 'string' ? data : JSON.stringify(data), header: function () { return null; } };
-    });
-  }
-
-  function runTransport(t, url, opt) {
-    if (t === 'native' || t === 'fetch') {
-      var w = t === 'native' ? hostWindow() : window;
-      if (!w) return Promise.reject(new Error('当前环境没有宿主窗口'));
-      return viaFetch(w.fetch, w, url, opt);
-    }
-    if (t === 'proxy') return viaProxy(url, opt);
-    return Promise.reject(new Error('未知通道 ' + t));
-  }
-
-  // 只有“连不上”才换通道；拿到 HTTP 状态码（哪怕 4xx/5xx）就说明通道是通的
-  function http(url, opt) {
-    opt = Object.assign({ method: 'GET', headers: {}, timeout: 30000 }, opt);
-    var origin; try { origin = new URL(url).origin; } catch (e) { return Promise.reject(new Error('地址无效：' + url)); }
-    var order = transportOrder(origin, opt.needHeaders);
-    var errors = [];
-    var i = 0;
-    function next() {
-      if (i >= order.length) {
-        return Promise.reject(new Error('连不上 ' + origin + '：\n' + errors.join('\n')));
-      }
-      var t = order[i++];
-      return runTransport(t, url, opt).then(function (r) {
-        if (!(opt.needHeaders && t === 'proxy')) state.goodTransport[origin] = t;
-        r.transport = t;
-        return r;
-      }, function (e) {
-        var m = errMsg(e);
-        errors.push('· ' + TRANSPORT_NAME[t] + '：' + m);
-        if (/超时/.test(m) && t !== 'proxy') return Promise.reject(new Error(m + '（' + TRANSPORT_NAME[t] + '）'));
-        return next();
-      });
-    }
-    return next();
-  }
-
-  function parseJson(r, what) {
-    try { return JSON.parse(r.text); } catch (e) {
-      throw new Error(what + '返回的不是 JSON（HTTP ' + r.status + '）：' + String(r.text).slice(0, 200));
-    }
-  }
-
-  // ------------------------------------------------------------------ 大模型（OpenAI 兼容）
-
-  function llmUrl(path) { return cfg.llmBase.replace(/\/+$/, '') + path; }
-  function llmHeaders() {
-    var h = { 'Content-Type': 'application/json' };
-    if (cfg.apiKey) h.Authorization = 'Bearer ' + cfg.apiKey;
-    return h;
-  }
-
-  function chatCompletion(messages, tools) {
-    var body = { model: cfg.model, messages: messages, temperature: 0.3, stream: false };
-    if (tools.length) { body.tools = tools; body.tool_choice = 'auto'; }
-    return http(llmUrl('/chat/completions'), {
-      method: 'POST', headers: llmHeaders(), body: JSON.stringify(body), timeout: LLM_TIMEOUT,
-    }).then(function (r) {
-      var data = parseJson(r, '模型接口');
-      if (r.status >= 400 || data.error) {
-        var em = data.error && (data.error.message || data.error.msg || JSON.stringify(data.error));
-        throw new Error('模型接口报错（HTTP ' + r.status + '）：' + (em || String(r.text).slice(0, 300)));
-      }
-      var msg = data.choices && data.choices[0] && data.choices[0].message;
-      if (!msg) throw new Error('模型没有返回 message：' + String(r.text).slice(0, 300));
-      return msg;
-    });
-  }
-
-  function fetchModels() {
-    return http(llmUrl('/models'), { headers: llmHeaders(), timeout: 20000 }).then(function (r) {
-      var data = parseJson(r, '模型列表接口');
-      if (r.status >= 400) throw new Error('HTTP ' + r.status + '：' + String(r.text).slice(0, 200));
-      return ((data && data.data) || []).map(function (m) { return m.id; }).filter(Boolean).sort();
-    });
-  }
-
-  // ------------------------------------------------------------------ 远程 MCP 客户端（Streamable HTTP）
-
-  function McpClient(url, token) {
-    this.url = url;
-    this.token = token;
-    this.sid = null;
-    this.protocol = null;
-    this.tools = [];
-    this.nextId = 1;
-  }
-
-  McpClient.prototype._post = function (msg) {
-    var h = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' };
-    if (this.token) h.Authorization = 'Bearer ' + this.token;
-    if (this.sid) h['Mcp-Session-Id'] = this.sid;
-    if (this.protocol) h['MCP-Protocol-Version'] = this.protocol;
-    var self = this;
-    return http(this.url, { method: 'POST', headers: h, body: JSON.stringify(msg), timeout: 60000, needHeaders: true }).then(function (r) {
-      self.transport = r.transport;
-      var sid = r.header('mcp-session-id');
-      if (sid) self.sid = sid;
-      if (msg.id === undefined) return null; // 通知：服务器回 202，无正文
-      if (r.status === 404 && self.sid) { var e404 = new Error('MCP 会话已失效'); e404.sessionExpired = true; throw e404; }
-      if (r.status === 401 || r.status === 403) throw new Error('MCP 服务器拒绝访问（HTTP ' + r.status + '），检查 Token');
-      var reply = McpClient.pickReply(r.text, msg.id, r.header('content-type'));
-      if (!reply) throw new Error('MCP 无法解析响应（HTTP ' + r.status + '）：' + String(r.text).slice(0, 200));
-      if (reply.error) throw new Error('MCP 错误：' + (reply.error.message || JSON.stringify(reply.error)));
-      return reply.result;
-    });
-  };
-
-  // 服务器可以回普通 JSON，也可以回一段 SSE（text/event-stream），两种都要能读
-  McpClient.pickReply = function (text, id, ctype) {
-    var candidates = [];
-    var body = String(text || '').trim();
-    if (!body) return null;
-    if (/event-stream/i.test(ctype || '') || /^(event|data|id|:)/m.test(body) && body.charAt(0) !== '{' && body.charAt(0) !== '[') {
-      body.split(/\r?\n\r?\n/).forEach(function (block) {
-        var data = block.split(/\r?\n/).filter(function (l) { return l.indexOf('data:') === 0; })
-          .map(function (l) { return l.slice(5).replace(/^ /, ''); }).join('\n');
-        if (data) { try { candidates.push(JSON.parse(data)); } catch (e) { /* 忽略非 JSON 事件 */ } }
-      });
-    } else {
-      try { candidates.push(JSON.parse(body)); } catch (e) { return null; }
-    }
-    var flat = [];
-    candidates.forEach(function (c) { flat = flat.concat(Array.isArray(c) ? c : [c]); });
-    return flat.find(function (m) { return m && m.id === id && (m.result !== undefined || m.error); }) || null;
-  };
-
-  McpClient.prototype.request = function (method, params) {
-    return this._post({ jsonrpc: '2.0', id: this.nextId++, method: method, params: params || {} });
-  };
-
-  McpClient.prototype.connect = function () {
-    var self = this;
-    self.sid = null; self.protocol = null;
-    return self.request('initialize', {
-      protocolVersion: '2025-06-18',
-      capabilities: {},
-      clientInfo: { name: 'sp-ai-assistant', version: '0.2.0' },
-    }).then(function (res) {
-      self.protocol = (res && res.protocolVersion) || '2025-06-18';
-      self.serverName = (res && res.serverInfo && res.serverInfo.name) || 'MCP';
-      return self._post({ jsonrpc: '2.0', method: 'notifications/initialized' });
-    }).then(function () { return self._listTools(undefined, []); })
-      .then(function (tools) { self.tools = tools; return tools; })
-      .catch(function (e) {
-        if (self.transport === 'proxy' && !self.sid) {
-          e.message = errMsg(e) + '\n（当前走的是 SP 宿主代理，它读不到 Mcp-Session-Id 响应头。有状态的 MCP 服务器需要：手机上用原生 HTTP 通道，'
-            + '或服务器开 CORS 并设置 Access-Control-Allow-Headers: Authorization, Content-Type, Mcp-Session-Id 和 Access-Control-Expose-Headers: Mcp-Session-Id）';
-        }
-        throw e;
-      });
-  };
-
-  McpClient.prototype._listTools = function (cursor, acc) {
-    var self = this;
-    return self.request('tools/list', cursor ? { cursor: cursor } : {}).then(function (res) {
-      acc = acc.concat((res && res.tools) || []);
-      return res && res.nextCursor && acc.length < 200 ? self._listTools(res.nextCursor, acc) : acc;
-    });
-  };
-
-  McpClient.prototype.callTool = function (name, args, retried) {
-    var self = this;
-    return self.request('tools/call', { name: name, arguments: args || {} }).then(function (res) {
-      var text = ((res && res.content) || []).map(function (c) {
-        return c.type === 'text' ? c.text : '[' + c.type + ']';
-      }).join('\n');
-      if (!text && res && res.structuredContent) text = JSON.stringify(res.structuredContent);
-      if (res && res.isError) throw new Error(text || '远程工具执行失败');
-      return text || '(无输出)';
-    }, function (e) {
-      if (e.sessionExpired && !retried) return self.connect().then(function () { return self.callTool(name, args, true); });
-      throw e;
-    });
-  };
-
-  function ensureMcp() {
-    if (!cfg.mcpUrl) { state.mcp = null; return Promise.resolve(null); }
-    if (state.mcp && state.mcp.url === cfg.mcpUrl && state.mcp.ready) return Promise.resolve(state.mcp);
-    var c = new McpClient(cfg.mcpUrl, cfg.mcpToken);
-    return c.connect().then(function () {
-      c.ready = true;
-      state.mcp = c;
-      addMsg('note', '已连接 MCP：' + c.serverName + '，' + c.tools.length + ' 个远程工具');
-      return c;
-    }).catch(function (e) {
-      // MCP 只是加分项：连不上就只用本机工具，对话照常进行
-      state.mcp = null;
-      addMsg('note', 'MCP 未连接（本次只用本机工具）：' + errMsg(e));
-      return null;
-    });
-  }
-
-  function mcpToolName(n) { return ('mcp_' + n).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64); }
-
-  // ------------------------------------------------------------------ 本机工具（直接操作这台设备上的 SP 数据）
+  // ================================================================== SP data helpers
 
   function need(fn) {
     if (!API || typeof API[fn] !== 'function') throw new Error('当前 SP 版本的插件 API 不支持 ' + fn);
     return API[fn].bind(API);
   }
 
-  function loadLookups() {
-    return Promise.all([need('getAllProjects')(), need('getAllTags')()]).then(function (r) {
-      var projects = {}, tags = {};
-      (r[0] || []).forEach(function (p) { projects[p.id] = p; });
-      (r[1] || []).forEach(function (t) { tags[t.id] = t; });
-      return { projects: projects, tags: tags };
-    });
+  async function loadLookups() {
+    const [projects, tags] = await Promise.all([need('getAllProjects')(), need('getAllTags')()]);
+    const lk = { projects: {}, tags: {}, tagByTitle: {} };
+    (projects || []).forEach((p) => { lk.projects[p.id] = p; });
+    (tags || []).forEach((t) => { lk.tags[t.id] = t; lk.tagByTitle[String(t.title).toLowerCase()] = t; });
+    return lk;
   }
 
   function resolveByName(map, key, kind) {
-    var list = Object.keys(map).map(function (k) { return map[k]; });
+    const list = Object.values(map);
     if (map[key]) return map[key];
-    var low = String(key).trim().toLowerCase();
-    var exact = list.filter(function (x) { return String(x.title).toLowerCase() === low; });
+    const low = String(key).trim().toLowerCase();
+    const exact = list.filter((x) => String(x.title).toLowerCase() === low);
     if (exact.length === 1) return exact[0];
-    var partial = list.filter(function (x) { return String(x.title).toLowerCase().indexOf(low) >= 0; });
+    const partial = list.filter((x) => String(x.title).toLowerCase().includes(low));
     if (partial.length === 1) return partial[0];
-    var names = list.map(function (x) { return x.title; }).slice(0, 30).join('、');
-    throw new Error((partial.length > 1 ? kind + '「' + key + '」不唯一' : '找不到' + kind + '「' + key + '」') + '。现有' + kind + '：' + names);
+    throw new Error((partial.length > 1 ? kind + '「' + key + '」不唯一' : '找不到' + kind + '「' + key + '」') + '。现有' + kind + '：' + list.map((x) => x.title).slice(0, 30).join('、'));
   }
 
   function parseDay(s) {
     if (!s) return null;
-    var v = String(s).trim().toLowerCase();
-    var d = new Date();
-    if (v === 'today' || v === '今天') return ymd(d);
-    if (v === 'tomorrow' || v === '明天') { d.setDate(d.getDate() + 1); return ymd(d); }
+    const v = String(s).trim().toLowerCase();
+    if (v === 'today' || v === '今天') return ymd();
+    if (v === 'tomorrow' || v === '明天') return addDays(ymd(), 1);
+    if (v === '后天') return addDays(ymd(), 2);
     if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
-    throw new Error('日期格式要用 YYYY-MM-DD（或 today / tomorrow），收到：' + s);
+    throw new Error('日期要用 YYYY-MM-DD（或 today / tomorrow），收到：' + s);
   }
-
   function parseTime(day, t) {
-    if (!/^\d{1,2}:\d{2}$/.test(String(t))) throw new Error('时间格式要用 HH:MM，收到：' + t);
-    var p = String(t).split(':');
-    var parts = day.split('-');
-    return new Date(+parts[0], +parts[1] - 1, +parts[2], +p[0], +p[1], 0, 0).getTime();
+    if (!/^\d{1,2}:\d{2}$/.test(String(t))) throw new Error('时间要用 HH:MM，收到：' + t);
+    const [H, M] = String(t).split(':');
+    const d = parseDayDate(day); d.setHours(+H, +M, 0, 0); return d.getTime();
   }
-
-  function isDueOn(t, day) {
-    if (t.dueWithTime) return ymd(new Date(t.dueWithTime)) === day;
-    return t.dueDay === day;
+  // "2026-10-03 15:00" / "15:00" / "tomorrow 09:30"
+  function parseWhen(s) {
+    const m = String(s).trim().match(/^(?:(\S+)\s+)?(\d{1,2}:\d{2})$/);
+    if (!m) throw new Error('提醒时间格式：YYYY-MM-DD HH:MM 或 HH:MM，收到：' + s);
+    return parseTime(m[1] ? parseDay(m[1]) : ymd(), m[2]);
   }
-
-  function dueOf(t) {
-    if (t.dueWithTime) return fmtTs(t.dueWithTime);
-    return t.dueDay || null;
-  }
+  const isDueOn = (t, day) => (t.dueWithTime ? ymd(new Date(t.dueWithTime)) === day : t.dueDay === day);
+  const dueOf = (t) => (t.dueWithTime ? fmtTs(t.dueWithTime) : t.dueDay || null);
+  const isRitual = (t) => String(t.title || '').indexOf(RITUAL_PREFIX) === 0;
 
   function briefTask(t, lk, withNotes) {
-    var today = ymd();
+    const today = ymd();
+    const live = lsGet('live', null);
     return compact({
-      id: t.id,
-      title: t.title,
-      done: !!t.isDone,
+      id: t.id, title: t.title, done: !!t.isDone,
       project: t.projectId && lk.projects[t.projectId] ? lk.projects[t.projectId].title : null,
-      tags: (t.tagIds || []).filter(function (id) { return lk.tags[id] && id !== 'TODAY'; }).map(function (id) { return lk.tags[id].title; }),
+      tags: (t.tagIds || []).filter((id) => lk.tags[id] && id !== 'TODAY').map((id) => lk.tags[id].title),
       due: dueOf(t),
-      deadline: t.deadlineWithTime ? fmtTs(t.deadlineWithTime) : (t.deadlineDay || null),
+      deadline: t.deadlineWithTime ? fmtTs(t.deadlineWithTime) : t.deadlineDay || null,
+      remind: t.remindAt ? fmtTs(t.remindAt) : null,
       priority: t.priority || null,
       estimateMin: minutes(t.timeEstimate) || null,
       spentMin: minutes(t.timeSpent) || null,
       spentTodayMin: minutes(t.timeSpentOnDay && t.timeSpentOnDay[today]) || null,
       parentId: t.parentId || null,
       subtasks: (t.subTaskIds || []).length || null,
-      running: t.id === state.currentTaskId || null,
+      running: (live && live.taskId === t.id) || null,
       notes: withNotes && t.notes ? String(t.notes).slice(0, 300) : null,
     });
   }
 
-  function findTask(id) {
-    return need('getTasks')().then(function (all) {
-      var t = (all || []).find(function (x) { return x.id === id; });
-      if (t) return t;
-      throw new Error('找不到任务 ' + id + '（先用 list_tasks 查 id）');
+  async function findTask(id) {
+    const all = await need('getTasks')();
+    const t = (all || []).find((x) => x.id === id);
+    if (!t) throw new Error('找不到任务 ' + id + '（先用 list_tasks 查 id）');
+    return t;
+  }
+
+  async function tagIdsByName(names, lk) {
+    const ids = [];
+    for (const raw of names) {
+      const name = String(raw).replace(/^#/, '').trim();
+      if (!name) continue;
+      const hit = lk.tagByTitle[name.toLowerCase()];
+      if (hit) { ids.push(hit.id); continue; }
+      const id = await need('addTag')({ title: name });
+      lk.tags[id] = { id, title: name }; lk.tagByTitle[name.toLowerCase()] = lk.tags[id];
+      ids.push(id);
+    }
+    return ids;
+  }
+
+  function goalByKey(doc, key) {
+    if (!key) return null;
+    const low = String(key).trim().toLowerCase();
+    return doc.goals.find((g) => g.id === key) ||
+      doc.goals.find((g) => g.title.toLowerCase() === low || String(g.tag).toLowerCase() === low) ||
+      doc.goals.find((g) => g.title.toLowerCase().includes(low)) || null;
+  }
+
+  // 任务 → 目标：任务带了目标的标签就算该目标的投入
+  function goalOfTask(t, goals, lk) {
+    for (let i = 0; i < goals.length; i++) {
+      const tag = goals[i].tag && lk.tagByTitle[String(goals[i].tag).toLowerCase()];
+      if (tag && (t.tagIds || []).includes(tag.id)) return goals[i];
+    }
+    return null;
+  }
+
+  async function timeByGoal(days, includeArchived) {
+    const [tasks, archived, lk, doc] = await Promise.all([
+      need('getTasks')(), includeArchived && API.getArchivedTasks ? API.getArchivedTasks().catch(() => []) : [], loadLookups(), getGoalsDoc(),
+    ]);
+    const all = (tasks || []).concat(archived || []);
+    const out = {}; let total = 0;
+    all.forEach((t) => {
+      if (t.subTaskIds && t.subTaskIds.length) return; // 父任务时间是子任务之和，避免重复
+      let ms = 0;
+      days.forEach((d) => { ms += (t.timeSpentOnDay && t.timeSpentOnDay[d]) || 0; });
+      if (!ms) return;
+      const parent = t.parentId && all.find((x) => x.id === t.parentId);
+      const g = goalOfTask(t, doc.goals, lk) || (parent && goalOfTask(parent, doc.goals, lk));
+      const k = g ? g.id : '_other';
+      out[k] = (out[k] || 0) + ms; total += ms;
     });
+    return { byGoal: out, total, goals: doc.goals };
   }
 
-  function addTagsByName(names, lk) {
-    var ids = [];
-    return names.reduce(function (p, name) {
-      return p.then(function () {
-        var hit = Object.keys(lk.tags).map(function (k) { return lk.tags[k]; })
-          .find(function (t) { return String(t.title).toLowerCase() === String(name).trim().toLowerCase(); });
-        if (hit) { ids.push(hit.id); return; }
-        return need('addTag')({ title: String(name).trim() }).then(function (id) {
-          lk.tags[id] = { id: id, title: String(name).trim() };
-          ids.push(id);
-        });
-      });
-    }, Promise.resolve()).then(function () { return ids; });
+  // ================================================================== network (3 channels, abortable)
+  //
+  //  native : 宿主窗口的 fetch。安卓/iOS 上被 CapacitorHttp 替换成原生 HTTP —— 无 CORS、可访问局域网、无 30 秒限制
+  //  fetch  : iframe 自己的 fetch，受 CORS 约束；唯一能做流式输出的通道
+  //  proxy  : PluginAPI.request，只能访问 manifest.allowedHosts 的公网域名，单次 30 秒，读不到响应头
+
+  function hostWindow() {
+    try { const w = window.parent; if (w && w !== window && typeof w.fetch === 'function') return w; } catch (e) { /* cross-origin */ }
+    return null;
+  }
+  function isNativeHost() {
+    try { const C = window.parent && window.parent.Capacitor; if (C && typeof C.isNativePlatform === 'function') return !!C.isNativePlatform(); } catch (e) { /* ignore */ }
+    const p = API && API.cfg && API.cfg.platform;
+    return p === 'android' || p === 'ios';
+  }
+  function transportOrder(origin, needHeaders) {
+    let order = cfg.transport !== 'auto' ? [cfg.transport] : (isNativeHost() && hostWindow() ? ['native', 'fetch', 'proxy'] : ['fetch', 'native', 'proxy']);
+    const good = state.goodTransport[origin];
+    if (good && order.indexOf(good) > 0 && !(needHeaders && good === 'proxy')) order = [good].concat(order.filter((t) => t !== good));
+    return order;
+  }
+  const TRANSPORT_NAME = { native: '原生 HTTP', fetch: '浏览器 fetch', proxy: 'SP 宿主代理' };
+
+  async function viaFetch(win, url, opt) {
+    const init = { method: opt.method, headers: opt.headers, body: opt.body };
+    const res = await abortable(withTimeout(win.fetch.call(win, url, init), opt.timeout), opt.signal);
+    const text = await abortable(withTimeout(res.text(), opt.timeout), opt.signal);
+    return { status: res.status, text, header: (n) => { try { return res.headers.get(n); } catch (e) { return null; } } };
+  }
+  async function viaProxy(url, opt) {
+    if (!API || typeof API.request !== 'function') throw new Error('没有 PluginAPI.request');
+    const data = await abortable(withTimeout(API.request(url, { method: opt.method, headers: opt.headers, body: opt.body, timeout: Math.min(opt.timeout, 120000), responseType: 'text' }), Math.min(opt.timeout, 31000), 'SP 宿主代理'), opt.signal);
+    return { status: 200, text: typeof data === 'string' ? data : JSON.stringify(data), header: () => null };
+  }
+  function runTransport(t, url, opt) {
+    if (t === 'native' || t === 'fetch') {
+      const w = t === 'native' ? hostWindow() : window;
+      if (!w) return Promise.reject(new Error('当前环境没有宿主窗口'));
+      return viaFetch(w, url, opt);
+    }
+    if (t === 'proxy') return viaProxy(url, opt);
+    return Promise.reject(new Error('未知通道 ' + t));
+  }
+  // 只有“连不上”才换通道；拿到任何 HTTP 状态码都说明通道是通的
+  async function http(url, opt) {
+    opt = Object.assign({ method: 'GET', headers: {}, timeout: 30000 }, opt);
+    let origin; try { origin = new URL(url).origin; } catch (e) { throw new Error('地址无效：' + url); }
+    const errors = [];
+    for (const t of transportOrder(origin, opt.needHeaders)) {
+      try {
+        const r = await runTransport(t, url, opt);
+        if (!(opt.needHeaders && t === 'proxy')) state.goodTransport[origin] = t;
+        r.transport = t;
+        return r;
+      } catch (e) {
+        if (e.aborted) throw e;
+        const m = errMsg(e);
+        errors.push('· ' + TRANSPORT_NAME[t] + '：' + m);
+        if (/超时/.test(m) && t !== 'proxy') throw new Error(m + '（' + TRANSPORT_NAME[t] + '）');
+      }
+    }
+    throw new Error('连不上 ' + origin + '：\n' + errors.join('\n'));
+  }
+  function parseJson(r, what) {
+    try { return JSON.parse(r.text); } catch (e) { throw new Error(what + '返回的不是 JSON（HTTP ' + r.status + '）：' + String(r.text).slice(0, 200)); }
   }
 
-  var LOCAL_TOOLS = [
-    {
-      name: 'list_tasks',
-      description: '查询本设备上的任务。回答“今天要做什么/还剩什么/某项目有哪些任务”时先调用它；修改任务前也用它拿 id。',
-      parameters: {
-        type: 'object',
-        properties: {
-          scope: { type: 'string', enum: ['today', 'overdue', 'open', 'done', 'all', 'archived'], description: 'today=今天到期/排期；overdue=已逾期未完成；open=所有未完成（默认）' },
-          query: { type: 'string', description: '按标题/备注关键字过滤' },
-          project: { type: 'string', description: '项目名或 id' },
-          tag: { type: 'string', description: '标签名或 id' },
-          limit: { type: 'integer', description: '默认 30，最多 100' },
-        },
-      },
-      run: function (a) {
-        var scope = a.scope || 'open';
-        return Promise.all([
-          scope === 'archived' ? need('getArchivedTasks')() : need('getTasks')(),
-          loadLookups(),
-        ]).then(function (r) {
-          var list = r[0] || [], lk = r[1], today = ymd();
-          if (scope === 'today') list = list.filter(function (t) { return isDueOn(t, today); });
-          else if (scope === 'overdue') list = list.filter(function (t) {
-            if (t.isDone) return false;
-            if (t.dueWithTime) return t.dueWithTime < Date.now();
-            return t.dueDay && t.dueDay < today;
+  // ================================================================== LLM
+
+  const llmUrl = (p) => cfg.llmBase.replace(/\/+$/, '') + p;
+  function llmHeaders() { const h2 = { 'Content-Type': 'application/json' }; if (cfg.apiKey) h2.Authorization = 'Bearer ' + cfg.apiKey; return h2; }
+  function llmError(status, text) {
+    let em = '';
+    try { const d = JSON.parse(text); em = d.error && (d.error.message || d.error.msg || JSON.stringify(d.error)); } catch (e) { /* ignore */ }
+    const hint = status === 401 ? '\n（API Key 不对或已失效）' : status === 402 ? '\n（账户余额不足）' : status === 429 ? '\n（请求太频繁或额度用完，稍后再试）' : '';
+    return new Error('模型接口报错（HTTP ' + status + '）：' + (em || String(text).slice(0, 300)) + hint);
+  }
+
+  function chatBody(messages, tools, stream) {
+    const body = { model: cfg.model, messages, temperature: 0.4, stream };
+    if (tools.length) { body.tools = tools; body.tool_choice = 'auto'; }
+    return body;
+  }
+
+  async function chatBuffered(messages, tools, signal) {
+    const r = await http(llmUrl('/chat/completions'), { method: 'POST', headers: llmHeaders(), body: JSON.stringify(chatBody(messages, tools, false)), timeout: LLM_TIMEOUT, signal });
+    if (r.status >= 400) throw llmError(r.status, r.text);
+    const data = parseJson(r, '模型接口');
+    if (data.error) throw llmError(r.status, r.text);
+    const msg = data.choices && data.choices[0] && data.choices[0].message;
+    if (!msg) throw new Error('模型没有返回内容：' + String(r.text).slice(0, 300));
+    return msg;
+  }
+
+  // 流式：只有 iframe 自己的 fetch 能逐块读；服务商不允许 CORS 时会立刻失败，然后改走非流式
+  async function chatStream(messages, tools, signal, onText) {
+    let res;
+    try {
+      res = await abortable(withTimeout(fetch(llmUrl('/chat/completions'), { method: 'POST', headers: llmHeaders(), body: JSON.stringify(chatBody(messages, tools, true)), signal }), 30000, '连接模型'), signal);
+    } catch (e) {
+      if ((signal && signal.aborted) || e.aborted) throw abortError();
+      const ne = new Error(errMsg(e)); ne.network = true; throw ne;
+    }
+    if (res.status >= 400) throw llmError(res.status, await res.text());
+    if (!res.body || !/event-stream/i.test(res.headers.get('content-type') || '')) {
+      const text = await res.text();
+      const d = JSON.parse(text);
+      return d.choices[0].message;
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', content = '', calls = [], lastChunk = Date.now();
+    const idle = setInterval(() => { if (Date.now() - lastChunk > 60000) reader.cancel().catch(() => {}); }, 5000);
+    try {
+      for (;;) {
+        const { done, value } = await abortable(reader.read(), signal).catch((e) => { reader.cancel().catch(() => {}); throw e; });
+        if (done) break;
+        lastChunk = Date.now();
+        buf += dec.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, idx).trim(); buf = buf.slice(idx + 1);
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
+          if (data === '[DONE]') continue;
+          let j; try { j = JSON.parse(data); } catch (e) { continue; }
+          if (j.error) throw llmError(500, data);
+          const delta = j.choices && j.choices[0] && j.choices[0].delta;
+          if (!delta) continue;
+          if (delta.content) { content += delta.content; onText(content); }
+          (delta.tool_calls || []).forEach((tc) => {
+            const i = tc.index != null ? tc.index : calls.length;
+            const c = calls[i] = calls[i] || { id: '', type: 'function', function: { name: '', arguments: '' } };
+            if (tc.id) c.id = tc.id;
+            if (tc.function && tc.function.name) c.function.name += tc.function.name;
+            if (tc.function && tc.function.arguments) c.function.arguments += tc.function.arguments;
           });
-          else if (scope === 'open') list = list.filter(function (t) { return !t.isDone; });
-          else if (scope === 'done') list = list.filter(function (t) { return t.isDone; });
-          if (a.project) { var p = resolveByName(lk.projects, a.project, '项目'); list = list.filter(function (t) { return t.projectId === p.id; }); }
-          if (a.tag) { var tg = resolveByName(lk.tags, a.tag, '标签'); list = list.filter(function (t) { return (t.tagIds || []).indexOf(tg.id) >= 0; }); }
-          if (a.query) {
-            var q = String(a.query).toLowerCase();
-            list = list.filter(function (t) { return (String(t.title) + ' ' + String(t.notes || '')).toLowerCase().indexOf(q) >= 0; });
+        }
+      }
+    } finally { clearInterval(idle); }
+    if (signal && signal.aborted) throw abortError();
+    calls = calls.filter(Boolean);
+    return { role: 'assistant', content: content || null, tool_calls: calls.length ? calls : undefined };
+  }
+
+  async function chat(messages, tools, signal, onText) {
+    let origin = ''; try { origin = new URL(cfg.llmBase).origin; } catch (e) { /* handled by http */ }
+    const remembered = lsGet('streamOk', {});
+    const canStream = cfg.stream !== false && (cfg.transport === 'auto' || cfg.transport === 'fetch') && remembered[origin] !== false;
+    if (canStream) {
+      try {
+        const m = await chatStream(messages, tools, signal, onText);
+        if (remembered[origin] !== true) { remembered[origin] = true; lsSet('streamOk', remembered); }
+        return m;
+      } catch (e) {
+        if (!e.network) throw e;
+        remembered[origin] = false; lsSet('streamOk', remembered); // 记住：这家不允许浏览器直连，以后直接走非流式
+      }
+    }
+    return chatBuffered(messages, tools, signal);
+  }
+
+  async function fetchModels() {
+    const r = await http(llmUrl('/models'), { headers: llmHeaders(), timeout: 20000 });
+    if (r.status >= 400) throw llmError(r.status, r.text);
+    const data = parseJson(r, '模型列表接口');
+    return ((data && data.data) || []).map((m) => m.id).filter(Boolean).sort();
+  }
+
+  // ================================================================== MCP client (Streamable HTTP)
+
+  class McpClient {
+    constructor(url, token) { this.url = url; this.token = token; this.sid = null; this.protocol = null; this.tools = []; this.nextId = 1; }
+    async _post(msg) {
+      const hd = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' };
+      if (this.token) hd.Authorization = 'Bearer ' + this.token;
+      if (this.sid) hd['Mcp-Session-Id'] = this.sid;
+      if (this.protocol) hd['MCP-Protocol-Version'] = this.protocol;
+      const r = await http(this.url, { method: 'POST', headers: hd, body: JSON.stringify(msg), timeout: 60000, needHeaders: true });
+      this.transport = r.transport;
+      const sid = r.header('mcp-session-id');
+      if (sid) this.sid = sid;
+      if (msg.id === undefined) return null;
+      if (r.status === 404 && this.sid) { const e = new Error('MCP 会话已失效'); e.sessionExpired = true; throw e; }
+      if (r.status === 401 || r.status === 403) throw new Error('MCP 服务器拒绝访问（HTTP ' + r.status + '），检查 Token');
+      const reply = McpClient.pickReply(r.text, msg.id, r.header('content-type'));
+      if (!reply) throw new Error('MCP 无法解析响应（HTTP ' + r.status + '）：' + String(r.text).slice(0, 200));
+      if (reply.error) throw new Error('MCP 错误：' + (reply.error.message || JSON.stringify(reply.error)));
+      return reply.result;
+    }
+    static pickReply(text, id, ctype) {
+      const body = String(text || '').trim();
+      if (!body) return null;
+      const cands = [];
+      if (/event-stream/i.test(ctype || '') || (/^(event|data|id|:)/m.test(body) && body[0] !== '{' && body[0] !== '[')) {
+        body.split(/\r?\n\r?\n/).forEach((block) => {
+          const data = block.split(/\r?\n/).filter((l) => l.indexOf('data:') === 0).map((l) => l.slice(5).replace(/^ /, '')).join('\n');
+          if (data) { try { cands.push(JSON.parse(data)); } catch (e) { /* skip */ } }
+        });
+      } else {
+        try { cands.push(JSON.parse(body)); } catch (e) { return null; }
+      }
+      const flat = [].concat(...cands.map((c) => (Array.isArray(c) ? c : [c])));
+      return flat.find((m) => m && m.id === id && (m.result !== undefined || m.error)) || null;
+    }
+    request(method, params) { return this._post({ jsonrpc: '2.0', id: this.nextId++, method, params: params || {} }); }
+    async connect() {
+      this.sid = null; this.protocol = null;
+      try {
+        const res = await this.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'sp-ai-assistant', version: VERSION } });
+        this.protocol = (res && res.protocolVersion) || '2025-06-18';
+        this.serverName = (res && res.serverInfo && res.serverInfo.name) || 'MCP';
+        await this._post({ jsonrpc: '2.0', method: 'notifications/initialized' });
+        let cursor, acc = [];
+        do {
+          const r = await this.request('tools/list', cursor ? { cursor } : {});
+          acc = acc.concat((r && r.tools) || []); cursor = r && r.nextCursor;
+        } while (cursor && acc.length < 200);
+        this.tools = acc;
+        return acc;
+      } catch (e) {
+        if (this.transport === 'proxy' && !this.sid) {
+          e.message = errMsg(e) + '\n（当前走的是 SP 宿主代理，读不到 Mcp-Session-Id。有状态的 MCP 服务器需要在手机上走原生 HTTP，或开启 CORS 并暴露该响应头）';
+        }
+        throw e;
+      }
+    }
+    async callTool(name, args, retried) {
+      try {
+        const res = await this.request('tools/call', { name, arguments: args || {} });
+        let text = ((res && res.content) || []).map((c) => (c.type === 'text' ? c.text : '[' + c.type + ']')).join('\n');
+        if (!text && res && res.structuredContent) text = JSON.stringify(res.structuredContent);
+        if (res && res.isError) throw new Error(text || '远程工具执行失败');
+        return text || '(无输出)';
+      } catch (e) {
+        if (e.sessionExpired && !retried) { await this.connect(); return this.callTool(name, args, true); }
+        throw e;
+      }
+    }
+  }
+
+  async function ensureMcp() {
+    if (!cfg.mcpUrl) { state.mcp = null; return null; }
+    if (state.mcp && state.mcp.url === cfg.mcpUrl && state.mcp.ready) return state.mcp;
+    if (state.mcpFailedAt && Date.now() - state.mcpFailedAt < 5 * 60000) return null; // 失败后 5 分钟内不再重试，免得每句话都卡一下
+    const c = new McpClient(cfg.mcpUrl, cfg.mcpToken);
+    try {
+      await c.connect();
+      c.ready = true; state.mcp = c; state.mcpFailedAt = 0;
+      return c;
+    } catch (e) {
+      state.mcp = null; state.mcpFailedAt = Date.now();
+      addNote('MCP 未连接，本次只用本机工具：' + errMsg(e));
+      return null;
+    }
+  }
+  const mcpToolName = (n) => ('mcp_' + n).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+
+  // ================================================================== tools
+
+  const P = (props, req) => ({ type: 'object', properties: props || {}, required: req || [] });
+  const S = (d, extra) => Object.assign({ type: 'string' }, d ? { description: d } : {}, extra || {});
+
+  const TOOLS = [
+    {
+      name: 'get_today', label: () => '查看今日概况',
+      description: '今日概况：今天的计划和完成情况、到期任务、逾期数、今日各目标投入时间、时间轴摘要、离开检查记录、是否已复盘。做计划/复盘/回答“今天怎么样”时先看这里。',
+      parameters: P({}),
+      run: async () => {
+        const today = ymd();
+        const [tasks, lk, day, log, tg] = await Promise.all([need('getTasks')(), loadLookups(), getDay(today), getLog(today), timeByGoal([today], false)]);
+        const due = tasks.filter((t) => !t.parentId && !isRitual(t) && isDueOn(t, today));
+        const overdue = tasks.filter((t) => !t.isDone && !isRitual(t) && (t.dueWithTime ? t.dueWithTime < Date.now() && ymd(new Date(t.dueWithTime)) !== today : t.dueDay && t.dueDay < today));
+        const live = lsGet('live', null);
+        return compact({
+          date: today + ' ' + weekday(today), now: hm(),
+          plan: day.plan ? { theme: day.plan.theme, items: (day.plan.items || []).map((it) => { const t = it.taskId && tasks.find((x) => x.id === it.taskId); return compact({ title: it.title, goal: it.goal, time: it.time, done: t ? !!t.isDone : null, taskId: it.taskId }); }) } : '还没有',
+          dueToday: due.map((t) => briefTask(t, lk)),
+          overdueCount: overdue.length,
+          timeTodayMin: minutes(tg.total),
+          byGoalMin: Object.fromEntries(Object.entries(tg.byGoal).map(([k, v]) => [k === '_other' ? '其他' : (tg.goals.find((g) => g.id === k) || {}).title, minutes(v)])),
+          timeline: log.segs.slice(-12).map((s) => hm(new Date(s.s)) + '-' + hm(new Date(s.e)) + ' ' + s.title),
+          away: log.away.map((a) => hm(new Date(a.s)) + ' 离开' + a.min + '分:' + ({ work: '在工作', break: '休息', other: '做别的', unknown: '未回答' }[a.verdict] || a.verdict)),
+          running: live ? live.title : null,
+          reviewed: !!day.review,
+        });
+      },
+    },
+    {
+      name: 'list_tasks', label: (a) => '查找任务' + (a.query ? '「' + a.query + '」' : ''),
+      description: '查询任务，修改任务前用它拿 id。',
+      parameters: P({
+        scope: S('today=今天到期；overdue=逾期；open=未完成（默认）；done；all；archived', { enum: ['today', 'overdue', 'open', 'done', 'all', 'archived'] }),
+        query: S('标题/备注关键字'), project: S('项目名或 id'), tag: S('标签名或 id'), goal: S('目标名，按目标的标签过滤'),
+        limit: { type: 'integer', description: '默认 30，最多 100' },
+      }),
+      run: async (a) => {
+        const scope = a.scope || 'open';
+        const [list0, lk] = await Promise.all([scope === 'archived' ? need('getArchivedTasks')() : need('getTasks')(), loadLookups()]);
+        let list = (list0 || []).filter((t) => !isRitual(t));
+        const today = ymd();
+        if (scope === 'today') list = list.filter((t) => isDueOn(t, today));
+        else if (scope === 'overdue') list = list.filter((t) => !t.isDone && (t.dueWithTime ? t.dueWithTime < Date.now() : t.dueDay && t.dueDay < today));
+        else if (scope === 'open') list = list.filter((t) => !t.isDone);
+        else if (scope === 'done') list = list.filter((t) => t.isDone);
+        if (a.project) { const p = resolveByName(lk.projects, a.project, '项目'); list = list.filter((t) => t.projectId === p.id); }
+        let tagName = a.tag;
+        if (a.goal) { const g = goalByKey(await getGoalsDoc(), a.goal); if (!g) throw new Error('找不到目标 ' + a.goal); tagName = g.tag; }
+        if (tagName) { const tg = resolveByName(lk.tags, tagName, '标签'); list = list.filter((t) => (t.tagIds || []).includes(tg.id)); }
+        if (a.query) { const q = String(a.query).toLowerCase(); list = list.filter((t) => (t.title + ' ' + (t.notes || '')).toLowerCase().includes(q)); }
+        const lim = Math.max(1, Math.min(Number(a.limit) || 30, 100));
+        return { total: list.length, tasks: list.slice(0, lim).map((t) => briefTask(t, lk, !!a.query)) };
+      },
+    },
+    {
+      name: 'get_task', label: () => '查看任务详情',
+      description: '查看单个任务的完整信息（备注、子任务）。',
+      parameters: P({ task_id: S() }, ['task_id']),
+      run: async (a) => {
+        const [all, lk] = await Promise.all([need('getTasks')(), loadLookups()]);
+        const t = all.find((x) => x.id === a.task_id);
+        if (!t) throw new Error('找不到任务 ' + a.task_id);
+        const out = briefTask(t, lk, true);
+        out.notes = t.notes || undefined;
+        out.subtaskList = (t.subTaskIds || []).map((id) => { const s = all.find((x) => x.id === id); return s ? { id: s.id, title: s.title, done: !!s.isDone } : { id }; });
+        return compact(out);
+      },
+    },
+    {
+      name: 'create_task', label: (a) => '创建任务「' + a.title + '」',
+      description: '新建任务。goal 填目标名会自动打上该目标的标签；标签不存在会自动创建。',
+      parameters: P({
+        title: S(), notes: S(), project: S('项目名或 id'), goal: S('所属目标，如 学习 / 国考'),
+        tags: { type: 'array', items: { type: 'string' } },
+        due_day: S('YYYY-MM-DD / today / tomorrow'), due_time: S('HH:MM，排到具体时间点'),
+        estimate_min: { type: 'number' }, priority: S('', { enum: ['high', 'medium', 'low'] }),
+        remind_at: S('提醒时间 "YYYY-MM-DD HH:MM" 或 "HH:MM"，到点手机会弹系统通知'),
+        parent_id: S('作为子任务时的父任务 id'),
+      }, ['title']),
+      run: async (a) => {
+        const day = a.due_day ? parseDay(a.due_day) : a.due_time ? ymd() : null;
+        const when = a.due_time ? parseTime(day, a.due_time) : null;
+        const lk = await loadLookups();
+        const tagNames = (a.tags || []).slice();
+        if (a.goal) { const g = goalByKey(await getGoalsDoc(), a.goal); if (g && g.tag) tagNames.push(g.tag); }
+        const tagIds = tagNames.length ? await tagIdsByName(tagNames, lk) : [];
+        const data = { title: String(a.title) };
+        if (a.notes) data.notes = a.notes;
+        if (a.project) data.projectId = resolveByName(lk.projects, a.project, '项目').id;
+        if (tagIds.length) data.tagIds = tagIds;
+        if (a.estimate_min) data.timeEstimate = Math.round(a.estimate_min * 60000);
+        if (a.parent_id) data.parentId = a.parent_id;
+        if (day && !when) data.dueDay = day;
+        const id = await need('addTask')(data);
+        const patch = {};
+        if (when) Object.assign(patch, { dueWithTime: when, dueDay: null, hasPlannedTime: true });
+        if (a.priority) patch.priority = a.priority;
+        if (a.remind_at) patch.remindAt = parseWhen(a.remind_at);
+        if (Object.keys(patch).length) await need('updateTask')(id, patch);
+        return compact({ ok: true, id, title: a.title, due: when ? fmtTs(when) : day, remind: patch.remindAt ? fmtTs(patch.remindAt) : null });
+      },
+    },
+    {
+      name: 'update_task', label: () => '修改任务',
+      description: '修改任务，只传要改的字段。',
+      parameters: P({
+        task_id: S(), title: S(), notes: S(),
+        due_day: S('YYYY-MM-DD / today / tomorrow'), due_time: S('HH:MM'), clear_due: { type: 'boolean' },
+        estimate_min: { type: 'number' }, priority: S('', { enum: ['high', 'medium', 'low', 'none'] }),
+        project: S(), goal: S('归入某目标（加该目标标签）'),
+        add_tags: { type: 'array', items: { type: 'string' } }, remove_tags: { type: 'array', items: { type: 'string' } },
+        remind_at: S('"YYYY-MM-DD HH:MM" 或 "HH:MM"'), clear_reminder: { type: 'boolean' },
+        done: { type: 'boolean', description: 'true 完成 / false 重新打开' },
+      }, ['task_id']),
+      run: async (a) => {
+        const [task, lk] = await Promise.all([findTask(a.task_id), loadLookups()]);
+        const addNames = (a.add_tags || []).slice();
+        if (a.goal) { const g = goalByKey(await getGoalsDoc(), a.goal); if (g && g.tag) addNames.push(g.tag); }
+        const addIds = addNames.length ? await tagIdsByName(addNames, lk) : [];
+        const p = {};
+        if (a.title !== undefined) p.title = a.title;
+        if (a.notes !== undefined) p.notes = a.notes;
+        if (a.clear_due) Object.assign(p, { dueDay: null, dueWithTime: null, hasPlannedTime: false });
+        else if (a.due_time) Object.assign(p, { dueWithTime: parseTime(a.due_day ? parseDay(a.due_day) : ymd(), a.due_time), dueDay: null, hasPlannedTime: true });
+        else if (a.due_day) Object.assign(p, { dueDay: parseDay(a.due_day), dueWithTime: null, hasPlannedTime: false });
+        if (a.estimate_min !== undefined) p.timeEstimate = Math.round(a.estimate_min * 60000);
+        if (a.priority) p.priority = a.priority === 'none' ? null : a.priority;
+        if (a.project) p.projectId = resolveByName(lk.projects, a.project, '项目').id;
+        if (a.remind_at) p.remindAt = parseWhen(a.remind_at);
+        if (a.clear_reminder) p.remindAt = null;
+        if (a.done === true) Object.assign(p, { isDone: true, doneOn: Date.now() });
+        if (a.done === false) Object.assign(p, { isDone: false, doneOn: null });
+        if (addIds.length || (a.remove_tags && a.remove_tags.length)) {
+          const removeIds = (a.remove_tags || []).map((n) => resolveByName(lk.tags, n, '标签').id);
+          const cur = (task.tagIds || []).filter((id) => !removeIds.includes(id));
+          addIds.forEach((id) => { if (!cur.includes(id)) cur.push(id); });
+          p.tagIds = cur;
+        }
+        if (!Object.keys(p).length) throw new Error('没有要修改的字段');
+        await need('updateTask')(a.task_id, p);
+        return { ok: true, title: task.title, changed: Object.keys(p) };
+      },
+    },
+    {
+      name: 'complete_task', label: () => '完成任务',
+      description: '标记任务完成。',
+      parameters: P({ task_id: S() }, ['task_id']),
+      run: async (a) => { const t = await findTask(a.task_id); await need('updateTask')(t.id, { isDone: true, doneOn: Date.now() }); return { ok: true, title: t.title }; },
+    },
+    {
+      name: 'delete_task', label: () => '删除任务',
+      description: '删除任务（不可恢复）。只在用户明确要求时调用，界面会让用户再确认一次。',
+      parameters: P({ task_id: S() }, ['task_id']),
+      run: async (a, ctx) => {
+        const t = await findTask(a.task_id);
+        const ok = await ctx.confirm('确定删除任务「' + t.title + '」？此操作不可恢复。', '删除');
+        if (!ok) return { ok: false, cancelled: true, reason: '用户取消了删除' };
+        await need('deleteTask')(t.id);
+        return { ok: true, deleted: t.title };
+      },
+    },
+    {
+      name: 'start_timer', label: () => '开始计时',
+      description: '开始为任务计时（自动切换掉正在计时的任务）。',
+      parameters: P({ task_id: S() }, ['task_id']),
+      run: async (a) => {
+        const t = await findTask(a.task_id);
+        if (t.isDone) throw new Error('已完成的任务不能计时');
+        if (t.subTaskIds && t.subTaskIds.length) throw new Error('父任务不能直接计时，请选它的子任务');
+        await need('dispatchAction')({ type: '[Task] SetCurrentTask', id: t.id });
+        return { ok: true, running: t.title };
+      },
+    },
+    {
+      name: 'stop_timer', label: () => '停止计时', description: '停止当前计时。', parameters: P({}),
+      run: async () => { await need('dispatchAction')({ type: '[Task] SetCurrentTask', id: null }); return { ok: true }; },
+    },
+    {
+      name: 'list_projects', label: () => '查看项目', description: '列出项目。', parameters: P({}),
+      run: async () => (await need('getAllProjects')()).map((p) => compact({ id: p.id, title: p.title, archived: !!p.isArchived, tasks: (p.taskIds || []).length })),
+    },
+    {
+      name: 'create_project', label: (a) => '创建项目「' + a.title + '」', description: '新建项目。', parameters: P({ title: S() }, ['title']),
+      run: async (a) => ({ ok: true, id: await need('addProject')({ title: a.title }) }),
+    },
+    {
+      name: 'list_tags', label: () => '查看标签', description: '列出标签。', parameters: P({}),
+      run: async () => (await need('getAllTags')()).filter((t) => t.id !== 'TODAY').map((t) => ({ id: t.id, title: t.title, tasks: (t.taskIds || []).length })),
+    },
+    {
+      name: 'list_habits', label: () => '查看习惯', description: '列出习惯/计数器和今天的数值。', parameters: P({}),
+      run: async () => {
+        const s = await need('getAppState')(); const today = ymd(); const map = (s && s.simpleCounters) || {};
+        return Object.values(map).map((c) => compact({ id: c.id, title: c.title, type: c.type, today: (c.countOnDay || {})[today] || 0 }));
+      },
+    },
+    {
+      name: 'check_habit', label: () => '习惯打卡', description: '习惯打卡：今天的数值 +1（或指定增量）。',
+      parameters: P({ habit_id: S(), by: { type: 'integer' } }, ['habit_id']),
+      run: async (a) => ({ ok: true, today: await need('incrementCounter')(a.habit_id, Number(a.by) || 1) }),
+    },
+    {
+      name: 'get_goals', label: () => '查看长期目标',
+      description: '长期目标详情：为什么、本周重点、里程碑、关键日期倒计时、最近 7 天投入时间。',
+      parameters: P({}),
+      run: async () => {
+        const doc = await getGoalsDoc();
+        const days = Array.from({ length: 7 }, (_, i) => addDays(ymd(), -i));
+        const tg = await timeByGoal(days, true);
+        return doc.goals.map((g) => compact({
+          id: g.id, title: g.title, tag: g.tag, why: g.why, focus: g.focus, status: g.status,
+          target: g.targetDate ? g.targetDate + '（还有 ' + daysUntil(g.targetDate) + ' 天）' : null,
+          keyDates: (g.keyDates || []).map((k) => k.label + ' ' + k.date + (k.estimated ? '（预计）' : '') + (daysUntil(k.date) >= 0 ? ' 剩' + daysUntil(k.date) + '天' : ' 已过')),
+          milestones: (g.milestones || []).map((m) => (m.done ? '[x] ' : '[ ] ') + m.text),
+          last7dMin: minutes(tg.byGoal[g.id] || 0),
+          recentLog: (g.log || []).slice(-3).map((l) => l.day + ' ' + l.text),
+        }));
+      },
+    },
+    {
+      name: 'update_goal', label: (a) => '更新目标「' + (a.goal || a.title) + '」',
+      description: '更新或新建长期目标。goal 填已有目标名/id；不存在且给了 title 就新建。',
+      parameters: P({
+        goal: S('目标名或 id'), title: S('新标题 / 新建时的标题'), emoji: S(), why: S('为什么要做'), focus: S('本周重点'),
+        target_date: S('YYYY-MM-DD'), tag: S('关联的 SP 标签名'), status: S('', { enum: ['active', 'paused', 'done'] }),
+        add_milestones: { type: 'array', items: { type: 'string' } }, complete_milestones: { type: 'array', items: { type: 'string' }, description: '里程碑文字（部分匹配）' },
+        key_date: { type: 'object', properties: { label: S(), date: S('YYYY-MM-DD'), estimated: { type: 'boolean' } }, description: '新增或更新一个关键日期（同名覆盖）' },
+        log: S('记一条进展'),
+      }),
+      run: async (a) => {
+        const doc = await getGoalsDoc();
+        let g = goalByKey(doc, a.goal || a.title);
+        if (!g) {
+          if (!a.title) throw new Error('找不到目标「' + a.goal + '」。现有：' + doc.goals.map((x) => x.title).join('、'));
+          g = { id: uid(), emoji: a.emoji || '🎯', title: a.title, tag: a.tag || a.title, why: '', focus: '', targetDate: '', keyDates: [], milestones: [] };
+          doc.goals.push(g);
+        }
+        if (a.title && a.goal) g.title = a.title;
+        ['emoji', 'why', 'focus', 'tag', 'status'].forEach((k) => { if (a[k] !== undefined) g[k] = a[k]; });
+        if (a.target_date) g.targetDate = parseDay(a.target_date);
+        (a.add_milestones || []).forEach((t) => g.milestones.push({ text: t, done: false }));
+        (a.complete_milestones || []).forEach((t) => { const m = g.milestones.find((x) => x.text.includes(t)); if (m) { m.done = true; m.doneOn = ymd(); } });
+        if (a.key_date && a.key_date.label && a.key_date.date) {
+          g.keyDates = g.keyDates || [];
+          const kd = g.keyDates.find((k) => k.label === a.key_date.label);
+          const v = { label: a.key_date.label, date: parseDay(a.key_date.date), estimated: !!a.key_date.estimated };
+          if (kd) Object.assign(kd, v); else g.keyDates.push(v);
+          g.keyDates.sort((x, y) => (x.date < y.date ? -1 : 1));
+        }
+        if (a.log) { g.log = (g.log || []).concat({ day: ymd(), text: a.log }).slice(-50); }
+        await saveGoalsDoc(doc);
+        if (state.tab === 'goals') renderGoals();
+        return { ok: true, goal: g.title };
+      },
+    },
+    {
+      name: 'save_daily_plan', label: () => '保存今日计划',
+      description: '保存某天的计划。items 里没有 task_id 的会自动在 SP 里建成任务（排到当天、打上目标标签）。',
+      parameters: P({
+        date: S('默认今天'), theme: S('今天的主线（一句话）'),
+        items: { type: 'array', items: { type: 'object', properties: {
+          title: S(), goal: S('所属目标'), task_id: S('已有任务 id'), time: S('HH:MM 开始时间'), minutes: { type: 'number', description: '预估分钟' },
+        }, required: ['title'] } },
+        note: S('参谋的提醒/备注'),
+      }, ['items']),
+      run: async (a) => {
+        const day = a.date ? parseDay(a.date) : ymd();
+        const lk = await loadLookups(); const doc = await getGoalsDoc();
+        const items = [];
+        for (const it of a.items || []) {
+          let taskId = it.task_id;
+          const g = goalByKey(doc, it.goal);
+          if (!taskId) {
+            const data = { title: it.title, dueDay: it.time ? undefined : day };
+            if (g && g.tag) data.tagIds = await tagIdsByName([g.tag], lk);
+            if (it.minutes) data.timeEstimate = Math.round(it.minutes * 60000);
+            taskId = await need('addTask')(data);
+            if (it.time) await need('updateTask')(taskId, { dueWithTime: parseTime(day, it.time), dueDay: null, hasPlannedTime: true });
+          } else {
+            const t = await findTask(taskId);
+            if (!isDueOn(t, day)) await need('updateTask')(taskId, it.time ? { dueWithTime: parseTime(day, it.time), dueDay: null, hasPlannedTime: true } : { dueDay: day, dueWithTime: null });
           }
-          var lim = Math.max(1, Math.min(Number(a.limit) || 30, 100));
-          return { total: list.length, shown: Math.min(lim, list.length), tasks: list.slice(0, lim).map(function (t) { return briefTask(t, lk, !!a.query); }) };
-        });
+          items.push(compact({ title: it.title, goal: g ? g.id : it.goal, taskId, time: it.time, minutes: it.minutes }));
+        }
+        await patchDay(day, (d) => { d.plan = compact({ theme: a.theme, items, note: a.note, at: Date.now() }); });
+        refreshSideViews();
+        return { ok: true, date: day, items: items.length };
       },
     },
     {
-      name: 'get_task',
-      description: '查看单个任务的完整信息（含备注和子任务）。',
-      parameters: { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'] },
-      run: function (a) {
-        return Promise.all([need('getTasks')(), loadLookups()]).then(function (r) {
-          var all = r[0] || [], lk = r[1];
-          var t = all.find(function (x) { return x.id === a.task_id; });
-          if (!t) throw new Error('找不到任务 ' + a.task_id);
-          var out = briefTask(t, lk, true);
-          out.notes = t.notes || undefined;
-          out.subtaskList = (t.subTaskIds || []).map(function (id) {
-            var s = all.find(function (x) { return x.id === id; });
-            return s ? { id: s.id, title: s.title, done: !!s.isDone } : { id: id };
-          });
-          return compact(out);
-        });
+      name: 'save_daily_review', label: () => '保存复盘并生成日报',
+      description: '保存当天复盘，生成日报并写进 SP（今天的「🧭 参谋」任务备注）。',
+      parameters: P({
+        date: S('默认今天'), wins: S('完成了什么/做得好的'), problems: S('卡在哪/没完成的原因'), lessons: S('学到/想改进的'),
+        tomorrow: S('明天第一件事'), mood: { type: 'integer', description: '心情 1-5' }, energy: { type: 'integer', description: '精力 1-5' },
+      }),
+      run: async (a) => {
+        const day = a.date ? parseDay(a.date) : ymd();
+        await patchDay(day, (d) => { d.review = compact({ wins: a.wins, problems: a.problems, lessons: a.lessons, tomorrow: a.tomorrow, mood: a.mood, energy: a.energy, at: Date.now() }); });
+        const where = await writeReportToSp(day);
+        refreshSideViews();
+        return { ok: true, date: day, report: where };
       },
     },
     {
-      name: 'create_task',
-      description: '新建任务。project/tags 用名字即可；标签不存在会自动创建，项目不存在会报错并列出现有项目。',
-      parameters: {
-        type: 'object',
-        properties: {
-          title: { type: 'string' },
-          notes: { type: 'string' },
-          project: { type: 'string', description: '项目名或 id，不填则进收件箱' },
-          tags: { type: 'array', items: { type: 'string' }, description: '标签名列表' },
-          due_day: { type: 'string', description: 'YYYY-MM-DD，或 today / tomorrow。排进今天就填 today' },
-          due_time: { type: 'string', description: 'HH:MM（24 小时制），需要同时给 due_day' },
-          estimate_min: { type: 'number', description: '预估分钟数' },
-          priority: { type: 'string', enum: ['high', 'medium', 'low'] },
-          parent_id: { type: 'string', description: '作为子任务时填父任务 id' },
-        },
-        required: ['title'],
-      },
-      run: function (a) {
-        var lk, day = a.due_day ? parseDay(a.due_day) : (a.due_time ? ymd() : null);
-        var when = a.due_time ? parseTime(day, a.due_time) : null;
-        return loadLookups().then(function (l) {
-          lk = l;
-          return a.tags && a.tags.length ? addTagsByName(a.tags, lk) : [];
-        }).then(function (tagIds) {
-          var data = { title: String(a.title) };
-          if (a.notes) data.notes = a.notes;
-          if (a.project) data.projectId = resolveByName(lk.projects, a.project, '项目').id;
-          if (tagIds.length) data.tagIds = tagIds;
-          if (a.estimate_min) data.timeEstimate = Math.round(a.estimate_min * 60000);
-          if (a.parent_id) data.parentId = a.parent_id;
-          if (day && !when) data.dueDay = day;
-          return need('addTask')(data);
-        }).then(function (id) {
-          var patch = {};
-          if (when) { patch.dueWithTime = when; patch.dueDay = null; patch.hasPlannedTime = true; }
-          if (a.priority) patch.priority = a.priority;
-          return (Object.keys(patch).length ? need('updateTask')(id, patch) : Promise.resolve())
-            .then(function () { return compact({ ok: true, id: id, due: when ? fmtTs(when) : day }); });
-        });
+      name: 'get_history', label: (a) => '回顾最近 ' + (a.days || 7) + ' 天',
+      description: '最近 N 天的计划、复盘和每天投入时间，用于周复盘/周计划。',
+      parameters: P({ days: { type: 'integer', description: '默认 7，最多 31' } }),
+      run: async (a) => {
+        const n = Math.max(1, Math.min(Number(a.days) || 7, 31));
+        const days = Array.from({ length: n }, (_, i) => addDays(ymd(), -i)).reverse();
+        const tg = await Promise.all(days.map((d) => timeByGoal([d], true)));
+        const journals = await Promise.all(days.map(getDay));
+        return days.map((d, i) => compact({
+          date: d + ' ' + weekday(d), timeMin: minutes(tg[i].total),
+          theme: journals[i].plan && journals[i].plan.theme,
+          planItems: journals[i].plan ? (journals[i].plan.items || []).length : null,
+          review: journals[i].review ? compact({ wins: journals[i].review.wins, problems: journals[i].review.problems, tomorrow: journals[i].review.tomorrow, mood: journals[i].review.mood }) : null,
+        }));
       },
     },
     {
-      name: 'update_task',
-      description: '修改任务。只传需要改的字段。',
-      parameters: {
-        type: 'object',
-        properties: {
-          task_id: { type: 'string' },
-          title: { type: 'string' },
-          notes: { type: 'string' },
-          due_day: { type: 'string', description: 'YYYY-MM-DD / today / tomorrow' },
-          due_time: { type: 'string', description: 'HH:MM，不给 due_day 时默认今天' },
-          clear_due: { type: 'boolean', description: 'true = 取消排期' },
-          estimate_min: { type: 'number' },
-          priority: { type: 'string', enum: ['high', 'medium', 'low', 'none'] },
-          project: { type: 'string', description: '移动到该项目（名或 id）' },
-          add_tags: { type: 'array', items: { type: 'string' } },
-          remove_tags: { type: 'array', items: { type: 'string' } },
-          done: { type: 'boolean', description: 'true = 完成，false = 重新打开' },
-        },
-        required: ['task_id'],
-      },
-      run: function (a) {
-        var lk, task;
-        return Promise.all([findTask(a.task_id), loadLookups()]).then(function (r) {
-          task = r[0]; lk = r[1];
-          return a.add_tags && a.add_tags.length ? addTagsByName(a.add_tags, lk) : [];
-        }).then(function (addIds) {
-          var p = {};
-          if (a.title !== undefined) p.title = a.title;
-          if (a.notes !== undefined) p.notes = a.notes;
-          if (a.clear_due) { p.dueDay = null; p.dueWithTime = null; p.hasPlannedTime = false; }
-          else if (a.due_time) {
-            p.dueWithTime = parseTime(a.due_day ? parseDay(a.due_day) : ymd(), a.due_time);
-            p.dueDay = null; p.hasPlannedTime = true;
-          } else if (a.due_day) { p.dueDay = parseDay(a.due_day); p.dueWithTime = null; p.hasPlannedTime = false; }
-          if (a.estimate_min !== undefined) p.timeEstimate = Math.round(a.estimate_min * 60000);
-          if (a.priority) p.priority = a.priority === 'none' ? null : a.priority;
-          if (a.project) p.projectId = resolveByName(lk.projects, a.project, '项目').id;
-          if (a.done === true) { p.isDone = true; p.doneOn = Date.now(); }
-          if (a.done === false) { p.isDone = false; p.doneOn = null; }
-          if (addIds.length || (a.remove_tags && a.remove_tags.length)) {
-            var removeIds = (a.remove_tags || []).map(function (n) { return resolveByName(lk.tags, n, '标签').id; });
-            var cur = (task.tagIds || []).filter(function (id) { return removeIds.indexOf(id) < 0; });
-            addIds.forEach(function (id) { if (cur.indexOf(id) < 0) cur.push(id); });
-            p.tagIds = cur;
-          }
-          if (!Object.keys(p).length) throw new Error('没有要修改的字段');
-          return need('updateTask')(a.task_id, p).then(function () { return { ok: true, changed: Object.keys(p) }; });
-        });
-      },
+      name: 'ask_user', label: (a) => '提问：' + a.question,
+      description: '向用户提一个问题并给出 2-6 个可以一点就答的选项（用户也可以自己打字）。调用后等用户回答，本轮不要再说别的。',
+      parameters: P({ question: S(), options: { type: 'array', items: { type: 'string' } } }, ['question', 'options']),
+      run: async (a, ctx) => { ctx.showChoices(a.question, a.options || []); return { shown: true, note: '已展示给用户，等待回答' }; },
+      endsTurn: true,
     },
     {
-      name: 'complete_task',
-      description: '把任务标记为完成。',
-      parameters: { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'] },
-      run: function (a) {
-        return findTask(a.task_id).then(function (t) {
-          return need('updateTask')(t.id, { isDone: true, doneOn: Date.now() }).then(function () { return { ok: true, title: t.title }; });
-        });
-      },
-    },
-    {
-      name: 'delete_task',
-      description: '删除任务（不可恢复）。只有用户明确要求删除时才调用；会弹窗让用户确认。',
-      parameters: { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'] },
-      run: function (a) {
-        return findTask(a.task_id).then(function (t) {
-          var ok = true;
-          try { ok = window.confirm('确定删除任务「' + t.title + '」？此操作不可恢复。'); } catch (e) { ok = true; }
-          if (!ok) return { ok: false, cancelled: true, reason: '用户在确认框里取消了删除' };
-          return need('deleteTask')(t.id).then(function () { return { ok: true, deleted: t.title }; });
-        });
-      },
-    },
-    {
-      name: 'start_timer',
-      description: '开始为某个任务计时（会自动切换掉正在计时的任务）。',
-      parameters: { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'] },
-      run: function (a) {
-        return findTask(a.task_id).then(function (t) {
-          if (t.isDone) throw new Error('已完成的任务不能计时');
-          if (t.subTaskIds && t.subTaskIds.length) throw new Error('父任务不能直接计时，请选择它的子任务');
-          return Promise.resolve(need('dispatchAction')({ type: '[Task] SetCurrentTask', id: t.id })).then(function () {
-            state.currentTaskId = t.id;
-            return { ok: true, running: t.title };
-          });
-        });
-      },
-    },
-    {
-      name: 'stop_timer',
-      description: '停止当前计时。',
-      parameters: { type: 'object', properties: {} },
-      run: function () {
-        return Promise.resolve(need('dispatchAction')({ type: '[Task] SetCurrentTask', id: null })).then(function () {
-          state.currentTaskId = null;
-          return { ok: true };
-        });
-      },
-    },
-    {
-      name: 'today_summary',
-      description: '今日概况：今天排期的任务完成情况、今天已记录的工时、逾期数量、正在计时的任务。回答“我今天干了啥/还剩多少”先看这里。',
-      parameters: { type: 'object', properties: {} },
-      run: function () {
-        return Promise.all([need('getTasks')(), loadLookups()]).then(function (r) {
-          var all = r[0] || [], lk = r[1], today = ymd();
-          var due = all.filter(function (t) { return !t.parentId && isDueOn(t, today); });
-          var spent = 0;
-          all.forEach(function (t) { if (!t.parentId) spent += (t.timeSpentOnDay && t.timeSpentOnDay[today]) || 0; });
-          var overdue = all.filter(function (t) {
-            return !t.isDone && (t.dueWithTime ? t.dueWithTime < Date.now() && ymd(new Date(t.dueWithTime)) !== today : t.dueDay && t.dueDay < today);
-          });
-          var cur = state.currentTaskId && all.find(function (t) { return t.id === state.currentTaskId; });
-          return compact({
-            date: today,
-            todayPlanned: due.length,
-            todayDone: due.filter(function (t) { return t.isDone; }).length,
-            todayOpen: due.filter(function (t) { return !t.isDone; }).map(function (t) { return briefTask(t, lk); }),
-            trackedTodayMin: minutes(spent),
-            overdueCount: overdue.length,
-            running: cur ? cur.title : null,
-          });
-        });
-      },
-    },
-    {
-      name: 'list_projects',
-      description: '列出项目。',
-      parameters: { type: 'object', properties: {} },
-      run: function () {
-        return need('getAllProjects')().then(function (list) {
-          return (list || []).map(function (p) { return compact({ id: p.id, title: p.title, archived: !!p.isArchived, tasks: (p.taskIds || []).length }); });
-        });
-      },
-    },
-    {
-      name: 'create_project',
-      description: '新建项目。',
-      parameters: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] },
-      run: function (a) { return need('addProject')({ title: a.title }).then(function (id) { return { ok: true, id: id }; }); },
-    },
-    {
-      name: 'list_tags',
-      description: '列出标签。',
-      parameters: { type: 'object', properties: {} },
-      run: function () {
-        return need('getAllTags')().then(function (list) {
-          return (list || []).filter(function (t) { return t.id !== 'TODAY'; })
-            .map(function (t) { return { id: t.id, title: t.title, tasks: (t.taskIds || []).length }; });
-        });
-      },
-    },
-    {
-      name: 'list_habits',
-      description: '列出习惯/计数器及今天的数值。',
-      parameters: { type: 'object', properties: {} },
-      run: function () {
-        return need('getAppState')().then(function (s) {
-          var today = ymd(), map = (s && s.simpleCounters) || {};
-          return Object.keys(map).map(function (k) {
-            var c = map[k];
-            return compact({ id: c.id, title: c.title, type: c.type, enabled: c.isEnabled !== false, today: (c.countOnDay || {})[today] || 0 });
-          });
-        });
-      },
-    },
-    {
-      name: 'check_habit',
-      description: '习惯打卡：给计数器今天的数值 +1（或指定增量）。',
-      parameters: { type: 'object', properties: { habit_id: { type: 'string' }, by: { type: 'integer', description: '默认 1' } }, required: ['habit_id'] },
-      run: function (a) {
-        return need('incrementCounter')(a.habit_id, Number(a.by) || 1).then(function (v) { return { ok: true, today: v }; });
+      name: 'remember', label: (a) => (a.forget ? '忘记：' : '记住：') + (a.fact || a.forget),
+      description: '长期记住关于用户的事实/偏好/约束（如“晚上 10 点后效率低”），以后每次对话都会带上。forget 填关键字可删除。',
+      parameters: P({ fact: S(), forget: S() }),
+      run: async (a) => {
+        const doc = await getGoalsDoc();
+        if (a.forget) doc.memory = doc.memory.filter((m) => !m.text.includes(a.forget));
+        if (a.fact) { doc.memory.push({ text: a.fact, at: ymd() }); doc.memory = doc.memory.slice(-30); }
+        await saveGoalsDoc(doc);
+        return { ok: true, count: doc.memory.length };
       },
     },
   ];
-
-  var LOCAL_BY_NAME = {};
-  LOCAL_TOOLS.forEach(function (t) { LOCAL_BY_NAME[t.name] = t; });
+  const TOOL_BY_NAME = Object.fromEntries(TOOLS.map((t) => [t.name, t]));
 
   function toolDefs() {
-    var defs = LOCAL_TOOLS.map(function (t) {
-      return { type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } };
-    });
+    const defs = TOOLS.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
     if (state.mcp) {
-      state.mcp.tools.forEach(function (t) {
-        defs.push({ type: 'function', function: {
-          name: mcpToolName(t.name),
-          description: '[远程 MCP] ' + (t.description || t.name),
-          parameters: t.inputSchema && t.inputSchema.type ? t.inputSchema : { type: 'object', properties: {} },
-        } });
-      });
+      state.mcp.tools.forEach((t) => defs.push({ type: 'function', function: {
+        name: mcpToolName(t.name), description: '[远程 MCP] ' + (t.description || t.name),
+        parameters: t.inputSchema && t.inputSchema.type ? t.inputSchema : { type: 'object', properties: {} },
+      } }));
     }
     return defs;
   }
 
-  function runTool(name, args) {
-    var local = LOCAL_BY_NAME[name];
-    if (local) return Promise.resolve().then(function () { return local.run(args || {}); });
+  async function runTool(name, args, ctx) {
+    const local = TOOL_BY_NAME[name];
+    if (local) return local.run(args || {}, ctx);
     if (state.mcp) {
-      var remote = state.mcp.tools.find(function (t) { return mcpToolName(t.name) === name; });
+      const remote = state.mcp.tools.find((t) => mcpToolName(t.name) === name);
       if (remote) return state.mcp.callTool(remote.name, args);
     }
-    return Promise.reject(new Error('没有这个工具：' + name));
+    throw new Error('没有这个工具：' + name);
+  }
+  function toolLabel(name, args) {
+    const t = TOOL_BY_NAME[name];
+    try { if (t && t.label) return t.label(args || {}); } catch (e) { /* ignore */ }
+    return name.startsWith('mcp_') ? '远程工具 ' + name.slice(4) : name;
   }
 
-  // ------------------------------------------------------------------ 对话主循环
+  // ================================================================== daily report
 
-  function systemPrompt() {
-    var d = new Date();
-    var wk = '日一二三四五六'.charAt(d.getDay());
-    return [
-      '你是嵌入在 Super Productivity（待办 + 时间追踪应用）里的助手，通过工具直接读写用户的任务数据。',
-      '现在是 ' + ymd(d) + ' 星期' + wk + ' ' + hm(d) + '（时区 ' + Intl.DateTimeFormat().resolvedOptions().timeZone + '）。“明天/下周一”之类要换算成具体日期。',
-      '规则：',
-      '- 需要任务 id 时先用 list_tasks 查，绝不编造 id；同名任务有多个时先问用户是哪一个。',
-      '- “排到今天”= due_day 设为今天；有具体时间点再填 due_time。',
-      '- 删除只在用户明确要求时做。',
-      '- 工具出错时根据报错修正参数重试一次，仍失败就如实告诉用户。',
-      '- 做完后用一两句中文简短汇报结果，不要复述工具的原始 JSON。',
-      state.mcp ? '- 以 mcp_ 开头的是远程 MCP 服务器提供的工具。' : '',
-    ].filter(Boolean).join('\n');
+  async function buildReport(day) {
+    const [tasks, archived, lk, j, log, tg, doc] = await Promise.all([
+      need('getTasks')(), API.getArchivedTasks ? API.getArchivedTasks().catch(() => []) : [], loadLookups(), getDay(day), getLog(day), timeByGoal([day], true), getGoalsDoc(),
+    ]);
+    const all = tasks.concat(archived || []);
+    const L = ['# 日报 ' + day + '（' + weekday(day) + '）', ''];
+    if (j.plan) {
+      L.push('## 今日主线', j.plan.theme || '（未写）', '');
+      const items = (j.plan.items || []).map((it) => { const t = all.find((x) => x.id === it.taskId); return { it, done: t ? !!t.isDone : false }; });
+      L.push('## 计划完成 ' + items.filter((x) => x.done).length + '/' + items.length);
+      items.forEach(({ it, done }) => L.push('- [' + (done ? 'x' : ' ') + '] ' + (it.time ? it.time + ' ' : '') + it.title));
+      L.push('');
+    }
+    const doneToday = all.filter((t) => t.isDone && t.doneOn && ymd(new Date(t.doneOn)) === day && !isRitual(t));
+    if (doneToday.length) { L.push('## 今天完成的任务（' + doneToday.length + '）'); doneToday.slice(0, 30).forEach((t) => L.push('- ' + t.title)); L.push(''); }
+    L.push('## 时间投入 共 ' + fmtDur(tg.total));
+    Object.entries(tg.byGoal).sort((x, y) => y[1] - x[1]).forEach(([k, v]) => {
+      const g = doc.goals.find((x) => x.id === k);
+      L.push('- ' + (g ? g.emoji + ' ' + g.title : '其他') + '：' + fmtDur(v));
+    });
+    L.push('');
+    if (log.segs.length) {
+      L.push('## 时间轴');
+      log.segs.forEach((s) => L.push('- ' + hm(new Date(s.s)) + '–' + hm(new Date(s.e)) + ' ' + s.title + '（' + fmtDur(s.e - s.s) + '）'));
+      L.push('');
+    }
+    if (log.away.length) {
+      const brk = log.away.filter((a) => a.verdict === 'break' || a.verdict === 'other').reduce((n, a) => n + a.min, 0);
+      L.push('## 离开检查（扣除 ' + brk + ' 分钟）');
+      log.away.forEach((a) => L.push('- ' + hm(new Date(a.s)) + ' 离开 ' + a.min + ' 分：' + ({ work: '在工作', break: '休息', other: '做别的', unknown: '未回答' }[a.verdict] || a.verdict) + '（' + a.title + '）'));
+      L.push('');
+    }
+    if (j.review) {
+      const r = j.review;
+      L.push('## 复盘');
+      if (r.wins) L.push('- 收获：' + r.wins);
+      if (r.problems) L.push('- 问题：' + r.problems);
+      if (r.lessons) L.push('- 改进：' + r.lessons);
+      if (r.tomorrow) L.push('- 明天第一件事：' + r.tomorrow);
+      if (r.mood || r.energy) L.push('- 心情 ' + (r.mood || '-') + '/5 · 精力 ' + (r.energy || '-') + '/5');
+      L.push('');
+    }
+    const cds = doc.goals.filter((g) => g.targetDate && daysUntil(g.targetDate) >= 0 && g.status !== 'done');
+    if (cds.length) { L.push('## 倒计时'); cds.forEach((g) => L.push('- ' + g.emoji + ' ' + g.title + '：还有 ' + daysUntil(g.targetDate) + ' 天')); }
+    return L.join('\n').trim() + '\n';
   }
 
-  // 按“用户轮次”裁剪，保证不会把 assistant(tool_calls) 与对应的 tool 结果拆开
-  function trimHistory() {
-    var userIdx = [];
-    state.history.forEach(function (m, i) { if (m.role === 'user') userIdx.push(i); });
-    if (userIdx.length > KEEP_USER_TURNS) state.history = state.history.slice(userIdx[userIdx.length - KEEP_USER_TURNS]);
+  // 日报写进 SP：今天的「🧭 参谋」任务（没有就新建一个已完成的），这样能在 SP 里搜索、同步、归档
+  async function writeReportToSp(day) {
+    const report = await buildReport(day);
+    await patchDay(day, (d) => { d.report = report; });
+    const tasks = await need('getTasks')();
+    let t = tasks.find((x) => isRitual(x) && !x.isDone && (isDueOn(x, day) || x.title.includes('复盘')));
+    if (!t) t = tasks.find((x) => isRitual(x) && x.title.includes('日报 ' + day.slice(5)));
+    if (t) {
+      await need('updateTask')(t.id, { title: RITUAL_PREFIX + '：日报 ' + day.slice(5), notes: report, isDone: true, doneOn: Date.now() });
+    } else {
+      const id = await need('addTask')({ title: RITUAL_PREFIX + '：日报 ' + day.slice(5), notes: report, dueDay: day });
+      await need('updateTask')(id, { isDone: true, doneOn: Date.now() });
+    }
+    return '已写入任务「' + RITUAL_PREFIX + '：日报 ' + day.slice(5) + '」的备注';
   }
 
-  function saveHistory() { storageSet({ history: state.history }); }
+  // ================================================================== system prompt (persona + compact context capsule)
 
-  function assistantEntry(msg) {
-    var e = { role: 'assistant', content: msg.content || null };
-    if (msg.tool_calls && msg.tool_calls.length) {
-      e.tool_calls = msg.tool_calls.map(function (c, i) {
-        return { id: c.id || ('call_' + Date.now() + '_' + i), type: 'function', function: { name: c.function.name, arguments: c.function.arguments || '{}' } };
+  const PERSONA = [
+    '你是用户的「AI 参谋」，嵌在 Super Productivity（待办 + 时间追踪）里，通过工具直接读写用户的任务、目标和日志。',
+    '定位：像一位靠谱的参谋长——帮用户把长期目标拆成每天能执行的小步，盯进度、按时提醒、复盘纠偏。用户很忙也容易犯懒，你要让参与计划的成本尽量低。',
+    '',
+    '工作方式：',
+    '1. 让用户少打字：需要用户做选择时，用 ask_user 给 2-6 个具体选项；一次只问 1 个问题，最多连问 3 轮就给出方案。',
+    '2. 定今日计划：先 get_today；结合目标的本周重点和考试倒计时，给出 1 条主线 + 最多 3 件关键事（每件 25-90 分钟，标明所属目标，可给开始时间），用户确认后 save_daily_plan。不要排满，留余量。',
+    '3. 晚间复盘：先 get_today 看数据，用 ask_user 依次问：今天最满意的一件事 / 卡在哪 / 明天第一件事（可附心情 1-5），然后 save_daily_review 生成日报。复盘要具体、不说教，指出 1 个可改进点。',
+    '4. 周计划/周复盘：用 get_history 和 get_goals，看各目标投入是否失衡，调整本周重点（update_goal 的 focus）。',
+    '5. 需要提醒的事用 create_task / update_task 的 remind_at，到点手机会弹通知。',
+    '6. 需要任务 id 时先查，绝不编造；删除只在用户明确要求时做。',
+    '7. 发现用户的稳定偏好或约束（作息、精力规律、不想做的事）就用 remember 记下来。',
+    '8. 回复用中文，口语、简短、有判断：先给结论，再给理由；不要复述工具返回的原始数据；适当用列表，少用大标题。',
+  ].join('\n');
+
+  async function contextCapsule() {
+    const today = ymd();
+    const lines = ['', '【当前情况】', '现在：' + today + ' ' + weekday(today) + ' ' + hm() + '（' + Intl.DateTimeFormat().resolvedOptions().timeZone + '）。“明天/下周一”要换算成具体日期。'];
+    try {
+      const [doc, day] = await Promise.all([getGoalsDoc(), getDay(today)]);
+      const gl = doc.goals.filter((g) => g.status !== 'done').map((g) => {
+        let s = g.emoji + g.title + '[' + g.id + ', 标签#' + g.tag + ']';
+        if (g.focus) s += ' 本周重点：' + g.focus;
+        const next = (g.keyDates || []).find((k) => daysUntil(k.date) >= 0);
+        if (next) s += ' ｜' + next.label + ' ' + next.date + (next.estimated ? '(预计)' : '') + ' 剩' + daysUntil(next.date) + '天';
+        else if (g.targetDate && daysUntil(g.targetDate) >= 0) s += ' ｜目标日 ' + g.targetDate + ' 剩' + daysUntil(g.targetDate) + '天';
+        return '- ' + s;
       });
-    } else if (e.content === null) {
-      e.content = '';
-    }
-    return e;
+      if (gl.length) lines.push('长期目标：', ...gl);
+      lines.push('今日计划：' + (day.plan ? (day.plan.theme || '') + '（' + (day.plan.items || []).length + ' 项）' : '还没定') + '；复盘：' + (day.review ? '已完成' : '未做'));
+      if (doc.memory.length) lines.push('关于用户（长期记忆）：', ...doc.memory.slice(-15).map((m) => '- ' + m.text));
+    } catch (e) { /* 上下文只是锦上添花 */ }
+    if (state.mcp) lines.push('以 mcp_ 开头的是远程 MCP 服务器的工具。');
+    return lines.join('\n');
   }
 
-  function send() {
-    if (state.busy) { state.stop = true; setStatus('warn', '正在停止…'); return; }
-    var text = (els.input.value || '').trim();
-    if (!text) return;
-    if (!cfg.llmBase || !cfg.model) {
-      els.cfg.classList.add('open');
-      addMsg('err', '先在设置里填好大模型的 API 地址和模型名');
-      return;
-    }
-    els.input.value = '';
-    autoGrow();
-    state.stop = false;
-    setBusy(true);
-    addMsg('me', text);
-    state.history.push({ role: 'user', content: text });
-    trimHistory();
-    saveHistory();
-    setStatus('warn', '思考中…');
+  // ================================================================== conversation state
 
-    ensureMcp().then(function () { return loop(0); }).catch(function (e) {
-      addMsg('err', errMsg(e));
-      setStatus('err', '出错 ' + hm());
-    }).then(function () {
-      setBusy(false);
-      saveHistory();
-      els.input.focus();
-    });
+  // 按“用户轮次”裁剪，保证 assistant(tool_calls) 和它的 tool 结果不被拆开
+  function trimHistory() {
+    const idx = []; state.history.forEach((m, i) => { if (m.role === 'user') idx.push(i); });
+    if (idx.length > KEEP_USER_TURNS) state.history = state.history.slice(idx[idx.length - KEEP_USER_TURNS]);
   }
-
-  function loop(round) {
-    if (state.stop) { addMsg('note', '已停止'); setStatus('', '已停止'); return Promise.resolve(); }
-    if (round >= MAX_ROUNDS) { addMsg('note', '工具调用轮数达到上限，已暂停。可以继续说“接着做”。'); setStatus('warn', '轮数上限'); return Promise.resolve(); }
-    var messages = [{ role: 'system', content: systemPrompt() }].concat(state.history);
-    return chatCompletion(messages, toolDefs()).then(function (msg) {
-      var entry = assistantEntry(msg);
-      state.history.push(entry);
-      if (entry.content) addMsg('ai', entry.content);
-      if (!entry.tool_calls) {
-        setStatus('ok', modelLabel() + ' · ' + hm());
-        return null;
+  // 中断后补齐缺失的 tool 结果，否则下一次请求会被模型接口拒绝
+  function repairHistory() {
+    const out = [];
+    for (let i = 0; i < state.history.length; i++) {
+      const m = state.history[i];
+      out.push(m);
+      if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length) {
+        const have = new Set();
+        let k = i + 1;
+        while (k < state.history.length && state.history[k].role === 'tool') { have.add(state.history[k].tool_call_id); k++; }
+        for (; i + 1 < k; i++) out.push(state.history[i + 1]);
+        m.tool_calls.forEach((c) => { if (!have.has(c.id)) out.push({ role: 'tool', tool_call_id: c.id, content: '{"error":"已取消"}' }); });
       }
-      setStatus('warn', '执行工具…');
-      // 顺序执行：避免并发创建同名标签之类的竞争
-      return entry.tool_calls.reduce(function (p, call) {
-        return p.then(function () { return execToolCall(call); });
-      }, Promise.resolve()).then(function () { saveHistory(); return loop(round + 1); });
+    }
+    state.history = out;
+  }
+  // 省 token：较早轮次的工具结果只留开头
+  function messagesForModel(system) {
+    const idx = []; state.history.forEach((m, i) => { if (m.role === 'user') idx.push(i); });
+    const cut = idx.length > FULL_TOOL_TURNS ? idx[idx.length - FULL_TOOL_TURNS] : 0;
+    const msgs = state.history.map((m, i) => {
+      const o = { role: m.role, content: m.content };
+      if (m.tool_calls) o.tool_calls = m.tool_calls;
+      if (m.tool_call_id) o.tool_call_id = m.tool_call_id;
+      if (m.role === 'tool' && i < cut && String(m.content).length > 300) o.content = String(m.content).slice(0, 300) + '…（已省略）';
+      return o;
+    });
+    return [{ role: 'system', content: system }].concat(msgs);
+  }
+  const saveHistory = () => lsWrite({ history: state.history });
+
+  // ================================================================== chat rendering
+
+  function md(text) {
+    const lines = String(text || '').replace(/\r/g, '').split('\n');
+    const out = []; let i = 0;
+    const inline = (s) => h(s)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+      .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>')
+      .replace(/~~([^~]+)~~/g, '<s>$1</s>');
+    while (i < lines.length) {
+      let line = lines[i];
+      if (/^```/.test(line)) {
+        const buf = []; i++;
+        while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]);
+        i++; out.push('<pre>' + h(buf.join('\n')) + '</pre>'); continue;
+      }
+      if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
+        const row = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+        const head = row(line); i += 2; const body = [];
+        while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) body.push(row(lines[i++]));
+        out.push('<table><tr>' + head.map((c) => '<th>' + inline(c) + '</th>').join('') + '</tr>' + body.map((r) => '<tr>' + r.map((c) => '<td>' + inline(c) + '</td>').join('') + '</tr>').join('') + '</table>');
+        continue;
+      }
+      let m;
+      if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { out.push('<h' + Math.min(4, m[1].length + 1) + '>' + inline(m[2]) + '</h' + Math.min(4, m[1].length + 1) + '>'); i++; continue; }
+      if (/^\s*([-*_])\s*\1\s*\1\s*$/.test(line)) { out.push('<hr>'); i++; continue; }
+      if (/^>\s?/.test(line)) { const buf = []; while (i < lines.length && /^>\s?/.test(lines[i])) buf.push(lines[i++].replace(/^>\s?/, '')); out.push('<blockquote>' + inline(buf.join(' ')) + '</blockquote>'); continue; }
+      if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) {
+        const ordered = /^\s*\d+[.)]/.test(line); const items = [];
+        while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) {
+          let it = lines[i++].replace(/^\s*([-*+]|\d+[.)])\s+/, '');
+          const task = it.match(/^\[([ xX])\]\s*(.*)$/);
+          items.push(task ? '<li class="task">' + (task[1] === ' ' ? '☐ ' : '☑ ') + inline(task[2]) + '</li>' : '<li>' + inline(it) + '</li>');
+        }
+        out.push((ordered ? '<ol>' : '<ul>') + items.join('') + (ordered ? '</ol>' : '</ul>')); continue;
+      }
+      if (!line.trim()) { i++; continue; }
+      const buf = [];
+      while (i < lines.length && lines[i].trim() && !/^(```|#{1,4}\s|>|\s*([-*+]|\d+[.)])\s+|\s*\|.*\|\s*$)/.test(lines[i])) buf.push(lines[i++]);
+      if (!buf.length) { buf.push(lines[i++]); }
+      out.push('<p>' + buf.map(inline).join('<br>') + '</p>');
+    }
+    return out.join('');
+  }
+
+  function scrollDown(force) {
+    const l = els.log;
+    if (force || l.scrollHeight - l.scrollTop - l.clientHeight < 160) l.scrollTop = l.scrollHeight;
+  }
+  function clearHero() { const x = els.log.querySelector('.hero'); if (x) x.remove(); }
+
+  function addUserRow(text) {
+    clearHero();
+    const row = document.createElement('div');
+    row.className = 'row me';
+    row.innerHTML = '<div class="bubble-me"></div>';
+    row.firstChild.textContent = text;
+    els.log.appendChild(row); scrollDown(true);
+    return row;
+  }
+
+  // 一个 AI 回合：头像 + 步骤 + 正文（流式更新）+ 选项 + 操作
+  function addAiRow() {
+    clearHero();
+    const row = document.createElement('div');
+    row.className = 'row ai';
+    row.innerHTML = '<div class="avatar sm">参</div><div class="ai-body"><div class="stepsbox"></div><div class="md"></div><div class="extra"></div></div>';
+    els.log.appendChild(row); scrollDown(true);
+    const body = row.querySelector('.md');
+    const stepsBox = row.querySelector('.stepsbox');
+    const extra = row.querySelector('.extra');
+    let text = '', steps = null, typing = null, t0 = Date.now(), timer = null;
+    const api = {
+      row,
+      typing(on) {
+        if (on && !typing) {
+          typing = document.createElement('div'); typing.className = 'typing';
+          typing.innerHTML = '<i></i><i></i><i></i><span></span>';
+          body.after(typing); t0 = Date.now();
+          timer = setInterval(() => { const s = Math.round((Date.now() - t0) / 1000); typing.lastChild.textContent = s >= 3 ? s + 's' : ''; }, 1000);
+        } else if (!on && typing) { clearInterval(timer); typing.remove(); typing = null; }
+      },
+      setText(t) { text = t; body.innerHTML = md(t); scrollDown(); },
+      appendText(t) { text = text ? text + '\n\n' + t : t; body.innerHTML = md(text); scrollDown(); },
+      text: () => text,
+      step(label) {
+        if (!steps) {
+          steps = document.createElement('details'); steps.className = 'steps';
+          steps.innerHTML = '<summary><span class="spin"></span><span class="sum"></span></summary><ul></ul>';
+          stepsBox.appendChild(steps);
+        }
+        const li = document.createElement('li');
+        li.innerHTML = '<span>⋯</span><div></div>';
+        li.lastChild.textContent = label;
+        steps.querySelector('ul').appendChild(li);
+        const n = steps.querySelectorAll('li').length;
+        steps.querySelector('.sum').textContent = '正在' + label;
+        scrollDown();
+        return {
+          done(ok, detail) {
+            li.firstChild.textContent = ok ? '✓' : '✗';
+            if (!ok) { li.className = 'fail'; steps.open = true; }
+            if (detail) { const sm = document.createElement('small'); sm.textContent = ' ' + String(detail).slice(0, 160); li.lastChild.appendChild(sm); }
+            const fails = steps.querySelectorAll('li.fail').length;
+            steps.querySelector('.sum').textContent = '已执行 ' + n + ' 个操作' + (fails ? '（' + fails + ' 个失败）' : '');
+          },
+        };
+      },
+      finishSteps() { if (steps) { const sp = steps.querySelector('.spin'); if (sp) sp.remove(); } },
+      choices(question, options) {
+        if (question && !text.includes(question)) api.appendText(question);
+        const box = document.createElement('div'); box.className = 'choices';
+        options.forEach((o) => {
+          const b = document.createElement('button'); b.textContent = o;
+          b.onclick = () => { box.querySelectorAll('button').forEach((x) => { x.disabled = true; }); send(o); };
+          box.appendChild(b);
+        });
+        extra.appendChild(box); scrollDown(true);
+      },
+      confirm(message, okLabel) {
+        return new Promise((resolve) => {
+          const c = document.createElement('div'); c.className = 'confirm';
+          c.innerHTML = '<div></div><div class="btns"><button class="btn danger"></button><button class="btn">取消</button></div>';
+          c.firstChild.textContent = message;
+          const [ok, cancel] = c.querySelectorAll('button');
+          ok.textContent = okLabel || '确定';
+          const done = (v) => { ok.disabled = cancel.disabled = true; c.style.opacity = '.6'; resolve(v); };
+          ok.onclick = () => done(true); cancel.onclick = () => done(false);
+          if (state.abort) state.abort.signal.addEventListener('abort', () => done(false), { once: true });
+          extra.appendChild(c); scrollDown(true);
+        });
+      },
+      actions(userText) {
+        const a = document.createElement('div'); a.className = 'acts';
+        a.innerHTML = '<button data-a="copy">' + ICON.copy + '复制</button>' + (userText ? '<button data-a="retry">' + ICON.retry + '重试</button>' : '');
+        a.onclick = (e) => {
+          const b = e.target.closest('button'); if (!b) return;
+          if (b.dataset.a === 'copy') copyText(text, b);
+          if (b.dataset.a === 'retry' && !state.busy) send(userText);
+        };
+        row.querySelector('.ai-body').appendChild(a);
+      },
+      error(msg) {
+        const e = document.createElement('div'); e.className = 'err-card'; e.textContent = msg;
+        extra.appendChild(e); scrollDown(true);
+      },
+    };
+    return api;
+  }
+
+  function addNote(text) { clearHero(); const n = document.createElement('div'); n.className = 'note'; n.textContent = text; els.log.appendChild(n); scrollDown(); }
+
+  function copyText(text, btn) {
+    const done = () => { if (btn) { const old = btn.innerHTML; btn.innerHTML = '✓ 已复制'; setTimeout(() => { btn.innerHTML = old; }, 1200); } };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, fallback); return; }
+    } catch (e) { /* fall through */ }
+    fallback();
+    function fallback() {
+      const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (e) { /* ignore */ }
+      ta.remove();
+    }
+  }
+
+  const QUICK = [
+    { icon: '🌅', title: '定今天的计划', sub: '2 分钟排好最重要的事', prompt: '帮我定今天的计划' },
+    { icon: '🌙', title: '晚间复盘', sub: '3 个问题 + 生成日报', prompt: '开始今天的晚间复盘' },
+    { icon: '🎯', title: '现在该做什么', sub: '根据计划和精力给建议', prompt: '我现在该做什么？' },
+    { icon: '🗓️', title: '规划这一周', sub: '看各目标投入是否失衡', prompt: '帮我做一下这周的计划，看看各个目标的投入' },
+    { icon: '🏛️', title: '备考安排', sub: '国考 / 省考倒排计划', prompt: '根据国考和四川省考的时间，帮我倒排一个备考计划' },
+    { icon: '🧭', title: '梳理长期目标', sub: '问几个问题，补全目标', prompt: '帮我梳理一下我的长期目标，缺的信息问我' },
+  ];
+
+  async function renderHero() {
+    els.log.innerHTML = '';
+    if (state.history.length) return;
+    const hour = new Date().getHours();
+    const greet = hour < 6 ? '夜深了' : hour < 11 ? '早上好' : hour < 14 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
+    const hero = document.createElement('div'); hero.className = 'hero';
+    hero.innerHTML = '<h2>' + greet + ' 👋</h2><p>我是你的参谋。说一句话，计划、提醒、复盘我来安排。</p><div class="stat-strip"></div><div class="starter"></div>';
+    const starter = hero.querySelector('.starter');
+    QUICK.forEach((q) => {
+      const b = document.createElement('button');
+      b.innerHTML = '<b>' + q.icon + ' ' + h(q.title) + '</b><span>' + h(q.sub) + '</span>';
+      b.onclick = () => send(q.prompt);
+      starter.appendChild(b);
+    });
+    els.log.appendChild(hero);
+    try {
+      const today = ymd();
+      const [doc, day, tg, tasks] = await Promise.all([getGoalsDoc(), getDay(today), timeByGoal([today], false), need('getTasks')()]);
+      const due = tasks.filter((t) => !t.parentId && !isRitual(t) && isDueOn(t, today));
+      const stats = [
+        { b: due.filter((t) => t.isDone).length + '/' + due.length, s: '今日任务' },
+        { b: fmtDur(tg.total), s: '今日投入' },
+        { b: day.plan ? '✓' : '—', s: day.plan ? '计划已定' : '还没定计划' },
+      ];
+      doc.goals.forEach((g) => { if (g.targetDate && daysUntil(g.targetDate) >= 0 && g.status !== 'done') stats.push({ b: daysUntil(g.targetDate) + ' 天', s: g.emoji + ' ' + g.title.replace(/（.*）/, '') }); });
+      hero.querySelector('.stat-strip').innerHTML = stats.map((x) => '<div class="stat"><b>' + h(x.b) + '</b><span>' + h(x.s) + '</span></div>').join('');
+    } catch (e) { /* ignore */ }
+  }
+
+  function rebuildLog() {
+    els.log.innerHTML = '';
+    if (!state.history.length) { renderHero(); return; }
+    let ai = null, lastUser = '';
+    state.history.forEach((m) => {
+      if (m.role === 'user') { if (ai) ai.actions(lastUser); ai = null; lastUser = m.content; addUserRow(m.content); }
+      else if (m.role === 'assistant') {
+        if (!ai) ai = addAiRow();
+        if (m.content) ai.appendText(m.content);
+        (m.tool_calls || []).forEach((c) => {
+          let args = {}; try { args = JSON.parse(c.function.arguments || '{}'); } catch (e) { /* ignore */ }
+          ai.step(toolLabel(c.function.name, args)).done(true);
+          if (c.function.name === 'ask_user' && m === state.history[state.history.length - 2]) ai.choices(args.question, args.options || []);
+        });
+        ai.finishSteps();
+      }
+    });
+    if (ai) ai.actions(lastUser);
+    scrollDown(true);
+  }
+
+  function renderChips() {
+    els.chips.innerHTML = '';
+    if (state.busy) return;
+    const hour = new Date().getHours();
+    const list = hour >= 18 ? ['晚间复盘', '明天第一件事是什么？', '今天投入了多少时间？', '提醒我明早 8 点背单词'] :
+      hour < 11 ? ['定今天的计划', '我现在该做什么？', '国考还有多少天？', '把…加到今天'] :
+        ['我现在该做什么？', '下午怎么安排？', '今天进度怎么样？', '提醒我 1 小时后休息'];
+    list.forEach((t) => {
+      const b = document.createElement('button'); b.textContent = t;
+      b.onclick = () => { if (t.includes('…')) { els.input.value = t.replace('…', ''); els.input.focus(); autoGrow(); } else send(t === '晚间复盘' ? '开始今天的晚间复盘' : t === '定今天的计划' ? '帮我定今天的计划' : t); };
+      els.chips.appendChild(b);
     });
   }
 
-  function execToolCall(call) {
-    var name = call.function.name, args = {};
-    var chip;
+  function setStatus(kind, text) { els.dot.className = 'dot' + (kind ? ' ' + kind : ''); els.meta.textContent = text || ''; }
+  function setBusy(b) {
+    state.busy = b;
+    els.send.innerHTML = b ? ICON.stop : ICON.send;
+    els.send.classList.toggle('stop', b);
+    els.send.setAttribute('aria-label', b ? '停止' : '发送');
+    renderChips(); updateSendEnabled();
+  }
+  function updateSendEnabled() { els.send.disabled = !state.busy && !els.input.value.trim(); }
+  function modelLabel() { return cfg.model || '未选模型'; }
+  function showCfgStatus() { if (!cfg.llmBase || !cfg.model) setStatus('err', '未配置模型 · 去设置'); else setStatus('', modelLabel()); }
+
+  // ================================================================== agent loop
+
+  async function send(textArg) {
+    if (state.busy) { if (state.abort) state.abort.abort(); return; }
+    const text = (typeof textArg === 'string' ? textArg : els.input.value || '').trim();
+    if (!text) return;
+    if (!cfg.llmBase || !cfg.model) { switchTab('settings'); toast('先在这里填好大模型 API'); return; }
+    if (typeof textArg !== 'string') { els.input.value = ''; autoGrow(); }
+    switchTab('chat');
+    addUserRow(text);
+    repairHistory();
+    state.history.push({ role: 'user', content: text });
+    trimHistory(); saveHistory();
+    const ai = addAiRow();
+    state.abort = new AbortController();
+    setBusy(true); setStatus('warn', '思考中…');
+    try {
+      await ensureMcp();
+      await loop(ai, state.abort.signal);
+      setStatus('ok', modelLabel() + ' · ' + hm());
+    } catch (e) {
+      if (e.aborted) { if (!ai.text()) ai.setText('_已停止_'); setStatus('', '已停止'); }
+      else { ai.error(errMsg(e)); setStatus('err', '出错了 · ' + hm()); }
+    } finally {
+      ai.typing(false); ai.finishSteps(); ai.actions(text);
+      repairHistory(); saveHistory();
+      state.abort = null; setBusy(false);
+    }
+  }
+
+  async function loop(ai, signal) {
+    const system = PERSONA + '\n' + (await contextCapsule());
+    for (let round = 0; round < MAX_ROUNDS; round++) {
+      ai.typing(true);
+      const before = ai.text();
+      const msg = await chat(messagesForModel(system), toolDefs(), signal, (partial) => { ai.typing(false); ai.setText(before ? before + '\n\n' + partial : partial); });
+      ai.typing(false);
+      const entry = { role: 'assistant', content: msg.content || null };
+      if (msg.tool_calls && msg.tool_calls.length) {
+        entry.tool_calls = msg.tool_calls.map((c, i) => ({ id: c.id || 'call_' + Date.now() + '_' + i, type: 'function', function: { name: c.function.name, arguments: c.function.arguments || '{}' } }));
+      } else if (entry.content === null) entry.content = '';
+      state.history.push(entry);
+      if (entry.content) ai.setText(before ? before + '\n\n' + entry.content : entry.content);
+      if (!entry.tool_calls) return;
+      setStatus('warn', '执行中…');
+      let ends = false;
+      for (const call of entry.tool_calls) {
+        if (signal.aborted) throw abortError();
+        ends = (await execToolCall(call, ai)) || ends;
+      }
+      saveHistory();
+      if (ends) return; // ask_user：等用户点选项
+      setStatus('warn', '思考中…');
+    }
+    ai.appendText('_操作步骤太多，先停在这里。说“继续”我接着做。_');
+  }
+
+  async function execToolCall(call, ai) {
+    const name = call.function.name;
+    let args;
     try { args = JSON.parse(call.function.arguments || '{}') || {}; } catch (e) {
-      chip = addToolChip(name, call.function.arguments);
-      var bad = '参数不是合法 JSON：' + call.function.arguments;
-      chip.done(false, bad);
+      const bad = '参数不是合法 JSON';
+      ai.step(name).done(false, bad);
       state.history.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: bad }) });
-      return Promise.resolve();
+      return false;
     }
-    chip = addToolChip(name, args);
-    if (state.stop) {
-      state.history.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: '用户已停止' }) });
-      chip.done(false, '已停止');
-      return Promise.resolve();
-    }
-    return runTool(name, args).then(function (out) {
-      var txt = typeof out === 'string' ? out : JSON.stringify(out === undefined ? { ok: true } : out);
+    const st = ai.step(toolLabel(name, args));
+    const ctx = { confirm: (m, l) => ai.confirm(m, l), showChoices: (q, o) => ai.choices(q, o) };
+    try {
+      const out = await runTool(name, args, ctx);
+      let txt = typeof out === 'string' ? out : JSON.stringify(out === undefined ? { ok: true } : out);
       if (txt.length > TOOL_RESULT_MAX) txt = txt.slice(0, TOOL_RESULT_MAX) + '…（已截断）';
       state.history.push({ role: 'tool', tool_call_id: call.id, content: txt });
-      chip.done(true, txt);
-    }, function (e) {
-      var m = errMsg(e);
+      st.done(true);
+      return !!(TOOL_BY_NAME[name] && TOOL_BY_NAME[name].endsTurn);
+    } catch (e) {
+      const m = errMsg(e);
       state.history.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: m }) });
-      chip.done(false, m);
+      st.done(false, m);
+      return false;
+    }
+  }
+
+  // ================================================================== tabs
+
+  function switchTab(tab) {
+    state.tab = tab;
+    document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
+    document.querySelectorAll('.view').forEach((v) => v.classList.toggle('on', v.id === 'view-' + tab));
+    if (tab === 'today') renderToday();
+    if (tab === 'goals') renderGoals();
+    if (tab === 'settings') renderSettings();
+  }
+  function refreshSideViews() { if (state.tab === 'today') renderToday(); if (state.tab === 'goals') renderGoals(); }
+
+  function toast(msg) {
+    try { if (API && API.showSnack) { API.showSnack({ msg, type: 'INFO' }); return; } } catch (e) { /* ignore */ }
+    addNote(msg);
+  }
+
+  // ================================================================== 今日
+
+  function colorOfGoal(goals, id) { const i = goals.findIndex((g) => g.id === id); return i < 0 ? '#9aa1ad' : GOAL_COLORS[i % GOAL_COLORS.length]; }
+
+  async function renderToday() {
+    const box = $('today');
+    const day = state.todayDay || ymd();
+    box.innerHTML = '<div class="empty-hint">加载中…</div>';
+    try {
+      const [tasks, archived, lk, j, log, tg, doc] = await Promise.all([
+        need('getTasks')(), API.getArchivedTasks ? API.getArchivedTasks().catch(() => []) : [], loadLookups(), getDay(day), getLog(day), timeByGoal([day], true), getGoalsDoc(),
+      ]);
+      const all = tasks.concat(archived || []);
+      const isToday = day === ymd();
+      let html = '<div class="daynav"><button class="btn ghost" data-act="prev">‹</button><b>' + (isToday ? '今天 · ' : '') + day.slice(5).replace('-', '月') + '日 ' + weekday(day) + '</b><button class="btn ghost" data-act="next"' + (isToday ? ' disabled' : '') + '>›</button></div>';
+
+      const cds = [];
+      doc.goals.forEach((g) => (g.keyDates || []).forEach((k) => { const n = daysUntil(k.date); if (n >= 0 && n <= 120) cds.push({ n, label: g.emoji + ' ' + g.title.replace(/（.*）/, '') + ' ' + k.label + (k.estimated ? '(预计)' : '') }); }));
+      cds.sort((a, b) => a.n - b.n);
+      if (cds.length) html += '<div class="countdowns">' + cds.slice(0, 6).map((c) => '<div class="cd"><b>' + c.n + '</b> 天<span>' + h(c.label) + '</span></div>').join('') + '</div>';
+
+      // 计划
+      html += '<div class="card"><h3>🎯 今日计划<span class="sp"></span>' + (j.plan ? '<small>' + new Date(j.plan.at).toTimeString().slice(0, 5) + ' 制定</small>' : '') + '</h3>';
+      if (j.plan) {
+        if (j.plan.theme) html += '<div style="margin-bottom:6px"><b>主线：</b>' + h(j.plan.theme) + '</div>';
+        (j.plan.items || []).forEach((it) => {
+          const t = all.find((x) => x.id === it.taskId); const done = t && t.isDone;
+          const g = doc.goals.find((x) => x.id === it.goal);
+          html += '<div class="plan-item"><span class="check' + (done ? ' on' : '') + '">' + (done ? '✓' : '') + '</span><div class="t"><span class="' + (done ? 'done-t' : '') + '">' + h(it.title) + '</span><small>' +
+            [it.time, it.minutes ? it.minutes + ' 分钟' : '', g ? g.emoji + ' ' + g.title : '', t ? '已投入 ' + fmtDur((t.timeSpentOnDay || {})[day] || 0) : ''].filter(Boolean).map(h).join(' · ') + '</small></div></div>';
+        });
+        if (j.plan.note) html += '<div class="muted" style="margin-top:6px">💡 ' + h(j.plan.note) + '</div>';
+      } else {
+        html += '<div class="muted">' + (isToday ? '还没定计划。' : '这天没有计划。') + '</div>';
+      }
+      if (isToday) html += '<div class="btn-row"><button class="btn' + (j.plan ? '' : ' primary') + '" data-ask="帮我定今天的计划">' + (j.plan ? '调整计划' : '和参谋定计划') + '</button></div>';
+      html += '</div>';
+
+      // 时间
+      html += '<div class="card"><h3>⏱️ 时间投入<span class="sp"></span><small>共 ' + fmtDur(tg.total) + '</small></h3>';
+      const entries = Object.entries(tg.byGoal).sort((a, b) => b[1] - a[1]);
+      if (entries.length) {
+        html += '<div class="bars">' + entries.map(([k, v]) => '<span style="width:' + (100 * v / tg.total).toFixed(2) + '%;background:' + colorOfGoal(doc.goals, k) + '"></span>').join('') + '</div><div class="legend">' +
+          entries.map(([k, v]) => { const g = doc.goals.find((x) => x.id === k); return '<span><i style="background:' + colorOfGoal(doc.goals, k) + '"></i>' + h(g ? g.emoji + ' ' + g.title : '其他（没打目标标签）') + '</span><span>' + fmtDur(v) + '</span>'; }).join('') + '</div>';
+      } else html += '<div class="muted">这天还没有计时记录。</div>';
+
+      // 时间轴
+      if (log.segs.length || log.away.length) {
+        const starts = log.segs.map((s) => s.s).concat(log.away.map((a) => a.s));
+        const ends = log.segs.map((s) => s.e).concat(log.away.map((a) => a.e));
+        const dayStart = parseDayDate(day).getTime();
+        let from = Math.min(dayStart + 6 * 3600000, Math.floor((Math.min(...starts) - dayStart) / 3600000) * 3600000 + dayStart);
+        let to = Math.max(from + 6 * 3600000, Math.ceil((Math.max(...ends) - dayStart) / 3600000) * 3600000 + dayStart);
+        const span = to - from;
+        const pos = (t) => (100 * (t - from) / span).toFixed(2);
+        const taskGoal = (id) => { const t = all.find((x) => x.id === id); if (!t) return null; const par = t.parentId && all.find((x) => x.id === t.parentId); const g = goalOfTask(t, doc.goals, lk) || (par && goalOfTask(par, doc.goals, lk)); return g ? g.id : '_other'; };
+        html += '<div class="timeline">' +
+          log.segs.map((s) => '<div class="seg" title="' + h(s.title) + '" style="left:' + pos(s.s) + '%;width:' + (100 * (s.e - s.s) / span).toFixed(2) + '%;background:' + colorOfGoal(doc.goals, taskGoal(s.taskId)) + '"></div>').join('') +
+          log.away.filter((a) => a.verdict !== 'work').map((a) => '<div class="seg away" style="left:' + pos(a.s) + '%;width:' + (100 * (a.e - a.s) / span).toFixed(2) + '%"></div>').join('') +
+          '</div><div class="ticks">' + [0, 1, 2, 3, 4].map((i) => '<span>' + hm(new Date(from + span * i / 4)) + '</span>').join('') + '</div>';
+        html += '<details class="seglist"><summary class="muted">时间轴明细（' + log.segs.length + ' 段）</summary>' +
+          log.segs.slice().reverse().map((s) => '<div><time>' + hm(new Date(s.s)) + '–' + hm(new Date(s.e)) + '</time><span>' + h(s.title) + ' · ' + fmtDur(s.e - s.s) + (s.live ? ' · 进行中' : '') + '</span></div>').join('') + '</details>';
+      } else if (isNativeHost()) {
+        html += '<div class="muted" style="margin-top:8px">时间轴会在你用 SP 计时后自动出现。</div>';
+      }
+      if (log.away.length) {
+        const V = { work: '在工作', break: '休息', other: '做别的', unknown: '未回答' };
+        const cut = log.away.filter((a) => a.verdict === 'break' || a.verdict === 'other').reduce((n, a) => n + a.min, 0);
+        html += '<div class="seglist" style="margin-top:10px"><div class="muted">📵 离开检查 ' + log.away.length + ' 次，扣除 ' + cut + ' 分钟</div>' +
+          log.away.map((a) => '<div><time>' + hm(new Date(a.s)) + '</time><span>离开 ' + a.min + ' 分 · ' + V[a.verdict] + ' · ' + h(a.title) + '</span></div>').join('') + '</div>';
+      }
+      html += '</div>';
+
+      // 复盘 & 日报
+      html += '<div class="card"><h3>🌙 复盘</h3>';
+      if (j.review) {
+        const r = j.review;
+        html += '<dl class="kv">' + [['收获', r.wins], ['问题', r.problems], ['改进', r.lessons], ['明天', r.tomorrow], ['状态', (r.mood || r.energy) ? '心情 ' + (r.mood || '-') + '/5 · 精力 ' + (r.energy || '-') + '/5' : '']]
+          .filter((x) => x[1]).map((x) => '<dt>' + x[0] + '</dt><dd>' + h(x[1]) + '</dd>').join('') + '</dl>';
+      } else html += '<div class="muted">' + (isToday ? '晚上花 2 分钟复盘，参谋会生成日报。' : '这天没有复盘。') + '</div>';
+      html += '<div class="btn-row">' + (isToday && !j.review ? '<button class="btn primary" data-ask="开始今天的晚间复盘">开始复盘</button>' : '') +
+        '<button class="btn" data-act="copy-report">复制日报</button><button class="btn" data-act="write-report">写入 SP</button></div></div>';
+
+      box.innerHTML = html;
+      box.querySelector('[data-act="prev"]').onclick = () => { state.todayDay = addDays(day, -1); renderToday(); };
+      const nx = box.querySelector('[data-act="next"]'); if (nx) nx.onclick = () => { state.todayDay = addDays(day, 1) > ymd() ? ymd() : addDays(day, 1); renderToday(); };
+      box.querySelectorAll('[data-ask]').forEach((b) => { b.onclick = () => send(b.dataset.ask); });
+      box.querySelector('[data-act="copy-report"]').onclick = async (e) => copyText(await buildReport(day), e.target);
+      box.querySelector('[data-act="write-report"]').onclick = async (e) => {
+        e.target.disabled = true;
+        try { toast(await writeReportToSp(day)); } catch (err) { toast('写入失败：' + errMsg(err)); }
+        e.target.disabled = false;
+      };
+    } catch (e) {
+      box.innerHTML = '<div class="err-card">加载失败：' + h(errMsg(e)) + '</div>';
+    }
+  }
+
+  // ================================================================== 目标
+
+  async function renderGoals() {
+    const box = $('goals');
+    try {
+      const doc = await getGoalsDoc();
+      const days = Array.from({ length: 7 }, (_, i) => addDays(ymd(), -i));
+      let tg = { byGoal: {} };
+      try { tg = await timeByGoal(days, true); } catch (e) { /* 时间统计失败也要能看目标 */ }
+      let html = '<div class="muted" style="margin:4px 2px 12px">任务打上目标的标签（如 <b>#国考</b>），时间就会算进这个目标。点卡片可编辑。</div>';
+      doc.goals.forEach((g, gi) => {
+        const next = (g.keyDates || []).find((k) => daysUntil(k.date) >= 0);
+        const dl = g.targetDate ? daysUntil(g.targetDate) : null;
+        const open = state.openGoal === g.id;
+        html += '<div class="card goal' + (open ? ' open' : '') + '" data-goal="' + h(g.id) + '"><div class="goal-head"><div class="goal-emoji" style="box-shadow: inset 0 -3px 0 ' + GOAL_COLORS[gi % GOAL_COLORS.length] + '">' + h(g.emoji || '🎯') + '</div><div class="t"><b>' + h(g.title) + (g.status === 'paused' ? ' <small class="muted">（暂停）</small>' : g.status === 'done' ? ' <small class="muted">（已完成）</small>' : '') + '</b><span>' +
+          h(g.focus ? '本周：' + g.focus : next ? next.label + ' ' + next.date + (next.estimated ? '（预计）' : '') : '近 7 天投入 ' + fmtDur(tg.byGoal[g.id] || 0)) + '</span></div>' +
+          (dl !== null && dl >= 0 ? '<div class="goal-days"><b>' + dl + '</b><span>天</span></div>' : '<div class="goal-days"><b style="font-size:15px">' + fmtDur(tg.byGoal[g.id] || 0) + '</b><span>近 7 天</span></div>') + '</div>';
+        html += '<div class="goal-body">' +
+          '<div class="pills" style="margin-bottom:10px"><span class="pill on">#' + h(g.tag || '') + '</span><span class="pill">近 7 天 ' + fmtDur(tg.byGoal[g.id] || 0) + '</span>' +
+          (g.keyDates || []).map((k) => '<span class="pill' + (daysUntil(k.date) >= 0 ? ' on' : '') + '">' + h(k.label + ' ' + k.date.slice(5) + (k.estimated ? ' 预计' : '') + (daysUntil(k.date) >= 0 ? ' · ' + daysUntil(k.date) + '天' : ' · 已过')) + '</span>').join('') + '</div>' +
+          ((g.milestones || []).length ? '<div style="margin-bottom:10px">' + g.milestones.map((m, mi) => '<label class="ms"><input type="checkbox" data-ms="' + mi + '"' + (m.done ? ' checked' : '') + '> <span class="' + (m.done ? 'done-t' : '') + '">' + h(m.text) + '</span></label>').join('') + '</div>' : '') +
+          '<div class="grid2"><div class="field"><label>图标</label><input data-f="emoji" value="' + h(g.emoji || '') + '"></div><div class="field"><label>关联标签</label><input data-f="tag" value="' + h(g.tag || '') + '"></div></div>' +
+          '<div class="field"><label>标题</label><input data-f="title" value="' + h(g.title) + '"></div>' +
+          '<div class="field"><label>为什么要做（动机越具体越好）</label><textarea data-f="why">' + h(g.why || '') + '</textarea></div>' +
+          '<div class="field"><label>本周重点</label><input data-f="focus" value="' + h(g.focus || '') + '"></div>' +
+          '<div class="grid2"><div class="field"><label>目标日期</label><input type="date" data-f="targetDate" value="' + h(g.targetDate || '') + '"></div><div class="field"><label>状态</label><select data-f="status"><option value="active">进行中</option><option value="paused"' + (g.status === 'paused' ? ' selected' : '') + '>暂停</option><option value="done"' + (g.status === 'done' ? ' selected' : '') + '>已完成</option></select></div></div>' +
+          '<div class="field"><label>关键日期（每行一个：名称 YYYY-MM-DD，预计的在末尾加 ?）</label><textarea data-f="keyDates">' + h((g.keyDates || []).map((k) => k.label + ' ' + k.date + (k.estimated ? ' ?' : '')).join('\n')) + '</textarea></div>' +
+          '<div class="field"><label>里程碑（每行一个，已完成的以 x 开头）</label><textarea data-f="milestones">' + h((g.milestones || []).map((m) => (m.done ? 'x ' : '') + m.text).join('\n')) + '</textarea></div>' +
+          '<div class="btn-row"><button class="btn primary" data-act="save">保存</button><button class="btn" data-act="chat">和参谋聊这个目标</button><span style="flex:1"></span><button class="btn danger ghost" data-act="del">删除</button></div>' +
+          '</div></div>';
+      });
+      html += '<div class="btn-row" style="justify-content:center"><button class="btn" data-act="add">＋ 新增目标</button><button class="btn" data-act="memory">参谋记住的事（' + doc.memory.length + '）</button></div>';
+      box.innerHTML = html;
+
+      box.querySelectorAll('.goal').forEach((card) => {
+        const g = doc.goals.find((x) => x.id === card.dataset.goal);
+        card.querySelector('.goal-head').onclick = () => { state.openGoal = state.openGoal === g.id ? null : g.id; card.classList.toggle('open'); };
+        card.querySelectorAll('[data-ms]').forEach((cb) => {
+          cb.onchange = async () => { const m = g.milestones[+cb.dataset.ms]; m.done = cb.checked; m.doneOn = cb.checked ? ymd() : undefined; await saveGoalsDoc(doc); renderGoals(); };
+        });
+        card.querySelector('[data-act="save"]').onclick = async () => {
+          const v = (f) => card.querySelector('[data-f="' + f + '"]').value.trim();
+          Object.assign(g, { emoji: v('emoji') || '🎯', tag: v('tag').replace(/^#/, ''), title: v('title') || g.title, why: v('why'), focus: v('focus'), targetDate: v('targetDate'), status: v('status') });
+          g.keyDates = v('keyDates').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
+            const m = l.match(/^(.*?)\s*(\d{4}-\d{2}-\d{2})\s*(\?|？)?$/); return m ? { label: m[1] || '日期', date: m[2], estimated: !!m[3] } : null;
+          }).filter(Boolean).sort((a, b) => (a.date < b.date ? -1 : 1));
+          g.milestones = v('milestones').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const d = /^x\s+/i.test(l); return { text: l.replace(/^x\s+/i, ''), done: d }; });
+          await saveGoalsDoc(doc); toast('已保存「' + g.title + '」'); renderGoals();
+        };
+        card.querySelector('[data-act="chat"]').onclick = () => send('我们聊聊「' + g.title + '」这个目标：现在进展如何、这周的重点该是什么？缺的信息问我。');
+        card.querySelector('[data-act="del"]').onclick = async () => {
+          if (!window.confirm('删除目标「' + g.title + '」？（不会删除任务）')) return;
+          doc.goals = doc.goals.filter((x) => x !== g); await saveGoalsDoc(doc); renderGoals();
+        };
+      });
+      box.querySelector('[data-act="add"]').onclick = async () => {
+        const g = { id: uid(), emoji: '🎯', title: '新目标', tag: '新目标', why: '', focus: '', targetDate: '', keyDates: [], milestones: [] };
+        doc.goals.push(g); state.openGoal = g.id; await saveGoalsDoc(doc); renderGoals();
+      };
+      box.querySelector('[data-act="memory"]').onclick = () => {
+        const list = doc.memory.map((m, i) => (i + 1) + '. ' + m.text + '（' + m.at + '）').join('\n') || '还没有。聊天时参谋会把你的习惯和偏好记在这里。';
+        window.alert(list);
+      };
+    } catch (e) {
+      box.innerHTML = '<div class="err-card">加载失败：' + h(errMsg(e)) + '</div>';
+    }
+  }
+
+  // ================================================================== 设置
+
+  const presetById = (id) => PRESETS.find((p) => p.id === id) || PRESETS[PRESETS.length - 1];
+
+  async function renderSettings() {
+    const box = $('settings');
+    const s = await getSettings();
+    const native = isNativeHost();
+    const tri = (v) => (v === null || v === undefined ? 'auto' : v ? 'on' : 'off');
+    const triSel = (key, v) => '<select data-s="' + key + '"><option value="auto"' + (tri(v) === 'auto' ? ' selected' : '') + '>自动（' + (native ? '开' : '关') + '）</option><option value="on"' + (tri(v) === 'on' ? ' selected' : '') + '>开</option><option value="off"' + (tri(v) === 'off' ? ' selected' : '') + '>关</option></select>';
+    const sw = (key, v) => '<select data-s="' + key + '"><option value="on"' + (v ? ' selected' : '') + '>开</option><option value="off"' + (!v ? ' selected' : '') + '>关</option></select>';
+    box.innerHTML =
+      '<div class="card"><h3>🤖 大模型</h3>' +
+        '<div class="provider-grid">' + PRESETS.map((p) => '<button data-preset="' + p.id + '" class="' + (cfg.preset === p.id ? 'on' : '') + '">' + h(p.label) + '</button>').join('') + '</div>' +
+        '<div class="field"><label>API 地址（OpenAI 兼容，到 /v1 为止）</label><input id="fBase" value="' + h(cfg.llmBase) + '" placeholder="https://api.deepseek.com/v1" autocomplete="off" spellcheck="false"></div>' +
+        '<div class="field"><label>API Key（只存在这台设备，不同步）</label><input id="fKey" type="password" value="' + h(cfg.apiKey) + '" autocomplete="off" spellcheck="false"></div>' +
+        '<div class="field"><label>模型</label><input id="fModel" list="modelList" value="' + h(cfg.model) + '" placeholder="deepseek-chat" autocomplete="off" spellcheck="false"><datalist id="modelList"></datalist></div>' +
+        '<div class="btn-row"><button class="btn primary" data-act="save-llm">保存并测试</button><button class="btn" data-act="models">获取模型列表</button></div>' +
+        '<div id="llmStatus"></div></div>' +
+
+      '<div class="card"><h3>🔌 远程 MCP 服务器<span class="sp"></span><small>可选</small></h3>' +
+        '<div class="muted" style="margin-bottom:10px">把远程 MCP 服务器的工具也交给参谋用（Streamable HTTP）。不填就只用本机工具。</div>' +
+        '<div class="field"><label>MCP 地址</label><input id="fMcpUrl" value="' + h(cfg.mcpUrl) + '" placeholder="https://example.com/mcp" autocomplete="off" spellcheck="false"></div>' +
+        '<div class="field"><label>Token（可选，作为 Bearer 发送）</label><input id="fMcpToken" type="password" value="' + h(cfg.mcpToken) + '" autocomplete="off"></div>' +
+        '<div class="btn-row"><button class="btn primary" data-act="save-mcp">保存并连接</button>' + (cfg.mcpUrl ? '<button class="btn ghost danger" data-act="clear-mcp">断开</button>' : '') + '</div>' +
+        '<div id="mcpStatus">' + (state.mcp ? '<div class="status-line"><i class="dot ok"></i><span>已连接 ' + h(state.mcp.serverName) + ' · ' + state.mcp.tools.length + ' 个工具：' + h(state.mcp.tools.map((t) => t.name).slice(0, 12).join('、')) + '</span></div>' : '') + '</div></div>' +
+
+      '<div class="card"><h3>🧭 参谋节奏</h3>' +
+        '<div class="grid2"><div class="field"><label>早上定计划</label><input type="time" data-s="morningTime" value="' + h(s.morningTime) + '"></div><div class="field"><label>晚上复盘</label><input type="time" data-s="eveningTime" value="' + h(s.eveningTime) + '"></div></div>' +
+        '<div class="switch"><div class="t">打开 App 时提醒我<small>到点还没做计划 / 复盘，打开 SP 时弹窗问一句（不耗 token）</small></div>' + sw('openPrompt', s.openPrompt) + '</div>' +
+        '<div class="switch"><div class="t">系统通知提醒<small>维护一个「🧭 参谋」任务，到点由手机发通知，App 关着也能收到</small></div>' + triSel('ritualTask', s.ritualTask) + '</div>' +
+        '<div class="switch"><div class="t">离开检查<small>计时中离开 SP 超过下面的分钟数，回来时问你是在工作还是休息</small></div>' + triSel('awayCheck', s.awayCheck) + '</div>' +
+        '<div class="switch"><div class="t">离开多久才问（分钟）</div><input type="number" min="1" max="240" data-s="awayMinutes" value="' + h(s.awayMinutes) + '" style="width:76px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:5px 8px"></div>' +
+        '<div class="switch"><div class="t">记录时间轴<small>记录每段计时的起止时间，用于“今日”页和日报</small></div>' + triSel('timeline', s.timeline) + '</div>' +
+        '<div class="btn-row"><button class="btn primary" data-act="save-rhythm">保存节奏设置</button></div></div>' +
+
+      '<div class="card"><h3>⚙️ 高级</h3>' +
+        '<div class="switch"><div class="t">网络通道<small>手机上“自动”会走原生 HTTP（无 CORS、可访问局域网）</small></div><select id="fTransport">' +
+          [['auto', '自动'], ['native', '原生 HTTP'], ['fetch', '浏览器 fetch'], ['proxy', 'SP 宿主代理']].map(([v, l]) => '<option value="' + v + '"' + (cfg.transport === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></div>' +
+        '<div class="switch"><div class="t">流式输出<small>服务商允许浏览器直连时逐字显示；不允许会自动改用普通模式</small></div><select id="fStream"><option value="on"' + (cfg.stream !== false ? ' selected' : '') + '>开</option><option value="off"' + (cfg.stream === false ? ' selected' : '') + '>关</option></select></div>' +
+        '<div class="btn-row"><button class="btn" data-act="save-adv">保存</button><button class="btn" data-act="export">导出目标与日志</button><button class="btn ghost danger" data-act="clear">清空对话</button></div>' +
+        '<div class="muted" style="margin-top:10px">AI 参谋 v' + VERSION + ' · ' + (native ? '手机端' : '桌面/网页端') + '</div></div>';
+
+    const q = (sel) => box.querySelector(sel);
+    box.querySelectorAll('[data-preset]').forEach((b) => {
+      b.onclick = () => {
+        const p = presetById(b.dataset.preset);
+        box.querySelectorAll('[data-preset]').forEach((x) => x.classList.toggle('on', x === b));
+        if (p.base) q('#fBase').value = p.base;
+        q('#fModel').value = p.model || '';
+        box.dataset.preset = p.id;
+      };
     });
-  }
+    const readLlm = () => ({ preset: box.dataset.preset || cfg.preset, llmBase: q('#fBase').value.trim().replace(/\/+$/, '').replace(/\/chat\/completions$/, ''), apiKey: q('#fKey').value.trim(), model: q('#fModel').value.trim() });
+    const status = (id, ok, text) => { q(id).innerHTML = '<div class="status-line"><i class="dot ' + (ok === null ? 'warn' : ok ? 'ok' : 'err') + '"></i><span>' + h(text) + '</span></div>'; };
 
-  function modelLabel() { return cfg.model || '未选模型'; }
-
-  // ------------------------------------------------------------------ 设置
-
-  function presetById(id) { return PRESETS.find(function (p) { return p.id === id; }) || PRESETS[PRESETS.length - 1]; }
-
-  function fillForm() {
-    els.preset.value = cfg.preset;
-    els.base.value = cfg.llmBase;
-    els.key.value = cfg.apiKey;
-    els.model.value = cfg.model;
-    els.mcpUrl.value = cfg.mcpUrl;
-    els.mcpToken.value = cfg.mcpToken;
-    els.transport.value = cfg.transport;
-  }
-
-  function readForm() {
-    return {
-      preset: els.preset.value,
-      llmBase: (els.base.value || '').trim().replace(/\/+$/, '').replace(/\/chat\/completions$/, ''),
-      apiKey: (els.key.value || '').trim(),
-      model: (els.model.value || '').trim(),
-      mcpUrl: (els.mcpUrl.value || '').trim(),
-      mcpToken: (els.mcpToken.value || '').trim(),
-      transport: els.transport.value || 'auto',
+    q('[data-act="save-llm"]').onclick = async () => {
+      cfg = Object.assign(cfg, readLlm()); persistCfg(); showCfgStatus();
+      status('#llmStatus', null, '测试中…');
+      try {
+        const m = await chat([{ role: 'user', content: '只回复 OK' }], [], null, () => {});
+        let origin = ''; try { origin = new URL(cfg.llmBase).origin; } catch (e) { /* ignore */ }
+        const via = lsGet('streamOk', {})[origin] === true && cfg.stream !== false ? '浏览器直连 · 流式' : TRANSPORT_NAME[state.goodTransport[origin]] || '';
+        status('#llmStatus', true, '可以用了（' + via + '），模型回复：' + String(m.content || '').slice(0, 30));
+        setStatus('ok', modelLabel());
+      } catch (e) { status('#llmStatus', false, errMsg(e)); setStatus('err', '模型连不上'); }
     };
-  }
-
-  function showCfgStatus() {
-    if (!cfg.llmBase || !cfg.model) setStatus('err', '未配置');
-    else setStatus('', modelLabel() + ' · 未测试');
-  }
-
-  function saveCfg() {
-    cfg = readForm();
-    state.mcp = null;
-    state.goodTransport = {};
-    storageSet({ cfg: cfg });
-    addMsg('note', '设置已保存');
-    showCfgStatus();
-  }
-
-  function testConn() {
-    var saved = cfg;
-    cfg = readForm();
-    setStatus('warn', '测试中…');
-    var report = [];
-    return chatCompletion([{ role: 'user', content: '只回复 OK' }], []).then(function (msg) {
-      report.push('✓ 大模型可用（' + TRANSPORT_NAME[state.goodTransport[new URL(cfg.llmBase).origin]] + '），回复：' + String(msg.content || '').slice(0, 40));
-    }, function (e) {
-      report.push('✗ 大模型：' + errMsg(e));
-    }).then(function () {
-      if (!cfg.mcpUrl) return;
-      var c = new McpClient(cfg.mcpUrl, cfg.mcpToken);
-      return c.connect().then(function (tools) {
-        report.push('✓ MCP：' + c.serverName + '，' + tools.length + ' 个工具' + (c.sid ? '' : '（无会话 id）'));
-      }, function (e) { report.push('✗ MCP：' + errMsg(e)); });
-    }).then(function () {
-      var ok = report.every(function (l) { return l.charAt(0) === '✓'; });
-      addMsg(ok ? 'note' : 'err', report.join('\n'));
-      setStatus(ok ? 'ok' : 'err', ok ? modelLabel() + ' · 连接正常' : '连接有问题');
+    q('[data-act="models"]').onclick = async () => {
+      const saved = cfg; cfg = Object.assign({}, cfg, readLlm());
+      status('#llmStatus', null, '获取中…');
+      try {
+        const ids = await fetchModels();
+        q('#modelList').innerHTML = ids.map((id) => '<option value="' + h(id) + '">').join('');
+        status('#llmStatus', true, ids.length + ' 个模型：' + ids.slice(0, 30).join('、') + (ids.length > 30 ? '…' : '') + '\n点“模型”输入框可以从列表选。');
+      } catch (e) { status('#llmStatus', false, '获取失败（有的服务商不支持，可以手动填）：' + errMsg(e)); }
       cfg = saved;
-    });
+    };
+    q('[data-act="save-mcp"]').onclick = async () => {
+      cfg.mcpUrl = q('#fMcpUrl').value.trim(); cfg.mcpToken = q('#fMcpToken').value.trim(); persistCfg();
+      state.mcp = null; state.mcpFailedAt = 0;
+      if (!cfg.mcpUrl) { q('#mcpStatus').innerHTML = ''; return; }
+      status('#mcpStatus', null, '连接中…');
+      const c = new McpClient(cfg.mcpUrl, cfg.mcpToken);
+      try {
+        const tools = await c.connect(); c.ready = true; state.mcp = c;
+        status('#mcpStatus', true, '已连接 ' + c.serverName + ' · ' + tools.length + ' 个工具：' + tools.map((t) => t.name).slice(0, 12).join('、') + (c.sid ? '' : '\n（服务器没有返回会话 id，按无状态模式使用）'));
+      } catch (e) { status('#mcpStatus', false, errMsg(e)); }
+    };
+    const clr = q('[data-act="clear-mcp"]'); if (clr) clr.onclick = () => { cfg.mcpUrl = ''; cfg.mcpToken = ''; state.mcp = null; persistCfg(); renderSettings(); };
+    q('[data-act="save-rhythm"]').onclick = async () => {
+      const ns = Object.assign({}, s);
+      box.querySelectorAll('[data-s]').forEach((el) => {
+        const k = el.dataset.s; let v = el.value;
+        if (k === 'awayMinutes') v = Math.max(1, Math.min(240, Number(v) || 10));
+        else if (k === 'awayCheck' || k === 'timeline' || k === 'ritualTask') v = v === 'auto' ? null : v === 'on';
+        else if (k === 'openPrompt') v = v === 'on';
+        ns[k] = v;
+      });
+      await saveKey('settings', ns); toast('节奏设置已保存');
+    };
+    q('[data-act="save-adv"]').onclick = () => {
+      cfg.transport = q('#fTransport').value; cfg.stream = q('#fStream').value === 'on';
+      state.goodTransport = {}; persistCfg(); toast('已保存');
+    };
+    q('[data-act="export"]').onclick = async (e) => {
+      const months = Array.from({ length: 3 }, (_, i) => { const d = new Date(); d.setMonth(d.getMonth() - i); return ymd(d).slice(0, 7); });
+      const data = { goals: await getGoalsDoc(), settings: await getSettings() };
+      for (const m of months) { data['journal-' + m] = await loadKey('journal-' + m, null); data['log-' + m] = await loadKey('log-' + m, null); }
+      copyText(JSON.stringify(data, null, 1), e.target);
+    };
+    q('[data-act="clear"]').onclick = () => { if (state.busy) return; state.history = []; saveHistory(); rebuildLog(); toast('对话已清空（目标和日志不受影响）'); };
   }
 
-  function loadModels() {
-    var saved = cfg;
-    cfg = readForm();
-    setStatus('warn', '获取模型…');
-    fetchModels().then(function (ids) {
-      els.models.innerHTML = '';
-      ids.forEach(function (id) { var o = document.createElement('option'); o.value = id; els.models.appendChild(o); });
-      addMsg('note', '可用模型 ' + ids.length + ' 个：' + ids.slice(0, 40).join('、') + (ids.length > 40 ? '…' : '') + '\n点模型输入框可以从列表里选。');
-      setStatus('', '');
-    }).catch(function (e) {
-      addMsg('err', '获取模型列表失败（部分服务商不支持，可手动填写模型名）：' + errMsg(e));
-      setStatus('err', '获取失败');
-    }).then(function () { cfg = saved; });
-  }
+  function persistCfg() { lsWrite({ cfg }); }
 
-  // ------------------------------------------------------------------ 启动
+  // ================================================================== boot
 
   function autoGrow() {
     els.input.style.height = 'auto';
     els.input.style.height = Math.min(els.input.scrollHeight, Math.round(window.innerHeight * 0.34)) + 'px';
+    updateSendEnabled();
+  }
+
+  function consumeIntent() {
+    const it = lsGet('intent', null);
+    if (!it || Date.now() - it.at > 10 * 60000) return;
+    lsSet('intent', null);
+    if (!cfg.llmBase || !cfg.model) return;
+    send(it.kind === 'review' ? '开始今天的晚间复盘' : '帮我定今天的计划');
   }
 
   function init() {
-    PRESETS.forEach(function (p) {
-      var o = document.createElement('option'); o.value = p.id; o.textContent = p.label; els.preset.appendChild(o);
-    });
-    var stored = storageGet();
-    if (stored.cfg) cfg = Object.assign(cfg, stored.cfg);
-    if (!cfg.llmBase && cfg.preset !== 'custom') { var p0 = presetById(cfg.preset); cfg.llmBase = p0.base; cfg.model = cfg.model || p0.model; }
-    state.history = Array.isArray(stored.history) ? stored.history : [];
-    fillForm();
-    rebuildLog();
-    showCfgStatus();
-    if (!cfg.apiKey && cfg.preset !== 'custom') els.cfg.classList.add('open');
-
     if (API && API.cfg && API.cfg.theme) document.documentElement.setAttribute('data-theme', API.cfg.theme);
-    if (API && typeof API.registerHook === 'function') {
-      try {
-        API.registerHook('currentTaskChange', function (payload) {
-          var cur = payload && payload.current;
-          state.currentTaskId = cur ? (typeof cur === 'string' ? cur : cur.id) : null;
-        });
-      } catch (e) { /* 旧版本没有这个钩子也无妨 */ }
-    }
+    $('btnNew').innerHTML = ICON.edit;
+    const stored = lsRead();
+    if (stored.cfg) cfg = Object.assign(cfg, stored.cfg);
+    if (!cfg.llmBase && cfg.preset !== 'custom') { const p0 = presetById(cfg.preset); cfg.llmBase = p0.base; cfg.model = cfg.model || p0.model; }
+    state.history = Array.isArray(stored.history) ? stored.history : [];
+    repairHistory();
+    showCfgStatus();
+    setBusy(false);
+    rebuildLog();
 
-    els.preset.addEventListener('change', function () {
-      var p = presetById(els.preset.value);
-      if (p.base) els.base.value = p.base;
-      els.model.value = p.model || '';
-      els.models.innerHTML = '';
-    });
-    $('btnCfg').addEventListener('click', function () { els.cfg.classList.toggle('open'); });
-    $('btnSave').addEventListener('click', function () { saveCfg(); testConn(); });
-    $('btnTest').addEventListener('click', testConn);
-    $('btnModels').addEventListener('click', loadModels);
-    els.send.addEventListener('click', send);
-    $('btnClear').addEventListener('click', function () {
-      if (state.busy) return;
-      state.history = [];
-      saveHistory();
-      rebuildLog();
-    });
+    document.querySelectorAll('#tabs button').forEach((b) => { b.onclick = () => switchTab(b.dataset.tab); });
+    $('btnNew').onclick = () => { if (state.busy) return; state.history = []; saveHistory(); switchTab('chat'); rebuildLog(); };
+    els.send.onclick = () => send();
     els.input.addEventListener('input', autoGrow);
-    els.input.addEventListener('keydown', function (e) {
-      // 手机输入法回车应当换行；桌面上 Enter 发送、Shift+Enter 换行
+    els.input.addEventListener('keydown', (e) => {
+      // 手机输入法的回车用来换行；桌面上 Enter 发送、Shift+Enter 换行
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !isNativeHost()) { e.preventDefault(); send(); }
     });
-
-    if (!API) addMsg('err', '未检测到 PluginAPI：这个页面需要作为 Super Productivity 插件运行。');
+    if (API && typeof API.registerHook === 'function') {
+      try { API.registerHook('currentTaskChange', () => { if (state.tab === 'today') setTimeout(renderToday, 300); }); } catch (e) { /* ignore */ }
+    }
+    if (!API) { const a = addAiRow(); a.error('未检测到 PluginAPI：这个页面需要作为 Super Productivity 插件运行。'); }
+    if (!cfg.apiKey && cfg.preset !== 'custom') switchTab('settings');
+    else consumeIntent();
   }
 
-  // 暴露给开发测试用
-  window.__spAiAssistant = { McpClient: McpClient, state: state, tools: LOCAL_BY_NAME, http: http };
-
+  window.__spAiAssistant = { McpClient, state, tools: TOOL_BY_NAME, http, md, buildReport };
   init();
 })();
 </script>
