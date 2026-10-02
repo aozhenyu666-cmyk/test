@@ -7,13 +7,17 @@ import com.behaviordept.app.ai.AiCoach
 import com.behaviordept.app.data.AppDatabase
 import com.behaviordept.app.data.BackupService
 import com.behaviordept.app.data.EventLog
+import com.behaviordept.app.data.GuardRepository
 import com.behaviordept.app.data.SecretStore
 import com.behaviordept.app.data.SessionRepository
 import com.behaviordept.app.data.SettingsStore
 import com.behaviordept.app.data.StudyRepository
+import com.behaviordept.app.data.TrainingRepository
+import com.behaviordept.app.data.WeeklyService
 import com.behaviordept.app.reminder.Notifications
 import com.behaviordept.app.reminder.ReminderScheduler
 import com.behaviordept.app.reminder.ReviewDueWorker
+import com.behaviordept.app.reminder.UsageSyncWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -32,6 +36,9 @@ class AppContainer(context: Context) {
     val secrets = SecretStore(appContext)
     val coach = AiCoach(appContext, AiClient(), settings, secrets, db.aiCallDao(), events)
     val backup = BackupService(db)
+    val training = TrainingRepository(db.skillDao(), db.eventDao(), events)
+    val guard = GuardRepository(appContext, db.guardDao(), db.eventDao(), events)
+    val weekly = WeeklyService(db, events)
 }
 
 class BehaviorApp : Application() {
@@ -45,8 +52,17 @@ class BehaviorApp : Application() {
         container.appScope.launch(Dispatchers.IO) {
             container.secrets.load()
             ReminderScheduler.reschedule(this@BehaviorApp, container.settings.current())
+            // v2：第一次打开时放进三角洲、考公两个技能和默认防线规则。
+            if (!container.settings.flag(SettingsStore.FLAG_SEEDED_V2)) {
+                container.training.seedIfEmpty()
+                container.guard.seedIfEmpty()
+                container.settings.setFlag(SettingsStore.FLAG_SEEDED_V2)
+            }
+            container.guard.applyDue()
+            container.guard.sync()
         }
         ReviewDueWorker.enqueue(this)
+        UsageSyncWorker.enqueue(this)
     }
 }
 

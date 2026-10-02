@@ -362,9 +362,9 @@ fun SettingsScreen(onBackToTraining: () -> Unit) {
         PaperCard {
             SectionLabel("关于")
             Spacer(Modifier.height(6.dp))
-            Hint("行为管理部 ${BuildConfig.VERSION_NAME} · 阶段 1：今日、学习、AI 教练、提醒、事件日志")
+            Hint("行为管理部 ${BuildConfig.VERSION_NAME} · 训练引擎（学习、三角洲、考公、动作技能）、防线、记录与周复盘")
             Hint(
-                "提示词版本：" + listOf(Prompts.CRITIQUE, Prompts.QUESTIONS, Prompts.GRADE, Prompts.TRANSFER).joinToString("、") { it.tag },
+                "提示词版本：" + listOf(Prompts.CRITIQUE, Prompts.QUESTIONS, Prompts.GRADE, Prompts.TRANSFER, Prompts.DECOMPOSE, Prompts.DRILLS, Prompts.WEEKLY).joinToString("、") { it.tag },
             )
         }
 

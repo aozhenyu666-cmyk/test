@@ -96,3 +96,40 @@ class ParsersTest {
         assertThrows(FormatException::class.java) { Parsers.transfer("【成立的地方】\n- 都是缓存") }
     }
 }
+
+class ParsersV2Test {
+    @Test
+    fun decomposeNeedsTwoCategories() {
+        val text = "【步伐】\n- 最后两步一大一小\n- 内侧脚起跳\n【出手】\n- 最高点出手"
+        val list = Parsers.decompose(text)
+        assertEquals(listOf("步伐", "出手"), list.map { it.first })
+        assertEquals(2, list[0].second.size)
+        assertThrows(FormatException::class.java) { Parsers.decompose("【步伐】\n- 一条") }
+    }
+
+    @Test
+    fun drillsParseFields() {
+        val text = """
+            【练习1：预瞄拐角】
+            - 做法：靶场 5 个拐角，每个 4 次
+            - 时长：12 分钟
+            - 指标：首发命中率%
+            【练习2：急停开火】
+            - 做法：横移急停 20 次
+            - 时长：8
+            - 指标：被反打次数（越低越好）
+        """.trimIndent()
+        val d = Parsers.drills(text)
+        assertEquals(listOf("预瞄拐角", "急停开火"), d.map { it.title })
+        assertEquals(listOf(12, 8), d.map { it.minutes })
+        assertEquals("被反打次数（越低越好）", d[1].metric)
+        assertThrows(FormatException::class.java) { Parsers.drills("【练习1：空】\n- 时长：5") }
+    }
+
+    @Test
+    fun weeklyNeedsBothSections() {
+        val ok = "【断在哪】\n- 周三到周五没练\n【下周唯一重点】\n- 每天 20:00 练 15 分钟身法\n【具体做法】\n- 单向 peek 20 次"
+        assertEquals(listOf("断在哪", "下周唯一重点", "具体做法"), Parsers.weekly(ok).map { it.title })
+        assertThrows(FormatException::class.java) { Parsers.weekly("【断在哪】\n- 没练") }
+    }
+}

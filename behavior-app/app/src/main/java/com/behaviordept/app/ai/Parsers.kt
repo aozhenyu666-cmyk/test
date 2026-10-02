@@ -14,12 +14,15 @@ data class Grade(val items: List<GradeItem>, val suggestion: String, val reason:
 
 class FormatException(message: String) : Exception(message)
 
+/** AI 提议的专项练习，确认后才固定下来。 */
+data class ProposedDrill(val title: String, val method: String, val minutes: Int, val metric: String)
+
 /**
  * AI 输出的固定格式解析（PRD M7）。格式不对就抛 FormatException，
  * 由调用方转成“可重试”的提示，绝不静默吞掉。
  */
 object Parsers {
-    private val headerRegex = Regex("【([^】\\n]{1,20})】")
+    private val headerRegex = Regex("【([^】\\n]{1,40})】")
 
     val CRITIQUE_TITLES = listOf("讲对了", "讲错了", "漏掉的关键点", "预习问题答到了吗", "下一步")
     val TRANSFER_TITLES = listOf("成立的地方", "不成立的地方", "再远一点")
@@ -52,6 +55,40 @@ object Parsers {
     fun critique(text: String): List<Section> = requireTitles(text, CRITIQUE_TITLES)
 
     fun transfer(text: String): List<Section> = requireTitles(text, TRANSFER_TITLES)
+
+    val WEEKLY_TITLES = listOf("断在哪", "下周唯一重点")
+
+    /** 技能拆解：每段【子能力名】下面是标准。至少 2 个子能力。 */
+    fun decompose(text: String): List<Pair<String, List<String>>> {
+        val list = sections(text).filter { it.lines.isNotEmpty() && it.title.isNotBlank() }
+            .map { it.title to it.lines }
+            .distinctBy { it.first }
+        if (list.size < 2) throw FormatException("子能力少于 2 个")
+        return list
+    }
+
+    /** 专项练习：【练习N：名字】+ 做法 / 时长 / 指标。 */
+    fun drills(text: String): List<ProposedDrill> {
+        val list = sections(text).filter { it.title.startsWith("练习") }.mapNotNull { s ->
+            val name = s.title.substringAfter('：', s.title.substringAfter(':', "")).trim()
+            fun field(key: String): String? = s.lines.firstOrNull { it.startsWith(key) }
+                ?.removePrefix(key)?.trim()?.removePrefix("：")?.removePrefix(":")?.trim()
+            val method = field("做法") ?: return@mapNotNull null
+            if (method.isBlank()) return@mapNotNull null
+            val minutes = field("时长")?.let { Regex("\\d+").find(it)?.value?.toIntOrNull() } ?: 15
+            val metric = field("指标").orEmpty()
+            ProposedDrill(name.ifBlank { method.take(12) }, method, minutes.coerceIn(1, 240), metric)
+        }
+        if (list.isEmpty()) throw FormatException("没有找到【练习】")
+        return list.take(3)
+    }
+
+    /** 周复盘：必须有【断在哪】【下周唯一重点】，【具体做法】可选。 */
+    fun weekly(text: String): List<Section> {
+        val required = requireTitles(text, WEEKLY_TITLES)
+        val extra = sections(text).firstOrNull { it.title == "具体做法" && it.lines.isNotEmpty() }
+        return if (extra != null) required + extra else required
+    }
 
     /** 出题：只接受 JSON 字符串数组，取前 3 道。 */
     fun questions(text: String): List<String> {

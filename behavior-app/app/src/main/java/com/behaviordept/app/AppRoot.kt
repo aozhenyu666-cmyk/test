@@ -39,6 +39,18 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.behaviordept.app.record.RecordScreen
+import com.behaviordept.app.data.Template
+import com.behaviordept.app.guard.GuardScreen
+import com.behaviordept.app.guard.UrgeScreen
+import com.behaviordept.app.record.WeeklyScreen
+import com.behaviordept.app.today.NextAction
+import com.behaviordept.app.training.DrillFocusScreen
+import com.behaviordept.app.training.ExamLogScreen
+import com.behaviordept.app.training.MatchLogScreen
+import com.behaviordept.app.training.NewSkillScreen
+import com.behaviordept.app.training.RetestState
+import com.behaviordept.app.training.SkillScreen
+import com.behaviordept.app.training.TrainingScreen
 import com.behaviordept.app.settings.OnboardingScreen
 import com.behaviordept.app.settings.SettingsScreen
 import com.behaviordept.app.study.StudyScreen
@@ -52,29 +64,64 @@ import kotlinx.coroutines.launch
 
 object Routes {
     const val TODAY = "today"
-    const val STUDY = "study"
+    const val TRAINING = "training"
+    const val GUARD = "guard"
     const val RECORD = "record"
     const val SETTINGS = "settings"
+    const val STUDY = "study"
     const val UNIT = "unit/{id}"
     const val FOCUS = "focus/{id}"
+    const val SKILL = "skill/{id}"
+    const val MATCH = "match/{id}"
+    const val EXAM = "exam/{id}"
+    const val DRILL = "drill/{id}"
+    const val NEW_SKILL = "newskill"
+    const val URGE = "urge"
+    const val WEEKLY = "weekly"
 
     fun unit(id: Long) = "unit/$id"
 
     /** id = -1 表示新建学习单元。 */
     fun focus(id: Long) = "focus/$id"
+    fun skill(id: Long) = "skill/$id"
+
+    /** id = -1 表示用第一个对抗竞技技能（桌面快捷方式）。 */
+    fun match(id: Long) = "match/$id"
+    fun exam(id: Long) = "exam/$id"
+    fun drill(id: Long) = "drill/$id"
 }
 
 private data class Tab(val route: String, val glyph: String, val label: String)
 
 private val tabs = listOf(
     Tab(Routes.TODAY, "今", "今日"),
-    Tab(Routes.STUDY, "学", "学习"),
+    Tab(Routes.TRAINING, "练", "训练"),
+    Tab(Routes.GUARD, "防", "防线"),
     Tab(Routes.RECORD, "录", "记录"),
     Tab(Routes.SETTINGS, "设", "设置"),
 )
 
+/** 今日一件事（或“我想刷”里的那一件）点开始后去哪。 */
+private fun NavHostController.start(action: NextAction) {
+    when (action) {
+        is NextAction.Review, is NextAction.Step, NextAction.NewUnit -> navigate(Routes.focus(action.unitId ?: -1L))
+        is NextAction.Drill -> navigate(Routes.drill(action.drill.id))
+        is NextAction.Retest -> {
+            val id = action.plan.skill.id
+            when {
+                action.state is RetestState.Ready -> navigate(Routes.skill(id))
+                action.plan.skill.template == Template.COMPETITIVE -> navigate(Routes.match(id))
+                action.plan.skill.template == Template.EXAM -> navigate(Routes.exam(id))
+                else -> navigate(Routes.skill(id))
+            }
+        }
+    }
+}
+
+private val idArg = listOf(navArgument("id") { type = NavType.LongType })
+
 @Composable
-fun AppRoot(openTodaySignal: Int) {
+fun AppRoot(request: RouteRequest?) {
     val c = LocalContext.current.container
     val settings by c.settings.settings.collectAsStateWithLifecycle(initialValue = null)
     val scope = rememberCoroutineScope()
@@ -91,8 +138,14 @@ fun AppRoot(openTodaySignal: Int) {
     }
 
     val nav = rememberNavController()
-    LaunchedEffect(openTodaySignal) {
-        if (openTodaySignal > 0) nav.goTab(Routes.TODAY)
+    LaunchedEffect(request) {
+        when (request?.route) {
+            null -> Unit
+            MainActivity.ROUTE_TODAY -> nav.goTab(Routes.TODAY)
+            MainActivity.ROUTE_URGE -> nav.navigate(Routes.URGE)
+            MainActivity.ROUTE_MATCH -> nav.navigate(Routes.match(-1))
+            MainActivity.ROUTE_WEEKLY -> nav.navigate(Routes.WEEKLY)
+        }
     }
     val entry by nav.currentBackStackEntryAsState()
     val route = entry?.destination?.route
@@ -108,9 +161,19 @@ fun AppRoot(openTodaySignal: Int) {
             modifier = Modifier.fillMaxSize().padding(inner).consumeWindowInsets(inner),
         ) {
             composable(Routes.TODAY) {
-                TodayScreen(
-                    onStart = { id -> nav.navigate(Routes.focus(id)) },
+                TodayScreen(onStart = { nav.start(it) }, onUrge = { nav.navigate(Routes.URGE) })
+            }
+            composable(Routes.TRAINING) {
+                TrainingScreen(
+                    onOpenStudy = { nav.navigate(Routes.STUDY) },
+                    onOpenSkill = { nav.navigate(Routes.skill(it)) },
+                    onNewSkill = { nav.navigate(Routes.NEW_SKILL) },
                 )
+            }
+            composable(Routes.GUARD) { GuardScreen(onUrge = { nav.navigate(Routes.URGE) }) }
+            composable(Routes.RECORD) { RecordScreen(onWeekly = { nav.navigate(Routes.WEEKLY) }) }
+            composable(Routes.SETTINGS) {
+                SettingsScreen(onBackToTraining = { nav.goTab(Routes.TODAY) })
             }
             composable(Routes.STUDY) {
                 StudyScreen(
@@ -118,11 +181,7 @@ fun AppRoot(openTodaySignal: Int) {
                     onNewUnit = { nav.navigate(Routes.focus(-1)) },
                 )
             }
-            composable(Routes.RECORD) { RecordScreen() }
-            composable(Routes.SETTINGS) {
-                SettingsScreen(onBackToTraining = { nav.goTab(Routes.TODAY) })
-            }
-            composable(Routes.UNIT, arguments = listOf(navArgument("id") { type = NavType.LongType })) { e ->
+            composable(Routes.UNIT, arguments = idArg) { e ->
                 val id = e.arguments?.getLong("id") ?: -1L
                 UnitDetailScreen(
                     unitId = id,
@@ -130,13 +189,50 @@ fun AppRoot(openTodaySignal: Int) {
                     onContinue = { nav.navigate(Routes.focus(id)) },
                 )
             }
-            composable(Routes.FOCUS, arguments = listOf(navArgument("id") { type = NavType.LongType })) { e ->
-                val id = e.arguments?.getLong("id") ?: -1L
-                FocusScreen(
-                    unitId = id,
-                    onExit = { nav.popBackStack() },
+            composable(Routes.FOCUS, arguments = idArg) { e ->
+                FocusScreen(unitId = e.arguments?.getLong("id") ?: -1L, onExit = { nav.popBackStack() })
+            }
+            composable(Routes.SKILL, arguments = idArg) { e ->
+                SkillScreen(
+                    skillId = e.arguments?.getLong("id") ?: -1L,
+                    onBack = { nav.popBackStack() },
+                    onLogMatch = { nav.navigate(Routes.match(it)) },
+                    onLogExam = { nav.navigate(Routes.exam(it)) },
+                    onStartDrill = { nav.navigate(Routes.drill(it)) },
                 )
             }
+            composable(Routes.MATCH, arguments = idArg) { e ->
+                MatchLogScreen(
+                    skillId = e.arguments?.getLong("id") ?: -1L,
+                    onBack = { nav.popBackStack() },
+                    onOpenSkill = { nav.navigate(Routes.skill(it)) },
+                )
+            }
+            composable(Routes.EXAM, arguments = idArg) { e ->
+                ExamLogScreen(skillId = e.arguments?.getLong("id") ?: -1L, onBack = { nav.popBackStack() })
+            }
+            composable(Routes.DRILL, arguments = idArg) { e ->
+                DrillFocusScreen(drillId = e.arguments?.getLong("id") ?: -1L, onExit = { nav.popBackStack() })
+            }
+            composable(Routes.NEW_SKILL) {
+                NewSkillScreen(
+                    onBack = { nav.popBackStack() },
+                    onCreated = { id ->
+                        nav.popBackStack()
+                        nav.navigate(Routes.skill(id))
+                    },
+                )
+            }
+            composable(Routes.URGE) {
+                UrgeScreen(
+                    onBack = { nav.popBackStack() },
+                    onStart = { action ->
+                        nav.popBackStack()
+                        nav.start(action)
+                    },
+                )
+            }
+            composable(Routes.WEEKLY) { WeeklyScreen(onBack = { nav.popBackStack() }) }
         }
     }
 }
@@ -171,7 +267,7 @@ private fun BottomBar(current: String?, onSelect: (String) -> Unit) {
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
                         ) { onSelect(tab.route) }
-                        .padding(horizontal = 14.dp),
+                        .padding(horizontal = 8.dp),
                 ) {
                     val box = Modifier.size(32.dp)
                     Box(

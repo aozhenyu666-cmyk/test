@@ -8,7 +8,7 @@ import kotlinx.serialization.json.Json
 @Serializable
 data class BackupFile(
     val format: String = FORMAT,
-    val version: Int = 1,
+    val version: Int = 2,
     val exportedAt: Long,
     val skills: List<Skill> = emptyList(),
     val subSkills: List<SubSkill> = emptyList(),
@@ -24,6 +24,8 @@ data class BackupFile(
     val events: List<Event> = emptyList(),
     val weeklyReviews: List<WeeklyReview> = emptyList(),
     val aiCalls: List<AiCall> = emptyList(),
+    val examSittings: List<ExamSitting> = emptyList(),
+    val examSections: List<ExamSection> = emptyList(),
 ) {
     companion object {
         const val FORMAT = "behavior-dept-backup"
@@ -42,6 +44,7 @@ class BackupService(private val db: AppDatabase) {
             matchLogs = d.matchLogs(), sessions = d.sessions(), rules = d.rules(),
             usageDays = d.usageDays(), urgeLogs = d.urgeLogs(), events = d.events(),
             weeklyReviews = d.weeklyReviews(), aiCalls = d.aiCalls(),
+            examSittings = d.examSittings(), examSections = d.examSections(),
         )
         return json.encodeToString(BackupFile.serializer(), file)
     }
@@ -64,12 +67,13 @@ class BackupService(private val db: AppDatabase) {
             d.clearSkill(); d.clearSubSkill(); d.clearDrill(); d.clearStudyUnit()
             d.clearReview(); d.clearTransfer(); d.clearMatchLog(); d.clearSession()
             d.clearRule(); d.clearUsageDay(); d.clearUrgeLog(); d.clearEvent()
-            d.clearWeeklyReview(); d.clearAiCall()
+            d.clearWeeklyReview(); d.clearAiCall(); d.clearExamSitting(); d.clearExamSection()
             d.putSkills(file.skills); d.putSubSkills(file.subSkills); d.putDrills(file.drills)
             d.putUnits(file.units); d.putReviews(file.reviews); d.putTransfers(file.transfers)
             d.putMatchLogs(file.matchLogs); d.putSessions(file.sessions); d.putRules(file.rules)
             d.putUsageDays(file.usageDays); d.putUrgeLogs(file.urgeLogs); d.putEvents(file.events)
             d.putWeeklyReviews(file.weeklyReviews); d.putAiCalls(file.aiCalls)
+            d.putExamSittings(file.examSittings); d.putExamSections(file.examSections)
         }
     }
 }

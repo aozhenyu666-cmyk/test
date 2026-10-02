@@ -17,8 +17,11 @@ import com.behaviordept.app.R
 object Notifications {
     const val CHANNEL_DAILY = "daily"
     const val CHANNEL_REVIEW = "review_due"
+    const val CHANNEL_GUARD = "guard"
     private const val ID_DAILY = 1001
     private const val ID_REVIEW = 1002
+    private const val ID_GUARD = 1003
+    private const val ID_WEEKLY = 1004
 
     fun createChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
@@ -32,6 +35,11 @@ object Notifications {
                 description = "当天到期的间隔自测还没做时提醒一次"
             },
         )
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_GUARD, "防线", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "娱乐用时超过上限、周日复盘"
+            },
+        )
     }
 
     fun canPost(context: Context): Boolean {
@@ -41,27 +49,32 @@ object Notifications {
         return NotificationManagerCompat.from(context).areNotificationsEnabled()
     }
 
-    /** 点通知直达“今日”。 */
-    private fun openToday(context: Context): PendingIntent {
+    /** 点通知直达对应页面（默认“今日”）。每种通知用自己的 requestCode，互不覆盖。 */
+    private fun open(context: Context, id: Int, route: String): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putExtra(MainActivity.EXTRA_OPEN_TODAY, true)
+            putExtra(MainActivity.EXTRA_ROUTE, route)
         }
-        return PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        return PendingIntent.getActivity(context, id, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
 
     fun showDaily(context: Context, title: String, text: String) = show(context, CHANNEL_DAILY, ID_DAILY, title, text)
 
     fun showReviewDue(context: Context, title: String, text: String) = show(context, CHANNEL_REVIEW, ID_REVIEW, title, text)
 
-    private fun show(context: Context, channel: String, id: Int, title: String, text: String) {
+    fun showGuard(context: Context, title: String, text: String) = show(context, CHANNEL_GUARD, ID_GUARD, title, text)
+
+    fun showWeekly(context: Context, title: String, text: String) =
+        show(context, CHANNEL_GUARD, ID_WEEKLY, title, text, MainActivity.ROUTE_WEEKLY)
+
+    private fun show(context: Context, channel: String, id: Int, title: String, text: String, route: String = MainActivity.ROUTE_TODAY) {
         if (!canPost(context)) return
         val n = NotificationCompat.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setContentIntent(openToday(context))
+            .setContentIntent(open(context, id, route))
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .build()

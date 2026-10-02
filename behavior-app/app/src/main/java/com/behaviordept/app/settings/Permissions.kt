@@ -27,13 +27,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.behaviordept.app.container
+import com.behaviordept.app.guard.UsageReader
 import com.behaviordept.app.reminder.Notifications
 import com.behaviordept.app.reminder.ReminderScheduler
 import com.behaviordept.app.ui.components.LineButton
 import com.behaviordept.app.ui.theme.Paper
 import kotlinx.coroutines.launch
 
-/** 通知、精确闹钟两项权限的状态和开启入口。拒绝也能用，只是对应提醒不出现或不准点。 */
+/** 通知、使用情况访问、精确闹钟三项权限的状态和开启入口。拒绝也能用，只是对应提醒不出现或不准点。 */
 @Composable
 fun PermissionRows() {
     val context = LocalContext.current
@@ -45,6 +46,7 @@ fun PermissionRows() {
     }
     val notifyOk = remember(tick) { Notifications.canPost(context) }
     val exactOk = remember(tick) { ReminderScheduler.canExact(context) }
+    val usageOk = remember(tick) { UsageReader.hasPermission(context) }
 
     val notifyLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { tick++ }
 
@@ -60,6 +62,12 @@ fun PermissionRows() {
                     openAppNotificationSettings(context)
                 }
             },
+        )
+        PermissionRow(
+            title = "使用情况访问",
+            desc = if (usageOk) "已开启：防线自动读取娱乐 App 用时" else "没开：防线读不到抖音、小红书等的用时",
+            granted = usageOk,
+            onGrant = { UsageReader.openSettings(context) },
         )
         PermissionRow(
             title = "精确闹钟",

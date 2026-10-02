@@ -56,7 +56,7 @@ class AiCoach(
         if (!isOnline()) throw AiException.Offline()
         val ep = endpoint(template.tier)
         val reply = try {
-            client.complete(ep, template.system, input)
+            client.complete(ep, template.system, input, maxTokens = if (template.tier == Tier.FLAGSHIP) 16000 else 4096)
         } catch (e: AiException) {
             events.log(EventType.AI_FAILED, note = "${template.tag} ${e.message.orEmpty()}")
             throw e
@@ -95,6 +95,18 @@ class AiCoach(
         ask(Prompts.TRANSFER, Prompts.transferInput(unit.title, unit.material, example)) {
             Parsers.sectionsToText(Parsers.transfer(it))
         }
+
+    /** 技能拆解与写标准（旗舰档）。 */
+    suspend fun decomposeSkill(name: String, templateLabel: String, keepNames: List<String>, goal: String): List<Pair<String, List<String>>> =
+        ask(Prompts.DECOMPOSE, Prompts.decomposeInput(name, templateLabel, keepNames, goal)) { Parsers.decompose(it) }
+
+    /** 为当前短板出 3 个专项练习（便宜档）。 */
+    suspend fun proposeDrills(skillName: String, focus: String, standards: List<String>, existing: List<String>, data: String): List<ProposedDrill> =
+        ask(Prompts.DRILLS, Prompts.drillsInput(skillName, focus, standards, existing, data)) { Parsers.drills(it) }
+
+    /** 周复盘（旗舰档）。返回规范化后的文本。 */
+    suspend fun weeklyReview(summary: String): String =
+        ask(Prompts.WEEKLY, summary) { Parsers.sectionsToText(Parsers.weekly(it)) }
 
     /** 设置页“测试连接”。 */
     suspend fun testConnection(): String {

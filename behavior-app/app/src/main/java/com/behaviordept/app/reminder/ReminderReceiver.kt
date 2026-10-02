@@ -19,7 +19,8 @@ class ReminderReceiver : BroadcastReceiver() {
         val c = context.container
         c.appScope.launch {
             try {
-                val next = computeNextAction(c.study.allUnits(), Time.now())
+                val now = Time.now()
+                val next = computeNextAction(c.study.allUnits(), now, c.training.plans(now))
                 Notifications.showDaily(context, "今日一件事：${next.headline()}", next.description() + "。点开，按开始。")
                 c.events.log(EventType.REMINDER_SENT, note = next.headline())
                 ReminderScheduler.reschedule(context, c.settings.current())

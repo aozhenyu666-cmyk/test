@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">行为管理部</string>
+    <string name="shortcut_urge">我想刷</string>
+    <string name="shortcut_urge_long">我想刷（先等 3 分钟）</string>
+    <string name="shortcut_match">登记一局</string>
+    <string name="shortcut_match_long">登记一局三角洲</string>
 </resources>

@@ -1,5 +1,6 @@
 package com.behaviordept.app.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -7,13 +8,22 @@ import kotlinx.serialization.Serializable
 
 /*
  * PRD「数据模型」一节的全部实体。学习、竞技、运动都是“技能 + 模板”，所有行为都落成 Event。
- * 阶段 1 只用到学习相关实体、Session、Event 和 AiCall；其余实体先建表，后续阶段直接使用。
+ * v2 起训练引擎（技能、子能力、练习、对局、考试）和防线（规则、用时、冲动）都已启用。
  */
 
 object Template {
     const val LEARNING = "learning"
     const val COMPETITIVE = "competitive"
     const val MOTOR = "motor"
+    const val EXAM = "exam"
+
+    fun label(template: String): String = when (template) {
+        LEARNING -> "学习"
+        COMPETITIVE -> "对抗竞技"
+        MOTOR -> "动作技能"
+        EXAM -> "考试"
+        else -> template
+    }
 }
 
 @Serializable
@@ -23,6 +33,8 @@ data class Skill(
     val name: String,
     val template: String,
     val focusSubSkillId: Long? = null,
+    /** 当前重点从什么时候开始练（v2 新增）。重点锁定 7 天，复测之后才能换。 */
+    val focusSince: Long? = null,
 )
 
 object SubSkillStatus {
@@ -49,9 +61,17 @@ data class Drill(
     val subSkillId: Long,
     val method: String,
     val minutes: Int,
-    /** ai / manual */
+    /** ai / manual / builtin */
     val source: String,
-)
+    /** 练习名（v2 新增）。 */
+    @ColumnInfo(defaultValue = "''") val title: String = "",
+    /** 每次练完记的数字，例如“首发命中率%”。含“越低越好”时数字越小越好（v2 新增）。 */
+    @ColumnInfo(defaultValue = "''") val metric: String = "",
+    /** 重新生成练习后，旧练习停用但保留记录（v2 新增）。 */
+    @ColumnInfo(defaultValue = "1") val active: Boolean = true,
+) {
+    val lowerIsBetter: Boolean get() = "越低越好" in metric
+}
 
 /** 学习单元：学习模板的核心对象。四步依次是 预习提问 → 读资料 → 合上讲一遍 → 举一反三。 */
 @Serializable
@@ -117,6 +137,8 @@ data class Review(
     val rating: String? = null,
     val createdAt: Long,
     val finishedAt: Long? = null,
+    /** 这次自测原定的到期时间，用来算“按时完成率”（v2 新增）。 */
+    val dueAt: Long? = null,
 )
 
 @Serializable
@@ -131,6 +153,11 @@ data class Transfer(
     val createdAt: Long,
 )
 
+object MatchResult {
+    const val EXTRACTED = "extracted"
+    const val DIED = "died"
+}
+
 @Serializable
 @Entity(tableName = "match_log", indices = [Index("skillId")])
 data class MatchLog(
@@ -139,9 +166,58 @@ data class MatchLog(
     val time: Long,
     /** extracted / died */
     val result: String,
+    /** 阵亡时的死因大类，等于某个 SubSkill 的名字。 */
     val causeCategory: String? = null,
     val note: String = "",
 )
+
+object ExamKind {
+    const val MOCK = "mock"
+    const val PAST = "past"
+    const val REAL = "real"
+
+    fun label(kind: String): String = when (kind) {
+        MOCK -> "模考"
+        PAST -> "真题"
+        REAL -> "真考"
+        else -> kind
+    }
+}
+
+object LostReason {
+    val ALL = listOf("知识点不会", "方法不会", "粗心", "时间不够")
+}
+
+/** 一次模考 / 真题 / 真考（v2 新增）。 */
+@Serializable
+@Entity(tableName = "exam_sitting", indices = [Index("skillId")])
+data class ExamSitting(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val skillId: Long,
+    val time: Long,
+    val kind: String,
+    /** 行测总分，可不填。 */
+    val score: Double? = null,
+    /** 申论分数，可不填。 */
+    val essayScore: Double? = null,
+    val note: String = "",
+)
+
+/** 一次考试里一个模块的成绩（v2 新增）。module 等于某个 SubSkill 的名字。 */
+@Serializable
+@Entity(tableName = "exam_section", indices = [Index("sittingId")])
+data class ExamSection(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sittingId: Long,
+    val module: String,
+    val correct: Int,
+    val total: Int,
+    val minutes: Int? = null,
+    /** 主要失分原因，见 LostReason。 */
+    val lostReason: String? = null,
+) {
+    val lost: Int get() = (total - correct).coerceAtLeast(0)
+}
 
 object SessionType {
     const val NEW_UNIT = "new_unit"
@@ -150,6 +226,7 @@ object SessionType {
     const val EXPLAIN = "explain"
     const val TRANSFER = "transfer"
     const val REVIEW = "review"
+    const val DRILL = "drill"
 }
 
 /** 训练时段，专注模式产生。end 在专注过程中每隔一会儿刷新一次，App 被杀也能留下真实时长。 */
@@ -176,7 +253,16 @@ data class Rule(
     /** 冷静期：待生效的放宽值和生效时间。 */
     val pendingLimitMin: Int? = null,
     val pendingEffectiveAt: Long? = null,
-)
+    /** 规则名（v2 新增）。 */
+    @ColumnInfo(defaultValue = "''") val name: String = "",
+    /** 待生效的包名列表（移除 App 也算放宽，v2 新增）。 */
+    val pendingPackages: String? = null,
+    /** 待生效的删除（v2 新增）。 */
+    @ColumnInfo(defaultValue = "0") val pendingDelete: Boolean = false,
+) {
+    val packageList: List<String> get() = packages.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+    val hasPending: Boolean get() = pendingEffectiveAt != null
+}
 
 @Serializable
 @Entity(tableName = "usage_day", primaryKeys = ["date", "packageName"])
@@ -212,9 +298,28 @@ object EventType {
     const val AI_FAILED = "ai_failed"
     const val REMINDER_SENT = "reminder_sent"
     const val DATA_IMPORTED = "data_imported"
+    /** 专项练完，refId = drillId，value = 记下的数字。 */
+    const val DRILL_DONE = "drill_done"
+    /** 登记一局，refId = matchId，value 阵亡 1 / 撤离 0。 */
+    const val MATCH_LOGGED = "match_logged"
+    /** 登记一次考试，refId = sittingId，value = 总正确率%。 */
+    const val EXAM_LOGGED = "exam_logged"
+    /** 设定当前重点，refId = skillId，value = subSkillId。 */
+    const val FOCUS_SET = "focus_set"
+    /** 动作技能的实战复测，refId = subSkillId，value = 达标比例%。 */
+    const val RETEST_DONE = "retest_done"
+    /** 一天的娱乐用时（当天结束后写入），refId = ruleId，value = 分钟。 */
+    const val USAGE_DAY = "usage_day"
+    /** 点了“我想刷”，refId = urgeId。 */
+    const val URGE = "urge"
+    const val RULE_CHANGED = "rule_changed"
+    const val WEEKLY_REVIEW = "weekly_review"
 
     /** 算作“当天有训练”的事件。 */
-    val TRAINING = setOf(SESSION, PREVIEW_DONE, STUDY_DONE, EXPLAIN_DONE, TRANSFER_DONE, REVIEW_DONE)
+    val TRAINING = setOf(
+        SESSION, PREVIEW_DONE, STUDY_DONE, EXPLAIN_DONE, TRANSFER_DONE, REVIEW_DONE,
+        DRILL_DONE, EXAM_LOGGED, RETEST_DONE,
+    )
 
     fun label(type: String): String = when (type) {
         SESSION -> "专注训练"
@@ -229,6 +334,15 @@ object EventType {
         AI_FAILED -> "AI 调用失败"
         REMINDER_SENT -> "发出提醒"
         DATA_IMPORTED -> "导入数据"
+        DRILL_DONE -> "专项练"
+        MATCH_LOGGED -> "登记对局"
+        EXAM_LOGGED -> "登记考试"
+        FOCUS_SET -> "设定当前重点"
+        RETEST_DONE -> "实战复测"
+        USAGE_DAY -> "娱乐用时"
+        URGE -> "我想刷"
+        RULE_CHANGED -> "修改规则"
+        WEEKLY_REVIEW -> "周复盘"
         else -> type
     }
 }

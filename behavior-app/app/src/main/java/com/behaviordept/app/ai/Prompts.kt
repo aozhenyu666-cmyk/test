@@ -85,6 +85,92 @@ $TEACHER
 """.trim(),
     )
 
+    private const val COACH = "你是一位严格的教练，相信“先有标准，再有练习”：标准必须能被观察到（看录像、看数据就能判断做没做到），不写感受。用简体中文。"
+
+    /** 技能拆解与写标准（旗舰档，一个技能做一次）。 */
+    val DECOMPOSE = PromptTemplate(
+        id = "decompose",
+        version = 1,
+        tier = Tier.FLAGSHIP,
+        system = """
+$COACH
+请把学生要提升的技能拆成 3–6 个可以单独训练的子能力，并为每个子能力写出 3–5 条“好的样子”。
+如果给了“沿用这些子能力名”，就用那些名字，不要改名、不要增减。
+格式严格如下，每个子能力一段，不要输出其他文字：
+【子能力名】
+- 标准一
+- 标准二
+""".trim(),
+    )
+
+    /** 为当前短板生成专项练习（便宜档）。 */
+    val DRILLS = PromptTemplate(
+        id = "drills",
+        version = 1,
+        tier = Tier.CHEAP,
+        system = """
+$COACH
+请为学生当前唯一的短板设计 3 个专项练习。每个练习：只练这一个短板；一次训练能做完；练完能记下一个数字作为指标。
+难度要让学生大约六到八成能做成。不要和“已有练习”重复。
+格式严格如下，不要输出其他文字：
+【练习1：练习名】
+- 做法：一两句话，说清楚怎么做、做多少次
+- 时长：分钟数（只写数字）
+- 指标：练完要记的数字，例如“首发命中率%”；数字越低越好时在后面加“（越低越好）”
+【练习2：练习名】
+……
+""".trim(),
+    )
+
+    /** 每周复盘（旗舰档）。 */
+    val WEEKLY = PromptTemplate(
+        id = "weekly",
+        version = 1,
+        tier = Tier.FLAGSHIP,
+        system = """
+$COACH
+这是学生这一周的行为数据，全部来自自动记录。请只依据这些数据复盘，不编造数据里没有的事。
+找出这一周最关键的一个断点，给出下周唯一的重点（一次只练一个短板）。
+格式严格如下，不要输出其他文字：
+【断在哪】
+- 1–3 条，每条引用具体数字
+【下周唯一重点】
+- 一句话，能执行、能检查
+【具体做法】
+- 1–3 条
+""".trim(),
+    )
+
+    fun decomposeInput(skillName: String, templateLabel: String, keepNames: List<String>, goal: String): String = buildString {
+        appendLine("## 技能")
+        appendLine("$skillName（$templateLabel）")
+        if (goal.isNotBlank()) {
+            appendLine()
+            appendLine("## 学生的目标和现状")
+            appendLine(goal.trim())
+        }
+        if (keepNames.isNotEmpty()) {
+            appendLine()
+            appendLine("## 沿用这些子能力名")
+            keepNames.forEach { appendLine("- $it") }
+        }
+    }
+
+    fun drillsInput(skillName: String, focus: String, standards: List<String>, existing: List<String>, data: String): String = buildString {
+        appendLine("## 技能：$skillName")
+        appendLine("## 当前唯一短板：$focus")
+        appendLine("## 这个短板的标准")
+        standards.forEach { appendLine("- $it") }
+        appendLine()
+        appendLine("## 已有练习")
+        if (existing.isEmpty()) appendLine("（无）") else existing.forEach { appendLine("- $it") }
+        if (data.isNotBlank()) {
+            appendLine()
+            appendLine("## 最近的数据")
+            append(data.trim())
+        }
+    }
+
     fun critiqueInput(material: String, preQuestions: List<String>, explanation: String): String = buildString {
         appendLine("## 资料")
         appendLine(material.trim())

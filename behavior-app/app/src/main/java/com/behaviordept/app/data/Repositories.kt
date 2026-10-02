@@ -91,6 +91,7 @@ class StudyRepository(private val dao: StudyDao, private val events: EventLog) {
             questions = JsonLists.encode(questions),
             mode = mode,
             createdAt = Time.now(),
+            dueAt = unit.nextReviewAt,
         )
         return review.copy(id = dao.insertReview(review))
     }

@@ -41,6 +41,10 @@ data class AppSettings(
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
 class SettingsStore(private val context: Context) {
+    companion object {
+        const val FLAG_SEEDED_V2 = "seeded_v2"
+    }
+
     private object Keys {
         val provider = stringPreferencesKey("provider")
         val baseUrl = stringPreferencesKey("base_url")
@@ -91,6 +95,20 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setOnboardingDone() {
         context.dataStore.edit { it[Keys.onboardingDone] = true }
+    }
+
+    /** 一次性的标记（例如“v2 的默认技能已放进去”）。 */
+    suspend fun flag(name: String): Boolean = context.dataStore.data.first()[booleanPreferencesKey(name)] ?: false
+
+    suspend fun setFlag(name: String) {
+        context.dataStore.edit { it[booleanPreferencesKey(name)] = true }
+    }
+
+    /** 某类提醒最近一次发出的标记（日期或周），用来做“每天 / 每周最多一次”。 */
+    suspend fun mark(name: String): String? = context.dataStore.data.first()[stringPreferencesKey("mark_$name")]
+
+    suspend fun setMark(name: String, value: String) {
+        context.dataStore.edit { it[stringPreferencesKey("mark_$name")] = value }
     }
 
     /** 自测到期提醒每天最多发一次，记下发过的日期。 */

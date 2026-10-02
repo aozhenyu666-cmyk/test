@@ -34,6 +34,7 @@ import com.behaviordept.app.study.UnitStep
 import com.behaviordept.app.study.currentStep
 import com.behaviordept.app.ui.appViewModel
 import com.behaviordept.app.ui.components.Divider
+import com.behaviordept.app.ui.components.FocusBar
 import com.behaviordept.app.ui.components.InkButton
 import com.behaviordept.app.ui.components.LineButton
 import com.behaviordept.app.ui.components.RedPenBlock
@@ -122,49 +123,13 @@ fun FocusScreen(unitId: Long, onExit: () -> Unit) {
 
 @Composable
 private fun FocusTopBar(vm: FocusViewModel, onEnd: () -> Unit) {
-    val p = Paper.colors
-    var now by remember { mutableLongStateOf(Time.now()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            now = Time.now()
-            delay(1000)
-        }
-    }
     val (kind, title) = when (val t = vm.task) {
         null -> "专注" to ""
         FocusTask.NewUnit -> "新建" to (vm.unit?.title ?: "学习单元")
         FocusTask.Review -> "间隔自测" to vm.unit?.title.orEmpty()
         is FocusTask.Step -> "第 ${t.step.number} 步 · ${t.step.title}" to vm.unit?.title.orEmpty()
     }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(p.page)
-            .padding(start = 20.dp, end = 12.dp, top = 14.dp, bottom = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(kind, style = MaterialTheme.typography.labelMedium, color = p.ink2)
-            Text(
-                title,
-                style = MaterialTheme.typography.titleLarge,
-                color = p.ink,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Text(
-            Time.clock(now - vm.startedAt),
-            fontFamily = SerifSC,
-            fontWeight = FontWeight.Black,
-            style = MaterialTheme.typography.headlineMedium,
-            color = p.ink,
-            modifier = Modifier.padding(horizontal = 12.dp),
-        )
-        TextButton(onClick = onEnd) {
-            Text("结束", style = MaterialTheme.typography.labelLarge, color = p.red)
-        }
-    }
+    FocusBar(kind, title, vm.startedAt, onEnd)
 }
 
 /** 一步做完：红笔打勾 + 当场的反馈 + 结束按钮。 */

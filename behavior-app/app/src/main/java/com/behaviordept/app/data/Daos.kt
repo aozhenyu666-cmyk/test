@@ -36,6 +36,9 @@ interface StudyDao {
     @Query("SELECT * FROM review ORDER BY createdAt ASC")
     fun observeAllReviews(): Flow<List<Review>>
 
+    @Query("SELECT * FROM review ORDER BY createdAt ASC")
+    suspend fun allReviews(): List<Review>
+
     @Query("SELECT * FROM review WHERE unitId = :unitId ORDER BY createdAt ASC")
     suspend fun reviewsOf(unitId: Long): List<Review>
 
@@ -96,6 +99,192 @@ interface EventDao {
 
     @Query("SELECT * FROM event WHERE time >= :from AND time < :to AND type = :type")
     suspend fun ofTypeBetween(type: String, from: Long, to: Long): List<Event>
+
+    @Query("SELECT * FROM event WHERE time >= :from ORDER BY time DESC")
+    suspend fun since(from: Long): List<Event>
+
+    @Query("SELECT * FROM event WHERE type = :type AND refId = :refId ORDER BY time DESC")
+    fun observeOfRef(type: String, refId: Long): Flow<List<Event>>
+
+    @Query("SELECT * FROM event WHERE type = :type AND refId = :refId ORDER BY time DESC")
+    suspend fun ofRef(type: String, refId: Long): List<Event>
+
+    @Query("SELECT COUNT(*) FROM event WHERE type = :type AND refId = :refId AND time >= :from AND time < :to")
+    suspend fun countOfRefBetween(type: String, refId: Long, from: Long, to: Long): Int
+}
+
+@Dao
+interface SkillDao {
+    @Query("SELECT * FROM skill ORDER BY id")
+    fun observeSkills(): Flow<List<Skill>>
+
+    @Query("SELECT * FROM skill ORDER BY id")
+    suspend fun skills(): List<Skill>
+
+    @Query("SELECT * FROM skill WHERE id = :id")
+    fun observeSkill(id: Long): Flow<Skill?>
+
+    @Query("SELECT * FROM skill WHERE id = :id")
+    suspend fun skill(id: Long): Skill?
+
+    @Insert
+    suspend fun insertSkill(skill: Skill): Long
+
+    @Update
+    suspend fun updateSkill(skill: Skill)
+
+    @Query("DELETE FROM skill WHERE id = :id")
+    suspend fun deleteSkill(id: Long)
+
+    @Query("SELECT * FROM sub_skill WHERE skillId = :skillId ORDER BY id")
+    fun observeSubSkills(skillId: Long): Flow<List<SubSkill>>
+
+    @Query("SELECT * FROM sub_skill ORDER BY id")
+    fun observeAllSubSkills(): Flow<List<SubSkill>>
+
+    @Query("SELECT * FROM sub_skill WHERE skillId = :skillId ORDER BY id")
+    suspend fun subSkills(skillId: Long): List<SubSkill>
+
+    @Query("SELECT * FROM sub_skill WHERE id = :id")
+    suspend fun subSkill(id: Long): SubSkill?
+
+    @Insert
+    suspend fun insertSubSkill(subSkill: SubSkill): Long
+
+    @Update
+    suspend fun updateSubSkill(subSkill: SubSkill)
+
+    @Query("DELETE FROM sub_skill WHERE skillId = :skillId")
+    suspend fun deleteSubSkillsOf(skillId: Long)
+
+    @Query("SELECT * FROM drill WHERE subSkillId = :subSkillId AND active = 1 ORDER BY id")
+    fun observeActiveDrills(subSkillId: Long): Flow<List<Drill>>
+
+    @Query("SELECT * FROM drill WHERE active = 1 ORDER BY id")
+    fun observeAllActiveDrills(): Flow<List<Drill>>
+
+    @Query("SELECT * FROM drill WHERE subSkillId = :subSkillId AND active = 1 ORDER BY id")
+    suspend fun activeDrills(subSkillId: Long): List<Drill>
+
+    @Query("SELECT * FROM drill WHERE id = :id")
+    suspend fun drill(id: Long): Drill?
+
+    @Insert
+    suspend fun insertDrill(drill: Drill): Long
+
+    @Update
+    suspend fun updateDrill(drill: Drill)
+
+    @Query("UPDATE drill SET active = 0 WHERE id = :id")
+    suspend fun deactivateDrill(id: Long)
+
+    @Query("DELETE FROM drill WHERE subSkillId IN (SELECT id FROM sub_skill WHERE skillId = :skillId)")
+    suspend fun deleteDrillsOf(skillId: Long)
+
+    @Query("SELECT * FROM match_log WHERE skillId = :skillId ORDER BY time DESC")
+    fun observeMatches(skillId: Long): Flow<List<MatchLog>>
+
+    @Query("SELECT * FROM match_log ORDER BY time DESC")
+    fun observeAllMatches(): Flow<List<MatchLog>>
+
+    @Query("SELECT * FROM match_log WHERE skillId = :skillId ORDER BY time DESC")
+    suspend fun matchesOf(skillId: Long): List<MatchLog>
+
+    @Insert
+    suspend fun insertMatch(match: MatchLog): Long
+
+    @Query("DELETE FROM match_log WHERE id = :id")
+    suspend fun deleteMatch(id: Long)
+
+    @Query("DELETE FROM match_log WHERE skillId = :skillId")
+    suspend fun deleteMatchesOf(skillId: Long)
+
+    @Query("SELECT * FROM exam_sitting WHERE skillId = :skillId ORDER BY time DESC")
+    fun observeSittings(skillId: Long): Flow<List<ExamSitting>>
+
+    @Query("SELECT * FROM exam_sitting ORDER BY time DESC")
+    fun observeAllSittings(): Flow<List<ExamSitting>>
+
+    @Query("SELECT * FROM exam_sitting WHERE skillId = :skillId ORDER BY time DESC")
+    suspend fun sittingsOf(skillId: Long): List<ExamSitting>
+
+    @Query("SELECT * FROM exam_section ORDER BY id")
+    fun observeAllSections(): Flow<List<ExamSection>>
+
+    @Query("SELECT exam_section.* FROM exam_section JOIN exam_sitting ON exam_section.sittingId = exam_sitting.id WHERE exam_sitting.skillId = :skillId ORDER BY exam_section.id")
+    fun observeSections(skillId: Long): Flow<List<ExamSection>>
+
+    @Query("SELECT exam_section.* FROM exam_section JOIN exam_sitting ON exam_section.sittingId = exam_sitting.id WHERE exam_sitting.skillId = :skillId ORDER BY exam_section.id DESC")
+    suspend fun sectionsOf(skillId: Long): List<ExamSection>
+
+    @Insert
+    suspend fun insertSitting(sitting: ExamSitting): Long
+
+    @Insert
+    suspend fun insertSections(sections: List<ExamSection>)
+
+    @Query("DELETE FROM exam_section WHERE sittingId = :sittingId")
+    suspend fun deleteSectionsOf(sittingId: Long)
+
+    @Query("DELETE FROM exam_sitting WHERE id = :id")
+    suspend fun deleteSitting(id: Long)
+}
+
+@Dao
+interface GuardDao {
+    @Query("SELECT * FROM rule ORDER BY id")
+    fun observeRules(): Flow<List<Rule>>
+
+    @Query("SELECT * FROM rule ORDER BY id")
+    suspend fun rules(): List<Rule>
+
+    @Query("SELECT * FROM rule WHERE id = :id")
+    suspend fun rule(id: Long): Rule?
+
+    @Insert
+    suspend fun insertRule(rule: Rule): Long
+
+    @Update
+    suspend fun updateRule(rule: Rule)
+
+    @Query("DELETE FROM rule WHERE id = :id")
+    suspend fun deleteRule(id: Long)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putUsage(items: List<UsageDay>)
+
+    @Query("SELECT * FROM usage_day WHERE date >= :fromDate ORDER BY date")
+    fun observeUsageSince(fromDate: String): Flow<List<UsageDay>>
+
+    @Query("SELECT * FROM usage_day WHERE date = :date")
+    suspend fun usageOn(date: String): List<UsageDay>
+
+    @Query("SELECT * FROM usage_day WHERE date >= :fromDate ORDER BY date")
+    suspend fun usageSince(fromDate: String): List<UsageDay>
+
+    @Query("SELECT * FROM urge_log WHERE time >= :from ORDER BY time DESC")
+    suspend fun urgesSince(from: Long): List<UrgeLog>
+
+    @Insert
+    suspend fun insertUrge(urge: UrgeLog): Long
+
+    @Query("UPDATE urge_log SET startedTraining = 1 WHERE id = :id")
+    suspend fun markUrgeStarted(id: Long)
+
+    @Query("SELECT * FROM urge_log WHERE time >= :from ORDER BY time DESC")
+    fun observeUrgesSince(from: Long): Flow<List<UrgeLog>>
+}
+
+@Dao
+interface WeeklyDao {
+    @Query("SELECT * FROM weekly_review ORDER BY weekStart DESC")
+    fun observeAll(): Flow<List<WeeklyReview>>
+
+    @Query("SELECT * FROM weekly_review WHERE weekStart = :weekStart")
+    suspend fun get(weekStart: String): WeeklyReview?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun put(review: WeeklyReview)
 }
 
 @Dao
@@ -121,6 +310,8 @@ interface BackupDao {
     @Query("SELECT * FROM event") suspend fun events(): List<Event>
     @Query("SELECT * FROM weekly_review") suspend fun weeklyReviews(): List<WeeklyReview>
     @Query("SELECT * FROM ai_call") suspend fun aiCalls(): List<AiCall>
+    @Query("SELECT * FROM exam_sitting") suspend fun examSittings(): List<ExamSitting>
+    @Query("SELECT * FROM exam_section") suspend fun examSections(): List<ExamSection>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putSkills(items: List<Skill>)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putSubSkills(items: List<SubSkill>)
@@ -136,6 +327,8 @@ interface BackupDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putEvents(items: List<Event>)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putWeeklyReviews(items: List<WeeklyReview>)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putAiCalls(items: List<AiCall>)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putExamSittings(items: List<ExamSitting>)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putExamSections(items: List<ExamSection>)
 
     @Query("DELETE FROM skill") suspend fun clearSkill()
     @Query("DELETE FROM sub_skill") suspend fun clearSubSkill()
@@ -151,5 +344,7 @@ interface BackupDao {
     @Query("DELETE FROM event") suspend fun clearEvent()
     @Query("DELETE FROM weekly_review") suspend fun clearWeeklyReview()
     @Query("DELETE FROM ai_call") suspend fun clearAiCall()
+    @Query("DELETE FROM exam_sitting") suspend fun clearExamSitting()
+    @Query("DELETE FROM exam_section") suspend fun clearExamSection()
 
 }

@@ -31,6 +31,15 @@ import com.behaviordept.app.study.IntervalLadder
 import com.behaviordept.app.study.StepGrid
 import com.behaviordept.app.study.UnitStep
 import com.behaviordept.app.ui.appViewModel
+import com.behaviordept.app.data.RuleToday
+import com.behaviordept.app.record.Metrics
+import com.behaviordept.app.training.RetestState
+import com.behaviordept.app.training.SkillPlan
+import com.behaviordept.app.ui.components.LimitBar
+import com.behaviordept.app.ui.components.QuietButton
+import com.behaviordept.app.ui.components.SevenDays
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.mapLatest
 import com.behaviordept.app.ui.components.BigNumber
 import com.behaviordept.app.ui.components.Hint
 import com.behaviordept.app.ui.components.InkButton
@@ -57,9 +66,12 @@ data class TodayState(
     val trainedDays: Int,
     val todayMinutes: Int,
     val weekMinutes: Int,
+    /** 防线状态条：每条规则今天的用时；没开权限时为空。 */
+    val guard: List<RuleToday> = emptyList(),
 )
 
-class TodayViewModel(c: AppContainer) : ViewModel() {
+@OptIn(ExperimentalCoroutinesApi::class)
+class TodayViewModel(private val c: AppContainer) : ViewModel() {
     /** 每分钟走一次，跨过零点时“今天”和到期自测自动更新。 */
     private val clock = flow {
         while (true) {
@@ -72,16 +84,16 @@ class TodayViewModel(c: AppContainer) : ViewModel() {
         c.study.observeUnits(),
         c.events.observeSince(Time.startOf(Time.weekStart().minusDays(7))),
         clock,
-    ) { units, events, now -> build(units, events, now) }
+        c.training.observeSkills(),
+        c.guard.observeRules(),
+    ) { units, events, now, _, _ -> Triple(units, events, now) }
+        .mapLatest { (units, events, now) -> build(units, events, now) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    private fun build(units: List<StudyUnit>, events: List<Event>, now: Long): TodayState {
+    private suspend fun build(units: List<StudyUnit>, events: List<Event>, now: Long): TodayState {
         val today = Time.dateOf(now)
         val monday = Time.weekStart(today)
-        val trainedDates = events
-            .filter { it.type in EventType.TRAINING && (it.type != EventType.SESSION || (it.value ?: 0.0) >= 1.0) }
-            .map { Time.dateOf(it.time) }
-            .toSet()
+        val trainedDates = Metrics.trainedDates(events, Time::dateOf)
         val week = (0L..6L).map { i ->
             val d = monday.plusDays(i)
             DayCell(d, d in trainedDates, d == today, d.isAfter(today))
@@ -89,7 +101,7 @@ class TodayViewModel(c: AppContainer) : ViewModel() {
         val sessionMinutes = events.filter { it.type == EventType.SESSION }
         val todayMinutes = sessionMinutes.filter { Time.dateOf(it.time) == today }.sumOf { it.value ?: 0.0 }
         val weekMinutes = sessionMinutes.filter { !Time.dateOf(it.time).isBefore(monday) }.sumOf { it.value ?: 0.0 }
-        val next = computeNextAction(units, now)
+        val next = computeNextAction(units, now, c.training.plans(now))
         val dueCount = units.count { it.isReviewDue(now) }
         return TodayState(
             next = next,
@@ -98,6 +110,7 @@ class TodayViewModel(c: AppContainer) : ViewModel() {
             trainedDays = week.count { it.trained },
             todayMinutes = todayMinutes.roundToInt(),
             weekMinutes = weekMinutes.roundToInt(),
+            guard = if (c.guard.hasUsagePermission) c.guard.today(now) else emptyList(),
         )
     }
 }
@@ -106,16 +119,28 @@ class TodayViewModel(c: AppContainer) : ViewModel() {
  * 今日：打开只看到一件事和一个按钮。冷启动 → 点“开始” → 进入专注，全程没有需要自己做的选择。
  */
 @Composable
-fun TodayScreen(onStart: (Long) -> Unit) {
+fun TodayScreen(onStart: (NextAction) -> Unit, onUrge: () -> Unit) {
     val vm = appViewModel { TodayViewModel(it) }
     val state by vm.state.collectAsStateWithLifecycle()
     val s = state ?: return
-    TodayContent(s, Time.today(), onStart)
+    TodayContent(s, Time.today(), onStart, onUrge)
+}
+
+/** 专项练 / 复测时，卡片里显示当前重点 7 天里练了哪几天。 */
+@Composable
+private fun FocusDays(plan: SkillPlan, today: LocalDate) {
+    val since = plan.skill.focusSince ?: return
+    val start = Time.dateOf(since)
+    SevenDays(
+        checked = (0 until 7).map { start.plusDays(it.toLong()) in plan.drillDates },
+        todayIndex = (today.toEpochDay() - start.toEpochDay()).toInt(),
+        cell = 32.dp,
+    )
 }
 
 /** 无状态的今日页面，方便预览和截图。 */
 @Composable
-fun TodayContent(s: TodayState, today: LocalDate, onStart: (Long) -> Unit) {
+fun TodayContent(s: TodayState, today: LocalDate, onStart: (NextAction) -> Unit, onUrge: () -> Unit = {}) {
     val p = Paper.colors
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -167,9 +192,15 @@ fun TodayContent(s: TodayState, today: LocalDate, onStart: (Long) -> Unit) {
                     is NextAction.Review -> IntervalLadder(n.unit.intervalLevel)
                     is NextAction.Step -> StepGrid(n.step)
                     NextAction.NewUnit -> StepGrid(UnitStep.PREVIEW)
+                    is NextAction.Drill -> FocusDays(n.plan, today)
+                    is NextAction.Retest -> FocusDays(n.plan, today)
                 }
                 Spacer(Modifier.height(24.dp))
-                InkButton("开始", onClick = { onStart(s.next.unitId) }, height = 60.dp)
+                InkButton(
+                    if (s.next is NextAction.Retest && (s.next as NextAction.Retest).state is RetestState.Ready) "去看结果" else "开始",
+                    onClick = { onStart(s.next) },
+                    height = 60.dp,
+                )
                 if (s.otherDue > 0) {
                     Spacer(Modifier.height(10.dp))
                     Hint("另有 ${s.otherDue} 个自测今天到期，做完这一件再说", Modifier.fillMaxWidth())
@@ -200,6 +231,23 @@ fun TodayContent(s: TodayState, today: LocalDate, onStart: (Long) -> Unit) {
             Spacer(Modifier.height(14.dp))
             Hint("今天专注 ${s.todayMinutes} 分钟 · 本周 ${s.weekMinutes} 分钟 · 目标每周至少 5 天")
         }
+
+        // 防线状态条：今天还剩多少娱乐额度，超限变红。
+        s.guard.forEach { rt ->
+            PaperCard(padding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SectionLabel("防线 · ${rt.rule.name.ifBlank { "娱乐" }}", Modifier.weight(1f))
+                    Text(
+                        if (rt.over) "超限 ${rt.minutes - rt.rule.dailyLimitMin} 分钟" else "还剩 ${rt.rule.dailyLimitMin - rt.minutes} 分钟",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (rt.over) p.red else p.ink,
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                LimitBar(rt.minutes, rt.rule.dailyLimitMin)
+            }
+        }
+        QuietButton("我想刷…", onClick = onUrge)
     }
     }
 }

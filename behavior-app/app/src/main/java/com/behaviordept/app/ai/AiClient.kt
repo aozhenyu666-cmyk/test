@@ -72,8 +72,8 @@ sealed class AiException(message: String) : Exception(message) {
 class AiClient(
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(120, TimeUnit.SECONDS)
-        .callTimeout(150, TimeUnit.SECONDS)
+        .readTimeout(240, TimeUnit.SECONDS)
+        .callTimeout(300, TimeUnit.SECONDS)
         .build(),
 ) {
     private val json = Json { ignoreUnknownKeys = true }
