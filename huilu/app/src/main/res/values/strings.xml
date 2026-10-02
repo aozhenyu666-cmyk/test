@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">回路</string>
+    <string name="guard_desc">回路用它做两件事：在你允许强干预的那一轮里，把你从娱乐 App 送回桌面；更快地察觉前台 App 的切换。它不读取屏幕内容。</string>
+</resources>

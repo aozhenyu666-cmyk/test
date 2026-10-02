@@ -1,3 +1,7 @@
+> **仓库里现在有两个项目。**
+> - [`huilu/`](huilu/)：**回路**，一个 Android App，把 AI 做成参与现实行为闭环的外置认知系统。它陪着“接下来十分钟做 X”这个意图走完这十分钟，偏离时主动把你拉回判断循环，并把“预期 vs 现实”的偏差作为一等数据记录下来。这是项目接下来的主线。安装包、用法见 [huilu/README.md](huilu/README.md)，设计取舍见 [huilu/docs/DESIGN.md](huilu/docs/DESIGN.md)。
+> - 下面的 Super Productivity 插件：负责“一天的计划”这一层，保持原样。
+
 # AI 参谋：Super Productivity 手机端插件
 
 在 Super Productivity（SP）里放一个**会主动盯进度的 AI 参谋**，主要面向安卓 / iOS 客户端：
