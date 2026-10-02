@@ -1,0 +1,12 @@
+{
+  "name": "sp-ai-assistant",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "pack": "node scripts/pack.mjs",
+    "test": "node scripts/pack.mjs && node dev/e2e.mjs"
+  },
+  "devDependencies": {
+    "terser": "^5.36.0"
+  }
+}

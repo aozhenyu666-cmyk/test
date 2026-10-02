@@ -111,17 +111,20 @@
 
 ```
 plugin/            插件源码：manifest.json、index.html（界面 + 对话）、plugin.js（后台脚本）、icon.svg
-scripts/pack.mjs   打包成 dist/*.zip（无依赖）
+scripts/pack.mjs   压缩（terser）到 dist/build/，再打包成 dist/*.zip
 dev/               模拟 SP 宿主 + 模拟大模型（含流式）+ 模拟 MCP 服务器，以及端到端测试
 ```
 
+SP 规定插件的 `index.html` 不能超过 100 KB（复用了 manifest 的大小上限），所以打包时会压缩代码；超过上限会直接报错，不会生成装不上的包。源码在 `plugin/`，保持可读。
+
 ```bash
-node scripts/pack.mjs                 # 打包
+npm install                           # 装压缩工具 terser
+node scripts/pack.mjs                 # 压缩 + 打包
 node dev/e2e.mjs                      # 端到端测试（需要 Playwright）；SHOTS=1 会把截图存到 dev/shots/
 PORT=8799 node dev/mock-server.mjs    # 手动调试：打开 http://127.0.0.1:8799/harness.html?native=1
 ```
 
-端到端测试在 Chromium 里跑两种宿主：模拟安卓（原生 HTTP、非流式、深色）和模拟桌面（CORS 直连、流式、浅色）。覆盖的场景有：
+端到端测试默认测的是压缩后、真正打进安装包的 `dist/build/`，在 Chromium 里跑两种宿主：模拟安卓（原生 HTTP、非流式、深色）和模拟桌面（CORS 直连、流式、浅色）。覆盖的场景有：
 - 设置页测试连接、MCP 连接
 - Markdown 渲染
 - 定计划：先查今日 → 弹出选项 → 点选 → 保存计划，并在 SP 里建出带目标标签和时间的任务

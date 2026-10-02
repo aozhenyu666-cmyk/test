@@ -10,7 +10,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const pluginDir = join(here, '..', 'plugin');
+// PLUGIN_DIR=dist/build tests the minified package that actually ships.
+const pluginDir = () => process.env.PLUGIN_DIR || join(here, '..', 'plugin');
 export const requests = [];
 
 function toolCall(name, args) {
@@ -143,7 +144,7 @@ export function startServer(port = 0) {
     if (url.pathname.startsWith('/plugin/')) {
       const name = url.pathname.slice('/plugin/'.length);
       if (!/^[\w.-]+$/.test(name)) return res.writeHead(400).end();
-      return res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }).end(readFileSync(join(pluginDir, name)));
+      return res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }).end(readFileSync(join(pluginDir(), name)));
     }
     if (url.pathname === '/mcp') return handleMcp(req, res);
     if (url.pathname === '/v1/models') return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ data: [{ id: 'mock-large' }, { id: 'mock-small' }] }));

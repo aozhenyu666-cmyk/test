@@ -1,18 +1,32 @@
 #!/usr/bin/env node
-// Packs plugin/ into dist/sp-ai-assistant-<version>.zip (files at the zip root,
-// which is what Super Productivity's "upload plugin" expects).
-// No dependencies: a minimal ZIP writer on top of node:zlib.
+// Builds plugin/ into dist/build/ (minified) and packs it as
+// dist/sp-ai-assistant-<version>.zip (files at the zip root, which is what
+// Super Productivity's "upload plugin" expects).
 //
-//   node scripts/pack.mjs                     # uses manifest as-is
+// Why minify: SP rejects an index.html larger than 100 KB (it reuses the
+// manifest size limit, MAX_PLUGIN_MANIFEST_SIZE). The readable source stays in plugin/.
+//
+//   npm install && node scripts/pack.mjs
 //   node scripts/pack.mjs --host api.x.com    # also allow this host for the SP proxy channel
-import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
 
+const MAX_INDEX_HTML = 100 * 1024;
+
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const srcDir = join(root, 'plugin');
 const outDir = join(root, 'dist');
+const buildDir = join(outDir, 'build');
+
+let minifyJs;
+try {
+  ({ minify: minifyJs } = await import('terser'));
+} catch {
+  console.error('terser is missing: run `npm install` first.');
+  process.exit(1);
+}
 
 const manifest = JSON.parse(readFileSync(join(srcDir, 'manifest.json'), 'utf8'));
 const args = process.argv.slice(2);
@@ -21,6 +35,51 @@ for (let i = 0; i < args.length; i++) {
     const h = args[++i].replace(/^https?:\/\//, '').replace(/[:/].*$/, '');
     if (!manifest.allowedHosts.includes(h)) manifest.allowedHosts.push(h);
   }
+}
+
+const TERSER = { compress: { passes: 2 }, mangle: true, format: { comments: false, ascii_only: false } };
+
+function minifyCss(css) {
+  return css
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s*([{}:;,>])\s*/g, '$1')
+    .replace(/;}/g, '}')
+    .trim();
+}
+
+async function buildIndexHtml(html) {
+  const scripts = [];
+  let out = html.replace(/<script>([\s\S]*?)<\/script>/g, (_, code) => {
+    scripts.push(code);
+    return `<script>@@SCRIPT${scripts.length - 1}@@</script>`;
+  });
+  out = out.replace(/<style>([\s\S]*?)<\/style>/g, (_, css) => `<style>${minifyCss(css)}</style>`);
+  out = out.replace(/<!--[\s\S]*?-->/g, '').replace(/>\s+</g, '><').replace(/\n\s*/g, '\n');
+  for (let i = 0; i < scripts.length; i++) {
+    const { code } = await minifyJs(scripts[i], TERSER);
+    out = out.replace(`@@SCRIPT${i}@@`, () => code);
+  }
+  return out;
+}
+
+rmSync(buildDir, { recursive: true, force: true });
+mkdirSync(buildDir, { recursive: true });
+for (const name of readdirSync(srcDir).sort()) {
+  const src = join(srcDir, name);
+  let data;
+  if (name === 'manifest.json') data = JSON.stringify(manifest, null, 2) + '\n';
+  else if (name === 'index.html') data = await buildIndexHtml(readFileSync(src, 'utf8'));
+  else if (name === 'plugin.js') data = (await minifyJs(readFileSync(src, 'utf8'), { ...TERSER, parse: { bare_returns: true } })).code;
+  else data = readFileSync(src);
+  writeFileSync(join(buildDir, name), data);
+}
+
+const indexSize = readFileSync(join(buildDir, 'index.html')).length;
+console.log(`index.html: ${(readFileSync(join(srcDir, 'index.html')).length / 1024).toFixed(1)} KB source -> ${(indexSize / 1024).toFixed(1)} KB built (SP limit ${MAX_INDEX_HTML / 1024} KB)`);
+if (indexSize > MAX_INDEX_HTML) {
+  console.error('index.html is still over the SP limit; SP would refuse to install the plugin.');
+  process.exit(1);
 }
 
 const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
@@ -34,15 +93,9 @@ const crc32 = (buf) => {
   return (c ^ 0xffffffff) >>> 0;
 };
 
-const files = readdirSync(srcDir)
+const files = readdirSync(buildDir)
   .sort()
-  .map((name) => ({
-    name,
-    data:
-      name === 'manifest.json'
-        ? Buffer.from(JSON.stringify(manifest, null, 2) + '\n')
-        : readFileSync(join(srcDir, name)),
-  }));
+  .map((name) => ({ name, data: readFileSync(join(buildDir, name)) }));
 
 const locals = [];
 const centrals = [];
@@ -87,7 +140,6 @@ end.writeUInt16LE(files.length, 10);
 end.writeUInt32LE(centralBuf.length, 12);
 end.writeUInt32LE(offset, 16);
 
-mkdirSync(outDir, { recursive: true });
 const out = join(outDir, `sp-ai-assistant-${manifest.version}.zip`);
 writeFileSync(out, Buffer.concat([...locals, centralBuf, end]));
 console.log(`packed ${files.length} files -> ${out}`);

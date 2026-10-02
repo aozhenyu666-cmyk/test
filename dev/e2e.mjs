@@ -19,6 +19,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const SHOTS = process.env.SHOTS ? join(here, 'shots') : null;
 if (SHOTS) mkdirSync(SHOTS, { recursive: true });
 
+// Test the minified build that actually ships (run `node scripts/pack.mjs` first), unless PLUGIN_DIR says otherwise.
+if (!process.env.PLUGIN_DIR) process.env.PLUGIN_DIR = join(here, '..', 'dist', 'build');
+console.log('testing plugin files from ' + process.env.PLUGIN_DIR);
+
 const { chromium } = await loadPlaywright();
 const server = await startServer();
 const port = server.address().port;
