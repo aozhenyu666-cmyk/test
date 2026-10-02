@@ -18,7 +18,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import org.robolectric.annotation.SQLiteMode
 
 /**
  * v1 → v2 的迁移不能丢数据。做法：先用 Room 建一个 v2 库并写数据，再把 v2 新增的列和表去掉、
@@ -26,7 +25,6 @@ import org.robolectric.annotation.SQLiteMode
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
-@SQLiteMode(SQLiteMode.Mode.NATIVE)
 class MigrationTest {
     @Test
     fun v1DataSurvivesMigration() = runBlocking {
@@ -45,14 +43,38 @@ class MigrationTest {
         // 造出 v1：去掉 v2 新增的列和表
         val path = context.getDatabasePath(name).path
         SQLiteDatabase.openDatabase(path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
-            db.execSQL("ALTER TABLE `skill` DROP COLUMN `focusSince`")
-            db.execSQL("ALTER TABLE `review` DROP COLUMN `dueAt`")
-            db.execSQL("ALTER TABLE `drill` DROP COLUMN `title`")
-            db.execSQL("ALTER TABLE `drill` DROP COLUMN `metric`")
-            db.execSQL("ALTER TABLE `drill` DROP COLUMN `active`")
-            db.execSQL("ALTER TABLE `rule` DROP COLUMN `name`")
-            db.execSQL("ALTER TABLE `rule` DROP COLUMN `pendingPackages`")
-            db.execSQL("ALTER TABLE `rule` DROP COLUMN `pendingDelete`")
+            // 不依赖 DROP COLUMN（老版本 SQLite 没有）：改名 → 按 v1 结构重建 → 拷回数据。
+            fun rebuild(table: String, create: String, columns: String, index: String?) {
+                db.execSQL("ALTER TABLE `$table` RENAME TO `${table}_v2`")
+                db.execSQL(create)
+                db.execSQL("INSERT INTO `$table` ($columns) SELECT $columns FROM `${table}_v2`")
+                db.execSQL("DROP TABLE `${table}_v2`")
+                if (index != null) db.execSQL(index)
+            }
+            rebuild(
+                "skill",
+                "CREATE TABLE `skill` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `template` TEXT NOT NULL, `focusSubSkillId` INTEGER)",
+                "`id`, `name`, `template`, `focusSubSkillId`",
+                null,
+            )
+            rebuild(
+                "drill",
+                "CREATE TABLE `drill` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `subSkillId` INTEGER NOT NULL, `method` TEXT NOT NULL, `minutes` INTEGER NOT NULL, `source` TEXT NOT NULL)",
+                "`id`, `subSkillId`, `method`, `minutes`, `source`",
+                "CREATE INDEX IF NOT EXISTS `index_drill_subSkillId` ON `drill` (`subSkillId`)",
+            )
+            rebuild(
+                "rule",
+                "CREATE TABLE `rule` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `packages` TEXT NOT NULL, `dailyLimitMin` INTEGER NOT NULL, `effectiveAt` INTEGER NOT NULL, `pendingLimitMin` INTEGER, `pendingEffectiveAt` INTEGER)",
+                "`id`, `packages`, `dailyLimitMin`, `effectiveAt`, `pendingLimitMin`, `pendingEffectiveAt`",
+                null,
+            )
+            rebuild(
+                "review",
+                "CREATE TABLE `review` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `unitId` INTEGER NOT NULL, `intervalDays` INTEGER NOT NULL, `questions` TEXT NOT NULL, `answers` TEXT NOT NULL, `critique` TEXT NOT NULL, `mode` TEXT NOT NULL, `rating` TEXT, `createdAt` INTEGER NOT NULL, `finishedAt` INTEGER)",
+                "`id`, `unitId`, `intervalDays`, `questions`, `answers`, `critique`, `mode`, `rating`, `createdAt`, `finishedAt`",
+                "CREATE INDEX IF NOT EXISTS `index_review_unitId` ON `review` (`unitId`)",
+            )
             db.execSQL("DROP TABLE `exam_section`")
             db.execSQL("DROP TABLE `exam_sitting`")
             db.version = 1

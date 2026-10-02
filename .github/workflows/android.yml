@@ -31,6 +31,14 @@ jobs:
       - name: Unit tests
         run: ./gradlew --no-daemon testDebugUnitTest
 
+      - name: Show failed tests
+        if: failure()
+        run: |
+          for f in $(grep -l "<failure" app/build/test-results/testDebugUnitTest/*.xml 2>/dev/null); do
+            echo "=== $f"
+            sed -n '/<failure/,/<\/failure>/p' "$f" | head -60
+          done
+
       - name: Build debug APK
         run: ./gradlew --no-daemon assembleDebug
 
