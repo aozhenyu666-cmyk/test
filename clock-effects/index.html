@@ -1,0 +1,738 @@
+<title>对齐时刻</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=ZCOOL+XiaoWei&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&text=%E5%90%88%E5%AF%B9%E6%AD%A3&display=swap">
+<style>
+/* Layout: a dark viewing stage, one control strip, then a grid of square avatar clocks; the clocks carry all the color */
+:root {
+  --stage: #15161a;
+  --panel: #1c1e24;
+  --line: #2d3039;
+  --ink: #ebe7de;
+  --mute: #989ca8;
+  --gold: #d8b25c;
+  --display: "ZCOOL XiaoWei", "Songti SC", "Noto Serif SC", "SimSun", serif;
+  --body: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+html, body { background: var(--stage); color: var(--ink); }
+body {
+  font-family: var(--body);
+  line-height: 1.6;
+  padding-inline: clamp(16px, 4vw, 48px);
+  padding-block: 28px 56px;
+}
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; gap: 28px; }
+header { display: grid; gap: 8px; }
+h1 {
+  font-family: var(--display); font-weight: 400; margin: 0;
+  font-size: clamp(32px, 5vw, 48px); letter-spacing: .06em; text-wrap: balance;
+}
+.lede { margin: 0; color: var(--mute); max-width: 64ch; font-size: 15px; }
+
+.bar {
+  display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center; justify-content: space-between;
+  padding: 16px 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+}
+.readout { display: grid; gap: 2px; min-width: 0; }
+.time { font-family: var(--mono); font-size: 30px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: .02em; line-height: 1.2; }
+.status { font-size: 13px; color: var(--mute); font-variant-numeric: tabular-nums; }
+.status b { color: var(--gold); font-weight: 500; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; gap: 2px; }
+.seg button, .btn {
+  font: inherit; font-size: 13px; color: var(--ink); background: transparent;
+  border: 0; border-radius: 999px; padding: 6px 14px; cursor: pointer; white-space: nowrap;
+}
+.btn { border: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--stage); }
+.btn:hover, .seg button:hover:not([aria-pressed="true"]) { background: var(--line); }
+button:focus-visible, canvas:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 32px 24px; }
+.card { display: grid; gap: 12px; margin: 0; min-width: 0; }
+.card canvas {
+  display: block; width: 100%; max-width: 100%; aspect-ratio: 1;
+  border-radius: 50%; cursor: pointer; background: var(--panel);
+  transition: border-radius .45s ease;
+}
+.square .card canvas { border-radius: 22%; }
+figcaption { display: grid; gap: 4px; }
+.name { display: flex; align-items: baseline; gap: 10px; }
+.name strong { font-family: var(--display); font-weight: 400; font-size: 22px; letter-spacing: .04em; }
+.tag { font-size: 11px; letter-spacing: .12em; color: var(--mute); border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
+.desc { margin: 0; color: var(--mute); font-size: 14px; max-width: 46ch; }
+
+.facts { border-top: 1px solid var(--line); padding-top: 20px; display: grid; gap: 12px; }
+.facts h2 { margin: 0; font-family: var(--display); font-weight: 400; font-size: 20px; letter-spacing: .04em; }
+.facts dl { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px 24px; }
+.facts dt { font-size: 12px; color: var(--mute); letter-spacing: .08em; }
+.facts dd { margin: 0; font-family: var(--mono); font-size: 18px; font-variant-numeric: tabular-nums; }
+.facts dd small { font-family: var(--body); font-size: 12px; color: var(--mute); margin-left: 6px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>对齐时刻</h1>
+    <p class="lede">时针和分针重合、或者连成一条直线的那一刻，表盘放一次特效。下面是六种风格的动态头像，点任意一个表盘可以手动触发。默认是自动演示，每次直接跳到对齐前两秒。</p>
+  </header>
+
+  <section class="bar" aria-label="时间控制">
+    <div class="readout">
+      <div class="time" id="time">--:--:--</div>
+      <div class="status" id="status">等待第一次对齐</div>
+    </div>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="时间模式">
+        <button id="m-demo" data-mode="demo" aria-pressed="true">自动演示</button>
+        <button id="m-real" data-mode="real" aria-pressed="false">实时</button>
+        <button id="m-fast" data-mode="fast" aria-pressed="false">快进 ×300</button>
+      </div>
+      <button class="btn" id="jump">跳到下次对齐</button>
+      <button class="btn" id="noon">跳到 12:00 三针合一</button>
+      <div class="seg" role="group" aria-label="头像形状">
+        <button id="s-round" data-shape="round" aria-pressed="true">圆形</button>
+        <button id="s-square" data-shape="square" aria-pressed="false">方形</button>
+      </div>
+    </div>
+  </section>
+
+  <main class="grid" id="grid"></main>
+
+  <section class="facts" aria-label="对齐规律">
+    <h2>什么时候会对齐</h2>
+    <dl>
+      <div><dt>两次重合之间</dt><dd>65:27.3<small>即 12/11 小时</small></dd></div>
+      <div><dt>重合到连成一线</dt><dd>32:43.6<small>半个周期</small></dd></div>
+      <div><dt>每天对齐</dt><dd>44 次<small>22 次重合 + 22 次一线</small></dd></div>
+      <div><dt>三针合一</dt><dd>12:00:00<small>一天只有两次</small></dd></div>
+    </dl>
+  </section>
+</div>
+
+<script>
+(() => {
+'use strict';
+const TAU = Math.PI * 2, S = 360, C = 180;
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const easeOut = t => 1 - Math.pow(1 - clamp(t), 3);
+const rad = d => d * Math.PI / 180;
+const P = (a, r) => [C + Math.sin(a) * r, C - Math.cos(a) * r];
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+function rng(seed) {
+  return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+const R = Math.random;
+function mk(w, h = w) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+function makeNoise(seed) {
+  const r = rng(seed), p = new Float32Array(65536);
+  for (let i = 0; i < p.length; i++) p[i] = r();
+  const g = (i, j) => p[((j & 255) << 8) | (i & 255)];
+  return (x, y) => {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+    const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+    const a = g(xi, yi), b = g(xi + 1, yi), c = g(xi, yi + 1), d = g(xi + 1, yi + 1);
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+  };
+}
+function fbm(n, x, y, oct = 5) { let s = 0, a = .5, f = 1; for (let i = 0; i < oct; i++) { s += a * n(x * f, y * f); f *= 2; a *= .5; } return s; }
+function line(ctx, x1, y1, x2, y2) { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); }
+function hand(ctx, a, len, tail, w, col, cap = 'round') {
+  const [x1, y1] = P(a + Math.PI, tail), [x2, y2] = P(a, len);
+  ctx.strokeStyle = col; ctx.lineWidth = w; ctx.lineCap = cap; line(ctx, x1, y1, x2, y2);
+}
+function dirsFor(f, tripleCount = 12) {
+  if (f.type === 'overlap') return [f.a];
+  if (f.type === 'triple') return Array.from({ length: tripleCount }, (_, i) => f.a + i * TAU / tripleCount);
+  return [f.a, f.a + Math.PI];
+}
+function stepParts(parts, dt, draw) {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const q = parts[i]; q.age += dt;
+    if (q.age >= q.life) { parts.splice(i, 1); continue; }
+    const k = Math.pow(q.drag || 1, dt * 60);
+    q.vx *= k; q.vy *= k; q.vy += (q.g || 0) * dt;
+    q.x += q.vx * dt; q.y += q.vy * dt;
+    draw(q, 1 - q.age / q.life);
+  }
+}
+
+/* ---------- 1 素白 ---------- */
+const mono = {
+  name: '素白', tag: '极简',
+  desc: '黑白细线表盘。对齐时一圈反色波从中心推开，指针方向射出细线，像剪辑里的闪黑转场。',
+  draw(ctx, clk, t, dt, st, fx) {
+    ctx.fillStyle = '#eeede8'; ctx.fillRect(0, 0, S, S);
+    for (let i = 0; i < 60; i++) {
+      const big = i % 5 === 0, a = i * TAU / 60, [x1, y1] = P(a, 152), [x2, y2] = P(a, big ? 137 : 146);
+      ctx.strokeStyle = big ? '#1a1a1a' : 'rgba(26,26,26,.32)'; ctx.lineWidth = big ? 2.4 : 1; ctx.lineCap = 'butt';
+      line(ctx, x1, y1, x2, y2);
+    }
+    let pump = 0;
+    for (const f of fx) {
+      const p = f.p;
+      pump = Math.max(pump, 1 - easeOut(p * 1.6));
+      const L = 30 + easeOut(p * 2.4) * 240;
+      ctx.strokeStyle = `rgba(17,17,17,${1 - p})`; ctx.lineWidth = .8 + (1 - p) * 2.2; ctx.lineCap = 'butt';
+      for (const a of dirsFor(f)) { const [x1, y1] = P(a, 20), [x2, y2] = P(a, L); line(ctx, x1, y1, x2, y2); }
+      for (const dl of [0, .14, .28]) {
+        const q = clamp((p - dl) / (1 - dl)); if (q <= 0) continue;
+        ctx.beginPath(); ctx.arc(C, C, 22 + easeOut(q) * 210, 0, TAU);
+        ctx.strokeStyle = `rgba(17,17,17,${(1 - q) * .45})`; ctx.lineWidth = 1; ctx.stroke();
+      }
+    }
+    hand(ctx, clk.h, 84, 14, 6 + pump * 5, '#151515');
+    hand(ctx, clk.m, 128, 18, 3.5 + pump * 3, '#151515');
+    if (clk.sec > 0) { ctx.globalAlpha = clk.sec; hand(ctx, clk.s, 140, 26, 1.2, '#e2421f'); ctx.globalAlpha = 1; }
+    ctx.fillStyle = '#151515'; ctx.beginPath(); ctx.arc(C, C, 5, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#e2421f'; ctx.beginPath(); ctx.arc(C, C, 2.2, 0, TAU); ctx.fill();
+    for (const f of fx) {
+      const waves = f.type === 'triple' ? [0, .3] : [0];
+      for (const o of waves) {
+        const p = f.p - o;
+        const r1 = easeOut(p / .55) * 272, r2 = easeOut((p - .1) / .55) * 272;
+        if (r1 - r2 < .5) continue;
+        ctx.save(); ctx.globalCompositeOperation = 'difference'; ctx.fillStyle = '#fff';
+        ctx.beginPath(); ctx.arc(C, C, r1, 0, TAU); ctx.arc(C, C, Math.max(0, r2), 0, TAU, true); ctx.fill();
+        ctx.restore();
+      }
+    }
+  }
+};
+
+/* ---------- 2 釉砖 Truchet ---------- */
+const PALS = [
+  { bg: '#1f3fae', fg: '#f1ead8', acc: '#ff6a3d' },
+  { bg: '#0f6b5c', fg: '#f4e7c5', acc: '#ffb000' },
+  { bg: '#e9e3d5', fg: '#1a1a1a', acc: '#e03a2f' },
+  { bg: '#c2442d', fg: '#f6eddc', acc: '#1d2a6b' },
+];
+function truchet(ctx, z, pal) {
+  ctx.fillStyle = pal.bg; ctx.fillRect(-z / 2 - .4, -z / 2 - .4, z + .8, z + .8);
+  ctx.strokeStyle = pal.fg; ctx.lineWidth = z * .2; ctx.lineCap = 'butt';
+  ctx.beginPath(); ctx.arc(-z / 2, -z / 2, z / 2, 0, Math.PI / 2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(z / 2, z / 2, z / 2, Math.PI, Math.PI * 1.5); ctx.stroke();
+}
+const tiles = {
+  name: '釉砖', tag: '标志瓷砖',
+  desc: '36 块 Truchet 瓷砖拼成的头像。对齐时瓷砖从指针连线向两侧依次翻面并换一套配色，每次翻完图案都不一样。',
+  setup() {
+    const r = rng(11), N = 6, list = [];
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const rot = r() < .5 ? 0 : 1; list.push({ i, j, from: { rot, pal: 0 }, to: { rot, pal: 0 }, start: -1 });
+    }
+    return { list, N, pal: 0 };
+  },
+  trigger(st, f) {
+    st.pal = (st.pal + 1) % PALS.length;
+    const z = S / st.N, ux = Math.sin(f.a), uy = -Math.cos(f.a);
+    for (const tl of st.list) {
+      const dx = (tl.i + .5) * z - C, dy = (tl.j + .5) * z - C;
+      const dist = f.type === 'line' ? Math.abs(dx * uy - dy * ux) : Math.hypot(dx, dy);
+      tl.from = { ...tl.to }; tl.to = { rot: tl.to.rot + 1, pal: st.pal };
+      tl.start = f.ts + dist / 180 * .6;
+    }
+  },
+  draw(ctx, clk, t, dt, st, fx) {
+    const z = S / st.N;
+    for (const tl of st.list) {
+      const q = tl.start < 0 ? 1 : clamp((t - tl.start) / .42);
+      const d = q >= .5 ? tl.to : tl.from;
+      const sx = Math.max(.02, Math.abs(Math.cos(q * Math.PI)));
+      ctx.save(); ctx.translate((tl.i + .5) * z, (tl.j + .5) * z); ctx.scale(sx, 1);
+      ctx.save(); ctx.rotate(d.rot * Math.PI / 2); truchet(ctx, z, PALS[d.pal]); ctx.restore();
+      if (q > 0 && q < 1) { ctx.fillStyle = `rgba(0,0,0,${.4 * Math.sin(q * Math.PI)})`; ctx.fillRect(-z / 2, -z / 2, z, z); }
+      ctx.restore();
+    }
+    const pal = PALS[st.pal];
+    let pop = 0; for (const f of fx) pop = Math.max(pop, Math.sin(clamp(f.p / .45) * Math.PI));
+    ctx.save(); ctx.translate(C, C); ctx.scale(1 + pop * .1, 1 + pop * .1); ctx.translate(-C, -C);
+    ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 20; ctx.shadowOffsetY = 6;
+    ctx.fillStyle = pal.fg; ctx.beginPath(); ctx.arc(C, C, 96, 0, TAU); ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.strokeStyle = pal.bg; ctx.lineWidth = 7; ctx.stroke();
+    for (let i = 0; i < 12; i++) {
+      const [x, y] = P(i * TAU / 12, 78); ctx.fillStyle = pal.bg;
+      ctx.beginPath(); ctx.arc(x, y, i % 3 === 0 ? 5 : 2.6, 0, TAU); ctx.fill();
+    }
+    hand(ctx, clk.h, 48, 0, 11, pal.bg);
+    hand(ctx, clk.m, 68, 0, 8, pal.bg);
+    if (clk.sec > 0) { ctx.globalAlpha = clk.sec; hand(ctx, clk.s, 76, 16, 3, pal.acc); ctx.globalAlpha = 1; }
+    ctx.fillStyle = pal.acc; ctx.beginPath(); ctx.arc(C, C, 6.5, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+};
+
+/* ---------- 3 花砖 ---------- */
+const AZ = { ground: '#f3eee2', cobalt: '#1f3f8f', teal: '#17807e', saffron: '#e3a32e', deep: '#101d3c' };
+function star(ctx, n, ro, ri) {
+  ctx.beginPath();
+  for (let i = 0; i < n * 2; i++) { const a = i * Math.PI / n, r = i % 2 ? ri : ro; ctx[i ? 'lineTo' : 'moveTo'](Math.sin(a) * r, -Math.cos(a) * r); }
+  ctx.closePath();
+}
+const azulejo = {
+  name: '花砖', tag: '繁复纹样',
+  desc: '十六角星花砖缓慢转动。对齐时整块纹样转过 45° 卡回对称位，金线亮起，碎金沿指针方向散开。',
+  setup() {
+    const W = 720, c = mk(W), g = c.getContext('2d'), z = W / 6;
+    for (let j = 0; j < 6; j++) for (let i = 0; i < 6; i++) {
+      g.save(); g.translate(i * z, j * z);
+      g.fillStyle = AZ.ground; g.fillRect(0, 0, z, z);
+      g.fillStyle = AZ.teal;
+      for (const [x, y] of [[0, 0], [z, 0], [0, z], [z, z]]) { g.beginPath(); g.arc(x, y, z * .24, 0, TAU); g.fill(); }
+      g.fillStyle = AZ.cobalt; g.beginPath(); g.moveTo(z / 2, z * .14); g.lineTo(z * .86, z / 2); g.lineTo(z / 2, z * .86); g.lineTo(z * .14, z / 2); g.closePath(); g.fill();
+      g.strokeStyle = AZ.ground; g.lineWidth = 3; g.stroke();
+      g.fillStyle = AZ.saffron; g.beginPath(); g.arc(z / 2, z / 2, z * .07, 0, TAU); g.fill();
+      g.strokeStyle = 'rgba(31,63,143,.35)'; g.lineWidth = 2; g.strokeRect(0, 0, z, z);
+      g.restore();
+    }
+    return { bg: c, boost: 0, target: 0, parts: [] };
+  },
+  trigger(st, f) {
+    st.target += Math.PI / 4 * (f.type === 'triple' ? 2 : 1);
+    const n = f.type === 'triple' ? 90 : 46;
+    for (let i = 0; i < n; i++) {
+      const a = R() * TAU, v = 60 + R() * 170;
+      st.parts.push({ x: C + Math.sin(a) * 22, y: C - Math.cos(a) * 22, vx: Math.sin(a) * v, vy: -Math.cos(a) * v, drag: .965, age: 0, life: 1.1 + R() * .8, size: 3 + R() * 4, col: R() < .7 ? AZ.saffron : '#fff' });
+    }
+    for (const a of dirsFor(f, 8)) for (let i = 0; i < 12; i++) {
+      const d = 30 + i * 13 + R() * 6, side = (R() - .5) * 60;
+      st.parts.push({ x: C + Math.sin(a) * d, y: C - Math.cos(a) * d, vx: Math.cos(a) * side + Math.sin(a) * 40, vy: Math.sin(a) * side - Math.cos(a) * 40, drag: .95, age: -i * .03, life: 1.2 + R() * .5, size: 3 + R() * 3, col: AZ.saffron });
+    }
+  },
+  draw(ctx, clk, t, dt, st, fx) {
+    st.boost += (st.target - st.boost) * (1 - Math.exp(-dt * 5));
+    ctx.drawImage(st.bg, 0, 0, S, S);
+    const rot = t * .05 + st.boost;
+    let sc = 1, glow = 0;
+    for (const f of fx) { sc = Math.max(sc, 1 + .07 * Math.sin(clamp(f.p * 1.6) * Math.PI)); glow = Math.max(glow, 1 - f.p); }
+    ctx.save(); ctx.translate(C, C); ctx.scale(sc, sc);
+    ctx.fillStyle = AZ.deep; ctx.beginPath(); ctx.arc(0, 0, 160, 0, TAU); ctx.fill();
+    ctx.strokeStyle = AZ.saffron; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, 154, 0, TAU); ctx.stroke();
+    ctx.save(); ctx.rotate(-rot * .5);
+    ctx.fillStyle = AZ.saffron;
+    for (let i = 0; i < 32; i++) { const a = i * TAU / 32; ctx.beginPath(); ctx.arc(Math.sin(a) * 146, -Math.cos(a) * 146, 2.6, 0, TAU); ctx.fill(); }
+    ctx.restore();
+    ctx.save(); ctx.rotate(rot);
+    star(ctx, 16, 136, 108); ctx.fillStyle = AZ.cobalt; ctx.fill(); ctx.strokeStyle = AZ.ground; ctx.lineWidth = 2; ctx.stroke();
+    if (glow > 0) {
+      ctx.save(); ctx.shadowColor = AZ.saffron; ctx.shadowBlur = 18 * glow;
+      ctx.strokeStyle = `rgba(255,205,100,${glow})`; ctx.lineWidth = 2.5 + glow * 2; ctx.stroke(); ctx.restore();
+    }
+    ctx.restore();
+    ctx.save(); ctx.rotate(-rot * 1.4);
+    for (let i = 0; i < 8; i++) {
+      ctx.save(); ctx.rotate(i * TAU / 8);
+      ctx.beginPath(); ctx.ellipse(0, -84, 15, 28, 0, 0, TAU);
+      ctx.fillStyle = AZ.teal; ctx.fill(); ctx.strokeStyle = AZ.ground; ctx.lineWidth = 2; ctx.stroke();
+      ctx.restore();
+    }
+    ctx.restore();
+    ctx.save(); ctx.rotate(rot * .8);
+    star(ctx, 8, 64, 46); ctx.fillStyle = AZ.ground; ctx.fill();
+    ctx.strokeStyle = AZ.saffron; ctx.lineWidth = 2.5; ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = AZ.deep; ctx.beginPath(); ctx.arc(0, 0, 40, 0, TAU); ctx.fill();
+    ctx.restore();
+    for (const [a, len, w] of [[clk.h, 74, 6], [clk.m, 114, 4]]) { hand(ctx, a, len, 10, w + 4, AZ.deep); hand(ctx, a, len, 10, w, AZ.ground); }
+    if (clk.sec > 0) { ctx.globalAlpha = clk.sec; hand(ctx, clk.s, 130, 22, 1.6, AZ.saffron); ctx.globalAlpha = 1; }
+    ctx.fillStyle = AZ.saffron; ctx.beginPath(); ctx.arc(C, C, 6, 0, TAU); ctx.fill();
+    stepParts(st.parts, dt, (q, k) => {
+      if (q.age < 0) return;
+      const s = q.size * k; ctx.fillStyle = q.col; ctx.globalAlpha = k;
+      ctx.fillRect(q.x - s, q.y - .7, s * 2, 1.4); ctx.fillRect(q.x - .7, q.y - s, 1.4, s * 2);
+      ctx.globalAlpha = 1;
+    });
+  }
+};
+
+/* ---------- 4 石纹 ---------- */
+function crackPath(r, x, y, a0, len) {
+  const pts = [[x, y]]; let a = a0, L = 0;
+  while (L < len) {
+    const step = 6 + r() * 9; a += (r() - .5) * .8; a = a * .72 + a0 * .28;
+    x += Math.sin(a) * step; y -= Math.cos(a) * step; L += step; pts.push([x, y]);
+  }
+  return pts;
+}
+const stone = {
+  name: '石纹', tag: '石刻',
+  desc: '深色大理石面配铜指针。对齐时石面沿指针方向裂开，裂缝里透出熔岩一样的光，之后留下慢慢变淡的裂痕。',
+  setup() {
+    const W = 540, c = mk(W), g = c.getContext('2d'), img = g.createImageData(W, W), n = makeNoise(5), d = img.data;
+    for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) {
+      const nx = x / W * 5, ny = y / W * 5, f = fbm(n, nx, ny), f2 = fbm(n, nx * 3 + 9, ny * 3 + 3, 3);
+      const vein = Math.abs(Math.sin((nx * 1.2 + ny * .8) * 2.4 + f * 8));
+      const vl = Math.pow(1 - vein, 22) * .85 + Math.pow(1 - Math.abs(Math.sin(nx * 3.1 - ny * 1.7 + f2 * 9)), 40) * .35;
+      let r0 = 44 + f * 58, g0 = 47 + f * 56, b0 = 50 + f * 50;
+      if (f2 > .62) { r0 *= .8; g0 *= .8; b0 *= .8; }
+      const k = clamp(vl);
+      const i = (y * W + x) * 4;
+      d[i] = r0 + (214 - r0) * k; d[i + 1] = g0 + (206 - g0) * k; d[i + 2] = b0 + (190 - b0) * k; d[i + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    const s = W / S; g.scale(s, s);
+    const vg = g.createRadialGradient(C, C, 120, C, C, 260);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,.55)');
+    g.fillStyle = vg; g.fillRect(0, 0, S, S);
+    g.strokeStyle = 'rgba(0,0,0,.55)'; g.lineWidth = 5; g.beginPath(); g.arc(C, C, 152, 0, TAU); g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,.14)'; g.lineWidth = 1.4; g.beginPath(); g.arc(C, C + 1.6, 155, 0, TAU); g.stroke();
+    for (let i = 0; i < 12; i++) {
+      const a = i * TAU / 12, big = i % 3 === 0, [x1, y1] = P(a, 141), [x2, y2] = P(a, big ? 120 : 130);
+      g.lineCap = 'round'; g.strokeStyle = 'rgba(0,0,0,.6)'; g.lineWidth = big ? 4.5 : 3; line(g, x1, y1, x2, y2);
+      g.strokeStyle = 'rgba(255,255,255,.16)'; g.lineWidth = 1; line(g, x1 + .8, y1 + 1.5, x2 + .8, y2 + 1.5);
+    }
+    return { tex: c, scars: [], parts: [], seed: 1 };
+  },
+  trigger(st, f) {
+    const r = rng(st.seed++ * 977), cracks = [];
+    for (const a of dirsFor(f, 6)) {
+      const main = crackPath(r, ...P(a, 12), a, 210 + r() * 40);
+      cracks.push({ pts: main, d0: 0 });
+      for (let b = 0; b < 3; b++) {
+        const idx = 4 + Math.floor(r() * (main.length - 6)), [x, y] = main[idx];
+        const ba = a + (r() < .5 ? -1 : 1) * (.5 + r() * .6);
+        cracks.push({ pts: crackPath(r, x, y, ba, 30 + r() * 55), d0: idx / main.length * .85 });
+      }
+    }
+    f.cracks = cracks;
+    st.scars.push({ cracks, t0: f.ts });
+    if (st.scars.length > 6) st.scars.shift();
+    for (let i = 0; i < 40; i++) {
+      const c = cracks[Math.floor(R() * cracks.length)], [x, y] = c.pts[Math.floor(R() * c.pts.length)];
+      st.parts.push({ x, y, vx: (R() - .5) * 50, vy: -20 - R() * 50, g: 160, age: -R() * .4, life: 1 + R(), size: .8 + R() * 1.6 });
+    }
+  },
+  draw(ctx, clk, t, dt, st, fx) {
+    ctx.save();
+    for (const f of fx) if (f.p < .12 && !reduce) { const k = 3.5 * (1 - f.p / .12); ctx.translate((R() - .5) * k, (R() - .5) * k); }
+    ctx.drawImage(st.tex, -4, -4, S + 8, S + 8);
+    const strokeCracks = (cracks, reveal, lw, col) => {
+      ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      for (const c of cracks) {
+        const rv = clamp((reveal - c.d0) / (1 - c.d0)); if (rv <= 0) continue;
+        const n = Math.max(1, Math.floor(rv * (c.pts.length - 1)));
+        ctx.beginPath(); ctx.moveTo(...c.pts[0]); for (let i = 1; i <= n; i++) ctx.lineTo(...c.pts[i]); ctx.stroke();
+      }
+    };
+    st.scars = st.scars.filter(s => t - s.t0 < 11);
+    for (const s of st.scars) {
+      const a = .6 * clamp((t - s.t0 - .5) / .8) * (1 - clamp((t - s.t0 - 2.5) / 8));
+      if (a > 0) { strokeCracks(s.cracks, 1, 2.2, `rgba(8,6,5,${a})`); strokeCracks(s.cracks, 1, .8, `rgba(255,190,120,${a * .25})`); }
+    }
+    for (const f of fx) {
+      const reveal = easeOut(f.p / .3), glow = 1 - clamp((f.p - .3) / .7);
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      const lg = ctx.createRadialGradient(C, C, 0, C, C, 230);
+      lg.addColorStop(0, `rgba(255,120,30,${.42 * glow})`); lg.addColorStop(1, 'rgba(255,80,0,0)');
+      ctx.fillStyle = lg; ctx.fillRect(0, 0, S, S);
+      strokeCracks(f.cracks, reveal, 8, `rgba(255,100,20,${.28 * glow})`);
+      strokeCracks(f.cracks, reveal, 3.2, `rgba(255,150,50,${.85 * glow})`);
+      strokeCracks(f.cracks, reveal, 1.2, `rgba(255,246,214,${glow})`);
+      ctx.restore();
+    }
+    stepParts(st.parts, dt, (q, k) => {
+      if (q.age < 0) return;
+      ctx.fillStyle = `rgba(205,190,165,${k * .9})`; ctx.fillRect(q.x, q.y, q.size, q.size);
+    });
+    const bronze = (a, len, tail, w) => {
+      ctx.save(); ctx.translate(2, 3); hand(ctx, a, len, tail, w, 'rgba(0,0,0,.5)'); ctx.restore();
+      hand(ctx, a, len, tail, w, '#b48f55');
+      ctx.save(); ctx.translate(-.6, -.6); hand(ctx, a, len - 2, tail - 2, Math.max(1, w * .25), 'rgba(255,236,196,.55)'); ctx.restore();
+    };
+    bronze(clk.h, 82, 14, 7);
+    bronze(clk.m, 124, 18, 4.5);
+    if (clk.sec > 0) { ctx.globalAlpha = clk.sec; hand(ctx, clk.s, 134, 22, 1.2, '#ddd5c4'); ctx.globalAlpha = 1; }
+    ctx.fillStyle = '#b48f55'; ctx.beginPath(); ctx.arc(C, C, 7, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#2b2620'; ctx.beginPath(); ctx.arc(C, C, 2.2, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+};
+
+/* ---------- 5 霓虹 ---------- */
+function bolt(ctx, x1, y1, x2, y2, disp) {
+  let pts = [[x1, y1], [x2, y2]];
+  for (let k = 0; k < 5; k++) {
+    const out = [pts[0]];
+    for (let i = 1; i < pts.length; i++) {
+      const [ax, ay] = pts[i - 1], [bx, by] = pts[i], dx = bx - ax, dy = by - ay, l = Math.hypot(dx, dy) || 1, o = (R() - .5) * disp;
+      out.push([(ax + bx) / 2 - dy / l * o, (ay + by) / 2 + dx / l * o], pts[i]);
+    }
+    pts = out; disp *= .55;
+  }
+  ctx.beginPath(); ctx.moveTo(...pts[0]); for (const p of pts) ctx.lineTo(...p); ctx.stroke();
+}
+const neon = {
+  name: '霓虹', tag: '赛博',
+  desc: '霓虹灯管表圈。对齐时沿指针连线劈下一道闪电，画面撕裂一下，冲击波向外扩散。',
+  setup() {
+    const sl = mk(4, 4), g = sl.getContext('2d'); g.fillStyle = 'rgba(0,0,0,.28)'; g.fillRect(0, 0, 4, 2);
+    return { scan: sl, parts: [] };
+  },
+  trigger(st, f) {
+    for (const a of dirsFor(f, 8)) for (let i = 0; i < 26; i++) {
+      const aa = a + (R() - .5) * .5, v = 160 + R() * 260;
+      st.parts.push({ x: C, y: C, vx: Math.sin(aa) * v, vy: -Math.cos(aa) * v, drag: .93, age: 0, life: .5 + R() * .5, col: ['#2ef2ff', '#ff3ad8', '#ffe347'][i % 3] });
+    }
+  },
+  draw(ctx, clk, t, dt, st, fx, cv) {
+    ctx.fillStyle = '#0b0916'; ctx.fillRect(0, 0, S, S);
+    const bg = ctx.createRadialGradient(C, C, 0, C, C, 240);
+    bg.addColorStop(0, 'rgba(90,30,150,.38)'); bg.addColorStop(1, 'rgba(90,30,150,0)');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, S, S);
+    let glow = 0; for (const f of fx) glow = Math.max(glow, 1 - f.p);
+    ctx.save();
+    ctx.shadowColor = '#ff2bd6'; ctx.shadowBlur = 14 + glow * 22;
+    ctx.strokeStyle = '#ff4fe0'; ctx.lineWidth = 3 + glow * 3; ctx.beginPath(); ctx.arc(C, C, 150, 0, TAU); ctx.stroke();
+    ctx.shadowBlur = 0; ctx.strokeStyle = 'rgba(255,225,250,.85)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.setLineDash([2, 7]); ctx.strokeStyle = 'rgba(46,242,255,.4)'; ctx.beginPath(); ctx.arc(C, C, 139, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+    ctx.shadowColor = '#2ef2ff'; ctx.shadowBlur = 8;
+    for (let i = 0; i < 12; i++) { const a = i * TAU / 12, [x1, y1] = P(a, 130), [x2, y2] = P(a, i % 3 ? 124 : 116); ctx.strokeStyle = '#2ef2ff'; ctx.lineWidth = 2; ctx.lineCap = 'round'; line(ctx, x1, y1, x2, y2); }
+    ctx.restore();
+    for (const f of fx) {
+      const p = f.p;
+      ctx.save(); ctx.shadowColor = '#ff2bd6'; ctx.shadowBlur = 16;
+      ctx.strokeStyle = `rgba(255,79,224,${1 - p})`; ctx.lineWidth = 3 * (1 - p) + .5;
+      ctx.beginPath(); ctx.arc(C, C, 150 + easeOut(p) * 115, 0, TAU); ctx.stroke(); ctx.restore();
+      if (p < .55 && R() < .85) {
+        ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        for (const a of dirsFor(f, 8)) {
+          const [x1, y1] = P(a, 8), [x2, y2] = P(a, 250);
+          ctx.strokeStyle = 'rgba(46,242,255,.35)'; ctx.lineWidth = 7; ctx.shadowColor = '#2ef2ff'; ctx.shadowBlur = 18; bolt(ctx, x1, y1, x2, y2, 40);
+          ctx.shadowBlur = 0; ctx.strokeStyle = '#f2fdff'; ctx.lineWidth = 1.6; bolt(ctx, x1, y1, x2, y2, 30);
+        }
+        ctx.restore();
+      }
+    }
+    const tube = (a, len, tail, w, col) => {
+      ctx.save(); ctx.shadowColor = col; ctx.shadowBlur = 12 + glow * 10; hand(ctx, a, len, tail, w, col); ctx.restore();
+      hand(ctx, a, len, tail, w * .35, 'rgba(255,255,255,.9)');
+    };
+    tube(clk.h, 78, 12, 5.5, '#2ef2ff');
+    tube(clk.m, 120, 16, 4, '#ff3ad8');
+    if (clk.sec > 0) { ctx.globalAlpha = clk.sec; tube(clk.s, 132, 20, 1.6, '#ffe347'); ctx.globalAlpha = 1; }
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(C, C, 3.5, 0, TAU); ctx.fill();
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    stepParts(st.parts, dt, (q, k) => {
+      ctx.strokeStyle = q.col; ctx.globalAlpha = k; ctx.lineWidth = 1.6; ctx.lineCap = 'round';
+      line(ctx, q.x, q.y, q.x - q.vx * .035, q.y - q.vy * .035);
+    });
+    for (const f of fx) if (f.p < .15) { ctx.globalAlpha = .35 * (1 - f.p / .15); ctx.fillStyle = '#ff3ad8'; ctx.fillRect(0, 0, S, S); }
+    ctx.restore();
+    ctx.fillStyle = ctx.createPattern(st.scan, 'repeat'); ctx.fillRect(0, 0, S, S);
+    if (!reduce && fx.some(f => f.p < .28)) {
+      const w = cv.width, h = cv.height;
+      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+      for (let i = 0; i < 7; i++) {
+        const sy = R() * h, sh = 3 + R() * h * .06, dx = (R() - .5) * h * .07;
+        ctx.drawImage(cv, 0, sy, w, sh, dx, sy, w, sh);
+      }
+      ctx.restore();
+    }
+  }
+};
+
+/* ---------- 6 水墨 ---------- */
+const INK = '#1c1a17', PAPER = '#ebe3d2', SEAL = '#b3322a';
+const ink = {
+  name: '水墨', tag: '东方',
+  desc: '宣纸上一笔圆相。对齐时墨点沿指针晕开，再盖一枚朱印：重合是「合」，一线是「对」，正午是「正」。',
+  setup() {
+    const W = 720, c = mk(W), g = c.getContext('2d'), r = rng(23);
+    g.fillStyle = PAPER; g.fillRect(0, 0, W, W);
+    for (let i = 0; i < 260; i++) {
+      const x = r() * W, y = r() * W, rr = 30 + r() * 90, gr = g.createRadialGradient(x, y, 0, x, y, rr);
+      gr.addColorStop(0, `rgba(150,125,85,${.03 + r() * .03})`); gr.addColorStop(1, 'rgba(150,125,85,0)');
+      g.fillStyle = gr; g.fillRect(x - rr, y - rr, rr * 2, rr * 2);
+    }
+    for (let i = 0; i < 1800; i++) {
+      const x = r() * W, y = r() * W, a = r() * TAU, l = 6 + r() * 22;
+      g.strokeStyle = `rgba(110,90,60,${.05 + r() * .08})`; g.lineWidth = .5 + r() * .8;
+      g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(x + Math.cos(a + 1) * l * .5, y + Math.sin(a + 1) * l * .5, x + Math.cos(a) * l, y + Math.sin(a) * l); g.stroke();
+    }
+    const steps = 700, start = -1.9, sweep = 5.55;
+    for (let i = 0; i < steps; i++) {
+      const tt = i / steps, ang = start + tt * sweep;
+      const width = 30 * (tt < .06 ? .4 + tt / .06 * .6 : 1 - .72 * tt);
+      for (let b = 0; b < 12; b++) {
+        if (tt > .6 && r() < (tt - .6) * 1.9) continue;
+        const off = (b / 11 - .5) * width + (r() - .5) * 2, rr = 280 + off;
+        g.fillStyle = `rgba(28,26,23,${.35 + r() * .3})`;
+        g.beginPath(); g.arc(W / 2 + Math.cos(ang) * rr, W / 2 + Math.sin(ang) * rr, 2.2, 0, TAU); g.fill();
+      }
+    }
+    g.fillStyle = 'rgba(28,26,23,.75)';
+    for (let i = 0; i < 12; i++) { const a = i * TAU / 12, rr = i % 3 ? 2.4 : 4.2; g.beginPath(); g.arc(W / 2 + Math.sin(a) * 236, W / 2 - Math.cos(a) * 236, rr, 0, TAU); g.fill(); }
+    return { paper: c, blots: [], seal: null };
+  },
+  trigger(st, f) {
+    const add = (x, y, rr, t0, life) => {
+      const subs = Array.from({ length: 4 }, () => ({ dx: (R() - .5) * rr * .7, dy: (R() - .5) * rr * .7, k: .5 + R() * .5 }));
+      st.blots.push({ x, y, rr, t0, life, subs });
+    };
+    add(C, C, f.type === 'triple' ? 58 : 38, f.ts, 5);
+    for (const a of dirsFor(f, 8)) for (const d of [38, 72, 106, 140, 170]) {
+      const [x, y] = P(a + (R() - .5) * .08, d);
+      add(x, y, 24 - d * .07 + R() * 8, f.ts + d / 380, 5);
+    }
+    for (let i = 0; i < 9; i++) { const a = R() * TAU, d = 40 + R() * 120; add(C + Math.cos(a) * d, C + Math.sin(a) * d, 3 + R() * 5, f.ts + .1 + R() * .3, 4.5); }
+    if (st.blots.length > 120) st.blots.splice(0, st.blots.length - 120);
+    st.seal = { ch: f.type === 'triple' ? '正' : f.type === 'line' ? '对' : '合', t0: f.ts };
+  },
+  draw(ctx, clk, t, dt, st, fx) {
+    ctx.drawImage(st.paper, 0, 0, S, S);
+    ctx.save(); ctx.globalCompositeOperation = 'multiply';
+    st.blots = st.blots.filter(b => t - b.t0 < b.life);
+    for (const b of st.blots) {
+      const age = t - b.t0; if (age < 0) continue;
+      const grow = easeOut(age / .9), a = .8 * (1 - clamp((age - 1.2) / (b.life - 1.2)));
+      for (const s of b.subs) {
+        const rr = b.rr * s.k * grow + 1, x = b.x + s.dx * grow, y = b.y + s.dy * grow;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, rr);
+        g.addColorStop(0, `rgba(22,20,18,${a})`); g.addColorStop(.6, `rgba(22,20,18,${a * .8})`); g.addColorStop(1, 'rgba(22,20,18,0)');
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, rr, 0, TAU); ctx.fill();
+      }
+    }
+    ctx.restore();
+    const brush = (a, len, w) => {
+      ctx.save(); ctx.translate(C, C); ctx.rotate(a);
+      ctx.beginPath(); ctx.moveTo(-w * .5, 10); ctx.quadraticCurveTo(-w * .65, -len * .4, 0, -len); ctx.quadraticCurveTo(w * .65, -len * .4, w * .5, 10); ctx.closePath();
+      ctx.strokeStyle = 'rgba(235,227,210,.9)'; ctx.lineWidth = 3; ctx.stroke();
+      ctx.fillStyle = INK; ctx.fill(); ctx.restore();
+    };
+    brush(clk.h, 78, 11);
+    brush(clk.m, 118, 7);
+    if (clk.sec > 0) { ctx.globalAlpha = clk.sec; hand(ctx, clk.s, 128, 20, 1.2, SEAL); ctx.globalAlpha = 1; }
+    ctx.fillStyle = INK; ctx.beginPath(); ctx.arc(C, C, 5, 0, TAU); ctx.fill();
+    if (st.seal) {
+      const age = t - st.seal.t0 - .3;
+      if (age > 4.6) st.seal = null;
+      else if (age > 0) {
+        const s = age < .14 ? 1.9 - .9 * easeOut(age / .14) : 1, al = age > 3.9 ? 1 - (age - 3.9) / .7 : 1;
+        ctx.save(); ctx.translate(252, 258); ctx.rotate(-.06); ctx.scale(s, s); ctx.globalAlpha = al * (age < .14 ? age / .14 : 1);
+        ctx.fillStyle = SEAL; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(-25, -25, 50, 50, 4) : ctx.rect(-25, -25, 50, 50); ctx.fill();
+        ctx.strokeStyle = PAPER; ctx.lineWidth = 1.6; ctx.strokeRect(-20, -20, 40, 40);
+        ctx.fillStyle = PAPER; ctx.font = '34px "Ma Shan Zheng", "STKaiti", "KaiTi", serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(st.seal.ch, 0, 2);
+        const r = rng(st.seal.ch.charCodeAt(0));
+        ctx.fillStyle = 'rgba(235,227,210,.55)';
+        for (let i = 0; i < 26; i++) ctx.fillRect(-25 + r() * 50, -25 + r() * 50, 1 + r() * 2, 1 + r() * 2);
+        ctx.restore();
+      }
+    }
+  }
+};
+
+/* ---------- clock + cards ---------- */
+const STYLES = [mono, tiles, azulejo, stone, neon, ink];
+const T = { sim: Date.now(), mode: 'demo', speed: 1, prevD: null, lastEvt: -1e9, demoN: 0, label: '' };
+function angles(ms) {
+  const d = new Date(ms), h = d.getHours() % 12, m = d.getMinutes(), s = d.getSeconds() + d.getMilliseconds() / 1000;
+  return { hd: h * 30 + m * .5 + s / 120, md: m * 6 + s * .1, sd: s * 6 };
+}
+const gap = a => ((a.md - a.hd) % 360 + 360) % 360;
+function nextAlign() {
+  const d = gap(angles(T.sim)); let target = d < 180 ? 180 : 360;
+  if (target - d < 1e-4) target += 180;
+  return { secs: (target - d) / 5.5 * 60, kind: target % 360 === 0 ? 'overlap' : 'line' };
+}
+function jumpNext(lead = 2.2) { T.sim += (nextAlign().secs - lead) * 1000; T.prevD = null; }
+function jumpNoon() { const d = new Date(T.sim); d.setHours(d.getHours() < 12 ? 11 : 23, 59, 57, 800); T.sim = d.getTime(); T.prevD = null; }
+
+const grid = document.getElementById('grid');
+const cards = STYLES.map((style, i) => {
+  const fig = document.createElement('figure'); fig.className = 'card';
+  fig.innerHTML = `<canvas tabindex="0" role="button" aria-label="${style.name}：点击触发特效"></canvas>
+    <figcaption><div class="name"><strong>${style.name}</strong><span class="tag">${style.tag}</span></div><p class="desc">${style.desc}</p></figcaption>`;
+  grid.appendChild(fig);
+  const cv = fig.querySelector('canvas');
+  const card = { style, cv, ctx: cv.getContext('2d'), st: style.setup ? style.setup() : {}, fx: [], visible: true, taps: 0, k: 1 };
+  card.trigger = (type, a) => {
+    const now = performance.now(), f = { type, a, t0: now, ts: now / 1000, dur: type === 'triple' ? 3.2 : 2.2, p: 0 };
+    card.fx.push(f); style.trigger && style.trigger(card.st, f);
+  };
+  const tap = () => { const a = angles(T.sim); card.trigger(card.taps++ % 2 ? 'line' : 'overlap', rad(a.md)); };
+  cv.addEventListener('click', tap);
+  cv.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tap(); } });
+  return card;
+});
+function sizeCards() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  for (const c of cards) {
+    const w = Math.max(200, Math.round(c.cv.getBoundingClientRect().width * dpr));
+    if (c.cv.width !== w) { c.cv.width = w; c.cv.height = w; }
+    c.k = w / S;
+  }
+}
+sizeCards();
+new ResizeObserver(sizeCards).observe(grid);
+const io = new IntersectionObserver(es => { for (const e of es) { const c = cards.find(c => c.cv === e.target); if (c) c.visible = e.isIntersecting; } });
+cards.forEach(c => io.observe(c.cv));
+
+const NAMES = { overlap: '时分针重合', line: '时分针连成一线', triple: '三针合一' };
+const pad = n => String(n).padStart(2, '0');
+const fmt = ms => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
+function fire(type, a) {
+  T.lastEvt = performance.now();
+  T.label = `${NAMES[type]} · ${fmt(T.sim)}`;
+  for (const c of cards) c.trigger(type, a);
+}
+
+const timeEl = document.getElementById('time'), statusEl = document.getElementById('status');
+let last = performance.now(), lastText = '';
+function frame(now) {
+  const dt = Math.min(.05, (now - last) / 1000); last = now;
+  if (T.mode === 'real') T.sim = Date.now(); else T.sim += dt * 1000 * T.speed;
+  const a = angles(T.sim), d = gap(a);
+  if (T.prevD != null) {
+    let type = null;
+    if (T.prevD - d > 180) type = 'overlap';
+    else if (T.prevD < 180 && d >= 180 && d - T.prevD < 180) type = 'line';
+    if (type) fire(type === 'overlap' && (a.hd < 1 || a.hd > 359) ? 'triple' : type, rad(a.hd));
+  }
+  T.prevD = d;
+  // after the crossing check, so a jump never skips the frame that crosses
+  if (T.mode === 'demo' && now - T.lastEvt > 3600 && nextAlign().secs > 3) {
+    if (++T.demoN % 5 === 0) jumpNoon(); else jumpNext(2);
+  }
+
+  const clk = { h: rad(a.hd), m: rad(a.md), s: rad(a.sd), sec: T.speed > 10 ? 0 : 1 };
+  const t = now / 1000;
+  for (const c of cards) {
+    for (const f of c.fx) f.p = (now - f.t0) / 1000 / f.dur;
+    c.fx = c.fx.filter(f => f.p < 1);
+    if (!c.visible) continue;
+    c.ctx.setTransform(c.k, 0, 0, c.k, 0, 0);
+    c.ctx.globalAlpha = 1; c.ctx.globalCompositeOperation = 'source-over';
+    c.style.draw(c.ctx, clk, t, dt, c.st, c.fx, c.cv);
+  }
+
+  const nx = nextAlign(), s = Math.ceil(nx.secs);
+  const txt = fmt(T.sim);
+  const st = `下次${nx.kind === 'overlap' ? '重合' : '一线'}还有 ${Math.floor(s / 60)} 分 ${pad(s % 60)} 秒` + (T.label ? `　上一次：<b>${T.label}</b>` : '');
+  if (txt + st !== lastText) { timeEl.textContent = txt; statusEl.innerHTML = st; lastText = txt + st; }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* ---------- controls ---------- */
+const modeBtns = document.querySelectorAll('[data-mode]');
+function setMode(m) {
+  T.mode = m; T.speed = m === 'fast' ? 300 : 1; T.prevD = null;
+  if (m === 'real') T.sim = Date.now();
+  modeBtns.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
+}
+modeBtns.forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+document.getElementById('jump').addEventListener('click', () => { if (T.mode === 'real') setMode('demo'); jumpNext(1.6); T.lastEvt = performance.now(); });
+document.getElementById('noon').addEventListener('click', () => { if (T.mode === 'real') setMode('demo'); jumpNoon(); T.lastEvt = performance.now(); });
+const shapeBtns = document.querySelectorAll('[data-shape]');
+shapeBtns.forEach(b => b.addEventListener('click', () => {
+  document.body.classList.toggle('square', b.dataset.shape === 'square');
+  shapeBtns.forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+}));
+if (document.fonts && document.fonts.load) document.fonts.load('34px "Ma Shan Zheng"', '合对正').catch(() => {});
+})();
+</script>
