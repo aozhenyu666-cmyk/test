@@ -317,11 +317,13 @@ private fun DrillRow(drill: Drill, d: SkillDetail, isNext: Boolean, onStart: () 
             Column(Modifier.weight(1f)) {
                 Text(drill.title.ifBlank { "练习" }, style = MaterialTheme.typography.titleMedium, color = p.ink)
                 Text(
-                    "${drill.minutes} 分钟" + (if (drill.metric.isNotBlank()) " · 记 ${drill.metric}" else "") +
-                        (values.lastOrNull()?.let { " · 上次 ${fmt(it)}" } ?: ""),
+                    "${drill.minutes} 分钟" + (values.lastOrNull()?.let { " · 上次 ${fmt(it)}" } ?: "") + if (isNext) " · 下一个练它" else "",
                     style = MaterialTheme.typography.labelMedium,
                     color = if (isNext) p.red else p.ink2,
                 )
+                if (drill.metric.isNotBlank()) {
+                    Text("记：${drill.metric}", style = MaterialTheme.typography.labelMedium, color = p.ink2)
+                }
             }
             LineButton("开始", onClick = onStart)
         }

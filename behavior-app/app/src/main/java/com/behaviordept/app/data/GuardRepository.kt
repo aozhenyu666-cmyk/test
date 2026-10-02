@@ -10,12 +10,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 
-/** 一条规则当天的用时。 */
-data class RuleToday(val rule: Rule, val minutes: Int) {
-    val over: Boolean get() = minutes > rule.dailyLimitMin
-    val ratio: Float get() = if (rule.dailyLimitMin <= 0) 1f else minutes.toFloat() / rule.dailyLimitMin
-}
-
 /** 防线：规则（带冷静期）、用时读取、冲动登记。 */
 class GuardRepository(
     private val context: Context,

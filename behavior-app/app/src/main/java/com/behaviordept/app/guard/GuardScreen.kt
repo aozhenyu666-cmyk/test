@@ -47,6 +47,7 @@ import com.behaviordept.app.ui.appViewModel
 import com.behaviordept.app.ui.components.Hint
 import com.behaviordept.app.ui.components.InkButton
 import com.behaviordept.app.ui.components.LimitBar
+import com.behaviordept.app.ui.components.UsageBars
 import com.behaviordept.app.ui.components.LineButton
 import com.behaviordept.app.ui.components.NumberField
 import com.behaviordept.app.ui.components.PageHeader
@@ -227,28 +228,6 @@ private fun TodayRuleCard(rt: RuleToday, hasPermission: Boolean) {
             Spacer(Modifier.height(6.dp))
             Text("已超限 ${rt.minutes - rt.rule.dailyLimitMin} 分钟", style = MaterialTheme.typography.labelLarge, color = p.red)
         }
-    }
-}
-
-/** 30 天娱乐用时柱状图 + 上限横线，超出部分红色（PRD 视觉规范）。 */
-@Composable
-fun UsageBars(values: List<Int>, limit: Int, modifier: Modifier = Modifier) {
-    val p = Paper.colors
-    Canvas(modifier.fillMaxWidth().height(120.dp)) {
-        val max = maxOf(values.maxOrNull() ?: 0, limit, 1).toFloat() * 1.1f
-        val n = values.size.coerceAtLeast(1)
-        val slot = size.width / n
-        val barW = slot * 0.62f
-        fun y(v: Float) = size.height - size.height * (v / max)
-        values.forEachIndexed { i, v ->
-            val x = i * slot + (slot - barW) / 2
-            val under = minOf(v, limit).toFloat()
-            if (under > 0) drawRect(p.ink2, Offset(x, y(under)), Size(barW, size.height - y(under)))
-            if (v > limit) drawRect(p.red, Offset(x, y(v.toFloat())), Size(barW, y(limit.toFloat()) - y(v.toFloat())))
-        }
-        val ly = y(limit.toFloat())
-        drawLine(p.ink, Offset(0f, ly), Offset(size.width, ly), 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 4.dp.toPx())))
-        drawLine(p.divider, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx())
     }
 }
 

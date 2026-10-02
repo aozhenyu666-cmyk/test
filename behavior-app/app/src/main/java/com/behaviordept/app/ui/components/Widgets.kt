@@ -24,6 +24,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -60,7 +61,9 @@ fun ChoiceChip(
     ) {
         Text(
             text,
-            style = MaterialTheme.typography.labelLarge,
+            // 大按钮（登记对局这种要一下点准的）用更大的字。
+            style = if (height >= 56.dp) MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, fontFamily = androidx.compose.ui.text.font.FontFamily.Default)
+            else MaterialTheme.typography.labelLarge,
             color = if (selected) p.page else p.ink,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -104,9 +107,9 @@ fun ShareBars(shares: List<Share>, highlight: String?, modifier: Modifier = Modi
     }
 }
 
-/** 小折线：最近几次的数字，最后一个点用红笔。 */
+/** 小折线：最近几次的数字，最后一个点用红笔。lowerIsBetter 时上下翻转，进步总是往上走。 */
 @Composable
-fun Sparkline(values: List<Double>, modifier: Modifier = Modifier) {
+fun Sparkline(values: List<Double>, modifier: Modifier = Modifier, lowerIsBetter: Boolean = false) {
     val p = Paper.colors
     Canvas(modifier.fillMaxWidth().height(56.dp)) {
         if (values.isEmpty()) return@Canvas
@@ -116,7 +119,8 @@ fun Sparkline(values: List<Double>, modifier: Modifier = Modifier) {
         val pad = 6.dp.toPx()
         fun pt(i: Int, v: Double): Offset {
             val x = if (values.size == 1) size.width / 2 else pad + (size.width - 2 * pad) * i / (values.size - 1)
-            val y = size.height - pad - ((v - min) / span * (size.height - 2 * pad)).toFloat()
+            val t = ((v - min) / span).toFloat().let { if (lowerIsBetter) 1f - it else it }
+            val y = size.height - pad - t * (size.height - 2 * pad)
             return Offset(x, y)
         }
         drawLine(p.grid, Offset(0f, size.height - 1), Offset(size.width, size.height - 1), 1.dp.toPx())
@@ -200,5 +204,27 @@ fun SevenDays(checked: List<Boolean>, todayIndex: Int, modifier: Modifier = Modi
                 Text("第${i + 1}天", style = MaterialTheme.typography.labelSmall, color = if (i == todayIndex) p.ink else p.ink2)
             }
         }
+    }
+}
+
+/** 30 天娱乐用时柱状图 + 上限横线，超出部分红色（PRD 视觉规范）。 */
+@Composable
+fun UsageBars(values: List<Int>, limit: Int, modifier: Modifier = Modifier) {
+    val p = Paper.colors
+    Canvas(modifier.fillMaxWidth().height(120.dp)) {
+        val max = maxOf(values.maxOrNull() ?: 0, limit, 1).toFloat() * 1.1f
+        val n = values.size.coerceAtLeast(1)
+        val slot = size.width / n
+        val barW = slot * 0.62f
+        fun y(v: Float) = size.height - size.height * (v / max)
+        values.forEachIndexed { i, v ->
+            val x = i * slot + (slot - barW) / 2
+            val under = minOf(v, limit).toFloat()
+            if (under > 0) drawRect(p.ink2, Offset(x, y(under)), Size(barW, size.height - y(under)))
+            if (v > limit) drawRect(p.red, Offset(x, y(v.toFloat())), Size(barW, y(limit.toFloat()) - y(v.toFloat())))
+        }
+        val ly = y(limit.toFloat())
+        drawLine(p.ink, Offset(0f, ly), Offset(size.width, ly), 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 4.dp.toPx())))
+        drawLine(p.divider, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx())
     }
 }

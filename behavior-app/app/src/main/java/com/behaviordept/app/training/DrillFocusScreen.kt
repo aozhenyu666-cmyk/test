@@ -244,6 +244,6 @@ private fun FeedbackView(d: Drill, fb: DrillFeedback, noNumber: Boolean) {
         }
         Text(verdict, style = MaterialTheme.typography.titleSmall, color = p.ink)
         fb.best?.let { Text("最近最好：${fmt(it)}" + if (fb.lowerIsBetter) "（越低越好）" else "", style = MaterialTheme.typography.labelMedium, color = p.ink2) }
-        if (fb.history.size >= 2) Sparkline(fb.history)
+        if (fb.history.size >= 2) Sparkline(fb.history, lowerIsBetter = fb.lowerIsBetter)
     }
 }
