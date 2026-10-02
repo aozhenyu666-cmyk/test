@@ -28,6 +28,7 @@ import com.behaviordept.app.ui.components.ErrorPanel
 import com.behaviordept.app.ui.components.Hint
 import com.behaviordept.app.ui.components.InkButton
 import com.behaviordept.app.ui.components.PaperCard
+import com.behaviordept.app.ui.components.PenMark
 import com.behaviordept.app.ui.components.RedPenBlock
 import com.behaviordept.app.ui.components.RuledTextField
 import com.behaviordept.app.ui.components.SectionLabel
@@ -329,13 +330,7 @@ private fun RatingPicker(suggested: String?, enabled: Boolean, onPick: (String) 
                     contentAlignment = Alignment.Center,
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            Rating.mark(r),
-                            fontFamily = SerifSC,
-                            fontWeight = FontWeight.Black,
-                            style = MaterialTheme.typography.titleLarge,
-                            color = if (isSuggested) p.page else p.red,
-                        )
+                        PenMark(Rating.mark(r), 24.dp, if (isSuggested) p.page else p.red)
                         Text(
                             Rating.label(r),
                             style = MaterialTheme.typography.labelLarge,

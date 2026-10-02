@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -26,6 +27,9 @@ import com.behaviordept.app.AppContainer
 import com.behaviordept.app.data.Event
 import com.behaviordept.app.data.EventType
 import com.behaviordept.app.data.StudyUnit
+import com.behaviordept.app.study.IntervalLadder
+import com.behaviordept.app.study.StepGrid
+import com.behaviordept.app.study.UnitStep
 import com.behaviordept.app.ui.appViewModel
 import com.behaviordept.app.ui.components.BigNumber
 import com.behaviordept.app.ui.components.Hint
@@ -105,12 +109,18 @@ class TodayViewModel(c: AppContainer) : ViewModel() {
 fun TodayScreen(onStart: (Long) -> Unit) {
     val vm = appViewModel { TodayViewModel(it) }
     val state by vm.state.collectAsStateWithLifecycle()
-    val p = Paper.colors
     val s = state ?: return
+    TodayContent(s, Time.today(), onStart)
+}
+
+/** 无状态的今日页面，方便预览和截图。 */
+@Composable
+fun TodayContent(s: TodayState, today: LocalDate, onStart: (Long) -> Unit) {
+    val p = Paper.colors
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-    // 一件事卡占首屏上半部分：固定高度，按钮压在卡片底部。
-    val cardHeight = maxOf(380.dp, maxHeight * 0.56f)
+    // 一件事卡至少占首屏上半部分，按钮压在卡片底部。
+    val cardHeight = maxOf(400.dp, maxHeight * 0.58f)
     Column(
         Modifier
             .fillMaxSize()
@@ -120,7 +130,7 @@ fun TodayScreen(onStart: (Long) -> Unit) {
     ) {
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
-                Time.md(Time.today()) + " " + Time.weekdayName(Time.today()),
+                Time.md(today) + " " + Time.weekdayName(today),
                 style = MaterialTheme.typography.titleMedium,
                 color = p.ink2,
             )
@@ -128,38 +138,49 @@ fun TodayScreen(onStart: (Long) -> Unit) {
 
         // 今日一件事：大号宋体标题 + 一句说明 + 一个墨水色按钮，占首屏上半部分。
         PaperCard(
-            modifier = Modifier.height(cardHeight),
+            modifier = Modifier.heightIn(min = cardHeight),
             padding = androidx.compose.foundation.layout.PaddingValues(24.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            SectionLabel("今日一件事 · ${s.next.kindLabel()}")
-            Spacer(Modifier.height(18.dp))
-            Text(
-                s.next.headline(),
-                style = MaterialTheme.typography.displaySmall,
-                color = p.ink,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(14.dp))
-            Text(
-                s.next.description(),
-                style = MaterialTheme.typography.bodyLarge,
-                color = p.ink2,
-                maxLines = 4,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.weight(1f))
-            InkButton("开始", onClick = { onStart(s.next.unitId) }, height = 60.dp)
-            if (s.otherDue > 0) {
-                Spacer(Modifier.height(10.dp))
-                Hint("另有 ${s.otherDue} 个自测今天到期，做完这一件再说", Modifier.fillMaxWidth())
+            Column {
+                SectionLabel("今日一件事 · ${s.next.kindLabel()}")
+                Spacer(Modifier.height(18.dp))
+                Text(
+                    s.next.headline(),
+                    style = MaterialTheme.typography.displaySmall,
+                    color = p.ink,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    s.next.description(),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = p.ink2,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Column(Modifier.padding(top = 28.dp)) {
+                // 下一步在整个流程里的位置：学习单元看步骤格，自测看间隔阶梯。
+                when (val n = s.next) {
+                    is NextAction.Review -> IntervalLadder(n.unit.intervalLevel)
+                    is NextAction.Step -> StepGrid(n.step)
+                    NextAction.NewUnit -> StepGrid(UnitStep.PREVIEW)
+                }
+                Spacer(Modifier.height(24.dp))
+                InkButton("开始", onClick = { onStart(s.next.unitId) }, height = 60.dp)
+                if (s.otherDue > 0) {
+                    Spacer(Modifier.height(10.dp))
+                    Hint("另有 ${s.otherDue} 个自测今天到期，做完这一件再说", Modifier.fillMaxWidth())
+                }
             }
         }
 
         // 本周田字格
         PaperCard {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-                SectionLabel("本周", Modifier.weight(1f).padding(bottom = 10.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                SectionLabel("本周", Modifier.weight(1f))
                 BigNumber("已练", s.trainedDays.toString(), "天", red = s.trainedDays >= 5)
             }
             Spacer(Modifier.height(14.dp))

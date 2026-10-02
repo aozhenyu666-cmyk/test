@@ -143,6 +143,35 @@ private fun TimelineCell(
     }
 }
 
+/** 间隔阶梯：1/3/7/14/30/60 天，已经爬过的级打红勾，当前一级墨水实底。 */
+@Composable
+fun IntervalLadder(level: Int, modifier: Modifier = Modifier) {
+    val p = Paper.colors
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Spacing.INTERVALS.forEachIndexed { i, d ->
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (i < level) {
+                    TianZiGeCell(done = true, size = 34.dp)
+                } else {
+                    Box(
+                        if (i == level) Modifier.size(34.dp).background(p.ink) else Modifier.size(34.dp).border(1.dp, p.divider),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            d.toString(),
+                            fontFamily = SerifSC,
+                            fontWeight = FontWeight.Black,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (i == level) p.page else p.ink2,
+                        )
+                    }
+                }
+                Text("${d}天", style = MaterialTheme.typography.labelSmall, color = if (i == level) p.ink else p.ink2)
+            }
+        }
+    }
+}
+
 /** 保持率：按间隔天数统计“记得”的占比。返回 (间隔下标, 百分比)。 */
 fun retentionPoints(reviews: List<Review>): List<Pair<Int, Double>> =
     Spacing.INTERVALS.mapIndexedNotNull { index, days ->

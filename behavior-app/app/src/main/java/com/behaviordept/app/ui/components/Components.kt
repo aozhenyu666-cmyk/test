@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,13 +33,17 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.PathMeasure
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -50,7 +55,6 @@ import androidx.compose.ui.unit.sp
 import com.behaviordept.app.ai.Section
 import com.behaviordept.app.ui.theme.LocalReduceMotion
 import com.behaviordept.app.ui.theme.Paper
-import com.behaviordept.app.ui.theme.SerifSC
 import kotlin.math.ceil
 
 val CardShape = RoundedCornerShape(6.dp)
@@ -61,6 +65,7 @@ private val ButtonShape = RoundedCornerShape(6.dp)
 fun PaperCard(
     modifier: Modifier = Modifier,
     padding: PaddingValues = PaddingValues(20.dp),
+    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val p = Paper.colors
@@ -70,6 +75,7 @@ fun PaperCard(
             .background(p.page, CardShape)
             .border(1.dp, p.divider, CardShape)
             .padding(padding),
+        verticalArrangement = verticalArrangement,
         content = content,
     )
 }
@@ -185,7 +191,7 @@ fun RuledTextField(
                         val lh = lineHeight.toPx()
                         val count = ceil(size.height / lh).toInt().coerceAtLeast(1)
                         for (i in 0 until count) {
-                            val y = i * lh + lh * 0.84f
+                            val y = i * lh + lh * 0.9f
                             if (y > size.height) break
                             drawLine(p.grid, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.dp.toPx())
                         }
@@ -200,7 +206,10 @@ fun RuledTextField(
     )
 }
 
-/** 一格田字格。done 时写入红色宋体“✓”，从未勾到勾上时红笔从左到右描一笔。 */
+/**
+ * 一格田字格，带浅色虚线十字。done 时红笔写一个记号（✓ / △ / ✗）；
+ * 从没勾到勾上时，记号沿笔画方向描出来（系统关闭动画时直接显示）。
+ */
 @Composable
 fun TianZiGeCell(
     done: Boolean,
@@ -215,7 +224,7 @@ fun TianZiGeCell(
     LaunchedEffect(done) {
         if (!done) progress.snapTo(0f)
         else if (progress.value < 1f) {
-            if (reduce) progress.snapTo(1f) else progress.animateTo(1f, tween(520, easing = FastOutSlowInEasing))
+            if (reduce) progress.snapTo(1f) else progress.animateTo(1f, tween(560, easing = FastOutSlowInEasing))
         }
     }
     Box(
@@ -230,23 +239,60 @@ fun TianZiGeCell(
                 val cy = this.size.height / 2f
                 drawLine(p.grid, Offset(cx, 0f), Offset(cx, this.size.height), w, pathEffect = dash)
                 drawLine(p.grid, Offset(0f, cy), Offset(this.size.width, cy), w, pathEffect = dash)
+                if (done || progress.value > 0f) drawPenMark(mark, progress.value, p.red)
             },
-        contentAlignment = Alignment.Center,
-    ) {
-        if (done || progress.value > 0f) {
-            Text(
-                mark,
-                color = p.red,
-                fontFamily = SerifSC,
-                fontWeight = FontWeight.Black,
-                fontSize = (size.value * 0.62f).sp,
-                modifier = Modifier
-                    .clipToBounds()
-                    .drawWithContent {
-                        clipRect(right = this.size.width * progress.value) { this@drawWithContent.drawContent() }
-                    },
-            )
-        }
+    )
+}
+
+/** 单独的红笔记号（不带格子），用在按钮和列表里。 */
+@Composable
+fun PenMark(mark: String, size: Dp, color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(size)) { drawPenMark(mark, 1f, color) }
+}
+
+/** 红笔记号的笔画，坐标是格子边长的比例。 */
+private fun penStrokes(mark: String, s: Float): List<Path> = when (mark) {
+    "△" -> listOf(
+        Path().apply {
+            moveTo(0.50f * s, 0.22f * s)
+            lineTo(0.79f * s, 0.74f * s)
+            lineTo(0.21f * s, 0.74f * s)
+            lineTo(0.50f * s, 0.22f * s)
+        },
+    )
+    "✗" -> listOf(
+        Path().apply {
+            moveTo(0.27f * s, 0.26f * s)
+            quadraticBezierTo(0.50f * s, 0.47f * s, 0.74f * s, 0.75f * s)
+        },
+        Path().apply {
+            moveTo(0.74f * s, 0.25f * s)
+            quadraticBezierTo(0.48f * s, 0.50f * s, 0.25f * s, 0.75f * s)
+        },
+    )
+    else -> listOf(
+        Path().apply {
+            moveTo(0.20f * s, 0.50f * s)
+            quadraticBezierTo(0.31f * s, 0.58f * s, 0.41f * s, 0.73f * s)
+            quadraticBezierTo(0.55f * s, 0.45f * s, 0.82f * s, 0.22f * s)
+        },
+    )
+}
+
+/** 按 progress 画出笔画的前一段，多笔时按长度依次画。 */
+private fun DrawScope.drawPenMark(mark: String, progress: Float, color: Color) {
+    val s = size.minDimension
+    val strokes = penStrokes(mark, s)
+    val measures = strokes.map { PathMeasure().apply { setPath(it, false) } }
+    val total = measures.sumOf { it.length.toDouble() }.toFloat()
+    var remaining = total * progress.coerceIn(0f, 1f)
+    val style = Stroke(width = s * 0.085f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+    measures.forEach { m ->
+        if (remaining <= 0f) return
+        val seg = Path()
+        m.getSegment(0f, minOf(remaining, m.length), seg, true)
+        drawPath(seg, color, style = style)
+        remaining -= m.length
     }
 }
 
@@ -286,11 +332,18 @@ fun RedPenBlock(sections: List<Section>, modifier: Modifier = Modifier, heading:
 fun BigNumber(prefix: String, number: String, suffix: String, modifier: Modifier = Modifier, red: Boolean = false) {
     val p = Paper.colors
     Row(modifier, verticalAlignment = Alignment.Bottom) {
-        Text(prefix, style = MaterialTheme.typography.titleMedium, color = p.ink2, modifier = Modifier.padding(bottom = 8.dp))
+        Text(prefix, style = MaterialTheme.typography.titleMedium, color = p.ink2, modifier = Modifier.padding(bottom = 4.dp))
         Spacer(Modifier.width(6.dp))
-        Text(number, style = MaterialTheme.typography.displayMedium, color = if (red) p.red else p.ink)
+        Text(
+            number,
+            style = MaterialTheme.typography.displayMedium.copy(
+                lineHeight = MaterialTheme.typography.displayMedium.fontSize,
+                lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both),
+            ),
+            color = if (red) p.red else p.ink,
+        )
         Spacer(Modifier.width(6.dp))
-        Text(suffix, style = MaterialTheme.typography.titleMedium, color = p.ink2, modifier = Modifier.padding(bottom = 8.dp))
+        Text(suffix, style = MaterialTheme.typography.titleMedium, color = p.ink2, modifier = Modifier.padding(bottom = 4.dp))
     }
 }
 

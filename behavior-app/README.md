@@ -2,6 +2,12 @@
 
 需求见 [`docs/PRD.md`](../docs/PRD.md)。当前实现到 **阶段 1**：今日 + 学习 + AI 教练服务 + 提醒 + 事件日志 + 设置。
 
+| 今日 | 今日（深色） | 合上讲一遍 | 红笔批改 | 学习单元（深色） |
+|---|---|---|---|---|
+| ![](docs/screenshots/today-light.png) | ![](docs/screenshots/today-dark.png) | ![](docs/screenshots/focus-writing-light.png) | ![](docs/screenshots/focus-done-light.png) | ![](docs/screenshots/unit-dark.png) |
+
+截图由同一套 Compose 组件在桌面端离线渲染，正文字体用 Noto Sans SC 代替手机系统字体，真机上会略有差别。
+
 ## 拿到 APK
 
 GitHub Actions 每次推送都会构建 debug APK：仓库 → Actions → **Android APK** → 最新一次运行 → Artifacts 里的 `behavior-dept-debug-apk`。解压后把 `app-debug.apk` 传到手机安装（需允许“安装未知应用”）。
