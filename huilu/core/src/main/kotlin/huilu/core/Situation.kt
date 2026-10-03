@@ -27,14 +27,19 @@ data class Situation(
     val lastDriftAftermath: Aftermath? = null,
     /** 最近一次关闭的检查，用于界面展示"系统刚才的判断"。 */
     val lastClosed: CheckIn? = null,
+    /** 当前被暂停的 App。跨轮次保留：一轮结束后必须确认解除，不能随局面一起清空。 */
+    val locked: Set<String> = emptySet(),
 ) {
+    /** 现在是否还应该保持暂停。 */
+    val lockWanted: Boolean get() = action != null && mode == Mode.ACTING && blocking && !muted
+
     fun apply(e: Event): Situation = when (e) {
         is Event.ActionStarted -> Situation(
             mode = Mode.ACTING, action = e.action, windowFrom = e.action.startedAt,
-            lastClosed = lastClosed,
+            lastClosed = lastClosed, locked = locked,
         )
         is Event.ActionRevised -> if (action?.id != e.actionId) this else copy(action = action.copy(text = e.text, endAt = e.endAt))
-        is Event.ActionEnded -> if (action?.id != e.actionId) this else Situation(lastClosed = lastClosed)
+        is Event.ActionEnded -> if (action?.id != e.actionId) this else Situation(lastClosed = lastClosed, locked = locked)
         is Event.CheckInOpened -> copy(pending = e.checkIn)
         is Event.CheckInNote -> if (pending?.id != e.checkInId) this else copy(pending = pending.copy(notes = pending.notes + e.text))
         is Event.CheckInAnswered -> if (pending?.id != e.checkInId) this
@@ -60,6 +65,8 @@ data class Situation(
                 lastDriftAftermath = if (drift) null else lastDriftAftermath,
             )
         }
+        is Event.Locked -> copy(locked = locked + e.packages)
+        is Event.Unlocked -> copy(locked = locked - e.packages)
         is Event.InterventionResult -> this
         is Event.InterventionAftermath -> copy(
             probes = probes.filter { it.id != e.interventionId },

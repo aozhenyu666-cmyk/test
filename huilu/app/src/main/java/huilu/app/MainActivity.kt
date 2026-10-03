@@ -70,7 +70,7 @@ class MainActivity : Activity() {
     private fun render() {
         val s = app.engine.situation
         val usage = app.platform.hasUsageAccess()
-        val k = listOf(s.mode, s.action?.id, s.action?.text, s.action?.endAt, s.pending?.id, s.lastClosed?.id, s.nextCheckAt, s.muted, usage).joinToString()
+        val k = listOf(s.mode, s.action?.id, s.action?.text, s.action?.endAt, s.pending?.id, s.lastClosed?.id, s.nextCheckAt, s.muted, usage, s.locked, s.lockWanted).joinToString()
         if (k != key) {
             key = k
             if (s.action == null) idle(usage) else acting(usage)
@@ -84,6 +84,7 @@ class MainActivity : Activity() {
         live = null
         page {
             if (!usage) permissionBanner()
+            stuckBanner()
             app.engine.situation.lastClosed?.decision?.let { d ->
                 if (App.now() - (app.engine.situation.lastClosed?.closedAt ?: 0) < 30 * 60_000) text(d, 14f, C.MUTED)
             }
@@ -177,6 +178,7 @@ class MainActivity : Activity() {
         val a = s.action ?: return
         page {
             if (!usage) permissionBanner()
+            stuckBanner()
             card {
                 text("现在", 13f, C.MUTED, bold = true)
                 text(a.text, 22f, bold = true)
@@ -247,6 +249,17 @@ class MainActivity : Activity() {
         text("系统现在只能靠你自报", 15f, C.WARN, bold = true)
         text("没有「使用情况访问权限」，就看不到前台 App，也就无法发现偏离。授权后回到这里即可。", 14f)
         button("去授权", primary = true) { startActivity(Intent(SysSettings.ACTION_USAGE_ACCESS_SETTINGS)) }
+    }
+
+    /** 本轮已经结束但还有 App 没解除暂停：必须让人看见。 */
+    private fun LinearLayout.stuckBanner() {
+        val s = app.engine.situation
+        if (s.locked.isEmpty() || s.lockWanted) return
+        card(0xFFFFF3E6.toInt()) {
+            text("仍有 App 处于暂停：" + s.locked.joinToString("、") { app.platform.label(it) }, 15f, C.WARN, bold = true)
+            text("系统会每 30 秒尝试解除一次，需要 Shizuku 正在运行。" + (app.device.unavailableReason()?.let { "现在：$it。" } ?: ""), 14f)
+            button("去设置页处理") { startActivity(Intent(this@MainActivity, SettingsActivity::class.java)) }
+        }
     }
 
     private fun LinearLayout.recent() {

@@ -60,6 +60,9 @@ class AppFlowTest {
         val base = 1_790_000_000_000L
         App.clock = { base + SystemClock.uptimeMillis() }
         app = RuntimeEnvironment.getApplication() as App
+        // 这组测试针对没有 Shizuku 的手机；不依赖其他测试留下的全局连接
+        app.device = FakeDevice().apply { reason = "没有安装 Shizuku" }
+        app.io = java.util.concurrent.Executor { it.run() }
         shadowOf(app.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager)
             .setMode(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), app.packageName, AppOpsManager.MODE_ALLOWED)
         install("com.example.course", "网课")

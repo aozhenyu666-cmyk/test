@@ -27,6 +27,10 @@ sealed class Event {
     /** 已经为这一段连续的娱乐前台开过检查，避免同一段偏离反复打扰。 */
     data class DriftSeen(override val at: Long, val pkg: String, val since: Long) : Event()
 
+    /** 平台确认这些 App 已被真正暂停 / 已真正解除暂停。只有平台确认后才记录。 */
+    data class Locked(override val at: Long, val packages: Set<String>) : Event()
+    data class Unlocked(override val at: Long, val packages: Set<String>) : Event()
+
     data class InterventionRequested(val intervention: Intervention) : Event() { override val at get() = intervention.at }
     data class InterventionResult(override val at: Long, val interventionId: String, val result: ActResult, val detail: String) : Event()
     data class InterventionAftermath(override val at: Long, val interventionId: String, val aftermath: Aftermath, val detail: String) : Event()
@@ -59,6 +63,8 @@ object Codec {
             is Event.Mute -> o.put("t", "mute").put("actionId", e.actionId)
             is Event.Block -> o.put("t", "block").put("actionId", e.actionId)
             is Event.DriftSeen -> o.put("t", "drift_seen").put("pkg", e.pkg).put("since", e.since)
+            is Event.Locked -> o.put("t", "locked").put("packages", JSONArray(e.packages.sorted()))
+            is Event.Unlocked -> o.put("t", "unlocked").put("packages", JSONArray(e.packages.sorted()))
             is Event.InterventionRequested -> o.put("t", "intervention_requested").put("intervention", intervention(e.intervention))
             is Event.InterventionResult -> o.put("t", "intervention_result").put("interventionId", e.interventionId).put("result", e.result.name).put("detail", e.detail)
             is Event.InterventionAftermath -> o.put("t", "intervention_aftermath").put("interventionId", e.interventionId).put("aftermath", e.aftermath.name).put("detail", e.detail)
@@ -84,6 +90,8 @@ object Codec {
             "mute" -> Event.Mute(at, o.getString("actionId"))
             "block" -> Event.Block(at, o.getString("actionId"))
             "drift_seen" -> Event.DriftSeen(at, o.getString("pkg"), o.getLong("since"))
+            "locked" -> Event.Locked(at, strings(o.optJSONArray("packages")).toSet())
+            "unlocked" -> Event.Unlocked(at, strings(o.optJSONArray("packages")).toSet())
             "intervention_requested" -> Event.InterventionRequested(intervention(o.getJSONObject("intervention")))
             "intervention_result" -> Event.InterventionResult(at, o.getString("interventionId"), ActResult.valueOf(o.getString("result")), o.optString("detail"))
             "intervention_aftermath" -> Event.InterventionAftermath(at, o.getString("interventionId"), Aftermath.valueOf(o.getString("aftermath")), o.optString("detail"))

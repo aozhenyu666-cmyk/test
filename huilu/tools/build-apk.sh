@@ -16,8 +16,8 @@ OUT=$ROOT/build/fallback
 DEPS=$OUT/deps
 REPO=${MAVEN_REPO:-https://repo1.maven.org/maven2}
 KOTLIN=2.0.21
-VERSION_NAME=0.1.0
-VERSION_CODE=1
+VERSION_NAME=0.2.0
+VERSION_CODE=2
 MIN_SDK=26
 TARGET_SDK=34
 APK=$ROOT/dist/huilu-$VERSION_NAME.apk
@@ -45,6 +45,11 @@ COMPILER_CP=$COMPILER_CP:$(fetch org/jetbrains/intellij/deps/trove4j/1.0.2020033
 COMPILER_CP=$COMPILER_CP:$(fetch org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.6.4/kotlinx-coroutines-core-jvm-1.6.4.jar)
 COMPILER_CP=$COMPILER_CP:$(fetch org/jetbrains/annotations/13.0/annotations-13.0.jar)
 
+# Shizuku 的 AIDL 接口（AAR 里只取 classes.jar；不含 invokedynamic）
+SHIZUKU_AAR=$(fetch dev/rikka/shizuku/aidl/13.1.5/aidl-13.1.5.aar)
+SHIZUKU_JAR=$DEPS/shizuku-aidl-13.1.5.jar
+[ -s "$SHIZUKU_JAR" ] || unzip -p "$SHIZUKU_AAR" classes.jar > "$SHIZUKU_JAR"
+
 echo "== core（纯 Kotlin 闭环逻辑）+ 单元测试"
 (cd "$ROOT" && "$GRADLE" -q --console=plain :core:test :core:jar)
 CORE_JAR=$ROOT/core/build/libs/core.jar
@@ -67,16 +72,16 @@ echo "== Kotlin 编译"
 find "$ROOT/app/src/main/java" -name '*.kt' > "$OUT/sources.txt"
 java -Xmx2g -Dfile.encoding=UTF-8 -cp "$COMPILER_CP" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   -no-stdlib -no-reflect -jvm-target 1.8 -Xlambdas=class -Xsam-conversions=class \
-  -classpath "$ANDROID_JAR:$CORE_JAR:$STDLIB:$OUT/classes" \
+  -classpath "$ANDROID_JAR:$CORE_JAR:$STDLIB:$SHIZUKU_JAR:$OUT/classes" \
   -d "$OUT/classes" @"$OUT/sources.txt" 2>&1 | grep -v 'JAVA_TOOL' || true
 [ -f "$OUT/classes/huilu/app/App.class" ] || { echo "Kotlin 编译失败"; exit 1; }
 
 echo "== dex"
 # dx 不认识 Java 9 的 module-info，去掉
 cp "$STDLIB" "$OUT/stdlib.jar" && zip -q -d "$OUT/stdlib.jar" 'META-INF/versions/*' >/dev/null 2>&1 || true
-python3 "$ROOT/tools/check-indy.py" "$OUT/stdlib.jar" "$OUT/classes" "$CORE_JAR"
+python3 "$ROOT/tools/check-indy.py" "$OUT/stdlib.jar" "$OUT/classes" "$CORE_JAR" "$SHIZUKU_JAR"
 DX=$(command -v dalvik-exchange || command -v dx)
-"$DX" --dex --min-sdk-version=$MIN_SDK --output="$OUT/dex/classes.dex" "$OUT/classes" "$CORE_JAR" "$OUT/stdlib.jar"
+"$DX" --dex --min-sdk-version=$MIN_SDK --output="$OUT/dex/classes.dex" "$OUT/classes" "$CORE_JAR" "$SHIZUKU_JAR" "$OUT/stdlib.jar"
 
 echo "== 打包、对齐、签名"
 cp "$OUT/base.apk" "$OUT/unsigned.apk"

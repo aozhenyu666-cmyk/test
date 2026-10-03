@@ -15,6 +15,8 @@
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Shizuku 客户端标识（与 Shizuku-API provider 包合并进来的一致） -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
@@ -69,6 +71,16 @@
             </intent-filter>
             <meta-data android:name="android.accessibilityservice" android:resource="@xml/guard" />
         </service>
+
+        <!-- Shizuku 服务端通过它把 binder 送进来；只有 shell / root 级别的调用方能访问 -->
+        <provider
+            android:name="huilu.app.ShizukuBinderProvider"
+            android:authorities="huilu.app.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+        <meta-data android:name="moe.shizuku.client.V3_SUPPORT" android:value="true" />
 
         <receiver android:name="huilu.app.AlarmReceiver" android:exported="false" />
         <receiver android:name="huilu.app.AnswerReceiver" android:exported="false" />

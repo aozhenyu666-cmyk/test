@@ -39,13 +39,14 @@ class Notifier(private val ctx: Context) {
         val elapsed = ((App.now() - a.startedAt) / 60_000).toInt()
         val pending = s.pending
         val next = s.nextCheckAt
-        val line = when {
+        val base = when {
             pending != null -> "等待回答：${pending.question}"
             s.mode == Mode.RESTING -> "休息中，${s.restUntil?.let(Engine::hm)} 回来"
             s.muted -> "本轮不主动检查，${Engine.hm(a.endAt)} 确认结果"
             next != null -> "下次检查 ${Engine.hm(next)}" + (if (a.why.isNotBlank()) " · 为什么：${a.why}" else "")
             else -> "${Engine.hm(a.endAt)} 确认结果" + (if (a.why.isNotBlank()) " · 为什么：${a.why}" else "")
         }
+        val line = if (s.locked.isEmpty()) base else "$base · 已暂停 ${s.locked.size} 个娱乐 App"
         b.setContentTitle("现在：${a.text}（$elapsed/${((a.endAt - a.startedAt) / 60_000)} 分钟）")
             .setContentText(line)
             .setStyle(Notification.BigTextStyle().bigText(line))

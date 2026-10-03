@@ -33,7 +33,8 @@ enum class Level(val rank: Int, val label: String) {
     INTERRUPT(2, "弹出检查页"),
     HOME(3, "送回桌面"),
     BLOCK(4, "本轮屏蔽娱乐 App"),
-    DEVICE(5, "设备级限制"),
+    /** 通过 Shizuku 以 shell 身份暂停（pm suspend）娱乐 App，直到本轮结束。 */
+    DEVICE(5, "暂停娱乐 App"),
 }
 
 enum class SensorState { OK, NO_PERMISSION, UNAVAILABLE }
@@ -172,7 +173,7 @@ data class Settings(
     /** 娱乐 App 连续在前台多久算偏离。 */
     val driftThresholdSec: Int = 120,
     /** 允许的最高干预强度；非严格轮次最高只到 INTERRUPT。 */
-    val maxLevel: Level = Level.BLOCK,
+    val maxLevel: Level = Level.DEVICE,
     /** 第一次检查在计划时长的多少比例处。 */
     val firstCheckRatio: Double = 0.5,
     val renotifyMin: Int = 3,

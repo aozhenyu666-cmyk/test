@@ -38,6 +38,15 @@ class RecordTest {
     }
 
     @Test
+    fun lockEventsRoundTrip() {
+        for (e in listOf(Event.Locked(5, setOf("b", "a")), Event.Unlocked(6, setOf("a")))) {
+            assertEquals(e, Codec.decode(Codec.encode(e)))
+        }
+        val s = Situation.replay(listOf(Event.Locked(5, setOf("a", "b")), Event.Unlocked(6, setOf("a"))))
+        assertEquals(setOf("b"), s.locked)
+    }
+
+    @Test
     fun corruptOrUnknownLinesAreSkipped() {
         assertNull(Codec.decode("{\"t\":\"from_the_future\",\"at\":1}"))
         assertNull(Codec.decode("{\"t\":\"action_sta"))

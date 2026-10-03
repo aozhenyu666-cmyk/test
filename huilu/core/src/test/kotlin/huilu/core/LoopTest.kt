@@ -155,7 +155,8 @@ class LoopTest {
             }
             return levels to reasons
         }
-        assertEquals(listOf(Level.NOTIFY, Level.INTERRUPT, Level.HOME, Level.HOME), run(true, Level.values().toSet()).first)
+        assertEquals(listOf(Level.NOTIFY, Level.INTERRUPT, Level.HOME, Level.DEVICE), run(true, Level.values().toSet()).first)
+        assertEquals(listOf(Level.NOTIFY, Level.INTERRUPT, Level.HOME, Level.HOME), run(true, Level.values().toSet() - Level.DEVICE).first)
         assertEquals(listOf(Level.NOTIFY, Level.INTERRUPT, Level.INTERRUPT, Level.INTERRUPT), run(false, Level.values().toSet()).first)
         val (lv, why) = run(true, setOf(Level.NOTIFY))
         assertEquals(listOf(Level.NOTIFY, Level.NOTIFY, Level.NOTIFY, Level.NOTIFY), lv)

@@ -12,8 +12,8 @@ android {
         minSdk = 26
         // 34：避免 Android 15 强制的全面屏绘制改变这套纯代码界面的布局
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
 
     signingConfigs {
@@ -52,4 +52,6 @@ kotlin {
 
 dependencies {
     implementation(project(":core"))
+    // 只用 Shizuku 的 AIDL 接口，客户端逻辑自己实现（见 Shizuku.kt）
+    implementation("dev.rikka.shizuku:aidl:13.1.5")
 }

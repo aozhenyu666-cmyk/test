@@ -23,7 +23,13 @@ class SettingsActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        app.onDeviceChange = { render() }
         render()
+    }
+
+    override fun onPause() {
+        app.onDeviceChange = null
+        super.onPause()
     }
 
     private fun render() {
@@ -54,14 +60,36 @@ class SettingsActivity : Activity() {
                 "偏离时可以直接把检查页放到你面前。", "只能发通知；需要「显示在其他应用上层」权限。") {
                 startActivity(Intent(SysSettings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
             }
-            cap("送回桌面 / 屏蔽（${Level.HOME.label}）", GuardService.instance != null,
-                "在你允许强干预的轮次里，可以把你从娱乐 App 送回桌面。",
-                "需要在无障碍里打开「回路」。Android 13+ 侧载安装时，先到 应用信息 → 右上角菜单 → 允许受限制的设置。") {
+            val shizuku = ShizukuClient.state(this@SettingsActivity)
+            val device = app.device.unavailableReason()
+            cap("送回桌面 / 屏蔽（${Level.HOME.label}）", GuardService.instance != null || device == null,
+                if (GuardService.instance != null) "通过无障碍执行。" else "通过 Shizuku 模拟 HOME 键执行。",
+                "需要无障碍或 Shizuku 其中之一。无障碍：在系统无障碍设置里打开「回路」；Android 13+ 侧载安装时，先到 应用信息 → 右上角菜单 → 允许受限制的设置。") {
                 startActivity(Intent(SysSettings.ACTION_ACCESSIBILITY_SETTINGS))
             }
             card {
-                text("设备级限制（Shizuku / ADB）", 15f, bold = true)
-                text("未实现：暂停 / 停用 App 需要 shell 权限。第一阶段先验证闭环本身；送回桌面已经覆盖大部分场景。见 docs/DESIGN.md。", 13f, C.MUTED)
+                val ok = device == null
+                text((if (ok) "✓ " else "✗ ") + "暂停娱乐 App（Shizuku）", 15f, if (ok) C.ACCENT else C.WARN, bold = true)
+                text(if (ok) "在允许强干预的轮次里，第 4 次偏离后用 pm suspend 暂停娱乐 App，本轮结束、休息或静音时自动解除。" +
+                    "以 ${if (ShizukuClient.uid == 0) "root" else "shell"} 身份运行。"
+                    else "$device。没有它时，最强一级退回为「本轮屏蔽娱乐 App」（反复送回桌面）。", 13f, C.MUTED)
+                when (shizuku) {
+                    ShizukuClient.State.NOT_INSTALLED -> button("下载 Shizuku") {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://shizuku.rikka.app/download/")))
+                    }
+                    ShizukuClient.State.NOT_RUNNING -> button("打开 Shizuku 启动服务") {
+                        packageManager.getLaunchIntentForPackage(ShizukuClient.MANAGER)?.let { startActivity(it) }
+                    }
+                    ShizukuClient.State.NO_PERMISSION -> button("授权回路", primary = true) {
+                        if (!ShizukuClient.requestPermission()) Toast.makeText(this@SettingsActivity, "请求失败，请先确认 Shizuku 正在运行", Toast.LENGTH_LONG).show()
+                    }
+                    ShizukuClient.State.READY -> {}
+                }
+                val locked = app.engine.situation.locked
+                if (locked.isNotEmpty()) text("当前暂停中：" + locked.joinToString("、") { app.platform.label(it) }, 14f, C.WARN, top = 8)
+                if (ok) button("立即解除所有暂停") {
+                    app.releaseAll { Toast.makeText(this@SettingsActivity, it, Toast.LENGTH_LONG).show(); render() }
+                }
             }
 
             title("娱乐 App（偏离的判断依据）")
@@ -73,9 +101,10 @@ class SettingsActivity : Activity() {
             val re = edit("多少分钟没回应就再问一次", p.renotifyMin.toString(), number = true)
             val give = edit("多少分钟没回应就按未回答处理", p.giveUpMin.toString(), number = true)
             text("依次为：偏离阈值（秒）、再次提醒（分钟）、放弃等待（分钟）", 12f, C.MUTED)
-            val levels = listOf(Level.NOTIFY, Level.INTERRUPT, Level.HOME, Level.BLOCK)
             text("最高干预强度：${p.maxLevel.label}", 14f, top = 8)
-            row { levels.forEach { l -> button(l.label, primary = l == p.maxLevel, weight = 1f) { p.maxLevel = l; render() } } }
+            Level.values().toList().chunked(3).forEach { chunk ->
+                row { chunk.forEach { l -> button(l.label, primary = l == p.maxLevel, weight = 1f) { p.maxLevel = l; render() } } }
+            }
             text("没勾选「允许强干预」的轮次，最多只到「${Level.INTERRUPT.label}」。", 12f, C.MUTED)
             button("保存节奏", primary = true) {
                 drift.text.toString().toIntOrNull()?.let { p.driftSec = it }

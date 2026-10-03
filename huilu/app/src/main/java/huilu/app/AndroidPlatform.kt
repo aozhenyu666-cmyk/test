@@ -19,7 +19,7 @@ import huilu.core.SensorState
  * 观察手机：前台 App 来自 UsageStatsManager 的事件流。
  * 它在所有 Android 8+ 设备上都可用、不需要 root，只需要用户手动授予"使用情况访问权限"。
  */
-class AndroidPlatform(private val ctx: Context) : Platform {
+class AndroidPlatform(private val ctx: Context, private val deviceReady: () -> Boolean) : Platform {
     private val usm = ctx.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
     private val pm = ctx.packageManager
     private val labels = HashMap<String, String>()
@@ -105,7 +105,9 @@ class AndroidPlatform(private val ctx: Context) : Platform {
     override fun available(): Set<Level> {
         val s = mutableSetOf(Level.NOTIFY)
         if (SysSettings.canDrawOverlays(ctx)) s += Level.INTERRUPT
-        if (GuardService.instance != null) { s += Level.HOME; s += Level.BLOCK }
+        val device = deviceReady()
+        if (GuardService.instance != null || device) { s += Level.HOME; s += Level.BLOCK }
+        if (device) s += Level.DEVICE
         return s
     }
 

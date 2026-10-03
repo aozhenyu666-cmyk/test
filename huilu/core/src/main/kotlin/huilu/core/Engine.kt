@@ -13,6 +13,8 @@ sealed class Effect {
     data class Intervene(val intervention: Intervention, val checkIn: CheckIn?) : Effect()
     /** 这次检查已经结束，撤掉它的通知 / 页面。 */
     data class Dismiss(val checkInId: String) : Effect()
+    /** 不再需要暂停：解除这些 App。平台确认后调用 [Engine.unlocked]，没确认就会被反复要求。 */
+    data class Release(val packages: Set<String>) : Effect()
 }
 
 /**
@@ -57,7 +59,7 @@ object Policy {
                     0, 1 -> Level.NOTIFY to "本轮第 1 次偏离，先轻提醒"
                     2 -> Level.INTERRUPT to "本轮第 2 次偏离，要求重新判断"
                     3 -> Level.HOME to "本轮第 3 次偏离，离开娱乐 App"
-                    else -> Level.BLOCK to "本轮第 ${sit.driftCount} 次偏离，本轮屏蔽娱乐 App"
+                    else -> Level.DEVICE to "本轮第 ${sit.driftCount} 次偏离，暂停娱乐 App 到本轮结束"
                 }
             }
             Trigger.SCHEDULED -> if (dev.kind == DevKind.DRIFT) Level.INTERRUPT to "定时检查发现偏离" else Level.NOTIFY to "定时检查"
@@ -94,10 +96,23 @@ class Engine(
         situation = situation.apply(e)
     }
 
+    private var lastReleaseAt = 0L
+
     private inline fun run(block: () -> Unit): List<Effect> {
         out.clear()
         block()
+        releaseIfUnwanted()
         return out.toList()
+    }
+
+    /** 暂停不再需要时要求解除；平台没确认之前，每 30 秒再要求一次（包括进程重启之后）。 */
+    private fun releaseIfUnwanted() {
+        val s = situation
+        if (s.locked.isEmpty() || s.lockWanted) return
+        val now = clock.now()
+        if (now - lastReleaseAt < 30_000 && lastReleaseAt != 0L) return
+        lastReleaseAt = now
+        out += Effect.Release(s.locked)
     }
 
     // ---------------------------------------------------------------- 用户发起
@@ -205,6 +220,21 @@ class Engine(
         emit(Event.InterventionResult(clock.now(), id, result, detail))
     }
 
+    /** 平台确认这些 App 已被暂停。 */
+    @Synchronized
+    fun locked(packages: Set<String>): List<Effect> = run {
+        val p = packages - situation.locked
+        if (p.isNotEmpty()) emit(Event.Locked(clock.now(), p))
+    }
+
+    /** 平台确认这些 App 已解除暂停。 */
+    @Synchronized
+    fun unlocked(packages: Set<String>): List<Effect> = run {
+        val p = packages intersect situation.locked
+        if (p.isNotEmpty()) emit(Event.Unlocked(clock.now(), p))
+        lastReleaseAt = 0L
+    }
+
     // ---------------------------------------------------------------- 时间推进
 
     /** 由前台服务每隔十几秒、闹钟、无障碍事件调用。没有需要做的事时什么都不发生。 */
@@ -262,6 +292,7 @@ class Engine(
         val s = situation
         val st = settings()
         val c = mutableListOf<Long>()
+        if (s.locked.isNotEmpty() && !s.lockWanted) c += clock.now() + 30_000
         s.probes.forEach { p -> p.probeAt?.let(c::add) }
         val p = s.pending
         if (p != null) {
@@ -301,9 +332,10 @@ class Engine(
         val driftPkg = if (t == Trigger.DRIFT) fg.pkg else null
         val prompt = minOf(choice.level, Level.INTERRUPT, compareBy { it.rank })
         if (choice.level.rank >= Level.HOME.rank && driftPkg != null) {
-            if (choice.level == Level.BLOCK) emit(Event.Block(now, a.id))
+            if (choice.level.rank >= Level.BLOCK.rank) emit(Event.Block(now, a.id))
             intervene(prompt, c, null, choice.reason, now, prompt = true)
-            intervene(Level.HOME, null, driftPkg, choice.reason, now)
+            // 暂停本身会把人从娱乐 App 里请出去；没有暂停能力时才单独送回桌面
+            intervene(if (choice.level == Level.DEVICE) Level.DEVICE else Level.HOME, null, driftPkg, choice.reason, now)
         } else {
             intervene(prompt, c, driftPkg, choice.reason, now, prompt = true)
         }

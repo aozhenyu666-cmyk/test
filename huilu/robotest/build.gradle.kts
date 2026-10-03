@@ -9,6 +9,7 @@ val fallback = rootDir.resolve("build/fallback")
 dependencies {
     testImplementation(project(":core"))
     testImplementation(files(fallback.resolve("classes")))
+    testImplementation(files(fallback.resolve("deps/shizuku-aidl-13.1.5.jar")))
     // 和 Android Gradle 插件的单元测试一样，外层类路径上要有 android.jar（Robolectric 解析注解默认值时需要）
     testImplementation(files(fallback.resolve("deps/android-all-14-robolectric-10818077.jar")))
     testImplementation("org.robolectric:robolectric:4.14.1") {
@@ -40,5 +41,7 @@ tasks.test {
     systemProperty("robolectric.offline", "true")
     systemProperty("robolectric.dependency.dir", fallback.resolve("deps").absolutePath)
     maxHeapSize = "3g"
+    // Robolectric 在 JDK 17+ 上模拟 ParcelFileDescriptor 管道时需要
+    jvmArgs("--add-opens=java.base/java.io=ALL-UNNAMED")
     testLogging { events("failed"); exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
 }
