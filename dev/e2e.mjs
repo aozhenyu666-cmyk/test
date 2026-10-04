@@ -132,6 +132,26 @@ async function run({ native, theme }) {
   await say('记住我晚上效率低');
   check(((await data('goals')).memory || []).some((m) => m.text.includes('10 点')), 'remember() stores long-term memory');
 
+  // case file: commitments are stored with their kind
+  await say('从明天起我每天 9 点前开始刷行测');
+  check(((await data('goals')).memory || []).some((m) => m.kind === 'commit' && m.text.includes('9 点前')), 'remember(kind=commit) stores a commitment in the case file');
+
+  // long rant -> diagnosis pass (facts + case file) -> one sharp question instead of a point-by-point answer
+  await f.locator('#input').fill('最近感觉一直在瞎忙，每天都挺累的但好像什么都没干成，备考也没什么进展。是不是我的方法有问题？要不要换一个刷题软件，或者干脆再搭一套更好的管理系统，把每天的安排都自动化？');
+  await f.locator('#btnSend').click();
+  await f.locator('.choices button', { hasText: '刷手机' }).waitFor({ timeout: 15000 });
+  await waitIdle();
+  const diagTxt = await f.locator('.row.ai').last().locator('.diag').innerText();
+  check(/先追问/.test(diagTxt) && /真正的问题：离国考笔试不到两个月/.test(diagTxt), 'diagnosis card shows the move and the real question (fact sheet reached the diagnosis)');
+  await f.locator('.row.ai').last().locator('.diag summary').click();
+  check(/对不上[\s\S]*每天 9 点前开始刷行测/.test(await f.locator('.row.ai').last().locator('.diag').innerText()), 'diagnosis cites the stored commitment as evidence');
+  check(/先别换工具/.test(await f.locator('.row.ai').last().locator('.md').innerText()) && /昨天你在什么时候/.test(await f.locator('.row.ai').last().innerText()), 'reply follows the diagnosis: opening line + the one question');
+  await shot('3b-diagnosis');
+
+  // short commands skip the diagnosis
+  await say('只回复 OK');
+  check((await f.locator('.row.ai').last().locator('.diag').count()) === 0, 'short messages are answered without a diagnosis');
+
   // review -> report written into SP
   await say('开始今天的晚间复盘');
   s = await store();
@@ -206,6 +226,7 @@ async function run({ native, theme }) {
   await page.reload();
   await f.locator('.row.me').first().waitFor({ timeout: 10000 });
   check((await f.locator('.row.me').count()) >= 8, 'conversation restored after reload');
+  check((await f.locator('.diag').count()) === 1, 'diagnosis card restored after reload');
 
   await browser.close();
 }

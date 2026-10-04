@@ -73,6 +73,13 @@
   .steps li { margin: 3px 0; display: flex; gap: 6px; }
   .steps li.fail { color: var(--bad); }
   .steps li small { color: var(--faint); word-break: break-all; }
+  .diag { margin: 0 0 8px; font-size: 12.5px; border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; }
+  .diag summary { cursor: pointer; list-style: none; display: flex; gap: 8px; align-items: baseline; }
+  .diag summary::-webkit-details-marker { display: none; }
+  .diag summary i { font-style: normal; flex: none; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--accent); color: #fff; }
+  .diag summary span { font-weight: 600; }
+  .diag div { margin: 6px 0 0; color: var(--dim); }
+  .diag div b { display: inline-block; min-width: 3.2em; margin-right: 6px; color: var(--faint); font-weight: 500; }
   .choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   .choices button { border: 1px solid var(--accent); color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 6px 14px; font-size: 14px; }
   .choices button:disabled { opacity: .45; }
@@ -211,7 +218,7 @@
   'use strict';
 
   const API = window.PluginAPI;
-  const VERSION = '0.3.0';
+  const VERSION = '0.4.0';
   const LS_KEY = 'sp-ai-assistant:v1';
   const LS = 'sp-ai-assistant:';
   const MAX_ROUNDS = 10;
@@ -243,8 +250,12 @@
 
   const DEFAULT_SETTINGS = {
     morningTime: '08:30', eveningTime: '21:30',
-    awayCheck: null, awayMinutes: 10, ritualTask: null, openPrompt: true, timeline: null,
+    awayCheck: null, awayMinutes: 10, ritualTask: null, openPrompt: true, timeline: null, diagnose: true,
   };
+
+  // 案卷条目的种类；没有 kind 的老条目当作 pref
+  const MEMORY_KINDS = { pref: '偏好', commit: '承诺', pattern: '反复' };
+  const memoryLine = (m) => '[' + MEMORY_KINDS[m.kind || 'pref'] + ' ' + String(m.at || '').slice(5) + '] ' + m.text;
 
   const GOAL_COLORS = ['#7383ff', '#34c38f', '#f5b84a', '#ef6461', '#22b8cf', '#c084fc', '#f97316', '#84cc16'];
 
@@ -1087,12 +1098,12 @@
     },
     {
       name: 'remember', label: (a) => (a.forget ? '忘记：' : '记住：') + (a.fact || a.forget),
-      description: '长期记住关于用户的事实/偏好/约束（如“晚上 10 点后效率低”），以后每次对话都会带上。forget 填关键字可删除。',
-      parameters: P({ fact: S(), forget: S() }),
+      description: '把关于用户的事记进案卷，以后每次对话都会带上。kind：pref=偏好/约束（如“晚上 10 点后效率低”，默认）；commit=用户说要做的事（写清做什么、哪天前）；pattern=反复出现的说法或抱怨（第二次出现时记）。forget 填关键字可删除。',
+      parameters: P({ fact: S(), kind: { type: 'string', enum: Object.keys(MEMORY_KINDS) }, forget: S() }),
       run: async (a) => {
         const doc = await getGoalsDoc();
         if (a.forget) doc.memory = doc.memory.filter((m) => !m.text.includes(a.forget));
-        if (a.fact) { doc.memory.push({ text: a.fact, at: ymd() }); doc.memory = doc.memory.slice(-30); }
+        if (a.fact) { doc.memory.push(compact({ text: a.fact, at: ymd(), kind: MEMORY_KINDS[a.kind] && a.kind !== 'pref' ? a.kind : undefined })); doc.memory = doc.memory.slice(-40); }
         await saveGoalsDoc(doc);
         return { ok: true, count: doc.memory.length };
       },
@@ -1206,6 +1217,7 @@
     '6. 需要任务 id 时先查，绝不编造；删除只在用户明确要求时做。',
     '7. 发现用户的稳定偏好或约束（作息、精力规律、不想做的事）就用 remember 记下来。',
     '8. 回复用中文，口语、简短、有判断：先给结论，再给理由；不要复述工具返回的原始数据；适当用列表，少用大标题。',
+    '9. 案卷：用户说“我要/打算/从明天起…”时，用 remember(kind=commit) 记下做什么、哪天前；同一种抱怨或说法第二次出现时，用 remember(kind=pattern) 记下。之后用户的说法和案卷或数据对不上，要直接指出来。',
   ].join('\n');
 
   async function contextCapsule() {
@@ -1223,10 +1235,117 @@
       });
       if (gl.length) lines.push('长期目标：', ...gl);
       lines.push('今日计划：' + (day.plan ? (day.plan.theme || '') + '（' + (day.plan.items || []).length + ' 项）' : '还没定') + '；复盘：' + (day.review ? '已完成' : '未做'));
-      if (doc.memory.length) lines.push('关于用户（长期记忆）：', ...doc.memory.slice(-15).map((m) => '- ' + m.text));
+      if (doc.memory.length) lines.push('案卷（关于用户）：', ...doc.memory.slice(-15).map((m) => '- ' + memoryLine(m)));
     } catch (e) { /* 上下文只是锦上添花 */ }
     if (state.mcp) lines.push('以 mcp_ 开头的是远程 MCP 服务器的工具。');
     return lines.join('\n');
+  }
+
+  // ================================================================== 诊断：先判断局面，再决定怎么回
+  //
+  // 用户一口气说一大段（倾诉、抱怨、半成品的想法）时，模型最容易逐条回应、被用户的叙事带着走。
+  // 所以长消息先单独过一遍诊断：把用户的说法和 SP 里的实际记录、案卷里的旧话对照，
+  // 找出真正的问题，再决定这一轮是追问、指出问错了问题，还是直接回答。
+  // 只多一次不带工具的调用；短指令（“明天 3 点提醒我…”）不诊断，不增加等待。
+  const DIAG_MIN_CHARS = 60;
+  const DIAG_MOVES = { ask: '先追问', redirect: '换个问题', answer: '直接回答' };
+
+  const DIAG_PROMPT = [
+    '你是参谋的「诊断」环节。你不直接回复用户，只输出一个 JSON，参谋会据此决定怎么回。',
+    '用户常常一口气说很多：抱怨、猜测、半成品的想法。逐条回应会被用户的叙事带着走。你的任务是跳出这个叙事，像一个见过很多类似案例的老练顾问那样判断局面：',
+    '1. complaint：用户自己认为的问题，一句话。',
+    '2. real：你判断真正值得解决的问题，一句话。可以和 complaint 不同；用户问错了问题就直说。',
+    '3. conflicts：用户的说法和【事实】或【案卷】对不上的地方，每条写成“说法 ↔ 证据”。证据只能来自下面给的材料，不许编；没有就给空数组。',
+    '4. assumptions：用户默认成立、但没检验过的前提，最多 3 条。',
+    '5. gap：最影响判断、但现在还不知道的一件事。',
+    '6. move 三选一：ask=信息不够，先问一个问题；redirect=用户问的不是关键，先把真问题指出来；answer=信息够了，直接回答真问题。缺关键信息时宁可 ask，也不要硬给方案。',
+    '7. question：move=ask 时要问的那一个问题。它的答案必须能区分两种不同的判断，不要问“能多说一点吗”这种泛泛的问题。',
+    '8. opening：参谋回复的第一句话。',
+    '只输出 JSON，不要别的文字：{"complaint":"","real":"","conflicts":[],"assumptions":[],"gap":"","move":"ask","question":"","opening":""}',
+  ].join('\n');
+
+  // 给诊断用的“事实”：最近 7 天实际做了什么，以及案卷。用户的说法要拿它来对照
+  async function factSheet() {
+    const today = ymd();
+    const days = Array.from({ length: 7 }, (_, i) => addDays(today, i - 6));
+    const [doc, journals, logs, tgs, tasks, archived] = await Promise.all([
+      getGoalsDoc(), Promise.all(days.map(getDay)), Promise.all(days.map(getLog)), Promise.all(days.map((d) => timeByGoal([d], true))),
+      need('getTasks')(), API.getArchivedTasks ? API.getArchivedTasks().catch(() => []) : [],
+    ]);
+    const byId = {}; (tasks || []).concat(archived || []).forEach((t) => { byId[t.id] = t; });
+    const goalName = (id) => { const g = doc.goals.find((x) => x.id === id); return g ? g.title.replace(/（.*）/, '') : '未归类'; };
+    const lines = ['【事实：最近 7 天 SP 里的记录】'];
+    days.forEach((d, i) => {
+      const j = journals[i], tg = tgs[i];
+      const parts = [d.slice(5) + weekday(d)];
+      const spent = Object.keys(tg.byGoal).map((k) => goalName(k) + minutes(tg.byGoal[k]) + '分');
+      parts.push('投入 ' + minutes(tg.total) + ' 分' + (spent.length ? '（' + spent.join('、') + '）' : ''));
+      if (j.plan) {
+        const items = j.plan.items || [];
+        parts.push('计划 ' + items.length + ' 项、完成 ' + items.filter((it) => byId[it.taskId] && byId[it.taskId].isDone).length + ' 项');
+      } else parts.push('没定计划');
+      const rest = logs[i].away.filter((a) => a.verdict === 'break' || a.verdict === 'other').reduce((n, a) => n + (a.min || 0), 0);
+      if (rest) parts.push('计时中离开去休息/干别的 ' + rest + ' 分');
+      if (j.review && j.review.problems) parts.push('复盘说卡在：' + String(j.review.problems).slice(0, 60));
+      lines.push('- ' + parts.join('；'));
+    });
+    const dl = [];
+    doc.goals.forEach((g) => {
+      if (g.status === 'done') return;
+      const next = (g.keyDates || []).find((k) => daysUntil(k.date) >= 0);
+      if (next) dl.push(g.title + ' ' + next.label + ' 剩 ' + daysUntil(next.date) + ' 天');
+      else if (g.targetDate && daysUntil(g.targetDate) >= 0) dl.push(g.title + ' 剩 ' + daysUntil(g.targetDate) + ' 天');
+    });
+    if (dl.length) lines.push('期限：' + dl.join('；'));
+    lines.push('【案卷：之前记下的偏好、承诺和反复出现的说法】');
+    lines.push(...(doc.memory.length ? doc.memory.map((m) => '- ' + memoryLine(m)) : ['（还没有）']));
+    return lines.join('\n');
+  }
+
+  function parseDiag(text) {
+    const m = String(text || '').match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    let d; try { d = JSON.parse(m[0]); } catch (e) { return null; }
+    if (!d || typeof d !== 'object' || !d.real) return null;
+    const list = (v) => (Array.isArray(v) ? v : v ? [v] : []).map(String).filter(Boolean).slice(0, 4);
+    return compact({
+      complaint: String(d.complaint || ''), real: String(d.real), conflicts: list(d.conflicts), assumptions: list(d.assumptions),
+      gap: String(d.gap || ''), move: DIAG_MOVES[d.move] ? d.move : 'answer', question: String(d.question || ''), opening: String(d.opening || ''),
+    });
+  }
+
+  async function diagnose(text, signal) {
+    const prev = state.history.slice(0, -1);
+    const users = prev.filter((m) => m.role === 'user').slice(-3).map((m) => '- ' + String(m.content).slice(0, 200));
+    const lastAi = [...prev].reverse().find((m) => m.role === 'assistant' && m.content);
+    const ask = [];
+    if (users.length) ask.push('【用户前几轮说的话】', ...users);
+    if (lastAi) ask.push('【参谋上一轮说的】', String(lastAi.content).slice(0, 300));
+    ask.push('【用户这次说的话】', text);
+    const system = DIAG_PROMPT + '\n\n现在：' + ymd() + ' ' + weekday(ymd()) + ' ' + hm() + '\n' + (await factSheet());
+    const msg = await chatBuffered([{ role: 'system', content: system }, { role: 'user', content: ask.join('\n') }], [], signal);
+    return parseDiag(msg.content);
+  }
+
+  // 主回复看到的诊断结论和回复规则
+  function diagBrief(d) {
+    const out = ['', '【本轮诊断（用户只看到摘要，你据此回复）】', '用户说的问题：' + (d.complaint || '—'), '真正的问题：' + d.real];
+    if (d.conflicts) out.push('说法和记录的冲突：', ...d.conflicts.map((c) => '- ' + c));
+    if (d.assumptions) out.push('没检验过的前提：', ...d.assumptions.map((c) => '- ' + c));
+    if (d.gap) out.push('还缺的信息：' + d.gap);
+    out.push('这一轮的动作：' + d.move + (d.question ? '（要问：' + d.question + '）' : ''));
+    if (d.opening) out.push('建议第一句：' + d.opening);
+    out.push('回复规则：不要逐条回应用户说的每一点，围绕“真正的问题”回复。',
+      d.move === 'ask' ? '这一轮只问那一个问题（能给选项就用 ask_user），不给方案。' :
+        d.move === 'redirect' ? '第一句就指出真正的问题，以及为什么用户问的那个不是关键；然后给一个具体的下一步。' :
+          '直接回答真正的问题，结论先行。',
+      '有冲突就点出来并带上证据；没有就别硬找。');
+    return out.join('\n');
+  }
+
+  async function shouldDiagnose(text) {
+    if (text.length < DIAG_MIN_CHARS) return false;
+    try { return (await getSettings()).diagnose !== false; } catch (e) { return true; }
   }
 
   // ================================================================== conversation state
@@ -1376,6 +1495,17 @@
           },
         };
       },
+      diag(d) {
+        const box = document.createElement('details'); box.className = 'diag';
+        let inner = '';
+        if (d.complaint) inner += '<div><b>你说的</b>' + h(d.complaint) + '</div>';
+        (d.conflicts || []).forEach((c) => { inner += '<div><b>对不上</b>' + h(c) + '</div>'; });
+        (d.assumptions || []).forEach((c) => { inner += '<div><b>前提</b>' + h(c) + '</div>'; });
+        if (d.gap) inner += '<div><b>还缺</b>' + h(d.gap) + '</div>';
+        box.innerHTML = '<summary><i>' + h(DIAG_MOVES[d.move]) + '</i><span></span></summary>' + inner;
+        box.querySelector('summary span').textContent = '真正的问题：' + d.real;
+        stepsBox.appendChild(box); scrollDown();
+      },
       finishSteps() { if (steps) { const sp = steps.querySelector('.spin'); if (sp) sp.remove(); } },
       choices(question, options) {
         if (question && !text.includes(question)) api.appendText(question);
@@ -1477,7 +1607,7 @@
     if (!state.history.length) { renderHero(); return; }
     let ai = null, lastUser = '';
     state.history.forEach((m) => {
-      if (m.role === 'user') { if (ai) ai.actions(lastUser); ai = null; lastUser = m.content; addUserRow(m.content); }
+      if (m.role === 'user') { if (ai) ai.actions(lastUser); ai = null; lastUser = m.content; addUserRow(m.content); if (m.diag) { ai = addAiRow(); ai.diag(m.diag); } }
       else if (m.role === 'assistant') {
         if (!ai) ai = addAiRow();
         if (m.content) ai.appendText(m.content);
@@ -1537,7 +1667,16 @@
     setBusy(true); setStatus('warn', '思考中…');
     try {
       await ensureMcp();
-      await loop(ai, state.abort.signal);
+      let diag = null;
+      if (await shouldDiagnose(text)) {
+        setStatus('warn', '诊断中…');
+        const st = ai.step('对照你的记录，判断真正的问题');
+        try { diag = await diagnose(text, state.abort.signal); } catch (e) { if (e.aborted) throw e; }
+        st.done(!!diag, diag ? '' : '诊断没成功，直接回答');
+        if (diag) { state.history[state.history.length - 1].diag = diag; saveHistory(); ai.diag(diag); }
+        setStatus('warn', '思考中…');
+      }
+      await loop(ai, state.abort.signal, diag);
       setStatus('ok', modelLabel() + ' · ' + hm());
     } catch (e) {
       if (e.aborted) { if (!ai.text()) ai.setText('_已停止_'); setStatus('', '已停止'); }
@@ -1549,8 +1688,8 @@
     }
   }
 
-  async function loop(ai, signal) {
-    const system = PERSONA + '\n' + (await contextCapsule());
+  async function loop(ai, signal, diag) {
+    const system = PERSONA + '\n' + (await contextCapsule()) + (diag ? '\n' + diagBrief(diag) : '');
     for (let round = 0; round < MAX_ROUNDS; round++) {
       ai.typing(true);
       const before = ai.text();
@@ -1777,7 +1916,7 @@
         doc.goals.push(g); state.openGoal = g.id; await saveGoalsDoc(doc); renderGoals();
       };
       box.querySelector('[data-act="memory"]').onclick = () => {
-        const list = doc.memory.map((m, i) => (i + 1) + '. ' + m.text + '（' + m.at + '）').join('\n') || '还没有。聊天时参谋会把你的习惯和偏好记在这里。';
+        const list = doc.memory.map((m, i) => (i + 1) + '. ' + memoryLine(m)).join('\n') || '还没有。聊天时参谋会把你的习惯、偏好、说过要做的事记在这里。';
         window.alert(list);
       };
     } catch (e) {
@@ -1819,6 +1958,7 @@
         '<div class="switch"><div class="t">离开检查<small>计时中离开 SP 超过下面的分钟数，回来时问你是在工作还是休息</small></div>' + triSel('awayCheck', s.awayCheck) + '</div>' +
         '<div class="switch"><div class="t">离开多久才问（分钟）</div><input type="number" min="1" max="240" data-s="awayMinutes" value="' + h(s.awayMinutes) + '" style="width:76px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:5px 8px"></div>' +
         '<div class="switch"><div class="t">记录时间轴<small>记录每段计时的起止时间，用于“今日”页和日报</small></div>' + triSel('timeline', s.timeline) + '</div>' +
+        '<div class="switch"><div class="t">先诊断再回答<small>长消息（倾诉、抱怨、一大段想法）先对照你的记录找出真正的问题，再决定追问还是回答。每次多一次模型调用</small></div>' + sw('diagnose', s.diagnose) + '</div>' +
         '<div class="btn-row"><button class="btn primary" data-act="save-rhythm">保存节奏设置</button></div></div>' +
 
       '<div class="card"><h3>⚙️ 高级</h3>' +
@@ -1880,7 +2020,7 @@
         const k = el.dataset.s; let v = el.value;
         if (k === 'awayMinutes') v = Math.max(1, Math.min(240, Number(v) || 10));
         else if (k === 'awayCheck' || k === 'timeline' || k === 'ritualTask') v = v === 'auto' ? null : v === 'on';
-        else if (k === 'openPrompt') v = v === 'on';
+        else if (k === 'openPrompt' || k === 'diagnose') v = v === 'on';
         ns[k] = v;
       });
       await saveKey('settings', ns); toast('节奏设置已保存');

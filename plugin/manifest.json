@@ -2,7 +2,7 @@
   "name": "AI 参谋",
   "id": "sp-ai-assistant",
   "manifestVersion": 1,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "minSupVersion": "14.0.0",
   "description": "手机上的 AI 参谋：张嘴定计划、到点提醒、晚间复盘生成日报；长期目标与考试倒计时；计时中离开 App 回来会问你在工作还是休息。调用 OpenAI 兼容大模型，可选连接远程 MCP。",
   "author": "local",

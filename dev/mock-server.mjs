@@ -25,8 +25,29 @@ function fakeModel(body) {
   const lastUser = [...msgs].reverse().find((m) => m.role === 'user').content;
   const toolNames = (body.tools || []).map((t) => t.function.name);
   const call = (name, args, content = null) => ({ content, tool_calls: [toolCall(name, args)] });
+  const system = msgs[0].role === 'system' ? msgs[0].content : '';
+
+  // diagnosis pass: no tools, answers with JSON built only from the facts it was given
+  if (system.startsWith('你是参谋的「诊断」环节')) {
+    const facts = /【事实：最近 7 天/.test(system) && /期限：.*国考/.test(system);
+    const commit = (system.match(/\[承诺 [^\]]*\] ([^\n]+)/) || [])[1];
+    return { content: '好的，诊断如下：\n' + JSON.stringify({
+      complaint: '觉得方法不对，想换刷题软件或再做一套计划系统',
+      real: facts ? '离国考笔试不到两个月，问题是每天有没有固定的刷题时间，不是工具' : '不清楚',
+      conflicts: commit ? ['说“什么都没干成” ↔ 案卷里承诺过：' + commit + '，记录里看不到兑现'] : [],
+      assumptions: ['换工具能解决动力问题'],
+      gap: '每天实际能坐下来学习的时段',
+      move: 'ask',
+      question: '昨天你在什么时候、因为什么没按计划开始？',
+      opening: '先别换工具。',
+    }) };
+  }
 
   if (last.role === 'user') {
+    if (system.includes('这一轮的动作：ask')) {
+      const q = (system.match(/要问：([^）]+)）/) || [])[1];
+      return call('ask_user', { question: q, options: ['睡过头了', '刷手机', '不知道从哪开始'] }, (system.match(/建议第一句：(.+)/) || [])[1] || null);
+    }
     if (lastUser === '只回复 OK') return { content: 'OK' };
     if (lastUser.includes('定今天的计划')) return call('get_today', {});
     if (lastUser === '就按这个来') {
@@ -51,6 +72,7 @@ function fakeModel(body) {
       return remote ? call(remote, { text: 'ping' }) : { content: '没有远程工具' };
     }
     if (lastUser.includes('记住')) return call('remember', { fact: '晚上 10 点后效率低' });
+    if (lastUser.includes('从明天起')) return call('remember', { fact: '每天 9 点前开始刷行测', kind: 'commit' });
     return { content: '你好！我是你的**参谋**。\n\n- 可以帮你定计划\n- 也可以复盘\n\n| 目标 | 剩余 |\n|---|---|\n| 国考 | 58 天 |' };
   }
 
