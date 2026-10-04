@@ -1,0 +1,13 @@
+{
+  "name": "operit-zhukong",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "主控中枢：对话门、伴读启动、思考线收线（Operit ToolPkg）",
+  "scripts": {
+    "test": "node --test tests/*.test.cjs",
+    "pack": "python3 scripts/pack.py"
+  },
+  "engines": {"node": ">=18"},
+  "license": "MIT"
+}

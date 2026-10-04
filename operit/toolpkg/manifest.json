@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "toolpkg_id": "com.community.zhukong",
+  "version": "0.1.0",
+  "api_version": "1.0.0",
+  "main": "main.js",
+  "display_name": {"zh": "主控中枢", "en": "Control Hub"},
+  "description": {
+    "zh": "对话门（1 分钟对话换限时钥匙）、Gemini 伴读启动、思考线收线。限制只走已绑定的现有通道；思考线写入 cognitive_core。",
+    "en": "Conversation gate with timed keys, Gemini reading companion launcher, and thread capture."
+  },
+  "subpackages": [
+    {
+      "id": "zhukong",
+      "entry": "packages/zhukong.js",
+      "enabled_by_default": false,
+      "display_name": {"zh": "主控中枢", "en": "Control Hub"},
+      "description": {"zh": "对话门、伴读、思考线工具", "en": "Gate, reading and thread tools"}
+    }
+  ],
+  "resources": [
+    {"key": "readme", "path": "resources/README.md", "mime": "text/markdown"}
+  ],
+  "workflow_templates": [],
+  "workspace_templates": []
+}

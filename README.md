@@ -1,5 +1,7 @@
 # AI 参谋：Super Productivity 手机端插件
 
+> 本仓库还包含 **Operit 主控体系**（思考线 · 伴读 · 对话门）：见 [`operit/`](operit/README.md)。
+
 在 Super Productivity（SP）里放一个**会主动盯进度的 AI 参谋**，主要面向安卓 / iOS 客户端：
 
 - **张嘴就能定计划**：说一句“帮我定今天的计划”，参谋会先看今天的数据，再用可以一点就答的选项问你一两个问题，然后把计划写进 SP
