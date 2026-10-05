@@ -30,7 +30,12 @@ def main():
     with zipfile.ZipFile(skill, "w") as zf:
         add_tree(zf, ROOT / "skill", "")
     outputs.append(skill)
-    lines = [f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}" for p in outputs]
+    fh_manifest = json.loads((ROOT / "focus_hub" / "manifest.json").read_text(encoding="utf-8"))
+    fh = DIST / f"focus_hub-{fh_manifest['version']}.toolpkg"
+    with zipfile.ZipFile(fh, "w") as zf:
+        add_tree(zf, ROOT / "focus_hub")
+    outputs.append(fh)
+    lines = [f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}" for p in sorted(outputs)]
     (DIST / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines))
 

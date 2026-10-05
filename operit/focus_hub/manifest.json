@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "toolpkg_id": "local.focus_hub",
+  "version": "0.8.0",
+  "api_version": "1.0.0",
+  "main": "dist/main.js",
+  "display_name": {
+    "zh": "主控台",
+    "en": "Focus Hub",
+    "default": "Focus Hub"
+  },
+  "description": {
+    "zh": "主控台：「现在」页推进你正在做的事（当前问题→你的回答→AI 接着问），专注时段与对话门钥匙；她会在专注时段里念出当前问题把你接回来。保留今天/会话/督促/省流/系统各页。锁定执行未接通前，钥匙只记账。",
+    "en": "Focus Hub: Now page with the current task loop, focus windows and gate keys; companion check-ins, chats, warden, context diet and system pages.",
+    "default": "Focus Hub"
+  },
+  "enabled_by_default": false,
+  "subpackages": [
+    {
+      "id": "focus_hub_data",
+      "entry": "dist/packages/focus_hub_data.js",
+      "enabled_by_default": true,
+      "display_name": {
+        "zh": "主控台数据",
+        "en": "Focus Hub Data"
+      },
+      "description": {
+        "zh": "给 AI 用的只读工具：读取看板快照。",
+        "en": "Read-only tool for the AI: read the dashboard snapshot."
+      }
+    },
+    {
+      "id": "focus_hub_progress",
+      "entry": "dist/packages/focus_hub_progress.js",
+      "enabled_by_default": true,
+      "display_name": {
+        "zh": "用户进展",
+        "en": "User Progress"
+      },
+      "description": {
+        "zh": "用户进展的统一入口：对话里的 AI 记录用户亲口说的进展，判断和提醒前先读。只追加写 progress 目录。",
+        "en": "Single entry for user-stated progress. Append-only."
+      }
+    },
+    {
+      "id": "focus_hub_nav",
+      "entry": "dist/packages/focus_hub_nav.js",
+      "enabled_by_default": true,
+      "display_name": {
+        "zh": "主控台跳转",
+        "en": "Focus Hub Navigation"
+      },
+      "description": {
+        "zh": "工作流或 AI 用：打开主控台页面，或在主界面打开指定对话。只做页面跳转。",
+        "en": "Open the Focus Hub page or a specific chat. Navigation only."
+      }
+    },
+    {
+      "id": "focus_hub_slim",
+      "entry": "dist/packages/focus_hub_slim.js",
+      "enabled_by_default": false,
+      "display_name": {
+        "zh": "省流报告",
+        "en": "Context Diet Report"
+      },
+      "description": {
+        "zh": "只读：哪些对话、工具包、角色卡最耗上下文。",
+        "en": "Read-only context-cost report."
+      }
+    },
+    {
+      "id": "focus_hub_warden",
+      "entry": "dist/packages/focus_hub_warden.js",
+      "enabled_by_default": false,
+      "display_name": {
+        "zh": "督促演练",
+        "en": "Warden (dry-run)"
+      },
+      "description": {
+        "zh": "第一阶段只演练：按契约和时间判断本来会不会锁，写日志，不调用 app_suspender。",
+        "en": "Phase-1 dry run warden."
+      }
+    }
+  ],
+  "resources": [
+    {
+      "key": "workflow_checkin",
+      "path": "resources/workflow_checkin.json",
+      "mime": "application/json"
+    },
+    {
+      "key": "workflow_warden_tick",
+      "path": "resources/workflow_warden_tick.json",
+      "mime": "application/json"
+    },
+    {
+      "key": "workflow_focus_nudge",
+      "path": "resources/workflow_focus_nudge.json",
+      "mime": "application/json"
+    }
+  ],
+  "workflow_templates": [
+    {
+      "id": "companion_checkin",
+      "display_name": {
+        "zh": "陪伴打卡（每小时）",
+        "en": "Companion Check-in (hourly)"
+      },
+      "description": {
+        "zh": "每小时让她来找你：语音 + 弹出主控台 + 待回应。深夜和刚找过时自动跳过。",
+        "en": "Hourly companion check-in with voice and popup."
+      },
+      "resource_key": "workflow_checkin"
+    },
+    {
+      "id": "warden_tick",
+      "display_name": {
+        "zh": "督促演练打点（每15分钟）",
+        "en": "Warden dry-run tick (15 min)"
+      },
+      "description": {
+        "zh": "每15分钟推进一次督促判定，只演练不冻结。启用「督促演练」工具包后从模板新建。",
+        "en": "Advance the warden every 15 min in dry-run."
+      },
+      "resource_key": "workflow_warden_tick"
+    },
+    {
+      "id": "focus_nudge",
+      "display_name": {
+        "zh": "专注推进（每15分钟）",
+        "en": "Focus nudge (15 min)"
+      },
+      "description": {
+        "zh": "专注时段内按当前问题把你接回来；收回到期钥匙。",
+        "en": "Bring you back to the current question during focus windows."
+      },
+      "resource_key": "workflow_focus_nudge"
+    }
+  ],
+  "workspace_templates": []
+}

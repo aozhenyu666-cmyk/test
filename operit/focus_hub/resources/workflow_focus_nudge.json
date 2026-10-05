@@ -1,0 +1,76 @@
+{
+  "id": "focus-hub-focus-nudge-seed",
+  "name": "专注推进（每15分钟）",
+  "description": "专注时段（09:30–11:30、14:30–16:30、20:00–22:00）内：有一会儿没回答当前问题时，念出问题并弹出主控台；暂停超过 15 分钟问一次回来吗；同时收回到期的钥匙。时段外只收钥匙不打扰（由 focus_hub_nav:focus_nudge 判断）。",
+  "nodes": [
+    {
+      "__type": "com.ai.assistance.operit.data.model.TriggerNode",
+      "id": "t_15m",
+      "type": "trigger",
+      "name": "每15分钟",
+      "description": "",
+      "position": {
+        "x": 120.0,
+        "y": 80.0
+      },
+      "triggerType": "schedule",
+      "triggerConfig": {
+        "enabled": "true",
+        "repeat": "true",
+        "schedule_type": "interval",
+        "interval_ms": "900000"
+      }
+    },
+    {
+      "__type": "com.ai.assistance.operit.data.model.TriggerNode",
+      "id": "t_manual",
+      "type": "trigger",
+      "name": "手动",
+      "description": "",
+      "position": {
+        "x": 120.0,
+        "y": 260.0
+      },
+      "triggerType": "manual",
+      "triggerConfig": {
+        "enabled": "true"
+      }
+    },
+    {
+      "__type": "com.ai.assistance.operit.data.model.ExecuteNode",
+      "id": "e_nudge",
+      "type": "execute",
+      "name": "专注推进",
+      "description": "focus_hub_nav:focus_nudge",
+      "position": {
+        "x": 480.0,
+        "y": 170.0
+      },
+      "actionType": "focus_hub_nav:focus_nudge",
+      "actionConfig": {},
+      "jsCode": null
+    }
+  ],
+  "connections": [
+    {
+      "id": "k1",
+      "sourceNodeId": "t_15m",
+      "targetNodeId": "e_nudge",
+      "condition": null
+    },
+    {
+      "id": "k2",
+      "sourceNodeId": "t_manual",
+      "targetNodeId": "e_nudge",
+      "condition": null
+    }
+  ],
+  "createdAt": 0,
+  "updatedAt": 0,
+  "enabled": true,
+  "lastExecutionTime": null,
+  "lastExecutionStatus": null,
+  "totalExecutions": 0,
+  "successfulExecutions": 0,
+  "failedExecutions": 0
+}
