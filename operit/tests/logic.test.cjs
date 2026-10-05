@@ -79,7 +79,7 @@ test('daily limit stops new gates; resets next Beijing day', () => {
     L.gateSubmit(s, T0 + i * 30 * MIN, o.gate.id, ['回一个帖子的消息' + i, '十分钟以内结束', '回来继续背单词' + i]);
   }
   assert.equal(L.gateOpen(s, T0 + 70 * MIN, 'com.xingin.xhs').status, 'limit');
-  const nextDay = Date.UTC(2026, 9, 5, 16, 30); // 北京 10-06 00:30
+  const nextDay = Date.UTC(2026, 9, 6, 1, 45); // 北京 10-06 09:45，处于上午专注时段
   assert.equal(L.gateOpen(s, nextDay, 'com.xingin.xhs').status, 'asking');
 });
 
@@ -126,4 +126,20 @@ test('durations parse in digits and Chinese; short duration answers are valid', 
   assert.equal(L.parseMinutes('一个小时'), 60);
   assert.equal(L.parseMinutes('一会儿'), null);
   assert.equal(L.judgeAnswer(L.defaultConfig(), '十分钟', []).valid, true);
+});
+
+test('focus windows: keys needed only inside 09:30-11:30 / 14:30-16:30 / 20:00-22:00 (Beijing)', () => {
+  const s = L.freshState();
+  const at = (h, m) => Date.UTC(2026, 9, 5, h - 8, m);
+  assert.equal(L.focusWindow(at(10, 0), s.config).active, true);
+  assert.equal(L.focusWindow(at(11, 30), s.config).active, false);
+  assert.equal(L.focusWindow(at(12, 0), s.config).next, '14:30');
+  const late = L.focusWindow(at(22, 30), s.config);
+  assert.equal(late.next, '09:30');
+  assert.equal(late.next_is_tomorrow, true);
+  const o = L.gateOpen(s, at(13, 0), 'tv.danmaku.bili');
+  assert.equal(o.status, 'not_in_window');
+  assert.equal(o.next, '14:30');
+  assert.equal(L.gateOpen(s, at(14, 31), 'tv.danmaku.bili').status, 'asking');
+  assert.throws(() => L.mergeConfig(s.config, {focus_windows: [{start: '12:00', end: '11:00'}]}), /开始早于结束/);
 });

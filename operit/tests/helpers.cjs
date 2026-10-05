@@ -34,6 +34,21 @@ function fakeHost({clock, withThread = true, routes = {}} = {}) {
     async notify(text, title) { calls.push({fn: 'notify', text, title}); return 'ok'; },
     async chatSend(chatId, message) { calls.push({fn: 'chatSend', chatId, message}); return {success: true}; },
     async startVoice(chatId) { calls.push({fn: 'startVoice', chatId}); return {success: true}; },
+    files: {},
+    chats: [{id: '52a18815-xiaoman', title: '小满'}, {id: 'core-chat-1', title: '核心对话'}],
+    current_chat: null,
+    async readFile(path) {
+      calls.push({fn: 'readFile', path});
+      if (!(path in host.files)) throw new Error('File or directory does not exist: ' + path);
+      return {path, content: host.files[path]};
+    },
+    async chatSwitch(chatId) { calls.push({fn: 'chatSwitch', chatId}); host.current_chat = chatId; return {success: true, chatId}; },
+    async findChat(query) {
+      calls.push({fn: 'findChat', query});
+      const c = host.chats.find(x => x.title.includes(query));
+      if (!c) throw new Error('Chat not found by query: ' + query);
+      return {chat: c};
+    },
     async workflowCreate(name, description, nodes, connections, enabled) {
       calls.push({fn: 'workflowCreate', name, nodes, connections, enabled}); return {id: 'wf-' + calls.length, name, enabled};
     },

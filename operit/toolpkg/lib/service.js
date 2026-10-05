@@ -2,7 +2,7 @@
 // 把纯逻辑、状态文件和真机接口串起来。每个公开方法对应一个工具。
 const L = require('./logic.js');
 
-const VERSION = '0.1.1';
+const VERSION = '0.2.0';
 
 function failed(r) { return !r || r.success === false || r.ok === false || (r.data && r.data.success === false); }
 function payload(r) { return r && typeof r === 'object' && 'data' in r ? r.data : r; }
@@ -22,7 +22,46 @@ function makeService({store, host, clock = () => Date.now()}) {
     const cp = data && data.state ? data.state.control_plane : null;
     const binding = cp && cp.policy ? cp.policy.task_binding || null : null;
     return {backend: 'cognitive_core', session, binding, managed: !!cp,
-      revision: data && data.state && data.state.core ? data.state.core.revision : null};
+      revision: data && data.state && data.state.core ? data.state.core.revision : null,
+      control_revision: cp ? cp.revision || 0 : null};
+  }
+
+  // ---------- 核心对话台：任务循环 ----------
+  function taskView(t) {
+    const s = t.session;
+    if (!s || s.status === 'COMPLETE') return null;
+    const turn = s.turns && s.turns.length ? s.turns[s.turns.length - 1] : null;
+    const ai = turn && turn.ai_contributions && turn.ai_contributions.length ? turn.ai_contributions[turn.ai_contributions.length - 1].text : null;
+    return {session_id: s.id, title: s.title, status: s.status, activity: s.activity || 'thinking',
+      question: s.next_entry ? s.next_entry.question : null, scaffold: s.next_entry ? s.next_entry.scaffold : null,
+      question_id: s.current_question_id, ai_help: ai, last_answer: s.last_step ? s.last_step.user_answer : null,
+      answers: (s.cognition || []).length, materials: (s.materials || []).map(m => m.title),
+      return_point: s.return_point || null, real_task: writable(t).ok};
+  }
+
+  // 请后台模型围绕刚才的回答接着问。preview.3 每题只允许试一次；preview.4 起允许用户重试。
+  async function coach(tag) {
+    const t = await threadSession();
+    if (t.backend !== 'cognitive_core' || !t.managed || !t.session) return {status: 'unavailable', note: '后台没有 AI 接续功能（需要 cognitive_continuity 0.3 以上）'};
+    let r;
+    try {
+      r = await host.callTool('control_plane:coach', {event_id: 'zk-coach:' + t.session.current_question_id + (tag ? ':' + tag : ''),
+        expected_core_revision: t.revision, expected_control_revision: t.control_revision || 0});
+    } catch (e) { return {status: 'unknown', note: String(e.message || e)}; }
+    if (failed(r)) {
+      const code = r && r.data && r.data.code;
+      const notes = {COACH_ALREADY_ATTEMPTED: '这一题 AI 已经试过一次，后台暂不允许重试（Codex 正在修）',
+        MODEL_API_UNAVAILABLE: '后台调用不到模型接口', REAL_TASK_REQUIRED: '先开始一件真实的事'};
+      return {status: 'failed', code: code || null, note: notes[code] || (r && r.message) || 'AI 没有接上'};
+    }
+    const job = payload(r);
+    const st = job && (job.status || (job.job && job.job.status));
+    return {status: st === 'saved' ? 'saved' : (st || 'unknown'), note: st === 'saved' ? null : 'AI 这次没有接上，可以点「再问一次」'};
+  }
+
+  function today(now, cfg) {
+    const d = new Date(now + cfg.tz_offset_min * 60000);
+    return d.toISOString().slice(0, 10).replace(/-/g, '');
   }
 
   // 只有当前思考线是用户亲自选的真实任务时才能写；旧版（没有主控绑定）照旧可写。
@@ -123,6 +162,22 @@ function makeService({store, host, clock = () => Date.now()}) {
     return {...result, key: saved, executor: out,
       note: status === 'unbound' ? '解锁通道还没绑定：钥匙已记账，但手机上的限制不会自动变化' :
         status === 'unknown' ? '解锁调用结果不明，请到手机上确认是否已解开' : null};
+  }
+
+  // 切换嵌入的对话：core=核心对话，companion=小满。没登记 ID 时按标题找。
+  async function switchChat({target}) {
+    if (!['core', 'companion'].includes(target)) throw L.err('INVALID_EVENT', 'target 只能是 core 或 companion');
+    const cfg = read().config;
+    let id = target === 'companion' ? cfg.companion_chat_id : cfg.core_chat_id;
+    if (!id) {
+      let r;
+      try { r = await host.findChat(target === 'companion' ? '小满' : '核心对话'); } catch (e) { r = null; }
+      id = r && r.chat ? r.chat.id : null;
+      if (!id) throw L.err('NO_CHAT', target === 'companion' ? '没找到小满的对话' : '没找到「核心对话」，请先新建一个以此为标题的对话');
+    }
+    const r = await host.chatSwitch(id);
+    if (failed(r)) throw L.err('SWITCH_FAILED', (r && r.message) || '切换失败');
+    return {chat_id: id, target};
   }
 
   return {
@@ -240,6 +295,98 @@ function makeService({store, host, clock = () => Date.now()}) {
       if (!L.todayHasUnfinishedTalk(s, now)) return {skipped: 'nothing_open'};
       const open = s.readings.slice().reverse().find(r => r.status !== 'finished' && L.dayKey(r.started_at, s.config) === L.dayKey(now, s.config));
       return {spoke: await speak('今天伴读的《' + open.title + '》还没收线。问用户聊出了什么。')};
+    },
+
+    // ---- 核心对话台 ----
+    async consoleState() {
+      const now = clock(), st = read();
+      const t = await threadSession();
+      let focus = L.focusWindow(now, st.config);
+      try { const r = await host.callTool('control_plane:focus_status', {}); if (!failed(r)) focus = {...focus, backend: payload(r)}; }
+      catch (e) { /* 后台还没有这个接口时，只用本地时段 */ }
+      return {version: VERSION, task: taskView(t), backend: t.backend, managed: !!t.managed, focus,
+        summary: L.summary(st, now), heavy_apps: st.config.heavy_apps,
+        chats: {core: st.config.core_chat_id, companion: st.config.companion_chat_id}};
+    },
+
+    // 用户在对话台写下的回答：原话入账，然后请 AI 接着问。
+    async answer({text}) {
+      const t0 = typeof text === 'string' ? text.trim() : '';
+      if (!t0) throw L.err('INVALID_EVENT', '写下你自己的回答');
+      const t = await threadSession();
+      const w = t.backend === 'cognitive_core' ? writable(t) : {ok: false, reason: '账本不可用'};
+      if (!w.ok || t.session.status !== 'ACTIVE') throw L.err('NO_TASK', w.ok ? '当前任务处于暂停，先点「我回来了」' : w.reason);
+      await threadApply({type: 'answer', event_id: 'zk:answer:' + clock().toString(36), session_id: t.session.id,
+        question_id: t.session.current_question_id, text: t0, source: 'USER'});
+      return {saved: true, coach: await coach()};
+    },
+
+    async askAgain() { return await coach('retry:' + clock().toString(36)); },
+
+    async pause() {
+      const t = await threadSession();
+      if (!t.session || t.session.status !== 'ACTIVE') throw L.err('NO_TASK', '没有进行中的任务');
+      await threadApply({type: 'pause', event_id: 'zk:pause:' + clock().toString(36), session_id: t.session.id, reason: '用户在核心对话台点了歇一会儿'});
+      return {paused: true};
+    },
+
+    async resume() {
+      const t = await threadSession();
+      if (!t.session || t.session.status !== 'PAUSED') throw L.err('NO_TASK', '当前没有暂停中的任务');
+      await threadApply({type: 'resume', event_id: 'zk:resume:' + clock().toString(36), session_id: t.session.id});
+      return {resumed: true};
+    },
+
+    // 开始一件真实的事：优先用后台的 begin_task；后台还没有这个接口时，请用户在认知主控台开始。
+    async startTask({object, material_text, material_ref}) {
+      const o = typeof object === 'string' ? object.trim() : '';
+      if (!o) throw L.err('INVALID_EVENT', '写下现在要做的事');
+      const t = await threadSession();
+      if (t.backend !== 'cognitive_core') throw L.err('NO_BACKEND', '账本插件不可用');
+      if (t.managed) {
+        const fallback = {status: 'use_backend_console', route: 'toolpkg:com.community.cognitive_continuity:ui:continuity',
+          note: '后台还没提供开始任务的接口（Codex 正在加）。这次请在认知主控台开始，开始后回到这里继续。'};
+        let r;
+        try { r = await host.callTool('cognitive_core:begin_task', {object: o, material_text: material_text || '', material_ref: material_ref || ''}); }
+        catch (e) { if (/not found/i.test(String(e.message || e))) return fallback; throw e; }
+        if (failed(r) && /not found/i.test((r && r.message) || '')) return fallback;
+        if (failed(r)) throw L.err('START_FAILED', (r && r.message) || '开始失败');
+        return {status: 'started', result: payload(r), coach: await coach()};
+      }
+      if (t.session && t.session.status !== 'COMPLETE') throw L.err('SESSION_IN_PROGRESS', '已有进行中的任务，先结束它');
+      const sid = 'zk-' + clock().toString(36);
+      await threadApply({type: 'start', event_id: 'zk:start:' + sid, session_id: sid, title: o.slice(0, 40), object: o, goal: '留下自己的理解和一个能用的下一步'});
+      if (material_text && material_text.trim()) await threadApply({type: 'attach_material', event_id: 'zk:mat:' + sid, session_id: sid,
+        material: {id: sid + ':m', title: '材料', text: material_text.trim(), source: {kind: 'user', ref: material_ref || 'core-console', device: 'android', observed_at: clock()}, status: 'reported'}});
+      return {status: 'started', session_id: sid};
+    },
+
+    // Focus Hub 看板：今天重度 App 用时、日报开头几行。只读。
+    async dashboard() {
+      const now = clock(), cfg = read().config, root = cfg.dashboard.root, out = {usage: null, digest: null, errors: []};
+      try {
+        const f = await host.readFile(root + '/p2/usage_last.json');
+        let j = JSON.parse(f.content);
+        if (j && j.data) j = j.data;
+        const apps = (j && Array.isArray(j.apps) ? j.apps : []).filter(a => a && typeof a.package === 'string' && typeof a.minutes === 'number');
+        const heavy = new Map(cfg.heavy_apps.map(a => [a.package, a.name]));
+        out.usage = {top: apps.slice().sort((a, b) => b.minutes - a.minutes).slice(0, 5).map(a => ({name: heavy.get(a.package) || a.package, minutes: Math.round(a.minutes), heavy: heavy.has(a.package)})),
+          heavy_minutes: Math.round(apps.filter(a => heavy.has(a.package)).reduce((n, a) => n + a.minutes, 0))};
+      } catch (e) { out.errors.push('用时：' + String(e.message || e)); }
+      try {
+        const f = await host.readFile(root + '/events/' + today(now, cfg) + '/digest.txt');
+        out.digest = f.content.split('\n').filter(x => x.trim()).slice(0, 12);
+      } catch (e) { out.errors.push('日报：' + String(e.message || e)); }
+      return out;
+    },
+
+    switchChat,
+
+    async voice({target}) {
+      const sw = await switchChat({target});
+      let v;
+      try { v = await host.startVoice(null); } catch (e) { v = {success: false, error: String(e.message || e)}; }
+      return {...sw, voice: failed(v) ? 'failed' : 'accepted', note: '已请求进入语音；是否真的出声以你听到为准'};
     },
 
     // ---- 工作流：默认创建为停用，真机核对后再启用 ----

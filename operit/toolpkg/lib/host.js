@@ -22,6 +22,9 @@ function phoneHost() {
       const started = parse(await Tools.Chat.startService({initial_mode: 'VOICE_BALL', auto_enter_voice_chat: true, keep_if_exists: true}));
       return {switched, started};
     },
+    async readFile(path) { return parse(await Tools.Files.read(path)); },
+    async chatSwitch(chatId) { return parse(await Tools.Chat.switchTo(chatId)); },
+    async findChat(query) { return parse(await Tools.Chat.findChat({query, match: 'contains'})); },
     async workflowCreate(name, description, nodes, connections, enabled) {
       return parse(await Tools.Workflow.create(name, description, nodes, connections, enabled));
     },

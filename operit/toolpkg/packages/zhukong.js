@@ -3,7 +3,7 @@
   "name": "zhukong",
   "display_name": {"zh": "主控中枢", "en": "Control Hub"},
   "description": {
-    "zh": "三件事：对话门（1 分钟对话换限时钥匙）、伴读（启动 Gemini Live 看屏陪读）、思考线（收线写入 cognitive_core）。执行限制只走已绑定的现有通道。",
+    "zh": "核心对话台的工具：当前任务与回答、AI 接续、专注时段与对话门（1 分钟对话换限时钥匙）、Gemini 伴读、收线、Focus Hub 看板、切换核心对话/小满。执行限制只走已绑定的后台通道。",
     "en": "Conversation gate with timed keys, Gemini Live reading companion launcher, and thread capture into cognitive_core."
   },
   "category": "Automatic",
@@ -42,6 +42,21 @@
       {"name": "source", "type": "string", "required": false, "description": "来自哪里，例如 GPT、Gemini、象棋"}]},
     {"name": "reading_invite", "description": "定时调用：伴读时间到时发出一句邀请（伴读进行中则跳过）。", "parameters": []},
     {"name": "thread_nudge", "description": "定时调用：当天有伴读没收线时问一句。", "parameters": []},
+    {"name": "console_state", "description": "核心对话台读取：当前任务与问题、专注时段、钥匙、版本。", "parameters": []},
+    {"name": "answer", "description": "把用户对当前问题的回答（原话）写进账本，然后请后台 AI 接着问。只能写用户亲口/亲手给出的内容。", "parameters": [
+      {"name": "text", "type": "string", "required": true, "description": "用户原话"}]},
+    {"name": "ask_again", "description": "AI 没接上时，请后台再试一次（后台不允许时如实返回原因）。", "parameters": []},
+    {"name": "pause_task", "description": "用户说要歇一会儿时暂停当前任务，保留问题和材料。", "parameters": []},
+    {"name": "resume_task", "description": "用户说回来了时接续当前任务。", "parameters": []},
+    {"name": "start_task", "description": "开始一件用户自己选的真实的事。后台没有开始接口时返回 use_backend_console。", "parameters": [
+      {"name": "object", "type": "string", "required": true, "description": "用户说的要做的事"},
+      {"name": "material_text", "type": "string", "required": false, "description": "用户贴的材料"},
+      {"name": "material_ref", "type": "string", "required": false, "description": "材料链接或位置"}]},
+    {"name": "dashboard", "description": "只读：今天重度 App 用时和日报开头（原 Focus Hub 看板）。", "parameters": []},
+    {"name": "switch_chat", "description": "把对话台嵌入的对话切到核心对话（core）或小满（companion）。", "parameters": [
+      {"name": "target", "type": "string", "required": true, "description": "core 或 companion"}]},
+    {"name": "voice", "description": "切到指定对话并请求进入语音。", "parameters": [
+      {"name": "target", "type": "string", "required": true, "description": "core 或 companion"}]},
     {"name": "install_workflows", "description": "创建或更新本包的定时工作流（钥匙巡检、伴读邀请、收线）。默认创建为停用。", "parameters": [
       {"name": "enable", "type": "boolean", "required": false, "description": "true 时创建为启用"}]}
   ]
@@ -81,4 +96,13 @@ exports.reading_finish = p => wrap(() => service().readingFinish({takeaway: p.ta
 exports.thread_capture = p => wrap(() => service().threadCapture({text: p.text, source: p.source}));
 exports.reading_invite = () => wrap(() => service().readingInvite());
 exports.thread_nudge = () => wrap(() => service().threadNudge());
+exports.console_state = () => wrap(() => service().consoleState());
+exports.answer = p => wrap(() => service().answer({text: p.text}));
+exports.ask_again = () => wrap(() => service().askAgain());
+exports.pause_task = () => wrap(() => service().pause());
+exports.resume_task = () => wrap(() => service().resume());
+exports.start_task = p => wrap(() => service().startTask({object: p.object, material_text: p.material_text, material_ref: p.material_ref}));
+exports.dashboard = () => wrap(() => service().dashboard());
+exports.switch_chat = p => wrap(() => service().switchChat({target: p.target}));
+exports.voice = p => wrap(() => service().voice({target: p.target}));
 exports.install_workflows = p => wrap(() => service().installWorkflows({enable: p && p.enable}));

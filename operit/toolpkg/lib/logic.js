@@ -34,6 +34,11 @@ function defaultConfig() {
     },
     speak: {mode: 'notification', chat_id: null},
     gate_chat_id: null,
+    core_chat_id: null,
+    companion_chat_id: null,
+    // 用户 2026-10-05 立法：三个专注时段内重度 App 需要钥匙，时段外不需要。
+    focus_windows: [{start: '09:30', end: '11:30'}, {start: '14:30', end: '16:30'}, {start: '20:00', end: '22:00'}],
+    dashboard: {root: '/sdcard/Download/Operit'},
     routes: {unlock: null, lock: null}
   };
 }
@@ -43,7 +48,7 @@ function validRoute(r) { return r === null || (r && typeof r.tool === 'string' &
 
 function mergeConfig(current, patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw err('INVALID_CONFIG', '配置必须是 JSON 对象');
-  const allowed = ['tz_offset_min', 'heavy_apps', 'gate', 'reading', 'speak', 'gate_chat_id', 'routes'];
+  const allowed = ['tz_offset_min', 'heavy_apps', 'gate', 'reading', 'speak', 'gate_chat_id', 'core_chat_id', 'companion_chat_id', 'focus_windows', 'dashboard', 'routes'];
   const unknown = Object.keys(patch).filter(k => !allowed.includes(k));
   if (unknown.length) throw err('INVALID_CONFIG', '不支持的配置项：' + unknown.join(','));
   const next = clone(current);
@@ -85,6 +90,20 @@ function mergeConfig(current, patch) {
     if (patch.gate_chat_id !== null && (typeof patch.gate_chat_id !== 'string' || !patch.gate_chat_id.trim())) throw err('INVALID_CONFIG', 'gate_chat_id 必须是会话 ID 或 null');
     next.gate_chat_id = patch.gate_chat_id;
   }
+  for (const k of ['core_chat_id', 'companion_chat_id']) if (k in patch) {
+    if (patch[k] !== null && (typeof patch[k] !== 'string' || !patch[k].trim())) throw err('INVALID_CONFIG', k + ' 必须是会话 ID 或 null');
+    next[k] = patch[k];
+  }
+  if ('focus_windows' in patch) {
+    const w = patch.focus_windows;
+    if (!Array.isArray(w) || w.length > 6 || w.some(x => !x || !validTime(x.start) || !validTime(x.end) || toMin(x.start) >= toMin(x.end)))
+      throw err('INVALID_CONFIG', 'focus_windows 需为最多 6 段 {start,end}，且开始早于结束');
+    next.focus_windows = clone(w);
+  }
+  if ('dashboard' in patch) {
+    if (!patch.dashboard || typeof patch.dashboard.root !== 'string' || !patch.dashboard.root.startsWith('/')) throw err('INVALID_CONFIG', 'dashboard.root 需为绝对路径');
+    next.dashboard = {root: patch.dashboard.root.replace(/\/+$/, '')};
+  }
   if ('routes' in patch) {
     const r = {...next.routes, ...patch.routes};
     for (const k of Object.keys(r)) {
@@ -94,6 +113,19 @@ function mergeConfig(current, patch) {
     next.routes = r;
   }
   return next;
+}
+
+function toMin(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
+
+// 当前是否在专注时段内；不在时给出下一段的开始时间。
+function focusWindow(now, cfg) {
+  const windows = cfg.focus_windows || [];
+  const m = localMinutes(now, cfg);
+  const cur = windows.find(w => m >= toMin(w.start) && m < toMin(w.end));
+  if (cur) return {active: true, start: cur.start, end: cur.end, minutes_left: toMin(cur.end) - m};
+  const later = windows.filter(w => toMin(w.start) > m).sort((a, b) => toMin(a.start) - toMin(b.start))[0];
+  const first = windows.slice().sort((a, b) => toMin(a.start) - toMin(b.start))[0];
+  return {active: false, next: later ? later.start : (first ? first.start : null), next_is_tomorrow: !later && !!first};
 }
 
 function freshState() {
@@ -174,6 +206,8 @@ function miss(s, now, g, reason) {
 function gateOpen(s, now, pkg) {
   const app = appOf(s, pkg);
   if (!app) return {status: 'not_guarded', app: pkg, note: '不在重度名单里，不需要钥匙'};
+  const fw = focusWindow(now, s.config);
+  if (!fw.active) return {status: 'not_in_window', app: pkg, next: fw.next, note: '现在不在专注时段，不需要钥匙'};
   expireGates(s, now);
   const day = ensureDay(s, now);
   const activeKey = s.keys.find(k => k.app === pkg && ['active', 'pending_unlock', 'unbound'].includes(k.status) && k.expires_at > now);
@@ -321,6 +355,7 @@ function todayHasUnfinishedTalk(s, now) {
 function summary(s, now) {
   const day = s.day && s.day.date === dayKey(now, s.config) ? s.day : {date: dayKey(now, s.config), keys_issued: 0, misses: 0};
   return {
+    focus: focusWindow(now, s.config),
     today: day,
     cooldown_minutes_left: s.cooldown_until && s.cooldown_until > now ? Math.ceil((s.cooldown_until - now) / 60000) : 0,
     keys_left_today: Math.max(0, s.config.gate.daily_key_limit - day.keys_issued),
@@ -333,6 +368,6 @@ function summary(s, now) {
   };
 }
 
-module.exports = {err, clone, defaultConfig, mergeConfig, freshState, validate, dayKey, localMinutes, ensureDay, log,
+module.exports = {err, clone, focusWindow, defaultConfig, mergeConfig, freshState, validate, dayKey, localMinutes, ensureDay, log,
   judgeAnswer, parseMinutes, expireGates, gateOpen, gateAnswer, gateDecide, gateSubmit, setKeyStatus, dueKeys, minutesFromAnswers,
   readingStart, readingFinish, currentReading, todayHasUnfinishedTalk, summary, DAY_MS};
