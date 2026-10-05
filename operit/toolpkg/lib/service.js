@@ -2,7 +2,7 @@
 // 把纯逻辑、状态文件和真机接口串起来。每个公开方法对应一个工具。
 const L = require('./logic.js');
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 
 function failed(r) { return !r || r.success === false || r.ok === false || (r.data && r.data.success === false); }
 function payload(r) { return r && typeof r === 'object' && 'data' in r ? r.data : r; }
@@ -18,7 +18,20 @@ function makeService({store, host, clock = () => Date.now()}) {
     if (failed(r)) return {backend: 'missing', error: (r && r.message) || 'cognitive_core 不可用'};
     const data = payload(r);
     const session = data && data.state && data.state.core ? data.state.core.session : null;
-    return {backend: 'cognitive_core', session, revision: data && data.state && data.state.core ? data.state.core.revision : null};
+    // 0.3.0 起由认知主控台绑定"真实任务"；绑定存在时只往那条线上写，绝不写进施工记录。
+    const cp = data && data.state ? data.state.control_plane : null;
+    const binding = cp && cp.policy ? cp.policy.task_binding || null : null;
+    return {backend: 'cognitive_core', session, binding, managed: !!cp,
+      revision: data && data.state && data.state.core ? data.state.core.revision : null};
+  }
+
+  // 只有当前思考线是用户亲自选的真实任务时才能写；旧版（没有主控绑定）照旧可写。
+  function writable(t) {
+    if (!t.session || t.session.status === 'COMPLETE')
+      return {ok: false, reason: t.managed ? '还没有进行中的真实任务，请先在「认知主控台」开始' : '没有进行中的思考线'};
+    if (!t.managed) return {ok: true};
+    if (t.binding && t.binding.session_id === t.session.id && t.binding.purpose === 'real_task') return {ok: true};
+    return {ok: false, reason: '当前思考线不是你选的真实任务（可能是施工记录），请先在「认知主控台」开始真实任务'};
   }
 
   async function threadApply(event) {
@@ -35,6 +48,10 @@ function makeService({store, host, clock = () => Date.now()}) {
     if (t.backend !== 'cognitive_core') return {backend: t.backend, note: '账本插件未安装或不可用，只在主控中枢本地记录', error: t.error};
     const steps = [];
     let session = t.session;
+    if (t.managed) {
+      const w = writable(t);
+      if (!w.ok) return {backend: 'cognitive_core', note: w.reason};
+    }
     try {
       if (!session || session.status === 'COMPLETE') {
         const sid = 'zk-' + now.toString(36);
@@ -59,8 +76,9 @@ function makeService({store, host, clock = () => Date.now()}) {
   // 用户自己的一句话，作为当前问题的回答写进思考线；写不进去就先存本地，绝不丢。
   async function threadAnswer(text, eventKey) {
     const t = await threadSession();
-    if (t.backend !== 'cognitive_core' || !t.session || t.session.status !== 'ACTIVE' || !t.session.current_question_id) {
-      const reason = t.backend !== 'cognitive_core' ? '账本不可用' : (!t.session ? '没有进行中的思考线' : '思考线状态为 ' + t.session.status);
+    const w = t.backend === 'cognitive_core' ? writable(t) : {ok: false};
+    if (t.backend !== 'cognitive_core' || !w.ok || t.session.status !== 'ACTIVE' || !t.session.current_question_id) {
+      const reason = t.backend !== 'cognitive_core' ? '账本不可用' : (!w.ok ? w.reason : '思考线状态为 ' + t.session.status);
       edit(s => { s.pending_takeaways.push({at: clock(), text, reason}); return null; });
       return {saved: 'local', reason};
     }

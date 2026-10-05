@@ -146,3 +146,46 @@ test('install_workflows creates disabled schedule workflows once, then updates t
   const again = await svc.installWorkflows({enable: true});
   assert.ok(again.workflows.every(w => w.action === 'updated' && w.enabled === true));
 });
+
+// cognitive_core 0.3.0 起有 control_plane.task_binding；模拟这种状态。
+function withBinding(host, purpose) {
+  const orig = host.callTool.bind(host);
+  host.callTool = async (name, params) => {
+    const r = await orig(name, params);
+    if (name === 'cognitive_core:status' && r.success) {
+      const s = r.data.state.core.session;
+      r.data.state.control_plane = {revision: 1, policy: {task_binding: s ? {session_id: s.id, purpose} : null}};
+    }
+    return r;
+  };
+}
+
+test('0.3.0 managed thread: machine_test session is never written to', async () => {
+  const {svc, host} = setup();
+  host.cc.event({type: 'start', event_id: 'mt', session_id: 'machine', title: '安装验收', object: '安装验收', goal: '施工'});
+  withBinding(host, 'machine_test');
+  const r = await svc.readingStart({title: '真实材料'});
+  assert.match(r.reading.thread.note, /认知主控台/);
+  assert.equal(host.cc.read().core.session.materials.length, 0);
+  const c = await svc.threadCapture({text: '和GPT聊出来的一句'});
+  assert.equal(c.saved, 'local');
+  assert.equal(host.cc.read().core.session.cognition.length, 0);
+});
+
+test('0.3.0 managed thread: no session means no raw start; user must pick the task in 认知主控台', async () => {
+  const {svc, host} = setup();
+  withBinding(host, 'real_task');
+  const r = await svc.readingStart({title: '真实材料'});
+  assert.match(r.reading.thread.note, /认知主控台/);
+  assert.equal(host.cc.read().core.session, null);
+});
+
+test('0.3.0 managed thread: bound real task receives material and takeaway', async () => {
+  const {svc, host} = setup();
+  host.cc.event({type: 'start', event_id: 'rt', session_id: 'real:1', title: '资料分析', object: '资料分析', goal: '弄懂增长率'});
+  withBinding(host, 'real_task');
+  await svc.readingStart({title: '第3讲'});
+  assert.equal(host.cc.read().core.session.materials.length, 1);
+  const r = await svc.readingFinish({takeaway: '先找基期再估算'});
+  assert.equal(r.thread.saved, 'thread');
+});

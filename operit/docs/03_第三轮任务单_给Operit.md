@@ -1,5 +1,7 @@
 # 第三轮任务单：安装主控中枢（给 Operit A 组）
 
+> **暂缓执行（2026-10-05）**：cognitive_core 已升级到 0.3.0-preview.3，并由 Codex 负责核心开发。主控中枢与新版「认知主控台」的分工还没定（见 `04_对preview3的审查.md` 第 4 节）。在用户决定合并方式之前，不要安装本包。
+
 task_id：A-030-zhukong；前置：A-020（cognitive_core 0.2.0 已升级）与 B-020（adapter-catalog、xiaoman-integration 已交付）。
 
 背景：主控中枢是新的 ToolPkg（`com.community.zhukong`），提供对话门、伴读启动和收线。思考线写进已安装的 cognitive_core，不另建账本。它不直接冻结或解冻任何 App；真实执行只通过之后绑定的现有通道。设计见 `docs/02_详细设计.md`。
@@ -10,8 +12,8 @@ task_id：A-030-zhukong；前置：A-020（cognitive_core 0.2.0 已升级）与 
 
 1. 读取并备份 `cognitive_core:status` 原始返回（不改变它的提醒开关和事务）。
 2. 核对安装包 SHA256（期望值见本仓库 `operit/dist/SHA256SUMS`），不一致就停止并回报。
-3. 安装 `zhukong-0.1.0.toolpkg`，启用子包 `zhukong`。同步 Skill（`zhukong-skill-0.1.0.zip` 解压到 Skills 目录），不要猜测加载成功。
-4. 调用 `zhukong:status`，确认 version=0.1.0、`thread.backend=cognitive_core`、`executor.unlock=false`。
+3. 安装 `zhukong-0.1.1.toolpkg`，启用子包 `zhukong`。同步 Skill（`zhukong-skill-0.1.1.zip` 解压到 Skills 目录），不要猜测加载成功。
+4. 调用 `zhukong:status`，确认 version=0.1.1、`thread.backend=cognitive_core`、`executor.unlock=false`。
 5. 侧边栏打开「主控台」，截图。面板报错时保留原文。
 6. **伴读测试**（施工测试，标明不是用户的认知任务）：在面板填标题"施工测试材料"，点「开始伴读」，确认 Gemini 被打开；读回 cognitive_core status，确认出现该材料且活动为 watching。不要代替用户在 Gemini 里点共享屏幕。
 7. **对话门测试（只记账）**：在面板依次测试三种情况：B站敷衍回答 → retry；B站三题具体回答 → 钥匙状态 unbound；抖音开门后不回答，3 分钟后调用 `zhukong:gate_tick` → 显示冷却 5 分钟。这些是施工数据，回执中注明 gate_id。注意：这次测试会占用用户当天 1 把钥匙并留下 1 次冷却，请在回执里提醒用户。
