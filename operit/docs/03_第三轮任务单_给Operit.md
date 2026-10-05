@@ -1,6 +1,6 @@
 # 第三轮任务单：安装主控中枢（给 Operit A 组）
 
-> **已取消（2026-10-05）**：用户决定只保留认知主控台一个入口，主控中枢不再安装，对话门并入 Codex 的包。现行任务见 `operit/rounds/`。
+> **已被取代（2026-10-05）**：主控中枢将升级为 v0.2「核心对话台」，安装步骤并入 `operit/rounds/A-027_给Operit_A.md`。本文件不要再发。
 
 task_id：A-030-zhukong；前置：A-020（cognitive_core 0.2.0 已升级）与 B-020（adapter-catalog、xiaoman-integration 已交付）。
 
