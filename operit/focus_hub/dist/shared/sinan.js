@@ -143,8 +143,21 @@ async function say(text, now = Date.now()) {
         state.sprint.reported = true;
     await append({ ts: now, role: "user", mode: state.mode, task_id: state.task.id, text: t });
     const out = await aiTurn(state, history, t, now);
+    if (out.via === "model" && L.needsMemo(state))
+        await compress(state, history.concat([{ role: "user", text: t }, { role: "ai", text: out.reply }]), now);
     await saveState(state);
     return out;
+}
+// 备忘失败不影响对话，下次再试
+async function compress(state, history, now) {
+    try {
+        const r = await Tools.Chat.call({ functionType: "CHAT", recordTokenUsage: true, turns: L.memoTurns(state, history) });
+        if (r && typeof r.text === "string" && L.applyMemo(state, r.text, now))
+            await append({ ts: now, role: "event", type: "memo", mode: state.mode, task_id: state.task.id, text: "整理了一次备忘" });
+    }
+    catch {
+        // 忽略
+    }
 }
 // 换模式：司南用新模式的方式开口（开场请求不算用户的话）
 async function switchMode(mode, now = Date.now()) {
@@ -154,8 +167,13 @@ async function switchMode(mode, now = Date.now()) {
         await saveState(state);
         return null;
     }
-    const history = await readThread(state.task.id, now);
     await append({ ts: now, role: "event", type: "mode", mode, task_id: state.task.id, text: L.MODES[mode].name });
+    // 歇着的时候只换模式，回来时再按新模式开口，不连发问题
+    if (state.task.paused_at) {
+        await saveState(state);
+        return null;
+    }
+    const history = await readThread(state.task.id, now);
     const out = await aiTurn(state, history, L.kickoffText(mode), now);
     await saveState(state);
     return out;
@@ -179,10 +197,16 @@ async function pause(now = Date.now()) {
 }
 async function resume(now = Date.now()) {
     const state = await readState();
+    const wasPaused = !!(state.task && state.task.paused_at);
     L.resumeTask(state, now);
-    if (state.task)
+    let out = null;
+    if (state.task && wasPaused) {
         await append({ ts: now, role: "event", type: "resume", mode: state.mode, task_id: state.task.id, text: "回来了" });
+        const history = await readThread(state.task.id, now);
+        out = await aiTurn(state, history, `【我回来了】接着刚才的地方，${L.MODES[state.mode].kickoff}`, now);
+    }
     await saveState(state);
+    return out;
 }
 async function finish(now = Date.now()) {
     const state = await readState();

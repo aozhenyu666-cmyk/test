@@ -147,6 +147,45 @@ test('modes, sprint, pause, resume and finish', async () => {
   } finally { e.restore(); }
 });
 
+test('manifest declares ToolPkg API 1.0.1, which Tools.Chat.call requires', () => {
+  const m = require(path.join(FH, '..', 'manifest.json'));
+  assert.equal(m.api_version, '1.0.1');
+});
+
+test('while paused, switching modes asks nothing; coming back asks one question in the chosen mode', async () => {
+  const e = env();
+  try {
+    await sinan().begin('完整部署 Operit AI', '');
+    await sinan().pause();
+    const before = e.calls.filter(c => c[0] === 'model').length;
+    for (const m of ['read', 'sprint', 'review']) assert.equal(await sinan().switchMode(m), null);
+    assert.equal(e.calls.filter(c => c[0] === 'model').length, before);
+    assert.equal((await sinan().loadSinan()).mode, 'review');
+    const out = await sinan().resume();
+    assert.equal(out.via, 'model');
+    assert.match(e.calls.filter(c => c[0] === 'model').at(-1)[1].turns.at(-1).content, /我回来了/);
+    assert.equal(await sinan().resume(), null);
+  } finally { e.restore(); }
+});
+
+test('context stays bounded: every 8 turns a memo is written and later calls carry it instead of the full history', async () => {
+  const e = env({model: turns => /压成一段备忘/.test(turns[0].content) ? '在做：资料分析。讲清的：增长率公式。卡住：基期。下一步：做例题。' : '{"reply":"接着说？","question":"接着说？"}'});
+  try {
+    await sinan().begin('资料分析', '');
+    for (let i = 0; i < 9; i++) { e.advance(60000); await sinan().say(`第${i}句回答`); }
+    const v = JSON.parse(e.files['/sdcard/Download/Operit/companion/sinan/state.json']);
+    assert.match(v.task.memo, /卡住：基期/);
+    const last = e.calls.filter(c => c[0] === 'model' && !/压成一段备忘/.test(c[1].turns[0].content)).at(-1)[1].turns;
+    assert.ok(last.some(t => /司南的备忘/.test(t.content)));
+    assert.ok(last.length <= 1 + 1 + 10 + 1);
+    // 第二天：今天的对话是空的，备忘和当前问题还在
+    e.advance(24 * 3600000);
+    await sinan().say('新的一天接着来');
+    const turns = e.calls.filter(c => c[0] === 'model').at(-1)[1].turns;
+    assert.ok(turns.some(t => /卡住：基期/.test(t.content)));
+  } finally { e.restore(); }
+});
+
 test('voice: one tap creates the 司南 card and chat once, then reuses them', async () => {
   const e = env();
   try {

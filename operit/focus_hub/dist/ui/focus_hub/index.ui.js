@@ -458,7 +458,8 @@ function Screen(ctx) {
                 setFocusStatus({ ok: true, text: "写下这次要交出的东西，选个时长" });
                 return;
             }
-            setFocusStatus(replyStatus(await (0, sinan_js_1.switchMode)(mode)));
+            const out = await (0, sinan_js_1.switchMode)(mode);
+            setFocusStatus(sinan && sinan.task && sinan.task.paused ? { ok: true, text: `换成${sinan_logic_js_1.MODES[mode].name}了，点「我回来了」就按这个模式接着` } : replyStatus(out));
             if (mode === "read" && !(sinan && sinan.task && sinan.task.hasMaterial))
                 setShowMaterial(true);
         });
@@ -478,8 +479,7 @@ function Screen(ctx) {
     }
     async function doResume() {
         await focusAction(async () => {
-            await (0, sinan_js_1.resume)();
-            setFocusStatus({ ok: true, text: "回来了，接着上次的问题" });
+            setFocusStatus(replyStatus(await (0, sinan_js_1.resume)()));
         });
     }
     async function doFinish() {
@@ -652,7 +652,7 @@ function Screen(ctx) {
         return gradientCard(pal, items);
     }
     function eventLine(r) {
-        const what = { begin: `开始：${r.text}`, mode: `换成${r.text}`, sprint: `冲刺 ${r.text}`, pause: "歇一会儿", resume: "回来了", finish: `收起：${r.text}` }[r.type] || r.text;
+        const what = { memo: "整理了一次备忘", begin: `开始：${r.text}`, mode: `换成${r.text}`, sprint: `冲刺 ${r.text}`, pause: "歇一会儿", resume: "回来了", finish: `收起：${r.text}` }[r.type] || r.text;
         return UI.Row({ fillMaxWidth: true, horizontalArrangement: "center", paddingVertical: 2 }, [
             UI.Surface({ shape: { type: "pill" }, containerColor: colors.surfaceVariant }, text(`${clock(r.ts)} · ${what}`, "labelSmall", colors.onSurfaceVariant, { paddingHorizontal: 12, paddingVertical: 4, maxLines: 1 })),
         ]);

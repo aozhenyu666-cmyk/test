@@ -3,7 +3,7 @@
 总计划见 `docs/00_总计划.md`（替代之前所有轮次计划）。
 
 ## 现在的样子
-- **唯一入口**：主控台 0.9.0（`local.focus_hub`），底栏三栏：
+- **唯一入口**：主控台 0.9.1（`local.focus_hub`），底栏三栏：
   - 专注：严格搭档「司南」+ 专注时段 + 对话门钥匙；
   - 陪伴：小满 + 进展 + 会话；
   - 管理：督促、省流、系统。
@@ -14,9 +14,10 @@
 - **锁**：还没接通，钥匙只记账。等 A-026 的结果做 M2。
 
 ## 进行中
-- Operit A：A-030（装 0.9.0，跑通一问一答和语音）。
+- Operit A：A-031（升级 0.9.1，修好模型接口；Shizuku 开着就重跑 A-026）。
+- 对 Codex 严格模式计划的审查：`docs/06_对Codex严格模式计划的审查.md`。
 - Operit B、Codex：暂停。
 
 ## 下载
-- 安装包：https://raw.githubusercontent.com/aozhenyu666-cmyk/test/ccr-6193e40d-cxxw8a/operit/handoff/install_focus_hub_0.9.0.zip
+- 安装包：https://raw.githubusercontent.com/aozhenyu666-cmyk/test/ccr-6193e40d-cxxw8a/operit/handoff/install_focus_hub_0.9.1.zip
 - 仓库分支：aozhenyu666-cmyk/test @ ccr-6193e40d-cxxw8a，目录 `operit/`（仓库是公开的）

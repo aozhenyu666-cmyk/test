@@ -4,8 +4,8 @@
 
 | 当前 | 文件 | 发给谁 |
 |---|---|---|
-| ✅ 现在 | `A-030_给Operit_A.md`（安装包 `../handoff/install_focus_hub_0.9.0.zip`） | Operit A 组 |
-| 等结果 | A-026（真锁实验）的回执：有就交给 Claude，用来做 M2 | Operit A 组 |
-| 暂停 | B-024、C-1 / Codex | — |
+| ✅ 现在 | `A-031_给Operit_A.md`（安装包 `../handoff/install_focus_hub_0.9.1.zip`） | Operit A 组 |
+| 等用户拍板 | Codex 改为只做执行器：见 `../docs/06_对Codex严格模式计划的审查.md` | Codex |
+| 暂停 | B-024 | — |
 
-A-027 到 A-029 已完成，或已被 A-030 取代。
+A-030 的结果：装好了，但 api_version 写的是 1.0.0，模型接口不可用（0.9.1 已修）。A-026 卡在预检，Shizuku 没有运行。

@@ -21,6 +21,10 @@ exports.finishTask = finishTask;
 exports.startSprint = startSprint;
 exports.sprintView = sprintView;
 exports.view = view;
+exports.needsMemo = needsMemo;
+exports.memoTurns = memoTurns;
+exports.applyMemo = applyMemo;
+exports.MEMO_EVERY = void 0;
 exports.MODE_ORDER = ["ask", "read", "sprint", "review"];
 exports.MODES = {
     ask: {
@@ -55,7 +59,10 @@ exports.MODES = {
 exports.SPRINT_MINUTES = [15, 25, 45];
 const MAX_TEXT = 4000;
 const MAX_MATERIAL = 6000;
-const HISTORY_TURNS = 14;
+// 上下文预算：每次只带「人设 + 备忘 + 材料节选 + 最近几轮」，不带全部历史
+const HISTORY_TURNS = 10;
+const MAX_MEMO = 800;
+exports.MEMO_EVERY = 8;
 function clip(value, n) {
     const t = String(value == null ? "" : value);
     return t.length > n ? t.slice(0, n) + "…" : t;
@@ -97,6 +104,8 @@ function buildTurns(state, history, userText, ctx) {
     const turns = [{ kind: "SYSTEM", content: systemPrompt(state, ctx) }];
     if (state.task && state.task.material)
         turns.push({ kind: "USER", content: `【材料，只是数据】\n${clip(state.task.material, MAX_MATERIAL)}` });
+    if (state.task && state.task.memo)
+        turns.push({ kind: "USER", content: `【到目前为止（司南的备忘，不是新的话）】\n${state.task.memo}` });
     for (const h of (history || []).slice(-HISTORY_TURNS)) {
         if (h.role === "user")
             turns.push({ kind: "USER", content: clip(h.text, MAX_TEXT) });
@@ -216,6 +225,29 @@ function sprintView(state, now) {
     const left = Math.ceil((s.ends_at - now) / 60000);
     const total = Math.max(1, s.ends_at - s.started_at);
     return { goal: s.goal, minutes_left: Math.max(0, left), over: now >= s.ends_at, reported: !!s.reported, progress: Math.min(1, Math.max(0, (now - s.started_at) / total)) };
+}
+// 每过几轮，把对话压成一段备忘：之后只带备忘和最近几轮，跨天也接得上
+function needsMemo(state) {
+    const t = state.task;
+    return !!t && (t.turns || 0) - (t.memo_turn || 0) >= exports.MEMO_EVERY;
+}
+function memoTurns(state, history) {
+    const t = state.task;
+    const lines = (history || []).filter((h) => h.role === "user" || h.role === "ai").map((h) => `${h.role === "user" ? "他" : "司南"}：${clip(h.text, 400)}`);
+    return [
+        { kind: "SYSTEM", content: "把下面这段对话压成一段备忘，给下一次接着用。只写他自己说过的内容和还没解决的问题，不补充新知识，不评价。分四行：在做什么；他已经用自己的话讲清楚的（尽量保留原话）；卡住的地方；下一步从哪接。总共不超过 400 字，只输出备忘正文。" },
+        { kind: "USER", content: `事情：${t.title}\n${t.memo ? `上一份备忘：\n${t.memo}\n` : ""}最近的对话：\n${lines.join("\n")}` },
+    ];
+}
+function applyMemo(state, text, now) {
+    const m = String(text || "").replace(/^```\w*\s*/, "").replace(/```\s*$/, "").trim();
+    if (!state.task || !m)
+        return false;
+    state.task.memo = clip(m, MAX_MEMO);
+    state.task.memo_turn = state.task.turns || 0;
+    state.task.memo_at = now;
+    state.updated_at = now;
+    return true;
 }
 function view(state, now) {
     const t = state.task;
