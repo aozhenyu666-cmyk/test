@@ -1,6 +1,6 @@
 # 第三轮任务单：安装主控中枢（给 Operit A 组）
 
-> **暂缓执行（2026-10-05）**：cognitive_core 已升级到 0.3.0-preview.3，并由 Codex 负责核心开发。主控中枢与新版「认知主控台」的分工还没定（见 `04_对preview3的审查.md` 第 4 节）。在用户决定合并方式之前，不要安装本包。
+> **已取消（2026-10-05）**：用户决定只保留认知主控台一个入口，主控中枢不再安装，对话门并入 Codex 的包。现行任务见 `operit/rounds/`。
 
 task_id：A-030-zhukong；前置：A-020（cognitive_core 0.2.0 已升级）与 B-020（adapter-catalog、xiaoman-integration 已交付）。
 
