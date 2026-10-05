@@ -87,7 +87,7 @@
     {
       "name": "focus_nudge",
       "description": {
-        "zh": "专注时段推进：时段内如果你有一会儿没回答当前问题，她念出当前问题并弹出主控台；没开始任何事时问你这段时间做什么；暂停超过 15 分钟问一次回来吗。同时收回到期的钥匙并提醒你说过回来先做什么。时段外只收钥匙不打扰。适合每 15 分钟的工作流。",
+        "zh": "专注时段推进：时段内如果你有一会儿没回答司南的当前问题，念出这个问题并弹出主控台；冲刺到点时问你交出了什么；没开始任何事时问你这段时间做什么；暂停超过 15 分钟问一次回来吗。同时收回到期的钥匙并提醒你说过回来先做什么。时段外只收钥匙不打扰。适合每 15 分钟的工作流。",
         "en": "Focus-window nudge: speak the current question and pop up the hub when idle; also closes expired keys."
       },
       "parameters": [
@@ -101,6 +101,41 @@
           "required": false
         }
       ]
+    },
+    {
+      "name": "sinan_context",
+      "description": {
+        "zh": "读司南（主控台的严格搭档）现在的局面：在做的事、当前问题、模式、冲刺、是否专注时段、最近几句。给语音里的司南用。",
+        "en": "Read Sinan's current task, question, mode and recent turns."
+      },
+      "parameters": []
+    },
+    {
+      "name": "sinan_note",
+      "description": {
+        "zh": "把用户在语音对话里的原话（逐字）和司南接下来要问的问题记回主控台同一条线。只记用户对当前问题的回答，不记闲聊。",
+        "en": "Record the user's verbatim answer and Sinan's next question."
+      },
+      "parameters": [
+        {
+          "name": "user_text",
+          "description": {
+            "zh": "用户原话，逐字",
+            "en": "User's verbatim words"
+          },
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ai_question",
+          "description": {
+            "zh": "司南接下来要问的那一个问题",
+            "en": "Sinan's next question"
+          },
+          "type": "string",
+          "required": false
+        }
+      ]
     }
   ]
 }
@@ -110,13 +145,15 @@ exports.open_focus_hub = open_focus_hub;
 exports.open_chat = open_chat;
 exports.check_in = check_in;
 exports.focus_nudge = focus_nudge;
+exports.sinan_context = sinan_context;
+exports.sinan_note = sinan_note;
 const nav_js_1 = require("../shared/nav.js");
 const snapshot_js_1 = require("../shared/snapshot.js");
 const speech_js_1 = require("../shared/speech.js");
 const format_js_1 = require("../shared/format.js");
 const checkin_js_1 = require("../shared/checkin.js");
 const gate_js_1 = require("../shared/gate.js");
-const thinking_js_1 = require("../shared/thinking.js");
+const sinan_js_1 = require("../shared/sinan.js");
 function errorText(error) {
     if (error && typeof error === "object" && "message" in error) {
         return String(error.message);
@@ -271,27 +308,28 @@ async function focus_nudge(params) {
         }
         if (!window.active && !force)
             return { success: true, status: "OUTSIDE_WINDOW", closed_keys: tick.closed.length, expired_gates: tick.expired.length, message: "不在专注时段，只收了到期的钥匙" };
-        const task = await (0, thinking_js_1.loadTask)();
+        const v = await (0, sinan_js_1.loadSinan)(now);
+        const t = v.task;
         let line = "";
         let reason = "";
-        if (!task.available) {
-            line = "后台账本连不上，打开主控台看一眼";
-            reason = "BACKEND_UNAVAILABLE";
-        }
-        else if (!task.session || !task.real) {
-            line = "这段时间做什么？打开主控台写一句";
+        if (!t) {
+            line = "这段时间做什么？打开主控台跟司南说一句";
             reason = "NO_TASK";
         }
-        else if (task.session.status === "PAUSED") {
-            if (!force && now - (task.session.pausedAt || 0) < PAUSE_GRACE_MS)
+        else if (t.paused) {
+            if (!force && now - (t.pausedAt || 0) < PAUSE_GRACE_MS)
                 return { success: true, status: "SKIP_PAUSED", message: "刚说过要歇，还没到 15 分钟" };
-            line = "歇得差不多了，回来吗？";
+            line = `歇得差不多了，回来接着做「${shortText(t.title, 20)}」吗？`;
             reason = "PAUSE_OVER";
         }
+        else if (v.sprint && v.sprint.over && !v.sprint.reported) {
+            line = `冲刺到点了：${shortText(v.sprint.goal, 30)}，交出了什么？`;
+            reason = "SPRINT_DUE";
+        }
         else {
-            if (!force && task.session.lastAnswerAt && now - task.session.lastAnswerAt < ANSWER_FRESH_MS)
+            if (!force && t.lastAnswerAt && now - t.lastAnswerAt < ANSWER_FRESH_MS)
                 return { success: true, status: "SKIP_ACTIVE", message: "你刚答过，不打扰" };
-            line = `回来接着想：${shortText(task.session.question, 40)}`;
+            line = t.question ? `回来接着想：${shortText(t.question, 40)}` : `回来接着做：${shortText(t.title, 30)}`;
             reason = "IDLE";
         }
         if (!force && now - (await lastNudgeAt()) < NUDGE_GAP_MS)
@@ -311,5 +349,34 @@ async function focus_nudge(params) {
     }
     catch (error) {
         return { success: false, status: "ERROR", message: errorText(error) };
+    }
+}
+// ---------- 司南（给语音对话里的司南用） ----------
+async function sinan_context() {
+    try {
+        const v = await (0, sinan_js_1.loadSinan)();
+        const recent = v.thread.filter((r) => r.role === "user" || r.role === "ai").slice(-6).map((r) => `${r.role === "user" ? "他" : "司南"}：${shortText(r.text, 120)}`);
+        return {
+            success: true,
+            task: v.task ? v.task.title : null,
+            question: v.task ? v.task.question : null,
+            paused: v.task ? v.task.paused : false,
+            mode: v.modeName,
+            sprint: v.sprint ? { goal: v.sprint.goal, minutes_left: v.sprint.minutes_left, over: v.sprint.over } : null,
+            focus: v.focus ? (v.focus.active ? `专注时段 ${v.focus.start}-${v.focus.end}，还剩 ${v.focus.minutes_left} 分钟` : "不在专注时段") : "未知",
+            recent,
+        };
+    }
+    catch (error) {
+        return { success: false, message: errorText(error) };
+    }
+}
+async function sinan_note(params) {
+    try {
+        const v = await (0, sinan_js_1.note)(params?.user_text, params?.ai_question);
+        return { success: true, message: "记下了", question: v.task ? v.task.question : null };
+    }
+    catch (error) {
+        return { success: false, message: errorText(error) };
     }
 }

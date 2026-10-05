@@ -9,13 +9,29 @@ const companion_js_1 = require("../../shared/companion.js");
 const speech_js_1 = require("../../shared/speech.js");
 const slim_js_1 = require("../../shared/slim.js");
 const warden_js_1 = require("../../shared/warden.js");
-const thinking_js_1 = require("../../shared/thinking.js");
+const sinan_js_1 = require("../../shared/sinan.js");
+const sinan_logic_js_1 = require("../../shared/sinan_logic.js");
 const gate_js_1 = require("../../shared/gate.js");
 // 心情四档固定配色：安心 / 在意 / 担心 / 要谈谈
 const MOOD_COLOR = ["#7FAE8E", "#E2B25A", "#E0876B", "#C75A6B"];
 const MOOD_TINT = ["#E4F0E8", "#FBF1DC", "#FBE6DE", "#F8E0E4"];
 const MOOD_INK = ["#3F7A52", "#A2741D", "#B5553A", "#A23A4C"];
 const ZONE_WEIGHTS = [20, 25, 25, 30];
+// 司南的两套底色：专注时段是夜紫，平时是深青；金色只给钥匙、进度和司南的头像
+const PAL = {
+    focus: { grad: ["#1A1838", "#2E2560", "#4A3489"], mid: "#2E2560", deep: "#1A1838", chip: "#4B3F86", soft: "#CFC8F0" },
+    calm: { grad: ["#0E3433", "#17524F", "#277567"], mid: "#17524F", deep: "#0E3433", chip: "#2F6F68", soft: "#BFE3DC" },
+};
+const GOLD = "#F2C36B";
+const GOLD_GRAD = ["#FFE3A3", "#F2C36B", "#D9993A"];
+const ON_DARK = "#FFFFFF";
+const NAV_GRAD = ["#4A3489", "#2E2560"];
+const THREAD_SHOWN = 16;
+const MANAGE_TABS = [
+    { key: "warden", name: "督促" },
+    { key: "slim", name: "省流" },
+    { key: "sys", name: "系统" },
+];
 const ACTIONS = [
     { kind: "progress", icon: "▶" },
     { kind: "stuck", icon: "◼" },
@@ -25,6 +41,7 @@ const ACTIONS = [
 const COLLAPSED_WORKFLOWS = 6;
 const COLLAPSED_PACKAGES = 10;
 const RECENT_CHATS = 30;
+const COLLAPSED_CHATS = 6;
 function errorText(error) {
     if (error && typeof error === "object" && "message" in error) {
         return String(error.message);
@@ -40,7 +57,9 @@ function parseTime(value) {
 function Screen(ctx) {
     const { UI } = ctx;
     const colors = ctx.MaterialTheme.colorScheme;
-    const [page, setPage] = ctx.useState("page", "now");
+    const [page, setPage] = ctx.useState("page", "focus");
+    const [manageTab, setManageTab] = ctx.useState("manageTab", "warden");
+    const [showAllChats, setShowAllChats] = ctx.useState("showAllChats", false);
     const [snap, setSnap] = ctx.useState("snap", null);
     const [loading, setLoading] = ctx.useState("loading", false);
     const [loadError, setLoadError] = ctx.useState("loadError", "");
@@ -74,18 +93,18 @@ function Screen(ctx) {
     const [deliverFile, setDeliverFile] = ctx.useState("deliverFile", "");
     const [wardenBusy, setWardenBusy] = ctx.useState("wardenBusy", false);
     const [showContract, setShowContract] = ctx.useState("showContract", false);
-    // 「现在」页：当前任务、专注时段与钥匙
-    const [task, setTask] = ctx.useState("task", null);
+    // 「专注」页：司南、专注时段与钥匙
+    const [sinan, setSinan] = ctx.useState("sinan", null);
     const [gate, setGate] = ctx.useState("gate", null);
-    const [nowBusy, setNowBusy] = ctx.useState("nowBusy", false);
-    const [nowStatus, setNowStatus] = ctx.useState("nowStatus", null);
-    const [answerText, setAnswerText] = ctx.useState("answerText", "");
-    const [startObject, setStartObject] = ctx.useState("startObject", "");
-    const [startMaterial, setStartMaterial] = ctx.useState("startMaterial", "");
-    const [needBackend, setNeedBackend] = ctx.useState("needBackend", false);
+    const [focusBusy, setFocusBusy] = ctx.useState("focusBusy", false);
+    const [focusStatus, setFocusStatus] = ctx.useState("focusStatus", null);
+    const [draft, setDraft] = ctx.useState("draft", "");
+    const [material, setMaterial] = ctx.useState("material", "");
+    const [showMaterial, setShowMaterial] = ctx.useState("showMaterial", false);
+    const [sprintGoal, setSprintGoal] = ctx.useState("sprintGoal", "");
     const [openGateRec, setOpenGateRec] = ctx.useState("openGateRec", null);
     const [gateAnswers, setGateAnswers] = ctx.useState("gateAnswers", ["", "", "", "", ""]);
-    const nowLoadingRef = ctx.useRef("nowLoadingRef", false);
+    const focusLoadingRef = ctx.useRef("focusLoadingRef", false);
     const loadingRef = ctx.useRef("loadingRef", false);
     const slimLoadingRef = ctx.useRef("slimLoadingRef", false);
     const wardenLoadingRef = ctx.useRef("wardenLoadingRef", false);
@@ -159,16 +178,23 @@ function Screen(ctx) {
             wardenLoadingRef.current = false;
         }
     }
+    async function openManage(tab) {
+        setManageTab(tab);
+        if (tab === "slim" && slim == null)
+            await refreshSlim();
+        if (tab === "warden" && warden == null)
+            await refreshWarden();
+        if (tab === "sys" && snap == null)
+            await refresh();
+    }
     async function openPage(next) {
         setPage(next);
-        if (next === "now")
-            await refreshNow();
-        if (next === "chats" && chats == null)
+        if (next === "focus")
+            await refreshFocus();
+        if (next === "life" && chats == null)
             await refreshChats();
-        if (next === "slim" && slim == null)
-            await refreshSlim();
-        if (next === "warden" && warden == null)
-            await refreshWarden();
+        if (next === "manage")
+            await openManage(manageTab);
     }
     async function createAssignment(deadlineMs) {
         if (wardenBusy)
@@ -286,7 +312,7 @@ function Screen(ctx) {
     async function talkToHer() {
         const chat = snap?.companion?.chat;
         if (!chat) {
-            setStatus({ ok: false, text: "还没认出她是哪个对话：去「会话」页点一个对话的「设为她」" });
+            setStatus({ ok: false, text: "还没认出她是哪个对话：在「陪伴」页下面的「会话」里点一个对话的「设为她」" });
             return;
         }
         await openChat(chat.id);
@@ -371,137 +397,152 @@ function Screen(ctx) {
             setSavingProgress(false);
         }
     }
-    // ---------- 「现在」页动作 ----------
-    async function refreshNow() {
-        if (nowLoadingRef.current)
+    // ---------- 「专注」页动作（司南） ----------
+    async function refreshFocus() {
+        if (focusLoadingRef.current)
             return;
-        nowLoadingRef.current = true;
+        focusLoadingRef.current = true;
         try {
-            const [t, g] = await Promise.all([(0, thinking_js_1.loadTask)(), (0, gate_js_1.loadGate)()]);
-            setTask(t);
             const now = Date.now();
-            setGate({ focus: (0, gate_js_1.focusNow)(g, now), summary: (0, gate_js_1.gateSummary)(g, now), apps: g.config.heavy_apps });
+            const [v, g] = await Promise.all([(0, sinan_js_1.loadSinan)(now), (0, gate_js_1.loadGate)()]);
+            setSinan(v);
+            setGate({ focus: (0, gate_js_1.focusNow)(g, now), summary: (0, gate_js_1.gateSummary)(g, now), apps: g.config.heavy_apps, limit: g.config.gate.daily_key_limit || 2 });
         }
         catch (error) {
-            setNowStatus({ ok: false, text: `读取失败：${errorText(error)}` });
+            setFocusStatus({ ok: false, text: `读取失败：${errorText(error)}` });
         }
         finally {
-            nowLoadingRef.current = false;
+            focusLoadingRef.current = false;
         }
     }
-    async function nowAction(fn) {
-        if (nowBusy)
+    async function focusAction(fn) {
+        if (focusBusy)
             return;
-        setNowBusy(true);
+        setFocusBusy(true);
         try {
             await fn();
         }
         catch (error) {
-            setNowStatus({ ok: false, text: errorText(error) });
+            setFocusStatus({ ok: false, text: errorText(error) });
         }
         finally {
-            setNowBusy(false);
-            await refreshNow();
+            setFocusBusy(false);
+            await refreshFocus();
         }
     }
-    function coachText(c) {
-        return c && c.status === "saved" ? "已保存，AI 接着问了" : `已保存。${(c && c.note) || ""}`;
+    function replyStatus(out) {
+        if (!out)
+            return null;
+        return out.via === "model" ? null : { ok: false, text: `模型没接上，先用本地问题顶上（${out.error || "未知原因"}）` };
     }
-    async function doStart() {
-        await nowAction(async () => {
-            if (!startObject.trim()) {
-                setNowStatus({ ok: false, text: "先写下现在要做的事" });
+    async function doSend() {
+        await focusAction(async () => {
+            const t = draft.trim();
+            if (!t) {
+                setFocusStatus({ ok: false, text: sinan && sinan.task ? "先写下你自己的回答" : "先说一件这段时间要做的事" });
                 return;
             }
-            const r = await (0, thinking_js_1.startTask)(startObject, startMaterial);
-            if (r.status === "use_backend_console") {
-                setNeedBackend(true);
-                setNowStatus({ ok: false, text: "后台还没开放「开始」接口：点下面「去认知主控台开始」，填同一件事，开始后回到这里。" });
+            const out = sinan && sinan.task ? await (0, sinan_js_1.say)(t) : await (0, sinan_js_1.begin)(t, material);
+            setDraft("");
+            setMaterial("");
+            setShowMaterial(false);
+            setFocusStatus(replyStatus(out));
+        });
+    }
+    async function doMode(mode) {
+        if (sinan && sinan.mode === mode)
+            return;
+        await focusAction(async () => {
+            if (mode === "sprint" && !(sinan && sinan.sprint && !sinan.sprint.over)) {
+                await (0, sinan_js_1.switchMode)("sprint").catch(() => null);
+                setFocusStatus({ ok: true, text: "写下这次要交出的东西，选个时长" });
                 return;
             }
-            setStartObject("");
-            setStartMaterial("");
-            setNowStatus({ ok: true, text: r.coach && r.coach.status === "saved" ? "开始了，AI 已经提了第一个问题" : "开始了" });
+            setFocusStatus(replyStatus(await (0, sinan_js_1.switchMode)(mode)));
+            if (mode === "read" && !(sinan && sinan.task && sinan.task.hasMaterial))
+                setShowMaterial(true);
         });
     }
-    async function doAnswer() {
-        await nowAction(async () => {
-            const r = await (0, thinking_js_1.answer)(answerText);
-            setAnswerText("");
-            setNowStatus({ ok: true, text: coachText(r.coach) });
-        });
-    }
-    async function doAskAgain() {
-        await nowAction(async () => {
-            const c = await (0, thinking_js_1.coach)(`retry:${Date.now()}`);
-            setNowStatus({ ok: c.status === "saved", text: c.status === "saved" ? "AI 接上了" : c.note || "AI 没接上" });
+    async function doSprint(minutes) {
+        await focusAction(async () => {
+            const out = await (0, sinan_js_1.sprint)(sprintGoal, minutes);
+            setSprintGoal("");
+            setFocusStatus(replyStatus(out) || { ok: true, text: `冲刺开始：${minutes} 分钟。到点我会来问你交出了什么` });
         });
     }
     async function doPause() {
-        await nowAction(async () => {
-            await (0, thinking_js_1.pause)();
-            setNowStatus({ ok: true, text: "好，歇一会儿。15 分钟后我会问你一次回不回来" });
+        await focusAction(async () => {
+            await (0, sinan_js_1.pause)();
+            setFocusStatus({ ok: true, text: "好，歇一会儿。15 分钟后我来问你回不回来" });
         });
     }
     async function doResume() {
-        await nowAction(async () => {
-            await (0, thinking_js_1.resume)();
-            setNowStatus({ ok: true, text: "欢迎回来" });
+        await focusAction(async () => {
+            await (0, sinan_js_1.resume)();
+            setFocusStatus({ ok: true, text: "回来了，接着上次的问题" });
+        });
+    }
+    async function doFinish() {
+        if (confirmKey !== "finish") {
+            setConfirmKey("finish");
+            setFocusStatus({ ok: true, text: "再点一次「收起这件事」确认；对话记录会留着" });
+            return;
+        }
+        setConfirmKey("");
+        await focusAction(async () => {
+            await (0, sinan_js_1.finish)();
+            setFocusStatus({ ok: true, text: "这件事收起来了。下一件是什么？" });
         });
     }
     async function doSpeakQuestion() {
-        await nowAction(async () => {
-            const q = task && task.session ? task.session.question : "";
-            const r = await (0, speech_js_1.speak)(q ? `现在的问题：${q}` : "还没有正在做的事", "当前问题");
-            setNowStatus(r.status === "ACCEPTED" ? { ok: true, text: "念完了" } : { ok: false, text: `没念出来：${r.error}` });
+        await focusAction(async () => {
+            const q = sinan && sinan.task ? sinan.task.question : "";
+            const r = await (0, speech_js_1.speak)(q || "这段时间做什么？", "司南");
+            setFocusStatus(r.status === "ACCEPTED" ? { ok: true, text: "念完了" } : { ok: false, text: `没念出来：${r.error}` });
         });
     }
-    async function openCoreChat() {
-        await nowAction(async () => {
-            const found = await (0, nav_js_1.listChats)("核心对话");
-            if (!found.length) {
-                setNowStatus({ ok: false, text: "还没有标题叫「核心对话」的对话：新建一个，标题写「核心对话」，绑定「主控」角色卡" });
-                return;
-            }
-            await (0, nav_js_1.setMainChat)(found[0].id);
+    async function doVoice() {
+        await focusAction(async () => {
+            const r = await (0, sinan_js_1.ensureNativeChat)();
+            await (0, nav_js_1.startVoiceWith)(r.chatId);
+            setFocusStatus({ ok: true, text: r.created ? "已建好「司南」对话并打开语音球。说的话会记回这里" : "已打开语音球，切到「司南」" });
+        });
+    }
+    async function doTextNative() {
+        await focusAction(async () => {
+            const r = await (0, sinan_js_1.ensureNativeChat)();
+            await (0, nav_js_1.setMainChat)(r.chatId);
             await ctx.navigate(nav_js_1.NATIVE_CHAT_ROUTE);
         });
     }
-    async function voiceCore() {
-        await nowAction(async () => {
-            const found = await (0, nav_js_1.listChats)("核心对话");
-            await (0, nav_js_1.startVoiceWith)(found.length ? found[0].id : snap?.companion?.chat?.id ?? null);
-            setNowStatus({ ok: true, text: found.length ? "已请求打开语音球并切到「核心对话」" : "没找到「核心对话」，语音切到了她" });
-        });
-    }
     async function doOpenGate(app) {
-        await nowAction(async () => {
+        await focusAction(async () => {
             const d = await (0, gate_js_1.openGate)(app.package);
             if (d.status === "asking") {
                 setOpenGateRec(d.gate);
                 setGateAnswers(["", "", "", "", ""]);
-                setNowStatus({ ok: true, text: "回答这三个问题，认真答完就给钥匙" });
+                setFocusStatus({ ok: true, text: "回答这三个问题，认真答完就给钥匙" });
             }
             else if (d.status === "cooldown")
-                setNowStatus({ ok: false, text: `还在冷却，${d.minutes_left} 分钟后再来` });
+                setFocusStatus({ ok: false, text: `还在冷却，${d.minutes_left} 分钟后再来` });
             else if (d.status === "limit")
-                setNowStatus({ ok: false, text: `今天的钥匙用完了（${d.issued}/${d.limit}）` });
+                setFocusStatus({ ok: false, text: `今天的钥匙用完了（${d.issued}/${d.limit}）` });
             else if (d.status === "key_active")
-                setNowStatus({ ok: true, text: "这把钥匙还在用" });
+                setFocusStatus({ ok: true, text: "这把钥匙还在用" });
             else
-                setNowStatus({ ok: true, text: d.note || "不需要钥匙" });
+                setFocusStatus({ ok: true, text: d.note || "不需要钥匙" });
         });
     }
     async function doSubmitGate() {
-        await nowAction(async () => {
+        await focusAction(async () => {
             const g = openGateRec;
             const r = await (0, gate_js_1.submitGate)(g.id, gateAnswers.slice(0, g.questions.length));
             if (r.status === "granted") {
                 setOpenGateRec(null);
-                setNowStatus({ ok: true, text: `钥匙给你：${r.key.minutes} 分钟。到点我会提醒你回来做：${r.key.back_to}（锁定还没接通，这次只记账）` });
+                setFocusStatus({ ok: true, text: `钥匙给你：${r.key.minutes} 分钟。到点我会提醒你回来做：${r.key.back_to}（锁定还没接通，这次只记账）` });
             }
             else
-                setNowStatus({ ok: false, text: `再具体一点：${r.problems.join("；")}` });
+                setFocusStatus({ ok: false, text: `再具体一点：${r.problems.join("；")}` });
         });
     }
     // ---------- 基础组件 ----------
@@ -531,104 +572,194 @@ function Screen(ctx) {
         return UI.Row({ fillMaxWidth: true, paddingStart: 4, paddingTop: 8, paddingBottom: 4, verticalAlignment: "center", spacing: 8 }, [
             text(title, "headlineSmall", colors.onSurface, { weight: 1 }),
             ...trailing,
-            UI.IconButton({ icon: Icons.Refresh, enabled: !loading, onClick: page === "chats" ? refreshChats : page === "slim" ? refreshSlim : page === "warden" ? refreshWarden : refresh }),
+            UI.IconButton({ icon: Icons.Refresh, enabled: !loading, onClick: page === "life" ? () => Promise.all([refresh(), refreshChats()]) : page === "manage" ? (manageTab === "slim" ? refreshSlim : manageTab === "warden" ? refreshWarden : refresh) : refresh }),
         ]);
     }
     function spinner() {
         return UI.Row({ fillMaxWidth: true, padding: 32, horizontalArrangement: "center" }, [UI.CircularProgressIndicator({})]);
     }
-    // ---------- 现在 ----------
-    function nowTaskCard() {
-        const t = task;
-        const items = [label("现在在做")];
-        if (!t) {
-            items.push(muted("读取中…"));
-            return card(items);
-        }
-        if (!t.available) {
-            items.push(text(`后台账本连不上：${t.error}`, "bodyMedium", colors.error));
-            return card(items);
-        }
-        const s = t.session;
-        if (!s || !t.real) {
-            if (s && !t.real)
-                items.push(muted(`账本里现在是「${s.title}」（安装测试，不算你的事）`));
-            items.push(text("开始一件你现在真正要做的事", "titleMedium", colors.onSurface));
-            items.push(UI.TextField({ fillMaxWidth: true, value: startObject, onValueChange: setStartObject, placeholder: "比如：把资料分析第 3 讲弄懂" }));
-            items.push(UI.TextField({ fillMaxWidth: true, value: startMaterial, onValueChange: setStartMaterial, placeholder: "材料：粘贴文字或链接（可以空着）", minLines: 2 }));
-            items.push(UI.Button({ fillMaxWidth: true, text: nowBusy ? "处理中…" : "开始", enabled: !nowBusy, onClick: doStart }));
-            if (needBackend)
-                items.push(UI.Button({ fillMaxWidth: true, text: "去认知主控台开始", onClick: () => ctx.navigate(thinking_js_1.BACKEND_ROUTE) }));
-            return card(items);
-        }
-        items.push(text(s.title, "titleLarge", colors.onSurface));
-        if (s.status === "PAUSED") {
-            items.push(muted("暂停着。问题和材料都还在。"));
-            items.push(UI.Button({ fillMaxWidth: true, text: "我回来了", enabled: !nowBusy, onClick: doResume }));
-            return card(items);
-        }
-        items.push(text(s.question || "（还没有问题）", "bodyLarge", colors.onSurface));
-        if (s.scaffold)
-            items.push(muted(s.scaffold));
-        if (s.aiHelp)
-            items.push(UI.Surface({ fillMaxWidth: true, containerColor: colors.surfaceVariant, shape: { cornerRadius: 12 } }, text(`AI：${s.aiHelp}`, "bodyMedium", colors.onSurface, { padding: 12 })));
-        items.push(UI.TextField({ fillMaxWidth: true, value: answerText, onValueChange: setAnswerText, placeholder: "写下你自己的回答（半句话也行）", minLines: 3 }));
-        items.push(UI.Button({ fillMaxWidth: true, text: nowBusy ? "保存中…" : "保存并继续", enabled: !nowBusy, onClick: doAnswer }));
-        items.push(UI.Row({ fillMaxWidth: true, spacing: 8 }, [
-            UI.Button({ weight: 1, text: "再问一次", enabled: !nowBusy, onClick: doAskAgain }),
-            UI.Button({ weight: 1, text: "念出问题", enabled: !nowBusy, onClick: doSpeakQuestion }),
-            UI.Button({ weight: 1, text: "歇一会儿", enabled: !nowBusy, onClick: doPause }),
+    // ---------- 专注（司南） ----------
+    function gradientCard(pal, children, radius = 28, spacing = 14) {
+        // 外层卡片的底色兜底；里层渐变（旧版宿主不认 backgroundBrush 时就显示底色）
+        return UI.Card({ fillMaxWidth: true, containerColor: pal.mid, elevation: 6, shape: { cornerRadius: radius } }, UI.Column({ fillMaxWidth: true, backgroundBrush: { type: "verticalGradient", colors: pal.grad } }, [
+            UI.Column({ fillMaxWidth: true, padding: 20, spacing }, children),
         ]));
-        items.push(muted(`已写回答 ${s.answers} 条${s.lastAnswer ? ` · 上一句：「${s.lastAnswer.slice(0, 30)}」` : ""}`));
-        return card(items);
     }
-    function focusCard() {
-        const g = gate;
-        const items = [label("专注时段")];
-        if (!g) {
-            items.push(muted("读取中…"));
-            return card(items);
+    function bar(fraction, fill, track, height = 6) {
+        const done = Math.min(1, Math.max(0, fraction));
+        return UI.Row({ fillMaxWidth: true, height, background: track, backgroundShape: { type: "pill" } }, [
+            ...(done > 0.005 ? [UI.Box({ weight: done, height, background: fill, backgroundShape: { type: "pill" } })] : []),
+            ...(done < 0.995 ? [UI.Box({ weight: 1 - done, height })] : []),
+        ]);
+    }
+    function minutesOf(hhmm) {
+        const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ""));
+        return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+    }
+    function sinanAvatar(pal, size = 52) {
+        return UI.Surface({ width: size, height: size, shape: { type: "circle" }, containerColor: GOLD, shadowElevation: 4 }, UI.Box({ fillMaxSize: true, contentAlignment: "center", backgroundBrush: { type: "verticalGradient", colors: GOLD_GRAD }, backgroundShape: { type: "circle" } }, [
+            text("司", size > 40 ? "titleLarge" : "labelLarge", pal.deep, { fontWeight: "bold" }),
+        ]));
+    }
+    function modeChip(pal, key) {
+        const on = sinan && sinan.mode === key;
+        const m = sinan_logic_js_1.MODES[key];
+        return UI.Surface({ weight: 1, shape: { type: "pill" }, containerColor: on ? ON_DARK : pal.chip, onClick: () => doMode(key) }, UI.Box({ fillMaxWidth: true, paddingVertical: 8, contentAlignment: "center" }, [text(m.name, "labelLarge", on ? pal.deep : ON_DARK)]));
+    }
+    function hero() {
+        const f = gate ? gate.focus : null;
+        const active = !!(f && f.active);
+        const pal = active ? PAL.focus : PAL.calm;
+        const v = sinan;
+        const t = v ? v.task : null;
+        const status = !f ? "读取中…" : active ? `专注中 · ${f.start}–${f.end} · 还剩 ${f.minutes_left} 分` : `平时 · 下一段${f.next_is_tomorrow ? "明天 " : " "}${f.next || "—"}`;
+        const items = [
+            UI.Row({ fillMaxWidth: true, spacing: 14, verticalAlignment: "center" }, [
+                sinanAvatar(pal),
+                UI.Column({ weight: 1, spacing: 2 }, [
+                    text("司南", "titleLarge", ON_DARK, { fontWeight: "bold" }),
+                    text(status, "labelMedium", pal.soft, { maxLines: 1 }),
+                ]),
+                UI.Surface({ shape: { type: "circle" }, containerColor: pal.chip, onClick: refreshFocus }, text("↻", "titleMedium", ON_DARK, { padding: 10 })),
+            ]),
+        ];
+        if (active) {
+            const span = (minutesOf(f.end) ?? 0) - (minutesOf(f.start) ?? 0);
+            items.push(bar(span > 0 ? 1 - f.minutes_left / span : 0, GOLD, pal.chip));
         }
-        const f = g.focus, sum = g.summary;
-        items.push(text(f.active ? `进行中 ${f.start}–${f.end}，还剩 ${f.minutes_left} 分钟` : `现在不在专注时段，下一段${f.next_is_tomorrow ? "明天 " : " "}${f.next || "—"}`, "titleMedium", colors.onSurface));
-        items.push(muted(`今天钥匙剩 ${sum.keys_left_today} 把${sum.cooldown_minutes_left ? `，冷却还有 ${sum.cooldown_minutes_left} 分钟` : ""}`));
-        for (const k of sum.active_keys)
-            items.push(muted(`· ${k.app} 还能用 ${k.minutes_left} 分钟，回来先做：${k.back_to || "—"}`));
+        // 当前问题：整张卡的主角
+        items.push(UI.Column({ fillMaxWidth: true, spacing: 6, paddingTop: 4 }, [
+            text(t ? `在做 · ${t.title}` : "还没开始", "labelMedium", pal.soft, { maxLines: 1 }),
+            text(!v ? "…" : !t ? "这段时间做什么？" : t.paused ? "歇着呢。回来就接着上次的问题。" : t.question || "司南在想第一个问题…", "headlineSmall", ON_DARK, { fontWeight: "bold" }),
+        ]));
+        if (v && v.sprint) {
+            const s = v.sprint;
+            items.push(UI.Column({ fillMaxWidth: true, spacing: 6 }, [
+                text(s.over ? `冲刺到点 · ${s.goal}` : `冲刺 · ${s.goal} · 还剩 ${s.minutes_left} 分`, "labelLarge", GOLD, { maxLines: 2 }),
+                bar(s.progress, GOLD, pal.chip, 4),
+            ]));
+        }
+        if (gate) {
+            const sum = gate.summary, limit = gate.limit || 2, left = sum.keys_left_today;
+            const dots = Array.from({ length: limit }, (_, i) => UI.Box({ width: 10, height: 10, background: i < left ? GOLD : pal.chip, backgroundShape: { type: "circle" } }));
+            items.push(UI.Row({ fillMaxWidth: true, spacing: 6, verticalAlignment: "center" }, [
+                text("钥匙", "labelMedium", pal.soft),
+                ...dots,
+                text(sum.cooldown_minutes_left ? `冷却 ${sum.cooldown_minutes_left} 分` : sum.active_keys.length ? `${sum.active_keys[0].app} 还能用 ${sum.active_keys[0].minutes_left} 分` : "", "labelMedium", pal.soft, { weight: 1, maxLines: 1 }),
+            ]));
+        }
+        items.push(UI.Row({ fillMaxWidth: true, spacing: 6 }, sinan_logic_js_1.MODE_ORDER.map((k) => modeChip(pal, k))));
+        return gradientCard(pal, items);
+    }
+    function eventLine(r) {
+        const what = { begin: `开始：${r.text}`, mode: `换成${r.text}`, sprint: `冲刺 ${r.text}`, pause: "歇一会儿", resume: "回来了", finish: `收起：${r.text}` }[r.type] || r.text;
+        return UI.Row({ fillMaxWidth: true, horizontalArrangement: "center", paddingVertical: 2 }, [
+            UI.Surface({ shape: { type: "pill" }, containerColor: colors.surfaceVariant }, text(`${clock(r.ts)} · ${what}`, "labelSmall", colors.onSurfaceVariant, { paddingHorizontal: 12, paddingVertical: 4, maxLines: 1 })),
+        ]);
+    }
+    function bubble(r) {
+        if (r.role === "event")
+            return eventLine(r);
+        if (r.role === "user") {
+            return UI.Row({ fillMaxWidth: true, paddingStart: 48 }, [
+                UI.Box({ weight: 1 }),
+                UI.Surface({ containerColor: colors.primary, shape: { topStart: 20, topEnd: 20, bottomStart: 20, bottomEnd: 6 } }, UI.Column({ padding: 12, spacing: 2 }, [
+                    text(r.text, "bodyLarge", colors.onPrimary),
+                    text(`${clock(r.ts)}${r.via === "voice" ? " · 语音" : ""}`, "labelSmall", colors.onPrimary),
+                ])),
+            ]);
+        }
+        return UI.Row({ fillMaxWidth: true, paddingEnd: 32, spacing: 8, verticalAlignment: "top" }, [
+            sinanAvatar(PAL.focus, 30),
+            UI.Surface({ weight: 1, containerColor: colors.surfaceVariant, shape: { topStart: 6, topEnd: 20, bottomStart: 20, bottomEnd: 20 } }, UI.Column({ padding: 12, spacing: 2 }, [
+                text(r.text, "bodyLarge", colors.onSurface),
+                ...(r.via === "local" ? [text("模型没接上，这句是本地备用问题", "labelSmall", MOOD_INK[2])] : []),
+            ])),
+        ]);
+    }
+    function clock(ts) {
+        return new Date(ts + 8 * 3600000).toISOString().slice(11, 16);
+    }
+    function threadCard() {
+        const rows = (sinan ? sinan.thread : []).slice(-THREAD_SHOWN);
+        if (!rows.length)
+            return null;
+        return UI.Column({ fillMaxWidth: true, spacing: 10, paddingVertical: 4 }, rows.map(bubble));
+    }
+    function composer() {
+        const v = sinan;
+        const t = v ? v.task : null;
+        const items = [];
+        if (t && t.paused) {
+            items.push(UI.Button({ fillMaxWidth: true, text: focusBusy ? "处理中…" : "我回来了", enabled: !focusBusy, onClick: doResume }));
+            return card(items, 10);
+        }
+        if (v && v.mode === "sprint" && !(v.sprint && !v.sprint.over)) {
+            items.push(label("这次冲刺要交出什么"));
+            items.push(UI.TextField({ fillMaxWidth: true, value: sprintGoal, onValueChange: setSprintGoal, placeholder: "看得见、能检查的东西：比如 做完第3讲例题1-5" }));
+            items.push(UI.Row({ fillMaxWidth: true, spacing: 8 }, sinan_logic_js_1.SPRINT_MINUTES.map((m) => UI.Button({ weight: 1, text: `${m} 分钟`, enabled: !focusBusy, onClick: () => doSprint(m) }))));
+            return card(items, 10);
+        }
+        items.push(UI.TextField({ fillMaxWidth: true, value: draft, onValueChange: setDraft, placeholder: t ? "用你自己的话回答（半句也行）" : "说一件这段时间要做的具体的事", minLines: 2 }));
+        if (showMaterial)
+            items.push(UI.TextField({ fillMaxWidth: true, value: material, onValueChange: setMaterial, placeholder: "贴材料：文字或链接（开始时一起交给司南）", minLines: 3 }));
+        items.push(UI.Row({ fillMaxWidth: true, spacing: 8, verticalAlignment: "center" }, [
+            UI.Button({ weight: 1, text: focusBusy ? "司南在想…" : t ? "发送" : "开始", enabled: !focusBusy, onClick: doSend }),
+            UI.FilledTonalButton({ enabled: !focusBusy, onClick: doSpeakQuestion }, text("🔈", "labelLarge", colors.onSurface)),
+            UI.FilledTonalButton({ enabled: !focusBusy, onClick: doVoice }, text("🎙", "labelLarge", colors.onSurface)),
+        ]));
+        const links = [];
+        if (!t && !showMaterial)
+            links.push(UI.TextButton({ onClick: () => setShowMaterial(true) }, text("＋ 贴材料", "labelLarge", colors.primary)));
+        if (t) {
+            links.push(UI.TextButton({ enabled: !focusBusy, onClick: doPause }, text("Ⅱ 歇一会儿", "labelLarge", colors.primary)));
+            links.push(UI.TextButton({ enabled: !focusBusy, onClick: doFinish }, text(confirmKey === "finish" ? "再点确认" : "收起这件事", "labelLarge", confirmKey === "finish" ? MOOD_INK[3] : colors.onSurfaceVariant)));
+        }
+        links.push(UI.TextButton({ enabled: !focusBusy, onClick: doTextNative }, text("打字长聊", "labelLarge", colors.onSurfaceVariant)));
+        items.push(UI.Row({ fillMaxWidth: true, spacing: 0, verticalAlignment: "center" }, links));
+        return card(items, 8);
+    }
+    function gateCard() {
+        const g = gate;
+        if (!g || !(g.focus.active || openGateRec))
+            return null;
+        const items = [UI.Row({ fillMaxWidth: true, verticalAlignment: "center" }, [
+                text("想刷一会儿？", "titleMedium", colors.onSurface, { weight: 1 }),
+                text(`今天还剩 ${g.summary.keys_left_today} 把`, "labelMedium", colors.onSurfaceVariant),
+            ])];
         if (openGateRec) {
             openGateRec.questions.forEach((q, i) => items.push(UI.TextField({
                 fillMaxWidth: true,
                 value: gateAnswers[i],
-                onValueChange: (v) => { const a = gateAnswers.slice(); a[i] = v; setGateAnswers(a); },
+                onValueChange: (val) => { const a = gateAnswers.slice(); a[i] = val; setGateAnswers(a); },
                 placeholder: `${i + 1}. ${q}`,
             })));
-            items.push(UI.Button({ fillMaxWidth: true, text: "交上", enabled: !nowBusy, onClick: doSubmitGate }));
-            items.push(UI.Button({ text: "先不要了", onClick: () => setOpenGateRec(null) }));
+            items.push(UI.Row({ fillMaxWidth: true, spacing: 8 }, [
+                UI.Button({ weight: 1, text: "交上", enabled: !focusBusy, onClick: doSubmitGate }),
+                UI.TextButton({ onClick: () => setOpenGateRec(null) }, text("先不要了", "labelLarge", colors.onSurfaceVariant)),
+            ]));
         }
-        else if (f.active) {
-            items.push(UI.Row({ fillMaxWidth: true, spacing: 8 }, g.apps.slice(0, 4).map((a) => pill(`我想打开${a.name}`, colors.surfaceVariant, colors.onSurface, () => doOpenGate(a)))));
+        else {
+            items.push(muted("专注时段里这些 App 要先回答三个问题，拿一把限时钥匙。"));
+            items.push(UI.Row({ fillMaxWidth: true, spacing: 8 }, g.apps.slice(0, 4).map((a) => pill(a.name, colors.surfaceVariant, colors.onSurface, () => doOpenGate(a)))));
         }
-        items.push(muted("锁定执行还没接通：时段内的钥匙先只记账，不改变手机限制。"));
-        return card(items);
+        items.push(muted("真锁还没接通：钥匙现在只记账，不改手机限制。"));
+        return UI.Card({ fillMaxWidth: true, containerColor: colors.surface, elevation: 0, border: { width: 1, color: GOLD }, shape: { cornerRadius: 20 } }, UI.Column({ fillMaxWidth: true, padding: 18, spacing: 10 }, items));
     }
-    function nowTalkCard() {
-        return card([
-            label("说话"),
-            UI.Row({ fillMaxWidth: true, spacing: 8 }, [
-                UI.Button({ weight: 1, text: "打开核心对话", enabled: !nowBusy, onClick: openCoreChat }),
-                UI.Button({ weight: 1, text: "语音", enabled: !nowBusy, onClick: voiceCore }),
-            ]),
-            muted(`「核心对话」负责推进这件事；想放松聊天找${companionName}（今天页）。`),
-        ], 8);
-    }
-    function nowPage() {
-        const items = [UI.Row({ fillMaxWidth: true, paddingStart: 4, paddingTop: 8, paddingBottom: 4, verticalAlignment: "center", spacing: 8 }, [
-                text("现在", "headlineSmall", colors.onSurface, { weight: 1 }),
-                UI.IconButton({ icon: Icons.Refresh, enabled: !nowBusy, onClick: refreshNow }),
-            ])];
-        if (nowStatus)
-            items.push(card([text(nowStatus.text, "bodyMedium", nowStatus.ok ? colors.primary : colors.error)], 4));
-        items.push(nowTaskCard(), focusCard(), nowTalkCard());
-        return pageColumn(items);
+    function focusPage() {
+        const items = [hero()];
+        if (focusStatus)
+            items.push(UI.Surface({ fillMaxWidth: true, shape: { cornerRadius: 14 }, containerColor: focusStatus.ok ? MOOD_TINT[0] : MOOD_TINT[3] }, text(focusStatus.text, "bodyMedium", focusStatus.ok ? MOOD_INK[0] : MOOD_INK[3], { padding: 12 })));
+        const thread = threadCard();
+        if (thread)
+            items.push(thread);
+        else if (sinan && !sinan.task)
+            items.push(muted(`${sinan_logic_js_1.MODES[sinan.mode].name}：${sinan_logic_js_1.MODES[sinan.mode].hint}`));
+        items.push(composer());
+        const gc = gateCard();
+        if (gc)
+            items.push(gc);
+        return UI.LazyColumn({ weight: 1, fillMaxWidth: true, padding: { horizontal: 16, vertical: 12 }, spacing: 12, autoScrollToEnd: false }, items);
     }
     // ---------- 今天 ----------
     function systemIssues(s) {
@@ -689,7 +820,7 @@ function Screen(ctx) {
                 UI.FilledTonalButton({ weight: 1, enabled: !speaking, onClick: sayLine }, text(speaking ? "念着…" : "🔈 念一句", "labelLarge", colors.onSurface)),
             ]),
             ...(status ? [text(status.text, "bodySmall", status.ok ? MOOD_INK[0] : MOOD_INK[3])] : []),
-            ...(hasChat ? [muted(`她 = 「${s.companion?.chat?.title}」${s.companion?.source === "chosen" ? "（你选的）" : ""}`, 1)] : [muted("还没认出她是哪个对话，去「会话」页点「设为她」")]),
+            ...(hasChat ? [muted(`她 = 「${s.companion?.chat?.title}」${s.companion?.source === "chosen" ? "（你选的）" : ""}`, 1)] : [muted("还没认出她是哪个对话，在下面「会话」里点一个对话的「设为她」")]),
         ]);
     }
     function actionTile(kind, icon) {
@@ -763,14 +894,14 @@ function Screen(ctx) {
         children.push(muted("色块是前台采样口径：绿=在任务上，橙=不在，灰=没数据或看不出"));
         return card(children);
     }
-    function todayPage() {
+    function lifePage() {
         const issues = snap ? systemIssues(snap) : 0;
         const chip = snap
             ? issues > 0
-                ? pill(`系统 · ${issues} 处要看`, MOOD_TINT[3], MOOD_INK[3], () => openPage("sys"))
-                : pill("系统正常", MOOD_TINT[0], MOOD_INK[0], () => openPage("sys"))
+                ? pill(`系统 · ${issues} 处要看`, MOOD_TINT[3], MOOD_INK[3], () => { setPage("manage"); return openManage("sys"); })
+                : pill("系统正常", MOOD_TINT[0], MOOD_INK[0], () => { setPage("manage"); return openManage("sys"); })
             : null;
-        const items = [pageHeader("今天", chip ? [chip] : [])];
+        const items = [pageHeader("陪伴", chip ? [chip] : [])];
         if (loadError)
             items.push(card([text(`读取失败：${loadError}`, "bodyMedium", colors.error)]));
         if (!snap) {
@@ -782,6 +913,7 @@ function Screen(ctx) {
                 items.push(banner);
             items.push(herCard(snap), taskCard(snap), dayCard(snap));
         }
+        items.push(...chatsItems());
         return pageColumn(items);
     }
     // ---------- 会话 ----------
@@ -813,35 +945,39 @@ function Screen(ctx) {
     function chatGroup(title, rows, note) {
         return card([label(title), ...(note ? [muted(note)] : []), ...rows], 2);
     }
-    function chatsPage() {
+    function chatsItems() {
         const items = [
-            pageHeader("会话"),
+            UI.Row({ fillMaxWidth: true, paddingStart: 4, paddingTop: 12 }, [text("会话", "titleLarge", colors.onSurface)]),
             UI.TextField({ fillMaxWidth: true, value: query, onValueChange: setQuery, placeholder: "搜索对话", singleLine: true }),
         ];
         if (chatsError)
             items.push(card([text(`读取对话失败：${chatsError}`, "bodyMedium", colors.error)]));
         if (chats == null) {
             items.push(spinner());
-            return pageColumn(items);
+            return items;
         }
         const herId = snap?.companion?.chat?.id ?? "";
         const keyword = query.trim();
         if (keyword) {
             const matches = chats.filter((c) => c.title.includes(keyword));
             items.push(matches.length > 0 ? chatGroup(`搜索结果 ${matches.length}`, matches.map((c) => chatRow(c, "💬", c.id !== herId))) : muted("没有匹配的对话"));
-            return pageColumn(items);
+            return items;
         }
         const her = chats.filter((c) => c.id === herId);
         const backstage = chats.filter((c) => (0, nav_js_1.isPinned)(c) && c.id !== herId);
-        const recent = chats.filter((c) => !(0, nav_js_1.isPinned)(c) && c.id !== herId).slice(0, RECENT_CHATS);
+        const recentAll = chats.filter((c) => !(0, nav_js_1.isPinned)(c) && c.id !== herId).slice(0, RECENT_CHATS);
+        const recent = showAllChats ? recentAll : recentAll.slice(0, COLLAPSED_CHATS);
         items.push(her.length > 0
             ? chatGroup("她（主入口）", her.map((c) => chatRow(c, "🎭")))
             : chatGroup("她（主入口）", [muted("还没认出她，在下面点一个对话的「设为她」")]));
         if (backstage.length > 0) {
             items.push(chatGroup("后台角色", backstage.map((c) => chatRow(c, "⚙", true)), "平时不用直接找它们"));
         }
-        items.push(chatGroup(`最近 ${recent.length} 个`, recent.map((c) => chatRow(c, "💬", true))));
-        return pageColumn(items);
+        items.push(chatGroup(`最近 ${recentAll.length} 个`, [
+            ...recent.map((c) => chatRow(c, "💬", true)),
+            ...(recentAll.length > COLLAPSED_CHATS ? [UI.TextButton({ onClick: () => setShowAllChats(!showAllChats) }, text(showAllChats ? "收起" : `展开全部 ${recentAll.length} 个`, "labelLarge", colors.primary))] : []),
+        ]));
+        return items;
     }
     // ---------- 系统 ----------
     function healthRow(h, now) {
@@ -884,11 +1020,11 @@ function Screen(ctx) {
                 : []),
         ]);
     }
-    function sysPage() {
-        const items = [pageHeader("系统")];
+    function sysItems() {
+        const items = [];
         if (!snap) {
             items.push(spinner());
-            return pageColumn(items);
+            return items;
         }
         const s = snap;
         const now = s.generatedAt;
@@ -949,7 +1085,7 @@ function Screen(ctx) {
             more.push(muted(`心情由采样、偏移和你的进展算出，只用来呈现，不会执行动作。读取于 ${(0, snapshot_js_1.formatDateTime)(now)}。`));
         }
         items.push(card(more, 6));
-        return pageColumn(items);
+        return items;
     }
     // ---------- 省流 ----------
     function actionButton(key, labelText, onClick, danger = false) {
@@ -1005,8 +1141,8 @@ function Screen(ctx) {
             actionButton(key, "停用", () => confirmThen(key, () => (0, slim_js_1.setPackageEnabled)(p.name, false)), used),
         ]);
     }
-    function slimPage() {
-        const items = [pageHeader("省流")];
+    function slimItems() {
+        const items = [];
         if (slimStatus) {
             items.push(card([text(slimStatus.text, "bodyMedium", slimStatus.ok ? MOOD_INK[0] : colors.error)], 4, slimStatus.ok ? MOOD_TINT[0] : MOOD_TINT[3]));
         }
@@ -1014,7 +1150,7 @@ function Screen(ctx) {
             items.push(card([text(`读取失败：${slimError}`, "bodyMedium", colors.error)]));
         if (!slim) {
             items.push(spinner());
-            return pageColumn(items);
+            return items;
         }
         const r = slim;
         const ceiling = r.summary ? (0, slim_js_1.summaryCeiling)(r.summary) : null;
@@ -1121,7 +1257,7 @@ function Screen(ctx) {
         }
         for (const e of r.errors)
             items.push(muted(`读取失败：${e}`));
-        return pageColumn(items);
+        return items;
     }
     // ---------- 督促（演练） ----------
     function stdChip(type, name, hint) {
@@ -1171,8 +1307,8 @@ function Screen(ctx) {
             lines.push(muted(v.reasons.join("；")));
         return card(lines, 6, MOOD_TINT[level]);
     }
-    function wardenPage() {
-        const items = [pageHeader("督促")];
+    function wardenItems() {
+        const items = [];
         items.push(card([
             text("演练模式：只记录，不锁任何 App", "titleSmall", MOOD_INK[0]),
             muted("它按你签的契约和时间，算出到点没交差时本来会锁什么，写进日志给你核对。真锁要你逐项确认契约后单独开。这手机始终是你的，系统设置里随时能停用 Operit——它做的是让放弃有代价、被记下，把你拉回来面对任务。"),
@@ -1183,7 +1319,7 @@ function Screen(ctx) {
             items.push(card([text(`读取失败：${wardenError}`, "bodyMedium", colors.error)]));
         if (!warden) {
             items.push(spinner());
-            return pageColumn(items);
+            return items;
         }
         const r = warden;
         if (r.view.assignment) {
@@ -1257,28 +1393,48 @@ function Screen(ctx) {
         else {
             items.push(card([muted("还没有演练记录。派个活、把截止时间调短，等打点工作流跑一拍（或到点后打开这页），就能看到它本来会锁什么。")], 4));
         }
+        return items;
+    }
+    // ---------- 管理 ----------
+    function segment() {
+        return UI.Surface({ fillMaxWidth: true, shape: { type: "pill" }, containerColor: colors.surfaceVariant }, UI.Row({ fillMaxWidth: true, padding: 4, spacing: 4 }, MANAGE_TABS.map((t) => {
+            const on = manageTab === t.key;
+            return UI.Surface({ weight: 1, shape: { type: "pill" }, containerColor: on ? colors.surface : colors.surfaceVariant, shadowElevation: on ? 2 : 0, onClick: () => openManage(t.key) }, UI.Box({ fillMaxWidth: true, paddingVertical: 8, contentAlignment: "center" }, [
+                text(t.name, "labelLarge", on ? colors.primary : colors.onSurfaceVariant),
+            ]));
+        })));
+    }
+    function managePage() {
+        const items = [pageHeader("管理"), segment()];
+        items.push(...(manageTab === "slim" ? slimItems() : manageTab === "warden" ? wardenItems() : sysItems()));
         return pageColumn(items);
     }
-    // ---------- 底栏 ----------
-    function navItem(target, icon, name) {
+    // ---------- 底栏：悬浮胶囊 ----------
+    function navItem(target, glyph, name) {
         const on = page === target;
-        return UI.Surface({ weight: 1, containerColor: colors.surface, onClick: () => openPage(target) }, UI.Column({ fillMaxWidth: true, paddingTop: 8, paddingBottom: 10, horizontalAlignment: "center", spacing: 2 }, [
-            text(icon, "titleMedium", on ? colors.primary : colors.onSurfaceVariant),
-            text(name, "labelMedium", on ? colors.primary : colors.onSurfaceVariant),
-        ]));
+        const inner = UI.Row({ fillMaxWidth: true, paddingVertical: 10, horizontalArrangement: "center", verticalAlignment: "center", spacing: 6 }, [
+            text(glyph, "titleMedium", on ? ON_DARK : colors.onSurfaceVariant),
+            text(name, "labelLarge", on ? ON_DARK : colors.onSurfaceVariant, on ? { fontWeight: "bold" } : {}),
+        ]);
+        return UI.Surface({ weight: 1, shape: { type: "pill" }, containerColor: on ? NAV_GRAD[0] : colors.surface, onClick: () => openPage(target) }, on ? UI.Box({ fillMaxWidth: true, backgroundBrush: { type: "verticalGradient", colors: NAV_GRAD }, backgroundShape: { type: "pill" } }, [inner]) : inner);
     }
-    const body = page === "now" ? nowPage() : page === "today" ? todayPage() : page === "chats" ? chatsPage() : page === "warden" ? wardenPage() : page === "slim" ? slimPage() : sysPage();
+    const body = page === "life" ? lifePage() : page === "manage" ? managePage() : focusPage();
     return UI.Column({
         fillMaxSize: true,
         onLoad: async () => {
             if (autoLoadedRef.current)
                 return;
             autoLoadedRef.current = true;
-            await Promise.all([refresh(), refreshNow()]);
+            await Promise.all([refresh(), refreshFocus()]);
         },
     }, [
         body,
-        UI.HorizontalDivider({ color: colors.surfaceVariant }),
-        UI.Row({ fillMaxWidth: true }, [navItem("now", "✎", "现在"), navItem("today", "☀", "今天"), navItem("chats", "💬", "会话"), navItem("warden", "⏱", "督促"), navItem("slim", "🍃", "省流"), navItem("sys", "⚙", "系统")]),
+        UI.Box({ fillMaxWidth: true, padding: { horizontal: 16, vertical: 10 } }, [
+            UI.Surface({ fillMaxWidth: true, shape: { type: "pill" }, containerColor: colors.surface, shadowElevation: 10, tonalElevation: 2 }, UI.Row({ fillMaxWidth: true, padding: 6, spacing: 6 }, [
+                navItem("focus", "◎", "专注"),
+                navItem("life", "♡", "陪伴"),
+                navItem("manage", "☰", "管理"),
+            ])),
+        ]),
     ]);
 }

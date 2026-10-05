@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "toolpkg_id": "local.focus_hub",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "api_version": "1.0.0",
   "main": "dist/main.js",
   "display_name": {
@@ -10,8 +10,8 @@
     "default": "Focus Hub"
   },
   "description": {
-    "zh": "主控台：「现在」页推进你正在做的事（当前问题→你的回答→AI 接着问），专注时段与对话门钥匙；她会在专注时段里念出当前问题把你接回来。保留今天/会话/督促/省流/系统各页。锁定执行未接通前，钥匙只记账。",
-    "en": "Focus Hub: Now page with the current task loop, focus windows and gate keys; companion check-ins, chats, warden, context diet and system pages.",
+    "zh": "主控台：三栏——「专注」是司南（严格搭档，追问/陪读/冲刺/复盘四种模式，可语音）和专注时段、对话门钥匙；「陪伴」是小满、进展和会话；「管理」是督促、省流、系统。专注时段里会念出当前问题把你接回来。锁定执行未接通前，钥匙只记账。",
+    "en": "Focus Hub: Focus (Sinan, a strict study partner with four modes, focus windows and gate keys), Companion, and Manage tabs.",
     "default": "Focus Hub"
   },
   "enabled_by_default": false,
@@ -51,7 +51,7 @@
         "en": "Focus Hub Navigation"
       },
       "description": {
-        "zh": "工作流或 AI 用：打开主控台页面，或在主界面打开指定对话。只做页面跳转。",
+        "zh": "工作流或 AI 用：打开主控台、打开指定对话、陪伴打卡、专注推进；给语音里的司南读局面、记原话。不冻结应用。",
         "en": "Open the Focus Hub page or a specific chat. Navigation only."
       }
     },
@@ -131,7 +131,7 @@
         "en": "Focus nudge (15 min)"
       },
       "description": {
-        "zh": "专注时段内按当前问题把你接回来；收回到期钥匙。",
+        "zh": "专注时段内按司南的当前问题把你接回来，冲刺到点问交差；收回到期钥匙。",
         "en": "Bring you back to the current question during focus windows."
       },
       "resource_key": "workflow_focus_nudge"
