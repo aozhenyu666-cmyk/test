@@ -1,4 +1,4 @@
-# A｜A-027｜现在就装：后台 preview.3 + 核心对话台 v0.2，用户先用起来
+# A｜A-027｜现在就装：后台 preview.3 + 核心对话台 v0.2.1，用户先用起来
 
 **为什么现在装**：Codex 的 preview.4 还要一段时间。核心对话台已经能在 preview.3 上工作，先让用户用起来。已知限制：AI 接着问时，每一题只能试一次，失败后不能重试（C-1 修复中）。
 **用户要做的**：约 10 分钟，第 4 步。
@@ -18,8 +18,8 @@
   vendor/cognitive-continuity-0.3.0-preview.3/SHA256SUMS
 
 核心对话台
-  dist/zhukong-0.2.0.toolpkg
-  dist/zhukong-skill-0.2.0.zip
+  dist/zhukong-0.2.1.toolpkg
+  dist/zhukong-skill-0.2.1.zip
   dist/SHA256SUMS
 ```
 
@@ -35,7 +35,7 @@
 
 ## 3. 安装核心对话台，建好「核心对话」
 
-- 安装 `zhukong-0.2.0.toolpkg`，启用子包 `zhukong`，同步它的 Skill。
+- 安装 `zhukong-0.2.1.toolpkg`，启用子包 `zhukong`，同步它的 Skill。
 - 新建一个对话，标题设为「核心对话」。如果用户已经建好「主控」角色卡（设定见仓库 `operit/roles/角色卡说明.md` 第零节），就绑定它；没有就先不绑。
 - 用 `zhukong:configure` 登记两个会话 ID：
   - `core_chat_id`：刚建的「核心对话」；

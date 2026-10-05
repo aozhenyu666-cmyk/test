@@ -118,3 +118,28 @@ test('core console: chat is the main area, the side panel runs the task loop aga
   assert.equal(host.current_chat, '52a18815-xiaoman');
   assert.equal(ui.tree().props.open, false);
 });
+
+// 复现 Operit 注册阶段的行为（JsExecutionScriptBuilder.kt）：require 到 *.ui.js 时返回占位函数，
+// 并按 JsToolPkgRegistration.kt 的 normalizeScreenField 规则检查 screen 是否可序列化。
+test('registration mode: every UI route passes a serializable screen reference', () => {
+  const src = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const fakeRequire = req => {
+    if (/\.ui\.js$/.test(req)) { const f = function ScreenPlaceholder() { return null; }; f.__operit_toolpkg_module_path = req.replace(/^\.\//, ''); return f; }
+    throw new Error('unexpected require in main.js: ' + req);
+  };
+  const regs = [];
+  global.ToolPkg = new Proxy({}, {get: (_, k) => (...a) => regs.push([k, a[0]])});
+  const mod = {exports: {}};
+  try {
+    new Function('module', 'exports', 'require', src)(mod, mod.exports, fakeRequire);
+    assert.equal(mod.exports.registerToolPkg(), true);
+  } finally { delete global.ToolPkg; }
+  const routes = regs.filter(r => r[0] === 'registerUiRoute').map(r => r[1]);
+  assert.equal(routes.length, 2);
+  for (const r of routes) {
+    const sc = r.screen;
+    const ok = typeof sc === 'string' || (typeof sc === 'function' && typeof sc.__operit_toolpkg_module_path === 'string');
+    assert.ok(ok, 'route ' + r.id + ' needs a serializable screen reference');
+  }
+  assert.deepEqual(routes.map(r => r.screen.__operit_toolpkg_module_path).sort(), ['ui/console.ui.js', 'ui/core.ui.js']);
+});

@@ -2,7 +2,7 @@
 // 把纯逻辑、状态文件和真机接口串起来。每个公开方法对应一个工具。
 const L = require('./logic.js');
 
-const VERSION = '0.2.0';
+const VERSION = '0.2.1';
 
 function failed(r) { return !r || r.success === false || r.ok === false || (r.data && r.data.success === false); }
 function payload(r) { return r && typeof r === 'object' && 'data' in r ? r.data : r; }
