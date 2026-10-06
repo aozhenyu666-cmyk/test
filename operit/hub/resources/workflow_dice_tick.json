@@ -1,0 +1,19 @@
+{
+  "id": "focus-hub-dice-tick-seed",
+  "name": "骰子节拍",
+  "description": "每5分钟检查一次；按骰子页设置的间隔与时段掷骰推送。",
+  "nodes": [
+    {"__type": "com.ai.assistance.operit.data.model.TriggerNode", "id": "t_tick", "type": "trigger", "name": "每5分钟", "description": "", "position": {"x": 100.0, "y": 80.0},
+     "triggerType": "schedule", "triggerConfig": {"enabled": "true", "repeat": "true", "schedule_type": "interval", "interval_ms": "300000"}},
+    {"__type": "com.ai.assistance.operit.data.model.TriggerNode", "id": "t_manual", "type": "trigger", "name": "手动", "description": "", "position": {"x": 100.0, "y": 260.0},
+     "triggerType": "manual", "triggerConfig": {"enabled": "true"}},
+    {"__type": "com.ai.assistance.operit.data.model.ExecuteNode", "id": "e_tick", "type": "execute", "name": "掷骰节拍", "description": "focus_hub_dice:tick", "position": {"x": 380.0, "y": 170.0},
+     "actionType": "focus_hub_dice:tick", "actionConfig": {}, "jsCode": null}
+  ],
+  "connections": [
+    {"id": "k1", "sourceNodeId": "t_tick", "targetNodeId": "e_tick", "condition": null},
+    {"id": "k2", "sourceNodeId": "t_manual", "targetNodeId": "e_tick", "condition": null}
+  ],
+  "createdAt": 0, "updatedAt": 0, "enabled": true, "lastExecutionTime": null, "lastExecutionStatus": null,
+  "totalExecutions": 0, "successfulExecutions": 0, "failedExecutions": 0
+}

@@ -26,12 +26,15 @@ files = "\n".join([
 card = read("roles/司南.md")
 role = card.split("## 人设正文", 1)[1].split("## 语音场景补充", 1)[0].strip()
 voice = card.split("## 语音场景补充（粘贴到“其他内容（语音）”）", 1)[1].strip()
+coach = read("roles/骰子教练.md").split("## 人设正文", 1)[1].strip()
+import hashlib
+hub_hash = hashlib.sha256((HERE / "dist" / "focus_hub-0.8.0.toolpkg").read_bytes()).hexdigest()
 xiaoman = read("roles/小满_调整.md").split("### 新的分工（追加）", 1)[1].strip()
 
 out = f"""# 给 Operit AI 的命令（免下载版 v3：司南）
 
 不用下载任何文件，所有内容都写在命令里。
-按顺序发：1A → 1B → 1C → 2 → 3 → 4。一次只发一条，等 Operit 回报后再发下一条。
+按顺序发：1A → 1B → 1C → 2 → 3 → 4；主控台升级是命令 5，可以在 2 之后任何时候发。一次只发一条，等 Operit 回报后再发下一条。
 每条命令就是四个反引号之间的全部内容，整段复制。
 
 ---
@@ -64,11 +67,11 @@ out = f"""# 给 Operit AI 的命令（免下载版 v3：司南）
 
 ````
 任务：
-1. 新建角色卡“司南”：
-   - “角色设定”填下面“人设正文”分隔线之间的全部内容，整段照抄，不要改写；
-   - “其他内容（语音）”填“语音补充”分隔线之间的内容；
-   - 对话模型绑定方式选“固定配置”，绑定 Grok 4.6（找不到这个模型就告诉我现有模型列表，不要自己换）；
-   - 工具白名单不要开启，让她能用文件、浏览器、读屏这些工具。
+1. 角色卡“司南”：用 operit_editor 的工具来建（没有就 create_character_card，已经有就 update_character_card 整段替换）：
+   - character_setting：下面“人设正文”分隔线之间的全部内容，整段照抄，不要改写；
+   - other_content_voice：“语音补充”分隔线之间的内容；
+   - chat_model_binding_mode 设为 FIXED_CONFIG，chat_model_config_id 和 chat_model_index 指向 Grok 4.6（先用 list_model_configs 查；找不到这个模型就把模型列表告诉我，不要自己换）；
+   - tool_access_enabled 设为 false，让她能用文件、浏览器、读屏这些工具。
 2. 对话“司南·任务对话（勿删）”：没有就新建，并绑定角色卡“司南”。
    把它的 chat_id 写进 /sdcard/Download/Operit/core/config.txt，格式是：main_chat_id=<id>
 3. 语音设置：
@@ -186,6 +189,45 @@ out = f"""# 给 Operit AI 的命令（免下载版 v3：司南）
 - 卡住或报错的地方（原样贴出）
 ````
 """
+
+out += f"""
+---
+
+## 命令 5：升级主控台到 0.8.0，建骰子教练
+
+先把我发给你的 focus_hub-0.8.0.toolpkg 保存到手机的 Download 文件夹，再发这条。
+
+````
+任务：升级主控台，并建好骰子教练。
+
+1. 在 /sdcard/Download/ 里找到 focus_hub-0.8.0.toolpkg，核对 SHA256 是否等于：
+   {hub_hash}
+   不一致就停下告诉我。
+2. 先备份：把当前已安装的主控台（local.focus_hub，0.7.0）复制一份到 /sdcard/Download/Operit/backup/。找不到安装文件就告诉我它在哪。
+3. 用 operit_editor:debug_install_toolpkg 安装：source_path 设为那个文件，reset_subpackage_states=false。
+   装好后确认子包 focus_hub_dice（六骰子思维训练）已经启用，没启用就启用它；其他子包原来是什么状态就保持什么状态。
+4. 角色卡“骰子教练”：用 operit_editor:create_character_card 新建（已经有就 update_character_card），character_setting 是下面分隔线之间的全部内容，模型用便宜、快的那个。
+5. 打开主控台，确认：
+   - 底栏是 今天 / 司南 / 骰子 / 会话 / 设置；
+   - 设置页顶部有 系统 / 省流 / 督促 三个分页。
+6. 调用一次 focus_hub_dice:roll，确认：
+   - 手机收到了骰子通知；
+   - 出现了一个“骰子训练·第1轮（自动清理）”对话，骰子教练在里面给了示范开头。
+7. 提醒我：去骰子页点“建立「骰子节拍」工作流”，再打开“定时推送”，间隔自己选。
+
+=====骰子教练人设开始=====
+{{coach}}
+=====骰子教练人设结束=====
+
+回报格式：
+- SHA256：一致 / 不一致
+- 备份位置：
+- 安装结果：版本号，以及各子包的启用状态
+- 骰子教练：已建 / 已更新 / 失败
+- 底栏和设置页：是否和描述一致（截图或说明）
+- 骰子试掷：通知是否收到；对话标题；教练的原话（前 80 字）
+````
+""".replace("{{coach}}", coach)
 
 (HERE / "commands" / "给Operit的命令_免下载版.md").write_text(out, encoding="utf-8")
 print(len(out))
