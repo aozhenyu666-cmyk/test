@@ -16,6 +16,7 @@ PLAN_AT=480        # 08:00 早计划
 SUMMARY_AT=1290    # 21:30 晚总结
 NUDGE_AFTER=600    # 提问后 10 分钟没回应才追问
 NUDGE_GAP=600      # 两次追问至少隔 10 分钟
+CHECK_EVERY=1200   # 没有待答问题、你在做事时，每 20 分钟点一次名
 
 NOW=${NOW_EPOCH:-$(date +%s)}
 LOCAL=$((NOW + 28800))             # 北京时间 = UTC+8
@@ -55,6 +56,7 @@ emit() { # 类型 窗口ID 标题 开始 结束
     echo "at=$TODAY $HHMM"
   } > "$CORE/tick_last.txt"
   echo "$TODAY $HHMM $1 $2" >> "$STATE/tick.log"
+  case "$1" in start|nudge|checkin) echo "$NOW" > "$STATE/last_contact" ;; esac
   echo "NEED=go EVENT=$1 ID=$2"
 }
 
@@ -85,19 +87,31 @@ if [ -f "$WIN" ] && grep -qx "date=$TODAY" "$WIN"; then
   done < "$WIN"
 fi
 
-# 4. 追问：只在进行中的窗口里，问了问题又一直没回应时
+# 4. 追问 / 5. 进度点名：只在进行中的窗口里，暂停和休息时都不打扰
 if [ -n "$ACTIVE_ID" ]; then
   waiting=$(json_num waiting_since); snooze=$(json_num snooze_until); status=$(json_str status)
+  user_at=$(json_num last_user_at)
   last=$(cat "$STATE/last_nudge" 2>/dev/null); last=${last:-0}
-  case "$status" in paused|resting|idle) waiting=0 ;; esac
-  if [ "${waiting:-0}" -gt 0 ] && [ $((NOW - waiting)) -ge "$NUDGE_AFTER" ] \
-     && [ "$NOW" -ge "${snooze:-0}" ] && [ $((NOW - last)) -ge "$NUDGE_GAP" ]; then
-    echo "$NOW" > "$STATE/last_nudge"
-    emit nudge "$ACTIVE_ID" "回应超时，换个小问法" - -; exit 0
-  fi
+  contact=$(cat "$STATE/last_contact" 2>/dev/null); contact=${contact:-0}
+  [ "${user_at:-0}" -gt "$contact" ] && contact=$user_at
+  case "$status" in
+    paused|resting|idle) ;;
+    *)
+      # 问了问题却一直没回应：换个小问法再问
+      if [ "${waiting:-0}" -gt 0 ] && [ $((NOW - waiting)) -ge "$NUDGE_AFTER" ] \
+         && [ "$NOW" -ge "${snooze:-0}" ] && [ $((NOW - last)) -ge "$NUDGE_GAP" ]; then
+        echo "$NOW" > "$STATE/last_nudge"
+        emit nudge "$ACTIVE_ID" "回应超时，换个小问法" - -; exit 0
+      fi
+      # 没有待答问题、正在做事：定时点名，问进度、给下一步
+      if [ "${waiting:-0}" -eq 0 ] && [ "$NOW" -ge "${snooze:-0}" ] && [ $((NOW - contact)) -ge "$CHECK_EVERY" ]; then
+        emit checkin "$ACTIVE_ID" "进度点名" - -; exit 0
+      fi
+      ;;
+  esac
 fi
 
-# 5. 晚总结
+# 6. 晚总结
 if [ "$MIN_OF_DAY" -ge "$SUMMARY_AT" ] && ! fired summary; then
   echo summary >> "$FIRED"; emit summary - "写今天的总结" - -; exit 0
 fi

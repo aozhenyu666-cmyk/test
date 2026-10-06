@@ -3,10 +3,12 @@
   "window_id": "",
   "goal": "",
   "done_when": "",
+  "step": 0,
   "last_step": "",
   "question": "",
   "waiting_since": 0,
   "snooze_until": 0,
+  "last_user_at": 0,
   "status": "idle",
   "parked_ideas": "",
   "updated_at": ""

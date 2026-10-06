@@ -58,6 +58,15 @@ w4|08:09|23:00|前导零 08:09
 EOF
 expect "EVENT=start ID=w4" "$(at 15 0)" "能解析 08:09 这类前导零"
 
+# 进度点名：在做事、没有待答问题时，每 20 分钟点一次名
+printf '{\n  "status": "acting",\n  "waiting_since": 0,\n  "snooze_until": 0,\n  "last_user_at": %s\n}\n' $((DAY0 + 15 * 3600)) > "$T/thread.json"
+expect "NEED=none" "$(at 15 10)" "刚和用户说过话，不点名"
+expect "EVENT=checkin ID=w4" "$(at 15 20)" "20 分钟没接触就点名"
+expect "NEED=none" "$(at 15 25)" "点名后 20 分钟内不再点"
+expect "EVENT=checkin ID=w4" "$(at 15 40)" "再过 20 分钟再点名"
+printf '{\n  "status": "paused",\n  "waiting_since": 0,\n  "snooze_until": 0,\n  "last_user_at": 0\n}\n' > "$T/thread.json"
+expect "NEED=none" "$(at 16 30)" "暂停时不点名"
+
 expect "EVENT=end ID=w4" "$(at 23 0)" "w4 结束"
 expect "EVENT=summary" "$(at 23 5)" "21:30 之后补发晚总结"
 expect "NEED=none" "$(at 23 10)" "晚总结只触发一次"
