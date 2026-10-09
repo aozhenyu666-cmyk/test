@@ -70,6 +70,7 @@ class GuardService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
+        Log.d(TAG, "窗口切换：$pkg / ${event.className}")
         if (pkg in overlays()) return
         val now = System.currentTimeMillis()
         if (pkg != fgPkg) {
@@ -112,9 +113,16 @@ class GuardService : AccessibilityService() {
     private fun enforce(pkg: String, now: Long) {
         if (pkg == packageName) return
         if (pkg !in store.config.value.blocked) return
-        if (!interactive()) return
+        if (!interactive()) {
+            Log.i(TAG, "拦截名单应用 $pkg 在前台，但屏幕没亮，不处理")
+            return
+        }
         val status = store.status(now)
-        if (!status.strict) return
+        if (!status.strict) {
+            Log.i(TAG, "放行 $pkg：${status.headline} ${status.reasons.map { it.text }} 紧急=${status.emergencyUntil} 休假=${status.paused}")
+            return
+        }
+        Log.i(TAG, "严管，弹回 $pkg：${status.reasons.firstOrNull()?.text}")
         if (now - lastBounce < 1500) return
         lastBounce = now
         store.updateToday(now) { DayOps.bounce(it) }

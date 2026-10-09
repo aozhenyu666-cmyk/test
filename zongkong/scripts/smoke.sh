@@ -52,7 +52,16 @@ route settings/perm;      shot 07-perm
 launch_target
 shot 08-blocked
 resumed | tee "$OUT/resumed-strict.txt"
-if grep -q "$PKG/.guard.BlockActivity" "$OUT/resumed-strict.txt"; then echo "STRICT_BLOCKS=OK" >> "$OUT/result.txt"; else echo "STRICT_BLOCKS=FAIL" >> "$OUT/result.txt"; fi
+if grep -q "$PKG/.guard.BlockActivity" "$OUT/resumed-strict.txt"; then
+  echo "STRICT_BLOCKS=OK" >> "$OUT/result.txt"
+else
+  echo "STRICT_BLOCKS=FAIL" >> "$OUT/result.txt"
+  echo "---- 诊断：总控的判断 ----"
+  adb logcat -d -s GuardService:V | tail -40
+  echo "---- 诊断：后台启动 / 任务栈 ----"
+  adb logcat -d | grep -iE "BlockActivity|Background activity|BAL|abort background" | tail -20
+  adb shell dumpsys activity activities | grep -E "Task|ActivityRecord" | head -20
+fi
 
 adb shell am broadcast -a $PKG.SEED -p $PKG --es mode free
 sleep 2
