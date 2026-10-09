@@ -117,6 +117,7 @@ class WindowActivity : ComponentActivity() {
 
     override fun onPause() {
         isVisible = false
+        vm.onHidden()
         super.onPause()
     }
 

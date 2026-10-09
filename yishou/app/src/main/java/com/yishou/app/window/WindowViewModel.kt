@@ -402,7 +402,19 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
         _state.update {
             it.copy(needMic = false, voiceNote = if (granted) null else "没有麦克风权限，语音陪练用不了。可以在系统设置里给一手开麦克风。")
         }
-        if (granted) maybeListen()
+        // 权限结果回来时页面还没回到前台，稍等一下再开始听
+        if (granted) viewModelScope.launch {
+            delay(400)
+            maybeListen()
+        }
+    }
+
+    /** 窗口页退到后台：正在听就不听了（后台录不到声音），其余照常。 */
+    fun onHidden() {
+        if (voice.phase.value == ListenPhase.LISTENING && listenJob?.isActive == true) {
+            listenJob?.cancel()
+            voice.cancel()
+        }
     }
 
     fun setVoice(on: Boolean) {
