@@ -7,6 +7,8 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
@@ -100,8 +102,24 @@ class LoopTest {
         assertTrue(gpt.updatePage(pageId, p.json) is ApiResult.Ok)
     }
 
-    private fun waitText(text: String, timeout: Long = 10_000) =
-        compose.waitUntilAtLeastOneExists(hasText(text, substring = true), timeout)
+    private fun waitText(text: String, timeout: Long = 10_000) = waitFor(hasText(text, substring = true), timeout, "文字“$text”")
+
+    /** 等不到时把当时的状态带进失败信息：本机记录、同步结果、屏幕上的内容。 */
+    private fun waitFor(m: androidx.compose.ui.test.SemanticsMatcher, timeout: Long, what: String) {
+        try {
+            compose.waitUntilAtLeastOneExists(m, timeout)
+        } catch (e: Throwable) {
+            shot("fail-${System.currentTimeMillis()}")
+            val w = app.store.work.value
+            val recs = w.recs.joinToString("\n") { "  ${it.kind} ${it.title} [${it[F.STATUS]}] plan=${it[F.PLAN]} thread=${it.threadKey} sync=${it.sync} ${it.syncError}" }
+            val tree = runCatching { compose.onRoot(useUnmergedTree = false).printToString(maxDepth = 30) }.getOrDefault("?")
+            throw AssertionError(
+                "等不到$what。\n同步：ok=${w.lastSyncOk} ${w.lastSyncMessage} at=${w.lastSyncAt}\n记录：\n$recs\n" +
+                    "当前：${com.zongkong.core.work.Focus.current(w, System.currentTimeMillis(), zone).let { "${it.why} ${it.action?.title}" }}\n屏幕：\n${tree.take(4000)}",
+                e,
+            )
+        }
+    }
 
     @Test
     fun fullLoop() {
@@ -121,7 +139,7 @@ class LoopTest {
         scenario = ActivityScenario.launch(MainActivity::class.java)
         compose.waitUntilAtLeastOneExists(hasTestTag("sync-now"), 15_000)
         compose.onNodeWithTag("sync-now").performScrollTo().performClick()
-        compose.waitUntilAtLeastOneExists(hasTestTag("task-title") and hasText("重写项目经历第二段"), 15_000)
+        waitFor(hasTestTag("task-title") and hasText("重写项目经历第二段"), 15_000, "首页任务卡")
         waitText("用 STAR 写完并读一遍")
         shot("e2e-01-home-task-from-gpt")
         val code = app.store.work.value.byNotion(threadId)!![F.CODE]
