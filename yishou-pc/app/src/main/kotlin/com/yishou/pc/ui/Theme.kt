@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
+
 package com.yishou.pc.ui
 
 import androidx.compose.foundation.Canvas
@@ -5,6 +7,11 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.platform.SystemFont
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -70,9 +77,30 @@ private val Night = darkColorScheme(
     outlineVariant = Color(0xFF283246),
 )
 
+/**
+ * 中文统一用微软雅黑（Windows 自带）。不指定的话，默认字体缺中文，
+ * 系统会一个字一个字地从别的字体里补，同一行字会忽粗忽细。
+ */
+private val Yahei = FontFamily(
+    SystemFont("Microsoft YaHei UI", FontWeight.Normal),
+    SystemFont("Microsoft YaHei UI", FontWeight.Bold),
+)
+
+private fun typography(): Typography {
+    val t = Typography()
+    fun TextStyle.y() = copy(fontFamily = Yahei)
+    return Typography(
+        displayLarge = t.displayLarge.y(), displayMedium = t.displayMedium.y(), displaySmall = t.displaySmall.y(),
+        headlineLarge = t.headlineLarge.y(), headlineMedium = t.headlineMedium.y(), headlineSmall = t.headlineSmall.y(),
+        titleLarge = t.titleLarge.y(), titleMedium = t.titleMedium.y(), titleSmall = t.titleSmall.y(),
+        bodyLarge = t.bodyLarge.y(), bodyMedium = t.bodyMedium.y(), bodySmall = t.bodySmall.y(),
+        labelLarge = t.labelLarge.y(), labelMedium = t.labelMedium.y(), labelSmall = t.labelSmall.y(),
+    )
+}
+
 @Composable
 fun YishouTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = if (isSystemInDarkTheme()) Night else White, content = content)
+    MaterialTheme(colorScheme = if (isSystemInDarkTheme()) Night else White, typography = typography(), content = content)
 }
 
 private val isNight @Composable get() = MaterialTheme.colorScheme.background.luminance() < 0.2f
