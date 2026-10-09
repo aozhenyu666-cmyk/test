@@ -201,6 +201,8 @@ private fun TaskCard(cur: Focus.Current, now: Long, notionReady: Boolean, nav: N
         Focus.Why.CONTINUE -> sig.think
         else -> sig.line
     }
+    // 边框可以很淡，文字不行：普通状态的标签用灰色
+    val labelColor = if (accent == sig.line) sig.muted else accent
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surface,
@@ -209,7 +211,7 @@ private fun TaskCard(cur: Focus.Current, now: Long, notionReady: Boolean, nav: N
     ) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(cur.why.label, color = accent, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(cur.why.label, color = labelColor, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 cur.start?.let { s ->
                     val label = when {
                         cur.why == Focus.Why.RUNNING -> app.store.work.value.session?.let { "已做 ${span(now - it.startedAt)}" } ?: ""
@@ -218,7 +220,7 @@ private fun TaskCard(cur: Focus.Current, now: Long, notionReady: Boolean, nav: N
                         cur.end != null -> "超时 ${span(now - cur.end)}"
                         else -> ""
                     }
-                    Text(label, style = MaterialTheme.typography.labelLarge.merge(Mono), color = accent)
+                    Text(label, style = MaterialTheme.typography.labelLarge.merge(Mono), color = labelColor)
                 }
             }
             if (a == null) {
