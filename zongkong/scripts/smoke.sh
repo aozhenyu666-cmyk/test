@@ -29,10 +29,17 @@ adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS || true
 adb shell am instrument -w $PKG.test/androidx.test.runner.AndroidJUnitRunner 2>&1 | tee "$OUT/e2e.txt"
 if grep -q "^OK (" "$OUT/e2e.txt"; then echo "E2E_LOOP=OK" >> "$OUT/result.txt"; else echo "E2E_LOOP=FAIL" >> "$OUT/result.txt"; fi
 adb pull /sdcard/Android/data/$PKG/files/shots/. "$OUT/" >/dev/null 2>&1 || true
-adb shell am force-stop $PKG
+# 注意：不能 force-stop 总控——系统会把被强行停止的应用从“已开启的无障碍服务”里移除，
+# 而且这一步可能比下面的开启晚执行，把刚开的又关掉。
 
-adb shell settings put secure enabled_accessibility_services $PKG/$PKG.guard.GuardService
-adb shell settings put secure accessibility_enabled 1
+# 开无障碍，确认真的绑定上了再往下走
+for i in 1 2 3 4 5 6; do
+  adb shell settings put secure enabled_accessibility_services $PKG/$PKG.guard.GuardService
+  adb shell settings put secure accessibility_enabled 1
+  sleep 3
+  if adb shell dumpsys accessibility | grep -q "Bound services:{Service\[label=总控"; then echo "无障碍已绑定"; break; fi
+  echo "无障碍还没绑定，重试 $i"
+done
 adb shell am start -n $PKG/.ui.MainActivity >/dev/null
 sleep 6
 adb shell am broadcast -a $PKG.SEED -p $PKG --es blocked $TARGET
