@@ -119,6 +119,23 @@ fun SettingsScreen(
             }
 
             HorizontalDivider()
+            SectionTitle("分组训练")
+            Text(
+                "像练体能一样分组：一组是几手有效回答，组间歇一下。起步目标每天几组，" +
+                    "连续两天达标自动加一组，连续两天没达标自动减一组。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            LabeledRow("一组") {
+                Stepper(prefs.setSize, 1..10, "手") { v -> vm.update { it.copy(setSize = v) } }
+            }
+            LabeledRow("组间休息") {
+                Stepper(prefs.restMinutes, 1..15, "分钟") { v -> vm.update { it.copy(restMinutes = v) } }
+            }
+            LabeledRow("起步每天") {
+                Stepper(prefs.baseSets, 1..8, "组") { v -> vm.update { it.copy(baseSets = v) } }
+            }
+
+            HorizontalDivider()
             SectionTitle("陪练窗口")
             SwitchRow("每天定时开始", prefs.windowEnabled) { on -> vm.update(reschedule = true) { it.copy(windowEnabled = on) } }
             LabeledRow("开始时间") {

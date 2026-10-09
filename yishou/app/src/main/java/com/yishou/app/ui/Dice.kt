@@ -189,6 +189,7 @@ fun FaceChip(face: Int) {
             if (open) {
                 Text("你要做的：${f.action}", style = MaterialTheme.typography.bodySmall)
                 Text("怎样算数：${f.check}", style = MaterialTheme.typography.bodySmall)
+                Text("标准句式：${f.frame}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
             }
         }
     }

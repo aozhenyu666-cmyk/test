@@ -15,8 +15,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DateRange
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
@@ -66,8 +64,6 @@ fun BoardScreen(
     onEditTask: (Long) -> Unit,
     onOpenPermissions: () -> Unit,
     onOpenWindow: () -> Unit,
-    onOpenSummary: () -> Unit,
-    onOpenStatus: () -> Unit,
     vm: BoardViewModel = viewModel(),
 ) {
     val s by vm.state.collectAsStateWithLifecycle()
@@ -101,8 +97,6 @@ fun BoardScreen(
                 },
                 actions = {
                     IconButton(onClick = onOpenWindow) { Icon(Icons.Filled.PlayArrow, contentDescription = "陪练窗口") }
-                    IconButton(onClick = onOpenSummary) { Icon(Icons.Filled.DateRange, contentDescription = "每晚总结") }
-                    IconButton(onClick = onOpenStatus) { Icon(Icons.Filled.Info, contentDescription = "盘点") }
                     IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Settings, contentDescription = "设置") }
                 },
             )
@@ -150,7 +144,12 @@ fun BoardScreen(
             item { PositionPanel(task, s.breakpoint, onEdit = { onEditTask(task.id) }) }
             item {
                 Text(
-                    if (s.todayRounds.isEmpty()) "今天还没落子" else "今天走了 ${s.todayRounds.size} 手，有效 ${s.effectiveToday} 手",
+                    when {
+                        s.todayRounds.isEmpty() -> "今天还没落子。一组 ${prefs.setSize} 手，先走完一组。"
+                        s.effectiveToday % prefs.setSize == 0 && s.effectiveToday > 0 ->
+                            "今天有效 ${s.effectiveToday} 手，刚好走完第 ${s.effectiveToday / prefs.setSize} 组。歇一下也行。"
+                        else -> "今天有效 ${s.effectiveToday} 手，这一组还差 ${prefs.setSize - s.effectiveToday % prefs.setSize} 手。"
+                    },
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.fillMaxWidth(),

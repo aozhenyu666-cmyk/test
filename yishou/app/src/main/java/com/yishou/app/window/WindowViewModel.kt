@@ -51,6 +51,9 @@ data class WindowState(
     val noResponse: Boolean = false,
     val effectiveCount: Int = 0,
     val ttsProblem: String? = null,
+    /** 刚完成第几组（今天的有效手数凑满一组时出现），等用户选“歇一下”或“接着来” */
+    val setDone: Int? = null,
+    val restMinutes: Int = 2,
 ) {
     val answerChars: Int get() = AnswerRules.countChars(answer)
 }
@@ -315,10 +318,39 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
                         )
                     }
                     if (!skipLengthCheck) attachment.clear()
-                    presentMove()
+                    // 凑满一组时先问要不要歇一下，选了“接着来”再出下一手
+                    if (!(r.round.effective && checkSetDone())) presentMove()
                 }
             }
         }
+    }
+
+    /** 今天的有效手数正好凑满一组时，问一句要不要歇一下。问了返回 true。 */
+    private suspend fun checkSetDone(): Boolean {
+        val prefs = yishou.settings.app.value
+        val start = WindowClock.startOfDay(WindowClock.today(System.currentTimeMillis(), zone), zone)
+        val effective = dao.roundsBetween(start, System.currentTimeMillis() + 1).count { it.effective }
+        if (effective > 0 && effective % prefs.setSize == 0) {
+            val n = effective / prefs.setSize
+            _state.update { it.copy(setDone = n, restMinutes = prefs.restMinutes) }
+            reminderJob?.cancel()
+            if (prefs.ttsEnabled) speaker.speak("第 $n 组完成了。歇 ${prefs.restMinutes} 分钟，还是接着来？")
+            return true
+        }
+        return false
+    }
+
+    /** 组间：歇一下（就是“先停”）或接着来。 */
+    fun restAfterSet() {
+        val minutes = _state.value.restMinutes
+        _state.update { it.copy(setDone = null) }
+        pause(minutes)
+    }
+
+    fun continueAfterSet() {
+        _state.update { it.copy(setDone = null) }
+        speaker.stop()
+        presentMove()
     }
 
     /**

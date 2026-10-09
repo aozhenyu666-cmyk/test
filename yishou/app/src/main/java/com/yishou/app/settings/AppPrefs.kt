@@ -45,6 +45,12 @@ data class AppPrefs(
     val windowPauseUntil: Long = 0,
     /** 窗口里自动“看一眼”的间隔分钟，0 表示只在点“看一眼”时看 */
     val lookIntervalMinutes: Int = 0,
+    /** 分组训练：一组几手有效回答 */
+    val setSize: Int = 3,
+    /** 组间休息几分钟 */
+    val restMinutes: Int = 2,
+    /** 起步每天几组（之后按达标情况自动加减） */
+    val baseSets: Int = 2,
     /** 界面：0 跟随系统，1 白局（浅色），2 夜局（深色） */
     val themeMode: Int = 0,
     /** 摇一摇手机掷骰子 */
@@ -85,6 +91,9 @@ data class AppPrefs(
         .put("windowShortMinutes", windowShortMinutes)
         .put("windowPauseUntil", windowPauseUntil)
         .put("lookIntervalMinutes", lookIntervalMinutes)
+        .put("setSize", setSize)
+        .put("restMinutes", restMinutes)
+        .put("baseSets", baseSets)
         .put("themeMode", themeMode)
         .put("shakeToRoll", shakeToRoll)
         .put("manualWindowStart", manualWindowStart)
@@ -163,6 +172,9 @@ data class AppPrefs(
                 windowShortMinutes = o.optInt("windowShortMinutes", d.windowShortMinutes).coerceIn(1, 15),
                 windowPauseUntil = o.optLong("windowPauseUntil", 0),
                 lookIntervalMinutes = o.optInt("lookIntervalMinutes", d.lookIntervalMinutes).coerceIn(0, 30),
+                setSize = o.optInt("setSize", d.setSize).coerceIn(1, 10),
+                restMinutes = o.optInt("restMinutes", d.restMinutes).coerceIn(1, 15),
+                baseSets = o.optInt("baseSets", d.baseSets).coerceIn(1, 8),
                 themeMode = o.optInt("themeMode", d.themeMode).coerceIn(0, 2),
                 shakeToRoll = o.optBoolean("shakeToRoll", d.shakeToRoll),
                 manualWindowStart = o.optLong("manualWindowStart", 0),

@@ -208,6 +208,25 @@ private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit
                 VerdictLine(r)
             }
 
+            s.setDone?.let { n ->
+                Surface(
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("第 $n 组完成", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("连续想了一组，脑子会累，这是正常的。歇一下再来，比硬撑走得远。")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = vm::restAfterSet) { Text("歇 ${s.restMinutes} 分钟") }
+                            OutlinedButton(onClick = vm::continueAfterSet) { Text("接着来") }
+                        }
+                    }
+                }
+                return@Column
+            }
+
             if (s.paused) {
                 Surface(
                     color = MaterialTheme.colorScheme.tertiaryContainer,
