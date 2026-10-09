@@ -35,7 +35,7 @@ import kotlinx.coroutines.launch
 private data class Line(val at: Long, val tag: String, val color: Color, val text: String)
 
 /** 随时汇报：报到（重置沉默计时）和随手记（存进信息收集库）。下面是今天的时间线。 */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ReportScreen() {
     val context = LocalContext.current
@@ -92,7 +92,7 @@ fun ReportScreen() {
                 Text("随手记 → 信息收集部", style = MaterialTheme.typography.titleMedium)
             }
             Hint("看到的、想到的、卡住的，先收进来。第一行当标题。“问题”类会流到谋划思考部。")
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Workspace.CAPTURE_TAGS.forEach { t ->
                     FilterChip(selected = tag == t, onClick = { tag = t }, label = { Text(t) })
                 }

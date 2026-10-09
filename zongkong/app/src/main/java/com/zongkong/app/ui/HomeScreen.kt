@@ -97,7 +97,7 @@ fun HomeScreen(nav: NavHostController) {
             if (status.paused) Text("休假到 ${clock(config.pausedUntil)}（${java.time.Instant.ofEpochMilli(config.pausedUntil).atZone(store.zone).toLocalDate()}）", color = sig.muted)
             Meters(status.playMin, status.quotaMin, status.silenceDueAt, now)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { nav.navigate("report") }, modifier = Modifier.weight(1f)) { Text("报到 / 随手记") }
+                Button(onClick = { nav.navigate("report") }, modifier = Modifier.weight(1f)) { Text("去汇报") }
                 if (status.strict && status.emergencyLeft > 0) {
                     OutlinedButton(onClick = { showEmergency = true }, modifier = Modifier.weight(1f)) { Text("紧急放行") }
                 }
