@@ -2,4 +2,7 @@
 <resources>
     <string name="app_name">一手</string>
     <string name="accessibility_description">打开你在「一手」里关注的应用时，先显示思考页。本服务只读取当前前台应用的包名，不读取屏幕内容、输入内容或其他应用的数据。你随时可以在这里关闭它。</string>
+    <string name="wallpaper_label">一手局面壁纸</string>
+    <string name="wallpaper_description">桌面背景是一张淡淡的棋盘，中间写着当前任务的下一问。也能让「一手」在后台更稳。</string>
+    <string name="widget_description">当前任务和下一问，点一下应手</string>
 </resources>

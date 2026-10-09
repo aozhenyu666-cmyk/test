@@ -46,6 +46,8 @@ import com.yishou.app.YishouApp
 import com.yishou.app.gate.GateActivity
 import com.yishou.app.gate.GateService
 import com.yishou.app.system.Notifications
+import com.yishou.app.wallpaper.BoardWallpaperService
+import com.yishou.app.widget.BoardWidget
 import com.yishou.app.window.WindowScheduler
 
 /** 读取各项权限的当前状态。 */
@@ -93,6 +95,9 @@ fun PermissionsScreen(onBack: () -> Unit) {
     val notif = remember(refreshKey) { PermissionStatus.notifications(context) }
     val exact = remember(refreshKey) { PermissionStatus.exactAlarm(context) }
     val battery = remember(refreshKey) { PermissionStatus.batteryUnrestricted(context) }
+    val wallpaper = remember(refreshKey) { BoardWallpaperService.isActive(context) }
+    val widget = remember(refreshKey) { BoardWidget.ids(context).isNotEmpty() }
+    var widgetNote by remember { mutableStateOf<String?>(null) }
 
     Scaffold(topBar = { BackTopBar("权限与运行状态", onBack) }) { padding ->
         Column(
@@ -152,6 +157,29 @@ fun PermissionsScreen(onBack: () -> Unit) {
             ) {
                 safeStart(context, Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")))
             }
+
+            Text("防止误清后台", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            PermissionCard(
+                title = "壁纸守护：局面壁纸",
+                detail = "把桌面背景换成一张写着“下一问”的淡棋盘。系统会一直保持壁纸所在的应用运行，" +
+                    "清理后台时「一手」不容易被杀；局面也一直摆在眼前。",
+                ok = wallpaper,
+                action = "设为壁纸",
+            ) { BoardWallpaperService.open(context) }
+            PermissionCard(
+                title = "桌面小组件",
+                detail = "桌面上显示当前任务和下一问，点一下就能应手。",
+                ok = widget,
+                action = "添加到桌面",
+            ) {
+                widgetNote = if (BoardWidget.requestPin(context)) null
+                else "这个桌面不支持一键添加：长按桌面空白处 → 小组件 → 找到「一手」拖出来。"
+            }
+            widgetNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+            Text(
+                "陪练窗口进行中时，「一手」会挂一条“陪练窗口进行中”的通知，保持前台运行；从最近任务里划掉界面，计时和朗读也不会停。",
+                style = MaterialTheme.typography.bodySmall,
+            )
 
             Text("vivo 手机还需要手动设置（系统不提供查询，设好后自己勾上）", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             MANUAL_ITEMS.forEach { (key, text) ->

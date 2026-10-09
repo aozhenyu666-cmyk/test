@@ -92,7 +92,7 @@ fun SummaryScreen(onBack: () -> Unit, vm: SummaryViewModel = viewModel()) {
             val text = vm.markdown(summary)
             val send = Intent(Intent.ACTION_SEND)
                 .setType("text/plain")
-                .putExtra(Intent.EXTRA_SUBJECT, "一手 · ${summary.date} 学习记录")
+                .putExtra(Intent.EXTRA_SUBJECT, "一手 ${summary.date} 学习记录")
                 .putExtra(Intent.EXTRA_TEXT, text)
             context.startActivity(Intent.createChooser(send, "导出到"))
         }
@@ -124,7 +124,7 @@ fun SummaryScreen(onBack: () -> Unit, vm: SummaryViewModel = viewModel()) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(s.date, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                             Text(
-                                "${s.roundCount} 轮 · 有效 ${s.effectiveCount} · 窗口 ${s.windowMinutes} 分钟",
+                                "${s.roundCount} 手，有效 ${s.effectiveCount} 手，窗口 ${s.windowMinutes} 分钟",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }

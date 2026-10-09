@@ -199,4 +199,41 @@ class RoundEngineTest {
         engine.answer(task, "这一手", goodAnswer, RoundSource.HOME)
         assertEquals("下一手" to listOf("如果……"), engine.starters.value)
     }
+
+    @Test
+    fun rollForcesFaceAndRoundRecordsIt() = runTest {
+        dao.breakpoints[7] = Breakpoint(7, "k", "s", "q", pendingCoachMove = "旧的一手", updatedAt = 1, pendingFace = 1)
+        coach.openingResult = LlmResult.Ok(OpeningMove("预测一下第 3 题的走向？", "缺预测", face = 4))
+        assertEquals(RoundEngine.MoveResult.Ready("预测一下第 3 题的走向？"), engine.rollFace(task, 2))
+        assertEquals(2, coach.lastContext!!.forcedFace)
+        val bp = dao.breakpoints[7]!!
+        assertEquals("预测一下第 3 题的走向？", bp.pendingCoachMove)
+        assertEquals(2, bp.pendingFace)
+
+        coach.judgeResult = LlmResult.Ok(Judgement(true, "预测", "", "", null, "下一手", nextFace = 6))
+        engine.answer(task, "预测一下第 3 题的走向？", goodAnswer, RoundSource.HOME)
+        assertEquals(2, dao.rounds.single().face)
+        assertEquals(6, dao.breakpoints[7]!!.pendingFace)
+        assertEquals(listOf(com.yishou.app.data.FaceCount(2, 1, 1)), dao.faceCounts(0))
+    }
+
+    @Test
+    fun demoKeepsFaceWhenModelOmitsIt() = runTest {
+        dao.breakpoints[7] = Breakpoint(7, "k", "s", "q", pendingCoachMove = "卡住的一手", updatedAt = 1, pendingFace = 5)
+        coach.openingResult = LlmResult.Ok(OpeningMove("示范：……现在你来", "跳步"))
+        engine.demo(task)
+        val c = coach.lastContext!!
+        assertTrue(c.demo)
+        assertEquals("卡住的一手", c.currentMove)
+        assertEquals(5, dao.breakpoints[7]!!.pendingFace)
+        assertEquals("示范：……现在你来", dao.breakpoints[7]!!.pendingCoachMove)
+    }
+
+    @Test
+    fun answeringStaleMoveRecordsNoFace() = runTest {
+        dao.breakpoints[7] = Breakpoint(7, "k", "s", "q", pendingCoachMove = "新的一手", updatedAt = 1, pendingFace = 3)
+        coach.judgeResult = LlmResult.Ok(Judgement(true, "比较", "", "", null, "下一手"))
+        engine.answer(task, "旧的一手", goodAnswer, RoundSource.HOME)
+        assertEquals(0, dao.rounds.single().face)
+    }
 }

@@ -14,6 +14,8 @@
     <!-- “让陪练看屏”：前台服务持有你在系统弹窗里同意的屏幕授权，只在你点“看一眼”时取一帧 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- 陪练窗口期间保持前台，划掉界面或清理后台时计时和朗读不中断 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!-- 关注应用的选择列表只需要“桌面上能打开的应用”，不申请读取全部应用 -->
     <queries>
@@ -85,6 +87,41 @@
             android:name=".look.ScreenLookService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <service
+            android:name=".window.WindowService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="用户主动开启的学习陪练计时：倒计时、朗读问题和无回应提醒，窗口结束即停止" />
+        </service>
+
+        <!-- 局面壁纸：用户自己在系统壁纸设置里选用 -->
+        <service
+            android:name=".wallpaper.BoardWallpaperService"
+            android:exported="true"
+            android:label="@string/wallpaper_label"
+            android:permission="android.permission.BIND_WALLPAPER">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/wallpaper" />
+        </service>
+
+        <receiver
+            android:name=".widget.BoardWidget"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_board_info" />
+        </receiver>
 
         <receiver
             android:name=".window.WindowAlarmReceiver"

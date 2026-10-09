@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#E3B96A</color>
+    <!-- 小组件：白局 -->
+    <color name="widget_bg">#F2F4F0</color>
+    <color name="widget_ink">#14171C</color>
+    <color name="widget_muted">#545B65</color>
+    <color name="widget_gold">#9C7A14</color>
 </resources>

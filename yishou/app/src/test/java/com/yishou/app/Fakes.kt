@@ -88,6 +88,9 @@ class FakeDao : AppDao() {
         rounds.count { it.source == source && it.createdAt in from until to }
     override suspend fun recentRules(limit: Int) =
         summaries.values.filter { it.rule.isNotEmpty() }.sortedByDescending { it.date }.take(limit).map { it.rule }
+    override suspend fun faceCounts(since: Long) =
+        rounds.filter { it.createdAt >= since }.groupBy { it.face }
+            .map { (f, rs) -> com.yishou.app.data.FaceCount(f, rs.size, rs.count { it.effective }) }
     override suspend fun countUnjudgedSince(since: Long) = rounds.count { !it.judged && it.createdAt >= since }
     override suspend fun countEffective(source: String, from: Long, to: Long) =
         rounds.count { it.source == source && it.effective && it.createdAt in from until to }

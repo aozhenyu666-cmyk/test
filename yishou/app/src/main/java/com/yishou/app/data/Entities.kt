@@ -1,5 +1,6 @@
 package com.yishou.app.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -32,6 +33,8 @@ data class Breakpoint(
     val nextQuestion: String,
     val pendingCoachMove: String?,
     val updatedAt: Long,
+    /** 待回答的这一手练骰子的第几面（1–6），0 表示没标 */
+    @ColumnInfo(defaultValue = "0") val pendingFace: Int = 0,
 )
 
 /** 一轮。原话原样保存。 */
@@ -55,6 +58,8 @@ data class Round(
     /** 是否经大模型判定；离线“保存并通过”时为 false */
     val judged: Boolean,
     val createdAt: Long,
+    /** 这一轮练的是骰子的第几面（1–6），0 表示没标（v0.5 之前的记录） */
+    @ColumnInfo(defaultValue = "0") val face: Int = 0,
 )
 
 object RoundSource {
@@ -87,4 +92,11 @@ data class DailySummary(
     val roundCount: Int,
     val effectiveCount: Int,
     val windowMinutes: Int,
+)
+
+/** 按骰子面统计的轮数（盘点页用）。 */
+data class FaceCount(
+    val face: Int,
+    val total: Int,
+    val effective: Int,
 )

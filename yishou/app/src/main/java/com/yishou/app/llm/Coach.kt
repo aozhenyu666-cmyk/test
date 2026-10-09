@@ -16,6 +16,8 @@ data class OpeningMove(
     val stuckType: String,
     /** 帮用户开口的半句话，可能为空 */
     val starters: List<String> = emptyList(),
+    /** 这一手练骰子第几面，0 表示没标 */
+    val face: Int = 0,
 )
 
 /** 看屏出一手的结果。 */
@@ -23,6 +25,7 @@ data class ObservedMove(
     val observation: String,
     val coachMove: String,
     val starters: List<String> = emptyList(),
+    val face: Int = 0,
 )
 
 /** 判定请求返回的新断点。 */
@@ -42,6 +45,8 @@ data class Judgement(
     val breakpoint: BreakpointUpdate?,
     val nextCoachMove: String,
     val starters: List<String> = emptyList(),
+    /** 下一手练骰子第几面，0 表示没标 */
+    val nextFace: Int = 0,
 )
 
 /** 每晚总结的结果。 */
@@ -62,6 +67,12 @@ data class CoachContext(
     val gapMinutes: Long? = null,
     /** 上一轮的用户原话，用于“恢复” */
     val lastAnswer: String? = null,
+    /** 用户掷出的骰子面：这一手必须练这一面 */
+    val forcedFace: Int? = null,
+    /** 用户请求示范 */
+    val demo: Boolean = false,
+    /** 示范时：当前这一手的原文 */
+    val currentMove: String? = null,
 )
 
 /** 陪练。抽成接口，方便测试时换成假的。 */
@@ -135,8 +146,22 @@ class LlmCoach(private val chat: ChatClient) : Coach {
 object CoachMessages {
 
     fun opening(task: Task, breakpoint: Breakpoint, context: CoachContext = CoachContext()): String = buildString {
-        appendLine("请求类型：开局（这是本任务的第一手，或断点刚被手动修改过）。")
-        appendLine("请根据下面的任务和断点出一手。")
+        when {
+            context.demo -> {
+                appendLine("请求类型：示范。")
+                appendLine("用户卡在下面这一手，请求示范。先用另一个短例子完整示范这一面的标准动作（两三句），")
+                appendLine("再请他在自己的题上做同样的动作。示范和请求一起写进 coach_move。")
+                context.currentMove?.let { appendLine("【卡住的这一手】$it") }
+            }
+            context.forcedFace != null -> {
+                appendLine("请求类型：掷骰换一手。")
+                appendLine("用户掷出了骰子，请按下面的任务和断点，出一手专门练他掷出的那一面。")
+            }
+            else -> {
+                appendLine("请求类型：开局（这是本任务的第一手，或断点刚被手动修改过）。")
+                appendLine("请根据下面的任务和断点出一手。")
+            }
+        }
         appendLine()
         appendTask(task)
         appendBreakpoint(breakpoint)
@@ -227,6 +252,9 @@ object CoachMessages {
     }
 
     private fun StringBuilder.appendContext(c: CoachContext) {
+        c.forcedFace?.let { Faces.of(it) }?.let { f ->
+            appendLine("【掷骰】掷出了 ${f.number}（${f.name}）。这一手必须练这一面：最小动作是“${f.action}”，face 填 ${f.number}。")
+        }
         if (c.rules.isNotEmpty()) {
             appendLine("【用户以前总结出的规则】（条件符合时，在支架里提醒他调用其中一条）")
             c.rules.forEach { appendLine("- $it") }
@@ -264,7 +292,7 @@ object CoachParser {
         val obj = extractJsonObject(content)
         val move = obj.requireText("coach_move")
         val stuck = obj.optText("stuck_type")
-        return OpeningMove(move, stuck, obj.starters())
+        return OpeningMove(move, stuck, obj.starters(), obj.face("face"))
     }
 
     fun parseJudgement(content: String): Judgement {
@@ -288,12 +316,19 @@ object CoachParser {
             breakpoint = bp,
             nextCoachMove = obj.requireText("next_coach_move"),
             starters = obj.starters(),
+            nextFace = obj.face("next_face"),
         )
     }
 
     fun parseObserved(content: String): ObservedMove {
         val obj = extractJsonObject(content)
-        return ObservedMove(obj.optText("observation"), obj.requireText("coach_move"), obj.starters())
+        return ObservedMove(obj.optText("observation"), obj.requireText("coach_move"), obj.starters(), obj.face("face"))
+    }
+
+    /** 骰子面：1–6，缺了或不对时为 0。 */
+    private fun JSONObject.face(key: String): Int {
+        val v = optInt(key, 0)
+        return if (v in 1..6) v else 0
     }
 
     /** 起手式：最多两个，去空、去重、截短。缺了不算错。 */

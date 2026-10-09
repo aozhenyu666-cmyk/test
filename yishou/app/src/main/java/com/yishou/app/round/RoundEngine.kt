@@ -56,7 +56,9 @@ class RoundEngine(
             is LlmResult.Ok -> {
                 // 请求期间断点可能被手动改过，以最新的为准，只填上这一手
                 val latest = dao.getBreakpoint(task.id) ?: bp
-                dao.upsertBreakpoint(latest.copy(pendingCoachMove = r.value.coachMove, updatedAt = clock()))
+                dao.upsertBreakpoint(
+                    latest.copy(pendingCoachMove = r.value.coachMove, pendingFace = r.value.face, updatedAt = clock()),
+                )
                 starters.value = r.value.coachMove to r.value.starters
                 MoveResult.Ready(r.value.coachMove)
             }
@@ -85,6 +87,8 @@ class RoundEngine(
         }
 
         val now = clock()
+        // 这一轮练的面：回答的正是断点里那一手时才算数
+        val face = if (bp.pendingCoachMove == coachMove) bp.pendingFace else 0
         val update = judgement.breakpoint
         val newBp = bp.copy(
             // 模型漏给某一项时保留原值，不让断点被清空
@@ -92,6 +96,7 @@ class RoundEngine(
             stuck = update?.stuck?.ifBlank { null } ?: bp.stuck,
             nextQuestion = update?.nextQuestion?.ifBlank { null } ?: bp.nextQuestion,
             pendingCoachMove = judgement.nextCoachMove,
+            pendingFace = judgement.nextFace,
             updatedAt = now,
         )
         val round = Round(
@@ -106,6 +111,7 @@ class RoundEngine(
             feedback = judgement.feedback,
             judged = true,
             createdAt = now,
+            face = face,
         )
         val id = dao.saveRound(round, newBp)
         starters.value = judgement.nextCoachMove to judgement.starters
@@ -121,10 +127,34 @@ class RoundEngine(
         val r = coach.observe(task, bp, screen, context())
         if (r is LlmResult.Ok) {
             val latest = dao.getBreakpoint(task.id) ?: bp
-            dao.upsertBreakpoint(latest.copy(pendingCoachMove = r.value.coachMove, updatedAt = clock()))
+            dao.upsertBreakpoint(latest.copy(pendingCoachMove = r.value.coachMove, pendingFace = r.value.face, updatedAt = clock()))
             starters.value = r.value.coachMove to r.value.starters
         }
         return r
+    }
+
+    /** 掷骰换一手：出一手专练掷出的那一面，替换当前待回答的一手。 */
+    suspend fun rollFace(task: Task, face: Int): MoveResult = replaceMove(task, context().copy(forcedFace = face), face)
+
+    /** 请陪练示范：先在别的小例子上示范这一面，再请用户在自己的题上做。 */
+    suspend fun demo(task: Task): MoveResult {
+        val bp = dao.getBreakpoint(task.id)
+        return replaceMove(task, context().copy(demo = true, currentMove = bp?.pendingCoachMove), bp?.pendingFace)
+    }
+
+    private suspend fun replaceMove(task: Task, ctx: CoachContext, keepFace: Int?): MoveResult {
+        val bp = dao.getBreakpoint(task.id) ?: emptyBreakpoint(task.id)
+        return when (val r = coach.opening(task, bp, ctx)) {
+            is LlmResult.Err -> MoveResult.Failed(r.error)
+            is LlmResult.Ok -> {
+                val latest = dao.getBreakpoint(task.id) ?: bp
+                // 掷骰时以掷出的面为准；示范时模型没标面就沿用原来的
+                val face = ctx.forcedFace ?: r.value.face.takeIf { it > 0 } ?: keepFace ?: 0
+                dao.upsertBreakpoint(latest.copy(pendingCoachMove = r.value.coachMove, pendingFace = face, updatedAt = clock()))
+                starters.value = r.value.coachMove to r.value.starters
+                MoveResult.Ready(r.value.coachMove)
+            }
+        }
     }
 
     /** 出一手时附带的背景：最近 5 条规则、距离上一轮多久、上一轮原话。 */
@@ -172,6 +202,7 @@ class RoundEngine(
             feedback = "",
             judged = false,
             createdAt = now,
+            face = dao.getBreakpoint(task.id)?.takeIf { it.pendingCoachMove == coachMove }?.pendingFace ?: 0,
         )
         val pass = Pass(packageGroup = group, startAt = now, endAt = now + minutes * 60_000L, roundId = null)
         return dao.saveOfflineRound(round, pass)

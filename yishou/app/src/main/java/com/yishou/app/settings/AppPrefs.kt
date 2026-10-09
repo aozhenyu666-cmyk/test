@@ -45,6 +45,10 @@ data class AppPrefs(
     val windowPauseUntil: Long = 0,
     /** 窗口里自动“看一眼”的间隔分钟，0 表示只在点“看一眼”时看 */
     val lookIntervalMinutes: Int = 0,
+    /** 界面：0 跟随系统，1 白局（浅色），2 夜局（深色） */
+    val themeMode: Int = 0,
+    /** 摇一摇手机掷骰子 */
+    val shakeToRoll: Boolean = true,
     /** 手动开始的陪练窗口的开始时间，0 表示没有 */
     val manualWindowStart: Long = 0,
     /** 最近一次“提前结束窗口”的时间，0 表示没有 */
@@ -81,6 +85,8 @@ data class AppPrefs(
         .put("windowShortMinutes", windowShortMinutes)
         .put("windowPauseUntil", windowPauseUntil)
         .put("lookIntervalMinutes", lookIntervalMinutes)
+        .put("themeMode", themeMode)
+        .put("shakeToRoll", shakeToRoll)
         .put("manualWindowStart", manualWindowStart)
         .put("windowStoppedAt", windowStoppedAt)
         .put("manualChecks", JSONArray().apply { manualChecks.forEach { put(it) } })
@@ -157,6 +163,8 @@ data class AppPrefs(
                 windowShortMinutes = o.optInt("windowShortMinutes", d.windowShortMinutes).coerceIn(1, 15),
                 windowPauseUntil = o.optLong("windowPauseUntil", 0),
                 lookIntervalMinutes = o.optInt("lookIntervalMinutes", d.lookIntervalMinutes).coerceIn(0, 30),
+                themeMode = o.optInt("themeMode", d.themeMode).coerceIn(0, 2),
+                shakeToRoll = o.optBoolean("shakeToRoll", d.shakeToRoll),
                 manualWindowStart = o.optLong("manualWindowStart", 0),
                 windowStoppedAt = o.optLong("windowStoppedAt", 0),
                 manualChecks = checks,

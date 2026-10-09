@@ -109,6 +109,10 @@ abstract class AppDao {
     @Query("SELECT COUNT(*) FROM round WHERE source = :source AND effective = 1 AND createdAt >= :from AND createdAt < :to")
     abstract suspend fun countEffective(source: String, from: Long, to: Long): Int
 
+    /** 某个时刻以来，按骰子面统计的轮数和有效数 */
+    @Query("SELECT face, COUNT(*) AS total, SUM(effective) AS effective FROM round WHERE createdAt >= :since GROUP BY face")
+    abstract suspend fun faceCounts(since: Long): List<FaceCount>
+
     // ---------- 放行 ----------
 
     @Insert

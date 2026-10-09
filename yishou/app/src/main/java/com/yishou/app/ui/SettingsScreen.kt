@@ -15,6 +15,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -163,6 +164,20 @@ fun SettingsScreen(
                 "定时窗口开始 10 分钟还没走第一手、“先停”的休息时间到了，也会提醒你。",
                 style = MaterialTheme.typography.bodySmall,
             )
+
+            HorizontalDivider()
+            SectionTitle("界面与掷骰")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(0 to "跟随系统", 1 to "白局", 2 to "夜局").forEach { (m, label) ->
+                    FilterChip(
+                        selected = prefs.themeMode == m,
+                        onClick = { vm.update { it.copy(themeMode = m) } },
+                        label = { Text(label) },
+                    )
+                }
+            }
+            Text("白局是青白纸面配黑子，夜局是靛青夜空配白子和金色星位。", style = MaterialTheme.typography.bodySmall)
+            SwitchRow("摇一摇手机掷骰子", prefs.shakeToRoll) { on -> vm.update { it.copy(shakeToRoll = on) } }
 
             HorizontalDivider()
             SectionTitle("大模型接口")

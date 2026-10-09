@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -55,7 +56,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import com.yishou.app.llm.Faces
+import kotlinx.coroutines.launch
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
@@ -68,19 +73,24 @@ import java.io.File
 
 // ---------- 对话气泡 ----------
 
-/** 陪练的一手：左侧气泡。footer 放计时等小字。 */
+/** 陪练的一手：左侧，宋体——对手的声音。footer 放计时等小字。 */
 @Composable
 fun CoachBubble(text: String, footer: @Composable (() -> Unit)? = null) {
     Row(Modifier.fillMaxWidth()) {
         Surface(
-            color = MaterialTheme.colorScheme.secondaryContainer,
-            shape = RoundedCornerShape(topStart = 4.dp, topEnd = 18.dp, bottomEnd = 18.dp, bottomStart = 18.dp),
+            color = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            shape = RoundedCornerShape(topStart = 2.dp, topEnd = 16.dp, bottomEnd = 16.dp, bottomStart = 16.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             modifier = Modifier.widthIn(max = 340.dp),
         ) {
-            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                Text(text, style = MaterialTheme.typography.bodyLarge)
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+                Text(
+                    text,
+                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Serif, lineHeight = 26.sp),
+                )
                 if (footer != null) {
-                    Spacer(Modifier.size(6.dp))
+                    Spacer(Modifier.size(8.dp))
                     footer()
                 }
             }
@@ -97,7 +107,7 @@ fun UserBubble(text: String) {
         Surface(
             color = MaterialTheme.colorScheme.primary,
             contentColor = MaterialTheme.colorScheme.onPrimary,
-            shape = RoundedCornerShape(topStart = 18.dp, topEnd = 4.dp, bottomEnd = 18.dp, bottomStart = 18.dp),
+            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 2.dp, bottomEnd = 16.dp, bottomStart = 16.dp),
             modifier = Modifier.widthIn(max = 320.dp),
         ) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
@@ -108,46 +118,67 @@ fun UserBubble(text: String) {
     }
 }
 
-/** 落子：有效是一颗黑子，不算是一颗空心子，出现时带一点弹性。 */
+/**
+ * 落子：有效是一颗实心子，不算是一颗空心子，子上写着第几手（棋谱的记法）。
+ * 出现时从上方轻轻落下，带一点弹性。
+ */
 @Composable
-fun Stone(filled: Boolean, color: Color, animateKey: Any) {
-    val scale = remember(animateKey) { Animatable(0f) }
+fun Stone(filled: Boolean, color: Color, number: Int?, animateKey: Any) {
+    val still = com.yishou.app.ui.theme.reducedMotion()
+    val scale = remember(animateKey) { Animatable(if (still) 1f else 1.6f) }
+    val alpha = remember(animateKey) { Animatable(if (still) 1f else 0f) }
     LaunchedEffect(animateKey) {
-        scale.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = 380f))
+        launch { alpha.animateTo(1f, tween(160)) }
+        scale.animateTo(1f, spring(dampingRatio = 0.42f, stiffness = 420f))
     }
-    Canvas(
+    Box(
         Modifier
-            .size(16.dp)
-            .graphicsLayer(scaleX = scale.value, scaleY = scale.value),
+            .size(22.dp)
+            .graphicsLayer(scaleX = scale.value, scaleY = scale.value, alpha = alpha.value),
+        contentAlignment = Alignment.Center,
     ) {
-        val r = size.minDimension / 2
-        if (filled) {
-            drawCircle(color, r)
-            drawCircle(Color.White.copy(alpha = 0.25f), r * 0.35f, center = Offset(r * 0.7f, r * 0.7f))
-        } else {
-            drawCircle(color, r - 1.5f, style = Stroke(width = 3f))
+        Canvas(Modifier.size(22.dp)) {
+            val r = size.minDimension / 2
+            if (filled) {
+                drawCircle(color, r)
+                drawCircle(Color.White.copy(alpha = 0.22f), r * 0.32f, center = Offset(r * 0.68f, r * 0.66f))
+            } else {
+                drawCircle(color, r - 1.5f, style = Stroke(width = 3f))
+            }
+        }
+        if (number != null) {
+            Text(
+                "$number",
+                color = if (filled) MaterialTheme.colorScheme.surface else color,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+            )
         }
     }
 }
 
 /** 判定结果：一行标签 + 反馈。 */
 @Composable
-fun VerdictLine(round: Round) {
+fun VerdictLine(round: Round, number: Int? = null) {
     val color = when {
         !round.judged -> MaterialTheme.colorScheme.outline
-        round.effective -> MaterialTheme.colorScheme.primary
+        round.effective -> MaterialTheme.colorScheme.onSurface
         else -> MaterialTheme.colorScheme.error
     }
     val label = when {
         !round.judged -> "离线保存，未判定"
-        round.effective -> "有效 · ${round.moveType}"
+        round.effective -> "有效，${round.moveType}"
         else -> "这一手不算"
     }
     Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Stone(filled = round.effective, color = color, animateKey = round.id to round.createdAt)
+            Stone(filled = round.effective, color = color, number = number, animateKey = round.id to round.createdAt)
             Spacer(Modifier.size(8.dp))
             Text(label, color = color, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+            Faces.of(round.face)?.let {
+                Spacer(Modifier.size(8.dp))
+                Text("练${it.short}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
+            }
         }
         if (round.feedback.isNotBlank()) Text(round.feedback, style = MaterialTheme.typography.bodyMedium)
         if (!round.effective && round.reason.isNotBlank()) {

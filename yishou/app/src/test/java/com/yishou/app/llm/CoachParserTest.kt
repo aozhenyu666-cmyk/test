@@ -113,4 +113,32 @@ class CoachParserTest {
         val o = CoachParser.parseObserved("""{"observation": "在做第 3 题", "coach_move": "你为什么选 B？", "starters": ["我选 B 是因为……"]}""")
         assertEquals(ObservedMove("在做第 3 题", "你为什么选 B？", listOf("我选 B 是因为……")), o)
     }
+
+    @Test
+    fun parsesFaces() {
+        assertEquals(2, CoachParser.parseOpening("""{"coach_move": "问", "face": 2}""").face)
+        assertEquals(0, CoachParser.parseOpening("""{"coach_move": "问", "face": 9}""").face)
+        assertEquals(0, CoachParser.parseOpening("""{"coach_move": "问", "face": "二"}""").face)
+        assertEquals(6, CoachParser.parseJudgement("""{"effective": false, "next_coach_move": "下一手", "next_face": 6}""").nextFace)
+        assertEquals(3, CoachParser.parseObserved("""{"coach_move": "问", "face": 3}""").face)
+    }
+
+    @Test
+    fun systemPromptHasFaceTable() {
+        assertTrue(Prompts.SYSTEM.contains("2 预判：最小动作——在结果出现前说一个预期及主要依据"))
+        assertFalse(Prompts.SYSTEM.contains("{{FACES}}"))
+        assertTrue(Prompts.SYSTEM.startsWith("你是一个学习陪练"))
+    }
+
+    @Test
+    fun rollAndDemoMessages() {
+        val task = com.yishou.app.data.Task(1, "资料分析", "算对", null, true, 0)
+        val bp = com.yishou.app.data.Breakpoint(1, "", "", "", null, 0)
+        val roll = CoachMessages.opening(task, bp, CoachContext(forcedFace = 2))
+        assertTrue(roll.contains("掷骰换一手"))
+        assertTrue(roll.contains("掷出了 2（预判）"))
+        val demo = CoachMessages.opening(task, bp, CoachContext(demo = true, currentMove = "卡住的那一手"))
+        assertTrue(demo.contains("请求类型：示范"))
+        assertTrue(demo.contains("卡住的那一手"))
+    }
 }

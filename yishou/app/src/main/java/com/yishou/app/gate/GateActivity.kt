@@ -46,6 +46,7 @@ import com.yishou.app.system.Attachment
 import com.yishou.app.ui.AnswerComposer
 import com.yishou.app.ui.CoachBubble
 import com.yishou.app.ui.ElapsedClock
+import com.yishou.app.ui.FaceChip
 import com.yishou.app.ui.ResumeCard
 import com.yishou.app.ui.TypingBubble
 import com.yishou.app.ui.UserBubble
@@ -267,6 +268,7 @@ private fun GateScreen(
                     s.moveError?.let {
                         Text("陪练暂时出不了题（$it），先回答下面这个问题：", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     }
+                    if (s.moveError == null) s.breakpoint?.pendingFace?.takeIf { it > 0 }?.let { FaceChip(it) }
                     CoachBubble(s.coachMove) { s.breakpoint?.updatedAt?.let { ElapsedClock(it) } }
                 }
             }

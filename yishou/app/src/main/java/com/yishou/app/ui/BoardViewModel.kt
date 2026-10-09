@@ -116,6 +116,22 @@ class BoardViewModel(app: Application) : AndroidViewModel(app) {
         requestMove()
     }
 
+    /** 掷骰换一手：出一手专练掷出的那一面。 */
+    fun roll(face: Int) = replaceMove { engine.rollFace(it, face) }
+
+    /** 请陪练先示范这一面，再让我做。 */
+    fun demo() = replaceMove { engine.demo(it) }
+
+    private fun replaceMove(call: suspend (Task) -> RoundEngine.MoveResult) {
+        val task = _state.value.task ?: return
+        if (_state.value.loadingMove || _state.value.submitting) return
+        _state.update { it.copy(loadingMove = true, moveError = null) }
+        viewModelScope.launch {
+            val r = call(task)
+            _state.update { it.copy(loadingMove = false, moveError = (r as? RoundEngine.MoveResult.Failed)?.error?.message) }
+        }
+    }
+
     /** 请求陪练出一手（开局）。失败时显示原因和“重试”。 */
     fun requestMove() {
         val task = _state.value.task ?: return

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 小组件：夜局 -->
+    <color name="widget_bg">#131B2C</color>
+    <color name="widget_ink">#E6E4DC</color>
+    <color name="widget_muted">#9AA3B5</color>
+    <color name="widget_gold">#D9B44A</color>
+</resources>

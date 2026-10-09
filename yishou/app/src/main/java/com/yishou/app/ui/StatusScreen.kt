@@ -1,6 +1,11 @@
 package com.yishou.app.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,7 +34,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yishou.app.YishouApp
+import com.yishou.app.data.FaceCount
 import com.yishou.app.data.Round
+import com.yishou.app.llm.Faces
 import com.yishou.app.look.ScreenLookService
 import com.yishou.app.stats.DayStats
 import com.yishou.app.window.WindowClock
@@ -55,6 +62,10 @@ fun StatusScreen(onBack: () -> Unit) {
         value = app.database.dao().roundsBetween(start, System.currentTimeMillis() + 1)
     }
 
+    val faces by produceState(emptyList<FaceCount>(), version, resumeKey) {
+        value = app.database.dao().faceCounts(0)
+    }
+
     Scaffold(topBar = { BackTopBar("盘点", onBack) }) { padding ->
         Column(
             modifier = Modifier
@@ -78,6 +89,10 @@ fun StatusScreen(onBack: () -> Unit) {
                 Line("陪练看屏", "${today.event(DayStats.LOOK)} 次")
             }
 
+            Block("六面练得怎样") {
+                FacePanel(faces)
+            }
+
             Block("今天的用量") {
                 val t = today.total
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -91,8 +106,8 @@ fun StatusScreen(onBack: () -> Unit) {
                 today.kinds.entries.sortedByDescending { it.value.tokens }.forEach { (kind, k) ->
                     Line(
                         kind,
-                        "${k.calls} 次 · ${formatTokens(k.tokens)} token · 平均 ${"%.1f".format(k.avgMillis / 1000.0)} 秒" +
-                            if (k.fails > 0) " · 失败 ${k.fails}" else "",
+                        "${k.calls} 次，${formatTokens(k.tokens)} token，平均 ${"%.1f".format(k.avgMillis / 1000.0)} 秒" +
+                            if (k.fails > 0) "，失败 ${k.fails} 次" else "",
                     )
                 }
             }
@@ -100,7 +115,7 @@ fun StatusScreen(onBack: () -> Unit) {
             Block("近 7 天") {
                 days.forEach { d ->
                     val t = d.total
-                    Line(d.date.substring(5), "${t.calls} 次 · ${formatTokens(t.tokens)} token · 拦截 ${d.event(DayStats.GATE_SHOWN) + d.event(DayStats.WINDOW_BLOCK)}")
+                    Line(d.date.substring(5), "${t.calls} 次请求，${formatTokens(t.tokens)} token，拦下 ${d.event(DayStats.GATE_SHOWN) + d.event(DayStats.WINDOW_BLOCK)} 次")
                 }
             }
 
@@ -123,6 +138,60 @@ fun StatusScreen(onBack: () -> Unit) {
             }
         }
     }
+}
+
+/** 六面各练了多少、有效率多少；练过 3 手以上里有效率最低的一面，就是眼下最该练的。 */
+@Composable
+private fun FacePanel(counts: List<FaceCount>) {
+    val byFace = counts.associateBy { it.face }
+    val max = (1..6).maxOf { byFace[it]?.total ?: 0 }.coerceAtLeast(1)
+    Faces.ALL.forEach { f ->
+        val c = byFace[f.number]
+        val total = c?.total ?: 0
+        val eff = c?.effective ?: 0
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            DieFace(f.number, 22.dp)
+            Text(f.short, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp).width(40.dp))
+            Box(Modifier.weight(1f).height(10.dp)) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .fillMaxHeight()
+                        .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(5.dp)),
+                )
+                if (total > 0) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth(total.toFloat() / max)
+                            .fillMaxHeight()
+                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f), RoundedCornerShape(5.dp)),
+                    )
+                    Box(
+                        Modifier
+                            .fillMaxWidth(eff.toFloat() / max)
+                            .fillMaxHeight()
+                            .background(MaterialTheme.colorScheme.tertiary, RoundedCornerShape(5.dp)),
+                    )
+                }
+            }
+            Text(
+                if (total == 0) "没练过" else "$eff/$total",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 8.dp).width(48.dp),
+            )
+        }
+    }
+    val weakest = counts.filter { it.face in 1..6 && it.total >= 3 }.minByOrNull { it.effective.toFloat() / it.total }
+    val untouched = Faces.ALL.filter { (byFace[it.number]?.total ?: 0) == 0 }
+    Text(
+        when {
+            weakest != null -> "最该练的是${Faces.of(weakest.face)!!.name}：有效率最低。下次可以掷骰时专门找它，或点“看个示范”。"
+            untouched.isNotEmpty() -> "还没练过：${untouched.joinToString("、") { it.short }}。掷骰换一手试试。"
+            else -> "六面都练过了，继续让陪练按眼前的题选面。"
+        },
+        style = MaterialTheme.typography.bodySmall,
+    )
 }
 
 @Composable

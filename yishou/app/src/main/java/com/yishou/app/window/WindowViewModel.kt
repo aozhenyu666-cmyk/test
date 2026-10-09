@@ -82,7 +82,6 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch { speaker.problem.collect { p -> _state.update { it.copy(ttsProblem = p) } } }
-        refresh()
     }
 
     /** 重新判断现在是否在窗口里，并加载任务。 */
@@ -109,6 +108,7 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             if (span != null) {
+                WindowService.start(yishou)
                 startTicker(span)
                 if (task != null) {
                     observeBreakpoint(task.id)
@@ -128,6 +128,24 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update { it.copy(breakpoint = bp, coachMove = if (it.submitting) it.coachMove else move ?: it.coachMove) }
                 if (changed) presentMove()
             }
+        }
+    }
+
+    /** 掷骰换一手：出一手专练掷出的那一面（新的一手出来后照常朗读、计时）。 */
+    fun roll(face: Int) = replaceMove { engine.rollFace(it, face) }
+
+    /** 请陪练先示范这一面，再让我做。 */
+    fun demo() = replaceMove { engine.demo(it) }
+
+    private fun replaceMove(call: suspend (Task) -> RoundEngine.MoveResult) {
+        val s = _state.value
+        val task = s.task ?: return
+        if (s.moveLoading || s.submitting || s.span == null || s.ended) return
+        speaker.stop()
+        _state.update { it.copy(moveLoading = true, moveError = null) }
+        viewModelScope.launch {
+            val r = call(task)
+            _state.update { it.copy(moveLoading = false, moveError = (r as? RoundEngine.MoveResult.Failed)?.error?.message) }
         }
     }
 
@@ -166,6 +184,7 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun onEnded() {
         tickJob?.cancel()
+        WindowService.stop(yishou)
         Reminders.cancelPauseEnd(yishou)
         yishou.settings.updateApp { it.copy(windowPauseUntil = 0) }
         reminderJob?.cancel()

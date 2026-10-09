@@ -1,7 +1,20 @@
 package com.yishou.app
 
 import android.app.Application
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
 import com.yishou.app.data.AppDatabase
+import com.yishou.app.data.Breakpoint
+import com.yishou.app.data.Task
+import com.yishou.app.widget.BoardWidget
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import com.yishou.app.llm.ChatClient
 import com.yishou.app.llm.LlmCoach
 import com.yishou.app.llm.Vision
@@ -42,6 +55,18 @@ class YishouApp : Application() {
     lateinit var stats: StatsStore
         private set
 
+    /**
+     * 陪练窗口的 ViewModel 挂在应用上而不是页面上：页面被关掉、从最近任务划掉，
+     * 计时、朗读和提醒照常进行（配合 WindowService 让进程保持前台）。
+     */
+    val windowOwner = object : ViewModelStoreOwner {
+        override val viewModelStore = ViewModelStore()
+    }
+
+    /** 应用级的协程范围：只做小组件刷新这类轻量的后台事 */
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
     override fun onCreate() {
         super.onCreate()
         database = AppDatabase.create(this)
@@ -51,6 +76,23 @@ class YishouApp : Application() {
         engine = RoundEngine(database.dao(), coach)
         summaryEngine = SummaryEngine(database.dao(), coach, prefs = { settings.app.value })
         vision = Vision(ChatClient(config = { settings.vision.value }, http = ChatClient.defaultHttpClient(60), usage = stats))
+
+        // 断点一变，桌面小组件跟着更新
+        appScope.launch {
+            val dao = database.dao()
+            dao.observeCurrentTask()
+                .flatMapLatest { task ->
+                    if (task == null) flowOf<Pair<Task?, Breakpoint?>>(null to null)
+                    else dao.observeBreakpoint(task.id).map { task to it }
+                }
+                .collect { (task, bp) ->
+                    BoardWidget.render(
+                        this@YishouApp,
+                        task?.title,
+                        bp?.nextQuestion?.takeIf { it.isNotBlank() } ?: bp?.pendingCoachMove,
+                    )
+                }
+        }
 
         Notifications.ensureChannels(this)
         WindowScheduler.reschedule(this)

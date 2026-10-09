@@ -3,6 +3,7 @@ package com.yishou.app.ui
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -29,6 +30,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -47,12 +49,13 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.yishou.app.YishouApp
 import com.yishou.app.data.Breakpoint
 import com.yishou.app.data.Round
 import com.yishou.app.data.Task
 import com.yishou.app.llm.CoachMessages
-import com.yishou.app.ui.theme.SealMark
-import com.yishou.app.ui.theme.inkWash
+import com.yishou.app.ui.theme.BoardBackdrop
+import com.yishou.app.ui.theme.StoneMark
 
 /** 主页：今天的对话流 + 局面面板 + 底部作答区。 */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -71,6 +74,7 @@ fun BoardScreen(
     val attachment by vm.attachment.state.collectAsStateWithLifecycle()
     val startersPair by vm.starters.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val prefs by (context.applicationContext as YishouApp).settings.app.collectAsStateWithLifecycle()
     var gateOn by remember { mutableStateOf(true) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { gateOn = PermissionStatus.accessibility(context) }
     val listState = rememberLazyListState()
@@ -86,7 +90,7 @@ fun BoardScreen(
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        SealMark()
+                        StoneMark()
                         Column(Modifier.padding(start = 10.dp)) {
                             Text("一手", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                             s.task?.let {
@@ -122,12 +126,11 @@ fun BoardScreen(
         },
     ) { padding ->
         if (!s.loaded) return@Scaffold
+        Box(Modifier.padding(padding).fillMaxSize()) {
+        BoardBackdrop()
         LazyColumn(
             state = listState,
-            modifier = Modifier
-                .padding(padding)
-                .fillMaxSize()
-                .inkWash(MaterialTheme.colorScheme.onBackground),
+            modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -147,7 +150,7 @@ fun BoardScreen(
             item { PositionPanel(task, s.breakpoint, onEdit = { onEditTask(task.id) }) }
             item {
                 Text(
-                    "今天 ${s.todayRounds.size} 手 · 有效 ${s.effectiveToday}",
+                    if (s.todayRounds.isEmpty()) "今天还没落子" else "今天走了 ${s.todayRounds.size} 手，有效 ${s.effectiveToday} 手",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.fillMaxWidth(),
@@ -162,32 +165,46 @@ fun BoardScreen(
                     )
                 }
             }
-            s.todayRounds.forEach { r ->
+            s.todayRounds.forEachIndexed { i, r ->
                 item(key = "c${r.id}") { CoachBubble(r.coachMove) }
                 item(key = "u${r.id}") { UserBubble(r.userAnswer) }
-                item(key = "v${r.id}") { VerdictLine(r) }
+                item(key = "v${r.id}") { VerdictLine(r, number = i + 1) }
             }
             item(key = "current") {
                 CurrentMove(
                     s = s,
+                    shake = prefs.shakeToRoll,
                     onRetry = vm::requestMove,
+                    onRoll = vm::roll,
+                    onDemo = vm::demo,
                 )
             }
+        }
         }
     }
 }
 
 @Composable
-private fun CurrentMove(s: BoardState, onRetry: () -> Unit) {
+private fun CurrentMove(
+    s: BoardState,
+    shake: Boolean,
+    onRetry: () -> Unit,
+    onRoll: (Int) -> Unit,
+    onDemo: () -> Unit,
+) {
     val move = s.coachMove
     when {
         s.submitting -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (s.answer.isNotBlank()) UserBubble(s.answer)
             TypingBubble("陪练在判定")
         }
-        s.loadingMove -> TypingBubble()
-        move != null -> CoachBubble(move) {
-            s.breakpoint?.updatedAt?.let { ElapsedClock(it) }
+        s.loadingMove -> TypingBubble("陪练在想这一手")
+        move != null -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            s.breakpoint?.pendingFace?.takeIf { it > 0 }?.let { FaceChip(it) }
+            CoachBubble(move) {
+                s.breakpoint?.updatedAt?.let { ElapsedClock(it) }
+            }
+            MoveTools(shake = shake, onRoll = onRoll, onDemo = onDemo)
         }
         s.moveError != null -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("暂时出不了题：${s.moveError}", color = MaterialTheme.colorScheme.error)
@@ -195,6 +212,21 @@ private fun CurrentMove(s: BoardState, onRetry: () -> Unit) {
         }
         !s.configured -> Text("填好接口后，陪练会在这里出题。", color = MaterialTheme.colorScheme.onSurfaceVariant)
         else -> OutlinedButton(onClick = onRetry) { Text("请陪练出一手") }
+    }
+}
+
+/** 掷骰换一手、看个示范。 */
+@Composable
+fun MoveTools(shake: Boolean, onRoll: (Int) -> Unit, onDemo: () -> Unit, enabled: Boolean = true) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        DiceRoller(enabled = enabled, shake = shake && enabled, onRolled = onRoll, size = 36.dp)
+        Text(
+            if (shake) "点骰子或摇一摇，换一面练" else "点骰子，换一面练",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onDemo, enabled = enabled) { Text("看个示范") }
     }
 }
 
@@ -255,7 +287,7 @@ fun ResultCard(round: Round) {
     Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = color)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
-                if (round.effective) "有效 · ${round.moveType}" else "这一手不算",
+                if (round.effective) "有效，${round.moveType}" else "这一手不算",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
             )

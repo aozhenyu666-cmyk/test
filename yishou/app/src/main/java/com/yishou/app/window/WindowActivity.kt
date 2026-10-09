@@ -5,7 +5,7 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.viewModels
+import androidx.lifecycle.ViewModelProvider
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -53,9 +53,12 @@ import com.yishou.app.ui.BackTopBar
 import com.yishou.app.ui.AnswerComposer
 import com.yishou.app.ui.CoachBubble
 import com.yishou.app.ui.ElapsedClock
+import com.yishou.app.ui.FaceChip
+import com.yishou.app.ui.MoveTools
 import com.yishou.app.ui.TypingBubble
 import com.yishou.app.ui.UserBubble
 import com.yishou.app.ui.VerdictLine
+import com.yishou.app.ui.theme.BoardBackdrop
 import com.yishou.app.ui.theme.YishouTheme
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -64,11 +67,17 @@ import java.util.Locale
 /** 陪练窗口页。窗口期间保持屏幕常亮，方便放在桌上边听边想。 */
 class WindowActivity : ComponentActivity() {
 
-    private val vm: WindowViewModel by viewModels()
+    private val vm: WindowViewModel by lazy {
+        ViewModelProvider(
+            (application as YishouApp).windowOwner,
+            ViewModelProvider.AndroidViewModelFactory.getInstance(application),
+        )[WindowViewModel::class.java]
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        vm.refresh()
         setContent {
             YishouTheme {
                 val s by vm.state.collectAsStateWithLifecycle()
@@ -118,9 +127,10 @@ private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit
     val change: ((AppPrefs) -> AppPrefs) -> Unit = { f -> app.settings.updateApp(f) }
 
     Scaffold(topBar = { BackTopBar("陪练窗口", onBack) }) { padding ->
+        Box(Modifier.padding(padding).fillMaxSize()) {
+        BoardBackdrop()
         Column(
             modifier = Modifier
-                .padding(padding)
                 .fillMaxSize()
                 .imePadding()
                 .verticalScroll(rememberScrollState())
@@ -218,8 +228,9 @@ private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit
                 return@Column
             }
 
+            if (!s.moveLoading && !s.submitting) s.breakpoint?.pendingFace?.takeIf { it > 0 }?.let { FaceChip(it) }
             when {
-                s.moveLoading -> TypingBubble()
+                s.moveLoading -> TypingBubble("陪练在想这一手")
                 s.submitting -> TypingBubble("陪练在判定")
                 s.coachMove != null -> CoachBubble(s.coachMove) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -239,6 +250,9 @@ private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit
             }
 
             if (s.coachMove != null) {
+                if (!s.submitting && !s.moveLoading) {
+                    MoveTools(shake = prefs.shakeToRoll, onRoll = vm::roll, onDemo = vm::demo)
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     OutlinedButton(onClick = vm::thinking, modifier = Modifier.weight(1f), enabled = !s.submitting) { Text("我在想") }
                     OutlinedButton(onClick = vm::dontKnow, modifier = Modifier.weight(1f), enabled = !s.submitting) { Text("我不知道") }
@@ -264,6 +278,7 @@ private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit
                     error = s.judgeError,
                 )
             }
+        }
         }
     }
 
