@@ -1,0 +1,68 @@
+name: yishou-pc
+
+# 「一手」电脑版（Windows）：每次改动 yishou-pc/ 就跑测试、打安装包，
+# 并更新固定下载地址：
+# https://github.com/aozhenyu666-cmyk/test/releases/download/yishou-pc-latest/yishou-pc.msi
+on:
+  push:
+    paths:
+      - "yishou-pc/**"
+      - ".github/workflows/yishou-pc.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: yishou-pc
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Tests, screenshots and installer
+        run: ./gradlew --no-daemon :core:test :app:test :app:packageMsi :app:createDistributable
+
+      - name: Collect files
+        run: |
+          cp app/build/compose/binaries/main/msi/*.msi yishou-pc.msi
+          (cd app/build/compose/binaries/main/app && 7z a -tzip ../../../../../../yishou-pc-portable.zip Yishou > /dev/null)
+          (cd app/build && 7z a -tzip ../../snapshots.zip snapshots > /dev/null)
+          ls -la *.msi *.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yishou-pc
+          path: |
+            yishou-pc/yishou-pc.msi
+            yishou-pc/yishou-pc-portable.zip
+            yishou-pc/snapshots.zip
+          if-no-files-found: error
+
+      - name: Publish to release yishou-pc-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete yishou-pc-latest --cleanup-tag --yes || true
+          gh release create yishou-pc-latest yishou-pc.msi yishou-pc-portable.zip snapshots.zip \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "一手 电脑版 最新构建" \
+            --notes "由提交 ${GITHUB_SHA::7} 自动构建。下载 yishou-pc.msi 双击安装（装在当前用户下，不需要管理员）；也可以用免安装的 yishou-pc-portable.zip。"
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: yishou-pc-test-reports
+          path: yishou-pc/*/build/reports/tests/
