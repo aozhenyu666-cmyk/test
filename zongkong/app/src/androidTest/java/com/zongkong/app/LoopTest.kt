@@ -55,6 +55,7 @@ class LoopTest {
     private lateinit var sim: NotionSim
     private lateinit var app: ZkApp
     private lateinit var gpt: NotionClient
+    private var scenario: ActivityScenario<MainActivity>? = null
     private val zone = ZoneId.systemDefault()
     private val fmt = DateTimeFormatter.ISO_OFFSET_DATE_TIME
 
@@ -72,7 +73,10 @@ class LoopTest {
     }
 
     @After
-    fun tearDown() = sim.shutdown()
+    fun tearDown() {
+        scenario?.close()
+        sim.shutdown()
+    }
 
     private fun shot(name: String) {
         InstrumentationRegistry.getInstrumentation().waitForIdleSync()
@@ -114,7 +118,8 @@ class LoopTest {
         ), threadId)
 
         // 2. 打开总控，同步，首页任务卡显示这一步
-        ActivityScenario.launch(MainActivity::class.java)
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+        compose.waitUntilAtLeastOneExists(hasTestTag("sync-now"), 15_000)
         compose.onNodeWithTag("sync-now").performScrollTo().performClick()
         compose.waitUntilAtLeastOneExists(hasTestTag("task-title") and hasText("重写项目经历第二段"), 15_000)
         waitText("用 STAR 写完并读一遍")
@@ -163,6 +168,8 @@ class LoopTest {
         ), threadId)
 
         // 7. 总控拉取，“查看结果”显示 GPT 的更新；首页接下来有新行动
+        compose.onNode(hasText("回首页")).performScrollTo().performClick()
+        compose.waitUntilAtLeastOneExists(hasTestTag("sync-now"), 10_000)
         compose.onNodeWithTag("sync-now").performScrollTo().performClick()
         waitText("从周报里补两个数据", 15_000)
         shot("e2e-05-home-after-gpt")
@@ -188,7 +195,7 @@ class LoopTest {
             【交接结束】
         """.trimIndent()
         val intent = Intent(app, MainActivity::class.java).setAction(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, block)
-        ActivityScenario.launch<MainActivity>(intent)
+        scenario = ActivityScenario.launch<MainActivity>(intent)
         waitText("新建事项「国考行测提到 75 分」")
         waitText("增长率专项 20 题")
         shot("e2e-06-import-preview")
