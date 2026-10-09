@@ -1,6 +1,7 @@
 package com.yishou.app.ui
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.yishou.app.YishouApp
@@ -8,8 +9,11 @@ import com.yishou.app.data.Breakpoint
 import com.yishou.app.data.Round
 import com.yishou.app.data.RoundSource
 import com.yishou.app.data.Task
+import com.yishou.app.llm.CoachMessages
 import com.yishou.app.round.AnswerRules
 import com.yishou.app.round.RoundEngine
+import com.yishou.app.system.AttachmentController
+import com.yishou.app.window.WindowClock
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +24,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.ZoneId
 
 /** 主页棋盘的界面状态。 */
 data class BoardState(
@@ -27,6 +32,10 @@ data class BoardState(
     val configured: Boolean = false,
     val task: Task? = null,
     val breakpoint: Breakpoint? = null,
+    /** 今天的全部轮次，按时间排成对话 */
+    val todayRounds: List<Round> = emptyList(),
+    /** 隔了很久才回来时的上一轮（用于“回到局面”）；不需要时为 null */
+    val resumeFrom: Round? = null,
     /** 正在请求开局 */
     val loadingMove: Boolean = false,
     val moveError: String? = null,
@@ -36,12 +45,10 @@ data class BoardState(
     val hint: String? = null,
     /** 判定请求失败的原因；回答保留在输入框里，可以直接重试 */
     val judgeError: String? = null,
-    /** 上一轮的判定结果 */
-    val lastRound: Round? = null,
 ) {
     /** 当前要回答的一手，就是断点里还没被回答的那一手 */
     val coachMove: String? get() = breakpoint?.pendingCoachMove?.takeIf { it.isNotBlank() }
-    val answerChars: Int get() = AnswerRules.countChars(answer)
+    val effectiveToday: Int get() = todayRounds.count { it.effective }
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -50,6 +57,7 @@ class BoardViewModel(app: Application) : AndroidViewModel(app) {
     private val yishou = app as YishouApp
     private val dao = yishou.database.dao()
     private val engine = yishou.engine
+    val attachment = AttachmentController(yishou, viewModelScope)
 
     private val _state = MutableStateFlow(BoardState())
     val state: StateFlow<BoardState> = _state.asStateFlow()
@@ -74,7 +82,6 @@ class BoardViewModel(app: Application) : AndroidViewModel(app) {
                             configured = cfg.isComplete,
                             task = task,
                             breakpoint = bp,
-                            lastRound = if (taskChanged) null else s.lastRound,
                             answer = if (taskChanged) "" else s.answer,
                             judgeError = if (taskChanged) null else s.judgeError,
                             moveError = if (taskChanged) null else s.moveError,
@@ -82,6 +89,16 @@ class BoardViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     maybeAutoOpen()
                 }
+        }
+        val zone = ZoneId.systemDefault()
+        val todayStart = WindowClock.startOfDay(WindowClock.today(System.currentTimeMillis(), zone), zone)
+        viewModelScope.launch {
+            dao.observeRoundsSince(todayStart).collect { rounds -> _state.update { it.copy(todayRounds = rounds) } }
+        }
+        viewModelScope.launch {
+            val last = dao.lastRound()
+            val gap = last?.let { (System.currentTimeMillis() - it.createdAt) / 60_000 } ?: 0
+            if (last != null && gap >= CoachMessages.RESUME_GAP_MINUTES) _state.update { it.copy(resumeFrom = last) }
         }
     }
 
@@ -116,25 +133,33 @@ class BoardViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(answer = text, hint = null) }
     }
 
-    /** 应一手：提交回答并等待判定。 */
+    fun attach(uri: Uri) {
+        val s = _state.value
+        attachment.attach(uri, s.task?.title, s.coachMove)
+    }
+
+    /** 应一手：提交回答（文字 + 图片转写）并等待判定。 */
     fun submit() {
         val s = _state.value
         val task = s.task ?: return
         val move = s.coachMove ?: return
-        if (s.submitting) return
-        if (!AnswerRules.isLongEnough(s.answer)) {
-            _state.update { it.copy(hint = "再多写一步") }
+        if (s.submitting || attachment.busy) return
+        val text = AnswerRules.compose(s.answer, attachment.readyText)
+        if (!AnswerRules.isLongEnough(text)) {
+            _state.update { it.copy(hint = "再多写一步：写下你得到了什么、依据是什么") }
             return
         }
         _state.update { it.copy(submitting = true, judgeError = null, hint = null) }
         viewModelScope.launch {
-            when (val r = engine.answer(task, move, s.answer, RoundSource.HOME)) {
+            when (val r = engine.answer(task, move, text, RoundSource.HOME)) {
                 RoundEngine.AnswerResult.TooShort ->
                     _state.update { it.copy(submitting = false, hint = "再多写一步") }
                 is RoundEngine.AnswerResult.Failed ->
                     _state.update { it.copy(submitting = false, judgeError = "暂时无法判定：${r.error.message}") }
-                is RoundEngine.AnswerResult.Judged ->
-                    _state.update { it.copy(submitting = false, answer = "", lastRound = r.round) }
+                is RoundEngine.AnswerResult.Judged -> {
+                    attachment.clear()
+                    _state.update { it.copy(submitting = false, answer = "", resumeFrom = null) }
+                }
             }
         }
     }

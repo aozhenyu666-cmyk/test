@@ -20,6 +20,26 @@ class SettingsStore(context: Context) {
     private val _llm = MutableStateFlow(readLlm())
     val llm: StateFlow<LlmConfig> = _llm.asStateFlow()
 
+    private val _vision = MutableStateFlow(readVision())
+    /** 识图模型（可选），用于拍照作答 */
+    val vision: StateFlow<LlmConfig> = _vision.asStateFlow()
+
+    fun saveVision(config: LlmConfig) {
+        prefs.edit()
+            .putString(KEY_V_BASE_URL, config.baseUrl.trim())
+            .putString(KEY_V_API_KEY, config.apiKey.trim())
+            .putString(KEY_V_MODEL, config.model.trim())
+            .apply()
+        _vision.value = readVision()
+    }
+
+    private fun readVision() = LlmConfig(
+        baseUrl = prefs.getString(KEY_V_BASE_URL, "").orEmpty(),
+        apiKey = prefs.getString(KEY_V_API_KEY, "").orEmpty(),
+        model = prefs.getString(KEY_V_MODEL, "").orEmpty(),
+        jsonMode = false,
+    )
+
     private val _prefs = MutableStateFlow(AppPrefs.fromJson(prefs.getString(KEY_APP_PREFS, null)))
     /** 除接口以外的全部设置 */
     val app: StateFlow<AppPrefs> = _prefs.asStateFlow()
@@ -58,6 +78,9 @@ class SettingsStore(context: Context) {
         private const val KEY_MODEL = "llm_model"
         private const val KEY_JSON_MODE = "llm_json_mode"
         private const val KEY_APP_PREFS = "app_prefs"
+        private const val KEY_V_BASE_URL = "vision_base_url"
+        private const val KEY_V_API_KEY = "vision_api_key"
+        private const val KEY_V_MODEL = "vision_model"
 
         /**
          * 少数机型在系统更新或备份恢复后，Keystore 里的密钥会对不上，打开加密文件会抛异常。

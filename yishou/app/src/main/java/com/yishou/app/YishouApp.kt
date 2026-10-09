@@ -4,11 +4,13 @@ import android.app.Application
 import com.yishou.app.data.AppDatabase
 import com.yishou.app.llm.ChatClient
 import com.yishou.app.llm.LlmCoach
+import com.yishou.app.llm.Vision
 import com.yishou.app.round.RoundEngine
 import com.yishou.app.settings.SettingsStore
 import com.yishou.app.summary.SummaryEngine
 import com.yishou.app.summary.SummaryScheduler
 import com.yishou.app.system.Notifications
+import com.yishou.app.system.Reminders
 import com.yishou.app.window.WindowScheduler
 
 /*
@@ -32,6 +34,8 @@ class YishouApp : Application() {
         private set
     lateinit var summaryEngine: SummaryEngine
         private set
+    lateinit var vision: Vision
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -40,9 +44,11 @@ class YishouApp : Application() {
         val coach = LlmCoach(ChatClient(config = { settings.llm.value }))
         engine = RoundEngine(database.dao(), coach)
         summaryEngine = SummaryEngine(database.dao(), coach, prefs = { settings.app.value })
+        vision = Vision(ChatClient(config = { settings.vision.value }, http = ChatClient.defaultHttpClient(60)))
 
         Notifications.ensureChannels(this)
         WindowScheduler.reschedule(this)
+        Reminders.scheduleNudge(this)
         SummaryScheduler.schedule(this, replace = false)
     }
 }

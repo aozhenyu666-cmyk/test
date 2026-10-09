@@ -1,34 +1,36 @@
 package com.yishou.app.ui
 
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,167 +38,206 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yishou.app.data.Breakpoint
 import com.yishou.app.data.Round
-import com.yishou.app.round.AnswerRules
+import com.yishou.app.data.Task
+import com.yishou.app.llm.CoachMessages
 
-/** 主页：一轮的完整界面。 */
+/** 主页：今天的对话流 + 局面面板 + 底部作答区。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BoardScreen(
     onOpenSettings: () -> Unit,
     onNewTask: () -> Unit,
+    onEditTask: (Long) -> Unit,
     onOpenPermissions: () -> Unit,
     onOpenWindow: () -> Unit,
     onOpenSummary: () -> Unit,
     vm: BoardViewModel = viewModel(),
 ) {
     val s by vm.state.collectAsStateWithLifecycle()
+    val attachment by vm.attachment.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var gateOn by remember { mutableStateOf(true) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { gateOn = PermissionStatus.accessibility(context) }
+    val listState = rememberLazyListState()
+
+    // 新的一手、新的判定出现时滚到底部
+    LaunchedEffect(s.todayRounds.size, s.coachMove, s.submitting, s.loadingMove) {
+        val last = listState.layoutInfo.totalItemsCount - 1
+        if (last >= 0) listState.animateScrollToItem(last)
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("一手") },
-                actions = {
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "设置")
+                title = {
+                    Column {
+                        Text("一手", fontWeight = FontWeight.Bold)
+                        s.task?.let {
+                            Text(it.title, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     }
+                },
+                actions = {
+                    IconButton(onClick = onOpenWindow) { Icon(Icons.Filled.PlayArrow, contentDescription = "陪练窗口") }
+                    IconButton(onClick = onOpenSummary) { Icon(Icons.Filled.DateRange, contentDescription = "每晚总结") }
+                    IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Settings, contentDescription = "设置") }
                 },
             )
         },
+        bottomBar = {
+            if (s.task != null && s.coachMove != null) {
+                AnswerComposer(
+                    answer = s.answer,
+                    onAnswerChange = vm::onAnswerChange,
+                    attachment = attachment,
+                    onAttach = vm::attach,
+                    onClearAttachment = vm.attachment::clear,
+                    submitting = s.submitting,
+                    onSubmit = vm::submit,
+                    hint = s.hint,
+                    error = s.judgeError,
+                    modifier = Modifier.imePadding(),
+                )
+            }
+        },
     ) { padding ->
-        Column(
+        if (!s.loaded) return@Scaffold
+        LazyColumn(
+            state = listState,
             modifier = Modifier
                 .padding(padding)
-                .fillMaxSize()
-                .imePadding()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            if (!s.loaded) return@Column
-
-            if (!gateOn) {
-                NoticeCard(
-                    text = "入口思考页还没开启：需要在系统里打开「一手」的无障碍服务。",
-                    action = "去开启权限",
-                    onAction = onOpenPermissions,
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(onClick = onOpenWindow, modifier = Modifier.weight(1f)) { Text("陪练窗口") }
-                OutlinedButton(onClick = onOpenSummary, modifier = Modifier.weight(1f)) { Text("每晚总结") }
-            }
-
             if (!s.configured) {
-                NoticeCard(
-                    text = "还没有填写大模型接口。先到设置里填写接口地址、密钥和模型名。",
-                    action = "去设置",
-                    onAction = onOpenSettings,
-                )
+                item {
+                    NoticeCard("还没有填写大模型接口。先到设置里填写接口地址、密钥和模型名。", "去设置", onOpenSettings)
+                }
             }
-
             val task = s.task
             if (task == null) {
-                NoticeCard(text = "还没有当前任务。先填一个真实的学习任务。", action = "新建任务", onAction = onNewTask)
-                return@Column
+                item { NoticeCard("还没有当前任务。先填一个真实的学习任务。", "新建任务", onNewTask) }
+                return@LazyColumn
             }
-
-            // 任务与断点
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(task.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("目标：${task.goal}", style = MaterialTheme.typography.bodyMedium)
-                    s.breakpoint?.let { BreakpointBlock(it) }
-                }
+            if (!gateOn) {
+                item { NoticeCard("入口思考页还没开启：需要在系统里打开「一手」的无障碍服务。", "去开启权限", onOpenPermissions) }
             }
-
-            s.lastRound?.let { ResultCard(it) }
-
-            // 陪练的一手
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-            ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("陪练的一手", style = MaterialTheme.typography.labelLarge)
-                    when {
-                        s.coachMove != null -> Text(s.coachMove!!, style = MaterialTheme.typography.bodyLarge)
-                        s.loadingMove -> Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.width(8.dp))
-                            Text("陪练在想……")
-                        }
-                        s.moveError != null -> {
-                            Text("暂时出不了题：${s.moveError}", color = MaterialTheme.colorScheme.error)
-                            OutlinedButton(onClick = vm::requestMove) { Text("重试") }
-                        }
-                        !s.configured -> Text("填好接口后，陪练会在这里出题。")
-                        else -> OutlinedButton(onClick = vm::requestMove) { Text("请陪练出一手") }
-                    }
-                }
-            }
-
-            // 应一手
-            if (s.coachMove != null) {
-                OutlinedTextField(
-                    value = s.answer,
-                    onValueChange = vm::onAnswerChange,
+            item { PositionPanel(task, s.breakpoint, onEdit = { onEditTask(task.id) }) }
+            item {
+                Text(
+                    "今天 ${s.todayRounds.size} 手 · 有效 ${s.effectiveToday}",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.fillMaxWidth(),
-                    minLines = 4,
-                    enabled = !s.submitting,
-                    label = { Text("你的一手") },
-                    supportingText = {
-                        Text("已写 ${s.answerChars} 字，至少 ${AnswerRules.MIN_CHARS} 字（不算标点空格）")
-                    },
                 )
-                s.hint?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                s.judgeError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                Button(
-                    onClick = vm::submit,
-                    enabled = !s.submitting,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    if (s.submitting) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
-                        Text("判定中……")
-                    } else {
-                        Text(if (s.judgeError != null) "重试判定" else "应一手")
-                    }
+            }
+            s.resumeFrom?.let { last ->
+                item {
+                    ResumeCard(
+                        gapMinutes = (System.currentTimeMillis() - last.createdAt) / 60_000,
+                        lastAnswer = last.userAnswer,
+                        stuck = s.breakpoint?.stuck,
+                    )
                 }
+            }
+            s.todayRounds.forEach { r ->
+                item(key = "c${r.id}") { CoachBubble(r.coachMove) }
+                item(key = "u${r.id}") { UserBubble(r.userAnswer) }
+                item(key = "v${r.id}") { VerdictLine(r) }
+            }
+            item(key = "current") {
+                CurrentMove(
+                    s = s,
+                    onRetry = vm::requestMove,
+                )
             }
         }
     }
 }
 
 @Composable
-private fun BreakpointBlock(bp: Breakpoint) {
+private fun CurrentMove(s: BoardState, onRetry: () -> Unit) {
+    val move = s.coachMove
+    when {
+        s.submitting -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (s.answer.isNotBlank()) UserBubble(s.answer)
+            TypingBubble("陪练在判定")
+        }
+        s.loadingMove -> TypingBubble()
+        move != null -> CoachBubble(move) {
+            s.breakpoint?.updatedAt?.let { ElapsedClock(it) }
+        }
+        s.moveError != null -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("暂时出不了题：${s.moveError}", color = MaterialTheme.colorScheme.error)
+            OutlinedButton(onClick = onRetry) { Text("重试") }
+        }
+        !s.configured -> Text("填好接口后，陪练会在这里出题。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        else -> OutlinedButton(onClick = onRetry) { Text("请陪练出一手") }
+    }
+}
+
+/**
+ * 局面面板：把断点摆成调度器的四句话。收起时只显示“下一步”。
+ */
+@Composable
+private fun PositionPanel(task: Task, bp: Breakpoint?, onEdit: () -> Unit) {
     var expanded by rememberSaveable { mutableStateOf(false) }
-    Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (bp.nextQuestion.isNotBlank()) {
-            Text("下一问：${bp.nextQuestion}", style = MaterialTheme.typography.bodyMedium)
-        }
-        if (expanded) {
-            Text("已知：${bp.known.ifBlank { "（空）" }}", style = MaterialTheme.typography.bodySmall)
-            Text("卡点：${bp.stuck.ifBlank { "（空）" }}", style = MaterialTheme.typography.bodySmall)
-        }
-        TextButton(onClick = { expanded = !expanded }) {
-            Text(if (expanded) "收起断点" else "展开断点")
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize()
+            .clickable { expanded = !expanded },
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("局面", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(if (expanded) "收起" else "展开", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            }
+            if (expanded) {
+                PositionLine("问题", task.goal)
+                PositionLine("刚才得到", bp?.known)
+                PositionLine("还缺", bp?.stuck)
+                PositionLine("下一步", bp?.nextQuestion)
+                Text(
+                    "改任务或断点",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable(onClick = onEdit).padding(top = 4.dp),
+                )
+            } else {
+                PositionLine("下一步", bp?.nextQuestion?.ifBlank { null } ?: bp?.stuck)
+            }
         }
     }
 }
 
+@Composable
+private fun PositionLine(label: String, value: String?) {
+    Row {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(end = 8.dp),
+        )
+        Text(value?.takeIf { it.isNotBlank() } ?: "（空）", style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+/** 一轮的判定结果卡片（思考页和陪练窗口用）。 */
 @Composable
 fun ResultCard(round: Round) {
     val color = if (round.effective) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer
@@ -214,7 +255,7 @@ fun ResultCard(round: Round) {
 }
 
 @Composable
-private fun NoticeCard(text: String, action: String, onAction: () -> Unit) {
+fun NoticeCard(text: String, action: String, onAction: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(text)
@@ -222,3 +263,6 @@ private fun NoticeCard(text: String, action: String, onAction: () -> Unit) {
         }
     }
 }
+
+/** 给其他页面用的距离文案。 */
+fun gapText(minutes: Long): String = CoachMessages.formatGap(minutes)

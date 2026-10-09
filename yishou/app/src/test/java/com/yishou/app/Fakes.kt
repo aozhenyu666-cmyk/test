@@ -7,6 +7,7 @@ import com.yishou.app.data.Pass
 import com.yishou.app.data.Round
 import com.yishou.app.data.Task
 import com.yishou.app.llm.Coach
+import com.yishou.app.llm.CoachContext
 import com.yishou.app.llm.Judgement
 import com.yishou.app.llm.LlmError
 import com.yishou.app.llm.LlmResult
@@ -23,15 +24,24 @@ class FakeCoach : Coach {
     var judgeCalls = 0
     var summaryCalls = 0
     var lastAnswer: String? = null
+    var lastContext: CoachContext? = null
 
-    override suspend fun opening(task: Task, breakpoint: Breakpoint): LlmResult<OpeningMove> {
+    override suspend fun opening(task: Task, breakpoint: Breakpoint, context: CoachContext): LlmResult<OpeningMove> {
         openingCalls++
+        lastContext = context
         return openingResult
     }
 
-    override suspend fun judge(task: Task, breakpoint: Breakpoint, coachMove: String, answer: String): LlmResult<Judgement> {
+    override suspend fun judge(
+        task: Task,
+        breakpoint: Breakpoint,
+        coachMove: String,
+        answer: String,
+        context: CoachContext,
+    ): LlmResult<Judgement> {
         judgeCalls++
         lastAnswer = answer
+        lastContext = context
         return judgeResult
     }
 
@@ -59,6 +69,12 @@ class FakeDao : AppDao() {
     }
     override suspend fun roundsBetween(from: Long, to: Long) =
         rounds.filter { it.createdAt in from until to }.sortedBy { it.createdAt }
+    override fun observeRoundsSince(since: Long): Flow<List<Round>> = emptyFlow()
+    override suspend fun lastRound() = rounds.maxByOrNull { it.createdAt }
+    override suspend fun countRounds(source: String, from: Long, to: Long) =
+        rounds.count { it.source == source && it.createdAt in from until to }
+    override suspend fun recentRules(limit: Int) =
+        summaries.values.filter { it.rule.isNotEmpty() }.sortedByDescending { it.date }.take(limit).map { it.rule }
     override suspend fun countUnjudgedSince(since: Long) = rounds.count { !it.judged && it.createdAt >= since }
     override suspend fun countEffective(source: String, from: Long, to: Long) =
         rounds.count { it.source == source && it.effective && it.createdAt in from until to }

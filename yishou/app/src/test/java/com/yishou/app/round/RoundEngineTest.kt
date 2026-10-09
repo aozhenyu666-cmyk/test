@@ -157,4 +157,25 @@ class RoundEngineTest {
         assertEquals(3L, p.roundId)
         assertNull(dao.activePass("短视频与社区", 2000))
     }
+
+    @Test
+    fun composeAnswerWithImage() {
+        assertEquals("文字", AnswerRules.compose("文字", null))
+        assertEquals("文字\n【图片内容】算式", AnswerRules.compose(" 文字 ", "算式"))
+        assertEquals("【图片内容】算式", AnswerRules.compose("", "算式"))
+        assertTrue(AnswerRules.isLongEnough(AnswerRules.compose("短", "增长率等于增长量除以基期量所以先算基期")))
+    }
+
+    @Test
+    fun contextCarriesRulesAndGap() = runTest {
+        dao.breakpoints[7] = Breakpoint(7, "k", "s", "q", pendingCoachMove = null, updatedAt = 1)
+        dao.summaries["2026-10-08"] = com.yishou.app.data.DailySummary("2026-10-08", "基期未知 → 先算基期 → 少错", "", "", 1, 1, 0)
+        dao.rounds += Round(1, 7, RoundSource.GATE, null, "m", "上次原话", true, "比较", "", "", true, createdAt = 1000L - 7 * 3_600_000L)
+        coach.openingResult = LlmResult.Ok(OpeningMove("开局", "跳步"))
+        engine.currentMove(task)
+        val c = coach.lastContext!!
+        assertEquals(listOf("基期未知 → 先算基期 → 少错"), c.rules)
+        assertEquals(7 * 60L, c.gapMinutes)
+        assertEquals("上次原话", c.lastAnswer)
+    }
 }

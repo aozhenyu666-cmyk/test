@@ -32,6 +32,7 @@ class MainActivity : ComponentActivity() {
                         BoardScreen(
                             onOpenSettings = { nav.navigate("settings") },
                             onNewTask = { nav.navigate("newtask") },
+                            onEditTask = { id -> nav.navigate("task/$id") },
                             onOpenPermissions = { nav.navigate("permissions") },
                             onOpenWindow = { startActivity(Intent(this@MainActivity, WindowActivity::class.java)) },
                             onOpenSummary = { nav.navigate("summary") },

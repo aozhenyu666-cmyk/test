@@ -31,7 +31,7 @@ data class LlmConfig(
 /** 请求失败的原因。message 直接显示给用户，要说清楚是哪里出了问题。 */
 sealed class LlmError(val message: String) {
     data object NotConfigured : LlmError("还没有填写接口地址、密钥或模型名，请到设置页填写")
-    data object Timeout : LlmError("请求超过 30 秒没有返回")
+    data object Timeout : LlmError("请求超时，没有在规定时间内返回")
     class Network(detail: String) : LlmError("网络连接失败：$detail")
     class Http(val code: Int, detail: String) : LlmError(httpMessage(code, detail))
     class BadFormat(detail: String) : LlmError("模型返回的内容不是约定的 JSON：$detail")
@@ -69,18 +69,35 @@ class ChatClient(
 
     suspend fun complete(system: String, user: String): LlmResult<String> {
         val cfg = config()
+        val messages = JSONArray()
+            .put(JSONObject().put("role", "system").put("content", system))
+            .put(JSONObject().put("role", "user").put("content", user))
+        return send(cfg, messages, cfg.jsonMode)
+    }
+
+    /**
+     * 带一张图片的请求（OpenAI 兼容的 image_url 格式，图片用 data URL 内嵌）。
+     * 只用于识图模型；返回纯文本，不要求 JSON。
+     */
+    suspend fun completeWithImage(system: String, text: String, imageDataUrl: String): LlmResult<String> {
+        val cfg = config()
+        val content = JSONArray()
+            .put(JSONObject().put("type", "text").put("text", text))
+            .put(JSONObject().put("type", "image_url").put("image_url", JSONObject().put("url", imageDataUrl)))
+        val messages = JSONArray()
+            .put(JSONObject().put("role", "system").put("content", system))
+            .put(JSONObject().put("role", "user").put("content", content))
+        return send(cfg, messages, jsonMode = false)
+    }
+
+    private suspend fun send(cfg: LlmConfig, messages: JSONArray, jsonMode: Boolean): LlmResult<String> {
         if (!cfg.isComplete) return LlmResult.Err(LlmError.NotConfigured)
 
         val body = JSONObject()
             .put("model", cfg.model.trim())
-            .put(
-                "messages",
-                JSONArray()
-                    .put(JSONObject().put("role", "system").put("content", system))
-                    .put(JSONObject().put("role", "user").put("content", user)),
-            )
+            .put("messages", messages)
             .put("stream", false)
-        if (cfg.jsonMode) body.put("response_format", JSONObject().put("type", "json_object"))
+        if (jsonMode) body.put("response_format", JSONObject().put("type", "json_object"))
 
         val url = chatCompletionsUrl(cfg.baseUrl)
             ?: return LlmResult.Err(LlmError.Network("接口地址格式不对：${cfg.baseUrl}"))
@@ -118,11 +135,12 @@ class ChatClient(
     companion object {
         private val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
 
-        fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
+        /** 陪练请求整体 30 秒超时。识图要上传图片、模型也更慢，用 60 秒。 */
+        fun defaultHttpClient(timeoutSeconds: Long = 30): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .callTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .writeTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
             .build()
 
         /**

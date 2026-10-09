@@ -42,10 +42,28 @@ data class SummaryResult(
     val note: String,
 )
 
+/**
+ * 出一手时附带的背景：以前总结出的规则（让陪练在合适时提醒调用），
+ * 以及距离上一轮过了多久（隔得久时先帮用户找回局面）。
+ */
+data class CoachContext(
+    val rules: List<String> = emptyList(),
+    /** 距离上一轮的分钟数；没有上一轮时为 null */
+    val gapMinutes: Long? = null,
+    /** 上一轮的用户原话，用于“恢复” */
+    val lastAnswer: String? = null,
+)
+
 /** 陪练。抽成接口，方便测试时换成假的。 */
 interface Coach {
-    suspend fun opening(task: Task, breakpoint: Breakpoint): LlmResult<OpeningMove>
-    suspend fun judge(task: Task, breakpoint: Breakpoint, coachMove: String, answer: String): LlmResult<Judgement>
+    suspend fun opening(task: Task, breakpoint: Breakpoint, context: CoachContext = CoachContext()): LlmResult<OpeningMove>
+    suspend fun judge(
+        task: Task,
+        breakpoint: Breakpoint,
+        coachMove: String,
+        answer: String,
+        context: CoachContext = CoachContext(),
+    ): LlmResult<Judgement>
     suspend fun summary(task: Task?, breakpoint: Breakpoint?, rounds: List<Round>): LlmResult<SummaryResult>
 }
 
@@ -56,16 +74,17 @@ interface Coach {
  */
 class LlmCoach(private val chat: ChatClient) : Coach {
 
-    override suspend fun opening(task: Task, breakpoint: Breakpoint): LlmResult<OpeningMove> =
-        requestJson(CoachMessages.opening(task, breakpoint), CoachParser::parseOpening)
+    override suspend fun opening(task: Task, breakpoint: Breakpoint, context: CoachContext): LlmResult<OpeningMove> =
+        requestJson(CoachMessages.opening(task, breakpoint, context), CoachParser::parseOpening)
 
     override suspend fun judge(
         task: Task,
         breakpoint: Breakpoint,
         coachMove: String,
         answer: String,
+        context: CoachContext,
     ): LlmResult<Judgement> =
-        requestJson(CoachMessages.judge(task, breakpoint, coachMove, answer), CoachParser::parseJudgement)
+        requestJson(CoachMessages.judge(task, breakpoint, coachMove, answer, context), CoachParser::parseJudgement)
 
     override suspend fun summary(task: Task?, breakpoint: Breakpoint?, rounds: List<Round>): LlmResult<SummaryResult> =
         requestJson(CoachMessages.summary(task, breakpoint, rounds), CoachParser::parseSummary)
@@ -89,23 +108,31 @@ class LlmCoach(private val chat: ChatClient) : Coach {
 /** 拼用户消息。任务、断点、原话都原样放进去。 */
 object CoachMessages {
 
-    fun opening(task: Task, breakpoint: Breakpoint): String = buildString {
+    fun opening(task: Task, breakpoint: Breakpoint, context: CoachContext = CoachContext()): String = buildString {
         appendLine("请求类型：开局（这是本任务的第一手，或断点刚被手动修改过）。")
         appendLine("请根据下面的任务和断点出一手。")
         appendLine()
         appendTask(task)
         appendBreakpoint(breakpoint)
+        appendContext(context)
         appendLine()
         appendLine("只返回 JSON，格式如下：")
         append(Prompts.OPENING_FORMAT)
     }
 
-    fun judge(task: Task, breakpoint: Breakpoint, coachMove: String, answer: String): String = buildString {
+    fun judge(
+        task: Task,
+        breakpoint: Breakpoint,
+        coachMove: String,
+        answer: String,
+        context: CoachContext = CoachContext(),
+    ): String = buildString {
         appendLine("请求类型：判定并出下一手。")
         appendLine("请判定用户这一手是否有效，更新断点，并出下一手。")
         appendLine()
         appendTask(task)
         appendBreakpoint(breakpoint)
+        appendContext(context)
         appendLine("【本轮陪练的一手】")
         appendLine(coachMove)
         appendLine("【用户回答原话】")
@@ -155,6 +182,27 @@ object CoachMessages {
         appendLine("对象：${task.title}")
         appendLine("目标：${task.goal}")
         appendLine("材料摘录：${task.material?.takeIf { it.isNotBlank() } ?: "（无）"}")
+    }
+
+    private fun StringBuilder.appendContext(c: CoachContext) {
+        if (c.rules.isNotEmpty()) {
+            appendLine("【用户以前总结出的规则】（条件符合时，在支架里提醒他调用其中一条）")
+            c.rules.forEach { appendLine("- $it") }
+        }
+        val gap = c.gapMinutes
+        if (gap != null && gap >= RESUME_GAP_MINUTES) {
+            appendLine("【距离上一轮】${formatGap(gap)}。用户隔了很久才回来：下一手先用一句话复述他上次停在哪里，再出问题。")
+            c.lastAnswer?.takeIf { it.isNotBlank() }?.let { appendLine("上一轮用户原话：$it") }
+        }
+    }
+
+    /** 隔多久算“很久没回来”：6 小时 */
+    const val RESUME_GAP_MINUTES = 6 * 60L
+
+    fun formatGap(minutes: Long): String = when {
+        minutes < 60 -> "$minutes 分钟"
+        minutes < 24 * 60 -> "${minutes / 60} 小时"
+        else -> "${minutes / (24 * 60)} 天 ${minutes % (24 * 60) / 60} 小时"
     }
 
     private fun StringBuilder.appendBreakpoint(bp: Breakpoint) {

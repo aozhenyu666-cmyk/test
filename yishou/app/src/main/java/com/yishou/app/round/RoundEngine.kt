@@ -7,6 +7,7 @@ import com.yishou.app.data.Round
 import com.yishou.app.data.RoundSource
 import com.yishou.app.data.Task
 import com.yishou.app.llm.Coach
+import com.yishou.app.llm.CoachContext
 import com.yishou.app.llm.Judgement
 import com.yishou.app.llm.LlmError
 import com.yishou.app.llm.LlmResult
@@ -42,7 +43,7 @@ class RoundEngine(
         val bp = dao.getBreakpoint(task.id) ?: emptyBreakpoint(task.id)
         bp.pendingCoachMove?.takeIf { it.isNotBlank() }?.let { return MoveResult.Ready(it) }
 
-        return when (val r = coach.opening(task, bp)) {
+        return when (val r = coach.opening(task, bp, context())) {
             is LlmResult.Err -> MoveResult.Failed(r.error)
             is LlmResult.Ok -> {
                 // 请求期间断点可能被手动改过，以最新的为准，只填上这一手
@@ -69,7 +70,7 @@ class RoundEngine(
         if (!skipLengthCheck && !AnswerRules.isLongEnough(answer)) return AnswerResult.TooShort
 
         val bp = dao.getBreakpoint(task.id) ?: emptyBreakpoint(task.id)
-        val judgement = when (val r = coach.judge(task, bp, coachMove, answer)) {
+        val judgement = when (val r = coach.judge(task, bp, coachMove, answer, context())) {
             is LlmResult.Err -> return AnswerResult.Failed(r.error)
             is LlmResult.Ok -> r.value
         }
@@ -99,6 +100,16 @@ class RoundEngine(
         )
         val id = dao.saveRound(round, newBp)
         return AnswerResult.Judged(round.copy(id = id), judgement)
+    }
+
+    /** 出一手时附带的背景：最近 5 条规则、距离上一轮多久、上一轮原话。 */
+    private suspend fun context(): CoachContext {
+        val last = dao.lastRound()
+        return CoachContext(
+            rules = dao.recentRules(5),
+            gapMinutes = last?.let { (clock() - it.createdAt) / 60_000 },
+            lastAnswer = last?.userAnswer,
+        )
     }
 
     /** 判定有效后发放一次放行。 */
@@ -157,4 +168,13 @@ object AnswerRules {
         text.codePoints().filter { Character.isLetterOrDigit(it) }.count().toInt()
 
     fun isLongEnough(text: String): Boolean = countChars(text) >= MIN_CHARS
+
+    const val IMAGE_MARK = "【图片内容】"
+
+    /** 文字回答和图片转写合成一条原话。图片转写也算字数。 */
+    fun compose(text: String, imageText: String?): String {
+        if (imageText.isNullOrBlank()) return text
+        val t = text.trim()
+        return if (t.isEmpty()) "$IMAGE_MARK$imageText" else "$t\n$IMAGE_MARK$imageText"
+    }
 }

@@ -17,8 +17,10 @@ object Notifications {
     private const val TAG = "Notifications"
     private const val CH_RUNNING = "running"
     private const val CH_WINDOW = "window"
+    private const val CH_NUDGE = "nudge"
     private const val ID_RUNNING = 1
-    private const val ID_WINDOW = 2
+    const val ID_WINDOW = 2
+    const val ID_NUDGE = 3
 
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java)
@@ -30,7 +32,12 @@ object Notifications {
         )
         nm.createNotificationChannel(
             NotificationChannel(CH_WINDOW, "陪练窗口", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "陪练窗口开始的提醒"
+                description = "陪练窗口开始、还没走第一手、休息时间到"
+            },
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CH_NUDGE, "每日提醒", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "当天还没应一手时提醒"
             },
         )
     }
@@ -73,6 +80,24 @@ object Notifications {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
         notify(context, ID_WINDOW, n)
+    }
+
+    /** 普通提醒，点开进入 target 页面。窗口类提醒走高优先级频道。 */
+    fun showReminder(context: Context, id: Int, title: String, text: String, target: Class<*>) {
+        val open = PendingIntent.getActivity(
+            context, 10 + id, Intent(context, target).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val n = NotificationCompat.Builder(context, if (id == ID_WINDOW) CH_WINDOW else CH_NUDGE)
+            .setSmallIcon(R.drawable.ic_stat_yishou)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .build()
+        notify(context, id, n)
     }
 
     private fun notify(context: Context, id: Int, n: android.app.Notification) {

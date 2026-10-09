@@ -143,6 +143,27 @@ class ChatClientTest {
         assertTrue(CoachMessages.opening(task, bp).contains("材料摘录：（无）"))
     }
 
+    @Test
+    fun imageRequestUsesContentArray() = runTest {
+        server.enqueue(completion("转写内容"))
+        val r = Vision(client()).transcribe("资料分析", "第一步是什么？", "data:image/jpeg;base64,AAAA")
+        assertEquals(LlmResult.Ok("转写内容"), r)
+        val body = JSONObject(server.takeRequest().body.readUtf8())
+        assertFalse(body.has("response_format"))
+        val content = body.getJSONArray("messages").getJSONObject(1).getJSONArray("content")
+        assertEquals("text", content.getJSONObject(0).getString("type"))
+        assertEquals("data:image/jpeg;base64,AAAA", content.getJSONObject(1).getJSONObject("image_url").getString("url"))
+    }
+
+    @Test
+    fun contextAppearsInMessages() {
+        val ctx = CoachContext(rules = listOf("规则一"), gapMinutes = 3 * 24 * 60L + 120, lastAnswer = "上次原话")
+        val msg = CoachMessages.opening(task, bp, ctx)
+        listOf("规则一", "3 天 2 小时", "上次原话").forEach { assertTrue(it, msg.contains(it)) }
+        val recent = CoachMessages.judge(task, bp, "m", "a", CoachContext(gapMinutes = 30, lastAnswer = "不该出现"))
+        assertFalse(recent.contains("不该出现"))
+    }
+
     private val task = Task(id = 1, title = "资料分析", goal = "算对增长率", material = null, isCurrent = true, createdAt = 0)
     private val bp = Breakpoint(1, "已知内容", "卡点内容", "下一问内容", pendingCoachMove = null, updatedAt = 0)
 }

@@ -7,6 +7,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Surface
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -42,7 +47,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yishou.app.MainActivity
 import com.yishou.app.round.AnswerRules
 import com.yishou.app.ui.BackTopBar
-import com.yishou.app.ui.ResultCard
+import com.yishou.app.ui.AnswerComposer
+import com.yishou.app.ui.CoachBubble
+import com.yishou.app.ui.ElapsedClock
+import com.yishou.app.ui.TypingBubble
+import com.yishou.app.ui.UserBubble
+import com.yishou.app.ui.VerdictLine
 import com.yishou.app.ui.theme.YishouTheme
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -78,6 +88,8 @@ class WindowActivity : ComponentActivity() {
 @Composable
 private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit, onOpenApp: () -> Unit) {
     var confirmStop by remember { mutableStateOf(false) }
+    var pauseMenu by remember { mutableStateOf(false) }
+    val attachment by vm.attachment.state.collectAsStateWithLifecycle()
 
     Scaffold(topBar = { BackTopBar("陪练窗口", onBack) }) { padding ->
         Column(
@@ -146,33 +158,48 @@ private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit
                 }
             }
 
-            s.lastRound?.let { ResultCard(it) }
+            s.lastRound?.let { r ->
+                UserBubble(r.userAnswer)
+                VerdictLine(r)
+            }
 
             if (s.paused) {
-                Text("本轮已停，窗口计时继续。准备好了再开始下一轮。")
-                Button(onClick = vm::resume, modifier = Modifier.fillMaxWidth()) { Text("继续下一轮") }
+                Surface(
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("休息中，窗口计时继续", fontWeight = FontWeight.Bold)
+                        if (s.pauseUntil > 0) {
+                            Text(
+                                "还剩 ${formatRemaining((s.pauseUntil - System.currentTimeMillis()).coerceAtLeast(0))}，到点会叫你回来。",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                        Button(onClick = vm::resume, modifier = Modifier.fillMaxWidth()) { Text("提前回来，开始下一轮") }
+                    }
+                }
                 return@Column
             }
 
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-            ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("陪练的一手", style = MaterialTheme.typography.labelLarge)
-                    when {
-                        s.moveLoading -> Text("陪练在想……")
-                        s.coachMove != null -> Text(s.coachMove, style = MaterialTheme.typography.bodyLarge)
-                        s.moveError != null -> {
-                            Text("暂时出不了题：${s.moveError}", color = MaterialTheme.colorScheme.error)
-                            OutlinedButton(onClick = vm::retryMove) { Text("重试") }
+            when {
+                s.moveLoading -> TypingBubble()
+                s.submitting -> TypingBubble("陪练在判定")
+                s.coachMove != null -> CoachBubble(s.coachMove) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        s.breakpoint?.updatedAt?.let { ElapsedClock(it) }
+                        Spacer(Modifier.width(8.dp))
+                        if (s.noResponse) {
+                            Text("未回应", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                        } else if (s.reminders > 0) {
+                            Text("已提醒 ${s.reminders} 次", style = MaterialTheme.typography.labelMedium)
                         }
                     }
-                    if (s.noResponse) {
-                        Text("未回应", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
-                    } else if (s.reminders > 0) {
-                        Text("已提醒 ${s.reminders} 次", style = MaterialTheme.typography.bodySmall)
-                    }
+                }
+                s.moveError != null -> {
+                    Text("暂时出不了题：${s.moveError}", color = MaterialTheme.colorScheme.error)
+                    OutlinedButton(onClick = vm::retryMove) { Text("重试") }
                 }
             }
 
@@ -180,28 +207,26 @@ private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     OutlinedButton(onClick = vm::thinking, modifier = Modifier.weight(1f), enabled = !s.submitting) { Text("我在想") }
                     OutlinedButton(onClick = vm::dontKnow, modifier = Modifier.weight(1f), enabled = !s.submitting) { Text("我不知道") }
-                    OutlinedButton(onClick = vm::pause, modifier = Modifier.weight(1f), enabled = !s.submitting) { Text("先停") }
-                }
-                OutlinedTextField(
-                    value = s.answer,
-                    onValueChange = vm::onAnswerChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 3,
-                    enabled = !s.submitting,
-                    label = { Text("你的一手") },
-                    supportingText = { Text("已写 ${s.answerChars} 字，至少 ${AnswerRules.MIN_CHARS} 字。可以用输入法的语音输入。") },
-                )
-                s.hint?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                s.judgeError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                Button(onClick = vm::submit, enabled = !s.submitting, modifier = Modifier.fillMaxWidth()) {
-                    if (s.submitting) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
-                        Text("判定中……")
-                    } else {
-                        Text(if (s.judgeError != null) "重试判定" else "应一手")
+                    Box(Modifier.weight(1f)) {
+                        OutlinedButton(onClick = { pauseMenu = true }, modifier = Modifier.fillMaxWidth(), enabled = !s.submitting) { Text("先停") }
+                        DropdownMenu(expanded = pauseMenu, onDismissRequest = { pauseMenu = false }) {
+                            listOf(5, 10, 15, 30).forEach { m ->
+                                DropdownMenuItem(text = { Text("休息 $m 分钟") }, onClick = { pauseMenu = false; vm.pause(m) })
+                            }
+                        }
                     }
                 }
+                AnswerComposer(
+                    answer = s.answer,
+                    onAnswerChange = vm::onAnswerChange,
+                    attachment = attachment,
+                    onAttach = vm::attach,
+                    onClearAttachment = vm.attachment::clear,
+                    submitting = s.submitting,
+                    onSubmit = vm::submit,
+                    hint = s.hint,
+                    error = s.judgeError,
+                )
             }
         }
     }

@@ -2,6 +2,7 @@ package com.yishou.app.gate
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -41,7 +42,14 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yishou.app.MainActivity
 import com.yishou.app.round.AnswerRules
-import com.yishou.app.ui.ResultCard
+import com.yishou.app.system.Attachment
+import com.yishou.app.ui.AnswerComposer
+import com.yishou.app.ui.CoachBubble
+import com.yishou.app.ui.ElapsedClock
+import com.yishou.app.ui.ResumeCard
+import com.yishou.app.ui.TypingBubble
+import com.yishou.app.ui.UserBubble
+import com.yishou.app.ui.VerdictLine
 import com.yishou.app.ui.theme.YishouTheme
 import com.yishou.app.window.WindowActivity
 import kotlinx.coroutines.delay
@@ -71,8 +79,12 @@ class GateActivity : ComponentActivity() {
                         returnToApp()
                     }
                 }
+                val attachment by vm.attachment.state.collectAsStateWithLifecycle()
                 GateScreen(
                     s = s,
+                    attachment = attachment,
+                    onAttach = vm::attach,
+                    onClearAttachment = vm.attachment::clear,
                     onAnswerChange = vm::onAnswerChange,
                     onSubmit = vm::submit,
                     onSaveOffline = vm::saveOffline,
@@ -167,6 +179,9 @@ class GateActivity : ComponentActivity() {
 @Composable
 private fun GateScreen(
     s: GateState,
+    attachment: Attachment?,
+    onAttach: (Uri) -> Unit,
+    onClearAttachment: () -> Unit,
     onAnswerChange: (String) -> Unit,
     onSubmit: () -> Unit,
     onSaveOffline: () -> Unit,
@@ -211,16 +226,20 @@ private fun GateScreen(
                 return@Column
             }
 
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(task.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    s.breakpoint?.nextQuestion?.takeIf { it.isNotBlank() }?.let {
-                        Text("下一问：$it", style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
+            Text(task.title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            s.resumeFrom?.let { last ->
+                ResumeCard(
+                    gapMinutes = (System.currentTimeMillis() - last.createdAt) / 60_000,
+                    lastAnswer = last.userAnswer,
+                    stuck = s.breakpoint?.stuck,
+                )
             }
 
-            s.lastRound?.let { ResultCard(it) }
+            s.lastRound?.let { r ->
+                UserBubble(r.userAnswer)
+                VerdictLine(r)
+            }
 
             val passMinutes = s.passMinutes
             if (passMinutes != null) {
@@ -229,50 +248,28 @@ private fun GateScreen(
                 return@Column
             }
 
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-            ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("陪练的一手", style = MaterialTheme.typography.labelLarge)
-                    if (s.moveLoading) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.width(8.dp))
-                            Text("陪练在想……")
-                        }
-                    } else {
-                        s.moveError?.let {
-                            Text("陪练暂时出不了题（$it），先回答下面这个问题：", color = MaterialTheme.colorScheme.error)
-                        }
-                        s.coachMove?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
+            when {
+                s.moveLoading -> TypingBubble()
+                s.coachMove != null -> {
+                    s.moveError?.let {
+                        Text("陪练暂时出不了题（$it），先回答下面这个问题：", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     }
+                    CoachBubble(s.coachMove) { s.breakpoint?.updatedAt?.let { ElapsedClock(it) } }
                 }
             }
 
             if (s.coachMove != null) {
-                OutlinedTextField(
-                    value = s.answer,
-                    onValueChange = onAnswerChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 4,
-                    enabled = !s.submitting,
-                    label = { Text("你的一手") },
-                    supportingText = {
-                        Text("已写 ${s.answerChars} 字，至少 ${AnswerRules.MIN_CHARS} 字。可以用输入法的语音输入。")
-                    },
+                AnswerComposer(
+                    answer = s.answer,
+                    onAnswerChange = onAnswerChange,
+                    attachment = attachment,
+                    onAttach = onAttach,
+                    onClearAttachment = onClearAttachment,
+                    submitting = s.submitting,
+                    onSubmit = onSubmit,
+                    hint = s.hint,
+                    error = s.judgeError,
                 )
-                s.hint?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                s.judgeError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                Button(onClick = onSubmit, enabled = !s.submitting, modifier = Modifier.fillMaxWidth()) {
-                    if (s.submitting) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
-                        Text("判定中……")
-                    } else {
-                        Text(if (s.judgeError != null) "重试判定" else "应一手")
-                    }
-                }
                 if (s.judgeError != null && !s.isTest) {
                     if (s.offlineLeft > 0) {
                         OutlinedButton(onClick = onSaveOffline, enabled = !s.submitting, modifier = Modifier.fillMaxWidth()) {

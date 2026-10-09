@@ -71,6 +71,22 @@
             android:name=".window.WindowAlarmReceiver"
             android:exported="false" />
 
+        <!-- 每日检查、窗口未开始、休息结束三个提醒 -->
+        <receiver
+            android:name=".system.ReminderReceiver"
+            android:exported="false" />
+
+        <!-- 拍照作答：相机把照片写到本应用缓存目录里的临时文件 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <receiver
             android:name=".window.RescheduleReceiver"
             android:exported="true">

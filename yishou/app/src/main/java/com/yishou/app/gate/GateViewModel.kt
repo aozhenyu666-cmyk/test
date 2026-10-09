@@ -1,6 +1,7 @@
 package com.yishou.app.gate
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.yishou.app.YishouApp
@@ -8,7 +9,9 @@ import com.yishou.app.data.Breakpoint
 import com.yishou.app.data.Round
 import com.yishou.app.data.RoundSource
 import com.yishou.app.data.Task
+import com.yishou.app.llm.CoachMessages
 import com.yishou.app.round.AnswerRules
+import com.yishou.app.system.AttachmentController
 import com.yishou.app.round.RoundEngine
 import com.yishou.app.window.WindowClock
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +46,8 @@ data class GateState(
     val offlineMinutes: Int = 5,
     /** 已放行的分钟数；非 null 表示这一手有效、可以回到原应用 */
     val passMinutes: Int? = null,
+    /** 隔了很久才回来时的上一轮，用于“回到局面” */
+    val resumeFrom: Round? = null,
 ) {
     val answerChars: Int get() = AnswerRules.countChars(answer)
     val isTest: Boolean get() = triggerPackage == null
@@ -54,6 +59,8 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     private val dao = yishou.database.dao()
     private val engine = yishou.engine
 
+    val attachment = AttachmentController(yishou, viewModelScope)
+
     private val _state = MutableStateFlow(GateState())
     val state: StateFlow<GateState> = _state.asStateFlow()
 
@@ -63,6 +70,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     fun start(pkg: String?, group: String, label: String) {
         if (startedFor == pkg to group && !_state.value.loading && _state.value.passMinutes == null) return
         startedFor = pkg to group
+        attachment.clear()
         _state.value = GateState(loading = true, triggerPackage = pkg, appLabel = label, group = group)
         viewModelScope.launch {
             val prefs = yishou.settings.app.value
@@ -70,9 +78,12 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             val inWindow = pkg != null && WindowClock.active(now, prefs, ZoneId.systemDefault()) != null
             val task = dao.getCurrentTask()
             val bp = task?.let { dao.getBreakpoint(it.id) }
+            val last = dao.lastRound()
+            val resume = last?.takeIf { (now - it.createdAt) / 60_000 >= CoachMessages.RESUME_GAP_MINUTES }
             _state.update {
                 it.copy(
                     loading = false,
+                    resumeFrom = resume,
                     task = task,
                     breakpoint = bp,
                     inWindow = inWindow,
@@ -107,18 +118,26 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(answer = text, hint = null) }
     }
 
+    fun attach(uri: Uri) {
+        val s = _state.value
+        attachment.attach(uri, s.task?.title, s.coachMove)
+    }
+
+    private fun composedAnswer(): String = AnswerRules.compose(_state.value.answer, attachment.readyText)
+
     fun submit() {
         val s = _state.value
         val task = s.task ?: return
         val move = s.coachMove ?: return
-        if (s.submitting || s.passMinutes != null) return
-        if (!AnswerRules.isLongEnough(s.answer)) {
-            _state.update { it.copy(hint = "再多写一步") }
+        if (s.submitting || s.passMinutes != null || attachment.busy) return
+        val text = composedAnswer()
+        if (!AnswerRules.isLongEnough(text)) {
+            _state.update { it.copy(hint = "再多写一步：写下你得到了什么、依据是什么") }
             return
         }
         _state.update { it.copy(submitting = true, hint = null, judgeError = null) }
         viewModelScope.launch {
-            when (val r = engine.answer(task, move, s.answer, RoundSource.GATE, s.triggerPackage)) {
+            when (val r = engine.answer(task, move, text, RoundSource.GATE, s.triggerPackage)) {
                 RoundEngine.AnswerResult.TooShort -> _state.update { it.copy(submitting = false, hint = "再多写一步") }
                 is RoundEngine.AnswerResult.Failed -> {
                     val left = offlineLeft()
@@ -131,9 +150,11 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
                     if (r.round.effective && !s.isTest && !s.inWindow) {
                         val minutes = yishou.settings.app.value.passMinutesFor(s.group)
                         engine.grantPass(s.group, minutes, r.round.id)
+                        attachment.clear()
                         _state.update { it.copy(submitting = false, lastRound = r.round, breakpoint = bp, passMinutes = minutes) }
                     } else {
                         // 无效：显示反馈和理由，下一手已在断点里，可以再答一次
+                        attachment.clear()
                         _state.update {
                             it.copy(
                                 submitting = false,
@@ -156,7 +177,8 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         val task = s.task ?: return
         val move = s.coachMove ?: return
         if (s.submitting || s.isTest || s.inWindow) return
-        if (!AnswerRules.isLongEnough(s.answer)) {
+        val text = composedAnswer()
+        if (!AnswerRules.isLongEnough(text)) {
             _state.update { it.copy(hint = "再多写一步") }
             return
         }
@@ -168,7 +190,8 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             val minutes = yishou.settings.app.value.offlinePassMinutes
-            engine.saveOffline(task, move, s.answer, s.triggerPackage, s.group, minutes)
+            engine.saveOffline(task, move, text, s.triggerPackage, s.group, minutes)
+            attachment.clear()
             _state.update { it.copy(submitting = false, passMinutes = minutes, offlineLeft = left - 1) }
         }
     }

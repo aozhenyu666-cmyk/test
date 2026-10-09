@@ -92,6 +92,16 @@ abstract class AppDao {
     @Query("SELECT * FROM round WHERE createdAt >= :from AND createdAt < :to ORDER BY createdAt")
     abstract suspend fun roundsBetween(from: Long, to: Long): List<Round>
 
+    /** 主页对话流：某个时刻以来的全部轮次 */
+    @Query("SELECT * FROM round WHERE createdAt >= :since ORDER BY createdAt")
+    abstract fun observeRoundsSince(since: Long): Flow<List<Round>>
+
+    @Query("SELECT * FROM round ORDER BY createdAt DESC LIMIT 1")
+    abstract suspend fun lastRound(): Round?
+
+    @Query("SELECT COUNT(*) FROM round WHERE source = :source AND createdAt >= :from AND createdAt < :to")
+    abstract suspend fun countRounds(source: String, from: Long, to: Long): Int
+
     /** 离线“保存并通过”的次数：未经判定的轮数 */
     @Query("SELECT COUNT(*) FROM round WHERE judged = 0 AND createdAt >= :since")
     abstract suspend fun countUnjudgedSince(since: Long): Int
@@ -120,6 +130,10 @@ abstract class AppDao {
 
     @Upsert
     abstract suspend fun upsertSummary(summary: DailySummary)
+
+    /** 最近总结出的规则（非空），让陪练在合适时提醒调用 */
+    @Query("SELECT rule FROM daily_summary WHERE rule != '' ORDER BY date DESC LIMIT :limit")
+    abstract suspend fun recentRules(limit: Int): List<String>
 
     @Query("SELECT * FROM daily_summary WHERE date = :date")
     abstract suspend fun getSummary(date: String): DailySummary?

@@ -10,6 +10,7 @@ import android.util.Log
 import com.yishou.app.YishouApp
 import com.yishou.app.summary.SummaryScheduler
 import com.yishou.app.system.Notifications
+import com.yishou.app.system.Reminders
 import java.time.ZoneId
 
 /** 用 AlarmManager 安排每天的“陪练窗口开始”提醒。 */
@@ -53,7 +54,10 @@ class WindowAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext as YishouApp
         val prefs = app.settings.app.value
-        if (prefs.windowEnabled) Notifications.showWindowStart(context, prefs.windowMinutes)
+        if (prefs.windowEnabled) {
+            Notifications.showWindowStart(context, prefs.windowMinutes)
+            Reminders.scheduleWindowCheck(context, System.currentTimeMillis() + Reminders.WINDOW_CHECK_MINUTES * 60_000L)
+        }
         WindowScheduler.reschedule(context)
     }
 }
@@ -69,6 +73,7 @@ class RescheduleReceiver : BroadcastReceiver() {
             AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED,
             -> {
                 WindowScheduler.reschedule(context)
+                Reminders.scheduleNudge(context)
                 SummaryScheduler.schedule(context, replace = intent.action != Intent.ACTION_MY_PACKAGE_REPLACED)
             }
         }

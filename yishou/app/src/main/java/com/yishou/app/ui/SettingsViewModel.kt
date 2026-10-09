@@ -9,6 +9,7 @@ import com.yishou.app.llm.ChatClient
 import com.yishou.app.llm.LlmConfig
 import com.yishou.app.settings.AppPrefs
 import com.yishou.app.summary.SummaryScheduler
+import com.yishou.app.system.Reminders
 import com.yishou.app.window.WindowScheduler
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -24,10 +25,26 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     val prefs: StateFlow<AppPrefs> = yishou.settings.app
 
     /** 修改设置；改了窗口或总结的时间时重新安排定时。 */
-    fun update(reschedule: Boolean = false, resummary: Boolean = false, change: (AppPrefs) -> AppPrefs) {
+    fun update(
+        reschedule: Boolean = false,
+        resummary: Boolean = false,
+        renudge: Boolean = false,
+        change: (AppPrefs) -> AppPrefs,
+    ) {
         yishou.settings.updateApp(change)
         if (reschedule) WindowScheduler.reschedule(yishou)
         if (resummary) SummaryScheduler.schedule(yishou, replace = true)
+        if (renudge) Reminders.scheduleNudge(yishou)
+    }
+
+    val vision: StateFlow<LlmConfig> = yishou.settings.vision
+
+    fun saveVision(config: LlmConfig): String? {
+        if (config.baseUrl.isNotBlank() && ChatClient.chatCompletionsUrl(config.baseUrl) == null) {
+            return "接口地址要以 https:// 或 http:// 开头"
+        }
+        yishou.settings.saveVision(config)
+        return null
     }
 
     val tasks: StateFlow<List<Task>> = dao.observeAllTasks()

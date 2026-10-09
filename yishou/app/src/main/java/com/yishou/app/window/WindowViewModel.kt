@@ -1,6 +1,7 @@
 package com.yishou.app.window
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.yishou.app.YishouApp
@@ -10,6 +11,8 @@ import com.yishou.app.data.RoundSource
 import com.yishou.app.data.Task
 import com.yishou.app.round.AnswerRules
 import com.yishou.app.round.RoundEngine
+import com.yishou.app.system.AttachmentController
+import com.yishou.app.system.Reminders
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,8 +41,10 @@ data class WindowState(
     val hint: String? = null,
     val judgeError: String? = null,
     val lastRound: Round? = null,
-    /** “先停”之后，等用户点“继续下一轮” */
+    /** “先停”之后，等休息结束或用户点“提前回来” */
     val paused: Boolean = false,
+    /** 休息到什么时候；到点自动回到下一轮 */
+    val pauseUntil: Long = 0,
     /** 这一问已经提醒了几次（最多 2 次） */
     val reminders: Int = 0,
     val noResponse: Boolean = false,
@@ -60,6 +65,8 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
     private val engine = yishou.engine
     private val speaker = Speaker(app)
     private val zone get() = ZoneId.systemDefault()
+
+    val attachment = AttachmentController(yishou, viewModelScope)
 
     private val _state = MutableStateFlow(WindowState())
     val state: StateFlow<WindowState> = _state.asStateFlow()
@@ -125,6 +132,12 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
                     break
                 }
                 _state.update { it.copy(remainingMs = left) }
+                val s = _state.value
+                if (s.paused && s.pauseUntil in 1..System.currentTimeMillis()) {
+                    if (yishou.settings.app.value.ttsEnabled) speaker.speak("休息结束，回到下一手。")
+                    delay(2_500)
+                    resume()
+                }
                 delay(1_000)
             }
         }
@@ -132,6 +145,7 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun onEnded() {
         tickJob?.cancel()
+        Reminders.cancelPauseEnd(yishou)
         reminderJob?.cancel()
         speaker.stop()
         val span = _state.value.span
@@ -215,7 +229,15 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
     /** “我不知道”：判为无效，请陪练给一个更具体的支架。 */
     fun dontKnow() = submitText(DONT_KNOW, skipLengthCheck = true)
 
-    fun submit() = submitText(_state.value.answer, skipLengthCheck = false)
+    fun submit() {
+        if (attachment.busy) return
+        submitText(AnswerRules.compose(_state.value.answer, attachment.readyText), skipLengthCheck = false)
+    }
+
+    fun attach(uri: Uri) {
+        val s = _state.value
+        attachment.attach(uri, s.task?.title, s.coachMove)
+    }
 
     private fun submitText(text: String, skipLengthCheck: Boolean) {
         val s = _state.value
@@ -223,7 +245,7 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
         val move = s.coachMove ?: return
         if (s.submitting || s.span == null || s.ended) return
         if (!skipLengthCheck && !AnswerRules.isLongEnough(text)) {
-            _state.update { it.copy(hint = "再多写一步") }
+            _state.update { it.copy(hint = "再多写一步：写下你得到了什么、依据是什么") }
             return
         }
         _state.update { it.copy(submitting = true, hint = null, judgeError = null, paused = false) }
@@ -249,23 +271,31 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
                             effectiveCount = count,
                         )
                     }
+                    if (!skipLengthCheck) attachment.clear()
                     presentMove()
                 }
             }
         }
     }
 
-    /** “先停”：断点已在每轮结束时保存；结束本轮，不再提醒，窗口计时继续。 */
-    fun pause() {
+    /**
+     * “先停”：断点已在每轮结束时保存；结束本轮，休息 minutes 分钟，窗口计时继续。
+     * 休息时间到会朗读并自动回到下一轮；应用在后台时用通知叫你回来。
+     */
+    fun pause(minutes: Int) {
         if (_state.value.span == null || _state.value.ended) return
         reminderJob?.cancel()
         speaker.stop()
-        _state.update { it.copy(paused = true, answer = "", hint = null, judgeError = null) }
+        attachment.clear()
+        val until = System.currentTimeMillis() + minutes * 60_000L
+        Reminders.schedulePauseEnd(yishou, until)
+        _state.update { it.copy(paused = true, pauseUntil = until, answer = "", hint = null, judgeError = null) }
     }
 
     /** 继续下一轮：重新朗读这一手，从头计时。 */
     fun resume() {
-        _state.update { it.copy(paused = false) }
+        Reminders.cancelPauseEnd(yishou)
+        _state.update { it.copy(paused = false, pauseUntil = 0) }
         spokenMove = null
         presentMove()
     }

@@ -30,6 +30,10 @@ data class AppPrefs(
     val summaryEnabled: Boolean = true,
     val summaryHour: Int = 22,
     val summaryMinute: Int = 30,
+    /** 每天检查一次：当天还没应一手就提醒 */
+    val nudgeEnabled: Boolean = true,
+    val nudgeHour: Int = 21,
+    val nudgeMinute: Int = 0,
     /** 手动开始的陪练窗口的开始时间，0 表示没有 */
     val manualWindowStart: Long = 0,
     /** 最近一次“提前结束窗口”的时间，0 表示没有 */
@@ -57,6 +61,9 @@ data class AppPrefs(
         .put("summaryEnabled", summaryEnabled)
         .put("summaryHour", summaryHour)
         .put("summaryMinute", summaryMinute)
+        .put("nudgeEnabled", nudgeEnabled)
+        .put("nudgeHour", nudgeHour)
+        .put("nudgeMinute", nudgeMinute)
         .put("manualWindowStart", manualWindowStart)
         .put("windowStoppedAt", windowStoppedAt)
         .put("manualChecks", JSONArray().apply { manualChecks.forEach { put(it) } })
@@ -119,6 +126,9 @@ data class AppPrefs(
                 summaryEnabled = o.optBoolean("summaryEnabled", d.summaryEnabled),
                 summaryHour = o.optInt("summaryHour", d.summaryHour).coerceIn(0, 23),
                 summaryMinute = o.optInt("summaryMinute", d.summaryMinute).coerceIn(0, 59),
+                nudgeEnabled = o.optBoolean("nudgeEnabled", d.nudgeEnabled),
+                nudgeHour = o.optInt("nudgeHour", d.nudgeHour).coerceIn(0, 23),
+                nudgeMinute = o.optInt("nudgeMinute", d.nudgeMinute).coerceIn(0, 59),
                 manualWindowStart = o.optLong("manualWindowStart", 0),
                 windowStoppedAt = o.optLong("windowStoppedAt", 0),
                 manualChecks = checks,
