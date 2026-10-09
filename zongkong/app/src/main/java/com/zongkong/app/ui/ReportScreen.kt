@@ -32,6 +32,8 @@ import com.zongkong.core.ReportKind
 import com.zongkong.core.Workspace
 import kotlinx.coroutines.launch
 
+private data class Line(val at: Long, val tag: String, val color: Color, val text: String)
+
 /** 随时汇报：报到（重置沉默计时）和随手记（存进信息收集库）。下面是今天的时间线。 */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
@@ -119,7 +121,6 @@ fun ReportScreen() {
         syncMsg?.let { Hint(it) }
         if (day.outbox.isNotEmpty() && config.notion.ready) Hint("${day.outbox.size} 条日志等待写入 Notion")
 
-        data class Line(val at: Long, val tag: String, val color: Color, val text: String)
         val lines = buildList {
             day.submissions.forEach { s ->
                 val g = config.gates.firstOrNull { it.id == s.gateId }

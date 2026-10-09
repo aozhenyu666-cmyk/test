@@ -162,7 +162,8 @@ class GuardService : AccessibilityService() {
                         this, "$name 还有 ${((g.deadlineAt - now) / 60_000).coerceAtLeast(1)} 分钟截止",
                         g.gate.instruction.take(60), "gate/$id",
                     )
-                g.blocking && g.phase != GatePhase.OVERDUE && now - g.openAt < 3600_000 && store.firstAlert("open:$id") ->
+                // 凌晨开放的关卡不半夜吵醒你：等到检查时段开始再提醒
+                g.blocking && g.phase != GatePhase.OVERDUE && awake(status, now) && store.firstAlert("open:$id") ->
                     Notifications.alert(this, "$name 开放了", "交了才放行娱乐应用，${DayClock.hhmm(g.gate.deadline)} 截止。", "gate/$id")
             }
         }
@@ -186,6 +187,14 @@ class GuardService : AccessibilityService() {
                 Notifications.alert(this, "紧急放行结束", "恢复检查。", null)
             }
         }
+    }
+
+    private fun awake(status: Status, now: Long): Boolean {
+        val c = store.config.value
+        val date = java.time.LocalDate.parse(status.date)
+        val start = DayClock.at(date, c.activeStart, store.zone)
+        val end = DayClock.at(date, c.activeEnd, store.zone).let { if (it <= start) it + 24 * 3600_000L else it }
+        return now in start until end
     }
 
     override fun onInterrupt() {}

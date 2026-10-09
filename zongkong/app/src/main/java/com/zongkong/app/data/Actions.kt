@@ -120,7 +120,9 @@ class Actions(private val context: Context, private val store: Store) {
      * 把待写的日志、随手记写进 Notion。失败的留着下次再试。
      * 返回一句结果说明。
      */
-    suspend fun sync(): String = syncLock.withLock {
+    suspend fun sync(): String = syncLock.withLock { syncLocked() }
+
+    private suspend fun syncLocked(): String {
         val cfg = store.config.value.notion
         if (!cfg.ready) return "还没配置 Notion"
         var ok = 0
@@ -171,7 +173,7 @@ class Actions(private val context: Context, private val store: Store) {
             if (failed != null) break
         }
         store.syncNote = failed?.let { "上次同步失败：$it" } ?: "上次同步成功 ${DayClock.hhmm(minuteNow())}"
-        failed?.let { "同步失败：$it" } ?: if (ok == 0) "没有要同步的" else "已同步 $ok 条"
+        return failed?.let { "同步失败：$it" } ?: if (ok == 0) "没有要同步的" else "已同步 $ok 条"
     }
 
     private fun minuteNow(): Int = Instant.now().atZone(store.zone).toLocalTime().let { it.hour * 60 + it.minute }
