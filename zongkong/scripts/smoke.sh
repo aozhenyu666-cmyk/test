@@ -56,14 +56,6 @@ adb shell cmd uimode night no
 
 adb logcat -d | grep -E "AndroidRuntime|FATAL|SeedReceiver|GuardService|Store" | tail -200 > "$OUT/logcat.txt"
 cat "$OUT/result.txt"
-# 截图缩小后以 base64 打进日志，方便在拿不到 Artifacts 的地方查看
-for f in "$OUT"/*.png; do
-  n=$(basename "$f" .png)
-  (convert "$f" -resize 360x -quality 60 "/tmp/$n.jpg" 2>/dev/null || magick "$f" -resize 360x -quality 60 "/tmp/$n.jpg") || continue
-  echo "=====SHOT $n"
-  base64 -w 4000 "/tmp/$n.jpg"
-  echo "=====END $n"
-done
 if grep -q "FATAL EXCEPTION" "$OUT/logcat.txt"; then echo "CRASH found"; grep -A20 "FATAL EXCEPTION" "$OUT/logcat.txt" | head -60; exit 1; fi
 grep -q FAIL "$OUT/result.txt" && exit 1
 exit 0

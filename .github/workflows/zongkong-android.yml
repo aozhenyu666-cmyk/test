@@ -92,14 +92,19 @@ jobs:
         with:
           name: zongkong-debug-apk
           path: apk
+      - uses: actions/download-artifact@v4
+        with:
+          name: zongkong-smoke
+          path: shots
       - name: Publish to release zongkong-latest
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp apk/app-debug.apk zongkong.apk
+          (cd shots && zip -q -r ../screenshots.zip .)
           gh release delete zongkong-latest --cleanup-tag --yes || true
-          gh release create zongkong-latest zongkong.apk \
+          gh release create zongkong-latest zongkong.apk screenshots.zip \
             --target "$GITHUB_SHA" \
             --prerelease \
             --title "总控 最新调试版" \
-            --notes "由提交 ${GITHUB_SHA::7} 自动构建，已通过单元测试和模拟器冒烟测试。直接安装 zongkong.apk，可覆盖旧版本，数据保留。"
+            --notes "由提交 ${GITHUB_SHA::7} 自动构建，已通过单元测试和模拟器冒烟测试。直接安装 zongkong.apk，可覆盖旧版本，数据保留。screenshots.zip 是模拟器上的自动测试截图。"
