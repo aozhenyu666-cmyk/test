@@ -20,6 +20,8 @@ enum class VerifyMode(val label: String, val strength: Int) {
     AI("AI 验收", 1),
     NOTION("Notion 查账", 1),
     NOTION_AI("Notion 查账 + AI 验收", 2),
+    /** 看事项里的真实记录：排了行动、关联了材料、形成了判断、完成了行动。 */
+    EVIDENCE("看事项证据", 1),
 }
 
 /** 关卡什么时候开始拦截娱乐应用。 */
@@ -60,6 +62,9 @@ data class Gate(
     val notionMinPages: Int = 1,
     /** “去做”按钮：应用包名，或者 http(s) 链接。 */
     val launch: String = "",
+    /** 看事项证据时看哪一种（Focus.Evidence 的名字）。 */
+    val evidence: String = "",
+    val evidenceMin: Int = 1,
 ) {
     companion object {
         val ALL_DAYS = setOf(1, 2, 3, 4, 5, 6, 7)
@@ -87,7 +92,15 @@ data class NotionConfig(
     val thinkDb: String = "",
     /** 每次验收的结果写进这里，GPT 读 Notion 时就能看到你每天交了什么。 */
     val logDb: String = "",
+    /** 双向同步的三个库：事项、行动、记录。 */
+    val threadsDb: String = "",
+    val actionsDb: String = "",
+    val notesDb: String = "",
+    /** 测试时换成本地模拟服务器；平时留空用官方地址。 */
+    val baseUrl: String = "",
 ) {
+    val workReady: Boolean get() = token.isNotBlank() && threadsDb.isNotBlank() && actionsDb.isNotBlank() && notesDb.isNotBlank()
+
     val ready: Boolean get() = token.isNotBlank()
 }
 
@@ -115,6 +128,8 @@ data class Config(
     val pending: List<PendingChange> = emptyList(),
     /** 首次设置是否完成。 */
     val onboarded: Boolean = false,
+    /** 开始一步行动时默认开专注锁（分钟；0 = 不开）。没写结束时间的行动用这个时长。 */
+    val focusMinutes: Int = 45,
 )
 
 /** 一次验收的结论。 */

@@ -73,6 +73,19 @@ fun GatesScreen(nav: NavHostController) {
                 }
             }
             Button(onClick = { nav.navigate("settings/gate/new") }, modifier = Modifier.fillMaxWidth()) { Text("新增关卡") }
+            var applied by remember { mutableStateOf<String?>(null) }
+            OutlinedButton(onClick = {
+                val store = context.zk.store
+                val now = System.currentTimeMillis()
+                val msgs = com.zongkong.core.Defaults.gates().map { g ->
+                    val out = Policy.putGate(store.config.value, g, now)
+                    store.updateConfig { out.config }
+                    out.message
+                }.filter { it != "没有改动" }
+                applied = msgs.joinToString("\n").ifBlank { "已经是推荐节律" }
+            }, modifier = Modifier.fillMaxWidth()) { Text("采用推荐节律（看事项证据）") }
+            Hint("推荐节律：今日部署看“今天排了带完成依据的行动”，收集看“材料关联到事项”，谋划看“形成了判断”。放宽的部分照样等 24 小时。")
+            applied?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         }
     }
 }
@@ -113,6 +126,8 @@ fun GateEditScreen(gateId: String, nav: NavHostController) {
     var notionDb by remember { mutableStateOf(original.notionDb) }
     var notionMin by remember { mutableStateOf(original.notionMinPages.toString()) }
     var launch by remember { mutableStateOf(original.launch) }
+    var evidence by remember { mutableStateOf(original.evidence.ifBlank { com.zongkong.core.work.Focus.Evidence.PLANNED_TODAY.name }) }
+    var evidenceMin by remember { mutableStateOf(original.evidenceMin.toString()) }
     var message by remember { mutableStateOf<String?>(null) }
     var done by remember { mutableStateOf(false) }
 
@@ -155,7 +170,17 @@ fun GateEditScreen(gateId: String, nav: NavHostController) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 VerifyMode.entries.forEach { v -> FilterChip(selected = verify == v, onClick = { verify = v }, label = { Text(v.label) }) }
             }
-            if (verify != VerifyMode.NOTION) {
+            if (verify == VerifyMode.EVIDENCE) {
+                Text("看哪种证据", style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    com.zongkong.core.work.Focus.Evidence.entries.forEach { e ->
+                        FilterChip(selected = evidence == e.name, onClick = { evidence = e.name }, label = { Text(e.label) })
+                    }
+                }
+                Hint(com.zongkong.core.work.Focus.Evidence.entries.first { it.name == evidence }.describe)
+                NumberField("至少几条", evidenceMin, { evidenceMin = it }, Modifier.fillMaxWidth(), "条")
+            }
+            if (verify != VerifyMode.NOTION && verify != VerifyMode.EVIDENCE) {
                 NumberField("最少字数（不计模板标签）", minChars, { minChars = it }, Modifier.fillMaxWidth(), "字")
             }
             if (verify == VerifyMode.AI || verify == VerifyMode.NOTION_AI) {
@@ -189,6 +214,8 @@ fun GateEditScreen(gateId: String, nav: NavHostController) {
                                 minChars = minChars.toIntOrNull() ?: original.minChars, rubric = rubric.trim(),
                                 notionDb = notionDb.trim(), notionMinPages = (notionMin.toIntOrNull() ?: 1).coerceAtLeast(1),
                                 launch = launch.trim(),
+                                evidence = if (verify == VerifyMode.EVIDENCE) evidence else original.evidence,
+                                evidenceMin = (evidenceMin.toIntOrNull() ?: original.evidenceMin).coerceAtLeast(1),
                             )
                             val out = Policy.putGate(store.config.value, g, System.currentTimeMillis())
                             store.updateConfig { out.config }

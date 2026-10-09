@@ -28,14 +28,16 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Unit tests and debug APK
-        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - name: Unit tests, debug APK and end-to-end test APK
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug assembleDebugAndroidTest
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: zongkong-debug-apk
-          path: zongkong/app/build/outputs/apk/debug/*.apk
+          path: |
+            zongkong/app/build/outputs/apk/debug/*.apk
+            zongkong/app/build/outputs/apk/androidTest/debug/*.apk
           if-no-files-found: error
 
       - name: Upload test reports
@@ -71,7 +73,7 @@ jobs:
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
-          script: bash zongkong/scripts/smoke.sh zongkong/apk/app-debug.apk zongkong/shots
+          script: bash zongkong/scripts/smoke.sh zongkong/apk zongkong/shots
 
       - name: Upload screenshots
         if: always()
@@ -100,11 +102,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp apk/app-debug.apk zongkong.apk
+          cp apk/debug/app-debug.apk zongkong.apk
           (cd shots && zip -q -r ../screenshots.zip .)
           gh release delete zongkong-latest --cleanup-tag --yes || true
           gh release create zongkong-latest zongkong.apk screenshots.zip \
             --target "$GITHUB_SHA" \
             --prerelease \
             --title "总控 最新调试版" \
-            --notes "由提交 ${GITHUB_SHA::7} 自动构建，已通过单元测试和模拟器冒烟测试。直接安装 zongkong.apk，可覆盖旧版本，数据保留。screenshots.zip 是模拟器上的自动测试截图。"
+            --notes "由提交 ${GITHUB_SHA::7} 自动构建，已通过单元测试、模拟器上的端到端闭环测试和拦截测试。直接安装 zongkong.apk，可覆盖旧版本，数据保留。screenshots.zip 是模拟器上的自动测试截图。"

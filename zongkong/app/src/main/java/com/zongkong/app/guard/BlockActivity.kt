@@ -199,6 +199,11 @@ private fun StrictBody(
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("报到") }
                 }
+                is Reason.Focus -> Panel(accent = MaterialTheme.colorScheme.primary, onClick = { openRoute("session") }) {
+                    Text("专注锁：${r.title}", style = MaterialTheme.typography.titleMedium)
+                    Hint("你开始做这一步时开了专注锁，到 ${clock(r.until)} 为止娱乐应用会被弹回。做完或者记个断点，锁就解开。")
+                    Button(onClick = { openRoute("session") }, modifier = Modifier.fillMaxWidth()) { Text("回去继续") }
+                }
                 is Reason.Quota -> Panel(accent = sig.strict) {
                     Text("今天的娱乐额度用完了", style = MaterialTheme.typography.titleMedium)
                     Text("已用 ${r.usedMin} 分钟，上限 ${r.limitMin} 分钟。明天凌晨 4 点重置。", style = MaterialTheme.typography.bodyMedium.merge(Mono))

@@ -75,6 +75,32 @@ object Notifications {
         post(context, id, n)
     }
 
+    /** 行动提醒的通知 ID：同一个行动的到点和追问用同一条，后一条替换前一条。 */
+    private fun taskId(actionKey: String) = 1000 + (actionKey.hashCode() and 0x7fff)
+
+    /** 到点提醒 / 追问。按钮：开始、推迟 30 分钟、卡住了。 */
+    fun taskReminder(context: Context, a: com.zongkong.core.work.Rec, thread: com.zongkong.core.work.Rec?, follow: Boolean) {
+        val id = taskId(a.key)
+        val title = (if (follow) "还没开始：" else "该做了：") + a.title
+        val text = (thread?.let { "「${it.title}」 " } ?: "") + reminderText(a, follow)
+        val n = NotificationCompat.Builder(context, CH_ALERT)
+            .setSmallIcon(R.drawable.ic_stat_zongkong)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .setContentIntent(open(context, "action/${a.key}", id))
+            .addAction(0, "开始", open(context, "start/${a.key}", id + 1))
+            .addAction(0, "推迟 30 分钟", Reminders.snoozeIntent(context, a.key, id + 2))
+            .addAction(0, "卡住了", open(context, "stuck/${a.key}", id + 3))
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+        post(context, id, n)
+    }
+
+    fun cancelTask(context: Context, actionKey: String) = NotificationManagerCompat.from(context).cancel(taskId(actionKey))
+
     private fun post(context: Context, id: Int, n: android.app.Notification) {
         if (!canPost(context)) return
         try {

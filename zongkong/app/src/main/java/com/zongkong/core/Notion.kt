@@ -27,6 +27,23 @@ interface NotionApi {
     suspend fun schema(dbId: String): ApiResult<NotionSchema>
     suspend fun createDatabase(parentPage: String, title: String, properties: JsonObject): ApiResult<String>
     suspend fun createPage(dbId: String, properties: JsonObject, children: JsonArray): ApiResult<String>
+
+    // ---- 双向同步用的原始接口：返回 Notion 的页面对象，由调用方解析 ----
+
+    /** 查询数据库（一页最多 100 条）。返回本页结果和下一页游标。 */
+    suspend fun query(dbId: String, filter: JsonObject?, cursor: String?): ApiResult<Pair<List<JsonObject>, String?>> =
+        ApiResult.Err("不支持")
+
+    suspend fun getPage(pageId: String): ApiResult<JsonObject> = ApiResult.Err("不支持")
+
+    suspend fun updatePage(pageId: String, properties: JsonObject): ApiResult<JsonObject> = ApiResult.Err("不支持")
+
+    suspend fun createPageObject(dbId: String, properties: JsonObject, children: JsonArray): ApiResult<JsonObject> =
+        ApiResult.Err("不支持")
+
+    suspend fun appendBlocks(blockId: String, children: JsonArray): ApiResult<Unit> = ApiResult.Err("不支持")
+
+    suspend fun archivePage(pageId: String): ApiResult<Unit> = ApiResult.Err("不支持")
 }
 
 /**
@@ -36,8 +53,12 @@ interface NotionApi {
 class NotionClient(
     private val token: () -> String,
     private val http: OkHttpClient = Net.client(30),
-    private val base: String = "https://api.notion.com/v1",
+    private val baseUrl: () -> String = { DEFAULT_BASE },
 ) : NotionApi {
+    /** 测试时可以换成本地模拟服务器。 */
+    constructor(token: () -> String, http: OkHttpClient = Net.client(30), base: String) : this(token, http, { base })
+
+    private val base: String get() = baseUrl().trimEnd('/').ifBlank { DEFAULT_BASE }
 
     private fun headers() = mapOf(
         "Authorization" to "Bearer ${token().trim()}",
@@ -104,8 +125,56 @@ class NotionClient(
         return call(Net.post("$base/pages", body, headers())).map { it.str("id").orEmpty() }
     }
 
+    override suspend fun query(dbId: String, filter: JsonObject?, cursor: String?): ApiResult<Pair<List<JsonObject>, String?>> {
+        val id = NotionIds.parse(dbId) ?: return ApiResult.Err("Notion 数据库 ID 不对：$dbId")
+        val body = buildJsonObject {
+            if (filter != null) put("filter", filter)
+            putJsonArray("sorts") { add(buildJsonObject { put("timestamp", "last_edited_time"); put("direction", "ascending") }) }
+            put("page_size", 100)
+            if (cursor != null) put("start_cursor", cursor)
+        }
+        return call(Net.post("$base/databases/$id/query", body, headers())).map { obj ->
+            val results = obj["results"]?.jsonArray.orEmpty().mapNotNull { it as? JsonObject }
+            val more = (obj["has_more"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull == "true"
+            results to if (more) obj.str("next_cursor") else null
+        }
+    }
+
+    override suspend fun getPage(pageId: String): ApiResult<JsonObject> {
+        val id = NotionIds.parse(pageId) ?: return ApiResult.Err("Notion 页面 ID 不对：$pageId")
+        return call(Net.get("$base/pages/$id", headers()))
+    }
+
+    override suspend fun updatePage(pageId: String, properties: JsonObject): ApiResult<JsonObject> {
+        val id = NotionIds.parse(pageId) ?: return ApiResult.Err("Notion 页面 ID 不对：$pageId")
+        val body = buildJsonObject { put("properties", properties) }
+        return call(Net.patch("$base/pages/$id", body, headers()))
+    }
+
+    override suspend fun createPageObject(dbId: String, properties: JsonObject, children: JsonArray): ApiResult<JsonObject> {
+        val id = NotionIds.parse(dbId) ?: return ApiResult.Err("Notion 数据库 ID 不对：$dbId")
+        val body = buildJsonObject {
+            putJsonObject("parent") { put("database_id", id) }
+            put("properties", properties)
+            if (children.isNotEmpty()) put("children", children)
+        }
+        return call(Net.post("$base/pages", body, headers()))
+    }
+
+    override suspend fun appendBlocks(blockId: String, children: JsonArray): ApiResult<Unit> {
+        val id = NotionIds.parse(blockId) ?: return ApiResult.Err("Notion 页面 ID 不对：$blockId")
+        val body = buildJsonObject { put("children", children) }
+        return call(Net.patch("$base/blocks/$id/children", body, headers())).map { }
+    }
+
+    override suspend fun archivePage(pageId: String): ApiResult<Unit> {
+        val id = NotionIds.parse(pageId) ?: return ApiResult.Err("Notion 页面 ID 不对：$pageId")
+        return call(Net.patch("$base/pages/$id", buildJsonObject { put("archived", true) }, headers())).map { }
+    }
+
     companion object {
         const val VERSION = "2022-06-28"
+        const val DEFAULT_BASE = "https://api.notion.com/v1"
 
         fun httpMessage(code: Int, detail: String): String {
             val hint = when (code) {

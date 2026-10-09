@@ -158,6 +158,6 @@ class EngineTest {
         assertEquals(5, s.gates.size)
         assertTrue(s.strict) // 晨间部署开放即拦截
         assertEquals("plan_morning", (s.reasons.first() as Reason.GateDue).status.gate.id)
-        assertTrue(Engine.summary(s).contains("晨间部署"))
+        assertTrue(Engine.summary(s).contains("今日部署"))
     }
 }

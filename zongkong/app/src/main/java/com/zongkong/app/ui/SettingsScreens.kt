@@ -66,8 +66,15 @@ fun SettingsScreen(nav: NavHostController) {
         MenuItem("拦截名单", "${config.blocked.size} 个应用：严管时打开就被弹回", "settings/block", nav)
         MenuItem("关卡", "${config.gates.size} 道：每个部门每天要交什么", "settings/gates", nav)
         MenuItem("规则", "沉默 ${if (config.silenceHours == 0) "不查" else "${config.silenceHours} 小时"} · 娱乐 ${if (config.dailyQuotaMin == 0) "不限" else "${config.dailyQuotaMin} 分钟"} · 紧急放行 ${config.emergencyPerDay} 次", "settings/rules", nav)
-        MenuItem("AI 接口", if (config.ai.ready) "${config.ai.model}" else "未配置", "settings/ai", nav)
-        MenuItem("Notion", if (config.notion.ready) "已连接" + if (config.notion.logDb.isNotBlank()) " · 日志写入中" else "" else "未连接", "settings/notion", nav)
+        MenuItem("Notion", when {
+            config.notion.workReady -> "事项 / 行动 / 记录 双向同步中"
+            config.notion.ready -> "已填密钥，还没建库"
+            else -> "未连接：记录只在手机上"
+        }, "settings/notion", nav)
+        MenuItem("ChatGPT 配合", "给 GPT 的说明、交接块、各条连接的现状", "settings/gptguide", nav)
+        MenuItem("每日节律", "今日部署、收集、判断、训练、日终验收；严管与放行", "rhythm", nav)
+        MenuItem("AI 接口", if (config.ai.ready) "${config.ai.model}（日终验收等用）" else "未配置", "settings/ai", nav)
+        MenuItem("四部门说明", "信息收集、谋划思考、统筹规划、行为管理怎么衔接", "depts", nav)
         MenuItem("待生效的放宽", if (config.pending.isEmpty()) "没有" else "${config.pending.size} 项", "settings/pending", nav)
         MenuItem("历史记录", "最近 14 天", "history", nav)
         Hint("总控 ${com.zongkong.app.BuildConfig.VERSION_NAME}", Modifier.padding(top = 8.dp))

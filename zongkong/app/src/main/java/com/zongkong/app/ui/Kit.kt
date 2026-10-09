@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -226,4 +227,115 @@ fun launchTarget(context: Context, target: String): Boolean {
     } catch (e: Exception) {
         false
     }
+}
+
+// ---------- 事项、行动用的小部件 ----------
+
+/** 衬线标题（任务卡、事项名）。 */
+val SerifTitle = androidx.compose.ui.text.TextStyle(
+    fontFamily = androidx.compose.ui.text.font.FontFamily.Serif,
+    fontWeight = FontWeight.SemiBold,
+)
+
+@Composable
+fun actionColor(s: com.zongkong.core.work.ActionStatus): Color {
+    val sig = LocalSignals.current
+    return when (s) {
+        com.zongkong.core.work.ActionStatus.TODO -> MaterialTheme.colorScheme.primary
+        com.zongkong.core.work.ActionStatus.DOING -> sig.warn
+        com.zongkong.core.work.ActionStatus.CONFIRM -> sig.think
+        com.zongkong.core.work.ActionStatus.DONE -> sig.free
+        com.zongkong.core.work.ActionStatus.STUCK -> sig.strict
+        com.zongkong.core.work.ActionStatus.RESCHEDULED -> sig.muted
+        com.zongkong.core.work.ActionStatus.CANCELLED -> sig.muted
+    }
+}
+
+@Composable
+fun threadColor(s: com.zongkong.core.work.ThreadStatus): Color {
+    val sig = LocalSignals.current
+    return when (s) {
+        com.zongkong.core.work.ThreadStatus.COLLECTING -> sig.info
+        com.zongkong.core.work.ThreadStatus.THINKING -> sig.think
+        com.zongkong.core.work.ThreadStatus.READY -> MaterialTheme.colorScheme.primary
+        com.zongkong.core.work.ThreadStatus.ACTIVE -> sig.warn
+        com.zongkong.core.work.ThreadStatus.STUCK -> sig.strict
+        com.zongkong.core.work.ThreadStatus.DONE -> sig.free
+        com.zongkong.core.work.ThreadStatus.PAUSED, com.zongkong.core.work.ThreadStatus.CANCELLED -> sig.muted
+    }
+}
+
+/** 同步状态：已同步 / 待同步 / 同步失败 / 有冲突 / 仅本机。 */
+@Composable
+fun SyncTag(r: com.zongkong.core.work.Rec, notionReady: Boolean) {
+    val sig = LocalSignals.current
+    val (label, c) = when {
+        !notionReady -> "仅本机" to sig.muted
+        r.sync == com.zongkong.core.work.SyncState.SYNCED && r.syncError.isNotBlank() -> "已同步·有列缺失" to sig.warn
+        r.sync == com.zongkong.core.work.SyncState.SYNCED -> "已同步" to sig.free
+        r.sync == com.zongkong.core.work.SyncState.FAILED -> "同步失败" to sig.strict
+        r.sync == com.zongkong.core.work.SyncState.CONFLICT -> "有冲突" to sig.strict
+        else -> "待同步" to sig.warn
+    }
+    Text(label, style = MaterialTheme.typography.labelSmall, color = c)
+}
+
+/** 整体同步状态的一行字。 */
+@Composable
+fun SyncLine(work: com.zongkong.core.work.Work, notionReady: Boolean, onSync: (() -> Unit)?) {
+    val sig = LocalSignals.current
+    val text = when {
+        !notionReady -> "Notion 未连接：记录只在手机上（设置 → Notion）"
+        work.lastSyncAt == 0L -> "还没同步过 Notion"
+        work.lastSyncOk -> "Notion ${clock(work.lastSyncAt)} 同步：${work.lastSyncMessage}" + if (work.pendingCount > 0) " · ${work.pendingCount} 条待同步" else ""
+        else -> "Notion ${clock(work.lastSyncAt)} ${work.lastSyncMessage}" + if (work.pendingCount > 0) " · ${work.pendingCount} 条待同步" else ""
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text, style = MaterialTheme.typography.bodySmall,
+            color = if (!work.lastSyncOk && notionReady) sig.strict else sig.muted, modifier = Modifier.weight(1f),
+        )
+        if (onSync != null && notionReady) {
+            androidx.compose.material3.TextButton(onClick = onSync, modifier = Modifier.testTag("sync-now")) { Text("同步") }
+        }
+    }
+}
+
+/** 一行字段：标签 + 内容，点了可以编辑。 */
+@Composable
+fun FieldRow(label: String, value: String, placeholder: String = "（空）", onClick: (() -> Unit)? = null) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(vertical = 4.dp),
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = LocalSignals.current.muted)
+        Text(
+            value.ifBlank { placeholder },
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (value.isBlank()) LocalSignals.current.muted else MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+/** 编辑一个文本字段的对话框。 */
+@Composable
+fun EditDialog(title: String, initial: String, hint: String = "", singleLine: Boolean = false, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var text by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(initial) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (hint.isNotBlank()) Hint(hint)
+                androidx.compose.material3.OutlinedTextField(
+                    value = text, onValueChange = { text = it }, singleLine = singleLine,
+                    minLines = if (singleLine) 1 else 3, modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { onSave(text); onDismiss() }) { Text("保存") } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }

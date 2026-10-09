@@ -27,9 +27,12 @@ import java.time.LocalDate
 /** 界面和后台服务共用的操作：交关卡、报到、随手记、紧急放行、同步 Notion。 */
 class Actions(private val context: Context, private val store: Store) {
     val llm = LlmClient({ store.config.value.ai })
-    val notion = NotionClient({ store.config.value.notion.token })
+    val notion = NotionClient({ store.config.value.notion.token }, baseUrl = { store.config.value.notion.baseUrl })
     private val verifier = Verifier(llm, notion)
     private val syncLock = Mutex()
+
+    /** 事项、行动、记录的操作和双向同步。 */
+    val work = WorkActions(context, store, notion)
 
     sealed interface SubmitResult {
         data class Judged(val verdict: Verdict) : SubmitResult
@@ -47,8 +50,19 @@ class Actions(private val context: Context, private val store: Store) {
             return SubmitResult.Refused("还没开放，${DayClock.hhmm(gs.gate.openAt)} 开放")
         }
         val date = LocalDate.parse(status.date)
-        val facts = Facts.build(status, store.today.value, store.zone)
-        return when (val out = verifier.verify(gs.gate, text, store.config.value, date, store.zone, facts)) {
+        if (gs.gate.verify == VerifyMode.EVIDENCE) {
+            // 自己写的判断也算一条结论记录
+            if (gs.gate.evidence == com.zongkong.core.work.Focus.Evidence.CONCLUSIONS.name && TextCheck.effectiveChars(text, Defaults.fillTemplate(gs.gate.template, date)) >= 20) {
+                work.addConclusion(text)
+            }
+            // 先拉一次 Notion：GPT 刚写进去的也要算
+            if (store.config.value.notion.workReady) work.sync()
+        }
+        val facts = Facts.build(status, store.today.value, store.zone, com.zongkong.core.work.Focus.daySummary(store.work.value, now, store.zone))
+        val evidence: (String) -> Pair<Int, List<String>> = { k ->
+            com.zongkong.core.work.Focus.evidence(store.work.value, com.zongkong.core.work.Focus.Evidence.valueOf(k), System.currentTimeMillis(), store.zone)
+        }
+        return when (val out = verifier.verify(gs.gate, text, store.config.value, date, store.zone, facts, evidence)) {
             is VerifyOutcome.Done -> {
                 record(gateId, text, out.verdict)
                 SubmitResult.Judged(out.verdict)
@@ -120,7 +134,14 @@ class Actions(private val context: Context, private val store: Store) {
      * 把待写的日志、随手记写进 Notion。失败的留着下次再试。
      * 返回一句结果说明。
      */
-    suspend fun sync(): String = syncLock.withLock { syncLocked() }
+    suspend fun sync(): String {
+        // 设好了事项/行动/记录三个库：验收、报到都作为“记录”走双向同步
+        if (store.config.value.notion.workReady) {
+            work.absorbOutbox()
+            return work.sync()
+        }
+        return syncLock.withLock { syncLocked() }
+    }
 
     private suspend fun syncLocked(): String {
         val cfg = store.config.value.notion

@@ -53,7 +53,7 @@ class VerifierTest {
 {"pass": false, "score": 55, "feedback": "主线没有完成标准", "missing": ["完成标准"]}
 ```""") }
         val v = Verifier(api, FakeNotion())
-        val g = Defaults.gates().first { it.id == "plan_morning" }
+        val g = gate(verify = VerifyMode.AI, minChars = 60).copy(rubric = "有且只有一件主线\n主线写了具体时间段")
         val out = v.verify(g, "主线：行测言语理解四十题，九点到十一点，做完并整理错题本。次要：背成语五十个，申论范文读一篇。风险：上午容易刷手机，对策：手机放客厅充电，总控严管", aiCfg, date, ZONE, "现在 08:00") as VerifyOutcome.Done
         assertFalse(out.verdict.pass)
         assertEquals(55, out.verdict.score)
@@ -127,6 +127,18 @@ class VerifierTest {
     }
 
     @Test
+    fun evidenceModeCounts() = runTest {
+        val v = Verifier(llm(null), FakeNotion())
+        val g = Defaults.gates().first { it.id == "plan_morning" }
+        val none = v.verify(g, "", Config(), date, ZONE, "") { 0 to emptyList() } as VerifyOutcome.Done
+        assertFalse(none.verdict.pass)
+        assertTrue(none.verdict.feedback.contains("还差 1 条"))
+        val ok = v.verify(g, "", Config(), date, ZONE, "") { k -> assertEquals("PLANNED_TODAY", k); 2 to listOf("言语 40 题", "改简历") } as VerifyOutcome.Done
+        assertTrue(ok.verdict.pass)
+        assertTrue(ok.verdict.feedback.contains("言语 40 题"))
+    }
+
+    @Test
     fun captureUsesSchema() = runTest {
         val notion = FakeNotion()
         Workspace.capture(notion, "inbox", "为什么总拖到晚上才开始\n可能是早上没部署", "问题", "2026-10-09")
@@ -163,6 +175,7 @@ class ThinkSheetTest {
     @Test
     fun outboxTargetsClearOneByOne() {
         val st = Engine.evaluate(Config(), DayLog("2026-10-09"), at(20), ZONE).gates.first { it.gate.id == "think_one" }
+        check(st.gate.dept == Dept.THINK)
         var day = DayOps.submit(DayLog("2026-10-09"), st, sheet, passVerdict(), at(20))
         val e = day.outbox.single()
         assertEquals(setOf("log", "think"), e.targets)

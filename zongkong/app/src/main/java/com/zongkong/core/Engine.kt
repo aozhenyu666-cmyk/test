@@ -43,7 +43,15 @@ sealed class Reason {
     data class Quota(val usedMin: Int, val limitMin: Int) : Reason() {
         override val text: String get() = "今天娱乐 $usedMin 分钟，已到上限 $limitMin 分钟"
     }
+
+    /** 正在做一步行动，开了专注锁。 */
+    data class Focus(val title: String, val until: Long) : Reason() {
+        override val text: String get() = "正在做「$title」，专注锁开着"
+    }
 }
+
+/** 专注锁：做某一步时到点前拦截娱乐应用。 */
+data class FocusLock(val title: String, val until: Long)
 
 data class Status(
     val now: Long,
@@ -76,7 +84,7 @@ data class Status(
 object Engine {
     const val DUE_SOON_MILLIS = 30 * 60_000L
 
-    fun evaluate(config: Config, day: DayLog, now: Long, zone: ZoneId): Status {
+    fun evaluate(config: Config, day: DayLog, now: Long, zone: ZoneId, lock: FocusLock? = null): Status {
         val date = DayClock.date(now, zone)
         val weekday = date.dayOfWeek.value
 
@@ -121,6 +129,8 @@ object Engine {
         if (config.dailyQuotaMin > 0 && playMin >= config.dailyQuotaMin) {
             reasons += Reason.Quota(playMin, config.dailyQuotaMin)
         }
+
+        if (lock != null && lock.until > now) reasons += Reason.Focus(lock.title, lock.until)
 
         val emergency = day.emergencies.lastOrNull { now < it.until }
         val paused = config.pausedUntil > now

@@ -67,6 +67,8 @@ object Policy {
         if (new.rubric.trim() != old.rubric.trim()) add("改了 AI 验收标准")
         if (new.notionDb.trim() != old.notionDb.trim() && old.notionDb.isNotBlank()) add("换了 Notion 数据库")
         if (new.notionMinPages < old.notionMinPages) add("Notion 条数降到 ${new.notionMinPages}")
+        if (new.verify == VerifyMode.EVIDENCE && old.verify == VerifyMode.EVIDENCE && new.evidence != old.evidence) add("换了要看的证据")
+        if (new.evidenceMin < old.evidenceMin) add("证据条数降到 ${new.evidenceMin}")
     }
 
     // ---------- 拦截名单 ----------

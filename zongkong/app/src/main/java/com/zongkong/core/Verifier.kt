@@ -49,7 +49,21 @@ class Verifier(private val llm: LlmApi, private val notion: NotionApi) {
         date: LocalDate,
         zone: ZoneId,
         facts: String,
+        evidence: (String) -> Pair<Int, List<String>> = { 0 to emptyList() },
     ): VerifyOutcome {
+        if (gate.verify == VerifyMode.EVIDENCE) {
+            val kind = com.zongkong.core.work.Focus.Evidence.entries.firstOrNull { it.name == gate.evidence }
+                ?: com.zongkong.core.work.Focus.Evidence.PLANNED_TODAY
+            val (n, titles) = evidence(kind.name)
+            val list = if (titles.isEmpty()) "" else "：" + titles.joinToString("、") { "「$it」" }
+            return VerifyOutcome.Done(
+                if (n >= gate.evidenceMin) {
+                    Verdict(true, "事项证据", "${kind.label} $n 条$list")
+                } else {
+                    Verdict(false, "事项证据", "要求：${kind.describe}（至少 ${gate.evidenceMin} 条）。现在 $n 条$list，还差 ${gate.evidenceMin - n} 条。")
+                },
+            )
+        }
         val needsText = gate.verify != VerifyMode.NOTION
         if (needsText) {
             val chars = TextCheck.effectiveChars(text, Defaults.fillTemplate(gate.template, date))
@@ -176,7 +190,7 @@ class Verifier(private val llm: LlmApi, private val notion: NotionApi) {
 
 /** 给 AI 看的“今天的事实”。 */
 object Facts {
-    fun build(status: Status, day: DayLog, zone: ZoneId): String = buildString {
+    fun build(status: Status, day: DayLog, zone: ZoneId, extra: String = ""): String = buildString {
         fun t(ms: Long) = java.time.Instant.ofEpochMilli(ms).atZone(zone).toLocalTime().toString().take(5)
         append("现在 ${t(status.now)}\n")
         status.gates.forEach { g ->
@@ -191,6 +205,7 @@ object Facts {
         val offlineMin = day.offline.sumOf { (it.to - it.from) / 60_000 }
         if (offlineMin > 0) append("，总控失联 $offlineMin 分钟")
         append('\n')
+        if (extra.isNotBlank()) append(extra.trim()).append('\n')
         val checkins = day.reports.filter { it.kind == ReportKind.CHECKIN }
         if (checkins.isNotEmpty()) {
             append("今天的报到：\n")

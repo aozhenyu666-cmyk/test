@@ -44,8 +44,9 @@ import com.zongkong.core.GateStatus
 import com.zongkong.core.Reason
 import kotlinx.coroutines.launch
 
+/** 节律：每日关卡、严管/放行、娱乐额度、紧急放行。首页只放一条摘要，细节在这里。 */
 @Composable
-fun HomeScreen(nav: NavHostController) {
+fun RhythmScreen(nav: NavHostController) {
     val context = LocalContext.current
     val store = context.zk.store
     val config by store.config.collectAsStateWithLifecycle()
@@ -58,6 +59,8 @@ fun HomeScreen(nav: NavHostController) {
     val guardOn = remember(resumeKey, now) { PermissionStatus.accessibility(context) }
     var showEmergency by remember { mutableStateOf(false) }
 
+    Column(Modifier.fillMaxSize()) {
+    BackBar("每日节律", { nav.popBackStack() })
     Column(
         Modifier
             .fillMaxSize()
@@ -97,7 +100,7 @@ fun HomeScreen(nav: NavHostController) {
             if (status.paused) Text("休假到 ${clock(config.pausedUntil)}（${java.time.Instant.ofEpochMilli(config.pausedUntil).atZone(store.zone).toLocalDate()}）", color = sig.muted)
             Meters(status.playMin, status.quotaMin, status.silenceDueAt, now)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { nav.navigate("report") }, modifier = Modifier.weight(1f)) { Text("去汇报") }
+                Button(onClick = { nav.navigate("capture") }, modifier = Modifier.weight(1f)) { Text("去报到") }
                 if (status.strict && status.emergencyLeft > 0) {
                     OutlinedButton(onClick = { showEmergency = true }, modifier = Modifier.weight(1f)) { Text("紧急放行") }
                 }
@@ -140,6 +143,7 @@ fun HomeScreen(nav: NavHostController) {
             }
         }
         TextButton(onClick = { nav.navigate("history") }) { Text("历史记录 →") }
+    }
     }
 
     if (showEmergency) EmergencyDialog(config.emergencyMinutes, status.emergencyLeft) { showEmergency = false }

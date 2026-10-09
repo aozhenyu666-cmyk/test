@@ -97,6 +97,14 @@ fun PermissionsScreen(nav: NavHostController) {
                     safeStart(context, Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
                 }
             }
+            val exact = remember(key) {
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.S || context.getSystemService(android.app.AlarmManager::class.java).canScheduleExactAlarms()
+            }
+            PermCard("准点提醒（闹钟）", "行动到点提醒的兜底：总控没在运行时也能准点响。不开也能提醒，但可能晚几分钟。", exact, "去开启") {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    safeStart(context, Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}")))
+                }
+            }
             PermCard("不限制电池优化", "减少系统在后台关掉无障碍服务。", battery, "去设置") {
                 safeStart(context, Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")))
             }

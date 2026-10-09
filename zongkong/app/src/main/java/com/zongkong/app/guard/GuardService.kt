@@ -74,6 +74,8 @@ class GuardService : AccessibilityService() {
         val now = System.currentTimeMillis()
         if (pkg != fgPkg) {
             accountPlay(now)
+            // 做一步行动时离开了总控：记下离开时刻，回来时提示记断点
+            if (fgPkg == packageName && pkg != packageName && store.work.value.session != null) zk.actions.work.left()
             fgPkg = pkg
             fgSince = now
         }
@@ -130,6 +132,7 @@ class GuardService : AccessibilityService() {
         val status = store.status(now)
         fgPkg?.let { if (status.strict) enforce(it, now) }
         alerts(status, now)
+        com.zongkong.app.system.Reminders.check(this)
         val text = Engine.summary(status)
         val title = "总控 · ${status.headline}"
         if ("$title|$text" != lastStatusText) {

@@ -33,6 +33,7 @@ import androidx.navigation.NavHostController
 import com.zongkong.app.zk
 import com.zongkong.core.AiConfig
 import com.zongkong.core.NotionIds
+import androidx.compose.material3.TextButton
 import kotlinx.coroutines.launch
 
 private data class Preset(val name: String, val url: String, val model: String)
@@ -106,20 +107,26 @@ fun AiScreen(nav: NavHostController) {
 @Composable
 fun NotionScreen(nav: NavHostController) {
     val context = LocalContext.current
-    val store = context.zk.store
+    val app = context.zk
+    val store = app.store
     val config by store.config.collectAsStateWithLifecycle()
+    val work by store.work.collectAsStateWithLifecycle()
     var token by remember { mutableStateOf(config.notion.token) }
     var parent by remember { mutableStateOf(config.notion.parentPage) }
-    var inbox by remember { mutableStateOf(config.notion.inboxDb) }
-    var think by remember { mutableStateOf(config.notion.thinkDb) }
-    var log by remember { mutableStateOf(config.notion.logDb) }
+    var threads by remember(config.notion.threadsDb) { mutableStateOf(config.notion.threadsDb) }
+    var actions by remember(config.notion.actionsDb) { mutableStateOf(config.notion.actionsDb) }
+    var notes by remember(config.notion.notesDb) { mutableStateOf(config.notion.notesDb) }
     var result by remember { mutableStateOf<String?>(null) }
+    var steps by remember { mutableStateOf<List<com.zongkong.core.work.SelfTest.Step>>(emptyList()) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val sig = LocalSignals.current
 
     fun save() = store.updateConfig {
-        it.copy(notion = it.notion.copy(token = token.trim(), parentPage = parent.trim(), inboxDb = inbox.trim(), thinkDb = think.trim(), logDb = log.trim()))
+        it.copy(notion = it.notion.copy(
+            token = token.trim(), parentPage = parent.trim(),
+            threadsDb = threads.trim(), actionsDb = actions.trim(), notesDb = notes.trim(),
+        ))
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -133,9 +140,9 @@ fun NotionScreen(nav: NavHostController) {
         ) {
             Panel {
                 Text("三步连上", style = MaterialTheme.typography.titleSmall)
-                Text("1. 电脑浏览器打开 notion.so/profile/integrations → 新建集成（类型选“内部”）→ 复制密钥，贴到下面。", style = MaterialTheme.typography.bodyMedium)
-                Text("2. 在 Notion 里新建一个页面，叫“总控”。打开它 → 右上角 ⋯ → 连接（Connections）→ 选你的集成。", style = MaterialTheme.typography.bodyMedium)
-                Text("3. 复制这个页面的链接贴到下面，点“一键搭建”。会在里面建好信息收集库、谋划库、总控日志。", style = MaterialTheme.typography.bodyMedium)
+                Text("1. 电脑浏览器打开 notion.so/profile/integrations → 新建集成（内部）→ 复制密钥，贴到下面。", style = MaterialTheme.typography.bodyMedium)
+                Text("2. 在 Notion 里新建一个页面叫“总控”。打开它 → 右上角 ⋯ → 连接 → 选你的集成。", style = MaterialTheme.typography.bodyMedium)
+                Text("3. 复制这个页面的链接贴到下面，点“一键建库”：会建好 总控·事项、总控·行动、总控·记录 三个库。", style = MaterialTheme.typography.bodyMedium)
             }
             OutlinedTextField(
                 token, { token = it }, label = { Text("集成密钥（ntn_ 或 secret_ 开头）") }, singleLine = true,
@@ -144,43 +151,110 @@ fun NotionScreen(nav: NavHostController) {
             OutlinedTextField(parent, { parent = it }, label = { Text("“总控”页面链接") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
-                    save()
-                    busy = true
-                    result = "测试中…"
-                    scope.launch { result = context.zk.actions.testNotion(); busy = false }
-                }, enabled = !busy) { Text("保存并测试") }
-                OutlinedButton(onClick = {
                     if (NotionIds.parse(parent) == null) {
                         result = "先贴“总控”页面的链接"
                     } else {
-                        save()
-                        busy = true
-                        result = "搭建中…"
-                        scope.launch {
-                            result = context.zk.actions.setupNotion(parent.trim())
-                            val n = store.config.value.notion
-                            inbox = n.inboxDb; think = n.thinkDb; log = n.logDb
-                            busy = false
-                        }
+                        save(); busy = true; result = "建库中…"
+                        scope.launch { result = app.actions.work.setup(parent.trim()); busy = false }
                     }
-                }, enabled = !busy && config.notion.inboxDb.isBlank()) { Text("一键搭建") }
+                }, enabled = !busy && token.isNotBlank()) { Text(if (config.notion.workReady) "再建一套" else "一键建库") }
+                OutlinedButton(onClick = {
+                    save(); busy = true; result = "自检中…"; steps = emptyList()
+                    scope.launch {
+                        steps = app.actions.work.selfTest()
+                        result = if (steps.all { it.ok }) "自检全部通过：写入、读回、修改、增量查询、关联都正常。" else "自检有问题，看下面哪一步没过。"
+                        busy = false
+                    }
+                }, enabled = !busy && config.notion.workReady) { Text("连接自检") }
             }
             result?.let { Panel { Text(it) } }
+            steps.forEach { st ->
+                Row(verticalAlignment = Alignment.Top) {
+                    Text(if (st.ok) "✓ " else "✗ ", color = if (st.ok) sig.free else sig.strict)
+                    Column {
+                        Text(st.name, style = MaterialTheme.typography.bodyMedium)
+                        Hint(st.detail)
+                    }
+                }
+            }
 
-            SectionLabel("数据库（一键搭建会自动填；也可以贴你自己的库）")
-            OutlinedTextField(inbox, { inbox = it }, label = { Text("信息收集库：随手记写这里") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(think, { think = it }, label = { Text("谋划库：谋划单写这里") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(log, { log = it }, label = { Text("总控日志：每次验收写这里") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedButton(onClick = { save(); result = "已保存" }) { Text("保存数据库设置") }
-            Hint("自己建的库也能用：标题列随意，其余列名对得上（类型、状态、日期、部门、结果、得分……）就会填进去，对不上的跳过。")
-            if (store.syncNote.isNotBlank()) Hint(store.syncNote)
+            SectionLabel("三个库（一键建库会自动填；也可以贴你自己的库链接）")
+            OutlinedTextField(threads, { threads = it }, label = { Text("事项库") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(actions, { actions = it }, label = { Text("行动库") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(notes, { notes = it }, label = { Text("记录库") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { save(); result = "已保存" }) { Text("保存") }
+                OutlinedButton(onClick = { save(); scope.launch { result = app.actions.work.sync() } }, enabled = config.notion.workReady) { Text("立即同步") }
+            }
+            SyncLine(work, config.notion.workReady, null)
+            Hint("自己建的库也能用：列名对得上（标题、状态、事项、计划时间、完成依据……）就同步，缺的列会跳过并提示。数据库不能有多个数据源（Notion 新功能），否则读不了。")
 
-            SectionLabel("和 GPT 配合")
+            SectionLabel("同步规则")
             Text(
-                "ChatGPT 连上 Notion 之后，可以让它读“总控日志”帮你做周复盘、读“信息收集库”帮你挑问题。" +
-                    "信息收集部的关卡改成“Notion 查账”后，不管你是用 GPT、Notion 还是这里的随手记存进去，只要当天建了足够条数就算过。",
-                style = MaterialTheme.typography.bodyMedium, color = sig.muted,
+                "· 事项、行动、记录的内容以 Notion 为准；手机上改的先存本机，联网后按字段写回。\n" +
+                    "· 两边都改了同一处：后改的为准，另一份留着给你选。\n" +
+                    "· 打开总控、回到前台、每 15 分钟（总控在运行时）、你改了东西 2 秒后，各同步一次。\n" +
+                    "· 提醒时间、专注锁、娱乐限制只在手机上算，不依赖网络。\n" +
+                    "· 在 Notion 里删掉的页面不会自动从手机删除；要取消请把状态改成“取消”。",
+                style = MaterialTheme.typography.bodySmall, color = sig.muted,
             )
+            TextButton(onClick = { nav.navigate("settings/gptguide") }) { Text("怎么让 ChatGPT 配合 →") }
         }
     }
 }
+
+/** GPT 配合说明：把说明放进 ChatGPT 项目；连接现状如实列出来。 */
+@Composable
+fun GptGuideScreen(nav: NavHostController) {
+    val context = LocalContext.current
+    val sig = LocalSignals.current
+    var copied by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize()) {
+        BackBar("ChatGPT 配合", { nav.popBackStack() })
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Panel {
+                Text("设置一次", style = MaterialTheme.typography.titleSmall)
+                Text("1. 在 ChatGPT 里新建一个“项目”，叫“总控”。", style = MaterialTheme.typography.bodyMedium)
+                Text("2. 把下面的说明粘贴到项目的“说明 / Instructions”里。以后在这个项目里聊，GPT 就知道怎么配合。", style = MaterialTheme.typography.bodyMedium)
+                Text("3. 可选：在 ChatGPT 设置里连接 Notion。只能读的话，GPT 能看你的记录；要让它直接写，需要连 Notion 的 MCP（看你的 ChatGPT 套餐和版本是否支持）。写不了也没关系，用交接块。", style = MaterialTheme.typography.bodyMedium)
+            }
+            Button(onClick = { Gpt.copy(context, com.zongkong.core.work.Handoff.GPT_INSTRUCTIONS); copied = true }, modifier = Modifier.fillMaxWidth()) {
+                Text(if (copied) "已复制说明" else "复制给 ChatGPT 的说明")
+            }
+            Panel {
+                Text(com.zongkong.core.work.Handoff.GPT_INSTRUCTIONS, style = MaterialTheme.typography.bodySmall)
+            }
+            SectionLabel("各条连接的现状")
+            CONNECTIONS.forEach { (what, state, how) ->
+                Panel {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(what, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                        Tag(state, when (state) {
+                            "已验证" -> sig.free
+                            "已实现·待你确认" -> sig.warn
+                            "需要你配置" -> sig.info
+                            else -> sig.muted
+                        })
+                    }
+                    Hint(how)
+                }
+            }
+        }
+    }
+}
+
+private val CONNECTIONS = listOf(
+    Triple("总控 → Notion 写入", "已实现·待你确认", "新建、按字段更新、断网重试、防重复都在模拟的 Notion 上测过。真实 Notion 请在“Notion → 连接自检”走一遍。"),
+    Triple("Notion → 总控 读取", "已实现·待你确认", "按修改时间增量拉取，GPT 改了状态、判断、新建行动，总控能识别并在“查看结果”显示。同上，用连接自检确认。"),
+    Triple("GPT → Notion 写入", "需要你配置", "取决于你的 ChatGPT：内置 Notion 连接一般只能读；接上 Notion MCP 才能写。用“交接块”可以绕过：GPT 输出、你复制、总控写入。"),
+    Triple("GPT 读 Notion 里的结果", "需要你配置", "ChatGPT 连上 Notion（只读即可）就能读到事项、行动和结果。没连的话，“去 GPT”时总控会把前情和结果整理成一段话带过去。"),
+    Triple("总控 → ChatGPT 带上下文", "已实现·待你确认", "ChatGPT App 不接受外部直接开新对话。总控把前情复制好并打开 ChatGPT，你粘贴；也提供“分享给 ChatGPT”和网页版预填。都不会自动发送。"),
+    Triple("ChatGPT → 总控 交回结果", "已实现·待你确认", "复制或分享【总控交接】块到总控，先预览再写入。从 ChatGPT 回来时首页会检测剪贴板。"),
+    Triple("Notion 变化实时推到手机", "当前做不到", "Notion 的 Webhook 需要一台公网服务器转发，现在用“回到前台 + 每 15 分钟”拉取代替。Notion 的变化也不能唤醒一个 ChatGPT 对话。"),
+)

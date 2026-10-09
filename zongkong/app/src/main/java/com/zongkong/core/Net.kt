@@ -73,6 +73,10 @@ object Net {
         Request.Builder().url(url).apply { headers.forEach { (k, v) -> header(k, v) } }
             .post(body.toString().toRequestBody(JSON_TYPE)).build()
 
+    fun patch(url: String, body: JsonElement, headers: Map<String, String>): Request =
+        Request.Builder().url(url).apply { headers.forEach { (k, v) -> header(k, v) } }
+            .patch(body.toString().toRequestBody(JSON_TYPE)).build()
+
     fun get(url: String, headers: Map<String, String>): Request =
         Request.Builder().url(url).apply { headers.forEach { (k, v) -> header(k, v) } }.get().build()
 

@@ -9,49 +9,30 @@ object Defaults {
         Gate(
             id = "plan_morning",
             dept = Dept.PLAN,
-            title = "晨间部署",
-            instruction = "开工前 10 分钟：定下今天唯一的主线，最多 3 件次要的事，每件写清几点做、做到什么程度算完。" +
-                "没部署之前，娱乐应用一律拦截。",
-            template = """
-                主线（今天最重要的一件事）：
-                · 做什么：
-                · 几点到几点：
-                · 做到什么程度算完成：
-                次要（最多 3 件，每件一行：事 / 时间 / 完成标准）：
-                1.
-                2.
-                今天最可能掉链子的地方，和对策：
-            """.trimIndent(),
+            title = "今日部署",
+            instruction = "开工前：从事项里挑今天要推进的行动，排进时间，每个写清完成依据。" +
+                "可以去 GPT 定好后把交接块导入，也可以在事项页里直接排。没部署之前，娱乐应用一律拦截。",
             openAt = 4 * 60,
             deadline = 10 * 60,
             block = BlockMode.FROM_OPEN,
-            verify = VerifyMode.AI,
-            minChars = 60,
-            rubric = """
-                有且只有一件主线
-                主线写了具体时间段
-                主线有能检查的完成标准（数量、页数、题数、产出物），不是“好好学”“尽量”这类空话
-                次要的事不超过 3 件
-                写了一个可能掉链子的地方和对应对策
-            """.trimIndent(),
+            verify = VerifyMode.EVIDENCE,
+            minChars = 0,
+            evidence = "PLANNED_TODAY",
+            evidenceMin = 1,
         ),
         Gate(
             id = "info_daily",
             dept = Dept.INFO,
-            title = "收集入库",
-            instruction = "把今天看到的、想到的、卡住的东西收进信息收集库。至少 3 条，其中至少 1 条是“问题”——" +
-                "问题会流到谋划思考部。可以用 GPT 整理后存进 Notion，也可以在「汇报」页随手记。",
-            template = """
-                今天收集的（每条一行，标上类型：信息 / 问题 / 灵感 / 待办）：
-                1.【问题】
-                2.
-                3.
-            """.trimIndent(),
+            title = "收集并关联",
+            instruction = "把今天看到的、想到的、卡住的东西收进来，并且挂到相关的事情上——收进来却用不上的材料不算数。" +
+                "在「收集」页随手记、分享链接或截图给总控，或者在 Notion 记录库里写，都算。",
             openAt = 4 * 60,
             deadline = 20 * 60,
-            verify = VerifyMode.TEXT,
-            minChars = 40,
+            verify = VerifyMode.EVIDENCE,
+            minChars = 0,
             notionMinPages = 3,
+            evidence = "LINKED_NOTES",
+            evidenceMin = 2,
         ),
         Gate(
             id = "act_train",
@@ -72,37 +53,30 @@ object Defaults {
         Gate(
             id = "think_one",
             dept = Dept.THINK,
-            title = "谋划一题",
-            instruction = "从信息收集库挑一个“问题”，用今天的方法卡想 20 分钟。可以让 AI 当反方，但结论要你自己写。" +
-                "产出一张谋划单：结论 + 24 小时内能做的下一步。",
+            title = "推进一个判断",
+            instruction = "挑一件事，带着前情去和 GPT 讨论（总控会把前情整理好复制给你），形成判断、关键不确定和下一步，" +
+                "把交接块导回总控。结论可以是“还需要补充信息”，只要写清缺什么、去哪查。也可以在下面直接写你的判断。",
             template = """
-                问题（从信息收集部挑的）：
+                问题：
                 今天的方法卡：{method}
-                我的初判：
-                最有力的反驳或风险（可以让 AI 当反方）：
-                修正后的结论：
-                24 小时内的下一步：
-                置信度（0–100%）：
+                我的判断：
+                最有力的反驳或风险：
+                关键不确定（还缺什么信息）：
+                下一步：
             """.trimIndent(),
             openAt = 4 * 60,
             deadline = 21 * 60 + 30,
-            verify = VerifyMode.AI,
-            minChars = 120,
-            rubric = """
-                问题具体，不是“怎么变优秀”这种大而空的问题
-                写了自己的初步判断
-                至少有一条有力的反驳或风险，而且认真回应了，不是走过场
-                修正后的结论和初判相比有变化，或者说明了为什么不变
-                下一步具体到动作，24 小时内能做完
-                写了置信度
-            """.trimIndent(),
+            verify = VerifyMode.EVIDENCE,
+            minChars = 0,
+            evidence = "CONCLUSIONS",
+            evidenceMin = 1,
         ),
         Gate(
             id = "hq_review",
             dept = Dept.HQ,
             title = "日终验收",
-            instruction = "对照晨间部署逐条过：完成了没有、没完成的真实原因是什么、明天第一步做什么。" +
-                "AI 会看到今天的实际数据（各关卡、娱乐时长、被弹回次数、紧急放行），对不上会被打回。",
+            instruction = "对照今天排的行动逐条过：完成了没有、没完成的真实原因是什么、明天第一步做什么。" +
+                "AI 会看到今天的实际数据（各行动的状态和结果、娱乐时长、被弹回次数、紧急放行），对不上会被打回。",
             template = """
                 主线：完成 / 没完成，实际做到：
                 次要：
@@ -115,7 +89,7 @@ object Defaults {
             verify = VerifyMode.AI,
             minChars = 80,
             rubric = """
-                逐条对照了晨间部署，说清楚每件事完成没有
+                逐条对照了今天排的行动，说清楚每件事完成没有
                 没完成的事写出了真实原因，而不是泛泛的“没时间”“状态不好”
                 和今天的实际数据（娱乐时长、被弹回次数、紧急放行）对得上，没有隐瞒
                 写了明天第一步，具体到时间和动作
@@ -201,7 +175,7 @@ object Defaults {
             Dept.PLAN,
             duty = "把时间分给最重要的事。周定方向，日定动作，晚上对账。谋划出的下一步、信息收集里的待办都在这里排进时间。",
             input = "长期目标（国考、省考等）、谋划单里的下一步、信息收集库里的待办。",
-            output = "周部署（≤3 个目标 + 量化标准 + 时间预算）；晨间部署（1 主线 + ≤3 次要 + 完成标准）；日终验收。",
+            output = "周部署（≤3 个目标 + 量化标准 + 时间预算）；今日部署（排进时间的行动，每个有完成依据）；日终验收。",
             rhythm = "每天早上 10 分钟部署，晚上 10 分钟验收；每周日 30 分钟周部署。",
             tools = "总控里直接交；验收结果会写进 Notion 总控日志，GPT 读日志就能帮你看一周的偏差。",
             pitfall = "计划写得太满、没有完成标准。一天只有一件主线，完成标准必须能检查。",

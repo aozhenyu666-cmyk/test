@@ -49,6 +49,7 @@ import java.time.LocalDate
 @Composable
 fun GateScreen(gateId: String, nav: NavHostController) {
     val context = LocalContext.current
+    val app = context.zk
     val store = context.zk.store
     val config by store.config.collectAsStateWithLifecycle()
     val day by store.today.collectAsStateWithLifecycle()
@@ -118,6 +119,28 @@ fun GateScreen(gateId: String, nav: NavHostController) {
                     Text("验收标准", style = MaterialTheme.typography.titleSmall)
                     gate.rubric.lines().filter { it.isNotBlank() }.forEach { Text("· ${it.trim()}", style = MaterialTheme.typography.bodyMedium) }
                 }
+            }
+            if (gate.verify == VerifyMode.EVIDENCE) {
+                val kind = com.zongkong.core.work.Focus.Evidence.entries.firstOrNull { it.name == gate.evidence } ?: com.zongkong.core.work.Focus.Evidence.PLANNED_TODAY
+                val work by app.store.work.collectAsStateWithLifecycle()
+                val (n, titles) = remember(work, now) { com.zongkong.core.work.Focus.evidence(work, kind, now, app.store.zone) }
+                Panel(accent = if (n >= gate.evidenceMin) sig.free else null) {
+                    Text("看的是：${kind.describe}", style = MaterialTheme.typography.bodyMedium)
+                    Text("现在 $n / ${gate.evidenceMin}", style = MaterialTheme.typography.titleMedium.merge(Mono), color = if (n >= gate.evidenceMin) sig.free else sig.warn)
+                    titles.forEach { Text("· $it", style = MaterialTheme.typography.bodySmall) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        when (kind) {
+                            com.zongkong.core.work.Focus.Evidence.PLANNED_TODAY -> {
+                                OutlinedButton(onClick = { nav.navigate("threads") }) { Text("去排行动") }
+                                OutlinedButton(onClick = { nav.navigate("import") }) { Text("导入交接块") }
+                            }
+                            com.zongkong.core.work.Focus.Evidence.LINKED_NOTES -> OutlinedButton(onClick = { nav.navigate("capture") }) { Text("去收集") }
+                            com.zongkong.core.work.Focus.Evidence.CONCLUSIONS -> OutlinedButton(onClick = { nav.navigate("threads") }) { Text("挑一件事去 GPT") }
+                            com.zongkong.core.work.Focus.Evidence.DONE_ACTIONS -> OutlinedButton(onClick = { nav.navigate("home") }) { Text("去做") }
+                        }
+                    }
+                }
+                if (kind == com.zongkong.core.work.Focus.Evidence.CONCLUSIONS) Hint("也可以在下面直接写你的判断（20 字以上），会记成一条“结论”。")
             }
             if (gate.verify == VerifyMode.NOTION || gate.verify == VerifyMode.NOTION_AI) {
                 Hint("验收时会去 Notion 数据库里数今天新建了几条（至少 ${gate.notionMinPages} 条）。" + if (gate.verify == VerifyMode.NOTION) "这里的文字可以不写。" else "")

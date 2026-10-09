@@ -9,6 +9,9 @@ import com.zongkong.core.Engine
 import com.zongkong.core.Policy
 import com.zongkong.core.Status
 import com.zongkong.core.ZkJson
+import com.zongkong.core.FocusLock
+import com.zongkong.core.work.Work
+import com.zongkong.core.work.WorkRef
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,6 +39,48 @@ class Store(private val context: Context) {
     private val _today = MutableStateFlow(loadDay(DayClock.dateKey(System.currentTimeMillis(), zone)))
     val today: StateFlow<DayLog> = _today.asStateFlow()
 
+    // ---------- 事项、行动、记录（和 Notion 双向同步的那部分） ----------
+
+    private val workLock = Any()
+    private val _work = MutableStateFlow(loadWork())
+    val work: StateFlow<Work> = _work.asStateFlow()
+
+    /** 原子地改 Work。同步引擎和界面都通过这里改，互不覆盖。 */
+    fun updateWork(f: (Work) -> Work): Work = synchronized(workLock) {
+        val next = f(_work.value)
+        if (next != _work.value) {
+            _work.value = next
+            val text = ZkJson.encodeToString(Work.serializer(), next)
+            io.execute { writeAtomic(File(dir, "work.json"), text) }
+        }
+        next
+    }
+
+    val workRef: WorkRef = object : WorkRef {
+        override fun get(): Work = _work.value
+        override fun update(f: (Work) -> Work): Work = updateWork(f)
+    }
+
+    private fun loadWork(): Work {
+        val f = File(dir, "work.json")
+        if (!f.exists()) return Work()
+        return try {
+            ZkJson.decodeFromString(Work.serializer(), f.readText())
+        } catch (e: Exception) {
+            Log.e(TAG, "work.json 读不了，备份后从空开始", e)
+            f.copyTo(File(dir, "work.broken.${System.currentTimeMillis()}.json"), overwrite = true)
+            Work()
+        }
+    }
+
+    /** 当前的专注锁（正在做的一步，锁还没到期）。 */
+    fun focusLock(now: Long = System.currentTimeMillis()): FocusLock? {
+        val s = _work.value.session ?: return null
+        if (s.lockUntil <= now) return null
+        val title = _work.value.rec(s.actionKey)?.title ?: return null
+        return FocusLock(title, s.lockUntil)
+    }
+
     /** 换日、到点的放宽改动都在这里处理。每次算状态前调用。 */
     fun refresh(now: Long = System.currentTimeMillis()) {
         synchronized(lock) {
@@ -49,7 +94,7 @@ class Store(private val context: Context) {
 
     fun status(now: Long = System.currentTimeMillis()): Status {
         refresh(now)
-        return Engine.evaluate(_config.value, _today.value, now, zone)
+        return Engine.evaluate(_config.value, _today.value, now, zone, focusLock(now))
     }
 
     fun updateConfig(f: (Config) -> Config): Config = synchronized(lock) {
@@ -105,6 +150,16 @@ class Store(private val context: Context) {
     var heartbeat: Long
         get() = prefs.getLong("heartbeat", 0L)
         set(v) = prefs.edit().putLong("heartbeat", v).apply()
+
+    /** 去 ChatGPT 续接的是哪件事、什么时候去的（回来时提示导入交接块）。 */
+    var awaitingGpt: String
+        get() = prefs.getString("awaiting_gpt", "") ?: ""
+        set(v) = prefs.edit().putString("awaiting_gpt", v).apply()
+
+    /** “查看结果”上次看到第几条变化。 */
+    var seenChanges: Long
+        get() = prefs.getLong("seen_changes", 0L)
+        set(v) = prefs.edit().putLong("seen_changes", v).apply()
 
     var syncNote: String
         get() = prefs.getString("sync_note", "") ?: ""

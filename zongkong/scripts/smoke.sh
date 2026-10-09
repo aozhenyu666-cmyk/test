@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # 模拟器冒烟测试：装 APK、开无障碍、预置拦截名单，验证严管时打开拦截应用会被弹回、放行时不会。
-# 用法：smoke.sh <apk> <截图目录>
+# 用法：smoke.sh <apk 目录> <截图目录>
+# 先跑端到端闭环测试（模拟 Notion + 真实界面），再测拦截。
 set -u
-APK="$1"
+APKDIR="$1"
 OUT="$2"
+APK="$APKDIR/debug/app-debug.apk"
+TESTAPK="$APKDIR/androidTest/debug/app-debug-androidTest.apk"
 PKG=com.zongkong.app
 # 被拦截的“娱乐应用”：用系统设置代替（模拟器上一定有）
 TARGET=com.android.settings
@@ -18,7 +21,16 @@ launch_target() {
 }
 
 adb install -r "$APK" || exit 1
+adb install -r "$TESTAPK" || exit 1
 adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS || true
+
+# ---------- 端到端闭环 ----------
+: > "$OUT/result.txt"
+adb shell am instrument -w $PKG.test/androidx.test.runner.AndroidJUnitRunner 2>&1 | tee "$OUT/e2e.txt"
+if grep -q "^OK (" "$OUT/e2e.txt"; then echo "E2E_LOOP=OK" >> "$OUT/result.txt"; else echo "E2E_LOOP=FAIL" >> "$OUT/result.txt"; fi
+adb pull /sdcard/Android/data/$PKG/files/shots/. "$OUT/" >/dev/null 2>&1 || true
+adb shell am force-stop $PKG
+
 adb shell settings put secure enabled_accessibility_services $PKG/$PKG.guard.GuardService
 adb shell settings put secure accessibility_enabled 1
 adb shell am start -n $PKG/.ui.MainActivity >/dev/null
@@ -28,14 +40,15 @@ sleep 2
 adb shell dumpsys accessibility | grep -iE "zongkong|Bound services|Enabled services" | head -8 | tee "$OUT/accessibility.txt"
 
 route home;               shot 01-home
+route rhythm;             shot 01b-rhythm
 route gate/plan_morning;  shot 02-gate
 route gate/think_one;     shot 03-think
-route report;             shot 04-report
+route capture;            shot 04-capture
+route results;            shot 04b-results
 route depts;              shot 05-depts
 route settings;           shot 06-settings
 route settings/perm;      shot 07-perm
 
-: > "$OUT/result.txt"
 launch_target
 shot 08-blocked
 resumed | tee "$OUT/resumed-strict.txt"
