@@ -1,0 +1,39 @@
+【任务书 T12：安装"系统体检"并跑第一次】
+
+用户批准执行本任务书。这是一个只读体检工具，不改任何文件、不触发任何工作流。
+
+你（Operit AI）是执行者，按目标自行选择工具；只在红线处停。
+
+====================
+一、是什么
+====================
+新 ToolPkg "系统体检"（local.operit_audit 0.1.0），源码 github aozhenyu666-cmyk/test 的 flow/operit_audit。
+- audit：检查工作流开关与调度新鲜度、关键状态文件、判断链（save_log）、锁队列，输出每项 PASS/WARN/FAIL 和总评。
+- self_test：用人造的正常/异常场景验证体检的判断逻辑本身是否还准（模拟异常）。
+全程只读，它唯一会调用的工具是 workflow:get_all_workflows。
+
+====================
+二、你来做
+====================
+U1. 下载安装包（你来做）：download_file
+    url：https://raw.githubusercontent.com/aozhenyu666-cmyk/test/55830b0e03ff8843ca67c7c509e0b587a16e94d6/flow/operit_audit/build/operit_audit.toolpkg
+    destination：/sdcard/Download/Operit/00_AGENT_HANDOVER/audit/operit_audit.toolpkg
+    校验 sha256 = 535b16545f0736d01d07b612d564e48353db7a61ac9ce11283b11de606721edd，不符就停止。
+U2. 提醒用户在包管理里导入并启用"系统体检"。用户导入后继续。
+A. 调用 operit_audit:self_test，报告 verdict 和 message。预期 verdict=PASS（否则说明包装坏了）。
+B. 调用 operit_audit:audit（参数 self_test=true），把返回的 message 原样贴出。
+   这就是第一次完整体检结果：哪项 PASS / WARN / FAIL、有没有关键链失败。
+
+====================
+三、红线
+====================
+1. 不改任何文件（新建下载文件和报告除外）、不触发任何工作流、不调用 app_suspender。
+2. 如果 audit 报了某项 FAIL，不要去"修"它——只如实报告，由外部 Agent 判断。
+
+====================
+四、报告（贴在对话里，并写入 /sdcard/Download/Operit/00_AGENT_HANDOVER/reports/T12_report.txt）
+====================
+T12 报告
+U1 sha256=
+A self_test verdict=
+B audit message（原样）=
