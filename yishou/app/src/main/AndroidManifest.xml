@@ -3,6 +3,22 @@
 
     <!-- 唯一的网络用途：把任务文本和回答发到用户自己配置的大模型接口 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 常驻通知“一手正在运行”和“陪练窗口开始”提醒（Android 13 起需要用户同意） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 陪练窗口准点提醒；没有授权时退回普通闹钟 -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- 开机后重新安排陪练窗口和每晚总结 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 权限页里请求“不限制电池优化”，减少后台被系统关掉 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- 关注应用的选择列表只需要“桌面上能打开的应用”，不申请读取全部应用 -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
 
     <application
         android:name=".YishouApp"
@@ -21,5 +37,50 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 入口思考页：独立任务，关闭后回到原应用，不出现在最近任务里 -->
+        <activity
+            android:name=".gate.GateActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.yishou.app.gate"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".window.WindowActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- 无障碍服务：只读前台应用包名，见 res/xml/gate_service.xml -->
+        <service
+            android:name=".gate.GateService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/gate_service" />
+        </service>
+
+        <receiver
+            android:name=".window.WindowAlarmReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".window.RescheduleReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

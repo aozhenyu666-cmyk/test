@@ -2,12 +2,15 @@ package com.yishou.app.round
 
 import com.yishou.app.data.AppDao
 import com.yishou.app.data.Breakpoint
+import com.yishou.app.data.Pass
 import com.yishou.app.data.Round
+import com.yishou.app.data.RoundSource
 import com.yishou.app.data.Task
 import com.yishou.app.llm.Coach
 import com.yishou.app.llm.Judgement
 import com.yishou.app.llm.LlmError
 import com.yishou.app.llm.LlmResult
+import com.yishou.app.llm.Prompts
 
 /**
  * “一轮”：读断点 → 陪练出一手 → 用户回答 → 判定 → 更新断点、保存 Round。
@@ -53,6 +56,7 @@ class RoundEngine(
     /**
      * 提交一次回答。判定成功后，在同一个事务里保存 Round 并覆盖断点；
      * 新断点里带上陪练的下一手，作为下一轮的题目。
+     * skipLengthCheck：陪练窗口的“我不知道”按钮用，原话就是“我不知道”。
      */
     suspend fun answer(
         task: Task,
@@ -60,8 +64,9 @@ class RoundEngine(
         answer: String,
         source: String,
         triggerPackage: String? = null,
+        skipLengthCheck: Boolean = false,
     ): AnswerResult {
-        if (!AnswerRules.isLongEnough(answer)) return AnswerResult.TooShort
+        if (!skipLengthCheck && !AnswerRules.isLongEnough(answer)) return AnswerResult.TooShort
 
         val bp = dao.getBreakpoint(task.id) ?: emptyBreakpoint(task.id)
         val judgement = when (val r = coach.judge(task, bp, coachMove, answer)) {
@@ -94,6 +99,50 @@ class RoundEngine(
         )
         val id = dao.saveRound(round, newBp)
         return AnswerResult.Judged(round.copy(id = id), judgement)
+    }
+
+    /** 判定有效后发放一次放行。 */
+    suspend fun grantPass(group: String, minutes: Int, roundId: Long?): Pass {
+        val now = clock()
+        val pass = Pass(packageGroup = group, startAt = now, endAt = now + minutes * 60_000L, roundId = roundId)
+        return pass.copy(id = dao.insertPass(pass))
+    }
+
+    /** 今天（since 为当天零点）已用掉的离线放行次数。 */
+    suspend fun offlineUsedSince(since: Long): Int = dao.countUnjudgedSince(since)
+
+    /**
+     * 离线“保存并通过”：回答原样保存，judged = false，发放一次放行。断点和陪练的一手都不变。
+     * 次数限制由调用方先检查。
+     */
+    suspend fun saveOffline(
+        task: Task,
+        coachMove: String,
+        answer: String,
+        triggerPackage: String?,
+        group: String,
+        minutes: Int,
+    ): Pass {
+        val now = clock()
+        val round = Round(
+            taskId = task.id,
+            source = RoundSource.GATE,
+            triggerPackage = triggerPackage,
+            coachMove = coachMove,
+            userAnswer = answer,
+            effective = false,
+            moveType = Prompts.MOVE_NONE,
+            reason = OFFLINE_REASON,
+            feedback = "",
+            judged = false,
+            createdAt = now,
+        )
+        val pass = Pass(packageGroup = group, startAt = now, endAt = now + minutes * 60_000L, roundId = null)
+        return dao.saveOfflineRound(round, pass)
+    }
+
+    companion object {
+        const val OFFLINE_REASON = "大模型暂时无法判定，离线保存"
     }
 
     private fun emptyBreakpoint(taskId: Long) =

@@ -6,6 +6,10 @@ import com.yishou.app.llm.ChatClient
 import com.yishou.app.llm.LlmCoach
 import com.yishou.app.round.RoundEngine
 import com.yishou.app.settings.SettingsStore
+import com.yishou.app.summary.SummaryEngine
+import com.yishou.app.summary.SummaryScheduler
+import com.yishou.app.system.Notifications
+import com.yishou.app.window.WindowScheduler
 
 /*
  * 「一手」透明原则（同样显示在应用内“关于”页）：
@@ -26,12 +30,19 @@ class YishouApp : Application() {
         private set
     lateinit var engine: RoundEngine
         private set
+    lateinit var summaryEngine: SummaryEngine
+        private set
 
     override fun onCreate() {
         super.onCreate()
         database = AppDatabase.create(this)
         settings = SettingsStore(this)
-        val chat = ChatClient(config = { settings.llm.value })
-        engine = RoundEngine(database.dao(), LlmCoach(chat))
+        val coach = LlmCoach(ChatClient(config = { settings.llm.value }))
+        engine = RoundEngine(database.dao(), coach)
+        summaryEngine = SummaryEngine(database.dao(), coach, prefs = { settings.app.value })
+
+        Notifications.ensureChannels(this)
+        WindowScheduler.reschedule(this)
+        SummaryScheduler.schedule(this, replace = false)
     }
 }

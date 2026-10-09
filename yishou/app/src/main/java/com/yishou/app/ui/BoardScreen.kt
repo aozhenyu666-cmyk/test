@@ -31,12 +31,16 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yishou.app.data.Breakpoint
@@ -49,9 +53,15 @@ import com.yishou.app.round.AnswerRules
 fun BoardScreen(
     onOpenSettings: () -> Unit,
     onNewTask: () -> Unit,
+    onOpenPermissions: () -> Unit,
+    onOpenWindow: () -> Unit,
+    onOpenSummary: () -> Unit,
     vm: BoardViewModel = viewModel(),
 ) {
     val s by vm.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    var gateOn by remember { mutableStateOf(true) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { gateOn = PermissionStatus.accessibility(context) }
 
     Scaffold(
         topBar = {
@@ -75,6 +85,18 @@ fun BoardScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (!s.loaded) return@Column
+
+            if (!gateOn) {
+                NoticeCard(
+                    text = "入口思考页还没开启：需要在系统里打开「一手」的无障碍服务。",
+                    action = "去开启权限",
+                    onAction = onOpenPermissions,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = onOpenWindow, modifier = Modifier.weight(1f)) { Text("陪练窗口") }
+                OutlinedButton(onClick = onOpenSummary, modifier = Modifier.weight(1f)) { Text("每晚总结") }
+            }
 
             if (!s.configured) {
                 NoticeCard(
@@ -176,7 +198,7 @@ private fun BreakpointBlock(bp: Breakpoint) {
 }
 
 @Composable
-private fun ResultCard(round: Round) {
+fun ResultCard(round: Round) {
     val color = if (round.effective) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer
     Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = color)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {

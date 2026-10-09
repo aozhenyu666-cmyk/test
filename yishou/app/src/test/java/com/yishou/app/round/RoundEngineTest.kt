@@ -1,18 +1,16 @@
 package com.yishou.app.round
 
-import com.yishou.app.data.AppDao
+import com.yishou.app.FakeCoach
+import com.yishou.app.FakeDao
 import com.yishou.app.data.Breakpoint
 import com.yishou.app.data.Round
 import com.yishou.app.data.RoundSource
 import com.yishou.app.data.Task
 import com.yishou.app.llm.BreakpointUpdate
-import com.yishou.app.llm.Coach
 import com.yishou.app.llm.Judgement
 import com.yishou.app.llm.LlmError
 import com.yishou.app.llm.LlmResult
 import com.yishou.app.llm.OpeningMove
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -119,46 +117,44 @@ class RoundEngineTest {
         assertTrue(dao.rounds.isEmpty())
         assertEquals("这一手", dao.breakpoints[7]!!.pendingCoachMove)
     }
-}
 
-private class FakeCoach : Coach {
-    var openingResult: LlmResult<OpeningMove> = LlmResult.Err(LlmError.NotConfigured)
-    var judgeResult: LlmResult<Judgement> = LlmResult.Err(LlmError.NotConfigured)
-    var openingCalls = 0
-    var judgeCalls = 0
-
-    override suspend fun opening(task: Task, breakpoint: Breakpoint): LlmResult<OpeningMove> {
-        openingCalls++
-        return openingResult
+    @Test
+    fun dontKnowSkipsLengthCheck() = runTest {
+        dao.breakpoints[7] = Breakpoint(7, "k", "s", "q", pendingCoachMove = "这一手", updatedAt = 1)
+        coach.judgeResult = LlmResult.Ok(Judgement(false, "无", "说了不知道", "", null, "更具体的支架"))
+        val r = engine.answer(task, "这一手", "我不知道", RoundSource.WINDOW, skipLengthCheck = true)
+        assertTrue(r is RoundEngine.AnswerResult.Judged)
+        assertEquals("我不知道", coach.lastAnswer)
+        assertEquals("更具体的支架", dao.breakpoints[7]!!.pendingCoachMove)
     }
 
-    override suspend fun judge(task: Task, breakpoint: Breakpoint, coachMove: String, answer: String): LlmResult<Judgement> {
-        judgeCalls++
-        return judgeResult
-    }
-}
+    @Test
+    fun offlineSaveKeepsBreakpointAndGrantsPass() = runTest {
+        val bp = Breakpoint(7, "k", "s", "q", pendingCoachMove = "这一手", updatedAt = 1)
+        dao.breakpoints[7] = bp
+        val pass = engine.saveOffline(task, "这一手", goodAnswer, "com.ss.android.ugc.aweme", "短视频与社区", 5)
 
-/** 内存版 DAO，只实现 RoundEngine 用到的部分。 */
-private class FakeDao : AppDao() {
-    val breakpoints = mutableMapOf<Long, Breakpoint>()
-    val rounds = mutableListOf<Round>()
+        val round = dao.rounds.single()
+        assertFalse(round.judged)
+        assertFalse(round.effective)
+        assertEquals(goodAnswer, round.userAnswer)
+        assertEquals(RoundSource.GATE, round.source)
+        assertEquals("com.ss.android.ugc.aweme", round.triggerPackage)
+        assertEquals(bp, dao.breakpoints[7])
 
-    override suspend fun getBreakpoint(taskId: Long) = breakpoints[taskId]
-    override suspend fun upsertBreakpoint(breakpoint: Breakpoint) {
-        breakpoints[breakpoint.taskId] = breakpoint
-    }
-    override suspend fun insertRound(round: Round): Long {
-        rounds += round
-        return rounds.size.toLong()
+        assertEquals(round.id, pass.roundId)
+        assertEquals(1000L + 5 * 60_000L, pass.endAt)
+        assertEquals(1, engine.offlineUsedSince(0))
+        assertEquals(pass, dao.activePass("短视频与社区", 1000L + 5 * 60_000L - 1))
+        assertNull(dao.activePass("短视频与社区", 1000L + 5 * 60_000L))
     }
 
-    override fun observeCurrentTask(): Flow<Task?> = emptyFlow()
-    override suspend fun getCurrentTask(): Task? = null
-    override suspend fun getTask(id: Long): Task? = null
-    override fun observeAllTasks(): Flow<List<Task>> = emptyFlow()
-    override suspend fun insertTask(task: Task): Long = 0
-    override suspend fun updateTask(task: Task) {}
-    override suspend fun clearCurrentFlag() {}
-    override suspend fun setCurrentFlag(id: Long) {}
-    override fun observeBreakpoint(taskId: Long): Flow<Breakpoint?> = emptyFlow()
+    @Test
+    fun grantPassUsesMinutes() = runTest {
+        val p = engine.grantPass("游戏", 10, roundId = 3)
+        assertEquals(1000L, p.startAt)
+        assertEquals(1000L + 600_000L, p.endAt)
+        assertEquals(3L, p.roundId)
+        assertNull(dao.activePass("短视频与社区", 2000))
+    }
 }

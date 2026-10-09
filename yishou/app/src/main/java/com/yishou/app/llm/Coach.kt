@@ -1,9 +1,14 @@
 package com.yishou.app.llm
 
 import com.yishou.app.data.Breakpoint
+import com.yishou.app.data.Round
+import com.yishou.app.data.RoundSource
 import com.yishou.app.data.Task
 import org.json.JSONException
 import org.json.JSONObject
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 /** 开局请求的结果。 */
 data class OpeningMove(
@@ -29,10 +34,19 @@ data class Judgement(
     val nextCoachMove: String,
 )
 
+/** 每晚总结的结果。 */
+data class SummaryResult(
+    /** 条件 → 做法 → 预期结果；证据不足时为空 */
+    val rule: String,
+    val tomorrowQuestion: String,
+    val note: String,
+)
+
 /** 陪练。抽成接口，方便测试时换成假的。 */
 interface Coach {
     suspend fun opening(task: Task, breakpoint: Breakpoint): LlmResult<OpeningMove>
     suspend fun judge(task: Task, breakpoint: Breakpoint, coachMove: String, answer: String): LlmResult<Judgement>
+    suspend fun summary(task: Task?, breakpoint: Breakpoint?, rounds: List<Round>): LlmResult<SummaryResult>
 }
 
 /**
@@ -52,6 +66,9 @@ class LlmCoach(private val chat: ChatClient) : Coach {
         answer: String,
     ): LlmResult<Judgement> =
         requestJson(CoachMessages.judge(task, breakpoint, coachMove, answer), CoachParser::parseJudgement)
+
+    override suspend fun summary(task: Task?, breakpoint: Breakpoint?, rounds: List<Round>): LlmResult<SummaryResult> =
+        requestJson(CoachMessages.summary(task, breakpoint, rounds), CoachParser::parseSummary)
 
     private suspend fun <T> requestJson(user: String, parse: (String) -> T): LlmResult<T> {
         var lastError: LlmError? = null
@@ -96,6 +113,41 @@ object CoachMessages {
         appendLine()
         appendLine("只返回 JSON，格式如下（effective 为 true 或 false；无效时 move_type 填“无”）：")
         append(Prompts.JUDGE_FORMAT)
+    }
+
+    fun summary(
+        task: Task?,
+        breakpoint: Breakpoint?,
+        rounds: List<Round>,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): String = buildString {
+        appendLine("请求类型：每晚总结。")
+        appendLine("请根据用户今天全部的轮次和当前断点，总结一条规则、明天第一问和今天的实际进展。")
+        appendLine()
+        if (task != null) appendTask(task)
+        if (breakpoint != null) appendBreakpoint(breakpoint)
+        appendLine("【今天的轮次】共 ${rounds.size} 轮")
+        val time = DateTimeFormatter.ofPattern("HH:mm").withZone(zone)
+        rounds.forEachIndexed { i, r ->
+            appendLine("第 ${i + 1} 轮（${time.format(Instant.ofEpochMilli(r.createdAt))}，${sourceName(r.source)}）")
+            appendLine("陪练：${r.coachMove}")
+            appendLine("用户原话：${r.userAnswer}")
+            val verdict = when {
+                !r.judged -> "未判定（离线保存）"
+                r.effective -> "有效（${r.moveType}）"
+                else -> "无效"
+            }
+            appendLine("判定：$verdict${if (r.reason.isNotBlank()) "；理由：${r.reason}" else ""}")
+        }
+        appendLine()
+        appendLine("只返回 JSON，格式如下（tomorrow_question 必须引用当天原话）：")
+        append(Prompts.SUMMARY_FORMAT)
+    }
+
+    fun sourceName(source: String) = when (source) {
+        RoundSource.GATE -> "入口思考页"
+        RoundSource.WINDOW -> "陪练窗口"
+        else -> "主页"
     }
 
     private fun StringBuilder.appendTask(task: Task) {
@@ -145,6 +197,15 @@ object CoachParser {
             feedback = obj.optText("feedback"),
             breakpoint = bp,
             nextCoachMove = obj.requireText("next_coach_move"),
+        )
+    }
+
+    fun parseSummary(content: String): SummaryResult {
+        val obj = extractJsonObject(content)
+        return SummaryResult(
+            rule = obj.optText("rule"),
+            tomorrowQuestion = obj.requireText("tomorrow_question"),
+            note = obj.optText("note"),
         )
     }
 

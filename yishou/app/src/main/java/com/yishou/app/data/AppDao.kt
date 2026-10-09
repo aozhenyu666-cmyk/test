@@ -88,4 +88,49 @@ abstract class AppDao {
         upsertBreakpoint(breakpoint)
         return id
     }
+
+    @Query("SELECT * FROM round WHERE createdAt >= :from AND createdAt < :to ORDER BY createdAt")
+    abstract suspend fun roundsBetween(from: Long, to: Long): List<Round>
+
+    /** 离线“保存并通过”的次数：未经判定的轮数 */
+    @Query("SELECT COUNT(*) FROM round WHERE judged = 0 AND createdAt >= :since")
+    abstract suspend fun countUnjudgedSince(since: Long): Int
+
+    @Query("SELECT COUNT(*) FROM round WHERE source = :source AND effective = 1 AND createdAt >= :from AND createdAt < :to")
+    abstract suspend fun countEffective(source: String, from: Long, to: Long): Int
+
+    // ---------- 放行 ----------
+
+    @Insert
+    abstract suspend fun insertPass(pass: Pass): Long
+
+    /** 该应用组还没到期的放行，到期的自然查不到 */
+    @Query("SELECT * FROM pass WHERE packageGroup = :group AND endAt > :now ORDER BY endAt DESC LIMIT 1")
+    abstract suspend fun activePass(group: String, now: Long): Pass?
+
+    /** 离线保存：原话存成一轮（judged = false），同时发放一次放行。断点不变。 */
+    @Transaction
+    open suspend fun saveOfflineRound(round: Round, pass: Pass): Pass {
+        val roundId = insertRound(round)
+        val saved = pass.copy(roundId = roundId)
+        return saved.copy(id = insertPass(saved))
+    }
+
+    // ---------- 每晚总结 ----------
+
+    @Upsert
+    abstract suspend fun upsertSummary(summary: DailySummary)
+
+    @Query("SELECT * FROM daily_summary WHERE date = :date")
+    abstract suspend fun getSummary(date: String): DailySummary?
+
+    @Query("SELECT * FROM daily_summary ORDER BY date DESC LIMIT 60")
+    abstract fun observeSummaries(): Flow<List<DailySummary>>
+
+    /** 保存总结，并把“明天第一问”写进断点（没有当前任务时 breakpoint 为 null）。 */
+    @Transaction
+    open suspend fun saveSummary(summary: DailySummary, breakpoint: Breakpoint?) {
+        upsertSummary(summary)
+        if (breakpoint != null) upsertBreakpoint(breakpoint)
+    }
 }

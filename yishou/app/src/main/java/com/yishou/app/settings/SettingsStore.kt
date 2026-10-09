@@ -20,6 +20,19 @@ class SettingsStore(context: Context) {
     private val _llm = MutableStateFlow(readLlm())
     val llm: StateFlow<LlmConfig> = _llm.asStateFlow()
 
+    private val _prefs = MutableStateFlow(AppPrefs.fromJson(prefs.getString(KEY_APP_PREFS, null)))
+    /** 除接口以外的全部设置 */
+    val app: StateFlow<AppPrefs> = _prefs.asStateFlow()
+
+    /** 修改设置并立即保存。返回修改后的设置。 */
+    @Synchronized
+    fun updateApp(change: (AppPrefs) -> AppPrefs): AppPrefs {
+        val next = change(_prefs.value)
+        prefs.edit().putString(KEY_APP_PREFS, next.toJson()).apply()
+        _prefs.value = next
+        return next
+    }
+
     fun saveLlm(config: LlmConfig) {
         prefs.edit()
             .putString(KEY_BASE_URL, config.baseUrl.trim())
@@ -44,6 +57,7 @@ class SettingsStore(context: Context) {
         private const val KEY_API_KEY = "llm_api_key"
         private const val KEY_MODEL = "llm_model"
         private const val KEY_JSON_MODE = "llm_json_mode"
+        private const val KEY_APP_PREFS = "app_prefs"
 
         /**
          * 少数机型在系统更新或备份恢复后，Keystore 里的密钥会对不上，打开加密文件会抛异常。

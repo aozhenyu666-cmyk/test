@@ -1,5 +1,6 @@
 package com.yishou.app.ui
 
+import android.app.TimePickerDialog
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -34,6 +35,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yishou.app.llm.LlmConfig
@@ -45,10 +47,14 @@ fun SettingsScreen(
     onEditTask: (Long) -> Unit,
     onNewTask: () -> Unit,
     onAbout: () -> Unit,
+    onPermissions: () -> Unit,
+    onWatchedApps: () -> Unit,
     vm: SettingsViewModel = viewModel(),
 ) {
     val saved by vm.llm.collectAsStateWithLifecycle()
     val tasks by vm.tasks.collectAsStateWithLifecycle()
+    val prefs by vm.prefs.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     var baseUrl by rememberSaveable { mutableStateOf(saved.baseUrl) }
     var apiKey by rememberSaveable { mutableStateOf(saved.apiKey) }
@@ -94,6 +100,53 @@ fun SettingsScreen(
                             .padding(vertical = 10.dp),
                     )
                 }
+            }
+
+            HorizontalDivider()
+            SectionTitle("入口思考页")
+            NavRow("权限与运行状态", "无障碍、通知、闹钟、电池，以及 vivo 的手动设置", onPermissions)
+            NavRow(
+                "关注的应用与放行时长",
+                "已关注 ${prefs.watched.size} 个应用，${prefs.groups.size} 个应用组",
+                onWatchedApps,
+            )
+            LabeledRow("离线放行时长") {
+                Stepper(prefs.offlinePassMinutes, 1..30, "分钟") { v -> vm.update { it.copy(offlinePassMinutes = v) } }
+            }
+            LabeledRow("离线放行每天最多") {
+                Stepper(prefs.offlineDailyLimit, 0..10, "次") { v -> vm.update { it.copy(offlineDailyLimit = v) } }
+            }
+
+            HorizontalDivider()
+            SectionTitle("陪练窗口")
+            SwitchRow("每天定时开始", prefs.windowEnabled) { on -> vm.update(reschedule = true) { it.copy(windowEnabled = on) } }
+            LabeledRow("开始时间") {
+                TextButton(onClick = {
+                    TimePickerDialog(context, { _, h, m ->
+                        vm.update(reschedule = true) { it.copy(windowHour = h, windowMinute = m) }
+                    }, prefs.windowHour, prefs.windowMinute, true).show()
+                }) { Text("%02d:%02d".format(prefs.windowHour, prefs.windowMinute)) }
+            }
+            LabeledRow("窗口时长") {
+                Stepper(prefs.windowMinutes, 15..120, "分钟") { v -> vm.update { it.copy(windowMinutes = v) } }
+            }
+            LabeledRow("第一次无回应提醒") {
+                Stepper(prefs.remindFirstMinutes, 1..10, "分钟后") { v -> vm.update { it.copy(remindFirstMinutes = v) } }
+            }
+            LabeledRow("第二次提醒") {
+                Stepper(prefs.remindSecondMinutes, 1..10, "分钟后") { v -> vm.update { it.copy(remindSecondMinutes = v) } }
+            }
+            SwitchRow("朗读问题和提醒", prefs.ttsEnabled) { on -> vm.update { it.copy(ttsEnabled = on) } }
+
+            HorizontalDivider()
+            SectionTitle("每晚总结")
+            SwitchRow("每天自动总结", prefs.summaryEnabled) { on -> vm.update(resummary = true) { it.copy(summaryEnabled = on) } }
+            LabeledRow("总结时间") {
+                TextButton(onClick = {
+                    TimePickerDialog(context, { _, h, m ->
+                        vm.update(resummary = true) { it.copy(summaryHour = h, summaryMinute = m) }
+                    }, prefs.summaryHour, prefs.summaryMinute, true).show()
+                }) { Text("%02d:%02d".format(prefs.summaryHour, prefs.summaryMinute)) }
             }
 
             HorizontalDivider()
@@ -148,6 +201,32 @@ fun SettingsScreen(
             TextButton(onClick = onAbout) { Text("关于「一手」") }
         }
     }
+}
+
+@Composable
+private fun NavRow(title: String, detail: String, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.bodyLarge)
+        Text(detail, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun LabeledRow(label: String, content: @Composable () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, modifier = Modifier.weight(1f))
+        content()
+    }
+}
+
+@Composable
+private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    LabeledRow(label) { Switch(checked = checked, onCheckedChange = onChange) }
 }
 
 @Composable

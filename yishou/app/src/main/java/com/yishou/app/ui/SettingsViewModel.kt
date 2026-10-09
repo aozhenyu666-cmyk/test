@@ -7,6 +7,9 @@ import com.yishou.app.YishouApp
 import com.yishou.app.data.Task
 import com.yishou.app.llm.ChatClient
 import com.yishou.app.llm.LlmConfig
+import com.yishou.app.settings.AppPrefs
+import com.yishou.app.summary.SummaryScheduler
+import com.yishou.app.window.WindowScheduler
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -18,6 +21,14 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     private val dao = yishou.database.dao()
 
     val llm: StateFlow<LlmConfig> = yishou.settings.llm
+    val prefs: StateFlow<AppPrefs> = yishou.settings.app
+
+    /** 修改设置；改了窗口或总结的时间时重新安排定时。 */
+    fun update(reschedule: Boolean = false, resummary: Boolean = false, change: (AppPrefs) -> AppPrefs) {
+        yishou.settings.updateApp(change)
+        if (reschedule) WindowScheduler.reschedule(yishou)
+        if (resummary) SummaryScheduler.schedule(yishou, replace = true)
+    }
 
     val tasks: StateFlow<List<Task>> = dao.observeAllTasks()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
