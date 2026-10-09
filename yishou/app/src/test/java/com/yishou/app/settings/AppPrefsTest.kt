@@ -45,4 +45,17 @@ class AppPrefsTest {
         assertEquals(30, p.passMinutesFor("A"))
         assertEquals(AppPrefs.DEFAULT_PASS_MINUTES, p.passMinutesFor("不存在"))
     }
+
+    @Test
+    fun voiceAndPullBackPrefs() {
+        val d = AppPrefs.fromJson("{}")
+        assertEquals(true, d.voiceMode)
+        assertEquals(3, d.idleHours)
+        val p = d.copy(voiceMode = false, pullBackMinutes = 4, voiceAutoSendSeconds = 0, pullBackEnabled = false)
+        assertEquals(p, AppPrefs.fromJson(p.toJson()))
+        val clamped = AppPrefs.fromJson("""{"pullBackMinutes":99,"idleHours":-1,"voiceAutoSendSeconds":50}""")
+        assertEquals(15, clamped.pullBackMinutes)
+        assertEquals(0, clamped.idleHours)
+        assertEquals(10, clamped.voiceAutoSendSeconds)
+    }
 }

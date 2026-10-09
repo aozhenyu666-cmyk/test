@@ -42,6 +42,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yishou.app.YishouApp
+import com.yishou.app.bet.Calibration
+import com.yishou.app.log.RunLog
+import com.yishou.app.recall.EchoRepo
 import com.yishou.app.data.Breakpoint
 import com.yishou.app.data.FaceCount
 import com.yishou.app.data.Task
@@ -101,6 +104,7 @@ fun ConsoleScreen(
     onOpenSettings: () -> Unit,
     onOpenPermissions: () -> Unit,
     onEditTask: (Long) -> Unit,
+    onOpen: (String) -> Unit = {},
     vm: ConsoleViewModel = viewModel(),
 ) {
     val context = LocalContext.current
@@ -116,6 +120,12 @@ fun ConsoleScreen(
         value = app.database.dao().faceCounts(0)
     }
     val inWindow = WindowClock.active(System.currentTimeMillis(), prefs, ZoneId.systemDefault()) != null
+    val echoDue by produceState(0, resumeKey) { value = EchoRepo(app).due().size }
+    val calibration by produceState("", resumeKey) {
+        val resolved = app.database.practice().resolvedBets()
+        value = Calibration.verdict(Calibration.of(resolved.map { it.confidence to (it.outcome > 0) }))
+    }
+    val logCount by produceState(0, resumeKey) { value = RunLog.current?.entries()?.size ?: 0 }
 
     Box(Modifier.fillMaxSize()) {
         BoardBackdrop()
@@ -159,6 +169,21 @@ fun ConsoleScreen(
                         prefs.nudgeEnabled,
                         onOpenSettings,
                     )
+                }
+            }
+            item {
+                Panel("练在平时") {
+                    StatusRow(
+                        "回响",
+                        if (echoDue > 0) "今天 $echoDue 条：前几天的结论，凭记忆再说一遍" else "今天没有要回响的",
+                        echoDue > 0,
+                    ) { onOpen("echo") }
+                    StatusRow("预判本", calibration.ifEmpty { "先押再看：下注和预演" }, false) { onOpen("bets") }
+                    StatusRow(
+                        "运行日志",
+                        if (logCount > 0) "记了 $logCount 条出错，点开看" else "没出过错",
+                        false,
+                    ) { onOpen("log") }
                 }
             }
             item {

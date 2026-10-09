@@ -58,6 +58,8 @@ data class DayStats(
         const val OFFLINE_PASS = "offline_pass"
         const val WINDOW_BLOCK = "window_block"
         const val LOOK = "look"
+        /** 无回应时把窗口页拉回前台 */
+        const val PULL_BACK = "pull_back"
 
         fun fromJson(text: String?, date: String): DayStats {
             if (text.isNullOrBlank()) return DayStats(date)

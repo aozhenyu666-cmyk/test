@@ -21,6 +21,7 @@ object Notifications {
     private const val ID_RUNNING = 1
     const val ID_WINDOW = 2
     const val ID_NUDGE = 3
+    const val ID_IDLE = 4
 
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java)

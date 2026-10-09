@@ -26,6 +26,9 @@ import com.yishou.app.summary.SummaryScheduler
 import com.yishou.app.system.Notifications
 import com.yishou.app.system.Reminders
 import com.yishou.app.window.WindowScheduler
+import com.yishou.app.log.RunLog
+import com.yishou.app.speech.SpeechApi
+import com.yishou.app.speech.VoiceInput
 
 /*
  * 「一手」透明原则（同样显示在应用内“关于”页）：
@@ -35,12 +38,24 @@ import com.yishou.app.window.WindowScheduler
  * - 无障碍服务只读取当前前台应用的包名，不读取屏幕内容、输入内容或其他应用的数据。
  * - “让陪练看屏”需要你每次在系统弹窗里同意；只在你点“看一眼”（或你设置的自动间隔）时截一张屏，
  *   发给你自己配置的识图模型，图片不保存。随时可以在通知里停止。
- * - 数据只保存在本机。唯一的网络请求是把任务文本、回答，以及你主动发出的照片或截屏，发送到你自己配置的大模型接口。
+ * - 数据只保存在本机。唯一的网络请求是把任务文本、回答，以及你主动发出的照片或截屏，发送到你自己配置的大模型接口；
+ *   填了语音接口时，你说的那一段录音和要朗读的那句话发给你自己配置的语音接口，录音不保存。
+ * - 麦克风只在你点麦克风、或语音陪练读完题等你回答时打开，界面上有明显的“在听”标记。
  * - 每日使用总量的限制交给用户另装的「不做手机控」，本应用不重复实现。
  */
 
 /** 应用入口。全局只有这几个对象，手动创建，不用依赖注入框架。 */
 class YishouApp : Application() {
+
+    /** 运行日志装好，再接管未捕获的异常：先记下来，再交给系统照常处理（应用照常退出）。 */
+    private fun installRunLog() {
+        RunLog.install(RunLog(java.io.File(filesDir, "runlog.jsonl")))
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, e ->
+            RunLog.e("崩溃", "线程 ${thread.name} 未处理的异常", e)
+            previous?.uncaughtException(thread, e)
+        }
+    }
 
     lateinit var database: AppDatabase
         private set
@@ -53,6 +68,11 @@ class YishouApp : Application() {
     lateinit var vision: Vision
         private set
     lateinit var stats: StatsStore
+        private set
+    lateinit var speechApi: SpeechApi
+        private set
+    /** 听你说：录音 + 听写（语音接口或系统识别），全应用共用一个，同一时间只听一处 */
+    lateinit var voice: VoiceInput
         private set
 
     /**
@@ -69,13 +89,19 @@ class YishouApp : Application() {
     @OptIn(ExperimentalCoroutinesApi::class)
     override fun onCreate() {
         super.onCreate()
+        installRunLog()
         database = AppDatabase.create(this)
         settings = SettingsStore(this)
         stats = StatsStore(this)
-        val coach = LlmCoach(ChatClient(config = { settings.llm.value }, usage = stats))
+        val logError: (String, String) -> Unit = { kind, message -> RunLog.e(kind, message) }
+        val coach = LlmCoach(ChatClient(config = { settings.llm.value }, usage = stats, onError = logError))
         engine = RoundEngine(database.dao(), coach)
         summaryEngine = SummaryEngine(database.dao(), coach, prefs = { settings.app.value })
-        vision = Vision(ChatClient(config = { settings.vision.value }, http = ChatClient.defaultHttpClient(60), usage = stats))
+        vision = Vision(
+            ChatClient(config = { settings.vision.value }, http = ChatClient.defaultHttpClient(60), usage = stats, onError = logError),
+        )
+        speechApi = SpeechApi(config = { settings.speech.value })
+        voice = VoiceInput(this)
 
         // 断点一变，桌面小组件跟着更新
         appScope.launch {
@@ -97,6 +123,7 @@ class YishouApp : Application() {
         Notifications.ensureChannels(this)
         WindowScheduler.reschedule(this)
         Reminders.scheduleNudge(this)
+        Reminders.scheduleIdle(this)
         SummaryScheduler.schedule(this, replace = false)
     }
 }

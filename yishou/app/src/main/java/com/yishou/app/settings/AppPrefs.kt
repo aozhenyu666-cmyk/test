@@ -61,6 +61,16 @@ data class AppPrefs(
     val windowStoppedAt: Long = 0,
     /** 权限页里手动勾选“已设置好”的厂商项 */
     val manualChecks: Set<String> = emptySet(),
+    /** 窗口里第二次提醒后还没动静，把窗口页拉回前台 */
+    val pullBackEnabled: Boolean = true,
+    /** 第二次提醒后每隔几分钟拉回一次 */
+    val pullBackMinutes: Int = 2,
+    /** 白天一手停了这么多小时没人应，发通知叫回来；0 表示关 */
+    val idleHours: Int = 3,
+    /** 语音陪练：窗口里读完题自动听你说 */
+    val voiceMode: Boolean = true,
+    /** 听写完几秒后自动发出，0 表示不自动发、等你确认 */
+    val voiceAutoSendSeconds: Int = 3,
 ) {
     fun groupOf(pkg: String): String? = watched[pkg]
 
@@ -99,6 +109,11 @@ data class AppPrefs(
         .put("manualWindowStart", manualWindowStart)
         .put("windowStoppedAt", windowStoppedAt)
         .put("manualChecks", JSONArray().apply { manualChecks.forEach { put(it) } })
+        .put("pullBackEnabled", pullBackEnabled)
+        .put("pullBackMinutes", pullBackMinutes)
+        .put("idleHours", idleHours)
+        .put("voiceMode", voiceMode)
+        .put("voiceAutoSendSeconds", voiceAutoSendSeconds)
         .toString()
 
     companion object {
@@ -180,6 +195,11 @@ data class AppPrefs(
                 manualWindowStart = o.optLong("manualWindowStart", 0),
                 windowStoppedAt = o.optLong("windowStoppedAt", 0),
                 manualChecks = checks,
+                pullBackEnabled = o.optBoolean("pullBackEnabled", d.pullBackEnabled),
+                pullBackMinutes = o.optInt("pullBackMinutes", d.pullBackMinutes).coerceIn(1, 15),
+                idleHours = o.optInt("idleHours", d.idleHours).coerceIn(0, 12),
+                voiceMode = o.optBoolean("voiceMode", d.voiceMode),
+                voiceAutoSendSeconds = o.optInt("voiceAutoSendSeconds", d.voiceAutoSendSeconds).coerceIn(0, 10),
             )
         }
     }

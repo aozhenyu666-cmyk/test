@@ -34,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -64,6 +65,7 @@ fun BoardScreen(
     onEditTask: (Long) -> Unit,
     onOpenPermissions: () -> Unit,
     onOpenWindow: () -> Unit,
+    onOpenEcho: () -> Unit = {},
     vm: BoardViewModel = viewModel(),
 ) {
     val s by vm.state.collectAsStateWithLifecycle()
@@ -72,7 +74,14 @@ fun BoardScreen(
     val context = LocalContext.current
     val prefs by (context.applicationContext as YishouApp).settings.app.collectAsStateWithLifecycle()
     var gateOn by remember { mutableStateOf(true) }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { gateOn = PermissionStatus.accessibility(context) }
+    var resumeKey by remember { mutableStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        gateOn = PermissionStatus.accessibility(context)
+        resumeKey++
+    }
+    val echoDue by produceState(0, resumeKey) {
+        value = com.yishou.app.recall.EchoRepo(context.applicationContext as YishouApp).due().size
+    }
     val listState = rememberLazyListState()
 
     // 新的一手、新的判定出现时滚到底部
@@ -142,6 +151,11 @@ fun BoardScreen(
                 item { NoticeCard("入口思考页还没开启：需要在系统里打开「一手」的无障碍服务。", "去开启权限", onOpenPermissions) }
             }
             item { PositionPanel(task, s.breakpoint, onEdit = { onEditTask(task.id) }) }
+            if (echoDue > 0) {
+                item {
+                    NoticeCard("有 $echoDue 条前几天的结论回来找你了。先凭记忆说一遍，再对照原话。", "回响", onOpenEcho)
+                }
+            }
             item {
                 Text(
                     when {

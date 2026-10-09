@@ -141,4 +141,13 @@ class CoachParserTest {
         assertTrue(demo.contains("请求类型：示范"))
         assertTrue(demo.contains("卡住的那一手"))
     }
+
+    @Test
+    fun sayIsOptionalAndTrimmed() {
+        assertEquals("", CoachParser.parseJudgement(fullJudge).say)
+        val o = CoachParser.parseOpening("""{"coach_move":"分析。问题？","say":"  问题？ "}""")
+        assertEquals("问题？", o.say)
+        val long = CoachParser.parseObserved("""{"coach_move":"m","say":"${"长".repeat(100)}"}""")
+        assertEquals(80, long.say.length)
+    }
 }

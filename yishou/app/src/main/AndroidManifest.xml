@@ -16,6 +16,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <!-- 陪练窗口期间保持前台，划掉界面或清理后台时计时和朗读不中断 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 语音陪练：只在你点麦克风、或陪练读完题等你回答时录这一段话，转成文字后丢掉 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- 关注应用的选择列表只需要“桌面上能打开的应用”，不申请读取全部应用 -->
     <queries>
@@ -33,6 +35,13 @@
         </intent>
         <intent>
             <action android:name="android.intent.action.DIAL" />
+        </intent>
+        <!-- 没填听写接口时用手机自带的语音识别；朗读用系统朗读引擎 -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
     </queries>
 

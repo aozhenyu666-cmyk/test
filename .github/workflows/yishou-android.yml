@@ -45,8 +45,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk yishou.apk
+          # Room 导出的数据库结构，一起放进发布页，方便提交进仓库（app/schemas）
+          (cd app && zip -qr ../schemas.zip schemas)
           gh release delete yishou-latest --cleanup-tag --yes || true
-          gh release create yishou-latest yishou.apk \
+          gh release create yishou-latest yishou.apk schemas.zip \
             --target "$GITHUB_SHA" \
             --prerelease \
             --title "一手 最新调试版" \

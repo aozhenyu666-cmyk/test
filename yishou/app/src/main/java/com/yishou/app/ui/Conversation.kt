@@ -73,26 +73,23 @@ import java.io.File
 
 // ---------- 对话气泡 ----------
 
-/** 陪练的一手：左侧，宋体——对手的声音。footer 放计时等小字。 */
+/**
+ * 陪练的一手：不套气泡，像对话应用里助手的回答那样直接排成正文（宋体——对手的声音），
+ * 左上角一颗小子标明是谁在说。footer 放计时等小字。
+ */
 @Composable
 fun CoachBubble(text: String, footer: @Composable (() -> Unit)? = null) {
     Row(Modifier.fillMaxWidth()) {
-        Surface(
-            color = MaterialTheme.colorScheme.surface,
-            contentColor = MaterialTheme.colorScheme.onSurface,
-            shape = RoundedCornerShape(topStart = 2.dp, topEnd = 16.dp, bottomEnd = 16.dp, bottomStart = 16.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            modifier = Modifier.widthIn(max = 340.dp),
-        ) {
-            Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
-                Text(
-                    text,
-                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Serif, lineHeight = 26.sp),
-                )
-                if (footer != null) {
-                    Spacer(Modifier.size(8.dp))
-                    footer()
-                }
+        Box(Modifier.padding(top = 5.dp)) { com.yishou.app.ui.theme.StoneMark(14.dp) }
+        Spacer(Modifier.size(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text,
+                style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Serif, lineHeight = 28.sp),
+            )
+            if (footer != null) {
+                Spacer(Modifier.size(8.dp))
+                footer()
             }
         }
     }
@@ -105,9 +102,9 @@ fun UserBubble(text: String) {
     val body = if (mark >= 0) text.substring(0, mark).trim() else text
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
         Surface(
-            color = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 2.dp, bottomEnd = 16.dp, bottomStart = 16.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            shape = RoundedCornerShape(20.dp),
             modifier = Modifier.widthIn(max = 320.dp),
         ) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
@@ -275,9 +272,12 @@ fun AnswerComposer(
     error: String? = null,
     submitLabel: String = "应一手",
     modifier: Modifier = Modifier,
+    /** 换掉默认的麦克风（陪练窗口用自己的语音流程） */
+    mic: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val context = LocalContext.current
+    var voiceNote by remember { mutableStateOf<String?>(null) }
     var photoUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         if (ok) photoUri?.let(onAttach)
@@ -334,6 +334,7 @@ fun AnswerComposer(
             }
             hint?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            VoiceNote(voiceNote)
             Row(verticalAlignment = Alignment.Bottom) {
                 OutlinedTextField(
                     value = answer,
@@ -342,10 +343,20 @@ fun AnswerComposer(
                     placeholder = { Text("你的一手：得到了什么、依据是什么") },
                     minLines = 1,
                     maxLines = 6,
-                    shape = RoundedCornerShape(20.dp),
+                    shape = RoundedCornerShape(26.dp),
                     modifier = Modifier.weight(1f),
                 )
-                Spacer(Modifier.size(8.dp))
+                Spacer(Modifier.size(4.dp))
+                if (mic != null) {
+                    mic()
+                } else {
+                    MicButton(
+                        onText = { t -> onAnswerChange(answer.trimEnd().let { if (it.isEmpty()) t else "$it，$t" }) },
+                        enabled = !submitting,
+                        onNote = { voiceNote = it },
+                    )
+                }
+                Spacer(Modifier.size(4.dp))
                 FilledIconButton(
                     onClick = onSubmit,
                     enabled = !submitting && attachment != Attachment.Working,

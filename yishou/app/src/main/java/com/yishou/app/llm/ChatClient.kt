@@ -71,6 +71,8 @@ class ChatClient(
     private val config: () -> LlmConfig,
     private val http: OkHttpClient = defaultHttpClient(),
     private val usage: UsageSink? = null,
+    /** 请求失败时记一笔（运行日志用）：请求类型、失败原因 */
+    private val onError: ((kind: String, message: String) -> Unit)? = null,
 ) {
 
     suspend fun complete(system: String, user: String, kind: String = "其他"): LlmResult<String> {
@@ -107,6 +109,7 @@ class ChatClient(
         val tokens = IntArray(2)
         val result = sendOnce(cfg, messages, jsonMode, tokens)
         usage?.record(kind, result is LlmResult.Ok, tokens[0], tokens[1], System.currentTimeMillis() - started, requestChars)
+        if (result is LlmResult.Err) onError?.invoke(kind, result.error.message)
         return result
     }
 

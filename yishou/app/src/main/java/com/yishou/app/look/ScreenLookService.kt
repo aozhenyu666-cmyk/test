@@ -97,6 +97,7 @@ class ScreenLookService : Service() {
             data?.let { mpm.getMediaProjection(code, it) }
         } catch (e: Exception) {
             Log.e(TAG, "无法获取屏幕授权", e)
+            com.yishou.app.log.RunLog.e("看屏", "无法获取屏幕授权", e)
             null
         }
         if (p == null) {
@@ -204,7 +205,7 @@ class ScreenLookService : Service() {
                         WindowActivity::class.java,
                     )
                     if (app.settings.app.value.ttsEnabled && !WindowActivity.isVisible) {
-                        speaker?.speak(r.value.coachMove)
+                        speaker?.speak(com.yishou.app.speech.Spoken.of(r.value.coachMove, r.value.say))
                     }
                 }
             }

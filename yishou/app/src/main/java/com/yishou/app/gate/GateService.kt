@@ -9,6 +9,7 @@ import android.view.accessibility.AccessibilityEvent
 import com.yishou.app.YishouApp
 import com.yishou.app.stats.DayStats
 import com.yishou.app.system.Notifications
+import com.yishou.app.log.RunLog
 import com.yishou.app.window.WindowClock
 import com.yishou.app.window.WindowRules
 import java.time.ZoneId
@@ -51,6 +52,7 @@ class GateService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        running = this
         Notifications.showRunning(this)
     }
 
@@ -170,11 +172,13 @@ class GateService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onUnbind(intent: Intent?): Boolean {
+        if (running === this) running = null
         Notifications.cancelRunning(this)
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
+        if (running === this) running = null
         Notifications.cancelRunning(this)
         scope.cancel()
         super.onDestroy()
@@ -182,5 +186,37 @@ class GateService : AccessibilityService() {
 
     companion object {
         private const val TAG = "GateService"
+
+        @Volatile
+        private var running: GateService? = null
+
+        /** 当前前台应用的包名；服务没开时为 null */
+        val foreground: String? get() = running?.foregroundPkg
+
+        /**
+         * 窗口里的“拉回”能不能把你从 pkg 拉走：窗口允许的学习应用、相机、电话、输入法不拉
+         * （你可能正在做题、拍作答、接电话）；桌面和其他应用照拉。
+         */
+        fun mayPullFrom(pkg: String?): Boolean {
+            val service = running ?: return true
+            if (pkg == null) return true
+            if (pkg in service.app.settings.app.value.windowAllowed) return false
+            return pkg !in service.systemAllowed() || pkg in service.homes
+        }
+
+        /**
+         * 从无障碍服务把一个页面拉到前台（陪练窗口的“拉回”）。系统允许开着的无障碍服务从后台打开页面，
+         * 和入口思考页是同一个办法。服务没开或被拦下时返回 false，由调用方改发通知。
+         */
+        fun bringToFront(intent: Intent): Boolean {
+            val service = running ?: return false
+            return try {
+                service.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                true
+            } catch (e: Exception) {
+                RunLog.e("拉回", "无法从后台打开陪练窗口", e)
+                false
+            }
+        }
     }
 }

@@ -40,6 +40,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yishou.app.llm.LlmConfig
+import com.yishou.app.settings.AppPrefs
+import com.yishou.app.speech.SpeechConfig
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -50,6 +52,7 @@ fun SettingsScreen(
     onAbout: () -> Unit,
     onPermissions: () -> Unit,
     onWatchedApps: () -> Unit,
+    onLog: () -> Unit = {},
     vm: SettingsViewModel = viewModel(),
 ) {
     val saved by vm.llm.collectAsStateWithLifecycle()
@@ -155,6 +158,17 @@ fun SettingsScreen(
                 Stepper(prefs.remindSecondMinutes, 1..10, "分钟后") { v -> vm.update { it.copy(remindSecondMinutes = v) } }
             }
             SwitchRow("朗读问题和提醒", prefs.ttsEnabled) { on -> vm.update { it.copy(ttsEnabled = on) } }
+            SwitchRow("没应声就拉回窗口", prefs.pullBackEnabled) { on -> vm.update { it.copy(pullBackEnabled = on) } }
+            if (prefs.pullBackEnabled) {
+                LabeledRow("第二次提醒后每隔") {
+                    Stepper(prefs.pullBackMinutes, 1..15, "分钟拉回") { v -> vm.update { it.copy(pullBackMinutes = v) } }
+                }
+                Text(
+                    "两次提醒都没动静，就把陪练窗口拉到前台（不管你在哪个应用），每一手最多 3 次。" +
+                        "你在窗口允许的学习应用、相机、电话里，或者屏幕关着时不拉，只朗读。需要开着入口思考页（无障碍服务）。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
 
             HorizontalDivider()
             SectionTitle("每晚总结")
@@ -177,8 +191,12 @@ fun SettingsScreen(
                     }, prefs.nudgeHour, prefs.nudgeMinute, true).show()
                 }) { Text("%02d:%02d".format(prefs.nudgeHour, prefs.nudgeMinute)) }
             }
+            LabeledRow("一手停了") {
+                Stepper(prefs.idleHours, 0..12, "小时叫你") { v -> vm.update(renudge = true) { it.copy(idleHours = v) } }
+            }
             Text(
-                "定时窗口开始 10 分钟还没走第一手、“先停”的休息时间到了，也会提醒你。",
+                "白天（8 点到 23 点）一手停了这么久没人应，就发通知，写上那一手；设为 0 关掉。" +
+                    "定时窗口开始 10 分钟还没走第一手、“先停”的休息时间到了，也会提醒你。",
                 style = MaterialTheme.typography.bodySmall,
             )
 
@@ -248,6 +266,10 @@ fun SettingsScreen(
             VisionSection(vm)
 
             HorizontalDivider()
+            VoiceSection(vm, prefs)
+
+            HorizontalDivider()
+            TextButton(onClick = onLog) { Text("运行日志") }
             TextButton(onClick = onAbout) { Text("关于「一手」") }
         }
     }
@@ -294,6 +316,76 @@ private fun VisionSection(vm: SettingsViewModel) {
     )
     Button(onClick = { message = vm.saveVision(LlmConfig(baseUrl, apiKey, model, false)) ?: "已保存" }) {
         Text("保存识图设置")
+    }
+    message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+}
+
+/** 语音：陪练窗口里读完题就听你说；可选填 OpenAI 兼容的听写 / 朗读接口，空着用手机自带的。 */
+@Composable
+private fun VoiceSection(vm: SettingsViewModel, prefs: AppPrefs) {
+    val saved by vm.speech.collectAsStateWithLifecycle()
+    var baseUrl by rememberSaveable { mutableStateOf(saved.baseUrl) }
+    var apiKey by rememberSaveable { mutableStateOf(saved.apiKey) }
+    var stt by rememberSaveable { mutableStateOf(saved.sttModel) }
+    var tts by rememberSaveable { mutableStateOf(saved.ttsModel) }
+    var voiceName by rememberSaveable { mutableStateOf(saved.ttsVoice) }
+    var message by rememberSaveable { mutableStateOf<String?>(null) }
+
+    SectionTitle("语音")
+    SwitchRow("语音陪练：读完题就听我说", prefs.voiceMode) { on -> vm.update { it.copy(voiceMode = on) } }
+    LabeledRow("听写好后自动发出") {
+        Stepper(prefs.voiceAutoSendSeconds, 0..10, "秒后") { v -> vm.update { it.copy(voiceAutoSendSeconds = v) } }
+    }
+    Text(
+        "设为 0 就不自动发，听写的字留在输入框里等你确认。短口令直接当操作：" +
+            "“我不知道”“再说一遍”“先停”“示范”“换一个”“等一下”“取消”。",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Text(
+        "下面的接口可选，按 OpenAI 兼容格式（/audio/transcriptions 听写、/audio/speech 朗读）。" +
+            "听写模型空着就用手机自带的语音识别，朗读模型空着就用系统朗读。录音只发给这里填的接口，不保存。",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    OutlinedTextField(
+        value = baseUrl,
+        onValueChange = { baseUrl = it; message = null },
+        label = { Text("语音接口地址") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = apiKey,
+        onValueChange = { apiKey = it; message = null },
+        label = { Text("语音密钥") },
+        singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = stt,
+        onValueChange = { stt = it; message = null },
+        label = { Text("听写模型（例如 whisper-1）") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = tts,
+        onValueChange = { tts = it; message = null },
+        label = { Text("朗读模型（例如 tts-1）") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = voiceName,
+        onValueChange = { voiceName = it; message = null },
+        label = { Text("朗读音色（接口要求时填）") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Button(onClick = { message = vm.saveSpeech(SpeechConfig(baseUrl, apiKey, stt, tts, voiceName)) ?: "已保存" }) {
+        Text("保存语音设置")
     }
     message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
 }

@@ -1,7 +1,21 @@
 package com.yishou.app.window
 
+import android.Manifest
 import android.content.Intent
 import android.os.Bundle
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.runtime.LaunchedEffect
+import com.yishou.app.speech.ListenPhase
+import com.yishou.app.ui.FlipClock
+import com.yishou.app.ui.MicGlyph
+import com.yishou.app.ui.ThinProgress
+import com.yishou.app.ui.VoiceNote
+import com.yishou.app.ui.VoiceRings
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -125,6 +139,11 @@ private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit
     val startersPair by vm.starters.collectAsStateWithLifecycle()
     val starters = startersPair?.takeIf { it.first == s.coachMove }?.second.orEmpty()
     val change: ((AppPrefs) -> AppPrefs) -> Unit = { f -> app.settings.updateApp(f) }
+    val level by vm.level.collectAsStateWithLifecycle()
+    val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> vm.onMicPermission(ok) }
+    LaunchedEffect(s.needMic) {
+        if (s.needMic) micPermission.launch(Manifest.permission.RECORD_AUDIO)
+    }
 
     Scaffold(topBar = { BackTopBar("陪练窗口", onBack) }) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
@@ -166,16 +185,16 @@ private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    formatRemaining(s.remainingMs),
-                    style = MaterialTheme.typography.displayMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f),
-                )
+                FlipClock(s.remainingMs, tile = 56.dp, modifier = Modifier.weight(1f))
                 Column(horizontalAlignment = Alignment.End) {
                     Text("有效 ${s.effectiveCount} 轮", style = MaterialTheme.typography.titleMedium)
                     TextButton(onClick = { confirmStop = true }) { Text("提前结束") }
                 }
+            }
+            ThinProgress(1f - s.remainingMs.toFloat() / (span.end - span.start).coerceAtLeast(1))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("语音陪练", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                Switch(checked = s.voiceOn, onCheckedChange = vm::setVoice)
             }
 
             TextButton(onClick = { showPanels = !showPanels }) {
@@ -269,6 +288,7 @@ private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit
             }
 
             if (s.coachMove != null) {
+                if (s.voiceOn && !s.moveLoading) VoiceStage(s, level, onTap = vm::micTap, onEdit = vm::cancelAutoSend)
                 if (!s.submitting && !s.moveLoading) {
                     MoveTools(shake = prefs.shakeToRoll, onRoll = vm::roll, onDemo = vm::demo)
                 }
@@ -295,7 +315,17 @@ private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit
                     onSubmit = vm::submit,
                     hint = s.hint,
                     error = s.judgeError,
+                    mic = {
+                        MicTapButton(s, onTap = vm::micTap)
+                    },
                 )
+                if (s.pulled > 0) {
+                    Text(
+                        "已经把你拉回来 ${s.pulled} 次。说一句也行：“我不知道”“先停”“示范”。",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
         }
         }
@@ -311,6 +341,56 @@ private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit
             },
             dismissButton = { TextButton(onClick = { confirmStop = false }) { Text("继续陪练") } },
         )
+    }
+}
+
+/**
+ * 语音台：一颗子和它的涟漪。陪练说话时金环荡开，在听时环跟着你的音量，在听写时收成转动的弧。
+ * 点一下：陪练在说就打断、开始听；正在听就当说完了。听写好后倒数自动发出，点“改一下”留下来改。
+ */
+@Composable
+private fun VoiceStage(s: WindowState, level: Float, onTap: () -> Unit, onEdit: () -> Unit) {
+    val label = when {
+        s.submitting -> "陪练在判定"
+        s.speaking -> "陪练在说 · 点一下直接开口"
+        s.listen == ListenPhase.LISTENING -> "在听，说完停一下就行"
+        s.listen == ListenPhase.TRANSCRIBING -> "在听写"
+        s.autoSendLeft > 0 -> "${s.autoSendLeft} 秒后发出"
+        else -> "点一下，开口作答"
+    }
+    Column(
+        Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Box(
+            Modifier
+                .size(168.dp)
+                .clickable(enabled = !s.submitting, onClick = onTap),
+            contentAlignment = Alignment.Center,
+        ) {
+            VoiceRings(level, s.listen, s.speaking, Modifier.fillMaxSize())
+        }
+        Text(label, style = MaterialTheme.typography.titleSmall)
+        if (s.autoSendLeft > 0) {
+            OutlinedButton(onClick = onEdit) { Text("改一下") }
+        }
+        VoiceNote(s.voiceNote)
+    }
+}
+
+@Composable
+private fun MicTapButton(s: WindowState, onTap: () -> Unit) {
+    val listening = s.listen == ListenPhase.LISTENING
+    FilledTonalIconButton(
+        onClick = onTap,
+        enabled = !s.submitting && s.listen != ListenPhase.TRANSCRIBING,
+        colors = if (listening) IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
+        else IconButtonDefaults.filledTonalIconButtonColors(),
+        modifier = Modifier.size(44.dp),
+    ) {
+        if (s.listen == ListenPhase.TRANSCRIBING) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+        else MicGlyph(active = listening)
     }
 }
 

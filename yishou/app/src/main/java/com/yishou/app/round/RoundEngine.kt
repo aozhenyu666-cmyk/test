@@ -31,6 +31,9 @@ class RoundEngine(
      */
     val starters = MutableStateFlow<Pair<String, List<String>>?>(null)
 
+    /** 最近一手的朗读版（这一手的原文 → 口语问题），同样只在内存里。 */
+    val spoken = MutableStateFlow<Pair<String, String>?>(null)
+
     sealed interface MoveResult {
         data class Ready(val coachMove: String) : MoveResult
         data class Failed(val error: LlmError) : MoveResult
@@ -60,6 +63,7 @@ class RoundEngine(
                     latest.copy(pendingCoachMove = r.value.coachMove, pendingFace = r.value.face, updatedAt = clock()),
                 )
                 starters.value = r.value.coachMove to r.value.starters
+                spoken.value = r.value.coachMove to r.value.say
                 MoveResult.Ready(r.value.coachMove)
             }
         }
@@ -115,6 +119,7 @@ class RoundEngine(
         )
         val id = dao.saveRound(round, newBp)
         starters.value = judgement.nextCoachMove to judgement.starters
+        spoken.value = judgement.nextCoachMove to judgement.say
         return AnswerResult.Judged(round.copy(id = id), judgement)
     }
 
@@ -129,6 +134,7 @@ class RoundEngine(
             val latest = dao.getBreakpoint(task.id) ?: bp
             dao.upsertBreakpoint(latest.copy(pendingCoachMove = r.value.coachMove, pendingFace = r.value.face, updatedAt = clock()))
             starters.value = r.value.coachMove to r.value.starters
+            spoken.value = r.value.coachMove to r.value.say
         }
         return r
     }
@@ -152,6 +158,7 @@ class RoundEngine(
                 val face = ctx.forcedFace ?: r.value.face.takeIf { it > 0 } ?: keepFace ?: 0
                 dao.upsertBreakpoint(latest.copy(pendingCoachMove = r.value.coachMove, pendingFace = face, updatedAt = clock()))
                 starters.value = r.value.coachMove to r.value.starters
+                spoken.value = r.value.coachMove to r.value.say
                 MoveResult.Ready(r.value.coachMove)
             }
         }

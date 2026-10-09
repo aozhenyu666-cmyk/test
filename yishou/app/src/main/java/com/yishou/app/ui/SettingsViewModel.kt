@@ -7,6 +7,8 @@ import com.yishou.app.YishouApp
 import com.yishou.app.data.Task
 import com.yishou.app.llm.ChatClient
 import com.yishou.app.llm.LlmConfig
+import com.yishou.app.speech.SpeechApi
+import com.yishou.app.speech.SpeechConfig
 import com.yishou.app.settings.AppPrefs
 import com.yishou.app.summary.SummaryScheduler
 import com.yishou.app.system.Reminders
@@ -34,7 +36,20 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         yishou.settings.updateApp(change)
         if (reschedule) WindowScheduler.reschedule(yishou)
         if (resummary) SummaryScheduler.schedule(yishou, replace = true)
-        if (renudge) Reminders.scheduleNudge(yishou)
+        if (renudge) {
+            Reminders.scheduleNudge(yishou)
+            Reminders.scheduleIdle(yishou)
+        }
+    }
+
+    val speech: StateFlow<SpeechConfig> = yishou.settings.speech
+
+    fun saveSpeech(config: SpeechConfig): String? {
+        if (config.baseUrl.isNotBlank() && SpeechApi.endpoint(config.baseUrl, "audio/speech") == null) {
+            return "接口地址要以 https:// 或 http:// 开头"
+        }
+        yishou.settings.saveSpeech(config)
+        return null
     }
 
     val vision: StateFlow<LlmConfig> = yishou.settings.vision

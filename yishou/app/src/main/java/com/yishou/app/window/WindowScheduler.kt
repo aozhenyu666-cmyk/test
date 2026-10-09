@@ -74,6 +74,7 @@ class RescheduleReceiver : BroadcastReceiver() {
             -> {
                 WindowScheduler.reschedule(context)
                 Reminders.scheduleNudge(context)
+                Reminders.scheduleIdle(context)
                 SummaryScheduler.schedule(context, replace = intent.action != Intent.ACTION_MY_PACKAGE_REPLACED)
             }
         }

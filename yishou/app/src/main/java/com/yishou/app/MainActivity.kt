@@ -22,6 +22,9 @@ import com.yishou.app.ui.DieFace
 import com.yishou.app.ui.theme.StoneMark
 import androidx.navigation.navArgument
 import com.yishou.app.ui.AboutScreen
+import com.yishou.app.ui.BetScreen
+import com.yishou.app.ui.EchoScreen
+import com.yishou.app.ui.LogScreen
 import com.yishou.app.ui.BoardScreen
 import com.yishou.app.ui.PermissionsScreen
 import com.yishou.app.ui.SummaryScreen
@@ -75,6 +78,7 @@ class MainActivity : ComponentActivity() {
                             onEditTask = { id -> nav.navigate("task/$id") },
                             onOpenPermissions = { nav.navigate("permissions") },
                             onOpenWindow = { startActivity(Intent(this@MainActivity, WindowActivity::class.java)) },
+                            onOpenEcho = { nav.navigate("echo") },
                         )
                     }
                     composable("console") {
@@ -86,6 +90,7 @@ class MainActivity : ComponentActivity() {
                             onOpenSettings = { nav.navigate("settings") },
                             onOpenPermissions = { nav.navigate("permissions") },
                             onEditTask = { id -> nav.navigate("task/$id") },
+                            onOpen = { route -> nav.navigate(route) },
                         )
                     }
                     composable("settings") {
@@ -96,6 +101,7 @@ class MainActivity : ComponentActivity() {
                             onAbout = { nav.navigate("about") },
                             onPermissions = { nav.navigate("permissions") },
                             onWatchedApps = { nav.navigate("watched") },
+                            onLog = { nav.navigate("log") },
                         )
                     }
                     composable("newtask") {
@@ -121,6 +127,15 @@ class MainActivity : ComponentActivity() {
                     }
                     composable("status") {
                         StatusScreen(onBack = { nav.navigateUp() })
+                    }
+                    composable("log") {
+                        LogScreen(onBack = { nav.navigateUp() })
+                    }
+                    composable("bets") {
+                        BetScreen(onBack = { nav.navigateUp() })
+                    }
+                    composable("echo") {
+                        EchoScreen(onBack = { nav.navigateUp() })
                     }
                 }
                 }

@@ -18,6 +18,8 @@ data class OpeningMove(
     val starters: List<String> = emptyList(),
     /** 这一手练骰子第几面，0 表示没标 */
     val face: Int = 0,
+    /** 朗读用的口语版（只含问题），可能为空 */
+    val say: String = "",
 )
 
 /** 看屏出一手的结果。 */
@@ -26,6 +28,7 @@ data class ObservedMove(
     val coachMove: String,
     val starters: List<String> = emptyList(),
     val face: Int = 0,
+    val say: String = "",
 )
 
 /** 判定请求返回的新断点。 */
@@ -47,6 +50,8 @@ data class Judgement(
     val starters: List<String> = emptyList(),
     /** 下一手练骰子第几面，0 表示没标 */
     val nextFace: Int = 0,
+    /** 下一手朗读用的口语版，可能为空 */
+    val say: String = "",
 )
 
 /** 每晚总结的结果。 */
@@ -138,7 +143,9 @@ class LlmCoach(private val chat: ChatClient) : Coach {
                 }
             }
         }
-        return LlmResult.Err(lastError ?: LlmError.BadFormat(""))
+        val error = lastError ?: LlmError.BadFormat("")
+        com.yishou.app.log.RunLog.e(kind, "两次都没解析出约定的 JSON：${error.message}")
+        return LlmResult.Err(error)
     }
 }
 
@@ -292,7 +299,7 @@ object CoachParser {
         val obj = extractJsonObject(content)
         val move = obj.requireText("coach_move")
         val stuck = obj.optText("stuck_type")
-        return OpeningMove(move, stuck, obj.starters(), obj.face("face"))
+        return OpeningMove(move, stuck, obj.starters(), obj.face("face"), obj.say())
     }
 
     fun parseJudgement(content: String): Judgement {
@@ -317,13 +324,17 @@ object CoachParser {
             nextCoachMove = obj.requireText("next_coach_move"),
             starters = obj.starters(),
             nextFace = obj.face("next_face"),
+            say = obj.say(),
         )
     }
 
     fun parseObserved(content: String): ObservedMove {
         val obj = extractJsonObject(content)
-        return ObservedMove(obj.optText("observation"), obj.requireText("coach_move"), obj.starters(), obj.face("face"))
+        return ObservedMove(obj.optText("observation"), obj.requireText("coach_move"), obj.starters(), obj.face("face"), obj.say())
     }
+
+    /** 朗读版：缺了不算错，太长的截掉。 */
+    private fun JSONObject.say(): String = optText("say").take(80)
 
     /** 骰子面：1–6，缺了或不对时为 0。 */
     private fun JSONObject.face(key: String): Int {

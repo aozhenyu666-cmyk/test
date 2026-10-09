@@ -85,7 +85,8 @@ fun StatusScreen(onBack: () -> Unit) {
                 Line("思考页弹出", "${today.event(DayStats.GATE_SHOWN)} 次")
                 Line("答对放行", "${today.event(DayStats.GATE_PASS)} 次")
                 Line("离线放行", "${today.event(DayStats.OFFLINE_PASS)} / ${prefs.offlineDailyLimit} 次")
-                Line("窗口里被拉回", "${today.event(DayStats.WINDOW_BLOCK)} 次")
+                Line("开局规则拦下", "${today.event(DayStats.WINDOW_BLOCK)} 次")
+                Line("没应声被拉回", "${today.event(DayStats.PULL_BACK)} 次")
                 Line("陪练看屏", "${today.event(DayStats.LOOK)} 次")
             }
 

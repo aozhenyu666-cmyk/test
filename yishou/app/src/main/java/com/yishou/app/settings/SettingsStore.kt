@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
 import com.yishou.app.llm.LlmConfig
+import com.yishou.app.speech.SpeechConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -38,6 +39,29 @@ class SettingsStore(context: Context) {
         apiKey = prefs.getString(KEY_V_API_KEY, "").orEmpty(),
         model = prefs.getString(KEY_V_MODEL, "").orEmpty(),
         jsonMode = false,
+    )
+
+    private val _speech = MutableStateFlow(readSpeech())
+    /** 语音接口（可选）：听写和朗读 */
+    val speech: StateFlow<SpeechConfig> = _speech.asStateFlow()
+
+    fun saveSpeech(config: SpeechConfig) {
+        prefs.edit()
+            .putString(KEY_S_BASE_URL, config.baseUrl.trim())
+            .putString(KEY_S_API_KEY, config.apiKey.trim())
+            .putString(KEY_S_STT, config.sttModel.trim())
+            .putString(KEY_S_TTS, config.ttsModel.trim())
+            .putString(KEY_S_VOICE, config.ttsVoice.trim())
+            .apply()
+        _speech.value = readSpeech()
+    }
+
+    private fun readSpeech() = SpeechConfig(
+        baseUrl = prefs.getString(KEY_S_BASE_URL, "").orEmpty(),
+        apiKey = prefs.getString(KEY_S_API_KEY, "").orEmpty(),
+        sttModel = prefs.getString(KEY_S_STT, "").orEmpty(),
+        ttsModel = prefs.getString(KEY_S_TTS, "").orEmpty(),
+        ttsVoice = prefs.getString(KEY_S_VOICE, "").orEmpty(),
     )
 
     private val _prefs = MutableStateFlow(AppPrefs.fromJson(prefs.getString(KEY_APP_PREFS, null)))
@@ -81,6 +105,11 @@ class SettingsStore(context: Context) {
         private const val KEY_V_BASE_URL = "vision_base_url"
         private const val KEY_V_API_KEY = "vision_api_key"
         private const val KEY_V_MODEL = "vision_model"
+        private const val KEY_S_BASE_URL = "speech_base_url"
+        private const val KEY_S_API_KEY = "speech_api_key"
+        private const val KEY_S_STT = "speech_stt_model"
+        private const val KEY_S_TTS = "speech_tts_model"
+        private const val KEY_S_VOICE = "speech_tts_voice"
 
         /**
          * 少数机型在系统更新或备份恢复后，Keystore 里的密钥会对不上，打开加密文件会抛异常。

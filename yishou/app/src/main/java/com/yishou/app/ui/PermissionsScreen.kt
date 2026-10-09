@@ -72,7 +72,7 @@ object PermissionStatus {
 private val MANUAL_ITEMS = listOf(
     "restricted" to "如果无障碍里的「一手」是灰色、点不开：设置 → 应用与权限 → 应用管理 → 一手 → 右上角 ⋮ → 允许受限制的设置，再回来开启无障碍。",
     "autostart" to "允许自启动：i管家 → 应用管理 → 权限管理 → 自启动（或 设置 → 应用与权限 → 权限管理 → 自启动），打开「一手」。",
-    "popup" to "允许后台弹出界面：设置 → 应用与权限 → 应用管理 → 一手 → 权限 → 后台弹出界面 → 允许。思考页靠它弹出来。",
+    "popup" to "允许后台弹出界面：设置 → 应用与权限 → 应用管理 → 一手 → 权限 → 后台弹出界面 → 允许。思考页和陪练窗口的“拉回”都靠它弹出来。",
     "background" to "允许后台高耗电：设置 → 电池 → 后台耗电管理 → 一手 → 允许后台高耗电。",
     "lock" to "在最近任务里把「一手」下拉锁定，清理后台时不被杀掉。",
 )
@@ -95,6 +95,9 @@ fun PermissionsScreen(onBack: () -> Unit) {
     val notif = remember(refreshKey) { PermissionStatus.notifications(context) }
     val exact = remember(refreshKey) { PermissionStatus.exactAlarm(context) }
     val battery = remember(refreshKey) { PermissionStatus.batteryUnrestricted(context) }
+    val mic = remember(refreshKey) { app.voice.hasPermission() }
+    var askedMic by remember { mutableStateOf(false) }
+    val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refreshKey++ }
     val wallpaper = remember(refreshKey) { BoardWallpaperService.isActive(context) }
     val widget = remember(refreshKey) { BoardWidget.ids(context).isNotEmpty() }
     var widgetNote by remember { mutableStateOf<String?>(null) }
@@ -135,6 +138,20 @@ fun PermissionsScreen(onBack: () -> Unit) {
                         context,
                         Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName),
                     )
+                }
+            }
+
+            PermissionCard(
+                title = "麦克风",
+                detail = "语音陪练：只在你点麦克风、或陪练读完题等你回答时录这一段话，转成文字后就丢掉，不保存录音。",
+                ok = mic,
+                action = "去开启",
+            ) {
+                if (!askedMic) {
+                    askedMic = true
+                    micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                } else {
+                    safeStart(context, appDetails(context))
                 }
             }
 
