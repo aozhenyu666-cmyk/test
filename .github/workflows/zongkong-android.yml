@@ -1,0 +1,105 @@
+name: zongkong-android
+
+# 「总控」Android 应用：改动 zongkong/ 下的文件就跑单元测试、打包调试版 APK，
+# 再在模拟器上冒烟测试一遍（严管时打开拦截名单里的应用会不会被弹回），截图放在 Artifacts 里。
+on:
+  push:
+    paths:
+      - "zongkong/**"
+      - ".github/workflows/zongkong-android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: zongkong
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests and debug APK
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: zongkong-debug-apk
+          path: zongkong/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zongkong-test-reports
+          path: zongkong/app/build/reports/tests/
+
+  smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: zongkong-debug-apk
+          path: zongkong/apk
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Emulator smoke test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: bash zongkong/scripts/smoke.sh zongkong/apk/app-debug.apk zongkong/shots
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zongkong-smoke
+          path: zongkong/shots/
+          if-no-files-found: warn
+
+  # 固定下载地址（手机浏览器直接打开即可下载，始终是最新一次通过测试的构建）：
+  # https://github.com/aozhenyu666-cmyk/test/releases/download/zongkong-latest/zongkong.apk
+  release:
+    needs: [build, smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: zongkong-debug-apk
+          path: apk
+      - name: Publish to release zongkong-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp apk/app-debug.apk zongkong.apk
+          gh release delete zongkong-latest --cleanup-tag --yes || true
+          gh release create zongkong-latest zongkong.apk \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "总控 最新调试版" \
+            --notes "由提交 ${GITHUB_SHA::7} 自动构建，已通过单元测试和模拟器冒烟测试。直接安装 zongkong.apk，可覆盖旧版本，数据保留。"

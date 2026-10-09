@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 网络：只连你自己配置的 AI 接口和 Notion -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 常驻状态通知、到点/超时/沉默提醒（Android 13 起需要你同意） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 权限页里请求“不限制电池优化”，减少无障碍服务被系统关掉 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- 拦截名单的选择列表只需要“桌面上能打开的应用” -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".ZkApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Zongkong">
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 严管拦截页：独立任务，不出现在最近任务里 -->
+        <activity
+            android:name=".guard.BlockActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.zongkong.app.block"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- 无障碍服务：只读前台应用包名，见 res/xml/guard_service.xml -->
+        <service
+            android:name=".guard.GuardService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/guard_service" />
+        </service>
+    </application>
+</manifest>

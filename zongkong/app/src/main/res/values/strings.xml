@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">总控</string>
+    <string name="accessibility_description">总控用它判断你打开的是不是拦截名单里的应用：严管时（关卡没验收、太久没汇报、娱乐超额）把你弹回总控。只读取前台应用的包名，不读取屏幕内容和输入。随时可以在这里关闭，但关闭的时间会记成“失联”，写进日终验收。</string>
+</resources>

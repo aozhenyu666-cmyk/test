@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- 只在调试版里：CI 的模拟器冒烟测试用 adb 广播预置配置 -->
+        <receiver
+            android:name=".debug.SeedReceiver"
+            android:exported="true"
+            tools:ignore="ExportedReceiver"
+            xmlns:tools="http://schemas.android.com/tools">
+            <intent-filter>
+                <action android:name="com.zongkong.app.SEED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
