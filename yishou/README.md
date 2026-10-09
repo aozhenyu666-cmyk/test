@@ -4,11 +4,11 @@
 
 ## 拿到 APK
 
-每次推送 `yishou/` 下的改动，GitHub Actions 的 `yishou-android` 流程会跑单元测试并打包调试版 APK：
+手机浏览器打开这个地址直接下载（始终是最新一次构建）：
 
-1. 打开仓库的 Actions → `yishou-android` → 最新一次运行
-2. 页面底部 Artifacts 下载 `yishou-debug-apk`（zip，解压后是 `app-debug.apk`）
-3. 传到手机安装（需要允许“安装未知应用”）
+https://github.com/aozhenyu666-cmyk/test/releases/download/yishou-latest/yishou.apk
+
+每次推送 `yishou/` 下的改动，GitHub Actions 的 `yishou-android` 流程会跑单元测试、打包调试版 APK，并更新上面这个地址。
 
 APK 用仓库里固定的调试签名（`app/debug.keystore`），以后的新版本可以直接覆盖安装，本机数据保留。
 
