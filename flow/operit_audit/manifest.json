@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "toolpkg_id": "local.operit_audit",
+  "version": "0.1.0",
+  "api_version": "1.0.1",
+  "main": "dist/main.js",
+  "display_name": { "zh": "系统体检", "en": "Operit Audit", "default": "Operit Audit" },
+  "description": {
+    "zh": "只读的自动体检 + 自测：检查工作流、状态文件、判断链和锁队列，模拟异常验证判断逻辑，输出 PASS/WARN/FAIL。不改任何东西。",
+    "en": "Read-only audit and self-test for the Operit setup.",
+    "default": "Read-only audit and self-test."
+  },
+  "enabled_by_default": false,
+  "subpackages": [
+    {
+      "id": "operit_audit",
+      "entry": "dist/packages/operit_audit.js",
+      "enabled_by_default": true,
+      "display_name": { "zh": "系统体检", "en": "Operit Audit" },
+      "description": { "zh": "audit / self_test", "en": "audit / self_test" }
+    }
+  ],
+  "resources": [],
+  "workflow_templates": []
+}
