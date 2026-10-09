@@ -57,8 +57,9 @@ class WorkActions(private val context: Context, private val store: Store, privat
             SyncEngine(notion, rnd).sync(store.workRef, dbs(), now())
         } catch (e: Exception) {
             Log.e(TAG, "同步出错", e)
-            store.updateWork { it.copy(lastSyncAt = now(), lastSyncOk = false, lastSyncMessage = "同步出错：${e.message}") }
-            return@withLock "同步出错：${e.message}"
+            val msg = "同步出错：${e.message ?: e.javaClass.simpleName}"
+            store.updateWork { it.copy(lastSyncAt = now(), lastSyncOk = false, lastSyncMessage = msg) }
+            return@withLock msg
         }
         Reminders.reschedule(context)
         r.message

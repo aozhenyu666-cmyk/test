@@ -1,6 +1,8 @@
 package com.zongkong.core
 
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -50,7 +52,13 @@ object Net {
     data class Raw(val code: Int, val body: String)
 
     /** 发一个请求，拿回状态码和正文；网络错误转成中文说明。 */
-    suspend fun send(http: OkHttpClient, request: Request): ApiResult<Raw> {
+    suspend fun send(http: OkHttpClient, request: Request): ApiResult<Raw> = withContext(Dispatchers.IO) { sendOnIo(http, request) }
+
+    /**
+     * 读响应正文也是网络读取，必须在后台线程：Android 在主线程上读网络会直接抛
+     * NetworkOnMainThreadException（界面上点“同步”“提交验收”时就是从主线程发起的）。
+     */
+    private suspend fun sendOnIo(http: OkHttpClient, request: Request): ApiResult<Raw> {
         val response = try {
             http.newCall(request).await()
         } catch (e: InterruptedIOException) {
