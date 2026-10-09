@@ -11,6 +11,7 @@ import com.yishou.app.llm.CoachContext
 import com.yishou.app.llm.Judgement
 import com.yishou.app.llm.LlmError
 import com.yishou.app.llm.LlmResult
+import com.yishou.app.llm.ObservedMove
 import com.yishou.app.llm.OpeningMove
 import com.yishou.app.llm.SummaryResult
 import kotlinx.coroutines.flow.Flow
@@ -20,6 +21,8 @@ class FakeCoach : Coach {
     var openingResult: LlmResult<OpeningMove> = LlmResult.Err(LlmError.NotConfigured)
     var judgeResult: LlmResult<Judgement> = LlmResult.Err(LlmError.NotConfigured)
     var summaryResult: LlmResult<SummaryResult> = LlmResult.Err(LlmError.NotConfigured)
+    var observeResult: LlmResult<ObservedMove> = LlmResult.Err(LlmError.NotConfigured)
+    var lastScreen: String? = null
     var openingCalls = 0
     var judgeCalls = 0
     var summaryCalls = 0
@@ -43,6 +46,16 @@ class FakeCoach : Coach {
         lastAnswer = answer
         lastContext = context
         return judgeResult
+    }
+
+    override suspend fun observe(
+        task: Task,
+        breakpoint: Breakpoint,
+        screen: String,
+        context: CoachContext,
+    ): LlmResult<ObservedMove> {
+        lastScreen = screen
+        return observeResult
     }
 
     override suspend fun summary(task: Task?, breakpoint: Breakpoint?, rounds: List<Round>): LlmResult<SummaryResult> {

@@ -59,6 +59,9 @@ class BoardViewModel(app: Application) : AndroidViewModel(app) {
     private val engine = yishou.engine
     val attachment = AttachmentController(yishou, viewModelScope)
 
+    /** 当前这一手配的起手式 */
+    val starters = engine.starters
+
     private val _state = MutableStateFlow(BoardState())
     val state: StateFlow<BoardState> = _state.asStateFlow()
 

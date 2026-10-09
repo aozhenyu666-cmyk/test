@@ -11,6 +11,7 @@ import com.yishou.app.data.RoundSource
 import com.yishou.app.data.Task
 import com.yishou.app.round.AnswerRules
 import com.yishou.app.round.RoundEngine
+import com.yishou.app.look.ScreenLookService
 import com.yishou.app.system.AttachmentController
 import com.yishou.app.system.Reminders
 import kotlinx.coroutines.Job
@@ -74,6 +75,10 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
     private var tickJob: Job? = null
     private var reminderJob: Job? = null
     private var spokenMove: String? = null
+    private var bpJob: Job? = null
+
+    /** 当前这一手配的起手式 */
+    val starters = engine.starters
 
     init {
         viewModelScope.launch { speaker.problem.collect { p -> _state.update { it.copy(ttsProblem = p) } } }
@@ -105,14 +110,30 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
             }
             if (span != null) {
                 startTicker(span)
-                if (task != null) ensureMove(task)
+                if (task != null) {
+                    observeBreakpoint(task.id)
+                    ensureMove(task)
+                }
+            }
+        }
+    }
+
+    /** 断点可能被“看一眼”改掉（换了一手），页面要跟着变。 */
+    private fun observeBreakpoint(taskId: Long) {
+        bpJob?.cancel()
+        bpJob = viewModelScope.launch {
+            dao.observeBreakpoint(taskId).collect { bp ->
+                val move = bp?.pendingCoachMove?.takeIf { it.isNotBlank() }
+                val changed = move != null && move != _state.value.coachMove && !_state.value.submitting
+                _state.update { it.copy(breakpoint = bp, coachMove = if (it.submitting) it.coachMove else move ?: it.coachMove) }
+                if (changed) presentMove()
             }
         }
     }
 
     /** 手动开始一个窗口（时长按设置）。 */
     fun startNow() {
-        yishou.settings.updateApp { it.copy(manualWindowStart = System.currentTimeMillis()) }
+        yishou.settings.updateApp { it.copy(manualWindowStart = System.currentTimeMillis(), windowPauseUntil = 0) }
         refresh()
     }
 
@@ -146,6 +167,7 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
     private fun onEnded() {
         tickJob?.cancel()
         Reminders.cancelPauseEnd(yishou)
+        yishou.settings.updateApp { it.copy(windowPauseUntil = 0) }
         reminderJob?.cancel()
         speaker.stop()
         val span = _state.value.span
@@ -185,7 +207,9 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
         if (move != spokenMove) {
             spokenMove = move
             _state.update { it.copy(reminders = 0, noResponse = false) }
-            if (yishou.settings.app.value.ttsEnabled) speaker.speak(move)
+            // “看一眼”出的一手，看屏服务在页面不可见时已经读过了
+            val alreadySpoken = move == ScreenLookService.lastLookMove && !WindowActivity.isVisible
+            if (yishou.settings.app.value.ttsEnabled && !alreadySpoken) speaker.speak(move)
         }
         scheduleReminders()
     }
@@ -289,12 +313,15 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
         attachment.clear()
         val until = System.currentTimeMillis() + minutes * 60_000L
         Reminders.schedulePauseEnd(yishou, until)
+        // 记进设置：休息期间开局规则不拦（无障碍服务读这里）
+        yishou.settings.updateApp { it.copy(windowPauseUntil = until) }
         _state.update { it.copy(paused = true, pauseUntil = until, answer = "", hint = null, judgeError = null) }
     }
 
     /** 继续下一轮：重新朗读这一手，从头计时。 */
     fun resume() {
         Reminders.cancelPauseEnd(yishou)
+        yishou.settings.updateApp { it.copy(windowPauseUntil = 0) }
         _state.update { it.copy(paused = false, pauseUntil = 0) }
         spokenMove = null
         presentMove()

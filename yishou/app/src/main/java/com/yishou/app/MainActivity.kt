@@ -15,6 +15,7 @@ import com.yishou.app.ui.PermissionsScreen
 import com.yishou.app.ui.SummaryScreen
 import com.yishou.app.ui.WatchedAppsScreen
 import com.yishou.app.ui.SettingsScreen
+import com.yishou.app.ui.StatusScreen
 import com.yishou.app.ui.TaskEditScreen
 import com.yishou.app.ui.theme.YishouTheme
 import com.yishou.app.window.WindowActivity
@@ -36,6 +37,7 @@ class MainActivity : ComponentActivity() {
                             onOpenPermissions = { nav.navigate("permissions") },
                             onOpenWindow = { startActivity(Intent(this@MainActivity, WindowActivity::class.java)) },
                             onOpenSummary = { nav.navigate("summary") },
+                            onOpenStatus = { nav.navigate("status") },
                         )
                     }
                     composable("settings") {
@@ -68,6 +70,9 @@ class MainActivity : ComponentActivity() {
                     }
                     composable("summary") {
                         SummaryScreen(onBack = { nav.navigateUp() })
+                    }
+                    composable("status") {
+                        StatusScreen(onBack = { nav.navigateUp() })
                     }
                 }
             }

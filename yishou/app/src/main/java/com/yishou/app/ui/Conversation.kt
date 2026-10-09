@@ -5,7 +5,14 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -32,6 +39,7 @@ import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -100,6 +108,28 @@ fun UserBubble(text: String) {
     }
 }
 
+/** 落子：有效是一颗黑子，不算是一颗空心子，出现时带一点弹性。 */
+@Composable
+fun Stone(filled: Boolean, color: Color, animateKey: Any) {
+    val scale = remember(animateKey) { Animatable(0f) }
+    LaunchedEffect(animateKey) {
+        scale.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = 380f))
+    }
+    Canvas(
+        Modifier
+            .size(16.dp)
+            .graphicsLayer(scaleX = scale.value, scaleY = scale.value),
+    ) {
+        val r = size.minDimension / 2
+        if (filled) {
+            drawCircle(color, r)
+            drawCircle(Color.White.copy(alpha = 0.25f), r * 0.35f, center = Offset(r * 0.7f, r * 0.7f))
+        } else {
+            drawCircle(color, r - 1.5f, style = Stroke(width = 3f))
+        }
+    }
+}
+
 /** 判定结果：一行标签 + 反馈。 */
 @Composable
 fun VerdictLine(round: Round) {
@@ -110,11 +140,15 @@ fun VerdictLine(round: Round) {
     }
     val label = when {
         !round.judged -> "离线保存，未判定"
-        round.effective -> "✓ 有效 · ${round.moveType}"
-        else -> "✗ 这一手不算"
+        round.effective -> "有效 · ${round.moveType}"
+        else -> "这一手不算"
     }
     Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
-        Text(label, color = color, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Stone(filled = round.effective, color = color, animateKey = round.id to round.createdAt)
+            Spacer(Modifier.size(8.dp))
+            Text(label, color = color, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+        }
         if (round.feedback.isNotBlank()) Text(round.feedback, style = MaterialTheme.typography.bodyMedium)
         if (!round.effective && round.reason.isNotBlank()) {
             Text(round.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -199,6 +233,7 @@ private fun newPhotoUri(context: Context): Uri {
 @Composable
 fun AnswerComposer(
     answer: String,
+    starters: List<String> = emptyList(),
     onAnswerChange: (String) -> Unit,
     attachment: Attachment?,
     onAttach: (Uri) -> Unit,
@@ -251,6 +286,19 @@ fun AnswerComposer(
                 is Attachment.Failed -> Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(attachment.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                     TextButton(onClick = onClearAttachment) { Text("关闭") }
+                }
+            }
+            if (starters.isNotEmpty() && !submitting) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    starters.forEach { st ->
+                        SuggestionChip(
+                            onClick = {
+                                val head = st.removeSuffix("……").removeSuffix("...").removeSuffix("…")
+                                onAnswerChange(if (answer.isBlank()) head else answer.trimEnd() + head)
+                            },
+                            label = { Text(st, style = MaterialTheme.typography.labelMedium) },
+                        )
+                    }
                 }
             }
             hint?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }

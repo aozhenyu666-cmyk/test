@@ -53,6 +53,11 @@ sealed class LlmError(val message: String) {
     }
 }
 
+/** 记录每次请求的用量，盘点页用。kind 是请求类型（开局、判定、识图……）。 */
+fun interface UsageSink {
+    fun record(kind: String, ok: Boolean, promptTokens: Int, completionTokens: Int, millis: Long, requestChars: Int)
+}
+
 sealed interface LlmResult<out T> {
     data class Ok<T>(val value: T) : LlmResult<T>
     data class Err(val error: LlmError) : LlmResult<Nothing>
@@ -65,21 +70,22 @@ sealed interface LlmResult<out T> {
 class ChatClient(
     private val config: () -> LlmConfig,
     private val http: OkHttpClient = defaultHttpClient(),
+    private val usage: UsageSink? = null,
 ) {
 
-    suspend fun complete(system: String, user: String): LlmResult<String> {
+    suspend fun complete(system: String, user: String, kind: String = "其他"): LlmResult<String> {
         val cfg = config()
         val messages = JSONArray()
             .put(JSONObject().put("role", "system").put("content", system))
             .put(JSONObject().put("role", "user").put("content", user))
-        return send(cfg, messages, cfg.jsonMode)
+        return send(cfg, messages, cfg.jsonMode, kind, system.length + user.length)
     }
 
     /**
      * 带一张图片的请求（OpenAI 兼容的 image_url 格式，图片用 data URL 内嵌）。
      * 只用于识图模型；返回纯文本，不要求 JSON。
      */
-    suspend fun completeWithImage(system: String, text: String, imageDataUrl: String): LlmResult<String> {
+    suspend fun completeWithImage(system: String, text: String, imageDataUrl: String, kind: String = "识图"): LlmResult<String> {
         val cfg = config()
         val content = JSONArray()
             .put(JSONObject().put("type", "text").put("text", text))
@@ -87,10 +93,25 @@ class ChatClient(
         val messages = JSONArray()
             .put(JSONObject().put("role", "system").put("content", system))
             .put(JSONObject().put("role", "user").put("content", content))
-        return send(cfg, messages, jsonMode = false)
+        return send(cfg, messages, jsonMode = false, kind = kind, requestChars = system.length + text.length)
     }
 
-    private suspend fun send(cfg: LlmConfig, messages: JSONArray, jsonMode: Boolean): LlmResult<String> {
+    private suspend fun send(
+        cfg: LlmConfig,
+        messages: JSONArray,
+        jsonMode: Boolean,
+        kind: String,
+        requestChars: Int,
+    ): LlmResult<String> {
+        val started = System.currentTimeMillis()
+        val tokens = IntArray(2)
+        val result = sendOnce(cfg, messages, jsonMode, tokens)
+        usage?.record(kind, result is LlmResult.Ok, tokens[0], tokens[1], System.currentTimeMillis() - started, requestChars)
+        return result
+    }
+
+    /** tokens 用来带回响应里的 usage：[输入 token, 输出 token]。 */
+    private suspend fun sendOnce(cfg: LlmConfig, messages: JSONArray, jsonMode: Boolean, tokens: IntArray): LlmResult<String> {
         if (!cfg.isComplete) return LlmResult.Err(LlmError.NotConfigured)
 
         val body = JSONObject()
@@ -127,6 +148,7 @@ class ChatClient(
             if (!resp.isSuccessful) {
                 LlmResult.Err(LlmError.Http(resp.code, errorDetail(text)))
             } else {
+                extractUsage(text).let { (p, c) -> tokens[0] = p; tokens[1] = c }
                 extractContent(text)
             }
         }
@@ -168,6 +190,14 @@ class ChatClient(
             }
         } catch (e: JSONException) {
             LlmResult.Err(LlmError.BadFormat("接口响应结构不对：${responseText.take(120)}"))
+        }
+
+        /** 取出 usage.prompt_tokens / completion_tokens，取不到为 0。 */
+        fun extractUsage(responseText: String): Pair<Int, Int> = try {
+            val u = JSONObject(responseText).optJSONObject("usage")
+            (u?.optInt("prompt_tokens", 0) ?: 0) to (u?.optInt("completion_tokens", 0) ?: 0)
+        } catch (e: JSONException) {
+            0 to 0
         }
 
         /** OpenAI 兼容接口的错误一般是 {"error": {"message": "..."}}，取出 message，取不到就原样截断。 */

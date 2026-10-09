@@ -14,6 +14,15 @@ import java.time.format.DateTimeFormatter
 data class OpeningMove(
     val coachMove: String,
     val stuckType: String,
+    /** 帮用户开口的半句话，可能为空 */
+    val starters: List<String> = emptyList(),
+)
+
+/** 看屏出一手的结果。 */
+data class ObservedMove(
+    val observation: String,
+    val coachMove: String,
+    val starters: List<String> = emptyList(),
 )
 
 /** 判定请求返回的新断点。 */
@@ -32,6 +41,7 @@ data class Judgement(
     /** 模型没给断点时为 null，保持原断点不变 */
     val breakpoint: BreakpointUpdate?,
     val nextCoachMove: String,
+    val starters: List<String> = emptyList(),
 )
 
 /** 每晚总结的结果。 */
@@ -65,6 +75,14 @@ interface Coach {
         context: CoachContext = CoachContext(),
     ): LlmResult<Judgement>
     suspend fun summary(task: Task?, breakpoint: Breakpoint?, rounds: List<Round>): LlmResult<SummaryResult>
+
+    /** 看了一眼屏幕（screen 是识图模型的描述）之后，针对屏幕上这一步出一手。 */
+    suspend fun observe(
+        task: Task,
+        breakpoint: Breakpoint,
+        screen: String,
+        context: CoachContext = CoachContext(),
+    ): LlmResult<ObservedMove>
 }
 
 /**
@@ -75,7 +93,7 @@ interface Coach {
 class LlmCoach(private val chat: ChatClient) : Coach {
 
     override suspend fun opening(task: Task, breakpoint: Breakpoint, context: CoachContext): LlmResult<OpeningMove> =
-        requestJson(CoachMessages.opening(task, breakpoint, context), CoachParser::parseOpening)
+        requestJson(CoachMessages.opening(task, breakpoint, context), "开局", CoachParser::parseOpening)
 
     override suspend fun judge(
         task: Task,
@@ -84,15 +102,23 @@ class LlmCoach(private val chat: ChatClient) : Coach {
         answer: String,
         context: CoachContext,
     ): LlmResult<Judgement> =
-        requestJson(CoachMessages.judge(task, breakpoint, coachMove, answer, context), CoachParser::parseJudgement)
+        requestJson(CoachMessages.judge(task, breakpoint, coachMove, answer, context), "判定", CoachParser::parseJudgement)
 
     override suspend fun summary(task: Task?, breakpoint: Breakpoint?, rounds: List<Round>): LlmResult<SummaryResult> =
-        requestJson(CoachMessages.summary(task, breakpoint, rounds), CoachParser::parseSummary)
+        requestJson(CoachMessages.summary(task, breakpoint, rounds), "总结", CoachParser::parseSummary)
 
-    private suspend fun <T> requestJson(user: String, parse: (String) -> T): LlmResult<T> {
+    override suspend fun observe(
+        task: Task,
+        breakpoint: Breakpoint,
+        screen: String,
+        context: CoachContext,
+    ): LlmResult<ObservedMove> =
+        requestJson(CoachMessages.observe(task, breakpoint, screen, context), "看屏出题", CoachParser::parseObserved)
+
+    private suspend fun <T> requestJson(user: String, kind: String, parse: (String) -> T): LlmResult<T> {
         var lastError: LlmError? = null
         repeat(2) {
-            when (val r = chat.complete(Prompts.SYSTEM, user)) {
+            when (val r = chat.complete(Prompts.SYSTEM, user, kind)) {
                 is LlmResult.Err -> return r
                 is LlmResult.Ok -> try {
                     return LlmResult.Ok(parse(r.value))
@@ -171,6 +197,22 @@ object CoachMessages {
         append(Prompts.SUMMARY_FORMAT)
     }
 
+    fun observe(task: Task, breakpoint: Breakpoint, screen: String, context: CoachContext = CoachContext()): String = buildString {
+        appendLine("请求类型：看屏出一手。")
+        appendLine("用户刚让你看了一眼他的手机屏幕。请针对屏幕上他正在做的这一步出一手：")
+        appendLine("问题必须落在屏幕上的具体内容（这道题、这个选项、这段材料），并尽量和断点接上。")
+        appendLine("如果屏幕上的内容和学习任务无关，就用一句话把他拉回任务，再出问题。")
+        appendLine()
+        appendTask(task)
+        appendBreakpoint(breakpoint)
+        appendContext(context)
+        appendLine("【屏幕描述】")
+        appendLine(screen)
+        appendLine()
+        appendLine("只返回 JSON，格式如下：")
+        append(Prompts.OBSERVE_FORMAT)
+    }
+
     fun sourceName(source: String) = when (source) {
         RoundSource.GATE -> "入口思考页"
         RoundSource.WINDOW -> "陪练窗口"
@@ -222,7 +264,7 @@ object CoachParser {
         val obj = extractJsonObject(content)
         val move = obj.requireText("coach_move")
         val stuck = obj.optText("stuck_type")
-        return OpeningMove(move, stuck)
+        return OpeningMove(move, stuck, obj.starters())
     }
 
     fun parseJudgement(content: String): Judgement {
@@ -245,7 +287,24 @@ object CoachParser {
             feedback = obj.optText("feedback"),
             breakpoint = bp,
             nextCoachMove = obj.requireText("next_coach_move"),
+            starters = obj.starters(),
         )
+    }
+
+    fun parseObserved(content: String): ObservedMove {
+        val obj = extractJsonObject(content)
+        return ObservedMove(obj.optText("observation"), obj.requireText("coach_move"), obj.starters())
+    }
+
+    /** 起手式：最多两个，去空、去重、截短。缺了不算错。 */
+    private fun JSONObject.starters(): List<String> {
+        val arr = optJSONArray("starters") ?: return emptyList()
+        return (0 until arr.length())
+            .map { arr.optString(it).trim() }
+            .filter { it.isNotEmpty() && it != "null" }
+            .distinct()
+            .take(2)
+            .map { it.take(24) }
     }
 
     fun parseSummary(content: String): SummaryResult {

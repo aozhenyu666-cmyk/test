@@ -80,8 +80,10 @@ class GateActivity : ComponentActivity() {
                     }
                 }
                 val attachment by vm.attachment.state.collectAsStateWithLifecycle()
+                val startersPair by vm.starters.collectAsStateWithLifecycle()
                 GateScreen(
                     s = s,
+                    starters = startersPair?.takeIf { it.first == s.coachMove }?.second.orEmpty(),
                     attachment = attachment,
                     onAttach = vm::attach,
                     onClearAttachment = vm.attachment::clear,
@@ -159,6 +161,9 @@ class GateActivity : ComponentActivity() {
         private const val EXTRA_PACKAGE = "package"
         private const val EXTRA_GROUP = "group"
 
+        /** 开局规则拦下的应用用这个组名打开思考页：只显示“回到陪练” */
+        const val WINDOW_GROUP = "__window__"
+
         /** 思考页正在前台。无障碍服务据此避免重复打开。 */
         @Volatile
         var isShowing = false
@@ -179,6 +184,7 @@ class GateActivity : ComponentActivity() {
 @Composable
 private fun GateScreen(
     s: GateState,
+    starters: List<String>,
     attachment: Attachment?,
     onAttach: (Uri) -> Unit,
     onClearAttachment: () -> Unit,
@@ -220,7 +226,14 @@ private fun GateScreen(
             }
 
             if (s.inWindow) {
-                Text("陪练窗口进行中。窗口里不放行，先回到陪练。", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    if (s.group == GateActivity.WINDOW_GROUP) {
+                        "陪练窗口进行中，「${s.appLabel}」不在这一局允许的应用里。想歇一下就在陪练里点“先停”。"
+                    } else {
+                        "陪练窗口进行中。窗口里不放行，先回到陪练。"
+                    },
+                    style = MaterialTheme.typography.bodyLarge,
+                )
                 Button(onClick = onOpenWindow, modifier = Modifier.fillMaxWidth()) { Text("回到陪练") }
                 OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("回到桌面") }
                 return@Column
@@ -260,6 +273,7 @@ private fun GateScreen(
 
             if (s.coachMove != null) {
                 AnswerComposer(
+                    starters = starters,
                     answer = s.answer,
                     onAnswerChange = onAnswerChange,
                     attachment = attachment,

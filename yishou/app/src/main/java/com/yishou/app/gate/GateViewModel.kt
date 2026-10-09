@@ -11,6 +11,7 @@ import com.yishou.app.data.RoundSource
 import com.yishou.app.data.Task
 import com.yishou.app.llm.CoachMessages
 import com.yishou.app.round.AnswerRules
+import com.yishou.app.stats.DayStats
 import com.yishou.app.system.AttachmentController
 import com.yishou.app.round.RoundEngine
 import com.yishou.app.window.WindowClock
@@ -61,6 +62,9 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
 
     val attachment = AttachmentController(yishou, viewModelScope)
 
+    /** 当前这一手配的起手式 */
+    val starters = engine.starters
+
     private val _state = MutableStateFlow(GateState())
     val state: StateFlow<GateState> = _state.asStateFlow()
 
@@ -75,7 +79,8 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val prefs = yishou.settings.app.value
             val now = System.currentTimeMillis()
-            val inWindow = pkg != null && WindowClock.active(now, prefs, ZoneId.systemDefault()) != null
+            val inWindow = pkg != null &&
+                (group == GateActivity.WINDOW_GROUP || WindowClock.active(now, prefs, ZoneId.systemDefault()) != null)
             val task = dao.getCurrentTask()
             val bp = task?.let { dao.getBreakpoint(it.id) }
             val last = dao.lastRound()
@@ -150,6 +155,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
                     if (r.round.effective && !s.isTest && !s.inWindow) {
                         val minutes = yishou.settings.app.value.passMinutesFor(s.group)
                         engine.grantPass(s.group, minutes, r.round.id)
+                        yishou.stats.event(DayStats.GATE_PASS)
                         attachment.clear()
                         _state.update { it.copy(submitting = false, lastRound = r.round, breakpoint = bp, passMinutes = minutes) }
                     } else {
@@ -191,6 +197,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             }
             val minutes = yishou.settings.app.value.offlinePassMinutes
             engine.saveOffline(task, move, text, s.triggerPackage, s.group, minutes)
+            yishou.stats.event(DayStats.OFFLINE_PASS)
             attachment.clear()
             _state.update { it.copy(submitting = false, passMinutes = minutes, offlineLeft = left - 1) }
         }

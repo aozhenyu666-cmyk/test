@@ -178,4 +178,25 @@ class RoundEngineTest {
         assertEquals(7 * 60L, c.gapMinutes)
         assertEquals("上次原话", c.lastAnswer)
     }
+
+    @Test
+    fun observeReplacesPendingMoveAndKeepsBreakpoint() = runTest {
+        dao.breakpoints[7] = Breakpoint(7, "已知", "卡点", "下一问", pendingCoachMove = "旧的一手", updatedAt = 1)
+        coach.observeResult = LlmResult.Ok(com.yishou.app.llm.ObservedMove("在做第 7 题", "第 7 题你先排除了哪个选项？", listOf("我先排除……")))
+        val r = engine.observe(task, "粉笔，第 7 题，选项 A-D，未作答")
+        assertTrue(r is LlmResult.Ok)
+        assertEquals("粉笔，第 7 题，选项 A-D，未作答", coach.lastScreen)
+        val bp = dao.breakpoints[7]!!
+        assertEquals("第 7 题你先排除了哪个选项？", bp.pendingCoachMove)
+        assertEquals("已知", bp.known)
+        assertEquals("第 7 题你先排除了哪个选项？" to listOf("我先排除……"), engine.starters.value)
+    }
+
+    @Test
+    fun judgeStartersFollowNextMove() = runTest {
+        dao.breakpoints[7] = Breakpoint(7, "k", "s", "q", pendingCoachMove = "这一手", updatedAt = 1)
+        coach.judgeResult = LlmResult.Ok(Judgement(true, "比较", "", "", null, "下一手", listOf("如果……")))
+        engine.answer(task, "这一手", goodAnswer, RoundSource.HOME)
+        assertEquals("下一手" to listOf("如果……"), engine.starters.value)
+    }
 }

@@ -48,10 +48,10 @@ import com.yishou.app.settings.AppPrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-private data class InstalledApp(val pkg: String, val label: String, val icon: ImageBitmap?)
+data class InstalledApp(val pkg: String, val label: String, val icon: ImageBitmap?)
 
 /** 列出桌面上能打开的应用（AndroidManifest 里用 <queries> 声明，不申请读取全部应用的权限）。 */
-private fun loadLaunchableApps(context: Context): List<InstalledApp> {
+fun loadLaunchableApps(context: Context): List<InstalledApp> {
     val pm = context.packageManager
     val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
     return pm.queryIntentActivities(intent, 0)

@@ -11,12 +11,26 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- 权限页里请求“不限制电池优化”，减少后台被系统关掉 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- “让陪练看屏”：前台服务持有你在系统弹窗里同意的屏幕授权，只在你点“看一眼”时取一帧 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <!-- 关注应用的选择列表只需要“桌面上能打开的应用”，不申请读取全部应用 -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <!-- 开局规则里始终放行的系统应用：桌面、相机、拨号 -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
         </intent>
     </queries>
 
@@ -66,6 +80,11 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/gate_service" />
         </service>
+
+        <service
+            android:name=".look.ScreenLookService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
 
         <receiver
             android:name=".window.WindowAlarmReceiver"

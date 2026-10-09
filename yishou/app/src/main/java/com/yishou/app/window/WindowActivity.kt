@@ -41,10 +41,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yishou.app.MainActivity
+import com.yishou.app.YishouApp
+import com.yishou.app.settings.AppPrefs
 import com.yishou.app.round.AnswerRules
 import com.yishou.app.ui.BackTopBar
 import com.yishou.app.ui.AnswerComposer
@@ -83,13 +86,36 @@ class WindowActivity : ComponentActivity() {
         super.onNewIntent(intent)
         vm.refresh()
     }
+
+    override fun onResume() {
+        super.onResume()
+        isVisible = true
+    }
+
+    override fun onPause() {
+        isVisible = false
+        super.onPause()
+    }
+
+    companion object {
+        /** 窗口页在前台。看屏服务据此决定由谁朗读新的一手。 */
+        @Volatile
+        var isVisible = false
+            private set
+    }
 }
 
 @Composable
 private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit, onOpenApp: () -> Unit) {
     var confirmStop by remember { mutableStateOf(false) }
     var pauseMenu by remember { mutableStateOf(false) }
+    var showPanels by remember { mutableStateOf(false) }
     val attachment by vm.attachment.state.collectAsStateWithLifecycle()
+    val app = LocalContext.current.applicationContext as YishouApp
+    val prefs by app.settings.app.collectAsStateWithLifecycle()
+    val startersPair by vm.starters.collectAsStateWithLifecycle()
+    val starters = startersPair?.takeIf { it.first == s.coachMove }?.second.orEmpty()
+    val change: ((AppPrefs) -> AppPrefs) -> Unit = { f -> app.settings.updateApp(f) }
 
     Scaffold(topBar = { BackTopBar("陪练窗口", onBack) }) { padding ->
         Column(
@@ -115,8 +141,9 @@ private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit
                     s.nextStart?.let { "下一次定时窗口：${formatTime(it)}" } ?: "定时窗口没有开启，可以在设置里开启。",
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                RulesCard(prefs, change)
                 Button(onClick = vm::startNow, modifier = Modifier.fillMaxWidth()) {
-                    Text("现在开始一个 ${s.windowMinutes} 分钟的窗口")
+                    Text("按这个规则开局：${s.windowMinutes} 分钟")
                 }
                 return@Column
             }
@@ -131,7 +158,7 @@ private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     formatRemaining(s.remainingMs),
-                    style = MaterialTheme.typography.displaySmall,
+                    style = MaterialTheme.typography.displayMedium,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                 )
@@ -139,6 +166,14 @@ private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit
                     Text("有效 ${s.effectiveCount} 轮", style = MaterialTheme.typography.titleMedium)
                     TextButton(onClick = { confirmStop = true }) { Text("提前结束") }
                 }
+            }
+
+            TextButton(onClick = { showPanels = !showPanels }) {
+                Text(if (showPanels) "收起 规则与看屏" else "规则与看屏 ▾")
+            }
+            if (showPanels) {
+                LookCard(prefs, change)
+                RulesCard(prefs, change)
             }
 
             val task = s.task
@@ -217,6 +252,7 @@ private fun WindowScreen(s: WindowState, vm: WindowViewModel, onBack: () -> Unit
                     }
                 }
                 AnswerComposer(
+                    starters = starters,
                     answer = s.answer,
                     onAnswerChange = vm::onAnswerChange,
                     attachment = attachment,

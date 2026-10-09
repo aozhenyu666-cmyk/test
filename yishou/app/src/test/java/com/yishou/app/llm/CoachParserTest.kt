@@ -97,4 +97,20 @@ class CoachParserTest {
     fun openingWithoutMoveFails() {
         CoachParser.parseOpening("""{"coach_move": "  ", "stuck_type": "缺关系"}""")
     }
+
+    @Test
+    fun startersAreOptionalAndCleaned() {
+        val j = CoachParser.parseJudgement(
+            """{"effective": true, "move_type": "比较", "next_coach_move": "下一手",
+               "starters": ["我先确定的是……", "", "我先确定的是……", "如果……那么……", "第三个"]}""",
+        )
+        assertEquals(listOf("我先确定的是……", "如果……那么……"), j.starters)
+        assertEquals(emptyList<String>(), CoachParser.parseOpening("""{"coach_move": "问"}""").starters)
+    }
+
+    @Test
+    fun parsesObserved() {
+        val o = CoachParser.parseObserved("""{"observation": "在做第 3 题", "coach_move": "你为什么选 B？", "starters": ["我选 B 是因为……"]}""")
+        assertEquals(ObservedMove("在做第 3 题", "你为什么选 B？", listOf("我选 B 是因为……")), o)
+    }
 }

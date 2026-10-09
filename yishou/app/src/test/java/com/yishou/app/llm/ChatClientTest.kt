@@ -144,6 +144,23 @@ class ChatClientTest {
     }
 
     @Test
+    fun usageIsRecorded() = runTest {
+        val records = mutableListOf<List<Any>>()
+        val sink = UsageSink { kind, ok, p, c, _, chars -> records += listOf(kind, ok, p, c, chars) }
+        server.enqueue(
+            MockResponse().setBody(
+                """{"choices":[{"message":{"content":"{}"}}],"usage":{"prompt_tokens":120,"completion_tokens":30}}""",
+            ),
+        )
+        server.enqueue(MockResponse().setResponseCode(500))
+        val c = ChatClient({ config() }, ChatClient.defaultHttpClient(), sink)
+        c.complete("系统", "用户", "判定")
+        c.complete("s", "u", "开局")
+        assertEquals(listOf("判定", true, 120, 30, 4), records[0])
+        assertEquals(listOf("开局", false, 0, 0, 2), records[1])
+    }
+
+    @Test
     fun imageRequestUsesContentArray() = runTest {
         server.enqueue(completion("转写内容"))
         val r = Vision(client()).transcribe("资料分析", "第一步是什么？", "data:image/jpeg;base64,AAAA")

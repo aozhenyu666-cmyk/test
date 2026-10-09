@@ -11,7 +11,9 @@ import com.yishou.app.llm.CoachContext
 import com.yishou.app.llm.Judgement
 import com.yishou.app.llm.LlmError
 import com.yishou.app.llm.LlmResult
+import com.yishou.app.llm.ObservedMove
 import com.yishou.app.llm.Prompts
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
  * “一轮”：读断点 → 陪练出一手 → 用户回答 → 判定 → 更新断点、保存 Round。
@@ -22,6 +24,12 @@ class RoundEngine(
     private val coach: Coach,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
+
+    /**
+     * 最近一手配的起手式（这一手的原文 → 两个半句话）。只放在内存里，
+     * 页面拿到的这一手和这里的原文一致时才显示。
+     */
+    val starters = MutableStateFlow<Pair<String, List<String>>?>(null)
 
     sealed interface MoveResult {
         data class Ready(val coachMove: String) : MoveResult
@@ -49,6 +57,7 @@ class RoundEngine(
                 // 请求期间断点可能被手动改过，以最新的为准，只填上这一手
                 val latest = dao.getBreakpoint(task.id) ?: bp
                 dao.upsertBreakpoint(latest.copy(pendingCoachMove = r.value.coachMove, updatedAt = clock()))
+                starters.value = r.value.coachMove to r.value.starters
                 MoveResult.Ready(r.value.coachMove)
             }
         }
@@ -99,7 +108,23 @@ class RoundEngine(
             createdAt = now,
         )
         val id = dao.saveRound(round, newBp)
+        starters.value = judgement.nextCoachMove to judgement.starters
         return AnswerResult.Judged(round.copy(id = id), judgement)
+    }
+
+    /**
+     * 看了一眼屏幕之后出一手：替换掉当前待回答的一手（断点其他内容不变）。
+     * screen 是识图模型对屏幕的描述。
+     */
+    suspend fun observe(task: Task, screen: String): LlmResult<ObservedMove> {
+        val bp = dao.getBreakpoint(task.id) ?: emptyBreakpoint(task.id)
+        val r = coach.observe(task, bp, screen, context())
+        if (r is LlmResult.Ok) {
+            val latest = dao.getBreakpoint(task.id) ?: bp
+            dao.upsertBreakpoint(latest.copy(pendingCoachMove = r.value.coachMove, updatedAt = clock()))
+            starters.value = r.value.coachMove to r.value.starters
+        }
+        return r
     }
 
     /** 出一手时附带的背景：最近 5 条规则、距离上一轮多久、上一轮原话。 */

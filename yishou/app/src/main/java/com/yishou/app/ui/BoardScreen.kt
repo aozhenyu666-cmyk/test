@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
@@ -50,6 +51,8 @@ import com.yishou.app.data.Breakpoint
 import com.yishou.app.data.Round
 import com.yishou.app.data.Task
 import com.yishou.app.llm.CoachMessages
+import com.yishou.app.ui.theme.SealMark
+import com.yishou.app.ui.theme.inkWash
 
 /** 主页：今天的对话流 + 局面面板 + 底部作答区。 */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -61,10 +64,12 @@ fun BoardScreen(
     onOpenPermissions: () -> Unit,
     onOpenWindow: () -> Unit,
     onOpenSummary: () -> Unit,
+    onOpenStatus: () -> Unit,
     vm: BoardViewModel = viewModel(),
 ) {
     val s by vm.state.collectAsStateWithLifecycle()
     val attachment by vm.attachment.state.collectAsStateWithLifecycle()
+    val startersPair by vm.starters.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var gateOn by remember { mutableStateOf(true) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { gateOn = PermissionStatus.accessibility(context) }
@@ -80,16 +85,20 @@ fun BoardScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text("一手", fontWeight = FontWeight.Bold)
-                        s.task?.let {
-                            Text(it.title, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        SealMark()
+                        Column(Modifier.padding(start = 10.dp)) {
+                            Text("一手", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                            s.task?.let {
+                                Text(it.title, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
                     }
                 },
                 actions = {
                     IconButton(onClick = onOpenWindow) { Icon(Icons.Filled.PlayArrow, contentDescription = "陪练窗口") }
                     IconButton(onClick = onOpenSummary) { Icon(Icons.Filled.DateRange, contentDescription = "每晚总结") }
+                    IconButton(onClick = onOpenStatus) { Icon(Icons.Filled.Info, contentDescription = "盘点") }
                     IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Settings, contentDescription = "设置") }
                 },
             )
@@ -97,6 +106,7 @@ fun BoardScreen(
         bottomBar = {
             if (s.task != null && s.coachMove != null) {
                 AnswerComposer(
+                    starters = startersPair?.takeIf { it.first == s.coachMove }?.second.orEmpty(),
                     answer = s.answer,
                     onAnswerChange = vm::onAnswerChange,
                     attachment = attachment,
@@ -116,7 +126,8 @@ fun BoardScreen(
             state = listState,
             modifier = Modifier
                 .padding(padding)
-                .fillMaxSize(),
+                .fillMaxSize()
+                .inkWash(MaterialTheme.colorScheme.onBackground),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
