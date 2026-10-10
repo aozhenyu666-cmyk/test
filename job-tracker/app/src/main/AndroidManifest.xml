@@ -5,6 +5,7 @@
     <application
         android:name=".JobTrackerApp"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
         android:label="@string/app_name"
         android:supportsRtl="true"

@@ -12,6 +12,7 @@ import java.time.LocalTime
 @Entity(tableName = "settings")
 data class SettingsEntity(
     @PrimaryKey val id: Int = SINGLE_ROW_ID,
+    val apiBaseUrl: String,
     val strongModel: String,
     val fastModel: String,
     val reminderTime: LocalTime,

@@ -7,6 +7,8 @@ import java.time.LocalTime
  * 后续模块用到的天数、字数等也在这里，提前放好以免散落各处。
  */
 data class AppConfig(
+    /** 模型接口地址，可在设置里改成中转地址 */
+    val defaultApiBaseUrl: String = "https://api.anthropic.com",
     /** 匹配分析用的强模型 */
     val defaultStrongModel: String = "claude-sonnet-5-5",
     /** 跟进话术用的便宜模型 */

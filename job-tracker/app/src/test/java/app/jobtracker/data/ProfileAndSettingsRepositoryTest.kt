@@ -59,6 +59,7 @@ class ProfileAndSettingsRepositoryTest {
     @Test
     fun settingsFallBackToConfigDefaults() = runTest {
         val s = settings.observe().first()
+        assertEquals("https://api.anthropic.com", s.apiBaseUrl)
         assertEquals("claude-sonnet-5-5", s.strongModel)
         assertEquals("claude-haiku-5-5", s.fastModel)
         assertEquals(LocalTime.of(9, 0), s.reminderTime)

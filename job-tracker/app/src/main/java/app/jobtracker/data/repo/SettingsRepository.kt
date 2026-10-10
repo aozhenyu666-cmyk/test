@@ -20,6 +20,7 @@ class SettingsRepository(
     }
 
     private fun defaults() = SettingsEntity(
+        apiBaseUrl = config.defaultApiBaseUrl,
         strongModel = config.defaultStrongModel,
         fastModel = config.defaultFastModel,
         reminderTime = config.defaultReminderTime,

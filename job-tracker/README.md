@@ -10,8 +10,8 @@
 
 | 模块 | 状态 |
 |---|---|
-| 1. 项目骨架与数据层 | ✅ 已完成，等你确认 |
-| 2. 设置页与简历 | 未开始 |
+| 1. 项目骨架与数据层 | ✅ 已完成 |
+| 2. 设置页与简历 | ✅ 已完成，等你确认 |
 | 3. 模型调用层与匹配分析 | 未开始 |
 | 4. 列表、详情与状态联动 | 未开始 |
 | 5. 跟进话术 | 未开始 |
@@ -54,4 +54,38 @@ app/src/main/java/app/jobtracker/
    - 设置没保存过时读到默认值；修改一项不影响其他项
 3. 装到手机上：`./gradlew :app:installDebug`，打开后应看到"骨架已就绪"的占位页。
 
-> 注意：这一版代码是在无法访问 Google Maven 和 Android SDK 的环境里写的，**还没有实际编译和运行过测试**。第一次同步或测试如果报错，把错误贴给我，我来修。
+## 模块 2：设置页与简历
+
+```
+app/src/main/java/app/jobtracker/
+├── security/ApiKeyStore.kt        API 密钥：EncryptedSharedPreferences 加密保存，不进数据库
+├── ui/settings/SettingsScreen.kt  简历、求职方向、API 密钥、接口地址、两个模型名
+├── ui/settings/SettingsViewModel.kt
+├── ui/settings/SettingsValidation.kt  接口地址必须 https://，模型名不能为空
+├── ui/home/HomeScreen.kt          首页占位，模块 4 实现
+└── MainActivity.kt                底部两个标签：投递 / 设置；没有简历时首次打开直接进设置
+```
+
+其他改动：
+- 设置表新增 `apiBaseUrl`（接口地址，默认 `https://api.anthropic.com`）。应用还没发布过，所以没有升级数据库版本号。
+- 关闭 Android 12 及以上的云备份和换机迁移（`res/xml/data_extraction_rules.xml`），数据和密钥只留在本机。
+- 设置页里的提醒时间、渠道与应用、后台运行说明、导出，分别在模块 5、6 中加入。
+
+### 怎么验证
+
+1. 单元测试：`./gradlew :app:testDebugUnitTest`，新增两个测试类：
+   - `SettingsValidationTest`：地址必须是 https、模型名不能为空
+   - `SettingsViewModelTest`：
+     - 首次打开是空简历和默认模型
+     - 保存后重新加载仍在；空白简历不保存
+     - 密钥只存在密钥存储里，数据库三张表都搜不到
+     - 密钥输入框留空时保留旧密钥
+     - 地址不合法时什么都不保存
+     - 清除密钥后密钥为空
+2. 真机检查（对应验收标准第 1 条）：
+   1. 首次打开应直接进入"设置"，粘贴简历和求职方向后点"保存简历"
+   2. 填 API 密钥后点"保存接口设置"，输入框清空，下方显示"密钥已加密保存在本机"
+   3. 强制结束应用再打开，应进入"投递"标签；切到"设置"，简历、方向、模型名都还在，密钥显示为已保存
+   4. 把接口地址改成 `http://` 开头，应提示错误且不保存
+
+> 注意：这一版代码是在无法访问 Google Maven 和 Android SDK 的环境里写的，**还没有实际编译和运行过测试**（模块 1、2 都是）。第一次同步或测试如果报错，把错误贴给我，我来修。
