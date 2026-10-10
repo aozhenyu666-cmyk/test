@@ -41,7 +41,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - uses: android-actions/setup-android@v3
+      # ubuntu-latest 自带 Android SDK（ANDROID_HOME），缺的平台由 Gradle 自动下载
       - run: npm ci
       - run: npx cap sync android
       - name: Build debug APK
