@@ -32,10 +32,14 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import app.jobtracker.ui.analysis.AnalysisScreen
 import app.jobtracker.ui.analysis.AnalysisViewModel
+import app.jobtracker.ui.detail.DetailScreen
+import app.jobtracker.ui.detail.DetailViewModel
 import app.jobtracker.ui.home.HomeScreen
+import app.jobtracker.ui.home.HomeViewModel
 import app.jobtracker.ui.settings.SettingsScreen
 import app.jobtracker.ui.settings.SettingsViewModel
 import app.jobtracker.ui.theme.JobTrackerTheme
+import java.time.LocalDate
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -58,9 +62,13 @@ private fun AppRoot(container: AppContainer) {
     val hasResume by hasResumeFlow.collectAsStateWithLifecycle(initialValue = null)
     var tab by rememberSaveable { mutableStateOf<Tab?>(null) }
     var showAnalysis by rememberSaveable { mutableStateOf(false) }
+    var detailId by rememberSaveable { mutableStateOf<Long?>(null) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val homeVm: HomeViewModel = viewModel(
+        factory = viewModelFactory { initializer { HomeViewModel(container.applications, container.clock) } },
+    )
     val analysisVm: AnalysisViewModel = viewModel(
         factory = viewModelFactory {
             initializer { AnalysisViewModel(container.analysis, container.applications, container.profile, container.config) }
@@ -73,6 +81,25 @@ private fun AppRoot(container: AppContainer) {
         if (tab == null) tab = if (known) Tab.HOME else Tab.SETTINGS
     }
     val current = tab ?: return
+
+    // 详情页盖在首页之上
+    detailId?.let { id ->
+        val detailVm: DetailViewModel = viewModel(
+            key = "detail-$id",
+            factory = viewModelFactory {
+                initializer {
+                    DetailViewModel(id, container.applications, container.followUpRules, container.clock, container.appScope)
+                }
+            },
+        )
+        val close = {
+            detailVm.flush()
+            detailId = null
+        }
+        BackHandler(onBack = close)
+        DetailScreen(viewModel = detailVm, today = LocalDate.now(container.clock), onBack = close)
+        return
+    }
 
     // 分析页盖在首页之上，返回键回到首页
     if (showAnalysis) {
@@ -114,7 +141,8 @@ private fun AppRoot(container: AppContainer) {
     ) { padding ->
         when (current) {
             Tab.HOME -> HomeScreen(
-                applications = container.applications,
+                viewModel = homeVm,
+                onOpen = { detailId = it },
                 onAdd = {
                     analysisVm.reset()
                     showAnalysis = true

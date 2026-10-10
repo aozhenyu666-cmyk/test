@@ -46,6 +46,10 @@ interface ApplicationDao {
     )
     fun observeDue(today: LocalDate, closed: ApplicationStatus): Flow<List<ApplicationEntity>>
 
+    /** 用过的渠道名，供输入时提示 */
+    @Query("SELECT DISTINCT channel FROM applications WHERE channel != '' ORDER BY channel")
+    fun observeChannels(): Flow<List<String>>
+
     /** 导出用，按创建时间排列 */
     @Query("SELECT * FROM applications ORDER BY createdAt ASC")
     suspend fun getAll(): List<ApplicationEntity>

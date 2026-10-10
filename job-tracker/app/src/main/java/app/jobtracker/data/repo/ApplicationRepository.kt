@@ -61,6 +61,8 @@ class ApplicationRepository(
         dao.update(application.copy(updatedAt = clock.instant()))
     }
 
+    fun observeChannels(): Flow<List<String>> = dao.observeChannels()
+
     suspend fun delete(id: Long) = dao.deleteById(id)
 
     suspend fun getAllForExport(): List<ApplicationEntity> = dao.getAll()

@@ -12,6 +12,51 @@
     <string name="status_applied">已投递</string>
     <string name="status_interviewing">面试中</string>
     <string name="status_closed">已结束</string>
+    <string name="home_segment_due">待跟进</string>
+    <string name="home_segment_all">全部</string>
+    <string name="home_due_empty">今天没有要跟进的投递。</string>
+    <string name="home_filter_all">全部状态</string>
+    <string name="home_row_status">%1$s · 下次跟进：%2$s</string>
+
+    <string name="due_none">未安排</string>
+    <string name="due_today">今天</string>
+    <string name="due_overdue">逾期 %1$d 天</string>
+    <string name="due_upcoming">%1$d 天后</string>
+    <string name="due_format">%1$s（%2$s）</string>
+
+    <string name="end_rejected">被拒</string>
+    <string name="end_no_response">无回复放弃</string>
+    <string name="end_withdrawn">自己放弃</string>
+    <string name="end_offer">已录用</string>
+
+    <string name="ok">确定</string>
+    <string name="cancel">取消</string>
+    <string name="date_not_set">未填写</string>
+    <string name="date_clear">清除</string>
+    <string name="date_pick">选择</string>
+
+    <string name="detail_title">投递详情</string>
+    <string name="detail_missing">这条记录已不存在。</string>
+    <string name="detail_next_follow_up">下次跟进：%1$s</string>
+    <string name="detail_interview_hint">填写面试日期后，会自动把下次跟进安排在面试后一天。</string>
+    <string name="detail_follow_up_count">已跟进 %1$d 次</string>
+    <string name="detail_end_result">结果：%1$s</string>
+    <string name="detail_choose_result">选择结束原因</string>
+    <string name="detail_match_level">匹配度：%1$s</string>
+    <string name="detail_jd_expand">展开 JD 原文</string>
+    <string name="detail_jd_collapse">收起 JD 原文</string>
+    <string name="detail_delete">删除</string>
+    <string name="detail_delete_title">删除这条投递？</string>
+    <string name="detail_delete_message">删除后无法恢复。</string>
+
+    <string name="field_status">状态</string>
+    <string name="field_channel">渠道</string>
+    <string name="field_channel_hint">例如：某招聘平台、官网、邮箱</string>
+    <string name="field_note">备注</string>
+    <string name="field_note_hint">例如面试聊到的话题，生成话术时会用到</string>
+    <string name="field_applied_at">投递日期</string>
+    <string name="field_interview_at">面试日期</string>
+    <string name="field_next_follow_up">下次跟进日期</string>
     <string name="field_company">公司</string>
     <string name="field_title">岗位</string>
 
