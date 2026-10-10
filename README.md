@@ -1,3 +1,5 @@
+> 本仓库还包含 **[脉络 · 知识结构引擎](mailuo/README.md)**（`mailuo/`）：把笔记拆成「体系 → 层级 → 节点 → 关系」的个人知识 App，Android + Obsidian 兼容。
+
 # AI 参谋：Super Productivity 手机端插件
 
 在 Super Productivity（SP）里放一个**会主动盯进度的 AI 参谋**，主要面向安卓 / iOS 客户端：

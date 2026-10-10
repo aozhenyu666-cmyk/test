@@ -1,0 +1,56 @@
+# 脉络：每次改动 mailuo/ 时跑端到端验收，并打出可直接安装的 Android 调试包（APK）。
+# APK 在 Actions 运行页面底部的 Artifacts 里下载：mailuo-debug-apk。
+name: 脉络 Android APK
+
+on:
+  push:
+    paths: ['mailuo/**', '.github/workflows/mailuo-android.yml']
+  pull_request:
+    paths: ['mailuo/**', '.github/workflows/mailuo-android.yml']
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: mailuo
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Playwright Chromium
+        run: |
+          npm i --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: End-to-end acceptance (mock model)
+        run: node dev/e2e.mjs
+
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mailuo/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+      - run: npm ci
+      - run: npx cap sync android
+      - name: Build debug APK
+        working-directory: mailuo/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mailuo-debug-apk
+          path: mailuo/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

@@ -1,0 +1,9 @@
+{
+  "appId": "app.mailuo.knowledge",
+  "appName": "脉络",
+  "webDir": "www",
+  "android": { "backgroundColor": "#f4f1ea" },
+  "plugins": {
+    "CapacitorHttp": { "enabled": true }
+  }
+}

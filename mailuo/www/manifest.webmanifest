@@ -1,0 +1,11 @@
+{
+  "name": "脉络 · 知识结构引擎",
+  "short_name": "脉络",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f1ea",
+  "theme_color": "#f4f1ea",
+  "lang": "zh-CN",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

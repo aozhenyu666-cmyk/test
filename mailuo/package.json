@@ -1,0 +1,23 @@
+{
+  "name": "mailuo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "脉络 · 个人知识结构引擎（v0.1）",
+  "scripts": {
+    "dev": "node dev/server.mjs",
+    "test": "node dev/e2e.mjs",
+    "shots": "SHOTS=1 node dev/e2e.mjs",
+    "android:sync": "cap sync android",
+    "android:open": "cap open android",
+    "android:apk": "cap sync android && cd android && ./gradlew assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/filesystem": "8.1.4"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.3"
+  }
+}
