@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">求职投递看板</string>
+    <string name="skeleton_placeholder">骨架已就绪：数据层可用，界面将在后续模块中加入。</string>
+</resources>
