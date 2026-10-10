@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "properties": {
+    "company": { "type": "string" },
+    "title": { "type": "string" },
+    "hardRequirements": { "type": "array", "items": { "type": "string" } },
+    "matchLevel": { "type": "string", "enum": ["high", "medium", "low"] },
+    "strengths": { "type": "array", "items": { "type": "string" } },
+    "gaps": { "type": "array", "items": { "type": "string" } },
+    "advice": { "type": "string", "enum": ["apply", "maybe", "skip"] },
+    "reason": { "type": "string" },
+    "resumeTips": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["company", "title", "hardRequirements", "matchLevel", "strengths", "gaps", "advice", "reason", "resumeTips"],
+  "additionalProperties": false
+}

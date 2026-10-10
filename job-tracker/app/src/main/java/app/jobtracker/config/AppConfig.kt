@@ -33,6 +33,18 @@ data class AppConfig(
     val jdMinChars: Int = 50,
     /** 简历改动要点最多条数 */
     val maxResumeTips: Int = 3,
+    /** 模型接口版本头 */
+    val anthropicVersion: String = "2023-06-01",
+    /** 单次回复的最大 token 数（含思考） */
+    val maxOutputTokens: Int = 16000,
+    /** 匹配分析的思考深度：low / medium / high；留空表示用模型默认值 */
+    val analysisEffort: String = "medium",
+    /** 话术生成的思考深度 */
+    val draftEffort: String = "low",
+    /** 官方接口的主机名。只有直连官方接口时才开启服务端拒答兜底 */
+    val officialApiHost: String = "api.anthropic.com",
+    /** 支持服务端拒答兜底（fallbacks: "default"）的模型 */
+    val serverFallbackModels: Set<String> = setOf("claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-1"),
     /** 模型请求超时 */
     val requestTimeoutSeconds: Long = 30,
     /** 返回内容不是合法 JSON 时的自动重试次数 */
