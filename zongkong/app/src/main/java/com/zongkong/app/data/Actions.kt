@@ -110,6 +110,27 @@ class Actions(private val context: Context, private val store: Store) {
         return passed
     }
 
+    /**
+     * 一手每晚总结出的规则，记进总控（挂到一手正在练的那件事上），这样也会同步到 Notion，GPT 能看到。
+     * 每个日期只记一次。返回记下的规则，没有新的返回 null。
+     */
+    suspend fun absorbYishou(): String? {
+        if (!YishouClient.installed(context)) return null
+        val y = (YishouClient.status(context) as? YishouClient.Result.Ok)?.value ?: return null
+        if (y.rule.isBlank() || y.summaryDate.isBlank() || y.summaryDate == store.yishouSummaryDate) return null
+        val threadKey = store.work.value.rec(y.actionKey)?.threadKey.orEmpty()
+        val text = buildString {
+            append("一手 ${y.summaryDate} 的每晚总结\n")
+            append("规则：${y.rule}\n")
+            if (y.tomorrowQuestion.isNotBlank()) append("明天第一问：${y.tomorrowQuestion}\n")
+            if (y.summaryNote.isNotBlank()) append("推进到：${y.summaryNote}\n")
+            if (y.taskTitle.isNotBlank()) append("在练：${y.taskTitle}")
+        }
+        work.addConclusion(text, threadKey)
+        store.yishouSummaryDate = y.summaryDate
+        return y.rule
+    }
+
     suspend fun submitDegraded(gateId: String, text: String, reason: String): SubmitResult {
         val status = store.status()
         val gs = status.gates.firstOrNull { it.gate.id == gateId } ?: return SubmitResult.Refused("今天没有这道关卡")

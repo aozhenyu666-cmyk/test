@@ -161,6 +161,11 @@ class Store(private val context: Context) {
         get() = prefs.getLong("seen_changes", 0L)
         set(v) = prefs.edit().putLong("seen_changes", v).apply()
 
+    /** 一手的每晚总结记到哪一天了。 */
+    var yishouSummaryDate: String
+        get() = prefs.getString("yishou_summary_date", "") ?: ""
+        set(v) = prefs.edit().putString("yishou_summary_date", v).apply()
+
     var syncNote: String
         get() = prefs.getString("sync_note", "") ?: ""
         set(v) = prefs.edit().putString("sync_note", v).apply()
