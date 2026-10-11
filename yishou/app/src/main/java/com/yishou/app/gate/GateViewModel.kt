@@ -1,5 +1,7 @@
 package com.yishou.app.gate
 
+import com.yishou.app.settings.AppZone
+
 import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
@@ -80,7 +82,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             val prefs = yishou.settings.app.value
             val now = System.currentTimeMillis()
             val inWindow = pkg != null &&
-                (group == GateActivity.WINDOW_GROUP || WindowClock.active(now, prefs, ZoneId.systemDefault()) != null)
+                (group == GateActivity.WINDOW_GROUP || WindowClock.active(now, prefs, AppZone.zone) != null)
             val task = dao.getCurrentTask()
             val bp = task?.let { dao.getBreakpoint(it.id) }
             val last = dao.lastRound()
@@ -204,7 +206,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun offlineLeft(): Int {
-        val zone = ZoneId.systemDefault()
+        val zone = AppZone.zone
         val since = WindowClock.startOfDay(WindowClock.today(System.currentTimeMillis(), zone), zone)
         val used = engine.offlineUsedSince(since)
         return (yishou.settings.app.value.offlineDailyLimit - used).coerceAtLeast(0)

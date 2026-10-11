@@ -1,5 +1,7 @@
 package com.yishou.app.summary
 
+import com.yishou.app.settings.AppZone
+
 import com.yishou.app.data.AppDao
 import com.yishou.app.data.Breakpoint
 import com.yishou.app.data.DailySummary
@@ -89,7 +91,7 @@ object SummaryMarkdown {
         task: Task?,
         breakpoint: Breakpoint?,
         rounds: List<Round>,
-        zone: ZoneId = ZoneId.systemDefault(),
+        zone: ZoneId = AppZone.zone,
     ): String = buildString {
         appendLine("# 一手 · ${summary.date} 学习记录")
         appendLine()

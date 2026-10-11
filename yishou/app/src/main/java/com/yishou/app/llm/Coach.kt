@@ -1,5 +1,7 @@
 package com.yishou.app.llm
 
+import com.yishou.app.settings.AppZone
+
 import com.yishou.app.data.Breakpoint
 import com.yishou.app.data.Round
 import com.yishou.app.data.RoundSource
@@ -204,7 +206,7 @@ object CoachMessages {
         task: Task?,
         breakpoint: Breakpoint?,
         rounds: List<Round>,
-        zone: ZoneId = ZoneId.systemDefault(),
+        zone: ZoneId = AppZone.zone,
     ): String = buildString {
         appendLine("请求类型：每晚总结。")
         appendLine("请根据用户今天全部的轮次和当前断点，总结一条规则、明天第一问和今天的实际进展。")

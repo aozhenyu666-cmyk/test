@@ -1,5 +1,7 @@
 package com.yishou.app.gate
 
+import com.yishou.app.settings.AppZone
+
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
 import android.provider.MediaStore
@@ -9,6 +11,7 @@ import android.view.accessibility.AccessibilityEvent
 import com.yishou.app.YishouApp
 import com.yishou.app.stats.DayStats
 import com.yishou.app.system.Notifications
+import com.yishou.app.system.ExternalGrace
 import com.yishou.app.log.RunLog
 import com.yishou.app.window.WindowClock
 import com.yishou.app.window.WindowRules
@@ -86,7 +89,10 @@ class GateService : AccessibilityService() {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
         foregroundPkg = pkg
-        if (pkg == packageName) return
+        if (pkg == packageName) {
+            ExternalGrace.close()
+            return
+        }
         check(pkg)
     }
 
@@ -103,7 +109,9 @@ class GateService : AccessibilityService() {
             shortPkg = null
         }
         // 陪练窗口进行中：先按开局规则看这个应用能不能用（关注的应用另由下面的思考页处理）
-        if (prefs.groupOf(pkg) == null && WindowClock.active(now, prefs, ZoneId.systemDefault()) != null) {
+        // 一手自己打开的相册、相机、屏幕授权：不拦（回到一手就收回许可）
+        if (prefs.groupOf(pkg) == null && ExternalGrace.active(now)) return
+        if (prefs.groupOf(pkg) == null && WindowClock.active(now, prefs, AppZone.zone) != null) {
             when (WindowRules.decide(pkg, prefs, systemAllowed(), now)) {
                 WindowRules.Decision.ALLOW -> {}
                 WindowRules.Decision.SHORT -> scheduleShortCheck(pkg, prefs.windowShortMinutes)
@@ -152,7 +160,7 @@ class GateService : AccessibilityService() {
         shortCheck = scope.launch {
             delay(minutes * 60_000L)
             val now = System.currentTimeMillis()
-            if (lastAppPkg == pkg && WindowClock.active(now, app.settings.app.value, ZoneId.systemDefault()) != null &&
+            if (lastAppPkg == pkg && WindowClock.active(now, app.settings.app.value, AppZone.zone) != null &&
                 app.settings.app.value.windowPauseUntil <= now
             ) {
                 shortPkg = null

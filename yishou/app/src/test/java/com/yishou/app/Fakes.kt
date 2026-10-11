@@ -110,6 +110,7 @@ class FakeDao : AppDao() {
     override suspend fun getCurrentTask(): Task? = currentTask
     override suspend fun getTask(id: Long): Task? = null
     override fun observeAllTasks(): Flow<List<Task>> = emptyFlow()
+    override suspend fun allTasks(): List<Task> = listOfNotNull(currentTask)
     override suspend fun insertTask(task: Task): Long = 0
     override suspend fun updateTask(task: Task) {}
     override suspend fun clearCurrentFlag() {}

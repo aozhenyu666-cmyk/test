@@ -41,6 +41,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yishou.app.llm.LlmConfig
 import com.yishou.app.settings.AppPrefs
+import com.yishou.app.settings.AppZone
 import com.yishou.app.speech.SpeechConfig
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -124,13 +125,10 @@ fun SettingsScreen(
             HorizontalDivider()
             SectionTitle("分组训练")
             Text(
-                "像练体能一样分组：一组是几手有效回答，组间歇一下。起步目标每天几组，" +
-                    "连续两天达标自动加一组，连续两天没达标自动减一组。",
+                "像练体能一样分组：一组就是教练排的一组（几手在下面“教练”里设），组间歇一下。" +
+                    "起步目标每天几组，连续两天达标自动加一组，连续两天没达标自动减一组。",
                 style = MaterialTheme.typography.bodySmall,
             )
-            LabeledRow("一组") {
-                Stepper(prefs.setSize, 1..10, "手") { v -> vm.update { it.copy(setSize = v) } }
-            }
             LabeledRow("组间休息") {
                 Stepper(prefs.restMinutes, 1..15, "分钟") { v -> vm.update { it.copy(restMinutes = v) } }
             }
@@ -213,6 +211,36 @@ fun SettingsScreen(
             }
             Text("白局是青白纸面配黑子，夜局是靛青夜空配白子和金色星位。", style = MaterialTheme.typography.bodySmall)
             SwitchRow("摇一摇手机掷骰子", prefs.shakeToRoll) { on -> vm.update { it.copy(shakeToRoll = on) } }
+            SwitchRow("震动提示", prefs.haptics) { on -> vm.update { it.copy(haptics = on) } }
+            Text(
+                "手机揣在身上、声音关着时靠震法分清：新的一手轻点两下，提醒三下一下比一下重，拉回是长短长两遍，" +
+                    "这手过了干脆一下，再改一下短促两下。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            HorizontalDivider()
+            SectionTitle("教练")
+            LabeledRow("一组几手") {
+                Stepper(prefs.coachSetMoves, 3..8, "手") { v -> vm.update { it.copy(coachSetMoves = v) } }
+            }
+            SwitchRow("开组前先热身", prefs.warmup) { on -> vm.update { it.copy(warmup = on) } }
+            Text("热身两分钟：一分钟呼吸，再做五步心算接龙，把“接上一步”的动作先活动开。", style = MaterialTheme.typography.bodySmall)
+
+            HorizontalDivider()
+            SectionTitle("时区")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(AppZone.BEIJING to "北京时间", AppZone.SYSTEM to "跟随手机").forEach { (z, label) ->
+                    FilterChip(
+                        selected = prefs.timeZone == z,
+                        onClick = { vm.update(reschedule = true, resummary = true, renudge = true) { it.copy(timeZone = z) } },
+                        label = { Text(label) },
+                    )
+                }
+            }
+            Text(
+                "默认固定北京时间：手机时区改来改去时，“今天”、陪练窗口、每晚总结都不跟着变。现在用的是 ${AppZone.zone.id}。",
+                style = MaterialTheme.typography.bodySmall,
+            )
 
             HorizontalDivider()
             SectionTitle("大模型接口")

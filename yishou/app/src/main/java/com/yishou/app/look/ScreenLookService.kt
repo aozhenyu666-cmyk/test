@@ -1,5 +1,7 @@
 package com.yishou.app.look
 
+import com.yishou.app.settings.AppZone
+
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -150,7 +152,7 @@ class ScreenLookService : Service() {
                 delay(60_000)
                 val prefs = app.settings.app.value
                 val now = System.currentTimeMillis()
-                if (WindowClock.active(now, prefs, java.time.ZoneId.systemDefault()) == null) {
+                if (WindowClock.active(now, prefs, java.time.AppZone.zone) == null) {
                     stopAll()
                     break
                 }
@@ -192,21 +194,22 @@ class ScreenLookService : Service() {
                     return@launch
                 }
             }
-            when (val r = app.engine.observe(task, screen)) {
-                is LlmResult.Err -> setStatus("出题失败：${r.error.message}")
-                is LlmResult.Ok -> {
+            // 看到的屏幕就是这一组的材料：教练按它重新开一组（窗口页会读出第一问）
+            val engine = app.coachEngine
+            when (val r = engine.open(task, engine.suggestFace(), "【屏幕上的内容】$screen")) {
+                is com.yishou.app.coach.SetEngine.Outcome.Failed -> setStatus("开组失败：${r.message}")
+                com.yishou.app.coach.SetEngine.Outcome.Busy -> setStatus("教练正忙，过一会儿再看")
+                else -> {
                     app.stats.event(DayStats.LOOK)
-                    lastLookMove = r.value.coachMove
+                    val first = engine.state.value.current?.question.orEmpty()
+                    lastLookMove = first
                     setStatus(null)
                     Notifications.showReminder(
                         this@ScreenLookService, ID_RESULT,
-                        "陪练看了一眼",
-                        listOf(r.value.observation, r.value.coachMove).filter { it.isNotBlank() }.joinToString("\n"),
+                        "教练看了一眼，按屏幕开了一组",
+                        first,
                         WindowActivity::class.java,
                     )
-                    if (app.settings.app.value.ttsEnabled && !WindowActivity.isVisible) {
-                        speaker?.speak(com.yishou.app.speech.Spoken.of(r.value.coachMove, r.value.say))
-                    }
                 }
             }
         }

@@ -71,6 +71,16 @@ data class AppPrefs(
     val voiceMode: Boolean = true,
     /** 听写完几秒后自动发出，0 表示不自动发、等你确认 */
     val voiceAutoSendSeconds: Int = 3,
+    /** 时区：默认固定北京时间，"system" 表示跟随手机 */
+    val timeZone: String = AppZone.BEIJING,
+    /** 震动提示：新的一手、提醒、拉回、判定结果都有各自的震法 */
+    val haptics: Boolean = true,
+    /** 一组训练几手（不含重做） */
+    val coachSetMoves: Int = 5,
+    /** 开组前先热身 */
+    val warmup: Boolean = true,
+    /** 各骰面的帮助等级（0 示范后补一步 … 3 连续接力、自己提下一问），按组的表现自动加减 */
+    val faceLevels: Map<Int, Int> = emptyMap(),
 ) {
     fun groupOf(pkg: String): String? = watched[pkg]
 
@@ -114,6 +124,11 @@ data class AppPrefs(
         .put("idleHours", idleHours)
         .put("voiceMode", voiceMode)
         .put("voiceAutoSendSeconds", voiceAutoSendSeconds)
+        .put("timeZone", timeZone)
+        .put("haptics", haptics)
+        .put("coachSetMoves", coachSetMoves)
+        .put("warmup", warmup)
+        .put("faceLevels", JSONObject().apply { faceLevels.forEach { (k, v) -> put(k.toString(), v) } })
         .toString()
 
     companion object {
@@ -200,6 +215,13 @@ data class AppPrefs(
                 idleHours = o.optInt("idleHours", d.idleHours).coerceIn(0, 12),
                 voiceMode = o.optBoolean("voiceMode", d.voiceMode),
                 voiceAutoSendSeconds = o.optInt("voiceAutoSendSeconds", d.voiceAutoSendSeconds).coerceIn(0, 10),
+                timeZone = o.optString("timeZone", d.timeZone).ifBlank { d.timeZone },
+                haptics = o.optBoolean("haptics", d.haptics),
+                coachSetMoves = o.optInt("coachSetMoves", d.coachSetMoves).coerceIn(3, 8),
+                warmup = o.optBoolean("warmup", d.warmup),
+                faceLevels = o.optJSONObject("faceLevels")?.let { f ->
+                    f.keys().asSequence().mapNotNull { k -> k.toIntOrNull()?.takeIf { it in 1..6 }?.let { it to f.optInt(k).coerceIn(0, 3) } }.toMap()
+                } ?: d.faceLevels,
             )
         }
     }

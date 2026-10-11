@@ -1,5 +1,7 @@
 package com.yishou.app.summary
 
+import com.yishou.app.settings.AppZone
+
 import android.content.Context
 import android.util.Log
 import androidx.work.Constraints
@@ -31,7 +33,7 @@ object SummaryScheduler {
             return
         }
         val now = System.currentTimeMillis()
-        val next = WindowClock.nextDaily(now, p.summaryHour, p.summaryMinute, ZoneId.systemDefault())
+        val next = WindowClock.nextDaily(now, p.summaryHour, p.summaryMinute, AppZone.zone)
         val request = PeriodicWorkRequestBuilder<SummaryWorker>(24, TimeUnit.HOURS)
             .setInitialDelay(next - now, TimeUnit.MILLISECONDS)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
@@ -48,7 +50,7 @@ class SummaryWorker(context: Context, params: WorkerParameters) : CoroutineWorke
 
     override suspend fun doWork(): Result {
         val app = applicationContext as YishouApp
-        val date = WindowClock.summaryDate(System.currentTimeMillis(), app.settings.app.value, ZoneId.systemDefault())
+        val date = WindowClock.summaryDate(System.currentTimeMillis(), app.settings.app.value, AppZone.zone)
         return when (val r = app.summaryEngine.run(date)) {
             is SummaryEngine.Outcome.Saved, is SummaryEngine.Outcome.NoRecord -> Result.success()
             is SummaryEngine.Outcome.Failed -> {

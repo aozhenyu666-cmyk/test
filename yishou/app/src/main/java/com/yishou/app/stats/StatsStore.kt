@@ -1,5 +1,7 @@
 package com.yishou.app.stats
 
+import com.yishou.app.settings.AppZone
+
 import android.content.Context
 import com.yishou.app.llm.UsageSink
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,12 +34,12 @@ class StatsStore(context: Context) : UsageSink {
     fun day(date: LocalDate): DayStats = DayStats.fromJson(prefs.getString(key(date), null), date.toString())
 
     fun lastDays(n: Int): List<DayStats> {
-        val today = LocalDate.now()
+        val today = LocalDate.now(AppZone.zone)
         return (0 until n).map { day(today.minusDays(it.toLong())) }
     }
 
     private fun update(change: (DayStats) -> DayStats) {
-        val today = LocalDate.now()
+        val today = LocalDate.now(AppZone.zone)
         val next = change(day(today))
         val edit = prefs.edit().putString(key(today), next.toJson())
         prefs.all.keys

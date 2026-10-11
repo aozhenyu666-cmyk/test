@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import com.yishou.app.llm.ChatClient
 import com.yishou.app.llm.LlmCoach
+import com.yishou.app.llm.LlmSetCoach
+import com.yishou.app.coach.SetEngine
 import com.yishou.app.llm.Vision
 import com.yishou.app.round.RoundEngine
 import com.yishou.app.settings.SettingsStore
@@ -27,6 +29,7 @@ import com.yishou.app.system.Notifications
 import com.yishou.app.system.Reminders
 import com.yishou.app.window.WindowScheduler
 import com.yishou.app.log.RunLog
+import com.yishou.app.settings.AppZone
 import com.yishou.app.speech.SpeechApi
 import com.yishou.app.speech.VoiceInput
 
@@ -71,6 +74,9 @@ class YishouApp : Application() {
         private set
     lateinit var speechApi: SpeechApi
         private set
+    /** 教练组：主页和陪练窗口共用 */
+    lateinit var coachEngine: SetEngine
+        private set
     /** 听你说：录音 + 听写（语音接口或系统识别），全应用共用一个，同一时间只听一处 */
     lateinit var voice: VoiceInput
         private set
@@ -92,16 +98,28 @@ class YishouApp : Application() {
         installRunLog()
         database = AppDatabase.create(this)
         settings = SettingsStore(this)
+        AppZone.id = settings.app.value.timeZone
         stats = StatsStore(this)
         val logError: (String, String) -> Unit = { kind, message -> RunLog.e(kind, message) }
         val coach = LlmCoach(ChatClient(config = { settings.llm.value }, usage = stats, onError = logError))
         engine = RoundEngine(database.dao(), coach)
+        coachEngine = SetEngine(
+            database.coach(), database.dao(),
+            LlmSetCoach(ChatClient(config = { settings.llm.value }, usage = stats, onError = logError)),
+            prefs = { settings.app.value },
+            savePrefs = { f -> settings.updateApp(f) },
+        )
         summaryEngine = SummaryEngine(database.dao(), coach, prefs = { settings.app.value })
         vision = Vision(
             ChatClient(config = { settings.vision.value }, http = ChatClient.defaultHttpClient(60), usage = stats, onError = logError),
         )
         speechApi = SpeechApi(config = { settings.speech.value })
         voice = VoiceInput(this)
+
+        appScope.launch { coachEngine.load() }
+
+        // 时区设置一变就生效
+        appScope.launch { settings.app.collect { AppZone.id = it.timeZone } }
 
         // 断点一变，桌面小组件跟着更新
         appScope.launch {

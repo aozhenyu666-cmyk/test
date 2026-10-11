@@ -18,6 +18,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- 语音陪练：只在你点麦克风、或陪练读完题等你回答时录这一段话，转成文字后丢掉 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- 震动提示：手机揣在身上、声音关着时也能分清是什么事 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- 关注应用的选择列表只需要“桌面上能打开的应用”，不申请读取全部应用 -->
     <queries>

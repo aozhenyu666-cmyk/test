@@ -1,5 +1,7 @@
 package com.yishou.app.ui
 
+import com.yishou.app.settings.AppZone
+
 import android.app.Application
 import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
@@ -60,7 +62,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
         running = true
         message = null
         viewModelScope.launch {
-            val today = WindowClock.today(System.currentTimeMillis(), ZoneId.systemDefault())
+            val today = WindowClock.today(System.currentTimeMillis(), AppZone.zone)
             message = when (val r = yishou.summaryEngine.run(today)) {
                 is SummaryEngine.Outcome.Saved -> "已生成今天的总结，明天第一问已写进断点"
                 is SummaryEngine.Outcome.NoRecord -> "今天还没有任何轮次，记为“当日无记录”"
@@ -72,7 +74,7 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 生成导出用的 Markdown。 */
     suspend fun markdown(summary: DailySummary): String {
-        val zone = ZoneId.systemDefault()
+        val zone = AppZone.zone
         val date = LocalDate.parse(summary.date)
         val rounds = dao.roundsBetween(WindowClock.startOfDay(date, zone), WindowClock.startOfDay(date.plusDays(1), zone))
         val task = dao.getCurrentTask()

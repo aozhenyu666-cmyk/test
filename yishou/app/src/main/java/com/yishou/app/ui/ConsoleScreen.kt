@@ -1,5 +1,7 @@
 package com.yishou.app.ui
 
+import com.yishou.app.settings.AppZone
+
 import android.app.Application
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -46,6 +48,7 @@ import com.yishou.app.bet.Calibration
 import com.yishou.app.log.RunLog
 import com.yishou.app.recall.EchoRepo
 import com.yishou.app.data.Breakpoint
+import com.yishou.app.data.SetStatus
 import com.yishou.app.data.FaceCount
 import com.yishou.app.data.Task
 import com.yishou.app.llm.Faces
@@ -77,17 +80,19 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     private val dao = yishou.database.dao()
 
     val state: StateFlow<ConsoleState> = run {
-        val zone = ZoneId.systemDefault()
+        val zone = AppZone.zone
         val today = WindowClock.today(System.currentTimeMillis(), zone)
         val since = WindowClock.startOfDay(today.minusDays(60), zone)
         val taskBp = dao.observeCurrentTask().flatMapLatest { task ->
             if (task == null) flowOf<Pair<Task?, Breakpoint?>>(null to null)
             else dao.observeBreakpoint(task.id).map { task to it }
         }
-        combine(dao.observeRoundsSince(since), taskBp, yishou.settings.app) { rounds, (task, bp), prefs ->
-            val byDay = rounds.groupBy { WindowClock.today(it.createdAt, zone) }
-                .mapValues { (_, rs) -> rs.count { it.effective } }
-            ConsoleState(Training.plan(byDay, today, prefs.setSize, prefs.baseSets), task, bp)
+        // 训练量按练完的教练组算：一组就是一组
+        combine(yishou.database.coach().observeSetsSince(since), taskBp, yishou.settings.app) { sets, (task, bp), prefs ->
+            val byDay = sets.filter { it.status == SetStatus.DONE }
+                .groupBy { WindowClock.today(it.endedAt ?: it.startedAt, zone) }
+                .mapValues { (_, ss) -> ss.size }
+            ConsoleState(Training.plan(byDay, today, 1, prefs.baseSets), task, bp)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ConsoleState())
     }
 }
@@ -119,7 +124,7 @@ fun ConsoleScreen(
     val faces by produceState(emptyList<FaceCount>(), resumeKey, s.plan?.todayEffective) {
         value = app.database.dao().faceCounts(0)
     }
-    val inWindow = WindowClock.active(System.currentTimeMillis(), prefs, ZoneId.systemDefault()) != null
+    val inWindow = WindowClock.active(System.currentTimeMillis(), prefs, AppZone.zone) != null
     val echoDue by produceState(0, resumeKey) { value = EchoRepo(app).due().size }
     val calibration by produceState("", resumeKey) {
         val resolved = app.database.practice().resolvedBets()
@@ -138,7 +143,7 @@ fun ConsoleScreen(
                 Text("主控台", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             }
             s.plan?.let { plan ->
-                item { TrainingCard(plan, inWindow, onOpenWindow, onOpenBoard) }
+                item { TrainingCard(plan, prefs.coachSetMoves, inWindow, onOpenWindow, onOpenBoard) }
             }
             item { PositionCard(s.task, s.breakpoint, onOpenBoard, onEditTask) }
             item {
@@ -218,7 +223,7 @@ fun ConsoleScreen(
 
 /** 今日训练：棋子摆成一组一组，连续达标的天数，最近一周。 */
 @Composable
-private fun TrainingCard(plan: TrainingPlan, inWindow: Boolean, onOpenWindow: () -> Unit, onOpenBoard: () -> Unit) {
+private fun TrainingCard(plan: TrainingPlan, setMoves: Int, inWindow: Boolean, onOpenWindow: () -> Unit, onOpenBoard: () -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(20.dp),
@@ -226,24 +231,20 @@ private fun TrainingCard(plan: TrainingPlan, inWindow: Boolean, onOpenWindow: ()
     ) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
-                if (plan.hitToday) "今天的目标完成了" else "今天练 ${plan.targetSets} 组，每组 ${plan.setSize} 手",
+                if (plan.hitToday) "今天的目标完成了" else "今天练 ${plan.targetSets} 组",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
             )
-            val groups = maxOf(plan.targetSets, plan.doneSets + if (plan.inSet > 0) 1 else 0)
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                repeat(groups) { g ->
-                    val filled = (plan.todayEffective - g * plan.setSize).coerceIn(0, plan.setSize)
-                    StoneGroup(plan.setSize, filled, extra = g >= plan.targetSets)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                repeat(maxOf(plan.targetSets, plan.doneSets)) { g ->
+                    StoneGroup(1, if (g < plan.doneSets) 1 else 0, extra = g >= plan.targetSets)
                 }
             }
-            val left = plan.setSize - plan.inSet
             Text(
                 when {
-                    plan.hitToday && plan.inSet == 0 -> "${plan.doneSets} 组都走完了。想多练就再开一组，不想就到此为止。"
-                    plan.hitToday -> "目标已经完成，这一组还差 $left 手。"
-                    plan.todayEffective == 0 -> "还没落子。先走一组 ${plan.setSize} 手，走完歇一下。"
-                    else -> "完成 ${plan.doneSets} 组，这一组还差 $left 手。"
+                    plan.hitToday -> "${plan.doneSets} 组都练完了。想多练就再开一组，不想就到此为止。"
+                    plan.doneSets == 0 -> "还没开组。一组 $setMoves 手，最后独立做一道相似题。"
+                    else -> "练完 ${plan.doneSets} 组，还差 ${plan.targetSets - plan.doneSets} 组。"
                 },
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -252,9 +253,9 @@ private fun TrainingCard(plan: TrainingPlan, inWindow: Boolean, onOpenWindow: ()
             }
             WeekStrip(plan)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = onOpenWindow) { Text(if (inWindow) "回到陪练窗口" else "开一组") }
+                Button(onClick = onOpenWindow) { Text(if (inWindow) "回到陪练窗口" else "开陪练窗口") }
                 Spacer(Modifier.width(8.dp))
-                TextButton(onClick = onOpenBoard) { Text("在对局里应一手") }
+                TextButton(onClick = onOpenBoard) { Text("在对局里开一组") }
             }
         }
     }

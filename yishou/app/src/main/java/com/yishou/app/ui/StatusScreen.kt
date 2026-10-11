@@ -1,5 +1,7 @@
 package com.yishou.app.ui
 
+import com.yishou.app.settings.AppZone
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -57,7 +59,7 @@ fun StatusScreen(onBack: () -> Unit) {
     val vision by app.settings.vision.collectAsStateWithLifecycle()
     val lookOn by ScreenLookService.running.collectAsStateWithLifecycle()
     val rounds by produceState(emptyList<Round>(), version, resumeKey) {
-        val zone = ZoneId.systemDefault()
+        val zone = AppZone.zone
         val start = WindowClock.startOfDay(WindowClock.today(System.currentTimeMillis(), zone), zone)
         value = app.database.dao().roundsBetween(start, System.currentTimeMillis() + 1)
     }

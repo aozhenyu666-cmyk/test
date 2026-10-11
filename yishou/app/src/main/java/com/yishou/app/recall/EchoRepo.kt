@@ -1,5 +1,7 @@
 package com.yishou.app.recall
 
+import com.yishou.app.settings.AppZone
+
 import com.yishou.app.YishouApp
 import com.yishou.app.data.Recall
 import com.yishou.app.window.WindowClock
@@ -9,7 +11,7 @@ import java.time.ZoneId
 class EchoRepo(private val app: YishouApp) {
     private val dao = app.database.dao()
     private val practice = app.database.practice()
-    private val zone get() = ZoneId.systemDefault()
+    private val zone get() = AppZone.zone
 
     suspend fun due(): List<EchoItem> {
         val now = System.currentTimeMillis()

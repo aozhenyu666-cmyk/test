@@ -29,6 +29,9 @@ abstract class AppDao {
     @Query("SELECT * FROM task ORDER BY createdAt DESC")
     abstract fun observeAllTasks(): Flow<List<Task>>
 
+    @Query("SELECT * FROM task ORDER BY createdAt DESC")
+    abstract suspend fun allTasks(): List<Task>
+
     @Insert
     abstract suspend fun insertTask(task: Task): Long
 

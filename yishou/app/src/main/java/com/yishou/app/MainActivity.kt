@@ -25,7 +25,7 @@ import com.yishou.app.ui.AboutScreen
 import com.yishou.app.ui.BetScreen
 import com.yishou.app.ui.EchoScreen
 import com.yishou.app.ui.LogScreen
-import com.yishou.app.ui.BoardScreen
+import com.yishou.app.ui.CoachScreen
 import com.yishou.app.ui.PermissionsScreen
 import com.yishou.app.ui.SummaryScreen
 import com.yishou.app.ui.WatchedAppsScreen
@@ -72,13 +72,11 @@ class MainActivity : ComponentActivity() {
                 ) { outer ->
                 NavHost(navController = nav, startDestination = "board", modifier = Modifier.padding(outer)) {
                     composable("board") {
-                        BoardScreen(
+                        CoachScreen(
                             onOpenSettings = { nav.navigate("settings") },
-                            onNewTask = { nav.navigate("newtask") },
-                            onEditTask = { id -> nav.navigate("task/$id") },
-                            onOpenPermissions = { nav.navigate("permissions") },
                             onOpenWindow = { startActivity(Intent(this@MainActivity, WindowActivity::class.java)) },
                             onOpenEcho = { nav.navigate("echo") },
+                            onOpenPermissions = { nav.navigate("permissions") },
                         )
                     }
                     composable("console") {

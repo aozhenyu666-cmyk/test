@@ -1,5 +1,7 @@
 package com.yishou.app.system
 
+import com.yishou.app.settings.AppZone
+
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -42,7 +44,7 @@ object Reminders {
         val am = context.getSystemService(AlarmManager::class.java)
         am.cancel(pi)
         if (!p.nudgeEnabled) return
-        set(am, WindowClock.nextDaily(System.currentTimeMillis(), p.nudgeHour, p.nudgeMinute, ZoneId.systemDefault()), pi)
+        set(am, WindowClock.nextDaily(System.currentTimeMillis(), p.nudgeHour, p.nudgeMinute, AppZone.zone), pi)
     }
 
     /**
@@ -58,7 +60,7 @@ object Reminders {
         if (hours <= 0) return
         val now = System.currentTimeMillis()
         val due = maxOf((lastActivity ?: now) + hours * 3_600_000L, now + 60_000L)
-        am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, daytime(due, ZoneId.systemDefault()), pi)
+        am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, daytime(due, AppZone.zone), pi)
     }
 
     /** t 落在夜里时推到下一个早上 8 点 */
@@ -102,7 +104,7 @@ object Reminders {
     internal suspend fun handle(context: Context, action: String?) {
         val app = context.applicationContext as YishouApp
         val dao = app.database.dao()
-        val zone = ZoneId.systemDefault()
+        val zone = AppZone.zone
         val now = System.currentTimeMillis()
         when (action) {
             NUDGE -> {

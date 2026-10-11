@@ -8,13 +8,14 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class],
-    version = 3,
+    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class],
+    version = 4,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun dao(): AppDao
     abstract fun practice(): PracticeDao
+    abstract fun coach(): CoachDao
 
     companion object {
         /** v0.5：给轮次和断点加上“骰子第几面”。旧数据保留，面记为 0。 */
@@ -43,9 +44,37 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v0.8：教练组。一组训练、组里的每一手、离开回来后的结论链复述。 */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `train_set` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`taskId` INTEGER NOT NULL, `face` INTEGER NOT NULL, `level` INTEGER NOT NULL, `goal` TEXT NOT NULL, " +
+                        "`material` TEXT NOT NULL, `standard` TEXT NOT NULL, `startedAt` INTEGER NOT NULL, `endedAt` INTEGER, " +
+                        "`status` TEXT NOT NULL, `lesson` TEXT NOT NULL, `warmup` TEXT NOT NULL, `verified` INTEGER NOT NULL)",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_train_set_startedAt` ON `train_set` (`startedAt`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `set_move` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`setId` INTEGER NOT NULL, `idx` INTEGER NOT NULL, `kind` TEXT NOT NULL, `attempt` INTEGER NOT NULL, " +
+                        "`question` TEXT NOT NULL, `say` TEXT NOT NULL, `answer` TEXT NOT NULL, `verdict` TEXT NOT NULL, " +
+                        "`gap` TEXT NOT NULL, `conclusion` TEXT NOT NULL, `help` INTEGER NOT NULL, `helpText` TEXT NOT NULL, " +
+                        "`correctStep` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `answeredAt` INTEGER)",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_set_move_setId` ON `set_move` (`setId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_set_move_createdAt` ON `set_move` (`createdAt`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `chain_recall` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`setId` INTEGER NOT NULL, `at` INTEGER NOT NULL, `total` INTEGER NOT NULL, `recalled` INTEGER NOT NULL, " +
+                        "`awaySeconds` INTEGER NOT NULL)",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_chain_recall_at` ON `chain_recall` (`at`)")
+            }
+        }
+
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "yishou.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
     }
 }
