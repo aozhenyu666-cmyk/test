@@ -304,6 +304,8 @@ await page.locator('[data-testid=dupe-pair]', { hasText: '推理链中断' }).lo
 await page.click('.sheet label:has-text("推理链断") input');
 await page.click('[data-testid=merge-confirm]');
 await page.waitForFunction(async () => !window.__mailuo.store.nodes.has('n-0099') && !(await window.__mailuo.vault.read(window.__mailuo.store.nodes.get('n-0005').path)).includes('n-0099'));
+// 等 n-0005 的文件写成新双链再检查（CI 机器较慢）
+await page.waitForFunction(async () => (await window.__mailuo.vault.read(window.__mailuo.store.nodes.get('n-0005').path)).includes('支撑 [[推理链断]]'), null, { timeout: 5000 }).catch(() => {});
 const mergedState = await page.evaluate(async () => {
   const s = window.__mailuo.store;
   const files = await window.__mailuo.vault.list();
@@ -311,7 +313,9 @@ const mergedState = await page.evaluate(async () => {
     body: await window.__mailuo.vault.read(s.nodes.get('n-0005').path) };
 });
 check(mergedState.redirected && mergedState.fileGone && mergedState.note.includes('推理到一半'), '合并：关系改指向保留节点，旧文件删除，结论并入说明');
-check(mergedState.body.includes('支撑 [[推理链断]]') && !mergedState.body.includes('推理链中断'), '合并后双链同步更新');
+const linkOk = mergedState.body.includes('支撑 [[推理链断]]') && !mergedState.body.includes('推理链中断');
+if (!linkOk) console.log('n-0005 文件内容：\n' + mergedState.body);
+check(linkOk, '合并后双链同步更新');
 
 await page.goto(ORIGIN + '/#/');
 await page.waitForSelector('[data-testid=weekly]');
