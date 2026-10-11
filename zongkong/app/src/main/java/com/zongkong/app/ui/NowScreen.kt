@@ -249,17 +249,21 @@ private fun Guidance(status: Status, date: String, now: Long, nav: NavHostContro
     val reason = status.reasons.firstOrNull()
     when {
         status.strict && reason != null -> {
-            val (how, route) = when (reason) {
-                is Reason.GateDue -> "交了「${reason.status.gate.title}」就放行" to (if (reason.status.gate.id == "plan_morning") "wizard/plan" else "gate/${reason.status.gate.id}")
-                is Reason.Silence -> "报个到：说一句现在在做什么" to "capture"
-                is Reason.Quota -> "今天的娱乐额度用完了，明天 4 点重置" to "rhythm"
-                is Reason.Focus -> "专注锁开着，做完这一步就解开" to "session"
+            val (title, how, route) = when (reason) {
+                is Reason.GateDue -> Triple(
+                    "「${reason.status.gate.title}」还没交",
+                    if (reason.status.gate.id == "plan_morning") "点这里，跟着向导两分钟部署完就放行" else "交了就放行，点这里去交",
+                    if (reason.status.gate.id == "plan_morning") "wizard/plan" else "gate/${reason.status.gate.id}",
+                )
+                is Reason.Silence -> Triple("太久没汇报了", "报个到：说一句现在在做什么", "capture")
+                is Reason.Quota -> Triple("今天的娱乐额度用完了", "明天凌晨 4 点重置", "rhythm")
+                is Reason.Focus -> Triple("专注锁开着", "做完「${reason.title}」就解开", "session")
             }
             Panel(accent = sig.strict, onClick = { nav.navigate(route) }, modifier = Modifier.enter(1)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     Seal("严", sig.strict, size = 44.dp, filled = true)
                     Column(Modifier.weight(1f)) {
-                        Text(reason.text, style = MaterialTheme.typography.titleSmall, color = sig.strict)
+                        Text(title, style = MaterialTheme.typography.titleSmall, color = sig.strict)
                         Text(how, style = MaterialTheme.typography.bodyMedium)
                     }
                     Text("去 →", style = MaterialTheme.typography.labelLarge, color = sig.strict)

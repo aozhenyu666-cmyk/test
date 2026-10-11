@@ -147,7 +147,7 @@ fun ChatScreen(nav: NavHostController) {
             Seal("参", sig.ai, size = 30.dp, filled = true)
             Column(Modifier.weight(1f).padding(start = 12.dp)) {
                 Text("参谋", style = MaterialTheme.typography.titleLarge.merge(SerifTitle))
-                Text(if (busy) "正在处理…" else "能直接改总控 · 放宽仍要等 24 小时", style = MaterialTheme.typography.labelMedium, color = sig.muted)
+                Text(if (busy) "正在处理…" else "能直接动手 · 放宽仍等 24 小时", style = MaterialTheme.typography.labelMedium, color = sig.muted, maxLines = 1)
             }
             Box {
                 TextButton(onClick = { menu = true }) { Text("···", fontSize = 20.sp, color = sig.muted) }
