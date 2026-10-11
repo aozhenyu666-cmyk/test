@@ -115,22 +115,29 @@ export class Store {
   emit() { for (const fn of this.listeners) fn(); }
 
   async load() {
-    this.nodes.clear(); this.systems.clear();
-    const paths = await this.vault.list();
-    for (const p of paths) {
-      if (!p.endsWith('.md')) continue;
-      const text = await this.vault.read(p);
+    // 先读进新的表，读完再替换：重新读取期间界面不会看到空库
+    const nodes = new Map(), systems = new Map();
+    const paths = (await this.vault.list()).filter((p) => p.endsWith('.md'));
+    // 分批并发读取（安卓文件接口每次调用都有往返开销）
+    const texts = [];
+    for (let i = 0; i < paths.length; i += 16) {
+      texts.push(...await Promise.all(paths.slice(i, i + 16).map((p) => this.vault.read(p))));
+    }
+    paths.forEach((p, i) => {
+      const text = texts[i];
       const { meta, body } = splitFrontmatter(text);
       if (meta.kind === 'system') {
-        this.systems.set(String(meta.name), {
+        systems.set(String(meta.name), {
           name: String(meta.name), levels: (meta.levels || []).map(String),
           desc: body.split(/\n##/)[0].trim(), created: meta.created, path: p,
         });
-        continue;
+        return;
       }
       const n = parseNode(text, p);
-      if (n) this.nodes.set(n.id, n);
-    }
+      if (n) nodes.set(n.id, n);
+    });
+    this.nodes = nodes;
+    this.systems = systems;
     // 只有节点、没有体系文件的文件夹，也补成体系
     for (const n of this.nodes.values()) {
       const s = this.ensureSystemSync(n.system);

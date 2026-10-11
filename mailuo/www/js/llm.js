@@ -6,6 +6,8 @@ export const PRESETS = {
   deepseek: { label: 'DeepSeek', format: 'openai', base: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
   qwen: { label: '通义千问', format: 'openai', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
   kimi: { label: 'Kimi', format: 'openai', base: 'https://api.moonshot.cn/v1', model: 'kimi-latest' },
+  doubao: { label: '豆包（火山方舟）', format: 'openai', base: 'https://ark.cn-beijing.volces.com/api/v3', model: '', hint: '填推理接入点 ID（ep-…）或模型名' },
+  zhipu: { label: '智谱 GLM', format: 'openai', base: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-plus' },
   openrouter: { label: 'OpenRouter', format: 'openai', base: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-opus-5-5' },
   claude: { label: 'Claude', format: 'anthropic', base: 'https://api.anthropic.com', model: 'claude-opus-5-5' },
   claudeHaiku: { label: 'Claude Haiku', format: 'anthropic', base: 'https://api.anthropic.com', model: 'claude-haiku-5-5' },

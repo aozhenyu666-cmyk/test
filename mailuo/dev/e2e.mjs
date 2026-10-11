@@ -36,12 +36,15 @@ const files = () => page.evaluate(async () => {
 });
 
 await page.goto(ORIGIN + '/');
+await page.waitForSelector('[data-testid=setup-hint]');
+check(true, '首次打开：提示配置模型或使用手动模式');
 await page.evaluate((o) => {
   const m = { preset: 'custom', label: 'Mock', format: 'openai', base: o + '/mock/v1', model: 'mock', key: 'test' };
   localStorage.setItem('mailuo.config', JSON.stringify({ split: m, think: { ...m, model: 'mock-pro' }, budget: 1500, theme: 'auto' }));
 }, ORIGIN);
 await page.reload();
 await page.waitForSelector('[data-testid=seed]');
+check(await page.locator('[data-testid=setup-hint]').count() === 0, '填好密钥后不再提示');
 await shot('01-empty');
 
 // ---------- 首个试用体系 ----------
@@ -258,6 +261,31 @@ await page.waitForFunction((n) => window.__mailuo.store.nodes.size === n, nodeCo
 check(await page.evaluate(() => window.__mailuo.store.nodes.has('n-0004')), '备份恢复：删掉的节点回来了');
 check(await page.locator('[data-testid=backup]').count() >= 2, '恢复前自动给当前状态做了备份');
 await shot('14-settings');
+
+// ---------- 新增：安卓返回键逻辑 ----------
+await page.goto(ORIGIN + '/#/node/n-0001');
+await page.waitForSelector('.node-hero');
+await page.click('[data-testid=backfill]');
+check(await page.evaluate(() => window.__mailuo.back()) === 'sheet' && await page.locator('.sheet').count() === 0, '返回键：先关弹层');
+check(await page.evaluate(() => window.__mailuo.back()) === 'back', '返回键：再回上一页');
+await page.goto(ORIGIN + '/#/');
+check(await page.evaluate(() => window.__mailuo.back()) === 'exit', '返回键：首页时退到后台');
+
+// ---------- 新增：大库加载 ----------
+const big = await page.evaluate(async () => {
+  const { vault, store } = window.__mailuo;
+  for (let i = 0; i < 300; i++) {
+    await vault.write('压测/批量/节点' + i + '.md', `---\nid: x-${i}\ntitle: 节点${i}\ntype: 概念\nsystem: 压测\nparent: 批量\nkeywords: [a, b, c]\nstatus: 已验证\nconfidence: 80\n---\n第 ${i} 个节点。\n`);
+  }
+  const t0 = performance.now();
+  await store.load();
+  const ms = performance.now() - t0;
+  const n = store.list('压测').length;
+  for (let i = 0; i < 300; i++) await vault.remove('压测/批量/节点' + i + '.md');
+  await store.load();
+  return { ms, n };
+});
+check(big.n === 300 && big.ms < 3000, '300 个节点的库 ' + Math.round(big.ms) + ' ms 读完');
 
 // 当日用量
 await page.goto(ORIGIN + '/#/');

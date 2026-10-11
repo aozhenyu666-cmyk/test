@@ -1,6 +1,6 @@
 {
   "name": "mailuo",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "脉络 · 个人知识结构引擎（v0.1）",
@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@capacitor/android": "8.5.3",
+    "@capacitor/app": "^8.1.2",
     "@capacitor/core": "8.5.3",
     "@capacitor/filesystem": "8.1.4"
   },

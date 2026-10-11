@@ -6,7 +6,7 @@ import { buildPack, MODE_QUESTIONS } from './pack.js';
 import { healthCheck, traceCause, longestChain, learningPath, dueReviews, gradeReview } from './features.js';
 import { loadSeed, SEED_SYSTEM } from './seed.js';
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 let store, vault;
 const app = document.getElementById('app');
 const session = { cands: loadDraft(), packRemoved: new Set(), lastAnswer: null, sys: localStorage.getItem('mailuo.sys') || '' };
@@ -56,7 +56,12 @@ async function boot() {
   if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !CapVault.available() && !/localhost|127\.0\.0\.1/.test(location.hostname)) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
-  window.__mailuo = { store, vault }; // 调试 / 测试用
+  window.__mailuo = { store, vault, back: handleBack }; // 调试 / 测试用
+  if (CapVault.available()) {
+    // 安卓返回键：先关弹层，再回上一页，到首页时退到后台（不杀掉 App）
+    const App = window.Capacitor.registerPlugin('App');
+    App.addListener('backButton', () => { if (handleBack() === 'exit') App.minimizeApp(); });
+  }
   dailySnapshot(vault).catch(() => {});
 }
 
@@ -85,6 +90,13 @@ function manualPanel({ title, hint, getText, placeholder, onPaste, testid }) {
       if (!area.value.trim()) return toast('先粘贴回答');
       onPaste(area.value);
     } }, '解析回答'));
+}
+
+function handleBack() {
+  if (document.querySelector('.sheet')) { closeSheets(); return 'sheet'; }
+  const atHome = /^#?\/?$/.test(location.hash);
+  if (!atHome) { if (history.length > 1) history.back(); else go('#/'); return 'back'; }
+  return 'exit';
 }
 
 function closeSheets() { document.querySelectorAll('.sheet, .scrim').forEach((e) => e.remove()); }
@@ -147,6 +159,13 @@ function viewToday() {
       h('div', { class: 'bars', title: '近 7 天' }, days.map((v, i) => h('i', { class: i === 6 ? 'today' : '', style: { height: Math.max(3, (v / max) * 38) + 'px' } })))),
     h('div', { class: 'small sub mt' }, `拆分 ${d.split?.n || 0} 次 · 推演 ${d.think?.n || 0} 次 · 收到 ${recv} token`)));
 
+  const cfg = getConfig();
+  if (!cfg.split.key && !cfg.think.key) {
+    out.push(h('div', { class: 'card setup mt', 'data-testid': 'setup-hint' },
+      h('div', { class: 'serif', style: { fontWeight: 600, fontSize: '16px' } }, '还没有配置模型'),
+      h('div', { class: 'small muted', style: { margin: '4px 0 12px' } }, '在设置里填写两个模型的 API；或者直接用「手动模式」：复制指令到 ChatGPT、Claude、豆包等聊天 App，再把回答粘回来，不花 API 费用。'),
+      h('div', { class: 'btn-row' }, h('button', { class: 'btn sm primary', onclick: () => go('#/settings') }, icon('gear'), '去设置'))));
+  }
   if (!nodes.length) {
     out.push(h('div', { class: 'empty' }, veinArt(), h('h3', {}, '先建一个体系'),
       h('p', {}, '粘贴一段笔记或 AI 回复，拆成「体系 → 层级 → 节点 → 关系」。也可以先载入示例体系「思维问题」试用。'),
@@ -1034,7 +1053,8 @@ function viewSettings() {
     const base = h('input', { class: 'input', value: c.base, placeholder: 'https://…', 'data-testid': role + '-base' });
     const model = h('input', { class: 'input', value: c.model, placeholder: '模型名', 'data-testid': role + '-model' });
     const key = h('input', { class: 'input', value: c.key, type: 'password', placeholder: 'API Key（只存在本机）', autocomplete: 'off', 'data-testid': role + '-key' });
-    preset.addEventListener('change', () => { const p = PRESETS[preset.value]; format.value = p.format; base.value = p.base; model.value = p.model; });
+    preset.addEventListener('change', () => { const p = PRESETS[preset.value]; format.value = p.format; base.value = p.base; model.value = p.model; model.placeholder = p.hint || '模型名'; });
+    if (PRESETS[c.preset]?.hint) model.placeholder = PRESETS[c.preset].hint;
     const read = () => ({ preset: preset.value, label: PRESETS[preset.value]?.label, format: format.value, base: base.value.trim(), model: model.value.trim(), key: key.value.trim() });
     const status = h('div', { class: 'small muted mt' });
     const card = h('div', { class: 'card' },

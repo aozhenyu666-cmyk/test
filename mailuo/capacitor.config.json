@@ -2,8 +2,16 @@
   "appId": "app.mailuo.knowledge",
   "appName": "脉络",
   "webDir": "www",
-  "android": { "backgroundColor": "#f4f1ea" },
+  "android": {
+    "backgroundColor": "#f4f1ea"
+  },
   "plugins": {
-    "CapacitorHttp": { "enabled": true }
+    "CapacitorHttp": {
+      "enabled": true
+    },
+    "SystemBars": {
+      "insetsHandling": "css",
+      "initialViewportFitValueHint": "cover"
+    }
   }
 }
