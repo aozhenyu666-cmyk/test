@@ -154,7 +154,7 @@ class LoopTest {
         assertEquals(code, sim.text(threadId, F.CODE)) // 编号写回了 Notion
 
         // 3. 去 GPT：带上前情
-        compose.onNodeWithTag("task-gpt").performClick()
+        compose.onNodeWithTag("task-gpt").performScrollTo().performClick()
         waitText("项目经历太虚，先重写第二段")
         waitText(code)
         shot("e2e-02-gpt-context")
@@ -162,8 +162,8 @@ class LoopTest {
         androidx.test.espresso.Espresso.pressBack()
 
         // 4. 开始 → 计时 → 做完 → 写结果
-        compose.onNodeWithTag("task-start").performClick()
-        compose.onNodeWithTag("start-confirm").performClick()
+        compose.onNodeWithTag("task-start").performScrollTo().performClick()
+        compose.onNodeWithTag("start-confirm").performScrollTo().performClick()
         compose.waitUntilAtLeastOneExists(hasTestTag("session-done"), 10_000)
         shot("e2e-03-session")
         compose.onNodeWithTag("session-done").performScrollTo().performClick()
@@ -357,7 +357,7 @@ class LoopTest {
             settle()
             shot(name)
         }
-        waitFor(hasTestTag("tab-home"), 5_000, "底部标签")
+        waitFor(hasText("今天"), 5_000, "底部标签")
     }
 
     /**

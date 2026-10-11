@@ -20,6 +20,21 @@ class SeedReceiver : BroadcastReceiver() {
             store.updateConfig { it.copy(blocked = list.split(',').map(String::trim).filter(String::isNotEmpty).toSet()) }
         }
         when (intent.getStringExtra("mode")) {
+            // 严管：清掉今天的记录和端到端测试留下的事项，加一道全天“开放即拦截”的关卡
+            "strict" -> {
+                val now = System.currentTimeMillis()
+                store.updateWork { com.zongkong.core.work.Work() }
+                store.updateToday(now) { com.zongkong.core.DayLog(it.date) }
+                store.updateConfig {
+                    it.copy(
+                        gates = com.zongkong.core.Defaults.gates() + com.zongkong.core.Gate(
+                            id = "smoke", dept = com.zongkong.core.Dept.HQ, title = "冒烟测试", instruction = "测试用",
+                            openAt = 4 * 60, deadline = 4 * 60 - 1, block = com.zongkong.core.BlockMode.FROM_OPEN,
+                        ),
+                        silenceHours = 0, dailyQuotaMin = 0, pausedUntil = 0,
+                    )
+                }
+            }
             "free" -> {
                 val now = System.currentTimeMillis()
                 store.updateToday(now) { day ->

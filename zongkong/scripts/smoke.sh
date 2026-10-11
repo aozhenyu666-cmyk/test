@@ -54,7 +54,7 @@ for i in 1 2 3 4 5 6; do
 done
 adb shell am start -n $PKG/.ui.MainActivity >/dev/null
 sleep 6
-adb shell am broadcast -a $PKG.SEED -p $PKG --es blocked $TARGET
+adb shell am broadcast -a $PKG.SEED -p $PKG --es blocked $TARGET --es mode strict
 sleep 2
 adb shell dumpsys accessibility | grep -iE "zongkong|Bound services|Enabled services" | head -8 | tee "$OUT/accessibility.txt"
 

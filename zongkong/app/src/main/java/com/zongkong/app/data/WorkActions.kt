@@ -55,6 +55,9 @@ class WorkActions(private val context: Context, private val store: Store, privat
         if (!ready) return@withLock "还没设置 Notion 的事项、行动、记录三个库（设置 → Notion）"
         val r = try {
             SyncEngine(notion, rnd).sync(store.workRef, dbs(), now())
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // 页面关掉了、协程被取消：不算同步失败，下次再同步
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "同步出错", e)
             val msg = "同步出错：${e.message ?: e.javaClass.simpleName}"
