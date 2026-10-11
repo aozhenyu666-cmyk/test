@@ -196,7 +196,7 @@ fun GateEditScreen(gateId: String, nav: NavHostController) {
 
             SectionLabel("“去做”按钮（可选）")
             OutlinedTextField(launch, { launch = it }, label = { Text("应用包名或链接") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            Hint("例：com.behaviordept.app（行为管理部）、notion.id（Notion）、com.openai.chatgpt，或者一个 Notion 页面链接。")
+            Hint("例：com.yishou.app（一手）、notion.id（Notion）、com.openai.chatgpt，或者一个 Notion 页面链接。")
 
             Button(
                 onClick = {

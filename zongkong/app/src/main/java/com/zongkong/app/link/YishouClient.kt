@@ -1,0 +1,61 @@
+package com.zongkong.app.link
+
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import androidx.core.os.bundleOf
+import com.zongkong.core.Link
+import com.zongkong.core.YishouStatus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+/** 总控这边读一手的状态、把行动交给一手。一手没装、太旧或签名不对时如实说。 */
+object YishouClient {
+    private val uri: Uri = Uri.parse("content://${Link.YISHOU_AUTHORITY}")
+
+    sealed interface Result<out T> {
+        data class Ok<T>(val value: T) : Result<T>
+        data class Err(val message: String) : Result<Nothing>
+    }
+
+    fun installed(context: Context) = Partner.installed(context)
+
+    suspend fun status(context: Context): Result<YishouStatus> = withContext(Dispatchers.IO) {
+        call(context, Link.STATUS, null) { b ->
+            @Suppress("DEPRECATION")
+            YishouStatus.fromMap(b.keySet().associateWith { b.get(it) })
+        }
+    }
+
+    /** 交给一手陪练：新建或更新一手的当前任务。返回一手的回话。 */
+    suspend fun setTask(context: Context, order: Map<String, String>): Result<String> = withContext(Dispatchers.IO) {
+        call(context, Link.SET_TASK, bundleOf(*order.toList().toTypedArray())) { b -> b.getString(Link.OK).orEmpty() }
+    }
+
+    private fun <T> call(context: Context, method: String, extras: android.os.Bundle?, read: (android.os.Bundle) -> T): Result<T> {
+        if (!Partner.installed(context)) return Result.Err("没装一手")
+        if (!Partner.yishouGenuine(context)) return Result.Err("手机上的一手不是我们打包的那个（签名不对），不连接")
+        return try {
+            val b = context.contentResolver.call(uri, method, null, extras)
+                ?: return Result.Err("一手没有回应：把一手更新到 0.8 以上")
+            b.getString(Link.ERROR)?.let { return Result.Err("一手拒绝了：$it") }
+            Result.Ok(read(b))
+        } catch (e: IllegalArgumentException) {
+            Result.Err("一手版本太旧，还没有连接功能：更新到 0.8 以上")
+        } catch (e: Exception) {
+            Result.Err("连一手出错：${e.message ?: e.javaClass.simpleName}")
+        }
+    }
+
+    fun open(context: Context): Boolean {
+        val intent = context.packageManager.getLaunchIntentForPackage(Link.YISHOU) ?: return false
+        return try {
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    const val DOWNLOAD = "https://github.com/aozhenyu666-cmyk/test/releases/download/yishou-latest/yishou.apk"
+}

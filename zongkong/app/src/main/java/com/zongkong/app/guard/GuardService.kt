@@ -155,6 +155,13 @@ class GuardService : AccessibilityService() {
                 } catch (e: Exception) {
                     Log.w(TAG, "同步失败", e)
                 }
+                // 看证据的关卡（排了行动、一手练够了组数……）够了就自动打勾
+                try {
+                    val passed = zk.actions.autoVerify()
+                    if (passed.isNotEmpty()) Notifications.alert(this@GuardService, "自动验收通过", passed.joinToString("、"), "rhythm")
+                } catch (e: Exception) {
+                    Log.w(TAG, "自动验收失败", e)
+                }
             }
         }
     }

@@ -142,6 +142,9 @@ abstract class AppDao {
     @Query("SELECT * FROM daily_summary WHERE date = :date")
     abstract suspend fun getSummary(date: String): DailySummary?
 
+    @Query("SELECT * FROM daily_summary ORDER BY date DESC LIMIT 1")
+    abstract suspend fun latestSummary(): DailySummary?
+
     @Query("SELECT * FROM daily_summary ORDER BY date DESC LIMIT 60")
     abstract fun observeSummaries(): Flow<List<DailySummary>>
 

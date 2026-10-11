@@ -1,5 +1,8 @@
 package com.zongkong.app.data
 
+import com.zongkong.app.link.YishouClient
+import com.zongkong.core.YishouStatus
+
 import android.content.Context
 import com.zongkong.core.ApiResult
 import com.zongkong.core.DayClock
@@ -59,9 +62,8 @@ class Actions(private val context: Context, private val store: Store) {
             if (store.config.value.notion.workReady) work.sync()
         }
         val facts = Facts.build(status, store.today.value, store.zone, com.zongkong.core.work.Focus.daySummary(store.work.value, now, store.zone))
-        val evidence: (String) -> Pair<Int, List<String>> = { k ->
-            com.zongkong.core.work.Focus.evidence(store.work.value, com.zongkong.core.work.Focus.Evidence.valueOf(k), System.currentTimeMillis(), store.zone)
-        }
+        val yishou = if (gs.gate.evidence == com.zongkong.core.work.Focus.Evidence.YISHOU_SETS.name) YishouClient.status(context) else null
+        val evidence = evidenceOf(yishou)
         return when (val out = verifier.verify(gs.gate, text, store.config.value, date, store.zone, facts, evidence)) {
             is VerifyOutcome.Done -> {
                 record(gateId, text, out.verdict)
@@ -69,6 +71,43 @@ class Actions(private val context: Context, private val store: Store) {
             }
             is VerifyOutcome.Unavailable -> SubmitResult.Unavailable(out.reason, if (out.canDegrade) status.degradedLeft else 0)
         }
+    }
+
+    private fun evidenceOf(yishou: YishouClient.Result<YishouStatus>?): (String) -> Pair<Int, List<String>> = { k ->
+        val kind = com.zongkong.core.work.Focus.Evidence.entries.firstOrNull { it.name == k } ?: com.zongkong.core.work.Focus.Evidence.PLANNED_TODAY
+        if (kind == com.zongkong.core.work.Focus.Evidence.YISHOU_SETS) {
+            when (yishou) {
+                is YishouClient.Result.Ok -> yishou.value.doneSets to listOf(yishou.value.summary())
+                is YishouClient.Result.Err -> 0 to listOf(yishou.message)
+                null -> 0 to emptyList()
+            }
+        } else {
+            com.zongkong.core.work.Focus.evidence(store.work.value, kind, System.currentTimeMillis(), store.zone)
+        }
+    }
+
+    /**
+     * 看证据的关卡：证据够了就自动打勾，不用你去点。没够不记失败（不算一次提交）。
+     * 首页打开、后台每隔几分钟各查一次。返回自动通过的关卡标题。
+     */
+    suspend fun autoVerify(): List<String> {
+        val now = System.currentTimeMillis()
+        val status = store.status(now)
+        val open = status.gates.filter { !it.done && it.phase != GatePhase.NOT_OPEN && it.gate.verify == VerifyMode.EVIDENCE }
+        if (open.isEmpty()) return emptyList()
+        val needYishou = open.any { it.gate.evidence == com.zongkong.core.work.Focus.Evidence.YISHOU_SETS.name }
+        val yishou = if (needYishou && YishouClient.installed(context)) YishouClient.status(context) else null
+        val evidence = evidenceOf(yishou)
+        val passed = mutableListOf<String>()
+        for (gs in open) {
+            val (n, titles) = evidence(gs.gate.evidence)
+            if (n < gs.gate.evidenceMin) continue
+            val kind = com.zongkong.core.work.Focus.Evidence.entries.firstOrNull { it.name == gs.gate.evidence } ?: continue
+            val list = if (titles.isEmpty()) "" else "：" + titles.joinToString("、") { "「$it」" }
+            record(gs.gate.id, "（自动验收）", Verdict(true, "事项证据", "${kind.label} $n 条$list"))
+            passed += gs.gate.title
+        }
+        return passed
     }
 
     suspend fun submitDegraded(gateId: String, text: String, reason: String): SubmitResult {

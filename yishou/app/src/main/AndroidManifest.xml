@@ -43,6 +43,8 @@
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
+        <!-- 和总控互相连接：读总控的状态、从这里打开总控 -->
+        <package android:name="com.zongkong.app" />
     </queries>
 
     <application
@@ -151,6 +153,12 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- 总控连接：只走 call()，只认总控的签名（见 link/Partner.kt），别的应用调用一律拒绝 -->
+        <provider
+            android:name=".link.LinkProvider"
+            android:authorities="com.yishou.app.link"
+            android:exported="true" />
 
         <receiver
             android:name=".window.RescheduleReceiver"

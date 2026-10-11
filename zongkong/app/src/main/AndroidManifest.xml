@@ -24,6 +24,8 @@
         <!-- “去 GPT”“打开 Notion”：判断这两个 App 装了没有、能不能接收分享 -->
         <package android:name="com.openai.chatgpt" />
         <package android:name="notion.id" />
+        <!-- 行为管理部：和一手互相连接（读一手的训练、把行动交给一手陪练） -->
+        <package android:name="com.yishou.app" />
         <intent>
             <action android:name="android.intent.action.SEND" />
             <data android:mimeType="text/plain" />
@@ -98,5 +100,10 @@
                 <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
             </intent-filter>
         </receiver>
+        <!-- 一手连接：只走 call()，只认一手的签名（见 link/Partner.kt），别的应用调用一律拒绝 -->
+        <provider
+            android:name=".link.LinkProvider"
+            android:authorities="com.zongkong.app.link"
+            android:exported="true" />
     </application>
 </manifest>

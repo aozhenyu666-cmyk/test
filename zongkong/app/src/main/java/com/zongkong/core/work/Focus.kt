@@ -74,6 +74,8 @@ object Focus {
         LINKED_NOTES("材料关联到事项", "今天收集的材料、问题、念头关联到了某件事"),
         CONCLUSIONS("形成了判断", "今天有新的判断或结论记录（GPT 交接导入、Notion 里写的都算）"),
         DONE_ACTIONS("完成了行动", "今天有行动做完并记录了结果"),
+        /** 从一手读（总控 core 里数不出来，由 App 层问一手）。 */
+        YISHOU_SETS("一手练了几组", "一手里今天完成的训练组数（一组 = 几手有效回答，按一手的设置）"),
     }
 
     private fun sameDay(t: Long, now: Long, zone: ZoneId) = DayClock.dateKey(t, zone) == DayClock.dateKey(now, zone)
@@ -99,6 +101,7 @@ object Focus {
             Evidence.DONE_ACTIONS -> work.actions().filter {
                 (it.actionStatus == ActionStatus.DONE || it.actionStatus == ActionStatus.CONFIRM) && sameDay(it.updatedAt, now, zone)
             }
+            Evidence.YISHOU_SETS -> emptyList()
         }
         return items.size to items.take(5).map { it.title }
     }

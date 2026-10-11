@@ -37,18 +37,14 @@ object Defaults {
         Gate(
             id = "act_train",
             dept = Dept.ACT,
-            title = "训练打卡",
-            instruction = "在行为管理部 App 里练完今天的动作，回来报告练了什么、哪个分解动作最差、下次怎么改。",
-            template = """
-                练了什么（动作 / 组数 / 时长）：
-                最差的一个分解动作：
-                下次怎么改：
-            """.trimIndent(),
+            title = "一手训练",
+            instruction = "在一手里练完今天的组数（一组是几手有效回答，一手按你最近的达标情况自动加减目标）。练完不用写汇报，总控直接读一手的记录，够了自动打勾。",
             openAt = 4 * 60,
             deadline = 21 * 60,
-            verify = VerifyMode.TEXT,
-            minChars = 30,
-            launch = "com.behaviordept.app",
+            verify = VerifyMode.EVIDENCE,
+            evidence = "YISHOU_SETS",
+            evidenceMin = 2,
+            launch = "com.yishou.app",
         ),
         Gate(
             id = "think_one",

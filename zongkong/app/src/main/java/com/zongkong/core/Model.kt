@@ -130,7 +130,27 @@ data class Config(
     val onboarded: Boolean = false,
     /** 开始一步行动时默认开专注锁（分钟；0 = 不开）。没写结束时间的行动用这个时长。 */
     val focusMinutes: Int = 45,
+    /** 首页的快捷按钮（参谋可以帮你加）。 */
+    val shortcuts: List<Shortcut> = emptyList(),
 )
+
+/**
+ * 首页的一个快捷按钮。
+ * kind = ask：点了把 payload 发给参谋；kind = open：打开 payload 指的页面。
+ */
+@Serializable
+data class Shortcut(
+    val id: String,
+    val label: String,
+    val kind: String,
+    val payload: String,
+    val dept: Dept? = null,
+) {
+    companion object {
+        const val ASK = "ask"
+        const val OPEN = "open"
+    }
+}
 
 /** 一次验收的结论。 */
 @Serializable

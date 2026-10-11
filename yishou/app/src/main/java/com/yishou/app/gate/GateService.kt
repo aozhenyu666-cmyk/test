@@ -20,6 +20,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.yishou.app.link.ZongkongClient
 
 /**
  * 入口思考页的无障碍服务。
@@ -117,6 +119,9 @@ class GateService : AccessibilityService() {
         if (pkg == lastLaunchPkg && now - lastLaunchAt < 2_000) return
 
         scope.launch {
+            // 总控正在严管、会把这个应用弹回去：让总控处理，一手不再叠一层思考页
+            val zk = withContext(Dispatchers.IO) { ZongkongClient.status(this@GateService) }
+            if (zk?.bounces(pkg) == true) return@launch
             val pass = try {
                 app.database.dao().activePass(group, now)
             } catch (e: Exception) {
