@@ -76,6 +76,13 @@ function fixDates(v) {
   return v;
 }
 
+// 这个文件是否由脉络管理（节点文件或体系文件）
+export function isMailuoFile(path, text) {
+  if (path.startsWith('.mailuo/')) return true;
+  const { meta } = splitFrontmatter(text);
+  return meta.kind === 'system' || !!parseNode(text, path);
+}
+
 export function splitFrontmatter(text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text || '');
   if (!m) return { meta: {}, body: text || '' };
@@ -87,7 +94,8 @@ export function splitFrontmatter(text) {
 
 export function parseNode(text, path) {
   const { meta, body } = splitFrontmatter(text);
-  if (!meta.id || meta.kind === 'system') return null;
+  // 仓库里可能还有你自己的其他笔记：只有带 id 且带脉络字段（激活词 / 状态 / 关系）的才算节点
+  if (!meta.id || meta.kind === 'system' || !('keywords' in meta || 'status' in meta || 'links' in meta)) return null;
   const main = body.split(/\n##\s*关系\s*\n/)[0].trim();
   const paras = main.split(/\n\s*\n/);
   const n = { path, extra: {} };

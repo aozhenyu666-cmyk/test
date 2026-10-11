@@ -255,11 +255,15 @@ check(nBackups >= 1 && (await page.textContent('[data-testid=backup]')).includes
 await page.click('[data-testid=backup-now]');
 await page.waitForFunction((n) => document.querySelectorAll('[data-testid=backup]').length === n + 1, nBackups);
 const nodeCount = await page.evaluate(() => window.__mailuo.store.nodes.size);
+// 同一文件夹里的其他 Obsidian 笔记（含 id 字段），备份之后才建
+await page.evaluate(() => window.__mailuo.vault.write('日记/2026-10-11.md', '---\nid: 20261011\ntags: [日记]\n---\n今天的随手记。\n'));
 await page.evaluate(() => window.__mailuo.store.deleteNode('n-0004'));
 await page.locator('[data-testid=backup] button:has-text("恢复")').first().click();
 await page.click('.sheet .btn.accent');
 await page.waitForFunction((n) => window.__mailuo.store.nodes.size === n, nodeCount);
 check(await page.evaluate(() => window.__mailuo.store.nodes.has('n-0004')), '备份恢复：删掉的节点回来了');
+check(await page.evaluate(async () => !!(await window.__mailuo.vault.read('日记/2026-10-11.md'))), '恢复备份不会删掉文件夹里你自己的其他笔记');
+check(await page.evaluate(() => window.__mailuo.store.nodes.size) === nodeCount, '带 id 的普通笔记不会被当成节点');
 await page.waitForFunction((n) => document.querySelectorAll('[data-testid=backup]').length >= n + 2, nBackups, { timeout: 5000 }).catch(() => {});
 check((await page.textContent('body')).includes('恢复前'), '恢复前自动给当前状态做了备份');
 await shot('14-settings');

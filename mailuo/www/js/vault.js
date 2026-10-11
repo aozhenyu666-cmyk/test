@@ -213,7 +213,9 @@ export async function restoreSnapshot(vault, ts) {
   const { unzipSync, strFromU8 } = await import('../vendor/fflate.mjs');
   const entries = unzipSync(target.bytes);
   const keep = new Set(Object.keys(entries));
-  for (const p of await vault.list()) if (!keep.has(p)) await vault.remove(p);
+  // 只删除脉络自己管理的文件；同一文件夹里你的其他笔记不动
+  const { isMailuoFile } = await import('./model.js');
+  for (const p of await vault.list()) if (!keep.has(p) && isMailuoFile(p, await vault.read(p))) await vault.remove(p);
   for (const [p, u8] of Object.entries(entries)) if (!p.endsWith('/')) await vault.write(p, strFromU8(u8));
   return keep.size;
 }

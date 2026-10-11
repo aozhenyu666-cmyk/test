@@ -6,7 +6,7 @@ import { buildPack, MODE_QUESTIONS, libraryTokens, systemOutline } from './pack.
 import { healthCheck, traceCause, longestChain, learningPath, dueReviews, gradeReview, weeklyDigest } from './features.js';
 import { loadSeed, SEED_SYSTEM } from './seed.js';
 
-const VERSION = '0.1.4';
+const VERSION = '0.1.5';
 let store, vault;
 const app = document.getElementById('app');
 const session = { cands: loadDraft(), packRemoved: new Set(), lastAnswer: null, sys: localStorage.getItem('mailuo.sys') || '' };
