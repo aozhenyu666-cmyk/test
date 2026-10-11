@@ -2,7 +2,7 @@
 //   体检（health）：检查库里哪些地方会把「好听的故事」当成规则
 //   溯源（trace）：沿「导致」找根因与后果，沿「前置」排学习顺序
 //   温故（review）：间隔复习，看标题和激活词回想结论
-import { REL_TYPES, today } from './model.js';
+import { REL_TYPES, today, titleSim, sharedKeywords } from './model.js';
 
 const DAY = 86400000;
 const daysSince = (d) => (d ? Math.floor((Date.now() - new Date(d).getTime()) / DAY) : 999);
@@ -36,6 +36,15 @@ export function healthCheck(store, system) {
     if (l.type === '对立' && o && !(n.verify && o.verify)) pairs.push(n, o);
   }
   if (pairs.length) issues.push({ key: 'rivalNoTest', level: 'high', label: '对立的两个解释缺少区分方法（至少一方没写验证方式）', nodes: [...new Set(pairs)] });
+  // 可能重复：标题很像；标题较像且有共同激活词；或同体系里激活词重合 ≥ 3 个（已有对立 / 类似关系的不算）
+  const dupes = [];
+  for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+    const a = nodes[i], b = nodes[j];
+    if (a.links.some((l) => l.to === b.id && (l.type === '对立' || l.type === '类似')) || b.links.some((l) => l.to === a.id && (l.type === '对立' || l.type === '类似'))) continue;
+    const sim = titleSim(a.title, b.title), kw = sharedKeywords(a.keywords, b.keywords).length;
+    if (sim >= 0.6 || (sim >= 0.45 && kw >= 1) || (a.system === b.system && kw >= 3)) dupes.push([a, b]);
+  }
+  if (dupes.length) issues.push({ key: 'dupe', level: 'mid', label: '可能重复的节点', nodes: [...new Set(dupes.flat())], pairs: dupes.slice(0, 10) });
   const penalty = issues.reduce((s, i) => s + WEIGHT[i.level] * i.nodes.length, 0);
   // 每个节点平均扣 10 分即为 0 分
   const score = nodes.length ? Math.max(0, Math.round(100 - (penalty * 10) / nodes.length)) : 100;
@@ -114,4 +123,21 @@ export async function gradeReview(store, id, grade) {
   store.review[id] = { step, due, last: today(), n: (r.n || 0) + 1 };
   await store.saveReview();
   return days;
+}
+
+// ---------- 本周回顾（不耗 token） ----------
+export function weeklyDigest(store, usage, asks) {
+  const since = new Date(Date.now() - 6 * DAY).toISOString().slice(0, 10);
+  const nodes = store.list();
+  const created = nodes.filter((n) => String(n.created || '') >= since);
+  const checks = nodes.flatMap((n) => n.checks.filter((c) => String(c.date) >= since).map((c) => ({ n, c })));
+  let sent = 0, calls = 0;
+  for (const [d, v] of Object.entries(usage || {})) if (d >= since) for (const r of Object.values(v)) { sent += r.sent || 0; calls += r.n || 0; }
+  const askN = Object.values(asks || {}).flat().filter((a) => String(a.date) >= since).length;
+  return {
+    created: created.length, checks: checks.length,
+    verified: checks.filter((x) => x.c.status === '已验证').length,
+    overturned: checks.filter((x) => x.c.status === '已推翻').length,
+    sent, calls, asks: askN,
+  };
 }

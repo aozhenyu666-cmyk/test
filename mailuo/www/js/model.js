@@ -3,7 +3,7 @@
 //   思维问题/思维问题.md               体系文件（kind: system，记录层级列表）
 //   思维问题/加工层/第一反应停止.md     节点文件（层级 = 子文件夹）
 //   .mailuo/review.json               温故进度（App 自用，Obsidian 忽略）
-import { load as yamlLoad } from '../vendor/js-yaml.mjs';
+import { load as yamlLoad, CORE_SCHEMA } from '../vendor/js-yaml.mjs';
 
 export const TYPES = ['概念', '论断', '规则', '问题', '案例'];
 export const STATUSES = ['假设', '已验证', '已推翻'];
@@ -67,11 +67,21 @@ export function serializeNode(n, store) {
   return lines.join('\n') + '\n';
 }
 
+// 万一遇到 Date（例如旧版本写坏的文件），统一转回 YYYY-MM-DD
+function fixDates(v) {
+  if (v instanceof Date) return isNaN(v) ? '' : v.toISOString().slice(0, 10);
+  if (typeof v === 'string' && /^[A-Z][a-z]{2} [A-Z][a-z]{2} \d{2} \d{4} /.test(v)) { const d = new Date(v); return isNaN(d) ? v : d.toISOString().slice(0, 10); }
+  if (Array.isArray(v)) return v.map(fixDates);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fixDates(x)]));
+  return v;
+}
+
 export function splitFrontmatter(text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text || '');
   if (!m) return { meta: {}, body: text || '' };
   let meta = {};
-  try { meta = yamlLoad(m[1]) || {}; } catch (e) { meta = { __error: String(e.message || e) }; }
+  // CORE_SCHEMA：不把 2026-10-10 解析成 Date，日期保持字符串原样写回
+  try { meta = fixDates(yamlLoad(m[1], { schema: CORE_SCHEMA }) || {}); } catch (e) { meta = { __error: String(e.message || e) }; }
   return { meta, body: m[2] };
 }
 
@@ -223,6 +233,41 @@ export class Store {
     if (sysDirty || !old) await this.saveSystem(s);
     this.emit();
     return n;
+  }
+
+  // 合并两个节点：保留 keepId，把 dropId 的激活词、结论、验证记录和关系都并过来，再删掉 dropId
+  async mergeNodes(keepId, dropId) {
+    const keep = this.nodes.get(keepId), drop = this.nodes.get(dropId);
+    if (!keep || !drop || keepId === dropId) return;
+    keep.keywords = [...new Set([...keep.keywords, ...drop.keywords])].slice(0, 5);
+    if (drop.claim && drop.claim !== keep.claim && !keep.note.includes(drop.claim) && keep.note.split('\n').filter(Boolean).length < 3) {
+      keep.note = (keep.note ? keep.note + '\n' : '') + '补充：' + drop.claim;
+    }
+    keep.checks = [...keep.checks, ...drop.checks];
+    if (!keep.verify && drop.verify) keep.verify = drop.verify;
+    for (const l of drop.links) {
+      if (l.to === keepId || keep.links.some((x) => x.to === l.to && x.type === l.type)) continue;
+      keep.links.push({ ...l });
+    }
+    // 指向被合并节点的关系改指向保留的节点
+    const touched = new Set();
+    for (const n of this.nodes.values()) {
+      if (n.id === dropId) continue;
+      let changed = false;
+      for (const l of n.links) if (l.to === dropId) { l.to = keepId; changed = true; }
+      if (changed) {
+        const seen = new Set();
+        n.links = n.links.filter((l) => l.to !== n.id && !seen.has(l.type + l.to) && seen.add(l.type + l.to));
+        touched.add(n);
+      }
+    }
+    this.nodes.delete(dropId);
+    await this.vault.remove(drop.path);
+    delete this.review[dropId];
+    await this.saveNode(keep);
+    for (const n of touched) if (n !== keep) await this.vault.write(n.path, serializeNode(n, this));
+    await this.saveSystem(this.systems.get(drop.system));
+    this.emit();
   }
 
   async deleteNode(id) {

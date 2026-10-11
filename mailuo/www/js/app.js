@@ -3,10 +3,10 @@ import { Store, TYPES, STATUSES, REL_TYPES, REL_HINT, REL_VIEW, findDuplicate, f
 import { openVault, IdbVault, FsVault, CapVault, exportZip, importZip, listSnapshots, snapshot, dailySnapshot, restoreSnapshot } from './vault.js';
 import { getConfig, setConfig, usage, callModel, PROMPT_SPLIT, splitUserMessage, extractJson, normalizeSplit, PROMPT_THINK, parseAnswer, PRESETS, estimateTokens, PROMPT_KEYWORDS, keywordsUserMessage } from './llm.js';
 import { buildPack, MODE_QUESTIONS, libraryTokens, systemOutline } from './pack.js';
-import { healthCheck, traceCause, longestChain, learningPath, dueReviews, gradeReview } from './features.js';
+import { healthCheck, traceCause, longestChain, learningPath, dueReviews, gradeReview, weeklyDigest } from './features.js';
 import { loadSeed, SEED_SYSTEM } from './seed.js';
 
-const VERSION = '0.1.3';
+const VERSION = '0.1.4';
 let store, vault;
 const app = document.getElementById('app');
 const session = { cands: loadDraft(), packRemoved: new Set(), lastAnswer: null, sys: localStorage.getItem('mailuo.sys') || '' };
@@ -181,6 +181,14 @@ function viewToday() {
     h('div', { class: 'tile', onclick: () => go('#/capture') }, icon('plus'), h('div', {}, h('div', { class: 't' }, '录入'), h('div', { class: 's' }, '粘贴 → 拆分'))),
     h('div', { class: 'tile', onclick: () => go('#/review'), 'data-testid': 'tile-review' }, h('div', { class: 'n' }, due), h('div', {}, h('div', { class: 't' }, '温故'), h('div', { class: 's' }, '张卡片到期'))),
     h('div', { class: 'tile', onclick: () => go('#/health') }, h('div', { class: 'n' }, hc.score), h('div', {}, h('div', { class: 't' }, '体检'), h('div', { class: 's' }, hc.issues.length + ' 类问题')))));
+
+  let asks = {};
+  try { asks = JSON.parse(localStorage.getItem('mailuo.asks') || '{}'); } catch { /* 空 */ }
+  const week = weeklyDigest(store, u, asks);
+  const stat = (n, label) => h('div', { class: 'stat' }, h('div', { class: 'n' }, n), h('div', { class: 's' }, label));
+  out.push(h('h2', { class: 'section' }, '本周'), h('div', { class: 'card weekly', 'data-testid': 'weekly' },
+    h('div', { class: 'stats' }, stat(week.created, '新增节点'), stat(week.checks, '回填'), stat(week.verified + ' / ' + week.overturned, '验证 / 推翻'), stat(week.asks, '次提问')),
+    h('div', { class: 'small muted mt' }, '近 7 天发送 ' + week.sent + ' token · ' + week.calls + ' 次模型调用')));
 
   const hyp = nodes.filter((n) => n.status === '假设').sort((a, b) => String(a.checks.at(-1)?.date || a.created).localeCompare(String(b.checks.at(-1)?.date || b.created)));
   if (hyp.length) {
@@ -497,7 +505,12 @@ function viewNode(id) {
   const an = findAnalogies(id, store, 3);
   if (an.length) {
     out.push(h('h2', { class: 'section' }, '结构相似', h('span', { class: 'more', onclick: () => go('#/ask/' + id + '?mode=analogy') }, '请 AI 判断')));
-    out.push(h('div', { class: 'list' }, an.map((a) => nodeRow(a.node, () => go('#/node/' + a.node.id), h('span', { class: 'pill outline small' }, a.reasons[0].split('：')[0])))));
+    out.push(h('div', { class: 'list' }, an.map((a) => nodeRow(a.node, () => go('#/node/' + a.node.id),
+      h('button', { class: 'btn sm', 'data-testid': 'link-like', title: a.reasons.join('；'), onclick: async (e) => {
+        e.stopPropagation();
+        await store.addLink(id, { type: '类似', to: a.node.id, why: a.reasons[0] });
+        toast('已建立「类似」关系'); route(true);
+      } }, '＋类似')))));
   }
 
   const asks = askHistory(id);
@@ -989,8 +1002,27 @@ function viewHealth(_, params) {
   out.push(h('div', { class: 'list mt' }, r.issues.map((i) => h('div', { class: 'card issue' },
     h('div', { class: 'ih' }, h('span', { class: 'lvl ' + i.level }), i.label, h('span', { class: 'small muted', style: { marginLeft: 'auto' } }, i.nodes.length)),
     h('div', { class: 'chips' }, i.nodes.slice(0, 12).map((n) => h('span', { class: 'kw', onclick: () => go('#/node/' + n.id) }, n.title))),
+    i.pairs ? h('div', { class: 'list mt' }, i.pairs.map(([a, b]) => h('div', { class: 'link-cand', 'data-testid': 'dupe-pair' },
+      h('div', { class: 'grow' }, h('b', {}, a.title), ' ≈ ', h('b', {}, b.title), h('div', { class: 'why' }, a.system + (a.system !== b.system ? ' / ' + b.system : ''))),
+      h('button', { class: 'btn sm', onclick: () => mergeSheet(a, b) }, icon('merge'), '合并')))) : null,
     i.key === 'kwCount' ? h('button', { class: 'btn sm mt', 'data-testid': 'fill-kw', onclick: () => fillKeywordsSheet(i.nodes) }, icon('spark'), 'AI 补全激活词（约 ' + estimateTokens(PROMPT_KEYWORDS + keywordsUserMessage(i.nodes.slice(0, 30))) + ' token）') : null))));
   return out;
+}
+
+function mergeSheet(a, b) {
+  sheet('合并两个节点', (box, close) => {
+    let keep = a.id;
+    const opt = (n) => h('label', { class: 'link-cand', style: { cursor: 'pointer' } },
+      h('input', { type: 'radio', name: 'keep', checked: n.id === keep, onchange: () => { keep = n.id; } }),
+      h('div', { class: 'grow' }, h('b', {}, n.title), h('div', { class: 'why' }, n.claim), h('div', { class: 'why' }, n.links.length + ' 条关系 · ' + n.status)));
+    box.append(h('p', { class: 'small muted' }, '选择保留哪一个。另一个的激活词、结论（补进说明）、验证记录和关系都会并过来，指向它的关系也会改指向保留的节点，然后删除它的文件。'),
+      h('div', { class: 'list' }, opt(a), opt(b)),
+      h('button', { class: 'btn primary block mt', 'data-testid': 'merge-confirm', onclick: async () => {
+        const drop = keep === a.id ? b.id : a.id;
+        await store.mergeNodes(keep, drop);
+        close(); route(true); toast('已合并');
+      } }, '合并'));
+  });
 }
 
 // 用便宜模型给激活词不足的节点补 3–5 个激活词；逐个确认后写入

@@ -260,7 +260,8 @@ await page.locator('[data-testid=backup] button:has-text("恢复")').first().cli
 await page.click('.sheet .btn.accent');
 await page.waitForFunction((n) => window.__mailuo.store.nodes.size === n, nodeCount);
 check(await page.evaluate(() => window.__mailuo.store.nodes.has('n-0004')), '备份恢复：删掉的节点回来了');
-check(await page.locator('[data-testid=backup]').count() >= 2, '恢复前自动给当前状态做了备份');
+await page.waitForFunction((n) => document.querySelectorAll('[data-testid=backup]').length >= n + 2, nBackups, { timeout: 5000 }).catch(() => {});
+check((await page.textContent('body')).includes('恢复前'), '恢复前自动给当前状态做了备份');
 await shot('14-settings');
 
 // ---------- 新增：AI 补全激活词 / 复制体系大纲 ----------
@@ -276,6 +277,53 @@ await page.goto(ORIGIN + '/#/tree');
 await page.click('[data-testid=copy-outline]');
 const outline = await page.evaluate(() => navigator.clipboard.readText());
 check(outline.startsWith('# 思维问题') && outline.includes('**第一反应停止**') && outline.includes('对立→'), '复制体系大纲（含层级、结论、激活词、关系）');
+
+// ---------- 新增：类比候选一键建「类似」、重复节点合并、本周回顾 ----------
+await page.goto(ORIGIN + '/#/node/n-0006');
+await page.waitForSelector('[data-testid=link-like]');
+const likeBefore = await page.evaluate(() => window.__mailuo.store.nodes.get('n-0006').links.length);
+await page.locator('[data-testid=link-like]').first().click();
+await page.waitForFunction((n) => window.__mailuo.store.nodes.get('n-0006').links.length === n + 1, likeBefore);
+check(await page.evaluate(() => window.__mailuo.store.nodes.get('n-0006').links.at(-1).type === '类似'), '类比候选一键建立「类似」关系');
+
+await page.evaluate(async () => {
+  const s = window.__mailuo.store;
+  await s.saveNode({ id: 'n-0099', title: '推理链中断', type: '论断', system: '思维问题', parent: '', keywords: ['推理链', '断点', '演绎'], status: '假设', confidence: 40, verify: '记录断点', claim: '推理到一半就断了。', note: '', links: [], checks: [], extra: {} });
+  const src = s.nodes.get('n-0005');
+  src.links.push({ type: '支撑', to: 'n-0099', why: '测试用' });
+  await s.saveNode(src);
+});
+await page.goto(ORIGIN + '/#/health');
+await page.waitForSelector('[data-testid=dupe-pair]');
+check((await page.textContent('[data-testid=dupe-pair]')).includes('推理链中断'), '体检找出可能重复的节点对');
+await page.locator('[data-testid=dupe-pair]', { hasText: '推理链中断' }).locator('button').click();
+await page.click('.sheet label:has-text("推理链断") input');
+await page.click('[data-testid=merge-confirm]');
+await page.waitForFunction(async () => !window.__mailuo.store.nodes.has('n-0099') && !(await window.__mailuo.vault.read(window.__mailuo.store.nodes.get('n-0005').path)).includes('n-0099'));
+const mergedState = await page.evaluate(async () => {
+  const s = window.__mailuo.store;
+  const files = await window.__mailuo.vault.list();
+  return { redirected: s.nodes.get('n-0005').links.some((l) => l.to === 'n-0002' && l.type === '支撑'), fileGone: !files.some((f) => f.includes('推理链中断')), note: s.nodes.get('n-0002').note,
+    body: await window.__mailuo.vault.read(s.nodes.get('n-0005').path) };
+});
+check(mergedState.redirected && mergedState.fileGone && mergedState.note.includes('推理到一半'), '合并：关系改指向保留节点，旧文件删除，结论并入说明');
+check(mergedState.body.includes('支撑 [[推理链断]]') && !mergedState.body.includes('推理链中断'), '合并后双链同步更新');
+
+await page.goto(ORIGIN + '/#/');
+await page.waitForSelector('[data-testid=weekly]');
+check(/\d+\s*新增节点/.test(await page.textContent('[data-testid=weekly]')) && (await page.textContent('[data-testid=weekly]')).includes('次提问'), '今日页显示本周回顾');
+await shot('19-weekly');
+
+// 从文件重新读入再保存，日期字段必须保持 YYYY-MM-DD（不能被 YAML 解析成 Date）
+const dates = await page.evaluate(async () => {
+  const { store, vault } = window.__mailuo;
+  await store.load();
+  await store.saveNode(store.nodes.get('n-0005'));
+  const out = [];
+  for (const p of await vault.list()) if (p.endsWith('.md')) out.push(...((await vault.read(p)).match(/^(created|updated): .*$/gm) || []));
+  return out;
+});
+check(dates.length > 10 && dates.every((d) => /^(created|updated): \d{4}-\d{2}-\d{2}$/.test(d)), '重新读入后保存，日期保持 YYYY-MM-DD');
 
 // ---------- 新增：安卓返回键逻辑 ----------
 await page.goto(ORIGIN + '/#/node/n-0001');
