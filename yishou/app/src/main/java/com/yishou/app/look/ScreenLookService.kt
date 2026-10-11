@@ -152,7 +152,7 @@ class ScreenLookService : Service() {
                 delay(60_000)
                 val prefs = app.settings.app.value
                 val now = System.currentTimeMillis()
-                if (WindowClock.active(now, prefs, java.time.AppZone.zone) == null) {
+                if (WindowClock.active(now, prefs, AppZone.zone) == null) {
                     stopAll()
                     break
                 }
