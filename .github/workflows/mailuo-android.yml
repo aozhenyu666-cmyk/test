@@ -9,6 +9,9 @@ on:
     paths: ['mailuo/**', '.github/workflows/mailuo-android.yml']
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 defaults:
   run:
     working-directory: mailuo
@@ -54,3 +57,31 @@ jobs:
           name: mailuo-debug-apk
           path: mailuo/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+  # 测试和打包都通过后，发布到固定的下载地址（覆盖上一版）：
+  # https://github.com/aozhenyu666-cmyk/test/releases/download/mailuo-latest/mailuo.apk
+  release:
+    if: github.event_name != 'pull_request'
+    needs: [e2e, apk]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: mailuo-debug-apk
+          path: apk
+      - name: Publish to release mailuo-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp apk/app-debug.apk mailuo.apk
+          VERSION=$(node -p "require('./mailuo/package.json').version")
+          gh release delete mailuo-latest --cleanup-tag --yes || true
+          gh release create mailuo-latest mailuo.apk \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "脉络 v$VERSION 最新调试版" \
+            --notes "由提交 ${GITHUB_SHA::7} 自动构建，已通过端到端验收测试。直接安装 mailuo.apk，可覆盖旧版本，数据保留（知识库在手机「文档/脉络」文件夹）。"

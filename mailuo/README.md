@@ -17,9 +17,9 @@
 ## 怎么用
 
 ### 手机（Android）
-1. 打开仓库的 **Actions → 脉络 Android APK**，进入最近一次成功运行，在页面底部的 Artifacts 中下载 `mailuo-debug-apk`，解压后得到 `app-debug.apk`
-2. 在手机上安装（需要允许「安装未知来源应用」）
-3. 打开后进入「设置」，填写两个模型的地址、模型名和密钥，然后点「测试连接」
+1. 用手机浏览器打开 **<https://github.com/aozhenyu666-cmyk/test/releases/download/mailuo-latest/mailuo.apk>**，下载后直接安装（需要允许「安装未知来源应用」）。链接固定不变，每次更新后都指向最新版，可以直接覆盖安装，数据会保留。
+2. 版本说明在 [Releases → mailuo-latest](https://github.com/aozhenyu666-cmyk/test/releases/tag/mailuo-latest)
+3. 打开后进入「设置」，填写两个模型的地址、模型名和密钥，然后点「测试连接」；也可以不填，直接用「手动模式」
 4. 回到「今日」，点「载入示例体系」，或者直接点 ＋ 粘贴笔记
 
 知识库保存在手机的 **文档/脉络/** 文件夹里，每个节点是一个 `.md` 文件。用 Obsidian 打开这个文件夹，就能看到同一批笔记的双链和关系图。
