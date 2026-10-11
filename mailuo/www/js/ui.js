@@ -53,6 +53,7 @@ const P = {
   eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
 };
 export function icon(name, cls = '') {
@@ -154,3 +155,41 @@ export function nodeRow(n, onclick, extra) {
 }
 
 export function relTag(type) { return h('span', { class: 'rel-tag rel-' + type }, type); }
+
+// 卡片左右滑：右滑 onRight、左滑 onLeft；纵向滚动不受影响
+export function swipeable(el, { onRight, onLeft, threshold = 90 }) {
+  el.classList.add('swipe');
+  let x0 = 0, y0 = 0, dx = 0, active = false, decided = false, id = null;
+  el.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button, select, input, textarea, a')) return;
+    x0 = e.clientX; y0 = e.clientY; dx = 0; active = true; decided = false; id = e.pointerId;
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!active || e.pointerId !== id) return;
+    const ddx = e.clientX - x0, ddy = e.clientY - y0;
+    if (!decided) {
+      if (Math.abs(ddx) < 10 && Math.abs(ddy) < 10) return;
+      decided = true;
+      if (Math.abs(ddy) > Math.abs(ddx)) { active = false; return; }
+      el.setPointerCapture(id);
+    }
+    dx = ddx;
+    el.style.transition = 'none';
+    el.style.transform = `translateX(${dx}px) rotate(${dx / 40}deg)`;
+    el.dataset.swipe = dx > threshold ? 'right' : dx < -threshold ? 'left' : '';
+  });
+  const end = () => {
+    if (!active) return;
+    active = false;
+    el.style.transition = '';
+    const dir = dx > threshold ? 'right' : dx < -threshold ? 'left' : '';
+    el.dataset.swipe = '';
+    if (dir) {
+      el.style.transform = `translateX(${dir === 'right' ? 120 : -120}%)`;
+      el.style.opacity = '0';
+      setTimeout(() => (dir === 'right' ? onRight : onLeft)?.(), 180);
+    } else el.style.transform = '';
+  };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+}

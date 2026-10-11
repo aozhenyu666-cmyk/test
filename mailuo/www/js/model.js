@@ -96,6 +96,7 @@ export function parseNode(text, path) {
   n.note = paras.slice(1).join('\n\n').trim();
   if (meta.__error) n.yamlError = meta.__error;
   n._savedTitle = n.title;
+  n._savedSystem = n.system;
   return n;
 }
 
@@ -137,6 +138,10 @@ export class Store {
     }
     try { this.review = JSON.parse(await this.vault.read('.mailuo/review.json') || '{}'); } catch { this.review = {}; }
     this.emit();
+  }
+
+  fingerprint() {
+    return [...this.nodes.values()].map((n) => n.id + n.title + n.updated + n.links.length + n.claim.length).join('|') + '#' + this.systems.size;
   }
 
   ensureSystemSync(name) {
@@ -184,6 +189,7 @@ export class Store {
     if (!n.created) n.created = today();
     const old = this.nodes.get(n.id);
     const oldTitle = n._savedTitle;
+    const oldSystem = n._savedSystem;
     const oldPath = n.path;
     let path = this.filePath(n);
     // 同名文件（不同节点）时加 id 避免覆盖
@@ -195,6 +201,9 @@ export class Store {
     if (n.parent) for (const lv of prefixes(n.parent)) if (!s.levels.includes(lv)) { s.levels.push(lv); sysDirty = true; }
     await this.vault.write(path, serializeNode(n, this));
     n._savedTitle = n.title;
+    n._savedSystem = n.system;
+    // 换了体系：旧体系文件里的目录也要去掉它
+    if (oldSystem && oldSystem !== n.system) await this.saveSystem(this.systems.get(oldSystem));
     if (oldPath && oldPath !== path) await this.vault.remove(oldPath);
     // 改名后，指向它的节点的双链要跟着改
     if (oldTitle && oldTitle !== n.title) {

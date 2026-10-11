@@ -182,3 +182,38 @@ export async function importZip(vault, buf) {
   }
   return n;
 }
+
+// ---------- 备份：整个仓库打成 zip 存进浏览器 IndexedDB（与仓库所在位置无关） ----------
+const KEEP = 10;
+export async function listSnapshots() {
+  return ((await kv.get('backups')) || []).map(({ bytes, ...meta }) => ({ ...meta, size: bytes.byteLength }));
+}
+export async function snapshot(vault, reason = '手动') {
+  const files = await vault.list();
+  if (!files.length) return null;
+  const bytes = await exportZip(vault);
+  const list = (await kv.get('backups')) || [];
+  const entry = { ts: Date.now(), date: new Date().toISOString().slice(0, 16).replace('T', ' '), reason, files: files.length, bytes };
+  list.unshift(entry);
+  await kv.set('backups', list.slice(0, KEEP));
+  return entry;
+}
+// 每天第一次打开时自动备份一次
+export async function dailySnapshot(vault) {
+  const list = (await kv.get('backups')) || [];
+  const today = new Date().toISOString().slice(0, 10);
+  if (list.some((b) => b.reason === '每日自动' && b.date.startsWith(today))) return null;
+  return snapshot(vault, '每日自动');
+}
+// 恢复：先给当前状态再备份一次，然后让仓库与快照完全一致
+export async function restoreSnapshot(vault, ts) {
+  const target = ((await kv.get('backups')) || []).find((b) => b.ts === ts);
+  if (!target) throw new Error('找不到这个备份');
+  await snapshot(vault, '恢复前');
+  const { unzipSync, strFromU8 } = await import('../vendor/fflate.mjs');
+  const entries = unzipSync(target.bytes);
+  const keep = new Set(Object.keys(entries));
+  for (const p of await vault.list()) if (!keep.has(p)) await vault.remove(p);
+  for (const [p, u8] of Object.entries(entries)) if (!p.endsWith('/')) await vault.write(p, strFromU8(u8));
+  return keep.size;
+}

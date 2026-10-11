@@ -128,7 +128,15 @@ export function extractJson(text) {
   const t = String(text).replace(/```(?:json)?/gi, '');
   const a = t.indexOf('{'), b = t.lastIndexOf('}');
   if (a < 0 || b <= a) throw new Error('模型没有返回 JSON');
-  return JSON.parse(t.slice(a, b + 1));
+  const body = t.slice(a, b + 1);
+  try { return JSON.parse(body); } catch (e) {
+    // 常见的小毛病：尾逗号、// 注释；最后再试把中文引号当作 JSON 引号
+    const tidy = (x) => x.replace(/^\s*\/\/.*$/gm, '').replace(/,\s*([}\]])/g, '$1');
+    for (const attempt of [tidy(body), tidy(body.replace(/[“”]/g, '"'))]) {
+      try { return JSON.parse(attempt); } catch { /* 下一种 */ }
+    }
+    throw new Error('模型返回的 JSON 无法解析：' + e.message);
+  }
 }
 
 // 把模型输出规范成候选卡片
@@ -166,7 +174,7 @@ export const PROMPT_THINK = `下面是我的知识结构片段：路径、节点
 - 验证：一个本周能做的小动作
 - 建议新增：最多 3 个节点或关系（标题 + 一句结论 + 关系类型）
 禁止逐条分析每个要点。
-「建议新增」每条单独一行，格式：关系类型｜标题｜一句结论。关系类型是新节点对当前节点的关系，只能用：属于、导致、支撑、反例、对立、前置、类似。`;
+「建议新增」每条单独一行，格式：关系类型｜标题｜一句结论｜3 个激活词（顿号分隔）。关系类型是新节点对当前节点的关系，只能用：属于、导致、支撑、反例、对立、前置、类似。`;
 
 const SECTIONS = [
   ['core', /^核心判断/], ['structure', /^结构/], ['alt', /^另一种可能/], ['wrong', /^如果我错了/],
@@ -178,7 +186,8 @@ export function parseAnswer(text) {
   let cur = null;
   const buf = {};
   for (const rawLine of String(text).split('\n')) {
-    const line = rawLine.replace(/^\s*(?:[-*•]|\d+[.、)])\s*/, '').replace(/\*\*/g, '').trim();
+    // 先去掉 Markdown 加粗和标题，再去掉列表符号（聊天 App 的回答常带这些格式）
+    const line = rawLine.replace(/\*\*|__/g, '').replace(/^\s*#{1,6}\s*/, '').replace(/^\s*(?:[-*•]|\d+[.、)])\s*/, '').trim();
     if (!line) continue;
     const sec = SECTIONS.find(([, re]) => re.test(line));
     if (sec && /^[^：:]{0,16}[：:]/.test(line)) {
@@ -206,7 +215,9 @@ export function parseAnswer(text) {
 function parseSuggestion(line) {
   if (/^(无|没有|暂无)/.test(line)) return null;
   const parts = line.split(/\s*[｜|]\s*/).filter(Boolean);
-  let type, title, claim;
+  let type, title, claim, keywords = [];
+  // 第 4 段是激活词（顿号 / 逗号分隔）
+  if (parts.length >= 4) keywords = parts.pop().split(/[、,，;；\s]+/).map((k) => k.trim()).filter(Boolean).slice(0, 5);
   if (parts.length >= 3) {
     [type, title, claim] = [parts[0], parts[1], parts.slice(2).join('，')];
     if (!REL_TYPES.includes(type.replace(/[[\]【】（）()]/g, ''))) {
@@ -224,5 +235,5 @@ function parseSuggestion(line) {
   if (!REL_TYPES.includes(type)) type = REL_TYPES.find((t) => line.includes(t)) || '类似';
   title = String(title || '').replace(/^(标题|节点)[：:]/, '').trim().slice(0, 40);
   claim = String(claim || '').replace(/^(结论)[：:]/, '').trim();
-  return title ? { type, title, claim } : null;
+  return title ? { type, title, claim, keywords } : null;
 }

@@ -1,12 +1,12 @@
-import { h, icon, brandMark, veinArt, dial, toast, sheet, confirmSheet, waiting, glyph, nodeRow, relTag } from './ui.js';
+import { h, icon, brandMark, veinArt, dial, toast, sheet, confirmSheet, waiting, glyph, nodeRow, relTag, swipeable } from './ui.js';
 import { Store, TYPES, STATUSES, REL_TYPES, REL_HINT, REL_VIEW, findDuplicate, findAnalogies, today, parentOf } from './model.js';
-import { openVault, IdbVault, FsVault, CapVault, exportZip, importZip } from './vault.js';
+import { openVault, IdbVault, FsVault, CapVault, exportZip, importZip, listSnapshots, snapshot, dailySnapshot, restoreSnapshot } from './vault.js';
 import { getConfig, setConfig, usage, callModel, PROMPT_SPLIT, splitUserMessage, extractJson, normalizeSplit, PROMPT_THINK, parseAnswer, PRESETS, estimateTokens } from './llm.js';
 import { buildPack, MODE_QUESTIONS } from './pack.js';
 import { healthCheck, traceCause, longestChain, learningPath, dueReviews, gradeReview } from './features.js';
 import { loadSeed, SEED_SYSTEM } from './seed.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 let store, vault;
 const app = document.getElementById('app');
 const session = { cands: loadDraft(), packRemoved: new Set(), lastAnswer: null, sys: localStorage.getItem('mailuo.sys') || '' };
@@ -39,22 +39,65 @@ async function boot() {
   await vault.ready();
   await store.load();
   if (!session.sys || !store.systems.has(session.sys)) session.sys = [...store.systems.keys()][0] || '';
-  window.addEventListener('hashchange', route);
+  window.addEventListener('hashchange', () => { closeSheets(); route(); });
   route();
+  // 回到前台时重新读取文件夹：在 Obsidian 里改过的内容能立刻看到
+  let hiddenAt = 0;
+  document.addEventListener('visibilitychange', async () => {
+    if (document.hidden) { hiddenAt = Date.now(); return; }
+    if (vault.kind === 'idb' || Date.now() - hiddenAt < 2000) return;
+    const before = store.fingerprint();
+    await store.load();
+    const name = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0];
+    if (store.fingerprint() !== before && !['capture', 'cands', 'ask'].includes(name) && !document.querySelector('.sheet')) {
+      route(); toast('已同步文件夹里的改动');
+    }
+  });
   if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !CapVault.available() && !/localhost|127\.0\.0\.1/.test(location.hostname)) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
   window.__mailuo = { store, vault }; // 调试 / 测试用
+  dailySnapshot(vault).catch(() => {});
 }
 
-function route() {
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); return true; } catch {
+    const ta = h('textarea', { style: { position: 'fixed', opacity: 0 } }, t);
+    document.body.append(ta); ta.select();
+    const ok = document.execCommand('copy'); ta.remove();
+    return ok;
+  }
+}
+
+// 手动模式：复制指令 → 在聊天 App 里问 → 把回答粘贴回来
+function manualPanel({ title, hint, getText, placeholder, onPaste, testid }) {
+  const area = h('textarea', { class: 'input', rows: 5, placeholder, 'data-testid': testid + '-paste' });
+  return h('details', { class: 'card manual mt' },
+    h('summary', {}, icon('copy'), h('span', { class: 'grow' }, title), h('span', { class: 'pill outline' }, '0 API token')),
+    h('p', { class: 'small muted' }, hint),
+    h('div', { class: 'step' }, h('span', { class: 'num' }, '1'), h('button', { class: 'btn sm', 'data-testid': testid + '-copy', onclick: async () => {
+      const t = getText();
+      if (!t) return;
+      toast((await copyText(t)) ? '已复制 · 约 ' + estimateTokens(t) + ' token，去聊天 App 粘贴' : '复制失败，请手动复制');
+    } }, icon('copy'), '复制指令')),
+    h('div', { class: 'step' }, h('span', { class: 'num' }, '2'), area),
+    h('button', { class: 'btn primary block mt', 'data-testid': testid + '-parse', onclick: () => {
+      if (!area.value.trim()) return toast('先粘贴回答');
+      onPaste(area.value);
+    } }, '解析回答'));
+}
+
+function closeSheets() { document.querySelectorAll('.sheet, .scrim').forEach((e) => e.remove()); }
+
+function route(keepScroll = false) {
+  const y = window.scrollY;
   const [path, qs] = location.hash.replace(/^#\/?/, '').split('?');
   const params = new URLSearchParams(qs || '');
   const [name, arg] = path.split('/').map(decodeURIComponent);
   const views = { '': viewToday, tree: viewTree, capture: viewCapture, cands: viewCands, node: viewNode, ask: viewAsk, verify: viewVerify, health: viewHealth, review: viewReview, trace: viewTrace, settings: viewSettings };
   const fn = views[name] || viewToday;
   render(() => fn(arg, params), name);
-  window.scrollTo(0, 0);
+  window.scrollTo(0, keepScroll === true ? y : 0);
 }
 
 function render(build, tab = '') {
@@ -91,7 +134,9 @@ function viewToday() {
   const date = new Date();
   const wk = '日一二三四五六'[date.getDay()];
   const out = [
-    topbarBrand(h('button', { class: 'iconbtn', onclick: () => go('#/settings'), 'aria-label': '设置' }, icon('gear'))),
+    topbarBrand(
+      h('button', { class: 'iconbtn', onclick: searchSheet, 'aria-label': '搜索', 'data-testid': 'search' }, icon('search')),
+      h('button', { class: 'iconbtn', onclick: () => go('#/settings'), 'aria-label': '设置' }, icon('gear'))),
     h('h1', { class: 'display' }, greeting()),
     h('div', { class: 'sub' }, `${date.getMonth() + 1}月${date.getDate()}日 周${wk} · ${store.systems.size} 个体系 · ${nodes.length} 个节点`),
   ];
@@ -129,6 +174,27 @@ function viewToday() {
   out.push(h('div', { class: 'list' }, recent.map((n) => nodeRow(n, () => go('#/node/' + n.id)))));
   return out;
 }
+// 全库搜索：标题、结论、说明、激活词、验证方式；按命中位置排序
+function searchSheet() {
+  sheet('搜索全部体系', (box, close) => {
+    const q = h('input', { class: 'input', type: 'search', placeholder: '标题、结论或激活词', 'data-testid': 'search-input' });
+    const list = h('div', { class: 'list mt', style: { maxHeight: '60vh', overflowY: 'auto' } });
+    const draw = () => {
+      list.innerHTML = '';
+      const t = q.value.trim().toLowerCase();
+      if (!t) return list.append(h('div', { class: 'small muted' }, '共 ' + store.nodes.size + ' 个节点'));
+      const score = (n) => (n.title.toLowerCase() === t ? 6 : n.title.toLowerCase().startsWith(t) ? 5 : n.title.toLowerCase().includes(t) ? 4 : 0) + (n.keywords.some((k) => k.toLowerCase().includes(t)) ? 3 : 0)
+        + (n.claim.toLowerCase().includes(t) ? 2 : 0) + ((n.note + n.verify).toLowerCase().includes(t) ? 1 : 0);
+      const hits = store.list().map((n) => [n, score(n)]).filter(([, sc]) => sc).sort((a, b) => b[1] - a[1]).slice(0, 40);
+      if (!hits.length) list.append(h('div', { class: 'small muted' }, '没有找到'));
+      for (const [n] of hits) list.append(nodeRow(n, () => { close(); go('#/node/' + n.id); }, h('span', { class: 'small muted' }, n.system)));
+    };
+    q.addEventListener('input', draw);
+    draw();
+    box.append(q, list);
+  });
+}
+
 function greeting() {
   const hr = new Date().getHours();
   return hr < 5 ? '夜深了' : hr < 11 ? '早上好' : hr < 14 ? '午安' : hr < 18 ? '下午好' : '晚上好';
@@ -141,6 +207,7 @@ function viewTree(_, params) {
   if (!store.systems.has(session.sys)) session.sys = systems[0] || '';
   localStorage.setItem('mailuo.sys', session.sys);
   const out = [topbarBrand(
+    h('button', { class: 'iconbtn', onclick: searchSheet, 'aria-label': '搜索全部体系' }, icon('search')),
     h('button', { class: 'iconbtn', onclick: () => newNodeSheet(session.sys, ''), 'aria-label': '新建节点' }, icon('plus')))];
   out.push(h('h1', { class: 'display' }, '结构'));
   out.push(h('div', { class: 'sys-chips' },
@@ -548,7 +615,22 @@ function viewAsk(id, params) {
     h('div', { class: 'seg' }, segBtn('ask', '提问'), segBtn('extend', '延展'), segBtn('analogy', '类比')),
     h('div', { class: 'field mt' }, q),
     h('h2', { class: 'section' }, '发送前预览'), packBox,
-    h('div', { class: 'mt' }, send), answerBox];
+    h('div', { class: 'mt' }, send),
+    manualPanel({
+      title: '不走 API：去聊天 App 问', testid: 'manual-ask',
+      hint: '复制「提示词 B + 打包内容」，粘贴到任意聊天 App。把它的回答粘贴回来，同样会解析成结构化卡片和候选节点。不消耗你的 API 额度。',
+      getText: () => { if (!q.value.trim()) { toast('先写下问题'); return ''; } return PROMPT_THINK + '\n\n' + drawPack().text; },
+      placeholder: '把聊天 App 的回答粘贴到这里',
+      onPaste: (raw) => {
+        const pack = drawPack();
+        const rec = { date: today(), mode, question: q.value.trim(), raw, sent: null, recv: null, packTokens: pack.tokens, manual: true };
+        pushAsk(id, rec);
+        answerBox.innerHTML = '';
+        answerBox.append(answerCard(n, rec));
+        answerBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      },
+    }),
+    answerBox];
   drawPack();
   if (params.get('show') && session.lastAnswer) answerBox.append(answerCard(n, session.lastAnswer));
   return out;
@@ -560,7 +642,7 @@ function answerCard(n, rec) {
   const box = h('div', { class: 'card answer mt2', 'data-testid': 'answer' });
   const draw = () => {
     box.innerHTML = '';
-    box.append(h('div', { class: 'small muted' }, `发送 ${rec.sent ?? '?'} · 收到 ${rec.recv ?? '?'} token · 打包 ${rec.packTokens ?? '?'}`));
+    box.append(h('div', { class: 'small muted' }, rec.manual ? `手动模式 · 打包 ${rec.packTokens ?? '?'} token · 未走 API` : `发送 ${rec.sent ?? '?'} · 收到 ${rec.recv ?? '?'} token · 打包 ${rec.packTokens ?? '?'}`));
     if (raw) {
       box.append(h('div', { class: 'raw mt' }, rec.raw));
     } else {
@@ -585,7 +667,7 @@ function answerCard(n, rec) {
 
 function suggestionsToCands(origin, suggest) {
   const nodes = suggest.map((s, i) => ({
-    tmp_id: 's' + (i + 1), title: s.title, type: '论断', claim: s.claim || s.title, keywords: [], status: '假设', confidence: 50,
+    tmp_id: 's' + (i + 1), title: s.title, type: '论断', claim: s.claim || s.title, keywords: s.keywords || [], status: '假设', confidence: 50,
     verify: '', merge_into: '', parent: origin.parent,
   }));
   const links = suggest.map((s, i) => ({ from: 's' + (i + 1), to: origin.id, type: s.type, why: 'AI 建议（' + today() + '）', on: true }));
@@ -605,34 +687,49 @@ function viewCapture() {
   const count = h('span', { class: 'small muted' }, draft.length + ' 字');
   text.addEventListener('input', () => { count.textContent = text.value.length + ' 字 · 约 ' + estimateTokens(text.value) + ' token'; localStorage.setItem('mailuo.captureDraft', text.value); });
   const status = h('div');
-  const btn = h('button', { class: 'btn accent block', 'data-testid': 'split', onclick: async () => {
+  const target = () => {
     const system = sysSel.value === '__new' ? newSys.value.trim() : sysSel.value;
-    if (!system) return toast('选择或新建一个体系');
-    if (text.value.trim().length < 10) return toast('材料太短');
+    if (!system) { toast('选择或新建一个体系'); return ''; }
+    if (text.value.trim().length < 10) { toast('材料太短'); return ''; }
     localStorage.setItem('mailuo.lastSource', source.value.trim());
+    return system;
+  };
+  const splitMessage = (system) => splitUserMessage(store.list(system).slice(0, 80), text.value.trim());
+  const finish = async (raw, system) => {
+    const data = normalizeSplit(extractJson(raw));
+    if (!data.nodes.length) throw new Error('没有拆出节点，换一段材料试试');
+    if (!store.systems.has(system)) await store.addSystem(system);
+    session.sys = system;
+    startCands({ ...data, system, source: source.value.trim() });
+    localStorage.removeItem('mailuo.captureDraft');
+  };
+  const btn = h('button', { class: 'btn accent block', 'data-testid': 'split', onclick: async () => {
+    const system = target();
+    if (!system) return;
     btn.disabled = true;
     status.innerHTML = '';
     status.append(waiting('便宜模型拆分中，目标 30 秒内'));
     try {
-      const existing = store.list(system).slice(0, 80);
-      const res = await callModel('split', PROMPT_SPLIT, splitUserMessage(existing, text.value.trim()), { maxTokens: 3000 });
-      const data = normalizeSplit(extractJson(res.text));
-      if (!data.nodes.length) throw new Error('没有拆出节点，换一段材料试试');
-      if (!store.systems.has(system)) await store.addSystem(system);
-      session.sys = system;
-      startCands({ ...data, system, source: source.value.trim() });
-      localStorage.removeItem('mailuo.captureDraft');
+      const res = await callModel('split', PROMPT_SPLIT, splitMessage(system), { maxTokens: 3000 });
+      await finish(res.text, system);
     } catch (e) {
       status.innerHTML = '';
       status.append(h('div', { class: 'banner' }, e.message));
     } finally { btn.disabled = false; }
   } }, icon('spark'), '拆分为候选卡片');
+  const manual = manualPanel({
+    title: '不走 API：去聊天 App 拆分', testid: 'manual-split',
+    hint: '复制拆分指令，粘贴到 ChatGPT / Claude / 豆包等聊天 App，再把它回复的 JSON 粘贴回来。不消耗你的 API 额度。',
+    getText: () => { const sys = target(); return sys ? PROMPT_SPLIT + '\n\n' + splitMessage(sys) : ''; },
+    placeholder: '把聊天 App 回复的 JSON 粘贴到这里',
+    onPaste: async (raw) => { const sys = target(); if (!sys) return; try { await finish(raw, sys); } catch (e) { toast(e.message, 3500); } },
+  });
   const out = [topbarBack('录入'), h('h1', { class: 'display' }, '录入与拆分'),
     h('p', { class: 'sub' }, '便宜模型只负责拆，节点和关系都要你逐张确认才会写入文件。'),
     session.cands ? h('div', { class: 'banner', style: { cursor: 'pointer' }, onclick: () => go('#/cands') }, icon('layers'), '有 ' + session.cands.nodes.length + ' 张候选卡片还没处理完，点此继续') : null,
     h('div', { class: 'row mt' }, h('div', { class: 'field' }, h('label', {}, '目标体系'), sysSel, newSys), h('div', { class: 'field' }, h('label', {}, '来源'), source)),
     h('div', { class: 'field' }, h('label', {}, '材料 ', count), text),
-    btn, status,
+    btn, status, manual,
     h('div', { class: 'center mt' }, h('button', { class: 'btn ghost', onclick: () => newNodeSheet(sysSel.value === '__new' ? '' : sysSel.value, '') }, '不用 AI，手动新建一个节点'))];
   return out;
 }
@@ -665,7 +762,19 @@ function viewCands() {
     return store.nodes.has(ref) || !!store.byTitle(ref);
   };
   const linkCount = C.links.filter((l) => l.on && resolvable(l.from) && resolvable(l.to)).length;
-  const persist = () => { saveDraft(); route(); };
+  // 逐张处理时保持滚动位置
+  const persist = () => { saveDraft(); route(true); };
+  const needsVerify = (c) => c.status === '假设' && !String(c.verify || '').trim();
+  const accept = (c) => {
+    if (needsVerify(c)) { toast('假设类要先补验证方式'); persist(); return editCandSheet(c, persist); }
+    c.state = 'accepted'; persist();
+  };
+  const acceptAll = (filter) => {
+    let skipped = 0;
+    for (const c of C.nodes) if (c.state === 'pending' && filter(c)) { if (needsVerify(c)) skipped++; else c.state = 'accepted'; }
+    persist();
+    if (skipped) toast(skipped + ' 张假设缺验证方式，留在待定');
+  };
   const out = [topbarBack('候选卡片', h('button', { class: 'btn ghost sm', onclick: async () => {
     if (!(await confirmSheet('放弃这批候选', '全部丢弃，不写入任何文件？', '全部放弃', true))) return;
     session.cands = null; localStorage.removeItem('mailuo.draft'); go('#/capture');
@@ -673,14 +782,15 @@ function viewCands() {
   out.push(h('h1', { class: 'display' }, C.nodes.length + ' 张候选'),
     h('div', { class: 'sub' }, '写入体系「' + C.system + '」 · 已接受 ' + counts.accepted + ' · 合并 ' + counts.merged + ' · 丢弃 ' + counts.discarded + ' · 待定 ' + counts.pending),
     h('div', { class: 'btn-row mt' },
-      h('button', { class: 'btn sm', onclick: () => { for (const c of C.nodes) if (c.state === 'pending' && !c.dupeId) c.state = 'accepted'; persist(); } }, icon('check'), '接受全部无重复的'),
-      h('button', { class: 'btn sm', onclick: () => { for (const c of C.nodes) if (c.state === 'pending') c.state = 'accepted'; persist(); } }, '接受全部待定')));
+      h('button', { class: 'btn sm', onclick: () => acceptAll((c) => !c.dupeId) }, icon('check'), '接受全部无重复的'),
+      h('button', { class: 'btn sm', onclick: () => acceptAll(() => true) }, '接受全部待定')),
+    counts.pending ? h('div', { class: 'swipe-hint' }, h('span', {}, '← 左滑丢弃'), h('span', {}, '右滑接受 →')) : null);
 
   const list = h('div', { class: 'list mt' });
   for (const c of C.nodes) {
     const badge = { accepted: '已接受', merged: '合并到「' + (store.nodes.get(c.mergeTo)?.title || '') + '」', discarded: '已丢弃', pending: '' }[c.state];
     const dupeNode = c.dupeId ? store.nodes.get(c.dupeId) : null;
-    list.append(h('div', { class: 'card cand ' + c.state, 'data-testid': 'cand' },
+    const card = h('div', { class: 'card cand ' + c.state, 'data-testid': 'cand' },
       badge ? h('span', { class: 'state-badge' }, badge) : null,
       h('div', { class: 'head' }, glyph(c), h('div', { class: 'title' }, c.title), dial(c.confidence, 36)),
       h('div', { class: 'chips', style: { marginTop: '8px' } }, h('span', { class: 'pill' }, c.type), h('span', { class: 'pill ' + c.status }, c.status)),
@@ -692,14 +802,13 @@ function viewCands() {
         h('button', { class: 'btn sm ghost', onclick: () => { c.dupeId = ''; persist(); } }, '不是重复')) : null,
       h('div', { class: 'btn-row' },
         c.state === 'pending'
-          ? [h('button', { class: 'btn sm primary', 'data-testid': 'accept', onclick: () => {
-              if (c.status === '假设' && !c.verify) { toast('假设类要先补验证方式'); return editCandSheet(c, persist); }
-              c.state = 'accepted'; persist();
-            } }, icon('check'), '接受'),
+          ? [h('button', { class: 'btn sm primary', 'data-testid': 'accept', onclick: () => accept(c) }, icon('check'), '接受'),
             h('button', { class: 'btn sm', onclick: () => editCandSheet(c, persist) }, icon('edit'), '修改'),
             h('button', { class: 'btn sm', onclick: () => mergePicker(c, persist) }, icon('merge'), '合并到…'),
             h('button', { class: 'btn sm ghost danger', onclick: () => { c.state = 'discarded'; persist(); } }, '丢弃')]
-          : h('button', { class: 'btn sm ghost', onclick: () => { c.state = 'pending'; c.mergeTo = ''; persist(); } }, icon('undo'), '撤销'))));
+          : h('button', { class: 'btn sm ghost', onclick: () => { c.state = 'pending'; c.mergeTo = ''; persist(); } }, icon('undo'), '撤销')));
+    if (c.state === 'pending') swipeable(card, { onRight: () => accept(c), onLeft: () => { c.state = 'discarded'; persist(); } });
+    list.append(card);
   }
   out.push(list);
 
@@ -953,6 +1062,7 @@ function viewSettings() {
   const fileIn = h('input', { type: 'file', accept: '.zip', style: { display: 'none' }, onchange: async () => {
     const f = fileIn.files[0];
     if (!f) return;
+    await snapshot(vault, '导入前');
     const n = await importZip(vault, await f.arrayBuffer());
     await store.load(); toast('已导入 ' + n + ' 个文件'); route();
   } });
@@ -977,12 +1087,34 @@ function viewSettings() {
       } }, icon('folder'), '改用本地文件夹') : null,
       vault.kind === 'fs' ? h('button', { class: 'btn sm', onclick: () => { localStorage.setItem('mailuo.vault', 'idb'); location.reload(); } }, '改回浏览器存储') : null,
       h('button', { class: 'btn sm ghost', onclick: async () => { await store.load(); toast('已重新读取 ' + store.nodes.size + ' 个节点'); } }, icon('refresh'), '重新读取')));
+  const backups = h('div', { class: 'list mt' });
+  const drawBackups = async () => {
+    backups.innerHTML = '';
+    const list = await listSnapshots();
+    if (!list.length) backups.append(h('div', { class: 'small muted' }, '还没有备份。每天第一次打开 App 会自动备份一次。'));
+    for (const b of list) {
+      backups.append(h('div', { class: 'link-cand', 'data-testid': 'backup' },
+        h('div', { class: 'grow' }, h('b', {}, b.date), h('div', { class: 'why' }, b.reason + ' · ' + b.files + ' 个文件 · ' + Math.max(1, Math.round(b.size / 1024)) + ' KB')),
+        h('button', { class: 'btn sm', onclick: async () => {
+          if (!(await confirmSheet('恢复到这个备份', '知识库会恢复成 ' + b.date + ' 的样子（之后新增的文件会被删除）。恢复前会先自动备份当前状态。', '恢复', true))) return;
+          const n = await restoreSnapshot(vault, b.ts);
+          await store.load(); toast('已恢复 ' + n + ' 个文件'); route();
+        } }, '恢复')));
+    }
+  };
+  drawBackups();
+  const backupCard = h('div', { class: 'card' },
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+      h('div', { class: 'grow' }, h('div', { class: 'serif', style: { fontWeight: 600, fontSize: '17px' } }, '备份'), h('div', { class: 'small muted' }, '整个知识库打包保存在本机，最多保留 10 份。')),
+      h('button', { class: 'btn sm', 'data-testid': 'backup-now', onclick: async () => { const b = await snapshot(vault, '手动'); toast(b ? '已备份 ' + b.files + ' 个文件' : '知识库是空的'); drawBackups(); } }, '立即备份')),
+    backups);
   return [topbarBrand(), h('h1', { class: 'display' }, '设置'),
     h('h2', { class: 'section' }, '模型'), split, think,
     h('h2', { class: 'section' }, '提问'),
     h('div', { class: 'card' }, h('div', { class: 'field', style: { margin: 0 } }, h('label', {}, '打包 token 预算（默认 1500）'), budget)),
     h('h2', { class: 'section' }, '外观'), theme,
     h('h2', { class: 'section' }, '数据'), storage,
+    h('div', { class: 'mt' }), backupCard,
     h('div', { class: 'sticky-bottom' }, h('button', { class: 'btn primary block', 'data-testid': 'save-settings', onclick: () => { save(); toast('已保存'); } }, '保存设置')),
     h('p', { class: 'small muted center mt2' }, '脉络 v' + VERSION + ' · 密钥只保存在本机，不写入知识库文件')];
 }

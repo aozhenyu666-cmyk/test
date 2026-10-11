@@ -24,6 +24,7 @@ const check = (c, label) => { console.log((c ? 'PASS ' : 'FAIL ') + label); if (
 
 const browser = await chromium.launch(process.env.PW_CHROMIUM ? { executablePath: process.env.PW_CHROMIUM } : {});
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, colorScheme: process.env.DARK ? 'dark' : 'light' });
+await ctx.grantPermissions(['clipboard-read', 'clipboard-write']);
 const page = await ctx.newPage();
 page.on('pageerror', (e) => { console.log('pageerror:', e.message); failures++; });
 page.on('console', (m) => { if (m.type() === 'error') console.log('console:', m.text()); });
@@ -133,6 +134,18 @@ await page.click('[data-testid=to-cands]');
 await page.waitForSelector('[data-testid=cand]');
 check(await page.locator('[data-testid=cand]').count() === 3, '「建议新增」解析成 3 张候选卡片');
 check((await page.textContent('body')).includes('舒缓感提前'), '候选卡片标题正确');
+check(await page.locator('[data-testid=cand]').first().locator('.kw').count() === 3, '「建议新增」带回 3 个激活词');
+
+// 左滑丢弃一张候选卡
+const card = page.locator('[data-testid=cand]').nth(1);
+const cb = await card.boundingBox();
+await page.mouse.move(cb.x + cb.width / 2, cb.y + 40);
+await page.mouse.down();
+await page.mouse.move(cb.x + cb.width / 2 - 160, cb.y + 44, { steps: 10 });
+await page.mouse.up();
+await page.waitForSelector('[data-testid=cand].discarded');
+check(true, '候选卡片左滑即丢弃');
+await shot('15-swipe');
 
 // ---------- 预算砍减顺序 ----------
 await page.goto(ORIGIN + '/#/ask/n-0001');
@@ -181,6 +194,69 @@ await page.waitForSelector('.t-self');
 check(await page.locator('.t-node.root').count() >= 1, '溯源找到根因候选');
 await shot('13-trace');
 await page.goto(ORIGIN + '/#/settings');
+await shot('14-settings');
+
+// ---------- 新增：不走 API 的手动模式 ----------
+await page.goto(ORIGIN + '/#/ask/n-0007');
+await page.fill('[data-testid=question]', '怎样区分这两个根因？');
+await page.click('details.manual summary');
+await page.click('[data-testid=manual-ask-copy]');
+const clip = await page.evaluate(() => navigator.clipboard.readText());
+check(clip.includes('只输出：') && clip.includes('【路径】思维问题 › 根因') && clip.includes('问题：怎样区分这两个根因？'), '手动模式：复制的是「提示词 B + 打包内容」');
+const before = calls.length;
+await page.fill('[data-testid=manual-ask-paste]', `**核心判断**：先看「累不累」，再看「有没有问题可问」。
+**结构**：单步成本 → 舒缓感 → 停止
+**把握**：7成
+**验证**：本周卡住时同时记录疲劳度和是否有下一问。
+**建议新增**：
+- 对立｜疲劳主导｜停下时疲劳评分高，与有没有下一问无关｜疲劳、认知负荷、精力`);
+await page.click('[data-testid=manual-ask-parse]');
+await page.waitForSelector('[data-testid=core]');
+check(calls.length === before, '手动模式不调用 API');
+check((await page.textContent('[data-testid=answer]')).includes('未走 API') && (await page.textContent('[data-testid=core]')).includes('累不累'), '手动模式：粘贴的回答（含 Markdown 加粗）能解析');
+await shot('16-manual');
+
+await page.goto(ORIGIN + '/#/capture');
+await page.fill('[data-testid=capture-text]', '学习新知识时，先建立框架再填细节，记忆更牢；框架像挂钩。');
+await page.click('details.manual summary');
+await page.click('[data-testid=manual-split-copy]');
+check((await page.evaluate(() => navigator.clipboard.readText())).includes('你是结构拆分器'), '手动拆分：复制拆分指令');
+await page.fill('[data-testid=manual-split-paste]', '好的，结果如下：\n```json\n{"nodes":[{"tmp_id":"a","title":"框架先行","type":"规则","claim":"先建框架再填细节，记得更牢。","keywords":["图式","组块","记忆提取"],"status":"假设","confidence":60,"verify":"两种学法各学一章，一周后测回忆量",},],"links":[],}\n```');
+await page.click('[data-testid=manual-split-parse]');
+await page.waitForSelector('[data-testid=cand]');
+check((await page.textContent('body')).includes('框架先行'), '手动拆分：粘贴带尾逗号的 JSON 也能解析成候选卡片');
+await page.click('[data-testid=cand] [data-testid=accept]');
+await page.click('[data-testid=commit]');
+await page.waitForURL(/#\/tree/);
+check(await page.evaluate(() => [...window.__mailuo.store.nodes.values()].some((n) => n.title === '框架先行')), '手动拆分的节点已写入');
+
+// ---------- 新增：全库搜索 / 返回键关闭弹层 ----------
+await page.goto(ORIGIN + '/#/');
+await page.click('[data-testid=search]');
+await page.fill('[data-testid=search-input]', '舒缓');
+check(await page.locator('.sheet .node-row').count() >= 2, '全库搜索：按标题 / 结论 / 激活词命中');
+await shot('17-search');
+await page.locator('.sheet .node-row').first().click();
+await page.waitForSelector('.node-hero');
+await page.click('[data-testid=backfill]');
+await page.goBack();
+await page.waitForTimeout(200);
+check(await page.locator('.sheet').count() === 0, '返回时自动关掉弹层');
+
+// ---------- 新增：备份与恢复 ----------
+await page.goto(ORIGIN + '/#/settings');
+await page.waitForTimeout(300);
+const nBackups = await page.locator('[data-testid=backup]').count();
+check(nBackups >= 1 && (await page.textContent('[data-testid=backup]')).includes('每日自动'), '每天第一次打开自动备份');
+await page.click('[data-testid=backup-now]');
+await page.waitForFunction((n) => document.querySelectorAll('[data-testid=backup]').length === n + 1, nBackups);
+const nodeCount = await page.evaluate(() => window.__mailuo.store.nodes.size);
+await page.evaluate(() => window.__mailuo.store.deleteNode('n-0004'));
+await page.locator('[data-testid=backup] button:has-text("恢复")').first().click();
+await page.click('.sheet .btn.accent');
+await page.waitForFunction((n) => window.__mailuo.store.nodes.size === n, nodeCount);
+check(await page.evaluate(() => window.__mailuo.store.nodes.has('n-0004')), '备份恢复：删掉的节点回来了');
+check(await page.locator('[data-testid=backup]').count() >= 2, '恢复前自动给当前状态做了备份');
 await shot('14-settings');
 
 // 当日用量
