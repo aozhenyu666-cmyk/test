@@ -149,6 +149,7 @@ fun PlanWizard(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     val work = app.store.work.value
     val zone = app.store.zone
+    val kb = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     var step by remember { mutableIntStateOf(0) }
     var threadKey by remember { mutableStateOf("") }
     var newThread by remember { mutableStateOf("") }
@@ -181,7 +182,7 @@ fun PlanWizard(nav: NavHostController) {
                 }
                 OutlinedTextField(
                     newThread, { newThread = it; threadKey = "" }, label = { Text(if (threads.isEmpty()) "写一件今天要推进的事" else "或者，新的一件事") },
-                    singleLine = true, modifier = Modifier.fillMaxWidth().testTag("wiz-new-thread"),
+                    singleLine = true, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done), keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { kb?.hide() }), modifier = Modifier.fillMaxWidth().testTag("wiz-new-thread"),
                 )
                 if (newThread.isNotBlank()) BigButton("下一步", {
                     existing = null; title = ""; criteria = ""; step = 1
@@ -191,7 +192,7 @@ fun PlanWizard(nav: NavHostController) {
             1 -> {
                 Question("第一步做什么？", "要具体到坐下就能开始。动词开头：打开、写、列、读、打电话……")
                 existing?.let { e -> Hint("这件事里已经有一步没做：「${e.title}」，可以直接用。") }
-                OutlinedTextField(title, { title = it }, label = { Text("第一步") }, modifier = Modifier.fillMaxWidth().testTag("wiz-title"))
+                OutlinedTextField(title, { title = it }, label = { Text("第一步") }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done), keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { kb?.hide() }), modifier = Modifier.fillMaxWidth().testTag("wiz-title"))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("打开文档写 10 分钟", "列出 3 个要点", "读完一节并标重点", "做 5 道题").forEach { QuickChip(it, sig.plan) { title = it } }
                 }
@@ -217,7 +218,7 @@ fun PlanWizard(nav: NavHostController) {
             }
             3 -> {
                 Question("做到什么算完？", "要能检查。“写完”不算，“写完第二段并保存”算。")
-                OutlinedTextField(criteria, { criteria = it }, label = { Text("完成依据") }, modifier = Modifier.fillMaxWidth().testTag("wiz-criteria"))
+                OutlinedTextField(criteria, { criteria = it }, label = { Text("完成依据") }, keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done), keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { kb?.hide() }), modifier = Modifier.fillMaxWidth().testTag("wiz-criteria"))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("写完并保存", "列出 3 条", "做完并对答案", "发出去").forEach { c -> QuickChip(c, sig.plan) { criteria = if (criteria.isBlank()) c else "$criteria，$c" } }
                 }

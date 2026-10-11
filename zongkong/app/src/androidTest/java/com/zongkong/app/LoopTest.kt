@@ -102,6 +102,12 @@ class LoopTest {
         assertTrue(gpt.updatePage(pageId, p.json) is ApiResult.Ok)
     }
 
+    /** 收起键盘，免得挡住下面的按钮。 */
+    private fun hideKeyboard() {
+        runCatching { androidx.test.espresso.Espresso.closeSoftKeyboard() }
+        settle()
+    }
+
     /** 让动画走完（测试时钟只在等待时前进）。 */
     private fun settle() {
         compose.waitForIdle()
@@ -314,9 +320,11 @@ class LoopTest {
         waitFor(hasTestTag("wiz-new-thread"), 10_000, "向导第一步")
         shot("e2e-11-wizard-1")
         compose.onNodeWithTag("wiz-new-thread").performTextInput("整理论文文献")
+        hideKeyboard()
         compose.onNode(hasText("下一步")).performScrollTo().performClick()
         waitFor(hasTestTag("wiz-title"), 5_000, "向导第二步")
         compose.onNodeWithTag("wiz-title").performTextInput("读完两篇综述并标重点")
+        hideKeyboard()
         shot("e2e-12-wizard-2")
         compose.onNode(hasText("下一步")).performScrollTo().performClick()
         waitText("明早 9:00", 5_000)
@@ -324,6 +332,7 @@ class LoopTest {
         compose.onNode(hasText("明早 9:00")).performScrollTo().performClick()
         waitFor(hasTestTag("wiz-criteria"), 5_000, "向导第四步")
         compose.onNodeWithTag("wiz-criteria").performTextInput("两篇各写 3 条笔记")
+        hideKeyboard()
         compose.onNodeWithTag("wiz-save").performScrollTo().performClick()
         waitText("已部署", 5_000)
         settle()
