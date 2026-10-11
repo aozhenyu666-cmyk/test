@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -58,8 +59,8 @@ fun Seal(text: String, color: Color, size: Dp = 36.dp, filled: Boolean = false) 
     Box(
         modifier = Modifier
             .size(size)
-            .then(if (filled) Modifier.background(color, RoundedCornerShape(4.dp)) else Modifier)
-            .border(BorderStroke(2.dp, color), RoundedCornerShape(4.dp)),
+            .then(if (filled) Modifier.background(color, RoundedCornerShape(size * 0.18f)) else Modifier)
+            .border(BorderStroke(if (size > 40.dp) 2.5.dp else 2.dp, color), RoundedCornerShape(size * 0.18f)),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -90,7 +91,7 @@ fun phaseColor(phase: GatePhase): Color {
 
 @Composable
 fun Tag(text: String, color: Color) {
-    Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(4.dp)) {
+    Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
         Text(
             text,
             color = color,
@@ -101,7 +102,7 @@ fun Tag(text: String, color: Color) {
     }
 }
 
-/** 带细边框的卡片。 */
+/** 卡片：纸面上一块更亮的纸，圆角、无边框；accent 给一圈有颜色的细边。可点的卡片按下会微缩。 */
 @Composable
 fun Panel(
     modifier: Modifier = Modifier,
@@ -109,15 +110,69 @@ fun Panel(
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val source = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+            .then(if (onClick != null) Modifier.pressScale(source) else Modifier)
+            .then(if (onClick != null) Modifier.clickable(interactionSource = source, indication = androidx.compose.material3.ripple(), onClick = onClick) else Modifier),
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(10.dp),
-        border = BorderStroke(if (accent != null) 1.5.dp else 1.dp, accent ?: LocalSignals.current.line),
+        shape = RoundedCornerShape(20.dp),
+        border = if (accent != null) BorderStroke(1.5.dp, accent.copy(alpha = 0.7f)) else null,
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
+    }
+}
+
+/** 页面大标题：衬线大字 + 一行小字。 */
+@Composable
+fun ScreenTitle(title: String, subtitle: String = "", modifier: Modifier = Modifier) {
+    Column(modifier.padding(top = 8.dp, bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(title, style = MaterialTheme.typography.headlineLarge)
+        if (subtitle.isNotBlank()) Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = LocalSignals.current.muted)
+    }
+}
+
+/** 大按钮：一页只有一个主动作时用，56dp 高。 */
+@Composable
+fun BigButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.primary, enabled: Boolean = true) {
+    androidx.compose.material3.Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.fillMaxWidth().heightIn(min = 56.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = color),
+    ) { Text(text, style = MaterialTheme.typography.titleMedium) }
+}
+
+/** 向导里的一个大选项：一行标题 + 一行说明，选中时描边。 */
+@Composable
+fun ChoiceCard(title: String, detail: String = "", selected: Boolean = false, color: Color = MaterialTheme.colorScheme.primary, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val source = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .pressScale(source)
+            .clickable(interactionSource = source, indication = androidx.compose.material3.ripple(), onClick = onClick),
+        color = if (selected) color.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) color else LocalSignals.current.line),
+    ) {
+        Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = if (selected) color else MaterialTheme.colorScheme.onSurface)
+            if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.bodyMedium, color = LocalSignals.current.muted)
+        }
+    }
+}
+
+/** 小药丸：状态、数字。 */
+@Composable
+fun Pill(text: String, color: Color, dot: Boolean = false) {
+    Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(50)) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (dot) PulseDot(color)
+            Text(text, color = color, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+        }
     }
 }
 
@@ -136,7 +191,7 @@ fun SectionLabel(text: String) {
 @Composable
 fun BackBar(title: String, onBack: () -> Unit, actions: @Composable () -> Unit = {}) {
     TopAppBar(
-        title = { Text(title, style = MaterialTheme.typography.titleMedium) },
+        title = { Text(title, style = MaterialTheme.typography.titleLarge.merge(SerifTitle)) },
         navigationIcon = {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回") }
         },

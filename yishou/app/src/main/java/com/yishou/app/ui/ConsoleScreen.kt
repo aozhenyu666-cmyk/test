@@ -333,7 +333,6 @@ private fun PositionCard(task: Task?, bp: Breakpoint?, onOpenBoard: () -> Unit, 
     }
 }
 
-@Composable
 /** 总控那边此刻的状态：严管没有、正在做哪一步。点开回总控。没装总控就不显示。 */
 @Composable
 private fun ZongkongPanel(resumeKey: Int) {

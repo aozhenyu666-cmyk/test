@@ -16,15 +16,22 @@ class ZkApp : Application() {
     var prompt: String = ""
     var promptTitle: String = ""
 
+    /** 别的页面要发给参谋的一句话（快捷按钮、“问参谋”），对话页打开时发出。 */
+    var chatDraft: String = ""
+
     lateinit var store: Store
         private set
     lateinit var actions: Actions
+        private set
+    /** 参谋（AI 对话）。 */
+    lateinit var chat: com.zongkong.app.data.ChatRepo
         private set
 
     override fun onCreate() {
         super.onCreate()
         store = Store(this)
         actions = Actions(this, store)
+        chat = com.zongkong.app.data.ChatRepo(this, store, actions)
         Notifications.ensureChannels(this)
         com.zongkong.app.system.Reminders.reschedule(this)
     }

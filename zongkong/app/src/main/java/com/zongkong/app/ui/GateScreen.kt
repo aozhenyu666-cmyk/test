@@ -123,7 +123,20 @@ fun GateScreen(gateId: String, nav: NavHostController) {
             if (gate.verify == VerifyMode.EVIDENCE) {
                 val kind = com.zongkong.core.work.Focus.Evidence.entries.firstOrNull { it.name == gate.evidence } ?: com.zongkong.core.work.Focus.Evidence.PLANNED_TODAY
                 val work by app.store.work.collectAsStateWithLifecycle()
-                val (n, titles) = remember(work, now) { com.zongkong.core.work.Focus.evidence(work, kind, now, app.store.zone) }
+                val yishou by androidx.compose.runtime.produceState<com.zongkong.app.link.YishouClient.Result<com.zongkong.core.YishouStatus>?>(null, now) {
+                    if (kind == com.zongkong.core.work.Focus.Evidence.YISHOU_SETS) value = com.zongkong.app.link.YishouClient.status(context)
+                }
+                val (n, titles) = remember(work, now, yishou) {
+                    if (kind == com.zongkong.core.work.Focus.Evidence.YISHOU_SETS) {
+                        when (val y = yishou) {
+                            is com.zongkong.app.link.YishouClient.Result.Ok -> y.value.doneSets to listOf(y.value.summary())
+                            is com.zongkong.app.link.YishouClient.Result.Err -> 0 to listOf(y.message)
+                            null -> 0 to listOf("正在读一手…")
+                        }
+                    } else {
+                        com.zongkong.core.work.Focus.evidence(work, kind, now, app.store.zone)
+                    }
+                }
                 Panel(accent = if (n >= gate.evidenceMin) sig.free else null) {
                     Text("看的是：${kind.describe}", style = MaterialTheme.typography.bodyMedium)
                     Text("现在 $n / ${gate.evidenceMin}", style = MaterialTheme.typography.titleMedium.merge(Mono), color = if (n >= gate.evidenceMin) sig.free else sig.warn)
@@ -137,6 +150,9 @@ fun GateScreen(gateId: String, nav: NavHostController) {
                             com.zongkong.core.work.Focus.Evidence.LINKED_NOTES -> OutlinedButton(onClick = { nav.navigate("capture") }) { Text("去收集") }
                             com.zongkong.core.work.Focus.Evidence.CONCLUSIONS -> OutlinedButton(onClick = { nav.navigate("threads") }) { Text("挑一件事去 GPT") }
                             com.zongkong.core.work.Focus.Evidence.DONE_ACTIONS -> OutlinedButton(onClick = { nav.navigate("home") }) { Text("去做") }
+                            com.zongkong.core.work.Focus.Evidence.YISHOU_SETS -> OutlinedButton(onClick = {
+                                if (!com.zongkong.app.link.YishouClient.open(context)) launchTarget(context, com.zongkong.app.link.YishouClient.DOWNLOAD)
+                            }) { Text("打开一手") }
                         }
                     }
                 }
