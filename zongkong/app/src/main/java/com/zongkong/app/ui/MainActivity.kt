@@ -7,6 +7,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -26,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -100,11 +106,17 @@ class MainActivity : ComponentActivity() {
 private data class TabItem(val route: String, val seal: String, val label: String)
 
 private val tabs = listOf(
-    TabItem("home", "今", "当前"),
+    TabItem("home", "今", "今天"),
+    TabItem("depts", "部", "四部"),
+    TabItem("chat", "参", "参谋"),
     TabItem("threads", "事", "事项"),
-    TabItem("capture", "收", "收集"),
-    TabItem("settings", "设", "设置"),
+    TabItem("settings", "我", "我"),
 )
+
+private val tabRoutes = tabs.map { it.route }.toSet()
+
+/** 页面切换：标签之间淡入淡出；往里走从右边滑进来，返回从左边。 */
+private const val NAV_MS = 260
 
 @OptIn(ExperimentalLayoutApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
@@ -116,6 +128,7 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
     val context = LocalContext.current
     val work by context.zk.store.work.collectAsStateWithLifecycle()
     val newChanges = work.changes.count { it.at > context.zk.store.seenChanges }
+    val chatBusy by context.zk.chat.busy.collectAsStateWithLifecycle()
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
@@ -133,11 +146,14 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                                 }
                             },
                             icon = {
-                                BadgedBox(badge = { if (t.route == "home" && newChanges > 0) Badge { Text("$newChanges") } }) {
-                                    Seal(t.seal, if (selected) MaterialTheme.colorScheme.primary else sig.muted, size = 26.dp, filled = selected)
+                                BadgedBox(badge = {
+                                    if (t.route == "home" && newChanges > 0) Badge { Text("$newChanges") }
+                                    if (t.route == "chat" && chatBusy) Badge(containerColor = sig.ai)
+                                }) {
+                                    Seal(t.seal, if (!selected) sig.muted else if (t.route == "chat") sig.ai else MaterialTheme.colorScheme.primary, size = 26.dp, filled = selected)
                                 }
                             },
-                            label = { Text(t.label) },
+                            label = { Text(t.label, modifier = androidx.compose.ui.Modifier.testTag("tab-${t.route}")) },
                             colors = NavigationBarItemDefaults.colors(indicatorColor = MaterialTheme.colorScheme.background),
                         )
                     }
@@ -146,8 +162,23 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
-            NavHost(nav, startDestination = "home") {
+            NavHost(
+                nav, startDestination = "home",
+                enterTransition = {
+                    if (initialState.destination.route in tabRoutes && targetState.destination.route in tabRoutes) fadeIn(tween(NAV_MS))
+                    else fadeIn(tween(NAV_MS)) + slideInHorizontally(tween(NAV_MS)) { it / 6 }
+                },
+                exitTransition = { fadeOut(tween(NAV_MS / 2)) },
+                popEnterTransition = { fadeIn(tween(NAV_MS)) + slideInHorizontally(tween(NAV_MS)) { -it / 8 } },
+                popExitTransition = { fadeOut(tween(NAV_MS / 2)) + slideOutHorizontally(tween(NAV_MS)) { it / 6 } },
+            ) {
                 composable("home") { NowScreen(nav) }
+                composable("depts") { DeptsScreen(nav) }
+                composable("dept/{name}") { e -> DeptScreen(e.arguments?.getString("name").orEmpty(), nav) }
+                composable("chat") { ChatScreen(nav) }
+                composable("wizard/plan") { PlanWizard(nav) }
+                composable("wizard/review") { ReviewWizard(nav) }
+                composable("stuckpick") { StuckPick(nav) }
                 composable("threads") { ThreadsScreen(nav) }
                 composable("capture") { CaptureScreen(nav) }
                 composable("capture/{thread}") { e -> CaptureScreen(nav, e.arguments?.getString("thread").orEmpty()) }
@@ -166,7 +197,6 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
 
                 composable("rhythm") { RhythmScreen(nav) }
                 composable("report") { CaptureScreen(nav) }
-                composable("depts") { DeptsScreen() }
                 composable("gate/{id}") { e -> GateScreen(e.arguments?.getString("id").orEmpty(), nav) }
                 composable("history") { HistoryScreen(nav) }
                 composable("settings/block") { BlockListScreen(nav) }

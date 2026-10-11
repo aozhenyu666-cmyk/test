@@ -129,7 +129,7 @@ class ChatRepo(private val context: Context, private val store: Store, private v
 
     fun forgetAll() = update { it.copy(memory = emptyList()) }
 
-    private fun update(f: (ChatLog) -> ChatLog) = synchronized(lock) {
+    private fun update(f: (ChatLog) -> ChatLog): Unit = synchronized(lock) {
         val next = f(_log.value)
         _log.value = next
         val text = ZkJson.encodeToString(ChatLog.serializer(), next)
@@ -140,6 +140,7 @@ class ChatRepo(private val context: Context, private val store: Store, private v
         } catch (e: Exception) {
             Log.e(TAG, "写 chat.json 失败", e)
         }
+        Unit
     }
 
     private fun load(): ChatLog = try {

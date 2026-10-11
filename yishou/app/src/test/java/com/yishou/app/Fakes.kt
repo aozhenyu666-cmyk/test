@@ -104,6 +104,7 @@ class FakeDao : AppDao() {
         summaries[summary.date] = summary
     }
     override suspend fun getSummary(date: String) = summaries[date]
+    override suspend fun latestSummary(): DailySummary? = summaries.values.maxByOrNull { it.date }
     override fun observeSummaries(): Flow<List<DailySummary>> = emptyFlow()
 
     override fun observeCurrentTask(): Flow<Task?> = emptyFlow()

@@ -1,32 +1,40 @@
 package com.zongkong.app.ui
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -43,20 +51,28 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
+import com.zongkong.app.link.YishouClient
 import com.zongkong.app.zk
+import com.zongkong.core.Dept
+import com.zongkong.core.GatePhase
+import com.zongkong.core.Reason
+import com.zongkong.core.Shortcut
+import com.zongkong.core.Status
+import com.zongkong.core.YishouStatus
 import com.zongkong.core.work.ActionStatus
 import com.zongkong.core.work.F
 import com.zongkong.core.work.Focus
 import com.zongkong.core.work.Handoff
 import com.zongkong.core.work.TimeParse
+import com.zongkong.core.work.Work
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.Instant
 
 /**
- * 首页：此刻最重要的一步。
- * 一张任务卡回答五个问题：做什么、为什么、上次停在哪、怎么继续、做到什么算完。
- * 下面是四个直接入口，再下面是等你处理的事、接下来的安排、今天的节律。
+ * 今天：一打开就知道现在该干什么。
+ * 从上到下：问候和状态 → 该你处理的提示（严管怎么解、早上部署、晚上复盘）→ 现在这一步 →
+ * 四个部门 → 快捷按钮 → 等你处理 → 接下来。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -70,7 +86,7 @@ fun NowScreen(nav: NavHostController) {
     val now = rememberNow(10_000)
     val status = remember(config, day, now, work.session) { store.status(now) }
     val cur = remember(work, now) { Focus.current(work, now, store.zone) }
-    val upcoming = remember(work, now, cur) { Focus.upcoming(work, cur.action?.key, now, store.zone, 3) }
+    val upcoming = remember(work, now, cur) { Focus.upcoming(work, cur.action?.key, now, store.zone, 4) }
     val attention = remember(work) { Focus.needsAttention(work) }
     val unplanned = remember(work) { Focus.unplannedThreads(work) }
     val sig = LocalSignals.current
@@ -78,112 +94,299 @@ fun NowScreen(nav: NavHostController) {
     val notionReady = config.notion.workReady
     var resumeKey by remember { mutableIntStateOf(0) }
     var clipHandoff by remember { mutableStateOf(false) }
+    var autoPassed by remember { mutableStateOf<List<String>>(emptyList()) }
 
-    // 回到前台：拉一次 Notion（GPT 可能刚写过）；刚从 ChatGPT 回来且剪贴板里有交接块，就提示导入
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeKey++ }
     LaunchedEffect(resumeKey) {
         if (notionReady && System.currentTimeMillis() - work.lastSyncAt > 60_000) scope.launch { app.actions.work.sync() }
+        scope.launch { autoPassed = runCatching { app.actions.autoVerify() }.getOrDefault(emptyList()) }
         if (store.awaitingGpt.isNotBlank()) {
             delay(400) // 等窗口拿到焦点才能读剪贴板
             clipHandoff = Handoff.contains(Gpt.readClipboard(context))
         }
+    }
+    val yishou by produceState<YishouStatus?>(null, resumeKey) {
+        value = if (YishouClient.installed(context)) (YishouClient.status(context) as? YishouClient.Result.Ok)?.value else null
     }
 
     Column(
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        // ---------- 顶部：日期 + 节律状态 ----------
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // ---------- 问候 + 状态 ----------
+        val d = Instant.ofEpochMilli(now).atZone(store.zone)
+        Row(verticalAlignment = Alignment.Top, modifier = Modifier.enter(0)) {
             Column(Modifier.weight(1f)) {
-                val d = Instant.ofEpochMilli(now).atZone(store.zone)
-                Text("%d月%d日 %s".format(d.monthValue, d.dayOfMonth, "周" + "一二三四五六日"[d.dayOfWeek.value - 1]), style = MaterialTheme.typography.titleMedium.merge(SerifTitle))
-                Text(clock(now), style = MaterialTheme.typography.bodySmall.merge(Mono), color = sig.muted)
-            }
-            val c = when {
-                status.paused -> sig.muted
-                status.emergencyUntil != null -> sig.warn
-                status.strict -> sig.strict
-                else -> sig.free
-            }
-            Surface(
-                color = c.copy(alpha = 0.12f), shape = RoundedCornerShape(50),
-                modifier = Modifier.clickable { nav.navigate("rhythm") },
-            ) {
+                Text(greeting(d.hour), style = MaterialTheme.typography.displayMedium.copy(fontSize = 40.sp))
                 Text(
-                    "${status.headline} · 节律 ${status.doneCount}/${status.gates.size}",
-                    color = c, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    "%d月%d日 %s · %s".format(d.monthValue, d.dayOfMonth, "周" + "一二三四五六日"[d.dayOfWeek.value - 1], clock(now)),
+                    style = MaterialTheme.typography.bodyMedium, color = sig.muted,
                 )
+            }
+            val c = statusColor(status)
+            Box(Modifier.padding(top = 10.dp).clickable { nav.navigate("rhythm") }) {
+                Pill("${status.headline} ${status.doneCount}/${status.gates.size}", c, dot = status.strict)
             }
         }
 
+        // ---------- 该你处理的提示 ----------
+        Guidance(status, day.date, now, nav)
+        if (autoPassed.isNotEmpty()) {
+            Panel(accent = sig.free, modifier = Modifier.enter(1)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Stamp("已验", sig.free, size = 56.dp)
+                    Column(Modifier.weight(1f)) {
+                        Text("自动验收通过", style = MaterialTheme.typography.titleSmall)
+                        Hint(autoPassed.joinToString("、") + "：证据够了，不用你交。")
+                    }
+                }
+            }
+        }
         if (clipHandoff) {
-            Panel(accent = sig.think, onClick = { clipHandoff = false; nav.navigate("import") }) {
+            Panel(accent = sig.think, onClick = { clipHandoff = false; nav.navigate("import") }, modifier = Modifier.enter(1)) {
                 Text("剪贴板里有 GPT 的交接块", style = MaterialTheme.typography.titleSmall)
                 Hint("点这里导入：结论、下一步、行动会写进事项，并同步到 Notion。")
             }
         }
 
-        // ---------- 当前任务卡 ----------
-        TaskCard(cur, now, notionReady, nav)
-
-        // ---------- 四个入口 ----------
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            val cont = work.session?.let { "session" } ?: cur.action?.let { if (cur.why == Focus.Why.CONTINUE) "start/${it.key}" else null }
-                ?: work.threads().filter { it.threadStatus.open }.maxByOrNull { it.updatedAt }?.let { "thread/${it.key}" }
-            Tile("继续上次", "续", Modifier.weight(1f), enabled = cont != null) { cont?.let { nav.navigate(it) } }
-            Tile("收集念头", "收", Modifier.weight(1f)) { nav.navigate("capture") }
+        // ---------- 现在这一步 ----------
+        Box(Modifier.enter(2)) {
+            AnimatedContent(
+                targetState = cur,
+                contentKey = { it.action?.key to it.why },
+                transitionSpec = { (fadeIn() + slideInVertically { it / 8 }) togetherWith fadeOut() },
+                label = "task",
+            ) { c -> TaskCard(c, now, notionReady, nav) }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Tile("我卡住了", "卡", Modifier.weight(1f), enabled = cur.action != null) { cur.action?.let { nav.navigate("stuck/${it.key}") } }
+
+        // ---------- 四个部门 ----------
+        SectionLabel("四个部门")
+        val depts = listOf(Dept.INFO, Dept.THINK, Dept.PLAN, Dept.ACT)
+        depts.chunked(2).forEachIndexed { row, pair ->
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                pair.forEachIndexed { i, dept ->
+                    DeptTile(dept, status, work, now, yishou, Modifier.weight(1f).enter(3 + row * 2 + i)) { nav.navigate("dept/${dept.name}") }
+                }
+            }
+        }
+
+        // ---------- 快捷 ----------
+        SectionLabel("随手")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.enter(7)) {
+            QuickChip("收一个念头", sig.info) { nav.navigate("capture") }
+            QuickChip("我卡住了", sig.strict) { nav.navigate("stuckpick") }
+            QuickChip("问参谋", sig.ai) { nav.navigate("chat") }
             val n = work.changes.count { it.at > store.seenChanges }
-            Tile(if (n > 0) "查看结果 · $n" else "查看结果", "果", Modifier.weight(1f)) { nav.navigate("results") }
+            QuickChip(if (n > 0) "查看结果 · $n" else "查看结果", sig.think) { nav.navigate("results") }
+            config.shortcuts.filter { it.dept == null }.forEach { s -> QuickChip(s.label, sig.ai) { runShortcut(s, app, nav) } }
         }
 
         // ---------- 等你处理 ----------
         if (attention.isNotEmpty() || unplanned.isNotEmpty()) {
             SectionLabel("等你处理")
-            attention.take(4).forEach { a ->
-                val label = if (a.actionStatus == ActionStatus.CONFIRM) "待确认" else "卡住：${a[F.STUCK].ifBlank { "原因没写" }}"
-                MiniRow(a.title, label, actionColor(a.actionStatus)) { nav.navigate("action/${a.key}") }
-            }
-            unplanned.take(3).forEach { t ->
-                MiniRow("${t.title}：${t[F.NEXT]}", "下一步还没排进时间", sig.warn) { nav.navigate("thread/${t.key}") }
+            Panel(modifier = Modifier.enter(8)) {
+                attention.take(4).forEach { a ->
+                    val label = if (a.actionStatus == ActionStatus.CONFIRM) "待确认：结果够不够" else "卡住：${a[F.STUCK].ifBlank { "原因没写" }}"
+                    MiniRow(a.title, label, actionColor(a.actionStatus)) { nav.navigate("action/${a.key}") }
+                }
+                unplanned.take(3).forEach { t ->
+                    MiniRow("${t.title}：${t[F.NEXT]}", "下一步还没排进时间 · 点开排", sig.warn) { nav.navigate("thread/${t.key}") }
+                }
             }
         }
 
         // ---------- 接下来 ----------
         if (upcoming.isNotEmpty()) {
             SectionLabel("接下来")
-            upcoming.forEach { a ->
-                val time = a.plan?.let { TimeParse.label(it, now, store.zone) } ?: "未排时间"
-                MiniRow(a.title, time + (work.rec(a.threadKey)?.let { " · ${it.title}" } ?: ""), actionColor(a.actionStatus)) { nav.navigate("action/${a.key}") }
+            Panel(modifier = Modifier.enter(9)) {
+                upcoming.forEach { a -> TimelineRow(a, work, now, nav) }
             }
         }
 
-        // ---------- 今天的节律 ----------
-        SectionLabel("今天的节律")
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            status.gates.forEach { g ->
-                Surface(
-                    color = phaseColor(g.phase).copy(alpha = 0.10f), shape = RoundedCornerShape(6.dp),
-                    modifier = Modifier.clickable { nav.navigate("gate/${g.gate.id}") },
-                ) {
-                    Row(Modifier.padding(horizontal = 8.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(g.gate.dept.seal, color = sig.dept(g.gate.dept), fontWeight = FontWeight.Black, fontSize = 13.sp)
-                        Text(" ${g.gate.title} · ${g.phase.label}", style = MaterialTheme.typography.labelMedium, color = phaseColor(g.phase))
+        if (!PermissionStatus.accessibility(context)) {
+            Panel(accent = sig.warn, onClick = { nav.navigate("settings/perm") }) {
+                Text("总控现在没在盯", style = MaterialTheme.typography.titleSmall, color = sig.warn)
+                Hint("无障碍没开：专注锁和严管都不会生效。点这里一步步打开。")
+            }
+        }
+        SyncLine(work, notionReady) { scope.launch { app.actions.work.sync() } }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+fun greeting(hour: Int): String = when (hour) {
+    in 0..4 -> "夜深了。"
+    in 5..8 -> "早上好。"
+    in 9..11 -> "上午好。"
+    in 12..13 -> "中午好。"
+    in 14..17 -> "下午好。"
+    in 18..22 -> "晚上好。"
+    else -> "夜深了。"
+}
+
+@Composable
+fun statusColor(status: Status): Color {
+    val sig = LocalSignals.current
+    return when {
+        status.paused -> sig.muted
+        status.emergencyUntil != null -> sig.warn
+        status.strict -> sig.strict
+        else -> sig.free
+    }
+}
+
+/**
+ * 轮椅式的提示：此刻你只需要看这一条。
+ * 严管时说清楚怎么解除；早上没部署就带你去部署；晚上没复盘就带你去复盘。
+ */
+@Composable
+private fun Guidance(status: Status, date: String, now: Long, nav: NavHostController) {
+    val sig = LocalSignals.current
+    val hour = Instant.ofEpochMilli(now).atZone(java.time.ZoneId.systemDefault()).hour
+    val reason = status.reasons.firstOrNull()
+    when {
+        status.strict && reason != null -> {
+            val (how, route) = when (reason) {
+                is Reason.GateDue -> "交了「${reason.status.gate.title}」就放行" to (if (reason.status.gate.id == "plan_morning") "wizard/plan" else "gate/${reason.status.gate.id}")
+                is Reason.Silence -> "报个到：说一句现在在做什么" to "capture"
+                is Reason.Quota -> "今天的娱乐额度用完了，明天 4 点重置" to "rhythm"
+                is Reason.Focus -> "专注锁开着，做完这一步就解开" to "session"
+            }
+            Panel(accent = sig.strict, onClick = { nav.navigate(route) }, modifier = Modifier.enter(1)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Seal("严", sig.strict, size = 44.dp, filled = true)
+                    Column(Modifier.weight(1f)) {
+                        Text(reason.text, style = MaterialTheme.typography.titleSmall, color = sig.strict)
+                        Text(how, style = MaterialTheme.typography.bodyMedium)
                     }
+                    Text("去 →", style = MaterialTheme.typography.labelLarge, color = sig.strict)
+                }
+                if (status.reasons.size > 1) Hint("另外还有 ${status.reasons.size - 1} 条，一条条来。")
+            }
+        }
+        status.gates.any { it.gate.id == "plan_morning" && !it.done && it.phase != GatePhase.NOT_OPEN } -> {
+            Panel(accent = sig.plan, onClick = { nav.navigate("wizard/plan") }, modifier = Modifier.enter(1).testTag("guide-plan")) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    DeptSeal(Dept.PLAN, size = 44.dp, filled = true)
+                    Column(Modifier.weight(1f)) {
+                        Text("先花两分钟部署今天", style = MaterialTheme.typography.titleSmall)
+                        Hint("一步一步问你：今天最要紧的一件、第一步、几点做、做到什么算完。")
+                    }
+                    Text("开始 →", style = MaterialTheme.typography.labelLarge, color = sig.plan)
                 }
             }
         }
-        if (!PermissionStatus.accessibility(context)) {
-            Hint("总控没在盯（无障碍未开），专注锁和严管不会生效。设置 → 权限与运行状态。")
+        hour >= 20 && status.gates.any { it.gate.id == "hq_review" && !it.done } -> {
+            Panel(accent = sig.hq, onClick = { nav.navigate("wizard/review") }, modifier = Modifier.enter(1)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    DeptSeal(Dept.HQ, size = 44.dp, filled = true)
+                    Column(Modifier.weight(1f)) {
+                        Text("复盘今天，定好明天第一步", style = MaterialTheme.typography.titleSmall)
+                        Hint("点一点就行：今天每一步怎么样、明天先做什么。")
+                    }
+                    Text("开始 →", style = MaterialTheme.typography.labelLarge, color = sig.hq)
+                }
+            }
         }
-        SyncLine(work, notionReady) { scope.launch { app.actions.work.sync() } }
+    }
+}
+
+@Composable
+private fun DeptTile(dept: Dept, status: Status, work: Work, now: Long, yishou: YishouStatus?, modifier: Modifier, onClick: () -> Unit) {
+    val sig = LocalSignals.current
+    val color = sig.dept(dept)
+    val zone = java.time.ZoneId.systemDefault()
+    val gates = status.gates.filter { it.gate.dept == dept }
+    val (line, progress) = when (dept) {
+        Dept.INFO -> Focus.evidence(work, Focus.Evidence.LINKED_NOTES, now, zone).first.let { "今天挂上 $it 条" to null }
+        Dept.THINK -> Focus.evidence(work, Focus.Evidence.CONCLUSIONS, now, zone).first.let { "今天 $it 个判断" to null }
+        Dept.PLAN -> Focus.evidence(work, Focus.Evidence.PLANNED_TODAY, now, zone).first.let { "今天排了 $it 步" to null }
+        Dept.ACT -> when {
+            work.session?.let { it.lockUntil > now } == true -> "专注锁到 ${clock(work.session!!.lockUntil)}" to null
+            yishou != null -> "一手 ${yishou.doneSets}/${yishou.targetSets} 组" to (if (yishou.targetSets > 0) yishou.doneSets.toFloat() / yishou.targetSets else null)
+            else -> "一手没连上" to null
+        }
+        Dept.HQ -> "" to null
+    }
+    val ring = progress ?: if (gates.isEmpty()) 0f else gates.count { it.done }.toFloat() / gates.size
+    val source = remember { MutableInteractionSource() }
+    Surface(
+        modifier = modifier
+            .pressScale(source)
+            .clickable(interactionSource = source, indication = ripple(), onClick = onClick)
+            .testTag("dept-${dept.name}"),
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(22.dp),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ProgressRing(ring, color, size = 46.dp, stroke = 3.5.dp) {
+                    Text(dept.seal, color = color, fontWeight = FontWeight.Black, fontSize = 18.sp)
+                }
+                Spacer(Modifier.weight(1f))
+                val overdue = gates.any { it.phase == GatePhase.OVERDUE }
+                if (overdue) PulseDot(sig.strict) else if (gates.isNotEmpty() && gates.all { it.done }) Text("✓", color = sig.free, fontWeight = FontWeight.Black)
+            }
+            Column {
+                Text(dept.label, style = MaterialTheme.typography.titleSmall)
+                Text(line, style = MaterialTheme.typography.bodySmall, color = sig.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+@Composable
+fun QuickChip(label: String, color: Color, onClick: () -> Unit) {
+    val source = remember { MutableInteractionSource() }
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.35f)),
+        modifier = Modifier.pressScale(source).clickable(interactionSource = source, indication = ripple(), onClick = onClick),
+    ) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.width(6.dp).height(6.dp).background(color, RoundedCornerShape(50)))
+            Text(label, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+/** 参谋加的快捷按钮：ask 发给参谋，open 打开页面。 */
+fun runShortcut(s: Shortcut, app: com.zongkong.app.ZkApp, nav: NavHostController) {
+    if (s.kind == Shortcut.ASK) {
+        app.chatDraft = s.payload
+        nav.navigate("chat") { launchSingleTop = true }
+    } else {
+        val (p, t) = s.payload.split(':', limit = 2).let { it[0] to it.getOrElse(1) { "" } }
+        app.chat.agent.tools.route(p, t)?.let { r -> runCatching { nav.navigate(r) } }
+    }
+}
+
+@Composable
+private fun TimelineRow(a: com.zongkong.core.work.Rec, work: Work, now: Long, nav: NavHostController) {
+    val sig = LocalSignals.current
+    val zone = java.time.ZoneId.systemDefault()
+    val start = a.plan?.let { TimeParse.startMillis(it, zone) }
+    Row(
+        Modifier.fillMaxWidth().clickable { nav.navigate("action/${a.key}") }.padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Column(Modifier.width(52.dp), horizontalAlignment = Alignment.End) {
+            Text(start?.let { clock(it) } ?: "—", style = MaterialTheme.typography.titleSmall.merge(Mono), color = if (start != null) MaterialTheme.colorScheme.onSurface else sig.muted)
+            a.plan?.let { p ->
+                val label = TimeParse.label(p, now, zone)
+                if (!label.startsWith("今天")) Text(label.substringBefore(' '), style = MaterialTheme.typography.labelSmall, color = sig.muted)
+            }
+        }
+        Box(Modifier.width(3.dp).height(34.dp).background(actionColor(a.actionStatus), RoundedCornerShape(2.dp)))
+        Column(Modifier.weight(1f)) {
+            Text(a.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            work.rec(a.threadKey)?.let { Text(it.title, style = MaterialTheme.typography.bodySmall, color = sig.muted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        }
     }
 }
 
@@ -199,19 +402,21 @@ private fun TaskCard(cur: Focus.Current, now: Long, notionReady: Boolean, nav: N
         Focus.Why.NOW -> MaterialTheme.colorScheme.primary
         Focus.Why.OVERDUE -> sig.strict
         Focus.Why.CONTINUE -> sig.think
-        else -> sig.line
+        else -> sig.muted
     }
-    // 边框可以很淡，文字不行：普通状态的标签用灰色
-    val labelColor = if (accent == sig.line) sig.muted else accent
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(26.dp),
         color = MaterialTheme.colorScheme.surface,
-        border = androidx.compose.foundation.BorderStroke(1.5.dp, accent),
+        shadowElevation = 1.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(cur.why.label, color = labelColor, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                if (cur.why == Focus.Why.RUNNING || cur.why == Focus.Why.OVERDUE) PulseDot(accent)
+                Text(
+                    if (a == null) "现在" else cur.why.label, color = accent, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f).padding(start = if (cur.why == Focus.Why.RUNNING || cur.why == Focus.Why.OVERDUE) 8.dp else 0.dp),
+                )
                 cur.start?.let { s ->
                     val label = when {
                         cur.why == Focus.Why.RUNNING -> app.store.work.value.session?.let { "已做 ${span(now - it.startedAt)}" } ?: ""
@@ -220,34 +425,41 @@ private fun TaskCard(cur: Focus.Current, now: Long, notionReady: Boolean, nav: N
                         cur.end != null -> "超时 ${span(now - cur.end)}"
                         else -> ""
                     }
-                    Text(label, style = MaterialTheme.typography.labelLarge.merge(Mono), color = labelColor)
+                    Text(label, style = MaterialTheme.typography.labelLarge.merge(Mono), color = accent)
                 }
             }
             if (a == null) {
-                Text("现在没有排好的下一步", style = MaterialTheme.typography.headlineSmall.merge(SerifTitle))
-                Hint("把一件事拿去和 GPT 讨论出下一步，或者先收一个念头。")
+                Text("没有排好的下一步", style = MaterialTheme.typography.headlineMedium)
+                Text("不用想太多：让参谋陪你挑一件，或者跟着向导部署一下。", style = MaterialTheme.typography.bodyMedium, color = sig.muted)
+                BigButton("跟着向导排一件", { nav.navigate("wizard/plan") })
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { nav.navigate("threads") }) { Text("挑一件事") }
-                    OutlinedButton(onClick = { nav.navigate("import") }) { Text("导入交接块") }
+                    OutlinedButton(onClick = { nav.navigate("chat") }, modifier = Modifier.weight(1f)) { Text("问参谋") }
+                    OutlinedButton(onClick = { nav.navigate("import") }, modifier = Modifier.weight(1f)) { Text("导入交接块") }
                 }
                 return@Column
             }
             t?.let { Text("${it.title} · ${it[F.CODE]}", style = MaterialTheme.typography.labelLarge, color = sig.muted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            Text(a.title, style = MaterialTheme.typography.headlineSmall.merge(SerifTitle), modifier = Modifier.testTag("task-title").clickable { nav.navigate("action/${a.key}") })
+            Text(a.title, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.testTag("task-title").clickable { nav.navigate("action/${a.key}") })
             a.plan?.let { Text(TimeParse.label(it, now, app.store.zone), style = MaterialTheme.typography.bodySmall.merge(Mono), color = sig.muted) }
-            CardLine("为什么", t?.get(F.WHY).orEmpty())
-            CardLine("停在", a[F.BREAK].ifBlank { t?.get(F.BREAK).orEmpty() })
-            CardLine("做到", a[F.CRITERIA], placeholder = "还没写完成依据——点开写一句：做到什么算完")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                when (cur.why) {
-                    Focus.Why.RUNNING -> Button(onClick = { nav.navigate("session") }, modifier = Modifier.weight(1f)) { Text("回到正在做的") }
-                    else -> Button(
-                        onClick = { nav.navigate("start/${a.key}") },
-                        colors = if (cur.why == Focus.Why.OVERDUE) ButtonDefaults.buttonColors(containerColor = sig.strict) else ButtonDefaults.buttonColors(),
-                        modifier = Modifier.weight(1f).testTag("task-start"),
-                    ) { Text(if (cur.why == Focus.Why.CONTINUE) "从断点继续" else "开始") }
-                }
-                OutlinedButton(onClick = {
+            Column(
+                Modifier.fillMaxWidth().background(sig.wash.copy(alpha = 0.55f), RoundedCornerShape(16.dp)).padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CardLine("为什么", t?.get(F.WHY).orEmpty(), placeholder = "")
+                CardLine("停在", a[F.BREAK].ifBlank { t?.get(F.BREAK).orEmpty() })
+                CardLine("做到", a[F.CRITERIA], placeholder = "还没写完成依据——点标题写一句：做到什么算完")
+            }
+            when (cur.why) {
+                Focus.Why.RUNNING -> BigButton("回到正在做的", { nav.navigate("session") }, color = sig.warn)
+                else -> BigButton(
+                    if (cur.why == Focus.Why.CONTINUE) "从断点继续" else "开始",
+                    { nav.navigate("start/${a.key}") },
+                    Modifier.testTag("task-start"),
+                    color = if (cur.why == Focus.Why.OVERDUE) sig.strict else MaterialTheme.colorScheme.primary,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = {
                     if (t != null) {
                         app.prompt = app.actions.work.gptPrompt(t.key)
                         app.promptTitle = t.title
@@ -257,8 +469,6 @@ private fun TaskCard(cur: Focus.Current, now: Long, notionReady: Boolean, nav: N
                         nav.navigate("action/${a.key}")
                     }
                 }, modifier = Modifier.testTag("task-gpt")) { Text("去 GPT") }
-            }
-            Row {
                 TextButton(onClick = { nav.navigate("stuck/${a.key}") }) { Text("卡住了", color = sig.muted) }
                 if (t != null && t.url.isNotBlank()) TextButton(onClick = { Gpt.openNotion(context, t.url) }) { Text("Notion", color = sig.muted) }
                 Box(Modifier.weight(1f))
@@ -272,33 +482,12 @@ private fun TaskCard(cur: Focus.Current, now: Long, notionReady: Boolean, nav: N
 private fun CardLine(label: String, value: String, placeholder: String = "") {
     if (value.isBlank() && placeholder.isBlank()) return
     Row {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = LocalSignals.current.muted, modifier = Modifier.padding(top = 2.dp).fillMaxWidth(0.16f))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = LocalSignals.current.muted, modifier = Modifier.padding(top = 2.dp).width(44.dp))
         Text(
             value.ifBlank { placeholder }, style = MaterialTheme.typography.bodyMedium,
             color = if (value.isBlank()) LocalSignals.current.warn else MaterialTheme.colorScheme.onSurface,
             maxLines = 3, overflow = TextOverflow.Ellipsis,
         )
-    }
-}
-
-/** 黑白方块入口（stoic 式）。 */
-@Composable
-private fun Tile(label: String, seal: String, modifier: Modifier, enabled: Boolean = true, onClick: () -> Unit) {
-    val ink = MaterialTheme.colorScheme.onSurface
-    Surface(
-        modifier = modifier.height(76.dp).then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier),
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(12.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, LocalSignals.current.line),
-    ) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Box(
-                Modifier.background(if (enabled) ink else LocalSignals.current.line, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 6.dp),
-            ) {
-                Text(seal, color = MaterialTheme.colorScheme.surface, fontWeight = FontWeight.Black, fontSize = 16.sp)
-            }
-            Text(label, style = MaterialTheme.typography.titleSmall, color = if (enabled) ink else LocalSignals.current.muted)
-        }
     }
 }
 
@@ -310,9 +499,9 @@ fun MiniRow(title: String, sub: String, color: Color, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Box(Modifier.background(color, RoundedCornerShape(2.dp)).padding(horizontal = 2.dp, vertical = 14.dp))
+        Box(Modifier.width(3.dp).height(34.dp).background(color, RoundedCornerShape(2.dp)))
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(sub, style = MaterialTheme.typography.bodySmall, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)

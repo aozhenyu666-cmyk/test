@@ -24,6 +24,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.animation.togetherWith
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -145,13 +147,18 @@ fun SessionScreen(nav: NavHostController) {
             }
             work.rec(a.threadKey)?.let { Text(it.title, style = MaterialTheme.typography.labelLarge, color = sig.muted) }
             Text(a.title, style = MaterialTheme.typography.headlineSmall.merge(SerifTitle))
-            // 大号计时（Fliqlo 式：只有数字）
+            // 大号计时：外面一圈呼吸圈（Endel 式），数字翻动（Fliqlo 式）
             val el = (now - s.startedAt).coerceAtLeast(0) / 1000
-            Text(
-                "%02d:%02d".format(el / 60, el % 60),
-                fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 72.sp,
-                textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            )
+            androidx.compose.foundation.layout.Box(
+                Modifier.fillMaxWidth().height(260.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                BreathingRings(if (s.lockUntil > now) sig.warn else MaterialTheme.colorScheme.primary, Modifier.fillMaxSize())
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    FlipNumber("%02d:%02d".format(el / 60, el % 60))
+                    Text(if (s.lockUntil > now) "专注锁 · 到 ${clock(s.lockUntil)}" else "计时中", style = MaterialTheme.typography.labelLarge, color = sig.muted)
+                }
+            }
             if (a[F.CRITERIA].isNotBlank()) {
                 Text("做到：${a[F.CRITERIA]}", style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
             }
@@ -176,6 +183,7 @@ fun SessionScreen(nav: NavHostController) {
                 OutlinedButton(onClick = { nav.navigate("pause/${a.key}") }, modifier = Modifier.weight(1f)) { Text("先停一下") }
                 OutlinedButton(onClick = { nav.navigate("stuck/${a.key}") }, modifier = Modifier.weight(1f)) { Text("卡住了") }
             }
+            YishouHandoff(a.key)
         }
     }
 }
@@ -368,5 +376,65 @@ fun StuckScreen(key: String, nav: NavHostController) {
     if (resched) RescheduleDialog(key) { resched = false; nav.navigate("home") { popUpTo("home") { inclusive = true } } }
     if (editCriteria) EditDialog("完成依据", a?.get(F.CRITERIA).orEmpty(), hint = "做到什么程度算完成？拿什么证明？", onDismiss = { editCriteria = false }) { v ->
         app.actions.work.update(key, mapOf(F.CRITERIA to v.trim()))
+    }
+}
+
+
+/** 计时数字：每一位单独往上翻。 */
+@Composable
+fun FlipNumber(text: String) {
+    Row {
+        text.forEachIndexed { i, ch ->
+            androidx.compose.animation.AnimatedContent(
+                targetState = ch,
+                transitionSpec = {
+                    (androidx.compose.animation.slideInVertically { -it } + androidx.compose.animation.fadeIn()) togetherWith
+                        (androidx.compose.animation.slideOutVertically { it } + androidx.compose.animation.fadeOut())
+                },
+                label = "flip$i",
+            ) { c ->
+                Text(c.toString(), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 64.sp)
+            }
+        }
+    }
+}
+
+/**
+ * 交给一手陪练：这一步设为一手的当前任务，一手按这一步一手一手地问你。
+ * 一手没装就给下载链接；装了但太旧就说更新。
+ */
+@Composable
+fun YishouHandoff(actionKey: String) {
+    val context = LocalContext.current
+    val app = context.zk
+    val sig = LocalSignals.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var msg by remember { mutableStateOf<String?>(null) }
+    val installed = remember { com.zongkong.app.link.YishouClient.installed(context) }
+    Panel(accent = sig.act) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            DeptSeal(com.zongkong.core.Dept.ACT, size = 34.dp, filled = true)
+            Column(Modifier.weight(1f)) {
+                Text("交给一手陪练", style = MaterialTheme.typography.titleSmall)
+                Hint(if (installed) "一手会就这一步一手一手地问你，答一手算一手。" else "还没装一手。装上以后，这一步可以交给它陪你练。")
+            }
+        }
+        if (installed) {
+            OutlinedButton(onClick = {
+                scope.launch {
+                    val order = com.zongkong.core.Link.taskOrder(app.store.work.value, actionKey)
+                    msg = if (order == null) "找不到这一步" else when (val r = com.zongkong.app.link.YishouClient.setTask(context, order)) {
+                        is com.zongkong.app.link.YishouClient.Result.Ok -> {
+                            com.zongkong.app.link.YishouClient.open(context)
+                            r.value.ifBlank { "已交给一手" }
+                        }
+                        is com.zongkong.app.link.YishouClient.Result.Err -> r.message
+                    }
+                }
+            }, modifier = Modifier.fillMaxWidth().testTag("to-yishou")) { Text("交给一手，打开一手") }
+        } else {
+            OutlinedButton(onClick = { launchTarget(context, com.zongkong.app.link.YishouClient.DOWNLOAD) }, modifier = Modifier.fillMaxWidth()) { Text("下载一手") }
+        }
+        msg?.let { Hint(it) }
     }
 }

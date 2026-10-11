@@ -53,43 +53,50 @@ fun SettingsScreen(nav: NavHostController) {
     val context = LocalContext.current
     val config by context.zk.store.config.collectAsStateWithLifecycle()
     val sig = LocalSignals.current
+    val yishouInstalled = remember { com.zongkong.app.link.YishouClient.installed(context) }
     Column(
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 20.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("设置", style = MaterialTheme.typography.headlineSmall)
-        Hint("改规则的规矩：收紧立即生效；放宽（删关卡、推迟截止、降低验收、移出拦截名单、加额度）要等 24 小时，期间可以撤回。")
-        MenuItem("权限与运行状态", if (PermissionStatus.accessibility(context)) "无障碍已开启" else "无障碍未开启——总控没在盯", "settings/perm", nav)
-        MenuItem("拦截名单", "${config.blocked.size} 个应用：严管时打开就被弹回", "settings/block", nav)
-        MenuItem("关卡", "${config.gates.size} 道：每个部门每天要交什么", "settings/gates", nav)
-        MenuItem("规则", "沉默 ${if (config.silenceHours == 0) "不查" else "${config.silenceHours} 小时"} · 娱乐 ${if (config.dailyQuotaMin == 0) "不限" else "${config.dailyQuotaMin} 分钟"} · 紧急放行 ${config.emergencyPerDay} 次", "settings/rules", nav)
+        ScreenTitle("我", "连接、规则、运行状态。改规则的规矩：收紧立即生效，放宽要等 24 小时，期间可以撤回。", Modifier.enter(0))
+
+        SectionLabel("运行")
+        MenuItem("权限与运行状态", if (PermissionStatus.accessibility(context)) "无障碍已开启" else "无障碍未开启——总控没在盯", "settings/perm", nav, warn = !PermissionStatus.accessibility(context))
+        MenuItem("今天的节律", "今日部署、收集、判断、一手训练、日终验收；严管与放行", "rhythm", nav)
+        MenuItem("历史记录", "最近 14 天", "history", nav)
+
+        SectionLabel("连接")
+        MenuItem("AI 接口", if (config.ai.ready) "${config.ai.model} · 参谋、日终验收用" else "未配置：参谋和 AI 验收用不了", "settings/ai", nav, warn = !config.ai.ready)
+        MenuItem("一手", if (yishouInstalled) "已安装：行为管理部读它的组数，可以把行动交给它陪练" else "没装：点开下载", "dept/ACT", nav)
         MenuItem("Notion", when {
             config.notion.workReady -> "事项 / 行动 / 记录 双向同步中"
             config.notion.ready -> "已填密钥，还没建库"
             else -> "未连接：记录只在手机上"
         }, "settings/notion", nav)
         MenuItem("ChatGPT 配合", "给 GPT 的说明、交接块、各条连接的现状", "settings/gptguide", nav)
-        MenuItem("每日节律", "今日部署、收集、判断、训练、日终验收；严管与放行", "rhythm", nav)
-        MenuItem("AI 接口", if (config.ai.ready) "${config.ai.model}（日终验收等用）" else "未配置", "settings/ai", nav)
-        MenuItem("四部门说明", "信息收集、谋划思考、统筹规划、行为管理怎么衔接", "depts", nav)
+
+        SectionLabel("规则")
+        MenuItem("关卡", "${config.gates.size} 道：每个部门每天要交什么", "settings/gates", nav)
+        MenuItem("拦截名单", "${config.blocked.size} 个应用：严管时打开就被弹回", "settings/block", nav)
+        MenuItem("规则", "沉默 ${if (config.silenceHours == 0) "不查" else "${config.silenceHours} 小时"} · 娱乐 ${if (config.dailyQuotaMin == 0) "不限" else "${config.dailyQuotaMin} 分钟"} · 紧急放行 ${config.emergencyPerDay} 次", "settings/rules", nav)
         MenuItem("待生效的放宽", if (config.pending.isEmpty()) "没有" else "${config.pending.size} 项", "settings/pending", nav)
-        MenuItem("历史记录", "最近 14 天", "history", nav)
-        Hint("总控 ${com.zongkong.app.BuildConfig.VERSION_NAME}", Modifier.padding(top = 8.dp))
-        Hint("所有数据只存在这台手机上；配置了 Notion 才会把验收结果写到你的 Notion。", Modifier.padding(bottom = 8.dp))
+
+        Hint("总控 ${com.zongkong.app.BuildConfig.VERSION_NAME}", Modifier.padding(top = 12.dp))
+        Hint("数据存在这台手机上；连了 Notion 才同步事项和记录；参谋只把对话发给你自己填的 AI 接口。", Modifier.padding(bottom = 8.dp))
         if (config.pausedUntil > System.currentTimeMillis()) Text("休假中", color = sig.warn)
     }
 }
 
 @Composable
-private fun MenuItem(title: String, sub: String, route: String, nav: NavHostController) {
+private fun MenuItem(title: String, sub: String, route: String, nav: NavHostController, warn: Boolean = false) {
     Panel(onClick = { nav.navigate(route) }) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
-                Text(sub, style = MaterialTheme.typography.bodySmall, color = LocalSignals.current.muted)
+                Text(sub, style = MaterialTheme.typography.bodySmall, color = if (warn) LocalSignals.current.warn else LocalSignals.current.muted)
             }
             Text("›", style = MaterialTheme.typography.titleLarge, color = LocalSignals.current.muted)
         }

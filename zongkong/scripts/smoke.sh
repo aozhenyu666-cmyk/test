@@ -22,6 +22,9 @@ launch_target() {
 
 adb install -r "$APK" || exit 1
 adb install -r "$TESTAPK" || exit 1
+# 一手：端到端测试里会真的跨应用调用它（读状态、交任务）
+YISHOU_APK=$(find "$APKDIR" -path "*yishou*" -name "*.apk" | head -1)
+if [ -n "$YISHOU_APK" ]; then adb install -r "$YISHOU_APK" && echo "一手已安装"; else echo "没找到一手 APK"; fi
 adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS || true
 
 # ---------- 端到端闭环 ----------
@@ -29,6 +32,15 @@ adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS || true
 adb shell am instrument -w $PKG.test/androidx.test.runner.AndroidJUnitRunner 2>&1 | tee "$OUT/e2e.txt"
 if grep -q "^OK (" "$OUT/e2e.txt"; then echo "E2E_LOOP=OK" >> "$OUT/result.txt"; else echo "E2E_LOOP=FAIL" >> "$OUT/result.txt"; fi
 adb pull /sdcard/Android/data/$PKG/files/shots/. "$OUT/" >/dev/null 2>&1 || true
+
+# ---------- 连接口只认对方：别的调用者（这里是 adb shell）一律拒绝 ----------
+adb shell content call --uri content://com.yishou.app.link --method status 2>&1 | tee "$OUT/link-yishou-from-shell.txt"
+adb shell content call --uri content://com.zongkong.app.link --method status 2>&1 | tee "$OUT/link-zongkong-from-shell.txt"
+if grep -q "只接受总控的连接" "$OUT/link-yishou-from-shell.txt" && grep -q "只接受一手的连接" "$OUT/link-zongkong-from-shell.txt"; then
+  echo "LINK_REJECTS_OTHERS=OK" >> "$OUT/result.txt"
+else
+  echo "LINK_REJECTS_OTHERS=FAIL" >> "$OUT/result.txt"
+fi
 # 注意：不能 force-stop 总控——系统会把被强行停止的应用从“已开启的无障碍服务”里移除，
 # 而且这一步可能比下面的开启晚执行，把刚开的又关掉。
 

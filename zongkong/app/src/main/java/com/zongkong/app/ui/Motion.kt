@@ -91,7 +91,8 @@ fun Modifier.pressScale(source: MutableInteractionSource): Modifier = composed {
 @Composable
 fun ProgressRing(progress: Float, color: Color, size: Dp = 44.dp, stroke: Dp = 4.dp, track: Color = color.copy(alpha = 0.15f), content: @Composable () -> Unit = {}) {
     val target = progress.coerceIn(0f, 1f)
-    val anim = remember { Animatable(if (LocalReduceMotion.current) target else 0f) }
+    val reduce = LocalReduceMotion.current
+    val anim = remember { Animatable(if (reduce) target else 0f) }
     LaunchedEffect(target) { anim.animateTo(target, tween(900, easing = FastOutSlowInEasing)) }
     Box(Modifier.size(size), contentAlignment = Alignment.Center) {
         Canvas(Modifier.size(size)) {

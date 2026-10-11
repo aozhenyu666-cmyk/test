@@ -6,6 +6,7 @@ on:
   push:
     paths:
       - "zongkong/**"
+      - "yishou/app/src/main/java/com/yishou/app/link/**"
       - ".github/workflows/zongkong-android.yml"
   workflow_dispatch:
 
@@ -31,6 +32,11 @@ jobs:
       - name: Unit tests, debug APK and end-to-end test APK
         run: ./gradlew --no-daemon testDebugUnitTest assembleDebug assembleDebugAndroidTest
 
+      # 一手也打一份，模拟器上装上它测两个 App 的连接
+      - name: 一手 debug APK (for the link test)
+        working-directory: yishou
+        run: ./gradlew --no-daemon assembleDebug
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -38,6 +44,13 @@ jobs:
           path: |
             zongkong/app/build/outputs/apk/debug/*.apk
             zongkong/app/build/outputs/apk/androidTest/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload 一手 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: yishou-apk-for-link-test
+          path: yishou/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
       - name: Upload test reports
@@ -58,6 +71,11 @@ jobs:
         with:
           name: zongkong-debug-apk
           path: zongkong/apk
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: yishou-apk-for-link-test
+          path: zongkong/apk/yishou
 
       - name: Enable KVM
         run: |
