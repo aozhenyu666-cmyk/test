@@ -164,6 +164,11 @@ function clampConf(v) {
   return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 50;
 }
 
+// ---------- 激活词补全（便宜模型） ----------
+export const PROMPT_KEYWORDS = `你是激活词生成器。给下面每个节点 3-5 个激活词：选最能唤起相关专业知识的专业词，不要照抄标题。只输出 JSON，不要任何其他文字。
+格式：{"节点id":["词1","词2","词3"]}`;
+export const keywordsUserMessage = (nodes) => nodes.map((n) => n.id + ' ' + n.title + '：' + n.claim).join('\n');
+
 // ---------- 提示词 B：推演 ----------
 export const PROMPT_THINK = `下面是我的知识结构片段：路径、节点、邻居和激活词。请先用激活词定位相关知识，再回答问题。
 回答前在内部完成：列出要点、判断上下游与并列关系、找出唯一核心。不要输出过程。

@@ -406,3 +406,8 @@ details.manual .step textarea { flex: 1; }
 .swipe[data-swipe="left"] { box-shadow: 0 0 0 2px var(--red), var(--shadow); }
 .swipe-hint { display: flex; justify-content: space-between; font-size: 12px; color: var(--faint); margin: 10px 4px 0; }
 details.manual > .btn.block { width: calc(100% - 32px); }
+.savings { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+.savings b { color: var(--ink); font-family: var(--serif); font-variant-numeric: tabular-nums; }
+.savings svg.i { width: 14px; height: 14px; color: var(--faint); }
+.savings .pill { margin-left: auto; }
+.link-cand input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--ink); flex: none; }

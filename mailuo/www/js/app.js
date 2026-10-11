@@ -1,12 +1,12 @@
 import { h, icon, brandMark, veinArt, dial, toast, sheet, confirmSheet, waiting, glyph, nodeRow, relTag, swipeable } from './ui.js';
 import { Store, TYPES, STATUSES, REL_TYPES, REL_HINT, REL_VIEW, findDuplicate, findAnalogies, today, parentOf } from './model.js';
 import { openVault, IdbVault, FsVault, CapVault, exportZip, importZip, listSnapshots, snapshot, dailySnapshot, restoreSnapshot } from './vault.js';
-import { getConfig, setConfig, usage, callModel, PROMPT_SPLIT, splitUserMessage, extractJson, normalizeSplit, PROMPT_THINK, parseAnswer, PRESETS, estimateTokens } from './llm.js';
-import { buildPack, MODE_QUESTIONS } from './pack.js';
+import { getConfig, setConfig, usage, callModel, PROMPT_SPLIT, splitUserMessage, extractJson, normalizeSplit, PROMPT_THINK, parseAnswer, PRESETS, estimateTokens, PROMPT_KEYWORDS, keywordsUserMessage } from './llm.js';
+import { buildPack, MODE_QUESTIONS, libraryTokens, systemOutline } from './pack.js';
 import { healthCheck, traceCause, longestChain, learningPath, dueReviews, gradeReview } from './features.js';
 import { loadSeed, SEED_SYSTEM } from './seed.js';
 
-const VERSION = '0.1.2';
+const VERSION = '0.1.3';
 let store, vault;
 const app = document.getElementById('app');
 const session = { cands: loadDraft(), packRemoved: new Set(), lastAnswer: null, sys: localStorage.getItem('mailuo.sys') || '' };
@@ -241,7 +241,13 @@ function viewTree(_, params) {
   const treeBox = h('div', { class: 'tree' });
   const draw = () => { treeBox.innerHTML = ''; treeBox.append(buildTree(session.sys, q.value.trim())); };
   q.addEventListener('input', draw);
-  out.push(h('div', { class: 'search' }, icon('search'), q), treeBox);
+  out.push(h('div', { class: 'search' }, icon('search'), q),
+    h('div', { class: 'btn-row', style: { justifyContent: 'flex-end', margin: '-2px 0 4px' } },
+      h('button', { class: 'btn ghost sm', 'data-testid': 'copy-outline', onclick: async () => {
+        const t = systemOutline(store, session.sys);
+        toast((await copyText(t)) ? '已复制大纲 · 约 ' + estimateTokens(t) + ' token' : '复制失败');
+      } }, icon('copy'), '复制体系大纲')),
+    treeBox);
   draw();
   out.push(h('p', { class: 'small muted center mt2' }, '按住节点左侧的 ⋮⋮ 拖到另一个层级，即可改父级。'));
   return out;
@@ -562,6 +568,14 @@ function backfillSheet(n) {
 }
 
 // ---------------- 提问 / 延展 / 类比 ----------------
+function savingsLine(packTokens) {
+  const all = libraryTokens(store);
+  const pct = all > 0 ? Math.max(0, Math.round((1 - packTokens / all) * 100)) : 0;
+  return h('div', { class: 'savings', 'data-testid': 'savings' },
+    h('span', {}, '整库约 ', h('b', {}, all), ' token'), icon('right'), h('span', {}, '本次 ', h('b', {}, packTokens)),
+    h('span', { class: 'pill ' + (pct > 0 ? 'accent' : 'outline') }, pct > 0 ? '省 ' + pct + '%' : '库还小，差别不大'));
+}
+
 function askHistory(id) { try { return JSON.parse(localStorage.getItem('mailuo.asks') || '{}')[id] || []; } catch { return []; } }
 function pushAsk(id, rec) {
   let all = {};
@@ -591,6 +605,7 @@ function viewAsk(id, params) {
     packBox.append(h('div', { class: 'card' },
       h('div', { class: 'budget' }, h('span', { class: 'label' }, '打包'), h('div', { class: 'track' }, h('div', { class: 'fill' + (pack.tokens > budget ? ' over' : ''), style: { width: pct + '%' } })),
         h('span', { class: 'num', 'data-testid': 'pack-tokens' }, pack.tokens + ' / ' + budget)),
+      savingsLine(pack.tokens),
       h('div', { class: 'small muted', style: { margin: '8px 0 10px' } }, '只发这个节点的路径和一跳邻居，不发整库。点 ✕ 可手动删减，超预算时自动先砍邻居说明、再砍远层路径；节点本身永不砍。'),
       pack.items.map((it) => h('div', { class: 'pack-item ' + it.state },
         h('div', { class: 'k' }, it.kind),
@@ -973,8 +988,41 @@ function viewHealth(_, params) {
   if (!r.issues.length) out.push(h('div', { class: 'empty' }, h('h3', {}, '没有发现问题')));
   out.push(h('div', { class: 'list mt' }, r.issues.map((i) => h('div', { class: 'card issue' },
     h('div', { class: 'ih' }, h('span', { class: 'lvl ' + i.level }), i.label, h('span', { class: 'small muted', style: { marginLeft: 'auto' } }, i.nodes.length)),
-    h('div', { class: 'chips' }, i.nodes.slice(0, 12).map((n) => h('span', { class: 'kw', onclick: () => go('#/node/' + n.id) }, n.title)))))));
+    h('div', { class: 'chips' }, i.nodes.slice(0, 12).map((n) => h('span', { class: 'kw', onclick: () => go('#/node/' + n.id) }, n.title))),
+    i.key === 'kwCount' ? h('button', { class: 'btn sm mt', 'data-testid': 'fill-kw', onclick: () => fillKeywordsSheet(i.nodes) }, icon('spark'), 'AI 补全激活词（约 ' + estimateTokens(PROMPT_KEYWORDS + keywordsUserMessage(i.nodes.slice(0, 30))) + ' token）') : null))));
   return out;
+}
+
+// 用便宜模型给激活词不足的节点补 3–5 个激活词；逐个确认后写入
+function fillKeywordsSheet(nodes) {
+  nodes = nodes.slice(0, 30);
+  sheet('AI 补全激活词', async (box, close) => {
+    const body = h('div', {}, waiting('便宜模型生成中'));
+    box.append(body);
+    let result;
+    try {
+      const res = await callModel('split', PROMPT_KEYWORDS, keywordsUserMessage(nodes), { maxTokens: 1500 });
+      result = extractJson(res.text);
+    } catch (e) { body.innerHTML = ''; body.append(h('div', { class: 'banner' }, e.message)); return; }
+    const picks = nodes.map((n) => ({ n, kws: (Array.isArray(result[n.id]) ? result[n.id] : []).map(String).map((k) => k.trim()).filter(Boolean).slice(0, 5), on: true }))
+      .filter((p) => p.kws.length >= 3);
+    body.innerHTML = '';
+    if (!picks.length) { body.append(h('div', { class: 'banner' }, '模型没有给出可用的激活词')); return; }
+    body.append(h('p', { class: 'small muted' }, '取消勾选不想要的，确认后替换原有激活词。'),
+      h('div', { class: 'list' }, picks.map((p) => {
+        const row = h('div', { class: 'link-cand', 'data-testid': 'kw-pick' },
+          h('input', { type: 'checkbox', checked: true, onchange: (e) => { p.on = e.target.checked; row.classList.toggle('off', !p.on); } }),
+          h('div', { class: 'grow' }, h('b', {}, p.n.title),
+            h('div', { class: 'why' }, (p.n.keywords.length ? p.n.keywords.join('、') : '（无）') + ' → '),
+            h('div', { class: 'chips', style: { marginTop: '4px' } }, p.kws.map((k) => h('span', { class: 'kw hit' }, k)))));
+        return row;
+      })),
+      h('button', { class: 'btn primary block mt', 'data-testid': 'fill-kw-save', onclick: async () => {
+        const chosen = picks.filter((p) => p.on);
+        for (const p of chosen) { p.n.keywords = p.kws; await store.saveNode(p.n); }
+        close(); route(true); toast('已更新 ' + chosen.length + ' 个节点的激活词');
+      } }, '写入'));
+  });
 }
 
 // ---------------- 温故 ----------------

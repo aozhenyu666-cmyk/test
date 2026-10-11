@@ -114,3 +114,31 @@ export const MODE_QUESTIONS = {
   extend: '请沿着这个节点延展：它的上游根因和下游后果还缺什么？给出 3 个最值得补进结构的新节点或关系。',
   analogy: '下面列出的类比候选与本节点结构相似。逐个判断类比是否成立（成立 / 不成立 + 一句理由），成立的说明可以从对方借用什么推演。',
 };
+
+// 如果把整库都发出去要多少 token（用来对比打包省了多少）
+export function libraryTokens(store) {
+  return estimateTokens(store.list().map((n) => {
+    const rels = n.links.map((l) => l.type + '→' + (store.nodes.get(l.to)?.title || l.to)).join('；');
+    return store.pathOf(n).join(' › ') + '（' + n.type + '｜' + n.status + '）' + n.claim + ' ' + n.note + ' 激活词：' + n.keywords.join('、') + (n.verify ? ' 验证：' + n.verify : '') + (rels ? ' 关系：' + rels : '');
+  }).join('\n'));
+}
+
+// 体系大纲（Markdown），方便整体复制到聊天 App
+export function systemOutline(store, system) {
+  const sys = store.systems.get(system);
+  const lines = ['# ' + system];
+  const nodeLine = (n, depth) => {
+    const rels = n.links.map((l) => l.type + '→' + (store.nodes.get(l.to)?.title || l.to)).join('，');
+    lines.push('  '.repeat(depth) + '- **' + n.title + '**（' + n.type + '·' + n.status + (n.confidence != null ? '·' + n.confidence + '%' : '') + '）：' + n.claim
+      + (n.keywords.length ? ' 〔' + n.keywords.join('、') + '〕' : '') + (rels ? ' ｛' + rels + '｝' : ''));
+  };
+  const walk = (parent, depth) => {
+    for (const n of store.list(system).filter((x) => x.parent === parent)) nodeLine(n, depth);
+    for (const lv of (sys?.levels || []).filter((l) => (l.lastIndexOf('/') < 0 ? '' : l.slice(0, l.lastIndexOf('/'))) === parent)) {
+      lines.push('  '.repeat(depth) + '- ' + lv.split('/').at(-1));
+      walk(lv, depth + 1);
+    }
+  };
+  walk('', 0);
+  return lines.join('\n');
+}

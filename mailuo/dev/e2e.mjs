@@ -122,6 +122,7 @@ const tokens = +(await page.textContent('[data-testid=pack-tokens]')).split('/')
 check(tokens > 0 && tokens <= 1500, '打包内容 ' + tokens + ' token（≤ 1500）');
 await page.click('text=预览发送全文');
 const raw = await page.textContent('[data-testid=pack-raw]');
+check(/省 \d+%/.test(await page.textContent('[data-testid=savings]')), '提问页显示「整库 vs 本次」省了多少 token：' + (await page.textContent('[data-testid=savings]')).replace(/\s+/g, ''));
 check(raw.includes('请说明怎样区分这两个解释'), '对立关系：自动加入「请说明怎样区分这两个解释」');
 check((raw.match(/对立·竞争解释/g) || []).length === 1, '双向写的对立关系只打包一次');
 check(raw.includes('【路径】思维问题 › 根因 › 下一问没有产生') && raw.includes('【激活词】'), '打包含路径、节点、邻居、激活词');
@@ -262,6 +263,20 @@ check(await page.evaluate(() => window.__mailuo.store.nodes.has('n-0004')), '备
 check(await page.locator('[data-testid=backup]').count() >= 2, '恢复前自动给当前状态做了备份');
 await shot('14-settings');
 
+// ---------- 新增：AI 补全激活词 / 复制体系大纲 ----------
+await page.evaluate(() => { const n = window.__mailuo.store.nodes.get('n-0004'); n.keywords = ['反例']; return window.__mailuo.store.saveNode(n); });
+await page.goto(ORIGIN + '/#/health');
+await page.click('[data-testid=fill-kw]');
+await page.waitForSelector('[data-testid=kw-pick]');
+await shot('18-fill-kw');
+await page.click('[data-testid=fill-kw-save]');
+await page.waitForFunction(() => window.__mailuo.store.nodes.get('n-0004').keywords.length === 3);
+check(calls.at(-1).sys.includes('激活词生成器') && calls.at(-1).model === 'mock', '补全激活词走便宜模型，确认后写入');
+await page.goto(ORIGIN + '/#/tree');
+await page.click('[data-testid=copy-outline]');
+const outline = await page.evaluate(() => navigator.clipboard.readText());
+check(outline.startsWith('# 思维问题') && outline.includes('**第一反应停止**') && outline.includes('对立→'), '复制体系大纲（含层级、结论、激活词、关系）');
+
 // ---------- 新增：安卓返回键逻辑 ----------
 await page.goto(ORIGIN + '/#/node/n-0001');
 await page.waitForSelector('.node-hero');
@@ -290,7 +305,7 @@ check(big.n === 300 && big.ms < 3000, '300 个节点的库 ' + Math.round(big.ms
 // 当日用量
 await page.goto(ORIGIN + '/#/');
 const usageText = await page.textContent('[data-testid=usage]');
-check(/拆分 1 次 · 推演 1 次/.test(usageText), '主界面显示当日 token 用量');
+check(/拆分 2 次 · 推演 1 次/.test(usageText), '主界面显示当日 token 用量');
 await shot('02-today');
 
 await browser.close();

@@ -44,7 +44,10 @@ export function startServer(port = 0) {
       const user = data.messages?.[1]?.content || '';
       calls.push({ sys, user, model: data.model, auth: req.headers.authorization });
       const isSplit = sys.includes('结构拆分器');
-      const content = isSplit ? '```json\n' + JSON.stringify(SPLIT) + '\n```' : sys.includes('只回复 OK') ? 'OK' : ANSWER;
+      const kwFill = sys.includes('激活词生成器')
+        ? JSON.stringify(Object.fromEntries(user.split('\n').map((l) => l.split(' ')[0]).filter(Boolean).map((id, i) => [id, ['追问链', '元认知', '停止规则' + i]])))
+        : null;
+      const content = kwFill ? kwFill : isSplit ? '```json\n' + JSON.stringify(SPLIT) + '\n```' : sys.includes('只回复 OK') ? 'OK' : ANSWER;
       await new Promise((r) => setTimeout(r, 300));
       res.writeHead(200, { 'content-type': 'application/json', ...cors() });
       return res.end(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: Math.ceil((sys.length + user.length) * 0.8), completion_tokens: Math.ceil(content.length * 0.8) } }));
