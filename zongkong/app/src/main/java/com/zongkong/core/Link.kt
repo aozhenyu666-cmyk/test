@@ -1,7 +1,10 @@
 package com.zongkong.core
 
+import com.zongkong.core.plan.PlanBook
+import com.zongkong.core.plan.Plans
 import com.zongkong.core.work.F
 import com.zongkong.core.work.Focus
+import com.zongkong.core.work.TimeParse
 import com.zongkong.core.work.Work
 import java.time.ZoneId
 
@@ -16,14 +19,51 @@ object Link {
     const val VERSION = 1
     const val STATUS = "status"
     const val SET_TASK = "setTask"
+    /** 总控 → 一手：现在开一局陪练窗口。 */
+    const val START_WINDOW = "startWindow"
     const val OK = "ok"
     const val ERROR = "error"
 
-    /** 总控此刻的状态，给一手看（一手据此决定要不要再弹自己的思考页）。 */
-    fun zongkongStatus(status: Status, config: Config, work: Work, zone: ZoneId): Map<String, Any> {
-        val cur = Focus.current(work, status.now, zone)
+    /**
+     * 总控对一手的要求。一手每次弹思考页、发放行时都会问一次（只读，不存，总控卸了就没影响）。
+     *  - hold：专注锁开着 → 一手这时不发放行，只让你回去做事
+     *  - passCap：收紧时每次最多放行几分钟；0 = 不限
+     *  - noOffline：收紧时不能“保存并通过”
+     */
+    data class Influence(val hold: Boolean = false, val passCap: Int = 0, val noOffline: Boolean = false, val note: String = "")
+
+    fun influence(status: Status, config: Config, work: Work, plans: PlanBook, zone: ZoneId): Influence {
+        if (!config.yishouInfluence || status.paused || status.emergencyUntil != null) return Influence()
+        val now = status.now
+        val lock = status.reasons.filterIsInstance<Reason.Focus>().firstOrNull()
+        if (lock != null) return Influence(hold = true, passCap = config.yishouPassCap, noOffline = true, note = "总控专注锁：先做完「${lock.title}」")
+        if (status.strict) {
+            return Influence(passCap = config.yishouPassCap, noOffline = true, note = "总控严管中：" + (status.reasons.firstOrNull()?.text ?: ""))
+        }
+        val plan = Plans.active(plans, now, zone) ?: return Influence()
+        if (Plans.isRestDay(plan, now, zone)) return Influence()
+        val main = Plans.mainAction(plans, work, now, zone)
+        val minutesToday = Plans.progress(plan, work, now, zone).todayPlanMinutes
+        val hour = java.time.Instant.ofEpochMilli(now).atZone(zone).hour
+        val mainStart = main?.plan?.let { TimeParse.startMillis(it, zone) }
+        val behind = when {
+            main != null && mainStart != null -> now > mainStart + 15 * 60_000 && minutesToday == 0
+            main != null -> hour >= 14 && minutesToday == 0
+            else -> hour >= 12 && minutesToday == 0
+        }
+        if (!behind) return Influence()
+        val what = main?.let { "今天的主线「${it.title}」还没开始" } ?: "今天计划内的事还一分钟没做"
+        return Influence(passCap = config.yishouPassCap, noOffline = true, note = "总控：$what")
+    }
+
+    /** 总控此刻的状态，给一手看（一手据此决定要不要再弹自己的思考页、放行给多久）。 */
+    fun zongkongStatus(status: Status, config: Config, work: Work, zone: ZoneId, plans: PlanBook = PlanBook()): Map<String, Any> {
+        val main = Plans.day(plans, DayClock.dateKey(status.now, zone))?.mainActionKey.orEmpty()
+        val cur = Focus.current(work, status.now, zone, main)
         val a = cur.action
         val lock = status.reasons.filterIsInstance<Reason.Focus>().firstOrNull()
+        val inf = influence(status, config, work, plans, zone)
+        val mainRec = Plans.mainAction(plans, work, status.now, zone)
         return mapOf(
             "v" to VERSION,
             "strict" to status.strict,
@@ -38,6 +78,11 @@ object Link {
             "gatesDone" to status.doneCount,
             "gatesTotal" to status.gates.size,
             "blocks" to config.blocked.joinToString(","),
+            "hold" to inf.hold,
+            "passCap" to inf.passCap,
+            "noOffline" to inf.noOffline,
+            "note" to inf.note,
+            "mainTitle" to (mainRec?.title ?: ""),
         )
     }
 

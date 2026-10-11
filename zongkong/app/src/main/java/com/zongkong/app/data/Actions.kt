@@ -37,6 +37,9 @@ class Actions(private val context: Context, private val store: Store) {
     /** 事项、行动、记录的操作和双向同步。 */
     val work = WorkActions(context, store, notion)
 
+    /** 计划：草稿、立项、主线、交出物。 */
+    val plan = PlanActions(store, work)
+
     sealed interface SubmitResult {
         data class Judged(val verdict: Verdict) : SubmitResult
         data class Unavailable(val reason: String, val degradedLeft: Int) : SubmitResult
@@ -75,7 +78,12 @@ class Actions(private val context: Context, private val store: Store) {
 
     private fun evidenceOf(yishou: YishouClient.Result<YishouStatus>?): (String) -> Pair<Int, List<String>> = { k ->
         val kind = com.zongkong.core.work.Focus.Evidence.entries.firstOrNull { it.name == k } ?: com.zongkong.core.work.Focus.Evidence.PLANNED_TODAY
-        if (kind == com.zongkong.core.work.Focus.Evidence.YISHOU_SETS) {
+        if (kind == com.zongkong.core.work.Focus.Evidence.WEEK_PLAN) {
+            val now = System.currentTimeMillis()
+            val p = com.zongkong.core.plan.Plans.active(store.plans.value, now, store.zone)
+                ?: com.zongkong.core.plan.Plans.nextActive(store.plans.value, now, store.zone)
+            if (p == null) 0 to emptyList() else 1 to listOf(p.goals.joinToString("、") { it.title })
+        } else if (kind == com.zongkong.core.work.Focus.Evidence.YISHOU_SETS) {
             when (yishou) {
                 is YishouClient.Result.Ok -> yishou.value.doneSets to listOf(yishou.value.summary())
                 is YishouClient.Result.Err -> 0 to listOf(yishou.message)

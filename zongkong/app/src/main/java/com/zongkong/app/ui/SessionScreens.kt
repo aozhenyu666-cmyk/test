@@ -92,12 +92,49 @@ fun StartRoute(key: String, nav: NavHostController) {
                 }
                 Switch(checked = lock, onCheckedChange = { lock = it })
             }
+            // 计划外：不拦，只问一句
+            val weekPlan = remember { app.actions.plan.active() }
+            val inPlan = weekPlan == null || com.zongkong.core.plan.Plans.inPlan(weekPlan, a)
+            var added by remember { mutableStateOf(false) }
+            if (!inPlan && !added) {
+                val main = remember { com.zongkong.core.plan.Plans.mainAction(app.store.plans.value, work, System.currentTimeMillis(), app.store.zone) }
+                Panel(accent = sig.warn, modifier = Modifier.testTag("offplan")) {
+                    Text("这件不在本周计划里", style = MaterialTheme.typography.titleSmall, color = sig.warn)
+                    Hint("不拦你。想一下：是临时冒出来的，还是本来就该在计划里？")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { app.actions.plan.addActionToPlan(key, "开始时发现该加进计划"); added = true }) { Text("加进本周计划") }
+                        if (main != null && main.key != key) {
+                            TextButton(onClick = { nav.navigate("start/${main.key}") { popUpTo("start/$key") { inclusive = true } } }) { Text("回到主线") }
+                        }
+                    }
+                }
+            }
+            // 同时让一手开一局陪练
+            val yishouInstalled = remember { com.zongkong.app.link.YishouClient.installed(app) }
+            var withYishou by remember { mutableStateOf(false) }
+            if (yishouInstalled) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("同时在一手开一局陪练")
+                        Hint(if (withYishou) "这一步交给一手，一手开陪练窗口，按这一步一手一手地问你。" else "不开")
+                    }
+                    Switch(checked = withYishou, onCheckedChange = { withYishou = it })
+                }
+            }
             work.session?.takeIf { it.actionKey != key }?.let { s ->
                 Hint("正在做的「${work.rec(s.actionKey)?.title}」会停止计时（状态不变，可以之后继续）。")
             }
             Button(onClick = {
                 if (criteria != a[F.CRITERIA]) app.actions.work.update(key, mapOf(F.CRITERIA to criteria.trim()))
                 app.actions.work.start(key, lock)
+                if (!inPlan && !added) app.store.updateWork { w -> com.zongkong.core.work.WorkOps.event(w, com.zongkong.core.work.Event(System.currentTimeMillis(), "offplan", key)) }
+                if (withYishou) {
+                    app.appScope.launch {
+                        com.zongkong.core.Link.taskOrder(app.store.work.value, key)?.let { com.zongkong.app.link.YishouClient.setTask(app, it) }
+                        com.zongkong.app.link.YishouClient.startWindow(app)
+                        com.zongkong.app.link.YishouClient.openWindow(app)
+                    }
+                }
                 com.zongkong.app.system.Notifications.cancelTask(app, key)
                 nav.navigate("session") { popUpTo("start/$key") { inclusive = true } }
             }, modifier = Modifier.fillMaxWidth().height(52.dp).testTag("start-confirm")) { Text("开始") }

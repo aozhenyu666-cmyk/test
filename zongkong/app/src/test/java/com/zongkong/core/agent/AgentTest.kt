@@ -30,6 +30,7 @@ class FakeEnv(var nowMs: Long = ZonedDateTime.of(2026, 10, 11, 9, 30, 0, 0, Zone
     override val rnd = Random(7)
     var cfg = Config()
     var w = Work()
+    var book = com.zongkong.core.plan.PlanBook()
     var kicks = 0
     val mem = mutableListOf<String>()
     val sentToYishou = mutableListOf<String>()
@@ -38,6 +39,8 @@ class FakeEnv(var nowMs: Long = ZonedDateTime.of(2026, 10, 11, 9, 30, 0, 0, Zone
     override fun updateConfig(f: (Config) -> Config): Config = f(cfg).also { cfg = it }
     override fun work() = w
     override fun updateWork(f: (Work) -> Work): Work = f(w).also { w = it }
+    override fun plans() = book
+    override fun updatePlans(f: (com.zongkong.core.plan.PlanBook) -> com.zongkong.core.plan.PlanBook) = f(book).also { book = it }
     override fun status(): Status = Engine.evaluate(cfg, DayLog(DayClock.dateKey(nowMs, zone)), nowMs, zone)
     override fun kick() { kicks++ }
     override suspend fun yishou() = "一手：今天 1/2 组"

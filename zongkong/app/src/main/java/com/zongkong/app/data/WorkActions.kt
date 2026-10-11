@@ -213,6 +213,7 @@ class WorkActions(private val context: Context, private val store: Store, privat
 
     fun complete(actionKey: String, result: String, met: WorkOps.Met, next: String) {
         store.updateWork { WorkOps.complete(it, actionKey, result, met, next, now(), zone, rnd) }
+        if (met == WorkOps.Met.YES) PlanActions(store, this).onActionDone(actionKey)
         kick()
     }
 

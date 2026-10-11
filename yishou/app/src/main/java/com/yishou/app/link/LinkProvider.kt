@@ -38,6 +38,16 @@ class LinkProvider : ContentProvider() {
                     val order = TaskOrder.fromMap(map) ?: return bundleOf(Link.ERROR to "标题和目标不能空")
                     bundleOf(Link.OK to setTask(app, order))
                 }
+                Link.START_WINDOW -> {
+                    val now = System.currentTimeMillis()
+                    val prefs = app.settings.app.value
+                    if (WindowClock.active(now, prefs, ZoneId.systemDefault()) != null) {
+                        bundleOf(Link.OK to "一手的陪练窗口已经开着")
+                    } else {
+                        app.settings.updateApp { it.copy(manualWindowStart = now, windowPauseUntil = 0) }
+                        bundleOf(Link.OK to "一手开局：陪练窗口 ${prefs.windowMinutes} 分钟")
+                    }
+                }
                 else -> bundleOf(Link.ERROR to "不认识的请求：$method")
             }
         } catch (e: Exception) {

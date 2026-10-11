@@ -173,6 +173,22 @@ object Policy {
         return Outcome(c, now = nowParts, later = laterParts)
     }
 
+    // ---------- 总控管一手 ----------
+
+    /** 开着、放行上限更短是收紧（立即）；关掉、上限变长是放宽（24 小时后）。 */
+    fun setYishou(config: Config, on: Boolean, cap: Int, now: Long): Outcome {
+        val c = cap.coerceIn(1, 30)
+        val base = config.copy(pending = config.pending.filterNot { it.op is ChangeOp.Yishou })
+        if (on == config.yishouInfluence && c == config.yishouPassCap) return Outcome(base)
+        val looser = (!on && config.yishouInfluence) || (on && c > config.yishouPassCap)
+        return if (!looser) {
+            Outcome(base.copy(yishouInfluence = on, yishouPassCap = c), now = listOf(if (on) "总控收紧一手：落后时一手每次最多放行 $c 分钟" else "总控不再收紧一手"))
+        } else {
+            val summary = if (!on) "总控不再收紧一手" else "一手收紧时的放行放宽到 $c 分钟"
+            Outcome(base.queue(ChangeOp.Yishou(on, c), summary, now), later = listOf(summary))
+        }
+    }
+
     // ---------- 休假 ----------
 
     /** 申请休假：24 小时后开始，休 [days] 天。 */
@@ -216,6 +232,7 @@ object Policy {
             degradedPerDay = op.degradedPerDay ?: c.degradedPerDay,
         )
         is ChangeOp.Pause -> c.copy(pausedUntil = op.until)
+        is ChangeOp.Yishou -> c.copy(yishouInfluence = op.on, yishouPassCap = op.cap)
     }
 
     private fun Config.queue(op: ChangeOp, summary: String, now: Long): Config {

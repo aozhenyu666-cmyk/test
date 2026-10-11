@@ -23,7 +23,7 @@ class LinkProvider : ContentProvider() {
         return when (method) {
             Link.STATUS -> {
                 val store = app.store
-                val map = Link.zongkongStatus(store.status(), store.config.value, store.work.value, store.zone)
+                val map = Link.zongkongStatus(store.status(), store.config.value, store.work.value, store.zone, store.plans.value)
                 bundleOf(*map.toList().toTypedArray())
             }
             else -> bundleOf(Link.ERROR to "不认识的请求：$method")

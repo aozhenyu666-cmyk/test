@@ -132,6 +132,10 @@ data class Config(
     val focusMinutes: Int = 45,
     /** 首页的快捷按钮（参谋可以帮你加）。 */
     val shortcuts: List<Shortcut> = emptyList(),
+    /** 总控管一手：落后于计划、专注锁时收紧一手的放行。 */
+    val yishouInfluence: Boolean = true,
+    /** 收紧时一手每次最多放行几分钟。 */
+    val yishouPassCap: Int = 5,
 )
 
 /**
@@ -281,4 +285,8 @@ sealed class ChangeOp {
     @Serializable
     @SerialName("pause")
     data class Pause(val until: Long) : ChangeOp()
+
+    @Serializable
+    @SerialName("yishou")
+    data class Yishou(val on: Boolean, val cap: Int) : ChangeOp()
 }

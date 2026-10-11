@@ -38,8 +38,22 @@ import com.yishou.app.window.WindowActivity
 /** 主界面。底部两个页签：对局（对话）和主控台；其余页面从这两处进入。 */
 class MainActivity : ComponentActivity() {
 
+    /** 总控打开一手时可以带 open=window：直接进陪练窗口。 */
+    private fun handleOpen(intent: Intent?) {
+        if (intent?.getStringExtra("open") == "window") {
+            intent.removeExtra("open")
+            startActivity(Intent(this, WindowActivity::class.java))
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleOpen(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) handleOpen(intent)
         setContent {
             YishouTheme {
                 val nav = rememberNavController()

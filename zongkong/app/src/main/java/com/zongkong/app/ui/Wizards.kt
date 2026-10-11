@@ -163,16 +163,35 @@ fun PlanWizard(nav: NavHostController) {
     var doneKey by remember { mutableStateOf("") }
     var passed by remember { mutableStateOf<List<String>>(emptyList()) }
     val threads = remember { work.threads().filter { it.threadStatus.open }.sortedWith(compareByDescending<Rec> { it[F.PRIORITY] == "高" }.thenByDescending { it.updatedAt }).take(6) }
+    val weekPlan = remember { app.actions.plan.active() }
+    var outcomeId by remember { mutableStateOf("") }
     val total = 5
 
     WizardFrame("晨间部署", step, total, sig.plan, { if (step == 0 || step == 4) nav.popBackStack() else step-- }) { s ->
         when (s) {
             0 -> {
-                Question("今天最要紧的一件事是？", "只挑一件。其他的今天不管也没关系。")
+                Question("今天最要紧的一件事是？", if (weekPlan != null) "从本周计划里挑一样当今天的主线。其他的今天不管也没关系。" else "只挑一件。其他的今天不管也没关系。")
+                val planOpen = weekPlan?.outcomes?.filter { !it.done }.orEmpty()
+                if (planOpen.isNotEmpty()) {
+                    Text("按本周计划", style = MaterialTheme.typography.labelLarge, color = sig.plan)
+                    planOpen.forEachIndexed { i, o ->
+                        ChoiceCard(o.title, weekPlan?.goal(o.goalId)?.title.orEmpty(), selected = outcomeId == o.id, color = sig.plan, modifier = Modifier.enter(2 + i).testTag("wiz-outcome-$i")) {
+                            outcomeId = o.id
+                            threadKey = o.threadKey
+                            newThread = ""
+                            existing = work.rec(o.actionKey)?.takeIf { it.actionStatus.open }
+                            title = existing?.title ?: o.title
+                            criteria = existing?.get(F.CRITERIA)?.ifBlank { null } ?: o.criteria
+                            step = 1
+                        }
+                    }
+                    Text("计划外的事", style = MaterialTheme.typography.labelLarge, color = sig.muted)
+                }
                 threads.forEachIndexed { i, t ->
                     ChoiceCard(t.title, t[F.NEXT].ifBlank { t.threadStatus.label }.let { "下一步：$it" }, selected = threadKey == t.key, color = sig.plan, modifier = Modifier.enter(2 + i)) {
                         threadKey = t.key
                         newThread = ""
+                        outcomeId = weekPlan?.outcomes?.firstOrNull { it.threadKey == t.key && !it.done }?.id.orEmpty()
                         val open = work.actionsOf(t.key).filter { it.actionStatus.open }
                         existing = open.firstOrNull { it.plan == null } ?: open.firstOrNull()
                         title = existing?.title ?: t[F.NEXT]
@@ -236,6 +255,8 @@ fun PlanWizard(nav: NavHostController) {
                         doneKey = k
                     }
                     if (tk.isNotBlank()) app.actions.work.update(tk, mapOf(F.STATUS to ThreadStatus.ACTIVE.label))
+                    // 第一件排好的（或者从计划里挑的）就是今天的主线
+                    if (outcomeId.isNotBlank() || app.store.mainKey().isBlank()) app.actions.plan.setMain(doneKey, outcomeId)
                     scope.launch { passed = runCatching { app.actions.autoVerify() }.getOrDefault(emptyList()) }
                     step = 4
                 }, enabled = criteria.isNotBlank(), color = sig.plan, modifier = Modifier.testTag("wiz-save"))
@@ -471,7 +492,7 @@ fun StuckPick(nav: NavHostController) {
     val app = LocalContext.current.zk
     val sig = LocalSignals.current
     val work = app.store.work.value
-    val cur = remember { com.zongkong.core.work.Focus.current(work, System.currentTimeMillis(), app.store.zone) }
+    val cur = remember { com.zongkong.core.work.Focus.current(work, System.currentTimeMillis(), app.store.zone, app.store.mainKey()) }
     val open = remember { work.actions().filter { it.actionStatus.open }.sortedByDescending { it.updatedAt }.take(6) }
     Column(Modifier.fillMaxSize()) {
         BackBar("我卡住了", { nav.popBackStack() })

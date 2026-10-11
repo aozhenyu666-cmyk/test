@@ -359,7 +359,7 @@ class LoopTest {
             w
         }
         val routes = listOf("home" to "e2e-20-today", "depts" to "e2e-21-depts", "dept/INFO" to "e2e-22-dept-info", "dept/THINK" to "e2e-23-dept-think",
-            "dept/PLAN" to "e2e-24-dept-plan", "dept/ACT" to "e2e-25-dept-act", "wizard/review" to "e2e-26-review", "stuckpick" to "e2e-27-stuck", "settings" to "e2e-28-me")
+            "dept/PLAN" to "e2e-24-dept-plan", "plan" to "e2e-29-plan-empty", "dept/ACT" to "e2e-25-dept-act", "wizard/review" to "e2e-26-review", "stuckpick" to "e2e-27-stuck", "settings" to "e2e-28-me")
         scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java))
         routes.forEach { (route, name) ->
             scenario!!.onActivity { it.startActivity(Intent(it, MainActivity::class.java).putExtra(com.zongkong.app.ui.MainActivity.EXTRA_ROUTE, route).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)) }
@@ -389,6 +389,10 @@ class LoopTest {
         assertEquals("增长率 10 题", after.taskTitle)
         assertEquals("正确率 70% 以上", after.taskGoal)
         assertEquals(ak, after.actionKey)
+        // 总控让一手开一局陪练窗口
+        val w = com.zongkong.app.link.YishouClient.startWindow(app)
+        assertTrue(w.toString(), w is com.zongkong.app.link.YishouClient.Result.Ok)
+        assertTrue((com.zongkong.app.link.YishouClient.status(app) as com.zongkong.app.link.YishouClient.Result.Ok).value.windowActive)
         // 再交一次：不重复新建
         val again = com.zongkong.app.link.YishouClient.setTask(app, order)
         assertEquals("已经是一手的当前任务", (again as com.zongkong.app.link.YishouClient.Result.Ok).value)
@@ -397,5 +401,78 @@ class LoopTest {
         waitText("在练：增长率 10 题", 10_000)
         settle()
         shot("e2e-15-dept-act-linked")
+    }
+
+    /**
+     * 计划模式：回看 → 选方向 → 交出什么 → 节奏 → 预演 → 立项；立项后事项下有行动，定主线，首页按主线推。
+     * 周日定的是下周（那天首页不推）。
+     */
+    @Test
+    fun planMode() {
+        val now = System.currentTimeMillis()
+        app.store.updatePlans { com.zongkong.core.plan.PlanBook() }
+        app.store.updateWork { w0 ->
+            com.zongkong.core.work.WorkOps.create(w0, com.zongkong.core.work.Kind.THREAD, mapOf(F.TITLE to "国考行测", F.WHY to "11 月底笔试", F.NEXT to "资料分析专项"), now, kotlin.random.Random(5)).first
+        }
+        val sunday = com.zongkong.core.DayClock.weekday(now, zone) == 7
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java).putExtra(com.zongkong.app.ui.MainActivity.EXTRA_ROUTE, "plan"))
+        waitFor(hasTestTag("plan-start"), 10_000, "计划页")
+        settle()
+        shot("e2e-30-plan-none")
+        compose.onNodeWithTag("plan-start").performScrollTo().performClick()
+        waitFor(hasTestTag("pm-begin"), 5_000, "计划模式第一步")
+        compose.onNodeWithTag("pm-begin").performScrollTo().performClick()
+        waitFor(hasTestTag("pm-goal-0"), 5_000, "选方向")
+        compose.onNodeWithTag("pm-goal-0").performScrollTo().performClick()
+        settle()
+        shot("e2e-31-plan-goals")
+        compose.onNodeWithTag("pm-next").performScrollTo().performClick()
+        waitFor(hasTestTag("pm-outcome-0"), 5_000, "交出什么")
+        compose.onNodeWithTag("pm-outcome-0").performTextInput("资料分析做完 3 套")
+        hideKeyboard()
+        compose.onNodeWithTag("pm-add-outcome-0").performScrollTo().performClick()
+        settle()
+        shot("e2e-32-plan-outcomes")
+        compose.onNodeWithTag("pm-next").performScrollTo().performClick()
+        waitText("1.5 小时", 5_000)
+        compose.onNode(hasText("1.5 小时")).performScrollTo().performClick()
+        compose.onNodeWithTag("pm-next").performScrollTo().performClick()
+        waitText("晚上刷手机停不下来", 5_000)
+        compose.onNode(hasText("晚上刷手机停不下来")).performScrollTo().performClick()
+        settle()
+        shot("e2e-33-plan-traps")
+        compose.onNodeWithTag("pm-next").performScrollTo().performClick()
+        waitFor(hasTestTag("pm-approve"), 5_000, "确认")
+        shot("e2e-34-plan-confirm")
+        compose.onNodeWithTag("pm-approve").performScrollTo().performClick()
+        waitText("有参照了", 5_000)
+        settle()
+        shot("e2e-35-plan-approved")
+
+        val book = app.store.plans.value
+        val p = (if (sunday) com.zongkong.core.plan.Plans.nextActive(book, now, zone) else com.zongkong.core.plan.Plans.active(book, now, zone))!!
+        assertEquals(1, p.goals.size)
+        assertEquals(90, p.dailyMinutes)
+        assertEquals("晚上刷手机停不下来", p.ifThens.single().trigger)
+        val o = p.outcomes.single()
+        val action = app.store.work.value.rec(o.actionKey)!!
+        assertEquals("资料分析做完 3 套", action.title)
+        assertEquals(p.goals[0].threadKey, action.threadKey)
+        // 立项时记了一条“计划”记录（会同步到 Notion）
+        assertTrue(app.store.work.value.notes().any { it.noteType == com.zongkong.core.work.NoteType.PLAN })
+        if (sunday) return
+
+        // 定今天的主线 → 首页按主线推
+        compose.onNode(hasText("定今天的主线")).performScrollTo().performClick()
+        waitFor(hasTestTag("plan-main"), 5_000, "计划页主线")
+        compose.onAllNodes(hasText("资料分析做完 3 套"))[0].performScrollTo().performClick()
+        settle()
+        assertEquals(o.actionKey, app.store.mainKey())
+        shot("e2e-36-plan-page")
+        scenario!!.onActivity { it.startActivity(Intent(it, MainActivity::class.java).putExtra(com.zongkong.app.ui.MainActivity.EXTRA_ROUTE, "home").addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)) }
+        waitFor(hasTestTag("task-title") and hasText("资料分析做完 3 套"), 10_000, "首页按主线推")
+        waitText("计划内", 5_000)
+        settle()
+        shot("e2e-37-home-main")
     }
 }

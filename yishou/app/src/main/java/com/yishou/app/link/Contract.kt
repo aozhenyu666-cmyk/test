@@ -15,6 +15,9 @@ object Link {
     /** 总控 → 一手：把一步行动交给一手陪练（新建或更新当前任务）。 */
     const val SET_TASK = "setTask"
 
+    /** 总控 → 一手：现在开一局陪练窗口。 */
+    const val START_WINDOW = "startWindow"
+
     const val OK = "ok"
     const val ERROR = "error"
 }
@@ -87,7 +90,20 @@ data class ZongkongStatus(
     val gatesTotal: Int = 0,
     /** 严管时总控会弹回的应用包名。 */
     val blocks: Set<String> = emptySet(),
+    /** 总控专注锁开着：一手这时不发放行，只让你回去做事。 */
+    val hold: Boolean = false,
+    /** 总控要求收紧：一手每次最多放行几分钟（0 = 不限）。 */
+    val passCap: Int = 0,
+    /** 总控要求收紧：不能“保存并通过”。 */
+    val noOffline: Boolean = false,
+    /** 为什么收紧（显示在思考页上）。 */
+    val note: String = "",
+    /** 总控里今天的主线。 */
+    val mainTitle: String = "",
 ) {
+    /** 按总控的要求算这次能放行几分钟。 */
+    fun capPass(minutes: Int): Int = if (passCap > 0) minOf(minutes, passCap) else minutes
+
     /** 这个应用总控现在会弹回：一手就不必再弹思考页了。 */
     fun bounces(pkg: String): Boolean = strict && pkg in blocks
 
@@ -105,6 +121,11 @@ data class ZongkongStatus(
             gatesDone = (m["gatesDone"] as? Number)?.toInt() ?: 0,
             gatesTotal = (m["gatesTotal"] as? Number)?.toInt() ?: 0,
             blocks = (m["blocks"] as? String).orEmpty().split(',').filter { it.isNotBlank() }.toSet(),
+            hold = m["hold"] as? Boolean ?: false,
+            passCap = (m["passCap"] as? Number)?.toInt() ?: 0,
+            noOffline = m["noOffline"] as? Boolean ?: false,
+            note = m["note"] as? String ?: "",
+            mainTitle = m["mainTitle"] as? String ?: "",
         )
     }
 }

@@ -65,4 +65,20 @@ class ContractTest {
         assertEquals("资料分析", m["taskTitle"])
         assertEquals(3, m["targetSets"])
     }
+
+    @Test
+    fun zongkongCanTightenPasses() {
+        val s = ZongkongStatus.fromMap(mapOf("passCap" to 5, "noOffline" to true, "note" to "总控：今天的主线「写第二节」还没开始", "mainTitle" to "写第二节"))
+        assertEquals(5, s.capPass(10))
+        assertEquals(3, s.capPass(3))
+        assertTrue(s.noOffline)
+        assertFalse(s.hold)
+        assertEquals("写第二节", s.mainTitle)
+        assertEquals(10, ZongkongStatus.fromMap(emptyMap()).capPass(10))
+    }
+
+    @Test
+    fun focusLockHoldsPasses() {
+        assertTrue(ZongkongStatus.fromMap(mapOf("hold" to true)).hold)
+    }
 }

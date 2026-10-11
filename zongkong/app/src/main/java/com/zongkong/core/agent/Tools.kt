@@ -78,12 +78,16 @@ interface AgentEnv {
     fun updateConfig(f: (Config) -> Config): Config
     fun work(): Work
     fun updateWork(f: (Work) -> Work): Work
+    fun plans(): com.zongkong.core.plan.PlanBook
+    fun updatePlans(f: (com.zongkong.core.plan.PlanBook) -> com.zongkong.core.plan.PlanBook): com.zongkong.core.plan.PlanBook
     fun status(): Status
     /** 改了事项 / 行动 / 记录：安排一次同步。 */
     fun kick()
     /** 一手的状态（一段话），连不上时说原因。 */
     suspend fun yishou(): String
     suspend fun sendToYishou(actionKey: String): String
+    /** 让一手现在开一局陪练窗口。 */
+    suspend fun startYishouWindow(): String = "这个环境开不了一手的窗口"
     suspend fun sync(): String
     fun memory(): List<String>
     fun remember(fact: String)
@@ -191,8 +195,8 @@ class ZkTools(private val env: AgentEnv) {
             ),
         ),
         ToolSpec(
-            "send_to_yishou", "把一步行动交给一手陪练：设为一手的当前任务，一手会就这一步一手一手地问你。",
-            listOf(Param("action", "string", "行动键或标题", required = true)),
+            "send_to_yishou", "把一步行动交给一手陪练：设为一手的当前任务，一手会就这一步一手一手地问你。window = true 时一手马上开一局陪练窗口。",
+            listOf(Param("action", "string", "行动键或标题", required = true), Param("window", "boolean", "要不要让一手现在开一局陪练窗口")),
         ),
         ToolSpec(
             "set_gate", "新建或修改一道节律关卡（每天必须交的一样东西）。收紧立即生效；放宽（推迟截止、减少日子、改成超时才拦）24 小时后生效。",
@@ -247,6 +251,36 @@ class ZkTools(private val env: AgentEnv) {
             ),
         ),
         ToolSpec("remove_shortcut", "删掉一个首页快捷按钮。", listOf(Param("label", "string", "按钮上的字", required = true))),
+        ToolSpec("get_plan", "看本周计划：方向、要交出的东西（带 id）、节奏、预演、今天的主线、计划内外各花了多少时间。"),
+        ToolSpec(
+            "draft_week_plan",
+            "起草一份周计划（计划模式）。只是草稿：他在计划页点“立项”才生效，你不能替他立项。方向最多 3 个，每个方向交出 1–2 样能检查的东西。" +
+                "多条内容用换行分隔，每行里用“｜”分字段。",
+            listOf(
+                Param("week", "string", "哪一周", choices = listOf("本周", "下周")),
+                Param("goals", "string", "方向，每行：方向标题｜为什么｜对应的事项编号（可空）", required = true),
+                Param("outcomes", "string", "要交出的东西，每行：方向标题｜交出什么｜做到什么算完", required = true),
+                Param("daily_minutes", "integer", "每天给计划内的事多少分钟（建议 60–180，宁少勿多）"),
+                Param("rest_days", "string", "休息日，例：6,7 或 周日；没有就不填"),
+                Param("if_then", "string", "预演，每行：如果……｜就……"),
+            ),
+        ),
+        ToolSpec(
+            "set_day_main", "把一步行动定为今天的主线（首页会优先推它）。",
+            listOf(Param("action", "string", "行动键或标题", required = true)),
+        ),
+        ToolSpec(
+            "complete_outcome", "把本周计划里的一样东西标成已交出。",
+            listOf(Param("outcome", "string", "交出物的 id 或标题", required = true)),
+        ),
+        ToolSpec(
+            "revise_plan", "改生效中的周计划：加或去掉一样要交出的东西。要写为什么（会留痕）。",
+            listOf(
+                Param("add", "string", "要加的，格式：方向标题｜交出什么｜做到什么算完"),
+                Param("drop", "string", "要去掉的交出物 id 或标题"),
+                Param("why", "string", "为什么改", required = true),
+            ),
+        ),
         ToolSpec("sync_notion", "现在和 Notion 同步一次（拉 GPT 写进去的、推总控改过的）。"),
         ToolSpec(
             "remember", "记住一条关于他的长期事实或偏好（例：晚上 10 点后效率低；周三下午有课），以后每次对话都会带上。",
@@ -281,6 +315,11 @@ class ZkTools(private val env: AgentEnv) {
                 "open_page" -> openPage(a)
                 "add_shortcut" -> addShortcut(a)
                 "remove_shortcut" -> removeShortcut(a)
+                "get_plan" -> getPlan()
+                "draft_week_plan" -> draftPlan(a)
+                "set_day_main" -> setDayMain(a)
+                "complete_outcome" -> completeOutcome(a)
+                "revise_plan" -> revisePlan(a)
                 "sync_notion" -> env.sync().let { ToolResult(it, it) }
                 "remember" -> a.s("fact").takeIf { it.isNotBlank() }?.let { env.remember(it); ToolResult("记住了：$it", "记住：$it") } ?: ToolResult.fail("fact 不能空")
                 "forget" -> if (env.forget(a.s("fact"))) ToolResult("删掉了", "不再记：${a.s("fact")}") else ToolResult.fail("没找到这条")
@@ -431,6 +470,13 @@ class ZkTools(private val env: AgentEnv) {
         val result = a.s("result").ifBlank { return ToolResult.fail("结果不能空") }
         env.updateWork { WorkOps.complete(it, x.key, result, met, a.s("next"), env.now(), env.zone, env.rnd) }
         env.kick()
+        if (met == WorkOps.Met.YES) {
+            activePlan()?.let { p ->
+                p.outcomes.firstOrNull { it.actionKey == x.key && !it.done }?.let { o ->
+                    env.updatePlans { com.zongkong.core.plan.Plans.setOutcomeDone(it, p.id, o.id, true, env.now()) }
+                }
+            }
+        }
         val st = env.work().rec(x.key)?.actionStatus?.label.orEmpty()
         return ToolResult("「${x.title}」记了结果，状态：$st", "「${x.title}」→ $st")
     }
@@ -476,7 +522,7 @@ class ZkTools(private val env: AgentEnv) {
 
     private suspend fun sendToYishou(a: Args): ToolResult {
         val x = findAction(a.s("action")) ?: return noAction(a.s("action"))
-        val msg = env.sendToYishou(x.key)
+        val msg = env.sendToYishou(x.key) + if (a.b("window") == true) "；" + env.startYishouWindow() else ""
         val ok = !msg.startsWith("失败") && !msg.contains("没装") && !msg.contains("连不上")
         return ToolResult(msg, if (ok) "「${x.title}」交给了一手" else msg, ok = ok)
     }
@@ -623,6 +669,119 @@ class ZkTools(private val env: AgentEnv) {
         return ToolResult("删掉了按钮「$label」", "删掉按钮「$label」")
     }
 
+    // ---------- 计划 ----------
+
+    private fun activePlan() = com.zongkong.core.plan.Plans.active(env.plans(), env.now(), env.zone)
+
+    private fun getPlan(): ToolResult {
+        val book = env.plans()
+        val p = activePlan() ?: com.zongkong.core.plan.Plans.nextActive(book, env.now(), env.zone)
+        val draft = com.zongkong.core.plan.Plans.draft(book, env.now(), env.zone)
+        val text = buildString {
+            if (p != null) append(com.zongkong.core.plan.Plans.describe(p, env.work(), book, env.now(), env.zone)) else append("本周还没有生效的计划。\n")
+            if (draft != null) append("\n有一份等他立项的草稿（${draft.by}起草，${draft.goals.size} 个方向、${draft.outcomes.size} 样交出物）。\n")
+        }
+        return ToolResult(text, "看了本周计划")
+    }
+
+    private fun lines(s: String) = s.split('\n').map { it.trim().trimStart('-', '·', '•', '*', ' ') }.filter { it.isNotEmpty() }
+    private fun fields(line: String) = line.split('｜', '|').map { it.trim() }
+
+    private fun draftPlan(a: Args): ToolResult {
+        val now = env.now()
+        val ws0 = com.zongkong.core.plan.Plans.weekStart(now, env.zone)
+        val ws = if (a.s("week") == "下周") ws0.plusWeeks(1) else ws0
+        val goals = lines(a.s("goals")).take(com.zongkong.core.plan.Plans.MAX_GOALS).mapIndexed { i, l ->
+            val f = fields(l)
+            val title = f.getOrElse(0) { "" }
+            val ref = f.getOrElse(2) { "" }
+            val thread = (if (ref.isNotBlank()) findThread(ref) else null) ?: findThread(title)
+            com.zongkong.core.plan.Goal(com.zongkong.core.plan.Plans.newId("g", now, i), title, f.getOrElse(1) { "" }, thread?.key.orEmpty())
+        }.filter { it.title.isNotBlank() }
+        if (goals.isEmpty()) return ToolResult.fail("至少要一个方向")
+        val outcomes = lines(a.s("outcomes")).mapIndexedNotNull { i, l ->
+            val f = fields(l)
+            val g = goals.firstOrNull { it.title == f.getOrElse(0) { "" } } ?: goals.firstOrNull { f.getOrElse(0) { "" }.contains(it.title) || it.title.contains(f.getOrElse(0) { "" }) } ?: return@mapIndexedNotNull null
+            val title = f.getOrElse(1) { "" }.ifBlank { return@mapIndexedNotNull null }
+            com.zongkong.core.plan.Outcome(com.zongkong.core.plan.Plans.newId("o", now, i), g.id, title, f.getOrElse(2) { "" }, g.threadKey)
+        }.groupBy { it.goalId }.flatMap { it.value.take(com.zongkong.core.plan.Plans.MAX_OUTCOMES_PER_GOAL) }
+        if (outcomes.isEmpty()) return ToolResult.fail("至少要一样交出物，格式：方向标题｜交出什么｜做到什么算完（方向标题要和 goals 里的一致）")
+        val rest = a.s("rest_days").let { r ->
+            val chinese = "一二三四五六日"
+            r.split(',', '，', '、', ' ').mapNotNull { x ->
+                val t = x.trim().removePrefix("周").removePrefix("星期")
+                t.toIntOrNull()?.takeIf { it in 1..7 } ?: chinese.indexOf(t).takeIf { it >= 0 && t.length == 1 }?.plus(1)
+            }.toSet()
+        }
+        val plan = com.zongkong.core.plan.WeekPlan(
+            id = com.zongkong.core.plan.Plans.newId("w", now, 0),
+            weekStart = ws.toString(),
+            goals = goals,
+            outcomes = outcomes,
+            dailyMinutes = (a.i("daily_minutes") ?: 120).coerceIn(30, 600),
+            restDays = rest,
+            ifThens = lines(a.s("if_then")).mapNotNull { l -> fields(l).let { f -> if (f.size >= 2 && f[0].isNotBlank() && f[1].isNotBlank()) com.zongkong.core.plan.IfThen(f[0].removePrefix("如果"), f[1].removePrefix("就")) else null } },
+            by = "参谋",
+            createdAt = now,
+        )
+        env.updatePlans { com.zongkong.core.plan.Plans.putDraft(it, plan) }
+        val unmatched = goals.count { it.threadKey.isBlank() }
+        return ToolResult(
+            "草稿已放进计划页，等他点“立项”。${goals.size} 个方向、${outcomes.size} 样交出物" + (if (unmatched > 0) "；$unmatched 个方向没对上事项（立项时会新建事项）" else "") + "。会在回复后打开计划页。",
+            "起草了${if (ws == ws0) "本周" else "下周"}计划（${outcomes.size} 样交出物）",
+            route = "plan",
+        )
+    }
+
+    private fun setDayMain(a: Args): ToolResult {
+        val x = findAction(a.s("action")) ?: return noAction(a.s("action"))
+        val now = env.now()
+        val date = DayClock.dateKey(now, env.zone)
+        val p = activePlan()
+        val outcome = p?.outcomes?.firstOrNull { it.threadKey.isNotBlank() && it.threadKey == x.threadKey && !it.done }
+        env.updatePlans { book ->
+            val old = com.zongkong.core.plan.Plans.day(book, date)
+            com.zongkong.core.plan.Plans.setDay(book, com.zongkong.core.plan.DayPlan(date, outcome?.id ?: old?.mainOutcomeId.orEmpty(), x.key, old?.extras.orEmpty(), now))
+        }
+        val inPlan = p != null && com.zongkong.core.plan.Plans.inPlan(p, x)
+        return ToolResult("今天的主线定为「${x.title}」" + if (p != null && !inPlan) "（注意：它不在本周计划里）" else "", "今天主线：「${x.title}」")
+    }
+
+    private fun findOutcome(ref: String): Pair<com.zongkong.core.plan.WeekPlan, com.zongkong.core.plan.Outcome>? {
+        val p = activePlan() ?: return null
+        val o = p.outcomes.firstOrNull { it.id == ref } ?: p.outcomes.firstOrNull { it.title == ref } ?: p.outcomes.firstOrNull { it.title.contains(ref) || ref.contains(it.title) }
+        return o?.let { p to it }
+    }
+
+    private fun completeOutcome(a: Args): ToolResult {
+        val (p, o) = findOutcome(a.s("outcome")) ?: return ToolResult.fail("本周计划里没有“${a.s("outcome")}”")
+        env.updatePlans { com.zongkong.core.plan.Plans.setOutcomeDone(it, p.id, o.id, true, env.now()) }
+        return ToolResult("「${o.title}」标成已交出", "交出：「${o.title}」")
+    }
+
+    private fun revisePlan(a: Args): ToolResult {
+        val p = activePlan() ?: return ToolResult.fail("本周没有生效的计划。先起草（draft_week_plan），他立项后才能改")
+        val why = a.s("why").ifBlank { return ToolResult.fail("改计划要写为什么") }
+        val now = env.now()
+        val done = mutableListOf<String>()
+        a.opt("add")?.let { l ->
+            val f = fields(l)
+            val g = p.goals.firstOrNull { it.title == f.getOrElse(0) { "" } } ?: p.goals.firstOrNull { f.getOrElse(0) { "" }.contains(it.title) || it.title.contains(f.getOrElse(0) { "" }) }
+                ?: return ToolResult.fail("方向“${f.getOrElse(0) { "" }}”不在计划里；现有方向：" + p.goals.joinToString("、") { it.title })
+            val title = f.getOrElse(1) { "" }.ifBlank { return ToolResult.fail("add 格式：方向标题｜交出什么｜做到什么算完") }
+            val o = com.zongkong.core.plan.Outcome(com.zongkong.core.plan.Plans.newId("o", now, p.outcomes.size), g.id, title, f.getOrElse(2) { "" }, g.threadKey)
+            env.updatePlans { com.zongkong.core.plan.Plans.revise(it, p.id, "加：$title", why, now) { w -> w.copy(outcomes = w.outcomes + o) } }
+            done += "加了「$title」"
+        }
+        a.opt("drop")?.let { ref ->
+            val o = (activePlan() ?: p).outcomes.firstOrNull { it.id == ref || it.title == ref || it.title.contains(ref) } ?: return ToolResult.fail("计划里没有“$ref”")
+            env.updatePlans { com.zongkong.core.plan.Plans.revise(it, p.id, "去掉：${o.title}", why, now) { w -> w.copy(outcomes = w.outcomes.filterNot { x -> x.id == o.id }) } }
+            done += "去掉了「${o.title}」"
+        }
+        if (done.isEmpty()) return ToolResult.fail("add 和 drop 都没填")
+        return ToolResult("改了本周计划：${done.joinToString("，")}（为什么：$why，已留痕）", "改计划：${done.joinToString("，")}")
+    }
+
     companion object {
         /** 参谋能打开的页面。 */
         val PAGES: Map<String, String> = linkedMapOf(
@@ -634,6 +793,8 @@ class ZkTools(private val env: AgentEnv) {
             "action" to "某一步行动",
             "capture" to "收集",
             "plan" to "晨间部署向导",
+            "week" to "本周计划（计划页）",
+            "plan_mode" to "计划模式（定本周计划的向导）",
             "review" to "晚间复盘向导",
             "rhythm" to "今天的节律关卡",
             "gate" to "某道关卡",
@@ -655,6 +816,8 @@ class ZkTools(private val env: AgentEnv) {
             "threads" to "threads",
             "capture" to "capture",
             "plan" to "wizard/plan",
+            "week" to "plan",
+            "plan_mode" to "plan/new",
             "review" to "wizard/review",
             "rhythm" to "rhythm",
             "session" to "session",

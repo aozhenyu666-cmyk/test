@@ -64,6 +64,8 @@ class ChatRepo(private val context: Context, private val store: Store, private v
         override fun updateConfig(f: (Config) -> Config): Config = store.updateConfig(f)
         override fun work(): Work = store.work.value
         override fun updateWork(f: (Work) -> Work): Work = store.updateWork(f)
+        override fun plans(): com.zongkong.core.plan.PlanBook = store.plans.value
+        override fun updatePlans(f: (com.zongkong.core.plan.PlanBook) -> com.zongkong.core.plan.PlanBook) = store.updatePlans(f)
         override fun status(): Status = store.status()
         override fun kick() = actions.work.kick()
         override suspend fun yishou(): String = when (val r = YishouClient.status(context)) {
@@ -84,6 +86,10 @@ class ChatRepo(private val context: Context, private val store: Store, private v
                 is YishouClient.Result.Ok -> r.value.ifBlank { "已交给一手" }
                 is YishouClient.Result.Err -> "失败：${r.message}"
             }
+        }
+        override suspend fun startYishouWindow(): String = when (val r = YishouClient.startWindow(context)) {
+            is YishouClient.Result.Ok -> r.value.also { YishouClient.openWindow(context) }
+            is YishouClient.Result.Err -> "开局失败：${r.message}"
         }
         override suspend fun sync(): String = actions.sync()
         override fun memory(): List<String> = _log.value.memory

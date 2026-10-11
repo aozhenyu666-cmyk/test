@@ -49,6 +49,10 @@ data class GateState(
     val passMinutes: Int? = null,
     /** 隔了很久才回来时的上一轮，用于“回到局面” */
     val resumeFrom: Round? = null,
+    /** 总控此刻的要求（没装总控或连不上为 null）。 */
+    val zongkong: com.yishou.app.link.ZongkongStatus? = null,
+    /** 这一手有效，但总控专注锁开着，不放行。 */
+    val held: Boolean = false,
 ) {
     val answerChars: Int get() = AnswerRules.countChars(answer)
     val isTest: Boolean get() = triggerPackage == null
@@ -84,6 +88,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             val task = dao.getCurrentTask()
             val bp = task?.let { dao.getBreakpoint(it.id) }
             val last = dao.lastRound()
+            val zk = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.yishou.app.link.ZongkongClient.status(yishou, maxAgeMs = 0) }
             val resume = last?.takeIf { (now - it.createdAt) / 60_000 >= CoachMessages.RESUME_GAP_MINUTES }
             _state.update {
                 it.copy(
@@ -94,6 +99,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
                     inWindow = inWindow,
                     coachMove = bp?.pendingCoachMove?.takeIf { m -> m.isNotBlank() },
                     offlineMinutes = prefs.offlinePassMinutes,
+                    zongkong = zk,
                 )
             }
             if (task != null && !inWindow) loadMove(task)
@@ -152,8 +158,13 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 is RoundEngine.AnswerResult.Judged -> {
                     val bp = dao.getBreakpoint(task.id)
-                    if (r.round.effective && !s.isTest && !s.inWindow) {
-                        val minutes = yishou.settings.app.value.passMinutesFor(s.group)
+                    if (r.round.effective && !s.isTest && !s.inWindow && s.zongkong?.hold == true) {
+                        // 总控专注锁开着：这一手算数，但不放行
+                        attachment.clear()
+                        _state.update { it.copy(submitting = false, lastRound = r.round, breakpoint = bp, held = true) }
+                    } else if (r.round.effective && !s.isTest && !s.inWindow) {
+                        val base = yishou.settings.app.value.passMinutesFor(s.group)
+                        val minutes = s.zongkong?.capPass(base) ?: base
                         engine.grantPass(s.group, minutes, r.round.id)
                         yishou.stats.event(DayStats.GATE_PASS)
                         attachment.clear()
@@ -183,6 +194,10 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         val task = s.task ?: return
         val move = s.coachMove ?: return
         if (s.submitting || s.isTest || s.inWindow) return
+        if (s.zongkong?.noOffline == true) {
+            _state.update { it.copy(hint = "总控现在不允许离线放行：${s.zongkong.note}") }
+            return
+        }
         val text = composedAnswer()
         if (!AnswerRules.isLongEnough(text)) {
             _state.update { it.copy(hint = "再多写一步") }
@@ -206,6 +221,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun offlineLeft(): Int {
         val zone = ZoneId.systemDefault()
         val since = WindowClock.startOfDay(WindowClock.today(System.currentTimeMillis(), zone), zone)
+        if (_state.value.zongkong?.noOffline == true) return 0
         val used = engine.offlineUsedSince(since)
         return (yishou.settings.app.value.offlineDailyLimit - used).coerceAtLeast(0)
     }

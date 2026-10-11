@@ -73,6 +73,37 @@ class Store(private val context: Context) {
         }
     }
 
+    // ---------- 计划 ----------
+
+    private val _plans = MutableStateFlow(loadPlans())
+    val plans: StateFlow<com.zongkong.core.plan.PlanBook> = _plans.asStateFlow()
+
+    fun updatePlans(f: (com.zongkong.core.plan.PlanBook) -> com.zongkong.core.plan.PlanBook): com.zongkong.core.plan.PlanBook = synchronized(workLock) {
+        val next = f(_plans.value)
+        if (next != _plans.value) {
+            _plans.value = next
+            val text = ZkJson.encodeToString(com.zongkong.core.plan.PlanBook.serializer(), next)
+            io.execute { writeAtomic(File(dir, "plans.json"), text) }
+        }
+        next
+    }
+
+    private fun loadPlans(): com.zongkong.core.plan.PlanBook {
+        val f = File(dir, "plans.json")
+        if (!f.exists()) return com.zongkong.core.plan.PlanBook()
+        return try {
+            ZkJson.decodeFromString(com.zongkong.core.plan.PlanBook.serializer(), f.readText())
+        } catch (e: Exception) {
+            Log.e(TAG, "plans.json 读不了，备份后从空开始", e)
+            f.copyTo(File(dir, "plans.broken.${System.currentTimeMillis()}.json"), overwrite = true)
+            com.zongkong.core.plan.PlanBook()
+        }
+    }
+
+    /** 今天主线的行动键（没定为空）。 */
+    fun mainKey(now: Long = System.currentTimeMillis()): String =
+        com.zongkong.core.plan.Plans.day(_plans.value, DayClock.dateKey(now, zone))?.mainActionKey.orEmpty()
+
     /** 当前的专注锁（正在做的一步，锁还没到期）。 */
     fun focusLock(now: Long = System.currentTimeMillis()): FocusLock? {
         val s = _work.value.session ?: return null

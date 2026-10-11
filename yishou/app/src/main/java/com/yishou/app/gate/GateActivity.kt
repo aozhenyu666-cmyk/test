@@ -197,6 +197,7 @@ private fun GateScreen(
     onOpenWindow: () -> Unit,
     onOpenApp: () -> Unit,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     Surface(Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
@@ -242,6 +243,19 @@ private fun GateScreen(
 
             Text(task.title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
+            // 总控的要求：为什么收紧、今天的主线
+            s.zongkong?.let { zk ->
+                if (zk.note.isNotBlank() || zk.mainTitle.isNotBlank()) {
+                    Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)) {
+                        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            if (zk.note.isNotBlank()) Text(zk.note, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                            if (zk.passCap > 0) Text("答对这一手最多放行 ${zk.passCap} 分钟" + if (zk.noOffline) "，不能离线放行" else "", style = MaterialTheme.typography.bodySmall)
+                            if (zk.mainTitle.isNotBlank()) Text("总控里今天的主线：${zk.mainTitle}", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+
             s.resumeFrom?.let { last ->
                 ResumeCard(
                     gapMinutes = (System.currentTimeMillis() - last.createdAt) / 60_000,
@@ -253,6 +267,13 @@ private fun GateScreen(
             s.lastRound?.let { r ->
                 UserBubble(r.userAnswer)
                 VerdictLine(r)
+            }
+
+            if (s.held) {
+                Text("这一手算数。但总控的专注锁开着，现在不放行：" + (s.zongkong?.note ?: "先回去做事"), style = MaterialTheme.typography.titleMedium)
+                Button(onClick = { com.yishou.app.link.ZongkongClient.open(context) }, modifier = Modifier.fillMaxWidth()) { Text("回总控") }
+                OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("回到桌面") }
+                return@Column
             }
 
             val passMinutes = s.passMinutes

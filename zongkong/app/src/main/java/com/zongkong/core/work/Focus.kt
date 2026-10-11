@@ -11,6 +11,7 @@ object Focus {
         NOW("现在该做"),
         CONTINUE("上次做到一半"),
         OVERDUE("过了计划时间还没做"),
+        MAIN("今天的主线"),
         LATER_TODAY("今天接下来"),
         UNSCHEDULED("还没排时间"),
         UPCOMING("下一个安排"),
@@ -21,7 +22,8 @@ object Focus {
 
     private fun Rec.open(): Boolean = actionStatus.open
 
-    fun current(work: Work, now: Long, zone: ZoneId): Current {
+    /** [main]：今天主线的行动键（计划里定的）。没有更紧急的事时，推主线。 */
+    fun current(work: Work, now: Long, zone: ZoneId, main: String = ""): Current {
         fun pack(a: Rec, why: Why): Current {
             val p = a.plan
             return Current(a, work.rec(a.threadKey), why, p?.let { TimeParse.startMillis(it, zone) }, p?.let { TimeParse.endMillis(it, zone) })
@@ -38,6 +40,7 @@ object Focus {
         open.filter { it.actionStatus == ActionStatus.DOING && it[F.BREAK].isNotBlank() }.maxByOrNull { it.updatedAt }
             ?.let { return pack(it, Why.CONTINUE) }
         timed.filter { (_, _, e) -> e <= now }.minByOrNull { it.second }?.let { return pack(it.first, Why.OVERDUE) }
+        if (main.isNotBlank()) open.firstOrNull { it.key == main }?.let { return pack(it, Why.MAIN) }
         val endOfDay = DayClock.at(DayClock.date(now, zone), DayClock.DAY_START_MIN - 1, zone)
         timed.filter { (_, s, _) -> s in (now + 1)..endOfDay }.minByOrNull { it.second }?.let { return pack(it.first, Why.LATER_TODAY) }
         open.filter { it.plan == null }.maxWithOrNull(compareBy<Rec>({ priority(work.rec(it.threadKey)) }, { it.updatedAt }))
@@ -76,6 +79,8 @@ object Focus {
         DONE_ACTIONS("完成了行动", "今天有行动做完并记录了结果"),
         /** 从一手读（总控 core 里数不出来，由 App 层问一手）。 */
         YISHOU_SETS("一手练了几组", "一手里今天完成的训练组数（一组 = 几手有效回答，按一手的设置）"),
+        /** 从计划本读（App 层算）。 */
+        WEEK_PLAN("定了本周计划", "本周有一份你点头立项的计划（周日定好下周的也算）"),
     }
 
     private fun sameDay(t: Long, now: Long, zone: ZoneId) = DayClock.dateKey(t, zone) == DayClock.dateKey(now, zone)
@@ -101,7 +106,7 @@ object Focus {
             Evidence.DONE_ACTIONS -> work.actions().filter {
                 (it.actionStatus == ActionStatus.DONE || it.actionStatus == ActionStatus.CONFIRM) && sameDay(it.updatedAt, now, zone)
             }
-            Evidence.YISHOU_SETS -> emptyList()
+            Evidence.YISHOU_SETS, Evidence.WEEK_PLAN -> emptyList()
         }
         return items.size to items.take(5).map { it.title }
     }

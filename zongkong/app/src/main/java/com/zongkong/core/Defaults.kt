@@ -94,27 +94,14 @@ object Defaults {
         Gate(
             id = "plan_week",
             dept = Dept.PLAN,
-            title = "周部署",
-            instruction = "每周日：回看这周，定下周最多 3 个目标，每个目标有量化标准和时间预算。",
-            template = """
-                上周回看：定的目标完成了几个？最大的问题？
-                下周目标（最多 3 个，每个：目标 / 量化标准 / 每周投入几小时）：
-                1.
-                2.
-                下周已知的干扰和对策：
-            """.trimIndent(),
-            days = setOf(7),
+            title = "本周计划",
+            instruction = "进入计划模式（统筹规划部 → 本周计划），五分钟：看一眼上周 → 选最多 3 个方向 → 每个方向这周交出 1–2 样 → 每天给多少时间 → 预演最可能卡住的地方 → 你点头立项。也可以让参谋起草，你只管点头。",
+            days = setOf(7, 1),
             openAt = 4 * 60,
             deadline = 21 * 60,
-            verify = VerifyMode.AI,
-            minChars = 100,
-            rubric = """
-                回看了上周，说了完成情况和最大的问题
-                目标不超过 3 个
-                每个目标有量化标准
-                每个目标有时间预算
-                考虑了已知的干扰
-            """.trimIndent(),
+            verify = VerifyMode.EVIDENCE,
+            evidence = "WEEK_PLAN",
+            evidenceMin = 1,
         ),
     )
 

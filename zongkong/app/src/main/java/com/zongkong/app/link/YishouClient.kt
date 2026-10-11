@@ -32,6 +32,21 @@ object YishouClient {
         call(context, Link.SET_TASK, bundleOf(*order.toList().toTypedArray())) { b -> b.getString(Link.OK).orEmpty() }
     }
 
+    /** 让一手现在开一局陪练窗口（默认长度按一手的设置），再打开一手的窗口页。 */
+    suspend fun startWindow(context: Context): Result<String> = withContext(Dispatchers.IO) {
+        call(context, Link.START_WINDOW, null) { b -> b.getString(Link.OK).orEmpty() }
+    }
+
+    fun openWindow(context: Context): Boolean {
+        val intent = context.packageManager.getLaunchIntentForPackage(Link.YISHOU) ?: return false
+        return try {
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("open", "window"))
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun <T> call(context: Context, method: String, extras: android.os.Bundle?, read: (android.os.Bundle) -> T): Result<T> {
         if (!Partner.installed(context)) return Result.Err("没装一手")
         if (!Partner.yishouGenuine(context)) return Result.Err("手机上的一手不是我们打包的那个（签名不对），不连接")

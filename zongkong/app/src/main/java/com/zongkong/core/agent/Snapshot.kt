@@ -35,7 +35,9 @@ object Snapshot {
         val zone = env.zone
         val status = env.status()
         val work = env.work()
-        val cur = Focus.current(work, now, zone)
+        val book = env.plans()
+        val main = com.zongkong.core.plan.Plans.day(book, DayClock.dateKey(now, zone))?.mainActionKey.orEmpty()
+        val cur = Focus.current(work, now, zone, main)
         return buildString {
             append("现在：${clock(now, zone)}\n")
             append("总控：${status.headline}。${Engine.summary(status)}\n")
@@ -50,6 +52,14 @@ object Snapshot {
             val threads = work.threads().filter { it.threadStatus.open }.sortedByDescending { it.updatedAt }
             append("进行中的事（${threads.size}）：").append(threads.take(8).joinToString("；") { "${it[F.CODE]} ${it.title}（${it.threadStatus.label}）" }.ifBlank { "无" }).append('\n')
             append("今天娱乐 ${status.playMin} 分钟" + (if (status.quotaMin > 0) " / 上限 ${status.quotaMin}" else "") + "\n")
+            val plan = com.zongkong.core.plan.Plans.active(book, now, zone)
+            if (plan == null) {
+                append("本周计划：还没有" + (if (com.zongkong.core.plan.Plans.draft(book, now, zone) != null) "（有一份草稿等他立项）" else "") + "\n")
+            } else {
+                append("本周计划：").append(plan.goals.joinToString("；") { g -> g.title + "（" + plan.outcomesOf(g.id).joinToString("、") { (if (it.done) "✓" else "") + it.title } + "）" }).append('\n')
+                append("今天的主线：").append(work.rec(main)?.title?.let { "「$it」" } ?: "还没定").append('\n')
+                cur.action?.let { a -> if (!com.zongkong.core.plan.Plans.inPlan(plan, a)) append("当前这一步不在本周计划里。\n") }
+            }
         }
     }
 
@@ -65,6 +75,7 @@ object Snapshot {
             append("，待同步 ${work.pendingCount} 条")
             val changes = work.changes.takeLast(5)
             if (changes.isNotEmpty()) append("\n最近的变化：").append(changes.joinToString("；") { "${it.by}${it.what}「${it.title}」" })
+            com.zongkong.core.plan.Plans.active(env.plans(), now, env.zone)?.let { append("\n\n").append(com.zongkong.core.plan.Plans.describe(it, work, env.plans(), now, env.zone)) }
             append("\n首页快捷按钮：").append(env.config().shortcuts.joinToString("、") { it.label }.ifBlank { "无" })
             append("\n\n").append(gates(env.config(), env.status(), now))
         }

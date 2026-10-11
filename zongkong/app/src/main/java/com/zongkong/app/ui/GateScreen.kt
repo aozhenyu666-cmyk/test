@@ -133,6 +133,10 @@ fun GateScreen(gateId: String, nav: NavHostController) {
                             is com.zongkong.app.link.YishouClient.Result.Err -> 0 to listOf(y.message)
                             null -> 0 to listOf("正在读一手…")
                         }
+                    } else if (kind == com.zongkong.core.work.Focus.Evidence.WEEK_PLAN) {
+                        val p = com.zongkong.core.plan.Plans.active(app.store.plans.value, now, app.store.zone)
+                            ?: com.zongkong.core.plan.Plans.nextActive(app.store.plans.value, now, app.store.zone)
+                        if (p == null) 0 to emptyList() else 1 to listOf(p.goals.joinToString("、") { it.title })
                     } else {
                         com.zongkong.core.work.Focus.evidence(work, kind, now, app.store.zone)
                     }
@@ -150,6 +154,7 @@ fun GateScreen(gateId: String, nav: NavHostController) {
                             com.zongkong.core.work.Focus.Evidence.LINKED_NOTES -> OutlinedButton(onClick = { nav.navigate("capture") }) { Text("去收集") }
                             com.zongkong.core.work.Focus.Evidence.CONCLUSIONS -> OutlinedButton(onClick = { nav.navigate("threads") }) { Text("挑一件事去 GPT") }
                             com.zongkong.core.work.Focus.Evidence.DONE_ACTIONS -> OutlinedButton(onClick = { nav.navigate("home") }) { Text("去做") }
+                            com.zongkong.core.work.Focus.Evidence.WEEK_PLAN -> OutlinedButton(onClick = { nav.navigate("plan") }) { Text("进入计划模式") }
                             com.zongkong.core.work.Focus.Evidence.YISHOU_SETS -> OutlinedButton(onClick = {
                                 if (!com.zongkong.app.link.YishouClient.open(context)) launchTarget(context, com.zongkong.app.link.YishouClient.DOWNLOAD)
                             }) { Text("打开一手") }

@@ -16,6 +16,9 @@ class ZkApp : Application() {
     var prompt: String = ""
     var promptTitle: String = ""
 
+    /** 应用级协程：离开页面也要做完的小事（比如通知一手开局）。 */
+    val appScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
+
     /** 别的页面要发给参谋的一句话（快捷按钮、“问参谋”），对话页打开时发出。 */
     var chatDraft: String = ""
 

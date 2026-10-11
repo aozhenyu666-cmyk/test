@@ -358,6 +358,18 @@ private fun PlanPart(work: Work, now: Long, nav: NavHostController) {
             a.plan?.let { p -> TimeParse.startMillis(p, zone)?.let { DayClock.dateKey(it, zone) == todayKey } } == true
     }.sortedBy { a -> a.plan?.let { TimeParse.startMillis(it, zone) } ?: 0L }
     val unplanned = Focus.unplannedThreads(work)
+    val app = LocalContext.current.zk
+    val book by app.store.plans.collectAsStateWithLifecycle()
+    val weekPlan = remember(book, now) { com.zongkong.core.plan.Plans.active(book, now, zone) }
+    Panel(accent = sig.plan, onClick = { nav.navigate("plan") }, modifier = Modifier.enter(2).testTag("dept-plan-card")) {
+        Text("本周计划", style = MaterialTheme.typography.titleMedium)
+        if (weekPlan == null) {
+            Hint("还没有。进入计划模式，五分钟定个参照。")
+        } else {
+            Text(weekPlan.goals.joinToString(" · ") { it.title }, style = MaterialTheme.typography.bodyMedium)
+            Hint(com.zongkong.core.plan.Plans.headline(weekPlan, now, zone))
+        }
+    }
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.enter(2)) {
         BigButton("晨间部署", { nav.navigate("wizard/plan") }, Modifier.weight(1f), color = sig.plan)
         BigButton("晚间复盘", { nav.navigate("wizard/review") }, Modifier.weight(1f), color = sig.hq)
@@ -401,7 +413,7 @@ private fun ActPart(work: Work, now: Long, status: com.zongkong.core.Status, nav
     val installed = remember(resumeKey) { YishouClient.installed(context) }
     val ys by produceState<YishouClient.Result<YishouStatus>?>(null, resumeKey) { value = if (installed) YishouClient.status(context) else null }
     var msg by remember { mutableStateOf<String?>(null) }
-    val cur = remember(work, now) { Focus.current(work, now, app.store.zone) }
+    val cur = remember(work, now) { Focus.current(work, now, app.store.zone, app.store.mainKey(now)) }
 
     // ---------- 一手 ----------
     Panel(accent = sig.act, modifier = Modifier.enter(2).testTag("yishou-card")) {
@@ -476,6 +488,60 @@ private fun ActPart(work: Work, now: Long, status: com.zongkong.core.Status, nav
             else -> Hint("没有待做的一步。先排一件。")
         }
     }
+
+    // ---------- 总控对一手的要求 ----------
+    val config by app.store.config.collectAsStateWithLifecycle()
+    val book by app.store.plans.collectAsStateWithLifecycle()
+    val inf = remember(status, config, work, book) { Link.influence(status, config, work, book, app.store.zone) }
+    var outcome by remember { mutableStateOf<String?>(null) }
+    Panel(modifier = Modifier.enter(4).testTag("yishou-influence")) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("总控管一手", style = MaterialTheme.typography.titleSmall)
+                Hint(if (config.yishouInfluence) "落后于计划或严管时，一手每次最多放行 ${config.yishouPassCap} 分钟、不能离线放行；专注锁时一手不放行。" else "关着：一手按自己的设置放行。")
+            }
+            androidx.compose.material3.Switch(checked = config.yishouInfluence, onCheckedChange = { on ->
+                var msg = ""
+                app.store.updateConfig { c -> com.zongkong.core.Policy.setYishou(c, on, c.yishouPassCap, System.currentTimeMillis()).also { msg = it.message }.config }
+                outcome = msg
+            })
+        }
+        Text(
+            when {
+                !config.yishouInfluence -> "现在：不影响一手"
+                inf.hold -> "现在：${inf.note}，一手不放行"
+                inf.passCap > 0 -> "现在：${inf.note}，一手最多放行 ${inf.passCap} 分钟"
+                else -> "现在：按计划走着，一手照常"
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (inf.hold || inf.passCap > 0) sig.warn else sig.free,
+        )
+        if (config.yishouInfluence) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("收紧时最多放行", style = MaterialTheme.typography.bodySmall, color = sig.muted)
+                listOf(3, 5, 10).forEach { m ->
+                    QuickChip("$m 分钟" + if (config.yishouPassCap == m) " ✓" else "", sig.act) {
+                        var msg = ""
+                        app.store.updateConfig { c -> com.zongkong.core.Policy.setYishou(c, true, m, System.currentTimeMillis()).also { msg = it.message }.config }
+                        outcome = msg
+                    }
+                }
+            }
+        }
+        if (installed) {
+            OutlinedButton(onClick = {
+                scope.launch {
+                    val a = cur.action
+                    if (a != null) Link.taskOrder(app.store.work.value, a.key)?.let { YishouClient.setTask(context, it) }
+                    msg = when (val r = YishouClient.startWindow(context)) {
+                        is YishouClient.Result.Ok -> r.value.also { YishouClient.openWindow(context) }
+                        is YishouClient.Result.Err -> r.message
+                    }
+                }
+            }, modifier = Modifier.fillMaxWidth()) { Text(if (cur.action != null) "让一手现在开一局（练「${cur.action!!.title.take(10)}」）" else "让一手现在开一局陪练") }
+        }
+    }
+    OutcomeDialog(outcome) { outcome = null }
 
     // ---------- 娱乐 ----------
     Panel(modifier = Modifier.enter(4), onClick = { nav.navigate("settings/block") }) {

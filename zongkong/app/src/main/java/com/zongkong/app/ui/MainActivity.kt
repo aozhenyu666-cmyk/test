@@ -179,6 +179,9 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 composable("wizard/plan") { PlanWizard(nav) }
                 composable("wizard/review") { ReviewWizard(nav) }
                 composable("stuckpick") { StuckPick(nav) }
+                composable("plan") { PlanScreen(nav) }
+                composable("plan/new") { PlanModeWizard(nav) }
+                composable("plan/close") { PlanCloseScreen(nav) }
                 composable("threads") { ThreadsScreen(nav) }
                 composable("capture") { CaptureScreen(nav) }
                 composable("capture/{thread}") { e -> CaptureScreen(nav, e.arguments?.getString("thread").orEmpty()) }

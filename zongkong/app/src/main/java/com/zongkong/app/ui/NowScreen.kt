@@ -85,7 +85,9 @@ fun NowScreen(nav: NavHostController) {
     val work by store.work.collectAsStateWithLifecycle()
     val now = rememberNow(10_000)
     val status = remember(config, day, now, work.session) { store.status(now) }
-    val cur = remember(work, now) { Focus.current(work, now, store.zone) }
+    val book by store.plans.collectAsStateWithLifecycle()
+    val plan = remember(book, now) { com.zongkong.core.plan.Plans.active(book, now, store.zone) }
+    val cur = remember(work, book, now) { Focus.current(work, now, store.zone, store.mainKey(now)) }
     val upcoming = remember(work, now, cur) { Focus.upcoming(work, cur.action?.key, now, store.zone, 4) }
     val attention = remember(work) { Focus.needsAttention(work) }
     val unplanned = remember(work) { Focus.unplannedThreads(work) }
@@ -152,6 +154,9 @@ fun NowScreen(nav: NavHostController) {
             }
         }
 
+        // ---------- 本周计划（参照） ----------
+        PlanStrip(plan, book, work, now, nav)
+
         // ---------- 现在这一步 ----------
         Box(Modifier.enter(2)) {
             AnimatedContent(
@@ -159,7 +164,7 @@ fun NowScreen(nav: NavHostController) {
                 contentKey = { it.action?.key to it.why },
                 transitionSpec = { (fadeIn() + slideInVertically { it / 8 }) togetherWith fadeOut() },
                 label = "task",
-            ) { c -> TaskCard(c, now, notionReady, nav) }
+            ) { c -> TaskCard(c, now, notionReady, nav, plan) }
         }
 
         // ---------- 四个部门 ----------
@@ -242,6 +247,42 @@ fun statusColor(status: Status): Color {
  * 轮椅式的提示：此刻你只需要看这一条。
  * 严管时说清楚怎么解除；早上没部署就带你去部署；晚上没复盘就带你去复盘。
  */
+@Composable
+private fun PlanStrip(plan: com.zongkong.core.plan.WeekPlan?, book: com.zongkong.core.plan.PlanBook, work: Work, now: Long, nav: NavHostController) {
+    val sig = LocalSignals.current
+    val zone = java.time.ZoneId.systemDefault()
+    if (plan == null) {
+        val draft = com.zongkong.core.plan.Plans.draft(book, now, zone)
+        Panel(accent = if (draft != null) sig.ai else null, onClick = { nav.navigate("plan") }, modifier = Modifier.enter(2).testTag("plan-strip")) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                DeptSeal(Dept.PLAN, size = 40.dp)
+                Column(Modifier.weight(1f)) {
+                    Text(if (draft != null) "有一份计划草稿等你点头" else "这周还没有参照", style = MaterialTheme.typography.titleSmall)
+                    Hint(if (draft != null) "${draft.by}起草的：${draft.goals.joinToString("、") { it.title }}" else "五分钟定个计划：几个方向、交出什么、每天多少时间。不想想就让参谋起草。")
+                }
+                Text("→", style = MaterialTheme.typography.titleMedium, color = sig.plan)
+            }
+        }
+        return
+    }
+    val main = com.zongkong.core.plan.Plans.mainAction(book, work, now, zone)
+    val pr = remember(plan, work, now) { com.zongkong.core.plan.Plans.progress(plan, work, now, zone) }
+    Panel(onClick = { nav.navigate("plan") }, modifier = Modifier.enter(2).testTag("plan-strip")) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            ProgressRing(if (plan.outcomes.isEmpty()) 0f else plan.doneCount.toFloat() / plan.outcomes.size, sig.plan, size = 44.dp, stroke = 3.5.dp) {
+                Text("${plan.doneCount}/${plan.outcomes.size}", style = MaterialTheme.typography.labelMedium.merge(Mono), color = sig.plan)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(plan.goals.joinToString(" · ") { it.title }, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    (main?.let { "主线：${it.title}" } ?: "今天的主线还没定 · 点这里挑") + " · 计划内 ${pr.todayPlanMinutes}/${plan.dailyMinutes} 分",
+                    style = MaterialTheme.typography.bodySmall, color = if (main == null) sig.warn else sig.muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun Guidance(status: Status, date: String, now: Long, nav: NavHostController) {
     val sig = LocalSignals.current
@@ -395,7 +436,7 @@ private fun TimelineRow(a: com.zongkong.core.work.Rec, work: Work, now: Long, na
 }
 
 @Composable
-private fun TaskCard(cur: Focus.Current, now: Long, notionReady: Boolean, nav: NavHostController) {
+private fun TaskCard(cur: Focus.Current, now: Long, notionReady: Boolean, nav: NavHostController, plan: com.zongkong.core.plan.WeekPlan? = null) {
     val context = LocalContext.current
     val app = context.zk
     val sig = LocalSignals.current
@@ -442,7 +483,12 @@ private fun TaskCard(cur: Focus.Current, now: Long, notionReady: Boolean, nav: N
                 }
                 return@Column
             }
-            t?.let { Text("${it.title} · ${it[F.CODE]}", style = MaterialTheme.typography.labelLarge, color = sig.muted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                t?.let { Text("${it.title} · ${it[F.CODE]}", style = MaterialTheme.typography.labelLarge, color = sig.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)) }
+                if (plan != null) {
+                    if (com.zongkong.core.plan.Plans.inPlan(plan, a)) Tag("计划内", sig.plan) else Tag("计划外", sig.warn)
+                }
+            }
             Text(a.title, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.testTag("task-title").clickable { nav.navigate("action/${a.key}") })
             a.plan?.let { Text(TimeParse.label(it, now, app.store.zone), style = MaterialTheme.typography.bodySmall.merge(Mono), color = sig.muted) }
             Column(

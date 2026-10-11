@@ -87,7 +87,7 @@ enum class ActionStatus(val label: String) {
 @Serializable
 enum class NoteType(val label: String) {
     MATERIAL("材料"), QUESTION("问题"), IDEA("念头"), CONCLUSION("结论"), RESULT("结果"),
-    BREAKPOINT("断点"), STUCK("卡点"), REVIEW("验收"), CHECKIN("报到");
+    BREAKPOINT("断点"), STUCK("卡点"), REVIEW("验收"), CHECKIN("报到"), PLAN("计划");
 
     companion object {
         fun of(label: String) = entries.firstOrNull { it.label == label.trim() } ?: IDEA
