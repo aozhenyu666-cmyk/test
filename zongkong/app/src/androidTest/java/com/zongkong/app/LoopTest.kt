@@ -75,6 +75,8 @@ class LoopTest {
         }
         app.store.updateHq { com.zongkong.core.hq.HqBook() }
         app.store.updateDossier { com.zongkong.core.boss.Dossier() }
+        app.store.updateVein { com.zongkong.core.vein.Vein() }
+        app.store.updateIntake { com.zongkong.core.info.IntakeBook() }
         app.store.touch()
         gpt = NotionClient({ "secret_gpt" }, base = sim.baseUrl)
         val msg = runBlocking { app.actions.work.setup(sim.rootPage) }
@@ -628,5 +630,114 @@ class LoopTest {
         settle()
         shot("e2e-52-dossier-eyes")
         llm.shutdown()
+    }
+
+    private fun go(route: String) {
+        scenario!!.onActivity { it.startActivity(Intent(it, MainActivity::class.java).putExtra(com.zongkong.app.ui.MainActivity.EXTRA_ROUTE, route).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)) }
+    }
+
+    /**
+     * 脉络：示例体系 → 节点 → 打包提问（模拟 AI 结构先行的回答）→ 建议新增进候选 → 录入一段材料让 AI 拆 → 接受候选。
+     */
+    @Test
+    fun veinFlow() {
+        app.actions.vein.seed()
+        val answer = "核心判断：更像是单步成本高。\n结构：疲劳 → 停止信号提前 → 第一反应停止\n另一种可能：其实是没有下一问\n如果我错了，最可能错在哪：把累当成了原因\n把握：六成\n验证：记一周停下时的疲劳分\n建议新增：\n导致｜睡眠不足｜睡不够时每步更累｜睡眠、疲劳、认知负荷"
+        val split = """{"nodes":[{"tmp_id":"t1","title":"提问清单","type":"规则","claim":"卡住前先写下一个问题。","keywords":["提问","清单","下一问"],"status":"假设","confidence":60,"verify":"记一周用清单后停下的次数","parent":"根因"}],"links":[{"from":"t1","to":"n-0006","type":"支撑","why":"有下一问就不会停"}]}"""
+        val llm = mockLlm(sayTurn(answer), sayTurn(split))
+        app.store.updateConfig { it.copy(ai = com.zongkong.core.AiConfig(llm.url("/v1").toString(), "sk-test", "mock-model")) }
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java).putExtra(com.zongkong.app.ui.MainActivity.EXTRA_ROUTE, "vein"))
+        waitFor(hasTestTag("vein-tree"), 10_000, "脉络结构树")
+        settle()
+        Thread.sleep(1_500)
+        shot("e2e-60-vein")
+        compose.onNodeWithTag("vein-node-n-0006").performScrollTo().performClick()
+        waitFor(hasTestTag("vein-title") and hasText("下一问没有产生"), 5_000, "节点页")
+        settle()
+        shot("e2e-61-vein-node")
+        compose.onNode(hasText("提问")).performScrollTo().performClick()
+        waitFor(hasTestTag("ask-pack"), 5_000, "打包预览")
+        compose.onNodeWithTag("ask-q").performTextInput("两个根因哪个更像真的？")
+        hideKeyboard()
+        waitText("请说明怎样区分这两个解释", 5_000)
+        shot("e2e-62-vein-pack")
+        compose.onNodeWithTag("ask-send").performScrollTo().performClick()
+        waitFor(hasTestTag("ask-answer"), 15_000, "回答")
+        waitText("更像是单步成本高", 5_000)
+        settle()
+        shot("e2e-63-vein-answer")
+        compose.onNodeWithTag("ask-suggest").performScrollTo().performClick()
+        settle()
+        assertEquals("睡眠不足", app.store.vein.value.candidates.single().title)
+        val sent = llm.takeRequest().body.readUtf8()
+        assertTrue(sent, sent.contains("【节点】下一问没有产生") && sent.contains("对立·竞争解释"))
+        // 录入：贴材料 → AI 拆 → 候选
+        go("vein/capture")
+        waitFor(hasTestTag("vein-text"), 5_000, "录入页")
+        compose.onNodeWithTag("vein-text").performTextInput("卡住之前先写下一个问题，就不容易停下来。")
+        hideKeyboard()
+        compose.onNodeWithTag("vein-split").performScrollTo().performClick()
+        waitFor(hasTestTag("cand-all"), 15_000, "候选卡片页")
+        waitText("提问清单", 5_000)
+        settle()
+        shot("e2e-64-vein-cands")
+        assertEquals(2, app.store.vein.value.candidates.size)
+        compose.onAllNodes(hasTestTag("cand-accept"))[1].performScrollTo().performClick()
+        settle()
+        val v = app.store.vein.value
+        assertEquals(8, v.nodes.size)
+        assertEquals("支撑", v.byTitle("提问清单")!!.links.single().type)
+        go("vein/health")
+        waitText("个节点", 5_000)
+        settle()
+        shot("e2e-65-vein-health")
+        go("vein/review")
+        waitFor(hasTestTag("review-card"), 5_000, "温故")
+        compose.onNodeWithTag("review-card").performClick()
+        settle()
+        shot("e2e-66-vein-review")
+        llm.shutdown()
+    }
+
+    /** 三个部门的新体系：信息收集部的漏斗（提炼一条）、统筹规划部的估时和精力地图、谋划思考部的脉络卡；对讲页、动效画廊。 */
+    @Test
+    fun deptsTour() {
+        app.actions.work.createThread("国考行测")
+        app.actions.work.capture("https://www.bilibili.com/video/BV1 资料分析讲解", com.zongkong.core.work.NoteType.MATERIAL, "B站：资料分析讲解", "https://www.bilibili.com/video/BV1", "", false)
+        app.actions.work.capture("增长率可以用错位加减估", com.zongkong.core.work.NoteType.IDEA, "增长率错位加减", "", "", false)
+        app.actions.vein.seed()
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java).putExtra(com.zongkong.app.ui.MainActivity.EXTRA_ROUTE, "dept/INFO"))
+        waitFor(hasTestTag("intake-funnel"), 10_000, "漏斗")
+        settle()
+        Thread.sleep(1_200)
+        shot("e2e-70-dept-info")
+        compose.onNode(hasText("B站：资料分析讲解")).performScrollTo().performClick()
+        waitFor(hasTestTag("distill-gist"), 5_000, "提炼")
+        compose.onNodeWithTag("distill-gist").performTextInput("资料分析先看讲解里的速算口诀")
+        compose.onNode(hasText("国考行测")).performClick()
+        settle()
+        val key = app.store.work.value.notes().first { it.title == "B站：资料分析讲解" }.key
+        assertEquals("资料分析先看讲解里的速算口诀", app.store.intake.value.metas[key]!!.gist)
+        assertTrue(app.store.work.value.rec(key)!!.threadKey.isNotBlank())
+        go("dept/PLAN")
+        waitFor(hasTestTag("plan-instruments"), 5_000, "估时和精力地图")
+        settle()
+        Thread.sleep(1_200)
+        shot("e2e-71-dept-plan")
+        go("dept/THINK")
+        waitFor(hasTestTag("vein-card"), 5_000, "脉络卡")
+        settle()
+        Thread.sleep(1_200)
+        shot("e2e-72-dept-think")
+        go("voice")
+        waitFor(hasTestTag("voice-hold"), 5_000, "对讲")
+        compose.onNode(hasText("语音设置")).performClick()
+        settle()
+        shot("e2e-73-voice")
+        go("gallery")
+        waitText("潮汐", 5_000)
+        settle()
+        Thread.sleep(800)
+        shot("e2e-74-gallery")
     }
 }
