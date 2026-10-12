@@ -35,6 +35,8 @@ sealed class LlmError(val message: String) {
     class Network(detail: String) : LlmError("网络连接失败：$detail")
     class Http(val code: Int, detail: String) : LlmError(httpMessage(code, detail))
     class BadFormat(detail: String) : LlmError("模型返回的内容不是约定的 JSON：$detail")
+    /** 本机的原因（没配识图、图片读不出、内容太短），message 原样显示 */
+    class Local(detail: String) : LlmError(detail)
 
     companion object {
         private fun httpMessage(code: Int, detail: String): String {

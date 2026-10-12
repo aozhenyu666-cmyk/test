@@ -181,6 +181,8 @@ fun ConsoleScreen(
                         redoDue > 0,
                     ) { onOpenBoard() }
                     StatusRow("预判本", calibration.ifEmpty { "先押再看：下注和预演" }, false) { onOpen("bets") }
+                    StatusRow("练思维", "素材库、抓主干、挖前提、站立场、估个数", false) { onOpen("think") }
+                    StatusRow("做实操", "先估再做、比一比价", false) { onOpen("deeds") }
                     StatusRow(
                         "运行日志",
                         if (logCount > 0) "记了 $logCount 条出错，点开看" else "没出过错",
@@ -233,7 +235,7 @@ private fun TrainingCard(plan: TrainingPlan, setMoves: Int, inWindow: Boolean, o
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Button(onClick = onOpenWindow) { Text(if (inWindow) "回到陪练窗口" else "开陪练窗口") }
                 Spacer(Modifier.width(8.dp))
-                TextButton(onClick = onOpenBoard) { Text("在对局里开一组") }
+                TextButton(onClick = onOpenBoard) { Text("开一组题卡") }
             }
         }
     }

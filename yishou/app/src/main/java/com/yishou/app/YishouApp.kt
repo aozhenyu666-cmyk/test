@@ -43,6 +43,7 @@ import com.yishou.app.speech.VoiceInput
  * - 无障碍服务只读取当前前台应用的包名，不读取屏幕内容、输入内容或其他应用的数据。
  * - “让陪练看屏”需要你每次在系统弹窗里同意；只在你点“看一眼”（或你设置的自动间隔）时截一张屏，
  *   发给你自己配置的识图模型，图片不保存。随时可以在通知里停止。
+ * - “分享 → 收进一手”只接收你主动分享的那一条；文字存进本机素材库，图片只拿去转写或认商品，不保存。
  * - 数据只保存在本机。唯一的网络请求是把任务文本、回答，以及你主动发出的照片或截屏，发送到你自己配置的大模型接口；
  *   填了语音接口时，你说的那一段录音和要朗读的那句话发给你自己配置的语音接口，录音不保存。
  * - 麦克风只在你点麦克风、或语音陪练读完题等你回答时打开，界面上有明显的“在听”标记。
@@ -89,6 +90,22 @@ class YishouApp : Application() {
     lateinit var cardEngine: CardEngine
         private set
 
+    /** 写素材、锁答案、判卷 */
+    lateinit var drillGen: com.yishou.app.llm.DrillGen
+        private set
+    /** 素材进来的几条路 */
+    lateinit var materials: com.yishou.app.system.MaterialImport
+        private set
+
+    /** 新开一次练习（练思维页一个） */
+    fun newDrill(): com.yishou.app.think.DrillSession =
+        com.yishou.app.think.DrillSession(drillGen, database.think(), database.practice())
+
+    /** 从分享页过来时要打开的页面（主界面取走后清空） */
+    val pendingRoute = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    /** 分享过来的商品截图认出的商品，交给实操页的“比一比” */
+    val pendingGoods = kotlinx.coroutines.flow.MutableStateFlow<List<com.yishou.app.deed.Goods>?>(null)
+
     /** “看一眼”看到的题，交给陪练窗口当下一张 */
     val incomingCard = kotlinx.coroutines.flow.MutableStateFlow<Dealt?>(null)
     /** 听你说：录音 + 听写（语音接口或系统识别），全应用共用一个，同一时间只听一处 */
@@ -121,6 +138,10 @@ class YishouApp : Application() {
             database.cards(),
             LlmCardGen(ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(60), usage = stats, onError = logError)),
         )
+        drillGen = com.yishou.app.llm.LlmDrillGen(
+            ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(60), usage = stats, onError = logError),
+        )
+        materials = com.yishou.app.system.MaterialImport(this)
         summaryEngine = SummaryEngine(database.dao(), coach, prefs = { settings.app.value })
         vision = Vision(
             ChatClient(config = { settings.vision.value }, http = ChatClient.defaultHttpClient(60), usage = stats, onError = logError),

@@ -79,6 +79,8 @@ data class AppPrefs(
     val coachSetMoves: Int = 5,
     /** 一组几张题卡 */
     val setCards: Int = 5,
+    /** 入口思考页要不要做一张题卡；关掉就只是打卡：说好看完做什么就放行 */
+    val gateCard: Boolean = true,
     /** 入口思考页放行时说的“看完做的第一件事”，下次打开先问做了没有 */
     val pendingExit: String = "",
     /** 那次放行到期的时间；过了这个时间才问 */
@@ -134,6 +136,7 @@ data class AppPrefs(
         .put("haptics", haptics)
         .put("coachSetMoves", coachSetMoves)
         .put("setCards", setCards)
+        .put("gateCard", gateCard)
         .put("pendingExit", pendingExit)
         .put("pendingExitAt", pendingExitAt)
         .put("warmup", warmup)
@@ -228,6 +231,7 @@ data class AppPrefs(
                 haptics = o.optBoolean("haptics", d.haptics),
                 coachSetMoves = o.optInt("coachSetMoves", d.coachSetMoves).coerceIn(3, 8),
                 setCards = o.optInt("setCards", d.setCards).coerceIn(1, 10),
+                gateCard = o.optBoolean("gateCard", d.gateCard),
                 pendingExit = o.optString("pendingExit", ""),
                 pendingExitAt = o.optLong("pendingExitAt", 0),
                 warmup = o.optBoolean("warmup", d.warmup),

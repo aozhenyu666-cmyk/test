@@ -35,6 +35,8 @@ data class GateState(
     val offlineMinutes: Int = 5,
     /** 已放行的分钟数；非 null 表示可以回到原应用 */
     val passMinutes: Int? = null,
+    /** 要不要做一张题卡；false 时只打卡 */
+    val gateCard: Boolean = true,
 ) {
     val isTest: Boolean get() = triggerPackage == null
 }
@@ -72,9 +74,10 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             inWindow = inWindow,
             followUp = follow,
             offlineMinutes = prefs.offlinePassMinutes,
+            gateCard = prefs.gateCard,
         )
         session.stop()
-        if (!inWindow) viewModelScope.launch {
+        if (!inWindow && prefs.gateCard) viewModelScope.launch {
             session.start(CardMode.GATE, null, 1)
             if (session.state.value.error != null) _state.update { it.copy(offlineLeft = offlineLeft()) }
         }
@@ -122,7 +125,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     fun pass() {
         val s = _state.value
         if (s.isTest || s.inWindow || s.passMinutes != null || s.exit.isBlank()) return
-        if (!session.state.value.done) return
+        if (s.gateCard && !session.state.value.done) return
         grant(yishou.settings.app.value.passMinutesFor(s.group), DayStats.GATE_PASS)
     }
 

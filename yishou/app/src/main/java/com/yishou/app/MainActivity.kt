@@ -15,6 +15,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.yishou.app.ui.ConsoleScreen
@@ -25,6 +26,9 @@ import com.yishou.app.ui.AboutScreen
 import com.yishou.app.ui.BetScreen
 import com.yishou.app.ui.LogScreen
 import com.yishou.app.ui.HomeScreen
+import com.yishou.app.ui.ThinkScreen
+import com.yishou.app.ui.CardsScreen
+import com.yishou.app.ui.DeedScreen
 import com.yishou.app.ui.PermissionsScreen
 import com.yishou.app.ui.SummaryScreen
 import com.yishou.app.ui.WatchedAppsScreen
@@ -34,7 +38,7 @@ import com.yishou.app.ui.TaskEditScreen
 import com.yishou.app.ui.theme.YishouTheme
 import com.yishou.app.window.WindowActivity
 
-/** 主界面。底部两个页签：对局（对话）和主控台；其余页面从这两处进入。 */
+/** 主界面。底部两个页签：今天（时之轮和两个入口）和主控台；其余页面从这两处进入。 */
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,6 +48,14 @@ class MainActivity : ComponentActivity() {
                 val nav = rememberNavController()
                 val entry by nav.currentBackStackEntryAsState()
                 val route = entry?.destination?.route
+                // 分享页过来的：打开它指定的那一页
+                val app = application as YishouApp
+                val pending by app.pendingRoute.collectAsState()
+                androidx.compose.runtime.LaunchedEffect(pending) {
+                    val to = pending ?: return@LaunchedEffect
+                    app.pendingRoute.value = null
+                    nav.navigate(to) { launchSingleTop = true }
+                }
                 fun tab(to: String) = nav.navigate(to) {
                     popUpTo("board") { saveState = true }
                     launchSingleTop = true
@@ -57,7 +69,7 @@ class MainActivity : ComponentActivity() {
                                     selected = route == "board",
                                     onClick = { tab("board") },
                                     icon = { StoneMark(22.dp) },
-                                    label = { Text("对局") },
+                                    label = { Text("今天") },
                                 )
                                 NavigationBarItem(
                                     selected = route == "console",
@@ -72,13 +84,34 @@ class MainActivity : ComponentActivity() {
                 NavHost(navController = nav, startDestination = "board", modifier = Modifier.padding(outer)) {
                     composable("board") {
                         HomeScreen(
+                            onThink = { nav.navigate("think") },
+                            onDeeds = { nav.navigate("deeds") },
                             onOpenSettings = { nav.navigate("settings") },
                             onOpenWindow = { startActivity(Intent(this@MainActivity, WindowActivity::class.java)) },
                         )
                     }
+                    composable(
+                        "think?m={m}",
+                        arguments = listOf(navArgument("m") { type = NavType.LongType; defaultValue = -1L }),
+                    ) { e ->
+                        ThinkScreen(
+                            onBack = { nav.navigateUp() },
+                            onCards = { id -> nav.navigate(if (id == null) "cards" else "cards?m=$id") },
+                            initialMaterial = e.arguments?.getLong("m")?.takeIf { it > 0 },
+                        )
+                    }
+                    composable(
+                        "cards?m={m}",
+                        arguments = listOf(navArgument("m") { type = NavType.LongType; defaultValue = -1L }),
+                    ) { e ->
+                        CardsScreen(onBack = { nav.navigateUp() }, materialId = e.arguments?.getLong("m")?.takeIf { it > 0 })
+                    }
+                    composable("deeds") {
+                        DeedScreen(onBack = { nav.navigateUp() })
+                    }
                     composable("console") {
                         ConsoleScreen(
-                            onOpenBoard = { tab("board") },
+                            onOpenBoard = { nav.navigate("cards") },
                             onOpenWindow = { startActivity(Intent(this@MainActivity, WindowActivity::class.java)) },
                             onOpenSummary = { nav.navigate("summary") },
                             onOpenStatus = { nav.navigate("status") },

@@ -225,6 +225,8 @@ fun SettingsScreen(
             }
             SwitchRow("开组前先热身", prefs.warmup) { on -> vm.update { it.copy(warmup = on) } }
             Text("热身两分钟：一分钟呼吸，再做五步心算接龙，把“接上一步”的动作先活动开。", style = MaterialTheme.typography.bodySmall)
+            SwitchRow("打开关注的应用前做一张题卡", prefs.gateCard) { on -> vm.update { it.copy(gateCard = on) } }
+            Text("关掉就只是打卡：先问上次说好的事做了没有，再写一句看完做什么，就放行。", style = MaterialTheme.typography.bodySmall)
 
             HorizontalDivider()
             SectionTitle("时区")

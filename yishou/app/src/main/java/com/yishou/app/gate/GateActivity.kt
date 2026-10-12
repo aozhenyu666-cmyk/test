@@ -237,6 +237,19 @@ private fun GateScreen(
                         OutlinedButton(onClick = { vm.answerFollowUp(false) }) { Text("没做") }
                     }
                 }
+                !s.gateCard -> {
+                    if (s.isTest) {
+                        Text("现在是只打卡模式：不出题，写一句看完做什么就放行。", style = MaterialTheme.typography.bodyLarge)
+                        OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
+                    } else {
+                        Text("看完要做的第一件事是？", style = MaterialTheme.typography.titleMedium)
+                        ExitField(s, vm)
+                        Button(onClick = vm::pass, enabled = s.exit.isNotBlank(), modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                            Text("说好了，放行")
+                        }
+                        OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
+                    }
+                }
                 c.error != null && c.round == null -> {
                     Text("现在出不了题：${c.error}", color = MaterialTheme.colorScheme.error)
                     TextButton(onClick = { vm.retry() }) { Text("再试一次") }
