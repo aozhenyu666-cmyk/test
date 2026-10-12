@@ -350,8 +350,8 @@ private fun SkillPanel(hist: List<com.yishou.app.data.CardAttempt>) {
             }
         }
         Text(
-            "首答对 ${P.Stats.ratio(stats.firstCorrect, stats.total)}，查完改对 ${stats.changedRight} 次、改错 ${stats.changedWrong} 次，" +
-                "把握高的对了 ${P.Stats.ratio(stats.highConfCorrect, stats.highConf)}，关屏练到第 ${P.level(hist)} 级。",
+            "首答对 ${com.yishou.app.card.Progress.Stats.ratio(stats.firstCorrect, stats.total)}，查完改对 ${stats.changedRight} 次、改错 ${stats.changedWrong} 次，" +
+                "把握高的对了 ${com.yishou.app.card.Progress.Stats.ratio(stats.highConfCorrect, stats.highConf)}，关屏练到第 ${P.level(hist)} 级。",
             style = MaterialTheme.typography.bodySmall,
         )
     }
