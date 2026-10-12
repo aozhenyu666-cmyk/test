@@ -33,10 +33,13 @@ class FakeCoach : Coach {
     var summaryCalls = 0
     var lastAnswer: String? = null
     var lastContext: CoachContext? = null
+    var beforeOpening: (suspend () -> Unit)? = null
+    var beforeJudge: (suspend () -> Unit)? = null
 
     override suspend fun opening(task: Task, breakpoint: Breakpoint, context: CoachContext): LlmResult<OpeningMove> {
         openingCalls++
         lastContext = context
+        beforeOpening?.invoke()
         return openingResult
     }
 
@@ -50,6 +53,7 @@ class FakeCoach : Coach {
         judgeCalls++
         lastAnswer = answer
         lastContext = context
+        beforeJudge?.invoke()
         return judgeResult
     }
 
@@ -89,6 +93,7 @@ class FakeDao : AppDao() {
         rounds.filter { it.createdAt in from until to }.sortedBy { it.createdAt }
     override fun observeRoundsSince(since: Long): Flow<List<Round>> = emptyFlow()
     override suspend fun lastRound() = rounds.maxByOrNull { it.createdAt }
+    override suspend fun lastRoundForTask(taskId: Long) = rounds.filter { it.taskId == taskId && !it.coachMove.startsWith("【题卡】") }.maxByOrNull { it.createdAt }
     override suspend fun countRounds(source: String, from: Long, to: Long) =
         rounds.count { it.source == source && it.createdAt in from until to }
     override suspend fun recentRules(limit: Int) =

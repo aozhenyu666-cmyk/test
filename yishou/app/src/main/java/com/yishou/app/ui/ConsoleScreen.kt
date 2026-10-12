@@ -179,7 +179,7 @@ fun ConsoleScreen(
                         "错题重做",
                         if (redoDue > 0) "$redoDue 张到期了，练一组时会先出" else "没有到期的错题",
                         redoDue > 0,
-                    ) { onOpenBoard() }
+                    ) { onOpen("cards") }
                     StatusRow("预判本", calibration.ifEmpty { "先押再看：下注和预演" }, false) { onOpen("bets") }
                     StatusRow(
                         "运行日志",
@@ -209,7 +209,7 @@ private fun TrainingCard(plan: TrainingPlan, setMoves: Int, inWindow: Boolean, o
     ) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
-                if (plan.hitToday) "今天的目标完成了" else "今天练 ${plan.targetSets} 组",
+                if (plan.hitToday) "今天的题卡组目标完成了" else "题卡与分组练习：${plan.targetSets} 组",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
             )
@@ -221,7 +221,7 @@ private fun TrainingCard(plan: TrainingPlan, setMoves: Int, inWindow: Boolean, o
             Text(
                 when {
                     plan.hitToday -> "${plan.doneSets} 组都练完了。想多练就再开一组，不想就到此为止。"
-                    plan.doneSets == 0 -> "还没开组。一组 $setMoves 张题卡。"
+                    plan.doneSets == 0 -> "还没开题卡组。一组 $setMoves 张；思维训练与实际行动从主页接续。"
                     else -> "练完 ${plan.doneSets} 组，还差 ${plan.targetSets - plan.doneSets} 组。"
                 },
                 style = MaterialTheme.typography.bodyMedium,
@@ -233,7 +233,7 @@ private fun TrainingCard(plan: TrainingPlan, setMoves: Int, inWindow: Boolean, o
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Button(onClick = onOpenWindow) { Text(if (inWindow) "回到陪练窗口" else "开陪练窗口") }
                 Spacer(Modifier.width(8.dp))
-                TextButton(onClick = onOpenBoard) { Text("在对局里开一组") }
+                TextButton(onClick = onOpenBoard) { Text("回主页接续任务") }
             }
         }
     }

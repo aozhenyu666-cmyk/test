@@ -17,6 +17,8 @@ data class Task(
     val material: String?,
     val isCurrent: Boolean,
     val createdAt: Long,
+    /** 开放陪练的目的，旧任务保持为思维训练。 */
+    @ColumnInfo(defaultValue = "'think'") val practiceMode: String = "think",
 )
 
 /**

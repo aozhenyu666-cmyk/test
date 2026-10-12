@@ -128,7 +128,7 @@ class YishouApp : Application() {
         speechApi = SpeechApi(config = { settings.speech.value })
         voice = VoiceInput(this)
 
-        prefetchCards()
+        // 题卡由用户明确进入练习后再备题；打开应用不自动耗接口用量出题。
 
         // 时区设置一变就生效
         appScope.launch { settings.app.collect { AppZone.id = it.timeZone } }

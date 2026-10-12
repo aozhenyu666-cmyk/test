@@ -25,6 +25,8 @@ import com.yishou.app.ui.AboutScreen
 import com.yishou.app.ui.BetScreen
 import com.yishou.app.ui.LogScreen
 import com.yishou.app.ui.HomeScreen
+import com.yishou.app.ui.CardsScreen
+import com.yishou.app.training.PracticeMode
 import com.yishou.app.ui.PermissionsScreen
 import com.yishou.app.ui.SummaryScreen
 import com.yishou.app.ui.WatchedAppsScreen
@@ -69,12 +71,23 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                 ) { outer ->
-                NavHost(navController = nav, startDestination = "board", modifier = Modifier.padding(outer)) {
+                val shared = intent.action == Intent.ACTION_SEND
+                NavHost(navController = nav, startDestination = if (shared) "import" else "board", modifier = Modifier.padding(outer)) {
                     composable("board") {
                         HomeScreen(
                             onOpenSettings = { nav.navigate("settings") },
                             onOpenWindow = { startActivity(Intent(this@MainActivity, WindowActivity::class.java)) },
+                            onOpenCards = { nav.navigate("cards") },
+                            onEditTask = { id, mode -> nav.navigate(if (id == null) "newtask/${mode.id}" else "task/$id") },
                         )
+                    }
+                    composable("cards") {
+                        CardsScreen(onOpenSettings = { nav.navigate("settings") }, onOpenWindow = { startActivity(Intent(this@MainActivity, WindowActivity::class.java)) }, onBack = { nav.navigateUp() })
+                    }
+                    composable("import") {
+                        @Suppress("DEPRECATION")
+                        val image = intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM)
+                        TaskEditScreen(taskId = null, sharedText = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString(), sharedImage = image, onBack = { nav.navigate("board") { popUpTo("import") { inclusive = true } } })
                     }
                     composable("console") {
                         ConsoleScreen(
@@ -101,6 +114,9 @@ class MainActivity : ComponentActivity() {
                     }
                     composable("newtask") {
                         TaskEditScreen(taskId = null, onBack = { nav.navigateUp() })
+                    }
+                    composable("newtask/{mode}") { entry ->
+                        TaskEditScreen(taskId = null, initialMode = PracticeMode.of(entry.arguments?.getString("mode")), onBack = { nav.navigateUp() })
                     }
                     composable(
                         "task/{id}",

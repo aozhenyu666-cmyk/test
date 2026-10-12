@@ -31,6 +31,8 @@ import com.yishou.app.ui.theme.reducedMotion
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.sin
+import kotlin.math.cos
+import androidx.compose.ui.graphics.drawscope.rotate
 
 /*
  * 动效只有几种，全都克制：
@@ -124,30 +126,67 @@ fun BranchSteps(steps: List<String>, current: Int, modifier: Modifier = Modifier
     }
 }
 
-/** 首页底部的潮汐：三道很淡的水纹，慢慢起伏、错开。 */
+/** 多个不同周期叠加，曲线的振幅、节奏、方向各异，长时间看不会整齐地一起移动。 */
 @Composable
 fun TideBackdrop(modifier: Modifier = Modifier) {
     val still = reducedMotion()
     val t = if (still) 0f else rememberInfiniteTransition(label = "tide").animateFloat(
-        0f, (2 * PI).toFloat(), infiniteRepeatable(tween(9_000, easing = LinearEasing)), label = "t",
+        0f, (2 * PI).toFloat(), infiniteRepeatable(tween(60_000, easing = LinearEasing)), label = "t",
     ).value
     val ink = MaterialTheme.colorScheme.onBackground
     val gold = MaterialTheme.colorScheme.tertiary
     Canvas(modifier) {
         val w = size.width
         val h = size.height
-        for (k in 0 until 3) {
-            val base = h * (0.55f + 0.14f * k)
-            val amp = h * (0.05f + 0.02f * k)
+        for (k in 0 until 5) {
+            val base = h * (0.38f + 0.12f * k)
+            val amp = h * (0.05f + 0.012f * k) * (1f + 0.28f * sin(t * (k + 2) + k))
             val path = Path()
-            val steps = 48
+            val steps = 80
             for (i in 0..steps) {
                 val x = w * i / steps
-                val y = base + amp * sin(x / w * 2f * PI.toFloat() * (1.2f + 0.3f * k) + t + k * 1.7f)
+                val direction = if (k % 2 == 0) 1f else -1f
+                val wave = x / w * 2f * PI.toFloat()
+                val y = base + amp * sin(wave * (1.1f + 0.22f * k) + direction * t * (7 + 2 * k) + k * 1.7f) +
+                    h * 0.025f * sin(wave * 2.3f - t * (3 + k) + k)
                 if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
             }
-            drawPath(path, (if (k == 0) gold else ink).copy(alpha = if (k == 0) 0.35f else 0.08f), style = Stroke(1.5.dp.toPx()))
+            drawPath(path, (if (k == 1) gold else ink).copy(alpha = if (k == 1) 0.3f else 0.09f), style = Stroke(1.3.dp.toPx()))
         }
+    }
+}
+
+/** 螺旋时之轮。中心呼吸、外沿落子；有倒计时进度时外圈表示真实进度。 */
+@Composable
+fun TimeWheel(modifier: Modifier = Modifier, progress: Float? = null) {
+    val still = reducedMotion()
+    val t = if (still) 0f else rememberInfiniteTransition(label = "time-wheel").animateFloat(
+        0f, (2 * PI).toFloat(), infiniteRepeatable(tween(12_000, easing = LinearEasing)), label = "turn",
+    ).value
+    val ink = MaterialTheme.colorScheme.onBackground
+    val gold = MaterialTheme.colorScheme.tertiary
+    Canvas(modifier) {
+        val radius = size.minDimension * 0.42f
+        val center = Offset(size.width / 2, size.height / 2)
+        drawCircle(ink.copy(alpha = 0.12f), radius, center, style = Stroke(1.dp.toPx()))
+        rotate(t * 180f / PI.toFloat(), center) {
+            for (arm in 0..1) {
+                val path = Path()
+                for (i in 0..120) {
+                    val f = i / 120f
+                    val angle = f * 2.6f * PI.toFloat() + arm * PI.toFloat()
+                    val r = radius * (0.13f + 0.72f * f) * (1f + 0.035f * sin(t * 2f + angle))
+                    val p = center + Offset(cos(angle) * r, sin(angle) * r)
+                    if (i == 0) path.moveTo(p.x, p.y) else path.lineTo(p.x, p.y)
+                }
+                drawPath(path, (if (arm == 0) gold else ink).copy(alpha = if (arm == 0) 0.75f else 0.24f), style = Stroke(1.5.dp.toPx(), cap = StrokeCap.Round))
+            }
+        }
+        if (progress != null) drawArc(gold, -90f, progress.coerceIn(0f, 1f) * 360f, false,
+            topLeft = center - Offset(radius, radius), size = androidx.compose.ui.geometry.Size(radius * 2, radius * 2), style = Stroke(2.dp.toPx(), cap = StrokeCap.Round))
+        val angle = t - PI.toFloat() / 2
+        drawCircle(gold, 2.8.dp.toPx(), center + Offset(cos(angle) * radius, sin(angle) * radius))
+        drawCircle(ink, 3.dp.toPx() * (1f + 0.15f * sin(t * 2)), center)
     }
 }
 

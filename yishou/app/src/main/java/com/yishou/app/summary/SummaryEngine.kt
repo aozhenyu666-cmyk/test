@@ -67,7 +67,7 @@ class SummaryEngine(
             windowMinutes = windowMinutes,
         )
         // 明天第一问既是断点的“下一问”，也是第二天第一轮陪练直接出的那一手
-        val newBp = task?.let {
+        val newBp = task?.takeIf { result.tomorrowQuestion.isNotBlank() && rounds.any { r -> r.taskId == it.id && !r.coachMove.startsWith("【题卡】") } }?.let {
             (bp ?: Breakpoint(it.id, "", "", "", null, now)).copy(
                 nextQuestion = result.tomorrowQuestion,
                 pendingCoachMove = result.tomorrowQuestion,
@@ -93,7 +93,7 @@ object SummaryMarkdown {
         rounds: List<Round>,
         zone: ZoneId = AppZone.zone,
     ): String = buildString {
-        appendLine("# 一手 · ${summary.date} 学习记录")
+        appendLine("# 一手 · ${summary.date} 思维与行动记录")
         appendLine()
         if (task != null) {
             appendLine("## 任务")

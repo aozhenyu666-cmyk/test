@@ -87,6 +87,8 @@ data class AppPrefs(
     val warmup: Boolean = true,
     /** 各骰面的帮助等级（0 示范后补一步 … 3 连续接力、自己提下一问），按组的表现自动加减 */
     val faceLevels: Map<Int, Int> = emptyMap(),
+    /** 窗口专门练题卡时由用户开启，默认接续当前真实任务。 */
+    val windowCards: Boolean = false,
 ) {
     fun groupOf(pkg: String): String? = watched[pkg]
 
@@ -137,6 +139,7 @@ data class AppPrefs(
         .put("pendingExit", pendingExit)
         .put("pendingExitAt", pendingExitAt)
         .put("warmup", warmup)
+        .put("windowCards", windowCards)
         .put("faceLevels", JSONObject().apply { faceLevels.forEach { (k, v) -> put(k.toString(), v) } })
         .toString()
 
@@ -231,6 +234,7 @@ data class AppPrefs(
                 pendingExit = o.optString("pendingExit", ""),
                 pendingExitAt = o.optLong("pendingExitAt", 0),
                 warmup = o.optBoolean("warmup", d.warmup),
+                windowCards = o.optBoolean("windowCards", d.windowCards),
                 faceLevels = o.optJSONObject("faceLevels")?.let { f ->
                     f.keys().asSequence().mapNotNull { k -> k.toIntOrNull()?.takeIf { it in 1..6 }?.let { it to f.optInt(k).coerceIn(0, 3) } }.toMap()
                 } ?: d.faceLevels,

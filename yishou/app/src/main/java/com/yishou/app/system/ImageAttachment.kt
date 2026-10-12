@@ -64,6 +64,10 @@ class AttachmentController(private val app: YishouApp, private val scope: Corout
         job?.cancel()
         _state.value = null
     }
+
+    fun edit(text: String) {
+        if (_state.value is Attachment.Ready) _state.value = Attachment.Ready(text)
+    }
 }
 
 /** 把图片缩到长边不超过 1600 像素，压成 JPEG，转成 data URL。 */

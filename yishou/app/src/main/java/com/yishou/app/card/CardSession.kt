@@ -174,13 +174,13 @@ class CardSession(
                     else -> com.yishou.app.data.RoundSource.HOME
                 },
                 triggerPackage = null,
-                coachMove = d.card.question,
+                coachMove = "【题卡】${d.card.question}",
                 userAnswer = buildString {
                     append("选 ${r.bet?.let(Card::letter) ?: "-"}，把握${r.conf?.label ?: "-"}，依据 ")
                     append(r.evidence.sorted().joinToString("、") { Card.mark(it) })
                     r.final?.takeIf { it != r.bet }?.let { append("，改成 ${Card.letter(it)}") }
                 },
-                effective = r.firstCorrect && r.help == 0,
+                effective = d.row.verified && r.firstCorrect && r.help == 0,
                 moveType = if (r.firstCorrect) "中间结论" else Prompts.MOVE_NONE,
                 reason = d.card.explain,
                 feedback = r.scoreLine(),

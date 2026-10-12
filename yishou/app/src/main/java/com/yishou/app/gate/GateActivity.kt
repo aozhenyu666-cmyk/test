@@ -80,7 +80,7 @@ class GateActivity : ComponentActivity() {
         setContent {
             YishouTheme {
                 val s by vm.state.collectAsStateWithLifecycle()
-                val c by vm.card.collectAsStateWithLifecycle()
+                val p by vm.practice.state.collectAsStateWithLifecycle()
                 LaunchedEffect(s.passMinutes) {
                     if (s.passMinutes != null) {
                         delay(1_800)
@@ -89,7 +89,7 @@ class GateActivity : ComponentActivity() {
                 }
                 GateScreen(
                     s = s,
-                    c = c,
+                    p = p,
                     vm = vm,
                     onReturn = ::returnToApp,
                     onHome = { if (s.isTest) finish() else goHome() },
@@ -185,12 +185,13 @@ class GateActivity : ComponentActivity() {
 @Composable
 private fun GateScreen(
     s: GateState,
-    c: SessionState,
+    p: com.yishou.app.training.PracticeState,
     vm: GateViewModel,
     onReturn: () -> Unit,
     onHome: () -> Unit,
     onOpenWindow: () -> Unit,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
             modifier = Modifier
@@ -212,7 +213,7 @@ private fun GateScreen(
 
             val passed = s.passMinutes
             when {
-                s.loading -> MatrixLoader("准备一张题")
+                s.loading -> MatrixLoader("接续当前任务")
                 passed != null -> {
                     Text("放行 $passed 分钟", style = MaterialTheme.typography.headlineMedium)
                     Text("说好看完：${s.exit}", style = MaterialTheme.typography.bodyLarge)
@@ -237,31 +238,25 @@ private fun GateScreen(
                         OutlinedButton(onClick = { vm.answerFollowUp(false) }) { Text("没做") }
                     }
                 }
-                c.error != null && c.round == null -> {
-                    Text("现在出不了题：${c.error}", color = MaterialTheme.colorScheme.error)
-                    TextButton(onClick = { vm.retry() }) { Text("再试一次") }
-                    if (!s.isTest) {
-                        Text("真要现在用，写一句看完要做的第一件事，离线放行 ${s.offlineMinutes} 分钟（今天还剩 ${s.offlineLeft} 次）。", style = MaterialTheme.typography.bodyMedium)
-                        ExitField(s, vm)
-                        Button(onClick = vm::passOffline, enabled = s.exit.isNotBlank() && s.offlineLeft > 0, modifier = Modifier.fillMaxWidth()) { Text("离线放行") }
-                    }
-                    OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
-                }
-                c.round == null -> MatrixLoader("准备一张题")
                 else -> {
-                    CardRoundView(c, vm.actions)
-                    if (c.done) {
-                        if (s.isTest) {
-                            OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
-                        } else {
+                    com.yishou.app.ui.PracticePanel(vm.practice, showHistory = false)
+                    if (p.task == null) {
+                        Button(onClick = { context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }) { Text("去主页选择任务与材料") }
+                    }
+                    val effective = p.last?.let { it.effective && it.judged && it.createdAt >= s.startedAt } == true
+                    if (effective) {
+                        if (s.isTest) OutlinedButton(onClick = onHome) { Text("关闭测试") }
+                        else {
                             Text("看完要做的第一件事是？", style = MaterialTheme.typography.titleMedium)
                             ExitField(s, vm)
-                            Button(onClick = vm::pass, enabled = s.exit.isNotBlank(), modifier = Modifier.fillMaxWidth().height(52.dp)) {
-                                Text("说好了，放行")
-                            }
-                            OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
+                            Button(onClick = vm::pass, enabled = s.exit.isNotBlank() && !p.busy, modifier = Modifier.fillMaxWidth()) { Text("说好了，放行") }
                         }
+                    } else if (p.error != null && !s.isTest && p.task != null) {
+                        Text("接口暂时无法判定。可以保存原话并离线放行 ${s.offlineMinutes} 分钟，今天还剩 ${s.offlineLeft} 次。")
+                        ExitField(s, vm)
+                        Button(onClick = vm::passOffline, enabled = s.exit.isNotBlank() && (p.answer.isNotBlank() || vm.practice.attachment.readyText != null) && s.offlineLeft > 0 && !p.busy) { Text("保存原话并离线放行") }
                     }
+                    OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text(if (s.isTest) "关闭测试" else "不打开了") }
                 }
             }
         }
@@ -270,5 +265,5 @@ private fun GateScreen(
 
 @Composable
 private fun ExitField(s: GateState, vm: GateViewModel) {
-    VoiceTextField(s.exit, vm::onExitChange, "例如：回去做两道资料分析", Modifier.fillMaxWidth())
+    VoiceTextField(s.exit, vm::onExitChange, "例如：回去继续当前任务，或把菜收好", Modifier.fillMaxWidth())
 }
