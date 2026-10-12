@@ -56,6 +56,9 @@ class FakeEnv(var nowMs: Long = ZonedDateTime.of(2026, 10, 11, 9, 30, 0, 0, Zone
     override fun dossier() = dossier
     override fun updateDossier(f: (com.zongkong.core.boss.Dossier) -> com.zongkong.core.boss.Dossier) = f(dossier).also { dossier = it }
     override fun deviceEvents(from: Long, to: Long) = events.toList()
+    var intakeBook = com.zongkong.core.info.IntakeBook()
+    override fun intake() = intakeBook
+    override fun updateIntake(f: (com.zongkong.core.info.IntakeBook) -> com.zongkong.core.info.IntakeBook) = f(intakeBook).also { intakeBook = it }
     var veinState = com.zongkong.core.vein.Vein()
     override fun vein() = veinState
     override fun updateVein(f: (com.zongkong.core.vein.Vein) -> com.zongkong.core.vein.Vein) = f(veinState).also { veinState = it }
@@ -435,5 +438,27 @@ class AgentTest {
         val due = tools.run("vein_due", "{}")
         assertTrue(due.text, due.text.contains("等验证的假设"))
         assertTrue(Agent(Scripted(), env).systemPrompt().contains("## 脉络"))
+    }
+
+    /** 漏斗：列出待提炼，提炼并归位；倒推：从截止日往回排，一天一步。 */
+    @Test
+    fun intakeAndBackwardPlan() = runTest {
+        val env = FakeEnv()
+        val tools = ZkTools(env)
+        tools.run("create_thread", """{"title":"国考行测"}""")
+        env.w = WorkOps.create(env.w, Kind.NOTE, mapOf(F.TITLE to "资料分析速算技巧", F.TYPE to "材料", F.URL to "https://mp.weixin.qq.com/s/abc"), env.nowMs, Random(1)).first
+        val st = tools.run("intake_status", "{}")
+        assertTrue(st.text, st.text.contains("资料分析速算技巧｜公众号"))
+        val d = tools.run("distill", """{"note":"资料分析速算技巧","gist":"增长率用错位加减估算，省一半时间","thread":"国考行测"}""")
+        assertTrue(d.text, d.ok)
+        val note = env.w.notes().first { it.title == "资料分析速算技巧" }
+        assertEquals(env.w.threads().single().key, note.threadKey)
+        assertEquals("增长率用错位加减估算，省一半时间", env.intakeBook.metas[note.key]!!.gist)
+        val bp = tools.run("backward_plan", """{"thread":"国考行测","deadline":"10-20","steps":"做一套资料分析｜60\n错题复盘｜30\n模考一套｜120"}""")
+        assertTrue(bp.text, bp.ok)
+        val acts = env.w.actions().sortedBy { it[F.PLAN] }
+        assertEquals(listOf("做一套资料分析", "错题复盘", "模考一套"), acts.map { it.title })
+        // 最后一步在截止前一天（10-19），晚上 20 点
+        assertTrue(acts.last()[F.PLAN], acts.last()[F.PLAN].startsWith("2026-10-19T20:00"))
     }
 }

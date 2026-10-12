@@ -121,6 +121,7 @@ fun NowScreen(nav: NavHostController) {
     ) {
         // ---------- 问候 + 状态 ----------
         val d = Instant.ofEpochMilli(now).atZone(store.zone)
+        Box(Modifier.fillMaxWidth().height(28.dp)) { FlowLines(sig.line, Modifier.fillMaxSize(), lines = 3) }
         Row(verticalAlignment = Alignment.Top, modifier = Modifier.enter(0)) {
             Column(Modifier.weight(1f)) {
                 Text(greeting(d.hour), style = MaterialTheme.typography.displayMedium.copy(fontSize = 40.sp))

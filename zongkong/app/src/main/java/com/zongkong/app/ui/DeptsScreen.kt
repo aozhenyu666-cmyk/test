@@ -181,6 +181,24 @@ fun DeptScreen(name: String, nav: NavHostController) {
                 }
             }
 
+            // ---------- 部门的线条母题 ----------
+            Box(Modifier.fillMaxWidth().height(96.dp).enter(1)) {
+                when (dept) {
+                    Dept.INFO -> {
+                        val book by store.intake.collectAsStateWithLifecycle()
+                        val st = remember(work, book, now) { com.zongkong.core.info.Intake.stats(work, book, now, store.zone) }
+                        TideLines(0.15f + 0.7f * st.level.coerceAtMost(1f), c, Modifier.fillMaxSize())
+                    }
+                    Dept.THINK -> LeafVein(1f, c, Modifier.fillMaxSize())
+                    Dept.PLAN -> {
+                        val planned = remember(work, now) { work.actions().count { a -> a.plan?.let { p -> TimeParse.startMillis(p, store.zone)?.let { DayClock.dateKey(it, store.zone) == DayClock.dateKey(now, store.zone) } } == true } }
+                        Lattice((planned / 3f).coerceAtMost(1f), c, Modifier.fillMaxSize())
+                    }
+                    Dept.ACT -> Lightning(0, if (status.strict) sig.strict else c, Modifier.fillMaxSize(), ambient = true)
+                    Dept.HQ -> FlowLines(c, Modifier.fillMaxSize())
+                }
+            }
+
             // ---------- 今天的关卡 ----------
             if (gates.isNotEmpty()) {
                 SectionLabel("今天的关卡")
@@ -256,26 +274,129 @@ private fun createdToday(r: Rec, now: Long) = DayClock.dateKey(r.createdAt, com.
 
 // ---------- 信息收集部 ----------
 
+/**
+ * 信息收集部：漏斗。收得进，更要消化得了——每条都要回答三问：这是什么（一句话收获）、给谁用（归位）、什么时候过期。
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun InfoPart(work: Work, now: Long, nav: NavHostController) {
+    val app = LocalContext.current.zk
     val sig = LocalSignals.current
-    val today = work.notes().filter { createdToday(it, now) && it.noteType in setOf(NoteType.MATERIAL, NoteType.QUESTION, NoteType.IDEA) }.sortedByDescending { it.createdAt }
-    val loose = work.notes().filter { it.threadKey.isBlank() && it.noteType in setOf(NoteType.MATERIAL, NoteType.QUESTION, NoteType.IDEA) }.sortedByDescending { it.createdAt }
+    val book by app.store.intake.collectAsStateWithLifecycle()
+    val items = remember(work, book, now) { com.zongkong.core.info.Intake.items(work, book, now) }
+    val st = remember(work, book, now) { com.zongkong.core.info.Intake.stats(work, book, now, app.store.zone) }
+    val sources = remember(work, book, now) { com.zongkong.core.info.Intake.sources(work, book, now) }
+    var distilling by remember { mutableStateOf<com.zongkong.core.info.IntakeItem?>(null) }
     BigButton("收一条", { nav.navigate("capture") }, Modifier.enter(2), color = sig.info)
-    Hint("说出来、粘贴、或者在别的 App 里分享给总控。类型和标题会自动猜好。")
-    SectionLabel("今天收进来的（${today.size}）")
-    if (today.isEmpty()) Hint("还没有。看到什么、想到什么、卡在哪，先收下。")
-    Panel(modifier = Modifier.enter(3)) {
-        today.take(8).forEach { n -> NoteLine(n, work) { if (n.threadKey.isNotBlank()) nav.navigate("thread/${n.threadKey}") else nav.navigate("capture") } }
-        if (today.isEmpty()) Text("—", color = sig.muted)
+    Panel(accent = if (st.overBacklog || st.overDaily) sig.warn else null, modifier = Modifier.enter(3).testTag("intake-funnel")) {
+        Text("漏斗", style = MaterialTheme.typography.titleSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            FunnelNum("今天收", "${st.todayIn}/${st.dailyCap}", if (st.overDaily) sig.warn else sig.info)
+            FunnelNum("待提炼", "${st.backlog}/${st.backlogCap}", if (st.overBacklog) sig.warn else sig.info)
+            FunnelNum("已提炼", "${st.distilled}", sig.think)
+            FunnelNum("已归位", "${st.placed}", sig.free)
+            FunnelNum("过期", "${st.expired}", sig.muted)
+        }
+        Hint(
+            when {
+                st.overDaily -> "今天收得太多了。先把待提炼的消化掉，再收。"
+                st.overBacklog -> "积压超了上限：收进来不消化，等于没收。"
+                else -> "每条回答三问：这是什么（一句话收获）、给谁用（挂到哪件事）、什么时候过期（念头 3 天、材料 7 天、问题 14 天）。"
+            },
+        )
     }
-    if (loose.isNotEmpty()) {
-        SectionLabel("还没挂到事项上的（${loose.size}）")
-        Hint("挂到一件事上才用得上。点开收集页，选一件事挂上。")
-        Panel {
-            loose.take(6).forEach { n -> NoteLine(n, work) { nav.navigate("capture") } }
+    val pending = items.filter { it.state == com.zongkong.core.info.IntakeState.NEW }.sortedBy { it.daysLeft }
+    SectionLabel("待提炼（${pending.size}）")
+    if (pending.isEmpty()) Hint("收集箱是空的。")
+    pending.take(8).forEach { it ->
+        Panel(onClick = { distilling = it }, modifier = Modifier.testTag("intake-${it.rec.key}")) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Tag(it.rec.noteType.label, sig.info)
+                Tag(it.source, sig.muted)
+                Spacer(Modifier.weight(1f))
+                Text(if (it.daysLeft <= 0) "今天过期" else "还剩 ${it.daysLeft} 天", style = MaterialTheme.typography.labelSmall, color = if (it.daysLeft <= 1) sig.warn else sig.muted)
+            }
+            Text(it.rec.title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
+    val expired = items.filter { it.state == com.zongkong.core.info.IntakeState.EXPIRED }
+    if (expired.isNotEmpty()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Hint("过期没处理的 ${expired.size} 条：说明当初不该收。", Modifier.weight(1f))
+            TextButton(onClick = { app.store.updateIntake { b -> expired.fold(b) { acc, e -> com.zongkong.core.info.Intake.drop(acc, e.rec.key) } } }) { Text("全部丢掉", color = sig.muted) }
+        }
+    }
+    val distilled = items.filter { it.state == com.zongkong.core.info.IntakeState.DISTILLED }
+    if (distilled.isNotEmpty()) {
+        SectionLabel("提炼了、还没归位（${distilled.size}）")
+        Panel { distilled.take(6).forEach { d -> MiniRow(d.gist, d.rec.title + " · 点开挂到一件事", sig.think) { distilling = d } } }
+    }
+    if (sources.isNotEmpty()) {
+        SectionLabel("来源账本")
+        Panel(modifier = Modifier.testTag("intake-sources")) {
+            sources.take(6).forEach { s ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(s.source, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    Text("收 ${s.total} · 用上 ${s.placed}", style = MaterialTheme.typography.labelMedium.merge(Mono), color = sig.muted)
+                    Text("  ${s.useful}%", style = MaterialTheme.typography.labelMedium.merge(Mono), color = if (s.total >= 5 && s.useful < 20) sig.strict else sig.free)
+                }
+            }
+            Hint("有用率 = 提炼、归位的占比。收得多用得少的来源，该断了。")
+        }
+    }
+    distilling?.let { d -> DistillDialog(d, work, onDismiss = { distilling = null }, nav = nav) }
+}
+
+@Composable
+private fun FunnelNum(label: String, value: String, color: androidx.compose.ui.graphics.Color) {
+    Column {
+        Text(value, style = MaterialTheme.typography.titleMedium.merge(Mono), color = color)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = LocalSignals.current.muted)
+    }
+}
+
+/** 提炼：一句话收获 → 归位到一件事，或者送进脉络录入，或者丢掉。 */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun DistillDialog(d: com.zongkong.core.info.IntakeItem, work: Work, onDismiss: () -> Unit, nav: NavHostController) {
+    val app = LocalContext.current.zk
+    val sig = LocalSignals.current
+    var gist by remember { mutableStateOf(d.gist) }
+    val threads = remember(work) { work.threads().filter { it.threadStatus.open }.sortedByDescending { it.updatedAt }.take(6) }
+    fun saveGist() { if (gist.isNotBlank()) app.store.updateIntake { com.zongkong.core.info.Intake.distill(it, d.rec.key, gist, System.currentTimeMillis()) } }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("提炼") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(d.rec.title, style = MaterialTheme.typography.titleSmall)
+                if (d.rec[F.RAW].isNotBlank() && d.rec[F.RAW] != d.rec.title) Text(d.rec[F.RAW], style = MaterialTheme.typography.bodySmall, maxLines = 5, overflow = TextOverflow.Ellipsis, color = sig.muted)
+                androidx.compose.material3.OutlinedTextField(gist, { gist = it }, label = { Text("一句话收获：它对我有什么用") }, minLines = 2, modifier = Modifier.fillMaxWidth().testTag("distill-gist"))
+                Text("给谁用：挂到一件事", style = MaterialTheme.typography.labelLarge, color = sig.muted)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    threads.forEach { t ->
+                        QuickChip(t.title.take(10), sig.info) {
+                            saveGist()
+                            app.actions.work.update(d.rec.key, mapOf(F.THREAD to t.key))
+                            app.store.updateIntake { com.zongkong.core.info.Intake.place(it, d.rec.key, "thread:${t.key}", System.currentTimeMillis()) }
+                            onDismiss()
+                        }
+                    }
+                    QuickChip("送进脉络拆", sig.think) {
+                        saveGist()
+                        app.veinDraft = listOf(d.rec.title, d.rec[F.RAW], if (gist.isNotBlank()) "收获：$gist" else "").filter { it.isNotBlank() }.distinct().joinToString("\n")
+                        app.store.updateIntake { com.zongkong.core.info.Intake.place(it, d.rec.key, "vein", System.currentTimeMillis()) }
+                        onDismiss()
+                        nav.navigate("vein/capture")
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { saveGist(); onDismiss() }, modifier = Modifier.testTag("distill-save")) { Text("只存收获") } },
+        dismissButton = {
+            TextButton(onClick = { app.store.updateIntake { com.zongkong.core.info.Intake.drop(it, d.rec.key) }; onDismiss() }) { Text("丢掉", color = sig.muted) }
+        },
+    )
 }
 
 @Composable
@@ -307,6 +428,28 @@ private fun ThinkPart(work: Work, now: Long, nav: NavHostController) {
     val needs = work.threads().filter { it.threadStatus == ThreadStatus.COLLECTING || it.threadStatus == ThreadStatus.THINKING || it.threadStatus == ThreadStatus.STUCK }
         .sortedByDescending { it.updatedAt }
     val conclusions = work.notes().filter { it.noteType == NoteType.CONCLUSION }.sortedByDescending { it.createdAt }
+    val vein by app.store.vein.collectAsStateWithLifecycle()
+    val today = remember { app.store.dateToday() }
+    val hypo = vein.nodes.count { it.status == com.zongkong.core.vein.VStatus.HYPO.label }
+    val dueN = remember(vein) { com.zongkong.core.vein.Veins.dueReviews(vein, today).size }
+    Panel(accent = sig.think, onClick = { nav.navigate("vein") }, modifier = Modifier.enter(2).testTag("vein-card")) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(Modifier.width(72.dp).height(52.dp)) { LeafVein(if (vein.nodes.isEmpty()) 0.5f else 1f, sig.think, Modifier.fillMaxSize()) }
+            Column(Modifier.weight(1f)) {
+                Text("脉络", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (vein.nodes.isEmpty()) "把想法拆成 体系 → 层级 → 节点 → 关系。点开开始。"
+                    else "${vein.systems.size} 个体系 · ${vein.nodes.size} 个节点 · $hypo 个假设待验证" + (if (vein.candidates.isNotEmpty()) " · 候选 ${vein.candidates.size}" else ""),
+                    style = MaterialTheme.typography.bodySmall, color = sig.muted,
+                )
+            }
+        }
+        if (vein.nodes.isNotEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            QuickChip("录入", sig.think) { nav.navigate("vein/capture") }
+            if (dueN > 0) QuickChip("温故 $dueN", sig.plan) { nav.navigate("vein/review") }
+            if (vein.candidates.isNotEmpty()) QuickChip("候选 ${vein.candidates.size}", sig.ai) { nav.navigate("vein/cands") }
+        }
+    }
     SectionLabel("等你想清楚的事（${needs.size}）")
     if (needs.isEmpty()) Hint("没有在等判断的事。")
     needs.take(6).forEachIndexed { i, t ->
@@ -374,6 +517,7 @@ private fun PlanPart(work: Work, now: Long, nav: NavHostController) {
         BigButton("晨间部署", { nav.navigate("wizard/plan") }, Modifier.weight(1f), color = sig.plan)
         BigButton("晚间复盘", { nav.navigate("wizard/review") }, Modifier.weight(1f), color = sig.hq)
     }
+    PlanInstruments(work, now, nav)
     SectionLabel("今天的时间线（${todays.size}）")
     Panel(modifier = Modifier.enter(3)) {
         if (todays.isEmpty()) Text("今天还没有排进时间的行动。用“晨间部署”排一件。", style = MaterialTheme.typography.bodySmall, color = sig.muted)
@@ -397,6 +541,63 @@ private fun PlanPart(work: Work, now: Long, nav: NavHostController) {
         Panel {
             unplanned.take(6).forEach { t -> MiniRow(t[F.NEXT].ifBlank { t.title }, t.title + " · 点开排进时间", sig.warn) { nav.navigate("thread/${t.key}") } }
         }
+    }
+}
+
+/** 估时校准、精力地图、在制品上限、倒推规划。 */
+@Composable
+private fun PlanInstruments(work: Work, now: Long, nav: NavHostController) {
+    val app = LocalContext.current.zk
+    val sig = LocalSignals.current
+    val zone = app.store.zone
+    val samples = remember(work) { com.zongkong.core.plan.Calibrate.samples(work, zone) }
+    val factor = remember(samples) { com.zongkong.core.plan.Calibrate.factor(samples) }
+    val energy = remember(work, now / 3_600_000) { com.zongkong.core.plan.Calibrate.energy(work, zone, now) }
+    val best = remember(energy) { com.zongkong.core.plan.Calibrate.bestHours(energy) }
+    val wip = remember(work) { com.zongkong.core.plan.Calibrate.wip(work) }
+    Panel(modifier = Modifier.enter(3).testTag("plan-instruments")) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("估时系数", style = MaterialTheme.typography.labelLarge, color = sig.muted)
+                Text(factor?.let { "×%.1f".format(it) } ?: "—", style = MaterialTheme.typography.headlineSmall.merge(Mono), color = if ((factor ?: 1.0) > 1.3) sig.warn else sig.plan)
+            }
+            Column(Modifier.weight(2f)) {
+                Hint(factor?.let { "计划 60 分钟的事，你实际要 ${(60 * it).toInt()} 分钟。排时间时按这个放大。" } ?: "做完 3 步有计划时长的事就能算出来（现在 ${samples.size}/3）。")
+            }
+        }
+        Text("精力地图（最近 14 天，每格一个钟头）", style = MaterialTheme.typography.labelLarge, color = sig.muted)
+        EnergyStrip(energy, sig.plan)
+        Hint(if (best.isEmpty()) "还没有记录。开始 / 做完一步，总控就记下你在哪个钟头真干成了事。" else "最好的钟头：${best.joinToString("、") { "$it 点" }}。主线排在这里。")
+        if (wip > com.zongkong.core.plan.Calibrate.WIP_LIMIT) Text("同时进行中 $wip 步，超过 ${com.zongkong.core.plan.Calibrate.WIP_LIMIT} 步就是在假装忙：先收掉一步。", style = MaterialTheme.typography.bodySmall, color = sig.warn)
+        OutlinedButton(onClick = {
+            app.chatDraft = "帮我倒推规划：（哪件事、截止哪天、大概要做哪几步）"
+            nav.navigate("chat")
+        }) { Text("倒推一件事") }
+    }
+}
+
+/** 24 格：一格一个钟头，线越长越亮这个钟头干得越多。 */
+@Composable
+private fun EnergyStrip(energy: IntArray, color: androidx.compose.ui.graphics.Color) {
+    val max = (energy.maxOrNull() ?: 0).coerceAtLeast(1)
+    val muted = LocalSignals.current.muted
+    Column {
+        androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(44.dp)) {
+            val cw = size.width / 24
+            for (h in 0 until 24) {
+                val f = energy[h].toFloat() / max
+                val cx = cw * (h + 0.5f)
+                val len = size.height * (0.15f + 0.75f * f)
+                val ang = (Math.PI / 2 * (1 - f)).toFloat()
+                drawLine(
+                    if (energy[h] > 0) color.copy(alpha = 0.35f + 0.65f * f) else muted.copy(alpha = 0.25f),
+                    androidx.compose.ui.geometry.Offset(cx - len / 2 * kotlin.math.cos(ang), size.height / 2 + len / 2 * kotlin.math.sin(ang)),
+                    androidx.compose.ui.geometry.Offset(cx + len / 2 * kotlin.math.cos(ang), size.height / 2 - len / 2 * kotlin.math.sin(ang)),
+                    strokeWidth = 3f, cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                )
+            }
+        }
+        Row(Modifier.fillMaxWidth()) { listOf("0", "6", "12", "18", "24").forEachIndexed { i, t -> Text(t, style = MaterialTheme.typography.labelSmall, color = muted, modifier = Modifier.weight(if (i == 4) 0.3f else 1f)) } }
     }
 }
 

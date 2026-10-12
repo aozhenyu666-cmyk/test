@@ -22,6 +22,9 @@ class ZkApp : Application() {
     /** 别的页面要发给参谋的一句话（快捷按钮、“问参谋”），对话页打开时发出。 */
     var chatDraft: String = ""
 
+    /** 别的页面带进“脉络 → 录入”的材料。 */
+    var veinDraft: String = ""
+
     lateinit var store: Store
         private set
     lateinit var actions: Actions

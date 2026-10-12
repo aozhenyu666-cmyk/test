@@ -57,6 +57,9 @@ class Agent(private val api: ChatApi, private val env: AgentEnv) {
         append("\n\n## 档案\n")
         append(com.zongkong.core.boss.Boss.brief(env.dossier(), env.hqSessions(), env.now(), env.zone))
         env.sensors().takeIf { it.isNotBlank() }?.let { append("\n## 你的眼睛\n").append(it) }
+        append("\n\n## 信息收集部 · 统筹规划部\n")
+        append(com.zongkong.core.info.Intake.brief(env.work(), env.intake(), env.now(), env.zone)).append('\n')
+        append(com.zongkong.core.plan.Calibrate.brief(env.work(), env.zone, env.now()))
         val vein = env.vein()
         if (vein.nodes.isNotEmpty() || vein.candidates.isNotEmpty()) {
             val hypo = vein.nodes.count { it.status == com.zongkong.core.vein.VStatus.HYPO.label }

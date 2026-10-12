@@ -183,6 +183,32 @@ class Store(private val context: Context) {
         }
     }
 
+    // ---------- 信息收集部的漏斗 ----------
+
+    private val _intake = MutableStateFlow(loadJson("intake.json", com.zongkong.core.info.IntakeBook.serializer()) ?: com.zongkong.core.info.IntakeBook())
+    val intake: StateFlow<com.zongkong.core.info.IntakeBook> = _intake.asStateFlow()
+
+    fun updateIntake(f: (com.zongkong.core.info.IntakeBook) -> com.zongkong.core.info.IntakeBook): com.zongkong.core.info.IntakeBook = synchronized(workLock) {
+        val next = f(_intake.value)
+        if (next != _intake.value) {
+            _intake.value = next
+            val text = ZkJson.encodeToString(com.zongkong.core.info.IntakeBook.serializer(), next)
+            io.execute { writeAtomic(File(dir, "intake.json"), text) }
+        }
+        next
+    }
+
+    private fun <T> loadJson(name: String, ser: kotlinx.serialization.KSerializer<T>): T? {
+        val f = File(dir, name)
+        if (!f.exists()) return null
+        return try {
+            ZkJson.decodeFromString(ser, f.readText())
+        } catch (e: Exception) {
+            Log.e(TAG, "$name 读不了", e)
+            null
+        }
+    }
+
     /** 今天（北京时间的自然日），脉络的日期都用它。 */
     fun dateToday(now: Long = System.currentTimeMillis()): java.time.LocalDate = java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
 

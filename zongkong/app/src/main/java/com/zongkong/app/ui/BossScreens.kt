@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -126,6 +127,13 @@ fun DossierScreen(nav: NavHostController) {
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            // ---------- 年轮：最近 14 天一天一圈，信用越高圈越圆；严格时一道雷 ----------
+            Box(Modifier.fillMaxWidth().height(110.dp)) {
+                val days = remember(ledger) { (ledger.map { java.time.Instant.ofEpochMilli(it.at).atZone(store.zone).toLocalDate() }.distinct().size + 3).coerceAtMost(14) }
+                TreeRings(days, cred / 100f, stanceColor(stance), Modifier.fillMaxSize())
+                if (stance == Stance.STRICT) Lightning(cred, sig.strict, Modifier.fillMaxSize(), ambient = true)
+            }
+
             // ---------- 信用和态度 ----------
             Panel(accent = stanceColor(stance), modifier = Modifier.enter(0).testTag("dossier-head")) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {

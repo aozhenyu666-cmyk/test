@@ -80,6 +80,10 @@ fun SettingsScreen(nav: NavHostController) {
             "settings/hq", nav,
         )
 
+        SectionLabel("工具")
+        MenuItem("脉络", "谋划思考部的知识结构：体系 → 层级 → 节点 → 关系", "vein", nav)
+        MenuItem("线条动效", "潮汐、叶脉、矩阵、雷霆、漩涡、涟漪、年轮、流线", "gallery", nav)
+
         SectionLabel("运行")
         MenuItem("权限与运行状态", if (PermissionStatus.accessibility(context)) "无障碍已开启" else "无障碍未开启——总控没在盯", "settings/perm", nav, warn = !PermissionStatus.accessibility(context))
         MenuItem("今天的节律", "今日部署、收集、判断、一手训练、日终验收；严管与放行", "rhythm", nav)

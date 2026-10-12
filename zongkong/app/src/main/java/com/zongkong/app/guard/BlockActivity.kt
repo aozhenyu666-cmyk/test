@@ -127,7 +127,9 @@ private fun BlockScreen(appLabel: String, goHome: () -> Unit, openRoute: (String
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Spacer(Modifier.height(12.dp))
+        if (status.strict) androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth().height(90.dp)) {
+            com.zongkong.app.ui.Lightning(0, sig.strict, Modifier.fillMaxSize(), ambient = true)
+        } else Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Seal(if (status.strict) "严" else "放", if (status.strict) sig.strict else sig.free, size = 64.dp, filled = true)
             Column {

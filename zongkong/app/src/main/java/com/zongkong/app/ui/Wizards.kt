@@ -497,6 +497,7 @@ fun StuckPick(nav: NavHostController) {
     Column(Modifier.fillMaxSize()) {
         BackBar("我卡住了", { nav.popBackStack() })
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth().height(110.dp)) { Vortex(LocalSignals.current.strict, Modifier.fillMaxSize(), intensity = 1.2f) }
             Question("卡在哪一步？", "选一步，接下来按卡住的原因给你办法。")
             cur.action?.let { a -> ChoiceCard(a.title, "当前这一步 · ${cur.why.label}", color = sig.strict, modifier = Modifier.enter(2)) { nav.navigate("stuck/${a.key}") } }
             open.filter { it.key != cur.action?.key }.forEachIndexed { i, a ->

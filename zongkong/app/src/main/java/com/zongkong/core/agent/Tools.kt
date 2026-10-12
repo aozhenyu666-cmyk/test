@@ -110,6 +110,11 @@ interface AgentEnv {
     /** 让识图模型看一张图，回答 [question]。 */
     suspend fun describeImage(path: String, question: String): String = "这个环境看不了图"
 
+    // ---------- 信息收集部的漏斗 ----------
+
+    fun intake(): com.zongkong.core.info.IntakeBook = com.zongkong.core.info.IntakeBook()
+    fun updateIntake(f: (com.zongkong.core.info.IntakeBook) -> com.zongkong.core.info.IntakeBook): com.zongkong.core.info.IntakeBook = intake()
+
     // ---------- 脉络（谋划思考部） ----------
 
     fun vein(): com.zongkong.core.vein.Vein = com.zongkong.core.vein.Vein()
@@ -414,6 +419,24 @@ class ZkTools(private val env: AgentEnv) {
                 Param("confidence", "integer", "回填后的把握 0–100"),
             ),
         ),
+        ToolSpec("intake_status", "信息收集部的漏斗：今天收了多少、积压多少没提炼、哪些快过期、哪个来源有用率低。列出待提炼的（带记录键）。"),
+        ToolSpec(
+            "distill", "提炼一条收进来的东西：写一句话收获；可以顺手归位到一件事。用户说“这条的意思是……”或者你帮用户消化收集箱时用。",
+            listOf(
+                Param("note", "string", "记录键或标题", required = true),
+                Param("gist", "string", "一句话收获：它对我有什么用", required = true),
+                Param("thread", "string", "归位到哪件事（编号或标题，可空）"),
+            ),
+        ),
+        ToolSpec("calibration", "统筹规划部的数据：估时系数（计划 vs 实际）、精力最好的钟头、同时进行中的步数。排时间之前看一眼。"),
+        ToolSpec(
+            "backward_plan", "倒推规划：从截止日往回排一串步骤，每天最多一步、留一天余量，时长按估时系数放大，放在精力最好的钟头。会直接建行动。",
+            listOf(
+                Param("thread", "string", "哪件事（编号或标题）", required = true),
+                Param("deadline", "string", "截止日：11-30 / 下周五 / 2026-12-01", required = true),
+                Param("steps", "string", "步骤，每行：标题｜估计分钟（按先后顺序）", required = true),
+            ),
+        ),
         ToolSpec("vein_due", "脉络里该回头看的：等验证的假设（按多久没回填排）、今天该温故的、候选卡片数、体检分。主动提问时用。"),
         ToolSpec("get_dossier", "看档案：信用分的每一笔、态度、全部未结约定、最近的陈述和判定、排了的回访。"),
         ToolSpec("sync_notion", "现在和 Notion 同步一次（拉 GPT 写进去的、推总控改过的）。"),
@@ -467,6 +490,10 @@ class ZkTools(private val env: AgentEnv) {
                 "schedule_check" -> scheduleCheck(a)
                 "escalate" -> escalate(a)
                 "get_dossier" -> ToolResult(dossierText(), "看了档案")
+                "intake_status" -> intakeStatus()
+                "distill" -> distill(a)
+                "calibration" -> ToolResult(com.zongkong.core.plan.Calibrate.brief(env.work(), env.zone, env.now()), "看了估时和精力地图")
+                "backward_plan" -> backwardPlan(a)
                 "vein_search" -> veinSearch(a)
                 "vein_node" -> veinNode(a)
                 "vein_propose" -> veinPropose(a)
@@ -617,6 +644,69 @@ class ZkTools(private val env: AgentEnv) {
                 closed.forEach { append("· [${it.id}] ${it.what}｜${it.status.label}｜${it.note.take(60)}\n") }
             }
         }.trimEnd()
+    }
+
+    // ---------- 信息收集部、统筹规划部 ----------
+
+    private fun intakeStatus(): ToolResult {
+        val w = env.work()
+        val book = env.intake()
+        val now = env.now()
+        val items = com.zongkong.core.info.Intake.items(w, book, now).filter { it.state == com.zongkong.core.info.IntakeState.NEW }
+        val text = buildString {
+            append(com.zongkong.core.info.Intake.brief(w, book, now, env.zone))
+            if (items.isNotEmpty()) {
+                append("\n待提炼：\n")
+                items.sortedBy { it.daysLeft }.take(10).forEach { append("· ${it.rec.key}｜${it.rec.noteType.label}｜${it.rec.title}｜${it.source}｜${if (it.daysLeft <= 0) "今天过期" else "还剩 ${it.daysLeft} 天"}\n") }
+            }
+        }.trimEnd()
+        return ToolResult(text, "看了信息收集部的漏斗")
+    }
+
+    private fun distill(a: Args): ToolResult {
+        val ref = a.s("note")
+        val w = env.work()
+        val n = w.rec(ref)?.takeIf { it.kind == Kind.NOTE } ?: w.notes().firstOrNull { it.title == ref } ?: w.notes().filter { it.title.contains(ref) && ref.isNotBlank() }.maxByOrNull { it.updatedAt }
+            ?: return ToolResult.fail("没找到记录“$ref”。先 intake_status 看记录键")
+        val gist = a.s("gist").ifBlank { return ToolResult.fail("gist 不能空") }
+        env.updateIntake { com.zongkong.core.info.Intake.distill(it, n.key, gist, env.now()) }
+        val t = a.opt("thread")?.let { findThread(it) ?: return ToolResult.fail("没找到事项“$it”") }
+        if (t != null) {
+            env.updateWork { WorkOps.update(it, n.key, mapOf(F.THREAD to t.key), env.now()) }
+            env.updateIntake { com.zongkong.core.info.Intake.place(it, n.key, "thread:${t.key}", env.now()) }
+            env.kick()
+        }
+        return ToolResult("提炼了「${n.title}」：$gist" + (t?.let { "，归位到 ${it[F.CODE]}「${it.title}」" } ?: ""), "提炼「${n.title.take(12)}」")
+    }
+
+    private fun backwardPlan(a: Args): ToolResult {
+        val t = findThread(a.s("thread")) ?: return noThread(a.s("thread"))
+        val now = env.now()
+        val plan = TimeParse.parse(a.s("deadline"), now, env.zone) ?: return ToolResult.fail("截止日认不出：${a.s("deadline")}")
+        val deadline = (TimeParse.startMillis(plan, env.zone) ?: return ToolResult.fail("截止日认不出")).let { java.time.Instant.ofEpochMilli(it).atZone(env.zone).toLocalDate() }
+        val today = env.today()
+        if (!deadline.isAfter(today)) return ToolResult.fail("截止日要在今天之后")
+        val steps = a.s("steps").lines().map { it.trim().trimStart('-', '·', ' ') }.filter { it.isNotBlank() }.map { line ->
+            val parts = line.split('｜', '|').map { it.trim() }
+            parts[0] to (parts.getOrNull(1)?.filter { it.isDigit() }?.toIntOrNull() ?: 45)
+        }.take(12)
+        if (steps.isEmpty()) return ToolResult.fail("steps 至少一行：标题｜分钟")
+        val samples = com.zongkong.core.plan.Calibrate.samples(env.work(), env.zone)
+        val factor = com.zongkong.core.plan.Calibrate.factor(samples)
+        val best = com.zongkong.core.plan.Calibrate.bestHours(com.zongkong.core.plan.Calibrate.energy(env.work(), env.zone, now), 1).firstOrNull()
+        val (slots, crowded) = com.zongkong.core.plan.Calibrate.backward(steps, deadline, today, env.zone, factor, best)
+        env.updateWork { w0 ->
+            var w = w0
+            slots.forEach { s -> w = WorkOps.create(w, Kind.ACTION, mapOf(F.TITLE to s.title, F.THREAD to t.key, F.PLAN to s.plan.encode()), now, env.rnd).first }
+            w
+        }
+        env.kick()
+        val lines = slots.joinToString("\n") { "· ${TimeParse.label(it.plan, now, env.zone)}｜${it.title}（${it.minutes} 分钟）" }
+        return ToolResult(
+            "倒推排了 ${slots.size} 步（${if (factor != null) "估时 ×%.1f".format(factor) else "估时样本不够，按原估计"}，${best?.let { "$it 点" } ?: "晚上 20 点"}）：\n$lines" +
+                if (crowded) "\n注意：天数不够，一天一步也排到了截止前一天——要么砍步骤，要么推截止日。" else "",
+            "倒推排了 ${slots.size} 步",
+        )
     }
 
     // ---------- 脉络 ----------
@@ -1005,6 +1095,7 @@ class ZkTools(private val env: AgentEnv) {
         "thread" -> findThread(target)?.let { "thread/${it.key}" }
         "action" -> findAction(target)?.let { "action/${it.key}" }
         "gate" -> env.config().gates.firstOrNull { it.id == target || it.title == target }?.let { "gate/${it.id}" }
+        "vein_node" -> env.vein().let { v -> (v.node(target) ?: v.byTitle(target))?.let { "vein/node/${it.id}" } }
         "dept" -> (Dept.entries.firstOrNull { it.label == target || it.name == target || it.seal == target } ?: Dept.INFO).let { "dept/${it.name}" }
         else -> ROUTES[page]
     }
@@ -1172,6 +1263,13 @@ class ZkTools(private val env: AgentEnv) {
             "gates" to "关卡设置",
             "notion" to "Notion 连接",
             "ai" to "AI 接口",
+            "vein" to "脉络（谋划思考部的知识结构）",
+            "vein_node" to "脉络里的某个节点",
+            "vein_cands" to "脉络的候选卡片",
+            "vein_review" to "脉络·温故",
+            "vein_health" to "脉络·体检",
+            "dossier" to "档案（信用、约定）",
+            "voice" to "语音对讲",
         )
 
         private val ROUTES: Map<String, String> = mapOf(
@@ -1195,6 +1293,12 @@ class ZkTools(private val env: AgentEnv) {
             "gates" to "settings/gates",
             "notion" to "settings/notion",
             "ai" to "settings/ai",
+            "vein" to "vein",
+            "vein_cands" to "vein/cands",
+            "vein_review" to "vein/review",
+            "vein_health" to "vein/health",
+            "dossier" to "dossier",
+            "voice" to "voice",
         )
     }
 }

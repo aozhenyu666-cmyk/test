@@ -220,6 +220,15 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 composable("hq") { HqScreen(nav) }
                 composable("settings/hq") { HqSettingsScreen(nav) }
                 composable("dossier") { DossierScreen(nav) }
+                composable("vein") { VeinScreen(nav) }
+                composable("vein/capture") { VeinCaptureScreen(nav) }
+                composable("vein/cands") { VeinCandScreen(nav) }
+                composable("vein/node/{id}") { e -> VeinNodeScreen(e.arguments?.getString("id").orEmpty(), nav) }
+                composable("vein/ask/{id}/{mode}") { e -> VeinAskScreen(e.arguments?.getString("id").orEmpty(), e.arguments?.getString("mode").orEmpty(), nav) }
+                composable("vein/trace/{id}") { e -> VeinTraceScreen(e.arguments?.getString("id").orEmpty(), nav) }
+                composable("vein/health") { VeinHealthScreen(nav) }
+                composable("vein/review") { VeinReviewScreen(nav) }
+                composable("gallery") { GalleryScreen(nav) }
             }
             // 从通知、分享、拦截页带进来的页面。必须放在 NavHost 之后：Scaffold 的内容是延后组合的，
             // 导航图要等 NavHost 组合完才设置好，太早跳转会崩（冷启动时点通知里的“开始”就会触发）。
