@@ -31,7 +31,8 @@ class Store(private val context: Context) {
     private val daysDir = File(dir, "days").apply { mkdirs() }
     private val prefs = context.getSharedPreferences("zk", Context.MODE_PRIVATE)
 
-    val zone: ZoneId get() = ZoneId.systemDefault()
+    /** 北京时间。 */
+    val zone: ZoneId get() = DayClock.BEIJING
 
     private val _config = MutableStateFlow(loadConfig())
     val config: StateFlow<Config> = _config.asStateFlow()
@@ -155,6 +156,35 @@ class Store(private val context: Context) {
     /** 现在的信用和态度。 */
     fun credibility(now: Long = System.currentTimeMillis()): Int = com.zongkong.core.boss.Boss.credibility(_dossier.value, _hq.value.sessions, now)
     fun stance(now: Long = System.currentTimeMillis()): com.zongkong.core.boss.Stance = com.zongkong.core.boss.Boss.stance(_dossier.value, _hq.value.sessions, now)
+
+    // ---------- 脉络（谋划思考部的知识结构） ----------
+
+    private val _vein = MutableStateFlow(loadVein())
+    val vein: StateFlow<com.zongkong.core.vein.Vein> = _vein.asStateFlow()
+
+    fun updateVein(f: (com.zongkong.core.vein.Vein) -> com.zongkong.core.vein.Vein): com.zongkong.core.vein.Vein = synchronized(workLock) {
+        val next = f(_vein.value)
+        if (next != _vein.value) {
+            _vein.value = next
+            val text = ZkJson.encodeToString(com.zongkong.core.vein.Vein.serializer(), next)
+            io.execute { writeAtomic(File(dir, "vein.json"), text) }
+        }
+        next
+    }
+
+    private fun loadVein(): com.zongkong.core.vein.Vein {
+        val f = File(dir, "vein.json")
+        if (!f.exists()) return com.zongkong.core.vein.Vein()
+        return try {
+            ZkJson.decodeFromString(com.zongkong.core.vein.Vein.serializer(), f.readText())
+        } catch (e: Exception) {
+            Log.e(TAG, "vein.json 读不了", e)
+            com.zongkong.core.vein.Vein()
+        }
+    }
+
+    /** 今天（北京时间的自然日），脉络的日期都用它。 */
+    fun dateToday(now: Long = System.currentTimeMillis()): java.time.LocalDate = java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
 
     // ---------- 设备时间线（无障碍服务自己记的：前台应用切换、亮屏熄屏） ----------
 

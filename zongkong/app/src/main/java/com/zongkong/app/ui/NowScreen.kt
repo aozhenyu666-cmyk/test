@@ -288,7 +288,7 @@ private fun HqStrip(cfg: com.zongkong.core.hq.HqConfig, book: com.zongkong.core.
 @Composable
 private fun PlanStrip(plan: com.zongkong.core.plan.WeekPlan?, book: com.zongkong.core.plan.PlanBook, work: Work, now: Long, nav: NavHostController) {
     val sig = LocalSignals.current
-    val zone = java.time.ZoneId.systemDefault()
+    val zone = com.zongkong.core.DayClock.BEIJING
     if (plan == null) {
         val draft = com.zongkong.core.plan.Plans.draft(book, now, zone)
         Panel(accent = if (draft != null) sig.ai else null, onClick = { nav.navigate("plan") }, modifier = Modifier.enter(2).testTag("plan-strip")) {
@@ -324,7 +324,7 @@ private fun PlanStrip(plan: com.zongkong.core.plan.WeekPlan?, book: com.zongkong
 @Composable
 private fun Guidance(status: Status, date: String, now: Long, nav: NavHostController) {
     val sig = LocalSignals.current
-    val hour = Instant.ofEpochMilli(now).atZone(java.time.ZoneId.systemDefault()).hour
+    val hour = Instant.ofEpochMilli(now).atZone(com.zongkong.core.DayClock.BEIJING).hour
     val reason = status.reasons.firstOrNull()
     when {
         status.strict && reason != null -> {
@@ -383,7 +383,7 @@ private fun Guidance(status: Status, date: String, now: Long, nav: NavHostContro
 private fun DeptTile(dept: Dept, status: Status, work: Work, now: Long, yishou: YishouStatus?, modifier: Modifier, onClick: () -> Unit) {
     val sig = LocalSignals.current
     val color = sig.dept(dept)
-    val zone = java.time.ZoneId.systemDefault()
+    val zone = com.zongkong.core.DayClock.BEIJING
     val gates = status.gates.filter { it.gate.dept == dept }
     val (line, progress) = when (dept) {
         Dept.INFO -> Focus.evidence(work, Focus.Evidence.LINKED_NOTES, now, zone).first.let { "今天挂上 $it 条" to null }
@@ -453,7 +453,7 @@ fun runShortcut(s: Shortcut, app: com.zongkong.app.ZkApp, nav: NavHostController
 @Composable
 private fun TimelineRow(a: com.zongkong.core.work.Rec, work: Work, now: Long, nav: NavHostController) {
     val sig = LocalSignals.current
-    val zone = java.time.ZoneId.systemDefault()
+    val zone = com.zongkong.core.DayClock.BEIJING
     val start = a.plan?.let { TimeParse.startMillis(it, zone) }
     Row(
         Modifier.fillMaxWidth().clickable { nav.navigate("action/${a.key}") }.padding(vertical = 6.dp),

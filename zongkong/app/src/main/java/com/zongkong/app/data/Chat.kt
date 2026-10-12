@@ -112,6 +112,8 @@ class ChatRepo(private val context: Context, private val store: Store, private v
             val h = actions.hq.start(com.zongkong.core.hq.HqTrigger.AGENT, minutes)
             return "总控时间开始了，${h.minutes} 分钟。说完这句会打开总控时间。"
         }
+        override fun vein(): com.zongkong.core.vein.Vein = store.vein.value
+        override fun updateVein(f: (com.zongkong.core.vein.Vein) -> com.zongkong.core.vein.Vein) = store.updateVein(f)
         override fun dossier(): com.zongkong.core.boss.Dossier = store.dossier.value
         override fun updateDossier(f: (com.zongkong.core.boss.Dossier) -> com.zongkong.core.boss.Dossier) = store.updateDossier(f)
         override fun hqSessions(): List<com.zongkong.core.hq.HqSession> = store.hq.value.sessions

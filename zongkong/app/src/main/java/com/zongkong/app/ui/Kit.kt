@@ -227,7 +227,7 @@ fun rememberNow(periodMillis: Long = 15_000): Long {
     return now
 }
 
-fun clock(ms: Long, zone: ZoneId = ZoneId.systemDefault()): String =
+fun clock(ms: Long, zone: ZoneId = com.zongkong.core.DayClock.BEIJING): String =
     Instant.ofEpochMilli(ms).atZone(zone).toLocalTime().toString().take(5)
 
 /** 1:05 / 12 分钟 */

@@ -252,7 +252,7 @@ private fun GateLine(g: GateStatus, nav: NavHostController, modifier: Modifier) 
     }
 }
 
-private fun createdToday(r: Rec, now: Long) = DayClock.dateKey(r.createdAt, java.time.ZoneId.systemDefault()) == DayClock.dateKey(now, java.time.ZoneId.systemDefault())
+private fun createdToday(r: Rec, now: Long) = DayClock.dateKey(r.createdAt, com.zongkong.core.DayClock.BEIJING) == DayClock.dateKey(now, com.zongkong.core.DayClock.BEIJING)
 
 // ---------- 信息收集部 ----------
 
@@ -351,7 +351,7 @@ private fun ThinkPart(work: Work, now: Long, nav: NavHostController) {
 @Composable
 private fun PlanPart(work: Work, now: Long, nav: NavHostController) {
     val sig = LocalSignals.current
-    val zone = java.time.ZoneId.systemDefault()
+    val zone = com.zongkong.core.DayClock.BEIJING
     val todayKey = DayClock.dateKey(now, zone)
     val todays = work.actions().filter { a ->
         a.actionStatus != ActionStatus.CANCELLED &&

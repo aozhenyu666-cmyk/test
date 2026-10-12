@@ -43,6 +43,9 @@ class Actions(private val context: Context, private val store: Store) {
     /** 总控时间。 */
     val hq = HqActions(context, store, this)
 
+    /** 脉络：谋划思考部的知识结构。 */
+    val vein = VeinActions(context, store)
+
     sealed interface SubmitResult {
         data class Judged(val verdict: Verdict) : SubmitResult
         data class Unavailable(val reason: String, val degradedLeft: Int) : SubmitResult

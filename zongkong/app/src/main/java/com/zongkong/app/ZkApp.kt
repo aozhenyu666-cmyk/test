@@ -32,6 +32,8 @@ class ZkApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // 一律北京时间：时间显示、换日、定时都按它
+        java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
         store = Store(this)
         actions = Actions(this, store)
         chat = com.zongkong.app.data.ChatRepo(this, store, actions)

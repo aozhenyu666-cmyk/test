@@ -56,6 +56,9 @@ class FakeEnv(var nowMs: Long = ZonedDateTime.of(2026, 10, 11, 9, 30, 0, 0, Zone
     override fun dossier() = dossier
     override fun updateDossier(f: (com.zongkong.core.boss.Dossier) -> com.zongkong.core.boss.Dossier) = f(dossier).also { dossier = it }
     override fun deviceEvents(from: Long, to: Long) = events.toList()
+    var veinState = com.zongkong.core.vein.Vein()
+    override fun vein() = veinState
+    override fun updateVein(f: (com.zongkong.core.vein.Vein) -> com.zongkong.core.vein.Vein) = f(veinState).also { veinState = it }
 }
 
 /** 按顺序回放的假模型。记下每次收到的消息，方便检查上下文。 */
@@ -406,5 +409,31 @@ class AgentTest {
         assertTrue(tools.run("resolve_commitment", """{"id":"$id","status":"没做到","note":"没有照片"}""").ok)
         // 结了的约定不能再改
         assertFalse(tools.run("resolve_commitment", """{"id":"$id","status":"做到了","note":"其实做了"}""").ok)
+    }
+
+    /** 总控用脉络：搜、看结构、提议（进候选不直接写入）、回填假设。 */
+    @Test
+    fun veinToolsProposeAndBackfill() = runTest {
+        val env = FakeEnv()
+        env.veinState = com.zongkong.core.vein.Veins.seed(com.zongkong.core.vein.Vein(), "2026-10-11")
+        val tools = ZkTools(env)
+        val found = tools.run("vein_search", """{"query":"停止信号"}""")
+        assertTrue(found.text, found.text.contains("第一反应停止"))
+        val node = tools.run("vein_node", """{"node":"下一问没有产生"}""")
+        assertTrue(node.text, node.text.contains("请说明怎样区分这两个解释"))
+        // 假设不写验证方式：拒绝
+        assertFalse(tools.run("vein_propose", """{"system":"思维问题","title":"睡眠不足","claim":"睡不够时每步更累"}""").ok)
+        val p = tools.run("vein_propose", """{"system":"思维问题","title":"睡眠不足","claim":"睡不够时每步更累","keywords":"睡眠、疲劳、认知负荷","verify":"记一周睡眠时长和停下次数","relate_to":"单步成本高、停止信号来得早","relation":"导致"}""")
+        assertTrue(p.text, p.ok)
+        assertEquals("vein/cands", p.route)
+        assertEquals(7, env.veinState.nodes.size)
+        assertEquals(1, env.veinState.candidates.size)
+        assertEquals(1, env.veinState.candLinks.size)
+        val b = tools.run("vein_backfill", """{"node":"下一问没有产生","result":"记了 7 天，停下时 5 次说得出下一个问题","status":"已推翻","confidence":20}""")
+        assertTrue(b.text, b.ok)
+        assertEquals("已推翻", env.veinState.byTitle("下一问没有产生")!!.status)
+        val due = tools.run("vein_due", "{}")
+        assertTrue(due.text, due.text.contains("等验证的假设"))
+        assertTrue(Agent(Scripted(), env).systemPrompt().contains("## 脉络"))
     }
 }

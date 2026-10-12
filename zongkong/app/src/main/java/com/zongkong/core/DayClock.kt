@@ -12,6 +12,9 @@ import java.time.ZoneId
 object DayClock {
     const val DAY_START_MIN = 4 * 60
 
+    /** 总控一律按北京时间算（手机设成别的时区、出差、模拟器默认 UTC 都不影响）。 */
+    val BEIJING: ZoneId = ZoneId.of("Asia/Shanghai")
+
     fun date(now: Long, zone: ZoneId): LocalDate =
         LocalDateTime.ofInstant(Instant.ofEpochMilli(now), zone).minusMinutes(DAY_START_MIN.toLong()).toLocalDate()
 

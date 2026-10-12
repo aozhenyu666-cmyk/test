@@ -57,6 +57,13 @@ class Agent(private val api: ChatApi, private val env: AgentEnv) {
         append("\n\n## 档案\n")
         append(com.zongkong.core.boss.Boss.brief(env.dossier(), env.hqSessions(), env.now(), env.zone))
         env.sensors().takeIf { it.isNotBlank() }?.let { append("\n## 你的眼睛\n").append(it) }
+        val vein = env.vein()
+        if (vein.nodes.isNotEmpty() || vein.candidates.isNotEmpty()) {
+            val hypo = vein.nodes.count { it.status == com.zongkong.core.vein.VStatus.HYPO.label }
+            append("\n\n## 脉络（谋划思考部的知识结构）\n")
+            append("${vein.systems.joinToString("、") { it.name }}：${vein.nodes.size} 个节点，$hypo 个假设等验证，候选 ${vein.candidates.size} 张。")
+            append("用户聊到想法、规律、为什么时先 vein_search；新想法用 vein_propose 提议（用户确认才写入）。")
+        }
         append("\n\n## 此刻的总控\n")
         append(Snapshot.brief(env))
         env.sessionContext().takeIf { it.isNotBlank() }?.let { append("\n\n## 正在进行：总控时间\n").append(it) }

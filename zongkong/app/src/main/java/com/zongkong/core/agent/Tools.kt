@@ -110,6 +110,13 @@ interface AgentEnv {
     /** 让识图模型看一张图，回答 [question]。 */
     suspend fun describeImage(path: String, question: String): String = "这个环境看不了图"
 
+    // ---------- 脉络（谋划思考部） ----------
+
+    fun vein(): com.zongkong.core.vein.Vein = com.zongkong.core.vein.Vein()
+    fun updateVein(f: (com.zongkong.core.vein.Vein) -> com.zongkong.core.vein.Vein): com.zongkong.core.vein.Vein = vein()
+    /** 今天的日期（北京时间自然日）。 */
+    fun today(): java.time.LocalDate = java.time.Instant.ofEpochMilli(now()).atZone(zone).toLocalDate()
+
     /** 让一手现在开一局陪练窗口。 */
     suspend fun startYishouWindow(): String = "这个环境开不了一手的窗口"
     suspend fun sync(): String
@@ -374,6 +381,40 @@ class ZkTools(private val env: AgentEnv) {
                 Param("reason", "string", "为什么", required = true),
             ),
         ),
+        ToolSpec(
+            "vein_search", "在脉络（谋划思考部的知识结构）里搜节点：标题、结论、激活词。用户聊到某个想法、问题、规律时先搜一下有没有现成的。",
+            listOf(Param("query", "string", "关键词", required = true)),
+        ),
+        ToolSpec(
+            "vein_node", "看脉络里一个节点的结构：路径、结论、把握、验证方式、回填记录、上下游和对立的邻居。",
+            listOf(Param("node", "string", "节点 id（n-0001）或标题", required = true)),
+        ),
+        ToolSpec(
+            "vein_propose", "往脉络里提议一个新节点（进候选，用户确认才写入——结构由用户决定）。推断类必须 status=假设 并写 verify。",
+            listOf(
+                Param("system", "string", "哪个体系（没有就新起一个名字）", required = true),
+                Param("title", "string", "标题，短", required = true),
+                Param("claim", "string", "一句结论", required = true),
+                Param("type", "string", "类型", choices = com.zongkong.core.vein.NodeType.entries.map { it.label }),
+                Param("keywords", "string", "3–5 个激活词，顿号分隔"),
+                Param("status", "string", "状态", choices = com.zongkong.core.vein.VStatus.entries.map { it.label }),
+                Param("confidence", "integer", "把握 0–100"),
+                Param("verify", "string", "验证方式（假设必填）"),
+                Param("parent", "string", "层级"),
+                Param("relate_to", "string", "和哪个已有节点有关系（id 或标题）"),
+                Param("relation", "string", "新节点对那个节点的关系", choices = com.zongkong.core.vein.Rel.TYPES),
+            ),
+        ),
+        ToolSpec(
+            "vein_backfill", "给一个假设回填验证结果（用户告诉你验证做了、结果如何时）。会改状态和把握。",
+            listOf(
+                Param("node", "string", "节点 id 或标题", required = true),
+                Param("result", "string", "验证结果，具体（做了几次、看到了什么）", required = true),
+                Param("status", "string", "回填后的状态", required = true, choices = com.zongkong.core.vein.VStatus.entries.map { it.label }),
+                Param("confidence", "integer", "回填后的把握 0–100"),
+            ),
+        ),
+        ToolSpec("vein_due", "脉络里该回头看的：等验证的假设（按多久没回填排）、今天该温故的、候选卡片数、体检分。主动提问时用。"),
         ToolSpec("get_dossier", "看档案：信用分的每一笔、态度、全部未结约定、最近的陈述和判定、排了的回访。"),
         ToolSpec("sync_notion", "现在和 Notion 同步一次（拉 GPT 写进去的、推总控改过的）。"),
         ToolSpec(
@@ -426,6 +467,11 @@ class ZkTools(private val env: AgentEnv) {
                 "schedule_check" -> scheduleCheck(a)
                 "escalate" -> escalate(a)
                 "get_dossier" -> ToolResult(dossierText(), "看了档案")
+                "vein_search" -> veinSearch(a)
+                "vein_node" -> veinNode(a)
+                "vein_propose" -> veinPropose(a)
+                "vein_backfill" -> veinBackfill(a)
+                "vein_due" -> ToolResult(veinDue(), "看了脉络里该回头看的")
                 "sync_notion" -> env.sync().let { ToolResult(it, it) }
                 "remember" -> a.s("fact").takeIf { it.isNotBlank() }?.let { env.remember(it); ToolResult("记住了：$it", "记住：$it") } ?: ToolResult.fail("fact 不能空")
                 "forget" -> if (env.forget(a.s("fact"))) ToolResult("删掉了", "不再记：${a.s("fact")}") else ToolResult.fail("没找到这条")
@@ -570,6 +616,80 @@ class ZkTools(private val env: AgentEnv) {
                 append("最近结了的约定：\n")
                 closed.forEach { append("· [${it.id}] ${it.what}｜${it.status.label}｜${it.note.take(60)}\n") }
             }
+        }.trimEnd()
+    }
+
+    // ---------- 脉络 ----------
+
+    private fun findNode(ref: String): com.zongkong.core.vein.VNode? {
+        val v = env.vein()
+        return v.node(ref.trim()) ?: v.byTitle(ref)
+    }
+
+    private fun veinSearch(a: Args): ToolResult {
+        val hits = com.zongkong.core.vein.Veins.search(env.vein(), a.s("query"))
+        if (hits.isEmpty()) return ToolResult("脉络里没有相关节点", "脉络里没搜到")
+        return ToolResult(hits.take(10).joinToString("\n") { "${it.id}｜${it.system} › ${it.parent.ifBlank { "-" }}｜${it.title}（${it.type}·${it.status}${it.confidence?.let { c -> "·$c%" } ?: ""}）：${it.claim}" }, "脉络里搜到 ${hits.size} 个")
+    }
+
+    private fun veinNode(a: Args): ToolResult {
+        val n = findNode(a.s("node")) ?: return ToolResult.fail("脉络里没有“${a.s("node")}”")
+        val v = env.vein()
+        val text = buildString {
+            append(com.zongkong.core.vein.VeinAi.pack(v, n.id, "（只看结构）", budget = 2500)?.text.orEmpty())
+            if (n.checks.isNotEmpty()) append("\n回填记录：").append(n.checks.takeLast(4).joinToString("；") { "${it.date} ${it.result}（${it.status}）" })
+        }
+        return ToolResult(text, "看了脉络节点「${n.title}」")
+    }
+
+    private fun veinPropose(a: Args): ToolResult {
+        val title = a.s("title").ifBlank { return ToolResult.fail("title 不能空") }
+        val status = com.zongkong.core.vein.VStatus.of(a.s("status").ifBlank { "假设" })
+        if (status == com.zongkong.core.vein.VStatus.HYPO && a.s("verify").isBlank()) return ToolResult.fail("假设要写验证方式（verify）")
+        val tmp = "a" + (env.now() / 1000).toString(36) + env.rnd.nextInt(100)
+        val target = a.opt("relate_to")?.let { findNode(it) ?: return ToolResult.fail("没有节点“$it”") }
+        val c = com.zongkong.core.vein.Candidate(
+            tmp = tmp, title = title.take(40), type = com.zongkong.core.vein.NodeType.of(a.s("type")).label, claim = a.s("claim").ifBlank { title },
+            keywords = a.s("keywords").split(Regex("[、,，]")).map { it.trim() }.filter { it.isNotEmpty() }.take(5),
+            status = status.label, confidence = (a.i("confidence") ?: 50).coerceIn(0, 100), verify = a.s("verify"),
+            mergeInto = com.zongkong.core.vein.Veins.likelyDuplicate(env.vein(), title, emptyList())?.id ?: "",
+            system = a.s("system").ifBlank { target?.system ?: "未分类" }, parent = a.s("parent").ifBlank { target?.parent ?: "" }, source = "总控",
+        )
+        val rel = a.opt("relation")?.takeIf { it in com.zongkong.core.vein.Rel.TYPES }
+        env.updateVein { v ->
+            v.copy(
+                candidates = v.candidates + c,
+                candLinks = v.candLinks + listOfNotNull(if (target != null && rel != null) com.zongkong.core.vein.CandLink(tmp, target.id, rel, "总控提议") else null),
+            )
+        }
+        val dup = if (c.mergeInto.isNotBlank()) "（可能和 ${c.mergeInto} 重复，确认时会提示合并）" else ""
+        return ToolResult("提议进了候选：「$title」$dup。用户要在“脉络 → 候选”里确认才写入", "提议脉络节点「$title」", route = "vein/cands")
+    }
+
+    private fun veinBackfill(a: Args): ToolResult {
+        val n = findNode(a.s("node")) ?: return ToolResult.fail("脉络里没有“${a.s("node")}”")
+        val st = com.zongkong.core.vein.VStatus.entries.firstOrNull { it.label == a.s("status") } ?: return ToolResult.fail("状态只能是 假设 / 已验证 / 已推翻")
+        var err: String? = null
+        env.updateVein { v -> com.zongkong.core.vein.Veins.backfill(v, n.id, a.s("result"), st, a.i("confidence"), env.today().toString()).getOrElse { e -> err = e.message; v } }
+        err?.let { return ToolResult.fail(it) }
+        return ToolResult("回填了「${n.title}」：${st.label}", "回填「${n.title}」：${st.label}")
+    }
+
+    private fun veinDue(): String {
+        val v = env.vein()
+        val today = env.today()
+        val hypos = v.nodes.filter { it.status == com.zongkong.core.vein.VStatus.HYPO.label }
+            .sortedByDescending { com.zongkong.core.vein.Veins.daysBetween(it.checks.lastOrNull()?.date ?: it.created, today) }
+        val due = com.zongkong.core.vein.Veins.dueReviews(v, today, 5)
+        val h = com.zongkong.core.vein.Veins.health(v, null, today)
+        return buildString {
+            append("脉络：${v.nodes.size} 个节点，体检 ${h.score} 分，候选 ${v.candidates.size} 张\n")
+            if (hypos.isNotEmpty()) {
+                append("等验证的假设：\n")
+                hypos.take(5).forEach { append("· ${it.id} ${it.title}｜${com.zongkong.core.vein.Veins.daysBetween(it.checks.lastOrNull()?.date ?: it.created, today)} 天没回填｜验证：${it.verify.ifBlank { "（没写）" }}\n") }
+            }
+            if (due.isNotEmpty()) append("今天该温故：").append(due.joinToString("、") { it.title }).append('\n')
+            h.issues.take(3).forEach { append("体检：${it.label}（${it.nodes.size}）\n") }
         }.trimEnd()
     }
 
