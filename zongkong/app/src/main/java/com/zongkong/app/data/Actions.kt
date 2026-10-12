@@ -193,6 +193,10 @@ class Actions(private val context: Context, private val store: Store) {
 
     fun emergency(reason: String): String {
         val now = System.currentTimeMillis()
+        // 总控者的态度是“严格”时不给紧急放行（信用低于 40，或者总控自己收紧了）
+        if (store.stance(now) == com.zongkong.core.boss.Stance.STRICT) {
+            return "总控现在的态度是“严格”（信用 ${store.credibility(now)}），不给紧急放行。去跟总控说清楚，或者把约定做到。"
+        }
         var msg = ""
         store.updateToday(now) { day ->
             val status = com.zongkong.core.Engine.evaluate(store.config.value, day, now, store.zone)
@@ -279,6 +283,9 @@ class Actions(private val context: Context, private val store: Store) {
             ?: "连上了，但回复不是 JSON：${r.value.take(60)}。可以试试开关 JSON 模式"
         is ApiResult.Err -> r.message
     }
+
+    /** 现在的 AI 接口能不能用（模型锁判断要不要 24 小时）。 */
+    suspend fun aiWorks(): Boolean = store.config.value.ai.ready && llm.complete("只回复 JSON。", """回复 {"pass": true}""") is ApiResult.Ok
 
     suspend fun testNotion(): String = when (val r = notion.me()) {
         is ApiResult.Ok -> "连接正常：${r.value}"

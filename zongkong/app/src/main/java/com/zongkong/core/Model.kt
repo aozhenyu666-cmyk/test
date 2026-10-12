@@ -140,6 +140,8 @@ data class Config(
     val yishouPassCap: Int = 5,
     /** 总控时间、震动、失联阶梯、参谋主动找你。 */
     val hq: com.zongkong.core.hq.HqConfig = com.zongkong.core.hq.HqConfig(),
+    /** 总控者：截图抽查、每天抽查、连续娱乐、模型锁。 */
+    val boss: com.zongkong.core.boss.BossConfig = com.zongkong.core.boss.BossConfig(),
 )
 
 /**
@@ -297,4 +299,12 @@ sealed class ChangeOp {
     @Serializable
     @SerialName("hq")
     data class Hq(val hq: com.zongkong.core.hq.HqConfig) : ChangeOp()
+
+    @Serializable
+    @SerialName("boss")
+    data class Boss(val boss: com.zongkong.core.boss.BossConfig) : ChangeOp()
+
+    @Serializable
+    @SerialName("ai")
+    data class Ai(val ai: AiConfig) : ChangeOp()
 }

@@ -42,22 +42,37 @@ object HqRunner {
             if (now > s.endsAt + 60 * 60_000L) app.actions.hq.exitEarly("超时一小时没封存，自动结束")
         }
 
-        when (Hq.due(cfg, store.hq.value.sessions, now, zone)) {
+        val due = Hq.due(cfg, store.hq.value.sessions, now, zone)
+        // 进程刚被闹钟拉起来时服务可能还没连上：一分半内有过心跳也算在
+        val eyes = com.zongkong.app.guard.GuardService.running || now - store.heartbeat < 90_000
+        when (due) {
             Hq.Due.SOON -> if (store.firstAlert("hq-soon")) {
                 Notifications.alert(context, "10 分钟后是总控时间", "${DayClock.hhmm(cfg.at)} 开始，${cfg.minutes} 分钟。手上的事收个尾。", "hq")
                 Buzz.once(context, Buzz.Level.GENTLE)
+                store.logWake("提前 10 分钟提醒已发" + diag(context))
             }
             Hq.Due.NOW -> if (store.firstAlert("hq-now")) {
                 Notifications.hqCall(context, "总控时间到了", "接下来 ${cfg.minutes} 分钟，把四个部门修一遍。" + if (cfg.autoLock) "5 分钟后自动进入。" else "", fullScreen = true)
                 Buzz.relentless(context, "总控时间到了")
                 if (cfg.speak) Speaker.speak(context, "总控时间到了。")
+                store.logWake("到点：全屏通知 + 连续震动" + diag(context))
             }
             Hq.Due.OVERDUE -> if (cfg.autoLock && store.firstAlert("hq-auto")) {
                 app.actions.hq.start(HqTrigger.SCHEDULED)
                 Notifications.hqCall(context, "总控时间已经开始", "除了总控和白名单里的应用，其他的打开就回到这里。做完就解锁。", fullScreen = true)
                 Buzz.relentless(context, "总控时间已经开始")
+                store.logWake("自动进入总控时间" + diag(context))
             }
             Hq.Due.NONE -> {}
+        }
+        // 到点了但总控的眼睛（无障碍服务）没在运行：锁不住手机，单独大声说
+        if (due != Hq.Due.NONE && due != Hq.Due.SOON && !eyes && store.firstAlert("hq-blind")) {
+            Notifications.hqCall(
+                context, "总控被关掉了，锁不住手机",
+                "无障碍服务没在运行（系统清理后台或更新后会关掉它）。点这里去重新打开，然后进总控时间。",
+                fullScreen = true, route = "settings/perm",
+            )
+            store.logWake("到点时无障碍服务没在运行：只能提醒，锁不住")
         }
 
         val minute = Instant.ofEpochMilli(now).atZone(zone).let { it.hour * 60 + it.minute }
@@ -73,6 +88,8 @@ object HqRunner {
             )
             Buzz.once(context, Buzz.Level.FIRM)
         }
+
+        boss(context, now, minute)
 
         if (!cfg.proactive) return
 
@@ -98,6 +115,76 @@ object HqRunner {
             )
             Buzz.once(context, Buzz.Level.FIRM)
         }
+    }
+
+    /**
+     * 总控者自己的日程：到点的回访、过期没回应的约定、每天几次抽查、周日的规则复盘。
+     * 一次只发一条（参谋忙着就下一轮再说）。
+     */
+    private fun boss(context: Context, now: Long, minute: Int) {
+        val app = context.zk
+        val store = app.store
+        val config = store.config.value
+        // 过期 24 小时没回应的约定：按没做到算，并告诉你
+        val before = store.dossier.value
+        val after = com.zongkong.core.boss.Boss.sweep(before, now)
+        if (after != before) {
+            store.updateDossier { com.zongkong.core.boss.Boss.sweep(it, now) }
+            after.commitments.filter { c -> before.commitments.any { it.id == c.id && it.status != c.status } }.forEach { c ->
+                Notifications.alert(context, "约定没做到", "「${c.what}」过期一天没有回应，按没做到算，信用扣 10。", "dossier")
+            }
+        }
+        // 到点的回访
+        com.zongkong.core.boss.Boss.dueChecks(store.dossier.value, now).firstOrNull()?.let { k ->
+            val sent = app.chat.proactive(
+                "check",
+                "[定时·回访] 你之前排的回访到了：${k.about}\n先取证（device_timeline、档案、需要的话看截图），再找用户。是约定就对完证据用 resolve_commitment 下结论，结论告诉用户。",
+                fallback = "回访：${k.about.take(60)}",
+            )
+            if (sent) {
+                store.updateDossier { com.zongkong.core.boss.Boss.markDone(it, k.id) }
+                Buzz.once(context, Buzz.Level.FIRM)
+                return
+            }
+        }
+        if (!config.ai.ready) return
+        // 周日的规则复盘（总控时间之前一小时）
+        val date = DayClock.date(now, store.zone)
+        if (date.dayOfWeek == java.time.DayOfWeek.SUNDAY && minute >= Hq.minutesOf(config.hq.at - 60) && minute < Hq.minutesOf(config.hq.at) && store.firstAlert("weekly-rules")) {
+            app.chat.proactive(
+                "weekly",
+                "[定时·周复盘] 按宪章“预判与规则优化”做一次周复盘：get_dossier、app_usage（今天、昨天）、get_plan，看这周没做到的约定、对不上的说法、最乱的时段。" +
+                    "提 1–2 条规则修改（收紧的直接用工具改，放宽的说明理由走冷静期），给下周最危险的时段排 schedule_check。最后用三四句话告诉用户你改了什么、为什么。",
+                fallback = "这周复盘：去档案看看没做到的约定。",
+            )
+            return
+        }
+        // 抽查：每天几次，时间每天不一样（用户猜不到），只在检查时段里
+        val n = config.boss.spotChecks.coerceIn(0, 8)
+        if (n == 0 || store.hq.value.active != null) return
+        val start = config.activeStart + 60
+        val end = config.activeEnd - 30
+        if (end <= start) return
+        val rnd = kotlin.random.Random(date.toEpochDay() * 31 + 7)
+        val slots = List(n) { start + rnd.nextInt(end - start) }.sorted()
+        slots.forEachIndexed { i, slot ->
+            if (minute in slot until slot + 90 && store.firstAlert("spot:$i")) {
+                app.chat.proactive(
+                    "spot",
+                    "[定时·抽查] 抽查一次。看最近 2 小时的 device_timeline（开了截图抽查就挑一两张 look_at_screenshot），对照今天的主线、未结的约定和计划。" +
+                        "没问题只回复“无事”两个字。有问题：直接说你看到了什么（带数字），问一个问题或给一个要求，必要时 commit 记约定或 start_hq_session。",
+                    fallback = "",
+                    quiet = true,
+                )
+                return
+            }
+        }
+    }
+
+    /** 记录时附上现在的状况：服务在不在、通知能不能发。 */
+    private fun diag(context: Context): String = buildString {
+        if (!com.zongkong.app.guard.GuardService.running && System.currentTimeMillis() - context.zk.store.heartbeat > 90_000) append("（无障碍服务没在运行）")
+        if (!Notifications.canPost(context)) append("（通知被关了）")
     }
 
     /** 下一个要叫醒手机的时刻（给系统闹钟兜底）。 */

@@ -24,7 +24,7 @@ import java.time.ZoneId
 enum class HqStep(val seal: String, val title: String, val dept: Dept?, val minMinutes: Int, val hint: String) {
     SETTLE("静", "静一下", null, 1, "放下手里的事。接下来这段时间只做一件事：把四个部门修一遍。"),
     INFO("收", "清收集箱", Dept.INFO, 3, "一条一条过：挂到事项、变成行动、转成问题，或者先放着。脑子里还有什么，也倒出来。"),
-    THINK("谋", "想透一件", Dept.THINK, 8, "挑一件卡着的事，和参谋来回追问：初判、最强的反驳、修正、下一步。憋也要憋出一个判断。"),
+    THINK("谋", "想透一件", Dept.THINK, 8, "挑一件卡着的事，和总控来回追问：初判、最强的反驳、修正、下一步。憋也要憋出一个判断。"),
     PLAN("筹", "定明天", Dept.PLAN, 3, "明天只推一样：定主线、定时间、定做到什么算完。看一眼本周计划。"),
     ACT("行", "对账", Dept.ACT, 2, "今天一手练了多少、娱乐多久、被弹回几次、哪些提醒被你忽略了。定一条明天的约束。"),
     SEAL("封", "封存", Dept.HQ, 1, "总结三行，盖章，解锁。"),
@@ -35,7 +35,7 @@ enum class HqTrigger(val label: String) {
     SCHEDULED("每日总控时间"),
     MANUAL("自己进入"),
     ESCALATION("失联太久，强制进入"),
-    AGENT("参谋发起"),
+    AGENT("总控发起"),
 }
 
 @Serializable
@@ -109,7 +109,7 @@ object Hq {
     /** 失联阶梯：几天没交流算几级。 */
     enum class Absence(val days: Int, val label: String) {
         NONE(0, "正常"),
-        NUDGE(1, "一天没交流：参谋主动找你"),
+        NUDGE(1, "一天没交流：总控主动找你"),
         STRICT(2, "两天没交流：严管到你回来"),
         FORCE(3, "三天没交流：下次打开别的应用直接进总控时间"),
     }
@@ -134,10 +134,14 @@ object Hq {
     /** 今天（逻辑日）总控时间的开始时刻。 */
     fun todayStart(cfg: HqConfig, now: Long, zone: ZoneId): Long = DayClock.at(DayClock.date(now, zone), cfg.at, zone)
 
-    /** 今天已经做过（不管提前退出没有）。 */
-    fun doneToday(sessions: List<HqSession>, now: Long, zone: ZoneId): Boolean {
+    /**
+     * 今天这一次（定时的那次）已经做过了：到点前 3 小时以内开始、已经结束的一段（提前退出也算，免得退出后又被拉回去）。
+     * 下午自己点进去试一下的那次不算——不然晚上到点就不叫了。
+     */
+    fun doneToday(cfg: HqConfig, sessions: List<HqSession>, now: Long, zone: ZoneId): Boolean {
         val today = DayClock.dateKey(now, zone)
-        return sessions.any { DayClock.dateKey(it.startedAt, zone) == today && !it.active }
+        val from = todayStart(cfg, now, zone) - 3 * 60 * 60_000L
+        return sessions.any { DayClock.dateKey(it.startedAt, zone) == today && !it.active && it.startedAt >= from }
     }
 
     enum class Due { NONE, SOON, NOW, OVERDUE }
@@ -150,7 +154,7 @@ object Hq {
     fun due(cfg: HqConfig, sessions: List<HqSession>, now: Long, zone: ZoneId): Due {
         if (!cfg.enabled) return Due.NONE
         if (sessions.any { it.active }) return Due.NONE
-        if (doneToday(sessions, now, zone)) return Due.NONE
+        if (doneToday(cfg, sessions, now, zone)) return Due.NONE
         val start = todayStart(cfg, now, zone)
         return when {
             now < start - 10 * 60_000 -> Due.NONE

@@ -67,6 +67,8 @@ route results;            shot 04b-results
 route depts;              shot 05-depts
 route settings;           shot 06-settings
 route settings/perm;      shot 07-perm
+route dossier;            shot 07b-dossier
+route chat;               shot 07c-chat
 
 launch_target
 shot 08-blocked

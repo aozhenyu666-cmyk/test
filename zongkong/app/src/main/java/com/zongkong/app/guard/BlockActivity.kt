@@ -211,9 +211,9 @@ private fun StrictBody(
                 }
                 is Reason.Absent -> Panel(accent = sig.strict, onClick = { openRoute("chat") }) {
                     Text("已经 ${r.days} 天没和总控交流了", style = MaterialTheme.typography.titleMedium)
-                    Hint("跟参谋说几句、或者进一次总控时间，就放行。")
+                    Hint("跟总控说几句、或者进一次总控时间，就放行。")
                     Button(onClick = { openRoute("hq") }, modifier = Modifier.fillMaxWidth()) { Text("进入总控时间") }
-                    OutlinedButton(onClick = { openRoute("chat") }, modifier = Modifier.fillMaxWidth()) { Text("跟参谋说几句") }
+                    OutlinedButton(onClick = { openRoute("chat") }, modifier = Modifier.fillMaxWidth()) { Text("跟总控说几句") }
                 }
                 is Reason.Quota -> Panel(accent = sig.strict) {
                     Text("今天的娱乐额度用完了", style = MaterialTheme.typography.titleMedium)

@@ -206,7 +206,7 @@ fun PlanWizard(nav: NavHostController) {
                 if (newThread.isNotBlank()) BigButton("下一步", {
                     existing = null; title = ""; criteria = ""; step = 1
                 }, color = sig.plan)
-                TextButton(onClick = { app.chatDraft = "帮我挑一下今天最要紧的一件事，并排好第一步。"; nav.navigate("chat") }) { Text("拿不准？让参谋帮你挑", color = sig.ai) }
+                TextButton(onClick = { app.chatDraft = "帮我挑一下今天最要紧的一件事，并排好第一步。"; nav.navigate("chat") }) { Text("拿不准？让总控帮你挑", color = sig.ai) }
             }
             1 -> {
                 Question("第一步做什么？", "要具体到坐下就能开始。动词开头：打开、写、列、读、打电话……")
@@ -506,7 +506,7 @@ fun StuckPick(nav: NavHostController) {
                 Hint("没有待做的行动。不是卡在某一步，而是不知道该干什么？")
                 BigButton("跟着向导排一件", { nav.navigate("wizard/plan") })
             }
-            TextButton(onClick = { app.chatDraft = "我卡住了，不知道从哪下手。"; nav.navigate("chat") }) { Text("说不清？跟参谋聊聊", color = sig.ai) }
+            TextButton(onClick = { app.chatDraft = "我卡住了，不知道从哪下手。"; nav.navigate("chat") }) { Text("说不清？跟总控聊聊", color = sig.ai) }
         }
     }
 }

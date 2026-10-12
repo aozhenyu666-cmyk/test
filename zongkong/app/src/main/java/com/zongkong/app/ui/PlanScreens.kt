@@ -103,7 +103,7 @@ fun PlanScreen(nav: NavHostController) {
             if (draft != null) {
                 Panel(accent = if (draft.by == "参谋") sig.ai else sig.plan, modifier = Modifier.enter(0).testTag("plan-draft")) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(if (draft.by == "参谋") "参谋起草了一份计划" else "你的草稿", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        Text(if (draft.by == "参谋") "总控起草了一份计划" else "你的草稿", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                         Tag(weekLabel(draft.weekStart), sig.plan)
                     }
                     PlanBody(draft, showChecks = false)
@@ -130,7 +130,7 @@ fun PlanScreen(nav: NavHostController) {
                     OutlinedButton(onClick = {
                         app.chatDraft = "进入计划模式：帮我起草这周的计划。先看看我手上的事，问我一两个选择题就起草。"
                         nav.navigate("chat")
-                    }, modifier = Modifier.fillMaxWidth().enter(3)) { Text("让参谋起草，我只管点头") }
+                    }, modifier = Modifier.fillMaxWidth().enter(3)) { Text("让总控起草，我只管点头") }
                     PlanWhy(Modifier.enter(4))
                 }
                 next?.let { n ->
@@ -443,7 +443,7 @@ fun PlanModeWizard(nav: NavHostController) {
                         TextButton(onClick = {
                             app.chatDraft = "进入计划模式：帮我起草${if (sunday) "下周" else "这周"}的计划。"
                             nav.navigate("chat")
-                        }) { Text("不想自己选？让参谋起草", color = sig.ai) }
+                        }) { Text("不想自己选？让总控起草", color = sig.ai) }
                     }
                     1 -> {
                         Text("这周往哪几个方向走？", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.enter(0))
@@ -532,7 +532,7 @@ fun PlanModeWizard(nav: NavHostController) {
                     }
                     4 -> {
                         Text("这周最可能在哪卡住？", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.enter(0))
-                        Text("选 1–2 个，配一个对策。到时候参谋和总控会按这个提醒你。", style = MaterialTheme.typography.bodyMedium, color = sig.muted, modifier = Modifier.enter(1))
+                        Text("选 1–2 个，配一个对策。到时候总控会按这个提醒你。", style = MaterialTheme.typography.bodyMedium, color = sig.muted, modifier = Modifier.enter(1))
                         Plans.COMMON_TRAPS.forEachIndexed { i, (trap, responses) ->
                             val chosen = ifThens.firstOrNull { it.trigger == trap }
                             ChoiceCard(trap, chosen?.let { "就：${it.response}" } ?: "", selected = chosen != null, color = sig.plan, modifier = Modifier.enter(2 + i)) {

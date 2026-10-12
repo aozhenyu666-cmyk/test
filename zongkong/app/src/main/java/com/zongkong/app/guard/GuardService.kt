@@ -33,9 +33,26 @@ class GuardService : AccessibilityService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val store get() = zk.store
 
-    /** 当前前台应用和它切到前台的时刻。 */
+    /** 当前前台应用和它切到前台的时刻（fgSince 每次记娱乐时长后重置；fgStartedAt 是这一段真正开始的时刻）。 */
     private var fgPkg: String? = null
     private var fgSince = 0L
+    private var fgStartedAt = 0L
+    private var lastShot = 0L
+
+    /** 亮屏熄屏：记进时间线（总控对账用）。 */
+    private val screenReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: Intent) {
+            val now = System.currentTimeMillis()
+            when (intent.action) {
+                Intent.ACTION_SCREEN_OFF -> {
+                    accountPlay(now)
+                    store.logSwitch(now, com.zongkong.core.boss.Timeline.OFF)
+                }
+                Intent.ACTION_SCREEN_ON -> store.logSwitch(now, fgPkg ?: com.zongkong.core.boss.Timeline.ON)
+            }
+            fgStartedAt = now
+        }
+    }
     private var lastBounce = 0L
     private var lastStatusText = ""
     private var lastSync = 0L
@@ -52,6 +69,17 @@ class GuardService : AccessibilityService() {
         if (hb > 0 && now - hb > OFFLINE_THRESHOLD) {
             // 上次心跳到现在，总控没有在运行
             store.updateToday(now) { DayOps.offline(it, hb, now) }
+        }
+        // 时间线：上次心跳之后到现在总控没在看，记成“没有记录”
+        if (hb > 0 && now - hb > 2 * TICK_MILLIS) store.logSwitch(hb, com.zongkong.core.boss.Timeline.GAP)
+        store.logSwitch(now, if (interactive()) com.zongkong.core.boss.Timeline.ON else com.zongkong.core.boss.Timeline.OFF)
+        try {
+            registerReceiver(screenReceiver, android.content.IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_SCREEN_ON)
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "注册亮屏广播失败", e)
         }
         store.heartbeat = now
         lastStatusText = ""
@@ -79,6 +107,8 @@ class GuardService : AccessibilityService() {
             if (fgPkg == packageName && pkg != packageName && store.work.value.session != null) zk.actions.work.left()
             fgPkg = pkg
             fgSince = now
+            fgStartedAt = now
+            store.logSwitch(now, pkg)
         }
         if (lockdown(pkg, now)) return
         enforce(pkg, now)
@@ -177,6 +207,7 @@ class GuardService : AccessibilityService() {
         com.zongkong.app.system.Buzz.tick(this)
         // 总控时间刚开始时你正停在别的应用里：也拉回来
         fgPkg?.let { if (store.hq.value.active != null) lockdown(it, now) }
+        watch(now)
         val text = Engine.summary(status)
         val title = "总控 · ${status.headline}"
         if ("$title|$text" != lastStatusText) {
@@ -204,6 +235,74 @@ class GuardService : AccessibilityService() {
                     Log.w(TAG, "自动验收失败", e)
                 }
             }
+        }
+    }
+
+    /**
+     * 总控者的眼睛：连续娱乐太久就找你；开了截图抽查就不定时截一张。
+     */
+    private fun watch(now: Long) {
+        val boss = store.config.value.boss
+        val pkg = fgPkg ?: return
+        if (!interactive() || pkg == packageName || pkg in overlays()) return
+        if (store.firstAlert("prune")) store.prune(now)
+        // 连续娱乐
+        val minutes = (now - fgStartedAt) / 60_000
+        if (boss.bingeMinutes > 0 && pkg in store.config.value.blocked && fgStartedAt > 0 && minutes >= boss.bingeMinutes &&
+            store.firstAlert("binge:$fgStartedAt")
+        ) {
+            snap(pkg, now, force = true)
+            val name = com.zongkong.app.data.AppNames.label(this, pkg)
+            zk.chat.proactive(
+                "binge",
+                "[触发·连续娱乐] 用户已经连续用「$name」$minutes 分钟（${com.zongkong.core.boss.Timeline.hm(fgStartedAt, store.zone)} 开始）。" +
+                    "先看 device_timeline（最近 2 小时）和档案里今天的主线、约定，再找用户：说出你看到的数字，问一个问题，" +
+                    "最后给【选项】现在去做主线｜再 10 分钟就停｜进总控时间。用户选“再 10 分钟”就用 commit 记成约定。",
+                fallback = "「$name」已经连续 $minutes 分钟了。现在停下，回到主线。",
+            )
+            com.zongkong.app.system.Buzz.once(this, com.zongkong.app.system.Buzz.Level.FIRM)
+        }
+        // 截图抽查：平均每小时 shotsPerHour 张
+        if (boss.shots && boss.shotsPerHour > 0 && kotlin.random.Random.nextDouble() < boss.shotsPerHour * TICK_MILLIS / 3_600_000.0) snap(pkg, now)
+    }
+
+    /** 截一张屏（Android 11 起，无障碍服务可以截图）。只存在手机上；电话、总控自己不截。 */
+    private fun snap(pkg: String, now: Long, force: Boolean = false) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return
+        if (!store.config.value.boss.shots) return
+        if (pkg in com.zongkong.core.hq.ALWAYS_ALLOWED || pkg == packageName) return
+        if (!force && now - lastShot < 5 * 60_000) return
+        if (now - lastShot < 2_000) return
+        lastShot = now
+        try {
+            takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor, object : AccessibilityService.TakeScreenshotCallback {
+                override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
+                    val hb = result.hardwareBuffer
+                    val bmp = try {
+                        android.graphics.Bitmap.wrapHardwareBuffer(hb, result.colorSpace)?.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
+                    } catch (e: Exception) {
+                        null
+                    } finally {
+                        hb.close()
+                    }
+                    bmp ?: return
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            val w = 720
+                            val small = if (bmp.width > w) android.graphics.Bitmap.createScaledBitmap(bmp, w, bmp.height * w / bmp.width, true) else bmp
+                            java.io.File(store.shotsDir, "${now}_$pkg.jpg").outputStream().use { small.compress(android.graphics.Bitmap.CompressFormat.JPEG, 60, it) }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "存截图失败", e)
+                        }
+                    }
+                }
+
+                override fun onFailure(errorCode: Int) {
+                    Log.w(TAG, "截图失败：$errorCode")
+                }
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "截图失败", e)
         }
     }
 
@@ -265,6 +364,10 @@ class GuardService : AccessibilityService() {
 
     override fun onDestroy() {
         offline()
+        try {
+            unregisterReceiver(screenReceiver)
+        } catch (_: Exception) {
+        }
         scope.cancel()
         super.onDestroy()
     }
@@ -273,6 +376,7 @@ class GuardService : AccessibilityService() {
         if (!running) return
         running = false
         accountPlay(System.currentTimeMillis())
+        store.logSwitch(System.currentTimeMillis(), com.zongkong.core.boss.Timeline.GAP)
         Notifications.showStatus(this, "总控已离线", "无障碍服务被关闭了。离线的时间会记成“失联”，写进日终验收。")
     }
 

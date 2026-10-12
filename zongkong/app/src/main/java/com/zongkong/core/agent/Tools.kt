@@ -8,6 +8,11 @@ import com.zongkong.core.Gate
 import com.zongkong.core.Policy
 import com.zongkong.core.Shortcut
 import com.zongkong.core.Status
+import com.zongkong.core.boss.Boss
+import com.zongkong.core.boss.ClaimVerdict
+import com.zongkong.core.boss.CommitStatus
+import com.zongkong.core.boss.Stance
+import com.zongkong.core.boss.Timeline
 import com.zongkong.core.VerifyMode
 import com.zongkong.core.work.ActionStatus
 import com.zongkong.core.work.F
@@ -91,6 +96,19 @@ interface AgentEnv {
 
     /** 进入总控时间（参谋觉得你该停下来修一修了）。 */
     fun startHq(minutes: Int): String = "这个环境进不了总控时间"
+
+    // ---------- 总控者：档案和眼睛 ----------
+
+    fun dossier(): com.zongkong.core.boss.Dossier = com.zongkong.core.boss.Dossier()
+    fun updateDossier(f: (com.zongkong.core.boss.Dossier) -> com.zongkong.core.boss.Dossier): com.zongkong.core.boss.Dossier = dossier()
+    fun hqSessions(): List<com.zongkong.core.hq.HqSession> = emptyList()
+    /** [from, to] 的设备事件（含 from 之前最后一条）。 */
+    fun deviceEvents(from: Long, to: Long): List<com.zongkong.core.boss.DevEvent> = emptyList()
+    /** 现在能看到什么（使用情况授权、截图抽查开没开），写给总控看。 */
+    fun sensors(): String = ""
+    fun screenshots(from: Long, to: Long): List<com.zongkong.core.boss.Shot> = emptyList()
+    /** 让识图模型看一张图，回答 [question]。 */
+    suspend fun describeImage(path: String, question: String): String = "这个环境看不了图"
 
     /** 让一手现在开一局陪练窗口。 */
     suspend fun startYishouWindow(): String = "这个环境开不了一手的窗口"
@@ -291,6 +309,72 @@ class ZkTools(private val env: AgentEnv) {
             "start_hq_session", "让他马上进入总控时间：手机只剩总控和白名单应用，按“静→收→谋→筹→行→封”把四个部门修一遍。他明显在逃避、失联、混乱时用。",
             listOf(Param("minutes", "integer", "多长（15–90 分钟，默认按设置）")),
         ),
+        ToolSpec(
+            "device_timeline", "看一段时间里手机在干什么：亮屏 / 熄屏多久、每个应用多久、娱乐合计、最长连续一段、流水。核实“我在做 X”之类的说法时先调这个。",
+            listOf(
+                Param("from", "string", "开始：14:00 / 昨天 22:30 / 下午3点 / 3小时前；不填 = 3 小时前"),
+                Param("to", "string", "结束，同上；不填 = 现在"),
+            ),
+        ),
+        ToolSpec("app_usage", "某一天各应用用了多久（逻辑日，凌晨 4 点换天）。", listOf(Param("day", "string", "哪天", choices = listOf("今天", "昨天")))),
+        ToolSpec(
+            "list_screenshots", "列出一段时间里的抽查截图（时间、当时的应用、编号）。截图抽查要用户在设置里开。",
+            listOf(Param("from", "string", "开始，写法同 device_timeline；不填 = 3 小时前"), Param("to", "string", "结束；不填 = 现在")),
+        ),
+        ToolSpec(
+            "look_at_screenshot", "让识图模型看一张抽查截图，回答你的问题（例：他在看什么内容？是学习还是娱乐？）。",
+            listOf(Param("id", "string", "截图编号", required = true), Param("question", "string", "想知道什么", required = true)),
+        ),
+        ToolSpec(
+            "record_claim", "记下用户的一个说法（要核实的：做了什么、做了多久、为什么没做、要什么豁免）。先记，再取证。",
+            listOf(
+                Param("text", "string", "原话，或忠实的概括", required = true),
+                Param("from", "string", "说的是哪段时间的开始（可空）"),
+                Param("to", "string", "结束（可空）"),
+                Param("verdict", "string", "已经能判就直接判；否则不填（待查）", choices = ClaimVerdict.entries.filter { it != ClaimVerdict.PENDING }.map { it.label }),
+                Param("evidence", "string", "依据"),
+            ),
+        ),
+        ToolSpec(
+            "judge_claim", "给一条说法下结论。判“属实”必须写依据；已判的结论只能改得更差，不能改好。",
+            listOf(
+                Param("id", "string", "陈述编号", required = true),
+                Param("verdict", "string", "结论", required = true, choices = ClaimVerdict.entries.filter { it != ClaimVerdict.PENDING }.map { it.label }),
+                Param("evidence", "string", "依据：时间线里的数字、截图、照片、产出", required = true),
+            ),
+        ),
+        ToolSpec(
+            "commit", "记一条约定：用户答应做什么、几点前、怎么检查。到点后 5 分钟你会被叫醒回访。",
+            listOf(
+                Param("what", "string", "做什么，具体", required = true),
+                Param("due", "string", "几点前：今晚 22:00 / 明天 9:00 / 30分钟后 / 2小时后", required = true),
+                Param("check", "string", "怎么检查：看时间线、拍照、看一手组数、看行动记录……", required = true),
+            ),
+        ),
+        ToolSpec(
+            "resolve_commitment", "给约定下结论。做到了要写依据；免掉要写理由，七天最多一次，严格态度下不能免。",
+            listOf(
+                Param("id", "string", "约定编号", required = true),
+                Param("status", "string", "结论", required = true, choices = listOf(CommitStatus.KEPT.label, CommitStatus.BROKEN.label, CommitStatus.EXCUSED.label)),
+                Param("note", "string", "依据或理由", required = true),
+            ),
+        ),
+        ToolSpec(
+            "schedule_check", "给自己排一次回访：到点你会被叫醒，带着这件事去查证据、找用户。用来预判高危时段、追踪说过的话。",
+            listOf(
+                Param("at", "string", "什么时候：今晚 22:00 / 明天 9:00 / 40分钟后", required = true),
+                Param("about", "string", "到时候查什么、问什么", required = true),
+            ),
+        ),
+        ToolSpec(
+            "escalate", "把自己的态度收紧一段时间（只能更严）。信用没到但你判断需要时用，要写原因并告诉用户。",
+            listOf(
+                Param("stance", "string", "收紧到", required = true, choices = listOf(Stance.WARY.label, Stance.STRICT.label)),
+                Param("hours", "integer", "多少小时（1–168）", required = true),
+                Param("reason", "string", "为什么", required = true),
+            ),
+        ),
+        ToolSpec("get_dossier", "看档案：信用分的每一笔、态度、全部未结约定、最近的陈述和判定、排了的回访。"),
         ToolSpec("sync_notion", "现在和 Notion 同步一次（拉 GPT 写进去的、推总控改过的）。"),
         ToolSpec(
             "remember", "记住一条关于他的长期事实或偏好（例：晚上 10 点后效率低；周三下午有课），以后每次对话都会带上。",
@@ -331,6 +415,17 @@ class ZkTools(private val env: AgentEnv) {
                 "complete_outcome" -> completeOutcome(a)
                 "revise_plan" -> revisePlan(a)
                 "start_hq_session" -> env.startHq(a.i("minutes") ?: env.config().hq.minutes).let { ToolResult(it, "进入总控时间", route = "hq") }
+                "device_timeline" -> deviceTimeline(a)
+                "app_usage" -> appUsage(a)
+                "list_screenshots" -> listShots(a)
+                "look_at_screenshot" -> lookShot(a)
+                "record_claim" -> recordClaim(a)
+                "judge_claim" -> judgeClaim(a)
+                "commit" -> commit(a)
+                "resolve_commitment" -> resolveCommitment(a)
+                "schedule_check" -> scheduleCheck(a)
+                "escalate" -> escalate(a)
+                "get_dossier" -> ToolResult(dossierText(), "看了档案")
                 "sync_notion" -> env.sync().let { ToolResult(it, it) }
                 "remember" -> a.s("fact").takeIf { it.isNotBlank() }?.let { env.remember(it); ToolResult("记住了：$it", "记住：$it") } ?: ToolResult.fail("fact 不能空")
                 "forget" -> if (env.forget(a.s("fact"))) ToolResult("删掉了", "不再记：${a.s("fact")}") else ToolResult.fail("没找到这条")
@@ -339,6 +434,143 @@ class ZkTools(private val env: AgentEnv) {
         } catch (e: Exception) {
             ToolResult.fail("${name} 出错：${e.message ?: e.javaClass.simpleName}")
         }
+    }
+
+    // ---------- 总控者 ----------
+
+    private fun newId(prefix: String) = prefix + (env.now() / 1000).toString(36).takeLast(4) + env.rnd.nextInt(36 * 36).toString(36).padStart(2, '0')
+
+    /** 读一段时间：from / to 都可空。 */
+    private fun range(a: Args, defaultHours: Int = 3): Pair<Long, Long>? {
+        val now = env.now()
+        val to = a.opt("to")?.let { Boss.clock(it, now, env.zone) ?: return null } ?: now
+        val from = a.opt("from")?.let { Boss.clock(it, now, env.zone) ?: return null } ?: (to - defaultHours * 3600_000L)
+        return if (from < to) from to minOf(to, now) else null
+    }
+
+    private fun timelineText(from: Long, to: Long): String {
+        val cfg = env.config()
+        val segs = Timeline.segments(env.deviceEvents(from, to), from, to)
+        return Timeline.summarize(segs, from, to, env.zone, { env.appLabel(it) }, { it in cfg.blocked })
+    }
+
+    private fun deviceTimeline(a: Args): ToolResult {
+        val (from, to) = range(a) ?: return ToolResult.fail("时间写法认不出：from=${a.s("from")} to=${a.s("to")}（例：14:00、昨天 22:30、3小时前）")
+        if (to - from > 3 * 86_400_000L) return ToolResult.fail("一次最多看 3 天")
+        return ToolResult(timelineText(from, to), "看了 ${Timeline.hm(from, env.zone)}–${Timeline.hm(to, env.zone)} 的手机记录")
+    }
+
+    private fun appUsage(a: Args): ToolResult {
+        val now = env.now()
+        val date = DayClock.date(now, env.zone).minusDays(if (a.s("day") == "昨天") 1 else 0)
+        val from = DayClock.startOf(date, env.zone)
+        val to = minOf(now, from + 86_400_000L)
+        return ToolResult(timelineText(from, to), "看了${a.s("day").ifBlank { "今天" }}的应用时长")
+    }
+
+    private fun listShots(a: Args): ToolResult {
+        val (from, to) = range(a) ?: return ToolResult.fail("时间写法认不出")
+        val list = env.screenshots(from, to)
+        if (list.isEmpty()) return ToolResult("这段时间没有抽查截图（截图抽查${if (env.config().boss.shots) "开着，但这段时间没截到" else "没开"}）", "没有截图")
+        return ToolResult(list.takeLast(30).joinToString("\n") { "${it.id}｜${Timeline.hm(it.at, env.zone)}｜${env.appLabel(it.pkg)}" }, "列了 ${list.size} 张截图")
+    }
+
+    private suspend fun lookShot(a: Args): ToolResult {
+        val id = a.s("id")
+        val shot = env.screenshots(0, env.now()).firstOrNull { it.id == id } ?: return ToolResult.fail("没有这张截图：$id")
+        val text = env.describeImage(shot.path, a.s("question").ifBlank { "这个人在手机上做什么？" })
+        return ToolResult("截图 $id（${Timeline.hm(shot.at, env.zone)}，${env.appLabel(shot.pkg)}）：$text", "看了一张截图")
+    }
+
+    private fun verdictOf(label: String) = ClaimVerdict.entries.firstOrNull { it.label == label.trim() }
+
+    private fun recordClaim(a: Args): ToolResult {
+        val text = a.s("text").ifBlank { return ToolResult.fail("text 不能空") }
+        val now = env.now()
+        val from = a.opt("from")?.let { Boss.clock(it, now, env.zone) } ?: 0L
+        val to = a.opt("to")?.let { Boss.clock(it, now, env.zone) } ?: if (from > 0) now else 0L
+        val verdict = a.opt("verdict")?.let { verdictOf(it) ?: return ToolResult.fail("没有这种结论：$it") } ?: ClaimVerdict.PENDING
+        if (verdict == ClaimVerdict.VERIFIED && a.s("evidence").length < 6) return ToolResult.fail("判“属实”要写依据")
+        val id = newId("s")
+        env.updateDossier { Boss.addClaim(it, id, text, from, to, verdict, a.s("evidence"), now) }
+        return ToolResult("记下陈述 $id（${verdict.label}）" + if (from > 0) "，时间段 ${Timeline.hm(from, env.zone)}–${Timeline.hm(to, env.zone)}" else "", "记下说法：${text.take(20)}（${verdict.label}）")
+    }
+
+    private fun judgeClaim(a: Args): ToolResult {
+        val v = verdictOf(a.s("verdict")) ?: return ToolResult.fail("没有这种结论：${a.s("verdict")}")
+        var err: String? = null
+        env.updateDossier { d -> Boss.judge(d, a.s("id"), v, a.s("evidence"), env.now()).getOrElse { e -> err = e.message; d } }
+        err?.let { return ToolResult.fail(it) }
+        val d = env.dossier()
+        return ToolResult("判定：${v.label}。信用现在 ${Boss.credibility(d, env.hqSessions(), env.now())}，态度 ${Boss.stance(d, env.hqSessions(), env.now()).label}", "判定说法：${v.label}")
+    }
+
+    /** 约定、回访的时间：“30分钟后”“2小时后”或者中文时间。 */
+    private fun dueOf(text: String): Long? {
+        val now = env.now()
+        Regex("""(\d+(?:\.\d+)?)\s*(小时|分钟)后""").find(text)?.let { m ->
+            val n = m.groupValues[1].toDouble()
+            return now + (if (m.groupValues[2] == "小时") n * 3600_000 else n * 60_000).toLong()
+        }
+        val plan = TimeParse.parse(text, now, env.zone) ?: return null
+        // “今晚 22:00”就是 22:00；“20:00-21:00”取结束；只有日期取那天结束
+        return if (plan.end.contains('T') || !plan.hasTime) TimeParse.endMillis(plan, env.zone) else TimeParse.startMillis(plan, env.zone)
+    }
+
+    private fun commit(a: Args): ToolResult {
+        val what = a.s("what").ifBlank { return ToolResult.fail("what 不能空") }
+        val due = dueOf(a.s("due")) ?: return ToolResult.fail("时间认不出：${a.s("due")}")
+        if (due <= env.now()) return ToolResult.fail("截止时间已经过了")
+        val id = newId("y")
+        env.updateDossier { Boss.commit(it, id, what, due, a.s("check"), env.now()) }
+        return ToolResult("记下约定 $id：$what，${Timeline.hm(due, env.zone)} 前；到点后 5 分钟回访", "约定：$what（${Timeline.hm(due, env.zone)} 前）")
+    }
+
+    private fun resolveCommitment(a: Args): ToolResult {
+        val st = CommitStatus.entries.firstOrNull { it.label == a.s("status") } ?: return ToolResult.fail("没有这种结论：${a.s("status")}")
+        val now = env.now()
+        val stance = Boss.stance(env.dossier(), env.hqSessions(), now)
+        var err: String? = null
+        env.updateDossier { d -> Boss.resolve(d, a.s("id"), st, a.s("note"), stance, now).getOrElse { e -> err = e.message; d } }
+        err?.let { return ToolResult.fail(it) }
+        return ToolResult("约定 ${a.s("id")}：${st.label}。信用现在 ${Boss.credibility(env.dossier(), env.hqSessions(), now)}", "约定${st.label}")
+    }
+
+    private fun scheduleCheck(a: Args): ToolResult {
+        val due = dueOf(a.s("at")) ?: return ToolResult.fail("时间认不出：${a.s("at")}")
+        if (due <= env.now()) return ToolResult.fail("时间已经过了")
+        val about = a.s("about").ifBlank { return ToolResult.fail("about 不能空") }
+        env.updateDossier { Boss.schedule(it, newId("k"), due, about, env.now()) }
+        return ToolResult("排了回访：${Timeline.hm(due, env.zone)}，$about", "排回访 ${Timeline.hm(due, env.zone)}")
+    }
+
+    private fun escalate(a: Args): ToolResult {
+        val to = Stance.entries.firstOrNull { it.label == a.s("stance") } ?: return ToolResult.fail("没有这种态度：${a.s("stance")}")
+        val now = env.now()
+        val cur = Boss.stance(env.dossier(), env.hqSessions(), now)
+        var err: String? = null
+        env.updateDossier { d -> Boss.escalate(d, to, a.i("hours") ?: 24, a.s("reason"), cur, now).getOrElse { e -> err = e.message; d } }
+        err?.let { return ToolResult.fail(it) }
+        return ToolResult("态度收紧到“${to.label}”，${a.i("hours") ?: 24} 小时", "态度收紧：${to.label}")
+    }
+
+    private fun dossierText(): String {
+        val d = env.dossier()
+        val now = env.now()
+        val sessions = env.hqSessions()
+        return buildString {
+            append(Boss.brief(d, sessions, now, env.zone))
+            val items = Boss.ledger(d, sessions, now)
+            if (items.isNotEmpty()) {
+                append("信用明细（起点 ${Boss.BASE}，近 ${Boss.WINDOW_DAYS} 天）：\n")
+                items.takeLast(20).forEach { append("· ${if (it.delta > 0) "+" else ""}${it.delta} ${it.why}\n") }
+            }
+            val closed = d.commitments.filter { it.status != CommitStatus.OPEN }.takeLast(8)
+            if (closed.isNotEmpty()) {
+                append("最近结了的约定：\n")
+                closed.forEach { append("· [${it.id}] ${it.what}｜${it.status.label}｜${it.note.take(60)}\n") }
+            }
+        }.trimEnd()
     }
 
     // ---------- 找东西 ----------

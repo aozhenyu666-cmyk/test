@@ -50,7 +50,12 @@ class FakeEnv(var nowMs: Long = ZonedDateTime.of(2026, 10, 11, 9, 30, 0, 0, Zone
     override fun remember(fact: String) { mem += fact }
     override fun forget(fact: String) = mem.removeIf { it.contains(fact) }
     override fun resolveApp(name: String) = mapOf("抖音" to "com.ss.android.ugc.aweme", "B站" to "tv.danmaku.bili")[name] ?: name.takeIf { '.' in it }
-    override fun appLabel(pkg: String) = pkg
+    override fun appLabel(pkg: String) = mapOf("com.ss.android.ugc.aweme" to "抖音", "com.tencent.mm" to "微信")[pkg] ?: pkg
+    var dossier = com.zongkong.core.boss.Dossier()
+    val events = mutableListOf<com.zongkong.core.boss.DevEvent>()
+    override fun dossier() = dossier
+    override fun updateDossier(f: (com.zongkong.core.boss.Dossier) -> com.zongkong.core.boss.Dossier) = f(dossier).also { dossier = it }
+    override fun deviceEvents(from: Long, to: Long) = events.toList()
 }
 
 /** 按顺序回放的假模型。记下每次收到的消息，方便检查上下文。 */
@@ -333,5 +338,73 @@ class AgentTest {
         assertTrue(text, text.contains(a.key))
         assertTrue(text.contains("id=plan_morning"))
         assertNotNull(Snapshot.brief(env))
+    }
+
+    /**
+     * 总控者核实一个说法：用户说下午做了 5 小时饭 → 记陈述 → 查时间线（抖音 2 小时多）→ 判“对不上” → 记约定。
+     * 判“属实”没依据会被代码拦下；已判的结论不能改好。
+     */
+    @Test
+    fun interrogatesClaimAgainstTimeline() = runTest {
+        val env = FakeEnv(ZonedDateTime.of(2026, 10, 11, 19, 30, 0, 0, ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli())
+        env.cfg = env.cfg.copy(blocked = setOf("com.ss.android.ugc.aweme"))
+        fun t(h: Int, m: Int) = ZonedDateTime.of(2026, 10, 11, h, m, 0, 0, env.zone).toInstant().toEpochMilli()
+        env.events += listOf(
+            com.zongkong.core.boss.DevEvent(t(13, 50), "-"),
+            com.zongkong.core.boss.DevEvent(t(14, 30), "com.ss.android.ugc.aweme"),
+            com.zongkong.core.boss.DevEvent(t(16, 40), "com.tencent.mm"),
+            com.zongkong.core.boss.DevEvent(t(17, 0), "-"),
+        )
+        val agent = Agent(Scripted(), env)
+        val first = agent.tools.run("record_claim", """{"text":"下午做了 5 小时饭","from":"14:00","to":"19:00"}""")
+        assertTrue(first.text, first.ok)
+        val id = env.dossier.claims.single().id
+        assertEquals(com.zongkong.core.boss.ClaimVerdict.PENDING, env.dossier.claims.single().verdict)
+        assertEquals(t(14, 0), env.dossier.claims.single().from)
+
+        val tl = agent.tools.run("device_timeline", """{"from":"14:00","to":"19:00"}""")
+        assertTrue(tl.text, tl.text.contains("抖音 2 小时 10 分〔娱乐〕"))
+        assertTrue(tl.text, tl.text.contains("娱乐合计 2 小时 10 分"))
+        assertTrue(tl.text, tl.text.contains("最长连续：抖音 14:30–16:40"))
+
+        val noEvidence = agent.tools.run("judge_claim", """{"id":"$id","verdict":"属实","evidence":""}""")
+        assertFalse(noEvidence.ok)
+        val judged = agent.tools.run("judge_claim", """{"id":"$id","verdict":"对不上","evidence":"14:30–16:40 抖音 2 小时 10 分"}""")
+        assertTrue(judged.text, judged.ok)
+        assertTrue(judged.text, judged.text.contains("信用现在 58"))
+        // 判过“对不上”，求情也改不回“属实”
+        val upgrade = agent.tools.run("judge_claim", """{"id":"$id","verdict":"属实","evidence":"他说其实在等锅"}""")
+        assertFalse(upgrade.ok)
+
+        val c = agent.tools.run("commit", """{"what":"做饭前报一句做什么、几点结束","due":"今晚 22:00","check":"看对话记录"}""")
+        assertTrue(c.text, c.ok)
+        val y = env.dossier.commitments.single()
+        assertEquals(t(22, 0), y.due)
+        assertEquals(t(22, 5), env.dossier.checks.single().due)
+
+        // 系统提示里有宪章和档案
+        val sys = agent.systemPrompt()
+        assertTrue(sys.contains(com.zongkong.core.boss.Charter.VERSION))
+        assertTrue(sys, sys.contains("信用 58 / 100 → 态度：审慎"))
+        assertTrue(sys.contains(y.id))
+    }
+
+    @Test
+    fun escalateOnlyTightensAndExcusesAreLimited() = runTest {
+        val env = FakeEnv()
+        val tools = ZkTools(env)
+        assertTrue(tools.run("escalate", """{"stance":"严格","hours":24,"reason":"连续三天对不上"}""").ok)
+        assertEquals(com.zongkong.core.boss.Stance.STRICT, com.zongkong.core.boss.Boss.stance(env.dossier, emptyList(), env.nowMs))
+        // 已经严格了，再“收紧”到审慎不行
+        assertFalse(tools.run("escalate", """{"stance":"审慎","hours":2,"reason":"试试放松"}""").ok)
+        assertTrue(tools.run("commit", """{"what":"10 点前做完一套题","due":"2小时后","check":"拍照"}""").ok)
+        val id = env.dossier.commitments.single().id
+        // 严格态度下不给免
+        val excuse = tools.run("resolve_commitment", """{"id":"$id","status":"免了","note":"突然有朋友来家里吃饭，走不开"}""")
+        assertFalse(excuse.ok)
+        assertTrue(excuse.text.contains("严格"))
+        assertTrue(tools.run("resolve_commitment", """{"id":"$id","status":"没做到","note":"没有照片"}""").ok)
+        // 结了的约定不能再改
+        assertFalse(tools.run("resolve_commitment", """{"id":"$id","status":"做到了","note":"其实做了"}""").ok)
     }
 }

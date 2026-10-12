@@ -114,7 +114,7 @@ private data class TabItem(val route: String, val seal: String, val label: Strin
 private val tabs = listOf(
     TabItem("home", "今", "今天"),
     TabItem("depts", "部", "四部"),
-    TabItem("chat", "参", "参谋"),
+    TabItem("chat", "控", "总控"),
     TabItem("threads", "事", "事项"),
     TabItem("settings", "我", "我"),
 )
@@ -219,6 +219,7 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 composable("settings/perm") { PermissionsScreen(nav) }
                 composable("hq") { HqScreen(nav) }
                 composable("settings/hq") { HqSettingsScreen(nav) }
+                composable("dossier") { DossierScreen(nav) }
             }
             // 从通知、分享、拦截页带进来的页面。必须放在 NavHost 之后：Scaffold 的内容是延后组合的，
             // 导航图要等 NavHost 组合完才设置好，太早跳转会崩（冷启动时点通知里的“开始”就会触发）。

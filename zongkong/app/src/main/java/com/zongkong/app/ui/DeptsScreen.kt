@@ -200,7 +200,7 @@ fun DeptScreen(name: String, nav: NavHostController) {
             SectionLabel("这个部门的按钮")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 config.shortcuts.filter { it.dept == dept }.forEach { s -> QuickChip(s.label, c) { runShortcut(s, app, nav) } }
-                QuickChip("＋ 让参谋加一个", sig.ai) {
+                QuickChip("＋ 让总控加一个", sig.ai) {
                     app.chatDraft = "给${dept.label}加一个首页快捷按钮：（说说你想点一下就做什么）"
                     nav.navigate("chat")
                 }
@@ -327,13 +327,13 @@ private fun ThinkPart(work: Work, now: Long, nav: NavHostController) {
                 TextButton(onClick = {
                     app.chatDraft = "帮我想清楚 ${t[F.CODE]}「${t.title}」：现在该下什么判断、下一步做什么？想好了直接写进去。"
                     nav.navigate("chat")
-                }) { Text("问参谋", color = sig.ai) }
+                }) { Text("问总控", color = sig.ai) }
             }
         }
     }
     SectionLabel("最近的判断")
     Panel {
-        if (conclusions.isEmpty()) Text("还没有判断记录。GPT 交接导入、在关卡里写的、参谋记的都算。", style = MaterialTheme.typography.bodySmall, color = sig.muted)
+        if (conclusions.isEmpty()) Text("还没有判断记录。GPT 交接导入、在关卡里写的、总控记的都算。", style = MaterialTheme.typography.bodySmall, color = sig.muted)
         conclusions.take(6).forEach { n ->
             Column(Modifier.fillMaxWidth().clickable { if (n.threadKey.isNotBlank()) nav.navigate("thread/${n.threadKey}") }.padding(vertical = 4.dp)) {
                 Text(n.title, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)

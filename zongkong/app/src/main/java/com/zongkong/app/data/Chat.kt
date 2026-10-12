@@ -112,6 +112,33 @@ class ChatRepo(private val context: Context, private val store: Store, private v
             val h = actions.hq.start(com.zongkong.core.hq.HqTrigger.AGENT, minutes)
             return "总控时间开始了，${h.minutes} 分钟。说完这句会打开总控时间。"
         }
+        override fun dossier(): com.zongkong.core.boss.Dossier = store.dossier.value
+        override fun updateDossier(f: (com.zongkong.core.boss.Dossier) -> com.zongkong.core.boss.Dossier) = store.updateDossier(f)
+        override fun hqSessions(): List<com.zongkong.core.hq.HqSession> = store.hq.value.sessions
+        override fun deviceEvents(from: Long, to: Long) = com.zongkong.app.system.Usage.events(context, from, to)
+        override fun screenshots(from: Long, to: Long) = store.shots(from, to)
+        override fun sensors(): String = buildString {
+            val boss = store.config.value.boss
+            append("- 手机使用记录：")
+            append(if (com.zongkong.app.system.Usage.granted(context)) "有系统的“使用情况访问”授权，总控没运行的时段也查得到\n" else "只有总控自己记的（没授权“使用情况访问”），总控没在运行的时段是空白\n")
+            append("- 无障碍服务：${if (com.zongkong.app.guard.GuardService.running) "运行中" else "没在运行（拦不住、记不到，提醒用户去权限页打开）"}\n")
+            append("- 截图抽查：")
+            append(if (boss.shots) "开着，亮屏时每小时约 ${boss.shotsPerHour} 张，留 ${boss.keepDays} 天；连续娱乐时也会截一张\n" else "没开（用户在“总控 → 档案”里能开；你可以建议）\n")
+            append("- 照片：用户发来的照片会附上拍摄时间；没有拍摄时间的多半是截图或转存的旧图\n")
+            append("- 识图：${if (store.config.value.ai.visionModel.isNotBlank()) "看图模型 ${store.config.value.ai.visionModel}" else "用主模型看图（主模型不支持看图时会失败）"}\n")
+            append("- 连续娱乐 ${if (boss.bingeMinutes > 0) "${boss.bingeMinutes} 分钟会叫醒你" else "不管"}；每天抽查 ${boss.spotChecks} 次")
+        }
+        override suspend fun describeImage(path: String, question: String): String {
+            val r = client.chat(
+                "你是总控的识图助手。只说截图里看得到的事实：哪个应用、什么内容、是学习 / 工作还是娱乐。看不清就说看不清，不要猜。一两句话。",
+                listOf(ChatMsg(ChatMsg.USER, question, at = System.currentTimeMillis(), image = path)),
+                emptyList(),
+            )
+            return when (r) {
+                is com.zongkong.core.ApiResult.Ok -> r.value.content.ifBlank { "（识图模型没有回答）" }
+                is com.zongkong.core.ApiResult.Err -> "看不了：${r.message}"
+            }
+        }
         override fun resolveApp(name: String): String? = AppNames.resolve(context, name)
         override fun appLabel(pkg: String): String = AppNames.label(context, pkg)
     }
@@ -131,7 +158,7 @@ class ChatRepo(private val context: Context, private val store: Store, private v
                     update { it.copy(messages = (it.messages + m).takeLast(MAX_KEEP)) }
                     if (m.role == ChatMsg.TOOL && m.route.isNotBlank()) route.value = m.route
                     if (speak && m.role == ChatMsg.ASSISTANT && m.content.isNotBlank() && !m.error) com.zongkong.app.system.Speaker.speak(context, m.content)
-                }, image = image)
+                }, image = image, meta = if (image.isNotBlank()) photoMeta(image) else "")
             } catch (e: Exception) {
                 Log.e(TAG, "参谋出错", e)
                 update { it.copy(messages = it.messages + ChatMsg(ChatMsg.ASSISTANT, "出错了：${e.message ?: e.javaClass.simpleName}", at = System.currentTimeMillis(), error = true)) }
@@ -145,23 +172,36 @@ class ChatRepo(private val context: Context, private val store: Store, private v
      * 参谋主动发一条消息（定时任务）：把指令当作看不见的一句话发给模型，回复显示在对话里并发通知。
      * 没配 AI 或者出错，就发 [fallback] 这句固定的话。
      */
-    fun proactive(kind: String, instruction: String, fallback: String) {
-        if (_busy.value) return
+    fun proactive(kind: String, instruction: String, fallback: String, quiet: Boolean = false): Boolean {
+        if (_busy.value) return false
+        val cfg0 = store.config.value
+        // 抽查要 AI 自己判断有没有事；没接 AI 就不做
+        if (quiet && !cfg0.ai.ready) return false
+        _busy.value = true
         scope.launch {
             var said = ""
             val cfg = store.config.value
             if (cfg.ai.ready) {
-                _busy.value = true
                 try {
+                    val added = mutableListOf<ChatMsg>()
                     val out = agent.reply(_log.value.messages, instruction, { m ->
+                        added += m
                         update { it.copy(messages = (it.messages + m).takeLast(MAX_KEEP)) }
                     }, hidden = true)
                     said = out.lastOrNull { it.role == ChatMsg.ASSISTANT && it.content.isNotBlank() && !it.error }?.content.orEmpty()
+                    if (quiet && (said.isBlank() || said.trim().startsWith("无事"))) {
+                        // 抽查没发现问题：这一轮整段藏起来，不打扰
+                        update { log -> log.copy(messages = log.messages.map { m -> if (m in added) m.copy(hidden = true) else m }) }
+                        Log.i(TAG, "抽查无事：$kind")
+                        return@launch
+                    }
                 } catch (e: Exception) {
-                    Log.w(TAG, "参谋定时消息失败：$kind", e)
+                    Log.w(TAG, "总控定时消息失败：$kind", e)
                 } finally {
                     _busy.value = false
                 }
+            } else {
+                _busy.value = false
             }
             if (said.isBlank()) {
                 said = fallback
@@ -171,6 +211,26 @@ class ChatRepo(private val context: Context, private val store: Store, private v
             com.zongkong.app.system.Notifications.advisor(context, body)
             if (cfg.hq.speak) com.zongkong.app.system.Speaker.speak(context, body)
         }
+        return true
+    }
+
+    /** 照片的拍摄时间（EXIF）：给总控判断是不是刚拍的。 */
+    private fun photoMeta(path: String): String = try {
+        val exif = android.media.ExifInterface(path)
+        val raw = exif.getAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL) ?: exif.getAttribute(android.media.ExifInterface.TAG_DATETIME)
+        if (raw.isNullOrBlank()) "[照片信息：没有拍摄时间——可能是截图、转存或处理过的图]"
+        else {
+            val t = java.time.LocalDateTime.parse(raw.trim(), java.time.format.DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss")).atZone(store.zone).toInstant().toEpochMilli()
+            val ago = (System.currentTimeMillis() - t) / 60_000
+            "[照片信息：拍摄于 ${com.zongkong.core.boss.Timeline.hm(t, store.zone)}（" + when {
+                ago < 0 -> "时间在未来，手机时间可能不对"
+                ago < 60 -> "$ago 分钟前"
+                ago < 24 * 60 -> "${ago / 60} 小时前"
+                else -> "${ago / 1440} 天前"
+            } + "）]"
+        }
+    } catch (e: Exception) {
+        "[照片信息：读不到拍摄时间]"
     }
 
     fun stop() {

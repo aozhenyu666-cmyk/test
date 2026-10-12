@@ -486,7 +486,7 @@ private fun ThinkStep(s: HqSession, onDone: (Boolean) -> Unit, onNote: (String) 
     }
     if (config.ai.ready) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(if (concluded) "判断已经记下了。还想再追就接着聊。" else "和参谋来回追问，最后让它把判断记下来（或者你说“记下来”）。", color = Night.dim, style = MaterialTheme.typography.bodySmall)
+            Text(if (concluded) "判断已经记下了。还想再追就接着聊。" else "和总控来回追问，最后让它把判断记下来（或者你说“记下来”）。", color = Night.dim, style = MaterialTheme.typography.bodySmall)
             ChatPanel(since = s.stepStartedAt, modifier = Modifier.weight(1f))
         }
     } else {
@@ -684,7 +684,7 @@ private fun LedgerStep(onDone: (Boolean) -> Unit, onNote: (String) -> Unit) {
                 chosen = "一手最多放行 3 分钟"
             }
             NightChip("总控时间多 10 分钟", chosen == "总控时间多 10 分钟") {
-                app.store.updateConfig { c -> Policy.setHq(c, c.hq.copy(minutes = (c.hq.minutes + 10).coerceAtMost(90)), System.currentTimeMillis()).config }
+                app.store.updateConfig { c -> Policy.desiredHq(c).let { d -> Policy.setHq(c, d.copy(minutes = (maxOf(c.hq.minutes, d.minutes) + 10).coerceAtMost(90)), System.currentTimeMillis()).config } }
                 chosen = "总控时间多 10 分钟"
             }
             NightChip("不加，照今天的来", chosen == "不加", Modifier.testTag("ledger-none")) { chosen = "不加" }
@@ -723,14 +723,23 @@ fun HqSettingsScreen(nav: NavHostController) {
     val app = LocalContext.current.zk
     val sig = LocalSignals.current
     val config by app.store.config.collectAsStateWithLifecycle()
-    var h by remember(config.hq) { mutableStateOf(config.hq) }
-    var timeText by remember(config.hq) { mutableStateOf(DayClock.hhmm(config.hq.at)) }
+    // 从“排队中的设置”开始改：放宽的那部分还在等 24 小时，不能一保存就把它冲掉
+    val desired = remember(config.hq, config.pending) { Policy.desiredHq(config) }
+    var h by remember(desired) { mutableStateOf(desired) }
+    var timeText by remember(desired) { mutableStateOf(DayClock.hhmm(desired.at)) }
+    val waiting = config.pending.firstOrNull { it.op is com.zongkong.core.ChangeOp.Hq }
     var addApp by remember { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxSize()) {
         BackBar("总控时间 · 设置", { nav.popBackStack() })
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Hint("收紧立即生效；关掉、缩短、推迟、放开更多应用这些放宽，24 小时后生效。")
+            Hint("收紧立即生效；关掉、缩短、推迟、放开更多应用这些放宽，24 小时后生效。一次保存里两样都有，收紧的照样马上生效。")
+            waiting?.let { w ->
+                Panel(accent = sig.warn, modifier = Modifier.testTag("hq-waiting")) {
+                    Text("排队中：${w.summary}", style = MaterialTheme.typography.titleSmall)
+                    Hint("${clock(w.effectiveAt)} 生效（“我 → 待生效的放宽”里可以撤回）。现在用的还是：每天 ${DayClock.hhmm(config.hq.at)}，${config.hq.minutes} 分钟。")
+                }
+            }
             Panel {
                 SwitchRow("每天的总控时间", h.enabled) { h = h.copy(enabled = it) }
                 OutlinedTextField(timeText, { timeText = it; DayClock.parse(it)?.let { m -> h = h.copy(at = m) } }, label = { Text("几点开始（HH:mm）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -744,6 +753,7 @@ fun HqSettingsScreen(nav: NavHostController) {
                 h.allowed.forEach { p ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(com.zongkong.app.data.AppNames.label(app, p), modifier = Modifier.weight(1f))
+                        if (p !in config.hq.allowed) Tag("24 小时后可用", sig.warn)
                         TextButton(onClick = { h = h.copy(allowed = h.allowed - p) }) { Text("去掉", color = sig.muted) }
                     }
                 }
@@ -758,8 +768,8 @@ fun HqSettingsScreen(nav: NavHostController) {
             Panel {
                 SwitchRow("震动催你（静音也震）", h.vibrate) { h = h.copy(vibrate = it) }
                 SwitchRow("失联阶梯（1 天主动找你、2 天严管、3 天强制进入）", h.escalation) { h = h.copy(escalation = it) }
-                SwitchRow("参谋定时主动找你（早上、午后）", h.proactive) { h = h.copy(proactive = it) }
-                SwitchRow("总控时间里把参谋的话读出来", h.speak) { h = h.copy(speak = it) }
+                SwitchRow("总控定时主动找你（早上、午后）", h.proactive) { h = h.copy(proactive = it) }
+                SwitchRow("总控时间里把总控的话读出来", h.speak) { h = h.copy(speak = it) }
                 Hint("睡觉时段 ${DayClock.hhmm(h.quietStart)}–${DayClock.hhmm(h.quietEnd)} 只轻震，不连续震。")
             }
             BigButton("保存", {

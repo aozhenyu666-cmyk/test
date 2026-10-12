@@ -74,7 +74,7 @@ fun SettingsScreen(nav: NavHostController) {
             listOfNotNull(
                 if (config.hq.vibrate) "震动" else null,
                 if (config.hq.escalation) "失联升级" else null,
-                if (config.hq.proactive) "参谋主动找你" else null,
+                if (config.hq.proactive) "总控主动找你" else null,
                 if (config.hq.speak) "语音" else null,
             ).joinToString(" · ").ifBlank { "全关了" },
             "settings/hq", nav,
@@ -86,7 +86,7 @@ fun SettingsScreen(nav: NavHostController) {
         MenuItem("历史记录", "最近 14 天", "history", nav)
 
         SectionLabel("连接")
-        MenuItem("AI 接口", if (config.ai.ready) "${config.ai.model} · 参谋、日终验收用" else "未配置：参谋和 AI 验收用不了", "settings/ai", nav, warn = !config.ai.ready)
+        MenuItem("AI 接口", if (config.ai.ready) "${config.ai.model} · 总控者、日终验收用" else "未配置：总控者和 AI 验收用不了", "settings/ai", nav, warn = !config.ai.ready)
         MenuItem("一手", if (yishouInstalled) "已安装：行为管理部读它的组数，可以把行动交给它陪练" else "没装：点开下载", "dept/ACT", nav)
         MenuItem("Notion", when {
             config.notion.workReady -> "事项 / 行动 / 记录 双向同步中"
@@ -102,7 +102,7 @@ fun SettingsScreen(nav: NavHostController) {
         MenuItem("待生效的放宽", if (config.pending.isEmpty()) "没有" else "${config.pending.size} 项", "settings/pending", nav)
 
         Hint("总控 ${com.zongkong.app.BuildConfig.VERSION_NAME}", Modifier.padding(top = 12.dp))
-        Hint("数据存在这台手机上；连了 Notion 才同步事项和记录；参谋只把对话发给你自己填的 AI 接口。", Modifier.padding(bottom = 8.dp))
+        Hint("数据存在这台手机上；连了 Notion 才同步事项和记录；总控只把对话发给你自己填的 AI 接口。", Modifier.padding(bottom = 8.dp))
         if (config.pausedUntil > System.currentTimeMillis()) Text("休假中", color = sig.warn)
     }
 }

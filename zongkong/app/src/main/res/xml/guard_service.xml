@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 只订阅前台窗口切换事件；不读取窗口内容（canRetrieveWindowContent = false） -->
+<!-- 只订阅前台窗口切换事件；不读取窗口内容（canRetrieveWindowContent = false）。
+     canTakeScreenshot：总控者的“截图抽查”（默认关，要你在设置里开；截图只存在手机上）。 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:canRetrieveWindowContent="false"
+    android:canTakeScreenshot="true"
     android:description="@string/accessibility_description"
     android:notificationTimeout="100" />

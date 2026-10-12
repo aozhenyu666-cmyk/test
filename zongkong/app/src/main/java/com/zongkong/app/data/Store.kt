@@ -126,6 +126,92 @@ class Store(private val context: Context) {
         }
     }
 
+    // ---------- 总控者的档案 ----------
+
+    private val _dossier = MutableStateFlow(loadDossier())
+    val dossier: StateFlow<com.zongkong.core.boss.Dossier> = _dossier.asStateFlow()
+
+    fun updateDossier(f: (com.zongkong.core.boss.Dossier) -> com.zongkong.core.boss.Dossier): com.zongkong.core.boss.Dossier = synchronized(workLock) {
+        val next = f(_dossier.value)
+        if (next != _dossier.value) {
+            _dossier.value = next
+            val text = ZkJson.encodeToString(com.zongkong.core.boss.Dossier.serializer(), next)
+            io.execute { writeAtomic(File(dir, "dossier.json"), text) }
+        }
+        next
+    }
+
+    private fun loadDossier(): com.zongkong.core.boss.Dossier {
+        val f = File(dir, "dossier.json")
+        if (!f.exists()) return com.zongkong.core.boss.Dossier()
+        return try {
+            ZkJson.decodeFromString(com.zongkong.core.boss.Dossier.serializer(), f.readText())
+        } catch (e: Exception) {
+            Log.e(TAG, "dossier.json 读不了", e)
+            com.zongkong.core.boss.Dossier()
+        }
+    }
+
+    /** 现在的信用和态度。 */
+    fun credibility(now: Long = System.currentTimeMillis()): Int = com.zongkong.core.boss.Boss.credibility(_dossier.value, _hq.value.sessions, now)
+    fun stance(now: Long = System.currentTimeMillis()): com.zongkong.core.boss.Stance = com.zongkong.core.boss.Boss.stance(_dossier.value, _hq.value.sessions, now)
+
+    // ---------- 设备时间线（无障碍服务自己记的：前台应用切换、亮屏熄屏） ----------
+
+    private val timelineDir = File(dir, "timeline").apply { mkdirs() }
+
+    /** 记一条：从 [at] 起前台是 [pkg]（Timeline.OFF / ON / GAP 是特殊值）。按自然日分文件，留 8 天。 */
+    fun logSwitch(at: Long, pkg: String) {
+        val day = java.time.Instant.ofEpochMilli(at).atZone(zone).toLocalDate().toString()
+        io.execute {
+            try {
+                File(timelineDir, "$day.txt").appendText("$at $pkg\n")
+            } catch (e: Exception) {
+                Log.w(TAG, "写时间线失败", e)
+            }
+        }
+    }
+
+    /** [from, to] 之间的记录，外加 from 之前最后一条（知道开始时前台是什么）。 */
+    fun switches(from: Long, to: Long): List<com.zongkong.core.boss.DevEvent> {
+        val start = java.time.Instant.ofEpochMilli(from).atZone(zone).toLocalDate().minusDays(1)
+        val end = java.time.Instant.ofEpochMilli(to).atZone(zone).toLocalDate()
+        val all = mutableListOf<com.zongkong.core.boss.DevEvent>()
+        var d = start
+        while (!d.isAfter(end)) {
+            val f = File(timelineDir, "$d.txt")
+            if (f.exists()) f.readLines().forEach { line ->
+                val sp = line.indexOf(' ')
+                if (sp > 0) line.substring(0, sp).toLongOrNull()?.let { all += com.zongkong.core.boss.DevEvent(it, line.substring(sp + 1).trim()) }
+            }
+            d = d.plusDays(1)
+        }
+        val before = all.filter { it.at <= from }.maxByOrNull { it.at }
+        return listOfNotNull(before) + all.filter { it.at in (from + 1)..to }.sortedBy { it.at }
+    }
+
+    /** 删掉 8 天前的时间线和过期的截图。 */
+    fun prune(now: Long = System.currentTimeMillis()) {
+        io.execute {
+            val keep = java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate().minusDays(8).toString()
+            timelineDir.listFiles()?.filter { it.name.removeSuffix(".txt") < keep }?.forEach { it.delete() }
+            val cutoff = now - _config.value.boss.keepDays.coerceAtLeast(1) * 86_400_000L
+            shotsDir.listFiles()?.filter { it.lastModified() < cutoff }?.forEach { it.delete() }
+        }
+    }
+
+    // ---------- 抽查截图 ----------
+
+    val shotsDir: File = File(context.filesDir, "shots").apply { mkdirs() }
+
+    /** 截图文件名：时间_包名.jpg。 */
+    fun shots(from: Long, to: Long): List<com.zongkong.core.boss.Shot> =
+        (shotsDir.listFiles() ?: emptyArray()).mapNotNull { f ->
+            val name = f.name.removeSuffix(".jpg")
+            val at = name.substringBefore('_').toLongOrNull() ?: return@mapNotNull null
+            if (at !in from..to) null else com.zongkong.core.boss.Shot(at.toString(36), at, name.substringAfter('_', ""), f.absolutePath)
+        }.sortedBy { it.at }
+
     /** 上一次真正和总控交流的时刻（说话、做事、交关卡、做完总控时间）。第一次打开时记为现在。 */
     var lastContact: Long
         get() = prefs.getLong("last_contact", 0L).let { if (it == 0L) System.currentTimeMillis().also { now -> prefs.edit().putLong("last_contact", now).apply() } else it }
@@ -137,6 +223,17 @@ class Store(private val context: Context) {
 
     fun absence(now: Long = System.currentTimeMillis()): com.zongkong.core.hq.Hq.Absence =
         com.zongkong.core.hq.Hq.absence(lastContact, now, _config.value.hq)
+
+    /** 叫醒记录：总控时间提醒发没发、为什么没进去（设置页里能看到，排查“到点没反应”）。 */
+    val wakeLog: List<String>
+        get() = (prefs.getString("wake_log", "") ?: "").split('\n').filter { it.isNotBlank() }
+
+    fun logWake(text: String, now: Long = System.currentTimeMillis()) = synchronized(lock) {
+        val t = java.time.Instant.ofEpochMilli(now).atZone(zone).let { "%d/%d %02d:%02d".format(it.monthValue, it.dayOfMonth, it.hour, it.minute) }
+        val next = (wakeLog + "$t  $text").takeLast(40)
+        prefs.edit().putString("wake_log", next.joinToString("\n")).apply()
+        Log.i(TAG, "叫醒：$text")
+    }
 
     /** 连续震动到什么时候（0 = 不震）；打开总控就停。 */
     var buzzUntil: Long

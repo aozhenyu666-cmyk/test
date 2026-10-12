@@ -79,7 +79,7 @@ internal fun group(msgs: List<ChatMsg>): List<Item> {
     for (m in msgs) {
         when {
             m.role == ChatMsg.TOOL -> steps += m
-            m.role == ChatMsg.USER && m.hidden -> flush()
+            m.hidden -> if (m.role == ChatMsg.USER) flush()
             m.role == ChatMsg.USER -> { flush(); out += Item.User(m) }
             m.error -> { flush(); out += Item.Failed(m) }
             m.content.isNotBlank() -> {
@@ -150,14 +150,16 @@ fun ChatScreen(nav: NavHostController) {
     Column(Modifier.fillMaxSize()) {
         // ---------- 顶栏 ----------
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Seal("参", sig.ai, size = 30.dp, filled = true)
+            Seal("控", sig.ai, size = 30.dp, filled = true)
             Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                Text("参谋", style = MaterialTheme.typography.titleLarge.merge(SerifTitle))
-                Text(if (busy) "正在处理…" else "能直接动手 · 放宽仍等 24 小时", style = MaterialTheme.typography.labelMedium, color = sig.muted, maxLines = 1)
+                Text("总控", style = MaterialTheme.typography.titleLarge.merge(SerifTitle))
+                if (busy) Text("正在处理…", style = MaterialTheme.typography.labelMedium, color = sig.muted, maxLines = 1)
+                else StanceLine { nav.navigate("dossier") }
             }
             Box {
                 TextButton(onClick = { menu = true }) { Text("···", fontSize = 20.sp, color = sig.muted) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("档案：信用、约定、判定") }, onClick = { menu = false; nav.navigate("dossier") })
                     DropdownMenuItem(text = { Text("它记住的事（${log.memory.size}）") }, onClick = { menu = false; showMemory = true })
                     DropdownMenuItem(text = { Text("清空对话") }, onClick = { menu = false; chat.clear() })
                     DropdownMenuItem(text = { Text("AI 接口设置") }, onClick = { menu = false; nav.navigate("settings/ai") })
@@ -170,7 +172,7 @@ fun ChatScreen(nav: NavHostController) {
                 Spacer(Modifier.height(24.dp))
                 Text("先接上一个 AI", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.enter(0))
                 Text(
-                    "参谋用的是你自己的 AI 接口（DeepSeek、Kimi、通义、OpenAI 都行）。填一次地址、密钥、模型名，以后就能直接跟它说：“帮我把今天排一下”“我卡住了”。",
+                    "总控用的是你自己的 AI 接口（DeepSeek、Kimi、通义、OpenAI 都行）。填一次地址、密钥、模型名，以后就能直接跟它说：“帮我把今天排一下”“我卡住了”。",
                     style = MaterialTheme.typography.bodyLarge, color = sig.muted, modifier = Modifier.enter(1),
                 )
                 Panel(modifier = Modifier.enter(2)) {
@@ -206,7 +208,7 @@ fun ChatScreen(nav: NavHostController) {
             if (busy) {
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(start = 2.dp, top = 4.dp)) {
-                        TypingDots(sig.ai)
+                        BranchThinking(sig.ai, Modifier.size(28.dp))
                         val last = log.messages.lastOrNull()
                         Text(
                             if (last?.role == ChatMsg.TOOL) last.summary else "在想",
@@ -236,7 +238,7 @@ fun ChatScreen(nav: NavHostController) {
         ) {
             Row(Modifier.padding(start = 18.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f).padding(vertical = 10.dp)) {
-                    if (input.isEmpty()) Text("跟参谋说…", style = MaterialTheme.typography.bodyLarge, color = sig.muted)
+                    if (input.isEmpty()) Text("跟总控说…", style = MaterialTheme.typography.bodyLarge, color = sig.muted)
                     BasicTextField(
                         value = input,
                         onValueChange = { input = it },
@@ -278,7 +280,7 @@ fun ChatScreen(nav: NavHostController) {
     if (showMemory) {
         AlertDialog(
             onDismissRequest = { showMemory = false },
-            title = { Text("参谋记住的事") },
+            title = { Text("总控记住的事") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (log.memory.isEmpty()) Hint("还没有。跟它说你的作息、习惯、偏好，它会记下来，以后每次都带上。")
@@ -409,9 +411,16 @@ fun saveChatImage(context: android.content.Context, uri: android.net.Uri): Strin
     val bmp = context.contentResolver.openInputStream(uri)?.use {
         android.graphics.BitmapFactory.decodeStream(it, null, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
     }
+    // 拍摄时间留着：总控用它判断是不是刚拍的
+    val taken = runCatching {
+        context.contentResolver.openInputStream(uri)?.use { android.media.ExifInterface(it).getAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL) }
+    }.getOrNull()
     if (bmp == null) null else {
         val f = java.io.File(dir, "img_${System.currentTimeMillis()}.jpg")
         f.outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, it) }
+        if (!taken.isNullOrBlank()) runCatching {
+            android.media.ExifInterface(f.absolutePath).apply { setAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL, taken); saveAttributes() }
+        }
         f.absolutePath
     }
 } catch (e: Exception) {

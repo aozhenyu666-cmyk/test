@@ -29,6 +29,13 @@ class HqTest {
         // 今天做过了
         val done = Hq.finish(Hq.start("a", HqTrigger.MANUAL, cfg, at(14, 20)), at(14, 20, 40))
         assertEquals(Hq.Due.NONE, Hq.due(cfg, listOf(done), at(14, 21, 40), zone))
+        // 下午自己进去试了一次：不算今晚这次，到点照样叫
+        val tried = Hq.exitEarly(Hq.start("t", HqTrigger.MANUAL, cfg, at(14, 15)), at(14, 15, 5), "试一下界面")
+        assertEquals(Hq.Due.OVERDUE, Hq.due(cfg, listOf(tried), at(14, 21, 40), zone))
+        assertFalse(Hq.doneToday(cfg, listOf(tried), at(14, 21, 40), zone))
+        // 到点前提前退出的那次算（不然退出后又被拉回去）
+        val quit = Hq.exitEarly(Hq.start("q", HqTrigger.SCHEDULED, cfg, at(14, 21, 35)), at(14, 21, 38), "有急事要出门")
+        assertEquals(Hq.Due.NONE, Hq.due(cfg, listOf(quit), at(14, 21, 40), zone))
         // 正在做
         assertEquals(Hq.Due.NONE, Hq.due(cfg, listOf(Hq.start("b", HqTrigger.MANUAL, cfg, at(14, 21, 31))), at(14, 21, 40), zone))
         // 关掉了
@@ -117,6 +124,25 @@ class HqTest {
         // 24 小时后生效
         val applied = Policy.applyDue(off.config, now + Policy.DELAY_MILLIS + 1)
         assertFalse(applied.hq.enabled)
+
+        // 一次保存里既提前时间（收紧）又加白名单（放宽）：时间马上生效，白名单排队——以前整份都要等 24 小时，到点就不进
+        val both = Policy.setHq(c, c.hq.copy(at = 20 * 60, allowed = c.hq.allowed + "com.tencent.mm"), now)
+        assertEquals(20 * 60, both.config.hq.at)
+        assertFalse("com.tencent.mm" in both.config.hq.allowed)
+        assertEquals(1, both.config.pending.size)
+        assertTrue("com.tencent.mm" in Policy.desiredHq(both.config).allowed)
+        // 设置页从排队的设置开始改：再改一项收紧的，排队的白名单不会被冲掉
+        val again = Policy.setHq(both.config, Policy.desiredHq(both.config).copy(minutes = 45), now)
+        assertEquals(45, again.config.hq.minutes)
+        assertEquals(20 * 60, again.config.hq.at)
+        assertTrue("com.tencent.mm" in Policy.desiredHq(again.config).allowed)
+        val later = Policy.applyDue(again.config, now + Policy.DELAY_MILLIS + 1)
+        assertTrue("com.tencent.mm" in later.hq.allowed)
+        assertEquals(45, later.hq.minutes)
+        // 去掉白名单里的应用是收紧：马上生效
+        val fewer = Policy.setHq(c, c.hq.copy(allowed = c.hq.allowed - "notion.id"), now)
+        assertFalse("notion.id" in fewer.config.hq.allowed)
+        assertTrue(fewer.config.pending.isEmpty())
     }
 
     @Test

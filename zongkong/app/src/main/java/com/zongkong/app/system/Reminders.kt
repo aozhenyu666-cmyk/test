@@ -23,6 +23,7 @@ object Reminders {
     private const val TAG = "Reminders"
     const val ACTION_ALARM = "com.zongkong.app.REMINDER_ALARM"
     const val ACTION_SNOOZE = "com.zongkong.app.REMINDER_SNOOZE"
+    const val ACTION_WATCHDOG = "com.zongkong.app.WATCHDOG"
     const val EXTRA_KEY = "action_key"
 
     /** 发出现在该发的提醒。 */
@@ -66,6 +67,25 @@ object Reminders {
         }
     }
 
+    /**
+     * 看门狗：每半小时叫醒一次（不准点，省电），检查总控时间、回访、抽查。
+     * 无障碍服务被系统关掉时，这是总控唯一还能主动找你的办法。
+     */
+    fun watchdog(context: Context) {
+        try {
+            val am = context.getSystemService(AlarmManager::class.java) ?: return
+            val pi = PendingIntent.getBroadcast(
+                context, 8, Intent(context, ReminderReceiver::class.java).setAction(ACTION_WATCHDOG),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            am.cancel(pi)
+            val every = 30 * 60_000L
+            am.setInexactRepeating(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + every, every, pi)
+        } catch (e: Exception) {
+            Log.w(TAG, "定看门狗失败", e)
+        }
+    }
+
     fun snoozeIntent(context: Context, actionKey: String, id: Int): PendingIntent = PendingIntent.getBroadcast(
         context, id, Intent(context, ReminderReceiver::class.java).setAction(ACTION_SNOOZE).putExtra(EXTRA_KEY, actionKey),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
@@ -92,6 +112,7 @@ class ReminderReceiver : BroadcastReceiver() {
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         Reminders.reschedule(context)
+        Reminders.watchdog(context)
     }
 }
 

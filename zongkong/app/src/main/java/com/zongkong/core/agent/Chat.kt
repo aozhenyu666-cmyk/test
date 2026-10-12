@@ -39,6 +39,8 @@ data class ChatMsg(
     val hidden: Boolean = false,
     /** 附带的图片（本机文件路径），发给识图模型。 */
     val image: String = "",
+    /** 附给模型的说明（照片的拍摄时间等），界面上不显示。 */
+    val meta: String = "",
 ) {
     companion object {
         const val USER = "user"
@@ -132,13 +134,14 @@ class ChatClient(
                 }
                 else -> {
                     val url = if (sendImage && m.image.isNotBlank()) imageUrl(m.image) else null
+                    val text = if (m.meta.isNotBlank()) "${m.content}\n${m.meta}".trim() else m.content
                     if (url != null) {
                         put("content", buildJsonArray {
-                            add(buildJsonObject { put("type", "text"); put("text", m.content.ifBlank { "看看这张图" }) })
+                            add(buildJsonObject { put("type", "text"); put("text", text.ifBlank { "看看这张图" }) })
                             add(buildJsonObject { put("type", "image_url"); put("image_url", buildJsonObject { put("url", url) }) })
                         })
                     } else {
-                        put("content", if (m.image.isNotBlank()) "${m.content}\n[图片]".trim() else m.content)
+                        put("content", if (m.image.isNotBlank()) "$text\n[图片]".trim() else text)
                     }
                 }
             }

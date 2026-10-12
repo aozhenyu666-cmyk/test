@@ -37,6 +37,7 @@ class ZkApp : Application() {
         chat = com.zongkong.app.data.ChatRepo(this, store, actions)
         Notifications.ensureChannels(this)
         com.zongkong.app.system.Reminders.reschedule(this)
+        com.zongkong.app.system.Reminders.watchdog(this)
     }
 }
 

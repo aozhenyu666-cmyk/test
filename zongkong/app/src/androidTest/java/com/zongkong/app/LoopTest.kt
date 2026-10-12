@@ -74,6 +74,7 @@ class LoopTest {
             )
         }
         app.store.updateHq { com.zongkong.core.hq.HqBook() }
+        app.store.updateDossier { com.zongkong.core.boss.Dossier() }
         app.store.touch()
         gpt = NotionClient({ "secret_gpt" }, base = sim.baseUrl)
         val msg = runBlocking { app.actions.work.setup(sim.rootPage) }
@@ -575,5 +576,57 @@ class LoopTest {
         assertTrue(!s.early && s.endedAt > 0)
         assertTrue(s.notes["INFO"].orEmpty().contains("处理 1 条"))
         assertTrue(app.store.work.value.notes().any { it.noteType == com.zongkong.core.work.NoteType.REVIEW && it[F.RAW].contains("总控时间") })
+    }
+
+    /**
+     * 总控者不吃“我做了 5 小时饭”：先查时间线（抖音 2 小时），记陈述判“对不上”，记一条约定；
+     * 对话页顶上信用掉到 58（审慎），点开档案能看到判定和约定。
+     */
+    @Test
+    fun bossInterrogation() {
+        val now = System.currentTimeMillis()
+        val douyin = "com.ss.android.ugc.aweme"
+        app.store.updateConfig { it.copy(blocked = setOf(douyin)) }
+        app.store.logSwitch(now - 6 * 3_600_000L, com.zongkong.core.boss.Timeline.OFF)
+        app.store.logSwitch(now - 270 * 60_000L, douyin)
+        app.store.logSwitch(now - 150 * 60_000L, com.zongkong.core.boss.Timeline.OFF)
+        val llm = mockLlm(
+            toolTurn("device_timeline" to """{"from":"5小时前","to":"现在"}"""),
+            toolTurn(
+                "record_claim" to """{"text":"下午做了 5 小时饭","from":"5小时前","to":"现在","verdict":"对不上","evidence":"这 5 小时里抖音 2 小时，最长一段连续 2 小时"}""",
+                "commit" to """{"what":"做饭前先报一句做什么、几点结束","due":"2小时后","check":"看对话记录和时间线"}""",
+            ),
+            sayTurn("这 5 小时里手机亮了 2 小时，全在抖音上。做饭的时间最多 3 小时。我记成“对不上”，信用 58。下次做饭前先报一句，我记成约定了。\n【选项】知道了｜我要解释"),
+        )
+        app.store.updateConfig { it.copy(ai = com.zongkong.core.AiConfig(llm.url("/v1").toString(), "sk-test", "mock-model")) }
+        app.chat.clear()
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java).putExtra(com.zongkong.app.ui.MainActivity.EXTRA_ROUTE, "chat"))
+        waitFor(hasTestTag("chat-input"), 10_000, "总控输入框")
+        waitFor(hasTestTag("stance-line") and hasText("信用 70", substring = true), 5_000, "信用 70")
+        compose.onNodeWithTag("chat-input").performTextInput("我下午做了5小时饭，也不知道干了什么")
+        compose.onNodeWithTag("chat-send").performClick()
+        waitText("我要解释", 20_000)
+        waitFor(hasTestTag("stance-line") and hasText("信用 58", substring = true), 5_000, "信用掉到 58")
+        settle()
+        shot("e2e-50-boss-chat")
+        // 时间线真的发给了模型：抖音 2 小时
+        llm.takeRequest()
+        val second = llm.takeRequest().body.readUtf8()
+        assertTrue(second, second.contains("娱乐合计 2 小时"))
+        val d = app.store.dossier.value
+        assertEquals(com.zongkong.core.boss.ClaimVerdict.CONTRADICTED, d.claims.single().verdict)
+        assertEquals("做饭前先报一句做什么、几点结束", d.commitments.single().what)
+        assertEquals(com.zongkong.core.boss.Stance.WARY, app.store.stance())
+        // 点信用那一行进档案
+        compose.onNodeWithTag("stance-line").performClick()
+        waitFor(hasTestTag("dossier-head"), 5_000, "档案页")
+        waitText("对不上", 5_000)
+        settle()
+        Thread.sleep(1_200)
+        shot("e2e-51-dossier")
+        compose.onNodeWithTag("charter").performScrollTo()
+        settle()
+        shot("e2e-52-dossier-eyes")
+        llm.shutdown()
     }
 }

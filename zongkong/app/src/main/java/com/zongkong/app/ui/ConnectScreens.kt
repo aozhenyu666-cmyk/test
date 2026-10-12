@@ -84,7 +84,7 @@ fun AiScreen(nav: NavHostController) {
             OutlinedTextField(model, { model = it }, label = { Text("模型名") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(
                 vision, { vision = it }, label = { Text("看图模型（可空）") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                supportingText = { Text("给参谋发截图时用。主模型本身能看图（gpt-4o、qwen-vl、glm-4v）就留空。") },
+                supportingText = { Text("给总控发截图时用。主模型本身能看图（gpt-4o、qwen-vl、glm-4v）就留空。") },
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -95,11 +95,19 @@ fun AiScreen(nav: NavHostController) {
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
-                    store.updateConfig { it.copy(ai = AiConfig(url.trim(), key.trim(), model.trim(), json, vision.trim())) }
                     busy = true
-                    result = "测试中…"
+                    result = "保存中…"
                     scope.launch {
-                        result = context.zk.actions.testAi()
+                        val next = AiConfig(url.trim(), key.trim(), model.trim(), json, vision.trim())
+                        // 模型锁：现在的接口能用时，换地址 / 密钥 / 模型要等 24 小时（免得不清醒时换一个听话的）
+                        val works = if (config.boss.modelLock && config.ai.ready) context.zk.actions.aiWorks() else false
+                        var outcome: com.zongkong.core.Policy.Outcome? = null
+                        store.updateConfig { c -> com.zongkong.core.Policy.setAi(c, next, works, System.currentTimeMillis()).also { outcome = it }.config }
+                        result = if (outcome?.later?.isNotEmpty() == true) {
+                            "模型锁开着，现在的接口能用：换成新的要 24 小时后生效（“我 → 待生效的放宽”里可以撤回）。"
+                        } else {
+                            "已保存。" + context.zk.actions.testAi()
+                        }
                         busy = false
                     }
                 }, enabled = !busy) { Text("保存并测试") }
@@ -262,6 +270,6 @@ private val CONNECTIONS = listOf(
     Triple("总控 → ChatGPT 带上下文", "已实现·待你确认", "ChatGPT App 不接受外部直接开新对话。总控把前情复制好并打开 ChatGPT，你粘贴；也提供“分享给 ChatGPT”和网页版预填。都不会自动发送。"),
     Triple("ChatGPT → 总控 交回结果", "已实现·待你确认", "复制或分享【总控交接】块到总控，先预览再写入。从 ChatGPT 回来时首页会检测剪贴板。"),
     Triple("总控 ↔ 一手", "已实现并验证", "两个 App 同装时直接在手机里互相问：读一手的组数和断点、把行动交给一手、总控严管时一手不重复拦。只认对方签名，别的应用来问一律拒绝。两边都要更新到最新版。"),
-    Triple("参谋（总控里的 AI 对话）", "已实现·待你确认", "用你在“AI 接口”里填的模型，它能直接改事项、行动、节律、拦截名单，打开页面，加快捷按钮。放宽照样等 24 小时。在模拟器上用模拟 AI 测过，真实模型请在参谋里试一句。"),
+    Triple("总控者（总控里的 AI）", "已实现·待你确认", "用你在“AI 接口”里填的模型，它能直接改事项、行动、节律、拦截名单，打开页面，加快捷按钮。放宽照样等 24 小时。在模拟器上用模拟 AI 测过，真实模型请在总控里试一句。"),
     Triple("Notion 变化实时推到手机", "当前做不到", "Notion 的 Webhook 需要一台公网服务器转发，现在用“回到前台 + 每 15 分钟”拉取代替。Notion 的变化也不能唤醒一个 ChatGPT 对话。"),
 )

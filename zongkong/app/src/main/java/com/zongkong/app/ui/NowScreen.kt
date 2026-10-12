@@ -135,6 +135,15 @@ fun NowScreen(nav: NavHostController) {
             }
         }
 
+        // ---------- 权限掉了：放在最上面 ----------
+        val missing = remember(resumeKey, now / 60_000) { PermissionStatus.missingCritical(context) }
+        if (missing.isNotEmpty()) {
+            Panel(accent = sig.strict, onClick = { nav.navigate("settings/perm") }, modifier = Modifier.enter(1).testTag("perm-banner")) {
+                Text("总控现在管不住你", style = MaterialTheme.typography.titleSmall, color = sig.strict)
+                Hint("没开：" + missing.joinToString("、") + "。定时的总控时间、拦截、叫醒都会失灵。点这里，一项一项开。")
+            }
+        }
+
         // ---------- 该你处理的提示 ----------
         Guidance(status, day.date, now, nav)
         if (autoPassed.isNotEmpty()) {
@@ -188,7 +197,7 @@ fun NowScreen(nav: NavHostController) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.enter(7)) {
             QuickChip("收一个念头", sig.info) { nav.navigate("capture") }
             QuickChip("我卡住了", sig.strict) { nav.navigate("stuckpick") }
-            QuickChip("问参谋", sig.ai) { nav.navigate("chat") }
+            QuickChip("问总控", sig.ai) { nav.navigate("chat") }
             val n = work.changes.count { it.at > store.seenChanges }
             QuickChip(if (n > 0) "查看结果 · $n" else "查看结果", sig.think) { nav.navigate("results") }
             config.shortcuts.filter { it.dept == null }.forEach { s -> QuickChip(s.label, sig.ai) { runShortcut(s, app, nav) } }
@@ -216,12 +225,6 @@ fun NowScreen(nav: NavHostController) {
             }
         }
 
-        if (!PermissionStatus.accessibility(context)) {
-            Panel(accent = sig.warn, onClick = { nav.navigate("settings/perm") }) {
-                Text("总控现在没在盯", style = MaterialTheme.typography.titleSmall, color = sig.warn)
-                Hint("无障碍没开：专注锁和严管都不会生效。点这里一步步打开。")
-            }
-        }
         SyncLine(work, notionReady) { scope.launch { app.actions.work.sync() } }
         Spacer(Modifier.height(8.dp))
     }
@@ -263,7 +266,7 @@ private fun HqStrip(cfg: com.zongkong.core.hq.HqConfig, book: com.zongkong.core.
         active != null -> Triple("总控时间进行中", "第 ${active.step + 1}/6 步「${active.current.title}」· 到 ${clock(active.endsAt)}", true)
         due == Hq.Due.NOW || due == Hq.Due.OVERDUE -> Triple("总控时间到了", "放下手里的，进来 ${cfg.minutes} 分钟。", true)
         due == Hq.Due.SOON -> Triple("$at 总控时间", "快到了：先把手头这件收个尾。", false)
-        Hq.doneToday(book.sessions, now, zone) -> Triple("今天的总控时间做过了", "明天 $at 再见。", false)
+        Hq.doneToday(cfg, book.sessions, now, zone) -> Triple("今天的总控时间做过了", "明天 $at 再见。", false)
         cfg.enabled -> Triple("今晚 $at 总控时间", "${cfg.minutes} 分钟，万籁俱寂，只和总控说话。", false)
         else -> Triple("总控时间", "没开每日的；想静下来理一理，随时可以进。", false)
     }
@@ -293,7 +296,7 @@ private fun PlanStrip(plan: com.zongkong.core.plan.WeekPlan?, book: com.zongkong
                 DeptSeal(Dept.PLAN, size = 40.dp)
                 Column(Modifier.weight(1f)) {
                     Text(if (draft != null) "有一份计划草稿等你点头" else "这周还没有参照", style = MaterialTheme.typography.titleSmall)
-                    Hint(if (draft != null) "${draft.by}起草的：${draft.goals.joinToString("、") { it.title }}" else "五分钟定个计划：几个方向、交出什么、每天多少时间。不想想就让参谋起草。")
+                    Hint(if (draft != null) "${if (draft.by == "参谋") "总控" else draft.by}起草的：${draft.goals.joinToString("、") { it.title }}" else "五分钟定个计划：几个方向、交出什么、每天多少时间。不想想就让总控起草。")
                 }
                 Text("→", style = MaterialTheme.typography.titleMedium, color = sig.plan)
             }
@@ -334,7 +337,7 @@ private fun Guidance(status: Status, date: String, now: Long, nav: NavHostContro
                 is Reason.Silence -> Triple("太久没汇报了", "报个到：说一句现在在做什么", "capture")
                 is Reason.Quota -> Triple("今天的娱乐额度用完了", "明天凌晨 4 点重置", "rhythm")
                 is Reason.Session -> Triple("总控时间进行中", "回到总控时间，做完就解锁", "hq")
-                is Reason.Absent -> Triple("已经 ${reason.days} 天没和总控交流了", "跟参谋说几句，或者进一次总控时间", "hq")
+                is Reason.Absent -> Triple("已经 ${reason.days} 天没和总控交流了", "跟总控说几句，或者进一次总控时间", "hq")
                 is Reason.Focus -> Triple("专注锁开着", "做完「${reason.title}」就解开", "session")
             }
             Panel(accent = sig.strict, onClick = { nav.navigate(route) }, modifier = Modifier.enter(1)) {
@@ -512,10 +515,10 @@ private fun TaskCard(cur: Focus.Current, now: Long, notionReady: Boolean, nav: N
             }
             if (a == null) {
                 Text("没有排好的下一步", style = MaterialTheme.typography.headlineMedium)
-                Text("不用想太多：让参谋陪你挑一件，或者跟着向导部署一下。", style = MaterialTheme.typography.bodyMedium, color = sig.muted)
+                Text("不用想太多：让总控陪你挑一件，或者跟着向导部署一下。", style = MaterialTheme.typography.bodyMedium, color = sig.muted)
                 BigButton("跟着向导排一件", { nav.navigate("wizard/plan") })
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { nav.navigate("chat") }, modifier = Modifier.weight(1f)) { Text("问参谋") }
+                    OutlinedButton(onClick = { nav.navigate("chat") }, modifier = Modifier.weight(1f)) { Text("问总控") }
                     OutlinedButton(onClick = { nav.navigate("import") }, modifier = Modifier.weight(1f)) { Text("导入交接块") }
                 }
                 return@Column

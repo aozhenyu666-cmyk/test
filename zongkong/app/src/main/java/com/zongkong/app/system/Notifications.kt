@@ -42,25 +42,25 @@ object Notifications {
             },
         )
         nm.createNotificationChannel(
-            NotificationChannel(CH_AI, "参谋", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "参谋主动发来的消息"
+            NotificationChannel(CH_AI, "总控", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "总控主动发来的消息"
             },
         )
     }
 
     /** 总控时间到了：全屏通知（锁屏上也会亮起来），点开进总控时间。 */
-    fun hqCall(context: Context, title: String, text: String, fullScreen: Boolean) {
+    fun hqCall(context: Context, title: String, text: String, fullScreen: Boolean, route: String = "hq") {
         val n = NotificationCompat.Builder(context, CH_HQ)
             .setSmallIcon(R.drawable.ic_stat_zongkong)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setAutoCancel(true)
-            .setContentIntent(open(context, "hq", ID_HQ))
-            .addAction(0, "现在进入", open(context, "hq", ID_HQ + 1))
+            .setContentIntent(open(context, route, ID_HQ))
+            .addAction(0, if (route == "hq") "现在进入" else "去处理", open(context, route, ID_HQ + 1))
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setPriority(NotificationCompat.PRIORITY_MAX)
-            .apply { if (fullScreen) setFullScreenIntent(open(context, "hq", ID_HQ + 2), true) }
+            .apply { if (fullScreen) setFullScreenIntent(open(context, route, ID_HQ + 2), true) }
             .build()
         post(context, ID_HQ, n)
     }
@@ -71,7 +71,7 @@ object Notifications {
     fun advisor(context: Context, text: String) {
         val n = NotificationCompat.Builder(context, CH_AI)
             .setSmallIcon(R.drawable.ic_stat_zongkong)
-            .setContentTitle("参谋")
+            .setContentTitle("总控")
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setAutoCancel(true)

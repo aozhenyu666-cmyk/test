@@ -199,21 +199,68 @@ object Policy {
         if (!old.allowed.containsAll(new.allowed)) add("总控时间里多放开了 " + (new.allowed - old.allowed).size + " 个应用")
         if (old.vibrate && !new.vibrate) add("关掉震动")
         if (old.escalation && !new.escalation) add("关掉失联阶梯")
-        if (old.proactive && !new.proactive) add("参谋不再主动找你")
+        if (old.proactive && !new.proactive) add("总控不再主动找你")
         if (DayClock.rank(new.at) > DayClock.rank(old.at)) add("总控时间推迟到 ${DayClock.hhmm(new.at)}")
     }
 
-    /** 改总控时间的设置：收紧立即生效，放宽（关掉、缩短、推迟、放开应用……）24 小时后生效。 */
+    /** 两份设置取更严的那份（放宽的部分保持原样）。 */
+    fun stricterHq(old: com.zongkong.core.hq.HqConfig, new: com.zongkong.core.hq.HqConfig): com.zongkong.core.hq.HqConfig = new.copy(
+        enabled = old.enabled || new.enabled,
+        minutes = maxOf(old.minutes, new.minutes),
+        autoLock = old.autoLock || new.autoLock,
+        allowed = old.allowed intersect new.allowed,
+        vibrate = old.vibrate || new.vibrate,
+        escalation = old.escalation || new.escalation,
+        proactive = old.proactive || new.proactive,
+        at = if (DayClock.rank(new.at) > DayClock.rank(old.at)) old.at else new.at,
+    )
+
+    /** 排队中的总控时间设置（24 小时后会变成这样）；没有就是现在的。设置页从这里开始改，免得把排队的改动冲掉。 */
+    fun desiredHq(config: Config): com.zongkong.core.hq.HqConfig =
+        (config.pending.lastOrNull { it.op is ChangeOp.Hq }?.op as? ChangeOp.Hq)?.hq ?: config.hq
+
+    /**
+     * 改总控时间的设置：收紧的部分立即生效，放宽的部分（关掉、缩短、推迟、放开应用……）24 小时后生效。
+     * 一次保存里既有收紧又有放宽时，收紧的照样马上生效——不会被放宽的那部分拖住。
+     */
     fun setHq(config: Config, hq: com.zongkong.core.hq.HqConfig, now: Long): Outcome {
         val base = config.copy(pending = config.pending.filterNot { it.op is ChangeOp.Hq })
-        if (hq == config.hq) return Outcome(base)
-        val looser = looserHq(config.hq, hq)
-        return if (looser.isEmpty()) {
-            Outcome(base.copy(hq = hq), now = listOf("总控时间的设置"))
-        } else {
-            val summary = looser.joinToString("、")
-            Outcome(base.queue(ChangeOp.Hq(hq), summary, now), later = listOf(summary))
+        val tight = stricterHq(config.hq, hq)
+        val nowList = if (tight != config.hq) listOf("总控时间的设置") else emptyList()
+        if (tight == hq) return Outcome(base.copy(hq = hq), now = nowList)
+        val summary = looserHq(tight, hq).joinToString("、").ifBlank { "总控时间的设置" }
+        return Outcome(base.copy(hq = tight).queue(ChangeOp.Hq(hq), summary, now), now = nowList, later = listOf(summary))
+    }
+
+    // ---------- 总控者 ----------
+
+    /** 排队中的总控者设置；没有就是现在的。 */
+    fun desiredBoss(config: Config): com.zongkong.core.boss.BossConfig =
+        (config.pending.lastOrNull { it.op is ChangeOp.Boss }?.op as? ChangeOp.Boss)?.boss ?: config.boss
+
+    /** 总控者的眼睛：多看、多查立即生效；少看、少查、关掉、解开模型锁 24 小时后生效。收紧的部分不被放宽的拖住。 */
+    fun setBoss(config: Config, boss: com.zongkong.core.boss.BossConfig, now: Long): Outcome {
+        val base = config.copy(pending = config.pending.filterNot { it.op is ChangeOp.Boss })
+        val tight = com.zongkong.core.boss.BossConfig.stricter(config.boss, boss)
+        val nowList = if (tight != config.boss) listOf("总控者的设置") else emptyList()
+        if (tight == boss) return Outcome(base.copy(boss = boss), now = nowList)
+        val summary = tight.looser(boss).joinToString("、").ifBlank { "总控者的设置" }
+        return Outcome(base.copy(boss = tight).queue(ChangeOp.Boss(boss), summary, now), now = nowList, later = listOf(summary))
+    }
+
+    /**
+     * 换 AI 接口。模型锁开着、现在的接口能用时，换地址 / 密钥 / 模型要 24 小时；
+     * 第一次填、现在的接口坏了、只改看图模型或 JSON 模式，立即生效。
+     */
+    fun setAi(config: Config, ai: AiConfig, currentWorks: Boolean, now: Long): Outcome {
+        val base = config.copy(pending = config.pending.filterNot { it.op is ChangeOp.Ai })
+        val old = config.ai
+        val core = old.baseUrl.trim() != ai.baseUrl.trim() || old.apiKey.trim() != ai.apiKey.trim() || old.model.trim() != ai.model.trim()
+        if (!core || !config.boss.modelLock || !old.ready || !currentWorks) {
+            return Outcome(base.copy(ai = ai), now = listOf("AI 接口"))
         }
+        val summary = "AI 接口换成 ${ai.model.ifBlank { "（空）" }}"
+        return Outcome(base.queue(ChangeOp.Ai(ai), summary, now), later = listOf(summary))
     }
 
     // ---------- 休假 ----------
@@ -261,6 +308,8 @@ object Policy {
         is ChangeOp.Pause -> c.copy(pausedUntil = op.until)
         is ChangeOp.Yishou -> c.copy(yishouInfluence = op.on, yishouPassCap = op.cap)
         is ChangeOp.Hq -> c.copy(hq = op.hq)
+        is ChangeOp.Boss -> c.copy(boss = op.boss)
+        is ChangeOp.Ai -> c.copy(ai = op.ai)
     }
 
     private fun Config.queue(op: ChangeOp, summary: String, now: Long): Config {
