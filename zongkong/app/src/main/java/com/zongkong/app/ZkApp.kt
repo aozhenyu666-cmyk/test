@@ -47,3 +47,6 @@ class ZkApp : Application() {
 }
 
 val android.content.Context.zk: ZkApp get() = applicationContext as ZkApp
+
+/** 广播接收器里拿应用对象。 */
+fun zkApp(context: android.content.Context): ZkApp = context.applicationContext as ZkApp

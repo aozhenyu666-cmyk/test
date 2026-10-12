@@ -140,9 +140,32 @@ data class Config(
     val yishouPassCap: Int = 5,
     /** 总控时间、震动、失联阶梯、参谋主动找你。 */
     val hq: com.zongkong.core.hq.HqConfig = com.zongkong.core.hq.HqConfig(),
-    /** 总控者：截图抽查、每天抽查、连续娱乐、模型锁。 */
+    /** 总控者：截图抽查、每天抽查、连续娱乐、模型锁、桌面宠物、主动程度。 */
     val boss: com.zongkong.core.boss.BossConfig = com.zongkong.core.boss.BossConfig(),
+    /** 语音：说话（TTS）和听写（STT）的接口；不填就用手机自带的。 */
+    val voice: VoiceConfig = VoiceConfig(),
 )
+
+/**
+ * 语音接口（OpenAI 兼容：/audio/speech、/audio/transcriptions）。
+ * 地址、密钥不填：说话用手机自带的语音，听写用手机自带的语音输入。
+ */
+@Serializable
+data class VoiceConfig(
+    val baseUrl: String = "",
+    val apiKey: String = "",
+    val ttsModel: String = "tts-1",
+    val ttsVoice: String = "alloy",
+    val sttModel: String = "whisper-1",
+    /** 主动找你时开口说（睡觉时段不说）。 */
+    val speakProactive: Boolean = true,
+    /** 对讲里的回复念出来。 */
+    val speakReplies: Boolean = true,
+    /** 它问完以后自动听你回答（只在对讲页里）。 */
+    val listenAfterAsk: Boolean = true,
+) {
+    val apiReady: Boolean get() = baseUrl.isNotBlank() && apiKey.isNotBlank()
+}
 
 /**
  * 首页的一个快捷按钮。

@@ -104,6 +104,7 @@ class ReminderReceiver : BroadcastReceiver() {
             }
             else -> Reminders.check(context)
         }
+        PetWidget.refresh(context)
         Reminders.reschedule(context)
     }
 }

@@ -80,6 +80,9 @@ fun SettingsScreen(nav: NavHostController) {
             "settings/hq", nav,
         )
 
+        SectionLabel("互动")
+        MenuItem("对讲、语音、墨灵", "${if (config.voice.apiReady) "语音接口已接" else "用手机自带的语音"} · 主动程度：${com.zongkong.core.boss.BossConfig.INITIATIVE.getOrElse(config.boss.initiative) { "?" }} · 墨灵${if (config.boss.pet) "在桌面上" else "收起了"}", "voice", nav)
+
         SectionLabel("工具")
         MenuItem("脉络", "谋划思考部的知识结构：体系 → 层级 → 节点 → 关系", "vein", nav)
         MenuItem("线条动效", "潮汐、叶脉、矩阵、雷霆、漩涡、涟漪、年轮、流线", "gallery", nav)

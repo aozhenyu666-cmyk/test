@@ -149,7 +149,10 @@ class ChatRepo(private val context: Context, private val store: Store, private v
 
     val agent = Agent(client, env)
 
-    fun send(text: String, image: String = "") {
+    /**
+     * 你说一句。[echo]：从桌面宠物、通知、对讲来的——回答也回到那里（气泡、通知、念出来）。
+     */
+    fun send(text: String, image: String = "", echo: Boolean = false) {
         val t = text.trim()
         if ((t.isEmpty() && image.isBlank()) || _busy.value) return
         store.touch()
@@ -168,8 +171,19 @@ class ChatRepo(private val context: Context, private val store: Store, private v
                 update { it.copy(messages = it.messages + ChatMsg(ChatMsg.ASSISTANT, "出错了：${e.message ?: e.javaClass.simpleName}", at = System.currentTimeMillis(), error = true)) }
             } finally {
                 _busy.value = false
+                if (echo) echoReply()
+                com.zongkong.app.system.PetWidget.refresh(context)
             }
         }
+    }
+
+    /** 把最后一句回答送回桌面宠物 / 通知，并念出来。 */
+    private fun echoReply() {
+        val reply = _log.value.messages.lastOrNull { it.role == ChatMsg.ASSISTANT && it.content.isNotBlank() }?.content ?: return
+        val (body, _) = Agent.options(reply)
+        com.zongkong.app.system.Pet.say(context, body, 30)
+        com.zongkong.app.system.Notifications.advisor(context, body)
+        if (store.config.value.voice.speakReplies) com.zongkong.app.system.Voice.speak(context, body)
     }
 
     /**
@@ -213,7 +227,11 @@ class ChatRepo(private val context: Context, private val store: Store, private v
             }
             val (body, _) = Agent.options(said)
             com.zongkong.app.system.Notifications.advisor(context, body)
-            if (cfg.hq.speak) com.zongkong.app.system.Speaker.speak(context, body)
+            // 桌面宠物跳出来说；开口说话（睡觉时段不说）
+            com.zongkong.app.system.Pet.say(context, body, 40, alert = kind == "binge" || kind == "absent")
+            val quiet = com.zongkong.core.hq.Hq.quiet(cfg.hq, System.currentTimeMillis(), store.zone)
+            if (!quiet && (cfg.voice.speakProactive || cfg.hq.speak)) com.zongkong.app.system.Voice.speak(context, body)
+            com.zongkong.app.system.PetWidget.refresh(context)
         }
         return true
     }

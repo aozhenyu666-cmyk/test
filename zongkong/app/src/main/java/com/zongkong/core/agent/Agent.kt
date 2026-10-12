@@ -129,6 +129,10 @@ class Agent(private val api: ChatApi, private val env: AgentEnv) {
             - 想让用户看到某个页面（刚开的计时页、要补的权限、档案），调 open_page。
             - 用户提到习惯、作息、偏好、反复出现的借口，用 remember 记下来。
             - 回答用中文，短：先说结论或做了什么，再说下一步。
+            - 用户常从桌面上的墨灵、对讲、通知回复跟你说话，回答会被念出来：这时不超过三句，不用列表和符号。
+            - 三个部门都有现成的体系，用起来：信息收集部的漏斗（intake_status、distill：每条要有一句话收获、归位、保鲜期）；
+              谋划思考部的脉络（vein_search、vein_node、vein_propose、vein_backfill：结构由用户确认，假设要有验证方式）；
+              统筹规划部的校准（calibration、backward_plan：排时间按估时系数放大，主线放在精力最好的钟头）。
 
             被定时叫醒时（你会收到一条以“[定时·…]”或“[触发·…]”开头、用户看不到的指令）：
             - 先取证（device_timeline、档案、截图），再决定开口说什么。

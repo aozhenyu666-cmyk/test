@@ -147,6 +147,8 @@ object HqRunner {
                 return
             }
         }
+        // 问候：主动开口（不是抽查——一定会说话）。标准：一天三次；黏人：每一个半小时；安静：不问
+        checkIn(context, now, minute, date = DayClock.date(now, store.zone))?.let { return }
         if (!config.ai.ready) return
         // 周日的规则复盘（总控时间之前一小时）
         val date = DayClock.date(now, store.zone)
@@ -179,6 +181,51 @@ object HqRunner {
                 return
             }
         }
+    }
+
+    /** 主动问候的时刻（分钟）。每天在 ±20 分钟里挪一挪，免得像闹钟。 */
+    fun checkInSlots(initiative: Int, activeStart: Int, activeEnd: Int, date: java.time.LocalDate): List<Int> {
+        val rnd = kotlin.random.Random(date.toEpochDay() * 17 + 3)
+        val base = when (initiative) {
+            0 -> emptyList()
+            1 -> listOf(11 * 60, 15 * 60, 19 * 60 + 30)
+            else -> generateSequence(activeStart + 60) { it + 90 }.takeWhile { it < activeEnd - 30 }.toList()
+        }
+        return base.map { (it + rnd.nextInt(-20, 21)).coerceIn(activeStart, activeEnd - 1) }
+    }
+
+    /**
+     * 问候：挑一件具体的事问用户——今天的主线、到点的约定、待提炼的东西、该验证的假设。
+     * 没配 AI 也问（固定的一句），所以“它从来不主动说话”不会再发生。返回 Unit 表示这一轮已经说过话了。
+     */
+    private fun checkIn(context: Context, now: Long, minute: Int, date: java.time.LocalDate): Unit? {
+        val app = context.zk
+        val store = app.store
+        val config = store.config.value
+        if (!config.hq.proactive || store.hq.value.active != null) return null
+        if (Hq.quiet(config.hq, now, store.zone)) return null
+        val slots = checkInSlots(config.boss.initiative, config.activeStart, config.activeEnd, date)
+        val i = slots.indexOfFirst { minute in it until it + 45 }
+        if (i < 0 || !store.firstAlert("checkin:$i")) return null
+        val main = Plans.mainAction(store.plans.value, store.work.value, now, store.zone)
+        val hypo = store.vein.value.nodes.filter { it.status == com.zongkong.core.vein.VStatus.HYPO.label }
+            .maxByOrNull { com.zongkong.core.vein.Veins.daysBetween(it.checks.lastOrNull()?.date ?: it.created, store.dateToday(now)) }
+        val intake = com.zongkong.core.info.Intake.stats(store.work.value, store.intake.value, now, store.zone)
+        val fallback = when {
+            main != null -> "「${main.title}」现在到哪一步了？回一句就行。"
+            intake.backlog > 0 -> "收集箱里有 ${intake.backlog} 条还没提炼。挑一条，用一句话说它对你有什么用。"
+            hypo != null -> "脉络里「${hypo.title}」还是假设。这周验证了吗？"
+            else -> "现在在做什么？接下来一小时打算做什么？"
+        }
+        app.chat.proactive(
+            "checkin",
+            "[定时·问候] 主动找用户说一句（这次一定要说，不能回“无事”）。先看档案、今天的主线、未结的约定、intake_status、vein_due，" +
+                "挑最该问的一件，问一个具体、马上能回答的问题；如果有约定快到点，就问那个。一两句，最后给【选项】。态度按档案里的来。",
+            fallback = fallback,
+        )
+        Buzz.once(context, Buzz.Level.GENTLE)
+        store.logWake("问候：第 ${i + 1} 次（主动程度 ${com.zongkong.core.boss.BossConfig.INITIATIVE.getOrElse(config.boss.initiative) { "?" }}）")
+        return Unit
     }
 
     /** 记录时附上现在的状况：服务在不在、通知能不能发。 */

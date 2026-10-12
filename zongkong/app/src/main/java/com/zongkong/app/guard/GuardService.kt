@@ -83,6 +83,7 @@ class GuardService : AccessibilityService() {
         }
         store.heartbeat = now
         lastStatusText = ""
+        com.zongkong.app.system.Pet.attach(this)
         scope.launch {
             while (isActive) {
                 try {
@@ -208,6 +209,7 @@ class GuardService : AccessibilityService() {
         // 总控时间刚开始时你正停在别的应用里：也拉回来
         fgPkg?.let { if (store.hq.value.active != null) lockdown(it, now) }
         watch(now)
+        com.zongkong.app.system.Pet.refresh(this)
         val text = Engine.summary(status)
         val title = "总控 · ${status.headline}"
         if ("$title|$text" != lastStatusText) {
@@ -363,6 +365,7 @@ class GuardService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        com.zongkong.app.system.Pet.detach()
         offline()
         try {
             unregisterReceiver(screenReceiver)

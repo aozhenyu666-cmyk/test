@@ -305,8 +305,14 @@ data class BossConfig(
     val bingeMinutes: Int = 40,
     /** 锁住模型：能用的 AI 接口 / 模型要换，24 小时后才生效（免得不清醒时换一个听话的）。 */
     val modelLock: Boolean = true,
+    /** 桌面宠物：浮在所有应用上面的小墨灵，点它说话。 */
+    val pet: Boolean = true,
+    /** 主动程度：0 安静（只在出事时找你）、1 标准（一天几次问候 + 抽查）、2 黏人（每一个半小时问一次）。 */
+    val initiative: Int = 1,
 ) {
     companion object {
+        val INITIATIVE = listOf("安静", "标准", "黏人")
+
         /** 两份设置取更严的（看得多、查得勤、管得紧的那份）。 */
         fun stricter(old: BossConfig, new: BossConfig): BossConfig = new.copy(
             shots = old.shots || new.shots,
@@ -322,6 +328,8 @@ data class BossConfig(
                 else -> minOf(old.bingeMinutes, new.bingeMinutes)
             },
             modelLock = old.modelLock || new.modelLock,
+            pet = old.pet || new.pet,
+            initiative = maxOf(old.initiative, new.initiative),
         )
     }
 
@@ -331,5 +339,7 @@ data class BossConfig(
         if (new.spotChecks < spotChecks) add("抽查减到每天 ${new.spotChecks} 次")
         if (bingeMinutes > 0 && (new.bingeMinutes == 0 || new.bingeMinutes > bingeMinutes)) add(if (new.bingeMinutes == 0) "不再管连续娱乐" else "连续娱乐 ${new.bingeMinutes} 分钟才找你")
         if (modelLock && !new.modelLock) add("解开模型锁")
+        if (pet && !new.pet) add("收起桌面宠物")
+        if (new.initiative < initiative) add("主动程度调低到“${INITIATIVE.getOrElse(new.initiative) { "?" }}”")
     }
 }

@@ -67,8 +67,16 @@ object Notifications {
 
     fun cancelHq(context: Context) = NotificationManagerCompat.from(context).cancel(ID_HQ)
 
-    /** 参谋主动发来的一句话，点开进对话。 */
+    const val KEY_REPLY = "reply"
+
+    /** 总控主动发来的一句话：点开进对话，或者直接在通知里回复（回答也会回到通知里）。 */
     fun advisor(context: Context, text: String) {
+        val replyIntent = PendingIntent.getBroadcast(
+            context, ID_AI + 5, Intent(context, ReplyReceiver::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or (if (android.os.Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0),
+        )
+        val input = androidx.core.app.RemoteInput.Builder(KEY_REPLY).setLabel("回总控…").build()
+        val reply = NotificationCompat.Action.Builder(0, "回复", replyIntent).addRemoteInput(input).setAllowGeneratedReplies(false).build()
         val n = NotificationCompat.Builder(context, CH_AI)
             .setSmallIcon(R.drawable.ic_stat_zongkong)
             .setContentTitle("总控")
@@ -76,8 +84,22 @@ object Notifications {
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setAutoCancel(true)
             .setContentIntent(open(context, "chat", ID_AI))
+            .addAction(reply)
+            .addAction(0, "说话", open(context, "voice", ID_AI + 6))
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+        post(context, ID_AI, n)
+    }
+
+    /** 回复发出去了：先显示“在想”。 */
+    fun advisorThinking(context: Context, said: String) {
+        val n = NotificationCompat.Builder(context, CH_AI)
+            .setSmallIcon(R.drawable.ic_stat_zongkong)
+            .setContentTitle("总控")
+            .setContentText("你：$said · 在想…")
+            .setOnlyAlertOnce(true)
+            .setContentIntent(open(context, "chat", ID_AI))
             .build()
         post(context, ID_AI, n)
     }
@@ -156,5 +178,15 @@ object Notifications {
         } catch (e: SecurityException) {
             Log.w(TAG, "没有通知权限", e)
         }
+    }
+}
+
+/** 通知里直接回复总控。 */
+class ReplyReceiver : android.content.BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val text = androidx.core.app.RemoteInput.getResultsFromIntent(intent)?.getCharSequence(Notifications.KEY_REPLY)?.toString()?.trim().orEmpty()
+        if (text.isEmpty()) return
+        Notifications.advisorThinking(context, text)
+        com.zongkong.app.zkApp(context).chat.send(text, echo = true)
     }
 }
