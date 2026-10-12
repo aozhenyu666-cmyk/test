@@ -512,6 +512,8 @@ class LoopTest {
         scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java).putExtra(com.zongkong.app.ui.MainActivity.EXTRA_ROUTE, "hq"))
         waitFor(hasTestTag("hq-start"), 10_000, "总控时间入口")
         settle()
+        settle()
+        Thread.sleep(800)
         shot("e2e-40-hq-entry")
         compose.onNodeWithTag("hq-start").performScrollTo().performClick()
         waitFor(hasTestTag("hq-step") and hasText("静", substring = true), 5_000, "第一环节")

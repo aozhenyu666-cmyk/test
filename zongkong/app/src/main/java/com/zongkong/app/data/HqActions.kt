@@ -70,7 +70,8 @@ class HqActions(private val context: Context, private val store: Store, private 
             is Actions.SubmitResult.Unavailable -> if (r.degradedLeft > 0) {
                 (actions.submitDegraded("hq_review", report, r.reason) as? Actions.SubmitResult.Judged)?.verdict?.let { if (it.pass) "日终验收（降级）通过" else it.feedback } ?: r.reason
             } else "AI 验收不可用：${r.reason}"
-            is Actions.SubmitResult.Refused -> r.message
+            // 日终验收还没开放（比如提前做了总控时间）：封存照样算，验收到点再交
+            is Actions.SubmitResult.Refused -> "已封存。日终验收：${r.message}，到时候用这次的记录交。"
         }
     }
 
