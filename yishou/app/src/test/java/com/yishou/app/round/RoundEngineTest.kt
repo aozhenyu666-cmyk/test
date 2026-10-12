@@ -12,6 +12,8 @@ import com.yishou.app.llm.LlmError
 import com.yishou.app.llm.LlmResult
 import com.yishou.app.llm.OpeningMove
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -61,10 +63,60 @@ class RoundEngineTest {
     }
 
     @Test
-    fun tooShortSendsNothing() = runTest {
-        assertEquals(RoundEngine.AnswerResult.TooShort, engine.answer(task, "一手", "完成了", RoundSource.HOME))
+    fun blankAnswerSendsNothing() = runTest {
+        assertEquals(RoundEngine.AnswerResult.TooShort, engine.answer(task, "一手", "   ", RoundSource.HOME))
         assertEquals(0, coach.judgeCalls)
         assertTrue(dao.rounds.isEmpty())
+    }
+
+    @Test
+    fun shortConcreteActionReachesCoachAndKeepsOriginalWords() = runTest {
+        coach.judgeResult = LlmResult.Ok(Judgement(true, "现实行动", "给了数量和花费", "记录实际结果", null, "买完了，可以收起"))
+        val action = task.copy(title = "买肉", practiceMode = "action")
+        val result = engine.answer(action, "买完后告诉我数量和花费", "买了两斤，花了二十元", RoundSource.HOME) as RoundEngine.AnswerResult.Judged
+        assertEquals("买了两斤，花了二十元", coach.lastAnswer)
+        assertTrue(result.round.effective)
+        assertEquals("现实行动", dao.rounds.single().moveType)
+    }
+
+    @Test
+    fun vagueShortActionIsNotAutomaticallyAccepted() = runTest {
+        coach.judgeResult = LlmResult.Ok(Judgement(false, "无", "没有结果", "具体买了什么？", null, "数量和花费是多少？"))
+        val result = engine.answer(task.copy(practiceMode = "action"), "结果呢？", "完成了", RoundSource.HOME) as RoundEngine.AnswerResult.Judged
+        assertFalse(result.round.effective)
+        assertEquals("完成了", dao.rounds.single().userAnswer)
+    }
+
+    @Test
+    fun concurrentHomeAndWindowOpeningOnlyMakesOneRequest() = runTest {
+        coach.openingResult = LlmResult.Ok(OpeningMove("同一手", "缺关系"))
+        coach.beforeOpening = { delay(100) }
+        val home = async { engine.currentMove(task) }
+        val window = async { engine.currentMove(task) }
+        assertEquals(home.await(), window.await())
+        assertEquals(1, coach.openingCalls)
+    }
+
+    @Test
+    fun changingMaterialDuringJudgementDoesNotOverwriteNewBreakpoint() = runTest {
+        val before = Breakpoint(task.id, "旧条件", "", "", "旧问题", 1)
+        val edited = before.copy(known = "截图里的新价格", pendingCoachMove = null, updatedAt = 2)
+        dao.breakpoints[task.id] = before
+        coach.judgeResult = LlmResult.Ok(Judgement(true, "比较", "", "", BreakpointUpdate("旧的结论", "", ""), "旧的下一问"))
+        coach.beforeJudge = { dao.breakpoints[task.id] = edited }
+        assertTrue(engine.answer(task, "旧问题", goodAnswer, RoundSource.HOME) is RoundEngine.AnswerResult.Failed)
+        assertEquals(edited, dao.breakpoints[task.id])
+        assertTrue(dao.rounds.isEmpty())
+    }
+
+    @Test
+    fun anotherTaskAndCardAnswersDoNotPolluteTaskContext() = runTest {
+        dao.rounds += Round(1, 7, RoundSource.HOME, null, "我的事情", "这件事的上一句", true, "比较", "", "", true, 1)
+        dao.rounds += Round(2, 8, RoundSource.HOME, null, "另一件事", "别的任务的话", true, "比较", "", "", true, 2)
+        dao.rounds += Round(3, 7, RoundSource.HOME, null, "【题卡】选哪个", "选 A", true, "中间结论", "", "", true, 3)
+        coach.openingResult = LlmResult.Ok(OpeningMove("接上", "缺关系"))
+        engine.currentMove(task)
+        assertEquals("这件事的上一句", coach.lastContext?.lastAnswer)
     }
 
     @Test

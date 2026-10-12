@@ -127,7 +127,7 @@ class CoachParserTest {
     fun systemPromptHasFaceTable() {
         assertTrue(Prompts.SYSTEM.contains("2 预判：最小动作——在结果出现前说一个预期及主要依据"))
         assertFalse(Prompts.SYSTEM.contains("{{FACES}}"))
-        assertTrue(Prompts.SYSTEM.startsWith("你是一个学习陪练"))
+        assertTrue(Prompts.SYSTEM.startsWith("你是一位思维训练与实际行动陪练"))
     }
 
     @Test

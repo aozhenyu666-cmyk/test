@@ -47,11 +47,18 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk yishou.apk
           # Room 导出的数据库结构，一起放进发布页，方便提交进仓库（app/schemas）
           (cd app && zip -qr ../schemas.zip schemas)
-          gh release delete yishou-latest --cleanup-tag --yes || true
-          gh release create yishou-latest yishou.apk schemas.zip \
+          # Codex 预览分支使用单独下载地址，便于在合并前试用。
+          release_tag=yishou-latest
+          release_title="一手 最新调试版"
+          if [[ "$GITHUB_REF_NAME" == codex/* ]]; then
+            release_tag=yishou-flexible-preview
+            release_title="一手 思维与行动预览版"
+          fi
+          gh release delete "$release_tag" --cleanup-tag --yes || true
+          gh release create "$release_tag" yishou.apk schemas.zip \
             --target "$GITHUB_SHA" \
             --prerelease \
-            --title "一手 最新调试版" \
+            --title "$release_title" \
             --notes "由提交 ${GITHUB_SHA::7} 自动构建。直接安装 yishou.apk，可覆盖旧版本，数据保留。"
 
       - name: Upload test reports

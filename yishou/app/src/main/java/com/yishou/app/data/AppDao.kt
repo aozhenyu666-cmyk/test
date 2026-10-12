@@ -102,6 +102,9 @@ abstract class AppDao {
     @Query("SELECT * FROM round ORDER BY createdAt DESC LIMIT 1")
     abstract suspend fun lastRound(): Round?
 
+    @Query("SELECT * FROM round WHERE taskId = :taskId AND coachMove NOT LIKE '【题卡】%' ORDER BY createdAt DESC LIMIT 1")
+    abstract suspend fun lastRoundForTask(taskId: Long): Round?
+
     @Query("SELECT COUNT(*) FROM round WHERE source = :source AND createdAt >= :from AND createdAt < :to")
     abstract suspend fun countRounds(source: String, from: Long, to: Long): Int
 

@@ -6,6 +6,7 @@ import com.yishou.app.data.Breakpoint
 import com.yishou.app.data.Round
 import com.yishou.app.data.RoundSource
 import com.yishou.app.data.Task
+import com.yishou.app.training.PracticeMode
 import org.json.JSONException
 import org.json.JSONObject
 import java.time.Instant
@@ -158,8 +159,12 @@ object CoachMessages {
         when {
             context.demo -> {
                 appendLine("请求类型：示范。")
-                appendLine("用户卡在下面这一手，请求示范。先用另一个短例子完整示范这一面的标准动作（两三句），")
-                appendLine("再请他在自己的题上做同样的动作。示范和请求一起写进 coach_move。")
+                if (PracticeMode.of(task.practiceMode) == PracticeMode.ACTION) {
+                    appendLine("用户卡在当前实际行动。就眼前材料示范如何观察一个必要条件、做下一步并检查结果，不要求练骰面或做题。")
+                } else {
+                    appendLine("用户卡在下面这一手，请求示范。先用另一个短例子完整示范这一面的标准动作（两三句），")
+                    appendLine("再请他在自己的材料或情境上做同样的动作。示范和请求一起写进 coach_move。")
+                }
                 context.currentMove?.let { appendLine("【卡住的这一手】$it") }
             }
             context.forcedFace != null -> {
@@ -214,9 +219,10 @@ object CoachMessages {
         if (task != null) appendTask(task)
         if (breakpoint != null) appendBreakpoint(breakpoint)
         appendLine("【今天的轮次】共 ${rounds.size} 轮")
+        appendLine("每轮可能来自不同任务。总结可以概括全部记录，但明天第一问只接当前任务的原话；没有当前任务的记录时留空，不把题卡答案或另一件事写进当前断点。")
         val time = DateTimeFormatter.ofPattern("HH:mm").withZone(zone)
         rounds.forEachIndexed { i, r ->
-            appendLine("第 ${i + 1} 轮（${time.format(Instant.ofEpochMilli(r.createdAt))}，${sourceName(r.source)}）")
+            appendLine("第 ${i + 1} 轮（任务 id ${r.taskId}，${time.format(Instant.ofEpochMilli(r.createdAt))}，${sourceName(r.source)}）")
             appendLine("陪练：${r.coachMove}")
             appendLine("用户原话：${r.userAnswer}")
             val verdict = when {
@@ -234,8 +240,8 @@ object CoachMessages {
     fun observe(task: Task, breakpoint: Breakpoint, screen: String, context: CoachContext = CoachContext()): String = buildString {
         appendLine("请求类型：看屏出一手。")
         appendLine("用户刚让你看了一眼他的手机屏幕。请针对屏幕上他正在做的这一步出一手：")
-        appendLine("问题必须落在屏幕上的具体内容（这道题、这个选项、这段材料），并尽量和断点接上。")
-        appendLine("如果屏幕上的内容和学习任务无关，就用一句话把他拉回任务，再出问题。")
+        appendLine("这一手必须落在屏幕上的具体情况（题目、文章、商品、价格、选项或操作结果），并尽量和断点接上。")
+        appendLine("截图是新材料，不是用户已经作答或完成行动的证明。与目标不一致时先问是否切换目标，不强行解释成题目。")
         appendLine()
         appendTask(task)
         appendBreakpoint(breakpoint)
@@ -255,7 +261,11 @@ object CoachMessages {
 
     private fun StringBuilder.appendTask(task: Task) {
         appendLine("【任务】")
+        val mode = PracticeMode.of(task.practiceMode)
+        appendLine("当前模式：${mode.label}")
+        appendLine(mode.instruction)
         appendLine("对象：${task.title}")
+        appendLine("任务 id：${task.id}")
         appendLine("目标：${task.goal}")
         appendLine("材料摘录：${task.material?.takeIf { it.isNotBlank() } ?: "（无）"}")
     }

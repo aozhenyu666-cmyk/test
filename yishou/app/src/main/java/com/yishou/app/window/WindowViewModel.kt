@@ -27,6 +27,9 @@ import com.yishou.app.system.Haptics
 import com.yishou.app.system.Notifications
 import com.yishou.app.system.Reminders
 import com.yishou.app.ui.CardActions
+import com.yishou.app.training.PracticeSession
+import com.yishou.app.training.PracticeMode
+import com.yishou.app.data.RoundSource
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -80,6 +83,9 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
     private val zone get() = AppZone.zone
     private val session: CardSession = yishou.newSession()
     val card: StateFlow<SessionState> = session.state
+    val practice = PracticeSession(yishou, viewModelScope, RoundSource.WINDOW)
+    private val cardsMode get() = yishou.settings.app.value.windowCards
+    private var setJob: Job? = null
 
     private val _state = MutableStateFlow(WindowState())
     val state: StateFlow<WindowState> = _state.asStateFlow()
@@ -105,14 +111,31 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { yishou.settings.app.collect { p -> _state.update { it.copy(voiceOn = p.voiceMode) } } }
         // 每到新的一步（新题、下一步），开口问一句
         viewModelScope.launch { session.state.collect { onCardState(it) } }
-        // “看一眼”看到的题：作为下一张
         viewModelScope.launch {
-            yishou.incomingCard.collect { d ->
-                if (d != null && session.state.value.active) {
-                    session.useDealt(d, checks = Progress.checks(yishou.cardEngine.history()))
-                    yishou.incomingCard.value = null
-                }
+            practice.state.collect { p ->
+                if (cardsMode || !active || p.busy || p.move == null) return@collect
+                val key = "open:${p.task?.id}:${p.move}"
+                if (key == promptedKey) return@collect
+                promptedKey = key
+                markActivity()
+                Haptics.play(yishou, Haptics.Kind.NEW_MOVE)
+                prompt(force = true)
             }
+        }
+
+    }
+
+    /** 用户明确接纳截图题卡后才替换当前题，避免自动丢失正在作答的内容。 */
+    fun useIncomingCard() {
+        if (!cardsMode) return
+        val incoming = yishou.incomingCard.value ?: return
+        setJob?.cancel()
+        speaker.stop()
+        stopVoice()
+        setJob = viewModelScope.launch {
+            session.start(CardMode.WINDOW, null, 1, deal = false)
+            session.useDealt(incoming, Progress.checks(yishou.cardEngine.history()))
+            yishou.incomingCard.compareAndSet(incoming, null)
         }
     }
 
@@ -166,7 +189,8 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
             if (span != null) {
                 WindowService.start(yishou)
                 startTicker(span)
-                if (!session.state.value.active) startSet(warm = prefs.warmup) else prompt(force = true)
+                if (!cardsMode) { practice.start(); prompt(force = true) }
+                else if (!session.state.value.active) startSet(warm = prefs.warmup) else prompt(force = true)
             }
         }
     }
@@ -175,10 +199,25 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
         yishou.database.coach().recentSets(50).count { it.status == SetStatus.DONE && (it.endedAt ?: 0) >= start }
 
     fun startSet(warm: Boolean) {
+        if (!cardsMode) { practice.start(); return }
         _state.update { it.copy(warmingUp = warm) }
         promptedKey = ""
         if (warm) speak("先热身。吸气四秒，呼气六秒，跟着圈走。")
-        viewModelScope.launch { session.start(CardMode.WINDOW, null, yishou.settings.app.value.setCards) }
+        setJob?.cancel()
+        setJob = viewModelScope.launch { session.start(CardMode.WINDOW, null, yishou.settings.app.value.setCards) }
+    }
+
+    fun setCardsMode(on: Boolean) {
+        speaker.stop()
+        stopVoice()
+        reminderJob?.cancel()
+        setJob?.cancel()
+        session.stop()
+        practice.stop()
+        promptedKey = ""
+        yishou.settings.updateApp { it.copy(windowCards = on) }
+        _state.update { it.copy(warmingUp = false) }
+        if (_state.value.let { it.span != null && !it.ended && !it.paused }) startSet(warm = false)
     }
 
     fun warmupDone() {
@@ -226,6 +265,8 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
         reminderJob?.cancel()
         speaker.stop()
         stopVoice()
+        practice.stop()
+        setJob?.cancel()
         val span = _state.value.span
         viewModelScope.launch {
             val done = span?.let { setsDoneSince(it.start) } ?: 0
@@ -233,11 +274,14 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private val active get() = _state.value.let { it.span != null && !it.ended && !it.paused && !it.warmingUp }
+    private val active get() = _state.value.let {
+        it.span != null && !it.ended && !it.paused && !it.warmingUp && (cardsMode || !practice.state.value.paused)
+    }
 
     // ---------- 每一步问一句 ----------
 
     private fun onCardState(c: SessionState) {
+        if (!cardsMode) return
         val r = c.round
         if (c.done) {
             if (promptedKey != "done:${c.startedAt}") {
@@ -265,6 +309,10 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 这一步的问话：短、口语、只问一件事 */
     private fun stepPrompt(c: SessionState): String? {
+        if (!cardsMode) {
+            val p = practice.state.value
+            return p.move?.let { Spoken.of(it, yishou.engine.spoken.value?.takeIf { v -> v.first == it }?.second) }
+        }
         val r = c.round ?: return null
         val card = r.card
         return when {
@@ -285,9 +333,10 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun prompt(force: Boolean) {
         if (!active) return
+        if (!cardsMode && practice.state.value.busy) return
         val c = session.state.value
         val text = stepPrompt(c) ?: return
-        val reveal = c.round?.step == Step.REVEAL && !c.needsKey
+        val reveal = cardsMode && c.round?.step == Step.REVEAL && !c.needsKey
         speak(text) {
             if (reveal) {
                 // 语音陪练时：揭晓读完，停一下，自动下一张（不开语音就等你点“下一张”）
@@ -308,6 +357,7 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun retry() {
+        if (!cardsMode) { practice.start(); return }
         viewModelScope.launch { session.deal() }
     }
 
@@ -331,12 +381,14 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
                 delay(5_000)
                 val s = _state.value
                 val c = session.state.value
-                if (!active || c.loading || c.done || c.round == null) continue
+                val pState = practice.state.value
+                if (!active || (if (cardsMode) c.loading || c.done || c.round == null else pState.busy || pState.move == null)) continue
                 if (s.listen != ListenPhase.IDLE || s.speaking) continue
                 val p = yishou.settings.app.value
                 val lvl = IdleLadder.level(
                     System.currentTimeMillis() - lastActivity,
-                    p.remindFirstMinutes, p.remindSecondMinutes, p.pullBackMinutes, p.pullBackEnabled,
+                    p.remindFirstMinutes, p.remindSecondMinutes, p.pullBackMinutes,
+                    p.pullBackEnabled && (cardsMode || pState.mode != PracticeMode.ACTION),
                 )
                 if (lvl > ladder) {
                     ladder = lvl
@@ -375,6 +427,15 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
     private fun maybeListen() {
         val s = _state.value
         val c = session.state.value
+        if (!cardsMode) {
+            val p = practice.state.value
+            if (!s.voiceOn || !active || p.move == null || p.busy) return
+            if (!WindowActivity.isVisible || voice.phase.value != ListenPhase.IDLE) return
+            if (!voice.hasPermission()) { _state.update { it.copy(needMic = true) }; return }
+            listenJob?.cancel()
+            listenJob = viewModelScope.launch { onHeard(voice.listen()) }
+            return
+        }
         if (!s.voiceOn || !active || c.round == null || c.loading || c.done) return
         if (c.round.step == Step.REVEAL && !c.needsKey) return
         if (!WindowActivity.isVisible || voice.phase.value != ListenPhase.IDLE) return
@@ -442,6 +503,20 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
         }
         markActivity()
         _state.update { it.copy(voiceNote = "听到：$text") }
+        if (!cardsMode) {
+            when (VoiceCommands.parse(text)) {
+                VoiceCommand.PAUSE -> pause(5)
+                VoiceCommand.REPEAT -> prompt(force = true)
+                VoiceCommand.THINKING -> thinking()
+                VoiceCommand.DONT_KNOW, VoiceCommand.HINT, VoiceCommand.DEMO, VoiceCommand.EXPLAIN -> practice.demo()
+                else -> {
+                    // 开放回答先放进输入框，用户确认后提交，避免听写错误被自动判定。
+                    practice.answer(text)
+                    _state.update { it.copy(voiceNote = "已放进输入框，检查后点发送。") }
+                }
+            }
+            return
+        }
         when (VoiceCommands.parse(text)) {
             VoiceCommand.DONT_KNOW, VoiceCommand.HINT, VoiceCommand.EXPLAIN, VoiceCommand.DEMO -> {
                 actions.hint()
@@ -521,6 +596,7 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
         yishou.settings.updateApp { it.copy(windowPauseUntil = 0) }
         _state.update { it.copy(paused = false, pauseUntil = 0) }
         promptedKey = ""
+        if (!cardsMode) { practice.start(); prompt(force = true); return }
         val c = session.state.value
         if (!c.active || c.done) startSet(warm = false) else onCardState(c)
     }

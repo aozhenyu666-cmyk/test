@@ -8,13 +8,13 @@ class Vision(private val chat: ChatClient) {
 
     suspend fun transcribe(taskTitle: String?, coachMove: String?, imageDataUrl: String): LlmResult<String> {
         val text = buildString {
-            if (taskTitle != null) appendLine("学习任务：$taskTitle")
+            if (taskTitle != null) appendLine("当前任务：$taskTitle")
             if (coachMove != null) appendLine("陪练刚才的问题：$coachMove")
-            append("这是用户回答这个问题时拍下的图片。请转写。")
+            append("这是用户主动提供的材料或结果图片。请客观转写。")
         }
         return when (val r = chat.completeWithImage(Prompts.VISION, text, imageDataUrl, "识图")) {
             is LlmResult.Err -> r
-            is LlmResult.Ok -> LlmResult.Ok(r.value.trim().take(MAX_CHARS))
+            is LlmResult.Ok -> LlmResult.Ok(limit(r.value, MAX_CHARS))
         }
     }
 
@@ -24,7 +24,7 @@ class Vision(private val chat: ChatClient) {
             "看不清的地方写“（看不清）”。不要作答，不要解析，不要加任何开场白。"
         return when (val r = chat.completeWithImage(system, "请转写这道题。", imageDataUrl, "拍题识图")) {
             is LlmResult.Err -> r
-            is LlmResult.Ok -> LlmResult.Ok(r.value.trim().take(MAX_CHARS * 2))
+            is LlmResult.Ok -> LlmResult.Ok(limit(r.value, MAX_CHARS * 2))
         }
     }
 
@@ -33,12 +33,16 @@ class Vision(private val chat: ChatClient) {
         val text = (if (taskTitle != null) "用户的学习任务：$taskTitle\n" else "") + "这是他此刻的手机屏幕。请描述。"
         return when (val r = chat.completeWithImage(Prompts.SCREEN, text, imageDataUrl, "看屏识图")) {
             is LlmResult.Err -> r
-            is LlmResult.Ok -> LlmResult.Ok(r.value.trim().take(MAX_CHARS))
+            is LlmResult.Ok -> LlmResult.Ok(limit(r.value, MAX_CHARS))
         }
     }
 
     companion object {
         /** 转写太长时截断，避免判定请求过大 */
-        const val MAX_CHARS = 1500
+        const val MAX_CHARS = 6000
+        private fun limit(text: String, max: Int): String {
+            val cleaned = text.trim()
+            return if (cleaned.length <= max) cleaned else cleaned.take(max) + "\n【转写较长，后面的内容未导入，请分段补充】"
+        }
     }
 }

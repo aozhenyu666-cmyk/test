@@ -277,20 +277,22 @@ fun AnswerComposer(
     /** 换掉默认的麦克风（陪练窗口用自己的语音流程） */
     mic: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
+    placeholder: String = "你的一手：得到了什么、依据是什么",
+    allowSubmit: Boolean = true,
+    onEditAttachment: ((String) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var voiceNote by remember { mutableStateOf<String?>(null) }
     val fieldFocus = remember { androidx.compose.ui.focus.FocusRequester() }
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     var photoUri by rememberSaveable { mutableStateOf<Uri?>(null) }
+    var imageExpanded by remember { mutableStateOf(false) }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         if (ok) photoUri?.let(onAttach)
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let(onAttach)
     }
-    val imageText = (attachment as? Attachment.Ready)?.text
-    val chars = AnswerRules.countChars(AnswerRules.compose(answer, imageText))
 
     Surface(tonalElevation = 3.dp, modifier = modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -307,15 +309,21 @@ fun AnswerComposer(
                     color = MaterialTheme.colorScheme.surfaceVariant,
                     shape = RoundedCornerShape(12.dp),
                 ) {
-                    Row(Modifier.padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "📷 ${attachment.text}",
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = onClearAttachment) { Text("移除") }
+                    Column(Modifier.padding(horizontal = 10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "📷 ${attachment.text}",
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = onClearAttachment) { Text("移除") }
+                        }
+                        if (onEditAttachment != null) {
+                            TextButton(onClick = { imageExpanded = !imageExpanded }) { Text(if (imageExpanded) "收起识别结果" else "检查 / 修改识别结果") }
+                            if (imageExpanded) OutlinedTextField(attachment.text, onEditAttachment, minLines = 3, maxLines = 8, label = { Text("图片转写（可编辑）") }, modifier = Modifier.fillMaxWidth())
+                        }
                     }
                 }
                 is Attachment.Failed -> Row(verticalAlignment = Alignment.CenterVertically) {
@@ -344,7 +352,7 @@ fun AnswerComposer(
                     value = answer,
                     onValueChange = onAnswerChange,
                     enabled = !submitting,
-                    placeholder = { Text("你的一手：得到了什么、依据是什么") },
+                    placeholder = { Text(placeholder) },
                     minLines = 1,
                     maxLines = 6,
                     shape = RoundedCornerShape(26.dp),
@@ -369,7 +377,7 @@ fun AnswerComposer(
                 Spacer(Modifier.size(4.dp))
                 FilledIconButton(
                     onClick = onSubmit,
-                    enabled = !submitting && attachment != Attachment.Working,
+                    enabled = allowSubmit && !submitting && attachment != Attachment.Working,
                     modifier = Modifier.size(52.dp),
                 ) {
                     if (submitting) {
@@ -401,9 +409,9 @@ fun AnswerComposer(
                 actions()
                 Spacer(Modifier.weight(1f))
                 Text(
-                    if (submitting) "判定中…" else "$chars/${AnswerRules.MIN_CHARS} 字",
+                    if (submitting) "检查这一步…" else "可简短回答",
                     style = MaterialTheme.typography.labelMedium,
-                    color = if (chars >= AnswerRules.MIN_CHARS) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                    color = MaterialTheme.colorScheme.outline,
                 )
             }
         }

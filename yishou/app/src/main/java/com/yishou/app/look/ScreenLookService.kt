@@ -181,13 +181,30 @@ class ScreenLookService : Service() {
                 setStatus("没有截到画面，再点一次试试")
                 return@launch
             }
-            // 看一眼：把屏幕上的题完整转写下来
-            val screen = when (val r = app.vision.transcribeQuestion(dataUrl)) {
+            val cardsMode = app.settings.app.value.windowCards
+            val task = app.database.dao().getCurrentTask()
+            if (!cardsMode && task == null) { setStatus("先在主页带入一件事，再让陪练看屏。"); return@launch }
+            val screen = when (val r = if (cardsMode) app.vision.transcribeQuestion(dataUrl) else app.vision.describeScreen(task?.title, dataUrl)) {
                 is LlmResult.Ok -> r.value
                 is LlmResult.Err -> {
                     setStatus("识图失败：${r.error.message}")
                     return@launch
                 }
+            }
+            // 普通截图围绕真实情况接一手，不自动变成题卡，也不自动计为一次回答。
+            if (!cardsMode && task != null) {
+                val current = app.database.dao().getCurrentTask()
+                if (current?.id != task.id || current != task) { setStatus("任务已变化，请再看一眼。"); return@launch }
+                val bp = app.database.dao().getBreakpoint(task.id)
+                val material = listOfNotNull(task.material, "【最新截图】$screen").joinToString("\n\n")
+                if (material.length > 24_000) { setStatus("材料较多，请先在主页编辑精简。"); return@launch }
+                val updated = task.copy(material = material)
+                app.database.dao().editTask(updated, bp?.known.orEmpty(), bp?.stuck.orEmpty(), bp?.nextQuestion.orEmpty(), System.currentTimeMillis())
+                app.stats.event(DayStats.LOOK)
+                lastLookMove = null
+                setStatus(null)
+                Notifications.showReminder(this@ScreenLookService, ID_RESULT, "已接住眼前的情况", "截图文字已加入当前任务，回到陪练接下一步。", WindowActivity::class.java)
+                return@launch
             }
             // 屏幕上的题：整理成一张题卡，交给陪练窗口当下一张（揭晓时点官方答案才计分）
             when (val r = app.cardEngine.import(screen)) {

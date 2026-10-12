@@ -129,7 +129,10 @@ fun CardRoundView(s: SessionState, a: CardActions) {
                     (0..3).filter { it != r.bet }.forEach { o -> OutlinedButton(onClick = { a.change(o) }) { Text("改 ${Card.letter(o)}") } }
                 }
             }
-            Step.REVEAL -> if (s.needsKey) KeyStep(a) else Reveal(card, r, a)
+            Step.REVEAL -> if (s.needsKey) KeyStep(a) else {
+                if (s.dealt?.row?.verified == false) Text("没有核对官方答案，这张只保留过程。下面是模型推测，不能作为核对结果。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Reveal(card, r, a)
+            }
         }
 
         if (r.step != Step.REVEAL) {

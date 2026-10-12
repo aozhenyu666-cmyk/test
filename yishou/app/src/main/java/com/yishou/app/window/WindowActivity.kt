@@ -65,6 +65,8 @@ import com.yishou.app.ui.ThinProgress
 import com.yishou.app.ui.VoiceNote
 import com.yishou.app.ui.VoiceRings
 import com.yishou.app.ui.WarmupPanel
+import com.yishou.app.ui.PracticePanel
+import com.yishou.app.ui.TimeWheel
 import com.yishou.app.ui.theme.YishouTheme
 
 /** 陪练窗口页。窗口期间保持屏幕常亮，方便放在桌上边听边想。 */
@@ -127,6 +129,7 @@ private fun WindowScreen(s: WindowState, c: SessionState, vm: WindowViewModel, o
     var showPanels by remember { mutableStateOf(false) }
     val app = LocalContext.current.applicationContext as YishouApp
     val prefs by app.settings.app.collectAsStateWithLifecycle()
+    val incoming by app.incomingCard.collectAsStateWithLifecycle()
     val change: ((AppPrefs) -> AppPrefs) -> Unit = { f -> app.settings.updateApp(f) }
     val level by vm.level.collectAsStateWithLifecycle()
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> vm.onMicPermission(ok) }
@@ -155,25 +158,38 @@ private fun WindowScreen(s: WindowState, c: SessionState, vm: WindowViewModel, o
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     RulesCard(prefs, change)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("专门练题卡", modifier = Modifier.weight(1f))
+                        Switch(checked = prefs.windowCards, onCheckedChange = vm::setCardsMode)
+                    }
                     Button(onClick = vm::startNow, modifier = Modifier.fillMaxWidth()) { Text("按这个规则开局：${s.windowMinutes} 分钟") }
                     return@Column
                 }
 
                 if (s.ended) {
                     Text("窗口结束", style = MaterialTheme.typography.headlineSmall)
-                    Text("本窗口练完 ${s.setsDone} 组。做过的每一张都记着。")
+                    Text(if (prefs.windowCards) "本窗口练完 ${s.setsDone} 组。做过的每一张都记着。" else "做过的每一手和当前断点都已保存，可以从主页继续。")
                     Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("返回") }
                     return@Column
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    TimeWheel(Modifier.size(54.dp), progress = 1f - s.remainingMs.toFloat() / (span.end - span.start).coerceAtLeast(1))
                     FlipClock(s.remainingMs, tile = 52.dp, modifier = Modifier.weight(1f))
                     Column(horizontalAlignment = Alignment.End) {
-                        Text("练完 ${s.setsDone} 组", style = MaterialTheme.typography.titleSmall)
+                        Text(if (prefs.windowCards) "练完 ${s.setsDone} 组" else "接续当前任务", style = MaterialTheme.typography.titleSmall)
                         TextButton(onClick = { confirmStop = true }) { Text("提前结束") }
                     }
                 }
                 ThinProgress(1f - s.remainingMs.toFloat() / (span.end - span.start).coerceAtLeast(1))
+                Text(if (prefs.windowCards) "题卡练习" else "开放陪练 · 思维与行动", style = MaterialTheme.typography.labelLarge)
+                if (prefs.windowCards && incoming != null) {
+                    Text("有一张截图题卡待接入。接入会收起当前未完成的题。", style = MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = vm::useIncomingCard) { Text("接入这道题") }
+                        TextButton(onClick = { app.incomingCard.value = null }) { Text("先不用") }
+                    }
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("语音陪练", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                     Switch(checked = s.voiceOn, onCheckedChange = vm::setVoice)
@@ -188,7 +204,17 @@ private fun WindowScreen(s: WindowState, c: SessionState, vm: WindowViewModel, o
                 when {
                     s.warmingUp -> WarmupPanel(ready = r != null || c.error != null, onDone = { vm.warmupDone() })
                     s.paused -> PausedCard(s, vm::resume)
+                    !prefs.windowCards -> {
+                        if (s.voiceOn) VoiceStage(s, level, onTap = vm::micTap)
+                        PracticePanel(vm.practice)
+                        TextButton(onClick = onOpenApp) { Text("回主页选择目标或导入材料") }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = vm::thinking) { Text("我在想 / 正在做") }
+                            OutlinedButton(onClick = { vm.pause(5) }) { Text("先停 5 分钟") }
+                        }
+                    }
                     c.done -> {
+                        CardRoundView(c, vm.actions)
                         Text("这一组做完了", style = MaterialTheme.typography.headlineSmall)
                         TodayBranch(c.results.map { it.firstCorrect && it.help == 0 }, target = c.results.size)
                         Text("自己做对 ${c.results.count { it.firstCorrect && it.help == 0 }} / ${c.results.size} 张", style = MaterialTheme.typography.bodyLarge)
@@ -236,7 +262,7 @@ private fun WindowScreen(s: WindowState, c: SessionState, vm: WindowViewModel, o
         AlertDialog(
             onDismissRequest = { confirmStop = false },
             title = { Text("提前结束窗口？") },
-            text = { Text("做过的每一张都已保存。结束后思考页恢复正常放行。") },
+            text = { Text("已提交的回答和当前断点已保存。结束后思考页恢复正常放行。") },
             confirmButton = { TextButton(onClick = { confirmStop = false; vm.stopEarly() }) { Text("结束") } },
             dismissButton = { TextButton(onClick = { confirmStop = false }) { Text("继续陪练") } },
         )
