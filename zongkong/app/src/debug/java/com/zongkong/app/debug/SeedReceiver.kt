@@ -12,6 +12,8 @@ import com.zongkong.core.Verdict
  * 调试版专用：CI 冒烟测试通过 adb 预置状态。
  *   adb shell am broadcast -a com.zongkong.app.SEED -p com.zongkong.app --es blocked com.android.contacts
  *   adb shell am broadcast -a com.zongkong.app.SEED -p com.zongkong.app --es mode free
+ *   adb shell am broadcast -a com.zongkong.app.SEED -p com.zongkong.app --es mode hq       （开始一次总控时间）
+ *   adb shell am broadcast -a com.zongkong.app.SEED -p com.zongkong.app --es mode hq-end   （提前结束）
  */
 class SeedReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -35,6 +37,8 @@ class SeedReceiver : BroadcastReceiver() {
                     )
                 }
             }
+            "hq" -> context.zk.actions.hq.start(com.zongkong.core.hq.HqTrigger.MANUAL)
+            "hq-end" -> context.zk.actions.hq.exitEarly("冒烟测试结束总控时间")
             "free" -> {
                 val now = System.currentTimeMillis()
                 store.updateToday(now) { day ->
@@ -47,6 +51,6 @@ class SeedReceiver : BroadcastReceiver() {
                 store.updateConfig { it.copy(silenceHours = 0, dailyQuotaMin = 0) }
             }
         }
-        Log.i("SeedReceiver", "seeded: strict=${store.status().strict} blocked=${store.config.value.blocked}")
+        Log.i("SeedReceiver", "seeded: strict=${store.status().strict} hq=${store.hq.value.active != null} blocked=${store.config.value.blocked}")
     }
 }

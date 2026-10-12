@@ -43,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import com.zongkong.core.hq.Hq
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -154,6 +155,10 @@ fun NowScreen(nav: NavHostController) {
             }
         }
 
+        // ---------- 总控时间 ----------
+        val hqBook by store.hq.collectAsStateWithLifecycle()
+        HqStrip(config.hq, hqBook, now, store.zone, nav)
+
         // ---------- 本周计划（参照） ----------
         PlanStrip(plan, book, work, now, nav)
 
@@ -247,6 +252,36 @@ fun statusColor(status: Status): Color {
  * 轮椅式的提示：此刻你只需要看这一条。
  * 严管时说清楚怎么解除；早上没部署就带你去部署；晚上没复盘就带你去复盘。
  */
+/** 首页上的总控时间条：进行中、快到了、到点了都显眼；其余时候一行小字。 */
+@Composable
+private fun HqStrip(cfg: com.zongkong.core.hq.HqConfig, book: com.zongkong.core.hq.HqBook, now: Long, zone: java.time.ZoneId, nav: NavHostController) {
+    val sig = LocalSignals.current
+    val active = book.active
+    val due = remember(cfg, book, now) { Hq.due(cfg, book.sessions, now, zone) }
+    val at = "%02d:%02d".format(cfg.at / 60, cfg.at % 60)
+    val (title, sub, loud) = when {
+        active != null -> Triple("总控时间进行中", "第 ${active.step + 1}/6 步「${active.current.title}」· 到 ${clock(active.endsAt)}", true)
+        due == Hq.Due.NOW || due == Hq.Due.OVERDUE -> Triple("总控时间到了", "放下手里的，进来 ${cfg.minutes} 分钟。", true)
+        due == Hq.Due.SOON -> Triple("$at 总控时间", "快到了：先把手头这件收个尾。", false)
+        Hq.doneToday(book.sessions, now, zone) -> Triple("今天的总控时间做过了", "明天 $at 再见。", false)
+        cfg.enabled -> Triple("今晚 $at 总控时间", "${cfg.minutes} 分钟，万籁俱寂，只和总控说话。", false)
+        else -> Triple("总控时间", "没开每日的；想静下来理一理，随时可以进。", false)
+    }
+    Panel(
+        accent = if (loud) sig.hq else null,
+        onClick = { nav.navigate("hq") },
+        modifier = Modifier.enter(2).testTag("hq-strip"),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Seal("总", sig.hq, size = 36.dp, filled = loud)
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                Hint(sub)
+            }
+        }
+    }
+}
+
 @Composable
 private fun PlanStrip(plan: com.zongkong.core.plan.WeekPlan?, book: com.zongkong.core.plan.PlanBook, work: Work, now: Long, nav: NavHostController) {
     val sig = LocalSignals.current
@@ -298,6 +333,8 @@ private fun Guidance(status: Status, date: String, now: Long, nav: NavHostContro
                 )
                 is Reason.Silence -> Triple("太久没汇报了", "报个到：说一句现在在做什么", "capture")
                 is Reason.Quota -> Triple("今天的娱乐额度用完了", "明天凌晨 4 点重置", "rhythm")
+                is Reason.Session -> Triple("总控时间进行中", "回到总控时间，做完就解锁", "hq")
+                is Reason.Absent -> Triple("已经 ${reason.days} 天没和总控交流了", "跟参谋说几句，或者进一次总控时间", "hq")
                 is Reason.Focus -> Triple("专注锁开着", "做完「${reason.title}」就解开", "session")
             }
             Panel(accent = sig.strict, onClick = { nav.navigate(route) }, modifier = Modifier.enter(1)) {

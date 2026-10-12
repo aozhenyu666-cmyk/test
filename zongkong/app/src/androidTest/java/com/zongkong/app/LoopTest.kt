@@ -67,8 +67,14 @@ class LoopTest {
         app = ApplicationProvider.getApplicationContext()
         app.store.updateWork { Work() }
         app.store.updateConfig {
-            Config(onboarded = true, silenceHours = 0, dailyQuotaMin = 0, notion = NotionConfig(token = "secret_test", baseUrl = sim.baseUrl))
+            Config(
+                onboarded = true, silenceHours = 0, dailyQuotaMin = 0, notion = NotionConfig(token = "secret_test", baseUrl = sim.baseUrl),
+                // 测试期间不让每日总控时间、失联升级、参谋主动找人插进来
+                hq = com.zongkong.core.hq.HqConfig(enabled = false, escalation = false, proactive = false, vibrate = false),
+            )
         }
+        app.store.updateHq { com.zongkong.core.hq.HqBook() }
+        app.store.touch()
         gpt = NotionClient({ "secret_gpt" }, base = sim.baseUrl)
         val msg = runBlocking { app.actions.work.setup(sim.rootPage) }
         assertTrue(msg, app.store.config.value.notion.workReady)
@@ -474,5 +480,98 @@ class LoopTest {
         waitText("计划内", 5_000)
         settle()
         shot("e2e-37-home-main")
+    }
+
+    /** 跳过环节的最短时间（测试里不真的等几分钟）。[whole] 连整段时间一起跳过。 */
+    private fun fastForward(whole: Boolean = false) {
+        app.store.updateHq { b ->
+            val s = b.active ?: return@updateHq b
+            b.put(s.copy(stepStartedAt = s.stepStartedAt - 30 * 60_000L, startedAt = if (whole) s.startedAt - 2 * 60 * 60_000L else s.startedAt))
+        }
+        settle()
+    }
+
+    private fun next(expect: String) {
+        fastForward()
+        waitFor(hasTestTag("hq-next") and androidx.compose.ui.test.isEnabled(), 5_000, "“下一环节”可以点")
+        compose.onNodeWithTag("hq-next").performClick()
+        waitFor(hasTestTag("hq-step") and hasText(expect, substring = true), 5_000, "环节“$expect”")
+        settle()
+    }
+
+    /**
+     * 总控时间：进入 → 静 → 收（清收集箱）→ 谋（没接 AI：四问自己憋）→ 筹（定明天主线）→ 行（对账）→ 封。
+     * 进行中按返回键不走；封存后记一条验收记录、解锁。
+     */
+    @Test
+    fun hqSession() {
+        val now = System.currentTimeMillis()
+        val thread = app.actions.work.createThread("国考行测", why = "11 月底笔试")
+        app.actions.work.addAction(thread, "资料分析专项 1 套", "", "")
+        app.actions.work.capture("看到一篇讲资料分析速算的文章", com.zongkong.core.work.NoteType.IDEA, "资料分析速算文章", "", "", false)
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java).putExtra(com.zongkong.app.ui.MainActivity.EXTRA_ROUTE, "hq"))
+        waitFor(hasTestTag("hq-start"), 10_000, "总控时间入口")
+        settle()
+        shot("e2e-40-hq-entry")
+        compose.onNodeWithTag("hq-start").performScrollTo().performClick()
+        waitFor(hasTestTag("hq-step") and hasText("静", substring = true), 5_000, "第一环节")
+        assertTrue(app.store.hq.value.active != null)
+        assertTrue("总控时间里严管", app.store.status().strict)
+        settle()
+        shot("e2e-41-hq-settle")
+        // 进行中按返回键不离开
+        androidx.test.espresso.Espresso.pressBackUnconditionally()
+        settle()
+        waitFor(hasTestTag("hq-step"), 3_000, "按返回键后还在总控时间")
+
+        next("收")
+        waitFor(hasTestTag("triage-card"), 5_000, "收集箱卡片")
+        shot("e2e-42-hq-triage")
+        compose.onAllNodes(hasText("国考行测"))[0].performScrollTo().performClick()
+        waitText("收集箱清空了", 5_000)
+        assertEquals(thread, app.store.work.value.notes().first { it.title == "资料分析速算文章" }.threadKey)
+
+        next("谋")
+        waitFor(hasTestTag("think-topic-0"), 5_000, "挑一件来想")
+        shot("e2e-43-hq-think-pick")
+        compose.onNodeWithTag("think-topic-0").performScrollTo().performClick()
+        waitFor(hasTestTag("think-first"), 5_000, "四问")
+        compose.onNodeWithTag("think-first").performTextInput("资料分析是最容易提分的")
+        compose.onNodeWithTag("think-fixed").performTextInput("先把速算练熟，再刷套题")
+        compose.onNodeWithTag("think-next").performTextInput("明早做一套资料分析")
+        hideKeyboard()
+        compose.onNodeWithTag("think-save").performScrollTo().performClick()
+        waitText("记下了", 5_000)
+        shot("e2e-44-hq-think")
+        assertEquals("先把速算练熟，再刷套题", app.store.work.value.rec(thread)!![F.JUDGE])
+
+        next("筹")
+        waitFor(hasTestTag("tomorrow-0"), 5_000, "明天的候选")
+        compose.onNodeWithTag("tomorrow-0").performScrollTo().performClick()
+        compose.onNodeWithTag("tomorrow-save").performScrollTo().performClick()
+        settle()
+        shot("e2e-45-hq-tomorrow")
+        val tomorrow = com.zongkong.core.DayClock.date(now, zone).plusDays(1).toString()
+        assertTrue(com.zongkong.core.plan.Plans.day(app.store.plans.value, tomorrow)?.mainActionKey?.isNotBlank() == true)
+
+        next("行")
+        compose.onNodeWithTag("ledger-none").performScrollTo().performClick()
+        settle()
+        shot("e2e-46-hq-ledger")
+
+        next("封")
+        settle()
+        shot("e2e-47-hq-seal-early")
+        fastForward(whole = true)
+        waitFor(hasTestTag("hq-seal") and androidx.compose.ui.test.isEnabled(), 5_000, "可以封存")
+        compose.onNodeWithTag("hq-seal").performClick()
+        waitText("手机解锁了", 15_000)
+        settle()
+        shot("e2e-48-hq-done")
+        assertTrue(app.store.hq.value.active == null)
+        val s = app.store.hq.value.sessions.last()
+        assertTrue(!s.early && s.endedAt > 0)
+        assertTrue(s.notes["INFO"].orEmpty().contains("处理 1 条"))
+        assertTrue(app.store.work.value.notes().any { it.noteType == com.zongkong.core.work.NoteType.REVIEW && it[F.RAW].contains("总控时间") })
     }
 }

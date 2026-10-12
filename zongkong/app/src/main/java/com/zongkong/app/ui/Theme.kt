@@ -133,3 +133,11 @@ fun ZkTheme(content: @Composable () -> Unit) {
         MaterialTheme(colorScheme = if (dark) DarkColors else LightColors, typography = Zk, content = content)
     }
 }
+
+/** 夜空上的纸面：不管系统是不是深色，纸上都用浅色配色（深色字），免得浅底浅字。 */
+@Composable
+fun PaperTheme(content: @Composable () -> Unit) {
+    androidx.compose.runtime.CompositionLocalProvider(LocalSignals provides LightSignals) {
+        MaterialTheme(colorScheme = LightColors, typography = Zk, content = content)
+    }
+}

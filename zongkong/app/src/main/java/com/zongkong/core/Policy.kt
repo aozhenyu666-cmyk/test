@@ -189,6 +189,33 @@ object Policy {
         }
     }
 
+    // ---------- 总控时间 ----------
+
+    /** 总控时间的设置：哪些地方变松了。 */
+    fun looserHq(old: com.zongkong.core.hq.HqConfig, new: com.zongkong.core.hq.HqConfig): List<String> = buildList {
+        if (old.enabled && !new.enabled) add("关掉每日总控时间")
+        if (new.minutes < old.minutes) add("总控时间缩短到 ${new.minutes} 分钟")
+        if (old.autoLock && !new.autoLock) add("到点不再自动进入")
+        if (!old.allowed.containsAll(new.allowed)) add("总控时间里多放开了 " + (new.allowed - old.allowed).size + " 个应用")
+        if (old.vibrate && !new.vibrate) add("关掉震动")
+        if (old.escalation && !new.escalation) add("关掉失联阶梯")
+        if (old.proactive && !new.proactive) add("参谋不再主动找你")
+        if (DayClock.rank(new.at) > DayClock.rank(old.at)) add("总控时间推迟到 ${DayClock.hhmm(new.at)}")
+    }
+
+    /** 改总控时间的设置：收紧立即生效，放宽（关掉、缩短、推迟、放开应用……）24 小时后生效。 */
+    fun setHq(config: Config, hq: com.zongkong.core.hq.HqConfig, now: Long): Outcome {
+        val base = config.copy(pending = config.pending.filterNot { it.op is ChangeOp.Hq })
+        if (hq == config.hq) return Outcome(base)
+        val looser = looserHq(config.hq, hq)
+        return if (looser.isEmpty()) {
+            Outcome(base.copy(hq = hq), now = listOf("总控时间的设置"))
+        } else {
+            val summary = looser.joinToString("、")
+            Outcome(base.queue(ChangeOp.Hq(hq), summary, now), later = listOf(summary))
+        }
+    }
+
     // ---------- 休假 ----------
 
     /** 申请休假：24 小时后开始，休 [days] 天。 */
@@ -233,6 +260,7 @@ object Policy {
         )
         is ChangeOp.Pause -> c.copy(pausedUntil = op.until)
         is ChangeOp.Yishou -> c.copy(yishouInfluence = op.on, yishouPassCap = op.cap)
+        is ChangeOp.Hq -> c.copy(hq = op.hq)
     }
 
     private fun Config.queue(op: ChangeOp, summary: String, now: Long): Config {

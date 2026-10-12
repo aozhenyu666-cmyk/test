@@ -35,6 +35,10 @@ data class ChatMsg(
     val route: String = "",
     /** 这条是出错提示（不发给模型）。 */
     val error: Boolean = false,
+    /** 定时任务替你说的话（发给模型，但界面上不显示成你的话）。 */
+    val hidden: Boolean = false,
+    /** 附带的图片（本机文件路径），发给识图模型。 */
+    val image: String = "",
 ) {
     companion object {
         const val USER = "user"
@@ -64,7 +68,9 @@ class ChatClient(
         val cfg = config()
         if (!cfg.ready) return ApiResult.Err("还没有配置 AI 接口（我 → AI 接口）")
         val url = LlmClient.chatUrl(cfg.baseUrl) ?: return ApiResult.Err("接口地址格式不对：${cfg.baseUrl}")
-        val body = request(cfg.model.trim(), system, messages, tools)
+        val hasImage = messages.lastOrNull { it.role == ChatMsg.USER }?.image?.isNotBlank() == true
+        val model = if (hasImage && cfg.visionModel.isNotBlank()) cfg.visionModel.trim() else cfg.model.trim()
+        val body = request(model, system, messages, tools)
         val raw = when (val r = Net.send(http, Net.post(url, body, mapOf("Authorization" to "Bearer ${cfg.apiKey.trim()}")))) {
             is ApiResult.Err -> return r
             is ApiResult.Ok -> r.value
@@ -82,9 +88,11 @@ class ChatClient(
             put("model", model)
             put("stream", false)
             put("temperature", 0.3)
+            // 只有最后一条带图的消息真的发图，之前的图只留一句“[图片]”，省流量
+            val lastImage = messages.indexOfLast { it.role == ChatMsg.USER && it.image.isNotBlank() }
             put("messages", buildJsonArray {
                 add(buildJsonObject { put("role", "system"); put("content", system) })
-                messages.forEach { m -> add(wire(m)) }
+                messages.forEachIndexed { i, m -> add(wire(m, sendImage = i == lastImage)) }
             })
             if (tools.isNotEmpty()) {
                 put("tools", buildJsonArray { tools.forEach { add(it.wire()) } })
@@ -92,7 +100,16 @@ class ChatClient(
             }
         }
 
-        private fun wire(m: ChatMsg): JsonObject = buildJsonObject {
+        /** 图片转成 data URL（JPEG，读不到返回 null）。 */
+        fun imageUrl(path: String): String? = try {
+            val f = java.io.File(path)
+            if (!f.exists() || f.length() > 4_000_000) null
+            else "data:image/jpeg;base64," + java.util.Base64.getEncoder().encodeToString(f.readBytes())
+        } catch (e: Exception) {
+            null
+        }
+
+        private fun wire(m: ChatMsg, sendImage: Boolean = false): JsonObject = buildJsonObject {
             put("role", m.role)
             when (m.role) {
                 ChatMsg.TOOL -> {
@@ -113,7 +130,17 @@ class ChatClient(
                         })
                     }
                 }
-                else -> put("content", m.content)
+                else -> {
+                    val url = if (sendImage && m.image.isNotBlank()) imageUrl(m.image) else null
+                    if (url != null) {
+                        put("content", buildJsonArray {
+                            add(buildJsonObject { put("type", "text"); put("text", m.content.ifBlank { "看看这张图" }) })
+                            add(buildJsonObject { put("type", "image_url"); put("image_url", buildJsonObject { put("url", url) }) })
+                        })
+                    } else {
+                        put("content", if (m.image.isNotBlank()) "${m.content}\n[图片]".trim() else m.content)
+                    }
+                }
             }
         }
 

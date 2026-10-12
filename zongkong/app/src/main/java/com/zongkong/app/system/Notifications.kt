@@ -16,6 +16,10 @@ object Notifications {
     private const val TAG = "Notifications"
     private const val CH_STATUS = "status"
     private const val CH_ALERT = "alert"
+    private const val CH_HQ = "hq"
+    private const val CH_AI = "ai"
+    private const val ID_HQ = 50
+    private const val ID_AI = 60
     private const val ID_STATUS = 1
     private var alertId = 100
 
@@ -32,6 +36,50 @@ object Notifications {
                 description = "关卡开放、快到截止、已超时、该报到了、娱乐快超额"
             },
         )
+        nm.createNotificationChannel(
+            NotificationChannel(CH_HQ, "总控时间", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "每日总控时间到了、失联太久：全屏叫你，像闹钟一样"
+            },
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CH_AI, "参谋", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "参谋主动发来的消息"
+            },
+        )
+    }
+
+    /** 总控时间到了：全屏通知（锁屏上也会亮起来），点开进总控时间。 */
+    fun hqCall(context: Context, title: String, text: String, fullScreen: Boolean) {
+        val n = NotificationCompat.Builder(context, CH_HQ)
+            .setSmallIcon(R.drawable.ic_stat_zongkong)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .setContentIntent(open(context, "hq", ID_HQ))
+            .addAction(0, "现在进入", open(context, "hq", ID_HQ + 1))
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .apply { if (fullScreen) setFullScreenIntent(open(context, "hq", ID_HQ + 2), true) }
+            .build()
+        post(context, ID_HQ, n)
+    }
+
+    fun cancelHq(context: Context) = NotificationManagerCompat.from(context).cancel(ID_HQ)
+
+    /** 参谋主动发来的一句话，点开进对话。 */
+    fun advisor(context: Context, text: String) {
+        val n = NotificationCompat.Builder(context, CH_AI)
+            .setSmallIcon(R.drawable.ic_stat_zongkong)
+            .setContentTitle("参谋")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .setContentIntent(open(context, "chat", ID_AI))
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+        post(context, ID_AI, n)
     }
 
     fun canPost(context: Context): Boolean = NotificationManagerCompat.from(context).areNotificationsEnabled()

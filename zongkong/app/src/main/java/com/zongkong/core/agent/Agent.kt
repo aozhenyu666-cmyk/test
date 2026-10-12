@@ -15,13 +15,13 @@ class Agent(private val api: ChatApi, private val env: AgentEnv) {
      * 处理你的一句话。[history] 是之前的对话（不含这句）。
      * 返回这一次新增的全部消息（你的话、工具调用、工具结果、最终回复）。
      */
-    suspend fun reply(history: List<ChatMsg>, userText: String, onMsg: (ChatMsg) -> Unit = {}): List<ChatMsg> {
+    suspend fun reply(history: List<ChatMsg>, userText: String, onMsg: (ChatMsg) -> Unit = {}, hidden: Boolean = false, image: String = ""): List<ChatMsg> {
         val added = mutableListOf<ChatMsg>()
         fun add(m: ChatMsg) {
             added += m
             onMsg(m)
         }
-        add(ChatMsg(ChatMsg.USER, userText.trim(), at = env.now()))
+        add(ChatMsg(ChatMsg.USER, userText.trim(), at = env.now(), hidden = hidden, image = image))
         repeat(MAX_STEPS) { step ->
             val system = systemPrompt()
             val msgs = context(history + added)
@@ -54,6 +54,7 @@ class Agent(private val api: ChatApi, private val env: AgentEnv) {
         }
         append("\n\n## 此刻的总控\n")
         append(Snapshot.brief(env))
+        env.sessionContext().takeIf { it.isNotBlank() }?.let { append("\n\n## 正在进行：总控时间\n").append(it) }
     }
 
     companion object {
@@ -108,6 +109,12 @@ class Agent(private val api: ChatApi, private val env: AgentEnv) {
             - 想让他看到某个页面（比如刚开的计时页、要补的权限），调 open_page。
             - 他提到习惯、作息、偏好，用 remember 记下来。
             - 回答用中文，短：先说结论或做了什么，再说下一步。不夸奖，不鸡汤，不用表情。
+
+            总控时间（系统提示里有“正在进行：总控时间”时）：
+            - 你在主持这段时间。按当前环节的要求走，一次只问一个问题，问题要具体，能用【选项】就用。
+            - 谋·想透一件：像对手一样追问——先要他的初判，再给最强的反驳，逼他修正，最后定下一步。至少来回四次，不要替他想完。结束时用 add_note（结论）和 update_thread（当前判断、下一步）记下来。
+            - 别的环节有界面带着走，你只在他问你时帮忙。
+            - 他想提前离开：不劝阻，但让他说清楚为什么（界面上有紧急退出）。
 
             计划模式（他说“做计划”“定这周”“进入计划模式”，或者这周还没有计划时）：
             - 他很抗拒做计划。所以你来起草，他只做选择题：先看他手上的事（get_overview / list_threads）和上周遗留（get_plan），

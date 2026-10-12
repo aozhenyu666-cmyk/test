@@ -49,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -61,14 +62,14 @@ import com.zongkong.core.agent.Agent
 import com.zongkong.core.agent.ChatMsg
 
 /** 一组显示单元：你的话、参谋的话、一串工具调用、出错。 */
-private sealed interface Item {
+internal sealed interface Item {
     data class User(val m: ChatMsg) : Item
     data class Said(val m: ChatMsg, val options: List<String>) : Item
     data class Steps(val steps: List<ChatMsg>) : Item
     data class Failed(val m: ChatMsg) : Item
 }
 
-private fun group(msgs: List<ChatMsg>): List<Item> {
+internal fun group(msgs: List<ChatMsg>): List<Item> {
     val out = mutableListOf<Item>()
     var steps = mutableListOf<ChatMsg>()
     fun flush() {
@@ -78,6 +79,7 @@ private fun group(msgs: List<ChatMsg>): List<Item> {
     for (m in msgs) {
         when {
             m.role == ChatMsg.TOOL -> steps += m
+            m.role == ChatMsg.USER && m.hidden -> flush()
             m.role == ChatMsg.USER -> { flush(); out += Item.User(m) }
             m.error -> { flush(); out += Item.Failed(m) }
             m.content.isNotBlank() -> {
@@ -133,6 +135,10 @@ fun ChatScreen(nav: NavHostController) {
         }
     }
 
+    var image by remember { mutableStateOf("") }
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) image = saveChatImage(context, uri).orEmpty()
+    }
     val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         if (r.resultCode == Activity.RESULT_OK) {
             r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let { said ->
@@ -188,7 +194,7 @@ fun ChatScreen(nav: NavHostController) {
             itemsIndexed(items, key = { i, it -> i.toString() + when (it) { is Item.User -> it.m.at; is Item.Said -> it.m.at; is Item.Steps -> it.steps.first().at; is Item.Failed -> it.m.at } }) { i, it ->
                 Box(Modifier.animateItem()) {
                     when (it) {
-                        is Item.User -> UserBubble(it.m.content)
+                        is Item.User -> UserBubble(it.m.content, it.m.image)
                         is Item.Said -> Said(it.m.content, if (i == items.lastIndex && !busy) it.options else emptyList()) { o -> chat.send(o) }
                         is Item.Steps -> Steps(it.steps)
                         is Item.Failed -> Failed(it.m.content) {
@@ -211,6 +217,16 @@ fun ChatScreen(nav: NavHostController) {
             }
         }
 
+        // ---------- 要发的图 ----------
+        if (image.isNotBlank()) {
+            Row(Modifier.padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                val bmp = remember(image) { runCatching { android.graphics.BitmapFactory.decodeFile(image)?.asImageBitmap() }.getOrNull() }
+                bmp?.let { androidx.compose.foundation.Image(it, null, modifier = Modifier.size(56.dp), contentScale = androidx.compose.ui.layout.ContentScale.Crop) }
+                Text(if (config.ai.visionModel.isNotBlank()) "用 ${config.ai.visionModel} 看图" else "主模型要能看图（或者在 AI 接口里填识图模型）", style = MaterialTheme.typography.labelSmall, color = sig.muted, modifier = Modifier.weight(1f))
+                TextButton(onClick = { image = "" }) { Text("×", color = sig.muted) }
+            }
+        }
+
         // ---------- 输入栏 ----------
         Surface(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
@@ -230,6 +246,9 @@ fun ChatScreen(nav: NavHostController) {
                         modifier = Modifier.fillMaxWidth().heightIn(min = 24.dp).testTag("chat-input"),
                     )
                 }
+                if (!busy) {
+                    TextButton(onClick = { pick.launch("image/*") }, modifier = Modifier.testTag("chat-image")) { Text("图", color = sig.muted, style = MaterialTheme.typography.titleMedium) }
+                }
                 if (input.isBlank() && !busy) {
                     TextButton(onClick = {
                         val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
@@ -238,13 +257,13 @@ fun ChatScreen(nav: NavHostController) {
                         if (i.resolveActivity(context.packageManager) != null) voice.launch(i)
                     }) { Text("说", color = sig.muted, style = MaterialTheme.typography.titleMedium) }
                 }
-                val canSend = input.isNotBlank() && !busy
+                val canSend = (input.isNotBlank() || image.isNotBlank()) && !busy
                 Box(
                     Modifier
                         .size(42.dp)
                         .background(if (busy) MaterialTheme.colorScheme.onSurface else if (canSend) sig.ai else sig.line, CircleShape)
                         .clickable(enabled = busy || canSend) {
-                            if (busy) chat.stop() else { chat.send(input); input = "" }
+                            if (busy) chat.stop() else { chat.send(input, image); input = ""; image = "" }
                         }
                         .testTag("chat-send"),
                     contentAlignment = Alignment.Center,
@@ -291,21 +310,27 @@ private fun Empty(send: (String) -> Unit) {
 }
 
 @Composable
-private fun UserBubble(text: String) {
+internal fun UserBubble(text: String, image: String = "") {
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant,
             shape = RoundedCornerShape(topStart = 20.dp, topEnd = 6.dp, bottomStart = 20.dp, bottomEnd = 20.dp),
             modifier = Modifier.widthIn(max = 300.dp),
         ) {
-            Text(text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp))
+            Column {
+                if (image.isNotBlank()) {
+                    val bmp = remember(image) { runCatching { android.graphics.BitmapFactory.decodeFile(image)?.asImageBitmap() }.getOrNull() }
+                    bmp?.let { androidx.compose.foundation.Image(it, null, modifier = Modifier.padding(6.dp).widthIn(max = 220.dp).heightIn(max = 220.dp), contentScale = androidx.compose.ui.layout.ContentScale.Fit) }
+                }
+                if (text.isNotBlank()) Text(text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp))
+            }
         }
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Said(text: String, options: List<String>, onOption: (String) -> Unit) {
+internal fun Said(text: String, options: List<String>, onOption: (String) -> Unit) {
     val sig = LocalSignals.current
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
@@ -332,7 +357,7 @@ private fun Said(text: String, options: List<String>, onOption: (String) -> Unit
 
 /** 一串工具调用折成一行：“已执行 3 个操作”，点开看每一步。 */
 @Composable
-private fun Steps(steps: List<ChatMsg>) {
+internal fun Steps(steps: List<ChatMsg>) {
     val sig = LocalSignals.current
     var open by remember { mutableStateOf(false) }
     val failed = steps.count { !it.ok }
@@ -362,7 +387,7 @@ private fun Steps(steps: List<ChatMsg>) {
 }
 
 @Composable
-private fun Failed(text: String, retry: () -> Unit) {
+internal fun Failed(text: String, retry: () -> Unit) {
     val sig = LocalSignals.current
     Column(
         Modifier.fillMaxWidth().background(sig.strict.copy(alpha = 0.08f), RoundedCornerShape(14.dp)).padding(14.dp),
@@ -371,4 +396,24 @@ private fun Failed(text: String, retry: () -> Unit) {
         Text(text, style = MaterialTheme.typography.bodyMedium, color = sig.strict)
         TextButton(onClick = retry, contentPadding = PaddingValues(0.dp)) { Text("再试一次", color = sig.strict) }
     }
+}
+
+
+/** 选的图复制一份到本机、缩到 1280 以内、存成 JPEG（发给识图模型用）。 */
+fun saveChatImage(context: android.content.Context, uri: android.net.Uri): String? = try {
+    val dir = java.io.File(context.filesDir, "chat").apply { mkdirs() }
+    val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    context.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
+    var sample = 1
+    while (maxOf(opts.outWidth, opts.outHeight) / sample > 1280) sample *= 2
+    val bmp = context.contentResolver.openInputStream(uri)?.use {
+        android.graphics.BitmapFactory.decodeStream(it, null, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+    }
+    if (bmp == null) null else {
+        val f = java.io.File(dir, "img_${System.currentTimeMillis()}.jpg")
+        f.outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, it) }
+        f.absolutePath
+    }
+} catch (e: Exception) {
+    null
 }

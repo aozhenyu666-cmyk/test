@@ -40,6 +40,9 @@ class Actions(private val context: Context, private val store: Store) {
     /** 计划：草稿、立项、主线、交出物。 */
     val plan = PlanActions(store, work)
 
+    /** 总控时间。 */
+    val hq = HqActions(context, store, this)
+
     sealed interface SubmitResult {
         data class Judged(val verdict: Verdict) : SubmitResult
         data class Unavailable(val reason: String, val degradedLeft: Int) : SubmitResult
@@ -150,6 +153,7 @@ class Actions(private val context: Context, private val store: Store) {
 
     private suspend fun record(gateId: String, text: String, verdict: Verdict) {
         val now = System.currentTimeMillis()
+        if (text != "（自动验收）") store.touch()
         store.updateToday(now) { day ->
             val gs = com.zongkong.core.Engine.evaluate(store.config.value, day, now, store.zone).gates.first { it.gate.id == gateId }
             if (gs.done) day else DayOps.submit(day, gs, text, verdict, now)
@@ -165,6 +169,7 @@ class Actions(private val context: Context, private val store: Store) {
         if (TextCheck.effectiveChars(text) < 10) return "说清楚现在在做什么、接下来做什么，至少 10 个字"
         if (TextCheck.looksPadded(text)) return "认真写一句"
         store.updateToday { DayOps.checkin(it, text, System.currentTimeMillis()) }
+        store.touch()
         sync()
         return null
     }

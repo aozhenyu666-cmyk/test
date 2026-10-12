@@ -90,6 +90,26 @@ resumed | tee "$OUT/resumed-free.txt"
 if grep -q "$TARGET" "$OUT/resumed-free.txt" && ! grep -q "BlockActivity" "$OUT/resumed-free.txt"; then echo "FREE_ALLOWS=OK" >> "$OUT/result.txt"; else echo "FREE_ALLOWS=FAIL" >> "$OUT/result.txt"; fi
 
 route home;               shot 10-home-free
+
+# ---------- 总控时间：白名单以外的应用一律回到总控时间 ----------
+adb shell am broadcast -a $PKG.SEED -p $PKG --es mode hq
+sleep 2
+route hq;                 shot 13-hq-session
+launch_target
+shot 14-hq-lockdown
+resumed | tee "$OUT/resumed-hq.txt"
+if grep -q "$PKG/.ui.MainActivity" "$OUT/resumed-hq.txt" && ! grep -q "$TARGET" "$OUT/resumed-hq.txt"; then
+  echo "HQ_LOCKDOWN=OK" >> "$OUT/result.txt"
+else
+  echo "HQ_LOCKDOWN=FAIL" >> "$OUT/result.txt"
+  adb logcat -d -s GuardService:V | tail -30
+fi
+adb shell am broadcast -a $PKG.SEED -p $PKG --es mode hq-end
+sleep 2
+launch_target
+resumed | tee "$OUT/resumed-hq-end.txt"
+if grep -q "$TARGET" "$OUT/resumed-hq-end.txt"; then echo "HQ_RELEASES=OK" >> "$OUT/result.txt"; else echo "HQ_RELEASES=FAIL" >> "$OUT/result.txt"; fi
+route home;               shot 15-home-after-hq
 adb shell cmd uimode night yes; sleep 2
 route home;               shot 11-home-dark
 route gate/hq_review;     shot 12-gate-dark

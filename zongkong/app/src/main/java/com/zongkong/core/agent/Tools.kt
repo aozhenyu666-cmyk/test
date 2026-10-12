@@ -86,6 +86,12 @@ interface AgentEnv {
     /** 一手的状态（一段话），连不上时说原因。 */
     suspend fun yishou(): String
     suspend fun sendToYishou(actionKey: String): String
+    /** 总控时间进行中时：当前环节和要求（空 = 没在总控时间里）。 */
+    fun sessionContext(): String = ""
+
+    /** 进入总控时间（参谋觉得你该停下来修一修了）。 */
+    fun startHq(minutes: Int): String = "这个环境进不了总控时间"
+
     /** 让一手现在开一局陪练窗口。 */
     suspend fun startYishouWindow(): String = "这个环境开不了一手的窗口"
     suspend fun sync(): String
@@ -281,6 +287,10 @@ class ZkTools(private val env: AgentEnv) {
                 Param("why", "string", "为什么改", required = true),
             ),
         ),
+        ToolSpec(
+            "start_hq_session", "让他马上进入总控时间：手机只剩总控和白名单应用，按“静→收→谋→筹→行→封”把四个部门修一遍。他明显在逃避、失联、混乱时用。",
+            listOf(Param("minutes", "integer", "多长（15–90 分钟，默认按设置）")),
+        ),
         ToolSpec("sync_notion", "现在和 Notion 同步一次（拉 GPT 写进去的、推总控改过的）。"),
         ToolSpec(
             "remember", "记住一条关于他的长期事实或偏好（例：晚上 10 点后效率低；周三下午有课），以后每次对话都会带上。",
@@ -320,6 +330,7 @@ class ZkTools(private val env: AgentEnv) {
                 "set_day_main" -> setDayMain(a)
                 "complete_outcome" -> completeOutcome(a)
                 "revise_plan" -> revisePlan(a)
+                "start_hq_session" -> env.startHq(a.i("minutes") ?: env.config().hq.minutes).let { ToolResult(it, "进入总控时间", route = "hq") }
                 "sync_notion" -> env.sync().let { ToolResult(it, it) }
                 "remember" -> a.s("fact").takeIf { it.isNotBlank() }?.let { env.remember(it); ToolResult("记住了：$it", "记住：$it") } ?: ToolResult.fail("fact 不能空")
                 "forget" -> if (env.forget(a.s("fact"))) ToolResult("删掉了", "不再记：${a.s("fact")}") else ToolResult.fail("没找到这条")
@@ -799,6 +810,7 @@ class ZkTools(private val env: AgentEnv) {
             "rhythm" to "今天的节律关卡",
             "gate" to "某道关卡",
             "session" to "正在做（计时页）",
+            "hq" to "总控时间",
             "results" to "查看结果",
             "stuck" to "我卡住了",
             "settings" to "设置",
@@ -821,6 +833,7 @@ class ZkTools(private val env: AgentEnv) {
             "review" to "wizard/review",
             "rhythm" to "rhythm",
             "session" to "session",
+            "hq" to "hq",
             "results" to "results",
             "stuck" to "stuckpick",
             "settings" to "settings",

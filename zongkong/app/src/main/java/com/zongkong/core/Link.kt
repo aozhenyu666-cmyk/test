@@ -83,6 +83,7 @@ object Link {
             "noOffline" to inf.noOffline,
             "note" to inf.note,
             "mainTitle" to (mainRec?.title ?: ""),
+            "lockdown" to status.reasons.any { it is Reason.Session },
         )
     }
 

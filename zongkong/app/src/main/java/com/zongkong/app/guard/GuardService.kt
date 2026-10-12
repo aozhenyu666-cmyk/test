@@ -80,7 +80,40 @@ class GuardService : AccessibilityService() {
             fgPkg = pkg
             fgSince = now
         }
+        if (lockdown(pkg, now)) return
         enforce(pkg, now)
+    }
+
+    /**
+     * 总控时间：白名单以外的应用（包括桌面）一出现就回到总控时间。
+     * 失联三天：下次打开白名单以外的应用，直接进入总控时间。
+     * 处理了返回 true。
+     */
+    private fun lockdown(pkg: String, now: Long): Boolean {
+        if (pkg == packageName || !interactive()) return false
+        val cfg = store.config.value.hq
+        if (store.config.value.pausedUntil > now) return false
+        var session = store.hq.value.active
+        if (session == null && store.absence(now) == com.zongkong.core.hq.Hq.Absence.FORCE && !com.zongkong.core.hq.Hq.allows(pkg, packageName, cfg, overlays())) {
+            Log.i(TAG, "失联太久，打开 $pkg 时进入总控时间")
+            session = zk.actions.hq.start(com.zongkong.core.hq.HqTrigger.ESCALATION)
+        }
+        if (session == null) return false
+        if (com.zongkong.core.hq.Hq.allows(pkg, packageName, cfg, overlays())) return false
+        if (now - lastBounce < 1500) return true
+        lastBounce = now
+        Log.i(TAG, "总控时间，弹回 $pkg")
+        store.updateToday(now) { DayOps.bounce(it) }
+        try {
+            startActivity(
+                Intent(this, com.zongkong.app.ui.MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    .putExtra(com.zongkong.app.ui.MainActivity.EXTRA_ROUTE, "hq"),
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "打不开总控时间", e)
+        }
+        return true
     }
 
     private fun overlays(): Set<String> {
@@ -141,6 +174,9 @@ class GuardService : AccessibilityService() {
         fgPkg?.let { if (status.strict) enforce(it, now) }
         alerts(status, now)
         com.zongkong.app.system.Reminders.check(this)
+        com.zongkong.app.system.Buzz.tick(this)
+        // 总控时间刚开始时你正停在别的应用里：也拉回来
+        fgPkg?.let { if (store.hq.value.active != null) lockdown(it, now) }
         val text = Engine.summary(status)
         val title = "总控 · ${status.headline}"
         if ("$title|$text" != lastStatusText) {

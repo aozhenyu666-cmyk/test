@@ -56,6 +56,7 @@ fun AiScreen(nav: NavHostController) {
     var key by remember { mutableStateOf(config.ai.apiKey) }
     var model by remember { mutableStateOf(config.ai.model) }
     var json by remember { mutableStateOf(config.ai.jsonMode) }
+    var vision by remember { mutableStateOf(config.ai.visionModel) }
     var result by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -81,6 +82,10 @@ fun AiScreen(nav: NavHostController) {
                 visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(model, { model = it }, label = { Text("模型名") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(
+                vision, { vision = it }, label = { Text("看图模型（可空）") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                supportingText = { Text("给参谋发截图时用。主模型本身能看图（gpt-4o、qwen-vl、glm-4v）就留空。") },
+            )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("JSON 模式")
@@ -90,7 +95,7 @@ fun AiScreen(nav: NavHostController) {
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
-                    store.updateConfig { it.copy(ai = AiConfig(url.trim(), key.trim(), model.trim(), json)) }
+                    store.updateConfig { it.copy(ai = AiConfig(url.trim(), key.trim(), model.trim(), json, vision.trim())) }
                     busy = true
                     result = "测试中…"
                     scope.launch {

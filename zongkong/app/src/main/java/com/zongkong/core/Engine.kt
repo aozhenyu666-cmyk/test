@@ -44,6 +44,16 @@ sealed class Reason {
         override val text: String get() = "今天娱乐 $usedMin 分钟，已到上限 $limitMin 分钟"
     }
 
+    /** 总控时间：除了白名单，什么应用都回到总控。 */
+    data class Session(val endsAt: Long) : Reason() {
+        override val text: String get() = "总控时间进行中"
+    }
+
+    /** 太久没和总控交流。 */
+    data class Absent(val days: Int) : Reason() {
+        override val text: String get() = "已经 $days 天没和总控交流了，回来报个到"
+    }
+
     /** 正在做一步行动，开了专注锁。 */
     data class Focus(val title: String, val until: Long) : Reason() {
         override val text: String get() = "正在做「$title」，专注锁开着"
@@ -84,7 +94,11 @@ data class Status(
 object Engine {
     const val DUE_SOON_MILLIS = 30 * 60_000L
 
-    fun evaluate(config: Config, day: DayLog, now: Long, zone: ZoneId, lock: FocusLock? = null): Status {
+    fun evaluate(
+        config: Config, day: DayLog, now: Long, zone: ZoneId, lock: FocusLock? = null,
+        session: com.zongkong.core.hq.HqSession? = null,
+        absence: com.zongkong.core.hq.Hq.Absence = com.zongkong.core.hq.Hq.Absence.NONE,
+    ): Status {
         val date = DayClock.date(now, zone)
         val weekday = date.dayOfWeek.value
 
@@ -110,6 +124,8 @@ object Engine {
             }
 
         val reasons = mutableListOf<Reason>()
+        if (session != null && session.active) reasons += Reason.Session(session.endsAt)
+        if (absence >= com.zongkong.core.hq.Hq.Absence.STRICT) reasons += Reason.Absent(absence.days)
         gates.filter { it.blocking }.forEach { reasons += Reason.GateDue(it) }
 
         val lastActivity = (day.submissions.map { it.at } + day.reports.map { it.at }).maxOrNull()

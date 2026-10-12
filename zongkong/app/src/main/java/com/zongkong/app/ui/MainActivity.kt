@@ -66,6 +66,12 @@ class MainActivity : ComponentActivity() {
         handle(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // 你回来了：停止连续震动
+        if (zk.store.buzzUntil != 0L) com.zongkong.app.system.Buzz.stop(this)
+    }
+
     override fun onStop() {
         super.onStop()
         // 做一步行动时离开了总控：记下时刻，回来时问一句要不要记断点
@@ -211,6 +217,8 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 composable("settings/gptguide") { GptGuideScreen(nav) }
                 composable("settings/pending") { PendingScreen(nav) }
                 composable("settings/perm") { PermissionsScreen(nav) }
+                composable("hq") { HqScreen(nav) }
+                composable("settings/hq") { HqSettingsScreen(nav) }
             }
             // 从通知、分享、拦截页带进来的页面。必须放在 NavHost 之后：Scaffold 的内容是延后组合的，
             // 导航图要等 NavHost 组合完才设置好，太早跳转会崩（冷启动时点通知里的“开始”就会触发）。

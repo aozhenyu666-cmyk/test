@@ -81,4 +81,10 @@ class ContractTest {
     fun focusLockHoldsPasses() {
         assertTrue(ZongkongStatus.fromMap(mapOf("hold" to true)).hold)
     }
+
+    @Test
+    fun lockdownBouncesEverything() {
+        val s = ZongkongStatus.fromMap(mapOf("lockdown" to true))
+        assertTrue(s.bounces("com.tencent.mm"))
+    }
 }

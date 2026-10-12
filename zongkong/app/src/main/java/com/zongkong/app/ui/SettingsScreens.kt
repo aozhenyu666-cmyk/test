@@ -63,6 +63,23 @@ fun SettingsScreen(nav: NavHostController) {
     ) {
         ScreenTitle("我", "连接、规则、运行状态。改规则的规矩：收紧立即生效，放宽要等 24 小时，期间可以撤回。", Modifier.enter(0))
 
+        SectionLabel("总控时间")
+        MenuItem(
+            "进入总控时间",
+            if (config.hq.enabled) "每天 ${"%02d:%02d".format(config.hq.at / 60, config.hq.at % 60)} · ${config.hq.minutes} 分钟 · 万籁俱寂，只和总控说话" else "没开每日总控时间——现在也可以手动进",
+            "hq", nav,
+        )
+        MenuItem(
+            "总控时间与叫醒",
+            listOfNotNull(
+                if (config.hq.vibrate) "震动" else null,
+                if (config.hq.escalation) "失联升级" else null,
+                if (config.hq.proactive) "参谋主动找你" else null,
+                if (config.hq.speak) "语音" else null,
+            ).joinToString(" · ").ifBlank { "全关了" },
+            "settings/hq", nav,
+        )
+
         SectionLabel("运行")
         MenuItem("权限与运行状态", if (PermissionStatus.accessibility(context)) "无障碍已开启" else "无障碍未开启——总控没在盯", "settings/perm", nav, warn = !PermissionStatus.accessibility(context))
         MenuItem("今天的节律", "今日部署、收集、判断、一手训练、日终验收；严管与放行", "rhythm", nav)

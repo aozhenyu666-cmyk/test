@@ -163,6 +163,12 @@ class PlanActions(private val store: Store, private val work: WorkActions) {
         }
     }
 
+    /** 定某一天（比如明天）的主线。 */
+    fun setMainFor(date: String, actionKey: String) {
+        val oid = active()?.outcomes?.firstOrNull { it.actionKey == actionKey }?.id.orEmpty()
+        store.updatePlans { b -> Plans.setDay(b, DayPlan(date, oid, actionKey, Plans.day(b, date)?.extras.orEmpty(), now())) }
+    }
+
     /** 做完一步：如果它就是某样交出物的那一步，交出物自动打勾。 */
     fun onActionDone(actionKey: String) {
         val p = active() ?: return

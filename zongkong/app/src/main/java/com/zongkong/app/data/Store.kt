@@ -100,6 +100,53 @@ class Store(private val context: Context) {
         }
     }
 
+    // ---------- 总控时间 ----------
+
+    private val _hq = MutableStateFlow(loadHq())
+    val hq: StateFlow<com.zongkong.core.hq.HqBook> = _hq.asStateFlow()
+
+    fun updateHq(f: (com.zongkong.core.hq.HqBook) -> com.zongkong.core.hq.HqBook): com.zongkong.core.hq.HqBook = synchronized(workLock) {
+        val next = f(_hq.value)
+        if (next != _hq.value) {
+            _hq.value = next
+            val text = ZkJson.encodeToString(com.zongkong.core.hq.HqBook.serializer(), next)
+            io.execute { writeAtomic(File(dir, "hq.json"), text) }
+        }
+        next
+    }
+
+    private fun loadHq(): com.zongkong.core.hq.HqBook {
+        val f = File(dir, "hq.json")
+        if (!f.exists()) return com.zongkong.core.hq.HqBook()
+        return try {
+            ZkJson.decodeFromString(com.zongkong.core.hq.HqBook.serializer(), f.readText())
+        } catch (e: Exception) {
+            Log.e(TAG, "hq.json 读不了", e)
+            com.zongkong.core.hq.HqBook()
+        }
+    }
+
+    /** 上一次真正和总控交流的时刻（说话、做事、交关卡、做完总控时间）。第一次打开时记为现在。 */
+    var lastContact: Long
+        get() = prefs.getLong("last_contact", 0L).let { if (it == 0L) System.currentTimeMillis().also { now -> prefs.edit().putLong("last_contact", now).apply() } else it }
+        set(v) = prefs.edit().putLong("last_contact", v).apply()
+
+    fun touch() {
+        lastContact = System.currentTimeMillis()
+    }
+
+    fun absence(now: Long = System.currentTimeMillis()): com.zongkong.core.hq.Hq.Absence =
+        com.zongkong.core.hq.Hq.absence(lastContact, now, _config.value.hq)
+
+    /** 连续震动到什么时候（0 = 不震）；打开总控就停。 */
+    var buzzUntil: Long
+        get() = prefs.getLong("buzz_until", 0L)
+        set(v) = prefs.edit().putLong("buzz_until", v).apply()
+
+    var buzzReason: String
+        get() = prefs.getString("buzz_reason", "") ?: ""
+        set(v) = prefs.edit().putString("buzz_reason", v).apply()
+
     /** 今天主线的行动键（没定为空）。 */
     fun mainKey(now: Long = System.currentTimeMillis()): String =
         com.zongkong.core.plan.Plans.day(_plans.value, DayClock.dateKey(now, zone))?.mainActionKey.orEmpty()
@@ -125,7 +172,7 @@ class Store(private val context: Context) {
 
     fun status(now: Long = System.currentTimeMillis()): Status {
         refresh(now)
-        return Engine.evaluate(_config.value, _today.value, now, zone, focusLock(now))
+        return Engine.evaluate(_config.value, _today.value, now, zone, focusLock(now), _hq.value.active, absence(now))
     }
 
     fun updateConfig(f: (Config) -> Config): Config = synchronized(lock) {

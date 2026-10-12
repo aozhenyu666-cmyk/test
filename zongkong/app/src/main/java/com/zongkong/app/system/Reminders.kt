@@ -34,8 +34,10 @@ object Reminders {
             if (!app.store.firstAlert(r.key)) continue
             val thread = work.rec(r.action.threadKey)
             Notifications.taskReminder(context, r.action, thread, r.follow)
+            Buzz.once(context, if (r.follow) Buzz.Level.FIRM else Buzz.Level.GENTLE)
             app.store.updateWork { WorkOps.event(it, Event(now, if (r.follow) "followup" else "remind", r.action.key)) }
         }
+        HqRunner.check(context)
     }
 
     /** 把系统闹钟定到下一个提醒时刻。 */
@@ -48,7 +50,11 @@ object Reminders {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
             am.cancel(pi)
-            val next = Focus.alarmTimes(app.store.work.value, System.currentTimeMillis(), app.store.zone).firstOrNull() ?: return
+            val now = System.currentTimeMillis()
+            val next = listOfNotNull(
+                Focus.alarmTimes(app.store.work.value, now, app.store.zone).firstOrNull(),
+                HqRunner.nextAlarm(context, now),
+            ).minOrNull() ?: return
             val exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am.canScheduleExactAlarms()
             if (exact) {
                 am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next + 1_000, pi)

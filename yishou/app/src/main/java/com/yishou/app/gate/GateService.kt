@@ -104,6 +104,8 @@ class GateService : AccessibilityService() {
             shortCheck?.cancel()
             shortPkg = null
         }
+        // 总控时间：总控在管整台手机，一手不插手
+        if (ZongkongClient.status(this)?.lockdown == true) return
         // 陪练窗口进行中：先按开局规则看这个应用能不能用（关注的应用另由下面的思考页处理）
         if (prefs.groupOf(pkg) == null && WindowClock.active(now, prefs, ZoneId.systemDefault()) != null) {
             when (WindowRules.decide(pkg, prefs, systemAllowed(), now)) {

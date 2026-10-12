@@ -77,6 +77,8 @@ data class AiConfig(
     val apiKey: String = "",
     val model: String = "",
     val jsonMode: Boolean = true,
+    /** 看图用的模型（可空：主模型能看图就不用填）。 */
+    val visionModel: String = "",
 ) {
     val ready: Boolean get() = baseUrl.isNotBlank() && apiKey.isNotBlank() && model.isNotBlank()
 }
@@ -136,6 +138,8 @@ data class Config(
     val yishouInfluence: Boolean = true,
     /** 收紧时一手每次最多放行几分钟。 */
     val yishouPassCap: Int = 5,
+    /** 总控时间、震动、失联阶梯、参谋主动找你。 */
+    val hq: com.zongkong.core.hq.HqConfig = com.zongkong.core.hq.HqConfig(),
 )
 
 /**
@@ -289,4 +293,8 @@ sealed class ChangeOp {
     @Serializable
     @SerialName("yishou")
     data class Yishou(val on: Boolean, val cap: Int) : ChangeOp()
+
+    @Serializable
+    @SerialName("hq")
+    data class Hq(val hq: com.zongkong.core.hq.HqConfig) : ChangeOp()
 }

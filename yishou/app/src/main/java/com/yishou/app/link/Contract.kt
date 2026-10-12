@@ -100,12 +100,14 @@ data class ZongkongStatus(
     val note: String = "",
     /** 总控里今天的主线。 */
     val mainTitle: String = "",
+    /** 总控时间：总控只放行白名单，别的应用都由总控弹回。 */
+    val lockdown: Boolean = false,
 ) {
     /** 按总控的要求算这次能放行几分钟。 */
     fun capPass(minutes: Int): Int = if (passCap > 0) minOf(minutes, passCap) else minutes
 
     /** 这个应用总控现在会弹回：一手就不必再弹思考页了。 */
-    fun bounces(pkg: String): Boolean = strict && pkg in blocks
+    fun bounces(pkg: String): Boolean = lockdown || (strict && pkg in blocks)
 
     companion object {
         fun fromMap(m: Map<String, Any?>): ZongkongStatus = ZongkongStatus(
@@ -126,6 +128,7 @@ data class ZongkongStatus(
             noOffline = m["noOffline"] as? Boolean ?: false,
             note = m["note"] as? String ?: "",
             mainTitle = m["mainTitle"] as? String ?: "",
+            lockdown = m["lockdown"] as? Boolean ?: false,
         )
     }
 }

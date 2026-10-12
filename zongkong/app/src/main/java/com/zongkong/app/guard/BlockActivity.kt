@@ -204,6 +204,17 @@ private fun StrictBody(
                     Hint("你开始做这一步时开了专注锁，到 ${clock(r.until)} 为止娱乐应用会被弹回。做完或者记个断点，锁就解开。")
                     Button(onClick = { openRoute("session") }, modifier = Modifier.fillMaxWidth()) { Text("回去继续") }
                 }
+                is Reason.Session -> Panel(accent = sig.strict, onClick = { openRoute("hq") }) {
+                    Text("总控时间", style = MaterialTheme.typography.titleMedium)
+                    Hint("到 ${clock(r.endsAt)} 之前，只有总控和白名单里的应用能用。")
+                    Button(onClick = { openRoute("hq") }, modifier = Modifier.fillMaxWidth()) { Text("回到总控时间") }
+                }
+                is Reason.Absent -> Panel(accent = sig.strict, onClick = { openRoute("chat") }) {
+                    Text("已经 ${r.days} 天没和总控交流了", style = MaterialTheme.typography.titleMedium)
+                    Hint("跟参谋说几句、或者进一次总控时间，就放行。")
+                    Button(onClick = { openRoute("hq") }, modifier = Modifier.fillMaxWidth()) { Text("进入总控时间") }
+                    OutlinedButton(onClick = { openRoute("chat") }, modifier = Modifier.fillMaxWidth()) { Text("跟参谋说几句") }
+                }
                 is Reason.Quota -> Panel(accent = sig.strict) {
                     Text("今天的娱乐额度用完了", style = MaterialTheme.typography.titleMedium)
                     Text("已用 ${r.usedMin} 分钟，上限 ${r.limitMin} 分钟。明天凌晨 4 点重置。", style = MaterialTheme.typography.bodyMedium.merge(Mono))

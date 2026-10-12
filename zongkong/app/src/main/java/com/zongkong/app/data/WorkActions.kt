@@ -103,6 +103,7 @@ class WorkActions(private val context: Context, private val store: Store, privat
      * [asAction] 为真时同时在事项下建一个同名行动（没排时间）。
      */
     fun capture(raw: String, type: NoteType, title: String, url: String, threadKey: String, asAction: Boolean, image: String = ""): String {
+        store.touch()
         val t = now()
         var key = ""
         store.updateWork { w0 ->
@@ -186,6 +187,7 @@ class WorkActions(private val context: Context, private val store: Store, privat
 
     /** 开始一步。开专注锁时，锁到计划结束时间（没有就用默认时长）。 */
     fun start(actionKey: String, lock: Boolean, minutes: Int? = null) {
+        store.touch()
         val t = now()
         val a = store.work.value.rec(actionKey)
         val planned = a?.plan?.let { TimeParse.endMillis(it, zone) }?.takeIf { it > t + 5 * 60_000 }?.let { ((it - t) / 60_000).toInt() }
@@ -207,17 +209,20 @@ class WorkActions(private val context: Context, private val store: Store, privat
     fun back() = store.updateWork { w -> w.session?.let { w.copy(session = it.copy(leftAt = 0)) } ?: w }
 
     fun pause(actionKey: String, done: String, blocker: String, next: String) {
+        store.touch()
         store.updateWork { WorkOps.pause(it, actionKey, done, blocker, next, now(), zone, rnd) }
         kick()
     }
 
     fun complete(actionKey: String, result: String, met: WorkOps.Met, next: String) {
+        store.touch()
         store.updateWork { WorkOps.complete(it, actionKey, result, met, next, now(), zone, rnd) }
         if (met == WorkOps.Met.YES) PlanActions(store, this).onActionDone(actionKey)
         kick()
     }
 
     fun stuck(actionKey: String, reason: StuckReason, detail: String) {
+        store.touch()
         store.updateWork { WorkOps.stuck(it, actionKey, reason, detail, now(), zone, rnd) }
         kick()
     }

@@ -99,29 +99,77 @@ class ChatRepo(private val context: Context, private val store: Store, private v
             update { it.copy(memory = it.memory.filterNot { m -> m == fact || m.contains(fact) }) }
             return _log.value.memory.size < before.size
         }
+        override fun sessionContext(): String {
+            val h = store.hq.value.active ?: return ""
+            val st = h.current
+            return buildString {
+                append("当前环节：${st.seal} · ${st.title}（第 ${h.step + 1}/${com.zongkong.core.hq.HqStep.entries.size}），要求：${st.hint}\n")
+                append("到 ${java.time.Instant.ofEpochMilli(h.endsAt).atZone(store.zone).toLocalTime().toString().take(5)} 结束（${h.trigger.label}）。\n")
+                h.notes.forEach { (k, v) -> append("已记：${com.zongkong.core.hq.HqStep.valueOf(k).title}：${v.take(200)}\n") }
+            }
+        }
+        override fun startHq(minutes: Int): String {
+            val h = actions.hq.start(com.zongkong.core.hq.HqTrigger.AGENT, minutes)
+            return "总控时间开始了，${h.minutes} 分钟。说完这句会打开总控时间。"
+        }
         override fun resolveApp(name: String): String? = AppNames.resolve(context, name)
         override fun appLabel(pkg: String): String = AppNames.label(context, pkg)
     }
 
     val agent = Agent(client, env)
 
-    fun send(text: String) {
+    fun send(text: String, image: String = "") {
         val t = text.trim()
-        if (t.isEmpty() || _busy.value) return
+        if ((t.isEmpty() && image.isBlank()) || _busy.value) return
+        store.touch()
         _busy.value = true
         job = scope.launch {
             try {
                 val history = _log.value.messages
-                agent.reply(history, t) { m ->
+                val speak = store.config.value.hq.speak && store.hq.value.active != null
+                agent.reply(history, t.ifBlank { "看看这张图" }, { m ->
                     update { it.copy(messages = (it.messages + m).takeLast(MAX_KEEP)) }
                     if (m.role == ChatMsg.TOOL && m.route.isNotBlank()) route.value = m.route
-                }
+                    if (speak && m.role == ChatMsg.ASSISTANT && m.content.isNotBlank() && !m.error) com.zongkong.app.system.Speaker.speak(context, m.content)
+                }, image = image)
             } catch (e: Exception) {
                 Log.e(TAG, "参谋出错", e)
                 update { it.copy(messages = it.messages + ChatMsg(ChatMsg.ASSISTANT, "出错了：${e.message ?: e.javaClass.simpleName}", at = System.currentTimeMillis(), error = true)) }
             } finally {
                 _busy.value = false
             }
+        }
+    }
+
+    /**
+     * 参谋主动发一条消息（定时任务）：把指令当作看不见的一句话发给模型，回复显示在对话里并发通知。
+     * 没配 AI 或者出错，就发 [fallback] 这句固定的话。
+     */
+    fun proactive(kind: String, instruction: String, fallback: String) {
+        if (_busy.value) return
+        scope.launch {
+            var said = ""
+            val cfg = store.config.value
+            if (cfg.ai.ready) {
+                _busy.value = true
+                try {
+                    val out = agent.reply(_log.value.messages, instruction, { m ->
+                        update { it.copy(messages = (it.messages + m).takeLast(MAX_KEEP)) }
+                    }, hidden = true)
+                    said = out.lastOrNull { it.role == ChatMsg.ASSISTANT && it.content.isNotBlank() && !it.error }?.content.orEmpty()
+                } catch (e: Exception) {
+                    Log.w(TAG, "参谋定时消息失败：$kind", e)
+                } finally {
+                    _busy.value = false
+                }
+            }
+            if (said.isBlank()) {
+                said = fallback
+                update { it.copy(messages = (it.messages + ChatMsg(ChatMsg.ASSISTANT, fallback, at = System.currentTimeMillis())).takeLast(MAX_KEEP)) }
+            }
+            val (body, _) = Agent.options(said)
+            com.zongkong.app.system.Notifications.advisor(context, body)
+            if (cfg.hq.speak) com.zongkong.app.system.Speaker.speak(context, body)
         }
     }
 
