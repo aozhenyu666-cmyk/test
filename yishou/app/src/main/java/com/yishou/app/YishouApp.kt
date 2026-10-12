@@ -17,8 +17,10 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import com.yishou.app.llm.ChatClient
 import com.yishou.app.llm.LlmCoach
-import com.yishou.app.llm.LlmSetCoach
-import com.yishou.app.coach.SetEngine
+import com.yishou.app.llm.LlmCardGen
+import com.yishou.app.card.CardEngine
+import com.yishou.app.card.CardSession
+import com.yishou.app.card.Dealt
 import com.yishou.app.llm.Vision
 import com.yishou.app.round.RoundEngine
 import com.yishou.app.settings.SettingsStore
@@ -50,6 +52,15 @@ import com.yishou.app.speech.VoiceInput
 /** 应用入口。全局只有这几个对象，手动创建，不用依赖注入框架。 */
 class YishouApp : Application() {
 
+    /** 后台备几张核对过的题卡，入口思考页一打开就有题（没填接口时什么都不做） */
+    fun prefetchCards() {
+        if (!settings.llm.value.isComplete) return
+        appScope.launch { cardEngine.prefetch() }
+    }
+
+    /** 新开一组题卡（主页、窗口、思考页各自一个） */
+    fun newSession(): CardSession = CardSession(cardEngine, database.dao(), database.coach())
+
     /** 运行日志装好，再接管未捕获的异常：先记下来，再交给系统照常处理（应用照常退出）。 */
     private fun installRunLog() {
         RunLog.install(RunLog(java.io.File(filesDir, "runlog.jsonl")))
@@ -74,9 +85,12 @@ class YishouApp : Application() {
         private set
     lateinit var speechApi: SpeechApi
         private set
-    /** 教练组：主页和陪练窗口共用 */
-    lateinit var coachEngine: SetEngine
+    /** 题卡：出题、核对、发牌、记分 */
+    lateinit var cardEngine: CardEngine
         private set
+
+    /** “看一眼”看到的题，交给陪练窗口当下一张 */
+    val incomingCard = kotlinx.coroutines.flow.MutableStateFlow<Dealt?>(null)
     /** 听你说：录音 + 听写（语音接口或系统识别），全应用共用一个，同一时间只听一处 */
     lateinit var voice: VoiceInput
         private set
@@ -103,11 +117,9 @@ class YishouApp : Application() {
         val logError: (String, String) -> Unit = { kind, message -> RunLog.e(kind, message) }
         val coach = LlmCoach(ChatClient(config = { settings.llm.value }, usage = stats, onError = logError))
         engine = RoundEngine(database.dao(), coach)
-        coachEngine = SetEngine(
-            database.coach(), database.dao(),
-            LlmSetCoach(ChatClient(config = { settings.llm.value }, usage = stats, onError = logError)),
-            prefs = { settings.app.value },
-            savePrefs = { f -> settings.updateApp(f) },
+        cardEngine = CardEngine(
+            database.cards(),
+            LlmCardGen(ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(60), usage = stats, onError = logError)),
         )
         summaryEngine = SummaryEngine(database.dao(), coach, prefs = { settings.app.value })
         vision = Vision(
@@ -116,7 +128,7 @@ class YishouApp : Application() {
         speechApi = SpeechApi(config = { settings.speech.value })
         voice = VoiceInput(this)
 
-        appScope.launch { coachEngine.load() }
+        prefetchCards()
 
         // 时区设置一变就生效
         appScope.launch { settings.app.collect { AppZone.id = it.timeZone } }

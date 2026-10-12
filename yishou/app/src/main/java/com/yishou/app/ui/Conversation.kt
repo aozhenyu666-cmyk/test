@@ -87,7 +87,7 @@ fun CoachBubble(text: String, footer: @Composable (() -> Unit)? = null) {
         Column(Modifier.weight(1f)) {
             Text(
                 text,
-                style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Serif, lineHeight = 28.sp),
+                style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 28.sp),
             )
             if (footer != null) {
                 Spacer(Modifier.size(8.dp))

@@ -125,7 +125,7 @@ fun SettingsScreen(
             HorizontalDivider()
             SectionTitle("分组训练")
             Text(
-                "像练体能一样分组：一组就是教练排的一组（几手在下面“教练”里设），组间歇一下。" +
+                "像练体能一样分组：一组是几张题卡（在下面“题卡”里设），组间歇一下。" +
                     "起步目标每天几组，连续两天达标自动加一组，连续两天没达标自动减一组。",
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -219,9 +219,9 @@ fun SettingsScreen(
             )
 
             HorizontalDivider()
-            SectionTitle("教练")
-            LabeledRow("一组几手") {
-                Stepper(prefs.coachSetMoves, 3..8, "手") { v -> vm.update { it.copy(coachSetMoves = v) } }
+            SectionTitle("题卡")
+            LabeledRow("一组几张") {
+                Stepper(prefs.setCards, 1..10, "张") { v -> vm.update { it.copy(setCards = v) } }
             }
             SwitchRow("开组前先热身", prefs.warmup) { on -> vm.update { it.copy(warmup = on) } }
             Text("热身两分钟：一分钟呼吸，再做五步心算接龙，把“接上一步”的动作先活动开。", style = MaterialTheme.typography.bodySmall)

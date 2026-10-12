@@ -18,6 +18,16 @@ class Vision(private val chat: ChatClient) {
         }
     }
 
+    /** 拍一道题：完整转写材料、问题和全部选项，不作答。 */
+    suspend fun transcribeQuestion(imageDataUrl: String): LlmResult<String> {
+        val system = "你负责把一道题目的图片完整转写成文字：材料、问题、全部选项，保持原来的顺序和编号。" +
+            "看不清的地方写“（看不清）”。不要作答，不要解析，不要加任何开场白。"
+        return when (val r = chat.completeWithImage(system, "请转写这道题。", imageDataUrl, "拍题识图")) {
+            is LlmResult.Err -> r
+            is LlmResult.Ok -> LlmResult.Ok(r.value.trim().take(MAX_CHARS * 2))
+        }
+    }
+
     /** “看一眼”：客观描述屏幕上用户正在做什么。 */
     suspend fun describeScreen(taskTitle: String?, imageDataUrl: String): LlmResult<String> {
         val text = (if (taskTitle != null) "用户的学习任务：$taskTitle\n" else "") + "这是他此刻的手机屏幕。请描述。"

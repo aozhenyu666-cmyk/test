@@ -77,6 +77,12 @@ data class AppPrefs(
     val haptics: Boolean = true,
     /** 一组训练几手（不含重做） */
     val coachSetMoves: Int = 5,
+    /** 一组几张题卡 */
+    val setCards: Int = 5,
+    /** 入口思考页放行时说的“看完做的第一件事”，下次打开先问做了没有 */
+    val pendingExit: String = "",
+    /** 那次放行到期的时间；过了这个时间才问 */
+    val pendingExitAt: Long = 0,
     /** 开组前先热身 */
     val warmup: Boolean = true,
     /** 各骰面的帮助等级（0 示范后补一步 … 3 连续接力、自己提下一问），按组的表现自动加减 */
@@ -127,6 +133,9 @@ data class AppPrefs(
         .put("timeZone", timeZone)
         .put("haptics", haptics)
         .put("coachSetMoves", coachSetMoves)
+        .put("setCards", setCards)
+        .put("pendingExit", pendingExit)
+        .put("pendingExitAt", pendingExitAt)
         .put("warmup", warmup)
         .put("faceLevels", JSONObject().apply { faceLevels.forEach { (k, v) -> put(k.toString(), v) } })
         .toString()
@@ -218,6 +227,9 @@ data class AppPrefs(
                 timeZone = o.optString("timeZone", d.timeZone).ifBlank { d.timeZone },
                 haptics = o.optBoolean("haptics", d.haptics),
                 coachSetMoves = o.optInt("coachSetMoves", d.coachSetMoves).coerceIn(3, 8),
+                setCards = o.optInt("setCards", d.setCards).coerceIn(1, 10),
+                pendingExit = o.optString("pendingExit", ""),
+                pendingExitAt = o.optLong("pendingExitAt", 0),
                 warmup = o.optBoolean("warmup", d.warmup),
                 faceLevels = o.optJSONObject("faceLevels")?.let { f ->
                     f.keys().asSequence().mapNotNull { k -> k.toIntOrNull()?.takeIf { it in 1..6 }?.let { it to f.optInt(k).coerceIn(0, 3) } }.toMap()

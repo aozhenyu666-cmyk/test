@@ -89,6 +89,7 @@ fun StatusScreen(onBack: () -> Unit) {
                 Line("离线放行", "${today.event(DayStats.OFFLINE_PASS)} / ${prefs.offlineDailyLimit} 次")
                 Line("开局规则拦下", "${today.event(DayStats.WINDOW_BLOCK)} 次")
                 Line("没应声被拉回", "${today.event(DayStats.PULL_BACK)} 次")
+                Line("说好看完做的事", "做了 ${today.event(DayStats.EXIT_KEPT)} 次，没做 ${today.event(DayStats.EXIT_MISSED)} 次")
                 Line("陪练看屏", "${today.event(DayStats.LOOK)} 次")
             }
 
@@ -210,7 +211,7 @@ private fun Block(title: String, content: @Composable () -> Unit) {
 @Composable
 private fun Big(value: String, label: String) {
     Column {
-        Text(value, style = MaterialTheme.typography.headlineSmall, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold)
+        Text(value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

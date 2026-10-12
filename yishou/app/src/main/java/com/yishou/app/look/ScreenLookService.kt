@@ -181,33 +181,26 @@ class ScreenLookService : Service() {
                 setStatus("没有截到画面，再点一次试试")
                 return@launch
             }
-            val dao = app.database.dao()
-            val task = dao.getCurrentTask()
-            if (task == null) {
-                setStatus("还没有当前任务")
-                return@launch
-            }
-            val screen = when (val r = app.vision.describeScreen(task.title, dataUrl)) {
+            // 看一眼：把屏幕上的题完整转写下来
+            val screen = when (val r = app.vision.transcribeQuestion(dataUrl)) {
                 is LlmResult.Ok -> r.value
                 is LlmResult.Err -> {
                     setStatus("识图失败：${r.error.message}")
                     return@launch
                 }
             }
-            // 看到的屏幕就是这一组的材料：教练按它重新开一组（窗口页会读出第一问）
-            val engine = app.coachEngine
-            when (val r = engine.open(task, engine.suggestFace(), "【屏幕上的内容】$screen")) {
-                is com.yishou.app.coach.SetEngine.Outcome.Failed -> setStatus("开组失败：${r.message}")
-                com.yishou.app.coach.SetEngine.Outcome.Busy -> setStatus("教练正忙，过一会儿再看")
-                else -> {
+            // 屏幕上的题：整理成一张题卡，交给陪练窗口当下一张（揭晓时点官方答案才计分）
+            when (val r = app.cardEngine.import(screen)) {
+                is LlmResult.Err -> setStatus("整理题目失败：${r.error.message}")
+                is LlmResult.Ok -> {
                     app.stats.event(DayStats.LOOK)
-                    val first = engine.state.value.current?.question.orEmpty()
-                    lastLookMove = first
+                    app.incomingCard.value = r.value
+                    lastLookMove = r.value.card.question
                     setStatus(null)
                     Notifications.showReminder(
                         this@ScreenLookService, ID_RESULT,
-                        "教练看了一眼，按屏幕开了一组",
-                        first,
+                        "教练看了一眼，把这道题做成了下一张",
+                        r.value.card.question,
                         WindowActivity::class.java,
                     )
                 }

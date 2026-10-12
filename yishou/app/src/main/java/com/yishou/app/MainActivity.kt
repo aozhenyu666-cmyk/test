@@ -23,9 +23,8 @@ import com.yishou.app.ui.theme.StoneMark
 import androidx.navigation.navArgument
 import com.yishou.app.ui.AboutScreen
 import com.yishou.app.ui.BetScreen
-import com.yishou.app.ui.EchoScreen
 import com.yishou.app.ui.LogScreen
-import com.yishou.app.ui.CoachScreen
+import com.yishou.app.ui.HomeScreen
 import com.yishou.app.ui.PermissionsScreen
 import com.yishou.app.ui.SummaryScreen
 import com.yishou.app.ui.WatchedAppsScreen
@@ -72,11 +71,9 @@ class MainActivity : ComponentActivity() {
                 ) { outer ->
                 NavHost(navController = nav, startDestination = "board", modifier = Modifier.padding(outer)) {
                     composable("board") {
-                        CoachScreen(
+                        HomeScreen(
                             onOpenSettings = { nav.navigate("settings") },
                             onOpenWindow = { startActivity(Intent(this@MainActivity, WindowActivity::class.java)) },
-                            onOpenEcho = { nav.navigate("echo") },
-                            onOpenPermissions = { nav.navigate("permissions") },
                         )
                     }
                     composable("console") {
@@ -132,9 +129,7 @@ class MainActivity : ComponentActivity() {
                     composable("bets") {
                         BetScreen(onBack = { nav.navigateUp() })
                     }
-                    composable("echo") {
-                        EchoScreen(onBack = { nav.navigateUp() })
-                    }
+
                 }
                 }
             }

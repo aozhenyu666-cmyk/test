@@ -46,7 +46,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yishou.app.YishouApp
 import com.yishou.app.bet.Calibration
 import com.yishou.app.log.RunLog
-import com.yishou.app.recall.EchoRepo
 import com.yishou.app.data.Breakpoint
 import com.yishou.app.data.SetStatus
 import com.yishou.app.data.FaceCount
@@ -121,11 +120,9 @@ fun ConsoleScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeKey++ }
     val gateOn = remember(resumeKey) { PermissionStatus.accessibility(context) }
     val wallpaperOn = remember(resumeKey) { BoardWallpaperService.isActive(context) }
-    val faces by produceState(emptyList<FaceCount>(), resumeKey, s.plan?.todayEffective) {
-        value = app.database.dao().faceCounts(0)
-    }
     val inWindow = WindowClock.active(System.currentTimeMillis(), prefs, AppZone.zone) != null
-    val echoDue by produceState(0, resumeKey) { value = EchoRepo(app).due().size }
+    val cardHist by produceState(emptyList<com.yishou.app.data.CardAttempt>(), resumeKey) { value = app.cardEngine.history() }
+    val redoDue = remember(cardHist) { com.yishou.app.card.Progress.dueRedo(cardHist, System.currentTimeMillis()).size }
     val calibration by produceState("", resumeKey) {
         val resolved = app.database.practice().resolvedBets()
         value = Calibration.verdict(Calibration.of(resolved.map { it.confidence to (it.outcome > 0) }))
@@ -143,9 +140,9 @@ fun ConsoleScreen(
                 Text("主控台", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             }
             s.plan?.let { plan ->
-                item { TrainingCard(plan, prefs.coachSetMoves, inWindow, onOpenWindow, onOpenBoard) }
+                item { TrainingCard(plan, prefs.setCards, inWindow, onOpenWindow, onOpenBoard) }
             }
-            item { PositionCard(s.task, s.breakpoint, onOpenBoard, onEditTask) }
+            item { SkillPanel(cardHist) }
             item {
                 Panel("开关") {
                     StatusRow("入口思考页", if (gateOn) "开着" else "没开，打开关注的应用不会拦", gateOn, onOpenPermissions)
@@ -179,35 +176,16 @@ fun ConsoleScreen(
             item {
                 Panel("练在平时") {
                     StatusRow(
-                        "回响",
-                        if (echoDue > 0) "今天 $echoDue 条：前几天的结论，凭记忆再说一遍" else "今天没有要回响的",
-                        echoDue > 0,
-                    ) { onOpen("echo") }
+                        "错题重做",
+                        if (redoDue > 0) "$redoDue 张到期了，练一组时会先出" else "没有到期的错题",
+                        redoDue > 0,
+                    ) { onOpenBoard() }
                     StatusRow("预判本", calibration.ifEmpty { "先押再看：下注和预演" }, false) { onOpen("bets") }
                     StatusRow(
                         "运行日志",
                         if (logCount > 0) "记了 $logCount 条出错，点开看" else "没出过错",
                         false,
                     ) { onOpen("log") }
-                }
-            }
-            item {
-                Panel("六面", onClick = onOpenStatus) {
-                    val byFace = faces.associateBy { it.face }
-                    Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                        Faces.ALL.forEach { f ->
-                            val c = byFace[f.number]
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                DieFace(f.number, 30.dp)
-                                Text(f.short, style = MaterialTheme.typography.labelMedium)
-                                Text(
-                                    if (c == null) "0" else "${c.effective}/${c.total}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
                 }
             }
             item {
@@ -243,7 +221,7 @@ private fun TrainingCard(plan: TrainingPlan, setMoves: Int, inWindow: Boolean, o
             Text(
                 when {
                     plan.hitToday -> "${plan.doneSets} 组都练完了。想多练就再开一组，不想就到此为止。"
-                    plan.doneSets == 0 -> "还没开组。一组 $setMoves 手，最后独立做一道相似题。"
+                    plan.doneSets == 0 -> "还没开组。一组 $setMoves 张题卡。"
                     else -> "练完 ${plan.doneSets} 组，还差 ${plan.targetSets - plan.doneSets} 组。"
                 },
                 style = MaterialTheme.typography.bodyMedium,
@@ -341,6 +319,41 @@ private fun Panel(title: String, onClick: (() -> Unit)? = null, content: @Compos
             Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             content()
         }
+    }
+}
+
+/**
+ * 小技能：七类题各自的掌握度（最近 10 张里自己做对的比例），以及几条总数。
+ * 判对错全靠题卡比对，所以这些数字说的是真做对了多少，不是说得好不好。
+ */
+@Composable
+private fun SkillPanel(hist: List<com.yishou.app.data.CardAttempt>) {
+    val P = com.yishou.app.card.Progress
+    val stats = P.stats(hist)
+    Panel("小技能（最近 30 天）") {
+        if (stats.total == 0) {
+            Text("还没做过题卡。到“对局”里练一组。", style = MaterialTheme.typography.bodySmall)
+            return@Panel
+        }
+        com.yishou.app.card.Skill.entries.forEach { sk ->
+            val m = P.mastery(hist, sk)
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row {
+                    Text(sk.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    Text(
+                        if (m == null) "没练过" else "${(m * 100).toInt()}%  难度 ${P.difficulty(hist, sk)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                ThinProgress((m ?: 0.0).toFloat())
+            }
+        }
+        Text(
+            "首答对 ${P.Stats.ratio(stats.firstCorrect, stats.total)}，查完改对 ${stats.changedRight} 次、改错 ${stats.changedWrong} 次，" +
+                "把握高的对了 ${P.Stats.ratio(stats.highConfCorrect, stats.highConf)}，关屏练到第 ${P.level(hist)} 级。",
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }
 

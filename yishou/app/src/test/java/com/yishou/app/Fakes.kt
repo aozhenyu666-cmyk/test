@@ -16,6 +16,11 @@ import com.yishou.app.llm.OpeningMove
 import com.yishou.app.llm.SummaryResult
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import com.yishou.app.data.ChainRecall
+import com.yishou.app.data.CoachDao
+import com.yishou.app.data.SetMove
+import com.yishou.app.data.SetStatus
+import com.yishou.app.data.TrainSet
 
 class FakeCoach : Coach {
     var openingResult: LlmResult<OpeningMove> = LlmResult.Err(LlmError.NotConfigured)
@@ -116,4 +121,38 @@ class FakeDao : AppDao() {
     override suspend fun clearCurrentFlag() {}
     override suspend fun setCurrentFlag(id: Long) {}
     override fun observeBreakpoint(taskId: Long): Flow<Breakpoint?> = emptyFlow()
+}
+
+class FakeCoachDao : CoachDao() {
+    val sets = mutableListOf<TrainSet>()
+    val moveList = mutableListOf<SetMove>()
+    val recalls = mutableListOf<ChainRecall>()
+
+    override suspend fun insertSet(set: TrainSet): Long {
+        val id = sets.size + 1L
+        sets += set.copy(id = id)
+        return id
+    }
+    override suspend fun updateSet(set: TrainSet) {
+        sets.replaceAll { if (it.id == set.id) set else it }
+    }
+    override suspend fun activeSet() = sets.lastOrNull { it.status == SetStatus.ACTIVE }
+    override suspend fun getSet(id: Long) = sets.firstOrNull { it.id == id }
+    override suspend fun recentSets(n: Int) = sets.sortedByDescending { it.startedAt }.take(n)
+    override fun observeSetsSince(since: Long): Flow<List<TrainSet>> = emptyFlow()
+    override suspend fun insertMove(move: SetMove): Long {
+        val id = moveList.size + 1L
+        moveList += move.copy(id = id)
+        return id
+    }
+    override suspend fun updateMove(move: SetMove) {
+        moveList.replaceAll { if (it.id == move.id) move else it }
+    }
+    override suspend fun moves(setId: Long) = moveList.filter { it.setId == setId }
+    override suspend fun movesSince(since: Long) = moveList.filter { it.createdAt >= since }
+    override suspend fun insertRecall(recall: ChainRecall): Long {
+        recalls += recall
+        return recalls.size.toLong()
+    }
+    override suspend fun recallsSince(since: Long) = recalls.filter { it.at >= since }
 }

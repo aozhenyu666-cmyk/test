@@ -8,14 +8,15 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class],
-    version = 4,
+    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class],
+    version = 5,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun dao(): AppDao
     abstract fun practice(): PracticeDao
     abstract fun coach(): CoachDao
+    abstract fun cards(): CardDao
 
     companion object {
         /** v0.5：给轮次和断点加上“骰子第几面”。旧数据保留，面记为 0。 */
@@ -72,9 +73,32 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v0.9：题卡。答案在出题时定死的单选题，以及每次作答的结果。 */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `card` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`skill` TEXT NOT NULL, `difficulty` INTEGER NOT NULL, `json` TEXT NOT NULL, `verified` INTEGER NOT NULL, " +
+                        "`source` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `usedAt` INTEGER)",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_card_createdAt` ON `card` (`createdAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_card_skill` ON `card` (`skill`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `card_attempt` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`cardId` INTEGER NOT NULL, `skill` TEXT NOT NULL, `difficulty` INTEGER NOT NULL, `mode` TEXT NOT NULL, " +
+                        "`level` INTEGER NOT NULL, `bet` INTEGER NOT NULL, `conf` TEXT NOT NULL, `evidenceOk` INTEGER NOT NULL, " +
+                        "`checks` INTEGER NOT NULL, `checksOk` INTEGER NOT NULL, `final` INTEGER NOT NULL, " +
+                        "`firstCorrect` INTEGER NOT NULL, `finalCorrect` INTEGER NOT NULL, `help` INTEGER NOT NULL, " +
+                        "`cause` TEXT NOT NULL, `durationMs` INTEGER NOT NULL, `verified` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL)",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_card_attempt_cardId` ON `card_attempt` (`cardId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_card_attempt_createdAt` ON `card_attempt` (`createdAt`)")
+            }
+        }
+
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "yishou.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
     }
 }
