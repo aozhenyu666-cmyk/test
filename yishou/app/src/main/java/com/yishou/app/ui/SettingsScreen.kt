@@ -226,8 +226,29 @@ fun SettingsScreen(
             }
             SwitchRow("开组前先热身", prefs.warmup) { on -> vm.update { it.copy(warmup = on) } }
             Text("热身两分钟：一分钟呼吸，再做五步心算接龙，把“接上一步”的动作先活动开。", style = MaterialTheme.typography.bodySmall)
-            SwitchRow("打开关注的应用前做一张题卡", prefs.gateCard) { on -> vm.update { it.copy(gateCard = on) } }
-            Text("关掉就只是打卡：先问上次说好的事做了没有，再写一句看完做什么，就放行。", style = MaterialTheme.typography.bodySmall)
+            SwitchRow("题卡先用自己的话说答案，再看选项", prefs.predictFirst) { on -> vm.update { it.copy(predictFirst = on) } }
+            Text("防乱选：先想出来，再认出来。连着三张又快又错时，这一组剩下的会自动打开。", style = MaterialTheme.typography.bodySmall)
+
+            HorizontalDivider()
+            SectionTitle("思维强度")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("LIGHT" to "轻", "MID" to "中", "HARD" to "强").forEach { (k, label) ->
+                    FilterChip(selected = prefs.talkLevel == k, onClick = { vm.update { it.copy(talkLevel = k) } }, label = { Text(label) })
+                }
+            }
+            Text(
+                "轻：口水规则只提醒。中：口水不超过 25%、第一句先说结论，每 5 手回一次主线，做事每步写一句判断。强：口水不超过 15%、更短更有结构，每 3 手回一次主线，适合语音对练。连着不想答会自动降一档。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            HorizontalDivider()
+            SectionTitle("打开关注的应用之前")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("line" to "主线下一手", "card" to "一张题卡", "check" to "只打卡").forEach { (k, label) ->
+                    FilterChip(selected = prefs.gateMode == k, onClick = { vm.update { it.copy(gateMode = k, gateCard = k == "card") } }, label = { Text(label) })
+                }
+            }
+            Text("主线下一手：拿你在下的那一局的下一问来问你，过了规则才放行（没有在下的局就退成一张题卡）。只打卡：说好看完做什么就放行。", style = MaterialTheme.typography.bodySmall)
 
             HorizontalDivider()
             SectionTitle("题库")

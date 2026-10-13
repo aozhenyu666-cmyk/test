@@ -60,7 +60,18 @@ class YishouApp : Application() {
     }
 
     /** 新开一组题卡（主页、窗口、思考页各自一个） */
-    fun newSession(): CardSession = CardSession(cardEngine, database.dao(), database.coach())
+    fun newSession(): CardSession = CardSession(cardEngine, database.dao(), database.coach(), predictFirst = settings.app.value.predictFirst)
+
+    /** 主线的教练（填了大模型接口才有；没有就用本机的六面问题接着走） */
+    val lineCoach: com.yishou.app.llm.LineCoach by lazy {
+        com.yishou.app.llm.LlmLineCoach(ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(40), usage = stats))
+    }
+
+    /** 新开一个主线会话（主线页、语音对练、入口思考页各自一个） */
+    fun newLine(): com.yishou.app.line.LineSession =
+        com.yishou.app.line.LineSession(database.lines(), if (settings.llm.value.isComplete) lineCoach else null)
+
+    val level: com.yishou.app.line.Level get() = com.yishou.app.line.Level.of(settings.app.value.talkLevel)
 
     /** 运行日志装好，再接管未捕获的异常：先记下来，再交给系统照常处理（应用照常退出）。 */
     private fun installRunLog() {

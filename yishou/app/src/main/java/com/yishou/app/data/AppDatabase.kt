@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class, Material::class, DrillRow::class, Deed::class, MaterialKey::class, Job::class, JobStep::class, Outside::class],
-    version = 8,
+    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class, Material::class, DrillRow::class, Deed::class, MaterialKey::class, Job::class, JobStep::class, Outside::class, Line::class, Move::class],
+    version = 9,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -19,6 +19,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun cards(): CardDao
     abstract fun think(): ThinkDao
     abstract fun jobs(): JobDao
+    abstract fun lines(): LineDao
 
     companion object {
         /** v0.5：给轮次和断点加上“骰子第几面”。旧数据保留，面记为 0。 */
@@ -156,9 +157,28 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v0.13：主线（一局一局往下想）和每一手。旧表不动。 */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `line` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, " +
+                        "`anchor` TEXT NOT NULL, `conclusions` TEXT NOT NULL, `doubts` TEXT NOT NULL, `nextQuestion` TEXT NOT NULL, " +
+                        "`face` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `closedAt` INTEGER, `materialId` INTEGER)",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_line_updatedAt` ON `line` (`updatedAt`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `move` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `lineId` INTEGER NOT NULL, " +
+                        "`question` TEXT NOT NULL, `answer` TEXT NOT NULL, `ask` TEXT NOT NULL, `verdict` TEXT NOT NULL, `note` TEXT NOT NULL, " +
+                        "`gist` TEXT NOT NULL, `face` INTEGER NOT NULL, `voice` INTEGER NOT NULL, `latencyMs` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL)",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_move_lineId` ON `move` (`lineId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_move_createdAt` ON `move` (`createdAt`)")
+            }
+        }
+
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "yishou.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
                 .build()
     }
 }

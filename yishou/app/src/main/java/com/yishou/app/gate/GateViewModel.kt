@@ -37,6 +37,8 @@ data class GateState(
     val passMinutes: Int? = null,
     /** 要不要做一张题卡；false 时只打卡 */
     val gateCard: Boolean = true,
+    /** 用主线的下一手当这一关 */
+    val useLine: Boolean = false,
 ) {
     val isTest: Boolean get() = triggerPackage == null
 }
@@ -52,6 +54,8 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     private val yishou = app as YishouApp
     private val session: CardSession = yishou.newSession()
     val card: StateFlow<SessionState> = session.state
+    private val lineSession = yishou.newLine()
+    val line: StateFlow<com.yishou.app.line.LineState> = lineSession.state
 
     private val _state = MutableStateFlow(GateState())
     val state: StateFlow<GateState> = _state.asStateFlow()
@@ -77,9 +81,23 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             gateCard = prefs.gateCard,
         )
         session.stop()
-        if (!inWindow && prefs.gateCard) viewModelScope.launch {
-            session.start(CardMode.GATE, null, 1)
-            if (session.state.value.error != null) _state.update { it.copy(offlineLeft = offlineLeft()) }
+        lineSession.stop()
+        if (inWindow) return
+        viewModelScope.launch {
+            // 主线下一手：有在下的局就问它的下一问；没有就退成一张题卡
+            val open = if (prefs.gateMode == "line") yishou.database.lines().latestOpen() else null
+            when {
+                open != null -> {
+                    lineSession.open(open, yishou.level)
+                    _state.update { it.copy(useLine = true, gateCard = false) }
+                }
+                prefs.gateMode == "check" -> _state.update { it.copy(gateCard = false) }
+                else -> {
+                    _state.update { it.copy(gateCard = true) }
+                    session.start(CardMode.GATE, null, 1)
+                    if (session.state.value.error != null) _state.update { it.copy(offlineLeft = offlineLeft()) }
+                }
+            }
         }
     }
 
@@ -121,6 +139,9 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onExitChange(text: String) = _state.update { it.copy(exit = text) }
 
+    /** 主线下一手 */
+    fun move(text: String) = viewModelScope.launch { lineSession.answer(text) }
+
     /** 做完题卡、说了看完做什么：放行 */
     fun pass() {
         val s = _state.value
@@ -129,6 +150,8 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         val card = session.state.value
         val cardFailed = card.error != null && card.round == null
         if (s.gateCard && !card.done && !cardFailed) return
+        // 主线：接住一手，或者降阶到底、老实记下“先放着”，才放行
+        if (s.useLine && line.value.caught == 0 && !line.value.parked) return
         grant(yishou.settings.app.value.passMinutesFor(s.group), DayStats.GATE_PASS)
     }
 

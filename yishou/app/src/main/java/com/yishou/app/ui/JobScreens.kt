@@ -224,6 +224,8 @@ class JobViewModel(app: Application) : AndroidViewModel(app) {
         id.value = jobId
     }
 
+    val level: com.yishou.app.line.Level get() = yishou.level
+
     fun start(s: JobStep) = viewModelScope.launch {
         if (s.startedAt == null) dao.updateStep(s.copy(startedAt = System.currentTimeMillis()))
     }
@@ -417,13 +419,22 @@ private fun CurrentStep(j: Job, steps: List<JobStep>, vm: JobViewModel, onClose:
                 AppStep(j, cur, vm)
                 return@Column
             }
-            VoiceTextField(note, { note = it }, "这一步记一句（可不填）：错在哪、卡在哪、发现了什么", Modifier.fillMaxWidth())
+            // 做完一步要说一句判断（强度“轻”时可以不写）：不是流水账，是这一步的思考
+            val level = vm.level
+            val ask = Jobs.REFLECT[cur.idx % Jobs.REFLECT.size]
+            val rules = com.yishou.app.line.TalkRules.of(level).copy(budget = 200, structureEvery = 0)
+            val check = com.yishou.app.line.Talk.check(note, rules)
+            val needs = level != com.yishou.app.line.Level.LIGHT
+            val ready = !needs || check.ok
+            Text(ask, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.tertiary)
+            VoiceTextField(note, { note = it }, if (needs) "一句判断，先说结论" else "一句判断（可不填）", Modifier.fillMaxWidth())
+            if (note.isNotBlank() || needs) TalkMeter(note, rules)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { vm.finish(cur, StepResult.OK, note) }, modifier = Modifier.weight(1f)) { Text("做成了") }
-                OutlinedButton(onClick = { vm.finish(cur, StepResult.MISS, note) }, modifier = Modifier.weight(1f)) { Text("没做成") }
+                Button(onClick = { vm.finish(cur, StepResult.OK, note) }, enabled = ready, modifier = Modifier.weight(1f)) { Text("做成了") }
+                OutlinedButton(onClick = { vm.finish(cur, StepResult.MISS, note) }, enabled = ready, modifier = Modifier.weight(1f)) { Text("没做成") }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { vm.finish(cur, StepResult.STUCK, note) }, modifier = Modifier.weight(1f)) { Text("卡住了") }
+                OutlinedButton(onClick = { vm.finish(cur, StepResult.STUCK, note) }, enabled = ready, modifier = Modifier.weight(1f)) { Text("卡住了") }
                 TextButton(onClick = { vm.finish(cur, StepResult.SKIP, note) }, modifier = Modifier.weight(1f)) { Text("跳过") }
             }
             if (j.mode != JobMode.COUNT) {

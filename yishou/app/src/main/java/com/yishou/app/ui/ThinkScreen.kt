@@ -198,6 +198,17 @@ class ThinkViewModel(app: Application) : AndroidViewModel(app) {
         if (m != null) viewModelScope.launch { dao.updateMaterial(m.copy(usedAt = System.currentTimeMillis(), uses = m.uses + 1)) }
     }
 
+    /** 拿一段素材开一局主线：围着“它说得对吗、对我有什么用”一手一手想 */
+    fun lineFrom(m: Material, onDone: (Long) -> Unit) = viewModelScope.launch {
+        val now = System.currentTimeMillis()
+        val anchor = "「${m.title}」说得对吗？对我有什么用？"
+        val l = com.yishou.app.data.Line(
+            title = m.title, anchor = anchor, nextQuestion = com.yishou.app.line.Lines.question(1, anchor),
+            createdAt = now, updatedAt = now, materialId = m.id,
+        )
+        onDone(yishou.database.lines().insertLine(l))
+    }
+
     fun hideRecite() = session.hide()
     fun left() = session.left()
     fun said(text: String) = viewModelScope.launch { session.recite(text) }
@@ -234,6 +245,7 @@ fun ThinkScreen(
     onCards: (Long?) -> Unit,
     initialMaterial: Long? = null,
     initialLens: String? = null,
+    onLine: (Long) -> Unit = {},
     vm: ThinkViewModel = viewModel(),
 ) {
     val drill by vm.drill.collectAsStateWithLifecycle()
@@ -344,6 +356,7 @@ fun ThinkScreen(
                         Unit
                     },
                     onCards = { onCards(m.id) },
+                    onLine = { vm.lineFrom(m, onLine) },
                     onDelete = { vm.delete(m) },
                 )
             }
@@ -417,6 +430,7 @@ private fun MaterialCard(
     onToggle: () -> Unit,
     onLens: (Lens) -> Unit,
     onCards: () -> Unit,
+    onLine: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
@@ -458,7 +472,8 @@ private fun MaterialCard(
                     if (QUESTION.containsMatchIn(m.text)) OutlinedButton(onClick = onCards) { Text("当题卡做") }
                 }
                 Text(lenses.first().short, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onLine) { Text("开一局，围着它想 →") }
                     Spacer(Modifier.weight(1f))
                     TextButton(onClick = { confirmDelete = true }) { Text("删掉", color = MaterialTheme.colorScheme.error) }
                 }

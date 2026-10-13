@@ -59,6 +59,8 @@ class CardActions(
     val key: (Int?) -> Unit,
     val hide: () -> Unit,
     val note: (String) -> Unit,
+    /** 先说再选：用自己的话说的答案 */
+    val predict: (String) -> Unit = {},
 )
 
 private fun stepsOf(r: Round): List<String> = buildList {
@@ -124,7 +126,7 @@ fun CardRoundView(s: SessionState, a: CardActions) {
         Text(card.question, style = MaterialTheme.typography.titleMedium)
 
         when (r.step) {
-            Step.BET -> BetStep(card, a)
+            Step.BET -> BetStep(card, s, a)
             Step.EVIDENCE -> {
                 Text("依据是哪一句？在材料里点出来（最多两句）。", style = MaterialTheme.typography.bodyMedium)
                 Options(card, r, selected = r.bet, marks = false)
@@ -237,11 +239,39 @@ private fun HiddenPassage(card: Card, s: SessionState, picked: Set<Int>, pickabl
 }
 
 @Composable
-private fun BetStep(card: Card, a: CardActions) {
+private fun BetStep(card: Card, s: SessionState, a: CardActions) {
     var option by remember(card) { mutableStateOf<Int?>(null) }
     var conf by remember(card) { mutableStateOf<Conf?>(null) }
+    s.rushNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+    // 先说再选：选项先藏着
+    if (s.mustPredict && s.predicted == null) {
+        var said by remember(card) { mutableStateOf("") }
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("先别看选项：用自己的话说答案（几个字就行）。", style = MaterialTheme.typography.bodyMedium)
+            VoiceTextField(said, { said = it }, "我觉得答案是……", Modifier.fillMaxWidth())
+            Button(onClick = { a.predict(said) }, enabled = com.yishou.app.think.Words.substance(said) >= 2, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("说好了，看选项") }
+        }
+        return
+    }
+    // 读完再选：按材料长短锁几秒
+    val unlockAt = if (s.mode == com.yishou.app.data.CardMode.GATE) 0L else s.cardStartedAt + com.yishou.app.card.AntiRandom.minReadMs(card)
+    var now by remember(card) { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
+    androidx.compose.runtime.LaunchedEffect(unlockAt) {
+        while (now < unlockAt) {
+            kotlinx.coroutines.delay(250)
+            now = System.currentTimeMillis()
+        }
+    }
+    val locked = now < unlockAt
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        card.options.forEachIndexed { i, o -> OptionRow(i, o, selected = option == i, onClick = { option = i }) }
+        s.predicted?.let { p ->
+            Text("你先说的：$p", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+            com.yishou.app.card.AntiRandom.closest(p, card)?.let { i ->
+                Text("最接近 ${Card.letter(i)}。对照一下再定。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (locked) Text("先读完：${((unlockAt - now) / 1000) + 1} 秒后能选", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        card.options.forEachIndexed { i, o -> OptionRow(i, o, selected = option == i, enabled = !locked, onClick = { if (!locked) option = i }) }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("把握", style = MaterialTheme.typography.labelLarge)
             Conf.entries.forEach { c -> FilterChip(selected = conf == c, onClick = { conf = c }, label = { Text(c.label) }) }

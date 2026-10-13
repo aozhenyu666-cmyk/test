@@ -17,6 +17,9 @@ object Jobs {
 
     const val MAX_STEPS = 60
 
+    /** 做完一步要回答的一问（轮着问）：判断、预判、复盘 */
+    val REFLECT = listOf("这一步最关键的判断是什么？", "下一步你预计会卡在哪？为什么？", "如果重来，这一步怎么做更快？")
+
     /** 从“完成 10 道题”里认出份数和量词；认不出返回 null */
     fun count(title: String): Pair<Int, String>? {
         val m = COUNT.find(title) ?: return null

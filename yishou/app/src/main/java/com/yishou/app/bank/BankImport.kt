@@ -38,11 +38,16 @@ class BankImport(
         val choices = items.filterIsInstance<BankItem.Choice>()
         val essays = items.filterIsInstance<BankItem.Essay>()
         val added = engine.importBank(choices)
-        val seen = think.recentMaterials(500).filter { it.source == MaterialSource.BANK }.map { Words.norm(it.text) }
+        val seen = think.recentMaterials(2000).filter { it.source == MaterialSource.BANK }.map { Words.norm(it.text) }.toMutableSet()
         var e = 0
         for (it in essays) {
-            val q = Words.norm(it.question)
-            if (seen.any { s -> q.isNotEmpty() && s.contains(q) }) continue
+            // 申论题干也常常一样（“根据给定资料，概括……”），连材料一起比
+            val whole = Words.norm(buildString {
+                if (it.material.isNotBlank()) append(it.material.trim()).append("\n\n")
+                append("【题目】").append(it.question.trim())
+            }.take(MaterialText.MAX))
+            if (whole in seen) continue
+            seen += whole
             val text = buildString {
                 if (it.material.isNotBlank()) append(it.material.trim()).append("\n\n")
                 append("【题目】").append(it.question.trim())

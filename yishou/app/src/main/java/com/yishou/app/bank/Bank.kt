@@ -77,6 +77,11 @@ object BankParser {
 
     private fun tagOf(name: String): Tag? = TAGS.firstOrNull { (_, names) -> names.any { name.trim() == it } }?.first
 
+    private val OPTION_A = Regex("(?m)^\\s*(?:[（(]\\s*[AＡ]\\s*[)）]|[AＡ]\\s*[.、．:：)）])")
+
+    /** 文件里看着像几道题：数“A.”开头的行和【要点】（用来判断本机是不是漏拆了很多） */
+    fun estimate(text: String): Int = OPTION_A.findAll(text).count() + Regex("【\\s*(?:参考)?要点\\s*】").findAll(text).count()
+
     /** 粗看一眼：是不是一份题包（至少一道带答案的选择题，或一道带要点的申论题） */
     fun looksLike(text: String): Boolean = parse(text).isNotEmpty()
 

@@ -126,6 +126,7 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
         key = { o -> act { session.officialKey(o) } },
         hide = { session.hide() },
         note = { session.note(it) },
+        predict = { session.predict(it) },
     )
 
     private fun act(block: suspend () -> Unit) {

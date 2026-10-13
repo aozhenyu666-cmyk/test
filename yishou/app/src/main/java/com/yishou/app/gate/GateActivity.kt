@@ -36,6 +36,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -81,6 +82,7 @@ class GateActivity : ComponentActivity() {
             YishouTheme {
                 val s by vm.state.collectAsStateWithLifecycle()
                 val c by vm.card.collectAsStateWithLifecycle()
+                val ln by vm.line.collectAsStateWithLifecycle()
                 LaunchedEffect(s.passMinutes) {
                     if (s.passMinutes != null) {
                         delay(1_800)
@@ -88,6 +90,7 @@ class GateActivity : ComponentActivity() {
                     }
                 }
                 GateScreen(
+                    ln = ln,
                     s = s,
                     c = c,
                     vm = vm,
@@ -184,6 +187,7 @@ class GateActivity : ComponentActivity() {
  */
 @Composable
 private fun GateScreen(
+    ln: com.yishou.app.line.LineState,
     s: GateState,
     c: SessionState,
     vm: GateViewModel,
@@ -237,6 +241,21 @@ private fun GateScreen(
                         OutlinedButton(onClick = { vm.answerFollowUp(false) }) { Text("没做") }
                     }
                 }
+                s.useLine -> {
+                    LineGate(ln, vm)
+                    if (ln.caught > 0 || ln.parked) {
+                        if (s.isTest) {
+                            OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
+                        } else {
+                            Text("看完要做的第一件事是？", style = MaterialTheme.typography.titleMedium)
+                            ExitField(s, vm)
+                            Button(onClick = vm::pass, enabled = s.exit.isNotBlank(), modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                                Text("说好了，放行")
+                            }
+                        }
+                    }
+                    OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
+                }
                 !s.gateCard -> {
                     if (s.isTest) {
                         Text("现在是只打卡模式：不出题，写一句看完做什么就放行。", style = MaterialTheme.typography.bodyLarge)
@@ -288,4 +307,32 @@ private fun GateScreen(
 @Composable
 private fun ExitField(s: GateState, vm: GateViewModel) {
     VoiceTextField(s.exit, vm::onExitChange, "例如：回去做两道资料分析", Modifier.fillMaxWidth())
+}
+
+
+/** 入口的主线一手：问你在下的那一局的下一问，过了本机规则才算 */
+@Composable
+private fun LineGate(ln: com.yishou.app.line.LineState, vm: GateViewModel) {
+    val line = ln.line ?: return
+    var text by androidx.compose.runtime.saveable.rememberSaveable(ln.question, ln.moves) { androidx.compose.runtime.mutableStateOf("") }
+    Text("「${line.anchor}」", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.tertiary)
+    if (ln.caught > 0) {
+        Text("接住了这一手。", style = MaterialTheme.typography.titleMedium)
+        Text("断点记好了：${ln.question}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        return
+    }
+    if (ln.parked) {
+        Text("这一手先放着，记下了。", style = MaterialTheme.typography.titleMedium)
+        return
+    }
+    if (ln.say.isNotBlank() && ln.say != ln.question) Text(ln.say.substringBefore(ln.question).trim(), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.tertiary)
+    Text(ln.question, style = MaterialTheme.typography.headlineSmall)
+    VoiceTextField(text, { text = it }, "先说结论，再说为什么", Modifier.fillMaxWidth(), minLines = 2)
+    val rules = if (ln.ask == com.yishou.app.line.Ask.NORMAL || ln.ask == com.yishou.app.line.Ask.ANCHOR) com.yishou.app.line.TalkRules.of(ln.level) else com.yishou.app.line.TalkRules.SMALL
+    if (text.isNotBlank()) com.yishou.app.ui.TalkMeter(text, rules)
+    if (ln.busy) MatrixLoader("在看这一手")
+    androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = { vm.move(text) }, enabled = text.isNotBlank() && !ln.busy, modifier = Modifier.weight(1f).height(50.dp)) { Text("下这一手") }
+        OutlinedButton(onClick = { vm.move("想不出") }, enabled = !ln.busy, modifier = Modifier.height(50.dp)) { Text("想不出") }
+    }
 }

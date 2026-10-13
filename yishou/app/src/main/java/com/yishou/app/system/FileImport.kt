@@ -34,9 +34,14 @@ class FileImport(private val app: YishouApp) {
             is LlmResult.Ok -> {
                 progress("拆题：$name ……")
                 var r = app.bankImport.import(t.value)
-                if (r.found == 0 && app.settings.llm.value.isComplete) {
+                // 本机拆出来的比文件里看着像题的少很多（格式太乱）：整份交给模型整理一遍，重复的会自动跳过
+                val expected = com.yishou.app.bank.BankParser.estimate(t.value)
+                if ((r.found == 0 || r.found < expected * 7 / 10) && app.settings.llm.value.isComplete) {
                     when (val tidy = app.bankTidy.tidy(t.value) { i, n -> progress("本机没拆出来，请模型整理 $name（$i/$n）……") }) {
-                        is LlmResult.Ok -> r = app.bankImport.import(tidy.value)
+                        is LlmResult.Ok -> {
+                            val again = app.bankImport.import(tidy.value)
+                            r = again.copy(choices = r.choices + again.choices, essays = r.essays + again.essays, found = maxOf(r.found, again.found))
+                        }
                         is LlmResult.Err -> return@map FileResult(name, "本机没拆出题，模型整理也失败了：${tidy.error.message}", false)
                     }
                 }
@@ -70,16 +75,21 @@ class FileImport(private val app: YishouApp) {
     private fun bytes(uri: Uri): ByteArray = app.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: ByteArray(0)
 
     private fun docx(uri: Uri): String {
+        var document: String? = null
+        var numbering: String? = null
         app.contentResolver.openInputStream(uri)?.use { input ->
             ZipInputStream(input).use { zip ->
                 var e = zip.nextEntry
                 while (e != null) {
-                    if (e.name == "word/document.xml") return DocText.fromDocumentXml(String(zip.readBytes(), Charsets.UTF_8))
+                    when (e.name) {
+                        "word/document.xml" -> document = String(zip.readBytes(), Charsets.UTF_8)
+                        "word/numbering.xml" -> numbering = String(zip.readBytes(), Charsets.UTF_8)
+                    }
                     e = zip.nextEntry
                 }
             }
         }
-        error("不是有效的 .docx")
+        return DocText.fromDocx(document ?: error("不是有效的 .docx"), numbering)
     }
 
     private suspend fun image(uri: Uri): LlmResult<String> {
@@ -122,6 +132,6 @@ class FileImport(private val app: YishouApp) {
     }
 
     companion object {
-        const val MAX_PAGES = 20
+        const val MAX_PAGES = 60
     }
 }

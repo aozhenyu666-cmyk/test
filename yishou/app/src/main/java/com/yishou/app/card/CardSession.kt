@@ -39,6 +39,12 @@ data class SessionState(
     val done: Boolean = false,
     val cardStartedAt: Long = 0,
     val startedAt: Long = 0,
+    /** 这一张要不要先说再选 */
+    val mustPredict: Boolean = false,
+    /** 先说的那句（说过了才放出选项） */
+    val predicted: String? = null,
+    /** 连着快、连着错之后，这一组剩下的都先说再选 */
+    val rushNote: String? = null,
 ) {
     val index: Int get() = results.size
 }
@@ -53,6 +59,8 @@ class CardSession(
     private val dao: AppDao,
     private val coachDao: CoachDao,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** 主页、窗口里每张都先说再选（设置里可关） */
+    private val predictFirst: Boolean = false,
 ) {
     private val _state = MutableStateFlow(SessionState())
     val state: StateFlow<SessionState> = _state.asStateFlow()
@@ -89,6 +97,7 @@ class CardSession(
                     it.copy(
                         loading = false, dealt = r.value, round = Round(r.value.card, cfg),
                         hidden = false, notes = "", needsKey = false, cardStartedAt = clock(),
+                        mustPredict = !gate && (predictFirst || it.rushNote != null), predicted = null,
                     )
                 }
             }
@@ -99,8 +108,17 @@ class CardSession(
     fun useDealt(d: Dealt, checks: Int) {
         recorded = null
         _state.update {
-            it.copy(dealt = d, round = Round(d.card, RoundConfig(checks, allowChange = true)), hidden = false, notes = "", needsKey = false, cardStartedAt = clock(), error = null)
+            it.copy(
+                dealt = d, round = Round(d.card, RoundConfig(checks, allowChange = true)), hidden = false, notes = "", needsKey = false,
+                cardStartedAt = clock(), error = null, mustPredict = predictFirst || it.rushNote != null, predicted = null,
+            )
         }
+    }
+
+    /** 先说再选：说了几个字才放出选项 */
+    fun predict(text: String) {
+        if (com.yishou.app.think.Words.substance(text) < 2) return
+        _state.update { it.copy(predicted = text.trim()) }
     }
 
     fun hide() = _state.update { if (it.level >= 2) it.copy(hidden = true) else it }
@@ -158,7 +176,8 @@ class CardSession(
         recorded = a
         val results = s.results + a
         val done = results.size >= s.size
-        _state.update { it.copy(results = results, done = done) }
+        val rush = if (s.mode != CardMode.GATE && AntiRandom.rushing(results)) "最近三张都选得很快、又都错了。剩下的先用自己的话说答案，再看选项。" else s.rushNote
+        _state.update { it.copy(results = results, done = done, rushNote = rush) }
         writeRound(d, r, s.mode)
         if (done && s.mode != CardMode.GATE) writeSet(results, s)
     }

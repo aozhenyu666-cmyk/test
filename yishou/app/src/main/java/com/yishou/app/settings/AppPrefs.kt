@@ -81,6 +81,12 @@ data class AppPrefs(
     val setCards: Int = 5,
     /** 入口思考页要不要做一张题卡；关掉就只是打卡：说好看完做什么就放行 */
     val gateCard: Boolean = true,
+    /** 入口思考页做什么：card 一张题卡、line 主线下一手、check 只打卡 */
+    val gateMode: String = "line",
+    /** 强度：LIGHT 轻 / MID 中 / HARD 强（口水规则、回主线的频率、做事要不要写判断） */
+    val talkLevel: String = "MID",
+    /** 题卡先用自己的话说答案，再看选项 */
+    val predictFirst: Boolean = true,
     /** 出题用的 AI App，每行“名字 包名 网址” */
     val bankLinks: String = com.yishou.app.outside.AiApps.DEFAULT,
     /** 刷题 App（粉笔……），每行“名字 包名 网址” */
@@ -141,6 +147,9 @@ data class AppPrefs(
         .put("coachSetMoves", coachSetMoves)
         .put("setCards", setCards)
         .put("gateCard", gateCard)
+        .put("gateMode", gateMode)
+        .put("talkLevel", talkLevel)
+        .put("predictFirst", predictFirst)
         .put("bankLinks", bankLinks)
         .put("drillApps", drillApps)
         .put("pendingExit", pendingExit)
@@ -238,6 +247,9 @@ data class AppPrefs(
                 coachSetMoves = o.optInt("coachSetMoves", d.coachSetMoves).coerceIn(3, 8),
                 setCards = o.optInt("setCards", d.setCards).coerceIn(1, 10),
                 gateCard = o.optBoolean("gateCard", d.gateCard),
+                gateMode = o.optString("gateMode", if (o.has("gateCard") && !o.optBoolean("gateCard", true)) "check" else d.gateMode),
+                talkLevel = o.optString("talkLevel", d.talkLevel),
+                predictFirst = o.optBoolean("predictFirst", d.predictFirst),
                 // 旧版默认的网页链接换成新的“App + 网址”列表；改过的保留
                 bankLinks = o.optString("bankLinks", d.bankLinks).let { if (it == com.yishou.app.bank.BankPrompt.DEFAULT_LINKS) d.bankLinks else it },
                 drillApps = o.optString("drillApps", d.drillApps),

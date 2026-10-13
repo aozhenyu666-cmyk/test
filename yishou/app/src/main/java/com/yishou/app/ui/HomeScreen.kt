@@ -24,6 +24,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -78,6 +79,10 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
     val outside: StateFlow<List<com.yishou.app.data.Outside>> = yishou.database.jobs().observeOutsideSince(dayStart)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val lines: StateFlow<List<com.yishou.app.data.Line>> = yishou.database.lines().observeLines()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val moves: StateFlow<List<com.yishou.app.data.Move>> = yishou.database.lines().observeMovesSince(dayStart)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val jobs: StateFlow<List<Job>> = yishou.database.jobs().observeJobs()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -103,6 +108,8 @@ fun todayMarks(cards: List<CardAttempt>, drills: List<DrillRow>, deeds: List<Dee
  */
 @Composable
 fun HomeScreen(
+    onLine: (Long?) -> Unit,
+    onLive: (Long) -> Unit,
     onBank: () -> Unit,
     onThink: () -> Unit,
     onJobs: () -> Unit,
@@ -119,11 +126,14 @@ fun HomeScreen(
     val bankLeft by vm.bankLeft.collectAsStateWithLifecycle()
     val jobs by vm.jobs.collectAsStateWithLifecycle()
     val outside by vm.outside.collectAsStateWithLifecycle()
+    val lines by vm.lines.collectAsStateWithLifecycle()
+    val moves by vm.moves.collectAsStateWithLifecycle()
     val prefs by app.settings.app.collectAsStateWithLifecycle()
     val llm by app.settings.llm.collectAsStateWithLifecycle()
-    val marks = remember(cards, drills, deeds, steps, outside) {
+    val marks = remember(cards, drills, deeds, steps, outside, moves) {
         todayMarks(cards, drills, deeds, steps.filter { st -> outside.none { it.jobId == st.jobId } }, vm.start) +
-            outside.map { o -> WheelMark(o.createdAt, MarkKind.CARD, o.correct == null || o.correct * 10 >= o.questions * 6) }
+            outside.map { o -> WheelMark(o.createdAt, MarkKind.CARD, o.correct == null || o.correct * 10 >= o.questions * 6) } +
+            moves.filter { it.verdict != com.yishou.app.data.LineVerdict.PARKED }.map { m -> WheelMark(m.createdAt, MarkKind.DRILL, m.verdict == com.yishou.app.data.LineVerdict.OK) }
     }
     val tide = remember { TideState() }
     val tideHeight = 240.dp
@@ -153,12 +163,19 @@ fun HomeScreen(
                 IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Settings, contentDescription = "设置") }
             }
 
+            MainLine(
+                line = lines.firstOrNull { it.closedAt == null },
+                today = com.yishou.app.line.Lines.today(moves),
+                onLine = onLine,
+                onLive = onLive,
+            )
+
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 TimeWheel(
                     marks = marks,
                     windowStart = if (prefs.windowEnabled) prefs.windowHour * 60 + prefs.windowMinute else null,
                     windowMinutes = prefs.windowMinutes,
-                    modifier = Modifier.fillMaxWidth(0.88f),
+                    modifier = Modifier.fillMaxWidth(0.72f),
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("${marks.size}", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Light)
@@ -237,6 +254,38 @@ private fun Entry(title: String, sub: String, accent: Color, onClick: () -> Unit
             androidx.compose.foundation.Canvas(Modifier.width(28.dp).height(3.dp)) { drawRect(accent) }
             Text(title, style = MaterialTheme.typography.titleLarge)
             Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, minLines = 2)
+        }
+    }
+}
+
+
+/** 首页最上面：现在这一局。断点就是下一问，点一下接着下；或者直接语音对练。 */
+@Composable
+private fun MainLine(line: com.yishou.app.data.Line?, today: com.yishou.app.line.Lines.Today, onLine: (Long?) -> Unit, onLive: (Long) -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(24.dp),
+        tonalElevation = 2.dp,
+        shadowElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth().clickable { onLine(line?.id) },
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("主线", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.tertiary, modifier = Modifier.weight(1f))
+                Text(com.yishou.app.line.Lines.line(today), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (line == null) {
+                Text("还没开一局", style = MaterialTheme.typography.headlineSmall)
+                Text("你现在在想、在学、在纠结的那件事，开成一局，一手一手往下走。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Button(onClick = { onLine(null) }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("开一局") }
+            } else {
+                Text("「${line.anchor}」", style = MaterialTheme.typography.titleMedium)
+                Text("下一问：${line.nextQuestion}", style = MaterialTheme.typography.headlineSmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(onClick = { onLine(line.id) }, modifier = Modifier.weight(1f).height(52.dp)) { Text("接着下") }
+                    OutlinedButton(onClick = { onLive(line.id) }, modifier = Modifier.weight(1f).height(52.dp)) { Text("语音对练") }
+                }
+            }
         }
     }
 }

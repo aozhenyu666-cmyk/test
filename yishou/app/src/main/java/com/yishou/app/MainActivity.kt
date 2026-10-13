@@ -30,6 +30,8 @@ import com.yishou.app.ui.ThinkScreen
 import com.yishou.app.ui.CardsScreen
 import com.yishou.app.ui.DeedScreen
 import com.yishou.app.ui.BankScreen
+import com.yishou.app.ui.LineScreen
+import com.yishou.app.ui.LiveScreen
 import com.yishou.app.ui.JobsScreen
 import com.yishou.app.ui.JobScreen
 import com.yishou.app.ui.PermissionsScreen
@@ -88,6 +90,8 @@ class MainActivity : ComponentActivity() {
                     composable("board") {
                         HomeScreen(
                             onBank = { nav.navigate("bank") },
+                            onLine = { id -> nav.navigate(if (id == null) "line" else "line?id=$id") },
+                            onLive = { id -> nav.navigate("live/$id") },
                             onThink = { nav.navigate("think") },
                             onJobs = { nav.navigate("jobs") },
                             onOpenSettings = { nav.navigate("settings") },
@@ -106,7 +110,25 @@ class MainActivity : ComponentActivity() {
                             onCards = { id -> nav.navigate(if (id == null) "cards" else "cards?m=$id") },
                             initialMaterial = e.arguments?.getLong("m")?.takeIf { it > 0 },
                             initialLens = e.arguments?.getString("lens")?.takeIf { it.isNotEmpty() },
+                            onLine = { id -> nav.navigate("line?id=$id") },
                         )
+                    }
+                    composable(
+                        "line?id={id}",
+                        arguments = listOf(navArgument("id") { type = NavType.LongType; defaultValue = -1L }),
+                    ) { e ->
+                        LineScreen(
+                            lineId = e.arguments?.getLong("id")?.takeIf { it > 0 },
+                            onBack = { nav.navigateUp() },
+                            onLive = { id -> nav.navigate("live/$id") },
+                            onRecite = { nav.navigate("think") },
+                        )
+                    }
+                    composable(
+                        "live/{id}",
+                        arguments = listOf(navArgument("id") { type = NavType.LongType }),
+                    ) { e ->
+                        LiveScreen(lineId = e.arguments?.getLong("id") ?: 0L, onBack = { nav.navigateUp() })
                     }
                     composable("bank") {
                         BankScreen(
