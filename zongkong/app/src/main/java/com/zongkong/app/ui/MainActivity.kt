@@ -163,7 +163,8 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                                     Seal(t.seal, if (!selected) sig.muted else if (t.route == "chat") sig.ai else MaterialTheme.colorScheme.primary, size = 26.dp, filled = selected)
                                 }
                             },
-                            label = { Text(t.label, modifier = androidx.compose.ui.Modifier.testTag("tab-${t.route}")) },
+                            label = { Text(t.label) },
+                            modifier = androidx.compose.ui.Modifier.testTag("tab-${t.route}"),
                             colors = NavigationBarItemDefaults.colors(indicatorColor = MaterialTheme.colorScheme.background),
                         )
                     }
