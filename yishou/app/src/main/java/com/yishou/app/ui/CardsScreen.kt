@@ -130,6 +130,15 @@ class CardsViewModel(app: Application) : AndroidViewModel(app) {
     /** 一段题目文字（素材库里像题的那种）直接整理成题卡来做 */
     fun importText(text: String) {
         viewModelScope.launch {
+            // 先在本机拆（不经过模型，不会格式出错）；拆不出来再交给模型整理
+            val local = com.yishou.app.bank.BankParser.parse(text).filterIsInstance<com.yishou.app.bank.BankItem.Choice>().firstOrNull()
+            if (local != null) {
+                val d = yishou.cardEngine.useChoice(local)
+                if (!session.state.value.active) session.start(CardMode.HOME, null, 1, deal = false)
+                session.useDealt(d, checks = 1)
+                _importing.value = null
+                return@launch
+            }
             _importing.value = "正在整理成题卡……"
             when (val r = yishou.cardEngine.import(text)) {
                 is LlmResult.Err -> _importing.value = "没整理成：${r.error.message}"
@@ -182,7 +191,7 @@ fun CardsScreen(onBack: () -> Unit, materialId: Long? = null, vm: CardsViewModel
 
     androidx.activity.compose.BackHandler { leave() }
 
-    Scaffold(topBar = { BackTopBar("题卡") { leave() } }) { padding ->
+    Scaffold(topBar = { BackTopBar("练一组") { leave() } }) { padding ->
         Column(
             Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -191,7 +200,7 @@ fun CardsScreen(onBack: () -> Unit, materialId: Long? = null, vm: CardsViewModel
                 warming -> WarmupPanel(ready = s.round != null || s.error != null, onDone = { vm.warmupDone() })
                 s.active && s.done -> SetDone(s, onAgain = { vm.stop(); vm.start(warm = false) }, onHome = { vm.stop(); onBack() })
                 s.active -> {
-                    if (s.loading || (s.round == null && s.error == null)) MatrixLoader("教练在出题、核对答案")
+                    if (s.loading || (s.round == null && s.error == null)) VortexLoader("教练在出题、核对答案")
                     s.error?.let {
                         Text("出不了题：$it", color = MaterialTheme.colorScheme.error)
                         TextButton(onClick = { vm.retry() }) { Text("重试") }
@@ -204,7 +213,7 @@ fun CardsScreen(onBack: () -> Unit, materialId: Long? = null, vm: CardsViewModel
                 }
             }
             importing?.let {
-                if (it.startsWith("正在")) MatrixLoader(it) else {
+                if (it.startsWith("正在")) VortexLoader(it) else {
                     Text(it, color = MaterialTheme.colorScheme.error)
                     TextButton(onClick = vm::dismissImport) { Text("知道了") }
                 }

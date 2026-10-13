@@ -17,6 +17,8 @@ enum class Lens(val label: String, val short: String, val ask: String, val minSu
     STANCE("站立场", "站一边，给理由，替对方说话，说清什么时候改主意", "你站哪一边？", 0),
     ESTIMATE("估个数", "给一个你有九成把握的区间", "先别查，给一个你有九成把握的区间：", 0),
     PREDICT("押后果", "押一个过几天能核对的判断", "这件事接下来会怎样？押一个过几天能核对的判断。", 6),
+    /** 题库里的申论题：参考要点导入时就锁住，按采分点给分 */
+    ESSAY("申论作答", "对着题目写，按参考要点的采分点给分", "按题目要求作答：", 10),
     ;
 
     companion object {
@@ -35,7 +37,7 @@ enum class Lens(val label: String, val short: String, val ask: String, val minSu
                 digits >= 4 -> ESTIMATE
                 else -> GIST
             }
-            return listOf(first) + entries.filter { it != first }
+            return listOf(first) + entries.filter { it != first && it != ESSAY }
         }
     }
 }
@@ -125,6 +127,12 @@ data class DrillKey(
                 DrillKey(lens, q, value = v, unit = o.text("unit"), method = o.text("method"), explain = o.text("explain"))
             }
             Lens.PREDICT -> DrillKey(lens, o.text("question").ifEmpty { Lens.PREDICT.ask })
+            Lens.ESSAY -> {
+                val q = o.text("question").ifEmpty { throw BadKey("缺 question") }
+                val pts = o.list("points")
+                if (pts.isEmpty()) throw BadKey("缺 points")
+                DrillKey(lens, q, pts, value = o.optDouble("limit").takeIf { !it.isNaN() }, explain = o.text("explain"))
+            }
         }
     }
 }
@@ -174,6 +182,16 @@ object Judge {
         return main + pts
     }
 
+    /** 申论：按采分点给分（说中几条占几成）；超字数扣 10 分 */
+    fun essayScore(checks: List<Check>, over: Boolean): Int {
+        val pts = checks.filter { it.label.startsWith("要点") }
+        if (pts.isEmpty()) return 0
+        return (100 * pts.count { it.ok } / pts.size - if (over) 10 else 0).coerceAtLeast(0)
+    }
+
+    /** 题目要求的字数（去掉空白标点后数） */
+    fun overLimit(answer: String, limit: Int?): Boolean = limit != null && Words.norm(answer).length > limit
+
     /** 挖前提：说中任意一条认可的前提就算 */
     fun assumeScore(checks: List<Check>): Int = if (checks.any { it.ok }) 100 else 0
 
@@ -188,6 +206,7 @@ object Judge {
             Lens.GIST -> "太短了，去掉口头禅只剩 $n 个字。把“谁、怎样、所以什么”说完整。"
             Lens.ASSUME -> "太短了。说一句完整的话：“它默认了……”。"
             Lens.PREDICT -> "说具体一点：什么事，到什么时候，会怎样。"
+            Lens.ESSAY -> "太短了，按题目要求把要点写出来。"
             else -> "说具体一点。"
         }
     }

@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class, Material::class, DrillRow::class, Deed::class],
-    version = 6,
+    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class, Material::class, DrillRow::class, Deed::class, MaterialKey::class, Job::class, JobStep::class],
+    version = 7,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -18,6 +18,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun coach(): CoachDao
     abstract fun cards(): CardDao
     abstract fun think(): ThinkDao
+    abstract fun jobs(): JobDao
 
     companion object {
         /** v0.5：给轮次和断点加上“骰子第几面”。旧数据保留，面记为 0。 */
@@ -123,9 +124,28 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v0.11：题库申论题的参考要点；做事（一步一步走）的事和步。旧表不动。 */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `material_key` (`materialId` INTEGER NOT NULL, `key` TEXT NOT NULL, PRIMARY KEY(`materialId`))")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `job` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, " +
+                        "`mode` TEXT NOT NULL, `estimateMinutes` INTEGER, `createdAt` INTEGER NOT NULL, `finishedAt` INTEGER, " +
+                        "`takeaway` TEXT NOT NULL)",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_job_createdAt` ON `job` (`createdAt`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `job_step` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `jobId` INTEGER NOT NULL, " +
+                        "`idx` INTEGER NOT NULL, `text` TEXT NOT NULL, `startedAt` INTEGER, `doneAt` INTEGER, `result` TEXT NOT NULL, " +
+                        "`note` TEXT NOT NULL)",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_job_step_jobId` ON `job_step` (`jobId`)")
+            }
+        }
+
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "yishou.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 .build()
     }
 }

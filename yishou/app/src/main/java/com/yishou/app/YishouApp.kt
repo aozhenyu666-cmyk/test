@@ -101,6 +101,9 @@ class YishouApp : Application() {
     fun newDrill(): com.yishou.app.think.DrillSession =
         com.yishou.app.think.DrillSession(drillGen, database.think(), database.practice())
 
+    /** 题包导入：在本机拆题，选择题进题卡库，申论进素材库 */
+    val bankImport: com.yishou.app.bank.BankImport by lazy { com.yishou.app.bank.BankImport(cardEngine, database.think()) }
+
     /** 从分享页过来时要打开的页面（主界面取走后清空） */
     val pendingRoute = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     /** 分享过来的商品截图认出的商品，交给实操页的“比一比” */

@@ -66,7 +66,7 @@ fun DrillView(s: DrillState, vm: ThinkViewModel, onOtherLens: (Material?) -> Uni
         val at = when (s.step) {
             DrillStep.LOADING -> 0
             DrillStep.ANSWER -> 1
-            DrillStep.JUDGING -> if (s.lens == Lens.STANCE && s.counter.isNotEmpty()) 2 else 1
+            DrillStep.JUDGING, DrillStep.SELF -> if (s.lens == Lens.STANCE && s.counter.isNotEmpty()) 2 else 1
             DrillStep.COUNTER -> 2
             DrillStep.REVEAL -> steps.size - 1
         }
@@ -78,12 +78,13 @@ fun DrillView(s: DrillState, vm: ThinkViewModel, onOtherLens: (Material?) -> Uni
                 Text(s.error, color = MaterialTheme.colorScheme.error)
                 Button(onClick = { vm.retry() }) { Text("重试") }
             }
-            key == null -> MatrixLoader("先把标准定下来，再让你答")
+            key == null -> VortexLoader("先把标准定下来，再让你答")
             s.step == DrillStep.ANSWER -> AnswerStep(s, key, vm)
             s.step == DrillStep.JUDGING -> {
                 Prompt(s.lens, key)
-                MatrixLoader("对照锁住的答案，核对你的原话")
+                VortexLoader("对照锁住的答案，核对你的原话")
             }
+            s.step == DrillStep.SELF -> SelfStep(s, key, vm)
             s.step == DrillStep.COUNTER -> CounterStep(s, vm)
             s.step == DrillStep.REVEAL -> RevealStep(s, key, vm, onOtherLens)
         }
@@ -117,6 +118,10 @@ private fun Prompt(lens: Lens, key: DrillKey) {
             Text(lens.ask, style = MaterialTheme.typography.bodyLarge)
         }
         Lens.GIST -> Text(lens.ask, style = MaterialTheme.typography.titleMedium)
+        Lens.ESSAY -> {
+            Text(key.prompt, style = MaterialTheme.typography.titleMedium)
+            key.value?.let { Text("字数：不超过 ${it.toInt()} 字", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
         Lens.ESTIMATE -> {
             Text(key.prompt, style = MaterialTheme.typography.titleMedium)
             Text(lens.ask + (if (key.unit.isNotEmpty()) "（单位：${key.unit}）" else ""), style = MaterialTheme.typography.bodyMedium)
@@ -133,6 +138,19 @@ private fun AnswerStep(s: DrillState, key: DrillKey, vm: ThinkViewModel) {
         Lens.GIST, Lens.ASSUME -> {
             var text by rememberSaveable(key.prompt) { mutableStateOf(s.answer) }
             VoiceTextField(text, { text = it }, if (s.lens == Lens.GIST) "它最想让人相信的是……" else "它默认了……", Modifier.fillMaxWidth(), minLines = 3)
+            Notes(s)
+            Button(onClick = { vm.answer(text) }, enabled = text.isNotBlank(), modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("交卷") }
+        }
+        Lens.ESSAY -> {
+            var text by rememberSaveable(key.prompt) { mutableStateOf(s.answer) }
+            VoiceTextField(text, { text = it }, "按题目要求作答", Modifier.fillMaxWidth(), minLines = 6)
+            val n = com.yishou.app.think.Words.norm(text).length
+            val limit = key.value?.toInt()
+            Text(
+                if (limit != null) "$n / $limit 字" else "$n 字",
+                style = MaterialTheme.typography.labelMedium,
+                color = if (limit != null && n > limit) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Notes(s)
             Button(onClick = { vm.answer(text) }, enabled = text.isNotBlank(), modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("交卷") }
         }
@@ -305,8 +323,10 @@ private fun LockedKey(s: DrillState, key: DrillKey) {
             key.method.takeIf { it.isNotBlank() }?.let { "怎么拆：$it" },
         )
         Lens.PREDICT -> emptyList()
+        Lens.ESSAY -> key.points.mapIndexed { i, p -> "要点 ${i + 1}：$p" }
     }
     if (lines.isEmpty() && key.explain.isBlank()) return
+    CloudReveal(key.prompt) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("锁住的答案", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -314,4 +334,43 @@ private fun LockedKey(s: DrillState, key: DrillKey) {
             if (key.explain.isNotBlank()) Text(key.explain, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+    }
+}
+
+/** 判卷没成功：对着锁住的答案自己逐条打勾，不卡在这里 */
+@Composable
+private fun SelfStep(s: DrillState, key: DrillKey, vm: ThinkViewModel) {
+    Prompt(s.lens, key)
+    s.error?.let { Text(it, color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodyMedium) }
+    if (s.answer.isNotBlank()) {
+        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+            Text("你答的：${s.answer}", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(12.dp))
+        }
+    }
+    val texts: List<String> = when (s.lens) {
+        Lens.STANCE -> listOf(
+            "明确站一边（“都有道理”不算）",
+            "针对这个问题的具体理由（空话不算）",
+            "真正对你不利的最强一条，不是稻草人",
+            "一个看得见、能核对的条件",
+        )
+        else -> key.points
+    }
+    var marks by remember(s.checks.size) { mutableStateOf(List(s.checks.size) { false }) }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        s.checks.forEachIndexed { i, c ->
+            Row(
+                Modifier.fillMaxWidth().clickable { marks = marks.toMutableList().also { it[i] = !it[i] } },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.Checkbox(checked = marks.getOrElse(i) { false }, onCheckedChange = { v -> marks = marks.toMutableList().also { it[i] = v } })
+                Column(Modifier.weight(1f)) {
+                    Text(c.label, style = MaterialTheme.typography.labelLarge)
+                    texts.getOrNull(i)?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                }
+            }
+        }
+    }
+    Text("只勾你真的写出来了的。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Button(onClick = { vm.selfMark(marks) }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("按我勾的算分") }
 }

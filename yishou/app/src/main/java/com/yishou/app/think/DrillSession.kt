@@ -13,7 +13,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
-enum class DrillStep { LOADING, ANSWER, JUDGING, COUNTER, REVEAL }
+/** SELF：判卷请求没成功（没网、没配置、格式不对），改成你自己对着锁住的答案逐条打勾，不卡在这里 */
+enum class DrillStep { LOADING, ANSWER, JUDGING, COUNTER, SELF, REVEAL }
 
 data class DrillState(
     val active: Boolean = false,
@@ -65,6 +66,12 @@ class DrillSession(
         lock()
     }
 
+    /** 题库里的题：答案导入时就锁住了，直接作答 */
+    suspend fun startLocked(material: Material?, key: DrillKey) {
+        _state.value = DrillState(active = true, material = material, lens = key.lens, key = key, step = DrillStep.ANSWER, startedAt = clock())
+        material?.let { dao.updateMaterial(it.copy(usedAt = clock(), uses = it.uses + 1)) }
+    }
+
     /** 锁答案失败后重试 */
     suspend fun retry() {
         val s = _state.value
@@ -97,23 +104,56 @@ class DrillSession(
         _state.update { it.copy(error = "两次估的参考值对不上，这道不出了。点重试换一道。") }
     }
 
-    /** 抓主干、挖前提 */
+    private fun labels(lens: Lens, key: DrillKey): List<String> = when (lens) {
+        Lens.GIST -> listOf("主干") + key.points.drop(1).indices.map { "要点 ${it + 1}" }
+        Lens.ESSAY -> key.points.indices.map { "要点 ${it + 1}" }
+        Lens.STANCE -> StanceItem.entries.map { it.label }
+        else -> key.points.indices.map { "前提 ${it + 1}" }
+    }
+
+    private fun pointScore(lens: Lens, key: DrillKey, checks: List<Check>, answer: String): Pair<List<Check>, Int> = when (lens) {
+        Lens.GIST -> checks to Judge.gistScore(checks)
+        Lens.ESSAY -> {
+            val limit = key.value?.toInt()
+            val over = Judge.overLimit(answer, limit)
+            val all = if (limit != null) checks + Check("字数 ≤ $limit", !over, note = if (over) "写了 ${Words.norm(answer).length} 字，超了" else "") else checks
+            all to Judge.essayScore(checks, over)
+        }
+        Lens.STANCE -> checks to Judge.stanceScore(checks)
+        else -> checks to Judge.assumeScore(checks)
+    }
+
+    /** 抓主干、挖前提、申论 */
     suspend fun answer(text: String) {
         val s = _state.value
         val key = s.key ?: return
-        if (s.step != DrillStep.ANSWER || (s.lens != Lens.GIST && s.lens != Lens.ASSUME)) return
+        if (s.step != DrillStep.ANSWER || s.lens !in setOf(Lens.GIST, Lens.ASSUME, Lens.ESSAY)) return
         Judge.tooThin(s.lens, text)?.let { thin -> _state.update { it.copy(answer = text, thin = thin) }; return }
         _state.update { it.copy(answer = text, thin = null, error = null, step = DrillStep.JUDGING) }
         when (val r = gen.judgePoints(key, text)) {
-            is LlmResult.Err -> _state.update { it.copy(step = DrillStep.ANSWER, error = r.error.message) }
+            is LlmResult.Err -> _state.update {
+                it.copy(
+                    step = DrillStep.SELF,
+                    checks = labels(s.lens, key).map { l -> Check(l, false) },
+                    error = "判卷没成功（${r.error.message}）。对着下面锁住的答案，自己逐条打勾。",
+                )
+            }
             is LlmResult.Ok -> {
-                val labels = if (s.lens == Lens.GIST) listOf("主干") + key.points.drop(1).indices.map { "要点 ${it + 1}" }
-                else key.points.indices.map { "前提 ${it + 1}" }
-                val checks = labels.mapIndexed { i, l -> Judge.verify(l, r.value.getOrNull(i), text) }
-                val score = if (s.lens == Lens.GIST) Judge.gistScore(checks) else Judge.assumeScore(checks)
-                reveal(checks, score)
+                val checks = labels(s.lens, key).mapIndexed { i, l -> Judge.verify(l, r.value.getOrNull(i), text) }
+                val (all, score) = pointScore(s.lens, key, checks, text)
+                reveal(all, score)
             }
         }
+    }
+
+    /** 自己对照：marks[i] 表示第 i 条你说到了 */
+    suspend fun selfMark(marks: List<Boolean>) {
+        val s = _state.value
+        val key = s.key ?: return
+        if (s.step != DrillStep.SELF) return
+        val checks = labels(s.lens, key).mapIndexed { i, l -> Check(l, marks.getOrElse(i) { false }, note = "自评") }
+        val (all, score) = pointScore(s.lens, key, checks, s.answer)
+        reveal(all, score)
     }
 
     /** 站立场：四项一起交 */
@@ -125,7 +165,13 @@ class DrillSession(
         val joined = StanceItem.entries.joinToString("\n") { "${it.label}：${parts[it].orEmpty()}" }
         _state.update { it.copy(parts = parts, answer = joined, thin = null, error = null, step = DrillStep.JUDGING) }
         when (val r = gen.judgeStance(key.prompt, parts)) {
-            is LlmResult.Err -> _state.update { it.copy(step = DrillStep.ANSWER, error = r.error.message) }
+            is LlmResult.Err -> _state.update {
+                it.copy(
+                    step = DrillStep.SELF,
+                    checks = labels(Lens.STANCE, key).map { l -> Check(l, false) },
+                    error = "判卷没成功（${r.error.message}）。对着下面的标准，自己逐项打勾。",
+                )
+            }
             is LlmResult.Ok -> {
                 val (raw, counter) = r.value
                 val checks = StanceItem.entries.mapIndexed { i, item -> Judge.verify(item.label, raw.getOrNull(i), parts[item].orEmpty()) }
@@ -262,7 +308,7 @@ object DrillStats {
 
     data class Line(val lens: Lens, val n: Int, val avg: Int?)
 
-    fun lines(rows: List<DrillRow>): List<Line> = Lens.entries.filter { it != Lens.PREDICT }.map { lens ->
+    fun lines(rows: List<DrillRow>): List<Line> = Lens.entries.filter { it != Lens.PREDICT && (it != Lens.ESSAY || rows.any { r -> r.lens == it.name }) }.map { lens ->
         val xs = rows.filter { it.lens == lens.name && !it.disputed && it.score >= 0 }.takeLast(10)
         Line(lens, rows.count { it.lens == lens.name }, if (xs.isEmpty()) null else xs.sumOf { it.score } / xs.size)
     }

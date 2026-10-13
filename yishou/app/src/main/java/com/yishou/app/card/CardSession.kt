@@ -80,7 +80,7 @@ class CardSession(
         _state.update { it.copy(loading = true, error = null) }
         val hist = engine.history()
         val gate = s.mode == CardMode.GATE
-        when (val r = engine.deal(s.focus, allowRedo = true)) {
+        when (val r = engine.deal(s.focus, allowRedo = true, needKey = !gate)) {
             is LlmResult.Err -> _state.update { it.copy(loading = false, error = r.error.message) }
             is LlmResult.Ok -> {
                 recorded = null
@@ -144,7 +144,8 @@ class CardSession(
         _state.update { it.copy(round = next) }
         if (next.step == Step.REVEAL && recorded == null) {
             val d = _state.value.dealt ?: return
-            if (!d.row.verified) _state.update { it.copy(needsKey = true) } else record()
+            // 拍的、导入时没写答案的：先点官方答案；模型两次没核对上的：直接揭晓，不计分
+            if (!d.row.verified && d.row.source != com.yishou.app.data.CardSource.AI) _state.update { it.copy(needsKey = true) } else record()
         }
     }
 

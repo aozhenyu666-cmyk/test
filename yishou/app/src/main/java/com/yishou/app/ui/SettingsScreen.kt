@@ -25,6 +25,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -227,6 +228,21 @@ fun SettingsScreen(
             Text("热身两分钟：一分钟呼吸，再做五步心算接龙，把“接上一步”的动作先活动开。", style = MaterialTheme.typography.bodySmall)
             SwitchRow("打开关注的应用前做一张题卡", prefs.gateCard) { on -> vm.update { it.copy(gateCard = on) } }
             Text("关掉就只是打卡：先问上次说好的事做了没有，再写一句看完做什么，就放行。", style = MaterialTheme.typography.bodySmall)
+
+            HorizontalDivider()
+            SectionTitle("题库")
+            var links by remember(prefs.bankLinks) { mutableStateOf(prefs.bankLinks) }
+            OutlinedTextField(
+                value = links,
+                onValueChange = { links = it },
+                label = { Text("出题链接（每行：名字 网址）") },
+                minLines = 3,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (links != prefs.bankLinks) {
+                TextButton(onClick = { vm.update { it.copy(bankLinks = links) } }) { Text("保存链接") }
+            }
+            Text("题库页“去出题”会列出这些链接：点一下复制出题要求并打开它。", style = MaterialTheme.typography.bodySmall)
 
             HorizontalDivider()
             SectionTitle("时区")

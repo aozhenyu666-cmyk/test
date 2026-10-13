@@ -23,6 +23,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -32,7 +33,7 @@ import com.yishou.app.MainActivity
 import com.yishou.app.YishouApp
 import com.yishou.app.data.MaterialSource
 import com.yishou.app.llm.LlmResult
-import com.yishou.app.ui.MatrixLoader
+import com.yishou.app.ui.VortexLoader
 import com.yishou.app.ui.theme.YishouTheme
 import kotlinx.coroutines.launch
 
@@ -71,11 +72,16 @@ class ShareActivity : ComponentActivity() {
                         }
                         val b = busy
                         if (b != null) {
-                            MatrixLoader(b)
+                            VortexLoader(b)
                         } else {
                             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                            val pack = remember(text) { text?.let { com.yishou.app.bank.BankParser.parse(it) }.orEmpty() }
+                            if (pack.isNotEmpty()) {
+                                Text("看起来是一份题包：认出 ${pack.size} 道题。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.tertiary)
+                                Button(onClick = { importPack(app, text!!) }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("收进题库") }
+                            }
                             if (text != null) {
-                                Button(onClick = { saveText(app, text, practice = true) }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("存下，马上练") }
+                                Button(onClick = { saveText(app, text, practice = true) }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(if (pack.isEmpty()) "存下，马上练" else "当素材存下，马上练") }
                                 OutlinedButton(onClick = { saveText(app, text, practice = false) }, modifier = Modifier.fillMaxWidth()) { Text("只存进素材库") }
                             } else if (image != null) {
                                 Button(onClick = { saveImage(app, image) }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("读出正文，当素材") }
@@ -115,6 +121,20 @@ class ShareActivity : ComponentActivity() {
                     error = r.error.message
                 }
                 is LlmResult.Ok -> if (practice) open(app, "think?m=${r.value.id}") else done("存好了：${r.value.title}")
+            }
+        }
+    }
+
+    private fun importPack(app: YishouApp, text: String) {
+        busy = "在本机拆题……"
+        lifecycleScope.launch {
+            val r = app.bankImport.import(text)
+            if (r.total > 0) {
+                Toast.makeText(this@ShareActivity, r.line(), Toast.LENGTH_LONG).show()
+                open(app, "bank")
+            } else {
+                busy = null
+                error = r.line()
             }
         }
     }

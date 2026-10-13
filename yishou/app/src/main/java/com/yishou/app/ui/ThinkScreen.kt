@@ -55,6 +55,7 @@ import com.yishou.app.data.Material
 import com.yishou.app.data.MaterialSource
 import com.yishou.app.llm.LlmResult
 import com.yishou.app.system.ExternalGrace
+import com.yishou.app.think.DrillKey
 import com.yishou.app.think.DrillSession
 import com.yishou.app.think.DrillState
 import com.yishou.app.think.DrillStats
@@ -64,6 +65,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -81,6 +83,10 @@ class ThinkViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val cards: StateFlow<List<CardAttempt>> = yishou.database.cards().observeAttemptsSince(since)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    /** 题库申论题锁住的参考要点：materialId → 答案 */
+    val keys: StateFlow<Map<Long, DrillKey>> = dao.observeKeys()
+        .map { list -> list.mapNotNull { k -> runCatching { k.materialId to DrillKey.fromJson(k.key) }.getOrNull() }.toMap() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     private val _busy = MutableStateFlow<String?>(null)
     /** 素材进来时的进度或失败原因 */
@@ -122,6 +128,15 @@ class ThinkViewModel(app: Application) : AndroidViewModel(app) {
     fun delete(m: Material) = viewModelScope.launch { dao.deleteMaterial(m) }
 
     fun begin(m: Material?, lens: Lens) = viewModelScope.launch { session.start(m, lens) }
+
+    /** 带参考要点的题（申论）：答案导入时就锁住了，直接作答 */
+    fun beginLocked(id: Long) = viewModelScope.launch {
+        val m = dao.getMaterial(id) ?: return@launch
+        val k = dao.getKey(id)?.let { runCatching { DrillKey.fromJson(it.key) }.getOrNull() } ?: return@launch
+        session.startLocked(m, k)
+    }
+
+    fun selfMark(marks: List<Boolean>) = viewModelScope.launch { session.selfMark(marks) }
     fun retry() = viewModelScope.launch { session.retry() }
     fun answer(text: String) = viewModelScope.launch { session.answer(text) }
     fun stance(parts: Map<StanceItem, String>) = viewModelScope.launch { session.stance(parts) }
@@ -140,7 +155,13 @@ class ThinkViewModel(app: Application) : AndroidViewModel(app) {
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ThinkScreen(onBack: () -> Unit, onCards: (Long?) -> Unit, initialMaterial: Long? = null, vm: ThinkViewModel = viewModel()) {
+fun ThinkScreen(
+    onBack: () -> Unit,
+    onCards: (Long?) -> Unit,
+    initialMaterial: Long? = null,
+    initialLens: String? = null,
+    vm: ThinkViewModel = viewModel(),
+) {
     val drill by vm.drill.collectAsStateWithLifecycle()
     val materials by vm.materials.collectAsStateWithLifecycle()
     val drills by vm.drills.collectAsStateWithLifecycle()
@@ -150,7 +171,12 @@ fun ThinkScreen(onBack: () -> Unit, onCards: (Long?) -> Unit, initialMaterial: L
     val clipboard = LocalClipboardManager.current
     var writing by rememberSaveable { mutableStateOf(false) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(vm::photo) }
-    LaunchedEffect(initialMaterial) { if (initialMaterial != null) vm.show(initialMaterial) }
+    val keys by vm.keys.collectAsStateWithLifecycle()
+    LaunchedEffect(initialMaterial, initialLens) {
+        if (initialMaterial == null) return@LaunchedEffect
+        vm.show(initialMaterial)
+        if (initialLens == Lens.ESSAY.name) vm.beginLocked(initialMaterial)
+    }
 
     BackHandler(enabled = drill.active) { vm.stop() }
 
@@ -179,7 +205,7 @@ fun ThinkScreen(onBack: () -> Unit, onCards: (Long?) -> Unit, initialMaterial: L
             }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(onClick = { onCards(null) }, modifier = Modifier.weight(1f).height(52.dp)) { Text("练一组题卡") }
+                    OutlinedButton(onClick = { vm.make(null) }, modifier = Modifier.weight(1f).height(52.dp)) { Text("教练写一段") }
                     OutlinedButton(onClick = { vm.begin(null, Lens.ESTIMATE) }, modifier = Modifier.weight(1f).height(52.dp)) { Text("估个数") }
                 }
             }
@@ -193,7 +219,6 @@ fun ThinkScreen(onBack: () -> Unit, onCards: (Long?) -> Unit, initialMaterial: L
                             picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         }, label = { Text("照片 / 截图") })
                         AssistChip(onClick = { writing = true }, label = { Text("自己写") })
-                        AssistChip(onClick = { vm.make(null) }, label = { Text("教练写一段") })
                     }
                     Text(
                         "在别的应用里点“分享 → 收进一手”，文章、帖子、截图都能直接进来。",
@@ -204,7 +229,7 @@ fun ThinkScreen(onBack: () -> Unit, onCards: (Long?) -> Unit, initialMaterial: L
             }
             busy?.let { b ->
                 item {
-                    if (b.endsWith("……")) MatrixLoader(b) else {
+                    if (b.endsWith("……")) VortexLoader(b) else {
                         Column {
                             Text(b, color = MaterialTheme.colorScheme.error)
                             TextButton(onClick = vm::dismissBusy) { Text("知道了") }
@@ -224,6 +249,8 @@ fun ThinkScreen(onBack: () -> Unit, onCards: (Long?) -> Unit, initialMaterial: L
                 MaterialCard(
                     m = m,
                     open = opened == m.id,
+                    locked = m.id in keys,
+                    onLocked = { vm.beginLocked(m.id) },
                     onToggle = { vm.open(m.id) },
                     onLens = { lens -> vm.begin(m, lens) },
                     onCards = { onCards(m.id) },
@@ -284,6 +311,8 @@ private val QUESTION = Regex("(?m)^\\s*[A-D][.、．]")
 private fun MaterialCard(
     m: Material,
     open: Boolean,
+    locked: Boolean,
+    onLocked: () -> Unit,
     onToggle: () -> Unit,
     onLens: (Lens) -> Unit,
     onCards: () -> Unit,
@@ -316,8 +345,9 @@ private fun MaterialCard(
                 val lenses = Lens.suggest(m.text)
                 Text("怎么练", style = MaterialTheme.typography.labelLarge)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (locked) Button(onClick = onLocked) { Text("按题目作答（有参考要点）") }
                     lenses.forEachIndexed { i, lens ->
-                        if (i == 0) {
+                        if (i == 0 && !locked) {
                             Button(onClick = { onLens(lens) }) { Text("${lens.label}（推荐）") }
                         } else {
                             OutlinedButton(onClick = { onLens(lens) }) { Text(lens.label) }

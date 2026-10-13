@@ -49,7 +49,15 @@ data class Card(
     /** 每个错误选项的错因（取自 [Flaws.ALL]） */
     val flaws: Map<Int, String>,
     val explain: String,
+    /** 题库里带的题型（如“言语理解·主旨概括”），模型出的题为空 */
+    val type: String = "",
 ) {
+    /** 有材料、有依据句的题才走“指依据”这一步 */
+    val hasEvidence: Boolean get() = sentences.isNotEmpty() && evidence.isNotEmpty()
+
+    /** 有错因表的题才能“多查一步”判错因 */
+    val hasFlaws: Boolean get() = flaws.size == 3
+
     fun flawOf(option: Int): String = if (option == answer) Flaws.NONE else flaws[option] ?: "答非所问"
 
     fun toJson(): String = JSONObject()
@@ -62,42 +70,51 @@ data class Card(
         .put("evidence", JSONArray(evidence.sorted()))
         .put("flaws", JSONObject().apply { flaws.forEach { (k, v) -> put(letter(k), v) } })
         .put("explain", explain)
+        .put("type", type)
         .toString()
 
     companion object {
         fun letter(i: Int): String = "ABCD"[i].toString()
         fun index(letter: String): Int? = "ABCD".indexOf(letter.trim().uppercase().take(1)).takeIf { it >= 0 && letter.isNotBlank() }
 
-        private val CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩"
+        private const val CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩"
         fun mark(n: Int): String = if (n in 1..10) CIRCLED[n - 1].toString() else "($n)"
 
         /**
-         * 从模型返回的 JSON 读一张题卡，并检查它自洽：四个选项、答案是 A–D、依据句在范围内、
-         * 每个错误选项都有固定表里的错因。不自洽就抛 [BadCard]，让调用方重出。
+         * 从模型返回（或题库导入）的 JSON 读一张题卡。尽量宽容：
+         * 材料可以是数组也可以是一整段；选项可以是 {A:…} 也可以是数组；答案可以写“B”“选B”“2”；
+         * 依据可以没有（数量、定义这类题不按句找依据）；错因不在表里就记成“答非所问”。
+         * 只有缺题目、缺四个选项、缺答案这种真没法做的情况才抛 [BadCard]。
          */
         fun parse(json: JSONObject, fallbackSkill: Skill? = null): Card {
-            val skill = Skill.of(json.optString("skill")) ?: fallbackSkill ?: throw BadCard("skill 不对")
-            val passage = json.optJSONArray("passage") ?: throw BadCard("缺 passage")
-            val sentences = (0 until passage.length()).map { passage.optString(it).trim().trimStart(*"①②③④⑤⑥⑦⑧⑨⑩".toCharArray()).trim() }
-                .filter { it.isNotEmpty() }
-            if (sentences.size !in 2..10) throw BadCard("材料要 2–10 句")
+            val skill = Skill.of(json.optString("skill")) ?: fallbackSkill ?: Skill.DETAIL
+            val sentences = when (val p = json.opt("passage")) {
+                is JSONArray -> (0 until p.length()).map { clean(p.optString(it)) }.filter { it.isNotEmpty() }
+                is String -> Sentences.split(p)
+                else -> emptyList()
+            }.take(12)
             val question = json.optString("question").trim().ifEmpty { throw BadCard("缺 question") }
-            val opts = json.optJSONObject("options") ?: throw BadCard("缺 options")
-            val options = (0..3).map { opts.optString(letter(it)).trim() }
-            if (options.any { it.isEmpty() }) throw BadCard("选项要 A–D 四个")
-            if (options.toSet().size < 4) throw BadCard("选项有重复")
-            val answer = index(json.optString("answer")) ?: throw BadCard("answer 不是 A–D")
-            val evArr = json.optJSONArray("evidence") ?: throw BadCard("缺 evidence")
-            val evidence = (0 until evArr.length()).map { evArr.optInt(it, -1) }.filter { it in 1..sentences.size }.toSet()
-            if (evidence.isEmpty()) throw BadCard("依据句不在材料范围里")
+            val options = when (val o = json.opt("options")) {
+                is JSONObject -> (0..3).map { clean(o.optString(letter(it)).ifEmpty { o.optString(letter(it).lowercase()) }) }
+                is JSONArray -> (0 until minOf(4, o.length())).map { clean(o.optString(it)) }
+                else -> emptyList()
+            }.map { stripLetter(it) }
+            if (options.size != 4 || options.any { it.isEmpty() }) throw BadCard("选项要 A–D 四个")
+            val answer = answerOf(json.opt("answer")) ?: throw BadCard("answer 不是 A–D")
+            val evidence = when (val e = json.opt("evidence")) {
+                is JSONArray -> (0 until e.length()).map { e.optInt(it, -1) }
+                is Number -> listOf(e.toInt())
+                is String -> Regex("\\d+").findAll(e).map { it.value.toInt() }.toList()
+                else -> emptyList()
+            }.filter { it in 1..sentences.size }.toSet()
             val fl = json.optJSONObject("flaws") ?: JSONObject()
-            val flaws = (0..3).filter { it != answer }.associateWith { i ->
+            val flaws = (0..3).filter { it != answer }.mapNotNull { i ->
                 val f = fl.optString(letter(i)).trim()
-                if (f in Flaws.ALL) f else throw BadCard("${letter(i)} 的错因不在表里：$f")
-            }
+                if (f.isEmpty()) null else i to (Flaws.ALL.firstOrNull { it == f } ?: Flaws.ALL.firstOrNull { f.contains(it) || it.contains(f) } ?: "答非所问")
+            }.toMap()
             return Card(
                 skill = skill,
-                difficulty = json.optInt("difficulty", 1).coerceIn(1, 3),
+                difficulty = json.optInt("difficulty", 2).coerceIn(1, 3),
                 sentences = sentences,
                 question = question,
                 options = options,
@@ -105,7 +122,21 @@ data class Card(
                 evidence = evidence,
                 flaws = flaws,
                 explain = json.optString("explain").trim(),
+                type = json.optString("type").trim(),
             )
+        }
+
+        private fun clean(s: String) = s.trim().trimStart(*CIRCLED.toCharArray()).trim()
+
+        /** 去掉选项前面自带的“A.”“B、”“(C)” */
+        private fun stripLetter(s: String) = s.replace(Regex("^[（(]?[A-Da-d][)）.、．:：]\\s*"), "").trim()
+
+        /** “B”“选B”“答案是 B”“b”“1”（下标） */
+        fun answerOf(v: Any?): Int? = when (v) {
+            is Number -> v.toInt().takeIf { it in 0..3 }
+            is String -> Regex("[A-Da-d]").find(v.replace(Regex("答案|选项|正确|是|选"), ""))?.value?.let { index(it) }
+                ?: v.trim().toIntOrNull()?.takeIf { it in 0..3 }
+            else -> null
         }
 
         fun fromJson(text: String): Card = parse(JSONObject(text))
@@ -113,3 +144,10 @@ data class Card(
 }
 
 class BadCard(message: String) : Exception(message)
+
+/** 按句号、问号、叹号、分号和换行把一段材料拆成句子（标点留在句尾） */
+object Sentences {
+    private val SENTENCE = Regex("[^。！？；!?;\\n]+[。！？；!?;]*[”」』）)]*")
+
+    fun split(text: String): List<String> = SENTENCE.findAll(text).map { it.value.trim() }.filter { it.isNotEmpty() && it.any { c -> c.isLetterOrDigit() } }.toList()
+}

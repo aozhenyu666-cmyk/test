@@ -29,6 +29,9 @@ import com.yishou.app.ui.HomeScreen
 import com.yishou.app.ui.ThinkScreen
 import com.yishou.app.ui.CardsScreen
 import com.yishou.app.ui.DeedScreen
+import com.yishou.app.ui.BankScreen
+import com.yishou.app.ui.JobsScreen
+import com.yishou.app.ui.JobScreen
 import com.yishou.app.ui.PermissionsScreen
 import com.yishou.app.ui.SummaryScreen
 import com.yishou.app.ui.WatchedAppsScreen
@@ -84,21 +87,46 @@ class MainActivity : ComponentActivity() {
                 NavHost(navController = nav, startDestination = "board", modifier = Modifier.padding(outer)) {
                     composable("board") {
                         HomeScreen(
+                            onBank = { nav.navigate("bank") },
                             onThink = { nav.navigate("think") },
-                            onDeeds = { nav.navigate("deeds") },
+                            onJobs = { nav.navigate("jobs") },
                             onOpenSettings = { nav.navigate("settings") },
                             onOpenWindow = { startActivity(Intent(this@MainActivity, WindowActivity::class.java)) },
                         )
                     }
                     composable(
-                        "think?m={m}",
-                        arguments = listOf(navArgument("m") { type = NavType.LongType; defaultValue = -1L }),
+                        "think?m={m}&lens={lens}",
+                        arguments = listOf(
+                            navArgument("m") { type = NavType.LongType; defaultValue = -1L },
+                            navArgument("lens") { type = NavType.StringType; defaultValue = "" },
+                        ),
                     ) { e ->
                         ThinkScreen(
                             onBack = { nav.navigateUp() },
                             onCards = { id -> nav.navigate(if (id == null) "cards" else "cards?m=$id") },
                             initialMaterial = e.arguments?.getLong("m")?.takeIf { it > 0 },
+                            initialLens = e.arguments?.getString("lens")?.takeIf { it.isNotEmpty() },
                         )
+                    }
+                    composable("bank") {
+                        BankScreen(
+                            onBack = { nav.navigateUp() },
+                            onPractice = { nav.navigate("cards") },
+                            onEssay = { id -> nav.navigate("think?m=$id&lens=ESSAY") },
+                        )
+                    }
+                    composable("jobs") {
+                        JobsScreen(
+                            onBack = { nav.navigateUp() },
+                            onOpen = { id -> nav.navigate("job/$id") },
+                            onTools = { nav.navigate("deeds") },
+                        )
+                    }
+                    composable(
+                        "job/{id}",
+                        arguments = listOf(navArgument("id") { type = NavType.LongType }),
+                    ) { e ->
+                        JobScreen(jobId = e.arguments?.getLong("id") ?: 0L, onBack = { nav.navigateUp() })
                     }
                     composable(
                         "cards?m={m}",

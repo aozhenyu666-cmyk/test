@@ -181,8 +181,9 @@ fun ConsoleScreen(
                         redoDue > 0,
                     ) { onOpenBoard() }
                     StatusRow("预判本", calibration.ifEmpty { "先押再看：下注和预演" }, false) { onOpen("bets") }
+                    StatusRow("练功底", "题库：导入的真题和申论", false) { onOpen("bank") }
                     StatusRow("练思维", "素材库、抓主干、挖前提、站立场、估个数", false) { onOpen("think") }
-                    StatusRow("做实操", "先估再做、比一比价", false) { onOpen("deeds") }
+                    StatusRow("做事", "一步一步走完一件事", false) { onOpen("jobs") }
                     StatusRow(
                         "运行日志",
                         if (logCount > 0) "记了 $logCount 条出错，点开看" else "没出过错",

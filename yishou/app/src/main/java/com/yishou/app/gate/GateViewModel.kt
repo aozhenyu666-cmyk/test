@@ -125,7 +125,10 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     fun pass() {
         val s = _state.value
         if (s.isTest || s.inWindow || s.passMinutes != null || s.exit.isBlank()) return
-        if (s.gateCard && !session.state.value.done) return
+        // 出不了题（没网、接口出错、题库空了又生成失败）时不卡人：退成只打卡
+        val card = session.state.value
+        val cardFailed = card.error != null && card.round == null
+        if (s.gateCard && !card.done && !cardFailed) return
         grant(yishou.settings.app.value.passMinutesFor(s.group), DayStats.GATE_PASS)
     }
 

@@ -61,14 +61,21 @@ class CardActions(
     val note: (String) -> Unit,
 )
 
-private fun stepsOf(r: Round): List<String> =
-    if (r.cfg.checks > 0) listOf("下注", "依据", "多查", "揭晓") else listOf("下注", "依据", "揭晓")
+private fun stepsOf(r: Round): List<String> = buildList {
+    add("下注")
+    if (r.card.hasEvidence) add("依据")
+    if (r.cfg.checks > 0) add("多查")
+    add("揭晓")
+}
 
-private fun stepIndex(r: Round): Int = when (r.step) {
-    Step.BET -> 0
-    Step.EVIDENCE -> 1
-    Step.CHECK, Step.CHANGE -> 2
-    Step.REVEAL -> if (r.cfg.checks > 0) 3 else 2
+private fun stepIndex(r: Round): Int {
+    val ev = if (r.card.hasEvidence) 1 else 0
+    return when (r.step) {
+        Step.BET -> 0
+        Step.EVIDENCE -> 1
+        Step.CHECK, Step.CHANGE -> 1 + ev
+        Step.REVEAL -> stepsOf(r).size - 1
+    }
 }
 
 /**
@@ -82,7 +89,12 @@ fun CardRoundView(s: SessionState, a: CardActions) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.animateContentSize()) {
         BranchSteps(stepsOf(r), stepIndex(r), Modifier.fillMaxWidth())
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(card.skill.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.tertiary)
+            Text(card.type.ifBlank { card.skill.label }, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.tertiary)
+            val row = s.dealt?.row
+            if (row != null && !row.verified && row.source == com.yishou.app.data.CardSource.AI) {
+                Spacer(Modifier.width(8.dp))
+                Text("未核对：答案只作参考，不计分", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             if (s.dealt?.redo == true) {
                 Spacer(Modifier.width(8.dp))
                 Text("错题重做", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
@@ -93,7 +105,7 @@ fun CardRoundView(s: SessionState, a: CardActions) {
 
         // 材料：同屏、或看完收起
         var picked by remember(card) { mutableStateOf(setOf<Int>()) }
-        val canHide = s.level >= 2 && r.step == Step.BET && !s.hidden
+        val canHide = s.level >= 2 && r.step == Step.BET && !s.hidden && card.sentences.isNotEmpty()
         if (canHide) ReadTimer(card, s.level, onHide = a.hide)
         if (s.hidden && r.step != Step.REVEAL) {
             HiddenPassage(card, s, picked, pickable = r.step == Step.EVIDENCE) { n -> picked = toggle(picked, n) }
@@ -174,6 +186,7 @@ private fun ReadTimer(card: Card, level: Int, onHide: () -> Unit) {
 
 @Composable
 private fun Passage(card: Card, r: Round, picked: Set<Int>, pickable: Boolean, onPick: (Int) -> Unit) {
+    if (card.sentences.isEmpty()) return
     val reveal = r.step == Step.REVEAL
     Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -333,7 +346,7 @@ private fun Options(card: Card, r: Round, selected: Int?, marks: Boolean) {
                 i, o,
                 selected = selected == i,
                 enabled = false,
-                tag = if (marks) card.flawOf(i).takeIf { i != card.answer } else null,
+                tag = if (marks) card.flawOf(i).takeIf { i != card.answer && card.hasFlaws } else null,
                 state = if (!marks) OptionState.NORMAL else when {
                     i == card.answer -> OptionState.RIGHT
                     i == selected || i == r.bet -> OptionState.WRONG

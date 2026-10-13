@@ -177,6 +177,15 @@ fun TimeWheel(
                     MarkKind.DRILL -> gold
                     MarkKind.DEED -> sea
                 }
+                // 流星留痕：刚落下的那颗从轮外飞进来，身后拖一道光
+                if (i == sorted.lastIndex && grow < 1f) {
+                    val from = point(minuteOfDay(m.at).toFloat() - 40f, radius * 1.02f)
+                    val cur = Offset(from.x + (pts[i].x - from.x) * grow, from.y + (pts[i].y - from.y) * grow)
+                    drawLine(
+                        Brush.linearGradient(listOf(Color.Transparent, color.copy(alpha = 0.8f)), start = from, end = cur),
+                        from, cur, strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round,
+                    )
+                }
                 val r = 4.2.dp.toPx() * grow
                 if (m.good) drawCircle(color, r, pts[i]) else drawCircle(miss.copy(alpha = 0.85f), r, pts[i], style = Stroke(1.5.dp.toPx()))
             }

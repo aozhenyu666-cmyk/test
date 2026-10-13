@@ -251,14 +251,18 @@ private fun GateScreen(
                     }
                 }
                 c.error != null && c.round == null -> {
-                    Text("现在出不了题：${c.error}", color = MaterialTheme.colorScheme.error)
-                    TextButton(onClick = { vm.retry() }) { Text("再试一次") }
-                    if (!s.isTest) {
-                        Text("真要现在用，写一句看完要做的第一件事，离线放行 ${s.offlineMinutes} 分钟（今天还剩 ${s.offlineLeft} 次）。", style = MaterialTheme.typography.bodyMedium)
+                    Text("这次出不了题（${c.error}），只打卡。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton(onClick = { vm.retry() }) { Text("再试一次出题") }
+                    if (s.isTest) {
+                        OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
+                    } else {
+                        Text("看完要做的第一件事是？", style = MaterialTheme.typography.titleMedium)
                         ExitField(s, vm)
-                        Button(onClick = vm::passOffline, enabled = s.exit.isNotBlank() && s.offlineLeft > 0, modifier = Modifier.fillMaxWidth()) { Text("离线放行") }
+                        Button(onClick = vm::pass, enabled = s.exit.isNotBlank(), modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                            Text("说好了，放行")
+                        }
+                        OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
                     }
-                    OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
                 }
                 c.round == null -> MatrixLoader("准备一张题")
                 else -> {

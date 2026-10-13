@@ -31,8 +31,12 @@ class CardEngine(
     /** 最近的做题记录（30 天），算掌握度、重做都用它 */
     suspend fun history(): List<CardAttempt> = dao.attemptsSince(clock() - 30 * DAY)
 
-    /** 发一张。skill 为 null 时按掌握度挑；allowRedo 时错题重做优先。 */
-    suspend fun deal(skill: Skill?, allowRedo: Boolean = true): LlmResult<Dealt> {
+    /**
+     * 发一张。顺序：到期的错题 → 题库里没做过的（你导入的真题，本机就有，不用等也不会出错）→
+     * 备好的核对过的题 → 现出一张。skill 为 null 时按掌握度挑；
+     * needKey 为 false 时（入口思考页）跳过没写答案、要你点官方答案的题。
+     */
+    suspend fun deal(skill: Skill?, allowRedo: Boolean = true, needKey: Boolean = true): LlmResult<Dealt> {
         val hist = history()
         if (allowRedo) {
             for (id in Progress.dueRedo(hist, clock())) {
@@ -42,6 +46,13 @@ class CardEngine(
                 return LlmResult.Ok(Dealt(row, card, redo = true))
             }
         }
+        if (skill == null) {
+            for (row in dao.unusedBank()) {
+                if (!needKey && !row.verified) continue
+                val card = runCatching { Card.fromJson(row.json) }.getOrNull() ?: continue
+                return LlmResult.Ok(Dealt(row, card, redo = false))
+            }
+        }
         val target = skill ?: Progress.nextSkill(hist)
         val unused = dao.unused()
         val row = unused.firstOrNull { it.skill == target.name } ?: if (skill == null) unused.firstOrNull() else null
@@ -49,7 +60,7 @@ class CardEngine(
             val card = runCatching { Card.fromJson(row.json) }.getOrNull()
             if (card != null) return LlmResult.Ok(Dealt(row, card, redo = false))
         }
-        return when (val r = make(target, Progress.difficulty(hist, target))) {
+        return when (val r = make(target, Progress.difficulty(hist, target), keepUnverified = true)) {
             is LlmResult.Err -> r
             is LlmResult.Ok -> LlmResult.Ok(Dealt(r.value, Card.fromJson(r.value.json), redo = false))
         }
@@ -83,17 +94,23 @@ class CardEngine(
         }
     }
 
-    private suspend fun make(skill: Skill, difficulty: Int): LlmResult<CardRow> = genLock.withLock { makeLocked(skill, difficulty) }
+    private suspend fun make(skill: Skill, difficulty: Int, keepUnverified: Boolean = false): LlmResult<CardRow> =
+        genLock.withLock { makeLocked(skill, difficulty, keepUnverified) }
 
-    /** 出一张并核对；对不上就再出一张，还对不上就算了 */
-    private suspend fun makeLocked(skill: Skill, difficulty: Int): LlmResult<CardRow> {
+    /**
+     * 出一张并核对；对不上就再出一张。还对不上时：后台备题就算了；
+     * 现在就要题（keepUnverified）时用最后那张，标成“未核对”——答案只作参考、不计分，但不让你卡在这里。
+     */
+    private suspend fun makeLocked(skill: Skill, difficulty: Int, keepUnverified: Boolean): LlmResult<CardRow> {
         val avoid = dao.recent(8).mapNotNull { runCatching { Card.fromJson(it.json).let { c -> c.sentences.first().take(30) } }.getOrNull() }
         var lastErr: LlmResult.Err? = null
+        var lastCard: Card? = null
         repeat(2) {
             val card = when (val g = gen.generate(skill, difficulty, avoid)) {
-                is LlmResult.Err -> return g
+                is LlmResult.Err -> return lastCard?.takeIf { keepUnverified }?.let { saveUnverified(skill, it) } ?: g
                 is LlmResult.Ok -> g.value
             }
+            lastCard = card
             when (val s = gen.solve(card)) {
                 is LlmResult.Err -> lastErr = s
                 is LlmResult.Ok -> if (s.value == card.answer) {
@@ -104,7 +121,43 @@ class CardEngine(
                 }
             }
         }
-        return lastErr ?: LlmResult.Err(com.yishou.app.llm.LlmError.BadFormat("两次出题答案都没核对上"))
+        val last = lastCard
+        if (keepUnverified && last != null) return saveUnverified(skill, last)
+        return lastErr ?: LlmResult.Err(com.yishou.app.llm.LlmError.Local("两次出题答案都没核对上"))
+    }
+
+    private suspend fun saveUnverified(skill: Skill, card: Card): LlmResult<CardRow> {
+        RunLog.e("出题", "两次没核对上，这张标成未核对：只作参考，不计分")
+        val row = CardRow(skill = skill.name, difficulty = card.difficulty, json = card.toJson(), verified = false, source = CardSource.AI, createdAt = clock())
+        return LlmResult.Ok(row.copy(id = dao.insertCard(row)))
+    }
+
+    /**
+     * 导入题包里的选择题。答案来自题包；没写答案的也收下，做完时请你点官方答案。
+     * 和题库里已有的题目重复的跳过。返回收下了几道。
+     */
+    suspend fun importBank(items: List<com.yishou.app.bank.BankItem.Choice>): Int {
+        val seen = dao.recent(1000).mapNotNull { runCatching { Card.fromJson(it.json).question }.getOrNull() }
+            .map { com.yishou.app.think.Words.norm(it) }.toMutableSet()
+        var n = 0
+        for (c in items) {
+            val key = com.yishou.app.think.Words.norm(c.question + c.options.joinToString(""))
+            val q = com.yishou.app.think.Words.norm(c.question)
+            if (q in seen || key in seen) continue
+            seen += q
+            val card = com.yishou.app.bank.BankParser.toCard(c, c.answer ?: 0)
+            val row = CardRow(skill = card.skill.name, difficulty = card.difficulty, json = card.toJson(), verified = c.answer != null, source = CardSource.BANK, createdAt = clock() + n)
+            dao.insertCard(row)
+            n++
+        }
+        return n
+    }
+
+    /** 一道认好的选择题（拍照转写后本机拆出来的）直接做：没写答案就揭晓时点官方答案 */
+    suspend fun useChoice(c: com.yishou.app.bank.BankItem.Choice): Dealt {
+        val card = com.yishou.app.bank.BankParser.toCard(c, c.answer ?: 0)
+        val row = CardRow(skill = card.skill.name, difficulty = card.difficulty, json = card.toJson(), verified = c.answer != null, source = CardSource.PHOTO, createdAt = clock())
+        return Dealt(row.copy(id = dao.insertCard(row)), card, redo = false)
     }
 
     /** 拍下的真题：整理成题卡，先标“未核对”，用户在揭晓时点了官方答案才算数 */

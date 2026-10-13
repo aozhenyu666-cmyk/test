@@ -66,7 +66,7 @@ class LensTest {
         assertEquals(Lens.STANCE, Lens.suggest("年轻人该不该买房？").first())
         assertEquals(Lens.ASSUME, Lens.suggest("因为大家都在用，所以它一定好用。只有这样才能跟上。").first())
         assertEquals(Lens.GIST, Lens.suggest("今天天气不错，出去走走。").first())
-        assertEquals(Lens.entries.size, Lens.suggest("x").size)
+        assertEquals(Lens.entries.size - 1, Lens.suggest("x").size)
     }
 
     @Test
@@ -242,6 +242,12 @@ class FakeThinkDao : ThinkDao() {
         deeds.removeAll { it.id == d.id }
     }
     override fun observeDeeds(): Flow<List<Deed>> = emptyFlow()
+    val keys = mutableMapOf<Long, com.yishou.app.data.MaterialKey>()
+    override suspend fun upsertKey(k: com.yishou.app.data.MaterialKey) {
+        keys[k.materialId] = k
+    }
+    override suspend fun getKey(id: Long) = keys[id]
+    override fun observeKeys(): Flow<List<com.yishou.app.data.MaterialKey>> = emptyFlow()
 }
 
 class FakePracticeDao : PracticeDao() {

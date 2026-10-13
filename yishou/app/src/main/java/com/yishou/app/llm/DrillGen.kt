@@ -77,6 +77,10 @@ object DrillPrompts {
             value：你的参考答案（一个数），unit：单位，method：怎么拆着估（两三步），explain：参考答案的依据。
             只返回 JSON：{"question": "……", "value": 123, "unit": "……", "method": "……", "explain": "……"}
         """.trimIndent()
+        Lens.ESSAY -> """
+            根据材料出一道申论归纳概括题，并按采分点给出参考要点。
+            只返回 JSON：{"question": "……（不超过 150 字）", "points": ["……", "……"], "limit": 150, "explain": "……"}
+        """.trimIndent()
         Lens.PREDICT -> """
             根据材料，问一个“接下来会怎样”的问题，要能在几天到几个月后用公开信息核对（question，不超过 40 字）。
             只返回 JSON：{"question": "……"}
@@ -88,7 +92,14 @@ object DrillPrompts {
 
     fun judgePoints(key: DrillKey, answer: String) = buildString {
         if (key.lens == Lens.ASSUME) appendLine("要挖前提的结论：${key.prompt}")
-        appendLine(if (key.lens == Lens.GIST) "锁住的答案（第 1 条是主干，其余是要点）：" else "认可的前提（说中任意一条就算）：")
+        if (key.lens == Lens.ESSAY) appendLine("申论题目：${key.prompt}")
+        appendLine(
+            when (key.lens) {
+                Lens.GIST -> "锁住的答案（第 1 条是主干，其余是要点）："
+                Lens.ESSAY -> "参考要点（按采分点逐条判，意思到了就算，只写了词没写出内容的不算）："
+                else -> "认可的前提（说中任意一条就算）："
+            },
+        )
         key.points.forEachIndexed { i, p -> appendLine("${i + 1}. $p") }
         appendLine()
         appendLine("用户的回答：「$answer」")

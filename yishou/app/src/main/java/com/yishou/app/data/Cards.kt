@@ -28,6 +28,8 @@ object CardSource {
     const val AI = "ai"
     /** 用户拍照导入的真题 */
     const val PHOTO = "photo"
+    /** 题包导入的（GPT、Gemini、粉笔……），答案来自题包 */
+    const val BANK = "bank"
 }
 
 object CardMode {
@@ -80,6 +82,13 @@ abstract class CardDao {
     /** 还没做过、核对过答案的题卡（备着用） */
     @Query("SELECT * FROM card WHERE usedAt IS NULL AND verified = 1 ORDER BY createdAt")
     abstract suspend fun unused(): List<CardRow>
+
+    /** 题库里还没做过的（含没写答案、要做完点官方答案的） */
+    @Query("SELECT * FROM card WHERE usedAt IS NULL AND source = 'bank' ORDER BY createdAt")
+    abstract suspend fun unusedBank(): List<CardRow>
+
+    @Query("SELECT * FROM card WHERE source = 'bank' ORDER BY createdAt DESC")
+    abstract fun observeBank(): Flow<List<CardRow>>
 
     @Query("SELECT * FROM card ORDER BY createdAt DESC LIMIT :n")
     abstract suspend fun recent(n: Int): List<CardRow>

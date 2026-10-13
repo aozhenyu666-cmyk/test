@@ -30,8 +30,16 @@ data class Round(
     val finalAnswer: Int? get() = final ?: bet
     val firstCorrect: Boolean get() = bet == card.answer
     val finalCorrect: Boolean get() = finalAnswer == card.answer
-    val evidenceOk: Boolean get() = evidence.isNotEmpty() && evidence.any { it in card.evidence }
-    val checksOk: Int get() = checks.count { (opt, flaw) -> card.flawOf(opt) == flaw }
+    /** 没有依据句的题（数量、定义这类）不考依据，算过 */
+    val evidenceOk: Boolean get() = !card.hasEvidence || (evidence.isNotEmpty() && evidence.any { it in card.evidence })
+    val checksOk: Int get() = checks.count { (opt, flaw) -> checkRight(opt, flaw) }
+
+    /** 多查判得对不对：正确项要判“没毛病”；有错因表就要判中错因，没有就只要看出它有毛病 */
+    fun checkRight(opt: Int, flaw: String): Boolean = when {
+        opt == card.answer -> flaw == Flaws.NONE
+        card.hasFlaws -> card.flawOf(opt) == flaw
+        else -> flaw != Flaws.NONE
+    }
     /** 自己完成：没用帮助 */
     val independent: Boolean get() = help == 0
     val changedRight: Boolean get() = final != null && final != bet && finalCorrect
@@ -41,15 +49,17 @@ data class Round(
 
     fun bet(option: Int, c: Conf): Round {
         if (step != Step.BET || option !in 0..3) return this
-        return copy(bet = option, conf = c, step = Step.EVIDENCE)
+        return copy(bet = option, conf = c, step = if (card.hasEvidence) Step.EVIDENCE else afterEvidence())
     }
 
     fun evidence(sentences: Set<Int>): Round {
         if (step != Step.EVIDENCE) return this
         val valid = sentences.filter { it in 1..card.sentences.size }.toSet()
         if (valid.isEmpty()) return this
-        return copy(evidence = valid, step = if (cfg.checks > 0) Step.CHECK else Step.REVEAL)
+        return copy(evidence = valid, step = afterEvidence())
     }
+
+    private fun afterEvidence() = if (cfg.checks > 0) Step.CHECK else Step.REVEAL
 
     fun check(option: Int, flaw: String): Round {
         if (step != Step.CHECK || option !in checkable || flaw !in Flaws.CHOICES) return this
@@ -75,7 +85,8 @@ data class Round(
 
     /** 帮助的内容：1 指区域，2 排除两项错误选项 */
     fun hintText(): String? = when (help) {
-        1 -> "看第 ${card.evidence.sorted().joinToString("、") { Card.mark(it) }} 句。"
+        1 -> if (card.hasEvidence) "看第 ${card.evidence.sorted().joinToString("、") { Card.mark(it) }} 句。"
+        else "把题干里的条件一条条列出来，再拿每个选项去代。"
         2 -> {
             val wrong = (0..3).filter { it != card.answer }.take(2)
             "先排除 " + wrong.joinToString("、") { "${Card.letter(it)}（${card.flawOf(it)}）" } + "。"
@@ -87,7 +98,7 @@ data class Round(
     fun scoreLine(): String = buildList {
         add("首答 ${if (firstCorrect) "✓" else "✗"}")
         conf?.let { c -> add("把握${c.label} ${if (firstCorrect == (c != Conf.LOW)) "✓" else "✗"}") }
-        add("依据 ${if (evidenceOk) "✓" else "✗"}")
+        if (card.hasEvidence) add("依据 ${if (evidenceOk) "✓" else "✗"}")
         if (checks.isNotEmpty()) add("多查 $checksOk/${checks.size}")
         if (final != null && final != bet) add(if (finalCorrect) "改对" else "改错")
         if (help > 0) add("帮助 $help")

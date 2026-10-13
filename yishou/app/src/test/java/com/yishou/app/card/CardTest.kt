@@ -6,6 +6,7 @@ import com.yishou.app.data.CardAttempt
 import com.yishou.app.data.CardDao
 import com.yishou.app.data.CardMode
 import com.yishou.app.data.CardRow
+import com.yishou.app.data.CardSource
 import com.yishou.app.data.SetStatus
 import com.yishou.app.llm.CardGen
 import com.yishou.app.llm.LlmError
@@ -46,6 +47,8 @@ class FakeCardDao : CardDao() {
     override suspend fun getCard(id: Long) = cards.firstOrNull { it.id == id }
     override suspend fun unused() = cards.filter { it.usedAt == null && it.verified }
     override suspend fun recent(n: Int) = cards.takeLast(n).reversed()
+    override suspend fun unusedBank() = cards.filter { it.usedAt == null && it.source == CardSource.BANK }
+    override fun observeBank(): Flow<List<CardRow>> = emptyFlow()
     override suspend fun insertAttempt(attempt: CardAttempt): Long {
         val id = attempts.size + 1L
         attempts += attempt.copy(id = id)
@@ -83,10 +86,12 @@ class CardTest {
         assertEquals(c, Card.fromJson(c.toJson()))
         val bad = JSONObject(c.toJson()).put("answer", "E")
         assertThrows { Card.parse(bad) }
+        // 宽容：错因不在表里记成“答非所问”，依据句超范围就当没有依据，都不再让整张题作废
         val badFlaw = JSONObject(c.toJson()).put("flaws", JSONObject().put("A", "不知道").put("C", "绝对化").put("D", "绝对化"))
-        assertThrows { Card.parse(badFlaw) }
+        assertEquals("答非所问", Card.parse(badFlaw).flaws[0])
         val badEvidence = JSONObject(c.toJson()).put("evidence", org.json.JSONArray(listOf(9)))
-        assertThrows { Card.parse(badEvidence) }
+        assertFalse(Card.parse(badEvidence).hasEvidence)
+        assertThrows { Card.parse(JSONObject(c.toJson()).put("options", JSONObject().put("A", "x"))) }
         val numbered = JSONObject(c.toJson()).put("passage", org.json.JSONArray(listOf("①第一句", "②第二句")))
             .put("evidence", org.json.JSONArray(listOf(1)))
         assertEquals("第一句", Card.parse(numbered).sentences.first())

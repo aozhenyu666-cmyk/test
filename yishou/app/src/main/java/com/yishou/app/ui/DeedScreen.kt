@@ -195,7 +195,7 @@ fun DeedScreen(onBack: () -> Unit, vm: DeedViewModel = viewModel()) {
     }
     val summary = remember(deeds) { Deeds.summary(deeds) }
 
-    Scaffold(topBar = { BackTopBar("做实操", onBack) }) { padding ->
+    Scaffold(topBar = { BackTopBar("小工具：估数与比价", onBack) }) { padding ->
         LazyColumn(
             Modifier.padding(padding).fillMaxSize(),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 96.dp),

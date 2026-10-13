@@ -8,6 +8,7 @@ import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Update
+import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -33,6 +34,8 @@ object MaterialSource {
     const val SCREEN = "screen"
     const val MADE = "made"
     const val TYPED = "typed"
+    /** 题包导入的申论题 */
+    const val BANK = "bank"
 
     fun label(s: String) = when (s) {
         SHARE -> "分享来的"
@@ -40,6 +43,7 @@ object MaterialSource {
         PHOTO -> "拍的"
         SCREEN -> "截屏"
         MADE -> "教练写的"
+        BANK -> "题库"
         else -> "自己写的"
     }
 }
@@ -71,6 +75,13 @@ data class DrillRow(
         const val COMPARE = "COMPARE"
     }
 }
+
+/** 申论这类题自带的参考要点（题包导入时就锁住），key 是 think.DrillKey 的 JSON */
+@Entity(tableName = "material_key")
+data class MaterialKey(
+    @PrimaryKey val materialId: Long,
+    val key: String,
+)
 
 /** 实操：做事前估一个数，做完对照 */
 @Entity(tableName = "deed", indices = [Index("createdAt")])
@@ -106,6 +117,15 @@ abstract class ThinkDao {
 
     @Query("SELECT * FROM material ORDER BY createdAt DESC LIMIT 200")
     abstract fun observeMaterials(): Flow<List<Material>>
+
+    @Upsert
+    abstract suspend fun upsertKey(k: MaterialKey)
+
+    @Query("SELECT * FROM material_key WHERE materialId = :id")
+    abstract suspend fun getKey(id: Long): MaterialKey?
+
+    @Query("SELECT * FROM material_key")
+    abstract fun observeKeys(): Flow<List<MaterialKey>>
 
     @Query("SELECT * FROM material ORDER BY createdAt DESC LIMIT :n")
     abstract suspend fun recentMaterials(n: Int): List<Material>
