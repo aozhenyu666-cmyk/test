@@ -104,6 +104,32 @@ class YishouApp : Application() {
     /** 题包导入：在本机拆题，选择题进题卡库，申论进素材库 */
     val bankImport: com.yishou.app.bank.BankImport by lazy { com.yishou.app.bank.BankImport(cardEngine, database.think()) }
 
+    /** 本机拆不出题时，让模型把文字整理成题包格式 */
+    val bankTidy: com.yishou.app.llm.BankTidy by lazy {
+        com.yishou.app.llm.BankTidy(ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(90), usage = stats))
+    }
+    /** 导入题库文件（Word、文本、PDF、图片） */
+    val fileImport: com.yishou.app.system.FileImport by lazy { com.yishou.app.system.FileImport(this) }
+
+    private val makingMaterial = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** 后台备两段教练写的素材，练思维时不用等（没填接口时什么都不做） */
+    fun prefetchMaterials() {
+        if (!settings.llm.value.isComplete) return
+        if (!makingMaterial.compareAndSet(false, true)) return
+        appScope.launch {
+            try {
+                repeat(2) {
+                    val fresh = database.think().recentMaterials(30).count { it.source == com.yishou.app.data.MaterialSource.MADE && it.uses == 0 }
+                    if (fresh >= 2) return@launch
+                    if (materials.make(null) is com.yishou.app.llm.LlmResult.Err) return@launch
+                }
+            } finally {
+                makingMaterial.set(false)
+            }
+        }
+    }
+
     /** 从分享页过来时要打开的页面（主界面取走后清空） */
     val pendingRoute = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     /** 分享过来的商品截图认出的商品，交给实操页的“比一比” */
@@ -153,6 +179,7 @@ class YishouApp : Application() {
         voice = VoiceInput(this)
 
         prefetchCards()
+        prefetchMaterials()
 
         // 时区设置一变就生效
         appScope.launch { settings.app.collect { AppZone.id = it.timeZone } }

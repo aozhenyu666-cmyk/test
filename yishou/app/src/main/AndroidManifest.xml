@@ -38,6 +38,17 @@
         <intent>
             <action android:name="android.intent.action.DIAL" />
         </intent>
+        <!-- 题库“去出题”：把出题要求分享进你装的 AI App；“去刷题”：打开粉笔这类 App -->
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="text/plain" />
+        </intent>
+        <package android:name="com.openai.chatgpt" />
+        <package android:name="com.google.android.apps.bard" />
+        <package android:name="com.larus.nova" />
+        <package android:name="com.deepseek.chat" />
+        <package android:name="com.moonshot.kimichat" />
+        <package android:name="com.fenbi.android.servant" />
         <!-- 没填听写接口时用手机自带的语音识别；朗读用系统朗读引擎 -->
         <intent>
             <action android:name="android.speech.RecognitionService" />
@@ -81,6 +92,17 @@
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+            <!-- 题库文件：Word、PDF、文本，可以一次分享好几个 -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+                <data android:mimeType="application/msword" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="text/*" />
                 <data android:mimeType="image/*" />
             </intent-filter>
         </activity>

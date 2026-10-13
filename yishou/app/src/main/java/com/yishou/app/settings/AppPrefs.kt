@@ -81,8 +81,10 @@ data class AppPrefs(
     val setCards: Int = 5,
     /** 入口思考页要不要做一张题卡；关掉就只是打卡：说好看完做什么就放行 */
     val gateCard: Boolean = true,
-    /** 题库页“去出题”的链接，每行“名字 网址” */
-    val bankLinks: String = com.yishou.app.bank.BankPrompt.DEFAULT_LINKS,
+    /** 出题用的 AI App，每行“名字 包名 网址” */
+    val bankLinks: String = com.yishou.app.outside.AiApps.DEFAULT,
+    /** 刷题 App（粉笔……），每行“名字 包名 网址” */
+    val drillApps: String = com.yishou.app.outside.AiApps.DEFAULT_DRILL,
     /** 入口思考页放行时说的“看完做的第一件事”，下次打开先问做了没有 */
     val pendingExit: String = "",
     /** 那次放行到期的时间；过了这个时间才问 */
@@ -140,6 +142,7 @@ data class AppPrefs(
         .put("setCards", setCards)
         .put("gateCard", gateCard)
         .put("bankLinks", bankLinks)
+        .put("drillApps", drillApps)
         .put("pendingExit", pendingExit)
         .put("pendingExitAt", pendingExitAt)
         .put("warmup", warmup)
@@ -235,7 +238,9 @@ data class AppPrefs(
                 coachSetMoves = o.optInt("coachSetMoves", d.coachSetMoves).coerceIn(3, 8),
                 setCards = o.optInt("setCards", d.setCards).coerceIn(1, 10),
                 gateCard = o.optBoolean("gateCard", d.gateCard),
-                bankLinks = o.optString("bankLinks", d.bankLinks),
+                // 旧版默认的网页链接换成新的“App + 网址”列表；改过的保留
+                bankLinks = o.optString("bankLinks", d.bankLinks).let { if (it == com.yishou.app.bank.BankPrompt.DEFAULT_LINKS) d.bankLinks else it },
+                drillApps = o.optString("drillApps", d.drillApps),
                 pendingExit = o.optString("pendingExit", ""),
                 pendingExitAt = o.optLong("pendingExitAt", 0),
                 warmup = o.optBoolean("warmup", d.warmup),

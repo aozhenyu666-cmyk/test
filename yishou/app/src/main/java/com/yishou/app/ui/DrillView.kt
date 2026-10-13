@@ -43,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.yishou.app.data.Material
@@ -62,16 +63,25 @@ fun DrillView(s: DrillState, vm: ThinkViewModel, onOtherLens: (Material?) -> Uni
         modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        val steps = if (s.lens == Lens.STANCE) listOf("锁答案", "作答", "追问", "揭晓") else listOf("锁答案", "作答", "揭晓")
+        val steps = when (s.lens) {
+            Lens.STANCE -> listOf("锁答案", "作答", "追问", "揭晓")
+            Lens.RECITE -> listOf("看", "复述", "对照")
+            else -> listOf("锁答案", "作答", "揭晓")
+        }
         val at = when (s.step) {
             DrillStep.LOADING -> 0
-            DrillStep.ANSWER -> 1
+            DrillStep.ANSWER -> if (s.lens == Lens.RECITE && !s.hidden) 0 else 1
             DrillStep.JUDGING, DrillStep.SELF -> if (s.lens == Lens.STANCE && s.counter.isNotEmpty()) 2 else 1
             DrillStep.COUNTER -> 2
             DrillStep.REVEAL -> steps.size - 1
         }
         BranchSteps(steps, at, Modifier.fillMaxWidth())
-        s.material?.let { MaterialPanel(it, startOpen = s.step == DrillStep.ANSWER || s.step == DrillStep.LOADING) }
+        val m = s.material
+        when {
+            s.lens == Lens.RECITE -> {}
+            m != null && s.hidden -> HiddenPanel(m)
+            m != null -> MaterialPanel(m, startOpen = s.step == DrillStep.ANSWER || s.step == DrillStep.LOADING)
+        }
         val key = s.key
         when {
             s.error != null && key == null -> {
@@ -117,7 +127,12 @@ private fun Prompt(lens: Lens, key: DrillKey) {
             Text("「${key.prompt}」", style = MaterialTheme.typography.titleMedium)
             Text(lens.ask, style = MaterialTheme.typography.bodyLarge)
         }
-        Lens.GIST -> Text(lens.ask, style = MaterialTheme.typography.titleMedium)
+        Lens.GIST, Lens.FRAME, Lens.ECHO -> Text(lens.ask, style = MaterialTheme.typography.titleMedium)
+        Lens.RECITE -> Text(key.prompt, style = MaterialTheme.typography.titleMedium)
+        Lens.LINK -> {
+            Text("「${key.prompt}」", style = MaterialTheme.typography.titleMedium)
+            Text("它像你见过的什么？说出像什么、相同在哪、不同在哪。", style = MaterialTheme.typography.bodyLarge)
+        }
         Lens.ESSAY -> {
             Text(key.prompt, style = MaterialTheme.typography.titleMedium)
             key.value?.let { Text("字数：不超过 ${it.toInt()} 字", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -133,11 +148,31 @@ private fun Prompt(lens: Lens, key: DrillKey) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AnswerStep(s: DrillState, key: DrillKey, vm: ThinkViewModel) {
+    if (s.lens == Lens.RECITE) {
+        ReciteStep(s, key, vm)
+        return
+    }
     Prompt(s.lens, key)
     when (s.lens) {
-        Lens.GIST, Lens.ASSUME -> {
+        Lens.RECITE -> {}
+        Lens.LINK -> {
+            val parts = com.yishou.app.think.LinkItem.entries.mapIndexed { i, item ->
+                var v by rememberSaveable(key.prompt, item) { mutableStateOf(s.linkParts.getOrElse(i) { "" }) }
+                VoiceTextField(v, { v = it }, "${item.label}：${item.hint}", Modifier.fillMaxWidth(), minLines = if (item == com.yishou.app.think.LinkItem.LIKE) 1 else 2)
+                v
+            }
+            Notes(s)
+            Button(onClick = { vm.link(parts) }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("交卷") }
+        }
+        Lens.GIST, Lens.ASSUME, Lens.FRAME, Lens.ECHO -> {
             var text by rememberSaveable(key.prompt) { mutableStateOf(s.answer) }
-            VoiceTextField(text, { text = it }, if (s.lens == Lens.GIST) "它最想让人相信的是……" else "它默认了……", Modifier.fillMaxWidth(), minLines = 3)
+            val hint = when (s.lens) {
+                Lens.GIST -> "它最想让人相信的是……"
+                Lens.FRAME -> "一行一条：A 和 B——什么关系"
+                Lens.ECHO -> "我记得这段讲的是……"
+                else -> "它默认了……"
+            }
+            VoiceTextField(text, { text = it }, hint, Modifier.fillMaxWidth(), minLines = 3)
             Notes(s)
             Button(onClick = { vm.answer(text) }, enabled = text.isNotBlank(), modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("交卷") }
         }
@@ -230,7 +265,8 @@ private fun RevealStep(s: DrillState, key: DrillKey, vm: ThinkViewModel, onOther
         Text("押下了，记进了预判本。", style = MaterialTheme.typography.headlineSmall)
         Text("这一条不由模型判，等现实。到了时候去 主控台 → 预判本 里点中没中。", style = MaterialTheme.typography.bodyMedium)
     }
-    if (s.answer.isNotBlank() && s.lens != Lens.STANCE) {
+    s.recite?.let { ReciteDiff(it) }
+    if (s.answer.isNotBlank() && s.lens != Lens.STANCE && s.lens != Lens.RECITE) {
         Text("你答的：${s.answer}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     Checks(s.checks)
@@ -245,7 +281,9 @@ private fun RevealStep(s: DrillState, key: DrillKey, vm: ThinkViewModel, onOther
         Text("记下了。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (s.material != null) {
+        if (s.lens == Lens.RECITE) {
+            Button(onClick = { vm.recite(s.material, key.prompt, key.points.first(), s.skeleton) }, modifier = Modifier.weight(1f)) { Text("再背一遍") }
+        } else if (s.material != null) {
             Button(onClick = { onOtherLens(s.material) }, modifier = Modifier.weight(1f)) { Text("换个练法") }
         } else {
             Button(onClick = { vm.begin(null, Lens.ESTIMATE) }, modifier = Modifier.weight(1f)) { Text("再估一个") }
@@ -324,6 +362,10 @@ private fun LockedKey(s: DrillState, key: DrillKey) {
         )
         Lens.PREDICT -> emptyList()
         Lens.ESSAY -> key.points.mapIndexed { i, p -> "要点 ${i + 1}：$p" }
+        Lens.ECHO -> listOf("主干：${key.points.firstOrNull().orEmpty()}") + key.points.drop(1).map { "要点：$it" }
+        Lens.FRAME -> key.points.map { "关系：$it" }
+        Lens.LINK -> key.points.map { "参考：$it" }
+        Lens.RECITE -> listOf("原文：${key.points.firstOrNull().orEmpty()}")
     }
     if (lines.isEmpty() && key.explain.isBlank()) return
     CloudReveal(key.prompt) {
@@ -354,6 +396,7 @@ private fun SelfStep(s: DrillState, key: DrillKey, vm: ThinkViewModel) {
             "真正对你不利的最强一条，不是稻草人",
             "一个看得见、能核对的条件",
         )
+        Lens.LINK -> com.yishou.app.think.LinkItem.entries.map { it.standard }
         else -> key.points
     }
     var marks by remember(s.checks.size) { mutableStateOf(List(s.checks.size) { false }) }
@@ -373,4 +416,109 @@ private fun SelfStep(s: DrillState, key: DrillKey, vm: ThinkViewModel) {
     }
     Text("只勾你真的写出来了的。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     Button(onClick = { vm.selfMark(marks) }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("按我勾的算分") }
+}
+
+
+/** 回想：原文收着，揭晓时再给看 */
+@Composable
+private fun HiddenPanel(m: Material) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(m.title, style = MaterialTheme.typography.labelLarge)
+            Text("原文收着，交卷后再看。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/**
+ * 背下来：先看（倒计时，可以提前点“记住了”），时间到原文一个字一个字散掉，
+ * 然后复述。收起之后离开一手会被记下来。
+ */
+@Composable
+private fun ReciteStep(s: DrillState, key: DrillKey, vm: ThinkViewModel) {
+    val text = key.points.firstOrNull().orEmpty()
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    androidx.compose.runtime.DisposableEffect(lifecycle) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_STOP) vm.left() }
+        lifecycle.addObserver(obs)
+        onDispose { lifecycle.removeObserver(obs) }
+    }
+    var now by remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(s.readUntil, s.hidden) {
+        while (!s.hidden) {
+            now = System.currentTimeMillis()
+            if (now >= s.readUntil) {
+                vm.hideRecite()
+                break
+            }
+            kotlinx.coroutines.delay(250)
+        }
+    }
+    Text(key.prompt, style = MaterialTheme.typography.titleMedium)
+    val fade = remember(key.prompt) { Animatable(1f) }
+    val still = reducedMotion()
+    LaunchedEffect(s.hidden) {
+        if (s.hidden) { if (still) fade.snapTo(0f) else fade.animateTo(0f, tween(1_400)) } else fade.snapTo(1f)
+    }
+    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(18.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (fade.value > 0f) {
+                DissolveText(text, fade.value)
+            } else if (s.skeleton) {
+                Text(com.yishou.app.think.Recite.skeleton(text), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Text("原文已收起。", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+    if (!s.hidden) {
+        val left = ((s.readUntil - now) / 1000).coerceAtLeast(0)
+        Text("还能看 $left 秒", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.tertiary)
+        Button(onClick = { vm.hideRecite() }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("记住了，收起来") }
+        return
+    }
+    var said by rememberSaveable(key.prompt) { mutableStateOf("") }
+    VoiceTextField(said, { said = it }, "复述出来（说也行）", Modifier.fillMaxWidth(), minLines = 4)
+    if (s.leaves > 0) Text("收起后离开过一手 ${s.leaves} 次，会记在结果里。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+    Notes(s)
+    Button(onClick = { vm.said(said) }, enabled = said.isNotBlank(), modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("对照") }
+}
+
+/** 一个字一个字地散掉：每个字有自己的消失时刻，散到最后只剩原文的轮廓 */
+@Composable
+private fun DissolveText(text: String, progress: Float) {
+    val ink = MaterialTheme.colorScheme.onSurface
+    val annotated = androidx.compose.ui.text.buildAnnotatedString {
+        text.forEachIndexed { i, c ->
+            // 每个字的“消失点”在 0–0.6 之间散开，看起来是一片一片地淡掉
+            val seed = ((i * 7919) % 97) / 97f * 0.6f
+            val a = ((progress - seed) / 0.4f).coerceIn(0f, 1f)
+            withStyle(androidx.compose.ui.text.SpanStyle(color = ink.copy(alpha = 0.08f + 0.92f * a))) { append(c) }
+        }
+    }
+    Text(annotated, style = MaterialTheme.typography.titleMedium)
+}
+
+/** 逐字对照：对上的正常显示，漏掉的标红加下划线，多说的标灰加删除线 */
+@Composable
+private fun ReciteDiff(r: com.yishou.app.think.Recite.Result) {
+    val ink = MaterialTheme.colorScheme.onSurface
+    val miss = MaterialTheme.colorScheme.error
+    val extra = MaterialTheme.colorScheme.outline
+    val annotated = androidx.compose.ui.text.buildAnnotatedString {
+        r.pieces.forEach { p ->
+            val style = when (p.op) {
+                com.yishou.app.think.Recite.Op.SAME, com.yishou.app.think.Recite.Op.MARK -> androidx.compose.ui.text.SpanStyle(color = ink)
+                com.yishou.app.think.Recite.Op.MISS -> androidx.compose.ui.text.SpanStyle(color = miss, textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)
+                com.yishou.app.think.Recite.Op.EXTRA -> androidx.compose.ui.text.SpanStyle(color = extra, textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough)
+            }
+            withStyle(style) { append(p.text) }
+        }
+    }
+    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(annotated, style = MaterialTheme.typography.titleMedium)
+            Text("红色下划线：漏了；灰色删除线：多说或说错的。对上 ${r.matched}/${r.total} 字。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }

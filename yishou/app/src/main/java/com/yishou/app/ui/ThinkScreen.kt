@@ -137,6 +137,80 @@ class ThinkViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun selfMark(marks: List<Boolean>) = viewModelScope.launch { session.selfMark(marks) }
+
+    private val _face = MutableStateFlow(1)
+    /** 六骰子现在选的那一面 */
+    val face: StateFlow<Int> = _face.asStateFlow()
+
+    fun pickFace(n: Int) {
+        _face.value = n
+    }
+
+    /**
+     * 不用挑素材，直接练：先用你展开的那段；没有就用一段还没练过的（教练在后台备好的优先）；
+     * 一段都没有就现写一段。
+     */
+    fun beginAuto(lens: Lens) = viewModelScope.launch {
+        if (lens == Lens.ESTIMATE) {
+            session.start(null, lens)
+            return@launch
+        }
+        if (lens == Lens.ECHO) {
+            echo()
+            return@launch
+        }
+        val list = materials.value
+        val m = _opened.value?.let { id -> list.firstOrNull { it.id == id } }
+            ?: list.firstOrNull { it.uses == 0 && it.source == MaterialSource.MADE }
+            ?: list.firstOrNull { it.uses == 0 && it.source != MaterialSource.BANK }
+            ?: run {
+                _busy.value = "教练在写一段素材……"
+                when (val r = yishou.materials.make(null)) {
+                    is LlmResult.Err -> {
+                        _busy.value = r.error.message
+                        return@launch
+                    }
+                    is LlmResult.Ok -> {
+                        _busy.value = null
+                        r.value
+                    }
+                }
+            }
+        session.start(m, lens)
+        yishou.prefetchMaterials()
+    }
+
+    /** 回想：挑一段一天以前练过的素材，原文收着，说出当时的主干 */
+    private suspend fun echo() {
+        val now = System.currentTimeMillis()
+        val old = materials.value.filter { it.uses > 0 && (it.usedAt ?: now) < now - 20L * 3600 * 1000 }.minByOrNull { it.usedAt ?: 0 }
+        if (old == null) {
+            _busy.value = "还没有一天以前练过的素材。先练几段，过一天再来回想。"
+            return
+        }
+        val previous = dao.drillsFor(old.id).firstOrNull { it.lens == Lens.GIST.name || it.lens == Lens.ECHO.name }
+            ?.let { runCatching { DrillKey.fromJson(it.key) }.getOrNull() }
+        session.startEcho(old, previous)
+    }
+
+    fun recite(m: Material?, title: String, text: String, skeleton: Boolean) {
+        session.startRecite(m, title, text, skeleton)
+        if (m != null) viewModelScope.launch { dao.updateMaterial(m.copy(usedAt = System.currentTimeMillis(), uses = m.uses + 1)) }
+    }
+
+    fun hideRecite() = session.hide()
+    fun left() = session.left()
+    fun said(text: String) = viewModelScope.launch { session.recite(text) }
+    fun link(parts: List<String>) = viewModelScope.launch { session.link(parts) }
+
+    /** 到期该再背的段落 */
+    val dueRecite: StateFlow<List<com.yishou.app.think.Recite.Due>> = drills
+        .map { com.yishou.app.think.Recite.due(it, System.currentTimeMillis()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    init {
+        yishou.prefetchMaterials()
+    }
     fun retry() = viewModelScope.launch { session.retry() }
     fun answer(text: String) = viewModelScope.launch { session.answer(text) }
     fun stance(parts: Map<StanceItem, String>) = viewModelScope.launch { session.stance(parts) }
@@ -172,6 +246,9 @@ fun ThinkScreen(
     var writing by rememberSaveable { mutableStateOf(false) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(vm::photo) }
     val keys by vm.keys.collectAsStateWithLifecycle()
+    val face by vm.face.collectAsStateWithLifecycle()
+    val due by vm.dueRecite.collectAsStateWithLifecycle()
+    var reciting by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(initialMaterial, initialLens) {
         if (initialMaterial == null) return@LaunchedEffect
         vm.show(initialMaterial)
@@ -197,17 +274,19 @@ fun ThinkScreen(
         ) {
             item { Overview(drills, cards) }
             item {
-                Text(
-                    "同一段东西，换个练法。标准在你作答前就锁住；说你“说到了”，必须拿得出你的原话。",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                SixFaces(
+                    face = face,
+                    drills = drills,
+                    due = due.size,
+                    onFace = vm::pickFace,
+                    onLens = { lens ->
+                        when (lens) {
+                            Lens.RECITE -> reciting = true
+                            else -> vm.beginAuto(lens)
+                        }
+                        Unit
+                    },
                 )
-            }
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(onClick = { vm.make(null) }, modifier = Modifier.weight(1f).height(52.dp)) { Text("教练写一段") }
-                    OutlinedButton(onClick = { vm.begin(null, Lens.ESTIMATE) }, modifier = Modifier.weight(1f).height(52.dp)) { Text("估个数") }
-                }
             }
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -218,7 +297,8 @@ fun ThinkScreen(
                             ExternalGrace.open()
                             picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         }, label = { Text("照片 / 截图") })
-                        AssistChip(onClick = { writing = true }, label = { Text("自己写") })
+                            AssistChip(onClick = { writing = true }, label = { Text("自己写") })
+                        AssistChip(onClick = { vm.make(null) }, label = { Text("教练写一段") })
                     }
                     Text(
                         "在别的应用里点“分享 → 收进一手”，文章、帖子、截图都能直接进来。",
@@ -252,12 +332,32 @@ fun ThinkScreen(
                     locked = m.id in keys,
                     onLocked = { vm.beginLocked(m.id) },
                     onToggle = { vm.open(m.id) },
-                    onLens = { lens -> vm.begin(m, lens) },
+                    face = face,
+                    onLens = { lens ->
+                        when (lens) {
+                            Lens.RECITE -> {
+                                vm.show(m.id)
+                                reciting = true
+                            }
+                            else -> vm.begin(m, lens)
+                        }
+                        Unit
+                    },
                     onCards = { onCards(m.id) },
                     onDelete = { vm.delete(m) },
                 )
             }
         }
+    }
+
+    if (reciting) {
+        ReciteChooser(
+            due = due,
+            material = materials.firstOrNull { it.id == opened },
+            recent = materials.filter { it.source != MaterialSource.BANK }.take(6),
+            onPick = { m, title, text, skeleton -> reciting = false; vm.recite(m, title, text, skeleton) },
+            onDismiss = { reciting = false },
+        )
     }
 
     if (writing) {
@@ -312,6 +412,7 @@ private fun MaterialCard(
     m: Material,
     open: Boolean,
     locked: Boolean,
+    face: Int,
     onLocked: () -> Unit,
     onToggle: () -> Unit,
     onLens: (Lens) -> Unit,
@@ -342,7 +443,8 @@ private fun MaterialCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (open) {
-                val lenses = Lens.suggest(m.text)
+                // 先放现在选的那一面的练法，再放推荐的
+                val lenses = (Lens.ofFace(face).filter { it in Lens.MATERIAL_LENSES } + Lens.suggest(m.text)).distinct()
                 Text("怎么练", style = MaterialTheme.typography.labelLarge)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (locked) Button(onClick = onLocked) { Text("按题目作答（有参考要点）") }

@@ -40,6 +40,18 @@ data class DrillState(
     val disputed: Boolean = false,
     val takeaway: String = "",
     val startedAt: Long = 0,
+    /** 原文收起来了（背下来：看完之后；回想：一直收着，揭晓才给看） */
+    val hidden: Boolean = false,
+    /** 背下来：看到什么时候自动收起 */
+    val readUntil: Long = 0,
+    /** 背下来：收起后离开过一手几次 */
+    val leaves: Int = 0,
+    /** 背下来：复述时给不给骨架提示 */
+    val skeleton: Boolean = false,
+    /** 背下来：逐字对照的结果 */
+    val recite: Recite.Result? = null,
+    /** 找相似：三项回答 */
+    val linkParts: List<String> = emptyList(),
 )
 
 /**
@@ -105,14 +117,17 @@ class DrillSession(
     }
 
     private fun labels(lens: Lens, key: DrillKey): List<String> = when (lens) {
-        Lens.GIST -> listOf("主干") + key.points.drop(1).indices.map { "要点 ${it + 1}" }
+        Lens.GIST, Lens.ECHO -> listOf("主干") + key.points.drop(1).indices.map { "要点 ${it + 1}" }
+        Lens.FRAME -> key.points.indices.map { "关系 ${it + 1}" }
+        Lens.LINK -> LinkItem.entries.map { it.label }
         Lens.ESSAY -> key.points.indices.map { "要点 ${it + 1}" }
         Lens.STANCE -> StanceItem.entries.map { it.label }
         else -> key.points.indices.map { "前提 ${it + 1}" }
     }
 
     private fun pointScore(lens: Lens, key: DrillKey, checks: List<Check>, answer: String): Pair<List<Check>, Int> = when (lens) {
-        Lens.GIST -> checks to Judge.gistScore(checks)
+        Lens.GIST, Lens.ECHO -> checks to Judge.gistScore(checks)
+        Lens.FRAME, Lens.LINK -> checks to Judge.coverScore(checks)
         Lens.ESSAY -> {
             val limit = key.value?.toInt()
             val over = Judge.overLimit(answer, limit)
@@ -127,7 +142,7 @@ class DrillSession(
     suspend fun answer(text: String) {
         val s = _state.value
         val key = s.key ?: return
-        if (s.step != DrillStep.ANSWER || s.lens !in setOf(Lens.GIST, Lens.ASSUME, Lens.ESSAY)) return
+        if (s.step != DrillStep.ANSWER || s.lens !in setOf(Lens.GIST, Lens.ASSUME, Lens.ESSAY, Lens.FRAME, Lens.ECHO)) return
         Judge.tooThin(s.lens, text)?.let { thin -> _state.update { it.copy(answer = text, thin = thin) }; return }
         _state.update { it.copy(answer = text, thin = null, error = null, step = DrillStep.JUDGING) }
         when (val r = gen.judgePoints(key, text)) {
@@ -144,6 +159,86 @@ class DrillSession(
                 reveal(all, score)
             }
         }
+    }
+
+    /** 找相似：三项一起交 */
+    suspend fun link(parts: List<String>) {
+        val s = _state.value
+        val key = s.key ?: return
+        if (s.step != DrillStep.ANSWER || s.lens != Lens.LINK) return
+        val thin = LinkItem.entries.filterIndexed { i, _ -> Words.substance(parts.getOrNull(i).orEmpty()) < 4 }
+        if (thin.isNotEmpty()) {
+            _state.update { it.copy(linkParts = parts, thin = "这几项还空着或太短：" + thin.joinToString("、") { t -> t.label }) }
+            return
+        }
+        val joined = LinkItem.entries.mapIndexed { i, it -> "${it.label}：${parts[i]}" }.joinToString("\n")
+        _state.update { it.copy(linkParts = parts, answer = joined, thin = null, error = null, step = DrillStep.JUDGING) }
+        when (val r = gen.judgeRubric(key.prompt, LinkItem.entries.map { it.label to it.standard }, parts)) {
+            is LlmResult.Err -> _state.update {
+                it.copy(
+                    step = DrillStep.SELF,
+                    checks = labels(Lens.LINK, key).map { l -> Check(l, false) },
+                    error = "判卷没成功（${r.error.message}）。对着下面的标准，自己逐项打勾。",
+                )
+            }
+            is LlmResult.Ok -> {
+                val checks = LinkItem.entries.mapIndexed { i, item -> Judge.verify(item.label, r.value.getOrNull(i), parts[i]) }
+                reveal(checks, Judge.coverScore(checks))
+            }
+        }
+    }
+
+    /**
+     * 背下来：先看 [Recite.readSeconds] 秒（可以提前点“记住了”），然后原文收起来，复述，本机逐字对照。
+     * 不需要模型，没网也能练。
+     */
+    fun startRecite(material: Material?, title: String, text: String, skeleton: Boolean) {
+        val key = DrillKey(Lens.RECITE, title, listOf(text.trim()))
+        val now = clock()
+        _state.value = DrillState(
+            active = true, material = material, lens = Lens.RECITE, key = key, step = DrillStep.ANSWER,
+            startedAt = now, readUntil = now + Recite.readSeconds(text) * 1000L, skeleton = skeleton,
+        )
+    }
+
+    /** 看完了（或者时间到了）：收起原文 */
+    fun hide() {
+        if (_state.value.lens == Lens.RECITE && _state.value.step == DrillStep.ANSWER) _state.update { it.copy(hidden = true) }
+    }
+
+    /** 收起原文之后离开了一手：记一次（揭晓时会写出来） */
+    fun left() {
+        val s = _state.value
+        if (s.hidden && s.step == DrillStep.ANSWER && s.lens == Lens.RECITE) _state.update { it.copy(leaves = it.leaves + 1) }
+    }
+
+    suspend fun recite(said: String) {
+        val s = _state.value
+        val key = s.key ?: return
+        if (s.step != DrillStep.ANSWER || s.lens != Lens.RECITE || !s.hidden) return
+        if (Words.norm(said).isEmpty()) {
+            _state.update { it.copy(thin = Judge.tooThin(Lens.RECITE, said)) }
+            return
+        }
+        val r = Recite.diff(key.points.first(), said)
+        val checks = buildList {
+            add(Check("逐字对上", r.score >= 90, note = "对上 ${r.matched}/${r.total} 字" + if (r.said > r.total) "，多说了 ${r.said - r.matched} 字" else ""))
+            if (s.skeleton) add(Check("看着骨架背的", false, note = "下次试试不看骨架"))
+            if (s.leaves > 0) add(Check("收起后没离开", false, note = "离开过 ${s.leaves} 次"))
+        }
+        _state.update { it.copy(answer = said, recite = r) }
+        reveal(checks, r.score)
+    }
+
+    /** 回想：拿一段以前练过的素材，原文收着，说出当时的主干；答案用以前锁过的，没有就现锁 */
+    suspend fun startEcho(material: Material, previous: DrillKey?) {
+        _state.value = DrillState(active = true, material = material, lens = Lens.ECHO, hidden = true, startedAt = clock())
+        if (previous != null) {
+            _state.update { it.copy(key = previous.copy(lens = Lens.ECHO, prompt = Lens.ECHO.ask), step = DrillStep.ANSWER) }
+        } else {
+            lock()
+        }
+        dao.updateMaterial(material.copy(usedAt = clock(), uses = material.uses + 1))
     }
 
     /** 自己对照：marks[i] 表示第 i 条你说到了 */
@@ -254,7 +349,7 @@ class DrillSession(
     }
 
     private suspend fun reveal(checks: List<Check>, score: Int) {
-        _state.update { it.copy(checks = checks, score = score, step = DrillStep.REVEAL, thin = null, error = null) }
+        _state.update { it.copy(checks = checks, score = score, step = DrillStep.REVEAL, thin = null, error = null, hidden = false) }
         save()
     }
 
@@ -306,9 +401,15 @@ class DrillSession(
 /** 各练法最近的成绩（不算有异议的、押后果的） */
 object DrillStats {
 
+    /** 六骰子每一面最近的平均分（这一面下所有练法合起来，最近 10 次） */
+    fun face(rows: List<DrillRow>, face: Int): Int? {
+        val xs = rows.filter { r -> Lens.of(r.lens)?.face == face && !r.disputed && r.score >= 0 }.takeLast(10)
+        return if (xs.isEmpty()) null else xs.sumOf { it.score } / xs.size
+    }
+
     data class Line(val lens: Lens, val n: Int, val avg: Int?)
 
-    fun lines(rows: List<DrillRow>): List<Line> = Lens.entries.filter { it != Lens.PREDICT && (it != Lens.ESSAY || rows.any { r -> r.lens == it.name }) }.map { lens ->
+    fun lines(rows: List<DrillRow>): List<Line> = Lens.entries.filter { it != Lens.PREDICT && (it in Lens.MATERIAL_LENSES || rows.any { r -> r.lens == it.name }) }.map { lens ->
         val xs = rows.filter { it.lens == lens.name && !it.disputed && it.score >= 0 }.takeLast(10)
         Line(lens, rows.count { it.lens == lens.name }, if (xs.isEmpty()) null else xs.sumOf { it.score } / xs.size)
     }

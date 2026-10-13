@@ -76,6 +76,8 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val bankLeft: StateFlow<Int> = yishou.database.cards().observeBank().map { xs -> xs.count { it.usedAt == null } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+    val outside: StateFlow<List<com.yishou.app.data.Outside>> = yishou.database.jobs().observeOutsideSince(dayStart)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val jobs: StateFlow<List<Job>> = yishou.database.jobs().observeJobs()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -116,9 +118,13 @@ fun HomeScreen(
     val steps by vm.steps.collectAsStateWithLifecycle()
     val bankLeft by vm.bankLeft.collectAsStateWithLifecycle()
     val jobs by vm.jobs.collectAsStateWithLifecycle()
+    val outside by vm.outside.collectAsStateWithLifecycle()
     val prefs by app.settings.app.collectAsStateWithLifecycle()
     val llm by app.settings.llm.collectAsStateWithLifecycle()
-    val marks = remember(cards, drills, deeds, steps) { todayMarks(cards, drills, deeds, steps, vm.start) }
+    val marks = remember(cards, drills, deeds, steps, outside) {
+        todayMarks(cards, drills, deeds, steps.filter { st -> outside.none { it.jobId == st.jobId } }, vm.start) +
+            outside.map { o -> WheelMark(o.createdAt, MarkKind.CARD, o.correct == null || o.correct * 10 >= o.questions * 6) }
+    }
     val tide = remember { TideState() }
     val tideHeight = 240.dp
 
@@ -170,7 +176,7 @@ fun HomeScreen(
             val running = jobs.count { it.finishedAt == null }
             Entry(
                 title = "练功底",
-                sub = if (bankLeft > 0) "题库里还有 $bankLeft 道没做 · 行测 · 申论" else "导入真题：GPT / Gemini / 粉笔",
+                sub = if (bankLeft > 0) "题库里还有 $bankLeft 道没做 · 去粉笔刷一组也算" else "导入题库文件，或者去粉笔刷一组",
                 accent = MaterialTheme.colorScheme.onBackground,
                 onClick = onBank,
                 modifier = Modifier.fillMaxWidth(),
@@ -178,7 +184,7 @@ fun HomeScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Entry(
                     title = "练思维",
-                    sub = "任何素材都能练：抓主干 · 挖前提 · 站立场",
+                    sub = "六面：精简 · 预判 · 联想 · 提问 · 体系 · 回响",
                     accent = MaterialTheme.colorScheme.tertiary,
                     onClick = onThink,
                     modifier = Modifier.weight(1f),

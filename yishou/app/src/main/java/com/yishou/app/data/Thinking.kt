@@ -36,6 +36,8 @@ object MaterialSource {
     const val TYPED = "typed"
     /** 题包导入的申论题 */
     const val BANK = "bank"
+    /** 一手自带的（背诵用的古诗文） */
+    const val BUILTIN = "builtin"
 
     fun label(s: String) = when (s) {
         SHARE -> "分享来的"
@@ -126,6 +128,9 @@ abstract class ThinkDao {
 
     @Query("SELECT * FROM material_key")
     abstract fun observeKeys(): Flow<List<MaterialKey>>
+
+    @Query("SELECT * FROM drill WHERE materialId = :id ORDER BY createdAt DESC")
+    abstract suspend fun drillsFor(id: Long): List<DrillRow>
 
     @Query("SELECT * FROM material ORDER BY createdAt DESC LIMIT :n")
     abstract suspend fun recentMaterials(n: Int): List<Material>

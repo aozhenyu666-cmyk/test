@@ -94,7 +94,7 @@ class JobsViewModel(app: Application) : AndroidViewModel(app) {
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun JobsScreen(onBack: () -> Unit, onOpen: (Long) -> Unit, onTools: () -> Unit, vm: JobsViewModel = viewModel()) {
+fun JobsScreen(onBack: () -> Unit, onOpen: (Long) -> Unit, onTools: () -> Unit, onDrill: () -> Unit, vm: JobsViewModel = viewModel()) {
     val jobs by vm.jobs.collectAsStateWithLifecycle()
     val steps by vm.steps.collectAsStateWithLifecycle()
     var title by rememberSaveable { mutableStateOf("") }
@@ -171,7 +171,10 @@ fun JobsScreen(onBack: () -> Unit, onOpen: (Long) -> Unit, onTools: () -> Unit, 
                 items(done, key = { it.id }) { j -> JobRow(j, steps[j.id].orEmpty(), onClick = { onOpen(j.id) }) }
             }
             item {
-                TextButton(onClick = onTools) { Text("小工具：估个数再对照、比一比价 →") }
+                Column {
+                    TextButton(onClick = onDrill) { Text("去粉笔这类 App 刷一组题，回来记练习报告 →") }
+                    TextButton(onClick = onTools) { Text("小工具：估个数再对照、比一比价 →") }
+                }
             }
         }
     }
@@ -248,6 +251,72 @@ class JobViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun reopen(j: Job) = viewModelScope.launch { dao.updateJob(j.copy(finishedAt = null)) }
+
+    /** 改计划：还没开始的步换成新写的这几行（正在做的那一步不动） */
+    fun replan(jobId: Long, text: String) = viewModelScope.launch {
+        val all = dao.steps(jobId)
+        all.filter { it.doneAt == null && it.startedAt == null }.forEach { dao.deleteStep(it.id) }
+        val keep = dao.steps(jobId)
+        val base = (keep.maxOfOrNull { it.idx } ?: -1) + 1
+        val lines = Jobs.plan(JobMode.LIST, "", text)
+        dao.insertSteps(lines.mapIndexed { i, t -> JobStep(jobId = jobId, idx = base + i, text = t, startedAt = if (keep.none { it.doneAt == null } && i == 0) System.currentTimeMillis() else null) })
+    }
+
+    private val _report = MutableStateFlow<com.yishou.app.outside.Report?>(null)
+    /** 刷题 App 的练习报告读出来的东西（等你确认） */
+    val report: StateFlow<com.yishou.app.outside.Report?> = _report
+    private val _busy = MutableStateFlow<String?>(null)
+    val busy: StateFlow<String?> = _busy
+
+    fun readReport(uri: android.net.Uri) = viewModelScope.launch {
+        if (!yishou.settings.vision.value.isComplete) {
+            _busy.value = "还没配识图模型：直接手填下面几个数就行。"
+            _report.value = com.yishou.app.outside.Report("", null, null, null)
+            return@launch
+        }
+        _busy.value = "正在读练习报告……"
+        val data = try {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.yishou.app.system.ImageEncoder.toDataUrl(yishou, uri) }
+        } catch (e: Exception) {
+            _busy.value = "读不了这张图：${e.message}"
+            return@launch
+        }
+        when (val r = yishou.vision.readReport(data)) {
+            is com.yishou.app.llm.LlmResult.Err -> {
+                _busy.value = "没读出来（${r.error.message}），手填也行。"
+                _report.value = com.yishou.app.outside.Report("", null, null, null)
+            }
+            is com.yishou.app.llm.LlmResult.Ok -> {
+                _busy.value = null
+                _report.value = r.value
+            }
+        }
+    }
+
+    fun manualReport() {
+        _report.value = com.yishou.app.outside.Report("", null, null, null)
+    }
+
+    /** 确认练习报告：记一条刷题记录，这一步做成，这件事收起 */
+    fun saveReport(j: Job, step: JobStep, subject: String, questions: Int, correct: Int?, seconds: Int?) = viewModelScope.launch {
+        val now = System.currentTimeMillis()
+        val name = j.title.substringBefore("：")
+        yishou.database.jobs().insertOutside(
+            com.yishou.app.data.Outside(
+                app = name, subject = subject, questions = questions, correct = correct,
+                seconds = seconds ?: step.startedAt?.let { ((now - it) / 1000).toInt() }, createdAt = now, startedAt = step.startedAt, jobId = j.id,
+            ),
+        )
+        val note = buildList {
+            add("$questions 题")
+            correct?.let { add("对 $it（${it * 100 / maxOf(questions, 1)}%）") }
+            seconds?.let { add("用时 ${Jobs.showDuration(it * 1000L)}") }
+        }.joinToString("，")
+        dao.updateStep(step.copy(startedAt = step.startedAt ?: now, doneAt = now, result = StepResult.OK, note = note))
+        dao.updateJob(j.copy(finishedAt = now))
+        _report.value = null
+        _busy.value = null
+    }
 }
 
 /** 一件事的流程页：轨道上是还没轮到的步，太阳是现在这一步，做完的连成星座。 */
@@ -324,6 +393,7 @@ private fun CurrentStep(j: Job, steps: List<JobStep>, vm: JobViewModel, onClose:
     val cur = Jobs.current(steps)
     var note by rememberSaveable(cur?.id) { mutableStateOf("") }
     var next by rememberSaveable(steps.size) { mutableStateOf("") }
+    var replanning by remember { mutableStateOf(false) }
     Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(20.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (cur == null) {
@@ -343,6 +413,10 @@ private fun CurrentStep(j: Job, steps: List<JobStep>, vm: JobViewModel, onClose:
                 return@Column
             }
             Ticker(started, perStep = j.estimateMinutes?.let { it * 60_000L / maxOf(steps.size, 1) })
+            if (j.mode == JobMode.APP) {
+                AppStep(j, cur, vm)
+                return@Column
+            }
             VoiceTextField(note, { note = it }, "这一步记一句（可不填）：错在哪、卡在哪、发现了什么", Modifier.fillMaxWidth())
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { vm.finish(cur, StepResult.OK, note) }, modifier = Modifier.weight(1f)) { Text("做成了") }
@@ -358,9 +432,79 @@ private fun CurrentStep(j: Job, steps: List<JobStep>, vm: JobViewModel, onClose:
                     TextButton(onClick = { vm.add(j.id, next); next = "" }, enabled = next.isNotBlank()) { Text("加上") }
                 }
             }
-            TextButton(onClick = onClose) { Text("提前收起这件事") }
+            Row {
+                if (steps.count { it.doneAt == null && it.startedAt == null } > 0 || j.mode != JobMode.COUNT) {
+                    TextButton(onClick = { replanning = true }) { Text("改计划") }
+                }
+                TextButton(onClick = onClose) { Text("提前收起这件事") }
+            }
         }
     }
+    if (replanning) {
+        var text by rememberSaveable { mutableStateOf(steps.filter { it.doneAt == null && it.startedAt == null }.sortedBy { it.idx }.joinToString("\n") { it.text }) }
+        AlertDialog(
+            onDismissRequest = { replanning = false },
+            title = { Text("改计划") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("后面还没开始的步，一行一步。正在做的这一步不动。", style = MaterialTheme.typography.bodySmall)
+                    VoiceTextField(text, { text = it }, "接下来的几步", Modifier.fillMaxWidth(), minLines = 4)
+                }
+            },
+            confirmButton = { TextButton(onClick = { replanning = false; vm.replan(j.id, text) }) { Text("就这样") } },
+            dismissButton = { TextButton(onClick = { replanning = false }) { Text("不改了") } },
+        )
+    }
+}
+
+/** 去刷题 App 做的那一步：回那边接着做；做完截练习报告，读出来确认后记下 */
+@Composable
+private fun AppStep(j: Job, step: JobStep, vm: JobViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val report by vm.report.collectAsStateWithLifecycle()
+    val busy by vm.busy.collectAsStateWithLifecycle()
+    val name = j.title.substringBefore("：")
+    val target = j.app
+    val picker = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let(vm::readReport)
+    }
+    if (target != null) {
+        OutlinedButton(onClick = {
+            val app = if (target.startsWith("http")) com.yishou.app.outside.AiApp(name, null, target) else com.yishou.app.outside.AiApp(name, target, null)
+            Launch.open(context, app)
+        }, modifier = Modifier.fillMaxWidth()) { Text("回到$name 接着做") }
+    }
+    busy?.let { if (it.endsWith("……")) VortexLoader(it) else Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary) }
+    val r = report
+    if (r == null) {
+        Text("做完了？在$name 的练习报告页截一张图（题数、正确率、用时都在上面），选它。", style = MaterialTheme.typography.bodyMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {
+                com.yishou.app.system.ExternalGrace.open()
+                picker.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly))
+            }, modifier = Modifier.weight(1f)) { Text("选练习报告截图") }
+            OutlinedButton(onClick = vm::manualReport, modifier = Modifier.weight(1f)) { Text("手填") }
+        }
+        return
+    }
+    val defaultCount = Regex("(\\d+)\\s*题").find(j.title)?.groupValues?.get(1).orEmpty()
+    var subject by rememberSaveable(r) { mutableStateOf(r.subject.ifEmpty { j.title.substringAfter("：").substringBeforeLast(" ").trim() }) }
+    var qs by rememberSaveable(r) { mutableStateOf(r.questions?.toString() ?: defaultCount) }
+    var right by rememberSaveable(r) { mutableStateOf(r.correct?.toString().orEmpty()) }
+    var time by rememberSaveable(r) { mutableStateOf(r.seconds?.let { Jobs.showDuration(it * 1000L) }.orEmpty()) }
+    Text("核对一下读出来的数，不对就改：", style = MaterialTheme.typography.labelLarge)
+    OutlinedTextField(subject, { subject = it }, label = { Text("科目 / 题型") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(qs, { qs = it.filter(Char::isDigit) }, label = { Text("题数") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f))
+        OutlinedTextField(right, { right = it.filter(Char::isDigit) }, label = { Text("做对") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f))
+    }
+    OutlinedTextField(time, { time = it }, label = { Text("用时（如 18分30秒，不填就按一手记的）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    val q = qs.toIntOrNull()
+    Button(
+        onClick = { if (q != null) vm.saveReport(j, step, subject.trim(), q, right.toIntOrNull()?.coerceAtMost(q), com.yishou.app.outside.Outsides.seconds(time)) },
+        enabled = q != null && q > 0,
+        modifier = Modifier.fillMaxWidth().height(52.dp),
+    ) { Text("记下这一组") }
 }
 
 /** 这一步用了多久；有估计时显示每步大约该用多久 */

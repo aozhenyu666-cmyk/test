@@ -235,14 +235,22 @@ fun SettingsScreen(
             OutlinedTextField(
                 value = links,
                 onValueChange = { links = it },
-                label = { Text("出题链接（每行：名字 网址）") },
+                label = { Text("出题用的 AI（每行：名字 包名 网址）") },
                 minLines = 3,
                 modifier = Modifier.fillMaxWidth(),
             )
-            if (links != prefs.bankLinks) {
-                TextButton(onClick = { vm.update { it.copy(bankLinks = links) } }) { Text("保存链接") }
+            var drillApps by remember(prefs.drillApps) { mutableStateOf(prefs.drillApps) }
+            OutlinedTextField(
+                value = drillApps,
+                onValueChange = { drillApps = it },
+                label = { Text("刷题 App（每行：名字 包名 网址）") },
+                minLines = 1,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (links != prefs.bankLinks || drillApps != prefs.drillApps) {
+                TextButton(onClick = { vm.update { it.copy(bankLinks = links, drillApps = drillApps) } }) { Text("保存") }
             }
-            Text("题库页“去出题”会列出这些链接：点一下复制出题要求并打开它。", style = MaterialTheme.typography.bodySmall)
+            Text("装了 App 就直接打开 App（出题要求会直接发进去）；没装就打开网址。包名不知道可以只写网址。", style = MaterialTheme.typography.bodySmall)
 
             HorizontalDivider()
             SectionTitle("时区")

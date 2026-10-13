@@ -26,6 +26,8 @@ data class Job(
     val finishedAt: Long? = null,
     /** 做完时收口的一句 */
     val takeaway: String = "",
+    /** 去别的 App 做的事（粉笔刷题）：那个 App 的包名 */
+    val app: String? = null,
 )
 
 object JobMode {
@@ -35,6 +37,8 @@ object JobMode {
     const val LIST = "list"
     /** 走一步看一步 */
     const val OPEN = "open"
+    /** 去别的 App 做（粉笔刷题），回来截练习报告 */
+    const val APP = "app"
 }
 
 @Entity(tableName = "job_step", indices = [Index("jobId")])
@@ -109,4 +113,16 @@ abstract class JobDao {
 
     @Query("SELECT * FROM job_step")
     abstract fun observeAllSteps(): Flow<List<JobStep>>
+
+    @Query("DELETE FROM job_step WHERE id = :id")
+    abstract suspend fun deleteStep(id: Long)
+
+    @Insert
+    abstract suspend fun insertOutside(o: Outside): Long
+
+    @Query("SELECT * FROM outside ORDER BY createdAt DESC LIMIT 200")
+    abstract fun observeOutside(): Flow<List<Outside>>
+
+    @Query("SELECT * FROM outside WHERE createdAt >= :since ORDER BY createdAt")
+    abstract fun observeOutsideSince(since: Long): Flow<List<Outside>>
 }

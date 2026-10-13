@@ -11,18 +11,32 @@ import kotlin.math.max
  * 每种练法都是同一个骨架——锚（一段素材、一个问题）→ 押（你先说）→ 照（对照事先锁住的答案或现实）→ 收（一句话，结束）。
  * 判卷的标准在你作答之前就定好；模型说你“说到了”，必须拿得出你的原话。
  */
-enum class Lens(val label: String, val short: String, val ask: String, val minSubstance: Int) {
-    GIST("抓主干", "一句话说它到底在说什么", "用一句话说出这段的主干：它最想让人相信什么？", 8),
-    ASSUME("挖前提", "说出它没写、但必须成立的那一条", "要让这个结论成立，必须有哪条它没写出来的前提？", 6),
-    STANCE("站立场", "站一边，给理由，替对方说话，说清什么时候改主意", "你站哪一边？", 0),
-    ESTIMATE("估个数", "给一个你有九成把握的区间", "先别查，给一个你有九成把握的区间：", 0),
-    PREDICT("押后果", "押一个过几天能核对的判断", "这件事接下来会怎样？押一个过几天能核对的判断。", 6),
+enum class Lens(val label: String, val short: String, val ask: String, val minSubstance: Int, val face: Int) {
+    GIST("抓主干", "一句话说它到底在说什么", "用一句话说出这段的主干：它最想让人相信什么？", 8, 1),
+    /** 精简记忆：看一会儿，一手把原文收起来，你复述，本机逐字对照 */
+    RECITE("背下来", "看一会儿，原文收起，复述出来", "原文已经收起来了。把它复述出来：", 2, 1),
+    PREDICT("押后果", "押一个过几天能核对的判断", "这件事接下来会怎样？押一个过几天能核对的判断。", 6, 2),
+    ESTIMATE("估个数", "给一个你有九成把握的区间", "先别查，给一个你有九成把握的区间：", 0, 2),
+    /** 联想：这像什么、相同在哪、不同在哪 */
+    LINK("找相似", "它像什么？相同在哪，不同在哪", "它像你见过的什么？", 0, 3),
+    ASSUME("挖前提", "说出它没写、但必须成立的那一条", "要让这个结论成立，必须有哪条它没写出来的前提？", 6, 4),
+    STANCE("站立场", "站一边，给理由，替对方说话，说清什么时候改主意", "你站哪一边？", 0, 4),
+    /** 体系：用几个概念和它们的关系给这段内容定位 */
+    FRAME("搭关系", "用几个概念和它们之间的关系，把这段搭起来", "这段里最重要的几个概念，彼此是什么关系？一行写一条：A 和 B——什么关系。", 8, 5),
+    /** 回响：隔了几天，不看原文，说出当时那段的主干 */
+    ECHO("回想", "不看原文，说出以前练过的一段讲了什么", "不看原文：这段当时讲的是什么？主干和要点尽量说全。", 8, 6),
     /** 题库里的申论题：参考要点导入时就锁住，按采分点给分 */
-    ESSAY("申论作答", "对着题目写，按参考要点的采分点给分", "按题目要求作答：", 10),
+    ESSAY("申论作答", "对着题目写，按参考要点的采分点给分", "按题目要求作答：", 10, 1),
     ;
 
     companion object {
         fun of(name: String?): Lens? = entries.firstOrNull { it.name == name }
+
+        /** 拿一段素材就能练的（申论、回想要特定的题或旧素材，不在里面） */
+        val MATERIAL_LENSES = listOf(GIST, RECITE, PREDICT, ESTIMATE, LINK, ASSUME, STANCE, FRAME)
+
+        /** 六骰子每一面下面的练法 */
+        fun ofFace(face: Int): List<Lens> = entries.filter { it.face == face && it != ESSAY }
 
         /** 本机粗看一眼素材，排一下哪几种练法最合适（第一个是推荐） */
         fun suggest(text: String): List<Lens> {
@@ -37,9 +51,16 @@ enum class Lens(val label: String, val short: String, val ask: String, val minSu
                 digits >= 4 -> ESTIMATE
                 else -> GIST
             }
-            return listOf(first) + entries.filter { it != first && it != ESSAY }
+            return listOf(first) + MATERIAL_LENSES.filter { it != first }
         }
     }
+}
+
+/** 找相似（联想）的三项 */
+enum class LinkItem(val label: String, val hint: String, val standard: String) {
+    LIKE("像什么", "它像……（另一个领域里的具体例子）", "一个具体的、来自别的领域或生活里的例子；同一件事换个说法不算"),
+    SAME("相同在哪", "相同在……（背后同一个机制或结构）", "说出两者背后相同的机制、结构或因果，不是表面相似（都很重要、都是问题不算）"),
+    DIFF("不同在哪", "不同在……（哪里不能照搬）", "说出一处会让类比失效、不能照搬的具体差别"),
 }
 
 /** 站立场的四项，各填各的 */
@@ -127,6 +148,20 @@ data class DrillKey(
                 DrillKey(lens, q, value = v, unit = o.text("unit"), method = o.text("method"), explain = o.text("explain"))
             }
             Lens.PREDICT -> DrillKey(lens, o.text("question").ifEmpty { Lens.PREDICT.ask })
+            Lens.ECHO -> {
+                val main = o.text("main").ifEmpty { throw BadKey("缺 main") }
+                DrillKey(lens, Lens.ECHO.ask, listOf(main) + o.list("points").take(3), explain = o.text("explain"))
+            }
+            Lens.LINK -> {
+                val target = o.text("target").ifEmpty { o.text("question") }.ifEmpty { throw BadKey("缺 target") }
+                DrillKey(lens, target, o.list("points").take(3), explain = o.text("explain"))
+            }
+            Lens.FRAME -> {
+                val rel = o.list("points").take(6)
+                if (rel.size < 2) throw BadKey("关系太少")
+                DrillKey(lens, o.text("topic").ifEmpty { Lens.FRAME.ask }, rel, explain = o.text("explain"))
+            }
+            Lens.RECITE -> DrillKey(lens, o.text("title").ifEmpty { "一段" }, listOf(o.text("text").ifEmpty { throw BadKey("缺 text") }))
             Lens.ESSAY -> {
                 val q = o.text("question").ifEmpty { throw BadKey("缺 question") }
                 val pts = o.list("points")
@@ -192,6 +227,9 @@ object Judge {
     /** 题目要求的字数（去掉空白标点后数） */
     fun overLimit(answer: String, limit: Int?): Boolean = limit != null && Words.norm(answer).length > limit
 
+    /** 说中几条占几成（体系的关系、申论的要点） */
+    fun coverScore(checks: List<Check>): Int = if (checks.isEmpty()) 0 else 100 * checks.count { it.ok } / checks.size
+
     /** 挖前提：说中任意一条认可的前提就算 */
     fun assumeScore(checks: List<Check>): Int = if (checks.any { it.ok }) 100 else 0
 
@@ -207,6 +245,9 @@ object Judge {
             Lens.ASSUME -> "太短了。说一句完整的话：“它默认了……”。"
             Lens.PREDICT -> "说具体一点：什么事，到什么时候，会怎样。"
             Lens.ESSAY -> "太短了，按题目要求把要点写出来。"
+            Lens.FRAME -> "至少写两条：A 和 B——什么关系。"
+            Lens.ECHO -> "想到多少写多少，至少一句完整的话。"
+            Lens.RECITE -> "还什么都没写。"
             else -> "说具体一点。"
         }
     }

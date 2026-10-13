@@ -1,9 +1,6 @@
 package com.yishou.app.ui
 
 import android.app.Application
-import android.content.ActivityNotFoundException
-import android.content.Intent
-import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -73,8 +70,34 @@ class BankViewModel(app: Application) : AndroidViewModel(app) {
     val materials: StateFlow<List<Material>> = yishou.database.think().observeMaterials()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    val outside: StateFlow<List<com.yishou.app.data.Outside>> = yishou.database.jobs().observeOutsideSince(System.currentTimeMillis() - 30L * 86_400_000)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
+    private val _progress = MutableStateFlow<String?>(null)
+    /** 导入文件时的进度 */
+    val progress: StateFlow<String?> = _progress.asStateFlow()
+    private val _results = MutableStateFlow<List<com.yishou.app.system.FileImport.FileResult>>(emptyList())
+    val results: StateFlow<List<com.yishou.app.system.FileImport.FileResult>> = _results.asStateFlow()
+
+    fun importFiles(uris: List<android.net.Uri>) = viewModelScope.launch {
+        if (uris.isEmpty()) return@launch
+        _results.value = emptyList()
+        _progress.value = "准备读 ${uris.size} 个文件……"
+        _results.value = yishou.fileImport.importAll(uris) { _progress.value = it }
+        _progress.value = null
+    }
+
+    /** 去刷题 App 做一组：开一件“做事”（一步：在那边做完），回来截练习报告 */
+    fun startOutside(app: com.yishou.app.outside.AiApp, subject: String, count: Int, onJob: (Long) -> Unit) = viewModelScope.launch {
+        val dao = yishou.database.jobs()
+        val now = System.currentTimeMillis()
+        val title = "${app.name}：$subject $count 题"
+        val id = dao.insertJob(com.yishou.app.data.Job(title = title, mode = com.yishou.app.data.JobMode.APP, estimateMinutes = null, createdAt = now, app = app.pkg ?: app.url))
+        dao.insertStep(com.yishou.app.data.JobStep(jobId = id, idx = 0, text = "在${app.name}里做 $count 道$subject", startedAt = now))
+        onJob(id)
+    }
 
     fun import(text: String?) = viewModelScope.launch {
         if (text.isNullOrBlank()) {
@@ -96,7 +119,7 @@ class BankViewModel(app: Application) : AndroidViewModel(app) {
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun BankScreen(onBack: () -> Unit, onPractice: () -> Unit, onEssay: (Long) -> Unit, vm: BankViewModel = viewModel()) {
+fun BankScreen(onBack: () -> Unit, onPractice: () -> Unit, onEssay: (Long) -> Unit, onJob: (Long) -> Unit, vm: BankViewModel = viewModel()) {
     val context = LocalContext.current
     val app = context.applicationContext as YishouApp
     val clipboard = LocalClipboardManager.current
@@ -105,6 +128,14 @@ fun BankScreen(onBack: () -> Unit, onPractice: () -> Unit, onEssay: (Long) -> Un
     val keys by vm.keys.collectAsStateWithLifecycle()
     val materials by vm.materials.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
+    val progress by vm.progress.collectAsStateWithLifecycle()
+    val results by vm.results.collectAsStateWithLifecycle()
+    val outside by vm.outside.collectAsStateWithLifecycle()
+    val files = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        vm.importFiles(uris)
+    }
+    var drillSubject by rememberSaveable { mutableStateOf("资料分析") }
+    var drillCount by rememberSaveable { mutableIntStateOf(20) }
     val prefs by app.settings.app.collectAsStateWithLifecycle()
     var type by rememberSaveable { mutableStateOf(BankPrompt.TYPES.first()) }
     var count by rememberSaveable { mutableIntStateOf(10) }
@@ -153,7 +184,7 @@ fun BankScreen(onBack: () -> Unit, onPractice: () -> Unit, onEssay: (Long) -> Un
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("去出题", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "挑好题型，点下面的链接：出题要求会复制到剪贴板，到那边粘贴发送。出完后长按回答 → 复制，回来点“粘贴题包”；或者直接 分享 → 收进一手。",
+                            "挑好题型，点一个 AI：装了 App 就直接把出题要求发进去（没装就开网页）。那边出完后，长按回答 → 分享 → 收进一手；或者复制，回来点“粘贴题包”。",
                             style = MaterialTheme.typography.bodySmall,
                         )
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -167,17 +198,11 @@ fun BankScreen(onBack: () -> Unit, onPractice: () -> Unit, onEssay: (Long) -> Un
                         }
                         val n = if (BankPrompt.isEssay(type)) minOf(count, 3) else count
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            BankPrompt.links(prefs.bankLinks).forEach { (name, url) ->
+                            com.yishou.app.outside.AiApps.parse(prefs.bankLinks).forEach { a ->
+                                val has = Launch.installed(context, a.pkg)
                                 OutlinedButton(onClick = {
-                                    clipboard.setText(AnnotatedString(BankPrompt.build(type, n, level)))
-                                    ExternalGrace.open()
-                                    try {
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                                        Toast.makeText(context, "出题要求已复制，到 $name 里粘贴发送", Toast.LENGTH_LONG).show()
-                                    } catch (e: ActivityNotFoundException) {
-                                        Toast.makeText(context, "打不开 $url", Toast.LENGTH_SHORT).show()
-                                    }
-                                }) { Text(name) }
+                                    Toast.makeText(context, Launch.sendPrompt(context, a, BankPrompt.build(type, n, level)), Toast.LENGTH_LONG).show()
+                                }) { Text(if (has) a.name else "${a.name}（网页）") }
                             }
                             TextButton(onClick = {
                                 clipboard.setText(AnnotatedString(BankPrompt.build(type, n, level)))
@@ -187,13 +212,31 @@ fun BankScreen(onBack: () -> Unit, onPractice: () -> Unit, onEssay: (Long) -> Un
                         if (BankPrompt.isEssay(type)) {
                             Text("申论一次出 1–3 道就好，材料长。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        Text("链接可以在 设置 → 题库 里改成你常用的。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("列表可以在 设置 → 题库 里改成你常用的。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Button(onClick = { vm.import(clipboard.getText()?.text) }, modifier = Modifier.fillMaxWidth()) { Text("粘贴题包") }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(onClick = { vm.import(clipboard.getText()?.text) }, modifier = Modifier.weight(1f)) { Text("粘贴题包") }
+                        OutlinedButton(
+                            onClick = {
+                                ExternalGrace.open()
+                                files.launch(arrayOf("text/*", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword", "application/pdf", "image/*"))
+                            },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("导入文件") }
+                    }
+                    Text(
+                        "文件可以一次选很多个：Word（.docx）、txt 本机直接拆；PDF、图片要识图模型一页页读。文末集中给答案的（“参考答案 1-5 BCADA”）也认。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    progress?.let { VortexLoader(it) }
+                    results.forEach { r ->
+                        Text("${if (r.ok) "✓" else "✗"} ${r.name}：${r.line}", style = MaterialTheme.typography.bodySmall, color = if (r.ok) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error)
+                    }
                     Text(
                         "认【题目】【材料】A–D【答案】【依据】【解析】【要点】；粉笔、真题册里复制的“1. … A. … 答案：B”也认。",
                         style = MaterialTheme.typography.labelSmall,
@@ -202,6 +245,37 @@ fun BankScreen(onBack: () -> Unit, onPractice: () -> Unit, onEssay: (Long) -> Un
                     message?.let {
                         Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.tertiary)
                         TextButton(onClick = vm::dismiss) { Text("知道了") }
+                    }
+                }
+            }
+            item {
+                val apps = com.yishou.app.outside.AiApps.parse(prefs.drillApps)
+                Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(18.dp), tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("去刷题 App 做一组", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "在粉笔这类 App 里做，做完截一张练习报告（题数、正确率、用时），回来交给一手记下。一手只看你给的截图。",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(com.yishou.app.outside.Outsides.line(com.yishou.app.outside.Outsides.summary(outside)), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.tertiary)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("言语理解", "判断推理", "数量关系", "资料分析", "常识判断", "申论").forEach { t ->
+                                FilterChip(selected = drillSubject == t, onClick = { drillSubject = t }, label = { Text(t) })
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf(10, 20, 40).forEach { c -> FilterChip(selected = drillCount == c, onClick = { drillCount = c }, label = { Text("$c 题") }) }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            apps.forEach { a ->
+                                Button(onClick = {
+                                    vm.startOutside(a, drillSubject, drillCount) { id ->
+                                        onJob(id)
+                                        if (!Launch.open(context, a)) Toast.makeText(context, "打不开 ${a.name}，在设置里检查包名", Toast.LENGTH_SHORT).show()
+                                    }
+                                }) { Text("去${a.name}") }
+                            }
+                        }
                     }
                 }
             }

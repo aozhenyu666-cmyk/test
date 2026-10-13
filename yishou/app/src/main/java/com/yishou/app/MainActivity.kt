@@ -113,6 +113,7 @@ class MainActivity : ComponentActivity() {
                             onBack = { nav.navigateUp() },
                             onPractice = { nav.navigate("cards") },
                             onEssay = { id -> nav.navigate("think?m=$id&lens=ESSAY") },
+                            onJob = { id -> nav.navigate("job/$id") },
                         )
                     }
                     composable("jobs") {
@@ -120,6 +121,7 @@ class MainActivity : ComponentActivity() {
                             onBack = { nav.navigateUp() },
                             onOpen = { id -> nav.navigate("job/$id") },
                             onTools = { nav.navigate("deeds") },
+                            onDrill = { nav.navigate("bank") },
                         )
                     }
                     composable(

@@ -77,12 +77,16 @@ class ChatClient(
     private val onError: ((kind: String, message: String) -> Unit)? = null,
 ) {
 
-    suspend fun complete(system: String, user: String, kind: String = "其他"): LlmResult<String> {
+    /**
+     * json 为 false 时不要求 JSON 返回（出题、写素材用带标签的纯文本，不怕格式对不上）；
+     * 为 null 时按设置里的“JSON 模式”。
+     */
+    suspend fun complete(system: String, user: String, kind: String = "其他", json: Boolean? = null): LlmResult<String> {
         val cfg = config()
         val messages = JSONArray()
             .put(JSONObject().put("role", "system").put("content", system))
             .put(JSONObject().put("role", "user").put("content", user))
-        return send(cfg, messages, cfg.jsonMode, kind, system.length + user.length)
+        return send(cfg, messages, json ?: cfg.jsonMode, kind, system.length + user.length)
     }
 
     /**

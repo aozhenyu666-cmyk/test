@@ -85,6 +85,13 @@ class Vision(private val chat: ChatClient) {
         }
     }
 
+    /** 刷题 App 的练习报告：按标签读出科目、题数、做对、用时 */
+    suspend fun readReport(imageDataUrl: String): LlmResult<com.yishou.app.outside.Report> =
+        when (val r = chat.completeWithImage(com.yishou.app.outside.Outsides.PROMPT, "读这张练习报告。", imageDataUrl, "报告识图")) {
+            is LlmResult.Err -> r
+            is LlmResult.Ok -> LlmResult.Ok(com.yishou.app.outside.Outsides.parse(r.value))
+        }
+
     companion object {
         /** 转写太长时截断，避免判定请求过大 */
         const val MAX_CHARS = 1500

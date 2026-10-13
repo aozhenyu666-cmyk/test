@@ -24,21 +24,20 @@ object CardPrompts {
         不要考数学计算，不要考常识记忆。
         错误选项要像真的干扰项：每一个都属于下面这张错因表里的一种，并且错得明确、可以指认。
         错因表：${Flaws.ALL.joinToString("、")}。
-        只返回一个 JSON 对象，不要任何其他文字，不要用代码块包裹。
+        严格按要求的【标签】格式输出纯文本，不要 JSON，不要代码块，不要开场白。
     """.trimIndent()
 
     val FORMAT = """
-        {
-          "skill": "题型英文名（照请求写）",
-          "difficulty": 1,
-          "passage": ["第一句", "第二句", "第三句"],
-          "question": "问题",
-          "options": {"A": "……", "B": "……", "C": "……", "D": "……"},
-          "answer": "B",
-          "evidence": [3],
-          "flaws": {"A": "错因表里的一项", "C": "……", "D": "……"},
-          "explain": "两三句解析：依据是哪一句，干扰项各错在哪"
-        }
+        【材料】第一句。第二句。第三句。
+        【题目】……
+        A. ……
+        B. ……
+        C. ……
+        D. ……
+        【答案】B
+        【依据】第 3 句
+        【错因】A：错因表里的一项；C：……；D：……
+        【解析】两三句：依据是哪一句，干扰项各错在哪
     """.trimIndent()
 
     fun difficultyText(d: Int) = when (d) {
@@ -51,14 +50,14 @@ object CardPrompts {
         appendLine("请出一道题。")
         appendLine("题型：${skill.name}（${skill.label}）。${skill.hint}")
         appendLine(difficultyText(difficulty))
-        appendLine("passage 按句分开，不要编号；evidence 写依据句的序号（从 1 开始）；flaws 给每个错误选项写一个错因。")
+        appendLine("材料写成一段，句子之间用句号分开；【依据】写依据句的序号（从 1 开始）；【错因】给每个错误选项写一个错因。")
         appendLine("话题换着来：社会、科技、自然、历史、生活、经济，都可以。")
         if (avoid.isNotEmpty()) {
             appendLine("最近出过这些题，换一个话题和问法：")
             avoid.take(8).forEach { appendLine("- $it") }
         }
         appendLine()
-        appendLine("只返回 JSON，格式如下：")
+        appendLine("格式如下：")
         append(FORMAT)
     }
 
@@ -68,18 +67,18 @@ object CardPrompts {
         appendLine("问题：${card.question}")
         card.options.forEachIndexed { i, o -> appendLine("${Card.letter(i)}. $o") }
         appendLine()
-        append("""只返回 JSON：{"answer": "A–D 中的一个", "evidence": [依据句序号]}""")
+        append("只回答一行：【答案】A–D 中的一个字母")
     }
 
     fun structure(text: String): String = buildString {
         appendLine("下面是用户拍下的一道题（照片转写，可能有错字）。请把它整理成题卡：")
-        appendLine("材料按句拆开放进 passage；保留原来的问题和四个选项；你自己做一遍，把你的答案写在 answer，依据句写在 evidence，")
-        appendLine("给每个你认为错误的选项写错因（错因表里的一项），skill 从这些里选最贴近的一个：${Skill.entries.joinToString("、") { it.name }}。")
+        appendLine("保留原来的材料、问题和四个选项，不要改写；你自己做一遍，把你的答案写在【答案】，依据句写在【依据】，")
+        appendLine("给每个你认为错误的选项写错因（错因表里的一项）。")
         appendLine("如果不是四个选项的单选题，就尽量改写成四个选项的单选题，问题不变。")
         appendLine()
         appendLine(text)
         appendLine()
-        appendLine("只返回 JSON，格式如下：")
+        appendLine("格式如下：")
         append(FORMAT)
     }
 }
@@ -87,26 +86,42 @@ object CardPrompts {
 class LlmCardGen(private val chat: ChatClient) : CardGen {
 
     override suspend fun generate(skill: Skill, difficulty: Int, avoid: List<String>): LlmResult<Card> =
-        request(CardPrompts.generate(skill, difficulty, avoid), "出题") { Card.parse(it, skill).copy(skill = skill) }
+        request(CardPrompts.generate(skill, difficulty, avoid), "出题") { readCard(it, skill).copy(skill = skill, difficulty = difficulty) }
 
     override suspend fun solve(card: Card): LlmResult<Int> =
-        request(CardPrompts.solve(card), "核对") { o ->
-            Card.index(o.optString("answer")) ?: throw BadCard("answer 不是 A–D")
+        request(CardPrompts.solve(card), "核对") { text ->
+            val line = text.lines().firstOrNull { it.contains("答案") } ?: text
+            Card.answerOf(line.substringAfter("答案")) ?: Card.answerOf(text.trim().take(4)) ?: throw BadCard("没认出答案字母")
         }
 
     override suspend fun structure(text: String): LlmResult<Card> =
-        request(CardPrompts.structure(text), "整理题目") { Card.parse(it) }
+        request(CardPrompts.structure(text), "整理题目") { readCard(it, null) }
 
-    private suspend fun <T> request(user: String, kind: String, parse: (org.json.JSONObject) -> T): LlmResult<T> {
+    /**
+     * 读一张题：先按【标签】纯文本在本机拆（和题库导入同一套），拆不出来再试 JSON。
+     * 只有缺题目、缺选项、缺答案这种真没法做的才算失败。
+     */
+    private fun readCard(text: String, skill: Skill?): Card {
+        com.yishou.app.bank.BankParser.parse(text).filterIsInstance<com.yishou.app.bank.BankItem.Choice>().firstOrNull()?.let { c ->
+            val answer = c.answer ?: throw BadCard("没写答案")
+            val card = com.yishou.app.bank.BankParser.toCard(c, answer)
+            return if (skill != null) card.copy(skill = skill) else card
+        }
+        return try {
+            Card.parse(CoachParser.extractJsonObject(text), skill)
+        } catch (e: BadJsonException) {
+            throw BadCard("没认出题目格式")
+        }
+    }
+
+    private suspend fun <T> request(user: String, kind: String, parse: (String) -> T): LlmResult<T> {
         var last: LlmError? = null
         repeat(2) {
-            when (val r = chat.complete(CardPrompts.SYSTEM, user, kind)) {
+            when (val r = chat.complete(CardPrompts.SYSTEM, user, kind, json = false)) {
                 is LlmResult.Err -> return r
                 is LlmResult.Ok -> try {
-                    return LlmResult.Ok(parse(CoachParser.extractJsonObject(r.value)))
+                    return LlmResult.Ok(parse(r.value))
                 } catch (e: BadCard) {
-                    last = LlmError.BadFormat(e.message ?: "")
-                } catch (e: BadJsonException) {
                     last = LlmError.BadFormat(e.message ?: "")
                 } catch (e: org.json.JSONException) {
                     last = LlmError.BadFormat(e.message ?: "")

@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class, Material::class, DrillRow::class, Deed::class, MaterialKey::class, Job::class, JobStep::class],
-    version = 7,
+    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class, Material::class, DrillRow::class, Deed::class, MaterialKey::class, Job::class, JobStep::class, Outside::class],
+    version = 8,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -143,9 +143,22 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v0.12：刷题 App 的练习记录；做事可以指向一个 App。 */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `job` ADD COLUMN `app` TEXT")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `outside` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `app` TEXT NOT NULL, " +
+                        "`subject` TEXT NOT NULL, `questions` INTEGER NOT NULL, `correct` INTEGER, `seconds` INTEGER, " +
+                        "`createdAt` INTEGER NOT NULL, `startedAt` INTEGER, `jobId` INTEGER)",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_outside_createdAt` ON `outside` (`createdAt`)")
+            }
+        }
+
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "yishou.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                 .build()
     }
 }

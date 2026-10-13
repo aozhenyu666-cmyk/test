@@ -17,6 +17,10 @@ sealed interface BankItem {
         val answer: Int?,
         val evidence: Set<Int>,
         val explain: String,
+        /** 原题号（“3.”“第 3 题”）；文末答案表按它对 */
+        val number: Int? = null,
+        /** 干扰项的错因（【错因】A：范围扩大；C：……），没有就空 */
+        val flaws: Map<Int, String> = emptyMap(),
     ) : BankItem
 
     data class Essay(
@@ -42,7 +46,7 @@ sealed interface BankItem {
  */
 object BankParser {
 
-    private enum class Tag { TYPE, MATERIAL, QUESTION, ANSWER, EVIDENCE, EXPLAIN, POINTS, LIMIT }
+    private enum class Tag { TYPE, MATERIAL, QUESTION, ANSWER, EVIDENCE, EXPLAIN, POINTS, LIMIT, FLAWS }
 
     private val TAGS = listOf(
         Tag.TYPE to listOf("题型", "类型", "题类"),
@@ -51,17 +55,25 @@ object BankParser {
         Tag.POINTS to listOf("参考要点", "答案要点", "要点", "参考答案", "采分点"),
         Tag.ANSWER to listOf("正确答案", "答案"),
         Tag.EVIDENCE to listOf("依据"),
-        Tag.EXPLAIN to listOf("解析", "解释", "说明"),
+        Tag.EXPLAIN to listOf("解析", "解释", "说明", "精解", "详解"),
         Tag.LIMIT to listOf("字数"),
+        Tag.FLAWS to listOf("错因", "干扰项"),
     )
 
     /** 行首标签：【答案】B、[答案] B、答案：B、答案:B */
     private val TAG_LINE = Regex("^\\s*(?:【\\s*([^】]{1,6})\\s*】|\\[\\s*([^\\]]{1,6})\\s*]|([\\u4e00-\\u9fa5]{2,6})\\s*[:：])\\s*(.*)$")
     private val OPTION = Regex("^\\s*(?:[（(]\\s*([A-Da-d])\\s*[)）]|([A-Da-d])\\s*[.、．:：)）])\\s*(.*)$")
     private val SEPARATOR = Regex("^\\s*(?:-{3,}|={3,}|—{2,}|\\*{3,})\\s*$")
-    private val NUMBERED = Regex("^\\s*(?:第\\s*\\d+\\s*题|\\d{1,3}\\s*[.、．)）](?!\\d))\\s*(.*)$")
+    private val NUMBERED = Regex("^\\s*(?:第\\s*(\\d+)\\s*题[.、．:：]?|(\\d{1,3})\\s*[.、．)）](?!\\d))\\s*(.*)$")
     private val POINT_PREFIX = Regex("^\\s*(?:\\d{1,2}\\s*[.、．)）]|[（(]\\s*\\d{1,2}\\s*[)）]|[①②③④⑤⑥⑦⑧⑨⑩]|[-•·*])\\s*")
     private val LIMIT_IN_QUESTION = Regex("不超过\\s*(\\d{2,4})\\s*字|(\\d{2,4})\\s*字(?:以内|左右)")
+    /** 文末答案表的标题：参考答案、答案及解析…… */
+    private val KEY_HEADER = Regex("^\\s*[【\\[]?\\s*(?:参考答案及解析|参考答案与解析|参考答案|答案及解析|答案与解析|答案解析|答案速查)\\s*[】\\]]?\\s*[:：]?\\s*$")
+    /** 1-5 BCADA / 1～5：BCADA */
+    private val KEY_RANGE = Regex("(\\d{1,3})\\s*[-—～~至到]\\s*(\\d{1,3})\\s*[:：.、．]?\\s*([A-Da-d]{2,})")
+    /** 1.B / 1．【答案】B / 1、答案：B / 1 B */
+    private val KEY_ONE = Regex("^\\s*(\\d{1,3})\\s*[.、．:：)）]?\\s*(?:【\\s*(?:正确)?答案\\s*】|(?:正确)?答案\\s*[:：]?)?\\s*([A-Da-d])(?![A-Za-z])\\s*[。.、，,]?\\s*(.*)$")
+    private val KEY_INLINE = Regex("(\\d{1,3})\\s*[.、．:：]?\\s*([A-Da-d])(?![A-Za-z])")
 
     private fun tagOf(name: String): Tag? = TAGS.firstOrNull { (_, names) -> names.any { name.trim() == it } }?.first
 
@@ -70,11 +82,13 @@ object BankParser {
 
     private class Draft {
         var type = ""
+        var number: Int? = null
         val material = StringBuilder()
         val question = StringBuilder()
         val options = arrayOfNulls<String>(4)
         var answerRaw = ""
         var evidenceRaw = ""
+        var flawsRaw = ""
         val explain = StringBuilder()
         val points = mutableListOf<String>()
         var limitRaw = ""
@@ -86,19 +100,68 @@ object BankParser {
         val empty get() = !hasQuestion && material.isBlank() && !hasOptions && points.isEmpty()
     }
 
+    /** 文末答案表里的一条 */
+    private class KeyEntry(var answer: Int?, val explain: StringBuilder = StringBuilder())
+
     fun parse(text: String): List<BankItem> {
         val out = mutableListOf<BankItem>()
         var d = Draft()
         var sharedType = ""
+        // 没有选项、也没有要点的长段文字：通常是“根据以下资料，回答 1–5 题”的共用材料
+        var shared = ""
+        val keys = linkedMapOf<Int, KeyEntry>()
+        var inKey = false
+        var keyCurrent: KeyEntry? = null
+
         fun flush() {
-            build(d, sharedType)?.let { out += it }
+            val built = build(d, sharedType, shared)
+            if (built != null) {
+                out += built
+            } else if (!d.hasOptions && d.points.isEmpty()) {
+                val orphan = (d.material.toString() + "\n" + d.question.toString()).trim()
+                if (orphan.length >= 60) shared = orphan
+            }
             d = Draft()
         }
+
         for (raw in text.replace("\r", "").lines()) {
             val line = raw.trimEnd()
             if (line.isBlank()) {
-                // 空行结束一个选项或要点的续行，但不分题
                 d.lastOption = -1
+                continue
+            }
+            // 文末答案表只对有题号的选择题有意义；申论的【参考答案】照常当要点读
+            val numberedChoices = (d.hasOptions && d.number != null) || (d.empty && out.any { it is BankItem.Choice && it.number != null })
+            if (!inKey && KEY_HEADER.matches(line) && numberedChoices) {
+                flush()
+                inKey = true
+                continue
+            }
+            if (inKey) {
+                val ranges = KEY_RANGE.findAll(line).toList()
+                if (ranges.isNotEmpty()) {
+                    ranges.forEach { m ->
+                        val from = m.groupValues[1].toInt()
+                        m.groupValues[3].forEachIndexed { i, c -> keys[from + i] = KeyEntry(Card.index(c.toString())) }
+                    }
+                    keyCurrent = null
+                    continue
+                }
+                val inline = KEY_INLINE.findAll(line).toList()
+                if (inline.size >= 2 && inline.sumOf { it.value.length } >= line.replace(" ", "").length * 0.6) {
+                    inline.forEach { m -> keys[m.groupValues[1].toInt()] = KeyEntry(Card.index(m.groupValues[2])) }
+                    keyCurrent = null
+                    continue
+                }
+                val one = KEY_ONE.find(line)
+                if (one != null) {
+                    val e = KeyEntry(Card.index(one.groupValues[2]))
+                    one.groupValues[3].trim().takeIf { it.isNotEmpty() }?.let { e.explain.appendLine(it.removePrefix("【解析】").removePrefix("解析：").trim()) }
+                    keys[one.groupValues[1].toInt()] = e
+                    keyCurrent = e
+                    continue
+                }
+                keyCurrent?.explain?.appendLine(line.trim().removePrefix("【解析】").removePrefix("解析：").trim())
                 continue
             }
             if (SEPARATOR.matches(line)) {
@@ -126,24 +189,29 @@ object BankParser {
                     Tag.EXPLAIN -> d.explain.appendLine(rest)
                     Tag.POINTS -> if (rest.isNotBlank()) d.points += rest.replace(POINT_PREFIX, "").trim()
                     Tag.LIMIT -> d.limitRaw = rest
+                    Tag.FLAWS -> d.flawsRaw += rest + "；"
                 }
                 continue
             }
             val opt = OPTION.find(line)
-            if (opt != null && d.current != Tag.POINTS && d.current != Tag.EXPLAIN) {
+            if (opt != null && d.current != Tag.POINTS && d.current != Tag.EXPLAIN && d.current != Tag.FLAWS) {
                 val i = Card.index(opt.groupValues[1].ifEmpty { opt.groupValues[2] })!!
                 // 选项又从 A 开始、而这道已经有四个选项：上一道没写分隔，直接分题
                 if (i == 0 && d.options.all { it != null }) flush()
                 d.options[i] = opt.groupValues[3].trim()
                 d.lastOption = i
                 d.current = null
+                // 一行里挤了几个选项：A. 甲 B. 乙 C. 丙 D. 丁
+                splitInline(d, i)
                 continue
             }
             val numbered = NUMBERED.find(line)
             val canSplit = d.current != Tag.POINTS && d.current != Tag.MATERIAL && (d.current != Tag.EXPLAIN || d.hasOptions)
             if (numbered != null && canSplit) {
                 if (d.hasOptions || d.hasQuestion && d.answerRaw.isNotBlank()) flush()
-                d.question.appendLine(numbered.groupValues[1])
+                if (d.hasQuestion && !d.hasOptions) flush()
+                d.number = (numbered.groupValues[1].ifEmpty { numbered.groupValues[2] }).toIntOrNull()
+                d.question.appendLine(numbered.groupValues[3])
                 d.current = Tag.QUESTION
                 continue
             }
@@ -151,6 +219,7 @@ object BankParser {
                 d.current == Tag.POINTS -> d.points += line.replace(POINT_PREFIX, "").trim()
                 d.current == Tag.EXPLAIN -> d.explain.appendLine(line.trim())
                 d.current == Tag.MATERIAL -> d.material.appendLine(line.trim())
+                d.current == Tag.FLAWS -> d.flawsRaw += line.trim() + "；"
                 d.lastOption >= 0 -> d.options[d.lastOption] = d.options[d.lastOption] + line.trim()
                 d.current == Tag.ANSWER -> d.answerRaw += line
                 else -> {
@@ -160,10 +229,31 @@ object BankParser {
             }
         }
         flush()
-        return out
+        if (keys.isEmpty()) return out
+        // 文末答案表：按题号补上答案和解析
+        return out.map { item ->
+            if (item !is BankItem.Choice || item.number == null) return@map item
+            val k = keys[item.number] ?: return@map item
+            item.copy(
+                answer = item.answer ?: k.answer,
+                explain = item.explain.ifBlank { k.explain.toString().trim() },
+            )
+        }
     }
 
-    private fun build(d: Draft, sharedType: String): BankItem? {
+    private val INLINE_OPTION = Regex("\\s+([B-Db-d])\\s*[.、．:：)）]\\s*")
+
+    private fun splitInline(d: Draft, start: Int) {
+        val text = d.options[start] ?: return
+        val parts = INLINE_OPTION.split(text)
+        val letters = INLINE_OPTION.findAll(text).map { Card.index(it.groupValues[1])!! }.toList()
+        if (letters.isEmpty() || letters.any { it <= start }) return
+        d.options[start] = parts[0].trim()
+        letters.forEachIndexed { i, idx -> d.options[idx] = parts.getOrNull(i + 1)?.trim().orEmpty() }
+        d.lastOption = letters.last()
+    }
+
+    private fun build(d: Draft, sharedType: String, shared: String): BankItem? {
         val type = d.type.ifBlank { sharedType }
         val question = d.question.toString().trim()
         val material = d.material.toString().trim()
@@ -173,15 +263,27 @@ object BankParser {
             // 有人把选择题的答案写成“参考答案：B”
             val answer = Card.answerOf(d.answerRaw) ?: d.points.firstOrNull()?.takeIf { it.length <= 6 }?.let { Card.answerOf(it) }
             val ev = Regex("\\d+").findAll(d.evidenceRaw).map { it.value.toInt() }.toSet()
-            return BankItem.Choice(type, material, question, d.options.map { it!!.trim() }, answer, ev, explain)
+            return BankItem.Choice(
+                type, material.ifEmpty { shared }, question, d.options.map { it!!.trim() }, answer, ev, explain,
+                number = d.number, flaws = flawsOf(d.flawsRaw),
+            )
         }
         if (d.hasOptions) return null
         val points = d.points.filter { it.isNotBlank() }
         if (points.isEmpty()) return null
         val limit = d.limitRaw.filter { it.isDigit() }.toIntOrNull()
             ?: LIMIT_IN_QUESTION.find(question)?.let { m -> (m.groupValues[1].ifEmpty { m.groupValues[2] }).toIntOrNull() }
-        return BankItem.Essay(type, material, question, points, limit, explain)
+        return BankItem.Essay(type, material.ifEmpty { shared }, question, points, limit, explain)
     }
+
+    private val FLAW_ITEM = Regex("([A-Da-d])\\s*[:：.、]\\s*([^；;，,\\n]+)")
+
+    /** 【错因】A：范围扩大；C：无中生有 → {0: 范围扩大, 2: 无中生有}（不在错因表里的记成“答非所问”） */
+    fun flawsOf(raw: String): Map<Int, String> = FLAW_ITEM.findAll(raw).mapNotNull { m ->
+        val i = Card.index(m.groupValues[1]) ?: return@mapNotNull null
+        val f = m.groupValues[2].trim()
+        i to (com.yishou.app.card.Flaws.ALL.firstOrNull { it == f } ?: com.yishou.app.card.Flaws.ALL.firstOrNull { f.contains(it) || it.contains(f) } ?: "答非所问")
+    }.toMap()
 
     /** 题型落到哪个小技能上（掌握度按它算） */
     fun skillOf(type: String): Skill = when {
@@ -207,7 +309,7 @@ object BankParser {
             options = c.options,
             answer = answer,
             evidence = c.evidence.filter { it in 1..sentences.size }.toSet(),
-            flaws = emptyMap(),
+            flaws = c.flaws.filterKeys { it != answer }.takeIf { it.size == 3 } ?: emptyMap(),
             explain = c.explain,
             type = c.type,
         )

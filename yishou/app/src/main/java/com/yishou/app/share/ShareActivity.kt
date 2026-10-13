@@ -49,9 +49,10 @@ class ShareActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val app = application as YishouApp
-        val text = sharedText()
-        val image = sharedImage()
-        if (text == null && image == null) {
+        val files = sharedFiles()
+        val text = if (files.isEmpty()) sharedText() else null
+        val image = if (files.isEmpty()) sharedImage() else null
+        if (text == null && image == null && files.isEmpty()) {
             finish()
             return
         }
@@ -63,7 +64,10 @@ class ShareActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Text("收进一手", style = MaterialTheme.typography.titleLarge)
-                        if (text != null) {
+                        if (files.isNotEmpty()) {
+                            Text("${files.size} 个文件。Word、文本在手机上直接拆题；PDF、图片要识图模型读。", style = MaterialTheme.typography.bodyMedium)
+                            fileLines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+                        } else if (text != null) {
                             Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(14.dp)) {
                                 Text(text.take(400), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(14.dp))
                             }
@@ -75,6 +79,13 @@ class ShareActivity : ComponentActivity() {
                             VortexLoader(b)
                         } else {
                             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                            if (files.isNotEmpty()) {
+                                if (fileLines.isEmpty()) {
+                                    Button(onClick = { importFiles(app, files) }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("收进题库") }
+                                } else {
+                                    Button(onClick = { open(app, "bank") }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("去题库看看") }
+                                }
+                            }
                             val pack = remember(text) { text?.let { com.yishou.app.bank.BankParser.parse(it) }.orEmpty() }
                             if (pack.isNotEmpty()) {
                                 Text("看起来是一份题包：认出 ${pack.size} 道题。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.tertiary)
@@ -92,6 +103,39 @@ class ShareActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    private var fileLines by mutableStateOf<List<String>>(emptyList())
+
+    /** 分享过来的文件（非图片的单个文件，或者一次好几个） */
+    private fun sharedFiles(): List<Uri> {
+        val i = intent ?: return emptyList()
+        val list: List<Uri> = when (i.action) {
+            Intent.ACTION_SEND_MULTIPLE -> if (Build.VERSION.SDK_INT >= 33) {
+                i.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
+            } else {
+                @Suppress("DEPRECATION")
+                i.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
+            }
+            Intent.ACTION_SEND -> {
+                if (i.type?.startsWith("image/") == true || i.getStringExtra(Intent.EXTRA_TEXT) != null && i.type == "text/plain") return emptyList()
+                listOfNotNull(
+                    if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                    else @Suppress("DEPRECATION") i.getParcelableExtra<Uri>(Intent.EXTRA_STREAM),
+                )
+            }
+            else -> emptyList()
+        }
+        return list
+    }
+
+    private fun importFiles(app: YishouApp, uris: List<Uri>) {
+        busy = "准备读 ${uris.size} 个文件……"
+        lifecycleScope.launch {
+            val results = app.fileImport.importAll(uris) { busy = it }
+            busy = null
+            fileLines = results.map { "${if (it.ok) "✓" else "✗"} ${it.name}：${it.line}" }
         }
     }
 

@@ -66,7 +66,7 @@ class LensTest {
         assertEquals(Lens.STANCE, Lens.suggest("年轻人该不该买房？").first())
         assertEquals(Lens.ASSUME, Lens.suggest("因为大家都在用，所以它一定好用。只有这样才能跟上。").first())
         assertEquals(Lens.GIST, Lens.suggest("今天天气不错，出去走走。").first())
-        assertEquals(Lens.entries.size - 1, Lens.suggest("x").size)
+        assertEquals(Lens.MATERIAL_LENSES.size, Lens.suggest("x").size)
     }
 
     @Test
@@ -229,6 +229,7 @@ class FakeThinkDao : ThinkDao() {
         drills.replaceAll { if (it.id == d.id) d else it }
     }
     override suspend fun drillsSince(since: Long) = drills.filter { it.createdAt >= since }
+    override suspend fun drillsFor(id: Long) = drills.filter { it.materialId == id }.reversed()
     override fun observeDrillsSince(since: Long): Flow<List<DrillRow>> = emptyFlow()
     override suspend fun insertDeed(d: Deed): Long {
         val id = deeds.size + 1L
@@ -281,6 +282,8 @@ class FakeDrillGen : DrillGen {
     }
     override suspend fun judgeStance(question: String, parts: Map<StanceItem, String>) = LlmResult.Ok(stance to "可是房价会跌")
     override suspend fun judgeReply(question: String, counter: String, reply: String) = LlmResult.Ok(replyHit)
+    var rubric: List<RawHit?> = emptyList()
+    override suspend fun judgeRubric(question: String, items: List<Pair<String, String>>, parts: List<String>): LlmResult<List<RawHit?>> = LlmResult.Ok(rubric)
 }
 
 class DrillSessionTest {
