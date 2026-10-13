@@ -328,8 +328,11 @@ fun VeinCaptureScreen(nav: NavHostController) {
                 busy = true
                 scope.launch {
                     val r = app.actions.vein.split(system.trim().ifBlank { "未分类" }, text, source.trim())
-                    busy = false
-                    if (r.startsWith("拆出")) nav.navigate("vein/cands") { popUpTo("vein") } else message = r
+                    // 网络回来可能不在主线程：跳页面要回到主线程
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        busy = false
+                        if (r.startsWith("拆出")) nav.navigate("vein/cands") { popUpTo("vein") } else message = r
+                    }
                 }
             }, Modifier.testTag("vein-split"), color = sig.think, enabled = !busy && text.isNotBlank() && config.ai.ready)
             if (!config.ai.ready) Hint("没配 AI 接口：先用下面的“手动新建节点”，或者去 我 → AI 接口。")

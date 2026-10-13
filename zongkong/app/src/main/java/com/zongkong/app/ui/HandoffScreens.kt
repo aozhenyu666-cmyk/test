@@ -124,7 +124,9 @@ fun ImportScreen(nav: NavHostController) {
                         scope.launch {
                             msg = app.actions.work.sync()
                             app.store.awaitingGpt = ""
-                            app.store.work.value.threadByCode(code)?.let { nav.navigate("thread/${it.key}") { popUpTo("home") } }
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                app.store.work.value.threadByCode(code)?.let { nav.navigate("thread/${it.key}") { popUpTo("home") } }
+                            }
                         }
                     }) { Text("从 Notion 拉取") }
                 }
