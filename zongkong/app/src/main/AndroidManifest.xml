@@ -40,7 +40,7 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- 总控时间到点：像闹钟一样全屏亮起来 -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
-    <!-- 对讲：按住墨灵或对讲页说话（录音只发给你自己填的语音接口） -->
+    <!-- 对讲：按住桌面宠物或对讲页说话（录音只发给你自己填的语音接口） -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 总控者对账：读系统记录的应用使用情况（要你在“使用情况访问”里手动打开） -->
     <uses-permission
@@ -108,11 +108,11 @@
             android:name=".system.ReplyReceiver"
             android:exported="false" />
 
-        <!-- 桌面小部件：墨灵 -->
+        <!-- 桌面小部件：宠物 -->
         <receiver
             android:name=".system.PetWidget"
             android:exported="true"
-            android:label="总控 · 墨灵">
+            android:label="总控">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>

@@ -345,10 +345,12 @@ data class BossConfig(
     val bingeMinutes: Int = 40,
     /** 锁住模型：能用的 AI 接口 / 模型要换，24 小时后才生效（免得不清醒时换一个听话的）。 */
     val modelLock: Boolean = true,
-    /** 桌面宠物：浮在所有应用上面的小墨灵，点它说话。 */
+    /** 桌面宠物：浮在所有应用上面的小家伙，点它说话。 */
     val pet: Boolean = true,
     /** 主动程度：0 安静（只在出事时找你）、1 标准（一天几次问候 + 抽查）、2 黏人（每一个半小时问一次）。 */
     val initiative: Int = 1,
+    /** 桌面宠物的形象：OWL 夜枭、CAT 团子、FLOWER 小葵。换形象不算放宽，马上生效。 */
+    val petKind: String = "OWL",
 ) {
     companion object {
         val INITIATIVE = listOf("安静", "标准", "黏人")

@@ -14,7 +14,7 @@ import com.zongkong.app.zk
 import com.zongkong.core.agent.Agent
 import com.zongkong.core.agent.ChatMsg
 
-/** 桌面小部件：墨灵、信用和态度、总控最近说的一句；“说话”进对讲，“打开”进对话。 */
+/** 桌面小部件：宠物、信用和态度、总控最近说的一句；“说话”进对讲，“打开”进对话。 */
 class PetWidget : AppWidgetProvider() {
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) = refresh(context)
 
@@ -36,7 +36,7 @@ class PetWidget : AppWidgetProvider() {
                 val last = app.chat.log.value.messages.lastOrNull { it.role == ChatMsg.ASSISTANT && it.content.isNotBlank() && !it.error && !it.hidden }?.content
                 val text = last?.let { Agent.options(it).first }?.take(120) ?: "有事按住我说。"
                 val v = RemoteViews(context.packageName, R.layout.widget_pet)
-                v.setImageViewBitmap(R.id.widget_pet, PetView.render(192, PetView.Mood.IDLE, stance))
+                v.setImageViewBitmap(R.id.widget_pet, PetView.render(192, PetView.Mood.IDLE, stance, PetView.kindOf(app.store.config.value.boss.petKind)))
                 v.setTextViewText(R.id.widget_title, "总控 · 信用 $cred · ${stance.label}")
                 v.setTextViewText(R.id.widget_text, text)
                 v.setOnClickPendingIntent(R.id.widget_root, open(context, "chat", 1))

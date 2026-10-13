@@ -1,6 +1,15 @@
 package com.zongkong.app.ui
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.getValue
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -37,6 +46,12 @@ fun GalleryScreen(nav: NavHostController) {
                             "涟漪" -> Ripple(true, sig.ai, Modifier.fillMaxSize())
                             "年轮" -> TreeRings(9, 0.7f, sig.think, Modifier.fillMaxSize())
                             "流线" -> FlowLines(sig.hq, Modifier.fillMaxSize())
+                            "月相" -> Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                                listOf(0.15f, 0.4f, 0.65f, 0.95f).forEach { MoonPhase(it, sig.plan, Modifier.width(44.dp).fillMaxHeight()) }
+                            }
+                            "星图" -> StarMap(listOf(4, 2, 5), sig.think, Modifier.fillMaxSize())
+                            "轨道" -> Orbit(listOf("收", "谋", "筹", "行", "验"), sig.ai, Modifier.fillMaxSize(), active = 3)
+                            "漩涡 → 秩序" -> { val o by rememberInfiniteTransition(label = "order").animateFloat(0f, 1f, infiniteRepeatable(tween(4000), RepeatMode.Reverse), label = "order"); Vortex(sig.strict, Modifier.fillMaxSize(), order = o) }
                             else -> BranchGrowth(1f, sig.ai, Modifier.fillMaxSize())
                         }
                     }

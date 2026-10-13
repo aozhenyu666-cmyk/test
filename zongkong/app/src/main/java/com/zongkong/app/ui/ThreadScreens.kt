@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -29,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -73,6 +75,24 @@ fun ThreadsScreen(nav: NavHostController) {
             OutlinedButton(onClick = { nav.navigate("import") }) { Text("导入交接块") }
         }
         Hint("一件事一条：材料、讨论出的判断、行动和结果都挂在它上面。GPT 在 Notion 里写的也会出现在这里。")
+        // 本周星图：这周做完的每一步是一颗星，同一件事连成星座
+        val stars = remember(work) {
+            val zone = app.store.zone
+            val since = com.zongkong.core.plan.Plans.weekStart(System.currentTimeMillis(), zone).atTime(4, 0).atZone(zone).toInstant().toEpochMilli()
+            val done = work.events.filter { it.at >= since && it.type.startsWith("done:") && it.type != "done:NO" }
+            val byThread = done.groupBy { work.rec(it.actionKey)?.threadKey.orEmpty() }.filterKeys { it.isNotEmpty() }
+            work.threads().sortedBy { it.createdAt }.mapNotNull { th -> byThread[th.key]?.let { th.title to it.size } }
+        }
+        if (work.threads().isNotEmpty()) {
+            Panel(modifier = Modifier.testTag("star-map")) {
+                androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth().height(84.dp)) { StarMap(stars.map { it.second }, sig.think, Modifier.fillMaxSize()) }
+                Text(
+                    if (stars.isEmpty()) "本周星图：还没有星。做完一步（行动 → 做完）就点亮一颗。"
+                    else "本周星图：${stars.sumOf { it.second }} 颗 · " + stars.joinToString("、") { "${it.first} ${it.second}" },
+                    style = MaterialTheme.typography.labelMedium, color = sig.muted, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
         Button(onClick = { creating = true }, modifier = Modifier.fillMaxWidth()) { Text("新建一件事") }
         if (work.threads().isEmpty()) Hint("还没有事项。可以新建，或者去 GPT 讨论后导入交接块。")
         listOf("推进中", "收集与思考", "已收尾").forEach { g ->
@@ -122,6 +142,7 @@ fun ThreadScreen(key: String, nav: NavHostController) {
     var editing by remember { mutableStateOf<String?>(null) }
     var adding by remember { mutableStateOf(false) }
     var showAllNotes by remember { mutableStateOf(false) }
+    var noteFilter by remember { mutableStateOf<String?>(null) }
     val now = rememberNow(30_000)
 
     Column(Modifier.fillMaxSize()) {
@@ -178,15 +199,31 @@ fun ThreadScreen(key: String, nav: NavHostController) {
             }
             val actions = work.actionsOf(key).sortedWith(compareBy({ !it.actionStatus.open }, { it.plan?.let { p -> TimeParse.startMillis(p, app.store.zone) } ?: Long.MAX_VALUE }))
             if (actions.isEmpty()) Hint(if (t[F.NEXT].isNotBlank()) "下一步“${t[F.NEXT]}”还没排成行动。点 ＋ 行动 排进时间。" else "还没有行动。")
-            actions.forEach { a -> ActionRow(a, now) { nav.navigate("action/${a.key}") } }
+            else if (actions.none { !it.actionStatus.open }) Hint("一条行动 = 一步具体的事。点“开始”计时；做完点“做完”，写一句结果、对照完成依据——它就变成“完成”，结果记进下面的记录，点亮事项页的本周星图，信用 +1。")
+            actions.forEach { a ->
+                ActionRow(
+                    a, now,
+                    onStart = if (a.actionStatus.open) ({ nav.navigate("start/${a.key}") }) else null,
+                    onDone = if (a.actionStatus.open) ({ nav.navigate("complete/${a.key}") }) else null,
+                ) { nav.navigate("action/${a.key}") }
+            }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SectionLabel("记录")
                 androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
                 TextButton(onClick = { nav.navigate("capture/$key") }) { Text("＋ 记一条") }
             }
-            val notes = work.notesOf(key).sortedByDescending { it.createdAt }
-            if (notes.isEmpty()) Hint("材料、问题、判断、结果、断点都会记在这里。")
+            val allNotes = work.notesOf(key).sortedByDescending { it.createdAt }
+            val types = allNotes.map { it[F.TYPE].ifBlank { "记录" } }.distinct()
+            val notes = noteFilter?.let { f -> allNotes.filter { it[F.TYPE].ifBlank { "记录" } == f } } ?: allNotes
+            if (allNotes.isEmpty()) Hint("材料、问题、判断、结果、断点都会记在这里。")
+            else Hint("记录是这件事的“档案袋”：GPT 交接来的材料和问题、你记的念头、每次做完的结果和断点。点一条展开看全文；从 Notion 来的可以读它的正文。")
+            if (types.size > 1) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(selected = noteFilter == null, onClick = { noteFilter = null }, label = { Text("全部 ${allNotes.size}") })
+                    types.forEach { ty -> FilterChip(selected = noteFilter == ty, onClick = { noteFilter = if (noteFilter == ty) null else ty }, label = { Text("$ty ${allNotes.count { it[F.TYPE].ifBlank { "记录" } == ty }}") }) }
+                }
+            }
             (if (showAllNotes) notes else notes.take(6)).forEach { n -> NoteRow(n) }
             if (notes.size > 6 && !showAllNotes) TextButton(onClick = { showAllNotes = true }) { Text("看全部 ${notes.size} 条") }
         }
@@ -222,7 +259,7 @@ fun ConflictPanel(r: Rec) {
 }
 
 @Composable
-fun ActionRow(a: Rec, now: Long, onClick: () -> Unit) {
+fun ActionRow(a: Rec, now: Long, onStart: (() -> Unit)? = null, onDone: (() -> Unit)? = null, onClick: () -> Unit) {
     val app = LocalContext.current.zk
     val sig = LocalSignals.current
     Panel(onClick = onClick, accent = if (a.actionStatus == ActionStatus.STUCK) sig.strict else null) {
@@ -236,14 +273,24 @@ fun ActionRow(a: Rec, now: Long, onClick: () -> Unit) {
         )
         if (bits.isNotEmpty()) Text(bits.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = sig.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (a[F.RESULT].isNotBlank()) Text("结果：${a[F.RESULT]}", style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        if (onStart != null || onDone != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                onStart?.let { TextButton(onClick = it) { Text(if (a[F.BREAK].isNotBlank()) "▶ 从断点继续" else "▶ 开始", color = sig.ai) } }
+                onDone?.let { TextButton(onClick = it) { Text("✓ 做完", color = sig.free) } }
+            }
+        }
     }
 }
 
 @Composable
 fun NoteRow(n: Rec) {
     val context = LocalContext.current
+    val app = context.zk
     val sig = LocalSignals.current
+    val scope = rememberCoroutineScope()
     var open by remember { mutableStateOf(false) }
+    var body by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -252,12 +299,30 @@ fun NoteRow(n: Rec) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Tag(n[F.TYPE].ifBlank { "记录" }, sig.info)
-            Text(n.title, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f), maxLines = if (open) 4 else 1, overflow = TextOverflow.Ellipsis)
+            Text(n.title, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f), maxLines = if (open) Int.MAX_VALUE else 1, overflow = TextOverflow.Ellipsis)
             Text(clock(n.createdAt), style = MaterialTheme.typography.labelSmall.merge(Mono), color = sig.muted)
         }
+        if (!open && n[F.RAW].isNotBlank() && n[F.RAW] != n.title) {
+            Text(n[F.RAW], style = MaterialTheme.typography.bodySmall, color = sig.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 2.dp))
+        }
         if (open) {
-            if (n[F.RAW].isNotBlank()) Text(n[F.RAW], style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
-            if (n[F.URL].isNotBlank()) TextButton(onClick = { Gpt.openNotion(context, n[F.URL]) }) { Text("打开链接") }
+            if (n[F.RAW].isNotBlank() && n[F.RAW] != n.title) Text(n[F.RAW], style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+            body?.let { Text(it.ifBlank { "（Notion 页面里没有正文）" }, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp)) }
+            Row {
+                // GPT 在 Notion 里常把长内容写在页面正文里，同步只带回标题和属性：这里把正文读回来
+                if (n.notionId.isNotBlank() && body == null) TextButton(enabled = !loading, onClick = {
+                    loading = true
+                    scope.launch {
+                        body = when (val r = app.actions.notion.pageText(n.notionId, 6000)) {
+                            is com.zongkong.core.ApiResult.Ok -> r.value.trim()
+                            is com.zongkong.core.ApiResult.Err -> "读不到正文：${r.message}"
+                        }
+                        loading = false
+                    }
+                }) { Text(if (loading) "读取中…" else "读 Notion 正文") }
+                if (n[F.URL].isNotBlank()) TextButton(onClick = { Gpt.openNotion(context, n[F.URL]) }) { Text("打开链接") }
+                else if (n.url.isNotBlank()) TextButton(onClick = { Gpt.openNotion(context, n.url) }) { Text("在 Notion 打开") }
+            }
         }
     }
 }

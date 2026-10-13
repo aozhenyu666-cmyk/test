@@ -193,4 +193,17 @@ class BossTest {
         assertNotNull(swap.later.firstOrNull())
         assertFalse(Policy.setAi(Config(), c0.ai, currentWorks = false, now = now).config.pending.isNotEmpty())
     }
+
+    @Test
+    fun changingPetLookIsNotLoosening() {
+        val c0 = Config()
+        val out = Policy.setBoss(c0, c0.boss.copy(petKind = "CAT"), at(12, 10))
+        assertEquals("CAT", out.config.boss.petKind)
+        assertTrue(out.config.pending.isEmpty())
+        // 同时收起宠物（放宽）：形象马上换，收起等 24 小时
+        val both = Policy.setBoss(c0, c0.boss.copy(petKind = "FLOWER", pet = false), at(12, 10))
+        assertEquals("FLOWER", both.config.boss.petKind)
+        assertTrue(both.config.boss.pet)
+        assertFalse(both.config.pending.isEmpty())
+    }
 }

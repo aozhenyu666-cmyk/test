@@ -14,6 +14,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -66,15 +67,17 @@ import com.zongkong.core.agent.ChatMsg
 import com.zongkong.core.boss.BossConfig
 import kotlinx.coroutines.launch
 
-/** 墨灵（Compose 里画）：和桌面上那只同一个画法。 */
+/** 桌面宠物（Compose 里画）：和桌面上那只同一个画法。 */
 @Composable
-fun PetFigure(mood: PetView.Mood, modifier: Modifier = Modifier) {
+fun PetFigure(mood: PetView.Mood, modifier: Modifier = Modifier, kind: PetView.Kind? = null) {
     val store = LocalContext.current.zk.store
     val d by store.dossier.collectAsStateWithLifecycle()
+    val cfg by store.config.collectAsStateWithLifecycle()
     val stance = remember(d) { store.stance() }
+    val k = kind ?: PetView.kindOf(cfg.boss.petKind)
     val t = if (LocalReduceMotion.current) 0.4f else rememberInfiniteTransition(label = "pet").animateFloat(0f, 600f, infiniteRepeatable(tween(600_000, easing = LinearEasing)), label = "t").value
     Canvas(modifier) {
-        drawIntoCanvas { c -> PetView.paint(c.nativeCanvas, size.width, size.height, t, mood, stance, 1f) }
+        drawIntoCanvas { c -> PetView.paint(c.nativeCanvas, size.width, size.height, t, mood, stance, 1f, k) }
     }
 }
 
@@ -83,7 +86,7 @@ fun PetFigure(mood: PetView.Mood, modifier: Modifier = Modifier) {
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun VoiceScreen(nav: NavHostController) {
+fun VoiceScreen(nav: NavHostController, openSettings: Boolean = false) {
     val context = LocalContext.current
     val app = context.zk
     val sig = LocalSignals.current
@@ -93,7 +96,7 @@ fun VoiceScreen(nav: NavHostController) {
     val vstate by Voice.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var hint by remember { mutableStateOf<String?>(null) }
-    var showSettings by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(openSettings) }
     var sentAt by remember { mutableStateOf(0L) }
     val visible = log.messages.filter { !it.hidden && !it.error && it.content.isNotBlank() && it.role != ChatMsg.TOOL }
     val lastUser = visible.lastOrNull { it.role == ChatMsg.USER }
@@ -204,14 +207,51 @@ private fun VoiceSettings(v: VoiceConfig, boss: BossConfig) {
     var stt by remember { mutableStateOf(v.sttModel) }
     var result by remember { mutableStateOf<String?>(null) }
     fun save(next: VoiceConfig) = app.store.updateConfig { it.copy(voice = next) }
+    Panel(modifier = Modifier.testTag("voice-now")) {
+        Text("现在它用什么声音", style = MaterialTheme.typography.titleSmall)
+        Text(
+            if (v.apiReady) "语音接口：${v.baseUrl.substringAfter("://").substringBefore('/')} · ${v.ttsVoice.substringAfterLast(':')}（自然人声）"
+            else "手机自带的朗读（机械音）——还没填语音接口",
+            style = MaterialTheme.typography.bodyMedium, color = if (v.apiReady) sig.free else sig.warn,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { Voice.speak(context, "你好，我是总控。今天的主线做了吗？") }) { Text("试听") }
+            if (!v.apiReady) TextButton(onClick = {
+                runCatching { context.startActivity(Intent("com.android.settings.TTS_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            }) { Text("换手机朗读引擎") }
+        }
+        Hint(
+            "默认那个机械音是手机自带的“文字转语音”。想要像人说话：在下面选一家服务商、贴上密钥、点“保存并试听”，三步。" +
+                "不想花钱：点“换手机朗读引擎”，装个好一点的引擎（比如讯飞、Google），也会自然很多。",
+        )
+    }
     Panel(modifier = Modifier.testTag("voice-settings")) {
         Text("语音接口（OpenAI 兼容）", style = MaterialTheme.typography.titleSmall)
+        Text("① 选一家", style = MaterialTheme.typography.labelLarge, color = sig.muted)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            VOICE_PRESETS.forEach { p ->
+                QuickChip(p.name, sig.ai) { url = p.url; tts = p.tts; voice = p.voice; stt = p.stt; result = p.note }
+            }
+            val ai = app.store.config.value.ai
+            if (ai.baseUrl.isNotBlank()) QuickChip("和 AI 接口同一家", sig.ai) {
+                url = ai.baseUrl; key = ai.apiKey
+                VOICE_PRESETS.firstOrNull { ai.baseUrl.contains(it.url.substringAfter("://").substringBefore('/')) }?.let { tts = it.tts; voice = it.voice; stt = it.stt }
+                result = "地址和密钥用了 AI 接口那份；这家要支持语音才行。"
+            }
+        }
+        Text("② 填密钥 ③ 保存并试听", style = MaterialTheme.typography.labelLarge, color = sig.muted)
         Hint("说话用 /audio/speech，听写用 /audio/transcriptions。不填就用手机自带的朗读和语音输入。录音只发给这里填的接口。")
         OutlinedTextField(url, { url = it }, label = { Text("接口地址（例：https://api.openai.com/v1）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(key, { key = it }, label = { Text("密钥") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(tts, { tts = it }, label = { Text("说话模型") }, singleLine = true, modifier = Modifier.weight(1f))
             OutlinedTextField(voice, { voice = it }, label = { Text("音色") }, singleLine = true, modifier = Modifier.weight(1f))
+        }
+        VOICE_PRESETS.firstOrNull { it.tts == tts }?.voices?.let { list ->
+            Text("音色", style = MaterialTheme.typography.labelLarge, color = sig.muted)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                list.forEach { (id, name) -> QuickChip(name + if (voice == id) " ✓" else "", sig.info) { voice = id } }
+            }
         }
         OutlinedTextField(stt, { stt = it }, label = { Text("听写模型") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedButton(onClick = {
@@ -225,22 +265,54 @@ private fun VoiceSettings(v: VoiceConfig, boss: BossConfig) {
         SwitchLine("它问完自动听你回答（手机自带语音输入时）", v.listenAfterAsk) { save(v.copy(listenAfterAsk = it)) }
     }
     Panel {
-        Text("墨灵和主动程度", style = MaterialTheme.typography.titleSmall)
+        Text("桌面宠物和主动程度", style = MaterialTheme.typography.titleSmall)
         fun setBoss(b: BossConfig) {
             var msg = ""
             app.store.updateConfig { c -> Policy.setBoss(c, b, System.currentTimeMillis()).also { msg = it.message }.config }
             com.zongkong.app.system.Pet.refresh(context)
             result = msg
         }
-        SwitchLine("桌面上的墨灵（点它、按住它说话）", boss.pet) { setBoss(boss.copy(pet = it)) }
+        Text("形象", style = MaterialTheme.typography.labelLarge, color = sig.muted)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.testTag("pet-kinds")) {
+            PetView.Kind.entries.forEach { k ->
+                val on = PetView.kindOf(boss.petKind) == k
+                Column(
+                    Modifier.weight(1f).background(if (on) sig.ai.copy(alpha = 0.12f) else Color.Transparent, androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                        .clickable { setBoss(boss.copy(petKind = k.name)) }.padding(6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    PetFigure(PetView.Mood.IDLE, Modifier.size(64.dp), kind = k)
+                    Text(k.label + if (on) " ✓" else "", style = MaterialTheme.typography.labelLarge, color = if (on) sig.ai else MaterialTheme.colorScheme.onSurface)
+                }
+            }
+        }
+        Hint(PetView.kindOf(boss.petKind).what + "。腮红、项圈、花盆的颜色跟着态度变；严格时会皱眉。")
+        SwitchLine("放在桌面上（点它、按住它说话）", boss.pet) { setBoss(boss.copy(pet = it)) }
         Text("主动程度", style = MaterialTheme.typography.labelLarge, color = sig.muted)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             BossConfig.INITIATIVE.forEachIndexed { i, name -> QuickChip(name + if (boss.initiative == i) " ✓" else "", sig.ai) { setBoss(boss.copy(initiative = i)) } }
         }
-        Hint("安静：只在出事时找你。标准：一天三次问候（上午、下午、晚上），加上抽查和回访。黏人：每一个半小时问你一次。调低、收起墨灵 24 小时后生效。")
-        Hint("桌面小部件：长按桌面 → 小组件 → 总控 · 墨灵。")
+        Hint("安静：只在出事时找你。标准：一天三次问候（上午、下午、晚上），加上抽查和回访。黏人：每一个半小时问你一次。调低、收起宠物 24 小时后生效；换形象马上生效。")
+        Hint("桌面小部件：长按桌面 → 小组件 → 总控。")
     }
 }
+
+/** 语音服务商预设：点一下填好地址、模型、音色，剩下只要贴密钥。 */
+private data class VoicePreset(val name: String, val url: String, val tts: String, val voice: String, val stt: String, val note: String, val voices: List<Pair<String, String>>)
+
+private val VOICE_PRESETS = listOf(
+    VoicePreset(
+        "硅基流动", "https://api.siliconflow.cn/v1", "FunAudioLLM/CosyVoice2-0.5B", "FunAudioLLM/CosyVoice2-0.5B:anna", "FunAudioLLM/SenseVoiceSmall",
+        "国内直连，中文自然。去 cloud.siliconflow.cn 注册 → API 密钥 → 新建，贴到下面。",
+        listOf("anna" to "沉稳女声", "claire" to "温柔女声", "bella" to "激情女声", "diana" to "欢快女声", "alex" to "沉稳男声", "benjamin" to "低沉男声", "charles" to "磁性男声", "david" to "欢快男声")
+            .map { (id, n) -> "FunAudioLLM/CosyVoice2-0.5B:$id" to n },
+    ),
+    VoicePreset(
+        "OpenAI", "https://api.openai.com/v1", "tts-1", "alloy", "whisper-1",
+        "要能访问 OpenAI。platform.openai.com → API keys → 新建，贴到下面。",
+        listOf("alloy" to "alloy 中性", "nova" to "nova 女声", "shimmer" to "shimmer 女声", "echo" to "echo 男声", "onyx" to "onyx 低沉", "fable" to "fable 英式"),
+    ),
+)
 
 @Composable
 private fun SwitchLine(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {

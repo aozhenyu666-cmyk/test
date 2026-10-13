@@ -22,6 +22,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlin.math.PI
 import kotlin.math.cos
@@ -42,6 +44,10 @@ import kotlin.random.Random
  *  涟漪 Ripple         听你说话（语音）：一圈圈往外荡
  *  年轮 TreeRings      档案：一天一圈，信用越高线越稳
  *  流线 FlowLines      首页底纹：几条慢慢漂的长线
+ *  月相 MoonPhase      远方（长期目标）：挂在首页上方，月亮随时间从新月长到满月
+ *  星图 StarMap        事项：这周做完的每一步是一颗星，同一件事连成星座
+ *  轨道 Orbit          总控怎么运转：收→谋→筹→行→验，一颗点绕着走
+ *  漩涡 order          卡住页：选了原因，螺线松开变成几条路
  *  （已有）星空、树枝生长、呼吸圈
  *
  * 系统关了动画就全部静止在一个好看的定格上。
@@ -243,19 +249,21 @@ fun Lightning(strike: Int, color: Color, modifier: Modifier = Modifier, ambient:
 
 /** 风暴漩涡：几条对数螺线往里旋，[intensity] 越大转得越快、线越多。 */
 @Composable
-fun Vortex(color: Color, modifier: Modifier = Modifier, intensity: Float = 1f) {
+fun Vortex(color: Color, modifier: Modifier = Modifier, intensity: Float = 1f, order: Float = 0f) {
     val t = loop((9000 / intensity.coerceIn(0.3f, 3f)).toInt(), "vortex")
+    // order 0 → 1：螺线一点点松开、停住，变成从中心伸出去的几条路（卡住 → 找到办法）
+    val calm = 1f - order.coerceIn(0f, 1f)
     Canvas(modifier) {
         val c = Offset(size.width / 2, size.height / 2)
         val rMax = min(size.width, size.height) / 2
         val arms = (4 + intensity * 2).toInt().coerceIn(3, 10)
         for (k in 0 until arms) {
             val p = Path()
-            val a0 = (2 * PI * k / arms + t * 2 * PI).toFloat()
+            val a0 = (2 * PI * k / arms + t * 2 * PI * calm).toFloat()
             var first = true
             var r = rMax * 0.06f
             while (r < rMax) {
-                val ang = a0 + 0.9f * ln(r / (rMax * 0.06f))
+                val ang = a0 + 0.9f * calm * ln(r / (rMax * 0.06f))
                 val x = c.x + r * cos(ang)
                 val y = c.y + r * sin(ang) * 0.82f
                 if (first) { p.moveTo(x, y); first = false } else p.lineTo(x, y)
@@ -334,6 +342,124 @@ fun FlowLines(color: Color, modifier: Modifier = Modifier, lines: Int = 5) {
     }
 }
 
+// ---------- 月相 ----------
+
+/**
+ * 一弯挂着的月亮：顶上一根细线吊着，轻轻晃。[phase] 0（新月）… 1（满月）= 时间走了多少；
+ * 亮的部分用横向细线排出来（线描，不涂实）。
+ */
+@Composable
+fun MoonPhase(phase: Float, color: Color, modifier: Modifier = Modifier, hang: Boolean = true) {
+    val t = loop(7000, "moon")
+    Canvas(modifier) {
+        val r = min(size.width, size.height * (if (hang) 0.62f else 1f)) / 2 * 0.86f
+        val sway = if (hang) (sin(t * 2 * PI) * 0.05).toFloat() else 0f
+        val top = Offset(size.width / 2, 0f)
+        val len = if (hang) size.height - r * 2 - 2f else 0f
+        val c = if (hang) Offset(top.x + sin(sway) * (len + r), len * cos(sway) + r) else Offset(size.width / 2, size.height / 2)
+        if (hang) drawLine(color.copy(alpha = 0.45f), top, Offset(top.x + sin(sway) * len, len * cos(sway)), 1.2f)
+        drawCircle(color.copy(alpha = 0.55f), r, c, style = Stroke(1.3f))
+        val p = phase.coerceIn(0f, 1f)
+        val step = r / 7f
+        var y = -r + step / 2
+        var i = 0
+        while (y < r) {
+            val w = sqrt(r * r - y * y)
+            // 盈月：右边亮，晨昏线从右往左扫过去
+            val xt = w * (1 - 2 * p)
+            val shimmer = 0.6f + 0.4f * sin((t * 2 * PI + i * 0.7).toFloat())
+            if (w - xt > 0.5f) drawLine(color.copy(alpha = color.alpha * (0.45f + 0.5f * shimmer)), Offset(c.x + xt, c.y + y), Offset(c.x + w, c.y + y), 1.4f, cap = StrokeCap.Round)
+            y += step
+            i++
+        }
+    }
+}
+
+// ---------- 星图 ----------
+
+/**
+ * 本周星图：[groups] 每件事这周做完了几步。一步一颗星，同一件事的星连成一个星座。
+ * 星座的位置按事项的序号定（每周一样的事在同一片天上），星星慢慢闪。
+ */
+@Composable
+fun StarMap(groups: List<Int>, color: Color, modifier: Modifier = Modifier, seed: Int = 3) {
+    val t = loop(5200, "stars")
+    Canvas(modifier) {
+        val n = groups.size.coerceAtLeast(1)
+        groups.forEachIndexed { gi, count ->
+            val rnd = Random(seed * 131 + gi * 17)
+            val cx = size.width * (gi + 0.5f) / n
+            val cy = size.height * (0.35f + 0.3f * rnd.nextFloat())
+            val spread = min(size.width / n, size.height) * 0.42f
+            val pts = (0 until count.coerceAtMost(12)).map {
+                Offset(
+                    (cx + (rnd.nextFloat() - 0.5f) * 2 * spread).coerceIn(4f, size.width - 4f),
+                    (cy + (rnd.nextFloat() - 0.5f) * 1.6f * spread).coerceIn(4f, size.height - 4f),
+                )
+            }
+            // 连线：按顺序连（做完的先后），像星座
+            for (k in 1 until pts.size) drawLine(color.copy(alpha = 0.28f), pts[k - 1], pts[k], 1f)
+            pts.forEachIndexed { k, pt ->
+                val tw = 0.55f + 0.45f * sin((t * 2 * PI + k * 1.9 + gi).toFloat())
+                val rr = 2.2f + 1.2f * tw
+                drawLine(color.copy(alpha = 0.7f * tw), Offset(pt.x - rr * 1.8f, pt.y), Offset(pt.x + rr * 1.8f, pt.y), 1f)
+                drawLine(color.copy(alpha = 0.7f * tw), Offset(pt.x, pt.y - rr * 1.8f), Offset(pt.x, pt.y + rr * 1.8f), 1f)
+                drawCircle(color.copy(alpha = 0.6f + 0.4f * tw), rr * 0.6f, pt)
+            }
+        }
+        if (groups.all { it == 0 }) {
+            // 一颗都没有：只有几颗很淡的背景星
+            val rnd = Random(seed)
+            repeat(14) { drawCircle(color.copy(alpha = 0.15f + 0.1f * sin((t * 2 * PI + it).toFloat())), 1.2f, Offset(rnd.nextFloat() * size.width, rnd.nextFloat() * size.height)) }
+        }
+    }
+}
+
+// ---------- 轨道 ----------
+
+/**
+ * 轨道：[labels] 几站排在一个椭圆上，一颗点沿着轨道慢慢走；[active] 那一站亮着（-1 = 不点亮）。
+ */
+@Composable
+fun Orbit(labels: List<String>, color: Color, modifier: Modifier = Modifier, active: Int = -1, textColor: Color = color) {
+    val t = loop(14000, "orbit")
+    Canvas(modifier) {
+        val c = Offset(size.width / 2, size.height / 2)
+        val rx = size.width * 0.36f
+        val ry = size.height * 0.34f
+        val path = Path()
+        for (k in 0..96) {
+            val a = (2 * PI * k / 96).toFloat()
+            val x = c.x + rx * cos(a)
+            val y = c.y + ry * sin(a)
+            if (k == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        ink(path, color, 1.2f, 0.4f)
+        val n = labels.size.coerceAtLeast(1)
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = 13.dp.toPx()
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+        labels.forEachIndexed { i, label ->
+            val a = (-PI / 2 + 2 * PI * i / n).toFloat()
+            val p = Offset(c.x + rx * cos(a), c.y + ry * sin(a))
+            val on = i == active
+            drawCircle(color.copy(alpha = if (on) 1f else 0.6f), if (on) 6.5f else 4f, p, style = if (on) androidx.compose.ui.graphics.drawscope.Fill else Stroke(1.4f))
+            paint.color = android.graphics.Color.argb((textColor.alpha * 255).toInt(), (textColor.red * 255).toInt(), (textColor.green * 255).toInt(), (textColor.blue * 255).toInt())
+            paint.isFakeBoldText = on
+            val ox = cos(a) * 26.dp.toPx()
+            val oy = sin(a) * 18.dp.toPx() + paint.textSize / 3
+            drawContext.canvas.nativeCanvas.drawText(label, p.x + ox, p.y + oy, paint)
+        }
+        // 走着的那颗点，拖一小段尾巴
+        for (k in 0 until 8) {
+            val a = (-PI / 2 + 2 * PI * (t - k * 0.008f)).toFloat()
+            drawCircle(color.copy(alpha = 0.9f * (1 - k / 8f)), 3.2f - k * 0.3f, Offset(c.x + rx * cos(a), c.y + ry * sin(a)))
+        }
+        drawCircle(color.copy(alpha = 0.5f), 3f, c)
+    }
+}
+
 /** 动效画廊用：名字、母题、用在哪。 */
 data class Motif(val name: String, val what: String, val where: String)
 
@@ -346,6 +472,10 @@ val MOTIFS = listOf(
     Motif("涟漪", "一圈圈往外荡", "语音：听你说话"),
     Motif("年轮", "一天一圈，信用越高圈越圆", "档案"),
     Motif("流线", "几条慢慢漂的长线", "首页底纹"),
+    Motif("月相", "一弯月亮吊在细线上轻轻晃，从新月长到满月 = 时间走了多少", "首页上方：远方（长期目标）"),
+    Motif("星图", "这周做完的每一步是一颗星，同一件事连成星座", "事项页顶上"),
+    Motif("轨道", "收→谋→筹→行→验，一颗点绕着走", "总控怎么运转"),
+    Motif("漩涡 → 秩序", "螺线松开、停住，变成从中心伸出去的几条路", "卡住了：选了原因之后"),
     Motif("星空 · 树枝 · 呼吸圈", "（之前就有）", "总控时间"),
 )
 

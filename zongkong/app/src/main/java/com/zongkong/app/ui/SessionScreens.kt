@@ -338,6 +338,9 @@ fun StuckScreen(key: String, nav: NavHostController) {
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            // 漩涡：选了原因，螺线松开变成几条路
+            val order by androidx.compose.animation.core.animateFloatAsState(if (reason != null) 1f else 0f, androidx.compose.animation.core.tween(1800), label = "order")
+            androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth().height(90.dp)) { Vortex(sig.strict, Modifier.fillMaxSize(), intensity = 1.1f, order = order) }
             Text(a.title, style = MaterialTheme.typography.titleLarge.merge(SerifTitle))
             Text("先看看是哪一种：", style = MaterialTheme.typography.titleSmall)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {

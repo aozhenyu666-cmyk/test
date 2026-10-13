@@ -437,6 +437,17 @@ class ZkTools(private val env: AgentEnv) {
                 Param("steps", "string", "步骤，每行：标题｜估计分钟（按先后顺序）", required = true),
             ),
         ),
+        ToolSpec(
+            "set_aim", "挂一个长期目标（求职、考试这类跨好几周、周计划装不下的事）或改它。首页上方会挂一弯月亮显示时间走了多少；关联事项后能看出这周有没有一步落在它上面。最多 ${com.zongkong.core.plan.Aims.MAX} 个。",
+            listOf(
+                Param("id", "string", "改哪一个（空 = 新建）"),
+                Param("title", "string", "目标，短：秋招拿到 offer / 12 月考过 CPA 会计"),
+                Param("why", "string", "为什么要它（一句）"),
+                Param("deadline", "string", "截止日：12-20 / 2027-03-01；没有期限就空着"),
+                Param("threads", "string", "关联的事项（编号或标题，逗号分隔）"),
+                Param("done", "boolean", "true = 达成或放下，从首页摘掉"),
+            ),
+        ),
         ToolSpec("vein_due", "脉络里该回头看的：等验证的假设（按多久没回填排）、今天该温故的、候选卡片数、体检分。主动提问时用。"),
         ToolSpec("get_dossier", "看档案：信用分的每一笔、态度、全部未结约定、最近的陈述和判定、排了的回访。"),
         ToolSpec("sync_notion", "现在和 Notion 同步一次（拉 GPT 写进去的、推总控改过的）。"),
@@ -494,6 +505,7 @@ class ZkTools(private val env: AgentEnv) {
                 "distill" -> distill(a)
                 "calibration" -> ToolResult(com.zongkong.core.plan.Calibrate.brief(env.work(), env.zone, env.now()), "看了估时和精力地图")
                 "backward_plan" -> backwardPlan(a)
+                "set_aim" -> setAim(a)
                 "vein_search" -> veinSearch(a)
                 "vein_node" -> veinNode(a)
                 "vein_propose" -> veinPropose(a)
@@ -677,6 +689,36 @@ class ZkTools(private val env: AgentEnv) {
             env.kick()
         }
         return ToolResult("提炼了「${n.title}」：$gist" + (t?.let { "，归位到 ${it[F.CODE]}「${it.title}」" } ?: ""), "提炼「${n.title.take(12)}」")
+    }
+
+    private fun setAim(a: Args): ToolResult {
+        val now = env.now()
+        val id = a.s("id")
+        if (a.b("done") == true) {
+            if (id.isBlank()) return ToolResult.fail("要写摘掉哪一个（id）")
+            var err: String? = null
+            env.updatePlans { b -> com.zongkong.core.plan.Aims.close(b, id, now).getOrElse { e -> err = e.message; b } }
+            return err?.let { ToolResult.fail(it) } ?: ToolResult("摘掉了长期目标 $id", "放下长期目标")
+        }
+        val dl = a.s("deadline").takeIf { it.isNotBlank() }?.let { raw ->
+            val p = TimeParse.parse(raw, now, env.zone) ?: return ToolResult.fail("截止日认不出：$raw")
+            val ms = TimeParse.startMillis(p, env.zone) ?: return ToolResult.fail("截止日认不出：$raw")
+            java.time.Instant.ofEpochMilli(ms).atZone(env.zone).toLocalDate()
+        }
+        val threads = a.s("threads").takeIf { it.isNotBlank() }?.split(',', '，', '、')?.map { it.trim() }?.filter { it.isNotEmpty() }?.map { ref ->
+            (findThread(ref) ?: return noThread(ref)).key
+        }
+        var err: String? = null
+        val book = env.updatePlans { b ->
+            com.zongkong.core.plan.Aims.set(b, id, a.s("title"), a.s("why"), dl, threads, now) { newId("aim") }.getOrElse { e -> err = e.message; b }
+        }
+        err?.let { return ToolResult.fail(it) }
+        val aim = (if (id.isBlank()) book.aims.lastOrNull() else book.aims.firstOrNull { it.id == id }) ?: return ToolResult.fail("没找到")
+        val left = com.zongkong.core.plan.Aims.daysLeft(aim, now, env.zone)
+        return ToolResult(
+            "长期目标 [${aim.id}] ${aim.title}｜${left?.let { "还剩 $it 天" } ?: "没有期限"}｜关联 ${aim.threads.size} 件事项。已挂在首页上方。",
+            if (id.isBlank()) "挂上长期目标：${aim.title}" else "改了长期目标：${aim.title}",
+        )
     }
 
     private fun backwardPlan(a: Args): ToolResult {

@@ -81,11 +81,12 @@ fun SettingsScreen(nav: NavHostController) {
         )
 
         SectionLabel("互动")
-        MenuItem("对讲、语音、墨灵", "${if (config.voice.apiReady) "语音接口已接" else "用手机自带的语音"} · 主动程度：${com.zongkong.core.boss.BossConfig.INITIATIVE.getOrElse(config.boss.initiative) { "?" }} · 墨灵${if (config.boss.pet) "在桌面上" else "收起了"}", "voice", nav)
+        MenuItem("总控怎么运转", "收→谋→筹→行→验；今天几点主动找你、信用怎么算、行动和记录怎么用", "flow", nav)
+        MenuItem("对讲、语音、桌面宠物", "${if (config.voice.apiReady) "语音接口已接" else "用手机自带的语音"} · 主动程度：${com.zongkong.core.boss.BossConfig.INITIATIVE.getOrElse(config.boss.initiative) { "?" }} · ${com.zongkong.app.system.PetView.kindOf(config.boss.petKind).label}${if (config.boss.pet) "在桌面上" else "收起了"}", "voice/settings", nav)
 
         SectionLabel("工具")
         MenuItem("脉络", "谋划思考部的知识结构：体系 → 层级 → 节点 → 关系", "vein", nav)
-        MenuItem("线条动效", "潮汐、叶脉、矩阵、雷霆、漩涡、涟漪、年轮、流线", "gallery", nav)
+        MenuItem("线条动效", "潮汐、叶脉、矩阵、雷霆、漩涡、涟漪、年轮、流线、月相、星图、轨道", "gallery", nav)
 
         SectionLabel("运行")
         MenuItem("权限与运行状态", if (PermissionStatus.accessibility(context)) "无障碍已开启" else "无障碍未开启——总控没在盯", "settings/perm", nav, warn = !PermissionStatus.accessibility(context))

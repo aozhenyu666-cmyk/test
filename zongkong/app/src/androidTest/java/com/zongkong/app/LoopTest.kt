@@ -740,4 +740,102 @@ class LoopTest {
         Thread.sleep(800)
         shot("e2e-74-gallery")
     }
+
+    /**
+     * 0.6.1 小修：底栏点哪去哪（以前点“今天/四部”会跳到总控/事项）、远方的月亮、事项页的星图和行动快捷键、
+     * 记录读 Notion 正文、“总控怎么运转”、三个宠物形象。
+     */
+    @Test
+    fun smallFixes() {
+        val dbs = app.store.config.value.notion
+        val now = System.currentTimeMillis()
+        val tk = app.actions.work.createThread("秋招")
+        val (a1, _) = app.actions.work.addAction(tk, "改简历", "", "发给两个朋友看过")
+        app.actions.work.addAction(tk, "投 3 家", "", "")
+        app.actions.work.complete(a1!!, "改完发出去了", com.zongkong.core.work.WorkOps.Met.YES, "投 3 家")
+        val tk2 = app.actions.work.createThread("科目一")
+        val (b1, _) = app.actions.work.addAction(tk2, "刷 50 题", "", "")
+        app.actions.work.complete(b1!!, "刷完了", com.zongkong.core.work.WorkOps.Met.YES, "")
+        runBlocking { app.actions.work.sync() }
+        // GPT 在 Notion 里写了一条记录，长内容在页面正文里
+        val threadNotion = app.store.work.value.rec(tk)!!.notionId
+        runBlocking {
+            val schema = (gpt.schema(dbs.notesDb) as ApiResult.Ok).value.props
+            val f = mapOf(F.TITLE to "面经整理", F.TYPE to "材料", F.SOURCE to "GPT", F.THREAD to "x")
+            val p = NotionMap.toProps(f, f.keys, schema) { threadNotion }
+            assertTrue(gpt.createPageObject(dbs.notesDb, p.json, NotionClient.paragraphs("群面先定框架，再分工；最后一分钟留给总结。")) is ApiResult.Ok)
+            app.actions.work.sync()
+        }
+        val beijing = ZoneId.of("Asia/Shanghai")
+        app.store.updatePlans { b0 ->
+            var b = com.zongkong.core.plan.Aims.set(b0, "", "秋招拿到 offer", "毕业前有着落", java.time.LocalDate.now(beijing).plusDays(40), listOf(tk), now - 20 * 86_400_000L) { "aim1" }.getOrThrow()
+            b = com.zongkong.core.plan.Aims.set(b, "", "考过科目一", "", java.time.LocalDate.now(beijing).plusDays(5), listOf(tk2), now - 30 * 86_400_000L) { "aim2" }.getOrThrow()
+            b
+        }
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java))
+        waitFor(hasTestTag("aims"), 10_000, "远方")
+        waitText("还剩 5 天", 5_000)
+        settle()
+        Thread.sleep(1_000)
+        shot("e2e-80-home-aims")
+
+        // 底栏：总控 → 事项 → 今天 → 四部，每次都到点的那一页
+        compose.onNodeWithTag("tab-chat").performClick()
+        waitFor(hasTestTag("flow-open"), 5_000, "总控页")
+        compose.onNodeWithTag("tab-threads").performClick()
+        waitFor(hasTestTag("star-map"), 5_000, "事项页的星图")
+        waitText("本周星图：2 颗", 5_000)
+        settle()
+        Thread.sleep(800)
+        shot("e2e-81-threads-stars")
+        compose.onNodeWithTag("tab-home").performClick()
+        waitFor(hasTestTag("aims"), 5_000, "回到今天")
+        compose.onNodeWithTag("tab-depts").performClick()
+        waitText("四个部门", 5_000)
+        compose.onNodeWithTag("tab-chat").performClick()
+        waitFor(hasTestTag("flow-open"), 5_000, "总控页")
+        compose.onNodeWithTag("tab-depts").performClick()
+        waitText("四个部门", 5_000)
+        compose.onNodeWithTag("tab-home").performClick()
+        waitFor(hasTestTag("aims"), 5_000, "回到今天")
+
+        // 事项：行动上直接“开始 / 做完”，记录读 Notion 正文
+        go("thread/$tk")
+        waitText("✓ 做完", 5_000)
+        waitText("面经整理", 10_000)
+        compose.onNode(hasText("面经整理")).performScrollTo().performClick()
+        compose.onNode(hasText("读 Notion 正文")).performScrollTo().performClick()
+        waitText("群面先定框架", 10_000)
+        settle()
+        shot("e2e-82-thread-actions-notes")
+
+        // 总控怎么运转
+        go("flow")
+        waitFor(hasTestTag("flow-today"), 5_000, "流程页")
+        settle()
+        Thread.sleep(1_000)
+        shot("e2e-83-flow")
+        compose.onNode(hasText("行动怎么用？做完要怎么标？")).performScrollTo().performClick()
+        settle()
+        shot("e2e-84-flow-faq")
+
+        // 宠物形象：换成团子，马上生效
+        go("voice/settings")
+        waitFor(hasTestTag("pet-kinds"), 5_000, "形象")
+        compose.onNodeWithTag("pet-kinds").performScrollTo()
+        settle()
+        shot("e2e-85-pets")
+        compose.onNode(hasText("团子")).performClick()
+        settle()
+        assertEquals("CAT", app.store.config.value.boss.petKind)
+        compose.onNodeWithTag("voice-now").performScrollTo()
+        settle()
+        shot("e2e-86-voice-now")
+        go("gallery")
+        waitText("月相", 5_000)
+        compose.onNode(hasText("月相")).performScrollTo()
+        settle()
+        Thread.sleep(800)
+        shot("e2e-87-gallery-new")
+    }
 }

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 桌面小部件：墨灵 + 信用和态度 + 总控最近说的一句 + 说话 / 打开 -->
+<!-- 桌面小部件：宠物 + 信用和态度 + 总控最近说的一句 + 说话 / 打开 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
     android:layout_width="match_parent"

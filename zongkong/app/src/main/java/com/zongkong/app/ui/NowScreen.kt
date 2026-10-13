@@ -121,7 +121,11 @@ fun NowScreen(nav: NavHostController) {
     ) {
         // ---------- 问候 + 状态 ----------
         val d = Instant.ofEpochMilli(now).atZone(store.zone)
-        Box(Modifier.fillMaxWidth().height(28.dp)) { FlowLines(sig.line, Modifier.fillMaxSize(), lines = 3) }
+        // 远方：长期目标挂在最上面，一个一弯月亮
+        var editAim by remember { mutableStateOf<com.zongkong.core.plan.Aim?>(null) }
+        var addAim by remember { mutableStateOf(false) }
+        AimsStrip(book, now, onEdit = { editAim = it }, onAdd = { addAim = true })
+        if (addAim || editAim != null) AimDialog(editAim) { addAim = false; editAim = null }
         Row(verticalAlignment = Alignment.Top, modifier = Modifier.enter(0)) {
             Column(Modifier.weight(1f)) {
                 Text(greeting(d.hour), style = MaterialTheme.typography.displayMedium.copy(fontSize = 40.sp))
@@ -284,6 +288,92 @@ private fun HqStrip(cfg: com.zongkong.core.hq.HqConfig, book: com.zongkong.core.
             }
         }
     }
+}
+
+/** 远方：长期目标。没有就只是一道底纹和一个小小的“＋ 远方”。 */
+@Composable
+private fun AimsStrip(book: com.zongkong.core.plan.PlanBook, now: Long, onEdit: (com.zongkong.core.plan.Aim) -> Unit, onAdd: () -> Unit) {
+    val sig = LocalSignals.current
+    val zone = com.zongkong.core.DayClock.BEIJING
+    val aims = com.zongkong.core.plan.Aims.open(book)
+    if (aims.isEmpty()) {
+        Box(Modifier.fillMaxWidth().height(28.dp)) {
+            FlowLines(sig.line, Modifier.fillMaxSize(), lines = 3)
+            Text(
+                "＋ 远方", style = MaterialTheme.typography.labelMedium, color = sig.muted,
+                modifier = Modifier.align(Alignment.CenterEnd).clickable(onClick = onAdd).padding(6.dp).testTag("aim-add"),
+            )
+        }
+        return
+    }
+    Column(Modifier.fillMaxWidth().testTag("aims")) {
+        // 一根细杆，月亮吊在下面
+        Box(Modifier.fillMaxWidth().height(1.dp).background(sig.line.copy(alpha = 0.6f)))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            aims.forEach { a ->
+                val left = com.zongkong.core.plan.Aims.daysLeft(a, now, zone)
+                val color = if (left != null && left <= 7) sig.warn else sig.plan
+                Column(Modifier.width(76.dp).clickable { onEdit(a) }, horizontalAlignment = Alignment.CenterHorizontally) {
+                    MoonPhase(com.zongkong.core.plan.Aims.phase(a, now, zone), color, Modifier.width(40.dp).height(56.dp))
+                    Text(a.title, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        left?.let { if (it >= 0) "还剩 $it 天" else "过期 ${-it} 天" } ?: "没有期限",
+                        style = MaterialTheme.typography.labelSmall.merge(Mono), color = if (left != null && left <= 7) sig.warn else sig.muted,
+                    )
+                }
+            }
+            if (aims.size < com.zongkong.core.plan.Aims.MAX) {
+                Text("＋", style = MaterialTheme.typography.titleMedium, color = sig.muted, modifier = Modifier.padding(top = 18.dp).clickable(onClick = onAdd).padding(8.dp).testTag("aim-add"))
+            }
+        }
+    }
+}
+
+/** 挂一个 / 改一个长期目标。[aim] 空 = 新建。 */
+@Composable
+fun AimDialog(aim: com.zongkong.core.plan.Aim?, onDismiss: () -> Unit) {
+    val app = LocalContext.current.zk
+    val sig = LocalSignals.current
+    var title by remember { mutableStateOf(aim?.title.orEmpty()) }
+    var why by remember { mutableStateOf(aim?.why.orEmpty()) }
+    var deadline by remember { mutableStateOf(aim?.deadline.orEmpty()) }
+    var err by remember { mutableStateOf<String?>(null) }
+    val now = System.currentTimeMillis()
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (aim == null) "挂一个远方" else "远方") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Hint("周计划装不下的长期目标：求职、考试、作品集……不排日程，只挂在首页上方。月亮从新月长到满月 = 时间走了多少。和总控聊的时候说一句，它会帮你关联到事项、在周计划里留出一步。")
+                androidx.compose.material3.OutlinedTextField(title, { title = it }, label = { Text("目标") }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("aim-title"))
+                androidx.compose.material3.OutlinedTextField(why, { why = it }, label = { Text("为什么要它（可空）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                androidx.compose.material3.OutlinedTextField(deadline, { deadline = it; err = null }, label = { Text("截止日（12-20 / 2027-03-01，可空）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                err?.let { Text(it, color = sig.strict, style = MaterialTheme.typography.bodySmall) }
+                if (aim != null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = { app.store.updatePlans { b -> com.zongkong.core.plan.Aims.close(b, aim.id, now).getOrDefault(b) }; onDismiss() }) { Text("达成 / 放下", color = sig.free) }
+                        TextButton(onClick = { app.store.updatePlans { com.zongkong.core.plan.Aims.remove(it, aim.id) }; onDismiss() }) { Text("删掉", color = sig.muted) }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val dl = deadline.trim().takeIf { it.isNotEmpty() && it != aim?.deadline }?.let { raw ->
+                    val ms = TimeParse.parse(raw, now, app.store.zone)?.let { TimeParse.startMillis(it, app.store.zone) }
+                    if (ms == null) { err = "截止日认不出：$raw"; return@TextButton }
+                    Instant.ofEpochMilli(ms).atZone(app.store.zone).toLocalDate()
+                }
+                var fail: String? = null
+                app.store.updatePlans { b ->
+                    com.zongkong.core.plan.Aims.set(b, aim?.id.orEmpty(), title, why, dl, null, now) { "aim" + (now / 1000).toString(36).takeLast(5) }
+                        .getOrElse { e -> fail = e.message; b }
+                }
+                if (fail != null) err = fail else onDismiss()
+            }, modifier = Modifier.testTag("aim-save")) { Text("挂上") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 @Composable

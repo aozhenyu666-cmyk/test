@@ -461,4 +461,38 @@ class AgentTest {
         // 最后一步在截止前一天（10-19），晚上 20 点
         assertTrue(acts.last()[F.PLAN], acts.last()[F.PLAN].startsWith("2026-10-19T20:00"))
     }
+
+    @Test
+    fun longTermAimsHangAboveTheWeek() = runTest {
+        val env = FakeEnv()
+        env.w = WorkOps.create(env.w, Kind.THREAD, mapOf(F.TITLE to "秋招"), env.nowMs, env.rnd).first
+        val thread = env.w.threads().first()
+        env.w = WorkOps.create(env.w, Kind.ACTION, mapOf(F.TITLE to "改简历", F.THREAD to thread.key), env.nowMs, env.rnd).first
+        val tools = ZkTools(env)
+        val res = tools.run("set_aim", """{"title":"秋招拿到 offer","why":"毕业前有着落","deadline":"2026-12-20","threads":"秋招"}""")
+        assertTrue(res.text, res.ok)
+        val aim = env.book.aims.single()
+        assertEquals("2026-12-20", aim.deadline)
+        assertEquals(listOf(thread.key), aim.threads)
+        assertEquals(70L, com.zongkong.core.plan.Aims.daysLeft(aim, env.nowMs, env.zone))
+        assertEquals(0f, com.zongkong.core.plan.Aims.phase(aim, env.nowMs, env.zone), 0.001f)
+        // 系统提示里看得到；这周没一步落在它上面会被点出来
+        val sys = Agent(Scripted(), env).systemPrompt()
+        assertTrue(sys.contains("秋招拿到 offer"))
+        assertTrue(sys.contains("一周没有一步落在"))
+        // 做了一步就不再点名
+        env.w = env.w.copy(events = env.w.events + com.zongkong.core.work.Event(env.nowMs, "start", env.w.actions().first().key))
+        assertEquals(1, com.zongkong.core.plan.Aims.recentSteps(env.book.aims.single(), env.w, env.nowMs))
+        // 过了一半时间，月亮走到一半
+        val mid = env.nowMs + 35 * 86_400_000L
+        assertEquals(0.5f, com.zongkong.core.plan.Aims.phase(aim, mid, env.zone), 0.02f)
+        // 最多挂 4 个
+        repeat(3) { tools.run("set_aim", """{"title":"目标$it"}""") }
+        assertFalse(tools.run("set_aim", """{"title":"第五个"}""").ok)
+        // 改、摘
+        assertTrue(tools.run("set_aim", """{"id":"${aim.id}","deadline":"2027-01-10"}""").ok)
+        assertEquals("2027-01-10", env.book.aims.first().deadline)
+        assertTrue(tools.run("set_aim", """{"id":"${aim.id}","done":true}""").ok)
+        assertEquals(3, com.zongkong.core.plan.Aims.open(env.book).size)
+    }
 }

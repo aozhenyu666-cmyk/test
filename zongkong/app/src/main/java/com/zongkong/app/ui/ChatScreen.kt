@@ -156,9 +156,11 @@ fun ChatScreen(nav: NavHostController) {
                 if (busy) Text("正在处理…", style = MaterialTheme.typography.labelMedium, color = sig.muted, maxLines = 1)
                 else StanceLine { nav.navigate("dossier") }
             }
+            TextButton(onClick = { nav.navigate("flow") }, modifier = Modifier.testTag("flow-open")) { Text("流程", color = sig.ai) }
             Box {
                 TextButton(onClick = { menu = true }) { Text("···", fontSize = 20.sp, color = sig.muted) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("它怎么运转：今天几点找你、怎么判你") }, onClick = { menu = false; nav.navigate("flow") })
                     DropdownMenuItem(text = { Text("档案：信用、约定、判定") }, onClick = { menu = false; nav.navigate("dossier") })
                     DropdownMenuItem(text = { Text("它记住的事（${log.memory.size}）") }, onClick = { menu = false; showMemory = true })
                     DropdownMenuItem(text = { Text("清空对话") }, onClick = { menu = false; chat.clear() })

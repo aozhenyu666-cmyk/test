@@ -99,6 +99,8 @@ data class DayPlan(
 data class PlanBook(
     val weeks: List<WeekPlan> = emptyList(),
     val days: List<DayPlan> = emptyList(),
+    /** 远方：周计划之外的长期目标。 */
+    val aims: List<Aim> = emptyList(),
 )
 
 object Plans {

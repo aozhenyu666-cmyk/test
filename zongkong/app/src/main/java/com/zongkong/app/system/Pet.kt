@@ -38,14 +38,24 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * 桌面宠物：一只线条画的小墨灵，浮在所有应用上面（借无障碍服务的悬浮层，不用另开“悬浮窗”权限）。
+ * 桌面宠物：一只 Q 版的小家伙（夜枭 / 团子 / 小葵，可选），浮在所有应用上面（借无障碍服务的悬浮层，不用另开“悬浮窗”权限）。
  *  - 点一下：弹出它最近说的话，和“说话 / 打开 / 收起”三个按钮
  *  - 按住：对它说话（配了听写接口时直接录音；没配就打开对讲页），松手发出去，它的回答显示在气泡里并念出来
  *  - 拖动：挪位置，松手贴边
- *  - 颜色跟着态度变：信任绿、正常赭、审慎琥珀、严格朱红；头上一根叶脉触角，主动找你时会跳一下
+ *  - 腮红、项圈、花盆跟着态度变色：信任绿、正常赭、审慎琥珀、严格朱红；严格时皱眉（夜枭戴眼镜），主动找你时会跳一下
  */
 class PetView(context: Context) : View(context) {
     enum class Mood { IDLE, TALK, LISTEN, THINK, ALERT, SLEEP }
+
+    /** 三个形象。 */
+    enum class Kind(val label: String, val what: String) {
+        OWL("夜枭", "小猫头鹰：夜里也醒着，严格的时候戴上眼镜"),
+        CAT("团子", "橘色圆猫：尾巴会甩，项圈上挂个铃铛"),
+        FLOWER("小葵", "盆里的向日葵：想事情时花瓣转圈，花盆是态度色"),
+    }
+
+    var kind = Kind.OWL
+        set(v) { field = v; invalidate() }
 
     var mood = Mood.IDLE
         set(v) { field = v; invalidate() }
@@ -59,7 +69,7 @@ class PetView(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val t = (SystemClock.uptimeMillis() - born) / 1000f
-        paint(canvas, width.toFloat(), height.toFloat(), t, mood, stance, ((SystemClock.uptimeMillis() - bounceAt) / 600f).coerceIn(0f, 1f))
+        paint(canvas, width.toFloat(), height.toFloat(), t, mood, stance, ((SystemClock.uptimeMillis() - bounceAt) / 600f).coerceIn(0f, 1f), kind)
         if (isAttachedToWindow) postInvalidateDelayed(if (mood == Mood.IDLE || mood == Mood.SLEEP) 66 else 33)
     }
 
@@ -71,112 +81,325 @@ class PetView(context: Context) : View(context) {
             Stance.STRICT -> Color.rgb(0xB8, 0x3A, 0x2E)
         }
 
+        fun kindOf(name: String): Kind = Kind.entries.firstOrNull { it.name == name } ?: Kind.OWL
+
+        private val INK = Color.rgb(0x2A, 0x24, 0x1F)
+        private val PAPER = Color.rgb(0xFB, 0xF8, 0xF2)
         private val ink = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
         private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
 
-        /** 画一只墨灵。[bounce] 0 → 1 是刚跳完的进度（1 = 不跳）。 */
-        fun paint(c: Canvas, w: Float, h: Float, t: Float, mood: Mood, stance: Stance, bounce: Float) {
+        private fun oval(x: Float, y: Float, rx: Float, ry: Float) = RectF(x - rx, y - ry, x + rx, y + ry)
+        private fun fillC(color: Int, alpha: Int = 255) { fill.color = color; fill.alpha = alpha }
+        private fun inkC(color: Int, width: Float, alpha: Int = 255) { ink.color = color; ink.alpha = alpha; ink.strokeWidth = width }
+
+        /**
+         * 画一只。[bounce] 0 → 1 是刚跳完的进度（1 = 不跳）。
+         * 三个形象共用表情：眨眼、睡着闭眼、听时眼睛睁大、想时眼睛往上瞟、说话张嘴、警觉皱眉加一道小闪电。
+         */
+        fun paint(c: Canvas, w: Float, h: Float, t: Float, mood: Mood, stance: Stance, bounce: Float, kind: Kind = Kind.OWL) {
             val accent = color(stance)
-            val inkColor = Color.rgb(0x2A, 0x24, 0x1F)
-            val cx = w / 2
             val hop = if (bounce < 1f) -sin(bounce * PI.toFloat()) * h * 0.12f else 0f
-            val breathe = if (mood == Mood.SLEEP) sin(t * 1.2f) * 0.015f else sin(t * 2.2f) * 0.03f
-            val r = minOf(w, h) * 0.30f * (1 + breathe)
-            val cy = h * 0.58f + hop
-            // 听的时候：涟漪
+            val breathe = if (mood == Mood.SLEEP) sin(t * 1.2f) * 0.015f else sin(t * 2.2f) * 0.025f
+            // 听的时候：身后一圈圈涟漪
             if (mood == Mood.LISTEN) for (i in 0 until 3) {
                 val f = ((t * 0.8f) + i / 3f) % 1f
-                ink.color = accent; ink.alpha = ((1 - f) * 200).toInt(); ink.strokeWidth = 2f
-                c.drawCircle(cx, cy, r * (1.05f + 0.6f * f), ink)
+                inkC(accent, 2f, ((1 - f) * 200).toInt())
+                c.drawCircle(w / 2, h * 0.55f, minOf(w, h) * 0.3f * (1.05f + 0.6f * f), ink)
             }
-            // 身体：一团微微起伏的墨，纸色填充
-            val body = Path()
-            for (k in 0..48) {
-                val a = (2 * PI * k / 48).toFloat()
-                val wob = 1 + 0.045f * sin(a * 3 + t * 1.6f) + 0.03f * sin(a * 5 - t * 2.1f)
-                val x = cx + r * wob * cos(a)
-                val y = cy + r * wob * sin(a) * 0.92f
-                if (k == 0) body.moveTo(x, y) else body.lineTo(x, y)
+            c.save()
+            c.translate(0f, hop)
+            val head = when (kind) {
+                Kind.OWL -> owl(c, w, h, t, mood, stance, accent, breathe)
+                Kind.CAT -> cat(c, w, h, t, mood, stance, accent, breathe)
+                Kind.FLOWER -> flower(c, w, h, t, mood, stance, accent, breathe)
             }
-            body.close()
-            fill.color = Color.rgb(0xFB, 0xF8, 0xF2); fill.alpha = 245
-            c.drawPath(body, fill)
-            ink.color = inkColor; ink.alpha = 255; ink.strokeWidth = r * 0.09f
-            c.drawPath(body, ink)
-            // 头上的叶脉触角，摆
-            val sway = sin(t * 1.7f) * r * 0.25f
-            val tip = floatArrayOf(cx + sway, cy - r * 1.75f)
-            val stem = Path().apply { moveTo(cx, cy - r * 0.95f); quadTo(cx - r * 0.1f, cy - r * 1.35f, tip[0], tip[1]) }
-            ink.color = accent; ink.strokeWidth = r * 0.08f
-            c.drawPath(stem, ink)
-            ink.strokeWidth = r * 0.05f
-            for (side in listOf(-1f, 1f)) {
-                val m = floatArrayOf(cx + sway * 0.6f, cy - r * 1.45f)
-                c.drawLine(m[0], m[1], m[0] + side * r * 0.28f, m[1] - r * 0.18f, ink)
-            }
-            fill.color = accent; fill.alpha = 255
-            c.drawCircle(tip[0], tip[1], r * 0.1f, fill)
-            // 眼睛：眨眼、睡着是两道弧、听的时候睁大
-            val eyeY = cy - r * 0.1f
-            val dx = r * 0.36f
+            overlays(c, head[0], head[1], head[2], t, mood, stance, accent)
+            c.restore()
+        }
+
+        /** 二次元的眼睛：黑色椭圆 + 两个高光；闭眼是一道弯。 */
+        private fun eye(c: Canvas, x: Float, y: Float, rw: Float, rh: Float, t: Float, mood: Mood) {
             val blink = (t % 4.3f) < 0.13f
-            fill.color = inkColor
-            ink.color = inkColor; ink.strokeWidth = r * 0.07f
-            for (s in listOf(-1f, 1f)) {
-                val ex = cx + s * dx
-                when {
-                    mood == Mood.SLEEP -> c.drawArc(RectF(ex - r * 0.12f, eyeY - r * 0.08f, ex + r * 0.12f, eyeY + r * 0.1f), 0f, 180f, false, ink)
-                    blink -> c.drawLine(ex - r * 0.1f, eyeY, ex + r * 0.1f, eyeY, ink)
-                    else -> c.drawCircle(ex, eyeY, r * if (mood == Mood.LISTEN) 0.12f else 0.085f, fill)
-                }
+            if (mood == Mood.SLEEP || blink) {
+                inkC(INK, rw * 0.5f)
+                c.drawArc(oval(x, y - rh * 0.2f, rw * 1.1f, rh * 0.6f), 20f, 140f, false, ink)
+                return
             }
-            // 嘴：说话时一开一合，想的时候是一条线，警觉时是 o
-            val my = cy + r * 0.3f
+            val look = when (mood) {
+                Mood.THINK -> floatArrayOf(rw * 0.35f, -rh * 0.3f)
+                Mood.IDLE -> floatArrayOf(sin(t * 0.5f) * rw * 0.25f, 0f)
+                else -> floatArrayOf(0f, 0f)
+            }
+            val k = when (mood) { Mood.LISTEN -> 1.15f; Mood.ALERT -> 0.85f; else -> 1f }
+            val ex = x + look[0]
+            val ey = y + look[1]
+            fillC(INK)
+            c.drawOval(oval(ex, ey, rw * k, rh * k), fill)
+            fillC(Color.WHITE)
+            c.drawCircle(ex - rw * 0.32f, ey - rh * 0.38f, rw * 0.38f * k, fill)
+            c.drawCircle(ex + rw * 0.35f, ey + rh * 0.35f, rw * 0.16f * k, fill)
+        }
+
+        /** 嘴：说话一开一合，警觉是 o，想是一条斜线，平时微笑。 */
+        private fun mouth(c: Canvas, x: Float, y: Float, s: Float, t: Float, mood: Mood) {
+            inkC(INK, s * 0.32f)
             when (mood) {
                 Mood.TALK -> {
-                    val open = (sin(t * 14f) * 0.5f + 0.5f) * r * 0.16f + r * 0.03f
-                    c.drawOval(RectF(cx - r * 0.13f, my - open / 2, cx + r * 0.13f, my + open / 2), fill)
+                    val open = (sin(t * 14f) * 0.5f + 0.5f) * s * 0.9f + s * 0.2f
+                    fillC(Color.rgb(0x8E, 0x3B, 0x2E))
+                    c.drawOval(oval(x, y, s * 0.6f, open / 2), fill)
+                    c.drawOval(oval(x, y, s * 0.6f, open / 2), ink)
                 }
-                Mood.ALERT -> c.drawCircle(cx, my, r * 0.08f, ink)
-                Mood.THINK -> c.drawLine(cx - r * 0.12f, my, cx + r * 0.12f, my, ink)
-                else -> c.drawArc(RectF(cx - r * 0.16f, my - r * 0.12f, cx + r * 0.16f, my + r * 0.08f), 20f, 140f, false, ink)
+                Mood.ALERT -> c.drawCircle(x, y, s * 0.35f, ink)
+                Mood.THINK -> c.drawLine(x - s * 0.5f, y + s * 0.1f, x + s * 0.5f, y - s * 0.1f, ink)
+                Mood.SLEEP -> c.drawCircle(x, y, s * 0.18f, ink)
+                else -> c.drawArc(oval(x, y - s * 0.3f, s * 0.7f, s * 0.6f), 25f, 130f, false, ink)
             }
-            // 腮红（态度色）
-            fill.color = accent; fill.alpha = 60
-            c.drawCircle(cx - r * 0.58f, cy + r * 0.12f, r * 0.12f, fill)
-            c.drawCircle(cx + r * 0.58f, cy + r * 0.12f, r * 0.12f, fill)
-            // 警觉：旁边一道小闪电
+        }
+
+        private fun blush(c: Canvas, x1: Float, x2: Float, y: Float, rr: Float, accent: Int) {
+            fillC(accent, 70)
+            c.drawOval(oval(x1, y, rr * 1.3f, rr * 0.8f), fill)
+            c.drawOval(oval(x2, y, rr * 1.3f, rr * 0.8f), fill)
+        }
+
+        /** 严格 / 警觉时皱眉。 */
+        private fun brows(c: Canvas, x1: Float, x2: Float, y: Float, s: Float) {
+            inkC(INK, s * 0.22f)
+            c.drawLine(x1 - s, y - s * 0.35f, x1 + s * 0.7f, y + s * 0.15f, ink)
+            c.drawLine(x2 + s, y - s * 0.35f, x2 - s * 0.7f, y + s * 0.15f, ink)
+        }
+
+        // ---------- 夜枭：小猫头鹰，严格时戴上眼镜 ----------
+
+        private fun owl(c: Canvas, w: Float, h: Float, t: Float, mood: Mood, stance: Stance, accent: Int, breathe: Float): FloatArray {
+            val body = Color.rgb(0xA8, 0x86, 0x66)
+            val wing = Color.rgb(0x86, 0x66, 0x4C)
+            val belly = Color.rgb(0xF3, 0xE6, 0xD0)
+            val beak = Color.rgb(0xE3, 0xA2, 0x3B)
+            val cx = w / 2
+            val r = minOf(w, h) * 0.31f
+            val cy = h * 0.57f
+            val sy = 1 + breathe
+            // 耳羽
+            val wig = sin(t * 1.3f) * r * 0.05f
+            for (s in listOf(-1f, 1f)) {
+                val p = Path().apply {
+                    moveTo(cx + s * r * 0.4f, cy - r * 0.8f * sy)
+                    lineTo(cx + s * r * 0.8f + s * wig, cy - r * 1.25f * sy)
+                    lineTo(cx + s * r * 0.86f, cy - r * 0.5f * sy)
+                    close()
+                }
+                fillC(body); c.drawPath(p, fill)
+                inkC(INK, r * 0.07f); c.drawPath(p, ink)
+            }
+            // 翅膀（说话时扑）
+            val flap = if (mood == Mood.TALK) sin(t * 10f) * 10f else sin(t * 1.5f) * 2f
+            for (s in listOf(-1f, 1f)) {
+                c.save()
+                c.rotate(s * (10f + flap), cx + s * r * 0.8f, cy - r * 0.2f)
+                val wp = oval(cx + s * r * 0.9f, cy + r * 0.2f, r * 0.24f, r * 0.5f)
+                fillC(wing); c.drawOval(wp, fill)
+                inkC(INK, r * 0.06f); c.drawOval(wp, ink)
+                c.restore()
+            }
+            // 身子
+            val b = oval(cx, cy, r * 0.98f, r * sy)
+            fillC(body); c.drawOval(b, fill)
+            fillC(belly); c.drawOval(oval(cx, cy + r * 0.4f * sy, r * 0.6f, r * 0.52f * sy), fill)
+            inkC(INK, r * 0.035f, 110)
+            for ((dx, dy) in listOf(-0.22f to 0.28f, 0.22f to 0.28f, 0f to 0.5f, -0.24f to 0.7f, 0.24f to 0.7f)) {
+                val x = cx + dx * r
+                val y = cy + dy * r * sy
+                c.drawLine(x - r * 0.07f, y - r * 0.05f, x, y + r * 0.02f, ink)
+                c.drawLine(x, y + r * 0.02f, x + r * 0.07f, y - r * 0.05f, ink)
+            }
+            inkC(INK, r * 0.08f); c.drawOval(b, ink)
+            // 脚
+            fillC(beak)
+            for (s in listOf(-1f, 1f)) for (k in -1..1) c.drawCircle(cx + s * r * 0.32f + k * r * 0.08f, cy + r * sy, r * 0.06f, fill)
+            // 眼盘
+            val ey = cy - r * 0.3f * sy
+            val ex = r * 0.4f
+            val er = r * 0.34f
+            for (s in listOf(-1f, 1f)) {
+                fillC(PAPER); c.drawCircle(cx + s * ex, ey, er, fill)
+                inkC(INK, r * 0.05f); c.drawCircle(cx + s * ex, ey, er, ink)
+                eye(c, cx + s * ex, ey, er * 0.5f, er * 0.6f, t, mood)
+            }
+            blush(c, cx - r * 0.66f, cx + r * 0.66f, ey + er * 1.05f, r * 0.1f, accent)
+            // 喙：说话时上下分开
+            val by = ey + er * 0.62f
+            val open = if (mood == Mood.TALK) (sin(t * 14f) * 0.5f + 0.5f) * r * 0.1f else 0f
+            fillC(beak)
+            if (open > 0f) c.drawPath(Path().apply { moveTo(cx - r * 0.08f, by + r * 0.08f + open); lineTo(cx + r * 0.08f, by + r * 0.08f + open); lineTo(cx, by + r * 0.18f + open); close() }, fill)
+            c.drawPath(Path().apply { moveTo(cx - r * 0.12f, by); lineTo(cx + r * 0.12f, by); lineTo(cx, by + r * 0.17f); close() }, fill)
+            // 严格：戴上圆眼镜
+            if (stance == Stance.STRICT) {
+                inkC(INK, r * 0.075f)
+                for (s in listOf(-1f, 1f)) c.drawCircle(cx + s * ex, ey, er * 1.08f, ink)
+                c.drawLine(cx - (ex - er * 1.08f), ey - er * 0.1f, cx + (ex - er * 1.08f), ey - er * 0.1f, ink)
+            } else if (mood == Mood.ALERT) brows(c, cx - ex, cx + ex, ey - er * 1.15f, r * 0.2f)
+            return floatArrayOf(cx, cy - r * 0.25f, r)
+        }
+
+        // ---------- 团子：橘色圆猫，尾巴会甩，挂个铃铛 ----------
+
+        private fun cat(c: Canvas, w: Float, h: Float, t: Float, mood: Mood, stance: Stance, accent: Int, breathe: Float): FloatArray {
+            val orange = Color.rgb(0xF2, 0xA6, 0x5A)
+            val dark = Color.rgb(0xD9, 0x82, 0x36)
+            val cream = Color.rgb(0xFB, 0xEB, 0xD5)
+            val pink = Color.rgb(0xF3, 0xA6, 0xA6)
+            val cx = w / 2
+            val r = minOf(w, h) * 0.31f
+            val cy = h * 0.6f
+            val rx = r * 1.08f * (1 - breathe * 0.5f)
+            val ry = r * 0.92f * (1 + breathe)
+            // 尾巴（在身子后面）：警觉时甩得快
+            val sw = sin(t * if (mood == Mood.ALERT) 7f else 2.4f) * r * 0.3f
+            val tail = Path().apply {
+                moveTo(cx + rx * 0.6f, cy + ry * 0.6f)
+                cubicTo(cx + rx * 1.45f, cy + ry * 0.7f, cx + rx * 1.3f + sw * 0.3f, cy - ry * 0.1f, cx + rx * 1.12f + sw, cy - ry * 0.55f)
+            }
+            inkC(INK, r * 0.3f); c.drawPath(tail, ink)
+            inkC(orange, r * 0.19f); c.drawPath(tail, ink)
+            // 耳朵（偶尔抖一下）
+            val twitch = if ((t % 5f) < 0.25f) r * 0.08f else 0f
+            for (s in listOf(-1f, 1f)) {
+                val tip = floatArrayOf(cx + s * r * 0.72f + (if (s > 0) twitch else 0f), cy - ry * 1.32f)
+                val ear = Path().apply { moveTo(cx + s * r * 0.2f, cy - ry * 0.82f); lineTo(tip[0], tip[1]); lineTo(cx + s * r * 0.92f, cy - ry * 0.4f); close() }
+                fillC(orange); c.drawPath(ear, fill)
+                inkC(INK, r * 0.07f); c.drawPath(ear, ink)
+                val inner = Path().apply { moveTo(cx + s * r * 0.38f, cy - ry * 0.8f); lineTo(tip[0] - s * r * 0.06f, tip[1] + r * 0.18f); lineTo(cx + s * r * 0.78f, cy - ry * 0.5f); close() }
+                fillC(pink); c.drawPath(inner, fill)
+            }
+            // 身子：一颗团子
+            val b = oval(cx, cy, rx, ry)
+            fillC(orange); c.drawOval(b, fill)
+            fillC(cream); c.drawOval(oval(cx, cy + ry * 0.38f, rx * 0.56f, ry * 0.46f), fill)
+            // 额头三道纹
+            inkC(dark, r * 0.07f)
+            for (k in -1..1) c.drawLine(cx + k * r * 0.16f, cy - ry * 0.88f, cx + k * r * 0.13f, cy - ry * (if (k == 0) 0.58f else 0.68f), ink)
+            inkC(INK, r * 0.08f); c.drawOval(b, ink)
+            // 项圈 + 铃铛（态度色）
+            inkC(accent, r * 0.1f)
+            c.drawArc(RectF(cx - rx * 0.72f, cy + ry * 0.1f, cx + rx * 0.72f, cy + ry * 0.78f), 25f, 130f, false, ink)
+            fillC(Color.rgb(0xF2, 0xC9, 0x4C)); c.drawCircle(cx, cy + ry * 0.8f, r * 0.11f, fill)
+            inkC(INK, r * 0.04f); c.drawCircle(cx, cy + ry * 0.8f, r * 0.11f, ink)
+            c.drawLine(cx, cy + ry * 0.83f, cx, cy + ry * 0.91f, ink)
+            // 脸
+            val ey = cy - ry * 0.15f
+            val ex = r * 0.42f
+            for (s in listOf(-1f, 1f)) eye(c, cx + s * ex, ey, r * 0.13f, r * 0.18f, t, mood)
+            blush(c, cx - r * 0.66f, cx + r * 0.66f, ey + r * 0.26f, r * 0.1f, accent)
+            val my = cy + ry * 0.14f
+            fillC(pink); c.drawPath(Path().apply { moveTo(cx - r * 0.07f, my - r * 0.1f); lineTo(cx + r * 0.07f, my - r * 0.1f); lineTo(cx, my - r * 0.02f); close() }, fill)
+            if (mood == Mood.IDLE || mood == Mood.LISTEN) {
+                // ω
+                inkC(INK, r * 0.045f)
+                c.drawArc(oval(cx - r * 0.07f, my, r * 0.07f, r * 0.06f), 0f, 180f, false, ink)
+                c.drawArc(oval(cx + r * 0.07f, my, r * 0.07f, r * 0.06f), 0f, 180f, false, ink)
+            } else mouth(c, cx, my + r * 0.06f, r * 0.14f, t, mood)
+            // 胡须
+            inkC(INK, r * 0.03f, 150)
+            for (s in listOf(-1f, 1f)) {
+                c.drawLine(cx + s * r * 0.55f, my - r * 0.04f, cx + s * r * 0.98f, my - r * 0.12f, ink)
+                c.drawLine(cx + s * r * 0.55f, my + r * 0.04f, cx + s * r * 0.98f, my + r * 0.08f, ink)
+            }
+            if (stance == Stance.STRICT || mood == Mood.ALERT) brows(c, cx - ex, cx + ex, ey - r * 0.3f, r * 0.13f)
+            return floatArrayOf(cx, cy - ry * 0.2f, r)
+        }
+
+        // ---------- 小葵：盆里的向日葵，花瓣跟着心情转 ----------
+
+        private fun flower(c: Canvas, w: Float, h: Float, t: Float, mood: Mood, stance: Stance, accent: Int, breathe: Float): FloatArray {
+            val yellow = Color.rgb(0xF6, 0xC5, 0x3B)
+            val seed = Color.rgb(0x8A, 0x5A, 0x2B)
+            val face = Color.rgb(0xF8, 0xE3, 0xB4)
+            val green = Color.rgb(0x6F, 0x9E, 0x4F)
+            val cx = w / 2
+            val r = minOf(w, h) * 0.17f * (1 + breathe)
+            val potTop = h * 0.8f
+            val sway = if (mood == Mood.SLEEP) r * 0.25f else sin(t * 1.4f) * r * 0.18f
+            val hx = cx + sway
+            val hy = h * 0.37f + if (mood == Mood.SLEEP) r * 0.2f else 0f
+            // 茎和叶子
+            inkC(green, r * 0.18f)
+            c.drawPath(Path().apply { moveTo(cx, potTop); quadTo(cx - r * 0.2f, (potTop + hy) / 2, hx, hy + r) }, ink)
+            for (s in listOf(-1f, 1f)) {
+                c.save()
+                c.rotate(s * (35f + sin(t * 1.8f + s) * 8f), cx, h * 0.68f)
+                val leaf = oval(cx + s * r * 0.55f, h * 0.68f, r * 0.55f, r * 0.24f)
+                fillC(green); c.drawOval(leaf, fill)
+                inkC(INK, r * 0.06f); c.drawOval(leaf, ink)
+                c.restore()
+            }
+            // 花盆（态度色）
+            val pot = Path().apply { moveTo(cx - r * 1.05f, potTop); lineTo(cx + r * 1.05f, potTop); lineTo(cx + r * 0.78f, h * 0.97f); lineTo(cx - r * 0.78f, h * 0.97f); close() }
+            fillC(accent); c.drawPath(pot, fill)
+            inkC(INK, r * 0.08f); c.drawPath(pot, ink)
+            c.drawLine(cx - r * 1.1f, potTop + r * 0.2f, cx + r * 1.1f, potTop + r * 0.2f, ink)
+            // 花瓣：想的时候转圈，平时轻轻摆，睡着收拢一点
+            val rot = if (mood == Mood.THINK) t * 60f else sin(t * 0.8f) * 6f
+            val dist = if (mood == Mood.SLEEP) r * 1.15f else r * 1.32f
+            for (k in 0 until 12) {
+                c.save()
+                c.rotate(rot + k * 30f, hx, hy)
+                val pp = oval(hx, hy - dist, r * 0.27f, r * 0.52f)
+                fillC(yellow); c.drawOval(pp, fill)
+                inkC(INK, r * 0.06f); c.drawOval(pp, ink)
+                c.restore()
+            }
+            // 花盘：外圈是籽，里面是脸
+            fillC(seed); c.drawCircle(hx, hy, r * 1.05f, fill)
+            fillC(Color.rgb(0x5E, 0x3C, 0x1C))
+            for (k in 0 until 18) {
+                val a = (2 * PI * k / 18).toFloat()
+                c.drawCircle(hx + r * 0.93f * cos(a), hy + r * 0.93f * sin(a), r * 0.05f, fill)
+            }
+            fillC(face); c.drawCircle(hx, hy, r * 0.8f, fill)
+            inkC(INK, r * 0.07f); c.drawCircle(hx, hy, r * 1.05f, ink)
+            val ey = hy - r * 0.1f
+            val ex = r * 0.33f
+            for (s in listOf(-1f, 1f)) eye(c, hx + s * ex, ey, r * 0.13f, r * 0.18f, t, mood)
+            blush(c, hx - r * 0.55f, hx + r * 0.55f, ey + r * 0.3f, r * 0.1f, accent)
+            mouth(c, hx, hy + r * 0.38f, r * 0.15f, t, mood)
+            if (stance == Stance.STRICT || mood == Mood.ALERT) brows(c, hx - ex, hx + ex, ey - r * 0.3f, r * 0.13f)
+            return floatArrayOf(hx, hy, r * 1.6f)
+        }
+
+        /** 三个形象共用的小附件：警觉的闪电、想时的漩涡、睡觉的 z。 */
+        private fun overlays(c: Canvas, hx: Float, hy: Float, hr: Float, t: Float, mood: Mood, stance: Stance, accent: Int) {
             if (mood == Mood.ALERT || stance == Stance.STRICT) {
-                ink.color = Color.rgb(0xB8, 0x3A, 0x2E); ink.alpha = (180 + 75 * sin(t * 9f)).toInt().coerceIn(0, 255); ink.strokeWidth = r * 0.07f
-                val bx = cx + r * 1.15f
-                val by = cy - r * 0.9f
-                val bolt = Path().apply { moveTo(bx, by); lineTo(bx - r * 0.18f, by + r * 0.32f); lineTo(bx + r * 0.02f, by + r * 0.32f); lineTo(bx - r * 0.16f, by + r * 0.7f) }
-                c.drawPath(bolt, ink)
+                inkC(Color.rgb(0xB8, 0x3A, 0x2E), hr * 0.07f, (180 + 75 * sin(t * 9f)).toInt().coerceIn(0, 255))
+                val bx = hx + hr * 1.05f
+                val by = hy - hr * 0.95f
+                c.drawPath(Path().apply { moveTo(bx, by); lineTo(bx - hr * 0.18f, by + hr * 0.32f); lineTo(bx + hr * 0.02f, by + hr * 0.32f); lineTo(bx - hr * 0.16f, by + hr * 0.7f) }, ink)
             }
-            // 想：头顶一个小漩涡
             if (mood == Mood.THINK) {
-                ink.color = accent; ink.alpha = 220; ink.strokeWidth = r * 0.04f
+                inkC(accent, hr * 0.04f, 220)
                 val sp = Path()
                 for (k in 0..40) {
-                    val rr = r * 0.02f + k * r * 0.006f
+                    val rr = hr * 0.02f + k * hr * 0.006f
                     val a = k * 0.45f + t * 4f
-                    val x = cx + r * 0.95f + rr * cos(a)
-                    val y = cy - r * 1.25f + rr * sin(a)
+                    val x = hx - hr * 0.95f + rr * cos(a)
+                    val y = hy - hr * 1.0f + rr * sin(a)
                     if (k == 0) sp.moveTo(x, y) else sp.lineTo(x, y)
                 }
                 c.drawPath(sp, ink)
             }
-            // 睡：zz
             if (mood == Mood.SLEEP) {
-                fill.color = inkColor; fill.alpha = 150; fill.textSize = r * 0.4f
-                c.drawText("z", cx + r * 0.9f, cy - r * 0.9f - (t % 2f) * r * 0.2f, fill)
+                fillC(INK, 150); fill.textSize = hr * 0.4f
+                c.drawText("z", hx + hr * 0.9f, hy - hr * 0.8f - (t % 2f) * hr * 0.2f, fill)
+                fill.textSize = hr * 0.28f
+                c.drawText("z", hx + hr * 1.15f, hy - hr * 1.1f - (t % 2f) * hr * 0.2f, fill)
             }
         }
 
         /** 桌面小部件用：画成一张图。 */
-        fun render(sizePx: Int, mood: Mood, stance: Stance): Bitmap {
+        fun render(sizePx: Int, mood: Mood, stance: Stance, kind: Kind = Kind.OWL): Bitmap {
             val b = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
-            paint(Canvas(b), sizePx.toFloat(), sizePx.toFloat(), 0.4f, mood, stance, 1f)
+            paint(Canvas(b), sizePx.toFloat(), sizePx.toFloat(), 0.4f, mood, stance, 1f, kind)
             return b
         }
     }
@@ -243,7 +466,7 @@ object Pet {
                 return@post
             }
             if (pet == null) {
-                val size = dp(s, 64f)
+                val size = dp(s, 72f)
                 val p = prefs(s)
                 val lp = params(s, size, size, p.getInt("x", dp(s, 8f)), p.getInt("y", dp(s, 220f)))
                 val v = PetView(s)
@@ -259,6 +482,7 @@ object Pet {
             }
             val store = c.zk.store
             pet?.stance = store.stance()
+            pet?.kind = PetView.kindOf(store.config.value.boss.petKind)
             val quiet = com.zongkong.core.hq.Hq.quiet(store.config.value.hq, System.currentTimeMillis(), store.zone)
             if (pet?.mood == PetView.Mood.IDLE || pet?.mood == PetView.Mood.SLEEP) pet?.mood = if (quiet) PetView.Mood.SLEEP else PetView.Mood.IDLE
         }

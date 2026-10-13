@@ -234,6 +234,8 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 composable("vein/review") { VeinReviewScreen(nav) }
                 composable("gallery") { GalleryScreen(nav) }
                 composable("voice") { VoiceScreen(nav) }
+                composable("flow") { FlowScreen(nav) }
+                composable("voice/settings") { VoiceScreen(nav, openSettings = true) }
             }
             // 从通知、分享、拦截页带进来的页面。必须放在 NavHost 之后：Scaffold 的内容是延后组合的，
             // 导航图要等 NavHost 组合完才设置好，太早跳转会崩（冷启动时点通知里的“开始”就会触发）。
