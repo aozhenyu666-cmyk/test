@@ -655,7 +655,7 @@ class LoopTest {
         waitFor(hasTestTag("vein-title") and hasText("下一问没有产生"), 5_000, "节点页")
         settle()
         shot("e2e-61-vein-node")
-        compose.onNode(hasText("提问")).performScrollTo().performClick()
+        compose.onNode(hasText("提问") and androidx.compose.ui.test.hasClickAction()).performScrollTo().performClick()
         waitFor(hasTestTag("ask-pack"), 5_000, "打包预览")
         compose.onNodeWithTag("ask-q").performTextInput("两个根因哪个更像真的？")
         hideKeyboard()
