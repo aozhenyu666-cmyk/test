@@ -145,10 +145,14 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                         NavigationBarItem(
                             selected = selected,
                             onClick = {
-                                nav.navigate(t.route) {
-                                    popUpTo("home") { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
+                                // 点哪个就去哪个：不恢复“上次存下的页面栈”（那会把别的标签页的页面带回来，点“今天”跳到总控）
+                                if (t.route == "home") {
+                                    if (!nav.popBackStack("home", inclusive = false)) nav.navigate("home") { launchSingleTop = true }
+                                } else if (current != t.route) {
+                                    nav.navigate(t.route) {
+                                        popUpTo("home") { inclusive = false }
+                                        launchSingleTop = true
+                                    }
                                 }
                             },
                             icon = {
