@@ -114,10 +114,11 @@ fun DossierScreen(nav: NavHostController) {
     val d by store.dossier.collectAsStateWithLifecycle()
     val hq by store.hq.collectAsStateWithLifecycle()
     val config by store.config.collectAsStateWithLifecycle()
+    val work by store.work.collectAsStateWithLifecycle()
     val now = rememberNow(30_000)
-    val cred = remember(d, hq, now) { Boss.credibility(d, hq.sessions, now) }
-    val stance = remember(d, hq, now) { Boss.stance(d, hq.sessions, now) }
-    val ledger = remember(d, hq, now) { Boss.ledger(d, hq.sessions, now) }
+    val cred = remember(d, hq, work, now) { Boss.credibility(d, hq.sessions, now, work.events) }
+    val stance = remember(d, hq, work, now) { Boss.stance(d, hq.sessions, now, work.events) }
+    val ledger = remember(d, hq, work, now) { Boss.ledger(d, hq.sessions, now, work.events) }
     var showCharter by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
 
@@ -146,7 +147,7 @@ fun DossierScreen(nav: NavHostController) {
                 d.escalation?.takeIf { it.until > now }?.let {
                     Text("总控自己收紧到“${it.stance.label}”，到 ${clock(it.until)}：${it.reason}", style = MaterialTheme.typography.bodySmall, color = sig.strict)
                 }
-                Hint("起点 ${Boss.BASE}，看最近 ${Boss.WINDOW_DAYS} 天：说法属实 +3、对不上 −12、说不清 −4；约定做到 +4、没做到 −10；总控时间做完 +3、提前退出 −5。低于 40 是“严格”：不给紧急放行、不接受口头说法。")
+                Hint("起点 ${Boss.BASE}，看最近 ${Boss.WINDOW_DAYS} 天：说法属实 +3、对不上 −12、说不清 −4；约定做到 +4、没做到 −10；总控时间做完 +3、提前退出 −5；不理也有代价：总控主动问了 2 小时不回 −3，到点提醒后 45 分钟没开始也没推迟 −2（一天最多 3 次）；记下做完一步 +1（一天最多 4 次）。低于 40 是“严格”：不给紧急放行、不接受口头说法。")
             }
 
             // ---------- 约定 ----------
@@ -332,9 +333,10 @@ fun StanceLine(onClick: () -> Unit) {
     val store = LocalContext.current.zk.store
     val d by store.dossier.collectAsStateWithLifecycle()
     val hq by store.hq.collectAsStateWithLifecycle()
+    val work by store.work.collectAsStateWithLifecycle()
     val now = rememberNow(60_000)
-    val cred = remember(d, hq, now) { Boss.credibility(d, hq.sessions, now) }
-    val st = remember(d, hq, now) { Boss.stance(d, hq.sessions, now) }
+    val cred = remember(d, hq, work, now) { Boss.credibility(d, hq.sessions, now, work.events) }
+    val st = remember(d, hq, work, now) { Boss.stance(d, hq.sessions, now, work.events) }
     val open = d.commitments.count { it.status == CommitStatus.OPEN }
     Row(Modifier.clickable(onClick = onClick).testTag("stance-line"), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("信用 $cred", style = MaterialTheme.typography.labelMedium.merge(Mono), color = stanceColor(st), fontWeight = FontWeight.Bold)

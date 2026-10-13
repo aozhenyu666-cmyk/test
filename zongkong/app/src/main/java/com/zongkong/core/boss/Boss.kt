@@ -1,6 +1,7 @@
 package com.zongkong.core.boss
 
 import com.zongkong.core.hq.HqSession
+import com.zongkong.core.work.Event
 import kotlinx.serialization.Serializable
 import java.time.Instant
 import java.time.LocalDate
@@ -81,12 +82,17 @@ enum class Stance(val label: String, val rule: String) {
 @Serializable
 data class Escalation(val stance: Stance, val until: Long, val reason: String)
 
+/** 总控主动问了你一句（推送了通知）。[answeredAt] = 你回话的时刻，0 = 还没回。 */
+@Serializable
+data class Ask(val at: Long, val kind: String, val answeredAt: Long = 0)
+
 @Serializable
 data class Dossier(
     val claims: List<Claim> = emptyList(),
     val commitments: List<Commitment> = emptyList(),
     val checks: List<Check> = emptyList(),
     val escalation: Escalation? = null,
+    val asks: List<Ask> = emptyList(),
 )
 
 /** 信用分的一项：为什么加、为什么扣。 */
@@ -99,15 +105,21 @@ object Boss {
     const val GRACE = 24 * 3600_000L
     /** 七天内最多免几次约定。 */
     const val EXCUSES_PER_WEEK = 1
+    /** 主动问了多久不回，算“没回”。 */
+    const val ASK_GRACE = 2 * 3600_000L
+    /** 到点提醒后多久没有任何动静（开始 / 推迟 / 卡住 / 做完），算“提醒了没动”。 */
+    const val REMIND_GRACE = 45 * 60_000L
 
     // ---------- 信用 ----------
 
     /**
      * 最近 14 天的信用（0–100，起点 70）：
      * 说法属实 +3、对不上 −12、说不清 −4、无法核实 −1；约定做到 +4、没做到 −10；
-     * 总控时间做完 +3、提前退出 −5。
+     * 总控时间做完 +3、提前退出 −5；
+     * 沉默也有代价：主动问你 2 小时不回 −3；到点提醒后 45 分钟没有任何动静 −2（一天最多扣 3 次）；
+     * 记下做完一步 +1（一天最多 4 次）。
      */
-    fun ledger(d: Dossier, sessions: List<HqSession>, now: Long): List<CredItem> {
+    fun ledger(d: Dossier, sessions: List<HqSession>, now: Long, events: List<Event> = emptyList()): List<CredItem> {
         val since = now - WINDOW_DAYS * 86_400_000L
         val out = mutableListOf<CredItem>()
         d.claims.filter { it.judgedAt >= since }.forEach { c ->
@@ -131,11 +143,37 @@ object Boss {
         sessions.filter { !it.active && it.endedAt >= since }.forEach { s ->
             out += if (s.early) CredItem(s.endedAt, -5, "总控时间提前退出：${s.earlyReason.take(30)}") else CredItem(s.endedAt, 3, "总控时间做完")
         }
+        d.asks.forEach { a ->
+            val late = a.at + ASK_GRACE
+            val unanswered = if (a.answeredAt == 0L) now >= late else a.answeredAt > late
+            if (unanswered && late >= since && late <= now) out += CredItem(late, -3, "问了没回（${a.kind}）")
+        }
+        val moves = events.filter { it.type == "start" || it.type == "snooze" || it.type == "reschedule" || it.type == "cancel" || it.type.startsWith("done:") || it.type.startsWith("stuck:") }
+        events.filter { it.type == "remind" }.mapNotNull { r ->
+            val late = r.at + REMIND_GRACE
+            if (late < since || late > now) return@mapNotNull null
+            val moved = moves.any { it.actionKey == r.actionKey && it.at in r.at..late }
+            if (moved) null else late
+        }.groupBy { day(it) }.values.forEach { day -> day.sorted().take(3).forEach { out += CredItem(it, -2, "提醒了没动") } }
+        events.filter { it.type == "done:YES" && it.at >= since && it.at <= now }
+            .groupBy { day(it.at) }.values.forEach { day -> day.sortedBy { it.at }.take(4).forEach { out += CredItem(it.at, 1, "做完一步") } }
         return out.sortedBy { it.at }
     }
 
-    fun credibility(d: Dossier, sessions: List<HqSession>, now: Long): Int =
-        (BASE + ledger(d, sessions, now).sumOf { it.delta }).coerceIn(0, 100)
+    /** 按北京时间分天（只用来给“一天最多几次”分组）。 */
+    private fun day(t: Long): Long = (t + 8 * 3600_000L) / 86_400_000L
+
+    /** 记一次主动询问（只留最近 200 条）。 */
+    fun asked(d: Dossier, kind: String, now: Long): Dossier = d.copy(asks = (d.asks + Ask(now, kind)).takeLast(200))
+
+    /** 你回话了：之前没回的询问都算回了。 */
+    fun answered(d: Dossier, now: Long): Dossier {
+        if (d.asks.none { it.answeredAt == 0L }) return d
+        return d.copy(asks = d.asks.map { if (it.answeredAt == 0L && it.at <= now) it.copy(answeredAt = now) else it })
+    }
+
+    fun credibility(d: Dossier, sessions: List<HqSession>, now: Long, events: List<Event> = emptyList()): Int =
+        (BASE + ledger(d, sessions, now, events).sumOf { it.delta }).coerceIn(0, 100)
 
     fun stanceOf(credibility: Int): Stance = when {
         credibility >= 80 -> Stance.TRUST
@@ -145,8 +183,8 @@ object Boss {
     }
 
     /** 现在的态度：信用算出来的，和总控自己加的严格程度，取更严的。 */
-    fun stance(d: Dossier, sessions: List<HqSession>, now: Long): Stance {
-        val base = stanceOf(credibility(d, sessions, now))
+    fun stance(d: Dossier, sessions: List<HqSession>, now: Long, events: List<Event> = emptyList()): Stance {
+        val base = stanceOf(credibility(d, sessions, now, events))
         val esc = d.escalation?.takeIf { it.until > now }?.stance ?: return base
         return if (esc.ordinal > base.ordinal) esc else base
     }
@@ -237,9 +275,9 @@ object Boss {
 
     // ---------- 给模型看的 ----------
 
-    fun brief(d: Dossier, sessions: List<HqSession>, now: Long, zone: ZoneId): String = buildString {
-        val cred = credibility(d, sessions, now)
-        val st = stance(d, sessions, now)
+    fun brief(d: Dossier, sessions: List<HqSession>, now: Long, zone: ZoneId, events: List<Event> = emptyList()): String = buildString {
+        val cred = credibility(d, sessions, now, events)
+        val st = stance(d, sessions, now, events)
         append("信用 $cred / 100 → 态度：${st.label}。${st.rule}\n")
         d.escalation?.takeIf { it.until > now }?.let { append("（你自己收紧到“${it.stance.label}”，到 ${hm(it.until, zone)}：${it.reason}）\n") }
         val open = d.commitments.filter { it.status == CommitStatus.OPEN }.sortedBy { it.due }
@@ -257,6 +295,8 @@ object Boss {
         val broken = d.commitments.count { it.status == CommitStatus.BROKEN && it.closedAt > now - 7 * 86_400_000L }
         val lies = d.claims.count { it.verdict == ClaimVerdict.CONTRADICTED && it.judgedAt > now - 7 * 86_400_000L }
         if (broken + lies > 0) append("近 7 天：没做到的约定 $broken 条，对不上的说法 $lies 条。\n")
+        val silent = ledger(d, sessions, now, events).filter { it.at > now - 86_400_000L && (it.why.startsWith("问了没回") || it.why == "提醒了没动") }
+        if (silent.isNotEmpty()) append("近 24 小时沉默：${silent.groupingBy { it.why.substringBefore("（") }.eachCount().entries.joinToString("，") { "${it.key} ${it.value} 次" }}（已经扣了信用）。\n")
     }
 
     private fun hm(t: Long, zone: ZoneId): String {

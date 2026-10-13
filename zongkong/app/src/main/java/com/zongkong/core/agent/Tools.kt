@@ -575,7 +575,7 @@ class ZkTools(private val env: AgentEnv) {
         env.updateDossier { d -> Boss.judge(d, a.s("id"), v, a.s("evidence"), env.now()).getOrElse { e -> err = e.message; d } }
         err?.let { return ToolResult.fail(it) }
         val d = env.dossier()
-        return ToolResult("判定：${v.label}。信用现在 ${Boss.credibility(d, env.hqSessions(), env.now())}，态度 ${Boss.stance(d, env.hqSessions(), env.now()).label}", "判定说法：${v.label}")
+        return ToolResult("判定：${v.label}。信用现在 ${Boss.credibility(d, env.hqSessions(), env.now(), env.work().events)}，态度 ${Boss.stance(d, env.hqSessions(), env.now(), env.work().events).label}", "判定说法：${v.label}")
     }
 
     /** 约定、回访的时间：“30分钟后”“2小时后”或者中文时间。 */
@@ -602,11 +602,11 @@ class ZkTools(private val env: AgentEnv) {
     private fun resolveCommitment(a: Args): ToolResult {
         val st = CommitStatus.entries.firstOrNull { it.label == a.s("status") } ?: return ToolResult.fail("没有这种结论：${a.s("status")}")
         val now = env.now()
-        val stance = Boss.stance(env.dossier(), env.hqSessions(), now)
+        val stance = Boss.stance(env.dossier(), env.hqSessions(), now, env.work().events)
         var err: String? = null
         env.updateDossier { d -> Boss.resolve(d, a.s("id"), st, a.s("note"), stance, now).getOrElse { e -> err = e.message; d } }
         err?.let { return ToolResult.fail(it) }
-        return ToolResult("约定 ${a.s("id")}：${st.label}。信用现在 ${Boss.credibility(env.dossier(), env.hqSessions(), now)}", "约定${st.label}")
+        return ToolResult("约定 ${a.s("id")}：${st.label}。信用现在 ${Boss.credibility(env.dossier(), env.hqSessions(), now, env.work().events)}", "约定${st.label}")
     }
 
     private fun scheduleCheck(a: Args): ToolResult {
@@ -620,7 +620,7 @@ class ZkTools(private val env: AgentEnv) {
     private fun escalate(a: Args): ToolResult {
         val to = Stance.entries.firstOrNull { it.label == a.s("stance") } ?: return ToolResult.fail("没有这种态度：${a.s("stance")}")
         val now = env.now()
-        val cur = Boss.stance(env.dossier(), env.hqSessions(), now)
+        val cur = Boss.stance(env.dossier(), env.hqSessions(), now, env.work().events)
         var err: String? = null
         env.updateDossier { d -> Boss.escalate(d, to, a.i("hours") ?: 24, a.s("reason"), cur, now).getOrElse { e -> err = e.message; d } }
         err?.let { return ToolResult.fail(it) }
@@ -632,8 +632,8 @@ class ZkTools(private val env: AgentEnv) {
         val now = env.now()
         val sessions = env.hqSessions()
         return buildString {
-            append(Boss.brief(d, sessions, now, env.zone))
-            val items = Boss.ledger(d, sessions, now)
+            append(Boss.brief(d, sessions, now, env.zone, env.work().events))
+            val items = Boss.ledger(d, sessions, now, env.work().events)
             if (items.isNotEmpty()) {
                 append("信用明细（起点 ${Boss.BASE}，近 ${Boss.WINDOW_DAYS} 天）：\n")
                 items.takeLast(20).forEach { append("· ${if (it.delta > 0) "+" else ""}${it.delta} ${it.why}\n") }

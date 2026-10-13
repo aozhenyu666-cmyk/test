@@ -154,8 +154,8 @@ class Store(private val context: Context) {
     }
 
     /** 现在的信用和态度。 */
-    fun credibility(now: Long = System.currentTimeMillis()): Int = com.zongkong.core.boss.Boss.credibility(_dossier.value, _hq.value.sessions, now)
-    fun stance(now: Long = System.currentTimeMillis()): com.zongkong.core.boss.Stance = com.zongkong.core.boss.Boss.stance(_dossier.value, _hq.value.sessions, now)
+    fun credibility(now: Long = System.currentTimeMillis()): Int = com.zongkong.core.boss.Boss.credibility(_dossier.value, _hq.value.sessions, now, _work.value.events)
+    fun stance(now: Long = System.currentTimeMillis()): com.zongkong.core.boss.Stance = com.zongkong.core.boss.Boss.stance(_dossier.value, _hq.value.sessions, now, _work.value.events)
 
     // ---------- 脉络（谋划思考部的知识结构） ----------
 

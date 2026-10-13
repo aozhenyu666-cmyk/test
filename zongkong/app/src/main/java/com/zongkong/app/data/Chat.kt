@@ -156,6 +156,8 @@ class ChatRepo(private val context: Context, private val store: Store, private v
         val t = text.trim()
         if ((t.isEmpty() && image.isBlank()) || _busy.value) return
         store.touch()
+        // 回话了：之前没回的主动询问都算回了
+        store.updateDossier { com.zongkong.core.boss.Boss.answered(it, System.currentTimeMillis()) }
         _busy.value = true
         job = scope.launch {
             try {
@@ -231,6 +233,8 @@ class ChatRepo(private val context: Context, private val store: Store, private v
             com.zongkong.app.system.Pet.say(context, body, 40, alert = kind == "binge" || kind == "absent")
             val quiet = com.zongkong.core.hq.Hq.quiet(cfg.hq, System.currentTimeMillis(), store.zone)
             if (!quiet && (cfg.voice.speakProactive || cfg.hq.speak)) com.zongkong.app.system.Voice.speak(context, body)
+            // 记下这次主动询问：2 小时不回，信用 −3（睡觉时段发的不算）
+            if (!quiet) store.updateDossier { com.zongkong.core.boss.Boss.asked(it, ASK_KINDS[kind] ?: kind, System.currentTimeMillis()) }
             com.zongkong.app.system.PetWidget.refresh(context)
         }
         return true
@@ -289,6 +293,8 @@ class ChatRepo(private val context: Context, private val store: Store, private v
     companion object {
         private const val TAG = "ChatRepo"
         const val MAX_KEEP = 300
+        /** 主动询问的种类 → 档案里显示的名字。 */
+        val ASK_KINDS = mapOf("absent" to "找不到人", "morning" to "早上", "noon" to "中午", "check" to "回访", "weekly" to "周复盘", "spot" to "抽查", "checkin" to "问候", "binge" to "连续娱乐")
     }
 }
 

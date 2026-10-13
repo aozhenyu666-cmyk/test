@@ -11,6 +11,7 @@ import com.zongkong.core.boss.Timeline
 import com.zongkong.core.hq.Hq
 import com.zongkong.core.hq.HqConfig
 import com.zongkong.core.hq.HqTrigger
+import com.zongkong.core.work.Event
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -23,6 +24,41 @@ import java.time.ZonedDateTime
 class BossTest {
     private val zone = ZoneId.of("Asia/Shanghai")
     private fun at(day: Int, h: Int, m: Int = 0) = ZonedDateTime.of(2026, 10, day, h, m, 0, 0, zone).toInstant().toEpochMilli()
+
+    @Test
+    fun silenceCostsCredibility() {
+        val now = at(12, 20)
+        // 问了 3 次：一次及时回了，一次过了 3 小时才回，一次一直没回；还有一次刚问，还没到 2 小时
+        var d = Boss.asked(Dossier(), "早上", at(12, 8))
+        d = Boss.answered(d, at(12, 8, 30))
+        d = Boss.asked(d, "中午", at(12, 12))
+        d = Boss.answered(d, at(12, 15))
+        d = Boss.asked(d, "回访", at(12, 16))
+        d = Boss.asked(d, "问候", at(12, 19))
+        val asks = Boss.ledger(d, emptyList(), now).filter { it.why.startsWith("问了没回") }
+        // 中午那次 15:00 才回（晚了），16:00 那次一直没回；19:00 那次还没到 2 小时
+        assertEquals(listOf(at(12, 14), at(12, 18)), asks.map { it.at })
+        assertTrue(asks.all { it.delta == -3 })
+        d = Boss.asked(Dossier(), "回访", at(12, 16))
+        assertEquals(-3, Boss.ledger(d, emptyList(), now).sumOf { it.delta })
+        assertEquals(Boss.BASE - 3, Boss.credibility(d, emptyList(), now))
+
+        // 提醒了没动：5 次提醒，一次后面开始了；没动的 4 次一天只扣 3 次
+        val ev = mutableListOf<Event>()
+        (9..13).forEach { h -> ev += Event(at(12, h), "remind", "a$h") }
+        ev += Event(at(12, 9, 20), "start", "a9")
+        // 做完 5 步只加 4 次
+        (14..18).forEach { h -> ev += Event(at(12, h, 10), "done:YES", "b$h") }
+        ev += Event(at(12, 19, 40), "remind", "late") // 还没过 45 分钟，不扣
+        val items = Boss.ledger(Dossier(), emptyList(), now, ev)
+        assertEquals(3, items.count { it.why == "提醒了没动" })
+        assertEquals(4, items.count { it.why == "做完一步" })
+        assertEquals(Boss.BASE - 6 + 4, Boss.credibility(Dossier(), emptyList(), now, ev))
+        // 一直不理会把态度压下去
+        val ignored = (1..9).fold(Dossier()) { acc, i -> Boss.asked(acc, "问候", at(12, 6) + i * 60_000L) }
+        assertEquals(Stance.WARY, Boss.stance(ignored, emptyList(), now))
+        assertTrue(Boss.brief(ignored, emptyList(), now, zone).contains("沉默"))
+    }
 
     @Test
     fun credibilityMovesWithEvidenceAndPromises() {
