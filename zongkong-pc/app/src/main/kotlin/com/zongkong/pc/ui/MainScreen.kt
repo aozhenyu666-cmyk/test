@@ -157,7 +157,7 @@ fun TodayPage(c: Controller, onTab: (Tab) -> Unit) {
             Text("今天的时间轴", style = MaterialTheme.typography.titleSmall)
             val dayStart = Usage.day(now, c.zone).atTime(4, 0).atZone(c.zone).toInstant().toEpochMilli()
             DayStrip(today.segs, dayStart, Modifier.fillMaxWidth().height(22.dp))
-            Row { listOf("4:00", "10:00", "16:00", "22:00", "4:00").forEach { Text(it, style = MaterialTheme.typography.labelSmall, color = sig.muted, modifier = Modifier.weight(1f)) } }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { listOf("4:00", "10:00", "16:00", "22:00", "4:00").forEach { Text(it, style = MaterialTheme.typography.labelSmall, color = sig.muted) } }
             today.top(8).forEach { (label, m, cat) ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Dot(sig.cat(cat))

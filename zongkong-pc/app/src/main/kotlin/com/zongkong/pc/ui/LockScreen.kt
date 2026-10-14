@@ -166,6 +166,10 @@ fun GateScreen(g: com.zongkong.pc.GateView, c: Controller) {
             Box(Modifier.width(520.dp).fillMaxHeight().background(sig.wash).padding(28.dp)) {
                 ChatPanel(c, Modifier.fillMaxSize(), starter = "我想用${g.target.label}：", compact = true)
             }
+        } else {
+            Box(Modifier.weight(0.8f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                Breath(sig.cat(g.target.cat), Modifier.size(320.dp))
+            }
         }
     }
 }

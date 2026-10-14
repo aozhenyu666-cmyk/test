@@ -15,6 +15,11 @@ on:
 permissions:
   contents: write
 
+# 两次提交挨得近时排队跑，免得同时替换同一个发布页
+concurrency:
+  group: zongkong-pc-release
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: windows-latest
