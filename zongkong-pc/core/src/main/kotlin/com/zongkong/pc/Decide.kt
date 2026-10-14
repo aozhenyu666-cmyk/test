@@ -38,6 +38,7 @@ object Decide {
     /** 整台电脑现在能不能用。顺序：锁机 > 总控时间 > 夜里 > 总时长 > 会话。 */
     fun machine(c: Ctx): Verdict {
         val now = c.now
+        if (c.state.emergencyUntil > now) return Verdict.Ok
         c.state.activeLock(now)?.let { return Verdict.Machine(LockKind.LOCK, it.reason, it.until) }
         val hq = c.phone?.hqUntil ?: 0
         if (hq > now) return Verdict.Machine(LockKind.HQ, "手机上正在进行总控时间，电脑跟着锁。", hq)

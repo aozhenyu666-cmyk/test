@@ -53,6 +53,8 @@ data class PcState(
     val lastCheckIn: Long = 0,
     /** 点名拦：在 [Ban.until] 之前一律不开（放行也不行）。 */
     val bans: List<Ban> = emptyList(),
+    /** 紧急解锁到几点（一天一次，十分钟，什么锁都打开，记一笔报给手机）。 */
+    val emergencyUntil: Long = 0,
 ) {
     fun activeBans(now: Long) = bans.filter { it.until > now }
     fun activePasses(now: Long) = passes.filter { it.until > now }

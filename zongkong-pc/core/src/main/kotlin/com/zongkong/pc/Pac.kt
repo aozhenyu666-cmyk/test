@@ -5,16 +5,18 @@ package com.zongkong.pc
  * 其他一律直连。总控没在运行时 PAC 地址打不开，浏览器自动直连——不会把网弄断。
  */
 object Pac {
-    fun script(blocked: Set<String>, proxyPort: Int): String = buildString {
+    /** [fallback]：不拦的走哪（原来开着代理软件的，照旧走它）。 */
+    fun script(blocked: Set<String>, proxyPort: Int, fallback: String = "DIRECT"): String = buildString {
         append("function FindProxyForURL(url, host) {\n")
         append("  host = host.toLowerCase();\n")
+        append("  if (isPlainHostName(host) || host == \"localhost\" || shExpMatch(host, \"127.*\")) return \"DIRECT\";\n")
         append("  var b = [")
         append(blocked.sorted().joinToString(",") { "\"" + it.lowercase().replace("\"", "") + "\"" })
         append("];\n")
         append("  for (var i = 0; i < b.length; i++) {\n")
         append("    if (host == b[i] || dnsDomainIs(host, \".\" + b[i])) return \"PROXY 127.0.0.1:$proxyPort\";\n")
         append("  }\n")
-        append("  return \"DIRECT\";\n")
+        append("  return \"" + fallback.replace("\"", "") + "\";\n")
         append("}\n")
     }
 
