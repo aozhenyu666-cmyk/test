@@ -101,6 +101,32 @@ class Store(private val context: Context) {
         }
     }
 
+    // ---------- 电脑（手机 ↔ 电脑互通） ----------
+
+    private val _device = MutableStateFlow(loadDevice())
+    val device: StateFlow<com.zongkong.core.device.DeviceBook> = _device.asStateFlow()
+
+    fun updateDevice(f: (com.zongkong.core.device.DeviceBook) -> com.zongkong.core.device.DeviceBook): com.zongkong.core.device.DeviceBook = synchronized(workLock) {
+        val next = f(_device.value)
+        if (next != _device.value) {
+            _device.value = next
+            val text = ZkJson.encodeToString(com.zongkong.core.device.DeviceBook.serializer(), next)
+            io.execute { writeAtomic(File(dir, "device.json"), text) }
+        }
+        next
+    }
+
+    private fun loadDevice(): com.zongkong.core.device.DeviceBook {
+        val f = File(dir, "device.json")
+        if (!f.exists()) return com.zongkong.core.device.DeviceBook()
+        return try {
+            ZkJson.decodeFromString(com.zongkong.core.device.DeviceBook.serializer(), f.readText())
+        } catch (e: Exception) {
+            Log.e(TAG, "device.json 读不了", e)
+            com.zongkong.core.device.DeviceBook()
+        }
+    }
+
     // ---------- 总控时间 ----------
 
     private val _hq = MutableStateFlow(loadHq())

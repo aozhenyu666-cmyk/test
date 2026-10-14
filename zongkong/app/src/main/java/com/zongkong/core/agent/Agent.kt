@@ -68,6 +68,7 @@ class Agent(private val api: ChatApi, private val env: AgentEnv) {
             append("${vein.systems.joinToString("、") { it.name }}：${vein.nodes.size} 个节点，$hypo 个假设等验证，候选 ${vein.candidates.size} 张。")
             append("用户聊到想法、规律、为什么时先 vein_search；新想法用 vein_propose 提议（用户确认才写入）。")
         }
+        env.pcSide()?.let { append("\n\n## 电脑\n").append(com.zongkong.core.device.DeviceLink.brief(it, env.now(), env.zone)).append("（用 pc 工具看详情、锁机、拦网站、给电脑发话）") }
         append("\n\n## 此刻的总控\n")
         append(Snapshot.brief(env))
         env.sessionContext().takeIf { it.isNotBlank() }?.let { append("\n\n## 正在进行：总控时间\n").append(it) }

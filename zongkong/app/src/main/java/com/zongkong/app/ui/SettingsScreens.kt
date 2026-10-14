@@ -94,6 +94,7 @@ fun SettingsScreen(nav: NavHostController) {
         MenuItem("历史记录", "最近 14 天", "history", nav)
 
         SectionLabel("连接")
+        MenuItem("电脑", context.zk.store.device.value.pc?.takeIf { config.notion.devicesDb.isNotBlank() }?.let { "今天 ${it.todayMinutes / 60} 小时 ${it.todayMinutes % 60} 分 · 被拦 ${it.blocks} 次" } ?: "电脑上的总控：锁机、拦网站、和手机连起来", "settings/pc", nav)
         MenuItem("AI 接口", if (config.ai.ready) "${config.ai.model} · 总控者、日终验收用" else "未配置：总控者和 AI 验收用不了", "settings/ai", nav, warn = !config.ai.ready)
         MenuItem("一手", if (yishouInstalled) "已安装：行为管理部读它的组数，可以把行动交给它陪练" else "没装：点开下载", "dept/ACT", nav)
         MenuItem("Notion", when {

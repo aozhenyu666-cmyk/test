@@ -181,3 +181,14 @@ object DeviceLink {
         }
     }
 }
+
+/** 手机这边存的：电脑最后一次的状态、自己那一行的页面、发出去的命令、收到的消息。 */
+@Serializable
+data class DeviceBook(
+    val pc: PcSide? = null,
+    val phonePage: String = "",
+    val cmds: List<DeviceCmd> = emptyList(),
+    val gotMsgs: List<String> = emptyList(),
+    val lastSync: Long = 0,
+    val lastError: String = "",
+)

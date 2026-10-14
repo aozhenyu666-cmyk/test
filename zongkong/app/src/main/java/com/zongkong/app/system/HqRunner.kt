@@ -42,6 +42,9 @@ object HqRunner {
             if (now > s.endsAt + 60 * 60_000L) app.actions.hq.exitEarly("超时一小时没封存，自动结束")
         }
 
+        // 和电脑同步（总控时间开始 / 结束时马上同步，电脑跟着锁 / 解）
+        app.actions.device.maybeSync()
+
         val due = Hq.due(cfg, store.hq.value.sessions, now, zone)
         // 进程刚被闹钟拉起来时服务可能还没连上：一分半内有过心跳也算在
         val eyes = com.zongkong.app.guard.GuardService.running || now - store.heartbeat < 90_000

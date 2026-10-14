@@ -80,6 +80,8 @@ class ChatRepo(private val context: Context, private val store: Store, private v
             }
             is YishouClient.Result.Err -> "读不到一手：${r.message}"
         }
+        override fun pcSide(): com.zongkong.core.device.PcSide? = store.device.value.pc.takeIf { actions.device.ready }
+        override fun pcCommand(kind: String, minutes: Int, text: String): String = actions.device.command(kind, minutes, text)
         override suspend fun sendToYishou(actionKey: String): String {
             val order = Link.taskOrder(store.work.value, actionKey) ?: return "失败：没有这步行动"
             return when (val r = YishouClient.setTask(context, order)) {
@@ -268,6 +270,11 @@ class ChatRepo(private val context: Context, private val store: Store, private v
     fun clear() = update { it.copy(messages = emptyList()) }
 
     fun forgetAll() = update { it.copy(memory = emptyList()) }
+
+    /** 别处来的一句话（比如电脑上的总控发来的），放进对话里。 */
+    fun note(text: String) {
+        update { it.copy(messages = (it.messages + ChatMsg(ChatMsg.ASSISTANT, text, at = System.currentTimeMillis())).takeLast(MAX_KEEP)) }
+    }
 
     private fun update(f: (ChatLog) -> ChatLog): Unit = synchronized(lock) {
         val next = f(_log.value)

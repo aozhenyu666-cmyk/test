@@ -98,6 +98,8 @@ data class NotionConfig(
     val threadsDb: String = "",
     val actionsDb: String = "",
     val notesDb: String = "",
+    /** 手机 ↔ 电脑传话的“总控·设备”库。 */
+    val devicesDb: String = "",
     /** 测试时换成本地模拟服务器；平时留空用官方地址。 */
     val baseUrl: String = "",
 ) {

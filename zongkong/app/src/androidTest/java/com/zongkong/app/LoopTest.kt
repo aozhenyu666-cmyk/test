@@ -838,4 +838,40 @@ class LoopTest {
         Thread.sleep(800)
         shot("e2e-87-gallery-new")
     }
+
+    /** 手机 ↔ 电脑：建传话的库、复制配对码、读到电脑的状态、发锁机命令。 */
+    @Test
+    fun pcLink() {
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java).putExtra(com.zongkong.app.ui.MainActivity.EXTRA_ROUTE, "settings/pc"))
+        waitFor(hasTestTag("pc-setup"), 10_000, "建立连接")
+        compose.onNodeWithTag("pc-setup").performClick()
+        waitFor(hasTestTag("pc-copy"), 15_000, "配对码")
+        val db = app.store.config.value.notion.devicesDb
+        assertTrue(db.isNotBlank())
+        compose.onNodeWithTag("pc-copy").performClick()
+        val code = app.actions.device.pairingCode(false)
+        assertEquals(db, com.zongkong.core.device.DeviceLink.parsePairing(code)!!.devicesDb)
+        // 电脑写自己那一行
+        val now = System.currentTimeMillis()
+        val pcSide = com.zongkong.core.device.PcSide(
+            at = now, version = "电脑版 0.1", todayMinutes = 334, funMinutes = 72, blocks = 3,
+            top = listOf(com.zongkong.core.device.UsageLine("VS Code", 140, "学习工作"), com.zongkong.core.device.UsageLine("B站", 52, "娱乐")),
+            session = "写论文第二章", sessionUntil = now + 40 * 60_000L, credibility = 64, stance = "正常",
+            msgs = listOf(com.zongkong.core.device.DeviceMsg("m1", now, "他在电脑上申请了 B站 15 分钟")),
+        )
+        runBlocking { com.zongkong.core.device.DeviceLink.write(gpt, db, com.zongkong.core.device.DeviceLink.PC, com.zongkong.core.device.DeviceLink.encodePc(pcSide), null) }
+        // 手机发一条锁机命令，同步
+        app.actions.device.command("lock", 30, "测试")
+        runBlocking { app.actions.device.sync() }
+        waitText("今天用了 5 小时 34 分", 10_000)
+        settle()
+        shot("e2e-90-pc")
+        // 电脑发来的话进了对话
+        assertTrue(app.chat.log.value.messages.any { it.content.contains("他在电脑上申请了 B站") })
+        // 手机那一行里有锁机命令、主线和信用
+        val rows = runBlocking { (com.zongkong.core.device.DeviceLink.readAll(gpt, db) as ApiResult.Ok).value }
+        val phone = com.zongkong.core.device.DeviceLink.decodePhone(rows[com.zongkong.core.device.DeviceLink.PHONE]!!.data)!!
+        assertEquals("lock", phone.cmds.single().kind)
+        assertEquals(listOf("m1"), phone.gotMsgs)
+    }
 }

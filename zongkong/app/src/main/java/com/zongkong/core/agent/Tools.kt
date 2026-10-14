@@ -112,6 +112,10 @@ interface AgentEnv {
 
     // ---------- 信息收集部的漏斗 ----------
 
+    /** 电脑那边最后一次的状态（没连电脑 = null）。 */
+    fun pcSide(): com.zongkong.core.device.PcSide? = null
+    /** 给电脑发命令：lock / unlock / say / block。 */
+    fun pcCommand(kind: String, minutes: Int, text: String): String = "没连电脑"
     fun intake(): com.zongkong.core.info.IntakeBook = com.zongkong.core.info.IntakeBook()
     fun updateIntake(f: (com.zongkong.core.info.IntakeBook) -> com.zongkong.core.info.IntakeBook): com.zongkong.core.info.IntakeBook = intake()
 
@@ -448,6 +452,14 @@ class ZkTools(private val env: AgentEnv) {
                 Param("done", "boolean", "true = 达成或放下，从首页摘掉"),
             ),
         ),
+        ToolSpec(
+            "pc", "电脑：看电脑今天用了多久、在做什么（状态），或者给电脑下命令：锁机 N 分钟、解锁（只解你锁的）、说一句（电脑上念出来、弹出来）、拦一个网站（今天剩下的时间都打不开）。",
+            listOf(
+                Param("action", "string", "做什么", required = true, choices = listOf("状态", "锁机", "解锁", "说一句", "拦网站")),
+                Param("minutes", "integer", "锁机几分钟（1–600）"),
+                Param("text", "string", "说什么 / 锁机原因 / 网站名或域名"),
+            ),
+        ),
         ToolSpec("vein_due", "脉络里该回头看的：等验证的假设（按多久没回填排）、今天该温故的、候选卡片数、体检分。主动提问时用。"),
         ToolSpec("get_dossier", "看档案：信用分的每一笔、态度、全部未结约定、最近的陈述和判定、排了的回访。"),
         ToolSpec("sync_notion", "现在和 Notion 同步一次（拉 GPT 写进去的、推总控改过的）。"),
@@ -506,6 +518,7 @@ class ZkTools(private val env: AgentEnv) {
                 "calibration" -> ToolResult(com.zongkong.core.plan.Calibrate.brief(env.work(), env.zone, env.now()), "看了估时和精力地图")
                 "backward_plan" -> backwardPlan(a)
                 "set_aim" -> setAim(a)
+                "pc" -> pc(a)
                 "vein_search" -> veinSearch(a)
                 "vein_node" -> veinNode(a)
                 "vein_propose" -> veinPropose(a)
@@ -689,6 +702,21 @@ class ZkTools(private val env: AgentEnv) {
             env.kick()
         }
         return ToolResult("提炼了「${n.title}」：$gist" + (t?.let { "，归位到 ${it[F.CODE]}「${it.title}」" } ?: ""), "提炼「${n.title.take(12)}」")
+    }
+
+    private fun pc(a: Args): ToolResult {
+        val now = env.now()
+        return when (a.s("action")) {
+            "状态" -> env.pcSide()?.let { ToolResult(com.zongkong.core.device.DeviceLink.brief(it, now, env.zone), "看了电脑") } ?: ToolResult.fail("还没连电脑（我 → 电脑）")
+            "锁机" -> {
+                val m = (a.i("minutes") ?: 30).coerceIn(1, 600)
+                ToolResult(env.pcCommand("lock", m, a.s("text").ifBlank { "手机上的总控锁的" }), "锁电脑 $m 分钟")
+            }
+            "解锁" -> ToolResult(env.pcCommand("unlock", 0, ""), "解开电脑")
+            "说一句" -> a.s("text").ifBlank { return ToolResult.fail("text 不能空") }.let { ToolResult(env.pcCommand("say", 0, it), "对电脑说：${it.take(20)}") }
+            "拦网站" -> a.s("text").ifBlank { return ToolResult.fail("text：网站名或域名") }.let { ToolResult(env.pcCommand("block", 0, it), "电脑拦 $it") }
+            else -> ToolResult.fail("action 只能是 状态 / 锁机 / 解锁 / 说一句 / 拦网站")
+        }
     }
 
     private fun setAim(a: Args): ToolResult {

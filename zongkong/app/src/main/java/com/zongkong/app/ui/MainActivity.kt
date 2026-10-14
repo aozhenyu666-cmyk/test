@@ -236,6 +236,7 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 composable("gallery") { GalleryScreen(nav) }
                 composable("voice") { VoiceScreen(nav) }
                 composable("flow") { FlowScreen(nav) }
+                composable("settings/pc") { PcScreen(nav) }
                 composable("voice/settings") { VoiceScreen(nav, openSettings = true) }
             }
             // 从通知、分享、拦截页带进来的页面。必须放在 NavHost 之后：Scaffold 的内容是延后组合的，
