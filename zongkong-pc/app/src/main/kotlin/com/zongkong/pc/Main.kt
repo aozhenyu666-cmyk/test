@@ -124,9 +124,10 @@ fun main(args: Array<String>) {
                         state = rememberWindowState(position = WindowPosition(b.x.dp, b.y.dp), size = DpSize(b.width.dp, b.height.dp)),
                     ) {
                         LaunchedEffect(Unit) {
+                            // 只在别的程序跑到前面时抢回来；你在锁屏里打字时不碰焦点
                             while (true) {
                                 if (b == primary) Win32.bringToFront(window)
-                                delay(2000)
+                                delay(3000)
                             }
                         }
                         ZkTheme { if (b == primary) LockScreen(v, c) else LockShade(v) }
@@ -163,9 +164,9 @@ fun main(args: Array<String>) {
                     undecorated = true,
                     alwaysOnTop = true,
                     resizable = false,
-                    state = rememberWindowState(position = WindowPosition(Alignment.BottomEnd), size = DpSize(420.dp, 230.dp)),
+                    state = rememberWindowState(position = WindowPosition(Alignment.BottomEnd), size = DpSize(420.dp, 300.dp)),
                 ) {
-                    LaunchedEffect(Unit) { Win32.bringToFront(window) }
+                    // 问候小窗不抢焦点：你正在别处打字也不会被打断，点它再回答
                     ZkTheme { CheckInCard(v, c) }
                 }
             }

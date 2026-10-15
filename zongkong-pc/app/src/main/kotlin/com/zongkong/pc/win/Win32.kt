@@ -139,13 +139,47 @@ object Win32 {
         if (isWindows) runCatching { User32.INSTANCE.LockWorkStation() }
     }
 
-    /** 把自己的窗口顶到最前：Windows 不让后台程序随便抢前台，先“按一下 Alt”再设前台。 */
+    /** 输入法相关的进程：它们的窗口（候选框、状态条、切换面板）在前台时，不算“别人抢了前台”。 */
+    private val IME = listOf("ctfmon", "textinputhost", "chsime", "inputapp", "sogou", "sgtool", "pinyin", "qqinput", "bdime", "baiduime", "imetool", "inputmethod", "wetype", "rime", "weasel")
+
+    fun isImeProcess(exe: String): Boolean = exe.lowercase().let { e -> IME.any { e.contains(it) } }
+
+    /**
+     * 前台是不是我们自己（或者输入法）。是的话就别去“抢回来”——
+     * 你正在我们的输入框里打字，抢一下焦点就会打断输入法（字跑到屏幕左上角、按键没反应）。
+     */
+    fun ownsForeground(): Boolean {
+        if (!isWindows) return true
+        return try {
+            val hwnd = User32.INSTANCE.GetForegroundWindow() ?: return false
+            val pidRef = IntByReference()
+            User32.INSTANCE.GetWindowThreadProcessId(hwnd, pidRef)
+            val pid = pidRef.value
+            if (pid == selfPid) return true
+            if (pid !in snapshot) { snapshot = processes(); snapshotAt = System.currentTimeMillis() }
+            isImeProcess(snapshot[pid]?.second.orEmpty())
+        } catch (e: Throwable) {
+            true
+        }
+    }
+
+    /**
+     * 别的程序跑到前面时，把锁屏 / 拦截页顶回来。前台已经是我们自己（或输入法）时什么都不做。
+     * Windows 不让后台程序随便抢前台，常用办法是先“按一下 Alt”再设前台——这一下只在真被别人抢走时才按，
+     * 不会在你打字时乱按（之前每两秒按一次，会打断输入法、触发 Alt+Shift 切换键盘布局）。
+     */
     fun bringToFront(window: Window) {
+        if (window is java.awt.Frame && window.extendedState and java.awt.Frame.ICONIFIED != 0) {
+            window.extendedState = window.extendedState and java.awt.Frame.ICONIFIED.inv()
+        }
+        if (ownsForeground()) return
         window.toFront()
-        window.requestFocus()
         if (!isWindows) return
         try {
             val hwnd = WinDef.HWND(Native.getWindowPointer(window))
+            // 用户正按着修饰键（比如正在按 Shift 切中英文）时不插 Alt，下一轮再说
+            val busy = listOf(0x10, 0x11, 0x12, 0x5B, 0x5C).any { (User32.INSTANCE.GetAsyncKeyState(it).toInt() and 0x8000) != 0 }
+            if (busy) return
             val alt = 0x12.toByte()
             Keys.INSTANCE.keybd_event(alt, 0, 0, null)
             User32.INSTANCE.SetForegroundWindow(hwnd)
@@ -186,7 +220,8 @@ object Win32 {
 }
 
 /**
- * 锁屏时把“逃出锁屏”的快捷键吃掉：Win 键、Alt+Tab、Alt+Esc、Ctrl+Esc、Alt+F4。
+ * 锁屏时把“逃出锁屏”的快捷键吃掉：Alt+Tab、Alt+Esc、Ctrl+Esc、Alt+F4、Win+D / M / Tab / E / R / X。
+ * Win 键本身和 Win+空格（切输入法）不拦。
  * Ctrl+Alt+Del 系统不让拦（也不该拦）——从那里打开任务管理器结束总控，会记成“失联”报给手机。
  * 钩子只在锁屏时生效；出任何错都放行按键，不会把键盘弄坏。
  */
@@ -206,7 +241,11 @@ object KeyGuard {
                             val vk = info.vkCode
                             val alt = (info.flags and 0x20) != 0
                             val ctrl = (User32.INSTANCE.GetAsyncKeyState(0x11).toInt() and 0x8000) != 0
-                            val swallow = vk == 0x5B || vk == 0x5C || (alt && (vk == 0x09 || vk == 0x1B || vk == 0x73)) || (ctrl && vk == 0x1B)
+                            val win = (User32.INSTANCE.GetAsyncKeyState(0x5B).toInt() and 0x8000) != 0 || (User32.INSTANCE.GetAsyncKeyState(0x5C).toInt() and 0x8000) != 0
+                            // 只拦“逃出锁屏”的组合：Alt+Tab / Esc / F4、Ctrl+Esc、Win+D / M / Tab / E / R / X / 数字。
+                            // Win 键本身、Win+空格（切输入法）、Shift、Ctrl+空格都放行。
+                            val winEscape = win && (vk == 0x44 || vk == 0x4D || vk == 0x09 || vk == 0x45 || vk == 0x52 || vk == 0x58 || vk in 0x30..0x39)
+                            val swallow = winEscape || (alt && (vk == 0x09 || vk == 0x1B || vk == 0x73)) || (ctrl && vk == 0x1B)
                             if (swallow) return@LowLevelKeyboardProc WinDef.LRESULT(1)
                         }
                     } catch (e: Throwable) {

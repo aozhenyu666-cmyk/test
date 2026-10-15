@@ -212,7 +212,9 @@ class Controller(val dataDir: File) {
             KeyGuard.active = false
         }
 
-        val w = Win32.foreground()
+        // 输入法的候选框、状态条在前台时当作“没换程序”：不计时、不拦
+        val raw = Win32.foreground()
+        val w = if (raw != null && Win32.isImeProcess(raw.fg.exe)) lastWinFg else raw
         lastWinFg = w
         val idle = Win32.idleMs() > IDLE_MS
         if (w == null) {
@@ -515,7 +517,7 @@ class Controller(val dataDir: File) {
     }
 
     companion object {
-        const val VERSION = "电脑版 0.1"
+        const val VERSION = "电脑版 0.1.1"
         /** 多久没碰键盘鼠标算不在用。 */
         const val IDLE_MS = 5 * 60_000L
     }

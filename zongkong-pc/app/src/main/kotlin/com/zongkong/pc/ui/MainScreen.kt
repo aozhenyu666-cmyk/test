@@ -373,7 +373,10 @@ fun CheckInCard(v: com.zongkong.pc.CheckInView, c: Controller) {
             Text("这 ${v.minutes} 分钟在做什么？", style = MaterialTheme.typography.titleMedium)
         }
         if (v.summary.isNotBlank()) Hint("记录：${v.summary}")
-        OutlinedTextField(text, { text = it }, placeholder = { Text("一句话") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(text, { text = it }, placeholder = { Text("一句话（或者点下面的）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("在学习", "在工作", "在查资料", "在娱乐").forEach { a -> Chip(a, if (a == "在娱乐") sig.warn else sig.plan) { c.answerCheckIn(a) } }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { c.answerCheckIn(text) }, enabled = text.isNotBlank(), colors = ButtonDefaults.buttonColors(containerColor = sig.ai)) { Text("回答") }
             TextButton(onClick = { c.dismissCheckIn() }) { Text("不回（2 小时不回扣信用）", color = sig.muted, fontSize = 12.sp) }

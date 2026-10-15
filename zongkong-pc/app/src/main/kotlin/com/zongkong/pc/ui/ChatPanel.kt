@@ -68,6 +68,12 @@ fun ChatPanel(c: Controller, modifier: Modifier = Modifier, starter: String = ""
             if (busy) item { Hint("总控在想…") }
         }
         confirm?.let { ConfirmCard(it, c) }
+        // 锁屏、拦截页上：打不了字也能申请
+        if (compact && config.ai.ready && !busy) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("我要学习 30 分钟", "查资料 15 分钟", "有急事要处理", "不用了").forEach { q -> Chip(q, sig.ai) { c.send(q) } }
+            }
+        }
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 input, { input = it },
