@@ -58,6 +58,9 @@ import com.yishou.app.ui.theme.StoneMark
 import com.yishou.app.ui.CardRoundView
 import com.yishou.app.ui.MatrixLoader
 import com.yishou.app.ui.VoiceTextField
+import com.yishou.app.ui.BrakeButton
+import com.yishou.app.ui.EchoCard
+import com.yishou.app.system.Variant
 import com.yishou.app.card.SessionState
 import com.yishou.app.window.WindowActivity
 import kotlinx.coroutines.delay
@@ -215,6 +218,8 @@ private fun GateScreen(
             }
 
             val passed = s.passMinutes
+            val needsDelta = c.done && vm.needsDelta
+            val echo = s.echo
             when {
                 s.loading -> MatrixLoader("准备一张题")
                 passed != null -> {
@@ -232,6 +237,7 @@ private fun GateScreen(
                     Button(onClick = onOpenWindow, modifier = Modifier.fillMaxWidth()) { Text("回到陪练") }
                     OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("回到桌面") }
                 }
+                echo != null -> EchoCard(echo, onConfirm = vm::confirmEcho)
                 s.followUp != null -> {
                     Text("上次你说看完要", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("「${s.followUp}」", style = MaterialTheme.typography.headlineSmall)
@@ -243,15 +249,11 @@ private fun GateScreen(
                 }
                 s.useLine -> {
                     LineGate(ln, vm)
-                    if (ln.caught > 0 || ln.parked) {
+                    if (ln.caught > 0 || (ln.parked && !Variant.chalu)) {
                         if (s.isTest) {
                             OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
                         } else {
-                            Text("看完要做的第一件事是？", style = MaterialTheme.typography.titleMedium)
-                            ExitField(s, vm)
-                            Button(onClick = vm::pass, enabled = s.exit.isNotBlank(), modifier = Modifier.fillMaxWidth().height(52.dp)) {
-                                Text("说好了，放行")
-                            }
+                            PassBlock(s, vm, needsDelta)
                         }
                     }
                     OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
@@ -261,11 +263,7 @@ private fun GateScreen(
                         Text("现在是只打卡模式：不出题，写一句看完做什么就放行。", style = MaterialTheme.typography.bodyLarge)
                         OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
                     } else {
-                        Text("看完要做的第一件事是？", style = MaterialTheme.typography.titleMedium)
-                        ExitField(s, vm)
-                        Button(onClick = vm::pass, enabled = s.exit.isNotBlank(), modifier = Modifier.fillMaxWidth().height(52.dp)) {
-                            Text("说好了，放行")
-                        }
+                        PassBlock(s, vm, needsDelta)
                         OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
                     }
                 }
@@ -275,11 +273,7 @@ private fun GateScreen(
                     if (s.isTest) {
                         OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
                     } else {
-                        Text("看完要做的第一件事是？", style = MaterialTheme.typography.titleMedium)
-                        ExitField(s, vm)
-                        Button(onClick = vm::pass, enabled = s.exit.isNotBlank(), modifier = Modifier.fillMaxWidth().height(52.dp)) {
-                            Text("说好了，放行")
-                        }
+                        PassBlock(s, vm, needsDelta)
                         OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
                     }
                 }
@@ -290,11 +284,7 @@ private fun GateScreen(
                         if (s.isTest) {
                             OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
                         } else {
-                            Text("看完要做的第一件事是？", style = MaterialTheme.typography.titleMedium)
-                            ExitField(s, vm)
-                            Button(onClick = vm::pass, enabled = s.exit.isNotBlank(), modifier = Modifier.fillMaxWidth().height(52.dp)) {
-                                Text("说好了，放行")
-                            }
+                            PassBlock(s, vm, needsDelta)
                             OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
                         }
                     }
@@ -306,7 +296,24 @@ private fun GateScreen(
 
 @Composable
 private fun ExitField(s: GateState, vm: GateViewModel) {
-    VoiceTextField(s.exit, vm::onExitChange, "例如：回去做两道资料分析", Modifier.fillMaxWidth())
+    VoiceTextField(s.exit, vm::onExitChange, if (Variant.chalu) "例如：回去点开资料分析第 3 题" else "例如：回去做两道资料分析", Modifier.fillMaxWidth())
+}
+
+/**
+ * 放行那一块：说好看完做什么（岔路问“回来第一步点哪儿”，放行后挂在通知栏），
+ * 岔路里答错了先写差值；放行按钮停 2 秒再落。
+ */
+@Composable
+private fun PassBlock(s: GateState, vm: GateViewModel, needsDelta: Boolean) {
+    if (needsDelta) {
+        Text("这张错了。写下差值再走：", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+        VoiceTextField(s.delta, vm::onDeltaChange, com.yishou.app.line.Echoes.DELTA_HINT, Modifier.fillMaxWidth(), minLines = 2)
+        Text("下次打开「${s.appLabel}」，开局先推这一句给你。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    Text(if (Variant.chalu) "回来第一步点哪儿？" else "看完要做的第一件事是？", style = MaterialTheme.typography.titleMedium)
+    ExitField(s, vm)
+    val ready = s.exit.isNotBlank() && (!needsDelta || com.yishou.app.line.Echoes.usable(s.delta))
+    BrakeButton(if (needsDelta && !com.yishou.app.line.Echoes.usable(s.delta)) "先写差值" else "说好了，放行", enabled = ready, modifier = Modifier.fillMaxWidth(), onClick = vm::pass)
 }
 
 
@@ -323,12 +330,22 @@ private fun LineGate(ln: com.yishou.app.line.LineState, vm: GateViewModel) {
     }
     if (ln.parked) {
         Text("这一手先放着，记下了。", style = MaterialTheme.typography.titleMedium)
+        if (Variant.chalu) {
+            Text("岔路里“先放着”不放行。换个小问题接着下，接住一手就走。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Button(onClick = vm::resumeLine, modifier = Modifier.fillMaxWidth()) { Text("接着下") }
+        }
         return
     }
     if (ln.say.isNotBlank() && ln.say != ln.question) Text(ln.say.substringBefore(ln.question).trim(), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.tertiary)
     Text(ln.question, style = MaterialTheme.typography.headlineSmall)
-    VoiceTextField(text, { text = it }, "先说结论，再说为什么", Modifier.fillMaxWidth(), minLines = 2)
-    val rules = if (ln.ask == com.yishou.app.line.Ask.NORMAL || ln.ask == com.yishou.app.line.Ask.ANCHOR) com.yishou.app.line.TalkRules.of(ln.level) else com.yishou.app.line.TalkRules.SMALL
+    val normal = ln.ask == com.yishou.app.line.Ask.NORMAL || ln.ask == com.yishou.app.line.Ask.ANCHOR
+    if (Variant.chalu) Text(com.yishou.app.ui.beatLabel(ln), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    VoiceTextField(text, { text = it }, if (Variant.chalu && normal) "只有当＿＿，才＿＿" else "先说结论，再说为什么", Modifier.fillMaxWidth(), minLines = 2)
+    val rules = when {
+        !normal -> com.yishou.app.line.TalkRules.SMALL
+        Variant.chalu -> com.yishou.app.line.TalkRules.CUT
+        else -> com.yishou.app.line.TalkRules.of(ln.level)
+    }
     if (text.isNotBlank()) com.yishou.app.ui.TalkMeter(text, rules)
     if (ln.busy) MatrixLoader("在看这一手")
     androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

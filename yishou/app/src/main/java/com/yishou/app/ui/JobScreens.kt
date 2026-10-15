@@ -235,6 +235,10 @@ class JobViewModel(app: Application) : AndroidViewModel(app) {
         val now = System.currentTimeMillis()
         dao.updateStep(s.copy(startedAt = s.startedAt ?: now, doneAt = now, result = result, note = note.trim()))
         Haptics.play(yishou, if (result == StepResult.OK) Haptics.Kind.PASS else Haptics.Kind.REDO)
+        // 岔路：没做成 / 卡住时说的那句，当差值进回响队列
+        if (com.yishou.app.system.Variant.chalu && (result == StepResult.MISS || result == StepResult.STUCK)) {
+            yishou.echo(note, com.yishou.app.data.EchoKind.DELTA, "job")
+        }
         dao.steps(s.jobId).sortedBy { it.idx }.firstOrNull { it.doneAt == null && it.idx > s.idx }?.let { next ->
             if (next.startedAt == null) dao.updateStep(next.copy(startedAt = now))
         }
@@ -250,6 +254,7 @@ class JobViewModel(app: Application) : AndroidViewModel(app) {
 
     fun close(j: Job, takeaway: String) = viewModelScope.launch {
         dao.updateJob(j.copy(finishedAt = System.currentTimeMillis(), takeaway = takeaway.trim()))
+        if (com.yishou.app.system.Variant.chalu) yishou.echo(takeaway, com.yishou.app.data.EchoKind.RULE)
     }
 
     fun reopen(j: Job) = viewModelScope.launch { dao.updateJob(j.copy(finishedAt = null)) }

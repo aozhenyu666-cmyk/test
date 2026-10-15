@@ -158,7 +158,11 @@ fun HomeScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 StoneMark(24.dp)
                 Spacer(Modifier.width(10.dp))
-                Text("一手", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                Text(
+                    if (com.yishou.app.system.Variant.chalu) "一手·${com.yishou.app.system.Variant.name}" else "一手",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.weight(1f),
+                )
                 Text(AppZone.format("M月d日", System.currentTimeMillis()), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Settings, contentDescription = "设置") }
             }

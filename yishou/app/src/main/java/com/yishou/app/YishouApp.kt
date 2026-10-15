@@ -67,9 +67,45 @@ class YishouApp : Application() {
         com.yishou.app.llm.LlmLineCoach(ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(40), usage = stats))
     }
 
-    /** 新开一个主线会话（主线页、语音对练、入口思考页各自一个） */
-    fun newLine(): com.yishou.app.line.LineSession =
-        com.yishou.app.line.LineSession(database.lines(), if (settings.llm.value.isComplete) lineCoach else null)
+    /**
+     * 新开一个主线会话（主线页、语音对练、入口思考页各自一个）。
+     * 岔路：教练改成捉虫 / 变条件，规则不放水；变条件时拿回响队列里的旧结论来撞，回到主干的结论进回响队列。
+     */
+    fun newLine(): com.yishou.app.line.LineSession {
+        val coach = if (settings.llm.value.isComplete) lineCoach else null
+        if (!com.yishou.app.system.Variant.chalu) return com.yishou.app.line.LineSession(database.lines(), coach)
+        return com.yishou.app.line.LineSession(
+            database.lines(), coach,
+            style = com.yishou.app.line.CoachStyle.TRAP,
+            lenient = false,
+            recall = {
+                val all = database.echoes().recent().filter { it.kind != com.yishou.app.data.EchoKind.DELTA }
+                com.yishou.app.line.Echoes.pick(all, "", System.currentTimeMillis())?.text
+            },
+            onConclusion = { echo(it, com.yishou.app.data.EchoKind.CONCLUSION, "line") },
+        )
+    }
+
+    /** 往回响队列里放一条（规则、差值、结论）。太短的不收。 */
+    suspend fun echo(text: String, kind: String, scene: String = "") {
+        val t = text.trim()
+        if (!com.yishou.app.line.Echoes.usable(t)) return
+        database.echoes().insert(com.yishou.app.data.Echo(text = t.take(120), kind = kind, scene = scene, createdAt = System.currentTimeMillis()))
+    }
+
+    /** 不在协程里时用：后台放一条 */
+    fun echoLater(text: String, kind: String, scene: String = "") {
+        appScope.launch { echo(text, kind, scene) }
+    }
+
+    /** 岔路第一次打开：强度直接拉到强、入口用主线下一手、题卡先押再看 */
+    private fun chaluDefaults() {
+        if (!com.yishou.app.system.Variant.chalu) return
+        val sp = getSharedPreferences("chalu", android.content.Context.MODE_PRIVATE)
+        if (sp.getBoolean("init", false)) return
+        settings.updateApp { it.copy(talkLevel = "HARD", gateMode = "line", predictFirst = true) }
+        sp.edit().putBoolean("init", true).apply()
+    }
 
     val level: com.yishou.app.line.Level get() = com.yishou.app.line.Level.of(settings.app.value.talkLevel)
 
@@ -169,6 +205,7 @@ class YishouApp : Application() {
         installRunLog()
         database = AppDatabase.create(this)
         settings = SettingsStore(this)
+        chaluDefaults()
         AppZone.id = settings.app.value.timeZone
         stats = StatsStore(this)
         val logError: (String, String) -> Unit = { kind, message -> RunLog.e(kind, message) }

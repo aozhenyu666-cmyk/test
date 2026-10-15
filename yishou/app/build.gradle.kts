@@ -13,8 +13,8 @@ android {
         applicationId = "com.yishou.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 13
-        versionName = "0.13.0"
+        versionCode = 14
+        versionName = "0.14.0"
     }
 
     signingConfigs {
@@ -43,6 +43,24 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+
+    // 两条线：主线（一手）和岔路（探索版）。岔路有自己的包名，能和主线同时装，数据完全分开。
+    flavorDimensions += "line"
+    productFlavors {
+        create("mainline") {
+            dimension = "line"
+            buildConfigField("boolean", "CHALU", "false")
+            buildConfigField("String", "CHALU_NAME", "\"\"")
+        }
+        create("chalu") {
+            dimension = "line"
+            applicationIdSuffix = ".chalu"
+            versionNameSuffix = "-chalu1"
+            buildConfigField("boolean", "CHALU", "true")
+            buildConfigField("String", "CHALU_NAME", "\"岔路 1\"")
+        }
     }
 }
 

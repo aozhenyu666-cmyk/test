@@ -230,7 +230,11 @@ class ThinkViewModel(app: Application) : AndroidViewModel(app) {
     fun range(low: Double, high: Double) = viewModelScope.launch { session.range(low, high) }
     fun predict(claim: String, conf: Int) = viewModelScope.launch { session.predict(claim, conf) }
     fun dispute() = viewModelScope.launch { session.dispute() }
-    fun takeaway(text: String) = viewModelScope.launch { session.takeaway(text) }
+    fun takeaway(text: String) = viewModelScope.launch {
+        session.takeaway(text)
+        // 岔路：收口进回响队列，下次开局推回来
+        if (com.yishou.app.system.Variant.chalu) yishou.echo(text, com.yishou.app.data.EchoKind.RULE)
+    }
     fun stop() = session.stop()
 }
 

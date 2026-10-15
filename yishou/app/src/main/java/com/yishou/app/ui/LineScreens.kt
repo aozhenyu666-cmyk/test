@@ -115,6 +115,7 @@ class LineViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun answer(text: String) = viewModelScope.launch { session.answer(text) }
+    fun answerCut(raw: String, cut: String) = viewModelScope.launch { session.answerCut(raw, cut) }
     fun park() = viewModelScope.launch { session.park() }
     fun resume() = session.resume()
     fun close() = viewModelScope.launch {
@@ -166,6 +167,7 @@ fun LineScreen(lineId: Long?, onBack: () -> Unit, onLive: (Long) -> Unit, onReci
             item { LineHeader(line, s, onLive = { onLive(line.id) }, onLevel = vm::setLevel) }
             item {
                 if (s.parked) Parked(onResume = vm::resume, onRecite = onRecite, onClose = { vm.close() })
+                else if (com.yishou.app.system.Variant.chalu) DumpCutBox(s, onCut = { raw, cut -> vm.answerCut(raw, cut) }, onRefuse = { vm.answer("想不出") }, onPark = { vm.park() })
                 else MoveBox(s, onAnswer = { vm.answer(it) }, onRefuse = { vm.answer("想不出") }, onPark = { vm.park() })
             }
             if (s.canRaise) {

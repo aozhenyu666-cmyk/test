@@ -14,7 +14,8 @@ object MaterialText {
             // 只截掉末尾那一截，正文中间出现的不动
             if (i > 0 && i > t.length * 0.6) t = t.substring(0, i)
         }
-        t = t.replace(URL, "").lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
+        t = t.replace(URL, "").replace(Regex("[（(]\\s*字数[:：]?\\s*\\d+\\s*字?\\s*[)）]"), "")
+            .lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
         return t.take(MAX).trim()
     }
 

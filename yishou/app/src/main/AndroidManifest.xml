@@ -82,7 +82,7 @@
             android:excludeFromRecents="true"
             android:exported="true"
             android:label="收进一手"
-            android:taskAffinity="com.yishou.app.share"
+            android:taskAffinity="${applicationId}.share"
             android:theme="@style/Theme.Yishou.Sheet">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
@@ -113,7 +113,7 @@
             android:excludeFromRecents="true"
             android:exported="false"
             android:launchMode="singleTask"
-            android:taskAffinity="com.yishou.app.gate"
+            android:taskAffinity="${applicationId}.gate"
             android:windowSoftInputMode="adjustResize" />
 
         <activity

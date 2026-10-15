@@ -63,7 +63,8 @@ object DrillPrompts {
 
     fun material(topic: String?, avoid: List<String>) = buildString {
         appendLine("写一段供思维训练用的中文材料（180–320 字），像真实世界里会读到的东西：评论、新闻解读、广告说法、政策解读、读书笔记、职场经验帖、申论给定资料，换着来。")
-        appendLine("要求：有一个明确的结论；有两三条理由；至少藏着一个没说出来的前提；可以有一两个具体数字；不要写成教科书，不要在文中点评自己，不要标出哪里是前提。")
+        appendLine("要求：有一个明确的结论；有两三条理由；至少藏着一个没说出来的前提；可以有一两个具体数字；不要写成教科书，不要在文中点评自己。")
+        appendLine("不要在正文里出现“前提”“假设”“我认为最关键的是”这类字眼，不要替读者总结，不要写字数、标题号或任何说明。")
         appendLine(if (topic.isNullOrBlank()) "话题自选，社会治理、基层工作、经济、科技、教育、健康、城市生活都可以。" else "话题：$topic")
         if (avoid.isNotEmpty()) appendLine("最近用过这些标题，换个话题：" + avoid.take(10).joinToString("、"))
         appendLine()
@@ -248,7 +249,7 @@ class LlmDrillGen(private val chat: ChatClient) : DrillGen {
                 is LlmResult.Ok -> try {
                     return LlmResult.Ok(parse(Tagged.toJson(r.value, DrillPrompts.NAMES, DrillPrompts.LISTS, DrillPrompts.NUMBERS)))
                 } catch (e: BadKey) {
-                    last = LlmError.BadFormat("缺内容：${e.message}")
+                    last = LlmError.Local("模型这次写的缺了一块（${e.message}），再试一次")
                 } catch (e: org.json.JSONException) {
                     last = LlmError.BadFormat(e.message ?: "")
                 }

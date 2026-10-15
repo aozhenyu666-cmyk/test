@@ -107,12 +107,17 @@ fun CardRoundView(s: SessionState, a: CardActions) {
 
         // 材料：同屏、或看完收起
         var picked by remember(card) { mutableStateOf(setOf<Int>()) }
+        // 岔路：顶上的外置寄存器，钉住的条件材料收起后还在
+        var pinned by remember(card) { mutableStateOf(listOf<String>()) }
+        val chalu = com.yishou.app.system.Variant.chalu && card.sentences.isNotEmpty()
+        if (chalu) RegisterSlots(pinned, onUnpin = { i -> pinned = pinned.filterIndexed { j, _ -> j != i } })
+        val pin: ((String) -> Unit)? = if (chalu && r.step != Step.EVIDENCE) ({ c: String -> pinned = pinClause(pinned, c) }) else null
         val canHide = s.level >= 2 && r.step == Step.BET && !s.hidden && card.sentences.isNotEmpty()
         if (canHide) ReadTimer(card, s.level, onHide = a.hide)
         if (s.hidden && r.step != Step.REVEAL) {
             HiddenPassage(card, s, picked, pickable = r.step == Step.EVIDENCE) { n -> picked = toggle(picked, n) }
         } else {
-            Passage(card, r, picked, pickable = r.step == Step.EVIDENCE) { n -> picked = toggle(picked, n) }
+            Passage(card, r, picked, pickable = r.step == Step.EVIDENCE, onPin = pin) { n -> picked = toggle(picked, n) }
         }
         if (s.level == 2 && !s.hidden && r.step == Step.BET) {
             OutlinedTextField(
@@ -187,7 +192,7 @@ private fun ReadTimer(card: Card, level: Int, onHide: () -> Unit) {
 }
 
 @Composable
-private fun Passage(card: Card, r: Round, picked: Set<Int>, pickable: Boolean, onPick: (Int) -> Unit) {
+private fun Passage(card: Card, r: Round, picked: Set<Int>, pickable: Boolean, onPin: ((String) -> Unit)? = null, onPick: (Int) -> Unit) {
     if (card.sentences.isEmpty()) return
     val reveal = r.step == Step.REVEAL
     Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
@@ -213,7 +218,8 @@ private fun Passage(card: Card, r: Round, picked: Set<Int>, pickable: Boolean, o
                     Surface(color = bg, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
                         Row(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
                             Text(Card.mark(n), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.tertiary, modifier = Modifier.width(22.dp))
-                            Text(sentence, style = MaterialTheme.typography.bodyLarge)
+                            if (com.yishou.app.system.Variant.chalu) LogicText(sentence, MaterialTheme.typography.bodyLarge, onPin = onPin)
+                            else Text(sentence, style = MaterialTheme.typography.bodyLarge)
                         }
                     }
                 }
@@ -276,22 +282,19 @@ private fun BetStep(card: Card, s: SessionState, a: CardActions) {
             Text("把握", style = MaterialTheme.typography.labelLarge)
             Conf.entries.forEach { c -> FilterChip(selected = conf == c, onClick = { conf = c }, label = { Text(c.label) }) }
         }
-        Button(
-            onClick = {
-                val o = option
-                val c = conf
-                if (o != null && c != null) a.bet(o, c)
+        // 押下去不可逆：岔路里先停 2 秒
+        BrakeButton(
+            when {
+                option == null -> "先选一项"
+                conf == null -> "再给个把握"
+                else -> "押 ${Card.letter(option!!)}，把握${conf!!.label}"
             },
             enabled = option != null && conf != null,
-            modifier = Modifier.fillMaxWidth().height(50.dp),
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(
-                when {
-                    option == null -> "先选一项"
-                    conf == null -> "再给个把握"
-                    else -> "押 ${Card.letter(option!!)}，把握${conf!!.label}"
-                },
-            )
+            val o = option
+            val c = conf
+            if (o != null && c != null) a.bet(o, c)
         }
     }
 }

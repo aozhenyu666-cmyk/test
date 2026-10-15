@@ -29,30 +29,32 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Unit tests and debug APK
-        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+        run: ./gradlew --no-daemon testMainlineDebugUnitTest assembleMainlineDebug assembleChaluDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: yishou-debug-apk
-          path: yishou/app/build/outputs/apk/debug/*.apk
+          path: yishou/app/build/outputs/apk/*/debug/*.apk
           if-no-files-found: error
 
       # 固定下载地址（手机浏览器直接打开即可下载，始终是最新一次构建）：
-      # https://github.com/aozhenyu666-cmyk/test/releases/download/yishou-latest/yishou.apk
+      # 主线 https://github.com/aozhenyu666-cmyk/test/releases/download/yishou-latest/yishou.apk
+      # 岔路 https://github.com/aozhenyu666-cmyk/test/releases/download/yishou-latest/yishou-chalu.apk
       - name: Publish to release yishou-latest
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk yishou.apk
+          cp app/build/outputs/apk/mainline/debug/app-mainline-debug.apk yishou.apk
+          cp app/build/outputs/apk/chalu/debug/app-chalu-debug.apk yishou-chalu.apk
           # Room 导出的数据库结构，一起放进发布页，方便提交进仓库（app/schemas）
           (cd app && zip -qr ../schemas.zip schemas)
           gh release delete yishou-latest --cleanup-tag --yes || true
-          gh release create yishou-latest yishou.apk schemas.zip \
+          gh release create yishou-latest yishou.apk yishou-chalu.apk schemas.zip \
             --target "$GITHUB_SHA" \
             --prerelease \
             --title "一手 最新调试版" \
-            --notes "由提交 ${GITHUB_SHA::7} 自动构建。直接安装 yishou.apk，可覆盖旧版本，数据保留。"
+            --notes "由提交 ${GITHUB_SHA::7} 自动构建。yishou.apk 是主线，可覆盖旧版本，数据保留；yishou-chalu.apk 是岔路（探索版），能和主线同时装，数据分开。"
 
       - name: Upload test reports
         if: failure()

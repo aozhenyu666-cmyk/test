@@ -39,6 +39,10 @@ data class GateState(
     val gateCard: Boolean = true,
     /** 用主线的下一手当这一关 */
     val useLine: Boolean = false,
+    /** 岔路：开局先过一遍的旧规则 / 差值（念一遍或点记得才往下） */
+    val echo: com.yishou.app.data.Echo? = null,
+    /** 岔路：题卡答错后写的差值（本来想……，漏看了……，下次见到……先……） */
+    val delta: String = "",
 ) {
     val isTest: Boolean get() = triggerPackage == null
 }
@@ -84,6 +88,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         lineSession.stop()
         if (inWindow) return
         viewModelScope.launch {
+            if (chalu) pushEcho(pkg.orEmpty())
             // 主线下一手：有在下的局就问它的下一问；没有就退成一张题卡
             val open = if (prefs.gateMode == "line") yishou.database.lines().latestOpen() else null
             when {
@@ -101,8 +106,44 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private val chalu = com.yishou.app.system.Variant.chalu
+
+    /** 回响：同一个 App 的差值优先，其次是确认得最少的规则 / 结论；推出来就记一次 */
+    private suspend fun pushEcho(pkg: String) {
+        val dao = yishou.database.echoes()
+        val now = System.currentTimeMillis()
+        val e = com.yishou.app.line.Echoes.pick(dao.recent(), pkg, now) ?: return
+        val shown = e.copy(shownAt = now, shown = e.shown + 1)
+        dao.update(shown)
+        _state.update { it.copy(echo = shown) }
+    }
+
+    /** 回响确认：念对一半以上，或者点了记得 */
+    fun confirmEcho(said: String) {
+        val e = _state.value.echo ?: return
+        _state.update { it.copy(echo = null) }
+        if (said.isNotBlank() && !com.yishou.app.line.Echoes.readBack(e.text, said)) {
+            // 念得对不上：这次不算确认，下次还推
+            return
+        }
+        viewModelScope.launch { yishou.database.echoes().update(e.copy(confirmed = e.confirmed + 1)) }
+    }
+
+    fun onDeltaChange(text: String) = _state.update { it.copy(delta = text) }
+
+    /** 这一张答错了（首答不对）：岔路要先写差值 */
+    val needsDelta: Boolean get() {
+        if (!chalu) return false
+        val c = session.state.value
+        return _state.value.gateCard && c.done && c.results.any { !it.firstCorrect }
+    }
+
+    /** 放着之后回来接着下（岔路里“先放着”不放行） */
+    fun resumeLine() = lineSession.resume()
+
     /** 上次说好的事：做了没有 */
     fun answerFollowUp(done: Boolean) {
+        com.yishou.app.system.Notifications.cancelCapsule(yishou)
         yishou.stats.event(if (done) DayStats.EXIT_KEPT else DayStats.EXIT_MISSED)
         yishou.settings.updateApp { it.copy(pendingExit = "", pendingExitAt = 0) }
         _state.update { it.copy(followUp = null) }
@@ -150,8 +191,13 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         val card = session.state.value
         val cardFailed = card.error != null && card.round == null
         if (s.gateCard && !card.done && !cardFailed) return
-        // 主线：接住一手，或者降阶到底、老实记下“先放着”，才放行
-        if (s.useLine && line.value.caught == 0 && !line.value.parked) return
+        // 主线：接住一手，或者降阶到底、老实记下“先放着”，才放行（岔路：先放着不放行）
+        if (s.useLine && line.value.caught == 0 && (chalu || !line.value.parked)) return
+        // 岔路：答错了先写差值，存进回响队列，下次打开这个 App 开局就推回来
+        if (needsDelta) {
+            if (!com.yishou.app.line.Echoes.usable(s.delta)) return
+            yishou.echoLater(s.delta, com.yishou.app.data.EchoKind.DELTA, s.triggerPackage.orEmpty())
+        }
         grant(yishou.settings.app.value.passMinutesFor(s.group), DayStats.GATE_PASS)
     }
 
@@ -172,6 +218,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             yishou.stats.event(event)
             val end = System.currentTimeMillis() + minutes * 60_000L
             yishou.settings.updateApp { it.copy(pendingExit = s.exit.trim(), pendingExitAt = end) }
+            if (chalu) com.yishou.app.system.Notifications.showCapsule(yishou, s.exit.trim())
             _state.update { it.copy(passMinutes = minutes) }
         }
     }

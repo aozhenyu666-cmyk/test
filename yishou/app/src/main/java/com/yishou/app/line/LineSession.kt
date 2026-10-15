@@ -40,7 +40,17 @@ data class LineState(
     val moves: Int = 0,
     val caught: Int = 0,
     val askedAt: Long = 0,
+    /** 岔路：这一问是哪一拍（OPEN 开局、TRAP 捉虫、FLIP 变条件） */
+    val beat: Beat = Beat.OPEN,
+    /** 岔路：这一问埋的漏洞（判卷用，不给你看） */
+    val flaw: String = "",
 )
+
+/** 岔路的两拍：吸气（捉虫，把判断压成条件句）——呼气（变条件，拿锁定的结论撞变化） */
+enum class Beat { OPEN, TRAP, FLIP }
+
+/** 教练的打法：顺着六面问（主线），或者捉虫 / 变条件（岔路） */
+enum class CoachStyle { ASK, TRAP }
 
 /**
  * 主线一局：一问一答往下走。每一手：
@@ -54,7 +64,15 @@ class LineSession(
     private val dao: LineDao,
     private val coach: LineCoach?,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val style: CoachStyle = CoachStyle.ASK,
+    /** 同一问连着两次没过规则时放行（主线）；岔路不放水 */
+    private val lenient: Boolean = true,
+    /** 变条件时拿来撞的旧结论（回响队列里挑一条） */
+    private val recall: (suspend () -> String?)? = null,
+    /** 回到主干时锁定的结论，交给回响队列 */
+    private val onConclusion: (suspend (String) -> Unit)? = null,
 ) {
+    private val trap get() = style == CoachStyle.TRAP
     private val _state = MutableStateFlow(LineState())
     val state: StateFlow<LineState> = _state.asStateFlow()
 
@@ -62,7 +80,7 @@ class LineSession(
     suspend fun create(title: String, anchor: String, level: Level, materialId: Long? = null): Line {
         val now = clock()
         val a = anchor.trim().ifEmpty { title.trim() }
-        val first = Lines.question(1, a)
+        val first = if (style == CoachStyle.TRAP) Lines.openTrap(a) else Lines.question(1, a)
         val l = Line(title = title.trim().ifEmpty { a.take(16) }, anchor = a, nextQuestion = first, face = 1, createdAt = now, updatedAt = now, materialId = materialId)
         val saved = l.copy(id = dao.insertLine(l))
         open(saved, level)
@@ -72,7 +90,15 @@ class LineSession(
     /** 接着下：从断点开始 */
     fun open(line: Line, level: Level) {
         val q = line.nextQuestion.ifBlank { Lines.question(line.face, line.anchor) }
-        _state.value = LineState(line = line, question = q, face = line.face, level = level, say = q, askedAt = clock())
+        // 断点里的漏洞存在疑问列表最后一条“漏洞：……”里（岔路），开局时取回来
+        val flaw = Lines.list(line.doubts).lastOrNull { it.startsWith(Lines.FLAW) }?.removePrefix(Lines.FLAW).orEmpty()
+        val beat = when {
+            !trap -> Beat.OPEN
+            q.startsWith(Lines.TRAP_PREFIX) -> Beat.TRAP
+            q.startsWith(Lines.FLIP_PREFIX) -> Beat.FLIP
+            else -> Beat.OPEN
+        }
+        _state.value = LineState(line = line, question = q, face = line.face, level = level, say = q, askedAt = clock(), beat = beat, flaw = flaw)
     }
 
     fun setLevel(level: Level) = _state.update { it.copy(level = level, canRaise = false) }
@@ -99,10 +125,15 @@ class LineSession(
         }
 
         // 2. 本机规则
-        val rules = if (s.ask == Ask.NORMAL || s.ask == Ask.ANCHOR) TalkRules.of(s.level) else TalkRules.SMALL
+        val normal = s.ask == Ask.NORMAL || s.ask == Ask.ANCHOR
+        val rules = when {
+            !normal -> TalkRules.SMALL
+            trap -> TalkRules.CUT
+            else -> TalkRules.of(s.level)
+        }
         val check = Talk.check(text, rules)
-        val enforce = s.level != Level.LIGHT && (s.ask == Ask.NORMAL || s.ask == Ask.ANCHOR)
-        if (!check.ok && enforce && s.thinTries < 2) {
+        val enforce = (trap || s.level != Level.LIGHT) && normal
+        if (!check.ok && enforce && (s.thinTries < 2 || !lenient)) {
             record(line, s, text, LineVerdict.THIN, check.hint.orEmpty(), "", voice, latency)
             val say = "${check.hint} 再说一次：${s.question}"
             _state.update { it.copy(check = check, thinTries = it.thinTries + 1, say = say, streak = 0, moves = it.moves + 1, askedAt = clock()) }
@@ -114,12 +145,17 @@ class LineSession(
         val conclusions = Lines.list(line.conclusions)
         val doubts = Lines.list(line.doubts)
         val recent = dao.recentMoves(line.id, 6).reversed().filter { it.verdict == LineVerdict.OK }.map { it.question to it.answer }
-        val reply = coach?.reply(line.anchor, conclusions, doubts, recent, s.question, text, s.face)
+        val nextBeat = if (s.beat == Beat.TRAP) Beat.FLIP else Beat.TRAP
+        val reply = when {
+            coach == null -> null
+            trap -> coach.trap(line.anchor, conclusions.filterNot { it.startsWith(Lines.FLAW) }, s.question, text, s.beat.name, s.flaw, nextBeat.name, recall?.invoke().orEmpty())
+            else -> coach.reply(line.anchor, conclusions, doubts, recent, s.question, text, s.face)
+        }
         val nowCount = s.caught + 1
         val anchorDue = s.ask != Ask.ANCHOR && nowCount % Lines.anchorEvery(s.level) == 0
 
         when {
-            reply is LlmResult.Ok && !reply.value.caught && s.ask == Ask.NORMAL && s.thinTries < 2 -> {
+            reply is LlmResult.Ok && !reply.value.caught && s.ask == Ask.NORMAL && (s.thinTries < 2 || !lenient) -> {
                 // 没接住问题：说差在哪，原问题再来（也算一次退回）
                 val why = reply.value.why.ifEmpty { "没接住这个问题。" }
                 record(line, s, text, LineVerdict.DRIFT, why, "", voice, latency)
@@ -134,15 +170,25 @@ class LineSession(
                 val face = r?.face ?: ((s.face % 6) + 1)
                 val next = when {
                     anchorDue -> Lines.anchorQuestion(line.anchor)
+                    trap && r != null -> if (nextBeat == Beat.TRAP) Lines.TRAP_PREFIX + "「${r.next}」哪里不对？叫停，改一个条件。" else Lines.FLIP_PREFIX + r.next
+                    trap -> Lines.FLIP_PREFIX + Lines.localFlip(gist)
                     r != null -> r.next
                     else -> Lines.question(face, line.anchor)
                 }
+                val beatNow = when {
+                    !trap || anchorDue -> Beat.OPEN
+                    r != null -> nextBeat
+                    else -> Beat.FLIP
+                }
+                val flawNow = if (beatNow == Beat.TRAP) r?.flaw.orEmpty() else ""
                 val newConclusions = when {
                     s.ask == Ask.ANCHOR -> listOf(gist) // 回主线时的结论替换掉零碎的
                     isDoubt -> conclusions
                     else -> (conclusions + gist).takeLast(12)
                 }
-                val newDoubts = if (isDoubt) (doubts + gist).takeLast(8) else doubts
+                if (s.ask == Ask.ANCHOR) onConclusion?.invoke(gist)
+                val baseDoubts = doubts.filterNot { it.startsWith(Lines.FLAW) }
+                val newDoubts = (if (isDoubt) (baseDoubts + gist).takeLast(8) else baseDoubts) + listOfNotNull(flawNow.takeIf { it.isNotEmpty() }?.let { Lines.FLAW + it })
                 val updated = line.copy(
                     conclusions = Lines.json(newConclusions),
                     doubts = Lines.json(newDoubts),
@@ -157,7 +203,7 @@ class LineSession(
                 val ack = if (r == null) "记下了。" else "接住了：$gist。"
                 _state.update {
                     it.copy(
-                        line = updated, question = next, ask = if (anchorDue) Ask.ANCHOR else Ask.NORMAL, face = updated.face,
+                        line = updated, question = next, ask = if (anchorDue) Ask.ANCHOR else Ask.NORMAL, face = updated.face, beat = beatNow, flaw = flawNow,
                         say = "$ack 下一问：$next", busy = false, thinTries = 0, streak = streak, parked = false,
                         canRaise = streak >= 6 && it.level != Level.HARD, moves = it.moves + 1, caught = nowCount, askedAt = clock(),
                     )
@@ -165,6 +211,15 @@ class LineSession(
             }
         }
     }
+
+    /** 先喷后砍：喷出来的原话记在这一手的判语里，交的是砍过的那句 */
+    suspend fun answerCut(raw: String, cut: String, voice: Boolean = false) {
+        lastRaw = raw
+        answer(cut, voice)
+        lastRaw = ""
+    }
+
+    private var lastRaw = ""
 
     /** 不想下了：记成先放着，断点留着 */
     suspend fun park() {
@@ -197,7 +252,8 @@ class LineSession(
         dao.insertMove(
             Move(
                 lineId = line.id, question = s.question, answer = answer.trim(), ask = s.ask.name, verdict = verdict,
-                note = note, gist = gist, face = s.face, voice = voice, latencyMs = latency, createdAt = clock(),
+                note = if (lastRaw.isNotBlank() && lastRaw.trim() != answer.trim()) (note + " 喷：" + lastRaw.take(200)).trim() else note,
+                gist = gist, face = s.face, voice = voice, latencyMs = latency, createdAt = clock(),
             ),
         )
     }
@@ -217,6 +273,16 @@ object Lines {
     }
 
     fun anchorQuestion(anchor: String) = "回到主线：关于「$anchor」，到现在你的结论是什么？一句话。"
+
+    const val TRAP_PREFIX = "捉虫："
+    const val FLIP_PREFIX = "变条件："
+    const val FLAW = "漏洞："
+
+    /** 岔路开局：先锁一句带条件的判断 */
+    fun openTrap(anchor: String) = "关于「$anchor」，先锁一句：只有当……，才……？"
+
+    /** 教练不在时的变条件：把你刚锁定的那句里的条件反过来问 */
+    fun localFlip(gist: String) = "如果「$gist」里的条件反过来、或者不成立了，结论怎么改？"
 
     /** 每接住几手回一次主线：越强越勤 */
     fun anchorEvery(level: Level): Int = when (level) {
