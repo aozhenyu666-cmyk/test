@@ -65,7 +65,7 @@ fun CampaignCard(c: Campaign, nav: NavHostController, askTopic: Boolean = false)
             ) { Text(if (running) "继续" else "开始（15–40 分钟）") }
             if (log.campaignLog.any { it.startsWith(c.title) }) TextButton(onClick = { msg = log.campaignLog.lastOrNull { it.startsWith(c.title) } }) { Text("上一次", color = sig.muted) }
         }
-        msg?.let { Hint(it, color = sig.ai) }
+        msg?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = sig.ai) }
     }
 }
 

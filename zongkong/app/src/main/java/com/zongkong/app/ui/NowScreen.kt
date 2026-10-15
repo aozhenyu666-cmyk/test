@@ -398,8 +398,9 @@ private fun PcStrip(nav: NavHostController) {
                 } else {
                     val locked = pc.lockUntil > now
                     Text("电脑今天 ${pc.todayMinutes / 60} 小时 ${pc.todayMinutes % 60} 分 · 娱乐 ${pc.funMinutes} 分", style = MaterialTheme.typography.titleSmall)
-                    Hint(
-                        listOfNotNull(
+                    Text(
+                        style = MaterialTheme.typography.bodySmall,
+                        text = listOfNotNull(
                             if (locked) "锁着" else if (pc.sessionUntil > now) "在做：${pc.session}" else null,
                             if (pc.blocks > 0) "被拦 ${pc.blocks} 次" else null,
                             if (pc.gaps.isNotEmpty()) "电脑上的总控被关过 ${pc.gaps.size} 次" else null,
