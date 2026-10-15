@@ -13,7 +13,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Notification
 import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
-import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberTrayState
@@ -138,6 +137,8 @@ fun main(args: Array<String>) {
 
         // 拦截页（整台没锁时才有）
         if (lockV == null) gate?.let { g ->
+            // 按主显示器的大小摆一个普通的置顶窗口；不用“独占全屏”——那个模式下 Windows 的输入法和键盘输入会坏（能选中文字却打不了字）
+            val b = if (GraphicsEnvironment.isHeadless()) java.awt.Rectangle(0, 0, 1280, 800) else GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.defaultConfiguration.bounds
             key(g.shownAt) {
                 Window(
                     onCloseRequest = { c.dismissGate() },
@@ -146,7 +147,7 @@ fun main(args: Array<String>) {
                     undecorated = true,
                     alwaysOnTop = true,
                     resizable = false,
-                    state = rememberWindowState(placement = WindowPlacement.Fullscreen),
+                    state = rememberWindowState(position = WindowPosition(b.x.dp, b.y.dp), size = DpSize(b.width.dp, b.height.dp)),
                 ) {
                     LaunchedEffect(Unit) { Win32.bringToFront(window) }
                     ZkTheme { GateScreen(g, c) }

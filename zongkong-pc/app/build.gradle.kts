@@ -30,8 +30,8 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi)
             packageName = "ZongKong"
-            // MSI 要求主版本号大于 0；界面上叫“电脑版 0.1.1”。每次发版都要加，不然覆盖安装不生效
-            packageVersion = "1.0.2"
+            // MSI 要求主版本号大于 0；界面上叫“电脑版 0.1.2”。每次发版都要加，不然覆盖安装不生效
+            packageVersion = "1.0.3"
             includeAllModules = true
             description = "总控 电脑版"
             vendor = "zongkong"

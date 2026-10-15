@@ -517,7 +517,7 @@ class Controller(val dataDir: File) {
     }
 
     companion object {
-        const val VERSION = "电脑版 0.1.1"
+        const val VERSION = "电脑版 0.1.2"
         /** 多久没碰键盘鼠标算不在用。 */
         const val IDLE_MS = 5 * 60_000L
     }
