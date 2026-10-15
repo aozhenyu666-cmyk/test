@@ -107,6 +107,8 @@ object Boss {
     const val EXCUSES_PER_WEEK = 1
     /** 主动问了多久不回，算“没回”。 */
     const val ASK_GRACE = 2 * 3600_000L
+    /** 主动问了多久之内回话，算“及时回应”（+1）。 */
+    const val QUICK_REPLY = 15 * 60_000L
     /** 到点提醒后多久没有任何动静（开始 / 推迟 / 卡住 / 做完），算“提醒了没动”。 */
     const val REMIND_GRACE = 45 * 60_000L
 
@@ -116,8 +118,8 @@ object Boss {
      * 最近 14 天的信用（0–100，起点 70）：
      * 说法属实 +3、对不上 −12、说不清 −4、无法核实 −1；约定做到 +4、没做到 −10；
      * 总控时间做完 +3、提前退出 −5；
-     * 沉默也有代价：主动问你 2 小时不回 −3；到点提醒后 45 分钟没有任何动静 −2（一天最多扣 3 次）；
-     * 记下做完一步 +1（一天最多 4 次）。
+     * 沉默也有代价：主动问你 2 小时不回 −3（一天最多扣 4 次）；到点提醒后 45 分钟没有任何动静 −2（一天最多扣 3 次）；
+     * 15 分钟内回应 +1、记下做完一步 +1（各一天最多 4 次）。
      */
     fun ledger(d: Dossier, sessions: List<HqSession>, now: Long, events: List<Event> = emptyList()): List<CredItem> {
         val since = now - WINDOW_DAYS * 86_400_000L
@@ -143,11 +145,14 @@ object Boss {
         sessions.filter { !it.active && it.endedAt >= since }.forEach { s ->
             out += if (s.early) CredItem(s.endedAt, -5, "总控时间提前退出：${s.earlyReason.take(30)}") else CredItem(s.endedAt, 3, "总控时间做完")
         }
-        d.asks.forEach { a ->
+        // 问了没回：一天最多扣 4 次（问得勤的时候不至于一天扣光）；15 分钟内回应 +1（一天最多 4 次）——从 0 爬回来的路
+        d.asks.mapNotNull { a ->
             val late = a.at + ASK_GRACE
             val unanswered = if (a.answeredAt == 0L) now >= late else a.answeredAt > late
-            if (unanswered && late >= since && late <= now) out += CredItem(late, -3, "问了没回（${a.kind}）")
-        }
+            if (unanswered && late >= since && late <= now) CredItem(late, -3, "问了没回（${a.kind}）") else null
+        }.groupBy { day(it.at) }.values.forEach { out += it.sortedBy { i -> i.at }.take(4) }
+        d.asks.filter { it.answeredAt > it.at && it.answeredAt - it.at <= QUICK_REPLY && it.answeredAt >= since && it.answeredAt <= now }
+            .groupBy { day(it.answeredAt) }.values.forEach { day -> day.sortedBy { it.answeredAt }.take(4).forEach { out += CredItem(it.answeredAt, 1, "及时回应（${it.kind}）") } }
         val moves = events.filter { it.type == "start" || it.type == "snooze" || it.type == "reschedule" || it.type == "cancel" || it.type.startsWith("done:") || it.type.startsWith("stuck:") }
         events.filter { it.type == "remind" }.mapNotNull { r ->
             val late = r.at + REMIND_GRACE
@@ -347,13 +352,13 @@ data class BossConfig(
     val modelLock: Boolean = true,
     /** 桌面宠物：浮在所有应用上面的小家伙，点它说话。 */
     val pet: Boolean = true,
-    /** 主动程度：0 安静（只在出事时找你）、1 标准（一天几次问候 + 抽查）、2 黏人（每一个半小时问一次）。 */
+    /** 主动程度：0 安静、1 标准（一天三次问候 + 抽查）、2 黏人（每一个半小时）、3 战友（每半小时开口问、解锁就问、截图抽查加密）。 */
     val initiative: Int = 1,
     /** 桌面宠物的形象：OWL 夜枭、CAT 团子、FLOWER 小葵。换形象不算放宽，马上生效。 */
     val petKind: String = "OWL",
 ) {
     companion object {
-        val INITIATIVE = listOf("安静", "标准", "黏人")
+        val INITIATIVE = listOf("安静", "标准", "黏人", "战友")
 
         /** 两份设置取更严的（看得多、查得勤、管得紧的那份）。 */
         fun stricter(old: BossConfig, new: BossConfig): BossConfig = new.copy(
@@ -383,5 +388,57 @@ data class BossConfig(
         if (modelLock && !new.modelLock) add("解开模型锁")
         if (pet && !new.pet) add("收起桌面宠物")
         if (new.initiative < initiative) add("主动程度调低到“${INITIATIVE.getOrElse(new.initiative) { "?" }}”")
+    }
+}
+
+
+/**
+ * 实际强度：你设的主动程度，和信用算出来的下限，取更高的。
+ * 信用掉到“审慎”至少是黏人，掉到“严格”自动进入战友模式——越不靠谱，它盯得越紧、说得越多。
+ */
+object Intensity {
+    const val PARTNER = 3
+
+    fun level(cfg: BossConfig, stance: Stance): Int = maxOf(
+        cfg.initiative,
+        when (stance) {
+            Stance.STRICT -> PARTNER
+            Stance.WARY -> 2
+            else -> 0
+        },
+    ).coerceIn(0, PARTNER)
+
+    /** 每小时截几张（没开截图抽查就是 0）。 */
+    fun shotsPerHour(cfg: BossConfig, stance: Stance): Int {
+        if (!cfg.shots) return 0
+        val floor = when {
+            stance == Stance.STRICT -> 8
+            stance == Stance.WARY || level(cfg, stance) >= PARTNER -> 6
+            else -> 0
+        }
+        return maxOf(cfg.shotsPerHour, floor)
+    }
+
+    /** 每天抽查几次。 */
+    fun spotChecks(cfg: BossConfig, stance: Stance): Int = when (level(cfg, stance)) {
+        PARTNER -> maxOf(cfg.spotChecks, 8)
+        2 -> maxOf(cfg.spotChecks, 5)
+        else -> cfg.spotChecks
+    }
+
+    /** 连续娱乐多少分钟就找你。 */
+    fun bingeMinutes(cfg: BossConfig, stance: Stance): Int = when {
+        level(cfg, stance) >= PARTNER -> if (cfg.bingeMinutes == 0) 20 else minOf(cfg.bingeMinutes, 20)
+        else -> cfg.bingeMinutes
+    }
+
+    /** 主动找你时一定开口说（睡觉时段除外）。 */
+    fun speakAlways(cfg: BossConfig, stance: Stance): Boolean = level(cfg, stance) >= PARTNER
+
+    /** 给人看：现在是什么强度、为什么。 */
+    fun describe(cfg: BossConfig, stance: Stance): String {
+        val l = level(cfg, stance)
+        val name = BossConfig.INITIATIVE.getOrElse(l) { "?" }
+        return if (l > cfg.initiative) "$name（信用掉到“${stance.label}”，自动拉高；你设的是“${BossConfig.INITIATIVE.getOrElse(cfg.initiative) { "?" }}”）" else name
     }
 }

@@ -206,4 +206,34 @@ class BossTest {
         assertTrue(both.config.boss.pet)
         assertFalse(both.config.pending.isEmpty())
     }
+
+    @Test
+    fun partnerIntensityFollowsCredibility() {
+        val now = at(12, 20)
+        val cfg = BossConfig(shots = true, shotsPerHour = 2, spotChecks = 3, initiative = 1)
+        assertEquals(1, com.zongkong.core.boss.Intensity.level(cfg, Stance.NORMAL))
+        assertEquals(2, com.zongkong.core.boss.Intensity.level(cfg, Stance.WARY))
+        assertEquals(3, com.zongkong.core.boss.Intensity.level(cfg, Stance.STRICT))
+        assertEquals(8, com.zongkong.core.boss.Intensity.shotsPerHour(cfg, Stance.STRICT))
+        assertEquals(0, com.zongkong.core.boss.Intensity.shotsPerHour(cfg.copy(shots = false), Stance.STRICT))
+        assertEquals(8, com.zongkong.core.boss.Intensity.spotChecks(cfg, Stance.STRICT))
+        assertEquals(20, com.zongkong.core.boss.Intensity.bingeMinutes(cfg.copy(bingeMinutes = 40), Stance.STRICT))
+        assertTrue(com.zongkong.core.boss.Intensity.describe(cfg, Stance.STRICT).contains("自动拉高"))
+        assertEquals("战友", com.zongkong.core.boss.Intensity.describe(cfg.copy(initiative = 3), Stance.NORMAL))
+        // 问了不回一天最多扣 4 次；15 分钟内回 +1，一天最多 4 次
+        var d = (0 until 8).fold(Dossier()) { acc, i -> Boss.asked(acc, "问候", at(12, 8) + i * 30 * 60_000L) }
+        assertEquals(4, Boss.ledger(d, emptyList(), now).count { it.why.startsWith("问了没回") })
+        d = (0 until 6).fold(Dossier()) { acc, i ->
+            val t = at(12, 8) + i * 60 * 60_000L
+            Boss.answered(Boss.asked(acc, "问候", t), t + 5 * 60_000L)
+        }
+        val items = Boss.ledger(d, emptyList(), now)
+        assertEquals(4, items.count { it.why.startsWith("及时回应") })
+        assertEquals(Boss.BASE + 4, Boss.credibility(d, emptyList(), now))
+        // 封存：整段时间到了、在“封”这一步待满 20 秒
+        val s = Hq.start("h", HqTrigger.MANUAL, HqConfig(), at(12, 21), 30).copy(step = com.zongkong.core.hq.HqStep.SEAL.ordinal, stepStartedAt = at(12, 21, 31))
+        assertFalse(Hq.canFinish(s, at(12, 21, 31)))
+        assertTrue(Hq.canFinish(s, at(12, 21, 31) + 21_000))
+        assertTrue(Hq.canFinish(s.copy(stepStartedAt = at(12, 21, 10)), at(12, 21, 30)))
+    }
 }

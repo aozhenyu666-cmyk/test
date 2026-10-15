@@ -161,6 +161,9 @@ fun ChatScreen(nav: NavHostController) {
                 TextButton(onClick = { menu = true }) { Text("···", fontSize = 20.sp, color = sig.muted) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(text = { Text("它怎么运转：今天几点找你、怎么判你") }, onClick = { menu = false; nav.navigate("flow") })
+                    com.zongkong.core.agent.Campaign.entries.forEach { c ->
+                        DropdownMenuItem(text = { Text("开一场${c.title}") }, onClick = { menu = false; chat.begin(c) })
+                    }
                     DropdownMenuItem(text = { Text("档案：信用、约定、判定") }, onClick = { menu = false; nav.navigate("dossier") })
                     DropdownMenuItem(text = { Text("它记住的事（${log.memory.size}）") }, onClick = { menu = false; showMemory = true })
                     DropdownMenuItem(text = { Text("清空对话") }, onClick = { menu = false; chat.clear() })
@@ -169,6 +172,7 @@ fun ChatScreen(nav: NavHostController) {
             }
         }
 
+        Box(Modifier.padding(horizontal = 16.dp)) { CampaignBanner() }
         if (!config.ai.ready) {
             Column(Modifier.weight(1f).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Spacer(Modifier.height(24.dp))

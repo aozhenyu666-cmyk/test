@@ -24,7 +24,13 @@ data class Aim(
     val threads: List<String> = emptyList(),
     val done: Boolean = false,
     val closedAt: Long = 0,
+    /** 里程碑：从截止日往回倒推的几个能检查的产出。 */
+    val milestones: List<Milestone> = emptyList(),
 )
+
+/** 一个里程碑：做出什么、哪天前。 */
+@Serializable
+data class Milestone(val id: String, val title: String, val due: String = "", val done: Boolean = false, val doneAt: Long = 0)
 
 object Aims {
     /** 同时最多挂几个：多了就不是远方，是噪音。 */
@@ -81,6 +87,27 @@ object Aims {
 
     fun remove(book: PlanBook, id: String): PlanBook = book.copy(aims = book.aims.filterNot { it.id == id })
 
+    /** 下一个没做完的里程碑。 */
+    fun nextMilestone(a: Aim): Milestone? = a.milestones.filter { !it.done }.minByOrNull { it.due.ifBlank { "9999" } }
+
+    /** 写里程碑：整组替换（已经做完的保留）。 */
+    fun setMilestones(book: PlanBook, aimId: String, items: List<Pair<String, LocalDate?>>, now: Long): Result<PlanBook> {
+        val a = book.aims.firstOrNull { it.id == aimId } ?: return Result.failure(IllegalArgumentException("没有这个目标：$aimId"))
+        if (items.isEmpty()) return Result.failure(IllegalArgumentException("至少一个里程碑"))
+        val kept = a.milestones.filter { it.done }
+        val fresh = items.take(8).mapIndexed { i, (t, d) -> Milestone("m" + (now / 1000).toString(36).takeLast(4) + i, t.trim(), d?.toString().orEmpty()) }
+        val next = a.copy(milestones = (kept + fresh).sortedBy { it.due.ifBlank { "9999" } })
+        return Result.success(book.copy(aims = book.aims.map { if (it.id == aimId) next else it }))
+    }
+
+    fun milestoneDone(book: PlanBook, aimId: String, ref: String, now: Long): Result<PlanBook> {
+        val a = book.aims.firstOrNull { it.id == aimId } ?: return Result.failure(IllegalArgumentException("没有这个目标：$aimId"))
+        val m = a.milestones.firstOrNull { it.id == ref || it.title == ref } ?: a.milestones.firstOrNull { !it.done && (it.title.contains(ref) || ref.contains(it.title)) }
+            ?: return Result.failure(IllegalArgumentException("没有这个里程碑：$ref"))
+        val next = a.copy(milestones = a.milestones.map { if (it.id == m.id) it.copy(done = true, doneAt = now) else it })
+        return Result.success(book.copy(aims = book.aims.map { if (it.id == aimId) next else it }))
+    }
+
     /** 给模型看的一段。 */
     fun brief(book: PlanBook, work: Work, now: Long, zone: ZoneId): String {
         val list = open(book)
@@ -94,6 +121,14 @@ object Aims {
                 if (a.why.isNotBlank()) append("｜为什么：${a.why.take(40)}")
                 if (a.threads.isEmpty()) append("｜没关联事项")
                 else append("｜近 7 天落在它上面 $steps 步")
+                if (a.milestones.isEmpty()) append("｜还没有里程碑（大统筹时用 set_milestones 倒推）")
+                else {
+                    val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate().toString()
+                    val late = a.milestones.filter { !it.done && it.due.isNotBlank() && it.due < today }
+                    append("｜里程碑 ${a.milestones.count { it.done }}/${a.milestones.size}")
+                    nextMilestone(a)?.let { append("，下一个：${it.title}（${it.due.ifBlank { "没日期" }}）") }
+                    if (late.isNotEmpty()) append("，过期没做：${late.joinToString("、") { it.title }}")
+                }
                 append('\n')
             }
             val idle = list.filter { it.threads.isNotEmpty() && recentSteps(it, work, now) == 0 }

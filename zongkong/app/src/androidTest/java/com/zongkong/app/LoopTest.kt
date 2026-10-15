@@ -874,4 +874,45 @@ class LoopTest {
         assertEquals("lock", phone.cmds.single().kind)
         assertEquals(listOf("m1"), phone.gotMsgs)
     }
+
+    /** 0.7：信用掉光自动进入战友模式；首页的电脑栏和战友栏；统筹规划部开一场大统筹。 */
+    @Test
+    fun partnerAndCampaign() {
+        val now = System.currentTimeMillis()
+        app.store.updateDossier { d0 ->
+            (1..5).fold(d0) { d, i -> com.zongkong.core.boss.Boss.addClaim(d, "c$i", "说做了 2 小时作业", 0, 0, com.zongkong.core.boss.ClaimVerdict.CONTRADICTED, "时间线里抖音 1 小时 40 分", now - i * 60_000L) }
+        }
+        assertEquals(com.zongkong.core.boss.Stance.STRICT, app.store.stance())
+        val llm = mockLlm(sayTurn("【阶段 1/6 · 盘点】离“秋招拿到 offer”还差简历定稿和 20 家投递；这周电脑上 B站 6 小时，主线只动了 40 分钟。我们先把里程碑倒推出来。\n【选项】好，倒推｜先看这周｜改天"))
+        app.store.updateConfig { it.copy(ai = com.zongkong.core.AiConfig(llm.url("/v1").toString(), "sk-test", "mock-model")) }
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java))
+        waitFor(hasTestTag("partner-line"), 10_000, "战友栏")
+        waitText("战友", 5_000)
+        waitFor(hasTestTag("pc-strip"), 5_000, "电脑栏")
+        compose.onNodeWithTag("partner-line").performScrollTo()
+        settle()
+        shot("e2e-91-home-partner")
+        go("dept/PLAN")
+        waitFor(hasTestTag("campaign-GRAND_PLAN"), 5_000, "大统筹")
+        settle()
+        Thread.sleep(800)
+        shot("e2e-92-grand-plan-card")
+        compose.onNodeWithTag("campaign-go-GRAND_PLAN").performScrollTo().performClick()
+        waitFor(hasTestTag("campaign-banner"), 10_000, "战役进行中")
+        waitText("阶段 1/6", 15_000)
+        settle()
+        shot("e2e-93-grand-plan-chat")
+        assertEquals("GRAND_PLAN", app.chat.log.value.campaign)
+        val sent = llm.takeRequest().body.readUtf8()
+        assertTrue(sent, sent.contains("正在进行的战役：大统筹") && sent.contains("战友"))
+        go("dossier")
+        waitFor(hasTestTag("intensity"), 5_000, "强度")
+        settle()
+        shot("e2e-94-dossier-partner")
+        go("dept/THINK")
+        waitFor(hasTestTag("campaign-GRAND_THINK"), 5_000, "大谋划")
+        settle()
+        shot("e2e-95-grand-think-card")
+        llm.shutdown()
+    }
 }

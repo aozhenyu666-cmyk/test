@@ -292,7 +292,8 @@ private fun VoiceSettings(v: VoiceConfig, boss: BossConfig) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             BossConfig.INITIATIVE.forEachIndexed { i, name -> QuickChip(name + if (boss.initiative == i) " ✓" else "", sig.ai) { setBoss(boss.copy(initiative = i)) } }
         }
-        Hint("安静：只在出事时找你。标准：一天三次问候（上午、下午、晚上），加上抽查和回访。黏人：每一个半小时问你一次。调低、收起宠物 24 小时后生效；换形象马上生效。")
+        Hint("安静：只在出事时找你。标准：一天三次问候，加上抽查和回访。黏人：每一个半小时问一次。战友：每半小时开口问一次、解锁手机就问、截图抽查和抽查都加密、连续娱乐 20 分钟就找你。信用掉到 60 以下自动至少是黏人，40 以下自动进入战友。调低、收起宠物 24 小时后生效；换形象马上生效。")
+        Text("现在实际：" + com.zongkong.core.boss.Intensity.describe(boss, app.store.stance()), style = MaterialTheme.typography.labelLarge, color = sig.ai)
         Hint("桌面小部件：长按桌面 → 小组件 → 总控。")
     }
 }

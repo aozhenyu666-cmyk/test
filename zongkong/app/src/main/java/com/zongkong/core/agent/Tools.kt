@@ -112,6 +112,12 @@ interface AgentEnv {
 
     // ---------- 信息收集部的漏斗 ----------
 
+    /** 正在进行的战役（大统筹、大谋划……）放进系统提示的那一段；没有就空。 */
+    fun campaign(): String = ""
+    /** 开一场战役（大统筹 / 大谋划 / 整理收集箱）。 */
+    fun startCampaign(kind: String, topic: String): String = "这里开不了战役"
+    /** 结束战役：记下进度。 */
+    fun endCampaign(summary: String): String = "没有进行中的战役"
     /** 电脑那边最后一次的状态（没连电脑 = null）。 */
     fun pcSide(): com.zongkong.core.device.PcSide? = null
     /** 给电脑发命令：lock / unlock / say / block。 */
@@ -453,6 +459,25 @@ class ZkTools(private val env: AgentEnv) {
             ),
         ),
         ToolSpec(
+            "set_milestones", "给一个长期目标写里程碑：从截止日往回倒推 3–5 个能检查的产出和日期（整组替换，做完的保留）。大统筹里用。",
+            listOf(
+                Param("aim", "string", "目标 id 或名字", required = true),
+                Param("items", "string", "每行：做出什么｜日期（11-20 / 2026-12-01）", required = true),
+            ),
+        ),
+        ToolSpec(
+            "milestone_done", "把一个里程碑标成做完了（要有证据：交出的东西、记录）。",
+            listOf(Param("aim", "string", "目标 id 或名字", required = true), Param("milestone", "string", "里程碑 id 或名字", required = true), Param("evidence", "string", "依据", required = true)),
+        ),
+        ToolSpec(
+            "start_campaign", "开一场战役：大统筹（从长期目标倒推到这周的日程）、大谋划（把一个问题想透写进脉络）、整理收集箱。他同意了再开；开了以后按阶段一段一段推进。",
+            listOf(
+                Param("kind", "string", "哪一种", required = true, choices = com.zongkong.core.agent.Campaign.entries.map { it.title }),
+                Param("topic", "string", "题目（大谋划要想的问题；可空）"),
+            ),
+        ),
+        ToolSpec("campaign_done", "结束正在进行的战役（大统筹 / 大谋划 / 整理收集箱），记下做到了哪一步。", listOf(Param("summary", "string", "三到五行：做成了什么、还差什么", required = true))),
+        ToolSpec(
             "pc", "电脑：看电脑今天用了多久、在做什么（状态），或者给电脑下命令：锁机 N 分钟、解锁（只解你锁的）、说一句（电脑上念出来、弹出来）、拦一个网站（今天剩下的时间都打不开）。",
             listOf(
                 Param("action", "string", "做什么", required = true, choices = listOf("状态", "锁机", "解锁", "说一句", "拦网站")),
@@ -519,6 +544,10 @@ class ZkTools(private val env: AgentEnv) {
                 "backward_plan" -> backwardPlan(a)
                 "set_aim" -> setAim(a)
                 "pc" -> pc(a)
+                "set_milestones" -> setMilestones(a)
+                "milestone_done" -> milestoneDone(a)
+                "start_campaign" -> ToolResult(env.startCampaign(a.s("kind"), a.s("topic")), "开始${a.s("kind")}")
+                "campaign_done" -> a.s("summary").ifBlank { return ToolResult.fail("summary 不能空") }.let { ToolResult(env.endCampaign(it), "战役收尾") }
                 "vein_search" -> veinSearch(a)
                 "vein_node" -> veinNode(a)
                 "vein_propose" -> veinPropose(a)
@@ -702,6 +731,39 @@ class ZkTools(private val env: AgentEnv) {
             env.kick()
         }
         return ToolResult("提炼了「${n.title}」：$gist" + (t?.let { "，归位到 ${it[F.CODE]}「${it.title}」" } ?: ""), "提炼「${n.title.take(12)}」")
+    }
+
+    private fun findAim(ref: String): com.zongkong.core.plan.Aim? {
+        val r = ref.trim()
+        val open = com.zongkong.core.plan.Aims.open(env.plans())
+        return open.firstOrNull { it.id == r } ?: open.firstOrNull { it.title == r } ?: open.firstOrNull { it.title.contains(r) || r.contains(it.title) }
+    }
+
+    private fun setMilestones(a: Args): ToolResult {
+        val aim = findAim(a.s("aim")) ?: return ToolResult.fail("没有这个长期目标：${a.s("aim")}（先用 set_aim 挂上）")
+        val now = env.now()
+        val items = lines(a.s("items")).map { l ->
+            val f = fields(l)
+            val d = f.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { raw ->
+                val p = TimeParse.parse(raw, now, env.zone) ?: return ToolResult.fail("日期认不出：$raw")
+                java.time.Instant.ofEpochMilli(TimeParse.startMillis(p, env.zone) ?: return ToolResult.fail("日期认不出：$raw")).atZone(env.zone).toLocalDate()
+            }
+            f[0] to d
+        }.filter { it.first.isNotBlank() }
+        var err: String? = null
+        val book = env.updatePlans { b -> com.zongkong.core.plan.Aims.setMilestones(b, aim.id, items, now).getOrElse { e -> err = e.message; b } }
+        err?.let { return ToolResult.fail(it) }
+        val ms = book.aims.first { it.id == aim.id }.milestones
+        return ToolResult("「${aim.title}」的里程碑：\n" + ms.joinToString("\n") { "· [${it.id}] ${it.title}｜${it.due.ifBlank { "没日期" }}${if (it.done) "｜已做完" else ""}" }, "写了 ${items.size} 个里程碑：${aim.title}")
+    }
+
+    private fun milestoneDone(a: Args): ToolResult {
+        val aim = findAim(a.s("aim")) ?: return ToolResult.fail("没有这个长期目标：${a.s("aim")}")
+        if (a.s("evidence").length < 4) return ToolResult.fail("要写依据")
+        var err: String? = null
+        env.updatePlans { b -> com.zongkong.core.plan.Aims.milestoneDone(b, aim.id, a.s("milestone"), env.now()).getOrElse { e -> err = e.message; b } }
+        err?.let { return ToolResult.fail(it) }
+        return ToolResult("里程碑做完：${a.s("milestone")}（${a.s("evidence")}）", "里程碑完成：${a.s("milestone").take(16)}")
     }
 
     private fun pc(a: Args): ToolResult {

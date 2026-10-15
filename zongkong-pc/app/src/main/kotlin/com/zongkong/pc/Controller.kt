@@ -275,7 +275,13 @@ class Controller(val dataDir: File) {
     }
 
     private fun maybeCheckIn(now: Long) {
-        val every = _config.value.rules.checkEvery
+        val base = _config.value.rules.checkEvery
+        // 手机那边信用掉到审慎 / 严格：电脑问得更勤（战友模式）
+        val every = when (_phone.value?.stance) {
+            "严格" -> if (base <= 0) 25 else minOf(base, 25)
+            "审慎" -> if (base <= 0) 35 else minOf(base, 35)
+            else -> base
+        }
         if (every <= 0 || _checkIn.value != null) return
         val st = _state.value
         val since = maxOf(st.lastCheckIn, st.activeSession(now)?.start ?: 0L)

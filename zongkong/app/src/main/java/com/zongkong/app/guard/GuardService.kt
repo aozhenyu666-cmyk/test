@@ -34,23 +34,39 @@ class GuardService : AccessibilityService() {
     private val store get() = zk.store
 
     /** 当前前台应用和它切到前台的时刻（fgSince 每次记娱乐时长后重置；fgStartedAt 是这一段真正开始的时刻）。 */
-    private var fgPkg: String? = null
-    private var fgSince = 0L
-    private var fgStartedAt = 0L
+    @Volatile private var fgPkg: String? = null
+    @Volatile private var fgSince = 0L
+    @Volatile private var fgStartedAt = 0L
     private var lastShot = 0L
+    /** 截图机会：按“每小时几张”一直攒（锁屏、熄屏时也攒），亮屏能截时再用掉。 */
+    private var shotDebt = 0.0
+    private var nextShotAt = 0L
+    private var lastWatch = 0L
+    @Volatile private var bgBusy = false
+    /** 最近一次解锁的时刻（战友模式解锁问候用）。 */
+    @Volatile var unlockedAt = 0L
 
     /** 亮屏熄屏：记进时间线（总控对账用）。 */
     private val screenReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context, intent: Intent) {
-            val now = System.currentTimeMillis()
-            when (intent.action) {
-                Intent.ACTION_SCREEN_OFF -> {
-                    accountPlay(now)
-                    store.logSwitch(now, com.zongkong.core.boss.Timeline.OFF)
+            try {
+                val now = System.currentTimeMillis()
+                when (intent.action) {
+                    Intent.ACTION_SCREEN_OFF -> {
+                        accountPlay(now)
+                        store.logSwitch(now, com.zongkong.core.boss.Timeline.OFF)
+                    }
+                    Intent.ACTION_SCREEN_ON -> store.logSwitch(now, fgPkg ?: com.zongkong.core.boss.Timeline.ON)
+                    Intent.ACTION_USER_PRESENT -> {
+                        // 解锁了：锁屏时攒下的截图机会，过一小会儿补上；战友模式下打个招呼
+                        nextShotAt = now + kotlin.random.Random.nextLong(20_000, 180_000)
+                        unlockedAt = now
+                    }
                 }
-                Intent.ACTION_SCREEN_ON -> store.logSwitch(now, fgPkg ?: com.zongkong.core.boss.Timeline.ON)
+                fgStartedAt = now
+            } catch (e: Throwable) {
+                Log.e(TAG, "亮屏广播处理出错", e)
             }
-            fgStartedAt = now
         }
     }
     private var lastBounce = 0L
@@ -63,6 +79,15 @@ class GuardService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        try {
+            connected()
+        } catch (e: Throwable) {
+            // 这里抛出去，系统会把服务标成“出现故障”，只能手动关开一次：一律接住
+            Log.e(TAG, "连接时出错", e)
+        }
+    }
+
+    private fun connected() {
         running = true
         val now = System.currentTimeMillis()
         val hb = store.heartbeat
@@ -77,6 +102,7 @@ class GuardService : AccessibilityService() {
             registerReceiver(screenReceiver, android.content.IntentFilter().apply {
                 addAction(Intent.ACTION_SCREEN_OFF)
                 addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_USER_PRESENT)
             })
         } catch (e: Exception) {
             Log.w(TAG, "注册亮屏广播失败", e)
@@ -88,8 +114,21 @@ class GuardService : AccessibilityService() {
             while (isActive) {
                 try {
                     tick()
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     Log.e(TAG, "tick 出错", e)
+                }
+                // 重活（提醒、总控者的日程、抽查、和电脑同步）放到后台线程：主线程卡住会被系统判成“无响应”停掉服务
+                if (!bgBusy) {
+                    bgBusy = true
+                    launch(Dispatchers.Default) {
+                        try {
+                            background(System.currentTimeMillis())
+                        } catch (e: Throwable) {
+                            Log.e(TAG, "后台检查出错", e)
+                        } finally {
+                            bgBusy = false
+                        }
+                    }
                 }
                 delay(TICK_MILLIS)
             }
@@ -97,6 +136,14 @@ class GuardService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        try {
+            onWindow(event)
+        } catch (e: Throwable) {
+            Log.e(TAG, "处理窗口切换出错", e)
+        }
+    }
+
+    private fun onWindow(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
         Log.d(TAG, "窗口切换：$pkg / ${event.className}")
@@ -204,11 +251,8 @@ class GuardService : AccessibilityService() {
         val status = store.status(now)
         fgPkg?.let { if (status.strict) enforce(it, now) }
         alerts(status, now)
-        com.zongkong.app.system.Reminders.check(this)
-        com.zongkong.app.system.Buzz.tick(this)
         // 总控时间刚开始时你正停在别的应用里：也拉回来
         fgPkg?.let { if (store.hq.value.active != null) lockdown(it, now) }
-        watch(now)
         com.zongkong.app.system.Pet.refresh(this)
         val text = Engine.summary(status)
         val title = "总控 · ${status.headline}"
@@ -240,17 +284,27 @@ class GuardService : AccessibilityService() {
         }
     }
 
+    /** 后台线程上的检查：到点提醒、总控者的日程、震动、眼睛。 */
+    private fun background(now: Long) {
+        com.zongkong.app.system.Reminders.check(this)
+        com.zongkong.app.system.Buzz.tick(this)
+        watch(now)
+        com.zongkong.app.system.Partner.afterUnlock(this, unlockedAt, now)
+    }
+
     /**
      * 总控者的眼睛：连续娱乐太久就找你；开了截图抽查就不定时截一张。
      */
     private fun watch(now: Long) {
+        shots(now)
         val boss = store.config.value.boss
         val pkg = fgPkg ?: return
         if (!interactive() || pkg == packageName || pkg in overlays()) return
         if (store.firstAlert("prune")) store.prune(now)
         // 连续娱乐
         val minutes = (now - fgStartedAt) / 60_000
-        if (boss.bingeMinutes > 0 && pkg in store.config.value.blocked && fgStartedAt > 0 && minutes >= boss.bingeMinutes &&
+        val binge = com.zongkong.core.boss.Intensity.bingeMinutes(boss, store.stance(now))
+        if (binge > 0 && pkg in store.config.value.blocked && fgStartedAt > 0 && minutes >= binge &&
             store.firstAlert("binge:$fgStartedAt")
         ) {
             snap(pkg, now, force = true)
@@ -264,16 +318,31 @@ class GuardService : AccessibilityService() {
             )
             com.zongkong.app.system.Buzz.once(this, com.zongkong.app.system.Buzz.Level.FIRM)
         }
-        // 截图抽查：平均每小时 shotsPerHour 张
-        if (boss.shots && boss.shotsPerHour > 0 && kotlin.random.Random.nextDouble() < boss.shotsPerHour * TICK_MILLIS / 3_600_000.0) snap(pkg, now)
+    }
+
+    /** 截图抽查：机会按时间一直攒（熄屏、锁屏时也攒），亮屏能截时用掉；间隔随机，猜不到。 */
+    private fun shots(now: Long) {
+        val boss = store.config.value.boss
+        val dt = if (lastWatch == 0L) 0L else (now - lastWatch).coerceIn(0, 3600_000L)
+        lastWatch = now
+        val rate = com.zongkong.core.boss.Intensity.shotsPerHour(boss, store.stance(now))
+        if (!boss.shots || rate <= 0) { shotDebt = 0.0; return }
+        shotDebt = (shotDebt + rate * dt / 3_600_000.0).coerceAtMost(rate * 2.0)
+        val pkg = fgPkg ?: return
+        if (!interactive() || pkg == packageName || pkg in overlays()) return
+        if (shotDebt >= 1.0 && now >= nextShotAt) {
+            val gap = (3_600_000L / rate).coerceAtLeast(3 * 60_000L)
+            nextShotAt = now + kotlin.random.Random.nextLong(gap / 3, gap)
+            snap(pkg, now, banked = true)
+        }
     }
 
     /** 截一张屏（Android 11 起，无障碍服务可以截图）。只存在手机上；电话、总控自己不截。 */
-    private fun snap(pkg: String, now: Long, force: Boolean = false) {
+    private fun snap(pkg: String, now: Long, force: Boolean = false, banked: Boolean = false) {
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return
         if (!store.config.value.boss.shots) return
         if (pkg in com.zongkong.core.hq.ALWAYS_ALLOWED || pkg == packageName) return
-        if (!force && now - lastShot < 5 * 60_000) return
+        if (!force && now - lastShot < 3 * 60_000) return
         if (now - lastShot < 2_000) return
         lastShot = now
         try {
@@ -288,6 +357,7 @@ class GuardService : AccessibilityService() {
                         hb.close()
                     }
                     bmp ?: return
+                    if (banked) shotDebt = (shotDebt - 1.0).coerceAtLeast(0.0)
                     scope.launch(Dispatchers.IO) {
                         try {
                             val w = 720

@@ -183,7 +183,10 @@ object Hq {
     }
 
     /** 正常结束：要走到最后一个环节，并且整段时间到了（时间没到可以回去再修一轮）。 */
-    fun canFinish(s: HqSession, now: Long): Boolean = s.current == HqStep.SEAL && now >= s.endsAt && now >= stepReadyAt(s)
+    fun canFinish(s: HqSession, now: Long): Boolean = s.current == HqStep.SEAL && now >= finishAt(s)
+
+    /** 最早什么时候能封存：整段时间到了，而且在“封”这一步至少待了 20 秒（读一眼总结）。 */
+    fun finishAt(s: HqSession): Long = maxOf(s.endsAt, s.stepStartedAt + 20_000L)
 
     /** 回到某个环节再修一轮（时间还没到的时候）。 */
     fun revisit(s: HqSession, step: HqStep, now: Long): HqSession = s.copy(step = step.ordinal, stepStartedAt = now - step.minMinutes * 60_000L)

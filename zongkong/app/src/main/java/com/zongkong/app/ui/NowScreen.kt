@@ -169,13 +169,6 @@ fun NowScreen(nav: NavHostController) {
             }
         }
 
-        // ---------- 总控时间 ----------
-        val hqBook by store.hq.collectAsStateWithLifecycle()
-        HqStrip(config.hq, hqBook, now, store.zone, nav)
-
-        // ---------- 本周计划（参照） ----------
-        PlanStrip(plan, book, work, now, nav)
-
         // ---------- 现在这一步 ----------
         Box(Modifier.enter(2)) {
             AnimatedContent(
@@ -184,6 +177,38 @@ fun NowScreen(nav: NavHostController) {
                 transitionSpec = { (fadeIn() + slideInVertically { it / 8 }) togetherWith fadeOut() },
                 label = "task",
             ) { c -> TaskCard(c, now, notionReady, nav, plan) }
+        }
+
+        // ---------- 今天：计划、总控时间、电脑、信用 ----------
+        SectionLabel("今天")
+        PlanStrip(plan, book, work, now, nav)
+
+        val hqBook by store.hq.collectAsStateWithLifecycle()
+        HqStrip(config.hq, hqBook, now, store.zone, nav)
+
+        PcStrip(nav)
+        PartnerLine(nav)
+
+        // ---------- 接下来 ----------
+        if (upcoming.isNotEmpty()) {
+            SectionLabel("接下来")
+            Panel(modifier = Modifier.enter(9)) {
+                upcoming.forEach { a -> TimelineRow(a, work, now, nav) }
+            }
+        }
+
+        // ---------- 等你处理 ----------
+        if (attention.isNotEmpty() || unplanned.isNotEmpty()) {
+            SectionLabel("等你处理")
+            Panel(modifier = Modifier.enter(8)) {
+                attention.take(4).forEach { a ->
+                    val label = if (a.actionStatus == ActionStatus.CONFIRM) "待确认：结果够不够" else "卡住：${a[F.STUCK].ifBlank { "原因没写" }}"
+                    MiniRow(a.title, label, actionColor(a.actionStatus)) { nav.navigate("action/${a.key}") }
+                }
+                unplanned.take(3).forEach { t ->
+                    MiniRow("${t.title}：${t[F.NEXT]}", "下一步还没排进时间 · 点开排", sig.warn) { nav.navigate("thread/${t.key}") }
+                }
+            }
         }
 
         // ---------- 四个部门 ----------
@@ -206,28 +231,6 @@ fun NowScreen(nav: NavHostController) {
             val n = work.changes.count { it.at > store.seenChanges }
             QuickChip(if (n > 0) "查看结果 · $n" else "查看结果", sig.think) { nav.navigate("results") }
             config.shortcuts.filter { it.dept == null }.forEach { s -> QuickChip(s.label, sig.ai) { runShortcut(s, app, nav) } }
-        }
-
-        // ---------- 等你处理 ----------
-        if (attention.isNotEmpty() || unplanned.isNotEmpty()) {
-            SectionLabel("等你处理")
-            Panel(modifier = Modifier.enter(8)) {
-                attention.take(4).forEach { a ->
-                    val label = if (a.actionStatus == ActionStatus.CONFIRM) "待确认：结果够不够" else "卡住：${a[F.STUCK].ifBlank { "原因没写" }}"
-                    MiniRow(a.title, label, actionColor(a.actionStatus)) { nav.navigate("action/${a.key}") }
-                }
-                unplanned.take(3).forEach { t ->
-                    MiniRow("${t.title}：${t[F.NEXT]}", "下一步还没排进时间 · 点开排", sig.warn) { nav.navigate("thread/${t.key}") }
-                }
-            }
-        }
-
-        // ---------- 接下来 ----------
-        if (upcoming.isNotEmpty()) {
-            SectionLabel("接下来")
-            Panel(modifier = Modifier.enter(9)) {
-                upcoming.forEach { a -> TimelineRow(a, work, now, nav) }
-            }
         }
 
         SyncLine(work, notionReady) { scope.launch { app.actions.work.sync() } }
@@ -374,6 +377,64 @@ fun AimDialog(aim: com.zongkong.core.plan.Aim?, onDismiss: () -> Unit) {
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
+}
+
+/** 电脑：没连时提示去连；连上后今天电脑用了多久、娱乐多少、被拦几次、锁没锁。 */
+@Composable
+private fun PcStrip(nav: NavHostController) {
+    val app = LocalContext.current.zk
+    val sig = LocalSignals.current
+    val config by app.store.config.collectAsStateWithLifecycle()
+    val book by app.store.device.collectAsStateWithLifecycle()
+    val now = rememberNow(60_000)
+    val pc = book.pc.takeIf { config.notion.devicesDb.isNotBlank() }
+    Panel(onClick = { nav.navigate("settings/pc") }, accent = if (pc == null) sig.warn else null, modifier = Modifier.testTag("pc-strip")) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Seal("电", if (pc == null) sig.warn else sig.plan, size = 40.dp, filled = pc != null)
+            Column(Modifier.weight(1f)) {
+                if (pc == null) {
+                    Text("电脑还没管起来", style = MaterialTheme.typography.titleSmall)
+                    Hint("装电脑版、和手机连起来：先说用途才能用、娱乐有额度、夜里锁机，总控时间电脑跟着锁。")
+                } else {
+                    val locked = pc.lockUntil > now
+                    Text("电脑今天 ${pc.todayMinutes / 60} 小时 ${pc.todayMinutes % 60} 分 · 娱乐 ${pc.funMinutes} 分", style = MaterialTheme.typography.titleSmall)
+                    Hint(
+                        listOfNotNull(
+                            if (locked) "锁着" else if (pc.sessionUntil > now) "在做：${pc.session}" else null,
+                            if (pc.blocks > 0) "被拦 ${pc.blocks} 次" else null,
+                            if (pc.gaps.isNotEmpty()) "电脑上的总控被关过 ${pc.gaps.size} 次" else null,
+                            if (now - pc.at > 10 * 60_000L) "${(now - pc.at) / 60_000} 分钟前同步" else null,
+                        ).joinToString(" · ").ifBlank { "在线" },
+                        color = if (pc.gaps.isNotEmpty()) sig.strict else sig.muted,
+                    )
+                }
+            }
+            Text("→", style = MaterialTheme.typography.titleMedium, color = sig.muted)
+        }
+    }
+}
+
+/** 战友：信用、态度、现在的强度。点开看档案。 */
+@Composable
+private fun PartnerLine(nav: NavHostController) {
+    val app = LocalContext.current.zk
+    val sig = LocalSignals.current
+    val config by app.store.config.collectAsStateWithLifecycle()
+    val d by app.store.dossier.collectAsStateWithLifecycle()
+    val now = rememberNow(60_000)
+    val cred = remember(d, now) { app.store.credibility(now) }
+    val st = remember(d, now) { app.store.stance(now) }
+    Panel(onClick = { nav.navigate("dossier") }, modifier = Modifier.testTag("partner-line")) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            ProgressRing(cred / 100f, stanceColor(st), size = 40.dp, stroke = 3.dp) {
+                Text("$cred", style = MaterialTheme.typography.labelMedium.merge(Mono), color = stanceColor(st))
+            }
+            Column(Modifier.weight(1f)) {
+                Text("总控：${st.label} · ${com.zongkong.core.boss.Intensity.describe(config.boss, st)}", style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Hint(if (cred < 60) "及时回话、按时开始、做完一步、守住约定，信用就往回爬。" else st.rule, modifier = Modifier)
+            }
+        }
+    }
 }
 
 @Composable

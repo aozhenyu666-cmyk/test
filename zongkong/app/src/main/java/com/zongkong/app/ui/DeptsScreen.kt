@@ -205,6 +205,14 @@ fun DeptScreen(name: String, nav: NavHostController) {
                 gates.forEachIndexed { i, g -> GateLine(g, nav, Modifier.enter(1 + i)) }
             }
 
+            // ---------- 战役：总控带着走完一整段深度工作 ----------
+            when (dept) {
+                Dept.INFO -> CampaignCard(com.zongkong.core.agent.Campaign.INTAKE, nav)
+                Dept.THINK -> CampaignCard(com.zongkong.core.agent.Campaign.GRAND_THINK, nav, askTopic = true)
+                Dept.PLAN -> CampaignCard(com.zongkong.core.agent.Campaign.GRAND_PLAN, nav)
+                else -> {}
+            }
+
             // ---------- 部门自己的事 ----------
             when (dept) {
                 Dept.INFO -> InfoPart(work, now, nav)

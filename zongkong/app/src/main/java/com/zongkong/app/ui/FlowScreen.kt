@@ -57,7 +57,7 @@ fun FlowScreen(nav: NavHostController) {
     val zone = store.zone
     val cred = remember(d, hq, work, now) { Boss.credibility(d, hq.sessions, now, work.events) }
     val stance = remember(d, hq, work, now) { Boss.stance(d, hq.sessions, now, work.events) }
-    val schedule = remember(config, work, d, now) { today(config, work, d, now, zone) }
+    val schedule = remember(config, work, d, now, stance) { today(config, work, d, now, zone, stance) }
 
     Column(Modifier.fillMaxSize()) {
         BackBar("总控怎么运转", { nav.popBackStack() })
@@ -83,7 +83,7 @@ fun FlowScreen(nav: NavHostController) {
             SectionLabel("今天它会主动找你")
             Panel(modifier = Modifier.testTag("flow-today")) {
                 Text(
-                    "主动程度：${BossConfig.INITIATIVE.getOrElse(config.boss.initiative) { "?" }}" +
+                    "强度：${com.zongkong.core.boss.Intensity.describe(config.boss, stance)}" +
                         (if (!config.hq.proactive) " · 主动消息已关" else "") +
                         (if (!config.ai.ready) " · 没接 AI（只发固定的话）" else ""),
                     style = MaterialTheme.typography.titleSmall,
@@ -103,7 +103,7 @@ fun FlowScreen(nav: NavHostController) {
                         }
                     }
                 }
-                Hint("抽查每天 ${config.boss.spotChecks} 次，时间每天不一样、不告诉你：它看一眼最近 2 小时的手机使用（开了截图就看截图），没事不出声，有事才找你。娱乐应用连续 ${config.boss.bingeMinutes} 分钟会直接找你。")
+                Hint("抽查每天 ${com.zongkong.core.boss.Intensity.spotChecks(config.boss, stance)} 次，时间每天不一样、不告诉你：它看一眼最近 2 小时的手机使用（开了截图就看截图），没事不出声，有事才找你。娱乐应用连续 ${com.zongkong.core.boss.Intensity.bingeMinutes(config.boss, stance)} 分钟会直接找你。" + if (config.boss.shots) "截图抽查每小时约 ${com.zongkong.core.boss.Intensity.shotsPerHour(config.boss, stance)} 张（锁屏时攒着，解锁后补）。" else "")
                 TextButton(onClick = { nav.navigate("voice/settings") }) { Text("调主动程度 →", color = sig.ai) }
             }
 
@@ -148,7 +148,7 @@ private fun Faq(q: String, a: String) {
 private data class Planned(val at: Long, val what: String, val why: String = "")
 
 /** 今天（北京时间）总控排定的主动动作，按时间排。 */
-private fun today(config: com.zongkong.core.Config, work: com.zongkong.core.work.Work, d: com.zongkong.core.boss.Dossier, now: Long, zone: java.time.ZoneId): List<Planned> {
+private fun today(config: com.zongkong.core.Config, work: com.zongkong.core.work.Work, d: com.zongkong.core.boss.Dossier, now: Long, zone: java.time.ZoneId, stance: com.zongkong.core.boss.Stance): List<Planned> {
     val date = DayClock.date(now, zone)
     val dayStart = date.atStartOfDay(zone).toInstant().toEpochMilli()
     fun at(min: Int) = dayStart + min * 60_000L
@@ -156,7 +156,7 @@ private fun today(config: com.zongkong.core.Config, work: com.zongkong.core.work
     val hqc = config.hq
     if (hqc.proactive) {
         out += Planned(at(hqc.morningAt), "早上第一条：今天的主线是什么", "没定就让你现在挑一个")
-        HqRunner.checkInSlots(config.boss.initiative, config.activeStart, config.activeEnd, date).forEach {
+        HqRunner.checkInSlots(com.zongkong.core.boss.Intensity.level(config.boss, stance), config.activeStart, config.activeEnd, date).forEach {
             if (!Hq.quiet(hqc, at(it), zone)) out += Planned(at(it), "问候：挑一件最该问的事问你", "主线到哪了 / 快到点的约定 / 没提炼的收集 / 该验证的假设。2 小时不回，信用 −3")
         }
         out += Planned(at(13 * 60 + 30), "午后：主线还没动就追问", "13:30–17:00 之间，今天计划内的时间还是 0 时")
@@ -188,7 +188,8 @@ private val RULES = listOf(
     "−4" to "说不清（追问三轮还模糊）",
     "+4 / −10" to "约定做到 / 没做到",
     "+3 / −5" to "总控时间做完 / 提前退出",
-    "−3" to "它主动问你，2 小时没回",
+    "−3" to "它主动问你，2 小时没回（一天最多扣 4 次）",
+    "+1" to "它问你，15 分钟内回了（一天最多 4 次）",
     "−2" to "到点提醒后 45 分钟没开始、没推迟、没说卡住（一天最多 3 次）",
     "+1" to "做完一步、达到完成依据（一天最多 4 次）",
 )

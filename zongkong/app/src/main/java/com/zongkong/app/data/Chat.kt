@@ -32,6 +32,12 @@ import kotlin.random.Random
 data class ChatLog(
     val messages: List<ChatMsg> = emptyList(),
     val memory: List<String> = emptyList(),
+    /** 正在进行的战役（大统筹、大谋划、整理收集箱），空 = 没有。 */
+    val campaign: String = "",
+    val campaignTopic: String = "",
+    val campaignAt: Long = 0,
+    /** 打完的战役：标题、时刻、总结（最近 10 次）。 */
+    val campaignLog: List<String> = emptyList(),
 )
 
 /**
@@ -100,6 +106,26 @@ class ChatRepo(private val context: Context, private val store: Store, private v
             val before = _log.value.memory
             update { it.copy(memory = it.memory.filterNot { m -> m == fact || m.contains(fact) }) }
             return _log.value.memory.size < before.size
+        }
+        override fun campaign(): String {
+            val log = _log.value
+            val c = com.zongkong.core.agent.Campaign.of(log.campaign) ?: return ""
+            val now = System.currentTimeMillis()
+            // 三小时没收尾就当放下了
+            if (now - log.campaignAt > 3 * 3600_000L) return ""
+            return c.prompt(log.campaignTopic, log.campaignAt, now)
+        }
+        override fun startCampaign(kind: String, topic: String): String {
+            val c = com.zongkong.core.agent.Campaign.of(kind) ?: return "没有这种战役：$kind"
+            update { it.copy(campaign = c.name, campaignTopic = topic.trim(), campaignAt = System.currentTimeMillis()) }
+            return "「${c.title}」开始了。阶段说明已经放进你的系统提示，从阶段 1 开始。"
+        }
+        override fun endCampaign(summary: String): String {
+            val log = _log.value
+            val c = com.zongkong.core.agent.Campaign.of(log.campaign) ?: return "没有进行中的战役"
+            val line = "${c.title} ${com.zongkong.core.boss.Timeline.hm(System.currentTimeMillis(), store.zone)}：${summary.trim()}"
+            update { it.copy(campaign = "", campaignTopic = "", campaignAt = 0, campaignLog = (it.campaignLog + line).takeLast(10)) }
+            return "「${c.title}」收尾了。"
         }
         override fun sessionContext(): String {
             val h = store.hq.value.active ?: return ""
@@ -234,7 +260,8 @@ class ChatRepo(private val context: Context, private val store: Store, private v
             // 桌面宠物跳出来说；开口说话（睡觉时段不说）
             com.zongkong.app.system.Pet.say(context, body, 40, alert = kind == "binge" || kind == "absent")
             val quiet = com.zongkong.core.hq.Hq.quiet(cfg.hq, System.currentTimeMillis(), store.zone)
-            if (!quiet && (cfg.voice.speakProactive || cfg.hq.speak)) com.zongkong.app.system.Voice.speak(context, body)
+            val loud = com.zongkong.core.boss.Intensity.speakAlways(cfg.boss, store.stance())
+            if (!quiet && (cfg.voice.speakProactive || cfg.hq.speak || loud)) com.zongkong.app.system.Voice.speak(context, body)
             // 记下这次主动询问：2 小时不回，信用 −3（睡觉时段发的不算）
             if (!quiet) store.updateDossier { com.zongkong.core.boss.Boss.asked(it, ASK_KINDS[kind] ?: kind, System.currentTimeMillis()) }
             com.zongkong.app.system.PetWidget.refresh(context)
@@ -271,6 +298,33 @@ class ChatRepo(private val context: Context, private val store: Store, private v
 
     fun forgetAll() = update { it.copy(memory = emptyList()) }
 
+    /** 开一场战役：记下来（系统提示里一直带着阶段说明），再让总控开口。没接 AI 返回 false。 */
+    fun begin(c: com.zongkong.core.agent.Campaign, topic: String = ""): Boolean {
+        if (!store.config.value.ai.ready || _busy.value) return false
+        update { it.copy(campaign = c.name, campaignTopic = topic.trim(), campaignAt = System.currentTimeMillis()) }
+        store.touch()
+        _busy.value = true
+        job = scope.launch {
+            try {
+                agent.reply(_log.value.messages, c.opening(topic), { m ->
+                    update { it.copy(messages = (it.messages + m).takeLast(MAX_KEEP)) }
+                    if (m.role == ChatMsg.TOOL && m.route.isNotBlank()) route.value = m.route
+                }, hidden = true)
+            } catch (e: Exception) {
+                update { it.copy(messages = it.messages + ChatMsg(ChatMsg.ASSISTANT, "出错了：${e.message ?: e.javaClass.simpleName}", at = System.currentTimeMillis(), error = true)) }
+            } finally {
+                _busy.value = false
+            }
+        }
+        return true
+    }
+
+    /** 手动结束战役（对话页顶上的“收工”）。 */
+    fun stopCampaign() {
+        val c = com.zongkong.core.agent.Campaign.of(_log.value.campaign) ?: return
+        update { it.copy(campaign = "", campaignTopic = "", campaignAt = 0, campaignLog = (it.campaignLog + "${c.title}：中途停下").takeLast(10)) }
+    }
+
     /** 别处来的一句话（比如电脑上的总控发来的），放进对话里。 */
     fun note(text: String) {
         update { it.copy(messages = (it.messages + ChatMsg(ChatMsg.ASSISTANT, text, at = System.currentTimeMillis())).takeLast(MAX_KEEP)) }
@@ -301,7 +355,7 @@ class ChatRepo(private val context: Context, private val store: Store, private v
         private const val TAG = "ChatRepo"
         const val MAX_KEEP = 300
         /** 主动询问的种类 → 档案里显示的名字。 */
-        val ASK_KINDS = mapOf("absent" to "找不到人", "morning" to "早上", "noon" to "中午", "check" to "回访", "weekly" to "周复盘", "spot" to "抽查", "checkin" to "问候", "binge" to "连续娱乐")
+        val ASK_KINDS = mapOf("absent" to "找不到人", "morning" to "早上", "noon" to "中午", "check" to "回访", "weekly" to "周复盘", "spot" to "抽查", "checkin" to "问候", "binge" to "连续娱乐", "unlock" to "解锁", "intake" to "自动收集", "think" to "自动谋划", "plan" to "自动统筹")
     }
 }
 

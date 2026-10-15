@@ -280,7 +280,7 @@ private fun HqRun(s: HqSession, nav: NavHostController, onFinished: (String) -> 
                 modifier = Modifier.fillMaxWidth().height(56.dp).testTag("hq-seal"),
                 shape = RoundedCornerShape(18.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Night.glow, contentColor = Night.top, disabledContainerColor = Night.card, disabledContentColor = Night.dim),
-            ) { Text(if (finishing) "封存中…" else if (can) "封存，解锁" else "还有 ${mmss(s.endsAt - now)}：点上面的印章回去再修一轮") }
+            ) { Text(if (finishing) "封存中…" else if (can) "封存，解锁" else if (s.endsAt > now) "还有 ${mmss(s.endsAt - now)}：点上面的印章回去再修一轮" else "读一眼总结，${mmss(Hq.finishAt(s) - now)} 后就能封存") }
         } else {
             val timeOk = readyIn <= 0
             Button(

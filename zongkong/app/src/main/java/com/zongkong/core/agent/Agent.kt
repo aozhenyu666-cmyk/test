@@ -72,6 +72,7 @@ class Agent(private val api: ChatApi, private val env: AgentEnv) {
         append("\n\n## 此刻的总控\n")
         append(Snapshot.brief(env))
         env.sessionContext().takeIf { it.isNotBlank() }?.let { append("\n\n## 正在进行：总控时间\n").append(it) }
+        env.campaign().takeIf { it.isNotBlank() }?.let { append("\n\n").append(it) }
     }
 
     companion object {

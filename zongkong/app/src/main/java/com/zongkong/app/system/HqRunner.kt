@@ -100,10 +100,13 @@ object HqRunner {
         if (minute in cfg.morningAt until cfg.morningAt + 180 && store.firstAlert("morning")) {
             app.chat.proactive(
                 "morning",
-                "[定时·早上] 早上了，给他发今天的第一条消息：今天的主线是什么（没定就问他要不要现在挑一个，给【选项】），再提醒一个他最可能卡住的地方（看计划里的预演）。最多三句。不要改任何东西。",
+                "[定时·早上] 早上了，给他发今天的第一条消息。今天的主线没定的话，你直接定：按本周计划要交出的、长期目标的下一个里程碑，挑一步具体的行动 set_day_main（没有合适的行动就 add_action 建一步再定），告诉他你定了什么、为什么，他可以改。" +
+                    "再提醒一个他最可能卡住的地方（看计划里的预演、昨天的电脑和手机娱乐）。最多三句，最后给【选项】。",
                 fallback = "早上好。今天的主线定了吗？没定的话，打开总控挑一件。",
             )
         }
+
+        auto(context, now, minute)
 
         // 午后：主线还没开始
         val plan = Plans.active(store.plans.value, now, zone)
@@ -117,6 +120,49 @@ object HqRunner {
                 fallback = "下午了，「${main.title}」还没开始。现在开始，还是拆一步？",
             )
             Buzz.once(context, Buzz.Level.FIRM)
+        }
+    }
+
+    /**
+     * 三个部门的自动化（要接 AI）：
+     *  信息收集：晚上收集箱积压 ≥ 3 条，总控先替你提炼最多 5 条、归位，拿不准的问你。
+     *  谋划思考：周六上午挑一个最该验证的假设，设计 30 分钟的验证，排进时间。
+     *  统筹规划：周日傍晚下周还没计划，提议开一场大统筹。
+     */
+    private fun auto(context: Context, now: Long, minute: Int) {
+        val app = context.zk
+        val store = app.store
+        if (!store.config.value.ai.ready) return
+        val date = DayClock.date(now, store.zone)
+        val intake = com.zongkong.core.info.Intake.stats(store.work.value, store.intake.value, now, store.zone)
+        if (minute in 21 * 60 until 22 * 60 + 30 && intake.backlog >= 3 && store.firstAlert("auto-intake")) {
+            app.chat.proactive(
+                "intake",
+                "[自动·信息收集] 收集箱积压 ${intake.backlog} 条。用 intake_status 看，按你的判断直接 distill 最多 5 条（一句话收获 + 归位到事项）；没用的建议丢；拿不准的列出来问他。" +
+                    "做完用两三句告诉他你处理了什么、剩几条，最后【选项】都对｜我看看｜开一场整理收集箱。",
+                fallback = "收集箱积压 ${intake.backlog} 条了。今晚总控时间里清一下。",
+            )
+            return
+        }
+        if (date.dayOfWeek == java.time.DayOfWeek.SATURDAY && minute in 10 * 60 until 12 * 60 && store.firstAlert("auto-think")) {
+            app.chat.proactive(
+                "think",
+                "[自动·谋划思考] 周六的谋划：看 vein_due，挑一个最该验证的假设，设计一个 30 分钟内能做完的验证，用 add_action 排进今天或明天精力最好的钟头（看 calibration），告诉他为什么挑这个。" +
+                    "脉络里没有假设，就看卡住的事项和长期目标，提一个需要想清楚的问题，建议开一场大谋划。两三句，最后【选项】好｜换一个｜开一场大谋划。",
+                fallback = "周六了：脉络里有一个假设该验证了，打开谋划思考部看看。",
+            )
+            return
+        }
+        val book = store.plans.value
+        if (date.dayOfWeek == java.time.DayOfWeek.SUNDAY && minute in 17 * 60 until 20 * 60 &&
+            Plans.nextActive(book, now, store.zone) == null && store.firstAlert("auto-plan")
+        ) {
+            app.chat.proactive(
+                "plan",
+                "[自动·统筹规划] 下周还没有计划。用两句话说清楚为什么现在要做一次大统筹（长期目标的下一个里程碑、这周实际的偏差，看 get_plan 和档案），" +
+                    "最后【选项】开始大统筹｜晚上总控时间里做｜这周不做。他选“开始大统筹”就调 start_campaign。",
+                fallback = "下周还没有计划。打开统筹规划部，开一场大统筹。",
+            )
         }
     }
 
@@ -165,7 +211,7 @@ object HqRunner {
             return
         }
         // 抽查：每天几次，时间每天不一样（用户猜不到），只在检查时段里
-        val n = config.boss.spotChecks.coerceIn(0, 8)
+        val n = com.zongkong.core.boss.Intensity.spotChecks(config.boss, store.stance(now)).coerceIn(0, 10)
         if (n == 0 || store.hq.value.active != null) return
         val start = config.activeStart + 60
         val end = config.activeEnd - 30
@@ -192,9 +238,12 @@ object HqRunner {
         val base = when (initiative) {
             0 -> emptyList()
             1 -> listOf(11 * 60, 15 * 60, 19 * 60 + 30)
-            else -> generateSequence(activeStart + 60) { it + 90 }.takeWhile { it < activeEnd - 30 }.toList()
+            2 -> generateSequence(activeStart + 60) { it + 90 }.takeWhile { it < activeEnd - 30 }.toList()
+            // 战友：每半小时
+            else -> generateSequence(activeStart + 30) { it + 30 }.takeWhile { it < activeEnd - 15 }.toList()
         }
-        return base.map { (it + rnd.nextInt(-20, 21)).coerceIn(activeStart, activeEnd - 1) }
+        val j = if (initiative >= com.zongkong.core.boss.Intensity.PARTNER) 5 else 20
+        return base.map { (it + rnd.nextInt(-j, j + 1)).coerceIn(activeStart, activeEnd - 1) }
     }
 
     /**
@@ -207,8 +256,10 @@ object HqRunner {
         val config = store.config.value
         if (!config.hq.proactive || store.hq.value.active != null) return null
         if (Hq.quiet(config.hq, now, store.zone)) return null
-        val slots = checkInSlots(config.boss.initiative, config.activeStart, config.activeEnd, date)
-        val i = slots.indexOfFirst { minute in it until it + 45 }
+        val level = com.zongkong.core.boss.Intensity.level(config.boss, store.stance(now))
+        val slots = checkInSlots(level, config.activeStart, config.activeEnd, date)
+        val window = if (level >= com.zongkong.core.boss.Intensity.PARTNER) 25 else 45
+        val i = slots.indexOfFirst { minute in it until it + window }
         if (i < 0 || !store.firstAlert("checkin:$i")) return null
         val main = Plans.mainAction(store.plans.value, store.work.value, now, store.zone)
         val hypo = store.vein.value.nodes.filter { it.status == com.zongkong.core.vein.VStatus.HYPO.label }
@@ -227,7 +278,7 @@ object HqRunner {
             fallback = fallback,
         )
         Buzz.once(context, Buzz.Level.GENTLE)
-        store.logWake("问候：第 ${i + 1} 次（主动程度 ${com.zongkong.core.boss.BossConfig.INITIATIVE.getOrElse(config.boss.initiative) { "?" }}）")
+        store.logWake("问候：第 ${i + 1} 次（强度 ${com.zongkong.core.boss.BossConfig.INITIATIVE.getOrElse(level) { "?" }}）")
         return Unit
     }
 

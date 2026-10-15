@@ -200,7 +200,12 @@ class PcTools(private val env: PcEnv) {
 
     private fun newId(prefix: String) = prefix + (env.now() / 1000).toString(36).takeLast(4) + env.rnd.nextInt(36 * 36).toString(36).padStart(2, '0')
 
-    fun stance(): Stance = Boss.stance(env.state().dossier, emptyList(), env.now())
+    /** 电脑这边的态度和手机那边的，取更严的（手机上信用掉光了，电脑也不该松）。 */
+    fun stance(): Stance {
+        val mine = Boss.stance(env.state().dossier, emptyList(), env.now())
+        val phone = env.phone()?.stance?.let { l -> Stance.entries.firstOrNull { it.label == l } } ?: return mine
+        return if (phone.ordinal > mine.ordinal) phone else mine
+    }
 
     fun ctx(): Ctx {
         val now = env.now()

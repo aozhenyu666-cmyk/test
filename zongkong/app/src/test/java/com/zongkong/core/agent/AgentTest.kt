@@ -25,7 +25,7 @@ import java.time.ZoneId
 import java.time.ZonedDateTime
 import kotlin.random.Random
 
-class FakeEnv(var nowMs: Long = ZonedDateTime.of(2026, 10, 11, 9, 30, 0, 0, ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli()) : AgentEnv {
+open class FakeEnv(var nowMs: Long = ZonedDateTime.of(2026, 10, 11, 9, 30, 0, 0, ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli()) : AgentEnv {
     override val zone: ZoneId = ZoneId.of("Asia/Shanghai")
     override val rnd = Random(7)
     var cfg = Config()
@@ -495,4 +495,39 @@ class AgentTest {
         assertTrue(tools.run("set_aim", """{"id":"${aim.id}","done":true}""").ok)
         assertEquals(3, com.zongkong.core.plan.Aims.open(env.book).size)
     }
+
+    @Test
+    fun campaignsAndMilestones() = runTest {
+        val env = object : FakeEnvBase() {}
+        val tools = ZkTools(env)
+        assertTrue(tools.run("set_aim", """{"title":"秋招拿到 offer","deadline":"2026-12-20"}""").ok)
+        val r = tools.run("set_milestones", """{"aim":"秋招","items":"简历定稿｜10-20\n投出 20 家｜11-05\n拿到 3 个面试｜11-25"}""")
+        assertTrue(r.text, r.ok)
+        val aim = env.book.aims.single()
+        assertEquals(listOf("2026-10-20", "2026-11-05", "2026-11-25"), aim.milestones.map { it.due })
+        assertTrue(com.zongkong.core.plan.Aims.brief(env.book, env.w, env.nowMs, env.zone).contains("下一个：简历定稿"))
+        assertTrue(tools.run("milestone_done", """{"aim":"秋招","milestone":"简历定稿","evidence":"发给两位学长看过"}""").ok)
+        assertTrue(env.book.aims.single().milestones.first().done)
+        // 重写里程碑：做完的保留
+        tools.run("set_milestones", """{"aim":"秋招","items":"投出 30 家｜11-10"}""")
+        assertEquals(listOf("简历定稿", "投出 30 家"), env.book.aims.single().milestones.map { it.title })
+        // 战役：开了以后系统提示里带着阶段
+        assertTrue(tools.run("start_campaign", """{"kind":"大统筹"}""").ok)
+        val sys = Agent(Scripted(), env).systemPrompt()
+        assertTrue(sys.contains("正在进行的战役：大统筹") && sys.contains("阶段"))
+        assertTrue(tools.run("campaign_done", """{"summary":"里程碑写了，下周计划起草了"}""").ok)
+        assertFalse(Agent(Scripted(), env).systemPrompt().contains("正在进行的战役"))
+        assertTrue(com.zongkong.core.boss.Charter.TEXT.contains("战友"))
+    }
+}
+
+/** 带战役状态的假环境。 */
+open class FakeEnvBase : FakeEnv() {
+    var running: com.zongkong.core.agent.Campaign? = null
+    override fun campaign(): String = running?.prompt("", nowMs - 60_000, nowMs).orEmpty()
+    override fun startCampaign(kind: String, topic: String): String {
+        running = com.zongkong.core.agent.Campaign.of(kind) ?: return "没有这种战役"
+        return "开始了"
+    }
+    override fun endCampaign(summary: String): String { running = null; return "收尾了" }
 }
