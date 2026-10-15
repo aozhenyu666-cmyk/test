@@ -97,7 +97,7 @@ fun LockScreen(v: Verdict.Machine, c: Controller) {
                     listOfNotNull(
                         phone?.main?.takeIf { it.isNotBlank() }?.let { "做主线：$it" },
                         "学习（看书、刷题）", "写作业 / 论文", "工作 / 项目", "查资料",
-                    ).take(5).forEach { p -> Chip(p.take(16), sig.plan, selected = purpose == p) { purpose = p; err = null } }
+                    ).take(4).forEach { p -> Chip(p.take(16), sig.plan, selected = purpose == p) { purpose = p; err = null } }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(15, 30, 45, 60, 90, 120).filter { it <= config.rules.sessionMax }.forEach { m -> Chip("$m 分钟", sig.plan, selected = minutes == m) { minutes = m } }
