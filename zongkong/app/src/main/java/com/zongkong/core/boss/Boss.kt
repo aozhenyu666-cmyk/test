@@ -435,6 +435,12 @@ object Intensity {
     /** 主动找你时一定开口说（睡觉时段除外）。 */
     fun speakAlways(cfg: BossConfig, stance: Stance): Boolean = level(cfg, stance) >= PARTNER
 
+    /** 短写法（首页一行放得下）。 */
+    fun short(cfg: BossConfig, stance: Stance): String {
+        val l = level(cfg, stance)
+        return BossConfig.INITIATIVE.getOrElse(l) { "?" } + if (l > cfg.initiative) "（信用低，自动拉高）" else ""
+    }
+
     /** 给人看：现在是什么强度、为什么。 */
     fun describe(cfg: BossConfig, stance: Stance): String {
         val l = level(cfg, stance)

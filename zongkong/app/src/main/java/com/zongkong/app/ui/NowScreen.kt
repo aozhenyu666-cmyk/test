@@ -431,7 +431,7 @@ private fun PartnerLine(nav: NavHostController) {
                 Text("$cred", style = MaterialTheme.typography.labelMedium.merge(Mono), color = stanceColor(st))
             }
             Column(Modifier.weight(1f)) {
-                Text("总控：${st.label} · ${com.zongkong.core.boss.Intensity.describe(config.boss, st)}", style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text("${st.label} · ${com.zongkong.core.boss.Intensity.short(config.boss, st)}", style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Hint(if (cred < 60) "及时回话、按时开始、做完一步、守住约定，信用就往回爬。" else st.rule, modifier = Modifier)
             }
         }
