@@ -1,5 +1,7 @@
 package com.zongkong.app.ui
 
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -70,6 +72,11 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // 你回来了：停止连续震动
         if (zk.store.buzzUntil != 0L) com.zongkong.app.system.Buzz.stop(this)
+        // 常驻服务；无障碍开着却没在跑、又给过写设置的权限：现在就重新挂上
+        com.zongkong.app.system.KeepAliveService.start(this)
+        if (PermissionStatus.accessibility(this) && !PermissionStatus.guardRunning(this) && com.zongkong.app.system.SelfHeal.canWrite(this)) {
+            lifecycleScope.launch { com.zongkong.app.system.SelfHeal.rebind(this@MainActivity) }
+        }
     }
 
     override fun onStop() {

@@ -106,6 +106,8 @@ class ReminderReceiver : BroadcastReceiver() {
         }
         PetWidget.refresh(context)
         Reminders.reschedule(context)
+        // 闹钟叫醒时可以开前台服务：常驻服务被清掉了就趁这时候拉起来
+        KeepAliveService.start(context)
     }
 }
 
@@ -114,6 +116,7 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         Reminders.reschedule(context)
         Reminders.watchdog(context)
+        KeepAliveService.start(context)
     }
 }
 

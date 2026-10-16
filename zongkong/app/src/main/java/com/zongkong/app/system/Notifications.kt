@@ -20,7 +20,7 @@ object Notifications {
     private const val CH_AI = "ai"
     private const val ID_HQ = 50
     private const val ID_AI = 60
-    private const val ID_STATUS = 1
+    const val ID_STATUS = 1
     private var alertId = 100
 
     fun ensureChannels(context: Context) {
@@ -114,8 +114,12 @@ object Notifications {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 
-    fun showStatus(context: Context, title: String, text: String) {
-        val n = NotificationCompat.Builder(context, CH_STATUS)
+    fun showStatus(context: Context, title: String, text: String) = post(context, ID_STATUS, statusNotification(context, title, text))
+
+    /** 常驻状态条（常驻服务的前台通知也是这一条）。 */
+    fun statusNotification(context: Context, title: String, text: String): android.app.Notification {
+        ensureChannels(context)
+        return NotificationCompat.Builder(context, CH_STATUS)
             .setSmallIcon(R.drawable.ic_stat_zongkong)
             .setContentTitle(title)
             .setContentText(text)
@@ -125,7 +129,6 @@ object Notifications {
             .setContentIntent(open(context, null, 0))
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
-        post(context, ID_STATUS, n)
     }
 
     fun cancelStatus(context: Context) = NotificationManagerCompat.from(context).cancel(ID_STATUS)

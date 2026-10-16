@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.navigation.NavHostController
+import kotlinx.coroutines.launch
 import com.zongkong.app.guard.BlockActivity
 import com.zongkong.app.guard.GuardService
 import com.zongkong.app.system.Notifications
@@ -108,7 +109,7 @@ fun PermissionsScreen(nav: NavHostController) {
             Perm(
                 "无障碍服务",
                 "总控的眼睛和手：看前台是哪个应用（只读包名，不读屏幕内容和输入），严管时把娱乐应用弹回去，总控时间里锁住手机。" +
-                    (if (acc && !running) "\n开着但没在运行：系统把它停了。关掉再打开一次。" else "") +
+                    (if (acc && !running) "\n开着但没在运行：系统把它停了。关掉再打开一次（下面的“自动修复”授权后就不用手动了）。" else "") +
                     "\n更新总控后、被清理后台后，系统有时会把它关掉——到点没进总控时间，多半是这个。",
                 "设置 → 快捷与辅助 → 无障碍 → 已安装的服务 → 总控（灰色点不开：先到 应用管理 → 总控 → 右上角 ⋮ → 允许受限制的设置）",
                 acc && running, { Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS) }, "perm-acc",
@@ -180,6 +181,7 @@ fun PermissionsScreen(nav: NavHostController) {
                     notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 } else safeStart(context, p.intent())
             } }
+            SelfHealCard(key) { key++ }
             SectionLabel("强烈建议")
             recommended.forEach { PermCard(it) { p -> safeStart(context, p.intent()) } }
             SectionLabel("vivo / iQOO 还要手动开（系统查不到）")
@@ -207,6 +209,47 @@ fun PermissionsScreen(nav: NavHostController) {
             SectionLabel("测试")
             Button(onClick = { context.startActivity(BlockActivity.intent(context, "com.example.test")) }, modifier = Modifier.fillMaxWidth()) { Text("打开一次拦截页看看") }
         }
+    }
+}
+
+/**
+ * 无障碍“开着但没在运行”的自动修复：电脑上 adb 授权一次“写安全设置”，以后总控自己把服务重新挂上。
+ * 没授权的话，常驻服务每 20 分钟大声提醒一次。
+ */
+@Composable
+private fun SelfHealCard(key: Int, refresh: () -> Unit) {
+    val context = LocalContext.current
+    val sig = LocalSignals.current
+    val clip = androidx.compose.ui.platform.LocalClipboardManager.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val granted = remember(key) { com.zongkong.app.system.SelfHeal.canWrite(context) }
+    var msg by remember { mutableStateOf<String?>(null) }
+    Panel(accent = if (granted) null else sig.warn, modifier = Modifier.testTag("perm-selfheal")) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("无障碍自动修复", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            Tag(if (granted) "已授权" else "没授权", if (granted) sig.free else sig.warn)
+        }
+        Hint(
+            if (granted) "无障碍“开着但没在运行”时，总控每分钟检查一次，自己关掉再打开，不用你动手。"
+            else "无障碍老是“开着但没在运行”、每次都要手动关开？在电脑上执行一次下面这条命令（手机开 USB 调试、连上电脑），以后总控自己修。" +
+                "不授权也行：总控会每 20 分钟大声提醒你一次，直到它重新跑起来。",
+        )
+        if (!granted) {
+            Text(com.zongkong.app.system.SelfHeal.GRANT_COMMAND, style = MaterialTheme.typography.bodySmall.merge(Mono))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { clip.setText(androidx.compose.ui.text.AnnotatedString(com.zongkong.app.system.SelfHeal.GRANT_COMMAND)); msg = "复制了" }) { Text("复制命令") }
+                TextButton(onClick = refresh) { Text("授权好了，刷新") }
+            }
+        } else {
+            OutlinedButton(onClick = {
+                scope.launch {
+                    msg = if (com.zongkong.app.system.SelfHeal.rebind(context)) "已经重新挂上，过几秒刷新看看" else "没成功"
+                    kotlinx.coroutines.delay(3_000)
+                    refresh()
+                }
+            }) { Text("现在重新挂上无障碍服务") }
+        }
+        msg?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = sig.muted) }
     }
 }
 

@@ -36,6 +36,14 @@
         </intent>
     </queries>
 
+    <!-- 常驻服务：让总控不容易被系统清掉，每分钟看一眼无障碍服务还在不在跑 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 无障碍“开着但没在运行”时自己重新挂上。普通安装拿不到，要你在电脑上 adb 授权一次（见权限页）；不授权就只提醒 -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+
     <!-- 震动催你（总控时间到了、失联太久） -->
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- 总控时间到点：像闹钟一样全屏亮起来 -->
@@ -85,6 +93,15 @@
             android:launchMode="singleTask"
             android:taskAffinity="com.zongkong.app.block"
             android:windowSoftInputMode="adjustResize" />
+
+        <service
+            android:name=".system.KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="自我约束工具的常驻守护：保持无障碍服务运行、到点提醒" />
+        </service>
 
         <!-- 无障碍服务：只读前台应用包名，见 res/xml/guard_service.xml -->
         <service

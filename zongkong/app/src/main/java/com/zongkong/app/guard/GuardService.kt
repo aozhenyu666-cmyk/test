@@ -110,6 +110,7 @@ class GuardService : AccessibilityService() {
         store.heartbeat = now
         lastStatusText = ""
         com.zongkong.app.system.Pet.attach(this)
+        com.zongkong.app.system.KeepAliveService.start(this)
         scope.launch {
             while (isActive) {
                 try {
