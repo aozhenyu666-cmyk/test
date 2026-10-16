@@ -300,14 +300,14 @@ class ChatRepo(private val context: Context, private val store: Store, private v
     fun forgetAll() = update { it.copy(memory = emptyList()) }
 
     /** 开一场战役：记下来（系统提示里一直带着阶段说明），再让总控开口。没接 AI 返回 false。 */
-    fun begin(c: com.zongkong.core.agent.Campaign, topic: String = ""): Boolean {
+    fun begin(c: com.zongkong.core.agent.Campaign, topic: String = "", material: String = ""): Boolean {
         if (!store.config.value.ai.ready || _busy.value) return false
         update { it.copy(campaign = c.name, campaignTopic = topic.trim(), campaignAt = System.currentTimeMillis()) }
         store.touch()
         _busy.value = true
         job = scope.launch {
             try {
-                agent.reply(_log.value.messages, c.opening(topic), { m ->
+                agent.reply(_log.value.messages, c.opening(topic, material), { m ->
                     update { it.copy(messages = (it.messages + m).takeLast(MAX_KEEP)) }
                     if (m.role == ChatMsg.TOOL && m.route.isNotBlank()) route.value = m.route
                 }, hidden = true)

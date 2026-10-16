@@ -45,6 +45,32 @@ enum class Campaign(val title: String, val dept: String, val what: String, val p
         3 用：马上有用的，每条变成一个 add_action（25 分钟内能做完的一步）或 vein_propose 一个节点。
         4 收尾：说清楚还剩几条、下次什么时候再整理；调 campaign_done。
         """.trimIndent(),
+    ),
+    PROJECT(
+        "立项", "统筹规划部",
+        "把一件刚冒出来、还很薄的事（比如“国考计划”只有一句“去查时间”）展开成能推进的样子。",
+        """
+        目标：一件事从“一个标题 + 一步”变成：说清楚为什么做、做到什么算完、关键事实（时间节点、要求、要准备什么）、里程碑、排进时间的头两三步。
+        阶段（每段开头写【阶段 n/5 · 名字】，一段只问一个问题，给【选项】）：
+        1 看清：get_thread 看这件事现在有什么（没有对应事项就 create_thread）。用两三句说清楚：现在只有什么、还缺什么。问他一句：这件事最终要什么结果、为什么现在做。
+        2 关键事实：按这类事的常识列出要弄清的事实（例：国考——报名时间、笔试时间、科目、岗位和专业要求、往年分数线）。你知道的写出来并标“待核实”，用 add_note 记到事项下；
+           每个“要去查”的变成一个具体的核实行动（去哪查、查什么，15 分钟内做完），add_action 排进时间。不要只写“去查时间”。
+        3 做到什么算完：用 update_thread 写清 为什么 / 完成依据 / 下一步；长期的事用 set_aim 挂成长期目标，set_milestones 从截止日倒推 3–5 个里程碑（先给他看，他点头再写）。
+        4 头几步：排 2–3 个 25–60 分钟的行动（有完成依据），第一步放在今天或明天精力最好的时候；需要的话 set_day_main。
+        5 收尾：五行以内总结这件事现在的样子；调 campaign_done。
+        """.trimIndent(),
+    ),
+    DIGEST(
+        "消化讨论", "谋划思考部",
+        "把在别处（Gemini、GPT、和人聊）想过的一段讨论收进来：提炼结论、挂到事项上、定下一步。",
+        """
+        目标：他在外面想过的东西不散掉——结论进记录、判断进脉络、下一步排进时间。原文已经收进收集箱了（开场消息里有原文和记录键）。
+        阶段（每段开头写【阶段 n/4 · 名字】，一段只推进一步，给【选项】）：
+        1 提炼：用三到五行说：他在讨论什么问题、得出了哪些结论、还有什么没定、对方给的建议里哪些值得做。问他：提炼得对吗。
+        2 归位：list_threads 找对应的事项（没有就 create_thread）；用 add_note（类型 结论）把结论挂上去，原文那条记录用 distill 写一句话收获并归位到同一事项；值得长期留的判断 vein_propose。
+        3 下一步：1–3 个 add_action（25–60 分钟，有完成依据），排进时间。还没定的问题写成一条“问题”记录。
+        4 收尾：三行总结；调 campaign_done。
+        """.trimIndent(),
     );
 
     /** 进行中时放进系统提示的一段。 */
@@ -55,11 +81,15 @@ enum class Campaign(val title: String, val dept: String, val what: String, val p
         append(procedure)
     }
 
-    /** 开战时发给模型的第一句（对话里不显示）。 */
-    fun opening(topic: String): String =
-        "[战役·开始] 开始“$title”。" + (if (topic.isNotBlank()) "题目：$topic。" else "") + "从阶段 1 开始，先调工具看清现状，再用两三句话告诉他这场要走几步、大概多久（15–40 分钟），然后问第一个问题。"
+    /** 开战时发给模型的第一句（对话里不显示）。[material]：带进来的原文（比如贴进来的讨论）。 */
+    fun opening(topic: String, material: String = ""): String =
+        "[战役·开始] 开始“$title”。" + (if (topic.isNotBlank()) "题目：$topic。" else "") + "从阶段 1 开始，先调工具看清现状，再用两三句话告诉他这场要走几步、大概多久（15–40 分钟），然后问第一个问题。" +
+            if (material.isNotBlank()) "\n\n原文：\n" + material.take(MATERIAL_MAX) else ""
 
     companion object {
+        /** 带进开场的原文最多这么长（太长的模型读不完，原文全文在记录里）。 */
+        const val MATERIAL_MAX = 8000
+
         fun of(name: String): Campaign? = entries.firstOrNull { it.name == name || it.title == name }
     }
 }

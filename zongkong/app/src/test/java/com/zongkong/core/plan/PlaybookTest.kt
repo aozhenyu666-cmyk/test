@@ -87,3 +87,21 @@ class PlaybookTest {
         assertEquals(Playbook.Node.END, Playbook.due(Playbook.begin(s, blocks[2].id), at(0, 30, day = 17), zone).single { it.block.id == blocks[2].id }.node)
     }
 }
+
+class ThinThreadTest {
+    @Test
+    fun aThreadWithOnlyATitleAndOneStepIsThin() {
+        val zone = ZoneId.of("Asia/Shanghai")
+        val now = ZonedDateTime.of(2026, 10, 16, 20, 0, 0, 0, zone).toInstant().toEpochMilli()
+        val rnd = kotlin.random.Random(9)
+        var (w, t) = com.zongkong.core.work.WorkOps.create(com.zongkong.core.work.Work(), com.zongkong.core.work.Kind.THREAD, mapOf(com.zongkong.core.work.F.TITLE to "国考计划"), now - 3600_000L, rnd)
+        w = com.zongkong.core.work.WorkOps.create(w, com.zongkong.core.work.Kind.ACTION, mapOf(com.zongkong.core.work.F.TITLE to "去查时间", com.zongkong.core.work.F.THREAD to t.key), now, rnd).first
+        assertEquals(listOf(t.key), com.zongkong.core.work.Focus.thinThreads(w, now).map { it.key })
+        w = com.zongkong.core.work.WorkOps.update(w, t.key, mapOf(com.zongkong.core.work.F.WHY to "明年上岸", com.zongkong.core.work.F.CRITERIA to "报上名、笔试过线"), now)
+        assertTrue(com.zongkong.core.work.Focus.thinThreads(w, now).isEmpty())
+        // 讨论原文带进开场，太长的截断
+        val open = com.zongkong.core.agent.Campaign.DIGEST.opening("记录键 n1", "甲".repeat(9000))
+        assertTrue(open.contains("原文："))
+        assertTrue(open.length < 8300)
+    }
+}

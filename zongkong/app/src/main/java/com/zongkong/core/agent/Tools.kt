@@ -492,13 +492,13 @@ class ZkTools(private val env: AgentEnv) {
             listOf(Param("aim", "string", "目标 id 或名字", required = true), Param("milestone", "string", "里程碑 id 或名字", required = true), Param("evidence", "string", "依据", required = true)),
         ),
         ToolSpec(
-            "start_campaign", "开一场战役：大统筹（从长期目标倒推到这周的日程）、大谋划（把一个问题想透写进脉络）、整理收集箱。他同意了再开；开了以后按阶段一段一段推进。",
+            "start_campaign", "开一场战役：大统筹（从长期目标倒推到这周的日程）、大谋划（把一个问题想透写进脉络）、整理收集箱、立项（把一件很薄的新事展开）、消化讨论（把外面聊过的提炼归位）。他同意了再开；开了以后按阶段一段一段推进。",
             listOf(
                 Param("kind", "string", "哪一种", required = true, choices = com.zongkong.core.agent.Campaign.entries.map { it.title }),
                 Param("topic", "string", "题目（大谋划要想的问题；可空）"),
             ),
         ),
-        ToolSpec("campaign_done", "结束正在进行的战役（大统筹 / 大谋划 / 整理收集箱），记下做到了哪一步。", listOf(Param("summary", "string", "三到五行：做成了什么、还差什么", required = true))),
+        ToolSpec("campaign_done", "结束正在进行的战役，记下做到了哪一步。", listOf(Param("summary", "string", "三到五行：做成了什么、还差什么", required = true))),
         ToolSpec(
             "pc", "电脑：看电脑今天用了多久、在做什么（状态），或者给电脑下命令：锁机 N 分钟、解锁（只解你锁的）、说一句（电脑上念出来、弹出来）、拦一个网站（今天剩下的时间都打不开）。",
             listOf(
@@ -1451,6 +1451,8 @@ class ZkTools(private val env: AgentEnv) {
             "plan_mode" to "计划模式（定本周计划的向导）",
             "review" to "今天的清单（日终验收）",
             "playbook" to "今天的预案",
+            "quick" to "记一下（收集箱）",
+            "digest" to "贴一段讨论（让你消化）",
             "rhythm" to "今天的节律关卡",
             "gate" to "某道关卡",
             "session" to "正在做（计时页）",
@@ -1483,6 +1485,8 @@ class ZkTools(private val env: AgentEnv) {
             "plan_mode" to "plan/new",
             "review" to "today",
             "playbook" to "playbook",
+            "quick" to "quick",
+            "digest" to "quick/digest",
             "rhythm" to "rhythm",
             "session" to "session",
             "hq" to "hq",

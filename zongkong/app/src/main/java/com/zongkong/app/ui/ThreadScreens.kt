@@ -183,6 +183,18 @@ fun ThreadScreen(key: String, nav: NavHostController) {
                 if (t.url.isNotBlank()) OutlinedButton(onClick = { Gpt.openNotion(context, t.url) }) { Text("Notion") }
             }
 
+            // 还很薄：让总控带着立项
+            if (com.zongkong.core.work.Focus.thinThreads(work, now).any { it.key == key }) {
+                Panel(accent = sig.plan, modifier = Modifier.testTag("thread-project")) {
+                    Text("这件事还很薄", style = MaterialTheme.typography.titleSmall, color = sig.plan)
+                    Hint("只有一个标题和 ${work.actionsOf(key).size} 步，最容易建完就散。让总控带你立项：为什么做、做到什么算完、要弄清的关键事实（时间、要求）、里程碑、头两三步排进时间。")
+                    Button(onClick = {
+                        if (app.chat.begin(com.zongkong.core.agent.Campaign.PROJECT, "${t.title}（${t[F.CODE]}）")) nav.navigate("chat")
+                        else nav.navigate("settings/ai")
+                    }) { Text(if (config.ai.ready) "让总控展开（10–20 分钟）" else "先接 AI") }
+                }
+            }
+
             Panel {
                 FieldRow("为什么做", t[F.WHY], "（写一句：为什么值得做）") { editing = F.WHY }
                 FieldRow("完成依据", t[F.CRITERIA], "（整件事做到什么算完成）") { editing = F.CRITERIA }

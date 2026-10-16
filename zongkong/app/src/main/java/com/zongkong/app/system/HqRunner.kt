@@ -166,6 +166,17 @@ object HqRunner {
             )
             return
         }
+        // 新建的事还很薄：晚上提议立项（一件一天只提一次）
+        val thin = com.zongkong.core.work.Focus.thinThreads(store.work.value, now).filter { now - it.createdAt > 2 * 3600_000L }.maxByOrNull { it.createdAt }
+        if (thin != null && minute in 19 * 60 until 21 * 60 && store.firstAlert("auto-project:${thin.key}")) {
+            app.chat.proactive(
+                "project",
+                "[自动·立项] 他建了「${thin.title}」（${thin[com.zongkong.core.work.F.CODE]}），但还很薄：为什么、做到什么算完都没写，行动 ${store.work.value.actionsOf(thin.key).size} 步。" +
+                    "用一两句点出最该补的一处（比如关键的时间节点还没查清），问他要不要现在花 15 分钟立项。最后【选项】现在立项｜明天再说｜不用。他说现在立项就 start_campaign 立项。",
+                fallback = "「${thin.title}」还只有一个标题。花 15 分钟让总控帮你展开？",
+            )
+            return
+        }
         if (date.dayOfWeek == java.time.DayOfWeek.SATURDAY && minute in 10 * 60 until 12 * 60 && store.firstAlert("auto-think")) {
             app.chat.proactive(
                 "think",

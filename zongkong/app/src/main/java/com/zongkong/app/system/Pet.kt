@@ -529,9 +529,10 @@ object Pet {
             this.text = label; textSize = 14f; setTextColor(Color.rgb(0xC1, 0x66, 0x3E)); setPadding(dp(s, 10f), dp(s, 10f), dp(s, 10f), dp(s, 6f))
             setOnClickListener { onClick() }
         }
+        row.addView(btn("记一下") { open(s, "quick") })
         row.addView(btn("说话") { open(s, "voice") })
         row.addView(btn("打开") { open(s, "chat") })
-        row.addView(btn("收起 1 小时") { snooze(s, 60) })
+        row.addView(btn("收起") { snooze(s, 60) })
         box.addView(row)
         val w = (screenW * 0.72f).toInt().coerceAtMost(dp(s, 300f))
         val x = if (onLeft) lp0.x + lp0.width + dp(s, 4f) else (lp0.x - w - dp(s, 4f)).coerceAtLeast(0)

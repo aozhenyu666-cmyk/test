@@ -198,6 +198,8 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 composable("wizard/review") { TodayScreen(nav) }
                 composable("today") { TodayScreen(nav) }
                 composable("playbook") { PlaybookScreen(nav) }
+                composable("quick") { QuickScreen(nav) }
+                composable("quick/digest") { QuickScreen(nav, digest = true) }
                 composable("stuckpick") { StuckPick(nav) }
                 composable("plan") { PlanScreen(nav) }
                 composable("plan/new") { PlanModeWizard(nav) }

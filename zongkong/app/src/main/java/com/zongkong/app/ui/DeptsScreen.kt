@@ -207,9 +207,18 @@ fun DeptScreen(name: String, nav: NavHostController) {
 
             // ---------- 战役：总控带着走完一整段深度工作 ----------
             when (dept) {
-                Dept.INFO -> CampaignCard(com.zongkong.core.agent.Campaign.INTAKE, nav)
+                Dept.INFO -> {
+                    CampaignCard(com.zongkong.core.agent.Campaign.INTAKE, nav)
+                    Panel(onClick = { nav.navigate("quick") }, modifier = Modifier.testTag("quick-entry")) {
+                        Text("记一下 / 贴一段讨论", style = MaterialTheme.typography.titleSmall)
+                        Hint("随手一句直接进收集箱；在 Gemini、GPT 里聊过的，整段贴进来，总控帮你提炼、挂到事项上、定下一步。桌面宠物的气泡里也有“记一下”。")
+                    }
+                }
                 Dept.THINK -> CampaignCard(com.zongkong.core.agent.Campaign.GRAND_THINK, nav, askTopic = true)
-                Dept.PLAN -> CampaignCard(com.zongkong.core.agent.Campaign.GRAND_PLAN, nav)
+                Dept.PLAN -> {
+                    CampaignCard(com.zongkong.core.agent.Campaign.GRAND_PLAN, nav)
+                    CampaignCard(com.zongkong.core.agent.Campaign.PROJECT, nav, askTopic = true)
+                }
                 else -> {}
             }
 

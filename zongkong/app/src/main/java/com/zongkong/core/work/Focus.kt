@@ -67,6 +67,15 @@ object Focus {
         t.threadStatus.open && t[F.NEXT].isNotBlank() && work.actionsOf(t.key).none { it.open() }
     }
 
+    /**
+     * 还很薄的事：开着、最近两周建的，为什么 / 完成依据没写，行动不超过一步（比如“国考计划”下面只有“去查时间”）。
+     * 这种事最容易建完就散，总控提议“立项”帮你展开。
+     */
+    fun thinThreads(work: Work, now: Long): List<Rec> = work.threads().filter { t ->
+        t.threadStatus.open && now - t.createdAt < 14 * 86_400_000L &&
+            (t[F.WHY].isBlank() || t[F.CRITERIA].isBlank()) && work.actionsOf(t.key).size <= 1
+    }
+
     /** 等你确认结果的、卡住的。 */
     fun needsAttention(work: Work): List<Rec> = work.actions().filter { it.actionStatus == ActionStatus.CONFIRM || it.actionStatus == ActionStatus.STUCK }
 

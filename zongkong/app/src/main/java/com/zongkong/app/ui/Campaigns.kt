@@ -37,21 +37,21 @@ fun CampaignCard(c: Campaign, nav: NavHostController, askTopic: Boolean = false)
     var topic by remember { mutableStateOf("") }
     var msg by remember { mutableStateOf<String?>(null) }
     val color = when (c) {
-        Campaign.GRAND_PLAN -> sig.plan
-        Campaign.GRAND_THINK -> sig.think
+        Campaign.GRAND_PLAN, Campaign.PROJECT -> sig.plan
+        Campaign.GRAND_THINK, Campaign.DIGEST -> sig.think
         Campaign.INTAKE -> sig.info
     }
     Panel(accent = color, modifier = Modifier.testTag("campaign-${c.name}")) {
         Box(Modifier.fillMaxWidth().height(56.dp)) {
             when (c) {
-                Campaign.GRAND_PLAN -> Lattice(0.8f, color, Modifier.fillMaxSize())
-                Campaign.GRAND_THINK -> LeafVein(1f, color, Modifier.fillMaxSize())
+                Campaign.GRAND_PLAN, Campaign.PROJECT -> Lattice(0.8f, color, Modifier.fillMaxSize())
+                Campaign.GRAND_THINK, Campaign.DIGEST -> LeafVein(1f, color, Modifier.fillMaxSize())
                 Campaign.INTAKE -> TideLines(0.6f, color, Modifier.fillMaxSize())
             }
         }
         Text(c.title, style = MaterialTheme.typography.titleLarge.merge(SerifTitle), color = color)
         Hint(c.what)
-        if (askTopic) OutlinedTextField(topic, { topic = it }, label = { Text("想透哪个问题（可空：让总控从卡着的事里挑）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        if (askTopic) OutlinedTextField(topic, { topic = it }, label = { Text(if (c == Campaign.PROJECT) "哪件事（比如：国考）" else "想透哪个问题（可空：让总控从卡着的事里挑）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             val running = log.campaign == c.name
             Button(
