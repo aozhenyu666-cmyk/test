@@ -146,7 +146,10 @@ class Controller(val dataDir: File) {
 
     // ---------- 运行 ----------
 
+    private var scope: CoroutineScope? = null
+
     fun start(scope: CoroutineScope) {
+        this.scope = scope
         val now = System.currentTimeMillis()
         // 上次没正常退出：电脑一直开着而总控没在运行，就是“失联”
         store.lastUnclean()?.let { (beat, why) ->
@@ -249,6 +252,8 @@ class Controller(val dataDir: File) {
         val now = System.currentTimeMillis()
         if (dirty) { store.saveUsage(_today.value); dirty = false }
         store.beat(now, clean = false)
+        // 审到一半退出了：再审一次
+        if (_config.value.pending?.reviewing == true) reviewLoosening()
         if (_config.value.rules.netBlock) {
             net.start()
             net.update(Decide.blockedDomains(ctx(now)))
@@ -374,10 +379,44 @@ class Controller(val dataDir: File) {
         _gate.value = null
     }
 
-    fun setRules(next: PcRules): String = run {
+    /** 改规则；放宽的部分要写 [why]，交给总控审（后台跑，审完弹个通知）。 */
+    fun setRules(next: PcRules, why: String = ""): String = run {
         var msg = ""
-        updateConfigInternal { c -> PcPolicy.setRules(c, next, System.currentTimeMillis()).also { msg = it.message }.config }
+        var review = false
+        updateConfigInternal { c -> PcPolicy.setRules(c, next, System.currentTimeMillis(), why).also { msg = it.message; review = it.review }.config }
+        if (review) reviewLoosening()
         msg
+    }
+
+    @Volatile private var reviewingNow = false
+
+    /** 让 AI 审排着的放宽：批 → 24 小时后生效；驳回 → 作废；没接 AI / 审不了 → 72 小时后生效。 */
+    private fun reviewLoosening() {
+        val p = _config.value.pending?.takeIf { it.reviewing } ?: return
+        val sc = scope ?: return
+        if (reviewingNow) return
+        reviewingNow = true
+        sc.launch(Dispatchers.IO) {
+            try {
+                val cfg = _config.value
+                val (approve, reason) = if (!cfg.ai.ready) {
+                    null to "没接 AI，没人审：等 72 小时"
+                } else {
+                    val prompt = PcPolicy.reviewPrompt(p, cfg.rules, agent.tools.statusText() + "\n" + Boss.brief(_state.value.dossier, emptyList(), System.currentTimeMillis(), zone), cfg.denied)
+                    when (val r = api.chat(PcPolicy.REVIEW_SYSTEM, listOf(ChatMsg(ChatMsg.USER, prompt)), emptyList())) {
+                        is ApiResult.Ok -> PcPolicy.parseReview(r.value.content)?.let { it.first to it.second } ?: (null to "总控的回复读不懂：按没人审算，等 72 小时")
+                        is ApiResult.Err -> null to "AI 连不上（${r.message.take(40)}）：按没人审算，等 72 小时"
+                    }
+                }
+                val now = System.currentTimeMillis()
+                updateConfigInternal { PcPolicy.reviewed(it, approve, reason, now) }
+                val title = when (approve) { true -> "放宽批了（24 小时后生效）"; false -> "放宽被驳回"; null -> "放宽没人审（72 小时后生效）" }
+                _toasts.tryEmit(title to "${p.summary}：$reason")
+                env.say(if (approve == false) "放宽被驳回。$reason" else title)
+            } finally {
+                reviewingNow = false
+            }
+        }
     }
 
     fun setAi(ai: AiConfig): String = run {
@@ -517,7 +556,7 @@ class Controller(val dataDir: File) {
     }
 
     companion object {
-        const val VERSION = "电脑版 0.1.2"
+        const val VERSION = "电脑版 0.2.0"
         /** 多久没碰键盘鼠标算不在用。 */
         const val IDLE_MS = 5 * 60_000L
     }

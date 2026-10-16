@@ -70,7 +70,23 @@ data class BlockHit(val at: Long, val key: String, val label: String, val why: S
 
 /** 放宽的改动：到 [due] 才生效。 */
 @Serializable
-data class PcPending(val at: Long, val due: Long, val rules: PcRules, val summary: String)
+data class PcPending(
+    val at: Long,
+    /** 什么时候生效（还在审的时候是 0）。 */
+    val due: Long,
+    val rules: PcRules,
+    val summary: String,
+    /** 你写的为什么要放宽。 */
+    val why: String = "",
+    /** 还在等总控审。 */
+    val reviewing: Boolean = false,
+    /** 总控的一句话（批了 / 没接 AI）。 */
+    val verdict: String = "",
+)
+
+/** 被总控驳回的放宽：几小时内不能再申请同一件事。 */
+@Serializable
+data class Denial(val at: Long, val summary: String, val why: String, val reason: String)
 
 @Serializable
 data class PendingAi(val at: Long, val due: Long, val ai: AiConfig)
@@ -88,6 +104,8 @@ data class PcConfig(
     val pending: PcPending? = null,
     val ai: AiConfig = AiConfig(),
     val pendingAi: PendingAi? = null,
+    /** 最近一次被驳回的放宽。 */
+    val denied: Denial? = null,
     val link: LinkConfig = LinkConfig(),
     /** 用 Windows 自带的声音念出来。 */
     val speak: Boolean = true,

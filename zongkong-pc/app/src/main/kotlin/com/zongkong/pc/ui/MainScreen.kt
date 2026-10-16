@@ -42,6 +42,7 @@ import com.zongkong.core.boss.Boss
 import com.zongkong.pc.Cat
 import com.zongkong.pc.Controller
 import com.zongkong.pc.Decide
+import com.zongkong.pc.PcPolicy
 import com.zongkong.pc.PcRules
 import com.zongkong.pc.PcTools
 import com.zongkong.pc.SiteRule
@@ -199,8 +200,23 @@ fun RulesPage(c: Controller) {
     var newDomain by remember { mutableStateOf("") }
     Page {
         Text("规则", style = MaterialTheme.typography.headlineMedium)
-        Hint("收紧马上生效；放宽（额度调大、删掉网站、关掉开关）24 小时后才生效——免得在想玩的那一刻把规则改松。AI 也只能收紧。")
-        config.pending?.let { p -> Panel(accent = sig.warn) { Text("排着的放宽：${p.summary}", color = sig.warn); Hint("${Usage.hm(p.due, c.zone)}（明天这个时候）生效。再改一次会以新的为准、重新等 24 小时。") } }
+        Hint("收紧马上生效。放宽（额度调大、删掉网站、关掉开关）要写为什么，交给总控审：批了 24 小时后生效，驳回就作废、6 小时内不能再申请；没接 AI 要等 72 小时。AI 自己只能收紧。")
+        config.pending?.let { p ->
+            Panel(accent = sig.warn) {
+                Text("排着的放宽：${p.summary}", color = sig.warn)
+                if (p.why.isNotBlank()) Hint("你的理由：${p.why}")
+                when {
+                    p.reviewing -> Hint("总控在审…")
+                    else -> Hint("总控：${p.verdict}。${Usage.hm(p.due, c.zone)} 生效（${if (p.due - p.at > PcPolicy.DELAY) "三天后" else "明天这个时候"}）。再改一次会以新的为准、重新审。")
+                }
+            }
+        }
+        config.denied?.takeIf { System.currentTimeMillis() - it.at < PcPolicy.RETRY_AFTER }?.let { d ->
+            Panel(accent = sig.strict) {
+                Text("驳回：${d.summary}", color = sig.strict)
+                Hint("总控：${d.reason}。${Usage.hm(d.at + PcPolicy.RETRY_AFTER, c.zone)} 之后才能再申请。真要用一会儿，去“对话”申请一次性放行。")
+            }
+        }
         Panel {
             Text("每天的额度（分钟）", style = MaterialTheme.typography.titleSmall)
             listOf(Cat.FUN, Cat.SOCIAL, Cat.GAME).forEach { cat ->
@@ -254,8 +270,16 @@ fun RulesPage(c: Controller) {
             Hint(r.apps.joinToString("、") { "${it.label.ifBlank { it.exe }}（${Cat.of(it.cat).label}）" })
             Hint("由 Steam、WeGame、Epic、战网、米哈游启动器启动的程序都算游戏。")
         }
+        val loosening = remember(r, config.rules) { PcPolicy.looser(PcPolicy.stricter(config.rules, r), r) }
+        var why by remember(base) { mutableStateOf("") }
+        if (loosening.isNotEmpty()) {
+            Panel(accent = sig.warn) {
+                Text("这次有放宽：${loosening.joinToString("、")}", style = MaterialTheme.typography.titleSmall, color = sig.warn)
+                OutlinedTextField(why, { why = it }, label = { Text("为什么要放宽（至少 ${PcPolicy.MIN_WHY} 个字，总控会看理由和今天的记录）") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = { msg = c.setRules(r) }, enabled = r != base, colors = ButtonDefaults.buttonColors(containerColor = sig.plan)) { Text("保存") }
+            Button(onClick = { msg = c.setRules(r, why) }, enabled = r != base, colors = ButtonDefaults.buttonColors(containerColor = sig.plan)) { Text("保存") }
             TextButton(onClick = { r = base }) { Text("撤销没保存的", color = sig.muted) }
             msg?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = sig.ai) }
         }

@@ -88,7 +88,7 @@ class PcAgent(private val api: ChatApi, private val env: PcEnv) {
             ## 电脑上怎么管（代码在执行，你在判断）
             - 会话制：每次用电脑先说做什么、用多久，到点锁屏对账。自己能开的时长有上限；超过、夜里、总时长用完，只有你能批（start_session）。
             - 娱乐 / 社交 / 游戏有每天的额度，用完就拦（程序窗口收起来，网站在网络层打不开）。额度外要用，只能找你申请（grant_pass）。
-            - 规则：收紧马上生效，放宽 24 小时后生效。你可以随时收紧（block、set_limit、lock），不能当场放宽规则。
+            - 规则：收紧马上生效。放宽只能他自己在“规则”页写理由申请，由审查官（另一次 AI 判断）批了才排进 24 小时冷静期。你可以随时收紧（block、set_limit、lock），不能放宽规则；他要放宽，告诉他去规则页写理由，或者申请一次性放行。
             - 手机上的总控时间开始时，电脑跟着锁。手机那边的主线和计划在“此刻”里。
 
             ## 铁律
@@ -150,7 +150,7 @@ class PcTools(private val env: PcEnv) {
             ),
         ),
         ToolSpec(
-            "set_limit", "改某一类每天的额度。调小马上生效；调大 24 小时后生效。",
+            "set_limit", "改某一类每天的额度。只能调小（马上生效）；调大要他自己在规则页写理由申请。",
             listOf(
                 Param("category", "string", "类", required = true, choices = listOf(Cat.FUN.label, Cat.SOCIAL.label, Cat.GAME.label)),
                 Param("minutes", "integer", "每天几分钟（0 = 一律要申请）", required = true),

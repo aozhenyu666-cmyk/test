@@ -147,26 +147,53 @@ class PcCoreTest {
     }
 
     @Test
-    fun looseningWaitsADay() {
+    fun looseningNeedsAReasonAndAReview() {
         val now = at(12, 10)
         val c0 = PcConfig()
         val tight = PcPolicy.setRules(c0, c0.rules.copy(limits = c0.rules.limits + (Cat.FUN.name to 30)), now)
         assertEquals(30, tight.config.rules.limits[Cat.FUN.name])
         assertNull(tight.config.pending)
-        val loose = PcPolicy.setRules(c0, c0.rules.copy(limits = c0.rules.limits + (Cat.FUN.name to 120), curfew = false, screenLook = true), now)
+        val wish = c0.rules.copy(limits = c0.rules.limits + (Cat.FUN.name to 120), curfew = false, screenLook = true)
+        // 没写为什么：放宽不进审，收紧（看屏幕）照样生效
+        val noWhy = PcPolicy.setRules(c0, wish, now)
+        assertNull(noWhy.config.pending)
+        assertTrue(noWhy.config.rules.screenLook)
+        assertTrue(noWhy.message, noWhy.error!!.contains("要写清楚为什么"))
+        val loose = PcPolicy.setRules(c0, wish, now, "这周要剪期末作业的视频，要看 B 站教程")
+        assertTrue(loose.review)
         assertEquals(60, loose.config.rules.limits[Cat.FUN.name])
         assertTrue(loose.config.rules.curfew)
-        // 收紧的部分（看屏幕）马上生效
         assertTrue(loose.config.rules.screenLook)
         assertTrue(loose.later.single(), loose.later.single().contains("娱乐额度 120 分钟") && loose.later.single().contains("夜里不锁机"))
-        val due = PcPolicy.applyDue(loose.config, now + PcPolicy.DELAY + 1)
+        // 还在审：时间到了也不生效
+        assertEquals(60, PcPolicy.applyDue(loose.config, now + 10 * PcPolicy.DELAY).rules.limits[Cat.FUN.name])
+        // 批了：24 小时后生效
+        val ok = PcPolicy.reviewed(loose.config, true, "理由具体", now)
+        assertEquals(60, PcPolicy.applyDue(ok, now + PcPolicy.DELAY - 1).rules.limits[Cat.FUN.name])
+        val due = PcPolicy.applyDue(ok, now + PcPolicy.DELAY + 1)
         assertEquals(120, due.rules.limits[Cat.FUN.name])
         assertFalse(due.rules.curfew)
+        // 没接 AI：72 小时
+        val noAi = PcPolicy.reviewed(loose.config, null, "", now)
+        assertEquals(60, PcPolicy.applyDue(noAi, now + PcPolicy.DELAY + 1).rules.limits[Cat.FUN.name])
+        assertEquals(120, PcPolicy.applyDue(noAi, now + PcPolicy.NO_AI_DELAY + 1).rules.limits[Cat.FUN.name])
+        // 驳回：作废，6 小时内再申请也不进审
+        val no = PcPolicy.reviewed(loose.config, false, "想玩不是理由", now)
+        assertNull(no.pending)
+        assertEquals("想玩不是理由", no.denied!!.reason)
+        val again = PcPolicy.setRules(no, wish, now + 3600_000L, "我就是想多玩一会儿真的")
+        assertNull(again.config.pending)
+        assertTrue(again.error!!.contains("驳回"))
+        assertNotNull(PcPolicy.setRules(no, wish, now + PcPolicy.RETRY_AFTER + 1, "这周要剪期末作业的视频，要看 B 站教程").config.pending)
+        // 读审查结果
+        assertEquals(false to "不批", PcPolicy.parseReview("好的```json\n{\"approve\": false, \"reason\": \"不批\"}\n```"))
+        assertNull(PcPolicy.parseReview("我觉得可以"))
         // 删掉一个网站 = 放宽；夜间时段缩短 = 放宽，延长 = 收紧
-        val noBili = PcPolicy.setRules(c0, c0.rules.copy(sites = c0.rules.sites.filterNot { it.label == "B站" }), now)
+        val why = "要查资料写论文，十个字以上"
+        val noBili = PcPolicy.setRules(c0, c0.rules.copy(sites = c0.rules.sites.filterNot { it.label == "B站" }), now, why)
         assertTrue(noBili.config.rules.sites.any { it.label == "B站" })
         assertTrue(PcPolicy.setRules(c0, c0.rules.copy(curfewStart = 22 * 60), now).config.pending == null)
-        assertNotNull(PcPolicy.setRules(c0, c0.rules.copy(curfewStart = 23 * 60 + 50), now).config.pending)
+        assertNotNull(PcPolicy.setRules(c0, c0.rules.copy(curfewStart = 23 * 60 + 50), now, why).config.pending)
         // 换 AI：第一次填马上生效；之后模型锁着要等
         val ai1 = PcPolicy.setAi(c0, com.zongkong.core.AiConfig("https://a/v1", "k", "m1"), now).config
         assertEquals("m1", ai1.ai.model)
@@ -226,11 +253,10 @@ class PcCoreTest {
         // 规则：新拦一个网站马上生效；额度调大要等
         assertTrue(tools.run("block", """{"kind":"网站","name":"虎扑","category":"社交","domains":"hupu.com, www.hupu.cn/bbs","title_words":"虎扑"}""").ok)
         assertEquals(listOf("hupu.com", "hupu.cn"), env.cfg.rules.sites.first { it.label == "虎扑" }.domains)
-        assertTrue(tools.run("set_limit", """{"category":"娱乐","minutes":200}""").text.contains("24 小时后生效"))
+        // 额度调大：总控放不了，要他自己写理由申请
+        assertTrue(tools.run("set_limit", """{"category":"娱乐","minutes":200}""").text.contains("要写清楚为什么"))
         assertEquals(60, env.cfg.rules.limits[Cat.FUN.name])
-        assertEquals(200, env.cfg.pending!!.rules.limits[Cat.FUN.name])
-        // 在排着的放宽上接着改：虎扑还在
-        assertTrue(env.cfg.pending!!.rules.sites.any { it.label == "虎扑" })
+        assertNull(env.cfg.pending)
         // 命令：只读直接跑；改东西的问用户；破坏性的不跑
         assertTrue(tools.run("run_command", """{"command":"Get-Process","why":"看看开着什么"}""").ok)
         env.allow = false
