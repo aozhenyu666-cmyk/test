@@ -96,3 +96,10 @@ dependencies {
     // Android 自带的 org.json 在本地单元测试里只是空壳，换成真实实现
     testImplementation("org.json:json:20240303")
 }
+
+// 两条路共用一份数据库结构文件（schemas/）：岔路的 KSP 等主线写完再跑，免得读到写了一半的文件
+tasks.configureEach {
+    if (name.startsWith("kspChalu") && name.endsWith("Kotlin")) {
+        mustRunAfter(name.replace("kspChalu", "kspMainline"))
+    }
+}
