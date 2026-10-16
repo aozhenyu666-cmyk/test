@@ -61,6 +61,7 @@ class Agent(private val api: ChatApi, private val env: AgentEnv) {
         append(com.zongkong.core.info.Intake.brief(env.work(), env.intake(), env.now(), env.zone)).append('\n')
         append(com.zongkong.core.plan.Calibrate.brief(env.work(), env.zone, env.now()))
         append("\n").append(com.zongkong.core.plan.Aims.brief(env.plans(), env.work(), env.now(), env.zone))
+        com.zongkong.core.plan.Playbook.today(env.plans(), env.now(), env.zone)?.let { append("\n").append(com.zongkong.core.plan.Playbook.brief(it, env.now(), env.zone)) }
         val vein = env.vein()
         if (vein.nodes.isNotEmpty() || vein.candidates.isNotEmpty()) {
             val hypo = vein.nodes.count { it.status == com.zongkong.core.vein.VStatus.HYPO.label }
@@ -131,6 +132,8 @@ class Agent(private val api: ChatApi, private val env: AgentEnv) {
             - 需要用户选的时候，回复最后一行写“【选项】A｜B｜C”（2–4 个，每个不超过 10 个字），界面会变成按钮。
             - 想让用户看到某个页面（刚开的计时页、要补的权限、档案），调 open_page。
             - 用户提到习惯、作息、偏好、反复出现的借口，用 remember 记下来。
+            - 预案（试验）：用户想把一天排细、怕情况一变计划就散，用 set_day_script 起草（每段都要有 B 方案：下雨、起晚、临时有事时换成什么做），
+              用户说定了再 lock。到点没按 A 做，引导选 B 或写原因跳过（script_block），不要整段默默没了。
             - 用户问今天做了什么、哪些没完成、要日终总结：先调 today_report，照清单原样列出来（做完的、没做的、时间），最后问一句明天第一步。
               不评分，不另写一份报告让用户去“说”，也不在用户没说话前就判“没完成”——清单上是什么就是什么。
             - 回答用中文，短：先说结论或做了什么，再说下一步。

@@ -2,6 +2,8 @@ package com.zongkong.app.data
 
 import com.zongkong.core.DayClock
 import com.zongkong.core.plan.DayPlan
+import com.zongkong.core.plan.DayScript
+import com.zongkong.core.plan.Playbook
 import com.zongkong.core.plan.Goal
 import com.zongkong.core.plan.Outcome
 import com.zongkong.core.plan.PlanBook
@@ -174,5 +176,47 @@ class PlanActions(private val store: Store, private val work: WorkActions) {
         val p = active() ?: return
         val o = p.outcomes.firstOrNull { it.actionKey == actionKey && !it.done } ?: return
         setOutcomeDone(p.id, o.id, true)
+    }
+
+    // ---------- 预案（试验） ----------
+
+    fun script(): DayScript? = Playbook.today(store.plans.value, now(), store.zone)
+
+    /** 写 / 改今天的预案；返回错误说明，成功返回 null。 */
+    fun writeScript(text: String, why: String): String? {
+        val t = now()
+        val date = DayClock.dateKey(t, store.zone)
+        val (blocks, bad) = Playbook.parse(text, t)
+        if (bad.isNotEmpty()) return "这几行没认出来：" + bad.joinToString("；") { it.take(20) } + "。写法：09:00-10:30 做什么 | B: 万一……就做什么"
+        val (next, err) = Playbook.write(Playbook.of(store.plans.value, date), date, blocks, why, "你", t)
+        if (err != null || next == null) return err ?: "没写成"
+        store.updatePlans { Playbook.put(it, next) }
+        return null
+    }
+
+    fun lockScript() = editScript { Playbook.lock(it, now()) }
+
+    fun scriptBegin(id: String) = editScript { Playbook.begin(it, id) }
+
+    fun scriptNote(id: String, text: String) = editScript { Playbook.note(it, id, text) }
+
+    fun scriptFinish(id: String, result: String) = editScript { Playbook.finish(it, id, result) }
+
+    fun scriptPlanB(id: String, why: String): String? = editScriptChecked { Playbook.planB(it, id, why, now()) }
+
+    fun scriptSkip(id: String, why: String): String? = editScriptChecked { Playbook.skip(it, id, why, now()) }
+
+    fun scriptPrompted(id: String, node: Playbook.Node) = editScript { Playbook.markPrompted(it, id, node) }
+
+    private fun editScript(f: (DayScript) -> DayScript) {
+        store.updatePlans { b -> Playbook.today(b, now(), store.zone)?.let { Playbook.put(b, f(it)) } ?: b }
+    }
+
+    private fun editScriptChecked(f: (DayScript) -> Pair<DayScript, String?>): String? {
+        val s = script() ?: return "今天还没有预案"
+        val (next, err) = f(s)
+        if (err != null) return err
+        store.updatePlans { Playbook.put(it, next) }
+        return null
     }
 }

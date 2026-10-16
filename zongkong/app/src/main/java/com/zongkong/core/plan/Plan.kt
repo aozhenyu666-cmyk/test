@@ -101,6 +101,8 @@ data class PlanBook(
     val days: List<DayPlan> = emptyList(),
     /** 远方：周计划之外的长期目标。 */
     val aims: List<Aim> = emptyList(),
+    /** 预案（试验）：一天排成几段，每段带 B 方案。 */
+    val scripts: List<DayScript> = emptyList(),
 )
 
 object Plans {

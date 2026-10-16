@@ -164,6 +164,25 @@ class ZkTools(private val env: AgentEnv) {
             listOf(Param("thread", "string", "事项编号（ZK-XXXX）或标题", required = true)),
         ),
         ToolSpec("today_report", "今天的清单：排了的每一步做了没有（✓ 做完 / ○ 没做 / ✗ 卡住 / → 改期）、另外做了什么、到期的约定、做事和娱乐时长、明天第一步。照着记录列，用户问今天做了什么、哪些没完成、日终时先调这个。"),
+        ToolSpec(
+            "set_day_script",
+            "写今天的预案（试验）：一天排成几段，每段写 B 方案，情况变了换 B 做而不是整段放掉。一行一段，写法：09:00-10:30 资料分析两套 | B: 下雨不去图书馆就在家做一套。" +
+                "整份替换。已经定稿的要写 why；已经开始的段保留。用户明确说“定了”才 lock=true（定稿后到点会提醒、速记、要结果）。",
+            listOf(
+                Param("script", "string", "一行一段", required = true),
+                Param("why", "string", "定稿后改要写为什么"),
+                Param("lock", "boolean", "用户说定了就 true"),
+            ),
+        ),
+        ToolSpec(
+            "script_block",
+            "预案里的一段：开始 / 速记 / 做完 / 走B方案 / 跳过。跳过要写原因；走 B 方案用那段写好的 B。",
+            listOf(
+                Param("id", "string", "段的 id（预案简报里有），或者段的内容", required = true),
+                Param("act", "string", "做什么", required = true, choices = listOf("开始", "速记", "做完", "走B方案", "跳过")),
+                Param("text", "string", "速记内容 / 结果 / 原因"),
+            ),
+        ),
         ToolSpec("list_gates", "列出节律关卡（id、部门、时间、验收方式、今天的状态）和待生效的放宽改动。"),
         ToolSpec("yishou_status", "读一手（行为管理部）今天的训练：练了几组、目标几组、在练什么、陪练窗口、昨晚总结的规则。"),
         ToolSpec(
@@ -511,6 +530,8 @@ class ZkTools(private val env: AgentEnv) {
                     ),
                     "列了今天的清单",
                 )
+                "set_day_script" -> setDayScript(a)
+                "script_block" -> scriptBlock(a)
                 "list_gates" -> ToolResult(Snapshot.gates(env.config(), env.status(), env.now()), "看了节律关卡")
                 "yishou_status" -> env.yishou().let { ToolResult(it, "读了一手的训练") }
                 "create_thread" -> createThread(a)
@@ -1342,6 +1363,44 @@ class ZkTools(private val env: AgentEnv) {
         return ToolResult("今天的主线定为「${x.title}」" + if (p != null && !inPlan) "（注意：它不在本周计划里）" else "", "今天主线：「${x.title}」")
     }
 
+    private fun setDayScript(a: Args): ToolResult {
+        val pb = com.zongkong.core.plan.Playbook
+        val now = env.now()
+        val date = DayClock.dateKey(now, env.zone)
+        val (blocks, bad) = pb.parse(a.s("script"), now)
+        val old = pb.of(env.plans(), date)
+        val (next, err) = pb.write(old, date, blocks, a.s("why"), "参谋", now)
+        if (err != null || next == null) return ToolResult.fail(err ?: "没写成")
+        val final = if (a.b("lock") == true) pb.lock(next, now) else next
+        env.updatePlans { pb.put(it, final) }
+        return ToolResult(
+            "预案${if (final.locked) "已定稿" else "草稿"}：${final.blocks.size} 段" + (if (bad.isNotEmpty()) "；没认出来的行：" + bad.joinToString("；") else "") + "\n" + pb.brief(final, now, env.zone),
+            "预案：${final.blocks.size} 段" + if (final.locked) "（定稿）" else "",
+            route = "playbook",
+        )
+    }
+
+    private fun scriptBlock(a: Args): ToolResult {
+        val pb = com.zongkong.core.plan.Playbook
+        val now = env.now()
+        val s = pb.today(env.plans(), now, env.zone) ?: return ToolResult.fail("今天还没有预案")
+        val ref = a.s("id")
+        val b = s.block(ref) ?: s.blocks.firstOrNull { it.what == ref } ?: s.blocks.firstOrNull { it.what.contains(ref) || ref.contains(it.what) }
+            ?: return ToolResult.fail("预案里没有“$ref”")
+        val text = a.s("text")
+        val (next, err) = when (a.s("act")) {
+            "开始" -> pb.begin(s, b.id) to null
+            "速记" -> pb.note(s, b.id, text) to null
+            "做完" -> pb.finish(s, b.id, text) to null
+            "走B方案" -> pb.planB(s, b.id, text, now)
+            "跳过" -> pb.skip(s, b.id, text, now)
+            else -> s to "act 只能是：开始、速记、做完、走B方案、跳过"
+        }
+        if (err != null) return ToolResult.fail(err)
+        env.updatePlans { pb.put(it, next) }
+        return ToolResult("「${b.what}」${a.s("act")}", "预案「${b.what.take(10)}」${a.s("act")}")
+    }
+
     private fun findOutcome(ref: String): Pair<com.zongkong.core.plan.WeekPlan, com.zongkong.core.plan.Outcome>? {
         val p = activePlan() ?: return null
         val o = p.outcomes.firstOrNull { it.id == ref } ?: p.outcomes.firstOrNull { it.title == ref } ?: p.outcomes.firstOrNull { it.title.contains(ref) || ref.contains(it.title) }
@@ -1390,7 +1449,8 @@ class ZkTools(private val env: AgentEnv) {
             "plan" to "晨间部署向导",
             "week" to "本周计划（计划页）",
             "plan_mode" to "计划模式（定本周计划的向导）",
-            "review" to "晚间复盘向导",
+            "review" to "今天的清单（日终验收）",
+            "playbook" to "今天的预案",
             "rhythm" to "今天的节律关卡",
             "gate" to "某道关卡",
             "session" to "正在做（计时页）",
@@ -1421,7 +1481,8 @@ class ZkTools(private val env: AgentEnv) {
             "plan" to "wizard/plan",
             "week" to "plan",
             "plan_mode" to "plan/new",
-            "review" to "wizard/review",
+            "review" to "today",
+            "playbook" to "playbook",
             "rhythm" to "rhythm",
             "session" to "session",
             "hq" to "hq",

@@ -59,6 +59,8 @@ object DayReport {
         val hqDone: Boolean,
         /** 明天第一步（已经排好的话）。 */
         val tomorrow: String,
+        /** 今天的预案（有的话）：每段怎么样。 */
+        val blocks: List<Block> = emptyList(),
     ) {
         val doneCount: Int get() = planned.count { it.mark == Mark.DONE || it.mark == Mark.WAIT }
         val notDone: List<Item> get() = planned.filter { it.mark != Mark.DONE && it.mark != Mark.WAIT && it.mark != Mark.CANCELLED }
@@ -152,6 +154,7 @@ object DayReport {
             promises = promises,
             hqDone = hq.any { DayClock.dateKey(it.startedAt, zone) == today.toString() && !it.active && !it.early },
             tomorrow = tomorrow,
+            blocks = Playbook.of(book, today.toString())?.blocks.orEmpty(),
         )
     }
 
@@ -162,6 +165,15 @@ object DayReport {
         else {
             append("\n排了的（做完 ${r.doneCount}/${r.planned.size}）：\n")
             r.planned.forEach { append(it.line()).append('\n') }
+        }
+        if (r.blocks.isNotEmpty()) {
+            append("\n预案：\n")
+            r.blocks.forEach { b ->
+                append(b.span).append(' ').append(b.what).append("：").append(b.state.label)
+                if (b.result.isNotBlank()) append("，").append(b.result.take(40))
+                if (b.notes.isNotEmpty()) append("（速记 ${b.notes.size} 条）")
+                append('\n')
+            }
         }
         if (r.extra.isNotEmpty()) {
             append("\n另外做了的：\n")

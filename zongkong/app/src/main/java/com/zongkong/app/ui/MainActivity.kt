@@ -190,6 +190,7 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 composable("wizard/plan") { PlanWizard(nav) }
                 composable("wizard/review") { TodayScreen(nav) }
                 composable("today") { TodayScreen(nav) }
+                composable("playbook") { PlaybookScreen(nav) }
                 composable("stuckpick") { StuckPick(nav) }
                 composable("plan") { PlanScreen(nav) }
                 composable("plan/new") { PlanModeWizard(nav) }

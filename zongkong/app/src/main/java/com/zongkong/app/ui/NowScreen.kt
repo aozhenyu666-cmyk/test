@@ -186,6 +186,7 @@ fun NowScreen(nav: NavHostController) {
         val hqBook by store.hq.collectAsStateWithLifecycle()
         HqStrip(config.hq, hqBook, now, store.zone, nav)
 
+        ScriptLine(nav)
         TodayLine(nav)
         PcStrip(nav)
         PartnerLine(nav)
@@ -417,6 +418,30 @@ private fun PcStrip(nav: NavHostController) {
 }
 
 /** 战友：信用、态度、现在的强度。点开看档案。 */
+/** 今天的预案（有的话）：现在这段 / 下一段。 */
+@Composable
+private fun ScriptLine(nav: NavHostController) {
+    val app = LocalContext.current.zk
+    val sig = LocalSignals.current
+    val book by app.store.plans.collectAsStateWithLifecycle()
+    val now = rememberNow(30_000)
+    val s = remember(book, now) { com.zongkong.core.plan.Playbook.today(book, now, app.store.zone) } ?: return
+    val pb = com.zongkong.core.plan.Playbook
+    val cur = pb.current(s, now, app.store.zone)
+    val next = pb.next(s, now, app.store.zone)
+    val late = pb.overdue(s, now, app.store.zone)
+    Panel(accent = if (late.isNotEmpty()) sig.warn else sig.plan, onClick = { nav.navigate("playbook") }, modifier = Modifier.testTag("script-line")) {
+        Text(if (s.locked) "预案" else "预案（草稿，还没定稿）", style = MaterialTheme.typography.labelLarge, color = sig.plan)
+        when {
+            cur != null -> Text("现在 ${cur.span} ${cur.what}", style = MaterialTheme.typography.titleSmall)
+            next != null -> Text("下一段 ${next.span} ${next.what}", style = MaterialTheme.typography.titleSmall)
+            else -> Text("今天的段都过了", style = MaterialTheme.typography.titleSmall)
+        }
+        if (late.isNotEmpty()) Hint("过了点还没交代：" + late.joinToString("、") { it.what.take(10) } + "。做完、走 B 还是跳过？")
+        else (cur ?: next)?.planB?.takeIf { it.isNotBlank() }?.let { Hint("B：$it") }
+    }
+}
+
 /** 今天的清单：做完几步、没做几步，点进去看全部。 */
 @Composable
 private fun TodayLine(nav: NavHostController) {

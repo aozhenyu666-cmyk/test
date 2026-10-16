@@ -6,6 +6,7 @@ import com.zongkong.app.zk
 import com.zongkong.core.DayClock
 import com.zongkong.core.hq.Hq
 import com.zongkong.core.hq.HqTrigger
+import com.zongkong.core.plan.Playbook
 import com.zongkong.core.plan.Plans
 import java.time.Instant
 
@@ -93,6 +94,7 @@ object HqRunner {
         }
 
         boss(context, now, minute)
+        playbook(context, now)
 
         if (!cfg.proactive) return
 
@@ -120,6 +122,26 @@ object HqRunner {
                 fallback = "下午了，「${main.title}」还没开始。现在开始，还是拆一步？",
             )
             Buzz.once(context, Buzz.Level.FIRM)
+        }
+    }
+
+    /**
+     * 预案（试验）：定稿后每段四个节点出声——开始前 5 分钟、开始、过半速记、结束交结果。
+     * 通知点开就是预案页；开着“主动找你时开口说”就念出来（睡觉时段不念）。
+     */
+    private fun playbook(context: Context, now: Long) {
+        val app = context.zk
+        val store = app.store
+        val script = Playbook.today(store.plans.value, now, store.zone) ?: return
+        val prompts = Playbook.due(script, now, store.zone)
+        if (prompts.isEmpty()) return
+        val config = store.config.value
+        val loud = config.voice.speakProactive && !Hq.quiet(config.hq, now, store.zone)
+        prompts.forEach { p ->
+            app.actions.plan.scriptPrompted(p.block.id, p.node)
+            Notifications.alert(context, "预案 · ${p.node.label} · ${p.block.span}", p.text, "playbook")
+            if (p.node == Playbook.Node.START || p.node == Playbook.Node.END) Buzz.once(context, Buzz.Level.FIRM) else Buzz.once(context, Buzz.Level.GENTLE)
+            if (loud) Speaker.speak(context, p.text)
         }
     }
 
@@ -296,7 +318,8 @@ object HqRunner {
         if (!cfg.enabled) return null
         val start = Hq.todayStart(cfg, now, zone)
         val morning = DayClock.at(DayClock.date(now, zone), cfg.morningAt, zone)
-        return listOf(start - 10 * 60_000, start, start + 5 * 60_000 + 5_000, morning, morning + 86_400_000L, start + 86_400_000L - 10 * 60_000)
+        val node = Playbook.today(app.store.plans.value, now, zone)?.let { Playbook.nextNode(it, now, zone) }
+        return listOfNotNull(start - 10 * 60_000, start, start + 5 * 60_000 + 5_000, morning, morning + 86_400_000L, start + 86_400_000L - 10 * 60_000, node?.plus(2_000))
             .filter { it > now }.minOrNull()
     }
 }

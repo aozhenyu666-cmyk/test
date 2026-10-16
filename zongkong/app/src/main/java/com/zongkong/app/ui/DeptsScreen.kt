@@ -525,6 +525,7 @@ private fun PlanPart(work: Work, now: Long, nav: NavHostController) {
         BigButton("晨间部署", { nav.navigate("wizard/plan") }, Modifier.weight(1f), color = sig.plan)
         BigButton("今天的清单", { nav.navigate("today") }, Modifier.weight(1f), color = sig.hq)
     }
+    OutlinedButton(onClick = { nav.navigate("playbook") }, modifier = Modifier.fillMaxWidth().enter(2).testTag("dept-playbook")) { Text("今天的预案（试验）：排成几段，每段带 B 方案") }
     PlanInstruments(work, now, nav)
     SectionLabel("今天的时间线（${todays.size}）")
     Panel(modifier = Modifier.enter(3)) {
