@@ -108,6 +108,8 @@ fun todayMarks(cards: List<CardAttempt>, drills: List<DrillRow>, deeds: List<Dee
  */
 @Composable
 fun HomeScreen(
+    onEndgame: () -> Unit,
+    onBrake: () -> Unit,
     onLine: (Long?) -> Unit,
     onLive: (Long) -> Unit,
     onBank: () -> Unit,
@@ -165,6 +167,24 @@ fun HomeScreen(
                 )
                 Text(AppZone.format("M月d日", System.currentTimeMillis()), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Settings, contentDescription = "设置") }
+            }
+
+            // 0.15：首页两个最常用的入口——磨刀（残局）和急刹
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Entry(
+                    title = "残局",
+                    sub = "点破绽 · 先开一枪 · 翻底牌",
+                    accent = MaterialTheme.colorScheme.tertiary,
+                    onClick = onEndgame,
+                    modifier = Modifier.weight(1f),
+                )
+                Entry(
+                    title = "急刹",
+                    sub = "冲动上头时点这里，十几秒",
+                    accent = MaterialTheme.colorScheme.error,
+                    onClick = onBrake,
+                    modifier = Modifier.weight(1f),
+                )
             }
 
             MainLine(

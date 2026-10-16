@@ -147,7 +147,7 @@ class ThinkViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 不用挑素材，直接练：先用你展开的那段；没有就用一段还没练过的（教练在后台备好的优先）；
+     * 不用挑素材，直接练：先用你展开的那段；没有就用一段还没练过的（你自己的优先，教练写的排最后）；
      * 一段都没有就现写一段。
      */
     fun beginAuto(lens: Lens) = viewModelScope.launch {
@@ -161,8 +161,10 @@ class ThinkViewModel(app: Application) : AndroidViewModel(app) {
         }
         val list = materials.value
         val m = _opened.value?.let { id -> list.firstOrNull { it.id == id } }
+            // 先用你自己的（分享、粘贴、拍的、题库里的材料），教练写的排最后
+            ?: list.firstOrNull { it.uses == 0 && it.source != MaterialSource.MADE && it.source != MaterialSource.BANK && it.source != MaterialSource.BUILTIN }
+            ?: list.firstOrNull { it.uses == 0 && it.source == MaterialSource.BANK }
             ?: list.firstOrNull { it.uses == 0 && it.source == MaterialSource.MADE }
-            ?: list.firstOrNull { it.uses == 0 && it.source != MaterialSource.BANK }
             ?: run {
                 _busy.value = "教练在写一段素材……"
                 when (val r = yishou.materials.make(null)) {

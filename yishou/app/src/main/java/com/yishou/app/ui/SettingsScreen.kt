@@ -244,11 +244,11 @@ fun SettingsScreen(
             HorizontalDivider()
             SectionTitle("打开关注的应用之前")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("line" to "主线下一手", "card" to "一张题卡", "check" to "只打卡").forEach { (k, label) ->
+                listOf("endgame" to "残局", "line" to "主线", "card" to "题卡", "check" to "只打卡").forEach { (k, label) ->
                     FilterChip(selected = prefs.gateMode == k, onClick = { vm.update { it.copy(gateMode = k, gateCard = k == "card") } }, label = { Text(label) })
                 }
             }
-            Text("主线下一手：拿你在下的那一局的下一问来问你，过了规则才放行（没有在下的局就退成一张题卡）。只打卡：说好看完做什么就放行。", style = MaterialTheme.typography.bodySmall)
+            Text("残局（推荐）：静音、单手，点出破绽那一句再翻底牌，几秒到十几秒；点错不罚，外围涂暗再点一次，没中的明天再来。残局只从你导入的题库和素材里加工。主线：问你在下的那一局的下一问。只打卡：说好看完做什么就放行。", style = MaterialTheme.typography.bodySmall)
 
             HorizontalDivider()
             SectionTitle("题库")

@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class, Material::class, DrillRow::class, Deed::class, MaterialKey::class, Job::class, JobStep::class, Outside::class, Line::class, Move::class, Echo::class],
-    version = 10,
+    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class, Material::class, DrillRow::class, Deed::class, MaterialKey::class, Job::class, JobStep::class, Outside::class, Line::class, Move::class, Echo::class, Endgame::class, Impulse::class],
+    version = 11,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -21,6 +21,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun jobs(): JobDao
     abstract fun lines(): LineDao
     abstract fun echoes(): EchoDao
+    abstract fun endgames(): EndgameDao
+    abstract fun impulses(): ImpulseDao
 
     companion object {
         /** v0.5：给轮次和断点加上“骰子第几面”。旧数据保留，面记为 0。 */
@@ -178,6 +180,17 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /** 岔路 1：回响队列（规则、差值、结论在下一次同类场景开局时推出来）。 */
+        /** 0.15：残局、急刹 */
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `endgame` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `text` TEXT NOT NULL, `crux` TEXT NOT NULL, `ask` TEXT NOT NULL, `aim` TEXT NOT NULL, `shot` TEXT NOT NULL, `law` TEXT NOT NULL, `source` TEXT NOT NULL, `sourceKey` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `seen` INTEGER NOT NULL, `hits` INTEGER NOT NULL, `lastAt` INTEGER, `lastHit` INTEGER NOT NULL, `dueAt` INTEGER NOT NULL)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_endgame_sourceKey` ON `endgame` (`sourceKey`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_endgame_dueAt` ON `endgame` (`dueAt`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `impulse` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `raw` TEXT NOT NULL, `facts` TEXT NOT NULL, `fantasies` TEXT NOT NULL, `proof` TEXT NOT NULL, `hasProof` INTEGER, `worst` TEXT NOT NULL, `decision` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `checkAt` INTEGER, `happened` INTEGER)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_impulse_createdAt` ON `impulse` (`createdAt`)")
+            }
+        }
+
         val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -191,7 +204,7 @@ abstract class AppDatabase : RoomDatabase() {
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "yishou.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
                 .build()
     }
 }

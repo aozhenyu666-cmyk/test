@@ -48,6 +48,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        routeFrom(intent)
         setContent {
             YishouTheme {
                 val nav = rememberNavController()
@@ -89,6 +90,8 @@ class MainActivity : ComponentActivity() {
                 NavHost(navController = nav, startDestination = "board", modifier = Modifier.padding(outer)) {
                     composable("board") {
                         HomeScreen(
+                            onEndgame = { nav.navigate("endgame") },
+                            onBrake = { nav.navigate("brake") },
                             onBank = { nav.navigate("bank") },
                             onLine = { id -> nav.navigate(if (id == null) "line" else "line?id=$id") },
                             onLive = { id -> nav.navigate("live/$id") },
@@ -214,10 +217,33 @@ class MainActivity : ComponentActivity() {
                     composable("bets") {
                         BetScreen(onBack = { nav.navigateUp() })
                     }
+                    composable("endgame") {
+                        com.yishou.app.ui.EndgameScreen(onBack = { nav.navigateUp() }, onBank = { nav.navigate("bank") })
+                    }
+                    composable("brake") {
+                        com.yishou.app.ui.BrakeScreen(onBack = { nav.navigateUp() })
+                    }
 
                 }
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        routeFrom(intent)
+    }
+
+    /** 长按图标的“急刹”、通知里的按钮：直接打开指定的那一页 */
+    private fun routeFrom(intent: android.content.Intent?) {
+        val to = intent?.getStringExtra(EXTRA_ROUTE) ?: return
+        intent.removeExtra(EXTRA_ROUTE)
+        (application as YishouApp).pendingRoute.value = to
+    }
+
+    companion object {
+        const val EXTRA_ROUTE = "route"
     }
 }

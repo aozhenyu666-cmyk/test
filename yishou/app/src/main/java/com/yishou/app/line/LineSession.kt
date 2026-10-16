@@ -126,6 +126,13 @@ class LineSession(
 
         // 2. 本机规则
         val normal = s.ask == Ask.NORMAL || s.ask == Ask.ANCHOR
+        // 降阶的小问题：照抄主线标题不算（“资料分析”答“资料分析”），要说一个你自己的词
+        if (!normal && Lines.parrot(text, line.anchor, line.title, s.ask, s.face)) {
+            val hint = "这是题目里的词，照抄不算。说一个你自己想起来的。"
+            record(line, s, text, LineVerdict.THIN, hint, "", voice, latency)
+            _state.update { it.copy(say = "$hint ${s.question}", streak = 0, moves = it.moves + 1, askedAt = clock()) }
+            return
+        }
         val rules = when {
             !normal -> TalkRules.SMALL
             trap -> TalkRules.CUT
@@ -273,6 +280,16 @@ object Lines {
     }
 
     fun anchorQuestion(anchor: String) = "回到主线：关于「$anchor」，到现在你的结论是什么？一句话。"
+
+    /** 降阶的回答是不是照抄了主线标题（“哪个词最拿不准”那一问本来就要从标题里挑，不算） */
+    fun parrot(text: String, anchor: String, title: String, ask: Ask, face: Int): Boolean {
+        if (ask == Ask.SMALLER && face == 4) return false
+        val t = Words.norm(text)
+        if (t.isEmpty()) return false
+        return listOf(anchor, title).map { Words.norm(it) }.filter { it.isNotEmpty() }.any { a ->
+            t == a || (a.contains(t) && t.length * 5 >= a.length * 3)
+        }
+    }
 
     const val TRAP_PREFIX = "捉虫："
     const val FLIP_PREFIX = "变条件："

@@ -36,10 +36,13 @@ object EchoKind {
     const val DELTA = "delta"
     /** 主线回到主干时的结论 */
     const val CONCLUSION = "conclusion"
+    /** 残局翻底牌时收进棋谱的走子铁律 */
+    const val LAW = "law"
 
     fun label(k: String) = when (k) {
         RULE -> "你的规则"
         DELTA -> "上次的差值"
+        LAW -> "你的棋谱"
         else -> "你的结论"
     }
 }

@@ -60,6 +60,7 @@ import com.yishou.app.ui.MatrixLoader
 import com.yishou.app.ui.VoiceTextField
 import com.yishou.app.ui.BrakeButton
 import com.yishou.app.ui.EchoCard
+import com.yishou.app.ui.EndgameBoard
 import com.yishou.app.system.Variant
 import com.yishou.app.card.SessionState
 import com.yishou.app.window.WindowActivity
@@ -246,6 +247,14 @@ private fun GateScreen(
                         Button(onClick = { vm.answerFollowUp(true) }) { Text("做了") }
                         OutlinedButton(onClick = { vm.answerFollowUp(false) }) { Text("没做") }
                     }
+                }
+                s.endgame != null -> {
+                    EndgameBoard(s.endgame, shoot = false, onFlip = { hit, _ -> vm.endgameFlipped(hit) }, onLaw = vm::saveLaw)
+                    if (s.endgameDone) {
+                        if (s.isTest) OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
+                        else PassBlock(s, vm, needsDelta = false)
+                    }
+                    OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
                 }
                 s.useLine -> {
                     LineGate(ln, vm)

@@ -43,6 +43,10 @@ data class GateState(
     val echo: com.yishou.app.data.Echo? = null,
     /** 岔路：题卡答错后写的差值（本来想……，漏看了……，下次见到……先……） */
     val delta: String = "",
+    /** 这一关是一个残局（静音单手：点破绽、翻底牌） */
+    val endgame: com.yishou.app.data.Endgame? = null,
+    /** 残局翻了底牌 */
+    val endgameDone: Boolean = false,
 ) {
     val isTest: Boolean get() = triggerPackage == null
 }
@@ -88,7 +92,18 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         lineSession.stop()
         if (inWindow) return
         viewModelScope.launch {
-            if (chalu) pushEcho(pkg.orEmpty())
+            pushEcho(pkg.orEmpty())
+            // 残局：有到期的就下一局；没有就退成一张题卡（并在后台加工新的）
+            if (prefs.gateMode == "endgame") {
+                val now = System.currentTimeMillis()
+                val dao = yishou.database.endgames()
+                val e = com.yishou.app.endgame.Endgames.pick(dao.due(now, 60), now)
+                if (dao.countDue(now) < 4) yishou.prefetchEndgames()
+                if (e != null) {
+                    _state.update { it.copy(endgame = e, gateCard = false) }
+                    return@launch
+                }
+            }
             // 主线下一手：有在下的局就问它的下一问；没有就退成一张题卡
             val open = if (prefs.gateMode == "line") yishou.database.lines().latestOpen() else null
             when {
@@ -128,6 +143,15 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch { yishou.database.echoes().update(e.copy(confirmed = e.confirmed + 1)) }
     }
+
+    /** 残局翻了底牌：记下点没点中，排下次 */
+    fun endgameFlipped(firstHit: Boolean) {
+        val e = _state.value.endgame ?: return
+        _state.update { it.copy(endgameDone = true) }
+        viewModelScope.launch { yishou.database.endgames().update(com.yishou.app.endgame.Endgames.after(e, firstHit, System.currentTimeMillis())) }
+    }
+
+    fun saveLaw(text: String) = viewModelScope.launch { yishou.echo(text, com.yishou.app.data.EchoKind.LAW) }
 
     fun onDeltaChange(text: String) = _state.update { it.copy(delta = text) }
 
@@ -191,6 +215,8 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         val card = session.state.value
         val cardFailed = card.error != null && card.round == null
         if (s.gateCard && !card.done && !cardFailed) return
+        // 残局：翻了底牌才放行（点没点中都放，没中的明天再来）
+        if (s.endgame != null && !s.endgameDone) return
         // 主线：接住一手，或者降阶到底、老实记下“先放着”，才放行（岔路：先放着不放行）
         if (s.useLine && line.value.caught == 0 && (chalu || !line.value.parked)) return
         // 岔路：答错了先写差值，存进回响队列，下次打开这个 App 开局就推回来

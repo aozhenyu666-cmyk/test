@@ -32,6 +32,7 @@ object Reminders {
     private const val WINDOW_CHECK = "window_check"
     private const val PAUSE_END = "pause_end"
     private const val IDLE = "idle"
+    private const val IMPULSE_CHECK = "impulse_check"
     /** 只在白天叫：8 点到 23 点 */
     private const val DAY_START = 8
     private const val DAY_END = 23
@@ -94,6 +95,11 @@ object Reminders {
         }
     }
 
+    /** 急刹后还是去做了：30 分钟后回来问最坏后果出没出现 */
+    fun scheduleImpulseCheck(context: Context, at: Long) {
+        set(context.getSystemService(AlarmManager::class.java), at, pending(context, IMPULSE_CHECK, 13))
+    }
+
     private fun pending(context: Context, action: String, code: Int): PendingIntent = PendingIntent.getBroadcast(
         context,
         code,
@@ -152,6 +158,11 @@ object Reminders {
                     move?.let { "上一手还在等你：$it" } ?: "点开，从断点接着走一手。",
                     MainActivity::class.java,
                 )
+            }
+            IMPULSE_CHECK -> {
+                val due = app.database.impulses().recent().filter { it.happened == null && (it.checkAt ?: Long.MAX_VALUE) <= now + 60_000 }
+                val first = due.minByOrNull { it.checkAt ?: 0 } ?: return
+                Notifications.showImpulseCheck(context, first.worst)
             }
             PAUSE_END -> {
                 if (WindowClock.active(now, app.settings.app.value, zone) == null) return

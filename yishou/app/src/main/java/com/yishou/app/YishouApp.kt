@@ -103,7 +103,7 @@ class YishouApp : Application() {
         if (!com.yishou.app.system.Variant.chalu) return
         val sp = getSharedPreferences("chalu", android.content.Context.MODE_PRIVATE)
         if (sp.getBoolean("init", false)) return
-        settings.updateApp { it.copy(talkLevel = "HARD", gateMode = "line", predictFirst = true) }
+        settings.updateApp { it.copy(talkLevel = "HARD", gateMode = "endgame", predictFirst = true) }
         sp.edit().putBoolean("init", true).apply()
     }
 
@@ -160,12 +160,17 @@ class YishouApp : Application() {
 
     private val makingMaterial = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    /** 后台备两段教练写的素材，练思维时不用等（没填接口时什么都不做） */
+    /**
+     * 后台备两段教练写的素材，练思维时不用等（没填接口时什么都不做）。
+     * 素材库里还有你自己导入、分享、粘贴进来没练过的，就不现编——AI 先去加工你的东西。
+     */
     fun prefetchMaterials() {
         if (!settings.llm.value.isComplete) return
         if (!makingMaterial.compareAndSet(false, true)) return
         appScope.launch {
             try {
+                val own = database.think().recentMaterials(300).count { it.uses == 0 && it.source != com.yishou.app.data.MaterialSource.MADE && it.source != com.yishou.app.data.MaterialSource.BUILTIN }
+                if (own > 0) return@launch
                 repeat(2) {
                     val fresh = database.think().recentMaterials(30).count { it.source == com.yishou.app.data.MaterialSource.MADE && it.uses == 0 }
                     if (fresh >= 2) return@launch
@@ -174,6 +179,87 @@ class YishouApp : Application() {
             } finally {
                 makingMaterial.set(false)
             }
+        }
+    }
+
+    /** 把原文加工成残局（只加工，不现编） */
+    val endgameGen: com.yishou.app.llm.EndgameGen by lazy {
+        com.yishou.app.llm.LlmEndgameGen(ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(60), usage = stats))
+    }
+
+    /** 急刹的切分：要快，超时就用本机的拆法 */
+    val brakeCoach: com.yishou.app.llm.BrakeCoach by lazy {
+        com.yishou.app.llm.LlmBrakeCoach(ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(12), usage = stats))
+    }
+
+    private val makingEndgames = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * 后台摆残局：
+     * 1. 题库里带依据句的题，本机直接变成残局（不经过模型）；
+     * 2. 你导入、分享、粘贴、拍进来的素材，交给模型截出残局，本机核对是原文才收（每次最多加工 3 段）。
+     * 教练自己写的素材不拿来做残局。
+     */
+    fun prefetchEndgames() {
+        if (!makingEndgames.compareAndSet(false, true)) return
+        appScope.launch {
+            try {
+                val dao = database.endgames()
+                val keys = dao.keys().toHashSet()
+                val now = System.currentTimeMillis()
+                var added = 0
+                for (row in database.cards().recent(3000)) {
+                    if (row.source != com.yishou.app.data.CardSource.BANK || "card:${row.id}" in keys) continue
+                    val card = runCatching { com.yishou.app.card.Card.parse(org.json.JSONObject(row.json)) }.getOrNull() ?: continue
+                    val e = com.yishou.app.endgame.Endgames.fromCard(row.id, card, now + added) ?: continue
+                    if (dao.insert(e) > 0) added++
+                    if (added >= 200) break
+                }
+                if (!settings.llm.value.isComplete || dao.countDue(now) >= 8) return@launch
+                val sp = getSharedPreferences("endgame", android.content.Context.MODE_PRIVATE)
+                val doneIds = sp.getStringSet("materials", emptySet()).orEmpty().toMutableSet()
+                val todo = database.think().recentMaterials(300).filter {
+                    it.source != com.yishou.app.data.MaterialSource.MADE && it.source != com.yishou.app.data.MaterialSource.BUILTIN &&
+                        it.id.toString() !in doneIds && com.yishou.app.think.Words.norm(it.text).length >= 60
+                }.take(3)
+                for (m in todo) {
+                    val r = endgameGen.make(m.text)
+                    if (r is com.yishou.app.llm.LlmResult.Err) break
+                    (r as com.yishou.app.llm.LlmResult.Ok).value.forEachIndexed { i, d ->
+                        dao.insert(com.yishou.app.endgame.Endgames.fromDraft(d, "material:${m.id}#$i", System.currentTimeMillis()))
+                    }
+                    doneIds += m.id.toString()
+                    sp.edit().putStringSet("materials", doneIds.toSet()).apply()
+                }
+            } catch (e: Exception) {
+                RunLog.e("残局", "摆残局失败", e)
+            } finally {
+                makingEndgames.set(false)
+            }
+        }
+    }
+
+    /** 0.15 起入口默认用残局（升级上来的也换一次；之后在设置里改了就听你的） */
+    private fun v15Defaults() {
+        val sp = getSharedPreferences("upgrade", android.content.Context.MODE_PRIVATE)
+        if (sp.getBoolean("v15_gate", false)) return
+        settings.updateApp { it.copy(gateMode = "endgame") }
+        sp.edit().putBoolean("v15_gate", true).apply()
+    }
+
+    /** 长按图标的“急刹”：冲动上头时一下就到 */
+    private fun installShortcuts() {
+        runCatching {
+            val intent = android.content.Intent(this, MainActivity::class.java)
+                .setAction(android.content.Intent.ACTION_VIEW)
+                .putExtra(MainActivity.EXTRA_ROUTE, "brake")
+            val sc = androidx.core.content.pm.ShortcutInfoCompat.Builder(this, "brake")
+                .setShortLabel("急刹")
+                .setLongLabel("急刹：冲动上头时点这里")
+                .setIcon(androidx.core.graphics.drawable.IconCompat.createWithResource(this, R.mipmap.ic_launcher))
+                .setIntent(intent)
+                .build()
+            androidx.core.content.pm.ShortcutManagerCompat.pushDynamicShortcut(this, sc)
         }
     }
 
@@ -206,6 +292,7 @@ class YishouApp : Application() {
         database = AppDatabase.create(this)
         settings = SettingsStore(this)
         chaluDefaults()
+        v15Defaults()
         AppZone.id = settings.app.value.timeZone
         stats = StatsStore(this)
         val logError: (String, String) -> Unit = { kind, message -> RunLog.e(kind, message) }
@@ -228,6 +315,8 @@ class YishouApp : Application() {
 
         prefetchCards()
         prefetchMaterials()
+        prefetchEndgames()
+        installShortcuts()
 
         // 时区设置一变就生效
         appScope.launch { settings.app.collect { AppZone.id = it.timeZone } }
