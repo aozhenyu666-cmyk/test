@@ -102,6 +102,8 @@ interface AgentEnv {
     fun dossier(): com.zongkong.core.boss.Dossier = com.zongkong.core.boss.Dossier()
     fun updateDossier(f: (com.zongkong.core.boss.Dossier) -> com.zongkong.core.boss.Dossier): com.zongkong.core.boss.Dossier = dossier()
     fun hqSessions(): List<com.zongkong.core.hq.HqSession> = emptyList()
+    /** 今天的日记录（娱乐时长、被弹回、紧急放行）。 */
+    fun dayLog(): com.zongkong.core.DayLog = com.zongkong.core.DayLog(today().toString())
     /** [from, to] 的设备事件（含 from 之前最后一条）。 */
     fun deviceEvents(from: Long, to: Long): List<com.zongkong.core.boss.DevEvent> = emptyList()
     /** 现在能看到什么（使用情况授权、截图抽查开没开），写给总控看。 */
@@ -161,6 +163,7 @@ class ZkTools(private val env: AgentEnv) {
             "get_thread", "看一件事的详情：为什么、当前判断、断点、下一步、完成依据、全部行动（带行动键）、最近记录。",
             listOf(Param("thread", "string", "事项编号（ZK-XXXX）或标题", required = true)),
         ),
+        ToolSpec("today_report", "今天的清单：排了的每一步做了没有（✓ 做完 / ○ 没做 / ✗ 卡住 / → 改期）、另外做了什么、到期的约定、做事和娱乐时长、明天第一步。照着记录列，用户问今天做了什么、哪些没完成、日终时先调这个。"),
         ToolSpec("list_gates", "列出节律关卡（id、部门、时间、验收方式、今天的状态）和待生效的放宽改动。"),
         ToolSpec("yishou_status", "读一手（行为管理部）今天的训练：练了几组、目标几组、在练什么、陪练窗口、昨晚总结的规则。"),
         ToolSpec(
@@ -502,6 +505,12 @@ class ZkTools(private val env: AgentEnv) {
                 "get_overview" -> ToolResult(Snapshot.full(env), "看了一眼全局")
                 "list_threads" -> listThreads(a)
                 "get_thread" -> getThread(a)
+                "today_report" -> ToolResult(
+                    com.zongkong.core.plan.DayReport.text(
+                        com.zongkong.core.plan.DayReport.build(env.work(), env.plans(), env.dayLog(), env.hqSessions(), env.dossier(), env.pcSide(), env.now(), env.zone),
+                    ),
+                    "列了今天的清单",
+                )
                 "list_gates" -> ToolResult(Snapshot.gates(env.config(), env.status(), env.now()), "看了节律关卡")
                 "yishou_status" -> env.yishou().let { ToolResult(it, "读了一手的训练") }
                 "create_thread" -> createThread(a)

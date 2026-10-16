@@ -53,7 +53,7 @@ class HqActions(private val context: Context, private val store: Store, private 
         store.updateHq { it.put(done) }
         store.touch()
         Buzz.stop(context)
-        val report = Hq.report(done)
+        val report = Hq.report(done) + "\n\n" + com.zongkong.core.plan.DayReport.text(actions.dayReport())
         val t = now()
         store.updateWork { w ->
             WorkOps.create(w, Kind.NOTE, mapOf(
@@ -66,7 +66,7 @@ class HqActions(private val context: Context, private val store: Store, private 
         val gate = store.status().gates.firstOrNull { it.gate.id == "hq_review" }
         if (gate == null || gate.done) return "已封存"
         return when (val r = actions.submit("hq_review", report)) {
-            is Actions.SubmitResult.Judged -> if (r.verdict.pass) "日终验收通过" else "日终验收没通过：${r.verdict.feedback}"
+            is Actions.SubmitResult.Judged -> if (r.verdict.pass) "今天的清单已交" else "日终验收：${r.verdict.feedback}"
             is Actions.SubmitResult.Unavailable -> if (r.degradedLeft > 0) {
                 (actions.submitDegraded("hq_review", report, r.reason) as? Actions.SubmitResult.Judged)?.verdict?.let { if (it.pass) "日终验收（降级）通过" else it.feedback } ?: r.reason
             } else "AI 验收不可用：${r.reason}"

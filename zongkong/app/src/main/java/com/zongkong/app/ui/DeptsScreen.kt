@@ -523,7 +523,7 @@ private fun PlanPart(work: Work, now: Long, nav: NavHostController) {
     }
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.enter(2)) {
         BigButton("晨间部署", { nav.navigate("wizard/plan") }, Modifier.weight(1f), color = sig.plan)
-        BigButton("晚间复盘", { nav.navigate("wizard/review") }, Modifier.weight(1f), color = sig.hq)
+        BigButton("今天的清单", { nav.navigate("today") }, Modifier.weight(1f), color = sig.hq)
     }
     PlanInstruments(work, now, nav)
     SectionLabel("今天的时间线（${todays.size}）")

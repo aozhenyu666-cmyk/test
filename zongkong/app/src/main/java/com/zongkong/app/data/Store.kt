@@ -448,7 +448,7 @@ class Store(private val context: Context) {
         val f = File(dir, "config.json")
         if (!f.exists()) return Config()
         return try {
-            ZkJson.decodeFromString(Config.serializer(), f.readText())
+            com.zongkong.core.Defaults.migrate(ZkJson.decodeFromString(Config.serializer(), f.readText()))
         } catch (e: Exception) {
             Log.e(TAG, "配置文件读不了，备份后用默认配置", e)
             f.copyTo(File(dir, "config.broken.${System.currentTimeMillis()}.json"), overwrite = true)

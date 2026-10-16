@@ -186,6 +186,7 @@ fun NowScreen(nav: NavHostController) {
         val hqBook by store.hq.collectAsStateWithLifecycle()
         HqStrip(config.hq, hqBook, now, store.zone, nav)
 
+        TodayLine(nav)
         PcStrip(nav)
         PartnerLine(nav)
 
@@ -416,6 +417,35 @@ private fun PcStrip(nav: NavHostController) {
 }
 
 /** 战友：信用、态度、现在的强度。点开看档案。 */
+/** 今天的清单：做完几步、没做几步，点进去看全部。 */
+@Composable
+private fun TodayLine(nav: NavHostController) {
+    val app = LocalContext.current.zk
+    val sig = LocalSignals.current
+    val work by app.store.work.collectAsStateWithLifecycle()
+    val today by app.store.today.collectAsStateWithLifecycle()
+    val now = rememberNow(60_000)
+    val r = remember(work, today, now) { app.actions.dayReport(now) }
+    if (r.empty) return
+    Panel(onClick = { nav.navigate("today") }, modifier = Modifier.testTag("today-line")) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            ProgressRing(if (r.planned.isEmpty()) 1f else r.doneCount / r.planned.size.toFloat(), sig.free, size = 40.dp, stroke = 3.dp) {
+                Text("${r.doneCount}", style = MaterialTheme.typography.labelMedium.merge(Mono), color = sig.free)
+            }
+            Column(Modifier.weight(1f)) {
+                Text("今天的清单", style = MaterialTheme.typography.titleSmall)
+                val notDone = r.notDone.size
+                Hint(buildString {
+                    if (r.planned.isNotEmpty()) append("排了 ${r.planned.size} 步，做完 ${r.doneCount}") else append("没排")
+                    if (notDone > 0) append("，还有 $notDone 步没做")
+                    if (r.extra.isNotEmpty()) append("，另外做了 ${r.extra.size} 样")
+                })
+            }
+            Text("→", style = MaterialTheme.typography.labelLarge, color = sig.muted)
+        }
+    }
+}
+
 @Composable
 private fun PartnerLine(nav: NavHostController) {
     val app = LocalContext.current.zk
@@ -518,12 +548,12 @@ private fun Guidance(status: Status, date: String, now: Long, nav: NavHostContro
             }
         }
         hour >= 20 && status.gates.any { it.gate.id == "hq_review" && !it.done } -> {
-            Panel(accent = sig.hq, onClick = { nav.navigate("wizard/review") }, modifier = Modifier.enter(1)) {
+            Panel(accent = sig.hq, onClick = { nav.navigate("today") }, modifier = Modifier.enter(1)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     DeptSeal(Dept.HQ, size = 44.dp, filled = true)
                     Column(Modifier.weight(1f)) {
-                        Text("复盘今天，定好明天第一步", style = MaterialTheme.typography.titleSmall)
-                        Hint("点一点就行：今天每一步怎么样、明天先做什么。")
+                        Text("看一眼今天的清单", style = MaterialTheme.typography.titleSmall)
+                        Hint("总控照记录列好了：做了什么、没做什么。补一句明天第一步就能交。")
                     }
                     Text("开始 →", style = MaterialTheme.typography.labelLarge, color = sig.hq)
                 }

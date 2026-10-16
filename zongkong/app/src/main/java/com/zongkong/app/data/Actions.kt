@@ -49,6 +49,23 @@ class Actions(private val context: Context, private val store: Store) {
     /** 电脑：手机 ↔ 电脑互通。 */
     val device = DeviceActions(context, store, notion)
 
+    /** 今天的清单（照记录列的，不评判）。 */
+    fun dayReport(now: Long = System.currentTimeMillis()): com.zongkong.core.plan.DayReport.Report =
+        com.zongkong.core.plan.DayReport.build(
+            store.work.value, store.plans.value, store.today.value, store.hq.value.sessions,
+            store.dossier.value, store.device.value.pc, now, store.zone,
+        )
+
+    /** 交日终验收：清单 + 明天第一步 + 一句话（可空）。没开放 / 交过了就只记下。 */
+    suspend fun submitDayList(tomorrow: String, extra: String = ""): SubmitResult {
+        val text = buildString {
+            append(com.zongkong.core.plan.DayReport.text(dayReport()))
+            if (tomorrow.isNotBlank()) append("明天第一步（刚定）：").append(tomorrow.trim()).append('\n')
+            if (extra.isNotBlank()) append("一句话：").append(extra.trim()).append('\n')
+        }
+        return submit("hq_review", text)
+    }
+
     sealed interface SubmitResult {
         data class Judged(val verdict: Verdict) : SubmitResult
         data class Unavailable(val reason: String, val degradedLeft: Int) : SubmitResult

@@ -71,25 +71,12 @@ object Defaults {
             id = "hq_review",
             dept = Dept.HQ,
             title = "日终验收",
-            instruction = "对照今天排的行动逐条过：完成了没有、没完成的真实原因是什么、明天第一步做什么。" +
-                "AI 会看到今天的实际数据（各行动的状态和结果、娱乐时长、被弹回次数、紧急放行），对不上会被打回。",
-            template = """
-                主线：完成 / 没完成，实际做到：
-                次要：
-                没完成的真实原因（不是借口）：
-                今天最大的一个偏差：
-                明天第一步（几点、做什么）：
-            """.trimIndent(),
+            instruction = "总控已经把今天的清单列好了：排了什么、做了没有、时间花在哪。看一眼，补一句明天第一步，交上来就行。" +
+                "不评分、不打回——清单是照着记录列的，不用你写报告。",
             openAt = 18 * 60,
             deadline = 23 * 60,
-            verify = VerifyMode.AI,
-            minChars = 80,
-            rubric = """
-                逐条对照了今天排的行动，说清楚每件事完成没有
-                没完成的事写出了真实原因，而不是泛泛的“没时间”“状态不好”
-                和今天的实际数据（娱乐时长、被弹回次数、紧急放行）对得上，没有隐瞒
-                写了明天第一步，具体到时间和动作
-            """.trimIndent(),
+            verify = VerifyMode.TEXT,
+            minChars = 10,
         ),
         Gate(
             id = "plan_week",
@@ -104,6 +91,21 @@ object Defaults {
             evidenceMin = 1,
         ),
     )
+
+    /**
+     * 老配置升级：关卡存在 config.json 里，改了默认值老用户拿不到。这里把明确过时的那几道换成新的。
+     * - 0.8：日终验收不再由 AI 按标准逐条审（“他又说我没完成”），改成交今天的清单。
+     */
+    fun migrate(c: Config): Config {
+        val fresh = gates().associateBy { it.id }
+        val gates = c.gates.map { g ->
+            when {
+                g.id == "hq_review" && g.verify == VerifyMode.AI && g.rubric.contains("逐条对照") -> fresh.getValue("hq_review")
+                else -> g
+            }
+        }
+        return if (gates == c.gates) c else c.copy(gates = gates)
+    }
 
     /** 谋划思考部的方法卡，按天轮换。 */
     data class Method(val name: String, val how: String)

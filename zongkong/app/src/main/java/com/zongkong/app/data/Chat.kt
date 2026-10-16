@@ -147,6 +147,7 @@ class ChatRepo(private val context: Context, private val store: Store, private v
         override fun dossier(): com.zongkong.core.boss.Dossier = store.dossier.value
         override fun updateDossier(f: (com.zongkong.core.boss.Dossier) -> com.zongkong.core.boss.Dossier) = store.updateDossier(f)
         override fun hqSessions(): List<com.zongkong.core.hq.HqSession> = store.hq.value.sessions
+        override fun dayLog(): com.zongkong.core.DayLog = store.today.value
         override fun deviceEvents(from: Long, to: Long) = com.zongkong.app.system.Usage.events(context, from, to)
         override fun screenshots(from: Long, to: Long) = store.shots(from, to)
         override fun sensors(): String = buildString {
