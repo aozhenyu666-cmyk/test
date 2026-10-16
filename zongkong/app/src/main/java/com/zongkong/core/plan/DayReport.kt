@@ -61,6 +61,9 @@ object DayReport {
         val tomorrow: String,
         /** 今天的预案（有的话）：每段怎么样。 */
         val blocks: List<Block> = emptyList(),
+        /** 今天记的支出（分；-1 = 没用账本）。 */
+        val spent: Long = -1,
+        val spentLine: String = "",
     ) {
         val doneCount: Int get() = planned.count { it.mark == Mark.DONE || it.mark == Mark.WAIT }
         val notDone: List<Item> get() = planned.filter { it.mark != Mark.DONE && it.mark != Mark.WAIT && it.mark != Mark.CANCELLED }
@@ -97,6 +100,7 @@ object DayReport {
         pc: PcSide?,
         now: Long,
         zone: ZoneId,
+        ledger: com.zongkong.core.ledger.LedgerBook? = null,
     ): Report {
         val today = DayClock.date(now, zone)
         val dayFrom = DayClock.startOf(today, zone)
@@ -155,6 +159,8 @@ object DayReport {
             hqDone = hq.any { DayClock.dateKey(it.startedAt, zone) == today.toString() && !it.active && !it.early },
             tomorrow = tomorrow,
             blocks = Playbook.of(book, today.toString())?.blocks.orEmpty(),
+            spent = ledger?.takeIf { it.items.isNotEmpty() }?.let { com.zongkong.core.ledger.Ledger.total(com.zongkong.core.ledger.Ledger.day(it, today, zone)) } ?: -1,
+            spentLine = ledger?.takeIf { it.items.isNotEmpty() }?.let { com.zongkong.core.ledger.Ledger.line(com.zongkong.core.ledger.Ledger.day(it, today, zone)) }.orEmpty(),
         )
     }
 
@@ -188,6 +194,7 @@ object DayReport {
         if (r.emergencies > 0) append("，紧急放行 ${r.emergencies} 次")
         if (r.pcKnown) append("；电脑 ${hm(r.pcMinutes)}（娱乐 ${hm(r.pcFunMinutes)}）")
         append('\n')
+        if (r.spent >= 0) append("支出：").append(r.spentLine).append('\n')
         append("总控时间：").append(if (r.hqDone) "做了" else "还没做").append('\n')
         append("明天第一步：").append(r.tomorrow.ifBlank { "还没排" }).append('\n')
     }

@@ -102,6 +102,8 @@ interface AgentEnv {
     fun dossier(): com.zongkong.core.boss.Dossier = com.zongkong.core.boss.Dossier()
     fun updateDossier(f: (com.zongkong.core.boss.Dossier) -> com.zongkong.core.boss.Dossier): com.zongkong.core.boss.Dossier = dossier()
     fun hqSessions(): List<com.zongkong.core.hq.HqSession> = emptyList()
+    fun ledger(): com.zongkong.core.ledger.LedgerBook = com.zongkong.core.ledger.LedgerBook()
+    fun updateLedger(f: (com.zongkong.core.ledger.LedgerBook) -> com.zongkong.core.ledger.LedgerBook): com.zongkong.core.ledger.LedgerBook = ledger()
     /** 今天的日记录（娱乐时长、被弹回、紧急放行）。 */
     fun dayLog(): com.zongkong.core.DayLog = com.zongkong.core.DayLog(today().toString())
     /** [from, to] 的设备事件（含 from 之前最后一条）。 */
@@ -183,6 +185,19 @@ class ZkTools(private val env: AgentEnv) {
                 Param("text", "string", "速记内容 / 结果 / 原因"),
             ),
         ),
+        ToolSpec(
+            "add_expense",
+            "记一笔支出（账本，试验）。他说“午饭 18”、发来付款截图（你看图读出商户和金额）时用。看不清金额就问，不要猜。",
+            listOf(
+                Param("amount", "string", "金额（元），如 18.5", required = true),
+                Param("what", "string", "花在什么上（商户 / 东西）", required = true),
+                Param("category", "string", "分类（不填按商户猜）", choices = com.zongkong.core.ledger.Ledger.CATS),
+                Param("time", "string", "什么时候（不填 = 现在），如 今天 12:30"),
+                Param("source", "string", "来源", choices = listOf("手记", "截图")),
+            ),
+        ),
+        ToolSpec("ledger_summary", "看账本：今天、本周花了多少，按分类，最近几笔（带 id）。"),
+        ToolSpec("remove_expense", "删掉记错的一笔。", listOf(Param("id", "string", "那一笔的 id", required = true))),
         ToolSpec("list_gates", "列出节律关卡（id、部门、时间、验收方式、今天的状态）和待生效的放宽改动。"),
         ToolSpec("yishou_status", "读一手（行为管理部）今天的训练：练了几组、目标几组、在练什么、陪练窗口、昨晚总结的规则。"),
         ToolSpec(
@@ -526,10 +541,18 @@ class ZkTools(private val env: AgentEnv) {
                 "get_thread" -> getThread(a)
                 "today_report" -> ToolResult(
                     com.zongkong.core.plan.DayReport.text(
-                        com.zongkong.core.plan.DayReport.build(env.work(), env.plans(), env.dayLog(), env.hqSessions(), env.dossier(), env.pcSide(), env.now(), env.zone),
+                        com.zongkong.core.plan.DayReport.build(env.work(), env.plans(), env.dayLog(), env.hqSessions(), env.dossier(), env.pcSide(), env.now(), env.zone, env.ledger()),
                     ),
                     "列了今天的清单",
                 )
+                "add_expense" -> addExpense(a)
+                "ledger_summary" -> ToolResult(com.zongkong.core.ledger.Ledger.brief(env.ledger(), env.now(), env.zone), "看了账本")
+                "remove_expense" -> {
+                    val id = a.s("id")
+                    val e = env.ledger().items.firstOrNull { it.id == id } ?: return ToolResult.fail("账本里没有 $id")
+                    env.updateLedger { com.zongkong.core.ledger.Ledger.remove(it, id) }
+                    ToolResult("删了：${e.what} ${com.zongkong.core.ledger.Ledger.yuan(e.cents)} 元", "删一笔账")
+                }
                 "set_day_script" -> setDayScript(a)
                 "script_block" -> scriptBlock(a)
                 "list_gates" -> ToolResult(Snapshot.gates(env.config(), env.status(), env.now()), "看了节律关卡")
@@ -1363,6 +1386,19 @@ class ZkTools(private val env: AgentEnv) {
         return ToolResult("今天的主线定为「${x.title}」" + if (p != null && !inPlan) "（注意：它不在本周计划里）" else "", "今天主线：「${x.title}」")
     }
 
+    private fun addExpense(a: Args): ToolResult {
+        val lg = com.zongkong.core.ledger.Ledger
+        val cents = lg.cents(a.s("amount")) ?: return ToolResult.fail("金额没认出来：${a.s("amount")}")
+        val what = a.s("what").ifBlank { return ToolResult.fail("what 不能空") }
+        val now = env.now()
+        val at = a.opt("time")?.let { t -> TimeParse.parse(t, now, env.zone)?.let { TimeParse.startMillis(it, env.zone) } } ?: now
+        val cat = a.s("category").takeIf { it in lg.CATS } ?: lg.guessCat(what)
+        val e = com.zongkong.core.ledger.Expense("e" + now.toString(36) + env.rnd.nextInt(1000), at, cents, what, cat, a.s("source").ifBlank { "手记" })
+        env.updateLedger { lg.add(it, listOf(e)).first }
+        val today = lg.day(env.ledger(), DayClock.date(now, env.zone), env.zone)
+        return ToolResult("记了：$what ${lg.yuan(cents)} 元（$cat）。今天合计 ${lg.yuan(lg.total(today))} 元。", "记账 ${lg.yuan(cents)} 元")
+    }
+
     private fun setDayScript(a: Args): ToolResult {
         val pb = com.zongkong.core.plan.Playbook
         val now = env.now()
@@ -1452,6 +1488,7 @@ class ZkTools(private val env: AgentEnv) {
             "review" to "今天的清单（日终验收）",
             "playbook" to "今天的预案",
             "quick" to "记一下（收集箱）",
+            "ledger" to "账本",
             "digest" to "贴一段讨论（让你消化）",
             "rhythm" to "今天的节律关卡",
             "gate" to "某道关卡",
@@ -1486,6 +1523,7 @@ class ZkTools(private val env: AgentEnv) {
             "review" to "today",
             "playbook" to "playbook",
             "quick" to "quick",
+            "ledger" to "ledger",
             "digest" to "quick/digest",
             "rhythm" to "rhythm",
             "session" to "session",

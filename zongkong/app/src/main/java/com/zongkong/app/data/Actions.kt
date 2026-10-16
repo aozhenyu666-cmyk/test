@@ -53,7 +53,7 @@ class Actions(private val context: Context, private val store: Store) {
     fun dayReport(now: Long = System.currentTimeMillis()): com.zongkong.core.plan.DayReport.Report =
         com.zongkong.core.plan.DayReport.build(
             store.work.value, store.plans.value, store.today.value, store.hq.value.sessions,
-            store.dossier.value, store.device.value.pc, now, store.zone,
+            store.dossier.value, store.device.value.pc, now, store.zone, store.ledger.value,
         )
 
     /** 交日终验收：清单 + 明天第一步 + 一句话（可空）。没开放 / 交过了就只记下。 */

@@ -224,6 +224,21 @@ class Store(private val context: Context) {
         next
     }
 
+    // ---------- 账本（试验） ----------
+
+    private val _ledger = MutableStateFlow(loadJson("ledger.json", com.zongkong.core.ledger.LedgerBook.serializer()) ?: com.zongkong.core.ledger.LedgerBook())
+    val ledger: StateFlow<com.zongkong.core.ledger.LedgerBook> = _ledger.asStateFlow()
+
+    fun updateLedger(f: (com.zongkong.core.ledger.LedgerBook) -> com.zongkong.core.ledger.LedgerBook): com.zongkong.core.ledger.LedgerBook = synchronized(workLock) {
+        val next = f(_ledger.value)
+        if (next != _ledger.value) {
+            _ledger.value = next
+            val text = ZkJson.encodeToString(com.zongkong.core.ledger.LedgerBook.serializer(), next)
+            io.execute { writeAtomic(File(dir, "ledger.json"), text) }
+        }
+        next
+    }
+
     private fun <T> loadJson(name: String, ser: kotlinx.serialization.KSerializer<T>): T? {
         val f = File(dir, name)
         if (!f.exists()) return null
