@@ -141,7 +141,7 @@ object HqRunner {
             app.actions.plan.scriptPrompted(p.block.id, p.node)
             Notifications.alert(context, "预案 · ${p.node.label} · ${p.block.span}", p.text, "playbook")
             if (p.node == Playbook.Node.START || p.node == Playbook.Node.END) Buzz.once(context, Buzz.Level.FIRM) else Buzz.once(context, Buzz.Level.GENTLE)
-            if (loud) Speaker.speak(context, p.text)
+            if (loud) Voice.speak(context, p.text)
         }
     }
 

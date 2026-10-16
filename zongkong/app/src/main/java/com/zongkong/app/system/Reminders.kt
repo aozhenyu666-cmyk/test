@@ -36,6 +36,11 @@ object Reminders {
             val thread = work.rec(r.action.threadKey)
             Notifications.taskReminder(context, r.action, thread, r.follow)
             Buzz.once(context, if (r.follow) Buzz.Level.FIRM else Buzz.Level.GENTLE)
+            // 主要是它说：到点念出来（睡觉时段不念）
+            val cfg = app.store.config.value
+            if (cfg.voice.speakProactive && !com.zongkong.core.hq.Hq.quiet(cfg.hq, now, app.store.zone)) {
+                Voice.speak(context, if (r.follow) "「${r.action.title}」到点一会儿了，还没开始。" else "该开始「${r.action.title}」了。")
+            }
             app.store.updateWork { WorkOps.event(it, Event(now, if (r.follow) "followup" else "remind", r.action.key)) }
         }
         HqRunner.check(context)

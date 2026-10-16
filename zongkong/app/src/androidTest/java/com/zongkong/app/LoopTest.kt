@@ -915,4 +915,88 @@ class LoopTest {
         shot("e2e-95-grand-think-card")
         llm.shutdown()
     }
+
+    /**
+     * 0.8：今天的清单（照记录列）、很薄的事项提议立项、预案（写 → 定稿）、记一下、账本、无障碍自动修复卡片。
+     */
+    @Test
+    fun dayListPlaybookCaptureLedger() {
+        val now = System.currentTimeMillis()
+        val bj = app.store.zone
+        val rnd = kotlin.random.Random(8)
+        fun at(min: Long) = fmt.format(java.time.Instant.ofEpochMilli(now + min * 60_000L).atZone(bj))
+        var thin = ""
+        var done = ""
+        app.store.updateWork { w0 ->
+            val (w1, t1) = com.zongkong.core.work.WorkOps.create(w0, com.zongkong.core.work.Kind.THREAD, mapOf(F.TITLE to "国考计划"), now - 3 * 3600_000L, rnd)
+            val (w2, t2) = com.zongkong.core.work.WorkOps.create(w1, com.zongkong.core.work.Kind.THREAD, mapOf(F.TITLE to "行测提分", F.WHY to "笔试", F.CRITERIA to "75 分"), now, rnd)
+            val (w3, a) = com.zongkong.core.work.WorkOps.create(w2, com.zongkong.core.work.Kind.ACTION, mapOf(F.TITLE to "去查报名时间", F.THREAD to t1.key, F.PLAN to com.zongkong.core.work.Plan(at(-30), at(-10)).encode()), now, rnd)
+            val (w4, _) = com.zongkong.core.work.WorkOps.create(w3, com.zongkong.core.work.Kind.ACTION, mapOf(F.TITLE to "资料分析 20 题", F.THREAD to t2.key, F.PLAN to com.zongkong.core.work.Plan(at(20), at(60)).encode()), now, rnd)
+            thin = t1.key
+            done = a.key
+            w4
+        }
+        app.actions.work.complete(done, "11 月初报名", com.zongkong.core.work.WorkOps.Met.YES, "")
+        app.store.updatePlans { com.zongkong.core.plan.PlanBook() }
+        app.store.updateLedger { com.zongkong.core.ledger.LedgerBook() }
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java))
+        waitFor(hasTestTag("today-line"), 10_000, "首页清单栏")
+        go("today")
+        waitFor(hasTestTag("today-list"), 5_000, "今天的清单")
+        waitText("做完 1/2", 5_000)
+        waitText("11 月初报名", 5_000)
+        settle()
+        shot("e2e-96-today-list")
+        val report = com.zongkong.core.plan.DayReport.text(app.actions.dayReport())
+        assertTrue(report, report.contains("○ 资料分析 20 题") && report.contains("✓ 去查报名时间"))
+
+        go("thread/$thin")
+        waitFor(hasTestTag("thread-project"), 5_000, "很薄的事项")
+        settle()
+        shot("e2e-97-thread-thin")
+
+        go("playbook")
+        waitFor(hasTestTag("script-text"), 5_000, "预案输入")
+        compose.onNodeWithTag("script-text").performTextInput("09:00-10:30 资料分析两套 | B: 下雨就在家做一套\n14:00-15:00 申论大作文 | B: 只写提纲")
+        hideKeyboard()
+        compose.onNodeWithTag("script-lock").performScrollTo().performClick()
+        waitText("下雨就在家做一套", 5_000)
+        settle()
+        shot("e2e-98-playbook")
+        assertTrue(app.actions.plan.script()!!.locked)
+        assertEquals(2, app.actions.plan.script()!!.blocks.size)
+
+        go("quick")
+        waitFor(hasTestTag("quick-text"), 5_000, "记一下")
+        compose.onNodeWithTag("quick-text").performTextInput("国考要不要报外省的岗位？")
+        hideKeyboard()
+        compose.onNodeWithTag("quick-save").performScrollTo().performClick()
+        waitText("收好了", 5_000)
+        settle()
+        shot("e2e-99-quick")
+        assertTrue(app.store.work.value.notes().any { it[F.RAW].contains("外省的岗位") })
+
+        go("ledger")
+        waitFor(hasTestTag("ledger-amount"), 5_000, "账本")
+        compose.onNodeWithTag("ledger-amount").performTextInput("18.5")
+        compose.onNodeWithTag("ledger-what").performTextInput("午饭 黄焖鸡")
+        hideKeyboard()
+        compose.onNodeWithTag("ledger-add").performScrollTo().performClick()
+        waitText("记了", 5_000)
+        settle()
+        shot("e2e-100-ledger")
+        assertEquals(1850L, com.zongkong.core.ledger.Ledger.total(app.store.ledger.value.items))
+        assertEquals("吃饭", app.store.ledger.value.items.single().cat)
+
+        go("settings/perm")
+        waitFor(hasTestTag("perm-selfheal"), 5_000, "自动修复")
+        compose.onNodeWithTag("perm-selfheal").performScrollTo()
+        settle()
+        shot("e2e-101-selfheal")
+
+        go("home")
+        waitFor(hasTestTag("script-line"), 5_000, "首页预案栏")
+        settle()
+        shot("e2e-102-home-08")
+    }
 }
