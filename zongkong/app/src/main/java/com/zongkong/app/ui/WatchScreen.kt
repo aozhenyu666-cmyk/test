@@ -143,9 +143,9 @@ fun WatchScreen(nav: NavHostController) {
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Hint("不是全封：连续用几分钟就弹回来做一道题，冷却后再放行。给闲鱼、Twitter/X 这种“全封太狠、放开太浪费时间”的应用用。")
+            Hint("不是全封：连续用几分钟就弹回来做一道题，冷却后再放行。给闲鱼、Twitter/X 这种“全封太狠、放开太浪费时间”的应用用。", Modifier.enter(0))
 
-            Panel(accent = if (config.watch.enabled) sig.free else null) {
+            Panel(accent = if (config.watch.enabled) sig.free else null, modifier = Modifier.enter(1)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Column(Modifier.weight(1f)) {
                         Text(
@@ -193,7 +193,7 @@ fun WatchScreen(nav: NavHostController) {
             }
 
             SectionLabel("题库")
-            Panel {
+            Panel(modifier = Modifier.enter(2)) {
                 Text("$bankCount 道题", style = MaterialTheme.typography.titleMedium)
                 Hint("一行一题：题干||答案（写一个竖线也行），也可以只写题干。导入 UTF-8 的 TXT / MD，或直接粘贴。")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -263,7 +263,7 @@ fun WatchScreen(nav: NavHostController) {
                         modifier = Modifier.fillMaxWidth(),
                     )
                     if (list == null) {
-                        Hint("读取应用列表…")
+                        Hint("读取应用列表…", Modifier.shimmer())
                     } else {
                         val shown = list
                             .filter { query.isBlank() || it.label.contains(query, true) || it.pkg.contains(query, true) }
@@ -274,6 +274,7 @@ fun WatchScreen(nav: NavHostController) {
                                 Row(
                                     Modifier
                                         .fillMaxWidth()
+                                        .animateItem()
                                         .clickable(enabled = !already) {
                                             saveWatch { w -> w.copy(rules = w.rules + WatchRule(pkg = a.pkg, label = a.label)) }
                                             pickerOpen = false

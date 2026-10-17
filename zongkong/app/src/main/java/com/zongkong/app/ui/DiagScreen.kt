@@ -128,7 +128,7 @@ fun DiagScreen(nav: NavHostController) {
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             // ---------- 摘要 ----------
-            Panel(accent = if (healthy) sig.free else sig.strict) {
+            Panel(accent = if (healthy) sig.free else sig.strict, modifier = Modifier.enter(0)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("眼睛状态", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                     Tag(if (healthy) "在线" else "离线", if (healthy) sig.free else sig.strict)
@@ -167,9 +167,9 @@ fun DiagScreen(nav: NavHostController) {
                     modifier = Modifier.padding(top = 6.dp),
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    list.forEach { e ->
+                    list.forEachIndexed { i, e ->
                         Row(
-                            Modifier.fillMaxWidth(),
+                            Modifier.fillMaxWidth().enter(i.coerceAtMost(8)),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.Top,
                         ) {

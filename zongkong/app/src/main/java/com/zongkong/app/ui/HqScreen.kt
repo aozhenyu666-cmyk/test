@@ -7,6 +7,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -59,6 +61,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -227,21 +230,31 @@ private fun HqRun(s: HqSession, nav: NavHostController, onFinish: (String) -> Un
     var finishing by remember { mutableStateOf(false) }
     val readyIn = Hq.stepReadyAt(s) - now
     val steps = HqStep.entries
+    val remain = mmss(s.endsAt - now)
+    // 秒数每变一次轻轻弹一下（1.02 → 1），扫一眼就知道在走
+    val remainPop = rememberTickPop(remain)
 
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         // ---------- 顶部：环节、剩余时间 ----------
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("总控时间", color = Night.dim, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
-            Text("还剩 " + mmss(s.endsAt - now), color = Night.ink, style = MaterialTheme.typography.titleMedium.merge(Mono), modifier = Modifier.testTag("hq-remaining"))
+            Text(
+                "还剩 " + remain, color = Night.ink, style = MaterialTheme.typography.titleMedium.merge(Mono),
+                modifier = Modifier.graphicsLayer { scaleX = remainPop; scaleY = remainPop }.testTag("hq-remaining"),
+            )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             steps.forEachIndexed { i, st ->
                 val done = i < s.step
                 val cur = i == s.step
+                // 做完的印章淡成暖色，正在做的那一格轻轻呼吸
+                val bg by animateColorAsState(if (done) Night.glow else Color.Transparent, tween(320), label = "hqSealBg")
+                val borderColor by animateColorAsState(if (done || cur) Night.glow else Night.line, tween(320), label = "hqSealBorder")
                 Box(
                     Modifier.size(34.dp)
-                        .background(if (done) Night.glow else Color.Transparent, RoundedCornerShape(8.dp))
-                        .border(BorderStroke(if (cur) 2.dp else 1.dp, if (done || cur) Night.glow else Night.line), RoundedCornerShape(8.dp))
+                        .then(if (cur) Modifier.breathe(0.06f, 1500) else Modifier)
+                        .background(bg, RoundedCornerShape(8.dp))
+                        .border(BorderStroke(if (cur) 2.dp else 1.dp, borderColor), RoundedCornerShape(8.dp))
                         .clickable(enabled = done && s.current == HqStep.SEAL) { app.actions.hq.revisit(st) },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -258,21 +271,30 @@ private fun HqRun(s: HqSession, nav: NavHostController, onFinish: (String) -> Un
             }
         }
 
-        // ---------- 这一环节 ----------
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            when (s.current) {
-                HqStep.SETTLE -> SettleStep()
-                HqStep.INFO -> TriageStep(s, { stepDone = it }, { stepNote = it })
-                HqStep.THINK -> ThinkStep(s, { stepDone = it }, { stepNote = it })
-                HqStep.PLAN -> TomorrowStep({ stepDone = it }, { stepNote = it }, nav)
-                HqStep.ACT -> LedgerStep({ stepDone = it }, { stepNote = it })
-                HqStep.SEAL -> SealStep(s, now) { stepNote = it }
+        // ---------- 这一环节：换环节时淡入 + 轻微下滑，不硬切 ----------
+        AnimatedContent(
+            targetState = s.current,
+            transitionSpec = { (fadeIn(tween(260)) + slideInVertically { it / 12 }) togetherWith fadeOut(tween(160)) },
+            label = "hqStepBody",
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        ) { step ->
+            Box(Modifier.fillMaxSize()) {
+                when (step) {
+                    HqStep.SETTLE -> SettleStep()
+                    HqStep.INFO -> TriageStep(s, { stepDone = it }, { stepNote = it })
+                    HqStep.THINK -> ThinkStep(s, { stepDone = it }, { stepNote = it })
+                    HqStep.PLAN -> TomorrowStep({ stepDone = it }, { stepNote = it }, nav)
+                    HqStep.ACT -> LedgerStep({ stepDone = it }, { stepNote = it })
+                    HqStep.SEAL -> SealStep(s, now) { stepNote = it }
+                }
             }
         }
 
         // ---------- 底部 ----------
         if (s.current == HqStep.SEAL) {
             val can = Hq.canFinish(s, now)
+            val btnColor by animateColorAsState(if (can && !finishing) Night.glow else Night.card, tween(260), label = "hqBtn")
+            val btnText by animateColorAsState(if (can && !finishing) Night.top else Night.dim, tween(260), label = "hqBtnText")
             Button(
                 onClick = {
                     if (finishing) return@Button
@@ -282,16 +304,18 @@ private fun HqRun(s: HqSession, nav: NavHostController, onFinish: (String) -> Un
                 enabled = can && !finishing,
                 modifier = Modifier.fillMaxWidth().height(56.dp).testTag("hq-seal"),
                 shape = RoundedCornerShape(18.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Night.glow, contentColor = Night.top, disabledContainerColor = Night.card, disabledContentColor = Night.dim),
+                colors = ButtonDefaults.buttonColors(containerColor = btnColor, contentColor = btnText, disabledContainerColor = btnColor, disabledContentColor = btnText),
             ) { Text(if (finishing) "封存中…" else if (can) "封存，解锁" else if (s.endsAt > now) "还有 ${mmss(s.endsAt - now)}：点上面的印章回去再修一轮" else "读一眼总结，${mmss(Hq.finishAt(s) - now)} 后就能封存") }
         } else {
             val timeOk = readyIn <= 0
+            val btnColor by animateColorAsState(if (timeOk && stepDone) Night.glow else Night.card, tween(260), label = "hqNext")
+            val btnText by animateColorAsState(if (timeOk && stepDone) Night.top else Night.dim, tween(260), label = "hqNextText")
             Button(
                 onClick = { app.actions.hq.advance(stepNote) },
                 enabled = timeOk && stepDone,
                 modifier = Modifier.fillMaxWidth().height(56.dp).testTag("hq-next"),
                 shape = RoundedCornerShape(18.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Night.glow, contentColor = Night.top, disabledContainerColor = Night.card, disabledContentColor = Night.dim),
+                colors = ButtonDefaults.buttonColors(containerColor = btnColor, contentColor = btnText, disabledContainerColor = btnColor, disabledContentColor = btnText),
             ) {
                 Text(
                     when {

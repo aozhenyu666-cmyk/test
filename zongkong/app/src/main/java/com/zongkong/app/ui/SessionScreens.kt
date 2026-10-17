@@ -303,8 +303,13 @@ fun CompleteScreen(key: String, nav: NavHostController) {
                 }, enabled = result.isNotBlank(), modifier = Modifier.fillMaxWidth().testTag("complete-save")) { Text("记下结果") }
             } else {
                 Panel(accent = sig.free) {
-                    Text("结果已记下", style = MaterialTheme.typography.titleMedium, color = sig.free)
-                    Hint("写进了行动、事项断点和一条“结果”记录，会同步到 Notion。GPT 下次读这件事就能看到。")
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Stamp("完", sig.free, size = 52.dp)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("结果已记下", style = MaterialTheme.typography.titleMedium, color = sig.free)
+                            Hint("写进了行动、事项断点和一条“结果”记录，会同步到 Notion。GPT 下次读这件事就能看到。")
+                        }
+                    }
                 }
                 if (t != null) Button(onClick = {
                     app.prompt = app.actions.work.gptPrompt(t.key, "我刚完成了「${a.title}」，结果：${result.trim()}。请根据结果判断下一步。")

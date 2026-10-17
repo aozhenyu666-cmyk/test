@@ -1,6 +1,7 @@
 package com.zongkong.app.ui
 
 import android.provider.Settings
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -8,6 +9,7 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
@@ -21,6 +23,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.background
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,14 +35,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -204,4 +210,109 @@ fun Stamp(text: String, color: Color, size: Dp = 96.dp, play: Boolean = true) {
             style = MaterialTheme.typography.titleLarge.merge(SerifTitle),
         )
     }
+}
+
+/**
+ * 数字滚动：信用、分钟、完成数变化时，从旧值滚到新值（0.6 秒）。
+ * 系统关了动画就直接显示目标值。
+ */
+@Composable
+fun AnimatedInt(
+    value: Int,
+    modifier: Modifier = Modifier,
+    style: TextStyle = LocalTextStyle.current,
+    color: Color = Color.Unspecified,
+    prefix: String = "",
+    suffix: String = "",
+) {
+    val reduce = LocalReduceMotion.current
+    val shown by animateIntAsState(
+        targetValue = value,
+        animationSpec = tween(if (reduce) 0 else 620, easing = FastOutSlowInEasing),
+        label = "count",
+    )
+    Text("$prefix$shown$suffix", modifier = modifier, style = style, color = color)
+}
+
+/** 小数滚动（进度、分数）；[decimals] 保留几位。 */
+@Composable
+fun AnimatedDecimal(
+    value: Float,
+    decimals: Int = 1,
+    modifier: Modifier = Modifier,
+    style: TextStyle = LocalTextStyle.current,
+    color: Color = Color.Unspecified,
+    prefix: String = "",
+    suffix: String = "",
+) {
+    val reduce = LocalReduceMotion.current
+    val shown by animateFloatAsState(
+        targetValue = value,
+        animationSpec = tween(if (reduce) 0 else 620, easing = FastOutSlowInEasing),
+        label = "decimal",
+    )
+    Text(prefix + String.format(java.util.Locale.US, "%.${decimals}f", shown) + suffix, modifier = modifier, style = style, color = color)
+}
+
+/** 文字换内容时淡入淡出（状态词、环节名），不整块跳。 */
+@Composable
+fun MorphText(
+    text: String,
+    modifier: Modifier = Modifier,
+    style: TextStyle = LocalTextStyle.current,
+    color: Color = Color.Unspecified,
+) {
+    if (LocalReduceMotion.current) {
+        Text(text, modifier = modifier, style = style, color = color)
+        return
+    }
+    Crossfade(targetState = text, animationSpec = tween(220), label = "morph") { t ->
+        Text(t, modifier = modifier, style = style, color = color)
+    }
+}
+
+/**
+ * 很轻的呼吸（当前这一步、正在跑的计时）：振幅 1%~2%，几乎看不出来，只是让“活的”东西不像贴图。
+ * 系统关了动画就不动。
+ */
+fun Modifier.breathe(amplitude: Float = 0.012f, periodMillis: Int = 4200): Modifier = composed {
+    if (LocalReduceMotion.current) return@composed this
+    val t = rememberInfiniteTransition(label = "breathe")
+    val p = t.animateFloat(0f, 1f, infiniteRepeatable(tween(periodMillis, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "bp").value
+    graphicsLayer {
+        val k = 1f + amplitude * (2f * p - 1f)
+        scaleX = k
+        scaleY = k
+    }
+}
+
+/** 一道淡淡的扫光（同步中、正在读）：只盖在内容上，不改布局。 */
+fun Modifier.shimmer(color: Color = Color.White, alpha: Float = 0.06f): Modifier = composed {
+    if (LocalReduceMotion.current) return@composed this
+    val t = rememberInfiniteTransition(label = "shimmer")
+    val p = t.animateFloat(0f, 1f, infiniteRepeatable(tween(1600, easing = LinearEasing)), label = "sp").value
+    drawWithContent {
+        drawContent()
+        val w = size.width
+        val x = -w + 2f * w * p
+        drawRect(
+            brush = Brush.linearGradient(
+                colors = listOf(Color.Transparent, color.copy(alpha = alpha), Color.Transparent),
+                start = Offset(x, 0f),
+                end = Offset(x + w * 0.45f, 0f),
+            ),
+        )
+    }
+}
+
+/** 值变了轻轻弹一下（倒计时、剩余秒数）：[key] 一变就从 1.02 弹回 1。 */
+@Composable
+fun rememberTickPop(key: Any, amount: Float = 0.02f): Float {
+    if (LocalReduceMotion.current) return 1f
+    val anim = remember { Animatable(1f) }
+    LaunchedEffect(key) {
+        anim.snapTo(1f + amount)
+        anim.animateTo(1f, spring(stiffness = Spring.StiffnessMedium))
+    }
+    return anim.value
 }

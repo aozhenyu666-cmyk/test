@@ -1,5 +1,8 @@
 package com.zongkong.app.ui
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -153,12 +156,17 @@ fun RhythmScreen(nav: NavHostController) {
 private fun Meters(playMin: Int, quotaMin: Int, silenceDueAt: Long?, now: Long) {
     val sig = LocalSignals.current
     if (quotaMin > 0) {
-        val frac = (playMin.toFloat() / quotaMin).coerceIn(0f, 1f)
-        val c = when {
-            frac >= 1f -> sig.strict
-            frac >= 0.8f -> sig.warn
-            else -> sig.free
-        }
+        val fracTarget = (playMin.toFloat() / quotaMin).coerceIn(0f, 1f)
+        val frac by animateFloatAsState(fracTarget, tween(700), label = "quotaFrac")
+        val c by animateColorAsState(
+            when {
+                fracTarget >= 1f -> sig.strict
+                fracTarget >= 0.8f -> sig.warn
+                else -> sig.free
+            },
+            tween(450),
+            label = "quotaColor",
+        )
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             KeyValue("娱乐", "$playMin / $quotaMin 分钟", c)
             Box(

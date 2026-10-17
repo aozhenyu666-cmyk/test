@@ -200,7 +200,7 @@ fun BlockListScreen(nav: NavHostController) {
         }
         val list = apps
         if (list == null) {
-            Hint("读取应用列表…", Modifier.padding(16.dp))
+            Hint("读取应用列表…", Modifier.padding(16.dp).shimmer())
         } else {
             val shown = list.filter { query.isBlank() || it.label.contains(query, true) || it.pkg.contains(query, true) }
                 .sortedWith(compareByDescending<AppInfo> { it.pkg in selected || it.pkg in pendingRemoval }.thenBy { it.label })
@@ -210,6 +210,7 @@ fun BlockListScreen(nav: NavHostController) {
                     Row(
                         Modifier
                             .fillMaxWidth()
+                            .animateItem()
                             .clickable { selected = if (on) selected - a.pkg else selected + a.pkg }
                             .padding(horizontal = 16.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,

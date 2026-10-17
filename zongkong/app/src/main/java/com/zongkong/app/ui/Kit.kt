@@ -4,10 +4,20 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -53,19 +64,29 @@ import kotlinx.coroutines.delay
 import java.time.Instant
 import java.time.ZoneId
 
-/** 部门印章：方框里一个字。 */
+/** 部门印章：方框里一个字。颜色变化（放行/严管切换）时淡过去，并轻轻弹一下。 */
 @Composable
-fun Seal(text: String, color: Color, size: Dp = 36.dp, filled: Boolean = false) {
+fun Seal(text: String, color: Color, size: Dp = 36.dp, filled: Boolean = false, modifier: Modifier = Modifier) {
+    val c by animateColorAsState(color, tween(320), label = "sealColor")
+    val reduce = LocalReduceMotion.current
+    val pop = remember { androidx.compose.animation.core.Animatable(1f) }
+    LaunchedEffect(color) {
+        if (!reduce) {
+            pop.snapTo(1.06f)
+            pop.animateTo(1f, spring(stiffness = androidx.compose.animation.core.Spring.StiffnessMedium))
+        }
+    }
     Box(
-        modifier = Modifier
+        modifier = modifier
             .size(size)
-            .then(if (filled) Modifier.background(color, RoundedCornerShape(size * 0.18f)) else Modifier)
-            .border(BorderStroke(if (size > 40.dp) 2.5.dp else 2.dp, color), RoundedCornerShape(size * 0.18f)),
+            .graphicsLayer { scaleX = pop.value; scaleY = pop.value }
+            .then(if (filled) Modifier.background(c, RoundedCornerShape(size * 0.18f)) else Modifier)
+            .border(BorderStroke(if (size > 40.dp) 2.5.dp else 2.dp, c), RoundedCornerShape(size * 0.18f)),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text,
-            color = if (filled) MaterialTheme.colorScheme.surface else color,
+            color = if (filled) MaterialTheme.colorScheme.surface else c,
             fontWeight = FontWeight.Black,
             fontSize = (size.value * 0.5f).sp,
             textAlign = TextAlign.Center,
@@ -74,7 +95,8 @@ fun Seal(text: String, color: Color, size: Dp = 36.dp, filled: Boolean = false) 
 }
 
 @Composable
-fun DeptSeal(dept: Dept, size: Dp = 36.dp, filled: Boolean = false) = Seal(dept.seal, LocalSignals.current.dept(dept), size, filled)
+fun DeptSeal(dept: Dept, size: Dp = 36.dp, filled: Boolean = false, modifier: Modifier = Modifier) =
+    Seal(dept.seal, LocalSignals.current.dept(dept), size, filled, modifier)
 
 @Composable
 fun phaseColor(phase: GatePhase): Color {
@@ -91,10 +113,11 @@ fun phaseColor(phase: GatePhase): Color {
 
 @Composable
 fun Tag(text: String, color: Color) {
-    Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
+    val c by animateColorAsState(color, tween(320), label = "tagColor")
+    Surface(color = c.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
         Text(
             text,
-            color = color,
+            color = c,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
@@ -102,23 +125,40 @@ fun Tag(text: String, color: Color) {
     }
 }
 
-/** 卡片：纸面上一块更亮的纸，圆角、无边框；accent 给一圈有颜色的细边。可点的卡片按下会微缩。 */
+/**
+ * 卡片：纸面上一块更亮的纸，圆角、无边框；accent 给一圈有颜色的细边。
+ * [pulse]：让这道边轻轻呼吸（正在拦截、当前主线这类“活的”卡片）。可点的卡片按下会微缩。
+ */
 @Composable
 fun Panel(
     modifier: Modifier = Modifier,
     accent: Color? = null,
+    pulse: Boolean = false,
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val source = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val base = accent
+    val borderColor: Color? = if (base == null) null else if (pulse && !LocalReduceMotion.current) {
+        val t = rememberInfiniteTransition(label = "panelPulse")
+        val k by t.animateFloat(
+            0.45f, 1f,
+            infiniteRepeatable(tween(2000, easing = androidx.compose.animation.core.LinearEasing), RepeatMode.Reverse),
+            label = "pk",
+        )
+        base.copy(alpha = k)
+    } else {
+        base.copy(alpha = 0.7f)
+    }
     Surface(
         modifier = modifier
             .fillMaxWidth()
+            .animateContentSize(tween(220))
             .then(if (onClick != null) Modifier.pressScale(source) else Modifier)
             .then(if (onClick != null) Modifier.clickable(interactionSource = source, indication = androidx.compose.material3.ripple(), onClick = onClick) else Modifier),
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(20.dp),
-        border = if (accent != null) BorderStroke(1.5.dp, accent.copy(alpha = 0.7f)) else null,
+        border = borderColor?.let { BorderStroke(1.5.dp, it) },
     ) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
     }
@@ -133,45 +173,61 @@ fun ScreenTitle(title: String, subtitle: String = "", modifier: Modifier = Modif
     }
 }
 
-/** 大按钮：一页只有一个主动作时用，56dp 高。 */
+/** 大按钮：一页只有一个主动作时用，56dp 高。按下微缩，可用状态变化时颜色淡过去。 */
 @Composable
 fun BigButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.primary, enabled: Boolean = true) {
+    val source = remember { MutableInteractionSource() }
+    val c by animateColorAsState(
+        if (enabled) color else MaterialTheme.colorScheme.surfaceVariant,
+        tween(260),
+        label = "bigButton",
+    )
     androidx.compose.material3.Button(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.fillMaxWidth().heightIn(min = 56.dp),
+        modifier = modifier.fillMaxWidth().heightIn(min = 56.dp).pressScale(source),
         shape = RoundedCornerShape(16.dp),
-        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = color),
+        interactionSource = source,
+        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+            containerColor = c,
+            disabledContainerColor = c,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        ),
     ) { Text(text, style = MaterialTheme.typography.titleMedium) }
 }
 
-/** 向导里的一个大选项：一行标题 + 一行说明，选中时描边。 */
+/** 向导里的一个大选项：一行标题 + 一行说明，选中时描边（选中/取消时颜色淡过去）。 */
 @Composable
 fun ChoiceCard(title: String, detail: String = "", selected: Boolean = false, color: Color = MaterialTheme.colorScheme.primary, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val source = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val border by animateColorAsState(if (selected) color else LocalSignals.current.line, tween(220), label = "choiceBorder")
+    val bg by animateColorAsState(if (selected) color.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surface, tween(220), label = "choiceBg")
+    val tc by animateColorAsState(if (selected) color else MaterialTheme.colorScheme.onSurface, tween(220), label = "choiceText")
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .pressScale(source)
             .clickable(interactionSource = source, indication = androidx.compose.material3.ripple(), onClick = onClick),
-        color = if (selected) color.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surface,
+        color = bg,
         shape = RoundedCornerShape(18.dp),
-        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) color else LocalSignals.current.line),
+        border = BorderStroke(if (selected) 2.dp else 1.dp, border),
     ) {
         Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, color = if (selected) color else MaterialTheme.colorScheme.onSurface)
+            Text(title, style = MaterialTheme.typography.titleMedium, color = tc)
             if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.bodyMedium, color = LocalSignals.current.muted)
         }
     }
 }
 
-/** 小药丸：状态、数字。 */
+/** 小药丸：状态、数字。颜色变化时淡过去。 */
 @Composable
 fun Pill(text: String, color: Color, dot: Boolean = false) {
-    Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(50)) {
+    val c by animateColorAsState(color, tween(320), label = "pill")
+    Surface(color = c.copy(alpha = 0.12f), shape = RoundedCornerShape(50)) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (dot) PulseDot(color)
-            Text(text, color = color, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+            if (dot) PulseDot(c)
+            MorphText(text, style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold), color = c)
         }
     }
 }
@@ -243,9 +299,10 @@ fun Hint(text: String, modifier: Modifier = Modifier) {
 
 @Composable
 fun KeyValue(key: String, value: String, valueColor: Color = MaterialTheme.colorScheme.onSurface) {
+    val c by animateColorAsState(valueColor, tween(320), label = "keyValue")
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(key, style = MaterialTheme.typography.bodyMedium, color = LocalSignals.current.muted, modifier = Modifier.weight(1f))
-        Text(value, style = MaterialTheme.typography.bodyMedium.merge(Mono), color = valueColor)
+        Text(value, style = MaterialTheme.typography.bodyMedium.merge(Mono), color = c)
     }
 }
 

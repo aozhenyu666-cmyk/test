@@ -9,9 +9,15 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.Box
@@ -33,6 +39,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -149,6 +156,17 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
                     tabs.forEach { t ->
                         val selected = current == t.route
+                        // 选中的印章轻轻放大，标签颜色淡过去（比整条高亮克制）
+                        val sealScale by animateFloatAsState(
+                            targetValue = if (selected) 1.14f else 1f,
+                            animationSpec = spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMediumLow),
+                            label = "tabSeal",
+                        )
+                        val labelColor by animateColorAsState(
+                            targetValue = if (selected) MaterialTheme.colorScheme.onSurface else sig.muted,
+                            animationSpec = tween(220),
+                            label = "tabLabel",
+                        )
                         NavigationBarItem(
                             selected = selected,
                             onClick = {
@@ -167,10 +185,15 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                                     if (t.route == "home" && newChanges > 0) Badge { Text("$newChanges") }
                                     if (t.route == "chat" && chatBusy) Badge(containerColor = sig.ai)
                                 }) {
-                                    Seal(t.seal, if (!selected) sig.muted else if (t.route == "chat") sig.ai else MaterialTheme.colorScheme.primary, size = 26.dp, filled = selected)
+                                    Seal(
+                                        t.seal,
+                                        if (!selected) sig.muted else if (t.route == "chat") sig.ai else MaterialTheme.colorScheme.primary,
+                                        size = 26.dp, filled = selected,
+                                        modifier = Modifier.graphicsLayer { scaleX = sealScale; scaleY = sealScale },
+                                    )
                                 }
                             },
-                            label = { Text(t.label) },
+                            label = { Text(t.label, color = labelColor) },
                             modifier = androidx.compose.ui.Modifier.testTag("tab-${t.route}"),
                             colors = NavigationBarItemDefaults.colors(indicatorColor = MaterialTheme.colorScheme.background),
                         )
@@ -183,11 +206,15 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
             NavHost(
                 nav, startDestination = "home",
                 enterTransition = {
-                    if (initialState.destination.route in tabRoutes && targetState.destination.route in tabRoutes) fadeIn(tween(NAV_MS))
-                    else fadeIn(tween(NAV_MS)) + slideInHorizontally(tween(NAV_MS)) { it / 6 }
+                    if (initialState.destination.route in tabRoutes && targetState.destination.route in tabRoutes) {
+                        fadeIn(tween(NAV_MS))
+                    } else {
+                        // 推入新页：淡入 + 轻微右移 + 从 98.5% 放大到 100%（不炫，但比硬切有层次）
+                        fadeIn(tween(NAV_MS)) + slideInHorizontally(tween(NAV_MS)) { it / 6 } + scaleIn(tween(NAV_MS), initialScale = 0.985f)
+                    }
                 },
-                exitTransition = { fadeOut(tween(NAV_MS / 2)) },
-                popEnterTransition = { fadeIn(tween(NAV_MS)) + slideInHorizontally(tween(NAV_MS)) { -it / 8 } },
+                exitTransition = { fadeOut(tween(NAV_MS / 2)) + scaleOut(tween(NAV_MS / 2), targetScale = 1.012f) },
+                popEnterTransition = { fadeIn(tween(NAV_MS)) + slideInHorizontally(tween(NAV_MS)) { -it / 8 } + scaleIn(tween(NAV_MS), initialScale = 0.99f) },
                 popExitTransition = { fadeOut(tween(NAV_MS / 2)) + slideOutHorizontally(tween(NAV_MS)) { it / 6 } },
             ) {
                 composable("home") { NowScreen(nav) }

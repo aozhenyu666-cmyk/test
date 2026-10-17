@@ -1,10 +1,12 @@
 package com.zongkong.app.ui
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -319,7 +321,8 @@ private fun AimsStrip(book: com.zongkong.core.plan.PlanBook, now: Long, onEdit: 
                 val left = com.zongkong.core.plan.Aims.daysLeft(a, now, zone)
                 val color = if (left != null && left <= 7) sig.warn else sig.plan
                 Column(Modifier.width(76.dp).clickable { onEdit(a) }, horizontalAlignment = Alignment.CenterHorizontally) {
-                    MoonPhase(com.zongkong.core.plan.Aims.phase(a, now, zone), color, Modifier.width(40.dp).height(56.dp))
+                    // 月亮很轻地呼吸，像是还在走
+                    MoonPhase(com.zongkong.core.plan.Aims.phase(a, now, zone), color, Modifier.width(40.dp).height(56.dp).breathe(0.02f, 5600))
                     Text(a.title, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
                         left?.let { if (it >= 0) "还剩 $it 天" else "过期 ${-it} 天" } ?: "没有期限",
@@ -455,7 +458,7 @@ private fun TodayLine(nav: NavHostController) {
     Panel(onClick = { nav.navigate("today") }, modifier = Modifier.testTag("today-line")) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             ProgressRing(if (r.planned.isEmpty()) 1f else r.doneCount / r.planned.size.toFloat(), sig.free, size = 40.dp, stroke = 3.dp) {
-                Text("${r.doneCount}", style = MaterialTheme.typography.labelMedium.merge(Mono), color = sig.free)
+                AnimatedInt(r.doneCount, style = MaterialTheme.typography.labelMedium.merge(Mono), color = sig.free)
             }
             Column(Modifier.weight(1f)) {
                 Text("今天的清单", style = MaterialTheme.typography.titleSmall)
@@ -483,7 +486,7 @@ private fun PartnerLine(nav: NavHostController) {
     Panel(onClick = { nav.navigate("dossier") }, modifier = Modifier.testTag("partner-line")) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             ProgressRing(cred / 100f, stanceColor(st), size = 40.dp, stroke = 3.dp) {
-                Text("$cred", style = MaterialTheme.typography.labelMedium.merge(Mono), color = stanceColor(st))
+                AnimatedInt(cred, style = MaterialTheme.typography.labelMedium.merge(Mono), color = stanceColor(st))
             }
             Column(Modifier.weight(1f)) {
                 Text("${st.label} · ${com.zongkong.core.boss.Intensity.short(config.boss, st)}", style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -516,7 +519,12 @@ private fun PlanStrip(plan: com.zongkong.core.plan.WeekPlan?, book: com.zongkong
     Panel(onClick = { nav.navigate("plan") }, modifier = Modifier.enter(2).testTag("plan-strip")) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             ProgressRing(if (plan.outcomes.isEmpty()) 0f else plan.doneCount.toFloat() / plan.outcomes.size, sig.plan, size = 44.dp, stroke = 3.5.dp) {
-                Text("${plan.doneCount}/${plan.outcomes.size}", style = MaterialTheme.typography.labelMedium.merge(Mono), color = sig.plan)
+                AnimatedInt(
+                    plan.doneCount,
+                    style = MaterialTheme.typography.labelMedium.merge(Mono),
+                    color = sig.plan,
+                    suffix = "/${plan.outcomes.size}",
+                )
             }
             Column(Modifier.weight(1f)) {
                 Text(plan.goals.joinToString(" · ") { it.title }, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -701,13 +709,21 @@ private fun TaskCard(cur: Focus.Current, now: Long, notionReady: Boolean, nav: N
         shape = RoundedCornerShape(26.dp),
         color = MaterialTheme.colorScheme.surface,
         shadowElevation = 1.dp,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(tween(260))
+            .then(
+                // 正在做 / 已超时：整张卡极轻地呼吸，像还活着
+                if (cur.why == Focus.Why.RUNNING || cur.why == Focus.Why.OVERDUE) Modifier.breathe(0.006f, 3800) else Modifier,
+            ),
     ) {
         Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (cur.why == Focus.Why.RUNNING || cur.why == Focus.Why.OVERDUE) PulseDot(accent)
-                Text(
-                    if (a == null) "现在" else cur.why.label, color = accent, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
+                MorphText(
+                    if (a == null) "现在" else cur.why.label,
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                    color = accent,
                     modifier = Modifier.weight(1f).padding(start = if (cur.why == Focus.Why.RUNNING || cur.why == Focus.Why.OVERDUE) 8.dp else 0.dp),
                 )
                 cur.start?.let { s ->

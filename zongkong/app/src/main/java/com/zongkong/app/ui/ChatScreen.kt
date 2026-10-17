@@ -6,6 +6,11 @@ import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -42,14 +47,17 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -60,6 +68,7 @@ import androidx.navigation.NavHostController
 import com.zongkong.app.zk
 import com.zongkong.core.agent.Agent
 import com.zongkong.core.agent.ChatMsg
+import kotlinx.coroutines.launch
 
 /** 一组显示单元：你的话、参谋的话、一串工具调用、出错。 */
 internal sealed interface Item {
@@ -113,6 +122,9 @@ fun ChatScreen(nav: NavHostController) {
     var showMemory by remember { mutableStateOf(false) }
     val items = remember(log.messages) { group(log.messages) }
     val list = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    // 是不是已经滚到底：不是的话浮一个“回到底部”，找旧消息后不用手划
+    val atBottom by remember { derivedStateOf { !list.canScrollForward } }
 
     // 参谋说要打开的页面：等它说完再跳
     LaunchedEffect(route, busy) {
@@ -153,7 +165,7 @@ fun ChatScreen(nav: NavHostController) {
             Seal("控", sig.ai, size = 30.dp, filled = true)
             Column(Modifier.weight(1f).padding(start = 12.dp)) {
                 Text("总控", style = MaterialTheme.typography.titleLarge.merge(SerifTitle))
-                if (busy) Text("正在处理…", style = MaterialTheme.typography.labelMedium, color = sig.muted, maxLines = 1)
+                if (busy) MorphText("正在处理…", style = MaterialTheme.typography.labelMedium, color = sig.muted)
                 else StanceLine { nav.navigate("dossier") }
             }
             TextButton(onClick = { nav.navigate("flow") }, modifier = Modifier.testTag("flow-open")) { Text("流程", color = sig.ai) }
@@ -226,6 +238,31 @@ fun ChatScreen(nav: NavHostController) {
             }
         }
 
+        // 翻旧消息时浮一个“回到底部”（自动滚动只在新消息来时发生）
+        AnimatedVisibility(
+            visible = !atBottom,
+            enter = fadeIn(tween(160)) + expandVertically(),
+            exit = fadeOut(tween(120)) + shrinkVertically(),
+        ) {
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Surface(
+                    onClick = {
+                        scope.launch { list.animateScrollToItem((items.size + if (busy) 1 else 0 - 1).coerceAtLeast(0)) }
+                    },
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 2.dp,
+                ) {
+                    Text(
+                        "回到底部 ↓",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = sig.muted,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                    )
+                }
+            }
+        }
+
         // ---------- 要发的图 ----------
         if (image.isNotBlank()) {
             Row(Modifier.padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -267,10 +304,25 @@ fun ChatScreen(nav: NavHostController) {
                     }) { Text("说", color = sig.muted, style = MaterialTheme.typography.titleMedium) }
                 }
                 val canSend = (input.isNotBlank() || image.isNotBlank()) && !busy
+                val sendColor by animateColorAsState(
+                    when {
+                        busy -> MaterialTheme.colorScheme.onSurface
+                        canSend -> sig.ai
+                        else -> sig.line
+                    },
+                    tween(240),
+                    label = "sendColor",
+                )
+                val sendScale by animateFloatAsState(
+                    if (canSend || busy) 1f else 0.9f,
+                    spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow),
+                    label = "sendScale",
+                )
                 Box(
                     Modifier
                         .size(42.dp)
-                        .background(if (busy) MaterialTheme.colorScheme.onSurface else if (canSend) sig.ai else sig.line, CircleShape)
+                        .graphicsLayer { scaleX = sendScale; scaleY = sendScale }
+                        .background(sendColor, CircleShape)
                         .clickable(enabled = busy || canSend) {
                             if (busy) chat.stop() else { chat.send(input, image); input = ""; image = "" }
                         }
