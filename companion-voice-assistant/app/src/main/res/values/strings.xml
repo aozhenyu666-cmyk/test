@@ -1,0 +1,4 @@
+<resources>
+    <string name="permission_status">麦克风 %1$s  ·  浮窗 %2$s\n屏幕与导航 %3$s</string>
+    <string name="accessibility_description">用于你明确发出的返回、桌面、最近任务指令，以及在你说“看一下屏幕”时截取当前屏幕。不会自动点击、后台巡视或保存截图。开启后具有读取屏幕的技术能力，请只在理解用途后授权；可随时在系统设置关闭。</string>
+</resources>
