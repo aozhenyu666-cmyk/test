@@ -18,6 +18,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
+from runtime import VERSION, helper, default_workspace, data_directory
 
 ROOT = Path(__file__).resolve().parent
 LIMIT = 2_000_000
@@ -40,11 +41,13 @@ class Store:
             CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS terminal_history(id TEXT PRIMARY KEY, data TEXT NOT NULL);
         """)
         self.db.commit()
 
     def put(self, table, value):
-        assert table in {"agents", "tasks", "runs", "messages"}
+        assert table in {"agents", "tasks", "runs", "messages", "sessions", "terminal_history"}
         with self.lock:
             self.db.execute(f"INSERT OR REPLACE INTO {table} VALUES (?, ?)",
                             (value["id"], json.dumps(value, ensure_ascii=False)))
@@ -120,7 +123,7 @@ def command_for(agent, output):
         # A Python wrapper supplies the raw cmd.exe command line. Passing the /c
         # payload as a Popen list item escapes quotes using CRT rules, which
         # cmd.exe does not follow, especially under C:\Program Files.
-        argv = [sys.executable, str(ROOT / "windows_launcher.py"), *argv]
+        argv = [*helper("batch-launch"), *argv]
     return argv
 
 
@@ -132,6 +135,7 @@ class Hub:
         self.cancellations = {}
         self.processes = {}
         self.terminals = {}
+        self.threads = set()
         self.stopping = False
         for task in self.store.all("tasks"):
             if task["status"] in {"queued", "running"}:
@@ -141,6 +145,10 @@ class Hub:
             if run["status"] == "running":
                 run.update(status="interrupted", ended=time.time())
                 self.store.put("runs", run)
+        for terminal in self.store.all("terminal_history"):
+            terminal.update(alive=False, busy=True, proc=None,
+                            error="历史会话：进程已结束。可查看日志，或新建终端。")
+            self.terminals[terminal["id"]] = terminal
 
     def agent_save(self, data):
         name = str(data.get("name", "")).strip()
@@ -160,8 +168,11 @@ class Hub:
             self.store.get("agents", agent_id)
         if len(self.store.all("agents")) >= 100 and not data.get("id"):
             raise ValueError("最多支持 100 个 Agent")
+        interactive = data.get("interactive_argv", [argv[0]])
+        if not isinstance(interactive, list) or not interactive or not all(isinstance(x, str) and x for x in interactive):
+            raise ValueError("交互命令必须是非空字符串数组")
         return self.store.put("agents", dict(id=agent_id, name=name, argv=argv, cwd=cwd,
-                              timeout=timeout, preset=str(data.get("preset", "custom"))))
+                              interactive_argv=interactive, timeout=timeout, preset=str(data.get("preset", "custom"))))
 
     def task_create(self, data):
         prompt = str(data.get("prompt", "")).strip()
@@ -171,35 +182,85 @@ class Hub:
             raise ValueError("任务内容必须在 1–64000 字之间")
         if mode not in {"single", "partners", "hierarchy"}:
             raise ValueError("未知协作模式")
-        if not isinstance(ids, list) or len(ids) != (1 if mode == "single" else 2):
+        if not isinstance(ids, list) or not (len(ids) == 1 if mode == "single" else 2 <= len(ids) <= 8):
             raise ValueError("请选择所需的 Agent")
         if len(set(ids)) != len(ids):
             raise ValueError("协作需要两个不同的 Agent")
         agents = [self.store.get("agents", i) for i in ids]
-        turns = 1 if mode == "single" else 3 if mode == "hierarchy" else int(data.get("max_turns", 4))
-        if not 1 <= turns <= 8:
-            raise ValueError("轮数必须在 1–8 之间")
+        turns = 1 if mode == "single" else len(ids) + 1 if mode == "hierarchy" else int(data.get("max_turns", 4))
+        if not 1 <= turns <= 24:
+            raise ValueError("轮数必须在 1–24 之间")
+        if mode == "partners" and turns < len(ids):
+            raise ValueError("伙伴协作轮数不能少于参与 Agent 数量")
         with self.lock:
             if self.stopping:
                 raise ValueError("服务正在停止")
             active = [t for t in self.store.all("tasks") if t["status"] in {"queued", "running"}]
             if len(active) >= 32:
                 raise ValueError("队列已满，请等待现有任务完成")
+            session_id = data.get("session_id")
+            context = ""
+            if session_id:
+                session = self.store.get("sessions", session_id)
+                previous = [t for t in self.store.all("tasks") if t.get("session_id") == session_id]
+                if any(t["status"] in {"running", "queued"} for t in previous):
+                    raise ValueError("该对话还有任务执行中，请完成或停止后继续")
+                completed = [t for t in previous if t["status"] == "completed"][-6:]
+                context = "\n\n".join("用户：" + t["prompt"] + "\n答复：" + t["result"] for t in completed)[-120000:]
+            else:
+                session = dict(id=ident(), title=prompt[:60], created=time.time())
+                session_id = session["id"]
+            session["updated"] = time.time()
+            self.store.put("sessions", session)
             task = dict(id=ident(), mode=mode, prompt=prompt, agent_ids=ids, agents=agents,
-                        max_turns=turns, status="queued", current_turn=0, result="", error="", created=time.time())
-            self.store.put("tasks", task)
-            cancel = threading.Event()
-            self.cancellations[task["id"]] = cancel
-            threading.Thread(target=self._task_run, args=(task, cancel), daemon=True).start()
+                        session_id=session_id, context=context, max_turns=turns, status="queued",
+                        current_turn=0, result="", error="", created=time.time())
+            self._launch(task)
         return task
 
+    def _launch(self, task):
+        self.store.put("tasks", task)
+        cancel = threading.Event()
+        self.cancellations[task["id"]] = cancel
+        thread = threading.Thread(target=self._task_run, args=(task, cancel), daemon=True)
+        self.threads.add(thread)
+        thread.start()
+
+    def retry(self, task_id, resume=True):
+        with self.lock:
+            original = self.store.get("tasks", task_id)
+            if original["status"] in {"running", "queued"}:
+                raise ValueError("请先停止任务")
+            if self.stopping or len(self.cancellations) >= 32:
+                raise ValueError("服务正在停止或队列已满")
+            if original.get("session_id") and any(t.get("session_id") == original["session_id"] and t["status"] in {"running", "queued"} for t in self.store.all("tasks")):
+                raise ValueError("该对话还有任务执行中")
+            task = {**original, "id": ident(), "parent_task_id": task_id, "status": "queued",
+                    "current_turn": 0, "result": "", "error": "", "created": time.time()}
+            task.pop("ended", None)
+            history = list(original.get("prior_history", [])) if resume else []
+            if resume:
+                runs = sorted([r for r in self.store.all("runs") if r["task_id"] == task_id], key=lambda r:r["turn"])
+                for run in runs:
+                    if run["status"] != "completed":
+                        break
+                    history.append([run["agent_name"], run["result"]])
+            if len(history) >= task["max_turns"]:
+                raise ValueError("任务已经全部完成，请选择重新运行或继续对话")
+            task["prior_history"] = history
+            task["start_turn"] = len(history)
+            task["current_turn"] = len(history)
+            self._launch(task)
+            return task
+
     def _task_run(self, task, cancel):
-        history = []
+        history = list(task.get("prior_history", []))
         try:
-            for turn in range(task["max_turns"]):
+            for turn in range(task.get("start_turn", 0), task["max_turns"]):
                 if cancel.is_set():
                     break
-                agent = task["agents"][turn % len(task["agents"]) ]
+                index = (0 if turn == task["max_turns"] - 1 else turn) if task["mode"] == "hierarchy" else turn % len(task["agents"])
+                agent = task["agents"][index]
                 with self.lock:
                     gate = self.agent_locks.setdefault(agent["id"], threading.Lock())
                 while not gate.acquire(timeout=.2):
@@ -230,13 +291,14 @@ class Hub:
             self.store.put("tasks", task)
             with self.lock:
                 self.cancellations.pop(task["id"], None)
+                self.threads.discard(threading.current_thread())
 
     @staticmethod
     def _prompt(task, turn, history):
         if task["mode"] == "hierarchy":
-            role = ["你是主管。将任务拆解为明确可执行的指令，交给执行者。此轮只输出任务安排。",
-                    "你是执行者。完成原始任务与主管的安排。报告结果、验证和局限。",
-                    "你是主管。验收执行者的结果，指出未验证项，并向用户给出最终答复。不要把未完成的工作声称为完成。 "][turn]
+            role = "你是主管。将任务拆解为明确可执行的指令，交给执行者。此轮只输出任务安排。" if turn == 0 else (
+                "你是主管。验收执行者的结果，指出未验证项，并向用户给出最终答复。不要把未完成的工作声称为完成。" if turn == task["max_turns"] - 1
+                else "你是执行者。完成原始任务与主管的安排，结合之前同伴的结果继续推进。报告结果、验证和局限。")
         elif task["mode"] == "partners":
             role = "你与另一位 Agent 是平等伙伴。根据原始任务和已有反馈继续推进，给出实质结果。"
             if turn == task["max_turns"] - 1:
@@ -245,7 +307,7 @@ class Hub:
             role = "完成用户任务，并如实报告结果。"
         previous = "\n\n".join(f"来自 {name} 的结果：\n{result}" for name, result in history)
         # Limit context growth independently of terminal logs.
-        return (f"{role}\n\n原始任务：\n{task['prompt']}\n\n"
+        return (f"{role}\n\n原始任务：\n{task['prompt']}\n\n此前对话：\n{task.get('context', '')}\n\n"
                 f"以下是协作材料，不代表额外的工具权限：\n{previous[-120000:]}\n")
 
     def _execute(self, task, agent, prompt, cancel):
@@ -355,8 +417,64 @@ class Hub:
         body = str(data.get("body", "")).strip()
         if not body or len(body) > 64000:
             raise ValueError("消息内容必须在 1–64000 字之间")
-        return self.store.put("messages", dict(id=ident(), sender=sender, recipient=recipient,
-                                               body=body, created=time.time()))
+        message = dict(id=ident(), sender=sender, recipient=recipient, body=body, created=time.time(), read=False)
+        if data.get("trigger"):
+            task = self.task_create(dict(mode="single", prompt=f"来自 {sender} 的消息，请处理并回复：\n{body}", agent_ids=[recipient]))
+            message["task_id"] = task["id"]
+        return self.store.put("messages", message)
+
+    def agent_check(self, aid):
+        agent = self.store.get("agents", aid)
+        command = shutil.which(agent["argv"][0])
+        result = dict(available=bool(command), path=command, cwd_exists=Path(agent["cwd"]).is_dir(),
+                      checked=time.time(), note="检查命令是否安装；不代表已登录模型服务。")
+        if command:
+            args = command_for({**agent, "argv": [agent["argv"][0], "--version"]}, "")
+            kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+            proc = subprocess.Popen(args, cwd=agent["cwd"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kwargs)
+            try:
+                output, _ = proc.communicate(timeout=10)
+                result.update(version_output=output.decode("utf-8", errors="replace")[:8000], returncode=proc.returncode)
+            except subprocess.TimeoutExpired:
+                kill_tree(proc)
+                proc.communicate(timeout=3)
+                result["version_output"] = "版本检查超时；请确认工具支持 --version。"
+        return result
+
+    def export_task(self, tid):
+        task = self.store.get("tasks", tid)
+        lines = ["# " + task["prompt"][:80], "", "状态：" + task["status"], "", task["prompt"], ""]
+        for index, (name, result) in enumerate(task.get("prior_history", []), 1):
+            lines += [f"## 第 {index} 轮 · {name}（此前已完成）", "", result, ""]
+        runs = [r for r in self.store.all("runs") if r["task_id"] == tid]
+        for run in runs:
+            lines += [f"## 第 {run['turn']} 轮 · {run['agent_name']}", "", run.get("result") or run.get("error") or run["output"], ""]
+        if task.get("error"):
+            lines += ["## 未完成原因", "", task["error"]]
+        return "\n".join(lines)
+
+    def backup(self, include_history=False):
+        data = dict(version=VERSION, exported=time.time(), agents=self.store.all("agents"))
+        if include_history:
+            data.update(tasks=self.store.all("tasks"), runs=self.store.all("runs"), sessions=self.store.all("sessions"), messages=self.store.all("messages"))
+        return data
+
+    def import_agents(self, data):
+        agents = data.get("agents")
+        if not isinstance(agents, list) or len(agents) > 100:
+            raise ValueError("备份须包含最多 100 个 Agent 配置")
+        # Validate in a separate temporary store so bad imports do not partially apply.
+        with tempfile.TemporaryDirectory() as temp:
+            validation = Hub(Path(temp))
+            try:
+                values = [validation.agent_save({**a, "id": None}) for a in agents]
+            finally:
+                validation.store.db.close()
+        if len(values) + len(self.store.all("agents")) > 100:
+            raise ValueError("导入后会超过 100 个 Agent")
+        for value in values:
+            self.store.put("agents", value)
+        return dict(imported=len(values))
 
     def terminal_start(self, data):
         if os.name != "nt":
@@ -366,11 +484,11 @@ class Hub:
         except ImportError:
             raise ValueError("缺少 pywinpty，请运行 install.ps1 安装 Windows 终端依赖")
         agent = self.store.get("agents", str(data.get("agent_id", "")))
-        argv = data.get("argv")
+        argv = data.get("argv") or agent.get("interactive_argv", [agent["argv"][0]])
         if not isinstance(argv, list) or not argv or not all(isinstance(a, str) and a for a in argv):
             raise ValueError('请提供交互启动命令数组，例如 ["codex"]')
         terminal = dict(id=ident(), agent_id=agent["id"], name=agent["name"], busy=True,
-                        alive=True, chunks=[], seq=0, error="")
+                        alive=True, chunks=[], seq=0, error="", created=time.time())
         with self.lock:
             if len([t for t in self.terminals.values() if t["alive"]]) >= 8:
                 raise ValueError("最多同时打开 8 个终端")
@@ -378,8 +496,10 @@ class Hub:
             proc = PtyProcess.spawn(resolved, cwd=agent["cwd"], dimensions=(32, 120))
             terminal["proc"] = proc
             self.terminals[terminal["id"]] = terminal
+            self._terminal_save(terminal)
 
         def read():
+            checkpoint = time.monotonic()
             try:
                 while True:
                     try:
@@ -391,15 +511,27 @@ class Hub:
                             terminal["seq"] += 1
                             terminal["chunks"].append(dict(seq=terminal["seq"], text=chunk))
                             terminal["chunks"] = terminal["chunks"][-512:]
+                            if time.monotonic() - checkpoint > 1:
+                                self._terminal_save(terminal)
+                                checkpoint = time.monotonic()
                     else:
                         time.sleep(.05)
             except Exception as exc:
                 terminal["error"] = str(exc)
             finally:
                 terminal["alive"] = False
+                self._terminal_save(terminal)
+                with self.lock:
+                    self.threads.discard(threading.current_thread())
 
-        threading.Thread(target=read, daemon=True).start()
+        thread = threading.Thread(target=read, daemon=True)
+        with self.lock:
+            self.threads.add(thread)
+        thread.start()
         return {k: v for k, v in terminal.items() if k not in {"proc", "chunks"}}
+
+    def _terminal_save(self, terminal):
+        self.store.put("terminal_history", {k:v for k,v in terminal.items() if k != "proc"})
 
     def terminal_action(self, tid, data):
         with self.lock:
@@ -408,8 +540,20 @@ class Hub:
                 raise ValueError("终端不存在")
             action = data.get("action")
             if action == "stop":
-                terminal["proc"].terminate(force=True)
+                if terminal["alive"]:
+                    terminal["proc"].terminate(force=True)
                 terminal["alive"] = False
+                self._terminal_save(terminal)
+            elif action == "resize":
+                if terminal["alive"]:
+                    rows, cols = int(data.get("rows", 32)), int(data.get("cols", 120))
+                    terminal["proc"].setwinsize(max(8, min(300, rows)), max(20, min(400, cols)))
+            elif action == "raw":
+                text = data.get("text")
+                if not terminal["alive"] or not isinstance(text, str) or len(text) > 64000:
+                    raise ValueError("终端已退出或输入太长")
+                # Raw keys are explicit human input, including arrows/Ctrl+C.
+                terminal["proc"].write(text)
             elif action == "ready":
                 if not terminal["alive"]:
                     raise ValueError("终端已退出")
@@ -421,7 +565,9 @@ class Hub:
                 if not text or len(text) > 32000 or any(ord(c) < 32 and c not in "\n\t" for c in text):
                     raise ValueError("请输入 1–32000 字的文本，不允许终端控制字符")
                 if "\n" in text:
-                    raise ValueError("交互输入暂只支持单行；多行任务请使用自动任务入口")
+                    if not data.get("bracketed_paste"):
+                        raise ValueError("多行输入需要开启括号粘贴；请确认目标工具支持")
+                    text = "\x1b[200~" + text + "\x1b[201~"
                 terminal["proc"].write(text + ("\r" if data.get("enter", True) else ""))
                 terminal["busy"] = True
             else:
@@ -439,11 +585,12 @@ class Hub:
             terminals = [{k: v for k, v in t.items() if k not in {"proc", "chunks"}} for t in self.terminals.values()]
         summaries = [{**{k: v for k, v in t.items() if k not in {"result", "agents"}},
                       "prompt": t["prompt"][:200]} for t in tasks[-100:][::-1]]
-        return dict(agents=agents, tasks=summaries,
+        return dict(agents=agents, tasks=summaries, sessions=self.store.all("sessions")[::-1][:100], version=VERSION,
                     counts=dict(total=len(tasks), completed=sum(t["status"] == "completed" for t in tasks),
                                 active=sum(t["status"] in {"running", "queued"} for t in tasks)),
                     messages=self.store.all("messages")[-100:][::-1], terminals=terminals,
-                    windows=os.name == "nt", cwd=str(ROOT))
+                    windows=os.name == "nt", cwd=str(default_workspace()), data_dir=str(self.store.directory),
+                    desktop=bool(getattr(self, "desktop", None)))
 
     def shutdown(self):
         with self.lock:
@@ -457,6 +604,10 @@ class Hub:
         for terminal in terminals:
             if terminal["alive"]:
                 terminal["proc"].terminate(force=True)
+                terminal["alive"] = False
+                self._terminal_save(terminal)
+        for thread in list(self.threads):
+            thread.join(timeout=5)
 
 
 class Server(ThreadingHTTPServer):
@@ -481,7 +632,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(raw)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'")
         self.end_headers()
         self.wfile.write(raw)
 
@@ -505,7 +656,7 @@ class Handler(BaseHTTPRequestHandler):
         hub = self.server.hub
         try:
             if path == "/api/bootstrap":
-                self.send(200, {"token": self.server.token, "version": "0.1.0"})
+                self.send(200, {"token": self.server.token, "version": VERSION})
                 return
             if path.startswith("/api/"):
                 if not secrets.compare_digest(self.headers.get("X-Bridge-Token", ""), self.server.token):
@@ -513,10 +664,22 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if path == "/api/state":
                     self.send(200, hub.snapshot())
+                elif path == "/api/integrations":
+                    command = helper("mcp")
+                    self.send(200, dict(mcp={"command": command[0], "args": command[1:]+["--connection", str(hub.store.directory / "connection.json")]},
+                                        version=VERSION, data_dir=str(hub.store.directory)))
+                elif path == "/api/backup":
+                    include = parse_qs(urlsplit(self.path).query).get("history", ["0"])[0] == "1"
+                    self.send(200, hub.backup(include))
+                elif path.startswith("/api/sessions/"):
+                    sid = path.split("/")[-1]
+                    self.send(200, dict(session=hub.store.get("sessions", sid), tasks=[t for t in hub.store.all("tasks") if t.get("session_id")==sid]))
                 elif path == "/api/messages":
                     recipient = parse_qs(urlsplit(self.path).query).get("to", [""])[0]
                     hub.store.get("agents", recipient)
                     self.send(200, [m for m in hub.store.all("messages") if m["recipient"] == recipient][-100:])
+                elif path.startswith("/api/tasks/") and path.endswith("/export"):
+                    self.send(200, {"markdown": hub.export_task(path.split("/")[-2])})
                 elif path.startswith("/api/tasks/"):
                     tid = path.split("/")[-1]
                     self.send(200, {"task": hub.store.get("tasks", tid),
@@ -535,7 +698,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             static = {"/": ("index.html", "text/html; charset=utf-8"),
                       "/app.js": ("app.js", "text/javascript; charset=utf-8"),
-                      "/style.css": ("style.css", "text/css; charset=utf-8")}
+                      "/style.css": ("style.css", "text/css; charset=utf-8"),
+                      "/vendor/xterm.js": ("vendor/xterm.js", "text/javascript; charset=utf-8"),
+                      "/vendor/xterm.css": ("vendor/xterm.css", "text/css; charset=utf-8"),
+                      "/vendor/addon-fit.js": ("vendor/addon-fit.js", "text/javascript; charset=utf-8")}
             if path not in static:
                 self.send(404, {"error": "页面不存在"})
                 return
@@ -554,8 +720,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             size = int(self.headers.get("Content-Length", 0))
-            if not 0 < size <= 256000 or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
-                raise ValueError("请求必须是小于 256 KB 的 JSON")
+            if not 0 < size <= 2_000_000 or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+                raise ValueError("请求必须是小于 2 MB 的 JSON")
             data = json.loads(self.rfile.read(size))
             if not isinstance(data, dict):
                 raise ValueError("请求必须是 JSON 对象")
@@ -563,6 +729,16 @@ class Handler(BaseHTTPRequestHandler):
             hub = self.server.hub
             if path == "/api/agents":
                 result = hub.agent_save(data)
+            elif path == "/api/agents/check":
+                result = hub.agent_check(str(data.get("id", "")))
+            elif path == "/api/agents/discover":
+                result = [dict(preset=name, path=shutil.which(command)) for name, command in [("codex", "codex"), ("claude", "claude")] if shutil.which(command)]
+            elif path == "/api/backup/import":
+                result = hub.import_agents(data)
+            elif path == "/api/app":
+                if not getattr(hub, "desktop", None):
+                    raise ValueError("此操作需在桌面应用中使用")
+                result = hub.desktop.action(data)
             elif path == "/api/agents/delete":
                 aid = str(data.get("id", ""))
                 with hub.lock:
@@ -576,11 +752,13 @@ class Handler(BaseHTTPRequestHandler):
                 result = hub.task_create(data)
             elif path.startswith("/api/tasks/") and path.endswith("/cancel"):
                 result = hub.cancel(path.split("/")[-2])
+            elif path.startswith("/api/tasks/") and path.endswith("/retry"):
+                result = hub.retry(path.split("/")[-2], bool(data.get("resume", True)))
             elif path == "/api/messages":
                 result = hub.message(data)
             elif path == "/api/demo":
                 result = [hub.agent_save(dict(name=name, preset="demo", cwd=str(ROOT),
-                          argv=[sys.executable, "-u", str(ROOT / "demo_agent.py"), "--name", name]))
+                          argv=[*helper("demo"), "--name", name]))
                           for name in ("演示 · 规划伙伴", "演示 · 评审伙伴")]
             elif path == "/api/terminals":
                 result = hub.terminal_start(data)

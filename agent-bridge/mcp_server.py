@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+from runtime import VERSION, data_directory
 
 ROOT = Path(__file__).resolve().parent
 
@@ -18,17 +19,22 @@ STRING = {"type": "string"}
 TOOLS = [
     dict(name="list_agents", description="列出本机已接入的 Agent、运行状态和 ID。", inputSchema=schema()),
     dict(name="send_message", description="向 Agent 信箱写入消息。仅留档，不会唤醒 Agent。需要执行时使用 create_task。",
-         inputSchema=schema({"to": STRING, "from": STRING, "body": STRING}, ["to", "body"])),
+         inputSchema=schema({"to": STRING, "from": STRING, "body": STRING, "trigger": {"type":"boolean"}}, ["to", "body"])),
     dict(name="read_inbox", description="读取指定 Agent 的最近 100 条信箱消息（不删除）。",
          inputSchema=schema({"agent_id": STRING}, ["agent_id"])),
     dict(name="create_task", description="异步派发本地自动任务。返回 task ID；使用 get_task 查询结果。不要在自己的执行轮次中创建包含自己的任务并等待它完成，这会使后续任务等待当前轮次退出。",
          inputSchema=schema({"prompt": STRING, "mode": {"type": "string", "enum": ["single", "partners", "hierarchy"]},
-                             "agent_ids": {"type": "array", "items": STRING, "minItems": 1, "maxItems": 2},
-                             "max_turns": {"type": "integer", "minimum": 1, "maximum": 8}}, ["prompt", "mode", "agent_ids"])),
+                             "agent_ids": {"type": "array", "items": STRING, "minItems": 1, "maxItems": 8},
+                             "session_id":STRING,
+                             "max_turns": {"type": "integer", "minimum": 1, "maximum": 24}}, ["prompt", "mode", "agent_ids"])),
     dict(name="get_task", description="读取任务状态、逐轮结果与日志。任务是异步的，请合理间隔查询。",
          inputSchema=schema({"task_id": STRING}, ["task_id"])),
     dict(name="cancel_task", description="取消一个本地任务及其运行进程。",
-         inputSchema=schema({"task_id": STRING}, ["task_id"]))
+         inputSchema=schema({"task_id": STRING}, ["task_id"])),
+    dict(name="list_sessions", description="列出保存的对话，可以在 create_task 中传入 session_id 续接。", inputSchema=schema()),
+    dict(name="get_session", description="读取一段对话的任务和结果。", inputSchema=schema({"session_id":STRING},["session_id"])),
+    dict(name="retry_task", description="从失败或中断的轮次续跑任务；resume=false 则从头重新执行。已完成的外部操作不会回滚。",
+         inputSchema=schema({"task_id":STRING,"resume":{"type":"boolean"}},["task_id"]))
 ]
 
 
@@ -67,6 +73,12 @@ class Client:
             raise ValueError("缺少必要参数或包含未知参数")
         if name == "list_agents":
             return self.request("state")["agents"]
+        if name == "list_sessions":
+            return self.request("state")["sessions"]
+        if name == "get_session":
+            return self.request("sessions/"+quote(str(args["session_id"]),safe=""))
+        if name == "retry_task":
+            return self.request("tasks/"+quote(str(args["task_id"]),safe="")+"/retry",dict(resume=args.get("resume",True)))
         if name == "send_message":
             return self.request("messages", args)
         if name == "read_inbox":
@@ -86,7 +98,7 @@ def handle(message, client):
         return None
     if method == "initialize":
         result = {"protocolVersion": "2024-11-05", "capabilities": {"tools": {"listChanged": False}},
-                  "serverInfo": {"name": "agent-bridge", "version": "0.1.0"}}
+                  "serverInfo": {"name": "agent-bridge", "version": VERSION}}
     elif method == "ping":
         result = {}
     elif method == "tools/list":
@@ -105,7 +117,7 @@ def handle(message, client):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--connection", type=Path, default=ROOT / "data" / "connection.json")
+    parser.add_argument("--connection", type=Path, default=(data_directory() if getattr(sys,"frozen",False) else ROOT / "data") / "connection.json")
     args = parser.parse_args()
     client = Client(args.connection)
     if hasattr(sys.stdin, "reconfigure"):

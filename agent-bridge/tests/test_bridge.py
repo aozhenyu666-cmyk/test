@@ -22,11 +22,16 @@ FIXTURE = '''import sys, time, json, argparse
 p=argparse.ArgumentParser()
 p.add_argument('--name'); p.add_argument('--capture'); p.add_argument('--delay',type=float,default=.02)
 p.add_argument('--fail',action='store_true'); p.add_argument('--output')
+p.add_argument('--fail-once')
 a=p.parse_args(); prompt=sys.stdin.read()
 with open(a.capture, 'a', encoding='utf-8') as f: f.write(json.dumps({'prompt':prompt,'name':a.name})+'\\n')
 print('START '+a.name, flush=True)
 time.sleep(a.delay)
 if a.fail: print('FAIL',flush=True); sys.exit(7)
+if a.fail_once:
+ import pathlib
+ marker=pathlib.Path(a.fail_once)
+ if not marker.exists(): marker.write_text('failed'); sys.exit(7)
 result='RESULT '+a.name+' 上下文 '+str(len(prompt))
 if a.output:
  with open(a.output,'w',encoding='utf-8') as f: f.write(result)
@@ -179,6 +184,105 @@ class HubTests(unittest.TestCase):
         raw = command_line([r"C:\Program Files\tools\codex.cmd", "exec", r"C:\Users\A&B\out.txt"], "cmd.exe")
         self.assertEqual(raw, 'cmd.exe /d /s /c ""C:\\Program Files\\tools\\codex.cmd" "exec" "C:\\Users\\A&B\\out.txt""')
 
+    def test_session_continuation_carries_previous_result(self):
+        a=self.agent("Memory")
+        first=self.wait(self.task([a],"single"),"completed")
+        second=self.hub.task_create(dict(mode="single",prompt="请继续刚才的讨论",agent_ids=[a["id"]],session_id=first["session_id"]))
+        self.wait(second,"completed")
+        prompt=self.captured("Memory")[1]["prompt"]
+        self.assertIn(first["result"],prompt)
+        self.assertEqual(len(self.hub.store.all("sessions")),1)
+
+    def test_session_does_not_allow_concurrent_turns(self):
+        a=self.agent("Memory","--delay","1")
+        first=self.task([a],"single")
+        with self.assertRaises(ValueError):
+            self.hub.task_create(dict(mode="single",prompt="Next",agent_ids=[a["id"]],session_id=first["session_id"]))
+        self.hub.cancel(first["id"])
+        self.wait(first,"cancelled")
+
+    def test_resume_skips_successful_rounds(self):
+        a=self.agent("Good")
+        b=self.agent("Once","--fail-once",str(self.root/"marker"))
+        first=self.wait(self.task([a,b]),"failed")
+        resumed=self.hub.retry(first["id"],True)
+        final=self.wait(resumed,"completed")
+        self.assertEqual(final["start_turn"],1)
+        self.assertEqual(len(self.captured("Good")),1)
+        self.assertEqual(len(self.captured("Once")),2)
+        self.assertIn("RESULT Good",self.captured("Once")[1]["prompt"])
+
+    def test_rerun_repeats_completed_task(self):
+        a=self.agent("Repeat")
+        first=self.wait(self.task([a],"single"),"completed")
+        self.wait(self.hub.retry(first["id"],False),"completed")
+        self.assertEqual(len(self.captured("Repeat")),2)
+        with self.assertRaises(ValueError): self.hub.retry(first["id"],True)
+
+    def test_multiple_workers_and_final_manager(self):
+        agents=[self.agent(name) for name in ["Manager","WorkerA","WorkerB"]]
+        final=self.wait(self.task(agents,"hierarchy"),"completed")
+        self.assertEqual(final["current_turn"],4)
+        self.assertIn("RESULT WorkerB",self.captured("Manager")[1]["prompt"])
+
+    def test_message_can_wake_agent(self):
+        a=self.agent("Inbox")
+        message=self.hub.message(dict(to=a["id"],body="请处理这条消息",trigger=True))
+        self.wait({"id":message["task_id"]},"completed")
+        self.assertIn("请处理这条消息",self.captured("Inbox")[0]["prompt"])
+
+    def test_export_preserves_result_and_error(self):
+        a=self.agent("Report")
+        final=self.wait(self.task([a],"single"),"completed")
+        export=self.hub.export_task(final["id"])
+        self.assertIn("RESULT Report",export)
+        self.assertIn("检查中文任务传递",export)
+
+    def test_backup_import_atomic_validation(self):
+        self.agent("Existing")
+        backup=self.hub.backup()
+        self.assertNotIn("token",json.dumps(backup))
+        invalid={"agents":[backup["agents"][0],dict(name="Bad",argv=[])]}
+        with self.assertRaises(ValueError): self.hub.import_agents(invalid)
+        self.assertEqual(len(self.hub.store.all("agents")),1)
+        self.assertEqual(self.hub.import_agents(backup)["imported"],1)
+        self.assertEqual(len(self.hub.store.all("agents")),2)
+
+    def test_agent_version_check(self):
+        a=self.hub.agent_save(dict(name="Python",argv=[sys.executable],cwd=str(self.root)))
+        check=self.hub.agent_check(a["id"])
+        self.assertTrue(check["available"])
+        self.assertIn("Python",check["version_output"])
+
+    @unittest.skipUnless(sys.platform=="win32","Windows ConPTY integration")
+    def test_real_windows_conpty_unicode_and_resize(self):
+        script=self.root/"interactive.py"
+        script.write_text("import sys\nprint('READY',flush=True)\ntext=input()\nprint('REPLY:'+text,flush=True)\n",encoding="utf-8")
+        a=self.agent("Interactive")
+        terminal=self.hub.terminal_start(dict(agent_id=a["id"],argv=[sys.executable,"-u",str(script)]))
+        tid=terminal["id"]
+        def wait_text(needle):
+            deadline=time.monotonic()+8
+            while time.monotonic()<deadline:
+                output=''.join(c['text'] for c in self.hub.terminals[tid]['chunks'])
+                if needle in output:return
+                time.sleep(.05)
+            self.fail('Missing terminal output: '+needle+'; '+output)
+        wait_text('READY')
+        self.hub.terminal_action(tid,dict(action="resize",rows=28,cols=100))
+        self.hub.terminal_action(tid,dict(action="ready"))
+        self.hub.terminal_action(tid,dict(action="input",text="你好 Windows",enter=True))
+        wait_text('REPLY:你好 Windows')
+
+    @unittest.skipUnless(sys.platform=="win32","Windows batch launcher integration")
+    def test_real_windows_batch_with_spaces(self):
+        folder=self.root/'tools with spaces';folder.mkdir()
+        command=folder/'fake.cmd'
+        command.write_bytes((f'@echo off\r\n"{sys.executable}" "{self.fixture}" --name Batch --capture "{self.root / "Batch.jsonl"}" %*\r\n').encode())
+        a=self.hub.agent_save(dict(name="Batch",argv=[str(command),"--output","{output}"],cwd=str(self.root)))
+        final=self.wait(self.task([a],"single"),"completed")
+        self.assertIn("RESULT Batch",final["result"])
+
     def test_terminal_input_guard_with_mock_windows_backend(self):
         # Contract test only: this is NOT a real Windows ConPTY test.
         a = self.agent("Terminal")
@@ -268,7 +372,7 @@ class HTTPTests(unittest.TestCase):
         responses=[json.loads(line) for line in result.stdout.splitlines()]
         self.assertEqual(len(responses),3)
         self.assertEqual(responses[0]["result"]["serverInfo"]["name"],"agent-bridge")
-        self.assertEqual(len(responses[1]["result"]["tools"]),6)
+        self.assertEqual(len(responses[1]["result"]["tools"]),9)
         self.assertFalse(responses[2]["result"].get("isError"))
 
     def test_message_roundtrip_via_mcp(self):
