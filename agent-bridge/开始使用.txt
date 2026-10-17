@@ -1,0 +1,14 @@
+Agent Bridge · Windows 本地多 Agent 协作台
+
+1. 先安装 Python 3.10 或以上版本，勾选 Add Python to PATH。
+2. 解压整个文件夹到 C:\AgentBridge 等可写目录。
+3. 双击 start.cmd。首次启动需要联网安装终端依赖。
+4. 保持启动窗口打开，浏览器会打开 http://127.0.0.1:8765。
+5. 先点“接入指南 → 添加演示伙伴”，回到工作台发一个任务验证流程。
+6. 再到“Agent 管理”添加真实工具，填写本机的项目目录。
+
+Codex 与 Claude Code 有命令模板，DeepSeek Harness 需要填实际启动命令。
+详细接入、MCP 配置及限制见 README.md；测试范围见 VALIDATION.md。
+
+这是源码运行版，需要 Python；不是已编译的 .exe 安装程序。
+开发环境尚未连接你的 Windows 电脑，真实终端和工具需要在本机实测。
