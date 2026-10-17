@@ -2,7 +2,7 @@
 
 ## 本地核心与浏览器验证
 
-Linux / Python 3.12：32 项自动测试中，30 项通过，2 项 Windows 专属检查跳过。覆盖任务传递、主管流程、并发/串行、停止、超时、失败续跑、会话上下文、版本检查、备份的整体校验、消息唤醒、HTTP 限制和真实 stdio MCP 协议。
+Linux / Python 3.12：33 项自动测试中，30 项通过，3 项 Windows 专属检查跳过。覆盖任务传递、主管流程、并发/串行、停止、超时、失败续跑、会话上下文、版本检查、备份的整体校验、消息唤醒、HTTP 限制和真实 stdio MCP 协议。
 
 Chromium / Playwright：13 个操作流程通过，页面 JavaScript 错误为 0：
 
@@ -26,7 +26,7 @@ Chromium / Playwright：13 个操作流程通过，页面 JavaScript 错误为 0
 
 [Agent Bridge Windows 工作流](https://github.com/aozhenyu666-cmyk/test/actions/workflows/agent-bridge-windows.yml) 在 Windows runner 中执行：
 
-- 全部 32 项自动测试，包含真实 ConPTY 的中文输入/输出、窗口缩放，以及带空格路径的 .cmd 包装器。
+- 全部 33 项自动测试，包含真实 ConPTY 的中文输入/输出、窗口缩放，带空格路径的 .cmd 包装器，以及停止终端时清理子进程树。
 - PyInstaller 生成原生 GUI EXE 与共享运行时的 CLI 辅助 EXE。
 - 打包后的 `--self-test` 检查内置运行时、前端资源、真实子进程、SQLite、stdio MCP、pywebview 与 winpty。
 - 打包后的 `--window-self-test` 启动真实 WebView2 窗口，验证界面连接到本地服务，以及离线终端资源已加载。

@@ -113,6 +113,19 @@ def kill_tree(proc):
             pass
 
 
+def stop_terminal(proc):
+    if proc is None:
+        return
+    # A .cmd Agent may have a Python helper, cmd.exe and Node below the PTY
+    # parent. Closing only that parent leaves the actual Agent running.
+    if os.name == "nt" and getattr(proc, "pid", None) and proc.isalive():
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=10, creationflags=subprocess.CREATE_NO_WINDOW)
+    if proc.isalive():
+        proc.terminate(force=True)
+
+
 def command_for(agent, output):
     argv = [x.replace("{output}", str(output)) for x in agent["argv"]]
     executable = shutil.which(argv[0])
@@ -524,6 +537,7 @@ class Hub:
                 self._terminal_save(terminal)
                 if hasattr(proc, "close"):
                     proc.close(force=True)
+                terminal["proc"] = None
                 with self.lock:
                     self.threads.discard(threading.current_thread())
 
@@ -544,7 +558,7 @@ class Hub:
             action = data.get("action")
             if action == "stop":
                 if terminal["alive"]:
-                    terminal["proc"].terminate(force=True)
+                    stop_terminal(terminal["proc"])
                 terminal["alive"] = False
                 self._terminal_save(terminal)
             elif action == "resize":
@@ -606,7 +620,7 @@ class Hub:
             kill_tree(proc)
         for terminal in terminals:
             if terminal["alive"]:
-                terminal["proc"].terminate(force=True)
+                stop_terminal(terminal["proc"])
                 terminal["alive"] = False
                 self._terminal_save(terminal)
         for thread in list(self.threads):

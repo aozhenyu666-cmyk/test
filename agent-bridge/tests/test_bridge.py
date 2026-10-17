@@ -283,6 +283,38 @@ class HubTests(unittest.TestCase):
         final=self.wait(self.task([a],"single"),"completed")
         self.assertIn("RESULT Batch",final["result"])
 
+    @unittest.skipUnless(sys.platform=="win32","Windows PTY child process cleanup")
+    def test_real_windows_terminal_stop_kills_children(self):
+        import ctypes
+        from ctypes import wintypes
+        script=self.root/'parent.py'
+        script.write_text("import subprocess,sys\np=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'])\nprint('CHILD='+str(p.pid),flush=True)\ninput()\n",encoding='utf-8')
+        a=self.agent('Parent')
+        terminal=self.hub.terminal_start(dict(agent_id=a['id'],argv=[sys.executable,'-u',str(script)]))
+        tid=terminal['id'];deadline=time.monotonic()+8;pid=None
+        import re
+        while time.monotonic()<deadline:
+            text=''.join(c['text'] for c in self.hub.terminals[tid]['chunks'])
+            match=re.search(r'CHILD=(\d+)',text)
+            if match:pid=int(match.group(1));break
+            time.sleep(.05)
+        self.assertIsNotNone(pid)
+        kernel=ctypes.windll.kernel32
+        kernel.OpenProcess.restype=wintypes.HANDLE
+        handle=kernel.OpenProcess(0x1000,False,pid)
+        self.assertTrue(handle)
+        try:
+            self.hub.terminal_action(tid,dict(action='stop'))
+            exit_code=wintypes.DWORD(259)
+            for _ in range(50):
+                kernel.GetExitCodeProcess(wintypes.HANDLE(handle),ctypes.byref(exit_code))
+                if exit_code.value!=259:break
+                time.sleep(.05)
+            self.assertNotEqual(exit_code.value,259,'Terminal child remained alive')
+        finally:
+            kernel.CloseHandle(wintypes.HANDLE(handle))
+            subprocess.run(['taskkill','/PID',str(pid),'/T','/F'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+
     def test_terminal_input_guard_with_mock_windows_backend(self):
         # Contract test only: this is NOT a real Windows ConPTY test.
         a = self.agent("Terminal")
