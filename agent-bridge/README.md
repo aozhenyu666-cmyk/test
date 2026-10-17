@@ -1,6 +1,6 @@
 # Agent Bridge · Windows 本地多 Agent 协作台
 
-[下载 Windows 源码运行包](https://github.com/aozhenyu666-cmyk/test/releases/download/agent-bridge-v0.1.0/AgentBridge-Windows-v0.1.0.zip) · [版本说明](https://github.com/aozhenyu666-cmyk/test/releases/tag/agent-bridge-v0.1.0) · [验证记录](VALIDATION.md)
+[下载 Windows 源码运行包](https://github.com/aozhenyu666-cmyk/test/raw/refs/tags/agent-bridge-v0.1.0/agent-bridge/dist/AgentBridge-Windows-v0.1.0.zip) · [版本说明](https://github.com/aozhenyu666-cmyk/test/releases/tag/agent-bridge-v0.1.0) · [验证记录](VALIDATION.md)
 
 仓库中的本项目位于独立的 `agent-bridge/` 目录。下载包只包含 Agent Bridge，解压后双击 `AgentBridge/start.cmd`，需要 Python 3.10+。
 
