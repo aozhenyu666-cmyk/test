@@ -196,6 +196,23 @@ object HqRunner {
                     "最后【选项】开始大统筹｜晚上总控时间里做｜这周不做。他选“开始大统筹”就调 start_campaign。",
                 fallback = "下周还没有计划。打开统筹规划部，开一场大统筹。",
             )
+            return
+        }
+        // 外接谋划：外面交进来的事还没落实时，一天挑一条盯一下——总控是监督者，不替用户重新谋划
+        val openDirs = store.config.value.directives.filter {
+            it.status == com.zongkong.core.plan.Directive.STATUS_ACTIVE && it.open.isNotEmpty()
+        }
+        if (openDirs.isNotEmpty() && minute in 9 * 60 + 30 until 11 * 60 && store.firstAlert("auto-directive:$date")) {
+            val d = openDirs.first()
+            val item = d.open.first()
+            app.chat.proactive(
+                "directive",
+                "[自动·外接谋划] 用户在 Gemini / GPT / Notion 那边交进来的「${d.title}」还有 ${d.open.size} 条没落实，比如「${item.text}」。" +
+                    "先 directive_check 对账，再看 get_overview / today_report，判断这条今天能不能落一步：" +
+                    "能就 add_action 排进今天，并 commit 一个到点可检查的约定；不能就说清楚卡在哪、问他要不要今天处理。" +
+                    "你只监督落实，不要替用户重做这份谋划。两三句，最后【选项】今天做｜本周内｜先不管。",
+                fallback = "「${d.title}」还有 ${d.open.size} 条外接谋划没落实。打开外接谋划看看。",
+            )
         }
     }
 

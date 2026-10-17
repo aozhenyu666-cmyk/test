@@ -442,6 +442,13 @@ object Pet {
         service = null
     }
 
+    /**
+     * 眼睛离线时的一句话（在线返回 null）：墨灵/桌面小部件用它当“活体指示”，
+     * 服务没了就不装没事——直接说“我看不见了”。
+     */
+    fun offlineNote(c: Context): String? =
+        if (com.zongkong.app.guard.GuardService.running) null else "我看不见了：无障碍没在运行。"
+
     private fun prefs(c: Context) = c.getSharedPreferences("pet", Context.MODE_PRIVATE)
 
     /** 收起一段时间。 */

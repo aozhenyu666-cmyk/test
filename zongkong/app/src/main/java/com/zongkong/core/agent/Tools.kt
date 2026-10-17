@@ -140,11 +140,18 @@ interface AgentEnv {
     suspend fun startYishouWindow(): String = "这个环境开不了一手的窗口"
     suspend fun sync(): String
     fun memory(): List<String>
+    /** 当前这段对话的交接信息（上一段对话压缩成的摘要、今天是第几段），写进系统提示。 */
+    fun threadContext(): String = ""
     fun remember(fact: String)
     fun forget(fact: String): Boolean
     /** 应用名 → 包名（拦截名单用）；认不出返回 null。 */
     fun resolveApp(name: String): String?
     fun appLabel(pkg: String): String
+
+    // ---------- 外接谋划单（外部谋划者交进来的东西，总控负责监督而不是替它想） ----------
+
+    fun directives(): List<com.zongkong.core.plan.Directive> = emptyList()
+    fun updateDirectives(f: (List<com.zongkong.core.plan.Directive>) -> List<com.zongkong.core.plan.Directive>): List<com.zongkong.core.plan.Directive> = directives()
 }
 
 /**
@@ -530,6 +537,34 @@ class ZkTools(private val env: AgentEnv) {
             listOf(Param("fact", "string", "一句话", required = true)),
         ),
         ToolSpec("forget", "删掉一条记住的事。", listOf(Param("fact", "string", "要删的那句（原样或包含的关键词）", required = true))),
+        ToolSpec(
+            "directive_add",
+            "收下一份外接的谋划（用户在 Gemini / GPT / Notion 里聊出来的报告、计划、问题清单）。你负责把它拆成能监督的条目，" +
+                "不替用户重写专业内容、不自己另做一份谋划。title 一句话；text 原文尽量完整；items 每行一条：类型｜一句话｜时间说法（类型可省）。",
+            listOf(
+                Param("title", "string", "这份谋划叫什么", required = true),
+                Param("text", "string", "原文（长文整段贴）", required = true),
+                Param("source", "string", "从哪来：Gemini / GPT / Notion / 粘贴"),
+                Param("summary", "string", "一句话结论：这份文档要用户做到什么"),
+                Param("items", "string", "每行：类型｜一句话｜时间说法（后两个可省；类型：要做/风险/待决/事实）"),
+            ),
+        ),
+        ToolSpec("directive_list", "列出所有外接谋划单：标题、来源、几条已落实、几条没落实。"),
+        ToolSpec(
+            "directive_update",
+            "改一份外接谋划单：加条目、勾掉条目、改结论、收掉或归档。",
+            listOf(
+                Param("directive", "string", "id 或标题", required = true),
+                Param("act", "string", "做什么", required = true, choices = listOf("加条目", "勾掉", "取消勾掉", "改结论", "收掉", "归档")),
+                Param("item", "string", "条目 id 或条目里的一句话（勾掉 / 取消勾掉用）"),
+                Param("text", "string", "新条目（一行：类型｜一句话｜时间）或新结论"),
+            ),
+        ),
+        ToolSpec(
+            "directive_check",
+            "对账：看一份谋划单（不填就看全部）里哪些说要做、现在到哪了。盯落实时先调这个，再去查事项/行动的证据。",
+            listOf(Param("directive", "string", "id 或标题；不填看全部")),
+        ),
     )
 
     suspend fun run(name: String, argsJson: String): ToolResult {
@@ -609,11 +644,148 @@ class ZkTools(private val env: AgentEnv) {
                 "sync_notion" -> env.sync().let { ToolResult(it, it) }
                 "remember" -> a.s("fact").takeIf { it.isNotBlank() }?.let { env.remember(it); ToolResult("记住了：$it", "记住：$it") } ?: ToolResult.fail("fact 不能空")
                 "forget" -> if (env.forget(a.s("fact"))) ToolResult("删掉了", "不再记：${a.s("fact")}") else ToolResult.fail("没找到这条")
+                "directive_add" -> directiveAdd(a)
+                "directive_list" -> directiveList()
+                "directive_update" -> directiveUpdate(a)
+                "directive_check" -> directiveCheck(a)
                 else -> ToolResult.fail("没有这个工具：$name")
             }
         } catch (e: Exception) {
             ToolResult.fail("${name} 出错：${e.message ?: e.javaClass.simpleName}")
         }
+    }
+
+    // ---------- 外接谋划单：收下、拆条目、盯落实 ----------
+
+    private fun dirId() = "D" + (env.now() / 1000).toString(36).takeLast(4) + env.rnd.nextInt(36 * 36).toString(36).padStart(2, '0')
+
+    private fun itemId(seq: Int) = "i$seq" + env.rnd.nextInt(36 * 36).toString(36).padStart(2, '0')
+
+    /** 解析"类型｜一句话｜时间"行；类型认不出就把第一列当内容。 */
+    private fun parseDirectiveItems(raw: String): List<com.zongkong.core.plan.DirectiveItem> =
+        raw.lines().map { it.trim() }.filter { it.isNotBlank() }.take(60).mapIndexed { idx, line ->
+            val parts = line.split('｜', '|').map { p -> p.trim() }
+            val kind = when (parts.getOrNull(0).orEmpty()) {
+                "风险", "risk" -> com.zongkong.core.plan.DirectiveItem.KIND_RISK
+                "待决", "question" -> com.zongkong.core.plan.DirectiveItem.KIND_QUESTION
+                "事实", "fact" -> com.zongkong.core.plan.DirectiveItem.KIND_FACT
+                "要做", "task" -> com.zongkong.core.plan.DirectiveItem.KIND_TASK
+                else -> null
+            }
+            val body: String
+            val due: String
+            if (kind == null) {
+                body = parts.getOrNull(0).orEmpty()
+                due = parts.getOrNull(1).orEmpty()
+            } else {
+                body = parts.getOrNull(1).orEmpty()
+                due = parts.getOrNull(2).orEmpty()
+            }
+            com.zongkong.core.plan.DirectiveItem(
+                id = itemId(idx),
+                text = body.take(200),
+                kind = kind ?: com.zongkong.core.plan.DirectiveItem.KIND_TASK,
+                due = due.take(40),
+            )
+        }.filter { it.text.isNotBlank() }
+
+    private fun directiveAdd(a: Args): ToolResult {
+        val title = a.s("title").take(60).ifBlank { return ToolResult.fail("title 不能空") }
+        val text = a.s("text")
+        if (text.isBlank()) return ToolResult.fail("text 不能空（把外部文档整段贴进来）")
+        val now = env.now()
+        val d = com.zongkong.core.plan.Directive(
+            id = dirId(),
+            title = title,
+            source = a.s("source").take(20).ifBlank { "粘贴" },
+            at = now,
+            raw = text.take(20000),
+            summary = a.s("summary").take(300),
+            items = parseDirectiveItems(a.s("items")),
+        )
+        val list = env.updateDirectives { (it + d).takeLast(30) }
+        val active = list.count { it.status == com.zongkong.core.plan.Directive.STATUS_ACTIVE }
+        return ToolResult(
+            "收下了「${d.title}」，拆成 ${d.items.size} 条。现在共 $active 份在办的外接谋划。",
+            "收下外接谋划：${d.title}",
+        )
+    }
+
+    private fun directiveList(): ToolResult {
+        val list = env.directives()
+        if (list.isEmpty()) return ToolResult("还没有外接谋划单。用户在 Gemini / GPT 里聊完后，把整段贴进来，就能在这里盯落实。", "没有外接谋划")
+        val sb = StringBuilder()
+        list.forEach { d ->
+            sb.append("· ").append(d.title).append(" [").append(d.id).append("]（").append(d.source).append("） ")
+            sb.append(d.doneCount).append("/").append(d.items.size).append(" 条落实")
+            if (d.status != com.zongkong.core.plan.Directive.STATUS_ACTIVE) sb.append(" · ").append(d.status)
+            sb.append('\n')
+            d.open.take(5).forEach { i ->
+                sb.append("   - [").append(com.zongkong.core.plan.DirectiveItem.kindLabel(i.kind)).append("] ").append(i.text)
+                if (i.due.isNotBlank()) sb.append("（").append(i.due).append("）")
+                sb.append('\n')
+            }
+        }
+        return ToolResult(sb.toString().trim(), "看了外接谋划（${list.size} 份）")
+    }
+
+    private fun directiveUpdate(a: Args): ToolResult {
+        val key = a.s("directive")
+        val d = com.zongkong.core.plan.Directives.find(env.directives(), key) ?: return ToolResult.fail("没有这份谋划：$key")
+        val act = a.s("act")
+        val item = a.s("item")
+        val text = a.s("text")
+        when (act) {
+            "加条目" -> {
+                val items = parseDirectiveItems(text)
+                if (items.isEmpty()) return ToolResult.fail("text 里没有条目（一行一条：类型｜一句话）")
+                env.updateDirectives { list -> list.map { if (it.id == d.id) it.copy(items = it.items + items) else it } }
+                return ToolResult("加了 ${items.size} 条到「${d.title}」。", "谋划加条目")
+            }
+            "勾掉", "取消勾掉" -> {
+                val hit = d.items.firstOrNull { it.id == item } ?: d.items.firstOrNull { item.isNotBlank() && it.text.contains(item) }
+                    ?: return ToolResult.fail("没找到这条：$item")
+                val done = act == "勾掉"
+                env.updateDirectives { list -> list.map { x -> if (x.id == d.id) x.copy(items = x.items.map { if (it.id == hit.id) it.copy(done = done) else it }) else x } }
+                return ToolResult("「${hit.text}」${if (done) "勾掉了" else "恢复成没做"}。", if (done) "谋划落实一条" else "谋划恢复一条")
+            }
+            "改结论" -> {
+                if (text.isBlank()) return ToolResult.fail("text 不能空")
+                env.updateDirectives { list -> list.map { if (it.id == d.id) it.copy(summary = text.take(300)) else it } }
+                return ToolResult("改了「${d.title}」的结论。", "改谋划结论")
+            }
+            "收掉" -> {
+                env.updateDirectives { list -> list.map { if (it.id == d.id) it.copy(status = com.zongkong.core.plan.Directive.STATUS_DONE) else it } }
+                return ToolResult("「${d.title}」收掉了（记成已完成）。", "收掉谋划")
+            }
+            "归档" -> {
+                env.updateDirectives { list -> list.map { if (it.id == d.id) it.copy(status = com.zongkong.core.plan.Directive.STATUS_ARCHIVED) else it } }
+                return ToolResult("「${d.title}」归档了。", "归档谋划")
+            }
+            else -> return ToolResult.fail("不认识的动作用：加条目 / 勾掉 / 取消勾掉 / 改结论 / 收掉 / 归档")
+        }
+    }
+
+    private fun directiveCheck(a: Args): ToolResult {
+        val key = a.s("directive")
+        val list = if (key.isBlank()) env.directives() else listOfNotNull(com.zongkong.core.plan.Directives.find(env.directives(), key))
+        if (list.isEmpty()) return ToolResult("没有这份谋划：$key", "没找到谋划")
+        val sb = StringBuilder()
+        list.forEach { d ->
+            sb.append("「").append(d.title).append("」（").append(d.source).append("）\n")
+            if (d.summary.isNotBlank()) sb.append("结论：").append(d.summary).append('\n')
+            if (d.items.isEmpty()) sb.append("（还没拆条目：让总控把原文拆成一条条能检查的事）\n")
+            d.items.forEach { i ->
+                sb.append(if (i.done) "✓ " else "○ ")
+                sb.append("[").append(com.zongkong.core.plan.DirectiveItem.kindLabel(i.kind)).append("] ").append(i.text)
+                if (i.due.isNotBlank()) sb.append("（").append(i.due).append("）")
+                if (i.threadKey.isNotBlank()) sb.append(" → 事项 ").append(i.threadKey)
+                if (i.actionKey.isNotBlank()) sb.append(" → 行动 ").append(i.actionKey)
+                sb.append('\n')
+            }
+            sb.append('\n')
+        }
+        return ToolResult(sb.toString().trim(), "对了外接谋划的账")
     }
 
     // ---------- 总控者 ----------
@@ -1510,6 +1682,9 @@ class ZkTools(private val env: AgentEnv) {
             "vein_health" to "脉络·体检",
             "dossier" to "档案（信用、约定）",
             "voice" to "语音对讲",
+            "directives" to "外接谋划（Gemini / GPT / Notion 交进来的）",
+            "watch" to "低屏模式（限时 + 冷却 + 做题）",
+            "diag" to "无障碍诊断",
         )
 
         private val ROUTES: Map<String, String> = mapOf(
@@ -1543,6 +1718,9 @@ class ZkTools(private val env: AgentEnv) {
             "vein_health" to "vein/health",
             "dossier" to "dossier",
             "voice" to "voice",
+            "directives" to "directives",
+            "watch" to "settings/watch",
+            "diag" to "settings/diag",
         )
     }
 }

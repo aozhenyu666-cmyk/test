@@ -83,6 +83,11 @@ fun SettingsScreen(nav: NavHostController) {
         SectionLabel("互动")
         MenuItem("总控怎么运转", "收→谋→筹→行→验；今天几点主动找你、信用怎么算、行动和记录怎么用", "flow", nav)
         MenuItem("对讲、语音、桌面宠物", "${if (config.voice.apiReady) "语音接口已接" else "用手机自带的语音"} · 主动程度：${com.zongkong.core.boss.BossConfig.INITIATIVE.getOrElse(config.boss.initiative) { "?" }} · ${com.zongkong.app.system.PetView.kindOf(config.boss.petKind).label}${if (config.boss.pet) "在桌面上" else "收起了"}", "voice/settings", nav)
+        MenuItem(
+            "外接谋划",
+            "${config.directives.count { it.status == com.zongkong.core.plan.Directive.STATUS_ACTIVE }} 份在办 · Gemini / GPT / Notion 交进来的报告，总控只负责盯落实",
+            "directives", nav,
+        )
 
         SectionLabel("工具")
         MenuItem("脉络", "谋划思考部的知识结构：体系 → 层级 → 节点 → 关系", "vein", nav)
@@ -90,6 +95,12 @@ fun SettingsScreen(nav: NavHostController) {
 
         SectionLabel("运行")
         MenuItem("权限与运行状态", if (PermissionStatus.accessibility(context)) "无障碍已开启" else "无障碍未开启——总控没在盯", "settings/perm", nav, warn = !PermissionStatus.accessibility(context))
+        MenuItem(
+            "无障碍诊断",
+            if (PermissionStatus.guardRunning(context)) "服务在运行 · 失联和失效原因都记着，可导出"
+            else "服务没在运行——看看为什么，导出日志",
+            "settings/diag", nav, warn = !PermissionStatus.guardRunning(context),
+        )
         MenuItem("今天的节律", "今日部署、收集、判断、一手训练、日终验收；严管与放行", "rhythm", nav)
         MenuItem("历史记录", "最近 14 天", "history", nav)
 
@@ -108,6 +119,13 @@ fun SettingsScreen(nav: NavHostController) {
         SectionLabel("规则")
         MenuItem("关卡", "${config.gates.size} 道：每个部门每天要交什么", "settings/gates", nav)
         MenuItem("拦截名单", "${config.blocked.size} 个应用：严管时打开就被弹回", "settings/block", nav)
+        MenuItem(
+            "低屏模式",
+            if (config.watch.enabled && config.watch.rules.isNotEmpty())
+                "${config.watch.rules.size} 个应用：连续用 ${config.watch.rules.firstOrNull()?.maxMinutes ?: 2} 分钟弹回做题，冷却后放行"
+            else "没开：闲鱼 / Twitter 这类全封太狠、放开太浪费时间",
+            "settings/watch", nav,
+        )
         MenuItem("规则", "沉默 ${if (config.silenceHours == 0) "不查" else "${config.silenceHours} 小时"} · 娱乐 ${if (config.dailyQuotaMin == 0) "不限" else "${config.dailyQuotaMin} 分钟"} · 紧急放行 ${config.emergencyPerDay} 次", "settings/rules", nav)
         MenuItem("待生效的放宽", if (config.pending.isEmpty()) "没有" else "${config.pending.size} 项", "settings/pending", nav)
 

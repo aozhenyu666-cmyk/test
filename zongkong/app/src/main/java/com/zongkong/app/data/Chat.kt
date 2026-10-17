@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.util.Log
 import com.zongkong.app.link.YishouClient
+import com.zongkong.core.ApiResult
 import com.zongkong.core.Config
 import com.zongkong.core.Link
 import com.zongkong.core.Status
@@ -13,6 +14,8 @@ import com.zongkong.core.agent.Agent
 import com.zongkong.core.agent.AgentEnv
 import com.zongkong.core.agent.ChatClient
 import com.zongkong.core.agent.ChatMsg
+import com.zongkong.core.agent.ChatThread
+import com.zongkong.core.agent.ChatThreads
 import com.zongkong.core.work.Work
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -27,10 +30,17 @@ import java.io.File
 import java.time.ZoneId
 import kotlin.random.Random
 
-/** 参谋的对话和它记住的事，存在 zk/chat.json。 */
+/**
+ * 参谋的对话和它记住的事，存在 zk/chat.json。
+ *
+ * 对话分成多段（[threads]），[activeId] 是当前这一段。旧的 chat.json 只有 `messages`，
+ * 读进来时自动迁移成第一段（并把旧文件备份成 chat.json.bak）；`messages` 这个计算属性让
+ * 现有界面和主动消息代码不用改。
+ */
 @Serializable
 data class ChatLog(
-    val messages: List<ChatMsg> = emptyList(),
+    val threads: List<ChatThread> = emptyList(),
+    val activeId: String = "",
     val memory: List<String> = emptyList(),
     /** 正在进行的战役（大统筹、大谋划、整理收集箱），空 = 没有。 */
     val campaign: String = "",
@@ -38,7 +48,30 @@ data class ChatLog(
     val campaignAt: Long = 0,
     /** 打完的战役：标题、时刻、总结（最近 10 次）。 */
     val campaignLog: List<String> = emptyList(),
-)
+) {
+    /** 当前这一段；activeId 对不上就退到最近没被收尾的一段。 */
+    val activeThread: ChatThread?
+        get() = threads.firstOrNull { it.id == activeId }
+            ?: threads.lastOrNull { !it.closed }
+            ?: threads.lastOrNull()
+
+    /** 当前这一段的全部消息（界面、主动消息、头像气泡都还按这个读）。 */
+    val messages: List<ChatMsg> get() = activeThread?.messages ?: emptyList()
+}
+
+/** 只改当前这一段。 */
+internal fun ChatLog.mapActive(f: (ChatThread) -> ChatThread): ChatLog {
+    val t = activeThread ?: return this
+    return copy(threads = threads.map { if (it.id == t.id) f(it) else it }, activeId = t.id)
+}
+
+/** 按 id 换掉这一段。 */
+internal fun ChatLog.replaceThread(t: ChatThread): ChatLog =
+    copy(threads = threads.map { if (it.id == t.id) t else it }, activeId = t.id)
+
+/** 旧格式（只有 messages）读出来用。 */
+@Serializable
+private data class LegacyChatLog(val messages: List<ChatMsg> = emptyList())
 
 /**
  * 参谋：对话在应用级的协程里跑，离开对话页也不中断；每一步（调用了什么工具、结果）实时写进对话。
@@ -48,6 +81,9 @@ class ChatRepo(private val context: Context, private val store: Store, private v
     private val file = File(File(context.filesDir, "zk"), "chat.json")
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val lock = Any()
+    /** 今天新开了几段对话（跨天归零）。 */
+    private val prefs = context.getSharedPreferences("chat", Context.MODE_PRIVATE)
+    private val rnd = Random.Default
 
     private val _log = MutableStateFlow(load())
     val log: StateFlow<ChatLog> = _log.asStateFlow()
@@ -101,6 +137,11 @@ class ChatRepo(private val context: Context, private val store: Store, private v
         }
         override suspend fun sync(): String = actions.sync()
         override fun memory(): List<String> = _log.value.memory
+        override fun threadContext(): String =
+            ChatThreads.contextLine(_log.value.threads, _log.value.activeId, System.currentTimeMillis(), store.zone)
+        override fun directives(): List<com.zongkong.core.plan.Directive> = store.config.value.directives
+        override fun updateDirectives(f: (List<com.zongkong.core.plan.Directive>) -> List<com.zongkong.core.plan.Directive>) =
+            store.updateConfig { it.copy(directives = f(it.directives)) }.directives
         override fun remember(fact: String) = update { it.copy(memory = (it.memory.filterNot { m -> m == fact } + fact).takeLast(30)) }
         override fun forget(fact: String): Boolean {
             val before = _log.value.memory
@@ -180,6 +221,94 @@ class ChatRepo(private val context: Context, private val store: Store, private v
 
     val agent = Agent(client, env)
 
+    // ---------- 多段对话 ----------
+
+    /** 现在的段列表，最近动过的在前。 */
+    fun threads(): List<ChatThread> = ChatThreads.recentFirst(_log.value.threads)
+
+    /** 当前这一段的 id（没有段时为空）。 */
+    val activeId: String get() = _log.value.activeThread?.id.orEmpty()
+
+    /** 当前这一段。 */
+    fun activeThread(): ChatThread? = _log.value.activeThread
+
+    /** 每天最多新开几段；0 = 不限（config.chat.threadsPerDay，默认 1）。 */
+    fun threadsPerDay(): Int = store.config.value.chat.threadsPerDay
+
+    /** 今天已经新开了几段（SharedPreferences 记，跨天归零）。 */
+    fun openedToday(): Int {
+        val day = ChatThreads.dayKey(System.currentTimeMillis(), store.zone)
+        val stored = prefs.getString(PREF_DAY, "") ?: ""
+        return if (stored == day) prefs.getInt(PREF_COUNT, 0) else 0
+    }
+
+    /** 今天还能新开几段；-1 = 不限。 */
+    fun remainingToday(): Int = ChatThreads.remaining(threadsPerDay(), openedToday())
+
+    /** 今天新建受限时给用户看的一句话。 */
+    fun limitText(): String = ChatThreads.limitText(threadsPerDay(), openedToday())
+
+    /** 新开一段。返回（成功了吗，给用户的一句话）。受每日上限限制。 */
+    fun newThread(): Pair<Boolean, String> {
+        val perDay = threadsPerDay()
+        val opened = openedToday()
+        if (!ChatThreads.canOpen(perDay, opened)) return false to ChatThreads.limitText(perDay, opened)
+        if (!markOpened()) return false to ChatThreads.limitText(perDay, opened)
+        val now = System.currentTimeMillis()
+        // 上一段压出来的交接带过来，新的一开始就知道之前到哪了
+        val carry = _log.value.threads.filter { it.carry.isNotBlank() }.maxByOrNull { it.updatedAt }?.carry.orEmpty()
+        val t = ChatThread(id = ChatThreads.newId(rnd), createdAt = now, updatedAt = now, carry = carry)
+        update { it.copy(threads = it.threads + t, activeId = t.id) }
+        return true to "新开了一段。上一段的结论已经带着了。"
+    }
+
+    /** 关掉当前这段再新开一段。先查每日上限，开不了就不关（免得两截都空着）。 */
+    fun closeAndNew(): Pair<Boolean, String> {
+        val perDay = threadsPerDay()
+        val opened = openedToday()
+        if (!ChatThreads.canOpen(perDay, opened)) return false to ChatThreads.limitText(perDay, opened)
+        closeThread(activeId)
+        return newThread()
+    }
+
+    /** 打开某一段（收尾过的也能接着聊，打开即重新激活）。 */
+    fun openThread(id: String) {
+        update { log ->
+            val t = log.threads.firstOrNull { it.id == id } ?: return@update log
+            log.copy(threads = log.threads.map { if (it.id == id) ChatThreads.opened(t) else it }, activeId = id)
+        }
+    }
+
+    /**
+     * 收尾一段：先用本地摘要兜底立刻写回（界面不等），再让模型压一次 120 字的交接。
+     * 模型失败/没接就留着本地摘要，绝不阻塞界面。
+     */
+    fun closeThread(id: String) {
+        val now = System.currentTimeMillis()
+        var target: ChatThread? = null
+        update { log ->
+            val t = log.threads.firstOrNull { it.id == id } ?: return@update log
+            if (t.closed) return@update log
+            target = t
+            val carry = ChatThreads.mergeCarry(t.carry, ChatThreads.carryOf(t))
+            log.copy(threads = log.threads.map { if (it.id == id) ChatThreads.closed(it, carry, now) else it })
+        }
+        target?.let { aiCarry(it) }
+    }
+
+    /** 删掉一段；删的是当前这段就把当前段挪到最近一段上。 */
+    fun deleteThread(id: String) {
+        update { log ->
+            val left = log.threads.filterNot { it.id == id }
+            if (left.size == log.threads.size) return@update log
+            val active = if (log.activeThread?.id == id) {
+                (left.lastOrNull { !it.closed } ?: left.lastOrNull())?.id.orEmpty()
+            } else log.activeThread?.id.orEmpty()
+            log.copy(threads = left, activeId = active)
+        }
+    }
+
+
     /**
      * 你说一句。[echo]：从桌面宠物、通知、对讲来的——回答也回到那里（气泡、通知、念出来）。
      */
@@ -195,13 +324,13 @@ class ChatRepo(private val context: Context, private val store: Store, private v
                 val history = _log.value.messages
                 val speak = store.config.value.hq.speak && store.hq.value.active != null
                 agent.reply(history, t.ifBlank { "看看这张图" }, { m ->
-                    update { it.copy(messages = (it.messages + m).takeLast(MAX_KEEP)) }
+                    append(listOf(m))
                     if (m.role == ChatMsg.TOOL && m.route.isNotBlank()) route.value = m.route
                     if (speak && m.role == ChatMsg.ASSISTANT && m.content.isNotBlank() && !m.error) com.zongkong.app.system.Speaker.speak(context, m.content)
                 }, image = image, meta = if (image.isNotBlank()) photoMeta(image) else "")
             } catch (e: Exception) {
                 Log.e(TAG, "参谋出错", e)
-                update { it.copy(messages = it.messages + ChatMsg(ChatMsg.ASSISTANT, "出错了：${e.message ?: e.javaClass.simpleName}", at = System.currentTimeMillis(), error = true)) }
+                append(listOf(ChatMsg(ChatMsg.ASSISTANT, "出错了：${e.message ?: e.javaClass.simpleName}", at = System.currentTimeMillis(), error = true)))
             } finally {
                 _busy.value = false
                 if (echo) echoReply()
@@ -237,12 +366,12 @@ class ChatRepo(private val context: Context, private val store: Store, private v
                     val added = mutableListOf<ChatMsg>()
                     val out = agent.reply(_log.value.messages, instruction, { m ->
                         added += m
-                        update { it.copy(messages = (it.messages + m).takeLast(MAX_KEEP)) }
+                        append(listOf(m))
                     }, hidden = true)
                     said = out.lastOrNull { it.role == ChatMsg.ASSISTANT && it.content.isNotBlank() && !it.error }?.content.orEmpty()
                     if (quiet && (said.isBlank() || said.trim().startsWith("无事"))) {
                         // 抽查没发现问题：这一轮整段藏起来，不打扰
-                        update { log -> log.copy(messages = log.messages.map { m -> if (m in added) m.copy(hidden = true) else m }) }
+                        update { log -> log.mapActive { t -> t.copy(messages = t.messages.map { m -> if (m in added) m.copy(hidden = true) else m }) } }
                         Log.i(TAG, "抽查无事：$kind")
                         return@launch
                     }
@@ -256,7 +385,7 @@ class ChatRepo(private val context: Context, private val store: Store, private v
             }
             if (said.isBlank()) {
                 said = fallback
-                update { it.copy(messages = (it.messages + ChatMsg(ChatMsg.ASSISTANT, fallback, at = System.currentTimeMillis())).takeLast(MAX_KEEP)) }
+                append(listOf(ChatMsg(ChatMsg.ASSISTANT, fallback, at = System.currentTimeMillis())))
             }
             val (body, _) = Agent.options(said)
             com.zongkong.app.system.Notifications.advisor(context, body)
@@ -296,8 +425,8 @@ class ChatRepo(private val context: Context, private val store: Store, private v
         _busy.value = false
     }
 
-    /** 清空对话（记住的事保留）。 */
-    fun clear() = update { it.copy(messages = emptyList()) }
+    /** 清空当前这一段的对话（其他段和记住的事都保留）。 */
+    fun clear() = update { it.mapActive { t -> t.copy(messages = emptyList()) } }
 
     fun forgetAll() = update { it.copy(memory = emptyList()) }
 
@@ -310,11 +439,11 @@ class ChatRepo(private val context: Context, private val store: Store, private v
         job = scope.launch {
             try {
                 agent.reply(_log.value.messages, c.opening(topic, material), { m ->
-                    update { it.copy(messages = (it.messages + m).takeLast(MAX_KEEP)) }
+                    append(listOf(m))
                     if (m.role == ChatMsg.TOOL && m.route.isNotBlank()) route.value = m.route
                 }, hidden = true)
             } catch (e: Exception) {
-                update { it.copy(messages = it.messages + ChatMsg(ChatMsg.ASSISTANT, "出错了：${e.message ?: e.javaClass.simpleName}", at = System.currentTimeMillis(), error = true)) }
+                append(listOf(ChatMsg(ChatMsg.ASSISTANT, "出错了：${e.message ?: e.javaClass.simpleName}", at = System.currentTimeMillis(), error = true)))
             } finally {
                 _busy.value = false
             }
@@ -328,35 +457,197 @@ class ChatRepo(private val context: Context, private val store: Store, private v
         update { it.copy(campaign = "", campaignTopic = "", campaignAt = 0, campaignLog = (it.campaignLog + "${c.title}：中途停下").takeLast(10)) }
     }
 
-    /** 别处来的一句话（比如电脑上的总控发来的），放进对话里。 */
+    /** 别处来的一句话（比如电脑上的总控发来的），放进当前这一段。 */
     fun note(text: String) {
-        update { it.copy(messages = (it.messages + ChatMsg(ChatMsg.ASSISTANT, text, at = System.currentTimeMillis())).takeLast(MAX_KEEP)) }
+        append(listOf(ChatMsg(ChatMsg.ASSISTANT, text, at = System.currentTimeMillis())))
     }
+
+    // ---------- 往当前段追加消息 / 满了自动换段 ----------
+
+    /**
+     * 往当前这一段加消息。一段满 60 条后，在下一轮“用户的话”开头收尾换段（不把一轮问答劈成两半）：
+     * 旧段压成交接摘要收尾，新段从这句话开始接着走。到每日上限就不新开，把交接并进当前段、裁到最近 60 条。
+     */
+    private fun append(msgs: List<ChatMsg>) {
+        if (msgs.isEmpty()) return
+        val now = System.currentTimeMillis()
+        var toSummarize: ChatThread? = null
+        update { log0 ->
+            val (log, current) = ensureActive(log0, now)
+            if (msgs.first().role == ChatMsg.USER && ChatThreads.overflows(current, msgs)) {
+                val carry = ChatThreads.mergeCarry(current.carry, ChatThreads.carryOf(current))
+                if (markOpened()) {
+                    val (old, fresh) = ChatThreads.rollover(current, msgs, ChatThreads.newId(rnd), now)
+                    toSummarize = current
+                    log.copy(threads = log.threads.map { if (it.id == old.id) old else it } + fresh, activeId = fresh.id)
+                } else {
+                    // 今天的新建额度用完了：不新开，交接并进这一段，只留最近 60 条
+                    val merged = current.copy(messages = current.messages + msgs, updatedAt = now, closed = false)
+                    log.replaceThread(ChatThreads.trimmed(ChatThreads.withCarry(merged, carry, now)))
+                }
+            } else {
+                val next = ChatThreads.titled(
+                    current.copy(messages = (current.messages + msgs).takeLast(MAX_KEEP), updatedAt = now, closed = false),
+                )
+                log.replaceThread(next)
+            }
+        }
+        toSummarize?.let { aiCarry(it) }
+    }
+
+    /** 当前这一段；一段都没有（新装、或都删光了）就建第一段（不占每日额度）。 */
+    private fun ensureActive(log: ChatLog, now: Long): Pair<ChatLog, ChatThread> {
+        log.activeThread?.let { return log to it }
+        val t = ChatThread(id = ChatThreads.newId(rnd), createdAt = now, updatedAt = now)
+        return log.copy(threads = log.threads + t, activeId = t.id) to t
+    }
+
+    /**
+     * 用一次便宜的模型调用把这段压成不超过 120 字的交接摘要。
+     * 失败、没接 AI、超时：什么都不做，本地兜底摘要已经写好了，界面不受影响。
+     */
+    private fun aiCarry(t: ChatThread) {
+        if (!store.config.value.ai.ready) return
+        val text = transcript(t)
+        if (text.isBlank()) return
+        scope.launch {
+            try {
+                val r = client.chat(SUMMARY_SYSTEM, listOf(ChatMsg(ChatMsg.USER, text, at = System.currentTimeMillis())), emptyList())
+                val said = (r as? ApiResult.Ok)?.value?.content?.trim().orEmpty()
+                if (said.isNotBlank()) {
+                    val carry = said.take(ChatThreads.CARRY_MAX)
+                    update { log -> log.copy(threads = log.threads.map { if (it.id == t.id) it.copy(carry = carry) else it }) }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "交接摘要失败，保留本地兜底", e)
+            }
+        }
+    }
+
+    /** 给摘要模型看的这段时间线：更早的交接 + 最后 30 条（工具结果不要，太长）。 */
+    private fun transcript(t: ChatThread): String = buildString {
+        if (t.carry.isNotBlank()) append("更早的交接：").append(t.carry.take(ChatThreads.CARRY_MAX)).append('\n')
+        append("这几轮：\n")
+        t.messages
+            .filter { it.role != ChatMsg.TOOL && !it.error && !it.hidden && it.content.isNotBlank() }
+            .takeLast(30)
+            .forEach { m ->
+                append(if (m.role == ChatMsg.USER) "用户：" else "总控：")
+                append(m.content.trim().take(500)).append('\n')
+            }
+    }.trim()
+
+    /** 记一次“今天新开了一段”；到上限返回 false。0 = 不限（也照样记数，界面能显示）。 */
+    private fun markOpened(): Boolean {
+        val day = ChatThreads.dayKey(System.currentTimeMillis(), store.zone)
+        val perDay = threadsPerDay()
+        val stored = prefs.getString(PREF_DAY, "") ?: ""
+        val used = if (stored == day) prefs.getInt(PREF_COUNT, 0) else 0
+        if (!ChatThreads.canOpen(perDay, used)) return false
+        prefs.edit().putString(PREF_DAY, day).putInt(PREF_COUNT, used + 1).apply()
+        return true
+    }
+
+    // ---------- 读写 ----------
 
     private fun update(f: (ChatLog) -> ChatLog): Unit = synchronized(lock) {
         val next = f(_log.value)
         _log.value = next
-        val text = ZkJson.encodeToString(ChatLog.serializer(), next)
+        writeFile(next)
+        Unit
+    }
+
+    private fun writeFile(log: ChatLog) {
         try {
+            file.parentFile?.mkdirs()
+            val text = ZkJson.encodeToString(ChatLog.serializer(), log)
             val tmp = File(file.parentFile, file.name + ".tmp")
             tmp.writeText(text)
             if (!tmp.renameTo(file)) file.writeText(text)
         } catch (e: Exception) {
             Log.e(TAG, "写 chat.json 失败", e)
         }
-        Unit
     }
 
-    private fun load(): ChatLog = try {
-        if (file.exists()) ZkJson.decodeFromString(ChatLog.serializer(), file.readText()) else ChatLog()
+    /** 读 chat.json；旧格式（只有 messages）迁移成第一段对话，迁移前把旧文件备份成 chat.json.bak（只备份一次）。 */
+    private fun load(): ChatLog {
+        if (!file.exists()) return ChatLog()
+        val raw = try {
+            file.readText()
+        } catch (e: Exception) {
+            Log.e(TAG, "读 chat.json 失败", e)
+            return ChatLog()
+        }
+        val decoded = try {
+            ZkJson.decodeFromString(ChatLog.serializer(), raw)
+        } catch (e: Exception) {
+            Log.e(TAG, "chat.json 读不了，备份后从空开始", e)
+            try {
+                file.copyTo(File(file.parentFile, "chat.json.broken.${System.currentTimeMillis()}.json"), overwrite = true)
+            } catch (_: Exception) {
+            }
+            return ChatLog()
+        }
+        // 旧格式：只有 messages，没有 threads
+        val old = legacyMessages(raw)
+        if (old.isNotEmpty() && decoded.threads.isEmpty()) {
+            val now = System.currentTimeMillis()
+            val firstAt = old.firstOrNull { it.at > 0 }?.at ?: now
+            val lastAt = old.lastOrNull { it.at > 0 }?.at ?: firstAt
+            val t = ChatThreads.titled(
+                ChatThread(
+                    id = ChatThreads.newId(rnd),
+                    createdAt = firstAt,
+                    updatedAt = lastAt,
+                    messages = old.takeLast(MAX_KEEP),
+                ),
+            )
+            val migrated = decoded.copy(threads = listOf(t), activeId = t.id)
+            backupOnce()
+            writeFile(migrated)
+            Log.i(TAG, "旧对话迁移成第一段：${old.size} 条")
+            return migrated
+        }
+        // 结构在但当前段对不上：修一下再写回
+        if (decoded.threads.isNotEmpty() && decoded.threads.none { it.id == decoded.activeId }) {
+            val fixed = decoded.copy(activeId = (decoded.threads.lastOrNull { !it.closed } ?: decoded.threads.last()).id)
+            writeFile(fixed)
+            return fixed
+        }
+        return decoded
+    }
+
+    private fun legacyMessages(raw: String): List<ChatMsg> = try {
+        ZkJson.decodeFromString(LegacyChatLog.serializer(), raw).messages
     } catch (e: Exception) {
-        Log.e(TAG, "chat.json 读不了", e)
-        ChatLog()
+        emptyList()
+    }
+
+    /** 旧 chat.json 只备份一次（chat.json.bak 已存在就不再覆盖）。 */
+    private fun backupOnce() {
+        try {
+            val bak = File(file.parentFile, "chat.json.bak")
+            if (!bak.exists() && file.exists()) {
+                file.copyTo(bak, overwrite = false)
+                Log.i(TAG, "旧 chat.json 已备份：${bak.absolutePath}")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "备份 chat.json 失败", e)
+        }
     }
 
     companion object {
         private const val TAG = "ChatRepo"
         const val MAX_KEEP = 300
+
+        /** SharedPreferences：今天已经新开了几段对话。 */
+        private const val PREF_DAY = "threads_day"
+        private const val PREF_COUNT = "threads_count"
+
+        /** 收尾一段时让模型压缩成交接摘要（一次便宜调用；失败保留本地兜底）。 */
+        private const val SUMMARY_SYSTEM =
+            "把这轮对话压成不超过 120 字的交接摘要，只写结论、做到哪、下一步、没解决的。只输出摘要本身，不要寒暄、不要分点。"
+
         /** 主动询问的种类 → 档案里显示的名字。 */
         val ASK_KINDS = mapOf("absent" to "找不到人", "morning" to "早上", "noon" to "中午", "check" to "回访", "weekly" to "周复盘", "spot" to "抽查", "checkin" to "问候", "binge" to "连续娱乐", "unlock" to "解锁", "intake" to "自动收集", "think" to "自动谋划", "plan" to "自动统筹")
     }

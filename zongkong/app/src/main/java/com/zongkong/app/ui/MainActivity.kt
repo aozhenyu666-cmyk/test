@@ -234,6 +234,12 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 composable("settings/gptguide") { GptGuideScreen(nav) }
                 composable("settings/pending") { PendingScreen(nav) }
                 composable("settings/perm") { PermissionsScreen(nav) }
+                composable("settings/diag") { DiagScreen(nav) }
+                composable("settings/watch") { WatchScreen(nav) }
+                composable("chat/threads") { ChatThreadsScreen(nav) }
+                composable("directives") { DirectiveListScreen(nav) }
+                composable("directives/add") { DirectiveAddScreen(nav) }
+                composable("directive/{id}") { e -> DirectiveDetailScreen(e.arguments?.getString("id").orEmpty(), nav) }
                 composable("hq") { HqScreen(nav) }
                 composable("settings/hq") { HqSettingsScreen(nav) }
                 composable("dossier") { DossierScreen(nav) }

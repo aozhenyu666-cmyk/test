@@ -146,6 +146,35 @@ data class Config(
     val boss: com.zongkong.core.boss.BossConfig = com.zongkong.core.boss.BossConfig(),
     /** 语音：说话（TTS）和听写（STT）的接口；不填就用手机自带的。 */
     val voice: VoiceConfig = VoiceConfig(),
+    /** 对话：每天最多新开几段（0 = 不限）。 */
+    val chat: ChatConfig = ChatConfig(),
+    /** 低屏模式：闲鱼、Twitter 这类不全封，改成限时 + 冷却 + 做题。 */
+    val watch: WatchConfig = WatchConfig(),
+    /** 外接的谋划单（Gemini / GPT / Notion 交进来的），总控只负责监督落实。 */
+    val directives: List<com.zongkong.core.plan.Directive> = emptyList(),
+)
+
+/** 对话的设置。 */
+@Serializable
+data class ChatConfig(
+    /** 每天最多新开几段对话；0 = 不限。默认 1：逼着旧对话压缩成摘要带走，不再无限堆。 */
+    val threadsPerDay: Int = 1,
+)
+
+/** 低屏模式：不能全封（太狠）也不能放开（浪费时间）的应用。 */
+@Serializable
+data class WatchConfig(
+    val enabled: Boolean = false,
+    val rules: List<WatchRule> = emptyList(),
+)
+
+/** 一条守门规则：连续用 [maxMinutes] 分钟 → 弹回做题页 → 冷却 [cooldownSeconds] 秒 → 才放行下一段。 */
+@Serializable
+data class WatchRule(
+    val pkg: String,
+    val label: String = "",
+    val maxMinutes: Int = 2,
+    val cooldownSeconds: Int = 10,
 )
 
 /**

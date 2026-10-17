@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
 import android.util.Log
+import com.zongkong.app.guard.Diag
 import com.zongkong.app.guard.GuardService
 import com.zongkong.app.ui.PermissionStatus
 import com.zongkong.app.zk
@@ -33,6 +34,10 @@ object SelfHeal {
     const val GRANT_COMMAND = "adb shell pm grant com.zongkong.app android.permission.WRITE_SECURE_SETTINGS"
     @Volatile private var lastHeal = 0L
     @Volatile private var heals = 0
+    /** 上一次判定出来的状态：running / stale / disabled。只在状态变化时写诊断，免得每分钟刷一条。 */
+    @Volatile private var state = ""
+    /** 这次掉线是不是已经提醒过了（诊断里只记第一次提醒）。 */
+    @Volatile private var reminded = false
 
     fun canWrite(context: Context): Boolean =
         context.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED
@@ -56,21 +61,37 @@ object SelfHeal {
         }
     }
 
-    /** 看一眼：在跑就算了；开着没跑就修（或提醒）；整个关掉了就提醒。 */
+    /** 看一眼：在跑就算了；开着没跑就修（或提醒）；整个关掉了就提醒。每次判定都记进诊断。 */
     suspend fun check(context: Context) {
         val store = context.zk.store
         if (store.config.value.pausedUntil > System.currentTimeMillis()) return
-        if (PermissionStatus.guardRunning(context)) { heals = 0; return }
+        if (PermissionStatus.guardRunning(context)) {
+            heals = 0
+            state = "running"
+            reminded = false
+            return
+        }
         val now = System.currentTimeMillis()
         val enabled = PermissionStatus.accessibility(context)
+        // 诊断：只在“运行 / 开着没跑 / 被关”之间变化时记一条，否则每分钟一条会把时间线刷满
+        val nowState = if (enabled) "stale" else "disabled"
+        if (state != nowState) {
+            state = nowState
+            if (enabled) Diag.log(context, "stale", "开着但没在运行")
+            else Diag.log(context, "disabled", "无障碍在设置里是关着的")
+        }
         // 连着修了三次还不行（多半是系统彻底不让它跑），改成提醒，免得一直开关
         if (enabled && canWrite(context) && heals < 3 && now - lastHeal > 3 * 60_000L) {
             lastHeal = now
             heals++
             if (rebind(context)) {
+                Diag.log(context, "rebind_ok", "自动重新挂上（第 $heals 次）")
+                state = "running"
+                reminded = false
                 store.logWake("无障碍开着但没在运行：自动重新挂上（第 $heals 次）")
                 return
             }
+            Diag.log(context, "rebind_fail", "自动重新挂上没成功（第 $heals 次）")
         }
         warn(context, enabled, now)
     }
@@ -87,6 +108,12 @@ object SelfHeal {
         Notifications.hqCall(context, title, text, fullScreen = false, route = "settings/perm")
         Buzz.once(context, Buzz.Level.FIRM)
         store.logWake("$title：已提醒")
+        // 诊断只记这次掉线的第一次提醒（提醒本身每 20 分钟一格，不必每次重复记）
+        if (!reminded) {
+            reminded = true
+            if (enabled) Diag.log(context, "stale", "已提醒：开着但没在运行，去权限页关掉再打开")
+            else Diag.log(context, "disabled", "已提醒：无障碍被关掉了，去权限页重新打开")
+        }
     }
 }
 
@@ -116,6 +143,8 @@ class KeepAliveService : Service() {
                     delay(60_000)
                     while (isActive) {
                         try { SelfHeal.check(this@KeepAliveService) } catch (e: Throwable) { Log.w("KeepAlive", "检查出错", e) }
+                        // 看门狗：眼睛没在运行超过 60 秒就提醒（每 60 秒问一次）
+                        try { Watchdog.check(this@KeepAliveService) } catch (e: Throwable) { Log.w("KeepAlive", "看门狗出错", e) }
                         delay(60_000)
                     }
                 }

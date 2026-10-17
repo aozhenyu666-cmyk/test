@@ -54,6 +54,14 @@ class Agent(private val api: ChatApi, private val env: AgentEnv) {
             append("\n\n## 你记住的关于用户的事\n")
             mem.forEach { append("- ").append(it).append('\n') }
         }
+        env.threadContext().takeIf { it.isNotBlank() }?.let { append("\n\n## 对话的交接\n").append(it) }
+        val directives = env.directives()
+        val directiveBrief = com.zongkong.core.plan.Directives.brief(directives)
+        if (directiveBrief.isNotBlank()) {
+            append("\n\n## 外接的谋划单\n")
+            append(com.zongkong.core.plan.Directives.tally(directives)).append('\n')
+            append(directiveBrief)
+        }
         append("\n\n## 档案\n")
         append(com.zongkong.core.boss.Boss.brief(env.dossier(), env.hqSessions(), env.now(), env.zone, env.work().events))
         env.sensors().takeIf { it.isNotBlank() }?.let { append("\n## 你的眼睛\n").append(it) }
@@ -124,6 +132,10 @@ class Agent(private val api: ChatApi, private val env: AgentEnv) {
 
             怎么做：
             - 先看上下文里“此刻的总控”和“档案”，不够再调读取工具。不要编造事项编号、行动键、时间。
+            - 这是多段对话：系统提示里的“对话的交接”是上一段压缩出来的结论，只有这些被带过来了，更早的细节没有带过来。
+              不要假装记得没被带过的细节；要细节就问用户，或者查事项、行动和记录。
+            - 系统提示里的“外接的谋划单”是外部谋划者（Gemini / GPT / Notion）写的报告和计划。你是**监督落实**，不是替用户重新谋划：
+              不要替用户重写一份更好的计划；用 directive_check / directive_list 对账，把条目挂到事项、行动、约定上，到点要证据。
             - 用户说了要做的事，就直接建 / 改，做完一句话说做了什么。不要先问“要不要我帮你建”。
             - 一步行动要具体到能马上开始（动词开头），要有完成依据（可检查），能排时间就排；答应了的用 commit 记成约定。
             - 用户说没动力、拖着、卡住：先问一句卡在哪（忘了 / 不会做 / 不清楚 / 时间冲突 / 去娱乐了 / 不想做），再对症：

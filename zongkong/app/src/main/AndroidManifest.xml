@@ -94,6 +94,16 @@
             android:taskAffinity="com.zongkong.app.block"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- 低屏模式做题页：连续用太久弹回来，答完再放行；独立任务、不进最近任务 -->
+        <activity
+            android:name=".guard.GateActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.zongkong.app.gate"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.Zongkong" />
+
         <service
             android:name=".system.KeepAliveService"
             android:exported="false"

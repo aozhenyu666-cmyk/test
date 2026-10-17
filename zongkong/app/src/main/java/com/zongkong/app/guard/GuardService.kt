@@ -89,6 +89,7 @@ class GuardService : AccessibilityService() {
 
     private fun connected() {
         running = true
+        runCatching { Diag.log(this, "connected", "无障碍服务连上；SDK=${android.os.Build.VERSION.SDK_INT}") }
         val now = System.currentTimeMillis()
         val hb = store.heartbeat
         if (hb > 0 && now - hb > OFFLINE_THRESHOLD) {
@@ -141,6 +142,7 @@ class GuardService : AccessibilityService() {
             onWindow(event)
         } catch (e: Throwable) {
             Log.e(TAG, "处理窗口切换出错", e)
+            runCatching { Diag.log(this, "event_error", "处理窗口: ${e.message ?: e.javaClass.simpleName}") }
         }
     }
 
@@ -161,6 +163,8 @@ class GuardService : AccessibilityService() {
         }
         if (lockdown(pkg, now)) return
         enforce(pkg, now)
+        // 低屏模式：连续用太久的应用弹回去做题（不拦全封，只限时 + 冷却 + 做题）
+        runCatching { Watch.tick(this, pkg, now) }
     }
 
     /**
@@ -183,6 +187,7 @@ class GuardService : AccessibilityService() {
         lastBounce = now
         Log.i(TAG, "总控时间，弹回 $pkg")
         store.updateToday(now) { DayOps.bounce(it) }
+        runCatching { Diag.log(this, "lockdown", "总控时间弹回 $pkg") }
         try {
             startActivity(
                 Intent(this, com.zongkong.app.ui.MainActivity::class.java)
@@ -238,6 +243,7 @@ class GuardService : AccessibilityService() {
         if (now - lastBounce < 1500) return
         lastBounce = now
         store.updateToday(now) { DayOps.bounce(it) }
+        runCatching { Diag.log(this, "bounce", "严管弹回 $pkg：${status.reasons.firstOrNull()?.text.orEmpty()}") }
         try {
             startActivity(BlockActivity.intent(this, pkg))
         } catch (e: Exception) {
@@ -251,6 +257,8 @@ class GuardService : AccessibilityService() {
         if (interactive()) accountPlay(now) else fgSince = now
         val status = store.status(now)
         fgPkg?.let { if (status.strict) enforce(it, now) }
+        // 低屏模式：没有窗口切换事件时也按秒盯着（比如一直停在一个应用里）
+        fgPkg?.let { p -> runCatching { Watch.tick(this, p, now) } }
         alerts(status, now)
         // 总控时间刚开始时你正停在别的应用里：也拉回来
         fgPkg?.let { if (store.hq.value.active != null) lockdown(it, now) }
@@ -428,14 +436,18 @@ class GuardService : AccessibilityService() {
         return now in start until end
     }
 
-    override fun onInterrupt() {}
+    override fun onInterrupt() {
+        runCatching { Diag.log(this, "event_error", "onInterrupt") }
+    }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        runCatching { Diag.log(this, "unbound", "系统解绑无障碍服务（intent=${intent?.action ?: "-"}）") }
         offline()
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
+        runCatching { Diag.log(this, "destroyed", "无障碍服务被销毁") }
         com.zongkong.app.system.Pet.detach()
         offline()
         try {
@@ -449,6 +461,7 @@ class GuardService : AccessibilityService() {
     private fun offline() {
         if (!running) return
         running = false
+        runCatching { Diag.log(this, "offline", "无障碍服务离线（拦不住、看不到）") }
         accountPlay(System.currentTimeMillis())
         store.logSwitch(System.currentTimeMillis(), com.zongkong.core.boss.Timeline.GAP)
         Notifications.showStatus(this, "总控已离线", "无障碍服务被关闭了。离线的时间会记成“失联”，写进日终验收。")
