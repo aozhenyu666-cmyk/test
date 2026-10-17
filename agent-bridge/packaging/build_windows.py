@@ -25,3 +25,11 @@ with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
 sha = hashlib.sha256(archive.read_bytes()).hexdigest()
 archive.with_suffix('.zip.sha256').write_text(sha + '  ' + archive.name + '\n', encoding='ascii')
 print(f'Built {archive} ({archive.stat().st_size} bytes); SHA256 {sha}')
+compiler = Path(os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)')) / 'Inno Setup 6' / 'ISCC.exe'
+if not compiler.is_file():
+    sys.exit('Inno Setup 6 is required to build the installer.')
+subprocess.run([str(compiler), str(root / 'packaging' / 'installer.iss')], check=True)
+installer = root / 'dist' / 'AgentBridge-Setup-0.2.0-x64.exe'
+assert installer.is_file()
+sums = '\n'.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name for p in [archive,installer])+'\n'
+(root / 'dist' / 'SHA256SUMS.txt').write_text(sums,encoding='ascii')

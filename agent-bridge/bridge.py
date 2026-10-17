@@ -379,7 +379,7 @@ class Hub:
                         raise RuntimeError("结果超过 2 MB，请缩小任务范围")
                     result = output_file.read_text(encoding="utf-8", errors="replace")
                 else:
-                    result = run["output"]
+                    result = run["output"].replace("\r\n", "\n")
                 if not result.strip():
                     raise RuntimeError("Agent 未返回结果，请检查命令是否支持从标准输入读取提示词")
                 run.update(status="completed", result=result)
@@ -521,6 +521,8 @@ class Hub:
             finally:
                 terminal["alive"] = False
                 self._terminal_save(terminal)
+                if hasattr(proc, "close"):
+                    proc.close(force=True)
                 with self.lock:
                     self.threads.discard(threading.current_thread())
 

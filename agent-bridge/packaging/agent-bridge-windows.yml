@@ -28,6 +28,13 @@ jobs:
         run: python -m pip install -r requirements-windows.txt pywebview==5.4 pyinstaller==6.16.0
       - name: Test on Windows
         run: python -m unittest discover -s tests -v
+      - name: Install installer compiler
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Build desktop application
         shell: pwsh
         run: |
@@ -42,6 +49,8 @@ jobs:
           path: |
             agent-bridge/dist/AgentBridge-Windows-x64.zip
             agent-bridge/dist/AgentBridge-Windows-x64.zip.sha256
+            agent-bridge/dist/AgentBridge-Setup-0.2.0-x64.exe
+            agent-bridge/dist/SHA256SUMS.txt
           retention-days: 30
       - name: Publish desktop release
         if: success() && (inputs.publish || hashFiles('agent-bridge/packaging/release-ready') != '')
@@ -49,4 +58,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          gh release create agent-bridge-v0.2.0 dist/AgentBridge-Windows-x64.zip dist/AgentBridge-Windows-x64.zip.sha256 --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "Agent Bridge 0.2.0 - Windows desktop" --notes-file packaging/release-notes.md --prerelease --latest=false
+          gh release create agent-bridge-v0.2.0 dist/AgentBridge-Windows-x64.zip dist/AgentBridge-Setup-0.2.0-x64.exe dist/SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "Agent Bridge 0.2.0 - Windows desktop" --notes-file packaging/release-notes.md --prerelease --latest=false

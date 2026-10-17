@@ -18,7 +18,7 @@ def schema(properties=None, required=None):
 STRING = {"type": "string"}
 TOOLS = [
     dict(name="list_agents", description="列出本机已接入的 Agent、运行状态和 ID。", inputSchema=schema()),
-    dict(name="send_message", description="向 Agent 信箱写入消息。仅留档，不会唤醒 Agent。需要执行时使用 create_task。",
+    dict(name="send_message", description="向 Agent 信箱写入消息。默认只留档，trigger=true 时创建单 Agent 任务唤醒接收者处理。",
          inputSchema=schema({"to": STRING, "from": STRING, "body": STRING, "trigger": {"type":"boolean"}}, ["to", "body"])),
     dict(name="read_inbox", description="读取指定 Agent 的最近 100 条信箱消息（不删除）。",
          inputSchema=schema({"agent_id": STRING}, ["agent_id"])),
