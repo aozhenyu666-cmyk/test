@@ -1,13 +1,11 @@
 package com.yishou.app.endgame
 
-import com.yishou.app.brake.Brake
 import com.yishou.app.card.Card
 import com.yishou.app.card.Skill
 import com.yishou.app.data.Endgame
 import com.yishou.app.data.EndgameSource
 import com.yishou.app.line.Ask
 import com.yishou.app.line.Lines
-import com.yishou.app.llm.BrakePrompts
 import com.yishou.app.llm.EndgamePrompts
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -116,38 +114,6 @@ class EndgamesTest {
         assertEquals("比家里贵三倍", ds[0].crux)
         assertEquals("一句", ds[1].crux)
         assertEquals("堵前门 + 利润在 = 必走后门", ds[0].law)
-    }
-}
-
-class BrakeTest {
-
-    @Test
-    fun localSplitSeparatesFantasy() {
-        val s = Brake.localSplit("他今天没回我消息，他肯定是故意的，看不起我，我要马上去问清楚")
-        assertEquals(listOf("他今天没回我消息"), s.facts)
-        assertEquals(3, s.fantasies.size)
-        assertTrue(Brake.biggest(s, "").contains("故意") || Brake.biggest(s, "").contains("看不起") || Brake.biggest(s, "").contains("问清楚"))
-        assertFalse(Brake.worstOk("嗯"))
-        assertTrue(Brake.worstOk("吵起来删好友"))
-    }
-
-    @Test
-    fun parseCoachCut() {
-        val c = BrakePrompts.parse("【事实】\n他没回消息\n【脑补】\n1. 他是故意的\n2. 他看不起我\n【证据】他亲口说过不想理你")
-        assertNotNull(c)
-        assertEquals(listOf("他没回消息"), c!!.split.facts)
-        assertEquals(listOf("他是故意的", "他看不起我"), c.split.fantasies)
-        assertEquals("他亲口说过不想理你", c.proof)
-        assertNull(BrakePrompts.parse("好的"))
-    }
-
-    @Test
-    fun tallyLine() {
-        fun i(d: String, h: Boolean?) = com.yishou.app.data.Impulse(raw = "x", decision = d, createdAt = 0, happened = h)
-        val t = Brake.tally(listOf(i("hold", null), i("go", true), i("go", false)))
-        assertEquals(1, t.held)
-        assertEquals(2, t.checked)
-        assertTrue(Brake.line(t).contains("1/2"))
     }
 }
 

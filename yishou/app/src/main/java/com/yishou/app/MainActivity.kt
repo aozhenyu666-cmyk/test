@@ -91,7 +91,7 @@ class MainActivity : ComponentActivity() {
                     composable("board") {
                         HomeScreen(
                             onEndgame = { nav.navigate("endgame") },
-                            onBrake = { nav.navigate("brake") },
+                            onSoup = { nav.navigate("soup") },
                             onBank = { nav.navigate("bank") },
                             onLine = { id -> nav.navigate(if (id == null) "line" else "line?id=$id") },
                             onLive = { id -> nav.navigate("live/$id") },
@@ -220,8 +220,8 @@ class MainActivity : ComponentActivity() {
                     composable("endgame") {
                         com.yishou.app.ui.EndgameScreen(onBack = { nav.navigateUp() }, onBank = { nav.navigate("bank") })
                     }
-                    composable("brake") {
-                        com.yishou.app.ui.BrakeScreen(onBack = { nav.navigateUp() })
+                    composable("soup") {
+                        com.yishou.app.ui.SoupScreen(onBack = { nav.navigateUp() }, onBank = { nav.navigate("bank") })
                     }
 
                 }

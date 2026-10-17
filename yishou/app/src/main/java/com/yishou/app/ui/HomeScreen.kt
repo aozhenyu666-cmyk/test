@@ -109,7 +109,7 @@ fun todayMarks(cards: List<CardAttempt>, drills: List<DrillRow>, deeds: List<Dee
 @Composable
 fun HomeScreen(
     onEndgame: () -> Unit,
-    onBrake: () -> Unit,
+    onSoup: () -> Unit,
     onLine: (Long?) -> Unit,
     onLive: (Long) -> Unit,
     onBank: () -> Unit,
@@ -169,20 +169,20 @@ fun HomeScreen(
                 IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Settings, contentDescription = "设置") }
             }
 
-            // 0.15：首页两个最常用的入口——磨刀（残局）和急刹
+            // 练思维的两样：海龟汤（自己生假设、自己设计问题）和残局（点破绽、翻底牌）
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Entry(
-                    title = "残局",
-                    sub = "点破绽 · 先开一枪 · 翻底牌",
+                    title = "海龟汤",
+                    sub = "真题当汤：只许问是非题，问穿了再亮选项",
                     accent = MaterialTheme.colorScheme.tertiary,
-                    onClick = onEndgame,
+                    onClick = onSoup,
                     modifier = Modifier.weight(1f),
                 )
                 Entry(
-                    title = "急刹",
-                    sub = "冲动上头时点这里，十几秒",
-                    accent = MaterialTheme.colorScheme.error,
-                    onClick = onBrake,
+                    title = "残局",
+                    sub = "点破绽 · 先开一枪 · 翻底牌",
+                    accent = MaterialTheme.colorScheme.secondary,
+                    onClick = onEndgame,
                     modifier = Modifier.weight(1f),
                 )
             }

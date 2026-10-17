@@ -82,7 +82,7 @@ data class AppPrefs(
     /** 入口思考页要不要做一张题卡；关掉就只是打卡：说好看完做什么就放行 */
     val gateCard: Boolean = true,
     /** 入口思考页做什么：endgame 残局、card 一张题卡、line 主线下一手、check 只打卡 */
-    val gateMode: String = "endgame",
+    val gateMode: String = "card",
     /** 强度：LIGHT 轻 / MID 中 / HARD 强（口水规则、回主线的频率、做事要不要写判断） */
     val talkLevel: String = "MID",
     /** 题卡先用自己的话说答案，再看选项 */

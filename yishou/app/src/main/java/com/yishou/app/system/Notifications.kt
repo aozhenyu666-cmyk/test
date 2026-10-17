@@ -23,7 +23,6 @@ object Notifications {
     const val ID_NUDGE = 3
     const val ID_IDLE = 4
     const val ID_CAPSULE = 5
-    const val ID_IMPULSE = 6
     private const val CH_CAPSULE = "capsule"
 
     fun ensureChannels(context: Context) {
@@ -66,7 +65,6 @@ object Notifications {
             .setContentText("打开关注的应用前会先走一手。随时可在系统无障碍设置里关闭。")
             .setOngoing(true)
             .setContentIntent(open)
-            .addAction(0, "急刹", route(context, "brake", 20))
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
         notify(context, ID_RUNNING, n)
@@ -130,26 +128,6 @@ object Notifications {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
         notify(context, ID_CAPSULE, n)
-    }
-
-    /** 打开主界面的某一页（急刹、残局） */
-    private fun route(context: Context, to: String, code: Int): PendingIntent = PendingIntent.getActivity(
-        context, code,
-        Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, to).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-    )
-
-    /** 急刹 30 分钟后：最坏后果出现了吗 */
-    fun showImpulseCheck(context: Context, worst: String) {
-        val n = NotificationCompat.Builder(context, CH_NUDGE)
-            .setSmallIcon(R.drawable.ic_stat_yishou)
-            .setContentTitle("30 分钟到了：最坏的后果出现了吗？")
-            .setContentText("当时押的：$worst")
-            .setStyle(NotificationCompat.BigTextStyle().bigText("当时押的：$worst"))
-            .setContentIntent(route(context, "brake", 21))
-            .setAutoCancel(true)
-            .build()
-        notify(context, ID_IMPULSE, n)
     }
 
     fun cancelCapsule(context: Context) {

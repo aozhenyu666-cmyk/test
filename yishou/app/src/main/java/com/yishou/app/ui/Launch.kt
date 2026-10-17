@@ -20,21 +20,21 @@ object Launch {
     fun installed(context: Context, pkg: String?): Boolean =
         pkg != null && context.packageManager.getLaunchIntentForPackage(pkg) != null
 
-    fun sendPrompt(context: Context, app: AiApp, prompt: String): String {
+    fun sendPrompt(context: Context, app: AiApp, prompt: String, what: String = "出题要求"): String {
         copy(context, prompt)
         ExternalGrace.open()
         val pkg = app.pkg
         if (pkg != null && installed(context, pkg)) {
             val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, prompt).setPackage(pkg)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            if (send.resolveActivity(context.packageManager) != null && start(context, send)) return "已经把出题要求发进 ${app.name}，在那边点发送"
-            context.packageManager.getLaunchIntentForPackage(pkg)?.let { if (start(context, it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))) return "打开了 ${app.name}，出题要求在剪贴板里，粘贴发送" }
+            if (send.resolveActivity(context.packageManager) != null && start(context, send)) return "已经把${what}发进 ${app.name}，在那边点发送"
+            context.packageManager.getLaunchIntentForPackage(pkg)?.let { if (start(context, it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))) return "打开了 ${app.name}，${what}在剪贴板里，粘贴发送" }
         }
-        val url = app.url ?: return "没装 ${app.name}，也没有网址。出题要求已复制"
+        val url = app.url ?: return "没装 ${app.name}，也没有网址。${what}已复制"
         return if (start(context, Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))) {
-            "没装 ${app.name} App，打开了网页版。出题要求在剪贴板里，粘贴发送"
+            "没装 ${app.name} App，打开了网页版。${what}在剪贴板里，粘贴发送"
         } else {
-            "打不开 ${app.name}。出题要求已复制"
+            "打不开 ${app.name}。${what}已复制"
         }
     }
 

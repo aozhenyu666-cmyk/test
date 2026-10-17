@@ -103,7 +103,7 @@ class YishouApp : Application() {
         if (!com.yishou.app.system.Variant.chalu) return
         val sp = getSharedPreferences("chalu", android.content.Context.MODE_PRIVATE)
         if (sp.getBoolean("init", false)) return
-        settings.updateApp { it.copy(talkLevel = "HARD", gateMode = "endgame", predictFirst = true) }
+        settings.updateApp { it.copy(talkLevel = "HARD", gateMode = "card", predictFirst = true) }
         sp.edit().putBoolean("init", true).apply()
     }
 
@@ -187,9 +187,9 @@ class YishouApp : Application() {
         com.yishou.app.llm.LlmEndgameGen(ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(60), usage = stats))
     }
 
-    /** 急刹的切分：要快，超时就用本机的拆法 */
-    val brakeCoach: com.yishou.app.llm.BrakeCoach by lazy {
-        com.yishou.app.llm.LlmBrakeCoach(ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(12), usage = stats))
+    /** 海龟汤的主持人：只回“是 / 不是 / 部分是 / 无关” */
+    val soupHost: com.yishou.app.soup.SoupJudge by lazy {
+        com.yishou.app.llm.LlmSoupHost(ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(20), usage = stats))
     }
 
     private val makingEndgames = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -239,28 +239,17 @@ class YishouApp : Application() {
         }
     }
 
-    /** 0.15 起入口默认用残局（升级上来的也换一次；之后在设置里改了就听你的） */
-    private fun v15Defaults() {
+    /** 0.16：入口换回刷题（一张题卡）。升级上来的换一次；之后在设置里改了就听你的 */
+    private fun v16Defaults() {
         val sp = getSharedPreferences("upgrade", android.content.Context.MODE_PRIVATE)
-        if (sp.getBoolean("v15_gate", false)) return
-        settings.updateApp { it.copy(gateMode = "endgame") }
-        sp.edit().putBoolean("v15_gate", true).apply()
+        if (sp.getBoolean("v16_gate", false)) return
+        settings.updateApp { it.copy(gateMode = "card", gateCard = true) }
+        sp.edit().putBoolean("v16_gate", true).apply()
     }
 
-    /** 长按图标的“急刹”：冲动上头时一下就到 */
-    private fun installShortcuts() {
-        runCatching {
-            val intent = android.content.Intent(this, MainActivity::class.java)
-                .setAction(android.content.Intent.ACTION_VIEW)
-                .putExtra(MainActivity.EXTRA_ROUTE, "brake")
-            val sc = androidx.core.content.pm.ShortcutInfoCompat.Builder(this, "brake")
-                .setShortLabel("急刹")
-                .setLongLabel("急刹：冲动上头时点这里")
-                .setIcon(androidx.core.graphics.drawable.IconCompat.createWithResource(this, R.mipmap.ic_launcher))
-                .setIntent(intent)
-                .build()
-            androidx.core.content.pm.ShortcutManagerCompat.pushDynamicShortcut(this, sc)
-        }
+    /** 0.15 装过的“急刹”快捷方式，0.16 起去掉 */
+    private fun removeOldShortcuts() {
+        runCatching { androidx.core.content.pm.ShortcutManagerCompat.removeDynamicShortcuts(this, listOf("brake")) }
     }
 
     /** 从分享页过来时要打开的页面（主界面取走后清空） */
@@ -292,7 +281,7 @@ class YishouApp : Application() {
         database = AppDatabase.create(this)
         settings = SettingsStore(this)
         chaluDefaults()
-        v15Defaults()
+        v16Defaults()
         AppZone.id = settings.app.value.timeZone
         stats = StatsStore(this)
         val logError: (String, String) -> Unit = { kind, message -> RunLog.e(kind, message) }
@@ -316,7 +305,7 @@ class YishouApp : Application() {
         prefetchCards()
         prefetchMaterials()
         prefetchEndgames()
-        installShortcuts()
+        removeOldShortcuts()
 
         // 时区设置一变就生效
         appScope.launch { settings.app.collect { AppZone.id = it.timeZone } }
