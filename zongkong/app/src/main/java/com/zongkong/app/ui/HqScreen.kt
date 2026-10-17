@@ -135,12 +135,16 @@ fun HqScreen(nav: NavHostController) {
     val book by app.store.hq.collectAsStateWithLifecycle()
     val session = book.active
     var finished by remember { mutableStateOf<String?>(null) }
+    // 封存会移除 HqRun，验收协程必须由仍在显示的总控页持有。
+    val finishScope = rememberCoroutineScope()
     // 总控时间里按返回键不离开（做完才解锁）
     BackHandler(enabled = session != null) {}
     NightSky(Modifier.fillMaxSize().testTag("hq-screen")) {
         when {
             finished != null -> HqDone(finished!!, nav)
-            session != null -> HqRun(session, nav) { finished = it }
+            session != null -> HqRun(session, nav) { summary ->
+                finishScope.launch { finished = app.actions.hq.finish(summary) }
+            }
             else -> HqEntry(nav, book.sessions)
         }
     }
@@ -214,10 +218,9 @@ private fun HqDone(result: String, nav: NavHostController) {
 }
 
 @Composable
-private fun HqRun(s: HqSession, nav: NavHostController, onFinished: (String) -> Unit) {
+private fun HqRun(s: HqSession, nav: NavHostController, onFinish: (String) -> Unit) {
     val app = LocalContext.current.zk
     val now = rememberNow(1_000)
-    val scope = rememberCoroutineScope()
     var stepDone by remember(s.step) { mutableStateOf(s.current == HqStep.SETTLE) }
     var stepNote by remember(s.step) { mutableStateOf("") }
     var exiting by remember { mutableStateOf(false) }
@@ -274,7 +277,7 @@ private fun HqRun(s: HqSession, nav: NavHostController, onFinished: (String) -> 
                 onClick = {
                     if (finishing) return@Button
                     finishing = true
-                    scope.launch { onFinished(app.actions.hq.finish(stepNote)) }
+                    onFinish(stepNote)
                 },
                 enabled = can && !finishing,
                 modifier = Modifier.fillMaxWidth().height(56.dp).testTag("hq-seal"),
