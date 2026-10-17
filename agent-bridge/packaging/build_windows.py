@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 root = Path(__file__).resolve().parents[1]
@@ -31,5 +32,12 @@ if not compiler.is_file():
 subprocess.run([str(compiler), str(root / 'packaging' / 'installer.iss')], check=True)
 installer = root / 'dist' / 'AgentBridge-Setup-0.2.0-x64.exe'
 assert installer.is_file()
+with tempfile.TemporaryDirectory(prefix='Agent Bridge installer ') as temp:
+    installed = Path(temp) / 'Installed App'
+    subprocess.run([str(installer), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/DIR='+str(installed)], check=True, timeout=90)
+    assert (installed / 'AgentBridge.exe').is_file()
+    subprocess.run([str(installed / 'AgentBridge-CLI.exe'), '--self-test'], check=True, timeout=60)
+    subprocess.run([str(installed / 'unins000.exe'), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'], check=True, timeout=90)
+    print('INSTALLER_SMOKE_OK: install into a spaced path, run embedded runtime, uninstall')
 sums = '\n'.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name for p in [archive,installer])+'\n'
 (root / 'dist' / 'SHA256SUMS.txt').write_text(sums,encoding='ascii')

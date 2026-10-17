@@ -12,6 +12,9 @@ on:
       - '.github/workflows/agent-bridge-windows.yml'
 permissions:
   contents: write
+concurrency:
+  group: agent-bridge-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   windows:
     runs-on: windows-latest

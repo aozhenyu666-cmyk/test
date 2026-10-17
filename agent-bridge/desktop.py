@@ -38,6 +38,11 @@ class Desktop:
         if action == "open-data":
             os.startfile(str(self.directory)) if os.name == "nt" else webbrowser.open(self.directory.as_uri())
             return dict(ok=True)
+        if action == "focus":
+            if self.window:
+                self.window.restore()
+                self.window.show()
+            return dict(ok=True)
         if action == "save-export":
             import webview
             kind = data.get("kind")
@@ -62,6 +67,7 @@ class Desktop:
         self.hub.shutdown()
         self.server.server_close()
         self.thread.join(timeout=3)
+        self.hub.store.db.close()
         self.connection.unlink(missing_ok=True)
         self.instance.close()
 
@@ -75,7 +81,14 @@ def main():
     except ValueError:
         connection = directory / "connection.json"
         if connection.is_file():
-            webbrowser.open(json.loads(connection.read_text(encoding="utf-8"))["url"])
+            from urllib.request import Request, urlopen
+            info=json.loads(connection.read_text(encoding="utf-8"))
+            try:
+                request=Request(info["url"]+"/api/app",data=b'{"action":"focus"}',headers={"Content-Type":"application/json","X-Bridge-Token":info["token"]})
+                with urlopen(request,timeout=3) as response:
+                    response.read()
+            except Exception:
+                webbrowser.open(info["url"])
         return
     try:
         app.window = webview.create_window("Agent Bridge", app.server.origin, width=1360, height=900,

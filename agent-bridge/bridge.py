@@ -101,7 +101,8 @@ def kill_tree(proc):
         return
     if os.name == "nt":
         subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
     else:
         try:
             os.killpg(proc.pid, signal.SIGTERM)
@@ -319,7 +320,7 @@ class Hub:
             with tempfile.TemporaryDirectory(prefix="agent-bridge-") as temp:
                 output_file = Path(temp) / "result.txt"
                 argv = command_for(agent, output_file)
-                kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+                kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
                 proc = subprocess.Popen(argv, cwd=agent["cwd"], stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                         env={**os.environ, "PYTHONIOENCODING": "utf-8", "NO_COLOR": "1"}, **kwargs)
@@ -430,7 +431,7 @@ class Hub:
                       checked=time.time(), note="检查命令是否安装；不代表已登录模型服务。")
         if command:
             args = command_for({**agent, "argv": [agent["argv"][0], "--version"]}, "")
-            kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+            kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
             proc = subprocess.Popen(args, cwd=agent["cwd"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kwargs)
             try:
                 output, _ = proc.communicate(timeout=10)

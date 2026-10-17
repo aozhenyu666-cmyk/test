@@ -1,164 +1,136 @@
-# Agent Bridge · Windows 本地多 Agent 协作台
+# Agent Bridge · Windows 桌面多 Agent 协作平台
 
-[下载 Windows 源码运行包](https://github.com/aozhenyu666-cmyk/test/raw/refs/tags/agent-bridge-v0.1.0/agent-bridge/dist/AgentBridge-Windows-v0.1.0.zip) · [版本说明](https://github.com/aozhenyu666-cmyk/test/releases/tag/agent-bridge-v0.1.0) · [验证记录](VALIDATION.md)
+[下载 Windows 安装程序](https://github.com/aozhenyu666-cmyk/test/releases/download/agent-bridge-v0.2.0/AgentBridge-Setup-0.2.0-x64.exe) · [下载便携版](https://github.com/aozhenyu666-cmyk/test/releases/download/agent-bridge-v0.2.0/AgentBridge-Windows-x64.zip) · [版本说明](https://github.com/aozhenyu666-cmyk/test/releases/tag/agent-bridge-v0.2.0) · [验证记录](VALIDATION.md)
 
-仓库中的本项目位于独立的 `agent-bridge/` 目录。下载包只包含 Agent Bridge，解压后双击 `AgentBridge/start.cmd`，需要 Python 3.10+。
+将 Codex CLI、Claude Code、DeepSeek Harness 等本机工具接入一个桌面工作台，自动派发任务、传递结果、继续讨论和保存运行记录。项目位于仓库独立的 `agent-bridge/` 目录。
 
-把本机命令行 Agent 接入同一个平台，自动提交任务、传递结果，并保留运行日志。
+## 安装与首次使用
 
-这是可运行的第一版本，不是对已有桌面窗口的键鼠遥控器。核心自动协作使用 CLI 进程；Windows 交互输入使用平台新建的 ConPTY 会话。
+适用 **Windows 10 1809+ / Windows 11，x64**。
 
-## Windows 启动
+1. 下载 `AgentBridge-Setup-0.2.0-x64.exe` 并运行，按提示安装。也可以下载便携 ZIP，完整解压后双击 `AgentBridge/AgentBridge.exe`。
+2. **无需安装 Python**。应用内置运行时、终端组件和管理界面，不需要前端 CDN。
+3. 先在“接入指南”添加演示伙伴，运行一次协作，确认派发、结果和日志。
+4. 在“Agent 管理”点“检测本机工具”，或手动添加工具；选择你的项目目录，点“检查命令”。
+5. Codex、Claude Code 和 Harness 本身仍须安装并完成登录。只安装某个工具的桌面界面，并不一定意味着命令行命令也已安装。
 
-1. 安装 **Python 3.10 或更新版本**，安装时勾选 **Add Python to PATH**。建议 Windows 10 1809+ 或 Windows 11。
-2. 将整个文件夹解压到普通可写目录，例如 `C:\AgentBridge`，不要直接在压缩包里运行。
-3. 双击 `start.cmd`。首次会创建项目专用 `.venv` 并安装 `pywinpty`，需要联网；不会修改系统的 PowerShell 执行策略。
-4. 浏览器自动打开 **http://127.0.0.1:8765**。保持启动窗口运行，按 Ctrl+C 停止服务和正在管理的任务。
-5. 先到“接入指南”点“添加演示伙伴”，发起任务，确认自动派发、轮次传递和日志可用。演示不调用模型，也不真正执行任务。
+应用用 Microsoft Edge WebView2 显示独立窗口。大多数 Windows 11 已有此组件；若提示缺少运行时，请安装微软的 [WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。这是未签名的独立项目，Windows 可能显示来源或 SmartScreen 提示，请根据下载地址和 SHA-256 核对文件。
 
-也可先双击 `install.cmd` 安装依赖。端口冲突时，在 PowerShell 中执行：
+安装按当前用户进行，无需管理员权限。更新或卸载应用不删除 `%APPDATA%\AgentBridge` 中的数据。**便携 ZIP 的整个文件夹都要保留**，不要只复制主 EXE。
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\start.ps1 -Port 8877
-```
+## 已实现的功能
 
-本地数据库在 `data/bridge.sqlite3`。停止服务后复制 `data` 文件夹即可备份。`data/connection.json` 是运行期间生成的本地 MCP 连接信息，包含令牌，请勿上传或分享。重新启动后令牌会变化。
+| 功能 | 行为 |
+| --- | --- |
+| 伙伴协作 | 2–8 位伙伴按顺序接力，最多 24 轮，自动传递结果 |
+| 主管派发 | 主管安排 → 1–7 位执行者依次处理 → 主管验收 |
+| 单 Agent 任务 | 自动输入任务、收集结果并保存日志 |
+| 持续对话 | 按对话保存任务与结果，可继续此前讨论 |
+| 失败续跑 | 沿用已成功轮次，只运行剩余部分；也可从头重新运行 |
+| 任务控制 | 按 Agent 串行排队，不同 Agent 并行；超时与取消 |
+| Agent 信箱 | 留消息，或勾选“唤醒处理”创建任务 |
+| 终端 | ConPTY + xterm.js，键盘、方向键、Ctrl+C、中文、多行粘贴、缩放和历史日志 |
+| 接入检测 | 检查命令路径、工作目录和 `--version` 输出 |
+| 导出与备份 | 导出任务 Markdown、Agent 配置或全部记录；合并导入 Agent 配置 |
+| MCP | Agent 可以查询伙伴、发消息、派任务、读结果、查询与续接对话、续跑任务 |
+| 桌面体验 | 原生窗口、目录选择、保存对话框、独立数据目录、安装程序和便携版 |
 
-## 接入真实 Agent
+关闭应用窗口会停止其管理的进程。重启后未完成任务显示为“已中断”，可以手动续跑；不会未经选择自动重放任务。续跑不撤销此前的文件修改或外部操作。
 
-先在普通终端安装并登录对应工具，确认能独立运行。平台沿用你的 PATH、环境变量、登录信息和工具权限，不要求把模型密钥填进网页。
+## 接入工具
 
 ### Codex CLI
 
-在“Agent 管理”添加 Agent，选 Codex 模板，填写 Windows 项目目录。默认自动任务命令：
+模板自动任务命令：
 
 ```json
 ["codex", "exec", "--sandbox", "workspace-write", "--skip-git-repo-check", "--output-last-message", "{output}", "-"]
 ```
 
-平台将提示词写入标准输入，读取 Codex 写入的最终结果文件。`workspace-write` 允许在工作目录内修改文件；平台不会添加跳过审批或关闭沙箱的参数。请根据本机版本的 `codex exec --help` 调整；遇到权限要求时，工具可能失败并将原因写入日志。
+提示词经 stdin 提交，`{output}` 是平台为本轮分配的最终结果文件。默认允许工作目录内写入，平台不添加跳过审批或关闭沙箱的参数。版本参数或权限不匹配时请查看日志，并以本机 `codex exec --help` 为准。
+
+交互终端命令：`["codex"]`。
 
 ### Claude Code
 
-模板命令：
+自动任务模板：
 
 ```json
 ["claude", "-p", "--output-format", "text"]
 ```
 
-平台把提示词写入 stdin，收集文本输出。请根据本机 `claude --help` 和权限设置调整。平台不自动添加 `--dangerously-skip-permissions`；非交互模式中的工具权限需求可能使任务失败或仅返回说明。
+提示词经 stdin 提交，以进程退出判断完成。工具审批需求可能使非交互任务失败或只返回说明；平台不会自行绕过。交互命令为 `["claude"]`。
 
-### DeepSeek Harness / 其他工具
+### DeepSeek Harness / 自定义工具
 
-不同 Harness 的命令和参数不统一，没有假定存在名为 `deepseek` 的程序。选择自定义模板，把占位命令换成你实际使用的命令数组。该命令必须：
+不同 Harness 的启动方式不统一。选择自定义模板，填写你实际安装的命令和参数；平台不会假定存在名为 `deepseek` 的通用程序。
 
-- 从 **标准输入 stdin** 读取完整提示词；
-- 将最终结果输出到 **stdout**，或用 `{output}` 指定的文件输出；
-- 完成后退出，成功时退出码为 0。
-
-例如下面只是你自己适配脚本的示例路径，不是某个 Harness 的真实命令：
+自动任务命令必须读取 stdin，输出最终文本或写入 `{output}`，完成后退出。例如你自己写的适配脚本可配置成：
 
 ```json
 ["python", "C:\\tools\\my_harness_adapter.py"]
 ```
 
-如果真实命令只接受参数中的提示词，需要写一个很小的包装脚本：读取 stdin，再通过该工具的 SDK/命令行接口提交。平台不把模型文本拼入 shell 命令。
+该示例中的外部脚本仍需要你自己的 Python；应用内置运行时只供应用使用，不会替代自定义命令的安装依赖。若工具只接受命令行提示词参数，需用包装脚本读取 stdin 再调用其接口。
 
-只有交互 TUI 的工具，请先走“交互终端”。需要在第一版自动协作中使用它，仍需补齐明确的结果/完成信号适配，不能仅靠“几秒没输出”判断完成。
+只有交互界面的程序可用“交互终端”。它不直接参与自动多轮协作，因为平台不能可靠猜测任意 TUI 何时完成。需要接入自动调度时，应提供明确的完成/结果信号适配器。
 
-## 协作模式
+## 对话与任务
 
-| 模式 | 执行顺序 |
-| --- | --- |
-| 单 Agent | 提交任务 → 执行 → 保存结果 |
-| 伙伴协作 | A → B → A → B，最多 8 轮，每轮收到原始任务和已有结果 |
-| 上下级派发 | 主管安排 → 执行者处理 → 主管验收，共 3 轮 |
+“继续对话”会把最近 6 个已完成任务的原始请求及结果传给下一次任务。每轮仍启动独立的工具进程；平台没有读取模型内部思考，也不恢复 Codex/Claude 自身原来的内部会话。
 
-这是有限轮次的调度。上下级属于平台给出的角色与固定流程，尚未实现动态组织树、任意递归拆任务或模型自行决定所有路由。
+同一对话在上一次任务结束后才能继续。同一 Agent 串行执行；不同 Agent 可并行。主管模式中的执行者当前依次处理，末轮由主管验收，不是动态组织树。Agent 可通过 MCP 再派发任务；嵌套任务需要由使用者控制，避免互相等待或无界递归。
 
-每轮启动独立进程，文本上下文由平台传递；不会自动恢复 CLI 原来的会话，也不会读取模型内部思考。Agent 能访问哪些文件，取决于它的工作目录和工具权限。
+Agent 各自访问其工作目录。不同 Agent 同时修改共享目录仍可能冲突，建议使用独立 Git worktree。最多排队 32 个任务，单轮超时 10–7200 秒。单轮日志保留末尾 2 MB，结果文件上限 2 MB，协作上下文保留最近 120000 字；对话历史另保留最近 120000 字。
 
-同一 Agent 的任务串行执行，不同 Agent 可并行。共享文件夹中的不同 Agent 仍可能同时修改文件，建议各自使用 Git worktree。队列最多 32 个任务，每轮超时可设为 10–7200 秒，默认 600 秒。单轮日志最多保留末尾 2 MB，结果文件上限 2 MB；轮次上下文保留最近 120000 字。限制超出时应缩小任务，而不是假定已完整传递。
+## 交互终端
 
-任务失败会停止后续轮次，不会将错误输出当成功结果继续转发。支持取消等待和运行中的任务；Windows 通过 `taskkill /T /F` 停止本次 CLI 的进程树。停止无法撤销已经修改的文件或已提交的外部操作。服务重启后未完成任务标记为“已中断”，不会自动重放。
+应用新建并管理终端，不接管已经打开的 Windows Terminal、桌面工具窗口或网页。选择 Agent 后可修改交互启动命令。
 
-## Windows 自动输入
+- 点击终端区域即可直接键入，支持方向键、Ctrl+C 和终端粘贴。
+- 下方自动输入框须先确认 Agent 在等待提示词，再点“标记为可输入”。发送后重新锁定，避免文本进入错误交互阶段。
+- 多行自动输入使用括号粘贴序列，目标工具须支持。若不支持，请直接在终端键入或使用自动任务接口。
+- 日志定期存盘；历史终端可回看，但历史进程不会在重启后继续运行。最多同时 8 个终端。
 
-“交互终端”通过 pywinpty / ConPTY 创建独立会话，例如：
+## MCP 配置
 
-```json
-["codex"]
-```
+先启动应用，到“设置与备份”复制本机生成的 **JSON 或 TOML** 配置。这些配置已包含正确的 EXE 路径、参数和连接文件路径，分别合并到 Claude/通用 MCP 客户端或 Codex 配置中，不要覆盖原有内容。
 
-也可以填写你的 Harness 交互启动命令数组。等待其进入提示输入框后，点击“标记为可输入”，输入一条单行消息并发送。平台会向终端写入文本，并可自动写入回车。每次发送后锁定输入，待你再次确认就绪。
+桌面版使用 `AgentBridge-CLI.exe --mcp`，不依赖外部 Python。
 
-这条路径：
+工具包括 `list_agents`、`send_message`、`read_inbox`、`create_task`、`get_task`、`cancel_task`、`list_sessions`、`get_session`、`retry_task`。`send_message` 的 `trigger=true` 可唤醒目标 Agent；`create_task` 的 `session_id` 可续接已有对话。
 
-- 创建新会话，不接管已打开的 Windows Terminal、桌面应用或远端网页；
-- 输出为文本日志，没有完整终端屏幕仿真，TUI 的光标重绘内容可能较杂；
-- 不猜测 Agent 完成状态；因此交互终端还不能直接参与自动多轮协作；
-- 暂只支持单行提示词，不提供任意控制键或密码/审批框自动输入；
-- 在 Windows 上需要实测各工具的回车和 TUI 行为。
+不要在某个 Agent 自己的执行轮次里向自己创建任务并同步等待。平台会串行化该 Agent，新任务只能等待当前轮次结束。
 
-## MCP：让 Agent 主动交流
+## 数据与备份
 
-`mcp_server.py` 提供 stdio MCP 工具，无额外 Python 依赖。须先运行平台。提供：
+数据目录为 `%APPDATA%\AgentBridge`，可在“设置与备份”打开。SQLite 数据库保存配置、任务、消息、对话及终端历史。运行中的 `connection.json` 含本地访问令牌，请勿上传；备份导出不包含连接令牌。
 
-| 工具 | 用途 |
-| --- | --- |
-| `list_agents` | 查询 Agent ID 与状态 |
-| `send_message` | 向信箱写入消息，不会唤醒接收者 |
-| `read_inbox` | 按接收者查询最近消息，不删除 |
-| `create_task` | 提交异步单人/伙伴/上下级任务 |
-| `get_task` | 查询状态、运行日志和结果 |
-| `cancel_task` | 取消任务 |
+“导出全部记录”可能包含项目文本、Agent 输出和敏感信息，请自行保管。导入功能只合并 Agent 配置，不恢复或执行历史任务。不同电脑导入时，工作目录必须存在，否则整体导入会失败并保留原有配置。
 
-Codex 的 MCP 配置片段（通常放入已有的 `%USERPROFILE%\.codex\config.toml`，不要覆盖原配置）：
+旧版源码用户可在旧版 Agent 管理配置基础上重新填写接入信息，或从旧数据中的 Agent 配置整理 JSON 后导入；桌面版不会擅自移动旧版数据库。
 
-```toml
-[mcp_servers.agent_bridge]
-command = 'C:\AgentBridge\.venv\Scripts\python.exe'
-args = ['C:\AgentBridge\mcp_server.py']
-```
+服务仅监听动态的本机环回端口，限制 Host/Origin 并要求操作令牌。所有本机 MCP 客户端共享平台权限，Agent 名称不是身份隔离机制。当前适合个人电脑上的可信工具，尚不提供多用户托管、跨电脑/云端连接器、自动升级或代码签名。
 
-Claude Code 常见的项目 `.mcp.json` 配置片段（与已有配置合并；以本机版本文档为准）：
+## 开发与构建
 
-```json
-{
-  "mcpServers": {
-    "agent_bridge": {
-      "command": "C:\\AgentBridge\\.venv\\Scripts\\python.exe",
-      "args": ["C:\\AgentBridge\\mcp_server.py"]
-    }
-  }
-}
-```
-
-可向已接入 MCP 的 Agent 发出类似指令：
-
-> 用 list_agents 找到评审伙伴，再创建一个 single 任务，请它审查指定工作目录中的改动。记录返回的任务 ID，稍后用 get_task 查看结果。
-
-派发会创建独立 CLI 进程，并不是向已有对话插话。不要让正在执行的 Agent 创建“发给自己”的任务并同步等待，否则该任务会一直等待当前轮次释放 Agent。嵌套协作仍受全局队列和各任务轮数限制，但当前没有跨任务的模型调用预算追踪，应避免无界递归。
-
-默认读取同目录下 `data/connection.json`。如果用自定义数据目录启动：
+源码运行需要 Python 3.10+。Windows 安装依赖后：
 
 ```powershell
-.\.venv\Scripts\python.exe mcp_server.py --connection C:\BridgeData\connection.json
-```
-
-所有本机 MCP 客户端共享平台权限，Agent 名称和发送者 ID 只是协作标识，不是隔离或身份认证。此版本适合你自己电脑上的可信工具，不是多用户托管服务。
-
-## 验证和兼容性
-
-核心服务仅用 Python 标准库，Linux/macOS 可运行自动任务、网页界面与 MCP；Windows 交互终端需 pywinpty。网页不依赖 CDN，不需要前端构建工具。
-
-```powershell
+python -m pip install -r requirements-windows.txt
+python app_entry.py
 python -m unittest discover -s tests -v
-python bridge.py --no-browser
 ```
 
-开发环境可验证：离线自动任务、伙伴上下文传递、主管流程、排队、超时、停止、重启恢复、HTTP 访问限制与 MCP 协议。
+不带桌面窗口的服务：`python app_entry.py --serve --no-browser`。浏览器回归脚本 `python tests/browser_smoke.py` 需要额外的 Playwright + Chromium。
 
-**开发时没有连接你的 Windows 电脑，也未使用你的真实 Codex、Claude 或 Harness 登录。Windows ConPTY、PowerShell 安装启动和真实模型 CLI 的端到端行为仍须在 Windows 上验证。**
+Windows 打包需要 PyInstaller、pywebview、pywinpty 和 Inno Setup 6：
 
-当前不包含云端连接器、屏幕点击、自动修改现有工具配置、云托管或跨电脑通信。
+```powershell
+python -m pip install -r requirements-windows.txt pyinstaller==6.16.0
+python packaging/build_windows.py
+```
+
+生成 `dist/AgentBridge-Setup-0.2.0-x64.exe` 和 `dist/AgentBridge-Windows-x64.zip`。GitHub Actions 先运行 Windows 测试，再检查真实 EXE 和原生窗口，之后生成安装包；构建失败不会发布下载版本。
+
+终端前端使用 xterm.js 5.5.0 和 addon-fit 0.10.0，许可证保留在 `web/vendor/`。

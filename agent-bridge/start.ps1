@@ -4,7 +4,7 @@ Set-Location $PSScriptRoot
 if (-not (Test-Path '.\.venv\Scripts\python.exe')) {
     & "$PSScriptRoot\install.ps1"
 }
-$BridgeArgs = @('bridge.py', '--port', "$Port")
-if ($NoBrowser) { $BridgeArgs += '--no-browser' }
+$BridgeArgs = @('app_entry.py')
+if ($NoBrowser) { $BridgeArgs = @('app_entry.py', '--serve', '--port', "$Port", '--no-browser') }
 & '.\.venv\Scripts\python.exe' @BridgeArgs
 if ($LASTEXITCODE -ne 0) { throw "Agent Bridge exited with code $LASTEXITCODE" }

@@ -1,14 +1,20 @@
-Agent Bridge · Windows 本地多 Agent 协作台
+Agent Bridge 0.2.0 · Windows 桌面版
 
-1. 先安装 Python 3.10 或以上版本，勾选 Add Python to PATH。
-2. 解压整个文件夹到 C:\AgentBridge 等可写目录。
-3. 双击 start.cmd。首次启动需要联网安装终端依赖。
-4. 保持启动窗口打开，浏览器会打开 http://127.0.0.1:8765。
-5. 先点“接入指南 → 添加演示伙伴”，回到工作台发一个任务验证流程。
-6. 再到“Agent 管理”添加真实工具，填写本机的项目目录。
+安装版：运行 AgentBridge-Setup-0.2.0-x64.exe，按提示安装。
+便携版：完整解压 ZIP，然后双击 AgentBridge.exe；不要只复制一个 EXE。
 
-Codex 与 Claude Code 有命令模板，DeepSeek Harness 需要填实际启动命令。
-详细接入、MCP 配置及限制见 README.md；测试范围见 VALIDATION.md。
+不需要安装 Python。需要 Windows 10 1809+ / Windows 11 x64，以及 Microsoft Edge WebView2 Runtime。
+Codex、Claude Code 和你的 Harness 本身仍需安装并登录。
 
-这是源码运行版，需要 Python；不是已编译的 .exe 安装程序。
-开发环境尚未连接你的 Windows 电脑，真实终端和工具需要在本机实测。
+第一次使用：
+1. 到“接入指南”添加两个演示伙伴，先跑通流程。
+2. 到“Agent 管理”检测本机工具，选择项目目录，再检查命令。
+3. 回到工作台选择伙伴或主管模式，提交任务。
+4. 从任务详情继续对话、续跑未完成轮次或导出结果。
+5. 在“设置与备份”复制 MCP 配置，并备份 Agent 配置。
+
+数据位于 %APPDATA%\AgentBridge。关闭窗口会停止当前任务；重启后可手动续跑。
+DeepSeek Harness 需填写实际启动命令。真实模型能力取决于各工具的登录和权限。
+
+当前支持本机 Agent；云端连接和接管已有窗口尚未实现。
+详细说明见 README.md，测试记录见 VALIDATION.md。

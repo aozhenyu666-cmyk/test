@@ -1,43 +1,45 @@
-# 第一版验证记录
+# Agent Bridge 0.2.0 验证记录
 
-验证环境：Linux、Python 3.12、Node.js 24（仅用于 JavaScript 语法检查）、Chromium / Playwright。
+## 本地核心与浏览器验证
 
-## 已通过
+Linux / Python 3.12：32 项自动测试中，30 项通过，2 项 Windows 专属检查跳过。覆盖任务传递、主管流程、并发/串行、停止、超时、失败续跑、会话上下文、版本检查、备份的整体校验、消息唤醒、HTTP 限制和真实 stdio MCP 协议。
 
-`python -m unittest discover -s tests -v`：21 项通过。
+Chromium / Playwright：13 个操作流程通过，页面 JavaScript 错误为 0：
 
-- 中文提示词通过标准输入传入，伙伴四轮传递真实子进程输出。
-- 主管安排、执行者处理、主管验收按顺序执行并传递上下文。
-- 结果文件与运行日志区分。
-- 失败后停止后续轮次，缺失命令明确报错。
-- 同一 Agent 串行、不同 Agent 并行。
-- 等待中的任务可取消；运行中的进程可停止；超时进程会被结束。
-- 重启后未完成记录标为中断；相同数据目录有实例锁。
-- 本机 HTTP 页面与接口、访问令牌、跨站和 Host 限制。
-- 实际 stdio MCP 初始化、工具列表、HTTP 连接与中文信箱读写。
-- Windows 终端输入锁与单行输入规则的模拟后端测试。
-- Windows batch 启动命令的引号构造测试。
+1. 伙伴四轮协作与逐轮结果。
+2. 主管三轮派发与验收。
+3. 消息中的 HTML/script 作为文本展示。
+4. Agent 配置编辑。
+5. 命令检查结果展示。
+6. 从历史对话继续任务。
+7. Markdown 结果下载。
+8. MCP 本机 JSON/TOML 配置生成。
+9. 配置导出与导入。
+10. 主管与两名执行者的四轮协作。
+11. 消息唤醒 Agent 并收集结果。
+12. 非 Windows 终端入口的明确反馈。
+13. 390px 窄屏无横向页面溢出。
 
-`node --check web/app.js`：通过。
+`node --check web/app.js` 与 Python 编译检查通过。
 
-`python tests/browser_smoke.py`：Chromium 中 6 个流程通过，页面 JavaScript 错误为 0。
+## Windows 持续构建与分发检查
 
-1. 从网页添加演示伙伴，运行四轮伙伴协作并查看各轮结果。
-2. 切换上下级模式并完成三轮任务。
-3. 发送消息，确认文本中的 HTML/script 不会被执行。
-4. 编辑 Agent 名称并确认保存。
-5. Linux 中启动 Windows 终端功能时，界面显示明确的环境提示。
-6. 390px 窄屏没有横向页面溢出。
+[Agent Bridge Windows 工作流](https://github.com/aozhenyu666-cmyk/test/actions/workflows/agent-bridge-windows.yml) 在 Windows runner 中执行：
 
-浏览器检查为可选开发检查，需另行安装 Playwright 和 Chromium；正常使用产品无需安装它们。检查脚本会启动隔离的临时数据服务，结束后停止服务并清理数据。
+- 全部 32 项自动测试，包含真实 ConPTY 的中文输入/输出、窗口缩放，以及带空格路径的 .cmd 包装器。
+- PyInstaller 生成原生 GUI EXE 与共享运行时的 CLI 辅助 EXE。
+- 打包后的 `--self-test` 检查内置运行时、前端资源、真实子进程、SQLite、stdio MCP、pywebview 与 winpty。
+- 打包后的 `--window-self-test` 启动真实 WebView2 窗口，验证界面连接到本地服务，以及离线终端资源已加载。
+- Inno Setup 生成安装程序。
+- 将安装程序静默安装到带空格的路径，在已安装程序中运行自检，再卸载。
+- 打包便携 ZIP 并生成 SHA-256 校验文件。
 
-## 尚未实测
+任一检查失败都不会执行发布步骤。具体构建日志和最终提交见对应版本的 GitHub Actions 记录。
 
-- Windows 上 PowerShell 安装与启动。
-- Windows ConPTY 中真实 Codex / DeepSeek Harness 的输入、回车和退出。
-- 真实模型 CLI 的登录、权限审批和各版本命令参数。
-- 云端或跨电脑连接（第一版没有实现）。
+## 验证范围
 
-已核对 pywinpty 上游 `PtyProcess.spawn/read/write/terminate` 的接口定义，但接口核对和模拟测试不能替代 Windows 实机验证。
+这些检查使用离线演示 Agent 和测试进程，不调用真实模型，不使用用户密钥。真实 Codex / Claude / DeepSeek Harness 的登录、审批策略、版本参数，以及用户项目中的实际任务仍需在本机配置后验证。
 
-压缩包不含开发日志数据库、连接令牌、模型密钥或虚拟环境。
+Windows runner 的自动验证不等于覆盖所有 Windows 版本、杀毒软件、企业策略、输入法和第三方 TUI。程序没有代码签名；安装和窗口显示依赖当前系统的 Microsoft Edge WebView2 Runtime。
+
+不包含云端或跨电脑连接，不接管已有桌面窗口，不声称恢复模型工具内部会话，也不承诺用任意 TUI 的输出自动判断任务已完成。
