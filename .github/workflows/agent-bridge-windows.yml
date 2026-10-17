@@ -1,0 +1,38 @@
+name: Agent Bridge Windows
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'agent-bridge/**'
+      - '.github/workflows/agent-bridge-windows.yml'
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: agent-bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime and build dependencies
+        run: python -m pip install -r requirements-windows.txt pywebview==5.4 pyinstaller==6.16.0
+      - name: Test on Windows
+        run: python -m unittest discover -s tests -v
+      - name: Build desktop application
+        shell: pwsh
+        run: |
+          if (Test-Path packaging/build_windows.py) {
+            python packaging/build_windows.py
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - uses: actions/upload-artifact@v4
+        if: hashFiles('agent-bridge/dist/AgentBridge-Windows-x64.zip') != ''
+        with:
+          name: AgentBridge-Windows-x64
+          path: agent-bridge/dist/AgentBridge-Windows-x64.zip
+          retention-days: 30
