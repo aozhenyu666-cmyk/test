@@ -124,6 +124,7 @@ class YishouApp : Application() {
         WindowScheduler.reschedule(this)
         Reminders.scheduleNudge(this)
         Reminders.scheduleIdle(this)
+        Reminders.scheduleInitiative(this)
         SummaryScheduler.schedule(this, replace = false)
     }
 }

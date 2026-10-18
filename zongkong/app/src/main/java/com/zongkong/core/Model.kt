@@ -1,5 +1,6 @@
 package com.zongkong.core
 
+import com.zongkong.core.initiative.InitiativeConfig
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -152,6 +153,8 @@ data class Config(
     val watch: WatchConfig = WatchConfig(),
     /** 外接的谋划单（Gemini / GPT / Notion 交进来的），总控只负责监督落实。 */
     val directives: List<com.zongkong.core.plan.Directive> = emptyList(),
+    /** 主动性：什么时候该主动来找你（信息收集部的周期拉取、退避、每日上限）。 */
+    val initiative: InitiativeConfig = InitiativeConfig(),
 )
 
 /** 对话的设置。 */
