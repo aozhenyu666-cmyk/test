@@ -199,7 +199,8 @@ object Engine {
         else -> {
             val next = status.gates.firstOrNull { !it.done && it.phase != GatePhase.NOT_OPEN }
                 ?: status.gates.firstOrNull { !it.done }
-            if (next == null) {
+            val play = if (status.quotaMin > 0) "娱乐 ${status.playMin}/${status.quotaMin} 分 · " else ""
+            play + if (next == null) {
                 "今天的关卡全部验收 ${status.doneCount}/${status.gates.size}"
             } else {
                 "下一关：${next.gate.title}（${DayClock.hhmm(next.gate.deadline)} 截止）· 已验收 ${status.doneCount}/${status.gates.size}"
