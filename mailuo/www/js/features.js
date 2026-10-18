@@ -2,56 +2,52 @@
 //   体检（health）：检查库里哪些地方会把「好听的故事」当成规则
 //   溯源（trace）：沿「导致」找根因与后果，沿「前置」排学习顺序
 //   温故（review）：间隔复习，看标题和激活词回想结论
-import { REL_TYPES, today, titleSim, sharedKeywords } from './model.js';
+import { today, titleSim, sharedKeywords } from './model.js';
 
 const DAY = 86400000;
-const daysSince = (d) => (d ? Math.floor((Date.now() - new Date(d).getTime()) / DAY) : 999);
 
 // ---------- 体检 ----------
-export const HEALTH_RULES = [
-  { key: 'noVerify', level: 'high', label: '假设没写验证方式', test: (n) => n.status === '假设' && !String(n.verify || '').trim() },
-  { key: 'overconfident', level: 'high', label: '假设却把握 ≥ 85%：可能把故事当规则', test: (n) => n.status === '假设' && (n.confidence ?? 0) >= 85 },
-  { key: 'weakVerified', level: 'mid', label: '已验证但把握 < 50%', test: (n) => n.status === '已验证' && n.confidence != null && n.confidence < 50 },
-  { key: 'stale', level: 'mid', label: '假设超过 14 天没回填', test: (n) => n.status === '假设' && daysSince(n.checks.at(-1)?.date || n.created) > 14 },
-  { key: 'badRel', level: 'high', label: '关系类型不在 7 种之内', test: (n) => n.links.some((l) => !REL_TYPES.includes(l.type)) },
-  { key: 'broken', level: 'high', label: '关系指向的节点不存在', test: (n, s) => n.links.some((l) => !s.nodes.has(l.to)) },
-  { key: 'orphan', level: 'low', label: '孤立节点：没有任何关系', test: (n, s) => !n.links.length && !s.incoming(n.id).length },
-  { key: 'kwCount', level: 'low', label: '激活词不是 3–5 个', test: (n) => n.keywords.length < 3 || n.keywords.length > 5 },
-  { key: 'long', level: 'low', label: '正文超过「一句结论 + 3 行说明」', test: (n) => n.note.split('\n').filter((l) => l.trim()).length > 3 || n.claim.length > 80 },
-  { key: 'noWhy', level: 'low', label: '有关系没写理由', test: (n) => n.links.some((l) => !String(l.why || '').trim()) },
-];
-const WEIGHT = { high: 6, mid: 3, low: 1 };
+const sinceDate = (date, days) => new Date(Date.parse(date + 'T00:00:00Z') - days * DAY).toISOString().slice(0,10);
+const recentChecks = (n, date) => (n.checks || []).filter((c) => c.date >= sinceDate(date,7) && c.date <= date);
+const duplicatePair = (a,b,store) => {
+  if (a.type !== b.type || store.ancestors(a.id).some((n) => n.id === b.id) || store.ancestors(b.id).some((n) => n.id === a.id)) return false;
+  if ([...a.links.filter((l) => l.to === b.id), ...b.links.filter((l) => l.to === a.id)].some((l) => ['对立','类似'].includes(l.type))) return false;
+  const sim=titleSim(a.title,b.title), kw=sharedKeywords(a.keywords,b.keywords).length;
+  return sim >= .6 || (sim >= .45 && kw >= 1) || (a.system === b.system && kw >= 3);
+};
 
-export function healthCheck(store, system) {
-  const nodes = store.list(system);
-  const issues = [];
+export const HEALTH_RULES = [
+  {key:'undecided',level:'high',label:'议而不决',test:(n,s) => (n.type === '问' || (n.type === '论' && n.confidence >= 75)) && !s.descendants(n.id).some((d) => d.type === '规' && !d.paused)},
+  {key:'orphanRule',level:'high',label:'师出无名',test:(n,s) => n.type === '规' && (!n.under || !s.nodes.has(n.under))},
+  {key:'inverted',level:'high',label:'地基倒挂',test:(n,s) => n.type === '规' && n.confidence > 85 && (s.ancestors(n.id).find((a) => a.type === '论')?.confidence ?? 100) < 70,
+    detail:(n,s) => '上游只有 ' + s.ancestors(n.id).find((a) => a.type === '论')?.confidence + '% 把握，规却有 ' + n.confidence + '%'},
+  {key:'noSentinel',level:'mid',label:'盲信无哨',test:(n) => n.type === '论' && (n.confidence ?? 50) < 90 && !n.sentinels.some((s) => s.delta !== 0),
+    detail:(n) => n.sentinels.length ? '验证哨没有加减分' : '还没有验证哨'},
+  {key:'stale',level:'mid',label:'脱离实操',test:(n,s,{today:date}) => n.type === '规' &&
+    (recentChecks(n,date).filter((c) => c.kind === '卡壳').length >= 2 || (!n.paused && n.confidence >= 80 && !!n.created && n.created < sinceDate(date,7) && !recentChecks(n,date).some((c) => ['有效','卡壳','回填'].includes(c.kind)))),
+    detail:() => '这条规是不是太难执行？建议降级或拆分'},
+  {key:'broken',level:'high',label:'断链',test:(n,s) => !!(n.under && !s.nodes.has(n.under)) || n.links.some((l) => !s.nodes.has(l.to))},
+  {key:'dupe',level:'low',label:'可能重复',test:(n,s,ctx={}) => (ctx.nodes || s.list()).some((o) => o.id !== n.id && duplicatePair(n,o,s))},
+  {key:'kwCount',level:'low',label:'激活词不足',test:(n) => n.keywords.length < 3 || n.keywords.length > 5},
+];
+const WEIGHT = {high:6,mid:3,low:1};
+
+export function healthCheck(store, system, {today:date=today()} = {}) {
+  const nodes=store.list(system), issues=[];
   for (const rule of HEALTH_RULES) {
-    const hit = nodes.filter((n) => rule.test(n, store));
-    if (hit.length) issues.push({ ...rule, nodes: hit });
+    const hit=nodes.filter((n) => rule.test(n,store,{today:date,nodes}));
+    if (!hit.length) continue;
+    const issue={...rule,nodes:hit};
+    if (rule.key === 'dupe') {
+      issue.pairs=[];
+      for (let i=0;i<nodes.length;i++) for (let j=i+1;j<nodes.length;j++) if (duplicatePair(nodes[i],nodes[j],store)) issue.pairs.push([nodes[i],nodes[j]]);
+      issue.pairs=issue.pairs.slice(0,10);
+    }
+    issues.push(issue);
   }
-  // 对立对：双方都没有验证方式 → 分不开
-  const pairs = [];
-  for (const n of nodes) for (const l of n.links) {
-    const o = store.nodes.get(l.to);
-    if (l.type === '对立' && o && !(n.verify && o.verify)) pairs.push(n, o);
-  }
-  if (pairs.length) issues.push({ key: 'rivalNoTest', level: 'high', label: '对立的两个解释缺少区分方法（至少一方没写验证方式）', nodes: [...new Set(pairs)] });
-  // 可能重复：标题很像；标题较像且有共同激活词；或同体系里激活词重合 ≥ 3 个（已有对立 / 类似关系的不算）
-  const dupes = [];
-  for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
-    const a = nodes[i], b = nodes[j];
-    if (a.links.some((l) => l.to === b.id && (l.type === '对立' || l.type === '类似')) || b.links.some((l) => l.to === a.id && (l.type === '对立' || l.type === '类似'))) continue;
-    // 类型不同（问 / 论 / 规）或有挂载上下级关系的，不算重复
-    if (a.type !== b.type || a.under === b.id || b.under === a.id) continue;
-    const sim = titleSim(a.title, b.title), kw = sharedKeywords(a.keywords, b.keywords).length;
-    if (sim >= 0.6 || (sim >= 0.45 && kw >= 1) || (a.system === b.system && kw >= 3)) dupes.push([a, b]);
-  }
-  if (dupes.length) issues.push({ key: 'dupe', level: 'mid', label: '可能重复的节点', nodes: [...new Set(dupes.flat())], pairs: dupes.slice(0, 10) });
-  const penalty = issues.reduce((s, i) => s + WEIGHT[i.level] * i.nodes.length, 0);
-  // 每个节点平均扣 10 分即为 0 分
-  const score = nodes.length ? Math.max(0, Math.round(100 - (penalty * 10) / nodes.length)) : 100;
-  issues.sort((a, b) => WEIGHT[b.level] - WEIGHT[a.level]);
-  return { score, issues, total: nodes.length };
+  issues.sort((a,b) => WEIGHT[b.level]-WEIGHT[a.level]);
+  const penalty=issues.reduce((sum,i) => sum+WEIGHT[i.level]*i.nodes.length,0);
+  return {score:nodes.length ? Math.max(0,Math.round(100-penalty*10/nodes.length)) : 100,issues,total:nodes.length};
 }
 
 // ---------- 溯源 ----------

@@ -229,10 +229,19 @@ await page.waitForFunction(() => [...window.__mailuo.store.nodes.values()].some(
 check(true, '回填写入验证记录并更新状态');
 
 // ---------- 新增模块：体检 / 温故 / 溯源 ----------
+await page.evaluate(async () => {
+  const s=window.__mailuo.store;
+  const n=s.nodes.get('n-0001'); n.confidence=80; await s.saveNode(n);
+  const {blankNode}=await import('/js/model.js');
+  await s.saveNode(blankNode({id:'health-orphan',title:'未挂载测试规',type:'规',system:'思维问题',claim:'测试动作'}));
+});
 await page.goto(ORIGIN + '/#/health');
 await page.waitForSelector('.issue');
 await shot('11-health');
-check(await page.locator('.issue').count() > 0, '体检列出问题');
+check((await page.textContent('[data-issue=undecided]')).includes('第一反应停止'), '议而不决命中高把握且没有规的论');
+check((await page.textContent('[data-issue=noSentinel]')).includes('验证哨没有加减分'), '盲信无哨识别迁移来的零分哨');
+check((await page.textContent('[data-issue=orphanRule]')).includes('未挂载测试规'), '师出无名识别未挂载的规');
+await page.evaluate(() => window.__mailuo.store.deleteNode('health-orphan'));
 await page.goto(ORIGIN + '/#/review');
 await page.click('[data-testid=flash]');
 await shot('12-review');
@@ -324,7 +333,7 @@ check(calls.at(-1).sys.includes('激活词生成器') && calls.at(-1).model === 
 await page.goto(ORIGIN + '/#/tree');
 await page.click('[data-testid=copy-outline]');
 const outline = await page.evaluate(() => navigator.clipboard.readText());
-check(outline.startsWith('# 思维问题') && outline.includes('[论 60%] 第一反应停止') && outline.includes('[问]') && outline.includes('对立→'), '复制体系大纲（含问论规链条、结论、激活词、关系）');
+check(outline.startsWith('# 思维问题') && /\[论 \d+%\] 第一反应停止/.test(outline) && outline.includes('[问]') && outline.includes('对立→'), '复制体系大纲（含问论规链条、结论、激活词、关系）');
 
 // ---------- 新增：类比候选一键建「类似」、重复节点合并、本周回顾 ----------
 await page.evaluate(async () => {

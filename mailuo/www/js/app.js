@@ -181,7 +181,7 @@ function viewToday() {
   out.push(h('div', { class: 'tiles mt' },
     h('div', { class: 'tile', onclick: () => go('#/capture') }, icon('plus'), h('div', {}, h('div', { class: 't' }, '录入'), h('div', { class: 's' }, '粘贴 → 拆分'))),
     h('div', { class: 'tile', onclick: () => go('#/review'), 'data-testid': 'tile-review' }, h('div', { class: 'n' }, due), h('div', {}, h('div', { class: 't' }, '温故'), h('div', { class: 's' }, '张卡片到期'))),
-    h('div', { class: 'tile', onclick: () => go('#/health') }, h('div', { class: 'n' }, hc.score), h('div', {}, h('div', { class: 't' }, '体检'), h('div', { class: 's' }, hc.issues.length + ' 类问题')))));
+    h('div', { class: 'tile', onclick: () => go('#/health') }, h('div', { class: 'n' }, hc.score), h('div', {}, h('div', { class: 't' }, '体检'), h('div', { class: 's' }, hc.issues[0] ? hc.issues[0].label + ' ' + hc.issues[0].nodes.length : '没有发现问题')))));
 
   let asks = {};
   try { asks = JSON.parse(localStorage.getItem('mailuo.asks') || '{}'); } catch { /* 空 */ }
@@ -654,7 +654,7 @@ function backfillSheet(n) {
       h('div', { class: 'field' }, h('label', {}, '把握 ', confLabel), conf),
       h('button', { class: 'btn primary block', 'data-testid': 'backfill-save', onclick: async () => {
         if (!result.value.trim()) return toast('写一句验证结果');
-        n.checks.push({ date: today(), result: result.value.trim(), status, confidence: +conf.value });
+        n.checks.push({ date: today(), kind: '回填', source: '验证', result: result.value.trim(), status, confidence: +conf.value });
         n.status = status; n.confidence = +conf.value;
         await store.saveNode(n);
         close(); route(); toast('已回填：' + status + ' · ' + conf.value + '%');
@@ -1117,14 +1117,32 @@ function viewHealth(_, params) {
       h('div', {}, h('div', { class: 'serif', style: { fontSize: '18px', fontWeight: 600 } }, r.score >= 85 ? '结构清楚' : r.score >= 60 ? '有几处要补' : '故事多于证据'),
         h('div', { class: 'small muted' }, r.total + ' 个节点 · ' + r.issues.length + ' 类问题 · 不耗 token')))];
   if (!r.issues.length) out.push(h('div', { class: 'empty' }, h('h3', {}, '没有发现问题')));
-  out.push(h('div', { class: 'list mt' }, r.issues.map((i) => h('div', { class: 'card issue' },
+  out.push(h('div', { class: 'list mt' }, r.issues.map((i) => h('div', { class: 'card issue', 'data-issue': i.key },
     h('div', { class: 'ih' }, h('span', { class: 'lvl ' + i.level }), i.label, h('span', { class: 'small muted', style: { marginLeft: 'auto' } }, i.nodes.length)),
-    h('div', { class: 'chips' }, i.nodes.slice(0, 12).map((n) => h('span', { class: 'kw', onclick: () => go('#/node/' + n.id) }, n.title))),
+    h('div', { class: 'list' }, i.nodes.slice(0, 12).map((n) => h('div', {}, h('div', { class: 'btn-row' }, h('span', { class: 'kw', onclick: () => go('#/node/' + n.id) }, n.title), healthAction(i,n)), i.detail ? h('div', { class: 'small muted' }, i.detail(n,store)) : null))),
     i.pairs ? h('div', { class: 'list mt' }, i.pairs.map(([a, b]) => h('div', { class: 'link-cand', 'data-testid': 'dupe-pair' },
       h('div', { class: 'grow' }, h('b', {}, a.title), ' ≈ ', h('b', {}, b.title), h('div', { class: 'why' }, a.system + (a.system !== b.system ? ' / ' + b.system : ''))),
       h('button', { class: 'btn sm', onclick: () => mergeSheet(a, b) }, icon('merge'), '合并')))) : null,
     i.key === 'kwCount' ? h('button', { class: 'btn sm mt', 'data-testid': 'fill-kw', onclick: () => fillKeywordsSheet(i.nodes) }, icon('spark'), 'AI 补全激活词（约 ' + estimateTokens(PROMPT_KEYWORDS + keywordsUserMessage(i.nodes.slice(0, 30))) + ' token）') : null))));
   return out;
+}
+
+function healthAction(issue,n) {
+  if (issue.key === 'undecided') return h('button', {class:'btn sm',onclick:() => newNodeSheet(n.system,n.id,'规')}, '挂一条规');
+  if (['noSentinel','stale'].includes(issue.key)) return h('button', {class:'btn sm',onclick:() => editNodeSheet(n)}, issue.key === 'noSentinel' ? '补验证哨' : '修改');
+  if (issue.key === 'orphanRule') return h('button', {class:'btn sm',onclick:() => sheet('选择挂载目标',(box,close) => {
+    const picker=mountPicker(() => n,n.under); picker.el.open=true;
+    box.append(picker.el,h('button',{class:'btn primary block mt',onclick:async () => {
+      try { await store.mount(n.id,picker.read()); close(); route(true); } catch(e) { toast(e.message); }
+    }},'保存挂载'));
+  })},'挂到…');
+  if (issue.key === 'broken') return h('button',{class:'btn sm',onclick:async () => {
+    n.links=n.links.filter((l) => store.nodes.has(l.to));
+    if (n.under && !store.nodes.has(n.under)) await store.mount(n.id,'');
+    else await store.saveNode(n);
+    route(true);
+  }},'清理');
+  return null;
 }
 
 function mergeSheet(a, b) {
