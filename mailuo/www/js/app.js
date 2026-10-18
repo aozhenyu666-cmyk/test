@@ -4,6 +4,7 @@ import { openVault, IdbVault, FsVault, CapVault, exportZip, importZip, listSnaps
 import { getConfig, setConfig, usage, callModel, PROMPT_SPLIT, splitUserMessage, extractJson, normalizeSplit, PROMPT_THINK, parseAnswer, PRESETS, estimateTokens, PROMPT_KEYWORDS, keywordsUserMessage } from './llm.js';
 import { buildPack, MODE_QUESTIONS, libraryTokens, systemOutline } from './pack.js';
 import { healthCheck, traceCause, longestChain, learningPath, dueReviews, gradeReview, weeklyDigest } from './features.js';
+import { PROMPT_COLLIDE, libraryDigest, collideUserMessage, normalizeCollide } from './collide.js';
 import { loadSeed, SEED_SYSTEM, SEED_NODES } from './seed.js';
 
 const VERSION = '0.1.5';
@@ -822,10 +823,17 @@ function viewCapture() {
     localStorage.setItem('mailuo.lastSource', source.value.trim());
     return system;
   };
-  const splitMessage = (system) => splitUserMessage(store.list(system).slice(0, 80), text.value.trim());
+  const digest = () => libraryDigest(store, text.value.trim(), { system: sysSel.value === '__new' ? newSys.value.trim() : sysSel.value });
+  const summary = h('p', { class: 'small muted', 'data-testid': 'digest-summary' });
+  let timer;
+  const updateSummary = () => { const d = digest(); summary.textContent = '将附上节点库摘要：' + d.ids.length + ' 个节点 · 约 ' + d.tokens + ' token（库里共 ' + d.total + ' 个）'; };
+  const scheduleSummary = () => { clearTimeout(timer); timer = setTimeout(updateSummary, 300); };
+  text.addEventListener('input', scheduleSummary); sysSel.addEventListener('change', updateSummary); newSys.addEventListener('input', scheduleSummary);
+  updateSummary();
+  const splitMessage = () => collideUserMessage(digest(), text.value.trim());
   const finish = async (raw, system) => {
-    const data = normalizeSplit(extractJson(raw));
-    if (!data.nodes.length) throw new Error('没有拆出节点，换一段材料试试');
+    const data = normalizeCollide(extractJson(raw), store);
+    if (!data.adjust.length && !data.nodes.length && !data.links.length) throw new Error('材料没有撞到任何东西，也没有新内容');
     if (!store.systems.has(system)) await store.addSystem(system);
     session.sys = system;
     startCands({ ...data, system, source: source.value.trim() });
@@ -836,38 +844,39 @@ function viewCapture() {
     if (!system) return;
     btn.disabled = true;
     status.innerHTML = '';
-    status.append(waiting('便宜模型拆分中，目标 30 秒内'));
+    status.append(waiting('正在撞击体系，生成候选'));
     try {
-      const res = await callModel('split', PROMPT_SPLIT, splitMessage(system), { maxTokens: 3000 });
+      const res = await callModel('split', PROMPT_COLLIDE, splitMessage(), { maxTokens: 3500 });
       await finish(res.text, system);
     } catch (e) {
       status.innerHTML = '';
       status.append(h('div', { class: 'banner' }, e.message));
     } finally { btn.disabled = false; }
-  } }, icon('spark'), '拆分为候选卡片');
+  } }, icon('spark'), '撞击体系，生成候选');
   const manual = manualPanel({
-    title: '不走 API：去聊天 App 拆分', testid: 'manual-split',
-    hint: '复制拆分指令，粘贴到 ChatGPT / Claude / 豆包等聊天 App，再把它回复的 JSON 粘贴回来。不消耗你的 API 额度。',
-    getText: () => { const sys = target(); return sys ? PROMPT_SPLIT + '\n\n' + splitMessage(sys) : ''; },
+    title: '不走 API：去聊天 App 撞击体系', testid: 'manual-split',
+    hint: '复制碰撞指令，粘贴到 ChatGPT / Claude / 豆包等聊天 App，再把它回复的 JSON 粘贴回来。不消耗你的 API 额度。',
+    getText: () => { const sys = target(); return sys ? PROMPT_COLLIDE + '\n\n' + splitMessage() : ''; },
     placeholder: '把聊天 App 回复的 JSON 粘贴到这里',
     onPaste: async (raw) => { const sys = target(); if (!sys) return; try { await finish(raw, sys); } catch (e) { toast(e.message, 3500); } },
   });
-  const out = [topbarBack('录入'), h('h1', { class: 'display' }, '录入与拆分'),
-    h('p', { class: 'sub' }, '便宜模型只负责拆，节点和关系都要你逐张确认才会写入文件。'),
+  const out = [topbarBack('录入'), h('h1', { class: 'display' }, '录入'),
+    h('p', { class: 'sub' }, '新材料先撞击已有判断，再补链，最后才新建。所有改动都要你在候选里确认。'),
     session.cands ? h('div', { class: 'banner', style: { cursor: 'pointer' }, onclick: () => go('#/cands') }, icon('layers'), '有 ' + session.cands.nodes.length + ' 张候选卡片还没处理完，点此继续') : null,
     h('div', { class: 'row mt' }, h('div', { class: 'field' }, h('label', {}, '目标体系'), sysSel, newSys), h('div', { class: 'field' }, h('label', {}, '来源'), source)),
     h('div', { class: 'field' }, h('label', {}, '材料 ', count), text),
-    btn, status, manual,
+    summary, btn, status, manual,
     h('div', { class: 'center mt' }, h('button', { class: 'btn ghost', onclick: () => newNodeSheet(sysSel.value === '__new' ? '' : sysSel.value, '') }, '不用 AI，手动新建一个节点'))];
   return out;
 }
 
 function startCands(data) {
   const nodes = data.nodes.map((c) => {
-    const dupe = c.merge_into && store.nodes.has(c.merge_into) ? { node: store.nodes.get(c.merge_into), reason: '模型判断含义相同' } : findDuplicate(c, store);
+    const preferred = c.dupe_of || c.merge_into;
+    const dupe = preferred && store.nodes.has(preferred) ? { node: store.nodes.get(preferred), reason: '模型判断含义相近' } : findDuplicate(c, store);
     return { ...c, parent: c.parent || '', state: c.merge_into && store.nodes.has(c.merge_into) ? 'pending' : 'pending', dupeId: dupe?.node.id || '', dupeReason: dupe?.reason || '', mergeTo: '' };
   });
-  session.cands = { ...data, nodes, links: data.links.map((l) => ({ ...l, on: l.on ?? true })) };
+  session.cands = { ...data, adjust: (data.adjust || []).map((a) => ({ ...a, state: 'pending', to_final: a.to })), nodes, links: data.links.map((l) => ({ ...l, on: l.on ?? true })) };
   saveDraft();
   go('#/cands');
 }
@@ -892,7 +901,7 @@ function viewCands() {
   const linkCount = C.links.filter((l) => l.on && resolvable(l.from) && resolvable(l.to)).length;
   // 逐张处理时保持滚动位置
   const persist = () => { saveDraft(); route(true); };
-  const needsVerify = (c) => c.status === '假设' && !String(c.verify || '').trim();
+  const needsVerify = (c) => c.type === '论' && !(c.sentinels?.length || String(c.verify || '').trim());
   const accept = (c) => {
     if (needsVerify(c)) { toast('假设类要先补验证方式'); persist(); return editCandSheet(c, persist); }
     c.state = 'accepted'; persist();
