@@ -230,7 +230,7 @@ class BossTest {
         val items = Boss.ledger(d, emptyList(), now)
         assertEquals(4, items.count { it.why.startsWith("及时回应") })
         assertEquals(Boss.BASE + 4, Boss.credibility(d, emptyList(), now))
-        // 封存：整段时间到了、在“封”这一步待满 20 秒
+        // 封存：在“封”这一步待满 20 秒
         val s = Hq.start("h", HqTrigger.MANUAL, HqConfig(), at(12, 21), 30).copy(step = com.zongkong.core.hq.HqStep.SEAL.ordinal, stepStartedAt = at(12, 21, 31))
         assertFalse(Hq.canFinish(s, at(12, 21, 31)))
         assertTrue(Hq.canFinish(s, at(12, 21, 31) + 21_000))

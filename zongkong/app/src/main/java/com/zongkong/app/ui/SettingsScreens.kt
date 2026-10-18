@@ -187,13 +187,14 @@ fun BlockListScreen(nav: NavHostController) {
     Column(Modifier.fillMaxSize()) {
         BackBar("拦截名单", { nav.popBackStack() })
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Hint("严管时，打开勾选的应用会立刻被弹回总控；放行时会累计它们的使用时长，算进每日娱乐上限。加入立即生效，移出要等 24 小时。")
+            Hint("严管时，打开勾选的应用会立刻被弹回总控；放行时打开要先答一题、每次给 10 分钟，用的时长算进今天挣到的娱乐。手机上的常见娱乐应用和游戏、视频类应用会自动勾上。加入立即生效，移出要等 24 小时。")
             OutlinedTextField(value = query, onValueChange = { query = it }, label = { Text("搜索") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Button(
                 onClick = {
                     val labels = apps.orEmpty().associate { it.pkg to it.label }
                     val out = Policy.setBlocked(config, selected, { labels[it] ?: it }, System.currentTimeMillis())
-                    store.updateConfig { out.config }
+                    // 你自己拿掉的，自动识别时不再加回去；重新勾上的从“拿掉”里删
+                    store.updateConfig { out.config.copy(unblocked = (config.unblocked + (config.blocked - selected)) - selected) }
                     message = out.message
                 },
                 modifier = Modifier.fillMaxWidth(),

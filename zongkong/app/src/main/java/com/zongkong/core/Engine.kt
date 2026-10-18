@@ -55,6 +55,16 @@ sealed class Reason {
         override val text: String get() = "已经 $days 天没和总控交流了，回来报个到"
     }
 
+    /** 今天挣到的娱乐时长用完了。 */
+    data class Budget(val usedMin: Int, val allowedMin: Int) : Reason() {
+        override val text: String get() = "今天挣到的 $allowedMin 分钟娱乐用完了（已用 $usedMin）。做完一步再挣"
+    }
+
+    /** 主线过了点还没开始。 */
+    data class Debt(val actionKey: String, val title: String) : Reason() {
+        override val text: String get() = "「$title」过了点还没开始：开始做，或者改个时间"
+    }
+
     /** 正在做一步行动，开了专注锁。 */
     data class Focus(val title: String, val until: Long) : Reason() {
         override val text: String get() = "正在做「$title」，专注锁开着"
@@ -99,6 +109,10 @@ object Engine {
         config: Config, day: DayLog, now: Long, zone: ZoneId, lock: FocusLock? = null,
         session: com.zongkong.core.hq.HqSession? = null,
         absence: com.zongkong.core.hq.Hq.Absence = com.zongkong.core.hq.Hq.Absence.NONE,
+        /** 今天挣到的娱乐分钟（不含底数）；null = 不用挣来的娱乐。 */
+        earned: Int? = null,
+        /** 过了点还没开始的那一步（行动键 to 标题）；null = 没欠。 */
+        debt: Pair<String, String>? = null,
         control: com.zongkong.core.control.ControlBook = com.zongkong.core.control.ControlBook(),
         dateOverride: String? = null,
     ): Status {
@@ -149,7 +163,11 @@ object Engine {
         val playMin = day.playMinutes
         if (config.dailyQuotaMin > 0 && playMin >= config.dailyQuotaMin) {
             reasons += Reason.Quota(playMin, config.dailyQuotaMin)
+        } else if (earned != null) {
+            val allowed = allowedMinutes(config, earned)
+            if (playMin >= allowed) reasons += Reason.Budget(playMin, allowed)
         }
+        if (debt != null) reasons += Reason.Debt(debt.first, debt.second)
 
         if (lock != null && lock.until > now) reasons += Reason.Focus(lock.title, lock.until)
 
@@ -168,8 +186,14 @@ object Engine {
             lastActivity = lastActivity,
             silenceDueAt = silenceDueAt,
             playMin = playMin,
-            quotaMin = config.dailyQuotaMin,
+            quotaMin = if (earned != null) allowedMinutes(config, earned) else config.dailyQuotaMin,
         )
+    }
+
+    /** 今天能玩多久：底数 + 挣到的，不超过每天上限。 */
+    fun allowedMinutes(config: Config, earned: Int): Int {
+        val v = config.earn.baseMinutes + earned
+        return if (config.dailyQuotaMin > 0) minOf(v, config.dailyQuotaMin) else v
     }
 
     /** 状态栏通知里的一句话。 */
@@ -180,7 +204,8 @@ object Engine {
         else -> {
             val next = status.gates.firstOrNull { !it.done && it.phase != GatePhase.NOT_OPEN }
                 ?: status.gates.firstOrNull { !it.done }
-            if (next == null) {
+            val play = if (status.quotaMin > 0) "娱乐 ${status.playMin}/${status.quotaMin} 分 · " else ""
+            play + if (next == null) {
                 "今天的关卡全部验收 ${status.doneCount}/${status.gates.size}"
             } else {
                 "下一关：${next.gate.title}（${DayClock.hhmm(next.gate.deadline)} 截止）· 已验收 ${status.doneCount}/${status.gates.size}"

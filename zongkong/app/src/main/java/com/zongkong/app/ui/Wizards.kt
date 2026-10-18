@@ -256,7 +256,7 @@ fun PlanWizard(nav: NavHostController) {
                     if (tk.isNotBlank()) app.actions.work.update(tk, mapOf(F.STATUS to ThreadStatus.ACTIVE.label))
                     // 第一件排好的（或者从计划里挑的）就是今天的主线
                     if (outcomeId.isNotBlank() || app.store.mainKey().isBlank()) app.actions.plan.setMain(doneKey, outcomeId)
-                    scope.launch { passed = runCatching { app.actions.autoVerify() }.getOrDefault(emptyList()) }
+                    scope.launch { passed = runCatching { app.actions.autoVerify(confirmPlan = true) }.getOrDefault(emptyList()) }
                     step = 4
                 }, enabled = criteria.isNotBlank(), color = sig.plan, modifier = Modifier.testTag("wiz-save"))
                 error?.let { Text(it, color = sig.strict, style = MaterialTheme.typography.bodySmall) }

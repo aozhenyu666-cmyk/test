@@ -71,6 +71,9 @@ class LoopTest {
                 onboarded = true, silenceHours = 0, dailyQuotaMin = 0, notion = NotionConfig(token = "secret_test", baseUrl = sim.baseUrl),
                 // 测试期间不让每日总控时间、失联升级、参谋主动找人插进来
                 hq = com.zongkong.core.hq.HqConfig(enabled = false, escalation = false, proactive = false, vibrate = false),
+                // 老的场景不受“挣来的娱乐 / 打开就答题”影响；0.10 的测试自己打开
+                earn = com.zongkong.core.EarnConfig(enabled = false),
+                watch = com.zongkong.core.WatchConfig(openGate = false),
             )
         }
         app.store.updateHq { com.zongkong.core.hq.HqBook() }
@@ -185,6 +188,8 @@ class LoopTest {
         compose.onNodeWithTag("session-done").performScrollTo().performClick()
         compose.onNodeWithTag("result-field").performTextInput("写完了，用了 STAR，数据还缺两个")
         compose.onNodeWithTag("next-field").performTextInput("找项目数据")
+        // 键盘会挡住“记下结果”，点之前先收起
+        hideKeyboard()
         compose.onNodeWithTag("complete-save").performScrollTo().performClick()
         waitText("结果已记下")
         shot("e2e-04-result-saved")
@@ -1052,5 +1057,54 @@ class LoopTest {
         waitFor(hasTestTag("script-line"), 5_000, "首页预案栏")
         settle()
         shot("e2e-102-home-08")
+    }
+
+    /**
+     * 0.10：早上总控替你排好的不会自动放行，要你点确认；主线过了点没开始就欠着（严管），开始做就解开；
+     * 挣来的娱乐：底数用完就严管，做完一步再挣。
+     */
+    @Test
+    fun earnAndDebt() {
+        val now = System.currentTimeMillis()
+        val bj = app.store.zone
+        val rnd = kotlin.random.Random(10)
+        fun at(min: Long) = fmt.format(java.time.Instant.ofEpochMilli(now + min * 60_000L).atZone(bj))
+        app.store.updateConfig { it.copy(earn = com.zongkong.core.EarnConfig(), dailyQuotaMin = 120) }
+        app.store.updatePlans { com.zongkong.core.plan.PlanBook() }
+        var key = ""
+        app.store.updateWork { w0 ->
+            val (w1, t) = com.zongkong.core.work.WorkOps.create(w0, com.zongkong.core.work.Kind.THREAD, mapOf(F.TITLE to "行测提分", F.WHY to "笔试", F.CRITERIA to "75 分"), now, rnd)
+            val (w2, a) = com.zongkong.core.work.WorkOps.create(w1, com.zongkong.core.work.Kind.ACTION, mapOf(F.TITLE to "资料分析 20 题", F.THREAD to t.key, F.CRITERIA to "做完对答案", F.PLAN to com.zongkong.core.work.Plan(at(-50), at(-10)).encode()), now, rnd)
+            key = a.key
+            w2
+        }
+        // 后台自动验收不再替你把早上的部署打勾
+        runBlocking { app.actions.autoVerify() }
+        assertTrue(app.store.status().gates.any { it.gate.id == "plan_morning" && !it.done })
+        val st = app.store.status()
+        assertTrue(st.reasons.toString(), st.reasons.any { it is com.zongkong.core.Reason.Debt })
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java))
+        waitFor(hasTestTag("guide-confirm-plan"), 10_000, "确认今天的部署")
+        settle()
+        shot("e2e-103-confirm-plan")
+        compose.onNodeWithTag("guide-confirm-plan").performScrollTo().performClick()
+        compose.waitUntil(5_000) { app.store.status().gates.any { it.gate.id == "plan_morning" && it.done } }
+        // 还欠着主线：首页是严管卡
+        waitText("过了点还没开始", 5_000)
+        settle()
+        shot("e2e-104-debt")
+        // 开始做就解开
+        app.store.updateWork { com.zongkong.core.work.WorkOps.start(it, key, System.currentTimeMillis(), 0) }
+        assertTrue(app.store.status().reasons.none { it is com.zongkong.core.Reason.Debt })
+        // 底数 20 分钟用完：严管；做完这一步 +20 就又能玩
+        app.store.updateWork { com.zongkong.core.work.WorkOps.complete(it, key, "做完了", com.zongkong.core.work.WorkOps.Met.YES, "", System.currentTimeMillis(), bj, rnd) }
+        app.store.updateToday(System.currentTimeMillis()) { it.copy(playSeconds = mapOf("tv.danmaku.bili" to 30 * 60L)) }
+        assertTrue(app.store.status().reasons.none { it is com.zongkong.core.Reason.Budget })
+        app.store.updateToday(System.currentTimeMillis()) { it.copy(playSeconds = mapOf("tv.danmaku.bili" to 45 * 60L)) }
+        assertTrue(app.store.status().reasons.toString(), app.store.status().reasons.any { it is com.zongkong.core.Reason.Budget })
+        go("home")
+        waitText("娱乐用完了", 5_000)
+        settle()
+        shot("e2e-105-budget")
     }
 }

@@ -217,6 +217,18 @@ private fun StrictBody(
                     Button(onClick = { openRoute("hq") }, modifier = Modifier.fillMaxWidth()) { Text("进入总控时间") }
                     OutlinedButton(onClick = { openRoute("chat") }, modifier = Modifier.fillMaxWidth()) { Text("跟总控说几句") }
                 }
+                is Reason.Budget -> Panel(accent = sig.strict, onClick = { openRoute("home") }) {
+                    Text("今天挣到的娱乐用完了", style = MaterialTheme.typography.titleMedium)
+                    Text("已用 ${r.usedMin} 分钟，今天挣到 ${r.allowedMin} 分钟。", style = MaterialTheme.typography.bodyMedium.merge(Mono))
+                    Hint("做完一步 +20 分钟，实打实做事每半小时 +10。不做事，就只有每天的底数。")
+                    Button(onClick = { openRoute("home") }, modifier = Modifier.fillMaxWidth()) { Text("去做下一步") }
+                }
+                is Reason.Debt -> Panel(accent = sig.strict, onClick = { openRoute("start/${r.actionKey}") }) {
+                    Text("「${r.title}」过了点还没开始", style = MaterialTheme.typography.titleMedium)
+                    Hint("排好的事先动起来，娱乐才开。真做不了：改个时间，或者标卡住、写一句为什么——都算交代了。")
+                    Button(onClick = { openRoute("start/${r.actionKey}") }, colors = ButtonDefaults.buttonColors(containerColor = sig.strict), modifier = Modifier.fillMaxWidth()) { Text("现在开始") }
+                    OutlinedButton(onClick = { openRoute("action/${r.actionKey}") }, modifier = Modifier.fillMaxWidth()) { Text("改时间 / 标卡住") }
+                }
                 is Reason.Quota -> Panel(accent = sig.strict) {
                     Text("今天的娱乐额度用完了", style = MaterialTheme.typography.titleMedium)
                     Text("已用 ${r.usedMin} 分钟，上限 ${r.limitMin} 分钟。明天凌晨 4 点重置。", style = MaterialTheme.typography.bodyMedium.merge(Mono))

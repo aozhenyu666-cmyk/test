@@ -143,6 +143,10 @@ data class Config(
     val yishouPassCap: Int = 5,
     /** 总控时间、震动、失联阶梯、参谋主动找你。 */
     val hq: com.zongkong.core.hq.HqConfig = com.zongkong.core.hq.HqConfig(),
+    /** 挣来的娱乐（0.10）。 */
+    val earn: EarnConfig = EarnConfig(),
+    /** 你自己从拦截名单里拿掉的应用：自动识别娱乐应用时不再加回去。 */
+    val unblocked: Set<String> = emptySet(),
     /** 总控者：截图抽查、每天抽查、连续娱乐、模型锁、桌面宠物、主动程度。 */
     val boss: com.zongkong.core.boss.BossConfig = com.zongkong.core.boss.BossConfig(),
     /** 语音：说话（TTS）和听写（STT）的接口；不填就用手机自带的。 */
@@ -171,7 +175,18 @@ data class ChatConfig(
 data class WatchConfig(
     val enabled: Boolean = false,
     val rules: List<WatchRule> = emptyList(),
-)
+    /** 拦截名单里的娱乐应用：放行时每次打开也要先答一题，答完给一段 [sliceMinutes] 分钟。 */
+    val openGate: Boolean = true,
+    val sliceMinutes: Int = 10,
+) {
+    /**
+     * 这个应用归不归低屏 / 答题管：自己加的规则优先（开了低屏模式才算）；
+     * 否则拦截名单里的应用按“打开就答题、一段 [sliceMinutes] 分钟”管。
+     */
+    fun ruleFor(pkg: String, blocked: Set<String>): WatchRule? =
+        rules.firstOrNull { it.pkg == pkg }?.takeIf { enabled }
+            ?: if (openGate && pkg in blocked) WatchRule(pkg, maxMinutes = sliceMinutes.coerceIn(1, 60), cooldownSeconds = 10, onOpen = true) else null
+}
 
 /** 一条守门规则：连续用 [maxMinutes] 分钟 → 弹回做题页 → 冷却 [cooldownSeconds] 秒 → 才放行下一段。 */
 @Serializable
@@ -180,6 +195,22 @@ data class WatchRule(
     val label: String = "",
     val maxMinutes: Int = 2,
     val cooldownSeconds: Int = 10,
+    /** 一打开就要答题（不是连续用满 [maxMinutes] 才弹）。 */
+    val onOpen: Boolean = false,
+)
+
+/**
+ * 挣来的娱乐：每天先给 [baseMinutes]，做完一步 +[perAction]，实打实做事每 30 分钟 +[perHalfHour]，
+ * 上限是 [Config.dailyQuotaMin]。不交流、不做事，就只有底数。
+ * 主线过了点 [mainGraceMinutes] 分钟还没开始：欠着，娱乐先关，开始做或改时间就解开。
+ */
+@Serializable
+data class EarnConfig(
+    val enabled: Boolean = true,
+    val baseMinutes: Int = 20,
+    val perAction: Int = 20,
+    val perHalfHour: Int = 10,
+    val mainGraceMinutes: Int = 30,
 )
 
 /**

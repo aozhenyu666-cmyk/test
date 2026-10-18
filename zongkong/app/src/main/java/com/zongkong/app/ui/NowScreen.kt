@@ -541,9 +541,26 @@ private fun PlanStrip(plan: com.zongkong.core.plan.WeekPlan?, book: com.zongkong
 @Composable
 private fun Guidance(status: Status, date: String, now: Long, nav: NavHostController) {
     val sig = LocalSignals.current
+    val app = LocalContext.current.zk
+    val scope = rememberCoroutineScope()
     val hour = Instant.ofEpochMilli(now).atZone(com.zongkong.core.DayClock.BEIJING).hour
     val reason = status.reasons.firstOrNull()
+    val planOpen = status.gates.firstOrNull { it.gate.id == com.zongkong.app.data.Actions.PLAN_GATE && !it.done && it.phase != GatePhase.NOT_OPEN }
+    // 今天已经排了（你自己排的，或者总控早上替你排的）：看一眼、点一下确认就算部署
+    val planned = remember(status, app.store.work.value) { Focus.evidence(app.store.work.value, Focus.Evidence.PLANNED_TODAY, now, com.zongkong.core.DayClock.BEIJING) }
     when {
+        planOpen != null && planned.first > 0 -> {
+            Panel(accent = sig.plan, onClick = { scope.launch { app.actions.autoVerify(confirmPlan = true) } }, modifier = Modifier.enter(1).testTag("guide-confirm-plan")) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    DeptSeal(Dept.PLAN, size = 44.dp, filled = true)
+                    Column(Modifier.weight(1f)) {
+                        Text("今天排了 ${planned.first} 步，确认一下就开始", style = MaterialTheme.typography.titleSmall)
+                        Hint(planned.second.joinToString("、") { "「$it」" } + "。要改就去晨间部署。")
+                    }
+                    Text("确认 →", style = MaterialTheme.typography.labelLarge, color = sig.plan)
+                }
+            }
+        }
         status.strict && reason != null -> {
             val (title, how, route) = when (reason) {
                 is Reason.GateDue -> Triple(
@@ -556,6 +573,8 @@ private fun Guidance(status: Status, date: String, now: Long, nav: NavHostContro
                 is Reason.Session -> Triple("总控时间进行中", "回到总控时间，做完就解锁", "hq")
                 is Reason.Absent -> Triple("已经 ${reason.days} 天没和总控交流了", "跟总控说几句，或者进一次总控时间", "hq")
                 is Reason.Focus -> Triple("专注锁开着", "做完「${reason.title}」就解开", "session")
+                is Reason.Budget -> Triple("今天挣到的 ${reason.allowedMin} 分钟娱乐用完了", "做完一步再挣 20 分钟", "today")
+                is Reason.Debt -> Triple("「${reason.title}」过了点还没开始", "现在开始，或者改个时间 / 标卡住", "start/${reason.actionKey}")
             }
             Panel(accent = sig.strict, onClick = { nav.navigate(route) }, modifier = Modifier.enter(1)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {

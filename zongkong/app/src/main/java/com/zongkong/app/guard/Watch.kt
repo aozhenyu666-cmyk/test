@@ -88,8 +88,7 @@ object Watch {
                 trackedPkg = pkg
                 trackedSince = now
             }
-            // 两个到期时间取晚的那个：连续用满 maxMinutes，并且放行也已到期（做完题再给的 maxMinutes）才弹
-            val due = maxOf(trackedSince + rule.maxMinutes * 60_000L, grantUntil(service, pkg))
+            val due = dueAt(service, pkg, rule)
             if (now >= due) {
                 fire(service, pkg, now)
             } else {
@@ -97,6 +96,14 @@ object Watch {
             }
         }
     }
+
+    /**
+     * 什么时候该弹：
+     * - 打开就答题的（拦截名单里的娱乐应用）：放行到期就弹，一打开没有放行就马上弹；
+     * - 低屏规则：连续用满 maxMinutes，并且放行也已到期（做完题再给的 maxMinutes）。
+     */
+    private fun dueAt(context: Context, pkg: String, rule: WatchRule): Long =
+        if (rule.onOpen) grantUntil(context, pkg) else maxOf(trackedSince + rule.maxMinutes * 60_000L, grantUntil(context, pkg))
 
     /** 放行到期时间戳；0 = 没有放行。 */
     fun grantUntil(context: Context, pkg: String): Long = try {
@@ -126,7 +133,7 @@ object Watch {
 
     /** 还能连续用多少秒：有未到期的放行先算放行剩余，否则算这一轮的剩余。 */
     fun remainingSeconds(context: Context, pkg: String, now: Long = System.currentTimeMillis()): Int {
-        val rule = context.zk.store.config.value.watch.rules.firstOrNull { it.pkg == pkg } ?: return 0
+        val rule = ruleFor(context, pkg) ?: return 0
         val cap = rule.maxMinutes * 60
         val grant = grantUntil(context, pkg)
         if (now < grant) return ((grant - now) / 1000L).toInt().coerceIn(0, cap)
@@ -137,10 +144,16 @@ object Watch {
 
     // ---------- 内部 ----------
 
-    private fun ruleFor(context: Context, pkg: String): WatchRule? {
-        val watch = context.zk.store.config.value.watch
-        if (!watch.enabled) return null
-        return watch.rules.firstOrNull { it.pkg == pkg }
+    /**
+     * 这个应用归谁管：自己加的低屏规则，或者拦截名单里的娱乐应用（打开就答题）。
+     * 严管时拦截名单里的应用由拦截页管（直接弹回），这里不重复弹。
+     */
+    fun ruleFor(context: Context, pkg: String): WatchRule? {
+        val store = context.zk.store
+        val config = store.config.value
+        val rule = config.watch.ruleFor(pkg, config.blocked) ?: return null
+        if (pkg in config.blocked && store.status().strict) return null
+        return rule
     }
 
     /** 定时到期检查：条件和 [tick] 一样，只是不用等下一次窗口事件。 */
@@ -160,8 +173,8 @@ object Watch {
                 schedule(SCREEN_OFF_RETRY_MS)
                 return
             }
-            // 和 tick 同一套判定：连续用满 maxMinutes 且放行已到期
-            val due = maxOf(trackedSince + rule.maxMinutes * 60_000L, grantUntil(service, pkg))
+            // 和 tick 同一套判定
+            val due = dueAt(service, pkg, rule)
             if (now + EDGE_MS < due) {
                 schedule(due - now)
             } else {

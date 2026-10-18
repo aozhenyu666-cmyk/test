@@ -135,6 +135,37 @@ class ControlTest {
         assertTrue(status.strict)
     }
 
+    @Test fun gateGraceKeepsClaude010EarnedBudgetAndUnstartedActionDebt() {
+        val c = config(gate(), quota = 120)
+        val log = DayLog(date, playSeconds = mapOf("app" to 20 * 60L))
+        val status = Engine.evaluate(c, log, now, ZONE, earned = 0, debt = "action" to "资料整理", control = deferred())
+        assertFalse(status.gates.single().blocking)
+        assertFalse(status.gates.single().done)
+        assertTrue(status.reasons.any { it is Reason.Budget })
+        assertTrue(status.reasons.any { it is Reason.Debt })
+        assertTrue(status.strict)
+    }
+
+    @Test fun hqGraceDoesNotGrantExtraEntertainmentMinutes() {
+        val s = Hq.suspend(Hq.start("h", HqTrigger.UNANSWERED, HqConfig(), now, 20), now, now + 30 * 60_000)
+        val status = Engine.evaluate(config(quota = 120), DayLog(date, playSeconds = mapOf("app" to 20 * 60L)),
+            now, ZONE, session = s, earned = 0)
+        assertFalse(status.reasons.any { it is Reason.Session })
+        assertTrue(status.reasons.any { it is Reason.Budget })
+        assertTrue(status.strict)
+    }
+
+    @Test fun claude010SavedSettingsKeepTheirRulesAfterUpgrade() {
+        val saved = """{"earn":{"enabled":true,"baseMinutes":7},"watch":{"openGate":true},"unblocked":["example.app"]}"""
+        val upgraded = Json.decodeFromString<Config>(saved)
+        assertTrue(upgraded.earn.enabled)
+        assertEquals(7, upgraded.earn.baseMinutes)
+        assertTrue(upgraded.watch.openGate)
+        assertTrue("example.app" in upgraded.unblocked)
+        assertFalse(upgraded.takeover.enabled)
+        assertEquals(upgraded, Json.decodeFromString<Config>(Json.encodeToString(upgraded)))
+    }
+
     @Test fun originalDateSubmissionCannotPassTodaysSameNamedGate() {
         val oldDate = LocalDate.parse(date)
         val tomorrow = at(12, date = oldDate.plusDays(1))
@@ -176,7 +207,8 @@ class ControlTest {
             .copy(step = HqStep.SEAL.ordinal, stepStartedAt = now + 20 * 60_000)
         assertFalse(Hq.canFinish(s, now + 20 * 60_000 + 19_999))
         assertTrue(Hq.canFinish(s, now + 20 * 60_000 + 20_000))
-        assertFalse(Hq.canFinish(s.copy(trigger = HqTrigger.SCHEDULED), now + 21 * 60_000))
+        // 沿用 Claude 0.10：每日总控做完也不必陪坐到整段时长结束。
+        assertTrue(Hq.canFinish(s.copy(trigger = HqTrigger.SCHEDULED), now + 21 * 60_000))
     }
 
     @Test fun forcedSessionCannotKeepBlockingPastItsMaximumEvenBeforeCleanupRuns() {

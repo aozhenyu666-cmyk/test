@@ -39,7 +39,8 @@ class SeedReceiver : BroadcastReceiver() {
             }
             "hq" -> context.zk.actions.hq.start(com.zongkong.core.hq.HqTrigger.MANUAL)
             "hq-end" -> context.zk.actions.hq.exitEarly("冒烟测试结束总控时间")
-            "free" -> {
+            // 放行，但打开娱乐应用先答一题（0.10 默认）
+            "gate", "free" -> {
                 val now = System.currentTimeMillis()
                 store.updateToday(now) { day ->
                     var d = DayOps.checkin(day, "冒烟测试：报到一次", now)
@@ -48,7 +49,10 @@ class SeedReceiver : BroadcastReceiver() {
                     }
                     d
                 }
-                store.updateConfig { it.copy(silenceHours = 0, dailyQuotaMin = 0) }
+                // free：纯放行（不答题、不算挣来的时长），看拦截名单本身放不放
+                val gate = intent.getStringExtra("mode") == "gate"
+                store.updateConfig { it.copy(silenceHours = 0, dailyQuotaMin = 0, earn = it.earn.copy(enabled = gate), watch = it.watch.copy(openGate = gate)) }
+                if (gate) context.getSharedPreferences("watch", Context.MODE_PRIVATE).edit().clear().apply()
             }
         }
         Log.i("SeedReceiver", "seeded: strict=${store.status().strict} hq=${store.hq.value.active != null} blocked=${store.config.value.blocked}")
