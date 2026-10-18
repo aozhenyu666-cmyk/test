@@ -187,6 +187,8 @@ class LoopTest {
         compose.onNodeWithTag("session-done").performScrollTo().performClick()
         compose.onNodeWithTag("result-field").performTextInput("写完了，用了 STAR，数据还缺两个")
         compose.onNodeWithTag("next-field").performTextInput("找项目数据")
+        // 键盘会挡住“记下结果”，点之前先收起
+        hideKeyboard()
         compose.onNodeWithTag("complete-save").performScrollTo().performClick()
         waitText("结果已记下")
         shot("e2e-04-result-saved")
