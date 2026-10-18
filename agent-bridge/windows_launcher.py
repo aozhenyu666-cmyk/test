@@ -22,8 +22,15 @@ def main():
         sys.exit("This wrapper only launches configured Windows batch commands.")
     command = command_line(sys.argv[1:], os.environ.get("COMSPEC", "cmd.exe"))
     # The command is local configuration; model/user prompts stay in stdin.
-    flags = subprocess.CREATE_NO_WINDOW if not sys.stdin.isatty() else 0
-    sys.exit(subprocess.call(command, shell=False, creationflags=flags))
+    options = {}
+    if not sys.stdin.isatty():
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = subprocess.SW_HIDE
+        options['startupinfo'] = startup
+    # Explicit handles preserve pipe EOF through cmd.exe even in a GUI parent.
+    sys.exit(subprocess.call(command, shell=False, stdin=sys.stdin,
+                            stdout=sys.stdout, stderr=sys.stderr, **options))
 
 
 if __name__ == "__main__":

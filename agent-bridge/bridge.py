@@ -126,6 +126,15 @@ def stop_terminal(proc):
         proc.terminate(force=True)
 
 
+def process_options():
+    if os.name != "nt":
+        return {"start_new_session": True}
+    startup = subprocess.STARTUPINFO()
+    startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startup.wShowWindow = subprocess.SW_HIDE
+    return dict(creationflags=subprocess.CREATE_NEW_PROCESS_GROUP, startupinfo=startup)
+
+
 def command_for(agent, output):
     argv = [x.replace("{output}", str(output)) for x in agent["argv"]]
     executable = shutil.which(argv[0])
@@ -333,7 +342,7 @@ class Hub:
             with tempfile.TemporaryDirectory(prefix="agent-bridge-") as temp:
                 output_file = Path(temp) / "result.txt"
                 argv = command_for(agent, output_file)
-                kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
+                kwargs = process_options()
                 proc = subprocess.Popen(argv, cwd=agent["cwd"], stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                         env={**os.environ, "PYTHONIOENCODING": "utf-8", "NO_COLOR": "1"}, **kwargs)
@@ -444,7 +453,7 @@ class Hub:
                       checked=time.time(), note="检查命令是否安装；不代表已登录模型服务。")
         if command:
             args = command_for({**agent, "argv": [agent["argv"][0], "--version"]}, "")
-            kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
+            kwargs = process_options()
             proc = subprocess.Popen(args, cwd=agent["cwd"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kwargs)
             try:
                 output, _ = proc.communicate(timeout=10)

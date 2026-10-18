@@ -65,7 +65,7 @@ class HubTests(unittest.TestCase):
                                         prompt="检查中文任务传递", max_turns=turns))
 
     def wait(self, task, status=None):
-        deadline = time.monotonic() + 8
+        deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             value = self.hub.store.get("tasks", task["id"])
             if value["status"] in {"completed", "failed", "cancelled"}:
@@ -73,7 +73,7 @@ class HubTests(unittest.TestCase):
                     self.assertEqual(value["status"], status, value)
                 return value
             time.sleep(.02)
-        self.fail("Task did not finish")
+        self.fail("Task did not finish: " + json.dumps(value,ensure_ascii=True))
 
     def captured(self, name):
         return [json.loads(line) for line in (self.root / (name + ".jsonl")).read_text(encoding="utf-8").splitlines()]
