@@ -784,7 +784,11 @@ function answerCard(n, rec) {
           a.verify ? h('div', {}, h('button', { class: 'btn sm mt', onclick: async () => { n.verify = a.verify; await store.saveNode(n); toast('已设为验证方式'); } }, '设为验证方式')) : null))));
       if (a.suggest.length) {
         box.append(h('div', { class: 'blk' }, h('div', { class: 'h' }, '建议新增'),
-          h('div', { class: 'list' }, a.suggest.map((s) => h('div', { class: 'link-cand rel-' + s.type }, relTag(s.type), h('div', { class: 'grow' }, h('b', {}, s.title), h('div', { class: 'why' }, s.claim))))),
+          h('div', { class: 'list' }, a.suggest.map((s) => h('div', { class: 'link-cand' + (s.rel ? ' rel-' + s.rel : '') },
+            glyph({ type: s.type, status: '假设' }),
+            h('div', { class: 'grow' }, h('b', {}, s.title), h('div', { class: 'why' }, s.claim),
+              h('div', { class: 'why' }, s.rel ? '与当前节点：' + s.rel : MOUNT_RULES[s.type].includes(n.type) ? '挂在当前节点下' : '不挂载（「' + s.type + '」不能挂在「' + n.type + '」下）')),
+            s.rel ? relTag(s.rel) : null))),
           h('button', { class: 'btn primary block mt', 'data-testid': 'to-cands', onclick: () => suggestionsToCands(n, a.suggest) }, '转为候选卡片，逐张确认')));
       }
     }
@@ -794,13 +798,16 @@ function answerCard(n, rec) {
   return box;
 }
 
+// 「建议新增」→ 候选卡片：没有横向关系的默认挂在当前节点下（符合挂载规则时），有关系的生成一条关系
 function suggestionsToCands(origin, suggest) {
   const nodes = suggest.map((s, i) => ({
-    tmp_id: 's' + (i + 1), title: s.title, type: '论', claim: s.claim || s.title, keywords: s.keywords || [], status: '假设', confidence: 50,
-    verify: '', merge_into: '', parent: origin.parent,
+    tmp_id: 's' + (i + 1), title: s.title, type: s.type, claim: s.claim || s.title, keywords: s.keywords || [],
+    status: '假设', confidence: s.type === '问' ? null : 50, verify: '', merge_into: '', parent: origin.parent,
+    under: !s.rel && MOUNT_RULES[s.type].includes(origin.type) ? origin.id : '',
+    pillars: [], blindspot: '', sentinels: s.sentinels || [], triggers: s.triggers || [], cost: '',
   }));
-  const links = suggest.map((s, i) => ({ from: 's' + (i + 1), to: origin.id, type: s.type, why: 'AI 建议（' + today() + '）', on: true }));
-  startCands({ nodes, links, system: origin.system, source: getConfig().think.label || 'AI 推演', origin: origin.id });
+  const links = suggest.map((s, i) => (s.rel ? { from: 's' + (i + 1), to: origin.id, type: s.rel, why: 'AI 建议（' + today() + '）', on: true } : null)).filter(Boolean);
+  startCands({ nodes, links, adjust: [], system: origin.system, source: getConfig().think.label || 'AI 推演', origin: origin.id });
 }
 
 // ---------------- 录入与拆分 ----------------

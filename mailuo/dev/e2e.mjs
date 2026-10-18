@@ -170,7 +170,10 @@ const raw = await page.textContent('[data-testid=pack-raw]');
 check(/省 \d+%/.test(await page.textContent('[data-testid=savings]')), '提问页显示「整库 vs 本次」省了多少 token：' + (await page.textContent('[data-testid=savings]')).replace(/\s+/g, ''));
 check(raw.includes('请说明怎样区分这两个解释'), '对立关系：自动加入「请说明怎样区分这两个解释」');
 check((raw.match(/对立·竞争解释/g) || []).length === 1, '双向写的对立关系只打包一次');
-check(raw.includes('【路径】思维问题 › 根因 › 下一问没有产生') && raw.includes('【激活词】'), '打包含路径、节点、邻居、激活词');
+check(raw.includes('【路径】为什么想到一半就停？ › 下一问没有产生') && raw.includes('【激活词】'), '打包路径按挂载链：问 › 论');
+check(raw.includes('验证哨：+10 卡住时写下下一问后') && raw.includes('反方盲区：'), '打包的节点正文带上推演槽位（验证哨、反方盲区）');
+check(raw.includes('- 上级·问｜为什么想到一半就停？'), '打包邻居包含挂载链的上级');
+check(raw.includes('类型｜标题｜一句结论｜3 个激活词'), '提示词 B 用 V2 的「建议新增」格式');
 await shot('06-ask-pack');
 await page.click('[data-testid=send]');
 await page.waitForSelector('[data-testid=core]');
@@ -184,6 +187,11 @@ await page.waitForSelector('[data-testid=cand]');
 check(await page.locator('[data-testid=cand]').count() === 3, '「建议新增」解析成 3 张候选卡片');
 check((await page.textContent('body')).includes('舒缓感提前'), '候选卡片标题正确');
 check(await page.locator('[data-testid=cand]').first().locator('.kw').count() === 3, '「建议新增」带回 3 个激活词');
+const sugg = await page.evaluate(() => JSON.parse(localStorage.getItem('mailuo.draft')));
+const [s1, s2, s3] = sugg.nodes;
+check(s1.type === '论' && s1.under === 'n-0006' && s1.sentinels[0]?.delta === 10, '建议的「论」默认挂在当前节点下，并带验证哨');
+check(s2.under === '' && sugg.links.some((l) => l.from === s2.tmp_id && l.to === 'n-0006' && l.type === '对立'), '「对立·论」不挂载，改为一条对立关系');
+check(s3.type === '规' && s3.under === 'n-0006' && s3.triggers[0] === '觉得脑子转不动的时候', '建议的「规」挂在当前节点下，并带触发场景');
 
 // 左滑丢弃一张候选卡
 const card = page.locator('[data-testid=cand]').nth(1);
@@ -272,7 +280,8 @@ await page.fill('[data-testid=question]', '怎样区分这两个根因？');
 await page.click('details.manual summary');
 await page.click('[data-testid=manual-ask-copy]');
 const clip = await page.evaluate(() => navigator.clipboard.readText());
-check(clip.includes('只输出：') && clip.includes('【路径】思维问题 › 根因') && clip.includes('问题：怎样区分这两个根因？'), '手动模式：复制的是「提示词 B + 打包内容」');
+check(clip.includes('只输出：') && clip.includes('【路径】为什么想到一半就停？ › 单步成本高') && clip.includes('问题：怎样区分这两个根因？'), '手动模式：复制的是「提示词 B + 打包内容」');
+check(/- 下级·规｜累了先把下一步写在纸上/.test(clip) && /【激活词】[^\n]*觉得脑子转不动的时候/.test(clip), '打包邻居包含挂在本节点下的规，激活词含它的触发场景');
 const before = calls.length;
 await page.fill('[data-testid=manual-ask-paste]', `**核心判断**：先看「累不累」，再看「有没有问题可问」。
 **结构**：单步成本 → 舒缓感 → 停止

@@ -181,12 +181,16 @@ export const PROMPT_THINK = `下面是我的知识结构片段：路径、节点
 - 验证：一个本周能做的小动作
 - 建议新增：最多 3 个节点或关系（标题 + 一句结论 + 关系类型）
 禁止逐条分析每个要点。
-「建议新增」每条单独一行，格式：关系类型｜标题｜一句结论｜3 个激活词（顿号分隔）。关系类型是新节点对当前节点的关系，只能用：属于、导致、支撑、反例、对立、前置、类似。`;
+「建议新增」每条单独一行，格式：类型｜标题｜一句结论｜3 个激活词（顿号分隔）｜附加。
+- 类型只能是 问、论、规；新节点默认挂在当前节点下面。若它不该挂在当前节点下、而是和当前节点构成横向关系，在类型前加关系，例如「对立·论」，关系只能用：属于、导致、支撑、反例、对立、前置、类似。
+- 附加：论写一条验证哨「哨：+10 看到什么现象」（数字带正负号，表示把握加分或扣分）；规写一个触发场景「触发：在什么念头或情境下」；问可以不写。`;
 
 const SECTIONS = [
   ['core', /^核心判断/], ['structure', /^结构/], ['alt', /^另一种可能/], ['wrong', /^如果我错了/],
   ['confidence', /^把握/], ['verify', /^验证/], ['suggest', /^建议新增/],
 ];
+
+export { parseSuggestion };
 
 export function parseAnswer(text) {
   const out = { raw: text, suggest: [] };
@@ -219,28 +223,48 @@ export function parseAnswer(text) {
   return out;
 }
 
+const V2_TYPE = /^(?:(属于|导致|支撑|反例|对立|前置|类似)\s*[·・.]\s*)?(问|论|规)$/;
+const clean = (x) => String(x || '').replace(/[[\]【】（）()]/g, '').trim();
+
+// 解析「建议新增」的一行。V2 格式：类型｜标题｜结论｜激活词｜附加（类型可带横向关系，如「对立·论」）；
+// 也兼容 v1 格式：关系类型｜标题｜结论｜激活词（当作「论」，并保留关系）。
+// 返回 {type, rel, title, claim, keywords, sentinels, triggers}；rel 为空表示挂在当前节点下
 function parseSuggestion(line) {
   if (/^(无|没有|暂无)/.test(line)) return null;
   const parts = line.split(/\s*[｜|]\s*/).filter(Boolean);
-  let type, title, claim, keywords = [];
-  // 第 4 段是激活词（顿号 / 逗号分隔）
-  if (parts.length >= 4) keywords = parts.pop().split(/[、,，;；\s]+/).map((k) => k.trim()).filter(Boolean).slice(0, 5);
-  if (parts.length >= 3) {
-    [type, title, claim] = [parts[0], parts[1], parts.slice(2).join('，')];
-    if (!REL_TYPES.includes(type.replace(/[[\]【】（）()]/g, ''))) {
-      const t = parts.find((p) => REL_TYPES.includes(p.replace(/[[\]【】（）()]/g, '')));
-      if (t) { type = t; [title, claim] = parts.filter((p) => p !== t); }
+  let type = '论', rel = '', title, claim, keywords = [], extra = '';
+  const head = parts.length >= 3 ? V2_TYPE.exec(clean(parts[0])) : null;
+  if (head) {
+    rel = head[1] || '';
+    type = head[2];
+    [title, claim] = [parts[1], parts[2]];
+    if (parts[3]) {
+      if (/^(哨|触发)[：:]/.test(parts[3])) extra = parts[3];
+      else keywords = parts[3].split(/[、,，;；\s]+/).map((k) => k.trim()).filter(Boolean).slice(0, 5);
     }
+    if (parts[4]) extra = parts.slice(4).join('｜');
+  } else if (parts.length >= 3) {
+    // v1：关系类型在第一段（或任意一段）
+    if (parts.length >= 4) keywords = parts.pop().split(/[、,，;；\s]+/).map((k) => k.trim()).filter(Boolean).slice(0, 5);
+    let r = clean(parts[0]);
+    [title, claim] = [parts[1], parts.slice(2).join('，')];
+    if (!REL_TYPES.includes(r)) {
+      const t = parts.find((p) => REL_TYPES.includes(clean(p)));
+      if (t) { r = clean(t); [title, claim] = parts.filter((p) => p !== t); }
+    }
+    rel = REL_TYPES.includes(r) ? r : REL_TYPES.find((t) => line.includes(t)) || '类似';
   } else {
     const m = /^(.+?)[：:](.+)$/.exec(line);
     if (!m) return null;
-    title = m[1]; claim = m[2];
-    type = REL_TYPES.find((t) => line.includes(t)) || '类似';
-    claim = claim.replace(/[（(][^）)]*[）)]\s*$/, '');
+    title = m[1]; claim = m[2].replace(/[（(][^）)]*[）)]\s*$/, '');
+    rel = REL_TYPES.find((t) => line.includes(t)) || '类似';
   }
-  type = (type || '').replace(/[[\]【】（）()]/g, '').trim();
-  if (!REL_TYPES.includes(type)) type = REL_TYPES.find((t) => line.includes(t)) || '类似';
   title = String(title || '').replace(/^(标题|节点)[：:]/, '').trim().slice(0, 40);
-  claim = String(claim || '').replace(/^(结论)[：:]/, '').trim();
-  return title ? { type, title, claim, keywords } : null;
+  claim = String(claim || '').replace(/^(结论|动作)[：:]/, '').trim();
+  const sentinels = [], triggers = [];
+  const sm = /^哨[：:]\s*([+\-−]?\d+)?\s*(.+)$/.exec(extra);
+  if (sm && type === '论') sentinels.push({ when: sm[2].trim(), delta: sm[1] ? parseInt(sm[1].replace('−', '-'), 10) : 0 });
+  const tm = /^触发[：:]\s*(.+)$/.exec(extra);
+  if (tm && type === '规') triggers.push(tm[1].trim());
+  return title ? { type, rel, title, claim, keywords, sentinels, triggers } : null;
 }
