@@ -108,7 +108,7 @@ class GateActivity : ComponentActivity() {
 
     /** 判分通过：写放行（再给 maxMinutes 分钟），关掉做题页。 */
     private fun pass(pkg: String) {
-        val minutes = zk.store.config.value.watch.rules.firstOrNull { it.pkg == pkg }?.maxMinutes ?: 2
+        val minutes = zk.store.config.value.let { it.watch.ruleFor(pkg, it.blocked) }?.maxMinutes ?: 2
         Watch.grant(this, pkg, System.currentTimeMillis() + minutes * 60_000L)
         finish()
     }
@@ -137,7 +137,7 @@ private fun GateScreen(pkg: String, onHome: () -> Unit, onPass: (String) -> Unit
     val store = context.zk.store
     val config by store.config.collectAsStateWithLifecycle()
     val sig = LocalSignals.current
-    val rule = config.watch.rules.firstOrNull { it.pkg == pkg } ?: WatchRule(pkg = pkg)
+    val rule = config.watch.ruleFor(pkg, config.blocked) ?: WatchRule(pkg = pkg)
     val label = remember(pkg) { AppNames.label(context, pkg) }
     val minutes = remember(pkg) { Watch.usedMinutes(pkg).takeIf { it > 0 } ?: rule.maxMinutes }
 
@@ -198,12 +198,17 @@ private fun GateScreen(pkg: String, onHome: () -> Unit, onPass: (String) -> Unit
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Seal("屏", sig.warn, size = 64.dp, filled = true)
             Column(Modifier.weight(1f)) {
-                Text("「$label」已经连续用了 $minutes 分钟", style = MaterialTheme.typography.headlineSmall)
+                Text(if (rule.onOpen) "打开「$label」之前" else "「$label」已经连续用了 $minutes 分钟", style = MaterialTheme.typography.headlineSmall)
                 Text("不是不准用，是先做一道题。", style = MaterialTheme.typography.bodyMedium, color = sig.muted)
             }
         }
 
         Text("规则：做完这道题再放行 ${rule.maxMinutes} 分钟。", style = MaterialTheme.typography.bodyMedium)
+        // 挣来的娱乐：今天还剩多少
+        val status = remember(pkg) { store.status() }
+        if (config.earn.enabled && status.quotaMin > 0) {
+            Hint("今天能玩 ${status.quotaMin} 分钟（底数 ${config.earn.baseMinutes} + 做事挣的），已用 ${status.playMin}。做完一步 +${config.earn.perAction}。")
+        }
 
         Panel(accent = MaterialTheme.colorScheme.primary) {
             Text("题目", style = MaterialTheme.typography.titleSmall, color = sig.muted)

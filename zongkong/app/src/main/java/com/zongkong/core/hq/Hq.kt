@@ -23,10 +23,10 @@ import java.time.ZoneId
 @Serializable
 enum class HqStep(val seal: String, val title: String, val dept: Dept?, val minMinutes: Int, val hint: String) {
     SETTLE("静", "静一下", null, 1, "放下手里的事。接下来这段时间只做一件事：把四个部门修一遍。"),
-    INFO("收", "清收集箱", Dept.INFO, 3, "一条一条过：挂到事项、变成行动、转成问题，或者先放着。脑子里还有什么，也倒出来。"),
-    THINK("谋", "想透一件", Dept.THINK, 8, "挑一件卡着的事，和总控来回追问：初判、最强的反驳、修正、下一步。憋也要憋出一个判断。"),
-    PLAN("筹", "定明天", Dept.PLAN, 3, "明天只推一样：定主线、定时间、定做到什么算完。看一眼本周计划。"),
-    ACT("行", "对账", Dept.ACT, 2, "今天一手练了多少、娱乐多久、被弹回几次、哪些提醒被你忽略了。定一条明天的约束。"),
+    INFO("收", "清收集箱", Dept.INFO, 1, "一条一条过：挂到事项、变成行动、转成问题，或者先放着。清不完就先放着，不卡你。"),
+    THINK("谋", "想一件（可跳过）", Dept.THINK, 0, "有卡着的事就挑一件，和总控追问几句；今天累了就直接下一步。"),
+    PLAN("筹", "定明天", Dept.PLAN, 1, "明天只推一样：定主线、定时间、定做到什么算完。看一眼本周计划。"),
+    ACT("行", "对账", Dept.ACT, 1, "看今天的清单：做了什么、没做什么、娱乐多久。想加一条明天的约束就加，不加也行。"),
     SEAL("封", "封存", Dept.HQ, 1, "总结三行，盖章，解锁。"),
 }
 
@@ -185,8 +185,11 @@ object Hq {
     /** 正常结束：要走到最后一个环节，并且整段时间到了（时间没到可以回去再修一轮）。 */
     fun canFinish(s: HqSession, now: Long): Boolean = s.current == HqStep.SEAL && now >= finishAt(s)
 
-    /** 最早什么时候能封存：整段时间到了，而且在“封”这一步至少待了 20 秒（读一眼总结）。 */
-    fun finishAt(s: HqSession): Long = maxOf(s.endsAt, s.stepStartedAt + 20_000L)
+    /**
+     * 最早什么时候能封存：在“封”这一步待满 20 秒（读一眼总结）。
+     * 0.10 起不再要求整段时间（30 分钟）用完：每一步做完了就能封，不陪坐。
+     */
+    fun finishAt(s: HqSession): Long = s.stepStartedAt + 20_000L
 
     /** 回到某个环节再修一轮（时间还没到的时候）。 */
     fun revisit(s: HqSession, step: HqStep, now: Long): HqSession = s.copy(step = step.ordinal, stepStartedAt = now - step.minMinutes * 60_000L)

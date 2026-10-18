@@ -199,6 +199,21 @@ object Defaults {
         "com.miHoYo.Yuanshen", // 原神
         "com.dragon.read", // 番茄小说
         "com.kmxs.reader", // 七猫小说
+        "com.zhihu.android", // 知乎
+        "com.hupu.games", // 虎扑
+        "com.douban.frodo", // 豆瓣
+        "com.tencent.weishi", // 微视
+        "com.baidu.haokan", // 好看视频
+        "tv.danmaku.bilibilihd", // 哔哩哔哩 HD
+        "com.ss.android.ugc.aweme.mobile", // 抖音（其他渠道）
+        "com.taobao.idlefish", // 闲鱼
+        "com.twitter.android", // X / Twitter
+        "com.instagram.android", // Instagram
+        "com.google.android.youtube", // YouTube
+        "com.netease.mc", // 我的世界（网易）
+        "com.tencent.tmgp.cf", // 穿越火线
+        "com.miHoYo.hkrpg", // 崩坏：星穹铁道
+        "com.tencent.jkchess", // 金铲铲之战
     )
 
     /** 不允许加进拦截名单的应用：总控自己、工作用的几个 App。 */

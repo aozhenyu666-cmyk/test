@@ -66,6 +66,11 @@ class Actions(private val context: Context, private val store: Store) {
         return submit("hq_review", text)
     }
 
+    companion object {
+        /** 早上的部署：只有你自己确认才算。 */
+        const val PLAN_GATE = "plan_morning"
+    }
+
     sealed interface SubmitResult {
         data class Judged(val verdict: Verdict) : SubmitResult
         data class Unavailable(val reason: String, val degradedLeft: Int) : SubmitResult
@@ -124,10 +129,14 @@ class Actions(private val context: Context, private val store: Store) {
      * 看证据的关卡：证据够了就自动打勾，不用你去点。没够不记失败（不算一次提交）。
      * 首页打开、后台每隔几分钟各查一次。返回自动通过的关卡标题。
      */
-    suspend fun autoVerify(): List<String> {
+    suspend fun autoVerify(confirmPlan: Boolean = false): List<String> {
         val now = System.currentTimeMillis()
         val status = store.status(now)
-        val open = status.gates.filter { !it.done && it.phase != GatePhase.NOT_OPEN && it.gate.verify == VerifyMode.EVIDENCE }
+        // 早上的部署要你自己点一下确认：总控替你排好的、后台自动打勾的，不算你部署过（0.10）
+        val open = status.gates.filter {
+            !it.done && it.phase != GatePhase.NOT_OPEN && it.gate.verify == VerifyMode.EVIDENCE &&
+                (confirmPlan || it.gate.id != PLAN_GATE)
+        }
         if (open.isEmpty()) return emptyList()
         val needYishou = open.any { it.gate.evidence == com.zongkong.core.work.Focus.Evidence.YISHOU_SETS.name }
         val yishou = if (needYishou && YishouClient.installed(context)) YishouClient.status(context) else null

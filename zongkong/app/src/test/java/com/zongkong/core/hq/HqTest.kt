@@ -57,8 +57,9 @@ class HqTest {
         assertEquals("清了 6 条", s.notes[HqStep.INFO.name])
         repeat(3) { s = Hq.advance(s, t0 + 20 * 60_000) }
         assertEquals(HqStep.SEAL, s.current)
-        // 整段时间（30 分钟）没到，不能结束；可以回去再修
-        assertFalse(Hq.canFinish(s, t0 + 22 * 60_000))
+        // 在“封”这一步待满 20 秒就能结束（不用等整段 30 分钟）；也可以回去再修
+        assertFalse(Hq.canFinish(s, t0 + 20 * 60_000 + 5_000))
+        assertTrue(Hq.canFinish(s, t0 + 20 * 60_000 + 21_000))
         val back = Hq.revisit(s, HqStep.THINK, t0 + 22 * 60_000)
         assertEquals(HqStep.THINK, back.current)
         assertTrue(Hq.canAdvance(back, t0 + 22 * 60_000, done = true))
