@@ -4,7 +4,7 @@ import { execSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startServer, calls } from './server.mjs';
+import { startServer, calls, COLLIDE } from './server.mjs';
 import { load as yamlLoad } from '../www/vendor/js-yaml.mjs';
 
 async function loadPlaywright() {
@@ -93,32 +93,27 @@ check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWid
 
 await page.evaluate(() => window.__mailuo.store.deleteNode('n-0102'));
 
-// ---------- 录入与拆分 ----------
+// ---------- 录入碰撞引擎 ----------
 await page.goto(ORIGIN + '/#/capture');
 const material = ('我发现自己思考时，第一个念头出来之后，就会出现一种「想完了」的舒缓感，于是停下来，没有继续加工。' +
   '这种舒缓感像一个停止信号。如果在停下之前强制写下下一个问题，就能继续往下推。').repeat(9).slice(0, 1000);
 await page.fill('[data-testid=capture-text]', material);
+check((await page.textContent('[data-testid=digest-summary]')).includes('将附上节点库摘要'), '录入前显示节点库摘要和 token 估算');
 const t0 = Date.now();
 await page.click('[data-testid=split]');
 await page.waitForSelector('[data-testid=cand]', { timeout: 30000 });
-const secs = (Date.now() - t0) / 1000;
-check(secs < 30, '1000 字材料 ' + secs.toFixed(1) + ' 秒内得到候选卡片（< 30 秒）');
-check(await page.locator('[data-testid=cand]').count() === 3, '3 张候选卡片');
-check(await page.locator('[data-testid=dupe]').count() >= 1, '与已有节点重合时提示「可能重复」');
-check(await page.locator('.link-cand').count() === 2, '自造关系类型被过滤，只留 2 条候选关系');
+check((Date.now() - t0) < 30000, '1000 字材料 30 秒内得到碰撞候选');
+const draftCands = await page.evaluate(() => JSON.parse(localStorage.getItem('mailuo.draft')));
+check(draftCands.adjust.length === 2 && draftCands.nodes.length === 2, '碰撞结果保存 2 条调整与 2 张新节点草稿');
+check(calls[0].sys.includes('碰撞引擎') && calls[0].user.includes('节点库摘要') && calls[0].user.includes('n-0006'), '录入请求使用碰撞引擎并带相关节点库摘要');
 await shot('04-cands');
-await page.locator('[data-testid=dupe] button:has-text("合并")').first().click();
 await page.locator('[data-testid=cand] [data-testid=accept]').first().click();
 await page.locator('[data-testid=cand] [data-testid=accept]').first().click();
 await page.click('[data-testid=commit]');
-await page.waitForSelector('.toast');
-check(await page.evaluate(() => window.__mailuo.store.nodes.size) === 11, '写入 2 个新节点 + 1 个合并（共 11 个节点）');
+await page.waitForURL(/#\/tree/);
 f = await files();
-const merged = yamlLoad(f['思维问题/第一反应停止.md'].split('---')[1]);
-check(merged.keywords.length <= 5, '合并：激活词并入已有节点（≤ 5 个）');
-const shu = Object.entries(f).find(([p]) => p.endsWith('/舒缓感.md'));
-check(shu && shu[1].includes('导致 [[第一反应停止]]'), '新节点的关系指向合并后的已有节点，并写成双链');
-check(calls[0].user.includes('n-0001 第一反应停止'), '拆分请求带上了已有节点列表（用于 merge_into）');
+check(Object.values(f).some((t) => t.includes('title: 累了先把下一步写在纸上') && t.includes('under: n-0007') && t.includes('triggers:')), '补链新规带触发场景挂在已有论下面');
+check(Object.values(f).some((t) => t.includes('title: 写下来能延后停止点') && t.includes('under: n-0100') && t.includes('sentinels:')), '补链新论带验证哨挂在已有问下面');
 
 // 双链都能在仓库里找到对应文件（Obsidian 关系图可见）
 const names = new Set(Object.keys(f).map((p) => p.split('/').at(-1).replace(/\.md$/, '')));
@@ -261,20 +256,18 @@ await page.goto(ORIGIN + '/#/capture');
 await page.fill('[data-testid=capture-text]', '学习新知识时，先建立框架再填细节，记忆更牢；框架像挂钩。');
 await page.click('details.manual summary');
 await page.click('[data-testid=manual-split-copy]');
-check((await page.evaluate(() => navigator.clipboard.readText())).includes('你是结构拆分器'), '手动拆分：复制拆分指令');
-await page.fill('[data-testid=manual-split-paste]', '好的，结果如下：\n```json\n{"nodes":[{"tmp_id":"a","title":"框架先行","type":"规则","claim":"先建框架再填细节，记得更牢。","keywords":["图式","组块","记忆提取"],"status":"假设","confidence":60,"verify":"两种学法各学一章，一周后测回忆量",},],"links":[],}\n```');
+check((await page.evaluate(() => navigator.clipboard.readText())).includes('碰撞引擎'), '手动模式：复制碰撞指令');
+const manualBefore = calls.length;
+await page.fill('[data-testid=manual-split-paste]', JSON.stringify(COLLIDE));
 await page.click('[data-testid=manual-split-parse]');
 await page.waitForSelector('[data-testid=cand]');
-check((await page.textContent('body')).includes('框架先行'), '手动拆分：粘贴带尾逗号的 JSON 也能解析成候选卡片');
-await page.click('[data-testid=cand] [data-testid=accept]');
-await page.click('[data-testid=commit]');
-await page.waitForURL(/#\/tree/);
-check(await page.evaluate(() => [...window.__mailuo.store.nodes.values()].some((n) => n.title === '框架先行')), '手动拆分的节点已写入');
+const manualDraft = await page.evaluate(() => JSON.parse(localStorage.getItem('mailuo.draft')));
+check(manualDraft.adjust.length === 2 && manualDraft.nodes.length === 2 && calls.length === manualBefore, '手动碰撞结果走同一规范化流程，不调用 API');
 
 // ---------- 新增：全库搜索 / 返回键关闭弹层 ----------
 await page.goto(ORIGIN + '/#/');
 await page.click('[data-testid=search]');
-await page.fill('[data-testid=search-input]', '舒缓');
+await page.fill('[data-testid=search-input]', '停止');
 check(await page.locator('.sheet .node-row').count() >= 2, '全库搜索：按标题 / 结论 / 激活词命中');
 await shot('17-search');
 await page.locator('.sheet .node-row').first().click();
@@ -320,12 +313,17 @@ const outline = await page.evaluate(() => navigator.clipboard.readText());
 check(outline.startsWith('# 思维问题') && outline.includes('[论 60%] 第一反应停止') && outline.includes('[问]') && outline.includes('对立→'), '复制体系大纲（含问论规链条、结论、激活词、关系）');
 
 // ---------- 新增：类比候选一键建「类似」、重复节点合并、本周回顾 ----------
+await page.evaluate(async () => {
+  const {blankNode}=await import('/js/model.js');
+  await window.__mailuo.store.saveNode(blankNode({id:'analogy-fixture',title:'提问清单先行',claim:'先准备问题清单',type:'论',system:'思维问题',under:'n-0100',keywords:['追问','问题生成','清单']}));
+});
 await page.goto(ORIGIN + '/#/node/n-0006');
 await page.waitForSelector('[data-testid=link-like]');
 const likeBefore = await page.evaluate(() => window.__mailuo.store.nodes.get('n-0006').links.length);
 await page.locator('[data-testid=link-like]').first().click();
 await page.waitForFunction((n) => window.__mailuo.store.nodes.get('n-0006').links.length === n + 1, likeBefore);
 check(await page.evaluate(() => window.__mailuo.store.nodes.get('n-0006').links.at(-1).type === '类似'), '类比候选一键建立「类似」关系');
+await page.evaluate(() => window.__mailuo.store.deleteNode('analogy-fixture'));
 
 await page.evaluate(async () => {
   const s = window.__mailuo.store;
