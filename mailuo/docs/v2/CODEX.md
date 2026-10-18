@@ -1,5 +1,7 @@
 # 交给 Codex：连接仓库 + 执行指令
 
+> **状态**：T01–T06 由 Codex 完成，T07–T08 由 Claude 完成，V2 已发布为 v0.2.0。以后的新任务照本文件的方式写任务卡、交给 Codex 即可。
+
 本文件给你（人）看，告诉你怎么把 V2 的任务交给 Codex。Codex 自己要读的是 `mailuo/AGENTS.md` 和 `mailuo/docs/v2/`。
 
 - **仓库**：`aozhenyu666-cmyk/test`（公开）

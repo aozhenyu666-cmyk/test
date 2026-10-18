@@ -411,6 +411,37 @@ const dates = await page.evaluate(async () => {
 });
 check(dates.length > 10 && dates.every((d) => /^(created|updated): \d{4}-\d{2}-\d{2}$/.test(d)), '重新读入后保存，日期保持 YYYY-MM-DD');
 
+// ---------- V2 升级：v1 的论 / 规没有挂载 → 今日页提示 → AI 整理挂载 ----------
+await page.evaluate(async () => {
+  const { vault, store } = window.__mailuo;
+  const v1 = (id, title, type) => `---\nid: ${id}\ntitle: ${title}\ntype: ${type}\nsystem: 旧体系\nparent: 某层级\nkeywords: [甲, 乙, 丙]\nstatus: 假设\nconfidence: 60\nverify: 记一周\ncreated: 2026-09-01\n---\n${title}的结论。\n`;
+  for (const [i, t] of ['旧论一', '旧论二', '旧论三', '旧论四'].entries()) await vault.write('旧体系/某层级/' + t + '.md', v1('old-' + i, t, '论断'));
+  await vault.write('旧体系/某层级/旧规.md', v1('old-r', '旧规', '规则'));
+  await store.load();
+});
+await page.goto(ORIGIN + '/#/tree');
+await page.goto(ORIGIN + '/#/');
+await page.waitForSelector('[data-testid=v2-hint]');
+check((await page.textContent('[data-testid=v2-hint]')).includes('「旧体系」'), 'V2 升级提示：发现未挂载的论 / 规');
+await page.click('[data-testid=ai-mount]');
+await page.waitForSelector('[data-testid=mount-pick]');
+check(calls.at(-1).sys.includes('整理挂载') && calls.at(-1).user.includes('old-0 论 60% 旧论一'), '整理挂载请求带上未挂载节点（v1 类型已迁移成论）');
+check(await page.locator('[data-testid=mount-pick]').count() === 5, '每个未挂载节点都有挂载建议');
+await shot('20-mount');
+await page.click('[data-testid=mount-apply]');
+await page.waitForFunction(async () => {
+  const { vault } = window.__mailuo;
+  return /under: n-\d+/.test(await vault.read('旧体系/旧论一.md') || '') && /under: old-0/.test(await vault.read('旧体系/旧规.md') || '');
+});
+const oldQ = await page.evaluate(() => window.__mailuo.store.chainRoots('旧体系').map((n) => n.title));
+check(oldQ.includes('旧笔记要回答的问题'), '确认后新建了「问」，论挂到问下、规挂到论下，文件移出旧层级文件夹');
+await page.waitForFunction(async () => {
+  const { store, vault } = window.__mailuo;
+  for (const p of await vault.list()) if (p.startsWith('旧体系/') && /^type: (论|规)$/m.test(await vault.read(p)) && !/^under: \S/m.test(await vault.read(p))) return false;
+  return store.unmounted('旧体系').length === 0;
+}, null, { timeout: 5000 }).catch(() => {});
+check(await page.evaluate(() => window.__mailuo.store.unmounted('旧体系').length) === 0, '整理后旧体系没有未挂载节点');
+
 // ---------- 新增：安卓返回键逻辑 ----------
 await page.goto(ORIGIN + '/#/node/n-0001');
 await page.waitForSelector('.node-hero');
@@ -439,7 +470,9 @@ check(big.n === 300 && big.ms < 3000, '300 个节点的库 ' + Math.round(big.ms
 // 当日用量
 await page.goto(ORIGIN + '/#/');
 const usageText = await page.textContent('[data-testid=usage]');
-check(/拆分 2 次 · 推演 1 次/.test(usageText), '主界面显示当日 token 用量');
+// 期望次数按模拟接口实际收到的请求算（便宜模型 mock / 旗舰模型 mock-pro）
+const nSplit = calls.filter((c) => c.model === 'mock').length, nThink = calls.filter((c) => c.model === 'mock-pro').length;
+check(usageText.includes('拆分 ' + nSplit + ' 次 · 推演 ' + nThink + ' 次') && nSplit >= 3, '主界面显示当日 token 用量（拆分 ' + nSplit + ' 次 · 推演 ' + nThink + ' 次）');
 await shot('02-today');
 
 await browser.close();

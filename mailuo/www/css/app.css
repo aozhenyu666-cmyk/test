@@ -222,19 +222,11 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .sys-chip { flex: none; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--card); font-weight: 600; font-size: 14px; cursor: pointer; }
 .sys-chip.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 .tree { position: relative; }
-.lv { margin-top: 6px; }
 .lv-head {
   display: flex; align-items: center; gap: 6px; padding: 8px 6px; border-radius: 10px; cursor: pointer; font: 600 15px/1.3 var(--serif);
   transition: background .15s;
 }
 .lv-head .cnt { font: 500 12px var(--sans); color: var(--faint); }
-.lv-head .chev { transition: transform .2s; color: var(--faint); }
-.lv.closed > .lv-head .chev { transform: rotate(-90deg); }
-.lv.closed > .lv-body { display: none; }
-.lv-body { padding-left: 14px; margin-left: 10px; border-left: 1.5px solid var(--line-2); display: flex; flex-direction: column; gap: 6px; padding-top: 4px; padding-bottom: 4px; }
-.lv-head .lv-tools { margin-left: auto; display: flex; opacity: .7; }
-.lv-head .lv-tools .iconbtn { width: 30px; height: 30px; }
-.lv-head .lv-tools svg.i { width: 16px; height: 16px; }
 .drop-on { background: var(--accent-soft) !important; outline: 1.5px dashed var(--accent); }
 .grip { touch-action: none; cursor: grab; color: var(--faint); padding: 6px 2px; margin: -6px -4px -6px -6px; display: grid; place-items: center; }
 .drag-ghost { position: fixed; z-index: 100; pointer-events: none; opacity: .92; transform: rotate(-1.5deg); box-shadow: var(--shadow-lg); width: min(420px, 86vw); }

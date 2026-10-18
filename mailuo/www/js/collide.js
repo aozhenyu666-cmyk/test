@@ -175,3 +175,48 @@ export function suggestPauses(store, targetId, to) {
   if (!t || t.type !== '论' || to >= 60) return [];
   return store.descendants(targetId).filter((d) => d.type === '规' && (d.confidence ?? 0) >= 80 && !d.paused).map((d) => d.id);
 }
+
+// ---------- 整理挂载：v1 升级上来的「论 / 规」大多没挂载，而且库里往往还没有「问」 ----------
+export const PROMPT_MOUNT = `你是首席参谋的「整理挂载」助手。下面是我知识库里还没挂载的「论 / 规」，以及已有的「问 / 论」。
+请把每个未挂载节点挂到最合适的父节点下，只输出 JSON，不要任何其他文字。
+规则：
+1. 挂载规则：论 挂在 问 / 论 下；规 挂在 论 / 问 下。under 填已有节点 id，或本次新建「问」的 tmp_id。
+2. 如果没有合适的父节点，可以新建「问」作为根（整次最多 3 个），每个问写 title、claim（一句话说明这个课题）、pillars（2–3 条决定成败的客观约束）。
+3. 实在不适合挂到任何地方的节点，不要放进 mounts。reason 用一句话说明为什么挂在那里。
+格式：
+{"questions":[{"tmp_id":"q1","title":"…","claim":"…","pillars":["…"]}],
+ "mounts":[{"id":"n-0001","under":"q1","reason":"…"}]}`;
+
+export function mountUserMessage(store, system) {
+  const loose = store.unmounted(system);
+  const parents = store.list(system).filter((n) => n.type === '问' || (n.type === '论' && n.under && store.nodes.has(n.under)));
+  return '未挂载的节点：\n' + (loose.map(digestLine).join('\n') || '（无）') + '\n\n已有的问 / 论（可作为父节点）：\n' + (parents.map(digestLine).join('\n') || '（无）');
+}
+
+// 校验整理挂载的输出：父节点必须存在（或是本次新建的问），并符合挂载规则、不成环
+export function normalizeMounts(raw, store, system) {
+  raw = raw || {};
+  const loose = new Set(store.unmounted(system).map((n) => n.id));
+  const questions = (Array.isArray(raw.questions) ? raw.questions : []).slice(0, 3).map((q, i) => ({
+    tmp_id: String(q?.tmp_id || 'q' + (i + 1)),
+    title: String(q?.title || '').trim().slice(0, 40),
+    claim: String(q?.claim || q?.title || '').trim(),
+    pillars: strList(q?.pillars, 3),
+  })).filter((q) => q.title && !store.nodes.has(q.tmp_id));
+  const qIds = new Set(questions.map((q) => q.tmp_id));
+  const seen = new Set();
+  const mounts = [];
+  for (const m of Array.isArray(raw.mounts) ? raw.mounts : []) {
+    const id = String(m?.id || ''), under = String(m?.under || '');
+    if (!loose.has(id) || seen.has(id)) continue;
+    const child = store.nodes.get(id);
+    const parentType = qIds.has(under) ? '问' : store.nodes.get(under)?.type;
+    if (!parentType || !MOUNT_RULES[child.type].includes(parentType)) continue;
+    if (!qIds.has(under) && store.canMount(id, under)) continue;
+    seen.add(id);
+    mounts.push({ id, under, reason: String(m.reason || '').trim() });
+  }
+  // 只保留真的被用到的新「问」
+  const used = new Set(mounts.map((m) => m.under));
+  return { questions: questions.filter((q) => used.has(q.tmp_id)), mounts };
+}

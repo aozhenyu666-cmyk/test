@@ -155,7 +155,7 @@ export const MODE_QUESTIONS = {
 export function libraryTokens(store) {
   return estimateTokens(store.list().map((n) => {
     const rels = n.links.map((l) => l.type + '→' + (store.nodes.get(l.to)?.title || l.to)).join('；');
-    return store.pathOf(n).join(' › ') + '（' + n.type + '｜' + n.status + '）' + n.claim + ' ' + n.note + ' 激活词：' + n.keywords.join('、') + (n.verify ? ' 验证：' + n.verify : '') + (rels ? ' 关系：' + rels : '');
+    return '【路径】' + chainPath(store, n).join(' › ') + '\n' + nodeText(n) + '\n激活词：' + n.keywords.join('、') + (rels ? '\n关系：' + rels : '');
   }).join('\n'));
 }
 

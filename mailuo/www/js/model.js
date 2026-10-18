@@ -230,7 +230,6 @@ export class Store {
     // 只有节点、没有体系文件的文件夹，也补成体系
     for (const n of this.nodes.values()) {
       const s = this.ensureSystemSync(n.system);
-      if (n.parent) for (const lv of prefixes(n.parent)) if (!s.levels.includes(lv)) s.levels.push(lv);
     }
     try { this.review = JSON.parse(await this.vault.read('.mailuo/review.json') || '{}'); } catch { this.review = {}; }
     this.emit();
@@ -268,7 +267,6 @@ export class Store {
     }
     return rels;
   }
-  pathOf(n) { return [n.system, ...(n.parent ? n.parent.split('/') : []), n.title]; }
   nextId() {
     let max = 0;
     for (const id of this.nodes.keys()) { const m = /^n-(\d+)$/.exec(id); if (m) max = Math.max(max, +m[1]); }
@@ -473,39 +471,9 @@ export class Store {
     return s;
   }
 
-  async addLevel(system, path) {
-    const s = this.ensureSystemSync(system);
-    if (path.split('/').length > 3) throw new Error('层级最多 3 层');
-    for (const lv of prefixes(path)) if (!s.levels.includes(lv)) s.levels.push(lv);
-    await this.saveSystem(s);
-    this.emit();
-  }
-
-  async removeLevel(system, path) {
-    const s = this.systems.get(system);
-    if (!s) return;
-    if (this.list(system).some((n) => n.parent === path || n.parent.startsWith(path + '/'))) throw new Error('层级下还有节点，先移走再删');
-    s.levels = s.levels.filter((l) => l !== path && !l.startsWith(path + '/'));
-    await this.saveSystem(s);
-    this.emit();
-  }
-
-  async moveNode(id, system, parent) {
-    const n = this.nodes.get(id);
-    if (!n) return;
-    n.system = system; n.parent = parent || '';
-    await this.saveNode(n);
-  }
-
   async saveReview() {
     await this.vault.write('.mailuo/review.json', JSON.stringify(this.review, null, 1));
   }
-}
-
-export function parentOf(level) { const i = level.lastIndexOf('/'); return i < 0 ? '' : level.slice(0, i); }
-export function prefixes(level) {
-  const parts = level.split('/');
-  return parts.map((_, i) => parts.slice(0, i + 1).join('/'));
 }
 
 // ---------- 相似度：查重 & 类比 ----------

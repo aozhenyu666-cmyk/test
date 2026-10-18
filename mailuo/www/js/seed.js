@@ -5,7 +5,6 @@
 //     论 n-0001…n-0005 五个故障（措辞是占位，请用 GPT 原始总结替换）
 import { blankNode } from './model.js';
 export const SEED_SYSTEM = '思维问题';
-export const SEED_LEVELS = ['加工层', '检验层', '输出层', '根因'];
 
 export const SEED_NODES = [
   {
@@ -94,7 +93,6 @@ SEED_NODES.push({
 export async function loadSeed(store) {
   const s = store.ensureSystemSync(SEED_SYSTEM);
   s.desc = '首个试用体系。5 个故障来自 GPT 总结（措辞为占位，请替换为原文），两个根因互为对立，各带一条验证方式。';
-  s.levels = [...SEED_LEVELS];
   for (const n of SEED_NODES) {
     if (store.nodes.has(n.id)) continue;
     // 先放进索引，保证写双链时能找到目标标题

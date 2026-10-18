@@ -9,18 +9,6 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'www');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.json': 'application/json' };
 export const calls = [];
 
-const SPLIT = {
-  nodes: [
-    { tmp_id: 't1', title: '第一反应即停', type: '论断', claim: '第一个念头出现后就停止加工，把它当成答案。', keywords: ['二次加工', '停止信号', '依据'], status: '假设', confidence: 60, verify: '记一周舒缓感后多做一步的次数', merge_into: '' },
-    { tmp_id: 't2', title: '舒缓感', type: '概念', claim: '想到一个说得通的答案时出现的放松感，常被误当作「想完了」。', keywords: ['停止信号', '认知闭合', '情绪'], status: '假设', confidence: 50, verify: '每次停下时记录是否伴随舒缓感', merge_into: '' },
-    { tmp_id: 't3', title: '写下下一问', type: '规则', claim: '停下之前，先写出下一个问题。', keywords: ['追问', '问题生成', '行动项'], status: '已验证', confidence: 70, verify: '', merge_into: '' },
-  ],
-  links: [
-    { from: 't2', to: 't1', type: '导致', why: '舒缓感充当了停止信号' },
-    { from: 't3', to: 't1', type: '反例', why: '强制下一问可以打断过早停止' },
-    { from: 't1', to: 't2', type: '自造关系', why: '应被过滤' },
-  ],
-};
 
 // 录入 V2「碰撞引擎」的模拟输出：基于示例体系「思维问题」的节点 id
 export const COLLIDE = {
@@ -61,11 +49,19 @@ export function startServer(port = 0) {
       const sys = data.messages?.[0]?.content || '';
       const user = data.messages?.[1]?.content || '';
       calls.push({ sys, user, model: data.model, auth: req.headers.authorization });
-      const isSplit = sys.includes('结构拆分器');
       const kwFill = sys.includes('激活词生成器')
         ? JSON.stringify(Object.fromEntries(user.split('\n').map((l) => l.split(' ')[0]).filter(Boolean).map((id, i) => [id, ['追问链', '元认知', '停止规则' + i]])))
         : null;
-      const content = sys.includes('碰撞引擎') ? JSON.stringify(COLLIDE) : kwFill ? kwFill : isSplit ? '```json\n' + JSON.stringify(SPLIT) + '\n```' : sys.includes('只回复 OK') ? 'OK' : ANSWER;
+      // 整理挂载：把未挂载的论挂到新建的问 q1 下，规挂到第一个论下
+      const mountFix = sys.includes('整理挂载') ? (() => {
+        const lines = user.split('\n\n')[0].split('\n').slice(1).map((l) => l.split(' ')).filter((p) => p.length > 1);
+        const firstLun = lines.find((p) => p[1] === '论')?.[0];
+        return JSON.stringify({
+          questions: [{ tmp_id: 'q1', title: '旧笔记要回答的问题', claim: '把 v1 的论归到一个课题下', pillars: ['精力有限', '反馈延迟'] }],
+          mounts: lines.map((p) => ({ id: p[0], under: p[1] === '规' ? firstLun : 'q1', reason: '模拟' })),
+        });
+      })() : null;
+      const content = mountFix ? mountFix : sys.includes('碰撞引擎') ? JSON.stringify(COLLIDE) : kwFill ? kwFill : sys.includes('只回复 OK') ? 'OK' : ANSWER;
       await new Promise((r) => setTimeout(r, 300));
       res.writeHead(200, { 'content-type': 'application/json', ...cors() });
       return res.end(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: Math.ceil((sys.length + user.length) * 0.8), completion_tokens: Math.ceil(content.length * 0.8) } }));

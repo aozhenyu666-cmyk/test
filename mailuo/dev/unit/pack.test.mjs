@@ -6,8 +6,20 @@ import { makeStore } from './helpers.mjs';
 
 const lib = [
   { id: 'q', type: '问', title: '为什么会停', claim: '想到一半就停', pillars: ['工作记忆有限', '反馈延迟'] },
-  { id: 'l', type: '论', title: '单步成本高', claim: '多想一步很累', under: 'q', confidence: 60, blindspot: '精力好时仍停',
-    sentinels: [{ when: '写纸上后走得更远', delta: 10 }, { when: '写了也没用', delta: -15 }], keywords: ['认知负荷'] },
+  {
+    id: 'l',
+    type: '论',
+    title: '单步成本高',
+    claim: '多想一步很累',
+    under: 'q',
+    confidence: 60,
+    blindspot: '精力好时仍停',
+    sentinels: [
+      { when: '写纸上后走得更远', delta: 10 },
+      { when: '写了也没用', delta: -15 },
+    ],
+    keywords: ['认知负荷'],
+  },
   { id: 'r', type: '规', title: '累了先写纸上', claim: '把下一步写在纸上', under: 'l', confidence: 55, triggers: ['脑子转不动时'], cost: '链条断在第二步' },
   { id: 'x', type: '论', title: '没挂载的论', claim: '孤立' },
 ];
@@ -46,12 +58,22 @@ test('预算很小时节点本身和问题永不砍', async () => {
   const node = p.items.find((i) => i.key === 'node');
   assert.equal(node.state, 'full');
   assert.match(p.text, /问题：为什么/);
-  assert.ok(p.items.some((i) => i.kind === '邻居' && i.state !== 'full'), '邻居被压缩或省略');
+  assert.ok(
+    p.items.some((i) => i.kind === '邻居' && i.state !== 'full'),
+    '邻居被压缩或省略',
+  );
 });
 
 test('解析 V2「建议新增」：类型、横向关系、激活词、验证哨、触发场景', () => {
-  assert.deepEqual(parseSuggestion('论｜舒缓感提前｜累时更早想停｜舒缓感、认知负荷｜哨：+10 疲劳时第一步就想停'),
-    { type: '论', rel: '', title: '舒缓感提前', claim: '累时更早想停', keywords: ['舒缓感', '认知负荷'], sentinels: [{ when: '疲劳时第一步就想停', delta: 10 }], triggers: [] });
+  assert.deepEqual(parseSuggestion('论｜舒缓感提前｜累时更早想停｜舒缓感、认知负荷｜哨：+10 疲劳时第一步就想停'), {
+    type: '论',
+    rel: '',
+    title: '舒缓感提前',
+    claim: '累时更早想停',
+    keywords: ['舒缓感', '认知负荷'],
+    sentinels: [{ when: '疲劳时第一步就想停', delta: 10 }],
+    triggers: [],
+  });
   const r = parseSuggestion('规｜写纸上｜把下一步写下来｜外化｜触发：脑子转不动时');
   assert.equal(r.type, '规');
   assert.deepEqual(r.triggers, ['脑子转不动时']);
@@ -71,5 +93,8 @@ test('兼容 v1「建议新增」：关系类型在前，当作论', () => {
 test('parseAnswer 把新格式的「建议新增」解析出来', () => {
   const a = parseAnswer('- 核心判断：成本是主因\n- 建议新增：\n  规｜写纸上｜把下一步写下来｜外化、纸笔｜触发：累的时候\n  对立·论｜不会提问｜另一解释｜提问');
   assert.equal(a.core, '成本是主因');
-  assert.deepEqual(a.suggest.map((x) => x.type + (x.rel ? '/' + x.rel : '')), ['规', '论/对立']);
+  assert.deepEqual(
+    a.suggest.map((x) => x.type + (x.rel ? '/' + x.rel : '')),
+    ['规', '论/对立'],
+  );
 });

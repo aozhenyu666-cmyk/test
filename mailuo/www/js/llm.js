@@ -1,6 +1,6 @@
 // 两个模型接口：split（便宜模型：拆分 / 激活词 / 查重）与 think（旗舰模型：提问 / 延展 / 类比）。
 // 支持 OpenAI 兼容格式（DeepSeek、通义、Kimi、OpenRouter…）和 Anthropic Messages 格式。
-import { REL_TYPES, TYPES, STATUSES, today, normalizeType } from './model.js';
+import { REL_TYPES, today } from './model.js';
 
 export const PRESETS = {
   deepseek: { label: 'DeepSeek', format: 'openai', base: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
@@ -107,25 +107,7 @@ export async function callModel(role, system, user, { signal, maxTokens = 4000 }
   } finally { clearTimeout(timer); }
 }
 
-// ---------- 提示词 A：拆分 ----------
-export const PROMPT_SPLIT = `你是结构拆分器。把下面的材料拆成节点和关系，只输出 JSON，不要任何其他文字。
-规则：
-1. 每个节点只含一句结论，最多 12 个节点。
-2. 每个节点给 3-5 个激活词，选最能唤起相关知识的专业词。
-3. 关系类型只能是：属于、导致、支撑、反例、对立、前置、类似。每条关系附一句理由。
-4. 材料中没有证据的推断，status 设为"假设"，并给出 verify（一句验证方式）。
-5. 已有节点列表见下方；含义相同的，用 merge_into 指向已有 id，不新建。
-6. type 只能是：问（痛点 / 课题）、论（诊断 / 假设）、规（行动 / 铁律）。confidence 为 0-100 的整数。
-格式：
-{"nodes":[{"tmp_id","title","type","claim","keywords","status","confidence","verify","merge_into"}],
- "links":[{"from","to","type","why"}]}
-links 的 from / to 填 tmp_id 或已有节点 id。`;
-
-export function splitUserMessage(existing, input) {
-  const list = existing.length ? existing.map((n) => n.id + ' ' + n.title).join('\n') : '（无）';
-  return '已有节点：\n' + list + '\n\n材料：\n' + input;
-}
-
+// ---------- JSON 提取（碰撞引擎、激活词补全都用它） ----------
 export function extractJson(text) {
   const t = String(text).replace(/```(?:json)?/gi, '');
   const a = t.indexOf('{'), b = t.lastIndexOf('}');
@@ -139,29 +121,6 @@ export function extractJson(text) {
     }
     throw new Error('模型返回的 JSON 无法解析：' + e.message);
   }
-}
-
-// 把模型输出规范成候选卡片
-export function normalizeSplit(raw) {
-  const nodes = (raw.nodes || []).slice(0, 12).map((n, i) => ({
-    tmp_id: String(n.tmp_id ?? n.id ?? 't' + (i + 1)),
-    title: String(n.title || '').trim().slice(0, 40),
-    type: normalizeType(n.type),
-    claim: String(n.claim || n.title || '').trim(),
-    keywords: (Array.isArray(n.keywords) ? n.keywords : String(n.keywords || '').split(/[,，、]/)).map((k) => String(k).trim()).filter(Boolean).slice(0, 5),
-    status: STATUSES.includes(n.status) ? n.status : '假设',
-    confidence: clampConf(n.confidence),
-    verify: String(n.verify || ''),
-    merge_into: n.merge_into ? String(n.merge_into) : '',
-  })).filter((n) => n.title);
-  const links = (raw.links || []).map((l) => ({
-    from: String(l.from ?? ''), to: String(l.to ?? ''), type: String(l.type || ''), why: String(l.why || ''),
-  })).filter((l) => l.from && l.to && REL_TYPES.includes(l.type) && l.from !== l.to);
-  return { nodes, links };
-}
-function clampConf(v) {
-  const n = parseInt(String(v ?? '').replace('%', ''), 10);
-  return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 50;
 }
 
 // ---------- 激活词补全（便宜模型） ----------

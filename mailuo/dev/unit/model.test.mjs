@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { parseNode, serializeNode, normalizeType, normalizeSentinels, TYPES } from '../../www/js/model.js';
 import { makeStore } from './helpers.mjs';
 
-const v1 = (type, extra = '') => `---\nid: n-0001\ntitle: 旧节点\ntype: ${type}\nsystem: 体系\nparent: 加工层\nkeywords: [a, b, c]\nstatus: 假设\nconfidence: 60\nverify: 记一周\n${extra}created: 2026-10-10\n---\n一句结论。\n`;
+const v1 = (type, extra = '') =>
+  `---\nid: n-0001\ntitle: 旧节点\ntype: ${type}\nsystem: 体系\nparent: 加工层\nkeywords: [a, b, c]\nstatus: 假设\nconfidence: 60\nverify: 记一周\n${extra}created: 2026-10-10\n---\n一句结论。\n`;
 
 test('V2 只有 问 / 论 / 规 三种类型', () => {
   assert.deepEqual(TYPES, ['问', '论', '规']);
@@ -29,8 +30,13 @@ test('v1 的「验证方式」迁移成一条 delta=0 的验证哨，原字段�
 test('槽位字段写出再读回不丢失', () => {
   const n = parseNode(v1('论断'), 'x.md');
   Object.assign(n, {
-    under: 'n-0100', blindspot: '精力充沛时仍早停就站不住', cost: '',
-    sentinels: [{ when: '写下下一问后能多走一步', delta: 10 }, { when: '写了也不想往下想', delta: -15 }],
+    under: 'n-0100',
+    blindspot: '精力充沛时仍早停就站不住',
+    cost: '',
+    sentinels: [
+      { when: '写下下一问后能多走一步', delta: 10 },
+      { when: '写了也不想往下想', delta: -15 },
+    ],
   });
   const back = parseNode(serializeNode(n), 'x.md');
   assert.equal(back.under, 'n-0100');
@@ -47,8 +53,11 @@ test('槽位字段写出再读回不丢失', () => {
 });
 
 test('验证哨规范化：字符串、+10、越界都能处理', () => {
-  assert.deepEqual(normalizeSentinels(['看到 A', { when: '看到 B', delta: '+10' }, { when: '看到 C', delta: -99 }, { when: '', delta: 5 }]),
-    [{ when: '看到 A', delta: 0 }, { when: '看到 B', delta: 10 }, { when: '看到 C', delta: -50 }]);
+  assert.deepEqual(normalizeSentinels(['看到 A', { when: '看到 B', delta: '+10' }, { when: '看到 C', delta: -99 }, { when: '', delta: 5 }]), [
+    { when: '看到 A', delta: 0 },
+    { when: '看到 B', delta: 10 },
+    { when: '看到 C', delta: -50 },
+  ]);
 });
 
 const chain = [
@@ -63,12 +72,36 @@ const chain = [
 
 test('链条查询：children / ancestors / descendants / chainRoots / unmounted', async () => {
   const s = await makeStore(chain);
-  assert.deepEqual(s.children('q1').map((n) => n.id), ['q2', 'l1']);
-  assert.deepEqual(s.children('l1').map((n) => n.id), ['l2', 'r1']);
-  assert.deepEqual(s.ancestors('r1').map((n) => n.id), ['l1', 'q1']);
-  assert.deepEqual(s.descendants('q1').map((n) => n.id).sort(), ['l1', 'l2', 'q2', 'r1']);
-  assert.deepEqual(s.chainRoots('测试').map((n) => n.id), ['q1']);
-  assert.deepEqual(s.unmounted('测试').map((n) => n.id).sort(), ['l3', 'r2']);
+  assert.deepEqual(
+    s.children('q1').map((n) => n.id),
+    ['q2', 'l1'],
+  );
+  assert.deepEqual(
+    s.children('l1').map((n) => n.id),
+    ['l2', 'r1'],
+  );
+  assert.deepEqual(
+    s.ancestors('r1').map((n) => n.id),
+    ['l1', 'q1'],
+  );
+  assert.deepEqual(
+    s
+      .descendants('q1')
+      .map((n) => n.id)
+      .sort(),
+    ['l1', 'l2', 'q2', 'r1'],
+  );
+  assert.deepEqual(
+    s.chainRoots('测试').map((n) => n.id),
+    ['q1'],
+  );
+  assert.deepEqual(
+    s
+      .unmounted('测试')
+      .map((n) => n.id)
+      .sort(),
+    ['l3', 'r2'],
+  );
 });
 
 test('挂载规则：规 只能挂 论/问，问 只能挂 问，不能成环', async () => {
@@ -81,7 +114,10 @@ test('挂载规则：规 只能挂 论/问，问 只能挂 问，不能成环', 
   assert.match(s.canMount('l1', 'l1'), /自己/);
   await s.mount('r2', 'l1');
   assert.equal(s.nodes.get('r2').under, 'l1');
-  assert.match([...s.vault.files.values()].find((t) => t.includes('id: r2')), /^under: l1$/m);
+  assert.match(
+    [...s.vault.files.values()].find((t) => t.includes('id: r2')),
+    /^under: l1$/m,
+  );
   await assert.rejects(() => s.mount('r2', 'r1'));
 });
 
@@ -104,7 +140,10 @@ test('合并节点：挂在被合并节点下面的改挂到保留节点，槽�
   await s.mergeNodes('l1', 'l9');
   assert.equal(s.nodes.get('r1').under, 'l1');
   assert.equal(s.nodes.get('l1').blindspot, '盲区');
-  assert.deepEqual(s.nodes.get('l1').sentinels.map((x) => x.when), ['A', 'B']);
+  assert.deepEqual(
+    s.nodes.get('l1').sentinels.map((x) => x.when),
+    ['A', 'B'],
+  );
 });
 
 test('代码里直接构造的不完整节点也能保存（saveNode 自动补字段）', async () => {
@@ -118,9 +157,9 @@ test('代码里直接构造的不完整节点也能保存（saveNode 自动补�
 
 test('挂载选择器校验新节点和编辑中的类型，不修改已存节点', async () => {
   const s = await makeStore(chain);
-  assert.equal(s.canMount({id:'', type:'规'}, 'l1'), '');
-  assert.match(s.canMount({id:'', type:'规'}, 'r1'), /只能挂在/);
-  assert.equal(s.canMount({...s.nodes.get('q2'),type:'论'},'l1'), '');
-  assert.match(s.canMount({...s.nodes.get('l1'),type:'问'},'l2'), /只能挂在/);
-  assert.equal(s.nodes.get('q2').type,'问');
+  assert.equal(s.canMount({ id: '', type: '规' }, 'l1'), '');
+  assert.match(s.canMount({ id: '', type: '规' }, 'r1'), /只能挂在/);
+  assert.equal(s.canMount({ ...s.nodes.get('q2'), type: '论' }, 'l1'), '');
+  assert.match(s.canMount({ ...s.nodes.get('l1'), type: '问' }, 'l2'), /只能挂在/);
+  assert.equal(s.nodes.get('q2').type, '问');
 });

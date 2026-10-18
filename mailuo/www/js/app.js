@@ -1,13 +1,13 @@
 import { h, icon, brandMark, veinArt, dial, toast, sheet, confirmSheet, waiting, glyph, nodeRow, relTag, swipeable } from './ui.js';
 import { Store, TYPES, SLOTS, STATUSES, blankNode, normalizeType, normalizeSentinels, REL_TYPES, REL_HINT, REL_VIEW, findDuplicate, findAnalogies, today, MOUNT_RULES, applyAdjust } from './model.js';
-import { openVault, IdbVault, FsVault, CapVault, exportZip, importZip, listSnapshots, snapshot, dailySnapshot, restoreSnapshot } from './vault.js';
-import { getConfig, setConfig, usage, callModel, PROMPT_SPLIT, splitUserMessage, extractJson, normalizeSplit, PROMPT_THINK, parseAnswer, PRESETS, estimateTokens, PROMPT_KEYWORDS, keywordsUserMessage } from './llm.js';
+import { openVault, FsVault, CapVault, exportZip, importZip, listSnapshots, snapshot, dailySnapshot, restoreSnapshot } from './vault.js';
+import { getConfig, setConfig, usage, callModel, extractJson, PROMPT_THINK, parseAnswer, PRESETS, estimateTokens, PROMPT_KEYWORDS, keywordsUserMessage } from './llm.js';
 import { buildPack, MODE_QUESTIONS, libraryTokens, systemOutline } from './pack.js';
 import { healthCheck, traceCause, longestChain, learningPath, dueReviews, applyFeedback, gradeReview, weeklyDigest } from './features.js';
-import { PROMPT_COLLIDE, libraryDigest, collideUserMessage, normalizeCollide, suggestPauses } from './collide.js';
+import { PROMPT_COLLIDE, libraryDigest, collideUserMessage, normalizeCollide, suggestPauses, PROMPT_MOUNT, mountUserMessage, normalizeMounts } from './collide.js';
 import { loadSeed, SEED_SYSTEM, SEED_NODES } from './seed.js';
 
-const VERSION = '0.1.5';
+const VERSION = '0.2.0';
 let store, vault;
 const app = document.getElementById('app');
 const session = { cands: loadDraft(), packRemoved: new Set(), lastAnswer: null, sys: localStorage.getItem('mailuo.sys') || '' };
@@ -167,6 +167,18 @@ function viewToday() {
       h('div', { class: 'small muted', style: { margin: '4px 0 12px' } }, '在设置里填写两个模型的 API；或者直接用「手动模式」：复制指令到 ChatGPT、Claude、豆包等聊天 App，再把回答粘回来，不花 API 费用。'),
       h('div', { class: 'btn-row' }, h('button', { class: 'btn sm primary', onclick: () => go('#/settings') }, icon('gear'), '去设置'))));
   }
+  // V2 升级提示：v1 的论 / 规还没挂到「问」下面
+  const loose = [...store.systems.keys()].map((sys) => [sys, store.unmounted(sys).length]).filter(([, k]) => k).sort((a, b) => b[1] - a[1]);
+  if (loose.length && localStorage.getItem('mailuo.v2hint') !== 'off') {
+    const total = loose.reduce((x, [, k]) => x + k, 0);
+    out.push(h('div', { class: 'card mt', 'data-testid': 'v2-hint' },
+      h('div', { class: 'serif', style: { fontWeight: 600, fontSize: '16px' } }, '整理成「问 → 论 → 规」'),
+      h('div', { class: 'small muted', style: { margin: '4px 0 12px' } }, '有 ' + total + ' 个论 / 规还没挂到问下面（最多的是「' + loose[0][0] + '」）。去结构页把它们拖到对应的问下面，或让 AI 先给出挂载建议，你勾选确认。'),
+      h('div', { class: 'btn-row' },
+        h('button', { class: 'btn sm primary', 'data-testid': 'ai-mount', onclick: () => mountSheet(loose[0][0]) }, icon('spark'), 'AI 整理挂载'),
+        h('button', { class: 'btn sm', onclick: () => go('#/tree?sys=' + encodeURIComponent(loose[0][0])) }, '去结构页'),
+        h('button', { class: 'btn sm ghost', onclick: () => { localStorage.setItem('mailuo.v2hint', 'off'); route(true); } }, '不再提示'))));
+  }
   if (!nodes.length) {
     out.push(h('div', { class: 'empty' }, veinArt(), h('h3', {}, '先建一个体系'),
       h('p', {}, '粘贴一段笔记或 AI 回复，拆成「体系 → 层级 → 节点 → 关系」。也可以先载入示例体系「思维问题」试用。'),
@@ -202,6 +214,59 @@ function viewToday() {
   out.push(h('div', { class: 'list' }, recent.map((n) => nodeRow(n, () => go('#/node/' + n.id)))));
   return out;
 }
+// AI 整理挂载：便宜模型给出新建的「问」和每个未挂载节点的父节点，你勾选后才写入
+function mountSheet(system) {
+  sheet('AI 整理挂载 · ' + system, async (box, close) => {
+    const body = h('div', {}, waiting('便宜模型整理中'));
+    box.append(body);
+    let res;
+    try {
+      const out = await callModel('split', PROMPT_MOUNT, mountUserMessage(store, system), { maxTokens: 2500 });
+      res = normalizeMounts(extractJson(out.text), store, system);
+    } catch (e) {
+      body.replaceChildren(h('div', { class: 'banner' }, e.message), h('button', { class: 'btn block mt', onclick: () => { close(); go('#/tree?sys=' + encodeURIComponent(system)); } }, '改为在结构页手动拖动'));
+      return;
+    }
+    if (!res.mounts.length) { body.replaceChildren(h('div', { class: 'banner' }, '模型没有给出可用的挂载建议，可以在结构页手动拖动。')); return; }
+    const qOn = new Map(res.questions.map((q) => [q.tmp_id, true]));
+    const mOn = new Map(res.mounts.map((m) => [m.id, true]));
+    const titleOf = (ref) => res.questions.find((q) => q.tmp_id === ref)?.title || store.nodes.get(ref)?.title || ref;
+    // 先列挂到新建问下的，再列其余（规挂论下），读起来就是一条链
+    const isQ = (ref) => res.questions.some((q) => q.tmp_id === ref);
+    const ordered = [...res.mounts].sort((a, b) => (isQ(a.under) ? 0 : 1) - (isQ(b.under) ? 0 : 1) || store.nodes.get(a.id).title.localeCompare(store.nodes.get(b.id).title, 'zh'));
+    const mountRows = ordered.map((m) => {
+      const n = store.nodes.get(m.id);
+      const box = h('input', { type: 'checkbox', checked: true, onchange: (e) => mOn.set(m.id, e.target.checked) });
+      return { m, box, el: h('label', { class: 'link-cand', 'data-testid': 'mount-pick' }, box,
+        h('div', { class: 'grow' }, h('b', {}, '[' + n.type + '] ' + n.title), h('div', { class: 'why' }, '→ 挂在【' + titleOf(m.under) + '】下'), m.reason ? h('div', { class: 'why' }, m.reason) : null)) };
+    });
+    body.replaceChildren(
+      res.questions.length ? h('h2', { class: 'section' }, '新建的问') : null,
+      ...res.questions.map((q) => h('label', { class: 'link-cand' },
+        h('input', { type: 'checkbox', checked: true, onchange: (e) => {
+          qOn.set(q.tmp_id, e.target.checked);
+          // 不建这个问，挂在它下面的也一起取消
+          for (const r of mountRows) if (r.m.under === q.tmp_id) { r.box.checked = e.target.checked; mOn.set(r.m.id, e.target.checked); }
+        } }),
+        h('div', { class: 'grow' }, h('b', {}, '[问] ' + q.title), h('div', { class: 'why' }, q.claim), q.pillars.length ? h('div', { class: 'why' }, '破局支柱：' + q.pillars.join('；')) : null))),
+      h('h2', { class: 'section' }, '挂载建议 · ' + res.mounts.length),
+      h('div', { class: 'list' }, mountRows.map((r) => r.el)),
+      h('button', { class: 'btn primary block mt', 'data-testid': 'mount-apply', onclick: async () => {
+        const ids = new Map();
+        for (const q of res.questions.filter((x) => qOn.get(x.tmp_id))) {
+          const n = await store.saveNode(blankNode({ id: store.nextId(), type: '问', system, title: q.title, claim: q.claim, pillars: q.pillars, confidence: null, source: 'AI 整理挂载' }));
+          ids.set(q.tmp_id, n.id);
+        }
+        let done = 0;
+        for (const m of res.mounts.filter((x) => mOn.get(x.id))) {
+          const under = ids.get(m.under) || (store.nodes.has(m.under) ? m.under : '');
+          if (under && !store.canMount(m.id, under)) { await store.mount(m.id, under); done++; }
+        }
+        close(); route(true); toast('已新建 ' + ids.size + ' 个问，挂好 ' + done + ' 个节点');
+      } }, '确认写入'));
+  });
+}
+
 // 全库搜索：标题、结论、说明、激活词、验证方式；按命中位置排序
 function searchSheet() {
   sheet('搜索全部体系', (box, close) => {
@@ -980,7 +1045,7 @@ function viewCands() {
         h('button', { class: 'btn sm primary', 'data-testid': 'accept', onclick: () => accept(c) }, '确认入库'),
         h('button', { class: 'btn sm', onclick: () => editCandSheet(c, persist) }, '修改'), h('button', { class: 'btn sm', onclick: () => mergePicker(c, persist) }, '合并到…'),
         h('button', { class: 'btn sm ghost danger', onclick: () => decide('discarded') }, '驳回')]
-        : [h('span', { class: 'small muted' }, {accepted:'已确认',merged:'已合并',discarded:'已驳回'}[c.state]), h('button', { class: 'btn sm ghost', onclick: () => { c.state = 'pending'; c.mergeTo = ''; persist(); } }, '撤销')]));
+        : [h('span', { class: 'small muted' }, { accepted: '已确认', merged: '已合并', discarded: '已驳回' }[c.state]), h('button', { class: 'btn sm ghost', onclick: () => { c.state = 'pending'; c.mergeTo = ''; persist(); } }, '撤销')]));
     if (c.state === 'pending') swipeable(card, { onRight: () => accept(c), onLeft: () => decide('discarded') });
     out.push(card);
   }
@@ -1061,7 +1126,9 @@ async function commitCands() {
     if ([fromC,toC].some((c) => c && !['accepted','merged'].includes(c.state))) continue;
     const from = resolve(l.from), to = resolve(l.to), src = store.nodes.get(from);
     if (!src || !to || from === to || !REL_TYPES.includes(l.type) || src.links.some((x) => x.to === to && x.type === l.type)) continue;
-    src.links.push({type:l.type,to,why:l.why}); touched.set(from,src); linkN++;
+    src.links.push({ type: l.type, to, why: l.why });
+    touched.set(from, src);
+    linkN++;
   }
   saveDraft();
   for (const n of touched.values()) await store.saveNode(n);
@@ -1134,21 +1201,56 @@ function viewHealth(_, params) {
   return out;
 }
 
-function healthAction(issue,n) {
-  if (issue.key === 'undecided') return h('button', {class:'btn sm',onclick:() => newNodeSheet(n.system,n.id,'规')}, '挂一条规');
-  if (['noSentinel','stale'].includes(issue.key)) return h('button', {class:'btn sm',onclick:() => editNodeSheet(n)}, issue.key === 'noSentinel' ? '补验证哨' : '修改');
-  if (issue.key === 'orphanRule') return h('button', {class:'btn sm',onclick:() => sheet('选择挂载目标',(box,close) => {
-    const picker=mountPicker(() => n,n.under); picker.el.open=true;
-    box.append(picker.el,h('button',{class:'btn primary block mt',onclick:async () => {
-      try { await store.mount(n.id,picker.read()); close(); route(true); } catch(e) { toast(e.message); }
-    }},'保存挂载'));
-  })},'挂到…');
-  if (issue.key === 'broken') return h('button',{class:'btn sm',onclick:async () => {
-    n.links=n.links.filter((l) => store.nodes.has(l.to));
-    if (n.under && !store.nodes.has(n.under)) await store.mount(n.id,'');
-    else await store.saveNode(n);
-    route(true);
-  }},'清理');
+function healthAction(issue, n) {
+  if (issue.key === 'undecided') return h('button', { class: 'btn sm', onclick: () => newNodeSheet(n.system, n.id, '规') }, '挂一条规');
+  if (['noSentinel', 'stale'].includes(issue.key))
+    return h('button', { class: 'btn sm', onclick: () => editNodeSheet(n) }, issue.key === 'noSentinel' ? '补验证哨' : '修改');
+  if (issue.key === 'orphanRule')
+    return h(
+      'button',
+      {
+        class: 'btn sm',
+        onclick: () =>
+          sheet('选择挂载目标', (box, close) => {
+            const picker = mountPicker(() => n, n.under);
+            picker.el.open = true;
+            box.append(
+              picker.el,
+              h(
+                'button',
+                {
+                  class: 'btn primary block mt',
+                  onclick: async () => {
+                    try {
+                      await store.mount(n.id, picker.read());
+                      close();
+                      route(true);
+                    } catch (e) {
+                      toast(e.message);
+                    }
+                  },
+                },
+                '保存挂载',
+              ),
+            );
+          }),
+      },
+      '挂到…',
+    );
+  if (issue.key === 'broken')
+    return h(
+      'button',
+      {
+        class: 'btn sm',
+        onclick: async () => {
+          n.links = n.links.filter((l) => store.nodes.has(l.to));
+          if (n.under && !store.nodes.has(n.under)) await store.mount(n.id, '');
+          else await store.saveNode(n);
+          route(true);
+        },
+      },
+      '清理',
+    );
   return null;
 }
 
@@ -1202,49 +1304,108 @@ function fillKeywordsSheet(nodes) {
 
 // ---------------- 温故 ----------------
 function viewReview() {
-  const queue=dueReviews(store,20);
-  const out=[topbarBack('温故'),h('h1',{class:'display'},'温故'),h('p',{class:'sub'},'先回想此时的判断和动作，再翻面核对。实操反馈会修正规与上游论的把握。')];
-  if (!queue.length) return [...out,h('div',{class:'empty'},veinArt(),h('h3',{},'今天的卡片都复习完了'),h('p',{},'明天再来。'))];
-  let i=0;
-  const stage=h('div');
-  const draw=() => {
+  const queue = dueReviews(store, 20);
+  const out = [
+    topbarBack('温故'),
+    h('h1', { class: 'display' }, '温故'),
+    h('p', { class: 'sub' }, '先回想此时的判断和动作，再翻面核对。实操反馈会修正规与上游论的把握。'),
+  ];
+  if (!queue.length) return [...out, h('div', { class: 'empty' }, veinArt(), h('h3', {}, '今天的卡片都复习完了'), h('p', {}, '明天再来。'))];
+  let i = 0;
+  const stage = h('div');
+  const draw = () => {
     stage.replaceChildren();
-    if (i>=queue.length) {stage.append(h('div',{class:'empty'},veinArt(),h('h3',{},'完成 '+queue.length+' 张'),h('button',{class:'btn',onclick:() => go('#/')},'回到今日'))); return;}
-    const n=store.nodes.get(queue[i].id), rule=n.type === '规';
-    const parent=store.ancestors(n.id).find((p) => p.type === '论');
-    const trigger=rule && n.triggers.length ? n.triggers[Math.floor(Math.random()*n.triggers.length)] : '';
-    const grades=h('div',{class:'grades'});
-    let busy=false;
-    const flash=h('div',{class:'flash v2-flash','data-testid':'flash',onclick:() => {
-      flash.classList.toggle('flipped');
-      grades.querySelectorAll('button').forEach((b) => b.disabled=!flash.classList.contains('flipped'));
-    }},h('div',{class:'flash-inner'},
-      h('div',{class:'flash-face'},h('div',{class:'small muted'},(i+1)+' / '+queue.length+' · '+n.system),
-        h('div',{},h('div',{class:'big'},trigger ? '演练：'+trigger : n.title),rule ? h('p',{class:'small muted'},'此时你的【论】和【规】是什么？') : null,
-          !trigger ? h('div',{class:'chips mt'},n.keywords.map((k) => h('span',{class:'kw'},k))) : null),h('div',{class:'small muted'},'点击翻面')),
-      h('div',{class:'flash-face back'},
-        h('div',{class:'small'},n.type+' · 把握 '+(n.confidence ?? '—')+'%'),
-        rule && parent ? h('div',{},h('div',{class:'small'},'上级论 · '+parent.title+' · '+(parent.confidence ?? '—')+'%'),h('p',{},parent.claim)) : null,
-        h('div',{class:'big'},n.claim),rule ? h('p',{class:'drill-cost'},'破戒代价：'+(n.cost || '待补')) : sentinelView(n.sentinels))));
-    const grade=async (g,kind) => {
-      if (busy) return; busy=true; grades.querySelectorAll('button').forEach((b) => b.disabled=true);
+    if (i >= queue.length) {
+      stage.append(
+        h(
+          'div',
+          { class: 'empty' },
+          veinArt(),
+          h('h3', {}, '完成 ' + queue.length + ' 张'),
+          h('button', { class: 'btn', onclick: () => go('#/') }, '回到今日'),
+        ),
+      );
+      return;
+    }
+    const n = store.nodes.get(queue[i].id),
+      rule = n.type === '规';
+    const parent = store.ancestors(n.id).find((p) => p.type === '论');
+    const trigger = rule && n.triggers.length ? n.triggers[Math.floor(Math.random() * n.triggers.length)] : '';
+    const grades = h('div', { class: 'grades' });
+    let busy = false;
+    const flash = h(
+      'div',
+      {
+        class: 'flash v2-flash',
+        'data-testid': 'flash',
+        onclick: () => {
+          flash.classList.toggle('flipped');
+          grades.querySelectorAll('button').forEach((b) => (b.disabled = !flash.classList.contains('flipped')));
+        },
+      },
+      h(
+        'div',
+        { class: 'flash-inner' },
+        h(
+          'div',
+          { class: 'flash-face' },
+          h('div', { class: 'small muted' }, i + 1 + ' / ' + queue.length + ' · ' + n.system),
+          h(
+            'div',
+            {},
+            h('div', { class: 'big' }, trigger ? '演练：' + trigger : n.title),
+            rule ? h('p', { class: 'small muted' }, '此时你的【论】和【规】是什么？') : null,
+            !trigger
+              ? h(
+                  'div',
+                  { class: 'chips mt' },
+                  n.keywords.map((k) => h('span', { class: 'kw' }, k)),
+                )
+              : null,
+          ),
+          h('div', { class: 'small muted' }, '点击翻面'),
+        ),
+        h(
+          'div',
+          { class: 'flash-face back' },
+          h('div', { class: 'small' }, n.type + ' · 把握 ' + (n.confidence ?? '—') + '%'),
+          rule && parent
+            ? h('div', {}, h('div', { class: 'small' }, '上级论 · ' + parent.title + ' · ' + (parent.confidence ?? '—') + '%'), h('p', {}, parent.claim))
+            : null,
+          h('div', { class: 'big' }, n.claim),
+          rule ? h('p', { class: 'drill-cost' }, '破戒代价：' + (n.cost || '待补')) : sentinelView(n.sentinels),
+        ),
+      ),
+    );
+    const grade = async (g, kind) => {
+      if (busy) return;
+      busy = true;
+      grades.querySelectorAll('button').forEach((b) => (b.disabled = true));
       try {
-        let message='';
+        let message = '';
         if (kind) {
-          const changed=applyFeedback(store,n.id,kind), before=changed.map((x) => store.nodes.get(x.id).confidence ?? 50);
+          const changed = applyFeedback(store, n.id, kind),
+            before = changed.map((x) => store.nodes.get(x.id).confidence ?? 50);
           for (const x of changed) await store.saveNode(x);
-          message=changed.map((x,j) => (j ? '上游论 ' : '规 ')+before[j]+'%→'+x.confidence+'%').join('，');
+          message = changed.map((x, j) => (j ? '上游论 ' : '规 ') + before[j] + '%→' + x.confidence + '%').join('，');
         }
-        const days=await gradeReview(store,n.id,g);
-        toast(message || days+' 天后再见'); i++; draw();
-      } catch(e) {busy=false; toast('保存失败：'+e.message); grades.querySelectorAll('button').forEach((b) => b.disabled=false);}
+        const days = await gradeReview(store, n.id, g);
+        toast(message || days + ' 天后再见');
+        i++;
+        draw();
+      } catch (e) {
+        busy = false;
+        toast('保存失败：' + e.message);
+        grades.querySelectorAll('button').forEach((b) => (b.disabled = false));
+      }
     };
-    const button=(text,cls,g,kind) => h('button',{class:'btn '+cls,disabled:true,onclick:() => grade(g,kind)},text);
-    if (rule) grades.append(button('实操有效','positive','good','有效'),button('实操卡壳','negative','forgot','卡壳'),button('只是回想','','fuzzy'));
-    else grades.append(button('忘了','','forgot'),button('模糊','','fuzzy'),button('记得','primary','good'));
-    stage.append(flash,grades,h('div',{class:'center mt'},h('button',{class:'btn ghost sm',onclick:() => go('#/node/'+n.id)},'打开节点')));
+    const button = (text, cls, g, kind) => h('button', { class: 'btn ' + cls, disabled: true, onclick: () => grade(g, kind) }, text);
+    if (rule) grades.append(button('实操有效', 'positive', 'good', '有效'), button('实操卡壳', 'negative', 'forgot', '卡壳'), button('只是回想', '', 'fuzzy'));
+    else grades.append(button('忘了', '', 'forgot'), button('模糊', '', 'fuzzy'), button('记得', 'primary', 'good'));
+    stage.append(flash, grades, h('div', { class: 'center mt' }, h('button', { class: 'btn ghost sm', onclick: () => go('#/node/' + n.id) }, '打开节点')));
   };
-  draw(); return [...out,stage];
+  draw();
+  return [...out, stage];
 }
 
 // ---------------- 溯源 ----------------
