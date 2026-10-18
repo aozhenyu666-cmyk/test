@@ -429,3 +429,17 @@ details.manual > .btn.block { width: calc(100% - 32px); }
 .rule-row { border-left: 2px solid var(--accent); }
 .paused { opacity: .55; }
 .node-row .title .pill { margin-left: 6px; }
+
+/* V2 槽位与表单 */
+[hidden] { display: none !important; }
+.slots summary, .mount-picker summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.slot { margin-top: 12px; }
+.slot p { margin: 4px 0; }
+.slot .chips { margin-top: 6px; }
+.sentinel { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; }
+.positive { color: var(--green); }
+.negative { color: var(--accent); }
+.sentinel-edit { display: grid; grid-template-columns: minmax(0, 1fr) 72px 28px; align-items: center; gap: 6px; }
+.mount-list { max-height: 230px; overflow-y: auto; margin-top: 8px; }
+.mount-picker .input { margin-top: 8px; }
+.path span { cursor: pointer; }

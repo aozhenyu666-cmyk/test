@@ -1,5 +1,5 @@
 import { h, icon, brandMark, veinArt, dial, toast, sheet, confirmSheet, waiting, glyph, nodeRow, relTag, swipeable } from './ui.js';
-import { Store, TYPES, STATUSES, blankNode, normalizeType, normalizeSentinels, REL_TYPES, REL_HINT, REL_VIEW, findDuplicate, findAnalogies, today, MOUNT_RULES } from './model.js';
+import { Store, TYPES, SLOTS, STATUSES, blankNode, normalizeType, normalizeSentinels, REL_TYPES, REL_HINT, REL_VIEW, findDuplicate, findAnalogies, today, MOUNT_RULES } from './model.js';
 import { openVault, IdbVault, FsVault, CapVault, exportZip, importZip, listSnapshots, snapshot, dailySnapshot, restoreSnapshot } from './vault.js';
 import { getConfig, setConfig, usage, callModel, PROMPT_SPLIT, splitUserMessage, extractJson, normalizeSplit, PROMPT_THINK, parseAnswer, PRESETS, estimateTokens, PROMPT_KEYWORDS, keywordsUserMessage } from './llm.js';
 import { buildPack, MODE_QUESTIONS, libraryTokens, systemOutline } from './pack.js';
@@ -370,45 +370,118 @@ function newSystemSheet() {
 }
 
 // ---------------- 节点编辑 ----------------
+// 挂载选择器供编辑、候选和体检共用；由 Store 统一判断合法目标。
+function mountPicker(getNode, initial = '') {
+  let value = initial;
+  const q = h('input', { class: 'input', type: 'search', placeholder: '搜索可挂载节点', 'aria-label': '搜索挂载目标' });
+  const list = h('div', { class: 'list mount-list', 'data-testid': 'mount-list' });
+  const label = h('summary');
+  const draw = () => {
+    const n = getNode();
+    label.textContent = '挂在：' + (store.nodes.get(value)?.title || '不挂载');
+    list.replaceChildren(h('button', { class: 'btn sm', onclick: () => { value = ''; draw(); } }, !value ? '✓ 不挂载' : '不挂载'));
+    const all = store.list().filter((x) => !store.canMount(n, x.id) && (!q.value || [x.title, ...x.keywords].some((t) => t.includes(q.value))));
+    for (const x of all) list.append(nodeRow(x, () => { value = x.id; draw(); }, value === x.id ? icon('check') : h('span', { class: 'small muted' }, x.type)));
+  };
+  q.addEventListener('input', draw);
+  draw();
+  return { el: h('details', { class: 'mount-picker' }, label, q, list), read: () => value, refresh: () => {
+    if (value && store.canMount(getNode(), value)) value = '';
+    draw();
+  } };
+}
+
+function sentinelView(sentinels) {
+  return h('div', { class: 'sentinels' }, (sentinels || []).map((s) => h('div', { class: 'sentinel' },
+    h('span', { class: 'pill ' + (s.delta > 0 ? 'positive' : s.delta < 0 ? 'negative' : 'muted') }, s.delta > 0 ? '+' + s.delta : s.delta < 0 ? '−' + Math.abs(s.delta) : '待定'),
+    h('span', {}, s.when))));
+}
+
+function slotView(n, onEmpty) {
+  return h('details', { class: 'card slots mt', open: true }, h('summary', {}, '推演槽位'),
+    (SLOTS[n.type] || []).map((s) => {
+      const value = n[s.key], empty = !value || (Array.isArray(value) && !value.length);
+      return h('div', { class: 'slot' }, h('div', { class: 'small muted' }, s.label),
+        empty ? h('button', { class: 'btn ghost sm muted', onclick: onEmpty || (() => {}) }, '待补：' + s.hint)
+          : s.kind === 'list' ? h('div', { class: 'chips' }, value.map((v) => h('span', { class: 'kw' }, v)))
+          : s.kind === 'sentinels' ? sentinelView(value) : h('p', {}, value));
+    }));
+}
+
 function nodeForm(n, { systemEditable = true } = {}) {
-  const f = {};
-  f.title = h('input', { class: 'input', value: n.title || '', placeholder: '短名' });
-  f.claim = h('textarea', { class: 'input', rows: 2, placeholder: '一句结论' }, n.claim || '');
-  f.note = h('textarea', { class: 'input', rows: 2, placeholder: '最多 3 行说明（可空）' }, n.note || '');
-  f.type = h('select', { class: 'input' }, TYPES.map((t) => h('option', { value: t, selected: t === n.type }, t)));
+  n = blankNode(n);
+  const f = {}, field = (label, input, key) => h('div', { class: 'field', 'data-field': key }, h('label', {}, label), input);
+  let type = normalizeType(n.type);
+  f.title = h('input', { class: 'input', value: n.title, 'data-testid': 'node-title', placeholder: '短名' });
+  f.claim = h('textarea', { class: 'input', rows: 2, 'data-testid': 'node-claim' }, n.claim);
+  f.note = h('textarea', { class: 'input', rows: 3 }, n.note);
   f.status = h('select', { class: 'input' }, STATUSES.map((t) => h('option', { value: t, selected: t === n.status }, t)));
-  f.keywords = h('input', { class: 'input', value: (n.keywords || []).join('、'), placeholder: '3–5 个，用顿号或逗号分隔' });
+  f.keywords = h('input', { class: 'input', value: n.keywords.join('、'), placeholder: '3–5 个，用顿号或逗号分隔' });
   const confLabel = h('span', {}, (n.confidence ?? 50) + '%');
-  f.confidence = h('input', { type: 'range', min: 0, max: 100, step: 5, value: n.confidence ?? 50, oninput: () => { confLabel.textContent = f.confidence.value + '%'; } });
-  f.verify = h('input', { class: 'input', value: n.verify || '', placeholder: '一句话，假设类必填' });
-  f.source = h('input', { class: 'input', value: n.source || '', placeholder: '自己 / AI 名称 / 资料' });
+  f.confidence = h('input', { type: 'range', min: 0, max: 100, step: 1, value: n.confidence ?? 50, 'aria-label': '把握', oninput: () => { confLabel.textContent = f.confidence.value + '%'; } });
+  f.source = h('input', { class: 'input', value: n.source, placeholder: '自己 / AI 名称 / 资料' });
   f.system = h('select', { class: 'input', disabled: !systemEditable }, [...store.systems.keys()].map((s) => h('option', { value: s, selected: s === n.system }, s)));
-  const parentWrap = h('div', { class: 'small muted' }, '挂在：' + (store.nodes.get(n.under)?.title || '不挂载'));
-  const el = h('div', {},
-    h('div', { class: 'field' }, h('label', {}, '标题'), f.title),
-    h('div', { class: 'field' }, h('label', {}, '结论'), f.claim),
-    h('div', { class: 'row' }, h('div', { class: 'field' }, h('label', {}, '类型'), f.type), h('div', { class: 'field' }, h('label', {}, '状态'), f.status)),
-    h('div', { class: 'field' }, h('label', {}, '激活词'), f.keywords),
-    h('div', { class: 'field' }, h('label', {}, '把握 ', confLabel), f.confidence),
-    h('div', { class: 'field' }, h('label', {}, '验证方式'), f.verify),
-    h('div', { class: 'row' }, h('div', { class: 'field' }, h('label', {}, '体系'), f.system), h('div', { class: 'field' }, h('label', {}, '挂载'), parentWrap)),
-    h('div', { class: 'field' }, h('label', {}, '说明'), f.note),
-    h('div', { class: 'field' }, h('label', {}, '来源'), f.source));
+  f.pillars = h('textarea', { class: 'input', rows: 3, placeholder: '每行一条，最多 3 条' }, n.pillars.join('\n'));
+  f.blindspot = h('textarea', { class: 'input', rows: 2 }, n.blindspot);
+  f.triggers = h('textarea', { class: 'input', rows: 3, placeholder: '每行一条，最多 3 条' }, n.triggers.join('\n'));
+  f.cost = h('textarea', { class: 'input', rows: 2 }, n.cost);
+  f.paused = h('input', { type: 'checkbox', checked: n.paused });
+  const sentinelRows = h('div', { class: 'list' });
+  const addSentinel = (s = {}) => {
+    const when = h('input', { class: 'input', value: s.when || '', placeholder: '看到什么现象', 'aria-label': '验证哨现象' });
+    const delta = h('input', { class: 'input', type: 'number', min: -30, max: 30, step: 5, value: s.delta ?? 0, 'aria-label': '验证哨分值' });
+    const row = h('div', { class: 'sentinel-edit' }, when, delta, h('button', { class: 'iconbtn', 'aria-label': '删除验证哨', onclick: () => row.remove() }, icon('x')));
+    sentinelRows.append(row);
+  };
+  n.sentinels.forEach(addSentinel);
+  const picker = mountPicker(() => ({ ...n, type }), n.under);
+  const claimLabel = h('label');
+  const typed = {
+    pillars: field('破局支柱', f.pillars, 'pillars'),
+    status: field('状态', f.status, 'status'),
+    confidence: field(h('span', {}, '把握 ', confLabel), f.confidence, 'confidence'),
+    blindspot: field('反方盲区', f.blindspot, 'blindspot'),
+    sentinels: field('验证哨', h('div', {}, sentinelRows, h('button', { class: 'btn sm mt', 'data-testid': 'add-sentinel', onclick: () => addSentinel() }, '＋ 验证哨')), 'sentinels'),
+    triggers: field('触发场景', f.triggers, 'triggers'),
+    cost: field('破戒代价', f.cost, 'cost'),
+    paused: field('暂停', f.paused, 'paused'),
+  };
+  const seg = h('div', { class: 'seg', 'data-testid': 'node-type' }, TYPES.map((t) => h('button', { onclick: () => { type = t; draw(); } }, t)));
+  const draw = () => {
+    seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.textContent === type));
+    claimLabel.textContent = type === '规' ? '唯一动作' : '结论';
+    const keys = new Set((SLOTS[type] || []).map((s) => s.key));
+    if (type !== '问') keys.add('confidence');
+    if (type === '论') keys.add('status');
+    if (type === '规') keys.add('paused');
+    for (const [key, el] of Object.entries(typed)) el.hidden = !keys.has(key);
+    picker.refresh();
+  };
+  const el = h('div', {}, field('类型', seg), field('标题', f.title), h('div', { class: 'field' }, claimLabel, f.claim),
+    ...Object.values(typed), field('激活词', f.keywords), field('体系', f.system), field('挂载', picker.el),
+    h('details', { class: 'mt' }, h('summary', {}, '更多'), field('说明', f.note), field('来源', f.source)));
+  const lines = (input) => input.value.split('\n').map((s) => s.trim()).filter(Boolean).slice(0, 3);
   const read = () => ({
     title: f.title.value.trim(), claim: f.claim.value.trim(), note: f.note.value.trim().split('\n').slice(0, 3).join('\n'),
-    type: f.type.value, status: f.status.value,
-    keywords: f.keywords.value.split(/[,，、;；\s]+/).map((s) => s.trim()).filter(Boolean).slice(0, 5),
-    confidence: +f.confidence.value, verify: f.verify.value.trim(), source: f.source.value.trim(),
-    system: f.system.value, parent: n.parent || '', under: n.under || '',
+    type, status: f.status.value, keywords: f.keywords.value.split(/[,，、;；\s]+/).filter(Boolean).slice(0, 5),
+    confidence: type === '问' ? null : +f.confidence.value, verify: n.verify, source: f.source.value.trim(),
+    system: f.system.value, parent: n.parent, under: picker.read(), pillars: lines(f.pillars), blindspot: f.blindspot.value.trim(),
+    sentinels: normalizeSentinels([...sentinelRows.children].map((row) => ({ when: row.querySelector('input').value, delta: row.querySelector('input[type=number]').value }))),
+    triggers: lines(f.triggers), cost: f.cost.value.trim(), paused: f.paused.checked,
   });
+  draw();
   return { el, read };
 }
 
 function validate(d) {
   if (!d.title) return '标题不能为空';
   if (!d.claim) return '结论不能为空';
-  if (d.type === '论' && d.status === '假设' && !d.verify) return '假设类节点必须写验证方式';
   return '';
+}
+
+async function confirmSlots(d, action = '保存') {
+  const message = d.type === '论' && !d.sentinels?.length ? '至少写一条验证哨' : d.type === '规' && !d.triggers?.length ? '至少写一个触发场景' : '';
+  return !message || await confirmSheet('槽位待补', message + '，也可以稍后补全。', '仍然' + action);
 }
 
 function newNodeSheet(system, under = '', type = '论') {
@@ -419,7 +492,12 @@ function newNodeSheet(system, under = '', type = '论') {
       const d = form.read();
       const err = validate(d);
       if (err) return toast(err);
-      const n = await store.saveNode(blankNode({ id: store.nextId(), ...d }));
+      if (!(await confirmSlots(d))) return;
+      const node = blankNode({ id: store.nextId(), ...d, under: '' });
+      const mountError = store.canMount(node, d.under);
+      if (mountError) return toast(mountError);
+      const n = await store.saveNode(node);
+      if (d.under) await store.mount(n.id, d.under);
       close(); go('#/node/' + n.id);
     } }, '保存'));
   });
@@ -433,8 +511,13 @@ function editNodeSheet(n) {
         const d = form.read();
         const err = validate(d);
         if (err) return toast(err);
-        Object.assign(n, d);
+        if (!(await confirmSlots(d))) return;
+        const mountError = store.canMount({ ...n, ...d }, d.under);
+        if (mountError) return toast(mountError);
+        const oldUnder = n.under;
+        Object.assign(n, d, { under: oldUnder });
         await store.saveNode(n);
+        if (d.under !== oldUnder) await store.mount(n.id, d.under);
         close(); route(); toast('已保存');
       } }, '保存'),
       h('button', { class: 'btn ghost danger block mt', onclick: async () => {
@@ -450,9 +533,9 @@ function viewNode(id) {
   if (!n) return [topbarBack('节点'), h('div', { class: 'empty' }, h('h3', {}, '找不到这个节点'))];
   const out = [topbarBack('', h('button', { class: 'iconbtn', onclick: () => editNodeSheet(n), 'aria-label': '编辑' }, icon('edit')))];
   out.push(h('div', { class: 'node-hero' },
-    h('div', { class: 'path' }, store.pathOf(n).slice(0, -1).map((p) => h('span', {}, p))),
+    h('div', { class: 'path' }, h('span', { onclick: () => go('#/tree?sys=' + encodeURIComponent(n.system)) }, n.system), store.ancestors(id).reverse().map((p) => h('span', { onclick: () => go('#/node/' + p.id) }, p.type + ' ' + p.title))),
     h('h1', {}, n.title),
-    h('div', { class: 'chips' }, h('span', { class: 'pill' }, n.type), h('span', { class: 'pill ' + n.status }, n.status), h('span', { class: 'pill outline mono' }, n.id),
+    h('div', { class: 'chips' }, h('span', { class: 'pill' }, n.type), n.type === '论' ? h('span', { class: 'pill ' + n.status }, n.status) : null, n.type !== '问' ? h('span', { class: 'pill outline' }, '把握 ' + (n.confidence ?? '—') + '%') : null, n.type === '规' && n.paused ? h('span', { class: 'pill accent' }, '暂停') : null, h('span', { class: 'pill outline mono' }, n.id),
       n.yamlError ? h('span', { class: 'pill accent' }, 'YAML 有误') : null)));
   out.push(h('div', { class: 'claim-big mt' }, n.claim), n.note ? h('div', { class: 'note' }, n.note) : null);
 
@@ -462,10 +545,10 @@ function viewNode(id) {
     h('div', { class: 'action', onclick: () => go('#/ask/' + id + '?mode=analogy') }, icon('merge'), '类比'),
     h('div', { class: 'action', onclick: () => go('#/trace/' + id) }, icon('branch'), '溯源')));
 
+  out.push(slotView(n, () => editNodeSheet(n)));
   out.push(h('div', { class: 'card mt2' }, h('dl', { class: 'meta-grid', style: { margin: 0 } },
     h('dt', {}, '激活词'), h('dd', {}, h('div', { class: 'chips' }, n.keywords.length ? n.keywords.map((k) => h('span', { class: 'kw' }, k)) : h('span', { class: 'small muted' }, '未填'))),
-    h('dt', {}, '把握'), h('dd', {}, h('div', { class: 'verify-box' }, dial(n.confidence, 56, false),
-      h('div', { class: 'vt' }, h('div', { class: 'label' }, '验证方式'), h('div', {}, n.verify || h('span', { class: 'muted' }, '—'))),
+    h('dt', {}, n.type === '问' ? '反馈' : '把握'), h('dd', {}, h('div', { class: 'verify-box' }, n.type !== '问' ? dial(n.confidence, 56, false) : null,
       h('button', { class: 'btn sm', onclick: () => backfillSheet(n), 'data-testid': 'backfill' }, '回填'))),
     h('dt', {}, '来源'), h('dd', { class: 'small' }, n.source || '—'),
     h('dt', {}, '更新'), h('dd', { class: 'small muted' }, (n.updated || '—') + (n.checks.length ? ' · 回填 ' + n.checks.length + ' 次' : '')))));
@@ -473,8 +556,12 @@ function viewNode(id) {
   if (n.checks.length) {
     out.push(h('h2', { class: 'section' }, '验证记录'));
     out.push(h('div', { class: 'list' }, n.checks.slice().reverse().map((c) => h('div', { class: 'card flat', style: { padding: '12px 14px' } },
-      h('div', { class: 'small muted' }, c.date + ' · ' + (c.status || '') + (c.confidence != null ? ' · 把握 ' + c.confidence + '%' : '')), h('div', {}, c.result)))));
+      h('div', { class: 'small muted' }, c.date + ' · ' + (c.kind || c.status || '') + (c.confidence != null ? ' · 把握 ' + c.confidence + '%' : '')), h('div', {}, c.result)))));
   }
+
+  out.push(h('h2', { class: 'section' }, '下级'));
+  out.push(h('div', { class: 'list' }, store.children(id).map((c) => nodeRow(c, () => go('#/node/' + c.id)))));
+  if (n.type !== '规') out.push(h('button', { class: 'btn sm mt', onclick: () => childNodeSheet(n) }, '＋ 挂一个论/规'));
 
   // 关系视图
   const rels = store.relations(id);
