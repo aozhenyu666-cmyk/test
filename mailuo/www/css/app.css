@@ -443,3 +443,12 @@ details.manual > .btn.block { width: calc(100% - 32px); }
 .mount-list { max-height: 230px; overflow-y: auto; margin-top: 8px; }
 .mount-picker .input { margin-top: 8px; }
 .path span { cursor: pointer; }
+
+/* V2 参谋批阅台 */
+.adjust-figure { font: 600 30px/1.4 var(--serif); margin: 14px 0; }
+.sentinel-hit { padding: 10px; background: var(--amber-soft); color: var(--amber); border-radius: var(--r-sm); font-size: 13px; }
+.pause-option { display: flex; align-items: baseline; gap: 8px; margin: 8px 0; }
+.mount-warning { color: var(--amber); }
+.cand + .cand { margin-top: 12px; }
+.cand .slots { box-shadow: none; padding: 12px; }
+.link-cand .grow { min-width: 0; overflow-wrap: anywhere; }

@@ -1,10 +1,10 @@
 import { h, icon, brandMark, veinArt, dial, toast, sheet, confirmSheet, waiting, glyph, nodeRow, relTag, swipeable } from './ui.js';
-import { Store, TYPES, SLOTS, STATUSES, blankNode, normalizeType, normalizeSentinels, REL_TYPES, REL_HINT, REL_VIEW, findDuplicate, findAnalogies, today, MOUNT_RULES } from './model.js';
+import { Store, TYPES, SLOTS, STATUSES, blankNode, normalizeType, normalizeSentinels, REL_TYPES, REL_HINT, REL_VIEW, findDuplicate, findAnalogies, today, MOUNT_RULES, applyAdjust } from './model.js';
 import { openVault, IdbVault, FsVault, CapVault, exportZip, importZip, listSnapshots, snapshot, dailySnapshot, restoreSnapshot } from './vault.js';
 import { getConfig, setConfig, usage, callModel, PROMPT_SPLIT, splitUserMessage, extractJson, normalizeSplit, PROMPT_THINK, parseAnswer, PRESETS, estimateTokens, PROMPT_KEYWORDS, keywordsUserMessage } from './llm.js';
 import { buildPack, MODE_QUESTIONS, libraryTokens, systemOutline } from './pack.js';
 import { healthCheck, traceCause, longestChain, learningPath, dueReviews, gradeReview, weeklyDigest } from './features.js';
-import { PROMPT_COLLIDE, libraryDigest, collideUserMessage, normalizeCollide } from './collide.js';
+import { PROMPT_COLLIDE, libraryDigest, collideUserMessage, normalizeCollide, suggestPauses } from './collide.js';
 import { loadSeed, SEED_SYSTEM, SEED_NODES } from './seed.js';
 
 const VERSION = '0.1.5';
@@ -891,80 +891,104 @@ function candTitle(ref) {
 function viewCands() {
   const C = session.cands;
   if (!C) return [topbarBack('候选'), h('div', { class: 'empty' }, veinArt(), h('h3', {}, '没有待确认的候选'), h('button', { class: 'btn accent', onclick: () => go('#/capture') }, '去录入'))];
-  const counts = { accepted: 0, merged: 0, discarded: 0, pending: 0 };
-  for (const c of C.nodes) counts[c.state]++;
+  const adjust = C.adjust || [], proposals = [...adjust, ...C.nodes];
+  const counts = (state) => proposals.filter((p) => p.state === state).length;
+  const acceptedA = adjust.filter((a) => a.state === 'accepted').length;
+  const acceptedN = C.nodes.filter((c) => ['accepted', 'merged'].includes(c.state)).length;
   const resolvable = (ref) => {
     const c = C.nodes.find((x) => x.tmp_id === ref);
-    if (c) return c.state === 'accepted' || c.state === 'merged';
-    return store.nodes.has(ref) || !!store.byTitle(ref);
+    return c ? ['accepted', 'merged'].includes(c.state) : store.nodes.has(ref) || !!store.byTitle(ref);
   };
   const linkCount = C.links.filter((l) => l.on && resolvable(l.from) && resolvable(l.to)).length;
-  // 逐张处理时保持滚动位置
   const persist = () => { saveDraft(); route(true); };
-  const needsVerify = (c) => c.type === '论' && !(c.sentinels?.length || String(c.verify || '').trim());
-  const accept = (c) => {
-    if (needsVerify(c)) { toast('假设类要先补验证方式'); persist(); return editCandSheet(c, persist); }
-    c.state = 'accepted'; persist();
+  const accept = async (c) => {
+    if (!c.slotsConfirmed && !(await confirmSlots(c, '确认'))) { persist(); return; }
+    c.slotsConfirmed = true; c.state = 'accepted'; persist();
   };
-  const acceptAll = (filter) => {
-    let skipped = 0;
-    for (const c of C.nodes) if (c.state === 'pending' && filter(c)) { if (needsVerify(c)) skipped++; else c.state = 'accepted'; }
+  const acceptAll = async () => {
+    for (const a of adjust) if (a.state === 'pending') a.state = 'accepted';
+    for (const c of C.nodes) if (c.state === 'pending') {
+      if (c.slotsConfirmed || await confirmSlots(c, '确认')) { c.state = 'accepted'; c.slotsConfirmed = true; }
+    }
     persist();
-    if (skipped) toast(skipped + ' 张假设缺验证方式，留在待定');
   };
-  const out = [topbarBack('候选卡片', h('button', { class: 'btn ghost sm', onclick: async () => {
-    if (!(await confirmSheet('放弃这批候选', '全部丢弃，不写入任何文件？', '全部放弃', true))) return;
+  const out = [topbarBack('参谋批阅台', h('button', { class: 'btn ghost sm', onclick: async () => {
+    if (!(await confirmSheet('放弃这批候选', '全部驳回，不写入任何文件？', '全部放弃', true))) return;
     session.cands = null; localStorage.removeItem('mailuo.draft'); go('#/capture');
-  } }, '放弃'))];
-  out.push(h('h1', { class: 'display' }, C.nodes.length + ' 张候选'),
-    h('div', { class: 'sub' }, '写入体系「' + C.system + '」 · 已接受 ' + counts.accepted + ' · 合并 ' + counts.merged + ' · 丢弃 ' + counts.discarded + ' · 待定 ' + counts.pending),
-    h('div', { class: 'btn-row mt' },
-      h('button', { class: 'btn sm', onclick: () => acceptAll((c) => !c.dupeId) }, icon('check'), '接受全部无重复的'),
-      h('button', { class: 'btn sm', onclick: () => acceptAll(() => true) }, '接受全部待定')),
-    counts.pending ? h('div', { class: 'swipe-hint' }, h('span', {}, '← 左滑丢弃'), h('span', {}, '右滑接受 →')) : null);
-
-  const list = h('div', { class: 'list mt' });
+  } }, '放弃')),
+    h('h1', { class: 'display' }, proposals.length + ' 条提案'),
+    h('div', { class: 'sub' }, '调整 ' + adjust.length + ' · 新节点 ' + C.nodes.length + ' · 已确认 ' + (counts('accepted') + counts('merged')) + ' · 已驳回 ' + counts('discarded')),
+    h('div', { class: 'btn-row mt' }, h('button', { class: 'btn sm', onclick: acceptAll }, '确认全部待定')),
+    counts('pending') ? h('div', { class: 'swipe-hint' }, h('span', {}, '← 左滑驳回'), h('span', {}, '右滑确认 →')) : null];
+  if (adjust.length) out.push(h('h2', { class: 'section' }, '调整已有判断'));
+  for (const a of adjust) {
+    const target = store.nodes.get(a.target);
+    if (!target) { out.push(h('div', { class: 'banner' }, '目标已删除：' + a.target)); continue; }
+    const figure = h('div', { class: 'adjust-figure' });
+    const drawFigure = () => { figure.textContent = a.from + '% → ' + a.to_final + '%'; figure.className = 'adjust-figure ' + (a.to_final < a.from ? 'negative' : 'positive'); };
+    const pauses = h('div', { class: 'pause-options' });
+    const drawPauses = () => {
+      const ids = [...new Set([...(a.pause_rules || []), ...suggestPauses(store, a.target, a.to_final)])];
+      a.pause_choices ||= {};
+      pauses.replaceChildren();
+      if (ids.length) pauses.append(h('p', { class: 'small muted' }, a.to_final < 60 ? '上游论把握低于 60%，建议暂停这些规' : '材料建议暂停这些规'));
+      for (const id of ids) {
+        const r = store.nodes.get(id);
+        if (!r) continue;
+        a.pause_choices[id] ??= true;
+        pauses.append(h('label', { class: 'pause-option' }, h('input', { type: 'checkbox', checked: a.pause_choices[id], onchange: (e) => {
+          a.pause_choices[id] = e.target.checked; a.pause_selected = ids.filter((id) => a.pause_choices[id]); saveDraft();
+        } }), r.title));
+      }
+      a.pause_selected = ids.filter((id) => a.pause_choices[id]);
+    };
+    const slider = h('input', { type: 'range', min: 0, max: 100, step: 5, value: a.to_final, 'aria-label': '微调把握 ' + target.title, disabled: a.state !== 'pending', oninput: () => {
+      a.to_final = +slider.value; drawFigure(); drawPauses(); saveDraft();
+    } });
+    drawFigure(); drawPauses();
+    const decide = (state) => { a.state = state; persist(); };
+    const card = h('div', { class: 'card cand adjust ' + a.state, 'data-testid': 'adjust', 'data-target': a.target },
+      h('div', { class: 'head' }, glyph(target), h('div', { class: 'title' }, target.title)), figure,
+      h('p', {}, '原因：' + a.reason), a.hit ? h('div', { class: 'sentinel-hit' }, '命中验证哨：' + a.hit) : null,
+      slider, pauses,
+      a.state === 'pending' ? h('div', { class: 'btn-row' }, h('button', { class: 'btn sm primary', onclick: () => decide('accepted') }, '确认'), h('button', { class: 'btn sm ghost danger', onclick: () => decide('discarded') }, '驳回'))
+        : h('div', { class: 'btn-row' }, h('span', { class: 'small muted' }, a.state === 'accepted' ? '已确认' : '已驳回'), h('button', { class: 'btn sm ghost', onclick: () => decide('pending') }, '撤销')));
+    if (a.state === 'pending') swipeable(card, { onRight: () => decide('accepted'), onLeft: () => decide('discarded') });
+    out.push(card);
+  }
+  if (C.nodes.length) out.push(h('h2', { class: 'section' }, '新增节点'));
   for (const c of C.nodes) {
-    const badge = { accepted: '已接受', merged: '合并到「' + (store.nodes.get(c.mergeTo)?.title || '') + '」', discarded: '已丢弃', pending: '' }[c.state];
-    const dupeNode = c.dupeId ? store.nodes.get(c.dupeId) : null;
+    const parent = store.nodes.get(c.under), tmpParent = C.nodes.find((p) => p.tmp_id === c.under);
+    const path = parent ? [...store.ancestors(parent.id).reverse(), parent].map((p) => p.type + '：' + p.title + (p.confidence != null && p.type !== '问' ? ' ' + p.confidence + '%' : '')).join(' › ') : '';
+    const mountText = parent ? '建议挂在【' + path + '】下方' : tmpParent ? '挂在本批新建的【' + tmpParent.type + '：' + tmpParent.title + '】下' : '未挂载';
+    const dupe = store.nodes.get(c.dupeId);
+    const decide = (state) => { c.state = state; persist(); };
     const card = h('div', { class: 'card cand ' + c.state, 'data-testid': 'cand' },
-      badge ? h('span', { class: 'state-badge' }, badge) : null,
-      h('div', { class: 'head' }, glyph(c), h('div', { class: 'title' }, c.title), dial(c.confidence, 36)),
-      h('div', { class: 'chips', style: { marginTop: '8px' } }, h('span', { class: 'pill' }, c.type), h('span', { class: 'pill ' + c.status }, c.status)),
-      h('div', { class: 'claim' }, c.claim),
-      h('div', { class: 'chips', style: { marginBottom: '10px' } }, c.keywords.length ? c.keywords.map((k) => h('span', { class: 'kw' }, k)) : h('span', { class: 'small', style: { color: 'var(--amber)' } }, '激活词待补（点「修改」）')),
-      c.status === '假设' ? h('div', { class: 'verify' }, '验证：' + (c.verify || '（未给出，接受前请补）')) : null,
-      dupeNode && c.state === 'pending' ? h('div', { class: 'dupe', 'data-testid': 'dupe' }, icon('merge'), h('span', { class: 'grow' }, '可能重复：「' + dupeNode.title + '」· ' + c.dupeReason),
-        h('button', { class: 'btn sm', onclick: () => { c.state = 'merged'; c.mergeTo = dupeNode.id; persist(); } }, '合并'),
-        h('button', { class: 'btn sm ghost', onclick: () => { c.dupeId = ''; persist(); } }, '不是重复')) : null,
-      h('div', { class: 'btn-row' },
-        c.state === 'pending'
-          ? [h('button', { class: 'btn sm primary', 'data-testid': 'accept', onclick: () => accept(c) }, icon('check'), '接受'),
-            h('button', { class: 'btn sm', onclick: () => editCandSheet(c, persist) }, icon('edit'), '修改'),
-            h('button', { class: 'btn sm', onclick: () => mergePicker(c, persist) }, icon('merge'), '合并到…'),
-            h('button', { class: 'btn sm ghost danger', onclick: () => { c.state = 'discarded'; persist(); } }, '丢弃')]
-          : h('button', { class: 'btn sm ghost', onclick: () => { c.state = 'pending'; c.mergeTo = ''; persist(); } }, icon('undo'), '撤销')));
-    if (c.state === 'pending') swipeable(card, { onRight: () => accept(c), onLeft: () => { c.state = 'discarded'; persist(); } });
-    list.append(card);
+      h('div', { class: 'small ' + (!parent && !tmpParent ? 'mount-warning' : 'muted') }, mountText),
+      h('div', { class: 'head' }, glyph(c), h('div', { class: 'title' }, c.title), c.type !== '问' ? dial(c.confidence, 36) : null),
+      h('div', { class: 'claim' }, c.claim), h('div', { class: 'chips' }, c.keywords.map((k) => h('span', { class: 'kw' }, k))), slotView(c, () => editCandSheet(c, persist)),
+      dupe && c.state === 'pending' ? h('div', { class: 'dupe mt', 'data-testid': 'dupe' }, h('span', { class: 'grow' }, '可能重复：「' + dupe.title + '」· ' + c.dupeReason),
+        h('button', { class: 'btn sm', onclick: () => { c.state = 'merged'; c.mergeTo = dupe.id; persist(); } }, '合并'), h('button', { class: 'btn sm ghost', onclick: () => { c.dupeId = ''; persist(); } }, '不是重复')) : null,
+      h('div', { class: 'btn-row mt' }, c.state === 'pending' ? [
+        h('button', { class: 'btn sm primary', 'data-testid': 'accept', onclick: () => accept(c) }, '确认入库'),
+        h('button', { class: 'btn sm', onclick: () => editCandSheet(c, persist) }, '修改'), h('button', { class: 'btn sm', onclick: () => mergePicker(c, persist) }, '合并到…'),
+        h('button', { class: 'btn sm ghost danger', onclick: () => decide('discarded') }, '驳回')]
+        : [h('span', { class: 'small muted' }, {accepted:'已确认',merged:'已合并',discarded:'已驳回'}[c.state]), h('button', { class: 'btn sm ghost', onclick: () => { c.state = 'pending'; c.mergeTo = ''; persist(); } }, '撤销')]));
+    if (c.state === 'pending') swipeable(card, { onRight: () => accept(c), onLeft: () => decide('discarded') });
+    out.push(card);
   }
-  out.push(list);
-
-  if (C.links.length) {
-    out.push(h('h2', { class: 'section' }, '候选关系 · ' + C.links.length));
-    out.push(h('div', { class: 'list' }, C.links.map((l) => {
-      const ok = resolvable(l.from) && resolvable(l.to);
-      const typeSel = h('select', { class: 'input', style: { width: 'auto', padding: '4px 8px', fontSize: '12.5px' }, onchange: () => { l.type = typeSel.value; saveDraft(); } }, REL_TYPES.map((t) => h('option', { value: t, selected: t === l.type }, t)));
-      return h('div', { class: 'link-cand' + (l.on && ok ? '' : ' off') },
-        h('div', { class: 'grow' }, h('div', {}, h('b', {}, candTitle(l.from)), ' ', typeSel, ' ', h('b', {}, candTitle(l.to))), l.why ? h('div', { class: 'why' }, l.why) : null,
-          !ok ? h('div', { class: 'why' }, '两端节点都被接受 / 合并后才会写入') : null),
-        h('button', { class: 'iconbtn', 'aria-label': '调换方向', onclick: () => { [l.from, l.to] = [l.to, l.from]; persist(); } }, icon('swap')),
-        h('button', { class: 'iconbtn', 'aria-label': l.on ? '不要这条' : '恢复', onclick: () => { l.on = !l.on; persist(); } }, icon(l.on ? 'x' : 'undo')));
-    })));
-  }
-  const n = counts.accepted + counts.merged;
-  out.push(h('div', { class: 'sticky-bottom' }, h('button', { class: 'btn primary block', disabled: !n, 'data-testid': 'commit', onclick: commitCands },
-    '写入 ' + counts.accepted + ' 个新节点 · 合并 ' + counts.merged + ' · ' + linkCount + ' 条关系')),
-  counts.pending ? h('p', { class: 'small muted center' }, '待定的卡片不会写入，可以稍后回来处理。') : null);
+  if (C.links.length) out.push(h('h2', { class: 'section' }, '候选关系 · ' + C.links.length), h('div', { class: 'list' }, C.links.map((l) => {
+    const typeSel = h('select', { class: 'input', style: { width: 'auto', maxWidth: '100%' }, onchange: () => { l.type = typeSel.value; saveDraft(); } }, REL_TYPES.map((t) => h('option', { value: t, selected: t === l.type }, t)));
+    return h('div', { class: 'link-cand' + (l.on && resolvable(l.from) && resolvable(l.to) ? '' : ' off') },
+      h('div', { class: 'grow' }, h('b', {}, candTitle(l.from)), ' → ', typeSel, ' ', h('b', {}, candTitle(l.to)), h('div', { class: 'why' }, l.why)),
+      h('button', { class: 'iconbtn', 'aria-label': '调换方向', onclick: () => { [l.from,l.to] = [l.to,l.from]; persist(); } }, icon('swap')),
+      h('button', { class: 'iconbtn', 'aria-label': l.on ? '不要这条' : '恢复', onclick: () => { l.on = !l.on; persist(); } }, icon(l.on ? 'x' : 'undo')));
+  })));
+  out.push(h('div', { class: 'sticky-bottom' }, h('button', { class: 'btn primary block', disabled: !acceptedA && !acceptedN && !linkCount, 'data-testid': 'commit', onclick: async (e) => {
+    e.currentTarget.disabled = true;
+    try { await commitCands(); } catch (err) { toast('写入失败：' + err.message); route(true); }
+  } }, '确认入库（调整 ' + acceptedA + ' · 新增 ' + acceptedN + ' · 关系 ' + linkCount + '）')));
+  saveDraft();
   return out;
 }
 
@@ -972,11 +996,12 @@ function editCandSheet(c, done) {
   sheet('修改候选', (box, close) => {
     if (!store.systems.has(session.cands.system)) store.ensureSystemSync(session.cands.system);
     const form = nodeForm({ ...c, system: session.cands.system, source: session.cands.source }, { systemEditable: false });
-    box.append(form.el, h('button', { class: 'btn primary block', onclick: () => {
+    box.append(form.el, h('button', { class: 'btn primary block', onclick: async () => {
       const d = form.read();
       const err = validate(d);
       if (err) return toast(err);
-      Object.assign(c, d, { state: 'accepted' });
+      if (!(await confirmSlots(d, '确认'))) return;
+      Object.assign(c, d, { state: 'accepted', slotsConfirmed: true });
       close(); done();
     } }, '保存并接受'));
   });
@@ -988,7 +1013,7 @@ function mergePicker(c, done) {
     const list = h('div', { class: 'list mt', style: { maxHeight: '50vh', overflowY: 'auto' } });
     const draw = () => {
       list.innerHTML = '';
-      for (const n of store.list().filter((x) => !q.value || x.title.includes(q.value)).slice(0, 40)) {
+      for (const n of store.list().filter((x) => x.type === c.type && (!q.value || x.title.includes(q.value))).slice(0, 40)) {
         list.append(nodeRow(n, () => { c.state = 'merged'; c.mergeTo = n.id; close(); done(); }, h('span', { class: 'small muted' }, n.system)));
       }
     };
@@ -999,60 +1024,56 @@ function mergePicker(c, done) {
 }
 
 async function commitCands() {
-  const C = session.cands;
-  const idMap = new Map();
-  const touched = new Map();
-  // 1) 新节点先全部放进索引，保证写双链时能找到标题
-  for (const c of C.nodes.filter((x) => x.state === 'accepted')) {
-    const id = store.nextId();
-    const n = blankNode({
-      id, title: c.title, type: normalizeType(c.type), system: c.system || C.system, parent: c.parent || '', keywords: c.keywords, status: c.status,
-      confidence: c.confidence, verify: c.verify, source: c.source || C.source, claim: c.claim, note: c.note || '',
-      pillars: c.pillars || [], blindspot: c.blindspot || '', sentinels: normalizeSentinels(c.sentinels), triggers: c.triggers || [], cost: c.cost || '',
-    });
-    store.nodes.set(id, n);
-    idMap.set(c.tmp_id, id);
-    touched.set(id, n);
+  const C = session.cands, idMap = new Map(), touched = new Map();
+  const accepted = C.nodes.filter((c) => c.state === 'accepted');
+  const merged = C.nodes.filter((c) => c.state === 'merged');
+  const adjustments = (C.adjust || []).filter((a) => a.state === 'accepted');
+  for (const c of accepted) {
+    const id = c.savedId && store.nodes.has(c.savedId) ? c.savedId : store.nextId();
+    c.savedId = id;
+    const existing = store.nodes.get(id);
+    const n = blankNode({ ...c, id, system: c.system || C.system, source: c.source || C.source, under: existing?.under || '', path: existing?.path, links: existing?.links || [], checks: existing?.checks || [] });
+    store.nodes.set(id, n); idMap.set(c.tmp_id, id); touched.set(id, n);
   }
-  // V2 挂载：under 可以是候选的 tmp_id 或已有节点 id；不合挂载规则的留空（进「未挂载」区）
-  for (const c of C.nodes.filter((x) => x.state === 'accepted' && x.under)) {
-    const n = store.nodes.get(idMap.get(c.tmp_id));
-    const target = idMap.get(c.under) || (store.nodes.has(c.under) ? c.under : '');
-    if (n && target && !store.canMount(n.id, target)) n.under = target;
-  }
-  for (const c of C.nodes.filter((x) => x.state === 'merged')) {
+  for (const c of merged) {
     const t = store.nodes.get(c.mergeTo);
     if (!t) continue;
     idMap.set(c.tmp_id, t.id);
-    t.keywords = [...new Set([...t.keywords, ...c.keywords])].slice(0, 5);
+    t.keywords = [...new Set([...t.keywords, ...c.keywords])].slice(0,5);
     if (c.claim && c.claim !== t.claim && !t.note.includes(c.claim) && t.note.split('\n').filter(Boolean).length < 3) t.note = (t.note ? t.note + '\n' : '') + '补充：' + c.claim;
+    for (const key of ['pillars','triggers']) t[key] = [...new Set([...t[key], ...(c[key] || [])])];
+    t.sentinels = [...t.sentinels, ...normalizeSentinels(c.sentinels).filter((s) => !t.sentinels.some((o) => o.when === s.when))];
+    if (!t.blindspot) t.blindspot = c.blindspot || '';
+    if (!t.cost) t.cost = c.cost || '';
     touched.set(t.id, t);
   }
   const resolve = (ref) => idMap.get(ref) || (store.nodes.has(ref) ? ref : store.byTitle(ref, C.system)?.id);
   let linkN = 0;
-  for (const l of C.links.filter((x) => x.on)) {
-    const from = resolve(l.from), to = resolve(l.to);
-    if (!from || !to || from === to || !REL_TYPES.includes(l.type)) continue;
-    // 来自已丢弃 / 待定卡片的关系不写
-    const fromC = C.nodes.find((x) => x.tmp_id === l.from), toC = C.nodes.find((x) => x.tmp_id === l.to);
-    if ((fromC && !['accepted', 'merged'].includes(fromC.state)) || (toC && !['accepted', 'merged'].includes(toC.state))) continue;
-    const src = store.nodes.get(from);
-    if (src.links.some((x) => x.to === to && x.type === l.type)) continue;
-    src.links.push({ type: l.type, to, why: l.why });
-    touched.set(from, src);
-    linkN++;
+  for (const l of C.links.filter((l) => l.on)) {
+    const fromC = C.nodes.find((c) => c.tmp_id === l.from), toC = C.nodes.find((c) => c.tmp_id === l.to);
+    if ([fromC,toC].some((c) => c && !['accepted','merged'].includes(c.state))) continue;
+    const from = resolve(l.from), to = resolve(l.to), src = store.nodes.get(from);
+    if (!src || !to || from === to || !REL_TYPES.includes(l.type) || src.links.some((x) => x.to === to && x.type === l.type)) continue;
+    src.links.push({type:l.type,to,why:l.why}); touched.set(from,src); linkN++;
   }
+  saveDraft();
   for (const n of touched.values()) await store.saveNode(n);
-  const left = C.nodes.filter((x) => x.state === 'pending');
-  const created = [...idMap.values()];
-  if (left.length) {
-    session.cands = { ...C, nodes: left, links: C.links.filter((l) => left.some((c) => c.tmp_id === l.from || c.tmp_id === l.to)).map((l) => ({ ...l, from: idMap.get(l.from) || l.from, to: idMap.get(l.to) || l.to })) };
+  for (const c of accepted) if (c.under) {
+    const targetC = C.nodes.find((n) => n.tmp_id === c.under);
+    const target = targetC && !['accepted','merged'].includes(targetC.state) ? '' : resolve(c.under);
+    if (target && !store.canMount(idMap.get(c.tmp_id),target)) await store.mount(idMap.get(c.tmp_id),target);
+  }
+  for (const a of adjustments) for (const n of applyAdjust(store,a)) await store.saveNode(n);
+  const left = C.nodes.filter((c) => c.state === 'pending');
+  const leftAdjust = (C.adjust || []).filter((a) => a.state === 'pending');
+  if (left.length || leftAdjust.length) {
+    session.cands = { ...C, nodes: left.map((c) => ({...c,under:idMap.get(c.under)||c.under})), adjust:leftAdjust,
+      links:C.links.filter((l) => left.some((c) => c.tmp_id === l.from || c.tmp_id === l.to)).map((l) => ({...l,from:idMap.get(l.from)||l.from,to:idMap.get(l.to)||l.to})) };
     saveDraft();
-  } else { session.cands = null; localStorage.removeItem('mailuo.draft'); }
-  toast('已写入 ' + touched.size + ' 个文件 · ' + linkN + ' 条关系');
+  } else { session.cands=null; localStorage.removeItem('mailuo.draft'); }
+  toast('已确认 ' + (adjustments.length + accepted.length + merged.length) + ' 条：调整 ' + adjustments.length + '、新增 ' + accepted.length);
   if (C.origin && store.nodes.has(C.origin)) go('#/node/' + C.origin);
-  else if (created.length) go('#/tree?sys=' + encodeURIComponent(C.system));
-  else go('#/');
+  else go('#/tree?sys=' + encodeURIComponent(C.system));
 }
 
 // ---------------- 验证（假设列表） ----------------
