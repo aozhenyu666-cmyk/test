@@ -144,7 +144,10 @@ object Hq {
     fun doneToday(cfg: HqConfig, sessions: List<HqSession>, now: Long, zone: ZoneId): Boolean {
         val today = DayClock.dateKey(now, zone)
         val from = todayStart(cfg, now, zone) - 3 * 60 * 60_000L
-        return sessions.any { DayClock.dateKey(it.startedAt, zone) == today && !it.active && it.startedAt >= from }
+        return sessions.any {
+            DayClock.dateKey(it.startedAt, zone) == today && !it.active && it.startedAt >= from &&
+                !(it.trigger == HqTrigger.UNANSWERED && it.early)
+        }
     }
 
     enum class Due { NONE, SOON, NOW, OVERDUE }

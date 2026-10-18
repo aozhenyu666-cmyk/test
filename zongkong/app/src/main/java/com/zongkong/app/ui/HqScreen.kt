@@ -141,6 +141,13 @@ fun HqScreen(nav: NavHostController) {
     var finished by remember { mutableStateOf<String?>(null) }
     // 封存会移除 HqRun，验收协程必须由仍在显示的总控页持有。
     val finishScope = rememberCoroutineScope()
+    // 页面本身也兜底收掉到时的强督导，避免后台服务掉线后一直留在不可返回的页面。
+    LaunchedEffect(session?.id, session?.endsAt) {
+        if (session?.trigger == HqTrigger.UNANSWERED) {
+            kotlinx.coroutines.delay((session.endsAt - System.currentTimeMillis()).coerceAtLeast(0))
+            com.zongkong.app.system.TakeoverRunner.check(app)
+        }
+    }
     // 总控时间里按返回键不离开（做完才解锁）
     BackHandler(enabled = session != null && now >= session.suspendedUntil) {}
     NightSky(Modifier.fillMaxSize().testTag("hq-screen")) {

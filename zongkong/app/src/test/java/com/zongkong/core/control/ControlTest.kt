@@ -188,6 +188,16 @@ class ControlTest {
         assertTrue(Engine.evaluate(config(gate()), DayLog(date), s.endsAt, ZONE, session = s).strict)
     }
 
+    @Test fun unfinishedForcedRoundDoesNotSilentlyReplaceTheNightlyReview() {
+        val start = at(20)
+        val s = Hq.start("h", HqTrigger.UNANSWERED, HqConfig(), start, 20)
+        val ended = Hq.exitEarly(s, s.endsAt, "本轮到时，仍有未完成项")
+        assertFalse(Hq.doneToday(HqConfig(), listOf(ended), at(21, 36), ZONE))
+        assertEquals(Hq.Due.OVERDUE, Hq.due(HqConfig(), listOf(ended), at(21, 36), ZONE))
+        val completed = Hq.finish(s, s.endsAt, "已完成所有环节")
+        assertTrue(Hq.doneToday(HqConfig(), listOf(completed), at(21, 36), ZONE))
+    }
+
     @Test fun summaryIncludesAllGatesAndUnresolvedPastDayDeferrals() {
         val tomorrow = at(22, date = LocalDate.parse(date).plusDays(1))
         val g = gate("hq_review").copy(title = "每晚总结报告")
