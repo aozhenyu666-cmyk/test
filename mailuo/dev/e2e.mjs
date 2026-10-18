@@ -52,30 +52,46 @@ await page.click('[data-testid=seed]');
 await page.waitForSelector('.toast');
 let f = await files();
 check(Object.keys(f).some((p) => p === '思维问题/思维问题.md'), '体系文件 思维问题/思维问题.md 已写入');
-check(!!f['思维问题/根因/下一问没有产生.md'], '层级 = 子文件夹（思维问题/根因/下一问没有产生.md）');
-const rootA = f['思维问题/根因/下一问没有产生.md'];
+check(!!f['思维问题/下一问没有产生.md'], '节点文件扁平存放（思维问题/下一问没有产生.md）');
+const rootA = f['思维问题/下一问没有产生.md'];
 const metaA = yamlLoad(rootA.split('---')[1]);
 check(metaA.links.some((l) => l.type === '对立' && l.to === 'n-0007'), '两个竞争根因建立了「对立」关系');
-check(metaA.verify && yamlLoad(f['思维问题/根因/单步成本高、停止信号来得早.md'].split('---')[1]).verify, '两个根因各填了验证方式');
+check(metaA.verify && yamlLoad(f['思维问题/单步成本高、停止信号来得早.md'].split('---')[1]).verify, '两个根因各填了验证方式');
 check(rootA.includes('- 对立 [[单步成本高、停止信号来得早]]'), '正文写了 Obsidian 双链');
 await page.goto(ORIGIN + '/#/');
 await page.waitForSelector('[data-testid=usage]');
 await shot('02-today');
 
-// ---------- 树视图 + 拖动改父级 ----------
+// ---------- 链条视图 + 拖动挂载 ----------
 await page.goto(ORIGIN + '/#/tree');
-await page.waitForSelector('.lv-head');
+await page.waitForSelector('.chain-tree');
 await shot('03-tree');
-const grip = page.locator('.node-row[data-id="n-0003"] .grip');
-const target = page.locator('.lv-head[data-drop="思维问题|加工层"]');
-const gb = await grip.boundingBox(), tb = await target.boundingBox();
-await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2);
-await page.mouse.down();
-await page.mouse.move(tb.x + 60, tb.y + tb.height / 2, { steps: 8 });
-await page.mouse.up();
-await page.waitForFunction(async () => (await window.__mailuo.vault.list()).includes('思维问题/加工层/依据缺失.md'));
+const drag = async (id, targetId) => {
+  const grip = page.locator('.node-row[data-id="' + id + '"] .grip');
+  const target = page.locator('[data-drop="node:' + targetId + '"]');
+  await grip.scrollIntoViewIfNeeded();
+  const gb = await grip.boundingBox(), tb = await target.boundingBox();
+  await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2, { steps: 8 });
+  await page.mouse.up();
+};
+await drag('n-0101', 'n-0007');
+await page.waitForFunction(async () => (await window.__mailuo.vault.read(window.__mailuo.store.nodes.get('n-0101').path)).includes('under: n-0007'));
+check(true, '拖动规到论：under 写入目标节点');
+await page.evaluate(async () => {
+  const { blankNode } = await import('/js/model.js');
+  await window.__mailuo.store.saveNode(blankNode({id:'n-0102', title:'挂载校验用规', type:'规', system:'思维问题', under:'n-0006'}));
+});
+await page.reload();
+await page.waitForSelector('.chain-tree');
+await drag('n-0101', 'n-0102');
+await page.waitForSelector('.toast');
 f = await files();
-check(!!f['思维问题/加工层/依据缺失.md'] && !f['思维问题/检验层/依据缺失.md'], '拖动改父级：文件移到新层级文件夹');
+check(Object.values(f).some((t) => t.includes('id: n-0101') && t.includes('under: n-0007')), '规不能挂在另一条规下面，原挂载保留');
+check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), '390px 链条视图无横向滚动');
+
+await page.evaluate(() => window.__mailuo.store.deleteNode('n-0102'));
 
 // ---------- 录入与拆分 ----------
 await page.goto(ORIGIN + '/#/capture');
@@ -98,7 +114,7 @@ await page.click('[data-testid=commit]');
 await page.waitForSelector('.toast');
 check(await page.evaluate(() => window.__mailuo.store.nodes.size) === 11, '写入 2 个新节点 + 1 个合并（共 11 个节点）');
 f = await files();
-const merged = yamlLoad(f['思维问题/加工层/第一反应停止.md'].split('---')[1]);
+const merged = yamlLoad(f['思维问题/第一反应停止.md'].split('---')[1]);
 check(merged.keywords.length <= 5, '合并：激活词并入已有节点（≤ 5 个）');
 const shu = Object.entries(f).find(([p]) => p.endsWith('/舒缓感.md'));
 check(shu && shu[1].includes('导致 [[第一反应停止]]'), '新节点的关系指向合并后的已有节点，并写成双链');
@@ -280,7 +296,7 @@ check(calls.at(-1).sys.includes('激活词生成器') && calls.at(-1).model === 
 await page.goto(ORIGIN + '/#/tree');
 await page.click('[data-testid=copy-outline]');
 const outline = await page.evaluate(() => navigator.clipboard.readText());
-check(outline.startsWith('# 思维问题') && outline.includes('**第一反应停止**') && outline.includes('对立→'), '复制体系大纲（含层级、结论、激活词、关系）');
+check(outline.startsWith('# 思维问题') && outline.includes('[论 60%] 第一反应停止') && outline.includes('[问]') && outline.includes('对立→'), '复制体系大纲（含问论规链条、结论、激活词、关系）');
 
 // ---------- 新增：类比候选一键建「类似」、重复节点合并、本周回顾 ----------
 await page.goto(ORIGIN + '/#/node/n-0006');

@@ -416,3 +416,16 @@ details.manual > .btn.block { width: calc(100% - 32px); }
 .weekly .stat .s { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
 .weekly .stat + .stat { border-left: 1px solid var(--line); }
 .link-cand input[type=radio] { width: 18px; height: 18px; accent-color: var(--ink); flex: none; }
+
+/* V2 挂载链条 */
+.chain-body { margin-left: 0; padding-left: 14px; border-left: 1px solid var(--line-2); }
+.chain-node { min-width: 0; }
+.chain-node.closed > .chain-body { display: none; }
+.chain-node.closed > .node-row .chain-toggle { transform: rotate(-90deg); }
+.chain-toggle { width: 22px; flex-shrink: 0; }
+.chain-tree .node-row { gap: 6px; padding: 10px 4px; }
+.chain-tree .node-row .body { min-width: 0; }
+.chain-tree .node-row .iconbtn { width: 24px; flex-shrink: 0; }
+.rule-row { border-left: 2px solid var(--accent); }
+.paused { opacity: .55; }
+.node-row .title .pill { margin-left: 6px; }
