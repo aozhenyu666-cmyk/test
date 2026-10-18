@@ -4,12 +4,12 @@
 
 ## 一句话架构
 
-一手里有一个**会话控制器**。**导演**（用户配置的强文字模型）每隔几轮写一张很短的**导演卡**；**嘴耳层**（Gemini Live API 实时语音，或一手现有的听写 → 模型 → 朗读链路）照着导演卡说话。**执行器**监视前台应用、管计时通知；路线 A 里它负责拉起 Gemini App。**记忆**是一手已有的数据：主线断点、收线句、棋谱（`echo` 表）、题库、海龟汤。
+一手里有一个**会话控制器**。**导演**（用户配置的强文字模型）每隔几轮写一张很短的**导演卡**；**嘴耳层**（本机流式听写 → 聊天模型 → 流式朗读；不用 Gemini Live）照着导演卡说话，要看屏幕时才调识图模型。**执行器**监视前台应用、管计时通知；路线 A 里它负责拉起 Gemini App。**记忆**是一手已有的数据：主线断点、收线句、棋谱（`echo` 表）、题库、海龟汤。
 
 新代码放在两个包里：
 
 - `com.yishou.app.partner`：会话计划、在场统计、导演、控制器（纯逻辑，可在 JVM 上测）。
-- `com.yishou.app.voice`：和实时语音接口的连接、录音和播放（Android 部分）。
+- `com.yishou.app.voice`：本机听写、说完检测、流式朗读（Android 部分）。
 
 ## 伙伴的行为（所有任务共同遵守）
 
@@ -78,41 +78,43 @@
 
 **完成标准**：解析、本机兜底、到点强制收、请求截断都有测试。
 
-## 任务 T4：Live 连接
+## 任务 T4：语音链路（本机听写 + 流式回复 + 流式朗读）
 
-**先联网核对官方文档**（Gemini Live API 的 WebSocket 地址、setup / realtimeInput / clientContent / toolResponse 消息格式、当前可用的原生音频模型名、会话时长限制、会话恢复、上下文压缩、打断事件、输入输出转写），把链接和结论写进 PR 说明。不能联网就停下说明，不要凭记忆写协议。
+不用 Gemini Live。一轮对话 = 本机听写出一句 → 聊天模型流式回一两句 → 第一句出来就开始朗读。
 
-1. `voice/LiveLink.kt` 接口：`connect(system: String, tools: List<ToolSpec>)`、`sendAudio(pcm16k: ByteArray)`、`sendText(text: String, speak: Boolean)`（speak=false 用于把导演卡作为上下文送进去、不要求它立刻回话；官方不支持就在 PR 里写清用什么替代）、`sendToolResult(id, result)`、`close()`；事件 `Flow<LiveEvent>`：`AudioOut`、`InputText`、`OutputText`、`ToolCall`、`Interrupted`、`TurnDone`、`GoAway`、`Closed(reason)`。
-2. `voice/GeminiLive.kt`：OkHttp WebSocket 实现；消息的拼装和解析写成纯函数（`voice/LiveProtocol.kt`），用官方文档里的示例 JSON 写单元测试。不引入 Firebase。
-3. 音频：`AudioRecord` 16 kHz 单声道 16 位；`AudioTrack` 24 kHz；有 `AcousticEchoCanceler` 就开。收到 `Interrupted`、或本机 VAD（`speech/Vad.kt`）在播放中听到用户开口 → 立刻停播并清空缓冲。
-4. 收到 `GoAway` 或断线：带会话恢复句柄重连，最多 3 次；重连后由控制器重发最近一张导演卡。
-5. 设置里加“实时语音”一节：API Key（加密保存）、模型名；加一个“实时语音测试”页：连上、说话、看两边的转写。
+1. **耳朵**：`voice/Ears.kt` 接口（`start()`、`stop()`、事件 `Flow<EarEvent>`：`Partial(text)`、`Final(text)`、`SpeechStart`、`SpeechEnd`）。两个实现：
+   - `SherpaEars`：用 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)（Apache-2.0，有 Kotlin API）做本机流式中文识别 + Silero VAD。先联网核对 sherpa-onnx 当前的 Android 集成方式和推荐的中文流式模型（中英双语流式 Zipformer 或流式 Paraformer），写进 PR 说明。模型不打进 APK：设置里点“下载本机听写模型”才从 sherpa-onnx 的 GitHub 发布页下载到应用私有目录，界面写明大小和来源。
+   - `SystemEars`：包一层现有的 `speech/VoiceInput`，作为没下载模型时的兜底。
+2. **说完检测**（纯逻辑 `voice/TurnEnd.kt`，重点写测试）：不能一停顿就当说完——用户边想边说。规则：句子完整（有句末语气或标点、不是以“然后、就是、那个、嗯、因为”结尾）静音 0.8 秒算说完；不完整的放宽到 2.5 秒；说了“我想想”“等一下”放宽到 8 秒；任何时候说“好了”“说完了”立刻算完。
+3. **流式回复**：`llm/ChatClient.kt` 加流式请求（`stream: true`，解析 SSE），纯函数 `llm/Sse.kt` 有测试。`voice/Sentences.kt` 把流切成句子（。！？；或超过 30 字的逗号处），出一句交一句给朗读。
+4. **嘴巴**：复用 `window/Speaker.kt`（语音接口或系统朗读），加一个句子队列。
+5. **打断**：朗读中本机 VAD 听到用户开口超过 0.3 秒 → 立刻停朗读、取消还在路上的模型请求、清空队列，转去听。录音源用 `VOICE_COMMUNICATION` 并开回声消除；建议戴耳机（界面提示一次）。
+6. 设置里加“语音伙伴”一节：说话用的模型（快、便宜）和导演用的模型（强）可以分开填，都走用户已配置的接口；加一个“语音测试”页：说话、看实时字幕、看每轮耗时（说完 → 第一个字出声）。
 
-**不要做**：持续推视频；后台常开麦克风；存录音。
+**不要做**：后台常开麦克风；存录音；把模型打进 APK。
 
-**完成标准**：协议纯函数有测试；PR 里写真机验收步骤（说完到开口的延迟、插话能否打断）。
+**完成标准**：`TurnEnd`、`Sse`、`Sentences` 有测试；PR 里写真机验收步骤（说完到出声的耗时、插话能否打断、边想边说会不会被抢话）。
 
 ## 任务 T5：会话控制器
 
-依赖 T3、T4。**新文件** `partner/Controller.kt`（纯逻辑，时钟和连接都注入），`ui/PartnerLiveScreen.kt`，测试 `partner/ControllerTest.kt`。
+依赖 T3、T4。**新文件** `partner/Controller.kt`（纯逻辑，时钟、耳朵、模型都注入），`ui/PartnerScreen.kt`，测试 `partner/ControllerTest.kt`。
 
 - 状态：`OPEN → ACCOMPANY ⇄ PROBE → CLOSE → ENDED`，另有 `PULLBACK`（闲聊超两轮或导演要求拉回）。
-- 输入：用户整句转写、伙伴说完、每秒时钟、导演卡到达、工具调用。输出：给连接的动作（送导演卡、说钩子、送工具结果、结束）。
+- 输入：用户说完的一句（T4 的 `Final`）、伙伴说完、每秒时钟、导演卡到达。输出：动作（请求说话模型、说钩子、请求导演、结束）。
 - 没接的阶梯：伙伴在 PROBE 里问完 20 秒内用户没开口 → 第 1 次用钩子缩短重问；第 2 次要求二选一；第 3 次记 `missed += 1` 回 ACCOMPANY。ACCOMPANY 里安静不算没接。
 - 导演节奏：每 3 轮用户发言或 90 秒请求一次导演卡，同时最多一个在路上；导演失败用本机卡。
 - 计时：到时长进 CLOSE，只问收线两问；把用户回答写进 `partner_session`（T2 的表，route = "live"）和回响队列。
-- 给实时模型声明的工具：`note(text)`（记一句用户自己说出的判断）、`ask_director()`、`start_soup()`、`end_session()`。
-- 实时模型的系统提示：伴读设定（T1 的开场白那段）+ “你会不时收到以【导演卡】开头的文字，照着它推进，不要把导演卡念出来，不要说你收到了导演卡。”
-- 备用链路：没有实时语音 Key 时，同一个控制器接一手现有的 `VoiceInput` + `ChatClient` + `Speaker`。
+- 用户话里的指令由本机识别（复用 `speech/VoiceCommands.kt` 的写法）：“来一锅”→ 海龟汤，“看一下”→ T7，“结束 / 今天到这”→ 收线，“逼紧一点 / 放松点”→ 换强度。
+- 说话模型每轮的请求 = 伙伴设定（T1 的开场白那段）+ 当前导演卡 + 最近 8 轮对话；要求只回一两句、口语、不念导演卡。导演卡不念出来。
 - 界面：剩余时间、强度、最近 4 行转写、一个大“停”按钮；麦克风类型的前台服务和常驻通知（通知里也有“停”）。
 
-**完成标准**：阶梯、导演节奏、到点收线、工具处理、断线重发导演卡都有测试（假连接 + 假时钟）。
+**完成标准**：阶梯、导演节奏、到点收线、指令识别都有测试（假耳朵、假模型、假时钟）。
 
 ## 任务 T6：语音海龟汤和语音刷题
 
 依赖 T5。
 
-- `start_soup` 或用户说“来一锅”：控制器进 SOUP 模式，用 `soup/Soup.kt` 的 `SoupSession` 和 `YishouApp.soupHost` 判；用户的话以“我猜”开头走 `guess`，否则走 `ask`；判出来的结果让实时模型**只念那几个字**（“是 / 不是 / 部分是 / 无关 / 这不是是非题，换个问法”）。问够或猜中后念 ABCD，用户说字母 → `pick`，用锁死的答案核对。实时模型自己不判。
+- `start_soup` 或用户说“来一锅”：控制器进 SOUP 模式，用 `soup/Soup.kt` 的 `SoupSession` 和 `YishouApp.soupHost` 判；用户的话以“我猜”开头走 `guess`，否则走 `ask`；判出来的结果**只朗读那几个字**（“是 / 不是 / 部分是 / 无关 / 这不是是非题，换个问法”）。问够或猜中后念 ABCD，用户说字母 → `pick`，用锁死的答案核对。聊天模型自己不判。
 - 刷题：用 `CardSession` 先说再选：念题干，用户先说答案和思路，再念选项，用户说字母，一手判对错。
 - 结果照原样记进 `soup` 表 / 题卡记录。
 
@@ -120,6 +122,6 @@
 
 ## 任务 T7：看一眼
 
-依赖 T5。用户说“看一下”“看看屏幕”或模型调用 `look()`：用 `look/` 里现有的屏幕授权流程取一帧，缩到最长边 1280、JPEG，作为一张图片送进实时会话一次。没有授权就提示去授权，不自己弹系统窗口以外的东西。从不定时截图，图片不落盘。
+依赖 T5。用户说“看一下”“看看屏幕”：用 `look/` 里现有的屏幕授权流程取一帧，缩到最长边 1280、JPEG，交给用户配置的识图模型（`YishouApp.vision`）写一段不超过 150 字的“屏幕上是什么”，放进导演和说话模型的上下文；伙伴据此接着聊。没有授权就提示去授权，不自己弹系统窗口以外的东西。从不定时截图，图片不落盘。
 
 **完成标准**：触发词识别有测试；PR 里写真机验收步骤（看网课时说“看一下”，它能说出屏幕上的内容）。
