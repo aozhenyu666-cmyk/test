@@ -1069,12 +1069,18 @@ class LoopTest {
         val bj = app.store.zone
         val rnd = kotlin.random.Random(10)
         fun at(min: Long) = fmt.format(java.time.Instant.ofEpochMilli(now + min * 60_000L).atZone(bj))
-        app.store.updateConfig { it.copy(earn = com.zongkong.core.EarnConfig(), dailyQuotaMin = 120) }
+        // 只测部署、欠账与预算；晚上其他关卡超时不应遮住本场景要验证的首页提示。
+        // 宽限设为 0，30 分钟宽限由 EarnTest 验证，避免凌晨刚换日时没有足够的当天历史。
+        val planGate = com.zongkong.core.Defaults.gates().first { it.id == com.zongkong.app.data.Actions.PLAN_GATE }
+        app.store.updateConfig { it.copy(gates = listOf(planGate), earn = com.zongkong.core.EarnConfig(mainGraceMinutes = 0), dailyQuotaMin = 120) }
+        app.store.updateToday(now) { com.zongkong.core.DayLog(it.date) }
         app.store.updatePlans { com.zongkong.core.plan.PlanBook() }
+        val dayStart = com.zongkong.core.DayClock.startOf(com.zongkong.core.DayClock.date(now, bj), bj)
+        val plannedStart = fmt.format(java.time.Instant.ofEpochMilli(maxOf(now - 50 * 60_000L, dayStart)).atZone(bj))
         var key = ""
         app.store.updateWork { w0 ->
             val (w1, t) = com.zongkong.core.work.WorkOps.create(w0, com.zongkong.core.work.Kind.THREAD, mapOf(F.TITLE to "行测提分", F.WHY to "笔试", F.CRITERIA to "75 分"), now, rnd)
-            val (w2, a) = com.zongkong.core.work.WorkOps.create(w1, com.zongkong.core.work.Kind.ACTION, mapOf(F.TITLE to "资料分析 20 题", F.THREAD to t.key, F.CRITERIA to "做完对答案", F.PLAN to com.zongkong.core.work.Plan(at(-50), at(-10)).encode()), now, rnd)
+            val (w2, a) = com.zongkong.core.work.WorkOps.create(w1, com.zongkong.core.work.Kind.ACTION, mapOf(F.TITLE to "资料分析 20 题", F.THREAD to t.key, F.CRITERIA to "做完对答案", F.PLAN to com.zongkong.core.work.Plan(plannedStart, at(30)).encode()), now, rnd)
             key = a.key
             w2
         }
