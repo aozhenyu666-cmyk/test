@@ -532,6 +532,7 @@ export function sharedKeywords(a, b) {
 export function findDuplicate(cand, store) {
   let best = null;
   for (const n of store.nodes.values()) {
+    if (normalizeType(cand.type) !== n.type || cand.under === n.id) continue;
     const sim = titleSim(cand.title, n.title);
     const kw = sharedKeywords(cand.keywords, n.keywords);
     const contains = cand.title && n.title && (cand.title.includes(n.title) || n.title.includes(cand.title));
@@ -570,4 +571,26 @@ export function findAnalogies(id, store, limit = 5) {
     if (reasons.length) res.push({ node: o, reasons, score: kw.length + (reasons.length > 1 ? 2 : 1) });
   }
   return res.sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
+// 应用批阅通过的调整，返回副本，由调用方保存；驳回、待定和失效目标均不改库。
+export function applyAdjust(store, proposal, { date = today() } = {}) {
+  if (proposal.state !== 'accepted') return [];
+  const target = store.nodes.get(proposal.target);
+  if (!target || target.type === '问') return [];
+  const requested = Number(proposal.to_final ?? proposal.to);
+  if (!Number.isFinite(requested)) return [];
+  const to = Math.max(0, Math.min(100, requested));
+  const result = [{ ...target, confidence: to, checks: [...target.checks, {
+    date, kind: '调整', source: '录入', from: target.confidence ?? 50, to, result: proposal.reason || '',
+  }] }];
+  const descendants = new Set(store.descendants(target.id).filter((n) => n.type === '规').map((n) => n.id));
+  for (const id of new Set(proposal.pause_selected ?? proposal.pause_rules ?? [])) {
+    const n = store.nodes.get(id);
+    if (!n || n.paused || !descendants.has(id)) continue;
+    result.push({ ...n, paused: true, checks: [...n.checks, {
+      date, kind: '暂停', source: '录入', result: '上游【' + target.title + '】降到 ' + to + '%',
+    }] });
+  }
+  return result;
 }
