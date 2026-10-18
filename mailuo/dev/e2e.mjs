@@ -174,6 +174,7 @@ check(await page.locator('[data-testid=cand]').first().locator('.kw').count() ==
 
 // 左滑丢弃一张候选卡
 const card = page.locator('[data-testid=cand]').nth(1);
+await card.scrollIntoViewIfNeeded();
 const cb = await card.boundingBox();
 await page.mouse.move(cb.x + cb.width / 2, cb.y + 40);
 await page.mouse.down();
