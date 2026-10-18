@@ -346,14 +346,15 @@ export class Store {
   }
   // 能不能把 childId 挂到 parentId 下面；能挂返回 ''，否则返回原因
   canMount(childId, parentId) {
-    const c = this.nodes.get(childId);
+    const c = typeof childId === 'object' ? childId : this.nodes.get(childId);
     if (!c) return '节点不存在';
+    childId = c.id;
     if (!parentId) return '';
     const p = this.nodes.get(parentId);
     if (!p) return '目标节点不存在';
     if (childId === parentId) return '不能挂在自己下面';
     if (!MOUNT_RULES[c.type].includes(p.type)) return '「' + c.type + '」只能挂在「' + MOUNT_RULES[c.type].join(' / ') + '」下面';
-    if (this.descendants(childId).some((d) => d.id === parentId)) return '不能挂到自己的下级下面（会成环）';
+    if (childId && this.descendants(childId).some((d) => d.id === parentId)) return '不能挂到自己的下级下面（会成环）';
     return '';
   }
   async mount(childId, parentId) {

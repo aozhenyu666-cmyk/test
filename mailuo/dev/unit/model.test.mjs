@@ -115,3 +115,12 @@ test('代码里直接构造的不完整节点也能保存（saveNode 自动补�
   assert.deepEqual(n.pillars, []);
   assert.deepEqual(n.sentinels, []);
 });
+
+test('挂载选择器校验新节点和编辑中的类型，不修改已存节点', async () => {
+  const s = await makeStore(chain);
+  assert.equal(s.canMount({id:'', type:'规'}, 'l1'), '');
+  assert.match(s.canMount({id:'', type:'规'}, 'r1'), /只能挂在/);
+  assert.equal(s.canMount({...s.nodes.get('q2'),type:'论'},'l1'), '');
+  assert.match(s.canMount({...s.nodes.get('l1'),type:'问'},'l2'), /只能挂在/);
+  assert.equal(s.nodes.get('q2').type,'问');
+});

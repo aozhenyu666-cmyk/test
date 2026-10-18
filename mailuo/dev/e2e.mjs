@@ -131,7 +131,28 @@ check(yamlOk, '所有文件的 YAML 头都能被标准解析器读取');
 // ---------- 提问：打包 ≤ 1500 token、可预览、对立自动带「如何区分」 ----------
 await page.goto(ORIGIN + '/#/node/n-0006');
 await page.waitForSelector('[data-testid=ask]');
+check((await page.textContent('.slots')).includes('反方盲区') && await page.locator('.slots .sentinel').count() === 2 && (await page.textContent('.slots')).includes('+10'), '论详情展示盲区与两条有分值的验证哨');
 await shot('05-node');
+await page.click('button[aria-label="编辑"]');
+await page.click('[data-testid=add-sentinel]');
+await page.locator('.sentinel-edit').last().locator('input').first().fill('连续三天卡住都写了下一问');
+await page.locator('.sentinel-edit').last().locator('input[type=number]').fill('5');
+await page.click('.sheet button:text-is("保存")');
+await page.waitForFunction(async () => {
+  const n=window.__mailuo.store.nodes.get('n-0006');
+  return (await window.__mailuo.vault.read(n.path)).includes('连续三天卡住都写了下一问, delta: 5');
+});
+check(true, '编辑验证哨后现象和 delta: 5 写回文件');
+await page.goto(ORIGIN + '/#/node/n-0101');
+await page.waitForSelector('.slots');
+check((await page.textContent('.slots')).includes('触发场景') && (await page.textContent('.slots')).includes('破戒代价'), '规详情展示触发场景和破戒代价');
+await shot('05b-rule');
+await page.click('button[aria-label="编辑"]');
+await page.click('.mount-picker summary');
+check(await page.locator('[data-testid=mount-list] .node-row[data-id="n-0101"]').count() === 0 && !await page.locator('[data-testid=mount-list] .glyph').evaluateAll((els) => els.some((e) => e.textContent === '规')), '挂载选择器不列出自己或任何规');
+await page.evaluate(() => window.__mailuo.back());
+await page.goto(ORIGIN + '/#/node/n-0006');
+await page.waitForSelector('[data-testid=ask]');
 await page.click('[data-testid=ask]');
 await page.fill('[data-testid=question]', '这两个根因哪个更可能是真的？');
 const tokens = +(await page.textContent('[data-testid=pack-tokens]')).split('/')[0];
