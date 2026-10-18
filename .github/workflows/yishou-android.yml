@@ -41,7 +41,9 @@ jobs:
       # 固定下载地址（手机浏览器直接打开即可下载，始终是最新一次构建）：
       # 主线 https://github.com/aozhenyu666-cmyk/test/releases/download/yishou-latest/yishou.apk
       # 岔路 https://github.com/aozhenyu666-cmyk/test/releases/download/yishou-latest/yishou-chalu.apk
+      # 只有主开发分支发布；别的分支（比如编码代理开的 PR 分支）只跑测试和打包，不覆盖下载地址
       - name: Publish to release yishou-latest
+        if: github.ref == 'refs/heads/ccr-a5172662-j1jcik'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
