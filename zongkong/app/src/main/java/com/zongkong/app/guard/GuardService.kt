@@ -181,7 +181,8 @@ class GuardService : AccessibilityService() {
             Log.i(TAG, "失联太久，打开 $pkg 时进入总控时间")
             session = zk.actions.hq.start(com.zongkong.core.hq.HqTrigger.ESCALATION)
         }
-        if (session == null) return false
+        if (session == null || now < session.suspendedUntil) return false
+        if (session.trigger == com.zongkong.core.hq.HqTrigger.UNANSWERED && now >= session.endsAt) return false
         if (com.zongkong.core.hq.Hq.allows(pkg, packageName, cfg, overlays())) return false
         if (now - lastBounce < 1500) return true
         lastBounce = now

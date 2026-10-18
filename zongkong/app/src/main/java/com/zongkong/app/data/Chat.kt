@@ -103,6 +103,7 @@ class ChatRepo(private val context: Context, private val store: Store, private v
         override val rnd: Random = Random.Default
         override fun now() = System.currentTimeMillis()
         override fun config(): Config = store.config.value
+        override fun controlBook(): com.zongkong.core.control.ControlBook = store.control.value
         override fun updateConfig(f: (Config) -> Config): Config = store.updateConfig(f)
         override fun work(): Work = store.work.value
         override fun updateWork(f: (Work) -> Work): Work = store.updateWork(f)
@@ -396,6 +397,7 @@ class ChatRepo(private val context: Context, private val store: Store, private v
             if (!quiet && (cfg.voice.speakProactive || cfg.hq.speak || loud)) com.zongkong.app.system.Voice.speak(context, body)
             // 记下这次主动询问：2 小时不回，信用 −3（睡觉时段发的不算）
             if (!quiet) store.updateDossier { com.zongkong.core.boss.Boss.asked(it, ASK_KINDS[kind] ?: kind, System.currentTimeMillis()) }
+            if (!quiet) com.zongkong.app.system.TakeoverRunner.offered(context, ASK_KINDS[kind] ?: kind)
             com.zongkong.app.system.PetWidget.refresh(context)
         }
         return true

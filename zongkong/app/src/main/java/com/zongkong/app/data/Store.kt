@@ -224,6 +224,21 @@ class Store(private val context: Context) {
         next
     }
 
+    // ---------- 强督导与缓行 ----------
+
+    private val _control = MutableStateFlow(loadJson("control.json", com.zongkong.core.control.ControlBook.serializer()) ?: com.zongkong.core.control.ControlBook())
+    val control: StateFlow<com.zongkong.core.control.ControlBook> = _control.asStateFlow()
+
+    fun updateControl(f: (com.zongkong.core.control.ControlBook) -> com.zongkong.core.control.ControlBook): com.zongkong.core.control.ControlBook = synchronized(workLock) {
+        val next = f(_control.value)
+        if (next != _control.value) {
+            _control.value = next
+            val text = ZkJson.encodeToString(com.zongkong.core.control.ControlBook.serializer(), next)
+            io.execute { writeAtomic(File(dir, "control.json"), text) }
+        }
+        next
+    }
+
     // ---------- 账本（试验） ----------
 
     private val _ledger = MutableStateFlow(loadJson("ledger.json", com.zongkong.core.ledger.LedgerBook.serializer()) ?: com.zongkong.core.ledger.LedgerBook())
@@ -366,7 +381,7 @@ class Store(private val context: Context) {
 
     fun status(now: Long = System.currentTimeMillis()): Status {
         refresh(now)
-        return Engine.evaluate(_config.value, _today.value, now, zone, focusLock(now), _hq.value.active, absence(now))
+        return Engine.evaluate(_config.value, _today.value, now, zone, focusLock(now), _hq.value.active, absence(now), _control.value)
     }
 
     fun updateConfig(f: (Config) -> Config): Config = synchronized(lock) {

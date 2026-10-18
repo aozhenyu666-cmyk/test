@@ -46,6 +46,7 @@ object Reminders {
         HqRunner.check(context)
         // 主动性：判断现在该不该主动来找人（收集箱欠账、退避、每日上限都在 core 里算）
         InitiativeRunner.check(context)
+        TakeoverRunner.check(context)
     }
 
     /** 把系统闹钟定到下一个提醒时刻。 */
@@ -63,6 +64,7 @@ object Reminders {
                 Focus.alarmTimes(app.store.work.value, now, app.store.zone).firstOrNull(),
                 HqRunner.nextAlarm(context, now),
                 InitiativeRunner.nextAlarm(context, now),
+                TakeoverRunner.nextAlarm(context, now),
             ).minOrNull() ?: return
             val exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am.canScheduleExactAlarms()
             if (exact) {

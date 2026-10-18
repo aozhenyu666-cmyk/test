@@ -155,6 +155,8 @@ data class Config(
     val directives: List<com.zongkong.core.plan.Directive> = emptyList(),
     /** 主动性：什么时候该主动来找你（信息收集部的周期拉取、退避、每日上限）。 */
     val initiative: InitiativeConfig = InitiativeConfig(),
+    /** 无回应后的强督导：首次使用在界面中明确开启。 */
+    val takeover: com.zongkong.core.control.TakeoverConfig = com.zongkong.core.control.TakeoverConfig(),
 )
 
 /** 对话的设置。 */
@@ -320,6 +322,10 @@ data class PendingChange(
 
 @Serializable
 sealed class ChangeOp {
+    @Serializable
+    @SerialName("takeover")
+    data class Takeover(val config: com.zongkong.core.control.TakeoverConfig) : ChangeOp()
+
     @Serializable
     @SerialName("put_gate")
     data class PutGate(val gate: Gate) : ChangeOp()

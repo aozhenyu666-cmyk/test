@@ -74,6 +74,7 @@ class LoopTest {
             )
         }
         app.store.updateHq { com.zongkong.core.hq.HqBook() }
+        app.store.updateControl { com.zongkong.core.control.ControlBook() }
         app.store.updateDossier { com.zongkong.core.boss.Dossier() }
         app.store.updateVein { com.zongkong.core.vein.Vein() }
         app.store.updateIntake { com.zongkong.core.info.IntakeBook() }
@@ -506,6 +507,59 @@ class LoopTest {
      * 总控时间：进入 → 静 → 收（清收集箱）→ 谋（没接 AI：四问自己憋）→ 筹（定明天主线）→ 行（对账）→ 封。
      * 进行中按返回键不走；封存后记一条验收记录、解锁。
      */
+    @Test
+    fun oneDeferralKeepsTheTaskAndExpiresWithoutPassingIt() {
+        val id = "grace-${System.currentTimeMillis()}"
+        val gate = com.zongkong.core.Gate(
+            id = id, dept = com.zongkong.core.Dept.HQ, title = "测试每晚总结报告", instruction = "列清未完成事项",
+            openAt = 4 * 60, deadline = 4 * 60 + 1, block = com.zongkong.core.BlockMode.FROM_OPEN,
+            verify = com.zongkong.core.VerifyMode.TEXT, minChars = 10,
+        )
+        app.store.updateConfig { it.copy(gates = listOf(gate), initiative = it.initiative.copy(enabled = false)) }
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, "gate/$id"))
+        waitText("用今日一次缓行")
+        compose.onNode(hasText("用今日一次缓行", substring = true)).performScrollTo().performClick()
+        waitText("这项先缓一缓")
+        compose.onNode(hasText("使用一次缓行")).performClick()
+        waitText("已延后 30 分钟")
+        assertEquals(1, app.store.control.value.deferrals.size)
+        assertTrue(app.store.today.value.passed(id) == null)
+        assertTrue(!app.store.status().gates.single().blocking)
+        assertTrue(app.actions.control.deferGate(id) != null)
+        val report = com.zongkong.core.plan.DayReport.text(app.actions.dayReport())
+        assertTrue(report, report.contains(gate.title) && report.contains("仍待补交"))
+        shot("e2e-38-grace-gate")
+        app.store.updateControl { b -> b.copy(deferrals = b.deferrals.map { it.copy(until = System.currentTimeMillis() - 1) }) }
+        assertTrue(app.store.status().gates.single().blocking)
+        assertTrue(app.store.today.value.passed(id) == null)
+        val result = runBlocking { app.actions.submitDeferred(app.store.control.value.deferrals.single().id, "今天的行动还未全部完成，明天先处理遗留的材料整理工作。") }
+        assertTrue(result.toString(), result is com.zongkong.app.data.Actions.SubmitResult.Judged && result.verdict.pass)
+        assertTrue(app.store.control.value.deferrals.single().resolvedAt > 0)
+        assertTrue(app.store.today.value.passed(id) != null)
+        assertTrue(app.actions.control.deferGate(id) != null)
+    }
+
+    @Test
+    fun hqGraceCanResumeWithoutSpendingAnotherPass() {
+        app.store.updateConfig { it.copy(gates = emptyList(), initiative = it.initiative.copy(enabled = false)) }
+        val session = app.actions.hq.start(com.zongkong.core.hq.HqTrigger.UNANSWERED, 20)
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, "hq"))
+        waitText("用今日一次缓行")
+        compose.onNode(hasText("用今日一次缓行", substring = true)).performClick()
+        waitText("这项先缓一缓")
+        compose.onNode(hasText("使用一次缓行")).performClick()
+        waitText("总控时间暂时缓行")
+        assertTrue(!app.store.status().strict)
+        assertTrue(app.store.hq.value.active!!.endsAt >= session.endsAt + 29 * 60_000)
+        shot("e2e-39-grace-hq")
+        compose.onNode(hasText("现在继续")).performClick()
+        waitFor(hasTestTag("hq-step"), 5_000, "恢复后的总控环节")
+        assertTrue(app.store.status().strict)
+        assertEquals(0L, app.store.hq.value.active!!.suspendedUntil)
+        assertEquals(1, app.store.control.value.deferrals.size)
+        assertTrue(app.actions.hq.exitEarly("再休息一次") != null)
+    }
+
     @Test
     fun hqSession() {
         val now = System.currentTimeMillis()

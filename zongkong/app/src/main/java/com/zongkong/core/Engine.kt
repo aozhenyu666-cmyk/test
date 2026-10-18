@@ -20,6 +20,7 @@ data class GateStatus(
     /** 这道关卡此刻是否在拦截娱乐应用。 */
     val blocking: Boolean,
     val attempts: Int,
+    val deferredUntil: Long? = null,
 ) {
     val done: Boolean get() = passed != null
 }
@@ -98,8 +99,10 @@ object Engine {
         config: Config, day: DayLog, now: Long, zone: ZoneId, lock: FocusLock? = null,
         session: com.zongkong.core.hq.HqSession? = null,
         absence: com.zongkong.core.hq.Hq.Absence = com.zongkong.core.hq.Hq.Absence.NONE,
+        control: com.zongkong.core.control.ControlBook = com.zongkong.core.control.ControlBook(),
+        dateOverride: String? = null,
     ): Status {
-        val date = DayClock.date(now, zone)
+        val date = dateOverride?.let { java.time.LocalDate.parse(it) } ?: DayClock.date(now, zone)
         val weekday = date.dayOfWeek.value
 
         val gates = config.gates
@@ -116,15 +119,17 @@ object Engine {
                     deadlineAt - now <= DUE_SOON_MILLIS -> GatePhase.DUE_SOON
                     else -> GatePhase.OPEN
                 }
-                val blocking = passed == null && when (gate.block) {
+                val deferred = com.zongkong.core.control.Control.gateUntil(control, date.toString(), gate.id, now)
+                val blocking = passed == null && deferred == null && when (gate.block) {
                     BlockMode.FROM_OPEN -> now >= openAt
                     BlockMode.AFTER_DEADLINE -> now >= deadlineAt
                 }
-                GateStatus(gate, phase, openAt, deadlineAt, passed, blocking, day.submissions.count { it.gateId == gate.id })
+                GateStatus(gate, phase, openAt, deadlineAt, passed, blocking, day.submissions.count { it.gateId == gate.id }, deferred)
             }
 
         val reasons = mutableListOf<Reason>()
-        if (session != null && session.active) reasons += Reason.Session(session.endsAt)
+        if (session != null && session.active && now >= session.suspendedUntil &&
+            (session.trigger != com.zongkong.core.hq.HqTrigger.UNANSWERED || now < session.endsAt)) reasons += Reason.Session(session.endsAt)
         if (absence >= com.zongkong.core.hq.Hq.Absence.STRICT) reasons += Reason.Absent(absence.days)
         gates.filter { it.blocking }.forEach { reasons += Reason.GateDue(it) }
 

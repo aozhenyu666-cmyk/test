@@ -64,10 +64,13 @@ object DayReport {
         /** 今天记的支出（分；-1 = 没用账本）。 */
         val spent: Long = -1,
         val spentLine: String = "",
+        /** 关卡也必须列出，不能只把行动当作当天全部任务。 */
+        val gates: List<Pair<String, String>> = emptyList(),
+        val deferred: List<Pair<String, String>> = emptyList(),
     ) {
         val doneCount: Int get() = planned.count { it.mark == Mark.DONE || it.mark == Mark.WAIT }
         val notDone: List<Item> get() = planned.filter { it.mark != Mark.DONE && it.mark != Mark.WAIT && it.mark != Mark.CANCELLED }
-        val empty: Boolean get() = planned.isEmpty() && extra.isEmpty()
+        val empty: Boolean get() = planned.isEmpty() && extra.isEmpty() && gates.isEmpty() && deferred.isEmpty()
     }
 
     private fun mark(a: Rec, sessionKey: String?): Mark = when {
@@ -101,6 +104,8 @@ object DayReport {
         now: Long,
         zone: ZoneId,
         ledger: com.zongkong.core.ledger.LedgerBook? = null,
+        config: com.zongkong.core.Config? = null,
+        control: com.zongkong.core.control.ControlBook = com.zongkong.core.control.ControlBook(),
     ): Report {
         val today = DayClock.date(now, zone)
         val dayFrom = DayClock.startOf(today, zone)
@@ -161,12 +166,34 @@ object DayReport {
             blocks = Playbook.of(book, today.toString())?.blocks.orEmpty(),
             spent = ledger?.takeIf { it.items.isNotEmpty() }?.let { com.zongkong.core.ledger.Ledger.total(com.zongkong.core.ledger.Ledger.day(it, today, zone)) } ?: -1,
             spentLine = ledger?.takeIf { it.items.isNotEmpty() }?.let { com.zongkong.core.ledger.Ledger.line(com.zongkong.core.ledger.Ledger.day(it, today, zone)) }.orEmpty(),
+            gates = config?.let { c -> com.zongkong.core.Engine.evaluate(c, log, now, zone, control = control).gates.map { g ->
+                g.gate.title to when {
+                    g.done -> g.phase.label
+                    g.deferredUntil != null -> "缓行至 " + java.time.Instant.ofEpochMilli(g.deferredUntil).atZone(zone).toLocalTime().toString().take(5) + "，仍待补交"
+                    else -> g.phase.label + "，未完成"
+                }
+            } }.orEmpty(),
+            deferred = control.deferrals.filter { it.resolvedAt == 0L || it.date == today.toString() }.map { d ->
+                "${d.date} · ${d.title}" to when {
+                    d.resolvedAt > 0 -> "已补交"
+                    d.until > now -> "缓行中，" + java.time.Instant.ofEpochMilli(d.until).atZone(zone).toLocalTime().toString().take(5) + " 恢复；未完成"
+                    else -> "缓行已到期，待补交（${d.reason}）"
+                }
+            },
         )
     }
 
     /** 列成纯文字：清单页、日终验收、参谋都用这一份。 */
     fun text(r: Report): String = buildString {
         append("今天（${r.date}）的清单\n")
+        if (r.gates.isNotEmpty()) {
+            append("\n今天的关卡（包括日终总结）：\n")
+            r.gates.forEach { (title, state) -> append("· $title：$state\n") }
+        }
+        if (r.deferred.isNotEmpty()) {
+            append("\n缓行与补交（延后不算完成）：\n")
+            r.deferred.forEach { (title, state) -> append("· $title：$state\n") }
+        }
         if (r.planned.isEmpty()) append("\n排了的：今天没有排进时间的行动。\n")
         else {
             append("\n排了的（做完 ${r.doneCount}/${r.planned.size}）：\n")

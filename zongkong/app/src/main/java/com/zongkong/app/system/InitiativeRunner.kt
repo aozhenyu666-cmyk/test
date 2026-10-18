@@ -48,6 +48,7 @@ object InitiativeRunner {
         }
         // 真的发出去才记一次
         send(context, push.title, push.text, push.firm)
+        TakeoverRunner.offered(context, push.title)
         save(context, kept.pushed(now))
         store.logWake("主动·${push.kind.title}（${push.reason}）")
     }
