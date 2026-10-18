@@ -144,7 +144,7 @@ export function waiting(label) {
   return el;
 }
 
-export const TYPE_GLYPH = { 概念: '概', 论断: '论', 规则: '规', 问题: '问', 案例: '例' };
+export const TYPE_GLYPH = { 问: '问', 论: '论', 规: '规' };
 export function glyph(n) { return h('div', { class: 'glyph ' + (n.status || ''), title: n.type + ' · ' + n.status }, TYPE_GLYPH[n.type] || '节'); }
 
 export function nodeRow(n, onclick, extra) {

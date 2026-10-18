@@ -22,6 +22,24 @@ const SPLIT = {
   ],
 };
 
+// 录入 V2「碰撞引擎」的模拟输出：基于示例体系「思维问题」的节点 id
+export const COLLIDE = {
+  adjust: [
+    { target: 'n-0006', from: 50, to: 65, reason: '材料里写下下一问之后又推进了两步', hit: '卡住时写下下一问后，能继续推进至少一步', pause_rules: [] },
+    { target: 'n-0007', from: 50, to: 40, reason: '精力好的上午也在第一步就停了', hit: '', pause_rules: [] },
+  ],
+  nodes: [
+    { tmp_id: 't1', type: '规', title: '累了先把下一步写在纸上', claim: '觉得脑子转不动时，先把下一步写在纸上再决定停不停。', under: 'n-0007',
+      keywords: ['外化', '纸笔', '认知负荷'], status: '假设', confidence: 55,
+      triggers: ['觉得脑子转不动的时候'], cost: '累了就停，链条永远断在第二步。' },
+    { tmp_id: 't2', type: '论', title: '写下来能延后停止点', claim: '把中间结论写下来，停止点会明显后移。', under: 'n-0100',
+      keywords: ['外化', '工作记忆', '停止点'], status: '假设', confidence: 60,
+      blindspot: '如果问题本身信息不足，写下来也推不动。',
+      sentinels: [{ when: '写下来后多走了两步以上', delta: 10 }, { when: '写下来后停止点没变', delta: -10 }] },
+  ],
+  links: [{ from: 't2', to: 'n-0007', type: '反例', why: '外化降低了单步成本' }],
+};
+
 const ANSWER = `- 核心判断：真正的根因更可能是「单步成本高」，下一问没产生只是它的表现。
 - 结构：单步成本高 → 舒缓感提前出现 → 第一反应停止 → 推理链断
 - 另一种可能：问题生成能力本身弱，与成本无关。
@@ -47,7 +65,7 @@ export function startServer(port = 0) {
       const kwFill = sys.includes('激活词生成器')
         ? JSON.stringify(Object.fromEntries(user.split('\n').map((l) => l.split(' ')[0]).filter(Boolean).map((id, i) => [id, ['追问链', '元认知', '停止规则' + i]])))
         : null;
-      const content = kwFill ? kwFill : isSplit ? '```json\n' + JSON.stringify(SPLIT) + '\n```' : sys.includes('只回复 OK') ? 'OK' : ANSWER;
+      const content = sys.includes('碰撞引擎') ? JSON.stringify(COLLIDE) : kwFill ? kwFill : isSplit ? '```json\n' + JSON.stringify(SPLIT) + '\n```' : sys.includes('只回复 OK') ? 'OK' : ANSWER;
       await new Promise((r) => setTimeout(r, 300));
       res.writeHead(200, { 'content-type': 'application/json', ...cors() });
       return res.end(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: Math.ceil((sys.length + user.length) * 0.8), completion_tokens: Math.ceil(content.length * 0.8) } }));

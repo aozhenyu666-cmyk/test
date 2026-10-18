@@ -96,7 +96,7 @@ await page.locator('[data-testid=cand] [data-testid=accept]').first().click();
 await page.locator('[data-testid=cand] [data-testid=accept]').first().click();
 await page.click('[data-testid=commit]');
 await page.waitForSelector('.toast');
-check(await page.evaluate(() => window.__mailuo.store.nodes.size) === 9, '写入 2 个新节点 + 1 个合并（共 9 个节点）');
+check(await page.evaluate(() => window.__mailuo.store.nodes.size) === 11, '写入 2 个新节点 + 1 个合并（共 11 个节点）');
 f = await files();
 const merged = yamlLoad(f['思维问题/加工层/第一反应停止.md'].split('---')[1]);
 check(merged.keywords.length <= 5, '合并：激活词并入已有节点（≤ 5 个）');
@@ -299,7 +299,7 @@ await page.evaluate(async () => {
 });
 await page.goto(ORIGIN + '/#/health');
 await page.waitForSelector('[data-testid=dupe-pair]');
-check((await page.textContent('[data-testid=dupe-pair]')).includes('推理链中断'), '体检找出可能重复的节点对');
+check(await page.locator('[data-testid=dupe-pair]', { hasText: '推理链中断' }).count() === 1, '体检找出可能重复的节点对');
 await page.locator('[data-testid=dupe-pair]', { hasText: '推理链中断' }).locator('button').click();
 await page.click('.sheet label:has-text("推理链断") input');
 await page.click('[data-testid=merge-confirm]');

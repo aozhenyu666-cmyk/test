@@ -41,6 +41,8 @@ export function healthCheck(store, system) {
   for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
     const a = nodes[i], b = nodes[j];
     if (a.links.some((l) => l.to === b.id && (l.type === '对立' || l.type === '类似')) || b.links.some((l) => l.to === a.id && (l.type === '对立' || l.type === '类似'))) continue;
+    // 类型不同（问 / 论 / 规）或有挂载上下级关系的，不算重复
+    if (a.type !== b.type || a.under === b.id || b.under === a.id) continue;
     const sim = titleSim(a.title, b.title), kw = sharedKeywords(a.keywords, b.keywords).length;
     if (sim >= 0.6 || (sim >= 0.45 && kw >= 1) || (a.system === b.system && kw >= 3)) dupes.push([a, b]);
   }

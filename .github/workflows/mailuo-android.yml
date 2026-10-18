@@ -28,6 +28,8 @@ jobs:
         run: |
           npm i --no-save playwright@1.56.1
           npx playwright install --with-deps chromium
+      - name: Unit tests (pure logic)
+        run: node --test dev/unit/*.test.mjs
       - name: End-to-end acceptance (mock model)
         run: node dev/e2e.mjs
 
@@ -61,7 +63,8 @@ jobs:
   # 测试和打包都通过后，发布到固定的下载地址（覆盖上一版）：
   # https://github.com/aozhenyu666-cmyk/test/releases/download/mailuo-latest/mailuo.apk
   release:
-    if: github.event_name != 'pull_request'
+    # 只有集成分支发布；Codex 的任务分支 / PR 只跑测试和打包，不覆盖下载链接
+    if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'ccr-153bfa69-lm85up')
     needs: [e2e, apk]
     runs-on: ubuntu-latest
     defaults:

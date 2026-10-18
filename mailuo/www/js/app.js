@@ -1,10 +1,10 @@
 import { h, icon, brandMark, veinArt, dial, toast, sheet, confirmSheet, waiting, glyph, nodeRow, relTag, swipeable } from './ui.js';
-import { Store, TYPES, STATUSES, REL_TYPES, REL_HINT, REL_VIEW, findDuplicate, findAnalogies, today, parentOf } from './model.js';
+import { Store, TYPES, STATUSES, blankNode, normalizeType, normalizeSentinels, REL_TYPES, REL_HINT, REL_VIEW, findDuplicate, findAnalogies, today, parentOf } from './model.js';
 import { openVault, IdbVault, FsVault, CapVault, exportZip, importZip, listSnapshots, snapshot, dailySnapshot, restoreSnapshot } from './vault.js';
 import { getConfig, setConfig, usage, callModel, PROMPT_SPLIT, splitUserMessage, extractJson, normalizeSplit, PROMPT_THINK, parseAnswer, PRESETS, estimateTokens, PROMPT_KEYWORDS, keywordsUserMessage } from './llm.js';
 import { buildPack, MODE_QUESTIONS, libraryTokens, systemOutline } from './pack.js';
 import { healthCheck, traceCause, longestChain, learningPath, dueReviews, gradeReview, weeklyDigest } from './features.js';
-import { loadSeed, SEED_SYSTEM } from './seed.js';
+import { loadSeed, SEED_SYSTEM, SEED_NODES } from './seed.js';
 
 const VERSION = '0.1.5';
 let store, vault;
@@ -170,7 +170,7 @@ function viewToday() {
     out.push(h('div', { class: 'empty' }, veinArt(), h('h3', {}, '先建一个体系'),
       h('p', {}, '粘贴一段笔记或 AI 回复，拆成「体系 → 层级 → 节点 → 关系」。也可以先载入示例体系「思维问题」试用。'),
       h('div', { class: 'btn-row', style: { justifyContent: 'center' } },
-        h('button', { class: 'btn accent', 'data-testid': 'seed', onclick: async () => { await loadSeed(store); session.sys = SEED_SYSTEM; toast('已载入「思维问题」：7 个节点'); route(); } }, icon('spark'), '载入示例体系'),
+        h('button', { class: 'btn accent', 'data-testid': 'seed', onclick: async () => { await loadSeed(store); session.sys = SEED_SYSTEM; toast('已载入「思维问题」：' + SEED_NODES.length + ' 个节点'); route(); } }, icon('spark'), '载入示例体系'),
         h('button', { class: 'btn', onclick: () => go('#/capture') }, icon('plus'), '录入笔记'))));
     return out;
   }
@@ -420,12 +420,12 @@ function validate(d) {
 function newNodeSheet(system, parent) {
   if (!system) return newSystemSheet();
   sheet('新建节点', (box, close) => {
-    const form = nodeForm({ system, parent, type: '论断', status: '假设', confidence: 50, source: '自己' });
+    const form = nodeForm({ system, parent, type: '论', status: '假设', confidence: 50, source: '自己' });
     box.append(form.el, h('button', { class: 'btn primary block', onclick: async () => {
       const d = form.read();
       const err = validate(d);
       if (err) return toast(err);
-      const n = await store.saveNode({ id: store.nextId(), ...d, links: [], checks: [], extra: {} });
+      const n = await store.saveNode(blankNode({ id: store.nextId(), ...d }));
       close(); go('#/node/' + n.id);
     } }, '保存'));
   });
@@ -714,7 +714,7 @@ function answerCard(n, rec) {
 
 function suggestionsToCands(origin, suggest) {
   const nodes = suggest.map((s, i) => ({
-    tmp_id: 's' + (i + 1), title: s.title, type: '论断', claim: s.claim || s.title, keywords: s.keywords || [], status: '假设', confidence: 50,
+    tmp_id: 's' + (i + 1), title: s.title, type: '论', claim: s.claim || s.title, keywords: s.keywords || [], status: '假设', confidence: 50,
     verify: '', merge_into: '', parent: origin.parent,
   }));
   const links = suggest.map((s, i) => ({ from: 's' + (i + 1), to: origin.id, type: s.type, why: 'AI 建议（' + today() + '）', on: true }));
@@ -915,13 +915,20 @@ async function commitCands() {
   // 1) 新节点先全部放进索引，保证写双链时能找到标题
   for (const c of C.nodes.filter((x) => x.state === 'accepted')) {
     const id = store.nextId();
-    const n = {
-      id, title: c.title, type: c.type, system: c.system || C.system, parent: c.parent || '', keywords: c.keywords, status: c.status,
-      confidence: c.confidence, verify: c.verify, source: c.source || C.source, claim: c.claim, note: c.note || '', links: [], checks: [], extra: {},
-    };
+    const n = blankNode({
+      id, title: c.title, type: normalizeType(c.type), system: c.system || C.system, parent: c.parent || '', keywords: c.keywords, status: c.status,
+      confidence: c.confidence, verify: c.verify, source: c.source || C.source, claim: c.claim, note: c.note || '',
+      pillars: c.pillars || [], blindspot: c.blindspot || '', sentinels: normalizeSentinels(c.sentinels), triggers: c.triggers || [], cost: c.cost || '',
+    });
     store.nodes.set(id, n);
     idMap.set(c.tmp_id, id);
     touched.set(id, n);
+  }
+  // V2 挂载：under 可以是候选的 tmp_id 或已有节点 id；不合挂载规则的留空（进「未挂载」区）
+  for (const c of C.nodes.filter((x) => x.state === 'accepted' && x.under)) {
+    const n = store.nodes.get(idMap.get(c.tmp_id));
+    const target = idMap.get(c.under) || (store.nodes.has(c.under) ? c.under : '');
+    if (n && target && !store.canMount(n.id, target)) n.under = target;
   }
   for (const c of C.nodes.filter((x) => x.state === 'merged')) {
     const t = store.nodes.get(c.mergeTo);
