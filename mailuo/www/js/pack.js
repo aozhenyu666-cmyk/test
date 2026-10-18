@@ -125,20 +125,17 @@ export function libraryTokens(store) {
 
 // 体系大纲（Markdown），方便整体复制到聊天 App
 export function systemOutline(store, system) {
-  const sys = store.systems.get(system);
-  const lines = ['# ' + system];
-  const nodeLine = (n, depth) => {
+  const lines = ['# ' + system], seen = new Set();
+  const walk = (n, depth) => {
+    if (seen.has(n.id)) return;
+    seen.add(n.id);
     const rels = n.links.map((l) => l.type + '→' + (store.nodes.get(l.to)?.title || l.to)).join('，');
-    lines.push('  '.repeat(depth) + '- **' + n.title + '**（' + n.type + '·' + n.status + (n.confidence != null ? '·' + n.confidence + '%' : '') + '）：' + n.claim
+    lines.push('  '.repeat(depth) + '- **[' + n.type + (n.type !== '问' && n.confidence != null ? ' ' + n.confidence + '%' : '') + '] ' + n.title + '**：' + n.claim
       + (n.keywords.length ? ' 〔' + n.keywords.join('、') + '〕' : '') + (rels ? ' ｛' + rels + '｝' : ''));
+    for (const child of store.children(n.id)) if (child.system === system) walk(child, depth + 1);
   };
-  const walk = (parent, depth) => {
-    for (const n of store.list(system).filter((x) => x.parent === parent)) nodeLine(n, depth);
-    for (const lv of (sys?.levels || []).filter((l) => (l.lastIndexOf('/') < 0 ? '' : l.slice(0, l.lastIndexOf('/'))) === parent)) {
-      lines.push('  '.repeat(depth) + '- ' + lv.split('/').at(-1));
-      walk(lv, depth + 1);
-    }
-  };
-  walk('', 0);
+  store.chainRoots(system).forEach((n) => walk(n, 0));
+  const rest = store.list(system).filter((n) => !seen.has(n.id));
+  if (rest.length) { lines.push('', '## 未挂载'); rest.forEach((n) => walk(n, 0)); }
   return lines.join('\n');
 }

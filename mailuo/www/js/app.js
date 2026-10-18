@@ -1,5 +1,5 @@
 import { h, icon, brandMark, veinArt, dial, toast, sheet, confirmSheet, waiting, glyph, nodeRow, relTag, swipeable } from './ui.js';
-import { Store, TYPES, STATUSES, blankNode, normalizeType, normalizeSentinels, REL_TYPES, REL_HINT, REL_VIEW, findDuplicate, findAnalogies, today, parentOf } from './model.js';
+import { Store, TYPES, STATUSES, blankNode, normalizeType, normalizeSentinels, REL_TYPES, REL_HINT, REL_VIEW, findDuplicate, findAnalogies, today, MOUNT_RULES } from './model.js';
 import { openVault, IdbVault, FsVault, CapVault, exportZip, importZip, listSnapshots, snapshot, dailySnapshot, restoreSnapshot } from './vault.js';
 import { getConfig, setConfig, usage, callModel, PROMPT_SPLIT, splitUserMessage, extractJson, normalizeSplit, PROMPT_THINK, parseAnswer, PRESETS, estimateTokens, PROMPT_KEYWORDS, keywordsUserMessage } from './llm.js';
 import { buildPack, MODE_QUESTIONS, libraryTokens, systemOutline } from './pack.js';
@@ -235,7 +235,7 @@ function viewTree(_, params) {
   localStorage.setItem('mailuo.sys', session.sys);
   const out = [topbarBrand(
     h('button', { class: 'iconbtn', onclick: searchSheet, 'aria-label': '搜索全部体系' }, icon('search')),
-    h('button', { class: 'iconbtn', onclick: () => newNodeSheet(session.sys, ''), 'aria-label': '新建节点' }, icon('plus')))];
+    h('button', { class: 'iconbtn', onclick: () => newNodeSheet(session.sys, '', '问'), 'aria-label': '新建节点' }, icon('plus')))];
   out.push(h('h1', { class: 'display' }, '结构'));
   out.push(h('div', { class: 'sys-chips' },
     systems.map((s) => h('button', { class: 'sys-chip' + (s === session.sys ? ' on' : ''), onclick: () => { session.sys = s; route(); } }, s)),
@@ -257,7 +257,7 @@ function viewTree(_, params) {
       } }, icon('copy'), '复制体系大纲')),
     treeBox);
   draw();
-  out.push(h('p', { class: 'small muted center mt2' }, '按住节点左侧的 ⋮⋮ 拖到另一个层级，即可改父级。'));
+  out.push(h('p', { class: 'small muted center mt2' }, '按住 ⋮⋮ 拖到另一张卡片下；拖到「未挂载」可取消挂载。'));
   return out;
 }
 
@@ -269,38 +269,53 @@ function toggleClosed(key) {
 }
 
 function buildTree(system, query) {
-  const sys = store.systems.get(system);
-  const nodes = store.list(system).filter((n) => !query || n.title.includes(query) || n.claim.includes(query) || n.keywords.some((k) => k.includes(query)));
-  const closed = closedSet();
-  const levelBlock = (path, depth) => {
-    const name = path ? path.split('/').at(-1) : system;
-    const children = sys.levels.filter((l) => parentOf(l) === path);
-    const own = nodes.filter((n) => n.parent === path);
-    const count = nodes.filter((n) => n.parent === path || (path && n.parent.startsWith(path + '/'))).length + (path ? 0 : 0);
-    const key = system + ':' + path;
-    const isClosed = !query && closed.has(key);
-    const head = h('div', { class: 'lv-head', 'data-drop': system + '|' + path, onclick: (e) => { if (e.target.closest('.lv-tools')) return; toggleClosed(key); el.classList.toggle('closed'); } },
-      icon('chev', 'chev'), h('span', {}, path ? name : '体系根'), h('span', { class: 'cnt' }, path ? count : own.length),
-      h('div', { class: 'lv-tools' },
-        depth < 3 ? h('button', { class: 'iconbtn', title: '新建子层级', 'aria-label': '新建子层级', onclick: () => newLevelSheet(system, path) }, icon('layers')) : null,
-        h('button', { class: 'iconbtn', title: '在此新建节点', 'aria-label': '在此新建节点', onclick: () => newNodeSheet(system, path) }, icon('plus')),
-        path ? h('button', { class: 'iconbtn', title: '删除层级', 'aria-label': '删除层级', onclick: async () => {
-          if (!(await confirmSheet('删除层级', '删除「' + name + '」及其子层级？（层级下必须没有节点）', '删除', true))) return;
-          try { await store.removeLevel(system, path); route(); } catch (e) { toast(e.message); }
-        } }, icon('trash')) : null));
-    const body = h('div', { class: 'lv-body' },
-      own.map((n) => draggableRow(n)),
-      children.map((c) => levelBlock(c, depth + 1)));
-    if (!own.length && !children.length) body.append(h('div', { class: 'empty-rel' }, '（空）'));
-    const el = h('div', { class: 'lv' + (isClosed ? ' closed' : '') }, head, body);
+  const nodes = store.list(system), closed = closedSet(), seen = new Set();
+  const matches = (n) => !query || [n, ...store.descendants(n.id)].some((x) =>
+    [x.title, x.claim, ...x.keywords].some((t) => t.includes(query)));
+  const branch = (n) => {
+    if (seen.has(n.id) || !matches(n)) return null;
+    seen.add(n.id);
+    const children = store.children(n.id).filter((x) => x.system === system);
+    const key = 'node:' + n.id;
+    const el = h('div', { class: 'chain-node' + (!query && closed.has(key) ? ' closed' : '') });
+    const row = draggableRow(n);
+    if (children.length) row.prepend(h('button', { class: 'iconbtn chain-toggle', 'aria-label': '折叠或展开 ' + n.title, onclick: (e) => {
+      e.stopPropagation(); toggleClosed(key); el.classList.toggle('closed');
+    } }, icon('chev')));
+    if (n.type !== '规') row.append(h('button', { class: 'iconbtn', 'aria-label': '新建下级 ' + n.title, onclick: (e) => {
+      e.stopPropagation(); childNodeSheet(n);
+    } }, icon('plus')));
+    el.append(row);
+    // 折叠只隐藏，仍绘制下级，避免隐藏的节点被当作遗漏节点重新列出。
+    if (children.length) el.append(h('div', { class: 'chain-body' }, children.map(branch)));
     return el;
   };
-  return levelBlock('', 0);
+  const tree = h('div', { class: 'chain-tree' }, store.chainRoots(system).map(branch));
+  const loose = store.unmounted(system).filter((n) => !seen.has(n.id));
+  // 外部导入的跨体系挂载或环也保持可见，交给体检和重新挂载修复。
+  const rest = [...loose, ...nodes.filter((n) => !seen.has(n.id) && !loose.includes(n))];
+  if (rest.length) {
+    const body = h('div', { class: 'chain-loose' }, rest.map(branch));
+    if (body.childElementCount) tree.append(h('h2', { class: 'lv-head', 'data-drop': 'unmount' }, '未挂载 ', h('span', { class: 'cnt' }, rest.filter((n) => !n.under || !store.nodes.has(n.under)).length)), body);
+  }
+  return tree;
+}
+
+function childNodeSheet(n) {
+  const types = TYPES.filter((t) => MOUNT_RULES[t].includes(n.type));
+  if (!types.length) return;
+  sheet('挂一个下级', (box, close) => box.append(h('div', { class: 'btn-row' }, types.map((type) =>
+    h('button', { class: 'btn grow', onclick: () => { close(); newNodeSheet(n.system, n.id, type); } }, '新建' + type)))));
 }
 
 function draggableRow(n) {
-  const grip = h('div', { class: 'grip', 'aria-label': '拖动改父级' }, icon('grip'));
-  const row = nodeRow(n, (e) => { if (!e.target.closest('.grip')) go('#/node/' + n.id); });
+  const grip = h('div', { class: 'grip', 'aria-label': '拖动改挂载' }, icon('grip'));
+  const row = nodeRow(n, (e) => { if (!e.target.closest('button,.grip')) go('#/node/' + n.id); }, n.type === '问' ? h('span') : null);
+  row.dataset.drop = 'node:' + n.id;
+  if (n.type === '规') row.classList.add('rule-row');
+  if (n.type === '规' && n.paused) {
+    row.classList.add('paused'); row.querySelector('.title').append(h('span', { class: 'pill outline' }, '暂停'));
+  }
   row.prepend(grip);
   grip.addEventListener('pointerdown', (e) => startDrag(e, n, row));
   return row;
@@ -323,17 +338,18 @@ function startDrag(e, n, row) {
     if (t !== target) { target?.classList.remove('drop-on'); target = t; target?.classList.add('drop-on'); }
     if (ev.clientY < 60) window.scrollBy(0, -12); else if (ev.clientY > innerHeight - 100) window.scrollBy(0, 12);
   };
-  const up = async () => {
+  const up = async (ev) => {
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
     window.removeEventListener('pointercancel', up);
     ghost.remove(); row.classList.remove('dragging'); target?.classList.remove('drop-on');
-    if (!target) return;
-    const [sys, path] = target.dataset.drop.split('|');
-    if (sys === n.system && path === n.parent) return;
-    await store.moveNode(n.id, sys, path);
-    toast('已移到「' + (path ? path.split('/').join(' › ') : sys) + '」');
-    route();
+    if (!target || ev.type === 'pointercancel') return;
+    const parent = target.dataset.drop === 'unmount' ? '' : target.dataset.drop.slice(5);
+    const err = store.canMount(n.id, parent);
+    if (err) return toast(err);
+    if (parent === n.under) return;
+    try { await store.mount(n.id, parent); toast(parent ? '已更新挂载' : '已取消挂载'); route(true); }
+    catch (e) { toast(e.message); }
   };
   move(e);
   window.addEventListener('pointermove', move);
@@ -353,28 +369,7 @@ function newSystemSheet() {
   });
 }
 
-function newLevelSheet(system, parent) {
-  sheet(parent ? '在「' + parent.split('/').at(-1) + '」下新建层级' : '新建层级', (box, close) => {
-    const inp = h('input', { class: 'input', placeholder: '例如：加工层' });
-    box.append(h('div', { class: 'field' }, h('label', {}, '层级名称'), inp),
-      h('p', { class: 'small muted' }, '层级最多 3 层。'),
-      h('button', { class: 'btn primary block', onclick: async () => {
-        const name = inp.value.trim().replace(/\//g, '·');
-        if (!name) return;
-        try { await store.addLevel(system, parent ? parent + '/' + name : name); close(); route(); } catch (e) { toast(e.message); }
-      } }, '创建'));
-  });
-}
-
 // ---------------- 节点编辑 ----------------
-function levelOptions(system, cur) {
-  const sys = store.systems.get(system);
-  const sel = h('select', { class: 'input' }, h('option', { value: '' }, '（体系根）'),
-    (sys?.levels || []).map((l) => h('option', { value: l, selected: l === cur }, '　'.repeat(l.split('/').length - 1) + l.split('/').at(-1))));
-  sel.value = cur || '';
-  return sel;
-}
-
 function nodeForm(n, { systemEditable = true } = {}) {
   const f = {};
   f.title = h('input', { class: 'input', value: n.title || '', placeholder: '短名' });
@@ -388,8 +383,7 @@ function nodeForm(n, { systemEditable = true } = {}) {
   f.verify = h('input', { class: 'input', value: n.verify || '', placeholder: '一句话，假设类必填' });
   f.source = h('input', { class: 'input', value: n.source || '', placeholder: '自己 / AI 名称 / 资料' });
   f.system = h('select', { class: 'input', disabled: !systemEditable }, [...store.systems.keys()].map((s) => h('option', { value: s, selected: s === n.system }, s)));
-  const parentWrap = h('div', {}, levelOptions(n.system, n.parent));
-  f.system.addEventListener('change', () => { parentWrap.innerHTML = ''; parentWrap.append(levelOptions(f.system.value, '')); });
+  const parentWrap = h('div', { class: 'small muted' }, '挂在：' + (store.nodes.get(n.under)?.title || '不挂载'));
   const el = h('div', {},
     h('div', { class: 'field' }, h('label', {}, '标题'), f.title),
     h('div', { class: 'field' }, h('label', {}, '结论'), f.claim),
@@ -397,7 +391,7 @@ function nodeForm(n, { systemEditable = true } = {}) {
     h('div', { class: 'field' }, h('label', {}, '激活词'), f.keywords),
     h('div', { class: 'field' }, h('label', {}, '把握 ', confLabel), f.confidence),
     h('div', { class: 'field' }, h('label', {}, '验证方式'), f.verify),
-    h('div', { class: 'row' }, h('div', { class: 'field' }, h('label', {}, '体系'), f.system), h('div', { class: 'field' }, h('label', {}, '上级层级'), parentWrap)),
+    h('div', { class: 'row' }, h('div', { class: 'field' }, h('label', {}, '体系'), f.system), h('div', { class: 'field' }, h('label', {}, '挂载'), parentWrap)),
     h('div', { class: 'field' }, h('label', {}, '说明'), f.note),
     h('div', { class: 'field' }, h('label', {}, '来源'), f.source));
   const read = () => ({
@@ -405,7 +399,7 @@ function nodeForm(n, { systemEditable = true } = {}) {
     type: f.type.value, status: f.status.value,
     keywords: f.keywords.value.split(/[,，、;；\s]+/).map((s) => s.trim()).filter(Boolean).slice(0, 5),
     confidence: +f.confidence.value, verify: f.verify.value.trim(), source: f.source.value.trim(),
-    system: f.system.value, parent: parentWrap.querySelector('select').value,
+    system: f.system.value, parent: n.parent || '', under: n.under || '',
   });
   return { el, read };
 }
@@ -413,14 +407,14 @@ function nodeForm(n, { systemEditable = true } = {}) {
 function validate(d) {
   if (!d.title) return '标题不能为空';
   if (!d.claim) return '结论不能为空';
-  if (d.status === '假设' && !d.verify) return '假设类节点必须写验证方式';
+  if (d.type === '论' && d.status === '假设' && !d.verify) return '假设类节点必须写验证方式';
   return '';
 }
 
-function newNodeSheet(system, parent) {
+function newNodeSheet(system, under = '', type = '论') {
   if (!system) return newSystemSheet();
   sheet('新建节点', (box, close) => {
-    const form = nodeForm({ system, parent, type: '论', status: '假设', confidence: 50, source: '自己' });
+    const form = nodeForm(blankNode({ system, under, type, confidence: type === '问' ? null : 50 }));
     box.append(form.el, h('button', { class: 'btn primary block', onclick: async () => {
       const d = form.read();
       const err = validate(d);

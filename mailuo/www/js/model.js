@@ -277,7 +277,7 @@ export class Store {
 
   // ---- 写入 ----
   filePath(n) {
-    return [safeName(n.system), ...(n.parent ? n.parent.split('/').map(safeName) : []), safeName(n.title) + '.md'].join('/');
+    return [safeName(n.system), safeName(n.title) + '.md'].join('/');
   }
 
   async saveNode(n, { touch = true } = {}) {
@@ -289,13 +289,12 @@ export class Store {
     const oldSystem = n._savedSystem;
     const oldPath = n.path;
     let path = this.filePath(n);
+    if (path === safeName(n.system) + "/" + safeName(n.system) + ".md") path = path.replace(/\.md$/, " (" + n.id + ").md");
     // 同名文件（不同节点）时加 id 避免覆盖
     for (const o of this.nodes.values()) if (o.id !== n.id && o.path === path) path = path.replace(/\.md$/, ' (' + n.id + ').md');
     n.path = path;
     this.nodes.set(n.id, n);
     const s = this.ensureSystemSync(n.system);
-    let sysDirty = !(await this.vault.read(s.path));
-    if (n.parent) for (const lv of prefixes(n.parent)) if (!s.levels.includes(lv)) { s.levels.push(lv); sysDirty = true; }
     await this.vault.write(path, serializeNode(n, this));
     n._savedTitle = n.title;
     n._savedSystem = n.system;
@@ -308,9 +307,8 @@ export class Store {
         const src = this.nodes.get(l.from);
         if (src) await this.vault.write(src.path, serializeNode(src, this));
       }
-      sysDirty = true;
     }
-    if (sysDirty || !old) await this.saveSystem(s);
+    await this.saveSystem(s);
     this.emit();
     return n;
   }
@@ -444,19 +442,23 @@ export class Store {
 
   async saveSystem(s) {
     if (!s) return;
-    s.levels = [...new Set(s.levels)];
+    s.levels = [];
     const nodes = this.list(s.name);
     const lines = ['---', 'kind: system', 'name: ' + q(s.name), 'levels: ' + flowList(s.levels), 'created: ' + q(s.created || today()), '---'];
     lines.push(s.desc || '「' + s.name + '」知识体系。由脉络 App 维护，可在 Obsidian 中直接打开。');
     lines.push('', '## 结构');
-    const render = (parent, depth) => {
-      for (const n of nodes.filter((x) => x.parent === parent)) lines.push('  '.repeat(depth) + '- [[' + n.title + ']]');
-      for (const lv of s.levels.filter((l) => parentOf(l) === parent)) {
-        lines.push('  '.repeat(depth) + '- ' + lv.split('/').at(-1));
-        render(lv, depth + 1);
-      }
+    const seen = new Set();
+    const render = (n, depth) => {
+      if (seen.has(n.id)) return;
+      seen.add(n.id);
+      lines.push('  '.repeat(depth) + '- [' + n.type + '] [[' + n.title + ']]');
+      for (const child of this.children(n.id)) if (child.system === s.name) render(child, depth + 1);
     };
-    render('', 0);
+    for (const n of this.chainRoots(s.name)) render(n, 0);
+    if (nodes.some((n) => !seen.has(n.id))) {
+      lines.push('', '## 未挂载');
+      for (const n of nodes) if (!seen.has(n.id)) render(n, 0);
+    }
     s.path = safeName(s.name) + '/' + safeName(s.name) + '.md';
     await this.vault.write(s.path, lines.join('\n') + '\n');
   }
