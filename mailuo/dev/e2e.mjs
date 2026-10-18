@@ -28,7 +28,7 @@ await ctx.grantPermissions(['clipboard-read', 'clipboard-write']);
 const page = await ctx.newPage();
 page.on('pageerror', (e) => { console.log('pageerror:', e.message); failures++; });
 page.on('console', (m) => { if (m.type() === 'error') console.log('console:', m.text()); });
-const shot = async (name) => { if (SHOTS) { await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove())); await page.waitForTimeout(450); await page.screenshot({ path: join(SHOTS, (process.env.DARK ? 'dark-' : '') + name + '.png') }); } };
+const shot = async (name) => { if (SHOTS) { await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove())); await page.waitForTimeout(650); await page.screenshot({ path: join(SHOTS, (process.env.DARK ? 'dark-' : '') + name + '.png') }); } };
 const files = () => page.evaluate(async () => {
   const v = window.__mailuo.vault; const out = {};
   for (const p of await v.list()) out[p] = await v.read(p);
@@ -242,11 +242,22 @@ check((await page.textContent('[data-issue=undecided]')).includes('第一反应�
 check((await page.textContent('[data-issue=noSentinel]')).includes('验证哨没有加减分'), '盲信无哨识别迁移来的零分哨');
 check((await page.textContent('[data-issue=orphanRule]')).includes('未挂载测试规'), '师出无名识别未挂载的规');
 await page.evaluate(() => window.__mailuo.store.deleteNode('health-orphan'));
+await page.evaluate(() => window.__mailuo.store.mount('n-0101','n-0006'));
 await page.goto(ORIGIN + '/#/review');
-await page.click('[data-testid=flash]');
+await page.waitForSelector('[data-testid=flash]');
+const exercise=await page.textContent('.flash-face:not(.back)');
+check(exercise.includes('演练：') && (exercise.includes('觉得「差不多想清楚了」的那一刻') || exercise.includes('准备关掉笔记去做别的事时')), '温故首先演练规的触发场景');
 await shot('12-review');
-await page.click('.grades button:has-text("记得")');
-f = await files();
+await page.click('[data-testid=flash]');
+await shot('12b-review-back');
+await page.click('.grades button:has-text("实操有效")');
+await page.waitForFunction(async () => {
+  const {store,vault}=window.__mailuo;
+  return (await vault.read(store.nodes.get('n-0101').path)).includes('confidence: 63') && (await vault.read(store.nodes.get('n-0006').path)).includes('confidence: 52') && !!(await vault.read('.mailuo/review.json'));
+});
+await page.waitForFunction(async () => !!JSON.parse(await window.__mailuo.vault.read('.mailuo/review.json') || '{}')['n-0101']);
+f=await files();
+check(Object.values(f).some((t) => t.includes('id: n-0101') && t.includes('confidence: 63') && t.includes('kind: 有效')) && Object.values(f).some((t) => t.includes('id: n-0006') && t.includes('confidence: 52') && t.includes('kind: 有效')), '实操有效把规 60→63、上游论 50→52，并记录两条 checks');
 check(!!f['.mailuo/review.json'], '温故进度写入 .mailuo/review.json');
 await page.goto(ORIGIN + '/#/trace/n-0002');
 await page.waitForSelector('.t-self');

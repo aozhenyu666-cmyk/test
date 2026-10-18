@@ -3,7 +3,7 @@ import { Store, TYPES, SLOTS, STATUSES, blankNode, normalizeType, normalizeSenti
 import { openVault, IdbVault, FsVault, CapVault, exportZip, importZip, listSnapshots, snapshot, dailySnapshot, restoreSnapshot } from './vault.js';
 import { getConfig, setConfig, usage, callModel, PROMPT_SPLIT, splitUserMessage, extractJson, normalizeSplit, PROMPT_THINK, parseAnswer, PRESETS, estimateTokens, PROMPT_KEYWORDS, keywordsUserMessage } from './llm.js';
 import { buildPack, MODE_QUESTIONS, libraryTokens, systemOutline } from './pack.js';
-import { healthCheck, traceCause, longestChain, learningPath, dueReviews, gradeReview, weeklyDigest } from './features.js';
+import { healthCheck, traceCause, longestChain, learningPath, dueReviews, applyFeedback, gradeReview, weeklyDigest } from './features.js';
 import { PROMPT_COLLIDE, libraryDigest, collideUserMessage, normalizeCollide, suggestPauses } from './collide.js';
 import { loadSeed, SEED_SYSTEM, SEED_NODES } from './seed.js';
 
@@ -176,11 +176,11 @@ function viewToday() {
     return out;
   }
 
-  const due = dueReviews(store, 50).length;
+  const due = dueReviews(store, store.nodes.size).filter((n) => n.type === '规').length;
   const hc = healthCheck(store);
   out.push(h('div', { class: 'tiles mt' },
     h('div', { class: 'tile', onclick: () => go('#/capture') }, icon('plus'), h('div', {}, h('div', { class: 't' }, '录入'), h('div', { class: 's' }, '粘贴 → 拆分'))),
-    h('div', { class: 'tile', onclick: () => go('#/review'), 'data-testid': 'tile-review' }, h('div', { class: 'n' }, due), h('div', {}, h('div', { class: 't' }, '温故'), h('div', { class: 's' }, '张卡片到期'))),
+    h('div', { class: 'tile', onclick: () => go('#/review'), 'data-testid': 'tile-review' }, h('div', { class: 'n' }, due), h('div', {}, h('div', { class: 't' }, '温故'), h('div', { class: 's' }, due + ' 条规待演练'))),
     h('div', { class: 'tile', onclick: () => go('#/health') }, h('div', { class: 'n' }, hc.score), h('div', {}, h('div', { class: 't' }, '体检'), h('div', { class: 's' }, hc.issues[0] ? hc.issues[0].label + ' ' + hc.issues[0].nodes.length : '没有发现问题')))));
 
   let asks = {};
@@ -1195,38 +1195,49 @@ function fillKeywordsSheet(nodes) {
 
 // ---------------- 温故 ----------------
 function viewReview() {
-  const queue = dueReviews(store, 20);
-  const out = [topbarBack('温故'), h('h1', { class: 'display' }, '温故'), h('p', { class: 'sub' }, '看标题和激活词，先自己想出结论，再翻面核对。间隔 1·3·7·15·30·60 天。')];
-  if (!queue.length) {
-    out.push(h('div', { class: 'empty' }, veinArt(), h('h3', {}, '今天的卡片都复习完了'), h('p', {}, '明天再来。')));
-    return out;
-  }
-  let i = 0;
-  const stage = h('div');
-  const draw = () => {
-    stage.innerHTML = '';
-    if (i >= queue.length) { stage.append(h('div', { class: 'empty' }, veinArt(), h('h3', {}, '完成 ' + queue.length + ' 张'), h('button', { class: 'btn', onclick: () => go('#/') }, '回到今日'))); return; }
-    const n = queue[i];
-    const flash = h('div', { class: 'flash', 'data-testid': 'flash', onclick: () => flash.classList.toggle('flipped') },
-      h('div', { class: 'flash-inner' },
-        h('div', { class: 'flash-face' },
-          h('div', { class: 'small muted' }, (i + 1) + ' / ' + queue.length + ' · ' + n.system + (n.parent ? ' › ' + n.parent : '')),
-          h('div', {}, h('div', { class: 'big' }, n.title), h('div', { class: 'chips mt' }, n.keywords.map((k) => h('span', { class: 'kw' }, k)))),
-          h('div', { class: 'small muted' }, '点击翻面')),
-        h('div', { class: 'flash-face back' },
-          h('div', { class: 'small', style: { opacity: .6 } }, n.type + ' · ' + n.status + (n.confidence != null ? ' · 把握 ' + n.confidence + '%' : '')),
-          h('div', { class: 'big' }, n.claim),
-          n.status === '假设' ? h('div', { class: 'small', style: { opacity: .75 } }, '本周验证了吗？' + (n.verify || '')) : h('div'))));
-    const grade = async (g) => { const d = await gradeReview(store, n.id, g); toast(d + ' 天后再见'); i++; draw(); };
-    stage.append(flash, h('div', { class: 'grades' },
-      h('button', { class: 'btn', onclick: () => grade('forgot') }, '忘了'),
-      h('button', { class: 'btn', onclick: () => grade('fuzzy') }, '模糊'),
-      h('button', { class: 'btn primary', onclick: () => grade('good') }, '记得')),
-    h('div', { class: 'center mt' }, h('button', { class: 'btn ghost sm', onclick: () => go('#/node/' + n.id) }, '打开节点')));
+  const queue=dueReviews(store,20);
+  const out=[topbarBack('温故'),h('h1',{class:'display'},'温故'),h('p',{class:'sub'},'先回想此时的判断和动作，再翻面核对。实操反馈会修正规与上游论的把握。')];
+  if (!queue.length) return [...out,h('div',{class:'empty'},veinArt(),h('h3',{},'今天的卡片都复习完了'),h('p',{},'明天再来。'))];
+  let i=0;
+  const stage=h('div');
+  const draw=() => {
+    stage.replaceChildren();
+    if (i>=queue.length) {stage.append(h('div',{class:'empty'},veinArt(),h('h3',{},'完成 '+queue.length+' 张'),h('button',{class:'btn',onclick:() => go('#/')},'回到今日'))); return;}
+    const n=store.nodes.get(queue[i].id), rule=n.type === '规';
+    const parent=store.ancestors(n.id).find((p) => p.type === '论');
+    const trigger=rule && n.triggers.length ? n.triggers[Math.floor(Math.random()*n.triggers.length)] : '';
+    const grades=h('div',{class:'grades'});
+    let busy=false;
+    const flash=h('div',{class:'flash v2-flash','data-testid':'flash',onclick:() => {
+      flash.classList.toggle('flipped');
+      grades.querySelectorAll('button').forEach((b) => b.disabled=!flash.classList.contains('flipped'));
+    }},h('div',{class:'flash-inner'},
+      h('div',{class:'flash-face'},h('div',{class:'small muted'},(i+1)+' / '+queue.length+' · '+n.system),
+        h('div',{},h('div',{class:'big'},trigger ? '演练：'+trigger : n.title),rule ? h('p',{class:'small muted'},'此时你的【论】和【规】是什么？') : null,
+          !trigger ? h('div',{class:'chips mt'},n.keywords.map((k) => h('span',{class:'kw'},k))) : null),h('div',{class:'small muted'},'点击翻面')),
+      h('div',{class:'flash-face back'},
+        h('div',{class:'small'},n.type+' · 把握 '+(n.confidence ?? '—')+'%'),
+        rule && parent ? h('div',{},h('div',{class:'small'},'上级论 · '+parent.title+' · '+(parent.confidence ?? '—')+'%'),h('p',{},parent.claim)) : null,
+        h('div',{class:'big'},n.claim),rule ? h('p',{class:'drill-cost'},'破戒代价：'+(n.cost || '待补')) : sentinelView(n.sentinels))));
+    const grade=async (g,kind) => {
+      if (busy) return; busy=true; grades.querySelectorAll('button').forEach((b) => b.disabled=true);
+      try {
+        let message='';
+        if (kind) {
+          const changed=applyFeedback(store,n.id,kind), before=changed.map((x) => store.nodes.get(x.id).confidence ?? 50);
+          for (const x of changed) await store.saveNode(x);
+          message=changed.map((x,j) => (j ? '上游论 ' : '规 ')+before[j]+'%→'+x.confidence+'%').join('，');
+        }
+        const days=await gradeReview(store,n.id,g);
+        toast(message || days+' 天后再见'); i++; draw();
+      } catch(e) {busy=false; toast('保存失败：'+e.message); grades.querySelectorAll('button').forEach((b) => b.disabled=false);}
+    };
+    const button=(text,cls,g,kind) => h('button',{class:'btn '+cls,disabled:true,onclick:() => grade(g,kind)},text);
+    if (rule) grades.append(button('实操有效','positive','good','有效'),button('实操卡壳','negative','forgot','卡壳'),button('只是回想','','fuzzy'));
+    else grades.append(button('忘了','','forgot'),button('模糊','','fuzzy'),button('记得','primary','good'));
+    stage.append(flash,grades,h('div',{class:'center mt'},h('button',{class:'btn ghost sm',onclick:() => go('#/node/'+n.id)},'打开节点')));
   };
-  draw();
-  out.push(stage);
-  return out;
+  draw(); return [...out,stage];
 }
 
 // ---------------- 溯源 ----------------

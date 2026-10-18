@@ -98,19 +98,30 @@ export function learningPath(store, id) {
 
 // ---------- 温故 ----------
 const STEPS = [1, 3, 7, 15, 30, 60];
-export function dueReviews(store, limit = 10) {
-  const t = today();
-  const all = [...store.nodes.values()].filter((n) => n.status !== '已推翻');
-  const due = all.filter((n) => {
-    const r = store.review[n.id];
-    return !r || r.due <= t;
-  });
-  // 假设优先，然后是从没复习过的，然后按到期日
-  due.sort((a, b) => {
-    const ra = store.review[a.id], rb = store.review[b.id];
-    return (a.status === '假设' ? 0 : 1) - (b.status === '假设' ? 0 : 1) || (ra ? 1 : 0) - (rb ? 1 : 0) || String(ra?.due).localeCompare(String(rb?.due));
-  });
-  return due.slice(0, limit);
+export const FEEDBACK = { 有效: {rule:3,parent:2}, 卡壳: {rule:-5,parent:-3}, max:95, min:5 };
+
+export function applyFeedback(store, ruleId, kind, {today:date=today(),source='温故',note=''} = {}) {
+  const rule=store.nodes.get(ruleId), feedback=FEEDBACK[kind];
+  if (!['有效','卡壳'].includes(kind) || !rule || rule.type !== '规' || rule.paused) return [];
+  const change=(n,delta,result) => {
+    const before=n.confidence ?? 50;
+    const confidence=Math.max(FEEDBACK.min,Math.min(FEEDBACK.max,before+delta));
+    return {...n,confidence,checks:[...n.checks,{date,kind,source,delta:confidence-before,confidence,result}]};
+  };
+  const out=[change(rule,feedback.rule,note||'温故：'+kind)];
+  const parent=store.ancestors(ruleId).find((n) => n.type === '论');
+  if (parent) out.push(change(parent,feedback.parent,'下游【'+rule.title+'】实操'+kind));
+  return out;
+}
+
+export function dueReviews(store, limit=10, {today:date=today()} = {}) {
+  const due=store.list().filter((n) => n.status !== '已推翻' &&
+    ((n.type === '规' && !n.paused) || (n.type === '论' && n.sentinels.length)) &&
+    (!store.review[n.id] || store.review[n.id].due <= date));
+  due.sort((a,b) => (a.type === '规' ? 0 : 1)-(b.type === '规' ? 0 : 1) ||
+    (store.review[a.id] ? 1 : 0)-(store.review[b.id] ? 1 : 0) ||
+    String(store.review[a.id]?.due || '').localeCompare(String(store.review[b.id]?.due || '')) || a.id.localeCompare(b.id));
+  return due.slice(0,limit);
 }
 
 export async function gradeReview(store, id, grade) {
