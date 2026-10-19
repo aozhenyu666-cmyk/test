@@ -89,6 +89,15 @@ class ChatClient(
         return send(cfg, messages, json ?: cfg.jsonMode, kind, system.length + user.length)
     }
 
+    /** 伙伴的上下文由本机明确传入，历史记录不能追加新的系统角色。 */
+    suspend fun completeConversation(system: String, history: List<Pair<String, String>>, user: String, kind: String = "伙伴对话"): LlmResult<String> {
+        val messages = JSONArray().put(JSONObject().put("role", "system").put("content", system))
+        val recent = history.filter { it.first == "user" || it.first == "assistant" }.takeLast(16)
+        recent.forEach { (role, text) -> messages.put(JSONObject().put("role", role).put("content", text)) }
+        messages.put(JSONObject().put("role", "user").put("content", user))
+        return send(config(), messages, false, kind, system.length + user.length + recent.sumOf { it.second.length })
+    }
+
     /**
      * 带一张图片的请求（OpenAI 兼容的 image_url 格式，图片用 data URL 内嵌）。
      * 只用于识图模型；返回纯文本，不要求 JSON。
