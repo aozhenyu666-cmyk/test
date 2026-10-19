@@ -7,6 +7,7 @@ import com.zongkong.app.zk
 import com.zongkong.core.DayClock
 import com.zongkong.core.director.Facts
 import com.zongkong.core.hq.Hq
+import com.zongkong.core.plan.Aims
 import com.zongkong.core.plan.Plans
 import com.zongkong.core.work.ActionStatus
 import java.time.LocalDate
@@ -66,11 +67,10 @@ object PhoneFacts {
         if (weekDeliverables.isEmpty()) unknown += "本周要交的东西（没有生效中的周计划）"
 
         val playMin = runCatching { store.today.value.playMinutes }.getOrDefault(0)
-        if (playMin == 0) unknown += "娱乐时长（今天还没有记录）"
 
-        // 账本、收件箱这几块总控里有，但导演暂时不用：先如实标成“看不见”，不做假数据。
-        unknown += "今天花多少钱（账本还没接）"
-        unknown += "收件箱新内容（还没接）"
+        // 账本、收件箱这两块导演暂时不用：如实标“看不见”，但不占提示词的篇幅
+        unknown += "花了多少"
+        unknown += "收件箱"
 
         val health = runCatching { HealthWatch.health(context, now) }.getOrNull()
         if (health == null) unknown += "无障碍健康"
@@ -107,7 +107,7 @@ object PhoneFacts {
             }.getOrDefault(""),
             lastContactAt = runCatching { store.lastContact }.getOrDefault(0L),
             health = health,
-            aims = emptyList(),
+            aims = runCatching { Aims.open(book).take(4).map { it.title } }.getOrDefault(emptyList()),
             weekDeliverables = weekDeliverables,
             upcoming = upcoming,
             inboxCount = 0,
