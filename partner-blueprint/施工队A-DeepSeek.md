@@ -22,7 +22,10 @@
 - 仓库 `aozhenyu666-cmyk/test`，**从 `ccr-b6e667ac-bsoz44` 分支拉你的分支**（例如 `deepseek-window`）。这个分支包含总控全部代码，以及接口约定。
 - 总控是 Kotlin + Jetpack Compose 的 Android App，在 `zongkong/` 目录。下文路径都相对 `zongkong/app/src/main/java/com/zongkong/`。
 - **接口约定**：`core/director/Contract.kt`。先通读这个文件，所有对接都靠它。
-- **替身导演**：`core/director/FakeDirector.kt`。真导演还没好时用它，行为固定，接口和真导演一样。真导演做好后叫 `DirectorEngine`，换掉构造那一行就行。
+- **真导演已经写好**：`core/director/DirectorEngine.kt`（施工队 B，带 29 个单元测试）。直接用它：
+  `DirectorEngine(facts = 你的FactsSource, ask = LlmAsk(总控的LlmApi), store = FileMindStore(File(filesDir, "director/mind.json")))`。
+  `LlmAsk`（`core/DirectorBridge.kt`）和 `FileMindStore`（`core/director/FileMindStore.kt`）也已经写好，你只需要实现 `FactsSource` 和 `WindowPort`。
+- **替身导演**：`core/director/FakeDirector.kt`。行为固定、不调模型，做界面调试时可以先用它，接口和真导演一样。
 - **你只改 `app/` 下的代码，以及新加的 `app/...` 文件。不要改 `core/director/` 下的文件**（那是施工队 B 的）。觉得约定需要改，就在你的 DEVLOG 里写清楚想怎么改、为什么，用户会转告 B。
 - 注意：仓库的 GitHub Actions 会在任何分支改动 `zongkong/` 后自动构建，测试通过就**覆盖用户手机上的“最新版”下载链接**（`zongkong-latest`）。所以每次推送前要保证 App 能正常用；没做完的功能用开关关着（默认关）。
 
@@ -39,11 +42,15 @@
 | 接口 | 你要做的 | 提示 |
 |---|---|---|
 | `FactsSource` | 从总控 `Store`（`app/data/Store.kt`）取出此刻的事实，填 `Facts` | 主线、计划、娱乐时长、信用、态度这些总控都有；拿不到的写进 `unknown` |
-| `Ask` | 转接总控已有的文字模型接口 `core/Llm.kt` 的 `LlmApi` | 失败、超时都返回 null；统计每次请求的字数，给 B 的花费统计用 |
-| `MindStore` | 把一段 JSON 存在手机本地（原子写入，写坏了能回退到上一份） | 可以照总控现有的存储方式做 |
+| `Ask` | **已写好**：`LlmAsk(LlmApi)`，在 `core/DirectorBridge.kt` | 花费统计导演自己做 |
+| `MindStore` | **已写好**：`FileMindStore(File)`，原子写入、自动备份 | 放在 App 的 filesDir 里 |
 | `WindowPort` | 见 A2 | |
 
-建一个 `app/director/DirectorHost.kt`（名字随意），持有 `Director` 实例，现在先用 `FakeDirector()`。设置里加一个总开关“墨灵导演（试验）”，**默认关**。
+建一个 `app/director/DirectorHost.kt`（名字随意），持有 `Director` 实例（`DirectorEngine`，调试界面时可临时换成 `FakeDirector`）。设置里加一个总开关“墨灵导演（试验）”，**默认关**。
+
+导演还提供两个调试用的方法：`snapshot()` 返回整份记忆（接力棒、议程、假设、事故、日记、花费），`nowText(now)` 返回“此刻”的文字。建议做一个简单的调试页把它们显示出来，用户和 B 都靠它看导演在想什么。
+
+两个特殊按钮 key（见 `Contract.kt`）：`go` 表示“去演员那里聊”，你要打开卡上 `actor` 指定的 App 并走 A3 的接力；`fix` 表示打开无障碍 / 权限设置页。两种情况都照常把 `Reply.Pick` 交给导演。
 
 ### A2 小窗
 
@@ -131,8 +138,9 @@
 
 ## 5. 和施工队 B 怎么会合
 
-- B 在同一个仓库的 `ccr-b6e667ac-bsoz44` 分支上做 `core/director/` 下的真导演（`DirectorEngine`）：局面、假设账本、议程、开场白、接力棒更新、夜间整理、日记、事故簿、花费统计。
-- 你先用 `FakeDirector` 把整条链跑通：事件 → 小窗 → 回应 → 去 Gemini → 收线 → 回来。B 做好后，把 `FakeDirector()` 换成 `DirectorEngine(...)`，构造参数就是你实现的 `FactsSource`、`Ask`、`MindStore`。
+- B 的真导演已经在 `ccr-b6e667ac-bsoz44` 分支上：局面、假设账本、议程和打扰节律、开场白、接力棒、收线理解（含“明天九点”这类时间）、回头看、夜间整理（日记、模式、矛盾待问）、每周系统自检、事故簿、花费上限。之后 B 还会继续做 Notion / Google 文档的“此刻”镜像，以及收件箱的同步。
+- 你接上 `DirectorEngine` 后把整条链跑通：事件 → 小窗 → 回应 → 去 Gemini → 收线 → 回来 → 回头看。
+- 导演的行为细节（什么时候问、问什么）不满意，写进 DEVLOG，用户会转给 B 改，你不用改 `core/director/`。
 - **会合时验收的场景**：约定的做事时段里，主线过点没开始，用户在刷短视频。依次发生：小窗问一个点选题 → 用户选“卡住了” → 去 Gemini 聊 10 分钟 → 对着小窗收线 → 接力棒更新、下一步变成行动 → 30–60 分钟后导演回头看做了没有。
 
 ---

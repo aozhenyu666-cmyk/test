@@ -63,9 +63,16 @@ data class Baton(
     val closed: Boolean = false,
 )
 
-/** 小窗上的一个按钮选项（点选题用）。 */
+/**
+ * 小窗上的一个按钮选项（点选题用）。
+ * 两个特殊 key 由施工队 A 直接执行动作（同时照常把 [Reply.Pick] 交给导演）：
+ *   [CHOICE_GO] 去演员那里聊（卡的 actor 指定去哪）；[CHOICE_FIX] 打开无障碍 / 权限设置页。
+ */
 @Serializable
 data class Choice(val key: String, val label: String)
+
+const val CHOICE_GO = "go"
+const val CHOICE_FIX = "fix"
 
 /**
  * 小窗里的一张卡：此刻要说的一句话。
