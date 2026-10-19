@@ -69,9 +69,15 @@ object PermissionStatus {
     fun fullScreen(context: Context) =
         Build.VERSION.SDK_INT < 34 || context.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
 
+    /** 哨兵（第二双眼睛）开着，而且最近 3 分钟有心跳。 */
+    fun sentinel(context: Context): Boolean =
+        com.zongkong.app.guard.SentinelLink.enabled(context, com.zongkong.app.guard.SentinelService::class.java) &&
+            System.currentTimeMillis() - com.zongkong.app.guard.SentinelLink.sentinelBeat(context) < 3 * 60_000L
+
     /** 必需的权限里缺了哪些（首页顶上提示用）。 */
     fun missingCritical(context: Context): List<String> = buildList {
         if (!accessibility(context)) add("无障碍服务") else if (!guardRunning(context)) add("无障碍服务（开着但没在运行）")
+        if (!sentinel(context)) add("哨兵（第二双眼睛）")
         if (!notifications(context)) add("通知")
         if (!exactAlarm(context)) add("准点闹钟")
         if (!fullScreen(context)) add("全屏通知")
@@ -113,6 +119,13 @@ fun PermissionsScreen(nav: NavHostController) {
                     "\n更新总控后、被清理后台后，系统有时会把它关掉——到点没进总控时间，多半是这个。",
                 "设置 → 快捷与辅助 → 无障碍 → 已安装的服务 → 总控（灰色点不开：先到 应用管理 → 总控 → 右上角 ⋮ → 允许受限制的设置）",
                 acc && running, { Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS) }, "perm-acc",
+            ),
+            Perm(
+                "哨兵（第二双眼睛）",
+                "总控的无障碍服务一被系统停掉（显示“此服务出现故障”），掉线的那段时间就什么都管不住。哨兵是第二个无障碍服务，跑在自己的小进程里，几乎不会崩：" +
+                    "总控在跑时它什么都不做；总控掉了，它把拦截名单里的应用先关着（掉线不再等于畅玩），并给你一个一键修复的页面。",
+                "设置 → 快捷与辅助 → 无障碍 → 已安装的服务 → 总控·哨兵 → 打开（和「总控」是两个开关，都要开）",
+                PermissionStatus.sentinel(context), { Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS) }, "perm-sentinel",
             ),
             Perm(
                 "通知",

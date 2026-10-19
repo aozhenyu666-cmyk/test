@@ -46,10 +46,10 @@ fi
 
 # 开无障碍，确认真的绑定上了再往下走
 for i in 1 2 3 4 5 6; do
-  adb shell settings put secure enabled_accessibility_services $PKG/$PKG.guard.GuardService
+  adb shell settings put secure enabled_accessibility_services $PKG/$PKG.guard.GuardService:$PKG/$PKG.guard.SentinelService
   adb shell settings put secure accessibility_enabled 1
   sleep 3
-  if adb shell dumpsys accessibility | grep -q "Bound services:{Service\[label=总控"; then echo "无障碍已绑定"; break; fi
+  if adb shell dumpsys accessibility | grep -q "label=总控,"; then echo "无障碍已绑定"; break; fi
   echo "无障碍还没绑定，重试 $i"
 done
 adb shell am start -n $PKG/.ui.MainActivity >/dev/null
@@ -125,7 +125,23 @@ route home;               shot 11-home-dark
 route gate/hq_review;     shot 12-gate-dark
 adb shell cmd uimode night no
 
-adb logcat -d | grep -E "AndroidRuntime|FATAL|SeedReceiver|GuardService|Store" | tail -200 > "$OUT/logcat.txt"
+# ---------- 哨兵：总控的无障碍掉了（这里直接把它从列表里拿掉），哨兵接管，娱乐照样拦 ----------
+adb shell am broadcast -a $PKG.SEED -p $PKG --es blocked $TARGET --es mode strict
+sleep 2
+adb shell settings put secure enabled_accessibility_services $PKG/$PKG.guard.SentinelService
+sleep 5
+adb shell dumpsys accessibility | grep -iE "Bound services|Enabled services" | head -4 | tee "$OUT/accessibility-sentinel.txt"
+# 总控的心跳停了（模拟掉线 90 秒以上）
+adb shell am broadcast -a $PKG.SEED -p $PKG --es mode main-down
+sleep 1
+launch_target
+sleep 4
+shot 16-sentinel-takeover
+resumed | tee "$OUT/resumed-sentinel.txt"
+if grep -q "$PKG/.guard.SentinelBlockActivity" "$OUT/resumed-sentinel.txt"; then echo "SENTINEL_TAKEOVER=OK" >> "$OUT/result.txt"; else echo "SENTINEL_TAKEOVER=FAIL" >> "$OUT/result.txt"; adb logcat -d -s Sentinel:V SentinelLink:V | tail -30; fi
+adb shell settings put secure enabled_accessibility_services $PKG/$PKG.guard.GuardService:$PKG/$PKG.guard.SentinelService
+
+adb logcat -d | grep -E "AndroidRuntime|FATAL|SeedReceiver|GuardService|Store|Sentinel|CrashShield" | tail -200 > "$OUT/logcat.txt"
 cat "$OUT/result.txt"
 if grep -q "FATAL EXCEPTION" "$OUT/logcat.txt"; then echo "CRASH found"; grep -A20 "FATAL EXCEPTION" "$OUT/logcat.txt" | head -60; exit 1; fi
 grep -q FAIL "$OUT/result.txt" && exit 1

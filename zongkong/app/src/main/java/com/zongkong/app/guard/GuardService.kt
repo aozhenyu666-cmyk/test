@@ -146,9 +146,21 @@ class GuardService : AccessibilityService() {
         }
     }
 
+    private var lastSentinelWrite = 0L
+
+    /** 给哨兵写心跳和现在的拦截状态（最多 5 秒一次）。哨兵看到心跳停了就接管。 */
+    private fun beatSentinel(now: Long, status: () -> com.zongkong.core.Status) {
+        if (now - lastSentinelWrite < 5_000) return
+        lastSentinelWrite = now
+        val c = store.config.value
+        val st = status()
+        SentinelLink.writeState(this, c.blocked, st.strict, maxOf(c.pausedUntil, st.emergencyUntil ?: 0L), now)
+    }
+
     private fun onWindow(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
+        System.currentTimeMillis().let { t -> beatSentinel(t) { store.status(t) } }
         Log.d(TAG, "窗口切换：$pkg / ${event.className}")
         if (pkg in overlays()) return
         val now = System.currentTimeMillis()
@@ -257,6 +269,7 @@ class GuardService : AccessibilityService() {
         store.heartbeat = now
         if (interactive()) accountPlay(now) else fgSince = now
         val status = store.status(now)
+        beatSentinel(now) { status }
         fgPkg?.let { if (status.strict) enforce(it, now) }
         // 低屏模式：没有窗口切换事件时也按秒盯着（比如一直停在一个应用里）
         fgPkg?.let { p -> runCatching { Watch.tick(this, p, now) } }
@@ -469,6 +482,8 @@ class GuardService : AccessibilityService() {
         if (!running) return
         running = false
         runCatching { Diag.log(this, "offline", "无障碍服务离线（拦不住、看不到）") }
+        // 告诉哨兵：总控这就下线了，马上接管（崩溃时走不到这里，哨兵等心跳停 90 秒）
+        runCatching { SentinelLink.writeState(this, store.config.value.blocked, true, store.config.value.pausedUntil, at = 0L) }
         accountPlay(System.currentTimeMillis())
         store.logSwitch(System.currentTimeMillis(), com.zongkong.core.boss.Timeline.GAP)
         Notifications.showStatus(this, "总控已离线", "无障碍服务被关闭了。离线的时间会记成“失联”，写进日终验收。")
