@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class, Material::class, DrillRow::class, Deed::class, MaterialKey::class, Job::class, JobStep::class, Outside::class, Line::class, Move::class, Echo::class, Endgame::class, Impulse::class, Soup::class],
-    version = 12,
+    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class, Material::class, DrillRow::class, Deed::class, MaterialKey::class, Job::class, JobStep::class, Outside::class, Line::class, Move::class, Echo::class, Endgame::class, Impulse::class, Soup::class, PartnerSession::class],
+    version = 13,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -23,9 +23,16 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun echoes(): EchoDao
     abstract fun endgames(): EndgameDao
     abstract fun impulses(): ImpulseDao
+    abstract fun partners(): PartnerDao
     abstract fun soups(): SoupDao
 
     companion object {
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `partner_session` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `material` TEXT NOT NULL, `goal` TEXT NOT NULL, `minutes` INTEGER NOT NULL, `gear` TEXT NOT NULL, `startedAt` INTEGER NOT NULL, `endedAt` INTEGER, `presentMs` INTEGER NOT NULL, `leaves` INTEGER NOT NULL, `closeLine` TEXT NOT NULL, `nextStep` TEXT NOT NULL, `route` TEXT NOT NULL)")
+            }
+        }
+
         /** v0.5：给轮次和断点加上“骰子第几面”。旧数据保留，面记为 0。 */
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -214,7 +221,7 @@ abstract class AppDatabase : RoomDatabase() {
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "yishou.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
                 .build()
     }
 }

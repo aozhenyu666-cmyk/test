@@ -107,6 +107,8 @@ class YishouApp : Application() {
         sp.edit().putBoolean("init", true).apply()
     }
 
+    val partner: com.yishou.app.partner.PartnerSessions by lazy { com.yishou.app.partner.PartnerSessions(this) }
+
     val level: com.yishou.app.line.Level get() = com.yishou.app.line.Level.of(settings.app.value.talkLevel)
 
     /** 运行日志装好，再接管未捕获的异常：先记下来，再交给系统照常处理（应用照常退出）。 */
@@ -328,6 +330,7 @@ class YishouApp : Application() {
         }
 
         Notifications.ensureChannels(this)
+        partner // 恢复未收线记录，不自动启动会话或服务
         WindowScheduler.reschedule(this)
         Reminders.scheduleNudge(this)
         Reminders.scheduleIdle(this)

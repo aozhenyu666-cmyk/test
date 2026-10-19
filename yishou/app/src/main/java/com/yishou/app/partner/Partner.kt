@@ -86,6 +86,16 @@ class Presence(allowed: Set<String>, private val awayLimitMs: Long = 120_000) {
         if (accepts(at)) settle(at)
     }
 
+    /** 观察权限撤回后没有证据，不能把未知时间算成在场或离开。 */
+    fun unknown(at: Long) {
+        if (!accepts(at)) return
+        settle(at)
+        present = false
+        awaySince = null
+        absenceCounted = false
+        lastAt = at
+    }
+
     fun finish(at: Long) {
         if (!accepts(at)) return
         settle(at)

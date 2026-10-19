@@ -118,6 +118,7 @@ class GateActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         isShowing = true
+        vm.refreshPartnerClose()
     }
 
     override fun onPause() {
@@ -199,6 +200,7 @@ private fun GateScreen(
     onHome: () -> Unit,
     onOpenWindow: () -> Unit,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
             modifier = Modifier
@@ -223,6 +225,14 @@ private fun GateScreen(
             val echo = s.echo
             when {
                 s.loading -> MatrixLoader("准备一张题")
+                s.partnerPending -> {
+                    Text("上次伴读还没收线", style = MaterialTheme.typography.headlineSmall)
+                    Text("留一句聊出了什么，再说下一步做什么。")
+                    Button(onClick = {
+                        context.startActivity(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, "partner"))
+                    }, modifier = Modifier.fillMaxWidth()) { Text("回一手收线") }
+                    OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("先回桌面") }
+                }
                 passed != null -> {
                     Text("放行 $passed 分钟", style = MaterialTheme.typography.headlineMedium)
                     Text("说好看完：${s.exit}", style = MaterialTheme.typography.bodyLarge)

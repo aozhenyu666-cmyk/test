@@ -110,6 +110,7 @@ fun todayMarks(cards: List<CardAttempt>, drills: List<DrillRow>, deeds: List<Dee
 fun HomeScreen(
     onEndgame: () -> Unit,
     onSoup: () -> Unit,
+    onPartner: () -> Unit,
     onLine: (Long?) -> Unit,
     onLive: (Long) -> Unit,
     onBank: () -> Unit,
@@ -186,6 +187,8 @@ fun HomeScreen(
                     modifier = Modifier.weight(1f),
                 )
             }
+
+            OutlinedButton(onClick = onPartner, modifier = Modifier.fillMaxWidth()) { Text("语音伙伴 · 外部伴读") }
 
             MainLine(
                 line = lines.firstOrNull { it.closedAt == null },
