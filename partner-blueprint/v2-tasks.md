@@ -1,6 +1,6 @@
 # 墨灵 v2 · 任务书
 
-> 配合 [`README.md`](README.md) 使用。第一版任务书（自建大脑、消费守门等）在 [`v1-tasks.md`](v1-tasks.md)，暂缓。
+> 第二版任务书，已被第三版取代；配合 [`v2-design.md`](v2-design.md) 使用。第一版任务书（自建大脑、消费守门等）在 [`v1-tasks.md`](v1-tasks.md)，暂缓。
 > 代码基线：`zongkong-0.9-upgrade` 分支。总控代码在 `zongkong/app/src/main/java/com/zongkong/`。
 
 ## 共同规则
