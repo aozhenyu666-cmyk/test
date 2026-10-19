@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 格线 -->
+    <path
+        android:strokeColor="#7A5520"
+        android:strokeWidth="1.5"
+        android:pathData="M30,42 L78,42 M30,54 L78,54 M30,66 L78,66 M42,30 L42,78 M54,30 L54,78 M66,30 L66,78" />
+    <!-- 黑子 -->
+    <path
+        android:fillColor="#1E1E1E"
+        android:pathData="M42,42 m-9,0 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0" />
+    <!-- 白子 -->
+    <path
+        android:fillColor="#FAFAFA"
+        android:strokeColor="#1E1E1E"
+        android:strokeWidth="1"
+        android:pathData="M66,66 m-9,0 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0" />
+</vector>

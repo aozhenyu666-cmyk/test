@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- 网络：只连你自己配置的 AI 接口和 Notion -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 常驻状态通知、到点/超时/沉默提醒（Android 13 起需要你同意） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 权限页里请求“不限制电池优化”，减少无障碍服务被系统关掉 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- 行动到点提醒：准点闹钟（没授权时退回普通闹钟）；开机后重新定 -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- 拦截名单的选择列表只需要“桌面上能打开的应用” -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+        <!-- “去 GPT”“打开 Notion”：判断这两个 App 装了没有、能不能接收分享 -->
+        <package android:name="com.openai.chatgpt" />
+        <package android:name="notion.id" />
+        <!-- 行为管理部：和一手互相连接（读一手的训练、把行动交给一手陪练） -->
+        <package android:name="com.yishou.app" />
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="text/plain" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+    </queries>
+
+    <!-- 常驻服务：让总控不容易被系统清掉，每分钟看一眼无障碍服务还在不在跑 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 无障碍“开着但没在运行”时自己重新挂上。普通安装拿不到，要你在电脑上 adb 授权一次（见权限页）；不授权就只提醒 -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- 震动催你（总控时间到了、失联太久） -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 总控时间到点：像闹钟一样全屏亮起来 -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- 对讲：按住桌面宠物或对讲页说话（录音只发给你自己填的语音接口） -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- 总控者对账：读系统记录的应用使用情况（要你在“使用情况访问”里手动打开） -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
+    <application
+        android:name=".ZkApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Zongkong">
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- 从别的 App 分享文字、链接、截图进来；ChatGPT 的交接块也从这里进 -->
+            <intent-filter android:label="收进总控">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter android:label="收进总控">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+        </activity>
+
+        <!-- 严管拦截页：独立任务，不出现在最近任务里 -->
+        <activity
+            android:name=".guard.BlockActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.zongkong.app.block"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- 低屏模式做题页：连续用太久弹回来，答完再放行；独立任务、不进最近任务 -->
+        <activity
+            android:name=".guard.GateActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.zongkong.app.gate"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.Zongkong" />
+
+        <service
+            android:name=".system.KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="自我约束工具的常驻守护：保持无障碍服务运行、到点提醒" />
+        </service>
+
+        <!-- 无障碍服务：只读前台应用包名，见 res/xml/guard_service.xml -->
+        <service
+            android:name=".guard.GuardService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/guard_service" />
+        </service>
+        <receiver
+            android:name=".system.ReminderReceiver"
+            android:exported="false" />
+
+        <!-- 通知里直接回复总控 -->
+        <receiver
+            android:name=".system.ReplyReceiver"
+            android:exported="false" />
+
+        <!-- 桌面小部件：宠物 -->
+        <receiver
+            android:name=".system.PetWidget"
+            android:exported="true"
+            android:label="总控">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/pet_widget" />
+        </receiver>
+
+        <receiver
+            android:name=".system.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+        <!-- 一手连接：只走 call()，只认一手的签名（见 link/Partner.kt），别的应用调用一律拒绝 -->
+        <provider
+            android:name=".link.LinkProvider"
+            android:authorities="com.zongkong.app.link"
+            android:exported="true" />
+    </application>
+</manifest>

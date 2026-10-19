@@ -1,0 +1,75 @@
+name: zongkong-pc
+
+# 「总控」电脑版（Windows）：改了 zongkong-pc/ 或手机和电脑共用的核心代码，就跑测试、画界面截图、打安装包，
+# 并更新固定下载地址：
+# https://github.com/aozhenyu666-cmyk/test/releases/download/zongkong-pc-latest/zongkong-pc.msi
+on:
+  push:
+    paths:
+      - "zongkong-pc/**"
+      - "zongkong/app/src/main/java/com/zongkong/core/**"
+      - "zongkong/app/src/sharedTest/**"
+      - ".github/workflows/zongkong-pc.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# 两次提交挨得近时排队跑，免得同时替换同一个发布页
+concurrency:
+  group: zongkong-pc-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: zongkong-pc
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Tests, screenshots and installer
+        run: ./gradlew --no-daemon :core:test :app:test :app:packageMsi :app:createDistributable
+
+      - name: Collect files
+        run: |
+          cp app/build/compose/binaries/main/msi/*.msi zongkong-pc.msi
+          (cd app/build/compose/binaries/main/app && 7z a -tzip ../../../../../../zongkong-pc-portable.zip ZongKong > /dev/null)
+          (cd app/build && 7z a -tzip ../../snapshots.zip snapshots > /dev/null)
+          ls -la *.msi *.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zongkong-pc
+          path: |
+            zongkong-pc/zongkong-pc.msi
+            zongkong-pc/zongkong-pc-portable.zip
+            zongkong-pc/snapshots.zip
+          if-no-files-found: error
+
+      - name: Publish to release zongkong-pc-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete zongkong-pc-latest --cleanup-tag --yes || true
+          gh release create zongkong-pc-latest zongkong-pc.msi zongkong-pc-portable.zip snapshots.zip \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "总控 电脑版 最新构建" \
+            --notes "由提交 ${GITHUB_SHA::7} 自动构建。下载 zongkong-pc.msi 双击安装（装在当前用户下，不需要管理员）；也可以用免安装的 zongkong-pc-portable.zip。snapshots.zip 是界面截图。"
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zongkong-pc-test-reports
+          path: zongkong-pc/*/build/reports/tests/

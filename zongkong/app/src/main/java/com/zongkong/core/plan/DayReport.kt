@@ -1,0 +1,230 @@
+package com.zongkong.core.plan
+
+import com.zongkong.core.DayClock
+import com.zongkong.core.DayLog
+import com.zongkong.core.boss.CommitStatus
+import com.zongkong.core.boss.Dossier
+import com.zongkong.core.device.PcSide
+import com.zongkong.core.hq.HqSession
+import com.zongkong.core.work.ActionStatus
+import com.zongkong.core.work.F
+import com.zongkong.core.work.Rec
+import com.zongkong.core.work.TimeParse
+import com.zongkong.core.work.Work
+import java.time.ZoneId
+
+/*
+ * 今天的清单：一天下来做了什么、没做什么，照着记录列出来。
+ *
+ * 不评判、不要你写报告——总控自己把账列清楚，你只看一眼、补一句明天第一步。
+ * 日终验收交的就是这张单子；问“今天哪些没完成”，参谋也照这张单子答。
+ */
+object DayReport {
+
+    enum class Mark(val sign: String, val label: String) {
+        DONE("✓", "做完"),
+        WAIT("✓?", "做完待确认"),
+        DOING("…", "在做"),
+        STUCK("✗", "卡住"),
+        MOVED("→", "改期"),
+        TODO("○", "没做"),
+        CANCELLED("—", "取消"),
+    }
+
+    data class Item(val key: String, val title: String, val mark: Mark, val minutes: Int, val note: String = "", val main: Boolean = false) {
+        fun line(): String = buildString {
+            append(mark.sign).append(' ').append(title)
+            if (main) append("（主线）")
+            append("：").append(mark.label)
+            if (minutes > 0) append("，$minutes 分钟")
+            if (note.isNotBlank()) append("，").append(note)
+        }
+    }
+
+    data class Report(
+        val date: String,
+        /** 今天排了的（主线在最前）。 */
+        val planned: List<Item>,
+        /** 没排但今天做了 / 做完的。 */
+        val extra: List<Item>,
+        val workMinutes: Int,
+        val playMinutes: Int,
+        val bounces: Int,
+        val emergencies: Int,
+        val pcMinutes: Int,
+        val pcFunMinutes: Int,
+        val pcKnown: Boolean,
+        /** 今天到期的约定：(内容, 结果)。 */
+        val promises: List<Pair<String, String>>,
+        val hqDone: Boolean,
+        /** 明天第一步（已经排好的话）。 */
+        val tomorrow: String,
+        /** 今天的预案（有的话）：每段怎么样。 */
+        val blocks: List<Block> = emptyList(),
+        /** 今天记的支出（分；-1 = 没用账本）。 */
+        val spent: Long = -1,
+        val spentLine: String = "",
+        /** 关卡也必须列出，不能只把行动当作当天全部任务。 */
+        val gates: List<Pair<String, String>> = emptyList(),
+        val deferred: List<Pair<String, String>> = emptyList(),
+    ) {
+        val doneCount: Int get() = planned.count { it.mark == Mark.DONE || it.mark == Mark.WAIT }
+        val notDone: List<Item> get() = planned.filter { it.mark != Mark.DONE && it.mark != Mark.WAIT && it.mark != Mark.CANCELLED }
+        val empty: Boolean get() = planned.isEmpty() && extra.isEmpty() && gates.isEmpty() && deferred.isEmpty()
+    }
+
+    private fun mark(a: Rec, sessionKey: String?): Mark = when {
+        a.key == sessionKey -> Mark.DOING
+        else -> when (a.actionStatus) {
+            ActionStatus.DONE -> Mark.DONE
+            ActionStatus.CONFIRM -> Mark.WAIT
+            ActionStatus.DOING -> Mark.DOING
+            ActionStatus.STUCK -> Mark.STUCK
+            ActionStatus.RESCHEDULED -> Mark.MOVED
+            ActionStatus.CANCELLED -> Mark.CANCELLED
+            ActionStatus.TODO -> Mark.TODO
+        }
+    }
+
+    private fun note(a: Rec): String = when (a.actionStatus) {
+        // “达到。”和“做完”重复，去掉；“部分达到”留着
+        ActionStatus.DONE -> a[F.RESULT].removePrefix("达到。").removePrefix("达到").trim().take(40)
+        ActionStatus.CONFIRM -> a[F.RESULT].take(40)
+        ActionStatus.STUCK -> a[F.STUCK].ifBlank { a[F.BREAK].take(30) }
+        else -> a[F.BREAK].take(30).let { if (it.isNotBlank()) "停在：$it" else "" }
+    }
+
+    fun build(
+        work: Work,
+        book: PlanBook,
+        log: DayLog,
+        hq: List<HqSession>,
+        dossier: Dossier,
+        pc: PcSide?,
+        now: Long,
+        zone: ZoneId,
+        ledger: com.zongkong.core.ledger.LedgerBook? = null,
+        config: com.zongkong.core.Config? = null,
+        control: com.zongkong.core.control.ControlBook = com.zongkong.core.control.ControlBook(),
+    ): Report {
+        val today = DayClock.date(now, zone)
+        val dayFrom = DayClock.startOf(today, zone)
+        val dayTo = DayClock.startOf(today.plusDays(1), zone)
+        val mins = Plans.minutesByAction(work, dayFrom, minOf(now, dayTo))
+        val mainKey = Plans.day(book, today.toString())?.mainActionKey.orEmpty()
+        val sessionKey = work.session?.actionKey
+        fun startOf(a: Rec) = a.plan?.let { TimeParse.startMillis(it, zone) }
+
+        val plannedRecs = work.actions().filter { a ->
+            val s = startOf(a)
+            (s != null && s in dayFrom until dayTo) || a.key == mainKey
+        }.sortedWith(compareBy({ it.key != mainKey }, { startOf(it) ?: Long.MAX_VALUE }))
+        val plannedKeys = plannedRecs.map { it.key }.toSet()
+        val planned = plannedRecs.map { Item(it.key, it.title, mark(it, sessionKey), mins[it.key] ?: 0, note(it), it.key == mainKey) }
+
+        val extra = work.actions().filter { a ->
+            a.key !in plannedKeys && (
+                (mins[a.key] ?: 0) > 0 ||
+                    ((a.actionStatus == ActionStatus.DONE || a.actionStatus == ActionStatus.CONFIRM) && a.updatedAt in dayFrom until dayTo)
+                )
+        }.sortedByDescending { mins[it.key] ?: 0 }
+            .map { Item(it.key, it.title, mark(it, sessionKey), mins[it.key] ?: 0, note(it)) }
+
+        val promises = dossier.commitments.filter { it.due in dayFrom until dayTo }.map { c ->
+            c.what to when (c.status) {
+                CommitStatus.OPEN -> if (c.due < now) "到点了，还没对账" else "还没到点"
+                else -> c.status.label + (c.note.takeIf { it.isNotBlank() }?.let { "（$it）" } ?: "")
+            }
+        }
+
+        val tomorrowFrom = dayTo
+        val tomorrowTo = DayClock.startOf(today.plusDays(2), zone)
+        val tomorrowMain = Plans.day(book, today.plusDays(1).toString())?.mainActionKey?.let { work.rec(it) }
+        val first = tomorrowMain ?: work.actions().filter { it.actionStatus.open }
+            .mapNotNull { a -> startOf(a)?.takeIf { it in tomorrowFrom until tomorrowTo }?.let { a to it } }
+            .minByOrNull { it.second }?.first
+        val tomorrow = first?.let { a ->
+            val at = startOf(a)?.takeIf { a.plan?.hasTime == true }?.let { java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalTime().toString().take(5) + " " }.orEmpty()
+            at + a.title
+        }.orEmpty()
+
+        val pcToday = pc?.takeIf { it.at > 0 && DayClock.dateKey(it.at, zone) == today.toString() }
+        return Report(
+            date = today.toString(),
+            planned = planned,
+            extra = extra,
+            workMinutes = mins.values.sum(),
+            playMinutes = log.playMinutes,
+            bounces = log.bounces,
+            emergencies = log.emergencies.size,
+            pcMinutes = pcToday?.todayMinutes ?: 0,
+            pcFunMinutes = pcToday?.funMinutes ?: 0,
+            pcKnown = pcToday != null,
+            promises = promises,
+            hqDone = hq.any { DayClock.dateKey(it.startedAt, zone) == today.toString() && !it.active && !it.early },
+            tomorrow = tomorrow,
+            blocks = Playbook.of(book, today.toString())?.blocks.orEmpty(),
+            spent = ledger?.takeIf { it.items.isNotEmpty() }?.let { com.zongkong.core.ledger.Ledger.total(com.zongkong.core.ledger.Ledger.day(it, today, zone)) } ?: -1,
+            spentLine = ledger?.takeIf { it.items.isNotEmpty() }?.let { com.zongkong.core.ledger.Ledger.line(com.zongkong.core.ledger.Ledger.day(it, today, zone)) }.orEmpty(),
+            gates = config?.let { c -> com.zongkong.core.Engine.evaluate(c, log, now, zone, control = control).gates.map { g ->
+                g.gate.title to when {
+                    g.done -> g.phase.label
+                    g.deferredUntil != null -> "缓行至 " + java.time.Instant.ofEpochMilli(g.deferredUntil).atZone(zone).toLocalTime().toString().take(5) + "，仍待补交"
+                    else -> g.phase.label + "，未完成"
+                }
+            } }.orEmpty(),
+            deferred = control.deferrals.filter { it.resolvedAt == 0L || it.date == today.toString() }.map { d ->
+                "${d.date} · ${d.title}" to when {
+                    d.resolvedAt > 0 -> "已补交"
+                    d.until > now -> "缓行中，" + java.time.Instant.ofEpochMilli(d.until).atZone(zone).toLocalTime().toString().take(5) + " 恢复；未完成"
+                    else -> "缓行已到期，待补交（${d.reason}）"
+                }
+            },
+        )
+    }
+
+    /** 列成纯文字：清单页、日终验收、参谋都用这一份。 */
+    fun text(r: Report): String = buildString {
+        append("今天（${r.date}）的清单\n")
+        if (r.gates.isNotEmpty()) {
+            append("\n今天的关卡（包括日终总结）：\n")
+            r.gates.forEach { (title, state) -> append("· $title：$state\n") }
+        }
+        if (r.deferred.isNotEmpty()) {
+            append("\n缓行与补交（延后不算完成）：\n")
+            r.deferred.forEach { (title, state) -> append("· $title：$state\n") }
+        }
+        if (r.planned.isEmpty()) append("\n排了的：今天没有排进时间的行动。\n")
+        else {
+            append("\n排了的（做完 ${r.doneCount}/${r.planned.size}）：\n")
+            r.planned.forEach { append(it.line()).append('\n') }
+        }
+        if (r.blocks.isNotEmpty()) {
+            append("\n预案：\n")
+            r.blocks.forEach { b ->
+                append(b.span).append(' ').append(b.what).append("：").append(b.state.label)
+                if (b.result.isNotBlank()) append("，").append(b.result.take(40))
+                if (b.notes.isNotEmpty()) append("（速记 ${b.notes.size} 条）")
+                append('\n')
+            }
+        }
+        if (r.extra.isNotEmpty()) {
+            append("\n另外做了的：\n")
+            r.extra.forEach { append(it.line()).append('\n') }
+        }
+        if (r.promises.isNotEmpty()) {
+            append("\n今天到期的约定：\n")
+            r.promises.forEach { (w, s) -> append("· ").append(w).append("：").append(s).append('\n') }
+        }
+        append("\n时间：做事 ${hm(r.workMinutes)}；手机娱乐 ${hm(r.playMinutes)}")
+        if (r.bounces > 0) append("，被弹回 ${r.bounces} 次")
+        if (r.emergencies > 0) append("，紧急放行 ${r.emergencies} 次")
+        if (r.pcKnown) append("；电脑 ${hm(r.pcMinutes)}（娱乐 ${hm(r.pcFunMinutes)}）")
+        append('\n')
+        if (r.spent >= 0) append("支出：").append(r.spentLine).append('\n')
+        append("总控时间：").append(if (r.hqDone) "做了" else "还没做").append('\n')
+        append("明天第一步：").append(r.tomorrow.ifBlank { "还没排" }).append('\n')
+    }
+
+    fun hm(m: Int): String = if (m >= 60) "${m / 60} 小时 ${m % 60} 分" else "$m 分钟"
+}
