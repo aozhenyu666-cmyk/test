@@ -1,6 +1,7 @@
 # 墨灵 v3：导演、演员和一根接力棒
 
 > 2026-10-19 · 第三版，写给要动手实现的 DeepSeek（也写给我自己）。
+> **配套：[`MIND.md`](MIND.md)，讲她的记忆（总控本地 + Notion 给 GPT + Google 给 Gemini）和十二种能力。实现导演之前请一起读。**
 > 前两版存档：[`v1-full-design.md`](v1-full-design.md)（自建大脑、消费守门细节）、[`v2-design.md`](v2-design.md)（Gemini 当大脑、哨兵）。GPT 对前两版的整合意见原文在 [`refs/gpt-integration-notes.md`](refs/gpt-integration-notes.md)，本版已经吸收。
 
 ---
@@ -115,6 +116,8 @@
 ---
 
 ## 5. 导演的脑子
+
+记忆怎么存、怎么在 GPT 和 Gemini 之间共享、眼界怎么做，见 [`MIND.md`](MIND.md)。
 
 导演跑在总控里，由事件叫醒（解锁、切换 App、计划到点、打开 GPT/Gemini、收到收线、夜里定时），平时安静。它维护下面这些东西，具体结构由你设计：
 
@@ -238,6 +241,7 @@
 | P6 | Gemini Live 能不能读写 Google Tasks 里指定的清单 | 能读出、能按格式写 | 不走这条，全靠小窗收线 |
 | P7 | 无障碍掉线在 vivo 上实际掉在哪一层 | 一周日志 | 决定哨兵怎么做 |
 | P8 | 导演每天实际花多少钱 | 调试页有真实的累计花费 | 加缓存、少叫模型，或者设每日上限 |
+| P9–P10 | GPT 通过 Notion、Gemini 通过 Google 文档读写记忆 | 见 [`MIND.md`](MIND.md) 第 5 节 | 同上 |
 
 ---
 
