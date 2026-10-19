@@ -30,6 +30,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -43,7 +46,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yishou.app.llm.LlmConfig
 import com.yishou.app.settings.AppPrefs
 import com.yishou.app.settings.AppZone
-import com.yishou.app.speech.SpeechConfig
+import com.yishou.app.speech.SpeechEndpoint
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,7 +66,7 @@ fun SettingsScreen(
     val context = LocalContext.current
 
     var baseUrl by rememberSaveable { mutableStateOf(saved.baseUrl) }
-    var apiKey by rememberSaveable { mutableStateOf(saved.apiKey) }
+    var apiKey by remember { mutableStateOf(saved.apiKey) }
     var model by rememberSaveable { mutableStateOf(saved.model) }
     var jsonMode by rememberSaveable { mutableStateOf(saved.jsonMode) }
     var showKey by rememberSaveable { mutableStateOf(false) }
@@ -336,6 +339,9 @@ fun SettingsScreen(
                 message = vm.saveLlm(LlmConfig(baseUrl, apiKey, model, jsonMode)) ?: "已保存"
             }) { Text("保存接口设置") }
             message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+            key(LlmConfig(baseUrl, apiKey, model, jsonMode)) {
+                ConnectionTest("测试文字连接") { vm.testText(LlmConfig(baseUrl, apiKey, model, jsonMode)) }
+            }
 
             HorizontalDivider()
             VisionSection(vm)
@@ -355,7 +361,7 @@ fun SettingsScreen(
 private fun VisionSection(vm: SettingsViewModel) {
     val saved by vm.vision.collectAsStateWithLifecycle()
     var baseUrl by rememberSaveable { mutableStateOf(saved.baseUrl) }
-    var apiKey by rememberSaveable { mutableStateOf(saved.apiKey) }
+    var apiKey by remember { mutableStateOf(saved.apiKey) }
     var model by rememberSaveable { mutableStateOf(saved.model) }
     var message by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -393,19 +399,15 @@ private fun VisionSection(vm: SettingsViewModel) {
         Text("保存识图设置")
     }
     message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+    key(LlmConfig(baseUrl, apiKey, model, false)) {
+        ConnectionTest("测试识图连接（发送测试图）") { vm.testVision(LlmConfig(baseUrl, apiKey, model, false)) }
+    }
 }
 
-/** 语音：陪练窗口里读完题就听你说；可选填 OpenAI 兼容的听写 / 朗读接口，空着用手机自带的。 */
+/** 听写和朗读各自保存，允许来自不同服务。 */
 @Composable
 private fun VoiceSection(vm: SettingsViewModel, prefs: AppPrefs) {
     val saved by vm.speech.collectAsStateWithLifecycle()
-    var baseUrl by rememberSaveable { mutableStateOf(saved.baseUrl) }
-    var apiKey by rememberSaveable { mutableStateOf(saved.apiKey) }
-    var stt by rememberSaveable { mutableStateOf(saved.sttModel) }
-    var tts by rememberSaveable { mutableStateOf(saved.ttsModel) }
-    var voiceName by rememberSaveable { mutableStateOf(saved.ttsVoice) }
-    var message by rememberSaveable { mutableStateOf<String?>(null) }
-
     SectionTitle("语音")
     SwitchRow("语音陪练：读完题就听我说", prefs.voiceMode) { on -> vm.update { it.copy(voiceMode = on) } }
     LabeledRow("听写好后自动发出") {
@@ -416,53 +418,61 @@ private fun VoiceSection(vm: SettingsViewModel, prefs: AppPrefs) {
             "“我不知道”“再说一遍”“先停”“示范”“换一个”“等一下”“取消”。",
         style = MaterialTheme.typography.bodySmall,
     )
-    Text(
-        "下面的接口可选，按 OpenAI 兼容格式（/audio/transcriptions 听写、/audio/speech 朗读）。" +
-            "听写模型空着就用手机自带的语音识别，朗读模型空着就用系统朗读。录音只发给这里填的接口，不保存。",
-        style = MaterialTheme.typography.bodySmall,
-    )
-    OutlinedTextField(
-        value = baseUrl,
-        onValueChange = { baseUrl = it; message = null },
-        label = { Text("语音接口地址") },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = apiKey,
-        onValueChange = { apiKey = it; message = null },
-        label = { Text("语音密钥") },
-        singleLine = true,
-        visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = stt,
-        onValueChange = { stt = it; message = null },
-        label = { Text("听写模型（例如 whisper-1）") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = tts,
-        onValueChange = { tts = it; message = null },
-        label = { Text("朗读模型（例如 tts-1）") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = voiceName,
-        onValueChange = { voiceName = it; message = null },
-        label = { Text("朗读音色（接口要求时填）") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    Button(onClick = { message = vm.saveSpeech(SpeechConfig(baseUrl, apiKey, stt, tts, voiceName)) ?: "已保存" }) {
-        Text("保存语音设置")
+    Text("听写与朗读可分开填服务，空着则使用手机自带能力。录音不保存。测试连接会发送测试内容，可能消耗接口额度。", style = MaterialTheme.typography.bodySmall)
+    SpeechEndpointEditor("听写", saved.input, input = true, save = vm::saveTranscriber, test = vm::testTranscriber)
+    HorizontalDivider()
+    SpeechEndpointEditor("朗读", saved.output, input = false, save = vm::saveSynthesizer, test = vm::testSynthesizer)
+}
+
+@Composable
+private fun SpeechEndpointEditor(
+    label: String,
+    saved: SpeechEndpoint,
+    input: Boolean,
+    save: (SpeechEndpoint) -> String?,
+    test: suspend (SpeechEndpoint) -> String,
+) {
+    var baseUrl by remember(saved) { mutableStateOf(saved.baseUrl) }
+    var apiKey by remember(saved) { mutableStateOf(saved.apiKey) }
+    var model by remember(saved) { mutableStateOf(saved.model) }
+    var voice by remember(saved) { mutableStateOf(saved.voice) }
+    var language by remember(saved) { mutableStateOf(saved.language) }
+    var format by remember(saved) { mutableStateOf(saved.format) }
+    var message by remember { mutableStateOf<String?>(null) }
+    SectionTitle("$label 接口")
+    OutlinedTextField(baseUrl, { baseUrl = it; message = null }, label = { Text("$label 接口地址") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(apiKey, { apiKey = it; message = null }, label = { Text("$label 密钥") }, singleLine = true,
+        visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(model, { model = it; message = null }, label = { Text("$label 模型名（空着用系统）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    if (input) {
+        OutlinedTextField(language, { language = it; message = null }, label = { Text("识别语言") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    } else {
+        OutlinedTextField(voice, { voice = it; message = null }, label = { Text("音色（接口要求时填）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("mp3", "wav").forEach { value ->
+                FilterChip(selected = format == value, onClick = { format = value; message = null }, label = { Text(value) })
+            }
+        }
     }
+    val current = SpeechEndpoint(baseUrl, apiKey, model, voice, language, format)
+    Button(onClick = { message = save(current) ?: "已保存$label 设置" }) { Text("保存$label 设置") }
     message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+    key(current) { ConnectionTest(if (input) "测试听写（发送静音片段）" else "测试朗读（合成不播放）") { test(current) } }
+}
+
+@Composable
+private fun ConnectionTest(label: String, test: suspend () -> String) {
+    val scope = rememberCoroutineScope()
+    var testing by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<String?>(null) }
+    OutlinedButton(enabled = !testing, onClick = {
+        testing = true
+        result = null
+        scope.launch {
+            try { result = test() } finally { testing = false }
+        }
+    }) { Text(if (testing) "正在测试……" else label) }
+    result?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
 }
 
 @Composable
