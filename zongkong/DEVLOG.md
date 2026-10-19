@@ -5,6 +5,70 @@
 
 ---
 
+## 2026-10-19 · 会合：施工队 A 并进主分支，修 5 处（施工队 B 审查）
+
+把 `deepseek-window` 合进 `ccr-b6e667ac-bsoz44`（已含 0.11 哨兵）。施工队 A 的代码编译和全部单元测试在 CI 上都通过了；审查时修了这几处：
+
+| 问题 | 后果 | 修法 |
+|---|---|---|
+| 事件返回 null 时宿主会收起小窗 | 正看着卡，切一下 App 卡就没了（大多数事件都返回 null） | `DirectorHost.sense` 只在有卡时显示；null 表示“现在不打扰”，不是“收起” |
+| 导演在主线程上跑 | 每次切 App 都在主线程写记忆文件、可能等模型，界面会卡 | 宿主改用后台线程，显示时切回主线程；开场白同样放后台 |
+| 点“去聊”不告诉导演 | 这件事一直留在议程里，过后又弹出来 | 照约定同时发 `Reply.Pick(go)`；宿主不因此收起小窗（开场白要接着显示） |
+| “去打开”按钮不跳设置页 | “我看不见了”卡上的按钮只是关掉卡片 | `fix` 打开系统无障碍设置页，同时告诉导演 |
+| 会话中收线算两次；“继续这一问”会收起小窗 | 接力棒重复、回头看排两次；会话里准备好的问题走不下去 | 会话中的按钮先交给 `Relay.consume`：继续 / 卡住了 → 下一张准备好的卡；有结论 → 只收线一次；划掉不算无视 |
+
+仍然没做（照施工队 A 的报告）：HqRunner 和“连续娱乐弹 chat”还没并进议程；C 档读字幕；导演设置界面；无障碍整个死掉时健康检查本身也停了（这种情况由 0.11 的哨兵接管）。
+
+## 2026-10-19 · 墨灵导演（施工队 A：小窗、接力、感知、健康）
+
+### 你提的
+
+1. 两队并行：B 做导演和记忆（`core/director/`），A 做 Android 侧的身体——眼睛（感知）、嘴（小窗 / 朗读）、腿（打开演员 App、交接开场白、统计在场）、保命（无障碍四层健康）。
+2. 只改 `app/` 下的代码，新代码长在 `app/director/`、`app/window/`、`app/sense/`、`app/health/`。
+3. 先用 `FakeDirector` 把链跑通，B 的真导演好了就换构造那一行。
+
+### 做了什么
+
+| 文件 | 内容 | 为什么 |
+|---|---|---|
+| `app/director/DirectorHost.kt` | 导演宿主：持有 `DirectorEngine`、事件 / 回应 / 收线**串行**交给它、把卡交给小窗；`AskStats`（给 `Ask` 包一层：30 秒超时、失败返回 null、按天记请求次数与字数） | 换导演只改 `start()` 里的构造；A 的三个接口（`FactsSource` / `Ask` / `MindStore`）都在这里落位，B 不用碰 Android |
+| `app/director/PhoneFacts.kt` | 从 `Store` 拼 `Facts`：主线、计划时间、开始 / 完成、最近进展、娱乐时长、信用、态度、静默、专注、接下来 3 小时的行动、本周要交的 | 拿不到的（账本、收件箱、长期目标）写进 `unknown`，**不把“没数据”当成“没在做事”** |
+| `app/window/MailuoWindow.kt` | 小圆点（可拖、松手贴边）+ 卡片：一次只突出 `ask`；`sayLines` 点一下复制；`choices` 或默认四键（继续 / 卡住了 / 有结论🎤 / 休息）；`queued`、倒计时、`confidence`、`speak`；关掉或超时发 `Dismissed` | 借无障碍悬浮层（`TYPE_ACCESSIBILITY_OVERLAY`），和桌面宠物同一套办法，**不用额外权限**，Gemini Live 全屏时也能浮 |
+| `app/window/Relay.kt` | 开场白：复制到剪贴板 → 打开 Gemini / ChatGPT（没装退回网页版）→ 小窗显示全文可照念；记演员在前台的时长和离开次数（离开 > 2 分钟算一次）；点“有结论”或离开太久 → 组 `SessionLog` 交给导演 | A3；先做最稳的一档（复制 / 照念），分享和直达 Live 等 P3 / P4 |
+| `app/sense/SenseHub.kt` | 翻译事件：`UNLOCK` / `SCREEN_OFF` / `FOREGROUND`（分类 ENTERTAINMENT / ACTOR / WORK / OTHER）/ `ACTOR_OPEN` / `LONG_ENTERTAINMENT`（默认 15 分钟）/ `PLAN_DUE`（过点 5 分钟还没开始）/ `PLAN_PROGRESS` / `IDLE_START` / `HEALTH` / `TICK`（30 分钟）/ `NIGHT`（默认 23:00） | A4；**只翻译，不判断**；开关关着时每个入口第一行就返回 |
+| `app/health/HealthWatch.kt` | 四层：权限（系统启用列表）/ 服务（`GuardService.running`）/ 最近事件（`SenseHub.lastEventAt`）/ 页面读取（P2 没做，如实 `null`）；变化才发 `Sense(HEALTH)`，并写进 `Diag` | A5；不确定的不编：区分“用户自己关的”只按“从开到关”保守记，不替用户改系统设置 |
+| `core/Model.kt` | 加 `MailuoConfig`（`enabled` 默认 **false**、`speak`、连续娱乐阈值、过点阈值、夜间时间，外加导演自己的 `DirectorConfig`）挂在 `Config.mailuo` | 开关要和总控配置一起存、一起即时生效；**没碰 `core/director/` 的任何文件** |
+| `app/guard/GuardService.kt` | 前台切换 → `SenseHub.foreground`；亮屏广播 → `unlock` / `screenOff`；tick → `SenseHub.tick`；连上 / 销毁时 attach / detach 小窗 | 总控本来就在收这些事件，不新开服务、不多耗电 |
+| `app/system/Partner.kt`、`InitiativeRunner.kt` | 导演开着时不再自己开口 | 避免“各说各话”：导演开着时由议程统一决定 |
+| `app/ui/SettingsScreens.kt` | “运行”里加一张卡：墨灵导演（试验）开关 + 四层健康一行 | 开关默认关；关着时行为一点不变 |
+| `AndroidManifest.xml` | `<queries>` 里加 Gemini 包名 | Android 11+ 不声明就查不到装没装，接力会永远退回网页版 |
+
+**复用了 B 的东西**：`core.LlmAsk`（把 `LlmApi` 接给导演）、`core/director/FileMindStore`（原子写 + 备份）、
+`core/director/DirectorEngine`（真导演）。所以 A 这边没有重复实现 `Ask` / `MindStore`。
+
+### 怎么验收（真机，5 步）
+
+1. 装好这一版 → 设置 → 运行 → 打开“墨灵导演（试验）”：屏幕边上出现一颗小圆点（可拖，松手贴边）。
+2. 把主线排到 1 分钟后，去刷拦截名单里的应用，等一会儿：小圆点弹出导演的卡（主线过点 + 在娱乐，通常是先问“你现在是在？”）。
+3. 点“卡住了” → 出现“去聊：Gemini Live” → 点它：剪贴板里是开场白，Gemini 被打开，小窗显示开场白全文（复制 / 照念 / 开始了）。
+4. 在 Gemini 里聊几分钟，回来点“有结论 🎤”，说完再点一次 → 原文交给导演，收线 → 接力棒更新（`mind.json` 里能看到）。
+5. 关掉开关：小圆点消失，桌面宠物和原来的提醒全部照旧。
+
+### 没做 / 已知问题
+
+- **没在本机编译过**：这台机器没有 Android SDK（`E:\ANDROID_SDK` 不存在），编译以 CI 为准。第一次 CI 可能要修几处编译错误。
+- **HqRunner 和“连续娱乐弹 chat”这两处还没并进议程**：导演开着时仍会各自发话。它们牵扯总控时间主流程，这一版没动，先观察会不会真的重复。
+- **C 档（读演员字幕）没做**：要 P2 的结果，且读屏权限只对 Gemini / ChatGPT 两个包开。现在 `Health.readable` 一律 `null`（未知），**不假装读到**。
+- **听写**：小窗里用总控现有的 `Voice`（要麦克风权限 + 配了听写接口）。没配时卡上提示“去总控里说”，**没做悬浮窗里的软键盘**（悬浮窗不抢焦点，输入法弹不出来）。
+- **P1 / P3 / P4 / P5 只能真机验**。
+- 阈值（15 分钟、过点 5 分钟、23:00）都是起步值，放在 `MailuoConfig`；导演自己的节律（每天 12 次、隔 20 分钟、过点 15 分钟、40 万字）在 B 的 `DirectorConfig`，已经挂到 `Config.mailuo.engine`，界面还没做。
+
+### 要观察
+
+- 小圆点会不会挡手（位置可拖，记在 `pet` prefs 的 `mailuo_x` / `mailuo_y`）。
+- 导演开着时，“解锁就问”和主动性不再出声，你会不会觉得空。
+- 四层健康里到底哪一层先掉（P7）：`Diag` 里新加了 `health` 种类，等一周的数据。
+
 ## 2026-10-19 · 墨灵导演（施工队 B，纯逻辑，未接入界面）
 
 ### 你提的

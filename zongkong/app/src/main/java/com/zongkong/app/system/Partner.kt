@@ -13,6 +13,8 @@ object Partner {
     @Volatile private var lastGreet = 0L
 
     fun afterUnlock(context: Context, unlockedAt: Long, now: Long) {
+        // 导演开着时，解锁问候由导演的议程统一决定；这里不再自己开口，避免两边各说各话
+        if (com.zongkong.app.director.DirectorHost.enabled(context)) return
         if (unlockedAt <= 0 || now - unlockedAt !in 30_000L..180_000L) return
         val app = context.zk
         val store = app.store

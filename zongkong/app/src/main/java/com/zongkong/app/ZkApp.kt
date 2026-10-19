@@ -43,6 +43,8 @@ class ZkApp : Application() {
         store = Store(this)
         actions = Actions(this, store)
         chat = com.zongkong.app.data.ChatRepo(this, store, actions)
+        // 墨灵导演的宿主：只建对象，开关关着时什么也不做
+        com.zongkong.app.director.DirectorHost.start(this)
         Notifications.ensureChannels(this)
         com.zongkong.app.system.Reminders.reschedule(this)
         com.zongkong.app.system.Reminders.watchdog(this)
