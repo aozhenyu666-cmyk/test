@@ -17,6 +17,11 @@ fun interface PartnerTextModel {
     suspend fun reply(tag: RequestTag, system: String, history: List<Pair<String, String>>, user: String): ApiReply<String>
 }
 
+/** 流式版本：边生成边交出文字片段，结束时返回整段 */
+fun interface StreamingTextModel {
+    suspend fun stream(tag: RequestTag, system: String, history: List<Pair<String, String>>, user: String, onDelta: suspend (String) -> Unit): ApiReply<String>
+}
+
 fun interface ScreenReader {
     suspend fun read(tag: RequestTag, question: String, imageDataUrl: String): ApiReply<String>
 }
@@ -32,6 +37,11 @@ class HttpTranscriber(private val speech: SpeechApi) : Transcriber {
 class HttpPartnerTextModel(private val chat: ChatClient) : PartnerTextModel {
     override suspend fun reply(tag: RequestTag, system: String, history: List<Pair<String, String>>, user: String) =
         ApiReply(tag, chat.completeConversation(system, history, user, "伙伴对话"))
+}
+
+class HttpStreamingTextModel(private val chat: ChatClient) : StreamingTextModel {
+    override suspend fun stream(tag: RequestTag, system: String, history: List<Pair<String, String>>, user: String, onDelta: suspend (String) -> Unit) =
+        ApiReply(tag, chat.streamConversation(system, history, user, "伙伴对话", onDelta))
 }
 
 class HttpScreenReader(private val chat: ChatClient) : ScreenReader {
