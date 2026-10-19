@@ -109,6 +109,14 @@ class YishouApp : Application() {
 
     val partner: com.yishou.app.partner.PartnerSessions by lazy { com.yishou.app.partner.PartnerSessions(this) }
 
+    /** 一手自己的语音伙伴（听写 → 文字模型 → 朗读） */
+    val partnerVoice: com.yishou.app.partner.PartnerVoice by lazy { com.yishou.app.partner.PartnerVoice(this) }
+
+    /** 不在协程里时用：后台做一件小事（写库之类） */
+    fun appScopeLaunch(block: suspend () -> Unit) {
+        appScope.launch { block() }
+    }
+
     val level: com.yishou.app.line.Level get() = com.yishou.app.line.Level.of(settings.app.value.talkLevel)
 
     /** 运行日志装好，再接管未捕获的异常：先记下来，再交给系统照常处理（应用照常退出）。 */

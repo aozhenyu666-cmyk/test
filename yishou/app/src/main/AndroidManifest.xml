@@ -16,6 +16,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <!-- 陪练窗口期间保持前台，划掉界面或清理后台时计时和朗读不中断 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 语音伙伴：用户点开始后才开麦克风，前台服务带常驻通知和“停”按钮 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- 语音陪练：只在你点麦克风、或陪练读完题等你回答时录这一段话，转成文字后丢掉 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 震动提示：手机揣在身上、声音关着时也能分清是什么事 -->
@@ -149,6 +151,11 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="用户主动开启的学习陪练计时：倒计时、朗读问题和无回应提醒，窗口结束即停止" />
         </service>
+
+        <service
+            android:name=".partner.PartnerVoiceService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
         <service
             android:name=".partner.PartnerService"

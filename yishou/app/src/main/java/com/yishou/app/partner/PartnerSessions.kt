@@ -44,6 +44,16 @@ class PartnerSessions(private val app: YishouApp) {
         }
     }
 
+    /** 语音伙伴那边留下了待收线的一场：外部伴读没在计时时，重新读一遍，让收线页显示出来 */
+    suspend fun reload() {
+        restored.join()
+        lock.withLock {
+            if (timer != null) return@withLock
+            val p = dao.pending()?.takeIf { it.endedAt != null }
+            _state.value = PartnerView(loading = false, row = p, closing = p != null)
+        }
+    }
+
     suspend fun pendingClose(): PartnerSession? {
         restored.join()
         tick()

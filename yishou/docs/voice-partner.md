@@ -1,5 +1,7 @@
 # 语音伙伴：规划与任务规格（T1–T7，独立 API 版）
 
+> 进度（2026-10-19）：T1、T2、T3、T4a 已合并；T4b、T5 已在 `ccr-a5172662-j1jcik` 上完成（`llm/Sse.kt`、`voice/Sentences.kt`、`voice/TurnEnd.kt`、`voice/Turns.kt`、`partner/Controller.kt`、`partner/PartnerVoice.kt`、`partner/PartnerVoiceService.kt`）。下一步是 T6、T7。T5 第一版是轮流说话（它说话时不开麦，点“停”打断），自然插话等真机测过回声再做。
+
 本次修订只调整规划与任务书，不表示应用已经实现。路线 B 采用用户自行配置的普通接口，不实现 Gemini Live、Firebase Live 或其他端到端音频模型协议。原路线 A 保留为可选外部流程，不要求先使用它，也不要求任何会员。
 
 每次只实现明确点名的任务。沿用 `yishou/AGENTS.md` 的分支、加密配置、透明原则和测试要求。

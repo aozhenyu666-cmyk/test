@@ -78,6 +78,23 @@ fun PartnerScreen(onBack: () -> Unit) {
             finally { busy = false }
         }
     }
+    val voiceRun by app.partnerVoice.running.collectAsStateWithLifecycle()
+    fun currentPlan() = PartnerPlan(Material.valueOf(materialName), goal, minutes, Gear.valueOf(gearName))
+    fun startVoice() = work {
+        val err = app.partnerVoice.start(currentPlan())
+        if (err != null) note = err
+        else if (!com.yishou.app.partner.PartnerVoiceService.start(context)) {
+            app.partnerVoice.stop()
+            note = "麦克风服务没启动，请检查通知和后台限制。"
+        }
+        Unit
+    }
+    val askMic = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) startVoice() else note = "没有麦克风权限，语音伙伴开不了。"
+        Unit
+    }
     Scaffold(topBar = { BackTopBar("语音伙伴", onBack) }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -86,7 +103,11 @@ fun PartnerScreen(onBack: () -> Unit) {
             if (GateService.foreground == null) Text("无障碍服务没开：这场不能统计在场或提醒离开。可到系统设置手动开启。")
             state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             note?.let { Text(it) }
-            if (state.loading) {
+            val live = voiceRun
+            if (live != null) {
+                VoiceLivePanel(live, onInterrupt = { app.partnerVoice.interrupt() }, onEnd = { app.partnerVoice.end() },
+                    onClose = { app.partnerVoice.stop() }, onGear = { app.partnerVoice.setGear(it) })
+            } else if (state.loading) {
                 Text("正在读本机记录……")
             } else if (state.row == null) {
                 Text("今天看什么？")
@@ -128,6 +149,15 @@ fun PartnerScreen(onBack: () -> Unit) {
                         }
                     }
                 }, modifier = Modifier.fillMaxWidth()) { Text(if (busy) "准备中……" else "用 Gemini 开始") }
+                Button(enabled = goal.isNotBlank() && !busy && state.error == null, onClick = {
+                    if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) {
+                        note = "先开启一手的通知：麦克风在用时通知里要能看见、能停。"
+                        context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+                    } else if (!app.voice.hasPermission()) {
+                        askMic.launch(android.Manifest.permission.RECORD_AUDIO)
+                    } else startVoice()
+                }, modifier = Modifier.fillMaxWidth()) { Text("用一手自己的语音开始") }
+                Text("一手自己的语音：你说完，它想好了念给你听；它说话时不开麦，想打断就点“停”。用设置里的文字模型和听写 / 朗读接口，没填听写朗读就用手机自带的。戴耳机效果更好。", style = MaterialTheme.typography.bodySmall)
             } else {
                 val row = state.row!!
                 Text(row.goal, style = MaterialTheme.typography.titleLarge)
@@ -166,4 +196,41 @@ fun PartnerScreen(onBack: () -> Unit) {
         text = { Text("计划、在场统计和未写完的收线都会从本机删除。") },
         confirmButton = { TextButton(onClick = { delete = false; work { partner.deletePending(); PartnerService.clearClosing(context) } }) { Text("删除") } },
         dismissButton = { TextButton(onClick = { delete = false }) { Text("保留") } })
+}
+
+@Composable
+private fun VoiceLivePanel(
+    r: com.yishou.app.partner.PartnerVoice.Running,
+    onInterrupt: () -> Unit,
+    onEnd: () -> Unit,
+    onClose: () -> Unit,
+    onGear: (Gear) -> Unit,
+) {
+    val s = r.live
+    val min = s.remainingMs / 60_000
+    val sec = (s.remainingMs / 1000) % 60
+    Text(r.plan.goal, style = MaterialTheme.typography.titleLarge)
+    Text(
+        when {
+            s.stage == com.yishou.app.partner.Stage.CLOSE -> "收线中"
+            s.stage == com.yishou.app.partner.Stage.ENDED -> "收好了"
+            s.phase == com.yishou.app.partner.Phase.SPEAKING -> "在说"
+            s.phase == com.yishou.app.partner.Phase.THINKING -> "在想"
+            s.stage == com.yishou.app.partner.Stage.PROBE -> "在等你回答"
+            else -> "在听"
+        } + " · 还剩 %d:%02d".format(min, sec) + if (s.missed > 0) " · 没接 ${s.missed}" else "",
+        style = MaterialTheme.typography.titleMedium,
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Gear.entries.forEach { g -> FilterChip(selected = s.gear == g, onClick = { onGear(g) }, label = { Text(g.label) }) }
+    }
+    s.lines.takeLast(4).forEach { t ->
+        Text("${t.who}：${t.text}", style = MaterialTheme.typography.bodyMedium,
+            color = if (t.who == com.yishou.app.partner.PartnerController.ME) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.tertiary)
+    }
+    s.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+    Button(onClick = onInterrupt, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("停（打断它，轮到我说）") }
+    OutlinedButton(onClick = onEnd, modifier = Modifier.fillMaxWidth()) { Text("结束并收线") }
+    TextButton(onClick = onClose) { Text("直接关掉（收线留到下次）") }
+    Text("口令：“今天到这”收线，“逼紧一点 / 放松点”换强度，“安静”先别主动问，说完一段话可以加一句“好了”。", style = MaterialTheme.typography.bodySmall)
 }
