@@ -29,6 +29,7 @@ data class GateState(
     val inWindow: Boolean = false,
     /** 上次放行时说好“看完做的第一件事”，先问做了没有 */
     val followUp: String? = null,
+    val partnerPending: Boolean = false,
     /** 这次放行要说的“看完做什么” */
     val exit: String = "",
     val offlineLeft: Int = 0,
@@ -79,7 +80,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         val inWindow = pkg != null && (group == GateActivity.WINDOW_GROUP || WindowClock.active(now, prefs, AppZone.zone) != null)
         val follow = prefs.pendingExit.takeIf { it.isNotBlank() && now >= prefs.pendingExitAt }
         _state.value = GateState(
-            loading = false,
+            loading = true,
             triggerPackage = pkg,
             appLabel = label,
             group = group,
@@ -90,8 +91,10 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         )
         session.stop()
         lineSession.stop()
-        if (inWindow) return
         viewModelScope.launch {
+            refreshPartnerCloseNow()
+            _state.update { it.copy(loading = false) }
+            if (inWindow) return@launch
             pushEcho(pkg.orEmpty())
             // 残局：有到期的就下一局；没有就退成一张题卡（并在后台加工新的）
             if (prefs.gateMode == "endgame") {
@@ -119,6 +122,13 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    fun refreshPartnerClose() = viewModelScope.launch { refreshPartnerCloseNow() }
+
+    private suspend fun refreshPartnerCloseNow() {
+        val pending = yishou.partner.pendingClose() != null
+        _state.update { it.copy(partnerPending = pending) }
     }
 
     private val chalu = com.yishou.app.system.Variant.chalu
@@ -210,7 +220,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     /** 做完题卡、说了看完做什么：放行 */
     fun pass() {
         val s = _state.value
-        if (s.isTest || s.inWindow || s.passMinutes != null || s.exit.isBlank()) return
+        if (s.loading || s.partnerPending || s.isTest || s.inWindow || s.passMinutes != null || s.exit.isBlank()) return
         // 出不了题（没网、接口出错、题库空了又生成失败）时不卡人：退成只打卡
         val card = session.state.value
         val cardFailed = card.error != null && card.round == null
@@ -230,7 +240,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     /** 题出不来：写一句为什么现在要用，离线放行（每天有次数） */
     fun passOffline() {
         val s = _state.value
-        if (s.isTest || s.inWindow || s.passMinutes != null || s.exit.isBlank()) return
+        if (s.loading || s.partnerPending || s.isTest || s.inWindow || s.passMinutes != null || s.exit.isBlank()) return
         viewModelScope.launch {
             if (offlineLeft() <= 0) return@launch
             grant(yishou.settings.app.value.offlinePassMinutes, DayStats.OFFLINE_PASS)

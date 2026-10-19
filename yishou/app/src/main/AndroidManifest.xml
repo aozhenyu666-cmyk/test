@@ -150,6 +150,15 @@
                 android:value="用户主动开启的学习陪练计时：倒计时、朗读问题和无回应提醒，窗口结束即停止" />
         </service>
 
+        <service
+            android:name=".partner.PartnerService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="用户主动开始的外部伴读计时和离开提醒：只观察前台包名，不录音，到点停止" />
+        </service>
+
         <!-- 局面壁纸：用户自己在系统壁纸设置里选用 -->
         <service
             android:name=".wallpaper.BoardWallpaperService"

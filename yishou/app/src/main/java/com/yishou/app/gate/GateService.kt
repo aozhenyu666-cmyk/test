@@ -89,6 +89,7 @@ class GateService : AccessibilityService() {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
         foregroundPkg = pkg
+        app.partner.foreground(pkg)
         if (pkg == packageName) {
             ExternalGrace.close()
             return
@@ -97,6 +98,11 @@ class GateService : AccessibilityService() {
     }
 
     private fun check(pkg: String) {
+        if (app.partner.allows(pkg)) {
+            shortCheck?.cancel()
+            shortPkg = null
+            return
+        }
         val prefs = app.settings.app.value
         val now = System.currentTimeMillis()
         val isSystem = pkg in systemAllowed() || pkg in WindowRules.STATIC_SYSTEM
@@ -125,6 +131,10 @@ class GateService : AccessibilityService() {
         if (pkg == lastLaunchPkg && now - lastLaunchAt < 2_000) return
 
         scope.launch {
+            if (app.partner.pendingClose() != null) {
+                launchGate(pkg, group, now)
+                return@launch
+            }
             val pass = try {
                 app.database.dao().activePass(group, now)
             } catch (e: Exception) {
@@ -180,13 +190,19 @@ class GateService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onUnbind(intent: Intent?): Boolean {
-        if (running === this) running = null
+        if (running === this) {
+            running = null
+            app.partner.foreground(null)
+        }
         Notifications.cancelRunning(this)
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
-        if (running === this) running = null
+        if (running === this) {
+            running = null
+            app.partner.foreground(null)
+        }
         Notifications.cancelRunning(this)
         scope.cancel()
         super.onDestroy()
