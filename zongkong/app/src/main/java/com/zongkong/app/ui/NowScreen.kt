@@ -146,8 +146,14 @@ fun NowScreen(nav: NavHostController) {
         val missing = remember(resumeKey, now / 60_000) { PermissionStatus.missingCritical(context) }
         if (missing.isNotEmpty()) {
             Panel(accent = sig.strict, onClick = { nav.navigate("settings/perm") }, modifier = Modifier.enter(1).testTag("perm-banner")) {
-                Text("总控现在管不住你", style = MaterialTheme.typography.titleSmall, color = sig.strict)
-                Hint("没开：" + missing.joinToString("、") + "。定时的总控时间、拦截、叫醒都会失灵。点这里，一项一项开。")
+                val guardDown = missing.any { it.startsWith("无障碍服务") }
+                val sentinelOn = missing.none { it.startsWith("哨兵") }
+                Text(if (guardDown && sentinelOn) "总控的眼睛掉了，哨兵在替它拦着" else if (guardDown) "总控现在管不住你" else "还差一双眼睛", style = MaterialTheme.typography.titleSmall, color = sig.strict)
+                Hint(
+                    "没开：" + missing.joinToString("、") + "。" +
+                        (if (guardDown && sentinelOn) "娱乐应用先关着，修好总控就恢复。" else if (guardDown) "定时的总控时间、拦截、叫醒都会失灵。" else "总控一掉线就没人管。") +
+                        "点这里，一项一项开。",
+                )
             }
         }
 

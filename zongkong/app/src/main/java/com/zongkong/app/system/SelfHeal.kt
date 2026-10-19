@@ -65,6 +65,7 @@ object SelfHeal {
     suspend fun check(context: Context) {
         val store = context.zk.store
         if (store.config.value.pausedUntil > System.currentTimeMillis()) return
+        checkSentinel(context)
         if (PermissionStatus.guardRunning(context)) {
             heals = 0
             state = "running"
@@ -94,6 +95,20 @@ object SelfHeal {
             Diag.log(context, "rebind_fail", "自动重新挂上没成功（第 $heals 次）")
         }
         warn(context, enabled, now)
+    }
+
+    @Volatile private var lastSentinelHeal = 0L
+
+    /** 反过来盯哨兵：开着、心跳却停了 3 分钟以上，有权限就把它重新挂上（10 分钟最多一次）。 */
+    private fun checkSentinel(context: Context) {
+        val now = System.currentTimeMillis()
+        if (!com.zongkong.app.guard.SentinelLink.enabled(context, com.zongkong.app.guard.SentinelService::class.java)) return
+        if (now - com.zongkong.app.guard.SentinelLink.sentinelBeat(context) < 3 * 60_000L) return
+        if (!canWrite(context) || now - lastSentinelHeal < 10 * 60_000L) return
+        lastSentinelHeal = now
+        if (com.zongkong.app.guard.SentinelLink.rebind(context, com.zongkong.app.guard.SentinelService::class.java)) {
+            Diag.log(context, "rebind_ok", "哨兵开着没在跑：总控把它重新挂上")
+        }
     }
 
     private fun warn(context: Context, enabled: Boolean, now: Long) {

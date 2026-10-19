@@ -38,6 +38,8 @@ class SeedReceiver : BroadcastReceiver() {
                 }
             }
             "hq" -> context.zk.actions.hq.start(com.zongkong.core.hq.HqTrigger.MANUAL)
+            // 模拟总控掉线：给哨兵的心跳写成很久以前
+            "main-down" -> com.zongkong.app.guard.SentinelLink.writeState(context, store.config.value.blocked, true, 0L, at = 0L)
             "hq-end" -> context.zk.actions.hq.exitEarly("冒烟测试结束总控时间")
             // 放行，但打开娱乐应用先答一题（0.10 默认）
             "gate", "free" -> {

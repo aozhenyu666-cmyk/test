@@ -113,6 +113,29 @@
                 android:value="自我约束工具的常驻守护：保持无障碍服务运行、到点提醒" />
         </service>
 
+        <!-- 哨兵：第二个无障碍服务，跑在自己的小进程里。总控的无障碍服务掉了（“出现故障”）时接管拦截，一键修复 -->
+        <service
+            android:name=".guard.SentinelService"
+            android:exported="true"
+            android:label="@string/sentinel_name"
+            android:process=":sentinel"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/sentinel_service" />
+        </service>
+        <activity
+            android:name=".guard.SentinelBlockActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:process=":sentinel"
+            android:taskAffinity="com.zongkong.app.sentinel"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+
         <!-- 无障碍服务：只读前台应用包名，见 res/xml/guard_service.xml -->
         <service
             android:name=".guard.GuardService"
