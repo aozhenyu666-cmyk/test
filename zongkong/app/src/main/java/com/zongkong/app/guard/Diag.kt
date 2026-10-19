@@ -65,6 +65,8 @@ object Diag {
     val KINDS = setOf(
         "connected", "unbound", "destroyed", "offline", "stale", "rebind_ok",
         "rebind_fail", "disabled", "bounce", "lockdown", "event_error", "watchdog",
+        // 四层健康的每一次变化（权限 / 服务 / 最近事件 / 用户自己关的）
+        "health",
     )
 
     private val lock = Any()

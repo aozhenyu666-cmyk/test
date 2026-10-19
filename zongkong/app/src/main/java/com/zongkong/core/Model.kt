@@ -161,6 +161,30 @@ data class Config(
     val initiative: InitiativeConfig = InitiativeConfig(),
     /** 无回应后的强督导：首次使用在界面中明确开启。 */
     val takeover: com.zongkong.core.control.TakeoverConfig = com.zongkong.core.control.TakeoverConfig(),
+    /** 墨灵导演（试验）：小窗、接力、感知的统一入口。默认关，关着时总控行为一点不变。 */
+    val mailuo: MailuoConfig = MailuoConfig(),
+)
+
+/**
+ * 墨灵导演的设置（施工队 A 加的，只放 A 侧的开关）。
+ *
+ * 为什么放在 Config 里而不是另开一份文件：导演的开关要跟着总控的配置一起备份、读取、界面即时生效，
+ * 多一份存储只会多一种“两边不一致”的可能。
+ */
+@Serializable
+data class MailuoConfig(
+    /** 总开关。默认关：关着时导演不说话、小窗不出现、总控原来那几条主动提醒照旧。 */
+    val enabled: Boolean = false,
+    /** 导演的话要不要念出来（睡觉时段另有静默判断）。 */
+    val speak: Boolean = true,
+    /** 同一个娱乐应用连续多少分钟算“刷起来了”。 */
+    val longEntertainmentMin: Int = 15,
+    /** 主线过了计划时间多少分钟算“过点没开始”。 */
+    val planLateMin: Int = 5,
+    /** 每晚整理的时间（一天中的分钟数，默认 23:00，用户的复盘之后）。 */
+    val nightAt: Int = 23 * 60,
+    /** 导演自己的节律和人格（施工队 B 的 DirectorConfig）：每天最多几次、隔多久、过点多久算没开始、字数预算。 */
+    val engine: com.zongkong.core.director.DirectorConfig = com.zongkong.core.director.DirectorConfig(),
 )
 
 /** 对话的设置。 */

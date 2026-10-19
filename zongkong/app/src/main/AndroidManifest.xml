@@ -25,6 +25,8 @@
         <!-- “去 GPT”“打开 Notion”：判断这两个 App 装了没有、能不能接收分享 -->
         <package android:name="com.openai.chatgpt" />
         <package android:name="notion.id" />
+        <!-- 墨灵导演的接力：判断 Gemini 装没装（装了直接打开，没装退回网页版） -->
+        <package android:name="com.google.android.apps.bard" />
         <!-- 行为管理部：和一手互相连接（读一手的训练、把行动交给一手陪练） -->
         <package android:name="com.yishou.app" />
         <intent>

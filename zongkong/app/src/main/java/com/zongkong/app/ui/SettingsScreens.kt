@@ -95,6 +95,28 @@ fun SettingsScreen(nav: NavHostController) {
         MenuItem("线条动效", "潮汐、叶脉、矩阵、雷霆、漩涡、涟漪、年轮、流线、月相、星图、轨道", "gallery", nav)
 
         SectionLabel("运行")
+        // 墨灵导演（试验）：默认关。关着时总控的一切行为都和以前一样
+        Panel {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("墨灵导演（试验）", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        if (config.mailuo.enabled) "小圆点会出现，事件交给导演决定说不说；桌面宠物的几条主动提醒暂时安静"
+                        else "关着：和以前一样。打开后小窗、接力、感知都交给导演（现在装的是替身导演）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = LocalSignals.current.muted,
+                    )
+                }
+                Checkbox(
+                    checked = config.mailuo.enabled,
+                    onCheckedChange = { on ->
+                        context.zk.store.updateConfig { it.copy(mailuo = it.mailuo.copy(enabled = on)) }
+                    },
+                )
+            }
+            Hint("打开后：解锁 / 熄屏 / 前台切换 / 连续娱乐 / 计划到点 / 夜里的整理都会交给导演；小圆点停在屏幕边上，点开是此刻这一问。导演还在施工，先用替身跑通链路。")
+            Hint(com.zongkong.app.health.HealthWatch.text(context, System.currentTimeMillis()))
+        }
         MenuItem("权限与运行状态", if (PermissionStatus.accessibility(context)) "无障碍已开启" else "无障碍未开启——总控没在盯", "settings/perm", nav, warn = !PermissionStatus.accessibility(context))
         MenuItem(
             "无障碍诊断",

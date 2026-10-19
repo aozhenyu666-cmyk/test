@@ -27,6 +27,8 @@ object InitiativeRunner {
     private const val ACK_WINDOW_MS = 30 * 60_000L
 
     fun check(context: Context) {
+        // 导演开着时，主动提醒统一走导演的议程（SenseHub 的 TICK 已经喂给它了）
+        if (com.zongkong.app.director.DirectorHost.enabled(context)) return
         try {
             evaluate(context)
         } catch (e: Exception) {

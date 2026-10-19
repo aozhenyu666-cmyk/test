@@ -55,12 +55,14 @@ class GuardService : AccessibilityService() {
                     Intent.ACTION_SCREEN_OFF -> {
                         accountPlay(now)
                         store.logSwitch(now, com.zongkong.core.boss.Timeline.OFF)
+                        com.zongkong.app.sense.SenseHub.screenOff(this@GuardService, now)
                     }
                     Intent.ACTION_SCREEN_ON -> store.logSwitch(now, fgPkg ?: com.zongkong.core.boss.Timeline.ON)
                     Intent.ACTION_USER_PRESENT -> {
                         // 解锁了：锁屏时攒下的截图机会，过一小会儿补上；战友模式下打个招呼
                         nextShotAt = now + kotlin.random.Random.nextLong(20_000, 180_000)
                         unlockedAt = now
+                        com.zongkong.app.sense.SenseHub.unlock(this@GuardService, now)
                     }
                 }
                 fgStartedAt = now
@@ -111,6 +113,9 @@ class GuardService : AccessibilityService() {
         store.heartbeat = now
         lastStatusText = ""
         com.zongkong.app.system.Pet.attach(this)
+        // 小窗也借这层悬浮：无障碍连上了它才有地方浮
+        com.zongkong.app.window.MailuoWindow.attach(this)
+        com.zongkong.app.sense.SenseHub.reset()
         com.zongkong.app.system.KeepAliveService.start(this)
         scope.launch {
             while (isActive) {
@@ -160,6 +165,8 @@ class GuardService : AccessibilityService() {
             fgSince = now
             fgStartedAt = now
             store.logSwitch(now, pkg)
+            // 导演的感知：只翻译成事件，说不说话由导演决定（开关关着时内部直接返回）
+            com.zongkong.app.sense.SenseHub.foreground(this, pkg, now)
         }
         if (lockdown(pkg, now)) return
         enforce(pkg, now)
@@ -261,6 +268,8 @@ class GuardService : AccessibilityService() {
         // 低屏模式：没有窗口切换事件时也按秒盯着（比如一直停在一个应用里）
         fgPkg?.let { p -> runCatching { Watch.tick(this, p, now) } }
         alerts(status, now)
+        // 导演的定时看护：健康四层、兜底 TICK、夜间整理、连续娱乐、计划到点
+        runCatching { com.zongkong.app.sense.SenseHub.tick(this, now) }
         // 总控时间刚开始时你正停在别的应用里：也拉回来
         fgPkg?.let { if (store.hq.value.active != null) lockdown(it, now) }
         com.zongkong.app.system.Pet.refresh(this)
@@ -456,6 +465,7 @@ class GuardService : AccessibilityService() {
     override fun onDestroy() {
         runCatching { Diag.log(this, "destroyed", "无障碍服务被销毁") }
         com.zongkong.app.system.Pet.detach()
+        com.zongkong.app.window.MailuoWindow.detach()
         offline()
         try {
             unregisterReceiver(screenReceiver)
