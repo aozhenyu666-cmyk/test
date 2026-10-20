@@ -129,3 +129,30 @@
 - **发布**：release `moling-latest` 里已有 `moling.apk`，大小 11,177,703 字节；`https://github.com/aozhenyu666-cmyk/test/releases/download/moling-latest/moling.apk` 直接返回 APK（`application/vnd.android.package-archive`），手机浏览器可以直接下。
 - **本机环境注记（与代码无关）**：Windows 中文用户名的路径会让 Gradle 测试 worker 的 classpath `@argfile` 读不到，报 `ClassNotFoundException: GradleWorkerMain`；把同一份代码放到 ASCII 路径下跑，29/29 一样通过。CI 在 Linux 上不受影响。以后在本机验证单元测试，建议放在 ASCII 路径（或用 CI）。
 - **没验证到的**：没有真机/模拟器可用，**语音输入（尤其 vivo）、朗读、覆盖安装保留数据**这三件只在代码层面保证（不可用时只提示、不崩），需要用户按上面的验收步骤在手机上试。
+---
+
+## M4 · 换上大脑
+
+**做了什么**
+- `BrainHost` 改成只持有 `Brain`（导演、水道、预言、体系图、权柄、总控都在大脑里），对外只暴露 `StateFlow<BrainState>` 和一组 suspend 方法；每个 `brain.*` 调用都在 `Dispatchers.IO` 里跑，调完把 `brain.state()` 推给界面；失败记日志、用兜底值返回，界面拿不到异常。
+- 文件路径不变（`mind/moling.json`、`mind/director.json`）：`BrainState` 的字段是旧 `MolingState` 的超集，升级安装直接读回旧文件，**对话记录不丢**。
+- 删掉 App 自己写的 `MolingState` / `PendingAction`，以及拼提示词、`Talk.parse`、`accept` 里的分支、`reroute` —— 这些大脑都做了。
+- `PhoneFacts` 只留手机这边拿得到的：`now`、`minute`、`quiet`；主线、水道、总控状态由大脑的 `BrainFacts.merge` 补。
+- 新建 `ZkBridge : ZkPort`：用 `ContentResolver.call` 读总控状态 / 交指令，Bundle ↔ Map；没装、被杀、版本旧、签名不认——任何异常都返回 null，绝不让墨灵崩。
+- 对话页改到「提议」上：卡片从 `state.proposals` 里按「这条回复到下一句墨灵之间」算出来（所以重开 App 卡片还在）；新建共用 `ui/ProposalCard.kt`（对话页和今天页共用）；「好 / 不用 / 重试」分别调 `brain.accept / decline / retry`；「去聊」的 `Outcome.opening` 弹对话框，可以复制开场白。
+
+**为什么这么做**
+- 文档要求 App 只和大脑打交道：以后 Claude 改大脑，App 这边只改 `BrainHost` 一个文件。
+- 卡片按时间从存储状态里算、不存本地：提议的「决定状态」必须来自大脑，切页/重启都不丢，也不会出现「界面上还有、大脑里已经过期」。
+- 底线：用户点「好」之前，卡片只是显示，什么都不会发生。
+
+**没做什么**
+- M4 还没接总控（`<queries>` 和前台心跳在 M5），所以现在点「好」会显示「没送到总控：连不上总控」——这是文档预期的。
+- 「体系」页还是空页。
+
+**用户在手机上怎么验收（≤5 步）**
+1. 覆盖安装（别清数据）→ 打开「对话」，第一批的聊天记录还在。
+2. 联网发「帮我把下午三点排成写申论」→ 等「墨灵在想…」消失，那条回复下面出现一张卡片。
+3. 点「不用」→ 卡片变成「不用了」，什么都没发生。
+4. 再发一次，点「好」→ Toast「没送到总控：连不上总控。可以稍后重试」，卡片变「没送到总控」并出现「重试」。
+5. 切到「今天」页，同一条还在「等你决定的」里（同一个组件）。
