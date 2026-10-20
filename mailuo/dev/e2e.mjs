@@ -487,12 +487,17 @@ await page.goto(ORIGIN + '/#/settings');
 await page.waitForSelector('[data-testid=practice-json]');
 await page.fill('[data-testid=practice-json]', JSON.stringify({ rule: 'n-0101', kind: '卡壳', note: '执行端：三次都没做到' }));
 await page.click('[data-testid=practice-import]');
-await page.waitForFunction((b) => window.__mailuo.store.nodes.get('n-0101').confidence === b - 5, beforePractice.rule, { timeout: 5000 });
+// 两条节点是先后两次 saveNode 写进去的，等待条件必须同时覆盖规和它的上游论，否则会读到中间态
+await page.waitForFunction((b) => {
+  const s = window.__mailuo.store;
+  return s.nodes.get('n-0101').confidence === b.rule - 5 && s.nodes.get('n-0006').confidence === b.parent - 3;
+}, beforePractice, { timeout: 8000 }).catch(() => {});
 const afterPractice = await page.evaluate(() => {
   const s = window.__mailuo.store;
   return { rule: s.nodes.get('n-0101').confidence, parent: s.nodes.get('n-0006').confidence, last: s.nodes.get('n-0101').checks.at(-1) };
 });
-check(afterPractice.rule === beforePractice.rule - 5 && afterPractice.parent === beforePractice.parent - 3, '一手卡壳：规 −5、上游论 −3');
+check(afterPractice.rule === beforePractice.rule - 5 && afterPractice.parent === beforePractice.parent - 3,
+  '一手卡壳：规 ' + beforePractice.rule + '→' + afterPractice.rule + '、上游论 ' + beforePractice.parent + '→' + afterPractice.parent);
 check(afterPractice.last.source === '一手' && afterPractice.last.kind === '卡壳' && afterPractice.last.result.includes('三次都没做到'), 'checks 记下 source=一手 与执行端原文');
 f = await files();
 check(Object.values(f).some((t) => t.includes('source: 一手') && t.includes('kind: 卡壳')), '一手反馈落盘成 Markdown 的 checks');
