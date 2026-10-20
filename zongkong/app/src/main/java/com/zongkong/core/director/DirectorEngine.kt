@@ -118,6 +118,7 @@ class DirectorEngine(
         }
         "s_tired" -> { markStuck("累"); done(topic); rest(20, now) }
         "c_old", "c_new", "c_none" -> { settleConflict(topic, key, now); done(topic); null }
+        "kb_yes", "kb_no" -> { markKb(topic, key == "kb_yes", now); done(topic); null }
         else -> { done(topic); null }
     }
 
@@ -252,6 +253,15 @@ class DirectorEngine(
         done(topic)
     }
 
+    /** 知识体检的回答：说“弄明白了”就把那条从“还说不清”挪到“已知”。 */
+    private fun markKb(topic: String, yes: Boolean, now: Long) {
+        val id = topic.removePrefix("kb:")
+        val node = mind.topicById(id) ?: return
+        val first = node.open.firstOrNull() ?: return
+        val nn = if (yes) node.copy(known = (node.known + first).takeLast(8), open = node.open - first) else node
+        mind = mind.copy(topicsKB = Knowledge.upsert(mind.topicsKB, nn.copy(lastAt = now)))
+    }
+
     private fun markStuck(label: String) {
         val b = mind.baton ?: return
         val nb = b.copy(stuck = label.ifBlank { b.stuck.ifBlank { "还没说清" } }, version = b.version + 1)
@@ -339,6 +349,14 @@ class DirectorEngine(
             }
         }
         mind = mind.copy(memories = memories)
+        // v4：把今天聊出来的东西收进知识库（不只靠收线）
+        mind = mind.copy(topicsKB = harvestKnowledge(mind, day, now, facts.facts(now).mainTitle))
+        // 每周一次知识体检：只有“还说不清”、一条已知都没有的节点，问一句
+        if (Night.isWeeklyReviewDay(day)) {
+            mind.topicsKB.firstOrNull { it.open.isNotEmpty() && it.known.isEmpty() }?.let { kb ->
+                enqueue("kb:${kb.id}", 45, Cards.kbCheck("c-kb-$now", kb, now), now, ttlMin = 24 * 60)
+            }
+        }
         Night.conflicts(memories).firstOrNull()?.let { (a, b) ->
             val card = Cards.confirm("c-conf-$now", a.text, b.text, now)
             enqueue("confirm:${a.key}", 45, card, now, ttlMin = 24 * 60)

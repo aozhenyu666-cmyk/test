@@ -247,3 +247,35 @@ object Openings {
         return cards
     }
 }
+
+/**
+ * 夜里把当天的东西收进知识库（v4）。
+ *
+ * 只靠“收线”太慢：白天聊出来的结论、没说清的卡点、还没验证的猜测，夜里都该变成知识。
+ * 这里全用本地判断，不花模型的钱；模型只负责写日记。
+ */
+fun harvestKnowledge(mind: MindState, day: String, now: Long, titleHint: String): List<TopicNode> {
+    var list = mind.topicsKB
+    fun put(n: TopicNode) { list = Knowledge.upsert(list, n) }
+    fun base(): TopicNode {
+        val cur = list.firstOrNull { it.id == mind.activeTopicId } ?: list.maxByOrNull { it.lastAt }
+        if (cur != null) return cur
+        val title = titleHint.trim().ifBlank { mind.baton?.question.orEmpty().trim() }.ifBlank { "今天在攻的事" }
+        val n = Knowledge.ensure(list, title, mind.baton?.question.orEmpty(), now)
+        put(n)
+        return n
+    }
+    // 今天收过线的会话：结论进“已知”
+    mind.sessions.filter { dayKey(it.endedAt) == day }.forEach { s ->
+        if (s.conclusion.isNotBlank()) {
+            put(Knowledge.learn(base(), s.conclusion, "", "", s.endedAt))
+        }
+    }
+    // 接力棒上的卡点、还没验证的猜测：进“还说不清”
+    val b = mind.baton
+    if (b != null && b.stuck.isNotBlank()) put(Knowledge.learn(base(), "", b.stuck, "", now))
+    mind.hypotheses.filter { it.outcome == "待验证" && it.guess.isNotBlank() }.forEach { h ->
+        put(Knowledge.learn(base(), "", h.guess.take(60), "", h.at))
+    }
+    return list
+}

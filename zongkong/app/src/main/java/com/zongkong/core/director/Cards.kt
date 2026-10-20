@@ -120,4 +120,17 @@ object Cards {
         choices = listOf(Choice("w_work", "在做正事"), Choice("w_rest", "在休息"), Choice("w_life", "在处理生活的事"), Choice("w_other", "别的")),
         createdAt = now,
     )
+
+    /** 每周一次：这块事只有“还说不清”、一条“已知”都没有，问一句把它收干净。 */
+    fun kbCheck(id: String, kb: TopicNode, now: Long): Card {
+        val stuck = kb.open.firstOrNull()?.take(28).orEmpty().ifBlank { "还没说清" }
+        return Card(
+            id = id,
+            mode = Mode.WORK,
+            title = "墨灵 · 对一下",
+            ask = "「${kb.title}」这块，你卡在「$stuck」。现在弄明白了吗？",
+            choices = listOf(Choice("kb_yes", "弄明白了"), Choice("kb_no", "还没有")),
+            createdAt = now,
+        )
+    }
 }

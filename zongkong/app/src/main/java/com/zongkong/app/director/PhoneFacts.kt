@@ -7,7 +7,10 @@ import com.zongkong.app.zk
 import com.zongkong.core.DayClock
 import com.zongkong.core.director.Facts
 import com.zongkong.core.hq.Hq
+import com.zongkong.core.info.Intake
+import com.zongkong.core.ledger.Ledger
 import com.zongkong.core.plan.Aims
+import com.zongkong.core.plan.Earn
 import com.zongkong.core.plan.Plans
 import com.zongkong.core.work.ActionStatus
 import java.time.LocalDate
@@ -67,10 +70,24 @@ object PhoneFacts {
         if (weekDeliverables.isEmpty()) unknown += "本周要交的东西（没有生效中的周计划）"
 
         val playMin = runCatching { store.today.value.playMinutes }.getOrDefault(0)
+        val today = DayClock.date(now, zone)
+        val todayFrom = DayClock.startOf(today, zone)
 
-        // 账本、收件箱这两块导演暂时不用：如实标“看不见”，但不占提示词的篇幅
-        unknown += "花了多少"
-        unknown += "收件箱"
+        // 做事多少分钟：和“挣来的娱乐”同一个口径，导演说出的数字才和首页对得上
+        val workMin = runCatching { Plans.minutesByAction(work, todayFrom, now).values.sum() }.getOrDefault(0)
+
+        // 今天还能玩多少：min(每日上限, 底数 + 挣到的) - 已经玩的
+        val playLeft = runCatching {
+            val cap = if (config.dailyQuotaMin > 0) config.dailyQuotaMin else Earn.CAP
+            val earned = config.earn.baseMinutes + Earn.earned(work, now, zone, config.earn)
+            (minOf(cap, earned) - playMin).coerceAtLeast(0)
+        }.getOrDefault(-1)
+
+        // 今天花了多少（账本；读不到就 0，不编）
+        val spend = runCatching { Ledger.total(Ledger.day(store.ledger.value, today, zone)) }.getOrDefault(0L)
+
+        // 收件箱积压几条
+        val inbox = runCatching { Intake.stats(work, store.intake.value, now, zone).backlog }.getOrDefault(0)
 
         val health = runCatching { HealthWatch.health(context, now) }.getOrNull()
         if (health == null) unknown += "无障碍健康"
@@ -92,9 +109,9 @@ object PhoneFacts {
             foregroundCategory = SenseHub.lastCategory,
             foregroundMinutes = SenseHub.foregroundMinutes(now),
             playMinutesToday = playMin,
-            workMinutesToday = 0,
-            playLeftMin = -1,
-            spendTodayCents = 0,
+            workMinutesToday = workMin,
+            playLeftMin = playLeft,
+            spendTodayCents = spend,
             credit = runCatching { store.credibility(now) }.getOrDefault(-1),
             stance = runCatching {
                 when (store.stance(now).name) {
@@ -110,7 +127,7 @@ object PhoneFacts {
             aims = runCatching { Aims.open(book).take(4).map { it.title } }.getOrDefault(emptyList()),
             weekDeliverables = weekDeliverables,
             upcoming = upcoming,
-            inboxCount = 0,
+            inboxCount = inbox,
             unknown = unknown,
         )
     }
