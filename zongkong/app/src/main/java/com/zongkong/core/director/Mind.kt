@@ -115,6 +115,36 @@ data class CostDay(
 @Serializable
 data class TopicState(val lastAt: Long = 0, val countToday: Int = 0, val ignored: Int = 0, val day: String = "")
 
+/**
+ * 知识库的一个节点：她“懂”的那一块事。
+ *
+ * 为什么要有它：没有知识，卡片只能给模板（“去和 Gemini 聊十分钟，第一问我准备好了”），
+ * 用户看到的就是一个空架子。节点里放的是**这一块要能做到什么、已知什么、还缺什么、材料在哪、哪种问法管用**，
+ * 出卡和开场白都从这里取，问题才会具体。
+ *
+ * 写入：收线（结论→known，未解→open）、夜里整理（反复出现→known）、用户说“记住【主题】：…”。
+ * 读取：出卡前、开场白的三问、夜里的日记。
+ */
+@Serializable
+data class TopicNode(
+    val id: String,
+    val title: String,
+    /** 这一块要做到什么（一句话）。 */
+    val goal: String = "",
+    /** 已经确认理解 / 做到的。 */
+    val known: List<String> = emptyList(),
+    /** 还说不清的（下一场就从这里问）。 */
+    val open: List<String> = emptyList(),
+    /** 题目、材料、出处。 */
+    val materials: List<String> = emptyList(),
+    /** 问到点子上的问法（会被复用）。 */
+    val goodAsks: List<String> = emptyList(),
+    /** 问了他也答不出的问法（别再问）。 */
+    val badAsks: List<String> = emptyList(),
+    val sessions: Int = 0,
+    val lastAt: Long = 0,
+)
+
 @Serializable
 data class MindState(
     val batons: List<Baton> = emptyList(),
@@ -127,6 +157,10 @@ data class MindState(
     val hypotheses: List<Hypothesis> = emptyList(),
     val followUps: List<FollowUp> = emptyList(),
     val topics: Map<String, TopicState> = emptyMap(),
+    /** 知识库：她懂的那些事。第一次会话就在建库。 */
+    val topicsKB: List<TopicNode> = emptyList(),
+    /** 现在主要在攻哪一块。 */
+    val activeTopicId: String = "",
     /** 最近的感觉记忆（精简后的事件），夜间整理用。 */
     val recent: List<Sense> = emptyList(),
     val sessions: List<SessionLog> = emptyList(),
@@ -140,7 +174,53 @@ data class MindState(
 ) {
     val baton: Baton? get() = batons.firstOrNull { it.id == currentBatonId && !it.closed }
 
+    /** 现在在攻的那一块；没指定就取最近动过的。 */
+    val activeTopic: TopicNode?
+        get() = topicsKB.firstOrNull { it.id == activeTopicId } ?: topicsKB.maxByOrNull { it.lastAt }
+
+    fun topicById(id: String): TopicNode? = topicsKB.firstOrNull { it.id == id }
+
     fun costToday(day: String): CostDay = costs.firstOrNull { it.day == day } ?: CostDay(day)
+}
+
+/** 知识库的增删改：纯函数，方便单测，也不让引擎里到处拼列表。 */
+object Knowledge {
+    /** 从标题推出一个稳定的 id（中文按内容哈希，英文数字直接留）。 */
+    fun idOf(title: String): String {
+        val t = title.trim()
+        if (t.isEmpty()) return "kb-none"
+        val ascii = t.filter { it.isLetterOrDigit() && it.code < 128 }.lowercase()
+        return if (ascii.length >= 3) ascii.take(20) else "kb-" + (t.hashCode().toUInt().toString(16))
+    }
+
+    fun upsert(list: List<TopicNode>, node: TopicNode): List<TopicNode> =
+        (list.filter { it.id != node.id } + node).sortedByDescending { it.lastAt }
+
+    /** 没有就建一个（第一次会话就是建库）。 */
+    fun ensure(list: List<TopicNode>, title: String, goal: String, now: Long): TopicNode {
+        val id = idOf(title)
+        return list.firstOrNull { it.id == id } ?: TopicNode(id = id, title = title.trim(), goal = goal.trim(), lastAt = now)
+    }
+
+    /**
+     * 一次收线之后的学习：结论进 known，未解进 open，顺带记一次场次。
+     * 去重、限长，避免同一个知识被反复写。
+     */
+    fun learn(node: TopicNode, conclusion: String, open: String, ask: String, now: Long): TopicNode {
+        fun add(old: List<String>, v: String): List<String> {
+            val t = v.trim().take(80)
+            if (t.length < 4) return old
+            if (old.any { it.contains(t) || t.contains(it) }) return old
+            return (old + t).takeLast(8)
+        }
+        return node.copy(
+            known = add(node.known, conclusion),
+            open = add(node.open, open),
+            goodAsks = if (ask.isBlank()) node.goodAsks else add(node.goodAsks, ask),
+            sessions = node.sessions + 1,
+            lastAt = now,
+        )
+    }
 }
 
 object MindCodec {
@@ -167,5 +247,6 @@ object MindCodec {
         sessions = m.sessions.takeLast(40),
         costs = m.costs.takeLast(30),
         tallies = m.tallies.mapValues { (_, v) -> v.takeLast(14) },
+        topicsKB = m.topicsKB.sortedByDescending { it.lastAt }.take(12),
     )
 }

@@ -273,7 +273,18 @@ object MailuoWindow : WindowPort {
     }
 
     /** 开场白：给演员的那段话，可以复制、展开、照着念。 */
-    fun showOpening(opening: Opening, onBegin: () -> Unit) {
+    /**
+     * 作战卡：进演员之前先把“这一场怎么聊”摆出来。
+     *
+     * v4 的规矩：没有三问就不打开 App；打开 App 是最后一个按钮。
+     * 用户也可以点“就在这儿聊”，在卡上把三问走完（不开演员，也不需要麦克风）。
+     */
+    fun showOpening(
+        opening: Opening,
+        onCopy: () -> Unit,
+        onOpenApp: () -> Unit,
+        onStartHere: () -> Unit,
+    ) {
         val s = service ?: return
         box?.let { runCatching { wm?.removeView(it) } }
         box = null
@@ -288,31 +299,54 @@ object MailuoWindow : WindowPort {
             }
             elevation = dp(s, 8f).toFloat()
         }
+
         val head = LinearLayout(s).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        head.addView(text(s, "开场白 · ${opening.actor.label}", 13f, muted, bold = true).also { it.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
-        head.addView(text(s, "×", 18f, muted).apply { setPadding(dp(s, 10f), 0, 0, 0); setOnClickListener { dismiss(false) } })
+        head.addView(
+            text(s, "作战卡 · ${opening.actor.label} · ${opening.minutes} 分钟", 13f, muted, bold = true)
+                .also { it.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) },
+        )
+        head.addView(text(s, "×", 18f, muted).apply {
+            setPadding(dp(s, 10f), 0, 0, 0)
+            setOnClickListener { dismiss(false) }
+        })
         root.addView(head)
 
-        val scroll = ScrollView(s).apply { isFillViewport = false }
-        val body = text(s, opening.text, 14f, ink)
-        body.setLineSpacing(0f, 1.2f)
-        scroll.addView(body)
-        root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(s, 200f)).apply { topMargin = dp(s, 8f) })
+        // 三问：一次只做一件，编号 + 直接能念的话
+        val marks = listOf("①", "②", "③")
+        val asks = opening.cards.filter { it.title.startsWith("第一问") || it.title.startsWith("第二问") || it.title.startsWith("第三问") }
+            .ifEmpty { opening.cards.take(3) }
+        asks.take(3).forEachIndexed { i, c ->
+            root.addView(text(s, "${marks.getOrElse(i) { "·" }} ${c.ask}", 15f, ink, bold = true).apply {
+                setPadding(0, dp(s, 10f), 0, dp(s, 2f))
+                setLineSpacing(0f, 1.2f)
+            })
+            c.sayLines.take(1).forEach { line ->
+                root.addView(text(s, "　念这句：$line", 13f, accent).apply {
+                    setPadding(0, 0, 0, dp(s, 2f))
+                    setOnClickListener { copy(s, line, "已复制，念给 TA 听") }
+                })
+            }
+        }
+
+        val close = opening.cards.lastOrNull { it.title.contains("收线") }
+        root.addView(text(s, "收线要带回：${close?.ask ?: "一句话结论 / 下一步 / 几点做"}", 12f, muted).apply {
+            setPadding(0, dp(s, 10f), 0, 0)
+        })
 
         val row = LinearLayout(s).apply { orientation = LinearLayout.HORIZONTAL }
-        row.addView(button(s, "复制") { copy(s, opening.text, "已复制，粘贴进 ${opening.actor.label}") }, halfParams(s, true))
-        row.addView(button(s, "照念也行", primary = false) { copy(s, opening.text, "照着念：不用一字不差") }, halfParams(s, false))
+        row.addView(button(s, "复制开场白") { copy(s, opening.text, "已复制，粘贴进 ${opening.actor.label}"); onCopy() }, halfParams(s, true))
+        row.addView(button(s, "就在这儿聊") { onStartHere() }, halfParams(s, false))
         root.addView(row, rowParams(s))
-        root.addView(button(s, "进 ${opening.actor.label} 了，开始", primary = true) { onBegin() }, rowParams(s))
+        root.addView(button(s, "进 ${opening.actor.label}", primary = true) { onOpenApp() }, rowParams(s))
 
         val w = minOf((s.resources.displayMetrics.widthPixels * 0.9f).toInt(), dp(s, 340f))
-        val lp = params(s, w, WindowManager.LayoutParams.WRAP_CONTENT, dp(s, 8f), dp(s, 120f))
+        val lp = params(s, w, WindowManager.LayoutParams.WRAP_CONTENT, dp(s, 8f), dp(s, 110f))
         try {
             wm?.addView(root, lp)
             box = root
             boxLp = lp
         } catch (e: Exception) {
-            Log.w(TAG, "加开场白失败", e)
+            Log.w(TAG, "加作战卡失败", e)
         }
     }
 

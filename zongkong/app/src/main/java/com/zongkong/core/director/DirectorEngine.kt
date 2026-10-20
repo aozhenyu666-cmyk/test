@@ -106,10 +106,13 @@ class DirectorEngine(
             val label = card?.choices?.firstOrNull { it.key == key }?.label ?: key
             markStuck(label)
             done(topic)
+            // v4：不再只说“去聊”，先把第一问摆出来（来自知识库 / 接力棒），用户照着念就行
+            val plan = Openings.plan(mind.activeTopic, mind.baton, mind.baton?.question ?: "这一块", cfg.talkMin)
             Card(
                 "c-$now", Mode.START, "墨灵 · 拆小一点",
-                "卡在「$label」。去和 Gemini 聊 ${cfg.talkMin} 分钟，第一问我准备好了？",
-                choices = listOf(Choice(CHOICE_GO, "去聊"), Choice("later", "20 分钟后")),
+                plan.asks.first(),
+                sayLines = plan.says,
+                choices = listOf(Choice(CHOICE_GO, "去聊 ${cfg.talkMin} 分钟"), Choice("later", "20 分钟后")),
                 actor = Actor.GEMINI_LIVE, minutes = cfg.talkMin, batonId = mind.baton?.id.orEmpty(), createdAt = now,
             )
         }
@@ -128,8 +131,15 @@ class DirectorEngine(
         val goal = Openings.goal(card, baton, s.facts)
         val minutes = card?.minutes?.takeIf { it > 0 } ?: cfg.talkMin
         val sid = "s-$now"
-        var cards = Openings.localCards(sid, actor, goal, baton, minutes, now)
-        val reply = model(Prompts.system(cfg), Prompts.session(s, baton, goal, actor, minutes), now)
+
+        // 没有知识库时，第一场就建一个：用主线当这一块事的名字。空架子的问题从这一步开始修。
+        val kb0 = mind.activeTopic ?: s.facts.mainTitle.takeIf { it.isNotBlank() }?.let { Knowledge.ensure(mind.topicsKB, it, goal, now) }
+        if (kb0 != null) mind = mind.copy(topicsKB = Knowledge.upsert(mind.topicsKB, kb0), activeTopicId = kb0.id)
+        val kb = kb0
+
+        val plan = Openings.plan(kb, baton, goal, minutes)
+        var cards = Openings.localCards(sid, actor, plan, minutes, now, baton?.id.orEmpty())
+        val reply = model(Prompts.system(cfg), Prompts.session(s, baton, goal, actor, minutes, kb), now)
         if (reply != null) {
             val t = Tags.parse(reply)
             val qs = listOfNotNull(t["第一问"], t["第二问"], t["第三问"]).filter { it.length in 4..80 }
@@ -142,7 +152,7 @@ class DirectorEngine(
         }
         val diary = mind.diary.lastOrNull()
         val mode = if (card?.mode == Mode.TRAIN) Mode.TRAIN else Mode.WORK
-        Opening(sid, actor, Openings.text(cfg, actor, s, baton, goal, minutes, diary), cards, minutes, mode).also { save(null) }
+        Opening(sid, actor, Openings.text(cfg, actor, s, baton, plan, minutes, diary, kb), cards, minutes, mode).also { save(null) }
     }
 
     override suspend fun onSession(log: SessionLog): Card? = lock.withLock {
@@ -196,6 +206,12 @@ class DirectorEngine(
             )
         }
         mind = mind.copy(batons = mind.batons.filter { it.id != b.id } + b, currentBatonId = b.id)
+        // v4：收线写回知识库 —— 结论进“已知”，未解进“还说不清”，这一问问得好也记下
+        val kb = mind.activeTopic
+        if (kb != null && c.substantial) {
+            val node = Knowledge.learn(kb, c.conclusion, c.open, card?.ask.orEmpty(), now)
+            mind = mind.copy(topicsKB = Knowledge.upsert(mind.topicsKB, node), activeTopicId = node.id)
+        }
         if (!c.substantial) {
             mind = mind.copy(incidents = mind.incidents + Incident("i-$now", "收线没内容", now, text.take(60)))
             return Card("c-$now", Mode.WORK, "墨灵 · 收线", "这句有点空。再说一句：具体聊出了什么？", createdAt = now)

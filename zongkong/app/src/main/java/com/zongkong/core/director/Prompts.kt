@@ -28,13 +28,21 @@ object Prompts {
     }
 
     /** 一场会话准备三个问题，外加两句可以念给演员的话。 */
-    fun session(s: Situation, baton: Baton?, goal: String, actor: Actor, minutes: Int) = buildString {
+    fun session(s: Situation, baton: Baton?, goal: String, actor: Actor, minutes: Int, kb: TopicNode? = null) = buildString {
         appendLine("【局面】")
         appendLine(s.lines(baton))
         appendLine("【这场的目标】$goal")
+        if (kb != null) {
+            appendLine("【正在攻的】${kb.title}" + if (kb.goal.isNotBlank()) "（要做到：${kb.goal}）" else "")
+            if (kb.known.isNotEmpty()) appendLine("【已经弄明白】${kb.known.takeLast(3).joinToString("；")}")
+            if (kb.open.isNotEmpty()) appendLine("【还没说清】${kb.open.takeLast(3).joinToString("；")}")
+            if (kb.materials.isNotEmpty()) appendLine("【材料】${kb.materials.takeLast(3).joinToString("；")}")
+            if (kb.goodAsks.isNotEmpty()) appendLine("【以前问得好的】${kb.goodAsks.takeLast(2).joinToString("；")}")
+        }
         appendLine("【时长】$minutes 分钟，在 ${actor.label} 里用语音聊")
         appendLine()
-        appendLine("用户会看着小窗把问题说给 ${actor.label}。准备三个由浅入深的问题（每个 30 字以内，要引用接力棒或局面里的具体内容），")
+        appendLine("用户会看着小窗把问题说给 ${actor.label}。准备三个由浅入深的问题（每个 30 字以内，必须引用上面的具体内容：")
+        appendLine("知识库里“还没说清”的那条、接力棒的下一问、或者这一场的目标），不要问“卡在哪”这种空问题。")
         appendLine("再写两句用户可以直接念给 ${actor.label} 的话（让它追问、指出漏洞，而不是替用户总结）。只输出：")
         appendLine("【第一问】……")
         appendLine("【第二问】……")

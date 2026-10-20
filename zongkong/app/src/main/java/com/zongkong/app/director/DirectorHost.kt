@@ -104,7 +104,7 @@ object DirectorHost {
                 null
             }
             // 事件返回 null 只表示“现在不打扰”，不代表要收起用户正在看的卡。
-            if (card != null) present(app, card)
+            if (card != null) present(app, card, system = true)
         }
     }
 
@@ -112,6 +112,7 @@ object DirectorHost {
     fun reply(context: Context, reply: Reply) {
         if (!started) return
         val app = context.applicationContext
+        Quiet.noteUser(System.currentTimeMillis())
         runCatching { app.zk.store.touch() }
         scope.launch {
             val card = try {
@@ -122,7 +123,7 @@ object DirectorHost {
             }
             // “去聊 / 去打开”由小窗自己接着显示开场白或跳设置页，这里不能把它收起。
             val handledByWindow = reply is Reply.Pick && (reply.key == CHOICE_GO || reply.key == CHOICE_FIX)
-            if (card != null || !handledByWindow) present(app, card)
+            if (card != null || !handledByWindow) present(app, card, system = false)
         }
     }
 
@@ -145,6 +146,7 @@ object DirectorHost {
     fun onSession(context: Context, log: SessionLog) {
         if (!started) return
         val app = context.applicationContext
+        Quiet.noteSessionEnd(System.currentTimeMillis())
         runCatching { app.zk.store.touch() }
         scope.launch {
             val card = try {
@@ -153,7 +155,7 @@ object DirectorHost {
                 Log.w(TAG, "onSession 失败", e)
                 null
             }
-            present(app, card)
+            present(app, card, system = false)
         }
     }
 
@@ -165,13 +167,29 @@ object DirectorHost {
     fun factsNow(now: Long = System.currentTimeMillis()): Facts =
         factsSource?.facts(now) ?: Facts(now = now, minute = 0)
 
-    private suspend fun present(app: Context, card: Card?) = withContext(Dispatchers.Main) {
+    /**
+     * 把卡交给小窗。[system] = true 表示这张卡是事件推出来的，必须过 [Quiet]；
+     * 用户自己点出来的卡（回应、收线）永远显示——那是他正在参与的对话。
+     */
+    private suspend fun present(app: Context, card: Card?, system: Boolean) = withContext(Dispatchers.Main) {
         if (card == null) {
-            last = null
-            MailuoWindow.hide()
+            if (!system) {
+                last = null
+                MailuoWindow.hide()
+            }
+            return@withContext
+        }
+        val now = System.currentTimeMillis()
+        // 事件驱动的卡：过闸门；不过就只留在议程里，等用户点小圆点自己看
+        if (system && !Quiet.allow(app, card, now)) {
+            last = card
             return@withContext
         }
         last = card
+        if (system) {
+            Quiet.record(app, now)
+            Quiet.noteShown(card, now)
+        }
         MailuoWindow.show(card)
         if (card.speak.isNotBlank() && app.zk.store.config.value.mailuo.speak) MailuoWindow.speak(card.speak)
     }

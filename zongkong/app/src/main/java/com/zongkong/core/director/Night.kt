@@ -136,19 +136,76 @@ object Night {
     }
 }
 
-/** 开场白和这一场的问题（本地版）。 */
+/** 一场会话的准备：目标、三问、可以直接念的话、收线要带回什么。 */
+data class SessionPlan(
+    val goal: String,
+    val asks: List<String>,
+    val says: List<String>,
+    val closing: String = "一句话结论 / 下一步 / 几点做",
+)
+
+/**
+ * 开场白和这一场的问题。
+ *
+ * v4 的规矩：**没有三问就不许打开演员**。三问从知识库（还说不清的那条 + 管用的问法）+ 接力棒 + 这一场的目标里长出来；
+ * 本地就有，模型只负责润色。之前那版只会说“去和 Gemini 聊十分钟，第一问我准备好了”，是第一问根本没有内容。
+ */
 object Openings {
-    fun text(cfg: DirectorConfig, actor: Actor, s: Situation, baton: Baton?, goal: String, minutes: Int, diary: DiaryEntry?): String = buildString {
+    fun plan(kb: TopicNode?, baton: Baton?, goal: String, talkMin: Int): SessionPlan {
+        val asks = mutableListOf<String>()
+        // ① 定位：先找知识库里“还说不清”的那条，其次是上次的卡点
+        val open = kb?.open?.firstOrNull { it.isNotBlank() }
+        val stuck = baton?.stuck?.takeIf { it.isNotBlank() }
+        asks += when {
+            !open.isNullOrBlank() -> "「${open.take(40)}」这句里，你最没把握的是哪一处？先说那一处。"
+            stuck != null -> "上次卡在「${stuck.take(30)}」。先把这一层拆开：它具体难在哪一步？"
+            else -> "$goal：你是不知道从哪下手，还是做了一半卡住？只答这一句。"
+        }
+        // ② 动手：优先复用知识库里被证明管用的问法
+        asks += kb?.goodAsks?.firstOrNull { it.isNotBlank() && it.length in 6..60 }
+            ?: "把它拆成 ${talkMin.coerceAtMost(10)} 分钟能做完的一步。那一步是什么？只说动作。"
+        // ③ 检验
+        asks += if (kb != null && kb.title.isNotBlank()) {
+            "用「${kb.title}」的标准反过来检查：刚才那一步，判卷的人会挑哪一处？"
+        } else {
+            "做完怎么知道对了？给我一个能检查的证据。"
+        }
+
+        val says = mutableListOf("先别给我答案，也别总结我；一次只问我一个问题。")
+        val known = kb?.known?.lastOrNull { it.isNotBlank() }
+        says += if (known != null) "我上次已经弄明白了：${known.take(30)}，从这里往上接着问。" else "我讲完你只指出一处我漏掉的，别替我补全。"
+        return SessionPlan(goal = goal, asks = asks, says = says)
+    }
+
+    fun text(
+        cfg: DirectorConfig,
+        actor: Actor,
+        s: Situation,
+        baton: Baton?,
+        plan: SessionPlan,
+        minutes: Int,
+        diary: DiaryEntry?,
+        kb: TopicNode? = null,
+    ): String = buildString {
         append("现在开始。请你扮演墨灵：").append(cfg.persona.removePrefix("你是墨灵，")).append("\n")
         val f = s.facts
         append("我现在的情况：")
         append(if (f.mainTitle.isNotBlank()) "今天的主线是「${f.mainTitle}」" else "今天还没定主线")
         if (s.mainLateMin > 0) append("，过点 ${s.mainLateMin} 分钟还没开始")
         append("；今天做事 ${f.workMinutesToday} 分钟、娱乐 ${f.playMinutesToday} 分钟。\n")
-        append("这次只聊一件事：$goal。")
-        if (baton != null && baton.nextAsk.isNotBlank()) append("上次停在：${baton.nextAsk}。")
+        append("这次只聊一件事：${plan.goal}。")
+        if (kb != null) {
+            append("\n我正在攻的是「${kb.title}」")
+            if (kb.goal.isNotBlank()) append("，要做到：${kb.goal}")
+            append("。")
+            if (kb.known.isNotEmpty()) append("已经弄明白的：${kb.known.takeLast(2).joinToString("；")}。")
+            if (kb.open.isNotEmpty()) append("还没说清的：${kb.open.takeLast(2).joinToString("；")}。")
+        }
+        if (baton != null && baton.nextAsk.isNotBlank()) append("\n上次停在：${baton.nextAsk}。")
         if (baton != null && baton.stuck.isNotBlank()) append("卡在：${baton.stuck}。")
-        append("\n规矩：别替我总结，先让我讲；我讲完你只指出一处漏掉的地方；一次只问一个问题；我开始说废话就把我拉回来。")
+        append("\n请你按这三问的顺序带我走，一次只问一个：")
+        plan.asks.forEachIndexed { i, q -> append("\n${i + 1}. $q") }
+        append("\n规矩：别替我总结、别一次问两个；我讲完你只指出一处漏掉的地方；我说废话就把我拉回来。")
         append("$minutes 分钟后问我：一句话聊出了什么、下一步几点做。")
         if (diary != null) append("\n（你昨天的日记：${diary.text.take(80)}）")
         if (actor == Actor.CHATGPT) append("\n收线时用这个格式输出一行：收线｜结论｜下一步｜时间。如果你能写我的 Notion，把它加进“墨灵·收件箱”。")
@@ -160,14 +217,33 @@ object Openings {
         else -> "接下来这段时间怎么用"
     }
 
-    fun localCards(sessionId: String, actor: Actor, goal: String, baton: Baton?, minutes: Int, now: Long): List<Card> {
-        val first = baton?.nextAsk?.takeIf { it.isNotBlank() } ?: "$goal，卡在哪一步？"
-        val say = listOf("先别给我答案，问我卡在哪。", "我说完你只指出一处我漏掉的地方。")
-        return listOf(
-            Card("$sessionId-1", Mode.WORK, "第一问", first, say, minutes = minutes, actor = actor, batonId = baton?.id.orEmpty(), createdAt = now),
-            Card("$sessionId-2", Mode.WORK, "第二问", "最小的第一步是什么？多久能做完？", listOf("帮我把这一步再拆小一点。"), actor = actor, batonId = baton?.id.orEmpty(), createdAt = now),
-            Card("$sessionId-3", Mode.WORK, "第三问", "做完这一步，怎么知道做对了？", listOf("你来扮演检查的人，挑我的毛病。"), actor = actor, batonId = baton?.id.orEmpty(), createdAt = now),
-            Card("$sessionId-close", Mode.WORK, "收线", "一句话，聊出了什么？下一步几点做？", actor = actor, batonId = baton?.id.orEmpty(), createdAt = now),
+    fun localCards(
+        sessionId: String,
+        actor: Actor,
+        plan: SessionPlan,
+        minutes: Int,
+        now: Long,
+        batonId: String = "",
+    ): List<Card> {
+        val asks = plan.asks.take(3)
+        val titles = listOf("第一问 · 定位", "第二问 · 动手", "第三问 · 检验")
+        val cards = asks.mapIndexed { i, q ->
+            Card(
+                id = "$sessionId-${i + 1}",
+                mode = Mode.WORK,
+                title = titles.getOrElse(i) { "第 ${i + 1} 问" },
+                ask = q,
+                sayLines = if (i == 0) plan.says else listOf(plan.says.getOrNull(1) ?: "接着刚才那一步，再往下问一层。"),
+                minutes = if (i == 0) minutes else 0,
+                actor = actor,
+                batonId = batonId,
+                createdAt = now,
+            )
+        }.toMutableList()
+        cards += Card(
+            "$sessionId-close", Mode.WORK, "收线",
+            "一句话，聊出了什么？下一步几点做？", actor = actor, batonId = batonId, createdAt = now,
         )
+        return cards
     }
 }

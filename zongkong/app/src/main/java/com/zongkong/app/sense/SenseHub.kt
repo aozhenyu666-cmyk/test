@@ -74,15 +74,8 @@ object SenseHub {
 
         Relay.onForeground(pkg, now)
 
-        push(
-            context,
-            Sense(
-                kind = SenseKind.FOREGROUND,
-                at = now,
-                source = "无障碍",
-                payload = mapOf("pkg" to pkg, "label" to label, "category" to category),
-            ),
-        )
+        // v4：前台切换只更新 Facts（导演自己会读），不再逐条喂给导演 —— 以前这条是“墨灵不断跳出”的主要来源。
+        // 只有“打开演员”值得让它知道一次。
         if (category == CAT_ACTOR) {
             val who = when (pkg) {
                 Actor.GEMINI_LIVE.pkg -> Actor.GEMINI_LIVE.name
@@ -93,16 +86,13 @@ object SenseHub {
         }
     }
 
+    /** 解锁：只更新“最近事件”（健康第三层），不再当成一次打扰的由头。 */
     fun unlock(context: Context, now: Long) {
         lastEventAt = now
-        if (!DirectorHost.enabled(context)) return
-        push(context, Sense(SenseKind.UNLOCK, now, "系统广播"))
     }
 
     fun screenOff(context: Context, now: Long) {
         lastEventAt = now
-        if (!DirectorHost.enabled(context)) return
-        push(context, Sense(SenseKind.SCREEN_OFF, now, "系统广播"))
     }
 
     /** 每 20 秒看一眼：健康、兜底 TICK、夜间、计划到点、连续娱乐。都是本地判断，不花钱。 */
@@ -168,14 +158,9 @@ object SenseHub {
             }
         }
 
-        // 空档：没有在做、近 2 小时也没排行动
-        if (facts != null && sessionKey.isBlank() && facts.upcoming.isEmpty() && now - lastIdleAt > 2 * 3600_000L) {
-            lastIdleAt = now
-            push(context, Sense(SenseKind.IDLE_START, now, "Store"))
-        }
-
+        // 空档不再主动问（v4：只在你点小圆点时给一句“接下来怎么用”）
         // 兜底 TICK：每 30 分钟一次（导演还能用它看“这个人现在大概在干什么”）
-        if (now - lastTickAt >= 30 * 60_000L) {
+        if (now - lastTickAt >= 60 * 60_000L) {
             lastTickAt = now
             push(context, Sense(SenseKind.TICK, now, "定时"))
         }

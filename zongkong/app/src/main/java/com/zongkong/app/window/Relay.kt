@@ -34,7 +34,7 @@ object Relay {
         val sessionId: String,
         val startedAt: Long,
         val minutes: Int,
-        val handoff: String,
+        var handoff: String,
     ) {
         var presentMs = 0L
         var leaves = 0
@@ -48,24 +48,41 @@ object Relay {
 
     private var live: Live? = null
 
-    /** 这张卡建议去演员那里聊：拿开场白、复制、打开 App、把小窗换成开场白。 */
+    /**
+     * 这张卡建议去演员那里聊。
+     *
+     * v4 的顺序反过来了：**先给作战卡（目标 + 三问 + 怎么念），再问要不要打开 App。**
+     * 用户不打开也能在卡上把三问走完——打开 App 只是其中一个按钮，不是第一步。
+     */
     fun begin(context: Context, card: Card) {
         if (card.actor == Actor.NONE) return
         val app = context.applicationContext
         scope.launch {
             val opening = DirectorHost.opening(app, card.actor, card.id) ?: return@launch
-            val ok = handoff(app, card.actor, opening.text)
             val now = System.currentTimeMillis()
-            val s = Live(app, card.actor, opening.sessionId, now, opening.minutes, if (ok) "复制" else "没打开")
+            val s = Live(app, card.actor, opening.sessionId, now, opening.minutes, "卡上")
             s.cards = opening.cards
             s.lastTick = now
             live = s
-            MailuoWindow.showOpening(opening) {
-                // 用户说“进 App 了”：把准备好的第一张卡推出去
-                val next = s.cards.getOrNull(0)
-                if (next != null) MailuoWindow.show(next) else MailuoWindow.hide()
-            }
+            MailuoWindow.showOpening(
+                opening = opening,
+                onCopy = { copy(app, opening.text) },
+                onOpenApp = {
+                    val ok = handoff(app, s.actor, opening.text)
+                    s.handoff = if (ok) "复制" else "没打开"
+                    s.startedAt = System.currentTimeMillis()
+                    s.lastTick = s.startedAt
+                    startHere(s)
+                },
+                onStartHere = { startHere(s) },
+            )
         }
+    }
+
+    /** 把准备好的第一问推到小窗上（不管有没有打开演员）。 */
+    private fun startHere(s: Live) {
+        val next = s.cards.getOrNull(0)
+        if (next != null) MailuoWindow.show(next) else MailuoWindow.hide()
     }
 
     /** 前台切换时算在场时间。 */
@@ -120,7 +137,7 @@ object Relay {
             presentMs = s.presentMs,
             leaves = s.leaves,
             handoff = s.handoff,
-            handoffOk = s.handoff == "复制",
+            handoffOk = s.handoff != "没打开",
             conclusion = conclusion.ifBlank { s.conclusion },
         )
         Log.i(TAG, "收线：$reason，在场 ${log.presentMs / 60_000} 分钟，离开 ${log.leaves} 次")
