@@ -7,6 +7,8 @@ import kotlinx.serialization.Serializable
  *
  * 用户要的是“尽可能高的权柄”。这里的做法：权柄分三级，墨灵靠“判断准不准、计划被接受多少”自己挣上去，
  * 用户设一个上限（默认最高）。实际等级 = min(用户上限, 挣到的等级)。
+ * 凡是要改动总控的（定主线、排行动、专注锁、总控时间、收紧），在任何等级都是“建议”：
+ * 由用户点一下、在总控里确认后才执行。等级高低决定的是墨灵多主动地提建议、能不能自己排水道和召唤会话。
  * 不管哪一级，铁律都不变（见 [Charter.forbidden]）：放宽只能走总控的 24 小时冷静期，
  * 电话、短信、支付、地图、紧急退出永远不碰，不替用户花钱、不替用户给别人发消息。
  */
@@ -19,8 +21,8 @@ enum class Power(val label: String) {
     PLAN("排：生成水道、给总控定主线、加行动"),
     SUMMON("召：打开 GPT / Gemini / 总控，带上准备好的话"),
     TIGHTEN("收：让总控开专注锁、进总控时间、加拦截、缩短娱乐"),
-    REPAIR("修：总控无障碍掉了就重新打开"),
-    FREEZE("冻：总控看不见时用 Shizuku 冻结娱乐 App"),
+    REPAIR("修：总控无障碍掉了就重新打开（不由墨灵做，交给总控自愈和哨兵）"),
+    FREEZE("冻：冻结 App（不由墨灵做，交给总控和哨兵）"),
     LOOSEN("放：申请放宽（只能交给总控走冷静期）"),
 }
 
@@ -29,7 +31,7 @@ enum class Power(val label: String) {
 enum class Tier(val label: String, val level: Int) {
     ADVISOR("参谋：只看、只说、只提建议", 1),
     PLANNER("规划者：可以自己排水道、给总控定主线，收紧要先问", 2),
-    STEWARD("管家：可以自己收紧、召唤会话、修和冻，事后告诉你", 3),
+    STEWARD("管家：可以自己排水道、召唤会话、给总控的建议更主动", 3),
 }
 
 /** 一件事在当前等级下怎么处理。 */
@@ -79,15 +81,15 @@ object Charter {
     private val table: Map<Tier, Map<Power, Mode>> = mapOf(
         Tier.ADVISOR to mapOf(
             Power.OBSERVE to Mode.AUTO, Power.SPEAK to Mode.AUTO, Power.PLAN to Mode.ASK, Power.SUMMON to Mode.ASK,
-            Power.TIGHTEN to Mode.ASK, Power.REPAIR to Mode.AUTO, Power.FREEZE to Mode.OFF, Power.LOOSEN to Mode.ASK,
+            Power.TIGHTEN to Mode.ASK, Power.REPAIR to Mode.OFF, Power.FREEZE to Mode.OFF, Power.LOOSEN to Mode.ASK,
         ),
         Tier.PLANNER to mapOf(
             Power.OBSERVE to Mode.AUTO, Power.SPEAK to Mode.AUTO, Power.PLAN to Mode.AUTO, Power.SUMMON to Mode.AUTO,
-            Power.TIGHTEN to Mode.ASK, Power.REPAIR to Mode.AUTO, Power.FREEZE to Mode.ASK, Power.LOOSEN to Mode.ASK,
+            Power.TIGHTEN to Mode.ASK, Power.REPAIR to Mode.OFF, Power.FREEZE to Mode.OFF, Power.LOOSEN to Mode.ASK,
         ),
         Tier.STEWARD to mapOf(
             Power.OBSERVE to Mode.AUTO, Power.SPEAK to Mode.AUTO, Power.PLAN to Mode.AUTO, Power.SUMMON to Mode.AUTO,
-            Power.TIGHTEN to Mode.AUTO, Power.REPAIR to Mode.AUTO, Power.FREEZE to Mode.AUTO, Power.LOOSEN to Mode.ASK,
+            Power.TIGHTEN to Mode.ASK, Power.REPAIR to Mode.OFF, Power.FREEZE to Mode.OFF, Power.LOOSEN to Mode.ASK,
         ),
     )
 
