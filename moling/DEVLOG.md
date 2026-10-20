@@ -119,3 +119,13 @@
 3. 对话里的动作，用户点“好”之前一律不执行（卡片只在内存里等点击）。
 4. 网络或模型失败时界面不卡：30 秒封顶 + 本地回复兜底。
 5. 每一步都写了 DEVLOG、本地编译与单元测试通过后才推下一步的改动。
+
+---
+
+## 验证（2026-10-20）
+
+- **本地**：Kotlin 编译通过，`testDebugUnitTest` 的 **29 个用例全过**（ConcludeTest 8 / DirectorEngineTest 20 / FileMindStoreTest 1），打出 debug APK 约 11.2 MB；APK 里包名 `com.moling.app`、minSdk 26、targetSdk 34、应用名「墨灵」、启动 Activity `com.moling.app.MainActivity`，权限只有 `INTERNET`（外加 AndroidX 自动加的内部 dynamic-receiver 权限）。
+- **CI**：`moling-android` 通过——单元测试 + 打包 + 发布两个 job 全绿。（第一次跑失败是因为 Windows 上拷来的 `gradlew` 没有可执行位，CI 报 `Permission denied`；补上文件模式后即绿。）
+- **发布**：release `moling-latest` 里已有 `moling.apk`，大小 11,177,703 字节；`https://github.com/aozhenyu666-cmyk/test/releases/download/moling-latest/moling.apk` 直接返回 APK（`application/vnd.android.package-archive`），手机浏览器可以直接下。
+- **本机环境注记（与代码无关）**：Windows 中文用户名的路径会让 Gradle 测试 worker 的 classpath `@argfile` 读不到，报 `ClassNotFoundException: GradleWorkerMain`；把同一份代码放到 ASCII 路径下跑，29/29 一样通过。CI 在 Linux 上不受影响。以后在本机验证单元测试，建议放在 ASCII 路径（或用 CI）。
+- **没验证到的**：没有真机/模拟器可用，**语音输入（尤其 vivo）、朗读、覆盖安装保留数据**这三件只在代码层面保证（不可用时只提示、不崩），需要用户按上面的验收步骤在手机上试。
