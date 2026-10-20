@@ -32,7 +32,7 @@ object Relay {
         val app: Context,
         val actor: Actor,
         val sessionId: String,
-        val startedAt: Long,
+        var startedAt: Long,
         val minutes: Int,
         var handoff: String,
     ) {
