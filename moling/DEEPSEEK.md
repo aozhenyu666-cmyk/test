@@ -31,7 +31,8 @@
 | `com.moling.core.predict` | `Predict.local(...)`、`Predict.prompt(...)`、`Predict.parse(...)`、`Predict.scoreText(...)`、`DayStat` |
 | `com.moling.core.power` | `Tier`、`Charter.describe(tier)`（设置页显示用） |
 | `com.moling.core.guard` | `ZkGuard.step(memory, sample, day)`（判断总控的无障碍是否正常） |
-| `com.moling.core.link` | `ZkCommand`、`ZkWire.toMap(command)`、`describe()`（建议给总控时用） |
+| `com.moling.core.link` | `ZkCommand`、`ZkStatus`、`ZkReceipt`、`ZkWire.toMap(command)`、`describe()`（建议给总控时用） |
+| `com.moling.core` | **`Brain`（大脑，App 的唯一入口）**、`ZkPort`（你实现：读总控、交指令）、`Proposal` / `Act` / `ProposalState`、`Notice`、`BrainState`、`ChatResult`、`Outcome` |
 
 ---
 
@@ -63,13 +64,15 @@
 ## 4. M2：存储和大脑宿主
 
 **建什么：**
-- `app/BrainHost.kt`（单例，`MolingApp.onCreate` 里初始化）。这是 App 访问核心逻辑的**唯一入口**，以后 Claude 会补一个更完整的大脑，到时只改这个文件。它持有：
-  - `director = DirectorEngine(facts = PhoneFacts, ask = MolingAsk, store = FileMindStore(File(filesDir, "mind/director.json")), config = { DirectorConfig(persona = 设置里的人格) })`
-  - 一份 `MolingState`（你在 `app/data/` 里自己定义的 `@Serializable` 数据类）：`flow: FlowPlan?`、`atlas: Atlas`、`topicId: String`、`predictions: List<Prediction>`、`days: List<DayStat>`、`talk: List<Turn>`。用 `FileMindStore(File(filesDir, "mind/moling.json"))` 存成 JSON。
-  - 所有调用导演和改 `MolingState` 的操作都放在后台协程里、用一个 `Mutex` 串行执行；需要更新界面时切回主线程。
-- `app/PhoneFacts.kt`：实现 `FactsSource`，返回 `Facts`。这一步只填你能拿到的：`now`、`minute`（北京时间一天中的分钟）、`quiet`（23:30–07:00 为 true）、今天的水道里当前水道的标题作为 `mainTitle`；其他拿不到的字段留默认值，并把名字写进 `unknown`（例如 `"总控数据"`）。
+- `app/BrainHost.kt`（单例，`MolingApp.onCreate` 里初始化）。这是 App 访问核心逻辑的**唯一入口**。它只持有一个大脑：
+  - `brain = Brain(phone = PhoneFacts, ask = MolingAsk, store = FileMindStore(File(filesDir, "mind/moling.json")), mindStore = FileMindStore(File(filesDir, "mind/director.json")), zk = ZkBridge, config = { DirectorConfig(persona = 设置里的人格) })`
+  - 导演用 `brain.director`，不要自己再建一个 `DirectorEngine`。
+  - 状态都在大脑里（`brain.state()` 返回 `BrainState`：水道、体系图、预言、对话、提议、日志），**不要自己定义 `MolingState`**。
+  - 大脑的方法都是 `suspend`，自己已经加锁；在后台协程（`Dispatchers.IO`）里调，需要更新界面时切回主线程。
+- `app/ZkBridge.kt`：实现 `com.moling.core.ZkPort`。总控那边接收墨灵的接口还没做，**这一批先返回 `null`**（`status()` 和 `send()` 都返回 null），大脑会把提议记成“没送到总控”，以后接上再重试。
+- `app/PhoneFacts.kt`：实现 `FactsSource`，返回 `Facts`。只填手机这边能拿到的：`now`、`minute`（北京时间一天中的分钟）、`quiet`（23:30–07:00 为 true）；总控和水道的字段大脑会自己补上，拿不到的写进 `unknown`。
 
-**验收：** 单元测试（`core` 的 29 个）全部通过；杀掉 App 再打开，`mind/` 下的两个 JSON 文件还在。
+**验收：** `core` 的单元测试全部通过；杀掉 App 再打开，`mind/` 下的两个 JSON 文件还在。
 
 ---
 
@@ -77,16 +80,13 @@
 
 **界面：** 聊天列表 + 底部输入框 + 麦克风按钮（系统语音识别 `SpeechRecognizer`，识别结果填进输入框）。回复可以朗读（系统 `TextToSpeech`，设置里能关）。
 
-**发送一条消息时，按这个顺序：**
-1. 把用户这句加进 `MolingState.talk`（`Turn("他", text, now)`）。
-2. 拼提示词：`Talk.prompt(persona, now = director.nowText(now), flow = 今天的水道 Flow.render(plan) 或空, baton = director.snapshot().baton 的 nextAsk 或空, atlas = 当前主题的 AtlasOps.outline(...) 或空, tierText = "规划者：可以提建议和排计划，动现实前先问你", history = talk, user = text)`。
-3. 调 `MolingAsk.ask(persona, prompt)`。返回 `null` 就用 `Talk.local(text, baton, 当前水道标题)`。
-4. 用 `Talk.parse(reply, Flow.dayStart(今天))` 拆出正文和动作。正文加进对话（`Turn("墨灵", 正文, now)`）。
-5. 每个动作在回复下面显示成一张小卡片，带“好 / 不用”两个按钮。**点“好”之前什么都不执行。** 点“好”之后：
-   - `TalkAction.Zk`（主线、行动、专注、总控时间）和 `TalkAction.Summon`（去聊）→ 这一批先不执行，只弹一句“记下了，这一项下一批再接上”，并把动作内容存进 `MolingState` 的一个待办列表，方便以后接。
-   - `TalkAction.AtlasNote` → 在对应主题下加一条论断（`Node`，类型“判断”，来源“墨灵对话”）。
-   - `TalkAction.Reroute` → 对今天的水道调用 `Flow.reroute(...)`，原因按文字对应 `Cause`（卡住了 / 累了 / 晚了 / 情况变了）。
-6. 对话只保留最近 40 条在 `MolingState.talk`。
+**发送一条消息时：**
+1. 调 `brain.chat(text, now)`，得到 `ChatResult(text, proposals, byModel)`。提示词、本地兜底、拆动作、只留最近 40 条，大脑都做了。
+2. 把 `text` 显示成墨灵的回复；对话列表用 `brain.state().talk`。
+3. 每条 `proposals` 在回复下面显示成一张小卡片：文字用 `proposal.text`，带“好 / 不用”两个按钮。**点“好”之前什么都不执行。**
+   - 点“好”→ `brain.accept(id, now)`，把返回的 `Outcome.message` 用 Toast 显示；`Outcome.opening` 不为空时（去聊）先只显示开场白文字，打开演员下一批再接。
+   - 点“不用”→ `brain.decline(id, now)`。
+   - 状态是“没送到总控”的卡片显示一个“重试”按钮 → `brain.retry(id, now)`。
 
 **验收：** 发“嗯”，她会指出这句空、给一个二选一；发“帮我把下午三点排成写申论”，回复下面出现一张“行动”卡片；断网时也能收到本地回复。
 
