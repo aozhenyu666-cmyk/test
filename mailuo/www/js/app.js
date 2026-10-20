@@ -4,13 +4,13 @@ import { openVault, FsVault, CapVault, exportZip, importZip, listSnapshots, snap
 import { getConfig, setConfig, usage, callModel, extractJson, PROMPT_THINK, parseAnswer, PRESETS, estimateTokens, PROMPT_KEYWORDS, keywordsUserMessage } from './llm.js';
 import { buildPack, MODE_QUESTIONS, libraryTokens, systemOutline } from './pack.js';
 import { healthCheck, traceCause, longestChain, learningPath, dueReviews, applyFeedback, gradeReview, weeklyDigest } from './features.js';
-import { PROMPT_COLLIDE, libraryDigest, collideUserMessage, normalizeCollide, suggestPauses, PROMPT_MOUNT, mountUserMessage, normalizeMounts } from './collide.js';
+import { PROMPT_COLLIDE, libraryDigest, collideUserMessage, normalizeCollide, suggestPauses, PROMPT_MOUNT, mountUserMessage, normalizeMounts, PROMPT_OPTIONS, optionsUserMessage, normalizeOptions, optionToNode } from './collide.js';
 import { loadSeed, SEED_SYSTEM, SEED_NODES } from './seed.js';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 let store, vault;
 const app = document.getElementById('app');
-const session = { cands: loadDraft(), packRemoved: new Set(), lastAnswer: null, sys: localStorage.getItem('mailuo.sys') || '' };
+const session = { cands: loadDraft(), packRemoved: new Set(), lastAnswer: null, options: null, sys: localStorage.getItem('mailuo.sys') || '' };
 
 function loadDraft() { try { return JSON.parse(localStorage.getItem('mailuo.draft') || 'null'); } catch { return null; } }
 function saveDraft() { localStorage.setItem('mailuo.draft', JSON.stringify(session.cands)); }
@@ -107,7 +107,7 @@ function route(keepScroll = false) {
   const [path, qs] = location.hash.replace(/^#\/?/, '').split('?');
   const params = new URLSearchParams(qs || '');
   const [name, arg] = path.split('/').map(decodeURIComponent);
-  const views = { '': viewToday, tree: viewTree, capture: viewCapture, cands: viewCands, node: viewNode, ask: viewAsk, verify: viewVerify, health: viewHealth, review: viewReview, trace: viewTrace, settings: viewSettings };
+  const views = { '': viewToday, tree: viewTree, capture: viewCapture, cands: viewCands, node: viewNode, ask: viewAsk, options: viewOptions, verify: viewVerify, health: viewHealth, review: viewReview, trace: viewTrace, settings: viewSettings };
   const fn = views[name] || viewToday;
   render(() => fn(arg, params), name);
   window.scrollTo(0, keepScroll === true ? y : 0);
@@ -605,7 +605,8 @@ function viewNode(id) {
       n.yamlError ? h('span', { class: 'pill accent' }, 'YAML 有误') : null)));
   out.push(h('div', { class: 'claim-big mt' }, n.claim), n.note ? h('div', { class: 'note' }, n.note) : null);
 
-  out.push(h('div', { class: 'actions' },
+  out.push(h('div', { class: 'actions' + (n.type === '问' ? ' five' : '') },
+    n.type === '问' ? h('div', { class: 'action', onclick: () => go('#/options/' + id), 'data-testid': 'options' }, icon('layers'), '谋划') : null,
     h('div', { class: 'action primary', onclick: () => go('#/ask/' + id), 'data-testid': 'ask' }, icon('send'), '提问'),
     h('div', { class: 'action', onclick: () => go('#/ask/' + id + '?mode=extend') }, icon('spark'), '延展'),
     h('div', { class: 'action', onclick: () => go('#/ask/' + id + '?mode=analogy') }, icon('merge'), '类比'),
@@ -742,6 +743,128 @@ function pushAsk(id, rec) {
   try { all = JSON.parse(localStorage.getItem('mailuo.asks') || '{}'); } catch { /* 重建 */ }
   all[id] = [rec, ...(all[id] || [])].slice(0, 3);
   localStorage.setItem('mailuo.asks', JSON.stringify(all));
+}
+
+// ---------------- 沙盘推演：先穷举路径，再收敛 ----------------
+// 立场：穷举不是答案。每条路必须写「会死在哪」，那句才是可比较的判定依据；
+// 选中的那条升格成「论」，fatal 变成扣分哨、test 变成加分哨；其余记进问的 discarded 留档。
+function viewOptions(id) {
+  const q = store.nodes.get(id);
+  if (!q) return [topbarBack('谋划'), h('div', { class: 'empty' }, h('h3', {}, '找不到这个节点'))];
+  if (q.type !== '问') {
+    return [topbarBack('谋划'), h('div', { class: 'empty' },
+      h('h3', {}, '沙盘只对「问」开放'),
+      h('p', {}, '路径是围绕一个课题摊开的。先把结论收成一个问，再来谋划。'),
+      h('button', { class: 'btn', onclick: () => go('#/node/' + id) }, '回到节点'))];
+  }
+
+  const st = session.options && session.options.forId === id ? session.options : { forId: id, paths: [], picked: '' };
+  session.options = st;
+
+  const listBox = h('div');
+  const out = [topbarBack('谋划 · ' + q.title)];
+
+  out.push(h('div', { class: 'card mt' },
+    h('div', { class: 'serif', style: { fontWeight: 600, fontSize: '16px' } }, q.title),
+    h('div', { class: 'small muted', style: { marginTop: '6px', lineHeight: 1.7 } },
+      '先把可行路径摊开，再决定走哪条。每条路必须写清「会死在哪」—— 写不出具体失败点的，说明还没想清楚，会单独标出来。')));
+
+  // 淘汰史：避免以后重复探索同一条死路
+  if (q.discarded && q.discarded.length) {
+    out.push(h('h2', { class: 'section' }, '淘汰过的路', h('span', { class: 'more' }, q.discarded.length + ' 条')));
+    out.push(h('div', { class: 'list' }, q.discarded.slice().reverse().map((d) => h('div', { class: 'card flat', style: { padding: '12px 14px' } },
+      h('div', { style: { fontSize: '14px', fontWeight: 600 } }, d.title),
+      d.fatal ? h('div', { class: 'small muted', style: { marginTop: '2px' } }, '死在：' + d.fatal) : null))));
+  }
+
+  const draw = () => {
+    listBox.innerHTML = '';
+    if (!st.paths.length) {
+      listBox.append(h('div', { class: 'empty', style: { padding: '22px 8px 6px' } }),
+        h('div', { class: 'small muted center', style: { paddingBottom: '10px' } }, '还没有候选路径。点上面的按钮让模型摊开，或用下面的手动模式。'));
+      return;
+    }
+    for (const p of st.paths) {
+      const on = st.picked === p.key;
+      listBox.append(h('div', {
+        class: 'card', 'data-testid': 'option-' + p.key,
+        style: { cursor: 'pointer', borderColor: on ? 'var(--accent)' : '', boxShadow: on ? '0 0 0 1px var(--accent)' : '' },
+        onclick: () => { st.picked = on ? '' : p.key; draw(); },
+      },
+        h('div', { class: 'chips' },
+          h('span', { class: 'pill' }, p.kind),
+          p.noFatal ? h('span', { class: 'pill accent' }, '没写失败点') : null,
+          p.seenBefore ? h('span', { class: 'pill accent' }, '上次淘汰过') : null,
+          on ? h('span', { class: 'pill accent' }, '选这条') : null),
+        h('div', { class: 'serif', style: { fontWeight: 600, fontSize: '16px', margin: '8px 0 4px' } }, p.title),
+        p.hypothesis ? h('div', { class: 'small' }, p.hypothesis) : null,
+        p.fatal ? h('div', { class: 'small', style: { marginTop: '8px', color: 'var(--accent)' } }, '会死在这：' + p.fatal) : null,
+        p.test ? h('div', { class: 'small muted', style: { marginTop: '4px' } }, '最小验证：' + p.test) : null,
+        p.cost ? h('div', { class: 'small muted', style: { marginTop: '2px' } }, '投入：' + p.cost) : null));
+    }
+    const pick = st.paths.find((p) => p.key === st.picked);
+    // 吸在底部：路径列表可能很长，确认按钮不能埋在末尾
+    listBox.append(h('div', { class: 'sticky-bottom' },
+      h('button', { class: 'btn accent block', 'data-testid': 'commit-option', onclick: () => commitOption(q, st) },
+        icon('check'), pick ? '确认走这条，其余记入淘汰' : '先选一条路径')));
+  };
+
+  const gen = h('button', {
+    class: 'btn primary block', 'data-testid': 'gen-options',
+    onclick: async () => {
+      gen.disabled = true;
+      listBox.innerHTML = '';
+      listBox.append(waiting('便宜模型摊开路径中'));
+      try {
+        const res = await callModel('split', PROMPT_OPTIONS, optionsUserMessage(store, id), { maxTokens: 2000 });
+        st.paths = normalizeOptions(extractJson(res.text), store, id);
+        st.picked = '';
+        if (!st.paths.length) throw new Error('模型没有给出可用的路径。换手动模式，或再点一次。');
+        draw();
+      } catch (e) {
+        listBox.innerHTML = '';
+        listBox.append(h('div', { class: 'banner' }, e.message));
+      } finally { gen.disabled = false; }
+    },
+  }, icon('layers'), '让便宜模型摊开路径');
+
+  out.push(h('div', { class: 'mt' }, gen));
+  out.push(manualPanel({
+    title: '不走 API：去聊天 App 摊开',
+    testid: 'manual-options',
+    hint: '复制「沙盘提示词 + 这个问的上下文」，粘贴到任意聊天 App。把它回的 JSON 粘回下面，同样会解析成候选路径。',
+    getText: () => PROMPT_OPTIONS + '\n\n' + optionsUserMessage(store, id),
+    placeholder: '把聊天 App 回的 JSON 粘贴到这里',
+    onPaste: (raw) => {
+      st.paths = normalizeOptions(extractJson(raw), store, id);
+      st.picked = '';
+      if (!st.paths.length) return toast('没解析出路径，看看 JSON 格式');
+      draw();
+      toast('解析出 ' + st.paths.length + ' 条路径');
+    },
+  }));
+
+  out.push(h('h2', { class: 'section' }, '候选路径', st.paths.length ? h('span', { class: 'more' }, st.paths.length + ' 条') : null));
+  out.push(listBox);
+  draw();
+  return out;
+}
+
+// 确认一条路径：升格成论并挂到问下面，其余进淘汰记录
+async function commitOption(q, st) {
+  const pick = st.paths.find((p) => p.key === st.picked);
+  if (!pick) return toast('先选一条路径');
+  const draft = optionToNode(pick, q);
+  const node = blankNode({ ...draft, id: store.nextId(), system: q.system });
+  await store.saveNode(node);
+  const rest = st.paths.filter((p) => p.key !== pick.key);
+  q.discarded = [...(q.discarded || []), ...rest.map((p) => ({
+    title: p.title, fatal: p.fatal || '', reason: '选择了「' + pick.title + '」', date: today(),
+  }))];
+  await store.saveNode(q);
+  session.options = null;
+  toast('已挂上「' + node.title + '」' + (rest.length ? '，其余 ' + rest.length + ' 条记入淘汰' : ''));
+  go('#/node/' + node.id);
 }
 
 function viewAsk(id, params) {
@@ -1439,6 +1562,33 @@ function viewTrace(id) {
 }
 
 // ---------------- 设置 ----------------
+// 外部执行端（一手）的实操反馈：写一条 checks.source='一手'，按 FEEDBACK 常量调把握
+// 这是 T09 缺的那一端：原来只有 App 内温故能产生反馈，规的实操结果回不到上游论。
+async function importPracticeFeedback(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return { ok: false, reason: '先粘贴执行端导出的 JSON' };
+  let data;
+  try { data = JSON.parse(text); } catch { return { ok: false, reason: '不是合法 JSON' }; }
+  const items = Array.isArray(data) ? data : [data];
+  const lines = [];
+  let count = 0;
+  for (const it of items.slice(0, 50)) {
+    const id = String(it?.rule || it?.id || '').trim();
+    const kind = String(it?.kind || '').trim();
+    if (!id) continue;
+    const rule = store.nodes.get(id);
+    if (!rule) { lines.push(id + ' 不存在'); continue; }
+    if (rule.type !== '规') { lines.push('「' + rule.title + '」不是规'); continue; }
+    if (!['有效', '卡壳'].includes(kind)) { lines.push('「' + rule.title + '」的 kind 只能是有效 / 卡壳'); continue; }
+    const updated = applyFeedback(store, id, kind, { date: String(it.date || today()).slice(0, 10), source: '一手', note: String(it.note || '').trim() });
+    if (!updated.length) { lines.push('「' + rule.title + '」已暂停，跳过'); continue; }
+    for (const n of updated) await store.saveNode(n);
+    count++;
+    lines.push(rule.title + ' ' + kind + ' → ' + updated[0].confidence + '%');
+  }
+  return count ? { ok: true, count, lines } : { ok: false, reason: lines.join('；') || '没有可写入的条目' };
+}
+
 function viewSettings() {
   const cfg = getConfig();
   const modelCard = (role, title, desc) => {
@@ -1523,6 +1673,27 @@ function viewSettings() {
       h('div', { class: 'grow' }, h('div', { class: 'serif', style: { fontWeight: 600, fontSize: '17px' } }, '备份'), h('div', { class: 'small muted' }, '整个知识库打包保存在本机，最多保留 10 份。')),
       h('button', { class: 'btn sm', 'data-testid': 'backup-now', onclick: async () => { const b = await snapshot(vault, '手动'); toast(b ? '已备份 ' + b.files + ' 个文件' : '知识库是空的'); drawBackups(); } }, '立即备份')),
     backups);
+  // 执行端联动：外部 App（一手）把实操结果写回来
+  const practiceIn = h('textarea', { class: 'input', rows: 4, 'data-testid': 'practice-json', placeholder: '{"rule":"n-0101","kind":"卡壳","note":"试了三次都没做到"}\n\n一次多条也可以：[{…},{…}]' });
+  const practiceOut = h('div', { class: 'small muted mt' });
+  const practiceCard = h('div', { class: 'card' },
+    h('div', { class: 'serif', style: { fontWeight: 600, fontSize: '17px' } }, '执行端联动'),
+    h('div', { class: 'small muted', style: { marginBottom: '12px', lineHeight: 1.7 } },
+      '外部执行端（一手）把「这条规做到了 / 卡住了」写回来：规 +3 / −5，同时带动上游论 +2 / −3，并记一条 source 为「一手」的反馈。这是让实操反过来修正战略的唯一通道。'),
+    practiceIn,
+    h('div', { class: 'btn-row mt' },
+      h('button', { class: 'btn sm primary', 'data-testid': 'practice-import', onclick: async () => {
+        const r = await importPracticeFeedback(practiceIn.value);
+        practiceOut.replaceChildren(r.ok
+          ? h('div', {}, '已写入 ' + r.count + ' 条', h('div', { class: 'muted', style: { marginTop: '4px' } }, r.lines.join('；')))
+          : h('div', { class: 'banner', style: { marginBottom: 0 } }, r.reason));
+        if (r.ok) practiceIn.value = '';
+      } }, icon('upload'), '导入反馈'),
+      h('button', { class: 'btn sm ghost', onclick: () => {
+        const r = [...store.nodes.values()].find((n) => n.type === '规');
+        practiceIn.value = JSON.stringify({ rule: r ? r.id : 'n-0001', kind: '卡壳', note: '执行端记录：今天三次都没做到' });
+      } }, '填入示例')),
+    practiceOut);
   return [topbarBrand(), h('h1', { class: 'display' }, '设置'),
     h('h2', { class: 'section' }, '模型'), split, think,
     h('h2', { class: 'section' }, '提问'),
@@ -1530,6 +1701,7 @@ function viewSettings() {
     h('h2', { class: 'section' }, '外观'), theme,
     h('h2', { class: 'section' }, '数据'), storage,
     h('div', { class: 'mt' }), backupCard,
+    h('h2', { class: 'section' }, '执行端'), practiceCard,
     h('div', { class: 'sticky-bottom' }, h('button', { class: 'btn primary block', 'data-testid': 'save-settings', onclick: () => { save(); toast('已保存'); } }, '保存设置')),
     h('p', { class: 'small muted center mt2' }, '脉络 v' + VERSION + ' · 密钥只保存在本机，不写入知识库文件')];
 }

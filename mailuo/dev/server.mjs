@@ -28,6 +28,15 @@ export const COLLIDE = {
   links: [{ from: 't2', to: 'n-0007', type: '反例', why: '外化降低了单步成本' }],
 };
 
+// 沙盘推演的模拟输出：三条互斥路径，覆盖现成 / 最小验证 / 自建三类，各自带具体失败点
+export const OPTIONS = {
+  paths: [
+    { title: '现成提醒工具 + 外部打断', kind: '现成', hypothesis: '停下是因为没有外部打断点，而不是不会想', fatal: '现成工具的提醒粒度只到小时级，而追问的时机在秒级', test: '装一个能用 API 的提醒工具，记一周打断成功的次数', cost: '半天' },
+    { title: '纸笔追问卡', kind: '最小验证', hypothesis: '把下一问写下来就能多走一步', fatal: '写下下一问却仍然不想答，说明卡点不在「没有问题」', test: '连续七天，卡住时写下下一问，记录是否推进', cost: '一小时' },
+    { title: '自建追问引擎', kind: '自建', hypothesis: '需要按知识结构自动生成下一个问题', fatal: '两周内做不出能判断「这一步值不值得追」的规则', test: '用现有模型跑十个真实卡壳片段，看生成的问题有没有用', cost: '两周' },
+  ],
+};
+
 const ANSWER = `- 核心判断：真正的根因更可能是「单步成本高」，下一问没产生只是它的表现。
 - 结构：单步成本高 → 舒缓感提前出现 → 第一反应停止 → 推理链断
 - 另一种可能：问题生成能力本身弱，与成本无关。
@@ -61,7 +70,7 @@ export function startServer(port = 0) {
           mounts: lines.map((p) => ({ id: p[0], under: p[1] === '规' ? firstLun : 'q1', reason: '模拟' })),
         });
       })() : null;
-      const content = mountFix ? mountFix : sys.includes('碰撞引擎') ? JSON.stringify(COLLIDE) : kwFill ? kwFill : sys.includes('只回复 OK') ? 'OK' : ANSWER;
+      const content = mountFix ? mountFix : sys.includes('沙盘推演') ? JSON.stringify(OPTIONS) : sys.includes('碰撞引擎') ? JSON.stringify(COLLIDE) : kwFill ? kwFill : sys.includes('只回复 OK') ? 'OK' : ANSWER;
       await new Promise((r) => setTimeout(r, 300));
       res.writeHead(200, { 'content-type': 'application/json', ...cors() });
       return res.end(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: Math.ceil((sys.length + user.length) * 0.8), completion_tokens: Math.ceil(content.length * 0.8) } }));

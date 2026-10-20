@@ -49,9 +49,9 @@ export const REL_VIEW = [
 ];
 
 const FIELD_ORDER = ['id', 'title', 'type', 'legacy_type', 'system', 'under', 'parent', 'keywords', 'status', 'confidence', 'verify',
-  'pillars', 'blindspot', 'sentinels', 'triggers', 'cost', 'paused', 'source', 'links', 'checks', 'created', 'updated'];
+  'pillars', 'blindspot', 'sentinels', 'triggers', 'cost', 'paused', 'source', 'links', 'checks', 'discarded', 'created', 'updated'];
 const LIST_FIELDS = new Set(['keywords', 'pillars', 'triggers']);
-const MAP_LIST_FIELDS = new Set(['links', 'checks', 'sentinels']);
+const MAP_LIST_FIELDS = new Set(['links', 'checks', 'sentinels', 'discarded']);
 
 export const today = () => new Date().toISOString().slice(0, 10);
 
@@ -150,6 +150,10 @@ export function parseNode(text, path) {
   n.cost = n.cost ? String(n.cost) : '';
   n.paused = n.paused === true || n.paused === 'true';
   n.sentinels = normalizeSentinels(n.sentinels);
+  // 被淘汰的候选路径：不进链条，留在问下面当决策留档（避免以后重复探索同一条死路）
+  n.discarded = (Array.isArray(n.discarded) ? n.discarded : []).filter((x) => x && x.title).map((x) => ({
+    title: String(x.title), fatal: String(x.fatal || ''), reason: String(x.reason || ''), date: String(x.date || ''),
+  }));
   // v1 的「验证方式」没有加减分：迁移成一条 delta 为 0 的验证哨（待你补上加减分）
   if (!n.sentinels.length && n.verify && n.type === '论') n.sentinels = [{ when: String(n.verify), delta: 0 }];
   n.claim = (paras[0] || '').trim();
@@ -171,7 +175,7 @@ export function normalizeSentinels(v) {
 // 补齐缺失字段（代码里直接构造的节点不一定字段齐全）；原地修改并返回
 export function ensureShape(n) {
   const b = blankNode();
-  for (const k of ['keywords', 'pillars', 'triggers', 'links', 'checks']) if (!Array.isArray(n[k])) n[k] = [];
+  for (const k of ['keywords', 'pillars', 'triggers', 'links', 'checks', 'discarded']) if (!Array.isArray(n[k])) n[k] = [];
   for (const k of ['under', 'parent', 'blindspot', 'cost', 'verify', 'claim', 'note']) if (n[k] == null) n[k] = b[k];
   n.type = normalizeType(n.type);
   n.sentinels = normalizeSentinels(n.sentinels);
@@ -185,7 +189,7 @@ export function blankNode(over = {}) {
   return {
     id: '', title: '', type: '论', system: '', under: '', parent: '', keywords: [], status: '假设', confidence: 50, verify: '',
     pillars: [], blindspot: '', sentinels: [], triggers: [], cost: '', paused: false,
-    source: '自己', claim: '', note: '', links: [], checks: [], extra: {}, ...over,
+    source: '自己', claim: '', note: '', links: [], checks: [], discarded: [], extra: {}, ...over,
   };
 }
 

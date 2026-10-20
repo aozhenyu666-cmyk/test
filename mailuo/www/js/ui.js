@@ -64,33 +64,59 @@ export function icon(name, cls = '') {
   return s;
 }
 
-// 品牌标：一条主脉分出侧脉（叶脉 / 水墨枝）
+// 品牌标：一条主脉分出侧脉（叶脉 / 水墨枝），外面一圈极细轨道
 export function brandMark() {
   const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   s.setAttribute('viewBox', '0 0 32 32');
   s.setAttribute('class', 'brand-mark');
-  s.innerHTML = '<g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"><path d="M6 27C12 21 18 13 26 5"/><path d="M12 20.5c-3-.5-5-2.5-6-5.5" stroke-width="1.6"/><path d="M16.5 15.5c1-3 .8-6-.5-8.5" stroke-width="1.6"/><path d="M20.5 11c3 .3 5.5 1.6 7 3.6" stroke-width="1.6"/></g><circle cx="26" cy="5" r="2.2" fill="var(--accent)"/>';
+  s.innerHTML = '<path d="M18 5A8 8 0 0 1 26 13" fill="none" stroke="currentColor" stroke-width=".8" opacity=".38" stroke-linecap="round"/><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.7"><path d="M6 27C12 21 18 13 26 5"/><path d="M12 20.5c-3-.5-5-2.5-6-5.5" stroke-width="1.2"/><path d="M16.5 15.5c1-3 .8-6-.5-8.5" stroke-width="1.2"/><path d="M20.5 11c3 .3 5.5 1.6 7 3.6" stroke-width="1.2"/></g><circle cx="26" cy="5" r="2.2" fill="var(--accent)"/>';
   return s;
 }
 
+// 空状态插画：同心轨道（点线 + 实线）+ 主脉 + 节点 + 朱砂焦点
 export function veinArt() {
   const d = document.createElement('div');
   d.className = 'art';
-  d.innerHTML = '<svg viewBox="0 0 180 120" width="180" height="120" fill="none" stroke="currentColor" stroke-linecap="round"><path class="vein-path" d="M14 110C50 88 92 58 168 12" stroke-width="2.4"/><path class="vein-path" d="M58 84c-14-2-26-12-32-28" stroke-width="1.6"/><path class="vein-path" d="M96 60c6-14 6-30-2-44" stroke-width="1.6"/><path class="vein-path" d="M128 38c16 0 30 6 40 18" stroke-width="1.6"/><circle cx="168" cy="12" r="5" fill="var(--accent)" stroke="none"/></svg>';
+  d.innerHTML = `<svg viewBox="0 0 180 120" width="180" height="120" fill="none" stroke="currentColor" stroke-linecap="round">
+    <path d="M156 96A80 80 0 0 0 76 16" stroke-width="1" stroke-dasharray="2 5" opacity=".6"/>
+    <path d="M156 66A50 50 0 0 0 106 16" stroke-width="1" opacity=".55"/>
+    <path d="M156 40A24 24 0 0 0 132 16" stroke-width="1" opacity=".6"/>
+    <g opacity=".58" stroke-width="1">
+      <path d="M26 18v7M22.5 21.5h7"/>
+      <path d="M72 32v5M69.5 34.5h5"/>
+      <circle cx="44" cy="12" r="1.6" fill="currentColor" stroke="none"/>
+      <circle cx="112" cy="88" r="1.4" fill="currentColor" stroke="none"/>
+      <circle cx="136" cy="100" r="1.1" fill="currentColor" stroke="none"/>
+      <circle cx="92" cy="24" r="1.3" fill="currentColor" stroke="none"/>
+    </g>
+    <path class="vein-path" d="M16 108C54 92 96 62 154 18" stroke-width="1.6"/>
+    <path class="vein-path side s1" d="M54 91c-9-9-13-20-10-32" stroke-width="1.1"/>
+    <path class="vein-path side s2" d="M97 61c11-4 19-12 24-23" stroke-width="1.1"/>
+    <g fill="currentColor" stroke="none">
+      <circle cx="54" cy="91" r="2.3"/>
+      <circle cx="97" cy="61" r="2.1"/>
+      <circle cx="121" cy="38" r="1.7"/>
+    </g>
+    <circle cx="154" cy="18" r="10" stroke="var(--accent)" stroke-width=".9" opacity=".5"/>
+    <circle cx="154" cy="18" r="4.4" fill="var(--accent)" stroke="none"/>
+  </svg>`;
   return d;
 }
 
-// 把握表盘：60 格刻度，已达刻度用墨色，指针用朱砂
+// 把握表盘：小尺寸 20 格、大尺寸 40 格，已达刻度用墨色，指针用朱砂
+// （34px 上画 40 格时相邻刻度间距只有 0.8px，而线宽 1.1px，刻度会互相压住连成一圈实心黑环）
 export function dial(value, size = 44, big = false, label = '把握') {
   const v = value == null ? null : Math.max(0, Math.min(100, value));
-  const r = size / 2, ticks = 40;
-  let t = '';
+  const r = size / 2, ticks = size < 44 ? 20 : 40, majorEvery = ticks / 4;
+  const swMajor = size < 44 ? 1.4 : 1.8, swMinor = size < 44 ? 0.9 : 1.1;
+  // 外轨：一条极细的圆，给刻度一个边界（参考环形进度的做法）
+  let t = `<circle cx="${r}" cy="${r}" r="${r - 0.6}" fill="none" stroke="var(--line-2)" stroke-width=".5" opacity=".55"/>`;
   for (let i = 0; i < ticks; i++) {
     const a = (i / ticks) * 2 * Math.PI - Math.PI / 2;
-    const major = i % 10 === 0;
+    const major = i % majorEvery === 0;
     const r1 = r - 2, r2 = r - (major ? (big ? 9 : 6) : (big ? 5 : 4));
     const on = v != null && i / ticks < v / 100;
-    t += `<line x1="${r + r1 * Math.cos(a)}" y1="${r + r1 * Math.sin(a)}" x2="${r + r2 * Math.cos(a)}" y2="${r + r2 * Math.sin(a)}" stroke="${on ? 'var(--ink)' : 'var(--line-2)'}" stroke-width="${major ? 1.8 : 1.1}" stroke-linecap="round"/>`;
+    t += `<line x1="${r + r1 * Math.cos(a)}" y1="${r + r1 * Math.sin(a)}" x2="${r + r2 * Math.cos(a)}" y2="${r + r2 * Math.sin(a)}" stroke="${on ? 'var(--ink)' : 'var(--line-2)'}" stroke-width="${major ? swMajor : swMinor}" stroke-linecap="round"/>`;
   }
   if (v != null) {
     const a = (v / 100) * 2 * Math.PI - Math.PI / 2;
@@ -134,7 +160,7 @@ export function confirmSheet(title, msg, okText = '确定', danger = false) {
 
 export function waiting(label) {
   const el = h('div', { class: 'waiting' },
-    h('div', { class: 'clocks' }, [0, 1, 2, 3].map(() => h('div', { class: 'clock' }, h('i'), h('i')))),
+    h('div', { class: 'clocks' }, [0, 1, 2, 3].map(() => h('div', { class: 'clock' }, h('i', { class: 'm' }), h('i', { class: 'h' })))),
     h('div', { class: 'elapsed' }, '0.0s'), h('div', { class: 'small' }, label));
   const t0 = performance.now();
   const timer = setInterval(() => {

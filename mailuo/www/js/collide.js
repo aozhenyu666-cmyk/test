@@ -176,6 +176,85 @@ export function suggestPauses(store, targetId, to) {
   return store.descendants(targetId).filter((d) => d.type === '规' && (d.confidence ?? 0) >= 80 && !d.paused).map((d) => d.id);
 }
 
+// ---------- 沙盘推演：先穷举可行路径，再收敛 ----------
+// 这里的立场：穷举本身不是答案。每条路径必须写出「会死在哪」，这句话才是可比较的判定依据；
+// 写不出具体失败点的路径直接丢掉。同时把淘汰过的路径记在问下面，避免下次重复探索。
+export const PROMPT_OPTIONS = `你是首席参谋的「沙盘推演」。我给你一个「问」（痛点或课题）和它下面已有的论断。
+你的任务不是给建议，是先把可行路径摊开，再标出每条路会死在哪。只输出 JSON，不要任何其他文字。
+
+规则：
+1. 给 3–5 条互斥的路径。互斥指选了 A 就不必走 B，不是同一条路线的细节变体。
+2. 必须覆盖三类，各至少一条：
+   - 「现成」：已有的工具、开源项目、成熟范式。写具体名字，不要写「类似工具」。
+   - 「最小验证」：用最低成本先把核心假设验一遍的做法。
+   - 「自建」：自己动手，说明技术边界在哪。
+3. 每条必须写 fatal：如果这条路彻底失败，最可能死在哪个环节。要具体到可观察的现象，
+   不能写「效果不好」「难度太大」「时间不够」这类废话。写不出具体失败点的路径，说明还没想清楚，不要输出。
+4. test 是最小验证动作：一周内能做完、能得出「行 / 不行」结论的动作。
+5. 不要排序，不要写推荐，不要说「建议选择」。选择权在我。
+
+格式：
+{"paths":[{"title":"不超过 20 字","kind":"现成 / 最小验证 / 自建","hypothesis":"这条路径成立的前提，一句话","fatal":"最可能死在哪，要具体可观察","test":"一周内能做完的验证动作","cost":"投入量级，如 半天 / 两周 / 持续"}]}`;
+
+export function optionsUserMessage(store, questionId) {
+  const q = store.nodes.get(questionId);
+  if (!q) return '';
+  const kids = store.children(questionId);
+  const lines = ['问：' + q.title, '说明：' + (q.claim || '—')];
+  if (q.pillars?.length) lines.push('破局支柱（决定成败的客观约束）：' + q.pillars.join('；'));
+  if (kids.length) lines.push('已有的论断：' + kids.map((k) => k.type + '「' + k.title + '」' + (k.confidence != null ? ' ' + k.confidence + '%' : '')).join('、'));
+  if (q.discarded?.length) lines.push('已经淘汰过的路径（不要重复推荐）：' + q.discarded.map((d) => d.title + (d.fatal ? '（死在：' + d.fatal + '）' : '')).join('；'));
+  return lines.join('\n');
+}
+
+const OPTION_KINDS = ['现成', '最小验证', '自建'];
+
+export function normalizeOptions(raw, store, questionId) {
+  const q = store.nodes.get(questionId);
+  const before = (q?.discarded || []).map((d) => d.title);
+  const paths = [];
+  const seen = [];
+  for (const [i, p] of (Array.isArray(raw?.paths) ? raw.paths : []).slice(0, 6).entries()) {
+    const title = String(p?.title || '').trim().slice(0, 40);
+    if (!title) continue;
+    if (seen.some((t) => titleSim(t, title) >= 0.7)) continue;
+    seen.push(title);
+    const fatal = String(p?.fatal || '').trim();
+    paths.push({
+      key: 'p' + (i + 1),
+      title,
+      kind: OPTION_KINDS.includes(p?.kind) ? p.kind : '其它',
+      hypothesis: String(p?.hypothesis || '').trim(),
+      fatal,
+      test: String(p?.test || '').trim(),
+      cost: String(p?.cost || '').trim(),
+      noFatal: !fatal,
+      seenBefore: before.find((t) => titleSim(t, title) >= 0.6) || '',
+    });
+  }
+  return paths;
+}
+
+// 选中的路径 → 一个「论」草案：fatal 直接变成扣分哨，test 变成加分哨
+// （没有哨的论会进体检的「盲信无哨」，所以这里必须给出加减分）
+export function optionToNode(path, question) {
+  const sentinels = [];
+  if (path.fatal) sentinels.push({ when: path.fatal.slice(0, 60), delta: -20 });
+  if (path.test) sentinels.push({ when: '按「' + path.test.slice(0, 50) + '」验证通过', delta: 15 });
+  return {
+    type: '论',
+    title: path.title,
+    claim: path.hypothesis || path.title,
+    under: question.id,
+    confidence: 55,
+    status: '假设',
+    keywords: [],
+    blindspot: path.fatal || '',
+    sentinels,
+    source: '沙盘推演',
+  };
+}
+
 // ---------- 整理挂载：v1 升级上来的「论 / 规」大多没挂载，而且库里往往还没有「问」 ----------
 export const PROMPT_MOUNT = `你是首席参谋的「整理挂载」助手。下面是我知识库里还没挂载的「论 / 规」，以及已有的「问 / 论」。
 请把每个未挂载节点挂到最合适的父节点下，只输出 JSON，不要任何其他文字。

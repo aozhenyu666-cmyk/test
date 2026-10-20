@@ -442,6 +442,66 @@ await page.waitForFunction(async () => {
 }, null, { timeout: 5000 }).catch(() => {});
 check(await page.evaluate(() => window.__mailuo.store.unmounted('旧体系').length) === 0, '整理后旧体系没有未挂载节点');
 
+// ---------- 新增：沙盘推演（问下面摊开路径，收敛后留档淘汰） ----------
+await page.goto(ORIGIN + '/#/node/n-0100');
+await page.waitForSelector('[data-testid=options]');
+check(await page.locator('[data-testid=options]').count() === 1, '「问」节点上出现规划入口');
+await page.click('[data-testid=options]');
+await page.waitForSelector('[data-testid=gen-options]');
+await page.click('[data-testid=gen-options]');
+await page.waitForSelector('[data-testid=option-p1]', { timeout: 10000 });
+check(await page.locator('[data-testid^=option-p]').count() === 3, '沙盘摊开三条互斥路径');
+const optText = await page.textContent('[data-testid=option-p1]');
+check(optText.includes('会死在这') && optText.includes('最小验证') && optText.includes('现成'), '每条路径标出会死在哪个环节、最小验证动作和所属类型');
+await page.click('[data-testid=option-p1]');
+check((await page.textContent('[data-testid=commit-option]')).includes('确认走'), '选中后按钮变成确认文案');
+await page.click('[data-testid=commit-option]');
+await page.waitForSelector('.node-hero');
+check((await page.textContent('.node-hero h1')) === '现成提醒工具 + 外部打断', '选中的路径升格成论并跳过去');
+const opts = await page.evaluate(() => {
+  const { store } = window.__mailuo;
+  const q = store.nodes.get('n-0100');
+  const kid = [...store.nodes.values()].find((n) => n.title === '现成提醒工具 + 外部打断');
+  return { discarded: q.discarded.length, ty: kid.type, under: kid.under, deltas: kid.sentinels.map((s) => s.delta), blindspot: kid.blindspot, discardedTitles: q.discarded.map((d) => d.title) };
+});
+check(opts.discarded === 2 && opts.discardedTitles.includes('纸笔追问卡'), '没选的两条进淘汰记录');
+check(opts.ty === '论' && opts.under === 'n-0100', '升格成论并挂在原问下面');
+check(opts.deltas.join(',') === '-20,15', '失败点变成扣 20 的哨，验证通过变成加 15 的哨');
+check(opts.blindspot.includes('小时级'), '失败点同时写进反方盲区');
+f = await files();
+check(Object.values(f).some((t) => t.includes('discarded:') && t.includes('自建追问引擎')), '淘汰记录写进了问的 Markdown');
+await shot('21-options');
+await page.reload();
+await page.waitForSelector('.node-hero');
+check(await page.evaluate(() => window.__mailuo.store.nodes.get('n-0100').discarded.length) === 2, '重新载入后淘汰记录还在');
+await page.goto(ORIGIN + '/#/options/n-0100');
+await page.waitForSelector('[data-testid=gen-options]');
+check((await page.textContent('.view')).includes('淘汰过的路'), '回到沙盘能看到淘汰史，避免重复探索');
+
+// ---------- 新增：执行端（一手）反馈写入 ----------
+const beforePractice = await page.evaluate(() => {
+  const s = window.__mailuo.store;
+  return { rule: s.nodes.get('n-0101').confidence, parent: s.nodes.get('n-0006').confidence };
+});
+await page.goto(ORIGIN + '/#/settings');
+await page.waitForSelector('[data-testid=practice-json]');
+await page.fill('[data-testid=practice-json]', JSON.stringify({ rule: 'n-0101', kind: '卡壳', note: '执行端：三次都没做到' }));
+await page.click('[data-testid=practice-import]');
+await page.waitForFunction((b) => window.__mailuo.store.nodes.get('n-0101').confidence === b - 5, beforePractice.rule, { timeout: 5000 });
+const afterPractice = await page.evaluate(() => {
+  const s = window.__mailuo.store;
+  return { rule: s.nodes.get('n-0101').confidence, parent: s.nodes.get('n-0006').confidence, last: s.nodes.get('n-0101').checks.at(-1) };
+});
+check(afterPractice.rule === beforePractice.rule - 5 && afterPractice.parent === beforePractice.parent - 3, '一手卡壳：规 −5、上游论 −3');
+check(afterPractice.last.source === '一手' && afterPractice.last.kind === '卡壳' && afterPractice.last.result.includes('三次都没做到'), 'checks 记下 source=一手 与执行端原文');
+f = await files();
+check(Object.values(f).some((t) => t.includes('source: 一手') && t.includes('kind: 卡壳')), '一手反馈落盘成 Markdown 的 checks');
+await page.fill('[data-testid=practice-json]', '{"rule":"n-9999","kind":"卡壳"}');
+await page.click('[data-testid=practice-import]');
+await page.waitForFunction(() => document.querySelector('[data-testid=practice-import]')?.parentElement?.parentElement?.textContent.includes('不存在'), null, { timeout: 5000 }).catch(() => {});
+check((await page.textContent('.card:has([data-testid=practice-json])')).includes('不存在'), '导入不存在的规则时给出明确提示');
+await shot('22-practice');
+
 // ---------- 新增：安卓返回键逻辑 ----------
 await page.goto(ORIGIN + '/#/node/n-0001');
 await page.waitForSelector('.node-hero');
