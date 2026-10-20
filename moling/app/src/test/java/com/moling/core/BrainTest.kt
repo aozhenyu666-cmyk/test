@@ -140,11 +140,14 @@ class BrainTest {
         val b = brain()
         assertNull(b.suggest(ZkCommand.Tighten("block_app", "com.android.phone", "别打电话"), at(10)))
         assertNull(b.suggest(ZkCommand.EnterHq(600, "太长"), at(10)))
-        val ok = b.suggest(ZkCommand.Tighten("cut_play", "30", "今天刷多了"), at(10))
+        assertNull("总控没有这个开关", b.suggest(ZkCommand.Tighten("cut_play", "30", "今天刷多了"), at(10)))
+        assertNull(b.suggest(ZkCommand.RequestLoosen("pause_all", "1", "想歇一天"), at(10)))
+        val ok = b.suggest(ZkCommand.Tighten("block_app", "com.ss.android.ugc.aweme", "今天刷多了"), at(10))
         assertNotNull(ok)
         assertEquals(ProposalState.PENDING, ok!!.state)
         // 同一句话不重复提
-        assertEquals(ok.id, b.suggest(ZkCommand.Tighten("cut_play", "30", "今天刷多了"), at(10, 1))!!.id)
+        assertEquals(ok.id, b.suggest(ZkCommand.Tighten("block_app", "com.ss.android.ugc.aweme", "今天刷多了"), at(10, 1))!!.id)
+        assertNotNull(b.suggest(ZkCommand.RequestLoosen("unblock_app", "tv.danmaku.bili", "周末想看"), at(10)))
     }
 
     @Test fun neverRepairsOrFreezesZongkong() = runTest {
@@ -218,7 +221,7 @@ class BrainTest {
         val b = brain(zk, "好。\n【动作】专注｜25｜写申论")
         val p1 = b.chat("开始", at(10)).proposals.single()
         b.accept(p1.id, at(10, 1))
-        b.suggest(ZkCommand.Tighten("cut_play", "20", "刷多了"), at(11))!!.let { b.decline(it.id, at(11, 1)) }
+        b.suggest(ZkCommand.Tighten("block_app", "tv.danmaku.bili", "刷多了"), at(11))!!.let { b.decline(it.id, at(11, 1)) }
         assertTrue(b.night(at(23, 30)).isNotBlank())
         val s = b.state()
         assertEquals(90, s.days.single().work)

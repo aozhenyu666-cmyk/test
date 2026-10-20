@@ -41,7 +41,7 @@
 **建什么：**
 - `moling/settings.gradle.kts`、`moling/build.gradle.kts`、`moling/app/build.gradle.kts`、`moling/gradle/`（wrapper）、`moling/gradlew`。直接参照 `zongkong/` 下同名文件，版本完全一致：AGP 8.5.2、Kotlin 2.0.21、Compose、`kotlinx-serialization-json:1.7.3`、`kotlinx-coroutines-android:1.8.1`、`okhttp`（版本照总控）、`junit:4.13.2`、`kotlinx-coroutines-test:1.8.1`。minSdk 26，targetSdk 34，JDK 17。
 - 包名 `com.moling.app`，应用名「墨灵」。
-- 固定调试签名：生成一个 `moling/app/debug.keystore` 提交进仓库，`signingConfigs.debug` 指向它（照总控的写法），这样以后覆盖安装数据不丢。
+- 固定调试签名：**`moling/app/debug.keystore` 已经在仓库里了，不要重新生成**（总控认的就是它的证书，换了总控就不认墨灵）。`signingConfigs.debug` 指向它（照总控的写法）：storePassword / keyPassword 都是 `android`，keyAlias `androiddebugkey`。
 - `MainActivity.kt`：Compose，底部三个标签：**对话 / 今天 / 体系**，外加右上角“设置”。先放空页面。
 - `.github/workflows/moling-android.yml`：触发条件 `push` 且 `paths: ["moling/**", ".github/workflows/moling-android.yml"]`；步骤：checkout → setup-java 17 → `./gradlew testDebugUnitTest assembleDebug`（工作目录 `moling`）→ 发布到 GitHub release **`moling-latest`**（照 `zongkong-android.yml` 里 release 那一步，只把名字和文件换掉）。**不要改动总控的任何 workflow。**
 
@@ -69,7 +69,12 @@
   - 导演用 `brain.director`，不要自己再建一个 `DirectorEngine`。
   - 状态都在大脑里（`brain.state()` 返回 `BrainState`：水道、体系图、预言、对话、提议、日志），**不要自己定义 `MolingState`**。
   - 大脑的方法都是 `suspend`，自己已经加锁；在后台协程（`Dispatchers.IO`）里调，需要更新界面时切回主线程。
-- `app/ZkBridge.kt`：实现 `com.moling.core.ZkPort`。总控那边接收墨灵的接口还没做，**这一批先返回 `null`**（`status()` 和 `send()` 都返回 null），大脑会把提议记成“没送到总控”，以后接上再重试。
+- `app/ZkBridge.kt`：实现 `com.moling.core.ZkPort`，通过总控的 ContentProvider 读状态、交建议（总控那边已经做好，只认墨灵的签名）：
+  - `AndroidManifest.xml` 里加 `<queries><package android:name="com.zongkong.app" /></queries>`，否则 Android 11 起看不见总控。
+  - 用 `Uri.parse("content://$ZK_AUTHORITY")`（常量在 `com.moling.core.link`）。
+  - `status()`：`contentResolver.call(uri, ZK_STATUS, null, null)`，把返回的 Bundle 转成 `Map<String, String>`（每个键 `getString`），交给 `ZkWire.status(map)`；Bundle 里有 `error` 键、返回 null、或抛异常（总控没装、被杀）都返回 `null`。
+  - `send(command)`：把 `ZkWire.toMap(command)` 放进一个 Bundle（全是 `putString`），`contentResolver.call(uri, ZK_COMMAND, null, bundle)`，返回的 Bundle 同样转成 Map 交给 `ZkWire.receipt(map, now)`；返回 null 或抛异常时返回 `null`。
+  - 两个方法都包 `try/catch`，任何异常都不能让墨灵崩。总控收到建议后会发一条通知，用户点“执行”总控才做。
 - `app/PhoneFacts.kt`：实现 `FactsSource`，返回 `Facts`。只填手机这边能拿到的：`now`、`minute`（北京时间一天中的分钟）、`quiet`（23:30–07:00 为 true）；总控和水道的字段大脑会自己补上，拿不到的写进 `unknown`。
 
 **验收：** `core` 的单元测试全部通过；杀掉 App 再打开，`mind/` 下的两个 JSON 文件还在。

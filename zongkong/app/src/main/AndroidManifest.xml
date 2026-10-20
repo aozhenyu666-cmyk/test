@@ -29,6 +29,8 @@
         <package android:name="com.google.android.apps.bard" />
         <!-- 行为管理部：和一手互相连接（读一手的训练、把行动交给一手陪练） -->
         <package android:name="com.yishou.app" />
+        <!-- 墨灵：认它的签名（只有真的墨灵能读总控、交建议） -->
+        <package android:name="com.moling.app" />
         <intent>
             <action android:name="android.intent.action.SEND" />
             <data android:mimeType="text/plain" />
@@ -187,5 +189,13 @@
             android:name=".link.LinkProvider"
             android:authorities="com.zongkong.app.link"
             android:exported="true" />
+        <!-- 墨灵连接：只走 call()，只认墨灵的签名（见 link/Partner.kt）。墨灵交来的只是建议，你在通知里点“执行”才做 -->
+        <provider
+            android:name=".link.MolingProvider"
+            android:authorities="com.zongkong.app.moling"
+            android:exported="true" />
+        <receiver
+            android:name=".link.MolingReceiver"
+            android:exported="false" />
     </application>
 </manifest>

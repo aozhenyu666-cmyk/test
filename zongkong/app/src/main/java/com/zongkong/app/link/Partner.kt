@@ -16,6 +16,15 @@ object Partner {
     /** 一手 yishou/app/debug.keystore 的证书 SHA-256。 */
     private const val YISHOU_CERT = "EDCE45B1C655885E106D3A08A76D169E8A50CFA79F364415F8AC997B44D87BCE"
 
+    /** 墨灵 moling/app/debug.keystore 的证书 SHA-256。 */
+    private const val MOLING_CERT = "DD76772A8714DFB8C67622EB2E18D5397334A36B54CCD329EB49D888B802E0A7"
+
+    /** 只有真正的墨灵（包名 + 签名都对）才能读总控的状态、交建议。 */
+    fun callerIsMoling(context: Context): Boolean {
+        val pkgs = context.packageManager.getPackagesForUid(Binder.getCallingUid()) ?: return false
+        return pkgs.any { it == com.zongkong.core.moling.MolingLink.PACKAGE && signedBy(context, it, MOLING_CERT) }
+    }
+
     fun callerIsYishou(context: Context): Boolean {
         val pkgs = context.packageManager.getPackagesForUid(Binder.getCallingUid()) ?: return false
         return pkgs.any { it == Link.YISHOU && signedBy(context, it, YISHOU_CERT) }

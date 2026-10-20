@@ -17,6 +17,11 @@ const val ZK_LINK_VERSION = 1
 const val ZK_AUTHORITY = "com.zongkong.app.moling"
 const val ZK_PACKAGE = "com.zongkong.app"
 
+/** ContentProvider.call 的方法名（总控那边在 zongkong/.../core/moling/Moling.kt 的 MolingLink）。 */
+const val ZK_STATUS = "status"
+const val ZK_COMMAND = "command"
+const val ZK_RESULT = "result"
+
 /** 总控此刻的状态（墨灵每分钟读一次，也在总控推送变化时读）。 */
 @Serializable
 data class ZkStatus(
@@ -70,10 +75,13 @@ sealed interface ZkCommand {
     /** 现在进入总控时间（手机只剩白名单）。 */
     @Serializable data class EnterHq(val minutes: Int, override val reason: String) : ZkCommand
 
-    /** 收紧：kind = block_app（value=包名）/ cut_play（value=分钟，今天的娱乐上限减少多少）/ strict（value=分钟，临时严管）。 */
+    /** 收紧：kind = block_app（value=包名）。总控现在只支持这一种；“只减今天的娱乐”“临时严管”总控还没有开关。 */
     @Serializable data class Tighten(val kind: String, val value: String, override val reason: String) : ZkCommand
 
-    /** 申请放宽：总控照自己的规矩走 24 小时冷静期，墨灵不能直接放宽。 */
+    /**
+     * 申请放宽：总控照自己的规矩走 24 小时冷静期，墨灵不能直接放宽。
+     * kind = unblock_app（value=包名）/ play_quota（value=每天娱乐上限的分钟数）。
+     */
     @Serializable data class RequestLoosen(val kind: String, val value: String, override val reason: String) : ZkCommand
 
     /** 往总控的收集箱放一条（结论、材料、问题）。 */
@@ -103,7 +111,11 @@ fun ZkCommand.describe(): String = when (this) {
         "strict" -> "临时严管 $value 分钟"
         else -> "收紧：$kind $value"
     }
-    is ZkCommand.RequestLoosen -> "申请放宽（总控 24 小时后生效）：$kind $value"
+    is ZkCommand.RequestLoosen -> when (kind) {
+        "unblock_app" -> "申请把 $value 移出拦截名单（总控 24 小时后生效）"
+        "play_quota" -> "申请把每天娱乐上限改成 $value 分钟（放宽要等 24 小时）"
+        else -> "申请放宽：$kind $value"
+    }
     is ZkCommand.Note -> "往总控收集箱放一条：${text.take(30)}"
 } + if (reason.isNotBlank()) "。原因：$reason" else ""
 
@@ -135,6 +147,29 @@ object ZkWire {
         }?.takeIf { valid(it) }
     }
 
+    /** 总控的状态（[ZK_STATUS] 返回的键值）→ [ZkStatus]。读不出的字段用默认值；列表用换行分隔。 */
+    fun status(m: Map<String, String>): ZkStatus {
+        fun s(k: String) = m[k].orEmpty()
+        fun b(k: String) = m[k] == "true"
+        fun l(k: String, d: Long = 0) = m[k]?.toLongOrNull() ?: d
+        fun i(k: String, d: Int = 0) = m[k]?.toIntOrNull() ?: d
+        fun list(k: String) = s(k).split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+        return ZkStatus(
+            version = i("v", ZK_LINK_VERSION), at = l("at"),
+            accessibilityOn = b("accessibilityOn"), heartbeatAt = l("heartbeatAt"), userDisabled = b("userDisabled"),
+            strict = b("strict"), strictReason = s("strictReason"), focus = b("focus"), hqActive = b("hqActive"), quiet = b("quiet"),
+            mainTitle = s("mainTitle"), mainKey = s("mainKey"), mainPlannedAt = l("mainPlannedAt"), mainStarted = b("mainStarted"), mainDone = b("mainDone"),
+            lastProgressAt = l("lastProgressAt"), playMinutesToday = i("playMinutesToday"), workMinutesToday = i("workMinutesToday"),
+            playLeftMin = i("playLeftMin", -1), spendTodayCents = l("spendTodayCents"), credit = i("credit", -1), stance = s("stance"),
+            aims = list("aims"), weekDeliverables = list("weekDeliverables"), upcoming = list("upcoming"), blocked = list("blocked"),
+            sentinelOn = b("sentinelOn"),
+        )
+    }
+
+    /** 总控对 [ZK_COMMAND] 的回执 → [ZkReceipt]。总控报错（例如签名不对）时 ok = false。 */
+    fun receipt(m: Map<String, String>, now: Long): ZkReceipt =
+        m["error"]?.let { ZkReceipt(false, it, now) } ?: ZkReceipt(m["ok"] == "true", m["message"].orEmpty(), now)
+
     /** 总控那边也要调用：明显不合理的指令直接拒绝。 */
     fun valid(c: ZkCommand): Boolean = when (c) {
         is ZkCommand.SetMain -> c.title.isNotBlank()
@@ -143,10 +178,13 @@ object ZkWire {
         is ZkCommand.EnterHq -> c.minutes in 5..60
         is ZkCommand.Tighten -> when (c.kind) {
             "block_app" -> c.value.isNotBlank() && c.value !in com.moling.core.power.Charter.neverTouch
-            "cut_play", "strict" -> (c.value.toIntOrNull() ?: 0) in 1..240
             else -> false
         }
-        is ZkCommand.RequestLoosen -> c.kind.isNotBlank()
+        is ZkCommand.RequestLoosen -> when (c.kind) {
+            "unblock_app" -> c.value.isNotBlank()
+            "play_quota" -> (c.value.toIntOrNull() ?: -1) in 0..1440
+            else -> false
+        }
         is ZkCommand.Note -> c.text.isNotBlank()
     }
 }

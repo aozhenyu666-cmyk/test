@@ -254,6 +254,21 @@ class Store(private val context: Context) {
         next
     }
 
+    // ---------- 墨灵的建议（墨灵交来、等你确认的指令） ----------
+
+    private val _moling = MutableStateFlow(loadJson("moling.json", com.zongkong.core.moling.MolingBook.serializer()) ?: com.zongkong.core.moling.MolingBook())
+    val moling: StateFlow<com.zongkong.core.moling.MolingBook> = _moling.asStateFlow()
+
+    fun updateMoling(f: (com.zongkong.core.moling.MolingBook) -> com.zongkong.core.moling.MolingBook): com.zongkong.core.moling.MolingBook = synchronized(workLock) {
+        val next = f(_moling.value)
+        if (next != _moling.value) {
+            _moling.value = next
+            val text = ZkJson.encodeToString(com.zongkong.core.moling.MolingBook.serializer(), next)
+            io.execute { writeAtomic(File(dir, "moling.json"), text) }
+        }
+        next
+    }
+
     private fun <T> loadJson(name: String, ser: kotlinx.serialization.KSerializer<T>): T? {
         val f = File(dir, name)
         if (!f.exists()) return null
