@@ -30,7 +30,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: 单元测试（core 的 29 个）和调试版 APK
+      - name: 单元测试（core，含 Brain）/ 调试版 APK
         run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
 
       - name: Upload APK

@@ -9,6 +9,8 @@
         <intent>
             <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
         </intent>
+        <!-- Android 11 起，不在这里声明就看不见总控，也就读不到它的状态 -->
+        <package android:name="com.zongkong.app" />
     </queries>
 
     <application

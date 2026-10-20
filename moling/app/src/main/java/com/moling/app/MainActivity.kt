@@ -23,20 +23,36 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.moling.app.ui.AtlasScreen
 import com.moling.app.ui.ChatScreen
 import com.moling.app.ui.MolingTheme
 import com.moling.app.ui.SettingsScreen
 import com.moling.app.ui.TodayScreen
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * 墨灵的外壳：底部三个标签（对话 / 今天 / 体系），右上角设置。
- * 这一批只把「对话」和「设置」接上核心逻辑；「今天」「体系」先放空页，
- * 等下一批（水道页、体系图页）再填。
+ * 这一批把「今天」页和总控接上；「体系」页还是空页（下一批）。
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 大脑的心跳：读总控、对账到点的预言、过期提议、看总控掉没掉。
+        // 这一批只做“App 在前台时每 60 秒一次”，不做后台定时、不读前台应用。
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    runCatching { BrainHost.tickNow() }
+                    delay(60_000L)
+                }
+            }
+        }
+
         setContent {
             MolingTheme {
                 MolingShell()

@@ -17,6 +17,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,10 +28,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.moling.app.BrainHost
 import com.moling.app.data.LlmResult
 import com.moling.app.data.ModelSettings
 import com.moling.app.data.MolingAsk
 import com.moling.app.data.SettingsStore
+import com.moling.core.link.ZkStatus
 import com.moling.core.mind.DEFAULT_PERSONA
 import com.moling.core.power.Charter
 import com.moling.core.power.Tier
@@ -46,6 +49,9 @@ fun SettingsScreen(onDone: () -> Unit) {
     val context = LocalContext.current
     val store = remember { SettingsStore(context) }
     val saved = remember { store.load() }
+    // 总控状态由大脑的心跳（MainActivity 里每分钟一次 tick）更新到这里。
+    val brainState by BrainHost.state.collectAsState()
+    var zkBusy by remember { mutableStateOf(false) }
 
     var url by remember { mutableStateOf(saved.baseUrl) }
     var key by remember { mutableStateOf(saved.apiKey) }
@@ -113,6 +119,33 @@ fun SettingsScreen(onDone: () -> Unit) {
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
                 supportingText = { Text("DeepSeek 填 deepseek-chat。") },
+            )
+
+            Text("总控", style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    zkLabel(brainState.lastStatus),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedButton(
+                    onClick = {
+                        if (!zkBusy) {
+                            zkBusy = true
+                            scope.launch {
+                                // 心跳会把总控状态拉回来；这一下失败也不影响聊天。
+                                runCatching { BrainHost.tickNow() }
+                                zkBusy = false
+                            }
+                        }
+                    },
+                    enabled = !zkBusy,
+                ) { Text(if (zkBusy) "连接中…" else "重新连接") }
+            }
+            Text(
+                "总控管拦截和锁机，墨灵只提议、由你在总控里确认；它连不上时墨灵照常聊，只是交不了建议。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             Text("她是谁", style = MaterialTheme.typography.titleSmall)
@@ -211,4 +244,16 @@ fun SettingsScreen(onDone: () -> Unit) {
             ) { Text("保存") }
         }
     }
+}
+
+/**
+ * 总控状态翻成一句话。null = 连不上（没装 / 被杀 / 版本太旧）。
+ * 总控掉线时大脑会保留上一次读到的状态，所以超过 2 分钟没刷新也当连不上——
+ * 不然强行停止总控后设置页还会显示“已连接”。
+ */
+private fun zkLabel(s: ZkStatus?): String {
+    if (s == null) return "总控：连不上"
+    val fresh = s.at > 0 && System.currentTimeMillis() - s.at <= 2 * 60_000L
+    if (!fresh) return "总控：连不上"
+    return "总控：已连接（" + (if (s.strict) "严管" else "正常") + "）"
 }
