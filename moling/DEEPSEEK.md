@@ -1,5 +1,7 @@
 # 墨灵 App · 给 DeepSeek 的施工文档
 
+> **第一批已完成（见 `moling/DEVLOG.md`）。下一批看 `moling/DEEPSEEK-2.md`。** 本文 M2/M3 里“直接调用大脑”的写法是第一批做完之后才改的，在第二批 M4 落实。
+
 > 2026-10-20。先读 `partner-blueprint/CONTEXT.md`（一页纸的来龙去脉），再读本文。
 > 分工：核心逻辑已经写好，在 `moling/app/src/main/java/com/moling/core/`（纯 Kotlin，有单元测试）。**你做 Android 外壳，把界面和这些逻辑接起来。**
 > 这份文档写得很具体：每一步写了要建哪些文件、调用哪些函数、做完怎么验收。照着一步一步做，不要跳步，也不要加文档没写的功能。

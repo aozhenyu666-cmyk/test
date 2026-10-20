@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 墨灵的图标：一滴墨，落在纸上。画布 108dp，内容在中间 72dp 里。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#C23B22"
+        android:pathData="M54,26 C54,26 36,48 36,62 C36,72 44,80 54,80 C64,80 72,72 72,62 C72,48 54,26 54,26 Z" />
+    <path
+        android:fillColor="#F7F4EE"
+        android:pathData="M50,60 C50,60 46,66 46,70 C46,73 48,75 51,75 C54,75 56,73 56,70 C56,66 50,60 50,60 Z" />
+</vector>
