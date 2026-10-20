@@ -153,10 +153,12 @@ data class SessionPlan(
 object Openings {
     fun plan(kb: TopicNode?, baton: Baton?, goal: String, talkMin: Int): SessionPlan {
         val asks = mutableListOf<String>()
-        // ① 定位：先找知识库里“还说不清”的那条，其次是上次的卡点
+        // ① 先验证上一场的判断（验证闭环），再定位“还说不清”的那条，最后才是上次的卡点
+        val verify = kb?.pending?.lastOrNull()?.takeIf { it.isNotBlank() }
         val open = kb?.open?.firstOrNull { it.isNotBlank() }
         val stuck = baton?.stuck?.takeIf { it.isNotBlank() }
         asks += when {
+            verify != null -> "上次你判断「${verify.take(28)}」。先验它：现在还成立吗？拿什么当证据？"
             !open.isNullOrBlank() -> "「${open.take(40)}」这句里，你最没把握的是哪一处？先说那一处。"
             stuck != null -> "上次卡在「${stuck.take(30)}」。先把这一层拆开：它具体难在哪一步？"
             else -> "$goal：你是不知道从哪下手，还是做了一半卡住？只答这一句。"
@@ -199,6 +201,7 @@ object Openings {
             if (kb.goal.isNotBlank()) append("，要做到：${kb.goal}")
             append("。")
             if (kb.known.isNotEmpty()) append("已经弄明白的：${kb.known.takeLast(2).joinToString("；")}。")
+            if (kb.pending.isNotEmpty()) append("上一场的判断（还没验）：${kb.pending.last()}。")
             if (kb.open.isNotEmpty()) append("还没说清的：${kb.open.takeLast(2).joinToString("；")}。")
         }
         if (baton != null && baton.nextAsk.isNotBlank()) append("\n上次停在：${baton.nextAsk}。")

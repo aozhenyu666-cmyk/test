@@ -148,6 +148,8 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
     val sig = LocalSignals.current
     val context = LocalContext.current
     val work by context.zk.store.work.collectAsStateWithLifecycle()
+    // 导演开着时首页换成墨灵（其余入口都还在，只是不当第一眼）
+    val cfg by context.zk.store.config.collectAsStateWithLifecycle()
     val newChanges = work.changes.count { it.at > context.zk.store.seenChanges }
     val chatBusy by context.zk.chat.busy.collectAsStateWithLifecycle()
     Scaffold(
@@ -218,7 +220,7 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 popEnterTransition = { fadeIn(tween(NAV_MS)) + slideInHorizontally(tween(NAV_MS)) { -it / 8 } + scaleIn(tween(NAV_MS), initialScale = 0.99f) },
                 popExitTransition = { fadeOut(tween(NAV_MS / 2)) + slideOutHorizontally(tween(NAV_MS)) { it / 6 } },
             ) {
-                composable("home") { NowScreen(nav) }
+                composable("home") { if (cfg.mailuo.enabled) MailuoScreen(nav) else NowScreen(nav) }
                 composable("depts") { DeptsScreen(nav) }
                 composable("dept/{name}") { e -> DeptScreen(e.arguments?.getString("name").orEmpty(), nav) }
                 composable("chat") { ChatScreen(nav) }

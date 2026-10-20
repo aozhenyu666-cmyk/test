@@ -44,6 +44,8 @@ object Relay {
         var conclusion = ""
         var cards: List<Card> = emptyList()
         var index = 0
+        /** 卡上一问一问答出来的内容（“就在这儿聊”那条路）。 */
+        val answers = mutableListOf<String>()
     }
 
     private var live: Live? = null
@@ -138,7 +140,7 @@ object Relay {
             leaves = s.leaves,
             handoff = s.handoff,
             handoffOk = s.handoff != "没打开",
-            conclusion = conclusion.ifBlank { s.conclusion },
+            conclusion = conclusion.ifBlank { s.conclusion }.ifBlank { s.answers.joinToString("；").take(300) },
         )
         Log.i(TAG, "收线：$reason，在场 ${log.presentMs / 60_000} 分钟，离开 ${log.leaves} 次")
         DirectorHost.onSession(s.app, log)
@@ -159,7 +161,19 @@ object Relay {
                 s.cards.getOrNull(s.index)?.let { MailuoWindow.show(it) }
                 true
             }
-            is com.zongkong.core.director.Reply.Conclusion -> { noteConclusion(r.text); true }
+            is com.zongkong.core.director.Reply.Conclusion -> {
+                // 先看现在这张是不是“收线”卡：是就真收线，不是就把这句存下来、翻到下一问。
+                // 这样“就在这儿聊”是一条真的三步流程，而不是一说答案就整场结束。
+                val closing = s.cards.getOrNull(s.index)?.title?.contains("收线") == true
+                if (closing) {
+                    noteConclusion(r.text)
+                } else {
+                    if (r.text.isNotBlank()) s.answers += r.text
+                    s.index = (s.index + 1).coerceAtMost(s.cards.lastIndex.coerceAtLeast(0))
+                    s.cards.getOrNull(s.index)?.let { MailuoWindow.show(it) }
+                }
+                true
+            }
             // 休息：先按现有记录收线，再让导演安排休息卡
             is com.zongkong.core.director.Reply.Rest -> { finish("休息", ""); false }
             // 会话里的卡被划掉不算“无视导演”

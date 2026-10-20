@@ -19,10 +19,10 @@ data class DirectorConfig(
     val followUpMin: Int = 45,
     /** 主线过点多少分钟算“没开始”。 */
     val lateMin: Int = 15,
-    /** 每天给导演的字数预算（输入 + 输出）。超了就只用本地模板。 */
-    val dailyChars: Long = 400_000,
+    /** 每天给导演的字数预算（输入 + 输出）。v4 提到 120 万：先让她算得动，再看真实花费。 */
+    val dailyChars: Long = 1_200_000,
     /** 去演员那里聊的默认时长（分钟）。 */
-    val talkMin: Int = 10,
+    val talkMin: Int = 15,
 )
 
 const val DEFAULT_PERSONA =

@@ -35,6 +35,7 @@ object Prompts {
         if (kb != null) {
             appendLine("【正在攻的】${kb.title}" + if (kb.goal.isNotBlank()) "（要做到：${kb.goal}）" else "")
             if (kb.known.isNotEmpty()) appendLine("【已经弄明白】${kb.known.takeLast(3).joinToString("；")}")
+            if (kb.pending.isNotEmpty()) appendLine("【上一场的判断（还没验证）】${kb.pending.last()}——第一问要先验它")
             if (kb.open.isNotEmpty()) appendLine("【还没说清】${kb.open.takeLast(3).joinToString("；")}")
             if (kb.materials.isNotEmpty()) appendLine("【材料】${kb.materials.takeLast(3).joinToString("；")}")
             if (kb.goodAsks.isNotEmpty()) appendLine("【以前问得好的】${kb.goodAsks.takeLast(2).joinToString("；")}")

@@ -133,6 +133,8 @@ data class TopicNode(
     val goal: String = "",
     /** 已经确认理解 / 做到的。 */
     val known: List<String> = emptyList(),
+    /** 自己下过、还没被验证的判断（下次会话第一问就验它；验过了才挪进 known）。 */
+    val pending: List<String> = emptyList(),
     /** 还说不清的（下一场就从这里问）。 */
     val open: List<String> = emptyList(),
     /** 题目、材料、出处。 */
@@ -213,8 +215,17 @@ object Knowledge {
             if (old.any { it.contains(t) || t.contains(it) }) return old
             return (old + t).takeLast(8)
         }
+        // 验证闭环 v1：新的结论先进 pending（待验证）；上一场留在 pending 的那条，
+        // 这一场活着回来了，就当成“验过了”，挪进 known；被推翻的会在下一场从 pending 里消失。
+        val promoted = node.pending.dropLast(1).lastOrNull().orEmpty()
+        val keepPending = if (conclusion.isNotBlank()) {
+            listOfNotNull(node.pending.lastOrNull(), conclusion.trim().take(80)).takeLast(2)
+        } else {
+            node.pending.takeLast(2)
+        }
         return node.copy(
-            known = add(node.known, conclusion),
+            known = add(node.known, promoted),
+            pending = keepPending,
             open = add(node.open, open),
             goodAsks = if (ask.isBlank()) node.goodAsks else add(node.goodAsks, ask),
             sessions = node.sessions + 1,
