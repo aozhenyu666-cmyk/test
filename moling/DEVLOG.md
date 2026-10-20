@@ -224,3 +224,14 @@
 3. 提议在用户点「好」之前一律不执行；交给总控之后，总控那边还要用户再点一次「执行」。
 4. 总控连不上、模型失败时界面不卡、墨灵不崩：所有 `brain.*` 调用都 `runCatching`，卡片会写「没送到总控」并给「重试」。
 5. 每一步写了 DEVLOG，并等 CI 绿了再推下一步（M4 → M5 → M6 三次提交，CI 每次都绿）。
+---
+
+## 第二批验证（2026-10-21）
+
+- **本地**：Kotlin 编译通过，`testDebugUnitTest` **48 个用例全过**（BrainTest 15 / ZkLinkTest 4 / DirectorEngineTest 20 / ConcludeTest 8 / FileMindStoreTest 1）；debug APK 约 11.3 MB。
+- **APK 清单**（aapt2 dump）：包名 `com.moling.app`、minSdk 26、targetSdk 34、启动页 `com.moling.app.MainActivity`、应用名「墨灵」；权限仍然只有 `INTERNET`（`<queries>` 里的 `com.zongkong.app` 和语音识别不是权限）。
+- **CI**：M4（`b772879`）、M5（`8b3f5db`）、M6（`bdd553c`）三次提交的 `moling-android` 全部绿（build + release 两个 job），按文档「CI 绿了再做下一步」。
+- **发布**：release `moling-latest` 已更新成这一批的 `moling.apk`，还是同一个地址，手机浏览器直接下：
+  `https://github.com/aozhenyu666-cmyk/test/releases/download/moling-latest/moling.apk`
+- **本机环境注记**（和第一批一样，与代码无关）：Windows 中文用户名路径会让 Gradle 测试 worker 的 classpath `@argfile` 读不到（`ClassNotFoundException: GradleWorkerMain`）；同一份代码放 ASCII 路径下 48/48 通过。CI 在 Linux 上不受影响。
+- **没验证到的**：这里没有真机/模拟器。**总控联动（通知 → 点「执行」）、语音输入、朗读、覆盖安装保留数据**只在代码层面保证（失败只提示、不崩），需要用户按上面的验收步骤在手机上试。
