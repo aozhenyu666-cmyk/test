@@ -1,6 +1,7 @@
 package com.moling.app.ui
 
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -294,18 +296,25 @@ fun ChatScreen() {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             choices.forEach { c ->
-                OutlinedButton(onClick = {
-                    sending = true
-                    val picked = c
-                    choices = emptyList()
-                    talkScope.launch {
-                        val t = runCatching { BrainHost.tap(picked) }.getOrNull()
-                        sending = false
-                        if (t == null) { toast("没接上，再点一次"); return@launch }
-                        choices = t.choices
-                        if (talkLoop || BrainHost.settingsStore.load().speak) Speaker.speak(t.line)
-                    }
-                }) { Text(c) }
+                OutlinedButton(
+                    onClick = {
+                        sending = true
+                        val picked = c
+                        choices = emptyList()
+                        talkScope.launch {
+                            val t = runCatching { BrainHost.tap(picked) }.getOrNull()
+                            sending = false
+                            if (t == null) { toast("没接上，再点一次"); return@launch }
+                            choices = t.choices
+                            if (talkLoop || BrainHost.settingsStore.load().speak) Speaker.speak(t.line)
+                        }
+                    },
+                    // D4 破雾：选项是这一轮的主入口，用印泥色细边和更大的可点区域。
+                    border = BorderStroke(1.dp, com.moling.app.ui.Seal),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = com.moling.app.ui.Seal),
+                    shape = RoundedCornerShape(14.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                ) { Text(c, style = MaterialTheme.typography.bodyLarge) }
             }
         }
 
@@ -347,6 +356,15 @@ fun ChatScreen() {
             }) { Text("疯想", style = MaterialTheme.typography.labelMedium) }
         }
 
+        // D4 破雾：不用打字，点她给的就行。
+        if (mode == TalkMode.FOG || usedMode == TalkMode.FOG) {
+            Text(
+                "不用打字，点她给的就行",
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.Bottom,
@@ -355,7 +373,7 @@ fun ChatScreen() {
                 value = input,
                 onValueChange = { if (it.length <= 4000) input = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("和墨灵说点什么") },
+                placeholder = { Text(if (mode == TalkMode.FOG || usedMode == TalkMode.FOG) "不用打字，点上面的选项" else "和墨灵说点什么") },
                 maxLines = 4,
                 shape = RoundedCornerShape(22.dp),
             )

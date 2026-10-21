@@ -13,7 +13,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -155,6 +157,8 @@ class GateActivity : ComponentActivity() {
     private var mood by mutableStateOf(Mood.POUT)
     private var line by mutableStateOf("")
     private var label by mutableStateOf("")
+    /** D1 破雾选项：点一下就能回，不用打字。 */
+    private var gateChoices by mutableStateOf<List<String>>(emptyList())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -175,6 +179,7 @@ class GateActivity : ComponentActivity() {
         mood = LiveScreens.mood(i)
         line = i?.getStringExtra(LiveScreens.EXTRA_LINE).orEmpty()
         label = i?.getStringExtra(LiveScreens.EXTRA_LABEL).orEmpty()
+        gateChoices = LiveScreens.choices(i)
     }
 
     override fun onStart() {
@@ -196,6 +201,10 @@ class GateActivity : ComponentActivity() {
         // B1 捉虫题：动一下脑子，答对了她再听你说。
         var gateQuiz by remember { mutableStateOf<Quiz?>(null) }
         var quizBusy by remember { mutableStateOf(false) }
+        // D1 破雾：他刷懵了，默认收起打字框，只让他点。
+        val fog = remember { BrainHost.state.value.gate?.fog == true }
+        var showInput by remember { mutableStateOf(!fog) }
+        val pickScope = androidx.compose.runtime.rememberCoroutineScope()
         val startedAt = remember { BrainHost.state.value.gate?.startedAt ?: System.currentTimeMillis() }
         var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
         val maxMs = BrainHost.liveConfig().gateMaxMin * 60_000L
@@ -268,6 +277,45 @@ class GateActivity : ComponentActivity() {
             Surface(shape = MaterialTheme.shapes.large, tonalElevation = 3.dp, shadowElevation = 2.dp, color = Color.White) {
                 Text(line, Modifier.padding(16.dp).fillMaxWidth(), style = MaterialTheme.typography.titleMedium)
             }
+            // D1 破雾选项：大一点的按钮，两两一行，手指好点。
+            if (!released && gateChoices.isNotEmpty()) {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    gateChoices.chunked(2).forEach { rowItems ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            rowItems.forEach { c ->
+                                OutlinedButton(
+                                    enabled = !busy,
+                                    onClick = {
+                                        lifecycleScope.launch {
+                                            busy = true
+                                            val t = runCatching { BrainHost.tap(c) }.getOrNull()
+                                            busy = false
+                                            if (t == null) {
+                                                Toast.makeText(this@GateActivity, "没接上，再点一次", Toast.LENGTH_SHORT).show()
+                                                return@launch
+                                            }
+                                            mood = t.mood
+                                            line = t.line
+                                            gateChoices = t.choices
+                                            if (BrainHost.speakOn()) Speaker.speak(t.line)
+                                            if (t.release) {
+                                                released = true
+                                                BrainHost.react(
+                                                    com.moling.core.live.Modality.GATE,
+                                                    com.moling.core.live.Reaction.REPLIED,
+                                                    System.currentTimeMillis() - startedAt,
+                                                )
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f).padding(vertical = 6.dp),
+                                ) { Text(c, style = MaterialTheme.typography.bodyLarge) }
+                            }
+                            if (rowItems.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
             if (said.isNotEmpty()) {
                 Column(Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState())) {
                     said.takeLast(6).forEach { s ->
@@ -281,11 +329,12 @@ class GateActivity : ComponentActivity() {
             }
             Spacer(Modifier.weight(1f))
             if (!released) {
+                if (showInput) {
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it.take(400) },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("回她：卡在哪 / 几点停 / 为什么现在要刷") },
+                    placeholder = { Text(if (fog) "不用打字，点上面的选项就行" else "回她：卡在哪 / 几点停 / 为什么现在要刷") },
                     minLines = 2,
                 )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -300,6 +349,9 @@ class GateActivity : ComponentActivity() {
                     }) { Text("说话") }
                     Spacer(Modifier.weight(1f))
                     if (busy) InkThinking("她在想…") else Button(enabled = text.isNotBlank(), onClick = { send() }) { Text("回她") }
+                }
+                } else if (fog) {
+                    TextButton(onClick = { showInput = true }) { Text("想打字也行", style = MaterialTheme.typography.labelMedium) }
                 }
                 if (gateQuiz == null) {
                     TextButton(
@@ -398,6 +450,8 @@ class PeekActivity : ComponentActivity() {
         var touched by remember { mutableStateOf(false) }
         // 点一下就能回的选项（破雾）：点了她接一句，最多三下
         var choices by remember { mutableStateOf(LiveScreens.choices(intent)) }
+        // D3：这一轮是不是盲盒 / 小剧场 / 赌（只影响样子）。
+        var kind by remember { mutableStateOf(BrainHost.state.value.lastPlay?.kind.orEmpty()) }
         var closeSoon by remember { mutableStateOf(false) }
 
         LaunchedEffect(Unit) {
@@ -424,7 +478,18 @@ class PeekActivity : ComponentActivity() {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         MolingFace(mood, Modifier.size(72.dp))
-                        Text(line, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            if (kind == "blindbox" || kind == "bet") {
+                                KindTag(if (kind == "blindbox") "盲盒" else "她下注了")
+                            }
+                            if (kind == "drama") {
+                                line.lines().filter { it.isNotBlank() }.forEach { one ->
+                                    Text("· " + one, style = MaterialTheme.typography.bodyMedium)
+                                }
+                            } else {
+                                Text(line, style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
                     }
                     if (choices.isNotEmpty()) Row(
                         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -440,6 +505,7 @@ class PeekActivity : ComponentActivity() {
                                     line = t.line
                                     mood = t.mood
                                     choices = t.choices
+                                    kind = ""
                                     if (BrainHost.speakOn()) Speaker.speak(t.line)
                                     busy = false
                                     if (t.choices.isEmpty()) closeSoon = true
@@ -484,4 +550,15 @@ class PeekActivity : ComponentActivity() {
             }
         }
     }
+}
+
+/** D3：卡片上的小标签（盲盒 / 她下注了）。 */
+@Composable
+private fun KindTag(text: String) {
+    Box(
+        Modifier
+            .background(Seal.copy(alpha = 0.10f), RoundedCornerShape(50))
+            .border(0.6.dp, Seal.copy(alpha = 0.5f), RoundedCornerShape(50))
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+    ) { Text(text, color = Seal, style = MaterialTheme.typography.labelSmall) }
 }
