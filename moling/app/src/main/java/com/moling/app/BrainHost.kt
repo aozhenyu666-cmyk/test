@@ -14,6 +14,7 @@ import com.moling.core.Notice
 import com.moling.core.Outcome
 import com.moling.core.Proposal
 import com.moling.core.ProposalState
+import com.moling.app.live.Appear
 import com.moling.app.live.GateActivity
 import com.moling.app.mirror.GptImport
 import com.moling.app.mirror.NotionMirror
