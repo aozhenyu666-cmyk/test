@@ -463,9 +463,11 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             return
         }
 
-        // 探头：只露半个
+        // 探头：从离落点最近的那条边露半个（上次拖到左边，就从左边出来，不横穿屏幕）
         if (petView !== v) return
-        p.x = (screenW - w / 2).coerceAtLeast(0)
+        val guessX = if (savedX != Int.MIN_VALUE) savedX else (screenW - w - px(12f))
+        val fromLeft = guessX + w / 2 < screenW / 2
+        p.x = if (fromLeft) -w / 2 else (screenW - w / 2).coerceAtLeast(0)
         updateWindow(v, p)
         delay(400)
         if (petView !== v) return
@@ -703,8 +705,8 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             stopFade()
             return
         }
-        // 0.35 * level，上限 0.35（窗口自己还有 0.8 的 alpha）。
-        val target = (0.35f * level).coerceIn(0f, 0.35f)
+        // 屏幕上实际看到的灰 = 内容透明度 × 窗口的 0.8；要实际到 0.35，内容取 0.35 / 0.8。
+        val target = (0.35f / 0.8f * level).coerceIn(0f, 0.35f / 0.8f)
         fadeTarget = target
         if (fadeView != null) return
 
@@ -1087,7 +1089,7 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         }
     }
 
-    /** Z6 褪色：整屏一层灰，10 分钟里从 0 慢慢升到 0.35*level。 */
+    /** Z6 褪色：整屏一层灰，10 分钟里慢慢升到屏幕上实际约 0.35（内容 0.44 × 窗口 0.8）。 */
     @Composable
     private fun FadeContent() {
         // 第一帧先用 0（否则 animateFloatAsState 会直接落在目标值），下一帧再开始往上升。
