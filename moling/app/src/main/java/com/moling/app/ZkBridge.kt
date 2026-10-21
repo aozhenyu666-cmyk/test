@@ -48,11 +48,22 @@ object ZkBridge : ZkPort {
 
     override fun send(command: ZkCommand): ZkReceipt? {
         val ctx = app ?: return null
-        val b = runCatching { call(ctx, command) }
+        val b = runCatching { call(ctx, ZkWire.toMap(command)) }
             .onFailure { Log.w(TAG, "给总控发指令失败", it) }
             .getOrNull() ?: return null
         return runCatching { ZkWire.receipt(toMap(b), System.currentTimeMillis()) }
             .onFailure { Log.w(TAG, "解析总控回执失败", it) }
+            .getOrNull()
+    }
+
+    /** 请求按授权书交；是否允许、60 秒反悔及执行都由总控检查。 */
+    override fun sendAuto(command: ZkCommand): ZkReceipt? {
+        val ctx = app ?: return null
+        val b = runCatching { call(ctx, ZkWire.toMapAuto(command)) }
+            .onFailure { Log.w(TAG, "按授权书交总控失败", it) }
+            .getOrNull() ?: return null
+        return runCatching { ZkWire.receipt(toMap(b), System.currentTimeMillis()) }
+            .onFailure { Log.w(TAG, "解析授权回执失败", it) }
             .getOrNull()
     }
 
@@ -68,9 +79,9 @@ object ZkBridge : ZkPort {
     }
 
     /** 指令 → Bundle（约定里全是字符串）→ 总控。 */
-    private fun call(ctx: Context, command: ZkCommand): Bundle? {
+    private fun call(ctx: Context, fields: Map<String, String>): Bundle? {
         val extras = Bundle()
-        ZkWire.toMap(command).forEach { (k, v) -> extras.putString(k, v) }
+        fields.forEach { (k, v) -> extras.putString(k, v) }
         return ctx.contentResolver.call(uri, ZK_COMMAND, null, extras)
     }
 

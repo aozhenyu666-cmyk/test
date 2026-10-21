@@ -47,6 +47,7 @@ import com.moling.app.BrainHost
 import com.moling.core.Brain
 import com.moling.core.Notice
 import com.moling.core.Proposal
+import com.moling.core.ProposalState
 import com.moling.core.flow.Cause
 import com.moling.core.flow.Channel
 import com.moling.core.flow.ChannelState
@@ -236,6 +237,17 @@ fun TodayScreen() {
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        state.lastStatus?.let { status ->
+            val parts = buildList {
+                if (status.holdUntil > now) add("严管到 ${Flow.fmt(Flow.minuteOf(status.holdUntil))}")
+                if (status.cutToday > 0) add("今天娱乐 −${status.cutToday} 分钟")
+                if (status.openCommitments > 0) add("还有 ${status.openCommitments} 条约定")
+            }
+            if (parts.isNotEmpty()) Text(
+                parts.joinToString(" · "), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         // 1. 提醒条：最多 3 条，新的在前；挂着提议的带“好 / 不用”。
         notices.take(3).forEach { notice ->
             NoticeBar(
@@ -348,6 +360,17 @@ fun TodayScreen() {
                     onDecline = { declineProposal(it) },
                     onRetry = { retryProposal(it) },
                 )
+            }
+        }
+
+        // 大脑在后台直接交的 SENT 不属于 pending，单独保留回执和结局。
+        val sent = state.proposals.filter {
+            it.state == ProposalState.SENT && Brain.calendarDay(it.createdAt) == today && it.id != confirmProposal?.id
+        }.takeLast(20).asReversed()
+        if (sent.isNotEmpty()) {
+            SectionTitle("交给总控的")
+            sent.forEach { proposal ->
+                ProposalCard(proposal, { acceptProposal(it) }, { declineProposal(it) }, { retryProposal(it) })
             }
         }
 

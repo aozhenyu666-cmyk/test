@@ -36,6 +36,10 @@ fun ProposalCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Column(Modifier.padding(start = 14.dp, end = 8.dp, top = 10.dp, bottom = 4.dp)) {
+            if (proposal.auto) Text(
+                "墨灵直接交的", style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
             Text(proposal.text, style = MaterialTheme.typography.bodyLarge)
             if (proposal.why.isNotBlank()) {
                 Text(
@@ -79,9 +83,12 @@ fun ProposalCard(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    // 总控在它那边确认后才有结局；之前不猜，就写「等你确认」。
+                    // 结局优先；授权倒计时和普通待确认分别说明。
                     Text(
-                        proposal.zkOutcome.ifBlank { "等你在总控里确认" },
+                        proposal.zkOutcome.ifBlank {
+                            if (proposal.receipt == "授权内：总控倒计时执行") "60 秒后执行，可以在总控里取消"
+                            else "等你在总控里确认"
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

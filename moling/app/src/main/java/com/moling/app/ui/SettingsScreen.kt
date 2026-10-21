@@ -247,10 +247,24 @@ fun SettingsScreen(onDone: () -> Unit) {
                 ) { Text(if (zkBusy) "连接中…" else "重新连接") }
             }
             Text(
-                "总控管拦截和锁机，墨灵只提议、由你在总控里确认；它连不上时墨灵照常聊，只是交不了建议。",
+                "总控管拦截和锁机。授权内的事倒计时后执行，其他建议仍由你在总控里确认；连不上时墨灵照常聊。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            Text(
+                brainState.lastStatus?.grants?.ifBlank { "总控还没有返回授权书，请重新连接或更新总控。" }
+                    ?: "总控未连接，暂时读不到授权书。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(onClick = {
+                val intent = context.packageManager.getLaunchIntentForPackage("com.zongkong.app")
+                    ?.putExtra("route", "settings/moling")
+                if (intent == null || runCatching { context.startActivity(intent) }.isFailure) {
+                    Toast.makeText(context, "打不开总控，请先安装或更新总控", Toast.LENGTH_LONG).show()
+                }
+            }) { Text("去总控改授权书") }
 
             Text("后台", style = MaterialTheme.typography.titleSmall)
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -413,7 +427,7 @@ fun SettingsScreen(onDone: () -> Unit) {
                     FilterChip(
                         selected = brainState.userMax == tier,
                         onClick = {
-                            // 上限只影响她多主动地提建议，不会跳过“你点好”这一步。
+                            // 权柄由大脑检查；授权内的请求仍由总控核对边界。
                             scope.launch { runCatching { BrainHost.setUserMax(tier) } }
                         },
                         label = { Text(tierShort(tier)) },
