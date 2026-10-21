@@ -500,14 +500,19 @@ fun InkPapers(modifier: Modifier = Modifier.size(64.dp), animated: Boolean = tru
 /** 小节标题：字 + 一条细墨线，线尾一个小圆点（参考图里的那种）。 */
 @Composable
 fun InkTitle(text: String, modifier: Modifier = Modifier) {
-    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    // 线从左边慢慢画到右边，像笔尖扫过去；字和小圆点跟着一起显出来。
+    val p = rememberInkProgress(duration = 720)
+    Row(modifier.fillMaxWidth().inkEnter(distance = 5.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(text, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
         Spacer(Modifier.width(10.dp))
         Canvas(Modifier.weight(1f).height(10.dp)) {
             val y = size.height / 2
-            drawLine(Faint, Offset(0f, y), Offset(size.width - 8.dp.toPx(), y), 0.7.dp.toPx())
-            drawCircle(Line, 2.dp.toPx(), Offset(size.width - 3.dp.toPx(), y))
-            drawCircle(Faint, 3.5.dp.toPx(), Offset(size.width - 3.dp.toPx(), y), style = hair(0.5f))
+            val end = size.width - 8.dp.toPx()
+            drawLine(Faint, Offset(0f, y), Offset(end * p.value, y), 0.7.dp.toPx())
+            if (p.value > 0.92f) {
+                drawCircle(Line, 2.dp.toPx(), Offset(size.width - 3.dp.toPx(), y), alpha = ((p.value - 0.92f) / 0.08f).coerceIn(0f, 1f))
+                drawCircle(Faint, 3.5.dp.toPx(), Offset(size.width - 3.dp.toPx(), y), style = hair(0.5f))
+            }
         }
     }
 }

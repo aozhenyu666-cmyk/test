@@ -36,6 +36,7 @@ import com.moling.core.Act
 import com.moling.core.ProposalState
 import com.moling.core.mind.BEIJING
 import com.moling.core.review.About
+import com.moling.app.ui.art.inkEnter
 import com.moling.core.review.Council
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -70,7 +71,7 @@ fun AboutScreen(onDone: () -> Unit) {
         }
 
         // 一株慢慢长的叶子：连续用的天数（两周长满）
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.inkEnter(distance = 8.dp)) {
             com.moling.app.ui.art.InkLeaf(state.trust.days / 14f, Modifier.size(84.dp))
             Spacer(Modifier.width(12.dp))
             Text(

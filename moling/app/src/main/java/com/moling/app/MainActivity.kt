@@ -1,5 +1,22 @@
 package com.moling.app
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
+import com.moling.app.ui.PaperWarm
+import com.moling.app.ui.PaperCool
+import com.moling.app.ui.art.inkEnter
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.ui.platform.LocalDensity
 import android.content.Intent
@@ -160,19 +177,21 @@ private fun MolingShell(requestedTab: MutableIntState) {
 
     // 设置页等占满全屏，不套 Scaffold：它们自己带返回。
     if (settingsOpen) {
-        SettingsScreen(onDone = { settingsOpen = false })
+        Box(Modifier.inkEnter(0, 10.dp)) { SettingsScreen(onDone = { settingsOpen = false }) }
         return
     }
     if (bridgeOpen) {
-        BridgeScreen(onDone = { bridgeOpen = false })
+        Box(Modifier.inkEnter(0, 10.dp)) { BridgeScreen(onDone = { bridgeOpen = false }) }
         return
     }
     if (readyOpen) {
-        ReadyScreen(
-            onDone = { readyOpen = false },
-            openSettings = { readyOpen = false; settingsOpen = true },
-            openBridge = { readyOpen = false; bridgeOpen = true },
-        )
+        Box(Modifier.inkEnter(0, 10.dp)) {
+            ReadyScreen(
+                onDone = { readyOpen = false },
+                openSettings = { readyOpen = false; settingsOpen = true },
+                openBridge = { readyOpen = false; bridgeOpen = true },
+            )
+        }
         return
     }
 
@@ -185,7 +204,13 @@ private fun MolingShell(requestedTab: MutableIntState) {
                         Spacer(Modifier.width(8.dp))
                         Column {
                             Text("墨灵", style = MaterialTheme.typography.titleMedium)
-                            Text(moodLine(mood), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Crossfade(mood, label = "moodLine") { m ->
+                                Text(
+                                    moodLine(m),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
                 },
@@ -204,35 +229,58 @@ private fun MolingShell(requestedTab: MutableIntState) {
             // 打字时收起底栏，给对话多留地方
             if (!typing) NavigationBar(containerColor = Paper, tonalElevation = 0.dp) {
                 val itemColors = NavigationBarItemDefaults.colors(indicatorColor = Mist)
+                // 选中的图标稍微放大；用 spring 回弹，点起来有手感。
+                val s0 by animateFloatAsState(if (tab == 0) 1.10f else 0.92f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMediumLow), label = "tabScale0")
+                val s1 by animateFloatAsState(if (tab == 1) 1.10f else 0.92f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMediumLow), label = "tabScale1")
+                val s2 by animateFloatAsState(if (tab == 2) 1.10f else 0.92f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMediumLow), label = "tabScale2")
                 NavigationBarItem(
                     selected = tab == 0,
                     onClick = { tab = 0 },
-                    icon = { InkBubbles(Modifier.size(30.dp), animated = tab == 0) },
+                    icon = { Box(Modifier.graphicsLayer { scaleX = s0; scaleY = s0 }) { InkBubbles(Modifier.size(30.dp), animated = tab == 0) } },
                     label = { Text("对话") },
                     colors = itemColors,
                 )
                 NavigationBarItem(
                     selected = tab == 1,
                     onClick = { tab = 1 },
-                    icon = { InkWaves(Modifier.size(30.dp), lines = 7, animated = tab == 1) },
+                    icon = { Box(Modifier.graphicsLayer { scaleX = s1; scaleY = s1 }) { InkWaves(Modifier.size(30.dp), lines = 7, animated = tab == 1) } },
                     label = { Text("今天") },
                     colors = itemColors,
                 )
                 NavigationBarItem(
                     selected = tab == 2,
                     onClick = { tab = 2 },
-                    icon = { InkGalaxy(Modifier.size(30.dp), animated = tab == 2) },
+                    icon = { Box(Modifier.graphicsLayer { scaleX = s2; scaleY = s2 }) { InkGalaxy(Modifier.size(30.dp), animated = tab == 2) } },
                     label = { Text("体系") },
                     colors = itemColors,
                 )
             }
         },
     ) { inner ->
-        Box(Modifier.fillMaxSize().padding(inner)) {
-            when (tab) {
-                0 -> ChatScreen()
-                1 -> TodayScreen(onReady = { readyOpen = true })
-                else -> AtlasScreen()
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(inner)
+                .background(Brush.verticalGradient(listOf(PaperWarm, Paper, PaperCool))),
+        ) {
+            AnimatedContent(
+                targetState = tab,
+                transitionSpec = {
+                    val dir = if (targetState > initialState) 1 else -1
+                    (slideInHorizontally(animationSpec = androidx.compose.animation.core.tween(320)) { it / 9 * dir } +
+                        fadeIn(androidx.compose.animation.core.tween(240))) togetherWith
+                        (slideOutHorizontally(animationSpec = androidx.compose.animation.core.tween(320)) { -it / 9 * dir } +
+                            fadeOut(androidx.compose.animation.core.tween(180)))
+                },
+                label = "tabContent",
+            ) { which ->
+                Box(Modifier.fillMaxSize()) {
+                    when (which) {
+                        0 -> ChatScreen()
+                        1 -> TodayScreen(onReady = { readyOpen = true })
+                        else -> AtlasScreen()
+                    }
+                }
             }
         }
     }

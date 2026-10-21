@@ -3,6 +3,13 @@ package com.moling.app.ui
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -44,6 +51,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.moling.app.BrainHost
+import com.moling.app.ui.art.inkEnter
 import com.moling.core.Proposal
 import com.moling.core.atlas.AtlasMap
 import com.moling.core.atlas.AtlasOps
@@ -225,7 +233,15 @@ fun AtlasScreen() {
             )
         }
 
-        if (map) {
+        AnimatedContent(
+            targetState = map,
+            transitionSpec = {
+                (fadeIn(tween(260)) + scaleIn(initialScale = 0.98f, animationSpec = tween(320))) togetherWith
+                    (fadeOut(tween(180)) + scaleOut(targetScale = 0.98f, animationSpec = tween(200)))
+            },
+            label = "atlasView",
+        ) { showMap ->
+        if (showMap) {
             // 沙盘：一眼看出每个主题亮了几成、还有几个黑洞；点岛切回列表的那个主题。
             AtlasMapView(
                 islands = AtlasMap.islands(atlas),
@@ -266,7 +282,7 @@ fun AtlasScreen() {
                 if (atlas.topics.isEmpty()) {
                     // 1. 空态：还没有任何主题，只留说明和下面的贴材料区。
                     Text(
-                        "还没有体系图。贴一段聊出来的结论，或从对话里点「记下」开始。",
+                        "还没有体系图。可以在对话里说「记下」，把一段笔记或聊天结论贴到下面，或者从对话页点「来一局」先下一盘。",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -486,6 +502,7 @@ fun AtlasScreen() {
     opening?.let { op ->
         AtlasOpeningDialog(opening = op, clip = clip, onDismiss = { opening = null })
     }
+    }
 }
 
 /** 小节标题。 */
@@ -506,7 +523,7 @@ private fun BriefCard(brief: Brief, onKeep: () -> Unit, onDrop: () -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().inkEnter(distance = 10.dp),
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("她替你采的：" + brief.question, style = MaterialTheme.typography.titleSmall)
@@ -558,7 +575,7 @@ private fun SourceMark(source: String) {
 @Composable
 private fun NodeRow(node: Node, onVerify: () -> Unit, onDelete: () -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+    Row(Modifier.fillMaxWidth().inkEnter(distance = 6.dp), verticalAlignment = Alignment.Top) {
         Column(Modifier.weight(1f).padding(vertical = 2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SourceMark(node.source)

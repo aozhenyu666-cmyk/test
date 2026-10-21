@@ -17,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -29,6 +30,12 @@ import androidx.compose.ui.unit.dp
 import com.moling.app.ui.art.InkMountain
 import com.moling.app.ui.art.WashGold
 import com.moling.app.ui.art.WashViolet
+import com.moling.app.ui.art.inkEnter
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloat
 import com.moling.core.atlas.AtlasMap
 import com.moling.core.atlas.Island
 import kotlin.math.PI
@@ -85,11 +92,11 @@ fun AtlasMapView(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.Top,
             ) {
-                pair.forEach { island ->
+                pair.forEachIndexed { pairIndex, island ->
                     val ids = island.dots.map { it.id }.toSet()
                     IslandCard(
                         island = island,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).inkEnter(order = rowIndex * 2 + pairIndex, distance = 14.dp),
                         onOpenTopic = onOpenTopic,
                         edges = edges.filter { it.from in ids && it.to in ids },
                     )
@@ -140,6 +147,12 @@ private fun IslandCard(
 @Composable
 private fun IslandCanvas(island: Island, edges: List<com.moling.core.atlas.Edge>, modifier: Modifier) {
     val ring = Ink.copy(alpha = 0.24f)
+    val march by rememberInfiniteTransition(label = "edgeMarch").animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1_800, easing = LinearEasing)),
+        label = "edgeMarchPhase",
+    )
     val faintDot = Ink.copy(alpha = 0.32f)
     val litDot = Ink.copy(alpha = 0.88f)
     Canvas(modifier) {
@@ -166,7 +179,7 @@ private fun IslandCanvas(island: Island, edges: List<com.moling.core.atlas.Edge>
                 from,
                 to,
                 1.dp.toPx(),
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 3.dp.toPx())),
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 3.dp.toPx()), phase = -march * 6.dp.toPx()),
             )
         }
         island.dots.forEachIndexed { i, dot ->
