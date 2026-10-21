@@ -75,7 +75,7 @@ fun DayPlanCard(nav: NavHostController, modifier: Modifier = Modifier) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(
                     input, { input = it; msg = null },
-                    placeholder = { Text("说一句：下午2点到4点刷题") },
+                    placeholder = { Text("下午2点到4点刷题", maxLines = 1) },
                     singleLine = true,
                     modifier = Modifier.weight(1f).testTag("quick-plan"),
                 )

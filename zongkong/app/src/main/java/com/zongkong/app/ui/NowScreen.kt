@@ -120,19 +120,20 @@ fun NowScreen(nav: NavHostController) {
         var addAim by remember { mutableStateOf(false) }
         AimsStrip(book, now, onEdit = { editAim = it }, onAdd = { addAim = true })
         if (addAim || editAim != null) AimDialog(editAim) { addAim = false; editAim = null }
+        // 问候在左（一行写完），日月小图在右；状态牌放到日期下面，不跟问候抢宽度
         Row(verticalAlignment = Alignment.Top, modifier = Modifier.enter(0)) {
-            SunMoonGlyph(d.hour, if (d.hour < 6 || d.hour >= 19) sig.think else sig.ai, size = 54.dp, modifier = Modifier.padding(end = 12.dp, top = 2.dp))
-            Column(Modifier.weight(1f)) {
-                Text(greeting(d.hour), style = MaterialTheme.typography.displayMedium.copy(fontSize = 40.sp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(greeting(d.hour), style = MaterialTheme.typography.displayMedium.copy(fontSize = 40.sp), maxLines = 1, softWrap = false)
                 Text(
                     "%d月%d日 %s · %s".format(d.monthValue, d.dayOfMonth, "周" + "一二三四五六日"[d.dayOfWeek.value - 1], clock(now)),
                     style = MaterialTheme.typography.bodyMedium, color = sig.muted,
                 )
+                val c = statusColor(status)
+                Box(Modifier.padding(top = 6.dp).clickable { nav.navigate("rhythm") }) {
+                    Pill(status.headline + if (status.quotaMin > 0) " · 娱乐 ${status.playMin}/${status.quotaMin}" else " ${status.doneCount}/${status.gates.size}", c, dot = status.strict)
+                }
             }
-            val c = statusColor(status)
-            Box(Modifier.padding(top = 10.dp).clickable { nav.navigate("rhythm") }) {
-                Pill(status.headline + if (status.quotaMin > 0) " · 娱乐 ${status.playMin}/${status.quotaMin}" else " ${status.doneCount}/${status.gates.size}", c, dot = status.strict)
-            }
+            SunMoonGlyph(d.hour, if (d.hour < 6 || d.hour >= 19) sig.think else sig.ai, size = 64.dp, modifier = Modifier.padding(start = 8.dp))
         }
 
         // ---------- 权限掉了：放在最上面 ----------
@@ -171,7 +172,8 @@ fun NowScreen(nav: NavHostController) {
         }
 
         // ---------- 现在这一步：只有排了时间的才出现（没排时间的在“待安排”里） ----------
-        if (cur.action != null) {
+        // 还没到点的（今天接下来 / 下一个安排）已经在时间线里了，不再重复一张卡
+        if (cur.action != null && cur.why != com.zongkong.core.work.Focus.Why.LATER_TODAY && cur.why != com.zongkong.core.work.Focus.Why.UPCOMING) {
             Box(Modifier.enter(2)) {
                 AnimatedContent(
                     targetState = cur,
