@@ -68,6 +68,48 @@ object Usage {
     }
 
     /**
+     * [from]..[to] 之间每一段前台使用（v8）：哪个应用、几点到几点。只有应用和时间，没有屏幕内容。
+     * 换应用、退到后台、熄屏都算一段结束；分类交给 [category]（大脑的 BrainFacts.category）。
+     */
+    fun sessions(context: Context, from: Long, to: Long, category: (String) -> String): List<com.moling.core.usage.Session> {
+        if (!allowed(context)) return emptyList()
+        val usm = context.getSystemService(UsageStatsManager::class.java) ?: return emptyList()
+        val events = runCatching { usm.queryEvents(from, to) }.getOrNull() ?: return emptyList()
+        val pm = context.packageManager
+        val labels = HashMap<String, String>()
+        fun label(pkg: String) = labels.getOrPut(pkg) {
+            runCatching { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
+        }
+        val out = mutableListOf<com.moling.core.usage.Session>()
+        val e = UsageEvents.Event()
+        var cur = ""
+        var since = 0L
+        fun close(at: Long) {
+            if (cur.isNotBlank() && at > since && cur != context.packageName) {
+                out += com.moling.core.usage.Session(cur, label(cur), category(cur), since, at)
+            }
+            cur = ""
+        }
+        while (events.hasNextEvent()) {
+            events.getNextEvent(e)
+            val pkg = e.packageName.orEmpty()
+            when {
+                Build.VERSION.SDK_INT >= 28 && e.eventType == UsageEvents.Event.SCREEN_NON_INTERACTIVE -> close(e.timeStamp)
+                e.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND && pkg.isNotBlank() -> {
+                    if (pkg != cur) {
+                        close(e.timeStamp)
+                        cur = pkg
+                        since = e.timeStamp
+                    }
+                }
+                e.eventType == UsageEvents.Event.MOVE_TO_BACKGROUND && pkg == cur -> close(e.timeStamp)
+            }
+        }
+        close(to)
+        return out
+    }
+
+    /**
      * 亮屏 / 熄屏事件（推算作息用，v4）：系统 Android 9 起才记这两种事件，更早的系统返回空。
      * 没权限也返回空，大脑就不推算（不瞎猜）。
      */

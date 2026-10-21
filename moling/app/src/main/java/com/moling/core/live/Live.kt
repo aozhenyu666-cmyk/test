@@ -35,7 +35,13 @@ enum class Trigger(val label: String, val salient: Boolean) {
     WAKE("她自己定的唤醒", true),
     MORNING("早上第一次解锁", false),
     IDLE("没事的时候", false),
+    UNLOCK("他放下手机好一会儿，刚拿起来", false),
+    DONE("他刚做完主线", true),
+    SAY("她自己想好了有话要说", true),
 }
+
+/** 她多主动：少 / 平常 / 多（设置里选）。 */
+enum class Eagerness(val label: String) { LOW("少"), MID("平常"), HIGH("多") }
 
 /** 他此刻在干什么（App 看到的）。[glance]：总控截图识图看到的内容，没有就空。 */
 data class Activity(val pkg: String, val label: String, val category: String, val minutes: Int, val glance: String = "")
@@ -69,7 +75,18 @@ data class LiveConfig(
     val escapesPerDay: Int = 2,
     val gateMaxMin: Int = 5,
     val maxRounds: Int = 3,
-)
+    /** 没事的时候（在桌面、在别的应用里闲着）也可以来找他。 */
+    val idle: Boolean = false,
+) {
+    companion object {
+        /** 按他选的主动程度；拦人的规矩不跟着变。 */
+        fun of(e: Eagerness, gates: Boolean): LiveConfig = when (e) {
+            Eagerness.LOW -> LiveConfig(speaksPerDay = 5, gapMin = 45)
+            Eagerness.MID -> LiveConfig()
+            Eagerness.HIGH -> LiveConfig(speaksPerDay = 16, gapMin = 12, idle = true)
+        }.let { if (gates) it else it.copy(gatesPerDay = 0) }
+    }
+}
 
 /** 她这一次说的。[gate] = 拦在他面前；[release] = 放他走（拦着的时候才有意义）。 */
 data class LiveLine(val speak: Boolean, val mood: Mood, val line: String, val gate: Boolean, val release: Boolean)
@@ -188,6 +205,9 @@ object Live {
             Trigger.WAKE -> LiveLine(true, Mood.CURIOUS, "我来看看你了。", false, false)
             Trigger.MORNING -> LiveLine(true, Mood.HAPPY, "早。今天先做哪一件？", false, false)
             Trigger.IDLE -> LiveLine(false, Mood.CALM, "", false, false)
+            Trigger.UNLOCK -> LiveLine(true, Mood.CURIOUS, "回来啦。现在打算干什么？", false, false)
+            Trigger.DONE -> LiveLine(true, Mood.HAPPY, "主线做完了！歇一会儿，还是趁热接下一件？", false, false)
+            Trigger.SAY -> LiveLine(false, Mood.CALM, "", false, false)
         }
     }
 

@@ -62,9 +62,11 @@ class HeartService : Service() {
     private var longKey = ""
     private val unlockReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == Intent.ACTION_SCREEN_OFF) BrainHost.onScreenOff(System.currentTimeMillis())
             if (intent.action == Intent.ACTION_USER_PRESENT) scope.launch {
                 runCatching { com.moling.app.overlay.Presence.unlock(context) }
                     .onFailure { com.moling.app.overlay.Presence.error(context, "晨报失败：${it.javaClass.simpleName}") }
+                runCatching { BrainHost.onUnlock(System.currentTimeMillis()) }
             }
         }
     }
@@ -75,7 +77,7 @@ class HeartService : Service() {
         super.onCreate()
         running = true
         Notify.ensureChannels(this)
-        ContextCompat.registerReceiver(this, unlockReceiver, android.content.IntentFilter(Intent.ACTION_USER_PRESENT), ContextCompat.RECEIVER_NOT_EXPORTED)
+        ContextCompat.registerReceiver(this, unlockReceiver, android.content.IntentFilter(Intent.ACTION_USER_PRESENT).apply { addAction(Intent.ACTION_SCREEN_OFF) }, ContextCompat.RECEIVER_NOT_EXPORTED)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

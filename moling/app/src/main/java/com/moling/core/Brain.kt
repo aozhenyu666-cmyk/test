@@ -66,6 +66,7 @@ import com.moling.core.live.GateRules
 import com.moling.core.live.GateSession
 import com.moling.core.live.Live
 import com.moling.core.live.LiveConfig
+import com.moling.core.live.LiveLine
 import com.moling.core.live.Mood
 import com.moling.core.live.Spirit
 import com.moling.core.live.Spirits
@@ -80,6 +81,9 @@ import com.moling.core.think.Say
 import com.moling.core.think.Think
 import com.moling.core.think.ThinkResult
 import com.moling.core.think.Thought
+import com.moling.core.usage.Session
+import com.moling.core.usage.UsageDay
+import com.moling.core.usage.UsageLog
 import com.moling.core.flow.ChannelKind
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
@@ -250,6 +254,10 @@ data class BrainState(
     val lastThinkAt: Long = 0,
     /** 她想好、等合适时候说的话。 */
     val sayQueue: List<Say> = emptyList(),
+    /** 哪天为主线做完出过声（一天一次）。 */
+    val cheeredDay: String = "",
+    /** 每天的手机使用（只有应用和时间，没有内容），留 30 天。 */
+    val usageDays: List<UsageDay> = emptyList(),
     /** 提议编号用的流水号。 */
     val seq: Long = 0,
     /** 给人看的行动日志（做了什么、交给总控什么、总控怎么回的）。 */
@@ -982,6 +990,19 @@ class Brain(
         save()
     }
 
+    /**
+     * 记下今天的手机使用（App 每次她思考前、和夜里交进来），返回给她看的一段话。
+     * [sessions] 是今天 0 点到现在的前台记录。
+     */
+    suspend fun noteUsage(sessions: List<Session>, now: Long): String = lock.withLock {
+        val day = calendarDay(now)
+        val start = Flow.dayStart(day)
+        val today = UsageLog.day(day, sessions, start)
+        st = st.copy(usageDays = (st.usageDays.filter { it.day != day } + today).sortedBy { it.day }.takeLast(30))
+        save()
+        UsageLog.text(today, UsageLog.planVsActual(st.flow?.takeIf { it.day == day }, sessions, start, now), st.usageDays)
+    }
+
     /** 他点了“聊这个”：她把想好的那句说出来（进对话），返回这句；没有返回 null。 */
     suspend fun sayNow(now: Long): String? = lock.withLock {
         val say = st.sayQueue.firstOrNull() ?: return@withLock null
@@ -1016,19 +1037,28 @@ class Brain(
      * 这一刻有没有什么值得把她叫醒（由大脑判断，App 每次心跳把前台交进来）：
      * 该做事时在刷 5 分钟以上 / 夜里躺着刷 15 分钟以上 / 连着刷 40 分钟以上。正拦着他时不再叫。
      */
-    fun liveTrigger(a: Activity?, now: Long): Trigger? {
-        if (st.gate != null || a == null) return null
-        if (a.category != "ENTERTAINMENT" && a.category != "SHOPPING") return null
+    fun liveTrigger(a: Activity?, now: Long, unlockGapMin: Int = 0, cfg: LiveConfig = LiveConfig()): Trigger? {
+        if (st.gate != null) return null
         val m = Flow.minuteOf(now)
-        val plan = st.flow?.takeIf { it.day == calendarDay(now) && it.confirmed }
-        val c = plan?.let { Flow.current(it, m) }
-        val working = c != null && m in c.startMin until c.endMin && c.kind in setOf(ChannelKind.MAIN, ChannelKind.SIDE, ChannelKind.SPRING)
-        return when {
-            working && a.minutes >= 5 -> Trigger.SCROLL_AT_WORK
-            (m >= 23 * 60 || m < 5 * 60) && a.minutes >= 15 -> Trigger.SCROLL_IN_BED
-            a.minutes >= 40 -> Trigger.LONG_SCROLL
-            else -> null
+        val day = calendarDay(now)
+        val playing = a != null && (a.category == "ENTERTAINMENT" || a.category == "SHOPPING")
+        if (a != null && playing) {
+            val plan = st.flow?.takeIf { it.day == day && it.confirmed }
+            val c = plan?.let { Flow.current(it, m) }
+            val working = c != null && m in c.startMin until c.endMin && c.kind in setOf(ChannelKind.MAIN, ChannelKind.SIDE, ChannelKind.SPRING)
+            when {
+                working && a.minutes >= 5 -> return Trigger.SCROLL_AT_WORK
+                (m >= 23 * 60 || m < 5 * 60) && a.minutes >= 15 -> return Trigger.SCROLL_IN_BED
+                a.minutes >= 40 -> return Trigger.LONG_SCROLL
+            }
         }
+        // 下面这些不打断正事：在做事 / 在和演员聊 / 深夜都不来
+        if (a?.category == "WORK" || a?.category == "ACTOR" || m < 7 * 60 || m >= 23 * 60 + 30) return null
+        if (st.lastStatus?.mainDone == true && st.cheeredDay != day) return Trigger.DONE
+        if (st.sayQueue.isNotEmpty() && !playing) return Trigger.SAY
+        if (unlockGapMin >= 30) return if (m < 10 * 60 && st.spirit.day != day) Trigger.MORNING else Trigger.UNLOCK
+        if (cfg.idle && !playing && a?.category == "OTHER") return Trigger.IDLE
+        return null
     }
 
     /**
@@ -1044,6 +1074,8 @@ class Brain(
             st = st.copy(spirit = sp)
             return@withLock null
         }
+        // 主线做完那句一天一次：这次她出不出声都算过了
+        if (trigger == Trigger.DONE) st = st.copy(cheeredDay = day)
         val canGate = GateRules.eligible(a) && Spirits.mayGate(sp, cfg) &&
             trigger in setOf(Trigger.SCROLL_AT_WORK, Trigger.SCROLL_IN_BED, Trigger.LONG_SCROLL)
         val flow = st.flow?.takeIf { it.day == day }
@@ -1055,7 +1087,9 @@ class Brain(
             thinking = Think.open(st.thoughts).takeLast(4).map { Think.line(it) }, toSay = toSay,
         )
         val reply = model(persona, prompt)
-        val line = reply?.let { Live.parse(it, canGate) } ?: Live.local(trigger, a, canGate, flowNow)
+        val line = reply?.let { Live.parse(it, canGate) }
+            ?: if (trigger == Trigger.SAY && toSay.isNotBlank()) LiveLine(true, Mood.CURIOUS, toSay, false, false)
+            else Live.local(trigger, a, canGate, flowNow)
         if (!line.speak) {
             st = st.copy(spirit = sp, log = st.log + "${hm(now)} ${trigger.label}：她看了一眼，没出声")
             save()
@@ -1068,7 +1102,7 @@ class Brain(
             spirit = sp,
             gate = gate,
             // 想好要说的说出去了（模型可用时她会揉进这次的话里）
-            sayQueue = if (reply != null && toSay.isNotBlank()) st.sayQueue.drop(1) else st.sayQueue,
+            sayQueue = if (toSay.isNotBlank() && (reply != null || trigger == Trigger.SAY)) st.sayQueue.drop(1) else st.sayQueue,
             // 她出声了：偏离阶梯的下一级往后推，不叠着打扰
             ladder = st.ladder?.copy(at = now),
             talk = (st.talk + Turn("墨灵", line.line, now)).takeLast(TALK_KEEP),

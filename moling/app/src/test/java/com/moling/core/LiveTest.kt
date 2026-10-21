@@ -5,6 +5,7 @@ import com.moling.core.link.ZkCommand
 import com.moling.core.link.ZkReceipt
 import com.moling.core.link.ZkStatus
 import com.moling.core.live.Activity
+import com.moling.core.live.Eagerness
 import com.moling.core.live.GateRules
 import com.moling.core.live.LiveConfig
 import com.moling.core.live.Mood
@@ -82,6 +83,23 @@ class LiveTest {
         assertNull("白天刷 25 分钟还不算久", b.liveTrigger(douyin, at(15)))
         assertEquals(Trigger.LONG_SCROLL, b.liveTrigger(douyin.copy(minutes = 45), at(15)))
         assertNull(b.liveTrigger(douyin.copy(category = "WORK", minutes = 90), at(23, 40)))
+    }
+
+    @Test fun sheAlsoComesWhenNotScrolling() = runTest {
+        val home = Activity("com.android.launcher", "桌面", "OTHER", 2)
+        val b = brain(null, Zk(ZkStatus(mainDone = true, at = at(15))))
+        b.tick(at(15))
+        assertEquals("主线做完了，来夸一句", Trigger.DONE, b.liveTrigger(home, at(15)))
+        b.live(Trigger.DONE, home, at(15), roll = 0.9)
+        assertNull("一天只夸一次", b.liveTrigger(home, at(16)))
+        val b2 = brain()
+        assertEquals("放下手机半小时后刚拿起来", Trigger.UNLOCK, b2.liveTrigger(home, at(15), unlockGapMin = 40))
+        assertEquals(Trigger.MORNING, b2.liveTrigger(home, at(8), unlockGapMin = 400))
+        assertNull("平常不在闲着时来", b2.liveTrigger(home, at(15)))
+        assertEquals("“多”的时候闲着也来", Trigger.IDLE, b2.liveTrigger(home, at(15), cfg = LiveConfig.of(Eagerness.HIGH, true)))
+        assertNull("在做事不打扰", b2.liveTrigger(home.copy(category = "WORK"), at(15), unlockGapMin = 40))
+        assertNull("深夜不来", b2.liveTrigger(home, at(0, 30, d = 21), unlockGapMin = 40))
+        assertEquals(0, LiveConfig.of(Eagerness.LOW, false).gatesPerDay)
     }
 
     @Test fun shePopsUpGatesAndLetsGoAfterARealAnswer() = runTest {

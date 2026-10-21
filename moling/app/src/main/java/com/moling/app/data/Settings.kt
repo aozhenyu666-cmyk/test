@@ -172,6 +172,14 @@ class SettingsStore(context: Context) {
         toggles.edit().putBoolean(KEY_GATE, on).apply()
     }
 
+    /** 她多主动（少 / 平常 / 多）：默认平常。 */
+    fun eagerness(): com.moling.core.live.Eagerness =
+        runCatching { com.moling.core.live.Eagerness.valueOf(toggles.getString(KEY_EAGER, null).orEmpty()) }.getOrDefault(com.moling.core.live.Eagerness.MID)
+
+    fun setEagerness(e: com.moling.core.live.Eagerness) {
+        toggles.edit().putString(KEY_EAGER, e.name).apply()
+    }
+
     /** 北京时间日期。按用户的作息，一天从零点算。 */
     private fun todayKey(): String = LocalDate.now(BEIJING).toString()
 
@@ -187,6 +195,7 @@ class SettingsStore(context: Context) {
         private const val KEY_AUTO_PLAN = "auto_plan"
         private const val KEY_LIVE = "live"
         private const val KEY_GATE = "gate"
+        private const val KEY_EAGER = "eagerness"
 
         private const val DEFAULT_BASE_URL = "https://api.deepseek.com"
         private const val DEFAULT_MODEL = "deepseek-chat"

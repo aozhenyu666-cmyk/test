@@ -125,6 +125,7 @@ fun TodayScreen(onReady: () -> Unit = {}) {
     var conclusionText by remember { mutableStateOf("") }
     LaunchedEffect(pushed) { if (pushed != null) card = pushed }
     LaunchedEffect(Unit) { if (card == null) card = BrainHost.currentCard(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { BrainHost.refreshUsage(force = true) }
 
     fun toast(text: String) {
         Toast.makeText(context.applicationContext, text, Toast.LENGTH_LONG).show()
@@ -435,6 +436,32 @@ fun TodayScreen(onReady: () -> Unit = {}) {
             SectionTitle("交给总控的")
             sent.forEach { proposal ->
                 ProposalCard(proposal, { acceptProposal(it) }, { declineProposal(it) }, { retryProposal(it) })
+            }
+        }
+
+        // 4.5 今天的手机：哪几个小时被拉走、用得最多的、拿起几次（只有应用和时间）
+        val usageToday = state.usageDays.lastOrNull { it.day == today }
+        if (usageToday != null && usageToday.screenMin > 0) {
+            SectionTitle("今天的手机")
+            HourStrip(usageToday.playByHour, Flow.minuteOf(now) / 60)
+            Text(
+                "亮屏 ${usageToday.screenMin} 分钟 · 娱乐 ${usageToday.playMin} 分钟 · 拿起 ${usageToday.pickups} 次 · 最长连刷 ${usageToday.longestPlay} 分钟",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            val maxTop = usageToday.top.firstOrNull()?.substringAfterLast(' ')?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+            usageToday.top.take(5).forEach { t ->
+                val name = t.substringBeforeLast(' ')
+                val min = t.substringAfterLast(' ').toIntOrNull() ?: 0
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(name, style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(88.dp), maxLines = 1)
+                    androidx.compose.foundation.Canvas(Modifier.weight(1f).height(8.dp)) {
+                        val w = size.width * min / maxTop
+                        drawLine(Ink.copy(alpha = 0.12f), androidx.compose.ui.geometry.Offset(0f, size.height / 2), androidx.compose.ui.geometry.Offset(size.width, size.height / 2), 1f)
+                        drawLine(Ink.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(0f, size.height / 2), androidx.compose.ui.geometry.Offset(w, size.height / 2), 3.dp.toPx(), androidx.compose.ui.graphics.StrokeCap.Round)
+                    }
+                    Text(" $min 分", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
 
@@ -782,5 +809,32 @@ private fun KindGlyph(kind: ChannelKind, current: Boolean) {
         ChannelKind.SPRING -> InkBubbles(m, animated = current)
         ChannelKind.POOL -> InkClouds(m, animated = current)
         ChannelKind.FREE -> InkWaves(m, lines = 6, animated = current)
+    }
+}
+
+/** 24 小时的娱乐分布：每小时一根细墨线，越长刷得越多；现在这个小时下面一个小点。 */
+@Composable
+private fun HourStrip(byHour: List<Int>, hourNow: Int) {
+    androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(56.dp)) {
+        val n = 24
+        val gap = size.width / n
+        val base = size.height - 10.dp.toPx()
+        val top = 4.dp.toPx()
+        val max = (byHour.maxOrNull() ?: 0).coerceAtLeast(20)
+        drawLine(Ink.copy(alpha = 0.2f), androidx.compose.ui.geometry.Offset(0f, base), androidx.compose.ui.geometry.Offset(size.width, base), 0.7.dp.toPx())
+        for (h in 0 until n) {
+            val x = gap * h + gap / 2
+            val m = byHour.getOrElse(h) { 0 }
+            if (m > 0) {
+                val y = base - (base - top) * m / max
+                drawLine(
+                    com.moling.app.ui.art.WashOrange.copy(alpha = 0.35f + 0.55f * m / max),
+                    androidx.compose.ui.geometry.Offset(x, base), androidx.compose.ui.geometry.Offset(x, y),
+                    (gap * 0.42f).coerceAtMost(6.dp.toPx()), androidx.compose.ui.graphics.StrokeCap.Round,
+                )
+            }
+            if (h % 6 == 0) drawCircle(Ink.copy(alpha = 0.35f), 1.2.dp.toPx(), androidx.compose.ui.geometry.Offset(x, base + 5.dp.toPx()))
+        }
+        drawCircle(Seal, 2.4.dp.toPx(), androidx.compose.ui.geometry.Offset(gap * hourNow + gap / 2, base + 6.dp.toPx()))
     }
 }

@@ -225,6 +225,7 @@ object BrainHost {
         if (out.isNotEmpty()) runCatching { postNotices(now, out) }
         runCatching { withContext(Dispatchers.IO) { autoSchedule(now) } }
         runCatching { liveTick(now) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "活的墨灵失败", it) }
+        if (interactive()) runCatching { refreshUsage() }
         runCatching { mirror(now, force = false) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "Notion 同步失败", it) }
         return out
     }
@@ -288,8 +289,28 @@ object BrainHost {
         io("judgeThought", {}) { brain.judgeThought(id, right, System.currentTimeMillis()) }
     }
 
-    /** 手机使用的整理（给她思考用）；没权限给空。第 5 步会换成完整的使用脉络。 */
-    private fun usageDigest(now: Long): String = ""
+    /** 今天的手机使用（只有应用和时间）记进大脑，返回给她思考用的一段话；没权限给空。 */
+    private suspend fun usageDigest(now: Long): String {
+        val ctx = appContext ?: return ""
+        if (!Usage.allowed(ctx)) return ""
+        val status = _state.value.lastStatus
+        val start = Flow.dayStart(Brain.calendarDay(now))
+        val sessions = withContext(Dispatchers.IO) {
+            runCatching { Usage.sessions(ctx, start, now) { BrainFacts.category(it, status) } }.getOrDefault(emptyList())
+        }
+        return io("usage", { "" }) { brain.noteUsage(sessions, now) }
+    }
+
+    @Volatile
+    private var lastUsageAt = 0L
+
+    /** 今天页打开时、心跳里每 15 分钟：把今天的使用更新一下（本地算，不调模型）。 */
+    suspend fun refreshUsage(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!ready || (!force && now - lastUsageAt < 15 * 60_000L)) return
+        lastUsageAt = now
+        runCatching { usageDigest(now) }
+    }
 
     /** 他想让她问 GPT 的。 */
     suspend fun askGpt(text: String): Question? =
@@ -338,7 +359,23 @@ object BrainHost {
 
     /** 设置里关了“她可以拦住你”，今天就一次也不拦（只说话）。 */
     fun liveConfig(): LiveConfig =
-        if (ready && settings.gateOn()) LiveConfig() else LiveConfig(gatesPerDay = 0)
+        if (ready) LiveConfig.of(settings.eagerness(), settings.gateOn()) else LiveConfig(gatesPerDay = 0)
+
+    /** 上次熄屏的时间（后台服务收到熄屏广播时记）。 */
+    @Volatile
+    private var screenOffAt = 0L
+
+    fun onScreenOff(now: Long) {
+        screenOffAt = now
+    }
+
+    /** 解锁了：放下手机够久的话，她可以来打个招呼（还是她自己决定说不说）。 */
+    suspend fun onUnlock(now: Long) {
+        val gap = if (screenOffAt > 0) ((now - screenOffAt) / 60_000L).toInt() else 0
+        // 等一两秒，让他先进到想用的应用里，再看前台
+        kotlinx.coroutines.delay(2_500)
+        runCatching { liveTick(System.currentTimeMillis(), gap) }
+    }
 
     /** 设置里开了“她说话出声音”。 */
     fun speakOn(): Boolean = ready && runCatching { settings.load().speak }.getOrDefault(false)
@@ -349,7 +386,7 @@ object BrainHost {
      *  - 没拦着：大脑判断有没有值得叫醒她的事（该做事时在刷、夜里躺着刷、刷了很久）。
      * 只在亮屏时做；设置里关了“她会主动找你”就什么都不做。
      */
-    private suspend fun liveTick(now: Long) {
+    private suspend fun liveTick(now: Long, unlockGapMin: Int = 0) {
         val ctx = appContext ?: return
         if (!ready || !settings.liveOn() || !interactive()) return
         if (!liveBusy.compareAndSet(false, true)) return
@@ -369,7 +406,7 @@ object BrainHost {
                 return
             }
             if (MainActivity.visible) return
-            val trigger = brain.liveTrigger(activity, now) ?: return
+            val trigger = brain.liveTrigger(activity, now, unlockGapMin, cfg) ?: return
             val turn = io<LiveTurn?>("live", { null }) { brain.live(trigger, activity, now, cfg = cfg) } ?: return
             withContext(Dispatchers.Main) {
                 if (turn.gate) LiveScreens.gate(ctx, turn.mood, turn.line, activity?.label.orEmpty())

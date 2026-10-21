@@ -93,6 +93,7 @@ fun SettingsScreen(onDone: () -> Unit) {
     var autoPlanOn by remember { mutableStateOf(store.autoPlan()) }
     var liveOn by remember { mutableStateOf(store.liveOn()) }
     var gateOn by remember { mutableStateOf(store.gateOn()) }
+    var eager by remember { mutableStateOf(store.eagerness()) }
     var faceMood by remember { mutableStateOf(com.moling.core.live.Mood.POUT) }
     var overlayAllowed by remember { mutableStateOf(android.provider.Settings.canDrawOverlays(context)) }
     // 看前台应用：权限在系统设置里，回来时刷新一下状态。
@@ -376,6 +377,23 @@ fun SettingsScreen(onDone: () -> Unit) {
                 }
                 Switch(checked = liveOn, onCheckedChange = { on -> liveOn = on; store.setLiveOn(on) })
             }
+            if (liveOn) Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("她多主动", modifier = Modifier.weight(1f))
+                com.moling.core.live.Eagerness.entries.forEach { e ->
+                    TextButton(onClick = { eager = e; store.setEagerness(e) }) {
+                        Text(if (eager == e) "【${e.label}】" else e.label)
+                    }
+                }
+            }
+            if (liveOn) Text(
+                when (eager) {
+                    com.moling.core.live.Eagerness.LOW -> "一天最多 5 次，至少隔 45 分钟；只在刷久了、做完事、她有话时来。"
+                    com.moling.core.live.Eagerness.MID -> "一天最多 10 次，至少隔 20 分钟；刷久了、刚拿起手机、做完事、她有话时来。"
+                    com.moling.core.live.Eagerness.HIGH -> "一天最多 16 次，至少隔 12 分钟；你闲着的时候她也会来找你聊两句。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("她可以拦住你")
