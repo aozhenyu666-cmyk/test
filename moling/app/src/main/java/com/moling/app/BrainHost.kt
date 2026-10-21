@@ -19,6 +19,7 @@ import com.moling.core.flow.Flow
 import com.moling.core.flow.FlowPlan
 import com.moling.core.guard.GuardSample
 import com.moling.core.link.ZkStatus
+import com.moling.core.mind.Actor
 import com.moling.core.mind.DirectorConfig
 import com.moling.core.mind.FileMindStore
 import com.moling.core.mind.MindState
@@ -266,6 +267,23 @@ object BrainHost {
     suspend fun setUserMax(tier: Tier) {
         io("setUserMax", {}) { brain.setUserMax(tier) }
     }
+
+    /** 核实一条论断（写下验证结果，把握升到高）；成功返回 true。 */
+    suspend fun verifyNode(nodeId: String, result: String): Boolean =
+        io("verifyNode", { false }) { brain.verifyNode(nodeId, result, System.currentTimeMillis()) }
+
+    /** 删掉一条论断（连同它的关系）。 */
+    suspend fun removeNode(nodeId: String) {
+        io("removeNode", {}) { brain.removeNode(nodeId) }
+    }
+
+    /** 让模型归纳当前主题；模型不可用返回 null。 */
+    suspend fun synthesize(): String? =
+        io<String?>("synthesize", { null }) { brain.synthesize(System.currentTimeMillis()) }
+
+    /** 体系图的一个缺口 → 一条去聊的提议（点「好」才去）。 */
+    suspend fun askGap(question: String, actor: Actor): Proposal? =
+        io<Proposal?>("askGap", { null }) { brain.askGap(question, actor, System.currentTimeMillis()) }
 
     // ---------------------------------------------------------------- 工具
 
