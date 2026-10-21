@@ -203,6 +203,49 @@ fun AboutScreen(onDone: () -> Unit) {
             }
         }
 
+        // ---------------------------------------------------------------- 她摸清的规律（v12）
+        val proposedRules = state.rules.filter { it.status == "proposed" }
+        val keptRules = state.rules.filter { it.status == "kept" }
+        if (proposedRules.isNotEmpty() || keptRules.isNotEmpty()) {
+            com.moling.app.ui.art.InkTitle("她摸清的规律")
+            Text(
+                "你点「对」之后，她才会按这条来找你。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            proposedRules.forEach { r ->
+                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    Text(com.moling.core.review.Rules.line(r), style = MaterialTheme.typography.bodySmall)
+                    if (r.why.isNotBlank()) {
+                        Text(
+                            "依据：" + r.why,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Row {
+                        TextButton(onClick = { scope.launch { runCatching { BrainHost.setRule(r.id, true) } } }) { Text("对") }
+                        TextButton(onClick = { scope.launch { runCatching { BrainHost.setRule(r.id, false) } } }) { Text("不对") }
+                    }
+                }
+            }
+            if (keptRules.isNotEmpty()) {
+                Text("她在按这些规律找你", style = MaterialTheme.typography.labelLarge)
+                keptRules.forEach { r ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            com.moling.core.review.Rules.line(r),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { scope.launch { runCatching { BrainHost.setRule(r.id, false) } } }) {
+                            Text("不再用", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+            }
+        }
+
         // ---------------------------------------------------------------- 她推过的（v8）
         val thoughts = state.thoughts.takeLast(20).reversed()
         com.moling.app.ui.art.InkTitle("她推过的")
