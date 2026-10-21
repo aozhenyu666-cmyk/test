@@ -446,6 +446,65 @@ fun TodayScreen(onReady: () -> Unit = {}) {
             }
         }
 
+        // 4.4 思维转速（E3）：最近 3 小时动了多少脑；低了就邀一局。
+        val rpmNow = System.currentTimeMillis()
+        val rpmScore = com.moling.core.spar.Rpm.score(state.mindMarks, rpmNow)
+        SectionTitle("思维转速")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(contentAlignment = Alignment.Center) {
+                com.moling.app.ui.art.InkRing(
+                    (rpmScore / 12f).coerceIn(0f, 1f),
+                    Modifier.size(64.dp),
+                    color = com.moling.app.ui.art.WashViolet,
+                )
+                Text("$rpmScore", style = MaterialTheme.typography.titleMedium, color = Ink)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    com.moling.core.spar.Rpm.line(state.mindMarks, rpmNow),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (rpmScore < com.moling.core.spar.Rpm.LOW) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("脑子歇太久了，来一局？", style = MaterialTheme.typography.labelSmall, color = Seal)
+                        TextButton(onClick = {
+                            todayScope.launch {
+                                val turn = runCatching { BrainHost.spar() }.getOrNull()
+                                if (turn == null) {
+                                    Toast.makeText(context, "体系图里还没东西可下，先在对话里说‘记下’几条", Toast.LENGTH_LONG).show()
+                                } else {
+                                    com.moling.app.live.LiveScreens.nextChoices = turn.choices
+                                    runCatching { com.moling.app.live.LiveScreens.peek(context, turn.mood, turn.line) }
+                                }
+                            }
+                        }) { Text("来一局", style = MaterialTheme.typography.labelMedium) }
+                    }
+                }
+            }
+            val byHour = com.moling.core.spar.Rpm.byHour(state.mindMarks, com.moling.core.flow.Flow.dayStart(today))
+            androidx.compose.foundation.Canvas(Modifier.width(88.dp).height(56.dp)) {
+                val n = 24
+                val gap = size.width / n
+                val base = size.height
+                val maxV = (byHour.maxOrNull() ?: 0).coerceAtLeast(6)
+                for (h in 0 until n) {
+                    val v = byHour.getOrElse(h) { 0 }
+                    if (v > 0) {
+                        val barH = (size.height - 4.dp.toPx()) * v / maxV
+                        drawLine(
+                            com.moling.app.ui.art.WashViolet.copy(alpha = 0.35f + 0.5f * v / maxV),
+                            androidx.compose.ui.geometry.Offset(gap * h + gap / 2, base),
+                            androidx.compose.ui.geometry.Offset(gap * h + gap / 2, base - barH),
+                            (gap * 0.55f).coerceAtMost(5.dp.toPx()),
+                            androidx.compose.ui.graphics.StrokeCap.Round,
+                        )
+                    }
+                }
+            }
+        }
+
         // 4.5 今天的手机：哪几个小时被拉走、用得最多的、拿起几次（只有应用和时间）
         val usageToday = state.usageDays.lastOrNull { it.day == today }
         if (usageToday != null && usageToday.screenMin > 0) {
