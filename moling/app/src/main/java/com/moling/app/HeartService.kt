@@ -11,6 +11,8 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import com.moling.core.BrainFacts
 import com.moling.core.flow.Flow
+import com.moling.app.live.PetOverlay
+import com.moling.app.overlay.Presence
 import com.moling.core.mind.Actor
 import com.moling.core.mind.Card
 import com.moling.core.mind.Sense
@@ -107,10 +109,28 @@ class HeartService : Service() {
             val now = System.currentTimeMillis()
             runCatching { BrainHost.tickNow(now) }.onFailure { Log.w(TAG, "心跳失败", it) }
             runCatching { feedSenses(now) }.onFailure { Log.w(TAG, "喂导演失败", it) }
+            runCatching { capsule(now) }.onFailure { Log.w(TAG, "演员胶囊失败", it) }
             com.moling.app.overlay.Presence.tick(this, now)
             com.moling.app.widget.NowWidget.update(this)
             Notify.updateHeart(this, heartText())
             delay(if (interactive()) 60_000L else 300_000L)
+        }
+    }
+
+    /**
+     * Z8 和演员聊时的小胶囊：正在和 Gemini / ChatGPT 聊、而且前台就是它时，顶角挂一问 + 已聊几分钟；
+     * 一旦离开演员就收起（收线仍然由 Presence 原来的流程管，这里不重复做）。
+     */
+    private fun capsule(now: Long) {
+        runCatching { Presence.init(this) }
+        val s = Presence.session.value
+        val fg = BrainHost.foregroundNow(now)?.pkg.orEmpty()
+        val actorPkg = s?.opening?.actor?.pkg.orEmpty()
+        if (s != null && actorPkg.isNotBlank() && fg == actorPkg) {
+            val line = s.opening.text.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().take(16).ifBlank { "聊完了就回来说一句" }
+            PetOverlay.capsule(this, line, s.startedAt)
+        } else {
+            PetOverlay.hideCapsule(this)
         }
     }
 
