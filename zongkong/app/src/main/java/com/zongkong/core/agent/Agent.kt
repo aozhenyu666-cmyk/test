@@ -69,6 +69,17 @@ class Agent(private val api: ChatApi, private val env: AgentEnv) {
         append(com.zongkong.core.info.Intake.brief(env.work(), env.intake(), env.now(), env.zone)).append('\n')
         append(com.zongkong.core.plan.Calibrate.brief(env.work(), env.zone, env.now()))
         append("\n").append(com.zongkong.core.plan.Aims.brief(env.plans(), env.work(), env.now(), env.zone))
+        com.zongkong.core.plan.QuickPlan.today(env.work(), env.now(), env.zone).let { list ->
+            append("\n## 今天的安排（几点做什么）\n")
+            if (list.isEmpty()) append("今天还没排。\n")
+            list.forEach { (a, t) ->
+                val hm = { x: Long -> java.time.Instant.ofEpochMilli(x).atZone(env.zone).let { "%02d:%02d".format(it.hour, it.minute) } }
+                append("· ${hm(t.first)}-${hm(t.second)} ${a.title}（${a[com.zongkong.core.work.F.STATUS]}）键 ${a.key}\n")
+            }
+            com.zongkong.core.plan.QuickPlan.unscheduled(env.work()).take(6).takeIf { it.isNotEmpty() }?.let { l ->
+                append("待安排（没排时间）：").append(l.joinToString("、") { "${it.title}（${it.key}）" }).append('\n')
+            }
+        }
         com.zongkong.core.plan.Playbook.today(env.plans(), env.now(), env.zone)?.let { append("\n").append(com.zongkong.core.plan.Playbook.brief(it, env.now(), env.zone)) }
         val vein = env.vein()
         if (vein.nodes.isNotEmpty() || vein.candidates.isNotEmpty()) {
@@ -144,6 +155,10 @@ class Agent(private val api: ChatApi, private val env: AgentEnv) {
             - 需要用户选的时候，回复最后一行写“【选项】A｜B｜C”（2–4 个，每个不超过 10 个字），界面会变成按钮。
             - 想让用户看到某个页面（刚开的计时页、要补的权限、档案），调 open_page。
             - 用户提到习惯、作息、偏好、反复出现的借口，用 remember 记下来。
+            - 分工：谋划、排计划主要是用户和 GPT 的事（GPT 可以按交接块把一整天排好导进来）；你的本职是把计划变成“今天几点做什么”，到点盯住、过点追问。
+            - 用户说现在要做 / 今天几点要做什么：立刻 add_action 排进具体时段（现在开始就从现在起，默认一小时），再说一句“排上了，几点我叫你”。不要只答应不记。
+            - 用户说某件事延期 / 改到下午：reschedule_action 到一个具体时间（没说就问“改到几点”），延期不是取消——到新的时间照样提醒、过点照样关娱乐。
+            - 首页“待安排”里没时间的事，不要反复追问它本身；问的是“排进今天哪个时段”，用户答了就 reschedule_action。
             - 新建的事很薄（只有标题和一步，比如“国考计划 → 去查时间”）：别让它就这么挂着，提议 start_campaign 立项，带他把为什么、完成依据、关键事实、里程碑、头几步补齐。
             - 他说在 Gemini、GPT 或者和别人讨论过什么：让他把讨论贴进“贴一段讨论”（open_page digest），你来提炼、归位、定下一步。之前没收进来的，不要反复催“去谋划”，先帮他收。
             - 账本（试验）：他说花了多少钱、发来付款截图，用 add_expense 记（截图上读清商户和金额，看不清就问）；问花了多少用 ledger_summary。不评价他怎么花钱，除非他问。

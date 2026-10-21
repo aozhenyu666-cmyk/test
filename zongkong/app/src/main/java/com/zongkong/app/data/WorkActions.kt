@@ -232,6 +232,38 @@ class WorkActions(private val context: Context, private val store: Store, privat
         store.updateWork { WorkOps.event(it, com.zongkong.core.work.Event(now(), "stuck:${reason.name}", actionKey)) }
     }
 
+    /**
+     * 说一句就排上（今天的安排）：“下午2点到4点刷题”。挂在「日常安排」下；没说时间的进待安排。
+     * 返回给你看的一句话。
+     */
+    fun quickAdd(text: String): String {
+        if (text.isBlank()) return "先写一句：几点做什么"
+        val t = now()
+        val p = com.zongkong.core.plan.QuickPlan.parse(text, t, zone)
+        store.touch()
+        store.updateWork { w0 ->
+            val (w1, daily) = com.zongkong.core.plan.QuickPlan.daily(w0, t, rnd)
+            WorkOps.create(w1, Kind.ACTION, buildMap {
+                put(F.TITLE, p.title); put(F.THREAD, daily.key)
+                // 自己排的一段：做满这段就算完（想写得更细，点开改）
+                put(F.CRITERIA, "按时开始，做满这一段")
+                p.plan?.let { put(F.PLAN, it.encode()) }
+            }, t, rnd).first
+        }
+        kick()
+        return p.plan?.let { "排上了：${TimeParse.label(it, t, zone)} ${p.title}。到点叫你，过点没开始娱乐先关。" }
+            ?: "「${p.title}」没说几点，先放进待安排。"
+    }
+
+    /** 延期 / 排进某个时段：时长不变。返回改到哪。 */
+    fun moveTo(actionKey: String, slot: com.zongkong.core.plan.QuickPlan.Slot): String {
+        val a = store.work.value.rec(actionKey) ?: return ""
+        val p = com.zongkong.core.plan.QuickPlan.moveTo(a.plan, slot, now(), zone)
+        store.updateWork { WorkOps.reschedule(it, actionKey, p, now()) }
+        kick()
+        return "「${a.title}」改到 ${TimeParse.label(p, now(), zone)}，到点再叫你。"
+    }
+
     fun reschedule(actionKey: String, time: String): String? {
         val plan = TimeParse.parse(time, now(), zone) ?: return "时间“$time”没认出来，换个写法：今晚 20:00、明天 9:00"
         rescheduleTo(actionKey, plan)
@@ -291,6 +323,13 @@ class WorkActions(private val context: Context, private val store: Store, privat
         val b = Handoff.parse(text) ?: return null
         if (b.empty && !b.alreadyWritten) return null
         return Handoff.plan(store.work.value, b, now(), zone)
+    }
+
+    /** 一段里有好几个交接块（GPT 排好的一天）：一个一个导进来。返回导入了几件事。 */
+    fun importAll(text: String): Int {
+        var n = 0
+        Handoff.splitBlocks(text).forEach { seg -> planImport(seg)?.let { applyImport(it); n++ } }
+        return n
     }
 
     fun applyImport(plan: Handoff.Plan): String {

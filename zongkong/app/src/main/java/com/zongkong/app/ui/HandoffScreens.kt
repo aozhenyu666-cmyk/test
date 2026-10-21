@@ -99,6 +99,7 @@ fun ImportScreen(nav: NavHostController) {
         }
     }
     val plan = remember(text, app.store.work.value) { if (text.isBlank()) null else app.actions.work.planImport(text) }
+    val segments = remember(text) { Handoff.splitBlocks(text) }
     val block = remember(text) { Handoff.parse(text) }
 
     Column(Modifier.fillMaxSize()) {
@@ -117,6 +118,19 @@ fun ImportScreen(nav: NavHostController) {
             OutlinedTextField(text, { text = it }, label = { Text("交接内容") }, minLines = 4, maxLines = 10, modifier = Modifier.fillMaxWidth())
             when {
                 text.isBlank() -> {}
+                // GPT 排好的一天：一件事一个块，一起导进来
+                segments.size > 1 -> Panel(accent = sig.plan) {
+                    Text("一共 ${segments.size} 件事", style = MaterialTheme.typography.titleSmall)
+                    segments.forEach { seg ->
+                        app.actions.work.planImport(seg)?.lines?.forEach { Text(it, style = MaterialTheme.typography.bodyMedium, color = if (it.startsWith("⚠")) sig.warn else MaterialTheme.colorScheme.onSurface) }
+                    }
+                    Button(onClick = {
+                        val n = app.actions.work.importAll(text)
+                        Gpt.copy(context, "")
+                        msg = "导入了 $n 件事"
+                        nav.navigate("home") { popUpTo("home") { inclusive = true } }
+                    }, modifier = Modifier.fillMaxWidth().testTag("import-all")) { Text("全部导入") }
+                }
                 block?.alreadyWritten == true && (plan == null || plan.newActions.isEmpty() && plan.threadChanges.size <= 1) -> Panel(accent = sig.free) {
                     val code = block?.code.orEmpty()
                     Text("GPT 说已经写进 Notion 了${if (code.isNotBlank()) "（$code）" else ""}", style = MaterialTheme.typography.titleSmall)

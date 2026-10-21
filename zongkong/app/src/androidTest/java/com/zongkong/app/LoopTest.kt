@@ -6,6 +6,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.printToString
@@ -891,12 +892,12 @@ class LoopTest {
         val llm = mockLlm(sayTurn("【阶段 1/6 · 盘点】离“秋招拿到 offer”还差简历定稿和 20 家投递；这周电脑上 B站 6 小时，主线只动了 40 分钟。我们先把里程碑倒推出来。\n【选项】好，倒推｜先看这周｜改天"))
         app.store.updateConfig { it.copy(ai = com.zongkong.core.AiConfig(llm.url("/v1").toString(), "sk-test", "mock-model")) }
         scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java))
-        waitFor(hasTestTag("partner-line"), 10_000, "战友栏")
-        waitText("战友", 5_000)
-        waitFor(hasTestTag("pc-strip"), 5_000, "电脑栏")
-        compose.onNodeWithTag("partner-line").performScrollTo()
+        // 0.12：信用和强度在“总控”页顶上（首页不再重复放）
+        waitFor(hasTestTag("day-plan"), 10_000, "今天的安排")
+        go("chat")
+        waitFor(hasTestTag("stance-line"), 10_000, "总控页的信用")
         settle()
-        shot("e2e-91-home-partner")
+        shot("e2e-91-chat-stance")
         go("dept/PLAN")
         waitFor(hasTestTag("campaign-GRAND_PLAN"), 5_000, "大统筹")
         settle()
@@ -1052,5 +1053,65 @@ class LoopTest {
         waitText("娱乐用完了", 5_000)
         settle()
         shot("e2e-105-budget")
+    }
+
+    /**
+     * 0.12：说一句就排上 → 时间线 → 延期（改到新时间、照样盯）→ 待安排点一下排进去 → GPT 排好一天的多个交接块一次导入。
+     */
+    @Test
+    fun dayPlan() {
+        app.store.updateConfig { it.copy(earn = com.zongkong.core.EarnConfig()) }
+        val now = System.currentTimeMillis()
+        val bj = app.store.zone
+        val h = java.time.Instant.ofEpochMilli(now).atZone(bj).hour
+        // 一个没排时间的待办（像从 Notion 同步来的）
+        val rnd = kotlin.random.Random(12)
+        var loose = ""
+        app.store.updateWork { w0 ->
+            val (w1, t) = com.zongkong.core.work.WorkOps.create(w0, com.zongkong.core.work.Kind.THREAD, mapOf(F.TITLE to "国考", F.WHY to "上岸"), now, rnd)
+            val (w2, a) = com.zongkong.core.work.WorkOps.create(w1, com.zongkong.core.work.Kind.ACTION, mapOf(F.TITLE to "下载职位表", F.THREAD to t.key), now, rnd)
+            loose = a.key
+            w2
+        }
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java))
+        waitFor(hasTestTag("day-plan"), 10_000, "今天的安排")
+        // 没排时间的不再当“现在这一步”反复追问，在待安排里
+        waitFor(hasTestTag("plan-loose"), 5_000, "待安排")
+        // 说一句排上（一小时后开始，保证还在今天）
+        val start = (h + 1).coerceAtMost(22)
+        compose.onNodeWithTag("quick-plan").performTextInput("${start}:00-${start + 1}:00 刷二十道资料分析")
+        hideKeyboard()
+        compose.onNodeWithTag("quick-plan-add").performClick()
+        waitText("排上了", 5_000)
+        val added = app.store.work.value.actions().first { it.title.contains("资料分析") }
+        assertEquals(com.zongkong.core.plan.QuickPlan.DAILY, app.store.work.value.rec(added.threadKey)!!.title)
+        settle()
+        shot("e2e-106-day-plan")
+        // 延期：点开这一段 → 延到明天，改到新的时间（不是取消）
+        compose.onNodeWithTag("plan-row-${added.key}").performScrollTo().performClick()
+        waitFor(hasTestTag("plan-actions-${added.key}"), 5_000, "这一段的按钮")
+        settle()
+        shot("e2e-107-plan-row-open")
+        compose.onNode(hasText("延到明天")).performScrollTo().performClick()
+        waitText("到点再叫你", 5_000)
+        val moved = app.store.work.value.rec(added.key)!!
+        assertTrue(moved.plan!!.start, moved.plan!!.start.startsWith(com.zongkong.core.DayClock.date(now, bj).plusDays(1).toString()) || h >= 23)
+        // 待安排：点“下午 / 今晚”就排进去
+        compose.onNodeWithTag("plan-loose").performScrollTo()
+        compose.onAllNodes(hasText("今晚")).onFirst().performClick()
+        compose.waitUntil(5_000) { app.store.work.value.rec(loose)!!.plan?.hasTime == true }
+        // GPT 排好的一天：两个交接块一起导入
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { com.zongkong.app.ui.Gpt.copy(app, "【总控交接】\n事项：日常安排\n行动：\n- 跑步 | 今天 ${start}:30-${start + 1}:00 | 完成依据：3 公里\n【交接结束】\n【总控交接】\n事项：国考\n行动：\n- 查报名时间 | 今天 ${start + 1}:00-${start + 1}:30 | 完成依据：写进事项\n【交接结束】") }
+        go("import")
+        waitFor(hasTestTag("import-all"), 10_000, "全部导入")
+        settle()
+        shot("e2e-108-import-day")
+        compose.onNodeWithTag("import-all").performScrollTo().performClick()
+        compose.waitUntil(5_000) { app.store.work.value.actions().any { it.title == "查报名时间" } }
+        assertTrue(app.store.work.value.actions().any { it.title == "跑步" })
+        assertEquals(1, app.store.work.value.threads().count { it.title == com.zongkong.core.plan.QuickPlan.DAILY })
+        waitFor(hasTestTag("day-plan"), 10_000, "回到今天")
+        settle()
+        shot("e2e-109-home-after-import")
     }
 }

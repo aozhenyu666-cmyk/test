@@ -36,7 +36,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -54,14 +53,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
-import com.zongkong.app.link.YishouClient
 import com.zongkong.app.zk
 import com.zongkong.core.Dept
 import com.zongkong.core.GatePhase
 import com.zongkong.core.Reason
 import com.zongkong.core.Shortcut
 import com.zongkong.core.Status
-import com.zongkong.core.YishouStatus
 import com.zongkong.core.work.ActionStatus
 import com.zongkong.core.work.F
 import com.zongkong.core.work.Focus
@@ -91,9 +88,7 @@ fun NowScreen(nav: NavHostController) {
     val book by store.plans.collectAsStateWithLifecycle()
     val plan = remember(book, now) { com.zongkong.core.plan.Plans.active(book, now, store.zone) }
     val cur = remember(work, book, now) { Focus.current(work, now, store.zone, store.mainKey(now)) }
-    val upcoming = remember(work, now, cur) { Focus.upcoming(work, cur.action?.key, now, store.zone, 4) }
     val attention = remember(work) { Focus.needsAttention(work) }
-    val unplanned = remember(work) { Focus.unplannedThreads(work) }
     val sig = LocalSignals.current
     val scope = rememberCoroutineScope()
     val notionReady = config.notion.workReady
@@ -109,9 +104,6 @@ fun NowScreen(nav: NavHostController) {
             delay(400) // 等窗口拿到焦点才能读剪贴板
             clipHandoff = Handoff.contains(Gpt.readClipboard(context))
         }
-    }
-    val yishou by produceState<YishouStatus?>(null, resumeKey) {
-        value = if (YishouClient.installed(context)) (YishouClient.status(context) as? YishouClient.Result.Ok)?.value else null
     }
 
     Column(
@@ -129,6 +121,7 @@ fun NowScreen(nav: NavHostController) {
         AimsStrip(book, now, onEdit = { editAim = it }, onAdd = { addAim = true })
         if (addAim || editAim != null) AimDialog(editAim) { addAim = false; editAim = null }
         Row(verticalAlignment = Alignment.Top, modifier = Modifier.enter(0)) {
+            SunMoonGlyph(d.hour, if (d.hour < 6 || d.hour >= 19) sig.think else sig.ai, size = 54.dp, modifier = Modifier.padding(end = 12.dp, top = 2.dp))
             Column(Modifier.weight(1f)) {
                 Text(greeting(d.hour), style = MaterialTheme.typography.displayMedium.copy(fontSize = 40.sp))
                 Text(
@@ -138,7 +131,7 @@ fun NowScreen(nav: NavHostController) {
             }
             val c = statusColor(status)
             Box(Modifier.padding(top = 10.dp).clickable { nav.navigate("rhythm") }) {
-                Pill("${status.headline} ${status.doneCount}/${status.gates.size}", c, dot = status.strict)
+                Pill(status.headline + if (status.quotaMin > 0) " · 娱乐 ${status.playMin}/${status.quotaMin}" else " ${status.doneCount}/${status.gates.size}", c, dot = status.strict)
             }
         }
 
@@ -177,70 +170,38 @@ fun NowScreen(nav: NavHostController) {
             }
         }
 
-        // ---------- 现在这一步 ----------
-        Box(Modifier.enter(2)) {
-            AnimatedContent(
-                targetState = cur,
-                contentKey = { it.action?.key to it.why },
-                transitionSpec = { (fadeIn() + slideInVertically { it / 8 }) togetherWith fadeOut() },
-                label = "task",
-            ) { c -> TaskCard(c, now, notionReady, nav, plan) }
-        }
-
-        // ---------- 今天：计划、总控时间、电脑、信用 ----------
-        SectionLabel("今天")
-        PlanStrip(plan, book, work, now, nav)
-
-        val hqBook by store.hq.collectAsStateWithLifecycle()
-        HqStrip(config.hq, hqBook, now, store.zone, nav)
-
-        ScriptLine(nav)
-        TodayLine(nav)
-        PcStrip(nav)
-        PartnerLine(nav)
-
-        // ---------- 接下来 ----------
-        if (upcoming.isNotEmpty()) {
-            SectionLabel("接下来")
-            Panel(modifier = Modifier.enter(9)) {
-                upcoming.forEach { a -> TimelineRow(a, work, now, nav) }
+        // ---------- 现在这一步：只有排了时间的才出现（没排时间的在“待安排”里） ----------
+        if (cur.action != null) {
+            Box(Modifier.enter(2)) {
+                AnimatedContent(
+                    targetState = cur,
+                    contentKey = { it.action?.key to it.why },
+                    transitionSpec = { (fadeIn() + slideInVertically { it / 8 }) togetherWith fadeOut() },
+                    label = "task",
+                ) { c -> TaskCard(c, now, notionReady, nav, plan) }
             }
         }
 
-        // ---------- 等你处理 ----------
-        if (attention.isNotEmpty() || unplanned.isNotEmpty()) {
+        // ---------- 今天的安排：几点做什么（首页的主角） ----------
+        DayPlanCard(nav, Modifier.enter(3))
+
+        // ---------- 今天的账：清单、总控时间、本周计划、预案 ----------
+        SectionLabel("今天")
+        TodayLine(nav)
+        val hqBook by store.hq.collectAsStateWithLifecycle()
+        HqStrip(config.hq, hqBook, now, store.zone, nav)
+        if (plan != null) PlanStrip(plan, book, work, now, nav)
+        ScriptLine(nav)
+
+        // ---------- 等你处理：卡住的、等你确认结果的 ----------
+        if (attention.isNotEmpty()) {
             SectionLabel("等你处理")
             Panel(modifier = Modifier.enter(8)) {
                 attention.take(4).forEach { a ->
                     val label = if (a.actionStatus == ActionStatus.CONFIRM) "待确认：结果够不够" else "卡住：${a[F.STUCK].ifBlank { "原因没写" }}"
                     MiniRow(a.title, label, actionColor(a.actionStatus)) { nav.navigate("action/${a.key}") }
                 }
-                unplanned.take(3).forEach { t ->
-                    MiniRow("${t.title}：${t[F.NEXT]}", "下一步还没排进时间 · 点开排", sig.warn) { nav.navigate("thread/${t.key}") }
-                }
             }
-        }
-
-        // ---------- 四个部门 ----------
-        SectionLabel("四个部门")
-        val depts = listOf(Dept.INFO, Dept.THINK, Dept.PLAN, Dept.ACT)
-        depts.chunked(2).forEachIndexed { row, pair ->
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                pair.forEachIndexed { i, dept ->
-                    DeptTile(dept, status, work, now, yishou, Modifier.weight(1f).enter(3 + row * 2 + i)) { nav.navigate("dept/${dept.name}") }
-                }
-            }
-        }
-
-        // ---------- 快捷 ----------
-        SectionLabel("随手")
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.enter(7)) {
-            QuickChip("收一个念头", sig.info) { nav.navigate("capture") }
-            QuickChip("我卡住了", sig.strict) { nav.navigate("stuckpick") }
-            QuickChip("问总控", sig.ai) { nav.navigate("chat") }
-            val n = work.changes.count { it.at > store.seenChanges }
-            QuickChip(if (n > 0) "查看结果 · $n" else "查看结果", sig.think) { nav.navigate("results") }
-            config.shortcuts.filter { it.dept == null }.forEach { s -> QuickChip(s.label, sig.ai) { runShortcut(s, app, nav) } }
         }
 
         SyncLine(work, notionReady) { scope.launch { app.actions.work.sync() } }
@@ -390,43 +351,6 @@ fun AimDialog(aim: com.zongkong.core.plan.Aim?, onDismiss: () -> Unit) {
     )
 }
 
-/** 电脑：没连时提示去连；连上后今天电脑用了多久、娱乐多少、被拦几次、锁没锁。 */
-@Composable
-private fun PcStrip(nav: NavHostController) {
-    val app = LocalContext.current.zk
-    val sig = LocalSignals.current
-    val config by app.store.config.collectAsStateWithLifecycle()
-    val book by app.store.device.collectAsStateWithLifecycle()
-    val now = rememberNow(60_000)
-    val pc = book.pc.takeIf { config.notion.devicesDb.isNotBlank() }
-    Panel(onClick = { nav.navigate("settings/pc") }, accent = if (pc == null) sig.warn else null, modifier = Modifier.testTag("pc-strip")) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Seal("电", if (pc == null) sig.warn else sig.plan, size = 40.dp, filled = pc != null)
-            Column(Modifier.weight(1f)) {
-                if (pc == null) {
-                    Text("电脑还没管起来", style = MaterialTheme.typography.titleSmall)
-                    Hint("装电脑版、和手机连起来：先说用途才能用、娱乐有额度、夜里锁机，总控时间电脑跟着锁。")
-                } else {
-                    val locked = pc.lockUntil > now
-                    Text("电脑今天 ${pc.todayMinutes / 60} 小时 ${pc.todayMinutes % 60} 分 · 娱乐 ${pc.funMinutes} 分", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        style = MaterialTheme.typography.bodySmall,
-                        text = listOfNotNull(
-                            if (locked) "锁着" else if (pc.sessionUntil > now) "在做：${pc.session}" else null,
-                            if (pc.blocks > 0) "被拦 ${pc.blocks} 次" else null,
-                            if (pc.gaps.isNotEmpty()) "电脑上的总控被关过 ${pc.gaps.size} 次" else null,
-                            if (now - pc.at > 10 * 60_000L) "${(now - pc.at) / 60_000} 分钟前同步" else null,
-                        ).joinToString(" · ").ifBlank { "在线" },
-                        color = if (pc.gaps.isNotEmpty()) sig.strict else sig.muted,
-                    )
-                }
-            }
-            Text("→", style = MaterialTheme.typography.titleMedium, color = sig.muted)
-        }
-    }
-}
-
-/** 战友：信用、态度、现在的强度。点开看档案。 */
 /** 今天的预案（有的话）：现在这段 / 下一段。 */
 @Composable
 private fun ScriptLine(nav: NavHostController) {
@@ -476,28 +400,6 @@ private fun TodayLine(nav: NavHostController) {
                 })
             }
             Text("→", style = MaterialTheme.typography.labelLarge, color = sig.muted)
-        }
-    }
-}
-
-@Composable
-private fun PartnerLine(nav: NavHostController) {
-    val app = LocalContext.current.zk
-    val sig = LocalSignals.current
-    val config by app.store.config.collectAsStateWithLifecycle()
-    val d by app.store.dossier.collectAsStateWithLifecycle()
-    val now = rememberNow(60_000)
-    val cred = remember(d, now) { app.store.credibility(now) }
-    val st = remember(d, now) { app.store.stance(now) }
-    Panel(onClick = { nav.navigate("dossier") }, modifier = Modifier.testTag("partner-line")) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            ProgressRing(cred / 100f, stanceColor(st), size = 40.dp, stroke = 3.dp) {
-                AnimatedInt(cred, style = MaterialTheme.typography.labelMedium.merge(Mono), color = stanceColor(st))
-            }
-            Column(Modifier.weight(1f)) {
-                Text("${st.label} · ${com.zongkong.core.boss.Intensity.short(config.boss, st)}", style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Hint(if (cred < 60) "及时回话、按时开始、做完一步、守住约定，信用就往回爬。" else st.rule, modifier = Modifier)
-            }
         }
     }
 }
@@ -621,50 +523,6 @@ private fun Guidance(status: Status, date: String, now: Long, nav: NavHostContro
 }
 
 @Composable
-private fun DeptTile(dept: Dept, status: Status, work: Work, now: Long, yishou: YishouStatus?, modifier: Modifier, onClick: () -> Unit) {
-    val sig = LocalSignals.current
-    val color = sig.dept(dept)
-    val zone = com.zongkong.core.DayClock.BEIJING
-    val gates = status.gates.filter { it.gate.dept == dept }
-    val (line, progress) = when (dept) {
-        Dept.INFO -> Focus.evidence(work, Focus.Evidence.LINKED_NOTES, now, zone).first.let { "今天挂上 $it 条" to null }
-        Dept.THINK -> Focus.evidence(work, Focus.Evidence.CONCLUSIONS, now, zone).first.let { "今天 $it 个判断" to null }
-        Dept.PLAN -> Focus.evidence(work, Focus.Evidence.PLANNED_TODAY, now, zone).first.let { "今天排了 $it 步" to null }
-        Dept.ACT -> when {
-            work.session?.let { it.lockUntil > now } == true -> "专注锁到 ${clock(work.session!!.lockUntil)}" to null
-            yishou != null -> "一手 ${yishou.doneSets}/${yishou.targetSets} 组" to (if (yishou.targetSets > 0) yishou.doneSets.toFloat() / yishou.targetSets else null)
-            else -> "一手没连上" to null
-        }
-        Dept.HQ -> "" to null
-    }
-    val ring = progress ?: if (gates.isEmpty()) 0f else gates.count { it.done }.toFloat() / gates.size
-    val source = remember { MutableInteractionSource() }
-    Surface(
-        modifier = modifier
-            .pressScale(source)
-            .clickable(interactionSource = source, indication = ripple(), onClick = onClick)
-            .testTag("dept-${dept.name}"),
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(22.dp),
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                ProgressRing(ring, color, size = 46.dp, stroke = 3.5.dp) {
-                    Text(dept.seal, color = color, fontWeight = FontWeight.Black, fontSize = 18.sp)
-                }
-                Spacer(Modifier.weight(1f))
-                val overdue = gates.any { it.phase == GatePhase.OVERDUE }
-                if (overdue) PulseDot(sig.strict) else if (gates.isNotEmpty() && gates.all { it.done }) Text("✓", color = sig.free, fontWeight = FontWeight.Black)
-            }
-            Column {
-                Text(dept.label, style = MaterialTheme.typography.titleSmall)
-                Text(line, style = MaterialTheme.typography.bodySmall, color = sig.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-    }
-}
-
-@Composable
 fun QuickChip(label: String, color: Color, onClick: () -> Unit) {
     val source = remember { MutableInteractionSource() }
     Surface(
@@ -688,31 +546,6 @@ fun runShortcut(s: Shortcut, app: com.zongkong.app.ZkApp, nav: NavHostController
     } else {
         val (p, t) = s.payload.split(':', limit = 2).let { it[0] to it.getOrElse(1) { "" } }
         app.chat.agent.tools.route(p, t)?.let { r -> runCatching { nav.navigate(r) } }
-    }
-}
-
-@Composable
-private fun TimelineRow(a: com.zongkong.core.work.Rec, work: Work, now: Long, nav: NavHostController) {
-    val sig = LocalSignals.current
-    val zone = com.zongkong.core.DayClock.BEIJING
-    val start = a.plan?.let { TimeParse.startMillis(it, zone) }
-    Row(
-        Modifier.fillMaxWidth().clickable { nav.navigate("action/${a.key}") }.padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Column(Modifier.width(52.dp), horizontalAlignment = Alignment.End) {
-            Text(start?.let { clock(it) } ?: "—", style = MaterialTheme.typography.titleSmall.merge(Mono), color = if (start != null) MaterialTheme.colorScheme.onSurface else sig.muted)
-            a.plan?.let { p ->
-                val label = TimeParse.label(p, now, zone)
-                if (!label.startsWith("今天")) Text(label.substringBefore(' '), style = MaterialTheme.typography.labelSmall, color = sig.muted)
-            }
-        }
-        Box(Modifier.width(3.dp).height(34.dp).background(actionColor(a.actionStatus), RoundedCornerShape(2.dp)))
-        Column(Modifier.weight(1f)) {
-            Text(a.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            work.rec(a.threadKey)?.let { Text(it.title, style = MaterialTheme.typography.bodySmall, color = sig.muted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-        }
     }
 }
 

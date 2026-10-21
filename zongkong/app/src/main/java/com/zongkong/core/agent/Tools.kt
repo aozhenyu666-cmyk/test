@@ -232,9 +232,9 @@ class ZkTools(private val env: AgentEnv) {
             ),
         ),
         ToolSpec(
-            "add_action", "在一件事下面加一步行动。时间用中文写（今晚 20:00-21:00、明天 9:00、周六 10:00），不排时间就不填。",
+            "add_action", "加一步行动、排进时间。用户说“下午 2 点到 4 点刷题”“现在要去做 X”就用它，别只是口头答应。时间用中文写（今天 14:00-16:00、今晚 20:00、明天 9:00），不说时间就不填（进待安排）。零散的事不用挑事项，thread 空着就挂在「日常安排」下。",
             listOf(
-                Param("thread", "string", "事项编号或标题", required = true),
+                Param("thread", "string", "事项编号或标题；零散的事空着"),
                 Param("title", "string", "要做的一步，动词开头，具体", required = true),
                 Param("time", "string", "计划时间"),
                 Param("criteria", "string", "做到什么算完（可检查）"),
@@ -1229,7 +1229,11 @@ class ZkTools(private val env: AgentEnv) {
     }
 
     private fun addAction(a: Args): ToolResult {
-        val t = findThread(a.s("thread")) ?: return noThread(a.s("thread"))
+        val t = if (a.s("thread").isBlank()) {
+            var d: Rec? = null
+            env.updateWork { w -> com.zongkong.core.plan.QuickPlan.daily(w, env.now(), env.rnd).also { d = it.second }.first }
+            d!!
+        } else findThread(a.s("thread")) ?: return noThread(a.s("thread"))
         val title = a.s("title").ifBlank { return ToolResult.fail("行动标题不能空") }
         val time = a.s("time")
         val plan = if (time.isBlank()) null else TimeParse.parse(time, env.now(), env.zone)
