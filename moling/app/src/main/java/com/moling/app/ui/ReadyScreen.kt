@@ -94,6 +94,18 @@ fun readyItems(context: Context, openSettings: () -> Unit, openBridge: () -> Uni
         ),
         ReadyItem("和 GPT / Notion 贯通", store.notion().ready(), "她写黑板、GPT 回答、她来收。", false, "去设置", openBridge),
         ReadyItem("深想模型", cfg.hasDeep(), "夜里整理、收件箱用更强的模型（可以不开）。", false, "去设置", openBridge),
+        ReadyItem(
+            "联络站（ChatGPT 直接连她）", store.relay().ready(),
+            "开通后 ChatGPT 能直接把结论交给她。", false, "去设置", openBridge,
+        ),
+        ReadyItem(
+            "耳机里说话", store.whisperOn(),
+            "戴着耳机时她在耳机里说一句；现在没戴也算好。", false, "去设置", openSettings,
+        ),
+        ReadyItem(
+            "刷着刷着慢慢褪色", true,
+            "默认关；想要更强的提醒再打开。", false, "去设置", openSettings,
+        ),
     )
 }
 
