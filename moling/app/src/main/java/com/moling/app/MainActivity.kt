@@ -83,6 +83,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        com.moling.app.overlay.Presence.onResume(this)
+    }
+
     override fun onStart() {
         super.onStart()
         visible = true

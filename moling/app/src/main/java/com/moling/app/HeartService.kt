@@ -60,6 +60,14 @@ class HeartService : Service() {
     /** 上一次看到的前台（判断“换了 App”）和已经说过的那段连续娱乐。 */
     private var lastPkg = ""
     private var longKey = ""
+    private val unlockReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == Intent.ACTION_USER_PRESENT) scope.launch {
+                runCatching { com.moling.app.overlay.Presence.unlock(context) }
+                    .onFailure { com.moling.app.overlay.Presence.error(context, "晨报失败：${it.javaClass.simpleName}") }
+            }
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -67,6 +75,7 @@ class HeartService : Service() {
         super.onCreate()
         running = true
         Notify.ensureChannels(this)
+        ContextCompat.registerReceiver(this, unlockReceiver, android.content.IntentFilter(Intent.ACTION_USER_PRESENT), ContextCompat.RECEIVER_NOT_EXPORTED)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -96,6 +105,8 @@ class HeartService : Service() {
             val now = System.currentTimeMillis()
             runCatching { BrainHost.tickNow(now) }.onFailure { Log.w(TAG, "心跳失败", it) }
             runCatching { feedSenses(now) }.onFailure { Log.w(TAG, "喂导演失败", it) }
+            com.moling.app.overlay.Presence.tick(this, now)
+            com.moling.app.widget.NowWidget.update(this)
             Notify.updateHeart(this, heartText())
             delay(if (interactive()) 60_000L else 300_000L)
         }
@@ -136,6 +147,7 @@ class HeartService : Service() {
     /** 导演给的卡：App 在前台就交给今天页，不在前台发通知（M15）。 */
     private fun deliver(card: Card?) {
         val c = card ?: return
+        if (com.moling.app.overlay.Presence.onCard(this, c)) return
         if (MainActivity.visible) BrainHost.setDirectorCard(c) else Notify.card(this, c.ask)
     }
 
@@ -153,6 +165,8 @@ class HeartService : Service() {
 
     override fun onDestroy() {
         running = false
+        runCatching { unregisterReceiver(unlockReceiver) }
+        com.moling.app.overlay.OverlayService.hide(this)
         scope.cancel()
         super.onDestroy()
     }
