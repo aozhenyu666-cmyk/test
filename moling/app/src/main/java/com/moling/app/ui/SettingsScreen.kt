@@ -24,6 +24,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.foundation.clickable
+import com.moling.app.ui.art.inkEnter
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -854,7 +855,7 @@ private fun SettingsHub(
             shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surface,
             border = androidx.compose.foundation.BorderStroke(0.7.dp, Ink.copy(alpha = 0.14f)),
-            modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+            modifier = Modifier.fillMaxWidth().inkEnter(distance = 8.dp).clickable(onClick = onClick),
         ) {
             Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) { art() }
