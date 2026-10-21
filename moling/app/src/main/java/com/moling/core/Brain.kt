@@ -61,6 +61,15 @@ import com.moling.core.rhythm.Rhythm
 import com.moling.core.rhythm.ScreenEvent
 import com.moling.core.rhythm.SleepNight
 import com.moling.core.flow.Busy
+import com.moling.core.live.Activity
+import com.moling.core.live.GateRules
+import com.moling.core.live.GateSession
+import com.moling.core.live.Live
+import com.moling.core.live.LiveConfig
+import com.moling.core.live.Mood
+import com.moling.core.live.Spirit
+import com.moling.core.live.Spirits
+import com.moling.core.live.Trigger
 import com.moling.core.flow.ChannelKind
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
@@ -218,11 +227,18 @@ data class BrainState(
     val counterDay: String = "",
     val driftsToday: Int = 0,
     val nudgesToday: Int = 0,
+    /** 她今天的精力（出声、拦人、被冷落）。 */
+    val spirit: Spirit = Spirit(),
+    /** 正拦在他面前的那一次（null = 没拦）。 */
+    val gate: GateSession? = null,
     /** 提议编号用的流水号。 */
     val seq: Long = 0,
     /** 给人看的行动日志（做了什么、交给总控什么、总控怎么回的）。 */
     val log: List<String> = emptyList(),
 )
+
+/** 她主动出声的一次。[gate] = 她拦在他面前（App 弹出拦人的页面）；[release] = 放他走了。 */
+data class LiveTurn(val mood: Mood, val line: String, val gate: Boolean, val release: Boolean, val proposals: List<Proposal>)
 
 data class ChatResult(val text: String, val proposals: List<Proposal>, val byModel: Boolean, val mode: TalkMode = TalkMode.WORK)
 
@@ -780,6 +796,133 @@ class Brain(
         val m = Flow.minuteOf(now)
         return (m >= 23 * 60 + 30 || m < 4 * 60) && st.lastNightDay != dayKey(now)
     }
+
+    // ------------------------------------------------------------------ 活的墨灵（v5）
+
+    /**
+     * 这一刻有没有什么值得把她叫醒（由大脑判断，App 每次心跳把前台交进来）：
+     * 该做事时在刷 5 分钟以上 / 夜里躺着刷 15 分钟以上 / 连着刷 40 分钟以上。正拦着他时不再叫。
+     */
+    fun liveTrigger(a: Activity?, now: Long): Trigger? {
+        if (st.gate != null || a == null) return null
+        if (a.category != "ENTERTAINMENT" && a.category != "SHOPPING") return null
+        val m = Flow.minuteOf(now)
+        val plan = st.flow?.takeIf { it.day == calendarDay(now) && it.confirmed }
+        val c = plan?.let { Flow.current(it, m) }
+        val working = c != null && m in c.startMin until c.endMin && c.kind in setOf(ChannelKind.MAIN, ChannelKind.SIDE, ChannelKind.SPRING)
+        return when {
+            working && a.minutes >= 5 -> Trigger.SCROLL_AT_WORK
+            (m >= 23 * 60 || m < 5 * 60) && a.minutes >= 15 -> Trigger.SCROLL_IN_BED
+            a.minutes >= 40 -> Trigger.LONG_SCROLL
+            else -> null
+        }
+    }
+
+    /**
+     * 叫醒她一次：她自己决定说不说、拦不拦。返回 null = 她这次不出声（精力不够、间隔太近、她懒得说、或模型说不说）。
+     * [roll] 是 0..1 的随机数（不重要的事有一半时候她懒得出声）。
+     */
+    suspend fun live(trigger: Trigger, a: Activity?, now: Long, roll: Double = kotlin.random.Random.nextDouble(), cfg: LiveConfig = LiveConfig()): LiveTurn? = lock.withLock {
+        if (st.gate != null) return@withLock null
+        refresh()
+        val day = calendarDay(now)
+        var sp = Spirits.today(st.spirit, day)
+        if (!Spirits.mayAct(sp, trigger, now, cfg, roll)) {
+            st = st.copy(spirit = sp)
+            return@withLock null
+        }
+        val canGate = GateRules.eligible(a) && Spirits.mayGate(sp, cfg) &&
+            trigger in setOf(Trigger.SCROLL_AT_WORK, Trigger.SCROLL_IN_BED, Trigger.LONG_SCROLL)
+        val flow = st.flow?.takeIf { it.day == day }
+        val flowNow = flow?.let { Flow.current(it, Flow.minuteOf(now)) }?.title.orEmpty()
+        val persona = config().persona
+        val prompt = Live.prompt(persona, trigger, a, director.nowText(now), flow?.let { Flow.render(it) }.orEmpty(), st.about, misjudged(now), talkLines(), canGate)
+        val reply = model(persona, prompt)
+        val line = reply?.let { Live.parse(it, canGate) } ?: Live.local(trigger, a, canGate, flowNow)
+        if (!line.speak) {
+            st = st.copy(spirit = sp, log = st.log + "${hm(now)} ${trigger.label}：她看了一眼，没出声")
+            save()
+            return@withLock null
+        }
+        val made = reply?.let { Talk.parse(it, Flow.dayStart(day), "她主动提的", now).actions }.orEmpty().mapNotNull { fromTalk(it, now, flow) }
+        sp = sp.copy(spoke = sp.spoke + 1, lastAt = now)
+        val gate = if (line.gate && a != null) GateSession(now, trigger, a.pkg, a.label).also { sp = sp.copy(gates = sp.gates + 1) } else null
+        st = st.copy(
+            spirit = sp,
+            gate = gate,
+            // 她出声了：偏离阶梯的下一级往后推，不叠着打扰
+            ladder = st.ladder?.copy(at = now),
+            talk = (st.talk + Turn("墨灵", line.line, now)).takeLast(TALK_KEEP),
+            log = st.log + "${hm(now)} ${trigger.label}：${if (gate != null) "拦住了，" else ""}${line.line.take(40)}",
+        )
+        count(now, nudges = 1)
+        save()
+        LiveTurn(line.mood, line.line, gate != null, false, made)
+    }
+
+    /** 她拦着他时，他回了一句：她决定放不放（最多 [LiveConfig.maxRounds] 轮，最后一轮一定放）。 */
+    suspend fun gateReply(text: String, now: Long, cfg: LiveConfig = LiveConfig()): LiveTurn = lock.withLock {
+        val g = st.gate ?: return@withLock LiveTurn(Mood.CALM, "", false, true, emptyList())
+        val numbers = noteClaim(text, "他", now)
+        st = st.copy(talk = (st.talk + Turn("他", text, now)).takeLast(TALK_KEEP))
+        val last = g.rounds + 1 >= cfg.maxRounds || GateRules.expired(g, now, cfg)
+        val persona = config().persona
+        val reply = model(persona, Live.replyPrompt(persona, g, text + if (numbers.isNotBlank()) "（$numbers）" else "", talkLines(), st.about, g.rounds, cfg.maxRounds))
+        val parsed = reply?.let { Live.parse(it, false) }?.takeIf { it.line.isNotBlank() }
+        val release = last || (parsed?.release ?: !Live.perfunctory(text))
+        val line = parsed?.line ?: if (release) "好，去吧。说好的别忘了。" else "这句太敷衍了。具体点：卡在哪，或者几点停？"
+        val mood = parsed?.mood ?: if (release) Mood.CALM else Mood.POUT
+        val day = calendarDay(now)
+        val made = reply?.let { Talk.parse(it, Flow.dayStart(day), "拦住时说好的", now).actions }.orEmpty()
+            .mapNotNull { fromTalk(it, now, st.flow?.takeIf { f -> f.day == day }) }
+        st = st.copy(
+            gate = if (release) null else g.copy(rounds = g.rounds + 1),
+            // 他认真回了：不再算冷落；这次偏离也算回应过
+            spirit = if (release && !Live.perfunctory(text)) st.spirit.copy(ignored = 0) else st.spirit,
+            ladder = st.ladder?.copy(answered = true),
+            talk = (st.talk + Turn("墨灵", line, now)).takeLast(TALK_KEEP),
+            log = st.log + "${hm(now)} 拦住时他回：${text.take(30)}${if (release) "，放行" else ""}",
+        )
+        save()
+        LiveTurn(mood, line, !release, release, made)
+    }
+
+    /**
+     * 不回答也要走：“急事”按钮，或拦到 [LiveConfig.gateMaxMin] 分钟（安全阀）。一律放行，记一笔，算一次冷落。
+     * 急事按钮永远可用；用得比 [LiveConfig.escapesPerDay] 多，她今天就不再拦。
+     */
+    suspend fun gateEscape(reason: String, now: Long, cfg: LiveConfig = LiveConfig()) = lock.withLock {
+        val g = st.gate ?: return@withLock
+        var sp = Spirits.today(st.spirit, calendarDay(now))
+        sp = sp.copy(escapes = sp.escapes + if (reason == "急事") 1 else 0, ignored = sp.ignored + 1)
+        if (sp.escapes > cfg.escapesPerDay) sp = sp.copy(gates = cfg.gatesPerDay)
+        st = st.copy(
+            gate = null,
+            spirit = sp,
+            decisions = (st.decisions + Decision(now, false)).takeLast(300),
+            log = st.log + "${hm(now)} 拦住 ${g.label} 后放行：$reason（没回答）",
+        )
+        save()
+    }
+
+    /** 这几天（3 天）判断上的错：他说的和记录对不上、她猜错的、她提议被拒或取消的、偏离多的那天。最多 5 条。 */
+    private fun misjudged(now: Long): List<String> {
+        val from = now - 3 * DAY_MS
+        val out = mutableListOf<String>()
+        st.claims.filter { it.at >= from && it.verdict.isNotBlank() && it.verdict != "对得上" && it.verdict != "看不到" }
+            .forEach { out += "他说「${it.text.take(24)}」，${it.verdict}" }
+        st.predictions.filter { it.madeAt >= from && it.hit == false }
+            .forEach { out += "我猜「${it.text.take(24)}」，错了（实际 ${it.actual?.toInt() ?: "?"}）" }
+        director.snapshot().hypotheses.filter { it.at >= from && it.outcome == "错了" }
+            .forEach { out += "我以为「${it.guess.take(24)}」，猜错了" }
+        st.proposals.filter { it.decidedAt >= from && (it.zkOutcome == "你在总控里取消了" || it.state == ProposalState.DECLINED) }
+            .takeLast(2).forEach { out += "我提议「${it.text.take(20)}」，你没要——时机或判断不对" }
+        st.days.filter { LocalDate.parse(it.day) >= LocalDate.parse(calendarDay(from)) && it.drifts >= 3 }
+            .forEach { out += "${it.day} 偏离了 ${it.drifts} 次" }
+        return out.takeLast(5)
+    }
+
+    private fun talkLines(): List<String> = st.talk.takeLast(8).map { "${it.who}：${it.text.take(120)}" }
 
     // ------------------------------------------------------------------ 了解和复盘
 
