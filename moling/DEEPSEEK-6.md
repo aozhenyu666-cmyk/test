@@ -220,3 +220,68 @@
 | 她说完自动开麦 6 秒 | 不自己开麦克风（底线 4）。改成：亮 8 秒“回她”，点了再说 |
 | 拆掉 / 改造“一手” | 不动已有体系。捉虫题是墨灵自己的小题 |
 | 用无障碍往 Gemini / ChatGPT 自动粘贴 | 继续用剪贴板 + 分享（已有）；Z8 只加一个小胶囊 |
+
+---
+
+# 续：B 组 + C 组（2026-10-21 更新，A 组已合进工作分支）
+
+> A 组（Z1–Z4、Z6、Z8）已经合进 `ccr-b3c7616e-xlohkd`。之后 Claude 又加了**联络站**（`app/mirror/RelaySync.kt`、`assets/relay-worker.js`）和**设置首页**（`SettingsScreen.kt` 改成首页 + 分节）。下面的位置都按现在的代码写。
+> 一个会话按顺序做完 B1–B4、C1–C3 就行（同一个分支，按顺序提交，文件冲突已经排开）。
+
+## 开工
+
+1. `git fetch origin && git checkout -b deepseek-autopilot-b origin/ccr-b3c7616e-xlohkd`，只推这个分支。
+2. 规矩同第 1 节、第 11 节：不改 `com/moling/core/`、不加权限、不碰总控和“一手”；`tools/core-tests` 的 `gradle test` 一直全绿（现在 394 个）；`node tools/relay-test/test.mjs` 也要一直输出 `relay ok`（你不碰联络站就不会变）。
+3. 每个任务一个提交，说明写任务号。
+
+## B1 = 原 Z5：捉虫题
+
+照第 6 节做，位置更新：
+- `Appear.kt` 第 52–53 行现在是 `// QUIZ 由 B 组接…` 和 `else -> LiveScreens.peek(...)`。在 `else` **上面**加一行：
+  `Modality.QUIZ -> turn.quiz?.let { QuizActivity.open(context, turn.mood, turn.line, it) } ?: LiveScreens.peek(context, turn.mood, turn.line, turn.modality)`，把那行注释删掉。Appear 别的地方不动。
+- 拦人页：`LiveScreens.kt` 里 `if (busy) InkThinking("她在想…") else Button(...) { Text("回她") }` 这一行所在的 `Row` 下面，「急事」按钮上面，加「做一道捉虫题」。题在拦人页里直接出（同 QuizActivity 的片段样式，抽一个 `@Composable fun QuizParts(quiz, onPicked)` 放在 `QuizActivity.kt` 里给两边用）。
+- Manifest 加 `.live.QuizActivity`：`exported=false`、`excludeFromRecents=true`、`taskAffinity="com.moling.app.quiz"`、主题 `@android:style/Theme.Translucent.NoTitleBar`（同 PeekActivity）。
+
+## B2 = 原 Z7：体系图沙盘
+
+照第 8 节做。补充：
+- `AtlasScreen.kt` 现在第 70 行起；顶部加「列表 / 沙盘」两个 `FilterChip`，默认列表；沙盘模式整页换成 `AtlasMapView`。
+- 点岛：调 `BrainHost.setTopic(island.name)`（和现有切换主题同一个入口），再切回列表。
+- 没有任何主题时，沙盘显示 `InkMountain` + “还没有体系图。在对话里说‘记下’，或者分享一段文字进来。”
+
+## B3 = 原 Z9：她怎么出现（看板）
+
+照第 10 节 1–3 做（`AboutScreen.kt` 最下面）。
+
+## B4 = 原 Z9 第 4 条：不想要的方式
+
+A 组没做，现在归你：
+- `Settings.kt`：`fun disabledModalities(): Set<Modality>`、`fun setDisabledModalities(set)`（存在 toggles 里，存 `name` 的逗号串）。
+- `SettingsScreen.kt`：现在是首页 + 分节，“活的墨灵”那一节在 `if (section == "live") {` 里（约第 377 行起）。在这一节**最后**加一行标题“不想要的方式”，下面五个 `FilterChip`：桌宠、盯着你、耳语、参谋弹幕、捉虫题（选中 = 不要）。
+- `Appear.show` 最前面：`if (turn.modality in disabled && turn.modality != Modality.GATE) → LiveScreens.peek(...)` 并 return。（拦人不在这里关——拦人有自己的开关“她可以拦住你”。）
+
+## C1：一周的手机脉络（今天页）
+
+`TodayScreen.kt` 现在有“今天的手机”一节（`HourStrip`）。在它下面加“这一周”：
+- 数据：`state.usageDays.takeLast(7)`（`UsageDay.playByHour` 24 个数、`playMin`、`pickups`、`day`）。
+- 画法：7 行 × 24 格的小方格（`Canvas`，每格 1 小时，颜色深浅 = 娱乐分钟数，用 `WashOrange` 的透明度，0 分钟就是纸色），左边写星期几，最下面一行 0 / 6 / 12 / 18 的小刻度。
+- 下面一句：`UsageLog.weakHours(days)` 的结果，“这一周最容易被拉走：22–24 点（平均 48 分钟）”。少于 3 天的数据就不显示这一节。
+- 只读，不调模型。
+
+## C2：准备清单加三项
+
+`ui/ReadyScreen.kt` 的 `readyItems(...)` 在“更好的”（`essential = false`）里加：
+- “联络站（ChatGPT 直接连她）”：`store.relay().ready()`；去设置 → 打开贯通页（用已有的 `openBridge`）。
+- “耳机里说话”：`Whisper` 的设置开关开着即算好（不判断此刻有没有戴耳机）；去设置 → `openSettings`。
+- “刷着刷着慢慢褪色”：默认关，关着也算“好”（ok = true），说明写“默认关；想要更强的提醒再打开”。
+
+## C3：她的推断（历史）
+
+`AboutScreen.kt`（B3 之后、同一个文件，放在“她怎么出现”上面）加一节“她推过的”：
+- `state.thoughts.takeLast(20).reversed()`：每条一行 `text`，后面小字 `把握${confidence}`，有 `outcome` 就加一个小标签（对了 = 墨色、错了 = 印泥红、过期 = 灰）。
+- 顶上一句统计：“最近 20 条：对了 X、错了 Y、过期 Z、还没验证 W”。
+- 没验证的那几条后面「对 / 不对」两个小按钮 → `BrainHost.judgeThought(id, right)`（已有）。
+
+## 交付
+
+同第 12 节：DEVLOG 末尾加“第六批 B 组 + C 组（DeepSeek）”，推 `deepseek-autopilot-b`，CI 绿了告诉用户，由 Claude 合并。
