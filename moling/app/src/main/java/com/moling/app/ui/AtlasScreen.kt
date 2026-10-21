@@ -1,6 +1,8 @@
 package com.moling.app.ui
 
 import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -226,6 +229,7 @@ fun AtlasScreen() {
             // 沙盘：一眼看出每个主题亮了几成、还有几个黑洞；点岛切回列表的那个主题。
             AtlasMapView(
                 islands = AtlasMap.islands(atlas),
+                edges = atlas.edges,
                 onOpenTopic = { id ->
                     val name = atlas.topics.firstOrNull { it.id == id }?.name
                     if (name != null) {
@@ -534,17 +538,36 @@ private fun BriefCard(brief: Brief, onKeep: () -> Unit, onDrop: () -> Unit) {
     }
 }
 
+/** E6：论断来源的小记号——三手棋是棋子（实心墨点套细圈），采蜜（待核）是一页纸。 */
+@Composable
+private fun SourceMark(source: String) {
+    when (source) {
+        "三手棋" -> Box(
+            Modifier
+                .size(12.dp)
+                .border(0.9.dp, Ink, androidx.compose.foundation.shape.CircleShape)
+                .padding(2.dp)
+                .background(Ink, androidx.compose.foundation.shape.CircleShape),
+        )
+        "采蜜（待核）" -> com.moling.app.ui.art.InkPapers(Modifier.size(14.dp), animated = false)
+        else -> {}
+    }
+}
+
 /** 一条论断：正文 + 小字（把握 / 已验证 / 来源），右边「⋯」弹核实 / 删除。 */
 @Composable
 private fun NodeRow(node: Node, onVerify: () -> Unit, onDelete: () -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
         Column(Modifier.weight(1f).padding(vertical = 2.dp)) {
-            Text(
-                node.claim,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SourceMark(node.source)
+                Text(
+                    node.claim + if (node.source == "采蜜（待核）") "（待核）" else "",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
             val meta = buildString {
                 append("把握 ${node.confidence}")
                 if (node.verified.isNotBlank()) append(" · 已验证：${node.verified}")

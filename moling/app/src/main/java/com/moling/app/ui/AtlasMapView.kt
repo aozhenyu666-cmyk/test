@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.moling.app.ui.art.InkMountain
 import com.moling.app.ui.art.WashGold
+import com.moling.app.ui.art.WashViolet
 import com.moling.core.atlas.AtlasMap
 import com.moling.core.atlas.Island
 import kotlin.math.PI
@@ -46,7 +47,11 @@ import kotlin.math.sqrt
 
 /** 沙盘：两列错开的群岛；没有主题时是一座山 + 一句话。 */
 @Composable
-fun AtlasMapView(islands: List<Island>, onOpenTopic: (String) -> Unit) {
+fun AtlasMapView(
+    islands: List<Island>,
+    onOpenTopic: (String) -> Unit,
+    edges: List<com.moling.core.atlas.Edge> = emptyList(),
+) {
     if (islands.isEmpty()) {
         // 空态：还没有任何主题，一座山 + 一句话，居中放着。
         Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
@@ -81,7 +86,13 @@ fun AtlasMapView(islands: List<Island>, onOpenTopic: (String) -> Unit) {
                 verticalAlignment = Alignment.Top,
             ) {
                 pair.forEach { island ->
-                    IslandCard(island, Modifier.weight(1f), onOpenTopic)
+                    val ids = island.dots.map { it.id }.toSet()
+                    IslandCard(
+                        island = island,
+                        modifier = Modifier.weight(1f),
+                        onOpenTopic = onOpenTopic,
+                        edges = edges.filter { it.from in ids && it.to in ids },
+                    )
                 }
                 if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
@@ -92,7 +103,12 @@ fun AtlasMapView(islands: List<Island>, onOpenTopic: (String) -> Unit) {
 
 /** 一座岛：圈（点 + 黑洞）+ AtlasMap.line + 细进度线；整块可点。 */
 @Composable
-private fun IslandCard(island: Island, modifier: Modifier, onOpenTopic: (String) -> Unit) {
+private fun IslandCard(
+    island: Island,
+    modifier: Modifier,
+    onOpenTopic: (String) -> Unit,
+    edges: List<com.moling.core.atlas.Edge> = emptyList(),
+) {
     // 岛的大小按论断数长：0 条半径 26dp，10 条及以上 56dp。
     val radiusDp = 26f + 30f * (island.dots.size.coerceIn(0, 10) / 10f)
     Column(
@@ -102,7 +118,7 @@ private fun IslandCard(island: Island, modifier: Modifier, onOpenTopic: (String)
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         // 画布比圈大一圈，给缺口外面的虚线留位置。
-        IslandCanvas(island, Modifier.size((radiusDp * 2f + 24f).dp))
+        IslandCanvas(island, edges, Modifier.size((radiusDp * 2f + 24f).dp))
         Spacer(Modifier.height(8.dp))
         Text(
             AtlasMap.line(island),
@@ -122,7 +138,7 @@ private fun IslandCard(island: Island, modifier: Modifier, onOpenTopic: (String)
 
 /** 岛的样子：淡墨圈、论断点、缺口黑洞。全部按 [island] 静态画。 */
 @Composable
-private fun IslandCanvas(island: Island, modifier: Modifier) {
+private fun IslandCanvas(island: Island, edges: List<com.moling.core.atlas.Edge>, modifier: Modifier) {
     val ring = Ink.copy(alpha = 0.24f)
     val faintDot = Ink.copy(alpha = 0.32f)
     val litDot = Ink.copy(alpha = 0.88f)
@@ -135,10 +151,26 @@ private fun IslandCanvas(island: Island, modifier: Modifier) {
 
         // 论断：按黄金角撒在圈里，条数越多铺得越开。
         val n = island.dots.size
-        island.dots.forEachIndexed { i, dot ->
+        val dots = island.dots.mapIndexed { i, _ ->
             val a = i * 2.399963f
             val d = if (n <= 1) 0f else r * 0.62f * sqrt((i + 0.5f) / n.toFloat())
-            val p = c + Offset(cos(a) * d, sin(a) * d)
+            c + Offset(cos(a) * d, sin(a) * d)
+        }
+        // E6：她推出来的线（note 以「她连的：」开头）用虚线连在两颗点之间。
+        val ids = island.dots.map { it.id }
+        edges.filter { it.note.startsWith("她连的：") }.forEach { e ->
+            val from = dots[ids.indexOf(e.from)]
+            val to = dots[ids.indexOf(e.to)]
+            drawLine(
+                WashViolet.copy(alpha = 0.7f),
+                from,
+                to,
+                1.dp.toPx(),
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 3.dp.toPx())),
+            )
+        }
+        island.dots.forEachIndexed { i, dot ->
+            val p = dots[i]
             if (dot.lit) {
                 // 亮的：一层 WashGold 光晕 + 实心墨点。
                 drawCircle(WashGold.copy(alpha = 0.30f), 6.dp.toPx(), p)
