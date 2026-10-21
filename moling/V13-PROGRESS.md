@@ -10,7 +10,7 @@
 | I9 J1–J7 | 主要实现已提交；来源点开原文缺失 | Moling CI通过 | 真机未测，未合入正式包 | [PR15，含PR13代码](https://github.com/aozhenyu666-cmyk/test/pull/15) |
 | 动效打磨 | 已提交，未合入 | Moling CI通过 | 真机未测 | [PR14](https://github.com/aozhenyu666-cmyk/test/pull/14) |
 | P0前置整合 | 已实现：整合PR15（含PR13）+PR14，补 I9 来源点开原文 | 本地编译通过；CI 见分支 | 真机未测；发布 job 应 skipped | 本分支 PR |
-| W10 T1–T9 | **进行中（里程碑1）**：T1/T2(fetch, RSS, HTML, Brave适配)/T3(池与解析)/T7(预算与事件) 核心完成；T3–T9 其余未做 | core-tests 442 全绿；App build/test 通过；真实公网未验 | 真机未测 | [任务](DEEPSEEK-10.md) · 本分支 PR |
+| W10 T1–T9 | **进行中（里程碑1）**：T1/T2(fetch, RSS, HTML, Brave适配)/T3(池与解析)/T7(预算与事件) 核心完成；T3–T9 其余未做 | core-tests 442 全绿；App build/test 通过；真实公网未验 | 真机未测 | [任务](DEEPSEEK-10.md) · [PR17](https://github.com/aozhenyu666-cmyk/test/pull/17) |
 | W11 R1–R7 | 任务书已补齐，待实现 | 待验证 | 待验证 | [任务](DEEPSEEK-11.md) |
 | W12 A1–A6 | 任务书已补齐，待实现 | 待验证 | 待验证 | [任务](DEEPSEEK-12.md) |
 | W13 G1–G7 | 任务书已补齐，待实现 | 待验证 | 待验证 | [任务](DEEPSEEK-13.md) |
