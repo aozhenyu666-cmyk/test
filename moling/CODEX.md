@@ -12,7 +12,7 @@
 >
 > 用户与 Gemini 的创意已综合为 [七脑＋五手总设计](../partner-blueprint/v13-system-blueprint.md)、[契约与跨进程协议](../partner-blueprint/v13-contracts.md)、[完整 Kotlin 定义](../partner-blueprint/v13/V13Contracts.kt) 和 [交付计划](../partner-blueprint/v13-delivery.md)。
 > 新增能力的第一波是 [第九批：本地案板与实质代工](DEEPSEEK-9.md)，从资料到草稿、挑刺、采用、导出形成闭环。第八批发布修复保持独立。
-> 四五批的“界面任务不改 core”仍适用；第九批 C9 是限定范围的独立内核任务，允许清单见任务文档。不得借总重构顺手修改总控授权、放宽规则或签名。
+> 四五批的“界面任务不改 core”仍适用；第九批 C9（`core/workspace/`、`core/strategy/Prework.kt`、Live 破雾统一、Brain 的 `markMind`/`keepClaims`）已由 Claude 完成，DEEPSEEK-9 只剩 I9 界面。不得借总重构顺手修改总控授权、放宽规则或签名。
 > 当前新增文档是实施规格，不表示 v13 已装进用户 APK；后续施工和验收分批进行，不重做已有 FOG/Chess/Habits/Atlas。
 
 > 你接 DeepSeek 的班，继续做墨灵（`moling/`）和总控里接墨灵的那部分界面。先读这一页，再读 `partner-blueprint/CONTEXT.md`（一页纸的来龙去脉）。
