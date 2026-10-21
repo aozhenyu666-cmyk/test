@@ -22,6 +22,7 @@ import com.moling.core.mind.Ask
 import com.moling.core.mirror.Absorbed
 import com.moling.core.mirror.Question
 import com.moling.app.live.LiveScreens
+import com.moling.app.live.PetOverlay
 import com.moling.core.LiveTurn
 import com.moling.core.flow.Cause
 import com.moling.core.live.GateRules
@@ -41,6 +42,8 @@ import com.moling.core.mind.MindState
 import com.moling.core.mind.Opening
 import com.moling.core.mind.Reply
 import com.moling.core.mind.Sense
+import com.moling.core.autopilot.AutopilotSignal
+import com.moling.core.power.Charter
 import com.moling.core.power.Tier
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -392,7 +395,11 @@ object BrainHost {
      */
     private suspend fun liveTick(now: Long, unlockGapMin: Int = 0) {
         val ctx = appContext ?: return
-        if (!ready || !settings.liveOn() || !interactive()) return
+        if (!ready || !settings.liveOn() || !interactive()) {
+            // 关掉“她会主动找你”或屏幕灭了：褪色立刻恢复。
+            runCatching { PetOverlay.fade(ctx, 0f) }
+            return
+        }
         if (!liveBusy.compareAndSet(false, true)) return
         try {
             val cfg = liveConfig()
@@ -407,14 +414,21 @@ object BrainHost {
                     val last = _state.value.talk.lastOrNull { it.who == "墨灵" }?.text.orEmpty()
                     withContext(Dispatchers.Main) { LiveScreens.gate(ctx, Mood.POUT, last.ifBlank { "还没回我呢。" }, gate.label) }
                 }
+                // 拦人页在前面：褪色先恢复，别让他看不清。
+                runCatching { PetOverlay.fade(ctx, 0f) }
                 return
             }
-            if (MainActivity.visible) return
+            if (MainActivity.visible) {
+                runCatching { PetOverlay.fade(ctx, 0f) }
+                return
+            }
             // 自动驾驶：看最近 30 分钟的前台记录（只有应用和时间）
             val autopilot = if (Usage.allowed(ctx)) runCatching {
                 val sessions = Usage.sessions(ctx, now - 30 * 60_000L, now) { BrainFacts.category(it, status) }
                 com.moling.core.autopilot.Autopilot.read(sessions, now, _state.value.flow)
             }.getOrNull() else null
+            // Z6 褪色：只在自动驾驶、还停在娱乐里时慢慢变灰（默认关、每天最多 20 分钟）。
+            fadeTick(ctx, autopilot, activity)
             val trigger = brain.liveTrigger(activity, now, unlockGapMin, cfg, autopilot) ?: return
             val cues = if (trigger == com.moling.core.live.Trigger.AUTOPILOT) autopilot?.reasons.orEmpty() else emptyList()
             val turn = io<LiveTurn?>("live", { null }) { brain.live(trigger, activity, now, cfg = cfg, can = Appear.can(ctx), cues = cues) } ?: return
@@ -422,6 +436,18 @@ object BrainHost {
         } finally {
             liveBusy.set(false)
         }
+    }
+
+    /**
+     * Z6 褪色（默认关）：他已经在自动驾驶、而且还停在娱乐应用里时，让画面 10 分钟里慢慢变灰。
+     * 完全由他自己在设置里打开；每天最多 20 分钟（分钟数由 PetOverlay 记）；离开娱乐 / 拦人 / 开 App 就恢复。
+     */
+    private fun fadeTick(ctx: Context, autopilot: AutopilotSignal?, activity: LiveActivity?) {
+        val want = settings.liveOn() && settings.fadeOn() && autopilot?.on == true && activity != null &&
+            (activity.category == "ENTERTAINMENT" || activity.category == "SHOPPING") &&
+            activity.pkg !in Charter.neverTouch &&
+            PetOverlay.fadeMinutesToday(ctx) < 20
+        runCatching { PetOverlay.fade(ctx, if (want) 1f else 0f) }
     }
 
     /** 他对她这次出现的反应（反免疫账本）。不等结果。 */
