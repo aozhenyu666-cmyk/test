@@ -33,7 +33,7 @@
 - 墨灵的签名沿用总控的调试签名（同一个证书），总控按“包名 com.moling.app + 这个证书”认墨灵。
 - **坑**：仓库的 GitHub Actions 在任何分支改动 `zongkong/` 后，测试通过就会覆盖手机上的“最新版”下载链接（`zongkong-latest`）。所以从旧分支推送会把用户的总控降级（发生过一次，已修）。
 - **坑**：总控的模拟器测试 `LoopTest` 偶尔超时（`bossInterrogation`、`partnerAndCampaign`），重跑一次通常就过。
-- 云端环境连不上谷歌的 Android SDK，纯逻辑代码用单独的 JVM 工程测试，Android 编译以 CI 为准。
+- 云端环境连不上谷歌的 Android SDK：两边的纯逻辑在 `tools/core-tests/` 里 `gradle test`（总控 core + 墨灵 core + 交叉测试，共 343 个），Android 编译以 CI 为准。Maven Central 偶尔 429，那个工程已经先走谷歌镜像。
 
 ## 5. 现在的状态
 
@@ -46,6 +46,9 @@
 - 墨灵外壳：DeepSeek 第一批（M0–M3）和第二批（M4 换上大脑、M5 接总控、M6 今天页，外加 M7 体系页、打开演员、权柄上限）都已完成并合进工作分支，CI 绿，`moling-latest` 已发布。细节见 `moling/DEVLOG.md`。
 - 第三批（DeepSeek，`moling/DEEPSEEK-3.md`，M8–M16）：调试页、后台心跳、看前台应用和总控健康、通知、早晚自动、总控结局回传、体系页补全、导演卡片和接力棒、备份。大脑为它补了：总控结局（`ZkPort.result`、`Proposal.zkOutcome`）、体系图核实 / 删除 / 归纳 / 缺口去聊、`needsPlan` / `needsNight`、`BrainFacts.category`。
 - 还没做：真机联调（总控通知 → 执行）；小窗（悬浮窗，要新权限，第三批之后再说）。
+- **v4 已完成的核心（C1–C3，Claude）**：总控的授权书（给多立即、收回走冷静期、授权内 60 秒倒计时可取消）、临时严管和只减今天的娱乐（到点自己解除，紧急放行照样有效）、约定和谋划单交给总控；墨灵规划者 / 管家对 AUTO 的事直接请求按授权书执行（没有授权书时总控照旧问用户）。
+- **交给 DeepSeek 的文档**：第三批 `moling/DEEPSEEK-3.md`（正在做，M8–M11 已推到 `deepseek-moling`）；第四批 `DEEPSEEK-4.md`（小窗、先答一问、小部件、晨报、分享、接住收线，依赖第三批）；第五批 `DEEPSEEK-5.md`（授权书界面、建议列表、临时开关显示，可以和第四批并行）。
+- **下一次对话从这里接**：照 `partner-blueprint/v4-core-design.md` 写 C4–C7（升级阶梯和说法对证据、复盘和四个参谋和打法本、模式和训练、日历和作息），再写第六、七批文档。
 - **v4 规划**（`partner-blueprint/v4-power.md`）：授权书（事先授权的收紧和排计划，60 秒反悔，撤销走冷静期）、总控三个新开关、约定 / 谋划单交给总控监督、小窗和“先答一问”、日历和作息、周报和打法本、模式和语音对讲。Claude 先做 C1–C7（大脑和总控内核），DeepSeek 做第四到第七批。
 - 没在真机上验证过：小窗能否浮在 Gemini Live 上、vivo 上的听写、开场白交接方式（探针 P1–P5）。
 
