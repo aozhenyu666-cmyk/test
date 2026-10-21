@@ -1,7 +1,11 @@
-// Built-in reference cases. Same shape as AI engine output, so they render with the same views.
-// They show what a good breakdown looks like; you can generate more with the sandbox.
+// Built-in reference cases. Same shape as AI engine output (decode / game schemas in
+// core/prompts.js), so they render with the same views. test/core.test.js validates every
+// case against the schema.
+
+const NO_DRAFT = { risk: 'none', blowup_risk: 0, their_first_reaction: '', defense_mechanism: '', issues: [], rewrite: '' };
 
 export const SEED_CASES = [
+  // ------------------------------------------------------------------ 朋友
   {
     id: 'friend-soft-reject',
     title: '高投入之后，朋友连续推脱',
@@ -9,6 +13,7 @@ export const SEED_CASES = [
     scenario: 'friendship',
     situation:
       '最好的朋友考研期间焦虑，打电话给我，我陪他聊了一个多小时。考完后我约他出来玩，到了他学校附近他说有事来不了；之后又约了两次，都是“最近忙，再说吧”，也不说在忙什么。',
+    myGuess: '他就是不想跟我玩了',
     draft: '算了，你爱咋咋吧。',
     result: {
       summary: '更可能是对方处在低谷或有难言之隐，而不是不在乎你。现在发气话，会把一次“暂时退缩”变成“关系结束”。',
@@ -18,7 +23,7 @@ export const SEED_CASES = [
         { label: '精力耗尽、社交倦怠，谁都不想见', probability: 25, evidence: '推脱时语气含糊，没给替代时间', how_to_verify: '看 TA 最近有没有和别人出去（朋友圈），没有就说明不是针对你' },
         { label: '对你的某个言行有心结，但不好意思说', probability: 15, evidence: '信息不足；需要回想最近一次聊天有没有让 TA 难堪', how_to_verify: '回看最近的聊天记录，有没有你说教、催促或开玩笑过头的地方' },
         { label: '有现实难处（家里的事、经济压力、感情问题）', probability: 15, evidence: '“有事”却不说是什么，常见于不想解释的私事', how_to_verify: '不追问，给一个随时可以开口的出口' },
-        { label: '有意疏远这段关系（软拒绝）', probability: 10, evidence: '连续三次没有回约，也没主动提别的时间', how_to_verify: '停止邀约一个月，看 TA 会不会主动联系' },
+        { label: '他就是不想跟我玩了（有意疏远）', probability: 10, evidence: '连续三次没有回约，也没主动提别的时间', how_to_verify: '停止邀约一个月，看 TA 会不会主动联系' },
       ],
       my_biases: [
         { bias: '把推测当事实', explanation: '“他不想见我”只是几种可能之一，而且不是最可能的那种。' },
@@ -35,6 +40,9 @@ export const SEED_CASES = [
       },
       draft_check: {
         risk: 'high',
+        blowup_risk: 85,
+        their_first_reaction: '我本来就够烦了，考得一塌糊涂，没脸见人……他还来这一句？行，那就这样吧，反正我现在也没力气解释。',
+        defense_mechanism: '羞耻转为回避：既然你已经下了结论，那就不用解释了，直接拉黑最省事。',
         issues: ['把猜测当结论，等于替对方宣布“你不在乎我”', '情绪化的告别句，会让对方用拉黑来“配合”你', '关上了对话的门，对方想解释也没台阶下'],
         rewrite: '最近是不是挺累的？不想出来也完全没事，等你状态好了想聚再叫我。',
       },
@@ -49,15 +57,271 @@ export const SEED_CASES = [
     },
   },
   {
+    id: 'friend-read-no-reply',
+    title: '帮朋友搬了一天家，之后已读不回',
+    mode: 'decode',
+    scenario: 'friendship',
+    situation:
+      '上周六我帮朋友搬家，从早上九点忙到晚上，还自己打车过去。当天她说了好多次谢谢。之后我发消息问她新家住得怎么样，显示已读，三天没回。',
+    myGuess: '她是用完我就扔',
+    draft: '用完就扔是吧？行，我记住了。',
+    result: {
+      summary: '三天已读不回，最常见的原因是“看了想等会儿认真回，然后忘了”。搬家后一周是最忙乱的时候，这还算不上冷淡的证据。',
+      surface: '搬家当天对方多次道谢；三天前你问新家情况，对方已读未回。之前没有类似记录。',
+      subtexts: [
+        { label: '搬家后琐事太多，看了想晚点回，结果忘了', probability: 45, evidence: '搬家后一周要收拾、办网、买东西，消息很容易被淹没', how_to_verify: '再等两天；或者发一张轻松的图，不提“你怎么不回”' },
+        { label: '觉得欠了你一个大人情，想好好回报，反而不知道怎么回', probability: 20, evidence: '当天反复道谢，说明她心里记着这份人情', how_to_verify: '看她之后会不会主动约你吃饭' },
+        { label: '情绪或生活出了别的状况', probability: 15, evidence: '信息不足', how_to_verify: '看她朋友圈有没有异常' },
+        { label: '她是用完我就扔', probability: 10, evidence: '只有一次已读未回，证据很弱', how_to_verify: '观察一个月：她有没有主动联系过你、有没有回请' },
+        { label: '对搬家那天的某件事不太舒服', probability: 10, evidence: '信息不足；回想当天有没有起过争执', how_to_verify: '回想一下当天的细节' },
+      ],
+      my_biases: [
+        { bias: '单次事件泛化', explanation: '一次三天没回，被你上升成了“用完就扔”，这是从一个点直接跳到了结论。' },
+        { bias: '付出后的回报预期', explanation: '帮了一整天，心里自然期待对方热情回应。这很正常，但不应该变成审判的标准。' },
+      ],
+      stage: 'stable',
+      stage_rationale: '刚有过高质量的互动和真诚的道谢，现在只是一次没回消息，关系本身是稳定的。',
+      chips: {
+        my_investment: '一整天的体力和时间、打车钱',
+        their_constraints: '搬家后的混乱、工作，以及可能的“欠人情”心理负担',
+        cost_of_pushing: '一句质问会让对方从“欠你人情”变成“被你指责”，人情就变成了怨气',
+        cost_of_waiting: '几乎没有',
+      },
+      draft_check: {
+        risk: 'high',
+        blowup_risk: 78,
+        their_first_reaction: '啊？我就是这两天累瘫了没回消息……他帮了我，我是很感激，可这话说得像我欠了他多大的债一样。',
+        defense_mechanism: '感激被指责冲掉，转为委屈和反感，可能回一句“那真是谢谢你了”然后疏远。',
+        issues: ['把一次没回消息定性为人品问题', '“我记住了”带有记账和威胁的意味', '把之前帮忙的情分一笔勾销'],
+        rewrite: '新家收拾得怎么样啦？东西多慢慢弄，别累着。',
+      },
+      playbook: [
+        { level: 'gentle', name: '轻松地再碰一下', when: '再过两天还没回', message: '新家收拾得怎么样啦？东西多慢慢弄，等你安顿好了，我来蹭顿饭哈哈。', expected_reaction: '大概率会回复，并顺势约你吃饭。', risk: '几乎没有' },
+        { level: 'equal', name: '真诚地说一句', when: '之后长时间都是你单方面联系', message: '最近感觉都是我在找你聊，不知道是不是你太忙了？没别的意思，就是有点想你了。', expected_reaction: '对方会意识到并解释，或者说明自己的状态。', risk: '低' },
+        { level: 'exit', name: '降低投入', when: '一个月里对方都没有主动过', message: '（不发消息）不再主动嘘寒问暖，她找你时正常回应。下次她再找你帮大忙，量力而行。', expected_reaction: '关系回到普通朋友的距离。', risk: '可能会错过一个只是不擅长表达的朋友' },
+      ],
+      do_not: ['发“用完就扔”之类的质问', '在朋友圈发“有些人帮完忙就不认人了”', '把搬家帮忙的事情翻出来算账'],
+      next_step: '先不发任何消息，周五如果还没动静，就发 gentle 那一条。',
+      wait_days: 2,
+    },
+  },
+  {
+    id: 'friend-borrow-money',
+    title: '朋友借了 5000 块，半年不提还',
+    mode: 'game',
+    scenario: 'friendship',
+    situation:
+      '半年前好朋友说急用钱，借了我 5000，说两个月内还。现在过了半年，她一次没提过，朋友圈里却在旅游、买新手机。我不好意思开口要。',
+    myGuess: '她就是不打算还了',
+    draft: '你都有钱出去旅游了，我那 5000 块什么时候还？',
+    result: {
+      summary: '要钱不伤感情的关键，是把“催债”变成“确认一个时间点”。你越拖不开口，委屈越大，到最后反而会以吵架收场。',
+      scenario: 'friendship',
+      subtexts: [
+        { label: '她忘了，或者觉得你不急', probability: 30, evidence: '你一直没提，对方容易默认“不急”', how_to_verify: '直接问一个具体的还款时间' },
+        { label: '手头确实紧，旅游和手机是分期或别人出的钱', probability: 25, evidence: '朋友圈不等于真实财务状况', how_to_verify: '提出分期还款，看她是否愿意' },
+        { label: '不好意思主动提，在等自己凑够了再说', probability: 20, evidence: '欠钱的人往往比借钱的人更回避这个话题', how_to_verify: '给她一个台阶，比如“分几次还也行”' },
+        { label: '她就是不打算还了', probability: 15, evidence: '半年没提，而且有消费', how_to_verify: '明确提出后，看她是否给出具体时间' },
+        { label: '对你们的关系有误解，觉得这钱“不用急着还”', probability: 10, evidence: '关系亲密时，有人会把借款当成帮忙', how_to_verify: '说清楚这是借款，你也有用钱的地方' },
+      ],
+      my_biases: [
+        { bias: '回避冲突导致怨气累积', explanation: '你不开口，对方不知道；你越憋越气，最后会把正常的要钱变成质问。' },
+        { bias: '用朋友圈推断真实财务', explanation: '朋友圈是展示，不是账本。' },
+      ],
+      parties: [
+        { name: '我', stated_position: '没提过，不好意思要', real_interests: '拿回钱，同时不伤感情', hidden_costs: '心里越来越膈应，每次看她朋友圈都难受', chips: ['借款事实（有转账记录）', '她的信用和面子', '你们共同的朋友圈子'], batna: '分期收回；或者认定这是一次买教训的钱', bottom_line: '至少拿到一个明确的还款计划', blind_spots: '以为开口要钱就会伤感情，其实不要才最伤', leverage: 55 },
+        { name: '朋友', stated_position: '没提这件事', real_interests: '保住面子和这段友谊，可能也想拖到手头宽裕', hidden_costs: '欠钱的心理负担；被其他朋友知道的风险', chips: ['你们的感情', '你的不好意思'], batna: '继续拖', bottom_line: '不想被当众或者被指责式地催', blind_spots: '低估了你的介意程度', leverage: 45 },
+      ],
+      core_exchange: '她在用你的“不好意思”换时间；你要做的是用一个体面的台阶，换回一个明确的时间表。',
+      misreadings: ['你以为她故意赖账，她可能以为你不急', '她以为不提就没事，其实你的怨气在累积'],
+      zopa: '分 2 到 3 次在三个月内还清，双方都能接受。',
+      stage: 'cooling',
+      draft_check: {
+        risk: 'high',
+        blowup_risk: 72,
+        their_first_reaction: '他一直在盯着我的朋友圈？我旅游是攒了很久的钱……被这样当面讽刺，好丢人。',
+        defense_mechanism: '羞耻转为反击：“你是不是一直在监视我”，然后焦点从还钱转移到你的态度。',
+        issues: ['把朋友圈当证据，像在监视对方', '讽刺语气会让对方先防御，而不是先还钱', '没有给对方台阶'],
+        rewrite: '最近我这边要用一笔钱，之前借你的 5000，你看什么时候方便还？分两次也行。',
+      },
+      playbook: [
+        { level: 'gentle', name: '用自己的需要开口', when: '第一次提', message: '最近我这边要交一笔钱，有点紧，之前借你的 5000 你看什么时候方便？分两次也行哈。', expected_reaction: '多数人会给一个时间，甚至马上还一部分。', risk: '低' },
+        { level: 'equal', name: '确认一个具体日期', when: '对方说“过段时间”但没给时间', message: '那我们定个时间吧，这个月底先还 2500，下个月底还剩下的，可以吗？', expected_reaction: '有了具体日期，对方就很难再拖。', risk: '中：对方可能会有点尴尬，但这是必要的' },
+        { level: 'exit', name: '止损并降级关系', when: '对方一再拖延或否认', message: '我理解你也有难处，那剩下的你什么时候有了再还吧。不过以后借钱的事我就不方便了。', expected_reaction: '你可能拿不回全部的钱，但拿回了边界。', risk: '友谊会变淡' },
+      ],
+      do_not: ['在共同朋友群里提这件事', '拿她的朋友圈截图去质问', '一边生闷气一边继续借钱给她'],
+      next_step: '这周找一个平常的时间，私聊发 gentle 那一条，不要在她发旅游照的时候发。',
+    },
+  },
+
+  // ------------------------------------------------------------------ 父母
+  {
+    id: 'parents-hide-illness',
+    title: '父母报喜不报忧，住院了也不说',
+    mode: 'decode',
+    scenario: 'family',
+    situation:
+      '每次给妈妈打电话，她都说“家里都好，你好好工作”。今天老家邻居无意中说，我妈上个月住院了一周，我爸一直在医院陪着。他们一个字都没跟我说。',
+    myGuess: '他们根本不把我当家里人',
+    draft: '你们为什么什么都瞒着我！我是外人吗？',
+    result: {
+      summary: '父母瞒着你，几乎都是出于保护，不是排斥。你现在最该做的不是追责，而是让他们知道：告诉你，不会给你添麻烦。',
+      surface: '妈妈住院一周，父母没有告诉你；平时电话里一直说“都好”。',
+      subtexts: [
+        { label: '怕你担心、影响工作，觉得自己能扛', probability: 55, evidence: '“你好好工作”是父母最常见的保护性说法', how_to_verify: '电话里直接问：“妈，你身体最近到底怎么样？我听说了。”' },
+        { label: '觉得你离得远，说了也帮不上，只会干着急', probability: 20, evidence: '异地子女的父母常有这种想法', how_to_verify: '问问他们当时最需要什么帮助' },
+        { label: '病情不严重，觉得不值得说', probability: 15, evidence: '住院一周可能是检查或小手术', how_to_verify: '问清楚诊断和医生的意见' },
+        { label: '过去你对家里的事不太上心，他们习惯了不说', probability: 10, evidence: '你提到自己以前不记得父母的生日', how_to_verify: '回想一下：最近一年你主动问过他们的身体吗？' },
+      ],
+      my_biases: [
+        { bias: '把保护解读成排斥', explanation: '“不把我当家里人”是受伤后的解读。对父母来说，瞒着你恰恰是把你当成最需要保护的人。' },
+        { bias: '愧疚转为愤怒', explanation: '你生气的一部分，其实是对自己没有察觉的愧疚。' },
+      ],
+      stage: 'stable',
+      stage_rationale: '亲缘关系的底子没有变，只是信息通道出了问题。',
+      chips: {
+        my_investment: '定期的电话，但多是例行公事',
+        their_constraints: '不想拖累你，也有“当父母的不能示弱”的面子',
+        cost_of_pushing: '父母会觉得自己做错了事、给你添了堵，下次更不敢说',
+        cost_of_waiting: '如果不说开，下次还会瞒着你，可能是更严重的事',
+      },
+      draft_check: {
+        risk: 'medium',
+        blowup_risk: 45,
+        their_first_reaction: '就是怕他着急才没说……这孩子怎么还吼起来了。早知道就不该让邻居知道。',
+        defense_mechanism: '委屈和自责，然后用“没什么大事”“你别管了”把话题关上。',
+        issues: ['用质问的方式表达关心，父母听到的是指责', '“我是外人吗”会让父母觉得自己做错了', '下次他们会瞒得更严'],
+        rewrite: '妈，我听说你上个月住院了。我不是怪你们，就是心疼，也有点难受没能在身边。以后有什么事告诉我好吗？我想知道。',
+      },
+      playbook: [
+        { level: 'gentle', name: '先表达心疼', when: '今天就打电话', message: '妈，我听说你上个月住院了。现在身体怎么样了？医生怎么说的？', expected_reaction: '妈妈可能会先说“没事没事”，你就安静听，多问几句细节。', risk: '几乎没有' },
+        { level: 'equal', name: '约定以后的沟通方式', when: '了解情况之后', message: '以后有什么事一定告诉我，你们不说我反而更担心。就算我帮不上忙，知道了心里也踏实。我们说好了啊。', expected_reaction: '父母会答应，但习惯不会马上改变，需要你平时多问。', risk: '低' },
+        { level: 'exit', name: '用行动代替追问', when: '父母不愿多说', message: '（不用发消息）近期找时间回家一趟，或者每周固定一个时间打视频电话。不再追究这次为什么瞒着你。', expected_reaction: '你的陪伴本身就是最好的回答。', risk: '无' },
+      ],
+      do_not: ['质问父母为什么瞒着你', '去责怪爸爸没告诉你', '只打一次电话就恢复成例行公事'],
+      next_step: '今晚就给妈妈打电话，用 gentle 那一档开头，挂电话前和爸爸也说几句。',
+      wait_days: 0,
+    },
+  },
+  {
+    id: 'parents-marriage-pressure',
+    title: '父母催婚，还偷偷安排相亲',
+    mode: 'game',
+    scenario: 'family',
+    situation:
+      '我 28 岁，单身。过年回家，爸妈每天都在念叨结婚的事，还背着我约了亲戚介绍的相亲对象来家里吃饭。我很反感，但又不想和他们吵。',
+    myGuess: '他们只在乎面子，不在乎我开不开心',
+    draft: '你们要是再这样，我以后过年都不回来了！',
+    result: {
+      summary: '父母催婚的核心是焦虑，不是控制。你需要给他们的焦虑一个出口（让他们安心的信息），同时守住决定权。',
+      scenario: 'family',
+      subtexts: [
+        { label: '担心你老了没人照顾，自己走了以后放心不下', probability: 40, evidence: '这是大多数父母催婚的底层担忧', how_to_verify: '问他们：“你们最担心的是什么？”' },
+        { label: '来自亲戚、邻居的社会压力', probability: 25, evidence: '过年期间亲戚聚会，比较和议论最多', how_to_verify: '留意他们在亲戚面前和私下的态度是否不同' },
+        { label: '不了解你的生活，用他们的经验判断“该结婚了”', probability: 20, evidence: '父母那一代人 25 岁结婚是常态', how_to_verify: '多跟他们说说你的生活和规划' },
+        { label: '他们只在乎面子，不在乎我开不开心', probability: 15, evidence: '背着你安排相亲，确实没有尊重你', how_to_verify: '认真谈一次你的感受，看他们是否愿意调整' },
+      ],
+      my_biases: [
+        { bias: '把焦虑当成控制', explanation: '父母的方法确实不对，但出发点大多是担心，不是想控制你。' },
+        { bias: '要么全盘顺从要么彻底对抗', explanation: '中间有很多选项：给信息、给时间表、给边界。' },
+      ],
+      parties: [
+        { name: '我', stated_position: '不想被催，反感相亲', real_interests: '自主决定婚姻，同时保持和父母的亲密', hidden_costs: '每次回家都很累，开始想逃避回家', chips: ['你是成年人，有最终决定权', '父母对你的爱和对关系的在乎', '你的生活状态和规划'], batna: '减少回家的频率和时长（代价很大）', bottom_line: '不接受被安排，不为了结婚而结婚', blind_spots: '低估了父母的焦虑，以为他们只是在乎面子', leverage: 50 },
+        { name: '父母', stated_position: '为你好，年纪不小了', real_interests: '确认你过得好、未来有依靠', hidden_costs: '在亲戚面前的压力，以及“没尽到责任”的自责', chips: ['亲情', '道德压力（“我们都是为你好”）', '亲戚网络'], batna: '继续催，安排更多相亲', bottom_line: '希望你至少认真对待这件事', blind_spots: '以为安排相亲能解决问题，没意识到会把你推远', leverage: 50 },
+      ],
+      core_exchange: '父母想用“催”换“安心”，你可以直接给他们安心，换回不被催的空间。',
+      misreadings: ['父母以为你不着急是因为不在乎，你以为父母催是因为不在乎你的感受'],
+      zopa: '你主动分享自己的生活和对感情的想法，父母不再背着你安排相亲；你可以接受偶尔认识新朋友，但由你决定见不见。',
+      stage: 'stable',
+      draft_check: {
+        risk: 'high',
+        blowup_risk: 70,
+        their_first_reaction: '我们为了他操碎了心，他居然拿不回家来威胁我们……这孩子太让人寒心了。',
+        defense_mechanism: '委屈和道德反击：“我们都是为你好”“你翅膀硬了”，然后冷战或者更加强硬。',
+        issues: ['用断绝联系来威胁，伤害的是你最在乎的关系', '把一个可以谈的问题变成了对抗', '父母的焦虑没有被回应，只会更焦虑'],
+        rewrite: '爸妈，我知道你们是担心我。这件事我也有在想，但我想自己来。你们背着我安排，我心里真的不舒服。我们好好聊聊好吗？',
+      },
+      playbook: [
+        { level: 'gentle', name: '先回应焦虑', when: '今天吃完饭，单独和父母聊', message: '我知道你们是担心我以后一个人。其实我现在过得挺好的，工作也稳定。感情的事我也有在留意，遇到合适的我会认真对待的。', expected_reaction: '父母可能还会念叨几句，但语气会缓和。', risk: '低' },
+        { level: 'equal', name: '划清边界，给出交换', when: '父母继续安排相亲', message: '你们要是有觉得不错的人，可以先告诉我，我自己决定要不要认识。但别再背着我约到家里了，这样我真的很尴尬，也更不想回家了。', expected_reaction: '父母可能会不高兴，但大多数会让步。', risk: '中：可能会有一两天的僵持' },
+        { level: 'exit', name: '缩短冲突时间，不缩短关心', when: '父母完全听不进去', message: '（不用发消息）这次过年少待两天，但回去后保持每周打电话，聊生活不聊结婚。父母念叨时就转移话题，不吵。', expected_reaction: '时间长了，父母会发现催没用，反而影响见面。', risk: '短期内父母会失落' },
+      ],
+      do_not: ['用“不回家”威胁父母', '在相亲对象面前给父母难堪', '为了应付而随便答应结婚'],
+      next_step: '今晚找一个只有你和父母的时间，用 gentle 那一档开头，先听他们说担心什么。',
+    },
+  },
+  {
+    id: 'parents-health-products',
+    title: '父母花几千块买保健品，劝不动',
+    mode: 'game',
+    scenario: 'family',
+    situation:
+      '我爸最近总去社区的“健康讲座”，一次买了 6000 多的保健品，说能治高血压。我说是骗人的，他不高兴，说我不懂，还说讲座里的小王比我还关心他。',
+    myGuess: '我爸被洗脑了，听不进去任何话',
+    draft: '你就是被骗了！那些人就是图你的钱，你怎么这么傻！',
+    result: {
+      summary: '骗子卖的不是保健品，是陪伴和被重视的感觉。你和他争对错只会把他推得更近。要赢回他，得先把“关心”这件事抢回来。',
+      scenario: 'family',
+      subtexts: [
+        { label: '在讲座里得到了陪伴和尊重，这是他真正需要的', probability: 45, evidence: '“小王比我还关心他”这句话说明了一切', how_to_verify: '想一想你最近一次耐心听他说话是什么时候' },
+        { label: '对自己的健康焦虑，想抓住一根救命稻草', probability: 25, evidence: '高血压是慢性病，正规治疗见效慢', how_to_verify: '陪他去一次医院，看他对医生的话是否信任' },
+        { label: '被你说“傻”，面子挂不住，只能嘴硬', probability: 20, evidence: '你说是骗人的，他立刻不高兴', how_to_verify: '换个不否定他的说法，看他态度是否松动' },
+        { label: '被深度洗脑，听不进去任何话', probability: 10, evidence: '目前只有一次购买，还不到这个程度', how_to_verify: '观察他是否还会继续大量购买' },
+      ],
+      my_biases: [
+        { bias: '只讲道理，不讲感受', explanation: '你在争“保健品有没有用”，他在意的是“有没有人在乎我”。' },
+        { bias: '把父母当作需要纠正的对象', explanation: '用“你怎么这么傻”的语气，等于把他放在了被教育的位置。' },
+      ],
+      parties: [
+        { name: '我', stated_position: '保健品是骗人的', real_interests: '保护爸爸的钱和健康，不让他继续被骗', hidden_costs: '平时陪伴少，心里有愧疚', chips: ['亲情', '医院的检查报告', '时间和陪伴'], batna: '向市场监管部门（12315）投诉讲座', bottom_line: '不能让他再大额购买', blind_spots: '低估了陪伴对他的价值', leverage: 40 },
+        { name: '爸爸', stated_position: '保健品有用，你不懂', real_interests: '健康、被关心、被尊重', hidden_costs: '孤独，对衰老和疾病的恐惧', chips: ['钱是他自己的', '父亲的面子'], batna: '继续去讲座', bottom_line: '不想被孩子当成傻子', blind_spots: '把推销员的热情当成了真心', leverage: 35 },
+        { name: '推销团队', stated_position: '我们关心老人健康', real_interests: '卖货赚钱', hidden_costs: '被投诉和查处的风险', chips: ['高频次的陪伴和嘘寒问暖', '“专家”的身份包装'], batna: '换下一个老人', bottom_line: '不轻易退款', blind_spots: '', leverage: 25 },
+      ],
+      core_exchange: '推销员用“陪伴和尊重”换爸爸的钱。你要用更真实的陪伴，把这份需求接回来。',
+      misreadings: ['你以为爸爸是傻，他其实是孤独', '爸爸以为你在否定他，其实你是在担心他'],
+      zopa: '爸爸同意以后大额购买前先跟你商量；你每周固定时间陪他聊天或散步，并陪他去医院做一次正规检查。',
+      stage: 'cooling',
+      draft_check: {
+        risk: 'high',
+        blowup_risk: 65,
+        their_first_reaction: '又来教训我了。人家小王天天问我血压怎么样，你一年回来几次？你懂什么。',
+        defense_mechanism: '面子受损后的固执：越说他傻，他越要证明自己没错，甚至会再买一次。',
+        issues: ['“你怎么这么傻”直接伤了他的自尊', '把爸爸推向了推销员那一边', '没有给他一个不丢面子的退路'],
+        rewrite: '爸，我不是说你买错了，是担心你的血压。下周我陪你去医院查一下，看看这个配合着吃行不行，好吗？',
+      },
+      playbook: [
+        { level: 'gentle', name: '先把关心抢回来', when: '今天就打电话', message: '爸，最近血压怎么样？讲座那边讲了些什么，跟我说说呗。', expected_reaction: '他会很愿意跟你说，这时只听不反驳。', risk: '无' },
+        { level: 'equal', name: '用医生代替你来说话', when: '他愿意聊之后', message: '爸，这个保健品我们拿去问问医生，看能不能跟降压药一起吃。要是医生说可以，我也放心。下周六我陪你去。', expected_reaction: '大多数父母会答应，医生的话比你的话更有分量。', risk: '低' },
+        { level: 'exit', name: '止损与正规渠道', when: '他还在大量购买', message: '爸，这次的钱我们先想办法退。以后买超过 500 块的东西，先跟我商量一下，就当让我放心，好吗？（同时保留收据，向 12315 投诉）', expected_reaction: '他可能会不情愿，但有了“让我放心”这个理由，比较容易接受。', risk: '中：退款不一定成功' },
+      ],
+      do_not: ['当着他的面说他傻、被骗', '偷偷扔掉保健品', '直接去讲座现场跟人吵架'],
+      next_step: '今晚打电话，只问血压和讲座，不评价。周末约好陪他去医院。',
+    },
+  },
+
+  // ------------------------------------------------------------------ 职场
+  {
     id: 'boss-promise',
     title: '老板画饼不兑现，猎头来了',
     mode: 'game',
     scenario: 'workplace',
     situation:
       '在小公司做了两年，老板一直说“明年上市就给期权”，年中调薪也没兑现。每周加班十几个小时。最近有猎头联系，薪资高 30%，但新公司不了解。',
+    myGuess: '老板从来没打算兑现，就是在骗我',
+    draft: '你们就会画饼，我不干了。',
     result: {
       summary: '你手里的筹码比你以为的多：一个能落地的外部报价，加上老板对你不可替代性的依赖。别空口谈“情怀”，把画饼换成写在纸上的条件。',
       scenario: 'workplace',
+      subtexts: [
+        { label: '老板在用未来收益压低现在的成本', probability: 40, evidence: '两次承诺都没有书面化，也没有兑现', how_to_verify: '要求把期权条款写进补充协议' },
+        { label: '公司真的现金紧张，老板也在赌上市', probability: 30, evidence: '小公司、两年没调薪', how_to_verify: '问问其他同事的调薪情况，看是普遍还是只有你' },
+        { label: '老板认为你不会走，所以不急着兑现', probability: 20, evidence: '你一直没提过要求', how_to_verify: '提出明确的调薪要求，看他的反应速度' },
+        { label: '老板从来没打算兑现，就是在骗我', probability: 10, evidence: '目前证据不足以说明是故意欺骗', how_to_verify: '书面化之后，看他是否推脱' },
+      ],
+      my_biases: [
+        { bias: '把口头承诺当成未来收入', explanation: '没写进合同的期权，在法律上和财务上都等于零。' },
+        { bias: '不好意思谈钱', explanation: '你的沉默被对方当成了“不在意”。' },
+      ],
       parties: [
         { name: '我', stated_position: '一直配合加班，没正式提过要求', real_interests: '合理的薪资、可预期的成长，以及不被白白消耗', hidden_costs: '每周十几小时的无偿加班；两年没涨薪带来的市场价值折损', chips: ['熟悉核心业务，短期难替代', '外部报价高 30%', '老板的承诺有记录'], batna: '接受猎头的岗位（需要先核实）', bottom_line: '年底前调薪到位，否则离开', blind_spots: '把老板的口头承诺当成未来收入；不好意思谈钱', leverage: 45 },
         { name: '老板', stated_position: '公司困难，大家一起熬，上市后都有回报', real_interests: '控制人力成本，留住核心员工，撑到下一轮融资或上市', hidden_costs: '你走后的招聘和交接成本，项目延期风险', chips: ['发薪权', '期权承诺', '推荐信和项目经验'], batna: '招新人（3 个月以上，成本更高）', bottom_line: '能接受小幅调薪，但不愿给出确定的期权条款', blind_spots: '以为画饼能一直替代现金；低估了员工的外部机会', leverage: 55 },
@@ -66,6 +330,14 @@ export const SEED_CASES = [
       misreadings: ['你以为老板会主动记得兑现承诺，老板以为你不提就是不在意', '老板以为你没有别的选择，你以为老板会因为“情分”留你'],
       zopa: '调薪 15%–25%，加上书面的期权条款或加班补偿，大概率在双方都能接受的范围内。',
       stage: 'cooling',
+      draft_check: {
+        risk: 'high',
+        blowup_risk: 75,
+        their_first_reaction: '这么沉不住气？行，想走就走，正好看看谁离不开谁。',
+        defense_mechanism: '被冒犯后的强硬：老板会为了面子不挽留，你失去了谈判的机会。',
+        issues: ['情绪化地提离职，等于直接放弃了谈判', '没有书面 offer 就摊牌，自己没有退路', '“画饼”这个词会让老板觉得被羞辱'],
+        rewrite: '老板，我想跟您聊聊我的薪资和期权。这两年我一直在等，现在想要一个明确的时间表。',
+      },
       playbook: [
         { level: 'gentle', name: '先要书面', when: '还没正式谈过钱的时候', message: '老板，上市给期权这件事我一直挺期待的，想跟您确认一下具体的比例和行权条件，方便的话能不能写进补充协议？', expected_reaction: '如果对方推说“还没定”，你就得到了重要信息：这个饼目前不存在。', risk: '低' },
         { level: 'equal', name: '亮出筹码，谈条件', when: '书面条款被推脱，或者调薪再次落空', message: '我很想在这里继续做下去，也清楚公司现在的情况。不过我两年没调过薪，加班也比较多，最近外面有机会给到高 30%。如果年底前能调薪 20%，或者把期权写进合同，我愿意留下来。', expected_reaction: '老板可能会打感情牌或者打折还价，坚持要书面结果和时间点。', risk: '中：要确认外部机会是真的，不能虚张声势' },
@@ -76,15 +348,319 @@ export const SEED_CASES = [
     },
   },
   {
+    id: 'boss-implicit-overtime',
+    title: '领导晚上十点在群里“辛苦大家一下”',
+    mode: 'game',
+    scenario: 'workplace',
+    situation:
+      '领导经常晚上十点在工作群里发任务，说“大家辛苦一下，明早要”。从来不说是加班，也没有加班费。同事都秒回“收到”。我不回又怕被当成不积极。',
+    myGuess: '领导就是想白嫖我们的时间',
+    draft: '下班时间能不能别发工作消息？',
+    result: {
+      summary: '这是一个“隐性加班”的默认规则：没人说破，所以没人付费。你不用当第一个反抗的人，但可以用“确认优先级”的方式，把隐性加班变成显性安排。',
+      scenario: 'workplace',
+      subtexts: [
+        { label: '领导自己也被上级在晚上压任务，往下传递', probability: 40, evidence: '晚上十点的需求常常来自上级的临时要求', how_to_verify: '留意任务是否常常带着“老板要”之类的说法' },
+        { label: '领导习惯了这种工作方式，没意识到对团队的影响', probability: 25, evidence: '同事都秒回，没有人表达过不适', how_to_verify: '找一个合适的机会，在一对一时轻描淡写地提一下' },
+        { label: '在测试谁更“拼”，作为考核依据', probability: 20, evidence: '“辛苦一下”这种说法让拒绝变得有道德压力', how_to_verify: '看绩效考核时是否提到响应速度' },
+        { label: '领导就是想白嫖我们的时间', probability: 15, evidence: '没有加班费也没有调休', how_to_verify: '询问公司的加班或调休制度' },
+      ],
+      my_biases: [
+        { bias: '把系统问题个人化', explanation: '这更可能是一层层传下来的压力，而不是领导针对你。' },
+        { bias: '高估了“不回消息”的后果，也高估了“直接抗议”的效果', explanation: '两个极端之间，有很多中间做法。' },
+      ],
+      parties: [
+        { name: '我', stated_position: '不想无偿加班', real_interests: '保住下班时间，同时不影响考核', hidden_costs: '睡眠、焦虑，以及每晚“要不要看手机”的心理消耗', chips: ['工作质量', '劳动法对加班的规定', '在团队里的口碑'], batna: '换一个工作节奏更健康的团队或公司', bottom_line: '不能每天晚上都被占用', blind_spots: '以为只有“全接”和“翻脸”两种选择', leverage: 35 },
+        { name: '领导', stated_position: '大家辛苦一下', real_interests: '按时交付，对上级有交代', hidden_costs: '团队疲劳、人员流失', chips: ['绩效考核权', '分配任务的权力'], batna: '把任务交给更愿意加班的同事', bottom_line: '第二天早上要有结果', blind_spots: '低估了团队的疲劳和不满', leverage: 50 },
+        { name: '同事们', stated_position: '秒回“收到”', real_interests: '不当出头鸟', hidden_costs: '和你一样累', chips: ['集体沉默或者集体表达'], batna: '', bottom_line: '', blind_spots: '以为别人都愿意', leverage: 15 },
+      ],
+      core_exchange: '领导在用“辛苦一下”的人情话，换你们没有付费的时间。',
+      misreadings: ['领导以为大家都愿意，大家以为只有自己不愿意'],
+      zopa: '紧急任务可以晚上处理，但需要明确是加班并有调休；非紧急任务第二天上班处理。',
+      stage: 'stable',
+      draft_check: {
+        risk: 'medium',
+        blowup_risk: 50,
+        their_first_reaction: '就你事多？大家都在干活，你这是当众给我难堪。',
+        defense_mechanism: '在群里被公开挑战，领导会为了权威而强硬，并且记住你。',
+        issues: ['在群里公开质疑，让领导下不来台', '用指责的语气，没有给出替代方案', '一个人出头，同事不会站在你这边'],
+        rewrite: '（私聊）领导，这个明早几点要？我今晚先把框架整理出来，细节明天一早补齐，可以吗？',
+      },
+      playbook: [
+        { level: 'gentle', name: '确认优先级', when: '下次晚上收到任务时', message: '收到。想确认一下，这个是明早九点前一定要吗？如果不是特别急，我明天一上班第一件事先做这个。', expected_reaction: '很多时候领导会说“明天上午也行”，隐性加班就少了一次。', risk: '低' },
+        { level: 'equal', name: '一对一提出调整', when: '这种情况持续了一个月', message: '领导，最近晚上的任务比较多，我想问问能不能尽量白天安排？确实紧急的我肯定配合，也想了解一下公司有没有加班调休的制度。', expected_reaction: '领导可能会解释原因，或者答应尽量调整。', risk: '中：要选领导心情好、私下的时间' },
+        { level: 'exit', name: '启动替代方案', when: '长期如此，身体吃不消', message: '（不在群里表态）记录每次晚间工作的时间和内容，同时开始看新的机会。必要时可以咨询劳动监察（12333）。', expected_reaction: '你会有更多主动权。', risk: '换工作的成本' },
+      ],
+      do_not: ['在群里公开抗议', '已读不回装没看见', '私下跟同事抱怨领导（很容易传回去）'],
+      next_step: '下次晚上收到任务时，用 gentle 那一句确认截止时间。',
+    },
+  },
+  {
+    id: 'cross-dept-blame',
+    title: '项目延期，被跨部门同事甩锅',
+    mode: 'game',
+    scenario: 'workplace',
+    situation:
+      '我负责的项目延期了，因为另一个部门的接口晚给了两周。周会上，那个部门的负责人说“是我们这边需求一直在变”，领导看了我一眼。我当时没反驳。',
+    myGuess: '他是故意整我，想让我背锅',
+    draft: '（在大群里）接口是你们晚给了两周，不是需求的问题，聊天记录都在。',
+    result: {
+      summary: '关键不是在会上吵赢，而是让领导看到事实。用时间线和记录说话，私下给领导，不在公开场合撕破脸。',
+      scenario: 'workplace',
+      subtexts: [
+        { label: '对方也在被追责，本能地先保护自己的部门', probability: 45, evidence: '周会上的甩锅往往是防御，不一定是针对你', how_to_verify: '看对方之后是否还会继续针对你' },
+        { label: '需求确实变过几次，对方把它当成了主要原因', probability: 25, evidence: '项目中需求变更很常见', how_to_verify: '翻一下需求变更记录，看变更是否影响了接口' },
+        { label: '对方认为你不会反驳，所以选择推给你', probability: 20, evidence: '你在会上没有回应', how_to_verify: '下次会议准备好事实，看对方的反应' },
+        { label: '他是故意整我', probability: 10, evidence: '没有其他证据表明有私人恩怨', how_to_verify: '回想你们之前是否有过冲突' },
+      ],
+      my_biases: [
+        { bias: '把自保当成攻击', explanation: '对方更可能是在保护自己，而不是专门要整你。' },
+        { bias: '以为当场没反驳就输了', explanation: '会议上的一句话不是定论，领导最后看的是事实和记录。' },
+      ],
+      parties: [
+        { name: '我', stated_position: '会上没反驳', real_interests: '让领导知道真实原因，不背锅', hidden_costs: '在领导心里的印象可能受损', chips: ['聊天记录、邮件、需求文档的时间线', '项目管理的记录'], batna: '在下次周会上正式说明', bottom_line: '不能让延期的责任落在自己身上', blind_spots: '认为事实不说也会自己清楚', leverage: 45 },
+        { name: '对方部门负责人', stated_position: '需求一直在变', real_interests: '保护自己部门的考核', hidden_costs: '如果被揭穿，信誉会受损', chips: ['在会上先发言的优势', '模糊的说法很难反驳'], batna: '坚持需求变更的说法', bottom_line: '不想被领导认定为主要责任人', blind_spots: '低估了你手里的记录', leverage: 30 },
+        { name: '领导', stated_position: '看了我一眼', real_interests: '项目顺利，知道问题出在哪里，避免再次发生', hidden_costs: '跨部门协调的成本', chips: ['评价权'], batna: '', bottom_line: '', blind_spots: '只听到了一面之词', leverage: 25 },
+      ],
+      core_exchange: '对方用“先说先赢”换取免责；你要用“事实和流程改进”换回领导的信任。',
+      misreadings: ['你以为领导已经认定是你的问题，领导可能只是在等你的解释'],
+      zopa: '双方共同承认延期有多个原因，并约定以后接口交付的时间节点和确认机制。',
+      stage: 'cooling',
+      draft_check: {
+        risk: 'high',
+        blowup_risk: 70,
+        their_first_reaction: '在大群里点我名？好，那就撕吧，我也有你们需求变更的记录。',
+        defense_mechanism: '公开对质会让对方必须反击，事情会升级成两个部门的对立，领导也会觉得你们都不成熟。',
+        issues: ['在公开场合指责，对方只能反击', '让领导处于必须当场裁决的尴尬位置', '你会被看成“难合作的人”'],
+        rewrite: '（私聊领导）领导，关于项目延期，我整理了一个时间线，接口和需求变更的节点都在里面，您有空的时候看一下？我也想了一个以后避免这种情况的办法。',
+      },
+      playbook: [
+        { level: 'gentle', name: '私下给领导时间线', when: '今天就做', message: '领导，关于项目延期，我整理了一份时间线，包括需求变更和接口交付的节点，您有空看一下。我也想提一个以后跨部门对接的改进建议。', expected_reaction: '领导会看到事实，并且对你主动解决问题的态度有好印象。', risk: '低' },
+        { level: 'equal', name: '和对方私下对齐', when: '需要和对方部门继续合作', message: '张哥，周会上说的延期原因，我这边看记录主要卡在接口交付上。以后我们是不是约定一下交付时间和确认方式？这样大家都好交代。', expected_reaction: '对方可能会客气地承认，并且以后更注意。', risk: '中：对方可能不承认' },
+        { level: 'exit', name: '正式说明', when: '对方继续甩锅，影响到你的考核', message: '在下一次周会上，用客观的语气展示时间线：“为了避免以后再出现类似情况，我把这次延期的时间线整理了一下……”', expected_reaction: '事实会说话，但对方可能会不高兴。', risk: '和对方部门的关系会变冷' },
+      ],
+      do_not: ['在大群里公开对质', '向其他同事抱怨对方', '以后故意卡对方的事情来报复'],
+      next_step: '今天下班前整理好时间线（附上关键聊天记录截图），明天一早私下发给领导。',
+    },
+  },
+
+  // ------------------------------------------------------------------ 校园
+  {
+    id: 'advisor-side-work',
+    title: '导师让干横向项目，毕业论文没时间做',
+    mode: 'game',
+    scenario: 'campus',
+    situation:
+      '我研二，导师接了很多横向项目，几乎每周都让我做项目报告，我的毕业论文实验一直没进展。导师说“项目做好了，毕业的事好说”。我担心最后延毕。',
+    myGuess: '导师就是把我当免费劳动力',
+    draft: '老师，我是来读研的，不是来给您打工的。',
+    result: {
+      summary: '导师掌握着你的毕业，硬碰硬不划算。你要做的是把“毕业时间表”变成和项目同等重要、而且导师认可的事情。',
+      scenario: 'campus',
+      subtexts: [
+        { label: '课题组经费靠横向项目，导师也需要人手', probability: 40, evidence: '“项目做好了”说明项目对导师很重要', how_to_verify: '了解课题组的经费来源和其他同学的情况' },
+        { label: '导师没意识到你的论文进度已经很紧张', probability: 25, evidence: '你可能没有正式汇报过论文进度', how_to_verify: '做一份论文进度汇报，看导师的反应' },
+        { label: '“毕业好说”是真心的，导师会在最后帮你', probability: 15, evidence: '一些导师确实会在答辩前给学生放行', how_to_verify: '问问已毕业的师兄师姐' },
+        { label: '导师就是把我当免费劳动力', probability: 20, evidence: '项目占用大量时间，没有提补助', how_to_verify: '问项目是否有劳务费；看导师是否尊重你的时间安排' },
+      ],
+      my_biases: [
+        { bias: '把系统压力当作个人恶意', explanation: '科研经费和人手的压力是结构性的，导师也处在这个结构里。' },
+        { bias: '以为只能顺从或对抗', explanation: '你可以谈时间分配，而不是谈“做不做”。' },
+      ],
+      parties: [
+        { name: '我', stated_position: '一直在配合做项目', real_interests: '按时毕业，有一篇像样的论文', hidden_costs: '焦虑，以及延毕的经济和时间成本', chips: ['项目里你已经很熟练，换人成本高', '学校对研究生培养的规定', '你的论文进度对导师的考核也有影响'], batna: '向学院研究生办公室反映（代价高，作为最后手段）', bottom_line: '必须按时毕业', blind_spots: '没有主动和导师谈过论文时间表', leverage: 35 },
+        { name: '导师', stated_position: '项目做好了，毕业好说', real_interests: '项目按时交付、课题组运转、学生按时毕业', hidden_costs: '学生延毕会影响自己的招生名额和考核', chips: ['毕业签字权', '推荐信', '论文指导'], batna: '找其他学生做项目', bottom_line: '项目不能出问题', blind_spots: '低估了学生论文的时间需求', leverage: 55 },
+        { name: '学院', stated_position: '按培养方案毕业', real_interests: '毕业率和培养质量', hidden_costs: '', chips: ['培养制度', '申诉渠道'], batna: '', bottom_line: '', blind_spots: '', leverage: 10 },
+      ],
+      core_exchange: '导师用“毕业好说”换你的劳动；你要把毕业从口头承诺变成双方认可的时间表。',
+      misreadings: ['导师以为你论文进度还可以，你以为导师故意不管你的论文'],
+      zopa: '每周固定两到三天做论文，项目保留在其他时间；导师认可一份论文时间表，并定期检查进度。',
+      stage: 'stable',
+      draft_check: {
+        risk: 'high',
+        blowup_risk: 80,
+        their_first_reaction: '我带你做项目也是在培养你，现在嫌我让你打工了？那毕业的事你自己看着办吧。',
+        defense_mechanism: '权威受到挑战后的强硬，导师可能会在论文和毕业上给你设卡。',
+        issues: ['直接否定导师的做法，等于宣战', '你在权力上处于弱势，对抗的代价很高', '没有提出解决方案'],
+        rewrite: '老师，我想跟您汇报一下论文的进度。现在实验部分有点落后，我担心赶不上开题后的节点。能不能每周留出两三天专门做论文？项目的部分我会安排在其他时间。',
+      },
+      playbook: [
+        { level: 'gentle', name: '用汇报代替抱怨', when: '这周就做', message: '老师，我想跟您汇报一下论文的进度。我列了一个到答辩的时间表，现在实验部分有点落后，想听听您的建议。', expected_reaction: '导师看到具体时间表，通常会意识到问题。', risk: '低' },
+        { level: 'equal', name: '提出时间分配方案', when: '导师认可论文的重要性之后', message: '老师，为了按时毕业，我想每周一到周三专门做论文，项目的事情放在周四到周六，紧急的我随时配合。您看这样可以吗？', expected_reaction: '多数导师会同意，或者在此基础上调整。', risk: '中：导师可能会讨价还价' },
+        { level: 'exit', name: '正式渠道', when: '导师长期不让你做论文，延毕风险很大', message: '（先跟已毕业的师兄师姐了解情况）保留工作记录，必要时向学院研究生办公室咨询培养规定。这是最后手段。', expected_reaction: '可能会解决问题，但和导师的关系会受影响。', risk: '高' },
+      ],
+      do_not: ['当面说导师在压榨你', '偷偷不做项目、消极怠工', '在网上匿名发帖吐槽（很容易被认出来）'],
+      next_step: '这周写一份一页纸的论文时间表，约导师当面汇报。',
+    },
+  },
+  {
+    id: 'school-rules-scholarship',
+    title: '奖学金评审，教务说材料“不符合要求”',
+    mode: 'game',
+    scenario: 'campus',
+    situation:
+      '我申请奖学金，交了竞赛获奖证书，教务处说“这个竞赛不在加分目录里”。但去年有同学拿同一个竞赛加了分。我去问，老师说“今年政策变了，以通知为准”。',
+    myGuess: '教务处在暗箱操作，给关系户留名额',
+    draft: '去年别人能加分今年就不行？你们是不是在暗箱操作？',
+    result: {
+      summary: '跟教务处打交道，规则和书面依据比情绪有用。先把“今年的通知”拿到手，再用书面方式提出复核申请。',
+      scenario: 'campus',
+      subtexts: [
+        { label: '今年的加分目录确实调整了', probability: 45, evidence: '老师明确说“政策变了，以通知为准”', how_to_verify: '索要今年的加分目录和通知原文' },
+        { label: '老师也不确定，用“以通知为准”来规避责任', probability: 25, evidence: '基层老师常常只执行，不解释', how_to_verify: '问清楚具体是哪份通知、哪一条' },
+        { label: '去年那位同学是特殊情况或者审核失误', probability: 20, evidence: '去年的情况你只是听说', how_to_verify: '问问那位同学当时提交了什么材料' },
+        { label: '在暗箱操作，给关系户留名额', probability: 10, evidence: '目前没有直接证据', how_to_verify: '查看评审结果是否公示、有没有申诉期' },
+      ],
+      my_biases: [
+        { bias: '用阴谋论解释规则变化', explanation: '规则变化很常见，先查清楚，再判断是否不公平。' },
+        { bias: '把基层老师当成规则的制定者', explanation: '窗口老师通常只负责执行，跟他们吵没有用。' },
+      ],
+      parties: [
+        { name: '我', stated_position: '应该给我加分', real_interests: '获得应得的加分和奖学金', hidden_costs: '时间和情绪', chips: ['竞赛证书', '去年的先例', '学校的公示和申诉制度'], batna: '按照申诉流程提出复核', bottom_line: '至少要拿到书面的解释', blind_spots: '没有先查清楚今年的规则', leverage: 35 },
+        { name: '教务处老师', stated_position: '以通知为准', real_interests: '按流程办事，不出错，不担责', hidden_costs: '学生投诉的压力', chips: ['规则解释权', '流程'], batna: '让你走申诉流程', bottom_line: '不在规则之外操作', blind_spots: '没有主动解释清楚规则变化', leverage: 50 },
+        { name: '评审委员会', stated_position: '按目录评审', real_interests: '评审公平，不出争议', hidden_costs: '', chips: ['最终决定权'], batna: '', bottom_line: '', blind_spots: '', leverage: 15 },
+      ],
+      core_exchange: '教务处用“规则”来降低自己的风险；你要用“书面依据和正式程序”让规则对你也有约束力。',
+      misreadings: ['你以为老师在为难你，老师以为你在无理取闹'],
+      zopa: '拿到书面的规则依据；如果规则确实改了，接受结果；如果规则没有明确排除这个竞赛，提出复核。',
+      stage: 'stable',
+      draft_check: {
+        risk: 'medium',
+        blowup_risk: 55,
+        their_first_reaction: '我只是按通知办事，你冲我嚷什么？还说暗箱操作，那你去投诉吧。',
+        defense_mechanism: '被指控后变得更加照章办事，不会再给你任何通融或解释。',
+        issues: ['指控暗箱操作没有证据，会让对方立刻防御', '窗口老师不是决策者，冲他发火解决不了问题'],
+        rewrite: '老师，能麻烦您告诉我是哪一份通知吗？我想看一下今年加分目录的具体规定，如果有疑问我再按流程申请复核。',
+      },
+      playbook: [
+        { level: 'gentle', name: '先要依据', when: '现在就做', message: '老师，能麻烦您发我一下今年的加分目录和通知吗？我想确认一下我的竞赛具体是哪一条不符合。', expected_reaction: '大多数老师会给你通知原文。', risk: '无' },
+        { level: 'equal', name: '书面复核', when: '规则表述有模糊之处，或者去年有先例', message: '（邮件）老师您好，我是某某专业的某某。关于奖学金加分，我的竞赛证书……根据今年通知第几条，我理解这个竞赛符合……，去年也有同学以同样的竞赛获得加分。恳请复核，谢谢。', expected_reaction: '书面申请会进入正式流程，更容易得到认真对待。', risk: '低' },
+        { level: 'exit', name: '接受结果，记录问题', when: '规则确实改了', message: '（不再争取这一次）把今年的规则记下来，明年提前按照目录准备材料。如果认为规则本身不合理，可以通过学生代表或学生会反映。', expected_reaction: '这次可能拿不到，但为下次做了准备。', risk: '损失这次的奖学金' },
+      ],
+      do_not: ['在窗口和老师争吵', '在网上发帖指控暗箱操作', '找关系走后门'],
+      next_step: '今天发消息给教务老师，礼貌地索要今年的加分目录和通知原文。',
+    },
+  },
+
+  // ------------------------------------------------------------------ 租房 / 消费
+  {
+    id: 'landlord-deposit',
+    title: '退租时房东要扣 3000 押金',
+    mode: 'game',
+    scenario: 'business',
+    situation:
+      '租了两年的房子退租，房东检查后说墙面有污渍、地板有划痕，要扣 3000 块押金（押金一共 4000）。入住时墙就有些旧，但我没拍照。',
+    myGuess: '房东就是想黑我的押金',
+    draft: '你这是明抢，我要去投诉你！',
+    result: {
+      summary: '押金纠纷的关键是证据和“正常损耗”这个概念。你没拍入住照片是弱点，但扣 75% 明显过高，有很大的谈判空间。',
+      scenario: 'business',
+      subtexts: [
+        { label: '先报一个高价，留出谈判空间', probability: 40, evidence: '3000 是一个很“整”的数字，像是开价而不是核算', how_to_verify: '让房东列出每项维修的具体费用' },
+        { label: '真的打算重新刷墙、修地板，想让你承担', probability: 30, evidence: '住了两年，下一位租客入住前可能需要翻新', how_to_verify: '问能不能自己找人修，或者看维修报价' },
+        { label: '知道你没有入住照片，所以有恃无恐', probability: 20, evidence: '你说入住时没拍照', how_to_verify: '翻看入住时和房东的聊天记录、合同附件' },
+        { label: '房东就是想黑我的押金', probability: 10, evidence: '目前只是开价阶段，还不能下结论', how_to_verify: '看对方是否拒绝提供任何明细' },
+      ],
+      my_biases: [
+        { bias: '没意识到“正常损耗”是你的筹码', explanation: '住两年墙面变旧、地板有轻微划痕，一般属于正常使用损耗。' },
+        { bias: '想用情绪施压', explanation: '房东手里握着钱，情绪化只会让他更坚持。' },
+      ],
+      parties: [
+        { name: '我', stated_position: '不应该扣这么多', real_interests: '拿回尽可能多的押金，尽快了结', hidden_costs: '时间成本，搬家后的奔波', chips: ['“正常损耗”的概念', '两年的租期（使用正常）', '聊天记录和合同', '12345 政务热线或消协投诉、小额诉讼'], batna: '向 12345 投诉或提起小额诉讼', bottom_line: '最多接受扣几百块的合理维修费', blind_spots: '低估了自己手里的筹码', leverage: 45 },
+        { name: '房东', stated_position: '墙面污渍、地板划痕，扣 3000', real_interests: '少花钱把房子恢复到能再出租的状态', hidden_costs: '空置期的租金损失；被投诉的麻烦', chips: ['押金在他手里', '你没有入住照片'], batna: '坚持扣款，等你放弃', bottom_line: '可能接受扣 500 到 1000', blind_spots: '以为租客怕麻烦会接受', leverage: 55 },
+      ],
+      core_exchange: '房东用“押金在我手里”换你的退让；你用“正常损耗 + 投诉的麻烦”换回大部分押金。',
+      misreadings: ['房东以为你会怕麻烦，你以为房东不会让步'],
+      zopa: '扣 300 到 1000 块，或者你自己找人做简单修补。',
+      stage: 'cooling',
+      draft_check: {
+        risk: 'medium',
+        blowup_risk: 55,
+        their_first_reaction: '还威胁我？行啊，你去投诉吧，钱在我这，看谁耗得过谁。',
+        defense_mechanism: '被威胁后会变得更强硬，选择拖延。',
+        issues: ['一上来就威胁，失去了谈判空间', '“明抢”这种指控会让对方面子过不去'],
+        rewrite: '王哥，住两年墙面变旧是正常使用的损耗。您能列一下具体要修哪些、各多少钱吗？合理的部分我认，我们商量一下。',
+      },
+      playbook: [
+        { level: 'gentle', name: '要求明细', when: '现在', message: '王哥，3000 块有点多，您能列一下具体要修哪些地方、各多少钱吗？合理的部分我认，我们商量一下。', expected_reaction: '一旦要列明细，房东很难证明 3000 都是合理的。', risk: '低' },
+        { level: 'equal', name: '提出正常损耗和替代方案', when: '房东给了明细但金额仍然偏高', message: '王哥，住了两年，墙面变旧、地板有些划痕属于正常使用损耗。地板那块我认，扣 500 可以吗？或者我自己找人来补一下墙。', expected_reaction: '多数房东会在 500 到 1000 之间接受。', risk: '低' },
+        { level: 'exit', name: '正规渠道', when: '房东拒绝协商或者拖着不退', message: '王哥，那我们就按正规流程来吧。我会先打 12345 反映一下，不行就走小额诉讼，到时候按法院认定的来。', expected_reaction: '很多房东到这一步就会让步。', risk: '需要花时间' },
+      ],
+      do_not: ['一开口就威胁投诉', '在房子里留下更多损坏来“报复”', '口头答应后没有书面确认'],
+      next_step: '今天发 gentle 那一条，同时把租房合同、入住时的聊天记录、转账记录都整理出来。',
+    },
+  },
+  {
+    id: 'merchant-refund',
+    title: '健身房私教课退费，被各种拖延',
+    mode: 'game',
+    scenario: 'business',
+    situation:
+      '我在健身房买了 20 节私教课，花了 6000，只上了 3 节就搬家了。申请退剩下的课时，销售说“要找经理”，经理说“合同写了不退，可以转让”，已经拖了一个月。',
+    myGuess: '他们就是想拖到我放弃',
+    draft: '再不退钱我就去网上曝光你们！',
+    result: {
+      summary: '健身房最怕的是监管投诉和集体维权，不怕情绪化的威胁。你要做的是把沟通变成书面、把证据整理好，然后按顺序升级渠道。',
+      scenario: 'business',
+      subtexts: [
+        { label: '拖延是标准流程，等客户自己放弃', probability: 45, evidence: '销售和经理互相推，已经一个月', how_to_verify: '书面提出退款申请，要求在限定时间内答复' },
+        { label: '合同确实写了“不退”，他们觉得有依据', probability: 25, evidence: '经理明确提到合同', how_to_verify: '仔细看合同条款，看是否属于不公平的格式条款' },
+        { label: '门店现金流紧张，没有钱退', probability: 20, evidence: '有的健身房预收款用完了', how_to_verify: '看门店是否有关店、换老板的迹象（如果有，要尽快行动）' },
+        { label: '他们就是想拖到我放弃', probability: 10, evidence: '和第一条基本一致，只是更带情绪', how_to_verify: '看书面申请后对方的反应' },
+      ],
+      my_biases: [
+        { bias: '高估了“曝光”的威慑力', explanation: '商家更在意的是监管部门的投诉记录。' },
+        { bias: '以为合同写了就一定有效', explanation: '“概不退款”这类格式条款不一定有效，可以咨询 12315。' },
+      ],
+      parties: [
+        { name: '我', stated_position: '要求退剩余课时的费用', real_interests: '尽可能多地拿回钱', hidden_costs: '时间和精力', chips: ['合同、付款记录、上课记录', '12315 投诉', '格式条款可能无效'], batna: '向 12315 投诉，必要时小额诉讼', bottom_line: '至少退大部分剩余课时费', blind_spots: '只有口头沟通，没有书面记录', leverage: 45 },
+        { name: '健身房', stated_position: '合同写了不退，可以转让', real_interests: '保住已收的钱', hidden_costs: '投诉记录会影响经营和年检', chips: ['钱在他们手里', '合同条款'], batna: '拖延', bottom_line: '可能接受扣除手续费后退款', blind_spots: '以为客户不会走正式渠道', leverage: 55 },
+      ],
+      core_exchange: '健身房在用“拖延成本”换你的放弃；你要用“投诉成本”让他们觉得退款更划算。',
+      misreadings: ['商家以为你会放弃，你以为商家不怕任何东西'],
+      zopa: '扣除 10% 到 20% 的手续费后退还剩余课时费，或者把课时转让给别人。',
+      stage: 'cooling',
+      draft_check: {
+        risk: 'medium',
+        blowup_risk: 40,
+        their_first_reaction: '又一个说要曝光的，随便吧，网上评论我们见多了。',
+        defense_mechanism: '对威胁免疫，继续拖。',
+        issues: ['威胁没有可执行的后果', '没有推进正式程序'],
+        rewrite: '经理您好，我正式申请退还剩余 17 节课的费用。请在 7 天内书面答复。如果无法协商，我会向 12315 投诉。',
+      },
+      playbook: [
+        { level: 'gentle', name: '书面申请', when: '今天', message: '经理您好，我因为搬家无法继续上课，正式申请退还剩余 17 节私教课的费用（共 5100 元）。可以扣除合理的手续费，请在 7 天内答复，谢谢。', expected_reaction: '书面申请会让对方知道你是认真的。', risk: '无' },
+        { level: 'equal', name: '提出折中方案', when: '对方回复但不愿全退', message: '我理解有一定的成本，扣 15% 的手续费，退还 4300，这周内处理，可以吗？或者您帮我把课时转让给其他会员，转让成功后退款。', expected_reaction: '很多门店会接受折中方案。', risk: '低' },
+        { level: 'exit', name: '投诉', when: '7 天内没有答复或者直接拒绝', message: '（打 12315 或者在全国 12315 平台提交投诉，附上合同、付款和上课记录）同时告知门店：“我已经向 12315 提交了投诉，编号是……”', expected_reaction: '收到投诉后，门店通常会主动联系协商。', risk: '需要等待处理' },
+      ],
+      do_not: ['只打电话不留书面记录', '在门店大吵大闹', '在网上发不实的指控'],
+      next_step: '今天用微信或邮件发 gentle 那一条书面申请，并截图保存。',
+    },
+  },
+
+  // ------------------------------------------------------------------ 婚恋
+  {
     id: 'dating-sunk-cost',
     title: '相亲半年，对方迟迟不确定关系',
     mode: 'game',
     scenario: 'dating',
     situation:
       '相亲认识半年，每周见面，花钱多是我出。问对方要不要确定关系，对方说“再相处看看”。双方父母都在催。',
+    myGuess: '她只是把我当备胎',
+    draft: '',
     result: {
       summary: '这是一场“确定性”的错位：你在用时间和投入换承诺，对方在用拖延保留选择权。继续加码只会抬高你的沉没成本，要把问题摆到桌面上。',
       scenario: 'dating',
+      subtexts: [
+        { label: '对你有好感，但心动不够，还在犹豫', probability: 35, evidence: '愿意每周见面，但不愿确定关系', how_to_verify: '问她“再看看”主要在看什么' },
+        { label: '对婚姻本身有顾虑，和你无关', probability: 25, evidence: '父母在催，她可能更有压力', how_to_verify: '聊聊她对婚姻和未来的想法' },
+        { label: '把你当备胎，同时在接触其他人', probability: 20, evidence: '半年不表态', how_to_verify: '约定一个期限，看她的反应' },
+        { label: '觉得目前这样挺舒服，没想那么多', probability: 20, evidence: '你一直在付出，她没有压力', how_to_verify: '把约会安排和花费改成轮流，看她的投入' },
+      ],
+      my_biases: [
+        { bias: '沉没成本', explanation: '投入越多越难离开，于是更想通过加码来“回本”。' },
+        { bias: '用付出换承诺', explanation: '感情里，付出多不等于能换来确定。' },
+      ],
       parties: [
         { name: '我', stated_position: '想确定关系', real_interests: '一个稳定、对等的伴侣，以及给父母一个交代', hidden_costs: '半年的时间、金钱和情绪投入；年龄焦虑', chips: ['真诚、稳定的投入', '离开的自由'], batna: '继续相亲认识其他人', bottom_line: '不能无限期地等', blind_spots: '因为投入多而越来越难离开', leverage: 50 },
         { name: '对方', stated_position: '再相处看看', real_interests: '可能还在比较，可能对你不够心动，也可能对婚姻本身有顾虑', hidden_costs: '父母催促的压力；拒绝你的愧疚感', chips: ['决定权', '你的投入惯性'], batna: '继续观望，或者接触其他人', bottom_line: '不想被逼着做决定', blind_spots: '低估了拖延对你的消耗', leverage: 50 },
@@ -93,6 +669,7 @@ export const SEED_CASES = [
       misreadings: ['你以为多付出就能换来确定，对方可能把你的付出当成“没有压力的陪伴”', '对方以为你会一直等'],
       zopa: '约定一个观察期（比如 2 个月）和明确的判断标准，到期必须给答案。',
       stage: 'stable',
+      draft_check: NO_DRAFT,
       playbook: [
         { level: 'gentle', name: '问出顾虑', when: '还没认真聊过“看看”是在看什么', message: '我挺珍惜我们这半年的。你说再相处看看，我想知道你主要在考虑哪些方面？说出来我们可以一起看看。', expected_reaction: '如果对方能说出具体顾虑，说明还有空间；如果含糊其辞，信号就比较明确了。', risk: '低' },
         { level: 'equal', name: '约定期限', when: '对方说不出具体顾虑', message: '我理解你需要时间，但我也希望关系能往前走。我们给彼此两个月，到时候都认真说一下自己的决定，好吗？另外以后约会我们轮流安排吧。', expected_reaction: '对方同意，就有了清晰的节点；如果对方反感，说明对方并不打算认真对待。', risk: '中：对方可能会觉得有压力' },
@@ -100,6 +677,55 @@ export const SEED_CASES = [
       ],
       do_not: ['用加倍付出来“感动”对方', '拿父母的催促去逼对方', '冷暴力或故意吊着对方'],
       next_step: '这周找一个轻松的时机，用 gentle 那一档问清楚对方的顾虑。',
+    },
+  },
+  {
+    id: 'dating-slow-reply',
+    title: '相亲对象回复越来越慢',
+    mode: 'decode',
+    scenario: 'dating',
+    situation:
+      '相亲认识两周，前几天每天聊到很晚，见过一次面感觉不错。这周她回复越来越慢，从几分钟变成几个小时，内容也短了，“嗯”“哈哈”“还好”。',
+    myGuess: '她对我没兴趣了',
+    draft: '你要是对我没兴趣就直说，没必要这样吊着。',
+    result: {
+      summary: '回复变慢是信号，但还不是结论。从“热聊期”回到正常节奏很常见。现在最有效的是把聊天变成一次具体的线下邀约，看行动而不是看回复速度。',
+      surface: '认识两周，见过一次面。这周回复从几分钟变成几小时，内容变短。',
+      subtexts: [
+        { label: '热聊期过去，回到正常的生活节奏', probability: 30, evidence: '前几天每天聊到很晚，这种强度很难持续', how_to_verify: '约一次具体的线下见面，看她是否答应' },
+        { label: '这周工作或生活比较忙', probability: 25, evidence: '信息不足', how_to_verify: '问一句“这周是不是挺忙的”' },
+        { label: '见面后好感下降，在慢慢降温', probability: 25, evidence: '变化发生在见面之后', how_to_verify: '看她对再次见面的态度' },
+        { label: '同时在接触其他人', probability: 10, evidence: '相亲阶段很常见', how_to_verify: '不需要验证，按自己的节奏走' },
+        { label: '对聊天这种方式本身不太热衷', probability: 10, evidence: '有些人更喜欢见面而不是打字', how_to_verify: '换成打电话或见面试试' },
+      ],
+      my_biases: [
+        { bias: '把回复速度当作好感的唯一指标', explanation: '回复速度受很多因素影响，见不见面才更说明问题。' },
+        { bias: '焦虑驱动的确认需求', explanation: '“直说”这种要求，其实是你想马上结束不确定的焦虑。' },
+      ],
+      stage: 'cooling',
+      stage_rationale: '热度确实在下降，但才两周，还在正常波动的范围内。',
+      chips: {
+        my_investment: '两周的聊天、一次见面',
+        their_constraints: '生活节奏、可能同时在比较、对是否继续还没想好',
+        cost_of_pushing: '逼对方表态，在不确定阶段大概率得到“那就算了吧”',
+        cost_of_waiting: '如果对方确实在降温，你会多花一两周时间',
+      },
+      draft_check: {
+        risk: 'high',
+        blowup_risk: 82,
+        their_first_reaction: '才认识两周，回慢一点就被说吊着……压力好大，算了吧。',
+        defense_mechanism: '被指责后顺势退出：对方会借这句话结束接触，并觉得“幸好没继续”。',
+        issues: ['在早期阶段要求对方表态，压力过大', '“吊着”是指责，会让对方觉得你情绪不稳定', '把一个还有希望的局面直接推向结束'],
+        rewrite: '这周好像挺忙的？周末有空的话，一起去吃那家你上次说想去的店吧。',
+      },
+      playbook: [
+        { level: 'gentle', name: '用具体邀约代替追问', when: '现在', message: '这周好像挺忙的吧？周六下午有空的话，一起去吃那家你上次说想去的店？', expected_reaction: '如果她答应，说明还有兴趣；如果推脱但给出替代时间，也还有空间。', risk: '低' },
+        { level: 'equal', name: '轻松地说出感受', when: '邀约被推脱，但还在聊', message: '感觉这周你挺忙的，我也不想打扰你。等你有空了我们再约，你定时间就好。', expected_reaction: '把主动权交给对方，看她会不会主动约。', risk: '低' },
+        { level: 'exit', name: '自然退出', when: '两次邀约都被推脱，而且没有给替代时间', message: '（不用发消息）停止主动找她，正常回复她的消息。把注意力放回自己的生活和其他认识新朋友的机会。', expected_reaction: '如果她有兴趣，会主动来找你。', risk: '可能错过一个只是慢热的人' },
+      ],
+      do_not: ['发“你是不是对我没兴趣”之类的质问', '刷屏发消息', '对比她回复其他人的速度（比如看朋友圈）'],
+      next_step: '今天发 gentle 那一条具体邀约，之后看行动，不看回复速度。',
+      wait_days: 0,
     },
   },
 ];

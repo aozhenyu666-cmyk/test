@@ -4,6 +4,7 @@ import { h, mount, go, emptyState, relDays, fmtDate, tempColor, toast } from '..
 import { TIERS, INTERACTION_TYPES } from '../core/models.js';
 import { loadWorld } from './world.js';
 import { loadDemoData } from '../data/demo.js';
+import { calibrationStats, needsOutcome } from '../core/calibration.js';
 
 export async function renderDashboard(root) {
   const w = await loadWorld();
@@ -35,6 +36,8 @@ export async function renderDashboard(root) {
     .slice(0, 8);
 
   const kin = w.entities.filter((e) => e.tier === 'kin');
+  const pendingCases = w.cases.filter((c) => needsOutcome(c));
+  const calib = calibrationStats(w.cases);
   const recent = [...w.interactions].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 5);
 
   mount(root,
@@ -52,6 +55,17 @@ export async function renderDashboard(root) {
           )),
         )
       : h('section.card', h('h3', '需要留意'), h('p.muted', '目前没有预警。保持节奏。')),
+
+    pendingCases.length || calib.resolved
+      ? h('button.card.calib-link', { type: 'button', onclick: () => go(pendingCases.length === 1 ? `#/case/${pendingCases[0].id}` : '#/calibration') },
+          h('div.row-between', h('b', '直觉校准'), h('span.muted', '›')),
+          pendingCases.length
+            ? h('p.small', `有 ${pendingCases.length} 条推演过去两天以上了，回来填一下真实结局。`)
+            : null,
+          calib.myHitRate != null
+            ? h('p.small.muted', `你的第一反应准确率 ${Math.round(calib.myHitRate * 100)}%（${calib.withGuess} 次）· ${calib.lesson}`)
+            : h('p.small.muted', calib.lesson))
+      : null,
 
     kin.length
       ? h('section.card.tier-kin',

@@ -12,7 +12,7 @@ import { getSettings, updateSettings } from './settings.js';
 import {
   entitiesDbBody, interactionsDbBody, casesDbBody,
   entityToProps, interactionToProps, caseToProps,
-  pageToEntity, pageToInteraction, pageToCase,
+  pageToEntity, pageToInteraction, pageToCase, CASES_V2_PROPS,
 } from '../core/notion-schema.js';
 import { newEntity, newInteraction, newCase, uid } from '../core/models.js';
 import { analyze } from '../core/scoring.js';
@@ -169,6 +169,13 @@ export async function syncAll(onProgress = () => {}) {
     ctx.entityByNotion = new Map(ents.filter((e) => e._sync?.notionId).map((e) => [e._sync.notionId, e]));
     ctx.entityById = new Map(ents.map((e) => [e.id, e]));
   };
+
+  // Databases created by v1 lack the outcome/rehearsal columns; adding columns is idempotent.
+  if (!(await db.getMeta(`notion.schema.v2.${ids.cases}`))) {
+    onProgress('更新案例库字段…');
+    await call('PATCH', `databases/${ids.cases}`, { properties: CASES_V2_PROPS });
+    await db.setMeta(`notion.schema.v2.${ids.cases}`, Date.now());
+  }
 
   await refreshEntityMaps();
   for (const store of ['entities', 'interactions', 'cases']) {

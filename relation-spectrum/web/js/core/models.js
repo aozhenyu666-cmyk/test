@@ -79,6 +79,9 @@ export const SCENARIOS = {
 
 export const CASE_MODES = { decode: '潜台词解码', game: '博弈拆解', audit: '关系审计' };
 
+export const USED_LEVELS = { gentle: '温和档', equal: '对等档', exit: '止损档', own: '我自己的说法', none: '什么都没发' };
+export const OUTCOME_RESULTS = { better: '关系变好了', same: '没什么变化', worse: '关系变差了' };
+
 export function uid(prefix = 'r') {
   const rand = Math.random().toString(36).slice(2, 8);
   return `${prefix}_${Date.now().toString(36)}${rand}`;
@@ -148,8 +151,11 @@ export function newCase(partial = {}) {
     scenario: 'other',
     entityId: null,
     situation: '',
-    draft: '',
+    draft: '', // the impulsive message I wanted to send
+    myGuess: '', // my own read before asking the AI (for calibration)
     result: null,
+    outcome: null, // filled in later: see core/calibration.js
+    rehearsals: [], // [{ at, level, transcript, debrief }]
     createdAt: now,
     updatedAt: now,
     deleted: false,

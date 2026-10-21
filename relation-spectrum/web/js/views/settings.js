@@ -9,19 +9,21 @@ import { loadDemoData } from '../data/demo.js';
 
 const MODEL_HINT = {
   anthropic: '默认 claude-opus-5-5；想省钱可填 claude-sonnet-5-5 或 claude-haiku-5-5',
-  openai: '如 gpt-4o-mini、deepseek-chat、moonshot-v1-8k',
+  openai: '如 gpt-4o-mini、deepseek-chat。浏览器直连时请选允许跨域的服务商，如 OpenRouter、DeepSeek',
 };
 
 export async function renderSettings(root) {
   const s = getSettings();
   let serverInfo = null;
   try {
-    serverInfo = await api.health();
+    serverInfo = await api.health({ force: true });
   } catch (err) {
     serverInfo = { error: err.message };
   }
 
   // ---------------- AI
+  const mode = segmented({ auto: '自动', server: '只走服务器', direct: '浏览器直连' }, s.llm.mode || 'auto', () => syncProvider());
+  const modeHint = h('span.field-hint');
   const provider = segmented({ anthropic: 'Claude', openai: 'OpenAI 兼容' }, s.llm.provider || serverInfo?.llm?.provider || 'anthropic', () => syncProvider());
   const model = h('input', { value: s.llm.model, placeholder: '留空用服务器默认值' });
   const apiKey = h('input', { type: 'password', value: s.llm.apiKey, placeholder: '留空则用服务器 .env 里的 Key', autocomplete: 'off' });
@@ -32,6 +34,11 @@ export async function renderSettings(root) {
   const effortField = field('思考深度', effort, '越高越仔细，也越慢越贵');
   const syncProvider = () => {
     const p = provider.value;
+    modeHint.textContent = {
+      auto: '电脑上的服务器开着就走服务器，连不上时自动改为浏览器直连（需要在下面填 Key）。出门用手机时选这个。',
+      server: 'Key 可以只写在电脑的 .env 里，手机上不存 Key。服务器没开时 AI 功能不可用。',
+      direct: '不经过电脑，手机浏览器直接调用大模型。Key 保存在这台设备上，只在自己的手机上这样用。',
+    }[mode.value];
     modelHint.textContent = MODEL_HINT[p];
     baseUrlField.hidden = p !== 'openai';
     effortField.hidden = p !== 'anthropic';
@@ -39,7 +46,7 @@ export async function renderSettings(root) {
   syncProvider();
 
   const saveAi = () => {
-    updateSettings({ llm: { provider: provider.value, model: model.value.trim(), apiKey: apiKey.value.trim(), baseUrl: baseUrl.value.trim(), effort: effort.value } });
+    updateSettings({ llm: { mode: mode.value, provider: provider.value, model: model.value.trim(), apiKey: apiKey.value.trim(), baseUrl: baseUrl.value.trim(), effort: effort.value } });
     toast('已保存', 'good');
   };
 
@@ -48,8 +55,8 @@ export async function renderSettings(root) {
     ev.target.disabled = true;
     ev.target.textContent = '测试中…';
     try {
-      const { model: m } = await api.analyze('decode', { situation: '测试：朋友说“最近忙，改天吧”。请用最简短的方式完成分析。' });
-      toast(`连接成功：${m}`, 'good');
+      const { model: m, via } = await api.analyze('parse', { text: '我：周末一起吃饭吗\nTA：最近忙，改天吧' });
+      toast(`连接成功：${m}（${via === 'direct' ? '浏览器直连' : '经过服务器'}）`, 'good');
     } catch (err) {
       toast(err.message, 'danger');
     } finally {
@@ -157,7 +164,7 @@ export async function renderSettings(root) {
   });
 
   const serverLine = serverInfo?.error
-    ? h('p.error', `连不上本地服务器：${serverInfo.error}。AI 和 Notion 功能需要先运行 npm start。`)
+    ? h('p.small.warn-text', '现在连不上电脑上的服务器。AI 可以用“自动”或“浏览器直连”继续用；Notion 同步要等连上服务器。数据都保存在这台设备上。')
     : h('p.small.muted', `服务器默认：${serverInfo.llm.provider} / ${serverInfo.llm.model}${serverInfo.llm.hasKey ? '（已配置 Key）' : '（未配置 Key）'} · Notion ${serverInfo.notion.hasToken ? '已配置' : '未配置'}`);
 
   mount(root,
@@ -166,6 +173,7 @@ export async function renderSettings(root) {
     h('section.card.form',
       h('h3', 'AI 模型'),
       serverLine,
+      h('div.field', h('span.field-label', '连接方式'), mode.el, modeHint),
       h('div.field', h('span.field-label', '服务商'), provider.el),
       h('label.field', h('span.field-label', '模型'), model, modelHint),
       field('API Key', apiKey, 'Key 只保存在这台设备上，通过你自己的本地服务器转发'),

@@ -5,6 +5,7 @@ import { INTERACTION_TYPES, INITIATORS, INVITE_STATUS, PROMISE_STATUS, TIERS, ne
 import { previewDelta } from '../core/scoring.js';
 import * as db from '../store/db.js';
 import { loadWorld } from './world.js';
+import { importBox } from './import-box.js';
 
 const QUICK = [
   { label: '陪聊/通话', type: 'chat', give: { minutes: 60, emotion: 3 } },
@@ -90,28 +91,70 @@ export async function renderLog(root, params) {
   };
   drawFlows();
 
+  /** Copy fields into the record and the form controls. */
+  function applyFields(f) {
+    it.type = f.type || it.type;
+    if (f.title != null) it.title = f.title;
+    if (f.note != null) it.note = f.note;
+    if (f.date) it.date = f.date;
+    it.give = { money: 0, minutes: 0, emotion: 0, ...(f.give || {}) };
+    it.get = { money: 0, minutes: 0, emotion: 0, ...(f.get || {}) };
+    it.initiator = f.initiator || 'me';
+    it.invite = f.invite ? { ...f.invite } : null;
+    it.promise = f.promise ? { ...f.promise } : null;
+    it.feeling = Math.max(-2, Math.min(2, Math.round(f.feeling ?? 0)));
+    typeSel.value = it.type;
+    title.value = it.title;
+    note.value = it.note || '';
+    date.value = it.date;
+    initiator.value = it.initiator;
+    inviteOn.checked = Boolean(it.invite);
+    inviteBox.hidden = !it.invite;
+    if (it.invite) { inviteBy.value = it.invite.by; inviteStatus.value = it.invite.status; }
+    promiseOn.checked = Boolean(it.promise);
+    promiseBox.hidden = !it.promise;
+    if (it.promise) { promiseBy.value = it.promise.by; promiseStatus.value = it.promise.status; promiseContent.value = it.promise.content || ''; }
+    feeling.value = String(it.feeling);
+    drawFlows();
+    refresh();
+  }
+
   const quick = h('div.chips-row', QUICK.map((q) =>
     h('button.chip', {
       type: 'button',
-      onclick: () => {
-        it.type = q.type;
-        it.title = it.title || q.label;
-        it.give = { money: 0, minutes: 0, emotion: 0, ...(q.give || {}) };
-        it.get = { money: 0, minutes: 0, emotion: 0, ...(q.get || {}) };
-        it.initiator = q.initiator || 'me';
-        it.invite = q.invite ? { ...q.invite } : null;
-        it.feeling = q.feeling ?? 0;
-        typeSel.value = it.type;
-        title.value = it.title;
-        initiator.value = it.initiator;
-        inviteOn.checked = Boolean(it.invite);
-        inviteBox.hidden = !it.invite;
-        if (it.invite) { inviteBy.value = it.invite.by; inviteStatus.value = it.invite.status; }
-        feeling.value = String(it.feeling);
-        drawFlows();
-        refresh();
-      },
+      onclick: () => applyFields({ ...q, title: it.title || q.label, promise: null }),
     }, q.label)));
+
+  const clampFlow = (f) => ({
+    money: Math.max(0, Number(f?.money) || 0),
+    minutes: Math.max(0, Math.round(Number(f?.minutes) || 0)),
+    emotion: Math.max(0, Math.min(5, Math.round(Number(f?.emotion) || 0))),
+  });
+  const importer = importBox({
+    getEntityName: () => w.entityById.get(it.entityId)?.name || '',
+    onParsed: (p, raw) => {
+      // Pick the entity the chat mentions, if we know them.
+      const hint = (p.person_hint || '').trim();
+      const match = hint && w.entities.find((e) => e.name.includes(hint) || hint.includes(e.name.replace(/（.*?）/g, '')));
+      if (match) {
+        it.entityId = match.id;
+        entitySel.value = match.id;
+      }
+      const days = Math.max(0, Math.min(365, Number(p.days_ago) || 0));
+      applyFields({
+        type: INTERACTION_TYPES[p.type] ? p.type : 'other',
+        title: p.summary || '',
+        note: raw.length > 400 ? raw.slice(0, 400) + '…' : raw,
+        date: todayISO(new Date(Date.now() - days * 86400000)),
+        give: clampFlow(p.give),
+        get: clampFlow(p.get),
+        initiator: ['me', 'them', 'none'].includes(p.initiator) ? p.initiator : 'me',
+        invite: p.invite?.present ? { by: p.invite.by, status: INVITE_STATUS[p.invite.status] ? p.invite.status : 'no_reply' } : null,
+        promise: p.promise?.present ? { by: p.promise.by, status: PROMISE_STATUS[p.promise.status] ? p.promise.status : 'pending', content: p.promise.content || '' } : null,
+        feeling: p.feeling,
+      });
+    },
+  });
 
   // ---- live preview
   const preview = h('section.card.preview');
@@ -153,6 +196,7 @@ export async function renderLog(root, params) {
 
   mount(root,
     h('header.page-head', h('h1', existing ? '编辑记录' : '记一笔'), h('p.muted', '记下发生了什么。不用精确，大概就行。')),
+    existing ? null : importer,
     existing ? null : h('section.card', h('h3', '快捷模板'), quick),
     h('form.card.form', { onsubmit: save },
       field('和谁', entitySel),

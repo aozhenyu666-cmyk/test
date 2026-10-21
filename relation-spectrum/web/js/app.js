@@ -5,7 +5,7 @@ import { renderDashboard } from './views/dashboard.js';
 import { renderPeople, renderPerson, renderPersonEdit } from './views/people.js';
 import { renderLog } from './views/log.js';
 import { renderSandbox } from './views/sandbox.js';
-import { renderCases, renderCase } from './views/cases.js';
+import { renderCases, renderCase, renderCalibration } from './views/cases.js';
 import { renderSettings } from './views/settings.js';
 
 const NAV = [
@@ -13,7 +13,7 @@ const NAV = [
   { hash: '#/people', label: '关系', icon: '◐', match: (p) => p.startsWith('/people') || p.startsWith('/person') },
   { hash: '#/log', label: '记一笔', icon: '＋', match: (p) => p.startsWith('/log'), primary: true },
   { hash: '#/sandbox', label: '沙盘', icon: '◇', match: (p) => p.startsWith('/sandbox') },
-  { hash: '#/cases', label: '更多', icon: '≡', match: (p) => p.startsWith('/case') || p.startsWith('/settings') },
+  { hash: '#/cases', label: '更多', icon: '≡', match: (p) => p.startsWith('/case') || p.startsWith('/settings') || p.startsWith('/calibration') },
 ];
 
 const routes = [
@@ -26,6 +26,7 @@ const routes = [
   [/^\/sandbox$/, (root, m, q) => renderSandbox(root, q)],
   [/^\/cases$/, (root, m, q) => renderCasesWithSettingsLink(root, q)],
   [/^\/case\/(.+)$/, (root, m) => renderCase(root, decodeURIComponent(m[1]))],
+  [/^\/calibration$/, (root) => renderCalibration(root)],
   [/^\/settings$/, (root) => renderSettings(root)],
 ];
 
@@ -70,3 +71,8 @@ async function route() {
 
 window.addEventListener('hashchange', route);
 route();
+
+// PWA: cache the app shell so it opens offline and can be added to the home screen.
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname))) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}

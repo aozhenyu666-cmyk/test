@@ -1,5 +1,5 @@
-// Per-device settings in localStorage. API keys entered here stay on this device and are
-// sent only to your own local server, which forwards them to the provider.
+// Per-device settings in localStorage. API keys entered here stay on this device. They go
+// to your own local server, or, in direct mode, straight from this browser to the provider.
 
 import { DEFAULT_PREFS } from '../core/models.js';
 
@@ -7,7 +7,7 @@ const KEY = 'rs.settings.v1';
 
 const DEFAULTS = {
   accessToken: '',
-  llm: { provider: '', model: '', apiKey: '', baseUrl: '', effort: '' },
+  llm: { mode: 'auto', provider: '', model: '', apiKey: '', baseUrl: '', effort: '' },
   notion: { token: '', parentPageId: '', entitiesDb: '', interactionsDb: '', casesDb: '', autoSync: false },
   prefs: { ...DEFAULT_PREFS },
 };

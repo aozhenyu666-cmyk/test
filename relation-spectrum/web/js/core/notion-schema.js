@@ -103,6 +103,9 @@ export const P = {
   summary: '结论',
   playbook: '三档话术',
   resultJson: '完整结果JSON',
+  myGuess: '我当时的猜测',
+  outcomeText: '真实结局',
+  extraJson: '回填与预演JSON',
   createdAt: '创建时间',
 };
 
@@ -169,6 +172,13 @@ export function interactionsDbBody(parentPageId, entitiesDbId) {
   };
 }
 
+/** Properties added in v2. Also PATCHed onto databases created by v1. */
+export const CASES_V2_PROPS = {
+  [P.myGuess]: { rich_text: {} },
+  [P.outcomeText]: { rich_text: {} },
+  [P.extraJson]: { rich_text: {} },
+};
+
 export function casesDbBody(parentPageId, entitiesDbId) {
   return {
     parent: { type: 'page_id', page_id: parentPageId },
@@ -183,6 +193,7 @@ export function casesDbBody(parentPageId, entitiesDbId) {
       [P.summary]: { rich_text: {} },
       [P.playbook]: { rich_text: {} },
       [P.resultJson]: { rich_text: {} },
+      ...CASES_V2_PROPS,
       [P.createdAt]: { date: {} },
       [P.localId]: { rich_text: {} },
       [P.updatedAt]: { date: {} },
@@ -275,6 +286,9 @@ export function caseToProps(c, entityPageId) {
     [P.summary]: rt(r.summary || r.verdict || ''),
     [P.playbook]: rt(playbook),
     [P.resultJson]: rt(c.result ? JSON.stringify(c.result) : ''),
+    [P.myGuess]: rt(c.myGuess),
+    [P.outcomeText]: rt(outcomeText(c.outcome)),
+    [P.extraJson]: rt(c.outcome || c.rehearsals?.length ? JSON.stringify({ outcome: c.outcome || null, rehearsals: c.rehearsals || [] }) : ''),
     [P.createdAt]: tsDate(c.createdAt),
     [P.localId]: rt(c.id),
     [P.updatedAt]: tsDate(c.updatedAt),
@@ -331,15 +345,26 @@ export function pageToInteraction(page) {
   };
 }
 
+function outcomeText(o) {
+  if (!o) return '';
+  const used = { gentle: '温和档', equal: '对等档', exit: '止损档', own: '自己的说法', none: '没发' }[o.usedLevel] || '';
+  const res = { better: '关系变好', same: '没变化', worse: '关系变差' }[o.result] || '';
+  return [used && `用了${used}`, o.reaction && `对方：${o.reaction}`, o.truth?.label && `真相：${o.truth.label}`, res].filter(Boolean).join('；');
+}
+
+function readJson(prop) {
+  try {
+    const raw = readText(prop);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function pageToCase(page) {
   const p = page.properties || {};
-  let result = null;
-  try {
-    const raw = readText(p[P.resultJson]);
-    result = raw ? JSON.parse(raw) : null;
-  } catch {
-    result = null;
-  }
+  const result = readJson(p[P.resultJson]);
+  const extra = readJson(p[P.extraJson]) || {};
   return {
     id: readText(p[P.localId]) || null,
     entityPageId: readRel(p[P.entity]),
@@ -348,7 +373,10 @@ export function pageToCase(page) {
     scenario: keyOfLabel(SCENARIOS, readSel(p[P.scenario]), 'other'),
     situation: readText(p[P.situation]),
     draft: readText(p[P.draft]),
+    myGuess: readText(p[P.myGuess]),
     result,
+    outcome: extra.outcome || null,
+    rehearsals: Array.isArray(extra.rehearsals) ? extra.rehearsals : [],
   };
 }
 

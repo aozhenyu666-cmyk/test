@@ -135,7 +135,7 @@ test('user message includes profile, last 10 records and the draft', () => {
   assert.ok(!msg.includes('事件3 '), 'older records are dropped');
   assert.match(msg, /事件13/);
   assert.match(msg, /你爱咋咋吧/);
-  assert.match(msg, /冷静阀/);
+  assert.match(msg, /冲动原话破坏力测试/);
 });
 
 test('parseJson tolerates code fences', () => {
