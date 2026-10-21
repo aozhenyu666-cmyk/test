@@ -137,6 +137,22 @@ object BrainHost {
         return out
     }
 
+    // ---------------------------------------------------------------- 体系图 / 权柄
+
+    /** 贴进来的材料拆成论断挂进体系图。返回新增几条；模型不可用时大脑给 0。 */
+    suspend fun ingest(text: String, source: String, topicName: String): Int =
+        io("ingest", { 0 }) { brain.ingest(text, source, topicName, System.currentTimeMillis()) }
+
+    /** 切换当前主题（没有就建一个）。 */
+    suspend fun setTopic(name: String) {
+        io("setTopic", {}) { brain.setTopic(name, System.currentTimeMillis()) }
+    }
+
+    /** 用户设的权柄上限：只影响墨灵多主动，不绕过总控的确认。 */
+    suspend fun setUserMax(tier: Tier) {
+        io("setUserMax", {}) { brain.setUserMax(tier) }
+    }
+
     // ---------------------------------------------------------------- 工具
 
     /** 所有 brain 调用都从这里走：IO 线程、失败记日志给兜底、调完把状态推给界面。 */

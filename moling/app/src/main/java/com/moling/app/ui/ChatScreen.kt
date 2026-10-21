@@ -276,19 +276,43 @@ private fun Bubble(who: String, text: String) {
     }
 }
 
-/** 开场白对话框：长文可滚动，“复制”只把字放进剪贴板，不会自己跳去别的 App。 */
+/** 开场白对话框：长文可滚动；“复制”放进剪贴板；装了演员的话还能直接打开它的 App。 */
 @Composable
 private fun OpeningDialog(opening: Opening, clip: ClipboardManager, onDismiss: () -> Unit) {
     val context = LocalContext.current
+    // 演员的包名可能是空的（NONE），手机也可能没装：取不到启动入口就不显示“打开”，只留复制。
+    val launchIntent = remember(opening.actor, context) {
+        val pkg = opening.actor.pkg
+        if (pkg.isBlank()) null
+        else runCatching { context.packageManager.getLaunchIntentForPackage(pkg) }.getOrNull()
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("开场白") },
         text = {
-            Column(
-                modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text(opening.text, style = MaterialTheme.typography.bodyMedium)
+            Column {
+                Column(
+                    modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(opening.text, style = MaterialTheme.typography.bodyMedium)
+                }
+                launchIntent?.let { intent ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        TextButton(onClick = {
+                            // 打开失败（被系统拦、演员被卸了）只提示，不关对话框，方便接着复制
+                            val ok = runCatching { context.startActivity(intent) }.isSuccess
+                            if (ok) {
+                                onDismiss()
+                            } else {
+                                Toast.makeText(context.applicationContext, "没打开，复制开场白去粘贴吧", Toast.LENGTH_LONG).show()
+                            }
+                        }) { Text("打开 ${opening.actor.label}") }
+                    }
+                }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("知道了") } },

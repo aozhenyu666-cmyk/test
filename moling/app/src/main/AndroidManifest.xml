@@ -11,6 +11,9 @@
         </intent>
         <!-- Android 11 起，不在这里声明就看不见总控，也就读不到它的状态 -->
         <package android:name="com.zongkong.app" />
+        <!-- “去聊”时要打开演员：不声明就看不见/打不开 Gemini 和 ChatGPT -->
+        <package android:name="com.google.android.apps.bard" />
+        <package android:name="com.openai.chatgpt" />
     </queries>
 
     <application

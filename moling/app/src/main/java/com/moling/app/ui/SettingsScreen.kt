@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -215,6 +216,25 @@ fun SettingsScreen(onDone: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
             )
 
+            Text("权柄上限", style = MaterialTheme.typography.titleSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Tier.entries.forEach { tier ->
+                    FilterChip(
+                        selected = brainState.userMax == tier,
+                        onClick = {
+                            // 上限只影响她多主动地提建议，不会跳过“你点好”这一步。
+                            scope.launch { runCatching { BrainHost.setUserMax(tier) } }
+                        },
+                        label = { Text(tierShort(tier)) },
+                    )
+                }
+            }
+            Text(
+                "她实际能做的 = min(这个上限, 挣到的等级)。提议永远要你点「好」；放宽只能向总控申请、等 24 小时。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
             Text("她能做什么（只读）", style = MaterialTheme.typography.titleSmall)
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant,
@@ -222,7 +242,7 @@ fun SettingsScreen(onDone: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
-                    Charter.describe(Tier.PLANNER),
+                    Charter.describe(BrainHost.tier()),
                     modifier = Modifier.padding(12.dp),
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -244,6 +264,13 @@ fun SettingsScreen(onDone: () -> Unit) {
             ) { Text("保存") }
         }
     }
+}
+
+/** 上限三档的短名字，FilterChip 里放不下整句。 */
+private fun tierShort(t: Tier): String = when (t) {
+    Tier.ADVISOR -> "参谋"
+    Tier.PLANNER -> "规划者"
+    Tier.STEWARD -> "管家"
 }
 
 /**

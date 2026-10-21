@@ -235,3 +235,34 @@
   `https://github.com/aozhenyu666-cmyk/test/releases/download/moling-latest/moling.apk`
 - **本机环境注记**（和第一批一样，与代码无关）：Windows 中文用户名路径会让 Gradle 测试 worker 的 classpath `@argfile` 读不到（`ClassNotFoundException: GradleWorkerMain`）；同一份代码放 ASCII 路径下 48/48 通过。CI 在 Linux 上不受影响。
 - **没验证到的**：这里没有真机/模拟器。**总控联动（通知 → 点「执行」）、语音输入、朗读、覆盖安装保留数据**只在代码层面保证（失败只提示、不崩），需要用户按上面的验收步骤在手机上试。
+---
+
+## M7 · 收尾：体系页、打开演员、权柄上限
+
+> 说明：仓库里没有第三批施工文档（`DEEPSEEK.md` 只到第二批，`DEEPSEEK-2.md` 到 M6 为止）。这一节是“按文档做完”的收尾：只做
+> `DEEPSEEK.md` 的模块速查 + `partner-blueprint/README.md`（第 3、5 节）里已经写明、而 App 还空着的三块——「体系」页（第三个标签）、
+> “去聊”时打开演员、设置里的权柄上限。**没有加文档外的新功能**；正式 M7 文档来了再对齐，`ui/AtlasScreen.kt` 的文件头也写了这句。
+
+**做了什么**
+- **体系页**（`ui/AtlasScreen.kt`）：空态说明；主题（横向 FilterChip，点一下 `brain.setTopic`）；当前主题的论断按 事实 / 判断 / 假设 / 问题 / 方法 分组（每条带把握、已验证、来源）；关系（只显示两端都在当前主题里的）；**缺口 · 下次该聊**（`AtlasOps.gaps` 的 why + question）；贴材料（`brain.ingest`，返回新增几条并 Toast，模型不可用时提示「没拆出新论断」）。
+- **`BrainHost` 补三个包装**：`ingest(text, source, topicName): Int`、`setTopic(name)`、`setUserMax(tier)`，和其他方法一样走私有 `io(...)`（IO 线程、异常兜底、调完把 `brain.state()` 推给界面）。
+- **打开演员**：`OpeningDialog` 里用 `getLaunchIntentForPackage(actor.pkg)` 查演员装没装，装了才显示「打开 Gemini Live / ChatGPT」；打开成功就关对话框，失败只提示、不关（开场白不能丢）。`AndroidManifest.xml` 加 `com.google.android.apps.bard` / `com.openai.chatgpt` 的 `<queries>`——只是包可见性声明，**不是权限**。
+- **设置页权柄上限**：「参谋 / 规划者 / 管家」三档（调 `brain.setUserMax`），下面展示按实际等级算的 `Charter.describe(brain.tier())`（只读）。
+
+**为什么这么做**
+- 三个标签里只有「体系」还是空页，而 core 的 `Atlas` / `AtlasOps` 早就写好了（拆论断、合并、找缺口、下一次该聊的问题），不接上就缺一块。
+- 「去聊」之前只能复制开场白，用户还得自己找 App；蓝图 P4 说至少要能一步打开演员——不需要新权限，只加 `<queries>`。
+- 权柄上限在 core 里有 `setUserMax` / `Charter.effective`，蓝图也说“数字由我定”，但 App 一直没有入口；补上之后“参谋 / 规划者 / 管家”的差别才看得见。
+- 范围克制：体系总结（synthesis）、删除 / 编辑 / 验证论断都没做——前两项 core 没暴露对应入口（改 core 是禁止的），要么等正式文档，要么留给 Claude 补大脑。
+
+**没做什么**
+- 小窗（悬浮、开场白交接）、接力棒页、后台常驻心跳、读前台应用后的「水流偏了」——这些需要新权限 / 前台服务或正式施工文档，这一批不做。
+- 体系总结、删除 / 编辑 / 验证论断——core 没有暴露入口。
+- 没在真机上验收（这里没有设备 / 模拟器）。
+
+**用户在手机上怎么验收（≤5 步）**
+1. 设置页把权柄上限切到「参谋」→ 杀掉 App 重开，选择还在，下面的“她能做什么”跟着变。
+2. 「体系」页贴一段 GPT / Gemini 的结论 + 主题名 → 点「收进体系图」→ 按钮变「在拆…」→ Toast「收进 N 条」，论断按类型出现（没密钥时提示没拆出新论断，界面不卡）。
+3. 有缺口时出现【待验证】等 + 加粗的「下一问」；点另一个主题，下面的论断 / 关系 / 缺口跟着切。
+4. 对话里让她给一条「去聊」提议并点「好」→ 弹出开场白；装了 Gemini 的话点「打开 Gemini Live」直接跳过去。
+5. 没装演员时对话框只有「复制」「知道了」，点了不崩、不卡。
