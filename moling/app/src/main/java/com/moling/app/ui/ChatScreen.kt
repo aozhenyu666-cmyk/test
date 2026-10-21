@@ -44,6 +44,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moling.app.BrainHost
 import com.moling.core.Proposal
+import com.moling.core.talk.TalkMode
+import androidx.compose.foundation.horizontalScroll
 import com.moling.core.mind.Opening
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +75,9 @@ fun ChatScreen() {
     }
     var sending by remember { mutableStateOf(false) }
     var listening by remember { mutableStateOf(false) }
+    // 模式条：null = 让她按局面判断（显示她这次用的是哪种）；点了某个模式就按它说，一小时内有效
+    var mode by remember { mutableStateOf<TalkMode?>(null) }
+    var usedMode by remember { mutableStateOf<TalkMode?>(null) }
     // 去聊的开场白：点“好”之后弹出来，供用户复制
     var opening by remember { mutableStateOf<Opening?>(null) }
     // 正在执行的提议 id：本地挡一下连点（真正防重复在 Brain 里，状态一变就点不动了）
@@ -142,12 +147,13 @@ fun ChatScreen() {
         sending = true
         talkScope.launch {
             // 大脑自己兜底（模型 / 总控失败都有本地回复）；再兜一层，界面不会永远停在“在想”
-            val res = runCatching { BrainHost.chat(text, System.currentTimeMillis()) }.getOrNull()
+            val res = runCatching { BrainHost.chat(text, System.currentTimeMillis(), mode) }.getOrNull()
             sending = false
             if (res == null) {
                 toast("这条没接上，再说一次")
                 return@launch
             }
+            usedMode = res.mode
             if (BrainHost.settingsStore.load().speak) Speaker.speak(res.text)
         }
     }
@@ -198,6 +204,44 @@ fun ChatScreen() {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 20.dp, bottom = 2.dp),
             )
+        }
+
+        // 模式条 + 两个特别的按钮（v4）：反驳我、疯想—冷判
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val auto = mode == null
+            TextButton(onClick = { mode = null }) {
+                Text(if (auto) "【自动${usedMode?.let { "·" + it.label } ?: ""}】" else "自动", style = MaterialTheme.typography.labelMedium)
+            }
+            TalkMode.entries.forEach { m ->
+                TextButton(onClick = { mode = if (mode == m) null else m }) {
+                    Text(if (mode == m) "【${m.label}】" else m.label, style = MaterialTheme.typography.labelMedium)
+                }
+            }
+            TextButton(enabled = !sending, onClick = {
+                sending = true
+                talkScope.launch {
+                    val r = runCatching { BrainHost.devil(System.currentTimeMillis()) }.getOrNull()
+                    sending = false
+                    if (r == null) toast("没接上，再试一次")
+                }
+            }) { Text("反驳我", style = MaterialTheme.typography.labelMedium) }
+            TextButton(enabled = !sending, onClick = {
+                val topic = input.trim().ifBlank { state.talk.lastOrNull { it.who == "他" }?.text.orEmpty() }
+                if (topic.isBlank()) {
+                    toast("先在输入框写想疯想的题目")
+                } else {
+                    input = ""
+                    sending = true
+                    talkScope.launch {
+                        val r = runCatching { BrainHost.wild(topic, System.currentTimeMillis()) }.getOrNull()
+                        sending = false
+                        if (r == null) toast("没接上，再试一次")
+                    }
+                }
+            }) { Text("疯想", style = MaterialTheme.typography.labelMedium) }
         }
 
         Row(

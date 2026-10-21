@@ -163,6 +163,8 @@ object Presence {
         val q = question.value ?: return
         question.value = null
         count(context, choice)
+        // 他回应了：这次偏离的升级阶梯停下
+        BrainHost.answeredLater()
         val now = System.currentTimeMillis()
         when (choice) {
             "A" -> {

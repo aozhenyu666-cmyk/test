@@ -58,4 +58,24 @@ object Usage {
         val minutes = ((now - since).coerceAtLeast(0) / 60_000L).toInt()
         return Foreground(current, label, minutes)
     }
+
+    /**
+     * 亮屏 / 熄屏事件（推算作息用，v4）：系统 Android 9 起才记这两种事件，更早的系统返回空。
+     * 没权限也返回空，大脑就不推算（不瞎猜）。
+     */
+    fun screenEvents(context: Context, from: Long, to: Long): List<com.moling.core.rhythm.ScreenEvent> {
+        if (Build.VERSION.SDK_INT < 28 || !allowed(context)) return emptyList()
+        val usm = context.getSystemService(UsageStatsManager::class.java) ?: return emptyList()
+        val events = runCatching { usm.queryEvents(from, to) }.getOrNull() ?: return emptyList()
+        val e = UsageEvents.Event()
+        val out = mutableListOf<com.moling.core.rhythm.ScreenEvent>()
+        while (events.hasNextEvent()) {
+            events.getNextEvent(e)
+            when (e.eventType) {
+                UsageEvents.Event.SCREEN_INTERACTIVE -> out += com.moling.core.rhythm.ScreenEvent(e.timeStamp, true)
+                UsageEvents.Event.SCREEN_NON_INTERACTIVE -> out += com.moling.core.rhythm.ScreenEvent(e.timeStamp, false)
+            }
+        }
+        return out
+    }
 }

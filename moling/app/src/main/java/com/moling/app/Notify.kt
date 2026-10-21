@@ -88,6 +88,7 @@ object Notify {
         "zk_result" -> "总控那边"
         "guard" -> "总控"
         "drift" -> "水流偏了"
+        "wake" -> "墨灵"
         else -> "墨灵"
     }
 

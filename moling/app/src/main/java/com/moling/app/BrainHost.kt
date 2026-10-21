@@ -33,6 +33,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -131,13 +132,47 @@ object BrainHost {
 
     /** 划掉一条提醒。 */
     fun dismissNotice(at: Long) {
+        if (_notices.value.any { it.at == at && it.kind == "drift" }) answeredLater()
         _notices.value = _notices.value.filterNot { it.at == at }
     }
 
     // ---------------------------------------------------------------- 对话
 
-    suspend fun chat(text: String, now: Long): ChatResult =
-        io("chat", { ChatResult("刚才没接上，再说一次", emptyList(), false) }) { brain.chat(text, now) }
+    /** [mode] = 他在模式条上选的（null = 让她按局面判断，或沿用他一小时内选过的）。 */
+    suspend fun chat(text: String, now: Long, mode: com.moling.core.talk.TalkMode? = null): ChatResult =
+        io("chat", { ChatResult("刚才没接上，再说一次", emptyList(), false) }) { brain.chat(text, now, mode) }
+
+    /** “反驳我”：挑他上一句判断的漏洞。 */
+    suspend fun devil(now: Long): ChatResult =
+        io("devil", { ChatResult("刚才没接上，再试一次", emptyList(), false) }) { brain.devil(now) }
+
+    /** “疯想—冷判”：给 [topic] 五条离谱路线，挑一个小实验（提议）。 */
+    suspend fun wild(topic: String, now: Long): ChatResult =
+        io("wild", { ChatResult("刚才没接上，再试一次", emptyList(), false) }) { brain.wild(topic, now) }
+
+    /** 四个参谋（大判断前）。 */
+    suspend fun council(question: String): com.moling.core.review.Council? =
+        io<com.moling.core.review.Council?>("council", { null }) { brain.council(question, System.currentTimeMillis()) }
+
+    /** 他自己改“对你的了解”。 */
+    suspend fun editAbout(text: String) {
+        io("editAbout", {}) { brain.editAbout(text, System.currentTimeMillis()) }
+    }
+
+    /** 现在出一份周报。 */
+    suspend fun week(): com.moling.core.review.WeekReport? =
+        io<com.moling.core.review.WeekReport?>("week", { null }) { brain.week(System.currentTimeMillis()) }
+
+    suspend fun cancelWake(id: String) {
+        io("cancelWake", {}) { brain.cancelWake(id) }
+    }
+
+    /** 他回应了这次偏离（划掉提醒、在小窗里选了什么）：这次偏离不再升级。不等结果。 */
+    fun answeredLater() {
+        answerScope.launch { runCatching { io("answered", {}) { brain.answered() } } }
+    }
+
+    private val answerScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
 
     /** 用户点了提议上的“好”。 */
     suspend fun accept(id: String, now: Long): Outcome =
@@ -190,6 +225,8 @@ object BrainHost {
         lastAutoMinute = minute
         try {
             if (settings.autoPlan() && interactive() && brain.needsPlan(now)) {
+                // 先用昨晚的亮屏 / 熄屏推算睡了多久（没权限就跳过），睡得少主河道会排短一点
+                runCatching { brain.sleep(Usage.screenEvents(ctx, now - 36 * 3_600_000L, now), now) }
                 val plan = runCatching { brain.planDay(now) }.getOrNull()
                 if (plan != null) {
                     refreshState()

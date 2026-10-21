@@ -85,6 +85,7 @@ fun SettingsScreen(onDone: () -> Unit) {
     val brainState by BrainHost.state.collectAsState()
     var zkBusy by remember { mutableStateOf(false) }
     var debugOpen by remember { mutableStateOf(false) }
+    var aboutOpen by remember { mutableStateOf(false) }
     var backgroundOn by remember { mutableStateOf(store.backgroundHeart()) }
     var autoPlanOn by remember { mutableStateOf(store.autoPlan()) }
     // 看前台应用：权限在系统设置里，回来时刷新一下状态。
@@ -108,6 +109,10 @@ fun SettingsScreen(onDone: () -> Unit) {
     // 调试页占满全屏，自己带返回。
     if (debugOpen) {
         DebugScreen(onDone = { debugOpen = false })
+        return
+    }
+    if (aboutOpen) {
+        AboutScreen(onDone = { aboutOpen = false })
         return
     }
 
@@ -459,6 +464,10 @@ fun SettingsScreen(onDone: () -> Unit) {
             )
 
             TextButton(onClick = { com.moling.app.overlay.PresenceActivity.open(context, "settings") }) { Text("在你身边") }
+            TextButton(
+                onClick = { aboutOpen = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("她对你的了解 · 周报 · 四个参谋") }
             TextButton(
                 onClick = { debugOpen = true },
                 modifier = Modifier.fillMaxWidth(),
