@@ -93,6 +93,7 @@ class MainActivity : ComponentActivity() {
                             onEndgame = { nav.navigate("endgame") },
                             onSoup = { nav.navigate("soup") },
                             onPartner = { nav.navigate("partner") },
+                            onRoute = { nav.navigate(it) },
                             onBank = { nav.navigate("bank") },
                             onLine = { id -> nav.navigate(if (id == null) "line" else "line?id=$id") },
                             onLive = { id -> nav.navigate("live/$id") },
@@ -219,13 +220,22 @@ class MainActivity : ComponentActivity() {
                         BetScreen(onBack = { nav.navigateUp() })
                     }
                     composable("endgame") {
-                        com.yishou.app.ui.EndgameScreen(onBack = { nav.navigateUp() }, onBank = { nav.navigate("bank") })
+                        com.yishou.app.ui.EndgameScreen(onBack = { nav.navigateUp() }, onBank = { nav.navigate("pool") })
                     }
-                    composable("partner") {
-                        com.yishou.app.ui.PartnerScreen(onBack = { nav.navigateUp() })
+                    composable(
+                        "partner?m={m}",
+                        arguments = listOf(navArgument("m") { type = NavType.LongType; defaultValue = -1L }),
+                    ) { e ->
+                        com.yishou.app.ui.PartnerScreen(onBack = { nav.navigateUp() }, materialId = e.arguments?.getLong("m")?.takeIf { it > 0 })
                     }
-                    composable("soup") {
-                        com.yishou.app.ui.SoupScreen(onBack = { nav.navigateUp() }, onBank = { nav.navigate("bank") })
+                    composable(
+                        "soup?card={card}",
+                        arguments = listOf(navArgument("card") { type = NavType.LongType; defaultValue = -1L }),
+                    ) { e ->
+                        com.yishou.app.ui.SoupScreen(onBack = { nav.navigateUp() }, onBank = { nav.navigate("pool") }, cardId = e.arguments?.getLong("card")?.takeIf { it > 0 })
+                    }
+                    composable("pool") {
+                        com.yishou.app.ui.PoolScreen(onBack = { nav.navigateUp() }, onRoute = { nav.navigate(it) })
                     }
 
                 }

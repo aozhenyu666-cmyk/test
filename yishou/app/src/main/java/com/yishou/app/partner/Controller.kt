@@ -105,7 +105,7 @@ class PartnerController(
         directorAt = startedAt
         val opening = buildString {
             append("开始吧。")
-            if (plan.goal.isNotBlank()) append("今天弄懂「${plan.goal.trim().take(20)}」。")
+            if (plan.goal.isNotBlank()) append(if (plan.source.isNotBlank()) "今天一起看「${plan.goal.trim().take(20)}」。" else "今天弄懂「${plan.goal.trim().take(20)}」。")
             append(
                 when (_state.value.gear) {
                     Gear.ACCOMPANY -> "我先安静陪着，关键处再问你。"
@@ -320,6 +320,11 @@ class PartnerController(
         appendLine("不替他总结，不先给答案；先让他自己讲，讲完指出他漏掉的一处，一次只指一处。他说懂了，追一个小问题验一下。")
         appendLine("这次：${materialName(plan.material)}；目标：${plan.goal.trim()}；强度：${_state.value.gear.label}。")
         appendLine("你会收到【内部导演卡】，照卡推进，不复述卡，不说你收到了卡。只输出要说出口的话，不要列表、标题或括号说明。")
+        if (plan.source.isNotBlank()) {
+            appendLine("你们正在一起看下面这段【材料】。只就它说话，引用要和原文一致，不编材料里没有的东西；先让他自己讲，不要替他总结全文。")
+            appendLine("【材料】")
+            appendLine(plan.source.take(1_500))
+        }
         card?.let { append(Directors.context(it)) }
     }
 

@@ -50,7 +50,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-fun PartnerScreen(onBack: () -> Unit) {
+fun PartnerScreen(onBack: () -> Unit, materialId: Long? = null) {
     val context = LocalContext.current
     val app = context.applicationContext as YishouApp
     val partner = app.partner
@@ -79,7 +79,17 @@ fun PartnerScreen(onBack: () -> Unit) {
         }
     }
     val voiceRun by app.partnerVoice.running.collectAsStateWithLifecycle()
-    fun currentPlan() = PartnerPlan(Material.valueOf(materialName), goal, minutes, Gear.valueOf(gearName))
+    // 从素材池选一段一起聊：语音伙伴就围着这段说
+    val pool by remember { app.database.think().observeMaterials() }.collectAsStateWithLifecycle(initialValue = emptyList())
+    var sourceId by rememberSaveable { mutableStateOf(materialId ?: -1L) }
+    LaunchedEffect(materialId, pool.size) {
+        val m = pool.firstOrNull { it.id == materialId } ?: return@LaunchedEffect
+        if (goal.isBlank()) goal = m.title
+    }
+    fun currentPlan() = PartnerPlan(
+        Material.valueOf(materialName), goal, minutes, Gear.valueOf(gearName),
+        source = pool.firstOrNull { it.id == sourceId }?.text.orEmpty(),
+    )
     fun startVoice() = work {
         val err = app.partnerVoice.start(currentPlan())
         if (err != null) note = err
@@ -119,6 +129,16 @@ fun PartnerScreen(onBack: () -> Unit) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf(Material.CHESS to "象棋", Material.OTHER to "其他").forEach { (m, label) ->
                         FilterChip(selected = materialName == m.name, onClick = { materialName = m.name }, label = { Text(label) })
+                    }
+                }
+                val picks = (pool.filter { it.id == sourceId } + pool.filter { it.source != com.yishou.app.data.MaterialSource.BUILTIN && it.id != sourceId }.take(4))
+                if (picks.isNotEmpty()) {
+                    Text("一起聊素材池里的哪段？（只对“用一手自己的语音”有用）", style = MaterialTheme.typography.bodySmall)
+                    picks.forEach { m ->
+                        FilterChip(selected = sourceId == m.id, onClick = {
+                            sourceId = if (sourceId == m.id) -1L else m.id
+                            if (sourceId == m.id && goal.isBlank()) goal = m.title
+                        }, label = { Text(m.title, maxLines = 1) })
                     }
                 }
                 VoiceTextField(goal, { goal = it }, "这次想弄懂什么", Modifier.fillMaxWidth())

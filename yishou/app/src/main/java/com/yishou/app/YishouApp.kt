@@ -109,6 +109,9 @@ class YishouApp : Application() {
 
     val partner: com.yishou.app.partner.PartnerSessions by lazy { com.yishou.app.partner.PartnerSessions(this) }
 
+    /** 素材池：唯一入口，所有练法从这里拿 */
+    val pool: com.yishou.app.pool.Pool by lazy { com.yishou.app.pool.Pool(this) }
+
     /** 一手自己的语音伙伴（听写 → 文字模型 → 朗读） */
     val partnerVoice: com.yishou.app.partner.PartnerVoice by lazy { com.yishou.app.partner.PartnerVoice(this) }
 

@@ -31,7 +31,11 @@ class FileImport(private val app: YishouApp) {
         progress("读 $name ……")
         when (val t = read(uri, name, progress)) {
             is LlmResult.Err -> FileResult(name, t.error.message, false)
-            is LlmResult.Ok -> {
+            is LlmResult.Ok -> if (com.yishou.app.pool.Intake.route(t.value) is com.yishou.app.pool.Intake.Route.Article) {
+                // 不像题的文件（文章、讲义）：切段进素材池，不硬拆成题
+                val r = app.pool.take(t.value, com.yishou.app.data.MaterialSource.FILE)
+                FileResult(name, r.message, r.ok)
+            } else {
                 progress("拆题：$name ……")
                 var r = app.bankImport.import(t.value)
                 // 本机拆出来的比文件里看着像题的少很多（格式太乱）：整份交给模型整理一遍，重复的会自动跳过

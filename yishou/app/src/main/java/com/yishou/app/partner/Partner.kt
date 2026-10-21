@@ -13,6 +13,8 @@ data class PartnerPlan(
     val goal: String,
     val minutes: Int = 25,
     val gear: Gear = Gear.ACCOMPANY,
+    /** 从素材池选的一段：语音伙伴就围着这段聊（外部伴读用不到） */
+    val source: String = "",
 )
 
 object Opening {

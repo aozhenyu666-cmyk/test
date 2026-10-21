@@ -159,12 +159,16 @@ class ShareActivity : ComponentActivity() {
     private fun saveText(app: YishouApp, text: String, practice: Boolean) {
         busy = "存进素材库……"
         lifecycleScope.launch {
-            when (val r = app.materials.addText(text, MaterialSource.SHARE)) {
-                is LlmResult.Err -> {
+            // 统一入口：像题就进题库，像文章就切段进素材池
+            val r = app.pool.take(text, MaterialSource.SHARE)
+            when {
+                !r.ok -> {
                     busy = null
-                    error = r.error.message
+                    error = r.message
                 }
-                is LlmResult.Ok -> if (practice) open(app, "think?m=${r.value.id}") else done("存好了：${r.value.title}")
+                r.bank -> open(app, "pool")
+                practice && r.materialId != null -> open(app, "think?m=${r.materialId}")
+                else -> done(r.message)
             }
         }
     }

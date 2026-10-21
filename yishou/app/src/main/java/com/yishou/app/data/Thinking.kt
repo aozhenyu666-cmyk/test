@@ -38,6 +38,8 @@ object MaterialSource {
     const val BANK = "bank"
     /** 一手自带的（背诵用的古诗文） */
     const val BUILTIN = "builtin"
+    /** 导入的文件（文章，不是题） */
+    const val FILE = "file"
 
     fun label(s: String) = when (s) {
         SHARE -> "分享来的"
@@ -46,6 +48,7 @@ object MaterialSource {
         SCREEN -> "截屏"
         MADE -> "教练写的"
         BANK -> "题库"
+        FILE -> "文件"
         else -> "自己写的"
     }
 }

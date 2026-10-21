@@ -38,6 +38,15 @@ class MaterialImport(private val app: YishouApp) {
         }
     }
 
+    /** 图片转写成文字（不存，交给素材池分流） */
+    suspend fun imageText(uri: Uri): LlmResult<String> {
+        val dataUrl = when (val d = dataUrl(uri)) {
+            is LlmResult.Err -> return d
+            is LlmResult.Ok -> d.value
+        }
+        return app.vision.transcribeText(dataUrl)
+    }
+
     /** 没东西可练：让教练写一段 */
     suspend fun make(topic: String?): LlmResult<Material> {
         val avoid = dao.recentMaterials(10).filter { it.source == MaterialSource.MADE }.map { it.title }

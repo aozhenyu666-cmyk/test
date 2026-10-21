@@ -70,8 +70,16 @@ class SoupViewModel(app: Application) : AndroidViewModel(app) {
     val outside: StateFlow<String?> = _outside.asStateFlow()
     private var saved = false
 
-    init {
-        next()
+    /** 指定一道题来煮（“来一手”挑中的）；拿不到就随便挑一锅 */
+    fun open(cardId: Long) = viewModelScope.launch {
+        _outside.value = null
+        saved = false
+        val row = yishou.database.cards().getCard(cardId)
+        val card = row?.let { runCatching { Card.parse(org.json.JSONObject(it.json)) }.getOrNull() }?.takeIf { Soups.eligible(it) }
+        if (card == null) next() else {
+            _empty.value = false
+            session.start(cardId, card)
+        }
     }
 
     /** 下一锅：题库里没煮过的真题，“为什么会这样”那类优先 */
@@ -133,8 +141,12 @@ class SoupViewModel(app: Application) : AndroidViewModel(app) {
  * 海龟汤：只许问是非问题，主持人只回“是 / 不是 / 部分是 / 无关”。问到能说出汤底，或者问够几问，再亮 ABCD 核对。
  */
 @Composable
-fun SoupScreen(onBack: () -> Unit, onBank: () -> Unit, vm: SoupViewModel = viewModel()) {
+fun SoupScreen(onBack: () -> Unit, onBank: () -> Unit, cardId: Long? = null, vm: SoupViewModel = viewModel()) {
     val s by vm.state.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(cardId) {
+        // 只在还没开锅时挑；回到这一页不重开
+        if (s.card == null) if (cardId != null) vm.open(cardId) else vm.next()
+    }
     val stats by vm.stats.collectAsStateWithLifecycle()
     val empty by vm.empty.collectAsStateWithLifecycle()
     val outside by vm.outside.collectAsStateWithLifecycle()

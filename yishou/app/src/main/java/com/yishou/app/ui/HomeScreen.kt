@@ -60,6 +60,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private val yishou = app as YishouApp
@@ -87,6 +89,33 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val start: Long get() = dayStart
+
+    /** “来一手”这次挑中的 */
+    private val _pick = kotlinx.coroutines.flow.MutableStateFlow<com.yishou.app.pool.Next.Pick?>(null)
+    val pick: StateFlow<com.yishou.app.pool.Next.Pick?> = _pick.asStateFlow()
+    private val skipped = mutableSetOf<com.yishou.app.pool.Next.Mode>()
+
+    /** 重新看一眼池子，挑下一件（回到首页时调） */
+    fun refreshPick() = viewModelScope.launch {
+        skipped.clear()
+        _pick.value = com.yishou.app.pool.Next.pick(yishou.pool.snapshot())
+    }
+
+    /** 不想做这个：换一个（换完一圈就从头来） */
+    fun another() = viewModelScope.launch {
+        _pick.value?.let { skipped += it.mode }
+        val p = com.yishou.app.pool.Next.pick(yishou.pool.snapshot(), skipped)
+        if (p.mode == com.yishou.app.pool.Next.Mode.EMPTY && skipped.isNotEmpty()) {
+            skipped.clear()
+            _pick.value = com.yishou.app.pool.Next.pick(yishou.pool.snapshot())
+        } else _pick.value = p
+    }
+
+    /** 点了开始：记下这次做的练法，返回要去的那一页 */
+    fun go(p: com.yishou.app.pool.Next.Pick): String {
+        yishou.pool.did(p.mode)
+        return yishou.pool.route(p)
+    }
 }
 
 /** 今天落在时之轮上的子 */
@@ -106,6 +135,7 @@ fun todayMarks(cards: List<CardAttempt>, drills: List<DrillRow>, deeds: List<Dee
  * 首页：一只时之轮，三个入口：练功底（题库）、练思维（素材）、做事（一步一步）。
  * 底下是潮汐，点一下水面会荡开。
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun HomeScreen(
     onEndgame: () -> Unit,
@@ -118,8 +148,11 @@ fun HomeScreen(
     onJobs: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenWindow: () -> Unit,
+    onRoute: (String) -> Unit = {},
     vm: HomeViewModel = viewModel(),
 ) {
+    val pick by vm.pick.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(Unit) { vm.refreshPick() }
     val app = LocalContext.current.applicationContext as YishouApp
     val cards by vm.cards.collectAsStateWithLifecycle()
     val drills by vm.drills.collectAsStateWithLifecycle()
@@ -170,32 +203,46 @@ fun HomeScreen(
                 IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Settings, contentDescription = "设置") }
             }
 
-            // 练思维的两样：海龟汤（自己生假设、自己设计问题）和残局（点破绽、翻底牌）
+            // 来一手：不用挑练法，从素材池里挑下一件最值得做的
+            NextCard(pick, onGo = { p -> onRoute(vm.go(p)) }, onAnother = vm::another)
+
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                val fresh = materials.count { it.uses == 0 }
                 Entry(
-                    title = "海龟汤",
-                    sub = "真题当汤：只许问是非题，问穿了再亮选项",
+                    title = "素材池",
+                    sub = "什么都往这放：${materials.size} 段文章" + (if (fresh > 0) "（$fresh 段没练）" else "") + " · $bankLeft 道题没做",
                     accent = MaterialTheme.colorScheme.tertiary,
-                    onClick = onSoup,
+                    onClick = { onRoute("pool") },
                     modifier = Modifier.weight(1f),
                 )
                 Entry(
-                    title = "残局",
-                    sub = "点破绽 · 先开一枪 · 翻底牌",
+                    title = "语音伙伴",
+                    sub = "一起看一段，它问你答",
                     accent = MaterialTheme.colorScheme.secondary,
-                    onClick = onEndgame,
+                    onClick = onPartner,
                     modifier = Modifier.weight(1f),
                 )
             }
 
-            OutlinedButton(onClick = onPartner, modifier = Modifier.fillMaxWidth()) { Text("语音伙伴 · 外部伴读") }
+            // 想自己挑练法时用；平时点上面的“来一手”就够了
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = onSoup) { Text("海龟汤") }
+                TextButton(onClick = onEndgame) { Text("残局") }
+                TextButton(onClick = onThink) { Text("练思维") }
+                TextButton(onClick = onBank) { Text("刷题") }
+                TextButton(onClick = { onLine(null) }) { Text("主线") }
+                TextButton(onClick = onJobs) { Text("做事") }
+                TextButton(onClick = onOpenWindow) { Text("陪练窗口") }
+            }
 
-            MainLine(
-                line = lines.firstOrNull { it.closedAt == null },
-                today = com.yishou.app.line.Lines.today(moves),
-                onLine = onLine,
-                onLive = onLive,
-            )
+            lines.firstOrNull { it.closedAt == null }?.let { open ->
+                MainLine(
+                    line = open,
+                    today = com.yishou.app.line.Lines.today(moves),
+                    onLine = onLine,
+                    onLive = onLive,
+                )
+            }
 
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 TimeWheel(
@@ -217,36 +264,34 @@ fun HomeScreen(
                 Button(onClick = onOpenSettings) { Text("去设置") }
             }
 
-            val running = jobs.count { it.finishedAt == null }
-            Entry(
-                title = "练功底",
-                sub = if (bankLeft > 0) "题库里还有 $bankLeft 道没做 · 去粉笔刷一组也算" else "导入题库文件，或者去粉笔刷一组",
-                accent = MaterialTheme.colorScheme.onBackground,
-                onClick = onBank,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Entry(
-                    title = "练思维",
-                    sub = "六面：精简 · 预判 · 联想 · 提问 · 体系 · 回响",
-                    accent = MaterialTheme.colorScheme.tertiary,
-                    onClick = onThink,
-                    modifier = Modifier.weight(1f),
-                )
-                Entry(
-                    title = "做事",
-                    sub = if (running > 0) "$running 件在做，接着走下一步" else "一步一步走完一件事",
-                    accent = MaterialTheme.colorScheme.secondary,
-                    onClick = onJobs,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-            val fresh = materials.count { it.uses == 0 }
-            if (fresh > 0) {
-                TextButton(onClick = onThink) { Text("素材库里有 $fresh 段还没练过 →") }
-            }
-            TextButton(onClick = onOpenWindow) { Text("陪练窗口") }
             Spacer(Modifier.height(tideHeight))
+        }
+    }
+}
+
+/** 首页最上面：“来一手”——挑中了什么、为什么，一个“开始”，不想做就“换一个” */
+@Composable
+private fun NextCard(p: com.yishou.app.pool.Next.Pick?, onGo: (com.yishou.app.pool.Next.Pick) -> Unit, onAnother: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(24.dp),
+        tonalElevation = 2.dp,
+        shadowElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(if (p == null) "来一手" else "来一手 · ${p.mode.label}", style = MaterialTheme.typography.headlineSmall)
+            if (p == null) {
+                Text("正在看素材池……", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Text(p.reason, style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(onClick = { onGo(p) }, modifier = Modifier.weight(1f).height(52.dp)) {
+                        Text(if (p.mode == com.yishou.app.pool.Next.Mode.EMPTY) "去收素材" else "开始")
+                    }
+                    if (p.mode != com.yishou.app.pool.Next.Mode.EMPTY) TextButton(onClick = onAnother) { Text("换一个") }
+                }
+            }
         }
     }
 }

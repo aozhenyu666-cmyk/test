@@ -267,10 +267,21 @@ fun ThinkScreen(
     val face by vm.face.collectAsStateWithLifecycle()
     val due by vm.dueRecite.collectAsStateWithLifecycle()
     var reciting by rememberSaveable { mutableStateOf(false) }
+    val thinkApp = androidx.compose.ui.platform.LocalContext.current.applicationContext as com.yishou.app.YishouApp
     LaunchedEffect(initialMaterial, initialLens) {
+        // “来一手”挑好了练法：直接开始，不再让你选
+        val lens = Lens.of(initialLens)
+        if (drill.active) return@LaunchedEffect
+        if (lens == Lens.ECHO) {
+            vm.beginAuto(Lens.ECHO)
+            return@LaunchedEffect
+        }
         if (initialMaterial == null) return@LaunchedEffect
         vm.show(initialMaterial)
-        if (initialLens == Lens.ESSAY.name) vm.beginLocked(initialMaterial)
+        when {
+            lens == Lens.ESSAY -> vm.beginLocked(initialMaterial)
+            lens != null -> thinkApp.database.think().getMaterial(initialMaterial)?.let { vm.begin(it, lens) }
+        }
     }
 
     BackHandler(enabled = drill.active) { vm.stop() }
