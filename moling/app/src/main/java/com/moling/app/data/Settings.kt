@@ -17,7 +17,30 @@ data class ModelSettings(
     val persona: String = DEFAULT_PERSONA,
     val callUser: String = "你",
     val speak: Boolean = false,
-)
+    /** 深想模型（可以是另一家，比如 OpenAI 的 GPT）：空 = 和上面同一个。只由 [SettingsStore.saveDeep] 写。 */
+    val deepBaseUrl: String = "",
+    val deepApiKey: String = "",
+    val deepModel: String = "",
+) {
+    fun hasDeep(): Boolean = deepModel.isNotBlank()
+
+    /** 深想模型的连接配置：没单独填的接口地址和密钥沿用平时的。 */
+    fun deep(): ModelSettings = copy(
+        baseUrl = deepBaseUrl.ifBlank { baseUrl },
+        apiKey = deepApiKey.ifBlank { apiKey },
+        model = deepModel.ifBlank { model },
+    )
+}
+
+/** 和 Notion 贯通的设置。[token] 是 Notion 内部集成的密钥（加密存）；[root] 是他分享给集成的那个页面。 */
+data class NotionSettings(
+    val token: String = "",
+    val root: String = "",
+    val boardId: String = "",
+    val inboxId: String = "",
+) {
+    fun ready(): Boolean = token.isNotBlank() && root.isNotBlank()
+}
 
 /** 当天调用了多少次模型、一共多少字。跨天清零，给设置页看。 */
 data class Usage(val day: String, val calls: Int, val chars: Int)
@@ -42,7 +65,52 @@ class SettingsStore(context: Context) {
         persona = prefs.getString(KEY_PERSONA, null) ?: DEFAULT_PERSONA,
         callUser = prefs.getString(KEY_CALL_USER, null) ?: "你",
         speak = prefs.getBoolean(KEY_SPEAK, false),
+        deepBaseUrl = prefs.getString(KEY_DEEP_URL, null).orEmpty(),
+        deepApiKey = prefs.getString(KEY_DEEP_KEY, null).orEmpty(),
+        deepModel = prefs.getString(KEY_DEEP_MODEL, null).orEmpty(),
     )
+
+    fun saveDeep(url: String, key: String, model: String) {
+        prefs.edit()
+            .putString(KEY_DEEP_URL, url.trim())
+            .putString(KEY_DEEP_KEY, key.trim())
+            .putString(KEY_DEEP_MODEL, model.trim())
+            .apply()
+    }
+
+    fun notion(): NotionSettings = NotionSettings(
+        token = prefs.getString(KEY_NOTION_TOKEN, null).orEmpty(),
+        root = toggles.getString(KEY_NOTION_ROOT, null).orEmpty(),
+        boardId = toggles.getString(KEY_NOTION_BOARD, null).orEmpty(),
+        inboxId = toggles.getString(KEY_NOTION_INBOX, null).orEmpty(),
+    )
+
+    /** 换了密钥或根页面：黑板和收件箱的页面要重新找。 */
+    fun saveNotion(token: String, root: String) {
+        val old = notion()
+        prefs.edit().putString(KEY_NOTION_TOKEN, token.trim()).apply()
+        val e = toggles.edit().putString(KEY_NOTION_ROOT, root.trim())
+        if (old.token != token.trim() || old.root != root.trim()) e.remove(KEY_NOTION_BOARD).remove(KEY_NOTION_INBOX)
+        e.apply()
+    }
+
+    fun saveNotionPages(boardId: String, inboxId: String) {
+        toggles.edit().putString(KEY_NOTION_BOARD, boardId).putString(KEY_NOTION_INBOX, inboxId).apply()
+    }
+
+    /** 同步的结果（给贯通页看）。 */
+    fun notionStatus(): String = toggles.getString(KEY_NOTION_STATUS, null).orEmpty()
+
+    fun setNotionStatus(text: String) {
+        toggles.edit().putString(KEY_NOTION_STATUS, text).apply()
+    }
+
+    /** 上次导入 ChatGPT 导出记录时，最新那段对话的时间（秒）：下次只收更新的。 */
+    fun gptImportedUntil(): Double = toggles.getString(KEY_GPT_UNTIL_S, null)?.toDoubleOrNull() ?: 0.0
+
+    fun setGptImportedUntil(sec: Double) {
+        toggles.edit().putString(KEY_GPT_UNTIL_S, sec.toString()).apply()
+    }
 
     fun save(s: ModelSettings) {
         prefs.edit()
@@ -129,6 +197,15 @@ class SettingsStore(context: Context) {
         private const val KEY_PERSONA = "persona"
         private const val KEY_CALL_USER = "call_user"
         private const val KEY_SPEAK = "speak"
+        private const val KEY_DEEP_URL = "deep_base_url"
+        private const val KEY_DEEP_KEY = "deep_api_key"
+        private const val KEY_DEEP_MODEL = "deep_model"
+        private const val KEY_NOTION_TOKEN = "notion_token"
+        private const val KEY_NOTION_ROOT = "notion_root"
+        private const val KEY_NOTION_BOARD = "notion_board"
+        private const val KEY_NOTION_INBOX = "notion_inbox"
+        private const val KEY_NOTION_STATUS = "notion_status"
+        private const val KEY_GPT_UNTIL_S = "gpt_until_s"
 
         private const val KEY_USAGE_DAY = "usage_day"
         private const val KEY_CALLS = "usage_calls"

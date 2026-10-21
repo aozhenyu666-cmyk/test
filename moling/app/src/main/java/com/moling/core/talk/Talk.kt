@@ -26,6 +26,8 @@ sealed interface TalkAction {
     data class Reroute(val cause: String) : TalkAction
     /** 她给自己定一个唤醒：到 [at] 来找他，说 [note]。 */
     data class Wake(val at: Long, val note: String) : TalkAction
+    /** 她想问 GPT 的（写到 Notion 黑板上，GPT / Notion AI 读到会回答）。 */
+    data class AskGpt(val question: String) : TalkAction
 }
 
 data class TalkReply(val text: String, val actions: List<TalkAction>, val byModel: Boolean)
@@ -78,6 +80,7 @@ object Talk {
         appendLine("【动作】提醒我｜HH:MM 或 N 分钟后｜到时候对他说什么（你自己到点会被叫醒）")
         appendLine("【动作】去聊｜gemini 或 chatgpt｜聊什么")
         appendLine("【动作】记下｜主题｜一句结论")
+        appendLine("【动作】问GPT｜一个具体问题（他跟 GPT 聊过、你不知道的，写到黑板上让 GPT 回答）")
         append("【动作】改道｜卡住了 / 累了 / 晚了 / 情况变了")
     }
 
@@ -114,6 +117,7 @@ object Talk {
                 }
                 "记下" -> if (!f.getOrNull(2).isNullOrBlank()) actions += TalkAction.AtlasNote(f.getOrNull(1).orEmpty().ifBlank { "杂项" }, f[2])
                 "改道" -> f.getOrNull(1)?.let { actions += TalkAction.Reroute(it) }
+                "问GPT", "问 GPT" -> f.getOrNull(1)?.trim()?.takeIf { it.length >= 4 }?.let { actions += TalkAction.AskGpt(it.take(120)) }
                 "提醒我" -> {
                     val w = f.getOrNull(1).orEmpty()
                     val inMin = Regex("""(\d+)\s*分钟后""").find(Conclude.cnDurations(w))?.groupValues?.get(1)?.toIntOrNull()

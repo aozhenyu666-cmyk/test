@@ -31,14 +31,20 @@ sealed class LlmResult<out T> {
  * OpenAI 兼容的 Chat Completions（DeepSeek、Kimi、通义、OpenAI 都支持）。
  * 请求在 IO 线程发，30 秒封顶；失败只返回 Err，不抛给界面。
  */
-class LlmClient(private val config: () -> ModelSettings) {
+class LlmClient(
+    private val config: () -> ModelSettings,
+    /** 封顶多少秒。深想模型（推理模型）要想一会儿，给 120 秒。 */
+    private val timeoutSec: Long = 30,
+    /** 推理模型（o 系列、gpt-5、deepseek-reasoner）不收 temperature，深想模型不带。 */
+    private val withTemperature: Boolean = true,
+) {
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(timeoutSec, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
-        // 整体也封顶 30 秒：连接慢的时候不要把测试按钮吊到一分钟。
-        .callTimeout(30, TimeUnit.SECONDS)
+        // 整体也封顶：连接慢的时候不要把测试按钮吊到一分钟。
+        .callTimeout(timeoutSec, TimeUnit.SECONDS)
         .build()
 
     suspend fun complete(system: String, user: String): LlmResult<String> {
@@ -48,7 +54,7 @@ class LlmClient(private val config: () -> ModelSettings) {
         val body = buildJsonObject {
             put("model", cfg.model.trim())
             put("stream", false)
-            put("temperature", 0.2)
+            if (withTemperature) put("temperature", 0.2)
             put(
                 "messages",
                 buildJsonArray {
@@ -63,7 +69,7 @@ class LlmClient(private val config: () -> ModelSettings) {
             .post(body.toString().toRequestBody(JSON_TYPE))
             .build()
         return try {
-            withTimeout(TIMEOUT_MS) {
+            withTimeout(timeoutSec * 1000) {
                 // 读正文也算网络读取，必须在 IO 线程，不能在主线程读。
                 withContext(Dispatchers.IO) {
                     http.newCall(request).execute().use { resp ->
@@ -74,7 +80,7 @@ class LlmClient(private val config: () -> ModelSettings) {
                 }
             }
         } catch (e: TimeoutCancellationException) {
-            LlmResult.Err("请求超时（30 秒），网络可能不通")
+            LlmResult.Err("请求超时（$timeoutSec 秒），网络可能不通")
         } catch (e: CancellationException) {
             throw e
         } catch (e: IOException) {
@@ -87,7 +93,6 @@ class LlmClient(private val config: () -> ModelSettings) {
     }
 
     companion object {
-        private const val TIMEOUT_MS = 30_000L
         private val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
         private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 

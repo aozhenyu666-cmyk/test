@@ -88,6 +88,7 @@ fun SettingsScreen(onDone: () -> Unit) {
     var zkBusy by remember { mutableStateOf(false) }
     var debugOpen by remember { mutableStateOf(false) }
     var aboutOpen by remember { mutableStateOf(false) }
+    var bridgeOpen by remember { mutableStateOf(false) }
     var backgroundOn by remember { mutableStateOf(store.backgroundHeart()) }
     var autoPlanOn by remember { mutableStateOf(store.autoPlan()) }
     var liveOn by remember { mutableStateOf(store.liveOn()) }
@@ -118,6 +119,10 @@ fun SettingsScreen(onDone: () -> Unit) {
     // 调试页占满全屏，自己带返回。
     if (debugOpen) {
         DebugScreen(onDone = { debugOpen = false })
+        return
+    }
+    if (bridgeOpen) {
+        BridgeScreen(onDone = { bridgeOpen = false })
         return
     }
     if (aboutOpen) {
@@ -534,6 +539,10 @@ fun SettingsScreen(onDone: () -> Unit) {
                 onClick = { aboutOpen = true },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("她对你的了解 · 周报 · 四个参谋") }
+            TextButton(
+                onClick = { bridgeOpen = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("贯通：Notion · GPT · 深想模型") }
             TextButton(
                 onClick = { debugOpen = true },
                 modifier = Modifier.fillMaxWidth(),

@@ -15,6 +15,11 @@ import com.moling.core.Outcome
 import com.moling.core.Proposal
 import com.moling.core.ProposalState
 import com.moling.app.live.GateActivity
+import com.moling.app.mirror.GptImport
+import com.moling.app.mirror.NotionMirror
+import com.moling.core.mind.Ask
+import com.moling.core.mirror.Absorbed
+import com.moling.core.mirror.Question
 import com.moling.app.live.LiveScreens
 import com.moling.core.LiveTurn
 import com.moling.core.flow.Cause
@@ -99,7 +104,9 @@ object BrainHost {
 
             ZkBridge.init(app)
             settings = SettingsStore(app)
-            val ask = MolingAsk(settings, LlmClient { settings.load() })
+            val ask = MolingAsk(settings, LlmClient({ settings.load() }))
+            // 深想模型：没填就和平时同一个（大脑里 deep = null 时退回 ask）
+            val deep = MolingAsk(settings, LlmClient({ settings.load().deep() }, timeoutSec = 120, withTemperature = false), timeoutMs = 125_000L)
             brain = Brain(
                 phone = PhoneFacts(
                     foreground = { appContext?.let { Usage.foreground(it) } },
@@ -112,6 +119,8 @@ object BrainHost {
                 zk = ZkBridge,
                 // 每次现读设置：设置页改完人格 / 称呼，下一句话就生效。
                 config = { settings.load().let { DirectorConfig(persona = it.persona, callUser = it.callUser) } },
+                // 没填深想模型时直接返回 null，大脑就用平时的模型
+                deep = Ask { system, user -> if (settings.load().hasDeep()) deep.ask(system, user) else null },
             )
             _state.value = brain.state()
             ready = true
@@ -216,7 +225,88 @@ object BrainHost {
         if (out.isNotEmpty()) runCatching { postNotices(now, out) }
         runCatching { withContext(Dispatchers.IO) { autoSchedule(now) } }
         runCatching { liveTick(now) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "活的墨灵失败", it) }
+        runCatching { mirror(now, force = false) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "Notion 同步失败", it) }
         return out
+    }
+
+    // ---------------------------------------------------------------- 贯通（v6）：Notion 黑板 / 收件箱、ChatGPT 记录
+
+    /** 和 Notion 同步一次（心跳里每 15 分钟；贯通页点“现在同步”时 [force]）。返回给人看的一句；没设置返回 null。 */
+    suspend fun mirror(now: Long = System.currentTimeMillis(), force: Boolean = true): String? {
+        if (!ready) return null
+        val r = withContext(Dispatchers.IO) {
+            NotionMirror.sync(
+                settings, now, force,
+                board = { brain.board(now) },
+                seen = { brain.state().mirrorSeen },
+                absorb = { items -> io("absorb", { Absorbed() }) { brain.absorb(items, now) } },
+            )
+        } ?: return null
+        refreshState()
+        tellAbsorbed(r.absorbed)
+        return r.status
+    }
+
+    /** 收件箱里有回答 / 要告诉他的事：发一条通知。 */
+    private fun tellAbsorbed(results: List<Absorbed>) {
+        val ctx = appContext ?: return
+        val qs = _state.value.questions
+        val lines = results.flatMap { r -> r.answered.mapNotNull { id -> qs.firstOrNull { it.id == id }?.let { "$id：${it.answer.take(60)}" } } + r.notes }
+        if (lines.isNotEmpty()) runCatching { Notify.card(ctx, "GPT 那边：" + lines.joinToString("；").take(300)) }
+    }
+
+    /** 从分享菜单进来的 GPT 回答：和收件箱一样交给她把关。返回给人看的一句。 */
+    suspend fun absorbShared(text: String): String {
+        val now = System.currentTimeMillis()
+        val r = io("absorbShared", { Absorbed() }) {
+            brain.absorb(listOf(com.moling.core.mirror.InboxItem("share:$now", text.take(6000), "分享")), now)
+        }
+        tellAbsorbed(listOf(r))
+        return when {
+            r.answered.isNotEmpty() -> "收到了：回答了 ${r.answered.joinToString("、")}，体系图 +${r.added}"
+            r.added > 0 -> "收进体系图 ${r.added} 条"
+            else -> "没收到什么（模型没接上，或没有可收的）"
+        }
+    }
+
+    /** 他想让她问 GPT 的。 */
+    suspend fun askGpt(text: String): Question? =
+        io<Question?>("askGpt", { null }) { brain.askGpt(text, System.currentTimeMillis()) }
+
+    suspend fun dropQuestion(id: String) {
+        io("dropQuestion", {}) { brain.dropQuestion(id) }
+    }
+
+    /** 让她现在想想要问 GPT 什么。 */
+    suspend fun prepareQuestions(): List<Question> =
+        io("prepareQuestions", { emptyList<Question>() }) { brain.prepareQuestions(System.currentTimeMillis()) }
+
+    /**
+     * 导入 ChatGPT 的导出记录：只收上次导入之后更新过的、最新的 20 段，交给她把关（深想模型）。
+     * 返回给人看的一句。
+     */
+    suspend fun importGpt(uri: android.net.Uri): String {
+        val ctx = appContext ?: return "还没准备好"
+        val since = settings.gptImportedUntil()
+        val list = withContext(Dispatchers.IO) { runCatching { GptImport.read(ctx, uri, since) } }
+            .getOrElse { return "读不了这个文件：${it.message ?: it.javaClass.simpleName}" }
+        if (list.isEmpty()) return "没有新的对话（上次导入之后没更新过）"
+        val items = GptImport.items(list)
+        var added = 0
+        var done = 0
+        var answered = 0
+        for (part in items.chunked(3)) {
+            val r = io("importGpt", { Absorbed() }) { brain.absorb(part, System.currentTimeMillis()) }
+            added += r.added
+            answered += r.answered.size
+            if (r.added > 0 || r.answered.isNotEmpty() || r.aboutProposal || r.notes.isNotEmpty() ||
+                part.all { it.id in brain.state().mirrorSeen }
+            ) done += part.size
+        }
+        // 全部收完才往前挪“导入到哪了”；模型中途不通，下次还能接着收
+        if (done == items.size) settings.setGptImportedUntil(list.maxOf { it.updated })
+        return "读了 ${items.size} 段对话，收了 $done 段：体系图 +$added" + (if (answered > 0) "，顺带回答了 $answered 个问题" else "") +
+            if (done < items.size) "（有的没收成，模型可能没接上，再导一次会接着收）" else ""
     }
 
     // ---------------------------------------------------------------- 活的墨灵（v5）
@@ -305,6 +395,8 @@ object BrainHost {
                 val text = runCatching { brain.night(now) }.getOrNull()
                 refreshState()
                 if (!text.isNullOrBlank()) Notify.nightAccount(ctx, text)
+                // 开着 Notion：她夜里想好明天要问 GPT 的，下一次同步写上黑板
+                if (settings.notion().ready()) runCatching { brain.prepareQuestions(now) }
             }
         } catch (e: CancellationException) {
             throw e

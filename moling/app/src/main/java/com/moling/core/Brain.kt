@@ -70,6 +70,11 @@ import com.moling.core.live.Mood
 import com.moling.core.live.Spirit
 import com.moling.core.live.Spirits
 import com.moling.core.live.Trigger
+import com.moling.core.mirror.Absorbed
+import com.moling.core.mirror.InboxItem
+import com.moling.core.mirror.Mirror
+import com.moling.core.mirror.Question
+import com.moling.core.mirror.Section
 import com.moling.core.flow.ChannelKind
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
@@ -231,6 +236,10 @@ data class BrainState(
     val spirit: Spirit = Spirit(),
     /** 正拦在他面前的那一次（null = 没拦）。 */
     val gate: GateSession? = null,
+    /** 她想问 GPT 的（贯通，v6）。 */
+    val questions: List<Question> = emptyList(),
+    /** 收件箱里收过的条目（Notion 块 id）。 */
+    val mirrorSeen: List<String> = emptyList(),
     /** 提议编号用的流水号。 */
     val seq: Long = 0,
     /** 给人看的行动日志（做了什么、交给总控什么、总控怎么回的）。 */
@@ -255,6 +264,8 @@ class Brain(
     mindStore: MindStore,
     private val zk: ZkPort,
     private val config: () -> DirectorConfig = { DirectorConfig() },
+    /** 想得深的事（夜里整理、收件箱、想问 GPT 的、归纳、周报）用的模型；null = 和平时同一个。 */
+    private val deep: Ask? = null,
 ) {
     private val lock = Mutex()
 
@@ -336,6 +347,10 @@ class Brain(
         is TalkAction.AtlasNote -> propose(Act.AtlasNote(a.topic, a.claim), "在「${a.topic}」里记一条：${a.claim.take(40)}", "对话里说到的", Power.PLAN, now)
         is TalkAction.Wake -> {
             setWakeLocked(a.at, a.note, false, now)
+            null
+        }
+        is TalkAction.AskGpt -> {
+            addQuestion(a.question, "对话里想到的", "她", now)
             null
         }
         is TalkAction.Reroute -> {
@@ -769,7 +784,7 @@ class Brain(
     suspend fun synthesize(now: Long): String? = lock.withLock {
         val t = st.atlas.topics.firstOrNull { it.id == st.topicId } ?: return@withLock null
         if (st.atlas.nodes.none { it.topicId == t.id }) return@withLock null
-        val text = model(config().persona, AtlasOps.synthesisPrompt(st.atlas, t.id))?.let { AtlasOps.parseSynthesis(it) } ?: return@withLock null
+        val text = deepModel(config().persona, AtlasOps.synthesisPrompt(st.atlas, t.id))?.let { AtlasOps.parseSynthesis(it) } ?: return@withLock null
         st = st.copy(synthesis = st.synthesis + (t.id to text), log = st.log + "${hm(now)} 归纳了「${t.name}」")
         save()
         text
@@ -781,6 +796,104 @@ class Brain(
         val p = propose(Act.Summon(actor, question), "去 ${actor.label} 聊：${question.take(40)}", "体系图的缺口", Power.SUMMON, now)
         save()
         p
+    }
+
+    // ------------------------------------------------------------------ 贯通（v6）：Notion 黑板和收件箱
+
+    /** 黑板：她知道的、她这几天的判断、她想问 GPT 的。App 把它写进 Notion（没变就不写）。 */
+    fun board(now: Long): List<Section> {
+        val s = st
+        val day = calendarDay(now)
+        val flow = s.flow?.takeIf { it.day == day }
+        val today = buildString {
+            flow?.let { appendLine(Flow.render(it)) }
+            s.lastStatus?.let { z ->
+                append("总控记的：做事 ${z.workMinutesToday} 分钟，娱乐 ${z.playMinutesToday} 分钟")
+                if (z.mainTitle.isNotBlank()) append("，主线「${z.mainTitle}」${if (z.mainDone) "做完了" else if (z.mainStarted) "开始了" else "还没开始"}")
+            }
+        }
+        val days = s.days.takeLast(7).map { "${it.day}：做事 ${it.work} 分钟、娱乐 ${it.play} 分钟、偏离 ${it.drifts} 次" }
+        val atlas = s.atlas.topics.flatMap { t ->
+            s.atlas.nodes.filter { it.topicId == t.id }.takeLast(4)
+                .map { "「${t.name}」${it.kind.label}：${it.claim}（把握${it.confidence}${if (it.verified.isNotBlank()) "，已核实" else ""}）" }
+        }
+        val said = s.talk.filter { it.who == "他" && it.text.length >= 8 }.takeLast(8).map { "${hm(it.at)} ${it.text.take(100)}" }
+        return Mirror.board(config().callUser, director.nowText(now), s.questions, s.about, today, misjudged(now), days, atlas, said)
+    }
+
+    /**
+     * 收收件箱：别人写来的先由她把关（深想模型），回答了的问题记上答案，论断进体系图，
+     * 要改“对你的了解”的变成提议（他点“好”才算数）。模型不通就不标“收过”，下次再收。
+     */
+    suspend fun absorb(items: List<InboxItem>, now: Long): Absorbed = lock.withLock {
+        val fresh = Mirror.unseen(items, st.mirrorSeen)
+        if (fresh.isEmpty()) return@withLock Absorbed()
+        val cfg = config()
+        val topicName = st.atlas.topics.firstOrNull { it.id == st.topicId }?.name ?: "来自 GPT"
+        val (a, t) = AtlasOps.topic(st.atlas, topicName, now)
+        st = st.copy(atlas = a, topicId = t.id)
+        val existing = st.atlas.nodes.filter { it.topicId == t.id }.map { "${it.id}：${it.claim}" }
+        val reply = deepModel(cfg.persona, Mirror.absorbPrompt(cfg.callUser, t.name, existing, Mirror.open(st.questions), st.about, fresh))
+            ?: return@withLock Absorbed()
+        val source = fresh.map { it.source }.distinct().joinToString("、").take(30)
+        val (merged, added) = AtlasOps.merge(st.atlas, AtlasOps.parse(reply, t.id, source, now))
+        val sorted = Mirror.parseAbsorb(reply)
+        val answered = mutableListOf<String>()
+        st = st.copy(
+            atlas = merged,
+            questions = st.questions.map { q ->
+                val ans = sorted.answers[q.id]
+                if (ans != null && q.answer.isBlank()) { answered += q.id; q.copy(answer = ans, answeredAt = now) } else q
+            },
+        )
+        var aboutAsked = false
+        if (sorted.about.isNotBlank()) {
+            val doc = st.about.ifBlank { About.SEED.trimIndent() }.trimEnd() + "\n- ${sorted.about}（来自 $source）"
+            val p = propose(Act.About(doc, "加一句：${sorted.about.take(30)}"), "更新我对你的了解：${sorted.about.take(30)}", "收件箱（$source）", Power.SPEAK, now, ttlUntil = now + 72 * 3_600_000L)
+            aboutAsked = p?.state == ProposalState.PENDING
+        }
+        st = st.copy(
+            mirrorSeen = (st.mirrorSeen + fresh.flatMap { listOf(it.id) + it.also }).takeLast(1000),
+            log = st.log + "${hm(now)} 收件箱收了 ${fresh.size} 条（$source）：体系图 +$added${if (answered.isNotEmpty()) "，回答了 ${answered.joinToString("、")}" else ""}",
+        )
+        save()
+        Absorbed(answered, added, aboutAsked, sorted.notes)
+    }
+
+    /** 他想让她问 GPT 的（或她自己想问的）。 */
+    suspend fun askGpt(text: String, now: Long, by: String = "你"): Question? = lock.withLock {
+        val q = addQuestion(text, "", by, now)
+        save()
+        q
+    }
+
+    suspend fun dropQuestion(id: String) = lock.withLock {
+        st = st.copy(questions = st.questions.filter { it.id != id })
+        save()
+    }
+
+    /** 她自己想想要问 GPT 什么（开着 Notion 时，夜里整理后调一次；也可以他点按钮）。返回新加的。 */
+    suspend fun prepareQuestions(now: Long, n: Int = 2): List<Question> = lock.withLock {
+        val open = Mirror.open(st.questions)
+        val room = minOf(n, Mirror.OPEN_MAX - open.size)
+        if (room <= 0) return@withLock emptyList()
+        val cfg = config()
+        val gaps = st.atlas.topics.flatMap { t -> AtlasOps.gaps(st.atlas, t.id).take(2) }.map { it.question }.filter { it.isNotBlank() }.take(5)
+        val reply = deepModel(cfg.persona, Mirror.questionsPrompt(cfg.callUser, st.about, misjudged(now), gaps, st.questions.takeLast(10).map { it.text }, room))
+            ?: return@withLock emptyList()
+        val made = Mirror.parseQuestions(reply).take(room).mapNotNull { (q, why) -> addQuestion(q, why, "她", now) }
+        if (made.isNotEmpty()) save()
+        made
+    }
+
+    private fun addQuestion(text: String, why: String, by: String, now: Long): Question? {
+        val t = text.trim().take(120)
+        if (t.length < 4 || st.questions.any { it.answer.isBlank() && it.text == t }) return null
+        if (Mirror.open(st.questions).size >= Mirror.OPEN_MAX + 3) return null
+        val n = (st.questions.mapNotNull { it.id.removePrefix("Q").toIntOrNull() }.maxOrNull() ?: 0) + 1
+        val q = Question("Q$n", t, why.take(60), now, by = by)
+        st = st.copy(questions = (st.questions + q).takeLast(40), log = st.log + "${hm(now)} 想问 GPT：${t.take(30)}（$by）")
+        return q
     }
 
     // ------------------------------------------------------------------ 定时的判断（给后台心跳用）
@@ -936,7 +1049,7 @@ class Brain(
             st.proposals.filter { dayKey(it.createdAt) == day && it.state != ProposalState.PENDING }.takeLast(10)
                 .forEach { appendLine("提议「${it.text.take(30)}」：${it.state.label}${if (it.zkOutcome.isNotBlank()) "，${it.zkOutcome}" else ""}") }
         }
-        val (what, doc) = model(config().persona, About.updatePrompt(st.about, facts))?.let { About.parse(it, st.about) } ?: return ""
+        val (what, doc) = deepModel(config().persona, About.updatePrompt(st.about, facts))?.let { About.parse(it, st.about) } ?: return ""
         val p = propose(Act.About(doc, what), "更新我对你的了解：$what", "夜里整理", Power.SPEAK, now, ttlUntil = now + 36 * 3_600_000L) ?: return ""
         return if (p.state == ProposalState.PENDING) "我想更新对你的了解（$what），等你看一眼" else ""
     }
@@ -966,7 +1079,7 @@ class Brain(
         val vetoes = st.proposals.count { it.decidedAt >= from && it.zkOutcome == "你在总控里取消了" }
         val base = Reviews.week(monday, st.days, accepts, vetoes, st.predictions.filter { it.madeAt >= from })
         val last = st.weeks.lastOrNull { it.week < monday }
-        val text = model(config().persona, Reviews.prompt(base, last, st.about))?.trim()?.takeIf { it.isNotBlank() } ?: Reviews.localText(base, last)
+        val text = deepModel(config().persona, Reviews.prompt(base, last, st.about))?.trim()?.takeIf { it.isNotBlank() } ?: Reviews.localText(base, last)
         val r = base.copy(text = text.take(600))
         st = st.copy(weeks = (st.weeks.filter { it.week != monday } + r).sortedBy { it.week }.takeLast(12), log = st.log + "${hm(now)} 周报：${r.text.take(40)}")
         return r
@@ -1055,6 +1168,19 @@ class Brain(
         val s = runCatching { zk.status() }.getOrNull() ?: return null
         st = st.copy(lastStatus = s)
         return s
+    }
+
+    /** 想得深的事：有深想模型就用它，它不通再退回平时的。 */
+    private suspend fun deepModel(system: String, user: String): String? {
+        val d = deep ?: return model(system, user)
+        val r = try {
+            d.ask(system, user)?.takeIf { it.isNotBlank() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+        return r ?: model(system, user)
     }
 
     private suspend fun model(system: String, user: String): String? {

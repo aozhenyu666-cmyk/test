@@ -34,7 +34,7 @@
 - 墨灵的签名沿用总控的调试签名（同一个证书），总控按“包名 com.moling.app + 这个证书”认墨灵。
 - **坑**：仓库的 GitHub Actions 在任何分支改动 `zongkong/` 后，测试通过就会覆盖手机上的“最新版”下载链接（`zongkong-latest`）。所以从旧分支推送会把用户的总控降级（发生过一次，已修）。
 - **坑**：总控的模拟器测试 `LoopTest` 偶尔超时（`bossInterrogation`、`partnerAndCampaign`），重跑一次通常就过。
-- 云端环境连不上谷歌的 Android SDK：两边的纯逻辑在 `tools/core-tests/` 里 `gradle test`（总控 core + 墨灵 core + 交叉测试，共 366 个），Android 编译以 CI 为准。Maven Central 偶尔 429，那个工程已经先走谷歌镜像。
+- 云端环境连不上谷歌的 Android SDK：两边的纯逻辑在 `tools/core-tests/` 里 `gradle test`（总控 core + 墨灵 core + 交叉测试，共 372 个），Android 编译以 CI 为准。Maven Central 偶尔 429，那个工程已经先走谷歌镜像。
 
 ## 5. 现在的状态
 
@@ -54,6 +54,8 @@
 - **v4 核心 C4–C7 已完成并接进 App**（Claude，2026-10-21）：升级阶梯、说法对证据、她自己定的唤醒、“她对你的了解”文档（她提修改你点好才算数）、周报、四个参谋、反驳我、疯想—冷判、说话模式、作息。细节见 `moling/DEVLOG.md` 最后一节。打法本和模式确认改成了“了解”文档（借鉴 Coopanion 的 PARTNER.md），比 `v4-core-design.md` 原设计简单。
 - **v5 活的墨灵（Claude，2026-10-21）**：`core/live/Live.kt`（表情、叫醒原因、精力、拦人规矩、提示词）+ `Brain.liveTrigger / live / gateReply / gateEscape`；她的提示词带“这几天判断上的错”（说法对不上、她猜错的、被拒的提议、偏离多的那天）。App：`ui/MolingFace.kt`（一滴墨，会呼吸眨眼、八种表情）、`live/LiveScreens.kt`（拦人整屏 `GateActivity`、蹦出来的卡片 `PeekActivity`）、`BrainHost.liveTick`（每跳一次）、设置里两个开关。细节见 `moling/DEVLOG.md` 最后一节。
 - **v5 没做**：“她看一眼屏幕”（总控截图识图后告诉墨灵他在看什么）——要改总控、要读娱乐应用的截图，等用户点头；和 GPT / Gemini 一起整理体系的加强。
+- **v6 贯通（Claude，2026-10-21）**：ChatGPT 和 Notion AI 都没有让外部程序跟它们聊、或读它们记录的接口（ChatGPT 只能自己往外连 MCP / 连接器），所以走 Notion：墨灵把“黑板”（了解、今天、这几天的错判、体系图、她想问 GPT 的问题）写进他的 Notion 页面，GPT（用 ChatGPT 的 Notion 连接器）/ Notion AI 读完把回答写进“收件箱”，墨灵每 15 分钟收一次、把关后进体系图（改“了解”仍是提议）。另有：她自己想问题（夜里、对话里的【动作】问GPT）、导入 ChatGPT 导出的对话记录、分享菜单里“这是 GPT 的回答”、深想模型（可填 OpenAI 接口让 GPT 直接参与她的深想）。代码：`core/mirror/Mirror.kt`、`Brain.board / absorb / askGpt / prepareQuestions`、`app/mirror/`、`ui/BridgeScreen.kt`。
+- **v6 没做**：墨灵自己当 MCP 服务器（要一个公网服务器中转，ChatGPT 个人版能不能接自定义 MCP 也不确定）；Notion 的 External Agents API 还是 alpha。
 - **还没做**：读系统日历（要加 `READ_CALENDAR`）、连续语音对讲、专注时开勿扰、Notion 镜子；以及最重要的——真机联调。
 - **v4 规划**（`partner-blueprint/v4-power.md`）：授权书（事先授权的收紧和排计划，60 秒反悔，撤销走冷静期）、总控三个新开关、约定 / 谋划单交给总控监督、小窗和“先答一问”、日历和作息、周报和打法本、模式和语音对讲。Claude 先做 C1–C7（大脑和总控内核），DeepSeek 做第四到第七批。
 - 没在真机上验证过：小窗能否浮在 Gemini Live 上、vivo 上的听写、开场白交接方式（探针 P1–P5）。

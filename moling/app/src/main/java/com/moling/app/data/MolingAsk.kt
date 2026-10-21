@@ -13,11 +13,13 @@ import kotlinx.coroutines.withTimeout
  */
 class MolingAsk(
     private val store: SettingsStore,
-    private val llm: LlmClient = LlmClient { store.load() },
+    private val llm: LlmClient = LlmClient({ store.load() }),
+    /** 比 LlmClient 的封顶多留一点，让那边先把超时的原因翻成中文。 */
+    private val timeoutMs: Long = TIMEOUT_MS,
 ) : Ask {
 
     override suspend fun ask(system: String, user: String): String? = try {
-        withTimeout(TIMEOUT_MS) {
+        withTimeout(timeoutMs) {
             when (val r = llm.complete(system, user)) {
                 is LlmResult.Ok -> {
                     store.addUsage(system.length + user.length + r.value.length)
@@ -41,7 +43,7 @@ class MolingAsk(
 
     /** 设置页“测试连接”用：发一句最短的话，回来的是回复或中文原因。 */
     suspend fun test(): LlmResult<String> = try {
-        withTimeout(TIMEOUT_MS) { llm.complete(TEST_SYSTEM, "你好") }
+        withTimeout(timeoutMs) { llm.complete(TEST_SYSTEM, "你好") }
     } catch (e: TimeoutCancellationException) {
         LlmResult.Err("请求超时（30 秒），网络可能不通")
     } catch (e: CancellationException) {
