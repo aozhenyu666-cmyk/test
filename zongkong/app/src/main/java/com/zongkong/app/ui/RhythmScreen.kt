@@ -54,8 +54,9 @@ fun RhythmScreen(nav: NavHostController) {
     val store = context.zk.store
     val config by store.config.collectAsStateWithLifecycle()
     val day by store.today.collectAsStateWithLifecycle()
+    val moling by store.moling.collectAsStateWithLifecycle()
     val now = rememberNow()
-    val status = remember(config, day, now) { store.status(now) }
+    val status = remember(config, day, moling, now) { store.status(now) }
     val sig = LocalSignals.current
     var resumeKey by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeKey++ }
@@ -102,6 +103,8 @@ fun RhythmScreen(nav: NavHostController) {
             status.emergencyUntil?.let { Text("紧急放行到 ${clock(it)}", color = sig.warn, style = MaterialTheme.typography.bodyMedium.merge(Mono)) }
             if (status.paused) Text("休假到 ${clock(config.pausedUntil)}（${java.time.Instant.ofEpochMilli(config.pausedUntil).atZone(store.zone).toLocalDate()}）", color = sig.muted)
             Meters(status.playMin, status.quotaMin, status.silenceDueAt, now)
+            val cut = com.zongkong.core.moling.Holds.cutToday(moling.holds, now, store.zone)
+            if (cut > 0) Hint("（墨灵约好减了 $cut 分钟）")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { nav.navigate("capture") }, modifier = Modifier.weight(1f)) { Text("去报到") }
                 if (status.strict && status.emergencyLeft > 0) {

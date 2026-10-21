@@ -254,6 +254,8 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 composable("gate/{id}") { e -> GateScreen(e.arguments?.getString("id").orEmpty(), nav) }
                 composable("history") { HistoryScreen(nav) }
                 composable("settings/block") { BlockListScreen(nav) }
+                composable("settings/moling") { GrantsScreen(nav) }
+                composable("moling/orders") { MolingOrdersScreen(nav) }
                 composable("settings/gates") { GatesScreen(nav) }
                 composable("settings/gate/{id}") { e -> GateEditScreen(e.arguments?.getString("id").orEmpty(), nav) }
                 composable("settings/rules") { RulesScreen(nav) }

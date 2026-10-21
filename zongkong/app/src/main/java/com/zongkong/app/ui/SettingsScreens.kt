@@ -52,6 +52,9 @@ import kotlinx.coroutines.withContext
 fun SettingsScreen(nav: NavHostController) {
     val context = LocalContext.current
     val config by context.zk.store.config.collectAsStateWithLifecycle()
+    val moling by context.zk.store.moling.collectAsStateWithLifecycle()
+    val grantNow = rememberNow()
+    val grants = com.zongkong.core.moling.Grants.applyDue(moling.grants, grantNow)
     val sig = LocalSignals.current
     val yishouInstalled = remember { com.zongkong.app.link.YishouClient.installed(context) }
     Column(
@@ -142,6 +145,7 @@ fun SettingsScreen(nav: NavHostController) {
         SectionLabel("规则")
         MenuItem("关卡", "${config.gates.size} 道：每个部门每天要交什么", "settings/gates", nav)
         MenuItem("拦截名单", "${config.blocked.size} 个应用：严管时打开就被弹回", "settings/block", nav)
+        MenuItem("墨灵的授权书", if (grants.grants.isEmpty()) "没有授权：墨灵的建议都要你点执行" else "已授权 ${grants.grants.size} 类", "settings/moling", nav)
         MenuItem(
             "低屏模式",
             if (config.watch.enabled && config.watch.rules.isNotEmpty())
