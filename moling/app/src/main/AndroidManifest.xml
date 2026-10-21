@@ -14,6 +14,8 @@
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
 
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <queries>
         <!-- 语音输入走系统识别界面：录音由系统负责，墨灵不申请录音权限 -->
         <intent>
@@ -45,6 +47,16 @@
             </intent-filter>
         </activity>
 
+        <service android:name=".overlay.OverlayService" android:exported="false" />
+        <activity android:name=".overlay.PresenceActivity" android:exported="false" android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <activity android:name=".ShareActivity" android:exported="true" android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
         <!-- 后台心跳：离开 App 也在。低优先级常驻通知，灭屏时放慢。 -->
         <service
             android:name=".HeartService"
@@ -54,6 +66,11 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="个人 AI 伙伴：每分钟看一眼总控和今天的安排" />
         </service>
+
+        <receiver android:name=".widget.NowWidget" android:exported="false" android:label="墨灵 · 此刻">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_now" />
+        </receiver>
 
         <!-- 开机 / 覆盖安装后，设置里开着就把心跳接回来 -->
         <receiver

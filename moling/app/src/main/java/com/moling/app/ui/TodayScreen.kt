@@ -667,8 +667,10 @@ private fun OpeningDialog(opening: Opening, clipboard: ClipboardManager, onDismi
                     ) {
                         TextButton(onClick = {
                             // 打开失败（被系统拦、演员被卸了）只提示，不关对话框，方便接着复制。
+                            val actorStartedAt = System.currentTimeMillis()
                             val ok = runCatching { context.startActivity(intent) }.isSuccess
                             if (ok) {
+                                com.moling.app.overlay.Presence.startSession(context, opening, actorStartedAt)
                                 onDismiss()
                             } else {
                                 Toast.makeText(

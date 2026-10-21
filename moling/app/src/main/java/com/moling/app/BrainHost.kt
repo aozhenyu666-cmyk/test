@@ -324,6 +324,13 @@ object BrainHost {
     /** 喂导演一条感知事件；返回需要立刻显示的卡。 */
     suspend fun sense(sense: Sense): Card? = io<Card?>("sense", { null }) { brain.director.onSense(sense) }
 
+    /** 在你身边的命令入口；用户选 A/C 后才调用 accept。 */
+    suspend fun suggest(command: com.moling.core.link.ZkCommand, now: Long): Proposal? =
+        io<Proposal?>("suggest", { null }) { brain.suggest(command, now) }
+
+    suspend fun session(log: com.moling.core.mind.SessionLog): Card? =
+        io<Card?>("session", { null }) { brain.director.onSession(log) }
+
     // ---------------------------------------------------------------- 工具
 
     /** 所有 brain 调用都从这里走：IO 线程、失败记日志给兜底、调完把状态推给界面。 */

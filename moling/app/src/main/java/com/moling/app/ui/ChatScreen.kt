@@ -67,6 +67,10 @@ fun ChatScreen() {
     val clip = LocalClipboardManager.current
 
     var input by remember { mutableStateOf("") }
+    val presenceDraft by com.moling.app.overlay.Presence.draftText.collectAsState()
+    LaunchedEffect(presenceDraft) {
+        presenceDraft?.let { input = it; com.moling.app.overlay.Presence.draftText.value = null }
+    }
     var sending by remember { mutableStateOf(false) }
     var listening by remember { mutableStateOf(false) }
     // 去聊的开场白：点“好”之后弹出来，供用户复制
@@ -304,8 +308,10 @@ private fun OpeningDialog(opening: Opening, clip: ClipboardManager, onDismiss: (
                     ) {
                         TextButton(onClick = {
                             // 打开失败（被系统拦、演员被卸了）只提示，不关对话框，方便接着复制
+                            val actorStartedAt = System.currentTimeMillis()
                             val ok = runCatching { context.startActivity(intent) }.isSuccess
                             if (ok) {
+                                com.moling.app.overlay.Presence.startSession(context, opening, actorStartedAt)
                                 onDismiss()
                             } else {
                                 Toast.makeText(context.applicationContext, "没打开，复制开场白去粘贴吧", Toast.LENGTH_LONG).show()

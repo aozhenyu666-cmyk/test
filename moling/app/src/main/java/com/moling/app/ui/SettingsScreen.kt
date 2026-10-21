@@ -444,6 +444,7 @@ fun SettingsScreen(onDone: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
+            TextButton(onClick = { com.moling.app.overlay.PresenceActivity.open(context, "settings") }) { Text("在你身边") }
             TextButton(
                 onClick = { debugOpen = true },
                 modifier = Modifier.fillMaxWidth(),

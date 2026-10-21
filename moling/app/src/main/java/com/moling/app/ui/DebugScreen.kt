@@ -63,7 +63,7 @@ fun DebugScreen(onDone: () -> Unit) {
             usageAllowed = usageAllowed,
             foreground = foreground,
             category = category,
-        )
+        ) + "\n\n" + com.moling.app.overlay.Presence.debug(context)
     }.getOrElse { "调试信息生成失败：${it.message ?: it.javaClass.simpleName}" }
 
     Column(Modifier.fillMaxSize()) {
