@@ -1147,3 +1147,32 @@
 **状态**：实现完成（P0）；自动检查：本地 `compileDebugKotlin` 通过，App `testDebugUnitTest assembleDebug` 与 `tools/core-tests` 见 CI；**真机未测**（案板全流程、重启恢复、来源原文弹窗）。
 
 **发布**：本分支已带第八批发布脚本，CI 的 release job 只会在工作分支运行；本开发分支应显示 skipped，不覆盖固定 APK。正式发布验证仍留到工作分支合入后。
+
+---
+
+## 第十批 W10：联网猎取里程碑 1（DeepSeek）
+
+分支 `deepseek/moling-web-memory`，从 P0 整合分支（`deepseek/moling-v13-integration`）拉出；本批**只完成第一块可审查的纵向切片，不是整批完成**。
+
+**实现（本轮）**
+- `core/web/Sources.kt`：`SourceRef/SourceDocument/SourceAttachment/SourceState`；URL 安全（只公网 http(s)，拒绝本机/内网/元数据）、canonical、内容 hash、相同链接/内容复用、删除后保留 DELETED、Material.id ↔ SourceRef.id 映射（不把新 s-ID 塞进旧 sourceIds 解析器）。
+- `core/web/WebPort.kt`：`WebPort`（search/fetch/readFeed）、`HttpWebPort`（重定向≤3、2MB 上限、15 秒超时、401/403/429 明确失败、HTML 正文提取、RSS/Atom 解析、Brave Search 适配器）。无密钥时 search 返回 `NOT_CONFIGURED`，生产路径不返回 mock。
+- `core/intake/Inhale.kt`：统一情报池（200 条 / 5MB、24h TTL、去重键、消费记录、sweep）；分享文本解析只把真正的 URL 当链接，带话的分享保留全文。
+- `core/cycle/Cycle.kt`：`AutonomyBudget`（搜索/抓取/作业/未读上限，跨重启保留、用户可调、`enabled` 默认关）、`CognitiveCycle.once` 事件去重、`QuietPeriod`。
+- App：`BrainHost` 新增来源库落盘 `sources.json`（`SourceState`）与 `benchFetchSource(focusId,url)`、`sourceView(id)`；案板菜单新增「加网页 / 链接」，抓取成功后正文作为材料放上当前案板，来源与材料建立 Attachment。
+
+**自动检查**
+- `tools/core-tests`：**442 个全绿**（原 432 + 新增 10 个 V13WebTest：URL 安全、去重/追加/删除、分享解析、情报池去重/TTL、预算、事件去重、HTML/RSS、假服务器抓取、超大响应、无密钥 search）。
+- App：本地 `testDebugUnitTest assembleDebug` 通过。
+- 真实公网抓取/搜索**未验**（没有 Brave key；只用 MockWebServer 假服务器验证了协议和失败路径）。
+
+**未完成（本批后续 T3–T9）**
+- T2：设置页搜索提供者/reader/RSS 配置、测试连接与额度显示、RSS 订阅 UI 未做；Brave search 仍 `NOT_CONFIGURED`。
+- T3：ShareActivity 还没有「提取正文放上案板 / 只存链接」，情报池还没接到分享入口；材料列表的移除/选中未做。
+- T4：联网采蜜（DISCOVERY/SOURCE_PACK）未做，旧 Forage 未改。
+- T5：Prework 模型作业还没有注入冻结材料快照和引用校验；伪造引用拦截未接。
+- T6：HybridRecall / MemoryCandidate 未做。
+- T7：CognitiveCycle 还没接心跳和主动第一块；设置里的“她可主动准备材料”开关未做。
+- T8：CognitiveProfile 未做。
+
+**真机**：未测。本切片只能验证「案板 → ⋯ → 加网页 → 输入公开 URL → 取正文 → 材料出现」；无密钥/断网应显示明确失败，不伪造内容。

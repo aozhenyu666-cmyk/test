@@ -47,6 +47,9 @@ import com.moling.core.workspace.JobKind
 import com.moling.core.workspace.PortError
 import com.moling.core.workspace.PortResult
 import com.moling.core.workspace.Workbench
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import com.moling.core.workspace.WorkbenchState
 import com.moling.core.workspace.WorkspaceArtifact
 import com.moling.core.mind.MindState
@@ -88,6 +91,11 @@ object BrainHost {
     /** 案板：焦点、稿子、撤销栈、作业（界面读这个；每次改动都会推新值）。 */
     val workbench: StateFlow<WorkbenchState> = _bench
     private lateinit var settings: SettingsStore
+
+    /** 第十批：来源库（SourceRef + 正文 + Material 映射），与案板分开存，避免大正文进状态。 */
+    private val _sources = MutableStateFlow(com.moling.core.web.SourceState())
+    val sources: StateFlow<com.moling.core.web.SourceState> = _sources
+    private var sourceFile: java.io.File? = null
 
     /** 持有 application context：读前台应用、系统状态、起服务都要用。 */
     private var appContext: Context? = null
@@ -155,6 +163,10 @@ object BrainHost {
                 onChange = { _bench.value = it },
             )
             _bench.value = bench.state()
+            sourceFile = File(dir, "sources.json")
+            _sources.value = runCatching {
+                sourceFile?.takeIf { it.exists() }?.readText()?.let { Json.decodeFromString<com.moling.core.web.SourceState>(it) }
+            }.getOrNull() ?: com.moling.core.web.SourceState()
             ready = true
             Log.i(TAG, "大脑宿主起来了")
         }
@@ -587,6 +599,52 @@ object BrainHost {
     /** 他确认后：把采用过的论断织进体系图（[topicId] null = 当前主题）。返回收进几条。 */
     suspend fun benchKeep(artifactId: String, topicId: String? = null): Int =
         io("benchKeep", { 0 }) { brain.keepClaims(bench.claims(artifactId), topicId, System.currentTimeMillis()) }
+
+    /** 第十批 T2/T3：抓一个真实网页，正文存来源库并作为材料放上当前案板。 */
+    suspend fun benchFetchSource(focusId: String, url: String): PortResult<com.moling.core.workspace.Material> =
+        io("benchFetch", { PortResult.Failed(PortError("NETWORK", "网络没接上")) }) {
+            val web = com.moling.core.web.HttpWebPort()
+            val page = when (val r = web.fetch(url)) {
+                is PortResult.Ok -> r.value
+                is PortResult.Failed -> return@io r
+            }
+            val now = System.currentTimeMillis()
+            val hash = com.moling.core.web.Sources.hash(page.text)
+            val canonical = com.moling.core.web.Sources.canonical(page.finalUrl)
+            val old = com.moling.core.web.Sources.reuse(_sources.value, page.finalUrl, hash)
+            val ref = old ?: com.moling.core.web.SourceRef(
+                id = com.moling.core.web.Sources.refId("s", canonical, hash),
+                channel = com.moling.core.web.SourceChannel.WEB,
+                url = page.finalUrl,
+                title = page.title,
+                fetchedAt = now,
+                snippet = page.text.take(200),
+                contentHash = hash,
+                status = com.moling.core.web.SourceStatus.OK,
+                complete = page.complete,
+                focusId = focusId,
+            )
+            _sources.value = com.moling.core.web.Sources.put(_sources.value, ref, page.text)
+            val added = bench.addMaterial(focusId, page.text, now, kind = "web", title = page.title.ifBlank { page.finalUrl })
+            when (added) {
+                is PortResult.Ok -> {
+                    val m = bench.state().materialsOf(added.value).lastOrNull()
+                        ?: return@io PortResult.Failed(PortError("BAD_ACTION", "材料没加上"))
+                    _sources.value = com.moling.core.web.Sources.attach(_sources.value, m.id, ref.id, now)
+                    saveSources()
+                    PortResult.Ok(m)
+                }
+                is PortResult.Failed -> added
+            }
+        }
+
+    /** 来源原文（只读）。材料 id 也可以查：先找 Attachment，再退回 Material 本身。 */
+    fun sourceView(id: String): com.moling.core.web.SourceRef? =
+        _sources.value.ref(id) ?: _sources.value.refOfMaterial(id)
+
+    private fun saveSources() {
+        runCatching { sourceFile?.writeText(Json.encodeToString(_sources.value)) }
+    }
 
     private fun <T> offline(): PortResult<T> = PortResult.Failed(PortError(PortError.OFFLINE, "刚才没接上，再试一次"))
 

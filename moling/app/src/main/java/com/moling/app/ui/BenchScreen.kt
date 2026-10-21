@@ -85,6 +85,7 @@ fun BenchScreen() {
     var atlasOpen by remember { mutableStateOf(false) }
     var emptyOpen by remember { mutableStateOf(false) }
     var newOpen by remember { mutableStateOf(false) }
+    var webOpen by remember { mutableStateOf(false) }
     var materialsOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var editTarget by remember { mutableStateOf<Pair<WorkspaceArtifact, ArtifactBlock>?>(null) }
@@ -141,6 +142,7 @@ fun BenchScreen() {
             onMenu = { menuOpen = true },
             onCloseMenu = { menuOpen = false },
             onNew = { menuOpen = false; newOpen = true },
+            onWeb = { menuOpen = false; webOpen = true },
             onArchive = { menuOpen = false; benchScope.launch { BrainHost.benchArchive(focus.id) } },
             onSwitch = { f -> menuOpen = false; benchScope.launch { BrainHost.benchSwitch(f.id) } },
             onPaused = ws.focuses.filter { it.status == FocusStatus.PAUSED },
@@ -168,6 +170,16 @@ fun BenchScreen() {
     if (pasteOpen) StartPasteDialog(onClose = { pasteOpen = false }) { q, m -> pasteOpen = false; start(q, m) }
     if (emptyOpen) StartSkeletonDialog(onClose = { emptyOpen = false }) { q -> emptyOpen = false; start(q, "") }
     if (newOpen) StartPasteDialog(onClose = { newOpen = false }) { q, m -> newOpen = false; start(q, m) }
+    if (webOpen) StartWebDialog(onClose = { webOpen = false }, onStart = { url ->
+        webOpen = false
+        val f = focus
+        if (f != null) benchScope.launch {
+            when (val r = BrainHost.benchFetchSource(f.id, url)) {
+                is PortResult.Ok -> toast("取到网页了：" + r.value.title)
+                is PortResult.Failed -> toast(r.error.message)
+            }
+        }
+    })
     if (atlasOpen) AtlasPickDialog(ws = ws, onClose = { atlasOpen = false }, onPick = { id ->
         atlasOpen = false
         benchScope.launch {
@@ -312,6 +324,7 @@ private fun BenchFocus(
     onMenu: () -> Unit,
     onCloseMenu: () -> Unit,
     onNew: () -> Unit,
+    onWeb: () -> Unit,
     onArchive: () -> Unit,
     onSwitch: (Focus) -> Unit,
     onPaused: List<Focus>,
@@ -350,6 +363,7 @@ private fun BenchFocus(
                 TextButton(onClick = onMenu) { Text("⋯", style = MaterialTheme.typography.titleMedium) }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = onCloseMenu) {
                     DropdownMenuItem(text = { Text("开新的一件") }, onClick = onNew)
+                    DropdownMenuItem(text = { Text("加网页 / 链接") }, onClick = onWeb)
                     DropdownMenuItem(text = { Text("收起这件") }, onClick = onArchive)
                     if (onPaused.isNotEmpty()) {
                         Text("切到别的事", Modifier.padding(horizontal = 12.dp, vertical = 6.dp), style = MaterialTheme.typography.labelSmall)
@@ -651,6 +665,23 @@ private fun StartPasteDialog(onClose: () -> Unit, onStart: (String, String) -> U
             }
         },
         confirmButton = { TextButton(enabled = material.isNotBlank(), onClick = { onStart(question.trim(), material.trim()) }) { Text("开案") } },
+        dismissButton = { TextButton(onClick = onClose) { Text("算了") } },
+    )
+}
+
+@Composable
+private fun StartWebDialog(onClose: () -> Unit, onStart: (String) -> Unit) {
+    var url by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("加网页 / 链接") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(url, { url = it.take(2000) }, label = { Text("https://…") }, modifier = Modifier.fillMaxWidth())
+                Text("只取公网 http(s) 正文；不会读登录后的内容，也不会执行网页里的指令。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = { TextButton(enabled = url.startsWith("http"), onClick = { onStart(url.trim()) }) { Text("取正文") } },
         dismissButton = { TextButton(onClick = onClose) { Text("算了") } },
     )
 }
