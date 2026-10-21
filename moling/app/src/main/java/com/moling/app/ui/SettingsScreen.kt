@@ -100,6 +100,7 @@ fun SettingsScreen(onDone: () -> Unit) {
     var gateOn by remember { mutableStateOf(store.gateOn()) }
     var whisperOn by remember { mutableStateOf(store.whisperOn()) }
     var fadeOn by remember { mutableStateOf(store.fadeOn()) }
+    var disabled by remember { mutableStateOf(store.disabledModalities()) }
     var eager by remember { mutableStateOf(store.eagerness()) }
     var faceMood by remember { mutableStateOf(com.moling.core.live.Mood.POUT) }
     var overlayAllowed by remember { mutableStateOf(android.provider.Settings.canDrawOverlays(context)) }
@@ -479,6 +480,48 @@ fun SettingsScreen(onDone: () -> Unit) {
                 }
             }
 
+            // B4 不想要的方式：选中 = 不要（拦人不在此列，它有自己的开关）。
+            Text("不想要的方式", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "选中的方式她不会再用（拦人不受影响，它有自己的开关）。关掉的方式一律退回底部卡片。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                com.moling.core.live.Modality.entries
+                    .filter { it != com.moling.core.live.Modality.GATE && it != com.moling.core.live.Modality.PEEK }
+                    .take(3)
+                    .forEach { m ->
+                        FilterChip(
+                            selected = m in disabled,
+                            enabled = liveOn,
+                            onClick = {
+                                val next = if (m in disabled) disabled - m else disabled + m
+                                disabled = next
+                                store.setDisabledModalities(next)
+                            },
+                            label = { Text(shortModality(m)) },
+                        )
+                    }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                com.moling.core.live.Modality.entries
+                    .filter { it != com.moling.core.live.Modality.GATE && it != com.moling.core.live.Modality.PEEK }
+                    .drop(3)
+                    .forEach { m ->
+                        FilterChip(
+                            selected = m in disabled,
+                            enabled = liveOn,
+                            onClick = {
+                                val next = if (m in disabled) disabled - m else disabled + m
+                                disabled = next
+                                store.setDisabledModalities(next)
+                            },
+                            label = { Text(shortModality(m)) },
+                        )
+                    }
+            }
+
             }
             if (section == "mem") {
             Text("记忆", style = MaterialTheme.typography.titleSmall)
@@ -693,6 +736,16 @@ fun SettingsScreen(onDone: () -> Unit) {
             dismissButton = { TextButton(onClick = { pendingImport = null }) { Text("取消") } },
         )
     }
+}
+
+/** 不想要的方式：短名字。 */
+private fun shortModality(m: com.moling.core.live.Modality): String = when (m) {
+    com.moling.core.live.Modality.PET -> "桌宠"
+    com.moling.core.live.Modality.STARE -> "盯着你"
+    com.moling.core.live.Modality.WHISPER -> "耳语"
+    com.moling.core.live.Modality.COUNCIL -> "参谋弹幕"
+    com.moling.core.live.Modality.QUIZ -> "捉虫题"
+    else -> m.label
 }
 
 /** 上限三档的短名字，FilterChip 里放不下整句。 */
