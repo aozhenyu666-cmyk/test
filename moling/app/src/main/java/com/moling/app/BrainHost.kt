@@ -38,6 +38,17 @@ import com.moling.core.mind.Baton
 import com.moling.core.mind.Card
 import com.moling.core.mind.DirectorConfig
 import com.moling.core.mind.FileMindStore
+import com.moling.core.spar.MindAct
+import com.moling.core.workspace.ArtifactAction
+import com.moling.core.workspace.ArtifactActionKind
+import com.moling.core.workspace.Artifacts
+import com.moling.core.workspace.Focus
+import com.moling.core.workspace.JobKind
+import com.moling.core.workspace.PortError
+import com.moling.core.workspace.PortResult
+import com.moling.core.workspace.Workbench
+import com.moling.core.workspace.WorkbenchState
+import com.moling.core.workspace.WorkspaceArtifact
 import com.moling.core.mind.MindState
 import com.moling.core.mind.Opening
 import com.moling.core.mind.Reply
@@ -70,6 +81,12 @@ object BrainHost {
     private var ready = false
 
     private lateinit var brain: Brain
+    private lateinit var bench: Workbench
+
+    private val _bench = MutableStateFlow(WorkbenchState())
+
+    /** 案板：焦点、稿子、撤销栈、作业（界面读这个；每次改动都会推新值）。 */
+    val workbench: StateFlow<WorkbenchState> = _bench
     private lateinit var settings: SettingsStore
 
     /** 持有 application context：读前台应用、系统状态、起服务都要用。 */
@@ -127,6 +144,17 @@ object BrainHost {
                 deep = Ask { system, user -> if (settings.load().hasDeep()) deep.ask(system, user) else null },
             )
             _state.value = brain.state()
+            // 案板（v13 第九批）：自己的文件、自己的锁；只有他点了才调模型
+            bench = Workbench(
+                store = FileMindStore(File(dir, "workbench.json")),
+                ask = ask,
+                deep = Ask { system, user -> if (settings.load().hasDeep()) deep.ask(system, user) else null },
+                persona = { settings.load().persona },
+                about = { runCatching { brain.state().about }.getOrDefault("") },
+                atlas = { q -> runCatching { Workbench.atlasLines(brain.state().atlas, q) }.getOrDefault(emptyList()) },
+                onChange = { _bench.value = it },
+            )
+            _bench.value = bench.state()
             ready = true
             Log.i(TAG, "大脑宿主起来了")
         }
@@ -499,6 +527,68 @@ object BrainHost {
     suspend fun setRule(id: String, keep: Boolean) {
         io("setRule", {}) { brain.setRule(id, keep, System.currentTimeMillis()) }
     }
+
+    // ---------------------------------------------------------------- 案板（v13 第九批）
+
+    /** 开一件新事：问题 + 他贴的材料（之前正在做的挂起）。 */
+    suspend fun benchStart(question: String, material: String): Focus? =
+        io<Focus?>("benchStart", { null }) { bench.start(question, material, System.currentTimeMillis()) }
+
+    /** 从体系图选一个主题当材料开一件事；主题里没论断返回 null。 */
+    suspend fun benchFromAtlas(topicId: String, question: String = ""): Focus? = io<Focus?>("benchFromAtlas", { null }) {
+        val (name, text) = Workbench.topicMaterial(brain.state().atlas, topicId) ?: return@io null
+        bench.start(question.ifBlank { name }, text, System.currentTimeMillis(), kind = "atlas", title = name)
+    }
+
+    suspend fun benchAddMaterial(focusId: String, text: String): PortResult<Focus> =
+        io("benchAddMaterial", { offline() }) { bench.addMaterial(focusId, text, System.currentTimeMillis()) }
+
+    suspend fun benchSwitch(focusId: String): PortResult<Focus> =
+        io("benchSwitch", { offline() }) { bench.switchTo(focusId, System.currentTimeMillis()) }
+
+    suspend fun benchArchive(focusId: String): PortResult<Focus> =
+        io("benchArchive", { offline() }) { bench.archive(focusId, System.currentTimeMillis()) }
+
+    /** “替我先做一块”：OUTLINE 纲要 / DRAFT 初稿（[artifactId] = 哪份纲要，null = 最新的）/ COUNCIL 四参谋（[artifactId] 必填）。 */
+    suspend fun benchPrework(focusId: String, kind: JobKind, artifactId: String? = null): PortResult<WorkspaceArtifact> =
+        io("benchPrework", { offline() }) { bench.prework(focusId, kind, System.currentTimeMillis(), artifactId) }
+
+    /**
+     * 稿子上的一下。界面用 [Artifacts.actionId] 生成 id（同一版本上同一个按钮 → 同一个 id，连点只算一次）。
+     * 挑刺 / 选路线 / 采用记进思维转速。
+     */
+    suspend fun benchApply(
+        artifact: WorkspaceArtifact,
+        kind: ArtifactActionKind,
+        blockId: String? = null,
+        optionId: String? = null,
+        text: String? = null,
+    ): PortResult<WorkspaceArtifact> = io("benchApply", { offline() }) {
+        val now = System.currentTimeMillis()
+        val a = ArtifactAction(Artifacts.actionId(artifact, kind, blockId, optionId, text), artifact.id, artifact.revision, kind, blockId, optionId, text, now)
+        val r = bench.apply(a)
+        if (r is PortResult.Ok) when (kind) {
+            ArtifactActionKind.REQUEST_CRITIC -> brain.markMind(MindAct.QUIZ, now)
+            ArtifactActionKind.CHOOSE_BRANCH, ArtifactActionKind.ACCEPT_BLOCK, ArtifactActionKind.ACCEPT_ARTIFACT -> brain.markMind(MindAct.DECIDE, now)
+            ArtifactActionKind.EDIT_BLOCK -> brain.markMind(MindAct.SAY, now)
+            else -> {}
+        }
+        r
+    }
+
+    suspend fun benchCancel(jobId: String): Boolean = io("benchCancel", { false }) { bench.cancel(jobId, System.currentTimeMillis()) }
+
+    /** 导出 Markdown（复制 / 分享用）。 */
+    fun benchMarkdown(artifactId: String): String = runCatching { bench.markdown(artifactId) }.getOrDefault("")
+
+    /** 能收进体系图的论断（先给他看，他点“收进”再调 [benchKeep]）。 */
+    fun benchClaims(artifactId: String): List<String> = runCatching { bench.claims(artifactId) }.getOrDefault(emptyList())
+
+    /** 他确认后：把采用过的论断织进体系图（[topicId] null = 当前主题）。返回收进几条。 */
+    suspend fun benchKeep(artifactId: String, topicId: String? = null): Int =
+        io("benchKeep", { 0 }) { brain.keepClaims(bench.claims(artifactId), topicId, System.currentTimeMillis()) }
+
+    private fun <T> offline(): PortResult<T> = PortResult.Failed(PortError(PortError.OFFLINE, "刚才没接上，再试一次"))
 
     /** 他对她这次出现的反应（反免疫账本）。不等结果。 */
     fun react(modality: com.moling.core.live.Modality, reaction: com.moling.core.live.Reaction, ms: Long) {

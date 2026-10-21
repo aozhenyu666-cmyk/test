@@ -58,7 +58,7 @@ class FogTest {
         val b = brain(ask)
         val t = b.live(Trigger.LONG_SCROLL, douyin, at(15), roll = 0.9)!!
         assertTrue(t.fog)
-        assertEquals(3, t.choices.size)
+        assertEquals(listOf("红烧肉", "糖醋排骨", "都不想吃", Live.EXIT), t.choices)
         val p = ask.prompts.last()
         assertTrue(p.contains("【破雾】"))
         assertTrue(p.contains("不问为什么 / 卡在哪"))
@@ -68,7 +68,44 @@ class FogTest {
         val b = brain(null)
         val t = b.live(Trigger.AUTOPILOT, douyin, at(15), roll = 0.9)!!
         assertFalse(t.line.contains("卡在哪"))
-        assertEquals(listOf("有点懵", "还行", "别管我"), t.choices)
+        assertEquals(listOf("有点懵", "还行", "别管我", Live.EXIT), t.choices)
+    }
+
+    @Test fun earlyScrollAtWorkIsFogToo() = runTest {
+        // v13：该做事时刚刷 6 分钟，也不审“卡在哪”，走点选
+        val ask = Router(listOf("你被叫醒的原因" to "【出声】是\n【表情】好奇\n【说】B 站又把你吸进去了？"))
+        val b = brain(ask)
+        val t = b.live(Trigger.SCROLL_AT_WORK, douyin.copy(minutes = 6), at(10), roll = 0.9)!!
+        assertTrue(t.fog)
+        assertTrue(ask.prompts.last().contains("【破雾】"))
+        assertEquals("模型漏了【选】也有按钮，最后一个是退出", Live.EXIT, t.choices.last())
+        assertTrue(t.choices.size >= 2)
+        val offline = brain(null).live(Trigger.SCROLL_AT_WORK, douyin.copy(minutes = 6), at(10), roll = 0.9)!!
+        assertFalse(offline.line.contains("卡在哪"))
+        assertEquals(Live.EXIT, offline.choices.last())
+    }
+
+    @Test fun everyEntertainmentEntryIsFog() {
+        Live.ENTERTAINMENT.forEach { assertTrue(it.name, Live.fog(it, 0)) }
+        assertFalse(Live.fog(Trigger.MORNING, 0))
+        assertFalse(Live.fog(Trigger.DONE, 5))
+        assertFalse(Live.fog(Trigger.SPAR, 5))
+        assertTrue("老被划掉也走破雾", Live.fog(Trigger.UNLOCK, 2))
+        Live.ENTERTAINMENT.forEach { tr ->
+            assertFalse(tr.name, Live.local(tr, douyin, true, "写报告").line.let { it.contains("卡在哪") || it.contains("还要多久") })
+        }
+        assertEquals(listOf("a", "b", "c", Live.EXIT), Live.fogChoices(listOf("a", "b", "c", "d"), listOf("x")))
+        assertEquals(listOf("x", Live.EXIT), Live.fogChoices(emptyList(), listOf("x")))
+    }
+
+    @Test fun exitChoiceEndsFogAndReleasesGate() = runTest {
+        val b = brain(Router(listOf("你被叫醒的原因" to "【出声】是\n【表情】气鼓鼓\n【说】停一下？\n【拦】是\n【选】好｜不")))
+        val t = b.live(Trigger.SCROLL_IN_BED, douyin.copy(minutes = 30), at(23, 40), roll = 0.9)!!
+        assertTrue(t.gate)
+        val r = b.tap(Live.EXIT, at(23, 41))
+        assertTrue("点退出第一下就放", r.release)
+        assertTrue(r.choices.isEmpty())
+        assertNull(b.state().gate)
     }
 
     @Test fun threeTapsBringHimOut() = runTest {

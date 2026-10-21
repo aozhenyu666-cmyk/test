@@ -1190,8 +1190,8 @@ class Brain(
         val canGate = GateRules.eligible(a) && Spirits.mayGate(sp, cfg) &&
             trigger in setOf(Trigger.SCROLL_AT_WORK, Trigger.SCROLL_IN_BED, Trigger.LONG_SCROLL, Trigger.AUTOPILOT)
         // 破雾：他多半刷懵了（自动驾驶、夜里躺着刷、刷了很久、该做事时已经刷了一刻钟，或者最近老划掉她）
-        val fog = trigger == Trigger.AUTOPILOT || trigger == Trigger.SCROLL_IN_BED || trigger == Trigger.LONG_SCROLL || trigger == Trigger.TOLL ||
-            (trigger == Trigger.SCROLL_AT_WORK && (a?.minutes ?: 0) >= 15) || (sp.ignored >= 2 && trigger != Trigger.DONE)
+        // （v13）所有娱乐入口都走破雾，不再分“刷了一刻钟以内先审一句卡在哪”
+        val fog = Live.fog(trigger, sp.ignored)
         val flow = st.flow?.takeIf { it.day == day }
         val flowNow = flow?.let { Flow.current(it, Flow.minuteOf(now)) }?.title.orEmpty()
         val persona = config().persona
@@ -1253,7 +1253,9 @@ class Brain(
         save()
         st = st.copy(habits = Habits.shown(st.habits, modality, now))
         save()
-        LiveTurn(line.mood, line.line, gate != null, false, made, modality, quiz, line.choices, fog)
+        // 破雾一定有按钮、一定能退出：模型漏了【选】就用兜底的
+        val choices = if (fog) Live.fogChoices(line.choices, Live.fogOpen(a, canGate).choices) else line.choices
+        LiveTurn(line.mood, line.line, gate != null, false, made, modality, quiz, choices, fog)
     }
 
     // ------------------------------------------------------------------ 平时也让脑子转起来（v12）
@@ -1379,6 +1381,30 @@ class Brain(
         added
     }
 
+    // ------------------------------------------------------------------ 案板的适配（v13 第九批；案板本身在 core/workspace，自己存、自己锁）
+
+    /** 他在案板上动了脑子（挑刺、选路线、采用）：记进思维转速。 */
+    suspend fun markMind(act: MindAct, now: Long) = lock.withLock {
+        mark(act, now)
+        save()
+    }
+
+    /**
+     * 他在案板上点了“收进体系图”：把他采用过的论断（[Artifacts.claims]，练习靶子和待核的已经排除）织进 [topicId]
+     * （null = 当前主题，没有就第一个主题）。来源记“案板”。返回收进几条；没有主题 / 模型没接上返回 0。
+     */
+    suspend fun keepClaims(claims: List<String>, topicId: String?, now: Long): Int = lock.withLock {
+        if (claims.isEmpty()) return@withLock 0
+        val t = st.atlas.topics.firstOrNull { it.id == (topicId ?: st.topicId) } ?: st.atlas.topics.firstOrNull() ?: return@withLock 0
+        val existing = st.atlas.nodes.filter { it.topicId == t.id }
+        val reply = model(config().persona, AtlasOps.ingestPrompt(t, existing, claims.joinToString("\n") { "- $it" }, "案板"))
+        val added = reply?.let { AtlasOps.merge(st.atlas, AtlasOps.parse(it, t.id, "案板", now)) }?.let { (a, n) -> st = st.copy(atlas = a); n } ?: 0
+        mark(MindAct.DECIDE, now)
+        st = st.copy(log = st.log + "${hm(now)} 案板收进体系图 $added 条（${t.name.take(10)}）")
+        save()
+        added
+    }
+
     /** 夜里：从这几天的数字里提 1–2 条“当……，就……”（他点“对”才生效）。 */
     suspend fun proposeRules(now: Long): List<Rule> = lock.withLock {
         if (st.rules.count { it.status == "proposed" } >= 3) return@withLock emptyList()
@@ -1439,7 +1465,8 @@ class Brain(
         val g = st.gate
         val round = (if (now - st.fogAt < 5 * 60_000L) st.fogRound else 0) + 1
         val gating = g != null
-        val last = if (gating) round >= 2 || GateRules.expired(g!!, now, cfg) else round >= 3
+        // 点“先不聊了”= 这一下就收尾（拦着时也放行，和「急事」一样随时能走）
+        val last = choice == Live.EXIT || (if (gating) round >= 2 || GateRules.expired(g!!, now, cfg) else round >= 3)
         st = st.copy(talk = (st.talk + Turn("他", "（点了）$choice", now)).takeLast(TALK_KEEP))
         // 盲盒 / 赌：先揭晓
         val p = st.lastPlay?.takeIf { round == 1 && now - it.at < 2 * DAY_MS }
@@ -1467,7 +1494,7 @@ class Brain(
             log = st.log + "${hm(now)} 他点了「${choice.take(12)}」${if (release) "，放行" else ""}",
         )
         save()
-        val choices = if (last || release) emptyList() else parsed.choices.ifEmpty { Live.fogLocal(round, false).choices }
+        val choices = if (last || release) emptyList() else Live.fogChoices(parsed.choices, Live.fogLocal(round, false).choices)
         LiveTurn(parsed.mood, line, gating && !release, release, made, choices = choices, fog = true)
     }
 

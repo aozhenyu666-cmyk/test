@@ -243,6 +243,20 @@ object Live {
         append("需要的话另起一行写【动作】（提醒我 / 约定）")
     }
 
+    /** 娱乐类的入口：一律走破雾（点选、不审讯、有退出）。正常做事时的对话不在这里，仍然可以问问题。 */
+    val ENTERTAINMENT = setOf(Trigger.SCROLL_AT_WORK, Trigger.SCROLL_IN_BED, Trigger.LONG_SCROLL, Trigger.AUTOPILOT, Trigger.TOLL)
+
+    /** 破雾时永远在的那个按钮：点了她就收尾（拦着时也放行）。 */
+    const val EXIT = "先不聊了"
+
+    /** 这次出现要不要走破雾：所有娱乐入口；或者他最近老划掉她（主线刚做完、三手棋除外）。 */
+    fun fog(trigger: Trigger, ignored: Int): Boolean =
+        trigger in ENTERTAINMENT || (ignored >= 2 && trigger != Trigger.DONE && trigger != Trigger.SPAR)
+
+    /** 破雾的按钮：模型给的（漏了就用兜底的），最多 3 个，最后一定带 [EXIT]。 */
+    fun fogChoices(given: List<String>, fallback: List<String>): List<String> =
+        given.ifEmpty { fallback }.filterNot { it == EXIT }.take(3) + EXIT
+
     /** 破雾开场的本地兜底（模型不可用时）：不问卡在哪，只给点一下的选项。 */
     fun fogOpen(activity: Activity?, canGate: Boolean): LiveLine {
         val app = activity?.label?.ifBlank { null } ?: "手机"
@@ -274,12 +288,13 @@ object Live {
         val app = activity?.label?.ifBlank { null } ?: "手机"
         val min = activity?.minutes ?: 0
         return when (trigger) {
+            // 娱乐入口不审讯：不问“卡在哪 / 还要多久”，给点一下就能回的选项（破雾时 Brain 还会补上“先不聊了”）
             Trigger.SCROLL_AT_WORK -> LiveLine(
-                true, Mood.POUT,
-                "${app}已经 $min 分钟了，现在本该是「${flowNow.ifBlank { "今天的主线" }}」。先说一句：卡在哪了？", canGate, false,
+                true, Mood.CURIOUS, "${app} $min 分钟啦。手在自己动，还是在等什么？", canGate, false,
+                listOf("手在自己动", "在等东西", "这就回去"),
             )
-            Trigger.SCROLL_IN_BED -> LiveLine(true, Mood.POUT, "躺着刷了 $min 分钟了哦。说一句：几点放下手机睡觉？", canGate, false)
-            Trigger.LONG_SCROLL -> LiveLine(true, Mood.WORRIED, "${app}连着 $min 分钟了。还要多久？", false, false)
+            Trigger.SCROLL_IN_BED -> LiveLine(true, Mood.SLEEPY, "躺着刷了 $min 分钟了哦。眼睛还撑得住吗？", canGate, false, listOf("还行", "有点困", "再看一个"))
+            Trigger.LONG_SCROLL -> LiveLine(true, Mood.CURIOUS, "${app}连着 $min 分钟了。刷到什么好玩的没？", false, false, listOf("有一个", "全是水", "没注意"))
             Trigger.WAKE -> LiveLine(true, Mood.CURIOUS, "我来看看你了。", false, false)
             Trigger.MORNING -> LiveLine(true, Mood.HAPPY, "早。今天先做哪一件？", false, false)
             Trigger.IDLE -> LiveLine(false, Mood.CALM, "", false, false)

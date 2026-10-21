@@ -983,3 +983,19 @@
 - `tools/core-tests` 里 `gradle test`：**410 个用例全绿**。
 - `node tools/relay-test/test.mjs`：输出 `relay ok`。
 - App：本地 `testDebugUnitTest` + `assembleDebug` 通过；CI `moling-android` 见 `deepseek-mind` 分支。
+## 第九批 C9（Claude）：案板内核 + 破雾统一
+
+**新增**
+- `core/workspace/Workspace.kt`：焦点 `Focus`、材料、稿子 `WorkspaceArtifact`（块：段落 / 引文 / 待核假设 / 选择 / 批注）、撤销栈、动作 `ArtifactAction`、作业 `PreworkJob`、`PortResult`；纯操作 `Artifacts`（编辑、采用、删、选 A/B、整份采用、导出 Markdown、可进体系图的论断）。
+- `core/workspace/Workbench.kt`：协调层。自己的锁、自己的文件（`mind/workbench.json`），不进 BrainState。只有他点了才调模型；调模型时不拿锁，回来再核对：取消的丢掉、焦点换了材料 / 归档的作废、要改的段落被他改过的作废。动作带版本号（对不上 = 版本冲突），同一动作 id 只算一次；进程被杀时在跑的作业下次记“中断”。
+- `core/strategy/Prework.kt`：纲要 / 初稿 / 对手挑刺（A/B 两条改法）/ 改写 / 四参谋的提示词和解析。没联网：依据只认真实存在的材料 / 论断编号，编出来的丢掉、那一块降成“待核”；模型漏字段走本地骨架（纲要、初稿、挑刺有兜底，改写和四参谋明说离线）。【靶子】练习诱饵 exerciseOnly：不导出、不进体系图。
+- Brain 适配：`markMind`（案板上动脑记进思维转速）、`keepClaims`（他确认后把采用过的论断织进体系图，来源“案板”）。
+- BrainHost：`workbench` 状态流 + `bench*` 方法（见 DEEPSEEK-9 第 1 节）。
+
+**破雾统一（v13 C9 第 3 条）**
+- 所有娱乐入口（该做事时在刷、躺着刷、刷很久、自动驾驶、过路费）一律破雾：不再有“该做事时刷了一刻钟以内先问卡在哪”。`Live.local` 的这几条也不再问“卡在哪 / 还要多久”，改成点选。
+- 破雾一定有按钮（模型漏了【选】用兜底），最后一个永远是「先不聊了」，点了她收尾、拦着时放行。正常做事时的对话不受影响。
+
+**验证**
+- `tools/core-tests` `gradle test`：432 个用例全绿（新增 `WorkbenchTest` 19 个、`FogTest` 3 个）。覆盖：出口流程（纲要→挑刺→选 A→改首段→导出）、重复动作只算一次 / 不重复花钱、版本冲突、撤销两步、改写回来时段落已改 → 作废、取消后不落盘、换材料后旧结果作废、换焦点后结果留在原焦点、同输入幂等、在跑时 BUSY、离线骨架、练习诱饵不进论断、重启恢复 + 中断标记、初稿只用采用过的要点、四参谋另开一份、解析容错。
+- App 编译以 CI 为准；界面（I9）还没做，真机未测。
