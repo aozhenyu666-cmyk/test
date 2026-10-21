@@ -237,6 +237,18 @@ class SettingsStore(context: Context) {
         toggles.edit().putString(KEY_EAGER, e.name).apply()
     }
 
+    /** 他不想要的出现方式（桌宠 / 盯着 / 耳语 / 参谋弹幕 / 捉虫题）；拦人（GATE）不在这里。 */
+    fun disabledModalities(): Set<com.moling.core.live.Modality> = runCatching {
+        toggles.getString(KEY_DISABLED_MODALITIES, null).orEmpty()
+            .split(',')
+            .mapNotNull { name -> name.trim().takeIf { it.isNotEmpty() }?.let { com.moling.core.live.Modality.valueOf(it) } }
+            .toSet()
+    }.getOrDefault(emptySet())
+
+    fun setDisabledModalities(set: Set<com.moling.core.live.Modality>) {
+        toggles.edit().putString(KEY_DISABLED_MODALITIES, set.joinToString(",") { it.name }).apply()
+    }
+
     /** 她可以在耳机里说话（Z3 耳语）：默认开。 */
     fun whisperOn(): Boolean = toggles.getBoolean(KEY_WHISPER, true)
 
@@ -269,6 +281,7 @@ class SettingsStore(context: Context) {
         private const val KEY_EAGER = "eagerness"
         private const val KEY_WHISPER = "whisper"
         private const val KEY_FADE = "fade"
+        private const val KEY_DISABLED_MODALITIES = "disabled_modalities"
 
         private const val DEFAULT_BASE_URL = "https://api.deepseek.com"
         private const val DEFAULT_MODEL = "deepseek-chat"

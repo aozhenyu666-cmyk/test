@@ -66,6 +66,7 @@ import com.moling.app.ui.Paper
 import com.moling.app.ui.Seal
 import com.moling.app.ui.Speaker
 import com.moling.core.live.Mood
+import com.moling.core.live.Quiz
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -192,6 +193,9 @@ class GateActivity : ComponentActivity() {
         var text by remember { mutableStateOf("") }
         var busy by remember { mutableStateOf(false) }
         var released by remember { mutableStateOf(false) }
+        // B1 捉虫题：动一下脑子，答对了她再听你说。
+        var gateQuiz by remember { mutableStateOf<Quiz?>(null) }
+        var quizBusy by remember { mutableStateOf(false) }
         val startedAt = remember { BrainHost.state.value.gate?.startedAt ?: System.currentTimeMillis() }
         var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
         val maxMs = BrainHost.liveConfig().gateMaxMin * 60_000L
@@ -296,6 +300,50 @@ class GateActivity : ComponentActivity() {
                     }) { Text("说话") }
                     Spacer(Modifier.weight(1f))
                     if (busy) InkThinking("她在想…") else Button(enabled = text.isNotBlank(), onClick = { send() }) { Text("回她") }
+                }
+                if (gateQuiz == null) {
+                    TextButton(
+                        enabled = !busy && !quizBusy,
+                        onClick = {
+                            quizBusy = true
+                            lifecycleScope.launch {
+                                val q = runCatching { BrainHost.quiz() }.getOrNull()
+                                quizBusy = false
+                                if (q == null) {
+                                    Toast.makeText(this@GateActivity, "现在出不了题", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    gateQuiz = q
+                                }
+                            }
+                        },
+                    ) { Text(if (quizBusy) "在出题…" else "做一道捉虫题") }
+                } else {
+                    val q = gateQuiz
+                    if (q != null) {
+                        Surface(shape = MaterialTheme.shapes.medium, color = Color.White) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                QuizParts(q) { ok, _ ->
+                                    if (ok) {
+                                        gateQuiz = null
+                                        lifecycleScope.launch {
+                                            val turn = BrainHost.gateReply("我刚答对了你的捉虫题：原来是「" + q.fix + "」")
+                                            mood = turn.mood
+                                            line = turn.line
+                                            if (BrainHost.speakOn()) Speaker.speak(turn.line)
+                                            if (turn.release) {
+                                                released = true
+                                                BrainHost.react(
+                                                    com.moling.core.live.Modality.GATE,
+                                                    com.moling.core.live.Reaction.REPLIED,
+                                                    System.currentTimeMillis() - startedAt,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 // 急事：永远在，点了马上走（记一笔）
                 TextButton(enabled = !busy, onClick = {

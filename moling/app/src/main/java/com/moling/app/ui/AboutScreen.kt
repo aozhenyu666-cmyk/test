@@ -202,5 +202,100 @@ fun AboutScreen(onDone: () -> Unit) {
                 }
             }
         }
+
+        // ---------------------------------------------------------------- 她推过的（v8）
+        val thoughts = state.thoughts.takeLast(20).reversed()
+        com.moling.app.ui.art.InkTitle("她推过的")
+        if (thoughts.isEmpty()) {
+            Text("她还没自己推过什么。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            val right = thoughts.count { it.outcome == "对了" }
+            val wrongN = thoughts.count { it.outcome == "错了" }
+            val expired = thoughts.count { it.outcome == "过期" }
+            val open = thoughts.count { it.outcome.isBlank() }
+            Text(
+                "最近 " + thoughts.size + " 条：对了 " + right + "、错了 " + wrongN + "、过期 " + expired + "、还没验证 " + open,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            thoughts.forEach { t ->
+                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(t.text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                        if (t.outcome.isNotBlank()) {
+                            val c = when (t.outcome) {
+                                "对了" -> Ink
+                                "错了" -> Seal
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                            Surface(color = c.copy(alpha = 0.10f), shape = MaterialTheme.shapes.small) {
+                                Text(
+                                    t.outcome,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = c,
+                                )
+                            }
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "把握" + t.confidence,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (t.outcome.isBlank()) {
+                            TextButton(onClick = { scope.launch { runCatching { BrainHost.judgeThought(t.id, true) } } }) { Text("对") }
+                            TextButton(onClick = { scope.launch { runCatching { BrainHost.judgeThought(t.id, false) } } }) { Text("不对") }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------- 她怎么出现（v9 反免疫）
+        com.moling.app.ui.art.InkTitle("她怎么出现")
+        Text(
+            "同一种方式被你连着秒划两次，她会让它歇两天，换别的方式来。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        val habitNow = System.currentTimeMillis()
+        val shownModalities = com.moling.core.live.Modality.entries.filter { m ->
+            state.habits.marks.any { it.modality == m }
+        }
+        if (shownModalities.isEmpty()) {
+            Text("她还没主动出现过。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            shownModalities.forEach { m ->
+                val n = state.habits.marks.count { it.modality == m }
+                val works = (com.moling.core.live.Habits.works(state.habits, m) * 100).toInt()
+                val cooling = com.moling.core.live.Habits.cooling(state.habits, m, habitNow)
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 3.dp)) {
+                    ModalityIcon(m)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        m.label + "：" + n + " 次，管用 " + works + "%" + if (cooling) "（歇着）" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 看板里每种出现方式的小插画。 */
+@Composable
+private fun ModalityIcon(m: com.moling.core.live.Modality) {
+    val s = Modifier.size(22.dp)
+    when (m) {
+        com.moling.core.live.Modality.PEEK -> com.moling.app.ui.art.InkPapers(s, animated = false)
+        com.moling.core.live.Modality.GATE -> com.moling.app.ui.art.InkHourglass(1f, s)
+        com.moling.core.live.Modality.WHISPER -> com.moling.app.ui.art.InkRipple(s, animated = false)
+        com.moling.core.live.Modality.PET -> MolingFace(com.moling.core.live.Mood.HAPPY, s)
+        com.moling.core.live.Modality.STARE -> com.moling.app.ui.art.InkRing(0.8f, s)
+        com.moling.core.live.Modality.COUNCIL -> com.moling.app.ui.art.InkBubbles(s, animated = false)
+        com.moling.core.live.Modality.QUIZ -> com.moling.app.ui.art.InkGalaxy(s, animated = false)
     }
 }

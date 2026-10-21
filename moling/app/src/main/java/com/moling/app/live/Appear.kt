@@ -34,6 +34,12 @@ object Appear {
     fun canWhisper(context: Context): Boolean = Whisper.can(context)
 
     fun show(context: Context, turn: LiveTurn, label: String) {
+        // B4：他在设置里关掉的方式一律退回底部卡片（拦人不受影响，它有自己的开关）。
+        val disabled = runCatching { BrainHost.settingsStore.disabledModalities() }.getOrDefault(emptySet())
+        if (turn.modality in disabled && turn.modality != Modality.GATE) {
+            LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
+            return
+        }
         val overlay = Settings.canDrawOverlays(context)
         when (turn.modality) {
             Modality.GATE -> LiveScreens.gate(context, turn.mood, turn.line, label)
@@ -49,7 +55,9 @@ object Appear {
             Modality.COUNCIL ->
                 if (!overlay) LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
                 else council(context, turn, label)
-            // QUIZ 由 B 组接；没接之前退回底部卡片。
+            Modality.QUIZ ->
+                turn.quiz?.let { QuizActivity.open(context, turn.mood, turn.line, it) }
+                    ?: LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
             else -> LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
         }
     }

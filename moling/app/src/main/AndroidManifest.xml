@@ -67,6 +67,13 @@
         <service android:name=".overlay.OverlayService" android:exported="false" />
         <!-- 第六批 A 组：桌宠 / 盯着你 / 参谋弹幕 / 褪色 / 演员胶囊都在这一个服务里。 -->
         <service android:name=".live.PetOverlayService" android:exported="false" />
+        <!-- 第六批 B1：捉虫题（透明主题，从底部出一张纸卡）。 -->
+        <activity
+            android:name=".live.QuizActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity="com.moling.app.quiz"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <activity android:name=".overlay.PresenceActivity" android:exported="false" android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <activity android:name=".ShareActivity" android:exported="true" android:theme="@android:style/Theme.Translucent.NoTitleBar">
             <intent-filter>

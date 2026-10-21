@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.moling.app.BrainHost
 import com.moling.core.Proposal
+import com.moling.core.atlas.AtlasMap
 import com.moling.core.atlas.AtlasOps
 import com.moling.core.atlas.Edge
 import com.moling.core.atlas.Gap
@@ -79,6 +80,9 @@ fun AtlasScreen() {
     var topicInput by remember(currentTopic?.id) { mutableStateOf(currentTopic?.name ?: "杂项") }
     var ingesting by remember { mutableStateOf(false) }
     var synthesizing by remember { mutableStateOf(false) }
+
+    // 列表 / 沙盘：默认列表；切到沙盘时整页正文换成 AtlasMapView。
+    var map by remember { mutableStateOf(false) }
 
     // 每条论断的「⋯」菜单弹出来的两个对话框：核实 / 删除。
     var verifyingNode by remember { mutableStateOf<Node?>(null) }
@@ -197,162 +201,200 @@ fun AtlasScreen() {
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        if (atlas.topics.isEmpty()) {
-            // 1. 空态：还没有任何主题，只留说明和下面的贴材料区。
-            Text(
-                "还没有体系图。贴一段聊出来的结论，或从对话里点「记下」开始。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+    Column(Modifier.fillMaxSize()) {
+        // 视图切换：列表 / 沙盘（默认列表），放在正文最上面。
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilterChip(
+                selected = !map,
+                onClick = { map = false },
+                label = { Text("列表") },
+            )
+            FilterChip(
+                selected = map,
+                onClick = { map = true },
+                label = { Text("沙盘") },
+            )
+        }
+
+        if (map) {
+            // 沙盘：一眼看出每个主题亮了几成、还有几个黑洞；点岛切回列表的那个主题。
+            AtlasMapView(
+                islands = AtlasMap.islands(atlas),
+                onOpenTopic = { id ->
+                    val name = atlas.topics.firstOrNull { it.id == id }?.name
+                    if (name != null) {
+                        switchTopic(name)
+                    } else {
+                        toast("这个主题已经不在了")
+                    }
+                    map = false
+                },
             )
         } else {
-            // 2. 主题：横着滚的一排，当前主题高亮。
-            SectionTitle("主题")
-            Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            // 列表：原来的正文原样保留，只是换成内层可滚动的 Column。
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                atlas.topics.forEach { t ->
-                    FilterChip(
-                        selected = t.id == currentTopic?.id,
-                        onClick = { switchTopic(t.name) },
-                        label = { Text(t.name) },
-                    )
-                }
-            }
-
-            val topic = currentTopic
-            if (topic != null) {
-                val nodes = atlas.nodes.filter { it.topicId == topic.id }
-
-                // 2.5 归纳这个主题：模型给的主干 / 分支 / 关键链 / 最大缺口，存在 state.synthesis。
-                Button(
-                    onClick = { synthesize() },
-                    enabled = !synthesizing,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(if (synthesizing) "在归纳…" else "归纳这个主题")
-                }
-                val summary = state.synthesis[topic.id].orEmpty()
-                if (summary.isNotBlank()) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = MaterialTheme.shapes.medium,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            summary,
-                            modifier = Modifier.padding(12.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                    }
-                }
-
-                // 3. 当前主题的论断：按事实 / 判断 / 假设 / 问题 / 方法分组；每条右边「⋯」核实 / 删除。
-                SectionTitle("论断")
-                if (nodes.isEmpty()) {
+                if (atlas.topics.isEmpty()) {
+                    // 1. 空态：还没有任何主题，只留说明和下面的贴材料区。
                     Text(
-                        "这个主题还没有论断",
-                        style = MaterialTheme.typography.bodySmall,
+                        "还没有体系图。贴一段聊出来的结论，或从对话里点「记下」开始。",
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
-                    NodeKind.entries.forEach { kind ->
-                        val group = nodes.filter { it.kind == kind }
-                        if (group.isNotEmpty()) {
-                            Text(
-                                kind.label,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.primary,
+                    // 2. 主题：横着滚的一排，当前主题高亮。
+                    SectionTitle("主题")
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        atlas.topics.forEach { t ->
+                            FilterChip(
+                                selected = t.id == currentTopic?.id,
+                                onClick = { switchTopic(t.name) },
+                                label = { Text(t.name) },
                             )
-                            group.forEach { node ->
-                                NodeRow(
-                                    node = node,
-                                    onVerify = {
-                                        verifyText = ""
-                                        verifyingNode = node
-                                    },
-                                    onDelete = { deletingNode = node },
+                        }
+                    }
+
+                    val topic = currentTopic
+                    if (topic != null) {
+                        val nodes = atlas.nodes.filter { it.topicId == topic.id }
+
+                        // 2.5 归纳这个主题：模型给的主干 / 分支 / 关键链 / 最大缺口，存在 state.synthesis。
+                        Button(
+                            onClick = { synthesize() },
+                            enabled = !synthesizing,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (synthesizing) "在归纳…" else "归纳这个主题")
+                        }
+                        val summary = state.synthesis[topic.id].orEmpty()
+                        if (summary.isNotBlank()) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                shape = MaterialTheme.shapes.medium,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(
+                                    summary,
+                                    modifier = Modifier.padding(12.dp),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
+
+                        // 3. 当前主题的论断：按事实 / 判断 / 假设 / 问题 / 方法分组；每条右边「⋯」核实 / 删除。
+                        SectionTitle("论断")
+                        if (nodes.isEmpty()) {
+                            Text(
+                                "这个主题还没有论断",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            NodeKind.entries.forEach { kind ->
+                                val group = nodes.filter { it.kind == kind }
+                                if (group.isNotEmpty()) {
+                                    Text(
+                                        kind.label,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                    group.forEach { node ->
+                                        NodeRow(
+                                            node = node,
+                                            onVerify = {
+                                                verifyText = ""
+                                                verifyingNode = node
+                                            },
+                                            onDelete = { deletingNode = node },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // 4. 关系：只显示两端都在当前主题里的。没有就不显示这一节。
+                        val ids = nodes.map { it.id }.toSet()
+                        val edges = atlas.edges.filter { it.from in ids && it.to in ids }
+                        if (edges.isNotEmpty()) {
+                            SectionTitle("关系")
+                            val byId = nodes.associateBy { it.id }
+                            edges.forEach { edge ->
+                                val from = byId[edge.from]
+                                val to = byId[edge.to]
+                                if (from != null && to != null) EdgeRow(edge, from, to)
+                            }
+                        }
+
+                        // 5. 缺口 + 下次该聊：每个缺口可以「去聊」，返回的提议挂在这个缺口下面。
+                        val gaps = AtlasOps.gaps(atlas, topic.id)
+                        SectionTitle("缺口 · 下次该聊")
+                        if (gaps.isEmpty()) {
+                            Text(
+                                "这张网现在没有明显缺口",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            gaps.forEach { gap ->
+                                // 本地存的提议可能已经旧了：优先用 state.proposals 里的最新状态。
+                                val stored = gapProposals[gap.nodeId + gap.kind]
+                                val live = stored?.let { p -> state.proposals.firstOrNull { it.id == p.id } ?: p }
+                                GapRow(
+                                    gap = gap,
+                                    proposal = live,
+                                    onChat = { chattingGap = gap },
+                                    onAccept = { acceptProposal(it) },
+                                    onDecline = { declineProposal(it) },
+                                    onRetry = { retryProposal(it) },
                                 )
                             }
                         }
                     }
                 }
 
-                // 4. 关系：只显示两端都在当前主题里的。没有就不显示这一节。
-                val ids = nodes.map { it.id }.toSet()
-                val edges = atlas.edges.filter { it.from in ids && it.to in ids }
-                if (edges.isNotEmpty()) {
-                    SectionTitle("关系")
-                    val byId = nodes.associateBy { it.id }
-                    edges.forEach { edge ->
-                        val from = byId[edge.from]
-                        val to = byId[edge.to]
-                        if (from != null && to != null) EdgeRow(edge, from, to)
-                    }
+                // 6. 贴材料：收进体系图（调一次模型，拆成论断和关系）。
+                SectionTitle("贴材料")
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { if (it.length <= 4000) input = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("把 GPT / Gemini 聊出来的结论贴进来") },
+                    minLines = 3,
+                    maxLines = 8,
+                )
+                OutlinedTextField(
+                    value = topicInput,
+                    onValueChange = { if (it.length <= 30) topicInput = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text("主题") },
+                    placeholder = { Text("杂项") },
+                )
+                Button(
+                    onClick = { ingest() },
+                    enabled = input.isNotBlank() && !ingesting,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (ingesting) "在拆…" else "收进体系图")
                 }
 
-                // 5. 缺口 + 下次该聊：每个缺口可以「去聊」，返回的提议挂在这个缺口下面。
-                val gaps = AtlasOps.gaps(atlas, topic.id)
-                SectionTitle("缺口 · 下次该聊")
-                if (gaps.isEmpty()) {
-                    Text(
-                        "这张网现在没有明显缺口",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    gaps.forEach { gap ->
-                        // 本地存的提议可能已经旧了：优先用 state.proposals 里的最新状态。
-                        val stored = gapProposals[gap.nodeId + gap.kind]
-                        val live = stored?.let { p -> state.proposals.firstOrNull { it.id == p.id } ?: p }
-                        GapRow(
-                            gap = gap,
-                            proposal = live,
-                            onChat = { chattingGap = gap },
-                            onAccept = { acceptProposal(it) },
-                            onDecline = { declineProposal(it) },
-                            onRetry = { retryProposal(it) },
-                        )
-                    }
-                }
+                Spacer(Modifier.height(12.dp))
             }
         }
-
-        // 6. 贴材料：收进体系图（调一次模型，拆成论断和关系）。
-        SectionTitle("贴材料")
-        OutlinedTextField(
-            value = input,
-            onValueChange = { if (it.length <= 4000) input = it },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("把 GPT / Gemini 聊出来的结论贴进来") },
-            minLines = 3,
-            maxLines = 8,
-        )
-        OutlinedTextField(
-            value = topicInput,
-            onValueChange = { if (it.length <= 30) topicInput = it },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            label = { Text("主题") },
-            placeholder = { Text("杂项") },
-        )
-        Button(
-            onClick = { ingest() },
-            enabled = input.isNotBlank() && !ingesting,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (ingesting) "在拆…" else "收进体系图")
-        }
-
-        Spacer(Modifier.height(12.dp))
     }
 
     // 核实：输入验证结果，成功才关弹窗（失败还能改一改再试）。

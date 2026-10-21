@@ -1,6 +1,7 @@
 package com.moling.app.ui
 
 import android.widget.Toast
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -36,6 +37,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -59,6 +63,7 @@ import com.moling.app.ui.art.InkSteps
 import com.moling.app.ui.art.InkThinking
 import com.moling.app.ui.art.InkTitle
 import com.moling.app.ui.art.InkWaves
+import com.moling.app.ui.art.WashOrange
 import com.moling.app.ui.art.moonPhase
 import com.moling.core.flow.ChannelKind
 import com.moling.core.Brain
@@ -76,6 +81,8 @@ import com.moling.core.mind.Opening
 import com.moling.core.mind.Reply
 import com.moling.core.predict.Predict
 import com.moling.core.predict.Prediction
+import com.moling.core.usage.UsageDay
+import com.moling.core.usage.UsageLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -465,6 +472,23 @@ fun TodayScreen(onReady: () -> Unit = {}) {
             }
         }
 
+        // 4.6 这一周：7 天 × 24 小时的小方格，看哪几个小时总被娱乐拉走。
+        // 少于 3 天还看不出规律，就先不显示这一节。
+        val week = state.usageDays.takeLast(7)
+        if (week.size >= 3) {
+            SectionTitle("这一周")
+            WeekGrid(week)
+            // 「22–24 点（平均 48 分钟）」这种句子；一条都没有就不说。
+            val weak = UsageLog.weakHours(week)
+            if (weak.isNotEmpty()) {
+                Text(
+                    "这一周最容易被拉走：" + weak.joinToString("、"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
         // 5. 今天的预言：只显示今天下的注；对账过的标“对了 / 错了”。
         SectionTitle("今天的预言")
         val todayPredictions = state.predictions.filter { Brain.calendarDay(it.madeAt) == today }
@@ -836,5 +860,82 @@ private fun HourStrip(byHour: List<Int>, hourNow: Int) {
             if (h % 6 == 0) drawCircle(Ink.copy(alpha = 0.35f), 1.2.dp.toPx(), androidx.compose.ui.geometry.Offset(x, base + 5.dp.toPx()))
         }
         drawCircle(Seal, 2.4.dp.toPx(), androidx.compose.ui.geometry.Offset(gap * hourNow + gap / 2, base + 6.dp.toPx()))
+    }
+}
+
+/** 星期几的中文：「一」到「日」。day 是 UsageDay.day（yyyy-MM-dd），解析不了就不猜。 */
+private val WEEKDAY_CN = listOf("一", "二", "三", "四", "五", "六", "日")
+
+private fun weekdayCn(day: String): String =
+    runCatching { WEEKDAY_CN[java.time.LocalDate.parse(day).dayOfWeek.value - 1] }.getOrDefault("·")
+
+/**
+ * 「这一周」的小方格：一行一天（按日期从旧到新），一格一小时，共 7 行 × 24 格。
+ * 颜色深浅 = 那一小时的娱乐分钟数：用 [WashOrange] 的透明度，60 分钟刷满最深；0 分钟就是纸色（不画）。
+ * 左边一列写星期几，最下面一行标 0 / 6 / 12 / 18 点。
+ * 只读：数据是 [UsageLog] 存下来的 [UsageDay]，不调模型，也不改任何状态。
+ */
+@Composable
+private fun WeekGrid(week: List<UsageDay>) {
+    val labelW = 22.dp
+    val gutter = 6.dp
+    // 每行 16dp：行高固定，左边的星期几和右边的方格才对得齐。
+    val gridH = (16 * week.size).dp
+
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth()) {
+            // 左边星期几：每格和方格的一行一样高，文字居中。
+            Column(Modifier.width(labelW).height(gridH)) {
+                week.forEach { d ->
+                    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                        Text(
+                            weekdayCn(d.day),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.width(gutter))
+            Canvas(Modifier.weight(1f).height(gridH)) {
+                val rows = week.size.coerceAtLeast(1)
+                val colW = size.width / 24f
+                val rowH = size.height / rows
+                // 每格留一点缝，看着才有「格」的样子；0 分钟不画，露出纸色。
+                val padX = 0.5.dp.toPx()
+                val padY = 1.2.dp.toPx()
+                val corner = 1.5.dp.toPx()
+                week.forEachIndexed { r, d ->
+                    for (h in 0 until 24) {
+                        val min = d.playByHour.getOrElse(h) { 0 }
+                        if (min <= 0) continue
+                        // 一小时最多按 60 分钟算：5 分钟很浅，刷满一小时最深，不随这周最高值放大。
+                        val t = (min / 60f).coerceIn(0f, 1f)
+                        drawRoundRect(
+                            color = WashOrange.copy(alpha = 0.15f + 0.75f * t),
+                            topLeft = Offset(h * colW + padX, r * rowH + padY),
+                            size = Size(
+                                (colW - padX * 2).coerceAtLeast(1f),
+                                (rowH - padY * 2).coerceAtLeast(1f),
+                            ),
+                            cornerRadius = CornerRadius(corner, corner),
+                        )
+                    }
+                }
+            }
+        }
+        // 最下面一行小刻度：0 / 6 / 12 / 18 点；刻度线和方格左边对齐。
+        Row(Modifier.fillMaxWidth().padding(start = labelW + gutter, top = 2.dp)) {
+            listOf("0", "6", "12", "18").forEach { h ->
+                Column(Modifier.weight(1f)) {
+                    Box(Modifier.width(1.dp).height(3.dp).background(Ink.copy(alpha = 0.3f)))
+                    Text(
+                        h,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
     }
 }
