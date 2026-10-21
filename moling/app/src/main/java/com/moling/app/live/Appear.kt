@@ -49,7 +49,9 @@ object Appear {
             Modality.COUNCIL ->
                 if (!overlay) LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
                 else council(context, turn, label)
-            // QUIZ 由 B 组接；没接之前退回底部卡片。
+            Modality.QUIZ ->
+                turn.quiz?.let { QuizActivity.open(context, turn.mood, turn.line, it) }
+                    ?: LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
             else -> LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
         }
     }
