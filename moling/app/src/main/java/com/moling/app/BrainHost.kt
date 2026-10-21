@@ -17,6 +17,7 @@ import com.moling.core.flow.FlowPlan
 import com.moling.core.link.ZkStatus
 import com.moling.core.mind.DirectorConfig
 import com.moling.core.mind.FileMindStore
+import com.moling.core.mind.MindState
 import com.moling.core.power.Tier
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +48,9 @@ object BrainHost {
 
     /** 界面读这个：水道、对话、提议、预言、日志、最后一次总控状态。 */
     val state: StateFlow<BrainState> = _state
+
+    @Volatile
+    private var lastHeartbeat = 0L
 
     private val _notices = MutableStateFlow<List<Notice>>(emptyList())
 
@@ -93,6 +97,13 @@ object BrainHost {
     /** 等用户决定的提议。 */
     fun pending(now: Long): List<Proposal> = runCatching { brain.pending(now) }.getOrDefault(emptyList())
 
+    /** 调试页用：导演的记忆快照（接力棒、议程、今天打扰次数、模型花费）。 */
+    fun directorSnapshot(): MindState =
+        if (ready) runCatching { brain.director.snapshot() }.getOrDefault(MindState()) else MindState()
+
+    /** 上次心跳跑到的时间（后台服务或前台循环）；0 = 还没跑过。 */
+    fun lastHeartbeatAt(): Long = lastHeartbeat
+
     /** 划掉一条提醒。 */
     fun dismissNotice(at: Long) {
         _notices.value = _notices.value.filterNot { it.at == at }
@@ -131,6 +142,7 @@ object BrainHost {
 
     /** App 在前台时每 60 秒一次（打开 App 也调一次）。 */
     suspend fun tickNow(now: Long = System.currentTimeMillis()): List<Notice> {
+        lastHeartbeat = now
         // 这一批不做后台定时、不做无障碍、不读前台应用：类别传空串、guard 传 null。
         val out = io("tick", { emptyList<Notice>() }) { brain.tick(now, "", null) }
         _notices.value = (out + _notices.value).distinctBy { it.at to it.text }.take(3)

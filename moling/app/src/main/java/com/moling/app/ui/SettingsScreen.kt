@@ -53,6 +53,13 @@ fun SettingsScreen(onDone: () -> Unit) {
     // 总控状态由大脑的心跳（MainActivity 里每分钟一次 tick）更新到这里。
     val brainState by BrainHost.state.collectAsState()
     var zkBusy by remember { mutableStateOf(false) }
+    var debugOpen by remember { mutableStateOf(false) }
+
+    // 调试页占满全屏，自己带返回。
+    if (debugOpen) {
+        DebugScreen(onDone = { debugOpen = false })
+        return
+    }
 
     var url by remember { mutableStateOf(saved.baseUrl) }
     var key by remember { mutableStateOf(saved.apiKey) }
@@ -252,6 +259,11 @@ fun SettingsScreen(onDone: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            TextButton(
+                onClick = { debugOpen = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("调试（只读：权柄 / 总控 / 提议 / 导演 / 后台 / 日志）") }
         }
 
         Surface(tonalElevation = 2.dp) {
