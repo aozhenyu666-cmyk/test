@@ -477,6 +477,38 @@ fun SettingsScreen(onDone: () -> Unit) {
                 Switch(checked = speak, onCheckedChange = { speak = it })
             }
 
+            // 她的声音（v8）：填了语音模型就用它（自然得多），不填用系统朗读
+            var vUrl by remember { mutableStateOf(store.voice().baseUrl) }
+            var vKey by remember { mutableStateOf(store.voice().apiKey) }
+            var vModel by remember { mutableStateOf(store.voice().model) }
+            var vName by remember { mutableStateOf(store.voice().voice) }
+            Text(
+                "更自然的声音（可选）：填一个 OpenAI 兼容的语音接口。比如 OpenAI：地址 https://api.openai.com/v1、模型 gpt-4o-mini-tts、音色 nova。" +
+                    "按字数付费；不通会自动退回系统朗读。对话页的「对讲」也用它。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(value = vUrl, onValueChange = { vUrl = it.trim() }, label = { Text("语音接口地址") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(
+                value = vKey, onValueChange = { vKey = it.trim() }, label = { Text("语音接口密钥") }, singleLine = true,
+                visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(value = vModel, onValueChange = { vModel = it.trim() }, label = { Text("模型") }, singleLine = true, modifier = Modifier.weight(1f))
+                OutlinedTextField(value = vName, onValueChange = { vName = it.trim() }, label = { Text("音色") }, singleLine = true, modifier = Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = {
+                    store.saveVoice(com.moling.app.data.VoiceSettings(vUrl, vKey, vModel, vName))
+                    Toast.makeText(context, if (vModel.isBlank()) "用系统朗读" else "存好了", Toast.LENGTH_SHORT).show()
+                }) { Text("保存声音") }
+                OutlinedButton(onClick = {
+                    store.saveVoice(com.moling.app.data.VoiceSettings(vUrl, vKey, vModel, vName))
+                    Speaker.prepare(context)
+                    Speaker.speak("我在。今天先做哪一件？")
+                }) { Text("试听") }
+            }
+
             // 先存下屏幕上的值再测：测的应该是正在填的这一份，不是上次保存的。
             OutlinedButton(
                 onClick = {

@@ -26,14 +26,14 @@ class ShareActivity : ComponentActivity() {
             var busy by remember { mutableStateOf(false) }
             AlertDialog(onDismissRequest = { if (!busy) finish() }, title = { Text("分享进墨灵") },
                 text = { Column { Text(text.take(200)); OutlinedTextField(topic, { topic = it.take(80) }, label = { Text("主题") }); TextButton(enabled = !busy, onClick = { Presence.open(this@ShareActivity, 0, text.take(500)); finish() }) { Text("跟墨灵说") }
-                    // 她有问 GPT 的问题还没回答：分享进来的可能就是 GPT 的回答，交给她把关（回答问题、收论断）
-                    if (BrainHost.state.value.questions.any { it.answer.isBlank() }) TextButton(enabled = !busy, onClick = {
+                    // 别的 AI 的回答（交接包发出去后回来的）：交给她把关——回答问题、收论断、改“了解”要你点头
+                    TextButton(enabled = !busy, onClick = {
                         busy = true
                         lifecycleScope.launch {
                             val r = BrainHost.absorbShared(text)
                             Toast.makeText(this@ShareActivity, r, Toast.LENGTH_LONG).show(); finish()
                         }
-                    }) { Text("这是 GPT 的回答") } } },
+                    }) { Text("这是 AI 的回答（交给她把关）") } } },
                 confirmButton = { TextButton(enabled = !busy, onClick = {
                     busy = true
                     lifecycleScope.launch {

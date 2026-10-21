@@ -32,6 +32,11 @@ data class ModelSettings(
     )
 }
 
+/** 她的声音：OpenAI 兼容的 /audio/speech（不填 = 用系统朗读）。 */
+data class VoiceSettings(val baseUrl: String = "", val apiKey: String = "", val model: String = "", val voice: String = "") {
+    fun ready(): Boolean = baseUrl.isNotBlank() && apiKey.isNotBlank() && model.isNotBlank()
+}
+
 /** 和 Notion 贯通的设置。[token] 是 Notion 内部集成的密钥（加密存）；[root] 是他分享给集成的那个页面。 */
 data class NotionSettings(
     val token: String = "",
@@ -75,6 +80,22 @@ class SettingsStore(context: Context) {
             .putString(KEY_DEEP_URL, url.trim())
             .putString(KEY_DEEP_KEY, key.trim())
             .putString(KEY_DEEP_MODEL, model.trim())
+            .apply()
+    }
+
+    fun voice(): VoiceSettings = VoiceSettings(
+        baseUrl = prefs.getString(KEY_VOICE_URL, null).orEmpty(),
+        apiKey = prefs.getString(KEY_VOICE_KEY, null).orEmpty(),
+        model = prefs.getString(KEY_VOICE_MODEL, null).orEmpty(),
+        voice = prefs.getString(KEY_VOICE_NAME, null).orEmpty(),
+    )
+
+    fun saveVoice(v: VoiceSettings) {
+        prefs.edit()
+            .putString(KEY_VOICE_URL, v.baseUrl.trim())
+            .putString(KEY_VOICE_KEY, v.apiKey.trim())
+            .putString(KEY_VOICE_MODEL, v.model.trim())
+            .putString(KEY_VOICE_NAME, v.voice.trim())
             .apply()
     }
 
@@ -206,6 +227,10 @@ class SettingsStore(context: Context) {
         private const val KEY_PERSONA = "persona"
         private const val KEY_CALL_USER = "call_user"
         private const val KEY_SPEAK = "speak"
+        private const val KEY_VOICE_URL = "voice_base_url"
+        private const val KEY_VOICE_KEY = "voice_api_key"
+        private const val KEY_VOICE_MODEL = "voice_model"
+        private const val KEY_VOICE_NAME = "voice_name"
         private const val KEY_DEEP_URL = "deep_base_url"
         private const val KEY_DEEP_KEY = "deep_api_key"
         private const val KEY_DEEP_MODEL = "deep_model"

@@ -92,6 +92,23 @@ object Mirror {
         ).filter { it.lines.isNotEmpty() }
     }
 
+    /**
+     * 交接包（v8）：不经过 Notion，直接发给任何 AI 应用（ChatGPT、Gemini、Claude、Kimi、豆包……）。
+     * 开头说清楚它是谁、要它做什么、按什么格式回答——回答从分享菜单发回墨灵，她照收件箱的规矩把关。
+     */
+    fun handoff(callUser: String, sections: List<Section>): String = buildString {
+        appendLine("你好。下面是墨灵（$callUser 手机上的 AI 伙伴）整理的材料：她对$callUser 的了解、这几天的情况、她自己的判断，和她想问你的问题。")
+        appendLine("请你：1）回答「墨灵想问你的」里的每个问题，每个一段，开头写编号（比如 Q3：……）；")
+        appendLine("2）指出她判断里你觉得不对的地方；3）对“体系图”提一两条修正或补充。")
+        appendLine("只写你有把握的，猜测请标“猜测”。$callUser 会把你的回答原样转给墨灵。")
+        appendLine()
+        sections.filterNot { it.title.startsWith("给 ") }.forEach { s ->
+            appendLine("## ${s.title}")
+            s.lines.forEach { appendLine("- $it") }
+            appendLine()
+        }
+    }.trim()
+
     /** 黑板内容的指纹：没变就不重写（Notion 有频率限制）。 */
     fun hash(sections: List<Section>): String =
         sections.joinToString("\n") { s -> s.title + "\n" + s.lines.filterNot { it.startsWith("更新于") }.joinToString("\n") }

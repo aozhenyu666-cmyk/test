@@ -64,6 +64,16 @@ class MirrorTest {
         assertEquals("时间变了、内容没变，指纹不变", Mirror.hash(board), Mirror.hash(b.board(at(11))))
     }
 
+    @Test fun handoffForAnyAi() = runTest {
+        val b = brain()
+        b.askGpt("他周末的复习计划定了吗？", at(9))
+        val h = b.handoff(at(10))
+        assertTrue(h.startsWith("你好。下面是墨灵"))
+        assertTrue(h.contains("## 墨灵想问你的"))
+        assertTrue(h.contains("- Q1：他周末的复习计划定了吗？"))
+        assertFalse("给 Notion 的说明不放进交接包", h.contains("给 GPT / Notion AI 的说明"))
+    }
+
     @Test fun absorbAnswersQuestionsAndProposesAboutChange() = runTest {
         val deep = Replies(
             "【回答】Q1｜提纲定了：三段式，周四前写完第一篇\n" +

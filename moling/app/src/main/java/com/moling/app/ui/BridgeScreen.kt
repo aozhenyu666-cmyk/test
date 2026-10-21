@@ -99,6 +99,31 @@ fun BridgeScreen(onDone: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
+        // ---------------------------------------------------------------- 交接包：直接发给任何 AI
+        com.moling.app.ui.art.InkTitle("直接交给任何 AI")
+        Text(
+            "不用 Notion 也行：她把了解、这几天的情况、她的判断和想问的问题打成一段话，直接发进 ChatGPT、Gemini 或别的 AI 应用。" +
+                "对方回答后，长按回答 → 分享 → 墨灵 →「这是 AI 的回答」，她把关后收进来。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        fun sendTo(pkg: String?) {
+            val text = BrainHost.handoff()
+            if (text.isBlank()) { toast("她还没准备好"); return }
+            val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT, text)
+            val ok = runCatching {
+                if (pkg != null) context.startActivity(send.setPackage(pkg).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                else context.startActivity(android.content.Intent.createChooser(send, "交给哪个 AI").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            }.isSuccess
+            if (!ok) { clipboard.setText(AnnotatedString(text)); toast("没打开，已经复制了，去粘贴吧") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { sendTo("com.openai.chatgpt") }) { Text("ChatGPT") }
+            OutlinedButton(onClick = { sendTo("com.google.android.apps.bard") }) { Text("Gemini") }
+            OutlinedButton(onClick = { sendTo(null) }) { Text("别的…") }
+        }
+        TextButton(onClick = { clipboard.setText(AnnotatedString(BrainHost.handoff())); toast("复制好了") }) { Text("复制交接包") }
+
         // ---------------------------------------------------------------- Notion
         com.moling.app.ui.art.InkTitle("Notion")
         Text(

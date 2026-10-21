@@ -38,6 +38,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -144,6 +145,14 @@ fun ChatScreen() {
         }
     }
 
+    // 对讲（v8）：你说完自动发，她念完自动接着听；连着两次没听清、或出错就停
+    var talkLoop by remember { mutableStateOf(false) }
+    var misses by remember { mutableIntStateOf(0) }
+    DisposableEffect(Unit) { onDispose { talkLoop = false; Speaker.stop() } }
+
+    // send 和 listen 互相调用：先占个位，listen 定义完再填上
+    lateinit var listenLater: (Boolean) -> Unit
+
     fun send() {
         val text = input.trim()
         if (text.isEmpty() || sending) return
@@ -162,9 +171,39 @@ fun ChatScreen() {
                 return@launch
             }
             usedMode = res.mode
-            if (BrainHost.settingsStore.load().speak) Speaker.speak(res.text)
+            if (talkLoop) Speaker.speak(res.text) { if (talkLoop) listenLater(true) }
+            else if (BrainHost.settingsStore.load().speak) Speaker.speak(res.text)
         }
     }
+
+    /** 听一句。[auto] = 对讲里：听到就直接发。 */
+    fun listen(auto: Boolean) {
+        if (listening) return
+        Speaker.stop()
+        listening = true
+        voice.start(
+            onResult = { said ->
+                listening = false
+                misses = 0
+                if (auto && talkLoop) {
+                    input = said
+                    send()
+                } else {
+                    input = if (input.isBlank()) said else "${input.trim()} $said"
+                }
+            },
+            onError = { msg ->
+                listening = false
+                if (auto && talkLoop && msg.contains("没听清") && misses < 1) {
+                    misses++
+                    listen(true)
+                } else {
+                    if (talkLoop) { talkLoop = false; toast("对讲停了：$msg") } else toast(msg)
+                }
+            },
+        )
+    }
+    listenLater = { listen(it) }
 
     // 她此刻的样子：在想 → 好奇，在听 → 平静，否则按状态
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -301,22 +340,30 @@ fun ChatScreen() {
                         voice.stop()
                         listening = false
                     } else {
-                        listening = true
-                        voice.start(
-                            onResult = { said ->
-                                listening = false
-                                input = if (input.isBlank()) said else "${input.trim()} $said"
-                            },
-                            onError = { msg ->
-                                listening = false
-                                toast(msg)
-                            },
-                        )
+                        listen(false)
                     }
                 },
-                enabled = !sending,
+                enabled = !sending && !talkLoop,
             ) {
-                Text(if (listening) "停" else "🎤", fontSize = 18.sp)
+                Text(if (listening && !talkLoop) "停" else "🎤", fontSize = 18.sp)
+            }
+            TextButton(
+                onClick = {
+                    if (talkLoop) {
+                        talkLoop = false
+                        voice.stop()
+                        listening = false
+                        Speaker.stop()
+                    } else {
+                        talkLoop = true
+                        misses = 0
+                        listen(true)
+                    }
+                },
+                contentPadding = PaddingValues(horizontal = 6.dp),
+            ) {
+                if (talkLoop) com.moling.app.ui.art.InkRipple(Modifier.size(22.dp), color = Seal)
+                Text(if (talkLoop) "停对讲" else "对讲", style = MaterialTheme.typography.labelMedium)
             }
             Button(
                 onClick = { send() },

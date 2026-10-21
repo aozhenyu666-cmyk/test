@@ -844,6 +844,9 @@ class Brain(
         )
     }
 
+    /** 交接包：直接发给任何 AI 应用的那段话（内容同黑板）。 */
+    fun handoff(now: Long): String = Mirror.handoff(config().callUser, board(now))
+
     /**
      * 收收件箱：别人写来的先由她把关（深想模型），回答了的问题记上答案，论断进体系图，
      * 要改“对你的了解”的变成提议（他点“好”才算数）。模型不通就不标“收过”，下次再收。

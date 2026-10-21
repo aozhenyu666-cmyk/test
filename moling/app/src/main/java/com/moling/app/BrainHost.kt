@@ -256,6 +256,9 @@ object BrainHost {
         if (lines.isNotEmpty()) runCatching { Notify.card(ctx, "GPT 那边：" + lines.joinToString("；").take(300)) }
     }
 
+    /** 交接包：发给任何 AI 应用的那段话。 */
+    fun handoff(): String = if (ready) runCatching { brain.handoff(System.currentTimeMillis()) }.getOrDefault("") else ""
+
     /** 从分享菜单进来的 GPT 回答：和收件箱一样交给她把关。返回给人看的一句。 */
     suspend fun absorbShared(text: String): String {
         val now = System.currentTimeMillis()
