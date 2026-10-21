@@ -983,3 +983,48 @@
 - `tools/core-tests` 里 `gradle test`：**410 个用例全绿**。
 - `node tools/relay-test/test.mjs`：输出 `relay ok`。
 - App：本地 `testDebugUnitTest` + `assembleDebug` 通过；CI `moling-android` 见 `deepseek-mind` 分支。
+---
+
+## 第八批（DeepSeek）：发布稳定与验收收口
+
+分支 `deepseek/moling-release-qa`，从工作分支 `ccr-b3c7616e-xlohkd` 最新提交 `952275f` 拉出。没有重做第四至七批，不改两边 `core/`、总控、权限和功能范围。
+
+**做了什么**
+- **R1 共享下载包不再被旧任务覆盖**（`.github/workflows/moling-android.yml` + 新增 `tools/publish-moling-release.sh`）：
+  - 所有分支仍跑 `testDebugUnitTest assembleDebug` 并上传 `moling-debug-apk` artifact；`release` job 只在 `refs/heads/ccr-b3c7616e-xlohkd` 上运行，开发分支不再覆盖用户正在试用的包。
+  - `release` job 使用仓库固定 `concurrency: moling-release-publish`、`cancel-in-progress: false`，所有发布串行且不取消正在更新 release 的任务。
+  - 拿到发布机会后先取远端工作分支 HEAD，与本次 `github.sha` 比较；不一致就写“跳过过期发布”并退出 0，不碰 `moling-latest`。取不到 HEAD 则直接失败，不把错误当成“过期”。
+  - 不再 `gh release delete`；已有 release 用 API 原地更新标题 / 说明 / `target_commitish`，并把 `moling-latest` tag 强制指到本次提交，再 `gh release upload --clobber` 替换 `moling.apk`；只有第一次才 `gh release create`。
+  - 发布前先校验 APK 存在、非空、`unzip -t` 通过并算 SHA-256；校验失败立即退出，现有 release 和资产不动。
+  - 发布说明保留版本 `0.12.<run>`、完整源码 SHA、run 链接和 APK SHA-256；标题带短 SHA。
+  - 发布后逐项核对：`draft == false`、`git/ref/tags/moling-latest` 指向本次提交、资产地址是固定 `.../releases/download/moling-latest/moling.apk`、用 curl 下载直链并比对 SHA-256；任何一项不符都失败。CLI 退出码 0 不再当作成功。
+- **R1 辅助脚本测试**（`tools/release-test/test.sh`）：mock `gh` / `curl` 跑真实脚本，覆盖 7 个情形、15 条断言：首次创建、过期跳过（无任何 release 写操作）、已有 release 原地更新且不删除、取不到 HEAD 失败且不误报跳过、发布后仍 draft 失败、直链内容不一致失败、创建失败不误报成功。
+- **R2 交接文档校正**：
+  - `moling/CODEX.md`：第四、五批改为“历史、已合入、不要重做”；测试数写明本批实际运行 410 个，343 是旧记录；补一句“连续对讲 / Notion 镜子已有 App 实现，真机 / 服务配置待验”。
+  - `partner-blueprint/CONTEXT.md`：删掉“接下来交给 Codex”的过时表述；把“还没做：连续语音对讲、Notion 镜子”改为“已有 App 实现、真机 / 服务配置待验”；纯逻辑测试数注明旧记录 29、本次实际 410。
+  - `moling/TESTING.md`：反馈去向改为“发回当前协作会话，或附在本批问题记录里”，不再依赖 Claude 余额。
+  - 隐私、授权、总控铁律、功能范围都没有改。
+
+**为什么这么做**
+- 已观察到旧提交的发布在新提交之后完成，把 `moling-latest` 覆盖成旧包（0.12.53 盖掉 0.12.54），用户下载到的是旧版本；根因是发布没有串行、没有最新提交校验、先删后建。
+- 共享下载地址是用户实际安装的入口，必须做到“只有工作分支最新提交能写、旧运行明确跳过、失败不破坏现有包、草稿 / untagged 资产不算成功”。
+- 发布日志只写“命令退出 0”不足以证明 release 可用；draft、tag 指向、固定资产地址、直链能否下载都必须用 API / 直链核对。
+- 文档现状写错会让接手的人重做已合入的批次，或者误判对讲 / Notion 镜子完全没做；只做少量更正，保留历史来源。
+
+**验证证据（本地）**
+- `bash -n tools/publish-moling-release.sh`、`bash -n tools/release-test/test.sh`：通过。
+- `python -c "import yaml; ..."` 解析 `.github/workflows/moling-android.yml`：通过，jobs = build / release。
+- `bash tools/release-test/test.sh`：**15 条断言全部 PASS**（首次创建 / 过期跳过 / 原地更新 / HEAD 取不到 / 仍 draft / 直链校验失败 / 创建失败）。
+- `tools/core-tests` 里 `gradle test`：**410 个全绿**（本批未改 core，确认无回归）。
+- 本分支的 CI 只会跑 build（release job 因不是工作分支被跳过）；**正式发布要在合入工作分支后由工作分支 CI 验证**，本分支没有提前覆盖用户下载。
+
+**没做到的 / 需要合入后验证**
+- 真实 GitHub API 上的“首次无 release 创建”和“过期运行跳过”只用 mock 验证过；合入工作分支后，第一次正式发布会走“更新已有 release”，旧运行跳过要在之后某次并发的旧构建里观察。
+- 没有在本分支触发真实发布（按要求不提前覆盖用户下载）；合入后需要核对：release 非 draft、tag 指向本次提交、资产地址为固定 tag 地址、直链 APK 可取且 SHA-256 一致。
+- 版本规则未改：仍是 CI 的 `0.12.<run_number>`，本地构建 `0.12.0`。
+
+**用户怎么验收**
+1. 工作分支合入后，等一次 `moling-android` 成功；打开发布页确认不是 Draft、标题里的短 SHA 是本次提交、下载地址仍是固定 `moling-latest/moling.apk`。
+2. 下载 APK，核对发布说明里的 SHA-256 与本地文件一致；覆盖安装后版本显示 `0.12.<run>`。
+3. 在开发分支推一次改动：Actions 仍有 APK artifact，但发布页的包和 tag 不动。
+4. 如果之后出现“旧构建晚完成”的情况，日志里应明确写“跳过过期发布”，下载页保持最新包。
