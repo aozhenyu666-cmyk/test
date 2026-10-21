@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 /*
  * 墨灵的大脑宿主（M4）：App 访问核心逻辑的唯一入口。
@@ -58,6 +59,12 @@ object BrainHost {
 
     @Volatile
     private var lastHeartbeat = 0L
+
+    /** 早晚自动的重入闸（心跳可能叠在一起）。 */
+    private val autoGate = AtomicBoolean(false)
+
+    @Volatile
+    private var lastAutoMinute = -1L
 
     private val _notices = MutableStateFlow<List<Notice>>(emptyList())
 
@@ -159,8 +166,51 @@ object BrainHost {
         val out = io("tick", { emptyList<Notice>() }) { brain.tick(now, category, guard) }
         _notices.value = (out + _notices.value).distinctBy { it.at to it.text }.take(3)
         if (out.isNotEmpty()) runCatching { postNotices(now, out) }
+        runCatching { withContext(Dispatchers.IO) { autoSchedule(now) } }
         return out
     }
+
+    /**
+     * 早晚自动（M12），都在心跳里做：
+     *  - 早上（6:00–22:00、今天还没有水道、开关开着、亮屏）→ 自动排一份**草稿**（不定稿、不交给总控），发通知；
+     *  - 夜里（23:30–4:00、这一夜还没整理）→ brain.night(now)，返回的话发一条安静的「今天的账」。
+     * 同一个判断一分钟内只做一次：后台服务和前台心跳可能同时跳。
+     */
+    private suspend fun autoSchedule(now: Long) {
+        val ctx = appContext ?: return
+        val minute = now / 60_000L
+        if (lastAutoMinute == minute) return
+        if (!autoGate.compareAndSet(false, true)) return
+        lastAutoMinute = minute
+        try {
+            if (settings.autoPlan() && interactive() && brain.needsPlan(now)) {
+                val plan = runCatching { brain.planDay(now) }.getOrNull()
+                if (plan != null) {
+                    refreshState()
+                    Notify.planReady(ctx, plan.intent)
+                }
+            }
+            if (brain.needsNight(now)) {
+                val text = runCatching { brain.night(now) }.getOrNull()
+                refreshState()
+                if (!text.isNullOrBlank()) Notify.nightAccount(ctx, text)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "早晚自动失败", e)
+        } finally {
+            autoGate.set(false)
+        }
+    }
+
+    private fun refreshState() {
+        _state.value = runCatching { brain.state() }.getOrDefault(_state.value)
+    }
+
+    private fun interactive(): Boolean = runCatching {
+        appContext?.getSystemService(PowerManager::class.java)?.isInteractive ?: true
+    }.getOrDefault(true)
 
     /**
      * 把心跳拿到的提醒发成系统通知（M11）。安静时段（总控静默或 23:30–07:00）照发但不响；

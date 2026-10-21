@@ -70,6 +70,7 @@ fun SettingsScreen(onDone: () -> Unit) {
     var zkBusy by remember { mutableStateOf(false) }
     var debugOpen by remember { mutableStateOf(false) }
     var backgroundOn by remember { mutableStateOf(store.backgroundHeart()) }
+    var autoPlanOn by remember { mutableStateOf(store.autoPlan()) }
     // 看前台应用：权限在系统设置里，回来时刷新一下状态。
     var usageAllowed by remember { mutableStateOf(Usage.allowed(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -232,6 +233,24 @@ fun SettingsScreen(onDone: () -> Unit) {
                         }
                     },
                 ) { Text(if (usageAllowed) "去改" else "去打开") }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("早上自动排水道")
+                    Text(
+                        "6 点到 22 点之间、今天还没有水道时，自动排一份草稿（不定稿、不交给总控）。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = autoPlanOn,
+                    onCheckedChange = { on ->
+                        autoPlanOn = on
+                        store.setAutoPlan(on)
+                    },
+                )
             }
 
             Text("她是谁", style = MaterialTheme.typography.titleSmall)

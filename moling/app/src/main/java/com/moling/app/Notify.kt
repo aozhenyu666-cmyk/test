@@ -23,6 +23,10 @@ object Notify {
     /** 常驻通知的 id；M11 的提醒另用 kind.hashCode()。 */
     const val ID_HEART = 1001
 
+    /** M12 的两条：早上草稿、夜里的账。 */
+    private const val ID_PLAN = 3001
+    private const val ID_NIGHT = 3002
+
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         if (nm.getNotificationChannel(CH_HEART) == null) {
@@ -116,6 +120,28 @@ object Notify {
             .setSilent(true)
             .setContentIntent(todayIntent(context))
         runCatching { context.getSystemService(NotificationManager::class.java)?.notify(noticeId(kind), b.build()) }
+    }
+
+    /** 早上自动排好的草稿（M12）。 */
+    fun planReady(context: Context, intent: String) =
+        simple(context, ID_PLAN, "今天的水道排好了（草稿）", intent, silent = false)
+
+    /** 夜里的账（M12）：第二天早上看到，安静一条。 */
+    fun nightAccount(context: Context, text: String) =
+        simple(context, ID_NIGHT, "今天的账", text, silent = true)
+
+    /** 不带按钮的一条简单通知。 */
+    private fun simple(context: Context, id: Int, head: String, text: String, silent: Boolean) {
+        ensureChannels(context)
+        val b = NotificationCompat.Builder(context, CH_ALERT)
+            .setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle(head)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .setContentIntent(todayIntent(context))
+        if (silent) b.setSilent(true)
+        runCatching { context.getSystemService(NotificationManager::class.java)?.notify(id, b.build()) }
     }
 
     /** 通知按钮 → 广播给 [NotifyReceiver]（exported=false，只有自己发得进来）。 */

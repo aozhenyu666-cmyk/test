@@ -83,6 +83,13 @@ class SettingsStore(context: Context) {
         toggles.edit().putBoolean(KEY_BACKGROUND, on).apply()
     }
 
+    /** 早上自动排水道（只排草稿、不定稿）：默认开。 */
+    fun autoPlan(): Boolean = toggles.getBoolean(KEY_AUTO_PLAN, true)
+
+    fun setAutoPlan(on: Boolean) {
+        toggles.edit().putBoolean(KEY_AUTO_PLAN, on).apply()
+    }
+
     /** 北京时间日期。按用户的作息，一天从零点算。 */
     private fun todayKey(): String = LocalDate.now(BEIJING).toString()
 
@@ -95,6 +102,7 @@ class SettingsStore(context: Context) {
         private const val USAGE_FILE = "moling_usage"
         private const val TOGGLE_FILE = "moling_toggles"
         private const val KEY_BACKGROUND = "background_heart"
+        private const val KEY_AUTO_PLAN = "auto_plan"
 
         private const val DEFAULT_BASE_URL = "https://api.deepseek.com"
         private const val DEFAULT_MODEL = "deepseek-chat"
