@@ -64,5 +64,10 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <!-- 通知上的「好 / 不用」：只接受自己 App 发来的广播 -->
+        <receiver
+            android:name=".NotifyReceiver"
+            android:exported="false" />
     </application>
 </manifest>

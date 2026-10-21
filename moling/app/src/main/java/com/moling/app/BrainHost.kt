@@ -13,6 +13,7 @@ import com.moling.core.ChatResult
 import com.moling.core.Notice
 import com.moling.core.Outcome
 import com.moling.core.Proposal
+import com.moling.core.ProposalState
 import com.moling.core.flow.Cause
 import com.moling.core.flow.Flow
 import com.moling.core.flow.FlowPlan
@@ -157,7 +158,23 @@ object BrainHost {
         val (category, guard) = tickInputs(now)
         val out = io("tick", { emptyList<Notice>() }) { brain.tick(now, category, guard) }
         _notices.value = (out + _notices.value).distinctBy { it.at to it.text }.take(3)
+        if (out.isNotEmpty()) runCatching { postNotices(now, out) }
         return out
+    }
+
+    /**
+     * 把心跳拿到的提醒发成系统通知（M11）。安静时段（总控静默或 23:30–07:00）照发但不响；
+     * 挂着提议的带上「好 / 不用」，和 App 里点卡片同一条路。
+     */
+    private fun postNotices(now: Long, notices: List<Notice>) {
+        val ctx = appContext ?: return
+        val s = _state.value
+        val minute = Flow.minuteOf(now)
+        val silent = s.lastStatus?.quiet == true || minute >= 23 * 60 + 30 || minute < 7 * 60
+        notices.forEach { n ->
+            val p = s.proposals.firstOrNull { it.id == n.proposalId && it.state == ProposalState.PENDING }
+            Notify.notice(ctx, n, p, silent)
+        }
     }
 
     /**
