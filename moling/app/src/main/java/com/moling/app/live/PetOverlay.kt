@@ -73,12 +73,17 @@ import com.moling.app.BrainHost
 import com.moling.app.ui.Ink
 import com.moling.app.ui.MolingFace
 import com.moling.app.ui.MolingTheme
+import com.moling.app.ui.ChessBait
+import com.moling.app.ui.ChessHeader
+import com.moling.app.ui.ChessScore
 import com.moling.app.ui.Paper
 import com.moling.app.ui.Seal
 import com.moling.app.ui.art.InkRing
 import com.moling.core.live.Modality
 import com.moling.core.live.Mood
 import com.moling.core.live.Reaction
+import com.moling.core.spar.Chess
+import com.moling.core.spar.Chesses
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -300,6 +305,10 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private var petChoices by mutableStateOf<List<String>>(emptyList())
     /** D3：这一次是盲盒 / 小剧场 / 赌（空 = 普通）。 */
     private var petKind by mutableStateOf("")
+    /** E1 三手棋：正在下的一局 / 收官分数 / 新结论。 */
+    private var petChess by mutableStateOf<Chess?>(null)
+    private var petChessScore by mutableIntStateOf(-1)
+    private var petChessConclusion by mutableStateOf("")
 
     // ---------------- 盯着你（Z2）
     private var stareView: ComposeView? = null
@@ -437,6 +446,9 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         petWhisper = whisper
         petChoices = choices
         petKind = kind
+        petChess = BrainHost.state.value.chess
+        petChessScore = -1
+        petChessConclusion = ""
         // 耳语直接亮出来，不弹跳；普通桌宠从压扁状态回弹。
         petLanded = whisper
         petShownAt = System.currentTimeMillis()
@@ -1046,6 +1058,16 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            val ch = petChess
+            if (ch != null || petChessScore >= 0) {
+                ChessHeader(turn = ch?.turn ?: 3, done = ch == null)
+            }
+            if (ch != null && ch.moves.isEmpty()) {
+                ChessBait(ch.bait)
+            }
+            if (ch == null && petChessScore >= 0) {
+                ChessScore(petChessScore, petChessConclusion)
+            }
             if (petKind == "blindbox" || petKind == "bet") {
                 Tag(if (petKind == "blindbox") "盲盒" else "她下注了")
             }
@@ -1244,6 +1266,17 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     /** D2：点桌宠气泡上的选项（点了算 REPLIED；没有新选项了 3 秒收起）。 */
     private fun onPetChoice(choice: String) {
         if (petView == null) return
+        // E1：“我自己说一句”在小气泡里没法打字——把同一批选项交给底部卡片去接。
+        if (choice == Chesses.FREE) {
+            report(petModality, Reaction.REPLIED, System.currentTimeMillis() - petShownAt)
+            val mood = petMood
+            val line = petLine
+            removePetWindow()
+            LiveScreens.nextChoices = petChoices
+            runCatching { LiveScreens.peek(this, mood, line, petModality) }
+            maybeStop()
+            return
+        }
         report(petModality, Reaction.REPLIED, System.currentTimeMillis() - petShownAt)
         scope.launch {
             val turn = runCatching { BrainHost.tap(choice) }.getOrNull() ?: return@launch
@@ -1251,7 +1284,16 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             petLine = turn.line
             petChoices = turn.choices
             petKind = ""
-            if (petChoices.isEmpty()) {
+            if (turn.chess) {
+                val s = BrainHost.state.value
+                petChess = s.chess
+                if (s.chess == null) {
+                    val last = s.chessDone.lastOrNull()
+                    petChessScore = last?.score ?: -1
+                    petChessConclusion = last?.conclusion.orEmpty()
+                }
+            }
+            if (petChoices.isEmpty() && petChess == null) {
                 petTimeoutJob?.cancel()
                 petTimeoutJob = scope.launch {
                     delay(3_000)

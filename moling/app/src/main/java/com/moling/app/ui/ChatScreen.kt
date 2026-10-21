@@ -56,6 +56,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moling.app.BrainHost
 import com.moling.core.Proposal
+import com.moling.core.spar.Chess
+import com.moling.core.spar.Chesses
 import com.moling.core.talk.TalkMode
 import androidx.compose.foundation.horizontalScroll
 import com.moling.core.mind.Opening
@@ -152,6 +154,11 @@ fun ChatScreen() {
     var talkLoop by remember { mutableStateOf(false) }
     // 她给的点选项（破雾模式里一定有）：点一下就算回她
     var choices by remember { mutableStateOf<List<String>>(emptyList()) }
+    // E1 三手棋：正在下的一局 / 收官分数 / 新结论 / “我自己说一句”。
+    var chess by remember { mutableStateOf(BrainHost.state.value.chess) }
+    var chessScore by remember { mutableIntStateOf(-1) }
+    var chessConclusion by remember { mutableStateOf("") }
+    var freeMode by remember { mutableStateOf(false) }
     var misses by remember { mutableIntStateOf(0) }
     DisposableEffect(Unit) { onDispose { talkLoop = false; Speaker.stop() } }
 
@@ -211,6 +218,34 @@ fun ChatScreen() {
     }
     listenLater = { listen(it) }
 
+    /** E1：点选项（三手棋的“我自己说一句”先展开输入框）。 */
+    fun pickChoice(c: String) {
+        if (c == Chesses.FREE) {
+            freeMode = true
+            return
+        }
+        sending = true
+        talkScope.launch {
+            val t = runCatching { BrainHost.tap(c) }.getOrNull()
+            sending = false
+            if (t == null) {
+                toast("没接上，再点一次")
+                return@launch
+            }
+            choices = t.choices
+            if (t.chess) {
+                val s = BrainHost.state.value
+                chess = s.chess
+                if (s.chess == null) {
+                    val last = s.chessDone.lastOrNull()
+                    chessScore = last?.score ?: -1
+                    chessConclusion = last?.conclusion.orEmpty()
+                }
+            }
+            if (talkLoop || BrainHost.settingsStore.load().speak) Speaker.speak(t.line)
+        }
+    }
+
     // 她此刻的样子：在想 → 好奇，在听 → 平静，否则按状态
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(state.talk.size) { now = System.currentTimeMillis() }
@@ -241,6 +276,7 @@ fun ChatScreen() {
                     toast(if (r == null) "她现在想不了（模型没接上）" else "她想了想：新判断 ${r.made.size} 条" + if (r.say.isNotEmpty()) "，有话想跟你说" else "")
                 }
             },
+
         )
 
         if (state.talk.isEmpty()) {
@@ -290,6 +326,41 @@ fun ChatScreen() {
             com.moling.app.ui.art.InkThinking("墨灵在想…", Modifier.padding(start = 16.dp, bottom = 2.dp))
         }
 
+        // E1 三手棋：第几手、暴论（第一手）、收官分数。
+        if (chess != null || chessScore >= 0) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                val ch = chess
+                ChessHeader(turn = ch?.turn ?: 3, done = ch == null)
+                if (ch != null && ch.moves.isEmpty()) ChessBait(ch.bait, Modifier.padding(top = 6.dp))
+                if (ch == null && chessScore >= 0) ChessScore(chessScore, chessConclusion)
+            }
+        }
+        if (freeMode && !sending) ChessFreeInput(
+            onSend = { said ->
+                freeMode = false
+                sending = true
+                talkScope.launch {
+                    val t = runCatching { BrainHost.tap(said) }.getOrNull()
+                    sending = false
+                    if (t == null) {
+                        toast("没接上，再写一句")
+                        return@launch
+                    }
+                    choices = t.choices
+                    if (t.chess) {
+                        val s = BrainHost.state.value
+                        chess = s.chess
+                        if (s.chess == null) {
+                            val last = s.chessDone.lastOrNull()
+                            chessScore = last?.score ?: -1
+                            chessConclusion = last?.conclusion.orEmpty()
+                        }
+                    }
+                    if (talkLoop || BrainHost.settingsStore.load().speak) Speaker.speak(t.line)
+                }
+            },
+            modifier = Modifier.padding(horizontal = 12.dp),
+        )
         // 她给的选项：点一下就回她（不用打字）
         if (choices.isNotEmpty() && !sending) Row(
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
@@ -298,16 +369,8 @@ fun ChatScreen() {
             choices.forEach { c ->
                 OutlinedButton(
                     onClick = {
-                        sending = true
-                        val picked = c
                         choices = emptyList()
-                        talkScope.launch {
-                            val t = runCatching { BrainHost.tap(picked) }.getOrNull()
-                            sending = false
-                            if (t == null) { toast("没接上，再点一次"); return@launch }
-                            choices = t.choices
-                            if (talkLoop || BrainHost.settingsStore.load().speak) Speaker.speak(t.line)
-                        }
+                        pickChoice(c)
                     },
                     // D4 破雾：选项是这一轮的主入口，用印泥色细边和更大的可点区域。
                     border = BorderStroke(1.dp, com.moling.app.ui.Seal),
@@ -500,6 +563,7 @@ private fun Stage(
                     TextButton(onClick = onThink, contentPadding = PaddingValues(horizontal = 0.dp)) {
                         Text("让她想想", style = MaterialTheme.typography.labelMedium)
                     }
+
                 }
             }
         }

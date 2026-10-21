@@ -41,6 +41,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -64,11 +65,17 @@ import com.moling.app.ui.art.InkRipple
 import com.moling.app.ui.art.InkThinking
 import com.moling.app.ui.art.WashBlue
 import com.moling.app.ui.MolingTheme
+import com.moling.app.ui.ChessBait
+import com.moling.app.ui.ChessFreeInput
+import com.moling.app.ui.ChessHeader
+import com.moling.app.ui.ChessScore
 import com.moling.app.ui.Paper
 import com.moling.app.ui.Seal
 import com.moling.app.ui.Speaker
 import com.moling.core.live.Mood
 import com.moling.core.live.Quiz
+import com.moling.core.spar.Chess
+import com.moling.core.spar.Chesses
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -452,6 +459,11 @@ class PeekActivity : ComponentActivity() {
         var choices by remember { mutableStateOf(LiveScreens.choices(intent)) }
         // D3：这一轮是不是盲盒 / 小剧场 / 赌（只影响样子）。
         var kind by remember { mutableStateOf(BrainHost.state.value.lastPlay?.kind.orEmpty()) }
+        // E1 三手棋：第几手 / 收官分数 / 暴论 / “我自己说一句”。
+        var chess by remember { mutableStateOf(BrainHost.state.value.chess) }
+        var chessScore by remember { mutableIntStateOf(-1) }
+        var chessConclusion by remember { mutableStateOf("") }
+        var freeMode by remember { mutableStateOf(false) }
         var closeSoon by remember { mutableStateOf(false) }
 
         LaunchedEffect(Unit) {
@@ -461,6 +473,31 @@ class PeekActivity : ComponentActivity() {
         }
         LaunchedEffect(closeSoon) {
             if (closeSoon) { delay(3_500); finish() }
+        }
+
+        fun runTap(c: String) {
+            busy = true
+            touched = true
+            report(com.moling.core.live.Reaction.REPLIED)
+            lifecycleScope.launch {
+                val t = BrainHost.tap(c)
+                line = t.line
+                mood = t.mood
+                choices = t.choices
+                kind = ""
+                if (t.chess) {
+                    val s = BrainHost.state.value
+                    chess = s.chess
+                    if (s.chess == null) {
+                        val last = s.chessDone.lastOrNull()
+                        chessScore = last?.score ?: -1
+                        chessConclusion = last?.conclusion.orEmpty()
+                    }
+                }
+                if (BrainHost.speakOn()) Speaker.speak(t.line)
+                busy = false
+                if (t.choices.isEmpty()) closeSoon = true
+            }
         }
 
         Box(
@@ -476,6 +513,23 @@ class PeekActivity : ComponentActivity() {
                 shadowElevation = 6.dp,
             ) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val ch = chess
+                    if (ch != null || chessScore >= 0) {
+                        ChessHeader(turn = ch?.turn ?: 3, done = ch == null)
+                    }
+                    if (ch != null && ch.moves.isEmpty()) {
+                        ChessBait(ch.bait)
+                    }
+                    if (ch == null && chessScore >= 0) {
+                        ChessScore(chessScore, chessConclusion) {
+                            startActivity(
+                                Intent(this@PeekActivity, MainActivity::class.java)
+                                    .putExtra(MainActivity.EXTRA_TAB, 2)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                            finish()
+                        }
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         MolingFace(mood, Modifier.size(72.dp))
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -497,23 +551,12 @@ class PeekActivity : ComponentActivity() {
                     ) {
                         choices.forEach { c ->
                             OutlinedButton(enabled = !busy, onClick = {
-                                busy = true
-                                touched = true
-                                report(com.moling.core.live.Reaction.REPLIED)
-                                lifecycleScope.launch {
-                                    val t = BrainHost.tap(c)
-                                    line = t.line
-                                    mood = t.mood
-                                    choices = t.choices
-                                    kind = ""
-                                    if (BrainHost.speakOn()) Speaker.speak(t.line)
-                                    busy = false
-                                    if (t.choices.isEmpty()) closeSoon = true
-                                }
+                                if (c == Chesses.FREE) freeMode = true else runTap(c)
                             }) { Text(c) }
                         }
                     }
-                    if (choices.isEmpty()) OutlinedTextField(
+                    if (freeMode) ChessFreeInput(onSend = { said -> freeMode = false; runTap(said) })
+                    if (choices.isEmpty() && !freeMode) OutlinedTextField(
                         value = text,
                         onValueChange = { text = it.take(400); touched = true },
                         modifier = Modifier.fillMaxWidth(),
