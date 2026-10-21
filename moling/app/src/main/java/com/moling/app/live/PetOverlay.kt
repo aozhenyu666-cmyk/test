@@ -323,7 +323,13 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
-        wm = getSystemService(WindowManager::class.java)
+        val windowManager: WindowManager? = getSystemService(WindowManager::class.java)
+        if (windowManager == null) {
+            // 理论上不会发生；真拿不到就安静退出，不崩。
+            stopSelf()
+            return
+        }
+        wm = windowManager
         // 权限中途被收回：清干净再退，别留下看不见的窗口。
         scope.launch {
             while (isActive) {
@@ -399,7 +405,7 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
         val prefs = overlayPrefs(this)
         val savedY = prefs.getInt(KEY_PET_Y, Int.MIN_VALUE)
-        val y = if (savedY != Int.MIN_VALUE) savedY else (screenH * if (whisper) 0.45f else 0.55f).toInt()
+        val y = if (savedY != Int.MIN_VALUE) savedY else (screenH * (if (whisper) 0.45f else 0.55f)).toInt()
         val p = windowParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -498,10 +504,12 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     private fun onPetLongPress() {
         if (petView == null) return
-        // 一小时内不再用桌宠。只写时间戳，Appear 只在 PET 分支读它，所以不会挡住 WHISPER。
-        overlayPrefs(this).edit()
-            .putLong(KEY_PET_MUTE, System.currentTimeMillis() + 3_600_000L)
-            .apply()
+        // 一小时内不再用桌宠（只对 PET 生效；耳语长按不会连累之后的桌宠）。
+        if (petModality == Modality.PET) {
+            overlayPrefs(this).edit()
+                .putLong(KEY_PET_MUTE, System.currentTimeMillis() + 3_600_000L)
+                .apply()
+        }
         dismissPet(Reaction.DISMISSED)
     }
 
