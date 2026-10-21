@@ -48,6 +48,7 @@ import com.moling.core.atlas.Edge
 import com.moling.core.atlas.Gap
 import com.moling.core.atlas.Node
 import com.moling.core.atlas.NodeKind
+import com.moling.core.forage.Brief
 import com.moling.core.mind.Actor
 import com.moling.core.mind.Opening
 import kotlinx.coroutines.CoroutineScope
@@ -244,6 +245,20 @@ fun AtlasScreen() {
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                // E4 她采回来的简报：一张张卡；收下才进体系图（把握一律低，待核实）。
+                state.briefs.filter { it.status == "new" }.forEach { b ->
+                    BriefCard(
+                        brief = b,
+                        onKeep = {
+                            atlasScope.launch {
+                                val n = runCatching { BrainHost.keepBrief(b.id, true) }.getOrDefault(0)
+                                toast("收进体系图 " + n + " 条（把握低，待你核实）")
+                            }
+                        },
+                        onDrop = { atlasScope.launch { runCatching { BrainHost.keepBrief(b.id, false) } } },
+                    )
+                }
+
                 if (atlas.topics.isEmpty()) {
                     // 1. 空态：还没有任何主题，只留说明和下面的贴材料区。
                     Text(
@@ -479,6 +494,44 @@ private fun SectionTitle(text: String) {
         color = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.padding(top = 4.dp),
     )
+}
+
+/** E4：她采回来的一份简报。每条后面括号里的来源用小字灰着；收下 / 不要，点了才生效。 */
+@Composable
+private fun BriefCard(brief: Brief, onKeep: () -> Unit, onDrop: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("她替你采的：" + brief.question, style = MaterialTheme.typography.titleSmall)
+            brief.lines.forEach { line ->
+                val cut = line.indexOf('（')
+                val main = if (cut > 0) line.substring(0, cut) else line
+                val tail = if (cut > 0) line.substring(cut) else ""
+                Row {
+                    Text("· " + main, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    if (tail.isNotBlank()) {
+                        Text(
+                            tail,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onKeep) { Text("收下") }
+                TextButton(onClick = onDrop) { Text("不要") }
+            }
+            Text(
+                "这是模型凭已知整理的，没联网查；也已经挂到黑板上问 GPT 了。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 /** 一条论断：正文 + 小字（把握 / 已验证 / 来源），右边「⋯」弹核实 / 删除。 */
