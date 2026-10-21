@@ -57,6 +57,7 @@
 - **v6 贯通（Claude，2026-10-21）**：ChatGPT 和 Notion AI 都没有让外部程序跟它们聊、或读它们记录的接口（ChatGPT 只能自己往外连 MCP / 连接器），所以走 Notion：墨灵把“黑板”（了解、今天、这几天的错判、体系图、她想问 GPT 的问题）写进他的 Notion 页面，GPT（用 ChatGPT 的 Notion 连接器）/ Notion AI 读完把回答写进“收件箱”，墨灵每 15 分钟收一次、把关后进体系图（改“了解”仍是提议）。另有：她自己想问题（夜里、对话里的【动作】问GPT）、导入 ChatGPT 导出的对话记录、分享菜单里“这是 GPT 的回答”、深想模型（可填 OpenAI 接口让 GPT 直接参与她的深想）。代码：`core/mirror/Mirror.kt`、`Brain.board / absorb / askGpt / prepareQuestions`、`app/mirror/`、`ui/BridgeScreen.kt`。
 - **v6 没做**：墨灵自己当 MCP 服务器（要一个公网服务器中转，ChatGPT 个人版能不能接自定义 MCP 也不确定）；Notion 的 External Agents API 还是 alpha。
 - **v8（Claude，2026-10-21）**：她自己的思考（定时推演、判断可验证、想好的话排队）、更多主动的时机（解锁、做完主线、有话说、闲着）和主动程度设置、使用脉络（只有应用和时间）、对讲和可选语音模型、交接包（发给任何 AI 应用，回答从分享菜单回来）、墨线界面和准备清单。细节见 `moling/DEVLOG.md`。
+- **v10（Claude，2026-10-21）**：联络站——Cloudflare Worker（`moling/app/src/main/assets/relay-worker.js`）当中转，ChatGPT / Claude 用 MCP 读墨灵的黑板、把回答发给她，墨灵每 10 分钟推 / 收；设置改成首页 + 分节。
 - **明确不做**：读其他应用的屏幕内容、让墨灵的权柄高过总控 / 绕开铁律（会话里提过，被安全检查拦下）。
 - **还没做**：读系统日历（要加 `READ_CALENDAR`）、连续语音对讲、专注时开勿扰、Notion 镜子；以及最重要的——真机联调。
 - **v4 规划**（`partner-blueprint/v4-power.md`）：授权书（事先授权的收紧和排计划，60 秒反悔，撤销走冷静期）、总控三个新开关、约定 / 谋划单交给总控监督、小窗和“先答一问”、日历和作息、周报和打法本、模式和语音对讲。Claude 先做 C1–C7（大脑和总控内核），DeepSeek 做第四到第七批。

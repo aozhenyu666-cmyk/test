@@ -99,6 +99,9 @@ fun BridgeScreen(onDone: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
+        // ---------------------------------------------------------------- 联络站：ChatGPT / Claude 通过 MCP 直接连墨灵
+        RelaySection(store, ::toast)
+
         // ---------------------------------------------------------------- 交接包：直接发给任何 AI
         com.moling.app.ui.art.InkTitle("直接交给任何 AI")
         Text(
@@ -243,4 +246,89 @@ fun BridgeScreen(onDone: () -> Unit) {
             toast(if (deepModel.isBlank()) "不用深想模型了" else "好了，想得深的事用 $deepModel")
         }) { Text("保存深想模型") }
     }
+}
+
+/**
+ * 联络站（v10）：一个免费的 Cloudflare Worker，ChatGPT / Claude 用 MCP 连它，墨灵每 10 分钟去推黑板、收回答。
+ * 手机上就能部署：复制代码 → 粘到 Cloudflare → 填两串密钥 → 把地址填回来。
+ */
+@Composable
+private fun RelaySection(store: SettingsStore, toast: (String) -> Unit) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    val saved = remember { store.relay() }
+    var url by remember { mutableStateOf(saved.url) }
+    var token by remember { mutableStateOf(saved.token) }
+    var secret by remember { mutableStateOf(saved.mcpSecret) }
+    var status by remember { mutableStateOf(store.relayStatus()) }
+    var busy by remember { mutableStateOf(false) }
+    var steps by remember { mutableStateOf(!saved.ready()) }
+    val draft = com.moling.app.data.RelaySettings(url, token, secret)
+
+    com.moling.app.ui.art.InkTitle("联络站：让 ChatGPT 直接连墨灵")
+    Text(
+        "ChatGPT（和 Claude）可以连“MCP 服务器”，但连不到你手机里。联络站是放在 Cloudflare 上的一个小程序（免费）：" +
+            "墨灵把黑板推上去、去那里收回答；ChatGPT 通过 MCP 读黑板、把回答发给她。别人写来的她照样把关。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    TextButton(onClick = { steps = !steps }) { Text(if (steps) "收起部署步骤 ▴" else "怎么部署（手机上 10 分钟）▾") }
+    if (steps) Surface(tonalElevation = 1.dp, shape = MaterialTheme.shapes.medium) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(
+                "1. 先点下面「生成两串密钥」。",
+                "2. 浏览器打开 dash.cloudflare.com（注册免费账号）→ Workers 和 Pages → 创建 → 从 Hello World 开始 → 起名（比如 moling）→ 部署。",
+                "3. 点「编辑代码」，把原来的全删掉，粘贴「复制联络站代码」的内容 → 部署。",
+                "4. 存储和数据库 → KV → 创建命名空间（叫 moling）。回到这个 Worker → 设置 → 绑定 → 添加 → KV 命名空间，变量名填 MOLING，选刚建的。",
+                "5. Worker → 设置 → 变量和机密 → 添加两个“机密”：MOLING_TOKEN = 下面的“墨灵用的令牌”，MCP_SECRET = 下面的“MCP 那段”。",
+                "6. 把 Worker 的地址（https://moling.你的名字.workers.dev）填到下面，点「保存并同步」，看到“黑板推上去了”就通了。",
+                "7. ChatGPT：设置 → 应用（连接器）→ 高级里打开开发者模式 → 新建 → 地址填「复制 MCP 地址」的那串，认证选“无”。" +
+                    "（个人版能不能用以你账号里的为准；Claude 的“自定义连接器”也能填同一个地址。）",
+                "8. 之后在 ChatGPT 里说：“用墨灵联络站读她的黑板，回答她的问题，把回答发给她。”",
+            ).forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = {
+            val code = runCatching { context.assets.open("relay-worker.js").bufferedReader().readText() }.getOrDefault("")
+            if (code.isBlank()) toast("没读到代码") else { clipboard.setText(AnnotatedString(code)); toast("联络站代码复制好了，去 Cloudflare 粘贴") }
+        }) { Text("复制联络站代码") }
+        OutlinedButton(onClick = {
+            token = com.moling.app.mirror.RelaySync.secret()
+            secret = com.moling.app.mirror.RelaySync.secret()
+            toast("生成好了，记得保存")
+        }) { Text("生成两串密钥") }
+    }
+    OutlinedTextField(value = url, onValueChange = { url = it.trim() }, label = { Text("联络站地址") }, placeholder = { Text("https://moling.xxx.workers.dev") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(value = token, onValueChange = { token = it.trim() }, label = { Text("墨灵用的令牌（MOLING_TOKEN）") }, singleLine = true, modifier = Modifier.weight(1f))
+        TextButton(enabled = token.isNotBlank(), onClick = { clipboard.setText(AnnotatedString(token)); toast("复制了") }) { Text("复制") }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(value = secret, onValueChange = { secret = it.trim() }, label = { Text("MCP 那段（MCP_SECRET）") }, singleLine = true, modifier = Modifier.weight(1f))
+        TextButton(enabled = secret.isNotBlank(), onClick = { clipboard.setText(AnnotatedString(secret)); toast("复制了") }) { Text("复制") }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(enabled = !busy && draft.ready(), onClick = {
+            store.saveRelay(draft)
+            busy = true
+            status = "在同步…"
+            scope.launch {
+                status = runCatching { BrainHost.relay(force = true) }.getOrNull() ?: store.relayStatus().ifBlank { "没同步成" }
+                busy = false
+            }
+        }) { Text(if (busy) "在同步…" else "保存并同步") }
+        OutlinedButton(enabled = draft.mcpUrl().isNotBlank(), onClick = {
+            store.saveRelay(draft)
+            clipboard.setText(AnnotatedString(draft.mcpUrl()))
+            toast("MCP 地址复制好了，去 ChatGPT 里新建连接器")
+        }) { Text("复制 MCP 地址") }
+    }
+    if (status.isNotBlank()) Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text(
+        "MCP 地址里带着那段密钥，别发到公开的地方；泄露了就重新生成、改 Cloudflare 里的机密。",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }

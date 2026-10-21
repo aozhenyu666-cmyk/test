@@ -12,6 +12,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -89,6 +92,8 @@ fun SettingsScreen(onDone: () -> Unit) {
     var debugOpen by remember { mutableStateOf(false) }
     var aboutOpen by remember { mutableStateOf(false) }
     var bridgeOpen by remember { mutableStateOf(false) }
+    // 设置首页（null）还是某一节
+    var section by remember { mutableStateOf<String?>(null) }
     var backgroundOn by remember { mutableStateOf(store.backgroundHeart()) }
     var autoPlanOn by remember { mutableStateOf(store.autoPlan()) }
     var liveOn by remember { mutableStateOf(store.liveOn()) }
@@ -208,8 +213,8 @@ fun SettingsScreen(onDone: () -> Unit) {
             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = onDone) { Text("← 返回") }
-            Text("设置", style = MaterialTheme.typography.titleLarge)
+            TextButton(onClick = { if (section != null) section = null else onDone() }) { Text("← 返回") }
+            Text(SECTIONS.firstOrNull { it.first == section }?.second ?: "设置", style = MaterialTheme.typography.titleLarge)
         }
 
         Column(
@@ -220,6 +225,19 @@ fun SettingsScreen(onDone: () -> Unit) {
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            if (section == null) SettingsHub(
+                callUser = callUser, speak = speak, model = model, calls = usage.calls,
+                liveOn = liveOn, eager = eager.label, zk = zkLabel(brainState.lastStatus), tier = tierShort(brainState.userMax),
+                background = backgroundOn, usageAllowed = usageAllowed,
+                notion = store.notion().ready(), relay = store.relay().ready(),
+                memory = fileSummary(File(File(context.filesDir, "mind"), "moling.json")),
+                open = { section = it },
+                openBridge = { bridgeOpen = true },
+                openAbout = { aboutOpen = true },
+                openPresence = { com.moling.app.overlay.PresenceActivity.open(context, "settings") },
+                openDebug = { debugOpen = true },
+            )
+            if (section == "ai") {
             Text("AI 接口", style = MaterialTheme.typography.titleSmall)
             OutlinedTextField(
                 value = url,
@@ -247,6 +265,8 @@ fun SettingsScreen(onDone: () -> Unit) {
                 supportingText = { Text("DeepSeek 填 deepseek-chat。") },
             )
 
+            }
+            if (section == "zk") {
             Text("总控", style = MaterialTheme.typography.titleSmall)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -288,6 +308,8 @@ fun SettingsScreen(onDone: () -> Unit) {
                 }
             }) { Text("去总控改授权书") }
 
+            }
+            if (section == "bg") {
             Text("后台", style = MaterialTheme.typography.titleSmall)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -351,6 +373,8 @@ fun SettingsScreen(onDone: () -> Unit) {
                 )
             }
 
+            }
+            if (section == "live") {
             // ---------------------------------------------------------------- 活的墨灵（v5）
             Text("活的墨灵", style = MaterialTheme.typography.titleSmall)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -455,6 +479,8 @@ fun SettingsScreen(onDone: () -> Unit) {
                 }
             }
 
+            }
+            if (section == "mem") {
             Text("记忆", style = MaterialTheme.typography.titleSmall)
             Text(
                 "备份是两个文件：对话、提议、体系图和导演的记忆。导入会整个覆盖，不含接口密钥。",
@@ -480,6 +506,8 @@ fun SettingsScreen(onDone: () -> Unit) {
                 }
             }
 
+            }
+            if (section == "she") {
             Text("她是谁", style = MaterialTheme.typography.titleSmall)
             OutlinedTextField(
                 value = persona,
@@ -541,6 +569,8 @@ fun SettingsScreen(onDone: () -> Unit) {
                 }) { Text("试听") }
             }
 
+            }
+            if (section == "ai") {
             // 先存下屏幕上的值再测：测的应该是正在填的这一份，不是上次保存的。
             OutlinedButton(
                 onClick = {
@@ -579,6 +609,8 @@ fun SettingsScreen(onDone: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
             )
 
+            }
+            if (section == "zk") {
             Text("权柄上限", style = MaterialTheme.typography.titleSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Tier.entries.forEach { tier ->
@@ -616,26 +648,14 @@ fun SettingsScreen(onDone: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            TextButton(onClick = { com.moling.app.overlay.PresenceActivity.open(context, "settings") }) { Text("在你身边") }
-            TextButton(
-                onClick = { aboutOpen = true },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("她对你的了解 · 周报 · 四个参谋") }
-            TextButton(
-                onClick = { bridgeOpen = true },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("贯通：Notion · GPT · 深想模型") }
-            TextButton(
-                onClick = { debugOpen = true },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("调试（只读：权柄 / 总控 / 提议 / 导演 / 后台 / 日志）") }
+            }
         }
 
-        Surface(tonalElevation = 2.dp) {
+        if (section == "ai" || section == "she") Surface(tonalElevation = 2.dp) {
             Button(
                 onClick = {
                     store.save(draft())
-                    onDone()
+                    section = null
                 },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
             ) { Text("保存") }
@@ -729,4 +749,78 @@ private fun writeAtomic(target: File, text: String) {
     if (tmp.renameTo(target)) return
     target.delete()
     if (!tmp.renameTo(target)) throw IOException("写不进 ${target.name}")
+}
+/** 设置的几节：键 → 标题。 */
+private val SECTIONS = listOf(
+    "she" to "她是谁",
+    "ai" to "AI 接口",
+    "live" to "活的墨灵",
+    "zk" to "总控与权柄",
+    "bg" to "后台与权限",
+    "mem" to "记忆与备份",
+)
+
+/**
+ * 设置首页：一节一张卡（小插画 + 名字 + 一句现在的状态），点进去才是细项。
+ * 贯通、了解、在你身边、调试是单独的页，也放在这里。
+ */
+@Composable
+private fun SettingsHub(
+    callUser: String,
+    speak: Boolean,
+    model: String,
+    calls: Int,
+    liveOn: Boolean,
+    eager: String,
+    zk: String,
+    tier: String,
+    background: Boolean,
+    usageAllowed: Boolean,
+    notion: Boolean,
+    relay: Boolean,
+    memory: String,
+    open: (String) -> Unit,
+    openBridge: () -> Unit,
+    openAbout: () -> Unit,
+    openPresence: () -> Unit,
+    openDebug: () -> Unit,
+) {
+    @Composable
+    fun Card(title: String, line: String, art: @Composable () -> Unit, onClick: () -> Unit) {
+        Surface(
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = androidx.compose.foundation.BorderStroke(0.7.dp, Ink.copy(alpha = 0.14f)),
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        ) {
+            Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) { art() }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.titleSmall)
+                    Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                }
+                Text("›", style = MaterialTheme.typography.titleLarge, color = Ink.copy(alpha = 0.35f))
+            }
+        }
+    }
+    val m = Modifier.size(40.dp)
+    com.moling.app.ui.art.InkTitle("她")
+    Card("她是谁", "叫你「$callUser」 · 朗读${if (speak) "开" else "关"} · 人格和声音", { MolingFace(com.moling.core.live.Mood.CALM, m) }) { open("she") }
+    Card("活的墨灵", if (liveOn) "会主动找你（$eager）· 拦人 · 桌宠 · 耳语 · 褪色" else "关着：她不会主动找你", { com.moling.app.ui.art.InkRipple(m, animated = false) }) { open("live") }
+    Card("了解 · 周报 · 参谋", "她对你的了解、每周复盘、四个参谋、她定的唤醒", { com.moling.app.ui.art.InkLeaf(0.7f, m) }, openAbout)
+    com.moling.app.ui.art.InkTitle("连接")
+    Card("AI 接口", "${model.ifBlank { "还没填" }} · 今天 $calls 次", { com.moling.app.ui.art.InkHalo(m, animated = false) }) { open("ai") }
+    Card(
+        "贯通：GPT · Notion · 深想",
+        listOfNotNull(if (relay) "联络站已连" else null, if (notion) "Notion 已连" else null).ifEmpty { listOf("联络站、Notion、交接包、ChatGPT 记录") }.joinToString(" · "),
+        { com.moling.app.ui.art.InkBubbles(m, animated = false) },
+        openBridge,
+    )
+    Card("总控与权柄", "$zk · 上限「$tier」", { com.moling.app.ui.art.InkSteps(2, 3, m) }) { open("zk") }
+    com.moling.app.ui.art.InkTitle("手机")
+    Card("后台与权限", "后台陪着${if (background) "开" else "关"} · 看前台应用${if (usageAllowed) "已允许" else "没开"}", { com.moling.app.ui.art.InkRing(if (background && usageAllowed) 1f else 0.5f, m) }) { open("bg") }
+    Card("在你身边", "小窗、先答一问、晨报、分享", { com.moling.app.ui.art.InkClouds(m, animated = false) }, openPresence)
+    Card("记忆与备份", "moling.json：$memory", { com.moling.app.ui.art.InkPapers(m, animated = false) }) { open("mem") }
+    Card("调试", "只读：权柄、总控、提议、导演、后台、日志", { com.moling.app.ui.art.InkGalaxy(m, animated = false) }, openDebug)
 }

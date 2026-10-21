@@ -37,6 +37,13 @@ data class VoiceSettings(val baseUrl: String = "", val apiKey: String = "", val 
     fun ready(): Boolean = baseUrl.isNotBlank() && apiKey.isNotBlank() && model.isNotBlank()
 }
 
+/** 联络站（Cloudflare Worker）：[url] 形如 https://moling.xxx.workers.dev；[token] 墨灵用；[mcpSecret] MCP 地址里的那段。 */
+data class RelaySettings(val url: String = "", val token: String = "", val mcpSecret: String = "") {
+    fun ready(): Boolean = url.startsWith("https://") && token.isNotBlank()
+    fun base(): String = url.trim().trimEnd('/')
+    fun mcpUrl(): String = if (url.isBlank() || mcpSecret.isBlank()) "" else "${base()}/mcp/$mcpSecret"
+}
+
 /** 和 Notion 贯通的设置。[token] 是 Notion 内部集成的密钥（加密存）；[root] 是他分享给集成的那个页面。 */
 data class NotionSettings(
     val token: String = "",
@@ -97,6 +104,35 @@ class SettingsStore(context: Context) {
             .putString(KEY_VOICE_MODEL, v.model.trim())
             .putString(KEY_VOICE_NAME, v.voice.trim())
             .apply()
+    }
+
+    fun relay(): RelaySettings = RelaySettings(
+        url = prefs.getString(KEY_RELAY_URL, null).orEmpty(),
+        token = prefs.getString(KEY_RELAY_TOKEN, null).orEmpty(),
+        mcpSecret = prefs.getString(KEY_RELAY_MCP, null).orEmpty(),
+    )
+
+    /** 换了地址就从头收（收过的条目大脑记着，不会重复收）。 */
+    fun saveRelay(r: RelaySettings) {
+        val old = relay()
+        prefs.edit()
+            .putString(KEY_RELAY_URL, r.url.trim())
+            .putString(KEY_RELAY_TOKEN, r.token.trim())
+            .putString(KEY_RELAY_MCP, r.mcpSecret.trim())
+            .apply()
+        if (old.url != r.url.trim()) toggles.edit().putLong(KEY_RELAY_AFTER, 0).apply()
+    }
+
+    fun relayAfter(): Long = toggles.getLong(KEY_RELAY_AFTER, 0)
+
+    fun setRelayAfter(n: Long) {
+        toggles.edit().putLong(KEY_RELAY_AFTER, n).apply()
+    }
+
+    fun relayStatus(): String = toggles.getString(KEY_RELAY_STATUS, null).orEmpty()
+
+    fun setRelayStatus(text: String) {
+        toggles.edit().putString(KEY_RELAY_STATUS, text).apply()
     }
 
     fun notion(): NotionSettings = NotionSettings(
@@ -243,6 +279,11 @@ class SettingsStore(context: Context) {
         private const val KEY_PERSONA = "persona"
         private const val KEY_CALL_USER = "call_user"
         private const val KEY_SPEAK = "speak"
+        private const val KEY_RELAY_URL = "relay_url"
+        private const val KEY_RELAY_TOKEN = "relay_token"
+        private const val KEY_RELAY_MCP = "relay_mcp"
+        private const val KEY_RELAY_AFTER = "relay_after"
+        private const val KEY_RELAY_STATUS = "relay_status"
         private const val KEY_VOICE_URL = "voice_base_url"
         private const val KEY_VOICE_KEY = "voice_api_key"
         private const val KEY_VOICE_MODEL = "voice_model"

@@ -230,6 +230,7 @@ object BrainHost {
         runCatching { withContext(Dispatchers.IO) { autoSchedule(now) } }
         runCatching { liveTick(now) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "活的墨灵失败", it) }
         if (interactive()) runCatching { refreshUsage() }
+        runCatching { relay(now, force = false) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "联络站同步失败", it) }
         runCatching { mirror(now, force = false) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "Notion 同步失败", it) }
         return out
     }
@@ -243,6 +244,22 @@ object BrainHost {
             NotionMirror.sync(
                 settings, now, force,
                 board = { brain.board(now) },
+                seen = { brain.state().mirrorSeen },
+                absorb = { items -> io("absorb", { Absorbed() }) { brain.absorb(items, now) } },
+            )
+        } ?: return null
+        refreshState()
+        tellAbsorbed(r.absorbed)
+        return r.status
+    }
+
+    /** 和联络站同步一次（心跳里每 10 分钟；贯通页点“同步”时 [force]）。没设置返回 null。 */
+    suspend fun relay(now: Long = System.currentTimeMillis(), force: Boolean = true): String? {
+        if (!ready) return null
+        val r = withContext(Dispatchers.IO) {
+            com.moling.app.mirror.RelaySync.sync(
+                settings, now, force,
+                board = { brain.handoff(now) to brain.state().questions },
                 seen = { brain.state().mirrorSeen },
                 absorb = { items -> io("absorb", { Absorbed() }) { brain.absorb(items, now) } },
             )

@@ -825,3 +825,19 @@
 - `hide()`（拦人页出现、离开应用等系统原因收起）不报 IGNORED——不是他的反应，对的。
 - 桌宠从离落点最近的那条边探头，不再横穿屏幕。
 - B 组（Z5 捉虫题、Z7 沙盘、Z9 看板、`Appear` 的 QUIZ 一行、拦人页“做一道捉虫题”）还没做，按 `DEEPSEEK-6.md` 另开分支 `deepseek-autopilot-b`。
+
+---
+
+## v10 联络站（MCP）+ 设置首页（2026-10-21，Claude）
+
+**为什么不是“手机上开一个 HTTP 服务”**：ChatGPT 的连接器从 OpenAI 的服务器出发，连不到手机（手机没有公网地址，还会休眠）；GPT 的 Actions 也在退役（OpenAI 建议改用 MCP 连接器）。所以放一个免费的中转站在 Cloudflare 上。
+
+- `app/src/main/assets/relay-worker.js`：联络站（Cloudflare Worker + KV）。
+  - 墨灵用：`PUT /api/board`（黑板 = 交接包 + 没回答的问题）、`GET /api/inbox?after=N`，Bearer 令牌（`MOLING_TOKEN`）。
+  - AI 用：`POST /mcp/<MCP_SECRET>`，MCP（JSON-RPC，直接回 JSON）：`read_moling_board`、`send_to_moling(text, question_id?, from?)`。地址里那段密钥就是钥匙（ChatGPT 自定义连接器认证选“无”）。
+  - 测试：`node tools/relay-test/test.mjs`（握手、列工具、读黑板、回答、收件箱游标、令牌校验）。
+- `app/mirror/RelaySync.kt`：每 10 分钟推黑板（变了才推）、收回答 → 大脑 `absorb` 把关（回答挂到问题上、论断进体系图、改“了解”要他点好）；大脑记成“收过”才挪游标。
+- 贯通页最上面「联络站」：部署步骤（手机浏览器就能做）、复制联络站代码、生成两串密钥、保存并同步、复制 MCP 地址。
+- 设置改成首页 + 分节：她 / 连接 / 手机三组卡片（小插画 + 一句现状），点进去才是细项；保存按钮只在“她是谁”“AI 接口”里出现。
+
+**真机验收**：照贯通页的 8 步部署 → 「保存并同步」显示“黑板推上去了” → ChatGPT 里新建连接器填 MCP 地址 → 说“用墨灵联络站读她的黑板，回答她的问题，把回答发给她” → 10 分钟内（或点同步）墨灵收到，通知“GPT 那边：……”。
