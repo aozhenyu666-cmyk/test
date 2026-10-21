@@ -9,8 +9,8 @@ import com.moling.core.live.Modality
 /*
  * 她出现的方式（v9 反免疫）：大脑每次挑一种（[LiveTurn.modality]），这里照着弹。
  *
- * 现在接好的：GATE（拦人页）、PEEK（底部卡片）、PET（桌宠）、STARE（盯着你）。
- * WHISPER / COUNCIL / QUIZ 接着往里加；没做好之前退回底部卡片，功能不缺，只是样子单一。
+ * 现在接好的：GATE（拦人页）、PEEK（底部卡片）、PET（桌宠）、STARE（盯着你）、WHISPER（耳机里说一句）。
+ * COUNCIL / QUIZ 接着往里加；没做好之前退回底部卡片，功能不缺，只是样子单一。
  *
  * 他怎么回应，各个界面调 [com.moling.app.BrainHost.react] 报回来（反免疫账本靠它）。
  */
@@ -22,8 +22,8 @@ object Appear {
         quiz = true,
     )
 
-    /** 耳语能不能用：戴着耳机、不在安静时段、设置里开着（Z3 实现）。 */
-    fun canWhisper(context: Context): Boolean = false
+    /** 耳语能不能用：戴着耳机、不在安静时段、设置里开着（Z3）。 */
+    fun canWhisper(context: Context): Boolean = Whisper.can(context)
 
     fun show(context: Context, turn: LiveTurn, label: String) {
         val overlay = Settings.canDrawOverlays(context)
@@ -35,6 +35,9 @@ object Appear {
             Modality.STARE ->
                 if (!overlay) LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
                 else PetOverlay.stare(context, turn.mood, turn.line)
+            Modality.WHISPER ->
+                if (canWhisper(context)) Whisper.say(context, turn.mood, turn.line)
+                else LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
             else -> LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
         }
     }

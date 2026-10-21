@@ -201,6 +201,20 @@ class SettingsStore(context: Context) {
         toggles.edit().putString(KEY_EAGER, e.name).apply()
     }
 
+    /** 她可以在耳机里说话（Z3 耳语）：默认开。 */
+    fun whisperOn(): Boolean = toggles.getBoolean(KEY_WHISPER, true)
+
+    fun setWhisperOn(on: Boolean) {
+        toggles.edit().putBoolean(KEY_WHISPER, on).apply()
+    }
+
+    /** 刷着刷着慢慢褪色（Z6）：默认关，完全由他自己打开。 */
+    fun fadeOn(): Boolean = toggles.getBoolean(KEY_FADE, false)
+
+    fun setFadeOn(on: Boolean) {
+        toggles.edit().putBoolean(KEY_FADE, on).apply()
+    }
+
     /** 北京时间日期。按用户的作息，一天从零点算。 */
     private fun todayKey(): String = LocalDate.now(BEIJING).toString()
 
@@ -217,6 +231,8 @@ class SettingsStore(context: Context) {
         private const val KEY_LIVE = "live"
         private const val KEY_GATE = "gate"
         private const val KEY_EAGER = "eagerness"
+        private const val KEY_WHISPER = "whisper"
+        private const val KEY_FADE = "fade"
 
         private const val DEFAULT_BASE_URL = "https://api.deepseek.com"
         private const val DEFAULT_MODEL = "deepseek-chat"

@@ -93,6 +93,8 @@ fun SettingsScreen(onDone: () -> Unit) {
     var autoPlanOn by remember { mutableStateOf(store.autoPlan()) }
     var liveOn by remember { mutableStateOf(store.liveOn()) }
     var gateOn by remember { mutableStateOf(store.gateOn()) }
+    var whisperOn by remember { mutableStateOf(store.whisperOn()) }
+    var fadeOn by remember { mutableStateOf(store.fadeOn()) }
     var eager by remember { mutableStateOf(store.eagerness()) }
     var faceMood by remember { mutableStateOf(com.moling.core.live.Mood.POUT) }
     var overlayAllowed by remember { mutableStateOf(android.provider.Settings.canDrawOverlays(context)) }
@@ -405,6 +407,36 @@ fun SettingsScreen(onDone: () -> Unit) {
                     )
                 }
                 Switch(checked = gateOn, enabled = liveOn, onCheckedChange = { on -> gateOn = on; store.setGateOn(on) })
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("她可以在耳机里说话")
+                    Text(
+                        "戴着耳机时，她会把音乐压低、在耳机里说一句；说完在屏幕边上亮 8 秒「回她」，你点了才回。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = whisperOn,
+                    enabled = liveOn,
+                    onCheckedChange = { on -> whisperOn = on; store.setWhisperOn(on) },
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("刷着刷着慢慢褪色")
+                    Text(
+                        "只在她觉得你在机械地刷、而且你还停在娱乐应用里时；只让画面变灰，不挡操作；离开就恢复；每天最多 20 分钟。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = fadeOn,
+                    enabled = liveOn,
+                    onCheckedChange = { on -> fadeOn = on; store.setFadeOn(on) },
+                )
             }
             if (liveOn && !overlayAllowed) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
