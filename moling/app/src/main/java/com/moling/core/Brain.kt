@@ -14,6 +14,7 @@ import com.moling.core.guard.GuardSample
 import com.moling.core.guard.ZkGuard
 import com.moling.core.link.ZkCommand
 import com.moling.core.link.ZkReceipt
+import com.moling.core.link.ZkResult
 import com.moling.core.link.ZkStatus
 import com.moling.core.link.ZkWire
 import com.moling.core.link.describe
@@ -72,6 +73,9 @@ interface ZkPort {
 
     /** 把一条指令交给总控；连不上返回 null。总控收下不等于执行了，回执里写它怎么处理。 */
     fun send(command: ZkCommand): ZkReceipt?
+
+    /** 交过去的一条后来怎么样了（[ZkReceipt.id]）；连不上返回 null。 */
+    fun result(id: String): ZkResult? = null
 }
 
 /** 提议要做的事。 */
@@ -120,6 +124,10 @@ data class Proposal(
     /** 总控的回执 / 失败原因。 */
     val receipt: String = "",
     val decidedAt: Long = 0,
+    /** 总控给每条指令的编号（用来问后来怎么样了）。 */
+    val zkIds: List<String> = emptyList(),
+    /** 总控那边的结局：空 = 还不知道；例如“总控执行了”“你在总控里点了不用”。 */
+    val zkOutcome: String = "",
 )
 
 /** 用户对提议的一次表态（算接受率，挣权柄用）。 */
@@ -149,6 +157,8 @@ data class BrainState(
     val nudged: List<String> = emptyList(),
     val lastStatus: ZkStatus? = null,
     val lastNightDay: String = "",
+    /** 每个主题的体系总结（主题 id → 一段话）。 */
+    val synthesis: Map<String, String> = emptyMap(),
     /** 提议编号用的流水号。 */
     val seq: Long = 0,
     /** 给人看的行动日志（做了什么、交给总控什么、总控怎么回的）。 */
@@ -365,18 +375,20 @@ class Brain(
             return Outcome(false, "这条现在不能交给总控（${Charter.check(bad.power(), tier).reason}）")
         }
         var sent = p.sent
+        val ids = p.zkIds.toMutableList()
         while (sent < commands.size) {
             val r = runCatching { zk.send(commands[sent]) }.getOrNull()
             if (r == null || !r.ok) {
                 val why = r?.message?.ifBlank { null } ?: if (r == null) "连不上总控" else "总控拒绝了"
-                update(p.copy(state = ProposalState.FAILED, sent = sent, receipt = why, decidedAt = now))
+                update(p.copy(state = ProposalState.FAILED, sent = sent, receipt = why, decidedAt = now, zkIds = ids))
                 st = st.copy(log = st.log + "${hm(now)} 没送到总控（$why）：${commands[sent].describe()}")
                 return Outcome(false, "没送到总控：$why。可以稍后重试")
             }
             st = st.copy(log = st.log + "${hm(now)} 交给总控：${commands[sent].describe()}｜回执：${r.message}")
+            if (r.id.isNotBlank()) ids += r.id
             sent++
         }
-        update(p.copy(state = ProposalState.SENT, sent = sent, receipt = "总控收下了", decidedAt = now))
+        update(p.copy(state = ProposalState.SENT, sent = sent, receipt = "总控收下了", decidedAt = now, zkIds = ids))
         return Outcome(true, "交给总控了，在总控里确认后执行")
     }
 
@@ -417,10 +429,32 @@ class Brain(
             if (it.state == ProposalState.PENDING && it.expiresAt <= now) it.copy(state = ProposalState.EXPIRED, decidedAt = now) else it
         })
         if (s != null) out += settle(s, now)
+        if (s != null) out += zkOutcomes(now)
         if (guard != null) watchZk(guard, now)?.let { out += it }
         drift(s, foregroundCategory, now)?.let { out += it }
         save()
         out
+    }
+
+    /** 交给总控的提议，问问总控后来怎么样了（24 小时内的；全部有结局才算完）。 */
+    private fun zkOutcomes(now: Long): List<Notice> {
+        val out = mutableListOf<Notice>()
+        st.proposals.filter { it.state == ProposalState.SENT && it.zkOutcome.isBlank() && it.zkIds.isNotEmpty() && now - it.decidedAt < DAY_MS }.forEach { p ->
+            val rs = p.zkIds.map { id -> runCatching { zk.result(id) }.getOrNull() ?: return@forEach }
+            if (rs.any { it.state == "PENDING" }) return@forEach
+            val bad = rs.firstOrNull { it.state != "DONE" }
+            val outcome = when (bad?.state) {
+                null -> "总控执行了"
+                "DECLINED" -> "你在总控里点了不用"
+                "EXPIRED" -> "总控里没确认，过期了"
+                "FAILED" -> "总控没执行成：${bad.message}"
+                else -> "总控里找不到这条"
+            }
+            update(p.copy(zkOutcome = outcome))
+            st = st.copy(log = st.log + "${hm(now)} $outcome：${p.text}")
+            out += Notice("zk_result", "$outcome：${p.text.substringBefore("。原因")}", now, p.id)
+        }
+        return out
     }
 
     private fun settle(s: ZkStatus, now: Long): List<Notice> {
@@ -521,6 +555,53 @@ class Brain(
         added
     }
 
+    /** 用户核实了一条论断（例如假设验证过了）：写上结果，把握改成高。 */
+    suspend fun verifyNode(nodeId: String, result: String, now: Long): Boolean = lock.withLock {
+        if (st.atlas.nodes.none { it.id == nodeId } || result.isBlank()) return@withLock false
+        st = st.copy(atlas = AtlasOps.verify(st.atlas, nodeId, result), log = st.log + "${hm(now)} 体系图核实一条：${result.take(30)}")
+        save()
+        true
+    }
+
+    /** 用户删掉一条论断（连同它的关系）。 */
+    suspend fun removeNode(nodeId: String) = lock.withLock {
+        val a = st.atlas
+        st = st.copy(atlas = a.copy(nodes = a.nodes.filter { it.id != nodeId }, edges = a.edges.filter { it.from != nodeId && it.to != nodeId }))
+        save()
+    }
+
+    /** 让模型把当前主题归纳成一个体系（主干、分支、关键链、最大缺口）。模型不可用返回 null。 */
+    suspend fun synthesize(now: Long): String? = lock.withLock {
+        val t = st.atlas.topics.firstOrNull { it.id == st.topicId } ?: return@withLock null
+        if (st.atlas.nodes.none { it.topicId == t.id }) return@withLock null
+        val text = model(config().persona, AtlasOps.synthesisPrompt(st.atlas, t.id))?.let { AtlasOps.parseSynthesis(it) } ?: return@withLock null
+        st = st.copy(synthesis = st.synthesis + (t.id to text), log = st.log + "${hm(now)} 归纳了「${t.name}」")
+        save()
+        text
+    }
+
+    /** 体系图的一个缺口 → 一条“去聊”的提议（点“好”才去）。 */
+    suspend fun askGap(question: String, actor: Actor, now: Long): Proposal? = lock.withLock {
+        if (question.isBlank()) return@withLock null
+        val p = propose(Act.Summon(actor, question), "去 ${actor.label} 聊：${question.take(40)}", "体系图的缺口", Power.SUMMON, now)
+        save()
+        p
+    }
+
+    // ------------------------------------------------------------------ 定时的判断（给后台心跳用）
+
+    /** 早上该排水道了：6:00–22:00 之间、今天还没有水道。 */
+    fun needsPlan(now: Long): Boolean {
+        val m = Flow.minuteOf(now)
+        return m in 6 * 60 until 22 * 60 && st.flow?.day != calendarDay(now)
+    }
+
+    /** 夜里该整理了：23:30 到凌晨 4 点之间、这一天还没整理过。 */
+    fun needsNight(now: Long): Boolean {
+        val m = Flow.minuteOf(now)
+        return (m >= 23 * 60 + 30 || m < 4 * 60) && st.lastNightDay != dayKey(now)
+    }
+
     // ------------------------------------------------------------------ 设置
 
     suspend fun setUserMax(tier: Tier) = lock.withLock {
@@ -587,6 +668,18 @@ class Brain(
 
 /** 把手机看到的、总控的状态、今天的水道合成导演要的 [Facts]。 */
 object BrainFacts {
+    /**
+     * 前台应用的类别（[Brain.tick] 用）：总控拦截名单里的算娱乐；Gemini / ChatGPT 算演员；
+     * 总控、墨灵、Notion 算做事；其他算 OTHER；空包名给空串（看不见）。
+     */
+    fun category(pkg: String, s: ZkStatus?): String = when {
+        pkg.isBlank() -> ""
+        pkg == Actor.GEMINI_LIVE.pkg || pkg == Actor.CHATGPT.pkg -> "ACTOR"
+        s != null && pkg in s.blocked -> "ENTERTAINMENT"
+        pkg in setOf("com.zongkong.app", "com.moling.app", "notion.id") -> "WORK"
+        else -> "OTHER"
+    }
+
     fun merge(phone: Facts, s: ZkStatus?, flow: FlowPlan?, now: Long): Facts {
         val flowNow = flow?.let { Flow.current(it, Flow.minuteOf(now)) }?.title.orEmpty()
         if (s == null) {

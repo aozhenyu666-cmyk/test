@@ -97,7 +97,14 @@ fun ZkCommand.power(): Power = when (this) {
 
 /** 总控执行后的回执。 */
 @Serializable
-data class ZkReceipt(val ok: Boolean, val message: String, val at: Long)
+data class ZkReceipt(val ok: Boolean, val message: String, val at: Long, val id: String = "")
+
+/**
+ * 一条建议在总控里后来怎么样了（[ZK_RESULT] 的返回）。
+ * [state]：PENDING（等你确认）/ DONE / FAILED / DECLINED / EXPIRED；空串 = 总控里没有这条。
+ */
+@Serializable
+data class ZkResult(val state: String, val message: String)
 
 /** 给用户看的一句话（确认框、日志里用）。 */
 fun ZkCommand.describe(): String = when (this) {
@@ -168,7 +175,11 @@ object ZkWire {
 
     /** 总控对 [ZK_COMMAND] 的回执 → [ZkReceipt]。总控报错（例如签名不对）时 ok = false。 */
     fun receipt(m: Map<String, String>, now: Long): ZkReceipt =
-        m["error"]?.let { ZkReceipt(false, it, now) } ?: ZkReceipt(m["ok"] == "true", m["message"].orEmpty(), now)
+        m["error"]?.let { ZkReceipt(false, it, now) } ?: ZkReceipt(m["ok"] == "true", m["message"].orEmpty(), now, m["id"].orEmpty())
+
+    /** 总控对 [ZK_RESULT] 的回答 → [ZkResult]。总控报错时返回 null（当作没问到）。 */
+    fun result(m: Map<String, String>): ZkResult? =
+        if ("error" in m) null else ZkResult(m["state"].orEmpty(), m["message"].orEmpty())
 
     /** 总控那边也要调用：明显不合理的指令直接拒绝。 */
     fun valid(c: ZkCommand): Boolean = when (c) {
