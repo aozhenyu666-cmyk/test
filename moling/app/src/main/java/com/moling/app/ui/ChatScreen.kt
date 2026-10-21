@@ -1,7 +1,6 @@
 package com.moling.app.ui
 
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.ime
 import androidx.compose.ui.platform.LocalDensity
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
@@ -259,7 +258,7 @@ fun ChatScreen() {
     }
     var showThoughts by remember { mutableStateOf(false) }
 
-    val typing = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val typing = com.moling.app.ui.rememberImeVisible()
     // 键盘一出来就滚到最新一条
     LaunchedEffect(typing) { if (typing && state.talk.isNotEmpty()) list.scrollToItem(state.talk.lastIndex) }
     Column(Modifier.fillMaxSize()) {
