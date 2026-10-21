@@ -23,6 +23,9 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.moling.app.BrainHost
+import com.moling.app.Foreground
+import com.moling.app.Usage
+import com.moling.core.BrainFacts
 import com.moling.core.BrainState
 import com.moling.core.ProposalState
 import com.moling.core.link.ZkStatus
@@ -44,6 +47,11 @@ fun DebugScreen(onDone: () -> Unit) {
     val clipboard = LocalClipboardManager.current
     val state by BrainHost.state.collectAsState()
 
+    // 前台应用（M10）：没开“使用情况访问”就显示没开，不猜。
+    val usageAllowed = runCatching { Usage.allowed(context) }.getOrDefault(false)
+    val foreground: Foreground? = if (usageAllowed) runCatching { Usage.foreground(context) }.getOrNull() else null
+    val category = BrainFacts.category(foreground?.pkg.orEmpty(), state.lastStatus)
+
     // 只读也兜一层：任何一处取数出错都显示一行原因，页面本身不能崩。
     val report = runCatching {
         buildReport(
@@ -52,6 +60,9 @@ fun DebugScreen(onDone: () -> Unit) {
             tier = BrainHost.tier(),
             mind = BrainHost.directorSnapshot(),
             heartbeatAt = BrainHost.lastHeartbeatAt(),
+            usageAllowed = usageAllowed,
+            foreground = foreground,
+            category = category,
         )
     }.getOrElse { "调试信息生成失败：${it.message ?: it.javaClass.simpleName}" }
 
@@ -89,6 +100,9 @@ private fun buildReport(
     tier: Tier,
     mind: MindState,
     heartbeatAt: Long,
+    usageAllowed: Boolean,
+    foreground: Foreground?,
+    category: String,
 ): String = buildString {
     val day = dayKey(now)
 
@@ -144,14 +158,15 @@ private fun buildReport(
     val cost = mind.costToday(day)
     appendLine("模型花费：调用 ${cost.calls} 次 / 输入 ${cost.charsIn} 字 / 输出 ${cost.charsOut} 字 / 失败 ${cost.failures} 次")
 
-    // 5. 后台（M9/M10 接上心跳和前台应用后由 Lead 补数据，这里先留—）
+    // 5. 后台：心跳 + 前台应用（M9 / M10）
     appendLine()
     appendLine("【后台】")
     appendLine("心跳上次：${if (heartbeatAt > 0) hms(heartbeatAt) else "还没跑过"}")
-    appendLine("看前台应用：—")
-    appendLine("前台包名：—")
-    appendLine("类别：—")
-    appendLine("连续分钟：—")
+    appendLine("看前台应用：${if (usageAllowed) "已允许" else "没开（使用情况访问）"}")
+    appendLine("前台包名：${foreground?.pkg ?: "—"}")
+    appendLine("前台应用：${foreground?.label ?: "—"}")
+    appendLine("类别：${category.ifBlank { "—" }}")
+    appendLine("连续分钟：${foreground?.minutes ?: 0}")
 
     // 6. 日志（最新在上）
     appendLine()

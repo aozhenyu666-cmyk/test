@@ -317,3 +317,30 @@
 3. 设置里关掉「后台陪着」→ 常驻通知消失；再打开 → 又出现。
 4. 重启手机 → 通知自己回来（开关开着时）。
 5. 点那条常驻通知 → 墨灵打开并停在「今天」页。
+---
+
+## M10 · 看前台应用和总控健康
+
+**做了什么**
+- `Usage.kt`：用「使用情况访问」（`UsageStatsManager.queryEvents` 最近 10 分钟）找最后一个进入前台的包，再往前数它连续在前台多少分钟；权限用 `AppOpsManager` 判断；没权限 / 读不到返回 null。
+- `PhoneFacts` 补上 `foregroundPkg` / `foregroundLabel` / `foregroundCategory` / `foregroundMinutes`：类别用 `BrainFacts.category`（总控拦截名单里的 = ENTERTAINMENT，Gemini / ChatGPT = ACTOR，总控 / 墨灵 / Notion = WORK，其它 OTHER，空包名 = 看不见）；没开权限时把「前台应用（没开使用情况访问）」写进 `unknown`。
+- `BrainHost.tickNow` 统一算心跳输入：前台类别 + `GuardSample`（`zkReachable` 按总控状态 2 分钟新鲜度、`secureSettingsOn`、`heartbeatAt`、`userDisabled`、`screenOn`、`canRepair = false`）→ `brain.tick(now, category, guard)`。**后台服务和前台心跳走同一条路**，不会两套逻辑。
+- 设置页加「看前台应用：已允许 / 没开」+「去打开」跳系统「使用情况访问」，从设置回来时自动刷新。
+- 调试页「后台」块填上：权限、前台包名、应用名、类别、连续分钟。
+- manifest 加 `PACKAGE_USAGE_STATS`（`tools:ignore="ProtectedPermissions"`，用户在系统设置里手动授权）。
+
+**为什么这么做**
+- 要判断“水流偏了”必须先看得到前台；用「使用情况访问」而不是无障碍：和总控不在同一个故障点，也不给墨灵新增无障碍权限。
+- `GuardSample.canRepair` 永远 false：墨灵**不修总控、不冻结 App**，只提醒，交给总控自愈和哨兵。
+- 没权限就降级一项（看不到前台），并在 `unknown` 和调试页写清楚，不假装看见。
+
+**没做什么**
+- 只读“当前前台”，没有做前台时间线 / 历史统计。
+- 通知（M11）、早晚自动（M12）、喂导演（M15）还没接。
+
+**用户在手机上怎么验收（≤5 步）**
+1. 设置 → 看前台应用 → 「去打开」→ 在系统「使用情况访问」里允许墨灵。
+2. 回墨灵 → 设置 → 调试 → 【后台】显示前台是墨灵、类别 WORK、连续分钟。
+3. 今天的水道定稿后，在主河道时间里打开一个总控拦截名单里的 App 刷 11 分钟 → 回墨灵 → 今天页提醒条出现「水该在「…」……」和「好 / 不用」（开专注锁的提议）。
+4. 在总控里把无障碍关掉，等 5 分钟 → 墨灵提醒条出现「总控的无障碍被关了……我不去修、也不冻结 App……」。
+5. 把「使用情况访问」关掉 → 调试页写「没开（使用情况访问）」，今天页照常能用、不崩。

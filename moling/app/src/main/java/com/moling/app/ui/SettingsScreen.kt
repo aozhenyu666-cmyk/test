@@ -1,8 +1,10 @@
 package com.moling.app.ui
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,6 +26,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,8 +39,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.moling.app.BrainHost
 import com.moling.app.HeartService
+import com.moling.app.Usage
 import com.moling.app.data.LlmResult
 import com.moling.app.data.ModelSettings
 import com.moling.app.data.MolingAsk
@@ -63,6 +70,16 @@ fun SettingsScreen(onDone: () -> Unit) {
     var zkBusy by remember { mutableStateOf(false) }
     var debugOpen by remember { mutableStateOf(false) }
     var backgroundOn by remember { mutableStateOf(store.backgroundHeart()) }
+    // 看前台应用：权限在系统设置里，回来时刷新一下状态。
+    var usageAllowed by remember { mutableStateOf(Usage.allowed(context)) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) usageAllowed = Usage.allowed(context)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // 后台通知：Android 13 起第一次打开要问一次；不给也不影响后台跑，只是看不到常驻通知。
     val askNotif = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -199,6 +216,22 @@ fun SettingsScreen(onDone: () -> Unit) {
                         }
                     },
                 )
+            }
+
+            Text("看前台应用", style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (usageAllowed) "已允许：知道你在用哪个 App" else "没开：看不到前台应用（水流偏了就不会提醒）",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedButton(
+                    onClick = {
+                        runCatching {
+                            context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                        }
+                    },
+                ) { Text(if (usageAllowed) "去改" else "去打开") }
             }
 
             Text("她是谁", style = MaterialTheme.typography.titleSmall)

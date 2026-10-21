@@ -1,11 +1,13 @@
 package com.moling.app
 
 import android.content.Context
+import android.os.PowerManager
 import android.util.Log
 import com.moling.app.data.LlmClient
 import com.moling.app.data.MolingAsk
 import com.moling.app.data.SettingsStore
 import com.moling.core.Brain
+import com.moling.core.BrainFacts
 import com.moling.core.BrainState
 import com.moling.core.ChatResult
 import com.moling.core.Notice
@@ -14,6 +16,7 @@ import com.moling.core.Proposal
 import com.moling.core.flow.Cause
 import com.moling.core.flow.Flow
 import com.moling.core.flow.FlowPlan
+import com.moling.core.guard.GuardSample
 import com.moling.core.link.ZkStatus
 import com.moling.core.mind.DirectorConfig
 import com.moling.core.mind.FileMindStore
@@ -44,6 +47,9 @@ object BrainHost {
     private lateinit var brain: Brain
     private lateinit var settings: SettingsStore
 
+    /** 持有 application context：读前台应用、系统状态、起服务都要用。 */
+    private var appContext: Context? = null
+
     private val _state = MutableStateFlow(BrainState())
 
     /** 界面读这个：水道、对话、提议、预言、日志、最后一次总控状态。 */
@@ -66,13 +72,18 @@ object BrainHost {
         synchronized(this) {
             if (ready) return
             val app = context.applicationContext
+            appContext = app
             val dir = File(app.filesDir, "mind").apply { mkdirs() }
 
             ZkBridge.init(app)
             settings = SettingsStore(app)
             val ask = MolingAsk(settings, LlmClient { settings.load() })
             brain = Brain(
-                phone = PhoneFacts(),
+                phone = PhoneFacts(
+                    foreground = { appContext?.let { Usage.foreground(it) } },
+                    usageAllowed = { appContext?.let { Usage.allowed(it) } ?: false },
+                    status = { _state.value.lastStatus },
+                ),
                 ask = ask,
                 store = FileMindStore(File(dir, "moling.json")),
                 mindStore = FileMindStore(File(dir, "director.json")),
@@ -143,10 +154,34 @@ object BrainHost {
     /** App 在前台时每 60 秒一次（打开 App 也调一次）。 */
     suspend fun tickNow(now: Long = System.currentTimeMillis()): List<Notice> {
         lastHeartbeat = now
-        // 这一批不做后台定时、不做无障碍、不读前台应用：类别传空串、guard 传 null。
-        val out = io("tick", { emptyList<Notice>() }) { brain.tick(now, "", null) }
+        val (category, guard) = tickInputs(now)
+        val out = io("tick", { emptyList<Notice>() }) { brain.tick(now, category, guard) }
         _notices.value = (out + _notices.value).distinctBy { it.at to it.text }.take(3)
         return out
+    }
+
+    /**
+     * 心跳的输入（M10）：前台类别 + 总控健康样本。
+     * 没开「使用情况访问」→ 类别空串、事实里标 unknown；总控连不上 → zkReachable=false。
+     * 墨灵不修总控，canRepair 永远 false。
+     */
+    private fun tickInputs(now: Long): Pair<String, GuardSample?> {
+        val ctx = appContext
+        val status = _state.value.lastStatus
+        val fg = if (ctx != null && Usage.allowed(ctx)) runCatching { Usage.foreground(ctx, now) }.getOrNull() else null
+        val category = BrainFacts.category(fg?.pkg.orEmpty(), status)
+        val screenOn = runCatching { ctx?.getSystemService(PowerManager::class.java)?.isInteractive ?: true }.getOrDefault(true)
+        val reachable = status != null && status.at > 0 && now - status.at <= 2 * 60_000L
+        val guard = GuardSample(
+            now = now,
+            zkReachable = reachable,
+            secureSettingsOn = reachable && status?.accessibilityOn == true,
+            heartbeatAt = status?.heartbeatAt ?: 0,
+            userDisabled = status?.userDisabled ?: false,
+            screenOn = screenOn,
+            canRepair = false,
+        )
+        return category to guard
     }
 
     // ---------------------------------------------------------------- 体系图 / 权柄
