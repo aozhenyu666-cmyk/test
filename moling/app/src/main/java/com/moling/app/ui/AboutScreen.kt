@@ -203,6 +203,56 @@ fun AboutScreen(onDone: () -> Unit) {
             }
         }
 
+        // ---------------------------------------------------------------- 她推过的（v8）
+        val thoughts = state.thoughts.takeLast(20).reversed()
+        com.moling.app.ui.art.InkTitle("她推过的")
+        if (thoughts.isEmpty()) {
+            Text("她还没自己推过什么。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            val right = thoughts.count { it.outcome == "对了" }
+            val wrongN = thoughts.count { it.outcome == "错了" }
+            val expired = thoughts.count { it.outcome == "过期" }
+            val open = thoughts.count { it.outcome.isBlank() }
+            Text(
+                "最近 " + thoughts.size + " 条：对了 " + right + "、错了 " + wrongN + "、过期 " + expired + "、还没验证 " + open,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            thoughts.forEach { t ->
+                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(t.text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                        if (t.outcome.isNotBlank()) {
+                            val c = when (t.outcome) {
+                                "对了" -> Ink
+                                "错了" -> Seal
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                            Surface(color = c.copy(alpha = 0.10f), shape = MaterialTheme.shapes.small) {
+                                Text(
+                                    t.outcome,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = c,
+                                )
+                            }
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "把握" + t.confidence,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (t.outcome.isBlank()) {
+                            TextButton(onClick = { scope.launch { runCatching { BrainHost.judgeThought(t.id, true) } } }) { Text("对") }
+                            TextButton(onClick = { scope.launch { runCatching { BrainHost.judgeThought(t.id, false) } } }) { Text("不对") }
+                        }
+                    }
+                }
+            }
+        }
+
         // ---------------------------------------------------------------- 她怎么出现（v9 反免疫）
         com.moling.app.ui.art.InkTitle("她怎么出现")
         Text(
