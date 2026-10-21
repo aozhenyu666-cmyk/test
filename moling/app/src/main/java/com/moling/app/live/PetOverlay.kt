@@ -23,6 +23,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -110,27 +111,39 @@ object PetOverlay {
 
     /** Z1 桌宠：墨滴从屏幕右边弹出 + 头顶气泡说一句；whisper=true 时是 Z3 的 8 秒“回她”气泡（不弹跳，只亮着）。 */
     fun show(context: Context, mood: Mood, line: String, whisper: Boolean = false) {
+        // D2：心跳在 Appear.show 之前把这一轮的选项放进了 LiveScreens.nextChoices。
+        // 这里只取一份副本、不清空——他点气泡本身打开卡片时，peek 还要用它。
+        val choices = LiveScreens.nextChoices
+        val kind = BrainHost.state.value.lastPlay?.kind.orEmpty()
         start(context, ACTION_PET) {
             it.putExtra(EXTRA_MOOD, mood.name)
             it.putExtra(EXTRA_LINE, line)
             it.putExtra(EXTRA_WHISPER, whisper)
+            it.putStringArrayListExtra(EXTRA_CHOICES, ArrayList(choices))
+            it.putExtra(EXTRA_KIND, kind)
         }
     }
 
     /** Z2 盯着你：中上部 2 倍大墨滴 + 45 秒圆环，不说话。 */
     fun stare(context: Context, mood: Mood, line: String) {
+        val choices = LiveScreens.nextChoices
         start(context, ACTION_STARE) {
             it.putExtra(EXTRA_MOOD, mood.name)
             it.putExtra(EXTRA_LINE, line)
+            it.putStringArrayListExtra(EXTRA_CHOICES, ArrayList(choices))
         }
     }
 
     /** Z4 参谋弹幕：lines 形如 listOf("教练：…","军师：…","对手：…","朋友：…")，从右往左飘，之后桌宠带 together 出来。 */
     fun council(context: Context, lines: List<String>, mood: Mood, together: String) {
+        val choices = LiveScreens.nextChoices
+        val kind = BrainHost.state.value.lastPlay?.kind.orEmpty()
         start(context, ACTION_COUNCIL) {
             it.putStringArrayListExtra(EXTRA_LINES, ArrayList(lines))
             it.putExtra(EXTRA_MOOD, mood.name)
             it.putExtra(EXTRA_TOGETHER, together)
+            it.putStringArrayListExtra(EXTRA_CHOICES, ArrayList(choices))
+            it.putExtra(EXTRA_KIND, kind)
         }
     }
 
@@ -215,6 +228,8 @@ private const val EXTRA_LINES = "lines"
 private const val EXTRA_TOGETHER = "together"
 private const val EXTRA_LEVEL = "level"
 private const val EXTRA_STARTED = "started"
+private const val EXTRA_CHOICES = "choices"
+private const val EXTRA_KIND = "kind"
 
 private val BEIJING: ZoneId = ZoneId.of("Asia/Shanghai")
 
@@ -281,6 +296,10 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private var petWhisper by mutableStateOf(false)
     private var petModality by mutableStateOf(Modality.PET)
     private var petLanded by mutableStateOf(false)
+    /** D2：气泡里可点的选项（破雾 / 盲盒 / 小剧场 / 赌）。 */
+    private var petChoices by mutableStateOf<List<String>>(emptyList())
+    /** D3：这一次是盲盒 / 小剧场 / 赌（空 = 普通）。 */
+    private var petKind by mutableStateOf("")
 
     // ---------------- 盯着你（Z2）
     private var stareView: ComposeView? = null
@@ -291,6 +310,8 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private var stareLine by mutableStateOf("")
     private var stareBubble by mutableStateOf(false)
     private var stareLeaving by mutableStateOf(false)
+    /** D2：盯着你时点出来的气泡里也可点的选项。 */
+    private var stareChoices by mutableStateOf<List<String>>(emptyList())
 
     // ---------------- 参谋弹幕（Z4）
     private var councilView: ComposeView? = null
@@ -363,13 +384,21 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     line = intent.getStringExtra(EXTRA_LINE).orEmpty(),
                     modality = if (whisper) Modality.WHISPER else Modality.PET,
                     whisper = whisper,
+                    choices = intent.getStringArrayListExtra(EXTRA_CHOICES).orEmpty(),
+                    kind = intent.getStringExtra(EXTRA_KIND).orEmpty(),
                 )
             }
-            ACTION_STARE -> startStare(moodOf(intent), intent.getStringExtra(EXTRA_LINE).orEmpty())
+            ACTION_STARE -> startStare(
+                moodOf(intent),
+                intent.getStringExtra(EXTRA_LINE).orEmpty(),
+                intent.getStringArrayListExtra(EXTRA_CHOICES).orEmpty(),
+            )
             ACTION_COUNCIL -> startCouncil(
                 lines = intent.getStringArrayListExtra(EXTRA_LINES).orEmpty(),
                 mood = moodOf(intent),
                 together = intent.getStringExtra(EXTRA_TOGETHER).orEmpty(),
+                choices = intent.getStringArrayListExtra(EXTRA_CHOICES).orEmpty(),
+                kind = intent.getStringExtra(EXTRA_KIND).orEmpty(),
             )
             ACTION_FADE -> setFade(intent.getFloatExtra(EXTRA_LEVEL, 0f))
             ACTION_CAPSULE -> startCapsule(
@@ -389,7 +418,14 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     // ------------------------------------------------------------------ Z1 桌宠
 
-    private fun startPet(mood: Mood, line: String, modality: Modality, whisper: Boolean) {
+    private fun startPet(
+        mood: Mood,
+        line: String,
+        modality: Modality,
+        whisper: Boolean,
+        choices: List<String> = emptyList(),
+        kind: String = "",
+    ) {
         // 同一时间只留一种“她本人”的窗口（胶囊和褪色不受影响）。
         removeStareWindow()
         removeCouncilWindow()
@@ -399,6 +435,8 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         petLine = line
         petModality = modality
         petWhisper = whisper
+        petChoices = choices
+        petKind = kind
         // 耳语直接亮出来，不弹跳；普通桌宠从压扁状态回弹。
         petLanded = whisper
         petShownAt = System.currentTimeMillis()
@@ -581,13 +619,14 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     // ------------------------------------------------------------------ Z2 盯着你
 
-    private fun startStare(mood: Mood, line: String) {
+    private fun startStare(mood: Mood, line: String, choices: List<String> = emptyList()) {
         removePetWindow()
         removeCouncilWindow()
         removeStareWindow()
 
         stareMood = mood
         stareLine = line
+        stareChoices = choices
         stareBubble = false
         stareLeaving = false
         stareShownAt = System.currentTimeMillis()
@@ -641,6 +680,23 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         }
     }
 
+    /** D2：点盯着你气泡里的选项：她接一句、换选项；没有了就收起。 */
+    private fun onStareChoice(choice: String) {
+        if (stareView == null || stareLeaving) return
+        report(Modality.STARE, Reaction.REPLIED, System.currentTimeMillis() - stareShownAt)
+        scope.launch {
+            val turn = runCatching { BrainHost.tap(choice) }.getOrNull() ?: return@launch
+            stareMood = turn.mood
+            stareLine = turn.line
+            stareChoices = turn.choices
+            if (stareChoices.isEmpty()) {
+                delay(2_000)
+                removeStareWindow()
+                maybeStop()
+            }
+        }
+    }
+
     private fun removeStareWindow() {
         stareJob?.cancel()
         stareJob = null
@@ -652,7 +708,13 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     // ------------------------------------------------------------------ Z4 参谋弹幕
 
-    private fun startCouncil(lines: List<String>, mood: Mood, together: String) {
+    private fun startCouncil(
+        lines: List<String>,
+        mood: Mood,
+        together: String,
+        choices: List<String> = emptyList(),
+        kind: String = "",
+    ) {
         removePetWindow()
         removeStareWindow()
         removeCouncilWindow()
@@ -685,7 +747,7 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             councilJob = null
             removeCouncilWindow()
             // 飘完：桌宠带着“合起来”的那句出来，之后的反应报 COUNCIL。
-            startPet(mood, together, Modality.COUNCIL, whisper = false)
+            startPet(mood, together, Modality.COUNCIL, whisper = false, choices = choices, kind = kind)
         }
     }
 
@@ -940,6 +1002,8 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     @Composable
     private fun PetContent() {
         val text = if (petWhisper) "回她" else petLine
+        // D3：小剧场按行画（“· 对手：…”），盲盒 / 赌在气泡上面加一个小标签。
+        val shown = if (petKind == "drama" && !petWhisper) petLine.lines().joinToString("\n") { "· " + it } else text
         val squashX by animateFloatAsState(
             targetValue = if (petLanded) 1f else 1.16f,
             animationSpec = spring(dampingRatio = 0.3f, stiffness = Spring.StiffnessMediumLow),
@@ -982,9 +1046,15 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            if (text.isNotBlank()) {
-                Bubble(text)
+            if (petKind == "blindbox" || petKind == "bet") {
+                Tag(if (petKind == "blindbox") "盲盒" else "她下注了")
+            }
+            if (shown.isNotBlank()) {
+                Bubble(shown)
                 BubbleTail()
+            }
+            if (!petWhisper && petChoices.isNotEmpty()) {
+                ChoiceCapsules(petChoices) { onPetChoice(it) }
             }
             Box(
                 Modifier.graphicsLayer {
@@ -1025,6 +1095,7 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             if (stareBubble) {
                 Bubble(stareLine)
                 BubbleTail()
+                if (stareChoices.isNotEmpty()) ChoiceCapsules(stareChoices) { onStareChoice(it) }
             }
             Box(Modifier.size(200.dp), contentAlignment = Alignment.Center) {
                 InkRing(progress.value, Modifier.size(188.dp), color = Seal)
@@ -1165,6 +1236,57 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     text = "聊完了就回来跟我说一句结论",
                     color = Ink.copy(alpha = 0.62f),
                     fontSize = 11.sp,
+                )
+            }
+        }
+    }
+
+    /** D2：点桌宠气泡上的选项（点了算 REPLIED；没有新选项了 3 秒收起）。 */
+    private fun onPetChoice(choice: String) {
+        if (petView == null) return
+        report(petModality, Reaction.REPLIED, System.currentTimeMillis() - petShownAt)
+        scope.launch {
+            val turn = runCatching { BrainHost.tap(choice) }.getOrNull() ?: return@launch
+            petMood = turn.mood
+            petLine = turn.line
+            petChoices = turn.choices
+            petKind = ""
+            if (petChoices.isEmpty()) {
+                petTimeoutJob?.cancel()
+                petTimeoutJob = scope.launch {
+                    delay(3_000)
+                    removePetWindow()
+                    maybeStop()
+                }
+            }
+        }
+    }
+
+    /** D3：气泡上的小标签（盲盒 / 她下注了）。 */
+    @Composable
+    private fun Tag(text: String) {
+        Box(
+            Modifier
+                .background(Seal.copy(alpha = 0.10f), RoundedCornerShape(50))
+                .border(0.6.dp, Seal.copy(alpha = 0.5f), RoundedCornerShape(50))
+                .padding(horizontal = 8.dp, vertical = 2.dp),
+        ) { Text(text, color = Seal, fontSize = 10.sp) }
+    }
+
+    /** D2/D3：气泡下面的小胶囊选项。 */
+    @Composable
+    private fun ChoiceCapsules(choices: List<String>, onPick: (String) -> Unit) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            choices.take(3).forEach { c ->
+                Text(
+                    c,
+                    color = Seal,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .background(Paper, RoundedCornerShape(50))
+                        .border(0.8.dp, Seal.copy(alpha = 0.55f), RoundedCornerShape(50))
+                        .clickable { onPick(c) }
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
                 )
             }
         }
