@@ -895,7 +895,6 @@
 
 ---
 
-<<<<<<< HEAD
 ## v12 心智引擎：平时也让脑子转起来（2026-10-21，Claude）
 
 参考 Gemini 的方向（收集 → 记住 → 推演 → 平时保持高转速），只做不越底线的部分（不读屏幕内容、不替他做主）。
@@ -911,7 +910,9 @@
 - 拍板、核实、判断推断、认真说话、一手式追问都记进转速。
 - App：心跳算“刚离开的那段娱乐多长”，想完采蜜，夜里提规律；`BrainHost.spar / keepBrief / setRule`。
 - 界面交给 DeepSeek：`moling/DEEPSEEK-7.md`（E1–E6）。
-=======
+
+---
+
 ## 第六批 D 组（DeepSeek）
 
 先 `git merge origin/ccr-b3c7616e-xlohkd`（快进到 `72a8b72`，带进 Claude 的破雾核心和联络站），再按 D1–D4 做，一个任务一个提交。
@@ -943,4 +944,3 @@
 - `tools/core-tests` 里 `gradle test`：**402 个用例全绿**（merge 后新核心）。
 - `node tools/relay-test/test.mjs`：输出 `relay ok`。
 - App：本地 `testDebugUnitTest` + `assembleDebug` 通过；CI `moling-android` 见 `deepseek-autopilot-b` 分支。
->>>>>>> origin/deepseek-autopilot-b
