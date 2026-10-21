@@ -51,12 +51,14 @@ import com.moling.app.ui.MolingFace
 import com.moling.app.ui.Paper
 import com.moling.app.ui.ReadyScreen
 import com.moling.app.ui.art.InkBubbles
+import com.moling.app.ui.art.InkBench
 import com.moling.app.ui.art.InkGalaxy
 import com.moling.app.ui.art.InkRing
 import com.moling.app.ui.art.InkWaves
 import com.moling.app.ui.moodLine
 import com.moling.app.ui.moodOf
 import com.moling.app.ui.AtlasScreen
+import com.moling.app.ui.BenchScreen
 import com.moling.app.ui.ChatScreen
 import com.moling.app.ui.MolingTheme
 import com.moling.app.ui.SettingsScreen
@@ -71,7 +73,7 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
 
     companion object {
-        /** 通知点开时带的目标标签：0 对话 / 1 今天 / 2 体系。 */
+        /** 通知点开时带的目标标签：0 对话 / 1 今天 / 2 体系 / 3 案板。 */
         const val EXTRA_TAB = "tab"
 
         /** App 是不是在前台：后台心跳据此决定“导演卡片”是显示在今天页还是发通知。 */
