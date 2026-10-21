@@ -117,9 +117,13 @@ object Live {
         misjudged: List<String>,
         history: List<String>,
         canGate: Boolean,
+        thinking: List<String> = emptyList(),
+        toSay: String = "",
     ) = buildString {
         appendLine("【你是】$persona")
         appendLine("【你被叫醒的原因】${trigger.label}")
+        if (thinking.isNotEmpty()) appendLine("【你自己推的判断（未必对）】\n" + thinking.joinToString("\n"))
+        if (toSay.isNotBlank()) appendLine("【你之前想好要对他说的】$toSay（合适就说这个，可以改得更贴合此刻）")
         activity?.let { a ->
             append("【他此刻】在用 ${a.label}（${a.minutes} 分钟）")
             if (a.glance.isNotBlank()) append("，屏幕上看到的：${a.glance}")

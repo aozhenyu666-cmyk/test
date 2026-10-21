@@ -7,6 +7,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -159,7 +166,38 @@ fun ChatScreen() {
         }
     }
 
+    // 她此刻的样子：在想 → 好奇，在听 → 平静，否则按状态
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(state.talk.size) { now = System.currentTimeMillis() }
+    val mood = when {
+        sending -> com.moling.core.live.Mood.CURIOUS
+        listening -> com.moling.core.live.Mood.CALM
+        else -> moodOf(state, now)
+    }
+    var showThoughts by remember { mutableStateOf(false) }
+
     Column(Modifier.fillMaxSize()) {
+        // ---------------------------------------------------------------- 她的台子：形象、此刻、想好要说的、她的推断
+        Stage(
+            mood = mood,
+            line = if (sending) "在想…" else if (listening) "在听…" else moodLine(mood),
+            say = state.sayQueue.firstOrNull()?.text,
+            thoughts = com.moling.core.think.Think.open(state.thoughts).takeLast(4),
+            expanded = showThoughts,
+            onToggle = { showThoughts = !showThoughts },
+            onSay = { talkScope.launch { BrainHost.sayNow() } },
+            onDropSay = { talkScope.launch { BrainHost.dropSay() } },
+            onJudge = { id, right -> talkScope.launch { BrainHost.judgeThought(id, right) } },
+            onThink = {
+                sending = true
+                talkScope.launch {
+                    val r = runCatching { BrainHost.thinkNow() }.getOrNull()
+                    sending = false
+                    toast(if (r == null) "她现在想不了（模型没接上）" else "她想了想：新判断 ${r.made.size} 条" + if (r.say.isNotEmpty()) "，有话想跟你说" else "")
+                }
+            },
+        )
+
         if (state.talk.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                 Text(
@@ -172,12 +210,12 @@ fun ChatScreen() {
             LazyColumn(
                 state = list,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 itemsIndexed(state.talk) { index, turn ->
                     Column(Modifier.fillMaxWidth()) {
-                        Bubble(who = turn.who, text = turn.text)
+                        if (turn.who == "墨灵") HerNote(turn.text) else HisLine(turn.text)
                         if (turn.who == "墨灵") {
                             // 这条回复到下一句墨灵之间产生的提议，挂在这条下面；重开 App 也能看到
                             val nextAt = state.talk.drop(index + 1)
@@ -298,30 +336,106 @@ fun ChatScreen() {
     }
 }
 
-/** 一句话气泡：他靠右灰底，墨灵靠左浅底。 */
+/** 她说的：一张纸条（细墨线边、左边一道印泥色的线）。 */
 @Composable
-private fun Bubble(who: String, text: String) {
-    val mine = who != "墨灵"
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
-    ) {
+private fun HerNote(text: String) {
+    Row(Modifier.fillMaxWidth()) {
         Box(
-            modifier = Modifier
-                .widthIn(max = 320.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(
-                    if (mine) MaterialTheme.colorScheme.surfaceVariant
-                    else MaterialTheme.colorScheme.surface,
-                )
-                .padding(horizontal = 14.dp, vertical = 9.dp),
+            Modifier
+                .widthIn(max = 340.dp)
+                .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 14.dp, bottomEnd = 14.dp, bottomStart = 14.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .border(0.7.dp, Ink.copy(alpha = 0.14f), RoundedCornerShape(topStart = 4.dp, topEnd = 14.dp, bottomEnd = 14.dp, bottomStart = 14.dp)),
         ) {
+            Row(Modifier.height(IntrinsicSize.Min)) {
+                Box(Modifier.width(3.dp).fillMaxHeight().background(Seal.copy(alpha = 0.55f)))
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                )
+            }
+        }
+    }
+}
+
+/** 他说的：靠右，一道细竖线，像在纸边写的批注。 */
+@Composable
+private fun HisLine(text: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        Row(Modifier.widthIn(max = 300.dp).height(IntrinsicSize.Min), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = text,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Ink.copy(alpha = 0.75f),
+                modifier = Modifier.padding(end = 10.dp, top = 2.dp, bottom = 2.dp),
             )
+            Box(Modifier.width(1.dp).fillMaxHeight().background(Ink.copy(alpha = 0.35f)))
         }
+    }
+}
+
+/**
+ * 对话页最上面的“台子”：她的样子和此刻；她想好要说的（聊这个 / 以后再说）；
+ * 她自己推的判断（展开后可以点对 / 不对）；“让她想想”。
+ */
+@Composable
+private fun Stage(
+    mood: com.moling.core.live.Mood,
+    line: String,
+    say: String?,
+    thoughts: List<com.moling.core.think.Thought>,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onSay: () -> Unit,
+    onDropSay: () -> Unit,
+    onJudge: (String, Boolean) -> Unit,
+    onThink: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().background(Paper).padding(horizontal = 14.dp, vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(contentAlignment = Alignment.Center) {
+                if (say != null) com.moling.app.ui.art.InkRipple(Modifier.size(84.dp), color = Seal)
+                MolingFace(mood, Modifier.size(64.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(line, style = MaterialTheme.typography.bodyMedium)
+                Row {
+                    TextButton(onClick = onToggle, contentPadding = PaddingValues(horizontal = 0.dp)) {
+                        Text(if (thoughts.isEmpty()) "她还没推出什么" else "她的推断（${thoughts.size}）${if (expanded) " ▴" else " ▾"}", style = MaterialTheme.typography.labelMedium)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = onThink, contentPadding = PaddingValues(horizontal = 0.dp)) {
+                        Text("让她想想", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+        }
+        if (say != null) {
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Seal.copy(alpha = 0.07f)).padding(start = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("她想跟你说：$say", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f).padding(vertical = 8.dp))
+                TextButton(onClick = onDropSay) { Text("以后") }
+                TextButton(onClick = onSay) { Text("聊这个") }
+            }
+        }
+        if (expanded) thoughts.forEach { t ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "${t.text}（把握${t.confidence}）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { onJudge(t.id, true) }) { Text("对") }
+                TextButton(onClick = { onJudge(t.id, false) }) { Text("不对") }
+            }
+        }
+        com.moling.app.ui.art.InkTitle("", Modifier.padding(top = 2.dp))
     }
 }
 

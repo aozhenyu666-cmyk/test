@@ -75,6 +75,11 @@ import com.moling.core.mirror.InboxItem
 import com.moling.core.mirror.Mirror
 import com.moling.core.mirror.Question
 import com.moling.core.mirror.Section
+import com.moling.core.think.Recall
+import com.moling.core.think.Say
+import com.moling.core.think.Think
+import com.moling.core.think.ThinkResult
+import com.moling.core.think.Thought
 import com.moling.core.flow.ChannelKind
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
@@ -240,6 +245,11 @@ data class BrainState(
     val questions: List<Question> = emptyList(),
     /** 收件箱里收过的条目（Notion 块 id）。 */
     val mirrorSeen: List<String> = emptyList(),
+    /** 她自己推出来的判断（v8），到点验证。 */
+    val thoughts: List<Thought> = emptyList(),
+    val lastThinkAt: Long = 0,
+    /** 她想好、等合适时候说的话。 */
+    val sayQueue: List<Say> = emptyList(),
     /** 提议编号用的流水号。 */
     val seq: Long = 0,
     /** 给人看的行动日志（做了什么、交给总控什么、总控怎么回的）。 */
@@ -319,6 +329,8 @@ class Brain(
             mode = use,
             about = st.about,
             numbers = numbers,
+            thinking = Think.open(st.thoughts).takeLast(5).map { Think.line(it) },
+            recall = Recall.relevant(text, knowledge(), 6),
         )
         val parsed = model(cfg.persona, prompt)?.let { Talk.parse(it, Flow.dayStart(day), now = now) }?.takeIf { it.text.isNotBlank() }
         val reply = parsed ?: Talk.local(text, batonText, flowNow?.title.orEmpty())
@@ -818,7 +830,10 @@ class Brain(
                 .map { "「${t.name}」${it.kind.label}：${it.claim}（把握${it.confidence}${if (it.verified.isNotBlank()) "，已核实" else ""}）" }
         }
         val said = s.talk.filter { it.who == "他" && it.text.length >= 8 }.takeLast(8).map { "${hm(it.at)} ${it.text.take(100)}" }
-        return Mirror.board(config().callUser, director.nowText(now), s.questions, s.about, today, misjudged(now), days, atlas, said)
+        return Mirror.board(
+            config().callUser, director.nowText(now), s.questions, s.about, today, misjudged(now), days, atlas, said,
+            thoughts = Think.open(s.thoughts).takeLast(6).map { Think.line(it) },
+        )
     }
 
     /**
@@ -896,6 +911,91 @@ class Brain(
         return q
     }
 
+    // ------------------------------------------------------------------ 她自己的思考（v8）
+
+    /** 她能翻的知识：体系图的论断、GPT 的回答、她的判断、“了解”里的条目。 */
+    private fun knowledge(): List<String> {
+        val topics = st.atlas.topics.associate { it.id to it.name }
+        return st.atlas.nodes.map { "「${topics[it.topicId].orEmpty()}」${it.kind.label}：${it.claim}（把握${it.confidence}）" } +
+            st.questions.filter { it.answer.isNotBlank() }.map { "GPT 回答过「${it.text.take(40)}」：${it.answer}" } +
+            st.thoughts.filter { it.outcome != "错了" }.takeLast(20).map { "我推断过：${it.text}${if (it.outcome.isNotBlank()) "（${it.outcome}）" else ""}" } +
+            st.about.lines().map { it.trim() }.filter { it.startsWith("- ") }.map { "了解：${it.removePrefix("- ")}" }
+    }
+
+    /** 该想了吗：醒着、隔够了；他这段时间说了不少（或有说法对不上）可以早一点。 */
+    fun needsThink(now: Long): Boolean {
+        val fresh = st.talk.count { it.who == "他" && it.at > st.lastThinkAt } + st.claims.count { it.at > st.lastThinkAt }
+        return Think.due(st.lastThinkAt, now, fresh)
+    }
+
+    /**
+     * 想一次：推出新判断、验证到点的旧判断、想好要说的话、需要时提动作（照样走权柄）。
+     * [usage] 是 App 整理好的手机使用（没有就空）。模型不可用返回 null（不记“想过了”，下次再想）。
+     */
+    suspend fun think(now: Long, usage: String = ""): ThinkResult? = lock.withLock {
+        refresh()
+        val cfg = config()
+        val day = calendarDay(now)
+        val flow = st.flow?.takeIf { it.day == day }
+        val today = buildString {
+            flow?.let { appendLine(Flow.render(it)) }
+            st.lastStatus?.let { z ->
+                append("总控记的：做事 ${z.workMinutesToday} 分钟，娱乐 ${z.playMinutesToday} 分钟")
+                if (z.mainTitle.isNotBlank()) append("，主线「${z.mainTitle}」${if (z.mainDone) "做完了" else if (z.mainStarted) "开始了" else "还没开始"}")
+                appendLine()
+            }
+            if (st.counterDay == day) appendLine("今天偏离 ${st.driftsToday} 次，她出声 ${st.nudgesToday} 次")
+        }
+        val days = st.days.takeLast(5).map { "${it.day}：做事 ${it.work} 分钟、娱乐 ${it.play} 分钟、偏离 ${it.drifts} 次" }
+        val said = st.talk.filter { it.who == "他" && now - it.at < 2 * DAY_MS }.takeLast(10).map { "${hm(it.at)} ${it.text.take(80)}" }
+        val open = Think.open(st.thoughts)
+        val query = (said.takeLast(4) + flow?.intent.orEmpty() + open.map { it.text }).joinToString(" ")
+        val reply = deepModel(
+            cfg.persona,
+            Think.prompt(cfg.persona, cfg.callUser, director.nowText(now), st.about, today, days, usage, said, misjudged(now),
+                Recall.relevant(query, knowledge(), 6), open.takeLast(8), Think.overdue(st.thoughts, now)),
+        ) ?: return@withLock null
+        val r = Think.parse(reply, Flow.dayStart(day), now)
+        var n = (st.thoughts.mapNotNull { it.id.removePrefix("T").toIntOrNull() }.maxOrNull() ?: 0)
+        val made = r.made.map { n += 1; it.copy(id = "T$n") }
+        val thoughts = st.thoughts.map { t ->
+            r.settled[t.id]?.takeIf { t.outcome.isBlank() }?.let { (o, why) -> t.copy(outcome = o, why = why, settledAt = now) } ?: t
+        } + made
+        // 过了验证时间两天还没人管的，算过期
+        val aged = thoughts.map { if (it.outcome.isBlank() && it.checkAt in 1..(now - 2 * DAY_MS)) it.copy(outcome = "过期", settledAt = now) else it }
+        st = st.copy(
+            thoughts = aged.takeLast(Think.KEEP),
+            lastThinkAt = now,
+            sayQueue = (st.sayQueue + r.say.map { Say(it, now) }).takeLast(5),
+            log = st.log + "${hm(now)} 她想了一会儿：新判断 ${made.size} 条" +
+                (if (r.settled.isNotEmpty()) "，验证 ${r.settled.entries.joinToString("、") { "${it.key}${it.value.first}" }}" else "") +
+                (if (r.say.isNotEmpty()) "，想好要说 ${r.say.size} 句" else ""),
+        )
+        Talk.parse(reply, Flow.dayStart(day), "她自己想到的", now).actions.forEach { fromTalk(it, now, flow) }
+        save()
+        ThinkResult(made, r.settled, r.say)
+    }
+
+    /** 他点了“这个判断不对 / 对”（今天页上）。 */
+    suspend fun judgeThought(id: String, right: Boolean, now: Long) = lock.withLock {
+        st = st.copy(thoughts = st.thoughts.map { if (it.id == id && it.outcome.isBlank()) it.copy(outcome = if (right) "对了" else "错了", why = "你说的", settledAt = now) else it })
+        save()
+    }
+
+    /** 他点了“聊这个”：她把想好的那句说出来（进对话），返回这句；没有返回 null。 */
+    suspend fun sayNow(now: Long): String? = lock.withLock {
+        val say = st.sayQueue.firstOrNull() ?: return@withLock null
+        st = st.copy(sayQueue = st.sayQueue.drop(1), talk = (st.talk + Turn("墨灵", say.text, now)).takeLast(TALK_KEEP))
+        save()
+        say.text
+    }
+
+    /** 想好要说的那句不用说了。 */
+    suspend fun dropSay(now: Long) = lock.withLock {
+        st = st.copy(sayQueue = st.sayQueue.drop(1))
+        save()
+    }
+
     // ------------------------------------------------------------------ 定时的判断（给后台心跳用）
 
     /** 早上该排水道了：6:00–22:00 之间、今天还没有水道。 */
@@ -949,7 +1049,11 @@ class Brain(
         val flow = st.flow?.takeIf { it.day == day }
         val flowNow = flow?.let { Flow.current(it, Flow.minuteOf(now)) }?.title.orEmpty()
         val persona = config().persona
-        val prompt = Live.prompt(persona, trigger, a, director.nowText(now), flow?.let { Flow.render(it) }.orEmpty(), st.about, misjudged(now), talkLines(), canGate)
+        val toSay = st.sayQueue.firstOrNull()?.text.orEmpty()
+        val prompt = Live.prompt(
+            persona, trigger, a, director.nowText(now), flow?.let { Flow.render(it) }.orEmpty(), st.about, misjudged(now), talkLines(), canGate,
+            thinking = Think.open(st.thoughts).takeLast(4).map { Think.line(it) }, toSay = toSay,
+        )
         val reply = model(persona, prompt)
         val line = reply?.let { Live.parse(it, canGate) } ?: Live.local(trigger, a, canGate, flowNow)
         if (!line.speak) {
@@ -963,6 +1067,8 @@ class Brain(
         st = st.copy(
             spirit = sp,
             gate = gate,
+            // 想好要说的说出去了（模型可用时她会揉进这次的话里）
+            sayQueue = if (reply != null && toSay.isNotBlank()) st.sayQueue.drop(1) else st.sayQueue,
             // 她出声了：偏离阶梯的下一级往后推，不叠着打扰
             ladder = st.ladder?.copy(at = now),
             talk = (st.talk + Turn("墨灵", line.line, now)).takeLast(TALK_KEEP),
@@ -1030,6 +1136,8 @@ class Brain(
             .forEach { out += "我以为「${it.guess.take(24)}」，猜错了" }
         st.proposals.filter { it.decidedAt >= from && (it.zkOutcome == "你在总控里取消了" || it.state == ProposalState.DECLINED) }
             .takeLast(2).forEach { out += "我提议「${it.text.take(20)}」，你没要——时机或判断不对" }
+        st.thoughts.filter { it.settledAt >= from && it.outcome == "错了" }
+            .forEach { out += "我推断「${it.text.take(24)}」，错了${if (it.why.isNotBlank()) "（${it.why.take(20)}）" else ""}" }
         st.days.filter { LocalDate.parse(it.day) >= LocalDate.parse(calendarDay(from)) && it.drifts >= 3 }
             .forEach { out += "${it.day} 偏离了 ${it.drifts} 次" }
         return out.takeLast(5)

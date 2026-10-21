@@ -269,6 +269,28 @@ object BrainHost {
         }
     }
 
+    /** 现在就让她想一次（今天页“让她想想”）。 */
+    suspend fun thinkNow(): com.moling.core.think.ThinkResult? {
+        val now = System.currentTimeMillis()
+        val usage = runCatching { usageDigest(now) }.getOrDefault("")
+        return io<com.moling.core.think.ThinkResult?>("think", { null }) { brain.think(now, usage) }
+    }
+
+    /** 她把想好的那句说出来。 */
+    suspend fun sayNow(): String? = io<String?>("sayNow", { null }) { brain.sayNow(System.currentTimeMillis()) }
+
+    suspend fun dropSay() {
+        io("dropSay", {}) { brain.dropSay(System.currentTimeMillis()) }
+    }
+
+    /** 他说她的一个判断对 / 不对。 */
+    suspend fun judgeThought(id: String, right: Boolean) {
+        io("judgeThought", {}) { brain.judgeThought(id, right, System.currentTimeMillis()) }
+    }
+
+    /** 手机使用的整理（给她思考用）；没权限给空。第 5 步会换成完整的使用脉络。 */
+    private fun usageDigest(now: Long): String = ""
+
     /** 他想让她问 GPT 的。 */
     suspend fun askGpt(text: String): Question? =
         io<Question?>("askGpt", { null }) { brain.askGpt(text, System.currentTimeMillis()) }
@@ -390,6 +412,11 @@ object BrainHost {
                     refreshState()
                     Notify.planReady(ctx, plan.intent)
                 }
+            }
+            // 她自己的思考（v8）：醒着时隔两三个小时一次，他说了不少话时早一点；只在亮屏时想，省电省钱
+            if (interactive() && brain.needsThink(now)) {
+                runCatching { brain.think(now, usageDigest(now)) }
+                refreshState()
             }
             if (brain.needsNight(now)) {
                 val text = runCatching { brain.night(now) }.getOrNull()

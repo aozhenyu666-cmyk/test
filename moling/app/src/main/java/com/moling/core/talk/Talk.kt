@@ -52,9 +52,13 @@ object Talk {
         mode: TalkMode = TalkMode.WORK,
         about: String = "",
         numbers: String = "",
+        thinking: List<String> = emptyList(),
+        recall: List<String> = emptyList(),
     ) = buildString {
         appendLine("【你是】$persona")
         appendLine("【你的权柄】$tierText")
+        if (thinking.isNotEmpty()) appendLine("【你自己推的判断（未必对，用来理解他，不要当结论甩给他）】\n" + thinking.joinToString("\n"))
+        if (recall.isNotEmpty()) appendLine("【你的知识里和这句话相关的】\n" + recall.joinToString("\n") { "- $it" })
         appendLine("【这次的模式】${mode.label}：${mode.rules}")
         if (about.isNotBlank()) appendLine("【你对他的了解（他确认过的）】\n${about.take(1200)}")
         if (numbers.isNotBlank()) appendLine("【数字】$numbers（对不上时温和地把数字摆出来，不指责）")

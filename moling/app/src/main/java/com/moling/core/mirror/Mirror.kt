@@ -73,6 +73,7 @@ object Mirror {
         days: List<String>,
         atlas: List<String>,
         said: List<String>,
+        thoughts: List<String> = emptyList(),
     ): List<Section> {
         fun cap(l: List<String>, n: Int = 12) = l.filter { it.isNotBlank() }.takeLast(n).map { it.take(300) }
         val open = open(questions)
@@ -85,6 +86,7 @@ object Mirror {
             Section("这几天判断上的错", cap(misjudged).ifEmpty { listOf("（没有记下的）") }),
             Section("最近几天", cap(days, 7)),
             Section("体系图（论断 · 把握）", cap(atlas, 16)),
+            Section("她最近自己推的判断（未必对，欢迎指正）", cap(thoughts, 6)),
             Section("$callUser 最近说的要紧话", cap(said, 8)),
             Section("问过的和收到的回答", cap(done.map { "${it.id}：${it.text.take(60)} → ${it.answer.take(160)}" }, 6)),
         ).filter { it.lines.isNotEmpty() }
