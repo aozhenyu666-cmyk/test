@@ -6,6 +6,7 @@
 > 下方第四、五批说明是历史记录，不要重做。当前工作分支仍为 `ccr-b3c7616e-xlohkd`，新施工从它的最新提交开始。
 > **给 DeepSeek 的新任务：[第八批：发布稳定与验收收口](DEEPSEEK-8.md)**。第八批独立处理发布流程与文档；新增系统能力按下面 v13 计划另开任务实施。
 > 用户先看 [10 分钟测试](TESTING-QUICK.md)，完整流程见 [TESTING.md](TESTING.md)。
+> 连续对讲、Notion 镜子已有 App 实现（对讲 / `app/mirror/`），属“真机 / 服务配置待验”，不是“完全没做”，也不是“已经真机可用”。
 > 本次 App 基线为 `b838311`；已有键盘、返回和重复点选修正，仍待真机验证。下面的旧测试数不代表本次新跑的结果。
 
 > **v13 总设计与新施工入口（2026-10-21）**
@@ -28,16 +29,16 @@
 
 **工作分支：`ccr-b3c7616e-xlohkd`**。所有新分支从它拉。
 
-## 2. 你的两批任务
+## 2. 历史：第四、五批（已合入，不要重做）
 
-两份文档名字里写的是 DeepSeek，内容就是你的任务说明，照做即可，只有分支不同：
+下面这份表是当时的交接记录；两批都已完成并合进工作分支，**不要再当成新任务做**。
 
-| 批次 | 文档 | 你的分支 | 内容 |
+| 批次 | 文档 | 当时的分支 | 内容 |
 |---|---|---|---|
 | 第四批 | `moling/DEEPSEEK-4.md`（P1–P7） | `codex/moling-presence` | 小窗、打开娱乐 App 时先答一问、桌面小部件、晨报和到点提醒、分享进墨灵、从 GPT / Gemini 回来接住收线 |
 | 第五批 | `moling/DEEPSEEK-5.md`（A1–A6） | `codex/moling-auth` | 总控的授权书页、墨灵建议列表、临时开关显示；墨灵按授权书交（`ZkBridge.sendAuto`）、显示授权书和临时开关 |
 
-- 两批改的文件不重叠（各自文档第 1 节列了），可以分两个任务并行。
+- 两批改的文件不重叠（各自文档第 1 节列了），当时是并行做的。
 - 开分支：`git fetch origin && git checkout -b codex/moling-presence origin/ccr-b3c7616e-xlohkd`。第三批**已经合进工作分支**，文档里“再合并 `deepseek-moling`”那一步跳过。
 - 每批做完：在 `moling/DEVLOG.md` 追加（和前三批同样的格式：做了什么 / 为什么 / 没做什么 / 用户怎么验收），推你的分支。用户会让 Claude 审查后合进工作分支。
 
@@ -52,7 +53,7 @@
 
 ## 4. 怎么验证
 
-- **纯逻辑**：`tools/core-tests/` 里 `gradle test`（两边的 core + 交叉测试，现在 343 个）。你不改 core，这里应该一直是绿的。
+- **纯逻辑**：`tools/core-tests/` 里 `gradle test`（两边的 core + 交叉测试）。本批（第八批，2026-10-21）实际运行 **410 个全绿**；文中出现的 343 是更早的旧记录，不代表本次结果。你不改 core，这里应该一直是绿的。
 - **App**：`moling/` 和 `zongkong/` 各自 `./gradlew testDebugUnitTest assembleDebug`（需要 Android SDK；没有就以 CI 为准：`moling-android`、`zongkong-android` 两个 workflow）。
 - **真机**：每批 DEVLOG 末尾写“真机验收清单”，用户照着在手机上试。
 
@@ -64,7 +65,7 @@
 
 ---
 
-## 第六批（2026-10-21 追加）
+## 第六批（2026-10-21 追加，已合入）
 
 `moling/DEEPSEEK-6.md`：反自动驾驶——桌宠、盯着你、耳语、参谋弹幕、捉虫题、褪色、沙盘、演员胶囊、出现方式看板。
 规则和大脑接口 Claude 已写好（`core/autopilot/`、`core/live/Habit.kt`、`core/live/Quiz.kt`、`core/atlas/AtlasMap.kt`、`app/live/Appear.kt`），只做界面和胶水。底线见那份文档第 11 节。
