@@ -276,6 +276,20 @@ fun ChatScreen() {
                     toast(if (r == null) "她现在想不了（模型没接上）" else "她想了想：新判断 ${r.made.size} 条" + if (r.say.isNotEmpty()) "，有话想跟你说" else "")
                 }
             },
+            onSpar = {
+                sending = true
+                talkScope.launch {
+                    val t = runCatching { BrainHost.spar() }.getOrNull()
+                    sending = false
+                    if (t == null) {
+                        toast("体系图里还没东西可下，先在对话里说‘记下’几条")
+                    } else {
+                        choices = t.choices
+                        chess = BrainHost.state.value.chess
+                        toast("来一局三手棋")
+                    }
+                }
+            },
 
         )
 
@@ -545,6 +559,7 @@ private fun Stage(
     onDropSay: () -> Unit,
     onJudge: (String, Boolean) -> Unit,
     onThink: () -> Unit,
+    onSpar: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().background(Paper).padding(horizontal = 14.dp, vertical = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -562,6 +577,10 @@ private fun Stage(
                     Spacer(Modifier.width(8.dp))
                     TextButton(onClick = onThink, contentPadding = PaddingValues(horizontal = 0.dp)) {
                         Text("让她想想", style = MaterialTheme.typography.labelMedium)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = onSpar, contentPadding = PaddingValues(horizontal = 0.dp)) {
+                        Text("来一局", style = MaterialTheme.typography.labelMedium)
                     }
 
                 }
