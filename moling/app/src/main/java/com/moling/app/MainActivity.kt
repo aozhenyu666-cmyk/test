@@ -47,6 +47,10 @@ class MainActivity : ComponentActivity() {
     companion object {
         /** 通知点开时带的目标标签：0 对话 / 1 今天 / 2 体系。 */
         const val EXTRA_TAB = "tab"
+
+        /** App 是不是在前台：后台心跳据此决定“导演卡片”是显示在今天页还是发通知。 */
+        @Volatile
+        var visible = false
     }
 
     /** 外面（通知 / onNewIntent）要求切到哪个标签；界面观察它。 */
@@ -77,6 +81,16 @@ class MainActivity : ComponentActivity() {
                 MolingShell(requestedTab)
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        visible = true
+    }
+
+    override fun onStop() {
+        visible = false
+        super.onStop()
     }
 
     override fun onNewIntent(intent: Intent) {

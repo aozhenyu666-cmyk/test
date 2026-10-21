@@ -20,9 +20,14 @@ import com.moling.core.flow.FlowPlan
 import com.moling.core.guard.GuardSample
 import com.moling.core.link.ZkStatus
 import com.moling.core.mind.Actor
+import com.moling.core.mind.Baton
+import com.moling.core.mind.Card
 import com.moling.core.mind.DirectorConfig
 import com.moling.core.mind.FileMindStore
 import com.moling.core.mind.MindState
+import com.moling.core.mind.Opening
+import com.moling.core.mind.Reply
+import com.moling.core.mind.Sense
 import com.moling.core.power.Tier
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -233,6 +238,12 @@ object BrainHost {
      * 没开「使用情况访问」→ 类别空串、事实里标 unknown；总控连不上 → zkReachable=false。
      * 墨灵不修总控，canRepair 永远 false。
      */
+    /** 此刻前台（M15 心跳给导演看）；没权限或读不到给 null。 */
+    fun foregroundNow(now: Long): Foreground? {
+        val ctx = appContext ?: return null
+        return if (Usage.allowed(ctx)) runCatching { Usage.foreground(ctx, now) }.getOrNull() else null
+    }
+
     private fun tickInputs(now: Long): Pair<String, GuardSample?> {
         val ctx = appContext
         val status = _state.value.lastStatus
@@ -284,6 +295,34 @@ object BrainHost {
     /** 体系图的一个缺口 → 一条去聊的提议（点「好」才去）。 */
     suspend fun askGap(question: String, actor: Actor): Proposal? =
         io<Proposal?>("askGap", { null }) { brain.askGap(question, actor, System.currentTimeMillis()) }
+
+    // ---------------------------------------------------------------- 导演（M15）
+
+    private val _directorCard = MutableStateFlow<Card?>(null)
+
+    /** 导演此刻要说的那张卡；App 在前台时今天页显示它。 */
+    val directorCard: StateFlow<Card?> = _directorCard
+
+    /** 此刻议程最上面的卡（不调模型）；换页/重开 App 后也能拿回来。 */
+    fun currentCard(now: Long): Card? =
+        if (ready) runCatching { brain.director.currentCard(now) }.getOrNull() else null
+
+    fun setDirectorCard(card: Card?) {
+        _directorCard.value = card
+    }
+
+    /** 没想完的念头（今天页「此刻」卡片下面那一行）。 */
+    fun directorBaton(): Baton? = directorSnapshot().baton
+
+    /** 用户回应了导演的一张卡（继续 / 卡住了 / 有结论 / 休息 / 点选 / 划掉）。返回下一张卡。 */
+    suspend fun reply(reply: Reply): Card? = io<Card?>("reply", { null }) { brain.director.onReply(reply) }
+
+    /** 「去聊」：让导演准备开场白（点「好」之后才调）。 */
+    suspend fun opening(actor: Actor, cardId: String?): Opening? =
+        io<Opening?>("opening", { null }) { brain.director.opening(actor, cardId, System.currentTimeMillis()) }
+
+    /** 喂导演一条感知事件；返回需要立刻显示的卡。 */
+    suspend fun sense(sense: Sense): Card? = io<Card?>("sense", { null }) { brain.director.onSense(sense) }
 
     // ---------------------------------------------------------------- 工具
 

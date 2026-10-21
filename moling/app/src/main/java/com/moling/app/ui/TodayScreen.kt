@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -21,6 +22,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -35,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -48,7 +51,11 @@ import com.moling.core.flow.Cause
 import com.moling.core.flow.Channel
 import com.moling.core.flow.ChannelState
 import com.moling.core.flow.Flow
+import com.moling.core.mind.CHOICE_GO
+import com.moling.core.mind.Card as MindCard
+import com.moling.core.mind.Choice
 import com.moling.core.mind.Opening
+import com.moling.core.mind.Reply
 import com.moling.core.predict.Predict
 import com.moling.core.predict.Prediction
 import kotlinx.coroutines.CoroutineScope
@@ -61,10 +68,10 @@ import kotlinx.coroutines.launch
 private val todayScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
 /**
- * 今天页，从上到下：提醒条、今天的水道、改道、等你决定的、今天的预言、最近做了什么。
+ * 今天页，从上到下：提醒条、此刻（导演卡 + 接力棒）、今天的水道、改道、等你决定的、今天的预言、最近做了什么。
  *
  * 界面不自己算：状态全从 [BrainHost] 取，提议用户点“好”之后才交给大脑。
- * 排水道、定稿、改道都要调模型或总控，所以都放在 [todayScope] 里跑，
+ * 排水道、定稿、改道、回应导演卡都要调模型或总控，所以都放在 [todayScope] 里跑，
  * 每一步都用 runCatching 兜底：总控连不上、模型失败时界面不卡，墨灵也不崩。
  * 卡片是共用组件 ui/ProposalCard.kt（同一个包，不用 import）。
  */
@@ -93,8 +100,57 @@ fun TodayScreen() {
     var confirmProposal by remember { mutableStateOf<Proposal?>(null) }
     var opening by remember { mutableStateOf<Opening?>(null) }
 
+    // M15：导演此刻要说的卡（心跳推来的），以及「有结论」的输入框。
+    val pushed by BrainHost.directorCard.collectAsState()
+    var card by remember { mutableStateOf<MindCard?>(BrainHost.currentCard(now)) }
+    var conclusionCard by remember { mutableStateOf<MindCard?>(null) }
+    var conclusionText by remember { mutableStateOf("") }
+    LaunchedEffect(pushed) { if (pushed != null) card = pushed }
+    LaunchedEffect(Unit) { if (card == null) card = BrainHost.currentCard(System.currentTimeMillis()) }
+
     fun toast(text: String) {
         Toast.makeText(context.applicationContext, text, Toast.LENGTH_LONG).show()
+    }
+
+    /** 把一次回应交给导演：下一张卡替换当前卡，null 就收起；失败只 Toast，卡片不动。 */
+    fun sendReply(reply: Reply, after: ((MindCard?) -> Unit)? = null) {
+        todayScope.launch {
+            val result = runCatching { BrainHost.reply(reply) }
+            if (result.isFailure) {
+                toast("刚才没接上")
+                return@launch
+            }
+            val next = result.getOrNull()
+            card = next
+            // 让心跳推来的卡也跟着走：换页 / 重开回今天页时，不会又弹出上一张。
+            BrainHost.setDirectorCard(next)
+            after?.invoke(next)
+        }
+    }
+
+    /** 划掉这张卡：先收起，再把“被划掉”告诉导演。 */
+    fun dismissCard(c: MindCard) {
+        card = null
+        todayScope.launch {
+            runCatching { BrainHost.reply(Reply.Dismissed(c.id, System.currentTimeMillis())) }
+            BrainHost.setDirectorCard(null)
+        }
+    }
+
+    /** 点了一个选项；CHOICE_GO 是“去聊”：先回应，再让导演准备开场白。 */
+    fun pick(c: MindCard, choice: Choice) {
+        val at = System.currentTimeMillis()
+        if (choice.key != CHOICE_GO) {
+            sendReply(Reply.Pick(c.id, at, choice.key))
+            return
+        }
+        sendReply(Reply.Pick(c.id, at, choice.key), after = { next ->
+            todayScope.launch {
+                // 回应后导演通常收起这张卡（next 为空），那就用这张卡的演员和 id 要开场白。
+                val op = runCatching { BrainHost.opening(next?.actor ?: c.actor, (next ?: c).id) }.getOrNull()
+                if (op != null) opening = op
+            }
+        })
     }
 
     fun acceptProposal(p: Proposal) {
@@ -187,6 +243,33 @@ fun TodayScreen() {
                 onDismiss = { runCatching { BrainHost.dismissNotice(notice.at) } },
                 onAccept = if (notice.proposalId.isNotBlank()) ({ acceptNotice(notice) }) else null,
                 onDecline = if (notice.proposalId.isNotBlank()) ({ declineNotice(notice) }) else null,
+            )
+        }
+
+        // 1.5 此刻：导演要说的一张卡 + 没想完的接力棒（M15）。
+        val mindCard = card
+        if (mindCard != null) {
+            DirectorCardView(
+                card = mindCard,
+                onDismiss = { dismissCard(mindCard) },
+                onReply = { sendReply(it) },
+                onPick = { pick(mindCard, it) },
+                onConclusion = {
+                    conclusionText = ""
+                    conclusionCard = mindCard
+                },
+                onCopy = { line ->
+                    clipboard.setText(AnnotatedString(line))
+                    toast("复制了")
+                },
+            )
+        }
+        val baton = BrainHost.directorBaton()
+        baton?.let { b ->
+            Text(
+                "没想完的：${b.question} → 下一问：${b.nextAsk.ifBlank { "—" }}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
@@ -301,22 +384,46 @@ fun TodayScreen() {
         Spacer(Modifier.height(12.dp))
     }
 
-    // 去聊：开场白弹窗，可以复制（打开演员下一批做）。
+    // 去聊：开场白弹窗（复制 / 打开演员）；通知条和提议卡也共用它。
     opening?.let { op ->
+        OpeningDialog(opening = op, clipboard = clipboard, onDismiss = { opening = null })
+    }
+
+    // 「有结论」：一句话收线，交给导演接着整理。
+    conclusionCard?.let { c ->
         AlertDialog(
-            onDismissRequest = { opening = null },
-            title = { Text("去 ${op.actor.label} 聊") },
-            text = { Text(op.text) },
+            onDismissRequest = { conclusionCard = null },
+            title = { Text("有结论") },
+            text = {
+                Column {
+                    Text(
+                        "一句话，聊出了什么？下一步做什么，几点？",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedTextField(
+                        value = conclusionText,
+                        onValueChange = { conclusionText = it },
+                        minLines = 3,
+                        maxLines = 5,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
             confirmButton = {
-                TextButton(onClick = {
-                    clipboard.setText(AnnotatedString(op.text))
-                    toast("开场白复制了")
-                    opening = null
-                }) { Text("复制") }
+                TextButton(
+                    onClick = {
+                        val text = conclusionText.trim()
+                        if (text.isNotEmpty()) {
+                            conclusionCard = null
+                            conclusionText = ""
+                            sendReply(Reply.Conclusion(c.id, System.currentTimeMillis(), text))
+                        }
+                    },
+                    enabled = conclusionText.isNotBlank(),
+                ) { Text("记下") }
             },
-            dismissButton = {
-                TextButton(onClick = { opening = null }) { Text("关上") }
-            },
+            dismissButton = { TextButton(onClick = { conclusionCard = null }) { Text("取消") } },
         )
     }
 }
@@ -441,4 +548,146 @@ private fun PredictionRow(prediction: Prediction) {
             null -> {}
         }
     }
+}
+
+/**
+ * 「此刻」卡片：导演说的一句话 + 可以念给演员的话 + 回应按钮。
+ * 只显示和回调，真正回应由 [BrainHost.reply] 交给导演。
+ */
+@Composable
+private fun DirectorCardView(
+    card: MindCard,
+    onDismiss: () -> Unit,
+    onReply: (Reply) -> Unit,
+    onPick: (Choice) -> Unit,
+    onConclusion: () -> Unit,
+    onCopy: (String) -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(Modifier.padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    card.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onDismiss) {
+                    Text(
+                        "×",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Text(
+                card.ask,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            card.sayLines.forEach { line ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "▸ $line",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f).padding(end = 4.dp),
+                    )
+                    TextButton(onClick = { onCopy(line) }) { Text("复制") }
+                }
+            }
+            if (card.queued > 1) {
+                Text(
+                    "还有 ${card.queued - 1} 件",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (card.choices.isEmpty()) {
+                // 默认四个按钮：继续 / 卡住了 / 有结论 / 休息。
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    TextButton(
+                        onClick = { onReply(Reply.Continue(card.id, System.currentTimeMillis())) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("继续") }
+                    TextButton(
+                        onClick = { onReply(Reply.Stuck(card.id, System.currentTimeMillis())) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("卡住了") }
+                    TextButton(onClick = onConclusion, modifier = Modifier.weight(1f)) { Text("有结论") }
+                    TextButton(
+                        onClick = { onReply(Reply.Rest(card.id, System.currentTimeMillis())) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("休息") }
+                }
+            } else {
+                // 点选题：按导演给的顺序，一个选项一个按钮。
+                Column(Modifier.fillMaxWidth()) {
+                    card.choices.forEach { choice ->
+                        TextButton(onClick = { onPick(choice) }, modifier = Modifier.fillMaxWidth()) {
+                            Text(choice.label)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 开场白对话框：长文可滚动；“复制”放进剪贴板；装了演员就能直接打开。 */
+@Composable
+private fun OpeningDialog(opening: Opening, clipboard: ClipboardManager, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    // 演员包名可能为空（NONE），手机也可能没装：取不到启动入口就不显示“打开”，只留复制。
+    val launchIntent = remember(opening.actor, context) {
+        val pkg = opening.actor.pkg
+        if (pkg.isBlank()) null else runCatching { context.packageManager.getLaunchIntentForPackage(pkg) }.getOrNull()
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("开场白") },
+        text = {
+            Column {
+                Column(
+                    modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(opening.text, style = MaterialTheme.typography.bodyMedium)
+                }
+                launchIntent?.let { intent ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        TextButton(onClick = {
+                            // 打开失败（被系统拦、演员被卸了）只提示，不关对话框，方便接着复制。
+                            val ok = runCatching { context.startActivity(intent) }.isSuccess
+                            if (ok) {
+                                onDismiss()
+                            } else {
+                                Toast.makeText(
+                                    context.applicationContext,
+                                    "没打开，复制开场白去粘贴吧",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        }) { Text("打开 ${opening.actor.label}") }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("知道了") } },
+        dismissButton = {
+            TextButton(onClick = {
+                clipboard.setText(AnnotatedString(opening.text))
+                Toast.makeText(context.applicationContext, "开场白复制了", Toast.LENGTH_SHORT).show()
+            }) { Text("复制") }
+        },
+    )
 }

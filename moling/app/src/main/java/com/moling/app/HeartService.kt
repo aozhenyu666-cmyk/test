@@ -9,7 +9,12 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.moling.core.BrainFacts
 import com.moling.core.flow.Flow
+import com.moling.core.mind.Actor
+import com.moling.core.mind.Card
+import com.moling.core.mind.Sense
+import com.moling.core.mind.SenseKind
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -52,6 +57,10 @@ class HeartService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var loop: Job? = null
 
+    /** 上一次看到的前台（判断“换了 App”）和已经说过的那段连续娱乐。 */
+    private var lastPkg = ""
+    private var longKey = ""
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -86,9 +95,48 @@ class HeartService : Service() {
         while (true) {
             val now = System.currentTimeMillis()
             runCatching { BrainHost.tickNow(now) }.onFailure { Log.w(TAG, "心跳失败", it) }
+            runCatching { feedSenses(now) }.onFailure { Log.w(TAG, "喂导演失败", it) }
             Notify.updateHeart(this, heartText())
             delay(if (interactive()) 60_000L else 300_000L)
         }
+    }
+
+    /**
+     * 把“每分钟 / 前台换了 / 刷娱乐 15 分钟 / 打开演员”告诉导演（M15）。
+     * 导演自己有限流，这里看到什么就说什么。
+     */
+    private suspend fun feedSenses(now: Long) {
+        deliver(BrainHost.sense(Sense(SenseKind.TICK, now, "heart")))
+        val fg = BrainHost.foregroundNow(now)
+        val pkg = fg?.pkg.orEmpty()
+        val category = BrainFacts.category(pkg, BrainHost.state.value.lastStatus)
+        if (pkg.isNotBlank() && pkg != lastPkg) {
+            deliver(
+                BrainHost.sense(
+                    Sense(SenseKind.FOREGROUND, now, "usage", mapOf("pkg" to pkg, "label" to (fg?.label ?: pkg), "category" to category)),
+                ),
+            )
+            if (category == "ACTOR") {
+                val actor = if (pkg == Actor.GEMINI_LIVE.pkg) "gemini" else "chatgpt"
+                deliver(BrainHost.sense(Sense(SenseKind.ACTOR_OPEN, now, "usage", mapOf("actor" to actor))))
+            }
+        }
+        val minutes = fg?.minutes ?: 0
+        if (category == "ENTERTAINMENT" && minutes >= 15) {
+            // 同一段连续娱乐只告诉一次：用“这段开始的时间”当 key。
+            val key = pkg + ":" + (now - minutes * 60_000L) / 60_000L
+            if (key != longKey) {
+                longKey = key
+                deliver(BrainHost.sense(Sense(SenseKind.LONG_ENTERTAINMENT, now, "usage", mapOf("pkg" to pkg, "minutes" to "\$minutes"))))
+            }
+        }
+        lastPkg = pkg
+    }
+
+    /** 导演给的卡：App 在前台就交给今天页，不在前台发通知（M15）。 */
+    private fun deliver(card: Card?) {
+        val c = card ?: return
+        if (MainActivity.visible) BrainHost.setDirectorCard(c) else Notify.card(this, c.ask)
     }
 
     /** 亮屏着就勤一点，灭屏省电。 */

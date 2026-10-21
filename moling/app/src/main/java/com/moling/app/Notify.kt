@@ -27,6 +27,9 @@ object Notify {
     private const val ID_PLAN = 3001
     private const val ID_NIGHT = 3002
 
+    /** 导演卡片（M15）。 */
+    private const val ID_CARD = 4001
+
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         if (nm.getNotificationChannel(CH_HEART) == null) {
@@ -121,6 +124,9 @@ object Notify {
             .setContentIntent(todayIntent(context))
         runCatching { context.getSystemService(NotificationManager::class.java)?.notify(noticeId(kind), b.build()) }
     }
+
+    /** 导演要说话但 App 不在前台（M15）：标题「墨灵」，正文是此刻那一问，点开进今天页。 */
+    fun card(context: Context, ask: String) = simple(context, ID_CARD, "墨灵", ask, silent = false)
 
     /** 早上自动排好的草稿（M12）。 */
     fun planReady(context: Context, intent: String) =
