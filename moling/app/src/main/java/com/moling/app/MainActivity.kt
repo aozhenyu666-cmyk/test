@@ -1,5 +1,8 @@
 package com.moling.app
 
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.platform.LocalDensity
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -152,8 +155,7 @@ private fun MolingShell(requestedTab: MutableIntState) {
             else -> tab = 0
         }
     }
-    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-    val typing = androidx.compose.foundation.layout.WindowInsets.isImeVisible
+    val typing = WindowInsets.ime.getBottom(LocalDensity.current) > 0
 
     // 设置页等占满全屏，不套 Scaffold：它们自己带返回。
     if (settingsOpen) {

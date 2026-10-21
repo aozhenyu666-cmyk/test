@@ -1,5 +1,8 @@
 package com.moling.app.ui
 
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.platform.LocalDensity
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -256,8 +259,7 @@ fun ChatScreen() {
     }
     var showThoughts by remember { mutableStateOf(false) }
 
-    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-    val typing = androidx.compose.foundation.layout.WindowInsets.isImeVisible
+    val typing = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     // 键盘一出来就滚到最新一条
     LaunchedEffect(typing) { if (typing && state.talk.isNotEmpty()) list.scrollToItem(state.talk.lastIndex) }
     Column(Modifier.fillMaxSize()) {
