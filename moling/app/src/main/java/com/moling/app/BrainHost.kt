@@ -449,7 +449,10 @@ object BrainHost {
             val trigger = brain.liveTrigger(activity, now, unlockGapMin, cfg, autopilot) ?: return
             val cues = if (trigger == com.moling.core.live.Trigger.AUTOPILOT) autopilot?.reasons.orEmpty() else emptyList()
             val turn = io<LiveTurn?>("live", { null }) { brain.live(trigger, activity, now, cfg = cfg, can = Appear.can(ctx), cues = cues) } ?: return
-            withContext(Dispatchers.Main) { Appear.show(ctx, turn, activity?.label.orEmpty()) }
+            withContext(Dispatchers.Main) {
+                LiveScreens.nextChoices = turn.choices
+                Appear.show(ctx, turn, activity?.label.orEmpty())
+            }
         } finally {
             liveBusy.set(false)
         }
@@ -478,6 +481,12 @@ object BrainHost {
     suspend fun quizResult(right: Boolean) {
         io("quizResult", {}) { brain.quizResult(right, System.currentTimeMillis()) }
     }
+
+    /** 他点了她给的一个选项（破雾、盲盒、赌……）。 */
+    suspend fun tap(choice: String): LiveTurn =
+        io("tap", { LiveTurn(Mood.CALM, "刚才没接上，等会儿再点一下", false, false, emptyList()) }) {
+            brain.tap(choice, System.currentTimeMillis(), liveConfig())
+        }
 
     /** 拦着他时他回了一句。 */
     suspend fun gateReply(text: String): LiveTurn =

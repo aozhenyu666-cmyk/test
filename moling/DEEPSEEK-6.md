@@ -285,3 +285,40 @@ A 组没做，现在归你：
 ## 交付
 
 同第 12 节：DEVLOG 末尾加“第六批 B 组 + C 组（DeepSeek）”，推 `deepseek-autopilot-b`，CI 绿了告诉用户，由 Claude 合并。
+
+---
+
+# 续二：D 组（破雾的界面，做完 B、C 再做）
+
+> 2026-10-21。Claude 已写好“破雾”的核心并测过（402 个测试）：他刷懵了的时候（自动驾驶、夜里躺着刷、刷了很久、最近老划掉她），她**不提主线、不问“卡在哪”**，只抛一个好玩的钩子 + 2–3 个**点一下就能回**的选项；点三下把他慢慢带出来。拦人时点两下就放。
+> 她自己也会攒“闲心”：盲盒（藏了一个漏洞的话）、参谋小剧场、她下的赌——攒好的直接拿出来，不再调模型。
+> 已经接好的：底部卡片（`PeekActivity`）和对话页的选项按钮；`LiveScreens.gate(...)` 已经把选项放进了 intent（`LiveScreens.choices(intent)` 取）。
+
+**你会用到的**：`LiveTurn.choices`、`LiveTurn.fog`、`GateSession.fog`（`BrainHost.state.value.gate?.fog`）；点了选项调 `BrainHost.tap(choice): LiveTurn`（返回她接的话、下一轮选项；`release = true` 表示拦人结束）；`Say.kind`（`say / blindbox / drama / bet`）。
+
+## D1：拦人页的选项（`LiveScreens.kt` 的 `GateActivity`）
+
+1. `val choices = remember { mutableStateOf(LiveScreens.choices(intent)) }`（`onNewIntent` 里也更新）。
+2. 有选项时：她那句话下面一排大一点的 `OutlinedButton`（每个一行或两两一行，手指好点），点了 → `BrainHost.tap(c)`：更新她的话、表情和选项；`turn.release` 为 true → 按现在“放行”的流程走（显示放行、4 秒后关、报 `REPLIED`）。
+3. 破雾的拦人页（`gate.fog`）：打字框默认收起，只留一个小字按钮“想打字也行”点开；不是破雾的拦人页保持现在的样子，选项只是多一条路。
+4. 「急事」按钮任何时候都在，位置不变。
+
+## D2：桌宠气泡上的选项（`PetOverlay.kt`）
+
+桌宠 / 盯着你 / 参谋弹幕最后那只桌宠：气泡里如果有选项（`Appear.show` 前心跳已经放进 `LiveScreens.nextChoices`，你在 `PetOverlay.show` 里读一份**副本**、别清空，点开卡片时 peek 会自己取），在气泡下面画 2–3 个小胶囊按钮；点一个 → 直接 `BrainHost.tap(c)`，气泡换成她接的话和新选项（窗口还是那么小，最多两行字）；没有新选项了 3 秒后收起。报反应：点了算 `REPLIED`。
+
+## D3：盲盒 / 小剧场 / 赌的样子
+
+`turn.choices` 来自这三种时（看 `BrainHost.state.value.lastPlay?.kind`）：
+- 盲盒：卡片 / 气泡上加一个小标签“盲盒”，她那句话用引号框起来；
+- 小剧场：三行分别前面画一个小圆点 + 名字（对手 / 军师 / 朋友），像对话；
+- 赌：一个小标签“她下注了”，选项“我偏不 / 你赢了”。
+只改显示，逻辑不动。
+
+## D4：对话页的“破雾”模式
+
+模式条里已经自动多了「破雾」（`TalkMode.FOG`）。选中时：输入框上面的提示改成“不用打字，点她给的就行”；她的回复下面已有选项按钮（Claude 做好了），你只需要把选项按钮做得更显眼（印泥色细边）。
+
+## 不做
+
+不读屏幕内容、不挡别的应用的操作、不替他做决定（这些不在这份文档里，也不要自己加）。

@@ -125,12 +125,10 @@ class LiveTest {
         assertEquals(0, b.state().spirit.ignored)
     }
 
-    @Test fun lastRoundAlwaysLetsGo() = runTest {
+    @Test fun fogGateDoesNotDemandWords() = runTest {
         val b = brain() // 没模型：用本地判断
         assertTrue(b.live(Trigger.SCROLL_IN_BED, douyin, at(23, 40), roll = 0.9)!!.gate)
-        assertFalse(b.gateReply("嗯", at(23, 41)).release)
-        assertFalse(b.gateReply("好", at(23, 42)).release)
-        assertTrue("最多三轮", b.gateReply("知道了", at(23, 43)).release)
+        assertTrue("夜里躺着刷算刷懵了：回个“嗯”也放", b.gateReply("嗯", at(23, 41)).release)
     }
 
     @Test fun safetyValveAndEmergency() = runTest {

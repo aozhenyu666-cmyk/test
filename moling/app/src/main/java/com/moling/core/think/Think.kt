@@ -32,12 +32,22 @@ data class Thought(
 
 /** 她想好、等合适时候说的一句。 */
 @Serializable
-data class Say(val text: String, val at: Long, val from: String = "想到的")
+data class Say(
+    val text: String,
+    val at: Long,
+    val from: String = "想到的",
+    /** say = 想说的话；blindbox = 藏了一个漏洞的暴论（[answer] 是漏洞）；drama = 参谋小剧场；bet = 她下的赌。 */
+    val kind: String = "say",
+    val answer: String = "",
+    val choices: List<String> = emptyList(),
+)
 
 data class ThinkResult(
     val made: List<Thought>,
     val settled: Map<String, Pair<String, String>>,
     val say: List<String>,
+    /** 她的闲心：盲盒、小剧场、赌。 */
+    val play: List<Say> = emptyList(),
 )
 
 object Think {
@@ -93,6 +103,10 @@ object Think {
         appendLine("【判断】内容｜依据｜把握（高/中/低）｜怎么验证｜HH:MM 前验证（或 明天）")
         appendLine("【放下】T编号｜对了 / 错了 / 过期｜一句理由")
         appendLine("【打算】出声｜等合适的时候对他说的一句话（具体、短，像朋友）")
+        appendLine("你也可以有自己的“闲心”（各最多一个，不是每次都要有）：")
+        appendLine("【盲盒】一句听着像他会说、但藏了一个逻辑漏洞的话（用他体系图或最近说的话做材料）｜漏洞在哪（一句）")
+        appendLine("【小剧场】对手：一句嘲笑｜军师：一句给台阶的办法｜朋友：一句护着他的话（针对他此刻的状态）")
+        appendLine("【赌】你下的一个小赌（比如：我赌你今晚 12 点前放不下手机），把握多少（0–100%）")
         append("【动作】只在真的需要时写，格式同对话：提醒我｜N 分钟后｜说什么、问GPT｜问题、约定｜做什么｜HH:MM 前｜怎么检查（最多 2 个）")
     }
 
@@ -120,7 +134,20 @@ object Think {
         }.toMap()
         val say = Regex("""【打算】\s*出声\s*[｜|]\s*([^\n]+)""").findAll(reply).map { it.groupValues[1].trim().take(120) }
             .filter { it.length >= 4 }.take(2).toList()
-        return ThinkResult(made, settled, say)
+        val play = buildList {
+            Regex("""【盲盒】([^｜|\n]+)[｜|]([^\n]+)""").find(reply)?.let {
+                add(Say(it.groupValues[1].trim().take(100), now, "她的盲盒", "blindbox", it.groupValues[2].trim().take(80), listOf("有漏洞", "说得对")))
+            }
+            Regex("""【小剧场】([^\n]+)""").find(reply)?.let { m ->
+                val lines = m.groupValues[1].split('｜', '|').map { it.trim() }.filter { it.contains('：') || it.contains(':') }.take(3)
+                if (lines.size >= 2) add(Say(lines.joinToString("\n").take(200), now, "参谋小剧场", "drama", "", listOf("对手说得对", "听军师的", "朋友懂我")))
+            }
+            Regex("""【赌】([^\n]+)""").find(reply)?.let {
+                val t = it.groupValues[1].trim().take(100)
+                if (t.length >= 4) add(Say(t, now, "她下的赌", "bet", "", listOf("我偏不", "你赢了")))
+            }
+        }
+        return ThinkResult(made, settled, say, play)
     }
 }
 

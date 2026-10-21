@@ -264,6 +264,11 @@ data class BrainState(
     val sayQueue: List<Say> = emptyList(),
     /** 她每种出现方式的效果（反免疫，v9）。 */
     val habits: HabitBook = HabitBook(),
+    /** 破雾进行到第几下、上一下的时间（5 分钟内连着点才算同一段）。 */
+    val fogRound: Int = 0,
+    val fogAt: Long = 0,
+    /** 刚拿出来的那个盲盒 / 赌（他点选项时用来揭晓）。 */
+    val lastPlay: Say? = null,
     /** 哪天为主线做完出过声（一天一次）。 */
     val cheeredDay: String = "",
     /** 每天的手机使用（只有应用和时间，没有内容），留 30 天。 */
@@ -285,9 +290,20 @@ data class LiveTurn(
     val modality: Modality = Modality.PEEK,
     /** [Modality.QUIZ] 时的题。 */
     val quiz: Quiz? = null,
+    /** 点一下就能回的选项；界面显示成按钮，点了调 [Brain.tap]。 */
+    val choices: List<String> = emptyList(),
+    /** 破雾：他刷懵了，这次只要他点，不要他打字。 */
+    val fog: Boolean = false,
 )
 
-data class ChatResult(val text: String, val proposals: List<Proposal>, val byModel: Boolean, val mode: TalkMode = TalkMode.WORK)
+data class ChatResult(
+    val text: String,
+    val proposals: List<Proposal>,
+    val byModel: Boolean,
+    val mode: TalkMode = TalkMode.WORK,
+    /** 点一下就能回的选项（破雾模式里一定有）。 */
+    val choices: List<String> = emptyList(),
+)
 
 /** 点“好” / 重试的结果。[opening] 只在“去聊”时有，App 拿它打开演员。 */
 data class Outcome(val ok: Boolean, val message: String, val opening: Opening? = null)
@@ -368,7 +384,7 @@ class Brain(
         Modes.score(reply.text).takeIf { it >= 0 }?.let { st = st.copy(log = st.log + "${hm(now)} 训练：这一轮 $it 分") }
         st = st.copy(talk = (st.talk + Turn("他", text, now) + Turn("墨灵", shown, now)).takeLast(TALK_KEEP))
         save()
-        ChatResult(shown, made, reply.byModel, use)
+        ChatResult(shown, made, reply.byModel, use, reply.choices)
     }
 
     /** 认出能对账的说法就记下、对一下；对不上返回给提示词的一句，否则空串。 */
@@ -997,14 +1013,14 @@ class Brain(
         st = st.copy(
             thoughts = aged.takeLast(Think.KEEP),
             lastThinkAt = now,
-            sayQueue = (st.sayQueue + r.say.map { Say(it, now) }).takeLast(5),
+            sayQueue = (st.sayQueue + r.say.map { Say(it, now) } + r.play).takeLast(6),
             log = st.log + "${hm(now)} 她想了一会儿：新判断 ${made.size} 条" +
                 (if (r.settled.isNotEmpty()) "，验证 ${r.settled.entries.joinToString("、") { "${it.key}${it.value.first}" }}" else "") +
                 (if (r.say.isNotEmpty()) "，想好要说 ${r.say.size} 句" else ""),
         )
         Talk.parse(reply, Flow.dayStart(day), "她自己想到的", now).actions.forEach { fromTalk(it, now, flow) }
         save()
-        ThinkResult(made, r.settled, r.say)
+        ThinkResult(made, r.settled, r.say, r.play)
     }
 
     /** 他点了“这个判断不对 / 对”（今天页上）。 */
@@ -1112,6 +1128,9 @@ class Brain(
         if (trigger == Trigger.DONE) st = st.copy(cheeredDay = day)
         val canGate = GateRules.eligible(a) && Spirits.mayGate(sp, cfg) &&
             trigger in setOf(Trigger.SCROLL_AT_WORK, Trigger.SCROLL_IN_BED, Trigger.LONG_SCROLL, Trigger.AUTOPILOT)
+        // 破雾：他多半刷懵了（自动驾驶、夜里躺着刷、刷了很久、该做事时已经刷了一刻钟，或者最近老划掉她）
+        val fog = trigger == Trigger.AUTOPILOT || trigger == Trigger.SCROLL_IN_BED || trigger == Trigger.LONG_SCROLL ||
+            (trigger == Trigger.SCROLL_AT_WORK && (a?.minutes ?: 0) >= 15) || (sp.ignored >= 2 && trigger != Trigger.DONE)
         val flow = st.flow?.takeIf { it.day == day }
         val flowNow = flow?.let { Flow.current(it, Flow.minuteOf(now)) }?.title.orEmpty()
         val persona = config().persona
@@ -1119,11 +1138,15 @@ class Brain(
         val prompt = Live.prompt(
             persona, trigger, a, director.nowText(now), flow?.let { Flow.render(it) }.orEmpty(), st.about, misjudged(now), talkLines(), canGate,
             thinking = Think.open(st.thoughts).takeLast(4).map { Think.line(it) }, toSay = toSay,
-            cues = cues, ignored = sp.ignored,
+            cues = cues, ignored = sp.ignored, fog = fog,
         )
-        val reply = model(persona, prompt)
-        val line = reply?.let { Live.parse(it, canGate) }
-            ?: if (trigger == Trigger.SAY && toSay.isNotBlank()) LiveLine(true, Mood.CURIOUS, toSay, false, false)
+        // 她攒好的盲盒 / 小剧场 / 赌：原样拿出来，不再调模型
+        val play = st.sayQueue.firstOrNull()?.takeIf { trigger == Trigger.SAY && it.kind != "say" }
+        val reply = if (play != null) null else model(persona, prompt)
+        val line = play?.let { LiveLine(true, if (it.kind == "bet") Mood.SMUG else Mood.CURIOUS, playLine(it), false, false, it.choices) }
+            ?: reply?.let { Live.parse(it, canGate) }
+            ?: if (fog) Live.fogOpen(a, canGate)
+            else if (trigger == Trigger.SAY && toSay.isNotBlank()) LiveLine(true, Mood.CURIOUS, toSay, false, false)
             else Live.local(trigger, a, canGate, flowNow)
         if (!line.speak) {
             st = st.copy(spirit = sp, log = st.log + "${hm(now)} ${trigger.label}：她看了一眼，没出声")
@@ -1132,7 +1155,7 @@ class Brain(
         }
         val made = reply?.let { Talk.parse(it, Flow.dayStart(day), "她主动提的", now).actions }.orEmpty().mapNotNull { fromTalk(it, now, flow) }
         sp = sp.copy(spoke = sp.spoke + 1, lastAt = now)
-        val gate = if (line.gate && a != null) GateSession(now, trigger, a.pkg, a.label).also { sp = sp.copy(gates = sp.gates + 1) } else null
+        val gate = if (line.gate && a != null) GateSession(now, trigger, a.pkg, a.label, fog = fog).also { sp = sp.copy(gates = sp.gates + 1) } else null
         // 不拦的时候换着方式出现（反免疫）；捉虫题出不来就退回别的
         var modality = if (gate != null) Modality.GATE else Habits.pick(st.habits, can, now, (roll * 7919.0) % 1.0)
         val quiz = if (modality == Modality.QUIZ) makeQuiz(now) else null
@@ -1142,6 +1165,9 @@ class Brain(
             gate = gate,
             // 想好要说的说出去了（模型可用时她会揉进这次的话里）
             sayQueue = if (toSay.isNotBlank() && (reply != null || trigger == Trigger.SAY)) st.sayQueue.drop(1) else st.sayQueue,
+            lastPlay = play ?: st.lastPlay,
+            fogRound = if (fog || play != null) 0 else st.fogRound,
+            fogAt = if (fog || play != null) now else st.fogAt,
             // 她出声了：偏离阶梯的下一级往后推，不叠着打扰
             ladder = st.ladder?.copy(at = now),
             talk = (st.talk + Turn("墨灵", line.line, now)).takeLast(TALK_KEEP),
@@ -1151,7 +1177,55 @@ class Brain(
         save()
         st = st.copy(habits = Habits.shown(st.habits, modality, now))
         save()
-        LiveTurn(line.mood, line.line, gate != null, false, made, modality, quiz)
+        LiveTurn(line.mood, line.line, gate != null, false, made, modality, quiz, line.choices, fog)
+    }
+
+    /** 盲盒 / 小剧场 / 赌拿出来时怎么说。 */
+    private fun playLine(p: Say): String = when (p.kind) {
+        "blindbox" -> "我攒了一句话，你看有没有毛病：「${p.text}」"
+        "drama" -> p.text
+        "bet" -> "我下个注：${p.text}"
+        else -> p.text
+    }
+
+    /**
+     * 他点了一个选项（破雾、盲盒、赌，或者她给的任何【选】）：她接一句，最多三下把他往外带。
+     * 拦着他时：点两下就放行（破雾不要他打字）；不拦时：第三下收尾。点了就算认真回应（不算冷落）。
+     */
+    suspend fun tap(choice: String, now: Long, cfg: LiveConfig = LiveConfig()): LiveTurn = lock.withLock {
+        val g = st.gate
+        val round = (if (now - st.fogAt < 5 * 60_000L) st.fogRound else 0) + 1
+        val gating = g != null
+        val last = if (gating) round >= 2 || GateRules.expired(g!!, now, cfg) else round >= 3
+        st = st.copy(talk = (st.talk + Turn("他", "（点了）$choice", now)).takeLast(TALK_KEEP))
+        // 盲盒 / 赌：先揭晓
+        val p = st.lastPlay?.takeIf { round == 1 && now - it.at < 2 * DAY_MS }
+        val reveal = when (p?.kind) {
+            "blindbox" -> if (choice.contains("漏洞")) "对，漏洞在：${p.answer}" else "再看一眼——漏洞在：${p.answer}"
+            "bet" -> if (choice.contains("偏不")) "好，那我们看谁赢。" else "嘿嘿，记下了。"
+            else -> ""
+        }
+        val persona = config().persona
+        val reply = model(persona, Live.fogPrompt(persona, choice + if (reveal.isNotBlank()) "（她揭晓：$reveal）" else "", talkLines(), st.about, round, last, gating))
+        val parsed = reply?.let { Live.parse(it, false) }?.takeIf { it.line.isNotBlank() } ?: Live.fogLocal(round, last)
+        val line = listOf(reveal, parsed.line).filter { it.isNotBlank() }.joinToString(" ")
+        val release = gating && (last || parsed.release)
+        val day = calendarDay(now)
+        val made = reply?.let { Talk.parse(it, Flow.dayStart(day), "点选时说好的", now).actions }.orEmpty()
+            .mapNotNull { fromTalk(it, now, st.flow?.takeIf { f -> f.day == day }) }
+        st = st.copy(
+            gate = if (gating && !release) g!!.copy(rounds = g.rounds + 1) else if (release) null else st.gate,
+            spirit = Spirits.today(st.spirit, day).copy(ignored = 0),
+            ladder = st.ladder?.copy(answered = true),
+            fogRound = round,
+            fogAt = now,
+            lastPlay = if (round == 1) null else st.lastPlay,
+            talk = (st.talk + Turn("墨灵", line, now)).takeLast(TALK_KEEP),
+            log = st.log + "${hm(now)} 他点了「${choice.take(12)}」${if (release) "，放行" else ""}",
+        )
+        save()
+        val choices = if (last || release) emptyList() else parsed.choices.ifEmpty { Live.fogLocal(round, false).choices }
+        LiveTurn(parsed.mood, line, gating && !release, release, made, choices = choices, fog = true)
     }
 
     /**
@@ -1199,7 +1273,8 @@ class Brain(
         val persona = config().persona
         val reply = model(persona, Live.replyPrompt(persona, g, text + if (numbers.isNotBlank()) "（$numbers）" else "", talkLines(), st.about, g.rounds, cfg.maxRounds))
         val parsed = reply?.let { Live.parse(it, false) }?.takeIf { it.line.isNotBlank() }
-        val release = last || (parsed?.release ?: !Live.perfunctory(text))
+        // 破雾时不要求他说得具体：回了就行
+        val release = last || (parsed?.release ?: (g.fog || !Live.perfunctory(text)))
         val line = parsed?.line ?: if (release) "好，去吧。说好的别忘了。" else "这句太敷衍了。具体点：卡在哪，或者几点停？"
         val mood = parsed?.mood ?: if (release) Mood.CALM else Mood.POUT
         val day = calendarDay(now)

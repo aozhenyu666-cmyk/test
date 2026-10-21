@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -147,6 +148,8 @@ fun ChatScreen() {
 
     // 对讲（v8）：你说完自动发，她念完自动接着听；连着两次没听清、或出错就停
     var talkLoop by remember { mutableStateOf(false) }
+    // 她给的点选项（破雾模式里一定有）：点一下就算回她
+    var choices by remember { mutableStateOf<List<String>>(emptyList()) }
     var misses by remember { mutableIntStateOf(0) }
     DisposableEffect(Unit) { onDispose { talkLoop = false; Speaker.stop() } }
 
@@ -171,6 +174,7 @@ fun ChatScreen() {
                 return@launch
             }
             usedMode = res.mode
+            choices = res.choices
             if (talkLoop) Speaker.speak(res.text) { if (talkLoop) listenLater(true) }
             else if (BrainHost.settingsStore.load().speak) Speaker.speak(res.text)
         }
@@ -282,6 +286,27 @@ fun ChatScreen() {
             }
         } else if (sending) {
             com.moling.app.ui.art.InkThinking("墨灵在想…", Modifier.padding(start = 16.dp, bottom = 2.dp))
+        }
+
+        // 她给的选项：点一下就回她（不用打字）
+        if (choices.isNotEmpty() && !sending) Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            choices.forEach { c ->
+                OutlinedButton(onClick = {
+                    sending = true
+                    val picked = c
+                    choices = emptyList()
+                    talkScope.launch {
+                        val t = runCatching { BrainHost.tap(picked) }.getOrNull()
+                        sending = false
+                        if (t == null) { toast("没接上，再点一次"); return@launch }
+                        choices = t.choices
+                        if (talkLoop || BrainHost.settingsStore.load().speak) Speaker.speak(t.line)
+                    }
+                }) { Text(c) }
+            }
         }
 
         // 模式条 + 两个特别的按钮（v4）：反驳我、疯想—冷判

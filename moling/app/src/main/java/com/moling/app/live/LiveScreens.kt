@@ -27,6 +27,8 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -78,15 +80,28 @@ object LiveScreens {
     private const val ID_LIVE = 3101
 
     fun gate(context: Context, mood: Mood, line: String, label: String) {
+        val choices = nextChoices
+        nextChoices = emptyList()
         val i = Intent(context, GateActivity::class.java)
             .putExtra(EXTRA_MOOD, mood.name).putExtra(EXTRA_LINE, line).putExtra(EXTRA_LABEL, label)
+            .putExtra(EXTRA_CHOICES, choices.joinToString("\u0001"))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         launch(context, i, "墨灵拦住你了", line)
     }
 
+    /**
+     * 这次出现带的点选项（破雾等）。心跳在 [Appear.show] 之前放进来，[peek] 带走并清空——
+     * 这样各种出现方式不用都改签名（桌宠 / 拦人页的选项见 DEEPSEEK-6 的 D 组）。
+     */
+    @Volatile
+    var nextChoices: List<String> = emptyList()
+
     fun peek(context: Context, mood: Mood, line: String, modality: com.moling.core.live.Modality = com.moling.core.live.Modality.PEEK) {
+        val choices = nextChoices
+        nextChoices = emptyList()
         val i = Intent(context, PeekActivity::class.java)
             .putExtra(EXTRA_MOOD, mood.name).putExtra(EXTRA_LINE, line).putExtra(EXTRA_MODALITY, modality.name)
+            .putExtra(EXTRA_CHOICES, choices.joinToString("\u0001"))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         launch(context, i, "墨灵", line)
     }
@@ -116,6 +131,9 @@ object LiveScreens {
     const val EXTRA_LINE = "line"
     const val EXTRA_LABEL = "label"
     const val EXTRA_MODALITY = "modality"
+    const val EXTRA_CHOICES = "choices"
+
+    fun choices(i: Intent?): List<String> = i?.getStringExtra(EXTRA_CHOICES).orEmpty().split('\u0001').filter { it.isNotBlank() }
 
     fun modality(i: Intent?): com.moling.core.live.Modality =
         runCatching { com.moling.core.live.Modality.valueOf(i?.getStringExtra(EXTRA_MODALITY).orEmpty()) }.getOrDefault(com.moling.core.live.Modality.PEEK)
@@ -330,11 +348,17 @@ class PeekActivity : ComponentActivity() {
         var text by remember { mutableStateOf("") }
         var busy by remember { mutableStateOf(false) }
         var touched by remember { mutableStateOf(false) }
+        // 点一下就能回的选项（破雾）：点了她接一句，最多三下
+        var choices by remember { mutableStateOf(LiveScreens.choices(intent)) }
+        var closeSoon by remember { mutableStateOf(false) }
 
         LaunchedEffect(Unit) {
             if (BrainHost.speakOn()) Speaker.speak(first)
             delay(15_000)
             if (!touched) finish()
+        }
+        LaunchedEffect(closeSoon) {
+            if (closeSoon) { delay(3_500); finish() }
         }
 
         Box(
@@ -354,7 +378,28 @@ class PeekActivity : ComponentActivity() {
                         MolingFace(mood, Modifier.size(72.dp))
                         Text(line, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
                     }
-                    OutlinedTextField(
+                    if (choices.isNotEmpty()) Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        choices.forEach { c ->
+                            OutlinedButton(enabled = !busy, onClick = {
+                                busy = true
+                                touched = true
+                                report(com.moling.core.live.Reaction.REPLIED)
+                                lifecycleScope.launch {
+                                    val t = BrainHost.tap(c)
+                                    line = t.line
+                                    mood = t.mood
+                                    choices = t.choices
+                                    if (BrainHost.speakOn()) Speaker.speak(t.line)
+                                    busy = false
+                                    if (t.choices.isEmpty()) closeSoon = true
+                                }
+                            }) { Text(c) }
+                        }
+                    }
+                    if (choices.isEmpty()) OutlinedTextField(
                         value = text,
                         onValueChange = { text = it.take(400); touched = true },
                         modifier = Modifier.fillMaxWidth(),

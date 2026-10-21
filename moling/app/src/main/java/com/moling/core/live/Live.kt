@@ -67,6 +67,8 @@ data class GateSession(
     val pkg: String,
     val label: String,
     val rounds: Int = 0,
+    /** 破雾：他脑子转不动，这次拦人只要他点选项，不要他打字。 */
+    val fog: Boolean = false,
 )
 
 data class LiveConfig(
@@ -90,7 +92,15 @@ data class LiveConfig(
 }
 
 /** 她这一次说的。[gate] = 拦在他面前；[release] = 放他走（拦着的时候才有意义）。 */
-data class LiveLine(val speak: Boolean, val mood: Mood, val line: String, val gate: Boolean, val release: Boolean)
+data class LiveLine(
+    val speak: Boolean,
+    val mood: Mood,
+    val line: String,
+    val gate: Boolean,
+    val release: Boolean,
+    /** 点一下就能回的选项（破雾时一定有）。 */
+    val choices: List<String> = emptyList(),
+)
 
 object Spirits {
     fun today(s: Spirit, day: String): Spirit = if (s.day == day) s else Spirit(day = day, ignored = s.ignored)
@@ -139,6 +149,7 @@ object Live {
         toSay: String = "",
         cues: List<String> = emptyList(),
         ignored: Int = 0,
+        fog: Boolean = false,
     ) = buildString {
         appendLine("【你是】$persona")
         appendLine("【你被叫醒的原因】${trigger.label}")
@@ -159,14 +170,25 @@ object Live {
         if (history.isNotEmpty()) appendLine("【刚才的对话】\n" + history.takeLast(6).joinToString("\n"))
         appendLine()
         appendLine("你是一个活的伙伴，不是闹钟。先判断现在要不要出声：不重要、他刚被打扰过、他在做正事，就不出声。")
-        appendLine("要出声就像朋友一样，一两句，提到他此刻具体在做的事；能指出一处这几天判断上的错就指出（用数字，不翻旧账、不说教），最后给一个马上能做的小建议。")
-        if (canGate) appendLine("如果他该停却还在刷，你可以拦在他面前（他不回你就刷不下去）：语气可以气鼓鼓，但不凶、不羞辱，问一个他必须回答的问题。")
-        else appendLine("这次不许拦他，只能说话。")
+        if (fog) {
+            appendLine("【破雾】他现在多半刷懵了，脑子转不动，打不出完整的句子。这次：")
+            appendLine("- 绝对不提主线、计划、时长、偏离；不问为什么 / 卡在哪 / 怎么办这类要组织语言的问题；")
+            appendLine("- 一两句好玩的、出乎意料的话：顺着他在用的应用和你知道的他，抛一个钩子（吐槽、猜一猜、二选一、一个小赌局），像坐在旁边的朋友；")
+            appendLine("- 最后一行写【选】2–3 个点一下就能回的选项（每个不超过 8 个字），他点一下就算接住了。")
+            if (canGate) appendLine("你可以拦在他面前，但只要他点一个选项，不要他打字。")
+            else appendLine("这次不许拦他，只能说话。")
+        } else {
+            appendLine("要出声就像朋友一样，一两句，提到他此刻具体在做的事；能指出一处这几天判断上的错就指出（用数字，不翻旧账、不说教），最后给一个马上能做的小建议。")
+            if (canGate) appendLine("如果他该停却还在刷，你可以拦在他面前（他不回你就刷不下去）：语气可以气鼓鼓，但不凶、不羞辱，问一个他必须回答的问题。")
+            else appendLine("这次不许拦他，只能说话。")
+            appendLine("（可选）最后一行写【选】2–3 个他点一下就能回的选项。")
+        }
         appendLine("只输出：")
         appendLine("【出声】是 / 否")
         appendLine("【表情】" + Mood.entries.joinToString(" / ") { it.label })
         appendLine("【说】你要说的话")
         if (canGate) appendLine("【拦】是 / 否")
+        appendLine("【选】选项一｜选项二｜选项三")
         append("需要改变现实时，另起一行写【动作】（格式同对话：专注｜分钟｜做什么、约定｜做什么｜HH:MM｜怎么检查、提醒我｜N 分钟后｜说什么）")
     }
 
@@ -186,6 +208,51 @@ object Live {
         append("需要的话另起一行写【动作】（约定 / 提醒我 / 专注）")
     }
 
+    /** 【选】A｜B｜C → 最多 3 个、每个最多 10 个字。 */
+    fun choices(reply: String): List<String> =
+        Regex("""【选】([^\n]+)""").find(reply)?.groupValues?.get(1)?.split('｜', '|', '/', '／')
+            ?.map { it.trim().trim('【', '】', '[', ']') }?.filter { it.isNotBlank() }?.map { it.take(10) }?.distinct()?.take(3).orEmpty()
+
+    /**
+     * 破雾时他点了一个选项：她接一句。[round] 从 1 数；第 1 下顺着钩子再逗他一下，
+     * 第 2 下起选项变成两分钟内能做的小事；[last] = 最后一下，放他走 / 收尾。
+     */
+    fun fogPrompt(persona: String, picked: String, history: List<String>, about: String, round: Int, last: Boolean, gating: Boolean) = buildString {
+        appendLine("【你是】$persona")
+        appendLine("【现在】他刷懵了，你在用点选的方式把他的脑子慢慢叫醒。这是他点的第 $round 下。")
+        if (about.isNotBlank()) appendLine("【你对他的了解】\n${about.take(500)}")
+        appendLine("【刚才】\n" + history.takeLast(6).joinToString("\n"))
+        appendLine("【他点了】$picked")
+        appendLine()
+        appendLine("规矩：仍然不问为什么 / 卡在哪；一两句，接住他点的那个，要好玩。")
+        when {
+            last -> appendLine("这是最后一下：轻轻收尾，${if (gating) "放他走（【放行】是）" else "不再给选项"}；可以顺手约一个时间（【动作】提醒我｜N 分钟后｜说什么）。")
+            round >= 2 -> appendLine("这一下开始把他往外带：【选】给 2–3 件两分钟内能做的小事（比如：再看一个就停 / 起来喝口水 / 打开主线看一眼）。")
+            else -> appendLine("顺着这个钩子再逗他一下，【选】再给 2–3 个点一下就能回的选项。")
+        }
+        appendLine("只输出：")
+        appendLine("【表情】" + Mood.entries.joinToString(" / ") { it.label })
+        appendLine("【说】你要说的话")
+        if (!last) appendLine("【选】选项一｜选项二｜选项三")
+        if (gating) appendLine("【放行】是 / 否")
+        append("需要的话另起一行写【动作】（提醒我 / 约定）")
+    }
+
+    /** 破雾开场的本地兜底（模型不可用时）：不问卡在哪，只给点一下的选项。 */
+    fun fogOpen(activity: Activity?, canGate: Boolean): LiveLine {
+        val app = activity?.label?.ifBlank { null } ?: "手机"
+        val min = activity?.minutes ?: 0
+        val line = if (min >= 10) "我数了一下，${app}连着 $min 分钟了。刷懵了没？" else "嘿，手是不是在自己动？"
+        return LiveLine(true, Mood.CURIOUS, line, canGate, false, listOf("有点懵", "还行", "别管我"))
+    }
+
+    /** 破雾的本地兜底（模型不可用时）：三下把他往外带。 */
+    fun fogLocal(round: Int, last: Boolean): LiveLine = when {
+        last -> LiveLine(true, Mood.HAPPY, "好，接住了。十分钟后我再来看你一眼。", false, true)
+        round >= 2 -> LiveLine(true, Mood.CURIOUS, "那挑一件两分钟的小事？", false, false, listOf("再看一个就停", "起来喝口水", "打开主线看一眼"))
+        else -> LiveLine(true, Mood.CURIOUS, "哈，我就知道。那刚才那几个视频，你还记得哪个？", false, false, listOf("记得一个", "全忘了", "没在看"))
+    }
+
     fun parse(reply: String, canGate: Boolean): LiveLine? {
         val t = Tags.parse(reply)
         val line = t["说"]?.trim().orEmpty()
@@ -194,7 +261,7 @@ object Live {
         val mood = Mood.entries.firstOrNull { t["表情"]?.contains(it.label) == true } ?: Mood.CALM
         val gate = canGate && t["拦"]?.startsWith("是") == true
         val release = t["放行"]?.startsWith("是") == true
-        return LiveLine(speak, mood, line.take(160), gate, release)
+        return LiveLine(speak, mood, line.take(160), gate, release, choices(reply))
     }
 
     /** 模型不可用时她自己会说的（按原因）。 */
@@ -214,7 +281,7 @@ object Live {
             Trigger.UNLOCK -> LiveLine(true, Mood.CURIOUS, "回来啦。现在打算干什么？", false, false)
             Trigger.DONE -> LiveLine(true, Mood.HAPPY, "主线做完了！歇一会儿，还是趁热接下一件？", false, false)
             Trigger.SAY -> LiveLine(false, Mood.CALM, "", false, false)
-            Trigger.AUTOPILOT -> LiveLine(true, Mood.CURIOUS, "停一下——你现在是想看点什么，还是手在自己动？说一件你接下来真正要做的事。", canGate, false)
+            Trigger.AUTOPILOT -> LiveLine(true, Mood.CURIOUS, "停一下——你现在是想看点什么，还是手在自己动？", canGate, false, listOf("想看点什么", "手在自己动", "说不清"))
         }
     }
 

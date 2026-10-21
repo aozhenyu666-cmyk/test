@@ -1,5 +1,7 @@
 package com.moling.core.talk
 
+import com.moling.core.live.Live
+
 import com.moling.core.link.ZkCommand
 import com.moling.core.mind.Actor
 import com.moling.core.mind.Conclude
@@ -30,7 +32,7 @@ sealed interface TalkAction {
     data class AskGpt(val question: String) : TalkAction
 }
 
-data class TalkReply(val text: String, val actions: List<TalkAction>, val byModel: Boolean)
+data class TalkReply(val text: String, val actions: List<TalkAction>, val byModel: Boolean, val choices: List<String> = emptyList())
 
 object Talk {
     private val filler = Regex("""^(嗯+|哦+|啊+|好吧?|行吧?|随便|都行|不知道|无所谓|没想法|还好|就那样|ok|OK|。|…+)[。！!？?，, …]*$""")
@@ -91,7 +93,7 @@ object Talk {
     /** 拆开回复正文和动作行。[dayStart] 用来把 HH:MM 换成时间戳。 */
     fun parse(reply: String, dayStart: Long, why: String = "对话里说好的", now: Long = 0): TalkReply {
         val actions = mutableListOf<TalkAction>()
-        val text = reply.lines().filterNot { it.trim().startsWith("【动作】") }.joinToString("\n").trim()
+        val text = reply.lines().filterNot { it.trim().startsWith("【动作】") || it.trim().startsWith("【选】") }.joinToString("\n").trim()
         Regex("""【动作】([^\n]+)""").findAll(reply).take(2).forEach { m ->
             val f = m.groupValues[1].split('｜', '|').map { it.trim() }
             fun hm(s: String?): Long? = s?.let { Regex("""(\d{1,2})[:：](\d{2})""").find(it) }?.let { r ->
@@ -134,7 +136,7 @@ object Talk {
                 }
             }
         }
-        return TalkReply(text, actions, true)
+        return TalkReply(text, actions, true, Live.choices(reply))
     }
 
     /** 模型不可用时的本地回复：不聊空话，给一个能接的问题。 */
