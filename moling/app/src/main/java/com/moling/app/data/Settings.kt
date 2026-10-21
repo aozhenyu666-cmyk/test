@@ -32,6 +32,8 @@ class SettingsStore(context: Context) {
     private val app = context.applicationContext
     private val prefs: SharedPreferences = openEncrypted(app)
     private val usage: SharedPreferences = app.getSharedPreferences(USAGE_FILE, Context.MODE_PRIVATE)
+    /** 开关类的设置（不涉密）：后台陪着、早上自动排水道（M12）。 */
+    private val toggles: SharedPreferences = app.getSharedPreferences(TOGGLE_FILE, Context.MODE_PRIVATE)
 
     fun load(): ModelSettings = ModelSettings(
         baseUrl = prefs.getString(KEY_BASE_URL, null) ?: DEFAULT_BASE_URL,
@@ -74,6 +76,13 @@ class SettingsStore(context: Context) {
             .apply()
     }
 
+    /** 后台陪着（常驻通知）：默认开。 */
+    fun backgroundHeart(): Boolean = toggles.getBoolean(KEY_BACKGROUND, true)
+
+    fun setBackgroundHeart(on: Boolean) {
+        toggles.edit().putBoolean(KEY_BACKGROUND, on).apply()
+    }
+
     /** 北京时间日期。按用户的作息，一天从零点算。 */
     private fun todayKey(): String = LocalDate.now(BEIJING).toString()
 
@@ -84,6 +93,8 @@ class SettingsStore(context: Context) {
         /** 加密文件打不开时的退路。用另一个文件名，免得把原来的密文覆盖掉。 */
         private const val FALLBACK_FILE = "moling_settings_plain"
         private const val USAGE_FILE = "moling_usage"
+        private const val TOGGLE_FILE = "moling_toggles"
+        private const val KEY_BACKGROUND = "background_heart"
 
         private const val DEFAULT_BASE_URL = "https://api.deepseek.com"
         private const val DEFAULT_MODEL = "deepseek-chat"

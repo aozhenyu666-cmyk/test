@@ -1,5 +1,11 @@
 package com.moling.app.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -29,7 +35,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.moling.app.BrainHost
+import com.moling.app.HeartService
 import com.moling.app.data.LlmResult
 import com.moling.app.data.ModelSettings
 import com.moling.app.data.MolingAsk
@@ -54,6 +62,14 @@ fun SettingsScreen(onDone: () -> Unit) {
     val brainState by BrainHost.state.collectAsState()
     var zkBusy by remember { mutableStateOf(false) }
     var debugOpen by remember { mutableStateOf(false) }
+    var backgroundOn by remember { mutableStateOf(store.backgroundHeart()) }
+
+    // 后台通知：Android 13 起第一次打开要问一次；不给也不影响后台跑，只是看不到常驻通知。
+    val askNotif = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) {
+            Toast.makeText(context, "没给通知权限：后台照常跑，但看不到「墨灵在」那条通知", Toast.LENGTH_LONG).show()
+        }
+    }
 
     // 调试页占满全屏，自己带返回。
     if (debugOpen) {
@@ -155,6 +171,35 @@ fun SettingsScreen(onDone: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            Text("后台", style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("后台陪着（常驻通知）")
+                    Text(
+                        "开着：她常驻在通知栏，每分钟看一眼总控和今天的安排；关掉就只在你打开 App 时动。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = backgroundOn,
+                    onCheckedChange = { on ->
+                        backgroundOn = on
+                        store.setBackgroundHeart(on)
+                        if (on) {
+                            if (Build.VERSION.SDK_INT >= 33 &&
+                                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                            ) {
+                                askNotif.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                            HeartService.start(context)
+                        } else {
+                            HeartService.stop(context)
+                        }
+                    },
+                )
+            }
 
             Text("她是谁", style = MaterialTheme.typography.titleSmall)
             OutlinedTextField(
