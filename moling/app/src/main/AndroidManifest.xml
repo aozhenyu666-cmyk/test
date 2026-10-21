@@ -1,8 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- 网络：只连你自己在设置里填的 AI 接口 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 后台心跳：常驻通知（Android 13 起要你同意）+ 前台服务 + 开机后接回来 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 看前台应用：用户在系统“使用情况访问”里手动打开；不开就降级（少看一样，调试页写明） -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
 
     <queries>
         <!-- 语音输入走系统识别界面：录音由系统负责，墨灵不申请录音权限 -->
@@ -34,5 +44,30 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 后台心跳：离开 App 也在。低优先级常驻通知，灭屏时放慢。 -->
+        <service
+            android:name=".HeartService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="个人 AI 伙伴：每分钟看一眼总控和今天的安排" />
+        </service>
+
+        <!-- 开机 / 覆盖安装后，设置里开着就把心跳接回来 -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 通知上的「好 / 不用」：只接受自己 App 发来的广播 -->
+        <receiver
+            android:name=".NotifyReceiver"
+            android:exported="false" />
     </application>
 </manifest>

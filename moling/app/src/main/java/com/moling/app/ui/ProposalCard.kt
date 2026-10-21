@@ -73,8 +73,21 @@ fun ProposalCard(
                     TextButton(onClick = { onRetry(proposal) }) { Text("重试") }
                 }
 
-                else -> Text(
-                    proposal.state.label,
+                ProposalState.SENT -> Column(Modifier.padding(top = 2.dp)) {
+                    Text(
+                        proposal.state.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    // 总控在它那边确认后才有结局；之前不猜，就写「等你确认」。
+                    Text(
+                        proposal.zkOutcome.ifBlank { "等你在总控里确认" },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                else -> Text(                    proposal.state.label,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp, bottom = 4.dp),

@@ -1,22 +1,33 @@
 package com.moling.app
 
 import android.content.Context
+import android.os.PowerManager
 import android.util.Log
 import com.moling.app.data.LlmClient
 import com.moling.app.data.MolingAsk
 import com.moling.app.data.SettingsStore
 import com.moling.core.Brain
+import com.moling.core.BrainFacts
 import com.moling.core.BrainState
 import com.moling.core.ChatResult
 import com.moling.core.Notice
 import com.moling.core.Outcome
 import com.moling.core.Proposal
+import com.moling.core.ProposalState
 import com.moling.core.flow.Cause
 import com.moling.core.flow.Flow
 import com.moling.core.flow.FlowPlan
+import com.moling.core.guard.GuardSample
 import com.moling.core.link.ZkStatus
+import com.moling.core.mind.Actor
+import com.moling.core.mind.Baton
+import com.moling.core.mind.Card
 import com.moling.core.mind.DirectorConfig
 import com.moling.core.mind.FileMindStore
+import com.moling.core.mind.MindState
+import com.moling.core.mind.Opening
+import com.moling.core.mind.Reply
+import com.moling.core.mind.Sense
 import com.moling.core.power.Tier
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +35,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 /*
  * 墨灵的大脑宿主（M4）：App 访问核心逻辑的唯一入口。
@@ -43,10 +55,22 @@ object BrainHost {
     private lateinit var brain: Brain
     private lateinit var settings: SettingsStore
 
+    /** 持有 application context：读前台应用、系统状态、起服务都要用。 */
+    private var appContext: Context? = null
+
     private val _state = MutableStateFlow(BrainState())
 
     /** 界面读这个：水道、对话、提议、预言、日志、最后一次总控状态。 */
     val state: StateFlow<BrainState> = _state
+
+    @Volatile
+    private var lastHeartbeat = 0L
+
+    /** 早晚自动的重入闸（心跳可能叠在一起）。 */
+    private val autoGate = AtomicBoolean(false)
+
+    @Volatile
+    private var lastAutoMinute = -1L
 
     private val _notices = MutableStateFlow<List<Notice>>(emptyList())
 
@@ -62,13 +86,18 @@ object BrainHost {
         synchronized(this) {
             if (ready) return
             val app = context.applicationContext
+            appContext = app
             val dir = File(app.filesDir, "mind").apply { mkdirs() }
 
             ZkBridge.init(app)
             settings = SettingsStore(app)
             val ask = MolingAsk(settings, LlmClient { settings.load() })
             brain = Brain(
-                phone = PhoneFacts(),
+                phone = PhoneFacts(
+                    foreground = { appContext?.let { Usage.foreground(it) } },
+                    usageAllowed = { appContext?.let { Usage.allowed(it) } ?: false },
+                    status = { _state.value.lastStatus },
+                ),
                 ask = ask,
                 store = FileMindStore(File(dir, "moling.json")),
                 mindStore = FileMindStore(File(dir, "director.json")),
@@ -92,6 +121,13 @@ object BrainHost {
 
     /** 等用户决定的提议。 */
     fun pending(now: Long): List<Proposal> = runCatching { brain.pending(now) }.getOrDefault(emptyList())
+
+    /** 调试页用：导演的记忆快照（接力棒、议程、今天打扰次数、模型花费）。 */
+    fun directorSnapshot(): MindState =
+        if (ready) runCatching { brain.director.snapshot() }.getOrDefault(MindState()) else MindState()
+
+    /** 上次心跳跑到的时间（后台服务或前台循环）；0 = 还没跑过。 */
+    fun lastHeartbeatAt(): Long = lastHeartbeat
 
     /** 划掉一条提醒。 */
     fun dismissNotice(at: Long) {
@@ -131,10 +167,100 @@ object BrainHost {
 
     /** App 在前台时每 60 秒一次（打开 App 也调一次）。 */
     suspend fun tickNow(now: Long = System.currentTimeMillis()): List<Notice> {
-        // 这一批不做后台定时、不做无障碍、不读前台应用：类别传空串、guard 传 null。
-        val out = io("tick", { emptyList<Notice>() }) { brain.tick(now, "", null) }
+        lastHeartbeat = now
+        val (category, guard) = tickInputs(now)
+        val out = io("tick", { emptyList<Notice>() }) { brain.tick(now, category, guard) }
         _notices.value = (out + _notices.value).distinctBy { it.at to it.text }.take(3)
+        if (out.isNotEmpty()) runCatching { postNotices(now, out) }
+        runCatching { withContext(Dispatchers.IO) { autoSchedule(now) } }
         return out
+    }
+
+    /**
+     * 早晚自动（M12），都在心跳里做：
+     *  - 早上（6:00–22:00、今天还没有水道、开关开着、亮屏）→ 自动排一份**草稿**（不定稿、不交给总控），发通知；
+     *  - 夜里（23:30–4:00、这一夜还没整理）→ brain.night(now)，返回的话发一条安静的「今天的账」。
+     * 同一个判断一分钟内只做一次：后台服务和前台心跳可能同时跳。
+     */
+    private suspend fun autoSchedule(now: Long) {
+        val ctx = appContext ?: return
+        val minute = now / 60_000L
+        if (lastAutoMinute == minute) return
+        if (!autoGate.compareAndSet(false, true)) return
+        lastAutoMinute = minute
+        try {
+            if (settings.autoPlan() && interactive() && brain.needsPlan(now)) {
+                val plan = runCatching { brain.planDay(now) }.getOrNull()
+                if (plan != null) {
+                    refreshState()
+                    Notify.planReady(ctx, plan.intent)
+                }
+            }
+            if (brain.needsNight(now)) {
+                val text = runCatching { brain.night(now) }.getOrNull()
+                refreshState()
+                if (!text.isNullOrBlank()) Notify.nightAccount(ctx, text)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "早晚自动失败", e)
+        } finally {
+            autoGate.set(false)
+        }
+    }
+
+    private fun refreshState() {
+        _state.value = runCatching { brain.state() }.getOrDefault(_state.value)
+    }
+
+    private fun interactive(): Boolean = runCatching {
+        appContext?.getSystemService(PowerManager::class.java)?.isInteractive ?: true
+    }.getOrDefault(true)
+
+    /**
+     * 把心跳拿到的提醒发成系统通知（M11）。安静时段（总控静默或 23:30–07:00）照发但不响；
+     * 挂着提议的带上「好 / 不用」，和 App 里点卡片同一条路。
+     */
+    private fun postNotices(now: Long, notices: List<Notice>) {
+        val ctx = appContext ?: return
+        val s = _state.value
+        val minute = Flow.minuteOf(now)
+        val silent = s.lastStatus?.quiet == true || minute >= 23 * 60 + 30 || minute < 7 * 60
+        notices.forEach { n ->
+            val p = s.proposals.firstOrNull { it.id == n.proposalId && it.state == ProposalState.PENDING }
+            Notify.notice(ctx, n, p, silent)
+        }
+    }
+
+    /**
+     * 心跳的输入（M10）：前台类别 + 总控健康样本。
+     * 没开「使用情况访问」→ 类别空串、事实里标 unknown；总控连不上 → zkReachable=false。
+     * 墨灵不修总控，canRepair 永远 false。
+     */
+    /** 此刻前台（M15 心跳给导演看）；没权限或读不到给 null。 */
+    fun foregroundNow(now: Long): Foreground? {
+        val ctx = appContext ?: return null
+        return if (Usage.allowed(ctx)) runCatching { Usage.foreground(ctx, now) }.getOrNull() else null
+    }
+
+    private fun tickInputs(now: Long): Pair<String, GuardSample?> {
+        val ctx = appContext
+        val status = _state.value.lastStatus
+        val fg = if (ctx != null && Usage.allowed(ctx)) runCatching { Usage.foreground(ctx, now) }.getOrNull() else null
+        val category = BrainFacts.category(fg?.pkg.orEmpty(), status)
+        val screenOn = runCatching { ctx?.getSystemService(PowerManager::class.java)?.isInteractive ?: true }.getOrDefault(true)
+        val reachable = status != null && status.at > 0 && now - status.at <= 2 * 60_000L
+        val guard = GuardSample(
+            now = now,
+            zkReachable = reachable,
+            secureSettingsOn = reachable && status?.accessibilityOn == true,
+            heartbeatAt = status?.heartbeatAt ?: 0,
+            userDisabled = status?.userDisabled ?: false,
+            screenOn = screenOn,
+            canRepair = false,
+        )
+        return category to guard
     }
 
     // ---------------------------------------------------------------- 体系图 / 权柄
@@ -152,6 +278,51 @@ object BrainHost {
     suspend fun setUserMax(tier: Tier) {
         io("setUserMax", {}) { brain.setUserMax(tier) }
     }
+
+    /** 核实一条论断（写下验证结果，把握升到高）；成功返回 true。 */
+    suspend fun verifyNode(nodeId: String, result: String): Boolean =
+        io("verifyNode", { false }) { brain.verifyNode(nodeId, result, System.currentTimeMillis()) }
+
+    /** 删掉一条论断（连同它的关系）。 */
+    suspend fun removeNode(nodeId: String) {
+        io("removeNode", {}) { brain.removeNode(nodeId) }
+    }
+
+    /** 让模型归纳当前主题；模型不可用返回 null。 */
+    suspend fun synthesize(): String? =
+        io<String?>("synthesize", { null }) { brain.synthesize(System.currentTimeMillis()) }
+
+    /** 体系图的一个缺口 → 一条去聊的提议（点「好」才去）。 */
+    suspend fun askGap(question: String, actor: Actor): Proposal? =
+        io<Proposal?>("askGap", { null }) { brain.askGap(question, actor, System.currentTimeMillis()) }
+
+    // ---------------------------------------------------------------- 导演（M15）
+
+    private val _directorCard = MutableStateFlow<Card?>(null)
+
+    /** 导演此刻要说的那张卡；App 在前台时今天页显示它。 */
+    val directorCard: StateFlow<Card?> = _directorCard
+
+    /** 此刻议程最上面的卡（不调模型）；换页/重开 App 后也能拿回来。 */
+    fun currentCard(now: Long): Card? =
+        if (ready) runCatching { brain.director.currentCard(now) }.getOrNull() else null
+
+    fun setDirectorCard(card: Card?) {
+        _directorCard.value = card
+    }
+
+    /** 没想完的念头（今天页「此刻」卡片下面那一行）。 */
+    fun directorBaton(): Baton? = directorSnapshot().baton
+
+    /** 用户回应了导演的一张卡（继续 / 卡住了 / 有结论 / 休息 / 点选 / 划掉）。返回下一张卡。 */
+    suspend fun reply(reply: Reply): Card? = io<Card?>("reply", { null }) { brain.director.onReply(reply) }
+
+    /** 「去聊」：让导演准备开场白（点「好」之后才调）。 */
+    suspend fun opening(actor: Actor, cardId: String?): Opening? =
+        io<Opening?>("opening", { null }) { brain.director.opening(actor, cardId, System.currentTimeMillis()) }
+
+    /** 喂导演一条感知事件；返回需要立刻显示的卡。 */
+    suspend fun sense(sense: Sense): Card? = io<Card?>("sense", { null }) { brain.director.onSense(sense) }
 
     // ---------------------------------------------------------------- 工具
 
