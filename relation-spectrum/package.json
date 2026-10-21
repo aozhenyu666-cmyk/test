@@ -1,0 +1,16 @@
+{
+  "name": "relation-spectrum",
+  "version": "0.1.0",
+  "private": true,
+  "description": "关系光谱：人际关系与社会博弈的记录、计算与 AI 分析",
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server/server.js",
+    "notion:init": "node server/notion-init.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.137.0"
+  }
+}

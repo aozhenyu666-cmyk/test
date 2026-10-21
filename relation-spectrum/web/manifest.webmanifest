@@ -1,0 +1,9 @@
+{
+  "name": "关系光谱",
+  "short_name": "关系光谱",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f3ee",
+  "theme_color": "#f6f3ee",
+  "lang": "zh-CN"
+}
