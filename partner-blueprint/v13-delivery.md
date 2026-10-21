@@ -1,5 +1,7 @@
 # v13 实施分解、文件映射与验收
 
+> **执行任务已补全（2026-10-21）**：以 [DEEPSEEK-ALL](../moling/DEEPSEEK-ALL.md) 和第十至十三批详细任务书作为新施工入口。C9已由Claude提交，I9已有PR15，不能重复分配C9；本页第4节保留其原设计范围。生产类型优先采用C9实际Focus/WorkbenchState等，不把设计DTO当已存在API。
+
 总设计：[七脑五手](v13-system-blueprint.md)。协议：[契约与跨进程](v13-contracts.md)。模型：[完整 Kotlin](v13/V13Contracts.kt)。
 
 ## 1. 施工方式：统一架构，逐个闭环交付
@@ -110,11 +112,8 @@ flowchart LR
 
 ```text
 仓库 aozhenyu666-cmyk/test，从 ccr-b3c7616e-xlohkd 最新提交开始。
-先读 AGENTS.md、moling/CODEX.md、partner-blueprint/CONTEXT.md，
-再读 partner-blueprint/v13-system-blueprint.md、v13-contracts.md、
-v13/V13Contracts.kt 和 v13-delivery.md。
-本次执行第九批 C9+I9：做出本地案板与第一块实质代工闭环，
-并统一娱乐入口的破雾点选；遵守该批允许的core范围。
-复用已有FOG/Chess/Habits/Atlas/分享/胶囊，不整仓重写，不修改总控规则。
-分里程碑提交，补对应测试与DEVLOG，推分支并给出PR和真机验收步骤。
+读 moling/CODEX.md 与 moling/DEEPSEEK-ALL.md。
+核对已有PR并完成P0，再依次按DEEPSEEK-10至13推进尚未交付的任务。
+C9/I9已有实现不重做；各批缺少的核心与接口按允许范围自行实现和测试。
+每批分提交/PR并更新DEVLOG、V13-PROGRESS，不把单批完成当作全计划完成。
 ```
