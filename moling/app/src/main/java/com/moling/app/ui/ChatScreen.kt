@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -197,13 +198,13 @@ fun ChatScreen() {
             }
         }
 
-        if (listening || sending) {
-            Text(
-                if (listening) "在听，说完会自动停" else "墨灵在想…",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 20.dp, bottom = 2.dp),
-            )
+        if (listening) {
+            Row(Modifier.padding(start = 16.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                com.moling.app.ui.art.InkRipple(Modifier.size(28.dp))
+                Text("在听，说完会自动停", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else if (sending) {
+            com.moling.app.ui.art.InkThinking("墨灵在想…", Modifier.padding(start = 16.dp, bottom = 2.dp))
         }
 
         // 模式条 + 两个特别的按钮（v4）：反驳我、疯想—冷判

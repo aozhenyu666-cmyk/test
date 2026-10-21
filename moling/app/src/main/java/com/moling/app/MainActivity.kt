@@ -30,6 +30,30 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.moling.app.data.SettingsStore
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
+import com.moling.app.ui.BridgeScreen
+import com.moling.app.ui.Mist
+import com.moling.app.ui.MolingFace
+import com.moling.app.ui.Paper
+import com.moling.app.ui.ReadyScreen
+import com.moling.app.ui.art.InkBubbles
+import com.moling.app.ui.art.InkGalaxy
+import com.moling.app.ui.art.InkRing
+import com.moling.app.ui.art.InkWaves
+import com.moling.app.ui.moodLine
+import com.moling.app.ui.moodOf
 import com.moling.app.ui.AtlasScreen
 import com.moling.app.ui.ChatScreen
 import com.moling.app.ui.MolingTheme
@@ -112,18 +136,50 @@ private fun MolingShell(requestedTab: MutableIntState) {
     // 从通知点进来时切到指定标签（包括 Activity 已经在前台的情况）。
     LaunchedEffect(requestedTab.intValue) { tab = requestedTab.intValue }
     var settingsOpen by remember { mutableStateOf(false) }
+    var readyOpen by remember { mutableStateOf(false) }
+    var bridgeOpen by remember { mutableStateOf(false) }
+    val state by BrainHost.state.collectAsState()
+    // 顶栏的小墨滴跟着她的状态变（每 30 秒看一次表）
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { while (true) { now = System.currentTimeMillis(); delay(30_000L) } }
+    val mood = moodOf(state, now)
 
-    // 设置页占满全屏，不套 Scaffold：它自己带返回。
+    // 设置页等占满全屏，不套 Scaffold：它们自己带返回。
     if (settingsOpen) {
         SettingsScreen(onDone = { settingsOpen = false })
+        return
+    }
+    if (bridgeOpen) {
+        BridgeScreen(onDone = { bridgeOpen = false })
+        return
+    }
+    if (readyOpen) {
+        ReadyScreen(
+            onDone = { readyOpen = false },
+            openSettings = { readyOpen = false; settingsOpen = true },
+            openBridge = { readyOpen = false; bridgeOpen = true },
+        )
         return
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("墨灵") },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MolingFace(mood, Modifier.size(38.dp).clickable { tab = 0 })
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text("墨灵", style = MaterialTheme.typography.titleMedium)
+                            Text(moodLine(mood), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Paper),
                 actions = {
+                    IconButton(onClick = { readyOpen = true }) {
+                        InkRing(readyRatio(state), Modifier.size(24.dp))
+                    }
                     IconButton(onClick = { settingsOpen = true }) {
                         Icon(Icons.Filled.Settings, contentDescription = "设置")
                     }
@@ -131,24 +187,28 @@ private fun MolingShell(requestedTab: MutableIntState) {
             )
         },
         bottomBar = {
-            NavigationBar {
+            NavigationBar(containerColor = Paper, tonalElevation = 0.dp) {
+                val itemColors = NavigationBarItemDefaults.colors(indicatorColor = Mist)
                 NavigationBarItem(
                     selected = tab == 0,
                     onClick = { tab = 0 },
-                    icon = { Text("谈") },
+                    icon = { InkBubbles(Modifier.size(30.dp), animated = tab == 0) },
                     label = { Text("对话") },
+                    colors = itemColors,
                 )
                 NavigationBarItem(
                     selected = tab == 1,
                     onClick = { tab = 1 },
-                    icon = { Text("今") },
+                    icon = { InkWaves(Modifier.size(30.dp), lines = 7, animated = tab == 1) },
                     label = { Text("今天") },
+                    colors = itemColors,
                 )
                 NavigationBarItem(
                     selected = tab == 2,
                     onClick = { tab = 2 },
-                    icon = { Text("系") },
+                    icon = { InkGalaxy(Modifier.size(30.dp), animated = tab == 2) },
                     label = { Text("体系") },
+                    colors = itemColors,
                 )
             }
         },
@@ -156,9 +216,20 @@ private fun MolingShell(requestedTab: MutableIntState) {
         Box(Modifier.fillMaxSize().padding(inner)) {
             when (tab) {
                 0 -> ChatScreen()
-                1 -> TodayScreen()
+                1 -> TodayScreen(onReady = { readyOpen = true })
                 else -> AtlasScreen()
             }
         }
     }
+}
+
+/** 顶栏小圆环：不用打开清单也能看出准备了几成（只看不费事的几项）。 */
+private fun readyRatio(s: com.moling.core.BrainState): Float {
+    val now = System.currentTimeMillis()
+    val ok = listOf(
+        s.lastStatus?.let { now - it.at < 10 * 60_000L } == true,
+        HeartService.isRunning(),
+        s.flow?.day == com.moling.core.Brain.calendarDay(now),
+    )
+    return ok.count { it } / ok.size.toFloat()
 }

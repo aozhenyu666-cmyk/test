@@ -43,7 +43,24 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Surface
 import com.moling.app.BrainHost
+import com.moling.app.ui.art.InkBubbles
+import com.moling.app.ui.art.InkClouds
+import com.moling.app.ui.art.InkFlame
+import com.moling.app.ui.art.InkLeaf
+import com.moling.app.ui.art.InkMoon
+import com.moling.app.ui.art.InkMountain
+import com.moling.app.ui.art.InkRipple
+import com.moling.app.ui.art.InkSteps
+import com.moling.app.ui.art.InkThinking
+import com.moling.app.ui.art.InkTitle
+import com.moling.app.ui.art.InkWaves
+import com.moling.app.ui.art.moonPhase
+import com.moling.core.flow.ChannelKind
 import com.moling.core.Brain
 import com.moling.core.Notice
 import com.moling.core.Proposal
@@ -77,7 +94,7 @@ private val todayScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
  * 卡片是共用组件 ui/ProposalCard.kt（同一个包，不用 import）。
  */
 @Composable
-fun TodayScreen() {
+fun TodayScreen(onReady: () -> Unit = {}) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val state by BrainHost.state.collectAsState()
@@ -248,6 +265,23 @@ fun TodayScreen() {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // 0. 还没准备好：一张小卡，点进准备清单
+        val notReady = remember(state.lastStatus) { readyItems(context, {}, {}).count { it.essential && !it.ok } }
+        if (notReady > 0) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(0.7.dp, Seal.copy(alpha = 0.35f)),
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.fillMaxWidth().clickable { onReady() },
+            ) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    InkRipple(Modifier.size(40.dp), color = Seal)
+                    Spacer(Modifier.width(10.dp))
+                    Text("还差 $notReady 步，她才能完整地活。点这里一项项打开。", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                }
+            }
+        }
+
         // 1. 提醒条：最多 3 条，新的在前；挂着提议的带“好 / 不用”。
         notices.take(3).forEach { notice ->
             NoticeBar(
@@ -285,32 +319,62 @@ fun TodayScreen() {
             )
         }
 
-        // 2. 今天的水道
-        SectionTitle("今天的水道")
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(
-                Flow.fmt(Flow.minuteOf(now)),
-                style = MaterialTheme.typography.displaySmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.width(10.dp))
-            Text(
-                flow?.intent ?: "今天还没排",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f).padding(bottom = 6.dp),
-            )
+        // 2. 今天的水道：月相 = 一天走到哪；下面的水纹 = 今天的水在流
+        Box(Modifier.fillMaxWidth()) {
+            InkWaves(Modifier.fillMaxWidth().height(86.dp).align(Alignment.BottomCenter), lines = 14)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 26.dp)) {
+                InkMoon(moonPhase(Flow.minuteOf(now)), Modifier.size(64.dp))
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        Flow.fmt(Flow.minuteOf(now)),
+                        style = MaterialTheme.typography.displaySmall,
+                        fontWeight = FontWeight.Light,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        flow?.intent ?: "今天还没排",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        // 2.1 精力：总控记的做事 / 娱乐；偏离的升级走到第几级
+        state.lastStatus?.let { z ->
+            val total = (z.workMinutesToday + z.playMinutesToday).coerceAtLeast(1)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                InkFlame(z.workMinutesToday / total.toFloat(), Modifier.size(40.dp), animated = z.workMinutesToday > 0)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "做事 ${z.workMinutesToday} 分钟 · 娱乐 ${z.playMinutesToday} 分钟" +
+                        if (z.mainTitle.isNotBlank()) " · 主线「${z.mainTitle}」${if (z.mainDone) "做完了" else if (z.mainStarted) "在做" else "没开始"}" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                val ladder = state.ladder
+                if (ladder != null && !ladder.answered && ladder.idleSince == 0L) {
+                    InkSteps(ladder.rung.ordinal + 1, com.moling.core.watch.Rung.entries.size, Modifier.size(36.dp))
+                    Text(ladder.rung.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                }
+            }
         }
 
         if (flow == null) {
-            Text(
-                "排一条，水才知道往哪流。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Button(onClick = { planDay(false) }, enabled = !planning) {
-                Text(if (planning) "在排…" else "排今天的水道")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                InkMountain(Modifier.size(88.dp))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "排一条，水才知道往哪流。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (planning) InkThinking("她在排…")
+                    else Button(onClick = { planDay(false) }) { Text("排今天的水道") }
+                }
             }
         } else {
             // 当前这一条：正在窗口里的那条；没有就是下一条。
@@ -454,12 +518,7 @@ fun TodayScreen() {
 /** 小节标题。 */
 @Composable
 private fun SectionTitle(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.onSurface,
-    )
+    InkTitle(text, Modifier.padding(top = 6.dp))
 }
 
 /** 提醒条：一句提醒加一个“×”；挂着提议时带“好 / 不用”。 */
@@ -518,12 +577,8 @@ private fun ChannelRow(channel: Channel, current: Boolean) {
             fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
             color = if (current) accent else MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            channel.kind.short,
-            style = MaterialTheme.typography.labelMedium,
-            color = if (current) accent else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Spacer(Modifier.width(6.dp))
+        KindGlyph(channel.kind, current)
         Spacer(Modifier.width(8.dp))
         Text(
             channel.title,
@@ -715,4 +770,17 @@ private fun OpeningDialog(opening: Opening, clipboard: ClipboardManager, onDismi
             }) { Text("复制") }
         },
     )
+}
+
+/** 水道种类的小插画：主河道 = 山，支流 = 叶，源头 = 对话，水潭 = 云，自由水域 = 水纹。只有正在流的那条会动。 */
+@Composable
+private fun KindGlyph(kind: ChannelKind, current: Boolean) {
+    val m = Modifier.size(24.dp)
+    when (kind) {
+        ChannelKind.MAIN -> InkMountain(m)
+        ChannelKind.SIDE -> InkLeaf(0.6f, m)
+        ChannelKind.SPRING -> InkBubbles(m, animated = current)
+        ChannelKind.POOL -> InkClouds(m, animated = current)
+        ChannelKind.FREE -> InkWaves(m, lines = 6, animated = current)
+    }
 }

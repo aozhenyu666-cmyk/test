@@ -8,6 +8,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -66,8 +69,21 @@ fun AboutScreen(onDone: () -> Unit) {
             Text("她对你的了解 · 复盘", style = MaterialTheme.typography.titleMedium)
         }
 
+        // 一株慢慢长的叶子：连续用的天数（两周长满）
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            com.moling.app.ui.art.InkLeaf(state.trust.days / 14f, Modifier.size(84.dp))
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "一起过了连续 ${state.trust.days} 天。她的提议你接受了 ${state.trust.accepted}/${state.trust.proposed}，" +
+                    "她猜对了 ${state.trust.guessRight}/${state.trust.guessJudged}。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+        }
+
         // ---------------------------------------------------------------- 了解
-        Text("她对你的了解", style = MaterialTheme.typography.titleSmall)
+        com.moling.app.ui.art.InkTitle("她对你的了解")
         Text(
             "整份放进她的提示词。她夜里会提修改，你点“好”才算数；你也可以直接改。",
             style = MaterialTheme.typography.bodySmall,
@@ -125,7 +141,7 @@ fun AboutScreen(onDone: () -> Unit) {
         }
 
         // ---------------------------------------------------------------- 周报
-        Text("周报", style = MaterialTheme.typography.titleSmall)
+        com.moling.app.ui.art.InkTitle("周报")
         Button(enabled = !busy, onClick = {
             busy = true
             scope.launch {
@@ -150,7 +166,7 @@ fun AboutScreen(onDone: () -> Unit) {
         }
 
         // ---------------------------------------------------------------- 四个参谋
-        Text("四个参谋", style = MaterialTheme.typography.titleSmall)
+        com.moling.app.ui.art.InkTitle("四个参谋")
         Text(
             "大判断前问一句（要不要放弃、换方向、今天还写不写）：教练、军师、对手、朋友各说一句，再合成一句。",
             style = MaterialTheme.typography.bodySmall,
@@ -178,7 +194,7 @@ fun AboutScreen(onDone: () -> Unit) {
 
         // ---------------------------------------------------------------- 唤醒
         if (state.wakes.isNotEmpty()) {
-            Text("她给自己定的唤醒", style = MaterialTheme.typography.titleSmall)
+            com.moling.app.ui.art.InkTitle("她给自己定的唤醒")
             state.wakes.forEach { w ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("${hm(w.at)}${if (w.daily) "（每天）" else ""} · ${w.note}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))

@@ -9,6 +9,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -82,6 +85,11 @@ fun BridgeScreen(onDone: () -> Unit) {
             TextButton(onClick = onDone) { Text("← 返回") }
             Text("贯通：Notion · GPT", style = MaterialTheme.typography.titleMedium)
         }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            com.moling.app.ui.art.InkBubbles(Modifier.size(72.dp))
+            Spacer(Modifier.width(8.dp))
+            com.moling.app.ui.art.InkPapers(Modifier.size(60.dp), animated = busy)
+        }
         Text(
             "ChatGPT 和 Notion AI 都不让别的程序直接找它们聊，也读不到它们的聊天记录；但它们都能读写 Notion。" +
                 "所以墨灵在 Notion 里放一块「${Mirror.BOARD_TITLE}」（她知道的、这几天的判断、想问的问题），" +
@@ -92,7 +100,7 @@ fun BridgeScreen(onDone: () -> Unit) {
         )
 
         // ---------------------------------------------------------------- Notion
-        Text("Notion", style = MaterialTheme.typography.titleSmall)
+        com.moling.app.ui.art.InkTitle("Notion")
         Text(
             "1. 电脑或手机浏览器打开 notion.so/my-integrations，新建一个“内部集成”，复制它的密钥。\n" +
                 "2. 在 Notion 里建一个页面（比如叫“墨灵”），右上角 ··· → 连接 → 选刚才的集成。\n" +
@@ -141,7 +149,7 @@ fun BridgeScreen(onDone: () -> Unit) {
         }
 
         // ---------------------------------------------------------------- 她想问 GPT 的
-        Text("她想问 GPT 的", style = MaterialTheme.typography.titleSmall)
+        com.moling.app.ui.art.InkTitle("她想问 GPT 的")
         Text(
             "她夜里整理完、或者聊天里拿不准时，会自己记下要问的（最多同时 5 个），下次同步写上黑板。",
             style = MaterialTheme.typography.bodySmall,
@@ -178,7 +186,7 @@ fun BridgeScreen(onDone: () -> Unit) {
         }
 
         // ---------------------------------------------------------------- ChatGPT 的记录
-        Text("你和 GPT 聊过的", style = MaterialTheme.typography.titleSmall)
+        com.moling.app.ui.art.InkTitle("你和 GPT 聊过的")
         Text(
             "ChatGPT 设置 → 数据控制 → 导出数据，邮件里会收到一个压缩包。下载到手机后在这里选它（或解压出来的 conversations.json）。" +
                 "她只收上次导入之后更新过的、最新的 20 段，一段段把关后收进体系图。文件只在手机上读，不上传。",
@@ -191,7 +199,7 @@ fun BridgeScreen(onDone: () -> Unit) {
         if (importText.isNotBlank()) Text(importText, style = MaterialTheme.typography.bodySmall)
 
         // ---------------------------------------------------------------- 深想模型
-        Text("深想模型", style = MaterialTheme.typography.titleSmall)
+        com.moling.app.ui.art.InkTitle("深想模型")
         Text(
             "夜里整理、收收件箱、想问 GPT 的、归纳体系、周报这些要想得深的事，换一个更强的模型；平时聊天还用上面那个（便宜、快）。" +
                 "DeepSeek 填 deepseek-reasoner 就行（地址和密钥留空=沿用）。想让 GPT 直接参与她的思考：地址填 https://api.openai.com/v1、" +

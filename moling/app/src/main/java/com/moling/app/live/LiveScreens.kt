@@ -53,7 +53,12 @@ import com.moling.app.BrainHost
 import com.moling.app.MainActivity
 import com.moling.app.Notify
 import com.moling.app.R
+import androidx.compose.foundation.layout.width
 import com.moling.app.ui.MolingFace
+import com.moling.app.ui.art.InkHourglass
+import com.moling.app.ui.art.InkRipple
+import com.moling.app.ui.art.InkThinking
+import com.moling.app.ui.art.WashBlue
 import com.moling.app.ui.MolingTheme
 import com.moling.app.ui.Paper
 import com.moling.app.ui.Seal
@@ -216,13 +221,21 @@ class GateActivity : ComponentActivity() {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             val left = ((maxMs - (now - startedAt)).coerceAtLeast(0) / 1000).toInt()
-            Text(
-                if (released) "放行了" else "墨灵拦在你面前${if (label.isNotBlank()) " · $label" else ""} · 最多再 ${left / 60}:${"%02d".format(left % 60)}",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!released) InkHourglass(left * 1000f / maxMs, Modifier.size(34.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    if (released) "放行了" else "墨灵拦在你面前${if (label.isNotBlank()) " · $label" else ""} · 最多再 ${left / 60}:${"%02d".format(left % 60)}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Spacer(Modifier.height(8.dp))
-            MolingFace(mood, Modifier.size(170.dp))
+            Box(contentAlignment = Alignment.Center) {
+                // 她身后一圈淡淡的涟漪：她刚“落”到你面前
+                InkRipple(Modifier.size(230.dp), color = if (mood == Mood.POUT) Seal else WashBlue)
+                MolingFace(mood, Modifier.size(170.dp))
+            }
             Surface(shape = MaterialTheme.shapes.large, tonalElevation = 3.dp, shadowElevation = 2.dp, color = Color.White) {
                 Text(line, Modifier.padding(16.dp).fillMaxWidth(), style = MaterialTheme.typography.titleMedium)
             }
@@ -257,7 +270,7 @@ class GateActivity : ComponentActivity() {
                         }.onFailure { Toast.makeText(this@GateActivity, "语音不可用，直接打字吧", Toast.LENGTH_SHORT).show() }
                     }) { Text("说话") }
                     Spacer(Modifier.weight(1f))
-                    Button(enabled = !busy && text.isNotBlank(), onClick = { send() }) { Text(if (busy) "她在想…" else "回她") }
+                    if (busy) InkThinking("她在想…") else Button(enabled = text.isNotBlank(), onClick = { send() }) { Text("回她") }
                 }
                 // 急事：永远在，点了马上走（记一笔）
                 TextButton(enabled = !busy, onClick = {
