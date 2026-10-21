@@ -4,9 +4,16 @@
 >
 > 第四、五批已合入；Claude 的 C4–C7、v5–v12，以及 DeepSeek 第六、七批也已合入。
 > 下方第四、五批说明是历史记录，不要重做。当前工作分支仍为 `ccr-b3c7616e-xlohkd`，新施工从它的最新提交开始。
-> **给 DeepSeek 的新任务：[第八批：发布稳定与验收收口](DEEPSEEK-8.md)**。先做发布流程与文档，等待用户真机反馈，不先扩功能。
+> **给 DeepSeek 的新任务：[第八批：发布稳定与验收收口](DEEPSEEK-8.md)**。第八批独立处理发布流程与文档；新增系统能力按下面 v13 计划另开任务实施。
 > 用户先看 [10 分钟测试](TESTING-QUICK.md)，完整流程见 [TESTING.md](TESTING.md)。
 > 本次 App 基线为 `b838311`；已有键盘、返回和重复点选修正，仍待真机验证。下面的旧测试数不代表本次新跑的结果。
+
+> **v13 总设计与新施工入口（2026-10-21）**
+>
+> 用户与 Gemini 的创意已综合为 [七脑＋五手总设计](../partner-blueprint/v13-system-blueprint.md)、[契约与跨进程协议](../partner-blueprint/v13-contracts.md)、[完整 Kotlin 定义](../partner-blueprint/v13/V13Contracts.kt) 和 [交付计划](../partner-blueprint/v13-delivery.md)。
+> 新增能力的第一波是 [第九批：本地案板与实质代工](DEEPSEEK-9.md)，从资料到草稿、挑刺、采用、导出形成闭环。第八批发布修复保持独立。
+> 四五批的“界面任务不改 core”仍适用；第九批 C9 是限定范围的独立内核任务，允许清单见任务文档。不得借总重构顺手修改总控授权、放宽规则或签名。
+> 当前新增文档是实施规格，不表示 v13 已装进用户 APK；后续施工和验收分批进行，不重做已有 FOG/Chess/Habits/Atlas。
 
 > 你接 DeepSeek 的班，继续做墨灵（`moling/`）和总控里接墨灵的那部分界面。先读这一页，再读 `partner-blueprint/CONTEXT.md`（一页纸的来龙去脉）。
 
