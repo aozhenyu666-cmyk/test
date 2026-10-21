@@ -68,6 +68,10 @@ data class FlowPlan(
 @Serializable
 enum class Cause(val label: String) { STUCK("卡住了"), TIRED("累了"), LATE("晚了"), CONFLICT("情况变了") }
 
+/** 日历上的固定安排（课、会、约），排水道时绕开。 */
+@Serializable
+data class Busy(val start: Long, val end: Long, val title: String)
+
 /** 偏离：该在某条水道里，却在别处。 */
 data class Drift(val channel: Channel, val lateMin: Int)
 
@@ -131,6 +135,36 @@ object Flow {
         return list.map { if (it.id != exceptId && it.open && it.startMin > fromMin) it.copy(startMin = it.startMin + by) else it }
     }
 
+    /** 固定安排换成当天的分钟区间（跨出当天的截掉）。 */
+    private fun busyMinutes(i: Inputs): List<IntRange> {
+        val start = dayStart(i.day)
+        return i.busy.mapNotNull { b ->
+            val s = ((b.start - start) / 60_000L).toInt().coerceIn(0, 24 * 60)
+            val e = ((b.end - start) / 60_000L).toInt().coerceIn(0, 24 * 60)
+            if (e > s) s until e else null
+        }
+    }
+
+    /**
+     * 主河道、支流、源头和固定安排重叠的，往后挪到安排结束；挪了之后也不和前面已排好的水道重叠。
+     * 水潭和自由水域跟着前一条走（同样往后挪）。
+     */
+    fun avoid(list: List<Channel>, busy: List<IntRange>): List<Channel> {
+        if (busy.isEmpty()) return list
+        var prevEnd = -1
+        return list.sortedBy { it.startMin }.map { c ->
+            if (c.startMin < 0) return@map c
+            var start = maxOf(c.startMin, prevEnd)
+            var moved = true
+            while (moved) {
+                moved = false
+                busy.firstOrNull { r -> start < r.last + 1 && start + c.minutes > r.first }?.let { r -> start = r.last + 1; moved = true }
+            }
+            prevEnd = start + c.minutes
+            c.copy(startMin = start)
+        }
+    }
+
     /** 超出 23:00 的：先去掉支流和自由水域，主河道和源头保留（截短也不删）。 */
     private fun fitDay(list: List<Channel>): Pair<List<Channel>, List<Channel>> {
         val over = list.filter { it.open && it.startMin >= 0 && it.endMin > DAY_END }
@@ -157,6 +191,8 @@ object Flow {
         /** 精力最好的几个钟头（0..23），没有就空。 */
         val bestHours: List<Int>,
         val freeMinutes: Int,
+        /** 日历上的固定安排；主河道、支流、源头不和它们重叠。 */
+        val busy: List<Busy> = emptyList(),
     )
 
     /** 不调模型的兜底水道。 */
@@ -175,7 +211,7 @@ object Flow {
         chans += Channel("free-0", ChannelKind.FREE, "自由时间", mainStart + 80, i.freeMinutes.coerceIn(0, 120).takeIf { it > 0 } ?: 30, why = "挣来的")
         val risks = i.patterns.take(2).map { Risk(mainStart + 60, it, "到点前 10 分钟我先提醒，必要时开专注锁") }
         val intent = if (main.isNotBlank()) "今天只推「$main」" else "今天先把要推的那件事找出来"
-        return FlowPlan(i.day, intent, fitDay(chans.filter { it.startMin >= 0 }).first, risks, createdAt = i.now)
+        return FlowPlan(i.day, intent, fitDay(avoid(chans.filter { it.startMin >= 0 }, busyMinutes(i))).first, risks, createdAt = i.now)
     }
 
     fun morningPrompt(i: Inputs) = buildString {
@@ -186,6 +222,7 @@ object Flow {
         if (i.deliverables.isNotEmpty()) appendLine("【本周要交】${i.deliverables.joinToString("、")}")
         if (i.patterns.isNotEmpty()) appendLine("【我注意到的模式】${i.patterns.joinToString("；")}")
         if (i.bestHours.isNotEmpty()) appendLine("【精力好的钟头】${i.bestHours.joinToString("、") { "$it 点" }}")
+        if (i.busy.isNotEmpty()) appendLine("【固定安排（不能占）】" + i.busy.joinToString("；") { "${fmt(minuteOf(it.start))}–${fmt(minuteOf(it.end))} ${it.title}" })
         appendLine("【今天能挣的娱乐】约 ${i.freeMinutes} 分钟")
         appendLine()
         appendLine("你是他的规划者。设计今天的水道：只有一条主河道；可以有一两条支流；至少一个源头（去和 GPT / Gemini 想清楚一件事，10–20 分钟）；")
@@ -213,7 +250,7 @@ object Flow {
             val at = parseHm(f.getOrNull(0) ?: "") ?: return@mapNotNull null
             Risk(at, f.getOrNull(1).orEmpty().take(60), f.getOrNull(2).orEmpty().take(60))
         }.take(3).toList()
-        return FlowPlan(i.day, intent.ifBlank { "今天只推「${chans.first { it.kind == ChannelKind.MAIN }.title}」" }, fitDay(chans).first, risks, createdAt = i.now, byModel = true)
+        return FlowPlan(i.day, intent.ifBlank { "今天只推「${chans.first { it.kind == ChannelKind.MAIN }.title}」" }, fitDay(avoid(chans, busyMinutes(i))).first, risks, createdAt = i.now, byModel = true)
     }
 
     /** 定稿后交给总控的指令：主河道定为主线，主河道和支流排进总控的行动。 */

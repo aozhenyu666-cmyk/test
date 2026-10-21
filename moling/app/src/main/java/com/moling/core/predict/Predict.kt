@@ -32,7 +32,18 @@ data class Prediction(
 
 /** 每天的数（对账、找规律、给下一次预言当底子）。 */
 @Serializable
-data class DayStat(val day: String, val play: Int, val work: Int, val mainStarted: Boolean, val spendYuan: Double)
+data class DayStat(
+    val day: String,
+    val play: Int,
+    val work: Int,
+    val mainStarted: Boolean,
+    val spendYuan: Double,
+    /** 主线：没开始 0、开始了 0.5、做完了 1；-1 = 不知道（旧数据）。 */
+    val mainScore: Double = -1.0,
+    /** 这一天偏离了几次（阶梯从头开始的次数）、她出声打扰了几次。 */
+    val drifts: Int = 0,
+    val nudges: Int = 0,
+)
 
 object Predict {
     fun measure(m: Metric, s: ZkStatus): Double = when (m) {

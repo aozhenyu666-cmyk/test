@@ -164,7 +164,13 @@ class BrainMoreTest {
         assertEquals(com.moling.core.power.Tier.STEWARD, b.tier())
         b.planDay(at(9))
         b.confirmFlow(at(9, 1))
-        val n = b.tick(at(10, 15), "ENTERTAINMENT").single { it.kind == "drift" }
+        b.tick(at(10, 15), "ENTERTAINMENT")
+        b.tick(at(10, 20), "ENTERTAINMENT")
+        val ask = b.tick(at(10, 25), "ENTERTAINMENT").single { it.kind == "drift" }
+        assertEquals("提议这一级管家也要先问", ProposalState.PENDING, b.state().proposals.single { it.id == ask.proposalId }.state)
+        val n = b.tick(at(10, 30), "ENTERTAINMENT").single { it.kind == "drift" }
+        assertEquals("AUTO", n.rung)
+        assertEquals("上一级没回应的提议作废", ProposalState.EXPIRED, b.state().proposals.single { it.id == ask.proposalId }.state)
         val focus = b.state().proposals.single { it.id == n.proposalId }
         assertTrue("管家按授权书直接收紧", focus.auto)
         assertEquals(ProposalState.SENT, focus.state)
@@ -173,7 +179,7 @@ class BrainMoreTest {
         val before = b.state().decisions.size
         zk.results[focus.zkIds.single()] = ZkResult("VETOED", "")
         focus.let { f -> b.state().proposals.filter { it.id != f.id }.flatMap { it.zkIds }.forEach { zk.results[it] = ZkResult("DONE", "") } }
-        b.tick(at(10, 16), "ENTERTAINMENT")
+        b.tick(at(10, 31), "ENTERTAINMENT")
         assertEquals("你在总控里取消了", b.state().proposals.single { it.id == focus.id }.zkOutcome)
         assertTrue(b.state().decisions.drop(before).any { !it.accepted })
     }

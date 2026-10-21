@@ -120,13 +120,21 @@ class BrainTest {
         val b = brain(zk)
         b.planDay(at(9))
         b.confirmFlow(at(9, 1))
+        // 升级阶梯：提醒一句 → 5 分钟后小窗 → 再 5 分钟提议开锁（规划者到此为止）
         val n = b.tick(at(10, 15), "ENTERTAINMENT").single { it.kind == "drift" }
         assertTrue(n.text.contains("申论第二题"))
-        val focus = b.state().proposals.single { it.id == n.proposalId }
+        assertEquals("NOTICE", n.rung)
+        assertEquals("", n.proposalId)
+        assertTrue("5 分钟内不再出声", b.tick(at(10, 18), "ENTERTAINMENT").none { it.kind == "drift" })
+        assertEquals("WINDOW", b.tick(at(10, 20), "ENTERTAINMENT").single { it.kind == "drift" }.rung)
+        val p = b.tick(at(10, 25), "ENTERTAINMENT").single { it.kind == "drift" }
+        assertEquals("PROPOSE", p.rung)
+        val focus = b.state().proposals.single { it.id == p.proposalId }
         assertEquals(Power.TIGHTEN, focus.power)
         assertTrue((focus.act as Act.Zk).commands.single() is ZkCommand.StartFocus)
-        assertTrue(b.tick(at(10, 20), "ENTERTAINMENT").none { it.kind == "drift" })
+        assertTrue("规划者最高到提议", b.tick(at(10, 31), "ENTERTAINMENT").none { it.kind == "drift" })
         assertTrue("规划者不直接收紧：专注锁只是提议", zk.sent.none { it is ZkCommand.StartFocus })
+        assertEquals(1, b.state().driftsToday)
     }
 
     @Test fun advisorOnlyWarnsOnDrift() = runTest {
@@ -134,8 +142,9 @@ class BrainTest {
         b.setUserMax(Tier.ADVISOR)
         b.planDay(at(9))
         b.confirmFlow(at(9, 1))
-        val n = b.tick(at(10, 15), "ENTERTAINMENT").single { it.kind == "drift" }
-        assertEquals("", n.proposalId)
+        assertEquals("", b.tick(at(10, 15), "ENTERTAINMENT").single { it.kind == "drift" }.proposalId)
+        assertEquals("WINDOW", b.tick(at(10, 20), "ENTERTAINMENT").single { it.kind == "drift" }.rung)
+        assertTrue("参谋最高到小窗", b.tick(at(10, 26), "ENTERTAINMENT").none { it.kind == "drift" })
     }
 
     @Test fun ironRulesFilterSuggestions() = runTest {

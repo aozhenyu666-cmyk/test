@@ -2,6 +2,7 @@ package com.moling.core.talk
 
 import com.moling.core.link.ZkCommand
 import com.moling.core.mind.Actor
+import com.moling.core.mind.Conclude
 import kotlinx.serialization.Serializable
 
 /*
@@ -23,6 +24,8 @@ sealed interface TalkAction {
     data class Summon(val actor: Actor, val topic: String) : TalkAction
     data class AtlasNote(val topic: String, val claim: String) : TalkAction
     data class Reroute(val cause: String) : TalkAction
+    /** 她给自己定一个唤醒：到 [at] 来找他，说 [note]。 */
+    data class Wake(val at: Long, val note: String) : TalkAction
 }
 
 data class TalkReply(val text: String, val actions: List<TalkAction>, val byModel: Boolean)
@@ -44,9 +47,15 @@ object Talk {
         tierText: String,
         history: List<Turn>,
         user: String,
+        mode: TalkMode = TalkMode.WORK,
+        about: String = "",
+        numbers: String = "",
     ) = buildString {
         appendLine("【你是】$persona")
         appendLine("【你的权柄】$tierText")
+        appendLine("【这次的模式】${mode.label}：${mode.rules}")
+        if (about.isNotBlank()) appendLine("【你对他的了解（他确认过的）】\n${about.take(1200)}")
+        if (numbers.isNotBlank()) appendLine("【数字】$numbers（对不上时温和地把数字摆出来，不指责）")
         appendLine("【此刻】")
         appendLine(now)
         if (flow.isNotBlank()) appendLine("【今天的水道】\n$flow")
@@ -66,13 +75,14 @@ object Talk {
         appendLine("【动作】严管｜分钟（临时严管，到点自己解除）")
         appendLine("【动作】减娱乐｜分钟（只减今天的）")
         appendLine("【动作】约定｜他答应做什么｜HH:MM 前｜怎么检查")
+        appendLine("【动作】提醒我｜HH:MM 或 N 分钟后｜到时候对他说什么（你自己到点会被叫醒）")
         appendLine("【动作】去聊｜gemini 或 chatgpt｜聊什么")
         appendLine("【动作】记下｜主题｜一句结论")
         append("【动作】改道｜卡住了 / 累了 / 晚了 / 情况变了")
     }
 
     /** 拆开回复正文和动作行。[dayStart] 用来把 HH:MM 换成时间戳。 */
-    fun parse(reply: String, dayStart: Long, why: String = "对话里说好的"): TalkReply {
+    fun parse(reply: String, dayStart: Long, why: String = "对话里说好的", now: Long = 0): TalkReply {
         val actions = mutableListOf<TalkAction>()
         val text = reply.lines().filterNot { it.trim().startsWith("【动作】") }.joinToString("\n").trim()
         Regex("""【动作】([^\n]+)""").findAll(reply).take(2).forEach { m ->
@@ -104,6 +114,16 @@ object Talk {
                 }
                 "记下" -> if (!f.getOrNull(2).isNullOrBlank()) actions += TalkAction.AtlasNote(f.getOrNull(1).orEmpty().ifBlank { "杂项" }, f[2])
                 "改道" -> f.getOrNull(1)?.let { actions += TalkAction.Reroute(it) }
+                "提醒我" -> {
+                    val w = f.getOrNull(1).orEmpty()
+                    val inMin = Regex("""(\d+)\s*分钟后""").find(Conclude.cnDurations(w))?.groupValues?.get(1)?.toIntOrNull()
+                    val at = when {
+                        inMin != null && now > 0 -> now + inMin.coerceIn(1, 24 * 60) * 60_000L
+                        else -> hm(w)?.let { t -> if (now > 0 && t <= now) t + 24 * 3_600_000L else t }
+                    }
+                    val note = f.getOrNull(2).orEmpty()
+                    if (at != null && note.isNotBlank()) actions += TalkAction.Wake(at, note.take(80))
+                }
             }
         }
         return TalkReply(text, actions, true)

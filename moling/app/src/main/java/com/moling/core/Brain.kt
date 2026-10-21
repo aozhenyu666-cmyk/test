@@ -42,6 +42,26 @@ import com.moling.core.predict.Prediction
 import com.moling.core.talk.Talk
 import com.moling.core.talk.TalkAction
 import com.moling.core.talk.Turn
+import com.moling.core.talk.TalkMode
+import com.moling.core.talk.Modes
+import com.moling.core.watch.Claim
+import com.moling.core.watch.Claims
+import com.moling.core.watch.Ladder
+import com.moling.core.watch.Ladders
+import com.moling.core.watch.Rung
+import com.moling.core.watch.Wake
+import com.moling.core.watch.Wakes
+import com.moling.core.review.About
+import com.moling.core.review.AboutVersion
+import com.moling.core.review.Council
+import com.moling.core.review.Councils
+import com.moling.core.review.Reviews
+import com.moling.core.review.WeekReport
+import com.moling.core.rhythm.Rhythm
+import com.moling.core.rhythm.ScreenEvent
+import com.moling.core.rhythm.SleepNight
+import com.moling.core.flow.Busy
+import com.moling.core.flow.ChannelKind
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -102,6 +122,10 @@ sealed interface Act {
     /** 今天的水道改道。 */
     @Serializable @SerialName("reroute")
     data class Reroute(val cause: Cause, val channelId: String, val day: String) : Act
+
+    /** 她想改“对你的了解”：你点“好”才换成 [text]。 */
+    @Serializable @SerialName("about")
+    data class About(val text: String, val what: String) : Act
 }
 
 @Serializable
@@ -144,7 +168,14 @@ data class Decision(val at: Long, val accepted: Boolean)
 
 /** 大脑要提醒用户的一件事（通知、小窗、今天页的横条）。 */
 @Serializable
-data class Notice(val kind: String, val text: String, val at: Long, val proposalId: String = "")
+data class Notice(
+    val kind: String,
+    val text: String,
+    val at: Long,
+    val proposalId: String = "",
+    /** 偏离提醒走到了哪一级（[Rung.name]）：NOTICE 发通知，WINDOW 起小窗展开。其他提醒为空。 */
+    val rung: String = "",
+)
 
 /** 大脑的全部状态，整份存成一段 JSON。 */
 @Serializable
@@ -167,13 +198,33 @@ data class BrainState(
     val lastNightDay: String = "",
     /** 每个主题的体系总结（主题 id → 一段话）。 */
     val synthesis: Map<String, String> = emptyMap(),
+    /** 此刻这次偏离走到哪一级了。 */
+    val ladder: Ladder? = null,
+    /** 他和演员说过的、能对账的话（最近 50 条）。 */
+    val claims: List<Claim> = emptyList(),
+    /** “她对你的了解”（你确认过的那一版）和历史版本。 */
+    val about: String = "",
+    val aboutVersions: List<AboutVersion> = emptyList(),
+    /** 每周的成绩单（最近 12 周）。 */
+    val weeks: List<WeekReport> = emptyList(),
+    /** 他手动选的说话模式（一小时内有效）。 */
+    val mode: TalkMode? = null,
+    val modeAt: Long = 0,
+    /** 最近 30 晚的睡眠（亮屏 / 熄屏推算）。 */
+    val nights: List<SleepNight> = emptyList(),
+    /** 她给自己定的唤醒。 */
+    val wakes: List<Wake> = emptyList(),
+    /** 今天（[counterDay]）偏离了几次、她出声打扰了几次。 */
+    val counterDay: String = "",
+    val driftsToday: Int = 0,
+    val nudgesToday: Int = 0,
     /** 提议编号用的流水号。 */
     val seq: Long = 0,
     /** 给人看的行动日志（做了什么、交给总控什么、总控怎么回的）。 */
     val log: List<String> = emptyList(),
 )
 
-data class ChatResult(val text: String, val proposals: List<Proposal>, val byModel: Boolean)
+data class ChatResult(val text: String, val proposals: List<Proposal>, val byModel: Boolean, val mode: TalkMode = TalkMode.WORK)
 
 /** 点“好” / 重试的结果。[opening] 只在“去聊”时有，App 拿它打开演员。 */
 data class Outcome(val ok: Boolean, val message: String, val opening: Opening? = null)
@@ -210,14 +261,25 @@ class Brain(
 
     // ------------------------------------------------------------------ 对话
 
-    suspend fun chat(text: String, now: Long): ChatResult = lock.withLock {
-        refresh()
+    /**
+     * 和她说一句。[mode] 不为空 = 他在模式条上选的（记一小时）；为空就用他选过的，或者按局面猜。
+     * 他说的“做了 N 分钟 / 刷了 N 分钟”会和总控的数对一下，对不上的数字写进提示词，让她温和地摆出来。
+     */
+    suspend fun chat(text: String, now: Long, mode: TalkMode? = null): ChatResult = lock.withLock {
+        val s = refresh()
         val cfg = config()
         val day = calendarDay(now)
         val flow = st.flow?.takeIf { it.day == day }
+        val flowNow = flow?.let { Flow.current(it, Flow.minuteOf(now)) }
         val baton = director.snapshot().baton
         val batonText = baton?.nextAsk?.ifBlank { baton.question }.orEmpty()
         val topic = st.atlas.topics.firstOrNull { it.id == st.topicId }
+        if (mode != null) st = st.copy(mode = mode, modeAt = now)
+        val late = s?.takeIf { it.mainPlannedAt > 0 && now > it.mainPlannedAt && !it.mainStarted && !it.mainDone }
+            ?.let { ((now - it.mainPlannedAt) / 60_000).toInt() } ?: 0
+        val use = mode ?: st.mode?.takeIf { now - st.modeAt < 3_600_000L }
+            ?: Modes.guess(text, late, s?.mainStarted == true, flowNow)
+        val numbers = noteClaim(text, "他", now)
         val prompt = Talk.prompt(
             persona = cfg.persona,
             now = director.nowText(now),
@@ -227,19 +289,39 @@ class Brain(
             tierText = tierText(tier()),
             history = st.talk,
             user = text,
+            mode = use,
+            about = st.about,
+            numbers = numbers,
         )
-        val parsed = model(cfg.persona, prompt)?.let { Talk.parse(it, Flow.dayStart(day)) }?.takeIf { it.text.isNotBlank() }
-        val reply = parsed ?: Talk.local(text, batonText, flow?.let { Flow.current(it, Flow.minuteOf(now)) }?.title.orEmpty())
+        val parsed = model(cfg.persona, prompt)?.let { Talk.parse(it, Flow.dayStart(day), now = now) }?.takeIf { it.text.isNotBlank() }
+        val reply = parsed ?: Talk.local(text, batonText, flowNow?.title.orEmpty())
         val made = reply.actions.mapNotNull { a -> fromTalk(a, now, flow) }
-        st = st.copy(talk = (st.talk + Turn("他", text, now) + Turn("墨灵", reply.text, now)).takeLast(TALK_KEEP))
+        // 训练模式的分只留在日志里（她每轮最后写【分】），正文不显示
+        val shown = reply.text.lines().filterNot { it.trim().startsWith("【分】") }.joinToString("\n").trim()
+        Modes.score(reply.text).takeIf { it >= 0 }?.let { st = st.copy(log = st.log + "${hm(now)} 训练：这一轮 $it 分") }
+        st = st.copy(talk = (st.talk + Turn("他", text, now) + Turn("墨灵", shown, now)).takeLast(TALK_KEEP))
         save()
-        ChatResult(reply.text, made, reply.byModel)
+        ChatResult(shown, made, reply.byModel, use)
+    }
+
+    /** 认出能对账的说法就记下、对一下；对不上返回给提示词的一句，否则空串。 */
+    private fun noteClaim(text: String, who: String, now: Long): String {
+        val c = Claims.parse(text, who, now) ?: return ""
+        val v = Claims.check(c, st.lastStatus)
+        st = st.copy(claims = (st.claims + c.copy(verdict = v)).takeLast(50))
+        if (v == "对得上" || v == "看不到") return ""
+        st = st.copy(log = st.log + "${hm(now)} 说法对不上：「${c.text.take(30)}」，$v")
+        return "${if (who == "他") "他说" else "${who}说"}「${c.text.take(40)}」，$v"
     }
 
     private fun fromTalk(a: TalkAction, now: Long, flow: FlowPlan?): Proposal? = when (a) {
         is TalkAction.Zk -> proposeZk(listOf(a.command), a.command.reason, now)
         is TalkAction.Summon -> propose(Act.Summon(a.actor, a.topic), "去 ${a.actor.label} 聊：${a.topic.ifBlank { "接着想" }}", "对话里说到的", Power.SUMMON, now)
         is TalkAction.AtlasNote -> propose(Act.AtlasNote(a.topic, a.claim), "在「${a.topic}」里记一条：${a.claim.take(40)}", "对话里说到的", Power.PLAN, now)
+        is TalkAction.Wake -> {
+            setWakeLocked(a.at, a.note, false, now)
+            null
+        }
         is TalkAction.Reroute -> {
             val cause = Cause.entries.firstOrNull { a.cause.contains(it.label) } ?: Cause.CONFLICT
             val c = flow?.let { Flow.current(it, Flow.minuteOf(now)) }
@@ -250,8 +332,12 @@ class Brain(
 
     // ------------------------------------------------------------------ 水道
 
-    /** 排今天的水道（草稿，没交给总控）。已经有今天的就直接返回，除非 [force]。顺便下今天的预言。 */
-    suspend fun planDay(now: Long, force: Boolean = false): FlowPlan = lock.withLock {
+    /**
+     * 排今天的水道（草稿，没交给总控）。已经有今天的就直接返回，除非 [force]。顺便下今天的预言。
+     * [busy]：日历上的固定安排（App 读系统日历传进来），水道绕开它们。
+     * 用到“对你的了解”里的条目和昨晚的睡眠；睡得少，主河道每段不超过 45 分钟。
+     */
+    suspend fun planDay(now: Long, force: Boolean = false, busy: List<Busy> = emptyList()): FlowPlan = lock.withLock {
         val day = calendarDay(now)
         st.flow?.takeIf { it.day == day && !force }?.let { return@withLock it }
         val s = refresh()
@@ -265,12 +351,19 @@ class Brain(
             baton = baton?.nextAsk?.ifBlank { baton.question }.orEmpty(),
             aims = s?.aims.orEmpty(),
             deliverables = s?.weekDeliverables.orEmpty(),
-            patterns = mind.memories.filter { it.kind == MemoryKind.PATTERN }.sortedByDescending { it.hits }.take(3).map { it.text },
+            patterns = (About.bullets(st.about).ifEmpty {
+                mind.memories.filter { it.kind == MemoryKind.PATTERN }.sortedByDescending { it.hits }.take(3).map { it.text }
+            } + listOf(Rhythm.advice(st.nights.firstOrNull { it.day == day })).filter { it.isNotBlank() }),
             bestHours = emptyList(),
             freeMinutes = s?.playLeftMin?.takeIf { it >= 0 } ?: 60,
+            busy = busy,
         )
         val system = config().persona
-        val plan = model(system, Flow.morningPrompt(inputs))?.let { Flow.parse(it, inputs) } ?: Flow.local(inputs)
+        val drafted = model(system, Flow.morningPrompt(inputs))?.let { Flow.parse(it, inputs) } ?: Flow.local(inputs)
+        val short = Rhythm.advice(st.nights.firstOrNull { it.day == day }).isNotBlank()
+        val plan = if (!short) drafted else drafted.copy(channels = drafted.channels.map {
+            if (it.kind == ChannelKind.MAIN && it.minutes > 45) it.copy(minutes = 45, why = (it.why + "（昨晚睡得少，先 45 分钟）").trim()) else it
+        })
         st = st.copy(flow = plan, log = st.log + "${hm(now)} 排了今天的水道：${plan.intent}")
         if (st.predictions.none { calendarDay(it.madeAt) == day }) {
             val due = Flow.dayStart(day) + PREDICTION_DUE_MIN * 60_000L
@@ -329,6 +422,7 @@ class Brain(
             return@withLock Outcome(false, "这条过期了，情况可能变了")
         }
         st = st.copy(decisions = (st.decisions + Decision(now, true)).takeLast(300))
+        markAnswered(p.id)
         val out = execute(p, now)
         save()
         out
@@ -338,6 +432,7 @@ class Brain(
     suspend fun decline(id: String, now: Long) = lock.withLock {
         val p = st.proposals.firstOrNull { it.id == id && it.state == ProposalState.PENDING } ?: return@withLock
         update(p.copy(state = ProposalState.DECLINED, decidedAt = now))
+        markAnswered(p.id)
         st = st.copy(decisions = (st.decisions + Decision(now, false)).takeLast(300), log = st.log + "${hm(now)} 不用：${p.text}")
         save()
     }
@@ -371,6 +466,11 @@ class Brain(
             val msg = plan?.let { doReroute(it, act.channelId, act.cause, now) }.orEmpty()
             update(p.copy(state = ProposalState.DONE, decidedAt = now))
             if (msg.isBlank()) Outcome(false, "今天的水道已经变了，这次改道用不上") else Outcome(true, msg)
+        }
+        is Act.About -> {
+            setAbout(act.text, "墨灵（你同意的）", now)
+            update(p.copy(state = ProposalState.DONE, decidedAt = now))
+            Outcome(true, "好，我对你的了解更新了：${act.what}")
         }
     }
 
@@ -452,8 +552,37 @@ class Brain(
         if (s != null) out += zkOutcomes(now)
         if (guard != null) watchZk(guard, now)?.let { out += it }
         drift(s, foregroundCategory, now)?.let { out += it }
+        out += dueWakes(now)
+        if (out.any { it.kind == "drift" || it.kind == "wake" }) count(now, nudges = out.count { it.kind == "drift" || it.kind == "wake" })
         save()
         out
+    }
+
+    /** 到点的唤醒：她“自己想起来”要找他。 */
+    private fun dueWakes(now: Long): List<Notice> {
+        if (st.wakes.isEmpty()) return emptyList()
+        val (due, keep) = Wakes.due(st.wakes, now)
+        if (due.isEmpty()) return emptyList()
+        st = st.copy(wakes = keep, log = st.log + due.map { "${hm(now)} 唤醒：${it.note}" })
+        return due.map { Notice("wake", Wakes.text(it, now), now) }
+    }
+
+    /** 今天的计数（日历日）：偏离几次、打扰几次。 */
+    private fun count(now: Long, drifts: Int = 0, nudges: Int = 0) {
+        val day = calendarDay(now)
+        val base = if (st.counterDay == day) st else st.copy(counterDay = day, driftsToday = 0, nudgesToday = 0)
+        st = base.copy(driftsToday = base.driftsToday + drifts, nudgesToday = base.nudgesToday + nudges)
+    }
+
+    /** 他回应了这次偏离的卡 / 提议（好、不用、选项、卡住了……）：这次偏离不再升级。 */
+    suspend fun answered() = lock.withLock {
+        st.ladder?.let { st = st.copy(ladder = it.copy(answered = true)) }
+        save()
+    }
+
+    private fun markAnswered(proposalId: String) {
+        val l = st.ladder ?: return
+        if (l.proposalId == proposalId) st = st.copy(ladder = l.copy(answered = true))
     }
 
     /** 交给总控的提议，问问总控后来怎么样了（24 小时内的；全部有结局才算完）。 */
@@ -504,23 +633,40 @@ class Brain(
         return Notice("guard", text, now)
     }
 
+    /**
+     * 水流偏了：按升级阶梯一步一步来（每步至少隔 5 分钟，他回应了就停）——
+     * 提醒一句 → 小窗展开 → 提议开专注锁（规划者起）→ 按授权书开锁（管家，总控 60 秒倒计时可取消）。
+     */
     private fun drift(s: ZkStatus?, category: String, now: Long): Notice? {
-        val plan = st.flow?.takeIf { it.day == calendarDay(now) && it.confirmed } ?: return null
+        val plan = st.flow?.takeIf { it.day == calendarDay(now) && it.confirmed }
         val playing = category == "ENTERTAINMENT" || category == "SHOPPING"
         val working = s?.focus == true || category == "WORK" || category == "ACTOR"
-        val d = Flow.drift(plan, Flow.minuteOf(now), playing, working) ?: return null
-        val key = "${plan.day}:${d.channel.id}"
-        if (key in st.nudged) return null
-        st = st.copy(nudged = (st.nudged + key).takeLast(50))
+        val d = plan?.let { Flow.drift(it, Flow.minuteOf(now), playing, working) }
+        val key = if (plan != null && d != null) "${plan.day}:${d.channel.id}" else null
+        val (ladder, rung) = Ladders.step(st.ladder, key, now, tier())
+        st = st.copy(ladder = ladder)
+        if (d == null || rung == null) return null
+        if (rung == Rung.NOTICE) count(now, drifts = 1)
+        val title = d.channel.title
         val left = (d.channel.endMin - Flow.minuteOf(now)).coerceIn(5, 60)
-        val p = if (tier().level >= Tier.PLANNER.level) {
-            proposeZk(listOf(ZkCommand.StartFocus(left, d.channel.title, "水道「${d.channel.title}」过了 ${d.lateMin} 分钟还在娱乐")), "水流偏了", now)
-        } else {
-            null
+        return when (rung) {
+            Rung.NOTICE -> Notice("drift", "水该在「$title」（过了 ${d.lateMin} 分钟），现在在别处。卡住了还是累了？说一声我来改道。", now, rung = rung.name)
+            Rung.WINDOW -> Notice("drift", "还在别处。现在是「$title」的时间：先做 10 分钟，还是跟我说卡在哪？", now, rung = rung.name)
+            Rung.PROPOSE, Rung.AUTO -> {
+                val cmd = ZkCommand.StartFocus(left, title, "水道「$title」过了 ${d.lateMin} 分钟还在娱乐")
+                // 上一级挂着没回应的提议作废，换成这一级的
+                st.ladder?.proposalId?.takeIf { it.isNotBlank() }?.let { old ->
+                    st.proposals.firstOrNull { it.id == old && it.state == ProposalState.PENDING }?.let { update(it.copy(state = ProposalState.EXPIRED, decidedAt = now)) }
+                }
+                val p = if (rung == Rung.AUTO) proposeZk(listOf(cmd), "水流偏了", now)
+                // 提议这一级一律等他点“好”，哪怕是管家：按授权书直接做是下一级的事
+                else if (ZkWire.valid(cmd) && Charter.check(cmd.power(), tier()).allowed) propose(Act.Zk(listOf(cmd)), cmd.describe(), "水流偏了", cmd.power(), now)
+                else null
+                st = st.copy(ladder = st.ladder?.copy(proposalId = p?.id.orEmpty()))
+                val how = if (p?.auto == true) "我让总控开 $left 分钟专注锁了（60 秒内可以在总控里取消）。" else "要不要让总控开 $left 分钟专注锁？"
+                Notice("drift", "过了 ${d.lateMin} 分钟还没回到「$title」。$how", now, p?.id.orEmpty(), rung.name)
+            }
         }
-        val text = "水该在「${d.channel.title}」（过了 ${d.lateMin} 分钟），现在在别处。" +
-            if (p != null) "要不要让总控开 $left 分钟专注锁？或者说一声卡住了 / 累了，我来改道。" else "卡住了还是累了？说一声我来改道。"
-        return Notice("drift", text, now, p?.id.orEmpty())
     }
 
     // ------------------------------------------------------------------ 夜间
@@ -531,7 +677,13 @@ class Brain(
         if (st.lastNightDay == day) return@withLock ""
         val s = refresh()
         if (s != null) {
-            val stat = DayStat(day, s.playMinutesToday, s.workMinutesToday, s.mainStarted || s.mainDone, s.spendTodayCents / 100.0)
+            val counted = st.counterDay == day
+            val stat = DayStat(
+                day, s.playMinutesToday, s.workMinutesToday, s.mainStarted || s.mainDone, s.spendTodayCents / 100.0,
+                mainScore = when { s.mainDone -> 1.0; s.mainStarted -> 0.5; s.mainTitle.isNotBlank() -> 0.0; else -> -1.0 },
+                drifts = if (counted) st.driftsToday else 0,
+                nudges = if (counted) st.nudgesToday else 0,
+            )
             st = st.copy(days = (st.days.filter { it.day != day } + stat).sortedBy { it.day }.takeLast(60))
             st = st.copy(predictions = Predict.settle(st.predictions, s, now))
         }
@@ -539,9 +691,13 @@ class Brain(
         st = st.copy(trust = trust(now, day), lastNightDay = day, nudged = st.nudged.filter { it.startsWith(calendarDay(now)) })
         val newTier = tier()
         director.onSense(Sense(SenseKind.NIGHT, now, "brain"))
+        val aboutNote = proposeAboutUpdate(day, now)
+        val week = if (LocalDate.parse(day).dayOfWeek == java.time.DayOfWeek.SUNDAY) weekReport(day, now) else null
         val text = buildString {
             append(Predict.scoreText(st.predictions))
             if (newTier != oldTier) append("。权柄变了：${oldTier.label} → ${newTier.label}")
+            if (aboutNote.isNotBlank()) append("。$aboutNote")
+            if (week != null) append("。周报出来了：${week.text.take(60)}")
         }
         st = st.copy(log = st.log + "${hm(now)} 夜间整理：$text")
         save()
@@ -623,6 +779,117 @@ class Brain(
     fun needsNight(now: Long): Boolean {
         val m = Flow.minuteOf(now)
         return (m >= 23 * 60 + 30 || m < 4 * 60) && st.lastNightDay != dayKey(now)
+    }
+
+    // ------------------------------------------------------------------ 了解和复盘
+
+    /** 夜里让她提一版“对你的了解”的修改（你点“好”才换）。模型不可用或没什么可改就不提。返回给人看的一句。 */
+    private suspend fun proposeAboutUpdate(day: String, now: Long): String {
+        val facts = buildString {
+            appendLine(com.moling.core.mind.Night.digest(director.snapshot(), day))
+            st.days.lastOrNull { it.day == day }?.let { appendLine("今天：做事 ${it.work} 分钟、娱乐 ${it.play} 分钟、主线${if (it.mainStarted) "开始了" else "没开始"}、偏离 ${it.drifts} 次") }
+            st.claims.filter { dayKey(it.at) == day && it.verdict.isNotBlank() && it.verdict != "对得上" }.forEach { appendLine("说法对不上：${it.text}（${it.verdict}）") }
+            st.talk.filter { dayKey(it.at) == day && it.who == "他" }.takeLast(12).forEach { appendLine("他说：${it.text.take(80)}") }
+            st.proposals.filter { dayKey(it.createdAt) == day && it.state != ProposalState.PENDING }.takeLast(10)
+                .forEach { appendLine("提议「${it.text.take(30)}」：${it.state.label}${if (it.zkOutcome.isNotBlank()) "，${it.zkOutcome}" else ""}") }
+        }
+        val (what, doc) = model(config().persona, About.updatePrompt(st.about, facts))?.let { About.parse(it, st.about) } ?: return ""
+        val p = propose(Act.About(doc, what), "更新我对你的了解：$what", "夜里整理", Power.SPEAK, now, ttlUntil = now + 36 * 3_600_000L) ?: return ""
+        return if (p.state == ProposalState.PENDING) "我想更新对你的了解（$what），等你看一眼" else ""
+    }
+
+    /** 他自己改“对你的了解”（直接生效，留一个版本）。 */
+    suspend fun editAbout(text: String, now: Long) = lock.withLock {
+        setAbout(text, "你", now)
+        save()
+    }
+
+    private fun setAbout(text: String, by: String, now: Long) {
+        val t = text.trim().take(About.MAX_CHARS + 200)
+        st = st.copy(about = t, aboutVersions = (st.aboutVersions + AboutVersion(now, t, by)).takeLast(20), log = st.log + "${hm(now)} 对你的了解改了（$by）")
+    }
+
+    /** 周报（周日夜里自动出，也可以随时要一份）。 */
+    suspend fun week(now: Long): WeekReport = lock.withLock {
+        val r = weekReport(dayKey(now), now)
+        save()
+        r
+    }
+
+    private suspend fun weekReport(day: String, now: Long): WeekReport {
+        val monday = Reviews.monday(day)
+        val from = java.time.LocalDate.parse(monday).atStartOfDay(BEIJING).toInstant().toEpochMilli()
+        val accepts = st.decisions.filter { it.at >= from }.map { it.accepted }
+        val vetoes = st.proposals.count { it.decidedAt >= from && it.zkOutcome == "你在总控里取消了" }
+        val base = Reviews.week(monday, st.days, accepts, vetoes, st.predictions.filter { it.madeAt >= from })
+        val last = st.weeks.lastOrNull { it.week < monday }
+        val text = model(config().persona, Reviews.prompt(base, last, st.about))?.trim()?.takeIf { it.isNotBlank() } ?: Reviews.localText(base, last)
+        val r = base.copy(text = text.take(600))
+        st = st.copy(weeks = (st.weeks.filter { it.week != monday } + r).sortedBy { it.week }.takeLast(12), log = st.log + "${hm(now)} 周报：${r.text.take(40)}")
+        return r
+    }
+
+    /** 四个参谋（大判断前用：重排、换方向、要不要放弃）。模型不可用返回 null。 */
+    suspend fun council(question: String, now: Long): Council? = lock.withLock {
+        val situation = director.nowText(now) + "\n" + st.flow?.let { Flow.render(it) }.orEmpty() + "\n" + st.about.take(600)
+        val c = model(config().persona, Councils.prompt(question, situation, config().persona))?.let { Councils.parse(it) } ?: return@withLock null
+        st = st.copy(log = st.log + listOf(
+            "${hm(now)} 四个参谋：$question",
+            "  教练：${c.coach}", "  军师：${c.strategist}", "  对手：${c.critic}", "  朋友：${c.friend}", "  合起来：${c.together}",
+        ))
+        save()
+        c
+    }
+
+    /** “反驳我”：专挑他上一句判断（或 [claim]）的漏洞。 */
+    suspend fun devil(now: Long, claim: String = ""): ChatResult = lock.withLock {
+        val target = claim.ifBlank { st.talk.lastOrNull { it.who == "他" }?.text.orEmpty() }
+        if (target.isBlank()) return@withLock ChatResult("你先说一个判断，我再来挑它的毛病。", emptyList(), false)
+        val text = model(config().persona, Modes.devilPrompt(config().persona, target, st.talk))?.trim()?.takeIf { it.isNotBlank() }
+            ?: "现在接不上模型。先自己问一句：这个判断最依赖哪一个前提？那个前提不成立会怎样？"
+        st = st.copy(talk = (st.talk + Turn("他", "反驳我：${target.take(60)}", now) + Turn("墨灵", text, now)).takeLast(TALK_KEEP))
+        save()
+        ChatResult(text, emptyList(), true)
+    }
+
+    /** “疯想—冷判”：五条离谱路线逐条标事实 / 假设 / 可以试，挑一个最便宜的小实验排进今天（提议）。 */
+    suspend fun wild(topic: String, now: Long): ChatResult = lock.withLock {
+        val reply = model(config().persona, Modes.wildPrompt(config().persona, topic))
+            ?: return@withLock ChatResult("现在接不上模型，疯想要靠她。先自己写三条最离谱的做法，挑一条最便宜的试 15 分钟。", emptyList(), false)
+        val (lines, exp) = Modes.parseWild(reply)
+        val text = (lines.joinToString("\n") + (exp?.let { "\n小实验：${it.first}（${it.second} 分钟）" } ?: "")).ifBlank { reply.take(400) }
+        val start = ((now / 600_000L) + 1) * 600_000L
+        val p = exp?.let { (title, min) -> proposeZk(listOf(ZkCommand.AddAction(title, start, start + min * 60_000L, "", "疯想—冷判挑出来的小实验")), "疯想—冷判", now) }
+        st = st.copy(talk = (st.talk + Turn("他", "疯想：${topic.take(60)}", now) + Turn("墨灵", text, now)).takeLast(TALK_KEEP))
+        save()
+        ChatResult(text, listOfNotNull(p), true)
+    }
+
+    // ------------------------------------------------------------------ 作息和唤醒
+
+    /** App 把最近两天的亮屏 / 熄屏事件交进来：推算昨晚睡了多久（推不出就不记）。 */
+    suspend fun sleep(events: List<ScreenEvent>, now: Long): SleepNight? = lock.withLock {
+        val n = Rhythm.lastNight(events, calendarDay(now)) ?: return@withLock null
+        st = st.copy(nights = (st.nights.filter { it.day != n.day } + n).sortedBy { it.day }.takeLast(30))
+        save()
+        n
+    }
+
+    /** 给她自己定一个唤醒（App 的按钮也可以用）。 */
+    suspend fun setWake(at: Long, note: String, daily: Boolean, now: Long) = lock.withLock {
+        setWakeLocked(at, note, daily, now)
+        save()
+    }
+
+    private fun setWakeLocked(at: Long, note: String, daily: Boolean, now: Long) {
+        if (note.isBlank() || at <= now) return
+        val w = Wake("w-$now-${st.seq}", at, note.take(80), daily, now)
+        st = st.copy(wakes = (st.wakes + w).sortedBy { it.at }.takeLast(30), seq = st.seq + 1, log = st.log + "${hm(now)} 定了唤醒 ${hm(at)}：${note.take(30)}")
+    }
+
+    suspend fun cancelWake(id: String) = lock.withLock {
+        st = st.copy(wakes = st.wakes.filter { it.id != id })
+        save()
     }
 
     // ------------------------------------------------------------------ 设置

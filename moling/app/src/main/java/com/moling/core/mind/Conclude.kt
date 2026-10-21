@@ -23,6 +23,15 @@ object Tags {
 }
 
 object Conclude {
+    private val closingMark = Regex("""(收线|结论|下一步|聊出了|聊出来|总结一下|接下来要|今天先)""")
+
+    /** 看起来像一次收线（从演员那里复制回来的结论），用来决定要不要问他“这是刚才聊出来的吗？”。 */
+    fun looksLikeClosing(text: String): Boolean {
+        val t = text.trim()
+        if (t.length < 8) return false
+        return closingMark.containsMatchIn(t) || (timeRe.containsMatchIn(t) && t.length >= 20)
+    }
+
     private val filler = Regex("""^(好的?|嗯+|哦+|行|可以|聊完了|没了|就这样|ok|OK|收到|完成了?)[。！!，, ]*$""")
     private val nextMark = Regex("""(下一步|接下来|然后|之后|待会儿?|明天|今晚|晚上|下午|上午|明早)""")
     private val timeRe = Regex("""(今天|今晚|明天|明早|后天)?\s*(早上|上午|中午|下午|晚上)?\s*(\d{1,2})\s*[点:：时]\s*(半|\d{1,2})?""")
@@ -82,6 +91,11 @@ object Conclude {
 
     /** 把“九点”“十一点半”“二十点”里的中文数字换成阿拉伯数字（语音听写常这样写）。 */
     fun cnDigits(s: String): String = cnRe.replace(s) { m -> cnNumber(m.value)?.toString() ?: m.value }
+
+    private val cnDurRe = Regex("""([零一二两三四五六七八九十]{1,3})(?=\s*个?\s*(分钟|小时|钟头))""")
+
+    /** 把“四十分钟”“一个小时”“十分钟后”里的中文数字换成阿拉伯数字（时长用）。 */
+    fun cnDurations(s: String): String = cnDurRe.replace(s) { m -> cnNumber(m.value)?.toString() ?: m.value }
 
     private fun cnNumber(t: String): Int? {
         val d = mapOf('零' to 0, '一' to 1, '二' to 2, '两' to 2, '三' to 3, '四' to 4, '五' to 5, '六' to 6, '七' to 7, '八' to 8, '九' to 9)
