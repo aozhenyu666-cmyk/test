@@ -9,6 +9,7 @@ import androidx.core.os.bundleOf
 import com.zongkong.app.ZkApp
 import com.zongkong.core.moling.Moling
 import com.zongkong.core.moling.MolingLink
+import kotlinx.coroutines.launch
 
 /**
  * 总控对墨灵开的口子：只走 call()，只认墨灵的签名（见 [Partner.callerIsMoling]），别的应用调用一律拒绝。
@@ -35,9 +36,15 @@ class MolingProvider : ContentProvider() {
                 val before = Moling.pending(app.store.moling.value, now).map { it.id }.toSet()
                 val book = app.store.updateMoling { b -> Moling.receive(b, fields, now).also { receipt = it.second }.first }
                 val r = receipt!!
-                // 新收下的才发通知（重复交的那条已经有通知了）
-                if (r.ok && r.id !in before) book.orders.firstOrNull { it.id == r.id }?.let { MolingBridge.notify(ctx, it) }
-                bundleOf(MolingLink.OK to r.ok.toString(), MolingLink.MESSAGE to r.message, MolingLink.ID to r.id)
+                // 新收下的才发通知（重复交的、正在倒计时的那条已经有通知了）
+                val fresh = r.ok && r.id !in before && book.orders.firstOrNull { it.id == r.id }?.receivedAt == now
+                if (fresh) book.orders.firstOrNull { it.id == r.id }?.let { MolingBridge.notify(ctx, it) }
+                // 授权内的：倒计时一到就执行（总控的每分钟巡检也会兜底）
+                if (fresh && r.auto) app.appScope.launch {
+                    kotlinx.coroutines.delay(Moling.VETO_MS + 1_000)
+                    MolingBridge.runDue(ctx)
+                }
+                bundleOf(MolingLink.OK to r.ok.toString(), MolingLink.MESSAGE to r.message, MolingLink.ID to r.id, MolingLink.AUTO to r.auto.toString())
             }
             MolingLink.RESULT -> {
                 val o = arg?.let { MolingBridge.result(ctx, it) }

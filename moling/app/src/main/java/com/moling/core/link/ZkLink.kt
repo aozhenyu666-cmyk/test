@@ -56,6 +56,17 @@ data class ZkStatus(
     val blocked: List<String> = emptyList(),
     /** 0.11 哨兵是否在线。 */
     val sentinelOn: Boolean = false,
+    /** 今天被弹回几次、紧急放行用了几次、关卡完成几道 / 共几道、还开着的约定几条。 */
+    val bounces: Int = 0,
+    val emergencies: Int = 0,
+    val gatesDone: Int = 0,
+    val gatesTotal: Int = 0,
+    val openCommitments: Int = 0,
+    /** 临时严管到几点（0 = 没有）；今天减了多少分钟娱乐。 */
+    val holdUntil: Long = 0,
+    val cutToday: Int = 0,
+    /** 总控里的授权书（给人看的一段话）。 */
+    val grants: String = "",
 )
 
 /** 墨灵对总控下的指令。每条都对应一项权柄，先过 [com.moling.core.power.Charter] 再发。 */
@@ -75,7 +86,10 @@ sealed interface ZkCommand {
     /** 现在进入总控时间（手机只剩白名单）。 */
     @Serializable data class EnterHq(val minutes: Int, override val reason: String) : ZkCommand
 
-    /** 收紧：kind = block_app（value=包名）。总控现在只支持这一种；“只减今天的娱乐”“临时严管”总控还没有开关。 */
+    /**
+     * 收紧：kind = block_app（value=包名，永久加进拦截名单，不能授权执行）/
+     * strict（value=分钟 5–720，临时严管，到点自己解除）/ cut_play（value=分钟 1–240，只减今天的娱乐）。
+     */
     @Serializable data class Tighten(val kind: String, val value: String, override val reason: String) : ZkCommand
 
     /**
@@ -86,18 +100,24 @@ sealed interface ZkCommand {
 
     /** 往总控的收集箱放一条（结论、材料、问题）。 */
     @Serializable data class Note(val text: String, override val reason: String) : ZkCommand
+
+    /** 记一条约定：做什么、[due] 之前、怎么检查。总控到点自己查。 */
+    @Serializable data class Commit(val what: String, val due: Long, val check: String, override val reason: String) : ZkCommand
+
+    /** 交一份谋划单给总控盯落实。[items] 每行：类型｜一句话｜时间说法（类型：要做 / 风险 / 待决 / 事实）。 */
+    @Serializable data class Directive(val title: String, val text: String, val items: String, override val reason: String) : ZkCommand
 }
 
 /** 指令对应的权柄。 */
 fun ZkCommand.power(): Power = when (this) {
-    is ZkCommand.SetMain, is ZkCommand.AddAction, is ZkCommand.Note -> Power.PLAN
+    is ZkCommand.SetMain, is ZkCommand.AddAction, is ZkCommand.Note, is ZkCommand.Commit, is ZkCommand.Directive -> Power.PLAN
     is ZkCommand.StartFocus, is ZkCommand.EnterHq, is ZkCommand.Tighten -> Power.TIGHTEN
     is ZkCommand.RequestLoosen -> Power.LOOSEN
 }
 
 /** 总控执行后的回执。 */
 @Serializable
-data class ZkReceipt(val ok: Boolean, val message: String, val at: Long, val id: String = "")
+data class ZkReceipt(val ok: Boolean, val message: String, val at: Long, val id: String = "", val auto: Boolean = false)
 
 /**
  * 一条建议在总控里后来怎么样了（[ZK_RESULT] 的返回）。
@@ -124,6 +144,8 @@ fun ZkCommand.describe(): String = when (this) {
         else -> "申请放宽：$kind $value"
     }
     is ZkCommand.Note -> "往总控收集箱放一条：${text.take(30)}"
+    is ZkCommand.Commit -> "记一条约定：$what（${hmOf(due)} 前）"
+    is ZkCommand.Directive -> "交一份谋划单：$title"
 } + if (reason.isNotBlank()) "。原因：$reason" else ""
 
 /** Android 传输用：指令 ↔ 键值对（都是字符串，方便塞进 Bundle）。 */
@@ -136,7 +158,12 @@ object ZkWire {
         is ZkCommand.Tighten -> mapOf("cmd" to "tighten", "kind" to c.kind, "value" to c.value)
         is ZkCommand.RequestLoosen -> mapOf("cmd" to "request_loosen", "kind" to c.kind, "value" to c.value)
         is ZkCommand.Note -> mapOf("cmd" to "note", "text" to c.text)
+        is ZkCommand.Commit -> mapOf("cmd" to "commit", "what" to c.what, "due" to c.due.toString(), "check" to c.check)
+        is ZkCommand.Directive -> mapOf("cmd" to "directive", "title" to c.title, "text" to c.text, "items" to c.items)
     } + mapOf("reason" to c.reason, "v" to ZK_LINK_VERSION.toString())
+
+    /** 想按总控的授权书执行（总控查授权书：授权内倒计时 60 秒后执行，授权外照旧等用户确认）。 */
+    fun toMapAuto(c: ZkCommand): Map<String, String> = toMap(c) + ("auto" to "true")
 
     fun fromMap(m: Map<String, String>): ZkCommand? {
         val r = m["reason"].orEmpty()
@@ -150,6 +177,8 @@ object ZkWire {
             "tighten" -> ZkCommand.Tighten(m["kind"].orEmpty(), m["value"].orEmpty(), r)
             "request_loosen" -> ZkCommand.RequestLoosen(m["kind"].orEmpty(), m["value"].orEmpty(), r)
             "note" -> ZkCommand.Note(m["text"].orEmpty(), r)
+            "commit" -> ZkCommand.Commit(m["what"].orEmpty(), l("due"), m["check"].orEmpty(), r)
+            "directive" -> ZkCommand.Directive(m["title"].orEmpty(), m["text"].orEmpty(), m["items"].orEmpty(), r)
             else -> null
         }?.takeIf { valid(it) }
     }
@@ -170,12 +199,14 @@ object ZkWire {
             playLeftMin = i("playLeftMin", -1), spendTodayCents = l("spendTodayCents"), credit = i("credit", -1), stance = s("stance"),
             aims = list("aims"), weekDeliverables = list("weekDeliverables"), upcoming = list("upcoming"), blocked = list("blocked"),
             sentinelOn = b("sentinelOn"),
+            bounces = i("bounces"), emergencies = i("emergencies"), gatesDone = i("gatesDone"), gatesTotal = i("gatesTotal"),
+            openCommitments = i("openCommitments"), holdUntil = l("holdUntil"), cutToday = i("cutToday"), grants = s("grants"),
         )
     }
 
     /** 总控对 [ZK_COMMAND] 的回执 → [ZkReceipt]。总控报错（例如签名不对）时 ok = false。 */
     fun receipt(m: Map<String, String>, now: Long): ZkReceipt =
-        m["error"]?.let { ZkReceipt(false, it, now) } ?: ZkReceipt(m["ok"] == "true", m["message"].orEmpty(), now, m["id"].orEmpty())
+        m["error"]?.let { ZkReceipt(false, it, now) } ?: ZkReceipt(m["ok"] == "true", m["message"].orEmpty(), now, m["id"].orEmpty(), m["auto"] == "true")
 
     /** 总控对 [ZK_RESULT] 的回答 → [ZkResult]。总控报错时返回 null（当作没问到）。 */
     fun result(m: Map<String, String>): ZkResult? =
@@ -189,6 +220,8 @@ object ZkWire {
         is ZkCommand.EnterHq -> c.minutes in 5..60
         is ZkCommand.Tighten -> when (c.kind) {
             "block_app" -> c.value.isNotBlank() && c.value !in com.moling.core.power.Charter.neverTouch
+            "strict" -> (c.value.toIntOrNull() ?: 0) in 5..720
+            "cut_play" -> (c.value.toIntOrNull() ?: 0) in 1..240
             else -> false
         }
         is ZkCommand.RequestLoosen -> when (c.kind) {
@@ -197,5 +230,11 @@ object ZkWire {
             else -> false
         }
         is ZkCommand.Note -> c.text.isNotBlank()
+        is ZkCommand.Commit -> c.what.isNotBlank() && c.due > 0
+        is ZkCommand.Directive -> c.title.isNotBlank() && c.text.isNotBlank()
     }
 }
+
+/** 北京时间 HH:mm（describe 用）。 */
+private fun hmOf(t: Long): String =
+    java.time.Instant.ofEpochMilli(t).atZone(java.time.ZoneId.of("Asia/Shanghai")).let { "%02d:%02d".format(it.hour, it.minute) }

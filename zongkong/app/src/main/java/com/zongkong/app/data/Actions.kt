@@ -267,7 +267,8 @@ class Actions(private val context: Context, private val store: Store) {
         }
         var msg = ""
         store.updateToday(now) { day ->
-            val status = com.zongkong.core.Engine.evaluate(store.config.value, day, now, store.zone)
+            // 墨灵约好的临时严管也要算进来：紧急退出必须对任何严管都有效
+            val status = com.zongkong.core.Engine.evaluate(store.config.value, day, now, store.zone, holds = store.moling.value.holds)
             val (next, m) = DayOps.emergency(day, store.config.value, status, reason, now)
             msg = m
             next ?: day

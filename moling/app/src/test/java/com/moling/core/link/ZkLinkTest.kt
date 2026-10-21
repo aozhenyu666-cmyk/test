@@ -16,13 +16,17 @@ class ZkLinkTest {
             ZkCommand.RequestLoosen("unblock_app", "tv.danmaku.bili", "周末"),
             ZkCommand.RequestLoosen("play_quota", "90", "周末"),
             ZkCommand.Note("开头先亮观点", "对话"),
+            ZkCommand.Tighten("strict", "90", "今晚不刷"),
+            ZkCommand.Tighten("cut_play", "30", "刷多了"),
+            ZkCommand.Commit("写完第二题", 5_000L, "看行动记录", "他说的"),
+            ZkCommand.Directive("申论三篇", "这周写完三篇", "要做｜周三第一篇｜周三 21:00", "谋划"),
         )
         all.forEach { assertEquals(it, ZkWire.fromMap(ZkWire.toMap(it))) }
     }
 
     @Test fun onlyKindsZongkongCanDo() {
-        assertFalse(ZkWire.valid(ZkCommand.Tighten("cut_play", "30", "")))
-        assertFalse(ZkWire.valid(ZkCommand.Tighten("strict", "30", "")))
+        assertFalse(ZkWire.valid(ZkCommand.Tighten("cut_play", "500", "")))
+        assertFalse(ZkWire.valid(ZkCommand.Tighten("strict", "1", "")))
         assertFalse(ZkWire.valid(ZkCommand.Tighten("block_app", "com.android.phone", "")))
         assertFalse(ZkWire.valid(ZkCommand.RequestLoosen("pause_all", "1", "")))
         assertFalse(ZkWire.valid(ZkCommand.RequestLoosen("play_quota", "很多", "")))

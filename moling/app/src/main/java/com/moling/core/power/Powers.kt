@@ -7,8 +7,12 @@ import kotlinx.serialization.Serializable
  *
  * 用户要的是“尽可能高的权柄”。这里的做法：权柄分三级，墨灵靠“判断准不准、计划被接受多少”自己挣上去，
  * 用户设一个上限（默认最高）。实际等级 = min(用户上限, 挣到的等级)。
- * 凡是要改动总控的（定主线、排行动、专注锁、总控时间、收紧），在任何等级都是“建议”：
- * 由用户点一下、在总控里确认后才执行。等级高低决定的是墨灵多主动地提建议、能不能自己排水道和召唤会话。
+ * 改动总控的事分两种走法（v4）：
+ *   - [Mode.ASK]：墨灵提议，用户在墨灵里点“好”，总控再按自己的规矩处理。
+ *   - [Mode.AUTO]：墨灵直接交给总控、请求“按授权书执行”。总控查用户亲手写的授权书：
+ *     授权内倒计时 60 秒后执行（用户可以取消），授权外照旧发通知等用户点“执行”。
+ *   所以 AUTO 不等于“不问”：没有授权书，总控那边还是要问；有授权书，也有 60 秒反悔。
+ * 等级高低决定的是墨灵多主动、哪些事可以请求授权执行。
  * 不管哪一级，铁律都不变（见 [Charter.forbidden]）：放宽只能走总控的 24 小时冷静期，
  * 电话、短信、支付、地图、紧急退出永远不碰，不替用户花钱、不替用户给别人发消息。
  */
@@ -30,8 +34,8 @@ enum class Power(val label: String) {
 @Serializable
 enum class Tier(val label: String, val level: Int) {
     ADVISOR("参谋：只看、只说、只提建议", 1),
-    PLANNER("规划者：可以自己排水道、给总控定主线，收紧要先问", 2),
-    STEWARD("管家：可以自己排水道、召唤会话、给总控的建议更主动", 3),
+    PLANNER("规划者：可以自己排水道；按你的授权书直接给总控排计划，收紧要先问", 2),
+    STEWARD("管家：排计划和收紧都可以按你的授权书直接让总控做（60 秒内可取消）", 3),
 }
 
 /** 一件事在当前等级下怎么处理。 */
@@ -89,7 +93,8 @@ object Charter {
         ),
         Tier.STEWARD to mapOf(
             Power.OBSERVE to Mode.AUTO, Power.SPEAK to Mode.AUTO, Power.PLAN to Mode.AUTO, Power.SUMMON to Mode.AUTO,
-            Power.TIGHTEN to Mode.ASK, Power.REPAIR to Mode.OFF, Power.FREEZE to Mode.OFF, Power.LOOSEN to Mode.ASK,
+            // 管家可以请求按授权书收紧（专注锁、临时严管、减今天的娱乐、总控时间）；授权书外照旧要用户确认
+            Power.TIGHTEN to Mode.AUTO, Power.REPAIR to Mode.OFF, Power.FREEZE to Mode.OFF, Power.LOOSEN to Mode.ASK,
         ),
     )
 

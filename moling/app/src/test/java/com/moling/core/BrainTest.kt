@@ -51,6 +51,7 @@ class BrainTest {
     @Test fun chatOnlyProposesUntilAccepted() = runTest {
         val zk = FakeZk()
         val b = brain(zk, "好，三点开始。\n【动作】主线｜写申论｜15:00")
+        b.setUserMax(Tier.ADVISOR) // 参谋：排计划也要先问（规划者会直接交给总控，见 BrainMoreTest）
         val r = b.chat("下午三点写申论", at(10))
         assertEquals("好，三点开始。", r.text)
         assertEquals(1, r.proposals.size)
@@ -98,6 +99,7 @@ class BrainTest {
     @Test fun flowIsDraftUntilConfirmedAndHandedOffOnlyAfterAccept() = runTest {
         val zk = FakeZk(ZkStatus(mainTitle = "申论第二题", mainPlannedAt = at(15)))
         val b = brain(zk)
+        b.setUserMax(Tier.ADVISOR)
         val plan = b.planDay(at(9))
         val main = plan.channels.single { it.kind == ChannelKind.MAIN }
         assertEquals("申论第二题", main.title)
@@ -124,7 +126,7 @@ class BrainTest {
         assertEquals(Power.TIGHTEN, focus.power)
         assertTrue((focus.act as Act.Zk).commands.single() is ZkCommand.StartFocus)
         assertTrue(b.tick(at(10, 20), "ENTERTAINMENT").none { it.kind == "drift" })
-        assertTrue(zk.sent.isEmpty())
+        assertTrue("规划者不直接收紧：专注锁只是提议", zk.sent.none { it is ZkCommand.StartFocus })
     }
 
     @Test fun advisorOnlyWarnsOnDrift() = runTest {
@@ -140,7 +142,7 @@ class BrainTest {
         val b = brain()
         assertNull(b.suggest(ZkCommand.Tighten("block_app", "com.android.phone", "别打电话"), at(10)))
         assertNull(b.suggest(ZkCommand.EnterHq(600, "太长"), at(10)))
-        assertNull("总控没有这个开关", b.suggest(ZkCommand.Tighten("cut_play", "30", "今天刷多了"), at(10)))
+        assertNull("超出范围", b.suggest(ZkCommand.Tighten("cut_play", "500", "今天刷多了"), at(10)))
         assertNull(b.suggest(ZkCommand.RequestLoosen("pause_all", "1", "想歇一天"), at(10)))
         val ok = b.suggest(ZkCommand.Tighten("block_app", "com.ss.android.ugc.aweme", "今天刷多了"), at(10))
         assertNotNull(ok)
@@ -166,7 +168,9 @@ class BrainTest {
         val store = MemStore()
         val mind = MemStore()
         val zk = FakeZk()
-        val p = brain(zk, "好。\n【动作】行动｜写申论｜15:00｜45", store, mind).chat("三点写 45 分钟", at(10)).proposals.single()
+        val first = brain(zk, "好。\n【动作】行动｜写申论｜15:00｜45", store, mind)
+        first.setUserMax(Tier.ADVISOR)
+        val p = first.chat("三点写 45 分钟", at(10)).proposals.single()
         val again = brain(zk, null, store, mind)
         val restored = again.pending(at(10, 1)).single()
         assertEquals(p, restored)

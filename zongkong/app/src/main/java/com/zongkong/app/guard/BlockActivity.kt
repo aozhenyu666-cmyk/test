@@ -233,6 +233,10 @@ private fun StrictBody(
                     Text("今天的娱乐额度用完了", style = MaterialTheme.typography.titleMedium)
                     Text("已用 ${r.usedMin} 分钟，上限 ${r.limitMin} 分钟。明天凌晨 4 点重置。", style = MaterialTheme.typography.bodyMedium.merge(Mono))
                 }
+                is Reason.Hold -> Panel(accent = sig.strict) {
+                    Text(r.text, style = MaterialTheme.typography.titleMedium)
+                    Hint("这是你和墨灵约好的（你同意过，或在授权书里授权过），到点自己解除。真有急事用下面的紧急放行。")
+                }
             }
         }
 

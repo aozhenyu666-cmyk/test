@@ -76,6 +76,12 @@ interface ZkPort {
 
     /** 交过去的一条后来怎么样了（[ZkReceipt.id]）；连不上返回 null。 */
     fun result(id: String): ZkResult? = null
+
+    /**
+     * 请求按总控的授权书执行（[ZkWire.toMapAuto]）：授权内倒计时 60 秒后执行，授权外总控照旧问用户。
+     * 没实现时退回普通的 [send]（总控会问用户），所以老的实现不会出错。
+     */
+    fun sendAuto(command: ZkCommand): ZkReceipt? = send(command)
 }
 
 /** 提议要做的事。 */
@@ -128,6 +134,8 @@ data class Proposal(
     val zkIds: List<String> = emptyList(),
     /** 总控那边的结局：空 = 还不知道；例如“总控执行了”“你在总控里点了不用”。 */
     val zkOutcome: String = "",
+    /** 墨灵直接交给总控、请求按授权书执行的（没经过“好”）。 */
+    val auto: Boolean = false,
 )
 
 /** 用户对提议的一次表态（算接受率，挣权柄用）。 */
@@ -367,6 +375,10 @@ class Brain(
     }
 
     /** 逐条交给总控；连不上或被拒就停下，记成“没送到”，可以重试。 */
+    /**
+     * 逐条交给总控，都请求按授权书执行：授权内总控倒计时 60 秒后做（可以取消），授权外总控照旧问他。
+     * （他在墨灵点过“好”的也这样交：授权书是他亲手写的，授权外总控还会再问。）
+     */
     private fun sendAll(p: Proposal, commands: List<ZkCommand>, now: Long): Outcome {
         val tier = tier()
         // 点“好”时再过一遍铁律：等级可能变了，指令也可能在存储里被改坏。
@@ -376,8 +388,9 @@ class Brain(
         }
         var sent = p.sent
         val ids = p.zkIds.toMutableList()
+        var lastAuto = false
         while (sent < commands.size) {
-            val r = runCatching { zk.send(commands[sent]) }.getOrNull()
+            val r = runCatching { zk.sendAuto(commands[sent]) }.getOrNull()
             if (r == null || !r.ok) {
                 val why = r?.message?.ifBlank { null } ?: if (r == null) "连不上总控" else "总控拒绝了"
                 update(p.copy(state = ProposalState.FAILED, sent = sent, receipt = why, decidedAt = now, zkIds = ids))
@@ -386,10 +399,12 @@ class Brain(
             }
             st = st.copy(log = st.log + "${hm(now)} 交给总控：${commands[sent].describe()}｜回执：${r.message}")
             if (r.id.isNotBlank()) ids += r.id
+            lastAuto = r.auto
             sent++
         }
-        update(p.copy(state = ProposalState.SENT, sent = sent, receipt = "总控收下了", decidedAt = now, zkIds = ids))
-        return Outcome(true, "交给总控了，在总控里确认后执行")
+        val counting = lastAuto
+        update(p.copy(state = ProposalState.SENT, sent = sent, receipt = if (counting) "授权内：总控倒计时执行" else "总控收下了", decidedAt = now, zkIds = ids))
+        return Outcome(true, if (counting) "交给总控了：在授权书内，60 秒后执行（可以在总控的通知里取消）" else "交给总控了，在总控里确认后执行")
     }
 
     private fun proposeZk(commands: List<ZkCommand>, why: String, now: Long, ttlUntil: Long = 0): Proposal? {
@@ -398,15 +413,20 @@ class Brain(
         if (ok.isEmpty()) return null
         val text = if (ok.size == 1) ok[0].describe() else "把今天的水道交给总控：" + ok.joinToString("；") { it.describe().substringBefore("。原因") }
         val power = ok.maxBy { it.power().ordinal }.power()
-        return propose(Act.Zk(ok), text, why, power, now, ttlUntil)
+        // 每一条都是 AUTO：不等“好”，直接交给总控请求按授权书执行（总控那边还有授权书和 60 秒反悔）
+        val auto = ok.all { Charter.check(it.power(), tier).mode == com.moling.core.power.Mode.AUTO }
+        val p = propose(Act.Zk(ok), text, why, power, now, ttlUntil, auto) ?: return null
+        if (!auto || p.state != ProposalState.PENDING) return p
+        sendAll(p, ok, now)
+        return st.proposals.first { it.id == p.id }
     }
 
-    private fun propose(act: Act, text: String, why: String, power: Power, now: Long, ttlUntil: Long = 0): Proposal? {
+    private fun propose(act: Act, text: String, why: String, power: Power, now: Long, ttlUntil: Long = 0, auto: Boolean = false): Proposal? {
         if (!Charter.check(power, tier()).allowed) return null
         // 同一句话还挂着，就不再提一次。
         pending(now).firstOrNull { it.text == text }?.let { return it }
         val expires = if (ttlUntil > now) ttlUntil else now + PROPOSAL_TTL_MIN * 60_000L
-        val p = Proposal("p-$now-${st.seq}", act, text, why, power, now, expires)
+        val p = Proposal("p-$now-${st.seq}", act, text, why, power, now, expires, auto = auto)
         st = st.copy(proposals = (st.proposals + p).takeLast(PROPOSALS_KEEP), seq = st.seq + 1)
         return p
     }
@@ -441,16 +461,19 @@ class Brain(
         val out = mutableListOf<Notice>()
         st.proposals.filter { it.state == ProposalState.SENT && it.zkOutcome.isBlank() && it.zkIds.isNotEmpty() && now - it.decidedAt < DAY_MS }.forEach { p ->
             val rs = p.zkIds.map { id -> runCatching { zk.result(id) }.getOrNull() ?: return@forEach }
-            if (rs.any { it.state == "PENDING" }) return@forEach
+            if (rs.any { it.state == "PENDING" || it.state == "SCHEDULED" }) return@forEach
             val bad = rs.firstOrNull { it.state != "DONE" }
             val outcome = when (bad?.state) {
                 null -> "总控执行了"
                 "DECLINED" -> "你在总控里点了不用"
+                "VETOED" -> "你在总控里取消了"
                 "EXPIRED" -> "总控里没确认，过期了"
                 "FAILED" -> "总控没执行成：${bad.message}"
                 else -> "总控里找不到这条"
             }
             update(p.copy(zkOutcome = outcome))
+            // 墨灵直接交的（没经过“好”）：总控那边的结局就是他的表态，算进接受率
+            if (p.auto) st = st.copy(decisions = (st.decisions + Decision(now, bad == null)).takeLast(300))
             st = st.copy(log = st.log + "${hm(now)} $outcome：${p.text}")
             out += Notice("zk_result", "$outcome：${p.text.substringBefore("。原因")}", now, p.id)
         }

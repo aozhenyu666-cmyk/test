@@ -581,6 +581,7 @@ private fun Guidance(status: Status, date: String, now: Long, nav: NavHostContro
                 is Reason.Focus -> Triple("专注锁开着", "做完「${reason.title}」就解开", "session")
                 is Reason.Budget -> Triple("今天挣到的 ${reason.allowedMin} 分钟娱乐用完了", "做完一步再挣 20 分钟", "today")
                 is Reason.Debt -> Triple("「${reason.title}」过了点还没开始", "现在开始，或者改个时间 / 标卡住", "start/${reason.actionKey}")
+                is Reason.Hold -> Triple(reason.text, "你和墨灵约好的，到点自己解除", "home")
             }
             Panel(accent = sig.strict, onClick = { nav.navigate(route) }, modifier = Modifier.enter(1)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {

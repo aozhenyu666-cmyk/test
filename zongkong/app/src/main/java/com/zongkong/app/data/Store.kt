@@ -399,7 +399,7 @@ class Store(private val context: Context) {
         val c = _config.value
         val earned = if (c.earn.enabled) com.zongkong.core.plan.Earn.earned(_work.value, now, zone, c.earn) else null
         val debt = if (c.earn.enabled) com.zongkong.core.plan.Earn.debt(_work.value, _plans.value, now, zone, c.earn)?.let { it.key to it.title } else null
-        return Engine.evaluate(c, _today.value, now, zone, focusLock(now), _hq.value.active, absence(now), earned, debt, control = _control.value)
+        return Engine.evaluate(c, _today.value, now, zone, focusLock(now), _hq.value.active, absence(now), earned, debt, control = _control.value, holds = _moling.value.holds)
     }
 
     fun updateConfig(f: (Config) -> Config): Config = synchronized(lock) {

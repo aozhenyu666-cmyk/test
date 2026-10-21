@@ -69,6 +69,14 @@ sealed class Reason {
     data class Focus(val title: String, val until: Long) : Reason() {
         override val text: String get() = "正在做「$title」，专注锁开着"
     }
+
+    /** 约好的临时严管（墨灵提议、你同意或授权的），到点自己解除。 */
+    data class Hold(val until: Long, val why: String) : Reason() {
+        override val text: String
+            get() = java.time.Instant.ofEpochMilli(until).atZone(DayClock.BEIJING).let { t ->
+                "约好的严管，到 %02d:%02d".format(t.hour, t.minute) + if (why.isNotBlank()) "：$why" else ""
+            }
+    }
 }
 
 /** 专注锁：做某一步时到点前拦截娱乐应用。 */
@@ -115,6 +123,8 @@ object Engine {
         debt: Pair<String, String>? = null,
         control: com.zongkong.core.control.ControlBook = com.zongkong.core.control.ControlBook(),
         dateOverride: String? = null,
+        /** 墨灵那边约好的临时开关（临时严管、只减今天的娱乐）。 */
+        holds: List<com.zongkong.core.moling.Hold> = emptyList(),
     ): Status {
         val date = dateOverride?.let { java.time.LocalDate.parse(it) } ?: DayClock.date(now, zone)
         val weekday = date.dayOfWeek.value
@@ -161,15 +171,18 @@ object Engine {
         }
 
         val playMin = day.playMinutes
-        if (config.dailyQuotaMin > 0 && playMin >= config.dailyQuotaMin) {
-            reasons += Reason.Quota(playMin, config.dailyQuotaMin)
+        val cut = com.zongkong.core.moling.Holds.cutToday(holds, now, zone)
+        val quota = if (config.dailyQuotaMin > 0) (config.dailyQuotaMin - cut).coerceAtLeast(0) else 0
+        if (config.dailyQuotaMin > 0 && playMin >= quota) {
+            reasons += Reason.Quota(playMin, quota)
         } else if (earned != null) {
-            val allowed = allowedMinutes(config, earned)
+            val allowed = (allowedMinutes(config, earned) - cut).coerceAtLeast(0)
             if (playMin >= allowed) reasons += Reason.Budget(playMin, allowed)
         }
         if (debt != null) reasons += Reason.Debt(debt.first, debt.second)
 
         if (lock != null && lock.until > now) reasons += Reason.Focus(lock.title, lock.until)
+        com.zongkong.core.moling.Holds.strict(holds, now)?.let { reasons += Reason.Hold(it.until, it.why) }
 
         val emergency = day.emergencies.lastOrNull { now < it.until }
         val paused = config.pausedUntil > now
@@ -186,7 +199,7 @@ object Engine {
             lastActivity = lastActivity,
             silenceDueAt = silenceDueAt,
             playMin = playMin,
-            quotaMin = if (earned != null) allowedMinutes(config, earned) else config.dailyQuotaMin,
+            quotaMin = if (earned != null) (allowedMinutes(config, earned) - cut).coerceAtLeast(0) else quota,
         )
     }
 

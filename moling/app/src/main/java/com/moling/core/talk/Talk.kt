@@ -63,6 +63,9 @@ object Talk {
         appendLine("【动作】行动｜标题｜HH:MM｜分钟")
         appendLine("【动作】专注｜分钟｜做什么")
         appendLine("【动作】总控时间｜分钟")
+        appendLine("【动作】严管｜分钟（临时严管，到点自己解除）")
+        appendLine("【动作】减娱乐｜分钟（只减今天的）")
+        appendLine("【动作】约定｜他答应做什么｜HH:MM 前｜怎么检查")
         appendLine("【动作】去聊｜gemini 或 chatgpt｜聊什么")
         appendLine("【动作】记下｜主题｜一句结论")
         append("【动作】改道｜卡住了 / 累了 / 晚了 / 情况变了")
@@ -86,6 +89,15 @@ object Talk {
                 }
                 "专注" -> f.getOrNull(1)?.filter { it.isDigit() }?.toIntOrNull()?.takeIf { it in 5..180 }?.let { actions += TalkAction.Zk(ZkCommand.StartFocus(it, f.getOrNull(2).orEmpty(), why)) }
                 "总控时间" -> f.getOrNull(1)?.filter { it.isDigit() }?.toIntOrNull()?.takeIf { it in 5..60 }?.let { actions += TalkAction.Zk(ZkCommand.EnterHq(it, why)) }
+                "严管" -> f.getOrNull(1)?.filter { it.isDigit() }?.toIntOrNull()?.takeIf { it in 5..720 }?.let { actions += TalkAction.Zk(ZkCommand.Tighten("strict", "$it", why)) }
+                "减娱乐" -> f.getOrNull(1)?.filter { it.isDigit() }?.toIntOrNull()?.takeIf { it in 1..240 }?.let { actions += TalkAction.Zk(ZkCommand.Tighten("cut_play", "$it", why)) }
+                "约定" -> {
+                    val what = f.getOrNull(1).orEmpty()
+                    var due = hm(f.getOrNull(2)) ?: 0L
+                    // “23:30 前”说的是今天；要是早于今天 4 点（例如 1:00），就是今晚过了零点
+                    if (due in 1 until dayStart + 4 * 3_600_000L) due += 24 * 3_600_000L
+                    if (what.isNotBlank() && due > 0) actions += TalkAction.Zk(ZkCommand.Commit(what, due, f.getOrNull(3).orEmpty().ifBlank { "看总控的记录" }, why))
+                }
                 "去聊" -> {
                     val actor = if (f.getOrNull(1)?.lowercase()?.contains("gpt") == true) Actor.CHATGPT else Actor.GEMINI_LIVE
                     actions += TalkAction.Summon(actor, f.getOrNull(2).orEmpty())

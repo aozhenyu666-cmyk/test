@@ -160,6 +160,8 @@ class KeepAliveService : Service() {
                         try { SelfHeal.check(this@KeepAliveService) } catch (e: Throwable) { Log.w("KeepAlive", "检查出错", e) }
                         // 看门狗：眼睛没在运行超过 60 秒就提醒（每 60 秒问一次）
                         try { Watchdog.check(this@KeepAliveService) } catch (e: Throwable) { Log.w("KeepAlive", "看门狗出错", e) }
+                        // 墨灵授权内的倒计时：总控在倒计时里被杀过的话，这里补上
+                        try { com.zongkong.app.link.MolingBridge.runDue(this@KeepAliveService) } catch (e: Throwable) { Log.w("KeepAlive", "墨灵的倒计时出错", e) }
                         delay(60_000)
                     }
                 }

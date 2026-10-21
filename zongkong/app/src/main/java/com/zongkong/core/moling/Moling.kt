@@ -1,5 +1,7 @@
 package com.zongkong.core.moling
 
+import com.zongkong.core.Config
+import com.zongkong.core.DayClock
 import com.zongkong.core.Defaults
 import com.zongkong.core.agent.ToolResult
 import com.zongkong.core.agent.ZkTools
@@ -39,6 +41,8 @@ object MolingLink {
     const val ID = "id"
     const val STATE = "state"
     const val ERROR = "error"
+    /** 回执里：true = 按授权书倒计时执行（不用你点“执行”）。墨灵交指令时也用这个键表示“想按授权执行”。 */
+    const val AUTO = "auto"
 
     /** 墨灵排的行动都挂在这件事下面。 */
     const val THREAD = "墨灵的水道"
@@ -54,6 +58,10 @@ object MolingLink {
 @Serializable
 enum class OrderState(val label: String) {
     PENDING("等你确认"),
+    /** 授权书内：倒计时中，[MolingOrder.runAt] 到了就做，之前可以取消。 */
+    SCHEDULED("马上执行（可取消）"),
+    /** 授权书内的倒计时被你取消了。 */
+    VETOED("你取消了"),
     DONE("执行了"),
     FAILED("没执行成"),
     DECLINED("不用了"),
@@ -69,16 +77,27 @@ data class MolingOrder(
     val state: OrderState = OrderState.PENDING,
     val result: String = "",
     val decidedAt: Long = 0,
+    /** 授权书内：这一刻执行（0 = 不是授权执行）。 */
+    val runAt: Long = 0,
+    /** 按授权书第几类执行的（空 = 要你确认的普通建议）。 */
+    val grant: String = "",
 ) {
     val cmd: String get() = fields["cmd"].orEmpty()
     val text: String get() = Moling.describe(fields)
 }
 
 @Serializable
-data class MolingBook(val orders: List<MolingOrder> = emptyList(), val seq: Long = 0)
+data class MolingBook(
+    val orders: List<MolingOrder> = emptyList(),
+    val seq: Long = 0,
+    /** 授权书。 */
+    val grants: GrantBook = GrantBook(),
+    /** 临时开关（临时严管、只减今天的娱乐）。 */
+    val holds: List<Hold> = emptyList(),
+)
 
-/** 收下一条指令后给墨灵的回执。 */
-data class Receipt(val ok: Boolean, val message: String, val id: String = "")
+/** 收下一条指令后给墨灵的回执。[auto] = 按授权书倒计时执行（不用你点“执行”）。 */
+data class Receipt(val ok: Boolean, val message: String, val id: String = "", val auto: Boolean = false)
 
 /** 总控此刻的状态，给墨灵看。字段和墨灵的 ZkStatus 一一对应；列表用换行连起来。 */
 data class MolingStatus(
@@ -108,6 +127,17 @@ data class MolingStatus(
     val upcoming: List<String> = emptyList(),
     val blocked: List<String> = emptyList(),
     val sentinelOn: Boolean = false,
+    /** 今天被弹回几次、紧急放行用了几次、关卡完成几道 / 共几道、还开着的约定几条。 */
+    val bounces: Int = 0,
+    val emergencies: Int = 0,
+    val gatesDone: Int = 0,
+    val gatesTotal: Int = 0,
+    val openCommitments: Int = 0,
+    /** 临时严管到几点（0 = 没有）；今天减了多少分钟娱乐。 */
+    val holdUntil: Long = 0,
+    val cutToday: Int = 0,
+    /** 授权书给人看的那段话。 */
+    val grants: String = "",
 ) {
     fun toMap(): Map<String, String> {
         fun list(xs: List<String>) = xs.joinToString("\n") { it.replace('\n', ' ') }
@@ -139,6 +169,14 @@ data class MolingStatus(
             "upcoming" to list(upcoming),
             "blocked" to list(blocked),
             "sentinelOn" to sentinelOn.toString(),
+            "bounces" to bounces.toString(),
+            "emergencies" to emergencies.toString(),
+            "gatesDone" to gatesDone.toString(),
+            "gatesTotal" to gatesTotal.toString(),
+            "openCommitments" to openCommitments.toString(),
+            "holdUntil" to holdUntil.toString(),
+            "cutToday" to cutToday.toString(),
+            "grants" to grants,
         )
     }
 }
@@ -177,7 +215,8 @@ object Moling {
                     s("value") in MolingLink.neverBlock -> "这个应用永远不拦：${s("value")}"
                     else -> null
                 }
-                "cut_play", "strict" -> "总控还没有“只减今天的娱乐”“临时严管”这两个开关，先用专注锁或总控时间"
+                "strict" -> if (i("value") !in 5..720) "临时严管只能 5–720 分钟" else null
+                "cut_play" -> if (i("value") !in 1..240) "只能减 1–240 分钟" else null
                 else -> "不认识的收紧：${s("kind")}"
             }
             "request_loosen" -> when {
@@ -187,6 +226,12 @@ object Moling {
                 else -> null
             }
             "note" -> if (s("text").isBlank()) "内容是空的" else null
+            "commit" -> when {
+                s("what").isBlank() -> "约定没写做什么"
+                l("due") <= 0 -> "约定没写截止时间"
+                else -> null
+            }
+            "directive" -> if (s("title").isBlank() || s("text").isBlank()) "谋划单要有标题和内容" else null
             null, "" -> "没写要做什么"
             else -> "不认识的指令：${f["cmd"]}"
         }
@@ -200,13 +245,20 @@ object Moling {
             "add_action" -> "加一步「${s("title")}」" + timeText(f["start"]?.toLongOrNull() ?: 0, f["end"]?.toLongOrNull() ?: 0)
             "start_focus" -> "开 ${s("minutes")} 分钟专注锁" + if (s("title").isNotBlank()) "（${s("title")}）" else ""
             "enter_hq" -> "现在进入 ${s("minutes")} 分钟总控时间"
-            "tighten" -> if (s("kind") == "block_app") "把 ${s("value")} 加进拦截名单" else "收紧：${s("kind")} ${s("value")}"
+            "tighten" -> when (s("kind")) {
+                "block_app" -> "把 ${s("value")} 加进拦截名单"
+                "strict" -> "临时严管 ${s("value")} 分钟"
+                "cut_play" -> "今天的娱乐减少 ${s("value")} 分钟"
+                else -> "收紧：${s("kind")} ${s("value")}"
+            }
             "request_loosen" -> when (s("kind")) {
                 "unblock_app" -> "把 ${s("value")} 移出拦截名单（24 小时后生效）"
                 "play_quota" -> "每天娱乐上限改成 ${s("value")} 分钟（放宽要等 24 小时）"
                 else -> "放宽：${s("kind")} ${s("value")}"
             }
             "note" -> "往收集箱放一条：${s("text").take(30)}"
+            "commit" -> "记一条约定：${s("what")}" + timeText(f["due"]?.toLongOrNull() ?: 0, 0).let { if (it.isBlank()) "" else "$it 前" }
+            "directive" -> "收下一份谋划单：${s("title")}"
             else -> "不认识的指令"
         }
         return what + if (s("reason").isNotBlank()) "。墨灵说：${s("reason")}" else ""
@@ -220,21 +272,57 @@ object Moling {
 
     // ------------------------------------------------------------------ 收
 
-    /** 收一条指令：过期旧的、检查、限流、去重，合格的挂起来等确认。 */
-    fun receive(book: MolingBook, f: Map<String, String>, now: Long): Pair<MolingBook, Receipt> {
-        val b = expire(book, now)
+    /** 授权执行前的反悔时间。 */
+    const val VETO_MS = 60_000L
+
+    /**
+     * 收一条指令：过期旧的、检查、限流、去重。
+     * 墨灵标了 auto=true、授权书也允许 → 倒计时 [VETO_MS] 后执行（可以取消）；否则挂起来等你点“执行”。
+     */
+    fun receive(book: MolingBook, f: Map<String, String>, now: Long, zone: ZoneId = DayClock.BEIJING): Pair<MolingBook, Receipt> {
+        val b = expire(book, now).let { it.copy(grants = Grants.applyDue(it.grants, now), holds = Holds.prune(it.holds, now)) }
         check(f)?.let { return b to Receipt(false, it) }
         val clean = f.mapValues { (_, v) -> v.take(500) }
         val pending = pending(b, now)
         pending.firstOrNull { same(it.fields, clean) }?.let { return b to Receipt(true, "这条已经在等你确认了", it.id) }
+        b.orders.firstOrNull { it.state == OrderState.SCHEDULED && same(it.fields, clean) }?.let { return b to Receipt(true, "这条已经在倒计时了", it.id, auto = true) }
         if (pending.size >= MAX_PENDING) return b to Receipt(false, "总控里已经有 $MAX_PENDING 条墨灵的建议没处理，先处理掉再交")
         if (b.orders.count { now - it.receivedAt < 3_600_000L } >= MAX_PER_HOUR) return b to Receipt(false, "这一小时墨灵交得太多了，晚点再交")
-        val o = MolingOrder("m${b.seq}-${now.toString(36)}", clean, now)
-        return b.copy(orders = (b.orders + o).takeLast(KEEP), seq = b.seq + 1) to Receipt(true, "总控收下了，等你在总控里确认", o.id)
+        val id = "m${b.seq}-${now.toString(36)}"
+        if (f["auto"] == "true") {
+            val kind = Grants.kindOf(clean)
+            val used = kind?.let { k -> usedToday(b, k, now, zone) } ?: 0
+            val (g, why) = Grants.check(b.grants, clean, now, zone, used)
+            if (g != null) {
+                val o = MolingOrder(id, clean, now, OrderState.SCHEDULED, runAt = now + VETO_MS, grant = g.kind.name)
+                return b.copy(orders = (b.orders + o).takeLast(KEEP), seq = b.seq + 1) to
+                    Receipt(true, "授权书「${g.kind.label}」：${VETO_MS / 1000} 秒后执行，你可以在总控的通知里取消", id, auto = true)
+            }
+            val o = MolingOrder(id, clean, now)
+            return b.copy(orders = (b.orders + o).takeLast(KEEP), seq = b.seq + 1) to Receipt(true, "不在授权内（$why），等你在总控里确认", id)
+        }
+        val o = MolingOrder(id, clean, now)
+        return b.copy(orders = (b.orders + o).takeLast(KEEP), seq = b.seq + 1) to Receipt(true, "总控收下了，等你在总控里确认", id)
     }
 
-    /** 同一件事（不管理由和版本号写得一不一样）。 */
-    private fun same(a: Map<String, String>, b: Map<String, String>) = a - "reason" - "v" == b - "reason" - "v"
+    /** 今天（逻辑日）按授权执行过（或正在倒计时）的这一类有几条。 */
+    fun usedToday(book: MolingBook, kind: GrantKind, now: Long, zone: ZoneId): Int {
+        val day = DayClock.date(now, zone)
+        return book.orders.count {
+            it.grant == kind.name && (it.state == OrderState.SCHEDULED || it.state == OrderState.DONE) && DayClock.date(it.receivedAt, zone) == day
+        }
+    }
+
+    /** 倒计时到了、该执行的。 */
+    fun due(book: MolingBook, now: Long): List<MolingOrder> = book.orders.filter { it.state == OrderState.SCHEDULED && it.runAt <= now }
+
+    /** 你在倒计时里点了“取消”。 */
+    fun veto(book: MolingBook, id: String, now: Long): MolingBook = book.copy(orders = book.orders.map {
+        if (it.id == id && it.state == OrderState.SCHEDULED) it.copy(state = OrderState.VETOED, decidedAt = now) else it
+    })
+
+    /** 同一件事（不管理由、版本号、要不要授权执行写得一不一样）。 */
+    private fun same(a: Map<String, String>, b: Map<String, String>) = a - "reason" - "v" - "auto" == b - "reason" - "v" - "auto"
 
     fun pending(book: MolingBook, now: Long): List<MolingOrder> =
         book.orders.filter { it.state == OrderState.PENDING && now - it.receivedAt < TTL_MS }
@@ -252,6 +340,37 @@ object Moling {
     })
 
     // ------------------------------------------------------------------ 做
+
+    /**
+     * 执行一条（用户点了“执行”，或授权倒计时到了）：临时开关直接写进 [MolingBook.holds]，别的交给 [run]。
+     * 返回新的记录和结果；记录里这条已经标成执行了 / 没执行成。只执行 PENDING 和 SCHEDULED 的。
+     */
+    suspend fun execute(book: MolingBook, id: String, tools: ZkTools, work: () -> Work, config: Config, now: Long, zone: ZoneId): Pair<MolingBook, ToolResult> {
+        val o = book.orders.firstOrNull { it.id == id && (it.state == OrderState.PENDING || it.state == OrderState.SCHEDULED) }
+            ?: return book to ToolResult.fail("这条已经处理过或过期了")
+        if (o.state == OrderState.PENDING && now - o.receivedAt >= TTL_MS) return expire(book, now) to ToolResult.fail("这条过期了")
+        check(o.fields)?.let { return finish(book, id, ToolResult.fail(it), now) to ToolResult.fail(it) }
+        val f = o.fields
+        val why = f["reason"].orEmpty()
+        val (b, r) = when {
+            o.cmd == "tighten" && f["kind"] == "strict" -> {
+                val m = f["value"]!!.toInt()
+                val h = Holds.strictFor("h-${o.id}", m, now, why)
+                book.copy(holds = Holds.prune(book.holds, now) + h) to ToolResult("临时严管 $m 分钟，到点自己解除", "临时严管 $m 分钟")
+            }
+            o.cmd == "tighten" && f["kind"] == "cut_play" -> {
+                if (config.dailyQuotaMin <= 0 && !config.earn.enabled) {
+                    book to ToolResult.fail("总控没设娱乐上限，也没开“挣来的娱乐”，减不了")
+                } else {
+                    val m = f["value"]!!.toInt()
+                    book.copy(holds = Holds.prune(book.holds, now) + Holds.cutPlay("h-${o.id}", m, now, zone, why)) to
+                        ToolResult("今天的娱乐减少 $m 分钟，明天恢复", "今天娱乐 −$m 分钟")
+                }
+            }
+            else -> book to run(o, tools, work, now, zone)
+        }
+        return finish(b, id, r, now) to r
+    }
 
     /**
      * 用户点了“执行”：用参谋的工具箱去做，规矩和参谋一样（放宽照样进冷静期）。
@@ -287,11 +406,13 @@ object Moling {
                 tools.run("start_focus", args("action" to key, "minutes" to s("minutes"), "lock" to "true"))
             }
             "enter_hq" -> tools.run("start_hq_session", args("minutes" to s("minutes").toInt().coerceIn(15, 90).toString()))
-            "tighten" -> tools.run("block_apps", args("add" to s("value")))
             "request_loosen" -> when (s("kind")) {
                 "unblock_app" -> tools.run("block_apps", args("remove" to s("value")))
                 else -> tools.run("set_rules", args("daily_quota_min" to s("value")))
             }
+            "commit" -> tools.run("commit", args("what" to s("what"), "due" to timeOf(l("due"), 0, zone), "check" to s("check").ifBlank { "看总控的记录" }))
+            "directive" -> tools.run("directive_add", args("title" to s("title"), "text" to s("text"), "source" to "墨灵", "summary" to s("summary"), "items" to s("items")))
+            "tighten" -> if (s("kind") == "block_app") tools.run("block_apps", args("add" to s("value"))) else ToolResult.fail("临时开关要走 execute")
             "note" -> tools.run("add_note", args("type" to "材料", "title" to s("text").lines().first().take(40), "text" to s("text") + if (why.isNotBlank()) "\n（墨灵：$why）" else ""))
             else -> ToolResult.fail("不认识的指令")
         }

@@ -32,7 +32,9 @@ class MolingTest {
         fun refused(f: Map<String, String>) = !Moling.receive(MolingBook(), f, at(10)).second.ok
         assertTrue(refused(cmd("cmd" to "tighten", "kind" to "block_app", "value" to "com.android.phone")))
         assertTrue(refused(cmd("cmd" to "tighten", "kind" to "block_app", "value" to "com.zongkong.app")))
-        assertTrue(refused(cmd("cmd" to "tighten", "kind" to "cut_play", "value" to "30")))
+        assertTrue(refused(cmd("cmd" to "tighten", "kind" to "cut_play", "value" to "500")))
+        assertTrue(refused(cmd("cmd" to "tighten", "kind" to "strict", "value" to "1")))
+        assertTrue(refused(cmd("cmd" to "commit", "what" to "写申论")))
         assertTrue(refused(cmd("cmd" to "request_loosen", "kind" to "pause_all", "value" to "1")))
         assertTrue(refused(cmd("cmd" to "start_focus", "minutes" to "600", "title" to "x")))
         assertTrue(refused(cmd("cmd" to "uninstall")))
@@ -139,6 +141,6 @@ class MolingTest {
         val m = MolingStatus(at = 1, mainTitle = "写申论", aims = listOf("上岸", "考研"), blocked = listOf("a", "b")).toMap()
         assertEquals("写申论", m["mainTitle"])
         assertEquals("上岸\n考研", m["aims"])
-        assertEquals(27, m.size)
+        assertEquals(35, m.size)
     }
 }

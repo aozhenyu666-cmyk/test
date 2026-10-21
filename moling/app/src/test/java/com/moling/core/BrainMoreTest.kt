@@ -44,11 +44,26 @@ class BrainMoreTest {
             return ZkReceipt(true, "收下了", 0, id)
         }
         override fun result(id: String) = if (reachable) results[id] else null
+        /** 假装总控的授权书什么都授权了。 */
+        var granted = false
+        var autoRequests = 0
+        override fun sendAuto(command: ZkCommand): ZkReceipt? {
+            autoRequests++
+            return send(command)?.let { if (granted) it.copy(auto = true, message = "授权内，60 秒后执行") else it }
+        }
     }
 
     private val phone = FactsSource { Facts(now = it, minute = Flow.minuteOf(it)) }
 
-    private fun brain(zk: Zk, reply: String? = null) = Brain(phone, reply?.let { r -> Ask { _, _ -> r } }, MemStore(), MemStore(), zk)
+    private fun brain(zk: Zk, reply: String? = null, store: MemStore = MemStore()) = Brain(phone, reply?.let { r -> Ask { _, _ -> r } }, store, MemStore(), zk)
+
+    /** 挣到了管家：用满 7 天、接受率和猜测都高。 */
+    private fun stewardStore(): MemStore = MemStore().apply {
+        json = kotlinx.serialization.json.Json.encodeToString(
+            BrainState.serializer(),
+            BrainState(trust = com.moling.core.power.TrustStats(accepted = 9, proposed = 10, guessRight = 8, guessJudged = 10, days = 7)),
+        )
+    }
 
     @Test fun learnsWhatZongkongDidWithIt() = runTest {
         val zk = Zk()
@@ -130,6 +145,45 @@ class BrainMoreTest {
         assertFalse(b.needsNight(at(23, 50)))
         assertFalse("凌晨 1 点还是昨天那一夜", b.needsNight(at(1, 0, d = 21)))
         assertTrue(b.needsNight(at(23, 40, d = 21)))
+    }
+
+    @Test fun plannerHandsPlansStraightToZongkong() = runTest {
+        val zk = Zk()
+        val b = brain(zk, "好，三点开始。\n【动作】主线｜写申论｜15:00")
+        assertEquals(com.moling.core.power.Tier.PLANNER, b.tier())
+        val p = b.chat("下午三点写申论", at(10)).proposals.single()
+        assertTrue(p.auto)
+        assertEquals(ProposalState.SENT, p.state)
+        assertEquals(1, zk.autoRequests)
+        assertEquals("总控收下了", p.receipt)
+    }
+
+    @Test fun stewardTightensByGrantAndVetoCountsAsNo() = runTest {
+        val zk = Zk().apply { granted = true; status = status.copy(mainTitle = "申论第二题", mainPlannedAt = at(10)) }
+        val b = brain(zk, store = stewardStore())
+        assertEquals(com.moling.core.power.Tier.STEWARD, b.tier())
+        b.planDay(at(9))
+        b.confirmFlow(at(9, 1))
+        val n = b.tick(at(10, 15), "ENTERTAINMENT").single { it.kind == "drift" }
+        val focus = b.state().proposals.single { it.id == n.proposalId }
+        assertTrue("管家按授权书直接收紧", focus.auto)
+        assertEquals(ProposalState.SENT, focus.state)
+        assertEquals("授权内：总控倒计时执行", focus.receipt)
+        // 他在总控的倒计时里点了取消
+        val before = b.state().decisions.size
+        zk.results[focus.zkIds.single()] = ZkResult("VETOED", "")
+        focus.let { f -> b.state().proposals.filter { it.id != f.id }.flatMap { it.zkIds }.forEach { zk.results[it] = ZkResult("DONE", "") } }
+        b.tick(at(10, 16), "ENTERTAINMENT")
+        assertEquals("你在总控里取消了", b.state().proposals.single { it.id == focus.id }.zkOutcome)
+        assertTrue(b.state().decisions.drop(before).any { !it.accepted })
+    }
+
+    @Test fun newCommandsAreValid() {
+        assertTrue(com.moling.core.link.ZkWire.valid(ZkCommand.Commit("写申论", at(22), "看行动记录", "")))
+        assertFalse(com.moling.core.link.ZkWire.valid(ZkCommand.Commit("写申论", 0, "", "")))
+        assertTrue(com.moling.core.link.ZkWire.valid(ZkCommand.Tighten("strict", "90", "")))
+        assertTrue(com.moling.core.link.ZkWire.valid(ZkCommand.Tighten("cut_play", "30", "")))
+        assertEquals("true", com.moling.core.link.ZkWire.toMapAuto(ZkCommand.Tighten("strict", "90", ""))["auto"])
     }
 
     @Test fun foregroundCategory() {
