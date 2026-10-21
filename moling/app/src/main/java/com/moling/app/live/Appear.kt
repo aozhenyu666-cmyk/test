@@ -2,19 +2,27 @@ package com.moling.app.live
 
 import android.content.Context
 import android.provider.Settings
+import com.moling.app.BrainHost
 import com.moling.core.LiveTurn
 import com.moling.core.live.Can
 import com.moling.core.live.Modality
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /*
  * 她出现的方式（v9 反免疫）：大脑每次挑一种（[LiveTurn.modality]），这里照着弹。
  *
- * 现在接好的：GATE（拦人页）、PEEK（底部卡片）、PET（桌宠）、STARE（盯着你）、WHISPER（耳机里说一句）。
- * COUNCIL / QUIZ 接着往里加；没做好之前退回底部卡片，功能不缺，只是样子单一。
+ * 现在接好的：GATE（拦人页）、PEEK（底部卡片）、PET（桌宠）、STARE（盯着你）、
+ * WHISPER（耳机里说一句）、COUNCIL（参谋弹幕）。QUIZ（捉虫题）由 B 组接。
+ * 没悬浮窗权限 / 没耳机时自动退回底部卡片，功能不缺，只是样子变了。
  *
- * 他怎么回应，各个界面调 [com.moling.app.BrainHost.react] 报回来（反免疫账本靠它）。
+ * 他怎么回应，各个界面调 [BrainHost.react] 报回来（反免疫账本靠它）。
  */
 object Appear {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     /** 此刻能用哪些方式。 */
     fun can(context: Context): Can = Can(
         overlay = Settings.canDrawOverlays(context),
@@ -38,7 +46,29 @@ object Appear {
             Modality.WHISPER ->
                 if (canWhisper(context)) Whisper.say(context, turn.mood, turn.line)
                 else LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
+            Modality.COUNCIL ->
+                if (!overlay) LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
+                else council(context, turn, label)
+            // QUIZ 由 B 组接；没接之前退回底部卡片。
             else -> LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
+        }
+    }
+
+    /** Z4 参谋弹幕：先问参谋（要调模型），拿不到就退回桌宠；拿到就飘四句，最后桌宠带着“合起来”的话。 */
+    private fun council(context: Context, turn: LiveTurn, label: String) {
+        val app = context.applicationContext
+        scope.launch {
+            val c = runCatching { BrainHost.council("他现在在「$label」里。接下来十分钟他该怎么办？") }.getOrNull()
+            if (c == null) {
+                PetOverlay.show(app, turn.mood, turn.line)
+            } else {
+                PetOverlay.council(
+                    app,
+                    listOf("教练：${c.coach}", "军师：${c.strategist}", "对手：${c.critic}", "朋友：${c.friend}"),
+                    turn.mood,
+                    c.together,
+                )
+            }
         }
     }
 }
