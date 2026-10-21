@@ -65,5 +65,5 @@ jobs:
           gh release create moling-latest moling.apk \
             --target "$GITHUB_SHA" \
             --prerelease \
-            --title "墨灵 最新调试版" \
+            --title "墨灵 0.12.${GITHUB_RUN_NUMBER}（${GITHUB_SHA::7}）" \
             --notes "由提交 ${GITHUB_SHA::7} 自动构建，已通过单元测试。直接安装 moling.apk，可覆盖旧版本，数据保留。"

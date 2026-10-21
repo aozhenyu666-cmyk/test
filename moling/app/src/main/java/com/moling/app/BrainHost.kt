@@ -513,10 +513,34 @@ object BrainHost {
     }
 
     /** 他点了她给的一个选项（破雾、盲盒、赌……）。 */
-    suspend fun tap(choice: String): LiveTurn =
-        io("tap", { LiveTurn(Mood.CALM, "刚才没接上，等会儿再点一下", false, false, emptyList()) }) {
-            brain.tap(choice, System.currentTimeMillis(), liveConfig())
+    suspend fun tap(choice: String): LiveTurn {
+        // 同一个选项 4 秒内只算一次；上一下还没回来时再点也不算（防连点、防两个界面同时报）
+        val now = System.currentTimeMillis()
+        lastTap?.let { (c, at, turn) -> if (c == choice && now - at < 4_000 && turn != null) return turn }
+        if (!tapBusy.compareAndSet(false, true)) {
+            // 上一下还在路上：等它回来，用它的结果
+            repeat(400) {
+                kotlinx.coroutines.delay(100)
+                if (!tapBusy.get()) lastTap?.third?.let { return it }
+            }
+            return LiveTurn(Mood.CALM, "刚才没接上，等会儿再点一下", false, false, emptyList())
         }
+        try {
+            lastTap = Triple(choice, now, null)
+            val t = io("tap", { LiveTurn(Mood.CALM, "刚才没接上，等会儿再点一下", false, false, emptyList()) }) {
+                brain.tap(choice, now, liveConfig())
+            }
+            lastTap = Triple(choice, now, t)
+            return t
+        } finally {
+            tapBusy.set(false)
+        }
+    }
+
+    private val tapBusy = AtomicBoolean(false)
+
+    @Volatile
+    private var lastTap: Triple<String, Long, LiveTurn?>? = null
 
     /** 拦着他时他回了一句。 */
     suspend fun gateReply(text: String): LiveTurn =

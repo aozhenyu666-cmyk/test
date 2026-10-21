@@ -256,9 +256,14 @@ fun ChatScreen() {
     }
     var showThoughts by remember { mutableStateOf(false) }
 
+    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+    val typing = androidx.compose.foundation.layout.WindowInsets.isImeVisible
+    // 键盘一出来就滚到最新一条
+    LaunchedEffect(typing) { if (typing && state.talk.isNotEmpty()) list.scrollToItem(state.talk.lastIndex) }
     Column(Modifier.fillMaxSize()) {
         // ---------------------------------------------------------------- 她的台子：形象、此刻、想好要说的、她的推断
-        Stage(
+        // 打字时收起台子和模式条，让对话和输入框露出来
+        if (!typing) Stage(
             mood = mood,
             line = if (sending) "在想…" else if (listening) "在听…" else moodLine(mood),
             say = state.sayQueue.firstOrNull()?.text,
@@ -396,7 +401,7 @@ fun ChatScreen() {
         }
 
         // 模式条 + 两个特别的按钮（v4）：反驳我、疯想—冷判
-        Row(
+        if (!typing) Row(
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

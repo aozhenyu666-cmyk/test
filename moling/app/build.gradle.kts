@@ -13,8 +13,10 @@ android {
         applicationId = "com.moling.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI 每次构建号 +1：手机上能看出是不是新版（本地构建是 0.12.0）
+        val run = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0
+        versionCode = 100 + run
+        versionName = "0.12.$run"
     }
 
     signingConfigs {

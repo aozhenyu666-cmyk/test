@@ -143,6 +143,17 @@ private fun MolingShell(requestedTab: MutableIntState) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { now = System.currentTimeMillis(); delay(30_000L) } }
     val mood = moodOf(state, now)
+    // 返回手势：先关掉打开的页面，再回到“对话”标签，最后才退出
+    androidx.activity.compose.BackHandler(enabled = settingsOpen || bridgeOpen || readyOpen || tab != 0) {
+        when {
+            settingsOpen -> settingsOpen = false
+            bridgeOpen -> bridgeOpen = false
+            readyOpen -> readyOpen = false
+            else -> tab = 0
+        }
+    }
+    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+    val typing = androidx.compose.foundation.layout.WindowInsets.isImeVisible
 
     // 设置页等占满全屏，不套 Scaffold：它们自己带返回。
     if (settingsOpen) {
@@ -187,7 +198,8 @@ private fun MolingShell(requestedTab: MutableIntState) {
             )
         },
         bottomBar = {
-            NavigationBar(containerColor = Paper, tonalElevation = 0.dp) {
+            // 打字时收起底栏，给对话多留地方
+            if (!typing) NavigationBar(containerColor = Paper, tonalElevation = 0.dp) {
                 val itemColors = NavigationBarItemDefaults.colors(indicatorColor = Mist)
                 NavigationBarItem(
                     selected = tab == 0,

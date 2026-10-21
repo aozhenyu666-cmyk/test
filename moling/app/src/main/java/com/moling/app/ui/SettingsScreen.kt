@@ -125,6 +125,16 @@ fun SettingsScreen(onDone: () -> Unit) {
         }
     }
 
+    // 返回手势：先关里面的页 / 回设置首页（首页时交给外面关掉设置）
+    androidx.activity.compose.BackHandler(enabled = debugOpen || aboutOpen || bridgeOpen || section != null) {
+        when {
+            debugOpen -> debugOpen = false
+            aboutOpen -> aboutOpen = false
+            bridgeOpen -> bridgeOpen = false
+            else -> section = null
+        }
+    }
+
     // 调试页占满全屏，自己带返回。
     if (debugOpen) {
         DebugScreen(onDone = { debugOpen = false })
@@ -876,4 +886,10 @@ private fun SettingsHub(
     Card("在你身边", "小窗、先答一问、晨报、分享", { com.moling.app.ui.art.InkClouds(m, animated = false) }, openPresence)
     Card("记忆与备份", "moling.json：$memory", { com.moling.app.ui.art.InkPapers(m, animated = false) }) { open("mem") }
     Card("调试", "只读：权柄、总控、提议、导演、后台、日志", { com.moling.app.ui.art.InkGalaxy(m, animated = false) }, openDebug)
+    Text(
+        "墨灵 ${com.moling.app.BuildConfig.VERSION_NAME}",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+    )
 }
