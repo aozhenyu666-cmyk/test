@@ -48,6 +48,8 @@ data class ThinkResult(
     val say: List<String>,
     /** 她的闲心：盲盒、小剧场、赌。 */
     val play: List<Say> = emptyList(),
+    /** 跨域连线：新编号、关系（中文）、旧编号、为什么。 */
+    val links: List<List<String>> = emptyList(),
 )
 
 object Think {
@@ -84,6 +86,9 @@ object Think {
         recall: List<String>,
         open: List<Thought>,
         overdue: List<Thought>,
+        /** 跨域连线的材料：这一天新进体系图的（带编号）和与之相关的旧论断（带编号）。 */
+        fresh: List<String> = emptyList(),
+        older: List<String> = emptyList(),
     ) = buildString {
         appendLine("【你是】$persona")
         appendLine("【现在】$now。没人叫你，这是你自己的思考时间：把手上的记录推一遍，想清楚$callUser 现在怎么样、接下来会怎样、你该做什么。")
@@ -96,6 +101,10 @@ object Think {
         if (recall.isNotEmpty()) appendLine("【体系图里相关的】\n" + recall.joinToString("\n") { "- $it" })
         if (open.isNotEmpty()) appendLine("【你之前的判断（还没验证）】\n" + open.joinToString("\n") { line(it) })
         if (overdue.isNotEmpty()) appendLine("【到点该验证的】" + overdue.joinToString("、") { it.id })
+        if (fresh.isNotEmpty() && older.isNotEmpty()) {
+            appendLine("【这一天新进体系图的】\n" + fresh.joinToString("\n"))
+            appendLine("【以前的、可能相关的】\n" + older.joinToString("\n"))
+        }
         appendLine()
         appendLine("要求：只从记录推，不编；猜测就标低把握；不重复已有的判断（要改就先放下旧的）。最多 3 条新判断。")
         appendLine("该验证的，按现在的记录写结果；看不出来就写“过期”。")
@@ -107,6 +116,7 @@ object Think {
         appendLine("【盲盒】一句听着像他会说、但藏了一个逻辑漏洞的话（用他体系图或最近说的话做材料）｜漏洞在哪（一句）")
         appendLine("【小剧场】对手：一句嘲笑｜军师：一句给台阶的办法｜朋友：一句护着他的话（针对他此刻的状态）")
         appendLine("【赌】你下的一个小赌（比如：我赌你今晚 12 点前放不下手机），把握多少（0–100%）")
+        if (fresh.isNotEmpty() && older.isNotEmpty()) appendLine("【连线】新编号｜支撑 / 反例 / 导致 / 前置 / 类似｜旧编号｜一句为什么（新的和旧的真有关系才写，最多 2 条）")
         append("【动作】只在真的需要时写，格式同对话：提醒我｜N 分钟后｜说什么、问GPT｜问题、约定｜做什么｜HH:MM 前｜怎么检查（最多 2 个）")
     }
 
@@ -147,7 +157,11 @@ object Think {
                 if (t.length >= 4) add(Say(t, now, "她下的赌", "bet", "", listOf("我偏不", "你赢了")))
             }
         }
-        return ThinkResult(made, settled, say, play)
+        val links = Regex("""【连线】([^\n]+)""").findAll(reply).mapNotNull { m ->
+            val f = m.groupValues[1].split('｜', '|').map { it.trim() }
+            if (f.size >= 3 && f[0].startsWith("n-") && f[2].startsWith("n-")) listOf(f[0], f[1], f[2], f.getOrNull(3).orEmpty()) else null
+        }.take(2).toList()
+        return ThinkResult(made, settled, say, play, links)
     }
 }
 

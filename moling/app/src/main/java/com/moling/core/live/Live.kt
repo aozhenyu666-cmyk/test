@@ -39,6 +39,8 @@ enum class Trigger(val label: String, val salient: Boolean) {
     DONE("他刚做完主线", true),
     SAY("她自己想好了有话要说", true),
     AUTOPILOT("他在自动驾驶：机械地刷 / 来回横跳 / 拿起又放下", true),
+    SPAR("他好一会儿没动脑了，来下一局三手棋", false),
+    TOLL("他刚刷完一大段，收一回合“思维过路费”", false),
 }
 
 /** 她多主动：少 / 平常 / 多（设置里选）。 */
@@ -80,11 +82,13 @@ data class LiveConfig(
     val maxRounds: Int = 3,
     /** 没事的时候（在桌面、在别的应用里闲着）也可以来找他。 */
     val idle: Boolean = false,
+    /** 闲着、好久没动脑时来下三手棋；刷完一大段收“过路费”。 */
+    val spar: Boolean = true,
 ) {
     companion object {
         /** 按他选的主动程度；拦人的规矩不跟着变。 */
         fun of(e: Eagerness, gates: Boolean): LiveConfig = when (e) {
-            Eagerness.LOW -> LiveConfig(speaksPerDay = 5, gapMin = 45)
+            Eagerness.LOW -> LiveConfig(speaksPerDay = 5, gapMin = 45, spar = false)
             Eagerness.MID -> LiveConfig()
             Eagerness.HIGH -> LiveConfig(speaksPerDay = 16, gapMin = 12, idle = true)
         }.let { if (gates) it else it.copy(gatesPerDay = 0) }
@@ -156,6 +160,7 @@ object Live {
         if (thinking.isNotEmpty()) appendLine("【你自己推的判断（未必对）】\n" + thinking.joinToString("\n"))
         if (toSay.isNotBlank()) appendLine("【你之前想好要对他说的】$toSay（合适就说这个，可以改得更贴合此刻）")
         if (cues.isNotEmpty()) appendLine("【你看到的】" + cues.joinToString("；"))
+        if (trigger == Trigger.TOLL) appendLine("他刚刷完一大段，现在离开了。收一回合“思维过路费”：你看不到他看了什么，所以不问内容细节；问一个点一下就能答的小问题，让他想一下刚才留下了什么、或者接下来做什么。")
         if (trigger == Trigger.AUTOPILOT) appendLine("他现在多半是脑子掉线、靠本能在操作。你的话要像一颗小石子：短、具体、出乎意料，让他停一下、想一下，而不是说教。")
         if (ignored >= 2) appendLine("他最近老划掉你。这次别讲道理，用“我猜……，对吗？”的方式问他一句，让他忍不住想纠正你。")
         activity?.let { a ->
@@ -281,6 +286,8 @@ object Live {
             Trigger.UNLOCK -> LiveLine(true, Mood.CURIOUS, "回来啦。现在打算干什么？", false, false)
             Trigger.DONE -> LiveLine(true, Mood.HAPPY, "主线做完了！歇一会儿，还是趁热接下一件？", false, false)
             Trigger.SAY -> LiveLine(false, Mood.CALM, "", false, false)
+            Trigger.SPAR -> LiveLine(false, Mood.CALM, "", false, false)
+            Trigger.TOLL -> LiveLine(true, Mood.CURIOUS, "刚才那一大段里，有一个你现在还记得的东西吗？", false, false, listOf("有一个", "全忘了", "不想说"))
             Trigger.AUTOPILOT -> LiveLine(true, Mood.CURIOUS, "停一下——你现在是想看点什么，还是手在自己动？", canGate, false, listOf("想看点什么", "手在自己动", "说不清"))
         }
     }

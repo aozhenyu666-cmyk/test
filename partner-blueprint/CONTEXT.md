@@ -34,7 +34,7 @@
 - 墨灵的签名沿用总控的调试签名（同一个证书），总控按“包名 com.moling.app + 这个证书”认墨灵。
 - **坑**：仓库的 GitHub Actions 在任何分支改动 `zongkong/` 后，测试通过就会覆盖手机上的“最新版”下载链接（`zongkong-latest`）。所以从旧分支推送会把用户的总控降级（发生过一次，已修）。
 - **坑**：总控的模拟器测试 `LoopTest` 偶尔超时（`bossInterrogation`、`partnerAndCampaign`），重跑一次通常就过。
-- 云端环境连不上谷歌的 Android SDK：两边的纯逻辑在 `tools/core-tests/` 里 `gradle test`（总控 core + 墨灵 core + 交叉测试，共 385 个），Android 编译以 CI 为准。Maven Central 偶尔 429，那个工程已经先走谷歌镜像。
+- 云端环境连不上谷歌的 Android SDK：两边的纯逻辑在 `tools/core-tests/` 里 `gradle test`（总控 core + 墨灵 core + 交叉测试，共 410 个），Android 编译以 CI 为准。Maven Central 偶尔 429，那个工程已经先走谷歌镜像。
 
 ## 5. 现在的状态
 
@@ -58,6 +58,7 @@
 - **v6 没做**：墨灵自己当 MCP 服务器（要一个公网服务器中转，ChatGPT 个人版能不能接自定义 MCP 也不确定）；Notion 的 External Agents API 还是 alpha。
 - **v8（Claude，2026-10-21）**：她自己的思考（定时推演、判断可验证、想好的话排队）、更多主动的时机（解锁、做完主线、有话说、闲着）和主动程度设置、使用脉络（只有应用和时间）、对讲和可选语音模型、交接包（发给任何 AI 应用，回答从分享菜单回来）、墨线界面和准备清单。细节见 `moling/DEVLOG.md`。
 - **v10（Claude，2026-10-21）**：联络站——Cloudflare Worker（`moling/app/src/main/assets/relay-worker.js`）当中转，ChatGPT / Claude 用 MCP 读墨灵的黑板、把回答发给她，墨灵每 10 分钟推 / 收；设置改成首页 + 分节。
+- **v11–v12（Claude，2026-10-21）**：破雾（刷懵了只要他点，不要他打字）；心智引擎——思维转速、三手棋、过路费、拓扑检索、跨域连线、采蜜简报、她摸清的规律（他点“对”才生效）。界面在 `moling/DEEPSEEK-7.md`。
 - **明确不做**：读其他应用的屏幕内容、让墨灵的权柄高过总控 / 绕开铁律（会话里提过，被安全检查拦下）。
 - **还没做**：读系统日历（要加 `READ_CALENDAR`）、连续语音对讲、专注时开勿扰、Notion 镜子；以及最重要的——真机联调。
 - **v4 规划**（`partner-blueprint/v4-power.md`）：授权书（事先授权的收紧和排计划，60 秒反悔，撤销走冷静期）、总控三个新开关、约定 / 谋划单交给总控监督、小窗和“先答一问”、日历和作息、周报和打法本、模式和语音对讲。Claude 先做 C1–C7（大脑和总控内核），DeepSeek 做第四到第七批。

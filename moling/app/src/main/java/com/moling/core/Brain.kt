@@ -5,6 +5,7 @@ import com.moling.core.atlas.AtlasOps
 import com.moling.core.atlas.Candidates
 import com.moling.core.atlas.Node
 import com.moling.core.atlas.NodeKind
+import com.moling.core.atlas.Relation
 import com.moling.core.flow.Cause
 import com.moling.core.flow.Flow
 import com.moling.core.flow.FlowPlan
@@ -89,6 +90,17 @@ import com.moling.core.think.Say
 import com.moling.core.think.Think
 import com.moling.core.think.ThinkResult
 import com.moling.core.think.Thought
+import com.moling.core.atlas.Graph
+import com.moling.core.forage.Brief
+import com.moling.core.forage.Forage
+import com.moling.core.review.Rule
+import com.moling.core.review.Rules
+import com.moling.core.spar.Chess
+import com.moling.core.spar.ChessTurn
+import com.moling.core.spar.Chesses
+import com.moling.core.spar.MindAct
+import com.moling.core.spar.MindMark
+import com.moling.core.spar.Rpm
 import com.moling.core.usage.Session
 import com.moling.core.usage.UsageDay
 import com.moling.core.usage.UsageLog
@@ -264,6 +276,16 @@ data class BrainState(
     val sayQueue: List<Say> = emptyList(),
     /** 她每种出现方式的效果（反免疫，v9）。 */
     val habits: HabitBook = HabitBook(),
+    /** 他动脑的动作（思维转速，v12）。 */
+    val mindMarks: List<MindMark> = emptyList(),
+    /** 正在下的三手棋；下完的留最近 20 局。 */
+    val chess: Chess? = null,
+    val chessDone: List<Chess> = emptyList(),
+    val lastSparAt: Long = 0,
+    /** 她采蜜采回来的简报（等他看）。 */
+    val briefs: List<Brief> = emptyList(),
+    /** 她摸清的他的规律（他点“对”才生效）。 */
+    val rules: List<Rule> = emptyList(),
     /** 破雾进行到第几下、上一下的时间（5 分钟内连着点才算同一段）。 */
     val fogRound: Int = 0,
     val fogAt: Long = 0,
@@ -294,6 +316,8 @@ data class LiveTurn(
     val choices: List<String> = emptyList(),
     /** 破雾：他刷懵了，这次只要他点，不要他打字。 */
     val fog: Boolean = false,
+    /** 这是一局三手棋（点选项会接着下）。 */
+    val chess: Boolean = false,
 )
 
 data class ChatResult(
@@ -371,10 +395,10 @@ class Brain(
             history = st.talk,
             user = text,
             mode = use,
-            about = st.about,
+            about = aboutPlus(),
             numbers = numbers,
             thinking = Think.open(st.thoughts).takeLast(5).map { Think.line(it) },
-            recall = Recall.relevant(text, knowledge(), 6),
+            recall = Graph.recall(text, st.atlas, 6) + Recall.relevant(text, knowledgeBesidesAtlas(), 3),
         )
         val parsed = model(cfg.persona, prompt)?.let { Talk.parse(it, Flow.dayStart(day), now = now) }?.takeIf { it.text.isNotBlank() }
         val reply = parsed ?: Talk.local(text, batonText, flowNow?.title.orEmpty())
@@ -383,6 +407,7 @@ class Brain(
         val shown = reply.text.lines().filterNot { it.trim().startsWith("【分】") }.joinToString("\n").trim()
         Modes.score(reply.text).takeIf { it >= 0 }?.let { st = st.copy(log = st.log + "${hm(now)} 训练：这一轮 $it 分") }
         st = st.copy(talk = (st.talk + Turn("他", text, now) + Turn("墨灵", shown, now)).takeLast(TALK_KEEP))
+        if (use == TalkMode.TRAIN) mark(MindAct.TRAIN, now) else if (text.trim().length >= 20) mark(MindAct.SAY, now)
         save()
         ChatResult(shown, made, reply.byModel, use, reply.choices)
     }
@@ -503,6 +528,7 @@ class Brain(
     suspend fun accept(id: String, now: Long): Outcome = lock.withLock {
         val p = st.proposals.firstOrNull { it.id == id }
         if (p == null || p.state != ProposalState.PENDING) return@withLock Outcome(false, "这条已经处理过了")
+        mark(MindAct.DECIDE, now)
         if (p.expiresAt <= now) {
             update(p.copy(state = ProposalState.EXPIRED, decidedAt = now))
             save()
@@ -520,6 +546,7 @@ class Brain(
         val p = st.proposals.firstOrNull { it.id == id && it.state == ProposalState.PENDING } ?: return@withLock
         update(p.copy(state = ProposalState.DECLINED, decidedAt = now))
         markAnswered(p.id)
+        mark(MindAct.DECIDE, now)
         st = st.copy(decisions = (st.decisions + Decision(now, false)).takeLast(300), log = st.log + "${hm(now)} 不用：${p.text}")
         save()
     }
@@ -825,6 +852,7 @@ class Brain(
     suspend fun verifyNode(nodeId: String, result: String, now: Long): Boolean = lock.withLock {
         if (st.atlas.nodes.none { it.id == nodeId } || result.isBlank()) return@withLock false
         st = st.copy(atlas = AtlasOps.verify(st.atlas, nodeId, result), log = st.log + "${hm(now)} 体系图核实一条：${result.take(30)}")
+        mark(MindAct.VERIFY, now)
         save()
         true
     }
@@ -997,10 +1025,17 @@ class Brain(
         val said = st.talk.filter { it.who == "他" && now - it.at < 2 * DAY_MS }.takeLast(10).map { "${hm(it.at)} ${it.text.take(80)}" }
         val open = Think.open(st.thoughts)
         val query = (said.takeLast(4) + flow?.intent.orEmpty() + open.map { it.text }).joinToString(" ")
+        // 跨域连线：这一天新进来的论断，和以前相关的旧论断
+        val freshNodes = st.atlas.nodes.filter { it.createdAt > now - DAY_MS }.takeLast(6)
+        val olderPool = st.atlas.nodes.filter { it.createdAt <= now - DAY_MS }
+        val olderHit = Recall.relevant(freshNodes.joinToString(" ") { it.claim }, olderPool.map { it.claim }, 6).toSet()
+        val olderNodes = if (freshNodes.isEmpty()) emptyList() else olderPool.filter { it.claim in olderHit }
         val reply = deepModel(
             cfg.persona,
-            Think.prompt(cfg.persona, cfg.callUser, director.nowText(now), st.about, today, days, usage, said, misjudged(now),
-                Recall.relevant(query, knowledge(), 6), open.takeLast(8), Think.overdue(st.thoughts, now)),
+            Think.prompt(cfg.persona, cfg.callUser, director.nowText(now), aboutPlus(), today, days, usage, said, misjudged(now),
+                Graph.recall(query, st.atlas, 6) + Recall.relevant(query, knowledgeBesidesAtlas(), 3), open.takeLast(8), Think.overdue(st.thoughts, now),
+                fresh = freshNodes.map { "${it.id}：${it.claim}" },
+                older = olderNodes.map { "${it.id}：${it.claim}" }),
         ) ?: return@withLock null
         val r = Think.parse(reply, Flow.dayStart(day), now)
         var n = (st.thoughts.mapNotNull { it.id.removePrefix("T").toIntOrNull() }.maxOrNull() ?: 0)
@@ -1019,6 +1054,15 @@ class Brain(
                 (if (r.say.isNotEmpty()) "，想好要说 ${r.say.size} 句" else ""),
         )
         Talk.parse(reply, Flow.dayStart(day), "她自己想到的", now).actions.forEach { fromTalk(it, now, flow) }
+        // 她连的线
+        var linked = 0
+        r.links.forEach { l ->
+            val rel = Relation.entries.firstOrNull { it.label == l[1] } ?: return@forEach
+            val before = st.atlas.edges.size
+            st = st.copy(atlas = Graph.link(st.atlas, l[0], l[2], rel, "她连的：" + l[3]))
+            if (st.atlas.edges.size > before) linked++
+        }
+        if (linked > 0) st = st.copy(log = st.log + "${hm(now)} 她把新旧论断连了 $linked 条线")
         save()
         ThinkResult(made, r.settled, r.say, r.play)
     }
@@ -1026,6 +1070,7 @@ class Brain(
     /** 他点了“这个判断不对 / 对”（今天页上）。 */
     suspend fun judgeThought(id: String, right: Boolean, now: Long) = lock.withLock {
         st = st.copy(thoughts = st.thoughts.map { if (it.id == id && it.outcome.isBlank()) it.copy(outcome = if (right) "对了" else "错了", why = "你说的", settledAt = now) else it })
+        mark(MindAct.JUDGE, now)
         save()
     }
 
@@ -1076,7 +1121,17 @@ class Brain(
      * 这一刻有没有什么值得把她叫醒（由大脑判断，App 每次心跳把前台交进来）：
      * 该做事时在刷 5 分钟以上 / 夜里躺着刷 15 分钟以上 / 连着刷 40 分钟以上。正拦着他时不再叫。
      */
-    fun liveTrigger(a: Activity?, now: Long, unlockGapMin: Int = 0, cfg: LiveConfig = LiveConfig(), autopilot: AutopilotSignal? = null): Trigger? {
+    /**
+     * [leftPlayMin]：他刚离开的那一段娱乐有多长（3 分钟内离开的才算；App 用使用记录算）。
+     */
+    fun liveTrigger(
+        a: Activity?,
+        now: Long,
+        unlockGapMin: Int = 0,
+        cfg: LiveConfig = LiveConfig(),
+        autopilot: AutopilotSignal? = null,
+        leftPlayMin: Int = 0,
+    ): Trigger? {
         if (st.gate != null) return null
         val m = Flow.minuteOf(now)
         val day = calendarDay(now)
@@ -1099,6 +1154,12 @@ class Brain(
         if (st.lastStatus?.mainDone == true && st.cheeredDay != day) return Trigger.DONE
         if (st.sayQueue.isNotEmpty() && !playing) return Trigger.SAY
         if (unlockGapMin >= 30) return if (m < 10 * 60 && st.spirit.day != day) Trigger.MORNING else Trigger.UNLOCK
+        // 刚刷完一大段离开：收一回合“过路费”
+        if (cfg.spar && !playing && leftPlayMin >= 15) return Trigger.TOLL
+        // 闲着、3 小时里没怎么动脑：来下一局三手棋（9:00–22:30，至少隔 90 分钟，体系图里得有东西）
+        if (cfg.spar && !playing && m in 9 * 60 until 22 * 60 + 30 && Rpm.low(st.mindMarks, now) &&
+            now - st.lastSparAt >= 90 * 60_000L && st.atlas.nodes.size >= 3
+        ) return Trigger.SPAR
         if (cfg.idle && !playing && a?.category == "OTHER") return Trigger.IDLE
         return null
     }
@@ -1129,17 +1190,32 @@ class Brain(
         val canGate = GateRules.eligible(a) && Spirits.mayGate(sp, cfg) &&
             trigger in setOf(Trigger.SCROLL_AT_WORK, Trigger.SCROLL_IN_BED, Trigger.LONG_SCROLL, Trigger.AUTOPILOT)
         // 破雾：他多半刷懵了（自动驾驶、夜里躺着刷、刷了很久、该做事时已经刷了一刻钟，或者最近老划掉她）
-        val fog = trigger == Trigger.AUTOPILOT || trigger == Trigger.SCROLL_IN_BED || trigger == Trigger.LONG_SCROLL ||
+        val fog = trigger == Trigger.AUTOPILOT || trigger == Trigger.SCROLL_IN_BED || trigger == Trigger.LONG_SCROLL || trigger == Trigger.TOLL ||
             (trigger == Trigger.SCROLL_AT_WORK && (a?.minutes ?: 0) >= 15) || (sp.ignored >= 2 && trigger != Trigger.DONE)
         val flow = st.flow?.takeIf { it.day == day }
         val flowNow = flow?.let { Flow.current(it, Flow.minuteOf(now)) }?.title.orEmpty()
         val persona = config().persona
         val toSay = st.sayQueue.firstOrNull()?.text.orEmpty()
         val prompt = Live.prompt(
-            persona, trigger, a, director.nowText(now), flow?.let { Flow.render(it) }.orEmpty(), st.about, misjudged(now), talkLines(), canGate,
+            persona, trigger, a, director.nowText(now), flow?.let { Flow.render(it) }.orEmpty(), aboutPlus(), misjudged(now), talkLines(), canGate,
             thinking = Think.open(st.thoughts).takeLast(4).map { Think.line(it) }, toSay = toSay,
             cues = cues, ignored = sp.ignored, fog = fog,
         )
+        // 三手棋：不走平常的提示词，直接开一局（开不出来就不出声）
+        if (trigger == Trigger.SPAR) {
+            val c = openChess(now) ?: run { st = st.copy(spirit = sp, lastSparAt = now); save(); return@withLock null }
+            sp = sp.copy(spoke = sp.spoke + 1, lastAt = now)
+            val line = "来一局三手棋？我把你体系图里的一条改了改：「${c.bait}」——这步棋有个破绽，你看得出来吗？"
+            val modality = Habits.pick(st.habits, can, now, (roll * 7919.0) % 1.0).let { if (it == Modality.QUIZ || it == Modality.GATE) Modality.PEEK else it }
+            st = st.copy(
+                spirit = sp, chess = c, lastSparAt = now, habits = Habits.shown(st.habits, modality, now),
+                talk = (st.talk + Turn("墨灵", line, now)).takeLast(TALK_KEEP),
+                log = st.log + "${hm(now)} 来下三手棋：${c.source.take(30)}",
+            )
+            count(now, nudges = 1)
+            save()
+            return@withLock LiveTurn(Mood.CURIOUS, line, false, false, emptyList(), modality, choices = c.options, chess = true)
+        }
         // 她攒好的盲盒 / 小剧场 / 赌：原样拿出来，不再调模型
         val play = st.sayQueue.firstOrNull()?.takeIf { trigger == Trigger.SAY && it.kind != "say" }
         val reply = if (play != null) null else model(persona, prompt)
@@ -1180,6 +1256,167 @@ class Brain(
         LiveTurn(line.mood, line.line, gate != null, false, made, modality, quiz, line.choices, fog)
     }
 
+    // ------------------------------------------------------------------ 平时也让脑子转起来（v12）
+
+    private fun mark(act: MindAct, now: Long) {
+        st = st.copy(mindMarks = (st.mindMarks + MindMark(now, act)).takeLast(Rpm.KEEP))
+    }
+
+    /** 体系图以外的知识（GPT 的回答、她的判断、了解、她摸清的规律）——体系图走 [Graph.recall]。 */
+    private fun knowledgeBesidesAtlas(): List<String> =
+        st.questions.filter { it.answer.isNotBlank() }.map { "GPT 回答过「${it.text.take(40)}」：${it.answer}" } +
+            st.thoughts.filter { it.outcome != "错了" }.takeLast(20).map { "我推断过：${it.text}${if (it.outcome.isNotBlank()) "（${it.outcome}）" else ""}" } +
+            st.about.lines().map { it.trim() }.filter { it.startsWith("- ") }.map { "了解：${it.removePrefix("- ")}" } +
+            Rules.kept(st.rules).map { "规律：${Rules.line(it)}" }
+
+    /** 给提示词的“了解”：他确认过的文档 + 他点过“对”的规律。 */
+    private fun aboutPlus(): String {
+        val r = Rules.kept(st.rules)
+        return if (r.isEmpty()) st.about else st.about + "\n## 她摸清的规律（他确认过）\n" + r.joinToString("\n") { "- " + Rules.line(it) }
+    }
+
+    /** 开一局三手棋（锁内）。体系图里没有能下的就返回 null。 */
+    private suspend fun openChess(now: Long): Chess? {
+        val recent = st.chessDone.takeLast(10).map { it.nodeId }
+        val node = Chesses.pick(st.atlas, recent, now) ?: return null
+        val outline = AtlasOps.outline(st.atlas, node.topicId)
+        val shuffle = ((now / 1000L) % 3).toInt()
+        return model(config().persona, Chesses.openPrompt(node, outline))?.let { Chesses.parseOpen(it, node, now, shuffle) }
+            ?: Chesses.local(node, now, shuffle)
+    }
+
+    /** 他点“来一局”（今天页 / 对话页）：开一局，返回她的第一手。 */
+    suspend fun spar(now: Long): LiveTurn? = lock.withLock {
+        val c = openChess(now) ?: return@withLock null
+        val line = "「${c.bait}」——这步棋有个破绽，你看得出来吗？"
+        st = st.copy(chess = c, lastSparAt = now, talk = (st.talk + Turn("墨灵", line, now)).takeLast(TALK_KEEP), log = st.log + "${hm(now)} 你开了一局三手棋：${c.source.take(30)}")
+        save()
+        LiveTurn(Mood.CURIOUS, line, false, false, emptyList(), choices = c.options, chess = true)
+    }
+
+    /** 下一手（锁内）。第三手下完：打分、把结论挂进体系图、和原论断连上线。 */
+    private suspend fun chessMoveLocked(c: Chess, picked: String, now: Long): ChessTurn {
+        mark(MindAct.CHESS, now)
+        st = st.copy(talk = (st.talk + Turn("他", "（第 ${c.turn} 手）$picked", now)).takeLast(TALK_KEEP))
+        val reply = model(config().persona, Chesses.movePrompt(c, picked))
+        val m = reply?.let { Chesses.parseMove(it) }
+        val turn: ChessTurn
+        var next = c.copy(turn = c.turn + 1, moves = c.moves + picked)
+        when (c.turn) {
+            1 -> {
+                val right = Chesses.firstRight(c, picked)
+                val line = m?.line?.ifBlank { null } ?: if (right) "点中了！漏洞就在这：${c.flaw}" else "差一点——漏洞在：${c.flaw}"
+                val choices = m?.choices?.takeIf { it.isNotEmpty() }
+                    ?: listOf("会更快做成", "会卡在新地方", "没什么变化")
+                turn = ChessTurn("$line 第二手：按修正后的去做，下一步最可能怎样？", choices + Chesses.FREE, false)
+            }
+            2 -> {
+                // 第三手：她打分收官（他这一下就是第二手的回答）；下完就结束
+                val score = m?.score?.takeIf { it >= 0 } ?: if (Chesses.firstRight(c, c.moves.firstOrNull().orEmpty())) 2 else 1
+                val claim = m?.claim?.takeIf { it.length >= 6 }
+                var added = ""
+                if (claim != null && m != null) {
+                    val node = Node("n-$now-c", c.topicId, claim, m.kind ?: NodeKind.JUDGMENT, "三手棋", m.confidence, createdAt = now)
+                    val (merged, n) = AtlasOps.merge(st.atlas, com.moling.core.atlas.Candidates(listOf(node), emptyList()))
+                    var a = merged
+                    if (n > 0) a = Graph.link(a, node.id, c.nodeId, m.relation ?: Relation.SUPPORTS, "三手棋推出来的")
+                    st = st.copy(atlas = a)
+                    if (n > 0) added = claim
+                }
+                val line = (m?.line?.ifBlank { null } ?: "这局 $score 分。") + if (added.isNotBlank()) " 新结论挂进体系图了：「$added」" else ""
+                next = next.copy(turn = 4, score = score, conclusion = added)
+                turn = ChessTurn(line, emptyList(), true, score, added, added)
+            }
+            else -> turn = ChessTurn("这局下完了。", emptyList(), true)
+        }
+        st = st.copy(
+            chess = if (next.turn > 3) null else next,
+            chessDone = if (next.turn > 3) (st.chessDone + next).takeLast(20) else st.chessDone,
+            spirit = Spirits.today(st.spirit, calendarDay(now)).copy(ignored = 0),
+            talk = (st.talk + Turn("墨灵", turn.line, now)).takeLast(TALK_KEEP),
+            log = if (turn.done) st.log + "${hm(now)} 三手棋下完：${turn.score} 分${if (turn.conclusion.isNotBlank()) "，新结论：${turn.conclusion.take(30)}" else ""}" else st.log,
+        )
+        save()
+        return turn
+    }
+
+    /** 采蜜：挑一个缺口，深想模型整理正反简报（等他看），同时把问题挂上黑板让 GPT 也答。一天最多一次。 */
+    suspend fun forage(now: Long): Brief? = lock.withLock {
+        if (st.briefs.any { calendarDay(it.at) == calendarDay(now) }) return@withLock null
+        val recent = st.briefs.filter { now - it.at < 3 * DAY_MS }.map { it.nodeId }
+        val gaps = st.atlas.topics.flatMap { AtlasOps.gaps(st.atlas, it.id) }
+        val g = Forage.pick(gaps, recent) ?: return@withLock null
+        val node = st.atlas.nodes.firstOrNull { it.id == g.nodeId } ?: return@withLock null
+        val lines = deepModel(config().persona, Forage.prompt(g.question, AtlasOps.outline(st.atlas, node.topicId), st.about))?.let { Forage.parse(it) }
+            ?.takeIf { it.size >= 2 } ?: return@withLock null
+        val b = Brief("b-$now", now, node.id, node.topicId, g.question, lines)
+        addQuestion(g.question.take(100), "体系图的缺口", "她", now)
+        st = st.copy(briefs = (st.briefs + b).takeLast(Forage.KEEP), log = st.log + "${hm(now)} 采蜜：${g.question.take(30)}（${lines.size} 条）")
+        save()
+        b
+    }
+
+    /** 他看了简报：收下（进体系图，标“待核”）或不要。 */
+    suspend fun keepBrief(id: String, keep: Boolean, now: Long): Int = lock.withLock {
+        val b = st.briefs.firstOrNull { it.id == id && it.status == "new" } ?: return@withLock 0
+        st = st.copy(briefs = st.briefs.map { if (it.id == id) it.copy(status = if (keep) "kept" else "dropped") else it })
+        var added = 0
+        if (keep) {
+            val t = st.atlas.topics.firstOrNull { it.id == b.topicId }
+            if (t != null) {
+                val existing = st.atlas.nodes.filter { it.topicId == t.id }
+                val reply = model(config().persona, AtlasOps.ingestPrompt(t, existing, Forage.asMaterial(b), "采蜜（待核）"))
+                reply?.let { AtlasOps.merge(st.atlas, AtlasOps.parse(it, t.id, "采蜜（待核）", now)) }?.let { (a, n) ->
+                    // 采蜜来的一律把握“低”
+                    st = st.copy(atlas = a.copy(nodes = a.nodes.map { if (it.source == "采蜜（待核）" && it.createdAt == now) it.copy(confidence = "低") else it }))
+                    added = n
+                }
+            }
+            mark(MindAct.DECIDE, now)
+        }
+        st = st.copy(log = st.log + "${hm(now)} 简报「${b.question.take(20)}」：${if (keep) "收下 $added 条" else "不要"}")
+        save()
+        added
+    }
+
+    /** 夜里：从这几天的数字里提 1–2 条“当……，就……”（他点“对”才生效）。 */
+    suspend fun proposeRules(now: Long): List<Rule> = lock.withLock {
+        if (st.rules.count { it.status == "proposed" } >= 3) return@withLock emptyList()
+        val stats = ruleStats(now)
+        if (stats.isBlank()) return@withLock emptyList()
+        val n = (st.rules.mapNotNull { it.id.removePrefix("R").toIntOrNull() }.maxOrNull() ?: 0) + 1
+        val made = deepModel(config().persona, Rules.prompt(stats, st.rules.filter { it.status != "dropped" }, st.about))
+            ?.let { Rules.parse(it, now, n) }.orEmpty()
+        if (made.isNotEmpty()) {
+            st = st.copy(rules = (st.rules + made).takeLast(Rules.KEEP), log = st.log + "${hm(now)} 她摸到 ${made.size} 条规律，等你看")
+            save()
+        }
+        made
+    }
+
+    suspend fun setRule(id: String, keep: Boolean, now: Long) = lock.withLock {
+        st = st.copy(rules = st.rules.map { if (it.id == id) it.copy(status = if (keep) "kept" else "dropped") else it })
+        mark(MindAct.JUDGE, now)
+        save()
+    }
+
+    /** 给“规律”用的数字：出现方式管用率、三手棋、最容易被拉走的时段、几点脑子转得多。 */
+    private fun ruleStats(now: Long): String = buildString {
+        Habits.summary(st.habits, now).takeIf { it.isNotEmpty() }?.let { appendLine("她的出现方式：" + it.joinToString("；")) }
+        st.chessDone.takeLast(10).takeIf { it.isNotEmpty() }?.let { l ->
+            appendLine("三手棋最近 ${l.size} 局：平均 ${"%.1f".format(l.map { it.score.coerceAtLeast(0) }.average())} 分，" +
+                l.groupBy { hourOf(it.startedAt) / 3 * 3 }.entries.joinToString("、") { "${it.key}–${it.key + 3} 点 ${it.value.size} 局" })
+        }
+        com.moling.core.usage.UsageLog.weakHours(st.usageDays.takeLast(7)).takeIf { it.isNotEmpty() }?.let { appendLine("最容易被拉走：" + it.joinToString("、")) }
+        val marks = st.mindMarks.filter { now - it.at < 7 * DAY_MS }
+        if (marks.isNotEmpty()) appendLine("一周动脑的时段：" + marks.groupBy { hourOf(it.at) / 3 * 3 }.entries.sortedBy { it.key }.joinToString("、") { "${it.key}–${it.key + 3} 点 ${it.value.sumOf { m -> m.act.weight }} 分" })
+        st.thoughts.filter { it.outcome.isNotBlank() && now - it.settledAt < 7 * DAY_MS }.takeIf { it.isNotEmpty() }?.let { t ->
+            appendLine("她的推断一周：对了 ${t.count { it.outcome == "对了" }}、错了 ${t.count { it.outcome == "错了" }}")
+        }
+    }.trim()
+
+    private fun hourOf(at: Long) = java.time.Instant.ofEpochMilli(at).atZone(BEIJING).hour
+
     /** 盲盒 / 小剧场 / 赌拿出来时怎么说。 */
     private fun playLine(p: Say): String = when (p.kind) {
         "blindbox" -> "我攒了一句话，你看有没有毛病：「${p.text}」"
@@ -1193,6 +1430,12 @@ class Brain(
      * 拦着他时：点两下就放行（破雾不要他打字）；不拦时：第三下收尾。点了就算认真回应（不算冷落）。
      */
     suspend fun tap(choice: String, now: Long, cfg: LiveConfig = LiveConfig()): LiveTurn = lock.withLock {
+        // 正在下三手棋：这一下是棋
+        st.chess?.takeIf { it.turn in 1..3 && now - it.startedAt < 2 * 3_600_000L }?.let { c ->
+            val t = chessMoveLocked(c, choice, now)
+            return@withLock LiveTurn(if (t.done) Mood.HAPPY else Mood.CURIOUS, t.line, false, false, emptyList(), choices = t.choices, chess = true)
+        }
+        mark(MindAct.TAP, now)
         val g = st.gate
         val round = (if (now - st.fogAt < 5 * 60_000L) st.fogRound else 0) + 1
         val gating = g != null
@@ -1206,7 +1449,7 @@ class Brain(
             else -> ""
         }
         val persona = config().persona
-        val reply = model(persona, Live.fogPrompt(persona, choice + if (reveal.isNotBlank()) "（她揭晓：$reveal）" else "", talkLines(), st.about, round, last, gating))
+        val reply = model(persona, Live.fogPrompt(persona, choice + if (reveal.isNotBlank()) "（她揭晓：$reveal）" else "", talkLines(), aboutPlus(), round, last, gating))
         val parsed = reply?.let { Live.parse(it, false) }?.takeIf { it.line.isNotBlank() } ?: Live.fogLocal(round, last)
         val line = listOf(reveal, parsed.line).filter { it.isNotBlank() }.joinToString(" ")
         val release = gating && (last || parsed.release)
@@ -1261,6 +1504,7 @@ class Brain(
     /** 他答了捉虫题：答对了算认真回应。 */
     suspend fun quizResult(right: Boolean, now: Long) = lock.withLock {
         st = st.copy(log = st.log + "${hm(now)} 捉虫题：${if (right) "抓到了" else "没抓到"}")
+        mark(MindAct.QUIZ, now)
         save()
     }
 

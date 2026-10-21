@@ -440,13 +440,14 @@ object BrainHost {
                 return
             }
             // 自动驾驶：看最近 30 分钟的前台记录（只有应用和时间）
-            val autopilot = if (Usage.allowed(ctx)) runCatching {
-                val sessions = Usage.sessions(ctx, now - 30 * 60_000L, now) { BrainFacts.category(it, status) }
-                com.moling.core.autopilot.Autopilot.read(sessions, now, _state.value.flow)
-            }.getOrNull() else null
+            val sessions = if (Usage.allowed(ctx)) runCatching {
+                Usage.sessions(ctx, now - 60 * 60_000L, now) { BrainFacts.category(it, status) }
+            }.getOrNull().orEmpty() else emptyList()
+            val autopilot = if (Usage.allowed(ctx)) com.moling.core.autopilot.Autopilot.read(sessions.filter { it.end > now - 30 * 60_000L }, now, _state.value.flow) else null
+            val leftPlay = leftPlayMinutes(sessions, activity?.pkg.orEmpty(), now)
             // Z6 褪色：只在自动驾驶、还停在娱乐里时慢慢变灰（默认关、每天最多 20 分钟）。
             fadeTick(ctx, autopilot, activity)
-            val trigger = brain.liveTrigger(activity, now, unlockGapMin, cfg, autopilot) ?: return
+            val trigger = brain.liveTrigger(activity, now, unlockGapMin, cfg, autopilot, leftPlay) ?: return
             val cues = if (trigger == com.moling.core.live.Trigger.AUTOPILOT) autopilot?.reasons.orEmpty() else emptyList()
             val turn = io<LiveTurn?>("live", { null }) { brain.live(trigger, activity, now, cfg = cfg, can = Appear.can(ctx), cues = cues) } ?: return
             withContext(Dispatchers.Main) {
@@ -468,6 +469,35 @@ object BrainHost {
             activity.pkg !in Charter.neverTouch &&
             PetOverlay.fadeMinutesToday(ctx) < 20
         runCatching { PetOverlay.fade(ctx, if (want) 1f else 0f) }
+    }
+
+    /**
+     * 他刚离开的那一段娱乐有多长：最后一段娱乐在 3 分钟内结束、现在前台已经不是它，
+     * 往前把同一个应用、中间断开不到 1 分钟的几段连起来算。否则 0。
+     */
+    private fun leftPlayMinutes(sessions: List<com.moling.core.usage.Session>, fgPkg: String, now: Long): Int {
+        val play = sessions.filter { it.category == "ENTERTAINMENT" || it.category == "SHOPPING" }.sortedBy { it.start }
+        val last = play.lastOrNull() ?: return 0
+        if (now - last.end > 3 * 60_000L || last.pkg == fgPkg) return 0
+        var start = last.start
+        for (s in play.dropLast(1).asReversed()) {
+            if (s.pkg != last.pkg || start - s.end > 60_000L) break
+            start = s.start
+        }
+        return ((last.end - start) / 60_000L).toInt()
+    }
+
+    // ---------------------------------------------------------------- 平时也让脑子转起来（v12）
+
+    /** 他点“来一局”：开一局三手棋。 */
+    suspend fun spar(): LiveTurn? = io<LiveTurn?>("spar", { null }) { brain.spar(System.currentTimeMillis()) }
+
+    /** 简报：收下 / 不要。返回收进体系图几条。 */
+    suspend fun keepBrief(id: String, keep: Boolean): Int = io("keepBrief", { 0 }) { brain.keepBrief(id, keep, System.currentTimeMillis()) }
+
+    /** 规律：对（生效）/ 不对。 */
+    suspend fun setRule(id: String, keep: Boolean) {
+        io("setRule", {}) { brain.setRule(id, keep, System.currentTimeMillis()) }
     }
 
     /** 他对她这次出现的反应（反免疫账本）。不等结果。 */
@@ -524,6 +554,8 @@ object BrainHost {
             // 她自己的思考（v8）：醒着时隔两三个小时一次，他说了不少话时早一点；只在亮屏时想，省电省钱
             if (interactive() && brain.needsThink(now)) {
                 runCatching { brain.think(now, usageDigest(now)) }
+                // 想完顺手采一次蜜（一天最多一次，大脑自己管）
+                runCatching { brain.forage(now) }
                 refreshState()
             }
             if (brain.needsNight(now)) {
@@ -532,6 +564,8 @@ object BrainHost {
                 if (!text.isNullOrBlank()) Notify.nightAccount(ctx, text)
                 // 开着 Notion：她夜里想好明天要问 GPT 的，下一次同步写上黑板
                 if (settings.notion().ready()) runCatching { brain.prepareQuestions(now) }
+                // 夜里从这几天的数字里摸规律（他点“对”才生效）
+                runCatching { brain.proposeRules(now) }
             }
         } catch (e: CancellationException) {
             throw e
