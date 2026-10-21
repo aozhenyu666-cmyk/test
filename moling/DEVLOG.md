@@ -1132,3 +1132,18 @@
 - 本分支最初从 `952275f` 拉出时，R1 的发布加固还在 `deepseek/moling-release-qa` 上没合入；第一次推送触发了旧 workflow，按旧规则把开发分支构建发布到了 `moling-latest`。
 - 已立刻用工作分支 `ccr-b3c7616e-xlohkd` 重新发布一次，把 `moling-latest` 恢复到工作分支最新提交（发布页标题 `0.12.60（952275f）`，tag 指向 `952275f`，非 draft）；并把 R1（固定 concurrency、过期 SHA 跳过、工作分支专属发布）合入本分支，之后本分支的 CI 只 build、release 为 skipped。
 - 以后开发分支推送不会再覆盖用户下载；正式发布仍以工作分支为准。
+
+---
+
+## P0 前置整合（DeepSeek）
+
+基于工作分支 `a8b5749` 新建 `deepseek/moling-v13-integration`，把已有成果收拢到一个可审查分支：
+
+- 合入 PR15（`deepseek/moling-workspace`，已包含 PR13 的发布加固）——I9 案板 J1–J7、第八批发布脚本/文档校正、来源标签基础都在。
+- 再合 PR14（`deepseek/moling-polish`）——动效底座、外壳/对话/今天/体系/设置/出现方式的界面打磨全部保留；解决 `CODEX.md` 与 `DEVLOG.md` 冲突（文档取较新的 v13 版，DEVLOG 两边记录都保留）。
+- 补 I9 缺口：来源标签现在可点开——`m-…` 显示对应 Material 的标题与原文，`n-…` 显示体系论断正文/把握/种类；找不到时明确“来源已删除”，不会对不上还展示另一段。
+- 回归链路（贴材料→纲要→挑刺→选 A→改首段→撤销→导出→重启恢复）靠 Workbench 现有持久化；本批没有改它的存储逻辑，自动检查见下。
+
+**状态**：实现完成（P0）；自动检查：本地 `compileDebugKotlin` 通过，App `testDebugUnitTest assembleDebug` 与 `tools/core-tests` 见 CI；**真机未测**（案板全流程、重启恢复、来源原文弹窗）。
+
+**发布**：本分支已带第八批发布脚本，CI 的 release job 只会在工作分支运行；本开发分支应显示 skipped，不覆盖固定 APK。正式发布验证仍留到工作分支合入后。

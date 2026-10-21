@@ -565,6 +565,7 @@ private fun ExerciseBlock(artifact: WorkspaceArtifact, block: ArtifactBlock, onA
 @Composable
 private fun SourceTags(ids: List<String>) {
     if (ids.isEmpty()) return
+    var openId by remember { mutableStateOf<String?>(null) }
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         ids.take(4).forEach { id ->
             val label = when {
@@ -572,8 +573,37 @@ private fun SourceTags(ids: List<String>) {
                 id.startsWith("n-") -> "体系"
                 else -> "来源"
             }
-            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = Seal.copy(alpha = 0.85f),
+                modifier = Modifier.clickable { openId = id },
+            )
         }
+    }
+    val sid = openId
+    if (sid != null) {
+        val ws = BrainHost.workbench.value
+        val material = ws.materials.firstOrNull { it.id == sid }
+        val node = BrainHost.state.value.atlas.nodes.firstOrNull { it.id == sid }
+        AlertDialog(
+            onDismissRequest = { openId = null },
+            title = { Text(if (material != null) "材料" else if (node != null) "体系论断" else "来源已删除") },
+            text = {
+                when {
+                    material != null -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(material.title.ifBlank { material.kind }, style = MaterialTheme.typography.labelMedium)
+                        Text(material.text, style = MaterialTheme.typography.bodySmall)
+                    }
+                    node != null -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(node.claim, style = MaterialTheme.typography.bodyMedium)
+                        Text("把握 " + node.confidence + " · " + node.kind.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    else -> Text("这条来源已经删除，或对应不上了。")
+                }
+            },
+            confirmButton = { TextButton(onClick = { openId = null }) { Text("好") } },
+        )
     }
 }
 
