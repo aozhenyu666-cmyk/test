@@ -7,9 +7,11 @@ import android.util.Log
 import com.moling.core.ZkPort
 import com.moling.core.link.ZK_AUTHORITY
 import com.moling.core.link.ZK_COMMAND
+import com.moling.core.link.ZK_RESULT
 import com.moling.core.link.ZK_STATUS
 import com.moling.core.link.ZkCommand
 import com.moling.core.link.ZkReceipt
+import com.moling.core.link.ZkResult
 import com.moling.core.link.ZkStatus
 import com.moling.core.link.ZkWire
 
@@ -51,6 +53,17 @@ object ZkBridge : ZkPort {
             .getOrNull() ?: return null
         return runCatching { ZkWire.receipt(toMap(b), System.currentTimeMillis()) }
             .onFailure { Log.w(TAG, "解析总控回执失败", it) }
+            .getOrNull()
+    }
+
+    /** 交过去的一条后来怎么样了（M13）；总控没装 / 被杀 / 不认签名都返回 null。 */
+    override fun result(id: String): ZkResult? {
+        val ctx = app ?: return null
+        val b = runCatching { ctx.contentResolver.call(uri, ZK_RESULT, id, null) }
+            .onFailure { Log.w(TAG, "问总控结局失败", it) }
+            .getOrNull() ?: return null
+        return runCatching { ZkWire.result(toMap(b)) }
+            .onFailure { Log.w(TAG, "解析总控结局失败", it) }
             .getOrNull()
     }
 
