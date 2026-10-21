@@ -1320,13 +1320,13 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private fun ChoiceCapsules(choices: List<String>, onPick: (String) -> Unit) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             choices.take(3).forEach { c ->
+                val exit = c == com.moling.core.live.Live.EXIT
                 Text(
                     c,
-                    color = Seal,
+                    color = if (exit) Ink.copy(alpha = 0.55f) else Seal,
                     fontSize = 12.sp,
                     modifier = Modifier
-                        .background(Paper, RoundedCornerShape(50))
-                        .border(0.8.dp, Seal.copy(alpha = 0.55f), RoundedCornerShape(50))
+                        .then(if (exit) Modifier else Modifier.background(Paper, RoundedCornerShape(50)).border(0.8.dp, Seal.copy(alpha = 0.55f), RoundedCornerShape(50)))
                         .clickable { onPick(c) }
                         .padding(horizontal = 10.dp, vertical = 5.dp),
                 )

@@ -26,6 +26,19 @@ class ShareActivity : ComponentActivity() {
             var busy by remember { mutableStateOf(false) }
             AlertDialog(onDismissRequest = { if (!busy) finish() }, title = { Text("分享进墨灵") },
                 text = { Column { Text(text.take(200)); OutlinedTextField(topic, { topic = it.take(80) }, label = { Text("主题") }); TextButton(enabled = !busy, onClick = { Presence.open(this@ShareActivity, 0, text.take(500)); finish() }) { Text("跟墨灵说") }
+                    // I9：直接放上案板（不自动开工，进案板后他自己点“替我先做一块”）
+                    TextButton(enabled = !busy, onClick = {
+                        busy = true
+                        lifecycleScope.launch {
+                            val f = runCatching { BrainHost.benchStart("", text) }.getOrNull()
+                            Toast.makeText(this@ShareActivity, if (f == null) "没放上去，再试一次" else "放上案板了", Toast.LENGTH_SHORT).show()
+                            busy = false
+                            if (f != null) {
+                                startActivity(Intent(this@ShareActivity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(MainActivity.EXTRA_TAB, 3))
+                                finish()
+                            }
+                        }
+                    }) { Text("放上案板") }
                     // 别的 AI 的回答（交接包发出去后回来的）：交给她把关——回答问题、收论断、改“了解”要你点头
                     TextButton(enabled = !busy, onClick = {
                         busy = true

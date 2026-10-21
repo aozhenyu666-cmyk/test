@@ -240,6 +240,31 @@ class GateActivity : ComponentActivity() {
             finish()
         }
 
+        fun pickGate(c: String) {
+            if (busy || released) return
+            lifecycleScope.launch {
+                busy = true
+                val t = runCatching { BrainHost.tap(c) }.getOrNull()
+                busy = false
+                if (t == null) {
+                    Toast.makeText(this@GateActivity, "没接上，再点一次", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                mood = t.mood
+                line = t.line
+                gateChoices = t.choices
+                if (BrainHost.speakOn()) Speaker.speak(t.line)
+                if (t.release) {
+                    released = true
+                    BrainHost.react(
+                        com.moling.core.live.Modality.GATE,
+                        com.moling.core.live.Reaction.REPLIED,
+                        System.currentTimeMillis() - startedAt,
+                    )
+                }
+            }
+        }
+
         fun send() {
             val t = text.trim()
             if (busy || released || t.isBlank()) return

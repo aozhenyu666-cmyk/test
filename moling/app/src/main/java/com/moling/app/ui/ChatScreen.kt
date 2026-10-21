@@ -387,17 +387,24 @@ fun ChatScreen() {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             choices.forEach { c ->
-                OutlinedButton(
-                    onClick = {
-                        choices = emptyList()
-                        pickChoice(c)
-                    },
-                    // D4 破雾：选项是这一轮的主入口，用印泥色细边和更大的可点区域。
-                    border = BorderStroke(1.dp, com.moling.app.ui.Seal),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = com.moling.app.ui.Seal),
-                    shape = RoundedCornerShape(14.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-                ) { Text(c, style = MaterialTheme.typography.bodyLarge) }
+                if (c == com.moling.core.live.Live.EXIT) {
+                    // J7：「先不聊了」永远最后、刻意淡一点，和真正的选项区分开。
+                    TextButton(onClick = { choices = emptyList(); pickChoice(c) }) {
+                        Text(c, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = {
+                            choices = emptyList()
+                            pickChoice(c)
+                        },
+                        // D4 破雾：选项是这一轮的主入口，用印泥色细边和更大的可点区域。
+                        border = BorderStroke(1.dp, com.moling.app.ui.Seal),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = com.moling.app.ui.Seal),
+                        shape = RoundedCornerShape(14.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                    ) { Text(c, style = MaterialTheme.typography.bodyLarge) }
+                }
             }
         }
 

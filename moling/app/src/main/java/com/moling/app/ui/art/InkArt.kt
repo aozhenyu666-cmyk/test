@@ -22,6 +22,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -513,3 +514,33 @@ fun InkTitle(text: String, modifier: Modifier = Modifier) {
 
 /** 0:00 新月 → 12:00 满月 → 24:00 新月。 */
 fun moonPhase(minuteOfDay: Int): Float = (minuteOfDay.coerceIn(0, 1439) / 1440f)
+
+/** I9 案板：一张纸 + 一道墨线。 */
+@Composable
+fun InkBench(modifier: Modifier = Modifier.size(56.dp), color: Color = Ink) {
+    Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        val left = w * 0.22f
+        val right = w * 0.78f
+        val top = h * 0.18f
+        val bottom = h * 0.82f
+        drawRoundRect(
+            color = color.copy(alpha = 0.55f),
+            topLeft = Offset(left, top),
+            size = Size(right - left, bottom - top),
+            cornerRadius = CornerRadius(w * 0.06f, w * 0.06f),
+            style = Stroke(1.dp.toPx()),
+        )
+        val lineY = top + (bottom - top) * 0.36f
+        drawLine(color.copy(alpha = 0.5f), Offset(left + w * 0.08f, lineY), Offset(right - w * 0.08f, lineY), 1.dp.toPx())
+        drawLine(color.copy(alpha = 0.35f), Offset(left + w * 0.08f, lineY + h * 0.14f), Offset(right - w * 0.2f, lineY + h * 0.14f), 1.dp.toPx())
+        drawLine(
+            color = color.copy(alpha = 0.85f),
+            start = Offset(left + w * 0.12f, bottom - h * 0.12f),
+            end = Offset(right - w * 0.1f, top + (bottom - top) * 0.52f),
+            strokeWidth = 3.dp.toPx(),
+            cap = StrokeCap.Round,
+        )
+    }
+}
