@@ -172,8 +172,11 @@ fun NowScreen(nav: NavHostController) {
         }
 
         // ---------- 现在这一步：只有排了时间的才出现（没排时间的在“待安排”里） ----------
-        // 还没到点的（今天接下来 / 下一个安排）已经在时间线里了，不再重复一张卡
-        if (cur.action != null && cur.why != com.zongkong.core.work.Focus.Why.LATER_TODAY && cur.why != com.zongkong.core.work.Focus.Why.UPCOMING) {
+        // 还没到点、而且已经在今天时间线里的，不再重复一张卡（明天的下一步照样出卡）
+        val inTimeline = cur.action != null &&
+            (cur.why == com.zongkong.core.work.Focus.Why.LATER_TODAY || cur.why == com.zongkong.core.work.Focus.Why.UPCOMING) &&
+            com.zongkong.core.plan.QuickPlan.today(work, now, store.zone).any { it.first.key == cur.action?.key }
+        if (cur.action != null && !inTimeline) {
             Box(Modifier.enter(2)) {
                 AnimatedContent(
                     targetState = cur,
