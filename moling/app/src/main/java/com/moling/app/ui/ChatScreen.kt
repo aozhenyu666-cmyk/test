@@ -3,6 +3,13 @@ package com.moling.app.ui
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.ui.platform.LocalDensity
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -49,6 +56,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -58,6 +66,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moling.app.BrainHost
 import com.moling.core.Proposal
+import com.moling.app.ui.art.InkDots
+import com.moling.app.ui.art.inkEnter
 import com.moling.core.spar.Chess
 import com.moling.core.spar.Chesses
 import com.moling.core.talk.TalkMode
@@ -248,6 +258,22 @@ fun ChatScreen() {
         }
     }
 
+    /** 台子上的「来一局」：拿到第一手就交给选项按钮。 */
+    fun quickSpar() {
+        sending = true
+        talkScope.launch {
+            val t = runCatching { BrainHost.spar() }.getOrNull()
+            sending = false
+            if (t == null) {
+                toast("体系图里还没东西可下，先在对话里说‘记下’几条")
+            } else {
+                choices = t.choices
+                chess = BrainHost.state.value.chess
+                toast("来一局三手棋")
+            }
+        }
+    }
+
     // 她此刻的样子：在想 → 好奇，在听 → 平静，否则按状态
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(state.talk.size) { now = System.currentTimeMillis() }
@@ -282,30 +308,47 @@ fun ChatScreen() {
                     toast(if (r == null) "她现在想不了（模型没接上）" else "她想了想：新判断 ${r.made.size} 条" + if (r.say.isNotEmpty()) "，有话想跟你说" else "")
                 }
             },
-            onSpar = {
-                sending = true
-                talkScope.launch {
-                    val t = runCatching { BrainHost.spar() }.getOrNull()
-                    sending = false
-                    if (t == null) {
-                        toast("体系图里还没东西可下，先在对话里说‘记下’几条")
-                    } else {
-                        choices = t.choices
-                        chess = BrainHost.state.value.chess
-                        toast("来一局三手棋")
-                    }
-                }
-            },
+            onSpar = { quickSpar() },
 
         )
 
         if (state.talk.isEmpty()) {
-            Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                Text(
-                    "跟墨灵说一句开始。\n她只提议：你说“好”之前，她不会动任何东西。",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Column(
+                    Modifier.padding(horizontal = 28.dp).fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    com.moling.app.ui.MolingFace(
+                        com.moling.core.live.Mood.CALM,
+                        Modifier.size(104.dp).inkEnter(),
+                    )
+                    Text("跟墨灵说一句", style = MaterialTheme.typography.titleMedium, modifier = Modifier.inkEnter(order = 1))
+                    Text(
+                        "她只提议：你说“好”之前，她不会动任何东西。\n也可以点「对讲」直接说，或者从下面的问题开始。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.inkEnter(order = 2),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    listOf(
+                        "今天有点乱，先陪我理一下",
+                        "帮我记一条：今天想明白的事",
+                        "来一局三手棋",
+                    ).forEachIndexed { i, hint ->
+                        OutlinedButton(
+                            onClick = {
+                                if (hint == "来一局三手棋") quickSpar() else input = hint
+                            },
+                            shape = RoundedCornerShape(50),
+                            border = BorderStroke(0.8.dp, Ink.copy(alpha = 0.25f)),
+                            modifier = Modifier.inkEnter(order = 3 + i, distance = 8.dp),
+                        ) {
+                            Text(hint, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
             }
         } else {
             LazyColumn(
@@ -315,7 +358,7 @@ fun ChatScreen() {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 itemsIndexed(state.talk) { index, turn ->
-                    Column(Modifier.fillMaxWidth()) {
+                    Column(Modifier.fillMaxWidth().inkEnter(order = index % 4, distance = 8.dp)) {
                         if (turn.who == "墨灵") HerNote(turn.text) else HisLine(turn.text)
                         if (turn.who == "墨灵") {
                             // 这条回复到下一句墨灵之间产生的提议，挂在这条下面；重开 App 也能看到
@@ -343,7 +386,7 @@ fun ChatScreen() {
                 Text("在听，说完会自动停", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         } else if (sending) {
-            com.moling.app.ui.art.InkThinking("墨灵在想…", Modifier.padding(start = 16.dp, bottom = 2.dp))
+            InkDots("墨灵在想", Modifier.padding(start = 16.dp, bottom = 2.dp))
         }
 
         // E1 三手棋：第几手、暴论（第一手）、收官分数。
@@ -491,11 +534,18 @@ fun ChatScreen() {
                 if (talkLoop) com.moling.app.ui.art.InkRipple(Modifier.size(22.dp), color = Seal)
                 Text(if (talkLoop) "停对讲" else "对讲", style = MaterialTheme.typography.labelMedium)
             }
+            val sendScale by animateFloatAsState(
+                targetValue = if (input.isNotBlank() && !sending) 1f else 0.94f,
+                animationSpec = spring(dampingRatio = 0.6f, stiffness = 420f),
+                label = "sendScale",
+            )
             Button(
                 onClick = { send() },
                 enabled = input.isNotBlank() && !sending,
                 shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
+                modifier = Modifier
+                    .padding(start = 4.dp, bottom = 6.dp)
+                    .graphicsLayer { scaleX = sendScale; scaleY = sendScale },
             ) {
                 Text(if (sending) "想…" else "发送")
             }
@@ -594,7 +644,7 @@ private fun Stage(
         }
         if (say != null) {
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Seal.copy(alpha = 0.07f)).padding(start = 12.dp),
+                Modifier.fillMaxWidth().inkEnter(distance = 6.dp).clip(RoundedCornerShape(12.dp)).background(Seal.copy(alpha = 0.07f)).padding(start = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("她想跟你说：$say", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f).padding(vertical = 8.dp))
@@ -602,16 +652,24 @@ private fun Stage(
                 TextButton(onClick = onSay) { Text("聊这个") }
             }
         }
-        if (expanded) thoughts.forEach { t ->
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "${t.text}（把握${t.confidence}）",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = { onJudge(t.id, true) }) { Text("对") }
-                TextButton(onClick = { onJudge(t.id, false) }) { Text("不对") }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(animationSpec = androidx.compose.animation.core.tween(260)) + fadeIn(androidx.compose.animation.core.tween(220)),
+            exit = shrinkVertically(animationSpec = androidx.compose.animation.core.tween(200)) + fadeOut(androidx.compose.animation.core.tween(160)),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                thoughts.forEach { t ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            t.text + "（把握" + t.confidence + "）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { onJudge(t.id, true) }) { Text("对") }
+                        TextButton(onClick = { onJudge(t.id, false) }) { Text("不对") }
+                    }
+                }
             }
         }
         com.moling.app.ui.art.InkTitle("", Modifier.padding(top = 2.dp))
