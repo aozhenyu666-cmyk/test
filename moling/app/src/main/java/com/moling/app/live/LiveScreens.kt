@@ -13,7 +13,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -448,6 +450,8 @@ class PeekActivity : ComponentActivity() {
         var touched by remember { mutableStateOf(false) }
         // 点一下就能回的选项（破雾）：点了她接一句，最多三下
         var choices by remember { mutableStateOf(LiveScreens.choices(intent)) }
+        // D3：这一轮是不是盲盒 / 小剧场 / 赌（只影响样子）。
+        var kind by remember { mutableStateOf(BrainHost.state.value.lastPlay?.kind.orEmpty()) }
         var closeSoon by remember { mutableStateOf(false) }
 
         LaunchedEffect(Unit) {
@@ -474,7 +478,18 @@ class PeekActivity : ComponentActivity() {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         MolingFace(mood, Modifier.size(72.dp))
-                        Text(line, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            if (kind == "blindbox" || kind == "bet") {
+                                KindTag(if (kind == "blindbox") "盲盒" else "她下注了")
+                            }
+                            if (kind == "drama") {
+                                line.lines().filter { it.isNotBlank() }.forEach { one ->
+                                    Text("· " + one, style = MaterialTheme.typography.bodyMedium)
+                                }
+                            } else {
+                                Text(line, style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
                     }
                     if (choices.isNotEmpty()) Row(
                         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -490,6 +505,7 @@ class PeekActivity : ComponentActivity() {
                                     line = t.line
                                     mood = t.mood
                                     choices = t.choices
+                                    kind = ""
                                     if (BrainHost.speakOn()) Speaker.speak(t.line)
                                     busy = false
                                     if (t.choices.isEmpty()) closeSoon = true
@@ -534,4 +550,15 @@ class PeekActivity : ComponentActivity() {
             }
         }
     }
+}
+
+/** D3：卡片上的小标签（盲盒 / 她下注了）。 */
+@Composable
+private fun KindTag(text: String) {
+    Box(
+        Modifier
+            .background(Seal.copy(alpha = 0.10f), RoundedCornerShape(50))
+            .border(0.6.dp, Seal.copy(alpha = 0.5f), RoundedCornerShape(50))
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+    ) { Text(text, color = Seal, style = MaterialTheme.typography.labelSmall) }
 }
