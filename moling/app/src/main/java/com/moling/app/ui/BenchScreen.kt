@@ -724,8 +724,18 @@ private fun MaterialsDialog(ws: WorkbenchState, focus: Focus, onClose: () -> Uni
         text = {
             Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ws.materialsOf(focus).forEach { m ->
-                    Column {
+                    val src = BrainHost.sources.value.refOfMaterial(m.id)
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(m.title.ifBlank { m.kind }, style = MaterialTheme.typography.labelMedium)
+                        if (src != null) {
+                            Text(
+                                (if (src.status == com.moling.core.web.SourceStatus.DELETED) "原文已删除 · " else "") +
+                                    (src.url.ifBlank { src.channel.name.lowercase() }),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (src.status == com.moling.core.web.SourceStatus.DELETED) Seal else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
                         Text(m.text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 4)
                     }
                 }

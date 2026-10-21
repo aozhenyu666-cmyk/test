@@ -1166,9 +1166,9 @@
 - App：本地 `testDebugUnitTest assembleDebug` 通过。
 - 真实公网抓取/搜索**未验**（没有 Brave key；只用 MockWebServer 假服务器验证了协议和失败路径）。
 
-**未完成（本批后续 T3–T9）**
+**未完成（本批后续 T3–T9，2026-10-22 追加分享正文后更新）**
 - T2：设置页搜索提供者/reader/RSS 配置、测试连接与额度显示、RSS 订阅 UI 未做；Brave search 仍 `NOT_CONFIGURED`。
-- T3：ShareActivity 还没有「提取正文放上案板 / 只存链接」，情报池还没接到分享入口；材料列表的移除/选中未做。
+- T3：ShareActivity 已加「提取正文放上案板」（有 URL 就开焦点→benchFetchSource→材料+来源；没 URL 只放文本）；材料弹窗显示来源 URL 和“原文已删除”。情报池尚未接到分享入口、材料移除/选中未做。
 - T4：联网采蜜（DISCOVERY/SOURCE_PACK）未做，旧 Forage 未改。
 - T5：Prework 模型作业还没有注入冻结材料快照和引用校验；伪造引用拦截未接。
 - T6：HybridRecall / MemoryCandidate 未做。

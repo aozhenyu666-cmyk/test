@@ -39,6 +39,29 @@ class ShareActivity : ComponentActivity() {
                             }
                         }
                     }) { Text("放上案板") }
+                    TextButton(enabled = !busy, onClick = {
+                        busy = true
+                        lifecycleScope.launch {
+                            val item = com.moling.core.intake.InhaleParse.fromShare(text, System.currentTimeMillis())
+                            val f = runCatching { BrainHost.benchStart("", text) }.getOrNull()
+                            if (f == null) {
+                                Toast.makeText(this@ShareActivity, "没放上去，再试一次", Toast.LENGTH_SHORT).show()
+                                busy = false
+                                return@launch
+                            }
+                            if (item.url.isNotBlank()) {
+                                when (val r = BrainHost.benchFetchSource(f.id, item.url)) {
+                                    is com.moling.core.workspace.PortResult.Ok -> Toast.makeText(this@ShareActivity, "取到正文：" + r.value.title, Toast.LENGTH_SHORT).show()
+                                    is com.moling.core.workspace.PortResult.Failed -> Toast.makeText(this@ShareActivity, "材料放上了，正文没取到：" + r.error.message, Toast.LENGTH_LONG).show()
+                                }
+                            } else {
+                                Toast.makeText(this@ShareActivity, "放上案板了", Toast.LENGTH_SHORT).show()
+                            }
+                            busy = false
+                            startActivity(Intent(this@ShareActivity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(MainActivity.EXTRA_TAB, 3))
+                            finish()
+                        }
+                    }) { Text("提取正文放上案板") }
                     // 别的 AI 的回答（交接包发出去后回来的）：交给她把关——回答问题、收论断、改“了解”要你点头
                     TextButton(enabled = !busy, onClick = {
                         busy = true
