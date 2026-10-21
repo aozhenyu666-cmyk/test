@@ -46,6 +46,7 @@
 - 墨灵外壳：DeepSeek 第一批（M0–M3）和第二批（M4 换上大脑、M5 接总控、M6 今天页，外加 M7 体系页、打开演员、权柄上限）都已完成并合进工作分支，CI 绿，`moling-latest` 已发布。细节见 `moling/DEVLOG.md`。
 - 第三批（DeepSeek，`moling/DEEPSEEK-3.md`，M8–M16）：调试页、后台心跳、看前台应用和总控健康、通知、早晚自动、总控结局回传、体系页补全、导演卡片和接力棒、备份。大脑为它补了：总控结局（`ZkPort.result`、`Proposal.zkOutcome`）、体系图核实 / 删除 / 归纳 / 缺口去聊、`needsPlan` / `needsNight`、`BrainFacts.category`。
 - 还没做：真机联调（总控通知 → 执行）；小窗（悬浮窗，要新权限，第三批之后再说）。
+- **v4 规划**（`partner-blueprint/v4-power.md`）：授权书（事先授权的收紧和排计划，60 秒反悔，撤销走冷静期）、总控三个新开关、约定 / 谋划单交给总控监督、小窗和“先答一问”、日历和作息、周报和打法本、模式和语音对讲。Claude 先做 C1–C7（大脑和总控内核），DeepSeek 做第四到第七批。
 - 没在真机上验证过：小窗能否浮在 Gemini Live 上、vivo 上的听写、开场白交接方式（探针 P1–P5）。
 
 ## 6. 对用户的了解（工作假设，不是诊断）
