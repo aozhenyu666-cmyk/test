@@ -90,6 +90,20 @@ class SettingsStore(context: Context) {
         toggles.edit().putBoolean(KEY_AUTO_PLAN, on).apply()
     }
 
+    /** 她会主动找你（刷久了、夜里躺着刷时蹦出来）：默认开。 */
+    fun liveOn(): Boolean = toggles.getBoolean(KEY_LIVE, true)
+
+    fun setLiveOn(on: Boolean) {
+        toggles.edit().putBoolean(KEY_LIVE, on).apply()
+    }
+
+    /** 她可以拦住你（只拦娱乐 / 购物，每天最多 3 次、每次最多 5 分钟、永远有“急事”）：默认开。 */
+    fun gateOn(): Boolean = toggles.getBoolean(KEY_GATE, true)
+
+    fun setGateOn(on: Boolean) {
+        toggles.edit().putBoolean(KEY_GATE, on).apply()
+    }
+
     /** 北京时间日期。按用户的作息，一天从零点算。 */
     private fun todayKey(): String = LocalDate.now(BEIJING).toString()
 
@@ -103,6 +117,8 @@ class SettingsStore(context: Context) {
         private const val TOGGLE_FILE = "moling_toggles"
         private const val KEY_BACKGROUND = "background_heart"
         private const val KEY_AUTO_PLAN = "auto_plan"
+        private const val KEY_LIVE = "live"
+        private const val KEY_GATE = "gate"
 
         private const val DEFAULT_BASE_URL = "https://api.deepseek.com"
         private const val DEFAULT_MODEL = "deepseek-chat"

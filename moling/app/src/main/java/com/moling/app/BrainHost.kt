@@ -14,7 +14,14 @@ import com.moling.core.Notice
 import com.moling.core.Outcome
 import com.moling.core.Proposal
 import com.moling.core.ProposalState
+import com.moling.app.live.GateActivity
+import com.moling.app.live.LiveScreens
+import com.moling.core.LiveTurn
 import com.moling.core.flow.Cause
+import com.moling.core.live.GateRules
+import com.moling.core.live.LiveConfig
+import com.moling.core.live.Mood
+import com.moling.core.live.Activity as LiveActivity
 import com.moling.core.flow.Flow
 import com.moling.core.flow.FlowPlan
 import com.moling.core.guard.GuardSample
@@ -208,7 +215,68 @@ object BrainHost {
         _notices.value = (out + _notices.value).distinctBy { it.at to it.text }.take(3)
         if (out.isNotEmpty()) runCatching { postNotices(now, out) }
         runCatching { withContext(Dispatchers.IO) { autoSchedule(now) } }
+        runCatching { liveTick(now) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "活的墨灵失败", it) }
         return out
+    }
+
+    // ---------------------------------------------------------------- 活的墨灵（v5）
+
+    /** 活的墨灵这一跳的重入闸（她在想要不要出声时可能要等模型几秒）。 */
+    private val liveBusy = AtomicBoolean(false)
+
+    /** 设置里关了“她可以拦住你”，今天就一次也不拦（只说话）。 */
+    fun liveConfig(): LiveConfig =
+        if (ready && settings.gateOn()) LiveConfig() else LiveConfig(gatesPerDay = 0)
+
+    /** 设置里开了“她说话出声音”。 */
+    fun speakOn(): Boolean = ready && runCatching { settings.load().speak }.getOrDefault(false)
+
+    /**
+     * 每一跳看一眼他在干什么，值得的时候把她叫醒（她自己决定说不说、拦不拦）。
+     *  - 正拦着：到 5 分钟自己放；他溜回那个娱乐应用、拦人的界面又不在前面，就再弹出来；
+     *  - 没拦着：大脑判断有没有值得叫醒她的事（该做事时在刷、夜里躺着刷、刷了很久）。
+     * 只在亮屏时做；设置里关了“她会主动找你”就什么都不做。
+     */
+    private suspend fun liveTick(now: Long) {
+        val ctx = appContext ?: return
+        if (!ready || !settings.liveOn() || !interactive()) return
+        if (!liveBusy.compareAndSet(false, true)) return
+        try {
+            val cfg = liveConfig()
+            val status = _state.value.lastStatus
+            val fg = if (Usage.allowed(ctx)) runCatching { Usage.foreground(ctx, now, Usage.LONG_WINDOW_MS) }.getOrNull() else null
+            val activity = fg?.let { LiveActivity(it.pkg, it.label, BrainFacts.category(it.pkg, status), it.minutes) }
+            val gate = brain.state().gate
+            if (gate != null) {
+                if (GateRules.expired(gate, now, cfg)) {
+                    io("gateTimeout", {}) { brain.gateEscape("超时", now, cfg) }
+                } else if (activity?.pkg == gate.pkg && !GateActivity.visible) {
+                    val last = _state.value.talk.lastOrNull { it.who == "墨灵" }?.text.orEmpty()
+                    withContext(Dispatchers.Main) { LiveScreens.gate(ctx, Mood.POUT, last.ifBlank { "还没回我呢。" }, gate.label) }
+                }
+                return
+            }
+            if (MainActivity.visible) return
+            val trigger = brain.liveTrigger(activity, now) ?: return
+            val turn = io<LiveTurn?>("live", { null }) { brain.live(trigger, activity, now, cfg = cfg) } ?: return
+            withContext(Dispatchers.Main) {
+                if (turn.gate) LiveScreens.gate(ctx, turn.mood, turn.line, activity?.label.orEmpty())
+                else LiveScreens.peek(ctx, turn.mood, turn.line)
+            }
+        } finally {
+            liveBusy.set(false)
+        }
+    }
+
+    /** 拦着他时他回了一句。 */
+    suspend fun gateReply(text: String): LiveTurn =
+        io("gateReply", { LiveTurn(Mood.WORRIED, "刚才没接上，再说一次（或者点「急事」）", true, false, emptyList()) }) {
+            brain.gateReply(text, System.currentTimeMillis(), liveConfig())
+        }
+
+    /** 不回答也走：急事 / 到点。 */
+    suspend fun gateEscape(reason: String) {
+        io("gateEscape", {}) { brain.gateEscape(reason, System.currentTimeMillis(), liveConfig()) }
     }
 
     /**

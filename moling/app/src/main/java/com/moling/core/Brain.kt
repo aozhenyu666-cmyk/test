@@ -1110,8 +1110,16 @@ object BrainFacts {
         pkg == Actor.GEMINI_LIVE.pkg || pkg == Actor.CHATGPT.pkg -> "ACTOR"
         s != null && pkg in s.blocked -> "ENTERTAINMENT"
         pkg in setOf("com.zongkong.app", "com.moling.app", "notion.id") -> "WORK"
+        // 总控连不上时，常见的短视频 / 刷屏应用照样认得出来；连得上就只认他自己在总控里定的名单
+        s == null && pkg in KNOWN_PLAY -> "ENTERTAINMENT"
         else -> "OTHER"
     }
+
+    /** 总控连不上时兜底认的娱乐应用。 */
+    val KNOWN_PLAY = setOf(
+        "com.ss.android.ugc.aweme", "com.ss.android.ugc.aweme.lite", "com.smile.gifmaker", "com.kuaishou.nebula",
+        "tv.danmaku.bili", "com.xingin.xhs", "com.sina.weibo", "com.google.android.youtube", "com.tencent.qqlive",
+    )
 
     fun merge(phone: Facts, s: ZkStatus?, flow: FlowPlan?, now: Long): Facts {
         val flowNow = flow?.let { Flow.current(it, Flow.minuteOf(now)) }?.title.orEmpty()

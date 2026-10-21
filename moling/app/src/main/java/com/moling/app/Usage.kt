@@ -20,6 +20,9 @@ object Usage {
     /** 往前看多久（分钟）。 */
     private const val WINDOW_MS = 10 * 60_000L
 
+    /** 活的墨灵要知道“连着刷了多久”（躺着刷 15 分钟、连刷 40 分钟），往前看 3 小时。 */
+    const val LONG_WINDOW_MS = 3 * 3_600_000L
+
     /** 有没有「使用情况访问」权限（用户在系统设置里手动打开）。 */
     fun allowed(context: Context): Boolean = runCatching {
         val appOps = context.getSystemService(AppOpsManager::class.java) ?: return false
@@ -31,15 +34,20 @@ object Usage {
         mode == AppOpsManager.MODE_ALLOWED
     }.getOrDefault(false)
 
-    fun foreground(context: Context, now: Long = System.currentTimeMillis()): Foreground? {
+    fun foreground(context: Context, now: Long = System.currentTimeMillis(), windowMs: Long = WINDOW_MS): Foreground? {
         if (!allowed(context)) return null
         val usm = context.getSystemService(UsageStatsManager::class.java) ?: return null
-        val events = runCatching { usm.queryEvents(now - WINDOW_MS, now) }.getOrNull() ?: return null
+        val events = runCatching { usm.queryEvents(now - windowMs, now) }.getOrNull() ?: return null
         val e = UsageEvents.Event()
         var current = ""
         var since = 0L
         while (events.hasNextEvent()) {
             events.getNextEvent(e)
+            // 熄过屏就不算“连着”：下次进前台重新计时（系统 Android 9 起才有这个事件）。
+            if (Build.VERSION.SDK_INT >= 28 && e.eventType == UsageEvents.Event.SCREEN_NON_INTERACTIVE) {
+                current = ""
+                continue
+            }
             // MOVE_TO_FOREGROUND 在 API 29 叫 ACTIVITY_RESUMED，值都是 1，用旧常量兼容到 minSdk 26。
             if (e.eventType != UsageEvents.Event.MOVE_TO_FOREGROUND) continue
             val pkg = e.packageName.orEmpty()

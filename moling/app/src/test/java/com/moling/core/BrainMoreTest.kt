@@ -198,7 +198,9 @@ class BrainMoreTest {
         assertEquals("ACTOR", BrainFacts.category("com.openai.chatgpt", s))
         assertEquals("WORK", BrainFacts.category("com.zongkong.app", s))
         assertEquals("OTHER", BrainFacts.category("com.android.chrome", s))
-        assertEquals("OTHER", BrainFacts.category("com.ss.android.ugc.aweme", null))
+        // 总控连不上：常见短视频应用兜底算娱乐（v5）
+        assertEquals("ENTERTAINMENT", BrainFacts.category("com.ss.android.ugc.aweme", null))
+        assertEquals("OTHER", BrainFacts.category("com.android.chrome", null))
         assertEquals("", BrainFacts.category("", s))
     }
 }

@@ -20,6 +20,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -88,12 +90,19 @@ fun SettingsScreen(onDone: () -> Unit) {
     var aboutOpen by remember { mutableStateOf(false) }
     var backgroundOn by remember { mutableStateOf(store.backgroundHeart()) }
     var autoPlanOn by remember { mutableStateOf(store.autoPlan()) }
+    var liveOn by remember { mutableStateOf(store.liveOn()) }
+    var gateOn by remember { mutableStateOf(store.gateOn()) }
+    var faceMood by remember { mutableStateOf(com.moling.core.live.Mood.POUT) }
+    var overlayAllowed by remember { mutableStateOf(android.provider.Settings.canDrawOverlays(context)) }
     // 看前台应用：权限在系统设置里，回来时刷新一下状态。
     var usageAllowed by remember { mutableStateOf(Usage.allowed(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) usageAllowed = Usage.allowed(context)
+            if (event == Lifecycle.Event.ON_RESUME) {
+                usageAllowed = Usage.allowed(context)
+                overlayAllowed = android.provider.Settings.canDrawOverlays(context)
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -332,6 +341,63 @@ fun SettingsScreen(onDone: () -> Unit) {
                         store.setAutoPlan(on)
                     },
                 )
+            }
+
+            // ---------------------------------------------------------------- 活的墨灵（v5）
+            Text("活的墨灵", style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                MolingFace(
+                    faceMood,
+                    Modifier.size(72.dp).clickable {
+                        val all = com.moling.core.live.Mood.entries
+                        faceMood = all[(faceMood.ordinal + 1) % all.size]
+                    },
+                )
+                Text(
+                    "她现在是「${faceMood.label}」（点她换个表情）。刷久了、该做事时在刷、夜里躺着刷，她会自己决定要不要蹦出来说一句。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("她会主动找你")
+                    Text(
+                        "每天最多出声 10 次、两次至少隔 20 分钟；你老划掉她，她就少说。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = liveOn, onCheckedChange = { on -> liveOn = on; store.setLiveOn(on) })
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("她可以拦住你")
+                    Text(
+                        "只拦娱乐 / 购物（电话、短信、支付、地图、设置永远不拦）。回她一句认真的话就放；" +
+                            "每天最多 3 次，每次最多 5 分钟、最多 3 轮，永远有「急事」按钮。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = gateOn, enabled = liveOn, onCheckedChange = { on -> gateOn = on; store.setGateOn(on) })
+            }
+            if (liveOn && !overlayAllowed) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "没开“显示在其他应用上层”：她只能发通知，蹦不出来",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    OutlinedButton(onClick = {
+                        runCatching {
+                            context.startActivity(
+                                Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:${context.packageName}")),
+                            )
+                        }
+                    }) { Text("去打开") }
+                }
             }
 
             Text("记忆", style = MaterialTheme.typography.titleSmall)

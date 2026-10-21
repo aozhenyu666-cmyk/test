@@ -47,6 +47,23 @@
             </intent-filter>
         </activity>
 
+        <!-- 活的墨灵（v5）：拦在娱乐应用前面 / 蹦出来说一句。单独的任务，关掉就回到他原来在用的应用 -->
+        <activity
+            android:name=".live.GateActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.moling.app.gate"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.Moling" />
+        <activity
+            android:name=".live.PeekActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity="com.moling.app.peek"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <service android:name=".overlay.OverlayService" android:exported="false" />
         <activity android:name=".overlay.PresenceActivity" android:exported="false" android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <activity android:name=".ShareActivity" android:exported="true" android:theme="@android:style/Theme.Translucent.NoTitleBar">

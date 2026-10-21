@@ -70,6 +70,12 @@ class LiveTest {
         assertFalse(GateRules.eligible(null))
     }
 
+    @Test fun knownPlayAppsCountOnlyWhenZongkongIsAway() {
+        assertEquals("ENTERTAINMENT", BrainFacts.category("com.ss.android.ugc.aweme", null))
+        assertEquals("OTHER", BrainFacts.category("com.ss.android.ugc.aweme", ZkStatus(blocked = listOf("tv.danmaku.bili"))))
+        assertEquals("ENTERTAINMENT", BrainFacts.category("tv.danmaku.bili", ZkStatus(blocked = listOf("tv.danmaku.bili"))))
+    }
+
     @Test fun triggers() {
         val b = brain()
         assertEquals(Trigger.SCROLL_IN_BED, b.liveTrigger(douyin, at(23, 40)))
