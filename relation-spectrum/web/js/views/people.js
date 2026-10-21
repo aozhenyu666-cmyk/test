@@ -1,6 +1,6 @@
 // People: list grouped by tier, detail page with metrics + timeline + AI audit, and the edit form.
 
-import { h, mount, go, field, segmented, emptyState, relDays, fmtDate, tempColor, meter, balanceBar, toast } from '../ui/dom.js';
+import { h, mount, go, field, segmented, emptyState, relDays, fmtDate, tempColor, meter, balanceBar, toast, ask } from '../ui/dom.js';
 import { TIERS, ENTITY_KINDS, INTERACTION_TYPES, INVITE_STATUS, PROMISE_STATUS, INITIATORS, newEntity } from '../core/models.js';
 import * as db from '../store/db.js';
 import * as api from '../services/api.js';
@@ -198,7 +198,7 @@ function interactionItem(it) {
       h('button.link.danger', {
         type: 'button',
         onclick: async () => {
-          if (!confirm('删除这条记录？')) return;
+          if (!(await ask('删除这条记录？', { ok: '删除', danger: true }))) return;
           await db.remove('interactions', it.id);
           toast('已删除');
           go(location.hash);
@@ -327,7 +327,7 @@ export async function renderPersonEdit(root, id, params) {
         existing ? h('button.btn.danger', {
           type: 'button',
           onclick: async () => {
-            if (!confirm(`删除 ${e.name} 及其所有记录？`)) return;
+            if (!(await ask(`删除 ${e.name} 及其所有记录？`, { ok: '删除', danger: true }))) return;
             for (const it of await db.interactionsOf(e.id)) await db.remove('interactions', it.id);
             await db.remove('entities', e.id);
             toast('已删除');

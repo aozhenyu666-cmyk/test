@@ -1,0 +1,312 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "关系光谱 Notion",
+    "version": "1.0.0",
+    "description": "读写关系光谱的三张 Notion 数据库"
+  },
+  "servers": [
+    {
+      "url": "https://api.notion.com"
+    }
+  ],
+  "paths": {
+    "/v1/databases/{database_id}/query": {
+      "post": {
+        "operationId": "queryDatabase",
+        "summary": "查询数据库里的页面，可以带 filter 和 sorts",
+        "parameters": [
+          {
+            "name": "database_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Notion-Version",
+            "in": "header",
+            "required": true,
+            "description": "Notion API 版本，固定传 2022-06-28",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "2022-06-28"
+              ],
+              "default": "2022-06-28"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "filter": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Notion filter，例如 {\"property\":\"名称\",\"title\":{\"contains\":\"妈妈\"}}"
+                  },
+                  "sorts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "description": "例如 [{\"property\":\"日期\",\"direction\":\"descending\"}]"
+                  },
+                  "page_size": {
+                    "type": "integer",
+                    "description": "最多 100"
+                  },
+                  "start_cursor": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功，返回 Notion 对象",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/databases/{database_id}": {
+      "get": {
+        "operationId": "getDatabase",
+        "summary": "读取数据库结构（字段名和选项）",
+        "parameters": [
+          {
+            "name": "database_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Notion-Version",
+            "in": "header",
+            "required": true,
+            "description": "Notion API 版本，固定传 2022-06-28",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "2022-06-28"
+              ],
+              "default": "2022-06-28"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功，返回 Notion 对象",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pages": {
+      "post": {
+        "operationId": "createPage",
+        "summary": "在数据库里新建一条记录",
+        "parameters": [
+          {
+            "name": "Notion-Version",
+            "in": "header",
+            "required": true,
+            "description": "Notion API 版本，固定传 2022-06-28",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "2022-06-28"
+              ],
+              "default": "2022-06-28"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "parent",
+                  "properties"
+                ],
+                "properties": {
+                  "parent": {
+                    "type": "object",
+                    "properties": {
+                      "database_id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "database_id"
+                    ]
+                  },
+                  "properties": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "按字段名填写，例如 {\"事件\":{\"title\":[{\"text\":{\"content\":\"陪聊\"}}]},\"日期\":{\"date\":{\"start\":\"2026-10-21\"}}}"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功，返回 Notion 对象",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pages/{page_id}": {
+      "get": {
+        "operationId": "getPage",
+        "summary": "读取一条记录",
+        "parameters": [
+          {
+            "name": "page_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Notion-Version",
+            "in": "header",
+            "required": true,
+            "description": "Notion API 版本，固定传 2022-06-28",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "2022-06-28"
+              ],
+              "default": "2022-06-28"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功，返回 Notion 对象",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updatePage",
+        "summary": "修改一条记录的字段；archived 为 true 时删除（移到回收站）",
+        "parameters": [
+          {
+            "name": "page_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Notion-Version",
+            "in": "header",
+            "required": true,
+            "description": "Notion API 版本，固定传 2022-06-28",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "2022-06-28"
+              ],
+              "default": "2022-06-28"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "properties": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "archived": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功，返回 Notion 对象",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "notionToken": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {}
+  },
+  "security": [
+    {
+      "notionToken": []
+    }
+  ]
+}

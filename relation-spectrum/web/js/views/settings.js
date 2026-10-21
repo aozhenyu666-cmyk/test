@@ -1,11 +1,22 @@
 // Settings: AI provider, Notion connection + sync, personal parameters, data import/export.
 
-import { h, mount, field, segmented, toast } from '../ui/dom.js';
+import { h, mount, field, segmented, toast, ask, copyText } from '../ui/dom.js';
 import { getSettings, updateSettings } from '../services/settings.js';
 import * as api from '../services/api.js';
 import * as db from '../store/db.js';
-import { initDatabases, syncAll, lastSyncAt, normalizeNotionId } from '../services/notion-sync.js';
+import { initDatabases, syncAll, lastSyncAt, normalizeNotionId, pushSeedCases } from '../services/notion-sync.js';
 import { loadDemoData } from '../data/demo.js';
+import { gptInstructions, notionOpenApi, GPT_SETUP_STEPS } from '../core/gpt-kit.js';
+import { inClaudeViewer, getDownloads } from '../services/claude-host.js';
+
+// One-tap provider presets. Model names change often: edit the model field if your
+// account offers a newer one.
+const PRESETS = [
+  { label: 'Claude', provider: 'anthropic', baseUrl: '', model: 'claude-opus-5-5' },
+  { label: 'OpenAI GPT', provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  { label: 'DeepSeek', provider: 'openai', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+  { label: 'OpenRouter', provider: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o-mini' },
+];
 
 const MODEL_HINT = {
   anthropic: '默认 claude-opus-5-5；想省钱可填 claude-sonnet-5-5 或 claude-haiku-5-5',
@@ -45,6 +56,18 @@ export async function renderSettings(root) {
   };
   syncProvider();
 
+  const presets = h('div.chips-row', PRESETS.map((pr) => h('button.chip', {
+    type: 'button',
+    onclick: () => {
+      provider.value = pr.provider;
+      baseUrl.value = pr.baseUrl;
+      model.value = pr.model;
+      syncProvider();
+      apiKey.focus();
+      toast(`已填好 ${pr.label}，再填上 API Key 后保存`);
+    },
+  }, pr.label)));
+
   const saveAi = () => {
     updateSettings({ llm: { mode: mode.value, provider: provider.value, model: model.value.trim(), apiKey: apiKey.value.trim(), baseUrl: baseUrl.value.trim(), effort: effort.value } });
     toast('已保存', 'good');
@@ -56,7 +79,7 @@ export async function renderSettings(root) {
     ev.target.textContent = '测试中…';
     try {
       const { model: m, via } = await api.analyze('parse', { text: '我：周末一起吃饭吗\nTA：最近忙，改天吧' });
-      toast(`连接成功：${m}（${via === 'direct' ? '浏览器直连' : '经过服务器'}）`, 'good');
+      toast(`连接成功：${m}（${{ direct: '浏览器直连', claude: 'claude.ai', server: '经过服务器' }[via] || via}）`, 'good');
     } catch (err) {
       toast(err.message, 'danger');
     } finally {
@@ -90,7 +113,7 @@ export async function renderSettings(root) {
 
   const initNotion = async (ev) => {
     saveNotion();
-    if (!confirm('将在这个页面下新建三张数据库。继续？')) return;
+    if (!(await ask('将在这个 Notion 页面下新建三张数据库。继续？', { ok: '创建' }))) return;
     ev.target.disabled = true;
     try {
       const ids = await initDatabases(nParent.value);
@@ -120,6 +143,37 @@ export async function renderSettings(root) {
     }
   };
 
+  const seedBtn = h('button.btn.small', {
+    type: 'button',
+    onclick: async (ev) => {
+      saveNotion();
+      if (!(await ask('把 15 个参考案例写进 Notion 的案例库？已经写过的话会再写一遍。', { ok: '写入' }))) return;
+      ev.target.disabled = true;
+      try {
+        const r = await pushSeedCases((t) => (syncStatus.textContent = t), { force: true });
+        syncStatus.textContent = `已写入 ${r.written} 个参考案例`;
+        toast('参考案例已写入 Notion', 'good');
+      } catch (err) {
+        syncStatus.textContent = `写入失败：${err.message}`;
+        toast(err.message, 'danger');
+      } finally {
+        ev.target.disabled = false;
+      }
+    },
+  }, '写入 15 个参考案例');
+
+  // ---------------- ChatGPT side by side
+  const kitIds = () => ({ entitiesDb: normalizeNotionId(nEnt.value), interactionsDb: normalizeNotionId(nInt.value), casesDb: normalizeNotionId(nCase.value) });
+  const kitStatus = h('p.small');
+  const refreshKit = () => {
+    const ids = kitIds();
+    const ready = ids.entitiesDb && ids.interactionsDb && ids.casesDb;
+    kitStatus.className = `small ${ready ? 'muted' : 'warn-text'}`;
+    kitStatus.textContent = ready ? '三张表的 ID 已填好，复制出来的指令里会自动带上。' : '还没有填三张表的 ID。先完成上面的 Notion 连接，否则 GPT 不知道往哪里写。';
+  };
+  [nEnt, nInt, nCase].forEach((el) => el.addEventListener('input', refreshKit));
+  refreshKit();
+
   // ---------------- prefs
   const p = s.prefs;
   const moneyUnit = h('input', { type: 'number', min: 1, value: p.moneyUnit, inputmode: 'decimal' });
@@ -143,8 +197,24 @@ export async function renderSettings(root) {
 
   const exportData = async () => {
     const data = await db.exportAll();
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const a = h('a', { href: URL.createObjectURL(blob), download: `relation-spectrum-${new Date().toISOString().slice(0, 10)}.json` });
+    const filename = `relation-spectrum-${new Date().toISOString().slice(0, 10)}.json`;
+    const text = JSON.stringify(data, null, 2);
+    const downloads = await getDownloads();
+    if (downloads) {
+      try {
+        await downloads.save({ filename, data: text });
+      } catch (err) {
+        if (err?.code !== 'cancelled' && err?.code !== 'declined') toast('没有保存文件', 'warn');
+      }
+      return;
+    }
+    if (inClaudeViewer()) {
+      await copyText(text);
+      toast('这里不能直接下载，已把数据复制到剪贴板', 'warn');
+      return;
+    }
+    const blob = new Blob([text], { type: 'application/json' });
+    const a = h('a', { href: URL.createObjectURL(blob), download: filename });
     document.body.append(a);
     a.click();
     a.remove();
@@ -163,7 +233,10 @@ export async function renderSettings(root) {
     },
   });
 
-  const serverLine = serverInfo?.error
+  const viewer = inClaudeViewer();
+  const serverLine = viewer
+    ? h('p.small', 'AI 由你登录的 Claude 账号直接提供，不需要填 Key。第一次分析时会弹出提示，选“允许”即可。想用 GPT、DeepSeek 等其他模型，请用电脑版或自己部署的网页版。')
+    : serverInfo?.error
     ? h('p.small.warn-text', '现在连不上电脑上的服务器。AI 可以用“自动”或“浏览器直连”继续用；Notion 同步要等连上服务器。数据都保存在这台设备上。')
     : h('p.small.muted', `服务器默认：${serverInfo.llm.provider} / ${serverInfo.llm.model}${serverInfo.llm.hasKey ? '（已配置 Key）' : '（未配置 Key）'} · Notion ${serverInfo.notion.hasToken ? '已配置' : '未配置'}`);
 
@@ -173,26 +246,50 @@ export async function renderSettings(root) {
     h('section.card.form',
       h('h3', 'AI 模型'),
       serverLine,
-      h('div.field', h('span.field-label', '连接方式'), mode.el, modeHint),
-      h('div.field', h('span.field-label', '服务商'), provider.el),
-      h('label.field', h('span.field-label', '模型'), model, modelHint),
-      field('API Key', apiKey, 'Key 只保存在这台设备上，通过你自己的本地服务器转发'),
-      baseUrlField,
-      effortField,
-      h('div.row-wrap', h('button.btn.primary', { type: 'button', onclick: saveAi }, '保存'), h('button.btn', { type: 'button', onclick: testAi }, '测试连接')),
+      viewer ? null : [
+        h('div.field', h('span.field-label', '快速选择'), presets),
+        h('div.field', h('span.field-label', '连接方式'), mode.el, modeHint),
+        h('div.field', h('span.field-label', '服务商'), provider.el),
+        h('label.field', h('span.field-label', '模型'), model, modelHint),
+        field('API Key', apiKey, '只保存在这台设备上。走服务器时由你自己的服务器转发；浏览器直连时直接发给服务商'),
+        baseUrlField,
+        effortField,
+      ],
+      h('div.row-wrap',
+        viewer ? null : h('button.btn.primary', { type: 'button', onclick: saveAi }, '保存'),
+        h('button.btn', { type: 'button', onclick: testAi }, '测试连接')),
     ),
 
     h('section.card.form',
       h('h3', 'Notion 同步（可选）'),
-      h('p.small.muted', '在 notion.so/my-integrations 创建一个 Integration，把目标页面通过“连接”分享给它。'),
+      viewer ? h('p.small.warn-text', '在 claude.ai 里打开时不能连接 Notion（页面不能访问外部网站）。下面的设置会保存，用电脑版或自己部署的网页版时再同步。') : null,
+      h('ol.steps',
+        h('li', '打开 notion.so/my-integrations，新建一个 Integration，复制它的 Token。'),
+        h('li', '在 Notion 里新建一个空页面，比如“关系光谱”。点右上角 ··· → 连接 → 选你的 Integration。'),
+        h('li', '把 Token 和这个页面的链接填到下面，点“一键创建三张表”。'),
+        h('li', '点“写入 15 个参考案例”和“立即同步”，数据库就有内容了。')),
       field('Integration Token', nToken),
       field('父页面', nParent, '三张数据库会建在这个页面下面'),
       h('button.btn.small', { type: 'button', onclick: initNotion }, '一键创建三张表'),
       field('Entities_DB ID', nEnt),
       field('Interactions_DB ID', nInt),
       field('Sandbox_Cases_DB ID', nCase),
-      h('div.row-wrap', h('button.btn', { type: 'button', onclick: () => { saveNotion(); toast('已保存', 'good'); } }, '保存'), h('button.btn.primary', { type: 'button', onclick: runSync }, '立即同步')),
+      h('div.row-wrap',
+        h('button.btn', { type: 'button', onclick: () => { saveNotion(); toast('已保存', 'good'); } }, '保存'),
+        seedBtn,
+        h('button.btn.primary', { type: 'button', onclick: runSync }, '立即同步')),
       syncStatus,
+    ),
+
+    h('section.card.form',
+      h('h3', '和 ChatGPT 并肩使用'),
+      h('p.small.muted', '在 ChatGPT 里建一个自己的 GPT，让它读写同一个 Notion 数据库。你在 ChatGPT 里聊完、记下的事，同步后 App 里也有；App 里的记录，ChatGPT 也能查到。'),
+      kitStatus,
+      h('ol.steps', GPT_SETUP_STEPS.map((t) => h('li', t))),
+      h('div.row-wrap',
+        h('button.btn.primary', { type: 'button', onclick: () => copyText(gptInstructions(kitIds())) }, '复制 GPT 指令'),
+        h('button.btn', { type: 'button', onclick: () => copyText(JSON.stringify(notionOpenApi(), null, 2)) }, '复制 Action 结构')),
+      h('p.small.muted', 'GPT 用的是你自己的 Notion Token，只在你的 ChatGPT 账号里保存。'),
     ),
 
     h('section.card.form',
@@ -216,7 +313,7 @@ export async function renderSettings(root) {
         h('button.btn.danger', {
           type: 'button',
           onclick: async () => {
-            if (!confirm('清空这台设备上的全部数据？Notion 上的不受影响。')) return;
+            if (!(await ask('清空这台设备上的全部数据？Notion 上的不受影响。', { ok: '清空', danger: true }))) return;
             await db.clearAll();
             toast('已清空');
           },

@@ -43,6 +43,33 @@ export function toast(text, tone = 'neutral') {
   setTimeout(() => el.remove(), 3000);
 }
 
+/**
+ * In-page confirmation. Native confirm() is blocked inside some viewers (it returns
+ * false at once), so destructive actions ask here instead. Resolves true or false.
+ */
+export function ask(text, { ok = '确定', cancel = '取消', danger = false } = {}) {
+  return new Promise((resolve) => {
+    const done = (v) => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKey);
+      resolve(v);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') done(false);
+    };
+    const okBtn = h(`button.btn.${danger ? 'danger-solid' : 'primary'}`, { type: 'button', onclick: () => done(true) }, ok);
+    const overlay = h('div.overlay.center', { role: 'alertdialog', 'aria-modal': 'true', onclick: (e) => { if (e.target === overlay) done(false); } },
+      h('div.dialog',
+        h('p.dialog-text', text),
+        h('div.row-wrap.dialog-actions', h('button.btn', { type: 'button', onclick: () => done(false) }, cancel), okBtn),
+      ),
+    );
+    document.addEventListener('keydown', onKey);
+    document.body.append(overlay);
+    okBtn.focus();
+  });
+}
+
 export async function copyText(text) {
   try {
     await navigator.clipboard.writeText(text);

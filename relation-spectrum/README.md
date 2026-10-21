@@ -13,6 +13,16 @@
 
 设计思路和算法见 [docs/DESIGN.md](docs/DESIGN.md)。
 
+## 马上在手机上试
+
+| 方式 | 链接 | 说明 |
+|---|---|---|
+| claude.ai 网页版 | https://claude.ai/artifact/J74sV8MTyUJXy46HZF4b87 | 登录 Claude 后直接打开。AI 用你的 Claude 账号，不用填 Key；不能连 Notion |
+| 网页版安装包 | [relation-spectrum-web-0.3.0.zip](https://github.com/aozhenyu666-cmyk/test/raw/ccr-09eb4a18-8qnot9/relation-spectrum/dist/relation-spectrum-web-0.3.0.zip) | 解压后上传到 Netlify、Cloudflare Pages 等静态托管，手机打开后“添加到主屏幕” |
+| 完整项目 | [relation-spectrum-0.3.0.zip](https://github.com/aozhenyu666-cmyk/test/raw/ccr-09eb4a18-8qnot9/relation-spectrum/dist/relation-spectrum-0.3.0.zip) | 电脑上 `npm install && npm start`，支持 Notion 同步和所有模型 |
+
+重新打包：`npm run package`。
+
 | 破坏力测试 | 对线预演 | 回填结局 | 直觉校准 |
 |---|---|---|---|
 | ![](docs/screenshots/blast-test.png) | ![](docs/screenshots/roleplay.png) | ![](docs/screenshots/outcome.png) | ![](docs/screenshots/calibration.png) |
@@ -69,15 +79,28 @@ Notion 同步始终需要服务器，因为 Notion 不允许浏览器直接调�
 | 服务商 | 配置 |
 |---|---|
 | Claude（默认） | `ANTHROPIC_API_KEY`，模型默认 `claude-opus-5-5`，可改成 `claude-sonnet-5-5` 或 `claude-haiku-5-5` 省钱 |
-| OpenAI 兼容（DeepSeek、Kimi、通义、OpenRouter 等） | `LLM_PROVIDER=openai`，再填 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` |
+| OpenAI GPT、DeepSeek、OpenRouter 等（设置页有一键预设） | `LLM_PROVIDER=openai`，再填 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` |
 
 Claude 用结构化输出保证返回合法 JSON，并开启了拒答时自动换模型重试（`fallbacks: "default"`）。聊天解析和对线预演用低思考深度，速度更快。
+
+## 和 ChatGPT 并肩使用
+
+在 ChatGPT 里建一个自己的 GPT，让它读写同一个 Notion 数据库：在 ChatGPT 里聊的、记下的，App 同步后能看到；App 里的记录，ChatGPT 也能查到。
+
+1. 先完成下面的 Notion 连接
+2. App 设置 → 和 ChatGPT 并肩使用 → 点“复制 GPT 指令”和“复制 Action 结构”，按页面上的步骤粘贴到 ChatGPT 的 GPT 编辑器
+3. Action 的身份验证选 API Key → Bearer，填你的 Notion Token
+
+文件版在 [integrations/chatgpt/](integrations/chatgpt/)。需要 ChatGPT Plus 或以上才能创建自己的 GPT。
+
+App 本身也可以直接用 GPT 做分析：设置 → AI 模型 → 快速选择“OpenAI GPT”，填 OpenAI 的 API Key。
 
 ## Notion 同步（可选）
 
 1. 在 https://www.notion.so/my-integrations 新建一个 Integration，复制 Token
 2. 在 Notion 里建一个空页面，右上角菜单 → 连接 → 选你的 Integration
-3. 在 App 的设置页填 Token 和这个页面的链接，点“一键创建三张表”，再点“立即同步”
+3. 在 App 的设置页填 Token 和这个页面的链接，点“一键创建三张表”
+4. 点“写入 15 个参考案例”，再点“立即同步”。数据库里就有了参考案例和你的记录
 
 也可以用命令行建表：`npm run notion:init`（需要在 `.env` 里填 `NOTION_TOKEN` 和 `NOTION_PARENT_PAGE_ID`）。
 
@@ -107,6 +130,9 @@ web/
 test/
   core.test.js        算法、提示词、Notion 映射
   v2.test.js          参考案例结构、本地解析、直觉校准、对线预演、直连请求、离线缓存
+  v3.test.js          ChatGPT 指令和 Action 结构、claude.ai 版提示词、参考案例写入 Notion
+integrations/chatgpt/ 自定义 GPT 的指令和 Notion Action（npm run gpt:kit 生成）
+scripts/build.mjs     打包：claude.ai 页面、ChatGPT 套件、zip
 ```
 
 ## 测试

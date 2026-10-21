@@ -1,7 +1,7 @@
 // Case library: saved sandbox analyses (with outcome backfill), built-in reference cases,
 // and the intuition-calibration page.
 
-import { h, mount, go, segmented, emptyState, toast, meter, field } from '../ui/dom.js';
+import { h, mount, go, segmented, emptyState, toast, meter, field, ask } from '../ui/dom.js';
 import { CASE_MODES, SCENARIOS, USED_LEVELS, OUTCOME_RESULTS } from '../core/models.js';
 import { calibrationStats, needsOutcome, topSubtext, truthText } from '../core/calibration.js';
 import * as db from '../store/db.js';
@@ -85,7 +85,7 @@ export async function renderCase(root, id) {
     isSeed ? null : h('button.btn.danger', {
       type: 'button',
       onclick: async () => {
-        if (!confirm('删除这条记录？')) return;
+        if (!(await ask('删除这条记录？', { ok: '删除', danger: true }))) return;
         await db.remove('cases', c.id);
         toast('已删除');
         go('#/cases');

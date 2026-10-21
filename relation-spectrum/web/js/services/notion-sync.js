@@ -16,6 +16,7 @@ import {
 } from '../core/notion-schema.js';
 import { newEntity, newInteraction, newCase, uid } from '../core/models.js';
 import { analyze } from '../core/scoring.js';
+import { SEED_CASES } from '../data/seed-cases.js';
 
 // Notion allows ~3 requests/second per integration.
 let lastCall = 0;
@@ -80,6 +81,7 @@ async function pull(store, dbId, ctx) {
     const remoteAt = Date.parse(page.last_edited_time);
     const local = byNotion.get(page.id) || null;
     const fields = def.fromPage(page);
+    if (fields.id && fields.id.startsWith('seed:')) continue; // reference cases live in the app already
     const sameId = !local && fields.id ? byId.get(fields.id) : null;
     const target = local || sameId;
 
@@ -205,4 +207,26 @@ export async function syncAll(onProgress = () => {}) {
 
 export function lastSyncAt() {
   return db.getMeta('notion.lastSyncAt');
+}
+
+/**
+ * Write the built-in reference cases into Sandbox_Cases_DB so the Notion workspace (and a
+ * ChatGPT working from it) starts with worked examples. Runs once per database.
+ */
+export async function pushSeedCases(onProgress = () => {}, { force = false } = {}) {
+  const { notion: cfg } = getSettings();
+  if (!cfg.casesDb) throw new Error('请先初始化或填写 Sandbox_Cases_DB');
+  const key = `notion.seeded.${cfg.casesDb}`;
+  if (!force && (await db.getMeta(key))) return { written: 0, skipped: true };
+  await call('PATCH', `databases/${cfg.casesDb}`, { properties: CASES_V2_PROPS });
+  let written = 0;
+  const now = Date.now();
+  for (const c of SEED_CASES) {
+    onProgress(`写入参考案例 ${written + 1}/${SEED_CASES.length}…`);
+    const record = { ...c, id: `seed:${c.id}`, title: `【参考】${c.title}`, createdAt: now, updatedAt: now, rehearsals: [], outcome: null };
+    await call('POST', 'pages', { parent: { database_id: cfg.casesDb }, properties: caseToProps(record, null) });
+    written++;
+  }
+  await db.setMeta(key, Date.now());
+  return { written, skipped: false };
 }

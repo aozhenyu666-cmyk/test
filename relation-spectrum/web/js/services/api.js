@@ -9,7 +9,8 @@
 // Paths are relative ('api/...') so the app also works from a sub-path such as GitHub Pages.
 
 import { getSettings } from './settings.js';
-import { buildDirectRequest, readAnthropicMessage, readOpenAIMessage, httpErrorMessage } from '../core/llm-request.js';
+import { buildDirectRequest, readAnthropicMessage, readOpenAIMessage, httpErrorMessage, buildSamplePrompt } from '../core/llm-request.js';
+import { inClaudeViewer, getSample, sampleErrorMessage } from './claude-host.js';
 
 function headers(extra = {}) {
   const s = getSettings();
@@ -52,6 +53,7 @@ async function serverFetch(path, init) {
 let serverState = { ok: null, at: 0, info: null };
 
 export async function health({ force = false } = {}) {
+  if (inClaudeViewer()) throw new ApiError('在 claude.ai 里打开时没有本地服务器', 0, { unreachable: true });
   if (!force && serverState.ok !== null && Date.now() - serverState.at < 60000) {
     if (serverState.ok) return serverState.info;
     throw new ApiError('本地服务器不可用', 0, { unreachable: true });
@@ -85,6 +87,8 @@ export async function serverAvailable() {
  * Returns { result, model, provider, via: 'server' | 'direct' }.
  */
 export async function analyze(kind, input) {
+  // Inside claude.ai the page cannot reach any API; Claude answers on the viewer's account.
+  if (inClaudeViewer()) return viaClaudeViewer(kind, input);
   const { llm } = getSettings();
   const mode = llm.mode || 'auto';
   if (mode === 'direct') return direct(kind, input);
@@ -97,6 +101,20 @@ export async function analyze(kind, input) {
       return direct(kind, input);
     }
     throw err;
+  }
+}
+
+async function viaClaudeViewer(kind, input) {
+  const sample = await getSample();
+  if (!sample) throw new ApiError('这个页面现在用不了 Claude。请在 claude.ai 或 Claude App 里打开。', 0);
+  const { prompt, modelTier } = buildSamplePrompt(kind, input);
+  try {
+    // Role-play turns must not replay a cached reply.
+    const result = await sample.json(prompt, { modelTier, ...(kind === 'roleplay' ? { cache: false } : {}) });
+    if (!result || typeof result !== 'object' || Array.isArray(result)) throw { code: 'invalid_json' };
+    return { result, model: 'Claude（claude.ai）', provider: 'claude', via: 'claude' };
+  } catch (e) {
+    throw new ApiError(sampleErrorMessage(e), e?.code === 'not_granted' ? 403 : 0);
   }
 }
 
@@ -141,6 +159,7 @@ async function direct(kind, input) {
 
 /** Raw Notion call through the proxy. path like 'databases/xxx/query'. */
 export async function notion(method, path, body) {
+  if (inClaudeViewer()) throw new ApiError('在 claude.ai 里打开时不能同步 Notion。请用电脑版（npm start）同步：先在这里导出 JSON，再在电脑版导入。', 0, { unreachable: true });
   const { notion: n } = getSettings();
   const extra = n.token ? { 'x-notion-token': n.token } : {};
   for (let attempt = 0; attempt < 4; attempt++) {

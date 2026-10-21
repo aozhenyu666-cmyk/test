@@ -73,6 +73,11 @@ window.addEventListener('hashchange', route);
 route();
 
 // PWA: cache the app shell so it opens offline and can be added to the home screen.
-if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname))) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+// Skipped inside the claude.ai viewer, which does not allow service workers.
+try {
+  if (!window.claude && 'serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname))) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+} catch {
+  /* sandboxed frame: no offline cache, the app still works */
 }

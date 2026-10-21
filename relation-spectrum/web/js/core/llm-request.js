@@ -115,3 +115,18 @@ export function httpErrorMessage(provider, status, data) {
   if (status === 429) return '请求太频繁或额度不足，请稍后再试';
   return `接口返回 ${status}：${msg}`;
 }
+
+/**
+ * One-string prompt for hosts that take no system prompt or schema parameter, such as the
+ * claude.ai artifact viewer's `sample` capability. Returns { prompt, modelTier }.
+ */
+export function buildSamplePrompt(kind, input) {
+  assertKind(kind);
+  const prompt = [
+    SYSTEM_PROMPTS[kind],
+    `## 输出格式\n只输出一个 JSON 对象，不要输出其他任何文字。JSON 必须符合下面的 JSON Schema（所有字段都必须出现）：\n${JSON.stringify(SCHEMAS[kind])}`,
+    '## 本次输入',
+    buildUserMessage(kind, input),
+  ].join('\n\n');
+  return { prompt, modelTier: LIGHT_KINDS.includes(kind) ? 'quick' : 'default' };
+}

@@ -49,6 +49,30 @@
     color-scheme: dark;
   }
 }
+/* Same dark palette when a host sets the theme explicitly. */
+:root[data-theme="dark"] {
+  --bg: #16181c;
+  --surface: #1f2228;
+  --surface-2: #272b32;
+  --text: #ecebe8;
+  --muted: #9a9890;
+  --line: #33373f;
+  --accent: #7fa3d1;
+  --accent-text: #10141a;
+  --good: #5cc29a;
+  --warn: #e2ab4a;
+  --danger: #e57a6d;
+  --kin: #e48b62;
+  --kin-soft: #3a2a22;
+  --bond: #55bfb1;
+  --bond-soft: #1f3330;
+  --deal: #8ea3c7;
+  --deal-soft: #252c38;
+  --c1: #7fa3d1; --c2: #55bfb1; --c3: #e48b62; --c4: #b29ad6; --c5: #d6b46a;
+  --shadow: none;
+  color-scheme: dark;
+}
+
 
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -373,3 +397,11 @@ body.no-scroll { overflow: hidden; }
 .debrief { border-left: 4px solid var(--good); }
 details.rehearsal { border-bottom: 1px solid var(--line); padding: 8px 0; }
 details.rehearsal summary { font-size: 14px; }
+
+/* ---------- in-page confirm dialog ---------- */
+.overlay.center { align-items: center; padding: 16px; }
+.dialog { background: var(--surface); border-radius: var(--radius); padding: 18px; width: 100%; max-width: 360px; box-shadow: var(--shadow); }
+.dialog-text { font-size: 16px; margin: 0 0 6px; }
+.dialog-actions { justify-content: flex-end; }
+.btn.danger-solid { background: var(--danger); border-color: var(--danger); color: #fff; }
+ol.steps { margin: 4px 0 12px; padding-left: 22px; font-size: 14px; display: flex; flex-direction: column; gap: 4px; }
