@@ -409,15 +409,30 @@ object BrainHost {
                 return
             }
             if (MainActivity.visible) return
-            val trigger = brain.liveTrigger(activity, now, unlockGapMin, cfg) ?: return
-            val turn = io<LiveTurn?>("live", { null }) { brain.live(trigger, activity, now, cfg = cfg) } ?: return
-            withContext(Dispatchers.Main) {
-                if (turn.gate) LiveScreens.gate(ctx, turn.mood, turn.line, activity?.label.orEmpty())
-                else LiveScreens.peek(ctx, turn.mood, turn.line)
-            }
+            // 自动驾驶：看最近 30 分钟的前台记录（只有应用和时间）
+            val autopilot = if (Usage.allowed(ctx)) runCatching {
+                val sessions = Usage.sessions(ctx, now - 30 * 60_000L, now) { BrainFacts.category(it, status) }
+                com.moling.core.autopilot.Autopilot.read(sessions, now, _state.value.flow)
+            }.getOrNull() else null
+            val trigger = brain.liveTrigger(activity, now, unlockGapMin, cfg, autopilot) ?: return
+            val cues = if (trigger == com.moling.core.live.Trigger.AUTOPILOT) autopilot?.reasons.orEmpty() else emptyList()
+            val turn = io<LiveTurn?>("live", { null }) { brain.live(trigger, activity, now, cfg = cfg, can = Appear.can(ctx), cues = cues) } ?: return
+            withContext(Dispatchers.Main) { Appear.show(ctx, turn, activity?.label.orEmpty()) }
         } finally {
             liveBusy.set(false)
         }
+    }
+
+    /** 他对她这次出现的反应（反免疫账本）。不等结果。 */
+    fun react(modality: com.moling.core.live.Modality, reaction: com.moling.core.live.Reaction, ms: Long) {
+        answerScope.launch { runCatching { io("react", {}) { brain.react(modality, reaction, ms, System.currentTimeMillis()) } } }
+    }
+
+    /** 出一道捉虫题。 */
+    suspend fun quiz(): com.moling.core.live.Quiz? = io<com.moling.core.live.Quiz?>("quiz", { null }) { brain.quiz(System.currentTimeMillis()) }
+
+    suspend fun quizResult(right: Boolean) {
+        io("quizResult", {}) { brain.quizResult(right, System.currentTimeMillis()) }
     }
 
     /** 拦着他时他回了一句。 */

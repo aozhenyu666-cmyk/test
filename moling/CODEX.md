@@ -46,3 +46,10 @@
 - 大脑的入口：`moling/app/src/main/java/com/moling/core/Brain.kt`（开头的注释写了全部规矩）；App 只经 `moling/app/src/main/java/com/moling/app/BrainHost.kt` 调它。
 - 墨灵 ↔ 总控的约定：墨灵 `core/link/ZkLink.kt`，总控 `core/moling/Moling.kt`、`Authority.kt`；总控 App 侧 `app/link/MolingProvider.kt`、`MolingBridge.kt`。
 - 权柄：`moling/.../core/power/Powers.kt`；v4 的整体规划：`partner-blueprint/v4-power.md`。
+
+---
+
+## 第六批（2026-10-21 追加）
+
+`moling/DEEPSEEK-6.md`：反自动驾驶——桌宠、盯着你、耳语、参谋弹幕、捉虫题、褪色、沙盘、演员胶囊、出现方式看板。
+规则和大脑接口 Claude 已写好（`core/autopilot/`、`core/live/Habit.kt`、`core/live/Quiz.kt`、`core/atlas/AtlasMap.kt`、`app/live/Appear.kt`），只做界面和胶水。底线见那份文档第 11 节。

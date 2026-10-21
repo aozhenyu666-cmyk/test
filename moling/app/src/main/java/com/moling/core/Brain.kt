@@ -71,6 +71,14 @@ import com.moling.core.live.Mood
 import com.moling.core.live.Spirit
 import com.moling.core.live.Spirits
 import com.moling.core.live.Trigger
+import com.moling.core.autopilot.AutopilotSignal
+import com.moling.core.live.Can
+import com.moling.core.live.HabitBook
+import com.moling.core.live.Habits
+import com.moling.core.live.Modality
+import com.moling.core.live.Quiz
+import com.moling.core.live.Quizzes
+import com.moling.core.live.Reaction
 import com.moling.core.mirror.Absorbed
 import com.moling.core.mirror.InboxItem
 import com.moling.core.mirror.Mirror
@@ -254,6 +262,8 @@ data class BrainState(
     val lastThinkAt: Long = 0,
     /** 她想好、等合适时候说的话。 */
     val sayQueue: List<Say> = emptyList(),
+    /** 她每种出现方式的效果（反免疫，v9）。 */
+    val habits: HabitBook = HabitBook(),
     /** 哪天为主线做完出过声（一天一次）。 */
     val cheeredDay: String = "",
     /** 每天的手机使用（只有应用和时间，没有内容），留 30 天。 */
@@ -265,7 +275,17 @@ data class BrainState(
 )
 
 /** 她主动出声的一次。[gate] = 她拦在他面前（App 弹出拦人的页面）；[release] = 放他走了。 */
-data class LiveTurn(val mood: Mood, val line: String, val gate: Boolean, val release: Boolean, val proposals: List<Proposal>)
+data class LiveTurn(
+    val mood: Mood,
+    val line: String,
+    val gate: Boolean,
+    val release: Boolean,
+    val proposals: List<Proposal>,
+    /** 这次用哪种方式出现（App 照着弹）。 */
+    val modality: Modality = Modality.PEEK,
+    /** [Modality.QUIZ] 时的题。 */
+    val quiz: Quiz? = null,
+)
 
 data class ChatResult(val text: String, val proposals: List<Proposal>, val byModel: Boolean, val mode: TalkMode = TalkMode.WORK)
 
@@ -1040,7 +1060,7 @@ class Brain(
      * 这一刻有没有什么值得把她叫醒（由大脑判断，App 每次心跳把前台交进来）：
      * 该做事时在刷 5 分钟以上 / 夜里躺着刷 15 分钟以上 / 连着刷 40 分钟以上。正拦着他时不再叫。
      */
-    fun liveTrigger(a: Activity?, now: Long, unlockGapMin: Int = 0, cfg: LiveConfig = LiveConfig()): Trigger? {
+    fun liveTrigger(a: Activity?, now: Long, unlockGapMin: Int = 0, cfg: LiveConfig = LiveConfig(), autopilot: AutopilotSignal? = null): Trigger? {
         if (st.gate != null) return null
         val m = Flow.minuteOf(now)
         val day = calendarDay(now)
@@ -1051,12 +1071,15 @@ class Brain(
             val working = c != null && m in c.startMin until c.endMin && c.kind in setOf(ChannelKind.MAIN, ChannelKind.SIDE, ChannelKind.SPRING)
             when {
                 working && a.minutes >= 5 -> return Trigger.SCROLL_AT_WORK
+                autopilot?.on == true -> return Trigger.AUTOPILOT
                 (m >= 23 * 60 || m < 5 * 60) && a.minutes >= 15 -> return Trigger.SCROLL_IN_BED
                 a.minutes >= 40 -> return Trigger.LONG_SCROLL
             }
         }
         // 下面这些不打断正事：在做事 / 在和演员聊 / 深夜都不来
         if (a?.category == "WORK" || a?.category == "ACTOR" || m < 7 * 60 || m >= 23 * 60 + 30) return null
+        // 不在娱乐里也可能在自动驾驶（横跳、拿起又放下）
+        if (autopilot?.on == true) return Trigger.AUTOPILOT
         if (st.lastStatus?.mainDone == true && st.cheeredDay != day) return Trigger.DONE
         if (st.sayQueue.isNotEmpty() && !playing) return Trigger.SAY
         if (unlockGapMin >= 30) return if (m < 10 * 60 && st.spirit.day != day) Trigger.MORNING else Trigger.UNLOCK
@@ -1068,7 +1091,15 @@ class Brain(
      * 叫醒她一次：她自己决定说不说、拦不拦。返回 null = 她这次不出声（精力不够、间隔太近、她懒得说、或模型说不说）。
      * [roll] 是 0..1 的随机数（不重要的事有一半时候她懒得出声）。
      */
-    suspend fun live(trigger: Trigger, a: Activity?, now: Long, roll: Double = kotlin.random.Random.nextDouble(), cfg: LiveConfig = LiveConfig()): LiveTurn? = lock.withLock {
+    suspend fun live(
+        trigger: Trigger,
+        a: Activity?,
+        now: Long,
+        roll: Double = kotlin.random.Random.nextDouble(),
+        cfg: LiveConfig = LiveConfig(),
+        can: Can = Can(),
+        cues: List<String> = emptyList(),
+    ): LiveTurn? = lock.withLock {
         if (st.gate != null) return@withLock null
         refresh()
         val day = calendarDay(now)
@@ -1080,7 +1111,7 @@ class Brain(
         // 主线做完那句一天一次：这次她出不出声都算过了
         if (trigger == Trigger.DONE) st = st.copy(cheeredDay = day)
         val canGate = GateRules.eligible(a) && Spirits.mayGate(sp, cfg) &&
-            trigger in setOf(Trigger.SCROLL_AT_WORK, Trigger.SCROLL_IN_BED, Trigger.LONG_SCROLL)
+            trigger in setOf(Trigger.SCROLL_AT_WORK, Trigger.SCROLL_IN_BED, Trigger.LONG_SCROLL, Trigger.AUTOPILOT)
         val flow = st.flow?.takeIf { it.day == day }
         val flowNow = flow?.let { Flow.current(it, Flow.minuteOf(now)) }?.title.orEmpty()
         val persona = config().persona
@@ -1088,6 +1119,7 @@ class Brain(
         val prompt = Live.prompt(
             persona, trigger, a, director.nowText(now), flow?.let { Flow.render(it) }.orEmpty(), st.about, misjudged(now), talkLines(), canGate,
             thinking = Think.open(st.thoughts).takeLast(4).map { Think.line(it) }, toSay = toSay,
+            cues = cues, ignored = sp.ignored,
         )
         val reply = model(persona, prompt)
         val line = reply?.let { Live.parse(it, canGate) }
@@ -1101,6 +1133,10 @@ class Brain(
         val made = reply?.let { Talk.parse(it, Flow.dayStart(day), "她主动提的", now).actions }.orEmpty().mapNotNull { fromTalk(it, now, flow) }
         sp = sp.copy(spoke = sp.spoke + 1, lastAt = now)
         val gate = if (line.gate && a != null) GateSession(now, trigger, a.pkg, a.label).also { sp = sp.copy(gates = sp.gates + 1) } else null
+        // 不拦的时候换着方式出现（反免疫）；捉虫题出不来就退回别的
+        var modality = if (gate != null) Modality.GATE else Habits.pick(st.habits, can, now, (roll * 7919.0) % 1.0)
+        val quiz = if (modality == Modality.QUIZ) makeQuiz(now) else null
+        if (modality == Modality.QUIZ && quiz == null) modality = if (can.overlay) Modality.PET else Modality.PEEK
         st = st.copy(
             spirit = sp,
             gate = gate,
@@ -1113,7 +1149,45 @@ class Brain(
         )
         count(now, nudges = 1)
         save()
-        LiveTurn(line.mood, line.line, gate != null, false, made)
+        st = st.copy(habits = Habits.shown(st.habits, modality, now))
+        save()
+        LiveTurn(line.mood, line.line, gate != null, false, made, modality, quiz)
+    }
+
+    /**
+     * 他对她这次出现的反应（App 报回来）：喂反免疫账本；认真回了就不算冷落，秒划 / 不理算一次冷落。
+     * 拦人页的“急事 / 超时”另走 [gateEscape]，这里只记账。
+     */
+    suspend fun react(modality: Modality, reaction: Reaction, ms: Long, now: Long) = lock.withLock {
+        val sp = Spirits.today(st.spirit, calendarDay(now))
+        st = st.copy(
+            habits = Habits.react(st.habits, modality, reaction, ms, now),
+            spirit = when {
+                reaction == Reaction.REPLIED -> sp.copy(ignored = 0)
+                reaction.bad && modality != Modality.GATE -> sp.copy(ignored = sp.ignored + 1)
+                else -> sp
+            },
+        )
+        save()
+    }
+
+    /** 出一道捉虫题（他自己的论断 / 她的判断 / 了解里的一条）。没有材料返回 null。 */
+    suspend fun quiz(now: Long): Quiz? = lock.withLock { makeQuiz(now).also { save() } }
+
+    private suspend fun makeQuiz(now: Long): Quiz? {
+        val pool = (st.atlas.nodes.filter { it.kind != com.moling.core.atlas.NodeKind.QUESTION }.map { it.claim } +
+            Think.open(st.thoughts).map { it.text } +
+            st.about.lines().map { it.trim() }.filter { it.startsWith("- ") }.map { it.removePrefix("- ") })
+            .filter { it.length in 8..80 }
+        if (pool.isEmpty()) return null
+        val source = pool[((now / 60_000L) % pool.size).toInt()]
+        return model(config().persona, Quizzes.prompt(source))?.let { Quizzes.parse(it, source) } ?: Quizzes.local(source)
+    }
+
+    /** 他答了捉虫题：答对了算认真回应。 */
+    suspend fun quizResult(right: Boolean, now: Long) = lock.withLock {
+        st = st.copy(log = st.log + "${hm(now)} 捉虫题：${if (right) "抓到了" else "没抓到"}")
+        save()
     }
 
     /** 她拦着他时，他回了一句：她决定放不放（最多 [LiveConfig.maxRounds] 轮，最后一轮一定放）。 */

@@ -84,9 +84,9 @@ object LiveScreens {
         launch(context, i, "墨灵拦住你了", line)
     }
 
-    fun peek(context: Context, mood: Mood, line: String) {
+    fun peek(context: Context, mood: Mood, line: String, modality: com.moling.core.live.Modality = com.moling.core.live.Modality.PEEK) {
         val i = Intent(context, PeekActivity::class.java)
-            .putExtra(EXTRA_MOOD, mood.name).putExtra(EXTRA_LINE, line)
+            .putExtra(EXTRA_MOOD, mood.name).putExtra(EXTRA_LINE, line).putExtra(EXTRA_MODALITY, modality.name)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         launch(context, i, "墨灵", line)
     }
@@ -115,6 +115,10 @@ object LiveScreens {
     const val EXTRA_MOOD = "mood"
     const val EXTRA_LINE = "line"
     const val EXTRA_LABEL = "label"
+    const val EXTRA_MODALITY = "modality"
+
+    fun modality(i: Intent?): com.moling.core.live.Modality =
+        runCatching { com.moling.core.live.Modality.valueOf(i?.getStringExtra(EXTRA_MODALITY).orEmpty()) }.getOrDefault(com.moling.core.live.Modality.PEEK)
 
     fun mood(i: Intent?): Mood = runCatching { Mood.valueOf(i?.getStringExtra(EXTRA_MOOD).orEmpty()) }.getOrDefault(Mood.CALM)
 }
@@ -210,7 +214,10 @@ class GateActivity : ComponentActivity() {
                 mood = turn.mood
                 line = turn.line
                 if (BrainHost.speakOn()) Speaker.speak(turn.line)
-                if (turn.release) released = true
+                if (turn.release) {
+                    released = true
+                    BrainHost.react(com.moling.core.live.Modality.GATE, com.moling.core.live.Reaction.REPLIED, System.currentTimeMillis() - startedAt)
+                }
                 busy = false
             }
         }
@@ -296,6 +303,26 @@ class PeekActivity : ComponentActivity() {
         setContent { MolingTheme { Peek(firstMood, first) } }
     }
 
+    /** 这次是以哪种方式出现的（报反应用）；出现的时刻；报过没有。 */
+    private val shownAt = System.currentTimeMillis()
+    private var reported = false
+
+    private fun report(r: com.moling.core.live.Reaction) {
+        if (reported) return
+        reported = true
+        BrainHost.react(LiveScreens.modality(intent), r, System.currentTimeMillis() - shownAt)
+    }
+
+    private fun dismissed() = report(
+        if (System.currentTimeMillis() - shownAt < 3_000) com.moling.core.live.Reaction.DISMISSED_FAST else com.moling.core.live.Reaction.DISMISSED,
+    )
+
+    override fun onDestroy() {
+        // 一直没碰就走了 = 没理
+        if (!isChangingConfigurations) report(com.moling.core.live.Reaction.IGNORED)
+        super.onDestroy()
+    }
+
     @Composable
     private fun Peek(firstMood: Mood, first: String) {
         var mood by remember { mutableStateOf(firstMood) }
@@ -312,7 +339,7 @@ class PeekActivity : ComponentActivity() {
 
         Box(
             Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.25f))
-                .clickable(remember { MutableInteractionSource() }, null) { finish() },
+                .clickable(remember { MutableInteractionSource() }, null) { dismissed(); finish() },
             contentAlignment = Alignment.BottomCenter,
         ) {
             Surface(
@@ -335,10 +362,12 @@ class PeekActivity : ComponentActivity() {
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = {
+                            dismissed()
                             BrainHost.answeredLater()
                             finish()
                         }) { Text("知道了") }
                         TextButton(onClick = {
+                            report(com.moling.core.live.Reaction.REPLIED)
                             startActivity(Intent(this@PeekActivity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                             finish()
                         }) { Text("去聊") }
@@ -348,6 +377,7 @@ class PeekActivity : ComponentActivity() {
                             touched = true
                             text = ""
                             lifecycleScope.launch {
+                                report(if (com.moling.core.live.Live.perfunctory(t)) com.moling.core.live.Reaction.PERFUNCTORY else com.moling.core.live.Reaction.REPLIED)
                                 val r = BrainHost.chat(t, System.currentTimeMillis())
                                 line = r.text
                                 mood = Mood.CALM

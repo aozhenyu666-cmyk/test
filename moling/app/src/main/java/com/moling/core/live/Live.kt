@@ -38,6 +38,7 @@ enum class Trigger(val label: String, val salient: Boolean) {
     UNLOCK("他放下手机好一会儿，刚拿起来", false),
     DONE("他刚做完主线", true),
     SAY("她自己想好了有话要说", true),
+    AUTOPILOT("他在自动驾驶：机械地刷 / 来回横跳 / 拿起又放下", true),
 }
 
 /** 她多主动：少 / 平常 / 多（设置里选）。 */
@@ -136,11 +137,16 @@ object Live {
         canGate: Boolean,
         thinking: List<String> = emptyList(),
         toSay: String = "",
+        cues: List<String> = emptyList(),
+        ignored: Int = 0,
     ) = buildString {
         appendLine("【你是】$persona")
         appendLine("【你被叫醒的原因】${trigger.label}")
         if (thinking.isNotEmpty()) appendLine("【你自己推的判断（未必对）】\n" + thinking.joinToString("\n"))
         if (toSay.isNotBlank()) appendLine("【你之前想好要对他说的】$toSay（合适就说这个，可以改得更贴合此刻）")
+        if (cues.isNotEmpty()) appendLine("【你看到的】" + cues.joinToString("；"))
+        if (trigger == Trigger.AUTOPILOT) appendLine("他现在多半是脑子掉线、靠本能在操作。你的话要像一颗小石子：短、具体、出乎意料，让他停一下、想一下，而不是说教。")
+        if (ignored >= 2) appendLine("他最近老划掉你。这次别讲道理，用“我猜……，对吗？”的方式问他一句，让他忍不住想纠正你。")
         activity?.let { a ->
             append("【他此刻】在用 ${a.label}（${a.minutes} 分钟）")
             if (a.glance.isNotBlank()) append("，屏幕上看到的：${a.glance}")
@@ -208,6 +214,7 @@ object Live {
             Trigger.UNLOCK -> LiveLine(true, Mood.CURIOUS, "回来啦。现在打算干什么？", false, false)
             Trigger.DONE -> LiveLine(true, Mood.HAPPY, "主线做完了！歇一会儿，还是趁热接下一件？", false, false)
             Trigger.SAY -> LiveLine(false, Mood.CALM, "", false, false)
+            Trigger.AUTOPILOT -> LiveLine(true, Mood.CURIOUS, "停一下——你现在是想看点什么，还是手在自己动？说一件你接下来真正要做的事。", canGate, false)
         }
     }
 
