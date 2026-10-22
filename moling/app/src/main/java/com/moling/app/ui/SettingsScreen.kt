@@ -106,6 +106,7 @@ fun SettingsScreen(onDone: () -> Unit) {
     // 联网采蜜（B1）：搜索密钥 + 「每天自动一份」（默认关）
     var braveKey by remember { mutableStateOf(store.braveKey()) }
     var forageAutoOn by remember { mutableStateOf(store.forageAutoOn()) }
+    var prepAutoOn by remember { mutableStateOf(store.prepAutoOn()) }
     val forageNow by BrainHost.forage.collectAsState()
     var disabled by remember { mutableStateOf(store.disabledModalities()) }
     var eager by remember { mutableStateOf(store.eagerness()) }
@@ -324,6 +325,19 @@ fun SettingsScreen(onDone: () -> Unit) {
                         store.setForageAutoOn(on)
                     },
                 )
+            }
+            // W10 T7：她主动准备第一块（默认关）
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("她先替我做一块")
+                    Text(
+                        "默认关。案板上正在做的事有材料、过了 10 分钟你还没动手，她就先拆一份三点纲要放上去（不采用、不交总控）；" +
+                            "同一版材料只做一次，安静期和夜里不做，和自动采蜜共用每天的后台额度。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = prepAutoOn, onCheckedChange = { on -> prepAutoOn = on; store.setPrepAutoOn(on) })
             }
             if (forageNow.lastMessage.isNotBlank()) {
                 Text(

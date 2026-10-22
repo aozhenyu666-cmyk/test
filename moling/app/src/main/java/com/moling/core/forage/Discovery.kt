@@ -67,6 +67,8 @@ data class ForageState(
     val lastAutoDay: String = "",
     val lastAutoAt: Long = 0,
     val lastMessage: String = "",
+    /** 她主动准备过的（焦点@材料版本），同一版只准备一次（W10 T7）。 */
+    val prepared: List<String> = emptyList(),
 )
 
 object Discovery {

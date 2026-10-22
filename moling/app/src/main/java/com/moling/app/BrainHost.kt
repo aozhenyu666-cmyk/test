@@ -1171,6 +1171,35 @@ object BrainHost {
         }
     }
 
+    /**
+     * 她主动准备第一块（W10 T7）：他开了开关、案板上正在做的事有材料没稿子、等过他了、预算够、不在安静期，
+     * 就替他先做一份三点纲要（未采用），发一条通知。同一版材料只做一次；先记账再开工，失败也不每分钟重试。
+     */
+    private fun autoPrep(now: Long) {
+        val ctx = appContext ?: return
+        if (!ready || !runCatching { settings.prepAutoOn() }.getOrDefault(false)) return
+        val day = Brain.calendarDay(now)
+        val st = _forage.value
+        var budget = st.budget.fresh(day)
+        if (!budget.enabled) budget = budget.copy(enabled = true)
+        val quiet = runCatching { com.moling.core.live.Habits.isQuiet(brain.state().habits, now) }.getOrDefault(true)
+        val d = com.moling.core.cycle.ProactivePrep.pick(_bench.value, now, quiet, budget, st.prepared)
+        val focusId = d.focusId ?: return
+        val spent = budget.spendJob()?.spendUnread() ?: return
+        _forage.value = st.copy(day = day, budget = spent, prepared = (st.prepared + d.key).takeLast(50), lastMessage = "主动准备：在拆「${_bench.value.focus(focusId)?.question?.take(16).orEmpty()}」")
+        saveForage()
+        answerScope.launch {
+            val r = runCatching { bench.prework(focusId, JobKind.OUTLINE, System.currentTimeMillis()) }.getOrNull()
+            if (r is PortResult.Ok && !r.value.offline) {
+                runCatching { Notify.prepReady(ctx, "我先替你拆了一份纲要", "「${r.value.title}」放在案板上了，没采用；你挑刺、改、或者不要都行。") }
+                _forage.value = _forage.value.copy(lastMessage = "主动准备好了：" + r.value.title)
+            } else {
+                _forage.value = _forage.value.copy(lastMessage = "主动准备没成（模型没接上），不再重试这一版")
+            }
+            saveForage()
+        }
+    }
+
     /** 和 sources.json 一样原子写：tmp + rename。 */
     private fun saveForage() {
         val f = forageFile ?: return
@@ -1493,6 +1522,8 @@ object BrainHost {
             }
             // 「每天自动一份」联网采蜜：默认关；他打开了、配了搜索、亮屏、预算够才查（不在这里造假结果）
             runCatching { autoForage(now) }.onFailure { Log.w(TAG, "自动采蜜没跑起来", it) }
+            // 她主动准备第一块（W10 T7）：默认关
+            runCatching { autoPrep(now) }.onFailure { Log.w(TAG, "主动准备没跑起来", it) }
             if (brain.needsNight(now)) {
                 val text = runCatching { brain.night(now) }.getOrNull()
                 refreshState()

@@ -137,6 +137,10 @@ object Notify {
         simple(context, ID_PLAN, "今天的水道排好了（草稿）", intent, silent = false)
 
     /** 联网采蜜（B1）：「每天自动一份」查回来了（他打开才发）。 */
+    /** 她主动准备好的一块（W10 T7）。 */
+    fun prepReady(context: Context, title: String, text: String) =
+        simple(context, ID_FORAGE + 1, title, text, silent = false)
+
     fun discoveryReady(context: Context, title: String, text: String) =
         simple(context, ID_FORAGE, "联网查回一份", title.ifBlank { text }.take(60) + " · " + text, silent = false)
 

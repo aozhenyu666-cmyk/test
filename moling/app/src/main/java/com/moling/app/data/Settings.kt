@@ -297,6 +297,13 @@ class SettingsStore(context: Context) {
         toggles.edit().putBoolean(KEY_FORAGE_AUTO, on).apply()
     }
 
+    /** 她主动准备第一块（W10 T7）：默认关；开着时走同一份每日后台预算。 */
+    fun prepAutoOn(): Boolean = toggles.getBoolean("prep_auto", false)
+
+    fun setPrepAutoOn(on: Boolean) {
+        toggles.edit().putBoolean("prep_auto", on).apply()
+    }
+
     /** 北京时间日期。按用户的作息，一天从零点算。 */
     private fun todayKey(): String = LocalDate.now(BEIJING).toString()
 
