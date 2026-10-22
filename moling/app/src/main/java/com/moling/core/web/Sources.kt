@@ -1,6 +1,7 @@
 package com.moling.core.web
 
 import kotlinx.serialization.Serializable
+import java.net.InetAddress
 import java.net.URI
 import java.security.MessageDigest
 
@@ -97,25 +98,80 @@ object Sources {
         (u.scheme ?: "https").lowercase() + "://" + host + port + (u.path ?: "").trimEnd('/')
     }.getOrDefault("")
 
-    /** 公网 http(s) 且不是本机 / 内网 / 元数据地址；重定向也按这个校验。 */
-    fun checkUrl(raw: String): String? {
+    /**
+     * 公网 http(s) 且不是本机 / 内网 / 元数据地址；重定向每一跳都要再调一次。
+     *
+     * F10-1：先按字面地址判；域名则 InetAddress.getAllByName 解析一次，**任一**地址是
+     * 回环 / any-local / 链路本地 / site-local / 组播 / fc00::/7 / 100.64/10 / IPv4 映射到这些就拒绝。
+     * [resolve] 只给测试注入“域名解析到内网”的假解析器；解析不出来不在这里判死
+     * （连接侧 OkHttp 的 Dns 钩子会再查一次并拒绝内网，那里才是最终防线）。
+     */
+    fun checkUrl(
+        raw: String,
+        resolve: (String) -> List<InetAddress> = ::resolveHost,
+    ): String? {
         val u = runCatching { URI(raw.trim()) }.getOrNull() ?: return "链接看不懂"
         if (u.scheme !in setOf("http", "https")) return "只支持 http(s) 链接"
-        val host = u.host?.lowercase() ?: return "链接里没有域名"
-        if (host == "localhost" || host.endsWith(".local") || host == "::1") return "不访问本机地址"
+        var host = u.host?.lowercase() ?: return "链接里没有域名"
+        host = host.removePrefix("[").removeSuffix("]")
+        if (host.isBlank()) return "链接里没有域名"
+        if (host == "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return "不访问本机地址"
         if (host == "169.254.169.254" || host.startsWith("169.254.")) return "不访问元数据地址"
-        Regex("""(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})""").matchEntire(host)?.let { m ->
-            val a = m.groupValues[1].toIntOrNull() ?: return "域名不对"
-            val b = m.groupValues[2].toIntOrNull() ?: return "域名不对"
-            if (a == 10 || a == 127 || a == 0 || (a == 192 && b == 168) || (a == 172 && b in 16..31) || (a == 169 && b == 254)) {
-                return "不访问内网地址"
+        if (isIpLiteral(host)) {
+            val addr = runCatching { InetAddress.getByName(host) }.getOrNull() ?: return "链接里的地址看不懂"
+            return if (isBlockedAddress(addr)) "不访问内网或本机地址" else null
+        }
+        val addrs = resolve(host)
+        // 任一解析结果指向本机 / 内网就拒绝：DNS 记录里混一条私网地址也不行
+        if (addrs.any { isBlockedAddress(it) }) return "不访问内网或本机地址（域名解析到本机或内网）"
+        return null
+    }
+
+    /** 本机 / 内网 / 链路本地 / 组播 / fc00::/7 / 100.64/10 / IPv4 映射到这些 —— 一处判定，连接时复用。 */
+    fun isBlockedAddress(addr: InetAddress): Boolean {
+        if (addr.isAnyLocalAddress || addr.isLoopbackAddress || addr.isLinkLocalAddress ||
+            addr.isSiteLocalAddress || addr.isMulticastAddress
+        ) return true
+        val b = addr.address
+        if (b.size == 4) {
+            val a = b[0].toInt() and 0xff
+            val c = b[1].toInt() and 0xff
+            if (a == 0) return true                         // 0.0.0.0/8“本网络”
+            if (a == 10) return true                        // 私网 10/8（isSiteLocalAddress 已覆盖，这里兜底）
+            if (a == 100 && c in 64..127) return true       // 100.64/10 运营商级 NAT
+            if (a == 127) return true                       // 回环
+            if (a == 169 && c == 254) return true           // 链路本地（含 169.254.169.254 元数据）
+            if (a == 172 && c in 16..31) return true        // 私网 172.16/12
+            if (a == 192 && c == 168) return true           // 私网 192.168/16
+            if (a == 192 && c == 0) return true             // 192.0.0.0/24 + 192.0.2.0/24（保留 / 文档）
+            if (a == 198 && c in 18..19) return true        // 198.18/15 基准测试网
+            if (a >= 240) return true                       // 240/4 保留 + 广播
+        } else if (b.size == 16) {
+            val first = b[0].toInt() and 0xff
+            if ((first and 0xfe) == 0xfc) return true       // fc00::/7 唯一本地地址
+            if (b.all { it.toInt() == 0 }) return true      // :: 未指定
+            // IPv4 映射 ::ffff:a.b.c.d：拆出后 4 字节再按 IPv4 判一次
+            if ((0..9).all { b[it].toInt() == 0 } &&
+                (b[10].toInt() and 0xff) == 0xff && (b[11].toInt() and 0xff) == 0xff
+            ) {
+                val v4 = InetAddress.getByAddress(b.copyOfRange(12, 16))
+                return isBlockedAddress(v4)
             }
         }
-        return null
+        return false
     }
 
     fun refId(prefix: String, canonicalUrl: String, hash: String): String =
         prefix + "-" + (if (canonicalUrl.isNotBlank()) hashOf(canonicalUrl) else hash).take(12)
 
     private fun hashOf(s: String): String = hash(s)
+
+    /** 纯数字 / 点分 IPv4 / 含冒号的 IPv6 都当字面地址；其余当域名去解析。 */
+    private fun isIpLiteral(host: String): Boolean =
+        host.contains(':') ||
+            Regex("""\d{1,3}(\.\d{1,3}){3}""").matches(host) ||
+            host.all { it.isDigit() }
+
+    private fun resolveHost(host: String): List<InetAddress> =
+        runCatching { InetAddress.getAllByName(host).toList() }.getOrDefault(emptyList())
 }
