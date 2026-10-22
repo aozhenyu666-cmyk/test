@@ -519,6 +519,12 @@ fun TodayScreen(onReady: () -> Unit = {}) {
                             }
                         }) { Text("交给总控（按授权书）") }
                     }
+                    // G5：“本地已采用”和“总控已确认”分两行写，别让人以为采用了就执行了
+                    if (adoption != null) {
+                        val split = com.moling.core.flow.PlanChain.split(adoption, planState.operations)
+                        Text(split.local, style = MaterialTheme.typography.bodySmall)
+                        Text(split.zongkong, style = MaterialTheme.typography.bodySmall)
+                    }
                     val ops = planState.operations.filter { it.planId == todayDraft?.planId }.takeLast(6)
                     if (ops.isNotEmpty()) {
                         Text("交给总控的：", style = MaterialTheme.typography.labelMedium)

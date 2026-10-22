@@ -227,6 +227,11 @@ private fun buildReport(
         t.receipts.takeLast(5).forEach { r -> appendLine("  回执 ${r.requestId}：${r.state} ${r.message.take(30)}") }
     }.onFailure { appendLine("  读不到：${it.message}") }
     appendLine()
+    // 计划代驾追链（W13 G5）：planId → operationId → receiptId
+    appendLine("【计划 → 动作 → 回执】")
+    runCatching { com.moling.core.flow.PlanChain.lines(BrainHost.plan.value).forEach { appendLine("  " + it) } }
+        .onFailure { appendLine("  读不到：${it.message}") }
+    appendLine()
     appendLine("【外脑】")
     val obState = BrainHost.outbrainState.value
     val obActive = com.moling.core.talk.Outbrain.active(obState)

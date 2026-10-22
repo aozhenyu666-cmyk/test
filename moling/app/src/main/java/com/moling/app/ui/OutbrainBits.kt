@@ -401,6 +401,12 @@ private fun CollectDialog(
     onSubmit: (String, String?) -> Unit,
 ) {
     var text by remember { mutableStateOf("") }
+    // W12 A5：语音收线——只有他点了「说一段」才交给系统识别（墨灵自己不录音），关掉弹窗就释放。
+    val ctx = LocalContext.current
+    val voice = remember { VoiceInput(ctx.applicationContext) }
+    var listening by remember { mutableStateOf(false) }
+    var voiceNote by remember { mutableStateOf("") }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { voice.destroy() } }
     // 只在一个会话在等时默认选它；两个以上默认不选，不选不能提交。
     var pick by remember { mutableStateOf(sessions.singleOrNull()?.id) }
     val tagged = Outbrain.taggedSessionId(text)
@@ -431,9 +437,29 @@ private fun CollectDialog(
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
-                    label = { Text("外脑怎么说（整段粘进来）") },
+                    label = { Text("外脑怎么说（整段粘进来，或点「说一段」口述）") },
                     minLines = 4,
                 )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (!listening) {
+                        OutlinedButton(onClick = {
+                            Speaker.stop()
+                            listening = true
+                            voiceNote = "在听…说完停一下就好"
+                            voice.start(
+                                onResult = { said ->
+                                    listening = false
+                                    voiceNote = "听到了，已经放进上面的框里，可以改"
+                                    text = if (text.isBlank()) said else text.trimEnd() + "\n" + said
+                                },
+                                onError = { msg -> listening = false; voiceNote = msg },
+                            )
+                        }) { Text("说一段") }
+                    } else {
+                        OutlinedButton(onClick = { voice.stop(); listening = false; voiceNote = "停了" }) { Text("停") }
+                    }
+                    if (voiceNote.isNotBlank()) Text(voiceNote, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 Text(
                     "只作为材料放上案板，未采用；不自动交总控。带 [[外脑:ob-…]] 标记也能自动对上。",
                     style = MaterialTheme.typography.labelSmall,

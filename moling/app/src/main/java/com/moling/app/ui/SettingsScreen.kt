@@ -183,6 +183,9 @@ fun SettingsScreen(onDone: () -> Unit) {
                             put("v", 1)
                             put("moling", readTextOrEmpty(File(dir, "moling.json")))
                             put("director", readTextOrEmpty(File(dir, "director.json")))
+                            // G5：案板（稿子 / 材料）和来源库也带上；计划账本、外脑会话、训练通行证不带（免得恢复后重复执行）
+                            put("workbench", readTextOrEmpty(File(dir, "workbench.json")))
+                            put("sources", readTextOrEmpty(File(dir, "sources.json")))
                         }.toString()
                         val out = context.contentResolver.openOutputStream(uri) ?: error("打不开要写的文件")
                         out.use { it.write(text.toByteArray(Charsets.UTF_8)) }
@@ -650,7 +653,7 @@ fun SettingsScreen(onDone: () -> Unit) {
             if (section == "mem") {
             Text("记忆", style = MaterialTheme.typography.titleSmall)
             Text(
-                "备份是两个文件：对话、提议、体系图和导演的记忆。导入会整个覆盖，不含接口密钥。",
+                "备份里有对话、提议、体系图、导演的记忆、案板和来源库。导入会整个覆盖，不含接口密钥；计划账本、外脑会话、训练通行证不备份（恢复后不会重复执行）。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -845,6 +848,9 @@ fun SettingsScreen(onDone: () -> Unit) {
                                 val dir = File(context.filesDir, "mind")
                                 writeAtomic(File(dir, "moling.json"), backup.moling)
                                 writeAtomic(File(dir, "director.json"), backup.director)
+                                // 旧备份没有这两项：不动现在的案板和来源库
+                                backup.workbench?.let { writeAtomic(File(dir, "workbench.json"), it) }
+                                backup.sources?.let { writeAtomic(File(dir, "sources.json"), it) }
                                 ""
                             }.getOrElse { it.message ?: "写不进去" }
                         }
@@ -892,7 +898,7 @@ private fun zkLabel(s: ZkStatus?): String {
 }
 
 /** 校验通过的备份内容（两个文件的原文；空串 = 空记忆）。 */
-private data class BackupText(val moling: String, val director: String)
+private data class BackupText(val moling: String, val director: String, val workbench: String? = null, val sources: String? = null)
 
 private val FILE_TIME = DateTimeFormatter.ofPattern("MM-dd HH:mm")
 private val STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmm")
@@ -915,7 +921,10 @@ private fun parseBackup(text: String): BackupText? {
     val v = (obj["v"] as? JsonPrimitive)?.intOrNull
     val moling = (obj["moling"] as? JsonPrimitive)?.takeIf { it.isString }?.content
     val director = (obj["director"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-    return if (v == 1 && moling != null && director != null) BackupText(moling, director) else null
+    // 案板 / 来源库是后加的，可以没有；有就必须是字符串
+    val workbench = (obj["workbench"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    val sources = (obj["sources"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    return if (v == 1 && moling != null && director != null) BackupText(moling, director, workbench, sources) else null
 }
 
 /** 先写 .tmp 再改名；rename 失败就删原文件再改名（文件被占 / 跨文件系统时也尽量写成）。 */
