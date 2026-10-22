@@ -40,3 +40,4 @@
 - 自动检查：`tools/core-tests` **461 全绿**（442 + 19）；App `compileDebugKotlin` 通过（C:/autopilot-w12-wt）。**真机未测，真实 API/联络站未验**。
 - 未完成：A2 辅助填入（需无障碍，只留降级）、A4 真实 Binder 服务与探针、A5 语音收线/微停顿、A6 真机逐传输、Notion outbox 归档、外脑结果 MemoryCandidate。
 
+
