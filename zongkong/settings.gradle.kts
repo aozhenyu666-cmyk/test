@@ -15,3 +15,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "zongkong"
 include(":app")
+include(":sentinel")

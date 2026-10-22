@@ -99,16 +99,25 @@ object SelfHeal {
 
     @Volatile private var lastSentinelHeal = 0L
 
-    /** 反过来盯哨兵：开着、心跳却停了 3 分钟以上，有权限就把它重新挂上（10 分钟最多一次）。 */
+    @Volatile private var sentinelState = ""
+
+    /**
+     * 反过来盯哨兵（独立应用）：装了却没在跑（开着没跑、或者被一键清理从无障碍列表里删了），有权限就把它挂回去（10 分钟最多一次）。
+     * 状态有变化时记一条诊断。
+     */
     private fun checkSentinel(context: Context) {
         val now = System.currentTimeMillis()
-        if (!com.zongkong.app.guard.SentinelLink.enabled(context, com.zongkong.app.guard.SentinelService::class.java)) return
-        if (now - com.zongkong.app.guard.SentinelLink.sentinelBeat(context) < 3 * 60_000L) return
+        val S = com.zongkong.app.guard.SentinelClient
+        val problem = S.problem(context)
+        val st = problem ?: "ok"
+        if (st != sentinelState) {
+            sentinelState = st
+            Diag.log(context, if (problem == null) "sentinel_on" else "sentinel_off", problem ?: "哨兵在岗")
+        }
+        if (problem == null || !S.installed(context) || !S.genuine(context)) return
         if (!canWrite(context) || now - lastSentinelHeal < 10 * 60_000L) return
         lastSentinelHeal = now
-        if (com.zongkong.app.guard.SentinelLink.rebind(context, com.zongkong.app.guard.SentinelService::class.java)) {
-            Diag.log(context, "rebind_ok", "哨兵开着没在跑：总控把它重新挂上")
-        }
+        if (S.rebind(context)) Diag.log(context, "rebind_ok", "哨兵开着没在跑：总控把它重新挂上")
     }
 
     private fun warn(context: Context, enabled: Boolean, now: Long) {

@@ -30,7 +30,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Unit tests, debug APK and end-to-end test APK
-        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug assembleDebugAndroidTest
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug :app:assembleDebugAndroidTest
 
       # 一手也打一份，模拟器上装上它测两个 App 的连接
       - name: 一手 debug APK (for the link test)
@@ -46,6 +46,14 @@ jobs:
             zongkong/app/build/outputs/apk/androidTest/debug/*.apk
           if-no-files-found: error
 
+      # 哨兵：独立的小应用（总控崩了、被强行停止都碰不到它）
+      - name: Upload 哨兵 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: zongkong-sentinel-apk
+          path: zongkong/sentinel/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
       - name: Upload 一手 APK
         uses: actions/upload-artifact@v4
         with:
@@ -58,7 +66,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: zongkong-test-reports
-          path: zongkong/app/build/reports/tests/
+          path: |
+            zongkong/app/build/reports/tests/
+            zongkong/sentinel/build/reports/tests/
 
   smoke:
     needs: build
@@ -76,6 +86,11 @@ jobs:
         with:
           name: yishou-apk-for-link-test
           path: zongkong/apk/yishou
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: zongkong-sentinel-apk
+          path: zongkong/apk/sentinel
 
       - name: Enable KVM
         run: |
@@ -103,6 +118,7 @@ jobs:
 
   # 固定下载地址（手机浏览器直接打开即可下载，始终是最新一次通过测试的构建）：
   # https://github.com/aozhenyu666-cmyk/test/releases/download/zongkong-latest/zongkong.apk
+  # https://github.com/aozhenyu666-cmyk/test/releases/download/zongkong-latest/zongkong-sentinel.apk
   release:
     needs: [build, smoke]
     runs-on: ubuntu-latest
@@ -114,6 +130,10 @@ jobs:
           path: apk
       - uses: actions/download-artifact@v4
         with:
+          name: zongkong-sentinel-apk
+          path: sentinel
+      - uses: actions/download-artifact@v4
+        with:
           name: zongkong-smoke
           path: shots
       - name: Publish to release zongkong-latest
@@ -121,10 +141,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp apk/debug/app-debug.apk zongkong.apk
+          cp sentinel/*.apk zongkong-sentinel.apk
           (cd shots && zip -q -r ../screenshots.zip .)
           gh release delete zongkong-latest --cleanup-tag --yes || true
-          gh release create zongkong-latest zongkong.apk screenshots.zip \
+          gh release create zongkong-latest zongkong.apk zongkong-sentinel.apk screenshots.zip \
             --target "$GITHUB_SHA" \
             --prerelease \
             --title "总控 最新调试版" \
-            --notes "由提交 ${GITHUB_SHA::7} 自动构建，已通过单元测试、模拟器上的端到端闭环测试和拦截测试。直接安装 zongkong.apk，可覆盖旧版本，数据保留。screenshots.zip 是模拟器上的自动测试截图。"
+            --notes "由提交 ${GITHUB_SHA::7} 自动构建，已通过单元测试、模拟器上的端到端闭环测试和拦截测试。直接安装 zongkong.apk，可覆盖旧版本，数据保留。zongkong-sentinel.apk 是独立的哨兵（总控掉线时替它拦），也要装、也要在无障碍里打开。screenshots.zip 是模拟器上的自动测试截图。"

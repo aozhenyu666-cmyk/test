@@ -154,7 +154,7 @@ class GuardService : AccessibilityService() {
         lastSentinelWrite = now
         val c = store.config.value
         val st = status()
-        SentinelLink.writeState(this, c.blocked, st.strict, maxOf(c.pausedUntil, st.emergencyUntil ?: 0L), now)
+        SentinelClient.push(this, c.blocked, st.strict, maxOf(c.pausedUntil, st.emergencyUntil ?: 0L), now)
     }
 
     private fun onWindow(event: AccessibilityEvent?) {
@@ -482,7 +482,7 @@ class GuardService : AccessibilityService() {
         running = false
         runCatching { Diag.log(this, "offline", "无障碍服务离线（拦不住、看不到）") }
         // 告诉哨兵：总控这就下线了，马上接管（崩溃时走不到这里，哨兵等心跳停 90 秒）
-        runCatching { SentinelLink.writeState(this, store.config.value.blocked, true, store.config.value.pausedUntil, at = 0L) }
+        runCatching { SentinelClient.push(this, store.config.value.blocked, true, store.config.value.pausedUntil, at = 0L) }
         accountPlay(System.currentTimeMillis())
         store.logSwitch(System.currentTimeMillis(), com.zongkong.core.boss.Timeline.GAP)
         Notifications.showStatus(this, "总控已离线", "无障碍服务被关闭了。离线的时间会记成“失联”，写进日终验收。")

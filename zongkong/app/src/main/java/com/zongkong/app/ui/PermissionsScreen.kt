@@ -69,15 +69,13 @@ object PermissionStatus {
     fun fullScreen(context: Context) =
         Build.VERSION.SDK_INT < 34 || context.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
 
-    /** 哨兵（第二双眼睛）开着，而且最近 3 分钟有心跳。 */
-    fun sentinel(context: Context): Boolean =
-        com.zongkong.app.guard.SentinelLink.enabled(context, com.zongkong.app.guard.SentinelService::class.java) &&
-            System.currentTimeMillis() - com.zongkong.app.guard.SentinelLink.sentinelBeat(context) < 3 * 60_000L
+    /** 哨兵（独立应用）装了、开着、在跑。 */
+    fun sentinel(context: Context): Boolean = com.zongkong.app.guard.SentinelClient.healthy(context)
 
     /** 必需的权限里缺了哪些（首页顶上提示用）。 */
     fun missingCritical(context: Context): List<String> = buildList {
         if (!accessibility(context)) add("无障碍服务") else if (!guardRunning(context)) add("无障碍服务（开着但没在运行）")
-        if (!sentinel(context)) add("哨兵（第二双眼睛）")
+        if (!sentinel(context)) add("哨兵（独立应用）")
         if (!notifications(context)) add("通知")
         if (!exactAlarm(context)) add("准点闹钟")
         if (!fullScreen(context)) add("全屏通知")
@@ -121,11 +119,18 @@ fun PermissionsScreen(nav: NavHostController) {
                 acc && running, { Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS) }, "perm-acc",
             ),
             Perm(
-                "哨兵（第二双眼睛）",
-                "总控的无障碍服务一被系统停掉（显示“此服务出现故障”），掉线的那段时间就什么都管不住。哨兵是第二个无障碍服务，跑在自己的小进程里，几乎不会崩：" +
-                    "总控在跑时它什么都不做；总控掉了，它把拦截名单里的应用先关着（掉线不再等于畅玩），并给你一个一键修复的页面。",
-                "设置 → 快捷与辅助 → 无障碍 → 已安装的服务 → 总控·哨兵 → 打开（和「总控」是两个开关，都要开）",
-                PermissionStatus.sentinel(context), { Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS) }, "perm-sentinel",
+                "哨兵（独立应用「总控哨兵」）",
+                "总控的无障碍一被系统停掉（显示“此服务出现故障”），掉线的那段时间就什么都管不住。哨兵是另一个应用——单独安装、单独运行，" +
+                    "总控崩了、被清理、被强行停止都碰不到它：总控在跑时它什么都不做；总控掉了，它把拦截名单里的应用先关着（掉线不再等于畅玩），提醒你，并把总控叫回来。" +
+                    (com.zongkong.app.guard.SentinelClient.problem(context)?.let { "\n现在：$it。" } ?: ""),
+                if (!com.zongkong.app.guard.SentinelClient.installed(context)) "点“去开启”下载安装「总控哨兵」（和总控同一个发布页），装好后在 设置 → 快捷与辅助 → 无障碍 → 已安装的服务 → 总控哨兵 → 打开"
+                else "设置 → 快捷与辅助 → 无障碍 → 已安装的服务 → 总控哨兵 → 打开（和「总控」是两个开关，都要开）。vivo：i管家 → 应用管理 → 总控哨兵 → 允许后台运行",
+                PermissionStatus.sentinel(context),
+                {
+                    if (!com.zongkong.app.guard.SentinelClient.installed(context)) Intent(Intent.ACTION_VIEW, Uri.parse(com.zongkong.app.guard.SentinelClient.DOWNLOAD))
+                    else Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                },
+                "perm-sentinel",
             ),
             Perm(
                 "通知",
@@ -247,10 +252,21 @@ private fun SelfHealCard(key: Int, refresh: () -> Unit) {
             else "无障碍老是“开着但没在运行”、每次都要手动关开？在电脑上执行一次下面这条命令（手机开 USB 调试、连上电脑），以后总控自己修。" +
                 "不授权也行：总控会每 20 分钟大声提醒你一次，直到它重新跑起来。",
         )
+        // 哨兵装了：两条一起给（哨兵有了这个权限，总控掉线时它能自己把总控挂回去）
+        val sentinelNeeds = remember(key) {
+            com.zongkong.app.guard.SentinelClient.installed(context) && com.zongkong.app.guard.SentinelClient.last?.canWrite != true
+        }
+        val cmd = listOfNotNull(
+            com.zongkong.app.system.SelfHeal.GRANT_COMMAND.takeIf { !granted },
+            com.zongkong.app.guard.SentinelClient.GRANT_COMMAND.takeIf { sentinelNeeds },
+        ).joinToString("\n")
+        if (cmd.isNotEmpty()) {
+            Text(cmd, style = MaterialTheme.typography.bodySmall.merge(Mono))
+            if (granted) Hint("总控这边授权了；上面这条给哨兵——总控掉线时，哨兵就能自己把它挂回去。")
+        }
         if (!granted) {
-            Text(com.zongkong.app.system.SelfHeal.GRANT_COMMAND, style = MaterialTheme.typography.bodySmall.merge(Mono))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { clip.setText(androidx.compose.ui.text.AnnotatedString(com.zongkong.app.system.SelfHeal.GRANT_COMMAND)); msg = "复制了" }) { Text("复制命令") }
+                OutlinedButton(onClick = { clip.setText(androidx.compose.ui.text.AnnotatedString(cmd)); msg = "复制了" }) { Text("复制命令") }
                 TextButton(onClick = refresh) { Text("授权好了，刷新") }
             }
         } else {

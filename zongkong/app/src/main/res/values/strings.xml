@@ -3,6 +3,4 @@
     <string name="app_name">总控</string>
     <string name="accessibility_description">总控用它判断你打开的是不是拦截名单里的应用：严管时（关卡没验收、太久没汇报、娱乐超额）把你弹回总控。只读取前台应用的包名，不读取屏幕内容和输入；你在“档案”里打开截图抽查后，才会偶尔截一张屏（只存在手机上）。它还用来显示桌面宠物。随时可以在这里关闭，但关闭的时间会记成“失联”，写进日终验收。</string>
     <string name="widget_description">总控的桌面宠物：最近说的一句、信用和态度，点“说话”就能对讲。</string>
-    <string name="sentinel_name">总控·哨兵</string>
-    <string name="sentinel_description">总控的第二双眼睛。总控的无障碍服务被系统停掉（显示“出现故障”）时，哨兵接管：拦截名单里的应用先关着，并提醒你一键修好总控。平时什么都不做。只读取前台应用的包名，不读取屏幕内容和输入，不联网。</string>
 </resources>

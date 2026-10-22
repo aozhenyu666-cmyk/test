@@ -37,8 +37,6 @@ class ZkApp : Application() {
         super.onCreate()
         // 一律北京时间：时间显示、换日、定时都按它
         java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
-        // 哨兵的小进程：什么都不初始化（不读写总控的数据，不联网），只跑哨兵自己
-        if (processName().endsWith(":sentinel")) return
         com.zongkong.app.system.CrashShield.install(this)
         store = Store(this)
         actions = Actions(this, store)
@@ -47,14 +45,6 @@ class ZkApp : Application() {
         com.zongkong.app.system.Reminders.reschedule(this)
         com.zongkong.app.system.Reminders.watchdog(this)
     }
-}
-
-/** 当前进程名（主进程是包名，哨兵是 包名:sentinel）。 */
-private fun processName(): String = try {
-    if (android.os.Build.VERSION.SDK_INT >= 28) android.app.Application.getProcessName()
-    else java.io.File("/proc/self/cmdline").readText().trimEnd('\u0000')
-} catch (_: Throwable) {
-    ""
 }
 
 val android.content.Context.zk: ZkApp get() = applicationContext as ZkApp
