@@ -256,11 +256,6 @@ class TrainingRedeemClient(
                 return fail(GateError.REPLAY, denied.message)
             }
         }
-        if (!stateOk && pass != null) {
-            val denied = receipt.copy(state = "REJECTED", pass = null, message = "总控没确认通过，不发奖")
-            remember(denied)
-            return fail(GateError.POLICY_DENIED, denied.message)
-        }
         val safe = if (pass != null) receipt.copy(pass = null) else receipt
         val next = if (pass != null) {
             safe.copy(
@@ -277,7 +272,9 @@ class TrainingRedeemClient(
         }
         remember(next)
         if (pass == null) {
-            return if (stateOk) fail(GateError.NOT_AVAILABLE, next.message) else PortResult.Ok(next)
+            // 小项：总控拒绝和“通过但没放行”走同一条回执路径——都返回这张回执（pass 为 null），
+            // 都不是授权；调用方只能看 pass，不能看 state 猜。
+            return PortResult.Ok(next)
         }
         commit(state.copy(pass = pass, lastMessage = next.message))
         return PortResult.Ok(next)

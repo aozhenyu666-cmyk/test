@@ -217,7 +217,8 @@ class TrainingRedeemTest {
         val c = client(gate)
         val bundle = (c.start(pkg, at) as PortResult.Ok).value
         val r = c.submit(correctAnswers(bundle), at + 60_000)
-        assertTrue(fails(r, GateError.NOT_AVAILABLE))
+        assertTrue("通过但没放行也只转抄回执，不是授权", r is PortResult.Ok)
+        assertNull((r as PortResult.Ok).value.pass)
         assertNull(c.activePass(at + 60_000))
     }
 
@@ -432,7 +433,8 @@ class TrainingRedeemTest {
         val c = client(gate)
         c.start(pkg, at)
         val r = c.query(at + 60_000)
-        assertTrue(fails(r, GateError.NOT_AVAILABLE))
+        assertTrue(r is PortResult.Ok)
+        assertNull((r as PortResult.Ok).value.pass)
         assertNull(c.activePass(at + 60_000))
         assertEquals(1, gate.receiptCalls)
     }
@@ -467,8 +469,31 @@ class TrainingRedeemTest {
         val c = client(gate)
         val bundle = (c.start(pkg, at) as PortResult.Ok).value
         val r = c.submit(correctAnswers(bundle), at + 60_000)
-        assertTrue(fails(r, GateError.NOT_AVAILABLE))
+        assertTrue("不伪造放行，只转抄回执", r is PortResult.Ok)
+        assertNull((r as PortResult.Ok).value.pass)
         assertNull(c.activePass(at + 60_000))
+    }
+
+    @Test fun deniedAndPassedWithoutPassUseSameReceiptPath() {
+        val denied = FakeGate()
+        denied.clock = at
+        denied.submitOverride = { s -> PortResult.Ok(ExecutionReceipt("r1", s.requestId, "DENIED", at, "没通过", null)) }
+        val passNoPass = FakeGate()
+        passNoPass.clock = at
+        passNoPass.submitOverride = { s -> PortResult.Ok(ExecutionReceipt("r2", s.requestId, "PASSED", at, "通过了但没放行", null)) }
+
+        val a = client(denied).run {
+            start(pkg, at)
+            submit(listOf(ChallengeAnswer("q1", "a")), at + 60_000)
+        }
+        val b = client(passNoPass).run {
+            start(pkg, at)
+            submit(listOf(ChallengeAnswer("q1", "a")), at + 60_000)
+        }
+        assertTrue(a is PortResult.Ok)
+        assertTrue(b is PortResult.Ok)
+        assertNull((a as PortResult.Ok).value.pass)
+        assertNull((b as PortResult.Ok).value.pass)
     }
 
     @Test fun stateIsSerializable() {
