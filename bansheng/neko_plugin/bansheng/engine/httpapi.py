@@ -125,6 +125,8 @@ class CompanionHTTP:
                     if url.path == "/ledger":
                         n = int(q.get("n", 120))
                         return self._send(200, {"records": api.call(c.ledger.tail, n, q.get("session_id"))})
+                    if url.path == "/metrics":
+                        return self._send(200, api.call(c.metrics))
                     if url.path == "/sessions":
                         return self._send(200, {"sessions": api.call(c.list_sessions)})
                     if url.path == "/export":
@@ -155,6 +157,10 @@ class CompanionHTTP:
                     if url.path == "/edit":
                         return self._send(200, api.call(c.edit, body["session_id"], body.get("line"),
                                                         body.get("text", ""), body.get("drop_item")))
+                    if url.path == "/host_turn":
+                        allowed = {"turn_type", "text", "ts", "ts_end", "is_voice", "record_id", "conversation_id"}
+                        kw = {k: v for k, v in body.items() if k in allowed}
+                        return self._send(200, {"result": api.run(c.observe_host_turn(**kw))})
                     if url.path == "/import":
                         return self._send(200, {"session_id": api.call(c.import_session, body)})
                 except (KeyError, ValueError, json.JSONDecodeError) as e:

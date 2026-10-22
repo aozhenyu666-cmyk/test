@@ -28,3 +28,5 @@ auto_start = false
 port = 48925
 level = 2
 token = ""
+# rephrase：角色用自己的口吻说（默认）；verbatim：原样说，更快（需要 install_into_neko.py --patch）
+voice_mode = "rephrase"

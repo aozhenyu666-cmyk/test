@@ -31,16 +31,15 @@ AIRI 没有安装。N.E.K.O. 在一次实际运行和扩展点检查中没遇到
 
 ## 2. 启动方式
 
-见 [README.md](README.md)。云端验证时用的命令：
+用户的正式步骤见 [README.md](README.md)。云端（Linux、无声音设备）验证用一条命令：
 
 ```bash
-uv sync                                   # N.E.K.O. 目录
-python bansheng/scripts/install_into_neko.py <N.E.K.O.目录>
-BANSHENG_LLM_BASE_URL=http://127.0.0.1:48999/v1 BANSHENG_LLM_API_KEY=x BANSHENG_LLM_MODEL=mock-mind \
-  uv run python launcher.py              # 另开 python bansheng/scripts/mock_llm_server.py 48999
-curl -X POST http://127.0.0.1:48916/plugin/bansheng/start
+cd <N.E.K.O.目录> && uv sync            # 只需一次
+bash bansheng/scripts/dev_neko_up.sh <N.E.K.O.目录>   # 假模型 + 补丁 + 启动 + 确认数据目录 + 打开“用户插件” + 启动伴生
 python bansheng/scripts/smoke_http.py
 ```
+
+脚本做的两件无头环境必需的事：调用 `/api/storage/location/select` 确认数据目录（首次运行时 N.E.K.O. 会等前端确认，角色不加载），以及 `POST :48915/agent/flags {"user_plugin_enabled": true}`。
 
 ## 3. 模块入口与六项约定
 
@@ -48,60 +47,61 @@ python bansheng/scripts/smoke_http.py
 
 | 阶段 | 位置 |
 |---|---|
-| 输入事件 | 扩展 `capture.js` + `adapters.js` → `POST /events` → `engine/events.py`、`SessionState.accept` |
+| 输入事件 | 网页：扩展 `capture.js` + `adapters.js` → `POST /events`；桌面角色：插件 `_watch_host_conversations` 轮询 N.E.K.O. `bus.conversations` → `Companion.observe_host_turn` |
 | 会话理解 | `engine/state.py`（条目、来源、改口、路标），由 `engine/mind.py` 的一次模型调用更新 |
-| 候选 | `engine/mind.py`（同一次调用产生 0–3 条，带依据和评分） |
+| 候选 | `engine/mind.py`（同一次调用产生 0–3 条，带依据和评分；`Policy.style` 切换对照风格） |
 | 是否交付 | `engine/gate.py` 的 `decide()`，`engine/companion.py` 每 0.4 秒复查 |
-| 声音和桌面 | `neko_plugin/bansheng/__init__.py` 的 `NekoDeliverer` → N.E.K.O.；扩展 `overlay.js` 显示路标 |
+| 声音和桌面 | `NekoDeliverer`：`rephrase` → `push_message(respond)`；`verbatim` → 补丁 `/api/bansheng/speak`；打断 → 补丁 `/api/bansheng/interrupt`；扩展 `overlay.js` 显示路标 |
 
 | 约定 | 字段 |
 |---|---|
-| 会话身份 | `session_id = "gemini:<会话号>"` / `"chatgpt:<会话号>"`，状态按会话落盘，重开能恢复 |
-| 说话者来源 | `speaker = user / main_ai / companion`，`source = gemini_web / chatgpt_web / replay …` |
-| 当前交谈对象 | `addressee`；网页里的提问固定是 `main_ai`，伴生此时不另起一轮，等主力 AI 回复后一起想 |
+| 会话身份 | `session_id = "gemini:<会话号>"` / `"chatgpt:<会话号>"`；没有网页讨论时，你和角色的直接对话归到 `neko:desktop`。状态按会话落盘，重开能恢复 |
+| 说话者来源 | `speaker = user / main_ai / companion`；`source = gemini_web / chatgpt_web / neko_voice / neko_text / neko / bansheng / replay` |
+| 当前交谈对象 | `addressee`：网页提问是 `main_ai`（伴生等主力 AI 回复后再想）；对桌面角色说的是 `companion`（角色自己回答，伴生只更新理解，不另插一句） |
 | 状态修订 | `SessionState.revision`；每条候选带 `state_rev`，依据的条目失效就撤销 |
-| 取消信号 | 用户新发言、主力 AI 新回复、思考期间有新话、依据失效、超时、静音、重复 → 记录原因 |
-| 真实播放状态 | **缺口**：只知道“已交给 N.E.K.O.”（`submitted`），不知道是否真的播完 |
+| 取消信号 | 用户新发言、主力 AI 新回复、思考期间有新话、依据失效、超时、静音、重复 → 记录原因；已在播的那句：你接着对主力 AI 说话或静音时调用打断 |
+| 真实播放状态 | `Candidate` 上的 `delivered_ts / received_ts / spoken_ts / spoken_end_ts / spoken_text`。`rephrase` 模式由会话流里的 `proactive_instruction`（角色模型收到）和 `proactive_reply`（实际原话与起止时间）填写；`verbatim` 模式由补丁等前端报告播放结束（`audio_completed`）。汇总在 `GET /metrics` |
 
 ## 4. 已经验证的（真实 vs 模拟）
 
 | 项目 | 怎么验证的 | 结论 |
 |---|---|---|
-| N.E.K.O. 在 Linux 启动三个服务 | 实际运行 launcher | 通过（无 Key 时模型连接失败，属预期） |
+| N.E.K.O. 在 Linux 启动三个服务 | 实际运行 launcher | 通过（无 Key 时角色模型连接失败，属预期） |
 | 伴生插件被 N.E.K.O. 加载、启动、监听 48925 | 实际运行 | 通过 |
-| 事件 → 思考 → 候选 → `push_message` 到达 N.E.K.O. 主服务 | 实际运行，日志 `proactive bridge forwarded: plugin=bansheng` | 通过（**模型是假模型**） |
-| 角色真的用声音说出来 | — | **待验证**：云端没有前端会话、麦克风、扬声器和对话模型 Key |
-| 引擎行为：约束 → 关联 → 改口后旧约束失效；“已确认”必须有用户原话；准备了但用户继续说而撤销；思考期间有新话丢弃旧候选；叫停/恢复/嫌吵；旧历史不触发；刷新不重复；卡住时降低门槛；重复抑制 | `pytest bansheng/tests`，9 项 | 通过（脚本模型，验证的是规则，不是接话质量） |
-| 扩展：旧历史标 backfill、打字让出话权、流式只发一次完整回复、浮层显示路标和伴生的话、刷新不重复 | Playwright 加载真实扩展，对**模拟的** Gemini 页面（页面启用了和 Gemini 同类的 Trusted Types 限制），12 项 | 通过 |
-| 真实 Gemini 网页采集 | — | **待验证**（云端没法登录） |
-| 非法来源拦截 | 带 `Origin: https://evil.example` 或非本机 `Host` 的请求 | 403 通过 |
+| 事件 → 思考 → 候选 → `push_message` 到达 N.E.K.O. 主服务 | 实际运行，日志 `proactive bridge forwarded: plugin=bansheng` | 通过（假模型） |
+| 你在 N.E.K.O. 里对角色说的话进入伴生；“伴生，先别说了”关掉主动 | 实际运行：WebSocket 以前端身份发文字 → 会话流 → 插件 → 静音 | 通过（**要先打开“用户插件”开关**；语音输入走同一函数 `is_voice=True`，未用真麦克风测） |
+| 打断角色 | 实际运行（补丁）：静音时前端在同一秒收到 `user_activity`；“伴生说话中你又对 Gemini 发了一句”时打断的正是那句的 `speech_id` | 通过（前端信号；扬声器是否真的停要你的电脑验证） |
+| 原样说 | 实际运行（补丁）：前端收到这句文字，`audio_sent/audio_queued` 为 true | 通过（这里没配 TTS 声线，没有真实出声） |
+| 补丁接口防护 | 没令牌 → 401；带浏览器 Origin → 403 | 通过 |
+| 引擎行为（12 项）：约束 → 改口 → 失效；“已确认”要用户原话；用户继续说就撤销；思考期间有新话丢弃；叫停/恢复/嫌吵；旧历史不触发；刷新不重复；卡住降低门槛；重复抑制；对角色说话只更新理解；角色原话与候选配对和延迟统计 | `pytest bansheng/tests` | 通过（脚本模型，验证规则，不是接话质量） |
+| 扩展 12 项 | Playwright 加载真实扩展，对模拟 Gemini 页面（同类 Trusted Types 限制），经过 N.E.K.O. 里的插件 | 通过 |
+| 风格对照工具 | 示例材料 + 假模型，生成对比页 | 流程通过；**对比本身需要真实模型才有意义** |
+| 真实 Gemini 网页采集、真实声音、接话质量 | — | **待验证** |
 
 ## 5. 场景表进度
 
 | 场景 | 现在 |
 |---|---|
-| 用户卡住 | 识别“不知道该抓哪个/卡住/说不清”等，降低门槛、跳过冷却；提示词要求给具体切入点。**接话质量待真实模型** |
+| 用户卡住 | 识别“不知道该抓哪个/卡住/说不清”等，降低门槛、跳过冷却；对主力 AI 说的卡住，会带到它回复之后再想。**接话质量待真实模型** |
 | 主力 AI 回答很长 | 只在完整回复后想一次；长回复给 1–6 秒阅读余量；提示词禁止复述总结 |
-| 用户安静阅读或停顿后继续 | 不用计时器插话；用户打字 3 秒内、主力 AI 生成中都不说；用户一发言就撤销 |
+| 用户安静阅读或停顿后继续 | 不用计时器插话；用户打字 3 秒内、主力 AI 生成中都不说；用户一发言就撤销，已在播的打断 |
 | 用户切去查资料 | **未做**：没有读取其他页面；切窗口不被当作走神 |
 | 用户反驳或改口 | 改口触发立即思考，`correction` + `retire` 让旧约束失效，依据失效的候选撤销 |
-| 用户说“停”“先安静” | 网页文字和卡片按钮有效；**对着角色语音说暂时不关主动**（见缺口） |
+| 用户说“停”“先安静” | 网页文字、卡片按钮、对角色说都有效；装补丁时正在说的那句也立刻打断 |
 | 主力 AI 发声 / 回声 | 文字通道不涉及；**Gemini Live 语音共存未验证** |
 | 断线、刷新、重连 | 刷新不重复（已测）；思考期间有新话丢弃旧候选；N.E.K.O. 端 12 秒过期 |
 | 蓝牙断开、空闲开口 | 由 N.E.K.O. 负责，未单独验证 |
-| 结束后再打开 | 会话状态按会话号落盘，重开同一个 Gemini 对话自动恢复（已测落盘恢复） |
+| 结束后再打开 | 会话按会话号落盘，重开同一个 Gemini 对话自动恢复（已测）；导出 Markdown 笔记交给 DeepSeek（D2） |
 
 ## 6. 已知缺口与下一处改动
 
-按优先级：
-
-1. **在你的电脑上跑一次真实链路**：Windows + N.E.K.O. + 真实模型 + 真实 Gemini 页面。重点看采集是否稳定、伴生说的话是否像人、什么时候烦。记录“你说完 → 第一个字的声音”的时间。
-2. **读到你对角色说的话**：`self.bus.conversations`（N.E.K.O. 插件 SDK 的只读会话流）看起来能拿到角色对话，需在真实语音会话里确认里面有没有用户转写，再接成 `speaker=user, addressee=companion` 事件。接上后语音“别说了”能关主动，伴生也能把你对角色说的话算进理解。
-3. **真实播放状态与中断**：N.E.K.O. 没有给插件的“立即停止角色语音”和“播放完成”回执；目前静音时只能停止后续发言。需要在 N.E.K.O. 加一个小接口，或从 bus 事件里找 `voice_play_end`。
-4. **Gemini Live / 原生语音共存**：需要实测：Gemini 语音时网页上有没有文字稿；两边都占麦克风时怎么分辨说话者。
-5. **角色会改写伴生的话**：伴生给出“要表达的意思”，N.E.K.O. 角色模型用自己的口吻说。好处是声音和人设一致；坏处是最终说的字和伴生准备的不完全一样，诊断记录里记的是“意思”。
-6. **接话质量调提示词**：用产品说明里的两种策略（偏总结 vs 自然反应）在同一段真实材料上对照；可以用 `scripts/smoke_http.py` 的方式把真实会话导出后回放。
-7. 一键包（Steam / exe 版 N.E.K.O.）里插件放在哪：未验证，目前只验证了源码运行。
+1. **在你的电脑上跑一次真实链路**：Windows + N.E.K.O.（`--patch`）+ 真实模型 + 真实 Gemini 页面。看采集是否稳定、伴生的话像不像人、什么时候烦；`/metrics` 会给出各段延迟。
+2. **用真实模型跑风格对照**：`scripts/replay_compare.py`，先用示例材料，再用你真实的一场讨论；按你的标记调提示词（`engine/mind.py`）。
+3. **延迟**：目前从回复完成到开口至少有 0.6 秒防抖 + 1–6 秒阅读余量 + 模型思考；`rephrase` 模式还要再加一次角色模型调用。拿到真实数据后再决定是否缩短阅读余量、默认改用 `verbatim`、或提前在主力 AI 生成中途就开始想。
+4. **Gemini Live / 原生语音共存**：需要实测 Gemini 语音时网页上有没有文字稿；两边都占麦克风时怎么分辨说话者。
+5. **用户正在对角色说话的实时信号**：会话流只在一句话结束后才到；说话中的状态（VAD）目前拿不到，伴生靠“用户一发言就撤销”兜底。
+6. 一键包（Steam / exe 版 N.E.K.O.）里插件和补丁放在哪：未验证，目前只验证了源码运行。
+7. 交给 DeepSeek 的 D1–D4（[docs/deepseek/](docs/deepseek/README.md)）：ChatGPT 测试、Markdown 归档、弹窗诊断、面板延迟表。
 
 ## 7. 你需要补充的最少信息
 

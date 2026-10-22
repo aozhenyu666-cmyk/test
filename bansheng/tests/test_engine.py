@@ -195,3 +195,67 @@ def test_decide_rules_unit():
     assert decide(Candidate(**{**base, "score": 3.0}), **kw).reason.startswith("below_threshold")
     fl.main_ai_streaming = True
     assert decide(Candidate(**base), **kw).reason == "main_ai_streaming"
+
+
+# ---------------------------------------------------------------- 宿主回报：用户对角色说话、角色实际说的话、延迟
+def test_voice_to_companion_mutes_and_only_updates_understanding():
+    async def run():
+        c, llm, out = make(lambda *_: {"ops": [], "candidates": [{"text": "我也想说一句", "score": 5, "basis": []}]})
+        await c.ingest([ev("main_ai", "主力 AI 的一条回复内容", "m1")])
+        await settle(c)
+        assert out.said == ["我也想说一句"]
+        # 用户对着桌面角色说了一段话：伴生只更新理解，不另准备一句（角色自己会回答）
+        r = await c.observe_host_turn(turn_type="user_message", text="其实我更在意它能不能听懂我", is_voice=True,
+                                      record_id="r1")
+        await settle(c)
+        assert r == "user_to_companion"
+        user_turn = c.session(SID).last_event("user")
+        assert user_turn.addressee == "companion" and user_turn.source == "neko_voice"
+        assert "只更新会话理解" in llm.calls[-1]["user"] and len(out.said) == 1
+        # 语音叫停也生效
+        await c.observe_host_turn(turn_type="user_message", text="别说了", is_voice=True, record_id="r2")
+        assert c.policy.muted
+    asyncio.run(run())
+
+
+def test_spoken_text_paired_with_candidate_and_metrics():
+    async def run():
+        c, llm, out = make([{"ops": [], "candidates": [{"text": "它又加了后台系统", "score": 4.5, "basis": ["e1"]}]}])
+        await c.ingest([ev("main_ai", "建议先做后台系统再做别的东西", "m1")])
+        await settle(c)
+        cand = c.decided[-1]
+        assert cand.status == "delivered" and cand.material_ts > 0 and cand.think_done_ts >= cand.think_start_ts
+        r1 = await c.observe_host_turn(turn_type="proactive_instruction", conversation_id="conv9",
+                                       text="（伴生提示……）要表达的意思：它又加了后台系统")
+        r2 = await c.observe_host_turn(turn_type="proactive_reply", conversation_id="conv9",
+                                       text="诶，它怎么又塞了个后台系统进来？",
+                                       ts=cand.delivered_ts + 1.2, ts_end=cand.delivered_ts + 3.0)
+        assert (r1, r2) == ("received", "spoken")
+        assert cand.spoken_text == "诶，它怎么又塞了个后台系统进来？"
+        turn = [t for t in c.session(SID).turns if t.speaker == "companion"][-1]
+        assert turn.text == cand.spoken_text          # 会话里记的是角色实际说的原话
+        m = c.metrics()
+        assert m["stages"]["交给角色→角色开口"]["median"] == 1.2
+        assert m["stages"]["角色说话时长"]["median"] == 1.8
+        # 和伴生无关的角色发言记成普通伴生轮次
+        assert await c.observe_host_turn(turn_type="assistant_message", text="今天天气不错") == "companion_turn"
+    asyncio.run(run())
+
+
+def test_verbatim_delivery_not_paired_with_unrelated_reply():
+    class VerbatimOut(PrintDeliverer):
+        async def say(self, cand, session):
+            await super().say(cand, session)
+            return {"submitted": True, "channel": "neko_verbatim"}
+
+    async def run():
+        llm = ScriptedLLM([{"ops": [], "candidates": [{"text": "原样说的一句", "score": 4.5, "basis": []}]}])
+        c = Companion(llm, VerbatimOut(echo=False), policy=Policy(max_reading_grace_s=0.0), debounce_s=0.01)
+        await c.ingest([ev("main_ai", "主力 AI 的一条回复内容", "m1")])
+        await settle(c)
+        assert c.decided[-1].channel == "neko_verbatim"
+        r = await c.observe_host_turn(turn_type="proactive_reply", text="角色自己的另一个主动话题")
+        assert r == "companion_turn" and not c.decided[-1].spoken_text
+        c.mark_playback(c.decided[-1].id, text="原样说的一句", ended_at=c.decided[-1].delivered_ts + 2.0)
+        assert c.metrics()["stages"]["交给角色→播放结束"]["median"] == 2.0
+    asyncio.run(run())

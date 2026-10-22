@@ -50,6 +50,7 @@ class Trigger:
     kind: str            # main_ai_reply / user_said / user_stuck / user_corrected / manual
     event_id: str
     detail: str = ""
+    allow_candidates: bool = True   # False：只更新理解（例如用户正直接和桌面角色说话）
 
 
 def build_user_prompt(state: SessionState, trigger: Trigger, recent_companion: list[str],
@@ -62,12 +63,24 @@ def build_user_prompt(state: SessionState, trigger: Trigger, recent_companion: l
         "你最近说过的话": recent_companion[-5:],
         "主动程度": level_desc,
     }
+    if not trigger.allow_candidates:
+        payload["注意"] = "这次只更新会话理解，candidates 给空列表。"
     return (f"主力 AI：{main_ai}。speaker 含义：user=用户，main_ai={main_ai}，companion=你。\n"
             + json.dumps(payload, ensure_ascii=False, indent=1))
 
 
-def system_prompt(main_ai: str) -> str:
-    return SYSTEM_PROMPT.format(main_ai=main_ai)
+# 对照实验用的另一种风格（产品说明 §8：偏总结与安排 vs 允许反应、好奇、轻回应和安静）
+SUMMARIZE_STYLE = """
+
+【本次使用"总结与安排"风格，覆盖上面的说话方式】
+每次开口时先用一句话概括目前讨论到哪里，再明确建议下一步做什么（可以给 2–3 个选项让用户选），
+语气像一个有条理的助理。候选尽量每次都给，score 按是否有助于推进安排来打。"""
+
+STYLES = {"react": "", "summarize": SUMMARIZE_STYLE}
+
+
+def system_prompt(main_ai: str, style: str = "react") -> str:
+    return SYSTEM_PROMPT.format(main_ai=main_ai) + STYLES.get(style, "")
 
 
 def parse_candidates(raw: Any) -> list[dict[str, Any]]:

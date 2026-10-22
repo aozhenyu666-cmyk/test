@@ -20,7 +20,8 @@ from .mind import Trigger, build_user_prompt, parse_candidates, system_prompt
 from .state import SessionState
 
 CORRECTION_PATTERNS = re.compile(r"(没说准|说错了|不是这个意思|我改|改口|算了|其实我|收回|不对，|我更希望|我不是)")
-MAIN_AI_NAMES = {"gemini": "Gemini", "chatgpt": "ChatGPT"}
+MAIN_AI_NAMES = {"gemini": "Gemini", "chatgpt": "ChatGPT", "neko": "桌面角色"}
+HOST_SESSION = "neko:desktop"
 
 
 class Deliverer(Protocol):
@@ -58,6 +59,11 @@ def _seq(event_id: str) -> int:
         return 0
 
 
+def text_hash_key(text: str, ts: float) -> str:
+    from .events import text_hash
+    return f"{text_hash(text)}@{int(ts)}"
+
+
 def _safe_name(session_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)[:120] or "session"
 
@@ -84,6 +90,8 @@ class Companion:
         self._pending_trigger: dict[str, Trigger] = {}
         self._last_context_at: dict[str, float] = {}
         self._cand_seq = 0
+        self._pending_conv: dict[str, Candidate] = {}
+        self.host_status: dict[str, Any] = {}   # 宿主连接状态（例如 N.E.K.O. 会话流轮询），给面板看
         self._tick_lock = asyncio.Lock()
         if self.data_dir:
             (self.data_dir / "sessions").mkdir(parents=True, exist_ok=True)
@@ -189,6 +197,9 @@ class Companion:
         if ev.speaker == Speaker.USER:
             # 用户开口了：之前准备的话都不再适用；正在播的也停
             await self._cancel_held(sid, "user_continued")
+            if ev.addressee != "companion" and self._maybe_speaking():
+                # 对角色说话时 N.E.K.O. 自己会打断；对主力 AI 说话时由伴生来停
+                await self.deliverer.stop_speaking("user_continued")
             text = ev.text.strip()
             if STOP_PATTERNS.search(text) or STOP_ANYWHERE.search(text):
                 await self.control("mute", source=f"user:{ev.event_id}")
@@ -197,10 +208,18 @@ class Companion:
                 await self.control("unmute", source=f"user:{ev.event_id}")
             if NOISY_PATTERNS.search(text) and self.policy.level > 1:
                 await self.control("level", self.policy.level - 1, source=f"user:{ev.event_id}")
+            # 用户直接对桌面角色说话：角色自己会回答，伴生只更新理解，不另准备一句
+            to_companion = ev.addressee == "companion"
             if NEED_PATTERNS.search(text):
-                self._schedule_think(sid, Trigger("user_stuck", ev.event_id, "用户明确表示卡住/不知道怎么继续"))
+                self._schedule_think(sid, Trigger("user_stuck", ev.event_id, "用户明确表示卡住/不知道怎么继续",
+                                                  allow_candidates=not to_companion))
             elif CORRECTION_PATTERNS.search(text) or ev.revises:
-                self._schedule_think(sid, Trigger("user_corrected", ev.event_id, "用户在修正或改口"))
+                self._schedule_think(sid, Trigger("user_corrected", ev.event_id, "用户在修正或改口",
+                                                  allow_candidates=not to_companion))
+            elif to_companion:
+                self._schedule_think(sid, Trigger("user_to_companion", ev.event_id,
+                                                  "用户直接对你（桌面角色）说话，角色本身会回答；这次只更新理解",
+                                                  allow_candidates=False))
             elif ev.addressee == "main_ai":
                 # 主力 AI 马上会回答，不另起一轮；等它的回复一起想
                 self.ledger.log("think_deferred", session_id=sid, event_id=ev.event_id,
@@ -264,10 +283,11 @@ class Companion:
         s = self.session(sid)
         main_ai = self.main_ai_name(sid)
         rev0, seq0 = s.revision, s.material_seq()
+        think_start = time.time()
         recent = self.delivered_texts.get(sid, [])
         self.ledger.log("think_start", session_id=sid, trigger=trigger.kind, event_id=trigger.event_id,
                         revision=rev0)
-        out, meta = await self.llm.chat_json(system_prompt(main_ai),
+        out, meta = await self.llm.chat_json(system_prompt(main_ai, self.policy.style),
                                              build_user_prompt(s, trigger, recent, self.policy.level, main_ai))
         results = s.apply_ops(out.get("ops") or [])
         self.ledger.log("think_done", session_id=sid, trigger=trigger.kind, read=str(out.get("read", ""))[:200],
@@ -280,7 +300,12 @@ class Companion:
             self.ledger.log("candidates_discarded", session_id=sid, reason="new_turns_during_think")
             self.save(sid)
             return []
+        if not trigger.allow_candidates:
+            self.save(sid)
+            await self._maybe_feed_context(s, force=s.revision != rev0)
+            return []
         explicit = trigger.kind == "user_stuck"
+        think_done = time.time()
         not_before = 0.0
         trig_ev = s.event(trigger.event_id)
         if trig_ev and trig_ev.speaker == Speaker.MAIN_AI:
@@ -291,7 +316,9 @@ class Companion:
             cand = Candidate(id=f"k{self._cand_seq}", session_id=sid, text=c["text"], kind=c["kind"],
                              score=c["score"], basis=c["basis"], trigger_event=trigger.event_id,
                              trigger_seq=seq0, state_rev=s.revision, why_now=c["why_now"],
-                             why_not=c["why_not"], explicit_need=explicit, not_before=not_before)
+                             why_not=c["why_not"], explicit_need=explicit, not_before=not_before,
+                             material_ts=trig_ev.ts if trig_ev else 0.0, think_start_ts=think_start,
+                             think_done_ts=think_done)
             new.append(cand)
             self.ledger.log("candidate", session_id=sid, candidate=cand.id, text=cand.text,
                             style=cand.kind, score=cand.score, basis=cand.basis, why_now=cand.why_now,
@@ -376,17 +403,137 @@ class Companion:
 
     async def _deliver(self, s: SessionState, c: Candidate) -> None:
         self.last_delivery_at = time.monotonic()
+        c.delivered_ts = time.time()
         self.delivered_texts.setdefault(s.session_id, []).append(c.text)
         try:
             res = await self.deliverer.say(c, s)
         except Exception as e:
             res = {"submitted": False, "error": str(e)}
+        c.channel = str(res.get("channel") or "")
         self._close(c, "delivered" if res.get("submitted") else "cancelled",
                     "ok" if res.get("submitted") else f"deliver_failed:{res.get('error') or res.get('reason')}")
         if res.get("submitted"):
             s.accept(TurnEvent(session_id=s.session_id, speaker=Speaker.COMPANION, text=c.text,
                                source="bansheng", turn_key=f"c:{c.id}", addressee="user"))
             self.save(s.session_id)
+
+    # ------------------------------------------------------------------ 宿主回报
+    def _maybe_speaking(self, window_s: float = 20.0) -> bool:
+        """最近交付的一句可能还在播（没收到说完的回报）。"""
+        now = time.time()
+        return any(c.status == "delivered" and now - c.delivered_ts < window_s
+                   and (not c.spoken_end_ts or c.spoken_end_ts > now) for c in self.decided[-5:])
+
+    def _awaiting_speech(self, window_s: float = 45.0) -> list[Candidate]:
+        now = time.time()
+        # 原样说（verbatim）不经角色模型，会话流里不会有对应的 proactive_reply，不参与配对
+        return [c for c in self.decided if c.status == "delivered" and not c.spoken_ts
+                and c.channel != "neko_verbatim" and now - c.delivered_ts < window_s]
+
+    async def observe_host_turn(self, *, turn_type: str, text: str, ts: float | None = None,
+                                ts_end: float | None = None, is_voice: bool = False,
+                                record_id: str = "", conversation_id: str = "") -> str:
+        """宿主（N.E.K.O.）会话流里的一条记录。
+
+        - user_message：用户直接对桌面角色说/打的话 → 用户事件（对象=伴生）
+        - proactive_instruction：宿主模型已经收到伴生让它说的话
+        - proactive_reply / assistant_message：角色实际说出的话
+        返回处理结果（用于诊断）。
+        """
+        text = (text or "").strip()
+        if not text:
+            return "empty"
+        ts = float(ts or time.time())
+        if turn_type == "proactive_instruction":
+            for c in self._awaiting_speech():
+                if c.text in text:
+                    c.received_ts = c.received_ts or ts
+                    self._pending_conv[conversation_id or c.id] = c
+                    self.ledger.log("host_received", session_id=c.session_id, candidate=c.id,
+                                    after_deliver_s=round(ts - c.delivered_ts, 2))
+                    return "received"
+            return "instruction_not_ours"
+        # 有正在进行的网页讨论就归到那场；否则归到“和桌面角色的直接对话”
+        sid = self.active_session or HOST_SESSION
+        s = self.session(sid)
+        if turn_type == "user_message":
+            await self.ingest([{"session_id": sid, "speaker": Speaker.USER, "text": text,
+                                "source": "neko_voice" if is_voice else "neko_text",
+                                "turn_key": f"neko:{record_id or text_hash_key(text, ts)}",
+                                "addressee": "companion", "ts": ts}])
+            return "user_to_companion"
+        if turn_type in ("proactive_reply", "assistant_message"):
+            match = None
+            if turn_type == "proactive_reply":
+                match = self._pending_conv.pop(conversation_id, None) if conversation_id else None
+                if match is None:
+                    waiting = self._awaiting_speech()
+                    match = waiting[0] if waiting else None
+            if match is not None:
+                match.spoken_text, match.spoken_ts = text, ts
+                match.spoken_end_ts = float(ts_end or ts)
+                ms = self.sessions.get(match.session_id) or s
+                for t in reversed(ms.turns):
+                    if t.turn_key == f"c:{match.id}":
+                        t.text = text          # 记录角色实际说的原话，而不是伴生给的意思
+                        break
+                self.delivered_texts.setdefault(ms.session_id, []).append(text)
+                self.ledger.log("spoken", session_id=ms.session_id, candidate=match.id, text=text,
+                                intended=match.text, deliver_to_voice_s=round(ts - match.delivered_ts, 2),
+                                speaking_s=round(match.spoken_end_ts - ts, 2))
+                self.save(ms.session_id)
+                return "spoken"
+            s.accept(TurnEvent(session_id=sid, speaker=Speaker.COMPANION, text=text, source="neko",
+                               turn_key=f"neko:{record_id or text_hash_key(text, ts)}", addressee="user", ts=ts))
+            self.ledger.log("companion_said", session_id=sid, turn_type=turn_type, preview=text[:80])
+            self.save(sid)
+            return "companion_turn"
+        return "ignored"
+
+    def mark_playback(self, cand_id: str, *, text: str = "", started_at: float = 0.0,
+                      ended_at: float = 0.0, detail: dict | None = None) -> None:
+        """宿主直接回报播放情况（例如 N.E.K.O. 补丁的原样说）。"""
+        c = next((x for x in reversed(self.decided) if x.id == cand_id), None)
+        if c is None:
+            return
+        c.spoken_text = c.spoken_text or text
+        if started_at:
+            c.spoken_ts = started_at
+        if ended_at:
+            c.spoken_end_ts = ended_at
+        self.ledger.log("playback", session_id=c.session_id, candidate=c.id, ended=bool(ended_at),
+                        deliver_to_end_s=round(ended_at - c.delivered_ts, 2) if ended_at else None,
+                        **(detail or {}))
+
+    def metrics(self) -> dict:
+        """各阶段耗时（秒）：典型值（中位数）和慢的一端（P90），以及样本数。"""
+        # (起点字段, 终点字段)
+        stages = {
+            "材料出现→开始思考": ("material_ts", "think_start_ts"),
+            "模型思考": ("think_start_ts", "think_done_ts"),
+            "思考完→交给角色（含等待话权）": ("think_done_ts", "delivered_ts"),
+            "交给角色→角色开口": ("delivered_ts", "spoken_ts"),
+            "材料出现→角色开口（总计）": ("material_ts", "spoken_ts"),
+            "角色说话时长": ("spoken_ts", "spoken_end_ts"),
+            "交给角色→播放结束": ("delivered_ts", "spoken_end_ts"),
+        }
+        delivered = [c for c in self.decided if c.status == "delivered"]
+        out = {}
+        for name, (start, end) in stages.items():
+            vals = sorted(getattr(c, end) - getattr(c, start) for c in delivered
+                          if getattr(c, start) > 0 and getattr(c, end) > 0
+                          and 0 <= getattr(c, end) - getattr(c, start) < 600)
+            out[name] = {"n": len(vals),
+                         "median": round(vals[len(vals) // 2], 2) if vals else None,
+                         "p90": round(vals[min(len(vals) - 1, int(len(vals) * 0.9))], 2) if vals else None}
+        cancelled = [c for c in self.decided if c.status == "cancelled"]
+        reasons: dict[str, int] = {}
+        for c in cancelled:
+            key = c.reason.split("(")[0]
+            reasons[key] = reasons.get(key, 0) + 1
+        return {"stages": out, "delivered": len(delivered), "cancelled": len(cancelled),
+                "cancel_reasons": reasons,
+                "note": "“材料出现”取浏览器看到消息完成的时间；角色开口取 N.E.K.O. 记录的第一段输出时间，不等于扬声器真正出声。"}
 
     async def run_forever(self, interval: float = 0.4) -> None:
         while True:
@@ -436,7 +583,8 @@ class Companion:
     def snapshot(self, sid: str | None = None) -> dict:
         sid = sid or self.active_session
         base = {"policy": {"level": self.policy.level, "muted": self.policy.muted},
-                "llm": getattr(self.llm, "name", None), "active_session": self.active_session}
+                "llm": getattr(self.llm, "name", None), "active_session": self.active_session,
+                "host": self.host_status}
         if not sid:
             return {**base, "session_id": None}
         s = self.session(sid)

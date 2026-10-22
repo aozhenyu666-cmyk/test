@@ -44,6 +44,16 @@ class Candidate:
     status: str = "held"          # held / delivered / cancelled
     reason: str = ""
     decided_at: float = 0.0
+    # 延迟记录（墙钟时间，秒）
+    material_ts: float = 0.0      # 触发材料出现的时间（用户发出 / 主力 AI 回复完成）
+    think_start_ts: float = 0.0
+    think_done_ts: float = 0.0
+    delivered_ts: float = 0.0     # 交给宿主
+    received_ts: float = 0.0      # 宿主模型确认收到（N.E.K.O. proactive_instruction）
+    spoken_ts: float = 0.0        # 角色开始说
+    spoken_end_ts: float = 0.0    # 角色说完
+    spoken_text: str = ""         # 角色实际说出的原话
+    channel: str = ""             # 交付通道（例如 neko_respond / neko_verbatim / print）
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -58,6 +68,8 @@ class Policy:
     ttl_s: float = 25.0            # 候选最长保留
     typing_hold_s: float = 3.0     # 用户最后一次打字后多久内不插话
     max_reading_grace_s: float = 6.0
+    style: str = "react"           # react（自然反应，默认）/ summarize（总结与安排，用于对照）
+    cooldown_override: float | None = None   # 回放时不模拟时间间隔，用它关掉冷却
 
     THRESHOLDS = {1: 4.2, 2: 3.6, 3: 3.0}
     COOLDOWN_S = {1: 60.0, 2: 25.0, 3: 10.0}
@@ -67,6 +79,8 @@ class Policy:
         return base - 0.8 if explicit_need else base
 
     def cooldown(self) -> float:
+        if self.cooldown_override is not None:
+            return self.cooldown_override
         return self.COOLDOWN_S.get(self.level, 25.0)
 
     def reading_grace(self, reply_len: int) -> float:
