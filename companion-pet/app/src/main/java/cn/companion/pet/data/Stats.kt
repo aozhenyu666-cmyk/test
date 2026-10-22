@@ -14,6 +14,8 @@ class Stats(context: Context) {
         GEMINI_LIVE("gemini_live", "Live 共看"),
         API_CALLS("api", "调用"),
         WEIGHTY("weighty", "有分量的开口"),
+        SESSIONS("sessions", "Gemini 会话"),
+        PULLBACKS("pullbacks", "拉回"),
     }
 
     private val prefs = context.applicationContext.getSharedPreferences("stats", Context.MODE_PRIVATE)

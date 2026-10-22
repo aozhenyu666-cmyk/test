@@ -132,6 +132,29 @@ fun SettingsTab(context: Context) {
             auto = it; s.geminiAutoSend = it
         }
 
+        Section("Gemini 会话")
+        Text("和 Gemini 聊天时，桌宠头上会出现蓝色的 G。文字深聊中切到别的 App，它先倒计时提醒，到点把 Gemini 拉回来；Live 共看本来就要切出去看东西，只记录不拉回。点桌宠可以随时结束会话。",
+            style = MaterialTheme.typography.bodySmall)
+        var autoStart by remember { mutableStateOf(s.sessionAutoStart) }
+        Toggle("打开 Gemini 自动开始", "自己打开 Gemini 停留 ${s.sessionAutoStartSec} 秒，就算开始一次会话。从桌宠点“去 Gemini”会直接开始。", autoStart) {
+            autoStart = it; s.sessionAutoStart = it
+        }
+        var pull by remember { mutableStateOf(s.sessionPullBack) }
+        Toggle("切出去时拉回", "关掉后只记录离开次数，不倒计时、不拉回。", pull) { pull = it; s.sessionPullBack = it }
+        var grace by remember { mutableStateOf(s.sessionGraceSec.toString()) }
+        var allowedGrace by remember { mutableStateOf(s.sessionAllowedGraceSec.toString()) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NumberField("宽限（秒）", grace, Modifier.weight(1f)) {
+                grace = it; it.toIntOrNull()?.let { v -> s.sessionGraceSec = v.coerceIn(3, 600) }
+            }
+            NumberField("允许的 App 宽限（秒）", allowedGrace, Modifier.weight(1f)) {
+                allowedGrace = it; it.toIntOrNull()?.let { v -> s.sessionAllowedGraceSec = v.coerceIn(3, 3600) }
+            }
+        }
+        AppListRow(context, "会话中允许的 App", "切到这些 App（如笔记、词典、要复制资料的阅读器）宽限更长；学习 App 也算", s.sessionAllowedApps) {
+            s.sessionAllowedApps = it
+        }
+
         Section("其他")
         var tts by remember { mutableStateOf(s.ttsEnabled) }
         Toggle("语音播报", "用系统 TTS 念出它说的话。默认关，机械音会破坏伴生感。", tts) { tts = it; s.ttsEnabled = it }

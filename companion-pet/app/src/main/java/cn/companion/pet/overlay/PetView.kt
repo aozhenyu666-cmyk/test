@@ -33,6 +33,9 @@ class PetView(context: Context) : View(context) {
         set(value) { field = value; kick() }
     var listening = false
         set(value) { field = value; kick() }
+    /** Gemini 会话进行中：头顶左边一个小小的蓝色“G”徽章。 */
+    var inSession = false
+        set(value) { field = value; kick() }
     /** 角色在屏幕右边时朝左看，反之朝右。 */
     var facingLeft = true
         set(value) { field = value; invalidate() }
@@ -52,6 +55,9 @@ class PetView(context: Context) : View(context) {
     private val paper = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 252, 240) }
     private val accent = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(108, 142, 230) }
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(70, 48, 38); textAlign = Paint.Align.CENTER }
+    private val badgeText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE; textAlign = Paint.Align.CENTER; isFakeBoldText = true
+    }
     private val path = Path()
     private val rect = RectF()
 
@@ -139,6 +145,14 @@ class PetView(context: Context) : View(context) {
         canvas.restore()
 
         drawOverhead(canvas, cx, top, s, t)
+        if (inSession) {
+            val bx = s * 0.16f
+            val by = s * 0.16f
+            canvas.drawCircle(bx, by, s * 0.12f, accent)
+            canvas.drawCircle(bx, by, s * 0.12f, outline)
+            badgeText.textSize = s * 0.15f
+            canvas.drawText("G", bx, by + s * 0.055f, badgeText)
+        }
 
         if (running) {
             val busy = attentive || talking || listening || mood == Mood.HAPPY

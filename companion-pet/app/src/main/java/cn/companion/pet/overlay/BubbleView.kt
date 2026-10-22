@@ -33,7 +33,13 @@ data class BubbleSpec(
     val showLive: Boolean = false,
     /** 只显示文字，不显示入口（例如桌宠的收尾句）。 */
     val textOnly: Boolean = false,
+    /** 自定义按钮（例如 Gemini 会话的“现在回去”）。非空时替换默认入口。 */
+    val actions: List<BubbleAction> = emptyList(),
+    /** 直接显示整段文字，不逐字出现（倒计时这类每秒更新的提示）。 */
+    val instant: Boolean = false,
 )
+
+data class BubbleAction(val label: String, val highlighted: Boolean = false, val onClick: () -> Unit)
 
 interface BubbleListener {
     fun onMicDown()
@@ -108,15 +114,26 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
         inputRow.visibility = GONE
         input.setText("")
         actions.removeAllViews()
-        if (!spec.textOnly) {
+        if (spec.actions.isNotEmpty()) {
+            spec.actions.forEach { a -> actions.addView(chip(a.label, a.highlighted) { a.onClick() }) }
+        } else if (!spec.textOnly) {
             if (spec.showMic) actions.addView(micChip())
             if (spec.showType) actions.addView(chip("打字", false) { startTyping() })
             if (spec.showGemini) actions.addView(chip("去 Gemini", spec.geminiHighlighted) { listener.onGemini() })
             if (spec.showLive) actions.addView(chip("一起看", false) { listener.onLive() })
             actions.addView(chip("×", false) { listener.onClose() })
         }
-        actions.visibility = if (spec.textOnly) GONE else VISIBLE
-        typeOut(spec.text, onFinishedTyping)
+        actions.visibility = if (spec.textOnly && spec.actions.isEmpty()) GONE else VISIBLE
+        if (spec.instant) setTextNow(spec.text, onFinishedTyping) else typeOut(spec.text, onFinishedTyping)
+    }
+
+    /** 立即换掉文字，不重建按钮（按钮正被按着时也不会打断）。 */
+    fun setTextNow(text: String, done: (() -> Unit)? = null) {
+        handler.removeCallbacksAndMessages(null)
+        fullText = text
+        typed = text.length
+        textView.text = text
+        done?.invoke()
     }
 
     fun setMicLabel(listening: Boolean) {

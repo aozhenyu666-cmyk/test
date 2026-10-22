@@ -30,11 +30,17 @@ import cn.companion.pet.core.rhythm.SpeakScheduler
 import cn.companion.pet.core.scene.Scene
 import cn.companion.pet.core.scene.SceneClassifier
 import cn.companion.pet.core.scene.SceneDecision
+import cn.companion.pet.core.session.EndReason
+import cn.companion.pet.core.session.GeminiSession
+import cn.companion.pet.core.session.SessionAction
+import cn.companion.pet.core.session.SessionMode
+import cn.companion.pet.core.session.SessionSummary
 import cn.companion.pet.core.text.ScreenTextCleaner
 import cn.companion.pet.data.Stats
 import cn.companion.pet.net.ChatMessage
 import cn.companion.pet.net.ChatRequest
 import cn.companion.pet.net.ChatResult
+import cn.companion.pet.overlay.BubbleAction
 import cn.companion.pet.overlay.BubbleListener
 import cn.companion.pet.overlay.BubbleSpec
 import cn.companion.pet.overlay.PetListener
@@ -114,6 +120,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         memory.persona() // 首次运行写入默认人设
         weighty.restore(LocalDate.now().toString(), stats.get(Stats.Kind.WEIGHTY))
         overlay.show()
+        restoreSession()
         active = isUserActive()
         if (active) onUserPresent()
         handler.post(ticker)
@@ -161,7 +168,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private fun tick() {
         val now = now()
         if (convo == null && life.tick(now)) overlay.setLife(life.state)
+        // Gemini 会话期间：只守着会话，不主动搭话
+        session?.let { handleSession(it, now); return }
         if (!active) return
+        if (maybeAutoStartSession(now)) return
 
         convo?.let { escalate(it, now); return }
         if (probeJob?.isActive == true || settings.petPaused) return
@@ -204,7 +214,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun speak(stuck: Boolean, afterHeartbeat: Boolean = false) {
         val now = now()
-        if (probeJob?.isActive == true || convo != null) return
+        if (probeJob?.isActive == true || convo != null || session != null) return
         heartbeatWaiting = false
 
         val key = apiKey()
@@ -286,6 +296,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     // ---------- 用户主动 ----------
 
     override fun onPetTapped() {
+        if (session != null) {
+            if (overlay.isBubbleShown) hideSessionPrompt() else showSessionMenu()
+            return
+        }
         if (overlay.isBubbleShown) {
             endConversation()
             return
@@ -302,9 +316,12 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         overlay.showBubble(entrySpec(greeting, decision.scene, false))
     }
 
-    override fun onHoldStart() = startListening(fromHold = true)
+    override fun onHoldStart() {
+        if (session != null) { showSessionMenu(); return }
+        startListening(fromHold = true)
+    }
 
-    override fun onHoldEnd() = stopListening()
+    override fun onHoldEnd() { if (session == null) stopListening() }
 
     override fun onMicDown() = startListening(fromHold = false)
 
@@ -442,7 +459,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         when (gemini.launch(pkg)) {
             GeminiLauncher.Outcome.NOT_INSTALLED -> { gemini.toast("没找到 Gemini（$pkg），文字已复制"); return }
             GeminiLauncher.Outcome.FAILED -> { gemini.toast("打不开 Gemini，文字已复制"); return }
-            GeminiLauncher.Outcome.LAUNCHED -> Unit
+            GeminiLauncher.Outcome.LAUNCHED -> startSession(SessionMode.TEXT)
         }
         if (settings.geminiAutoSend && PerceptionHub.service != null) {
             scope.launch {
@@ -462,7 +479,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         stats.add(Stats.Kind.GEMINI_LIVE)
         endConversation()
         when (gemini.launch(settings.geminiPackage)) {
-            GeminiLauncher.Outcome.LAUNCHED -> gemini.toast("点 Gemini 里的 Live，再点“共享屏幕”。开场白已复制，可以照着念")
+            GeminiLauncher.Outcome.LAUNCHED -> {
+                gemini.toast("点 Gemini 里的 Live，再点“共享屏幕”。开场白已复制，可以照着念")
+                startSession(SessionMode.LIVE)
+            }
             else -> gemini.toast("没打开 Gemini，开场白已复制")
         }
     }
@@ -495,6 +515,167 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             ),
         )
         scope.launch(Dispatchers.IO) { synchronized(app.memoryLock) { memory.appendToday(LocalDate.now(), line) } }
+    }
+
+    // ---------- Gemini 会话 ----------
+
+    private var session: GeminiSession? = null
+    private var sessionPrompt: String? = null
+    private var lastSessionText = ""
+    /** 用户在 Gemini 里手动结束会话后，先离开一次 Gemini 再允许自动开始。 */
+    private var autoStartBlocked = false
+    private var lastGeminiSeenAt = 0L
+
+    private fun geminiPackages() = GeminiSession.packagesFor(settings.geminiPackage)
+
+    private fun startSession(mode: SessionMode) {
+        val now = now()
+        val existing = session
+        if (existing != null) {
+            if (existing.mode == mode) return
+            finishSession(existing.end(now).summary, announce = false)
+        }
+        endConversation()
+        session = GeminiSession(mode, now, geminiPackages(), allowedForSession(), settings.sessionConfig())
+        settings.sessionMode = mode.name
+        settings.sessionStartedAt = now
+        stats.add(Stats.Kind.SESSIONS)
+        overlay.setInSession(true)
+    }
+
+    private fun restoreSession() {
+        val mode = runCatching { SessionMode.valueOf(settings.sessionMode) }.getOrNull() ?: return
+        val startedAt = settings.sessionStartedAt.takeIf { it > 0 } ?: now()
+        session = GeminiSession(mode, startedAt, geminiPackages(), allowedForSession(), settings.sessionConfig())
+        overlay.setInSession(true)
+    }
+
+    private fun allowedForSession() = settings.sessionAllowedApps + settings.learningApps
+
+    /** 自己打开 Gemini 并停留一会儿，也算开始一次会话。 */
+    private fun maybeAutoStartSession(now: Long): Boolean {
+        val fg = PerceptionHub.trail.foreground ?: return false
+        val since = PerceptionHub.trail.foregroundSince ?: return false
+        if (fg == settings.geminiPackage) lastGeminiSeenAt = now
+        // Google App 也可能托管 Gemini 的界面：只有刚从 Gemini 跳过去时才算，平时用 Google 搜索不算
+        val inGemini = fg == settings.geminiPackage ||
+            (fg in geminiPackages() && now - lastGeminiSeenAt < 5 * 60_000L)
+        if (!inGemini) { autoStartBlocked = false; return false }
+        if (!settings.sessionAutoStart || autoStartBlocked || convo != null || probeJob?.isActive == true) return false
+        if (now - since < settings.sessionAutoStartSec.coerceAtLeast(5) * 1000L) return false
+        startSession(SessionMode.TEXT)
+        return true
+    }
+
+    private fun handleSession(s: GeminiSession, now: Long) {
+        s.allowedPackages = allowedForSession()
+        s.config = settings.sessionConfig()
+        val fg = PerceptionHub.trail.foreground
+        if (fg == settings.geminiPackage) lastGeminiSeenAt = now
+        when (val action = s.update(now, fg, active)) {
+            SessionAction.None -> Unit
+            SessionAction.Back -> hideSessionPrompt()
+            is SessionAction.Countdown -> if (settings.sessionPullBack) showCountdown(action)
+            SessionAction.PullBack -> if (settings.sessionPullBack) pullBack()
+            SessionAction.AskEnd -> if (settings.sessionPullBack) showAskEnd()
+            is SessionAction.Ended -> finishSession(action.summary, announce = active)
+        }
+    }
+
+    private fun showCountdown(c: SessionAction.Countdown) {
+        val text = if (c.allowed) "还在跟 Gemini 聊呢。这个 App 多给你一会儿，${c.secondsLeft} 秒后带你回去"
+        else "还在跟 Gemini 聊呢，${c.secondsLeft} 秒后带你回去"
+        if (sessionPrompt == PROMPT_COUNTDOWN && overlay.isBubbleShown) {
+            if (text != lastSessionText) overlay.updateBubbleText(text)
+            lastSessionText = text
+            return
+        }
+        sessionPrompt = PROMPT_COUNTDOWN
+        lastSessionText = text
+        haptics.tap()
+        overlay.attention()
+        overlay.showBubble(
+            BubbleSpec(
+                text, instant = true,
+                actions = listOf(
+                    BubbleAction("现在回去", highlighted = true) { session?.let { if (it.returnNow() == SessionAction.PullBack) pullBack() } },
+                    BubbleAction("给我 5 分钟") { session?.pause(now()); hideSessionPrompt() },
+                    BubbleAction("结束会话") { endSessionByUser() },
+                ),
+            ),
+        )
+    }
+
+    private fun showAskEnd() {
+        sessionPrompt = PROMPT_ASK
+        haptics.tap()
+        overlay.showBubble(
+            BubbleSpec(
+                "这几分钟拉了你好几次，看来你在忙别的。这次 Gemini 会话要结束吗？",
+                instant = true,
+                actions = listOf(
+                    BubbleAction("结束会话", highlighted = true) { endSessionByUser() },
+                    BubbleAction("继续守着") { session?.keepGoing(now()); hideSessionPrompt() },
+                ),
+            ),
+        )
+    }
+
+    private fun showSessionMenu() {
+        val s = session ?: return
+        val minutes = (now() - s.startedAt) / 60_000
+        val modeText = if (s.mode == SessionMode.LIVE) "Live 共看" else "文字深聊"
+        val status = when {
+            s.isPaused -> "，暂停中"
+            s.mode == SessionMode.LIVE -> "，切出去不会拉你回来"
+            !settings.sessionPullBack -> "，只记录不拉回"
+            else -> ""
+        }
+        sessionPrompt = PROMPT_MENU
+        val actions = mutableListOf(
+            BubbleAction("回 Gemini", highlighted = true) { pullBack() },
+            BubbleAction("结束会话") { endSessionByUser() },
+        )
+        if (s.isPaused) actions.add(1, BubbleAction("继续守着") { session?.keepGoing(now()); hideSessionPrompt() })
+        overlay.showBubble(BubbleSpec("Gemini 会话中（$modeText）· 已经 $minutes 分钟$status", instant = true, actions = actions))
+    }
+
+    private fun pullBack() {
+        hideSessionPrompt()
+        when (gemini.launch(settings.geminiPackage, adjacent = false)) {
+            GeminiLauncher.Outcome.LAUNCHED -> stats.add(Stats.Kind.PULLBACKS)
+            else -> gemini.toast("没能打开 Gemini。vivo 上要在应用权限里允许“后台弹出界面”")
+        }
+    }
+
+    private fun endSessionByUser() {
+        val s = session ?: return
+        if (PerceptionHub.trail.foreground in geminiPackages()) autoStartBlocked = true
+        finishSession(s.end(now()).summary, announce = false)
+    }
+
+    private fun finishSession(summary: SessionSummary, announce: Boolean) {
+        session = null
+        settings.sessionMode = ""
+        overlay.setInSession(false)
+        hideSessionPrompt()
+        scheduler.onSpoke(now()) // 会话刚结束别马上搭话
+        val minutes = summary.durationMillis / 60_000
+        val mode = if (summary.mode == SessionMode.LIVE) "Live 共看" else "文字深聊"
+        val line = "- ${HHMM.format(java.time.Instant.ofEpochMilli(summary.startedAt).atZone(java.time.ZoneId.systemDefault()))} | Gemini 会话 | " +
+            "$mode，$minutes 分钟，离开 ${summary.leaves} 次，拉回 ${summary.pullBacks} 次（${summary.reason.label}）"
+        scope.launch(Dispatchers.IO) { synchronized(app.memoryLock) { memory.appendToday(LocalDate.now(), line) } }
+        if (announce && summary.reason != EndReason.USER) {
+            overlay.showBubble(BubbleSpec("Gemini 会话结束了（${summary.reason.label}），聊了 $minutes 分钟。", textOnly = true)) {
+                handler.postDelayed({ if (convo == null && session == null) overlay.hideBubble() }, 5000)
+            }
+        }
+    }
+
+    private fun hideSessionPrompt() {
+        if (sessionPrompt != null) overlay.hideBubble()
+        sessionPrompt = null
+        lastSessionText = ""
     }
 
     // ---------- 信 ----------
@@ -558,5 +739,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     companion object {
         private val HHMM = DateTimeFormatter.ofPattern("HH:mm")
+        private const val PROMPT_COUNTDOWN = "countdown"
+        private const val PROMPT_ASK = "ask"
+        private const val PROMPT_MENU = "menu"
     }
 }

@@ -3,6 +3,7 @@ package cn.companion.pet.data
 import android.content.Context
 import cn.companion.pet.core.rhythm.RhythmConfig
 import cn.companion.pet.core.scene.AppLists
+import cn.companion.pet.core.session.SessionConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -32,6 +33,17 @@ class Settings(context: Context) {
     var heartbeatEnabled by bool("heartbeat", false)
     var heartbeatIntervalMin by int("heartbeat_interval", 20)
 
+    var sessionAutoStart by bool("session_auto_start", true)
+    var sessionAutoStartSec by int("session_auto_start_sec", 20)
+    var sessionPullBack by bool("session_pull_back", true)
+    var sessionGraceSec by int("session_grace_sec", 10)
+    var sessionAllowedGraceSec by int("session_allowed_grace_sec", 90)
+    var sessionAllowedApps by set("session_allowed_apps")
+
+    /** 进行中的会话（服务重启后接着守）：模式名，空字符串表示没有会话。 */
+    var sessionMode by str("session_mode", "")
+    var sessionStartedAt by long("session_started_at", 0L)
+
     var geminiPackage by str("gemini_pkg", "com.google.android.apps.bard")
     var geminiAutoSend by bool("gemini_auto_send", false)
     var ttsEnabled by bool("tts", false)
@@ -51,12 +63,18 @@ class Settings(context: Context) {
         quietEndMinute = quietEndMin,
     )
 
+    fun sessionConfig(): SessionConfig = SessionConfig(
+        graceMillis = sessionGraceSec.coerceIn(3, 600) * 1000L,
+        allowedGraceMillis = sessionAllowedGraceSec.coerceIn(3, 3600) * 1000L,
+    )
+
     fun appLists(): AppLists = AppLists(learningApps, feedApps, focusApps, excludeApps)
 
     private fun touched() { _changes.value = _changes.value + 1 }
 
     private fun str(key: String, def: String) = Pref({ prefs.getString(key, def) ?: def }, { prefs.edit().putString(key, it).apply() })
     private fun int(key: String, def: Int) = Pref({ prefs.getInt(key, def) }, { prefs.edit().putInt(key, it).apply() })
+    private fun long(key: String, def: Long) = Pref({ prefs.getLong(key, def) }, { prefs.edit().putLong(key, it).apply() })
     private fun bool(key: String, def: Boolean) = Pref({ prefs.getBoolean(key, def) }, { prefs.edit().putBoolean(key, it).apply() })
     private fun set(key: String) = Pref({ prefs.getStringSet(key, emptySet())!!.toSet() }, { prefs.edit().putStringSet(key, it).apply() })
 

@@ -2,6 +2,7 @@ package cn.companion.pet.a11y
 
 import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
+import cn.companion.pet.core.session.GeminiSession
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -20,7 +21,7 @@ object GeminiAutoSender {
             var found: AccessibilityNodeInfo? = null
             while (found == null) {
                 val root = service.rootInActiveWindow
-                if (root != null && root.packageName?.toString() == geminiPackage) found = findEditable(root)
+                if (root != null && root.packageName?.toString() in GeminiSession.packagesFor(geminiPackage)) found = findEditable(root)
                 if (found == null) delay(250)
             }
             found

@@ -25,7 +25,7 @@ import cn.companion.pet.data.Stats
 fun StatsTab(resumeTick: Int) {
     val stats = PetApp.instance.stats
     val days = remember(resumeTick) { stats.days() }
-    val kinds = listOf(Stats.Kind.SPOKE, Stats.Kind.REPLIED, Stats.Kind.IGNORED, Stats.Kind.GEMINI_TEXT, Stats.Kind.GEMINI_LIVE, Stats.Kind.API_CALLS)
+    val kinds = listOf(Stats.Kind.SPOKE, Stats.Kind.REPLIED, Stats.Kind.IGNORED, Stats.Kind.GEMINI_TEXT, Stats.Kind.GEMINI_LIVE, Stats.Kind.SESSIONS, Stats.Kind.PULLBACKS, Stats.Kind.API_CALLS)
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("回应率低：先改人设和钩子。回应了但没拉住：再调开口频率。", style = MaterialTheme.typography.bodySmall)
         if (days.isEmpty()) {

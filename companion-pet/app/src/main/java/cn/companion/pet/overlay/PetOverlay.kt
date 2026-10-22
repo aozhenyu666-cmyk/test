@@ -77,6 +77,15 @@ class PetOverlay(
     fun setListening(v: Boolean) { pet.listening = v; bubble.setMicLabel(v) }
     fun setHoldingLetter(v: Boolean) { pet.holdingLetter = v }
     fun attention() = pet.attention()
+    fun setInSession(v: Boolean) { pet.inSession = v }
+
+    /** 只换气泡文字（倒计时每秒更新），尺寸变化时重新摆位置。 */
+    fun updateBubbleText(text: String) {
+        if (!bubbleShown) return
+        bubble.setTextNow(text)
+        layoutBubble()
+        runCatching { wm.updateViewLayout(bubble, bubbleParams) }
+    }
 
     fun showBubble(spec: BubbleSpec, onFinishedTyping: (() -> Unit)? = null) {
         if (!petShown) return
