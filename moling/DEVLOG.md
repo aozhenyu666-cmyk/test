@@ -1426,7 +1426,7 @@
 **自动检查（实际跑出来的）**
 - `tools/core-tests`：**58 个测试类、590 个测试、0 失败 0 错误 0 跳过**。Gradle 8.9 + JDK 22，ASCII 路径 `C:/autopilot-b5-wt/tools/core-tests`；第一次 daemon OOM，第二次加 `-Xmx4g` 和 `kotlin.compiler.execution.strategy=in-process` 通过。core 没改，数字与第十五批基线一致。
 - App：`moling/gradlew.bat testDebugUnitTest`（`C:/autopilot-b5-wt/moling`，`ANDROID_HOME=C:\Android\Sdk`，`JAVA_HOME=jdk-22`，ASCII `GRADLE_USER_HOME=C:\gradlehome`）：**28 个测试类、293 个测试、0 失败 0 错误 0 跳过**；新增 `SystemToolRulesTest` 8 个（日历/勿扰/歌单能力状态、歌单缺失降级、三项独立、HH:mm 解析）。
-- CI：push 后由 `moling-android` 跑 `testDebugUnitTest assembleDebug`；开发分支 `release` 应为 skipped。结果以实际 run 为准。
+- CI：`moling-android` **build 通过、release skipped**（开发分支不发布）：[run 39730536281](https://github.com/aozhenyu666-cmyk/test/actions/runs/39730536281)。
 - 真机**未测**：本地没有 Android 真机/模拟器。
 
 **没做到 / 限制**
