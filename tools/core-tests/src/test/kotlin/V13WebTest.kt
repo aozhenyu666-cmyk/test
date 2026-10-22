@@ -73,6 +73,41 @@ class V13WebTest {
 
 
     @Test
+    fun canonicalKeepsQueryAndOnlyReusesSameUrl() {
+        val a = Sources.canonical("https://mp.weixin.qq.com/s?__biz=x&mid=1&idx=1&sn=aa&utm_source=wechat#rd")
+        val b = Sources.canonical("https://mp.weixin.qq.com/s?__biz=x&mid=2&idx=1&sn=aa")
+        assertNotEquals(a, b)
+        assertTrue(a.startsWith("https://mp.weixin.qq.com/s?"))
+        assertTrue(a.contains("mid=1"))
+        assertFalse(a.contains("utm_"))
+        assertFalse(a.contains("#"))
+        assertEquals(Sources.canonical("https://example.com/a/"), Sources.canonical("https://example.com/a#x"))
+        assertEquals(Sources.canonical("https://example.com:443/a"), Sources.canonical("https://example.com/a"))
+
+        // 只差一个参数的两篇公众号文章 → 两个来源
+        var st = SourceState()
+        st = Sources.put(st, ref("s-1", "https://mp.weixin.qq.com/s?mid=1", "第一篇"), "正文一")
+        st = Sources.put(st, ref("s-2", "https://mp.weixin.qq.com/s?mid=2", "第二篇"), "正文二")
+        assertEquals(2, st.sources.size)
+
+        // 两个 URL 返回同一段登录墙 → 仍是两个来源（不按正文 hash 合并）
+        var wall = SourceState()
+        wall = Sources.put(wall, ref("s-a", "https://e.com/a", "A", hash = "same"), "登录墙")
+        wall = Sources.put(wall, ref("s-b", "https://e.com/b", "B", hash = "same"), "登录墙")
+        assertEquals(2, wall.sources.size)
+
+        // 同一个规范化 URL 再次抓取：只更新 hash / 标题 / 时间，不悄悄换正文
+        var again = SourceState()
+        again = Sources.put(again, ref("s-1", "https://e.com/a?x=1", "旧标题", "h1", 10), "old body")
+        again = Sources.put(again, ref("s-2", "https://e.com/a?x=1#frag", "新标题", "h2", 20), "new body")
+        assertEquals(1, again.sources.size)
+        assertEquals("新标题", again.sources.first().title)
+        assertEquals("h2", again.sources.first().contentHash)
+        assertEquals(20, again.sources.first().fetchedAt)
+        assertEquals("old body", again.document(again.sources.first().id)?.text)
+    }
+
+    @Test
     fun sourceDedupeAttachDelete() {
         var st = SourceState()
         val r = ref("s-1", "https://example.com/a?x=1", "标题", Sources.hash("body"), 10)

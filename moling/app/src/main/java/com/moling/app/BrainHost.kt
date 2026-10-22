@@ -611,9 +611,9 @@ object BrainHost {
             val now = System.currentTimeMillis()
             val hash = com.moling.core.web.Sources.hash(page.text)
             val canonical = com.moling.core.web.Sources.canonical(page.finalUrl)
-            val old = com.moling.core.web.Sources.reuse(_sources.value, page.finalUrl, hash)
-            val ref = old ?: com.moling.core.web.SourceRef(
-                id = com.moling.core.web.Sources.refId("s", canonical, hash),
+            val old = com.moling.core.web.Sources.reuse(_sources.value, page.finalUrl)
+            val ref = com.moling.core.web.SourceRef(
+                id = old?.id ?: com.moling.core.web.Sources.refId("s", canonical, hash),
                 channel = com.moling.core.web.SourceChannel.WEB,
                 url = page.finalUrl,
                 title = page.title,

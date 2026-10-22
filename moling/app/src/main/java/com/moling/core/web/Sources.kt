@@ -62,17 +62,35 @@ object Sources {
     fun hash(text: String): String =
         MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }.take(32)
 
-    /** 相同内容/链接复用已有来源；返回 null 表示不需要新增。 */
-    fun reuse(st: SourceState, url: String, contentHash: String): SourceRef? {
+    /**
+     * 同一个规范化 URL 才算同一个来源；**不按正文 hash 合并**——
+     * 两篇只差 mid= 的文章、两个都返回登录墙的链接，都是两个来源。
+     */
+    fun reuse(st: SourceState, url: String): SourceRef? {
         val canon = canonical(url)
-        return st.sources.firstOrNull { (canon.isNotBlank() && canonical(it.url) == canon) || (contentHash.isNotBlank() && it.contentHash == contentHash) }
+        if (canon.isBlank()) return null
+        return st.sources.lastOrNull { canonical(it.url) == canon }
     }
 
     fun put(st: SourceState, ref: SourceRef, text: String): SourceState {
-        val existing = reuse(st, ref.url, ref.contentHash)
+        val existing = reuse(st, ref.url)
         if (existing != null) {
-            // 相同链接/内容复用已有来源，不新建一条；正文跟着刷新。
-            return st.copy(documents = st.documents.filterNot { it.sourceId == existing.id } + SourceDocument(existing.id, text.take(MAX_TEXT), text.toByteArray().size, ref.fetchedAt))
+            // 同一个 URL：更新 hash / 标题 / 时间 / 状态，不悄悄换掉已经存下的正文（换正文要显式刷新）
+            val updated = existing.copy(
+                title = ref.title.ifBlank { existing.title },
+                fetchedAt = ref.fetchedAt,
+                contentHash = ref.contentHash.ifBlank { existing.contentHash },
+                status = ref.status,
+                complete = ref.complete,
+                focusId = ref.focusId.ifBlank { existing.focusId },
+                snippet = ref.snippet.ifBlank { existing.snippet },
+            )
+            val docs = if (st.documents.any { it.sourceId == existing.id }) st.documents
+            else st.documents + SourceDocument(existing.id, text.take(MAX_TEXT), text.toByteArray().size, ref.fetchedAt)
+            return st.copy(
+                sources = st.sources.map { if (it.id == existing.id) updated else it },
+                documents = docs,
+            )
         }
         return st.copy(
             sources = (st.sources.filterNot { it.id == ref.id } + ref).takeLast(500),
@@ -91,11 +109,18 @@ object Sources {
         return st.copy(attachments = (st.attachments + SourceAttachment(materialId, sourceId, now)).takeLast(1000))
     }
 
+    /** 规范化链接：保留 query（只去掉 utm_*），丢掉 #…，去掉默认端口和末尾 /。 */
     fun canonical(raw: String): String = runCatching {
         val u = URI(raw.trim())
+        val scheme = (u.scheme ?: "").lowercase()
+        if (scheme != "http" && scheme != "https") return ""
         val host = u.host?.lowercase()?.removePrefix("www.") ?: return ""
-        val port = if (u.port > 0) ":" + u.port else ""
-        (u.scheme ?: "https").lowercase() + "://" + host + port + (u.path ?: "").trimEnd('/')
+        if (host.isBlank()) return ""
+        val port = if (u.port > 0 && !((scheme == "http" && u.port == 80) || (scheme == "https" && u.port == 443))) ":" + u.port else ""
+        val query = (u.rawQuery ?: "").split('&')
+            .filter { it.isNotBlank() && !it.startsWith("utm_", ignoreCase = true) }
+            .joinToString("&")
+        scheme + "://" + host + port + (u.rawPath ?: "").trimEnd('/') + if (query.isNotBlank()) "?" + query else ""
     }.getOrDefault("")
 
     /**
