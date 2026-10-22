@@ -1184,7 +1184,7 @@
 分支 `deepseek/moling-outbrain`，从 W10 `4f3c905` 拉出。**A1–A3 核心完成 + 最小 UI 接线；A4 只做接口 + 拒绝降级 + 文档；A5/A6 未做。**
 
 **任务号与实现**
-- **A1 会话状态机**：`core/talk/Outbrain.kt`（Endpoint/Router/EntryPack/EntryMaterial/EntryBlock/OutbrainSession/ActorResult/OutbrainState/Codec）、`core/talk/OutbrainMachine.kt`（PREPARED→OPENED→WAITING_RESULT→RESULT_RECEIVED→REVIEWED，另有 CANCELLED/EXPIRED）。会话绑定 sessionId/focusId/focusRevision/payloadHash/起止时间；prepare 按“同一焦点版本 + 同一端点 + 同一份进场包”幂等；重启 `recover` 保留等待；过期仍可人工归档结果（只进历史，不改过期状态、不覆盖当前焦点）。
+- **A1 会话状态机**：`core/talk/Outbrain.kt`（Endpoint/Router/EntryPack/EntryMaterial/EntryBlock/OutbrainSession/ActorResult/OutbrainState/Codec）、`core/talk/OutbrainMachine.kt`（PREPARED→OPENED→WAITING_RESULT→RESULT_RECEIVED→REVIEWED，另有 CANCELLED/EXPIRED）。会话绑定 sessionId/focusId/focusRevision/payloadHash/起止时间；prepare 按“同一焦点版本 + 同一端点 + 同一份进场包”幂等；重启 `recover` 保留等待；过期仍可人工归档结果（直接收只进历史，不改过期状态、不覆盖当前焦点；第十四批加了“手动接回” `reopen`，接回后再收才落案板）。
 - **三条传输**：① 分享/复制（进场包文本 + `[[外脑:ob-…]]` 标记，用户手动送出，**实际就是复制并打开外脑 App，不是自动发**）；② 配置的模型 API（`BrainHost.outbrainAskApi` 复用 `MolingAsk` 现有凭据、超时与用量记账，带同一 sessionId）；③ 联络站 MCP **只做了“收”**：`RelaySync.routeOutbrain` 把带标记的收件箱条目先交给外脑会话认领，认领过的不再重复交大脑吸收；**没有把进场包推到黑板**，发还是①的复制+打开。都未配置/断网时明确失败并保留会话，不伪造外脑回复。
 - **选路**：`OutbrainRouter` 按“需要的能力 + configured + 用户偏好（端点排序/传输偏好）”选，不按模型名硬编码猜能力。
 - **A2 进场包**：问题、目标、体系图主干（`Workbench.atlasLines`）、最大缺口、材料摘要（≤6 条 × 400 字）、待审草稿块（≤4 块 × 500 字，只取未采用）、回合制契约、返回格式、来源索引；整包 3500 字封顶；敏感材料默认不放，预览可逐条去掉；不把整库复制给外部服务。胶囊（`OverlayService`）显示外脑状态，收线回收线卡。
