@@ -215,6 +215,8 @@ object RadioHost {
         val segmentId = seg.id
         val generation = s.generation
         ensureTick()
+        // 播之前再看一眼状态机：停止 / 跳过 / 换会话之后，旧回调不能出声。
+        if (!engine.accepts(sessionId, segmentId, generation)) return
         // 拿不到音频焦点就只出文字：段按 deadline 往下走，不硬外放。
         if (!takeFocus()) return
         Speaker.speak(seg.text) {
