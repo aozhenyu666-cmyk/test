@@ -41,7 +41,8 @@ object RelaySync {
     @Volatile private var lastAt = 0L
     @Volatile private var pushedHash = 0
 
-    data class Result(val status: String, val absorbed: List<Absorbed>)
+    /** [pushed] = 这次真的把黑板推上去了（和收件箱有没有收成功分开：推送成功但收件箱失败时仍算推上去了）。 */
+    data class Result(val status: String, val absorbed: List<Absorbed>, val pushed: Boolean = false)
 
     suspend fun sync(
         store: SettingsStore,
@@ -57,9 +58,10 @@ object RelaySync {
         if (!r.ready()) return null
         if (!force && now - lastAt < EVERY_MS) return null
         lastAt = now
+        // 推送结果要能单独报出去（外脑会话“推到联络站”只说推上去了，不说外脑已读）。
+        var pushed = false
         return try {
             val (text, qs) = board()
-            var pushed = false
             if (force || text.hashCode() != pushedHash) {
                 val body = buildJsonObject {
                     put("text", text)
@@ -94,14 +96,15 @@ object RelaySync {
                 if (inbox.isNotEmpty() && !ok) append("（模型没接上，下次再收）")
             }
             store.setRelayStatus(status)
-            Result(status, results)
+            Result(status, results, pushed)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "同步失败", e)
             val status = "同步失败：${e.message ?: e.javaClass.simpleName}"
             store.setRelayStatus(status)
-            Result(status, emptyList())
+            // 黑板推上去了、后面收件箱才失败：推送这件事仍然算数，不能报成“没推上去”。
+            Result(status, emptyList(), pushed)
         }
     }
 

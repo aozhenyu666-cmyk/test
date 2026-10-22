@@ -71,6 +71,7 @@ import com.moling.core.talk.OutbrainEndpoint
 import com.moling.core.talk.OutbrainRoute
 import com.moling.core.talk.OutbrainRouter
 import com.moling.core.talk.OutbrainState
+import com.moling.core.talk.OutbrainStatus
 import com.moling.core.talk.OutbrainTransport
 import com.moling.core.talk.ReceiveOutcome
 import com.moling.core.mind.MindState
@@ -522,30 +523,45 @@ object BrainHost {
     }
 
     /** 和联络站同步一次（心跳里每 10 分钟；贯通页点“同步”时 [force]）。没设置返回 null。 */
-    suspend fun relay(now: Long = System.currentTimeMillis(), force: Boolean = true): String? {
+    suspend fun relay(now: Long = System.currentTimeMillis(), force: Boolean = true): String? =
+        relayResult(now, force)?.status
+
+    /**
+     * 真的同步一次，把整个结果给调用方（外脑“推到联络站”要知道黑板到底推没推上去）。
+     * 黑板 = 她的交接包 + 正在等结果的联络站外脑会话（Outbrain.relayBoard）。
+     */
+    private suspend fun relayResult(now: Long, force: Boolean): com.moling.app.mirror.RelaySync.Result? {
         if (!ready) return null
         val r = withContext(Dispatchers.IO) {
             com.moling.app.mirror.RelaySync.sync(
                 settings, now, force,
-                board = { brain.handoff(now) to brain.state().questions },
-                seen = { brain.state().mirrorSeen },
-                routeOutbrain = { items ->
-                    val handled = mutableSetOf<String>()
-                    val waiting = Outbrain.waiting(outbrain.state()).map { it.id }.toSet()
-                    items.forEach { item ->
-                        val sid = Outbrain.taggedSessionId(item.text) ?: return@forEach
-                        if (sid !in waiting) return@forEach
-                        val got = outbrain.receive(Outbrain.clean(item.text), now, sessionId = sid, source = "relay")
-                        if (got is PortResult.Ok) handled += item.id
-                    }
-                    handled
+                board = {
+                    val text = brain.handoff(now)
+                    val out = Outbrain.relayBoard(outbrain.state(), now)
+                    (if (out.isBlank()) text else text + "\n\n" + out) to brain.state().questions
                 },
+                seen = { brain.state().mirrorSeen },
+                // B4：带 [[外脑:ob-…]] 回来的按会话认领（已取消 / 过期 → 只进历史，不混进大脑的材料）。
+                routeOutbrain = { items -> outbrain.receiveRelayTagged(items.map { it.id to it.text }, now) },
                 absorb = { items -> io("absorb", { Absorbed() }) { brain.absorb(items, now) } },
             )
         } ?: return null
+        // 黑板推上去了：这次真带上的 OPENED 联络站会话都算“推上去了”（外脑还没来读，仍然不是已读）。
+        // 放在这里而不是只放在“推到联络站”按钮里：推送失败后由心跳补推成功也算数。
+        if (r.pushed) {
+            val ids = Outbrain.relayBoardSessions(outbrain.state(), now)
+                // OPENED = 刚点“推到联络站”；没标的 WAITING = 旧版本留下的“复制并打开”会话，这次补推上也记上。
+                .filter { it.status == OutbrainStatus.OPENED || (it.status == OutbrainStatus.WAITING_RESULT && !Outbrain.pushedToBoard(it)) }
+                .map { it.id }
+            if (ids.isNotEmpty()) {
+                withContext(Dispatchers.IO) {
+                    ids.forEach { id -> runCatching { outbrain.relayPushed(id, now) } }
+                }
+            }
+        }
         refreshState()
         tellAbsorbed(r.absorbed)
-        return r.status
+        return r
     }
 
     /** 收件箱里有回答 / 要告诉他的事：发一条通知。 */
@@ -1234,6 +1250,45 @@ object BrainHost {
                 source = source,
             )
         }
+
+    /**
+     * B4：把联络站路线的进场包真的推到黑板（复用 RelaySync），回来靠 [[外脑:ob-…]] 按会话认领。
+     * 成功只说“推上去了”：推上黑板不代表外脑读到了。
+     */
+    suspend fun outbrainSendRelay(sessionId: String): String {
+        if (!ready) return "还没准备好"
+        val now = System.currentTimeMillis()
+        val session = outbrain.state().sessions.firstOrNull { it.id == sessionId } ?: return "这个外脑会话不在了"
+        if (session.transport != OutbrainTransport.RELAY) return "这个会话不是联络站路线"
+        when (session.status) {
+            OutbrainStatus.CANCELLED -> return "已经取消了，不再推"
+            OutbrainStatus.EXPIRED -> return "到点没回来：要接着推，先在收线卡里手动接回"
+            OutbrainStatus.RESULT_RECEIVED, OutbrainStatus.REVIEWED -> return "结论已经回来了，不用再推"
+            OutbrainStatus.WAITING_RESULT ->
+                if (Outbrain.pushedToBoard(session)) return "已经在等结果了：黑板上有这一包，到点没回来才撤下"
+            OutbrainStatus.PREPARED, OutbrainStatus.OPENED -> Unit
+        }
+        if (!settings.relay().ready()) return "联络站还没配置：先去贯通页填地址和令牌"
+        // 先标成 OPENED（黑板只放推上去 / 在等的 RELAY 会话），再强制同步一次。
+        when (val opened = io<PortResult<com.moling.core.talk.OutbrainSession>?>("outbrainRelayOpen", { null }) {
+            outbrain.open(sessionId, now)
+        }) {
+            null -> return "刚才没接上，再试一次"
+            is PortResult.Failed -> return opened.error.message
+            is PortResult.Ok -> Unit
+        }
+        val r = relayResult(now, force = true) ?: return "联络站还没配置：先去贯通页填地址和令牌"
+        if (!r.pushed) {
+            io("outbrainRelayFailed", {}) { outbrain.markError(sessionId, now, "没推上黑板") }
+            return "这次没推上去：" + r.status + "（之后同步还会再试）"
+        }
+        // relayResult 推送成功时已经把这次带上的 OPENED 会话标成“推上去了”。
+        return if (r.status.startsWith("同步失败")) {
+            "进场包推上去了（收件箱这次没连上，下次再收）"
+        } else {
+            "进场包推上去了（等外脑来读，不是已读）"
+        }
+    }
 
     suspend fun outbrainClose(sessionId: String): PortResult<com.moling.core.talk.OutbrainSession> =
         io("outbrainClose", { offline() }) { outbrain.close(sessionId, System.currentTimeMillis()) }

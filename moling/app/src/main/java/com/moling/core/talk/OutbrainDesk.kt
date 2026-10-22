@@ -126,6 +126,11 @@ class OutbrainDesk(
         Outbrain.reopen(st, sessionId, now)
     }
 
+    /** B4：联络站的进场包推上黑板之后调用。只记“推上去了”，不代表外脑读过。 */
+    suspend fun relayPushed(sessionId: String, now: Long): PortResult<OutbrainSession> = step(now) {
+        Outbrain.relayPushed(st, sessionId, now)
+    }
+
     suspend fun reviewed(sessionId: String, now: Long): PortResult<OutbrainSession> = step(now) {
         Outbrain.reviewed(st, sessionId, now)
     }
@@ -199,6 +204,20 @@ class OutbrainDesk(
                 PortResult.Ok(outcome to null)
             }
         }
+    }
+
+    /**
+     * B4：联络站收件箱回来的一批（条目 id + 原文）。带 [[外脑:ob-…]] 标记的按会话认领：
+     * 还在等的落案板，已取消 / 过期 / 已复查的只进历史（也不混进大脑的材料）；
+     * 没标记的不认领，留给大脑按原来的收件箱规则处理。返回认领的条目 id。
+     */
+    suspend fun receiveRelayTagged(items: List<Pair<String, String>>, now: Long): Set<String> {
+        val handled = mutableSetOf<String>()
+        for ((id, text) in items) {
+            val sid = Outbrain.taggedSessionId(text) ?: continue
+            if (receive(text, now, sessionId = sid, source = "relay") is PortResult.Ok) handled += id
+        }
+        return handled
     }
 
     /** 轻量收线卡上的三个选项之外，“稍后”什么都不用做；这里给“他也说不清”的情况标一下。 */
