@@ -215,6 +215,28 @@ class ChatRepo(private val context: Context, private val store: Store, private v
                 is com.zongkong.core.ApiResult.Err -> "看不了：${r.message}"
             }
         }
+        override suspend fun confirmPlan(): String {
+            val now = System.currentTimeMillis()
+            val gs = store.status(now).gates.firstOrNull { it.gate.id == Actions.PLAN_GATE } ?: return "今天没有“今日部署”这道关卡"
+            if (gs.done) return "今日部署今天已经过了"
+            val planned = com.zongkong.core.plan.QuickPlan.today(store.work.value, now, store.zone).size
+            if (planned == 0) return "今天还没有排了时间的事：先 add_action 排上至少一段，再确认"
+            val passed = actions.autoVerify(confirmPlan = true)
+            return if (gs.gate.title in passed) "今日部署过了（今天排了 $planned 段，用户在对话里确认）"
+            else "还没过：${gs.gate.title}要求 ${gs.gate.evidenceMin} 段以上，现在 $planned 段。再排一段"
+        }
+        override suspend fun closeDay(tomorrow: String, note: String): String = describe(actions.submitDayList(tomorrow, note), "日终验收")
+        override suspend fun submitGate(gate: String, text: String): String {
+            val g = store.config.value.gates.firstOrNull { it.id == gate || it.title == gate || it.title.contains(gate) }
+                ?: return "没有这道关卡：$gate（list_gates 看有哪些）"
+            return describe(actions.submit(g.id, text), g.title)
+        }
+        private fun describe(r: Actions.SubmitResult, title: String): String = when (r) {
+            is Actions.SubmitResult.Judged -> if (r.verdict.pass) "「$title」通过：${r.verdict.feedback}" else "「$title」没通过：${r.verdict.feedback}" +
+                (r.verdict.missing.takeIf { it.isNotEmpty() }?.let { "（还差：${it.joinToString("；")}）" } ?: "")
+            is Actions.SubmitResult.Unavailable -> "「$title」这会儿验不了：${r.reason}" + if (r.degradedLeft > 0) "（可以让用户去关卡页用降级验收）" else ""
+            is Actions.SubmitResult.Refused -> "「$title」：${r.message}"
+        }
         override fun lastPhoto(): com.zongkong.core.work.ProofItem? =
             _log.value.messages.lastOrNull { it.role == ChatMsg.USER && it.image.isNotBlank() }?.image?.let { Photos.fromStored(it) }
         override fun usedPhotos(): Map<String, String> = (context.applicationContext as com.zongkong.app.ZkApp).proofs.usedPhotos()

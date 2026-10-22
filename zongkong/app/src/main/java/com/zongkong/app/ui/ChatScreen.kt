@@ -181,6 +181,10 @@ fun ChatScreen(nav: NavHostController) {
                     DropdownMenuItem(text = { Text("它记住的事（${log.memory.size}）") }, onClick = { menu = false; showMemory = true })
                     DropdownMenuItem(text = { Text("清空对话") }, onClick = { menu = false; chat.clear() })
                     DropdownMenuItem(text = { Text("AI 接口设置") }, onClick = { menu = false; nav.navigate("settings/ai") })
+                    DropdownMenuItem(
+                        text = { Text(if (config.startOnChat) "打开 App 先到“今天”页" else "打开 App 先到总控对话") },
+                        onClick = { menu = false; app.store.updateConfig { it.copy(startOnChat = !it.startOnChat) } },
+                    )
                 }
             }
         }
@@ -202,6 +206,9 @@ fun ChatScreen(nav: NavHostController) {
             }
             return@Column
         }
+
+        // 今天的状况：不离开对话就看得到（0.14）
+        ChatTodayBar(nav) { chat.send(it) }
 
         LazyColumn(
             state = list,
@@ -272,6 +279,9 @@ fun ChatScreen(nav: NavHostController) {
                 TextButton(onClick = { image = "" }) { Text("×", color = sig.muted) }
             }
         }
+
+        // ---------- 常用说法（空着时） ----------
+        if (input.isEmpty() && image.isBlank() && !busy && items.isNotEmpty()) ChatStarters(send = { chat.send(it) }, fill = { input = it })
 
         // ---------- 输入栏 ----------
         Surface(

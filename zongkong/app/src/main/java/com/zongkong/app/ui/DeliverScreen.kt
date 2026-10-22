@@ -230,12 +230,16 @@ fun CompleteScreen(key: String, nav: NavHostController) {
                     }
                     Text(savedText, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("delivery-summary"))
                 }
-                if (t != null) Button(onClick = {
+                Button(onClick = {
+                    app.chatDraft = "我刚交付了「${a.title}」。下一步做什么？"
+                    nav.navigate("chat") { popUpTo("home") }
+                }, modifier = Modifier.fillMaxWidth().testTag("delivery-ask")) { Text("问总控下一步") }
+                if (t != null) OutlinedButton(onClick = {
                     app.prompt = app.actions.work.gptPrompt(t.key, "我刚完成了「${a.title}」，结果：${savedText.trim()}。请根据结果判断下一步。")
                     app.promptTitle = t.title
                     app.store.awaitingGpt = t.key
                     nav.navigate("gpt")
-                }, modifier = Modifier.fillMaxWidth()) { Text("带着结果去 GPT 判断下一步") }
+                }, modifier = Modifier.fillMaxWidth()) { Text("想深聊：带去 GPT") }
                 OutlinedButton(onClick = { nav.navigate("home") { popUpTo("home") { inclusive = true } } }, modifier = Modifier.fillMaxWidth()) { Text("回首页") }
             }
         }

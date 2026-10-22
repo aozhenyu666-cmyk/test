@@ -38,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
@@ -204,8 +205,12 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
+            // 主要跟总控对话：打开就进对话（配了 AI 才行；没配就先到“今天”）
+            val start = remember {
+                context.zk.store.config.value.let { if (it.startOnChat && it.ai.ready) "chat" else "home" }
+            }
             NavHost(
-                nav, startDestination = "home",
+                nav, startDestination = start,
                 enterTransition = {
                     if (initialState.destination.route in tabRoutes && targetState.destination.route in tabRoutes) {
                         fadeIn(tween(NAV_MS))

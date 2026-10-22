@@ -70,6 +70,8 @@ class LoopTest {
         app.store.updateConfig {
             Config(
                 onboarded = true, silenceHours = 0, dailyQuotaMin = 0, notion = NotionConfig(token = "secret_test", baseUrl = sim.baseUrl),
+                // 老的场景从“今天”页开始；0.14 的对话优先测试自己打开
+                startOnChat = false,
                 // 测试期间不让每日总控时间、失联升级、参谋主动找人插进来
                 hq = com.zongkong.core.hq.HqConfig(enabled = false, escalation = false, proactive = false, vibrate = false),
                 // 老的场景不受“挣来的娱乐 / 打开就答题”影响；0.10 的测试自己打开
@@ -1182,6 +1184,44 @@ class LoopTest {
         go("action/$key")
         waitFor(hasTestTag("action-delivery"), 10_000, "行动页的交付")
         shot("e2e-114-action-delivery")
+        llm.shutdown()
+    }
+
+    /**
+     * 0.14 对话为中心：打开就是总控对话，顶上看得到今天；说“排今天” → 总控排成时段 → 用户说“好” → 今日部署过了。
+     */
+    @Test
+    fun chatRunsTheDay() {
+        val bj = app.store.zone
+        val h = java.time.Instant.ofEpochMilli(System.currentTimeMillis()).atZone(bj).hour
+        val start = (h + 1).coerceAtMost(22)
+        val llm = mockLlm(
+            toolTurn("add_action" to """{"title":"刷 20 道资料分析","time":"今天 $start:00-${start + 1}:00","criteria":"做完并对答案"}"""),
+            sayTurn("排上了：今天 $start:00-${start + 1}:00 刷 20 道资料分析。就这样？\n【选项】好｜再改改"),
+            toolTurn("confirm_plan" to "{}"),
+            sayTurn("今日部署过了。$start:00 我叫你。"),
+        )
+        app.store.updateConfig { it.copy(startOnChat = true, ai = com.zongkong.core.AiConfig(llm.url("/v1").toString(), "sk-test", "mock-model")) }
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java))
+        // 打开就是对话，顶上是今天
+        waitFor(hasTestTag("chat-today"), 10_000, "对话顶上的今天")
+        waitFor(hasTestTag("chat-input"), 5_000, "对话输入框")
+        shot("e2e-120-chat-landing")
+        compose.onNodeWithTag("chat-input").performTextInput("帮我把今天排一下")
+        compose.onNodeWithTag("chat-send").performClick()
+        waitText("就这样？", 20_000)
+        val a = app.store.work.value.actions().single { it.title == "刷 20 道资料分析" }
+        assertEquals(com.zongkong.core.plan.QuickPlan.DAILY, app.store.work.value.rec(a.threadKey)!!.title)
+        // 顶上的今天跟着变：下一段就是它
+        waitFor(hasTestTag("chat-today") and hasText("刷 20 道资料分析", substring = true), 10_000, "顶栏显示下一段")
+        settle()
+        shot("e2e-121-chat-planned")
+        compose.onNode(hasText("好")).performClick()
+        waitText("今日部署过了", 20_000)
+        settle()
+        shot("e2e-122-chat-confirmed")
+        val gate = app.store.status().gates.firstOrNull { it.gate.id == com.zongkong.app.data.Actions.PLAN_GATE }
+        if (gate != null && gate.phase != com.zongkong.core.GatePhase.NOT_OPEN) assertTrue("今日部署应已通过：${gate.phase}", gate.done)
         llm.shutdown()
     }
 }

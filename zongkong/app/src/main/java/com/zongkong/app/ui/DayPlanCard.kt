@@ -93,7 +93,7 @@ fun DayPlanCard(nav: NavHostController, modifier: Modifier = Modifier) {
 
             if (items.isEmpty()) {
                 WaveLines(sig.plan, Modifier.fillMaxWidth().height(44.dp))
-                Hint("今天还没排。说一句排上；或者让 GPT 把一整天排好，导进来。排上的每一段：到点叫你，过点没开始娱乐先关，改个时间就解开。")
+                Hint("今天还没排。说一句排上；或者让总控在对话里帮你排一整天。排上的每一段：到点叫你，过点没开始娱乐先关，改个时间就解开。")
             }
             items.forEach { (a, t) ->
                 val (s, e) = t
@@ -114,11 +114,11 @@ fun DayPlanCard(nav: NavHostController, modifier: Modifier = Modifier) {
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                // 主要跟总控说：让它在对话里问清楚、排好、你确认（0.14）
                 TextButton(onClick = {
-                    app.prompt = QuickPlan.gptPrompt(app.store.work.value, System.currentTimeMillis(), zone)
-                    app.promptTitle = "排今天"
-                    nav.navigate("gpt")
-                }, modifier = Modifier.testTag("plan-gpt")) { Text("让 GPT 排一整天", color = sig.think) }
+                    app.chatDraft = "帮我把今天排一下"
+                    nav.navigate("chat")
+                }, modifier = Modifier.testTag("plan-ask")) { Text("让总控排一整天", color = sig.ai) }
                 TextButton(onClick = { nav.navigate("import") }) { Text("导入 GPT 排好的", color = sig.muted) }
             }
         }

@@ -113,6 +113,13 @@ interface AgentEnv {
     fun screenshots(from: Long, to: Long): List<com.zongkong.core.boss.Shot> = emptyList()
     /** 让识图模型看一张图，回答 [question]。 */
     suspend fun describeImage(path: String, question: String): String = "这个环境看不了图"
+    /** 对话里确认了今天的安排：算作“今日部署”（本人确认）。返回给参谋看的一句话。 */
+    suspend fun confirmPlan(): String = "这个环境确认不了部署"
+    /** 晚上收尾：交日终验收（今天的清单 + 明天第一步 + 一句话）。 */
+    suspend fun closeDay(tomorrow: String, note: String): String = "这个环境交不了日终验收"
+    /** 交一道关卡（文字）。 */
+    suspend fun submitGate(gate: String, text: String): String = "这个环境交不了关卡"
+
     /** 对话里用户最近发的那张照片（交付证据用）。 */
     fun lastPhoto(): com.zongkong.core.work.ProofItem? = null
     /** 交过的照片：指纹 → 那一步的标题（同一张不能交两次）。 */
@@ -177,6 +184,23 @@ class ZkTools(private val env: AgentEnv) {
         ToolSpec(
             "get_thread", "看一件事的详情：为什么、当前判断、断点、下一步、完成依据、全部行动（带行动键）、最近记录。",
             listOf(Param("thread", "string", "事项编号（ZK-XXXX）或标题", required = true)),
+        ),
+        ToolSpec(
+            "confirm_plan",
+            "用户在对话里确认了今天的安排后调用：算作“今日部署”（本人确认，解除早上的严管）。前提：今天至少一段排了时间（先 add_action / reschedule_action）。只有用户明确说“就这样 / 可以 / 好”时才调，不要替他确认。",
+        ),
+        ToolSpec(
+            "close_day",
+            "晚上收尾：照今天的清单交“日终验收”。先 today_report 和用户过一遍，问清明天第一步，再调这个。",
+            listOf(
+                Param("tomorrow", "string", "明天第一步（用户说的，具体到能马上开始）", required = true),
+                Param("note", "string", "用户对今天的一句话（可空，用他的原话）"),
+            ),
+        ),
+        ToolSpec(
+            "submit_gate",
+            "替用户交一道写字的关卡（比如“推进一个判断”）。text 必须是用户在对话里说的内容（可以整理，不能编）。list_gates 看有哪些、交了没有。",
+            listOf(Param("gate", "string", "关卡 id 或标题", required = true), Param("text", "string", "用户的内容", required = true)),
         ),
         ToolSpec("today_report", "今天的清单：排了的每一步做了没有（✓ 做完 / ○ 没做 / ✗ 卡住 / → 改期）、另外做了什么、到期的约定、做事和娱乐时长、明天第一步。照着记录列，用户问今天做了什么、哪些没完成、日终时先调这个。"),
         ToolSpec(
@@ -588,6 +612,14 @@ class ZkTools(private val env: AgentEnv) {
                     ),
                     "列了今天的清单",
                 )
+                "confirm_plan" -> env.confirmPlan().let { ToolResult(it, it) }
+                "close_day" -> a.s("tomorrow").ifBlank { return ToolResult.fail("先问清明天第一步") }
+                    .let { env.closeDay(it, a.s("note")) }.let { ToolResult(it, "交日终验收") }
+                "submit_gate" -> {
+                    val g = a.s("gate").ifBlank { return ToolResult.fail("gate 不能空") }
+                    val text = a.s("text").ifBlank { return ToolResult.fail("text 不能空：用用户说的内容") }
+                    env.submitGate(g, text).let { ToolResult(it, "交关卡「$g」") }
+                }
                 "add_expense" -> addExpense(a)
                 "ledger_summary" -> ToolResult(com.zongkong.core.ledger.Ledger.brief(env.ledger(), env.now(), env.zone), "看了账本")
                 "remove_expense" -> {

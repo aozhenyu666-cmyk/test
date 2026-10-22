@@ -315,7 +315,18 @@ object HqRunner {
         val hypo = store.vein.value.nodes.filter { it.status == com.zongkong.core.vein.VStatus.HYPO.label }
             .maxByOrNull { com.zongkong.core.vein.Veins.daysBetween(it.checks.lastOrNull()?.date ?: it.created, store.dateToday(now)) }
         val intake = com.zongkong.core.info.Intake.stats(store.work.value, store.intake.value, now, store.zone)
+        // 今天还差的那一步最要紧：早上没部署就先排今天，晚上没收尾就先收尾（0.14：一天的主线在对话里走完）
+        val gates = store.status(now).gates.filter { !it.done && it.phase != com.zongkong.core.GatePhase.NOT_OPEN }
+        val needPlan = gates.any { it.gate.id == com.zongkong.app.data.Actions.PLAN_GATE }
+        val needClose = gates.any { it.gate.id == "hq_review" } && minute >= 20 * 60
+        val focusLine = when {
+            needPlan -> "今天还没部署：先问他今天有哪些固定安排、想做哪几件，帮他排成具体时段，他说好就 confirm_plan。"
+            needClose -> "今天还没收尾：today_report 和他过一遍，问明天第一步，close_day。"
+            else -> ""
+        }
         val fallback = when {
+            needPlan -> "今天还没排：几点做什么？说一句，我帮你排上。"
+            needClose -> "今天收个尾：做完了哪些、明天第一步是什么？"
             main != null -> "「${main.title}」现在到哪一步了？回一句就行。"
             intake.backlog > 0 -> "收集箱里有 ${intake.backlog} 条还没提炼。挑一条，用一句话说它对你有什么用。"
             hypo != null -> "脉络里「${hypo.title}」还是假设。这周验证了吗？"
@@ -323,7 +334,8 @@ object HqRunner {
         }
         app.chat.proactive(
             "checkin",
-            "[定时·问候] 主动找用户说一句（这次一定要说，不能回“无事”）。先看档案、今天的主线、未结的约定、intake_status、vein_due，" +
+            "[定时·问候] 主动找用户说一句（这次一定要说，不能回“无事”）。" + focusLine +
+                "没有这类事，就先看档案、今天的主线、未结的约定、intake_status、vein_due，" +
                 "挑最该问的一件，问一个具体、马上能回答的问题；如果有约定快到点，就问那个。一两句，最后给【选项】。态度按档案里的来。",
             fallback = fallback,
         )

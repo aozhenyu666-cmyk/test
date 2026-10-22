@@ -110,6 +110,8 @@ data class NotionConfig(
 
 @Serializable
 data class Config(
+    /** 打开 App 先到总控对话（0.14；没配 AI 时还是先到“今天”）。 */
+    val startOnChat: Boolean = true,
     val gates: List<Gate> = Defaults.gates(),
     /** 严管时拦截的应用包名。 */
     val blocked: Set<String> = emptySet(),

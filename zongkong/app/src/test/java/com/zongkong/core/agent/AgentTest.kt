@@ -149,6 +149,27 @@ class AgentTest {
     }
 
     @Test
+    fun dayToolsGoThroughEnv() = runTest {
+        val calls = mutableListOf<String>()
+        val env = object : FakeEnv() {
+            override suspend fun confirmPlan(): String { calls += "plan"; return "今日部署过了" }
+            override suspend fun closeDay(tomorrow: String, note: String): String { calls += "close:$tomorrow|$note"; return "「日终验收」通过" }
+            override suspend fun submitGate(gate: String, text: String): String { calls += "gate:$gate"; return "「推进一个判断」通过" }
+        }
+        val tools = ZkTools(env)
+        assertTrue(tools.run("confirm_plan", "{}").text.contains("过了"))
+        // 明天第一步不能空
+        assertTrue(!tools.run("close_day", """{"note":"还行"}""").ok)
+        assertTrue(tools.run("close_day", """{"tomorrow":"9 点改简历第二段","note":"还行"}""").ok)
+        assertTrue(!tools.run("submit_gate", """{"gate":"think_one"}""").ok)
+        assertTrue(tools.run("submit_gate", """{"gate":"think_one","text":"资料分析先练增长率，因为错得最多"}""").ok)
+        assertEquals(listOf("plan", "close:9 点改简历第二段|还行", "gate:think_one"), calls)
+        // 参谋看得到这三个工具
+        val names = tools.specs.map { it.name }
+        assertTrue(names.containsAll(listOf("confirm_plan", "close_day", "submit_gate")))
+    }
+
+    @Test
     fun completeWithChatPhotoKeepsProofAndRefusesReuse() = runTest {
         val saved = mutableListOf<com.zongkong.core.work.Delivery>()
         var photo: com.zongkong.core.work.ProofItem? = null
