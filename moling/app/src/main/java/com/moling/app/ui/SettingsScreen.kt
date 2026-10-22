@@ -103,6 +103,11 @@ fun SettingsScreen(onDone: () -> Unit) {
     var gateOn by remember { mutableStateOf(store.gateOn()) }
     var whisperOn by remember { mutableStateOf(store.whisperOn()) }
     var fadeOn by remember { mutableStateOf(store.fadeOn()) }
+    // 联网采蜜（B1）：搜索密钥 + 「每天自动一份」（默认关）
+    var braveKey by remember { mutableStateOf(store.braveKey()) }
+    var forageAutoOn by remember { mutableStateOf(store.forageAutoOn()) }
+    var prepAutoOn by remember { mutableStateOf(store.prepAutoOn()) }
+    val forageNow by BrainHost.forage.collectAsState()
     var disabled by remember { mutableStateOf(store.disabledModalities()) }
     var eager by remember { mutableStateOf(store.eagerness()) }
     var faceMood by remember { mutableStateOf(com.moling.core.live.Mood.POUT) }
@@ -178,6 +183,9 @@ fun SettingsScreen(onDone: () -> Unit) {
                             put("v", 1)
                             put("moling", readTextOrEmpty(File(dir, "moling.json")))
                             put("director", readTextOrEmpty(File(dir, "director.json")))
+                            // G5：案板（稿子 / 材料）和来源库也带上；计划账本、外脑会话、训练通行证不带（免得恢复后重复执行）
+                            put("workbench", readTextOrEmpty(File(dir, "workbench.json")))
+                            put("sources", readTextOrEmpty(File(dir, "sources.json")))
                         }.toString()
                         val out = context.contentResolver.openOutputStream(uri) ?: error("打不开要写的文件")
                         out.use { it.write(text.toByteArray(Charsets.UTF_8)) }
@@ -244,6 +252,7 @@ fun SettingsScreen(onDone: () -> Unit) {
                 liveOn = liveOn, eager = eager.label, zk = zkLabel(brainState.lastStatus), tier = tierShort(brainState.userMax),
                 background = backgroundOn, usageAllowed = usageAllowed,
                 notion = store.notion().ready(), relay = store.relay().ready(),
+                forageAuto = forageAutoOn, searchReady = braveKey.isNotBlank(),
                 memory = fileSummary(File(File(context.filesDir, "mind"), "moling.json")),
                 open = { section = it },
                 openBridge = { bridgeOpen = true },
@@ -279,6 +288,73 @@ fun SettingsScreen(onDone: () -> Unit) {
                 supportingText = { Text("DeepSeek 填 deepseek-chat。") },
             )
 
+            }
+            if (section == "forage") {
+            Text("联网采蜜", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "只在你点案板的「去查一下」时搜：从这件事的问题（没有就体系图最大的缺口）出发，最多两路搜索，" +
+                    "抓到的正文进来源库，再整理成一份「发现」（支持 / 反对 + 来源）。网页内容一律按未核实处理。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                value = braveKey,
+                onValueChange = { braveKey = it },
+                label = { Text("Brave 搜索密钥") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+                supportingText = { Text("没填 = 没配置：点「去查一下」只会说没配置，不会返回假结果。只存在这台手机上（加密保存）。") },
+            )
+            OutlinedButton(onClick = {
+                store.setBraveKey(braveKey)
+                Toast.makeText(context, if (braveKey.isBlank()) "已清空搜索密钥" else "搜索密钥已保存", Toast.LENGTH_SHORT).show()
+            }) { Text("保存搜索密钥") }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("每天自动一份")
+                    Text(
+                        "默认关。开着时一天最多一份，只在亮屏、配了搜索、预算还够时查；" +
+                            "每次最多 2 路查询、4 篇正文；自动的每天最多一份，并受每日预算（查询 / 正文 / 模型作业次数）限制，跨天清零、跨重启保留。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = forageAutoOn,
+                    onCheckedChange = { on ->
+                        forageAutoOn = on
+                        store.setForageAutoOn(on)
+                    },
+                )
+            }
+            // W10 T7：她主动准备第一块（默认关）
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("她先替我做一块")
+                    Text(
+                        "默认关。案板上正在做的事有材料、过了 10 分钟你还没动手，她就先拆一份三点纲要放上去（不采用、不交总控）；" +
+                            "同一版材料只做一次，安静期和夜里不做，和自动采蜜共用每天的后台额度。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = prepAutoOn, onCheckedChange = { on -> prepAutoOn = on; store.setPrepAutoOn(on) })
+            }
+            if (forageNow.lastMessage.isNotBlank()) {
+                Text(
+                    "上次：" + forageNow.lastMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "今天已用查询 " + forageNow.budget.searches + "/" + forageNow.budget.maxSearches +
+                        " · 正文 " + forageNow.budget.fetches + "/" + forageNow.budget.maxFetches,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             }
             if (section == "zk") {
             Text("总控", style = MaterialTheme.typography.titleSmall)
@@ -572,10 +648,12 @@ fun SettingsScreen(onDone: () -> Unit) {
             }
 
             }
+            if (section == "tools") ToolsSettings()
+            if (section == "profile") ProfileSettings()
             if (section == "mem") {
             Text("记忆", style = MaterialTheme.typography.titleSmall)
             Text(
-                "备份是两个文件：对话、提议、体系图和导演的记忆。导入会整个覆盖，不含接口密钥。",
+                "备份里有对话、提议、体系图、导演的记忆、案板和来源库。导入会整个覆盖，不含接口密钥；计划账本、外脑会话、训练通行证不备份（恢复后不会重复执行）。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -770,6 +848,9 @@ fun SettingsScreen(onDone: () -> Unit) {
                                 val dir = File(context.filesDir, "mind")
                                 writeAtomic(File(dir, "moling.json"), backup.moling)
                                 writeAtomic(File(dir, "director.json"), backup.director)
+                                // 旧备份没有这两项：不动现在的案板和来源库
+                                backup.workbench?.let { writeAtomic(File(dir, "workbench.json"), it) }
+                                backup.sources?.let { writeAtomic(File(dir, "sources.json"), it) }
                                 ""
                             }.getOrElse { it.message ?: "写不进去" }
                         }
@@ -817,7 +898,7 @@ private fun zkLabel(s: ZkStatus?): String {
 }
 
 /** 校验通过的备份内容（两个文件的原文；空串 = 空记忆）。 */
-private data class BackupText(val moling: String, val director: String)
+private data class BackupText(val moling: String, val director: String, val workbench: String? = null, val sources: String? = null)
 
 private val FILE_TIME = DateTimeFormatter.ofPattern("MM-dd HH:mm")
 private val STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmm")
@@ -840,7 +921,10 @@ private fun parseBackup(text: String): BackupText? {
     val v = (obj["v"] as? JsonPrimitive)?.intOrNull
     val moling = (obj["moling"] as? JsonPrimitive)?.takeIf { it.isString }?.content
     val director = (obj["director"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-    return if (v == 1 && moling != null && director != null) BackupText(moling, director) else null
+    // 案板 / 来源库是后加的，可以没有；有就必须是字符串
+    val workbench = (obj["workbench"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    val sources = (obj["sources"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    return if (v == 1 && moling != null && director != null) BackupText(moling, director, workbench, sources) else null
 }
 
 /** 先写 .tmp 再改名；rename 失败就删原文件再改名（文件被占 / 跨文件系统时也尽量写成）。 */
@@ -856,10 +940,13 @@ private fun writeAtomic(target: File, text: String) {
 private val SECTIONS = listOf(
     "she" to "她是谁",
     "ai" to "AI 接口",
+    "forage" to "联网采蜜",
     "live" to "活的墨灵",
     "zk" to "总控与权柄",
     "bg" to "后台与权限",
     "mem" to "记忆与备份",
+    "tools" to "系统工具",
+    "profile" to "她怎么找你",
 )
 
 /**
@@ -880,6 +967,8 @@ private fun SettingsHub(
     usageAllowed: Boolean,
     notion: Boolean,
     relay: Boolean,
+    forageAuto: Boolean,
+    searchReady: Boolean,
     memory: String,
     open: (String) -> Unit,
     openBridge: () -> Unit,
@@ -914,6 +1003,11 @@ private fun SettingsHub(
     com.moling.app.ui.art.InkTitle("连接")
     Card("AI 接口", "${model.ifBlank { "还没填" }} · 今天 $calls 次", { com.moling.app.ui.art.InkHalo(m, animated = false) }) { open("ai") }
     Card(
+        "联网采蜜",
+        (if (searchReady) "搜索已配" else "没配搜索") + " · " + (if (forageAuto) "每天自动一份开" else "只在你点「去查一下」时查"),
+        { com.moling.app.ui.art.InkPapers(m, animated = false) },
+    ) { open("forage") }
+    Card(
         "贯通：GPT · Notion · 深想",
         listOfNotNull(if (relay) "联络站已连" else null, if (notion) "Notion 已连" else null).ifEmpty { listOf("联络站、Notion、交接包、ChatGPT 记录") }.joinToString(" · "),
         { com.moling.app.ui.art.InkBubbles(m, animated = false) },
@@ -923,6 +1017,8 @@ private fun SettingsHub(
     com.moling.app.ui.art.InkTitle("手机")
     Card("后台与权限", "后台陪着${if (background) "开" else "关"} · 看前台应用${if (usageAllowed) "已允许" else "没开"}", { com.moling.app.ui.art.InkRing(if (background && usageAllowed) 1f else 0.5f, m) }) { open("bg") }
     Card("在你身边", "小窗、先答一问、晨报、分享", { com.moling.app.ui.art.InkClouds(m, animated = false) }, openPresence)
+    Card("系统工具", "日历忙闲 · 主河道勿扰 · 歌单提醒（各自开关，默认关）", { com.moling.app.ui.art.InkWaves(m, lines = 5, animated = false) }) { open("tools") }
+    Card("她怎么找你", "认知画像：只数真实出现记录，不足 10 次不下结论", { com.moling.app.ui.art.InkBubbles(m, animated = false) }) { open("profile") }
     Card("记忆与备份", "moling.json：$memory", { com.moling.app.ui.art.InkPapers(m, animated = false) }) { open("mem") }
     Card("调试", "只读：权柄、总控、提议、导演、后台、日志", { com.moling.app.ui.art.InkGalaxy(m, animated = false) }, openDebug)
     Text(

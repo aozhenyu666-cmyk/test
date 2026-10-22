@@ -83,7 +83,7 @@ object Speaker {
     }
 
     /** OpenAI 兼容的 /audio/speech：返回一段 mp3。 */
-    private fun cloud(ctx: Context, v: com.moling.app.data.VoiceSettings, text: String): File {
+    private fun cloud(ctx: Context, v: com.moling.app.data.VoiceSettings, text: String, out: File = File(ctx.cacheDir, "moling-voice.mp3")): File {
         val base = v.baseUrl.trim().trimEnd('/')
         val url = if (base.endsWith("/audio/speech")) base else "$base/audio/speech"
         val body = buildJsonObject {
@@ -97,7 +97,7 @@ object Speaker {
             if (r.code !in 200..299) error("语音模型返回 ${r.code}")
             val bytes = r.body?.bytes() ?: error("语音模型没返回声音")
             if (bytes.size < 200) error("语音模型返回的不是声音")
-            return File(ctx.cacheDir, "moling-voice.mp3").apply { writeBytes(bytes) }
+            return out.apply { writeBytes(bytes) }
         }
     }
 
@@ -125,25 +125,87 @@ object Speaker {
             return
         }
         pending = text to onDone
-        if (engine != null) return // 正在初始化，等回调一起念
+        ensureEngine(ctx)
+    }
+
+    /** 没有朗读引擎就起一个；起好后先处理排队的那一句、再处理排队的“合成到文件”。 */
+    private fun ensureEngine(ctx: Context) {
+        if (tts != null) return // 正在初始化，等回调
         tts = TextToSpeech(ctx) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 tts?.language = Locale.CHINA
                 tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) = Unit
-                    override fun onDone(utteranceId: String?) = finish(utteranceId)
+                    override fun onDone(utteranceId: String?) = finish(utteranceId, ok = true)
                     @Deprecated("系统要求实现")
-                    override fun onError(utteranceId: String?) = finish(utteranceId)
+                    override fun onError(utteranceId: String?) = finish(utteranceId, ok = false)
                 })
                 ready = true
                 pending?.let { (t, d) -> tts?.let { say(it, t, d) } }
+                val jobs = synchronized(renderQueue) { renderQueue.toList().also { renderQueue.clear() } }
+                jobs.forEach { it(tts) }
             } else {
                 failed = true
                 Log.w(TAG, "没有可用的朗读引擎（$status），以后都跳过")
                 pending?.second?.let { main.post(it) }
+                val jobs = synchronized(renderQueue) { renderQueue.toList().also { renderQueue.clear() } }
+                jobs.forEach { it(null) }
             }
             pending = null
         }
+    }
+
+    // ------------------------------------------------------------------ 合成到文件（电台用，交给 Media3 播放）
+
+    private val renders = HashMap<String, Pair<File, (File?) -> Unit>>()
+    private val renderQueue = mutableListOf<(TextToSpeech?) -> Unit>()
+
+    /**
+     * 把一段话合成成音频文件（云端语音模型优先，不通就用系统朗读合成），在主线程回调文件；合成不了回调 null。
+     * 和 [speak] 互不干扰：[stop] 不会作废这里的回调（电台自己用状态机判断回来的还要不要）。
+     */
+    fun renderToFile(text: String, name: String, onReady: (File?) -> Unit) {
+        val ctx = app
+        val clean = text.replace(NOT_SPOKEN, "").trim().take(1200)
+        if (ctx == null || clean.isEmpty()) {
+            main.post { onReady(null) }
+            return
+        }
+        val dir = File(ctx.cacheDir, "radio").apply { mkdirs() }
+        val v = store?.voice()
+        if (v != null && v.ready()) {
+            scope.launch {
+                val file = runCatching { cloud(ctx, v, clean, File(dir, "$name.mp3")) }.onFailure { Log.w(TAG, "语音模型不通，改用系统朗读合成", it) }.getOrNull()
+                main.post { if (file != null) onReady(file) else synthesize(ctx, clean, File(dir, "$name.wav"), onReady) }
+            }
+        } else {
+            synthesize(ctx, clean, File(dir, "$name.wav"), onReady)
+        }
+    }
+
+    private fun synthesize(ctx: Context, text: String, out: File, onReady: (File?) -> Unit) {
+        if (failed) { main.post { onReady(null) }; return }
+        val job: (TextToSpeech?) -> Unit = { engine ->
+            if (engine == null) main.post { onReady(null) } else {
+                val id = "moling-file-${seq++}"
+                synchronized(renders) { renders[id] = out to onReady }
+                val r = runCatching { engine.synthesizeToFile(text, null, out, id) }.getOrDefault(TextToSpeech.ERROR)
+                if (r != TextToSpeech.SUCCESS) {
+                    synchronized(renders) { renders.remove(id) }
+                    main.post { onReady(null) }
+                }
+            }
+        }
+        val engine = tts
+        if (engine != null && ready) job(engine) else {
+            synchronized(renderQueue) { renderQueue += job }
+            ensureEngine(ctx)
+        }
+    }
+
+    /** 删掉电台的临时音频（会话结束时调）。 */
+    fun clearRendered() {
+        app?.let { ctx -> runCatching { File(ctx.cacheDir, "radio").listFiles()?.forEach { it.delete() } } }
     }
 
     private fun say(engine: TextToSpeech, text: String, onDone: (() -> Unit)?) {
@@ -152,7 +214,13 @@ object Speaker {
         engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
     }
 
-    private fun finish(id: String?) {
+    private fun finish(id: String?, ok: Boolean) {
+        val r = synchronized(renders) { id?.let { renders.remove(it) } }
+        if (r != null) {
+            val (file, cb) = r
+            main.post { cb(if (ok && file.length() > 0) file else null) }
+            return
+        }
         val d = synchronized(done) { id?.let { done.remove(it) } } ?: return
         main.post(d)
     }

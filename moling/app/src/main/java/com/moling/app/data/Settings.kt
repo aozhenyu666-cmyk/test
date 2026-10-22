@@ -280,6 +280,30 @@ class SettingsStore(context: Context) {
         toggles.edit().putBoolean(KEY_FADE, on).apply()
     }
 
+    /**
+     * 联网采蜜的搜索密钥（Brave Search）。空 = 没配置：点「去查一下」只回报 NOT_CONFIGURED，不返回假结果。
+     * 和别的密钥一样存加密文件。
+     */
+    fun braveKey(): String = prefs.getString(KEY_BRAVE_KEY, null).orEmpty()
+
+    fun setBraveKey(key: String) {
+        prefs.edit().putString(KEY_BRAVE_KEY, key.trim()).apply()
+    }
+
+    /** 「每天自动一份」联网采蜜：默认关；开着时走 AutonomyBudget，每天最多一份。 */
+    fun forageAutoOn(): Boolean = toggles.getBoolean(KEY_FORAGE_AUTO, false)
+
+    fun setForageAutoOn(on: Boolean) {
+        toggles.edit().putBoolean(KEY_FORAGE_AUTO, on).apply()
+    }
+
+    /** 她主动准备第一块（W10 T7）：默认关；开着时走同一份每日后台预算。 */
+    fun prepAutoOn(): Boolean = toggles.getBoolean("prep_auto", false)
+
+    fun setPrepAutoOn(on: Boolean) {
+        toggles.edit().putBoolean("prep_auto", on).apply()
+    }
+
     /** 北京时间日期。按用户的作息，一天从零点算。 */
     private fun todayKey(): String = LocalDate.now(BEIJING).toString()
 
@@ -301,6 +325,8 @@ class SettingsStore(context: Context) {
         private const val KEY_WHISPER = "whisper"
         private const val KEY_FADE = "fade"
         private const val KEY_DISABLED_MODALITIES = "disabled_modalities"
+        private const val KEY_BRAVE_KEY = "brave_search_key"
+        private const val KEY_FORAGE_AUTO = "forage_auto"
 
         private const val DEFAULT_BASE_URL = "https://api.deepseek.com"
         private const val DEFAULT_MODEL = "deepseek-chat"

@@ -269,7 +269,8 @@ private fun RelaySection(store: SettingsStore, toast: (String) -> Unit) {
     com.moling.app.ui.art.InkTitle("联络站：让 ChatGPT 直接连墨灵")
     Text(
         "ChatGPT（和 Claude）可以连“MCP 服务器”，但连不到你手机里。联络站是放在 Cloudflare 上的一个小程序（免费）：" +
-            "墨灵把黑板推上去、去那里收回答；ChatGPT 通过 MCP 读黑板、把回答发给她。别人写来的她照样把关。",
+            "墨灵把黑板推上去、去那里收回答；ChatGPT 通过 MCP 读黑板、把回答发给她。别人写来的她照样把关。" +
+            "外脑会话点「推到联络站」时，会把整包也放进这块黑板；同步成功只说明推上去了，不代表外脑读过。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )

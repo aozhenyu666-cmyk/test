@@ -153,6 +153,11 @@ fun SettingsScreen(nav: NavHostController) {
             else "没开：闲鱼 / Twitter 这类全封太狠、放开太浪费时间",
             "settings/watch", nav,
         )
+        MenuItem(
+            "以思代锁",
+            if (config.training.enabled) "开着 · 每次 ${config.training.minutesPerPass} 分钟 · 每天 ${config.training.dailyMaxPasses} 次" else "关着：答几道题换一点今天的娱乐（只在挣来的用完时）",
+            "settings/training", nav,
+        )
         MenuItem("规则", "沉默 ${if (config.silenceHours == 0) "不查" else "${config.silenceHours} 小时"} · 娱乐 ${if (config.dailyQuotaMin == 0) "不限" else "${config.dailyQuotaMin} 分钟"} · 紧急放行 ${config.emergencyPerDay} 次", "settings/rules", nav)
         MenuItem("待生效的放宽", if (config.pending.isEmpty()) "没有" else "${config.pending.size} 项", "settings/pending", nav)
 

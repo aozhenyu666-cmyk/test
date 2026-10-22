@@ -70,6 +70,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // 第十五批 B6：电台的播放底座（音频焦点、拔耳机暂停、通知栏 / 锁屏控制、断点续播）。Apache-2.0。
+    // 1.4.x 是支持 compileSdk 34 的最后一档（1.5 起要 35）。
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-session:1.4.1")
     // 接口密钥放加密的 SharedPreferences（M1 设置页用）
     implementation("androidx.security:security-crypto:1.0.0")
 

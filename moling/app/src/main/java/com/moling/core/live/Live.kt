@@ -154,9 +154,14 @@ object Live {
         cues: List<String> = emptyList(),
         ignored: Int = 0,
         fog: Boolean = false,
+        /** 他案板上正在做的那件事的材料（W11 R4）：点选题只能从这里或他说过的话出。 */
+        material: List<String> = emptyList(),
     ) = buildString {
         appendLine("【你是】$persona")
         appendLine("【你被叫醒的原因】${trigger.label}")
+        if ((fog || trigger == Trigger.TOLL) && material.isNotEmpty()) {
+            appendLine("【他手上正在做的事的材料（可以拿来出一个点一下就能答的小题）】\n" + material.joinToString("\n") { "- $it" })
+        }
         if (thinking.isNotEmpty()) appendLine("【你自己推的判断（未必对）】\n" + thinking.joinToString("\n"))
         if (toSay.isNotBlank()) appendLine("【你之前想好要对他说的】$toSay（合适就说这个，可以改得更贴合此刻）")
         if (cues.isNotEmpty()) appendLine("【你看到的】" + cues.joinToString("；"))
@@ -179,6 +184,7 @@ object Live {
             appendLine("【破雾】他现在多半刷懵了，脑子转不动，打不出完整的句子。这次：")
             appendLine("- 绝对不提主线、计划、时长、偏离；不问为什么 / 卡在哪 / 怎么办这类要组织语言的问题；")
             appendLine("- 一两句好玩的、出乎意料的话：顺着他在用的应用和你知道的他，抛一个钩子（吐槽、猜一猜、二选一、一个小赌局），像坐在旁边的朋友；")
+            appendLine("- 你看不到他屏幕上的内容：不要说“你刚看的那个视频 / 帖子”，不编标题；要出内容题只能用上面的材料或他自己说过的话，没有就只问点一下就能答的感受 / 选择；")
             appendLine("- 最后一行写【选】2–3 个点一下就能回的选项（每个不超过 8 个字），他点一下就算接住了。")
             if (canGate) appendLine("你可以拦在他面前，但只要他点一个选项，不要他打字。")
             else appendLine("这次不许拦他，只能说话。")

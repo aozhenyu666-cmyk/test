@@ -135,6 +135,26 @@ class FogTest {
         assertFalse("退出的话不说一个不存在的恢复按钮", r.line.contains("点「恢复」"))
     }
 
+    @Test fun fogUsesHisMaterialAndNeverInventsScreenContent() = runTest {
+        val ask = Router(listOf("你被叫醒的原因" to "【出声】是\n【表情】好奇\n【说】考你一个：申论开头先亮观点还是先铺垫？\n【选】亮观点｜先铺垫"))
+        val b = brain(ask)
+        b.live(Trigger.LONG_SCROLL, douyin, at(15), roll = 0.9, material = listOf("申论：申论开头最容易卡"))
+        val p = ask.prompts.last()
+        assertTrue(p.contains("申论开头最容易卡"))
+        assertTrue(p.contains("你看不到他屏幕上的内容"))
+    }
+
+    @Test fun tollIsCappedPerDay() = runTest {
+        val b = brain(null)
+        val desk = Activity("launcher", "桌面", "OTHER", 0)
+        val times = listOf(at(10), at(12), at(14))
+        times.forEach { t ->
+            assertEquals(Trigger.TOLL, b.liveTrigger(desk, t, cfg = com.moling.core.live.LiveConfig(spar = true), leftPlayMin = 20))
+            assertTrue("这一回收了", b.live(Trigger.TOLL, desk, t, roll = 0.9) != null)
+        }
+        assertTrue("第四回不收", b.liveTrigger(desk, at(16), cfg = com.moling.core.live.LiveConfig(spar = true), leftPlayMin = 20) != Trigger.TOLL)
+    }
+
     @Test fun threeTapsBringHimOut() = runTest {
         val b = brain(null)
         // 在桌面和几个应用之间横跳（不是娱乐应用，不会拦）

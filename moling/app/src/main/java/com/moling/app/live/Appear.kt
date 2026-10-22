@@ -2,6 +2,7 @@ package com.moling.app.live
 
 import android.content.Context
 import android.provider.Settings
+import android.util.Log
 import com.moling.app.BrainHost
 import com.moling.core.LiveTurn
 import com.moling.core.live.Can
@@ -21,6 +22,7 @@ import kotlinx.coroutines.launch
  * 他怎么回应，各个界面调 [BrainHost.react] 报回来（反免疫账本靠它）。
  */
 object Appear {
+    private const val TAG = "Appear"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     /** 此刻能用哪些方式。 */
@@ -36,30 +38,61 @@ object Appear {
     fun show(context: Context, turn: LiveTurn, label: String) {
         // B4：他在设置里关掉的方式一律退回底部卡片（拦人不受影响，它有自己的开关）。
         val disabled = runCatching { BrainHost.settingsStore.disabledModalities() }.getOrDefault(emptySet())
+        val overlay = Settings.canDrawOverlays(context)
+        // 退回底部卡片时：有悬浮窗权限，卡片是真弹出来的（他看得见），照常记；没有才可能只是一条通知，记 UNOBSERVED
         if (turn.modality in disabled && turn.modality != Modality.GATE) {
+            if (!overlay) unobserved(turn.modality)
             LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
             return
         }
-        val overlay = Settings.canDrawOverlays(context)
         when (turn.modality) {
             Modality.GATE -> LiveScreens.gate(context, turn.mood, turn.line, label)
             Modality.PET ->
-                if (!overlay || PetOverlay.petMuted(context)) LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
-                else PetOverlay.show(context, turn.mood, turn.line)
+                if (!overlay || PetOverlay.petMuted(context)) {
+                    if (!overlay) unobserved(turn.modality)
+                    LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
+                } else {
+                    PetOverlay.show(context, turn.mood, turn.line)
+                }
             Modality.STARE ->
-                if (!overlay) LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
-                else PetOverlay.stare(context, turn.mood, turn.line)
+                if (!overlay) {
+                    unobserved(turn.modality)
+                    LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
+                } else {
+                    PetOverlay.stare(context, turn.mood, turn.line)
+                }
             Modality.WHISPER ->
                 if (canWhisper(context)) Whisper.say(context, turn.mood, turn.line)
-                else LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
+                else {
+                    unobserved(turn.modality)
+                    LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
+                }
             Modality.COUNCIL ->
-                if (!overlay) LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
-                else council(context, turn, label)
+                if (!overlay) {
+                    unobserved(turn.modality)
+                    LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
+                } else {
+                    council(context, turn, label)
+                }
             Modality.QUIZ ->
                 turn.quiz?.let { QuizActivity.open(context, turn.mood, turn.line, it) }
-                    ?: LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
+                    ?: run {
+                        if (!overlay) unobserved(turn.modality)
+                        LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
+                    }
             else -> LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
         }
+    }
+
+    /**
+     * F11-5：这一次其实没按选定的方式出现（浮层被系统拦 / 没戴耳机 / 设置里关了 / 没材料出题），
+     * 只能退回底部卡片或通知——他可能根本没看见，记 UNOBSERVED，之后不算“他不理我”。
+     * PEEK 本身就是那张卡片，不记。
+     */
+    private fun unobserved(m: Modality) {
+        if (m == Modality.PEEK) return
+        runCatching { BrainHost.unobserved(m) }
+            .onFailure { Log.w(TAG, "曝光没报上：${it.javaClass.simpleName}") }
     }
 
     /** Z4 参谋弹幕：先问参谋（要调模型），拿不到就退回桌宠；拿到就飘四句，最后桌宠带着“合起来”的话。 */
