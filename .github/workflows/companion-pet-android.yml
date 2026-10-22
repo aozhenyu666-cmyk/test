@@ -65,7 +65,7 @@ jobs:
 
       - name: Print lint report on failure
         if: failure()
-        run: cat app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt || true
+        run: grep -A3 ": Error:" app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt || true
 
       - name: Upload test and lint reports
         if: always()

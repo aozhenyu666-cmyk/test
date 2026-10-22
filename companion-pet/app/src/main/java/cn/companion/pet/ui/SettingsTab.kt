@@ -166,8 +166,8 @@ private fun Section(title: String) {
 }
 
 @Composable
-private fun NumberField(label: String, value: String, modifier: Modifier = Modifier.fillMaxWidth(), onChange: (String) -> Unit) {
-    OutlinedTextField(value, { onChange(it.filter(Char::isDigit)) }, modifier, label = { Text(label) }, singleLine = true,
+private fun NumberField(label: String, value: String, modifier: Modifier = Modifier, onChange: (String) -> Unit) {
+    OutlinedTextField(value, { onChange(it.filter(Char::isDigit)) }, modifier.fillMaxWidth(), label = { Text(label) }, singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
 }
 

@@ -17,6 +17,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +42,7 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
     val battery = remember(resumeTick) { Permissions.batteryUnrestricted(activity) }
     val hasKey = remember(resumeTick) { app.apiKey() != null }
     var running by remember(resumeTick) { mutableStateOf(PetService.running) }
+    val a11yConnected by PerceptionHub.connected.collectAsState()
 
     Column(
         Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -81,7 +83,7 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
             "无障碍服务",
             "只用来知道前台是哪个 App、有没有在滚动；学习场景开口前读一次屏幕文字。" +
                 "如果开关是灰的：到“应用详情 → 右上角 ⋮ → 允许受限制的设置”，再回来开。" +
-                if (a11y && !PerceptionHub.connected.value) "（已打开，但服务还没连上，可以关掉再打开一次）" else "",
+                if (a11y && !a11yConnected) "（已打开，但服务还没连上，可以关掉再打开一次）" else "",
             a11y,
         ) { activity.startActivity(Permissions.accessibilityIntent()) }
 
