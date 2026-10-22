@@ -84,6 +84,7 @@ fun BenchScreen() {
     val context = LocalContext.current
     val clip = LocalClipboardManager.current
     val ws by BrainHost.workbench.collectAsState()
+    val fetching by BrainHost.fetching.collectAsState()
     val focus = ws.active()
     var pasteOpen by remember { mutableStateOf(false) }
     var atlasOpen by remember { mutableStateOf(false) }
@@ -157,6 +158,8 @@ fun BenchScreen() {
             onArchive = { menuOpen = false; benchScope.launch { BrainHost.benchArchive(focus.id) } },
             onSwitch = { f -> menuOpen = false; benchScope.launch { BrainHost.benchSwitch(f.id) } },
             onPaused = ws.focuses.filter { it.status == FocusStatus.PAUSED },
+            fetching = focus.id in fetching,
+            onCancelFetch = { benchScope.launch { BrainHost.cancelBenchFetch(focus.id) } },
             onMaterials = { materialsOpen = true },
             onPrework = { kind, artifactId -> prework(kind, artifactId) },
             onCancel = { jobId -> benchScope.launch { BrainHost.benchCancel(jobId) } },
@@ -339,6 +342,9 @@ private fun BenchFocus(
     onArchive: () -> Unit,
     onSwitch: (Focus) -> Unit,
     onPaused: List<Focus>,
+    /** F10-7：这个焦点的网页正文正在后台取。 */
+    fetching: Boolean,
+    onCancelFetch: () -> Unit,
     onMaterials: () -> Unit,
     onPrework: (JobKind, String?) -> Unit,
     onCancel: (String) -> Unit,
@@ -389,6 +395,12 @@ private fun BenchFocus(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 com.moling.app.ui.art.InkThinking("她在做：" + running.first().kind.label)
                 TextButton(onClick = { onCancel(running.first().id) }) { Text("取消") }
+            }
+        }
+        if (fetching) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("正在取网页正文…", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton(onClick = onCancelFetch) { Text("取消") }
             }
         }
         if (artifacts.isNotEmpty()) {

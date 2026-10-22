@@ -60,13 +60,16 @@ import com.moling.core.autopilot.AutopilotSignal
 import com.moling.core.power.Charter
 import com.moling.core.power.Tier
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 /*
@@ -639,6 +642,34 @@ object BrainHost {
                 is PortResult.Failed -> added
             }
         }
+
+    /** 正在后台取正文的焦点（案板显示“取正文中…”，可以取消）。 */
+    private val _fetching = MutableStateFlow<Set<String>>(emptySet())
+    val fetching: StateFlow<Set<String>> = _fetching
+    private val fetchJobs = ConcurrentHashMap<String, Job>()
+
+    /** F10-7：分享“提取正文”不在分享窗等；后台抓，可取消，同一个焦点再点一次先取消上一次。 */
+    fun startBenchFetch(focusId: String, url: String) {
+        fetchJobs.remove(focusId)?.cancel()
+        _fetching.update { it + focusId }
+        var job: Job? = null
+        job = answerScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val r = benchFetchSource(focusId, url)
+                if (r is PortResult.Failed) Log.w(TAG, "取正文失败 " + r.error.code + "：" + r.error.message)
+            } finally {
+                if (fetchJobs[focusId] === job) fetchJobs.remove(focusId)
+                _fetching.update { it - focusId }
+            }
+        }
+        fetchJobs[focusId] = job
+        job.start()
+    }
+
+    fun cancelBenchFetch(focusId: String) {
+        fetchJobs.remove(focusId)?.cancel()
+        _fetching.update { it - focusId }
+    }
 
     /** 来源原文（只读）。材料 id 也可以查：先找 Attachment，再退回 Material 本身。 */
     fun sourceView(id: String): com.moling.core.web.SourceRef? =

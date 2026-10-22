@@ -3,7 +3,9 @@ package com.moling.core.web
 import com.moling.core.workspace.PortError
 import com.moling.core.workspace.PortResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -175,8 +177,16 @@ class HttpWebPort(
 
     private sealed interface Got
 
-    private suspend fun get(raw: String, headers: Map<String, String>): Got =
-        withContext(Dispatchers.IO) { hopLoop(raw, headers) }
+    /** 整次请求（含所有跳）总时限 15 秒（F10-7），不是每一跳各等 15 秒。 */
+    private suspend fun get(raw: String, headers: Map<String, String>): Got {
+        return try {
+            withTimeout(WebLimits.TIMEOUT_MS.toLong()) {
+                withContext(Dispatchers.IO) { hopLoop(raw, headers) }
+            }
+        } catch (e: TimeoutCancellationException) {
+            Failed(PortError("TIMEOUT", "取这个链接超过 15 秒，先不读了"))
+        }
+    }
 
     private fun hopLoop(raw: String, headers: Map<String, String>): Got {
         var current = raw.trim()
