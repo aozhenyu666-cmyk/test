@@ -40,9 +40,10 @@ class ShareActivity : ComponentActivity() {
                         }
                     }) { Text("放上案板") }
                     TextButton(enabled = !busy, onClick = {
+                        // F10-7：先建焦点 + 链接材料，马上跳案板；正文在后台抓（可取消），不在这里等
                         busy = true
+                        val item = com.moling.core.intake.InhaleParse.fromShare(text, System.currentTimeMillis())
                         lifecycleScope.launch {
-                            val item = com.moling.core.intake.InhaleParse.fromShare(text, System.currentTimeMillis())
                             val f = runCatching { BrainHost.benchStart("", text) }.getOrNull()
                             if (f == null) {
                                 Toast.makeText(this@ShareActivity, "没放上去，再试一次", Toast.LENGTH_SHORT).show()
@@ -50,10 +51,9 @@ class ShareActivity : ComponentActivity() {
                                 return@launch
                             }
                             if (item.url.isNotBlank()) {
-                                when (val r = BrainHost.benchFetchSource(f.id, item.url)) {
-                                    is com.moling.core.workspace.PortResult.Ok -> Toast.makeText(this@ShareActivity, "取到正文：" + r.value.title, Toast.LENGTH_SHORT).show()
-                                    is com.moling.core.workspace.PortResult.Failed -> Toast.makeText(this@ShareActivity, "材料放上了，正文没取到：" + r.error.message, Toast.LENGTH_LONG).show()
-                                }
+                                runCatching { BrainHost.benchAddMaterial(f.id, item.url) }
+                                BrainHost.startBenchFetch(f.id, item.url)
+                                Toast.makeText(this@ShareActivity, "放上案板了，正文在后台取", Toast.LENGTH_SHORT).show()
                             } else {
                                 Toast.makeText(this@ShareActivity, "放上案板了", Toast.LENGTH_SHORT).show()
                             }
