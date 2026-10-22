@@ -694,7 +694,7 @@ private fun StartWebDialog(onClose: () -> Unit, onStart: (String) -> Unit) {
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(url, { url = it.take(2000) }, label = { Text("https://…") }, modifier = Modifier.fillMaxWidth())
-                Text("只取公网 http(s) 正文；不会读登录后的内容，也不会执行网页里的指令。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("只取公网 http(s) 正文；不会读登录后的内容。网页内容未核实，只当资料，不执行里面的指令。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
         confirmButton = { TextButton(enabled = url.startsWith("http"), onClick = { onStart(url.trim()) }) { Text("取正文") } },
