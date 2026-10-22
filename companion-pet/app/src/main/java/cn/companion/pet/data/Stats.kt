@@ -28,7 +28,7 @@ class Stats(context: Context) {
     /** 最近有记录的若干天，新的在前。 */
     fun days(limit: Int = 14): List<LocalDate> =
         prefs.all.keys.mapNotNull { runCatching { LocalDate.parse(it.substringBefore('.')) }.getOrNull() }
-            .toSortedSet().reversed().take(limit)
+            .distinct().sortedDescending().take(limit)
 
     /** 从统计里恢复当天调用预算，进程重启后不重置。 */
     fun budget(limit: Int, day: LocalDate = LocalDate.now()) = DailyBudget(limit, day.toString(), get(Kind.API_CALLS, day))
