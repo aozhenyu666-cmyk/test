@@ -755,7 +755,12 @@ object BrainHost {
             fadeTick(ctx, autopilot, activity)
             val trigger = brain.liveTrigger(activity, now, unlockGapMin, cfg, autopilot, leftPlay) ?: return
             val cues = if (trigger == com.moling.core.live.Trigger.AUTOPILOT) autopilot?.reasons.orEmpty() else emptyList()
-            val turn = io<LiveTurn?>("live", { null }) { brain.live(trigger, activity, now, cfg = cfg, can = Appear.can(ctx), cues = cues) } ?: return
+            // W11 R4：点选题用他案板上正在做的那件事的材料（网页来的标“未核实”）；没有就不出内容题
+            val material = runCatching {
+                val ws = _bench.value
+                ws.active()?.let { f -> ws.materialsOf(f).takeLast(3).map { m -> (if (m.kind == "web") "（网页，未核实）" else "") + m.title.take(20) + "：" + m.text.take(160) } }.orEmpty()
+            }.getOrDefault(emptyList())
+            val turn = io<LiveTurn?>("live", { null }) { brain.live(trigger, activity, now, cfg = cfg, can = Appear.can(ctx), cues = cues, material = material) } ?: return
             withContext(Dispatchers.Main) {
                 LiveScreens.nextChoices = turn.choices
                 Appear.show(ctx, turn, activity?.label.orEmpty())

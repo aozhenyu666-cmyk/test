@@ -300,6 +300,9 @@ data class BrainState(
     val lastPlay: Say? = null,
     /** 哪天为主线做完出过声（一天一次）。 */
     val cheeredDay: String = "",
+    /** 过路费（TOLL）今天收了几回（W11 R4：每天最多 [TOLL_PER_DAY] 回）。 */
+    val tollDay: String = "",
+    val tolls: Int = 0,
     /** 每天的手机使用（只有应用和时间，没有内容），留 30 天。 */
     val usageDays: List<UsageDay> = emptyList(),
     /** 提议编号用的流水号。 */
@@ -1166,7 +1169,7 @@ class Brain(
         if (st.sayQueue.isNotEmpty() && !playing) return Trigger.SAY
         if (unlockGapMin >= 30) return if (m < 10 * 60 && st.spirit.day != day) Trigger.MORNING else Trigger.UNLOCK
         // 刚刷完一大段离开：收一回合“过路费”
-        if (cfg.spar && !playing && leftPlayMin >= 15) return Trigger.TOLL
+        if (cfg.spar && !playing && leftPlayMin >= 15 && !(st.tollDay == day && st.tolls >= TOLL_PER_DAY)) return Trigger.TOLL
         // 闲着、3 小时里没怎么动脑：来下一局三手棋（9:00–22:30，至少隔 90 分钟，体系图里得有东西）
         if (cfg.spar && !playing && m in 9 * 60 until 22 * 60 + 30 && Rpm.low(st.mindMarks, now) &&
             now - st.lastSparAt >= 90 * 60_000L && st.atlas.nodes.size >= 3
@@ -1187,6 +1190,8 @@ class Brain(
         cfg: LiveConfig = LiveConfig(),
         can: Can = Can(),
         cues: List<String> = emptyList(),
+        /** 他案板上正在做的那件事的材料摘要（W11 R4）。 */
+        material: List<String> = emptyList(),
     ): LiveTurn? = lock.withLock {
         if (st.gate != null) return@withLock null
         // 安静期（R3）：他说了“先不聊了 / 别管我”，自发出现一律不发声；手动开电台 / 找他说话不算。
@@ -1212,7 +1217,7 @@ class Brain(
         val prompt = Live.prompt(
             persona, trigger, a, director.nowText(now), flow?.let { Flow.render(it) }.orEmpty(), aboutPlus(), misjudged(now), talkLines(), canGate,
             thinking = Think.open(st.thoughts).takeLast(4).map { Think.line(it) }, toSay = toSay,
-            cues = cues, ignored = sp.ignored, fog = fog,
+            cues = cues, ignored = sp.ignored, fog = fog, material = material,
         )
         // 三手棋：不走平常的提示词，直接开一局（开不出来就不出声）
         if (trigger == Trigger.SPAR) {
@@ -1262,6 +1267,7 @@ class Brain(
             talk = (st.talk + Turn("墨灵", line.line, now)).takeLast(TALK_KEEP),
             log = st.log + "${hm(now)} ${trigger.label}：${if (gate != null) "拦住了，" else ""}${line.line.take(40)}",
         )
+        if (trigger == Trigger.TOLL) st = st.copy(tollDay = day, tolls = if (st.tollDay == day) st.tolls + 1 else 1)
         count(now, nudges = 1)
         save()
         st = st.copy(habits = Habits.shown(st.habits, modality, now))
@@ -1922,6 +1928,8 @@ class Brain(
 
     companion object {
         const val TALK_KEEP = 40
+        /** 过路费每天最多收几回。 */
+        const val TOLL_PER_DAY = 3
         const val PROPOSALS_KEEP = 80
         const val LOG_KEEP = 150
         /** 提议默认挂多久（分钟）；水道交接挂到当天 23:00。 */
