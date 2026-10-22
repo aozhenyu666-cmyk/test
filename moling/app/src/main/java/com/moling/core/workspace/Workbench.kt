@@ -1,6 +1,8 @@
 package com.moling.core.workspace
 
 import com.moling.core.atlas.Atlas
+import com.moling.core.forage.DiscoveryDraft
+import com.moling.core.forage.DiscoveryLine
 import com.moling.core.mind.Ask
 import com.moling.core.mind.MindStore
 import com.moling.core.strategy.Draft
@@ -338,6 +340,87 @@ class Workbench(
             },
         )
         log(now, "外脑结果落上案板：${a.title.take(20)}")
+        save()
+        PortResult.Ok(a)
+    }
+
+    // ------------------------------------------------------------------ 联网发现（v13 第十五批 B1）
+
+    /**
+     * 联网采蜜抓到的正文当作材料挂上（kind = web）。返回新材料，宿主拿它的 id 去来源库做 attach；
+     * 没抓到正文就不调用，也不拿模型编一段充数。
+     */
+    suspend fun addSourceMaterial(focusId: String, text: String, title: String, now: Long): PortResult<Material> = lock.withLock {
+        val f = st.focus(focusId)?.takeIf { it.status != FocusStatus.ARCHIVED }
+            ?: return@withLock fail(PortError.NOT_FOUND, "这件事不在了")
+        val t = text.trim().takeIf { it.isNotBlank() }
+            ?: return@withLock fail(PortError.BAD_ACTION, "网页正文是空的")
+        val m = Material(next("m"), "web", title.ifBlank { t.take(20) }.take(40), t.take(6000), now)
+        st = st.copy(
+            materials = st.materials + m,
+            focuses = st.focuses.map {
+                if (it.id == f.id) it.copy(materialIds = it.materialIds + m.id, revision = it.revision + 1) else it
+            },
+        )
+        save()
+        PortResult.Ok(m)
+    }
+
+    /** 同一件事、同一批来源已经查过：直接给他那一份，不重复搜、不重复调模型。 */
+    fun discovery(focusId: String, inputHash: String): WorkspaceArtifact? =
+        st.artifacts.lastOrNull {
+            it.focusId == focusId && it.producerJobId == "discovery:" + inputHash && it.status != ArtifactStatus.ARCHIVED
+        }
+
+    /**
+     * 把一份联网发现落成 DISCOVERY 稿子（READY_FOR_REVIEW，未采用）。
+     *  - 支持 / 反对带来源库编号；编号不在 [sourceIds] 里的丢掉，那一行降成「待核」的假设；
+     *  - 「摘录」是模型没接上时的兜底：只列真抓到的正文，不假装整理过；
+     *  - 网页内容一律按未核实写进待核，不自动收进体系图。
+     */
+    suspend fun attachDiscovery(
+        focusId: String,
+        title: String,
+        inputHash: String,
+        draft: DiscoveryDraft,
+        sourceIds: List<String>,
+        now: Long,
+        offline: Boolean = false,
+    ): PortResult<WorkspaceArtifact> = lock.withLock {
+        val f = st.focus(focusId)?.takeIf { it.status != FocusStatus.ARCHIVED }
+            ?: return@withLock fail(PortError.NOT_FOUND, "这件事不在了，发现只留历史")
+        val valid = sourceIds.toSet()
+        val blocks = draft.lines.mapNotNull { line ->
+            val text = line.text.trim().take(500)
+            if (text.length < 4) return@mapNotNull null
+            val refs = line.refs.filter { it in valid }.distinct()
+            when {
+                line.stance == "摘录" -> ArtifactBlock(next("b"), BlockKind.QUOTE, text, refs)
+                line.stance == "验证" -> ArtifactBlock(next("b"), BlockKind.ASSUMPTION, "验证：" + text)
+                refs.isEmpty() -> ArtifactBlock(next("b"), BlockKind.ASSUMPTION, text)
+                else -> ArtifactBlock(next("b"), BlockKind.MARKDOWN, line.stance + "：" + text, refs)
+            }
+        }
+        if (blocks.isEmpty()) return@withLock fail(PortError.BAD_ACTION, "查回来的内容没有能当材料的句子")
+        val a = WorkspaceArtifact(
+            next("a"), f.id, ArtifactKind.DISCOVERY, title.take(40), blocks,
+            sourceIds = sourceIds.distinct(),
+            createdAt = now, updatedAt = now, status = ArtifactStatus.READY_FOR_REVIEW,
+            producerJobId = "discovery:" + inputHash,
+            unresolvedQuestions = draft.questions.take(2) +
+                "网页内容未核实，只当资料；引用编号对应来源库里的原文，点「采用」才会进体系图。",
+            offline = offline,
+        )
+        st = st.copy(
+            artifacts = st.artifacts + a,
+            focuses = st.focuses.map {
+                if (it.id == f.id) it.copy(
+                    artifactIds = it.artifactIds + a.id,
+                    nextChoice = "看看这份发现：支持 / 反对各站不站得住，能用的逐段采用",
+                ) else it
+            },
+        )
+        log(now, "联网查回一份发现：" + a.title.take(20))
         save()
         PortResult.Ok(a)
     }

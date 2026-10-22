@@ -30,6 +30,9 @@ object Notify {
     /** 导演卡片（M15）。 */
     private const val ID_CARD = 4001
 
+    /** 联网采蜜（B1）：每天自动一份查回来了。 */
+    private const val ID_FORAGE = 4002
+
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         if (nm.getNotificationChannel(CH_HEART) == null) {
@@ -132,6 +135,10 @@ object Notify {
     /** 早上自动排好的草稿（M12）。 */
     fun planReady(context: Context, intent: String) =
         simple(context, ID_PLAN, "今天的水道排好了（草稿）", intent, silent = false)
+
+    /** 联网采蜜（B1）：「每天自动一份」查回来了（他打开才发）。 */
+    fun discoveryReady(context: Context, title: String, text: String) =
+        simple(context, ID_FORAGE, "联网查回一份", title.ifBlank { text }.take(60) + " · " + text, silent = false)
 
     /** 夜里的账（M12）：第二天早上看到，安静一条。 */
     fun nightAccount(context: Context, text: String) =
