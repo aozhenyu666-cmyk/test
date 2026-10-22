@@ -14,7 +14,8 @@ import kotlinx.serialization.Serializable
  *  - 墨灵不给自己发奖：没有总控回执里的 TemporaryPass，activePass 永远是 null；
  *  - 回执里的 pass 必须和挑战 id / 包名 / 策略修订 / 截止时间对得上，对不上当没发；
  *  - 重复提交同一挑战返回原回执，不重复增加时长；
- *  - 并发提交由 @Synchronized 串行化，只有一个能写入通行令；
+ *  - 客户端只串行化本地状态；锁内不调端口（F13-7）。“一局只成功一次”最终由总控按
+ *    challengeId/requestId 保证，客户端不假装自己能保证；
  *  - 总控不支持 v2 训练协议 / 没开策略 / 严格期 / 没额度 → 明确拒绝，不伪造成功；
  *  - 本文件不实现总控侧判分（那要改 zongkong/，本批明确不做），测试用 Fake 总控验证协议。
  *
@@ -130,15 +131,23 @@ class TrainingRedeemClient(
 ) {
     private var state: RedeemState = initial
 
-    fun snapshot(): RedeemState = state
+    /** F13-7：锁只保护本地状态，绝不包着端口调用（start/submit/query 都是先锁内改状态、锁外调端口）。 */
+    private val lock = Any()
+
+    fun snapshot(): RedeemState = synchronized(lock) { state }
 
     /** 发起一局训练。没有可用策略/没额度/严格期/不支持 v2 都明确拒绝，不给题。 */
-    @Synchronized
     fun start(packageName: String, now: Long): PortResult<ChallengeBundle> {
         val p = port ?: return fail(GateError.NOT_AVAILABLE, "总控没装或连不上，不能兑换")
         // F13-6：requestId 每次唯一（计数持久化在状态里），不再按天固定。
-        val issueNo = state.issueSeq + 1
-        state = state.copy(issueSeq = issueNo)
+        // F13-7：锁内只读状态 + 发号，能力/策略/发起挑战都在锁外调端口。
+        val (activePass, issueNo) = synchronized(lock) {
+            val active = state.pass?.takeIf { it.expiresAt > now }
+            val seq = state.issueSeq + 1
+            state = state.copy(issueSeq = seq)
+            active to seq
+        }
+        if (activePass != null) return fail(GateError.NOT_AVAILABLE, "还有一次没到期的放行，先用完再来")
         // F13-4：没拿到能力协商就当不支持，不能默认放行。
         val caps = p.capabilities() ?: return fail(GateError.NOT_AVAILABLE, "总控没给能力协商，不知道支不支持训练兑换")
         if (!caps.supportsTraining()) return fail(GateError.NOT_AVAILABLE, "总控这个版本不支持训练兑换")
@@ -158,7 +167,6 @@ class TrainingRedeemClient(
         if (policy.minutesPerPass !in 1..15) return fail(GateError.POLICY_DENIED, "单次放行时长不合理，先在总控里改策略")
         if (policy.remainingPassesToday == 0 || policy.remainingMinutesToday == 0) return fail(GateError.NO_QUOTA, "今天没有可兑换的次数/额度了")
         if (policy.validUntil in 1..now) return fail(GateError.EXPIRED, "训练兑换策略已经过期")
-        state.pass?.takeIf { it.expiresAt > now }?.let { return fail(GateError.NOT_AVAILABLE, "还有一次没到期的放行，先用完再来") }
         val today = com.moling.core.mind.dayKey(now)
         val requestId = "issue-${policy.policyId}-${policy.policyRevision}-${packageName}-${today}-${issueNo}"
         return when (val r = p.issue(policy.policyId, packageName, requestId)) {
@@ -169,7 +177,9 @@ class TrainingRedeemClient(
                 } else if (c.packageName != packageName || c.policyId != policy.policyId) {
                     fail(GateError.SCOPE_DENIED, "总控给的挑战和这次请求对不上")
                 } else {
-                    commit(state.copy(challenge = c, lastMessage = "一局三题，做对至少两题才可能放行（由总控判）"))
+                    synchronized(lock) {
+                        commit(state.copy(challenge = c, lastMessage = "一局三题，做对至少两题才可能放行（由总控判）"))
+                    }
                     PortResult.Ok(c)
                 }
             }
@@ -181,11 +191,10 @@ class TrainingRedeemClient(
      * 交答案。本地只检查题目/选项范围与非空；对不对由总控判。
      * 同一挑战重复交返回原回执（不再请求总控，也不再加时长）。
      */
-    @Synchronized
     fun submit(answers: List<ChallengeAnswer>, now: Long): PortResult<ExecutionReceipt> {
         val p = port ?: return fail(GateError.NOT_AVAILABLE, "总控没装或连不上")
-        val c = state.challenge ?: return fail(GateError.NOT_AVAILABLE, "还没有这一局的题目")
-        cachedReceipt(c.challengeId)?.let { return PortResult.Ok(it) }
+        val c = synchronized(lock) { state.challenge } ?: return fail(GateError.NOT_AVAILABLE, "还没有这一局的题目")
+        synchronized(lock) { cachedReceipt(c.challengeId) }?.let { return PortResult.Ok(it) }
         if (now >= c.expiresAt) return fail(GateError.EXPIRED, "这一局已经超时，回到原闸门规则")
         val qs = c.questions.associateBy { it.id }
         if (answers.isEmpty()) return fail(GateError.INVALID_ANSWER, "还没选答案")
@@ -208,10 +217,9 @@ class TrainingRedeemClient(
     }
 
     /** 查上一次提交的结果；只转抄总控的回执，不自己生成放行。 */
-    @Synchronized
     fun query(now: Long): PortResult<ExecutionReceipt> {
         val p = port ?: return fail(GateError.NOT_AVAILABLE, "总控没装或连不上")
-        val c = state.challenge ?: return fail(GateError.NOT_AVAILABLE, "没有可查的这一局")
+        val c = synchronized(lock) { state.challenge } ?: return fail(GateError.NOT_AVAILABLE, "没有可查的这一局")
         val requestId = "submit-${c.challengeId}"
         return when (val r = p.receipt(requestId)) {
             is PortResult.Ok -> acceptReceipt(r.value, c, now)
@@ -220,19 +228,18 @@ class TrainingRedeemClient(
     }
 
     /** 当前有效的临时通行令；过期就作废，不续期、不重复使用。 */
-    @Synchronized
-    fun activePass(now: Long): TemporaryPass? {
-        val pass = state.pass ?: return null
+    fun activePass(now: Long): TemporaryPass? = synchronized(lock) {
+        val pass = state.pass ?: return@synchronized null
         if (pass.expiresAt <= now) {
             commit(state.copy(pass = null, lastMessage = "放行到点了，恢复原闸门规则"))
-            return null
+            return@synchronized null
         }
-        return pass
+        pass
     }
 
     // ------------------------------------------------------------------ 回执核对
 
-    private fun acceptReceipt(receipt: ExecutionReceipt, challenge: ChallengeBundle, now: Long): PortResult<ExecutionReceipt> {
+    private fun acceptReceipt(receipt: ExecutionReceipt, challenge: ChallengeBundle, now: Long): PortResult<ExecutionReceipt> = synchronized(lock) {
         val stateOk = receipt.state.trim().uppercase() in setOf("PASSED", "REDEEMED", "ACTIVE", "OK")
         val pass = receipt.pass
         if (pass != null) {

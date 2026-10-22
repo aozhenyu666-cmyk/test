@@ -84,6 +84,8 @@ class TrainingRedeemTest {
             return PortResult.Ok(bundle)
         }
 
+        // 模拟总控：同一 requestId 只判一次、只发一份放行（客户端不再用锁包 IPC）。
+        @Synchronized
         override fun submit(submission: UnlockSubmission): PortResult<ExecutionReceipt> {
             submitCalls++
             submitOverride?.let { return it(submission) }
@@ -190,7 +192,7 @@ class TrainingRedeemTest {
         assertTrue("并发提交应在 5 秒内结束", done.await(5, TimeUnit.SECONDS))
         pool.shutdownNow()
         assertEquals(2, results.size)
-        assertEquals("并发只成功一次", 1, gate.passesIssued)
+        assertEquals("并发时“只成功一次”由总控按 requestId 保证", 1, gate.passesIssued)
         assertEquals(15, gate.totalGrantedMinutes)
         val ids = results.filterIsInstance<PortResult.Ok<ExecutionReceipt>>().map { it.value.receiptId }.toSet()
         assertEquals(1, ids.size)
@@ -345,6 +347,42 @@ class TrainingRedeemTest {
         val longPass = FakeGate(FakeGate().policy.copy(minutesPerPass = 60))
         longPass.clock = at
         assertTrue(fails(client(longPass).start(pkg, at), GateError.POLICY_DENIED))
+    }
+
+    @Test fun portCallDoesNotHoldTheClientLock() {
+        val gate = FakeGate()
+        gate.clock = at
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        gate.issueOverride = {
+            entered.countDown()
+            release.await(2, TimeUnit.SECONDS)
+            PortResult.Ok(
+                ChallengeBundle(
+                    "ch-1", "nonce-1", "pol-1", pkg, at, at + 10 * 60_000L,
+                    questions = listOf(ChallengeQuestion("q1", "1+1=?", listOf(ChallengeChoice("a", "2")))),
+                ),
+            )
+        }
+        val c = client(gate)
+        val starter = Executors.newSingleThreadExecutor()
+        val reader = Executors.newSingleThreadExecutor()
+        try {
+            val started = starter.submit<PortResult<ChallengeBundle>> { c.start(pkg, at) }
+            assertTrue("start 已进入端口调用", entered.await(2, TimeUnit.SECONDS))
+            val readDone = CountDownLatch(1)
+            reader.submit {
+                c.snapshot()
+                readDone.countDown()
+            }
+            assertTrue("端口调用期间别的线程能读状态（没有拿锁做 IPC）", readDone.await(2, TimeUnit.SECONDS))
+            release.countDown()
+            assertTrue(started.get(2, TimeUnit.SECONDS) is PortResult.Ok)
+        } finally {
+            release.countDown()
+            starter.shutdownNow()
+            reader.shutdownNow()
+        }
     }
 
     @Test fun issueRequestIdIsUniquePerStart() {
