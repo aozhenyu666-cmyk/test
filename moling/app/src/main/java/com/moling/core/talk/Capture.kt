@@ -57,17 +57,23 @@ enum class CaptureStatus { OFF, RUNNING, STOPPED, EXPIRED, REVOKED, DENIED, OUT_
 /** 用户明确选的应用/会话；TTL 由用户定，墨灵不能自己加大。 */
 @Serializable
 data class CaptureSelection(
+    /** 用户在总控里选的目标应用。 */
     val pkg: String,
-    val certSha256: String = "",
-    val uid: Int = -1,
     val titleOnly: Boolean = true,
     val visibleText: Boolean = false,
-    /** 外脑会话里可见的回合（需要无障碍读取时另外算能力）。 */
+    /** 外脑会话里可见的回合（只多给对话正文，不给输入框/按钮/其它可见文字）。 */
     val actorTurns: Boolean = false,
     val ttlMs: Long = 10 * 60_000L,
     /** 用户自己选的具体会话/页面标题（可空）。 */
     val sessionLabel: String = "",
 )
+
+/**
+ * 调用方（墨灵）身份：包名 + 安装证书指纹。
+ * 真机上由 PackageManager 按调用方 UID 查出来；**不能**用请求里自报的包名/证书。
+ */
+@Serializable
+data class CaptureTrust(val pkg: String = "com.moling.app", val certSha256: String = "")
 
 @Serializable
 data class CapturePolicy(
@@ -79,9 +85,10 @@ data class CapturePolicy(
 @Serializable
 data class CaptureLease(
     val id: String,
+    /** 用户选的目标应用（不是调用方）。 */
     val pkg: String,
-    val certSha256: String,
-    val uid: Int,
+    /** begin 时由 Binder.getCallingUid 绑定的调用方 UID（不是请求自报）。 */
+    val callerUid: Int,
     val titleOnly: Boolean = true,
     val visibleText: Boolean = false,
     val actorTurns: Boolean = false,
@@ -137,24 +144,58 @@ object Capture {
     const val MAX_PACKET_BYTES = 32 * 1024
     const val BOUNDS_TTL_MS = 2_000L
 
-    /** 用户明确选了应用、总控也开了，才给租约；否则拒绝并说明原因。 */
-    fun begin(policy: CapturePolicy, selection: CaptureSelection, now: Long, id: String = ""): PortResult<CaptureLease> {
+    /**
+     * 用户明确选了应用、总控也开了，才给租约；否则拒绝并说明原因。
+     *
+     * [selected] 只能是总控里用户选的那份；[request] 是正式请求（可空），只能更窄：
+     * 换应用 / 打开用户没勾的开关 / 延长 TTL 一律拒绝，不能由请求方扩大。
+     * [callerUid] 由 Binder.getCallingUid() 传入（真实实现），不是请求里的字段。
+     */
+    fun begin(
+        policy: CapturePolicy,
+        selected: CaptureSelection,
+        now: Long,
+        id: String = "",
+        callerUid: Int = -1,
+        request: CaptureSelection? = null,
+    ): PortResult<CaptureLease> {
         if (!policy.enabled) {
             return PortResult.Failed(PortError("CAPTURE_OFF", "限定捕获没开（默认关，要你在总控里明确选应用/会话）"))
         }
-        if (selection.pkg.isBlank()) {
+        if (selected.pkg.isBlank()) {
             return PortResult.Failed(PortError("DENIED", "没选应用：墨灵不能自己扩大捕获范围"))
         }
-        val ttl = selection.ttlMs.coerceIn(60_000L, policy.maxTtlMs.coerceAtLeast(60_000L))
+        if (callerUid < 0) {
+            return PortResult.Failed(PortError("DENIED", "没有绑定调用方 UID：begin 必须用 Binder.getCallingUid()"))
+        }
+        if (request != null) {
+            if (!request.pkg.equals(selected.pkg, ignoreCase = true)) {
+                return PortResult.Failed(PortError("DENIED", "请求方不能改用户选的应用"))
+            }
+            if (selected.titleOnly && !request.titleOnly) {
+                return PortResult.Failed(PortError("DENIED", "请求方不能把“只取标题”放宽成取正文"))
+            }
+            if (request.visibleText && !selected.visibleText) {
+                return PortResult.Failed(PortError("DENIED", "请求方不能打开用户没勾的“可见文本”"))
+            }
+            if (request.actorTurns && !selected.actorTurns) {
+                return PortResult.Failed(PortError("DENIED", "请求方不能打开用户没勾的“外脑回合”"))
+            }
+            if (request.ttlMs > selected.ttlMs) {
+                return PortResult.Failed(PortError("DENIED", "请求方不能延长用户定的捕获时间"))
+            }
+        }
+        val wantedTtl = if (request != null) minOf(selected.ttlMs, request.ttlMs) else selected.ttlMs
+        val ttl = wantedTtl.coerceIn(60_000L, policy.maxTtlMs.coerceAtLeast(60_000L))
         val lease = CaptureLease(
             id = id.ifBlank { "cap-" + now },
-            pkg = selection.pkg,
-            certSha256 = selection.certSha256,
-            uid = selection.uid,
-            titleOnly = selection.titleOnly,
-            visibleText = selection.visibleText,
-            actorTurns = selection.actorTurns,
-            sessionLabel = selection.sessionLabel,
+            pkg = selected.pkg,
+            callerUid = callerUid,
+            // 请求只能收窄：两边的开关取交集。
+            titleOnly = selected.titleOnly && (request?.titleOnly ?: true),
+            visibleText = selected.visibleText && (request?.visibleText ?: true),
+            actorTurns = selected.actorTurns && (request?.actorTurns ?: true),
+            sessionLabel = selected.sessionLabel,
             createdAt = now,
             expiresAt = now + ttl,
         )
@@ -162,16 +203,26 @@ object Capture {
     }
 
     /**
-     * Binder 调用方校验：调用方 UID 必须等于租约里的 UID；UID 对应的包名必须等于租约包名；
-     * 证书指纹（安装时固定）必须一致。**不信 payload 自报的包名**。
-     * 真实实现里 callerPkg/cert 由 PackageManager 按 UID 查，不能由对方传。
+     * Binder 调用方校验：校验的是**调用方（墨灵）**，不是被看的目标 App。
+     *  - UID 必须等于 begin 时绑定的调用方 UID；
+     *  - 按该 UID 由 PackageManager 查出的包名必须等于 [trust].pkg（墨灵）；
+     *  - 证书指纹必须等于打包时固定的 [trust].certSha256；没固定证书就拒绝（不认自报身份）。
+     * 目标应用的范围另由租约 pkg + 前台窗口检查，和调用方身份分开。
      */
-    fun verifyCaller(lease: CaptureLease, callerUid: Int, callerPkg: String, certSha256: String): PortResult<Unit> = when {
-        lease.uid < 0 -> PortResult.Failed(PortError("DENIED", "租约没有绑定调用方 UID"))
-        callerUid != lease.uid -> PortResult.Failed(PortError("DENIED", "调用方 UID 不对"))
-        !callerPkg.equals(lease.pkg, ignoreCase = true) -> PortResult.Failed(PortError("DENIED", "调用方包名和用户选的不一致"))
-        lease.certSha256.isNotBlank() && !certSha256.equals(lease.certSha256, ignoreCase = true) ->
-            PortResult.Failed(PortError("DENIED", "证书指纹不一致"))
+    fun verifyCaller(
+        lease: CaptureLease,
+        callerUid: Int,
+        callerPkg: String,
+        certSha256: String,
+        trust: CaptureTrust = CaptureTrust(),
+    ): PortResult<Unit> = when {
+        lease.callerUid < 0 -> PortResult.Failed(PortError("DENIED", "租约没有绑定调用方 UID"))
+        callerUid != lease.callerUid -> PortResult.Failed(PortError("DENIED", "调用方 UID 不对"))
+        trust.certSha256.isBlank() -> PortResult.Failed(PortError("DENIED", "没有固定的调用方证书：不认自报身份"))
+        !callerPkg.equals(trust.pkg, ignoreCase = true) ->
+            PortResult.Failed(PortError("DENIED", "不是墨灵在调用（调用方包名不对）"))
+        !certSha256.equals(trust.certSha256, ignoreCase = true) ->
+            PortResult.Failed(PortError("DENIED", "调用方证书指纹不一致"))
         else -> PortResult.Ok(Unit)
     }
 
@@ -283,13 +334,25 @@ object Capture {
 
     // ------------------------------------------------------------------ 内部
 
+    /** 默认只取标题；可见文本只多给正文类节点；外脑回合再窄，不能放大成“所有可见文字”。 */
+    private val titleRoles = setOf("TITLE", "HEADER")
+    private val turnRoles = setOf("PARAGRAPH", "CAPTION")
+    private val textRoles = titleRoles + turnRoles
+
+    /** 密码 / 验证 / 支付 / 通知类节点：不管勾了什么都不要。 */
+    private val forbiddenRole = Regex("(PASSWORD|PASSCODE|SECURE|OTP|VERIF|PAYMENT|PAY_|WALLET|BANK|NOTIF)", RegexOption.IGNORE_CASE)
+    private val forbiddenText = Regex("(密码|口令|验证码|动态码|支付密码|银行卡|信用卡|身份证|付款码)")
+
     private fun wanted(n: CaptureNode, lease: CaptureLease): Boolean {
-        if (!lease.visibleText && !lease.actorTurns) {
-            // 默认只取标题（+ 用户明确勾了可见文本才取正文）。
-            return lease.titleOnly && (n.role == "TITLE" || n.role == "HEADER")
+        if (forbiddenRole.containsMatchIn(n.role) || forbiddenText.containsMatchIn(n.text)) return false
+        val role = n.role.uppercase()
+        val allowed = buildSet {
+            if (lease.titleOnly) addAll(titleRoles)
+            if (lease.visibleText) addAll(textRoles)
+            // 回合只给对话正文（段落/说明）；输入框、按钮、其它节点永远不在内。
+            if (lease.actorTurns) addAll(turnRoles)
         }
-        if (!lease.actorTurns) return true
-        return true
+        return role in allowed
     }
 
     private fun page(

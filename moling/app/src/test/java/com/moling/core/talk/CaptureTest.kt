@@ -11,17 +11,16 @@ import org.junit.Test
 /** 第十二批 A4：限定捕获只做接口 + 拒绝降级（不申请权限）。 */
 class CaptureTest {
     private val policy = CapturePolicy(enabled = true, maxTtlMs = 600_000)
+    private val trust = CaptureTrust("com.moling.app", "CERT-M")
     private val selection = CaptureSelection(
         pkg = "com.example.chat",
-        certSha256 = "CERT-A",
-        uid = 10_123,
         titleOnly = false,
         visibleText = true,
         ttlMs = 120_000,
     )
 
     private fun lease(now: Long = 1_000, sel: CaptureSelection = selection): CaptureLease =
-        (Capture.begin(policy, sel, now) as PortResult.Ok).value
+        (Capture.begin(policy, sel, now, callerUid = 10_123) as PortResult.Ok).value
 
     private fun window(revision: Long = 1, rotation: Int = 0) = CaptureWindow("com.example.chat", revision, 1080, 2400, rotation)
 
@@ -41,19 +40,83 @@ class CaptureTest {
         val l = lease()
         assertEquals(CaptureStatus.RUNNING, l.status)
         assertEquals("用户选的 TTL 不能被墨灵放大", 120_000, l.expiresAt - l.createdAt)
-        val capped = (Capture.begin(policy.copy(maxTtlMs = 60_000), selection, 1) as PortResult.Ok).value
+        val capped = (Capture.begin(policy.copy(maxTtlMs = 60_000), selection, 1, callerUid = 10_123) as PortResult.Ok).value
         assertEquals("超过总控上限就压到上限", 60_000, capped.expiresAt - capped.createdAt)
+        assertEquals(
+            "没绑调用方 UID 就不给租约",
+            "DENIED",
+            ((Capture.begin(policy, selection, 1)) as PortResult.Failed).error.code,
+        )
     }
 
     @Test
-    fun callerIsVerifiedByUidPackageAndCertificate() {
+    fun callerIsVerifiedAsMolingNotTargetApp() {
         val l = lease()
-        assertTrue(Capture.verifyCaller(l, 10_123, "com.example.chat", "CERT-A") is PortResult.Ok)
-        assertEquals("UID 不对就拒", "DENIED", ((Capture.verifyCaller(l, 99, "com.example.chat", "CERT-A")) as PortResult.Failed).error.code)
-        assertEquals("包名对不上就拒", "DENIED", ((Capture.verifyCaller(l, 10_123, "com.evil.chat", "CERT-A")) as PortResult.Failed).error.code)
-        assertEquals("证书对不上就拒", "DENIED", ((Capture.verifyCaller(l, 10_123, "com.example.chat", "CERT-B")) as PortResult.Failed).error.code)
-        val noUid = (Capture.begin(policy, selection.copy(uid = -1), 1) as PortResult.Ok).value
-        assertEquals("没绑 UID 的租约不认", "DENIED", ((Capture.verifyCaller(noUid, 1, "com.example.chat", "CERT-A")) as PortResult.Failed).error.code)
+        assertTrue("墨灵按 UID 查出的包名+证书", Capture.verifyCaller(l, 10_123, "com.moling.app", "CERT-M", trust) is PortResult.Ok)
+        assertEquals("UID 不对就拒", "DENIED", ((Capture.verifyCaller(l, 99, "com.moling.app", "CERT-M", trust)) as PortResult.Failed).error.code)
+        assertEquals(
+            "拿目标 App 的包名冒充调用方要拒（旧实现就是这么错的）",
+            "DENIED",
+            ((Capture.verifyCaller(l, 10_123, "com.example.chat", "CERT-M", trust)) as PortResult.Failed).error.code,
+        )
+        assertEquals(
+            "别的应用想调也拒",
+            "DENIED",
+            ((Capture.verifyCaller(l, 10_123, "com.evil.app", "CERT-M", trust)) as PortResult.Failed).error.code,
+        )
+        assertEquals("证书对不上就拒", "DENIED", ((Capture.verifyCaller(l, 10_123, "com.moling.app", "CERT-B", trust)) as PortResult.Failed).error.code)
+        assertEquals(
+            "没固定证书 = 不认自报身份",
+            "DENIED",
+            ((Capture.verifyCaller(l, 10_123, "com.moling.app", "CERT-M", CaptureTrust("com.moling.app"))) as PortResult.Failed).error.code,
+        )
+    }
+
+    @Test
+    fun requestCannotWidenUserSelection() {
+        fun denied(req: CaptureSelection) =
+            ((Capture.begin(policy, selection, 1_000, callerUid = 10_123, request = req)) as PortResult.Failed).error.code
+        assertEquals("不能改用户选的应用", "DENIED", denied(selection.copy(pkg = "com.other")))
+        assertEquals("不能打开用户没勾的外脑回合", "DENIED", denied(selection.copy(actorTurns = true)))
+        assertEquals("不能延长用户定的时间", "DENIED", denied(selection.copy(ttlMs = 600_000)))
+        val narrower = selection.copy(visibleText = false, ttlMs = 60_000)
+        val l = (Capture.begin(policy, selection, 1_000, callerUid = 10_123, request = narrower) as PortResult.Ok).value
+        assertFalse("请求只能更窄：可见文本不开", l.visibleText)
+        assertEquals("请求只能更短", 60_000, l.expiresAt - l.createdAt)
+        assertEquals("目标应用仍是用户选的", "com.example.chat", l.pkg)
+    }
+
+
+    @Test
+    fun secretsAndTurnsAreExcludedFromCapture() {
+        val sel = selection.copy(titleOnly = false, visibleText = true, actorTurns = true)
+        val l = lease(sel = sel)
+        val nodes = listOf(
+            node("p-1", "正文段落", "PARAGRAPH"),
+            node("in-1", "他正在输入的话", "INPUT"),
+            node("btn-1", "发送", "BUTTON"),
+            node("o-1", "其它节点", "OTHER"),
+            node("pw-1", "登录密码", "PASSWORD"),
+            node("v-1", "123456", "VERIFICATION"),
+            node("pay-1", "付款", "PAYMENT"),
+            node("n-1", "新通知", "NOTIFICATION"),
+            node("p-2", "请输入验证码后继续", "PARAGRAPH"),
+        )
+        val snap = CaptureSnapshot(1_000, window(), nodes)
+        val p = (Capture.poll(l, listOf(snap), CaptureCursor(), 1_000, "com.example.chat", permission = true, enabled = true) as PortResult.Ok).value
+        assertEquals("密码/验证/支付/通知、输入框、按钮都不拿", listOf("正文段落"), p.nodes.map { it.text })
+
+        // actorTurns 单独不能放大成“所有可见文字”
+        val onlyTurns = lease(sel = selection.copy(titleOnly = false, visibleText = false, actorTurns = true))
+        val turnNodes = listOf(
+            node("t-1", "会话标题", "TITLE"),
+            node("p-1", "外脑回合正文", "PARAGRAPH"),
+            node("c-1", "说明文字", "CAPTION"),
+            node("btn-1", "复制", "BUTTON"),
+            node("o-1", "别的可见字", "OTHER"),
+        )
+        val tp = (Capture.poll(onlyTurns, listOf(CaptureSnapshot(1_000, window(), turnNodes)), CaptureCursor(), 1_000, "com.example.chat", permission = true, enabled = true) as PortResult.Ok).value
+        assertEquals("只多给对话回合的正文", listOf("外脑回合正文", "说明文字"), tp.nodes.map { it.text })
     }
 
     @Test
@@ -141,7 +204,7 @@ class CaptureTest {
 
     @Test
     fun titleOnlyByDefaultAndProbeDegrade() {
-        val l = (Capture.begin(policy, selection.copy(titleOnly = true, visibleText = false), 1_000) as PortResult.Ok).value
+        val l = (Capture.begin(policy, selection.copy(titleOnly = true, visibleText = false), 1_000, callerUid = 10_123) as PortResult.Ok).value
         val snap = CaptureSnapshot(1_000, window(), listOf(node("t-1", "标题", "TITLE"), node("p-1", "正文段")))
         val p = (Capture.poll(l, listOf(snap), CaptureCursor(), 1_000, "com.example.chat", permission = true, enabled = true) as PortResult.Ok).value
         assertEquals("默认只拿标题", listOf("标题"), p.nodes.map { it.text })
