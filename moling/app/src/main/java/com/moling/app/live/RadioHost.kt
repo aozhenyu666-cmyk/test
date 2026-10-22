@@ -171,10 +171,16 @@ object RadioHost {
         return r
     }
 
-    /** 界面离开 / 进程结束：立刻停止并释放。 */
+    /**
+     * 界面离开 / 拔耳机 / 熄屏 / 失焦：立刻停止并释放。
+     * 只管电台自己：没有电台在播时什么都不做；只有电台正拿着焦点在念时才打断朗读——
+     * Speaker 是公用的，不能顺手把她的耳语、对话朗读也掐了（耳语被掐会让别人的音乐一直压低）。
+     */
     fun stopAll() {
-        engine.current?.let { engine.stop(it.id, System.currentTimeMillis()) }
-        Speaker.stop()
+        val live = engine.current?.active == true
+        if (!live && !focusGranted && tickJob == null) return
+        engine.current?.takeIf { it.active }?.let { engine.stop(it.id, System.currentTimeMillis()) }
+        if (focusGranted) Speaker.stop()
         spokenKey = ""
         dropFocus()
         publish()

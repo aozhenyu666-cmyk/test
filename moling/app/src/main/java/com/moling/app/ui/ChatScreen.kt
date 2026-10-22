@@ -56,6 +56,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.ClipboardManager
@@ -315,7 +316,8 @@ fun ChatScreen() {
         )
 
         // 第十一批 R2：对话页也能“陪我听一会”（只读案板已有材料）
-        if (!typing) RadioPanel(benchState, benchState.active())
+        // 打字时只是藏起来，不卸载：卸载会触发“离开面板就停”，点一下输入框电台就断了
+        Box(if (typing) Modifier.height(0.dp).clipToBounds() else Modifier) { RadioPanel(benchState, benchState.active()) }
 
         if (state.talk.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
