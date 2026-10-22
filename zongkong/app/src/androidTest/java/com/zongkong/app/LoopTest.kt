@@ -1225,7 +1225,16 @@ class LoopTest {
         settle()
         shot("e2e-121-chat-planned")
         compose.onNode(hasText("好")).performClick()
-        waitText("今日部署过了", 20_000)
+        // 等这一轮说完；等不到就把对话原样带进失败信息（看清是哪一步卡住）
+        try {
+            compose.waitUntil(30_000) { !app.chat.busy.value && app.chat.log.value.messages.any { it.content.contains("今日部署过了") } }
+        } catch (e: Throwable) {
+            val dump = app.chat.log.value.messages.takeLast(10).joinToString("\n") { m ->
+                "${m.role}${if (m.error) "(错)" else ""}: ${m.content.take(160)} ${m.summary} ${m.calls.joinToString { it.name }}"
+            }
+            throw AssertionError("等不到“今日部署过了”。busy=${app.chat.busy.value} 模型被请求了 ${llm.requestCount} 次\n$dump", e)
+        }
+        waitText("今日部署过了", 5_000)
         settle()
         shot("e2e-122-chat-confirmed")
         val gate = app.store.status().gates.firstOrNull { it.gate.id == com.zongkong.app.data.Actions.PLAN_GATE }
