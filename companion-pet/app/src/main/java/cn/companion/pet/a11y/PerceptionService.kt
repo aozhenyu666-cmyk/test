@@ -44,6 +44,7 @@ class PerceptionService : AccessibilityService() {
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 PerceptionHub.trail.onScroll(pkg, now)
                 if (pkg == PerceptionHub.trail.foreground) PerceptionHub.stuck.onScroll(now)
+                PerceptionHub.onScroll?.invoke(pkg)
             }
         }
     }

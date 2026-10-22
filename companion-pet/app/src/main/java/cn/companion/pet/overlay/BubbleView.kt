@@ -16,7 +16,6 @@ import android.os.Handler
 import android.os.Looper
 import android.text.InputType
 import android.util.TypedValue
-import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -37,6 +36,9 @@ data class BubbleSpec(
     val actions: List<BubbleAction> = emptyList(),
     /** 直接显示整段文字，不逐字出现（倒计时这类每秒更新的提示）。 */
     val instant: Boolean = false,
+    /** 默认入口之后追加的按钮（例如“想一想”“记个念头”）。 */
+    val extra: List<BubbleAction> = emptyList(),
+    val geminiLabel: String = "去 Gemini",
 )
 
 data class BubbleAction(val label: String, val highlighted: Boolean = false, val onClick: () -> Unit)
@@ -61,7 +63,7 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
 
     private val handler = Handler(Looper.getMainLooper())
     private val textView = TextView(context)
-    private val actions = LinearLayout(context)
+    private val actions = FlowRow(context)
     private val inputRow = LinearLayout(context)
     private val input = EditText(context)
     private val bubbleBg = ComicBubble(dp(2f), dp(14f), dp(10f))
@@ -89,8 +91,6 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
         textView.setLineSpacing(0f, 1.15f)
         addView(textView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
 
-        actions.orientation = HORIZONTAL
-        actions.gravity = Gravity.START
         addView(actions, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10f).toInt() })
 
         inputRow.orientation = HORIZONTAL
@@ -119,8 +119,9 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
         } else if (!spec.textOnly) {
             if (spec.showMic) actions.addView(micChip())
             if (spec.showType) actions.addView(chip("打字", false) { startTyping() })
-            if (spec.showGemini) actions.addView(chip("去 Gemini", spec.geminiHighlighted) { listener.onGemini() })
+            if (spec.showGemini) actions.addView(chip(spec.geminiLabel, spec.geminiHighlighted) { listener.onGemini() })
             if (spec.showLive) actions.addView(chip("一起看", false) { listener.onLive() })
+            spec.extra.forEach { a -> actions.addView(chip(a.label, a.highlighted) { a.onClick() }) }
             actions.addView(chip("×", false) { listener.onClose() })
         }
         actions.visibility = if (spec.textOnly && spec.actions.isEmpty()) GONE else VISIBLE
@@ -158,6 +159,8 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
         textView.text = fullText.substring(0, typed)
         handler.postDelayed({ step() }, 55)
     }
+
+    fun openInput() = startTyping()
 
     private fun startTyping() {
         inputRow.visibility = VISIBLE
@@ -209,7 +212,7 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
             setColor(if (highlighted) ACCENT else Color.rgb(255, 244, 230))
             setStroke(dp(1.5f).toInt(), INK)
         }
-        layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6f).toInt() }
+        layoutParams = android.view.ViewGroup.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
         setOnClickListener { onClick() }
     }
 
@@ -254,5 +257,53 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
         private const val MIC_TAG = "mic"
         val INK = Color.rgb(70, 48, 38)
         val ACCENT = Color.rgb(108, 142, 230)
+    }
+}
+
+/** 按钮一行放不下就换行。 */
+class FlowRow(context: Context) : android.view.ViewGroup(context) {
+    private val gap = (6 * resources.displayMetrics.density).toInt()
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val maxW = MeasureSpec.getSize(widthMeasureSpec).let { if (it == 0) Int.MAX_VALUE else it } - paddingLeft - paddingRight
+        var x = 0
+        var y = 0
+        var rowH = 0
+        var usedW = 0
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            if (c.visibility == GONE) continue
+            measureChild(c, MeasureSpec.makeMeasureSpec(maxW, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+            if (x > 0 && x + c.measuredWidth > maxW) {
+                x = 0
+                y += rowH + gap
+                rowH = 0
+            }
+            x += c.measuredWidth + gap
+            usedW = maxOf(usedW, x - gap)
+            rowH = maxOf(rowH, c.measuredHeight)
+        }
+        val w = if (MeasureSpec.getMode(widthMeasureSpec) == MeasureSpec.EXACTLY) MeasureSpec.getSize(widthMeasureSpec)
+        else usedW + paddingLeft + paddingRight
+        setMeasuredDimension(w, y + rowH + paddingTop + paddingBottom)
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val maxW = r - l - paddingLeft - paddingRight
+        var x = 0
+        var y = 0
+        var rowH = 0
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            if (c.visibility == GONE) continue
+            if (x > 0 && x + c.measuredWidth > maxW) {
+                x = 0
+                y += rowH + gap
+                rowH = 0
+            }
+            c.layout(paddingLeft + x, paddingTop + y, paddingLeft + x + c.measuredWidth, paddingTop + y + c.measuredHeight)
+            x += c.measuredWidth + gap
+            rowH = maxOf(rowH, c.measuredHeight)
+        }
     }
 }

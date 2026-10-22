@@ -39,7 +39,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import cn.companion.pet.PetApp
 import cn.companion.pet.data.SecretWriteResult
+import cn.companion.pet.bridge.Assistants
+import cn.companion.pet.core.session.AssistantApp
 import cn.companion.pet.net.EndpointPolicy
+import cn.companion.pet.net.ModelProvider
 import cn.companion.pet.work.NightlyWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -56,9 +59,15 @@ fun SettingsTab(context: Context) {
         Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Section("DeepSeek")
+        Section("搭话用的模型")
+        Text("桌宠主动开口、想一想、整理记忆都用这里的模型。点一下填好常用服务商，Key 要换成对应服务商的。", style = MaterialTheme.typography.bodySmall)
         var endpoint by remember { mutableStateOf(s.endpoint) }
         var model by remember { mutableStateOf(s.model) }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            ModelProvider.entries.forEach { p ->
+                OutlinedButton(onClick = { endpoint = p.endpoint; model = p.model }, Modifier.weight(1f)) { Text(p.shortLabel) }
+            }
+        }
         var key by remember { mutableStateOf("") }
         var limit by remember { mutableStateOf(s.dailyLimit.toString()) }
         OutlinedTextField(endpoint, { endpoint = it }, Modifier.fillMaxWidth(), label = { Text("接口地址（OpenAI 兼容）") }, singleLine = true,
@@ -124,19 +133,34 @@ fun SettingsTab(context: Context) {
         AppListRow(context, "专注 App", "连续用 15 分钟以上，开口间隔翻倍", s.focusApps) { s.focusApps = it }
         AppListRow(context, "排除 App", "前台是这些时不开口、不读屏", s.excludeApps) { s.excludeApps = it }
 
-        Section("Gemini")
-        var pkg by remember { mutableStateOf(s.geminiPackage) }
-        OutlinedTextField(pkg, { pkg = it; s.geminiPackage = it.trim() }, Modifier.fillMaxWidth(), label = { Text("Gemini 包名") }, singleLine = true)
+        Section("深聊用哪个 AI")
+        val assistants = remember { Assistants(context, s) }
+        var chosen by remember { mutableStateOf(assistants.current) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AssistantApp.entries.forEach { a ->
+                val selected = a == chosen
+                if (selected) Button(onClick = {}) { Text(a.label) }
+                else OutlinedButton(onClick = { chosen = a; s.assistant = a.name }) { Text(a.label) }
+            }
+        }
+        val found = remember(chosen) { chosen.resolve(assistants.installed(), assistants.override(chosen)) }
+        Text(
+            if (found != null) "已找到 ${chosen.label}：$found" else "没在手机上找到 ${chosen.label}。装了的话，在下面填它的包名。",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        var pkg by remember(chosen) { mutableStateOf(assistants.override(chosen)) }
+        OutlinedTextField(pkg, { pkg = it; assistants.setOverride(chosen, it.trim()) }, Modifier.fillMaxWidth(),
+            label = { Text("${chosen.label} 包名（留空自动找）") }, singleLine = true)
         var auto by remember { mutableStateOf(s.geminiAutoSend) }
-        Toggle("自动发送（实验）", "打开 Gemini 后用无障碍自动粘贴并点发送；3 秒找不到输入框就退回手动粘贴。", auto) {
+        Toggle("自动发送（实验）", "打开 AI App 后用无障碍自动粘贴并点发送；3 秒找不到输入框就退回手动粘贴。", auto) {
             auto = it; s.geminiAutoSend = it
         }
 
-        Section("Gemini 会话")
-        Text("和 Gemini 聊天时，桌宠头上会出现蓝色的 G。文字深聊中切到别的 App，它先倒计时提醒，到点把 Gemini 拉回来；Live 共看本来就要切出去看东西，只记录不拉回。点桌宠可以随时结束会话。",
+        Section("AI 会话")
+        Text("和 Gemini、ChatGPT 或千问聊天时，桌宠头上会出现蓝色的 G。文字深聊中切到别的 App，它先倒计时提醒，到点把你拉回原来的对话；“一起看”本来就要切出去看东西，只记录不拉回。点桌宠可以随时结束会话。",
             style = MaterialTheme.typography.bodySmall)
         var autoStart by remember { mutableStateOf(s.sessionAutoStart) }
-        Toggle("打开 Gemini 自动开始", "自己打开 Gemini 停留 ${s.sessionAutoStartSec} 秒，就算开始一次会话。从桌宠点“去 Gemini”会直接开始。", autoStart) {
+        Toggle("打开 AI App 自动开始", "自己打开 Gemini / ChatGPT / 千问 停留 ${s.sessionAutoStartSec} 秒，就算开始一次会话。从桌宠点“去 …”会直接开始。", autoStart) {
             autoStart = it; s.sessionAutoStart = it
         }
         var pull by remember { mutableStateOf(s.sessionPullBack) }
@@ -153,6 +177,12 @@ fun SettingsTab(context: Context) {
         }
         AppListRow(context, "会话中允许的 App", "切到这些 App（如笔记、词典、要复制资料的阅读器）宽限更长；学习 App 也算", s.sessionAllowedApps) {
             s.sessionAllowedApps = it
+        }
+
+        Section("想一想")
+        var skimOn by remember { mutableStateOf(s.skimEnabled) }
+        Toggle("划过留痕", "滑动时把经过的段落记在内存里，点桌宠 → 想一想 → 划过了啥，就能回看。只留 10 分钟、熄屏就清空，不存文件；信息流 App、排除 App 和 AI App 里不记。", skimOn) {
+            skimOn = it; s.skimEnabled = it
         }
 
         Section("其他")

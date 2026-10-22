@@ -2,12 +2,11 @@ package cn.companion.pet.a11y
 
 import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
-import cn.companion.pet.core.session.GeminiSession
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * 实验功能“自动发送”：在 Gemini 界面里找输入框，写入文字并点发送。
+ * 实验功能“自动发送”：在 Gemini / ChatGPT / 千问 界面里找输入框，写入文字并点发送。
  *
  * 只在用户刚点了“去 Gemini”之后调用一次；3 秒内找不到就放弃，由调用方退回手动粘贴。
  * 只尝试一次，不重试，所以不会重复发送。Gemini 改版导致找不到控件时只是失败，不影响别的功能。
@@ -15,13 +14,13 @@ import kotlinx.coroutines.withTimeoutOrNull
 object GeminiAutoSender {
     private val sendWords = listOf("发送", "send", "提交", "submit")
 
-    suspend fun send(geminiPackage: String, text: String, timeoutMillis: Long = 3_000): Boolean {
+    suspend fun send(packages: Set<String>, text: String, timeoutMillis: Long = 3_000): Boolean {
         val service = PerceptionHub.service ?: return false
         val input = withTimeoutOrNull(timeoutMillis) {
             var found: AccessibilityNodeInfo? = null
             while (found == null) {
                 val root = service.rootInActiveWindow
-                if (root != null && root.packageName?.toString() in GeminiSession.packagesFor(geminiPackage)) found = findEditable(root)
+                if (root != null && root.packageName?.toString() in packages) found = findEditable(root)
                 if (found == null) delay(250)
             }
             found

@@ -44,7 +44,16 @@ class Settings(context: Context) {
     var sessionMode by str("session_mode", "")
     var sessionStartedAt by long("session_started_at", 0L)
 
+    /** 深聊用哪个 AI App：GEMINI / CHATGPT / QWEN。 */
+    var assistant by str("assistant", "GEMINI")
     var geminiPackage by str("gemini_pkg", "com.google.android.apps.bard")
+    var chatgptPackage by str("chatgpt_pkg", "")
+    var qwenPackage by str("qwen_pkg", "")
+    /** 进行中会话的 AI App。 */
+    var sessionAssistant by str("session_assistant", "GEMINI")
+    var sessionPackage by str("session_package", "")
+    /** 划过留痕：滑动时在内存里记下经过的段落。 */
+    var skimEnabled by bool("skim", true)
     var geminiAutoSend by bool("gemini_auto_send", false)
     var ttsEnabled by bool("tts", false)
     var petPaused by bool("paused", false)

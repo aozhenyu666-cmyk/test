@@ -29,6 +29,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import cn.companion.pet.PetApp
 import cn.companion.pet.core.memory.ProfileRules
+import cn.companion.pet.core.think.ThoughtNotes
+import cn.companion.pet.data.Stats
+import cn.companion.pet.net.ChatRequest
+import cn.companion.pet.net.ChatResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -39,6 +43,7 @@ private data class MemorySnapshot(
     val today: List<String> = emptyList(),
     val diaries: List<Pair<LocalDate, String>> = emptyList(),
     val letters: List<Pair<LocalDate, String>> = emptyList(),
+    val thoughts: List<Pair<LocalDate, List<ThoughtNotes.Thought>>> = emptyList(),
 )
 
 /** 记忆查看与编辑：档案（可纠正、删除推测）、今天的流水、日记、信。 */
@@ -47,6 +52,7 @@ fun MemoryTab(resumeTick: Int) {
     val app = PetApp.instance
     val memory = app.memory
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
     var reload by remember { mutableIntStateOf(0) }
     var snap by remember { mutableStateOf(MemorySnapshot()) }
     var editing by remember { mutableStateOf(false) }
@@ -60,6 +66,7 @@ fun MemoryTab(resumeTick: Int) {
                     today = memory.todayLines(),
                     diaries = memory.listDates(memory.diaryDir).take(7).map { it to memory.diary(it).orEmpty() },
                     letters = memory.listDates(memory.lettersDir).take(7).map { it to memory.letter(it).orEmpty() },
+                    thoughts = app.thoughts.dates().take(7).map { it to app.thoughts.list(it) }.filter { it.second.isNotEmpty() },
                 )
             }
         }
@@ -98,6 +105,55 @@ fun MemoryTab(resumeTick: Int) {
         Text("今天的交流（${snap.today.size}）", style = MaterialTheme.typography.titleMedium)
         snap.today.takeLast(30).reversed().forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
         if (snap.today.isNotEmpty()) TextButton(onClick = { io { memory.todayFile.delete() } }) { Text("清空今天的记录") }
+
+        HorizontalDivider()
+        Text("念头卡", style = MaterialTheme.typography.titleMedium)
+        Text("点桌宠 → 记个念头，说一句就记下，连同当时在看的那句原文。", style = MaterialTheme.typography.bodySmall)
+        var digest by remember { mutableStateOf<String?>(null) }
+        var digesting by remember { mutableStateOf(false) }
+        if (snap.thoughts.isEmpty()) Text("还没有。", style = MaterialTheme.typography.bodySmall)
+        snap.thoughts.forEach { (d, list) ->
+            Text(d.toString(), style = MaterialTheme.typography.labelLarge)
+            list.forEach { t ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("${t.time} ${t.text}", style = MaterialTheme.typography.bodyMedium)
+                        if (t.quote.isNotBlank()) Text("「${t.quote}」· ${t.app}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    TextButton(onClick = { io { app.thoughts.delete(d, t) } }) { Text("删") }
+                }
+            }
+        }
+        val latest = snap.thoughts.firstOrNull()
+        if (latest != null) {
+            Button(enabled = !digesting, onClick = {
+                val key = app.apiKey()
+                if (key == null) { digest = "还没填模型的 API Key。"; return@Button }
+                digesting = true
+                scope.launch {
+                    val messages = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { ThoughtNotes.digestPrompt(memory.persona(), latest.second) } }
+                    app.stats.add(Stats.Kind.API_CALLS)
+                    val r = app.client.complete(ChatRequest(app.settings.endpoint, app.settings.model, key, messages, maxTokens = 800, timeoutMillis = 30_000))
+                    val text = (r as? ChatResult.Success)?.content?.trim()
+                    if (text != null) withContext(Dispatchers.IO) {
+                        synchronized(app.memoryLock) { memory.writeAtomic(java.io.File(memory.root, "notes/digest-${latest.first}.md"), text) }
+                    }
+                    digest = text ?: "这次没整理出来，等会儿再试。"
+                    digesting = false
+                }
+            }) { Text(if (digesting) "整理中……" else "把 ${latest.first} 的念头整理成笔记") }
+        }
+        digest?.let { d ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(d, style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = {
+                        val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                        cm?.setPrimaryClip(android.content.ClipData.newPlainText("念头笔记", d))
+                    }) { Text("复制") }
+                }
+            }
+        }
 
         HorizontalDivider()
         Text("它写给你的信", style = MaterialTheme.typography.titleMedium)

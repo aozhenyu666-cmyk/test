@@ -2,6 +2,7 @@ package cn.companion.pet
 
 import android.app.Application
 import cn.companion.pet.core.memory.MemoryStore
+import cn.companion.pet.core.think.ThoughtNotes
 import cn.companion.pet.data.SecretReadResult
 import cn.companion.pet.data.SecretStore
 import cn.companion.pet.data.Settings
@@ -19,6 +20,8 @@ class PetApp : Application() {
     lateinit var secrets: SecretStore
         private set
     lateinit var memory: MemoryStore
+        private set
+    lateinit var thoughts: ThoughtNotes
         private set
     val client by lazy { DeepSeekClient() }
 
@@ -49,6 +52,7 @@ class PetApp : Application() {
         stats = Stats(this)
         secrets = SecretStore(this)
         memory = MemoryStore(File(filesDir, "memory"))
+        thoughts = ThoughtNotes(File(memory.root, "notes"))
         NightlyWorker.schedule(this)
     }
 

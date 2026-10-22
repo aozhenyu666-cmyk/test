@@ -4,17 +4,17 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class GeminiSessionTest {
+class ChatSessionTest {
     private val gemini = "com.google.android.apps.bard"
 
     private fun session(mode: SessionMode = SessionMode.TEXT, allowed: Set<String> = setOf("notes")) =
-        GeminiSession(mode, 0, GeminiSession.packagesFor(gemini), allowed)
+        ChatSession(mode, 0, AssistantApp.GEMINI.sessionPackages(gemini), allowed)
 
     @Test
     fun stayingInGeminiDoesNothing() {
         val s = session()
         assertEquals(SessionAction.None, s.update(1_000, gemini, true))
-        assertEquals(SessionAction.None, s.update(2_000, GeminiSession.GOOGLE_APP, true))
+        assertEquals(SessionAction.None, s.update(2_000, AssistantApp.GOOGLE_APP, true))
     }
 
     @Test
@@ -25,7 +25,7 @@ class GeminiSessionTest {
         assertEquals(SessionAction.PullBack, s.update(10_000, "wechat", true))
         assertEquals(1, s.pullBacks)
         assertEquals(SessionAction.Back, s.update(11_000, gemini, true))
-        assertEquals(GeminiSession.State.IN_GEMINI, s.state)
+        assertEquals(ChatSession.State.IN_GEMINI, s.state)
     }
 
     @Test
@@ -58,7 +58,7 @@ class GeminiSessionTest {
         }
         s.update(t, "wechat", true)
         assertEquals(SessionAction.AskEnd, s.update(t + 10_000, "wechat", true))
-        assertEquals(GeminiSession.State.ASKING, s.state)
+        assertEquals(ChatSession.State.ASKING, s.state)
         // 没回应 2 分钟：自动结束
         val ended = s.update(t + 10_000 + 120_000, "wechat", true)
         assertTrue(ended is SessionAction.Ended && ended.summary.reason == EndReason.NO_ANSWER)

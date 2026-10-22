@@ -10,6 +10,7 @@ import android.os.PowerManager
 import cn.companion.pet.PetApp
 import cn.companion.pet.a11y.GeminiAutoSender
 import cn.companion.pet.a11y.PerceptionHub
+import cn.companion.pet.bridge.Assistants
 import cn.companion.pet.bridge.GeminiLauncher
 import cn.companion.pet.core.bridge.BridgeContext
 import cn.companion.pet.core.bridge.GeminiBridgeTextBuilder
@@ -31,7 +32,13 @@ import cn.companion.pet.core.scene.Scene
 import cn.companion.pet.core.scene.SceneClassifier
 import cn.companion.pet.core.scene.SceneDecision
 import cn.companion.pet.core.session.EndReason
-import cn.companion.pet.core.session.GeminiSession
+import cn.companion.pet.core.session.ChatSession
+import cn.companion.pet.core.session.AssistantApp
+import cn.companion.pet.core.skim.SkimBuffer
+import cn.companion.pet.core.think.ThinkMode
+import cn.companion.pet.core.think.ThinkPrompt
+import cn.companion.pet.core.think.ThinkResult
+import cn.companion.pet.core.think.ThoughtNotes
 import cn.companion.pet.core.session.SessionAction
 import cn.companion.pet.core.session.SessionMode
 import cn.companion.pet.core.session.SessionSummary
@@ -77,6 +84,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private val haptics = Haptics(context)
     private val voice = VoiceInput(context)
     private val gemini = GeminiLauncher(context)
+    private val assistants = Assistants(context, settings)
     private val speech = Speech(context)
     private val power = context.getSystemService(PowerManager::class.java)
     private val keyguard = context.getSystemService(KeyguardManager::class.java)
@@ -124,10 +132,12 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         active = isUserActive()
         if (active) onUserPresent()
         handler.post(ticker)
+        PerceptionHub.onScroll = { pkg -> onScrollEvent(pkg) }
         scope.launch { settings.changes.collect { scheduler.config = settings.rhythm() } }
     }
 
     fun stop() {
+        PerceptionHub.onScroll = null
         handler.removeCallbacksAndMessages(null)
         voice.cancel()
         speech.shutdown()
@@ -144,6 +154,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         probeJob?.cancel()
         voice.cancel()
         endConversation()
+        endThink()
+        skim.clear() // 划过的内容只留在亮屏期间
         overlay.retreat()
         Heartbeat.schedule(context, settings)
     }
@@ -171,6 +183,12 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // Gemini 会话期间：只守着会话，不主动搭话
         session?.let { handleSession(it, now); return }
         if (!active) return
+        // 正在“想一想”或记念头：不插嘴；放着不管 3 分钟就收起
+        if (think != null || noteDraft != null) {
+            val since = think?.touchedAt ?: noteDraft!!.startedAt
+            if (now - since > 3 * 60_000L) endThink()
+            return
+        }
         if (maybeAutoStartSession(now)) return
 
         convo?.let { escalate(it, now); return }
@@ -214,7 +232,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun speak(stuck: Boolean, afterHeartbeat: Boolean = false) {
         val now = now()
-        if (probeJob?.isActive == true || convo != null || session != null) return
+        if (probeJob?.isActive == true || convo != null || session != null || think != null || noteDraft != null) return
         heartbeatWaiting = false
 
         val key = apiKey()
@@ -290,6 +308,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         text = text,
         showMic = voice.available,
         geminiHighlighted = highlightGemini,
+        geminiLabel = "去 ${assistants.current.label}",
         showLive = scene == Scene.LEARNING,
     )
 
@@ -300,6 +319,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             if (overlay.isBubbleShown) hideSessionPrompt() else showSessionMenu()
             return
         }
+        if (think != null || noteDraft != null) { endThink(); return }
         if (overlay.isBubbleShown) {
             endConversation()
             return
@@ -313,7 +333,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val opening = buildOpeningSync(decision)
         convo = Conversation(decision, reply, opening, now(), userStarted = true)
         overlay.setMood(Mood.CURIOUS)
-        overlay.showBubble(entrySpec(greeting, decision.scene, false))
+        overlay.showBubble(
+            entrySpec(greeting, decision.scene, false).copy(
+                extra = listOf(BubbleAction("想一想") { openThinkMenu() }, BubbleAction("记个念头") { startNote() }),
+            ),
+        )
     }
 
     override fun onHoldStart() {
@@ -358,6 +382,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     override fun onTextSubmitted(text: String) {
         overlay.setBubbleFocusable(false)
+        when {
+            noteDraft != null -> { saveNote(text); return }
+            think?.awaitingAnswer == true -> { answerThink(text); return }
+        }
         onUserInput(text, fromHold = false)
     }
 
@@ -428,7 +456,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         closeRunnable = Runnable { if (convo === c) endConversation() }.also { handler.postDelayed(it, delayMillis) }
     }
 
-    // ---------- Gemini ----------
+    // ---------- 去 AI App 深聊（Gemini / ChatGPT / 千问） ----------
 
     override fun onGemini() {
         val c = convo ?: return
@@ -451,39 +479,47 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 userInput = c.userReply.orEmpty(),
             ),
         )
-        val pkg = settings.geminiPackage
-        gemini.copy("桌宠 → Gemini", text)
         c.gemini = GeminiExit.TEXT
         stats.add(Stats.Kind.GEMINI_TEXT)
         endConversation()
+        sendToAssistant(text)
+    }
+
+    /** 把拼好的文字带去当前选的 AI App：复制 → 打开 → 开始会话 →（可选）自动发送。 */
+    private fun sendToAssistant(text: String) {
+        val target = assistants.current
+        val pkg = assistants.packageOf(target)
+        gemini.copy("桌宠 → ${target.label}", text)
+        if (pkg == null) { gemini.toast("没找到 ${target.label}，文字已复制。可以在设置里填它的包名"); return }
         when (gemini.launch(pkg)) {
-            GeminiLauncher.Outcome.NOT_INSTALLED -> { gemini.toast("没找到 Gemini（$pkg），文字已复制"); return }
-            GeminiLauncher.Outcome.FAILED -> { gemini.toast("打不开 Gemini，文字已复制"); return }
-            GeminiLauncher.Outcome.LAUNCHED -> startSession(SessionMode.TEXT)
+            GeminiLauncher.Outcome.NOT_INSTALLED -> { gemini.toast("没找到 ${target.label}（$pkg），文字已复制"); return }
+            GeminiLauncher.Outcome.FAILED -> { gemini.toast("打不开 ${target.label}，文字已复制"); return }
+            GeminiLauncher.Outcome.LAUNCHED -> startSession(SessionMode.TEXT, target, pkg)
         }
         if (settings.geminiAutoSend && PerceptionHub.service != null) {
             scope.launch {
                 delay(800)
-                val ok = GeminiAutoSender.send(pkg, text)
+                val ok = GeminiAutoSender.send(target.sessionPackages(pkg), text)
                 if (!ok) gemini.toast("没能自动发送，已复制，粘贴发送即可")
             }
         } else {
-            gemini.toast("已复制，粘贴发送即可")
+            gemini.toast("已复制，到 ${target.label} 里粘贴发送即可")
         }
     }
 
     override fun onLive() {
         val c = convo ?: return
-        gemini.copy("桌宠 → Gemini Live", GeminiBridgeTextBuilder.buildLiveOpening(c.reply.hookText))
+        val target = assistants.current
+        gemini.copy("桌宠 → ${target.label}", GeminiBridgeTextBuilder.buildLiveOpening(c.reply.hookText))
         c.gemini = GeminiExit.LIVE
         stats.add(Stats.Kind.GEMINI_LIVE)
         endConversation()
-        when (gemini.launch(settings.geminiPackage)) {
-            GeminiLauncher.Outcome.LAUNCHED -> {
-                gemini.toast("点 Gemini 里的 Live，再点“共享屏幕”。开场白已复制，可以照着念")
-                startSession(SessionMode.LIVE)
-            }
-            else -> gemini.toast("没打开 Gemini，开场白已复制")
+        val pkg = assistants.packageOf(target)
+        if (pkg != null && gemini.launch(pkg) == GeminiLauncher.Outcome.LAUNCHED) {
+            gemini.toast("${target.liveHint}。开场白已复制，可以照着念")
+            startSession(SessionMode.LIVE, target, pkg)
+        } else {
+            gemini.toast("没打开 ${target.label}，开场白已复制")
         }
     }
 
@@ -517,61 +553,72 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         scope.launch(Dispatchers.IO) { synchronized(app.memoryLock) { memory.appendToday(LocalDate.now(), line) } }
     }
 
-    // ---------- Gemini 会话 ----------
+    // ---------- AI 会话（守住和 Gemini / ChatGPT / 千问 的对话） ----------
 
-    private var session: GeminiSession? = null
+    private var session: ChatSession? = null
+    private var sessionApp = AssistantApp.GEMINI
+    private var sessionPkg = ""
     private var sessionPrompt: String? = null
     private var lastSessionText = ""
-    /** 用户在 Gemini 里手动结束会话后，先离开一次 Gemini 再允许自动开始。 */
+    /** 用户在 AI App 里手动结束会话后，先离开一次再允许自动开始。 */
     private var autoStartBlocked = false
     private var lastGeminiSeenAt = 0L
 
-    private fun geminiPackages() = GeminiSession.packagesFor(settings.geminiPackage)
-
-    private fun startSession(mode: SessionMode) {
+    private fun startSession(mode: SessionMode, target: AssistantApp, pkg: String) {
         val now = now()
         val existing = session
         if (existing != null) {
-            if (existing.mode == mode) return
+            if (existing.mode == mode && sessionPkg == pkg) return
             finishSession(existing.end(now).summary, announce = false)
         }
         endConversation()
-        session = GeminiSession(mode, now, geminiPackages(), allowedForSession(), settings.sessionConfig())
+        endThink()
+        sessionApp = target
+        sessionPkg = pkg
+        session = ChatSession(mode, now, target.sessionPackages(pkg), allowedForSession(), settings.sessionConfig())
         settings.sessionMode = mode.name
         settings.sessionStartedAt = now
+        settings.sessionAssistant = target.name
+        settings.sessionPackage = pkg
         stats.add(Stats.Kind.SESSIONS)
         overlay.setInSession(true)
     }
 
     private fun restoreSession() {
         val mode = runCatching { SessionMode.valueOf(settings.sessionMode) }.getOrNull() ?: return
+        sessionApp = AssistantApp.fromName(settings.sessionAssistant)
+        sessionPkg = settings.sessionPackage.ifBlank { assistants.packageOf(sessionApp) ?: return }
         val startedAt = settings.sessionStartedAt.takeIf { it > 0 } ?: now()
-        session = GeminiSession(mode, startedAt, geminiPackages(), allowedForSession(), settings.sessionConfig())
+        session = ChatSession(mode, startedAt, sessionApp.sessionPackages(sessionPkg), allowedForSession(), settings.sessionConfig())
         overlay.setInSession(true)
     }
 
     private fun allowedForSession() = settings.sessionAllowedApps + settings.learningApps
 
-    /** 自己打开 Gemini 并停留一会儿，也算开始一次会话。 */
+    /** 自己打开 Gemini / ChatGPT / 千问 并停留一会儿，也算开始一次会话。 */
     private fun maybeAutoStartSession(now: Long): Boolean {
         val fg = PerceptionHub.trail.foreground ?: return false
         val since = PerceptionHub.trail.foregroundSince ?: return false
-        if (fg == settings.geminiPackage) lastGeminiSeenAt = now
+        var target = assistants.detect(fg)
+        var pkg = fg
+        if (target == AssistantApp.GEMINI) lastGeminiSeenAt = now
         // Google App 也可能托管 Gemini 的界面：只有刚从 Gemini 跳过去时才算，平时用 Google 搜索不算
-        val inGemini = fg == settings.geminiPackage ||
-            (fg in geminiPackages() && now - lastGeminiSeenAt < 5 * 60_000L)
-        if (!inGemini) { autoStartBlocked = false; return false }
-        if (!settings.sessionAutoStart || autoStartBlocked || convo != null || probeJob?.isActive == true) return false
+        if (target == null && fg == AssistantApp.GOOGLE_APP && now - lastGeminiSeenAt < 5 * 60_000L) {
+            target = AssistantApp.GEMINI
+            pkg = assistants.packageOf(AssistantApp.GEMINI) ?: return false
+        }
+        if (target == null) { autoStartBlocked = false; return false }
+        if (!settings.sessionAutoStart || autoStartBlocked || convo != null || think != null || probeJob?.isActive == true) return false
         if (now - since < settings.sessionAutoStartSec.coerceAtLeast(5) * 1000L) return false
-        startSession(SessionMode.TEXT)
+        startSession(SessionMode.TEXT, target, pkg)
         return true
     }
 
-    private fun handleSession(s: GeminiSession, now: Long) {
+    private fun handleSession(s: ChatSession, now: Long) {
         s.allowedPackages = allowedForSession()
         s.config = settings.sessionConfig()
         val fg = PerceptionHub.trail.foreground
-        if (fg == settings.geminiPackage) lastGeminiSeenAt = now
+        if (sessionApp == AssistantApp.GEMINI && fg == sessionPkg) lastGeminiSeenAt = now
         when (val action = s.update(now, fg, active)) {
             SessionAction.None -> Unit
             SessionAction.Back -> hideSessionPrompt()
@@ -583,8 +630,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     private fun showCountdown(c: SessionAction.Countdown) {
-        val text = if (c.allowed) "还在跟 Gemini 聊呢。这个 App 多给你一会儿，${c.secondsLeft} 秒后带你回去"
-        else "还在跟 Gemini 聊呢，${c.secondsLeft} 秒后带你回去"
+        val name = sessionApp.label
+        val text = if (c.allowed) "还在跟 $name 聊呢。这个 App 多给你一会儿，${c.secondsLeft} 秒后带你回去"
+        else "还在跟 $name 聊呢，${c.secondsLeft} 秒后带你回去"
         if (sessionPrompt == PROMPT_COUNTDOWN && overlay.isBubbleShown) {
             if (text != lastSessionText) overlay.updateBubbleText(text)
             lastSessionText = text
@@ -611,7 +659,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         haptics.tap()
         overlay.showBubble(
             BubbleSpec(
-                "这几分钟拉了你好几次，看来你在忙别的。这次 Gemini 会话要结束吗？",
+                "这几分钟拉了你好几次，看来你在忙别的。这次和 ${sessionApp.label} 的会话要结束吗？",
                 instant = true,
                 actions = listOf(
                     BubbleAction("结束会话", highlighted = true) { endSessionByUser() },
@@ -624,7 +672,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private fun showSessionMenu() {
         val s = session ?: return
         val minutes = (now() - s.startedAt) / 60_000
-        val modeText = if (s.mode == SessionMode.LIVE) "Live 共看" else "文字深聊"
+        val modeText = if (s.mode == SessionMode.LIVE) "一起看" else "文字深聊"
         val status = when {
             s.isPaused -> "，暂停中"
             s.mode == SessionMode.LIVE -> "，切出去不会拉你回来"
@@ -633,24 +681,24 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
         sessionPrompt = PROMPT_MENU
         val actions = mutableListOf(
-            BubbleAction("回 Gemini", highlighted = true) { pullBack() },
+            BubbleAction("回 ${sessionApp.label}", highlighted = true) { pullBack() },
             BubbleAction("结束会话") { endSessionByUser() },
         )
         if (s.isPaused) actions.add(1, BubbleAction("继续守着") { session?.keepGoing(now()); hideSessionPrompt() })
-        overlay.showBubble(BubbleSpec("Gemini 会话中（$modeText）· 已经 $minutes 分钟$status", instant = true, actions = actions))
+        overlay.showBubble(BubbleSpec("${sessionApp.label} 会话中（$modeText）· 已经 $minutes 分钟$status", instant = true, actions = actions))
     }
 
     private fun pullBack() {
         hideSessionPrompt()
-        when (gemini.launch(settings.geminiPackage, adjacent = false)) {
+        when (gemini.launch(sessionPkg, adjacent = false)) {
             GeminiLauncher.Outcome.LAUNCHED -> stats.add(Stats.Kind.PULLBACKS)
-            else -> gemini.toast("没能打开 Gemini。vivo 上要在应用权限里允许“后台弹出界面”")
+            else -> gemini.toast("没能打开 ${sessionApp.label}。vivo 上要在应用权限里允许“后台弹出界面”")
         }
     }
 
     private fun endSessionByUser() {
         val s = session ?: return
-        if (PerceptionHub.trail.foreground in geminiPackages()) autoStartBlocked = true
+        if (s.isAssistant(PerceptionHub.trail.foreground)) autoStartBlocked = true
         finishSession(s.end(now()).summary, announce = false)
     }
 
@@ -661,13 +709,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         hideSessionPrompt()
         scheduler.onSpoke(now()) // 会话刚结束别马上搭话
         val minutes = summary.durationMillis / 60_000
-        val mode = if (summary.mode == SessionMode.LIVE) "Live 共看" else "文字深聊"
-        val line = "- ${HHMM.format(java.time.Instant.ofEpochMilli(summary.startedAt).atZone(java.time.ZoneId.systemDefault()))} | Gemini 会话 | " +
+        val mode = if (summary.mode == SessionMode.LIVE) "一起看" else "文字深聊"
+        val line = "- ${HHMM.format(java.time.Instant.ofEpochMilli(summary.startedAt).atZone(java.time.ZoneId.systemDefault()))} | ${sessionApp.label} 会话 | " +
             "$mode，$minutes 分钟，离开 ${summary.leaves} 次，拉回 ${summary.pullBacks} 次（${summary.reason.label}）"
         scope.launch(Dispatchers.IO) { synchronized(app.memoryLock) { memory.appendToday(LocalDate.now(), line) } }
         if (announce && summary.reason != EndReason.USER) {
-            overlay.showBubble(BubbleSpec("Gemini 会话结束了（${summary.reason.label}），聊了 $minutes 分钟。", textOnly = true)) {
-                handler.postDelayed({ if (convo == null && session == null) overlay.hideBubble() }, 5000)
+            overlay.showBubble(BubbleSpec("和 ${sessionApp.label} 的会话结束了（${summary.reason.label}），聊了 $minutes 分钟。", textOnly = true)) {
+                handler.postDelayed({ if (convo == null && session == null && think == null) overlay.hideBubble() }, 5000)
             }
         }
     }
@@ -676,6 +724,260 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         if (sessionPrompt != null) overlay.hideBubble()
         sessionPrompt = null
         lastSessionText = ""
+    }
+
+    // ---------- 划过留痕 ----------
+
+    private val skim = SkimBuffer()
+    private val skimCapture = Runnable { captureSkim() }
+
+    /** 无障碍收到滚动事件时调用：停下 0.7 秒后读一次屏幕。 */
+    private fun onScrollEvent(pkg: String) {
+        if (!settings.skimEnabled || !active) return
+        if (!skimAllowed(pkg)) return
+        handler.removeCallbacks(skimCapture)
+        handler.postDelayed(skimCapture, 700)
+    }
+
+    private fun skimAllowed(pkg: String?): Boolean {
+        if (pkg == null || pkg == context.packageName) return false
+        val lists = settings.appLists()
+        // 信息流不给内容加热、排除 App 不读；AI App 里的对话本身也不收
+        if (pkg in lists.feed || pkg in lists.exclude) return false
+        if (assistants.detect(pkg) != null || pkg == AssistantApp.GOOGLE_APP) return false
+        return true
+    }
+
+    private fun captureSkim() {
+        val fg = PerceptionHub.trail.foreground
+        if (!active || !skimAllowed(fg)) return
+        skim.add(now(), fg!!, PerceptionHub.readScreen())
+    }
+
+    // ---------- 想一想（提问模式） ----------
+
+    private inner class ThinkFlow(val material: String, val source: String, val appName: String) {
+        var mode = ThinkMode.SOCRATIC
+        var result: ThinkResult? = null
+        var questionIndex = 0
+        var awaitingAnswer = false
+        val qa = mutableListOf<Pair<String, String>>()
+        var touchedAt = now()
+        val question: String? get() = result?.questions?.getOrNull(questionIndex)
+    }
+
+    private var think: ThinkFlow? = null
+
+    private fun thinkMaterial(): ThinkFlow? {
+        val now = now()
+        val fg = PerceptionHub.trail.foreground
+        val appName = fg?.let { label(it) } ?: "手机"
+        if (!skim.isEmpty(now)) {
+            val parts = skim.recent(now, ThinkPrompt.MAX_MATERIAL_CHARS)
+            return ThinkFlow(parts.joinToString("\n") { it.text }, "刚才划过的 ${parts.size} 段", parts.lastOrNull()?.pkg?.let { label(it) } ?: appName)
+        }
+        if (!skimAllowed(fg)) return null
+        val text = ScreenTextCleaner.clean(PerceptionHub.readScreen(), ThinkPrompt.MAX_MATERIAL_CHARS)
+        if (cn.companion.pet.core.text.UnicodeText.count(text) < 40) return null
+        return ThinkFlow(text, "当前屏幕", appName)
+    }
+
+    private fun openThinkMenu() {
+        endConversation()
+        val flow = thinkMaterial()
+        if (flow == null) {
+            overlay.showBubble(BubbleSpec("屏幕上没读到正文。先滑一会儿要看的内容，再叫我。", textOnly = true)) {
+                handler.postDelayed({ if (think == null && convo == null) overlay.hideBubble() }, 4000)
+            }
+            return
+        }
+        think = flow
+        val actions = mutableListOf<BubbleAction>()
+        val fromSkim = flow.source.startsWith("刚才")
+        ThinkMode.entries.filter { it != ThinkMode.RECAP || fromSkim }.forEach { m ->
+            actions += BubbleAction(m.label, highlighted = m == ThinkMode.RECAP) { runThink(m) }
+        }
+        actions += BubbleAction("×") { endThink() }
+        overlay.setMood(Mood.CURIOUS)
+        overlay.showBubble(BubbleSpec("想怎么想？（素材：${flow.source}）", instant = true, actions = actions))
+    }
+
+    private fun runThink(mode: ThinkMode) {
+        val flow = think ?: return
+        flow.mode = mode
+        flow.touchedAt = now()
+        val key = apiKey()
+        if (key == null || stats.get(Stats.Kind.API_CALLS) >= settings.dailyLimit) {
+            thinkNotice(if (key == null) "还没填模型的 API Key，到设置里填一下。" else "今天的调用次数用完了，明天再陪你想。")
+            return
+        }
+        overlay.setMood(Mood.THINKING)
+        overlay.showBubble(BubbleSpec("……", textOnly = true))
+        probeJob = scope.launch {
+            val messages = withContext(Dispatchers.IO) {
+                synchronized(app.memoryLock) { ThinkPrompt.build(memory.persona(), memory.profile(), mode, flow.material) }
+            }
+            stats.add(Stats.Kind.API_CALLS)
+            val r = app.client.complete(
+                ChatRequest(settings.endpoint, settings.model, key, messages, maxTokens = ThinkPrompt.MAX_TOKENS, timeoutMillis = ThinkPrompt.TIMEOUT_MILLIS),
+            )
+            if (think !== flow) return@launch
+            val result = (r as? ChatResult.Success)?.let { ThinkPrompt.parse(it.content) }
+            if (result == null) { thinkNotice("这次没想出来，等会儿再试试。"); return@launch }
+            flow.result = result
+            flow.questionIndex = 0
+            showThinkResult(flow)
+        }
+    }
+
+    private fun showThinkResult(flow: ThinkFlow) {
+        val r = flow.result ?: return
+        overlay.setMood(Mood.CURIOUS)
+        val actions = mutableListOf<BubbleAction>()
+        if (flow.question != null) {
+            flow.awaitingAnswer = true
+            if (voice.available) actions += BubbleAction("说一句", highlighted = true) { thinkVoice { answerThink(it) } }
+            actions += BubbleAction("打字") { overlay.openBubbleInput() }
+            if (r.questions.size > 1) actions += BubbleAction("换个问题") { nextQuestion() }
+        }
+        actions += BubbleAction("带去 ${assistants.current.label}") { thinkToAssistant() }
+        actions += BubbleAction("×") { endThink() }
+        val text = if (flow.questionIndex == 0) ThinkPrompt.display(flow.mode, r) else "问你：${flow.question}"
+        overlay.showBubble(BubbleSpec(text, actions = actions))
+    }
+
+    private fun nextQuestion() {
+        val flow = think ?: return
+        val n = flow.result?.questions?.size ?: return
+        flow.questionIndex = (flow.questionIndex + 1) % n
+        flow.touchedAt = now()
+        showThinkResult(flow)
+    }
+
+    private fun answerThink(answer: String?) {
+        val flow = think ?: return
+        val q = flow.question ?: return
+        val said = answer?.trim().orEmpty()
+        if (said.isEmpty()) { showThinkResult(flow); return }
+        flow.awaitingAnswer = false
+        flow.touchedAt = now()
+        flow.qa += q to said
+        val key = apiKey()
+        if (key == null || stats.get(Stats.Kind.API_CALLS) >= settings.dailyLimit) { showThinkFollowUp(flow, "记下了。"); return }
+        overlay.setMood(Mood.THINKING)
+        overlay.showBubble(BubbleSpec("……", textOnly = true))
+        probeJob = scope.launch {
+            val messages = withContext(Dispatchers.IO) {
+                synchronized(app.memoryLock) { ThinkPrompt.feedback(memory.persona(), flow.mode, flow.material, q, said) }
+            }
+            stats.add(Stats.Kind.API_CALLS)
+            val r = app.client.complete(ChatRequest(settings.endpoint, settings.model, key, messages, maxTokens = 250, timeoutMillis = ThinkPrompt.TIMEOUT_MILLIS))
+            if (think !== flow) return@launch
+            val reply = (r as? ChatResult.Success)?.let { ThinkPrompt.parseFeedback(it.content) } ?: "嗯，我听到了。"
+            showThinkFollowUp(flow, reply)
+        }
+        // 他自己的回答是他的想法，记进今天的流水（以后整理档案能用上）
+        val line = "- ${timeText()} | 想一想·${flow.mode.label} | 问：$q | 他答：${said.replace('\n', ' ')}"
+        if (!TodayLog.wantsForget(said)) scope.launch(Dispatchers.IO) { synchronized(app.memoryLock) { memory.appendToday(LocalDate.now(), line) } }
+    }
+
+    private fun showThinkFollowUp(flow: ThinkFlow, reply: String) {
+        overlay.setMood(Mood.HAPPY)
+        val actions = mutableListOf<BubbleAction>()
+        val total = flow.result?.questions?.size ?: 0
+        if (flow.qa.size < total) actions += BubbleAction("下一个问题") {
+            flow.questionIndex = (flow.questionIndex + 1) % total
+            showThinkResult(flow)
+        }
+        actions += BubbleAction("带去 ${assistants.current.label}", highlighted = true) { thinkToAssistant() }
+        actions += BubbleAction("×") { endThink() }
+        overlay.showBubble(BubbleSpec(reply, actions = actions))
+    }
+
+    private fun thinkToAssistant() {
+        val flow = think ?: return
+        val text = ThinkPrompt.bridgeText(timeText(), flow.appName, flow.mode, flow.material, flow.result, flow.qa)
+        endThink()
+        stats.add(Stats.Kind.GEMINI_TEXT)
+        sendToAssistant(text)
+    }
+
+    private fun thinkNotice(text: String) {
+        overlay.setMood(Mood.IDLE)
+        overlay.showBubble(BubbleSpec(text, textOnly = true)) { handler.postDelayed({ if (convo == null) endThink() }, 4000) }
+    }
+
+    private fun endThink() {
+        if (think == null && noteDraft == null) return
+        think = null
+        noteDraft = null
+        voice.cancel()
+        overlay.setListening(false)
+        overlay.setBubbleFocusable(false)
+        overlay.hideBubble()
+        overlay.setMood(Mood.IDLE)
+    }
+
+    /** 点一下开始听，停顿后自动结束。 */
+    private fun thinkVoice(onResult: (String?) -> Unit) {
+        think?.touchedAt = now()
+        overlay.setListening(true)
+        overlay.updateBubbleText("在听……说完停一下就好")
+        voice.start { text ->
+            overlay.setListening(false)
+            onResult(text)
+        }
+    }
+
+    // ---------- 念头速记 ----------
+
+    private data class NoteDraft(val app: String, val quote: String, val startedAt: Long)
+
+    private var noteDraft: NoteDraft? = null
+    private var lastSavedNote: LocalDate? = null
+
+    private fun startNote() {
+        endConversation()
+        val fg = PerceptionHub.trail.foreground
+        val quote = if (skimAllowed(fg)) {
+            PerceptionHub.readScreen().firstOrNull { it.inScrollableContainer && cn.companion.pet.core.text.UnicodeText.count(it.text.trim()) >= 12 }?.text?.trim().orEmpty()
+        } else ""
+        noteDraft = NoteDraft(fg?.let { label(it) } ?: "手机", quote, now())
+        val actions = mutableListOf<BubbleAction>()
+        if (voice.available) actions += BubbleAction("说一句", highlighted = true) { thinkVoice { saveNote(it) } }
+        actions += BubbleAction("打字") { overlay.openBubbleInput() }
+        actions += BubbleAction("×") { endThink() }
+        overlay.setMood(Mood.CURIOUS)
+        overlay.showBubble(BubbleSpec("想到什么了？我帮你记下来。", instant = true, actions = actions))
+    }
+
+    private fun saveNote(text: String?) {
+        val d = noteDraft ?: return
+        val said = text?.trim().orEmpty()
+        if (said.isEmpty()) { startNote(); return }
+        noteDraft = null
+        val today = LocalDate.now()
+        val t = ThoughtNotes.Thought(timeText(), d.app, d.quote, said)
+        scope.launch(Dispatchers.IO) {
+            synchronized(app.memoryLock) {
+                app.thoughts.add(today, t)
+                memory.appendToday(today, "- ${t.time} | 念头 | ${said.replace('\n', ' ')}")
+            }
+        }
+        lastSavedNote = today
+        overlay.setMood(Mood.HAPPY)
+        overlay.showBubble(
+            BubbleSpec(
+                "记下了：$said", instant = true,
+                actions = listOf(
+                    BubbleAction("撤销") {
+                        scope.launch(Dispatchers.IO) { synchronized(app.memoryLock) { app.thoughts.removeLast(today) } }
+                        overlay.hideBubble()
+                    },
+                    BubbleAction("好") { overlay.hideBubble() },
+                ),
+            ),
+        ) { handler.postDelayed({ if (convo == null && think == null && noteDraft == null && session == null) overlay.hideBubble() }, 5000) }
     }
 
     // ---------- 信 ----------

@@ -23,6 +23,9 @@ object PerceptionHub {
     internal var reader: (() -> List<TextCandidate>)? = null
     internal var service: PerceptionService? = null
 
+    /** 有滚动时通知桌宠服务（划过留痕用）。只传包名，不传内容。 */
+    var onScroll: ((String) -> Unit)? = null
+
     fun setConnected(value: Boolean) { _connected.value = value }
 
     /** 现读一次当前窗口的文字。服务没连上或读失败返回空列表。 */

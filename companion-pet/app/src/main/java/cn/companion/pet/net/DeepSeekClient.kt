@@ -53,7 +53,7 @@ class DeepSeekClient(base: OkHttpClient = OkHttpClient()) : ChatCompletionClient
                 }
             })
             put("stream", false)
-            put("max_tokens", request.maxTokens)
+            put(if (ModelProvider.usesCompletionTokens(endpoint)) "max_completion_tokens" else "max_tokens", request.maxTokens)
         }.toString()
 
         val builder = Request.Builder()

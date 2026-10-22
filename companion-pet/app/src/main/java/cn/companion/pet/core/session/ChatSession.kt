@@ -1,7 +1,7 @@
 package cn.companion.pet.core.session
 
 /**
- * Gemini 会话：用户在和 Gemini 聊的时候，桌宠帮他“守住”这段对话。
+ * AI 会话：用户在和 Gemini / ChatGPT / 千问 聊的时候，桌宠帮他“守住”这段对话。
  *
  * - 文字会话：切到别的 App 后先倒计时，到点把 Gemini 拉回前台。
  * - Live 会话：Live 共享屏幕时本来就要切去看别的东西，所以只记录、不拉回。
@@ -65,10 +65,11 @@ sealed interface SessionAction {
     data class Ended(val summary: SessionSummary) : SessionAction
 }
 
-class GeminiSession(
+class ChatSession(
     val mode: SessionMode,
     val startedAt: Long,
-    private val geminiPackages: Set<String>,
+    /** 算作“在这个 AI App 里”的包名（含托管它界面的 App）。 */
+    private val assistantPackages: Set<String>,
     var allowedPackages: Set<String> = emptySet(),
     var config: SessionConfig = SessionConfig(),
 ) {
@@ -90,7 +91,7 @@ class GeminiSession(
 
     val isPaused: Boolean get() = state == State.PAUSED
 
-    fun isGemini(pkg: String?) = pkg != null && pkg in geminiPackages
+    fun isAssistant(pkg: String?) = pkg != null && pkg in assistantPackages
 
     fun update(now: Long, foreground: String?, screenOn: Boolean): SessionAction {
         if (state == State.ENDED) return SessionAction.None
@@ -102,7 +103,7 @@ class GeminiSession(
         screenOffSince = null
         if (foreground == null) return SessionAction.None
 
-        if (isGemini(foreground)) {
+        if (isAssistant(foreground)) {
             if (state == State.IN_GEMINI) return SessionAction.None
             awayTotal += now - awaySince
             state = State.IN_GEMINI
@@ -177,11 +178,4 @@ class GeminiSession(
 
     private fun countdown(now: Long, allowed: Boolean) =
         SessionAction.Countdown((((deadline - now) + 999) / 1000).toInt().coerceAtLeast(0), allowed)
-
-    companion object {
-        /** Gemini 的对话界面有时跑在 Google App 里，两个包名都算“在 Gemini 里”。 */
-        const val GOOGLE_APP = "com.google.android.googlequicksearchbox"
-
-        fun packagesFor(geminiPackage: String): Set<String> = setOf(geminiPackage, GOOGLE_APP)
-    }
 }
