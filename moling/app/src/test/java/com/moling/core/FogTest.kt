@@ -7,6 +7,8 @@ import com.moling.core.link.ZkStatus
 import com.moling.core.live.Activity
 import com.moling.core.live.Habits
 import com.moling.core.live.Live
+import com.moling.core.live.Modality
+import com.moling.core.live.Reaction
 import com.moling.core.live.Trigger
 import com.moling.core.mind.Ask
 import com.moling.core.mind.BEIJING
@@ -111,11 +113,13 @@ class FogTest {
 
     @Test fun dontCareMeAlsoEntersQuietPeriod() = runTest {
         val b = brain(null)
-        b.live(Trigger.AUTOPILOT, douyin, at(15), roll = 0.9)
-        val r = b.tap("别管我", at(15, 1))
+        b.live(Trigger.AUTOPILOT, Activity("launcher", "桌面", "OTHER", 0), at(15), roll = 0.9)
+        val r = b.tap("别管我", at(15, 1), modality = Modality.PEEK)
         assertTrue("“别管我”和“先不聊了”一样进安静期", Habits.isQuiet(b.state().habits, at(15, 2)))
         assertNull("不再拦着", b.state().gate)
         assertTrue("不再给选项", r.choices.isEmpty())
+        // 只给这一次出现记 STOPPED；不是“她回复了”。
+        assertEquals(Reaction.STOPPED, b.state().habits.marks.last().reaction)
     }
 
     @Test fun threeTapsBringHimOut() = runTest {

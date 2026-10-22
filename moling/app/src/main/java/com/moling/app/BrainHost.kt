@@ -773,8 +773,8 @@ object BrainHost {
         io("quizResult", {}) { brain.quizResult(right, System.currentTimeMillis()) }
     }
 
-    /** 他点了她给的一个选项（破雾、盲盒、赌……）。 */
-    suspend fun tap(choice: String): LiveTurn {
+    /** 他点了她给的一个选项（破雾、盲盒、赌……）。[modality] = 这次出现的形态，点退出时只给它记 STOPPED。 */
+    suspend fun tap(choice: String, modality: com.moling.core.live.Modality? = null): LiveTurn {
         // 同一个选项 4 秒内只算一次；上一下还没回来时再点也不算（防连点、防两个界面同时报）
         val now = System.currentTimeMillis()
         lastTap?.let { (c, at, turn) -> if (c == choice && now - at < 4_000 && turn != null) return turn }
@@ -789,7 +789,7 @@ object BrainHost {
         try {
             lastTap = Triple(choice, now, null)
             val t = io("tap", { LiveTurn(Mood.CALM, "刚才没接上，等会儿再点一下", false, false, emptyList()) }) {
-                brain.tap(choice, now, liveConfig())
+                brain.tap(choice, now, liveConfig(), modality)
             }
             lastTap = Triple(choice, now, t)
             return t

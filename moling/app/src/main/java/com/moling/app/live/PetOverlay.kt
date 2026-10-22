@@ -695,9 +695,11 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     /** D2：点盯着你气泡里的选项：她接一句、换选项；没有了就收起。 */
     private fun onStareChoice(choice: String) {
         if (stareView == null || stareLeaving) return
-        report(Modality.STARE, Reaction.REPLIED, System.currentTimeMillis() - stareShownAt)
+        // 点“先不聊了 / 别管我”不是回复：不报 REPLIED，由 Brain.tap 只给这次出现记 STOPPED。
+        val exit = choice == com.moling.core.live.Live.EXIT || choice == "别管我"
+        if (!exit) report(Modality.STARE, Reaction.REPLIED, System.currentTimeMillis() - stareShownAt)
         scope.launch {
-            val turn = runCatching { BrainHost.tap(choice) }.getOrNull() ?: return@launch
+            val turn = runCatching { BrainHost.tap(choice, Modality.STARE) }.getOrNull() ?: return@launch
             stareMood = turn.mood
             stareLine = turn.line
             stareChoices = turn.choices
@@ -1277,9 +1279,12 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             maybeStop()
             return
         }
-        report(petModality, Reaction.REPLIED, System.currentTimeMillis() - petShownAt)
+        // 点“先不聊了 / 别管我”不是回复：不报 REPLIED，由 Brain.tap 只给这次出现记 STOPPED。
+        val exit = choice == com.moling.core.live.Live.EXIT || choice == "别管我"
+        if (!exit) report(petModality, Reaction.REPLIED, System.currentTimeMillis() - petShownAt)
+        val modality = petModality
         scope.launch {
-            val turn = runCatching { BrainHost.tap(choice) }.getOrNull() ?: return@launch
+            val turn = runCatching { BrainHost.tap(choice, modality) }.getOrNull() ?: return@launch
             petMood = turn.mood
             petLine = turn.line
             petChoices = turn.choices

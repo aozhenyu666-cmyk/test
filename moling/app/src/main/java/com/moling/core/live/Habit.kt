@@ -97,14 +97,13 @@ object Habits {
         return if (min >= 60) "安静期：还剩约 ${((min / 60.0)).let { "%.1f".format(it) }} 小时" else "安静期：还剩约 $min 分钟"
     }
 
-    /** 他明确说“先不聊了 / 别管我”：记一笔 STOPPED，并进安静期。不算冷落。 */
-    fun explicitStop(b: HabitBook, now: Long): HabitBook {
-        val i = b.marks.indexOfLast { it.reaction == null }
-        val marks = if (i >= 0) {
-            b.marks.toMutableList().also { it[i] = it[i].copy(reaction = Reaction.STOPPED) }
-        } else {
-            b.marks + HabitMark(Modality.PEEK, now, Reaction.STOPPED, exposure = Exposure.SEEN)
-        }
+    /**
+     * 他明确说“先不聊了 / 别管我”：只给这一次出现（[modality]）记一笔 STOPPED，并进安静期。
+     * 找不到这次出现就不记——不拿 PEEK 之类的形态补一条假记录（F11-4）。明确停止不算冷落。
+     */
+    fun explicitStop(b: HabitBook, now: Long, modality: Modality? = null): HabitBook {
+        val i = if (modality == null) -1 else b.marks.indexOfLast { it.modality == modality && it.reaction == null }
+        val marks = if (i >= 0) b.marks.toMutableList().also { it[i] = it[i].copy(reaction = Reaction.STOPPED) } else b.marks
         return b.copy(marks = marks.takeLast(KEEP), quietUntil = now + QUIET_MS)
     }
 

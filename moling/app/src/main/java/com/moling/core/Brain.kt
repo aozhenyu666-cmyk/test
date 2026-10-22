@@ -1465,7 +1465,7 @@ class Brain(
      * 他点了一个选项（破雾、盲盒、赌，或者她给的任何【选】）：她接一句，最多三下把他往外带。
      * 拦着他时：点两下就放行（破雾不要他打字）；不拦时：第三下收尾。点了就算认真回应（不算冷落）。
      */
-    suspend fun tap(choice: String, now: Long, cfg: LiveConfig = LiveConfig()): LiveTurn = lock.withLock {
+    suspend fun tap(choice: String, now: Long, cfg: LiveConfig = LiveConfig(), modality: Modality? = null): LiveTurn = lock.withLock {
         // 正在下三手棋：这一下是棋
         st.chess?.takeIf { it.turn in 1..3 && now - it.startedAt < 2 * 3_600_000L }?.let { c ->
             val t = chessMoveLocked(c, choice, now)
@@ -1475,7 +1475,7 @@ class Brain(
         // 明确停止（R3）：“先不聊了 / 别管我”直接进安静期，不再调模型、不再换一种方式继续。
         if (choice == Live.EXIT || choice == "别管我") {
             st = st.copy(
-                habits = Habits.explicitStop(st.habits, now),
+                habits = Habits.explicitStop(st.habits, now, modality),
                 gate = null,
                 fogRound = 0,
                 fogAt = 0,

@@ -2,6 +2,7 @@ package com.moling.core.live
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -17,7 +18,7 @@ class HabitTest {
 
     @Test fun explicitStopEntersQuietPeriodAndRestoreClearsIt() {
         var b = Habits.shown(HabitBook(), Modality.PEEK, t0)
-        b = Habits.explicitStop(b, t0 + 1_000)
+        b = Habits.explicitStop(b, t0 + 1_000, Modality.PEEK)
         assertTrue(Habits.isQuiet(b, t0 + 2_000))
         assertEquals(t0 + 1_000 + Habits.QUIET_MS, b.quietUntil)
         assertTrue(Habits.quietLine(b, t0 + 2_000).contains("安静期"))
@@ -32,11 +33,24 @@ class HabitTest {
         assertEquals("", Habits.quietLine(restored, t0 + 2_000))
     }
 
-    @Test fun stopWithoutAnyShownMarkStillRecordsOne() {
+    @Test fun explicitStopWithoutThisAppearanceDoesNotFabricateOne() {
+        // 设置页“先安静”没有对应的一次出现：只进安静期，不补一条假记录。
         val b = Habits.explicitStop(HabitBook(), t0)
-        assertEquals(1, b.marks.size)
-        assertEquals(Reaction.STOPPED, b.marks.single().reaction)
+        assertEquals(0, b.marks.size)
         assertTrue(Habits.isQuiet(b, t0))
+        // 有上一次出现、但这次不是它：找不到这一次就不记。
+        val other = Habits.explicitStop(Habits.shown(HabitBook(), Modality.PEEK, t0), t0 + 1, Modality.STARE)
+        assertEquals(1, other.marks.size)
+        assertNull(other.marks.single().reaction)
+        assertTrue(Habits.isQuiet(other, t0 + 2))
+    }
+
+    @Test fun explicitStopOnlyMarksThisAppearance() {
+        var b = Habits.shown(HabitBook(), Modality.PEEK, t0)
+        b = Habits.shown(b, Modality.PET, t0 + 10)
+        b = Habits.explicitStop(b, t0 + 20, Modality.PET)
+        assertEquals(Reaction.STOPPED, b.marks.last().reaction)
+        assertNull("别的出现不跟着记 STOPPED", b.marks.first().reaction)
     }
 
     @Test fun unobservedExposureDoesNotCountAsIgnored() {
