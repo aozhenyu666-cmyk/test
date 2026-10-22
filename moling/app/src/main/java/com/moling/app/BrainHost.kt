@@ -604,7 +604,7 @@ object BrainHost {
     suspend fun benchKeep(artifactId: String, topicId: String? = null): Int =
         io("benchKeep", { 0 }) { brain.keepClaims(bench.claims(artifactId), topicId, System.currentTimeMillis()) }
 
-    /** 第十批 T2/T3：抓一个真实网页，正文存来源库并作为材料放上当前案板。 */
+    /** 第十批 T2/T3：抓一个真实网页，正文存来源库并作为材料放上当前案板。整次请求 15 秒（WebPort 内 withTimeout）。 */
     suspend fun benchFetchSource(focusId: String, url: String): PortResult<com.moling.core.workspace.Material> =
         io("benchFetch", { PortResult.Failed(PortError("NETWORK", "网络没接上")) }) {
             val web = com.moling.core.web.HttpWebPort()
@@ -669,6 +669,14 @@ object BrainHost {
     fun cancelBenchFetch(focusId: String) {
         fetchJobs.remove(focusId)?.cancel()
         _fetching.update { it - focusId }
+    }
+
+    /** 删掉来源原文（来源对象保留为 DELETED；材料里的正文不动）。 */
+    suspend fun deleteSource(sourceId: String) {
+        io("deleteSource", {}) {
+            _sources.update { st -> com.moling.core.web.Sources.delete(st, sourceId) }
+            saveSources()
+        }
     }
 
     /** 来源原文（只读）。材料 id 也可以查：先找 Attachment，再退回 Material 本身。 */

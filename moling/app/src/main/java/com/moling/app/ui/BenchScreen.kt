@@ -210,6 +210,8 @@ fun BenchScreen() {
                 is PortResult.Failed -> toast(r.error.message)
             }
         }
+    }, onDeleteSource = { sourceId ->
+        benchScope.launch { BrainHost.deleteSource(sourceId) }
     })
 
     editTarget?.let { (a, b) ->
@@ -744,7 +746,7 @@ private fun AtlasPickDialog(ws: WorkbenchState, onClose: () -> Unit, onPick: (St
 }
 
 @Composable
-private fun MaterialsDialog(ws: WorkbenchState, focus: Focus, onClose: () -> Unit, onAdd: (String) -> Unit) {
+private fun MaterialsDialog(ws: WorkbenchState, focus: Focus, onClose: () -> Unit, onAdd: (String) -> Unit, onDeleteSource: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onClose,
@@ -763,6 +765,12 @@ private fun MaterialsDialog(ws: WorkbenchState, focus: Focus, onClose: () -> Uni
                                 color = if (src.status == com.moling.core.web.SourceStatus.DELETED) Seal else MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                             )
+                            // 顺手项：删除原文入口（Sources.delete：来源保留为 DELETED，材料正文不动）
+                            if (src.status != com.moling.core.web.SourceStatus.DELETED) {
+                                TextButton(onClick = { onDeleteSource(src.id) }, contentPadding = PaddingValues(0.dp)) {
+                                    Text("删除原文", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
                         }
                         Text(m.text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 4)
                     }

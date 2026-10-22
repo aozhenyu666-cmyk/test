@@ -72,8 +72,6 @@ class V13WebTest {
         assertNull(Sources.checkUrl("http://localhost:8080/a", true))
     }
 
-
-
     @Test
     fun canonicalKeepsQueryAndOnlyReusesSameUrl() {
         val a = Sources.canonical("https://mp.weixin.qq.com/s?__biz=x&mid=1&idx=1&sn=aa&utm_source=wechat#rd")
@@ -122,6 +120,7 @@ class V13WebTest {
         val tight = Sources.prune(st, maxBytes = 100)
         assertEquals(setOf("s-1"), tight.documents.map { it.sourceId }.toSet())
     }
+
     @Test
     fun sourceDedupeAttachDelete() {
         var st = SourceState()
@@ -201,7 +200,6 @@ class V13WebTest {
         assertTrue(Rss.parse("""<!DOCTYPE rss [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><rss><channel><item><title>A</title><link>https://e.com/a</link></item></channel></rss>""") is PortResult.Failed)
     }
 
-
     @Test
     fun preworkMarksWebMaterialAsExternal() {
         val his = Material("m-1", "paste", "他的笔记", "这是他自己写的材料", 1)
@@ -212,6 +210,7 @@ class V13WebTest {
         assertTrue(prompt.indexOf("[m-1]") < prompt.indexOf(marker))
         assertTrue(prompt.indexOf("[m-2]") > prompt.indexOf(marker))
     }
+
     @Test
     fun fetchWithFakeServer() = runBlocking {
         val server = MockWebServer()
@@ -246,9 +245,6 @@ class V13WebTest {
         red.shutdown()
     }
 
-
-
-
     @Test
     fun fetchRejectsUnsupportedContentType() = runBlocking {
         val server = MockWebServer()
@@ -259,6 +255,7 @@ class V13WebTest {
         assertEquals("UNSUPPORTED", (r as PortResult.Failed).error.code)
         server.shutdown()
     }
+
     @Test
     fun fetchSniffsGbkMetaCharset() = runBlocking {
         val server = MockWebServer()
@@ -273,6 +270,7 @@ class V13WebTest {
         assertTrue(page.text.contains("中文正文"))
         server.shutdown()
     }
+
     @Test
     fun readFeedAcceptsXmlContentType() = runBlocking {
         val server = MockWebServer()
@@ -287,6 +285,7 @@ class V13WebTest {
         assertEquals("https://e.com/a", (r as PortResult.Ok).value.first().url)
         server.shutdown()
     }
+
     @Test
     fun searchWithoutKeyIsNotConfigured() = runBlocking {
         val r = HttpWebPort().search("q")

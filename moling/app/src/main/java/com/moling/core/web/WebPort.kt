@@ -25,10 +25,16 @@ import org.w3c.dom.Element
 
 /*
  * 第十批 T2：一个真的 WebPort。搜不到/没配置/超时都明确失败，生产路径不返回 mock 内容。
- * 安全：只公网 http(s)、拒绝本机/内网/元数据；重定向≤3、响应≤2MB、请求≤15s。
+ * 安全：只公网 http(s)、拒绝本机/内网/元数据；重定向≤3、响应≤2MB、整次请求≤15s。
  *
- * 第十四批 F10-1：每一跳都用 Sources.checkUrl 解析地址再判；连接侧再套一个 OkHttp Dns 钩子，
- * 只用“这里认可过的地址”去连，避免解析两次被 DNS 重绑定绕过。
+ * 第十四批：
+ *  - F10-1：每一跳都用 Sources.checkUrl 解析地址再判；连接侧再套一个 OkHttp Dns 钩子，
+ *    只用“这里认可过的地址”去连，避免解析两次被 DNS 重绑定绕过；
+ *  - F10-3：allowPrivateForTest 是构造参数注入的测试钩子，生产默认不放行；
+ *  - F10-4：只收 text/html、application/xhtml+xml、text/plain（RSS 收 XML 类），
+ *    其它类型返回 UNSUPPORTED，不当材料；没给 charset 时从 meta charset / XML 声明嗅（GBK 页面）；
+ *  - 顺手：X-Subscription-Token 不带到跨主机重定向；XML 解析器特性设不上时降级为
+ *    “拒绝 DOCTYPE + 关外部实体”，不让 RSS 永远失败。
  */
 
 data class SearchHit(val url: String, val title: String, val snippet: String = "")
@@ -175,8 +181,6 @@ class HttpWebPort(
 
     private data class Failed(val error: PortError) : Got
 
-    private sealed interface Got
-
     /** 整次请求（含所有跳）总时限 15 秒（F10-7），不是每一跳各等 15 秒。 */
     private suspend fun get(raw: String, headers: Map<String, String>): Got {
         return try {
@@ -190,15 +194,19 @@ class HttpWebPort(
 
     private fun hopLoop(raw: String, headers: Map<String, String>): Got {
         var current = raw.trim()
+        val firstHost = hostOf(raw)
         var hop = 0
         while (true) {
             // F10-1：每一跳（含重定向后的地址）都重新校验，并解析一次域名
             val bad = Sources.checkUrl(current, allowPrivateForTest)
             if (bad != null) return Failed(PortError("BLOCKED", bad))
+            // 顺手项：鉴权头不跟着跨主机重定向走
+            val sameHost = hostOf(current).equals(firstHost, ignoreCase = true)
+            val reqHeaders = if (sameHost) headers else headers.filterKeys { it.lowercase() !in SENSITIVE_HEADERS }
             val request = try {
                 Request.Builder().url(current).apply {
                     header("User-Agent", "Moling/1.0 (personal assistant)")
-                    headers.forEach { (k, v) -> header(k, v) }
+                    reqHeaders.forEach { (k, v) -> header(k, v) }
                 }.build()
             } catch (e: Exception) {
                 return Failed(PortError("BAD_URL", "链接看不懂"))
@@ -243,7 +251,13 @@ class HttpWebPort(
         }
     }
 
+    private sealed interface Got
+
     companion object {
+        private val SENSITIVE_HEADERS = setOf("x-subscription-token", "authorization", "cookie")
+
+        private fun hostOf(url: String): String = runCatching { URI(url).host?.lowercase().orEmpty() }.getOrDefault("")
+
         /** 读正文，超过 [max] 直接返回 null（TOO_LARGE），不把超大页面读进内存再判断。 */
         private fun readCapped(stream: InputStream, max: Int): ByteArray? {
             val buf = ByteArrayOutputStream()
@@ -281,12 +295,20 @@ object HtmlText {
 
 object Rss {
     fun parse(xml: String): PortResult<List<FeedItem>> {
+        // 顺手项：先拒绝 DOCTYPE（XXE 的第一道门）；解析器特性名设不上时也还有这一层
+        if (Regex("(?i)<!DOCTYPE").containsMatchIn(xml)) {
+            return PortResult.Failed(PortError("PARSE", "这个订阅源带了 DOCTYPE，不解析"))
+        }
         val doc = runCatching {
             val f = DocumentBuilderFactory.newInstance()
             f.isNamespaceAware = false
+            // 个别 Android 解析器不认这些特性名：逐个 try，失败就靠“拒绝 DOCTYPE + 关外部实体”的降级写法
             runCatching { f.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
             runCatching { f.setFeature("http://xml.org/sax/features/external-general-entities", false) }
             runCatching { f.setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
+            runCatching { f.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false) }
+            runCatching { f.setFeature(javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, true) }
+            runCatching { f.isExpandEntityReferences = false }
             f.newDocumentBuilder().parse(xml.byteInputStream())
         }.getOrNull() ?: return PortResult.Failed(PortError("PARSE", "这个订阅源不是合法的 XML"))
         val items = doc.getElementsByTagName("item")

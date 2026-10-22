@@ -8,6 +8,13 @@ import java.security.MessageDigest
 /*
  * 第十批 T1：生产来源模型。引用证明“这段话来自哪里”，不证明“这段话是真的”；
  * 正文单独存，避免把大段网页塞进 BrainState / sayQueue。
+ *
+ * 第十四批（F10-1/F10-2/F10-6）：
+ *  - 每一跳都按域名解析出地址再判断（本机 / 内网 / 链路本地 / 组播 / fc00::/7 / 100.64/10 / IPv4 映射），
+ *    连接侧另用 OkHttp 的 Dns 钩子，只连这里认可过的地址（防 DNS 重绑定）；
+ *  - canonical 保留 query（只去掉 utm_* 和 #…），复用只认同一个规范化 URL，不按正文 hash 合并；
+ *  - 复用时只更新 hash / 标题 / 时间 / 状态，不悄悄换掉已存正文；
+ *  - 正文总量上限 8MB，超了先删最旧、没有被任何材料引用的正文。
  */
 
 @Serializable
@@ -147,11 +154,9 @@ object Sources {
     /**
      * 公网 http(s) 且不是本机 / 内网 / 元数据地址；重定向每一跳都要再调一次。
      *
-     * F10-1：先按字面地址判；域名则 InetAddress.getAllByName 解析一次，**任一**地址是
-     * 回环 / any-local / 链路本地 / site-local / 组播 / fc00::/7 / 100.64/10 / IPv4 映射到这些就拒绝。
      * [allowPrivate] 只给测试用（MockWebServer 在 localhost），生产路径永远 false。
-     * [resolve] 只给测试注入“域名解析到内网”的假解析器；解析不出来不在这里判死
-     * （连接侧 OkHttp 的 Dns 钩子会再查一次并拒绝内网，那里才是最终防线）。
+     * [resolve] 只给测试注入“域名解析到内网”的假解析器；默认真的解析一次，
+     * 解析不出来不在这里判死（连接侧 OkHttp 的 Dns 会再查一次并拒绝内网）。
      */
     fun checkUrl(
         raw: String,
@@ -163,7 +168,6 @@ object Sources {
         var host = u.host?.lowercase() ?: return "链接里没有域名"
         host = host.removePrefix("[").removeSuffix("]")
         if (host.isBlank()) return "链接里没有域名"
-        // F10-3：仅测试放行钩子（构造参数注入），生产路径 false
         if (allowPrivate) return null
         if (host == "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return "不访问本机地址"
         if (host == "169.254.169.254" || host.startsWith("169.254.")) return "不访问元数据地址"
