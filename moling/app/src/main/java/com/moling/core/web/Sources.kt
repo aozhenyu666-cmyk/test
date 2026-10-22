@@ -59,6 +59,9 @@ data class SourceState(
 object Sources {
     const val MAX_TEXT = 200_000
 
+    /** 来源正文总量上限（约 8MB）。 */
+    const val MAX_TOTAL_BYTES = 8 * 1024 * 1024
+
     fun hash(text: String): String =
         MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }.take(32)
 
@@ -73,6 +76,7 @@ object Sources {
     }
 
     fun put(st: SourceState, ref: SourceRef, text: String): SourceState {
+        val stored = text.take(MAX_TEXT)
         val existing = reuse(st, ref.url)
         if (existing != null) {
             // 同一个 URL：更新 hash / 标题 / 时间 / 状态，不悄悄换掉已经存下的正文（换正文要显式刷新）
@@ -86,16 +90,33 @@ object Sources {
                 snippet = ref.snippet.ifBlank { existing.snippet },
             )
             val docs = if (st.documents.any { it.sourceId == existing.id }) st.documents
-            else st.documents + SourceDocument(existing.id, text.take(MAX_TEXT), text.toByteArray().size, ref.fetchedAt)
-            return st.copy(
+            else st.documents + SourceDocument(existing.id, stored, stored.toByteArray().size, ref.fetchedAt)
+            return prune(st.copy(
                 sources = st.sources.map { if (it.id == existing.id) updated else it },
                 documents = docs,
-            )
+            ))
         }
-        return st.copy(
+        return prune(st.copy(
             sources = (st.sources.filterNot { it.id == ref.id } + ref).takeLast(500),
-            documents = (st.documents.filterNot { it.sourceId == ref.id } + SourceDocument(ref.id, text.take(MAX_TEXT), text.toByteArray().size, ref.fetchedAt)).takeLast(500),
-        )
+            documents = (st.documents.filterNot { it.sourceId == ref.id } + SourceDocument(ref.id, stored, stored.toByteArray().size, ref.fetchedAt)).takeLast(500),
+        ))
+    }
+
+    /**
+     * 总量超过 [maxBytes] 时，先删最旧、没有被任何材料引用的正文；
+     * 还被引用的正文不删（引用还在，就不能让“原文”凭空消失）。
+     */
+    fun prune(st: SourceState, maxBytes: Int = MAX_TOTAL_BYTES): SourceState {
+        var docs = st.documents
+        var total = docs.sumOf { it.bytes.toLong() }
+        if (total <= maxBytes) return st
+        val referenced = st.attachments.map { it.sourceId }.toSet()
+        for (victim in docs.filterNot { it.sourceId in referenced }.sortedBy { it.at }) {
+            if (total <= maxBytes) break
+            docs = docs.filterNot { it.sourceId == victim.sourceId }
+            total -= victim.bytes
+        }
+        return if (docs.size == st.documents.size) st else st.copy(documents = docs)
     }
 
     /** 删除正文，来源对象保留为 DELETED（标签显示“原文已删除”，不能假装还有）。 */

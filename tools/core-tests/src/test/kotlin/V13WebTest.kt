@@ -110,6 +110,19 @@ class V13WebTest {
     }
 
     @Test
+    fun pruneDropsOldestUnreferencedDocuments() {
+        val st = SourceState(
+            sources = listOf(ref("s-1", "https://e.com/1", at = 1), ref("s-2", "https://e.com/2", at = 2), ref("s-3", "https://e.com/3", at = 3)),
+            documents = listOf(doc("s-1", 400, 1), doc("s-2", 400, 2), doc("s-3", 400, 3)),
+            attachments = listOf(SourceAttachment("m-1", "s-1", 0)),
+        )
+        val pruned = Sources.prune(st, maxBytes = 800)
+        assertEquals(setOf("s-1", "s-3"), pruned.documents.map { it.sourceId }.toSet())
+        // 被材料引用的正文不删
+        val tight = Sources.prune(st, maxBytes = 100)
+        assertEquals(setOf("s-1"), tight.documents.map { it.sourceId }.toSet())
+    }
+    @Test
     fun sourceDedupeAttachDelete() {
         var st = SourceState()
         val r = ref("s-1", "https://example.com/a?x=1", "标题", Sources.hash("body"), 10)

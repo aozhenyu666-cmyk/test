@@ -63,6 +63,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -164,9 +165,9 @@ object BrainHost {
             )
             _bench.value = bench.state()
             sourceFile = File(dir, "sources.json")
-            _sources.value = runCatching {
+            _sources.value = (runCatching {
                 sourceFile?.takeIf { it.exists() }?.readText()?.let { Json.decodeFromString<com.moling.core.web.SourceState>(it) }
-            }.getOrNull() ?: com.moling.core.web.SourceState()
+            }.getOrNull() ?: com.moling.core.web.SourceState()).let { com.moling.core.web.Sources.prune(it) }
             ready = true
             Log.i(TAG, "大脑宿主起来了")
         }
@@ -624,13 +625,14 @@ object BrainHost {
                 complete = page.complete,
                 focusId = focusId,
             )
-            _sources.value = com.moling.core.web.Sources.put(_sources.value, ref, page.text)
+            // F10-6：_sources 用 update 改，不直接换 .value（后台抓取与界面可能同时动）
+            _sources.update { st -> com.moling.core.web.Sources.put(st, ref, page.text) }
             val added = bench.addMaterial(focusId, page.text, now, kind = "web", title = page.title.ifBlank { page.finalUrl })
             when (added) {
                 is PortResult.Ok -> {
                     val m = bench.state().materialsOf(added.value).lastOrNull()
                         ?: return@io PortResult.Failed(PortError("BAD_ACTION", "材料没加上"))
-                    _sources.value = com.moling.core.web.Sources.attach(_sources.value, m.id, ref.id, now)
+                    _sources.update { st -> com.moling.core.web.Sources.attach(st, m.id, ref.id, now) }
                     saveSources()
                     PortResult.Ok(m)
                 }
@@ -642,8 +644,18 @@ object BrainHost {
     fun sourceView(id: String): com.moling.core.web.SourceRef? =
         _sources.value.ref(id) ?: _sources.value.refOfMaterial(id)
 
+    /** F10-6：原子写（tmp + rename，同 FileMindStore），写到一半断电不会把 sources.json 写坏。 */
     private fun saveSources() {
-        runCatching { sourceFile?.writeText(Json.encodeToString(_sources.value)) }
+        val f = sourceFile ?: return
+        runCatching {
+            f.parentFile?.mkdirs()
+            val tmp = File(f.path + ".tmp")
+            tmp.writeText(Json.encodeToString(_sources.value))
+            if (!tmp.renameTo(f)) {
+                f.delete()
+                tmp.renameTo(f)
+            }
+        }
     }
 
     private fun <T> offline(): PortResult<T> = PortResult.Failed(PortError(PortError.OFFLINE, "刚才没接上，再试一次"))
