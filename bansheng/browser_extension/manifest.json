@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "伴生桥",
+  "version": "0.1.0",
+  "description": "把你和 Gemini / ChatGPT 的网页对话交给本机的伴生，并在页面上显示三行路标。只连接本机 127.0.0.1。",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://gemini.google.com/*",
+    "https://chatgpt.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "伴生桥", "default_popup": "popup.html" },
+  "content_scripts": [
+    {
+      "matches": ["https://gemini.google.com/*", "https://chatgpt.com/*"],
+      "js": ["adapters.js", "capture.js", "overlay.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

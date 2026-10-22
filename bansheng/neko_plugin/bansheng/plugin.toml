@@ -1,0 +1,30 @@
+[plugin]
+id = "bansheng"
+name = "伴生"
+type = "plugin"
+description = "旁听你和 Gemini / ChatGPT 的讨论，记住关键点，在合适的时候让角色自然地接一句。面板：http://127.0.0.1:48925/"
+short_description = "Listens to your Gemini/ChatGPT discussion and lets the companion chime in."
+keywords = ["伴生", "gemini", "chatgpt", "讨论", "陪伴", "路标", "companion"]
+version = "0.1.0"
+entry = "plugin.plugins.bansheng:BanshengPlugin"
+
+[plugin.author]
+name = "bansheng"
+
+[plugin.sdk]
+recommended = ">=0.1.0,<0.2.0"
+supported = ">=0.1.0,<0.3.0"
+
+[plugin.models.mind]
+label = "伴生思考（理解讨论 + 准备接话）"
+required = true
+capabilities = ["text"]
+
+[plugin_runtime]
+enabled = true
+auto_start = false
+
+[bansheng]
+port = 48925
+level = 2
+token = ""

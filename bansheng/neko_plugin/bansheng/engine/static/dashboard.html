@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>伴生面板</title>
+<style>
+  :root { --bg:#f7f6f3; --card:#fff; --ink:#1f2328; --mute:#6b7280; --line:#e5e2dc; --acc:#3b6ea8; --ok:#2f7d4f; --bad:#a8433b; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#16181b; --card:#1f2226; --ink:#e8e6e1; --mute:#9aa0a6; --line:#2e3237; --acc:#7aa7dc; --ok:#6cbf8c; --bad:#e08a82; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.55 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  main { max-width:980px; margin:0 auto; padding:16px; display:grid; gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  h1 { font-size:16px; margin:0; } h2 { font-size:13px; margin:0 0 8px; color:var(--mute); font-weight:600; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .sign div { display:grid; grid-template-columns:5.5em 1fr auto; gap:8px; padding:4px 0; align-items:baseline; }
+  .sign b { color:var(--mute); font-weight:500; }
+  button, select { font:inherit; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:6px; padding:3px 10px; cursor:pointer; }
+  button.on { background:var(--bad); color:#fff; border-color:var(--bad); }
+  .muted { color:var(--mute); } .small { font-size:12px; }
+  .list > div { border-top:1px solid var(--line); padding:6px 0; }
+  .list > div:first-child { border-top:0; }
+  .tag { display:inline-block; font-size:11px; padding:0 6px; border-radius:9px; border:1px solid var(--line); color:var(--mute); margin-right:4px; }
+  .delivered { color:var(--ok); } .cancelled { color:var(--mute); }
+  pre { white-space:pre-wrap; margin:0; font-size:12px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  @media (max-width:720px) { .grid2 { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="row"><h1>伴生</h1><span id="sess" class="muted small"></span><span style="flex:1"></span>
+    <label class="small">主动程度 <select id="level"><option value="0">关</option><option value="1">少</option><option value="2">正常</option><option value="3">多</option></select></label>
+    <button id="mute">静音</button>
+  </div>
+  <section class="card sign" id="sign">
+    <h2>三行路标（点“改”可直接修正）</h2>
+    <div><b>在聊</b><span id="l-topic"></span><button data-line="topic">改</button></div>
+    <div><b>已确认</b><span id="l-confirmed"></span><button data-line="confirmed">改</button></div>
+    <div><b>没解开</b><span id="l-open"></span><button data-line="open">改</button></div>
+  </section>
+  <div class="grid2">
+    <section class="card"><h2>准备中的话</h2><div id="held" class="list"></div><h2 style="margin-top:10px">最近的决定</h2><div id="decided" class="list"></div></section>
+    <section class="card"><h2>最近对话</h2><div id="turns" class="list"></div></section>
+  </div>
+  <section class="card"><h2>会话理解（条目带来源）</h2><div id="items" class="list small"></div></section>
+  <section class="card"><h2>诊断记录</h2><div id="ledger" class="list small"></div></section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const who = {user:"你", main_ai:"主力AI", companion:"伴生"};
+let sid = new URLSearchParams(location.search).get("session_id") || "";
+async function api(path, body) {
+  const r = await fetch(path, body ? {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)} : {});
+  return r.json();
+}
+function renderItems(st) {
+  const rows = [];
+  const add = (label, arr) => arr.forEach(i => rows.push(`<div><span class="tag">${label}</span>${esc(i.text)} <span class="muted">← ${esc((i.evidence||i.closed_by||[]).join(","))} · ${esc(i.id)}</span></div>`));
+  add("约束", st.constraints); add("已确认", st.confirmed); add("未解", st.open); add("待考虑", st.pending_suggestions); add("改口", st.corrections);
+  (st.retired_constraints||[]).forEach(i => rows.push(`<div class="muted"><span class="tag">已失效</span><s>${esc(i.text)}</s> ← ${esc(i.closed_by.join(","))}</div>`));
+  $("items").innerHTML = rows.join("") || '<span class="muted">（暂无）</span>';
+}
+async function refresh() {
+  try {
+    const s = await api("/state" + (sid ? "?session_id=" + encodeURIComponent(sid) : ""));
+    $("level").value = s.policy.level; $("mute").classList.toggle("on", s.policy.muted); $("mute").textContent = s.policy.muted ? "已静音（点击恢复）" : "静音";
+    if (!s.session_id) { $("sess").textContent = "等待会话…（打开 Gemini/ChatGPT 页面）"; return; }
+    $("sess").textContent = `${s.session_id} · 模型 ${s.llm || "未配置"}${s.thinking ? " · 正在想" : ""}${s.floor.busy ? " · 话权：" + s.floor.busy : ""}`;
+    for (const k of ["topic","confirmed","open"]) $("l-"+k).textContent = s.signpost[k];
+    $("held").innerHTML = s.held.map(c => `<div>${esc(c.text)}<br><span class="muted small">${c.kind} · 分 ${c.score} · 等待：${esc(c.reason||"")}</span></div>`).join("") || '<span class="muted">（没有）</span>';
+    $("decided").innerHTML = s.recent_decisions.slice().reverse().map(c => `<div class="${c.status}">${c.status==="delivered"?"✓ 说了":"✗ 没说"}：${esc(c.text)}<br><span class="muted small">${esc(c.reason)} · 分 ${c.score} · 依据 ${esc(c.basis.join(","))}</span></div>`).join("") || '<span class="muted">（没有）</span>';
+    $("turns").innerHTML = s.turns.map(t => `<div><span class="tag">${who[t.speaker]||t.speaker} ${t.id}</span>${esc(t.text)}</div>`).join("");
+    renderItems(s.state);
+    const L = await api("/ledger?n=40" + (s.session_id ? "&session_id=" + encodeURIComponent(s.session_id) : ""));
+    $("ledger").innerHTML = L.records.slice().reverse().map(r => `<div><span class="tag">${esc(r.kind)}</span>${esc(JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k]) => !["n","t","kind","session_id"].includes(k)))))}</div>`).join("");
+  } catch (e) { $("sess").textContent = "连不上伴生服务：" + e; }
+}
+$("level").onchange = () => api("/control", {action:"level", value:Number($("level").value)}).then(refresh);
+$("mute").onclick = () => api("/control", {action: $("mute").classList.contains("on") ? "unmute" : "mute"}).then(refresh);
+document.querySelectorAll("[data-line]").forEach(b => b.onclick = async () => {
+  const s = await api("/state" + (sid ? "?session_id=" + encodeURIComponent(sid) : ""));
+  if (!s.session_id) return;
+  const line = b.dataset.line; const v = prompt("改成（留空=交回给伴生自动维护）：", s.signpost[line]);
+  if (v !== null) { await api("/edit", {session_id: s.session_id, line, text: v}); refresh(); }
+});
+refresh(); setInterval(refresh, 1500);
+</script>
+</body>
+</html>

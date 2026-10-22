@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  body { font: 13px/1.5 system-ui, "Microsoft YaHei", sans-serif; width: 300px; margin: 12px; }
+  label { display:block; margin:6px 0 2px; color:#555; }
+  input[type=text] { width:100%; box-sizing:border-box; padding:4px 6px; }
+  .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
+  pre { background:#f4f4f4; padding:6px; white-space:pre-wrap; font-size:12px; }
+  a { color:#3b6ea8; }
+</style>
+</head>
+<body>
+  <b>伴生桥</b>
+  <label>伴生服务地址</label><input id="endpoint" type="text">
+  <label>令牌（插件配置了 token 才需要）</label><input id="token" type="text">
+  <div class="row"><label><input id="enabled" type="checkbox"> 采集当前对话</label><span style="flex:1"></span><button id="save">保存</button></div>
+  <div class="row"><button id="test">检测连接</button><a id="panel" href="#" target="_blank">打开面板</a></div>
+  <pre id="out">（只在 gemini.google.com / chatgpt.com 页面工作，只连接本机）</pre>
+  <script src="popup.js"></script>
+</body>
+</html>
