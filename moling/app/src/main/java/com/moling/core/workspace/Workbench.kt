@@ -286,14 +286,27 @@ class Workbench(
     ): PortResult<WorkspaceArtifact> = lock.withLock {
         val f = st.focus(focusId)?.takeIf { it.status != FocusStatus.ARCHIVED }
             ?: return@withLock fail(PortError.NOT_FOUND, "这件事不在了，结果只留历史")
-        val clean = text.trim().take(4000)
+        // 与 Outbrain.MAX_RESULT_CHARS 一致（12000）：结果截断只在一处算，不能这里 4000 悄悄吃掉后半段。
+        val clean = text.trim().take(12_000)
         if (clean.isBlank()) return@withLock fail(PortError.BAD_ACTION, "结果是空的")
         val tag = "outbrain:" + sessionId
         val existing = existingArtifactId?.let { st.artifact(it) } ?: st.artifacts.lastOrNull { it.producerJobId == tag }
         if (existing != null) {
             if (existing.blocks.any { it.markdown.trim() == clean }) return@withLock PortResult.Ok(existing)
-            val block = ArtifactBlock(next("b"), BlockKind.QUOTE, clean)
-            val na = existing.copy(blocks = existing.blocks + block, revision = existing.revision + 1, updatedAt = now)
+            val block = ArtifactBlock(next("b"), BlockKind.QUOTE, clean, accepted = false)
+            // 整份采用过的旧稿：旧内容仍算他采用过（逐块记下来），只把新一段留在待审。
+            val kept = if (existing.status == ArtifactStatus.ACCEPTED) {
+                existing.blocks.map { if (!it.accepted && Artifacts.isContent(it) && !it.exerciseOnly) it.copy(accepted = true) else it }
+            } else {
+                existing.blocks
+            }
+            val na = existing.copy(
+                blocks = kept + block,
+                revision = existing.revision + 1,
+                updatedAt = now,
+                // 新一段还没采用：稿子退回待审，别把新文字混进 claims()。
+                status = ArtifactStatus.READY_FOR_REVIEW,
+            )
             st = st.copy(artifacts = st.artifacts.map { if (it.id == existing.id) na else it })
             log(now, "外脑又带回一段：${na.title.take(20)}")
             save()

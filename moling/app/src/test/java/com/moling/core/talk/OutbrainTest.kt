@@ -2,6 +2,8 @@ package com.moling.core.talk
 
 import com.moling.core.mind.Actor
 import com.moling.core.mind.MindStore
+import com.moling.core.workspace.ArtifactAction
+import com.moling.core.workspace.ArtifactActionKind
 import com.moling.core.workspace.ArtifactBlock
 import com.moling.core.workspace.ArtifactKind
 import com.moling.core.workspace.ArtifactStatus
@@ -284,6 +286,32 @@ class OutbrainTest {
         val rev = desk.reviewed(session.id, 4_000)
         assertTrue(rev is PortResult.Ok)
         assertEquals(OutbrainStatus.REVIEWED, desk.state().sessions.single().status)
+    }
+
+
+    @Test
+    fun appendedResultReturnsToReviewAndIsNotClaimed() = runTest {
+        val wb = Workbench(store = MemStore(), ask = null)
+        wb.start("申论开头怎么写", "材料", now = 1)
+        val desk = OutbrainDesk(MemStore(), wb)
+        val s = (desk.prepare(Actor.CHATGPT, epShare, now = 2_000) as PortResult.Ok).value
+        desk.open(s.id, 2_100)
+        desk.waiting(s.id, 2_200)
+        val first = (desk.receive("第一段结论：先亮观点", now = 3_000, source = "paste") as PortResult.Ok).value
+        val a = first.second!!
+        // 他整份采用（旧块都成 accepted）
+        assertTrue(wb.apply(ArtifactAction("ac-1", a.id, a.revision, ArtifactActionKind.ACCEPT_ARTIFACT, at = 3_100)) is PortResult.Ok)
+        assertEquals(ArtifactStatus.ACCEPTED, wb.state().artifact(a.id)!!.status)
+        assertTrue(wb.claims(a.id).any { it.contains("第一段结论") })
+        // 同一会话又带回一段：追加，但整份退回待审、新块未采用
+        val second = (desk.receive("第二段结论：再给依据", now = 4_000, source = "paste") as PortResult.Ok).value
+        val b = second.second!!
+        assertEquals("同一会话追加，不新建稿子", a.id, b.id)
+        assertEquals(2, b.blocks.size)
+        assertFalse("新块 accepted=false", b.blocks.last().accepted)
+        assertEquals("追加后回到待审", ArtifactStatus.READY_FOR_REVIEW, wb.state().artifact(a.id)!!.status)
+        assertFalse("新文字不混进已采用", wb.claims(a.id).any { it.contains("第二段结论") })
+        assertTrue("旧文字仍是已采用", wb.claims(a.id).any { it.contains("第一段结论") })
     }
 
     @Test
