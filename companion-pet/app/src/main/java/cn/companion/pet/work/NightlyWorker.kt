@@ -29,21 +29,22 @@ class NightlyWorker(context: Context, params: WorkerParameters) : CoroutineWorke
 
     override suspend fun doWork(): Result {
         val app = applicationContext as PetApp
-        val result = run(app)
+        val retry = run(app) == RETRY
         // 成功（含“今天不用整理”）后接上下一晚；重试时由 WorkManager 自己退避重跑
-        if (result is Result.Success) scheduleNext(applicationContext, ExistingWorkPolicy.APPEND_OR_REPLACE)
-        return result
+        if (retry) return Result.retry()
+        scheduleNext(applicationContext, ExistingWorkPolicy.APPEND_OR_REPLACE)
+        return Result.success()
     }
 
-    private suspend fun run(app: PetApp): Result {
-        val key = app.apiKey() ?: return Result.success()
-        if (app.stats.get(Stats.Kind.API_CALLS) >= app.settings.dailyLimit) return Result.success()
+    private suspend fun run(app: PetApp): Int {
+        val key = app.apiKey() ?: return DONE
+        if (app.stats.get(Stats.Kind.API_CALLS) >= app.settings.dailyLimit) return DONE
 
         val memory = app.memory
         val prepared = synchronized(app.memoryLock) {
             val day = memory.todayDate() ?: LocalDate.now().minusDays(1)
             // 这天没有任何交流、也已经写过日记：不用再花一次调用
-            if (memory.todayLines().isEmpty() && memory.diary(day) != null) return Result.success()
+            if (memory.todayLines().isEmpty() && memory.diary(day) != null) return DONE
             Triple(
                 day,
                 Nightly.prompt(memory.persona(), memory.profile(), memory.todayLines(), memory.diary(day.minusDays(1)).orEmpty(), memory.tombstones()),
@@ -57,16 +58,18 @@ class NightlyWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             ChatRequest(app.settings.endpoint, app.settings.model, key, messages, maxTokens = Nightly.MAX_TOKENS, timeoutMillis = Nightly.TIMEOUT_MILLIS),
         )
         val output = (result as? ChatResult.Success)?.let { Nightly.parse(it.content, oldProfile) }
-            ?: return if (runAttemptCount < 2) Result.retry() else Result.success()
+            ?: return if (runAttemptCount < 2) RETRY else DONE
 
         synchronized(app.memoryLock) {
             memory.commitNightly(day, output)
             memory.pruneArchive(LocalDate.now())
         }
-        return Result.success()
+        return DONE
     }
 
     companion object {
+        private const val DONE = 0
+        private const val RETRY = 1
         private const val NIGHTLY = "nightly"
         private const val WATCHDOG = "watchdog"
 
