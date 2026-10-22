@@ -447,21 +447,21 @@ fun TodayScreen(onReady: () -> Unit = {}) {
                             val reminded = (adoption?.remindedAt ?: 0L) > 0
                             Text(
                                 when {
-                                    reminded -> "到点了：点「一键采用」才用这份计划（只影响今天页/提醒，不会自动执行）。"
+                                    reminded -> "到点了：点「一键采用」才算你用了这份计划（只是记下你的选择，不会自动执行）。"
                                     left > 0 -> "还没采纳。约 " + ((left / 60_000L) + 1) + " 分钟后提醒你一键采用（到点不会自己用）。"
-                                    else -> "还没采纳。点「采纳」只影响今天页和提醒，不会自动执行。"
+                                    else -> "还没采纳。点「采纳」只是记下你的选择，不会自动执行。"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (reminded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                         com.moling.core.flow.AdoptionState.LOCAL_ADOPTED -> Text(
-                            "本地已采用：今天页和提醒按这份计划走；没有交给总控，也没有执行任何现实动作。",
+                            "你采用了这份计划：只在墨灵里记下了；没有交给总控，也没有执行任何现实动作。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary,
                         )
                         null -> Text(
-                            "点「采纳」只影响今天页和提醒，不会自动执行。",
+                            "点「采纳」只是记下你的选择，不会自动执行。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

@@ -168,7 +168,9 @@ class TrainingRedeemClient(
         if (policy.remainingPassesToday == 0 || policy.remainingMinutesToday == 0) return fail(GateError.NO_QUOTA, "今天没有可兑换的次数/额度了")
         if (policy.validUntil in 1..now) return fail(GateError.EXPIRED, "训练兑换策略已经过期")
         val today = com.moling.core.mind.dayKey(now)
-        val requestId = "issue-${policy.policyId}-${policy.policyRevision}-${packageName}-${today}-${issueNo}"
+        // 计数之外再带一段随机数：状态没持久化 / 重启后计数从头来，也不会撞上之前的 requestId
+        val nonce = java.util.UUID.randomUUID().toString().take(8)
+        val requestId = "issue-${policy.policyId}-${policy.policyRevision}-${packageName}-${today}-${issueNo}-$nonce"
         return when (val r = p.issue(policy.policyId, packageName, requestId)) {
             is PortResult.Ok -> {
                 val c = r.value

@@ -259,6 +259,37 @@ class PlanDriverTest {
         assertTrue("他再点才算", h.driver.adopt(changed, at(9, 6)).ok)
     }
 
+    @Test fun rewriteAfterReminderRestartsTheCountdown() {
+        val h = Harness(AdoptPolicy(remind = true))
+        h.driver.putDraft(plan(), at(9))
+        h.driver.tick(at(9, 20))
+        assertEquals(at(9, 20), h.driver.adoption(day)!!.remindedAt)
+        // 9:30 改了计划：新版本要重新等 20 分钟才提醒，不能一改完就显示“到点了”
+        h.driver.putDraft(plan(main = "写报告"), at(9, 30))
+        h.driver.tick(at(9, 31))
+        assertEquals("改版后旧提醒不算数", 0L, h.driver.adoption(day)!!.remindedAt)
+        h.driver.tick(at(9, 49))
+        assertEquals(0L, h.driver.adoption(day)!!.remindedAt)
+        h.driver.tick(at(9, 50))
+        val a = h.driver.adoption(day)!!
+        assertEquals("新版本到点再提醒", at(9, 50), a.remindedAt)
+        assertEquals("还是不自动采用", AdoptionState.DRAFT, a.state)
+    }
+
+    @Test fun sentOperationExpiredByZongkongIsNotLabelledUnsent() {
+        val h = Harness(AdoptPolicy(remind = true))
+        val p = plan()
+        h.driver.putDraft(p, at(9))
+        h.driver.adopt(p, at(9, 1))
+        val op = h.driver.prepareExecution(p, listOf(ZkCommand.Note("x", "计划")), at(9, 2)).operations.single().operationId
+        h.driver.markSending(op, at(9, 3))
+        h.driver.recordReceipt(op, PlanReceipt("r-1", ok = true, auto = false, message = "总控等确认"), at(9, 4))
+        h.driver.recordFinal(op, "r-1", "EXPIRED", "总控里没人确认，过期了", at(10))
+        val o = h.driver.operation(op)!!
+        assertEquals(OperationState.ZK_EXPIRED, o.state)
+        assertFalse("发过的不能写“没发”", o.state.label.contains("没发"))
+    }
+
     @Test fun pendingReceiptIsNeverExpiredLocallyAndCanBeQueried() {
         val h = Harness(AdoptPolicy(remind = true, operationTtlMs = 60_000L))
         val p = plan()

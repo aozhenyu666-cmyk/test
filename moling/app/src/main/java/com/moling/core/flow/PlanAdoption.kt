@@ -11,7 +11,7 @@ import java.security.MessageDigest
  *
  * 这里只回答三件事，彼此分开：
  *  1. 计划草稿是哪一份（PlanDraft）。
- *  2. 用户/保底策略有没有在本地采用它（PlanAdoption）。本地采用只影响今天页和提醒，
+ *  2. 用户/保底策略有没有在本地采用它（PlanAdoption）。本地采用只是记下他的选择（目前还没有别处读它），
  *     不改 FlowPlan.confirmed 的旧语义，也不代表总控执行了。
  *  3. 如果要交给总控，逐条动作在 PlanOperation 账本里走：准备 → 发送中 → 总控待确认 / 已执行 / 拒绝 / 结果未知。
  *
@@ -53,6 +53,8 @@ data class PlanDraft(
     val confirmed: Boolean = false,
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
+    /** 这一版内容是什么时候定下的（新建 / 改版时更新；同内容重登记不动）。提醒倒计时从这里算。 */
+    val revisedAt: Long = 0,
 )
 
 @Serializable
@@ -89,6 +91,8 @@ enum class OperationState(val label: String) {
     CANCELLED("已取消（没发）"),
     UNKNOWN("结果未知（不重发）"),
     EXPIRED("过期（没发）"),
+    /** 发出去了，总控那边过期 / 没执行。和“没发”分开写。 */
+    ZK_EXPIRED("总控那边过期了（发过）"),
 }
 
 /** 一条准备交给总控的动作。状态和回执都留在这里，界面可按 planId → operationId → receiptId 追。 */
@@ -241,6 +245,7 @@ class PlanDriver(
                 confirmed = plan.confirmed,
                 createdAt = now,
                 updatedAt = now,
+                revisedAt = now,
             )
             existing.contentHash == hash -> existing.copy(
                 intent = plan.intent,
@@ -257,6 +262,7 @@ class PlanDriver(
                 focusKey = focusKey.ifBlank { existing.focusKey },
                 confirmed = plan.confirmed,
                 updatedAt = now,
+                revisedAt = now,
             )
         }
         val focusChanged = focusKey.isNotBlank() && existing != null && existing.focusKey.isNotBlank() && existing.focusKey != focusKey
@@ -305,6 +311,8 @@ class PlanDriver(
                     lastTickAt = now,
                     eligibilityAt = 0,
                     adoptedAt = 0,
+                    // 新版本重新倒计时：旧版本已经提醒过的不算数
+                    remindedAt = 0,
                     message = when {
                         active -> "计划改版了；总控里已经执行的动作不受本地改稿影响，新版本重新倒计时"
                         unsent -> "计划改版了：没发的旧命令已取消，已经发出的按总控回执处理，新版本重新倒计时"
@@ -343,7 +351,7 @@ class PlanDriver(
             adopt = when (adopt.state) {
                 AdoptionState.DRAFT -> {
                     val p = policy()
-                    val dueAt = draft.createdAt + p.remindAfterMs
+                    val dueAt = (draft.revisedAt.takeIf { it > 0 } ?: draft.createdAt) + p.remindAfterMs
                     val canRemind = p.remind && !draft.confirmed &&
                         now - draft.createdAt <= p.maxDraftAgeMs &&
                         adoptionConflicts(draft, adopt, now, today).isEmpty()
@@ -353,7 +361,7 @@ class PlanDriver(
                                 eligibilityAt = 0,
                                 lastTickAt = now,
                                 remindedAt = now,
-                                message = "到点了：点「一键采用」才用这份计划（只影响今天页/提醒，没交给总控）",
+                                message = "到点了：点「一键采用」才算你用了这份计划（只记下你的选择，没交给总控）",
                             )
                         } else {
                             adopt.copy(eligibilityAt = 0, lastTickAt = now)
@@ -525,7 +533,7 @@ class PlanDriver(
         if (adopt != null && adopt.planId == op.planId && adopt.planRevision == op.planRevision) {
             val mine = ops.filter {
                 it.planId == op.planId && it.planRevision == op.planRevision &&
-                    it.state !in setOf(OperationState.CANCELLED, OperationState.EXPIRED)
+                    it.state !in setOf(OperationState.CANCELLED, OperationState.EXPIRED, OperationState.ZK_EXPIRED)
             }
             val rejected = mine.count { it.state == OperationState.REJECTED }
             val active = mine.count { it.state == OperationState.ACTIVE || it.state == OperationState.EXECUTED }
@@ -550,7 +558,7 @@ class PlanDriver(
         val next = when (kind) {
             "DONE" -> op.copy(state = OperationState.EXECUTED, receiptId = receiptId.ifBlank { op.receiptId }, receiptAt = now, message = message)
             "FAILED", "DECLINED" -> op.copy(state = OperationState.REJECTED, receiptId = receiptId.ifBlank { op.receiptId }, receiptAt = now, message = message)
-            "EXPIRED" -> op.copy(state = OperationState.EXPIRED, receiptId = receiptId.ifBlank { op.receiptId }, receiptAt = now, message = message)
+            "EXPIRED" -> op.copy(state = OperationState.ZK_EXPIRED, receiptId = receiptId.ifBlank { op.receiptId }, receiptAt = now, message = message)
             "ACTIVE" -> op.copy(state = OperationState.ACTIVE, receiptId = receiptId.ifBlank { op.receiptId }, receiptAt = now, message = message)
             else -> op.copy(state = OperationState.ZK_PENDING, receiptId = receiptId.ifBlank { op.receiptId }, receiptAt = now, message = message)
         }
