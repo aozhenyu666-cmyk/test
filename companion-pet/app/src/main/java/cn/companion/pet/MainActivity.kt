@@ -1,54 +1,86 @@
 package cn.companion.pet
 
+import android.Manifest
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
+import cn.companion.pet.ui.MemoryTab
+import cn.companion.pet.ui.SettingsTab
+import cn.companion.pet.ui.StartTab
+import cn.companion.pet.ui.StatsTab
 
 /**
- * H1 最小启动页：只证明工程可以安装并启动，不显示任何"已授权/运行中/联网成功"状态。
+ * 设置页：开始（权限引导）、设置、记忆、统计。
  */
 class MainActivity : ComponentActivity() {
+
+    /** 每次回到前台 +1，让各页重新读取权限状态和文件。 */
+    private var resumeTick by mutableIntStateOf(0)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    BootstrapContent()
-                }
+            val dark = isSystemInDarkTheme()
+            MaterialTheme(
+                colorScheme = if (dark) darkColorScheme(primary = Color(0xFFF2B67C)) else lightColorScheme(primary = Color(0xFFB8682A)),
+            ) {
+                Surface(modifier = Modifier.fillMaxSize()) { Root() }
             }
         }
     }
-}
 
-@Composable
-private fun BootstrapContent() {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = stringResource(R.string.app_name),
-            style = MaterialTheme.typography.headlineMedium,
-        )
-        Text(
-            text = stringResource(R.string.bootstrap_status),
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.padding(top = 12.dp),
-        )
+    override fun onResume() {
+        super.onResume()
+        resumeTick++
+    }
+
+    fun requestMic() {
+        val perms = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= 33) perms += Manifest.permission.POST_NOTIFICATIONS
+        requestPermissions(perms.toTypedArray(), 7)
+    }
+
+    @Suppress("OVERRIDE_DEPRECATION")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        resumeTick++
+    }
+
+    @androidx.compose.runtime.Composable
+    private fun Root() {
+        var tab by rememberSaveable { mutableIntStateOf(0) }
+        val tabs = listOf("开始", "设置", "记忆", "统计")
+        Scaffold { inner ->
+            Column(Modifier.padding(inner)) {
+                TabRow(selectedTabIndex = tab) {
+                    tabs.forEachIndexed { i, t -> Tab(selected = tab == i, onClick = { tab = i }, text = { Text(t) }) }
+                }
+                when (tab) {
+                    0 -> StartTab(this@MainActivity, resumeTick)
+                    1 -> SettingsTab(this@MainActivity)
+                    2 -> MemoryTab(resumeTick)
+                    else -> StatsTab(resumeTick)
+                }
+            }
+        }
     }
 }

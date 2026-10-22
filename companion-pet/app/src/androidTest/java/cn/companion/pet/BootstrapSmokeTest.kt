@@ -8,9 +8,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/**
- * H1 设备冒烟测试：Activity 能启动，且启动页文案可见。
- */
+/** 设备冒烟测试：设置页能启动，引导项可见。 */
 @RunWith(AndroidJUnit4::class)
 class BootstrapSmokeTest {
 
@@ -18,8 +16,8 @@ class BootstrapSmokeTest {
     val composeRule = createAndroidComposeRule<MainActivity>()
 
     @Test
-    fun bootstrapScreenShowsStatusText() {
-        val expected = composeRule.activity.getString(R.string.bootstrap_status)
-        composeRule.onNodeWithText(expected).assertIsDisplayed()
+    fun startTabShowsOverlayStep() {
+        composeRule.onNodeWithText("开始").assertIsDisplayed()
+        composeRule.onNodeWithText("悬浮窗", substring = true).assertIsDisplayed()
     }
 }
