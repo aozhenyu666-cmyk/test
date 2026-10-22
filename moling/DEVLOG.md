@@ -1179,6 +1179,52 @@
 
 ---
 
+---
+
+## 第十三批 W13：计划代驾、训练兑换与系统工具（DeepSeek，2026-10-22）
+
+分支 `deepseek/moling-planner`，基于 W10 的 `4f3c905`。本批只做**能安全验证的核心 + 最小 UI 接线**，没有改 `zongkong/`、没有加 Android 权限、没有改 Manifest、没有自动执行现实动作。
+
+**G1/G2 本地计划代驾（core + 最小 UI）**
+- 新增 `core/flow/PlanAdoption.kt`：`PlanDraft` / `PlanAdoption` / `PlanOperation` / `PlanDriver`。
+  - 状态机：`DRAFT → LOCAL_ADOPTED → EXECUTION_REQUESTED → ZK_PENDING / ACTIVE / REJECTED / EXPIRED`（另有 CANCELLED 供用户取消）；`planRevision`（计划内容版本）和 `adoptionRevision`（采纳状态版本）分开。
+  - 可见时间：只有 App 在前台、屏幕亮着才累计；锁屏/离开暂停；单次 tick 最多按 90 秒算，避免进程被杀后一口气攒满。默认 20 分钟，设置页可选 10/20/30 分钟。
+  - 换日/隔夜草稿不自动采用；计划改版会重置倒计时并取消**尚未发送**的旧命令，已发送的保留回执；焦点变化要求重核；草稿太久不自动采用。
+  - 旧 `FlowPlan.confirmed` 语义不变：本地采纳不改它，内容 hash 也不再算 confirmed/运行态，避免一确认/一推进就重置。
+  - 执行账本：operationId 由 planId/planRevision/attempt/index/指令内容确定性生成；重复 prepare 不加动作；回执按 receiptId 幂等；终态不被后来的回执覆盖；IPC 中断记 UNKNOWN，不盲重发。
+- App：`BrainHost` 持有 `PlanDriver`，状态单独存 `mind/plan-adoption.json`；`planDay/confirmFlow/reroute/自动排水道` 后登记草稿；心跳每分钟以“App 是否在前台+亮屏”喂可见时间。**没有**把本地采用变成自动 send。
+- 今天页新增「计划代驾」卡片：草稿版本/意图、本地状态和「总控已确认（旧定稿）」分栏显示，「采纳 / 不采纳」按钮；采纳提示明确“只影响今天页和提醒，没有交给总控/没有执行现实动作”。
+- 设置页新增「保底计划可以在我没改时本地采用」开关（默认关）与 10/20/30 分钟可见时间选择。
+
+**G3 训练兑换（墨灵侧，未改总控）**
+- 新增 `core/link/GateV2.kt`：`GATE_V2=2`、能力协商、v2 请求/响应字符串外壳、固定错误码；**没有**把 `ZK_LINK_VERSION` 从 1 改掉，v1 status/command/result 原样保留。
+- 新增 `core/redeem/TrainingRedeem.kt`：`UnlockPolicyView / ChallengeBundle / UnlockSubmission / TemporaryPass / ExecutionReceipt / GateV2Port / TrainingRedeemClient`。
+  - 墨灵只拿题干/选项；`activePass` 只认总控回执里绑定 challengeId/包名/policyRevision/截止时间的 pass，本地不生成、不签名、不把讨论版分数换授权。
+  - 没启用策略/严格期/范围外/没额度/单次超过 15 分钟/v2 不支持 → 明确拒绝；答案越界、未知题、重复题本地拒绝；同一挑战重复提交返回原回执、不重复计时长；并发提交串行化。
+  - 测试里的 FakeGate 是**测试替身**，模拟总控 rubric/额度；生产总控侧本批按要求不动。
+
+**G4 系统工具（只有接口与拒绝/降级）**
+- 新增 `core/system/SystemPorts.kt`：`CalendarPort / DndPort / PlaylistPort / SystemTools`、能力状态（READY/没配置/没权限/撤销/不支持/App 没装）。
+- 默认适配器 `UnavailableCalendar / UnavailableDnd / UnavailablePlaylist` 明确返回 PERMISSION_DENIED/UNSUPPORTED/NOT_CONFIGURED，不返回伪造成功。
+- 纯规则：日历忙闲去重+同步时间；写入只承认“打开系统编辑页、等用户保存”，直接写默认拒绝；勿扰只恢复墨灵确实改过且用户没再改的档位；歌单要求用户选 App + 可验证 URI，找不到退回配置，打开成功只说明系统接受 Intent，不表示正在播放。
+- **未**新增 Android 权限、未改 Manifest、未申请日历/通知策略访问；真正 Android 适配器留后续批次。
+
+**自动检查**
+- `tools/core-tests`（ASCII 路径 `C:/autopilot-w13-wt`）：**493 个全绿**，0 失败；新增 51 个：PlanDriverTest 15、TrainingRedeemTest 21、SystemPortsTest 10、GateV2Test 5。
+- App：`compileDebugKotlin` 通过（ASCII 路径）；`testDebugUnitTest` 本批未跑。
+- 注：中文路径直接跑 core-tests 会出现 JVM 类路径编码问题（ClassNotFoundException）；改为 ASCII junction 路径运行，并新增 `tools/core-tests/gradle.properties`（Kotlin/Gradle 堆上限）避免编译 OOM。
+
+**明确未完成**
+- Z13 总控侧：CognitiveUnlockPolicy/Challenge/rubric/临时通行记录、`v2.challenge.*` 的 ContentProvider 实现、拦截页训练入口全部未做（按要求不改 `zongkong/`）。
+- GateV2 端口还没有 Android/ContentProvider 适配器；训练兑换没有 UI 入口；没有接真实总控联调。
+- G2 的“真正交给总控”链路：账本/回执/幂等核心已测，但 App 没有发送入口，也没有复用 sendAuto 的 60 秒过程（本批坚持不自动执行）。
+- G5 调试页 planId→operationId→receiptId 追链、总控端训练发行/兑换界面未做。
+- G6 交叉协议/两 App 新旧版本/备份恢复不复活临时令未做；真机全部未测。
+- G7 整套七脑五手最终验收、能力/设备矩阵、迁移说明与发布 SHA 未做。
+- 日历/勿扰/歌单的真实 Android 适配器与设置入口未做（因此没有新增权限）。
+
+---
+
 ## 第十四批修复（#17 W10，2026-10-22）
 
 只修不加新功能。`deepseek/moling-web-memory` 先把工作分支最新 `b2b47fb` merge 进来（`606f740`，冲突已解），再按 F10-1…F10-7 + 顺手项逐个修，每个修复一个提交。
@@ -1206,3 +1252,32 @@
 - prune 删正文不会把对应 `SourceRef.status` 改成 PARTIAL / DELETED；材料里那份正文还在。
 - 本批没有改 `zongkong/`、Manifest、权限，也没有动 `core/workspace`、`core/strategy` 其它行（只改点名的 `materialLines` 与调用处）、`core/live/Live.kt`、`Brain.kt`。
 
+---
+
+## 第十四批修复（#20 W13，2026-10-22）
+
+只修不加新功能。先把 `origin/deepseek/moling-web-memory`（#17 按 F10 修好）merge 进 `deepseek/moling-planner`（`06dc724`，冲突按“保留双方有效改动、以 #17 修复为准”解），再按 F13-1…F13-8 + 小项逐个修，每个修复一个提交。没有改 `zongkong/`、没有加权限、没有改 Manifest/签名/包名；W12 A4/A2 冻结未碰；W13 不做 Z13、没有自动采用/执行；训练兑换与系统工具仍不接线。
+
+| 编号 | 提交 | 改了什么 | 对应测试 |
+|---|---|---|---|
+| F13-1 | `7f0f496` | 取消“20 分钟没改就自动本地采用”与 `interactive()` 可见时间累计：`PlanDriver.tick(now)` 只看墙钟，到 `remindAfterMs` 只在 `PlanAdoption.remindedAt` 记一次提醒；`LOCAL_ADOPTED` 只能由 `adopt()`（他点）产生。`BrainHost` 到点发 `plan_adopt` 通知（今天页同时显示「一键采用」按钮），设置页改成“到点提醒我一键采用”（默认开，10/20/30 分钟） | `PlanDriverTest.reminderCanBeTurnedOffAndNeverAdopts`、`reminderAtTwentyMinutesNeverAdopts`、`confirmedPlanIsNotReminded`、`restartDoesNotAdoptOrRemindYesterdayDraft` |
+| F13-2 | `fd49c4c` | 计划改版时 `CANCELLED / REJECTED` 粘住，不再重置成 `DRAFT`；只有他再点采纳才改状态（`putDraft`） | `cancelledAdoptionStaysCancelledAfterPlanRewrite`、`rejectedAdoptionStaysRejectedAfterPlanRewrite` |
+| F13-3 | `ddbfc01` | `SENDING` 中断（超时/改稿/取消）一律 `UNKNOWN`，不记 `CANCELLED`（“已取消（没发）”）也不记 `EXPIRED`；`ZK_PENDING` 不在本地过期，新增 `receiptsToQuery(now)` 交调用方去查回执；`cancel()` 只取消真正 `PREPARED` 的，已发/发送中按回执/未知处理 | `pendingReceiptIsNeverExpiredLocallyAndCanBeQueried`、`interruptedSendingBecomesUnknownOnExpire`、`planRewriteWhileSendingBecomesUnknownNotCancelled`、`cancelNeverMarksSendingOrSentAsNotSent` |
+| F13-4 | `22ad126` | `capabilities() == null` 直接 `NOT_AVAILABLE`，不再默认放行 | `TrainingRedeemTest.capabilitiesNullIsNotAvailable` |
+| F13-5 | `8a459e8` | 允许列表为空 = 没选任何应用，`SCOPE_DENIED` 拒绝，不再当“全放行” | `emptyAllowListRejectsInsteadOfAllowingEverything` |
+| F13-6 | `4b2749e` | 发起挑战的 `requestId` 加持久计数（`RedeemState.issueSeq`），每次 `start()` 唯一，不再按天固定 | `issueRequestIdIsUniquePerStart` |
+| F13-7 | `8d5b15f` | `TrainingRedeemClient` 去掉 `@Synchronized`：`start/submit/query/activePass` 锁内只读写状态，能力/策略/发起/交卷/查回执都在锁外调端口；并发时“一局只成功一次”最终由总控按 challengeId/requestId 保证（DEVLOG 保留此说明） | `portCallDoesNotHoldTheClientLock`；`concurrentSubmitOnlyOnePass` 改为由 Fake 总控按 requestId 去重后仍只发一份放行 |
+| F13-8 | `1a7a364` | 今天页 `flow.confirmed` 文案改为「定稿：你已定稿 / 还没定稿」，不再写“总控已确认”；只有读到 `LOCAL_ADOPTED` 时才写“今天页和提醒按这份计划走”，到点提醒文案不再暗示已采纳 | 纯文案/UI，无核心测试；以 `compileDebugKotlin` 通过为准 |
+| 小项 | `df7ac6d` | `acceptReceipt` 对“总控拒绝”和“通过但没发行临时放行”走同一条回执路径：都返回这张回执（`pass == null`），都不当授权；删掉不可达的“没确认通过”分支 | `deniedAndPassedWithoutPassUseSameReceiptPath`；更新 `passedStateWithoutPassIsNotAwarded`、`passedStateWithoutPassCannotBecomeAuthorization`、`queryNeverFabricatesPass` |
+
+**自动检查（实际跑出来的）**
+- `tools/core-tests`：`gradle test`（Gradle 8.9 + JDK 22，`JAVA_HOME=C:\Program Files\Java\jdk-22`，ASCII 路径 `C:/autopilot-w13-wt/tools/core-tests`）：**51 个测试类、510 个测试、0 失败 0 错误 0 跳过**。其中 W13 相关：`PlanDriverTest` 21、`TrainingRedeemTest` 26、`SystemPortsTest` 10、`GateV2Test` 5。
+- App：`moling/gradlew.bat compileDebugKotlin`（`ANDROID_HOME=C:\Android\sdk`，ASCII 路径 `C:/autopilot-w13-wt/moling`）**通过**；本批未打包、未跑 Android 单测。
+- CI：GitHub Actions `build` **通过**、`release` skipped（开发分支不发布）：[run 39725106241](https://github.com/aozhenyu666-cmyk/test/actions/runs/39725106241)。
+- 真机**未测**：通知实际弹出、点击进今天页、设置项持久化都未在手机上验。训练兑换/系统工具仍无 UI、未接 Android 适配器。
+
+**没做到 / 说明**
+- F13-1 的提醒依赖心跳（`HeartService` 前台 60 秒 / 息屏 300 秒一次与打开 App）；进程被杀期间不会准时提醒，下一次心跳才补发。
+- F13-3 只提供 `receiptsToQuery`，真正去总控查回执的调用入口要等 Z13 的 v2 端口接线；本批不拿 IPC 做回执轮询。
+- F13-7 客户端不再保证并发只成功一次；真正的幂等保证在总控（按 challengeId/requestId），这一条写进代码注释与本记录。
+- 本批没有改 `zongkong/`、Manifest、权限、签名/包名，也没有碰 W12 的 Capture/外脑冻结部分。

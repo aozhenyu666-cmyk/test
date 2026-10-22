@@ -215,6 +215,23 @@ class SettingsStore(context: Context) {
         toggles.edit().putBoolean(KEY_AUTO_PLAN, on).apply()
     }
 
+    /**
+     * 到点提醒「一键采用」：默认开。提醒只发一条通知，绝不自动采用（F13-1）；
+     * 采用仍然只能由他点出来。
+     */
+    fun planRemindOn(): Boolean = toggles.getBoolean(KEY_PLAN_ADOPTION, true)
+
+    fun setPlanRemindOn(on: Boolean) {
+        toggles.edit().putBoolean(KEY_PLAN_ADOPTION, on).apply()
+    }
+
+    /** 草稿登记后多久提醒：默认 20 分钟（只允许 5–60）。 */
+    fun planRemindMin(): Int = toggles.getInt(KEY_PLAN_ADOPTION_WAIT, 20).coerceIn(5, 60)
+
+    fun setPlanRemindMin(min: Int) {
+        toggles.edit().putInt(KEY_PLAN_ADOPTION_WAIT, min.coerceIn(5, 60)).apply()
+    }
+
     /** 她会主动找你（刷久了、夜里躺着刷时蹦出来）：默认开。 */
     fun liveOn(): Boolean = toggles.getBoolean(KEY_LIVE, true)
 
@@ -276,6 +293,8 @@ class SettingsStore(context: Context) {
         private const val TOGGLE_FILE = "moling_toggles"
         private const val KEY_BACKGROUND = "background_heart"
         private const val KEY_AUTO_PLAN = "auto_plan"
+        private const val KEY_PLAN_ADOPTION = "plan_adoption"
+        private const val KEY_PLAN_ADOPTION_WAIT = "plan_adoption_wait_min"
         private const val KEY_LIVE = "live"
         private const val KEY_GATE = "gate"
         private const val KEY_EAGER = "eagerness"

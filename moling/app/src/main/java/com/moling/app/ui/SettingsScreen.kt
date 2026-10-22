@@ -97,6 +97,8 @@ fun SettingsScreen(onDone: () -> Unit) {
     var section by remember { mutableStateOf<String?>(null) }
     var backgroundOn by remember { mutableStateOf(store.backgroundHeart()) }
     var autoPlanOn by remember { mutableStateOf(store.autoPlan()) }
+    var planRemindOn by remember { mutableStateOf(store.planRemindOn()) }
+    var planRemindMin by remember { mutableStateOf(store.planRemindMin()) }
     var liveOn by remember { mutableStateOf(store.liveOn()) }
     var gateOn by remember { mutableStateOf(store.gateOn()) }
     var whisperOn by remember { mutableStateOf(store.whisperOn()) }
@@ -383,6 +385,42 @@ fun SettingsScreen(onDone: () -> Unit) {
                         store.setAutoPlan(on)
                     },
                 )
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("到点提醒我一键采用计划")
+                    Text(
+                        "到点只发一条提醒（通知 + 今天页按钮）；你点了才算采用，不会自动采用、不会交给总控。默认开。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = planRemindOn,
+                    onCheckedChange = { on ->
+                        planRemindOn = on
+                        store.setPlanRemindOn(on)
+                    },
+                )
+            }
+            if (planRemindOn) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "排好草稿后多久提醒",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    listOf(10, 20, 30).forEach { m ->
+                        TextButton(onClick = {
+                            planRemindMin = m
+                            store.setPlanRemindMin(m)
+                        }) {
+                            Text(if (m == planRemindMin) "✓ " + m + " 分" else "" + m + " 分")
+                        }
+                    }
+                }
             }
 
             }
