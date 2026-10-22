@@ -8,6 +8,11 @@ import com.moling.app.data.MolingAsk
 import com.moling.app.data.SettingsStore
 import com.moling.core.Brain
 import com.moling.core.BrainFacts
+import com.moling.core.atlas.Atlas
+import com.moling.core.atlas.AtlasOps
+import com.moling.core.forage.Discovery
+import com.moling.core.forage.DiscoveryPage
+import com.moling.core.forage.ForageState
 import com.moling.core.BrainState
 import com.moling.core.ChatResult
 import com.moling.core.Notice
@@ -53,6 +58,8 @@ import com.moling.core.workspace.JobKind
 import com.moling.core.workspace.PortError
 import com.moling.core.workspace.PortResult
 import com.moling.core.workspace.Workbench
+import com.moling.core.web.HttpWebPort
+import com.moling.core.web.Sources
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -81,6 +88,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -116,6 +124,17 @@ object BrainHost {
     private val _sources = MutableStateFlow(com.moling.core.web.SourceState())
     val sources: StateFlow<com.moling.core.web.SourceState> = _sources
     private var sourceFile: java.io.File? = null
+
+    /** 深想模型（设置里单独填了才有）：联网采蜜的整理优先用它，没有就用平时的。 */
+    private lateinit var deepAsk: MolingAsk
+
+    /** 联网采蜜的预算账（「每天自动一份」用，默认关）；跨天清零、跨重启保留。 */
+    private val _forage = MutableStateFlow(ForageState())
+    val forage: StateFlow<ForageState> = _forage
+    private var forageFile: java.io.File? = null
+    private val autoForageGate = AtomicBoolean(false)
+    /** 手动点 / 自动一天一份共用一把锁：同时只跑一轮，连点不重复花钱。 */
+    private val forageLock = Mutex()
 
     /** 第十三批 G1：本地计划代驾（草稿/本地采纳/执行账本），单独存 mind/plan-adoption.json。 */
     private lateinit var planDriver: PlanDriver
@@ -168,6 +187,7 @@ object BrainHost {
             val ask = MolingAsk(settings, LlmClient({ settings.load() })).also { askModel = it }
             // 深想模型：没填就和平时同一个（大脑里 deep = null 时退回 ask）
             val deep = MolingAsk(settings, LlmClient({ settings.load().deep() }, timeoutSec = 120, withTemperature = false), timeoutMs = 125_000L)
+            deepAsk = deep
             brain = Brain(
                 phone = PhoneFacts(
                     foreground = { appContext?.let { Usage.foreground(it) } },
@@ -208,6 +228,11 @@ object BrainHost {
             _sources.value = (runCatching {
                 sourceFile?.takeIf { it.exists() }?.readText()?.let { Json.decodeFromString<com.moling.core.web.SourceState>(it) }
             }.getOrNull() ?: com.moling.core.web.SourceState()).let { com.moling.core.web.Sources.prune(it) }
+            // 联网采蜜的预算账：旧文件没有 / 读坏了就当空的（默认关），不影响启动
+            forageFile = File(dir, "forage.json")
+            _forage.value = runCatching {
+                forageFile?.takeIf { it.exists() }?.readText()?.let { Json.decodeFromString<ForageState>(it) }
+            }.getOrNull() ?: ForageState()
             // 计划代驾：状态单独存；旧文件没有就当空。本地采用不会自动发任何指令。
             planFile = File(dir, "plan-adoption.json")
             val planInitial = runCatching {
@@ -892,6 +917,182 @@ object BrainHost {
         }
     }
 
+    // ---------------------------------------------------------------- 联网采蜜（v13 第十五批 B1）
+
+    /** 「每天自动一份」的账（设置页 / 调试页读）：今天用了几次查询、抓了几篇。 */
+    fun forageState(): ForageState = _forage.value
+
+    /**
+     * 他点了「去查一下」：从这件事的问题（没有就体系图最大的缺口）选 query，
+     * 走已合入的 WebPort 搜索（没配 Brave 就 NOT_CONFIGURED，不造假）、把正文抓进来源库，
+     * 再把支持 / 反对整理成一份 DISCOVERY 稿子。最多两路查询；一篇真实正文都没抓到就不落稿。
+     */
+    suspend fun forageOnline(focusId: String? = null): PortResult<WorkspaceArtifact> {
+        if (!ready) return PortResult.Failed(PortError(PortError.OFFLINE, "刚才没接上，再试一次"))
+        val now = System.currentTimeMillis()
+        val ws = _bench.value
+        val current = focusId?.let { ws.focus(it) } ?: ws.active()
+        val gaps = runCatching {
+            val a: Atlas = brain.state().atlas
+            a.topics.flatMap { AtlasOps.gaps(a, it.id) }
+        }.getOrDefault(emptyList())
+        val picked = Discovery.pickQuery(current?.question, gaps)
+            ?: return PortResult.Failed(PortError(PortError.NOT_FOUND, "案板上没有正在做的事，体系图里也没有缺口：先开一件事"))
+        val question = picked.trim()
+        val focus = current ?: bench.start(Discovery.query(question).ifBlank { question }.take(80), "", now)
+        return io("forageOnline", { offline() }) { forageOnce(question, focus.id).result }
+    }
+
+    /** 一轮联网采蜜的记账：真实用掉几次查询、抓了几篇正文（「每天自动一份」的预算按这个扣）。 */
+    private data class ForageRun(
+        val result: PortResult<WorkspaceArtifact>,
+        val searches: Int,
+        val fetches: Int,
+    )
+
+    /** 手动 / 自动同时只跑一轮；已经在查就明确说 BUSY，不重复搜、不重复调模型。 */
+    private suspend fun forageOnce(question: String, focusId: String): ForageRun {
+        if (!forageLock.tryLock()) {
+            return ForageRun(PortResult.Failed(PortError(PortError.BUSY, "正在联网查，等这一份回来")), 0, 0)
+        }
+        return try {
+            forageWork(question, focusId)
+        } finally {
+            forageLock.unlock()
+        }
+    }
+
+    /** 真的搜、抓、整理、落稿。[focusId] 必须已经在案板上。 */
+    private suspend fun forageWork(question: String, focusId: String): ForageRun {
+        val now = System.currentTimeMillis()
+        val queries = Discovery.queries(question)
+        if (queries.isEmpty()) {
+            return ForageRun(PortResult.Failed(PortError("BAD_ACTION", "没有可查的问题")), 0, 0)
+        }
+        val key = runCatching { settings.braveKey() }.getOrDefault("")
+        val harvest = Discovery.harvest(HttpWebPort(searchKey = key), queries, _sources.value, now)
+        // 抓到的正文先进来源库（同一 URL 复用旧编号，不悄悄换正文）
+        if (harvest.pages.isNotEmpty()) {
+            _sources.update { current ->
+                var st = current
+                harvest.pages.zip(harvest.refs).forEach { (page, ref) -> st = Sources.put(st, ref, page.text) }
+                st
+            }
+            runCatching { saveSources() }
+        }
+        val sourceIds = harvest.pages.map { it.sourceId }.distinct()
+        val inputHash = Discovery.inputHash(question, sourceIds)
+        // 同一件事、同一批来源已经查过：给他那一份，不重复花钱
+        bench.discovery(focusId, inputHash)?.let { return ForageRun(PortResult.Ok(it), harvest.queries.size, harvest.pages.size) }
+        if (harvest.pages.isEmpty()) {
+            val e = harvest.errors.firstOrNull()
+            return ForageRun(
+                PortResult.Failed(e ?: PortError("EMPTY", "这次没有抓到任何真实网页，不生成发现")),
+                harvest.queries.size,
+                0,
+            )
+        }
+        // 真抓到的正文当材料挂上；来源库按材料 id 也能找回去（材料弹窗里的「删除原文」）
+        harvest.pages.forEach { page ->
+            when (val added = bench.addSourceMaterial(focusId, page.text, page.title.ifBlank { page.url }, now)) {
+                is PortResult.Ok -> _sources.update { st -> Sources.attach(st, added.value.id, page.sourceId, now) }
+                is PortResult.Failed -> {}
+            }
+        }
+        runCatching { saveSources() }
+        val persona = runCatching { settings.load().persona }.getOrDefault("你是墨灵，他的伙伴。")
+        val about = runCatching { brain.state().about }.getOrDefault("")
+        val reply = runCatching {
+            val ask = if (runCatching { settings.load().hasDeep() }.getOrDefault(false)) deepAsk else askModel
+            ask.ask(persona, Discovery.prompt(persona, question, harvest.pages, about))
+        }.getOrNull()
+        val draft = reply?.let { Discovery.parse(it, sourceIds.toSet()) }
+        val offline = draft == null
+        val title = "联网发现：" + Discovery.query(question).ifBlank { question }.take(20)
+        val result = bench.attachDiscovery(
+            focusId = focusId,
+            title = title,
+            inputHash = inputHash,
+            draft = draft ?: Discovery.fallback(harvest.pages),
+            sourceIds = sourceIds,
+            now = now,
+            offline = offline,
+        )
+        return ForageRun(result, harvest.queries.size, harvest.pages.size)
+    }
+
+    /**
+     * 心跳里最多一天一次：「每天自动一份」只有他自己打开、配了搜索密钥、亮屏、而且预算还够时才查。
+     * 默认关；预算用 AutonomyBudget，跨天清零、跨重启保留。失败也记下来，但不拿假结果充数。
+     */
+    private fun autoForage(now: Long) {
+        val ctx = appContext ?: return
+        if (!ready) return
+        if (!runCatching { settings.forageAutoOn() }.getOrDefault(false)) return
+        if (runCatching { settings.braveKey() }.getOrDefault("").isBlank()) return
+        if (!interactive()) return
+        val day = Brain.calendarDay(now)
+        val st = _forage.value
+        if (st.lastAutoDay == day) return
+        val atlas = runCatching { brain.state().atlas }.getOrDefault(Atlas())
+        val gaps = atlas.topics.flatMap { AtlasOps.gaps(atlas, it.id) }
+        val focus = _bench.value.active()
+        val question = Discovery.pickQuery(focus?.question, gaps) ?: return
+        val queries = Discovery.queries(question)
+        if (queries.isEmpty()) return
+        var budget = st.budget.fresh(day)
+        if (!budget.enabled) budget = budget.copy(enabled = true)
+        if (budget.searches + queries.size > budget.maxSearches) return
+        if (budget.fetches + Discovery.MAX_FETCH > budget.maxFetches) return
+        if (!autoForageGate.compareAndSet(false, true)) return
+        // 先记下今天已经试过：失败也不每分钟重试（预算账在下面按真实的查询 / 抓取扣）
+        _forage.value = st.copy(day = day, budget = budget, lastAutoDay = day, lastAutoAt = now, lastMessage = "自动采蜜：正在查…")
+        saveForage()
+        answerScope.launch {
+            try {
+                val target = focus ?: bench.start(Discovery.query(question).ifBlank { question }.take(80), "", System.currentTimeMillis())
+                val run = forageOnce(question, target.id)
+                val used = budget.copy(
+                    enabled = true,
+                    searches = budget.searches + run.searches,
+                    fetches = budget.fetches + run.fetches,
+                )
+                when (val r = run.result) {
+                    is PortResult.Ok -> {
+                        _forage.value = _forage.value.copy(budget = used, lastMessage = "联网查回一份：" + r.value.title)
+                        runCatching { Notify.discoveryReady(ctx, r.value.title, "支持 / 反对和来源都在案板上；网页内容未核实。") }
+                    }
+                    is PortResult.Failed -> {
+                        _forage.value = _forage.value.copy(budget = used, lastMessage = r.error.message)
+                    }
+                }
+                saveForage()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "自动采蜜失败", e)
+                _forage.value = _forage.value.copy(lastMessage = "自动采蜜失败：" + (e.message ?: e.javaClass.simpleName))
+                saveForage()
+            } finally {
+                autoForageGate.set(false)
+            }
+        }
+    }
+
+    /** 和 sources.json 一样原子写：tmp + rename。 */
+    private fun saveForage() {
+        val f = forageFile ?: return
+        runCatching {
+            f.parentFile?.mkdirs()
+            val tmp = File(f.path + ".tmp")
+            tmp.writeText(Json.encodeToString(_forage.value))
+            if (!tmp.renameTo(f)) {
+                f.delete()
+                tmp.renameTo(f)
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- 外脑会话（第十二批 A1–A3）
 
     /**
@@ -1149,6 +1350,8 @@ object BrainHost {
                 runCatching { brain.forage(now) }
                 refreshState()
             }
+            // 「每天自动一份」联网采蜜：默认关；他打开了、配了搜索、亮屏、预算够才查（不在这里造假结果）
+            runCatching { autoForage(now) }.onFailure { Log.w(TAG, "自动采蜜没跑起来", it) }
             if (brain.needsNight(now)) {
                 val text = runCatching { brain.night(now) }.getOrNull()
                 refreshState()

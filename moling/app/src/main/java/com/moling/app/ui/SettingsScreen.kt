@@ -103,6 +103,10 @@ fun SettingsScreen(onDone: () -> Unit) {
     var gateOn by remember { mutableStateOf(store.gateOn()) }
     var whisperOn by remember { mutableStateOf(store.whisperOn()) }
     var fadeOn by remember { mutableStateOf(store.fadeOn()) }
+    // 联网采蜜（B1）：搜索密钥 + 「每天自动一份」（默认关）
+    var braveKey by remember { mutableStateOf(store.braveKey()) }
+    var forageAutoOn by remember { mutableStateOf(store.forageAutoOn()) }
+    val forageNow by BrainHost.forage.collectAsState()
     var disabled by remember { mutableStateOf(store.disabledModalities()) }
     var eager by remember { mutableStateOf(store.eagerness()) }
     var faceMood by remember { mutableStateOf(com.moling.core.live.Mood.POUT) }
@@ -244,6 +248,7 @@ fun SettingsScreen(onDone: () -> Unit) {
                 liveOn = liveOn, eager = eager.label, zk = zkLabel(brainState.lastStatus), tier = tierShort(brainState.userMax),
                 background = backgroundOn, usageAllowed = usageAllowed,
                 notion = store.notion().ready(), relay = store.relay().ready(),
+                forageAuto = forageAutoOn, searchReady = braveKey.isNotBlank(),
                 memory = fileSummary(File(File(context.filesDir, "mind"), "moling.json")),
                 open = { section = it },
                 openBridge = { bridgeOpen = true },
@@ -279,6 +284,60 @@ fun SettingsScreen(onDone: () -> Unit) {
                 supportingText = { Text("DeepSeek 填 deepseek-chat。") },
             )
 
+            }
+            if (section == "forage") {
+            Text("联网采蜜", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "只在你点案板的「去查一下」时搜：从这件事的问题（没有就体系图最大的缺口）出发，最多两路搜索，" +
+                    "抓到的正文进来源库，再整理成一份「发现」（支持 / 反对 + 来源）。网页内容一律按未核实处理。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                value = braveKey,
+                onValueChange = { braveKey = it },
+                label = { Text("Brave 搜索密钥") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+                supportingText = { Text("没填 = 没配置：点「去查一下」只会说没配置，不会返回假结果。只存在这台手机上（加密保存）。") },
+            )
+            OutlinedButton(onClick = {
+                store.setBraveKey(braveKey)
+                Toast.makeText(context, if (braveKey.isBlank()) "已清空搜索密钥" else "搜索密钥已保存", Toast.LENGTH_SHORT).show()
+            }) { Text("保存搜索密钥") }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("每天自动一份")
+                    Text(
+                        "默认关。开着时一天最多一份，只在亮屏、配了搜索、预算还够时查；" +
+                            "预算（AutonomyBudget）每天最多 2 路查询 / 4 篇正文，跨天清零、跨重启保留。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = forageAutoOn,
+                    onCheckedChange = { on ->
+                        forageAutoOn = on
+                        store.setForageAutoOn(on)
+                    },
+                )
+            }
+            if (forageNow.lastMessage.isNotBlank()) {
+                Text(
+                    "上次：" + forageNow.lastMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "今天已用查询 " + forageNow.budget.searches + "/" + forageNow.budget.maxSearches +
+                        " · 正文 " + forageNow.budget.fetches + "/" + forageNow.budget.maxFetches,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             }
             if (section == "zk") {
             Text("总控", style = MaterialTheme.typography.titleSmall)
@@ -856,6 +915,7 @@ private fun writeAtomic(target: File, text: String) {
 private val SECTIONS = listOf(
     "she" to "她是谁",
     "ai" to "AI 接口",
+    "forage" to "联网采蜜",
     "live" to "活的墨灵",
     "zk" to "总控与权柄",
     "bg" to "后台与权限",
@@ -880,6 +940,8 @@ private fun SettingsHub(
     usageAllowed: Boolean,
     notion: Boolean,
     relay: Boolean,
+    forageAuto: Boolean,
+    searchReady: Boolean,
     memory: String,
     open: (String) -> Unit,
     openBridge: () -> Unit,
@@ -913,6 +975,11 @@ private fun SettingsHub(
     Card("了解 · 周报 · 参谋", "她对你的了解、每周复盘、四个参谋、她定的唤醒", { com.moling.app.ui.art.InkLeaf(0.7f, m) }, openAbout)
     com.moling.app.ui.art.InkTitle("连接")
     Card("AI 接口", "${model.ifBlank { "还没填" }} · 今天 $calls 次", { com.moling.app.ui.art.InkHalo(m, animated = false) }) { open("ai") }
+    Card(
+        "联网采蜜",
+        (if (searchReady) "搜索已配" else "没配搜索") + " · " + (if (forageAuto) "每天自动一份开" else "只在你点「去查一下」时查"),
+        { com.moling.app.ui.art.InkPapers(m, animated = false) },
+    ) { open("forage") }
     Card(
         "贯通：GPT · Notion · 深想",
         listOfNotNull(if (relay) "联络站已连" else null, if (notion) "Notion 已连" else null).ifEmpty { listOf("联络站、Notion、交接包、ChatGPT 记录") }.joinToString(" · "),

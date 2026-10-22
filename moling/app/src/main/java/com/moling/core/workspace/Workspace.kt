@@ -325,11 +325,20 @@ object Artifacts {
         }
         val used = a.blocks.flatMap { it.sourceIds }.toSet() + a.sourceIds
         val ms = materials.filter { it.id in used }
-        if (ms.isNotEmpty()) {
+        // 联网发现引用的是来源库编号（s-…）：材料里查不到，但要在导出里列出“来自哪几个网页来源”
+        val sourceRefs = used.filterNot { it.startsWith("m-") || it.startsWith("n-") }
+        if (ms.isNotEmpty() || sourceRefs.isNotEmpty()) {
             appendLine("## 来源")
             ms.forEach { appendLine("- [${it.id}] ${it.title.ifBlank { it.text.take(30) }}") }
+            sourceRefs.forEach { appendLine("- [$it] 来源库网页（正文在来源库，未核实）") }
             appendLine()
         }
-        append("（未联网查证：依据只有你给的材料和体系图；标“待核”的要你自己核实。）")
+        append(
+            if (a.kind == ArtifactKind.DISCOVERY) {
+                "（联网查过：网页内容未核实，引用编号对应来源库里的原文；标「待核」的要你自己核实。）"
+            } else {
+                "（未联网查证：依据只有你给的材料和体系图；标“待核”的要你自己核实。）"
+            },
+        )
     }.trim()
 }

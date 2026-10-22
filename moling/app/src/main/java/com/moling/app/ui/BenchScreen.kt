@@ -99,8 +99,24 @@ fun BenchScreen() {
     var deleteTarget by remember { mutableStateOf<Pair<WorkspaceArtifact, ArtifactBlock>?>(null) }
     var versionsOf by remember { mutableStateOf<WorkspaceArtifact?>(null) }
     var claimsOf by remember { mutableStateOf<WorkspaceArtifact?>(null) }
+    // 联网采蜜（B1）：只在他点「去查一下」时跑，进度在按钮上；不在后台自动跑（自动是另一个开关）
+    var foraging by remember { mutableStateOf(false) }
 
     fun toast(msg: String) = Toast.makeText(context.applicationContext, msg, Toast.LENGTH_LONG).show()
+
+    fun forage() {
+        if (foraging) return
+        foraging = true
+        val f = focus
+        benchScope.launch {
+            val r = BrainHost.forageOnline(f?.id)
+            foraging = false
+            when (r) {
+                is PortResult.Ok -> toast("查回来了：" + r.value.title)
+                is PortResult.Failed -> toast(r.error.message)
+            }
+        }
+    }
 
     fun apply(a: WorkspaceArtifact, kind: ArtifactActionKind, blockId: String? = null, optionId: String? = null, text: String? = null) {
         benchScope.launch {
@@ -141,6 +157,7 @@ fun BenchScreen() {
             onPaste = { pasteOpen = true },
             onAtlas = { atlasOpen = true },
             onSkeleton = { emptyOpen = true },
+            onForage = { forage() },
             onSwitch = { f -> benchScope.launch { BrainHost.benchSwitch(f.id) } },
         )
     } else {
@@ -162,6 +179,8 @@ fun BenchScreen() {
             fetching = focus.id in fetching,
             onCancelFetch = { benchScope.launch { BrainHost.cancelBenchFetch(focus.id) } },
             onMaterials = { materialsOpen = true },
+            onForage = { forage() },
+            foraging = foraging,
             onPrework = { kind, artifactId -> prework(kind, artifactId) },
             onCancel = { jobId -> benchScope.launch { BrainHost.benchCancel(jobId) } },
             onApply = { a, kind, blockId, optionId, text -> apply(a, kind, blockId, optionId, text) },
@@ -279,7 +298,7 @@ fun BenchScreen() {
 }
 
 @Composable
-private fun BenchHome(ws: WorkbenchState, onPaste: () -> Unit, onAtlas: () -> Unit, onSkeleton: () -> Unit, onSwitch: (Focus) -> Unit) {
+private fun BenchHome(ws: WorkbenchState, onPaste: () -> Unit, onAtlas: () -> Unit, onSkeleton: () -> Unit, onForage: () -> Unit, onSwitch: (Focus) -> Unit) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -294,6 +313,7 @@ private fun BenchHome(ws: WorkbenchState, onPaste: () -> Unit, onAtlas: () -> Un
         BenchEntry("贴材料", "把你手上的原文、笔记或聊天结论贴进来，告诉她你要攻什么。", onPaste, 0)
         BenchEntry("从体系选", "从体系图里挑一个主题，用里面已有的论断当材料。", onAtlas, 1)
         BenchEntry("先给骨架", "什么都不贴，只写一句要攻的问题，让她先从零拆三点。", onSkeleton, 2)
+        BenchEntry("去查一下", "从体系图最大的缺口联网查一份：支持 / 反对 + 来源（没配搜索就没有结果，不造假）。", onForage, 3)
         val paused = ws.focuses.filter { it.status == FocusStatus.PAUSED }
         if (paused.isNotEmpty()) {
             Text("收起的事", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
@@ -349,6 +369,8 @@ private fun BenchFocus(
     fetching: Boolean,
     onCancelFetch: () -> Unit,
     onMaterials: () -> Unit,
+    onForage: () -> Unit,
+    foraging: Boolean,
     onPrework: (JobKind, String?) -> Unit,
     onCancel: (String) -> Unit,
     onApply: (WorkspaceArtifact, ArtifactActionKind, String?, String?, String?) -> Unit,
@@ -398,6 +420,15 @@ private fun BenchFocus(
         RadioPanel(ws, focus)
         // 第十二批：这件事的外脑会话 / 收线 / 发到外脑
         OutbrainCard(focusId = focus.id, allowSend = true)
+        // 第十五批 B1：真联网采蜜；只在他点的时候查，查回来的正文进来源库
+        OutlinedButton(onClick = onForage, enabled = !foraging, modifier = Modifier.fillMaxWidth()) {
+            Text(if (foraging) "正在联网查…" else "去查一下（联网）")
+        }
+        Text(
+            "从这件事的问题出发，最多两路搜索；网页内容未核实，引用只认来源库编号。没配搜索就明确说没配置，不会给你编结果。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         if (running.isNotEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 com.moling.app.ui.art.InkThinking("她在做：" + running.first().kind.label)
@@ -635,9 +666,21 @@ private fun SourceTags(ids: List<String>) {
         val ws = BrainHost.workbench.value
         val material = ws.materials.firstOrNull { it.id == sid }
         val node = BrainHost.state.value.atlas.nodes.firstOrNull { it.id == sid }
+        // B1：联网发现的引用是来源库编号（s-…）：显示标题 / 链接 / 原文，不再说“来源已删除”
+        val source = BrainHost.sources.value.ref(sid)
+        val sourceText = BrainHost.sources.value.document(sid)?.text
         AlertDialog(
             onDismissRequest = { openId = null },
-            title = { Text(if (material != null) "材料" else if (node != null) "体系论断" else "来源已删除") },
+            title = {
+                Text(
+                    when {
+                        material != null -> "材料"
+                        node != null -> "体系论断"
+                        source != null -> "网页来源"
+                        else -> "来源已删除"
+                    },
+                )
+            },
             text = {
                 when {
                     material != null -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -647,6 +690,15 @@ private fun SourceTags(ids: List<String>) {
                     node != null -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(node.claim, style = MaterialTheme.typography.bodyMedium)
                         Text("把握 " + node.confidence + " · " + node.kind.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    source != null -> Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(source.title.ifBlank { source.channel.name.lowercase() }, style = MaterialTheme.typography.labelMedium)
+                        Text(source.url, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            if (source.status == com.moling.core.web.SourceStatus.DELETED) "原文已删除（来源对象还在）"
+                            else sourceText?.take(1200) ?: "正文不在来源库里",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                     else -> Text("这条来源已经删除，或对应不上了。")
                 }
