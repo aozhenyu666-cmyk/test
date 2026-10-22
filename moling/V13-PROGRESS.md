@@ -12,7 +12,7 @@
 | P0前置整合 | 已实现：整合PR15（含PR13）+PR14，补 I9 来源点开原文 | 本地编译通过；CI 见分支 | 真机未测；发布 job 应 skipped | 本分支 PR |
 | W10 T1–T9 | **进行中（里程碑2）**：T1/T2(fetch,RSS,HTML,Brave适配)/T3(池、分享解析、分享提取正文)/T7(预算与事件) 核心与入口完成；T4–T6、T8–T9 未做 | core-tests 442 全绿；App build/test 通过；真实公网未验 | 真机未测 | [任务](DEEPSEEK-10.md) · [PR17](https://github.com/aozhenyu666-cmyk/test/pull/17) |
 | W11 R1–R7 | 任务书已补齐，待实现 | 待验证 | 待验证 | [任务](DEEPSEEK-11.md) |
-| W12 A1–A6 | 任务书已补齐，待实现 | 待验证 | 待验证 | [任务](DEEPSEEK-12.md) |
+| W12 A1–A6 | **进行中**：A1–A3 核心 + 最小 UI 完成；A4 仅接口+拒绝降级；A5/A6 未做 | core-tests 461 全绿；App compileDebugKotlin 通过 | 真机未测 | [任务](DEEPSEEK-12.md) · [PR待建] |
 | W13 G1–G7 | 任务书已补齐，待实现 | 待验证 | 待验证 | [任务](DEEPSEEK-13.md) |
 
 ## 更新格式
@@ -32,3 +32,11 @@
 - 补 I9 来源标签点开原文：`m-…` 查当前 `WorkbenchState.materials`，`n-…` 查 `BrainState.atlas.nodes`，找不到显示“来源已删除”；没有做把新 s-ID 塞进旧解析器的伪造引用。
 - 第八批发布脚本已在分支内：release job 只在工作分支跑，开发分支 CI 的 release 应为 skipped；正式发布验证仍待合入工作分支后做。
 - 自动检查：本地 `compileDebugKotlin` 通过；App 测试/打包与 core 测试见本批 CI。真机未测。 
+### W12（2026-10-22）
+- 分支 `deepseek/moling-outbrain`（基于 W10 `4f3c905`）。实现 A1–A3 核心：`core/talk/Outbrain.kt`（选路/进场包/会话/结果/编码）、`OutbrainMachine.kt`（PREPARED→…→REVIEWED + CANCELLED/EXPIRED、幂等、归属、partial、过期、重启恢复）、`OutbrainDesk.kt`（持久化 + 结果落案板）、`Workbench.attachActorResult`（ACTOR_RESULT 未采用 + 材料，同会话追加、文本幂等）。
+- 三条传输：分享/复制、模型 API（复用现有凭据/用量）、联络站（`RelaySync.routeOutbrain` 按 `[[外脑:ob-…]]` 认领）；未配置/失败不伪造。
+- A4 `core/talk/Capture.kt`：UID→包名+证书校验、64 节点/8192 字/4 快照/32KiB、cursor/gap、坐标 2 秒/窗口失效、只带观察信号、UNSUPPORTED/DENIED 降级；**不申请无障碍/屏幕权限**。
+- 最小 UI：`ui/OutbrainBits.kt`（发到外脑/预览材料/复制/打开/API 问/收线/看结论/看案板）、对话页+案板显示、胶囊状态、分享面板接回、调试页状态；`MainActivity` 恢复第四个「案板」标签（P0 合并丢失 J1 接线）。
+- 自动检查：`tools/core-tests` **461 全绿**（442 + 19）；App `compileDebugKotlin` 通过（C:/autopilot-w12-wt）。**真机未测，真实 API/联络站未验**。
+- 未完成：A2 辅助填入（需无障碍，只留降级）、A4 真实 Binder 服务与探针、A5 语音收线/微停顿、A6 真机逐传输、Notion outbox 归档、外脑结果 MemoryCandidate。
+
