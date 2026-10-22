@@ -37,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -117,6 +118,20 @@ fun CaptureScreen(nav: NavHostController, presetThread: String = "") {
                 val bmp = remember(image) { runCatching { android.graphics.BitmapFactory.decodeFile(image)?.asImageBitmap() }.getOrNull() }
                 bmp?.let { androidx.compose.foundation.Image(it, contentDescription = "截图", modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) }
                 Hint("截图只存在手机里；Notion 里只记文字和截图的位置。")
+                // 这张图是某一步做完的证据：直接交过去（0.13）
+                val target = remember(work) {
+                    com.zongkong.core.work.Focus.current(work, System.currentTimeMillis(), app.store.zone, app.store.mainKey()).action
+                        ?: work.actions().filter { it.actionStatus.open }.maxByOrNull { it.updatedAt }
+                }
+                target?.let { act ->
+                    OutlinedButton(onClick = {
+                        app.proofInbox = listOf(image)
+                        image = ""
+                        nav.navigate("complete/${act.key}")
+                    }, modifier = Modifier.fillMaxWidth().testTag("capture-as-proof")) {
+                        Text("当作「${act.title.take(14)}」的交付证据", maxLines = 1)
+                    }
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = {

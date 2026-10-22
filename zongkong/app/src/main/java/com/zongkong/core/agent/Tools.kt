@@ -113,6 +113,12 @@ interface AgentEnv {
     fun screenshots(from: Long, to: Long): List<com.zongkong.core.boss.Shot> = emptyList()
     /** 让识图模型看一张图，回答 [question]。 */
     suspend fun describeImage(path: String, question: String): String = "这个环境看不了图"
+    /** 对话里用户最近发的那张照片（交付证据用）。 */
+    fun lastPhoto(): com.zongkong.core.work.ProofItem? = null
+    /** 交过的照片：指纹 → 那一步的标题（同一张不能交两次）。 */
+    fun usedPhotos(): Map<String, String> = emptyMap()
+    /** 存一次交付（本机）。 */
+    fun saveDelivery(d: com.zongkong.core.work.Delivery) {}
 
     // ---------- 信息收集部的漏斗 ----------
 
@@ -254,12 +260,14 @@ class ZkTools(private val env: AgentEnv) {
             listOf(Param("action", "string", "行动键或标题", required = true), Param("time", "string", "新时间，中文写法", required = true)),
         ),
         ToolSpec(
-            "complete_action", "记一步行动的结果。对照完成依据：达到 → 完成；部分达到 → 待确认；没达到 → 卡住。",
+            "complete_action", "记一步行动的结果（交付）。对照完成依据：达到 → 完成；部分达到 → 待确认；没达到 → 卡住。用户在对话里发了照片作证据，photo 填“是”。",
             listOf(
                 Param("action", "string", "行动键或标题", required = true),
                 Param("result", "string", "结果，具体", required = true),
                 Param("met", "string", "对照完成依据", required = true, choices = WorkOps.Met.entries.map { it.label }),
                 Param("next", "string", "下一步"),
+                Param("photo", "string", "“是” = 把用户在对话里最近发的那张照片记成这一步的交付证据（你已经看过）"),
+                Param("link", "string", "证据链接（可选）"),
             ),
         ),
         ToolSpec(
@@ -1281,8 +1289,22 @@ class ZkTools(private val env: AgentEnv) {
         val x = findAction(a.s("action")) ?: return noAction(a.s("action"))
         val met = WorkOps.Met.entries.firstOrNull { it.label == a.s("met") || it.name.equals(a.s("met"), true) }
             ?: return ToolResult.fail("met 只能是 达到 / 部分达到 / 没达到")
-        val result = a.s("result").ifBlank { return ToolResult.fail("结果不能空") }
-        env.updateWork { WorkOps.complete(it, x.key, result, met, a.s("next"), env.now(), env.zone, env.rnd) }
+        val note = a.s("result").ifBlank { return ToolResult.fail("结果不能空") }
+        // 证据：对话里最近那张照片 + 链接（0.13）
+        val now = env.now()
+        val items = buildList {
+            if (a.b("photo") == true || a.s("photo") in setOf("是", "yes", "true", "1")) {
+                val p = env.lastPhoto() ?: return ToolResult.fail("对话里没有照片。让用户先发一张，或者不填 photo（记成自评）")
+                env.usedPhotos()[p.hash]?.takeIf { p.hash.isNotBlank() }?.let { return ToolResult.fail("这张照片交过「$it」了，同一张照片不能交两件事。让用户另拍一张") }
+                add(p)
+            }
+            a.opt("link")?.let { add(com.zongkong.core.work.ProofItem(com.zongkong.core.work.ProofItem.LINK, it)) }
+        }
+        val source = if (items.isEmpty()) "self" else "ai"
+        val rounds = if (items.isEmpty()) emptyList() else listOf(com.zongkong.core.work.ProofRound(now, met.name, "在对话里看过证据：$note"))
+        val result = if (items.isEmpty()) note else com.zongkong.core.work.Proof.resultText(note, items, rounds, met, source, env.zone)
+        env.updateWork { WorkOps.complete(it, x.key, result, met, a.s("next"), now, env.zone, env.rnd) }
+        if (items.isNotEmpty()) env.saveDelivery(com.zongkong.core.work.Delivery(x.key, x.title, items, rounds, met.name, source, now))
         env.kick()
         if (met == WorkOps.Met.YES) {
             activePlan()?.let { p ->
@@ -1292,7 +1314,8 @@ class ZkTools(private val env: AgentEnv) {
             }
         }
         val st = env.work().rec(x.key)?.actionStatus?.label.orEmpty()
-        return ToolResult("「${x.title}」记了结果，状态：$st", "「${x.title}」→ $st")
+        val ev = if (items.isEmpty()) "（没有证据，记成自评）" else "（证据 ${items.size} 样已存）"
+        return ToolResult("「${x.title}」记了结果，状态：$st$ev", "「${x.title}」→ $st")
     }
 
     private fun cancel(a: Args): ToolResult {

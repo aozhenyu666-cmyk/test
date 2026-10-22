@@ -149,6 +149,36 @@ class AgentTest {
     }
 
     @Test
+    fun completeWithChatPhotoKeepsProofAndRefusesReuse() = runTest {
+        val saved = mutableListOf<com.zongkong.core.work.Delivery>()
+        var photo: com.zongkong.core.work.ProofItem? = null
+        val env = object : FakeEnv() {
+            override fun lastPhoto() = photo
+            override fun usedPhotos() = saved.flatMap { d -> d.items.map { it.hash to d.title } }.toMap()
+            override fun saveDelivery(d: com.zongkong.core.work.Delivery) { saved += d }
+        }
+        val (w1, t) = WorkOps.create(env.w, Kind.THREAD, mapOf(F.TITLE to "行测"), env.nowMs, env.rnd)
+        val (w2, a) = WorkOps.create(w1, Kind.ACTION, mapOf(F.TITLE to "刷 20 题", F.THREAD to t.key, F.CRITERIA to "对完答案"), env.nowMs, env.rnd)
+        val (w3, b) = WorkOps.create(w2, Kind.ACTION, mapOf(F.TITLE to "背 50 个单词", F.THREAD to t.key), env.nowMs, env.rnd)
+        env.w = w3
+        // 对话里没照片：要 photo 就失败
+        assertTrue(!ZkTools(env).run("complete_action", """{"action":"${a.key}","result":"做完了","met":"达到","photo":"是"}""").ok)
+        photo = com.zongkong.core.work.ProofItem(com.zongkong.core.work.ProofItem.PHOTO, "/chat/img.jpg", takenAt = env.nowMs - 60_000, hash = "abc")
+        val res = ZkTools(env).run("complete_action", """{"action":"${a.key}","result":"20 题对完，错 3 道","met":"达到","photo":"是"}""")
+        assertTrue(res.text, res.ok)
+        assertEquals(ActionStatus.DONE, env.w.rec(a.key)!!.actionStatus)
+        assertTrue(env.w.rec(a.key)!![F.RESULT].contains("照片 1 张"))
+        assertEquals("ai", saved.single().source)
+        // 同一张照片交另一件事：拒收
+        val again = ZkTools(env).run("complete_action", """{"action":"${b.key}","result":"背完了","met":"达到","photo":"是"}""")
+        assertTrue(!again.ok)
+        assertTrue(again.text, again.text.contains("交过"))
+        // 不带照片：照旧记，标自评
+        assertTrue(ZkTools(env).run("complete_action", """{"action":"${b.key}","result":"背完了","met":"达到"}""").ok)
+        assertEquals(1, saved.size)
+    }
+
+    @Test
     fun tighteningGateAppliesNowLooseningWaits() = runTest {
         val env = FakeEnv()
         val tools = ZkTools(env)

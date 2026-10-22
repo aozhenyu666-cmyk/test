@@ -215,6 +215,10 @@ class ChatRepo(private val context: Context, private val store: Store, private v
                 is com.zongkong.core.ApiResult.Err -> "看不了：${r.message}"
             }
         }
+        override fun lastPhoto(): com.zongkong.core.work.ProofItem? =
+            _log.value.messages.lastOrNull { it.role == ChatMsg.USER && it.image.isNotBlank() }?.image?.let { Photos.fromStored(it) }
+        override fun usedPhotos(): Map<String, String> = (context.applicationContext as com.zongkong.app.ZkApp).proofs.usedPhotos()
+        override fun saveDelivery(d: com.zongkong.core.work.Delivery) = (context.applicationContext as com.zongkong.app.ZkApp).proofs.save(d)
         override fun resolveApp(name: String): String? = AppNames.resolve(context, name)
         override fun appLabel(pkg: String): String = AppNames.label(context, pkg)
     }

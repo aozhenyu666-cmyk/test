@@ -221,6 +221,52 @@ class WorkActions(private val context: Context, private val store: Store, privat
         kick()
     }
 
+    // ---------- 交付（0.13）：证据 + 总控看一眼 ----------
+
+    /** 这一步最近一次开始做的时刻（没开始过 = null）。 */
+    fun startedAt(actionKey: String): Long? = store.work.value.events.lastOrNull { it.type == "start" && it.actionKey == actionKey }?.at
+
+    /** 每张照片的疑点（按 items 的下标）。 */
+    fun proofFlags(actionKey: String, items: List<com.zongkong.core.work.ProofItem>): Map<Int, List<String>> {
+        val used = (context.applicationContext as com.zongkong.app.ZkApp).proofs.usedPhotos()
+        val start = startedAt(actionKey)
+        return items.withIndex().associate { (i, p) -> i to com.zongkong.core.work.Proof.flags(p, start, now(), used, zone) }
+    }
+
+    /** 让总控（AI）看一轮。照片拼成一张图一起发。 */
+    suspend fun review(
+        actionKey: String,
+        items: List<com.zongkong.core.work.ProofItem>,
+        previous: com.zongkong.core.work.ProofRound?,
+    ): com.zongkong.core.ApiResult<com.zongkong.core.work.ProofRound> = withContext(Dispatchers.IO) {
+        val a = store.work.value.rec(actionKey) ?: return@withContext com.zongkong.core.ApiResult.Err("找不到这一步")
+        val app = context.applicationContext as com.zongkong.app.ZkApp
+        val collage = com.zongkong.app.data.Photos.collage(context, items.filter { it.kind == com.zongkong.core.work.ProofItem.PHOTO }.map { it.value })
+        com.zongkong.core.work.ProofReviewer(app.chat.client).review(a.title, a[F.CRITERIA], items, proofFlags(actionKey, items), previous, collage, now(), zone)
+    }
+
+    /**
+     * 记下交付：结果写回行动（和以前的“记录结果”一样同步到 Notion），证据和每一轮结论存在本机。
+     * [source]：ai = 按总控的结论；self = 自评；override = 本人改判。
+     */
+    fun deliver(
+        actionKey: String,
+        note: String,
+        items: List<com.zongkong.core.work.ProofItem>,
+        rounds: List<com.zongkong.core.work.ProofRound>,
+        met: WorkOps.Met,
+        source: String,
+        next: String,
+    ) {
+        val a = store.work.value.rec(actionKey) ?: return
+        val result = com.zongkong.core.work.Proof.resultText(note, items, rounds, met, source, zone)
+        complete(actionKey, result, met, next)
+        if (source == "override") rounds.lastOrNull()?.let { r ->
+            store.updateWork { WorkOps.event(it, com.zongkong.core.work.Event(now(), "override", actionKey, "${r.met}->${met.name}")) }
+        }
+        (context.applicationContext as com.zongkong.app.ZkApp).proofs.save(com.zongkong.core.work.Delivery(actionKey, a.title, items, rounds, met.name, source, now()))
+    }
+
     fun stuck(actionKey: String, reason: StuckReason, detail: String) {
         store.touch()
         store.updateWork { WorkOps.stuck(it, actionKey, reason, detail, now(), zone, rnd) }

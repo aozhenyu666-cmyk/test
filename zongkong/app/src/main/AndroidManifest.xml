@@ -36,6 +36,10 @@
         <intent>
             <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
         </intent>
+        <!-- 交付时拍照 -->
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
     </queries>
 
     <!-- 常驻服务：让总控不容易被系统清掉，每分钟看一眼无障碍服务还在不在跑 -->
@@ -114,6 +118,17 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="自我约束工具的常驻守护：保持无障碍服务运行、到点提醒" />
         </service>
+
+        <!-- 交付时拍照：相机把照片写进 filesDir/proofs（只开放这一个目录） -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.zongkong.app.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <!-- 哨兵（独立应用 com.zongkong.sentinel）看到总控掉线时碰一下这里：把总控的进程拉起来、让它自查。只认哨兵的签名 -->
         <provider

@@ -1114,4 +1114,74 @@ class LoopTest {
         settle()
         shot("e2e-109-home-after-import")
     }
+
+    /**
+     * 交付（0.13）：一张照片当证据 → 总控看（部分达到，让补一样）→ 补一句再看（达到）→ 按结论记下；
+     * 交付记录存在本机，行动页能看到。
+     */
+    @Test
+    fun deliveryWithPhotoReview() {
+        val llm = mockLlm(
+            sayTurn("""{"met":"部分达到","reason":"照片里只看到前 10 题","ask":"拍一下后 10 题，或者写一句正确率"}"""),
+            sayTurn("""{"met":"达到","reason":"20 题做完、对过答案，正确率 85%"}"""),
+        )
+        app.store.updateConfig { it.copy(ai = com.zongkong.core.AiConfig(llm.url("/v1").toString(), "sk-test", "mock-model")) }
+        val now = System.currentTimeMillis()
+        val rnd = kotlin.random.Random(21)
+        var key = ""
+        app.store.updateWork { w0 ->
+            val (w1, t) = com.zongkong.core.work.WorkOps.create(w0, com.zongkong.core.work.Kind.THREAD, mapOf(F.TITLE to "国考行测", F.WHY to "上岸"), now, rnd)
+            val (w2, a) = com.zongkong.core.work.WorkOps.create(
+                w1, com.zongkong.core.work.Kind.ACTION,
+                mapOf(F.TITLE to "刷 20 道资料分析", F.THREAD to t.key, F.CRITERIA to "做完并对答案"), now, rnd,
+            )
+            key = a.key
+            w2
+        }
+        // 一张“照片”（模拟分享进来的截图：没有拍摄时间）
+        val img = File(app.cacheDir, "proof-test.jpg")
+        val bmp = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.rgb(240, 236, 226)) }
+        img.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        app.proofInbox = listOf(img.absolutePath)
+
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java))
+        waitFor(hasTestTag("day-plan"), 10_000, "首页")
+        go("complete/$key")
+        waitFor(hasTestTag("proof-photo-0"), 10_000, "交付页上的照片")
+        compose.onNodeWithTag("result-field").performTextInput("前 10 题做完了")
+        hideKeyboard()
+        shot("e2e-110-delivery-proof")
+        compose.onNodeWithTag("complete-review").performScrollTo().performClick()
+        waitText("照片里只看到前 10 题", 15_000)
+        waitText("补一下就够")
+        shot("e2e-111-delivery-partial")
+        // 补一句，再看一次（最后一次）
+        compose.onNodeWithTag("result-field").performTextInput("，后 10 题也做完了，对过答案 17/20")
+        hideKeyboard()
+        compose.onNodeWithTag("complete-review").performScrollTo().performClick()
+        waitText("正确率 85%", 15_000)
+        // 第二轮之后不再让补
+        assertTrue(compose.onAllNodes(hasTestTag("complete-review")).fetchSemanticsNodes().isEmpty())
+        shot("e2e-112-delivery-pass")
+        compose.onNodeWithTag("complete-save").performScrollTo().performClick()
+        waitText("结果已记下")
+        waitFor(hasTestTag("delivery-summary") and hasText("总控看过：达到", substring = true), 5_000, "交付小结")
+        shot("e2e-113-delivery-saved")
+
+        val a = app.store.work.value.rec(key)!!
+        assertEquals(com.zongkong.core.work.ActionStatus.DONE, a.actionStatus)
+        assertTrue(a[F.RESULT], a[F.RESULT].contains("照片 1 张"))
+        val d = app.proofs.of(key)!!
+        assertEquals("ai", d.source)
+        assertEquals(2, d.rounds.size)
+        assertEquals(1, d.items.count { it.kind == com.zongkong.core.work.ProofItem.PHOTO })
+        // 同一张照片不能再交给别的事
+        assertTrue(com.zongkong.core.work.Proof.duplicate(d.items.first(), app.proofs.usedPhotos()))
+
+        // 行动页看得到交付
+        go("action/$key")
+        waitFor(hasTestTag("action-delivery"), 10_000, "行动页的交付")
+        shot("e2e-114-action-delivery")
+        llm.shutdown()
+    }
 }
