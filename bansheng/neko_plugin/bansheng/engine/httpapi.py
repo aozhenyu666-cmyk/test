@@ -82,7 +82,15 @@ class CompanionHTTP:
                 self.send_header("Access-Control-Max-Age", "600")
                 self.end_headers()
 
+            def _host_ok(self) -> bool:
+                # 防 DNS 重绑定：只认本机地址
+                host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+                return host in ("127.0.0.1", "localhost", "::1", "")
+
             def _guard(self) -> bool:
+                if not self._host_ok():
+                    self._send(403, {"error": "host_not_allowed"})
+                    return False
                 if not self._origin_ok():
                     self._send(403, {"error": "origin_not_allowed"})
                     return False

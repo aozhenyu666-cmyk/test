@@ -16,8 +16,17 @@
   host.className = "bansheng-ignore";
   host.style.cssText = "position:fixed;right:16px;bottom:96px;z-index:2147483646;";
   const root = host.attachShadow({ mode: "open" });
-  root.innerHTML = `
-  <style>
+  // 只用 DOM 方法搭界面，不拼 HTML（页面文字进不了标记，也不受页面 Trusted Types 策略影响）
+  const h = (tag, props = {}, ...kids) => {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(props)) {
+      if (k === "class") el.className = v; else if (k === "text") el.textContent = v; else el.setAttribute(k, v);
+    }
+    kids.forEach((c) => el.append(c));
+    return el;
+  };
+  const style = document.createElement("style");
+  style.textContent = `
     :host { all: initial; }
     .card { font: 13px/1.5 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; width: 300px; max-width: calc(100vw - 32px);
       background: rgba(255,255,255,.96); color:#1f2328; border:1px solid #e3e0da; border-radius:12px;
@@ -36,25 +45,24 @@
     .say { margin-top:6px; padding:6px 8px; border-radius:8px; background:rgba(59,110,168,.10); display:none; }
     .msg { color:#6b7280; font-size:12px; padding-top:4px; }
     .collapsed .bd { display:none; } .collapsed { width:auto; }
-  </style>
-  <div class="card" id="card">
-    <div class="hd"><span class="dot" id="dot"></span><span class="t">伴生</span><span class="sp"></span>
-      <select id="lv" title="主动程度"><option value="0">关</option><option value="1">少</option><option value="2">正常</option><option value="3">多</option></select>
-      <button id="mute" title="让伴生安静">静音</button><button id="fold" title="收起">－</button></div>
-    <div class="bd">
-      <div class="ln" data-line="topic"><span class="k">在聊</span><span class="v" id="topic">…</span></div>
-      <div class="ln" data-line="confirmed"><span class="k">已确认</span><span class="v" id="confirmed">…</span></div>
-      <div class="ln" data-line="open"><span class="k">没解开</span><span class="v" id="open">…</span></div>
-      <div class="say" id="say"></div>
-      <div class="msg" id="msg"></div>
-    </div>
-  </div>`;
+  `;
+  const lvSel = h("select", { id: "lv", title: "主动程度" },
+    ...[["0", "关"], ["1", "少"], ["2", "正常"], ["3", "多"]].map(([v, t]) => h("option", { value: v, text: t })));
+  const line = (key, label) => h("div", { class: "ln", "data-line": key }, h("span", { class: "k", text: label }), h("span", { class: "v", id: key, text: "…" }));
+  root.append(style, h("div", { class: "card", id: "card" },
+    h("div", { class: "hd" }, h("span", { class: "dot", id: "dot" }), h("span", { class: "t", text: "伴生" }), h("span", { class: "sp" }),
+      lvSel, h("button", { id: "mute", title: "让伴生安静", text: "静音" }), h("button", { id: "fold", title: "收起", text: "－" })),
+    h("div", { class: "bd" }, line("topic", "在聊"), line("confirmed", "已确认"), line("open", "没解开"),
+      h("div", { class: "say", id: "say" }), h("div", { class: "msg", id: "msg" }))));
   document.documentElement.appendChild(host);
   const $ = (id) => root.getElementById(id);
   let last = null;
 
   try {
-    chrome.storage.local.get({ overlayCollapsed: false }, (v) => $("card").classList.toggle("collapsed", !!v.overlayCollapsed));
+    chrome.storage.local.get({ overlayCollapsed: false }, (v) => {
+      $("card").classList.toggle("collapsed", !!v.overlayCollapsed);
+      $("fold").textContent = v.overlayCollapsed ? "＋" : "－";
+    });
   } catch (e) {}
   $("fold").onclick = () => {
     const c = $("card").classList.toggle("collapsed");

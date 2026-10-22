@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>Gemini（模拟页面）</title></head>
+<body>
+<!-- 模拟 Gemini 网页的 DOM 结构（user-query / model-response / rich-textarea），只用于测试采集逻辑 -->
+<div id="chat">
+  <div class="conversation-container">
+    <user-query><div class="query-text">（旧历史）帮我想想伴生的名字</div></user-query>
+    <model-response><message-content><div class="markdown">（旧历史）可以叫“伴生”，意思是陪伴着一起生长的伙伴。</div></message-content></model-response>
+  </div>
+</div>
+<rich-textarea><div class="ql-editor" contenteditable="true" role="textbox"></div></rich-textarea>
+<button id="send">发送</button>
+<script>
+  const chat = document.getElementById("chat");
+  const editor = document.querySelector(".ql-editor");
+  function stopBtn(on) {
+    let b = document.querySelector("button[aria-label='Stop response']");
+    if (on && !b) { b = document.createElement("button"); b.setAttribute("aria-label", "Stop response"); b.textContent = "■"; document.body.appendChild(b); }
+    if (!on && b) b.remove();
+  }
+  // 测试脚本调用：模拟用户发送一句，Gemini 流式回复
+  window.simSend = async (userText, replyText, chunkMs = 250) => {
+    const box = document.createElement("div");
+    box.className = "conversation-container";
+    // 不用 innerHTML：页面和真实 Gemini 一样启用了 Trusted Types
+    const mk = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
+    const uq = mk("user-query"), qt = mk("div", "query-text"), mr = mk("model-response"), mc = mk("message-content"), md0 = mk("div", "markdown");
+    qt.textContent = userText; uq.append(qt); mc.append(md0); mr.append(mc); box.append(uq, mr);
+    chat.appendChild(box);
+    editor.textContent = "";
+    stopBtn(true);
+    const md = box.querySelector(".markdown");
+    for (let i = 0; i < replyText.length; i += 12) {
+      md.textContent = replyText.slice(0, i + 12);
+      await new Promise((r) => setTimeout(r, chunkMs));
+    }
+    stopBtn(false);
+  };
+</script>
+</body>
+</html>
