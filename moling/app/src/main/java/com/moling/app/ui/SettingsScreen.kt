@@ -97,6 +97,8 @@ fun SettingsScreen(onDone: () -> Unit) {
     var section by remember { mutableStateOf<String?>(null) }
     var backgroundOn by remember { mutableStateOf(store.backgroundHeart()) }
     var autoPlanOn by remember { mutableStateOf(store.autoPlan()) }
+    var planAdoptOn by remember { mutableStateOf(store.planAdoptionOn()) }
+    var planWaitMin by remember { mutableStateOf(store.planAdoptionWaitMin()) }
     var liveOn by remember { mutableStateOf(store.liveOn()) }
     var gateOn by remember { mutableStateOf(store.gateOn()) }
     var whisperOn by remember { mutableStateOf(store.whisperOn()) }
@@ -383,6 +385,42 @@ fun SettingsScreen(onDone: () -> Unit) {
                         store.setAutoPlan(on)
                     },
                 )
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("保底计划可以在我没改时本地采用")
+                    Text(
+                        "到点只让今天页/提醒使用这份计划；不自动交给总控、不执行现实动作。默认关。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = planAdoptOn,
+                    onCheckedChange = { on ->
+                        planAdoptOn = on
+                        store.setPlanAdoptionOn(on)
+                    },
+                )
+            }
+            if (planAdoptOn) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "计划实际可见多久才采用（锁屏/离开暂停）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    listOf(10, 20, 30).forEach { m ->
+                        TextButton(onClick = {
+                            planWaitMin = m
+                            store.setPlanAdoptionWaitMin(m)
+                        }) {
+                            Text(if (m == planWaitMin) "✓ " + m + " 分" else "" + m + " 分")
+                        }
+                    }
+                }
             }
 
             }

@@ -109,6 +109,8 @@ fun TodayScreen(onReady: () -> Unit = {}) {
     val clipboard = LocalClipboardManager.current
     val state by BrainHost.state.collectAsState()
     val notices by BrainHost.notices.collectAsState()
+    // 计划代驾：草稿、本地采纳、可见时间（和总控回执分开显示）。
+    val planState by BrainHost.plan.collectAsState()
 
     // 每 20 秒走一次表：大字时间和“当前这一条”的高亮不用等别处刷新。
     var clock by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -411,6 +413,89 @@ fun TodayScreen(onReady: () -> Unit = {}) {
                     onDecline = { declineProposal(it) },
                     onRetry = { retryProposal(it) },
                 )
+            }
+        }
+
+        // 2.5 计划代驾（第十三批 G1）：草稿给“采纳 / 不采纳”；采纳只在本地下，不自动交给总控。
+        val todayDraft = planState.drafts.firstOrNull { it.day == today }
+        val adoption = planState.adoption?.takeIf { it.day == today }
+        if (todayDraft != null || adoption != null) {
+            SectionTitle("计划代驾")
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        if (todayDraft != null) "草稿 v" + todayDraft.revision + "：" + todayDraft.intent else "计划代驾",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            "本地：" + (adoption?.state?.label ?: "没采纳"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (adoption?.state == com.moling.core.flow.AdoptionState.LOCAL_ADOPTED) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "总控：" + (if (flow?.confirmed == true) "已确认（旧定稿）" else "未确认"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    val waitMin = (BrainHost.planPolicy().waitVisibleMs / 60_000L).toInt()
+                    when (adoption?.state) {
+                        com.moling.core.flow.AdoptionState.DRAFT -> {
+                            val left = (adoption?.eligibilityAt ?: 0L) - now
+                            Text(
+                                if (left > 0) "计划实际可见满 " + waitMin + " 分钟会自动本地采用；现在还要看 " + ((left / 60_000L) + 1) + " 分钟（锁屏/离开暂停）。"
+                                else "还没采纳。点「采纳」只影响今天页和提醒，不会自动执行。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        com.moling.core.flow.AdoptionState.LOCAL_ADOPTED -> Text(
+                            "本地已采用：今天页和提醒按这份计划走；没有交给总控，也没有执行任何现实动作。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        null -> Text(
+                            "点「采纳」只影响今天页和提醒，不会自动执行。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        else -> Text(
+                            adoption?.message.orEmpty().ifBlank { adoption?.state?.label.orEmpty() },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val busy = adoption != null && adoption.state in setOf(
+                            com.moling.core.flow.AdoptionState.EXECUTION_REQUESTED,
+                            com.moling.core.flow.AdoptionState.ZK_PENDING,
+                            com.moling.core.flow.AdoptionState.ACTIVE,
+                        )
+                        Button(
+                            onClick = {
+                                todayScope.launch {
+                                    val r = runCatching { BrainHost.adoptPlan(now) }.getOrNull()
+                                    Toast.makeText(context, r?.message ?: "刚才没接上", Toast.LENGTH_LONG).show()
+                                }
+                            },
+                            enabled = todayDraft != null && !busy && adoption?.state != com.moling.core.flow.AdoptionState.LOCAL_ADOPTED,
+                        ) { Text(if (adoption?.state == com.moling.core.flow.AdoptionState.LOCAL_ADOPTED) "已本地采用" else "采纳") }
+                        OutlinedButton(
+                            onClick = {
+                                todayScope.launch {
+                                    val r = runCatching { BrainHost.cancelPlanAdoption(now) }.getOrNull()
+                                    Toast.makeText(context, r?.message ?: "刚才没接上", Toast.LENGTH_LONG).show()
+                                }
+                            },
+                            enabled = adoption != null && adoption.state in setOf(
+                                com.moling.core.flow.AdoptionState.DRAFT,
+                                com.moling.core.flow.AdoptionState.LOCAL_ADOPTED,
+                            ),
+                        ) { Text("不采纳") }
+                    }
+                }
             }
         }
 

@@ -29,8 +29,12 @@ import com.moling.core.live.GateRules
 import com.moling.core.live.LiveConfig
 import com.moling.core.live.Mood
 import com.moling.core.live.Activity as LiveActivity
+import com.moling.core.flow.AdoptPolicy
 import com.moling.core.flow.Flow
 import com.moling.core.flow.FlowPlan
+import com.moling.core.flow.PlanDriver
+import com.moling.core.flow.PlanDriverState
+import com.moling.core.flow.PlanResult
 import com.moling.core.guard.GuardSample
 import com.moling.core.link.ZkStatus
 import com.moling.core.mind.Actor
@@ -64,6 +68,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -96,6 +101,14 @@ object BrainHost {
     private val _sources = MutableStateFlow(com.moling.core.web.SourceState())
     val sources: StateFlow<com.moling.core.web.SourceState> = _sources
     private var sourceFile: java.io.File? = null
+
+    /** 第十三批 G1：本地计划代驾（草稿/本地采纳/执行账本），单独存 mind/plan-adoption.json。 */
+    private lateinit var planDriver: PlanDriver
+    private val planLock = kotlinx.coroutines.sync.Mutex()
+    private val _plan = MutableStateFlow(PlanDriverState())
+    /** 今天页读这个：草稿、本地采纳状态、可见时间、执行账本。 */
+    val plan: StateFlow<PlanDriverState> = _plan
+    private var planFile: java.io.File? = null
 
     /** 持有 application context：读前台应用、系统状态、起服务都要用。 */
     private var appContext: Context? = null
@@ -167,6 +180,16 @@ object BrainHost {
             _sources.value = runCatching {
                 sourceFile?.takeIf { it.exists() }?.readText()?.let { Json.decodeFromString<com.moling.core.web.SourceState>(it) }
             }.getOrNull() ?: com.moling.core.web.SourceState()
+            // 计划代驾：状态单独存；旧文件没有就当空。本地采用不会自动发任何指令。
+            planFile = File(dir, "plan-adoption.json")
+            val planInitial = runCatching {
+                planFile?.takeIf { it.exists() }?.readText()?.let { Json.decodeFromString<PlanDriverState>(it) }
+            }.getOrNull() ?: PlanDriverState()
+            planDriver = PlanDriver(planInitial, { adoptPolicy() }, { s ->
+                _plan.value = s
+                runCatching { planFile?.writeText(Json.encodeToString(s)) }
+            })
+            _plan.value = planDriver.snapshot()
             ready = true
             Log.i(TAG, "大脑宿主起来了")
         }
@@ -249,16 +272,79 @@ object BrainHost {
 
     // ---------------------------------------------------------------- 今天
 
-    suspend fun planDay(now: Long, force: Boolean = false): FlowPlan =
-        io("planDay", { _state.value.flow ?: fallbackPlan(now) }) { brain.planDay(now, force) }
+    suspend fun planDay(now: Long, force: Boolean = false): FlowPlan {
+        val plan = io("planDay", { _state.value.flow ?: fallbackPlan(now) }) { brain.planDay(now, force) }
+        // 排好就登记成计划草稿；只是草稿，不自动采用、不交给总控。
+        runCatching { registerPlan(plan, now) }.onFailure { Log.w(TAG, "记计划草稿失败", it) }
+        return plan
+    }
 
     /** 定稿今天的水道，返回“交给总控”的提议（用户点“好”才交）。 */
-    suspend fun confirmFlow(now: Long): Proposal? =
-        io<Proposal?>("confirmFlow", { null }) { brain.confirmFlow(now) }
+    suspend fun confirmFlow(now: Long): Proposal? {
+        val p = io<Proposal?>("confirmFlow", { null }) { brain.confirmFlow(now) }
+        _state.value.flow?.let { runCatching { registerPlan(it, now) } }
+        return p
+    }
 
     /** 今天页的改道按钮（用户自己点的，直接做）。返回一句说明，空串 = 现在没有在流的水道。 */
-    suspend fun reroute(cause: Cause, now: Long, note: String = ""): String =
-        io("reroute", { "" }) { brain.reroute(cause, now, note) }
+    suspend fun reroute(cause: Cause, now: Long, note: String = ""): String {
+        val msg = io("reroute", { "" }) { brain.reroute(cause, now, note) }
+        if (msg.isNotBlank()) _state.value.flow?.let { runCatching { registerPlan(it, now) } }
+        return msg
+    }
+
+    // ---------------------------------------------------------------- 计划代驾（第十三批 G1）
+
+    fun planState(): PlanDriverState = if (ready) _plan.value else PlanDriverState()
+
+    /** 当前设置下的代驾规则（今天页显示“要看多少分钟”）。 */
+    fun planPolicy(): AdoptPolicy = adoptPolicy()
+
+    /** 用户点「采纳」：只本地采用，不交给总控、不执行现实动作。 */
+    suspend fun adoptPlan(now: Long): PlanResult = planIo({ PlanResult(false, "刚才没接上，等会儿再试") }) {
+        planDriver.adopt(_state.value.flow, now)
+    }
+
+    /** 用户点「不采纳」/取消本地代驾：说明几条没发、几条已按回执。 */
+    suspend fun cancelPlanAdoption(now: Long): PlanResult = planIo({ PlanResult(false, "刚才没接上，等会儿再试") }) {
+        planDriver.cancel(now, "你在今天页取消了计划代驾")
+    }
+
+    /** 重新开始可见时间倒计时（改稿/换焦点时）。 */
+    suspend fun resetPlanCountdown(now: Long): PlanResult = planIo({ PlanResult(false, "刚才没接上，等会儿再试") }) {
+        planDriver.resetCountdown(now)
+    }
+
+    /** 心跳每分钟喂一次：只有 [visible]（App 在前台、亮屏）才累计可见时间。不自动发指令。 */
+    suspend fun tickPlan(now: Long, visible: Boolean): PlanDriverState = planIo({ _plan.value }) {
+        planDriver.tick(now, visible)
+        planDriver.snapshot()
+    }
+
+    private suspend fun registerPlan(plan: FlowPlan, now: Long, focusKey: String = "") {
+        planIo({ PlanResult(false, "记计划草稿失败") }) { planDriver.putDraft(plan, now, focusKey) }
+    }
+
+    private suspend fun <T> planIo(fallback: () -> T, block: () -> T): T = withContext(Dispatchers.IO) {
+        try {
+            planLock.withLock {
+                val r = block()
+                _plan.value = planDriver.snapshot()
+                r
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "计划代驾失败", e)
+            fallback()
+        }
+    }
+
+    private fun adoptPolicy(): AdoptPolicy {
+        val on = runCatching { settings.planAdoptionOn() }.getOrDefault(false)
+        val waitMin = runCatching { settings.planAdoptionWaitMin() }.getOrDefault(20)
+        return AdoptPolicy(enabled = on, localAdoption = on, waitVisibleMs = waitMin * 60_000L)
+    }
 
     /** App 在前台时每 60 秒一次（打开 App 也调一次）。 */
     suspend fun tickNow(now: Long = System.currentTimeMillis()): List<Notice> {
@@ -267,6 +353,8 @@ object BrainHost {
         val out = io("tick", { emptyList<Notice>() }) { brain.tick(now, category, guard) }
         _notices.value = (out + _notices.value).distinctBy { it.at to it.text }.take(3)
         if (out.isNotEmpty()) runCatching { postNotices(now, out) }
+        // 计划代驾：只累计“计划实际可见”的时间，不自动发任何指令。
+        runCatching { tickPlan(now, interactive()) }
         runCatching { withContext(Dispatchers.IO) { autoSchedule(now) } }
         runCatching { liveTick(now) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "活的墨灵失败", it) }
         if (interactive()) runCatching { refreshUsage() }
@@ -720,6 +808,7 @@ object BrainHost {
                 val plan = runCatching { brain.planDay(now) }.getOrNull()
                 if (plan != null) {
                     refreshState()
+                    runCatching { registerPlan(plan, now) }
                     Notify.planReady(ctx, plan.intent)
                 }
             }
