@@ -244,6 +244,45 @@ class OutbrainTest {
         assertTrue(r3 is PortResult.Ok)
     }
 
+
+    // -------------------------------------------------------------- F12-2 id / 复用
+
+    @Test
+    fun sessionIdsCarryTimestampAndSurviveUnreadableFile() {
+        val f = focus()
+        val pack = { sid: String -> Packs.build(sid, f, emptyList(), emptyList(), now = 1) }
+        val a = (Outbrain.prepare(OutbrainState(), f, pack, Actor.CHATGPT, epShare, now = 1_000).second as PortResult.Ok).value
+        assertTrue("会话 id 带时间戳：" + a.id, a.id.matches(Regex("ob-\\d+-\\d+")))
+        assertEquals("带时间戳的 id 也认得出标记", a.id, Outbrain.taggedSessionId("[[外脑:" + a.id + "]] 结论"))
+        assertEquals("落材料前去掉标记", "结论", Outbrain.clean("[[外脑:" + a.id + "]] 结论"))
+        // outbrain.json 读坏了：不把编号归零，新会话不和旧的撞
+        val broken = OutbrainCodec.decode("{不是 json")
+        assertTrue("读坏后 seq 不从 0 开始", broken.seq > 0)
+        val b = (Outbrain.prepare(broken, f, pack, Actor.CHATGPT, epShare, now = 2_000).second as PortResult.Ok).value
+        assertNotEquals(a.id, b.id)
+        assertTrue(b.id.matches(Regex("ob-\\d+-\\d+")))
+    }
+
+    @Test
+    fun attachReusesOnlyMatchingOutbrainArtifact() = runTest {
+        val wb = Workbench(store = MemStore(), ask = null)
+        val f1 = wb.start("第一件", "材料", now = 1)
+        val f2 = wb.start("第二件", "材料", now = 2)
+        val a1 = (wb.attachActorResult(f1.id, "ob-9-100", "外脑：甲", "结论一", 10) as PortResult.Ok).value
+        // 同一会话同一焦点：复用旧稿
+        val a1b = (wb.attachActorResult(f1.id, "ob-9-100", "外脑：甲", "结论二", 11) as PortResult.Ok).value
+        assertEquals(a1.id, a1b.id)
+        assertEquals(2, a1b.blocks.size)
+        // 拿着别的稿子 id 冒充、焦点又不同：新建，不塞进旧稿
+        val other = (wb.attachActorResult(f2.id, "ob-8-200", "外脑：乙", "结论三", 20) as PortResult.Ok).value
+        assertEquals(f2.id, other.focusId)
+        val fresh = (wb.attachActorResult(f2.id, "ob-9-100", "外脑：甲", "结论四", 21, existingArtifactId = a1.id) as PortResult.Ok).value
+        assertNotEquals("焦点不对的外脑稿子不复用", a1.id, fresh.id)
+        assertEquals(f2.id, fresh.focusId)
+        assertTrue("旧稿没被塞进别的焦点的文字", wb.state().artifact(a1.id)!!.blocks.none { it.markdown.contains("结论四") })
+        assertEquals(2, wb.state().artifacts.count { it.kind == ArtifactKind.ACTOR_RESULT && it.focusId == f2.id })
+    }
+
     // -------------------------------------------------------------- 落案板
 
     @Test

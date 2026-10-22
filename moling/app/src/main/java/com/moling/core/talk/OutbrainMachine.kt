@@ -18,7 +18,8 @@ object Outbrain {
     const val DEFAULT_TTL_MS = 30 * 60_000L
     const val MAX_RESULT_CHARS = 12_000
 
-    private val tagRe = Regex("\\[\\[外脑:(ob-\\d+)\\]\\]")
+    // 会话 id 带时间戳：ob-<seq>-<now>（旧数据 ob-<seq> 也认）。
+    private val tagRe = Regex("\\[\\[外脑:(ob-\\d+(?:-\\d+)?)\\]\\]")
 
     /** 进场包里让他带回来的标记；回来时靠它把结果对到会话上。 */
     fun tag(sessionId: String): String = "[[外脑:" + sessionId + "]]"
@@ -52,7 +53,8 @@ object Outbrain {
                 it.status != OutbrainStatus.EXPIRED && it.status != OutbrainStatus.REVIEWED
         }?.let { return state to PortResult.Ok(it) }
         var next = state.copy(seq = state.seq + 1)
-        val sid = "ob-" + next.seq
+        // 编号加时间戳：outbrain.json 丢了/读坏后重新从 1 数，也不会撞上旧会话 id。
+        val sid = "ob-" + next.seq + "-" + now
         val pack = packFor(sid)
         val session = OutbrainSession(
             id = sid,

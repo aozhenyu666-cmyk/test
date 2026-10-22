@@ -290,7 +290,12 @@ class Workbench(
         val clean = text.trim().take(12_000)
         if (clean.isBlank()) return@withLock fail(PortError.BAD_ACTION, "结果是空的")
         val tag = "outbrain:" + sessionId
-        val existing = existingArtifactId?.let { st.artifact(it) } ?: st.artifacts.lastOrNull { it.producerJobId == tag }
+        // 复用旧稿前核对：同一焦点、带同一 outbrain: 标记、没归档、确实是外脑结果。对不上就新建，不往别人的稿子里塞。
+        val existing = (listOfNotNull(existingArtifactId?.let { st.artifact(it) }) + st.artifacts.filter { it.producerJobId == tag })
+            .firstOrNull {
+                it.focusId == f.id && it.producerJobId == tag && it.status != ArtifactStatus.ARCHIVED &&
+                    it.kind == ArtifactKind.ACTOR_RESULT
+            }
         if (existing != null) {
             if (existing.blocks.any { it.markdown.trim() == clean }) return@withLock PortResult.Ok(existing)
             val block = ArtifactBlock(next("b"), BlockKind.QUOTE, clean, accepted = false)

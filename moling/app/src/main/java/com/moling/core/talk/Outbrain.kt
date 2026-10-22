@@ -271,7 +271,11 @@ object OutbrainCodec {
 
     fun decode(raw: String?): OutbrainState =
         if (raw.isNullOrBlank()) OutbrainState()
-        else runCatching { json.decodeFromString(OutbrainState.serializer(), raw) }.getOrDefault(OutbrainState())
+        else runCatching { json.decodeFromString(OutbrainState.serializer(), raw) }.getOrElse {
+            // 读坏了：不把 seq 归零（否则新会话会和旧 ob-1/ob-2 撞号、把旧结果认错）。
+            // 用当前毫秒当初值，编号照样可用，只是不再从小数字重来。
+            OutbrainState(seq = System.currentTimeMillis())
+        }
 
     /** 控制体积；会话本身留最近 40 个，结果留 200 条。 */
     fun trim(s: OutbrainState): OutbrainState = s.copy(
