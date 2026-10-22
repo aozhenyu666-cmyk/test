@@ -62,6 +62,33 @@ class ShareActivity : ComponentActivity() {
                             finish()
                         }
                     }) { Text("提取正文放上案板") }
+                    // 第十二批：外脑会话在等结果时，这段文字可以直接接回案板（未采用）
+                    if (com.moling.core.talk.Outbrain.waiting(BrainHost.outbrainState.value).isNotEmpty()) {
+                        TextButton(enabled = !busy, onClick = {
+                            busy = true
+                            lifecycleScope.launch {
+                                when (val r = BrainHost.outbrainReceive(text, null, source = "share")) {
+                                    is com.moling.core.workspace.PortResult.Ok -> {
+                                        val (outcome, artifact) = r.value
+                                        Toast.makeText(
+                                            this@ShareActivity,
+                                            when {
+                                                outcome.duplicate -> "这段刚才已经收过了"
+                                                artifact != null -> "接回案板了（未采用）"
+                                                outcome.history -> "会话结束了，只进历史"
+                                                else -> "收下了"
+                                            },
+                                            Toast.LENGTH_LONG,
+                                        ).show()
+                                        if (artifact != null) startActivity(Intent(this@ShareActivity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(MainActivity.EXTRA_TAB, 3))
+                                    }
+                                    is com.moling.core.workspace.PortResult.Failed -> Toast.makeText(this@ShareActivity, r.error.message, Toast.LENGTH_LONG).show()
+                                }
+                                busy = false
+                                finish()
+                            }
+                        }) { Text("这是外脑带回来的结论") }
+                    }
                     // 别的 AI 的回答（交接包发出去后回来的）：交给她把关——回答问题、收论断、改“了解”要你点头
                     TextButton(enabled = !busy, onClick = {
                         busy = true
