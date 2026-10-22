@@ -1242,3 +1242,31 @@
 - prune 删正文不会把对应 `SourceRef.status` 改成 PARTIAL / DELETED；材料里那份正文还在。
 - 本批没有改 `zongkong/`、Manifest、权限，也没有动 `core/workspace`、`core/strategy` 其它行（只改点名的 `materialLines` 与调用处）、`core/live/Live.kt`、`Brain.kt`。
 
+---
+
+## 第十四批修复（#18 W11，2026-10-22）
+
+只修不加。先把工作分支最新 `a378568` merge 进来（`457b5f7`，冲突只在 `DEVLOG.md` / `V13-PROGRESS.md`，保留双方记录、以 #17 的 F10 修复为准），再按 F11-1…F11-7 + 小项逐个修，每条修复一个提交。
+
+| 编号 | 提交 | 改了什么 | 对应测试 |
+|---|---|---|---|
+| F11-1 | `b947d3e` | `RadioHost` 照 `Whisper` 的写法请求音频焦点（USAGE_ASSISTANT / SPEECH，GAIN_TRANSIENT_MAY_DUCK）；失焦（来电 / 别的应用要出声）、`ACTION_AUDIO_BECOMING_NOISY`（拔耳机）、`ACTION_SCREEN_OFF`（熄屏）都 `stopAll()`；`RadioPanel` 离开时 `radioStopAll()`。拿不到焦点就只出文字不出声 | Android 生命周期 / 音频策略，纯逻辑层测不到；以 `compileDebugKotlin` 通过为准，真机未测 |
+| F11-2 | `582bf60` | `Speaker` 每次 `speak` 一个令牌，`stop()` 作废；云 TTS 拉取回来令牌不对就丢，不再“停止后还念”；`RadioHost` 出声前再查 `engine.accepts(session, segment, generation)` | 同上（`Speaker` 依赖 Android TTS / MediaPlayer）；`RadioTest` 既有 accepts / 迟到回调 14 项继续全绿 |
+| F11-3 | `ae2618a` | `Brain.kt` 里判断改成 choice 是 `Live.EXIT` 或「别管我」，只改这一处：点“别管我”直接进安静期、不再调模型 | `FogTest.dontCareMeAlsoEntersQuietPeriod` |
+| F11-4 | `0265341` | `Habits.explicitStop(b, now, modality)` 只给这一次出现的形态记 STOPPED，找不到就不记（删掉补 PEEK 假记录的兜底）；`Brain.tap` / `BrainHost.tap` 带形态；桌宠 / 盯着你 / 底部卡片 / 拦人页点 EXIT 或「别管我」不再报 REPLIED；拦人页一次出现只记一笔 GATE（去掉未用的 `pickGate`） | `HabitTest.explicitStopWithoutThisAppearanceDoesNotFabricateOne`、`HabitTest.explicitStopOnlyMarksThisAppearance`、`FogTest.dontCareMeAlsoEntersQuietPeriod` |
+| F11-5 | — | **未做（如实）**：`Exposure` 枚举、`works()` / `react()` 对 UNOBSERVED 的过滤已经在；但生产 App 还没有把“浮层被系统拦 / 没戴耳机”回报成 UNOBSERVED（本批只许改点名行，没有新增回报通道），所以现在实际记录仍都是 SHOWN | 无 |
+| F11-6 | `631b28a` | 不拦人的破雾点 EXIT 不再返回 `release=true`（只有真拦着才放行）；点退出时 `spirit.ignored` 清零，“他点了就不算冷落” | `FogTest.fogExitWithoutGateIsNotAReleaseAndClearsIgnored`、既有 `FogTest.exitChoiceEndsFogAndReleasesGate` |
+| F11-7 | `0c0f37d` | 桌宠 `ChoiceCapsules` 改为前 3 个 + EXIT 必留，不再把“先不聊了”截掉 | UI 逻辑；`compileDebugKotlin` 通过 |
+| 小项 | `f106752` | QUOTE 段标“引用”（不标成她自己的整理）；电台里“先安静”改名“这两小时别主动找我”并挪出暂停/跳过/停止那排；暂停时写明“继续从这一段开头念”；EXIT 回话说“去设置里恢复”，不再提不存在的按钮 | `compileDebugKotlin` |
+
+**自动检查（实际跑出来的）**
+- `tools/core-tests`：`gradle test -Dorg.gradle.jvmargs=-Xmx4g`（Gradle 8.9 + JDK 22，`JAVA_HOME=C:\Program Files\Java\jdk-22`、`GRADLE_USER_HOME=C:\codex-build\gradle-home-m4`）：**50 个测试类、481 个测试、0 失败 0 错误**；其中 `HabitTest` 8、`FogTest` 13、`RadioTest` 14、`V13WebTest` 16。
+- App：`moling/gradlew.bat compileDebugKotlin`、`testDebugUnitTest`（ASCII 路径 `C:/autopilot-w11-wt/moling`，Android SDK `C:\Android\sdk`）**通过**。本地没有打包。
+- CI：见 push 后的 `moling-android`；真机**未测**。
+
+**限制 / 没做到的**
+- F11-5 未做（见上）；浮层被系统拦、没戴耳机仍不区分曝光，暂按 SHOWN 计。
+- 音频焦点是“最小正确版”：失焦一律 `stopAll()`，没有做暂停续播 / duck 恢复 / 来电号码判断；拔耳机、熄屏用运行时注册的广播，真机未验证。
+- 暂停后继续从头念这一段（TTS 不能从半句中间接上），界面已写清；段时长仍按字数估算，和真实音频长度可能不完全一致。
+- 本批没有改 `zongkong/`、Manifest、权限、包名、签名；`Brain.kt` 只动了 F11-3 / F11-4 / F11-6 点名的判断与 EXIT 分支，`core/live/Live.kt`、`core/workspace`、`core/strategy` 未动。
+
