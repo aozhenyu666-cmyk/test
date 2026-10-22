@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.moling.app.ui
 
 import android.content.Intent
@@ -9,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -60,6 +63,7 @@ import com.moling.core.workspace.Focus
 import com.moling.core.workspace.FocusStatus
 import com.moling.core.workspace.JobKind
 import com.moling.core.workspace.JobStatus
+import com.moling.core.workspace.PortError
 import com.moling.core.workspace.PortResult
 import com.moling.core.workspace.PreworkJob
 import com.moling.core.workspace.WorkbenchState
@@ -80,6 +84,7 @@ fun BenchScreen() {
     val context = LocalContext.current
     val clip = LocalClipboardManager.current
     val ws by BrainHost.workbench.collectAsState()
+    val fetching by BrainHost.fetching.collectAsState()
     val focus = ws.active()
     var pasteOpen by remember { mutableStateOf(false) }
     var atlasOpen by remember { mutableStateOf(false) }
@@ -98,10 +103,17 @@ fun BenchScreen() {
 
     fun apply(a: WorkspaceArtifact, kind: ArtifactActionKind, blockId: String? = null, optionId: String? = null, text: String? = null) {
         benchScope.launch {
-            when (val r = BrainHost.benchApply(a, kind, blockId, optionId, text)) {
-                is PortResult.Ok -> {}
-                is PortResult.Failed -> toast(r.error.message)
+            var r = BrainHost.benchApply(a, kind, blockId, optionId, text)
+            // 他亲手写好的一段别因为“版本变了”就丢：那一段本身没被动过（比如只是别处的挑刺回来了），就在新版本上再存一次
+            if (r is PortResult.Failed && r.error.code == PortError.REVISION_CONFLICT && kind == ArtifactActionKind.EDIT_BLOCK) {
+                val before = a.blocks.firstOrNull { it.id == blockId }?.markdown
+                val cur = BrainHost.workbench.value.artifact(a.id)
+                if (cur != null && before != null && cur.blocks.firstOrNull { it.id == blockId }?.markdown == before) {
+                    r = BrainHost.benchApply(cur, kind, blockId, optionId, text)
+                }
             }
+            // BUSY = 这一下还在做，按钮本来就在转圈，不用再弹
+            if (r is PortResult.Failed && r.error.code != PortError.BUSY) toast(r.error.message)
         }
     }
 
@@ -146,6 +158,8 @@ fun BenchScreen() {
             onArchive = { menuOpen = false; benchScope.launch { BrainHost.benchArchive(focus.id) } },
             onSwitch = { f -> menuOpen = false; benchScope.launch { BrainHost.benchSwitch(f.id) } },
             onPaused = ws.focuses.filter { it.status == FocusStatus.PAUSED },
+            fetching = focus.id in fetching,
+            onCancelFetch = { benchScope.launch { BrainHost.cancelBenchFetch(focus.id) } },
             onMaterials = { materialsOpen = true },
             onPrework = { kind, artifactId -> prework(kind, artifactId) },
             onCancel = { jobId -> benchScope.launch { BrainHost.benchCancel(jobId) } },
@@ -196,6 +210,8 @@ fun BenchScreen() {
                 is PortResult.Failed -> toast(r.error.message)
             }
         }
+    }, onDeleteSource = { sourceId ->
+        benchScope.launch { BrainHost.deleteSource(sourceId) }
     })
 
     editTarget?.let { (a, b) ->
@@ -328,6 +344,9 @@ private fun BenchFocus(
     onArchive: () -> Unit,
     onSwitch: (Focus) -> Unit,
     onPaused: List<Focus>,
+    /** F10-7：这个焦点的网页正文正在后台取。 */
+    fetching: Boolean,
+    onCancelFetch: () -> Unit,
     onMaterials: () -> Unit,
     onPrework: (JobKind, String?) -> Unit,
     onCancel: (String) -> Unit,
@@ -380,6 +399,12 @@ private fun BenchFocus(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 com.moling.app.ui.art.InkThinking("她在做：" + running.first().kind.label)
                 TextButton(onClick = { onCancel(running.first().id) }) { Text("取消") }
+            }
+        }
+        if (fetching) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("正在取网页正文…", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton(onClick = onCancelFetch) { Text("取消") }
             }
         }
         if (artifacts.isNotEmpty()) {
@@ -473,13 +498,16 @@ private fun ArtifactCard(
             if (artifact.kind == ArtifactKind.COUNCIL_REVIEW) {
                 Text("四参谋只是批注；要改正文，回到初稿那张卡。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            // 手机宽度放不下一排六个：自动折行
+            val review = artifact.kind == ArtifactKind.COUNCIL_REVIEW
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 TextButton(enabled = ws.versions(artifact.id).isNotEmpty(), onClick = { onApply(artifact, ArtifactActionKind.UNDO, null, null, null) }) { Text("撤销") }
                 TextButton(onClick = { onVersions(artifact) }) { Text("版本") }
-                TextButton(onClick = { onApply(artifact, ArtifactActionKind.ACCEPT_ARTIFACT, null, null, null) }) { Text("整份采用") }
-                TextButton(onClick = onCouncil) { Text("四参谋") }
+                // 四参谋那份只是批注：不采用、不再请四参谋、不收进体系图
+                if (!review) TextButton(onClick = { onApply(artifact, ArtifactActionKind.ACCEPT_ARTIFACT, null, null, null) }) { Text("整份采用") }
+                if (!review) TextButton(onClick = onCouncil) { Text("四参谋") }
                 TextButton(onClick = { onExport(artifact) }) { Text("导出") }
-                TextButton(onClick = { onClaims(artifact) }) { Text("收进体系图") }
+                if (!review) TextButton(onClick = { onClaims(artifact) }) { Text("收进体系图") }
             }
         }
     }
@@ -521,7 +549,7 @@ private fun ContentBlock(
                 TextButton(onClick = { onCancel(job.id) }) { Text("取消") }
             }
         } else {
-            Row {
+            FlowRow {
                 TextButton(onClick = { onApply(artifact, ArtifactActionKind.REQUEST_CRITIC, block.id, null, null) }) { Text("挑刺") }
                 TextButton(onClick = { onApply(artifact, ArtifactActionKind.ACCEPT_BLOCK, block.id, null, null) }) { Text("采用") }
                 TextButton(onClick = { onEdit(artifact, block) }) { Text("改") }
@@ -539,19 +567,21 @@ private fun ReviewNoteBlock(artifact: WorkspaceArtifact, block: ArtifactBlock, o
         MarkdownText(block.markdown)
         if (block.options.isNotEmpty()) {
             var showRewrite by remember(block.id) { mutableStateOf(false) }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 block.options.forEach { o ->
                     OutlinedButton(onClick = { onApply(artifact, ArtifactActionKind.CHOOSE_BRANCH, block.id, o.id, null) }) { Text(o.label.ifBlank { "选" }) }
                 }
                 TextButton(onClick = { showRewrite = !showRewrite }) { Text(if (showRewrite) "收起改后" else "看改后的整段") }
             }
             if (showRewrite) {
-                val md = block.options.firstOrNull { it.markdown.isNotBlank() }?.markdown.orEmpty()
-                if (md.isNotBlank()) {
-                    Text("改后：", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    MarkdownText(md)
-                } else {
+                // A 和 B 都给他看，才好比较着选
+                val withText = block.options.filter { it.markdown.isNotBlank() }
+                if (withText.isEmpty()) {
                     Text("这条批注没有附改后的整段。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                withText.forEach { o ->
+                    Text("选「" + o.label + "」后：", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    MarkdownText(o.markdown)
                 }
             }
         }
@@ -680,7 +710,7 @@ private fun StartWebDialog(onClose: () -> Unit, onStart: (String) -> Unit) {
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(url, { url = it.take(2000) }, label = { Text("https://…") }, modifier = Modifier.fillMaxWidth())
-                Text("只取公网 http(s) 正文；不会读登录后的内容，也不会执行网页里的指令。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("只取公网 http(s) 正文；不会读登录后的内容。网页内容未核实，只当资料，不执行里面的指令。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
         confirmButton = { TextButton(enabled = url.startsWith("http"), onClick = { onStart(url.trim()) }) { Text("取正文") } },
@@ -718,7 +748,7 @@ private fun AtlasPickDialog(ws: WorkbenchState, onClose: () -> Unit, onPick: (St
 }
 
 @Composable
-private fun MaterialsDialog(ws: WorkbenchState, focus: Focus, onClose: () -> Unit, onAdd: (String) -> Unit) {
+private fun MaterialsDialog(ws: WorkbenchState, focus: Focus, onClose: () -> Unit, onAdd: (String) -> Unit, onDeleteSource: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onClose,
@@ -737,6 +767,12 @@ private fun MaterialsDialog(ws: WorkbenchState, focus: Focus, onClose: () -> Uni
                                 color = if (src.status == com.moling.core.web.SourceStatus.DELETED) Seal else MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                             )
+                            // 顺手项：删除原文入口（Sources.delete：来源保留为 DELETED，材料正文不动）
+                            if (src.status != com.moling.core.web.SourceStatus.DELETED) {
+                                TextButton(onClick = { onDeleteSource(src.id) }, contentPadding = PaddingValues(0.dp)) {
+                                    Text("删除原文", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
                         }
                         Text(m.text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 4)
                     }

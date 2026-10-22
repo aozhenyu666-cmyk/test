@@ -68,12 +68,16 @@ import com.moling.core.autopilot.AutopilotSignal
 import com.moling.core.power.Charter
 import com.moling.core.power.Tier
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 /*
@@ -185,9 +189,9 @@ object BrainHost {
             )
             _outbrain.value = outbrain.state()
             sourceFile = File(dir, "sources.json")
-            _sources.value = runCatching {
+            _sources.value = (runCatching {
                 sourceFile?.takeIf { it.exists() }?.readText()?.let { Json.decodeFromString<com.moling.core.web.SourceState>(it) }
-            }.getOrNull() ?: com.moling.core.web.SourceState()
+            }.getOrNull() ?: com.moling.core.web.SourceState()).let { com.moling.core.web.Sources.prune(it) }
             ready = true
             Log.i(TAG, "大脑宿主起来了")
         }
@@ -633,7 +637,7 @@ object BrainHost {
     suspend fun benchKeep(artifactId: String, topicId: String? = null): Int =
         io("benchKeep", { 0 }) { brain.keepClaims(bench.claims(artifactId), topicId, System.currentTimeMillis()) }
 
-    /** 第十批 T2/T3：抓一个真实网页，正文存来源库并作为材料放上当前案板。 */
+    /** 第十批 T2/T3：抓一个真实网页，正文存来源库并作为材料放上当前案板。整次请求 15 秒（WebPort 内 withTimeout）。 */
     suspend fun benchFetchSource(focusId: String, url: String): PortResult<com.moling.core.workspace.Material> =
         io("benchFetch", { PortResult.Failed(PortError("NETWORK", "网络没接上")) }) {
             val web = com.moling.core.web.HttpWebPort()
@@ -644,9 +648,9 @@ object BrainHost {
             val now = System.currentTimeMillis()
             val hash = com.moling.core.web.Sources.hash(page.text)
             val canonical = com.moling.core.web.Sources.canonical(page.finalUrl)
-            val old = com.moling.core.web.Sources.reuse(_sources.value, page.finalUrl, hash)
-            val ref = old ?: com.moling.core.web.SourceRef(
-                id = com.moling.core.web.Sources.refId("s", canonical, hash),
+            val old = com.moling.core.web.Sources.reuse(_sources.value, page.finalUrl)
+            val ref = com.moling.core.web.SourceRef(
+                id = old?.id ?: com.moling.core.web.Sources.refId("s", canonical, hash),
                 channel = com.moling.core.web.SourceChannel.WEB,
                 url = page.finalUrl,
                 title = page.title,
@@ -657,13 +661,14 @@ object BrainHost {
                 complete = page.complete,
                 focusId = focusId,
             )
-            _sources.value = com.moling.core.web.Sources.put(_sources.value, ref, page.text)
+            // F10-6：_sources 用 update 改，不直接换 .value（后台抓取与界面可能同时动）
+            _sources.update { st -> com.moling.core.web.Sources.put(st, ref, page.text) }
             val added = bench.addMaterial(focusId, page.text, now, kind = "web", title = page.title.ifBlank { page.finalUrl })
             when (added) {
                 is PortResult.Ok -> {
                     val m = bench.state().materialsOf(added.value).lastOrNull()
                         ?: return@io PortResult.Failed(PortError("BAD_ACTION", "材料没加上"))
-                    _sources.value = com.moling.core.web.Sources.attach(_sources.value, m.id, ref.id, now)
+                    _sources.update { st -> com.moling.core.web.Sources.attach(st, m.id, ref.id, now) }
                     saveSources()
                     PortResult.Ok(m)
                 }
@@ -671,12 +676,58 @@ object BrainHost {
             }
         }
 
+    /** 正在后台取正文的焦点（案板显示“取正文中…”，可以取消）。 */
+    private val _fetching = MutableStateFlow<Set<String>>(emptySet())
+    val fetching: StateFlow<Set<String>> = _fetching
+    private val fetchJobs = ConcurrentHashMap<String, Job>()
+
+    /** F10-7：分享“提取正文”不在分享窗等；后台抓，可取消，同一个焦点再点一次先取消上一次。 */
+    fun startBenchFetch(focusId: String, url: String) {
+        fetchJobs.remove(focusId)?.cancel()
+        _fetching.update { it + focusId }
+        var job: Job? = null
+        job = answerScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val r = benchFetchSource(focusId, url)
+                if (r is PortResult.Failed) Log.w(TAG, "取正文失败 " + r.error.code + "：" + r.error.message)
+            } finally {
+                if (fetchJobs[focusId] === job) fetchJobs.remove(focusId)
+                _fetching.update { it - focusId }
+            }
+        }
+        fetchJobs[focusId] = job
+        job.start()
+    }
+
+    fun cancelBenchFetch(focusId: String) {
+        fetchJobs.remove(focusId)?.cancel()
+        _fetching.update { it - focusId }
+    }
+
+    /** 删掉来源原文（来源对象保留为 DELETED；材料里的正文不动）。 */
+    suspend fun deleteSource(sourceId: String) {
+        io("deleteSource", {}) {
+            _sources.update { st -> com.moling.core.web.Sources.delete(st, sourceId) }
+            saveSources()
+        }
+    }
+
     /** 来源原文（只读）。材料 id 也可以查：先找 Attachment，再退回 Material 本身。 */
     fun sourceView(id: String): com.moling.core.web.SourceRef? =
         _sources.value.ref(id) ?: _sources.value.refOfMaterial(id)
 
+    /** F10-6：原子写（tmp + rename，同 FileMindStore），写到一半断电不会把 sources.json 写坏。 */
     private fun saveSources() {
-        runCatching { sourceFile?.writeText(Json.encodeToString(_sources.value)) }
+        val f = sourceFile ?: return
+        runCatching {
+            f.parentFile?.mkdirs()
+            val tmp = File(f.path + ".tmp")
+            tmp.writeText(Json.encodeToString(_sources.value))
+            if (!tmp.renameTo(f)) {
+                f.delete()
+                tmp.renameTo(f)
+            }
+        }
     }
 
     // ---------------------------------------------------------------- 外脑会话（第十二批 A1–A3）
