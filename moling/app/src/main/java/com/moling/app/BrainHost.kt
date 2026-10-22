@@ -799,6 +799,25 @@ object BrainHost {
     suspend fun benchKeep(artifactId: String, topicId: String? = null): Int =
         io("benchKeep", { 0 }) { brain.keepClaims(bench.claims(artifactId), topicId, System.currentTimeMillis()) }
 
+    // ---------------------------------------------------------------- 候选记忆（第十五批 B2）
+
+    /** 从一份稿子提候选（只提新的），返回这份稿子还没被他否掉的候选。不调模型。 */
+    suspend fun benchCandidates(artifactId: String): List<com.moling.core.atlas.MemoryCandidate> =
+        io("benchCandidates", { emptyList() }) {
+            val a = bench.state().artifact(artifactId) ?: return@io emptyList()
+            brain.proposeCandidates(a, System.currentTimeMillis())
+        }
+
+    /** 他点「收」：原话进体系图。主题：当前主题 → 第一个 → 用这件事的问题新建。 */
+    suspend fun candidateAccept(id: String, fallbackTopic: String): PortResult<String> =
+        io("candidateAccept", { offline() }) { brain.acceptCandidate(id, null, fallbackTopic, System.currentTimeMillis()) }
+
+    suspend fun candidateReject(id: String): PortResult<Unit> =
+        io("candidateReject", { offline() }) { brain.rejectCandidate(id, System.currentTimeMillis()) }
+
+    suspend fun candidateUndo(id: String): PortResult<Unit> =
+        io("candidateUndo", { offline() }) { brain.undoCandidate(id, System.currentTimeMillis()) }
+
     /** 第十批 T2/T3：抓一个真实网页，正文存来源库并作为材料放上当前案板。整次请求 15 秒（WebPort 内 withTimeout）。 */
     suspend fun benchFetchSource(focusId: String, url: String): PortResult<com.moling.core.workspace.Material> =
         io("benchFetch", { PortResult.Failed(PortError("NETWORK", "网络没接上")) }) {

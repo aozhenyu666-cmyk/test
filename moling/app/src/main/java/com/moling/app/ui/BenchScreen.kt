@@ -36,6 +36,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -254,26 +255,56 @@ fun BenchScreen() {
         )
     }
     claimsOf?.let { a ->
-        val claims = BrainHost.benchClaims(a.id)
+        // 第十五批 B2：候选记忆——逐条「收 / 不要」，可撤销；收下的是原话（不调模型）
+        val brainState by BrainHost.state.collectAsState()
+        var ids by remember(a.id) { mutableStateOf<List<String>?>(null) }
+        LaunchedEffect(a.id) { ids = BrainHost.benchCandidates(a.id).map { it.id } }
+        val items = ids.orEmpty().mapNotNull { brainState.candidates.get(it) }
+        val focusQuestion = ws.focus(a.focusId)?.question.orEmpty()
+        fun act(block: suspend () -> PortResult<*>) {
+            benchScope.launch {
+                val r = block()
+                if (r is PortResult.Failed) Toast.makeText(context.applicationContext, r.error.message, Toast.LENGTH_SHORT).show()
+            }
+        }
         AlertDialog(
             onDismissRequest = { claimsOf = null },
             title = { Text("收进体系图") },
             text = {
-                Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (claims.isEmpty()) Text("先采用几段，才有能收进体系图的论断。", style = MaterialTheme.typography.bodySmall)
-                    claims.forEach { Text("· " + it, style = MaterialTheme.typography.bodySmall) }
+                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    when {
+                        ids == null -> Text("在整理…", style = MaterialTheme.typography.bodySmall)
+                        items.isEmpty() -> Text("没有新的可收：先采用几段；体系图里已经有的、你说过不要的，不会再推。", style = MaterialTheme.typography.bodySmall)
+                    }
+                    items.forEach { c ->
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(c.claim, style = MaterialTheme.typography.bodyMedium)
+                            if (c.related.isNotEmpty()) {
+                                val rel = c.related.mapNotNull { id -> brainState.atlas.nodes.firstOrNull { it.id == id }?.claim?.take(24) }
+                                if (rel.isNotEmpty()) Text("体系图里相关的（看看是支撑还是冲突）：" + rel.joinToString("；"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                when (c.status) {
+                                    com.moling.core.atlas.CandidateStatus.PROPOSED -> {
+                                        TextButton(onClick = { act { BrainHost.candidateAccept(c.id, focusQuestion) } }) { Text("收") }
+                                        TextButton(onClick = { act { BrainHost.candidateReject(c.id) } }) { Text("不要") }
+                                    }
+                                    com.moling.core.atlas.CandidateStatus.ACCEPTED -> {
+                                        Text("✓ 收进去了", style = MaterialTheme.typography.labelMedium, color = Seal, modifier = Modifier.padding(top = 12.dp))
+                                        TextButton(onClick = { act { BrainHost.candidateUndo(c.id) } }) { Text("撤销") }
+                                    }
+                                    com.moling.core.atlas.CandidateStatus.REJECTED -> {
+                                        Text("不要了", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 12.dp))
+                                        TextButton(onClick = { act { BrainHost.candidateUndo(c.id) } }) { Text("撤销") }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Text("收下的是你采用过的原话，来源记“案板（你确认的）”；练习靶子和待核的假设不会出现在这里。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
-            confirmButton = {
-                TextButton(enabled = claims.isNotEmpty(), onClick = {
-                    claimsOf = null
-                    benchScope.launch {
-                        val n = BrainHost.benchKeep(a.id)
-                        Toast.makeText(context.applicationContext, "收进体系图 " + n + " 条", Toast.LENGTH_LONG).show()
-                    }
-                }) { Text("收进") }
-            },
-            dismissButton = { TextButton(onClick = { claimsOf = null }) { Text("算了") } },
+            confirmButton = { TextButton(onClick = { claimsOf = null }) { Text("好了") } },
         )
     }
 }

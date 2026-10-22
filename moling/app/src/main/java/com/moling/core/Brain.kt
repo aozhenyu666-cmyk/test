@@ -305,6 +305,8 @@ data class BrainState(
     val seq: Long = 0,
     /** 给人看的行动日志（做了什么、交给总控什么、总控怎么回的）。 */
     val log: List<String> = emptyList(),
+    /** 候选记忆（第十五批 B2）：案板上采用过的论断，他逐条点「收」才进体系图。 */
+    val candidates: com.moling.core.atlas.CandidateBook = com.moling.core.atlas.CandidateBook(),
 )
 
 /** 她主动出声的一次。[gate] = 她拦在他面前（App 弹出拦人的页面）；[release] = 放他走了。 */
@@ -1413,6 +1415,50 @@ class Brain(
         st = st.copy(log = st.log + "${hm(now)} 案板收进体系图 $added 条（${t.name.take(10)}）")
         save()
         added
+    }
+
+    // ------------------------------------------------------------------ 候选记忆（第十五批 B2）
+
+    /** 从案板的一份稿子里提候选（只提新的）。返回这份稿子对应的、还待他决定的候选。 */
+    suspend fun proposeCandidates(artifact: com.moling.core.workspace.WorkspaceArtifact, now: Long): List<com.moling.core.atlas.MemoryCandidate> = lock.withLock {
+        val (book, _) = com.moling.core.atlas.MemoryCandidates.propose(st.candidates, artifact, st.atlas, now)
+        if (book != st.candidates) {
+            st = st.copy(candidates = book)
+            save()
+        }
+        st.candidates.items.filter { it.artifactId == artifact.id && it.status != com.moling.core.atlas.CandidateStatus.REJECTED }
+    }
+
+    /**
+     * 他点「收」：原话进体系图（不调模型）。[topicId] null = 当前主题 → 第一个主题 → 用 [fallbackTopic] 新建一个。
+     * 返回节点编号；重复点返回同一个。
+     */
+    suspend fun acceptCandidate(id: String, topicId: String?, fallbackTopic: String, now: Long): com.moling.core.workspace.PortResult<String> = lock.withLock {
+        var atlas = st.atlas
+        val topic = atlas.topics.firstOrNull { it.id == (topicId ?: st.topicId) } ?: atlas.topics.firstOrNull()
+            ?: AtlasOps.topic(atlas, fallbackTopic.ifBlank { "案板" }.take(20), now).let { (a, t) -> atlas = a; t }
+        val (book, nextAtlas, r) = com.moling.core.atlas.MemoryCandidates.accept(st.candidates, id, atlas, topic.id, now)
+        st = st.copy(candidates = book, atlas = nextAtlas)
+        if (r is com.moling.core.workspace.PortResult.Ok) {
+            mark(MindAct.DECIDE, now)
+            st = st.copy(log = st.log + "${hm(now)} 候选收进体系图：${book.get(id)?.claim?.take(20).orEmpty()}")
+        }
+        save()
+        r
+    }
+
+    suspend fun rejectCandidate(id: String, now: Long): com.moling.core.workspace.PortResult<Unit> = lock.withLock {
+        val (book, r) = com.moling.core.atlas.MemoryCandidates.reject(st.candidates, id, now)
+        st = st.copy(candidates = book)
+        save()
+        r
+    }
+
+    suspend fun undoCandidate(id: String, now: Long): com.moling.core.workspace.PortResult<Unit> = lock.withLock {
+        val (book, atlas, r) = com.moling.core.atlas.MemoryCandidates.undo(st.candidates, id, st.atlas, now)
+        st = st.copy(candidates = book, atlas = atlas)
+        save()
+        r
     }
 
     /** 夜里：从这几天的数字里提 1–2 条“当……，就……”（他点“对”才生效）。 */
