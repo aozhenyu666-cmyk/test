@@ -53,7 +53,9 @@ case "$cmd" in
       esac
     done
     if [ "$method" = "PATCH" ] && [[ "$path" == *"/git/refs/tags/"* ]]; then setstate tagsha "$sha"; exit 0; fi
-    if [ "$method" = "PATCH" ] && [[ "$path" == *"/releases/tags/"* ]]; then
+    # 真实 GitHub 没有 PATCH /releases/tags/{tag}（会 404）；更新 release 只能用数字 id
+    if [ "$method" = "PATCH" ] && [[ "$path" == *"/releases/tags/"* ]]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
+    if [ "$method" = "PATCH" ] && [[ "$path" =~ /releases/[0-9]+$ ]]; then
       [ -n "$name" ] && setstate name "$name"
       if [ "${STUCK_DRAFT:-0}" != "1" ] && [ -n "${draftval:-}" ]; then setstate draft "$draftval"; fi
       exit 0
@@ -65,6 +67,7 @@ case "$cmd" in
         case "$jqexpr" in
           .draft) echo "$(state draft)" ;;
           .name) echo "$(state name)" ;;
+          .id) echo "4242" ;;
           *assets*) echo "${ASSET_URL:-}" ;;
           *) printf '{}' ;;
         esac ;;
