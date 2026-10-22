@@ -134,9 +134,9 @@ class TrainingRedeemClient(
     @Synchronized
     fun start(packageName: String, now: Long): PortResult<ChallengeBundle> {
         val p = port ?: return fail(GateError.NOT_AVAILABLE, "总控没装或连不上，不能兑换")
-        p.capabilities()?.let {
-            if (!it.supportsTraining()) return fail(GateError.NOT_AVAILABLE, "总控这个版本不支持训练兑换")
-        }
+        // F13-4：没拿到能力协商就当不支持，不能默认放行。
+        val caps = p.capabilities() ?: return fail(GateError.NOT_AVAILABLE, "总控没给能力协商，不知道支不支持训练兑换")
+        if (!caps.supportsTraining()) return fail(GateError.NOT_AVAILABLE, "总控这个版本不支持训练兑换")
         val policy = when (val r = p.policy()) {
             is PortResult.Ok -> r.value
             is PortResult.Failed -> return r

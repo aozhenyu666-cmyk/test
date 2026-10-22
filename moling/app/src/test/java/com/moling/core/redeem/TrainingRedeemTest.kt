@@ -336,6 +336,15 @@ class TrainingRedeemTest {
         assertTrue(fails(client(longPass).start(pkg, at), GateError.POLICY_DENIED))
     }
 
+    @Test fun capabilitiesNullIsNotAvailable() {
+        val gate = FakeGate(caps = null)
+        gate.clock = at
+        val c = client(gate)
+        assertTrue("没拿到能力协商不能当放行", fails(c.start(pkg, at), GateError.NOT_AVAILABLE))
+        assertEquals(0, gate.issueCalls)
+        assertNull(c.snapshot().challenge)
+    }
+
     @Test fun unsupportedV2OrNoPortIsRefused() {
         val oldGate = FakeGate(caps = GateCapabilities(listOf(1), training = false))
         oldGate.clock = at
