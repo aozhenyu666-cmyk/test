@@ -33,6 +33,7 @@ import com.moling.core.mind.BEIJING
 import com.moling.core.mind.MindState
 import com.moling.core.mind.dayKey
 import com.moling.core.power.Tier
+import com.moling.core.workspace.WorkbenchState
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 
@@ -63,6 +64,7 @@ fun DebugScreen(onDone: () -> Unit) {
             usageAllowed = usageAllowed,
             foreground = foreground,
             category = category,
+            bench = BrainHost.workbench.value,
         ) + "\n\n" + com.moling.app.overlay.Presence.debug(context)
     }.getOrElse { "调试信息生成失败：${it.message ?: it.javaClass.simpleName}" }
 
@@ -103,6 +105,7 @@ private fun buildReport(
     usageAllowed: Boolean,
     foreground: Foreground?,
     category: String,
+    bench: WorkbenchState,
 ): String = buildString {
     val day = dayKey(now)
 
@@ -167,6 +170,29 @@ private fun buildReport(
     appendLine("前台应用：${foreground?.label ?: "—"}")
     appendLine("类别：${category.ifBlank { "—" }}")
     appendLine("连续分钟：${foreground?.minutes ?: 0}")
+
+    // 5.5 案板（I9）：只读；看焦点 / 稿子 / 作业 / 最近日志
+    appendLine()
+    appendLine("【案板】")
+    val active = bench.active()
+    appendLine("当前焦点：" + (active?.let { it.id + "（第 " + it.revision + " 版）" } ?: "没有"))
+    if (bench.artifacts.isEmpty()) appendLine("稿子：还没有") else {
+        appendLine("稿子：")
+        bench.artifacts.takeLast(10).forEach { a ->
+            appendLine("· " + a.id + " · " + a.kind + " · 第 " + a.revision + " 版" + if (a.offline) " · offline" else "")
+        }
+    }
+    val jobs = bench.jobs.takeLast(10)
+    if (jobs.isEmpty()) appendLine("作业：还没有") else {
+        appendLine("最近 10 个作业：")
+        jobs.forEach { j ->
+            appendLine("· " + j.id + " · " + j.kind + " · " + j.status + " · focus=" + j.focusId + " · artifact=" + (j.artifactId ?: "—") + " · error=" + (j.error?.code ?: "—"))
+        }
+    }
+    if (bench.log.isNotEmpty()) {
+        appendLine("最近日志：")
+        bench.log.takeLast(20).asReversed().forEach { appendLine("· " + it) }
+    }
 
     // 6. 日志（最新在上）
     appendLine()

@@ -61,7 +61,10 @@ import com.moling.app.ui.art.InkMountain
 import com.moling.app.ui.art.InkRipple
 import com.moling.app.ui.art.InkSteps
 import com.moling.app.ui.art.InkThinking
+import com.moling.app.ui.art.AnimatedCount
 import com.moling.app.ui.art.InkTitle
+import com.moling.app.ui.art.inkEnter
+import com.moling.app.ui.art.rememberInkProgress
 import com.moling.app.ui.art.InkWaves
 import com.moling.app.ui.art.WashOrange
 import com.moling.app.ui.art.moonPhase
@@ -451,13 +454,14 @@ fun TodayScreen(onReady: () -> Unit = {}) {
         val rpmScore = com.moling.core.spar.Rpm.score(state.mindMarks, rpmNow)
         SectionTitle("思维转速")
         Row(verticalAlignment = Alignment.CenterVertically) {
+            val rpmProgress = rememberInkProgress(duration = 900)
             Box(contentAlignment = Alignment.Center) {
                 com.moling.app.ui.art.InkRing(
-                    (rpmScore / 12f).coerceIn(0f, 1f),
+                    ((rpmScore / 12f).coerceIn(0f, 1f)) * rpmProgress.value,
                     Modifier.size(64.dp),
                     color = com.moling.app.ui.art.WashViolet,
                 )
-                Text("$rpmScore", style = MaterialTheme.typography.titleMedium, color = Ink)
+                AnimatedCount(rpmScore, MaterialTheme.typography.titleMedium, Ink)
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -484,6 +488,7 @@ fun TodayScreen(onReady: () -> Unit = {}) {
                 }
             }
             val byHour = com.moling.core.spar.Rpm.byHour(state.mindMarks, com.moling.core.flow.Flow.dayStart(today))
+            val barsProgress = rememberInkProgress(order = 1, duration = 800)
             androidx.compose.foundation.Canvas(Modifier.width(88.dp).height(56.dp)) {
                 val n = 24
                 val gap = size.width / n
@@ -492,7 +497,7 @@ fun TodayScreen(onReady: () -> Unit = {}) {
                 for (h in 0 until n) {
                     val v = byHour.getOrElse(h) { 0 }
                     if (v > 0) {
-                        val barH = (size.height - 4.dp.toPx()) * v / maxV
+                        val barH = (size.height - 4.dp.toPx()) * v / maxV * barsProgress.value
                         drawLine(
                             com.moling.app.ui.art.WashViolet.copy(alpha = 0.35f + 0.5f * v / maxV),
                             androidx.compose.ui.geometry.Offset(gap * h + gap / 2, base),
@@ -507,12 +512,28 @@ fun TodayScreen(onReady: () -> Unit = {}) {
 
         // 4.5 今天的手机：哪几个小时被拉走、用得最多的、拿起几次（只有应用和时间）
         val usageToday = state.usageDays.lastOrNull { it.day == today }
-        if (usageToday != null && usageToday.screenMin > 0) {
+        if (usageToday == null || usageToday.screenMin <= 0) {
+            SectionTitle("今天的手机")
+            Text(
+                "用一会儿手机，这里会出现 24 小时的娱乐分布、最常打开的应用和拿起次数。只看应用和时间，不读内容。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
             SectionTitle("今天的手机")
             HourStrip(usageToday.playByHour, Flow.minuteOf(now) / 60)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("亮屏 ", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                AnimatedCount(usageToday.screenMin, MaterialTheme.typography.bodySmall, MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(" 分钟 · 娱乐 ", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                AnimatedCount(usageToday.playMin, MaterialTheme.typography.bodySmall, MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(" 分钟 · 拿起 ", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                AnimatedCount(usageToday.pickups, MaterialTheme.typography.bodySmall, MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(" 次", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Text(
-                "亮屏 ${usageToday.screenMin} 分钟 · 娱乐 ${usageToday.playMin} 分钟 · 拿起 ${usageToday.pickups} 次 · 最长连刷 ${usageToday.longestPlay} 分钟",
-                style = MaterialTheme.typography.bodySmall,
+                "最长连刷 " + usageToday.longestPlay + " 分钟",
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             val maxTop = usageToday.top.firstOrNull()?.substringAfterLast(' ')?.toIntOrNull()?.coerceAtLeast(1) ?: 1
@@ -537,6 +558,11 @@ fun TodayScreen(onReady: () -> Unit = {}) {
         if (week.size >= 3) {
             SectionTitle("这一周")
             WeekGrid(week)
+            Text(
+                "每格 1 小时；颜色越深，那一小时刷得越多。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             // 「22–24 点（平均 48 分钟）」这种句子；一条都没有就不说。
             val weak = UsageLog.weakHours(week)
             if (weak.isNotEmpty()) {
@@ -628,7 +654,7 @@ fun TodayScreen(onReady: () -> Unit = {}) {
 /** 小节标题。 */
 @Composable
 private fun SectionTitle(text: String) {
-    InkTitle(text, Modifier.padding(top = 6.dp))
+    InkTitle(text, Modifier.padding(top = 6.dp).inkEnter(distance = 6.dp))
 }
 
 /** 提醒条：一句提醒加一个“×”；挂着提议时带“好 / 不用”。 */
@@ -640,7 +666,7 @@ private fun NoticeBar(
     onDecline: (() -> Unit)?,
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().inkEnter(distance = 8.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Column(Modifier.padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 4.dp)) {
@@ -676,6 +702,7 @@ private fun ChannelRow(channel: Channel, current: Boolean) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .inkEnter(distance = 6.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(if (current) accent.copy(alpha = 0.12f) else Color.Transparent)
             .padding(horizontal = 10.dp, vertical = 7.dp),
@@ -752,7 +779,7 @@ private fun DirectorCardView(
     onCopy: (String) -> Unit,
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().inkEnter(distance = 8.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Column(Modifier.padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp)) {
@@ -898,6 +925,7 @@ private fun KindGlyph(kind: ChannelKind, current: Boolean) {
 /** 24 小时的娱乐分布：每小时一根细墨线，越长刷得越多；现在这个小时下面一个小点。 */
 @Composable
 private fun HourStrip(byHour: List<Int>, hourNow: Int) {
+    val progress = rememberInkProgress(duration = 750)
     androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(56.dp)) {
         val n = 24
         val gap = size.width / n
@@ -909,7 +937,7 @@ private fun HourStrip(byHour: List<Int>, hourNow: Int) {
             val x = gap * h + gap / 2
             val m = byHour.getOrElse(h) { 0 }
             if (m > 0) {
-                val y = base - (base - top) * m / max
+                val y = base - (base - top) * m / max * progress.value
                 drawLine(
                     com.moling.app.ui.art.WashOrange.copy(alpha = 0.35f + 0.55f * m / max),
                     androidx.compose.ui.geometry.Offset(x, base), androidx.compose.ui.geometry.Offset(x, y),
@@ -940,8 +968,9 @@ private fun WeekGrid(week: List<UsageDay>) {
     val gutter = 6.dp
     // 每行 16dp：行高固定，左边的星期几和右边的方格才对得齐。
     val gridH = (16 * week.size).dp
+    val progress = rememberInkProgress(duration = 850)
 
-    Column(Modifier.fillMaxWidth()) {
+    Column(Modifier.fillMaxWidth().inkEnter(distance = 8.dp)) {
         Row(Modifier.fillMaxWidth()) {
             // 左边星期几：每格和方格的一行一样高，文字居中。
             Column(Modifier.width(labelW).height(gridH)) {
@@ -970,8 +999,11 @@ private fun WeekGrid(week: List<UsageDay>) {
                         if (min <= 0) continue
                         // 一小时最多按 60 分钟算：5 分钟很浅，刷满一小时最深，不随这周最高值放大。
                         val t = (min / 60f).coerceIn(0f, 1f)
+                        // 逐列从左到右显出来，像墨一点点渗开。
+                        val reveal = ((progress.value * 24f - h) / 4f).coerceIn(0f, 1f)
+                        if (reveal <= 0f) continue
                         drawRoundRect(
-                            color = WashOrange.copy(alpha = 0.15f + 0.75f * t),
+                            color = WashOrange.copy(alpha = (0.15f + 0.75f * t) * reveal),
                             topLeft = Offset(h * colW + padX, r * rowH + padY),
                             size = Size(
                                 (colW - padX * 2).coerceAtLeast(1f),

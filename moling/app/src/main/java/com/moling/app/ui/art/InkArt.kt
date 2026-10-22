@@ -22,6 +22,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -499,17 +500,52 @@ fun InkPapers(modifier: Modifier = Modifier.size(64.dp), animated: Boolean = tru
 /** 小节标题：字 + 一条细墨线，线尾一个小圆点（参考图里的那种）。 */
 @Composable
 fun InkTitle(text: String, modifier: Modifier = Modifier) {
-    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    // 线从左边慢慢画到右边，像笔尖扫过去；字和小圆点跟着一起显出来。
+    val p = rememberInkProgress(duration = 720)
+    Row(modifier.fillMaxWidth().inkEnter(distance = 5.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(text, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
         Spacer(Modifier.width(10.dp))
         Canvas(Modifier.weight(1f).height(10.dp)) {
             val y = size.height / 2
-            drawLine(Faint, Offset(0f, y), Offset(size.width - 8.dp.toPx(), y), 0.7.dp.toPx())
-            drawCircle(Line, 2.dp.toPx(), Offset(size.width - 3.dp.toPx(), y))
-            drawCircle(Faint, 3.5.dp.toPx(), Offset(size.width - 3.dp.toPx(), y), style = hair(0.5f))
+            val end = size.width - 8.dp.toPx()
+            drawLine(Faint, Offset(0f, y), Offset(end * p.value, y), 0.7.dp.toPx())
+            if (p.value > 0.92f) {
+                drawCircle(Line, 2.dp.toPx(), Offset(size.width - 3.dp.toPx(), y), alpha = ((p.value - 0.92f) / 0.08f).coerceIn(0f, 1f))
+                drawCircle(Faint, 3.5.dp.toPx(), Offset(size.width - 3.dp.toPx(), y), style = hair(0.5f))
+            }
         }
     }
 }
 
 /** 0:00 新月 → 12:00 满月 → 24:00 新月。 */
 fun moonPhase(minuteOfDay: Int): Float = (minuteOfDay.coerceIn(0, 1439) / 1440f)
+
+/** I9 案板：一张纸 + 一道墨线。 */
+@Composable
+fun InkBench(modifier: Modifier = Modifier.size(56.dp), color: Color = Ink) {
+    Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        val left = w * 0.22f
+        val right = w * 0.78f
+        val top = h * 0.18f
+        val bottom = h * 0.82f
+        drawRoundRect(
+            color = color.copy(alpha = 0.55f),
+            topLeft = Offset(left, top),
+            size = Size(right - left, bottom - top),
+            cornerRadius = CornerRadius(w * 0.06f, w * 0.06f),
+            style = Stroke(1.dp.toPx()),
+        )
+        val lineY = top + (bottom - top) * 0.36f
+        drawLine(color.copy(alpha = 0.5f), Offset(left + w * 0.08f, lineY), Offset(right - w * 0.08f, lineY), 1.dp.toPx())
+        drawLine(color.copy(alpha = 0.35f), Offset(left + w * 0.08f, lineY + h * 0.14f), Offset(right - w * 0.2f, lineY + h * 0.14f), 1.dp.toPx())
+        drawLine(
+            color = color.copy(alpha = 0.85f),
+            start = Offset(left + w * 0.12f, bottom - h * 0.12f),
+            end = Offset(right - w * 0.1f, top + (bottom - top) * 0.52f),
+            strokeWidth = 3.dp.toPx(),
+            cap = StrokeCap.Round,
+        )
+    }
+}

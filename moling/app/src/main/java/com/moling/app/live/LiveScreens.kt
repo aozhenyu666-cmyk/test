@@ -73,6 +73,7 @@ import com.moling.app.ui.Paper
 import com.moling.app.ui.Seal
 import com.moling.app.ui.Speaker
 import com.moling.core.live.Mood
+import com.moling.app.ui.art.inkEnter
 import com.moling.core.live.Quiz
 import com.moling.core.spar.Chess
 import com.moling.core.spar.Chesses
@@ -240,6 +241,31 @@ class GateActivity : ComponentActivity() {
             finish()
         }
 
+        fun pickGate(c: String) {
+            if (busy || released) return
+            lifecycleScope.launch {
+                busy = true
+                val t = runCatching { BrainHost.tap(c) }.getOrNull()
+                busy = false
+                if (t == null) {
+                    Toast.makeText(this@GateActivity, "没接上，再点一次", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                mood = t.mood
+                line = t.line
+                gateChoices = t.choices
+                if (BrainHost.speakOn()) Speaker.speak(t.line)
+                if (t.release) {
+                    released = true
+                    BrainHost.react(
+                        com.moling.core.live.Modality.GATE,
+                        com.moling.core.live.Reaction.REPLIED,
+                        System.currentTimeMillis() - startedAt,
+                    )
+                }
+            }
+        }
+
         fun send() {
             val t = text.trim()
             if (busy || released || t.isBlank()) return
@@ -289,7 +315,7 @@ class GateActivity : ComponentActivity() {
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     gateChoices.chunked(2).forEach { rowItems ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            rowItems.forEach { c ->
+                            rowItems.forEachIndexed { ci, c ->
                                 OutlinedButton(
                                     enabled = !busy,
                                     onClick = {
@@ -315,7 +341,7 @@ class GateActivity : ComponentActivity() {
                                             }
                                         }
                                     },
-                                    modifier = Modifier.weight(1f).padding(vertical = 6.dp),
+                                    modifier = Modifier.weight(1f).padding(vertical = 6.dp).inkEnter(order = ci, distance = 8.dp),
                                 ) { Text(c, style = MaterialTheme.typography.bodyLarge) }
                             }
                             if (rowItems.size == 1) Spacer(Modifier.weight(1f))
@@ -512,7 +538,7 @@ class PeekActivity : ComponentActivity() {
                 color = Paper,
                 shadowElevation = 6.dp,
             ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.padding(16.dp).inkEnter(distance = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     val ch = chess
                     if (ch != null || chessScore >= 0) {
                         ChessHeader(turn = ch?.turn ?: 3, done = ch == null)
@@ -549,10 +575,12 @@ class PeekActivity : ComponentActivity() {
                         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        choices.forEach { c ->
-                            OutlinedButton(enabled = !busy, onClick = {
-                                if (c == Chesses.FREE) freeMode = true else runTap(c)
-                            }) { Text(c) }
+                        choices.forEachIndexed { i, c ->
+                            OutlinedButton(
+                                enabled = !busy,
+                                onClick = { if (c == Chesses.FREE) freeMode = true else runTap(c) },
+                                modifier = Modifier.inkEnter(order = i, distance = 8.dp),
+                            ) { Text(c) }
                         }
                     }
                     if (freeMode) ChessFreeInput(onSend = { said -> freeMode = false; runTap(said) })

@@ -1,14 +1,18 @@
 name: moling-android
 
-# 「墨灵」Android 应用：改动 moling/ 下的文件就跑单元测试、打包调试版 APK，
-# 发布到固定下载地址（手机浏览器直接打开即可）：
-# https://github.com/aozhenyu666-cmyk/test/releases/download/moling-latest/moling.apk
-# 注意：这个 workflow 只碰 moling/，不碰总控的任何 workflow 和产物。
+# 「墨灵」Android 应用：改动 moling/ 下的文件就跑单元测试、打包调试版 APK。
+# 所有分支都会测试、打包并上传 Actions artifact；
+# 但共享的固定下载地址（moling-latest / moling.apk）只由工作分支发布：
+#   https://github.com/aozhenyu666-cmyk/test/releases/download/moling-latest/moling.apk
+# 发布由 tools/publish-moling-release.sh 完成：固定 concurrency 串行、过期 SHA 跳过、
+# 原地更新已有 release（不先删）、校验失败立即失败、发布后用 API 和直链核对。
+# 只碰 moling/，不碰总控的任何 workflow 和产物。
 on:
   push:
     paths:
       - "moling/**"
       - ".github/workflows/moling-android.yml"
+      - "tools/publish-moling-release.sh"
   workflow_dispatch:
 
 permissions:
@@ -49,21 +53,35 @@ jobs:
 
   release:
     needs: build
+    # 共享下载地址只由工作分支发布；开发分支只保留 APK artifact，不覆盖用户正在试用的包。
+    if: github.ref == 'refs/heads/ccr-b3c7616e-xlohkd'
     runs-on: ubuntu-latest
+    # 整个仓库固定一个发布组：任何一次发布都排队，不取消正在更新 release 的任务。
+    # 拿到锁之后脚本会再核对本次 SHA 是否仍是远端工作分支 HEAD，旧运行直接跳过。
+    concurrency:
+      group: moling-release-publish
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           name: moling-debug-apk
           path: apk
-      - name: Publish to release moling-latest
+
+      - name: 定位 APK
+        run: |
+          set -euo pipefail
+          apk="$(find apk -name '*.apk' -type f | head -n1)"
+          test -n "$apk"
+          cp "$apk" moling.apk
+
+      - name: 发布到 moling-latest（串行、过期跳过、失败即失败）
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          cp apk/app-debug.apk moling.apk 2>/dev/null || cp apk/debug/app-debug.apk moling.apk
-          gh release delete moling-latest --cleanup-tag --yes || true
-          gh release create moling-latest moling.apk \
-            --target "$GITHUB_SHA" \
-            --prerelease \
-            --title "墨灵 0.12.${GITHUB_RUN_NUMBER}（${GITHUB_SHA::7}）" \
-            --notes "由提交 ${GITHUB_SHA::7} 自动构建，已通过单元测试。直接安装 moling.apk，可覆盖旧版本，数据保留。"
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+        run: bash tools/publish-moling-release.sh moling.apk
