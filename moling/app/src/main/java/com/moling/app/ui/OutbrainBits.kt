@@ -358,14 +358,20 @@ private fun CollectDialog(
     onSubmit: (String, String?) -> Unit,
 ) {
     var text by remember { mutableStateOf("") }
-    var pick by remember { mutableStateOf(sessions.singleOrNull()?.id ?: sessions.firstOrNull()?.id) }
+    // 只在一个会话在等时默认选它；两个以上默认不选，不选不能提交。
+    var pick by remember { mutableStateOf(sessions.singleOrNull()?.id) }
+    val tagged = Outbrain.taggedSessionId(text)
+    val canSubmit = text.isNotBlank() && (sessions.size <= 1 || tagged != null || pick != null)
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("收线：把结论带回来") },
         text = {
             Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (sessions.size > 1) {
-                    Text("有两个以上会话在等：这条属于哪一个？（不按时间猜）", style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        if (tagged != null) "文本里有标记：按 [[外脑:" + tagged + "]] 认，手选不算" else "有两个以上会话在等：这条属于哪一个？（默认不选，不按时间猜）",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
                     sessions.forEach { s ->
                         Row(
                             Modifier.fillMaxWidth().toggleable(value = pick == s.id, onValueChange = { pick = s.id }).padding(vertical = 2.dp),
@@ -378,7 +384,7 @@ private fun CollectDialog(
                 }
                 OutlinedTextField(
                     value = text,
-                    onValueChange = { text = it.take(12_000) },
+                    onValueChange = { text = it },
                     label = { Text("外脑怎么说（整段粘进来）") },
                     minLines = 4,
                 )
@@ -390,7 +396,7 @@ private fun CollectDialog(
             }
         },
         confirmButton = {
-            TextButton(enabled = text.isNotBlank(), onClick = { onSubmit(text, pick) }) { Text("接回案板") }
+            TextButton(enabled = canSubmit, onClick = { onSubmit(text, pick) }) { Text("接回案板") }
         },
         dismissButton = { TextButton(onClick = onClose) { Text("稍后") } },
     )

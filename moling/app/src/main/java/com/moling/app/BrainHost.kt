@@ -811,11 +811,11 @@ object BrainHost {
         source: String = "paste",
     ): PortResult<Pair<ReceiveOutcome, WorkspaceArtifact?>> =
         io("outbrainReceive", { offline() }) {
-            val sid = sessionId ?: Outbrain.taggedSessionId(text)
+            // 标记优先于手选由 Outbrain.receive 判；这里不先 clean，免得把标记洗掉。
             outbrain.receive(
-                text = Outbrain.clean(text),
+                text = text,
                 now = System.currentTimeMillis(),
-                sessionId = sid,
+                sessionId = sessionId,
                 source = source,
             )
         }

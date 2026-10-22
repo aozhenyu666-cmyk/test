@@ -180,6 +180,31 @@ class OutbrainTest {
         assertEquals(a, Outbrain.waiting(s2).single().id)
     }
 
+
+    @Test
+    fun pastedTagWinsOverManualPickAndIsStripped() {
+        val f = focus(listOf(material("m-1", "材料")))
+        val pack = { sid: String -> Packs.build(sid, f, listOf(material("m-1", "材料")), emptyList(), now = 1) }
+        var st = OutbrainState()
+        val ids = mutableListOf<String>()
+        listOf(epShare, epRelay).forEach { e ->
+            val (n, r) = Outbrain.prepare(st, f, pack, e.actor, e, now = 1_000)
+            st = n
+            val s = (r as PortResult.Ok).value
+            st = Outbrain.waiting(st, s.id, 1_100).first
+            ids += s.id
+        }
+        assertEquals(2, Outbrain.waiting(st).size)
+        // 手选第二个，但文本里带着第一个的标记：标记优先
+        val (s2, r) = Outbrain.receive(st, "[[外脑:" + ids[0] + "]] 结论：先亮观点", now = 2_000, sessionId = ids[1])
+        val out = (r as PortResult.Ok).value
+        assertEquals("标记优先于手选", ids[0], out.session!!.id)
+        assertEquals(OutbrainStatus.RESULT_RECEIVED, s2.sessions.first { it.id == ids[0] }.status)
+        assertEquals(OutbrainStatus.WAITING_RESULT, s2.sessions.first { it.id == ids[1] }.status)
+        assertEquals("标记不落进材料", "结论：先亮观点", out.result.text)
+        assertFalse("存储里也不带标记", s2.results.single().text.contains("[[外脑:"))
+    }
+
     @Test
     fun lateResultAfterCancelOnlyGoesHistory() {
         val f = focus(listOf(material("m-1", "材料")))

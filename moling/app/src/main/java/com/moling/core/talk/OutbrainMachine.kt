@@ -178,7 +178,9 @@ object Outbrain {
         source: String = "",
         actor: Actor = Actor.NONE,
     ): Pair<OutbrainState, PortResult<ReceiveOutcome>> {
-        val clean = text.trim().take(MAX_RESULT_CHARS)
+        // 文本里带 [[外脑:ob-…]] 就以标记为准，优先于手选；落库前把标记去掉。
+        val tagged = taggedSessionId(text)
+        val clean = clean(text).take(MAX_RESULT_CHARS)
         if (clean.isBlank()) return state to fail(PortError.BAD_ACTION, "结果是空的")
         // 结果可能分几条回来：已经收到一条最终版的会话仍然算候选（不重复、不丢后半段）。
         val candidates = state.sessions.filter {
@@ -186,6 +188,7 @@ object Outbrain {
                 it.status == OutbrainStatus.WAITING_RESULT || it.status == OutbrainStatus.RESULT_RECEIVED
         }
         val target = when {
+            tagged != null -> state.sessions.firstOrNull { it.id == tagged }
             sessionId != null -> state.sessions.firstOrNull { it.id == sessionId }
             candidates.size == 1 -> candidates.first()
             candidates.size > 1 -> return state to fail(
@@ -197,7 +200,7 @@ object Outbrain {
         if (target == null) {
             // 没有会话：一样存进历史，不猜、不覆盖当前焦点。
             var s1 = state.copy(seq = state.seq + 1)
-            val orphan = mkResult(s1.seq, sessionId ?: "orphan", clean, partial, turn, source, actor, now)
+            val orphan = mkResult(s1.seq, tagged ?: sessionId ?: "orphan", clean, partial, turn, source, actor, now)
             s1 = s1.copy(
                 results = (s1.results + orphan).takeLast(200),
                 log = (s1.log + (now / 1000).toString() + " 收到一条对不上会话的外脑结果（只进历史）").takeLast(100),
