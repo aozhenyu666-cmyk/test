@@ -1421,8 +1421,9 @@
 
 **自动检查（实际跑出来的）**
 - `tools/core-tests`：`gradle test`（Gradle 8.9 + JDK 22，`JAVA_HOME=C:\Program Files\Java\jdk-22`，`GRADLE_USER_HOME=C:\codex-build\gradle-home-m4`，ASCII junction `C:/autopilot-b2-wt`）：**59 个测试类、605 个测试、0 失败 0 错误 0 跳过**（新增 `CandidatesTest` 15 个；原 590）。
-- App：`moling/gradlew.bat compileDebugKotlin`（`ANDROID_HOME=C:\codex-build\android-sdk`）**通过**（2m17s）。
-- 真机**未测**：弹窗逐条收、练习靶子没有「收」、撤销后节点真的从体系页消失，都没在手机上点过；模型拆解入图没有真模型验证。CI 未跑（推分支后由 CI 为准）。
+- App：`moling/gradlew.bat compileDebugKotlin`（`ANDROID_HOME=C:\codex-build\android-sdk`）**通过**（2m17s）；`testDebugUnitTest` **通过**：28 类、300 测试、0 失败 0 错误 0 跳过（1m46s）。
+- CI：GitHub Actions `build` **通过**、`release` skipped（开发分支不发布）：[run 39729446023](https://github.com/aozhenyu666-cmyk/test/actions/runs/39729446023)（代码提交 `130193b`）。
+- 真机**未测**：弹窗逐条收、练习靶子没有「收」、撤销后节点真的从体系页消失，都没在手机上点过；模型拆解入图没有真模型验证。
 
 **没做到 / 说明**
 - 「收」依赖模型拆解（旧 `keepClaims` 路径）：模型没接上时这条候选留在列表里，不会假装收进去。

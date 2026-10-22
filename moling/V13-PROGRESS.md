@@ -41,7 +41,7 @@
 - `core/atlas/Candidates.kt`：MemoryCandidate（来源、稿子+版本、依据 sourceIds、练习标记、冲突节点、addedNodeIds）与 CandidateState；propose 只从「他采用过的正文」生成（练习靶子也列出但标记）、稳定 id 重复不增、旧版本未决定的不再摆；accept/reject/undo 幂等；稿子改版/不在不误报成功。
 - `BrainHost`：候选 StateFlow + `mind/candidates.json` 原子写；`benchCandidates / benchAcceptCandidate / benchRejectCandidate / benchUndoCandidate`。收仍走 `Brain.keepClaims`（未改），并记录新增节点供撤销删除；无主题时明确拒绝。
 - 案板「收进体系图」：先列候选，逐条「收 / 不要 / 撤销」；练习靶子没有「收」按钮，核心也拒收。
-- 自动检查：`tools/core-tests` **59 类 605 测试全绿**（新增 CandidatesTest 15）；App `compileDebugKotlin` 通过。真机未测；HybridRecall 未做；候选目前只接案板来源。
+- 自动检查：`tools/core-tests` **59 类 605 测试全绿**（新增 CandidatesTest 15）；App `compileDebugKotlin` 与 `testDebugUnitTest`（28 类 300 测试）通过；CI `build` 通过、`release` skipped（[run 39729446023](https://github.com/aozhenyu666-cmyk/test/actions/runs/39729446023)）。真机未测；HybridRecall 未做；候选目前只接案板来源。
 
 ### P0（2026-10-22）
 - 基于工作分支 `a8b5749` 建 `deepseek/moling-v13-integration`；合入 PR15（`deepseek/moling-workspace`，已含 PR13），再合 PR14（`deepseek/moling-polish`），解决 `CODEX.md`/`DEVLOG.md` 冲突，保留两边记录。
