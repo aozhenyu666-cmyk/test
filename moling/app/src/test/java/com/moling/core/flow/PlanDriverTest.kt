@@ -225,6 +225,40 @@ class PlanDriverTest {
         assertTrue("取消后还能重新采纳", h.driver.adopt(p, at(9, 6)).ok)
     }
 
+    @Test fun cancelledAdoptionStaysCancelledAfterPlanRewrite() {
+        val h = Harness(AdoptPolicy(remind = true))
+        val p = plan()
+        h.driver.putDraft(p, at(9))
+        assertTrue(h.driver.cancel(at(9, 1)).ok)
+        assertEquals(AdoptionState.CANCELLED, h.driver.adoption(day)!!.state)
+
+        val changed = plan(intent = "改成下午推", startMin = 14 * 60)
+        h.driver.putDraft(changed, at(9, 2))
+        val a = h.driver.adoption(day)!!
+        assertEquals("不采纳要粘住，不能改稿就变回草稿", AdoptionState.CANCELLED, a.state)
+        assertTrue(a.message.contains("没采纳"))
+        assertEquals(2, h.driver.snapshot().drafts.single().revision)
+        assertTrue("他再点才算", h.driver.adopt(changed, at(9, 3)).ok)
+        assertEquals(AdoptionState.LOCAL_ADOPTED, h.driver.adoption(day)!!.state)
+    }
+
+    @Test fun rejectedAdoptionStaysRejectedAfterPlanRewrite() {
+        val h = Harness(AdoptPolicy(remind = true))
+        val p = plan()
+        h.driver.putDraft(p, at(9))
+        assertTrue(h.driver.adopt(p, at(9, 1)).ok)
+        val prepared = h.driver.prepareExecution(p, listOf(ZkCommand.Note("x", "计划")), at(9, 2))
+        val op = prepared.operations.single().operationId
+        h.driver.markSending(op, at(9, 3))
+        h.driver.recordReceipt(op, PlanReceipt("r-1", ok = false, message = "总控拒绝"), at(9, 4))
+        assertEquals(AdoptionState.REJECTED, h.driver.adoption(day)!!.state)
+
+        val changed = plan(intent = "改成下午推", startMin = 14 * 60)
+        h.driver.putDraft(changed, at(9, 5))
+        assertEquals("被拒绝也要粘住", AdoptionState.REJECTED, h.driver.adoption(day)!!.state)
+        assertTrue("他再点才算", h.driver.adopt(changed, at(9, 6)).ok)
+    }
+
     @Test fun prepareRequiresLocalAdoptionAndCurrentPlan() {
         val h = Harness(AdoptPolicy(remind = true))
         val p = plan()

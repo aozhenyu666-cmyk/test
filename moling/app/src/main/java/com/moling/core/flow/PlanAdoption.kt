@@ -268,33 +268,47 @@ class PlanDriver(
         var ops = state.operations
         var message = "记下草稿「${draft.intent}」"
         if (changed && adopt != null && adopt.planId == draft.planId) {
-            val unsent = adopt.state == AdoptionState.EXECUTION_REQUESTED || adopt.state == AdoptionState.ZK_PENDING
-            val active = adopt.state == AdoptionState.ACTIVE
-            if (unsent) {
-                ops = ops.map {
-                    if (it.planId == draft.planId && it.planRevision < draft.revision &&
-                        it.state in setOf(OperationState.PREPARED, OperationState.SENDING)
-                    ) {
-                        it.copy(state = OperationState.CANCELLED, message = "计划改版，取消未发送")
-                    } else it
+            val sticky = adopt.state == AdoptionState.CANCELLED || adopt.state == AdoptionState.REJECTED
+            if (sticky) {
+                // F13-2：他说过“不采纳 / 被拒绝”就粘住，改稿不偷偷变回草稿；要用只能他再点。
+                adopt = adopt.copy(
+                    planRevision = draft.revision,
+                    adoptionRevision = adopt.adoptionRevision + 1,
+                    lastTickAt = now,
+                    eligibilityAt = 0,
+                    remindedAt = 0,
+                    message = "计划改版了；你还没采纳，还是没采纳（要用再点采纳）",
+                )
+                message = adopt.message
+            } else {
+                val unsent = adopt.state == AdoptionState.EXECUTION_REQUESTED || adopt.state == AdoptionState.ZK_PENDING
+                val active = adopt.state == AdoptionState.ACTIVE
+                if (unsent) {
+                    ops = ops.map {
+                        if (it.planId == draft.planId && it.planRevision < draft.revision &&
+                            it.state in setOf(OperationState.PREPARED, OperationState.SENDING)
+                        ) {
+                            it.copy(state = OperationState.CANCELLED, message = "计划改版，取消未发送")
+                        } else it
+                    }
                 }
+                adopt = adopt.copy(
+                    planRevision = draft.revision,
+                    adoptionRevision = adopt.adoptionRevision + 1,
+                    state = AdoptionState.DRAFT,
+                    visibleMs = 0,
+                    visibleSince = 0,
+                    lastTickAt = now,
+                    eligibilityAt = 0,
+                    adoptedAt = 0,
+                    message = when {
+                        active -> "计划改版了；总控里已经执行的动作不受本地改稿影响，新版本重新倒计时"
+                        unsent -> "计划改版了：没发的旧命令已取消，已经发出的按总控回执处理，新版本重新倒计时"
+                        else -> "计划改版了，倒计时重来"
+                    },
+                )
+                message = adopt.message
             }
-            adopt = adopt.copy(
-                planRevision = draft.revision,
-                adoptionRevision = adopt.adoptionRevision + 1,
-                state = AdoptionState.DRAFT,
-                visibleMs = 0,
-                visibleSince = 0,
-                lastTickAt = now,
-                eligibilityAt = 0,
-                adoptedAt = 0,
-                message = when {
-                    active -> "计划改版了；总控里已经执行的动作不受本地改稿影响，新版本重新倒计时"
-                    unsent -> "计划改版了：没发的旧命令已取消，已经发出的按总控回执处理，新版本重新倒计时"
-                    else -> "计划改版了，倒计时重来"
-                },
-            )
-            message = adopt.message
         }
         // 今天的草稿才有采纳记录；未来几天先只存草稿，到那天再开始计时。
         if (plan.day == dayOf(now) && (adopt == null || adopt.planId != draft.planId)) {
