@@ -1207,6 +1207,8 @@ class LoopTest {
             sayTurn("今日部署过了。到点我叫你。"),
         )
         app.store.updateConfig { it.copy(startOnChat = true, ai = com.zongkong.core.AiConfig(llm.url("/v1").toString(), "sk-test", "mock-model")) }
+        // 前面的测试留下的对话清掉：不然这一段满了会先做一次交接摘要，用掉一条模拟回答
+        app.chat.clear()
         scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java))
         // 打开就是对话，顶上是今天
         waitFor(hasTestTag("chat-today"), 10_000, "对话顶上的今天")
