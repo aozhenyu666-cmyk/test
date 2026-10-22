@@ -111,7 +111,7 @@ object BrainHost {
     private lateinit var planDriver: PlanDriver
     private val planLock = kotlinx.coroutines.sync.Mutex()
     private val _plan = MutableStateFlow(PlanDriverState())
-    /** 今天页读这个：草稿、本地采纳状态、可见时间、执行账本。 */
+    /** 今天页读这个：草稿、本地采纳状态、提醒时间、执行账本。 */
     val plan: StateFlow<PlanDriverState> = _plan
     private var planFile: java.io.File? = null
 

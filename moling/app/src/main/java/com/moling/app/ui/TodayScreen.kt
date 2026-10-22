@@ -109,7 +109,7 @@ fun TodayScreen(onReady: () -> Unit = {}) {
     val clipboard = LocalClipboardManager.current
     val state by BrainHost.state.collectAsState()
     val notices by BrainHost.notices.collectAsState()
-    // 计划代驾：草稿、本地采纳、可见时间（和总控回执分开显示）。
+    // 计划代驾：草稿、本地采纳、到点提醒时间（和总控回执分开显示）。
     val planState by BrainHost.plan.collectAsState()
 
     // 每 20 秒走一次表：大字时间和“当前这一条”的高亮不用等别处刷新。
@@ -435,7 +435,7 @@ fun TodayScreen(onReady: () -> Unit = {}) {
                             color = if (adoption?.state == com.moling.core.flow.AdoptionState.LOCAL_ADOPTED) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
-                            "总控：" + (if (flow?.confirmed == true) "已确认（旧定稿）" else "未确认"),
+                            if (flow?.confirmed == true) "定稿：你已定稿" else "定稿：还没定稿",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
