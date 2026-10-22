@@ -11,7 +11,7 @@
 | 动效打磨 | 已提交，未合入 | Moling CI通过 | 真机未测 | [PR14](https://github.com/aozhenyu666-cmyk/test/pull/14) |
 | P0前置整合 | 已实现：整合PR15（含PR13）+PR14，补 I9 来源点开原文 | 本地编译通过；CI 见分支 | 真机未测；发布 job 应 skipped | 本分支 PR |
 | W10 T1–T9 | **进行中（里程碑2）**：T1/T2(fetch,RSS,HTML,Brave适配)/T3(池、分享解析、分享提取正文)/T7(预算与事件) 核心与入口完成；T4–T6、T8–T9 未做 | core-tests 442 全绿；App build/test 通过；真实公网未验 | 真机未测 | [任务](DEEPSEEK-10.md) · [PR17](https://github.com/aozhenyu666-cmyk/test/pull/17) |
-| W11 R1–R7 | **部分实现**：R1 电台核心、R2 案板/对话面板、R3 安静期与曝光、R5 赌局核心完成；R4/R6 只有接口与说明 | core-tests 472 全绿；App compileDebugKotlin 通过 | 真机未测；R4/R6/R5 UI 入口未做 | [任务](DEEPSEEK-11.md) |
+| W11 R1–R7 | **部分实现**：R1 电台核心、R2 案板/对话面板、R3 安静期与曝光、R5 赌局核心完成；R4/R6 只有接口与说明 | core-tests 472 全绿；App compileDebugKotlin / testDebugUnitTest 通过 | 真机未测；R4/R6/R5 UI 入口未做 | [任务](DEEPSEEK-11.md) |
 | W12 A1–A6 | 任务书已补齐，待实现 | 待验证 | 待验证 | [任务](DEEPSEEK-12.md) |
 | W13 G1–G7 | 任务书已补齐，待实现 | 待验证 | 待验证 | [任务](DEEPSEEK-13.md) |
 
@@ -39,6 +39,6 @@
 - R2 `app/live/RadioHost.kt` + `RadioPanel.kt`：StateFlow 渲染、当前段/来源/进度/暂停继续跳过停止；接案板与对话页；声音走现有 Speaker，不新增联网抓取。
 - R3 `HabitBook.quietUntil` + `Exposure` + `Habits.explicitStop/restore`；`Brain.live` 安静期不出现；「先不聊了」立即进安静期并可恢复；设置页/调试页可看。
 - R5 `core/predict/Bet.kt` ChoiceBet：同 id 一笔、观测才结算、UNOBSERVABLE、取消不算输、可评分 Brier 与旧预测分开；`BrainState.bets` 与 Brain/BrainHost API、调试页只读列表。
-- 自动检查：core-tests **472 全绿**（新增 30）；App 本地 `compileDebugKotlin` 通过；`testDebugUnitTest`、真机未跑。
+- 自动检查：core-tests **472 全绿**（新增 30）；App 本地 `compileDebugKotlin`、`testDebugUnitTest` 通过；真机未跑。
 - 未完成：R4 材料化 FOG/TOLL/Chess；R6 轮盘/音频焦点/VoiceSession/微停顿；R5 卡片/电台赌局入口。不新增权限。
 

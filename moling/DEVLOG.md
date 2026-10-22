@@ -1207,7 +1207,7 @@
 
 **测试**
 - `tools/core-tests`：**472 个全绿**（原 442 + 新增 30：RadioTest 14 / BetTest 9 / HabitTest 7）。覆盖启动/暂停/继续/跳过/停止、停止后迟到 prepared 与 segment 回调、换会话 generation、重复 start、5 分钟预算、准备超时、安静期优先级、材料拆分与来源；赌局去重/重复结算/过期/无法观测/取消/Brier；曝光与安静期。
-- App：本地 `compileDebugKotlin` 通过（ASCII 路径 `C:/autopilot-w11-wt`）。`testDebugUnitTest` / 真机未跑。
+- App：本地 `compileDebugKotlin`、`testDebugUnitTest` 均通过（ASCII 路径 `C:/autopilot-w11-wt`）。真机未跑。
 
 **未完成（如实）**
 - R4：FOG/TOLL/Chess 接材料化题干、来源与练习标志回看、完整“听完这一段→抓漏洞”链路**未做**（现有 `Quizzes.local` / `Chesses` 未改）。
