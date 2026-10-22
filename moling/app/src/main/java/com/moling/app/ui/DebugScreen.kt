@@ -215,6 +215,18 @@ private fun buildReport(
         bench.log.takeLast(20).asReversed().forEach { appendLine("· " + it) }
     }
 
+    // 5.6 外脑会话（W12 A1–A3）+ 限定捕获（A4，未申请权限）
+    appendLine()
+    appendLine("【外脑】")
+    val obState = BrainHost.outbrainState.value
+    val obActive = com.moling.core.talk.Outbrain.active(obState)
+    appendLine("当前：" + (obActive?.let { it.id + " · " + it.actor.label + " · " + it.transport + " · " + it.status } ?: "没有"))
+    com.moling.core.talk.Outbrain.waiting(obState).forEach { appendLine("在等：" + it.id + " · " + it.pack.question.take(20) + " · 到期 " + hms(it.expiresAt)) }
+    com.moling.core.talk.Outbrain.needCollect(obState).forEach { appendLine("待收线：" + it.id + " · " + it.pack.question.take(20)) }
+    appendLine("结果：" + obState.results.size + " 条（最终 " + obState.results.count { !it.partial } + "）")
+    obState.sessions.takeLast(5).forEach { appendLine("· " + it.id + " · " + it.status + " · 材料 " + it.pack.materials.size + " · 稿子 " + (it.artifactId ?: "—")) }
+    appendLine("限定捕获（A4）：未开启——本版不申请无障碍 / 屏幕权限；接口与拒绝降级已就绪，走分享 / 粘贴")
+
     // 6. 日志（最新在上）
     appendLine()
     appendLine("【日志】")

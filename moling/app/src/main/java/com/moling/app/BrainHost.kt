@@ -58,6 +58,14 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import com.moling.core.workspace.WorkbenchState
 import com.moling.core.workspace.WorkspaceArtifact
+import com.moling.core.talk.Outbrain
+import com.moling.core.talk.OutbrainDesk
+import com.moling.core.talk.OutbrainEndpoint
+import com.moling.core.talk.OutbrainRoute
+import com.moling.core.talk.OutbrainRouter
+import com.moling.core.talk.OutbrainState
+import com.moling.core.talk.OutbrainTransport
+import com.moling.core.talk.ReceiveOutcome
 import com.moling.core.mind.MindState
 import com.moling.core.mind.Opening
 import com.moling.core.mind.Reply
@@ -96,6 +104,7 @@ object BrainHost {
 
     private lateinit var brain: Brain
     private lateinit var bench: Workbench
+    private lateinit var askModel: MolingAsk
 
     private val _bench = MutableStateFlow(WorkbenchState())
 
@@ -115,6 +124,10 @@ object BrainHost {
     /** 今天页读这个：草稿、本地采纳状态、提醒时间、执行账本。 */
     val plan: StateFlow<PlanDriverState> = _plan
     private var planFile: java.io.File? = null
+    /** 第十二批：外脑会话（进场包 / 等结果 / 收线 / 结果对齐），和案板分开存 mind/outbrain.json。 */
+    private lateinit var outbrain: OutbrainDesk
+    private val _outbrain = MutableStateFlow(OutbrainState())
+    val outbrainState: StateFlow<OutbrainState> = _outbrain
 
     /** 持有 application context：读前台应用、系统状态、起服务都要用。 */
     private var appContext: Context? = null
@@ -152,7 +165,7 @@ object BrainHost {
 
             ZkBridge.init(app)
             settings = SettingsStore(app)
-            val ask = MolingAsk(settings, LlmClient({ settings.load() }))
+            val ask = MolingAsk(settings, LlmClient({ settings.load() })).also { askModel = it }
             // 深想模型：没填就和平时同一个（大脑里 deep = null 时退回 ask）
             val deep = MolingAsk(settings, LlmClient({ settings.load().deep() }, timeoutSec = 120, withTemperature = false), timeoutMs = 125_000L)
             brain = Brain(
@@ -184,6 +197,13 @@ object BrainHost {
             _bench.value = bench.state()
             // 第十一批 R2：电台控制器（StateFlow）；只读案板已有材料，不联网。
             RadioHost.init(app)
+            // 第十二批：外脑会话；结果落案板仍由 Workbench 管（未采用、不自动交总控）
+            outbrain = OutbrainDesk(
+                store = FileMindStore(File(dir, "outbrain.json")),
+                workbench = bench,
+                onChange = { _outbrain.value = it },
+            )
+            _outbrain.value = outbrain.state()
             sourceFile = File(dir, "sources.json")
             _sources.value = (runCatching {
                 sourceFile?.takeIf { it.exists() }?.readText()?.let { Json.decodeFromString<com.moling.core.web.SourceState>(it) }
@@ -434,6 +454,7 @@ object BrainHost {
             _notices.value = (listOf(n) + _notices.value).distinctBy { it.at to it.text }.take(3)
             runCatching { postNotices(now, listOf(n)) }
         }
+        runCatching { outbrainSweep(now) }
         runCatching { withContext(Dispatchers.IO) { autoSchedule(now) } }
         runCatching { liveTick(now) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "活的墨灵失败", it) }
         if (interactive()) runCatching { refreshUsage() }
@@ -468,6 +489,17 @@ object BrainHost {
                 settings, now, force,
                 board = { brain.handoff(now) to brain.state().questions },
                 seen = { brain.state().mirrorSeen },
+                routeOutbrain = { items ->
+                    val handled = mutableSetOf<String>()
+                    val waiting = Outbrain.waiting(outbrain.state()).map { it.id }.toSet()
+                    items.forEach { item ->
+                        val sid = Outbrain.taggedSessionId(item.text) ?: return@forEach
+                        if (sid !in waiting) return@forEach
+                        val got = outbrain.receive(Outbrain.clean(item.text), now, sessionId = sid, source = "relay")
+                        if (got is PortResult.Ok) handled += item.id
+                    }
+                    handled
+                },
                 absorb = { items -> io("absorb", { Absorbed() }) { brain.absorb(items, now) } },
             )
         } ?: return null
@@ -859,6 +891,178 @@ object BrainHost {
             }
         }
     }
+
+    // ---------------------------------------------------------------- 外脑会话（第十二批 A1–A3）
+
+    /**
+     * 现在能用的外脑端点。分享/复制永远可用；模型 API 看有没有密钥；联络站看有没有配置。
+     * UI 让他自己选走哪条；不按模型名猜能力。
+     */
+    fun outbrainEndpoints(): List<OutbrainEndpoint> {
+        if (!ready) return emptyList()
+        val s = settings.load()
+        val ctxReady = appContext != null
+        return listOf(
+            OutbrainEndpoint("ep-share", "分享 / 复制给外脑", OutbrainTransport.SHARE, Actor.CHATGPT, configured = ctxReady, preference = 20),
+            OutbrainEndpoint("ep-api", "模型 API 直接问", OutbrainTransport.API, Actor.NONE, configured = s.apiKey.isNotBlank(), preference = 5),
+            OutbrainEndpoint("ep-relay", "联络站（MCP）", OutbrainTransport.RELAY, Actor.CHATGPT, configured = settings.relay().ready(), preference = 8),
+        )
+    }
+
+    /**
+     * 从当前焦点拼进场包、开一次外脑会话（不送出、不花钱）。
+     * [prefer] = 他选的端点 id（null = 按能力和偏好自动选）；[exclude] = 预览时去掉的材料 id。
+     */
+    suspend fun outbrainPrepare(
+        prefer: String? = null,
+        focusId: String? = null,
+        exclude: Set<String> = emptySet(),
+        includeSensitive: Boolean = false,
+    ): PortResult<com.moling.core.talk.OutbrainSession> {
+        if (!ready) return PortResult.Failed(PortError(PortError.OFFLINE, "刚才没接上，再试一次"))
+        val endpoints = outbrainEndpoints()
+        val ep = if (prefer != null) {
+            endpoints.firstOrNull { it.id == prefer }
+                ?: return PortResult.Failed(PortError("NOT_CONFIGURED", "没有这个外脑端点"))
+        } else {
+            when (val r = OutbrainRouter.pick(endpoints)) {
+                is OutbrainRoute.Pick -> r.endpoint
+                is OutbrainRoute.Failed -> return PortResult.Failed(r.error)
+            }
+        }
+        if (!ep.configured) return PortResult.Failed(PortError("NOT_CONFIGURED", ep.label + " 还没配置"))
+        val bstate = bench.state()
+        val focus = (focusId?.let { bstate.focus(it) } ?: bstate.active())
+            ?: return PortResult.Failed(PortError(PortError.NOT_FOUND, "案板上没有正在做的事"))
+        val spine = runCatching { Workbench.atlasLines(brain.state().atlas, focus.question, 4) }.getOrDefault(emptyList())
+        return io("outbrainPrepare", { offline<com.moling.core.talk.OutbrainSession>() }) {
+            outbrain.prepare(
+                actor = ep.actor,
+                endpoint = ep,
+                now = System.currentTimeMillis(),
+                focusId = focus.id,
+                spine = spine,
+                exclude = exclude,
+                includeSensitive = includeSensitive,
+            )
+        }
+    }
+
+    /** 复制的就是这段：进场包原文（带回来标记）。 */
+    fun outbrainPackText(sessionId: String): String =
+        if (ready) outbrain.state().sessions.firstOrNull { it.id == sessionId }?.pack?.text().orEmpty() else ""
+
+    /** 他点了打开外脑 / 复制进场包：会话进入等结果。 */
+    suspend fun outbrainOpen(sessionId: String): PortResult<com.moling.core.talk.OutbrainSession> =
+        io("outbrainOpen", { offline() }) {
+            val now = System.currentTimeMillis()
+            when (val r = outbrain.open(sessionId, now)) {
+                is PortResult.Ok -> outbrain.waiting(sessionId, now)
+                is PortResult.Failed -> r
+            }
+        }
+
+    /**
+     * 收一条外脑结果（粘贴 / 分享回来 / 语音转文字）。
+     * [sessionId] 为 null 时先认包里带回来的 [[外脑:ob-…]]；没有且只有一个会话在等才认，多个返回 NEEDS_ATTRIBUTION。
+     * 落成 ACTOR_RESULT 稿子（未采用）＋材料；不自动收进体系图、不自动交总控。
+     */
+    suspend fun outbrainReceive(
+        text: String,
+        sessionId: String? = null,
+        source: String = "paste",
+    ): PortResult<Pair<ReceiveOutcome, WorkspaceArtifact?>> =
+        io("outbrainReceive", { offline() }) {
+            // 标记优先于手选由 Outbrain.receive 判；这里不先 clean，免得把标记洗掉。
+            outbrain.receive(
+                text = text,
+                now = System.currentTimeMillis(),
+                sessionId = sessionId,
+                source = source,
+            )
+        }
+
+    suspend fun outbrainClose(sessionId: String): PortResult<com.moling.core.talk.OutbrainSession> =
+        io("outbrainClose", { offline() }) { outbrain.close(sessionId, System.currentTimeMillis()) }
+
+    suspend fun outbrainReviewed(sessionId: String): PortResult<com.moling.core.talk.OutbrainSession> =
+        io("outbrainReviewed", { offline() }) { outbrain.reviewed(sessionId, System.currentTimeMillis()) }
+
+    suspend fun outbrainCancel(sessionId: String): PortResult<com.moling.core.talk.OutbrainSession> =
+        io("outbrainCancel", { offline() }) { outbrain.cancel(sessionId, System.currentTimeMillis()) }
+
+    /** 收线卡「稍后」：真的推迟 1 小时再提醒，撤掉常驻通知（不再永远挂着）。 */
+    suspend fun outbrainSnooze(sessionId: String): PortResult<com.moling.core.talk.OutbrainSession> =
+        io("outbrainSnooze", { offline() }) { outbrain.snooze(sessionId, System.currentTimeMillis()) }
+
+    /** 过期会话「手动接回」：重新进入等结果，晚到的结果还能落案板。 */
+    suspend fun outbrainReopen(sessionId: String): PortResult<com.moling.core.talk.OutbrainSession> =
+        io("outbrainReopen", { offline() }) { outbrain.reopen(sessionId, System.currentTimeMillis()) }
+
+    /** 心跳里扫一次：到点没回来的会话标过期（收线卡还在，仍可人工归档结果）。 */
+    suspend fun outbrainSweep(now: Long = System.currentTimeMillis()): Int =
+        if (ready) runCatching { outbrain.sweep(now) }.getOrDefault(0) else 0
+
+    /**
+     * 模型 API 那条真实传输：用现有凭据把进场包发出去，把回复收回来（带同一会话 id）。
+     * 失败不伪造回复：记 lastError，等他改用分享/粘贴。
+     */
+    suspend fun outbrainAskApi(sessionId: String): String {
+        if (!ready) return "还没准备好"
+        val st = outbrain.state()
+        val session = st.sessions.firstOrNull { it.id == sessionId } ?: return "这个外脑会话不在了"
+        val ep = outbrainEndpoints().firstOrNull { it.id == session.endpointId }
+        if (ep == null || ep.transport != OutbrainTransport.API || !ep.configured) return "这个会话不是模型 API 路线"
+        // 只在 PREPARED/OPENED 且没有结果时问；取消/过期/已有结论都不再调模型（防重复花钱）。
+        if (!Outbrain.apiAskable(st, sessionId)) {
+            return when {
+                Outbrain.finalResults(st, sessionId).isNotEmpty() -> "这个会话已经有结论了，不重复问"
+                session.status == com.moling.core.talk.OutbrainStatus.CANCELLED -> "已经取消了，不再问"
+                session.status == com.moling.core.talk.OutbrainStatus.EXPIRED -> "到点没回来：要接着问，先在收线卡里手动接回"
+                else -> "正在等结果：等这次回来或先收线，不重复问"
+            }
+        }
+        // 每会话一个进行中标记：连点/两个界面同时点只发一次请求。
+        if (!apiInFlight.add(sessionId)) return "正在问，别重复点"
+        try {
+            // 只 open 不 waiting：请求失败时状态仍是 OPENED，他还点「用 API 问」可以重试；
+            // 真正在跑的重复请求由上面的 apiInFlight 挡住。
+            val opened = io<PortResult<com.moling.core.talk.OutbrainSession>?>("outbrainApiOpen", { null }) {
+                outbrain.open(sessionId, System.currentTimeMillis())
+            }
+            if (opened == null) return "刚才没接上，再试一次"
+            if (opened is PortResult.Failed) return opened.error.message
+            val system = "你是外脑：只回答他这一件事，按返回格式给结论 / 依据 / 不确定。不客套，不替他改稿，不提交任何东西。"
+            val reply = runCatching { askModel.ask(system, session.pack.text() + "\n\n【按上面的返回格式，最多 600 字回答】") }.getOrNull()
+            if (reply.isNullOrBlank()) {
+                io("outbrainApiErr", {}) { outbrain.markError(sessionId, System.currentTimeMillis(), "模型没接上") }
+                return "模型没接上：结果没回来，可以改用分享或粘贴"
+            }
+            // 回来时他可能已经取消/过期，或者别的传输先收到了：这时不再收、不再花第二次。
+            val nowSt = outbrain.state()
+            val cur = nowSt.sessions.firstOrNull { it.id == sessionId } ?: return "会话不在了，这次回答没接"
+            if (cur.status == com.moling.core.talk.OutbrainStatus.CANCELLED) return "已经取消了，这次回答不用"
+            if (cur.status == com.moling.core.talk.OutbrainStatus.EXPIRED) return "会话已经过期，这次回答没接；要收先手动接回"
+            if (Outbrain.finalResults(nowSt, sessionId).isNotEmpty()) return "已经收到结论了，这次回答没覆盖"
+            return when (val r = io<PortResult<Pair<ReceiveOutcome, WorkspaceArtifact?>>?>("outbrainApiRecv", { null }) {
+                    outbrain.receive(reply, System.currentTimeMillis(), sessionId = sessionId, source = "api")
+                }) {
+                is PortResult.Ok -> {
+                    val (outcome, artifact) = r.value
+                    if (outcome.duplicate) "这一段刚才已经收过了"
+                    else if (artifact != null) "外脑回来了：已放上案板材料（未采用）"
+                    else "外脑回来了，但会话已经结束，只记进历史"
+                }
+                is PortResult.Failed -> "回来了但没接上：" + r.error.message
+                null -> "刚才没接上，再试一次"
+            }
+        } finally {
+            apiInFlight.remove(sessionId)
+        }
+    }
+
+    /** 同一会话同时只允许一个模型 API 请求在跑。 */
+    private val apiInFlight: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     private fun <T> offline(): PortResult<T> = PortResult.Failed(PortError(PortError.OFFLINE, "刚才没接上，再试一次"))
 

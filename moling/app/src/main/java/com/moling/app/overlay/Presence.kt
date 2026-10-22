@@ -319,6 +319,18 @@ object Presence {
         } else OverlayService.hide(context)
         if (s != null && (!allowed || !overlay || !Usage.allowed(context))) PresenceNotices.show(context, PresenceNotices.SESSION, "正在和 ${s.opening.actor.label} 聊", "下一问：${currentSessionCard()?.ask.orEmpty()} · 点此收线", true)
         else PresenceNotices.cancel(context, PresenceNotices.SESSION)
+        // 第十二批：外脑会话留一条状态（没有在场会话时才显示，避免两条通知打架）。
+        // 「稍后」的会话在 snoozeUntil 前不提醒、不挂常驻通知；到点或收到了再回来。
+        val ob = if (s == null) {
+            BrainHost.outbrainState.value.let { st -> com.moling.core.talk.Outbrain.reminder(st, System.currentTimeMillis()) }
+        } else null
+        when {
+            ob == null -> PresenceNotices.cancel(context, PresenceNotices.ACTOR)
+            ob.status == com.moling.core.talk.OutbrainStatus.PREPARED || ob.status == com.moling.core.talk.OutbrainStatus.OPENED ||
+                ob.status == com.moling.core.talk.OutbrainStatus.WAITING_RESULT ->
+                PresenceNotices.showOutbrain(context, "外脑：" + ob.actor.label, "等结果回来 · 点此收线")
+            else -> PresenceNotices.showOutbrain(context, "外脑还没收线", ob.pack.question.take(30) + " · 粘贴 / 说一句")
+        }
     }
     fun debug(context: Context): String {
         init(context)

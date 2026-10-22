@@ -49,6 +49,8 @@ object RelaySync {
         force: Boolean,
         board: () -> Pair<String, List<Question>>,
         seen: () -> Collection<String>,
+        /** 第十二批：外脑会话的结果先在这里认领（带 [[外脑:ob-…]] 标记的），认领过的不再交给大脑重复收。返回认领的 InboxItem id。 */
+        routeOutbrain: suspend (List<InboxItem>) -> Set<String> = { emptySet() },
         absorb: suspend (List<InboxItem>) -> Absorbed,
     ): Result? {
         val r = store.relay()
@@ -76,16 +78,18 @@ object RelaySync {
                 InboxItem("relay:${s("id")}", (if (q.isNotBlank()) "$q：" else "") + s("text"), s("from").ifBlank { "AI" } + "（联络站）")
             }
             val results = mutableListOf<Absorbed>()
-            for (part in inbox.chunked(4)) results += absorb(part)
-            // 大脑把关过（记成“收过”）的才往前挪；模型没接上时不挪，下次再收
+            val routed = runCatching { routeOutbrain(inbox) }.getOrDefault(emptySet())
+            val forBrain = inbox.filterNot { it.id in routed }
+            for (part in forBrain.chunked(4)) results += absorb(part)
+            // 大脑把关过（记成“收过”）的才往前挪；外脑认领的也算收过；模型没接上时不挪，下次再收
             val known = seen().toSet()
-            val ok = inbox.all { it.id in known }
+            val ok = inbox.all { it.id in known || it.id in routed }
             val last = (got["last"] as? JsonPrimitive)?.longOrNull ?: after
             if (inbox.isEmpty() || ok) store.setRelayAfter(last)
             val t = Instant.ofEpochMilli(now).atZone(BEIJING)
             val status = "%02d:%02d ".format(t.hour, t.minute) + buildString {
                 append(if (pushed) "黑板推上去了" else "黑板没变")
-                append(if (inbox.isEmpty()) "，没有新回答" else "，收了 ${inbox.size} 条")
+                append(if (inbox.isEmpty()) "，没有新回答" else "，收了 ${inbox.size} 条" + if (routed.isNotEmpty()) "（外脑 ${routed.size} 条）" else "")
                 results.flatMap { it.answered }.takeIf { it.isNotEmpty() }?.let { append("，回答了 ${it.joinToString("、")}") }
                 if (inbox.isNotEmpty() && !ok) append("（模型没接上，下次再收）")
             }

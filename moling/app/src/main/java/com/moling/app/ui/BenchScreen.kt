@@ -396,6 +396,8 @@ private fun BenchFocus(
         }
         // 第十一批 R2：只听电台（只念已有材料 / 稿子，不联网）
         RadioPanel(ws, focus)
+        // 第十二批：这件事的外脑会话 / 收线 / 发到外脑
+        OutbrainCard(focusId = focus.id, allowSend = true)
         if (running.isNotEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 com.moling.app.ui.art.InkThinking("她在做：" + running.first().kind.label)

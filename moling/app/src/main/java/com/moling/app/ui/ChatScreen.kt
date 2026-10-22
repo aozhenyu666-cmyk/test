@@ -318,6 +318,8 @@ fun ChatScreen() {
         // 第十一批 R2：对话页也能“陪我听一会”（只读案板已有材料）
         // 打字时只是藏起来，不卸载：卸载会触发“离开面板就停”，点一下输入框电台就断了
         Box(if (typing) Modifier.height(0.dp).clipToBounds() else Modifier) { RadioPanel(benchState, benchState.active()) }
+        // 第十二批：外脑会话（进场 / 等结果 / 收线）；没有会话时不占地方。
+        if (!typing) Box(Modifier.padding(horizontal = 12.dp)) { OutbrainCard() }
 
         if (state.talk.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
