@@ -42,66 +42,64 @@ class PlanDriverTest {
         val driver = PlanDriver(initial, { p }, { saves += it })
     }
 
-    @Test fun draftIsNotAdoptedWhenSwitchIsOff() {
-        val h = Harness(AdoptPolicy(enabled = false))
+    @Test fun reminderCanBeTurnedOffAndNeverAdopts() {
+        val h = Harness(AdoptPolicy(remind = false))
         val p = plan()
         h.driver.putDraft(p, at(9))
-        repeat(30) { h.driver.tick(at(9, 1 + it), visible = true) }
+        repeat(30) { h.driver.tick(at(9, 1 + it)) }
         val a = h.driver.adoption(day)!!
-        assertEquals(AdoptionState.DRAFT, a.state)
-        assertTrue("可见时间照常累计", a.visibleMs > 0)
+        assertEquals("看多久都不会自己采用", AdoptionState.DRAFT, a.state)
+        assertEquals("关掉提醒就不提醒", 0L, a.remindedAt)
         assertFalse(p.confirmed)
         assertEquals(0, h.driver.snapshot().operations.size)
     }
 
-    @Test fun autoAdoptAfterTwentyVisibleMinutesButNeverExecutes() {
-        val h = Harness(AdoptPolicy(enabled = true))
+    @Test fun reminderAtTwentyMinutesNeverAdopts() {
+        val h = Harness(AdoptPolicy(remind = true))
         val p = plan()
         h.driver.putDraft(p, at(9))
-        h.driver.tick(at(9), visible = true)
-        repeat(19) { h.driver.tick(at(9, 1 + it), visible = true) }
+        h.driver.tick(at(9))
+        repeat(19) { h.driver.tick(at(9, 1 + it)) }
         assertEquals("19 分钟还不够", AdoptionState.DRAFT, h.driver.adoption(day)!!.state)
-        h.driver.tick(at(9, 20), visible = true)
+        assertEquals(0L, h.driver.adoption(day)!!.remindedAt)
+        h.driver.tick(at(9, 20))
         val a = h.driver.adoption(day)!!
-        assertEquals(AdoptionState.LOCAL_ADOPTED, a.state)
-        assertTrue(a.message.contains("本地采用"))
-        assertFalse("本地采用不改旧 confirmed", p.confirmed)
+        assertEquals("到点只提醒，不自动采用", AdoptionState.DRAFT, a.state)
+        assertEquals("到点发了提醒", at(9, 20), a.remindedAt)
+        assertTrue(a.message.contains("一键采用"))
+        assertFalse("不改旧 confirmed", p.confirmed)
         assertEquals("没有自动准备/发送任何指令", 0, h.driver.snapshot().operations.size)
         assertEquals(0, h.driver.sentCount())
+        h.driver.tick(at(9, 21))
+        assertEquals("提醒只发一次", at(9, 20), h.driver.adoption(day)!!.remindedAt)
     }
 
-    @Test fun lockScreenPausesTheCountdown() {
-        val h = Harness(AdoptPolicy(enabled = true))
-        h.driver.putDraft(plan(), at(9))
-        h.driver.tick(at(9), visible = true)
-        repeat(9) { h.driver.tick(at(9, 1 + it), visible = true) } // 9:01..9:09，约 9 分钟
-        repeat(20) { h.driver.tick(at(9, 10 + it), visible = false) } // 锁屏/离开 9:10..9:29
-        val paused = h.driver.adoption(day)!!
-        assertTrue("锁屏期间不累计", paused.visibleMs <= 9 * 60_000L + 1)
-        assertEquals(AdoptionState.DRAFT, h.driver.adoption(day)!!.state)
-        repeat(10) { h.driver.tick(at(9, 30 + it), visible = true) } // 再看到 9:39，总可见约 18 分钟
-        assertEquals(AdoptionState.DRAFT, h.driver.adoption(day)!!.state)
-        h.driver.tick(at(9, 40), visible = true)
-        assertEquals(AdoptionState.LOCAL_ADOPTED, h.driver.adoption(day)!!.state)
+    @Test fun confirmedPlanIsNotReminded() {
+        val h = Harness(AdoptPolicy(remind = true))
+        h.driver.putDraft(plan(confirmed = true), at(9))
+        h.driver.tick(at(9, 30))
+        val a = h.driver.adoption(day)!!
+        assertEquals(AdoptionState.DRAFT, a.state)
+        assertEquals(0L, a.remindedAt)
     }
 
-    @Test fun restartDoesNotAdoptAnUnseenDraft() {
-        val h = Harness(AdoptPolicy(enabled = true))
+    @Test fun restartDoesNotAdoptOrRemindYesterdayDraft() {
+        val h = Harness(AdoptPolicy(remind = true))
         h.driver.putDraft(plan(), at(23))
-        h.driver.tick(at(23), visible = true)
-        repeat(3) { h.driver.tick(at(23, 1 + it), visible = true) }
+        h.driver.tick(at(23))
+        repeat(3) { h.driver.tick(at(23, 1 + it)) }
         val json = Json.encodeToString(h.driver.snapshot())
         val restored = Json.decodeFromString<PlanDriverState>(json)
         // 第二天中午才重启：昨天的草稿不自动采用，也没有今天的草稿。
-        val again = Harness(AdoptPolicy(enabled = true), restored)
-        again.driver.tick(at(12, d = 23), visible = true)
+        val again = Harness(AdoptPolicy(remind = true), restored)
+        again.driver.tick(at(12, d = 23))
         assertNull(again.driver.adoption("2026-10-23"))
         assertEquals(AdoptionState.EXPIRED, again.driver.snapshot().adoption!!.state)
         assertTrue(again.driver.snapshot().operations.isEmpty())
     }
 
     @Test fun rewrittenPlanResetsCountdownAndCancelsUnsentCommands() {
-        val h = Harness(AdoptPolicy(enabled = true))
+        val h = Harness(AdoptPolicy(remind = true))
         val p = plan()
         h.driver.putDraft(p, at(9))
         assertTrue(h.driver.adopt(p, at(9, 1)).ok)
@@ -118,7 +116,6 @@ class PlanDriverTest {
         val state = h.driver.snapshot()
         assertEquals(2, state.drafts.single().revision)
         assertEquals(AdoptionState.DRAFT, state.adoption!!.state)
-        assertEquals(0, state.adoption!!.visibleMs)
         assertEquals("已经发出的保持回执", OperationState.ZK_PENDING, h.driver.operation(first.operationId)!!.state)
         val canceled = prepared.operations[1]
         assertEquals("没发的取消", OperationState.CANCELLED, h.driver.operation(canceled.operationId)!!.state)
@@ -127,7 +124,7 @@ class PlanDriverTest {
     }
 
     @Test fun changingFocusRequiresRecheck() {
-        val h = Harness(AdoptPolicy(enabled = true))
+        val h = Harness(AdoptPolicy(remind = true))
         val p = plan()
         h.driver.putDraft(p, at(9), focusKey = "focus-a")
         val bad = h.driver.adopt(p, at(9, 1), focusKey = "focus-b")
@@ -139,7 +136,7 @@ class PlanDriverTest {
     }
 
     @Test fun changedPlanCannotBeAdoptedWithStaleHash() {
-        val h = Harness(AdoptPolicy(enabled = true))
+        val h = Harness(AdoptPolicy(remind = true))
         val p = plan()
         h.driver.putDraft(p, at(9))
         val edited = p.copy(intent = "临时改的")
@@ -150,7 +147,7 @@ class PlanDriverTest {
     }
 
     @Test fun tooOldDraftIsNotAdopted() {
-        val h = Harness(AdoptPolicy(enabled = true, maxDraftAgeMs = 60 * 60_000L))
+        val h = Harness(AdoptPolicy(remind = true, maxDraftAgeMs = 60 * 60_000L))
         val p = plan()
         h.driver.putDraft(p, at(8))
         val r = h.driver.adopt(p, at(10))
@@ -159,7 +156,7 @@ class PlanDriverTest {
     }
 
     @Test fun operationsAreIdempotent() {
-        val h = Harness(AdoptPolicy(enabled = true))
+        val h = Harness(AdoptPolicy(remind = true))
         val p = plan()
         h.driver.putDraft(p, at(9))
         h.driver.adopt(p, at(9, 1))
@@ -186,7 +183,7 @@ class PlanDriverTest {
     }
 
     @Test fun unknownIsNotResent() {
-        val h = Harness(AdoptPolicy(enabled = true))
+        val h = Harness(AdoptPolicy(remind = true))
         val p = plan()
         h.driver.putDraft(p, at(9))
         h.driver.adopt(p, at(9, 1))
@@ -205,7 +202,7 @@ class PlanDriverTest {
     }
 
     @Test fun cancelExplainsUnsentAndSent() {
-        val h = Harness(AdoptPolicy(enabled = true))
+        val h = Harness(AdoptPolicy(remind = true))
         val p = plan()
         h.driver.putDraft(p, at(9))
         h.driver.adopt(p, at(9, 1))
@@ -229,7 +226,7 @@ class PlanDriverTest {
     }
 
     @Test fun prepareRequiresLocalAdoptionAndCurrentPlan() {
-        val h = Harness(AdoptPolicy(enabled = true))
+        val h = Harness(AdoptPolicy(remind = true))
         val p = plan()
         h.driver.putDraft(p, at(9))
         val early = h.driver.prepareExecution(p, listOf(ZkCommand.Note("x", "计划")), at(9, 1))
@@ -244,7 +241,7 @@ class PlanDriverTest {
     }
 
     @Test fun stateSerializesWithCommandsAndReceipts() {
-        val h = Harness(AdoptPolicy(enabled = true))
+        val h = Harness(AdoptPolicy(remind = true))
         val p = plan()
         h.driver.putDraft(p, at(9))
         h.driver.adopt(p, at(9, 1))
@@ -263,7 +260,7 @@ class PlanDriverTest {
     }
 
     @Test fun duplicateDraftDoesNotBumpRevision() {
-        val h = Harness(AdoptPolicy(enabled = true))
+        val h = Harness(AdoptPolicy(remind = true))
         val p = plan()
         h.driver.putDraft(p, at(9))
         h.driver.putDraft(p, at(9, 5))
@@ -272,7 +269,7 @@ class PlanDriverTest {
     }
 
     @Test fun noDraftMeansNoAdoption() {
-        val h = Harness(AdoptPolicy(enabled = true))
+        val h = Harness(AdoptPolicy(remind = true))
         val r = h.driver.adopt(plan(), at(9))
         assertFalse(r.ok)
         assertEquals(ConflictKind.NO_DRAFT, r.conflicts.single().kind)

@@ -440,15 +440,19 @@ fun TodayScreen(onReady: () -> Unit = {}) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    val waitMin = (BrainHost.planPolicy().waitVisibleMs / 60_000L).toInt()
+                    val waitMin = (BrainHost.planPolicy().remindAfterMs / 60_000L).toInt()
                     when (adoption?.state) {
                         com.moling.core.flow.AdoptionState.DRAFT -> {
                             val left = (adoption?.eligibilityAt ?: 0L) - now
+                            val reminded = (adoption?.remindedAt ?: 0L) > 0
                             Text(
-                                if (left > 0) "计划实际可见满 " + waitMin + " 分钟会自动本地采用；现在还要看 " + ((left / 60_000L) + 1) + " 分钟（锁屏/离开暂停）。"
-                                else "还没采纳。点「采纳」只影响今天页和提醒，不会自动执行。",
+                                when {
+                                    reminded -> "到点了：点「一键采用」才用这份计划（只影响今天页/提醒，不会自动执行）。"
+                                    left > 0 -> "还没采纳。约 " + ((left / 60_000L) + 1) + " 分钟后提醒你一键采用（到点不会自己用）。"
+                                    else -> "还没采纳。点「采纳」只影响今天页和提醒，不会自动执行。"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = if (reminded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                         com.moling.core.flow.AdoptionState.LOCAL_ADOPTED -> Text(
@@ -481,7 +485,15 @@ fun TodayScreen(onReady: () -> Unit = {}) {
                                 }
                             },
                             enabled = todayDraft != null && !busy && adoption?.state != com.moling.core.flow.AdoptionState.LOCAL_ADOPTED,
-                        ) { Text(if (adoption?.state == com.moling.core.flow.AdoptionState.LOCAL_ADOPTED) "已本地采用" else "采纳") }
+                        ) {
+                            Text(
+                                when {
+                                    adoption?.state == com.moling.core.flow.AdoptionState.LOCAL_ADOPTED -> "已本地采用"
+                                    adoption?.state == com.moling.core.flow.AdoptionState.DRAFT && (adoption?.remindedAt ?: 0L) > 0 -> "一键采用"
+                                    else -> "采纳"
+                                },
+                            )
+                        }
                         OutlinedButton(
                             onClick = {
                                 todayScope.launch {

@@ -30,6 +30,7 @@ import com.moling.core.live.LiveConfig
 import com.moling.core.live.Mood
 import com.moling.core.live.Activity as LiveActivity
 import com.moling.core.flow.AdoptPolicy
+import com.moling.core.flow.AdoptionState
 import com.moling.core.flow.Flow
 import com.moling.core.flow.FlowPlan
 import com.moling.core.flow.PlanDriver
@@ -314,14 +315,14 @@ object BrainHost {
         planDriver.cancel(now, "你在今天页取消了计划代驾")
     }
 
-    /** 重新开始可见时间倒计时（改稿/换焦点时）。 */
+    /** 重新开始提醒倒计时（改稿/换焦点时）。 */
     suspend fun resetPlanCountdown(now: Long): PlanResult = planIo({ PlanResult(false, "刚才没接上，等会儿再试") }) {
         planDriver.resetCountdown(now)
     }
 
-    /** 心跳每分钟喂一次：只有 [visible]（App 在前台、亮屏）才累计可见时间。不自动发指令。 */
-    suspend fun tickPlan(now: Long, visible: Boolean): PlanDriverState = planIo({ _plan.value }) {
-        planDriver.tick(now, visible)
+    /** 心跳每分钟喂一次：到点只发「一键采用」提醒，不自动采用、不发指令。 */
+    suspend fun tickPlan(now: Long): PlanDriverState = planIo({ _plan.value }) {
+        planDriver.tick(now)
         planDriver.snapshot()
     }
 
@@ -345,9 +346,9 @@ object BrainHost {
     }
 
     private fun adoptPolicy(): AdoptPolicy {
-        val on = runCatching { settings.planAdoptionOn() }.getOrDefault(false)
-        val waitMin = runCatching { settings.planAdoptionWaitMin() }.getOrDefault(20)
-        return AdoptPolicy(enabled = on, localAdoption = on, waitVisibleMs = waitMin * 60_000L)
+        val on = runCatching { settings.planRemindOn() }.getOrDefault(true)
+        val waitMin = runCatching { settings.planRemindMin() }.getOrDefault(20)
+        return AdoptPolicy(remind = on, remindAfterMs = waitMin * 60_000L)
     }
 
     /** App 在前台时每 60 秒一次（打开 App 也调一次）。 */
@@ -357,8 +358,20 @@ object BrainHost {
         val out = io("tick", { emptyList<Notice>() }) { brain.tick(now, category, guard) }
         _notices.value = (out + _notices.value).distinctBy { it.at to it.text }.take(3)
         if (out.isNotEmpty()) runCatching { postNotices(now, out) }
-        // 计划代驾：只累计“计划实际可见”的时间，不自动发任何指令。
-        runCatching { tickPlan(now, interactive()) }
+        // 计划代驾：到点只发一条「一键采用」提醒（通知 + 今天页按钮），不自动采用、不发指令。
+        val planTicked = runCatching { tickPlan(now) }.getOrNull()
+        val reminder = planTicked?.adoption?.takeIf {
+            it.state == AdoptionState.DRAFT && it.remindedAt == now
+        }
+        if (reminder != null) {
+            val n = Notice(
+                kind = "plan_adopt",
+                text = reminder.message.ifBlank { "到点了，点一下用今天的计划（不会自动执行）" },
+                at = now,
+            )
+            _notices.value = (listOf(n) + _notices.value).distinctBy { it.at to it.text }.take(3)
+            runCatching { postNotices(now, listOf(n)) }
+        }
         runCatching { withContext(Dispatchers.IO) { autoSchedule(now) } }
         runCatching { liveTick(now) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "活的墨灵失败", it) }
         if (interactive()) runCatching { refreshUsage() }

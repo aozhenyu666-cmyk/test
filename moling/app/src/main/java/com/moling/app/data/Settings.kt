@@ -215,17 +215,20 @@ class SettingsStore(context: Context) {
         toggles.edit().putBoolean(KEY_AUTO_PLAN, on).apply()
     }
 
-    /** 本地保底计划代驾：默认关；开了也只做“本地采用”，不自动交给总控。 */
-    fun planAdoptionOn(): Boolean = toggles.getBoolean(KEY_PLAN_ADOPTION, false)
+    /**
+     * 到点提醒「一键采用」：默认开。提醒只发一条通知，绝不自动采用（F13-1）；
+     * 采用仍然只能由他点出来。
+     */
+    fun planRemindOn(): Boolean = toggles.getBoolean(KEY_PLAN_ADOPTION, true)
 
-    fun setPlanAdoptionOn(on: Boolean) {
+    fun setPlanRemindOn(on: Boolean) {
         toggles.edit().putBoolean(KEY_PLAN_ADOPTION, on).apply()
     }
 
-    /** 计划实际可见多久才自动本地采用：默认 20 分钟（只允许 5–60）。 */
-    fun planAdoptionWaitMin(): Int = toggles.getInt(KEY_PLAN_ADOPTION_WAIT, 20).coerceIn(5, 60)
+    /** 草稿登记后多久提醒：默认 20 分钟（只允许 5–60）。 */
+    fun planRemindMin(): Int = toggles.getInt(KEY_PLAN_ADOPTION_WAIT, 20).coerceIn(5, 60)
 
-    fun setPlanAdoptionWaitMin(min: Int) {
+    fun setPlanRemindMin(min: Int) {
         toggles.edit().putInt(KEY_PLAN_ADOPTION_WAIT, min.coerceIn(5, 60)).apply()
     }
 

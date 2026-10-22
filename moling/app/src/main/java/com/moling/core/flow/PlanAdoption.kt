@@ -63,17 +63,19 @@ data class PlanAdoption(
     /** 采纳状态自身的版本：每次改动/取消/重来 +1，和 planRevision 分开。 */
     val adoptionRevision: Long = 1,
     val state: AdoptionState = AdoptionState.DRAFT,
-    /** 这一轮“计划实际可见”的累计毫秒（锁屏/离开 App 暂停）。 */
+    /** 旧字段，只为读回旧文件保留；F13-1 起不再累计“可见时间”。 */
     val visibleMs: Long = 0,
     val visibleSince: Long = 0,
     val lastTickAt: Long = 0,
     val adoptedAt: Long = 0,
-    /** 按当前可见进度，什么时候够条件（0 = 已够或没在计时）。 */
+    /** 下一次“一键采用”提醒的时间（0 = 不提醒）。 */
     val eligibilityAt: Long = 0,
     val createdAt: Long = 0,
     val commandIds: List<String> = emptyList(),
     val lastReceiptId: String = "",
     val message: String = "",
+    /** 这条草稿的「一键采用」提醒已经发出的时间；0 = 还没提醒。 */
+    val remindedAt: Long = 0,
 )
 
 @Serializable
@@ -119,17 +121,17 @@ data class PlanDriverState(
     val lastTickAt: Long = 0,
 )
 
-/** 本地保底代驾的设置。默认关闭；开启后也只做“本地采用”，不会自动执行现实动作。 */
+/**
+ * 计划代驾的设置。到点只发一条「一键采用」提醒，**绝不自动采用**；
+ * 本地采用只能由他点出来（第十四批 F13-1）。
+ */
 @Serializable
 data class AdoptPolicy(
-    val enabled: Boolean = false,
-    /** 开启后允许“没改过的草稿到点自动本地采用”。 */
-    val localAdoption: Boolean = true,
-    /** 默认 20 分钟，按计划实际可见的时间累计。 */
-    val waitVisibleMs: Long = 20 * 60_000L,
-    /** 两次 tick 间隔最多按这么久算（手机睡着/进程被杀不会一口气攒满）。 */
-    val maxTickGapMs: Long = 90_000L,
-    /** 草稿放太久就不自动采用（避免隔夜草稿突然生效）。 */
+    /** 到点要不要提醒。提醒本身不改任何状态。 */
+    val remind: Boolean = true,
+    /** 草稿登记后多久提醒一次，按墙钟算（不看屏幕亮不亮）。默认 20 分钟。 */
+    val remindAfterMs: Long = 20 * 60_000L,
+    /** 草稿放太久就不再提醒（避免隔夜草稿突然生效）。 */
     val maxDraftAgeMs: Long = 12 * 60 * 60_000L,
     /** 准备发出的动作多久没发就过期（不发）。 */
     val operationTtlMs: Long = 10 * 60_000L,
@@ -138,7 +140,7 @@ data class AdoptPolicy(
 )
 
 @Serializable
-enum class ConflictKind { NO_DRAFT, STALE_DAY, PLAN_CHANGED, DRAFT_TOO_OLD, FOCUS_CHANGED, ALREADY_EXECUTING, POLICY_DISABLED, NOT_VISIBLE_ENOUGH, INVALID_PLAN }
+enum class ConflictKind { NO_DRAFT, STALE_DAY, PLAN_CHANGED, DRAFT_TOO_OLD, FOCUS_CHANGED, ALREADY_EXECUTING, INVALID_PLAN }
 
 @Serializable
 data class PlanConflict(val kind: ConflictKind, val message: String)
@@ -305,10 +307,10 @@ class PlanDriver(
     // ------------------------------------------------------------------ 本地采用
 
     /**
-     * 计划每分钟走一次。只有 [visible] = App 在前台、屏幕亮着时才累计可见时间；
-     * 到条件且用户开了“保底代驾”才自动本地采用，绝不发任何指令。
+     * 计划每分钟走一次。**只发「一键采用」提醒，从不自动采用**（第十四批 F13-1）。
+     * 倒计时按草稿登记后的墙钟走，不再看屏幕亮不亮 / App 在不在前台。
      */
-    fun tick(now: Long, visible: Boolean): PlanDriverState {
+    fun tick(now: Long): PlanDriverState {
         val today = dayOf(now)
         val drafts = state.drafts
         var adopt = state.adoption
@@ -322,33 +324,29 @@ class PlanDriver(
         if (draft != null && adopt != null && adopt.planId == draft.planId) {
             adopt = when (adopt.state) {
                 AdoptionState.DRAFT -> {
-                    val gap = if (adopt.lastTickAt in 1 until now) (now - adopt.lastTickAt).coerceIn(0, policy().maxTickGapMs) else 0
-                    val add = if (visible) gap else 0
-                    val seen = adopt.visibleMs + add
-                    val since = if (visible) adopt.visibleSince.takeIf { it > 0 } ?: now else adopt.visibleSince
-                    val remaining = (policy().waitVisibleMs - seen).coerceAtLeast(0)
-                    val due = if (remaining > 0) now + remaining else 0
                     val p = policy()
-                    val eligible = p.enabled && p.localAdoption && remaining == 0L &&
-                        !draft.confirmed && now - draft.createdAt <= p.maxDraftAgeMs &&
+                    val dueAt = draft.createdAt + p.remindAfterMs
+                    val canRemind = p.remind && !draft.confirmed &&
+                        now - draft.createdAt <= p.maxDraftAgeMs &&
                         adoptionConflicts(draft, adopt, now, today).isEmpty()
-                    if (eligible) {
-                        adopt.copy(
-                            state = AdoptionState.LOCAL_ADOPTED,
-                            visibleMs = seen,
-                            visibleSince = since,
-                            lastTickAt = now,
-                            adoptedAt = now,
-                            eligibilityAt = 0,
-                            message = "没改过，已本地采用（只影响今天页/提醒，未交给总控）",
-                        )
+                    if (canRemind && now >= dueAt) {
+                        if (adopt.remindedAt == 0L) {
+                            adopt.copy(
+                                eligibilityAt = 0,
+                                lastTickAt = now,
+                                remindedAt = now,
+                                message = "到点了：点「一键采用」才用这份计划（只影响今天页/提醒，没交给总控）",
+                            )
+                        } else {
+                            adopt.copy(eligibilityAt = 0, lastTickAt = now)
+                        }
                     } else {
-                        adopt.copy(visibleMs = seen, visibleSince = since, lastTickAt = now, eligibilityAt = due)
+                        adopt.copy(lastTickAt = now, eligibilityAt = if (canRemind) dueAt else 0)
                     }
                 }
                 AdoptionState.LOCAL_ADOPTED, AdoptionState.EXECUTION_REQUESTED, AdoptionState.ZK_PENDING ->
                     adopt.copy(lastTickAt = now, eligibilityAt = 0)
-                else -> adopt
+                else -> adopt.copy(lastTickAt = now, eligibilityAt = 0)
             }
         }
         val ops = expireOperations(state.operations, now)
@@ -357,10 +355,10 @@ class PlanDriver(
     }
 
     /**
-     * 用户点「采纳」；[byUser] = true 时不用等满可见时间（他本人在看）。
+     * 用户点「采纳」（含到点提醒后的「一键采用」）。这是本地采用**唯一**的入口：
      * 只把状态改成 LOCAL_ADOPTED，不发指令、不改 FlowPlan.confirmed。
      */
-    fun adopt(plan: FlowPlan?, now: Long, byUser: Boolean = true, focusKey: String = ""): PlanResult {
+    fun adopt(plan: FlowPlan?, now: Long, focusKey: String = ""): PlanResult {
         val today = dayOf(now)
         val draft = draft(today) ?: return PlanResult.fail("今天还没有草稿，先排一条", PlanConflict(ConflictKind.NO_DRAFT, "没有今天的草稿"))
         val conflicts = planConflicts(plan, draft, now, today, focusKey)
@@ -369,13 +367,6 @@ class PlanDriver(
         if (adopt.state in setOf(AdoptionState.EXECUTION_REQUESTED, AdoptionState.ZK_PENDING, AdoptionState.ACTIVE)) {
             return PlanResult(false, "已经交给总控了，本地采纳不能再改它", listOf(PlanConflict(ConflictKind.ALREADY_EXECUTING, "已经在执行/等回执")))
         }
-        if (!byUser) {
-            val p = policy()
-            if (!p.enabled || !p.localAdoption) return PlanResult.fail("保底代驾没开，不自动采用", PlanConflict(ConflictKind.POLICY_DISABLED, "保底代驾没开"))
-            if (adopt.visibleMs < p.waitVisibleMs) {
-                return PlanResult.fail("还没看够时间，不自动采用", PlanConflict(ConflictKind.NOT_VISIBLE_ENOUGH, "可见时间不够"))
-            }
-        }
         val next = adopt.copy(
             planRevision = draft.revision,
             adoptionRevision = adopt.adoptionRevision + 1,
@@ -383,7 +374,7 @@ class PlanDriver(
             adoptedAt = now,
             lastTickAt = now,
             eligibilityAt = 0,
-            message = if (byUser) "你采纳了这份计划：只在本地用，没有交给总控" else "没改过，已本地采用（未交给总控）",
+            message = "你采纳了这份计划：只在本地用，没有交给总控",
         )
         commit(state.copy(adoption = next, seq = state.seq + 1))
         return PlanResult.ok(next.message)
@@ -600,7 +591,7 @@ class PlanDriver(
         state = AdoptionState.DRAFT,
         createdAt = now,
         lastTickAt = now,
-        message = "草稿放这儿；到点或你点采纳才用",
+        message = "草稿放这儿；到点提醒你一键采用，你点了才算",
     )
 
     private fun planConflicts(plan: FlowPlan?, draft: PlanDraft, now: Long, today: String, focusKey: String = ""): List<PlanConflict> {

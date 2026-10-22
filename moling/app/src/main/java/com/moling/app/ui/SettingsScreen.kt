@@ -97,8 +97,8 @@ fun SettingsScreen(onDone: () -> Unit) {
     var section by remember { mutableStateOf<String?>(null) }
     var backgroundOn by remember { mutableStateOf(store.backgroundHeart()) }
     var autoPlanOn by remember { mutableStateOf(store.autoPlan()) }
-    var planAdoptOn by remember { mutableStateOf(store.planAdoptionOn()) }
-    var planWaitMin by remember { mutableStateOf(store.planAdoptionWaitMin()) }
+    var planRemindOn by remember { mutableStateOf(store.planRemindOn()) }
+    var planRemindMin by remember { mutableStateOf(store.planRemindMin()) }
     var liveOn by remember { mutableStateOf(store.liveOn()) }
     var gateOn by remember { mutableStateOf(store.gateOn()) }
     var whisperOn by remember { mutableStateOf(store.whisperOn()) }
@@ -389,35 +389,35 @@ fun SettingsScreen(onDone: () -> Unit) {
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("保底计划可以在我没改时本地采用")
+                    Text("到点提醒我一键采用计划")
                     Text(
-                        "到点只让今天页/提醒使用这份计划；不自动交给总控、不执行现实动作。默认关。",
+                        "到点只发一条提醒（通知 + 今天页按钮）；你点了才算采用，不会自动采用、不会交给总控。默认开。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Switch(
-                    checked = planAdoptOn,
+                    checked = planRemindOn,
                     onCheckedChange = { on ->
-                        planAdoptOn = on
-                        store.setPlanAdoptionOn(on)
+                        planRemindOn = on
+                        store.setPlanRemindOn(on)
                     },
                 )
             }
-            if (planAdoptOn) {
+            if (planRemindOn) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "计划实际可见多久才采用（锁屏/离开暂停）",
+                        "排好草稿后多久提醒",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
                     listOf(10, 20, 30).forEach { m ->
                         TextButton(onClick = {
-                            planWaitMin = m
-                            store.setPlanAdoptionWaitMin(m)
+                            planRemindMin = m
+                            store.setPlanRemindMin(m)
                         }) {
-                            Text(if (m == planWaitMin) "✓ " + m + " 分" else "" + m + " 分")
+                            Text(if (m == planRemindMin) "✓ " + m + " 分" else "" + m + " 分")
                         }
                     }
                 }
