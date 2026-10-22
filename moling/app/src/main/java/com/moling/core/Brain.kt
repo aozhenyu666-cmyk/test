@@ -1473,7 +1473,7 @@ class Brain(
         }
         mark(MindAct.TAP, now)
         // 明确停止（R3）：“先不聊了 / 别管我”直接进安静期，不再调模型、不再换一种方式继续。
-        if (choice == Live.EXIT) {
+        if (choice == Live.EXIT || choice == "别管我") {
             st = st.copy(
                 habits = Habits.explicitStop(st.habits, now),
                 gate = null,

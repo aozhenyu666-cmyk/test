@@ -5,6 +5,7 @@ import com.moling.core.link.ZkCommand
 import com.moling.core.link.ZkReceipt
 import com.moling.core.link.ZkStatus
 import com.moling.core.live.Activity
+import com.moling.core.live.Habits
 import com.moling.core.live.Live
 import com.moling.core.live.Trigger
 import com.moling.core.mind.Ask
@@ -106,6 +107,15 @@ class FogTest {
         assertTrue("点退出第一下就放", r.release)
         assertTrue(r.choices.isEmpty())
         assertNull(b.state().gate)
+    }
+
+    @Test fun dontCareMeAlsoEntersQuietPeriod() = runTest {
+        val b = brain(null)
+        b.live(Trigger.AUTOPILOT, douyin, at(15), roll = 0.9)
+        val r = b.tap("别管我", at(15, 1))
+        assertTrue("“别管我”和“先不聊了”一样进安静期", Habits.isQuiet(b.state().habits, at(15, 2)))
+        assertNull("不再拦着", b.state().gate)
+        assertTrue("不再给选项", r.choices.isEmpty())
     }
 
     @Test fun threeTapsBringHimOut() = runTest {
