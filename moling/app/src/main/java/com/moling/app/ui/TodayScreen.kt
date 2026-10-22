@@ -52,6 +52,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Surface
 import com.moling.app.BrainHost
+import com.moling.core.link.describe
 import com.moling.app.ui.art.InkBubbles
 import com.moling.app.ui.art.InkClouds
 import com.moling.app.ui.art.InkFlame
@@ -373,6 +374,8 @@ fun TodayScreen(onReady: () -> Unit = {}) {
                     Text(ladder.rung.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
             }
+            // 以思代锁（第十五批 A3）：总控开了训练兑换才出现；娱乐分钟变了就重新问一次
+            TrainingLine(refreshKey = z.playMinutesToday)
         }
 
         if (flow == null) {
@@ -506,6 +509,33 @@ fun TodayScreen(onReady: () -> Unit = {}) {
                                 com.moling.core.flow.AdoptionState.LOCAL_ADOPTED,
                             ),
                         ) { Text("不采纳") }
+                    }
+                    // G2：已经本地采用 → 他点了才按授权书交给总控；账本里每条的状态照总控回执写
+                    if (adoption?.state == com.moling.core.flow.AdoptionState.LOCAL_ADOPTED) {
+                        OutlinedButton(onClick = {
+                            todayScope.launch {
+                                val msg = runCatching { BrainHost.executePlan(System.currentTimeMillis()) }.getOrDefault("刚才没接上")
+                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                            }
+                        }) { Text("交给总控（按授权书）") }
+                    }
+                    // G5：“本地已采用”和“总控已确认”分两行写，别让人以为采用了就执行了
+                    if (adoption != null) {
+                        val split = com.moling.core.flow.PlanChain.split(adoption, planState.operations)
+                        Text(split.local, style = MaterialTheme.typography.bodySmall)
+                        Text(split.zongkong, style = MaterialTheme.typography.bodySmall)
+                    }
+                    val ops = planState.operations.filter { it.planId == todayDraft?.planId }.takeLast(6)
+                    if (ops.isNotEmpty()) {
+                        Text("交给总控的：", style = MaterialTheme.typography.labelMedium)
+                        ops.forEach { op ->
+                            Text(
+                                "· " + op.command.describe().substringBefore("。原因").take(28) + " — " + op.state.label +
+                                    if (op.message.isNotBlank()) "（" + op.message.take(24) + "）" else "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }

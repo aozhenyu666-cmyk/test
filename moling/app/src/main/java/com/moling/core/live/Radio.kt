@@ -276,11 +276,11 @@ class RadioEngine {
         return PortResult.Ok(current!!)
     }
 
-    fun stop(sessionId: String, now: Long): PortResult<RadioSession> {
+    fun stop(sessionId: String, now: Long, reason: String = "他点停止"): PortResult<RadioSession> {
         val s = current
         if (s == null || s.id != sessionId) return PortResult.Failed(PortError("NOT_FOUND", "这个电台已经不在了"))
         if (!s.active) return PortResult.Ok(s)
-        current = Radio.stopped(s, now)
+        current = Radio.stopped(s, now, reason)
         return PortResult.Ok(current!!)
     }
 

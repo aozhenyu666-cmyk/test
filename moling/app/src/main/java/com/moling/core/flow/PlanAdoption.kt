@@ -2,6 +2,7 @@ package com.moling.core.flow
 
 import com.moling.core.link.ZkCommand
 import com.moling.core.link.ZkWire
+import com.moling.core.link.describe
 import com.moling.core.mind.BEIJING
 import kotlinx.serialization.Serializable
 import java.security.MessageDigest
@@ -173,6 +174,70 @@ data class ExecutionPreparation(
     val operations: List<PlanOperation> = emptyList(),
     val conflicts: List<PlanConflict> = emptyList(),
 )
+
+/** 总控那边的指令状态 → 账本的最终状态（G2）。倒计时中（SCHEDULED）还不算执行。 */
+/**
+ * 计划 → 动作 → 回执怎么给人看（W13 G5）：今天页把“本地已采用”和“总控已确认”分两栏写；
+ * 调试页按 planId → operationId → receiptId 一行一条追链。只读，不改账本。
+ */
+object PlanChain {
+    data class Split(val local: String, val zongkong: String)
+
+    private val CONFIRMED = setOf(OperationState.EXECUTED, OperationState.ACTIVE)
+    private val WAITING = setOf(OperationState.SENDING, OperationState.ZK_PENDING)
+    private val NOT_SENT = setOf(OperationState.PREPARED, OperationState.CANCELLED, OperationState.EXPIRED)
+
+    /** [ops] 只取这份计划最近一次采纳（attempt 最大）的那一轮。 */
+    fun split(adoption: PlanAdoption?, ops: List<PlanOperation>): Split {
+        val local = when (adoption?.state) {
+            null -> "本地：还没有计划"
+            AdoptionState.DRAFT -> "本地：草稿，你还没采用"
+            AdoptionState.LOCAL_ADOPTED, AdoptionState.EXECUTION_REQUESTED, AdoptionState.ZK_PENDING, AdoptionState.ACTIVE -> "本地：你已采用"
+            else -> "本地：" + adoption.state.label
+        }
+        val mine = adoption?.let { a -> ops.filter { it.planId == a.planId } }.orEmpty()
+        val round = mine.maxOfOrNull { it.attempt }?.let { r -> mine.filter { it.attempt == r } }.orEmpty()
+        val zk = if (round.isEmpty()) "总控：还没交给总控" else buildList {
+            add("已确认 ${round.count { it.state in CONFIRMED }}")
+            round.count { it.state in WAITING }.takeIf { it > 0 }?.let { add("等确认 $it") }
+            round.count { it.state == OperationState.REJECTED }.takeIf { it > 0 }?.let { add("拒绝 $it") }
+            round.count { it.state == OperationState.UNKNOWN }.takeIf { it > 0 }?.let { add("结果未知 $it（不重发）") }
+            round.count { it.state == OperationState.ZK_EXPIRED }.takeIf { it > 0 }?.let { add("总控那边过期 $it") }
+            round.count { it.state in NOT_SENT }.takeIf { it > 0 }?.let { add("没发 $it") }
+        }.joinToString(" · ", prefix = "总控：", postfix = "（共 ${round.size} 条）")
+        return Split(local, zk)
+    }
+
+    /** 调试页：每份计划一行，下面每条动作一行（编号 → 状态 → 回执）。最新的计划在前。 */
+    fun lines(st: PlanDriverState, keepPlans: Int = 4): List<String> = buildList {
+        val plans = (st.drafts.map { it.planId } + st.operations.map { it.planId } + listOfNotNull(st.adoption?.planId)).distinct().takeLast(keepPlans).asReversed()
+        if (plans.isEmpty()) add("（没有计划）")
+        plans.forEach { pid ->
+            val d = st.drafts.lastOrNull { it.planId == pid }
+            val a = st.adoption?.takeIf { it.planId == pid }
+            add("计划 $pid" + (d?.let { " · ${it.day} · 第 ${it.revision} 版" } ?: "") + " · " + (a?.state?.label ?: "（不是当前采纳）"))
+            val ops = st.operations.filter { it.planId == pid }
+            if (ops.isEmpty()) add("  └ 没有交给总控的动作")
+            ops.forEach { op ->
+                add(
+                    "  └ ${op.operationId} · 第 ${op.attempt} 轮 #${op.index} · " + op.command.describe().substringBefore("。").take(20) +
+                        " → " + op.state.label + " → " + (op.receiptId.ifBlank { "无回执" }) +
+                        if (op.message.isNotBlank()) "（" + op.message.take(24) + "）" else "",
+                )
+            }
+        }
+    }
+}
+
+object PlanReceipts {
+    fun finalOf(zkState: String): String = when (zkState.trim().uppercase()) {
+        "DONE" -> "DONE"
+        "FAILED" -> "FAILED"
+        "DECLINED", "VETOED" -> "DECLINED"
+        "EXPIRED" -> "EXPIRED"
+        else -> "PENDING"
+    }
+}
 
 object PlanContents {
     /** 计划内容的稳定 hash：意图、水道（含时间/状态）、风险。 */

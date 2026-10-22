@@ -259,6 +259,48 @@ class PlanDriverTest {
         assertTrue("他再点才算", h.driver.adopt(changed, at(9, 6)).ok)
     }
 
+    @Test fun zongkongStatesMapToLedgerFinals() {
+        assertEquals("DONE", PlanReceipts.finalOf("DONE"))
+        assertEquals("倒计时中还不算执行", "PENDING", PlanReceipts.finalOf("SCHEDULED"))
+        assertEquals("PENDING", PlanReceipts.finalOf("PENDING"))
+        assertEquals("你在总控取消了", "DECLINED", PlanReceipts.finalOf("VETOED"))
+        assertEquals("DECLINED", PlanReceipts.finalOf("declined"))
+        assertEquals("EXPIRED", PlanReceipts.finalOf("EXPIRED"))
+        assertEquals("FAILED", PlanReceipts.finalOf("FAILED"))
+        // 发过、总控说过期 → 不写“没发”
+        val h = Harness(AdoptPolicy(remind = true))
+        val p = plan()
+        h.driver.putDraft(p, at(9))
+        h.driver.adopt(p, at(9, 1))
+        val op = h.driver.prepareExecution(p, listOf(ZkCommand.Note("x", "计划")), at(9, 2)).operations.single().operationId
+        h.driver.markSending(op, at(9, 3))
+        h.driver.recordReceipt(op, PlanReceipt("r-1", ok = true, auto = true, message = "倒计时"), at(9, 4))
+        h.driver.recordFinal(op, "r-1", PlanReceipts.finalOf("VETOED"), "你取消了", at(9, 5))
+        assertEquals(OperationState.REJECTED, h.driver.operation(op)!!.state)
+    }
+
+    @Test fun chainSplitsLocalAdoptionFromZongkongConfirmation() {
+        val h = Harness(AdoptPolicy(remind = true))
+        val p = plan()
+        h.driver.putDraft(p, at(9))
+        assertEquals("本地：草稿，你还没采用", PlanChain.split(h.driver.adoption(day), h.driver.snapshot().operations).local)
+        h.driver.adopt(p, at(9, 1))
+        var sp = PlanChain.split(h.driver.adoption(day), h.driver.snapshot().operations)
+        assertEquals("本地：你已采用", sp.local)
+        assertEquals("采用了不等于交给总控", "总控：还没交给总控", sp.zongkong)
+        val ops = h.driver.prepareExecution(p, listOf(ZkCommand.Note("a", "计划"), ZkCommand.Note("b", "计划")), at(9, 2)).operations.map { it.operationId }
+        h.driver.markSending(ops[0], at(9, 3))
+        h.driver.recordReceipt(ops[0], PlanReceipt("r-1", ok = true, auto = true, message = "倒计时"), at(9, 4))
+        h.driver.recordFinal(ops[0], "r-1", PlanReceipts.finalOf("DONE"), "", at(9, 5))
+        sp = PlanChain.split(h.driver.adoption(day), h.driver.snapshot().operations)
+        assertTrue(sp.zongkong, sp.zongkong.contains("已确认 1"))
+        assertTrue(sp.zongkong, sp.zongkong.contains("没发 1"))
+        val lines = PlanChain.lines(h.driver.snapshot())
+        assertTrue(lines.first().startsWith("计划 " + h.driver.adoption(day)!!.planId))
+        assertTrue("能追到回执", lines.any { it.contains(ops[0]) && it.contains("r-1") })
+        assertTrue(lines.any { it.contains(ops[1]) && it.contains("无回执") })
+    }
+
     @Test fun rewriteAfterReminderRestartsTheCountdown() {
         val h = Harness(AdoptPolicy(remind = true))
         h.driver.putDraft(plan(), at(9))

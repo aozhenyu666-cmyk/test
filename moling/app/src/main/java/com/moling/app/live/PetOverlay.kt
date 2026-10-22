@@ -674,6 +674,8 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     /** 破雾点选：就是原来“点桌宠打开卡片”，选项由 peek 带走。 */
     private fun onWheelFog() {
         if (petView == null) return
+        // 卡片用的是全局的 nextChoices：先把桌宠手上这批交过去，免得拿到上一轮用过的 / 空的
+        LiveScreens.nextChoices = petChoices
         openPetCard()
     }
 
@@ -712,14 +714,22 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         petTimeoutJob = null
         scope.launch {
             val r = runCatching { BrainHost.radioStart(null) }.getOrNull()
-            if (r is PortResult.Ok) {
+            // 开出来的会话可能立刻就“讲完了”（没有可讲的材料）：只有真在准备 / 在播才算开始了
+            val s = BrainHost.radio.value
+            val playing = r is PortResult.Ok && s != null &&
+                (s.state == com.moling.core.live.RadioState.PLAYING || s.state == com.moling.core.live.RadioState.PREPARING)
+            if (playing) {
                 report(modality, Reaction.REPLIED, System.currentTimeMillis() - petShownAt)
                 removePetWindow()
-                toast("在念了：只念案板里已有的材料，不回你。要停就去案板点「停止」。")
+                toast("在念了：只念案板里已有的材料，不回你。通知栏和案板上都能暂停 / 停止。")
                 maybeStop()
             } else {
                 // 没材料 / 没接上：原地说明白，不装成开始了。
-                petLine = if (r is PortResult.Failed) RadioHost.errorText(r.error) else "刚才没接上电台，再点一下。"
+                petLine = when {
+                    r is PortResult.Failed -> r.error.message.ifBlank { "电台开不了" }
+                    s != null && s.stopReason.isNotBlank() -> s.stopReason + "：先在案板上开一件事、放点材料"
+                    else -> "刚才没接上电台，再点一下。"
+                }
                 petWheel = true
                 armPetWheelTimeout()
             }
@@ -733,8 +743,10 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         petChoices = emptyList()
         petKind = ""
         petLine = "好，安静两小时。想找我就去设置里恢复。"
-        report(petModality, Reaction.REPLIED, System.currentTimeMillis() - petShownAt)
+        // 和点「先不聊了」同一条路：记成这次出现被明确叫停（不算“回了她”），进安静期
+        val modality = petModality
         scope.launch {
+            runCatching { BrainHost.tap(com.moling.core.live.Live.EXIT, modality) }
             runCatching { BrainHost.stopLive() }
             delay(2_600)
             removePetWindow()

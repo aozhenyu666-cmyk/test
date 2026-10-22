@@ -300,12 +300,19 @@ data class BrainState(
     val lastPlay: Say? = null,
     /** 哪天为主线做完出过声（一天一次）。 */
     val cheeredDay: String = "",
+    /** 过路费（TOLL）今天收了几回（W11 R4：每天最多 [TOLL_PER_DAY] 回）。 */
+    val tollDay: String = "",
+    val tolls: Int = 0,
+    /** 认知画像里的规律他怎么选的（W10 T8）：id → 对（ACCEPTED）/ 停用（DISABLED）；只给他看，不改策略。 */
+    val profileRules: Map<String, com.moling.core.live.PatternState> = emptyMap(),
     /** 每天的手机使用（只有应用和时间，没有内容），留 30 天。 */
     val usageDays: List<UsageDay> = emptyList(),
     /** 提议编号用的流水号。 */
     val seq: Long = 0,
     /** 给人看的行动日志（做了什么、交给总控什么、总控怎么回的）。 */
     val log: List<String> = emptyList(),
+    /** 候选记忆（第十五批 B2）：案板上采用过的论断，他逐条点「收」才进体系图。 */
+    val candidates: com.moling.core.atlas.CandidateBook = com.moling.core.atlas.CandidateBook(),
 )
 
 /** 她主动出声的一次。[gate] = 她拦在他面前（App 弹出拦人的页面）；[release] = 放他走了。 */
@@ -1164,7 +1171,7 @@ class Brain(
         if (st.sayQueue.isNotEmpty() && !playing) return Trigger.SAY
         if (unlockGapMin >= 30) return if (m < 10 * 60 && st.spirit.day != day) Trigger.MORNING else Trigger.UNLOCK
         // 刚刷完一大段离开：收一回合“过路费”
-        if (cfg.spar && !playing && leftPlayMin >= 15) return Trigger.TOLL
+        if (cfg.spar && !playing && leftPlayMin >= 15 && !(st.tollDay == day && st.tolls >= TOLL_PER_DAY)) return Trigger.TOLL
         // 闲着、3 小时里没怎么动脑：来下一局三手棋（9:00–22:30，至少隔 90 分钟，体系图里得有东西）
         if (cfg.spar && !playing && m in 9 * 60 until 22 * 60 + 30 && Rpm.low(st.mindMarks, now) &&
             now - st.lastSparAt >= 90 * 60_000L && st.atlas.nodes.size >= 3
@@ -1185,6 +1192,8 @@ class Brain(
         cfg: LiveConfig = LiveConfig(),
         can: Can = Can(),
         cues: List<String> = emptyList(),
+        /** 他案板上正在做的那件事的材料摘要（W11 R4）。 */
+        material: List<String> = emptyList(),
     ): LiveTurn? = lock.withLock {
         if (st.gate != null) return@withLock null
         // 安静期（R3）：他说了“先不聊了 / 别管我”，自发出现一律不发声；手动开电台 / 找他说话不算。
@@ -1210,7 +1219,7 @@ class Brain(
         val prompt = Live.prompt(
             persona, trigger, a, director.nowText(now), flow?.let { Flow.render(it) }.orEmpty(), aboutPlus(), misjudged(now), talkLines(), canGate,
             thinking = Think.open(st.thoughts).takeLast(4).map { Think.line(it) }, toSay = toSay,
-            cues = cues, ignored = sp.ignored, fog = fog,
+            cues = cues, ignored = sp.ignored, fog = fog, material = material,
         )
         // 三手棋：不走平常的提示词，直接开一局（开不出来就不出声）
         if (trigger == Trigger.SPAR) {
@@ -1260,6 +1269,7 @@ class Brain(
             talk = (st.talk + Turn("墨灵", line.line, now)).takeLast(TALK_KEEP),
             log = st.log + "${hm(now)} ${trigger.label}：${if (gate != null) "拦住了，" else ""}${line.line.take(40)}",
         )
+        if (trigger == Trigger.TOLL) st = st.copy(tollDay = day, tolls = if (st.tollDay == day) st.tolls + 1 else 1)
         count(now, nudges = 1)
         save()
         st = st.copy(habits = Habits.shown(st.habits, modality, now))
@@ -1416,6 +1426,50 @@ class Brain(
         added
     }
 
+    // ------------------------------------------------------------------ 候选记忆（第十五批 B2）
+
+    /** 从案板的一份稿子里提候选（只提新的）。返回这份稿子对应的、还待他决定的候选。 */
+    suspend fun proposeCandidates(artifact: com.moling.core.workspace.WorkspaceArtifact, now: Long): List<com.moling.core.atlas.MemoryCandidate> = lock.withLock {
+        val (book, _) = com.moling.core.atlas.MemoryCandidates.propose(st.candidates, artifact, st.atlas, now)
+        if (book != st.candidates) {
+            st = st.copy(candidates = book)
+            save()
+        }
+        st.candidates.items.filter { it.artifactId == artifact.id && it.status != com.moling.core.atlas.CandidateStatus.REJECTED }
+    }
+
+    /**
+     * 他点「收」：原话进体系图（不调模型）。[topicId] null = 当前主题 → 第一个主题 → 用 [fallbackTopic] 新建一个。
+     * 返回节点编号；重复点返回同一个。
+     */
+    suspend fun acceptCandidate(id: String, topicId: String?, fallbackTopic: String, now: Long): com.moling.core.workspace.PortResult<String> = lock.withLock {
+        var atlas = st.atlas
+        val topic = atlas.topics.firstOrNull { it.id == (topicId ?: st.topicId) } ?: atlas.topics.firstOrNull()
+            ?: AtlasOps.topic(atlas, fallbackTopic.ifBlank { "案板" }.take(20), now).let { (a, t) -> atlas = a; t }
+        val (book, nextAtlas, r) = com.moling.core.atlas.MemoryCandidates.accept(st.candidates, id, atlas, topic.id, now)
+        st = st.copy(candidates = book, atlas = nextAtlas)
+        if (r is com.moling.core.workspace.PortResult.Ok) {
+            mark(MindAct.DECIDE, now)
+            st = st.copy(log = st.log + "${hm(now)} 候选收进体系图：${book.get(id)?.claim?.take(20).orEmpty()}")
+        }
+        save()
+        r
+    }
+
+    suspend fun rejectCandidate(id: String, now: Long): com.moling.core.workspace.PortResult<Unit> = lock.withLock {
+        val (book, r) = com.moling.core.atlas.MemoryCandidates.reject(st.candidates, id, now)
+        st = st.copy(candidates = book)
+        save()
+        r
+    }
+
+    suspend fun undoCandidate(id: String, now: Long): com.moling.core.workspace.PortResult<Unit> = lock.withLock {
+        val (book, atlas, r) = com.moling.core.atlas.MemoryCandidates.undo(st.candidates, id, st.atlas, now)
+        st = st.copy(candidates = book, atlas = atlas)
+        save()
+        r
+    }
+
     /** 夜里：从这几天的数字里提 1–2 条“当……，就……”（他点“对”才生效）。 */
     suspend fun proposeRules(now: Long): List<Rule> = lock.withLock {
         if (st.rules.count { it.status == "proposed" } >= 3) return@withLock emptyList()
@@ -1433,6 +1487,16 @@ class Brain(
 
     suspend fun setRule(id: String, keep: Boolean, now: Long) = lock.withLock {
         st = st.copy(rules = st.rules.map { if (it.id == id) it.copy(status = if (keep) "kept" else "dropped") else it })
+        mark(MindAct.JUDGE, now)
+        save()
+    }
+
+    /** 认知画像（W10 T8）：从真实出现记录里数，样本不足就说不足。 */
+    fun profile(): com.moling.core.live.Profile = com.moling.core.live.CognitiveProfile.build(st.habits, st.profileRules)
+
+    /** 画像规律：他点“对” / “停用” / “撤回选择”（[state] = null）。只记他的选择，不改她的出现策略。 */
+    suspend fun setProfileRule(id: String, state: com.moling.core.live.PatternState?, now: Long) = lock.withLock {
+        st = st.copy(profileRules = if (state == null || state == com.moling.core.live.PatternState.PROPOSED) st.profileRules - id else st.profileRules + (id to state))
         mark(MindAct.JUDGE, now)
         save()
     }
@@ -1534,7 +1598,8 @@ class Brain(
     suspend fun react(modality: Modality, reaction: Reaction, ms: Long, now: Long) = lock.withLock {
         val sp = Spirits.today(st.spirit, calendarDay(now))
         // F11-5：那一次其实没被他看到（浮层被系统拦 / 没戴耳机 / 窗口没加上）：不算“他不理我”。
-        val observed = Habits.lastExposure(st.habits, modality) != Exposure.UNOBSERVED
+        // 看的是这次要记反应的那一笔（和 Habits.react 改的是同一笔），不是这种方式最近任意一笔
+        val observed = Habits.pendingExposure(st.habits, modality) != Exposure.UNOBSERVED
         st = st.copy(
             habits = Habits.react(st.habits, modality, reaction, ms, now),
             spirit = when {
@@ -1875,6 +1940,8 @@ class Brain(
 
     companion object {
         const val TALK_KEEP = 40
+        /** 过路费每天最多收几回。 */
+        const val TOLL_PER_DAY = 3
         const val PROPOSALS_KEEP = 80
         const val LOG_KEEP = 150
         /** 提议默认挂多久（分钟）；水道交接挂到当天 23:00。 */

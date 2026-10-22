@@ -10,9 +10,9 @@
 | I9 J1–J7 | **已合入 8cc1e54**（含来源原文、Claude 审查修复 4 处） | Moling CI通过 | 真机未测，未合入正式包 | [PR15，含PR13代码](https://github.com/aozhenyu666-cmyk/test/pull/15) |
 | 动效打磨 | **已合入 8cc1e54** | Moling CI通过 | 真机未测 | [PR14](https://github.com/aozhenyu666-cmyk/test/pull/14) |
 | P0前置整合 | 已实现：整合PR15（含PR13）+PR14，补 I9 来源点开原文 | 本地编译通过；CI 见分支 | 真机未测；发布 job 应 skipped | [PR16](https://github.com/aozhenyu666-cmyk/test/pull/16) |
-| W10 T1–T9 | **进行中（里程碑2，第十四批修复完成）**：T1/T2(fetch,RSS,HTML,Brave适配)/T3(池、分享解析、分享后台提取正文)/T7(预算与事件) 核心与入口完成，F10-1…F10-7 + 顺手项已修；T4–T6、T8–T9 未做 | core-tests 448 全绿（47 类，V13WebTest 16；此前“442 全绿”已更正，见 DEVLOG 第十四批）；App compileDebugKotlin 通过；真实公网未验 | 真机未测 | [任务](DEEPSEEK-10.md) · [PR17](https://github.com/aozhenyu666-cmyk/test/pull/17) |
-| W11 R1–R7 | **部分实现 + 第十五批 B3**：R1 电台核心、R2 案板/对话面板（音频焦点最小版、TTS 令牌）、R3 安静期（「别管我」同 EXIT、明确停止不记 REPLIED、只记这一次出现）、R5 赌局核心、R6 桌宠轻轮盘（破雾点选 / 当场捉虫 / 只听电台 / 先安静，同一扇不可聚焦悬窗、复用已有入口）完成；F11-1…F11-7 + 小项已修，F11-5 曝光已接（浮层被拦 / 没耳机记 UNOBSERVED，不算冷落）；R4 只有接口与说明 | core-tests 59 类 594 全绿（HabitTest 9 / ExposureTest 3 / FogTest 13 / RadioTest 14 / V13WebTest 16）；App compileDebugKotlin 通过；moling CI 通过（run 39730183311） | 真机未测；R4 与 R5 卡片/电台入口未做 | [任务](DEEPSEEK-11.md) · [第十五批](DEEPSEEK-15.md) |
-| W12 A1–A6 | **部分（第十四批 F12-1…F12-7 已修，已合入工作分支）**：A1–A3 外脑会话核心 + 最小界面（分享 / 复制 / 模型 API）；A4 屏幕快照按裁定冻结（已修、不接线）；A2/A5/A6 未做；联络站传输目前只是复制并打开 | 合入后 core-tests 见 DEVLOG 第十四批合入记录 | 真机未测 | [任务](DEEPSEEK-12.md) · [第十四批](DEEPSEEK-14.md) |
+| W10 T1–T9 | **进行中（里程碑2，第十五批 B1 完成；第十四批修复已完成）**：T1/T2(fetch,RSS,HTML,Brave适配)/T3(池、分享解析、分享后台提取正文)/T4(真正联网采蜜，分支 deepseek/m2-b1-forage)/T7(预算与事件) 核心与入口完成，F10-1…F10-7 + 顺手项已修；T8 焦点到期可续上 + 认知画像页（Claude，FocusLifeTest/CognitiveProfileTest）已做；T5/T6、T9 未做 | core-tests **598 全绿（59 类，0 失败）**，其中 V13ForageTest 8；App compileDebugKotlin 通过；真实公网未验（无 Brave key） | 真机未测 | [任务](DEEPSEEK-10.md) · [PR17](https://github.com/aozhenyu666-cmyk/test/pull/17) · 第十五批 B1 |
+| W11 R1–R7 | **部分实现 + 第十五批 B3**：R1 电台核心、R2 案板/对话面板（音频焦点最小版、TTS 令牌）、R3 安静期（「别管我」同 EXIT、明确停止不记 REPLIED、只记这一次出现）、R5 赌局核心、R6 桌宠轻轮盘（破雾点选 / 当场捉虫 / 只听电台 / 先安静，同一扇不可聚焦悬窗、复用已有入口）完成；F11-1…F11-7 + 小项已修，F11-5 曝光已接（浮层被拦 / 没耳机记 UNOBSERVED，不算冷落）；R4 只有接口与说明 | core-tests 59 类 594 全绿（HabitTest 9 / ExposureTest 3 / FogTest 13 / RadioTest 14 / V13WebTest 16）；App compileDebugKotlin 通过；moling CI 通过（run 39730183311）；合入最新工作分支后合并树上 core-tests 64 类 631 全绿 | 真机未测；R4 与 R5 卡片/电台入口未做 | [任务](DEEPSEEK-11.md) · [第十五批](DEEPSEEK-15.md) |
+| W12 A1–A6 | **部分（第十四批 F12-1…F12-7 已修，已合入工作分支；B4 联络站传输已真接）**：A1–A3 外脑会话核心 + 最小界面（分享 / 复制、模型 API、联络站推黑板并按会话认领）；A4 屏幕快照按裁定冻结（已修、不接线）；A2/A5/A6 未做 | B4 分支 `deepseek/m2-b4-relay` 本地 core-tests 58 类 594 全绿；App compileDebugKotlin 通过 | 真机未测；真实联络站 / MCP 未连 | [任务](DEEPSEEK-12.md) · [第十四批](DEEPSEEK-14.md) · [第十五批 B4](DEEPSEEK-15.md) |
 | W13 G1–G4 | **部分（第十四批 F13-1…F13-8 已修）**：G1/G2 计划代驾核心+今天页/设置（已取消自动采用，到点只提醒）；G3 墨灵侧训练兑换协议；G4 系统工具接口与拒绝降级。G5–G7、Z13 未做 | core-tests 510 全绿（51 类；W13 类 62：PlanDriverTest 21、TrainingRedeemTest 26、SystemPortsTest 10、GateV2Test 5）；App compileDebugKotlin 通过；CI build 通过、release skipped | 真机未测；未改 zongkong/权限/Manifest | [任务](DEEPSEEK-13.md) · [第十四批](DEEPSEEK-14.md) |
 
 ### W13（2026-10-22，分支 deepseek/moling-planner，基于 4f3c905）
@@ -30,12 +30,14 @@
 
 缺口统一写在这里并关联任务号；不得只在聊天里说“还差一点”。
 
+当前明确缺口：第八批正式发布验证（P0）；I9/动效真机验收（P0）；W10 T5–T9（T4 代码完成，真机/真实公网未验）；W11 R4/R6 与 R5 UI 入口、F11-5 曝光回报、真机；W12–W13 功能（各批）。
 当前明确缺口：第八批正式发布验证（P0）；I9/动效真机验收（P0）；W10 T4–T9；W11 R4 与 R5 卡片/电台入口、真机；W12–W13 功能（各批）。
 
 ### W10（2026-10-22）
 - 里程碑1 已提交：Sources/WebPort/Inhale/Cycle 核心与测试；BrainHost 来源库 + 案板「加网页/链接」。
 - 第十四批修复（提交 19cd181…1047588）：F10-1 内网防护逐跳解析 + OkHttp Dns；F10-2 canonical 保留 query、只按完整 URL 复用；F10-3 修好假服务器测试并断言 TOO_LARGE/TOO_MANY_REDIRECTS；F10-4 Content-Type/charset 嗅探；F10-5 网页材料标外部资料；F10-6 sources.json 原子写与 8MB 上限；F10-7 分享后台抓取 + 15 秒总时限；顺手项（跨主机鉴权头、RSS DOCTYPE 降级、删除原文入口）。core-tests 448 全绿；App compileDebugKotlin 通过；真机未测。
-- 未做：设置页搜索/RSS 配置、ShareActivity 提取正文、联网采蜜、Prework 引用校验、HybridRecall/MemoryCandidate、主动循环接线、CognitiveProfile（见 DEVLOG 第十批）。
+- 未做：设置页搜索/RSS 配置、ShareActivity 提取正文、Prework 引用校验、HybridRecall/MemoryCandidate、主动循环接线、CognitiveProfile（见 DEVLOG 第十批）。
+- 第十五批 B1（2026-10-22，分支 deepseek/m2-b1-forage，基于 6bf7a69）：新增 `core/forage/Discovery.kt`（选 query / 最多两路搜索 / 抓正文进来源库 / 外部资料提示词 / 只认来源库编号 / 摘录兜底）；`Workbench.addSourceMaterial / discovery / attachDiscovery` 落 DISCOVERY（未采用）；`BrainHost.forageOnline` 只在案板点「去查一下」时跑，`autoForage` 是默认关的「每天自动一份」走 AutonomyBudget；设置页可配 Brave 密钥；案板来源标签能点开 s-… 原文。core-tests **598 全绿（59 类，+8）**；App compileDebugKotlin 通过；没有 Brave key，真实公网与真机未验。
 
 ### P0（2026-10-22）
 - 基于工作分支 `a8b5749` 建 `deepseek/moling-v13-integration`；合入 PR15（`deepseek/moling-workspace`，已含 PR13），再合 PR14（`deepseek/moling-polish`），解决 `CODEX.md`/`DEVLOG.md` 冲突，保留两边记录。
@@ -45,6 +47,7 @@
 ### W12（2026-10-22）
 - 分支 `deepseek/moling-outbrain`（基于 W10 `4f3c905`）。实现 A1–A3 核心：`core/talk/Outbrain.kt`（选路/进场包/会话/结果/编码）、`OutbrainMachine.kt`（PREPARED→…→REVIEWED + CANCELLED/EXPIRED、幂等、归属、partial、过期、重启恢复）、`OutbrainDesk.kt`（持久化 + 结果落案板）、`Workbench.attachActorResult`（ACTOR_RESULT 未采用 + 材料，同会话追加、文本幂等）。
 - 三条传输：分享/复制、模型 API（复用现有凭据/用量）、联络站（`RelaySync.routeOutbrain` 按 `[[外脑:ob-…]]` 认领）；未配置/失败不伪造。
+- **B4（2026-10-22，`deepseek/m2-b4-relay`，基于 `6bf7a69`）**：RELAY 不再只是复制并打开——`Outbrain.relayBoard` 把已推 / 在等的联络站进场包接进 `RelaySync` 黑板，`BrainHost.outbrainSendRelay` 只有推送真成功才记“推上去了”（不写外脑已读）；`OutbrainDesk.receiveRelayTagged` 按 `[[外脑:ob-…]]` 认领（已取消 / 过期只进历史，不漏给大脑）。core-tests 58 类 594 全绿；App compileDebugKotlin 通过；真机 / 真实联络站未测。
 - A4 `core/talk/Capture.kt`：调用方（墨灵）UID→包名+固定证书校验（不是目标 App）、范围只能来自总控用户选择、64 节点/8192 字/4 快照/32KiB、cursor/gap、坐标 2 秒/窗口失效、只带观察信号、UNSUPPORTED/DENIED 降级；**不申请无障碍/屏幕权限**。
 - 最小 UI：`ui/OutbrainBits.kt`（发到外脑/预览材料/复制/打开/API 问/收线/看结论/看案板）、对话页+案板显示、胶囊状态、分享面板接回、调试页状态；`MainActivity` 恢复第四个「案板」标签（P0 合并丢失 J1 接线）。
 - 第十四批修复（提交 `e064eb2`…`8d14b8b`）：F12-1 追加结果回待审且 claims 不含新文本；F12-2 会话 id 加时间戳/读坏文件不重用编号/复用旧稿前核对；F12-3 收线默认不选、标记优先；F12-4 过期可清/手动接回/“稍后”真推迟 1 小时；F12-5 API 防重复花钱；F12-6 Capture 只修不接线（校验墨灵调用方、actorTurns 不放大、排除密码/验证/支付/通知、范围只能来自用户选择）；F12-7 分享回流多会话弹窗带原文、12000 截断、超出另存材料、API 回答过 clean()。
@@ -68,3 +71,14 @@
 - PR16（第八、九批 + 动效）审查通过，附 4 处界面修复后合入工作分支 `8cc1e54`；核心测试全绿，发布脚本 mock 测试 15/15。真机未测。
 - PR17–20 审查：均为“修完再合”，必修 / 应修清单见 [DEEPSEEK-14](DEEPSEEK-14.md)。另：`V13WebTest.fetchWithFakeServer` 在干净环境失败（F10-3），此前“全绿”记录不成立。
 - 裁定：W12 A4/A2 冻结；W13 G1 不自动采用；Z12/Z13 总控部分由 Claude 负责。
+
+
+### 第十五批（2026-10-22，Claude 收尾整合）
+- Claude：A1/A2 总控以思代锁界面、A3 墨灵今天页训练入口、A4 两边训练记录、B2 候选记忆、B5 系统工具（日历 / 勿扰 / 歌单）、B6 电台 Media3；W13 Z13 总控训练核心（`2446a72`）。
+- DeepSeek：B1 联网采蜜、B3 桌宠轮盘 + F11-5、B4 联络站真推送——Claude 审查后合入并修复：B1 不先建空焦点 / 自动采蜜不新开焦点 / 离线兜底不进缓存 / 引用与来源库同文；B3 电台没开成不报“在念了” / 有悬浮窗时的退回卡片照常记曝光 / 先安静按明确停止记 / 破雾点选带上本轮选项 / 曝光看同一笔记录；B4 只标真放上黑板的会话 / 刚点的排前 / 不替他推没点过的旧会话 / 交接正文按剩余位置截，外脑段不被截。DeepSeek 的 B2 与 Claude 版重复，不合。
+- `tools/core-tests` 615 全过；App 编译以 CI 为准；真机未测。
+
+### 合入最新工作分支（2026-10-22，B3 分支 `deepseek/m2-b3-wheel`）
+- 把 `origin/ccr-b3c7616e-xlohkd`（`d60d2c6`）merge 进 B3 分支，不 rebase、不强推。base 已含 B3 的全部提交（`03e829f` 轮盘 + F11-5 曝光、`16cd9bf` 耳语气泡不算冷落）与 Claude 的复审修复（`bca07c2`），所以冲突一律**以 base 为准**：本分支只补自己的 CI 记录（run 39730183311）与本段说明，桌宠轻轮盘与 F11-5 曝光全部用 base 版本，没有留下重复实现；F11-5 的重复补丁也没再往回带。
+- 冲突文件：只有 `moling/V13-PROGRESS.md`（W10/W11/W12 三行表格两边各写一次）。解法：取 base 三行，仅把 B3 分支的 CI 结果补回 W11 行的自动检查栏。`moling/DEVLOG.md` 自动合并，两边记录都保留。
+- 合并树上的自动检查（本机实跑）：`tools/core-tests` `gradle test`（Gradle 8.9 + JDK 22，ASCII 路径 `C:/b3w`，`-Dorg.gradle.jvmargs=-Xmx4g`）**64 个测试类、631 个测试、0 失败 0 错误 0 跳过**；`moling/gradlew.bat compileDebugKotlin` **通过**。真机未测。

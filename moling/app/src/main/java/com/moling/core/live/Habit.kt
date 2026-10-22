@@ -113,6 +113,10 @@ object Habits {
     fun shown(b: HabitBook, m: Modality, now: Long, exposure: Exposure = Exposure.SHOWN): HabitBook =
         b.copy(marks = (b.marks + HabitMark(m, now, exposure = exposure)).takeLast(KEEP))
 
+    /** 这次要记反应的那一笔（[m] 最近一笔还没反应的）有没有被看到；没有这一笔返回 null。 */
+    fun pendingExposure(b: HabitBook, m: Modality): Exposure? =
+        b.marks.lastOrNull { it.modality == m && it.reaction == null }?.exposure
+
     /** 最近一次出现有没有真的被看到（没看到就别算他冷落）。 */
     fun lastExposure(b: HabitBook, m: Modality): Exposure? =
         b.marks.lastOrNull { it.modality == m }?.exposure
