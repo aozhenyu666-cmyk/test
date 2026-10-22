@@ -322,11 +322,16 @@ object Outbrain {
             "推上黑板只代表到了这里；发回来也只到收件箱，不代表他看过任何回答。\n"
 
     /** B4：现在该在联络站黑板上的 RELAY 会话（推上去 / 还在等；结果回来、取消、到期就撤下）。 */
+    /**
+     * 能上黑板的 RELAY 会话：他点过「推到联络站」的（OPENED），和已经推上去、还在等结果的。
+     * 旧版本“复制并打开”留下的、从没推过的 WAITING 不算——他没点过推，就不替他推。
+     * 刚点的（OPENED）排在前面：黑板放不下时先挤掉旧的，不挤掉他刚点的。
+     */
     private fun relayLive(state: OutbrainState, now: Long): List<OutbrainSession> = state.sessions.filter {
         it.transport == OutbrainTransport.RELAY &&
-            (it.status == OutbrainStatus.OPENED || it.status == OutbrainStatus.WAITING_RESULT) &&
+            (it.status == OutbrainStatus.OPENED || (it.status == OutbrainStatus.WAITING_RESULT && pushedToBoard(it))) &&
             (it.expiresAt == 0L || it.expiresAt > now)
-    }
+    }.sortedBy { if (it.status == OutbrainStatus.OPENED) 0 else 1 }
 
     /** B4：这次黑板真正带得下的 RELAY 会话（宿主推送成功后按它把 OPENED 标成“推上去了”）。 */
     fun relayBoardSessions(state: OutbrainState, now: Long, maxChars: Int = RELAY_BOARD_MAX_CHARS): List<OutbrainSession> {

@@ -1580,7 +1580,8 @@ class Brain(
     suspend fun react(modality: Modality, reaction: Reaction, ms: Long, now: Long) = lock.withLock {
         val sp = Spirits.today(st.spirit, calendarDay(now))
         // F11-5：那一次其实没被他看到（浮层被系统拦 / 没戴耳机 / 窗口没加上）：不算“他不理我”。
-        val observed = Habits.lastExposure(st.habits, modality) != Exposure.UNOBSERVED
+        // 看的是这次要记反应的那一笔（和 Habits.react 改的是同一笔），不是这种方式最近任意一笔
+        val observed = Habits.pendingExposure(st.habits, modality) != Exposure.UNOBSERVED
         st = st.copy(
             habits = Habits.react(st.habits, modality, reaction, ms, now),
             spirit = when {

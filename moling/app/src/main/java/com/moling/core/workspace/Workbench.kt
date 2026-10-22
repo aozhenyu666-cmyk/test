@@ -369,7 +369,8 @@ class Workbench(
     /** 同一件事、同一批来源已经查过：直接给他那一份，不重复搜、不重复调模型。 */
     fun discovery(focusId: String, inputHash: String): WorkspaceArtifact? =
         st.artifacts.lastOrNull {
-            it.focusId == focusId && it.producerJobId == "discovery:" + inputHash && it.status != ArtifactStatus.ARCHIVED
+            // 模型没接上时的“摘录”兜底不算数：下次同样的来源要重新请模型整理，不能永远停在兜底上
+            it.focusId == focusId && it.producerJobId == "discovery:" + inputHash && it.status != ArtifactStatus.ARCHIVED && !it.offline
         }
 
     /**

@@ -530,14 +530,27 @@ object BrainHost {
      * 真的同步一次，把整个结果给调用方（外脑“推到联络站”要知道黑板到底推没推上去）。
      * 黑板 = 她的交接包 + 正在等结果的联络站外脑会话（Outbrain.relayBoard）。
      */
+    /** 联络站黑板正文的上限（和 relay-worker 的截断一致）。 */
+    private const val RELAY_TEXT_MAX = 20_000
+
+    /** 上一次推送成功时黑板上放的外脑会话。 */
+    @Volatile
+    private var lastOnBoard: List<String> = emptyList()
+
     private suspend fun relayResult(now: Long, force: Boolean): com.moling.app.mirror.RelaySync.Result? {
         if (!ready) return null
+        // 这次黑板上真放了哪几个外脑会话（推送成功后只标这几个；不按推完之后的状态重新算）
+        var onBoard: List<String> = emptyList()
         val r = withContext(Dispatchers.IO) {
             com.moling.app.mirror.RelaySync.sync(
                 settings, now, force,
                 board = {
-                    val text = brain.handoff(now)
-                    val out = Outbrain.relayBoard(outbrain.state(), now)
+                    val snapshot = outbrain.state()
+                    onBoard = Outbrain.relayBoardSessions(snapshot, now).map { it.id }
+                    val out = Outbrain.relayBoard(snapshot, now)
+                    // 联络站只收 20000 字：外脑段放得下才算数，交接正文按剩下的位置截（不让外脑段被悄悄截掉）
+                    val room = (RELAY_TEXT_MAX - out.length - 2).coerceAtLeast(0)
+                    val text = brain.handoff(now).take(room)
                     (if (out.isBlank()) text else text + "\n\n" + out) to brain.state().questions
                 },
                 seen = { brain.state().mirrorSeen },
@@ -548,11 +561,9 @@ object BrainHost {
         } ?: return null
         // 黑板推上去了：这次真带上的 OPENED 联络站会话都算“推上去了”（外脑还没来读，仍然不是已读）。
         // 放在这里而不是只放在“推到联络站”按钮里：推送失败后由心跳补推成功也算数。
+        lastOnBoard = if (r.pushed) onBoard else emptyList()
         if (r.pushed) {
-            val ids = Outbrain.relayBoardSessions(outbrain.state(), now)
-                // OPENED = 刚点“推到联络站”；没标的 WAITING = 旧版本留下的“复制并打开”会话，这次补推上也记上。
-                .filter { it.status == OutbrainStatus.OPENED || (it.status == OutbrainStatus.WAITING_RESULT && !Outbrain.pushedToBoard(it)) }
-                .map { it.id }
+            val ids = onBoard.filter { id -> outbrain.state().sessions.firstOrNull { it.id == id }?.status == OutbrainStatus.OPENED }
             if (ids.isNotEmpty()) {
                 withContext(Dispatchers.IO) {
                     ids.forEach { id -> runCatching { outbrain.relayPushed(id, now) } }
@@ -1007,8 +1018,13 @@ object BrainHost {
         val picked = Discovery.pickQuery(current?.question, gaps)
             ?: return PortResult.Failed(PortError(PortError.NOT_FOUND, "案板上没有正在做的事，体系图里也没有缺口：先开一件事"))
         val question = picked.trim()
-        val focus = current ?: bench.start(Discovery.query(question).ifBlank { question }.take(80), "", now)
-        return io("forageOnline", { offline() }) { forageOnce(question, focus.id).result }
+        if (runCatching { settings.braveKey() }.getOrDefault("").isBlank()) {
+            return PortResult.Failed(PortError("NOT_CONFIGURED", "还没配搜索服务（设置里填 Brave 搜索密钥）：没法联网查"))
+        }
+        // 没有正在做的事：真抓到网页以后才新开一件，查不到不留空的焦点
+        return io("forageOnline", { offline() }) {
+            forageOnce(question, current?.id) { bench.start(Discovery.query(question).ifBlank { question }.take(80), "", System.currentTimeMillis()).id }.result
+        }
     }
 
     /** 一轮联网采蜜的记账：真实用掉几次查询、抓了几篇正文（「每天自动一份」的预算按这个扣）。 */
@@ -1019,19 +1035,22 @@ object BrainHost {
     )
 
     /** 手动 / 自动同时只跑一轮；已经在查就明确说 BUSY，不重复搜、不重复调模型。 */
-    private suspend fun forageOnce(question: String, focusId: String): ForageRun {
+    private suspend fun forageOnce(question: String, focusId: String?, newFocus: (suspend () -> String)? = null): ForageRun {
         if (!forageLock.tryLock()) {
             return ForageRun(PortResult.Failed(PortError(PortError.BUSY, "正在联网查，等这一份回来")), 0, 0)
         }
         return try {
-            forageWork(question, focusId)
+            forageWork(question, focusId, newFocus)
         } finally {
             forageLock.unlock()
         }
     }
 
-    /** 真的搜、抓、整理、落稿。[focusId] 必须已经在案板上。 */
-    private suspend fun forageWork(question: String, focusId: String): ForageRun {
+    /**
+     * 真的搜、抓、整理、落稿。[focusId] = 已经在案板上的那件事；为 null 时，真抓到网页后才用 [newFocus] 新开一件
+     * （[newFocus] 也为 null 就不落稿）。
+     */
+    private suspend fun forageWork(question: String, existingFocus: String?, newFocus: (suspend () -> String)?): ForageRun {
         val now = System.currentTimeMillis()
         val queries = Discovery.queries(question)
         if (queries.isEmpty()) {
@@ -1051,7 +1070,7 @@ object BrainHost {
         val sourceIds = harvest.pages.map { it.sourceId }.distinct()
         val inputHash = Discovery.inputHash(question, sourceIds)
         // 同一件事、同一批来源已经查过：给他那一份，不重复花钱
-        bench.discovery(focusId, inputHash)?.let { return ForageRun(PortResult.Ok(it), harvest.queries.size, harvest.pages.size) }
+        existingFocus?.let { f -> bench.discovery(f, inputHash)?.let { return ForageRun(PortResult.Ok(it), harvest.queries.size, harvest.pages.size) } }
         if (harvest.pages.isEmpty()) {
             val e = harvest.errors.firstOrNull()
             return ForageRun(
@@ -1060,6 +1079,8 @@ object BrainHost {
                 0,
             )
         }
+        val focusId = existingFocus ?: newFocus?.invoke()
+            ?: return ForageRun(PortResult.Failed(PortError("NOT_FOUND", "案板上没有正在做的事，不自动新开")), harvest.queries.size, harvest.pages.size)
         // 真抓到的正文当材料挂上；来源库按材料 id 也能找回去（材料弹窗里的「删除原文」）
         harvest.pages.forEach { page ->
             when (val added = bench.addSourceMaterial(focusId, page.text, page.title.ifBlank { page.url }, now)) {
@@ -1104,26 +1125,29 @@ object BrainHost {
         if (st.lastAutoDay == day) return
         val atlas = runCatching { brain.state().atlas }.getOrDefault(Atlas())
         val gaps = atlas.topics.flatMap { AtlasOps.gaps(atlas, it.id) }
-        val focus = _bench.value.active()
-        val question = Discovery.pickQuery(focus?.question, gaps) ?: return
+        // 自动的只往他正在做的那件事上放，绝不自己新开一件
+        val focus = _bench.value.active() ?: return
+        val question = Discovery.pickQuery(focus.question, gaps) ?: return
         val queries = Discovery.queries(question)
         if (queries.isEmpty()) return
         var budget = st.budget.fresh(day)
         if (!budget.enabled) budget = budget.copy(enabled = true)
         if (budget.searches + queries.size > budget.maxSearches) return
         if (budget.fetches + Discovery.MAX_FETCH > budget.maxFetches) return
+        if (!budget.canJob()) return
         if (!autoForageGate.compareAndSet(false, true)) return
         // 先记下今天已经试过：失败也不每分钟重试（预算账在下面按真实的查询 / 抓取扣）
         _forage.value = st.copy(day = day, budget = budget, lastAutoDay = day, lastAutoAt = now, lastMessage = "自动采蜜：正在查…")
         saveForage()
         answerScope.launch {
             try {
-                val target = focus ?: bench.start(Discovery.query(question).ifBlank { question }.take(80), "", System.currentTimeMillis())
-                val run = forageOnce(question, target.id)
+                val run = forageOnce(question, focus.id)
                 val used = budget.copy(
                     enabled = true,
                     searches = budget.searches + run.searches,
                     fetches = budget.fetches + run.fetches,
+                    // 抓到了正文就会调一次模型整理：记进后台模型作业数
+                    jobs = budget.jobs + if (run.fetches > 0) 1 else 0,
                 )
                 when (val r = run.result) {
                     is PortResult.Ok -> {
@@ -1282,7 +1306,8 @@ object BrainHost {
             io("outbrainRelayFailed", {}) { outbrain.markError(sessionId, now, "没推上黑板") }
             return "这次没推上去：" + r.status + "（之后同步还会再试）"
         }
-        // relayResult 推送成功时已经把这次带上的 OPENED 会话标成“推上去了”。
+        // relayResult 推送成功时已经把这次带上的 OPENED 会话标成“推上去了”。黑板放不下这一包就照实说。
+        if (sessionId !in lastOnBoard) return "黑板放不下这一包：先在收线卡里处理别的外脑会话，再推一次"
         return if (r.status.startsWith("同步失败")) {
             "进场包推上去了（收件箱这次没连上，下次再收）"
         } else {

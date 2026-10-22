@@ -312,7 +312,7 @@ fun SettingsScreen(onDone: () -> Unit) {
                     Text("每天自动一份")
                     Text(
                         "默认关。开着时一天最多一份，只在亮屏、配了搜索、预算还够时查；" +
-                            "预算（AutonomyBudget）每天最多 2 路查询 / 4 篇正文，跨天清零、跨重启保留。",
+                            "每次最多 2 路查询、4 篇正文；自动的每天最多一份，并受每日预算（查询 / 正文 / 模型作业次数）限制，跨天清零、跨重启保留。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

@@ -175,8 +175,10 @@ object Discovery {
                 val stored = Sources.reuse(st, page.finalUrl)
                     ?: st.sources.lastOrNull { Sources.canonical(it.url) == finalCanon }
                     ?: continue
-                // 同一个 URL 之前存过：复用旧来源编号，不悄悄换正文
-                pages += DiscoveryPage(stored.id, page.finalUrl, title, page.text)
+                // 同一个 URL 之前存过：复用旧来源编号，不悄悄换正文——交给模型的也是来源库里这个编号下存的那份，
+                // 免得模型引用 [s-x] 时看到的和来源库里 s-x 的原文不是同一段
+                val text = st.document(stored.id)?.text?.takeIf { it.isNotBlank() } ?: page.text
+                pages += DiscoveryPage(stored.id, page.finalUrl, title, text)
                 refs += st.ref(stored.id) ?: stored
             }
         }

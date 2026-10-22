@@ -38,17 +38,18 @@ object Appear {
     fun show(context: Context, turn: LiveTurn, label: String) {
         // B4：他在设置里关掉的方式一律退回底部卡片（拦人不受影响，它有自己的开关）。
         val disabled = runCatching { BrainHost.settingsStore.disabledModalities() }.getOrDefault(emptySet())
+        val overlay = Settings.canDrawOverlays(context)
+        // 退回底部卡片时：有悬浮窗权限，卡片是真弹出来的（他看得见），照常记；没有才可能只是一条通知，记 UNOBSERVED
         if (turn.modality in disabled && turn.modality != Modality.GATE) {
-            unobserved(turn.modality)
+            if (!overlay) unobserved(turn.modality)
             LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
             return
         }
-        val overlay = Settings.canDrawOverlays(context)
         when (turn.modality) {
             Modality.GATE -> LiveScreens.gate(context, turn.mood, turn.line, label)
             Modality.PET ->
                 if (!overlay || PetOverlay.petMuted(context)) {
-                    unobserved(turn.modality)
+                    if (!overlay) unobserved(turn.modality)
                     LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
                 } else {
                     PetOverlay.show(context, turn.mood, turn.line)
@@ -76,7 +77,7 @@ object Appear {
             Modality.QUIZ ->
                 turn.quiz?.let { QuizActivity.open(context, turn.mood, turn.line, it) }
                     ?: run {
-                        unobserved(turn.modality)
+                        if (!overlay) unobserved(turn.modality)
                         LiveScreens.peek(context, turn.mood, turn.line, turn.modality)
                     }
             else -> LiveScreens.peek(context, turn.mood, turn.line, turn.modality)

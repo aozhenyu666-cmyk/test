@@ -501,6 +501,28 @@ class OutbrainTest {
     // -------------------------------------------------------------- B4 联络站：真正推上黑板
 
     @Test
+    fun relayNeverPushesUntappedAndPutsTheTappedFirst() {
+        val ms = listOf(material("m-1", "材料一"))
+        val f = focus(ms)
+        val pack = { sid: String -> Packs.build(sid, f, ms, emptyList(), now = 1) }
+        // 旧版本“复制并打开”留下的：直接进了等待，没推过黑板
+        val (s0, r0) = Outbrain.prepare(OutbrainState(), f, pack, Actor.CHATGPT, epRelay, now = 1_000)
+        val old = (r0 as PortResult.Ok).value
+        var st = Outbrain.open(s0, old.id, 1_050).first
+        st = Outbrain.waiting(st, old.id, 1_060).first
+        assertTrue("他没点过推，就不替他推", Outbrain.relayBoardSessions(st, 1_100).isEmpty())
+        // 一个已经推上去在等的 + 一个刚点推的：刚点的排第一
+        val (s1, r1) = Outbrain.prepare(st, f, pack, Actor.CHATGPT, epRelay, now = 1_200)
+        val first = (r1 as PortResult.Ok).value
+        st = Outbrain.open(s1, first.id, 1_250).first
+        st = Outbrain.relayPushed(st, first.id, 1_260).first
+        val (s2, r2) = Outbrain.prepare(st, f, pack, Actor.CHATGPT, epRelay, now = 1_300)
+        val tapped = (r2 as PortResult.Ok).value
+        st = Outbrain.open(s2, tapped.id, 1_350).first
+        assertEquals(tapped.id, Outbrain.relayBoardSessions(st, 1_400).first().id)
+    }
+
+    @Test
     fun relayBoardOnlyIncludesPushedRelaySessions() {
         val ms = listOf(material("m-1", "材料一"))
         val f = focus(ms)
