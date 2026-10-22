@@ -24,7 +24,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.moling.app.BrainHost
 import com.moling.app.Foreground
-import com.moling.app.TrainingHost
 import com.moling.app.Usage
 import com.moling.core.BrainFacts
 import com.moling.core.BrainState
@@ -66,7 +65,6 @@ fun DebugScreen(onDone: () -> Unit) {
             foreground = foreground,
             category = category,
             bench = BrainHost.workbench.value,
-            training = TrainingHost.snapshot(),
         ) + "\n\n" + com.moling.app.overlay.Presence.debug(context)
     }.getOrElse { "调试信息生成失败：${it.message ?: it.javaClass.simpleName}" }
 
@@ -108,7 +106,6 @@ private fun buildReport(
     foreground: Foreground?,
     category: String,
     bench: WorkbenchState,
-    training: com.moling.core.redeem.RedeemState,
 ): String = buildString {
     val day = dayKey(now)
 
@@ -220,6 +217,21 @@ private fun buildReport(
 
     // 5.6 外脑会话（W12 A1–A3）+ 限定捕获（A4，未申请权限）
     appendLine()
+    // 以思代锁（第十五批 A4）：只读墨灵侧客户端的状态；答案不在墨灵这边
+    appendLine("【以思代锁】")
+    runCatching {
+        val t = BrainHost.training.snapshot()
+        appendLine("  最近：${t.lastMessage.ifBlank { "（没做过）" }}")
+        t.challenge?.let { appendLine("  这一局：${it.challengeId} · ${it.packageName} · 截止 ${java.time.Instant.ofEpochMilli(it.expiresAt)}") }
+        t.pass?.let { appendLine("  通行：${it.passId} · ${it.minutes} 分钟 · 到 ${java.time.Instant.ofEpochMilli(it.expiresAt)}") }
+        t.receipts.takeLast(5).forEach { r -> appendLine("  回执 ${r.requestId}：${r.state} ${r.message.take(30)}") }
+    }.onFailure { appendLine("  读不到：${it.message}") }
+    appendLine()
+    // 计划代驾追链（W13 G5）：planId → operationId → receiptId
+    appendLine("【计划 → 动作 → 回执】")
+    runCatching { com.moling.core.flow.PlanChain.lines(BrainHost.plan.value).forEach { appendLine("  " + it) } }
+        .onFailure { appendLine("  读不到：${it.message}") }
+    appendLine()
     appendLine("【外脑】")
     val obState = BrainHost.outbrainState.value
     val obActive = com.moling.core.talk.Outbrain.active(obState)
@@ -229,22 +241,6 @@ private fun buildReport(
     appendLine("结果：" + obState.results.size + " 条（最终 " + obState.results.count { !it.partial } + "）")
     obState.sessions.takeLast(5).forEach { appendLine("· " + it.id + " · " + it.status + " · 材料 " + it.pack.materials.size + " · 稿子 " + (it.artifactId ?: "—")) }
     appendLine("限定捕获（A4）：未开启——本版不申请无障碍 / 屏幕权限；接口与拒绝降级已就绪，走分享 / 粘贴")
-
-    // 5.7 以思代锁（A3 / A4）：只列 lastMessage 和最近回执；题目和答案不在这里
-    appendLine()
-    appendLine("【训练兑换】")
-    appendLine("lastMessage：" + training.lastMessage.ifBlank { "—" })
-    if (training.receipts.isEmpty()) {
-        appendLine("最近回执：还没有")
-    } else {
-        appendLine("最近回执：")
-        training.receipts.takeLast(5).asReversed().forEach { r ->
-            appendLine(
-                "· " + r.state.ifBlank { "?" } + " · " + hms(r.at) + " · " + r.message.ifBlank { "—" } +
-                    (r.pass?.let { " · 通行 " + it.minutes + " 分钟" } ?: ""),
-            )
-        }
-    }
 
     // 6. 日志（最新在上）
     appendLine()

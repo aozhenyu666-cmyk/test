@@ -145,14 +145,6 @@ fun SettingsScreen(nav: NavHostController) {
         SectionLabel("规则")
         MenuItem("关卡", "${config.gates.size} 道：每个部门每天要交什么", "settings/gates", nav)
         MenuItem("拦截名单", "${config.blocked.size} 个应用：严管时打开就被弹回", "settings/block", nav)
-        MenuItem(
-            "以思代锁",
-            when {
-                config.training.enabled -> "开着：每次换 ${config.training.minutesPerPass} 分钟 · 每天 ${config.training.dailyMaxPasses} 次 / ${config.training.dailyMaxMinutes} 分钟"
-                else -> "没开：答几道有标准答案的题，换一点今天的娱乐分钟"
-            } + if (config.pending.any { it.op is ChangeOp.Training }) " · 有待生效的改动" else "",
-            "settings/training", nav,
-        )
         MenuItem("墨灵的授权书", if (grants.grants.isEmpty()) "没有授权：墨灵的建议都要你点执行" else "已授权 ${grants.grants.size} 类", "settings/moling", nav)
         MenuItem(
             "低屏模式",
@@ -160,6 +152,11 @@ fun SettingsScreen(nav: NavHostController) {
                 "${config.watch.rules.size} 个应用：连续用 ${config.watch.rules.firstOrNull()?.maxMinutes ?: 2} 分钟弹回做题，冷却后放行"
             else "没开：闲鱼 / Twitter 这类全封太狠、放开太浪费时间",
             "settings/watch", nav,
+        )
+        MenuItem(
+            "以思代锁",
+            if (config.training.enabled) "开着 · 每次 ${config.training.minutesPerPass} 分钟 · 每天 ${config.training.dailyMaxPasses} 次" else "关着：答几道题换一点今天的娱乐（只在挣来的用完时）",
+            "settings/training", nav,
         )
         MenuItem("规则", "沉默 ${if (config.silenceHours == 0) "不查" else "${config.silenceHours} 小时"} · 娱乐 ${if (config.dailyQuotaMin == 0) "不限" else "${config.dailyQuotaMin} 分钟"} · 紧急放行 ${config.emergencyPerDay} 次", "settings/rules", nav)
         MenuItem("待生效的放宽", if (config.pending.isEmpty()) "没有" else "${config.pending.size} 项", "settings/pending", nav)

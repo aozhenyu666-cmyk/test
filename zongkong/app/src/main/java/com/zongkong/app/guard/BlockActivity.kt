@@ -8,7 +8,6 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,13 +25,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -56,7 +52,6 @@ import com.zongkong.app.ui.rememberNow
 import com.zongkong.app.zk
 import com.zongkong.core.Engine
 import com.zongkong.core.Reason
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** 严管时打开拦截名单里的应用，就会被弹到这里。 */
@@ -113,18 +108,14 @@ class BlockActivity : ComponentActivity() {
 }
 
 @Composable
-private fun BlockScreen(appLabel: String, blockedPkg: String, goHome: () -> Unit, openRoute: (String) -> Unit, release: () -> Unit) {
+private fun BlockScreen(appLabel: String, pkg: String, goHome: () -> Unit, openRoute: (String) -> Unit, release: () -> Unit) {
     val context = LocalContext.current
     val store = context.zk.store
     val config by store.config.collectAsStateWithLifecycle()
     val day by store.today.collectAsStateWithLifecycle()
-    // 训练回执会改今天的娱乐额度：把账本也作为 key，交卷后立刻按新额度重判
-    val book by store.training.collectAsStateWithLifecycle()
     val now = rememberNow(5_000)
-    val status = remember(config, day, now, book) { store.status(now) }
+    val status = remember(config, day, now) { store.status(now) }
     val sig = LocalSignals.current
-    // 交卷回执要留到“已放行”那一屏也看得见
-    var trainingReceipt by remember { mutableStateOf<String?>(null) }
 
     Column(
         Modifier
@@ -153,12 +144,11 @@ private fun BlockScreen(appLabel: String, blockedPkg: String, goHome: () -> Unit
 
         if (!status.strict) {
             Panel(accent = sig.free) {
-                trainingReceipt?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
                 Text(Engine.summary(status), style = MaterialTheme.typography.bodyLarge)
                 Button(onClick = release, modifier = Modifier.fillMaxWidth()) { Text("继续") }
             }
         } else {
-            StrictBody(status, config.emergencyMinutes, config.training, blockedPkg, { trainingReceipt = it }, goHome, openRoute, release)
+            StrictBody(status, config.emergencyMinutes, goHome, openRoute, release, pkg, config.training)
         }
     }
 }
@@ -167,12 +157,11 @@ private fun BlockScreen(appLabel: String, blockedPkg: String, goHome: () -> Unit
 private fun StrictBody(
     status: com.zongkong.core.Status,
     emergencyMinutes: Int,
-    trainingPolicy: com.zongkong.core.moling.TrainingPolicy,
-    blockedPkg: String,
-    onTrainingMessage: (String) -> Unit,
     goHome: () -> Unit,
     openRoute: (String) -> Unit,
     release: () -> Unit,
+    pkg: String = "",
+    training: com.zongkong.core.moling.TrainingPolicy = com.zongkong.core.moling.TrainingPolicy(),
 ) {
     val context = LocalContext.current
     val store = context.zk.store
@@ -235,6 +224,12 @@ private fun StrictBody(
                     Text("已用 ${r.usedMin} 分钟，今天挣到 ${r.allowedMin} 分钟。", style = MaterialTheme.typography.bodyMedium.merge(Mono))
                     Hint("做完一步 +20 分钟，实打实做事每半小时 +10。不做事，就只有每天的底数。")
                     Button(onClick = { openRoute("home") }, modifier = Modifier.fillMaxWidth()) { Text("去做下一步") }
+                    // 以思代锁：只在“挣来的用完了”是唯一原因、策略开着、这个应用在名单里时出现
+                    if (com.zongkong.app.ui.trainingAvailable(status, training, pkg)) {
+                        com.zongkong.app.ui.TrainingCard(pkg, training.minutesPerPass) {
+                            if (!store.status().strict) release()
+                        }
+                    }
                 }
                 is Reason.Debt -> Panel(accent = sig.strict, onClick = { openRoute("start/${r.actionKey}") }) {
                     Text("「${r.title}」过了点还没开始", style = MaterialTheme.typography.titleMedium)
@@ -252,12 +247,6 @@ private fun StrictBody(
                 }
             }
         }
-
-        // 以思代锁：只在“策略开着 + 这个应用在名单里 + 现在只因为挣来的娱乐用完而拦”时出现按钮。
-        val canTrain = trainingPolicy.enabled && blockedPkg.isNotBlank() &&
-            blockedPkg in trainingPolicy.packages &&
-            com.zongkong.core.moling.Training.blocker(status) == null
-        if (canTrain) TrainingPanel(trainingPolicy, blockedPkg, onTrainingMessage)
 
         message?.let { Text(it, color = sig.warn, style = MaterialTheme.typography.bodyMedium) }
 
@@ -288,103 +277,3 @@ private fun StrictBody(
         }
     }
 }
-
-/**
- * 拦截页的「做一局训练」卡片（A2）。题目由总控出、总控判；界面只拿题干和选项——
- * [com.zongkong.core.moling.TrainingChallenge.questions] 里带 answer 字段，这里绝不显示、也不记录。
- */
-@Composable
-private fun TrainingPanel(
-    policy: com.zongkong.core.moling.TrainingPolicy,
-    blockedPkg: String,
-    onMessage: (String) -> Unit,
-) {
-    val context = LocalContext.current
-    val store = context.zk.store
-    val sig = LocalSignals.current
-    var challenge by remember { mutableStateOf<com.zongkong.core.moling.TrainingChallenge?>(null) }
-    var answers by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
-    var remaining by remember { mutableLongStateOf(0L) }
-    var note by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-
-    val c = challenge
-    LaunchedEffect(c?.id) {
-        val active = c ?: return@LaunchedEffect
-        while (true) {
-            remaining = ((active.expiresAt - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
-            if (remaining <= 0) break
-            delay(1_000)
-        }
-        remaining = 0
-    }
-
-    Panel(accent = sig.strict) {
-        Text("做一局训练，换 ${policy.minutesPerPass} 分钟", style = MaterialTheme.typography.titleMedium)
-        Hint("4 道单选，对 3 道才过。5 分钟内交卷；换来的是今天的娱乐分钟，一小时内有效，用完照旧拦。")
-        note?.let { Text(it, color = sig.warn, style = MaterialTheme.typography.bodyMedium) }
-        if (c == null) {
-            Button(
-                onClick = {
-                    if (!busy) {
-                        busy = true
-                        val out = store.trainingIssue(blockedPkg)
-                        busy = false
-                        val value = out.value
-                        if (out.ok && value != null) {
-                            challenge = value
-                            remaining = ((value.expiresAt - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
-                            answers = emptyMap()
-                            note = null
-                        } else {
-                            note = out.message
-                        }
-                    }
-                },
-                enabled = !busy,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("做一局训练（换 ${policy.minutesPerPass} 分钟）") }
-        } else if (remaining <= 0) {
-            Text("这一局超时了（5 分钟没交卷）。", style = MaterialTheme.typography.bodyMedium)
-            Button(onClick = { challenge = null; note = "超时了；想换就再开一局。" }, modifier = Modifier.fillMaxWidth()) { Text("知道了") }
-        } else {
-            c.questions.forEach { q ->
-                Text(q.stem, style = MaterialTheme.typography.bodyLarge)
-                q.options.forEach { o ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { answers = answers + (q.id to o.id) }
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(selected = answers[q.id] == o.id, onClick = { answers = answers + (q.id to o.id) })
-                        Text(o.text, style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-            }
-            Text(
-                "还剩 ${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}",
-                style = MaterialTheme.typography.bodyMedium.merge(Mono),
-                color = if (remaining <= 60) sig.warn else sig.muted,
-            )
-            Button(
-                onClick = {
-                    if (!busy) {
-                        busy = true
-                        val receipt = store.trainingSubmit(c.id, c.nonce, answers)
-                        busy = false
-                        challenge = null
-                        answers = emptyMap()
-                        note = receipt.message
-                        onMessage(receipt.message)
-                    }
-                },
-                enabled = !busy && c.questions.all { answers.containsKey(it.id) },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("交卷") }
-            TextButton(onClick = { challenge = null; note = "这一局先不交了；开过就算一次尝试。" }) { Text("先不做") }
-        }
-    }
-}
-

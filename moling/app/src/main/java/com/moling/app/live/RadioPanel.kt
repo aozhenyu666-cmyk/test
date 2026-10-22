@@ -58,7 +58,7 @@ fun RadioPanel(ws: WorkbenchState, focus: Focus? = ws.active()) {
             delay(500)
         }
     }
-    // 离开面板就停：不把电台留在后台一个人念（音频焦点 / 拔耳机 / 来电 / 熄屏在 RadioHost 里处理）。
+    // 离开面板就停（除非设置里开了“锁屏后继续播”）；音频焦点 / 拔耳机 / 来电由 Media3 播放器处理。
     DisposableEffect(Unit) {
         onDispose { BrainHost.radioStopAll() }
     }
@@ -118,7 +118,7 @@ fun RadioPanel(ws: WorkbenchState, focus: Focus? = ws.active()) {
                     Text("陪我听一会 · " + s.state.label, style = MaterialTheme.typography.titleSmall)
                     Text(
                         "第 " + (s.index + 1) + "/" + s.segments.size + " 段" + when {
-                            s.state == RadioState.PAUSED -> " · 已暂停（继续从这一段开头念）"
+                            s.state == RadioState.PAUSED -> " · 已暂停（继续会从停下的地方接着念）"
                             left > 0 -> " · 还剩 " + left + " 秒"
                             else -> ""
                         },
@@ -167,7 +167,7 @@ fun RadioPanel(ws: WorkbenchState, focus: Focus? = ws.active()) {
             // 这是“让她安静两小时”，不是电台控件：挪出暂停/跳过/停止那一排，名字写明白。
             TextButton(onClick = { scope.launch { runCatching { BrainHost.stopLive() } } }) { Text("这两小时别主动找我") }
             Text(
-                "只听不回：不扣分，也不会追着问。停止后这一段不会再自动恢复；暂停后继续从这一段开头重新念。",
+                "只听不回：不扣分，也不会追着问。停止后不会再自动恢复；暂停后从停下的地方接着念。通知栏和锁屏上也能暂停 / 跳过 / 停止。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

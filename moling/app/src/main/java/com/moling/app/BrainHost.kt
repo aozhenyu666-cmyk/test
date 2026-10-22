@@ -8,6 +8,11 @@ import com.moling.app.data.MolingAsk
 import com.moling.app.data.SettingsStore
 import com.moling.core.Brain
 import com.moling.core.BrainFacts
+import com.moling.core.atlas.Atlas
+import com.moling.core.atlas.AtlasOps
+import com.moling.core.forage.Discovery
+import com.moling.core.forage.DiscoveryPage
+import com.moling.core.forage.ForageState
 import com.moling.core.BrainState
 import com.moling.core.ChatResult
 import com.moling.core.Notice
@@ -37,6 +42,9 @@ import com.moling.core.flow.FlowPlan
 import com.moling.core.flow.PlanDriver
 import com.moling.core.flow.PlanDriverState
 import com.moling.core.flow.PlanResult
+import com.moling.core.flow.OperationState
+import com.moling.core.flow.PlanReceipt
+import com.moling.core.link.power
 import com.moling.core.guard.GuardSample
 import com.moling.core.link.ZkStatus
 import com.moling.core.mind.Actor
@@ -53,6 +61,8 @@ import com.moling.core.workspace.JobKind
 import com.moling.core.workspace.PortError
 import com.moling.core.workspace.PortResult
 import com.moling.core.workspace.Workbench
+import com.moling.core.web.HttpWebPort
+import com.moling.core.web.Sources
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -64,6 +74,7 @@ import com.moling.core.talk.OutbrainEndpoint
 import com.moling.core.talk.OutbrainRoute
 import com.moling.core.talk.OutbrainRouter
 import com.moling.core.talk.OutbrainState
+import com.moling.core.talk.OutbrainStatus
 import com.moling.core.talk.OutbrainTransport
 import com.moling.core.talk.ReceiveOutcome
 import com.moling.core.mind.MindState
@@ -81,6 +92,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -116,6 +128,17 @@ object BrainHost {
     private val _sources = MutableStateFlow(com.moling.core.web.SourceState())
     val sources: StateFlow<com.moling.core.web.SourceState> = _sources
     private var sourceFile: java.io.File? = null
+
+    /** 深想模型（设置里单独填了才有）：联网采蜜的整理优先用它，没有就用平时的。 */
+    private lateinit var deepAsk: MolingAsk
+
+    /** 联网采蜜的预算账（「每天自动一份」用，默认关）；跨天清零、跨重启保留。 */
+    private val _forage = MutableStateFlow(ForageState())
+    val forage: StateFlow<ForageState> = _forage
+    private var forageFile: java.io.File? = null
+    private val autoForageGate = AtomicBoolean(false)
+    /** 手动点 / 自动一天一份共用一把锁：同时只跑一轮，连点不重复花钱。 */
+    private val forageLock = Mutex()
 
     /** 第十三批 G1：本地计划代驾（草稿/本地采纳/执行账本），单独存 mind/plan-adoption.json。 */
     private lateinit var planDriver: PlanDriver
@@ -168,6 +191,7 @@ object BrainHost {
             val ask = MolingAsk(settings, LlmClient({ settings.load() })).also { askModel = it }
             // 深想模型：没填就和平时同一个（大脑里 deep = null 时退回 ask）
             val deep = MolingAsk(settings, LlmClient({ settings.load().deep() }, timeoutSec = 120, withTemperature = false), timeoutMs = 125_000L)
+            deepAsk = deep
             brain = Brain(
                 phone = PhoneFacts(
                     foreground = { appContext?.let { Usage.foreground(it) } },
@@ -208,6 +232,11 @@ object BrainHost {
             _sources.value = (runCatching {
                 sourceFile?.takeIf { it.exists() }?.readText()?.let { Json.decodeFromString<com.moling.core.web.SourceState>(it) }
             }.getOrNull() ?: com.moling.core.web.SourceState()).let { com.moling.core.web.Sources.prune(it) }
+            // 联网采蜜的预算账：旧文件没有 / 读坏了就当空的（默认关），不影响启动
+            forageFile = File(dir, "forage.json")
+            _forage.value = runCatching {
+                forageFile?.takeIf { it.exists() }?.readText()?.let { Json.decodeFromString<ForageState>(it) }
+            }.getOrNull() ?: ForageState()
             // 计划代驾：状态单独存；旧文件没有就当空。本地采用不会自动发任何指令。
             planFile = File(dir, "plan-adoption.json")
             val planInitial = runCatching {
@@ -359,8 +388,17 @@ object BrainHost {
 
     // ---------------------------------------------------------------- 今天
 
+    /** 今天日历上的忙碌时段（他开了日历、给了权限、选了日历才有；否则空，排水道照旧）。 */
+    private fun calendarBusy(now: Long): List<com.moling.core.flow.Busy> {
+        val ctx = appContext ?: return emptyList()
+        val cal = com.moling.app.system.AndroidCalendar(ctx, com.moling.app.system.ToolsStore(ctx))
+        if (!cal.capability().usable) return emptyList()
+        val start = com.moling.core.flow.Flow.dayStart(com.moling.core.Brain.calendarDay(now))
+        return cal.readBusy(start, start + 24 * 3_600_000L).value.orEmpty()
+    }
+
     suspend fun planDay(now: Long, force: Boolean = false): FlowPlan {
-        val plan = io("planDay", { _state.value.flow ?: fallbackPlan(now) }) { brain.planDay(now, force) }
+        val plan = io("planDay", { _state.value.flow ?: fallbackPlan(now) }) { brain.planDay(now, force, calendarBusy(now)) }
         // 排好就登记成计划草稿；只是草稿，不自动采用、不交给总控。
         runCatching { registerPlan(plan, now) }.onFailure { Log.w(TAG, "记计划草稿失败", it) }
         return plan
@@ -403,9 +441,59 @@ object BrainHost {
     }
 
     /** 心跳每分钟喂一次：到点只发「一键采用」提醒，不自动采用、不发指令。 */
-    suspend fun tickPlan(now: Long): PlanDriverState = planIo({ _plan.value }) {
-        planDriver.tick(now)
-        planDriver.snapshot()
+    suspend fun tickPlan(now: Long): PlanDriverState {
+        val st = planIo({ _plan.value }) {
+            planDriver.tick(now)
+            planDriver.snapshot()
+        }
+        // G2：问一问还没有最终结果的动作（锁外调总控，回来再记）
+        st.operations.filter { (it.state == OperationState.ZK_PENDING || it.state == OperationState.ACTIVE) && it.receiptId.isNotBlank() }
+            .take(5)
+            .forEach { op ->
+                val r = withContext(Dispatchers.IO) { runCatching { ZkBridge.result(op.receiptId) }.getOrNull() } ?: return@forEach
+                val final = com.moling.core.flow.PlanReceipts.finalOf(r.state)
+                if (final != "PENDING") planIo({ null }) { planDriver.recordFinal(op.operationId, op.receiptId, final, r.message, now) }
+            }
+        return _plan.value
+    }
+
+    /**
+     * G2：他点「交给总控」——今天这份已经本地采用的计划，逐条按授权书交给总控：先在账本里记一笔，再发，回执写回账本。
+     * 授权书内总控倒计时 60 秒执行（可以在总控取消），授权外总控照旧问他；墨灵现在的权柄不允许的指令不发。
+     * 调总控时不拿账本的锁；发出去没回执（连不上 / 中断）记“结果未知”，不盲目重发。
+     */
+    suspend fun executePlan(now: Long): String {
+        if (!ready) return "还没准备好"
+        val plan = _state.value.flow?.takeIf { it.day == Brain.calendarDay(now) } ?: return "今天还没有水道"
+        val tier = brain.tier()
+        val all = com.moling.core.flow.Flow.toCommands(plan, com.moling.core.flow.Flow.dayStart(plan.day))
+        val commands = all.filter { com.moling.core.link.ZkWire.valid(it) && com.moling.core.power.Charter.check(it.power(), tier).allowed }
+        if (commands.isEmpty()) return "没有现在的权柄允许交给总控的指令"
+        val prep = planIo({ null }) { planDriver.prepareExecution(plan, commands, now) } ?: return "刚才没接上，等会儿再试"
+        if (!prep.ok) return prep.message
+        var sent = 0
+        var unknown = 0
+        var rejected = 0
+        for (op in prep.operations) {
+            if (op.state != OperationState.PREPARED) continue
+            planIo({ null }) { planDriver.markSending(op.operationId, System.currentTimeMillis()) } ?: continue
+            val r = withContext(Dispatchers.IO) { runCatching { ZkBridge.sendAuto(op.command) }.getOrNull() }
+            val at = System.currentTimeMillis()
+            if (r == null) {
+                planIo({ null }) { planDriver.markUnknown(op.operationId, at, "连不上总控：发没发到不确定，不重发，等能查回执再说") }
+                unknown++
+                break
+            }
+            planIo({ null }) { planDriver.recordReceipt(op.operationId, PlanReceipt(r.id, r.ok, r.auto, r.message, at), at) }
+            if (r.ok) sent++ else rejected++
+        }
+        val skipped = all.size - commands.size
+        return buildList {
+            if (sent > 0) add("交给总控 $sent 条（授权内 60 秒后执行、可在总控取消；授权外要你在总控确认）")
+            if (rejected > 0) add("总控拒了 $rejected 条")
+            if (unknown > 0) add("有 1 条结果未知，没有重发")
+            if (skipped > 0) add("$skipped 条现在的权柄不允许，没发")
+        }.joinToString("；").ifBlank { "没有发出任何指令" }
     }
 
     private suspend fun registerPlan(plan: FlowPlan, now: Long, focusKey: String = "") {
@@ -455,8 +543,16 @@ object BrainHost {
             runCatching { postNotices(now, listOf(n)) }
         }
         runCatching { outbrainSweep(now) }
+        // 焦点两小时没动就收起成“可续上”（W10 T8）：不删稿子，续上还是同一件事
+        if (::bench.isInitialized) io("benchExpire", { false }) { bench.expire(now) }
         runCatching { withContext(Dispatchers.IO) { autoSchedule(now) } }
         runCatching { liveTick(now) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "活的墨灵失败", it) }
+        // 第十五批 B5：主河道开始 / 结束时的勿扰和歌单提醒（各自开关，默认关）
+        runCatching {
+            appContext?.let { ctx ->
+                com.moling.app.system.SystemCues.tick(ctx, _state.value.flow?.takeIf { it.day == com.moling.core.Brain.calendarDay(now) }, now)
+            }?.let { Log.i(TAG, "系统工具：$it") }
+        }
         if (interactive()) runCatching { refreshUsage() }
         runCatching { relay(now, force = false) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "联络站同步失败", it) }
         runCatching { mirror(now, force = false) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "Notion 同步失败", it) }
@@ -482,30 +578,56 @@ object BrainHost {
     }
 
     /** 和联络站同步一次（心跳里每 10 分钟；贯通页点“同步”时 [force]）。没设置返回 null。 */
-    suspend fun relay(now: Long = System.currentTimeMillis(), force: Boolean = true): String? {
+    suspend fun relay(now: Long = System.currentTimeMillis(), force: Boolean = true): String? =
+        relayResult(now, force)?.status
+
+    /**
+     * 真的同步一次，把整个结果给调用方（外脑“推到联络站”要知道黑板到底推没推上去）。
+     * 黑板 = 她的交接包 + 正在等结果的联络站外脑会话（Outbrain.relayBoard）。
+     */
+    /** 联络站黑板正文的上限（和 relay-worker 的截断一致）。 */
+    private const val RELAY_TEXT_MAX = 20_000
+
+    /** 上一次推送成功时黑板上放的外脑会话。 */
+    @Volatile
+    private var lastOnBoard: List<String> = emptyList()
+
+    private suspend fun relayResult(now: Long, force: Boolean): com.moling.app.mirror.RelaySync.Result? {
         if (!ready) return null
+        // 这次黑板上真放了哪几个外脑会话（推送成功后只标这几个；不按推完之后的状态重新算）
+        var onBoard: List<String> = emptyList()
         val r = withContext(Dispatchers.IO) {
             com.moling.app.mirror.RelaySync.sync(
                 settings, now, force,
-                board = { brain.handoff(now) to brain.state().questions },
-                seen = { brain.state().mirrorSeen },
-                routeOutbrain = { items ->
-                    val handled = mutableSetOf<String>()
-                    val waiting = Outbrain.waiting(outbrain.state()).map { it.id }.toSet()
-                    items.forEach { item ->
-                        val sid = Outbrain.taggedSessionId(item.text) ?: return@forEach
-                        if (sid !in waiting) return@forEach
-                        val got = outbrain.receive(Outbrain.clean(item.text), now, sessionId = sid, source = "relay")
-                        if (got is PortResult.Ok) handled += item.id
-                    }
-                    handled
+                board = {
+                    val snapshot = outbrain.state()
+                    onBoard = Outbrain.relayBoardSessions(snapshot, now).map { it.id }
+                    val out = Outbrain.relayBoard(snapshot, now)
+                    // 联络站只收 20000 字：外脑段放得下才算数，交接正文按剩下的位置截（不让外脑段被悄悄截掉）
+                    val room = (RELAY_TEXT_MAX - out.length - 2).coerceAtLeast(0)
+                    val text = brain.handoff(now).take(room)
+                    (if (out.isBlank()) text else text + "\n\n" + out) to brain.state().questions
                 },
+                seen = { brain.state().mirrorSeen },
+                // B4：带 [[外脑:ob-…]] 回来的按会话认领（已取消 / 过期 → 只进历史，不混进大脑的材料）。
+                routeOutbrain = { items -> outbrain.receiveRelayTagged(items.map { it.id to it.text }, now) },
                 absorb = { items -> io("absorb", { Absorbed() }) { brain.absorb(items, now) } },
             )
         } ?: return null
+        // 黑板推上去了：这次真带上的 OPENED 联络站会话都算“推上去了”（外脑还没来读，仍然不是已读）。
+        // 放在这里而不是只放在“推到联络站”按钮里：推送失败后由心跳补推成功也算数。
+        lastOnBoard = if (r.pushed) onBoard else emptyList()
+        if (r.pushed) {
+            val ids = onBoard.filter { id -> outbrain.state().sessions.firstOrNull { it.id == id }?.status == OutbrainStatus.OPENED }
+            if (ids.isNotEmpty()) {
+                withContext(Dispatchers.IO) {
+                    ids.forEach { id -> runCatching { outbrain.relayPushed(id, now) } }
+                }
+            }
+        }
         refreshState()
         tellAbsorbed(r.absorbed)
-        return r.status
+        return r
     }
 
     /** 收件箱里有回答 / 要告诉他的事：发一条通知。 */
@@ -688,7 +810,12 @@ object BrainHost {
             fadeTick(ctx, autopilot, activity)
             val trigger = brain.liveTrigger(activity, now, unlockGapMin, cfg, autopilot, leftPlay) ?: return
             val cues = if (trigger == com.moling.core.live.Trigger.AUTOPILOT) autopilot?.reasons.orEmpty() else emptyList()
-            val turn = io<LiveTurn?>("live", { null }) { brain.live(trigger, activity, now, cfg = cfg, can = Appear.can(ctx), cues = cues) } ?: return
+            // W11 R4：点选题用他案板上正在做的那件事的材料（网页来的标“未核实”）；没有就不出内容题
+            val material = runCatching {
+                val ws = _bench.value
+                ws.active()?.let { f -> ws.materialsOf(f).takeLast(3).map { m -> (if (m.kind == "web") "（网页，未核实）" else "") + m.title.take(20) + "：" + m.text.take(160) } }.orEmpty()
+            }.getOrDefault(emptyList())
+            val turn = io<LiveTurn?>("live", { null }) { brain.live(trigger, activity, now, cfg = cfg, can = Appear.can(ctx), cues = cues, material = material) } ?: return
             withContext(Dispatchers.Main) {
                 LiveScreens.nextChoices = turn.choices
                 Appear.show(ctx, turn, activity?.label.orEmpty())
@@ -733,6 +860,14 @@ object BrainHost {
 
     /** 简报：收下 / 不要。返回收进体系图几条。 */
     suspend fun keepBrief(id: String, keep: Boolean): Int = io("keepBrief", { 0 }) { brain.keepBrief(id, keep, System.currentTimeMillis()) }
+
+    /** 认知画像（W10 T8）：从她真实的出现记录里数，样本不足就说不足。 */
+    fun profile(): com.moling.core.live.Profile? = if (ready) runCatching { brain.profile() }.getOrNull() else null
+
+    /** 画像规律：对 / 停用 / 撤回（null）。只记他的选择，这一批不改她的出现策略。 */
+    suspend fun setProfileRule(id: String, state: com.moling.core.live.PatternState?) {
+        io("setProfileRule", {}) { brain.setProfileRule(id, state, System.currentTimeMillis()) }
+    }
 
     /** 规律：对（生效）/ 不对。 */
     suspend fun setRule(id: String, keep: Boolean) {
@@ -798,6 +933,43 @@ object BrainHost {
     /** 他确认后：把采用过的论断织进体系图（[topicId] null = 当前主题）。返回收进几条。 */
     suspend fun benchKeep(artifactId: String, topicId: String? = null): Int =
         io("benchKeep", { 0 }) { brain.keepClaims(bench.claims(artifactId), topicId, System.currentTimeMillis()) }
+
+    // ---------------------------------------------------------------- 以思代锁·墨灵侧（第十五批 A3）
+
+    /** 墨灵侧训练客户端：题目、判分、通行全在总控；这里只转交和核对回执。 */
+    val training: com.moling.core.redeem.TrainingRedeemClient by lazy { com.moling.core.redeem.TrainingRedeemClient(ZkBridge.gateV2) }
+
+    /** 总控当前的训练策略（总控没装 / 旧版本 / 连不上 → Failed）。 */
+    suspend fun trainingPolicy(): PortResult<com.moling.core.redeem.UnlockPolicyView> =
+        withContext(Dispatchers.IO) {
+            if (ZkBridge.gateV2.capabilities()?.supportsTraining() != true) PortResult.Failed(PortError("NOT_AVAILABLE", "总控没开放训练兑换（没装、旧版本或连不上）"))
+            else runCatching { ZkBridge.gateV2.policy() }.getOrElse { PortResult.Failed(PortError("NOT_AVAILABLE", "总控连不上")) }
+        }
+
+    suspend fun trainingStart(pkg: String): PortResult<com.moling.core.redeem.ChallengeBundle> =
+        withContext(Dispatchers.IO) { runCatching { training.start(pkg, System.currentTimeMillis()) }.getOrElse { PortResult.Failed(PortError("NOT_AVAILABLE", "总控连不上")) } }
+
+    suspend fun trainingSubmit(answers: List<com.moling.core.redeem.ChallengeAnswer>): PortResult<com.moling.core.redeem.ExecutionReceipt> =
+        withContext(Dispatchers.IO) { runCatching { training.submit(answers, System.currentTimeMillis()) }.getOrElse { PortResult.Failed(PortError("NOT_AVAILABLE", "总控连不上")) } }
+
+    // ---------------------------------------------------------------- 候选记忆（第十五批 B2）
+
+    /** 从一份稿子提候选（只提新的），返回这份稿子还没被他否掉的候选。不调模型。 */
+    suspend fun benchCandidates(artifactId: String): List<com.moling.core.atlas.MemoryCandidate> =
+        io("benchCandidates", { emptyList() }) {
+            val a = bench.state().artifact(artifactId) ?: return@io emptyList()
+            brain.proposeCandidates(a, System.currentTimeMillis())
+        }
+
+    /** 他点「收」：原话进体系图。主题：当前主题 → 第一个 → 用这件事的问题新建。 */
+    suspend fun candidateAccept(id: String, fallbackTopic: String): PortResult<String> =
+        io("candidateAccept", { offline() }) { brain.acceptCandidate(id, null, fallbackTopic, System.currentTimeMillis()) }
+
+    suspend fun candidateReject(id: String): PortResult<Unit> =
+        io("candidateReject", { offline() }) { brain.rejectCandidate(id, System.currentTimeMillis()) }
+
+    suspend fun candidateUndo(id: String): PortResult<Unit> =
+        io("candidateUndo", { offline() }) { brain.undoCandidate(id, System.currentTimeMillis()) }
 
     /** 第十批 T2/T3：抓一个真实网页，正文存来源库并作为材料放上当前案板。整次请求 15 秒（WebPort 内 withTimeout）。 */
     suspend fun benchFetchSource(focusId: String, url: String): PortResult<com.moling.core.workspace.Material> =
@@ -885,6 +1057,224 @@ object BrainHost {
             f.parentFile?.mkdirs()
             val tmp = File(f.path + ".tmp")
             tmp.writeText(Json.encodeToString(_sources.value))
+            if (!tmp.renameTo(f)) {
+                f.delete()
+                tmp.renameTo(f)
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- 联网采蜜（v13 第十五批 B1）
+
+    /** 「每天自动一份」的账（设置页 / 调试页读）：今天用了几次查询、抓了几篇。 */
+    fun forageState(): ForageState = _forage.value
+
+    /**
+     * 他点了「去查一下」：从这件事的问题（没有就体系图最大的缺口）选 query，
+     * 走已合入的 WebPort 搜索（没配 Brave 就 NOT_CONFIGURED，不造假）、把正文抓进来源库，
+     * 再把支持 / 反对整理成一份 DISCOVERY 稿子。最多两路查询；一篇真实正文都没抓到就不落稿。
+     */
+    suspend fun forageOnline(focusId: String? = null): PortResult<WorkspaceArtifact> {
+        if (!ready) return PortResult.Failed(PortError(PortError.OFFLINE, "刚才没接上，再试一次"))
+        val now = System.currentTimeMillis()
+        val ws = _bench.value
+        val current = focusId?.let { ws.focus(it) } ?: ws.active()
+        val gaps = runCatching {
+            val a: Atlas = brain.state().atlas
+            a.topics.flatMap { AtlasOps.gaps(a, it.id) }
+        }.getOrDefault(emptyList())
+        val picked = Discovery.pickQuery(current?.question, gaps)
+            ?: return PortResult.Failed(PortError(PortError.NOT_FOUND, "案板上没有正在做的事，体系图里也没有缺口：先开一件事"))
+        val question = picked.trim()
+        if (runCatching { settings.braveKey() }.getOrDefault("").isBlank()) {
+            return PortResult.Failed(PortError("NOT_CONFIGURED", "还没配搜索服务（设置里填 Brave 搜索密钥）：没法联网查"))
+        }
+        // 没有正在做的事：真抓到网页以后才新开一件，查不到不留空的焦点
+        return io("forageOnline", { offline() }) {
+            forageOnce(question, current?.id) { bench.start(Discovery.query(question).ifBlank { question }.take(80), "", System.currentTimeMillis()).id }.result
+        }
+    }
+
+    /** 一轮联网采蜜的记账：真实用掉几次查询、抓了几篇正文（「每天自动一份」的预算按这个扣）。 */
+    private data class ForageRun(
+        val result: PortResult<WorkspaceArtifact>,
+        val searches: Int,
+        val fetches: Int,
+    )
+
+    /** 手动 / 自动同时只跑一轮；已经在查就明确说 BUSY，不重复搜、不重复调模型。 */
+    private suspend fun forageOnce(question: String, focusId: String?, newFocus: (suspend () -> String)? = null): ForageRun {
+        if (!forageLock.tryLock()) {
+            return ForageRun(PortResult.Failed(PortError(PortError.BUSY, "正在联网查，等这一份回来")), 0, 0)
+        }
+        return try {
+            forageWork(question, focusId, newFocus)
+        } finally {
+            forageLock.unlock()
+        }
+    }
+
+    /**
+     * 真的搜、抓、整理、落稿。[focusId] = 已经在案板上的那件事；为 null 时，真抓到网页后才用 [newFocus] 新开一件
+     * （[newFocus] 也为 null 就不落稿）。
+     */
+    private suspend fun forageWork(question: String, existingFocus: String?, newFocus: (suspend () -> String)?): ForageRun {
+        val now = System.currentTimeMillis()
+        val queries = Discovery.queries(question)
+        if (queries.isEmpty()) {
+            return ForageRun(PortResult.Failed(PortError("BAD_ACTION", "没有可查的问题")), 0, 0)
+        }
+        val key = runCatching { settings.braveKey() }.getOrDefault("")
+        val harvest = Discovery.harvest(HttpWebPort(searchKey = key), queries, _sources.value, now)
+        // 抓到的正文先进来源库（同一 URL 复用旧编号，不悄悄换正文）
+        if (harvest.pages.isNotEmpty()) {
+            _sources.update { current ->
+                var st = current
+                harvest.pages.zip(harvest.refs).forEach { (page, ref) -> st = Sources.put(st, ref, page.text) }
+                st
+            }
+            runCatching { saveSources() }
+        }
+        val sourceIds = harvest.pages.map { it.sourceId }.distinct()
+        val inputHash = Discovery.inputHash(question, sourceIds)
+        // 同一件事、同一批来源已经查过：给他那一份，不重复花钱
+        existingFocus?.let { f -> bench.discovery(f, inputHash)?.let { return ForageRun(PortResult.Ok(it), harvest.queries.size, harvest.pages.size) } }
+        if (harvest.pages.isEmpty()) {
+            val e = harvest.errors.firstOrNull()
+            return ForageRun(
+                PortResult.Failed(e ?: PortError("EMPTY", "这次没有抓到任何真实网页，不生成发现")),
+                harvest.queries.size,
+                0,
+            )
+        }
+        val focusId = existingFocus ?: newFocus?.invoke()
+            ?: return ForageRun(PortResult.Failed(PortError("NOT_FOUND", "案板上没有正在做的事，不自动新开")), harvest.queries.size, harvest.pages.size)
+        // 真抓到的正文当材料挂上；来源库按材料 id 也能找回去（材料弹窗里的「删除原文」）
+        harvest.pages.forEach { page ->
+            when (val added = bench.addSourceMaterial(focusId, page.text, page.title.ifBlank { page.url }, now)) {
+                is PortResult.Ok -> _sources.update { st -> Sources.attach(st, added.value.id, page.sourceId, now) }
+                is PortResult.Failed -> {}
+            }
+        }
+        runCatching { saveSources() }
+        val persona = runCatching { settings.load().persona }.getOrDefault("你是墨灵，他的伙伴。")
+        val about = runCatching { brain.state().about }.getOrDefault("")
+        val reply = runCatching {
+            val ask = if (runCatching { settings.load().hasDeep() }.getOrDefault(false)) deepAsk else askModel
+            ask.ask(persona, Discovery.prompt(persona, question, harvest.pages, about))
+        }.getOrNull()
+        val draft = reply?.let { Discovery.parse(it, sourceIds.toSet()) }
+        val offline = draft == null
+        val title = "联网发现：" + Discovery.query(question).ifBlank { question }.take(20)
+        val result = bench.attachDiscovery(
+            focusId = focusId,
+            title = title,
+            inputHash = inputHash,
+            draft = draft ?: Discovery.fallback(harvest.pages),
+            sourceIds = sourceIds,
+            now = now,
+            offline = offline,
+        )
+        return ForageRun(result, harvest.queries.size, harvest.pages.size)
+    }
+
+    /**
+     * 心跳里最多一天一次：「每天自动一份」只有他自己打开、配了搜索密钥、亮屏、而且预算还够时才查。
+     * 默认关；预算用 AutonomyBudget，跨天清零、跨重启保留。失败也记下来，但不拿假结果充数。
+     */
+    private fun autoForage(now: Long) {
+        val ctx = appContext ?: return
+        if (!ready) return
+        if (!runCatching { settings.forageAutoOn() }.getOrDefault(false)) return
+        if (runCatching { settings.braveKey() }.getOrDefault("").isBlank()) return
+        if (!interactive()) return
+        val day = Brain.calendarDay(now)
+        val st = _forage.value
+        if (st.lastAutoDay == day) return
+        val atlas = runCatching { brain.state().atlas }.getOrDefault(Atlas())
+        val gaps = atlas.topics.flatMap { AtlasOps.gaps(atlas, it.id) }
+        // 自动的只往他正在做的那件事上放，绝不自己新开一件
+        val focus = _bench.value.active() ?: return
+        val question = Discovery.pickQuery(focus.question, gaps) ?: return
+        val queries = Discovery.queries(question)
+        if (queries.isEmpty()) return
+        var budget = st.budget.fresh(day)
+        if (!budget.enabled) budget = budget.copy(enabled = true)
+        if (budget.searches + queries.size > budget.maxSearches) return
+        if (budget.fetches + Discovery.MAX_FETCH > budget.maxFetches) return
+        if (!budget.canJob()) return
+        if (!autoForageGate.compareAndSet(false, true)) return
+        // 先记下今天已经试过：失败也不每分钟重试（预算账在下面按真实的查询 / 抓取扣）
+        _forage.value = st.copy(day = day, budget = budget, lastAutoDay = day, lastAutoAt = now, lastMessage = "自动采蜜：正在查…")
+        saveForage()
+        answerScope.launch {
+            try {
+                val run = forageOnce(question, focus.id)
+                val used = budget.copy(
+                    enabled = true,
+                    searches = budget.searches + run.searches,
+                    fetches = budget.fetches + run.fetches,
+                    // 抓到了正文就会调一次模型整理：记进后台模型作业数
+                    jobs = budget.jobs + if (run.fetches > 0) 1 else 0,
+                )
+                when (val r = run.result) {
+                    is PortResult.Ok -> {
+                        _forage.value = _forage.value.copy(budget = used, lastMessage = "联网查回一份：" + r.value.title)
+                        runCatching { Notify.discoveryReady(ctx, r.value.title, "支持 / 反对和来源都在案板上；网页内容未核实。") }
+                    }
+                    is PortResult.Failed -> {
+                        _forage.value = _forage.value.copy(budget = used, lastMessage = r.error.message)
+                    }
+                }
+                saveForage()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "自动采蜜失败", e)
+                _forage.value = _forage.value.copy(lastMessage = "自动采蜜失败：" + (e.message ?: e.javaClass.simpleName))
+                saveForage()
+            } finally {
+                autoForageGate.set(false)
+            }
+        }
+    }
+
+    /**
+     * 她主动准备第一块（W10 T7）：他开了开关、案板上正在做的事有材料没稿子、等过他了、预算够、不在安静期，
+     * 就替他先做一份三点纲要（未采用），发一条通知。同一版材料只做一次；先记账再开工，失败也不每分钟重试。
+     */
+    private fun autoPrep(now: Long) {
+        val ctx = appContext ?: return
+        if (!ready || !runCatching { settings.prepAutoOn() }.getOrDefault(false)) return
+        val day = Brain.calendarDay(now)
+        val st = _forage.value
+        var budget = st.budget.fresh(day)
+        if (!budget.enabled) budget = budget.copy(enabled = true)
+        val quiet = runCatching { com.moling.core.live.Habits.isQuiet(brain.state().habits, now) }.getOrDefault(true)
+        val d = com.moling.core.cycle.ProactivePrep.pick(_bench.value, now, quiet, budget, st.prepared)
+        val focusId = d.focusId ?: return
+        val spent = budget.spendJob()?.spendUnread() ?: return
+        _forage.value = st.copy(day = day, budget = spent, prepared = (st.prepared + d.key).takeLast(50), lastMessage = "主动准备：在拆「${_bench.value.focus(focusId)?.question?.take(16).orEmpty()}」")
+        saveForage()
+        answerScope.launch {
+            val r = runCatching { bench.prework(focusId, JobKind.OUTLINE, System.currentTimeMillis()) }.getOrNull()
+            if (r is PortResult.Ok && !r.value.offline) {
+                runCatching { Notify.prepReady(ctx, "我先替你拆了一份纲要", "「${r.value.title}」放在案板上了，没采用；你挑刺、改、或者不要都行。") }
+                _forage.value = _forage.value.copy(lastMessage = "主动准备好了：" + r.value.title)
+            } else {
+                _forage.value = _forage.value.copy(lastMessage = "主动准备没成（模型没接上），不再重试这一版")
+            }
+            saveForage()
+        }
+    }
+
+    /** 和 sources.json 一样原子写：tmp + rename。 */
+    private fun saveForage() {
+        val f = forageFile ?: return
+        runCatching {
+            f.parentFile?.mkdirs()
+            val tmp = File(f.path + ".tmp")
+            tmp.writeText(Json.encodeToString(_forage.value))
             if (!tmp.renameTo(f)) {
                 f.delete()
                 tmp.renameTo(f)
@@ -982,6 +1372,46 @@ object BrainHost {
             )
         }
 
+    /**
+     * B4：把联络站路线的进场包真的推到黑板（复用 RelaySync），回来靠 [[外脑:ob-…]] 按会话认领。
+     * 成功只说“推上去了”：推上黑板不代表外脑读到了。
+     */
+    suspend fun outbrainSendRelay(sessionId: String): String {
+        if (!ready) return "还没准备好"
+        val now = System.currentTimeMillis()
+        val session = outbrain.state().sessions.firstOrNull { it.id == sessionId } ?: return "这个外脑会话不在了"
+        if (session.transport != OutbrainTransport.RELAY) return "这个会话不是联络站路线"
+        when (session.status) {
+            OutbrainStatus.CANCELLED -> return "已经取消了，不再推"
+            OutbrainStatus.EXPIRED -> return "到点没回来：要接着推，先在收线卡里手动接回"
+            OutbrainStatus.RESULT_RECEIVED, OutbrainStatus.REVIEWED -> return "结论已经回来了，不用再推"
+            OutbrainStatus.WAITING_RESULT ->
+                if (Outbrain.pushedToBoard(session)) return "已经在等结果了：黑板上有这一包，到点没回来才撤下"
+            OutbrainStatus.PREPARED, OutbrainStatus.OPENED -> Unit
+        }
+        if (!settings.relay().ready()) return "联络站还没配置：先去贯通页填地址和令牌"
+        // 先标成 OPENED（黑板只放推上去 / 在等的 RELAY 会话），再强制同步一次。
+        when (val opened = io<PortResult<com.moling.core.talk.OutbrainSession>?>("outbrainRelayOpen", { null }) {
+            outbrain.open(sessionId, now)
+        }) {
+            null -> return "刚才没接上，再试一次"
+            is PortResult.Failed -> return opened.error.message
+            is PortResult.Ok -> Unit
+        }
+        val r = relayResult(now, force = true) ?: return "联络站还没配置：先去贯通页填地址和令牌"
+        if (!r.pushed) {
+            io("outbrainRelayFailed", {}) { outbrain.markError(sessionId, now, "没推上黑板") }
+            return "这次没推上去：" + r.status + "（之后同步还会再试）"
+        }
+        // relayResult 推送成功时已经把这次带上的 OPENED 会话标成“推上去了”。黑板放不下这一包就照实说。
+        if (sessionId !in lastOnBoard) return "黑板放不下这一包：先在收线卡里处理别的外脑会话，再推一次"
+        return if (r.status.startsWith("同步失败")) {
+            "进场包推上去了（收件箱这次没连上，下次再收）"
+        } else {
+            "进场包推上去了（等外脑来读，不是已读）"
+        }
+    }
+
     suspend fun outbrainClose(sessionId: String): PortResult<com.moling.core.talk.OutbrainSession> =
         io("outbrainClose", { offline() }) { outbrain.close(sessionId, System.currentTimeMillis()) }
 
@@ -1071,6 +1501,15 @@ object BrainHost {
         answerScope.launch { runCatching { io("react", {}) { brain.react(modality, reaction, ms, System.currentTimeMillis()) } } }
     }
 
+    /**
+     * 这一次出现其实没被他看到（浮层被系统 / 厂商拦了、没戴耳机、窗口没加上）：记 UNOBSERVED（F11-5）。
+     * 之后他就算没理也不算冷落。不等结果；大脑那边找不到这一次出现就什么都不改。
+     */
+    fun unobserved(modality: com.moling.core.live.Modality) {
+        if (!ready) return
+        answerScope.launch { runCatching { io("unobserved", {}) { brain.markUnobserved(modality, System.currentTimeMillis()) } } }
+    }
+
     /** 出一道捉虫题。 */
     suspend fun quiz(): com.moling.core.live.Quiz? = io<com.moling.core.live.Quiz?>("quiz", { null }) { brain.quiz(System.currentTimeMillis()) }
 
@@ -1135,7 +1574,7 @@ object BrainHost {
             if (settings.autoPlan() && interactive() && brain.needsPlan(now)) {
                 // 先用昨晚的亮屏 / 熄屏推算睡了多久（没权限就跳过），睡得少主河道会排短一点
                 runCatching { brain.sleep(Usage.screenEvents(ctx, now - 36 * 3_600_000L, now), now) }
-                val plan = runCatching { brain.planDay(now) }.getOrNull()
+                val plan = runCatching { brain.planDay(now, busy = calendarBusy(now)) }.getOrNull()
                 if (plan != null) {
                     refreshState()
                     runCatching { registerPlan(plan, now) }
@@ -1149,6 +1588,10 @@ object BrainHost {
                 runCatching { brain.forage(now) }
                 refreshState()
             }
+            // 「每天自动一份」联网采蜜：默认关；他打开了、配了搜索、亮屏、预算够才查（不在这里造假结果）
+            runCatching { autoForage(now) }.onFailure { Log.w(TAG, "自动采蜜没跑起来", it) }
+            // 她主动准备第一块（W10 T7）：默认关
+            runCatching { autoPrep(now) }.onFailure { Log.w(TAG, "主动准备没跑起来", it) }
             if (brain.needsNight(now)) {
                 val text = runCatching { brain.night(now) }.getOrNull()
                 refreshState()
