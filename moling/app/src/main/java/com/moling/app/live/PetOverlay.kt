@@ -10,6 +10,7 @@ import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -37,6 +38,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -84,6 +86,7 @@ import com.moling.core.live.Mood
 import com.moling.core.live.Reaction
 import com.moling.core.spar.Chess
 import com.moling.core.spar.Chesses
+import com.moling.core.workspace.PortResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -120,36 +123,40 @@ object PetOverlay {
         // 这里只取一份副本、不清空——他点气泡本身打开卡片时，peek 还要用它。
         val choices = LiveScreens.nextChoices
         val kind = BrainHost.state.value.lastPlay?.kind.orEmpty()
-        start(context, ACTION_PET) {
+        val ok = start(context, ACTION_PET) {
             it.putExtra(EXTRA_MOOD, mood.name)
             it.putExtra(EXTRA_LINE, line)
             it.putExtra(EXTRA_WHISPER, whisper)
             it.putStringArrayListExtra(EXTRA_CHOICES, ArrayList(choices))
             it.putExtra(EXTRA_KIND, kind)
         }
+        // F11-5：悬窗服务没起来（后台限制 / 厂商限制）＝这次其实没出现，记 UNOBSERVED，不算他冷落。
+        if (!ok) markUnobserved(if (whisper) Modality.WHISPER else Modality.PET)
     }
 
     /** Z2 盯着你：中上部 2 倍大墨滴 + 45 秒圆环，不说话。 */
     fun stare(context: Context, mood: Mood, line: String) {
         val choices = LiveScreens.nextChoices
-        start(context, ACTION_STARE) {
+        val ok = start(context, ACTION_STARE) {
             it.putExtra(EXTRA_MOOD, mood.name)
             it.putExtra(EXTRA_LINE, line)
             it.putStringArrayListExtra(EXTRA_CHOICES, ArrayList(choices))
         }
+        if (!ok) markUnobserved(Modality.STARE)
     }
 
     /** Z4 参谋弹幕：lines 形如 listOf("教练：…","军师：…","对手：…","朋友：…")，从右往左飘，之后桌宠带 together 出来。 */
     fun council(context: Context, lines: List<String>, mood: Mood, together: String) {
         val choices = LiveScreens.nextChoices
         val kind = BrainHost.state.value.lastPlay?.kind.orEmpty()
-        start(context, ACTION_COUNCIL) {
+        val ok = start(context, ACTION_COUNCIL) {
             it.putStringArrayListExtra(EXTRA_LINES, ArrayList(lines))
             it.putExtra(EXTRA_MOOD, mood.name)
             it.putExtra(EXTRA_TOGETHER, together)
             it.putStringArrayListExtra(EXTRA_CHOICES, ArrayList(choices))
             it.putExtra(EXTRA_KIND, kind)
         }
+        if (!ok) markUnobserved(Modality.COUNCIL)
     }
 
     /** Z6 褪色：level = 0 收起；> 0 显示整屏灰层，透明度从 0 在 10 分钟里升到 0.35*level。 */
@@ -196,14 +203,26 @@ object PetOverlay {
     private fun canDraw(context: Context): Boolean =
         runCatching { Settings.canDrawOverlays(context) }.getOrDefault(false)
 
-    /** 起服务；没有权限、后台被限、服务被厂商拦都只记日志，不影响调用方。 */
-    private fun start(context: Context, action: String, fill: (Intent) -> Unit = {}) {
-        if (!canDraw(context)) return
+    /**
+     * 起服务；没有权限、后台被限、服务被厂商拦都只记日志，不影响调用方。
+     * 返回 false = 这次根本没机会出现（调用方据此记 UNOBSERVED，F11-5）。
+     */
+    private fun start(context: Context, action: String, fill: (Intent) -> Unit = {}): Boolean {
+        if (!canDraw(context)) return false
         val app = context.applicationContext
-        runCatching {
+        return runCatching {
             app.startService(Intent(app, PetOverlayService::class.java).setAction(action).also(fill))
-        }.onFailure { Log.w(TAG, "悬浮窗服务没有起来（静默降级）：${it.javaClass.simpleName}") }
+        }.onFailure { Log.w(TAG, "悬浮窗服务没有起来（静默降级）：${it.javaClass.simpleName}") }.isSuccess
     }
+}
+
+/**
+ * F11-5：这一次出现其实没被他看到（系统 / 厂商拦了浮层、服务没起来、窗口没加上）：记 UNOBSERVED。
+ * 之后他就算没理，也不算“他不理我”。
+ */
+private fun markUnobserved(modality: Modality) {
+    runCatching { BrainHost.unobserved(modality) }
+        .onFailure { Log.w(TAG, "曝光没报上：${it.javaClass.simpleName}") }
 }
 
 // ---------------------------------------------------------------------- 文件内部的常量 / 小工具
@@ -301,6 +320,10 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private var petWhisper by mutableStateOf(false)
     private var petModality by mutableStateOf(Modality.PET)
     private var petLanded by mutableStateOf(false)
+    /** R6 轻轮盘：点一下桌宠展开，再点收起（只改窗口里的状态，不申请焦点）。 */
+    private var petWheel by mutableStateOf(false)
+    /** 他点开过这只桌宠（看过轮盘）：之后到点自己收，不算“他不理我”。 */
+    private var petSeen by mutableStateOf(false)
     /** D2：气泡里可点的选项（破雾 / 盲盒 / 小剧场 / 赌）。 */
     private var petChoices by mutableStateOf<List<String>>(emptyList())
     /** D3：这一次是盲盒 / 小剧场 / 赌（空 = 普通）。 */
@@ -449,6 +472,8 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         petChess = BrainHost.state.value.chess
         petChessScore = -1
         petChessConclusion = ""
+        petWheel = false
+        petSeen = false
         // 耳语直接亮出来，不弹跳；普通桌宠从压扁状态回弹。
         petLanded = whisper
         petShownAt = System.currentTimeMillis()
@@ -472,19 +497,47 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             petView = null
             petParams = null
             Log.w(TAG, "桌宠窗口加不上：${it.javaClass.simpleName}")
+            // F11-5：系统 / 厂商不让加这扇窗：这次其实没出现，记 UNOBSERVED。
+            markUnobserved(modality)
             maybeStop()
             return
         }
         petEntranceJob = scope.launch { petEntrance(v, p, whisper) }
+        armPetTimeout()
+    }
+
+    /** 没人碰：8 秒（耳语）/ 12 秒（桌宠）后自己收。他点开过（[petSeen]）就算划掉，不算“他不理我”。 */
+    private fun armPetTimeout() {
+        petTimeoutJob?.cancel()
         petTimeoutJob = scope.launch {
-            delay(if (whisper) 8_000L else 12_000L)
+            delay(if (petWhisper) 8_000L else 12_000L)
             petTimeoutJob = null
             val elapsed = System.currentTimeMillis() - petShownAt
+            val modality = petModality
+            val seen = petSeen
             petEntranceJob?.cancel()
             petEntranceJob = null
             retractPetInline()
             removePetWindow()
-            report(modality, Reaction.IGNORED, elapsed)
+            report(modality, if (seen) Reaction.DISMISSED else Reaction.IGNORED, elapsed)
+            maybeStop()
+        }
+    }
+
+    /** 轮盘开着、半天没点：整只收起，算划掉（他已经看到了）。 */
+    private fun armPetWheelTimeout() {
+        petTimeoutJob?.cancel()
+        petTimeoutJob = scope.launch {
+            delay(20_000)
+            petTimeoutJob = null
+            petWheel = false
+            val elapsed = System.currentTimeMillis() - petShownAt
+            val modality = petModality
+            petEntranceJob?.cancel()
+            petEntranceJob = null
+            retractPetInline()
+            removePetWindow()
+            report(modality, Reaction.DISMISSED, elapsed)
             maybeStop()
         }
     }
@@ -542,16 +595,153 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         petLanded = true
     }
 
+    /**
+     * R6：点桌宠展开轻轮盘（破雾点选 / 当场捉虫 / 只听电台 / 先安静），再点收起。
+     * 耳语只是 8 秒的“回她”气泡，点开还是原来那张卡片，不展开轮盘。
+     */
     private fun onPetTap() {
+        if (petView == null) return
+        petSeen = true
+        if (petWhisper) {
+            openPetCard()
+            return
+        }
+        if (petWheel) closePetWheel() else openPetWheel()
+    }
+
+    /** 打开底部卡片（原来“点桌宠”的行为）。轮盘里的「破雾点选」也走这里。 */
+    private fun openPetCard() {
         if (petView == null) return
         val mood = petMood
         val line = petLine
         val modality = petModality
+        petWheel = false
         removePetWindow()
         // 卡片自己报反应；耳语时把原来那句完整的话交给她。
         runCatching { LiveScreens.peek(this, mood, line, modality) }
             .onFailure { Log.w(TAG, "底部卡片打不开：${it.javaClass.simpleName}") }
         maybeStop()
+    }
+
+    /** 展开轮盘：先别自动收；窗口变宽后挪回屏内。窗口一直是 NOT_FOCUSABLE，不抢焦点。 */
+    private fun openPetWheel() {
+        if (petView == null) return
+        petWheel = true
+        petLanded = true
+        petEntranceJob?.cancel()
+        petEntranceJob = null
+        nudgePetInScreen()
+        armPetWheelTimeout()
+    }
+
+    /** 收起轮盘（桌宠还留着）：回到 12 秒自动收。 */
+    private fun closePetWheel() {
+        if (!petWheel) return
+        petWheel = false
+        nudgePetInScreen()
+        armPetTimeout()
+    }
+
+    /** 窗口尺寸变了，等一帧再挪（布局还没跑完时量出来的宽度是旧的）。 */
+    private fun nudgePetInScreen() {
+        petView?.post { clampPetOnScreen() }
+        scope.launch {
+            delay(80)
+            clampPetOnScreen()
+        }
+    }
+
+    /** 窗口变大 / 变小后把整扇窗挪回屏内；只动位置，不碰窗口标志（不申请焦点）。 */
+    private fun clampPetOnScreen() {
+        val v = petView ?: return
+        val p = petParams ?: return
+        val w = v.width
+        val h = v.height
+        if (w <= 0 || h <= 0) return
+        val nx = p.x.coerceIn(0, (screenW - w).coerceAtLeast(0))
+        val ny = p.y.coerceIn(0, (screenH - h).coerceAtLeast(0))
+        if (nx != p.x || ny != p.y) {
+            p.x = nx
+            p.y = ny
+            updateWindow(v, p)
+        }
+    }
+
+    // ---------------- 轮盘上的四个动作：都复用已有入口，不另开一条路
+
+    /** 破雾点选：就是原来“点桌宠打开卡片”，选项由 peek 带走。 */
+    private fun onWheelFog() {
+        if (petView == null) return
+        openPetCard()
+    }
+
+    /** 当场捉虫：复用 QuizActivity；出不了题就留在轮盘上说明白。 */
+    private fun onWheelQuiz() {
+        if (petView == null) return
+        val mood = petMood
+        val line = petLine
+        val modality = petModality
+        petWheel = false
+        // 等模型的时候别让 20 秒的轮盘计时把他当成“划掉”。
+        petTimeoutJob?.cancel()
+        petTimeoutJob = null
+        scope.launch {
+            val q = runCatching { BrainHost.quiz() }.getOrNull()
+            if (q == null) {
+                petLine = "这会儿没有能出题的论断。"
+                petWheel = true
+                armPetWheelTimeout()
+                return@launch
+            }
+            report(modality, Reaction.REPLIED, System.currentTimeMillis() - petShownAt)
+            removePetWindow()
+            runCatching { QuizActivity.open(this@PetOverlayService, mood, line, q) }
+                .onFailure { Log.w(TAG, "捉虫题界面打不开：${it.javaClass.simpleName}") }
+            maybeStop()
+        }
+    }
+
+    /** 只听电台：复用 RadioHost（只念案板里已有的材料）；没材料就照原话说明白。 */
+    private fun onWheelRadio() {
+        if (petView == null) return
+        val modality = petModality
+        petWheel = false
+        petTimeoutJob?.cancel()
+        petTimeoutJob = null
+        scope.launch {
+            val r = runCatching { BrainHost.radioStart(null) }.getOrNull()
+            if (r is PortResult.Ok) {
+                report(modality, Reaction.REPLIED, System.currentTimeMillis() - petShownAt)
+                removePetWindow()
+                toast("在念了：只念案板里已有的材料，不回你。要停就去案板点「停止」。")
+                maybeStop()
+            } else {
+                // 没材料 / 没接上：原地说明白，不装成开始了。
+                petLine = if (r is PortResult.Failed) RadioHost.errorText(r.error) else "刚才没接上电台，再点一下。"
+                petWheel = true
+                armPetWheelTimeout()
+            }
+        }
+    }
+
+    /** 先安静：复用 [BrainHost.stopLive]（和设置页 / 面板的「先安静」同一条路，两小时）。 */
+    private fun onWheelQuiet() {
+        if (petView == null) return
+        petWheel = false
+        petChoices = emptyList()
+        petKind = ""
+        petLine = "好，安静两小时。想找我就去设置里恢复。"
+        report(petModality, Reaction.REPLIED, System.currentTimeMillis() - petShownAt)
+        scope.launch {
+            runCatching { BrainHost.stopLive() }
+            delay(2_600)
+            removePetWindow()
+            maybeStop()
+        }
+    }
+
+    private fun toast(text: String) {
+        runCatching { Toast.makeText(applicationContext, text, Toast.LENGTH_SHORT).show() }
     }
 
     private fun onPetLongPress() {
@@ -623,6 +813,7 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         petEntranceJob = null
         petTimeoutJob?.cancel()
         petTimeoutJob = null
+        petWheel = false
         val v = petView ?: return
         petView = null
         petParams = null
@@ -659,6 +850,8 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             stareView = null
             stareParams = null
             Log.w(TAG, "盯着你的窗口加不上：${it.javaClass.simpleName}")
+            // F11-5：窗口加不上＝这次没出现，记 UNOBSERVED。
+            markUnobserved(Modality.STARE)
             maybeStop()
             return
         }
@@ -1077,18 +1270,65 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 Bubble(shown)
                 BubbleTail()
             }
-            if (!petWhisper && petChoices.isNotEmpty()) {
+            // 轮盘展开时不再画那一排点选项：轮盘里的「破雾点选」走同一条卡片入口。
+            if (!petWhisper && !petWheel && petChoices.isNotEmpty()) {
                 ChoiceCapsules(petChoices) { onPetChoice(it) }
             }
-            Box(
-                Modifier.graphicsLayer {
-                    scaleX = squashX
-                    scaleY = squashY
-                },
-                contentAlignment = Alignment.Center,
-            ) {
-                MolingFace(petMood, Modifier.size(92.dp))
+            if (!petWhisper && petWheel) {
+                PetWheel()
+            } else {
+                Box(
+                    Modifier.graphicsLayer {
+                        scaleX = squashX
+                        scaleY = squashY
+                    },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    MolingFace(petMood, Modifier.size(92.dp))
+                }
             }
+            if (!petWhisper && petWheel) {
+                Text("点墨滴收起", color = Ink.copy(alpha = 0.5f), fontSize = 10.sp)
+            }
+        }
+    }
+
+    /**
+     * R6 轻轮盘：墨滴周围四个轻按钮——破雾点选 / 当场捉虫 / 只听电台 / 先安静。
+     * 窗口一直是 FLAG_NOT_FOCUSABLE，展开 / 收起都不申请焦点，也不弹新的界面。
+     */
+    @Composable
+    private fun PetWheel() {
+        Box(Modifier.size(252.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(252.dp).border(0.5.dp, Ink.copy(alpha = 0.16f), CircleShape))
+            Box(Modifier.size(148.dp).border(0.5.dp, Ink.copy(alpha = 0.10f), CircleShape))
+            WheelChip("破雾点选", enabled = petChoices.isNotEmpty(), modifier = Modifier.align(Alignment.TopCenter)) { onWheelFog() }
+            WheelChip("当场捉虫", modifier = Modifier.align(Alignment.CenterEnd)) { onWheelQuiz() }
+            WheelChip("只听电台", modifier = Modifier.align(Alignment.BottomCenter)) { onWheelRadio() }
+            WheelChip("先安静", modifier = Modifier.align(Alignment.CenterStart)) { onWheelQuiet() }
+            MolingFace(petMood, Modifier.size(92.dp))
+        }
+    }
+
+    /** 轮盘上的一个轻按钮；没有对应的东西时是灰的，不是点了才说不行的按钮。 */
+    @Composable
+    private fun WheelChip(label: String, enabled: Boolean = true, modifier: Modifier = Modifier, onPick: () -> Unit) {
+        val shape = RoundedCornerShape(50)
+        Box(
+            modifier
+                .then(
+                    if (enabled) Modifier.background(Paper, shape).border(0.8.dp, Seal.copy(alpha = 0.55f), shape)
+                    else Modifier,
+                )
+                .clickable(enabled = enabled) { onPick() }
+                .padding(horizontal = 10.dp, vertical = 5.dp),
+        ) {
+            Text(
+                label,
+                color = if (enabled) Seal else Ink.copy(alpha = 0.35f),
+                fontSize = 12.sp,
+                maxLines = 1,
+            )
         }
     }
 

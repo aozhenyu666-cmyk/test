@@ -1071,6 +1071,15 @@ object BrainHost {
         answerScope.launch { runCatching { io("react", {}) { brain.react(modality, reaction, ms, System.currentTimeMillis()) } } }
     }
 
+    /**
+     * 这一次出现其实没被他看到（浮层被系统 / 厂商拦了、没戴耳机、窗口没加上）：记 UNOBSERVED（F11-5）。
+     * 之后他就算没理也不算冷落。不等结果；大脑那边找不到这一次出现就什么都不改。
+     */
+    fun unobserved(modality: com.moling.core.live.Modality) {
+        if (!ready) return
+        answerScope.launch { runCatching { io("unobserved", {}) { brain.markUnobserved(modality, System.currentTimeMillis()) } } }
+    }
+
     /** 出一道捉虫题。 */
     suspend fun quiz(): com.moling.core.live.Quiz? = io<com.moling.core.live.Quiz?>("quiz", { null }) { brain.quiz(System.currentTimeMillis()) }
 

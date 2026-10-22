@@ -117,6 +117,16 @@ object Habits {
     fun lastExposure(b: HabitBook, m: Modality): Exposure? =
         b.marks.lastOrNull { it.modality == m }?.exposure
 
+    /**
+     * 这次出现其实没被他看到（浮层被系统 / 厂商拦了、窗口没加上、没戴耳机）：把 [m] 最近一笔还没反应的记录标成
+     * [Exposure.UNOBSERVED]（F11-5）。没有这一次出现就什么都不改——不拿别的一次记录顶包。
+     */
+    fun unobserved(b: HabitBook, m: Modality): HabitBook {
+        val i = b.marks.indexOfLast { it.modality == m && it.reaction == null }
+        if (i < 0) return b
+        return b.copy(marks = b.marks.toMutableList().also { it[i] = it[i].copy(exposure = Exposure.UNOBSERVED) })
+    }
+
     /** 记下他的反应；同一种方式最近两次都“不好”，就歇 48 小时。没被看到的出现不计入“不好”。 */
     fun react(b: HabitBook, m: Modality, r: Reaction, ms: Long, now: Long): HabitBook {
         val i = b.marks.indexOfLast { it.modality == m && it.reaction == null }
