@@ -51,6 +51,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moling.app.BrainHost
+import com.moling.app.live.RadioPanel
 import com.moling.core.workspace.ArtifactActionKind
 import com.moling.core.workspace.ArtifactBlock
 import com.moling.core.workspace.ArtifactKind
@@ -374,6 +375,8 @@ private fun BenchFocus(
                 }
             }
         }
+        // 第十一批 R2：只听电台（只念已有材料 / 稿子，不联网）
+        RadioPanel(ws, focus)
         if (running.isNotEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 com.moling.app.ui.art.InkThinking("她在做：" + running.first().kind.label)

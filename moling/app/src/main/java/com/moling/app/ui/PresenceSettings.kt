@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.moling.app.BrainHost
 import com.moling.app.overlay.Presence
 import com.moling.app.overlay.PresenceStore
 import kotlinx.coroutines.launch
@@ -45,6 +46,15 @@ fun PresenceSettings(onDone: () -> Unit) {
                 })
             }
         }
+        // 第十一批 R3：明确停止 → 安静期；可查看、可恢复。
+        val brainState by BrainHost.state.collectAsState()
+        val quiet = com.moling.core.live.Habits.quietLine(brainState.habits, System.currentTimeMillis())
+        Text(if (quiet.isBlank()) "安静期：没有" else quiet)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = { scope.launch { BrainHost.stopLive() } }) { Text("先安静") }
+            TextButton(enabled = quiet.isNotBlank(), onClick = { scope.launch { BrainHost.restoreLive() } }) { Text("恢复") }
+        }
+        Text("安静期内她不会自发出声；你手动开电台 / 找她说话不受影响。", style = MaterialTheme.typography.bodySmall)
         Text("悬浮窗：${if (allowed) "已允许" else "未允许，会话改用通知"}")
         TextButton(onClick = { runCatching { context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))) } }) { Text("去打开悬浮窗权限") }
         Text("先答一问需要悬浮窗和使用情况访问；晨报还需要设置里的朗读开关。小窗不会拦截应用。", style = MaterialTheme.typography.bodySmall)

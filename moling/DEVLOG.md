@@ -1176,3 +1176,42 @@
 - T8：CognitiveProfile 未做。
 
 **真机**：未测。本切片只能验证「案板 → ⋯ → 加网页 → 输入公开 URL → 取正文 → 材料出现」；无密钥/断网应显示明确失败，不伪造内容。
+
+---
+
+## 第十一批 W11：只听电台、活体表现与常态对弈（DeepSeek，分支 `deepseek/moling-radio-play`）
+
+从 W10 最新提交 `4f3c905` 拉出。每完成一块就提交；本批**不是整批完成**，R4 / R6 只留接口与说明。
+
+**R1 电台核心（完成，可测）**
+- 新 `core/live/Radio.kt`：`RadioState` PREPARING / PLAYING / PAUSED / FINISHED / STOPPED；`RadioSegment` 带 `id/kind/text/sourceIds/ms`；`RadioSession` 带 `id/focusId/sourceIds/index/generation/segmentDeadline/endsAt/pausedRemainingMs/stopReason`。
+- `Radio` 纯函数：`newSession/prepared/paused/resumed/skipped/stopped/finished/tick/progress/remainingMs/accepts`。一段 30–90 秒，一场最多 5 分钟，准备 15 秒超时；暂停冻结这一段剩余时间且不占 5 分钟；停止只留已讲过的段、清空待播。
+- `RadioEngine`：同一焦点 + 同一来源重复 start 返回原会话；停止 / 换会话后 `onPrepared`、`onSegmentDone` 返回 false，迟到 TTS / 模型回调不能重播；`skip` 到最后一手结束；安静期内只允许用户显式 start。
+- `RadioContent.fromWorkbench`：只从当前案板的 Material 和稿子正文（MARKDOWN/QUOTE/ASSUMPTION，跳过 `exerciseOnly`）拆段，不联网、不调模型；材料原文标 `QUOTE` 并带 `m-…` 来源，稿子/整理标 `IDEA`，末尾可留一句 `QUESTION`；没有材料时结束原因为“没有可讲的材料”。
+- 新 `core/live/RadioPorts.kt`：`RadioAudioPort / VoiceSessionPort / HudDialPort / AudioFocusPort` 仅接口约定（R4/R6 未实现）。
+
+**R2 最小 UI（完成接线）**
+- 新 `app/live/RadioHost.kt`：一份 `RadioEngine`，对外 `StateFlow<RadioSession?>`；只读案板材料，1 秒 tick；声音走现有 `Speaker`（系统 TTS；设置里配了云 TTS 时沿用设置，不新增联网抓取）；暂停 / 跳过 / 停止立即 `Speaker.stop()`，TTS 回调带 session/segment/generation。
+- 新 `app/live/RadioPanel.kt`：当前段文字、来源、第几段、剩余秒数、进度条、暂停/继续、跳过、醒目“停止”、“先安静”；案板焦点页（`BenchScreen`）和对话页（`ChatScreen`）都已接。
+- `BrainHost` 新增 `radio` / `radioStart(focusId, sourceIds)` / `radioPause/Resume/Skip/Stop` / `radioStopAll`。
+
+**R3 反免疫（最小实现，完成核心）**
+- `HabitBook.quietUntil`（旧数据缺省 0）；`Habits.explicitStop` 记一笔 `Reaction.STOPPED` 并安静 2 小时，`restore` 立刻结束；`isQuiet/quietLine`。
+- 曝光区分 `Exposure.SHOWN/SEEN/UNOBSERVED`：没被看到的出现不计“他冷落”，也不进管用率；旧记录按 SHOWN 读。
+- `Brain.live` 在安静期直接不出现；`tap("先不聊了 / 别管我")` 立即进安静期、不再调模型；`Brain.stopLive/restoreLive/quietLine`，设置页「在你身边」可查看 / 先安静 / 恢复，调试页显示安静期与各方式效果。明确停止不算冷落、不增加压力。
+
+**R5 选择赌局（核心完成，UI 只到调试页）**
+- 新 `core/predict/Bet.kt`：`ChoiceBet`（id / kind FUN|SCORED / sessionId / 题目 / 选项 / 她的猜测 / 截止 / 观测证据）、`BetState` OPEN/WON/LOST/UNOBSERVABLE/CANCELLED。
+- 同一 id 换卡片 / 电台 / 弹幕只一笔；只有观测到结果才结算；看不到 / 越界选项 → UNOBSERVABLE；取消不算输；重复结算不变；`Bets.brier` 只算 SCORED 且和旧 `Predict.brier` 分开；玩笑局不显示伪概率。
+- `BrainState.bets` 与 `Brain.openBet/settleBet/cancelBet`；`tick` 到截止把没观测的标未知；调试页列出赌局与可评分 Brier。**还没有在卡片 / 电台里生成赌局的入口**。
+
+**测试**
+- `tools/core-tests`：**472 个全绿**（原 442 + 新增 30：RadioTest 14 / BetTest 9 / HabitTest 7）。覆盖启动/暂停/继续/跳过/停止、停止后迟到 prepared 与 segment 回调、换会话 generation、重复 start、5 分钟预算、准备超时、安静期优先级、材料拆分与来源；赌局去重/重复结算/过期/无法观测/取消/Brier；曝光与安静期。
+- App：本地 `compileDebugKotlin` 通过（ASCII 路径 `C:/autopilot-w11-wt`）。`testDebugUnitTest` / 真机未跑。
+
+**未完成（如实）**
+- R4：FOG/TOLL/Chess 接材料化题干、来源与练习标志回看、完整“听完这一段→抓漏洞”链路**未做**（现有 `Quizzes.local` / `Chesses` 未改）。
+- R6：桌宠轻轮盘、AudioSessionController/音频焦点/duck/来电拔耳机策略、云 TTS 适配、VoiceSession/SpeechRecognizer、“微停顿”**未做**；只留 `RadioPorts.kt` 接口和本说明，未新增权限。
+- R5 UI：只有调试页只读列表，没有在卡片/电台沉淀真实赌局入口。
+- 真机：电台出声、暂停恢复、停止后不再恢复、TTS 生命周期、安静期、设置页按钮都**未在真机验证**；音频长度与段 deadline 可能不完全一致，声音以 TTS 回调推进为主。
+

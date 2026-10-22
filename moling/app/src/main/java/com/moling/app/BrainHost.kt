@@ -23,6 +23,7 @@ import com.moling.core.mirror.Absorbed
 import com.moling.core.mirror.Question
 import com.moling.app.live.LiveScreens
 import com.moling.app.live.PetOverlay
+import com.moling.app.live.RadioHost
 import com.moling.core.LiveTurn
 import com.moling.core.flow.Cause
 import com.moling.core.live.GateRules
@@ -163,6 +164,8 @@ object BrainHost {
                 onChange = { _bench.value = it },
             )
             _bench.value = bench.state()
+            // 第十一批 R2：电台控制器（StateFlow）；只读案板已有材料，不联网。
+            RadioHost.init(app)
             sourceFile = File(dir, "sources.json")
             _sources.value = runCatching {
                 sourceFile?.takeIf { it.exists() }?.readText()?.let { Json.decodeFromString<com.moling.core.web.SourceState>(it) }
@@ -171,6 +174,65 @@ object BrainHost {
             Log.i(TAG, "大脑宿主起来了")
         }
     }
+
+    // ---------------------------------------------------------------- 电台（R2）
+
+    /** 电台会话（StateFlow）；界面只读这个渲染，不靠重组重复 start。 */
+    val radio: StateFlow<com.moling.core.live.RadioSession?> get() = RadioHost.state
+
+    /** 点“陪我听一会”：只播当前案板已有的材料 / 稿子正文。 */
+    suspend fun radioStart(focusId: String?, sourceIds: List<String> = emptyList()): PortResult<com.moling.core.live.RadioSession> {
+        val ws = _bench.value
+        val f = focusId?.let { ws.focus(it) } ?: ws.active()
+            ?: return PortResult.Failed(PortError("NOT_FOUND", "先开一件案板，或者贴一段材料"))
+        return RadioHost.start(f, ws, System.currentTimeMillis(), sourceIds)
+    }
+
+    suspend fun radioPause(sessionId: String): PortResult<com.moling.core.live.RadioSession> =
+        RadioHost.pause(sessionId)
+
+    suspend fun radioResume(sessionId: String): PortResult<com.moling.core.live.RadioSession> =
+        RadioHost.resume(sessionId)
+
+    suspend fun radioSkip(sessionId: String): PortResult<com.moling.core.live.RadioSession> =
+        RadioHost.skip(sessionId)
+
+    suspend fun radioStop(sessionId: String): PortResult<com.moling.core.live.RadioSession> =
+        RadioHost.stop(sessionId)
+
+    fun radioStopAll() = RadioHost.stopAll()
+
+    // ---------------------------------------------------------------- 安静期（R3）
+
+    /** 他手动点“先安静”。 */
+    suspend fun stopLive() = io<Unit>("stopLive", {}) { brain.stopLive(System.currentTimeMillis()) }
+
+    /** 他点“恢复”。 */
+    suspend fun restoreLive() = io<Unit>("restoreLive", {}) { brain.restoreLive(System.currentTimeMillis()) }
+
+    fun quietLine(): String = runCatching { brain.quietLine(System.currentTimeMillis()) }.getOrDefault("")
+
+    // ---------------------------------------------------------------- 赌局（R5）
+
+    fun bets(): List<com.moling.core.predict.ChoiceBet> = runCatching { brain.state().bets }.getOrDefault(emptyList())
+
+    suspend fun openBet(
+        sessionId: String,
+        prompt: String,
+        options: List<String>,
+        guess: String,
+        deadline: Long,
+        kind: com.moling.core.predict.BetKind = com.moling.core.predict.BetKind.FUN,
+        p: Double = -1.0,
+    ): com.moling.core.predict.ChoiceBet? = io("openBet", { null }) {
+        brain.openBet(sessionId, prompt, options, guess, deadline, System.currentTimeMillis(), kind, p)
+    }
+
+    suspend fun settleBet(id: String, observed: String?): com.moling.core.predict.ChoiceBet? =
+        io("settleBet", { null }) { brain.settleBet(id, observed, System.currentTimeMillis()) }
+
+    suspend fun cancelBet(id: String): com.moling.core.predict.ChoiceBet? =
+        io("cancelBet", { null }) { brain.cancelBet(id, System.currentTimeMillis()) }
 
     // ---------------------------------------------------------------- 读（不调模型、不碰文件）
 
