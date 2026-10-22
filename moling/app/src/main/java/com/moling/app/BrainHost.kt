@@ -863,10 +863,10 @@ object BrainHost {
         // 每会话一个进行中标记：连点/两个界面同时点只发一次请求。
         if (!apiInFlight.add(sessionId)) return "正在问，别重复点"
         try {
+            // 只 open 不 waiting：请求失败时状态仍是 OPENED，他还点「用 API 问」可以重试；
+            // 真正在跑的重复请求由上面的 apiInFlight 挡住。
             val opened = io<PortResult<com.moling.core.talk.OutbrainSession>?>("outbrainApiOpen", { null }) {
-                val now = System.currentTimeMillis()
-                val o = outbrain.open(sessionId, now)
-                if (o is PortResult.Failed) o else outbrain.waiting(sessionId, now)
+                outbrain.open(sessionId, System.currentTimeMillis())
             }
             if (opened == null) return "刚才没接上，再试一次"
             if (opened is PortResult.Failed) return opened.error.message

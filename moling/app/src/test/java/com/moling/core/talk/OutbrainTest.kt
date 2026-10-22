@@ -392,6 +392,8 @@ class OutbrainTest {
         assertTrue("PREPARED 可以问", Outbrain.apiAskable(s0, a.id))
         val opened = Outbrain.open(s0, a.id, 1_100).first
         assertTrue("OPENED 可以问", Outbrain.apiAskable(opened, a.id))
+        val failed = Outbrain.markError(opened, a.id, 1_150, "模型没接上").first
+        assertTrue("失败后状态仍是 OPENED，可以重试", Outbrain.apiAskable(failed, a.id))
         val waiting = Outbrain.waiting(opened, a.id, 1_200).first
         assertFalse("已经在等结果（请求在跑）就不再问", Outbrain.apiAskable(waiting, a.id))
         val cancelled = Outbrain.cancel(waiting, a.id, 1_300).first
