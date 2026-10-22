@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.moling.app.BrainHost
 import com.moling.app.Foreground
+import com.moling.app.TrainingHost
 import com.moling.app.Usage
 import com.moling.core.BrainFacts
 import com.moling.core.BrainState
@@ -65,6 +66,7 @@ fun DebugScreen(onDone: () -> Unit) {
             foreground = foreground,
             category = category,
             bench = BrainHost.workbench.value,
+            training = TrainingHost.snapshot(),
         ) + "\n\n" + com.moling.app.overlay.Presence.debug(context)
     }.getOrElse { "调试信息生成失败：${it.message ?: it.javaClass.simpleName}" }
 
@@ -106,6 +108,7 @@ private fun buildReport(
     foreground: Foreground?,
     category: String,
     bench: WorkbenchState,
+    training: com.moling.core.redeem.RedeemState,
 ): String = buildString {
     val day = dayKey(now)
 
@@ -226,6 +229,22 @@ private fun buildReport(
     appendLine("结果：" + obState.results.size + " 条（最终 " + obState.results.count { !it.partial } + "）")
     obState.sessions.takeLast(5).forEach { appendLine("· " + it.id + " · " + it.status + " · 材料 " + it.pack.materials.size + " · 稿子 " + (it.artifactId ?: "—")) }
     appendLine("限定捕获（A4）：未开启——本版不申请无障碍 / 屏幕权限；接口与拒绝降级已就绪，走分享 / 粘贴")
+
+    // 5.7 以思代锁（A3 / A4）：只列 lastMessage 和最近回执；题目和答案不在这里
+    appendLine()
+    appendLine("【训练兑换】")
+    appendLine("lastMessage：" + training.lastMessage.ifBlank { "—" })
+    if (training.receipts.isEmpty()) {
+        appendLine("最近回执：还没有")
+    } else {
+        appendLine("最近回执：")
+        training.receipts.takeLast(5).asReversed().forEach { r ->
+            appendLine(
+                "· " + r.state.ifBlank { "?" } + " · " + hms(r.at) + " · " + r.message.ifBlank { "—" } +
+                    (r.pass?.let { " · 通行 " + it.minutes + " 分钟" } ?: ""),
+            )
+        }
+    }
 
     // 6. 日志（最新在上）
     appendLine()

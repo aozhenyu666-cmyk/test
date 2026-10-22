@@ -29,8 +29,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.zongkong.app.guard.Diag
+import com.zongkong.app.zk
 import com.zongkong.core.DayClock
 import java.time.Instant
 import java.time.format.DateTimeFormatter
@@ -90,6 +92,7 @@ fun DiagScreen(nav: NavHostController) {
     var msg by remember { mutableStateOf<String?>(null) }
 
     val healthy = summary.accessibilityEnabled && summary.serviceRunning
+    val training by context.zk.store.training.collectAsStateWithLifecycle()
 
     fun share() {
         try {
@@ -153,6 +156,31 @@ fun DiagScreen(nav: NavHostController) {
                 msg?.let { Hint(it) }
                 Hint("日志存在手机上（filesDir/zk/diag.jsonl），只保留最近 1500 条；分享时会把文本和导出路径一起发出去。")
             }
+
+            // ---------- 以思代锁账本（A4）：局 / 状态 / 时间 / 回执 / 通行分钟，不显示题目和答案 ----------
+            SectionLabel("训练账本（最近 10 条）")
+            val recentTraining = training.challenges.sortedByDescending { it.issuedAt }.take(10)
+            if (recentTraining.isEmpty()) {
+                Hint("还没有训练局。拦截页的「做一局训练」成功发题后，会记在这里。")
+            }
+            recentTraining.forEach { ch ->
+                val receipt = training.receipts.lastOrNull { it.challengeId == ch.id }
+                val pass = training.passes.lastOrNull { it.challengeId == ch.id }
+                Panel {
+                    KeyValue("局", ch.id)
+                    KeyValue("状态", ch.state.name)
+                    KeyValue("发出", clock(ch.issuedAt))
+                    KeyValue("截止", clock(ch.expiresAt))
+                    KeyValue(
+                        "回执",
+                        receipt?.let { it.state + (if (it.code.isNotBlank()) " / " + it.code else "") + " · " + it.message.ifBlank { "—" } }
+                            ?: "还没交",
+                        if (receipt?.state == "PASSED") sig.free else sig.muted,
+                    )
+                    KeyValue("通行分钟", pass?.let { it.minutes.toString() + " 分钟（到 " + clock(it.expiresAt) + "）" } ?: "—")
+                }
+            }
+            Hint("只列局号、状态、时间和回执；题目与标准答案不在这里显示。")
 
             // ---------- 事件时间线 ----------
             SectionLabel("事件时间线")
