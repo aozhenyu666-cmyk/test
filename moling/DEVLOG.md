@@ -1179,6 +1179,42 @@
 
 ---
 
+## 第十一批 W11：只听电台、活体表现与常态对弈（DeepSeek，分支 `deepseek/moling-radio-play`）
+
+从 W10 最新提交 `4f3c905` 拉出。每完成一块就提交；本批**不是整批完成**，R4 / R6 只留接口与说明。
+
+**R1 电台核心（完成，可测）**
+- 新 `core/live/Radio.kt`：`RadioState` PREPARING / PLAYING / PAUSED / FINISHED / STOPPED；`RadioSegment` 带 `id/kind/text/sourceIds/ms`；`RadioSession` 带 `id/focusId/sourceIds/index/generation/segmentDeadline/endsAt/pausedRemainingMs/stopReason`。
+- `Radio` 纯函数：`newSession/prepared/paused/resumed/skipped/stopped/finished/tick/progress/remainingMs/accepts`。一段 30–90 秒，一场最多 5 分钟，准备 15 秒超时；暂停冻结这一段剩余时间且不占 5 分钟；停止只留已讲过的段、清空待播。
+- `RadioEngine`：同一焦点 + 同一来源重复 start 返回原会话；停止 / 换会话后 `onPrepared`、`onSegmentDone` 返回 false，迟到 TTS / 模型回调不能重播；`skip` 到最后一手结束；安静期内只允许用户显式 start。
+- `RadioContent.fromWorkbench`：只从当前案板的 Material 和稿子正文（MARKDOWN/QUOTE/ASSUMPTION，跳过 `exerciseOnly`）拆段，不联网、不调模型；材料原文标 `QUOTE` 并带 `m-…` 来源，稿子/整理标 `IDEA`，末尾可留一句 `QUESTION`；没有材料时结束原因为“没有可讲的材料”。
+- 新 `core/live/RadioPorts.kt`：`RadioAudioPort / VoiceSessionPort / HudDialPort / AudioFocusPort` 仅接口约定（R4/R6 未实现）。
+
+**R2 最小 UI（完成接线）**
+- 新 `app/live/RadioHost.kt`：一份 `RadioEngine`，对外 `StateFlow<RadioSession?>`；只读案板材料，1 秒 tick；声音走现有 `Speaker`（系统 TTS；设置里配了云 TTS 时沿用设置，不新增联网抓取）；暂停 / 跳过 / 停止立即 `Speaker.stop()`，TTS 回调带 session/segment/generation。
+- 新 `app/live/RadioPanel.kt`：当前段文字、来源、第几段、剩余秒数、进度条、暂停/继续、跳过、醒目“停止”、“先安静”；案板焦点页（`BenchScreen`）和对话页（`ChatScreen`）都已接。
+- `BrainHost` 新增 `radio` / `radioStart(focusId, sourceIds)` / `radioPause/Resume/Skip/Stop` / `radioStopAll`。
+
+**R3 反免疫（最小实现，完成核心）**
+- `HabitBook.quietUntil`（旧数据缺省 0）；`Habits.explicitStop` 记一笔 `Reaction.STOPPED` 并安静 2 小时，`restore` 立刻结束；`isQuiet/quietLine`。
+- 曝光区分 `Exposure.SHOWN/SEEN/UNOBSERVED`：没被看到的出现不计“他冷落”，也不进管用率；旧记录按 SHOWN 读。
+- `Brain.live` 在安静期直接不出现；`tap("先不聊了 / 别管我")` 立即进安静期、不再调模型；`Brain.stopLive/restoreLive/quietLine`，设置页「在你身边」可查看 / 先安静 / 恢复，调试页显示安静期与各方式效果。明确停止不算冷落、不增加压力。
+
+**R5 选择赌局（核心完成，UI 只到调试页）**
+- 新 `core/predict/Bet.kt`：`ChoiceBet`（id / kind FUN|SCORED / sessionId / 题目 / 选项 / 她的猜测 / 截止 / 观测证据）、`BetState` OPEN/WON/LOST/UNOBSERVABLE/CANCELLED。
+- 同一 id 换卡片 / 电台 / 弹幕只一笔；只有观测到结果才结算；看不到 / 越界选项 → UNOBSERVABLE；取消不算输；重复结算不变；`Bets.brier` 只算 SCORED 且和旧 `Predict.brier` 分开；玩笑局不显示伪概率。
+- `BrainState.bets` 与 `Brain.openBet/settleBet/cancelBet`；`tick` 到截止把没观测的标未知；调试页列出赌局与可评分 Brier。**还没有在卡片 / 电台里生成赌局的入口**。
+
+**测试**
+- `tools/core-tests`：**472 个全绿**（原 442 + 新增 30：RadioTest 14 / BetTest 9 / HabitTest 7）。覆盖启动/暂停/继续/跳过/停止、停止后迟到 prepared 与 segment 回调、换会话 generation、重复 start、5 分钟预算、准备超时、安静期优先级、材料拆分与来源；赌局去重/重复结算/过期/无法观测/取消/Brier；曝光与安静期。
+- App：本地 `compileDebugKotlin`、`testDebugUnitTest` 均通过（ASCII 路径 `C:/autopilot-w11-wt`）。真机未跑。
+
+**未完成（如实）**
+- R4：FOG/TOLL/Chess 接材料化题干、来源与练习标志回看、完整“听完这一段→抓漏洞”链路**未做**（现有 `Quizzes.local` / `Chesses` 未改）。
+- R6：桌宠轻轮盘、AudioSessionController/音频焦点/duck/来电拔耳机策略、云 TTS 适配、VoiceSession/SpeechRecognizer、“微停顿”**未做**；只留 `RadioPorts.kt` 接口和本说明，未新增权限。
+- R5 UI：只有调试页只读列表，没有在卡片/电台沉淀真实赌局入口。
+- 真机：电台出声、暂停恢复、停止后不再恢复、TTS 生命周期、安静期、设置页按钮都**未在真机验证**；音频长度与段 deadline 可能不完全一致，声音以 TTS 回调推进为主。
+
 ## 第十四批修复（#17 W10，2026-10-22）
 
 只修不加新功能。`deepseek/moling-web-memory` 先把工作分支最新 `b2b47fb` merge 进来（`606f740`，冲突已解），再按 F10-1…F10-7 + 顺手项逐个修，每个修复一个提交。
@@ -1205,4 +1241,32 @@
 - 分享后台抓取完成 / 失败后没有通知（材料出现或案板提示消失），只有案板里的“正在取网页正文…”。
 - prune 删正文不会把对应 `SourceRef.status` 改成 PARTIAL / DELETED；材料里那份正文还在。
 - 本批没有改 `zongkong/`、Manifest、权限，也没有动 `core/workspace`、`core/strategy` 其它行（只改点名的 `materialLines` 与调用处）、`core/live/Live.kt`、`Brain.kt`。
+
+---
+
+## 第十四批修复（#18 W11，2026-10-22）
+
+只修不加。先把工作分支最新 `a378568` merge 进来（`457b5f7`，冲突只在 `DEVLOG.md` / `V13-PROGRESS.md`，保留双方记录、以 #17 的 F10 修复为准），再按 F11-1…F11-7 + 小项逐个修，每条修复一个提交。
+
+| 编号 | 提交 | 改了什么 | 对应测试 |
+|---|---|---|---|
+| F11-1 | `b947d3e` | `RadioHost` 照 `Whisper` 的写法请求音频焦点（USAGE_ASSISTANT / SPEECH，GAIN_TRANSIENT_MAY_DUCK）；失焦（来电 / 别的应用要出声）、`ACTION_AUDIO_BECOMING_NOISY`（拔耳机）、`ACTION_SCREEN_OFF`（熄屏）都 `stopAll()`；`RadioPanel` 离开时 `radioStopAll()`。拿不到焦点就只出文字不出声 | Android 生命周期 / 音频策略，纯逻辑层测不到；以 `compileDebugKotlin` 通过为准，真机未测 |
+| F11-2 | `582bf60`、`33110ba` | `Speaker` 每次 `speak` 一个令牌，`stop()` 作废（连等朗读引擎初始化的 pending 也清掉）；云 TTS 拉取回来令牌不对就丢，不再“停止后还念”；`RadioHost` 出声前再查 `engine.accepts(session, segment, generation)` | 同上（`Speaker` 依赖 Android TTS / MediaPlayer）；`RadioTest` 既有 accepts / 迟到回调 14 项继续全绿 |
+| F11-3 | `ae2618a` | `Brain.kt` 里判断改成 choice 是 `Live.EXIT` 或「别管我」，只改这一处：点“别管我”直接进安静期、不再调模型 | `FogTest.dontCareMeAlsoEntersQuietPeriod` |
+| F11-4 | `0265341` | `Habits.explicitStop(b, now, modality)` 只给这一次出现的形态记 STOPPED，找不到就不记（删掉补 PEEK 假记录的兜底）；`Brain.tap` / `BrainHost.tap` 带形态；桌宠 / 盯着你 / 底部卡片 / 拦人页点 EXIT 或「别管我」不再报 REPLIED；拦人页一次出现只记一笔 GATE（去掉未用的 `pickGate`） | `HabitTest.explicitStopWithoutThisAppearanceDoesNotFabricateOne`、`HabitTest.explicitStopOnlyMarksThisAppearance`、`FogTest.dontCareMeAlsoEntersQuietPeriod` |
+| F11-5 | — | **未做（如实）**：`Exposure` 枚举、`works()` / `react()` 对 UNOBSERVED 的过滤已经在；但生产 App 还没有把“浮层被系统拦 / 没戴耳机”回报成 UNOBSERVED（本批只许改点名行，没有新增回报通道），所以现在实际记录仍都是 SHOWN | 无 |
+| F11-6 | `631b28a` | 不拦人的破雾点 EXIT 不再返回 `release=true`（只有真拦着才放行）；点退出时 `spirit.ignored` 清零，“他点了就不算冷落” | `FogTest.fogExitWithoutGateIsNotAReleaseAndClearsIgnored`、既有 `FogTest.exitChoiceEndsFogAndReleasesGate` |
+| F11-7 | `0c0f37d` | 桌宠 `ChoiceCapsules` 改为前 3 个 + EXIT 必留，不再把“先不聊了”截掉 | UI 逻辑；`compileDebugKotlin` 通过 |
+| 小项 | `f106752` | QUOTE 段标“引用”（不标成她自己的整理）；电台里“先安静”改名“这两小时别主动找我”并挪出暂停/跳过/停止那排；暂停时写明“继续从这一段开头念”；EXIT 回话说“去设置里恢复”，不再提不存在的按钮 | `compileDebugKotlin` |
+
+**自动检查（实际跑出来的）**
+- `tools/core-tests`：`gradle test -Dorg.gradle.jvmargs=-Xmx4g`（Gradle 8.9 + JDK 22，`JAVA_HOME=C:\Program Files\Java\jdk-22`、`GRADLE_USER_HOME=C:\codex-build\gradle-home-m4`）：**50 个测试类、481 个测试、0 失败 0 错误**；其中 `HabitTest` 8、`FogTest` 13、`RadioTest` 14、`V13WebTest` 16。
+- App：`moling/gradlew.bat compileDebugKotlin`、`testDebugUnitTest`（ASCII 路径 `C:/autopilot-w11-wt/moling`，Android SDK `C:\Android\sdk`）**通过**。本地没有打包。
+- CI：见 push 后的 `moling-android`；真机**未测**。
+
+**限制 / 没做到的**
+- F11-5 未做（见上）；浮层被系统拦、没戴耳机仍不区分曝光，暂按 SHOWN 计。
+- 音频焦点是“最小正确版”：失焦一律 `stopAll()`，没有做暂停续播 / duck 恢复 / 来电号码判断；拔耳机、熄屏用运行时注册的广播，真机未验证。
+- 暂停后继续从头念这一段（TTS 不能从半句中间接上），界面已写清；段时长仍按字数估算，和真实音频长度可能不完全一致。
+- 本批没有改 `zongkong/`、Manifest、权限、包名、签名；`Brain.kt` 只动了 F11-3 / F11-4 / F11-6 点名的判断与 EXIT 分支，`core/live/Live.kt`、`core/workspace`、`core/strategy` 未动。
 

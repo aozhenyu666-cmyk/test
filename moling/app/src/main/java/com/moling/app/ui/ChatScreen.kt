@@ -65,6 +65,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moling.app.BrainHost
+import com.moling.app.live.RadioPanel
 import com.moling.core.Proposal
 import com.moling.app.ui.art.InkDots
 import com.moling.app.ui.art.inkEnter
@@ -91,6 +92,7 @@ private val talkScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 fun ChatScreen() {
     val context = LocalContext.current
     val state by BrainHost.state.collectAsState()
+    val benchState by BrainHost.workbench.collectAsState()
     val list = rememberLazyListState()
     val clip = LocalClipboardManager.current
 
@@ -311,6 +313,9 @@ fun ChatScreen() {
             onSpar = { quickSpar() },
 
         )
+
+        // 第十一批 R2：对话页也能“陪我听一会”（只读案板已有材料）
+        if (!typing) RadioPanel(benchState, benchState.active())
 
         if (state.talk.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {

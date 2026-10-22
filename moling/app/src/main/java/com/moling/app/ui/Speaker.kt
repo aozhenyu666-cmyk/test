@@ -46,6 +46,8 @@ object Speaker {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val done = HashMap<String, () -> Unit>()
     private var seq = 0
+    /** 每次 [speak] 一个令牌；[stop] 作废。云 TTS / 播放器晚回来时令牌对不上就丢。 */
+    private var token = 0L
 
     private val http by lazy {
         OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(40, TimeUnit.SECONDS).callTimeout(45, TimeUnit.SECONDS).build()
@@ -64,11 +66,16 @@ object Speaker {
             return
         }
         stop()
+        val my = token
         val v = store?.voice()
         if (v != null && v.ready()) {
             scope.launch {
                 val file = runCatching { cloud(ctx, v, clean) }.onFailure { Log.w(TAG, "语音模型不通，退回系统朗读", it) }.getOrNull()
-                main.post { if (file != null) play(file, onDone) else system(ctx, clean, onDone) }
+                main.post {
+                    // 拉取期间 stop() 或新的 speak 已经把这次作废：回来也不播。
+                    if (my != token) return@post
+                    if (file != null) play(file, onDone) else system(ctx, clean, onDone)
+                }
             }
         } else {
             system(ctx, clean, onDone)
@@ -159,8 +166,11 @@ object Speaker {
         pending = null
     }
 
-    /** 掐断正在念的（关掉朗读、开始听他说话时）。被掐断的不回调。 */
+    /** 掐断正在念的（关掉朗读、开始听他说话时）。被掐断的不回调，晚到的云 TTS / 播放也不播。 */
     fun stop() {
+        token++
+        // 还在初始化朗读引擎时排队的那一句也作废（否则 stop 之后初始化完又念出来）。
+        pending = null
         runCatching { tts?.stop() }
         synchronized(done) { done.clear() }
         runCatching { player?.stop(); player?.release() }

@@ -5,7 +5,10 @@ import com.moling.core.link.ZkCommand
 import com.moling.core.link.ZkReceipt
 import com.moling.core.link.ZkStatus
 import com.moling.core.live.Activity
+import com.moling.core.live.Habits
 import com.moling.core.live.Live
+import com.moling.core.live.Modality
+import com.moling.core.live.Reaction
 import com.moling.core.live.Trigger
 import com.moling.core.mind.Ask
 import com.moling.core.mind.BEIJING
@@ -106,6 +109,30 @@ class FogTest {
         assertTrue("点退出第一下就放", r.release)
         assertTrue(r.choices.isEmpty())
         assertNull(b.state().gate)
+    }
+
+    @Test fun dontCareMeAlsoEntersQuietPeriod() = runTest {
+        val b = brain(null)
+        b.live(Trigger.AUTOPILOT, Activity("launcher", "桌面", "OTHER", 0), at(15), roll = 0.9)
+        val r = b.tap("别管我", at(15, 1), modality = Modality.PEEK)
+        assertTrue("“别管我”和“先不聊了”一样进安静期", Habits.isQuiet(b.state().habits, at(15, 2)))
+        assertNull("不再拦着", b.state().gate)
+        assertTrue("不再给选项", r.choices.isEmpty())
+        // 只给这一次出现记 STOPPED；不是“她回复了”。
+        assertEquals(Reaction.STOPPED, b.state().habits.marks.last().reaction)
+    }
+
+    @Test fun fogExitWithoutGateIsNotAReleaseAndClearsIgnored() = runTest {
+        val b = brain(null)
+        // 先攒一次冷落
+        b.react(Modality.PEEK, Reaction.IGNORED, 0, at(14))
+        assertEquals(1, b.state().spirit.ignored)
+        b.live(Trigger.AUTOPILOT, Activity("launcher", "桌面", "OTHER", 0), at(15), roll = 0.9)
+        val r = b.tap(Live.EXIT, at(15, 1), modality = Modality.PEEK)
+        assertFalse("不拦人的破雾点退出，不该说放行", r.release)
+        assertEquals("他点了就不算冷落", 0, b.state().spirit.ignored)
+        assertTrue(Habits.isQuiet(b.state().habits, at(15, 2)))
+        assertFalse("退出的话不说一个不存在的恢复按钮", r.line.contains("点「恢复」"))
     }
 
     @Test fun threeTapsBringHimOut() = runTest {

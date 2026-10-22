@@ -212,8 +212,9 @@ class GateActivity : ComponentActivity() {
         // D1 破雾：他刷懵了，默认收起打字框，只让他点。
         val fog = remember { BrainHost.state.value.gate?.fog == true }
         var showInput by remember { mutableStateOf(!fog) }
-        val pickScope = androidx.compose.runtime.rememberCoroutineScope()
         val startedAt = remember { BrainHost.state.value.gate?.startedAt ?: System.currentTimeMillis() }
+        // 一次拦人只记一笔 GATE：放行后不再重复记账（F11-4）。
+        var gateReported by remember { mutableStateOf(false) }
         var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
         val maxMs = BrainHost.liveConfig().gateMaxMin * 60_000L
         val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
@@ -241,29 +242,15 @@ class GateActivity : ComponentActivity() {
             finish()
         }
 
-        fun pickGate(c: String) {
-            if (busy || released) return
-            lifecycleScope.launch {
-                busy = true
-                val t = runCatching { BrainHost.tap(c) }.getOrNull()
-                busy = false
-                if (t == null) {
-                    Toast.makeText(this@GateActivity, "没接上，再点一次", Toast.LENGTH_SHORT).show()
-                    return@launch
-                }
-                mood = t.mood
-                line = t.line
-                gateChoices = t.choices
-                if (BrainHost.speakOn()) Speaker.speak(t.line)
-                if (t.release) {
-                    released = true
-                    BrainHost.react(
-                        com.moling.core.live.Modality.GATE,
-                        com.moling.core.live.Reaction.REPLIED,
-                        System.currentTimeMillis() - startedAt,
-                    )
-                }
-            }
+        /** 放行时只记一次 GATE；点“先不聊了 / 别管我”不算回复，不记 REPLIED。 */
+        fun noteGate(reaction: com.moling.core.live.Reaction, isExit: Boolean) {
+            if (isExit || gateReported) return
+            gateReported = true
+            BrainHost.react(
+                com.moling.core.live.Modality.GATE,
+                reaction,
+                System.currentTimeMillis() - startedAt,
+            )
         }
 
         fun send() {
@@ -280,7 +267,7 @@ class GateActivity : ComponentActivity() {
                 if (BrainHost.speakOn()) Speaker.speak(turn.line)
                 if (turn.release) {
                     released = true
-                    BrainHost.react(com.moling.core.live.Modality.GATE, com.moling.core.live.Reaction.REPLIED, System.currentTimeMillis() - startedAt)
+                    noteGate(com.moling.core.live.Reaction.REPLIED, isExit = false)
                 }
                 busy = false
             }
@@ -321,7 +308,7 @@ class GateActivity : ComponentActivity() {
                                     onClick = {
                                         lifecycleScope.launch {
                                             busy = true
-                                            val t = runCatching { BrainHost.tap(c) }.getOrNull()
+                                            val t = runCatching { BrainHost.tap(c, com.moling.core.live.Modality.GATE) }.getOrNull()
                                             busy = false
                                             if (t == null) {
                                                 Toast.makeText(this@GateActivity, "没接上，再点一次", Toast.LENGTH_SHORT).show()
@@ -333,11 +320,8 @@ class GateActivity : ComponentActivity() {
                                             if (BrainHost.speakOn()) Speaker.speak(t.line)
                                             if (t.release) {
                                                 released = true
-                                                BrainHost.react(
-                                                    com.moling.core.live.Modality.GATE,
-                                                    com.moling.core.live.Reaction.REPLIED,
-                                                    System.currentTimeMillis() - startedAt,
-                                                )
+                                                val isExit = c == com.moling.core.live.Live.EXIT || c == "别管我"
+                                                noteGate(com.moling.core.live.Reaction.REPLIED, isExit)
                                             }
                                         }
                                     },
@@ -417,11 +401,7 @@ class GateActivity : ComponentActivity() {
                                             if (BrainHost.speakOn()) Speaker.speak(turn.line)
                                             if (turn.release) {
                                                 released = true
-                                                BrainHost.react(
-                                                    com.moling.core.live.Modality.GATE,
-                                                    com.moling.core.live.Reaction.REPLIED,
-                                                    System.currentTimeMillis() - startedAt,
-                                                )
+                                                noteGate(com.moling.core.live.Reaction.REPLIED, isExit = false)
                                             }
                                         }
                                     }
@@ -504,9 +484,11 @@ class PeekActivity : ComponentActivity() {
         fun runTap(c: String) {
             busy = true
             touched = true
-            report(com.moling.core.live.Reaction.REPLIED)
+            // 点“先不聊了 / 别管我”不是回复：不报 REPLIED，也不让 onDestroy 再补 IGNORED。
+            val exit = c == com.moling.core.live.Live.EXIT || c == "别管我"
+            if (exit) reported = true else report(com.moling.core.live.Reaction.REPLIED)
             lifecycleScope.launch {
-                val t = BrainHost.tap(c)
+                val t = BrainHost.tap(c, LiveScreens.modality(intent))
                 line = t.line
                 mood = t.mood
                 choices = t.choices

@@ -37,6 +37,10 @@ import com.moling.core.power.Charter
 import com.moling.core.power.Power
 import com.moling.core.power.Tier
 import com.moling.core.power.TrustStats
+import com.moling.core.predict.BetKind
+import com.moling.core.predict.BetState
+import com.moling.core.predict.Bets
+import com.moling.core.predict.ChoiceBet
 import com.moling.core.predict.DayStat
 import com.moling.core.predict.Predict
 import com.moling.core.predict.Prediction
@@ -227,6 +231,8 @@ data class BrainState(
     val atlas: Atlas = Atlas(),
     val topicId: String = "",
     val predictions: List<Prediction> = emptyList(),
+    /** 思维选择赌局（R5）：同一会话一个 id，重复展示只算一笔。 */
+    val bets: List<ChoiceBet> = emptyList(),
     val days: List<DayStat> = emptyList(),
     val talk: List<Turn> = emptyList(),
     val proposals: List<Proposal> = emptyList(),
@@ -662,6 +668,8 @@ class Brain(
         st = st.copy(proposals = st.proposals.map {
             if (it.state == ProposalState.PENDING && it.expiresAt <= now) it.copy(state = ProposalState.EXPIRED, decidedAt = now) else it
         })
+        // 到点还没观测到的赌局：未知，不算输（R5）。
+        if (st.bets.any { it.state == BetState.OPEN && now >= it.deadline }) st = st.copy(bets = Bets.expireAll(st.bets, now))
         if (s != null) out += settle(s, now)
         if (s != null) out += zkOutcomes(now)
         if (guard != null) watchZk(guard, now)?.let { out += it }
@@ -1178,6 +1186,8 @@ class Brain(
         cues: List<String> = emptyList(),
     ): LiveTurn? = lock.withLock {
         if (st.gate != null) return@withLock null
+        // 安静期（R3）：他说了“先不聊了 / 别管我”，自发出现一律不发声；手动开电台 / 找他说话不算。
+        if (Habits.isQuiet(st.habits, now)) return@withLock null
         refresh()
         val day = calendarDay(now)
         var sp = Spirits.today(st.spirit, day)
@@ -1455,13 +1465,31 @@ class Brain(
      * 他点了一个选项（破雾、盲盒、赌，或者她给的任何【选】）：她接一句，最多三下把他往外带。
      * 拦着他时：点两下就放行（破雾不要他打字）；不拦时：第三下收尾。点了就算认真回应（不算冷落）。
      */
-    suspend fun tap(choice: String, now: Long, cfg: LiveConfig = LiveConfig()): LiveTurn = lock.withLock {
+    suspend fun tap(choice: String, now: Long, cfg: LiveConfig = LiveConfig(), modality: Modality? = null): LiveTurn = lock.withLock {
         // 正在下三手棋：这一下是棋
         st.chess?.takeIf { it.turn in 1..3 && now - it.startedAt < 2 * 3_600_000L }?.let { c ->
             val t = chessMoveLocked(c, choice, now)
             return@withLock LiveTurn(if (t.done) Mood.HAPPY else Mood.CURIOUS, t.line, false, false, emptyList(), choices = t.choices, chess = true)
         }
         mark(MindAct.TAP, now)
+        // 明确停止（R3）：“先不聊了 / 别管我”直接进安静期，不再调模型、不再换一种方式继续。
+        if (choice == Live.EXIT || choice == "别管我") {
+            val gating = st.gate != null
+            st = st.copy(
+                habits = Habits.explicitStop(st.habits, now, modality),
+                gate = null,
+                fogRound = 0,
+                fogAt = 0,
+                // 他点了就不算冷落：不拦人的破雾点退出也一样清零（F11-6）。
+                spirit = Spirits.today(st.spirit, calendarDay(now)).copy(ignored = 0),
+                ladder = st.ladder?.copy(answered = true),
+                talk = (st.talk + Turn("他", "（点了）$choice", now)).takeLast(TALK_KEEP),
+                log = st.log + "${hm(now)} 他说先不聊了：安静 ${Habits.QUIET_MS / 60_000L} 分钟",
+            )
+            save()
+            // 只有真的拦着时才说“放行”；不拦人的破雾不能返回 release=true（F11-6）。
+            return@withLock LiveTurn(Mood.CALM, "好，我安静一会儿。想找我就去设置里恢复。", false, gating, emptyList(), fog = true)
+        }
         val g = st.gate
         val round = (if (now - st.fogAt < 5 * 60_000L) st.fogRound else 0) + 1
         val gating = g != null
@@ -1513,6 +1541,73 @@ class Brain(
             },
         )
         save()
+    }
+
+    /** 他手动进安静期（设置页 / 面板的“先安静”）。 */
+    suspend fun stopLive(now: Long) = lock.withLock {
+        st = st.copy(
+            habits = Habits.explicitStop(st.habits, now),
+            gate = null,
+            fogRound = 0,
+            fogAt = 0,
+            log = st.log + "${hm(now)} 手动进安静期（${Habits.QUIET_MS / 60_000L} 分钟）",
+        )
+        save()
+    }
+
+    /** 他点“恢复”：结束安静期，别的预算和冷却不变。 */
+    suspend fun restoreLive(now: Long) = lock.withLock {
+        if (!Habits.isQuiet(st.habits, now)) return@withLock
+        st = st.copy(habits = Habits.restore(st.habits), log = st.log + "${hm(now)} 结束安静期，恢复")
+        save()
+    }
+
+    fun quietLine(now: Long): String = Habits.quietLine(st.habits, now)
+
+    // ------------------------------------------------------------------ 思维选择赌局（R5）
+
+    /**
+     * 开一笔赌局。同一个 [sessionId] 只一笔（同一张卡片 / 同一个电台换着展示不重复记账）；
+     * [guess] 必须在这道题的选项里。猜错了也不扣权柄、不改授权。
+     */
+    suspend fun openBet(
+        sessionId: String,
+        prompt: String,
+        options: List<String>,
+        guess: String,
+        deadline: Long,
+        now: Long,
+        kind: BetKind = BetKind.FUN,
+        p: Double = -1.0,
+    ): ChoiceBet? = lock.withLock {
+        if (sessionId.isBlank()) return@withLock null
+        val made = Bets.open(st.bets, "bet-$sessionId", sessionId, prompt, options, guess, deadline, now, kind, p) ?: return@withLock null
+        st = st.copy(bets = made.first, log = st.log + "${hm(now)} 她下注：${Bets.line(made.second)}")
+        save()
+        made.second
+    }
+
+    /** 观测到结果（选项文字）。没有这个选项 / 传 null 就是“看不到结果”，不算输。 */
+    suspend fun settleBet(id: String, observed: String?, now: Long): ChoiceBet? = lock.withLock {
+        val b = st.bets.firstOrNull { it.id == id } ?: return@withLock null
+        if (b.state != BetState.OPEN) return@withLock b
+        val option = observed?.let { label -> b.options.firstOrNull { it.label == label.trim() }?.id }
+        val next = Bets.settle(b, option, now, if (observed == null) "没有观测到结果" else "观测到：${observed}")
+        st = st.copy(
+            bets = st.bets.map { if (it.id == id) next else it },
+            log = st.log + "${hm(now)} 赌局结算：${Bets.line(next)}",
+        )
+        save()
+        next
+    }
+
+    /** 他取消 / 关掉赌局：不算输，旧记录保留但不再推送。 */
+    suspend fun cancelBet(id: String, now: Long): ChoiceBet? = lock.withLock {
+        val b = st.bets.firstOrNull { it.id == id } ?: return@withLock null
+        val next = Bets.cancel(b, now)
+        st = st.copy(bets = st.bets.map { if (it.id == id) next else it }, log = st.log + "${hm(now)} 赌局取消（不算输）")
+        save()
+        next
     }
 
     /** 出一道捉虫题（他自己的论断 / 她的判断 / 了解里的一条）。没有材料返回 null。 */

@@ -695,9 +695,11 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     /** D2：点盯着你气泡里的选项：她接一句、换选项；没有了就收起。 */
     private fun onStareChoice(choice: String) {
         if (stareView == null || stareLeaving) return
-        report(Modality.STARE, Reaction.REPLIED, System.currentTimeMillis() - stareShownAt)
+        // 点“先不聊了 / 别管我”不是回复：不报 REPLIED，由 Brain.tap 只给这次出现记 STOPPED。
+        val exit = choice == com.moling.core.live.Live.EXIT || choice == "别管我"
+        if (!exit) report(Modality.STARE, Reaction.REPLIED, System.currentTimeMillis() - stareShownAt)
         scope.launch {
-            val turn = runCatching { BrainHost.tap(choice) }.getOrNull() ?: return@launch
+            val turn = runCatching { BrainHost.tap(choice, Modality.STARE) }.getOrNull() ?: return@launch
             stareMood = turn.mood
             stareLine = turn.line
             stareChoices = turn.choices
@@ -1277,9 +1279,12 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             maybeStop()
             return
         }
-        report(petModality, Reaction.REPLIED, System.currentTimeMillis() - petShownAt)
+        // 点“先不聊了 / 别管我”不是回复：不报 REPLIED，由 Brain.tap 只给这次出现记 STOPPED。
+        val exit = choice == com.moling.core.live.Live.EXIT || choice == "别管我"
+        if (!exit) report(petModality, Reaction.REPLIED, System.currentTimeMillis() - petShownAt)
+        val modality = petModality
         scope.launch {
-            val turn = runCatching { BrainHost.tap(choice) }.getOrNull() ?: return@launch
+            val turn = runCatching { BrainHost.tap(choice, modality) }.getOrNull() ?: return@launch
             petMood = turn.mood
             petLine = turn.line
             petChoices = turn.choices
@@ -1315,11 +1320,13 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         ) { Text(text, color = Seal, fontSize = 10.sp) }
     }
 
-    /** D2/D3：气泡下面的小胶囊选项。 */
+    /** D2/D3：气泡下面的小胶囊选项。前 3 个 + “先不聊了”必留（原先 take(3) 会截掉退出）。 */
     @Composable
     private fun ChoiceCapsules(choices: List<String>, onPick: (String) -> Unit) {
+        val exit = com.moling.core.live.Live.EXIT
+        val shown = if (choices.contains(exit)) choices.filterNot { it == exit }.take(3) + exit else choices.take(3)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            choices.take(3).forEach { c ->
+            shown.forEach { c ->
                 val exit = c == com.moling.core.live.Live.EXIT
                 Text(
                     c,
