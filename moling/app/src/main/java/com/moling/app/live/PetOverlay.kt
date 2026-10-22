@@ -1320,11 +1320,13 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         ) { Text(text, color = Seal, fontSize = 10.sp) }
     }
 
-    /** D2/D3：气泡下面的小胶囊选项。 */
+    /** D2/D3：气泡下面的小胶囊选项。前 3 个 + “先不聊了”必留（原先 take(3) 会截掉退出）。 */
     @Composable
     private fun ChoiceCapsules(choices: List<String>, onPick: (String) -> Unit) {
+        val exit = com.moling.core.live.Live.EXIT
+        val shown = if (choices.contains(exit)) choices.filterNot { it == exit }.take(3) + exit else choices.take(3)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            choices.take(3).forEach { c ->
+            shown.forEach { c ->
                 val exit = c == com.moling.core.live.Live.EXIT
                 Text(
                     c,
