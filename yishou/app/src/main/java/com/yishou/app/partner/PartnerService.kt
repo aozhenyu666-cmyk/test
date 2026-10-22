@@ -17,6 +17,7 @@ import androidx.core.content.ContextCompat
 import com.yishou.app.MainActivity
 import com.yishou.app.R
 import com.yishou.app.YishouApp
+import com.yishou.app.gate.GateService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -64,6 +65,7 @@ class PartnerService : Service() {
             while (isActive) {
                 if (!notificationsVisible(this@PartnerService)) partner.finish()
                 partner.tick(checkpoint = ticks++ % 60 == 0)
+                partner.takeAct()?.let { act(it) }
                 val state = partner.state.value
                 if (state.closing || state.row == null) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
@@ -81,6 +83,44 @@ class PartnerService : Service() {
         return START_NOT_STICKY
     }
 
+    /** 盯场：提醒，或把 Gemini 拉回前台（无障碍服务开着才拉得动；拉不动就改成提醒） */
+    private fun act(a: LiveWatch.Act) {
+        when (a) {
+            is LiveWatch.Act.Nudge -> nudge(a.text)
+            LiveWatch.Act.Pull -> {
+                val back = LiveWatch.GEMINI.firstNotNullOfOrNull { packageManager.getLaunchIntentForPackage(it) }
+                if (back != null && GateService.bringToFront(back)) {
+                    getSystemService(NotificationManager::class.java).cancel(NUDGE_ID)
+                } else {
+                    nudge("Live 断了，回 Gemini 接着聊（没能自动拉回）")
+                }
+            }
+            LiveWatch.Act.None -> {}
+        }
+    }
+
+    private fun nudge(text: String) {
+        val n = NotificationCompat.Builder(this, NUDGE_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_yishou)
+            .setContentTitle("一手 · 伴读")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(backToGemini())
+            .addAction(0, "回 Gemini", backToGemini())
+            .setAutoCancel(true)
+            .setTimeoutAfter(60_000)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .build()
+        post(NUDGE_ID, n)
+    }
+
+    private fun backToGemini(): PendingIntent {
+        val backIntent = LiveWatch.GEMINI.firstNotNullOfOrNull { packageManager.getLaunchIntentForPackage(it) }
+            ?: Intent(Intent.ACTION_VIEW, Uri.parse(PartnerSessions.EXTERNAL_URL))
+        return PendingIntent.getActivity(this, 91, backIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+    }
+
     private fun showClosing() {
         post(CLOSE_ID, notification("伴读结束了，回来留一句收线", ongoing = false))
     }
@@ -95,14 +135,13 @@ class PartnerService : Service() {
         val open = PendingIntent.getActivity(this, 90,
             Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, "partner"),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val backIntent = packageManager.getLaunchIntentForPackage(PartnerSessions.EXTERNAL_PACKAGE)
-            ?: Intent(Intent.ACTION_VIEW, Uri.parse(PartnerSessions.EXTERNAL_URL))
-        val back = PendingIntent.getActivity(this, 91, backIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val back = backToGemini()
+        val spoken = partner.state.value.spoken
         val builder = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_yishou)
             .setContentTitle("一手 · 语音伙伴")
             .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(if (ongoing && spoken.isNotEmpty()) "$text\n在 Live 里说：$spoken" else text))
             .setContentIntent(open)
             .setOngoing(ongoing)
             .setOnlyAlertOnce(true)
@@ -126,9 +165,16 @@ class PartnerService : Service() {
         private const val ID = 90
         private const val CLOSE_ID = 91
         private const val STOP = "stop"
+        private const val NUDGE_CHANNEL = "partner_nudge"
+        private const val NUDGE_ID = 93
         private fun ensureChannel(context: Context) {
-            context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+            val nm = context.getSystemService(NotificationManager::class.java)
+            nm.createNotificationChannel(
                 NotificationChannel(CHANNEL, "语音伙伴计时", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
+            nm.createNotificationChannel(
+                NotificationChannel(NUDGE_CHANNEL, "伴读盯场", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "Gemini Live 断了、离开伴读时的提醒"
+                })
         }
         private fun notificationsVisible(context: Context): Boolean {
             val channel = context.getSystemService(NotificationManager::class.java).getNotificationChannel(CHANNEL)

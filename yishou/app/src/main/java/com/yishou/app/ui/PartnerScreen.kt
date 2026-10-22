@@ -60,6 +60,8 @@ fun PartnerScreen(onBack: () -> Unit, materialId: Long? = null) {
     var materialName by rememberSaveable { mutableStateOf(Material.ARTICLE.name) }
     var gearName by rememberSaveable { mutableStateOf(Gear.ACCOMPANY.name) }
     var minutes by rememberSaveable { mutableStateOf(25) }
+    var useLive by rememberSaveable { mutableStateOf(true) }
+    var pullBack by rememberSaveable { mutableStateOf(true) }
     var selected by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     var line by rememberSaveable(state.row?.id) { mutableStateOf("") }
     var next by rememberSaveable(state.row?.id) { mutableStateOf("") }
@@ -150,15 +152,31 @@ fun PartnerScreen(onBack: () -> Unit, materialId: Long? = null) {
                 }
                 OutlinedButton(onClick = { picker = true }) { Text("登记材料 App（已选 ${selected.size} 个）") }
                 Text("这一场在 Gemini、材料 App 和一手之间切换算在场；其他关注应用照常过入口。网页版请把浏览器登记为材料 App。", style = MaterialTheme.typography.bodySmall)
-                Text("开场白会复制到剪贴板。打开后：进伴读 Gem → 粘贴 → 点 Live → 共享屏幕。按钮由你自己点。", style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(selected = useLive, onClick = { useLive = !useLive }, label = { Text("用 Live 语音") })
+                    FilterChip(selected = pullBack, onClick = { pullBack = !pullBack }, label = { Text("走了拉回 Gemini") })
+                }
+                Text(
+                    if (useLive) "Live 开着时麦克风一直在用：一手只看“有没有应用在用麦克风”（系统不告诉是谁、录了什么）和前台是哪个应用。" +
+                        "Live 断了、人也不在 Gemini，${if (pullBack) "先提醒，再把 Gemini 拉回前台（一场最多 3 次）" else "提醒你回去"}。让 Live 看屏时，把你在看的应用登记成材料 App。"
+                    else "文字聊：开场白复制到剪贴板，打开 Gemini 粘贴发送。离开太久${if (pullBack) "会把 Gemini 拉回前台" else "会提醒"}。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                if (useLive) {
+                    Text("Live 里没法粘贴，所以用规定词：先把长规则存进 Gemini 一次，以后开 Live 只说「${com.yishou.app.partner.Opening.TRIGGER}……」那一句。", style = MaterialTheme.typography.bodyMedium)
+                    OutlinedButton(onClick = {
+                        Launch.copy(context, com.yishou.app.partner.Opening.savedInfo())
+                        note = "长规则已复制。到 Gemini → 头像 → 保存的信息（Saved info）→ 添加，粘贴保存。只要做一次。"
+                    }) { Text("复制长规则（存进 Gemini 一次）") }
+                }
                 Button(enabled = goal.isNotBlank() && !busy && state.error == null, onClick = {
                     if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) {
                         note = "先开启一手的通知，伴读计时和结束入口才会一直可见。"
                         context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
                     } else work {
-                        val opening = partner.start(PartnerPlan(Material.valueOf(materialName), goal, minutes, Gear.valueOf(gearName)), selected.toSet())
+                        val opening = partner.start(PartnerPlan(Material.valueOf(materialName), goal, minutes, Gear.valueOf(gearName)), selected.toSet(), live = useLive, pull = pullBack)
                         if (opening == null) { note = "上一场还没收线，请先完成它。"; return@work }
-                        Launch.copy(context, opening)
+                        Launch.copy(context, partner.state.value.spoken.ifEmpty { opening })
                         if (!PartnerService.start(context)) {
                             partner.finish()
                             note = "计时服务没启动，请先收线，再检查系统后台限制。"
@@ -168,7 +186,7 @@ fun PartnerScreen(onBack: () -> Unit, materialId: Long? = null) {
                             note = "没能打开外部 App 或网页，开场白已复制；先结束这一场再试。"
                         }
                     }
-                }, modifier = Modifier.fillMaxWidth()) { Text(if (busy) "准备中……" else "用 Gemini 开始") }
+                }, modifier = Modifier.fillMaxWidth()) { Text(if (busy) "准备中……" else if (useLive) "用 Gemini Live 开始" else "用 Gemini 开始") }
                 Button(enabled = goal.isNotBlank() && !busy && state.error == null, onClick = {
                     if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) {
                         note = "先开启一手的通知：麦克风在用时通知里要能看见、能停。"
@@ -182,6 +200,10 @@ fun PartnerScreen(onBack: () -> Unit, materialId: Long? = null) {
                 val row = state.row!!
                 Text(row.goal, style = MaterialTheme.typography.titleLarge)
                 Text(state.text.ifBlank { "上次伴读还没收线" })
+                if (!state.closing && state.spoken.isNotEmpty()) {
+                    Text("开 Live 以后说：", style = MaterialTheme.typography.labelLarge)
+                    Text(state.spoken, style = MaterialTheme.typography.titleMedium)
+                }
                 if (!state.closing) {
                     OutlinedButton(onClick = { Launch.open(context, external) }) { Text("回 Gemini") }
                     Button(enabled = !busy, onClick = { work { partner.finish(); PartnerService.stop(context) } }) { Text("结束并收线") }

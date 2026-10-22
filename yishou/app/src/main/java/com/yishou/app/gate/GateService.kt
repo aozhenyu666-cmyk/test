@@ -217,6 +217,13 @@ class GateService : AccessibilityService() {
         /** 当前前台应用的包名；服务没开时为 null */
         val foreground: String? get() = running?.foregroundPkg
 
+        /** 不算“离开”也不算“回来”的界面：输入法、通知栏、相机、拨号、系统设置（桌面不算，回桌面就是走了） */
+        fun neutral(pkg: String): Boolean {
+            if (pkg in WindowRules.STATIC_SYSTEM) return true
+            val service = running ?: return false
+            return pkg in service.systemAllowed() && pkg !in service.homes
+        }
+
         /**
          * 窗口里的“拉回”能不能把你从 pkg 拉走：窗口允许的学习应用、相机、电话、输入法不拉
          * （你可能正在做题、拍作答、接电话）；桌面和其他应用照拉。
