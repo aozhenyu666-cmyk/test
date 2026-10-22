@@ -1251,7 +1251,7 @@
 | 编号 | 提交 | 改了什么 | 对应测试 |
 |---|---|---|---|
 | F11-1 | `b947d3e` | `RadioHost` 照 `Whisper` 的写法请求音频焦点（USAGE_ASSISTANT / SPEECH，GAIN_TRANSIENT_MAY_DUCK）；失焦（来电 / 别的应用要出声）、`ACTION_AUDIO_BECOMING_NOISY`（拔耳机）、`ACTION_SCREEN_OFF`（熄屏）都 `stopAll()`；`RadioPanel` 离开时 `radioStopAll()`。拿不到焦点就只出文字不出声 | Android 生命周期 / 音频策略，纯逻辑层测不到；以 `compileDebugKotlin` 通过为准，真机未测 |
-| F11-2 | `582bf60` | `Speaker` 每次 `speak` 一个令牌，`stop()` 作废；云 TTS 拉取回来令牌不对就丢，不再“停止后还念”；`RadioHost` 出声前再查 `engine.accepts(session, segment, generation)` | 同上（`Speaker` 依赖 Android TTS / MediaPlayer）；`RadioTest` 既有 accepts / 迟到回调 14 项继续全绿 |
+| F11-2 | `582bf60`、`33110ba` | `Speaker` 每次 `speak` 一个令牌，`stop()` 作废（连等朗读引擎初始化的 pending 也清掉）；云 TTS 拉取回来令牌不对就丢，不再“停止后还念”；`RadioHost` 出声前再查 `engine.accepts(session, segment, generation)` | 同上（`Speaker` 依赖 Android TTS / MediaPlayer）；`RadioTest` 既有 accepts / 迟到回调 14 项继续全绿 |
 | F11-3 | `ae2618a` | `Brain.kt` 里判断改成 choice 是 `Live.EXIT` 或「别管我」，只改这一处：点“别管我”直接进安静期、不再调模型 | `FogTest.dontCareMeAlsoEntersQuietPeriod` |
 | F11-4 | `0265341` | `Habits.explicitStop(b, now, modality)` 只给这一次出现的形态记 STOPPED，找不到就不记（删掉补 PEEK 假记录的兜底）；`Brain.tap` / `BrainHost.tap` 带形态；桌宠 / 盯着你 / 底部卡片 / 拦人页点 EXIT 或「别管我」不再报 REPLIED；拦人页一次出现只记一笔 GATE（去掉未用的 `pickGate`） | `HabitTest.explicitStopWithoutThisAppearanceDoesNotFabricateOne`、`HabitTest.explicitStopOnlyMarksThisAppearance`、`FogTest.dontCareMeAlsoEntersQuietPeriod` |
 | F11-5 | — | **未做（如实）**：`Exposure` 枚举、`works()` / `react()` 对 UNOBSERVED 的过滤已经在；但生产 App 还没有把“浮层被系统拦 / 没戴耳机”回报成 UNOBSERVED（本批只许改点名行，没有新增回报通道），所以现在实际记录仍都是 SHOWN | 无 |
