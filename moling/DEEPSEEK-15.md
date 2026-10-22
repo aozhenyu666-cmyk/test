@@ -75,7 +75,7 @@ A 部分真机验收：总控开启策略（看到“24 小时后生效”）→
 ### B5 W13 G4：系统工具适配器（I）
 - 日历：用户选日历后读忙闲；写日程用系统 `ACTION_INSERT` 由他保存。勿扰：只恢复墨灵自己改过的状态。歌单：显式 Intent 打开他选的 URI。每项独立开关、拒绝权限能降级、没回执不写“已完成”。新增权限只在他点开对应开关时申请。
 
-### B6 电台底座换成 Media3（I，可以和 B1 并行，优先于 B3）
+### B6 电台底座换成 Media3 —— **由 Claude 做（用户指派），DeepSeek 不用做；B3 轮盘里的“只听电台”直接调 `BrainHost.radioStart`**
 - 依赖：`androidx.media3:media3-exoplayer` 和 `media3-session`（Apache-2.0）。只加这两个模块。
 - 播放统一走一个 `ExoPlayer`：云端朗读本来就是音频文件；系统朗读先 `synthesizeToFile` 成文件再播。`setAudioAttributes(…, handleAudioFocus = true)` + `setHandleAudioBecomingNoisy(true)`，删掉 `RadioHost` 里手写的焦点 / 拔耳机 / 熄屏广播（逻辑交给播放器）。
 - `MediaSessionService`：通知栏和锁屏有暂停 / 继续 / 跳过 / 停止。“锁屏后继续播”做成设置开关，**默认关**（关着时熄屏仍然停，和现在一致）；需要的前台服务类型（媒体播放）权限照 Android 14 的要求在清单里声明。

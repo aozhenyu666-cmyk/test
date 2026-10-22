@@ -25,7 +25,8 @@
 
 | 谁 | 做什么 | 分支 |
 |---|---|---|
-| DeepSeek | 第十五批：以思代锁界面（A）+ v13 第二阶段（B1–B6） | `deepseek/zk-training-ui`、`deepseek/moling-v13-m2` |
+| DeepSeek | 第十五批：以思代锁界面（A）+ v13 第二阶段（B1–B5） | `deepseek/zk-training-ui`、`deepseek/moling-v13-m2` |
+| Claude | 第十五批 B6：电台换 Media3 底座（用户指派给 Claude） | 工作分支 |
 
 ## 待用户决定
 

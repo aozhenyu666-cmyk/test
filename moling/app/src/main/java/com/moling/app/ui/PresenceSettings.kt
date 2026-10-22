@@ -55,6 +55,13 @@ fun PresenceSettings(onDone: () -> Unit) {
             TextButton(enabled = quiet.isNotBlank(), onClick = { scope.launch { BrainHost.restoreLive() } }) { Text("恢复") }
         }
         Text("安静期内她不会自发出声；你手动开电台 / 找她说话不受影响。", style = MaterialTheme.typography.bodySmall)
+        // 第十五批 B6：电台在后台 / 锁屏继续放（默认关：关着时熄屏或离开面板就停）
+        var radioBg by remember { mutableStateOf(com.moling.app.live.RadioHost.backgroundAllowed()) }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("电台锁屏后继续播", Modifier.weight(1f).padding(top = 12.dp))
+            Switch(radioBg, onCheckedChange = { radioBg = it; com.moling.app.live.RadioHost.setBackgroundAllowed(it) })
+        }
+        Text("打开后：熄屏、切到别的应用时电台继续放，通知栏和锁屏上可以暂停 / 跳过 / 停止。关着时一熄屏就停。", style = MaterialTheme.typography.bodySmall)
         Text("悬浮窗：${if (allowed) "已允许" else "未允许，会话改用通知"}")
         TextButton(onClick = { runCatching { context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))) } }) { Text("去打开悬浮窗权限") }
         Text("先答一问需要悬浮窗和使用情况访问；晨报还需要设置里的朗读开关。小窗不会拦截应用。", style = MaterialTheme.typography.bodySmall)

@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 第十五批 B6：电台在通知栏 / 锁屏继续放（安装时权限，不弹窗；只有电台在播时才前台） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- 看前台应用：用户在系统“使用情况访问”里手动打开；不开就降级（少看一样，调试页写明） -->
     <uses-permission
@@ -67,6 +69,16 @@
         <service android:name=".overlay.OverlayService" android:exported="false" />
         <!-- 第六批 A 组：桌宠 / 盯着你 / 参谋弹幕 / 褪色 / 演员胶囊都在这一个服务里。 -->
         <service android:name=".live.PetOverlayService" android:exported="false" />
+
+        <!-- 电台的媒体会话：通知栏 / 锁屏 / 耳机按键能暂停、跳过、停止（只控制电台） -->
+        <service
+            android:name=".live.RadioService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
         <!-- 第六批 B1：捉虫题（透明主题，从底部出一张纸卡）。 -->
         <activity
             android:name=".live.QuizActivity"
