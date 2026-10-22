@@ -1402,3 +1402,9 @@
 - F12-6 仍未接线：没有 Binder 服务、没有无障碍/屏幕权限；打包时要把墨灵自己的证书指纹填进 `CaptureTrust`（空 = 一律拒绝，默认安全）。
 - F12-7 的分享选择弹窗、通知推迟、收线 UI 只有 `compileDebugKotlin` 通过，真机未测。
 - 本批没有改 `zongkong/`、Manifest、权限、签名/包名；`Workbench.kt` 只改 `attachActorResult`，`Capture.kt` 只改纯逻辑。
+
+## W13 Z13（Claude）：以思代锁的总控核心
+- 总控 `core/moling/Training.kt` / `TrainingWire.kt`：策略默认关；开启 / 放宽 24 小时后生效、收紧立即生效（`Policy.setTraining`）。只在“挣来的娱乐用完了”是唯一拦截原因时能换；换来的分钟加进今天的“挣到的”（同一本账、同一个每天总上限，一小时内有效）。题目当场算出（心算 / 数列 / 百分比 / 推理），4 道对 3 道；每天局数、答错冷却 3 分钟；nonce、过期、策略改版、重放、同题双答案都拒绝；题目下发不带答案。
+- 总控 `MolingProvider` 新增 v2 方法（仍只认墨灵签名；v1 不动）；`Store.trainingIssue / trainingSubmit` 给总控自己的拦截页用。
+- 墨灵 `WireGateV2Port` + `ZkBridge.gateV2`：墨灵侧客户端通过字符串键值和总控说话。界面都没接（见 DEEPSEEK-15 A 部分）。
+- 测试：`TrainingTest` 12 个、`TrainingContractTest` 3 个（墨灵真实客户端 ↔ 总控真实处理）；`tools/core-tests` 590 全过。两边 App 编译以 CI 为准；真机未测。
