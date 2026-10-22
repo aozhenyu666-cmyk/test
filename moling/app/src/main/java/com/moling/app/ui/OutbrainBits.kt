@@ -59,12 +59,25 @@ private val obScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
 private fun statusText(s: OutbrainSession): String = when (s.status) {
     OutbrainStatus.PREPARED -> "准备好了，还没送出"
-    OutbrainStatus.OPENED -> "已打开外脑"
-    OutbrainStatus.WAITING_RESULT -> if (s.closedAt > 0) "退场了，还在等结果" else "等结果回来"
+    OutbrainStatus.OPENED ->
+        if (s.transport == OutbrainTransport.RELAY) "推上去了，等外脑来读" else "已打开外脑"
+    OutbrainStatus.WAITING_RESULT -> when {
+        // 联络站：只保证推上黑板了；外脑读没读、答没答都不知道。
+        s.transport == OutbrainTransport.RELAY -> if (s.closedAt > 0) "退场了，还在等外脑来读" else "推上去了，等外脑来读"
+        s.closedAt > 0 -> "退场了，还在等结果"
+        else -> "等结果回来"
+    }
     OutbrainStatus.RESULT_RECEIVED -> "结论回来了"
     OutbrainStatus.REVIEWED -> "看过了"
     OutbrainStatus.CANCELLED -> "已取消"
     OutbrainStatus.EXPIRED -> "到点没回来"
+}
+
+/** 送出按钮按路线说人话：联络站是“推上黑板”，不是“外脑已经收到了”。 */
+private fun sendLabel(t: OutbrainTransport): String = when (t) {
+    OutbrainTransport.API -> "用 API 问"
+    OutbrainTransport.RELAY -> "推到联络站"
+    OutbrainTransport.SHARE -> "送到外脑"
 }
 
 @Composable
@@ -93,29 +106,35 @@ fun OutbrainCard(focusId: String? = null, allowSend: Boolean = false, onOpenBenc
         }
     }
 
-    fun openAndCopy(session: OutbrainSession) {
-        val text = BrainHost.outbrainPackText(session.id)
-        if (text.isBlank()) {
-            toast("进场包是空的")
-            return
-        }
-        clip.setText(AnnotatedString(text))
-        obScope.launch {
-            if (session.transport == OutbrainTransport.API) {
+    fun sendTo(session: OutbrainSession) {
+        preview = null
+        when (session.transport) {
+            OutbrainTransport.API ->
                 // 这里不先 open：让 outbrainAskApi 自己判 PREPARED/OPENED，连点不会发两次请求。
-                toast(BrainHost.outbrainAskApi(session.id))
-            } else {
-                BrainHost.outbrainOpen(session.id)
-                val launch = runCatching { context.packageManager.getLaunchIntentForPackage(session.actor.pkg) }.getOrNull()
-                if (launch != null) {
-                    runCatching { context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                        .onFailure { toast("外脑没打开，进场包已经复制") }
-                } else {
-                    toast("进场包已复制（没装 " + session.actor.label + "，粘到你常用的外脑里）")
+                obScope.launch { toast(BrainHost.outbrainAskApi(session.id)) }
+
+            // B4：联络站真的把进场包推到黑板；成功只说推上去了（不代表外脑读过）。
+            OutbrainTransport.RELAY -> obScope.launch { toast(BrainHost.outbrainSendRelay(session.id)) }
+
+            OutbrainTransport.SHARE -> {
+                val text = BrainHost.outbrainPackText(session.id)
+                if (text.isBlank()) {
+                    toast("进场包是空的")
+                    return
                 }
-                toast("送出去了，等结论回来收线")
+                clip.setText(AnnotatedString(text))
+                obScope.launch {
+                    BrainHost.outbrainOpen(session.id)
+                    val launch = runCatching { context.packageManager.getLaunchIntentForPackage(session.actor.pkg) }.getOrNull()
+                    if (launch != null) {
+                        runCatching { context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                            .onFailure { toast("外脑没打开，进场包已经复制") }
+                        toast("复制好了，粘到外脑里发出去")
+                    } else {
+                        toast("进场包已复制（没装 " + session.actor.label + "，粘到你常用的外脑里）")
+                    }
+                }
             }
-            preview = null
         }
     }
 
@@ -151,7 +170,7 @@ fun OutbrainCard(focusId: String? = null, allowSend: Boolean = false, onOpenBenc
                         clip.setText(AnnotatedString(BrainHost.outbrainPackText(active.id)))
                         toast("进场包已复制")
                     }) { Text("复制进场包") }
-                    TextButton(onClick = { openAndCopy(active) }) { Text(if (active.transport == OutbrainTransport.API) "用 API 问" else "送到外脑") }
+                    TextButton(onClick = { sendTo(active) }) { Text(sendLabel(active.transport)) }
                     TextButton(onClick = { collectOpen = true }) { Text("收线") }
                 }
                 if (collect != null) {
@@ -216,7 +235,7 @@ fun OutbrainCard(focusId: String? = null, allowSend: Boolean = false, onOpenBenc
                 clip.setText(AnnotatedString(BrainHost.outbrainPackText(s.id)))
                 toast("进场包已复制")
             },
-            onSend = { openAndCopy(s) },
+            onSend = { sendTo(s) },
             onClose = { preview = null },
         )
     }
@@ -340,19 +359,22 @@ private fun PreviewDialog(
         text = {
             Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("先看一眼；不想发的材料回上一步去掉。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (session.transport == OutbrainTransport.RELAY) {
+                    Text(
+                        "推到联络站 = 把整包放进黑板。推上去只代表发出去了，不代表外脑读过；结论回来会按会话认领。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Text(text, style = MaterialTheme.typography.bodySmall)
             }
         },
         confirmButton = {
             TextButton(onClick = {
-                if (session.transport == OutbrainTransport.API) {
-                    onSend()
-                } else {
-                    onCopy()
-                    onSend()
-                }
+                if (session.transport == OutbrainTransport.SHARE) onCopy()
+                onSend()
             }) {
-                Text(if (session.transport == OutbrainTransport.API) "用 API 问" else "复制并送到外脑")
+                Text(if (session.transport == OutbrainTransport.SHARE) "复制并送到外脑" else sendLabel(session.transport))
             }
         },
         dismissButton = {

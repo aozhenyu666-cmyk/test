@@ -1403,6 +1403,26 @@
 - F12-7 的分享选择弹窗、通知推迟、收线 UI 只有 `compileDebugKotlin` 通过，真机未测。
 - 本批没有改 `zongkong/`、Manifest、权限、签名/包名；`Workbench.kt` 只改 `attachActorResult`，`Capture.kt` 只改纯逻辑。
 
+## B4 W12：联络站传输真接上（2026-10-22）
+
+分支 `deepseek/m2-b4-relay`（基于工作分支 `6bf7a69`）。之前 RELAY 路线和“分享 / 复制”一样：只复制进场包、打开外脑 App，黑板里根本没有这一包；这次把传输真接上。只动 `core/talk/Outbrain*` 和 `moling/app` 的 `RelaySync` / `BrainHost` / 外脑卡片 / 贯通页，**没改 `zongkong/`、没有加权限 / Manifest / 签名 / 包名**。
+
+- 推上黑板：`Outbrain.relayBoard(state, now)` 只把已经推上去 / 还在等的 RELAY 会话放进黑板（PREPARED 还没推不放；结果回来 / 取消 / 过期就撤下），整段 6000 字、最多 2 个会话封顶；段里写明“推上黑板只代表到了这里，发回来也只到收件箱，不代表他看过任何回答”。`BrainHost.relayResult` 把它接在 `brain.handoff` 后面，`RelaySync` 照旧按文字哈希推送；`RelaySync.Result` 新增 `pushed`，推送成功但收件箱失败也仍然算推上去了。
+- 真实送出：外脑卡片对 RELAY 路线改走 `BrainHost.outbrainSendRelay`：`open` → 强制同步一次（黑板带上这一包）→ 只有推送真的成功才 `Outbrain.relayPushed` 进 WAITING_RESULT，提示“进场包推上去了（等外脑来读，不是已读）”。联络站没配置 / 没推上去就只说没推上去，不打开别的 App，也不拿复制冒充已发；分享路线仍复制并打开，API 路线不变。
+- 回来认领：`OutbrainDesk.receiveRelayTagged` 把收件箱里带 `[[外脑:ob-…]]` 的按会话认领（还在等的落案板未采用稿子；已取消 / 过期 / 已复查的只进历史），对不上任何会话的标记也认领进历史，不再漏给大脑当材料；没标记的照旧交给大脑。
+- 界面：外脑卡片状态改成“推上去了，等外脑来读”，按钮改成“推到联络站”，预览弹窗与贯通页都写明“推上去不代表外脑读过”。
+
+**自动检查（实际跑出来的）**
+- `tools/core-tests`：`gradle test`（Gradle 8.9 + JDK 22，`GRADLE_USER_HOME=C:\codex-build\gradle-home-m4`，ASCII 路径 `C:/autopilot-b4-wt/tools/core-tests`）：**58 个测试类、594 个测试、0 失败 0 错误 0 跳过**。本批新增 4 个：`relayBoardOnlyIncludesPushedRelaySessions`、`relayPushedWaitsForResultAndSaysNotRead`、`relayTaggedInboxIsClaimedBySessionNotBrain`、`relayTaggedResultAfterExpireIsClaimedButOnlyHistory`。
+- App：`moling/gradlew.bat compileDebugKotlin`（`ANDROID_HOME=C:\Android\sdk`，ASCII 路径 `C:/autopilot-b4-wt/moling`）**通过**；未打包、未跑 App 单测。
+- 真机**未测**；联络站 Worker 未部署、MCP 客户端未实连。
+
+**限制 / 没做到的**
+- “推上去了”只代表 `PUT /api/board` 成功，不代表 ChatGPT / Claude 读过、回过；收件箱没有回音时不会伪造任何“已读 / 已回答”。
+- 黑板里最多放 2 个会话、6000 字（worker 黑板 20000 字封顶，给她的交接包留余量），放不下的写“还有 N 个外脑会话没放进黑板，先在收线卡里处理”。
+- 推送失败后会话停在 OPENED；下一次心跳（force=false）看到黑板文字变了会再试一次。这不是假成功，但如果一直失败（令牌 / 地址错），界面不会自己变成“已推上去”。
+- 本批没改 `zongkong/`、Manifest、权限、签名 / 包名，没碰 W12 A2/A4。
+
 ## W13 Z13（Claude）：以思代锁的总控核心
 - 总控 `core/moling/Training.kt` / `TrainingWire.kt`：策略默认关；开启 / 放宽 24 小时后生效、收紧立即生效（`Policy.setTraining`）。只在“挣来的娱乐用完了”是唯一拦截原因时能换；换来的分钟加进今天的“挣到的”（同一本账、同一个每天总上限，一小时内有效）。题目当场算出（心算 / 数列 / 百分比 / 推理），4 道对 3 道；每天局数、答错冷却 3 分钟；nonce、过期、策略改版、重放、同题双答案都拒绝；题目下发不带答案。
 - 总控 `MolingProvider` 新增 v2 方法（仍只认墨灵签名；v1 不动）；`Store.trainingIssue / trainingSubmit` 给总控自己的拦截页用。

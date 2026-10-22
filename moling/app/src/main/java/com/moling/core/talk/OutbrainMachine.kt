@@ -19,6 +19,10 @@ object Outbrain {
     const val DEFAULT_SNOOZE_MS = 3_600_000L
     const val MAX_RESULT_CHARS = 12_000
 
+    /** B4：联络站黑板上一次最多放几个外脑会话、整段最多多少字（worker 黑板 20000 封顶，留余量给她的黑板）。 */
+    const val RELAY_BOARD_MAX_SESSIONS = 2
+    const val RELAY_BOARD_MAX_CHARS = 6_000
+
     // 会话 id 带时间戳：ob-<seq>-<now>（旧数据 ob-<seq> 也认）。
     private val tagRe = Regex("\\[\\[外脑:(ob-\\d+(?:-\\d+)?)\\]\\]")
 
@@ -311,6 +315,46 @@ object Outbrain {
         it.status == OutbrainStatus.WAITING_RESULT || it.status == OutbrainStatus.OPENED ||
             it.status == OutbrainStatus.PREPARED
     }
+
+    /**
+     * B4：联络站黑板上的外脑段。只放已经推上去 / 还在等的 RELAY 会话（PREPARED 还没推，不放；
+     * 结果回来、取消、到期就撤下），这样 MCP 那边 read_moling_board 能看到整包。
+     * 段里写清“推上黑板”和“他看过回答”是两回事。
+     */
+    fun relayBoard(state: OutbrainState, now: Long, maxChars: Int = RELAY_BOARD_MAX_CHARS): String {
+        val live = state.sessions.filter {
+            it.transport == OutbrainTransport.RELAY &&
+                (it.status == OutbrainStatus.OPENED || it.status == OutbrainStatus.WAITING_RESULT) &&
+                (it.expiresAt == 0L || it.expiresAt > now)
+        }
+        if (live.isEmpty()) return ""
+        val out = StringBuilder()
+        out.appendLine("【外脑会话 · 联络站】")
+        out.appendLine("下面是他按「推到联络站」推上来的进场包：按里面的【返回格式】做完，用 send_to_moling 把结论整段发回来，开头保留 [[外脑:ob-…]]。")
+        out.appendLine("推上黑板只代表到了这里；发回来也只到收件箱，不代表他看过任何回答。")
+        var n = 0
+        for (s in live.take(RELAY_BOARD_MAX_SESSIONS)) {
+            val t = s.pack.text()
+            if (out.length + t.length + 2 > maxChars) break
+            out.append('\n').append(t).append('\n')
+            n++
+        }
+        if (live.size > n) out.append("…（还有 ").append(live.size - n).append(" 个外脑会话没放进黑板，先在收线卡里处理）\n")
+        val text = out.toString().trim()
+        return if (text.length > maxChars) text.take(maxChars).trimEnd() else text
+    }
+
+    /**
+     * B4：联络站的进场包已经推上黑板（只代表发出去了，不代表外脑读到了）。
+     * 进 WAITING_RESULT；已经收到最终结论的会话不改状态。
+     */
+    fun relayPushed(state: OutbrainState, sessionId: String, now: Long): Pair<OutbrainState, PortResult<OutbrainSession>> =
+        move(state, sessionId, now, setOf(OutbrainStatus.PREPARED, OutbrainStatus.OPENED, OutbrainStatus.WAITING_RESULT)) {
+            it.copy(
+                openedAt = if (it.openedAt == 0L) now else it.openedAt,
+                status = OutbrainStatus.WAITING_RESULT,
+            ).withEvent(now, OutbrainEventKind.OPENED, "进场包推上黑板了（等外脑来读，不是已读）")
+        }
 
     /**
      * 该提醒/挂通知的那一条：跳过点了「稍后」且还没到点的。

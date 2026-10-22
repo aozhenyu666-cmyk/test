@@ -498,6 +498,113 @@ class OutbrainTest {
         assertTrue("旧文字仍是已采用", wb.claims(a.id).any { it.contains("第一段结论") })
     }
 
+    // -------------------------------------------------------------- B4 联络站：真正推上黑板
+
+    @Test
+    fun relayBoardOnlyIncludesPushedRelaySessions() {
+        val ms = listOf(material("m-1", "材料一"))
+        val f = focus(ms)
+        val pack = { sid: String -> Packs.build(sid, f, ms, emptyList(), now = 1) }
+        val (s0, r0) = Outbrain.prepare(OutbrainState(), f, pack, Actor.CHATGPT, epRelay, now = 1_000)
+        val relay = (r0 as PortResult.Ok).value
+        // 还没点“推到联络站”：黑板上不放
+        assertTrue("PREPARED 不上黑板", Outbrain.relayBoard(s0, 1_100).isEmpty())
+        // 分享路线的会话就算打开了，也不上联络站黑板
+        val (s1, r1) = Outbrain.prepare(s0, f, pack, Actor.CHATGPT, epShare, now = 1_200)
+        val share = (r1 as PortResult.Ok).value
+        var st = Outbrain.open(s1, relay.id, 1_300).first
+        st = Outbrain.relayPushed(st, relay.id, 1_350).first
+        st = Outbrain.open(st, share.id, 1_400).first
+        val board = Outbrain.relayBoard(st, 1_500)
+        assertTrue("联络站会话上黑板", board.contains("[[外脑:" + relay.id + "]]"))
+        assertTrue(board.contains("申论开头怎么写"))
+        assertFalse("分享路线不上联络站黑板", board.contains("[[外脑:" + share.id + "]]"))
+        assertTrue("写清推上去不代表他看过", board.contains("不代表他看过任何回答"))
+        // 上限：整段不超过 maxChars
+        assertTrue(Outbrain.relayBoard(st, 1_500, maxChars = 400).length <= 400)
+        // 结果回来 / 取消 / 过期：从黑板上撤下
+        val done = Outbrain.receive(st, "[[外脑:" + relay.id + "]] 结论", 2_000, source = "relay").first
+        assertTrue("结果回来就撤下", Outbrain.relayBoard(done, 2_100).isEmpty())
+        val cancelled = Outbrain.cancel(st, relay.id, 2_200).first
+        assertTrue("取消就撤下", Outbrain.relayBoard(cancelled, 2_300).isEmpty())
+        val expired = Outbrain.expire(st, relay.expiresAt + 1).first
+        assertTrue("过期就撤下", Outbrain.relayBoard(expired, relay.expiresAt + 2).isEmpty())
+    }
+
+    @Test
+    fun relayPushedWaitsForResultAndSaysNotRead() {
+        val ms = listOf(material("m-1", "材料一"))
+        val f = focus(ms)
+        val pack = { sid: String -> Packs.build(sid, f, ms, emptyList(), now = 1) }
+        val (s0, r0) = Outbrain.prepare(OutbrainState(), f, pack, Actor.CHATGPT, epRelay, now = 1_000)
+        val relay = (r0 as PortResult.Ok).value
+        val opened = Outbrain.open(s0, relay.id, 1_100).first
+        val (pushed, pr) = Outbrain.relayPushed(opened, relay.id, 1_200)
+        assertTrue(pr is PortResult.Ok)
+        assertEquals("推上黑板后开始等结果", OutbrainStatus.WAITING_RESULT, pushed.sessions.single().status)
+        assertTrue("时间线只说推上去了", pushed.sessions.single().timeline.last().note.contains("不是已读"))
+        assertTrue("推上去之后还留在黑板上等", Outbrain.relayBoard(pushed, 1_300).contains("[[外脑:" + relay.id + "]]"))
+        val done = Outbrain.receive(pushed, "结论", now = 1_400, sessionId = relay.id).first
+        assertTrue(Outbrain.relayBoard(done, 1_500).isEmpty())
+        assertEquals(
+            "取消后不能再标“推上去”",
+            "BAD_STATE",
+            (Outbrain.relayPushed(Outbrain.cancel(done, relay.id, 2_000).first, relay.id, 2_100).second as PortResult.Failed).error.code,
+        )
+    }
+
+    @Test
+    fun relayTaggedInboxIsClaimedBySessionNotBrain() = runTest {
+        val wb = Workbench(store = MemStore(), ask = null)
+        wb.start("申论开头怎么写", "材料", now = 1)
+        val desk = OutbrainDesk(MemStore(), wb)
+        val s = (desk.prepare(Actor.CHATGPT, epRelay, now = 2_000) as PortResult.Ok).value
+        desk.open(s.id, 2_100)
+        desk.relayPushed(s.id, 2_200)
+        // 没标记的照旧留给大脑：不认领
+        assertTrue(desk.receiveRelayTagged(listOf("relay:1" to "顺便说一句"), 2_300).isEmpty())
+        // 带标记的按会话认领，落成未采用稿子
+        assertEquals(
+            setOf("relay:2"),
+            desk.receiveRelayTagged(listOf("relay:2" to "[[外脑:" + s.id + "]] 结论：先亮观点"), 2_400),
+        )
+        assertEquals(OutbrainStatus.RESULT_RECEIVED, desk.state().sessions.single().status)
+        assertEquals("标记不落进材料", "结论：先亮观点", desk.results(s.id).single().text)
+        assertEquals(1, wb.state().artifacts.count { it.kind == ArtifactKind.ACTOR_RESULT })
+        // 同一条再来一次：认领（不再交给大脑），但不重复落
+        assertEquals(
+            setOf("relay:3"),
+            desk.receiveRelayTagged(listOf("relay:3" to "[[外脑:" + s.id + "]] 结论：先亮观点"), 2_500),
+        )
+        assertEquals(1, wb.state().artifacts.count { it.kind == ArtifactKind.ACTOR_RESULT })
+        // 对不上任何会话的标记也认领（只进历史），不把标记漏进大脑
+        assertEquals(
+            setOf("relay:4"),
+            desk.receiveRelayTagged(listOf("relay:4" to "[[外脑:ob-999-1]] 不知哪来的"), 2_600),
+        )
+        assertTrue(desk.state().results.any { it.sessionId == "ob-999-1" })
+    }
+
+    @Test
+    fun relayTaggedResultAfterExpireIsClaimedButOnlyHistory() = runTest {
+        val wb = Workbench(store = MemStore(), ask = null)
+        wb.start("申论开头怎么写", "材料", now = 1)
+        val desk = OutbrainDesk(MemStore(), wb)
+        val s = (desk.prepare(Actor.CHATGPT, epRelay, now = 2_000, ttlMs = 60_000) as PortResult.Ok).value
+        desk.open(s.id, 2_100)
+        desk.relayPushed(s.id, 2_200)
+        assertEquals(1, desk.sweep(62_000))
+        assertEquals(OutbrainStatus.EXPIRED, desk.state().sessions.single().status)
+        // 以前按“还在等”过滤，过期会话的结果会漏给大脑；现在认领，但只进历史、不落案板
+        assertEquals(
+            setOf("relay:9"),
+            desk.receiveRelayTagged(listOf("relay:9" to "[[外脑:" + s.id + "]] 迟到的结论"), 63_000),
+        )
+        assertEquals("过期状态不被结果改掉", OutbrainStatus.EXPIRED, desk.state().sessions.single().status)
+        assertEquals(1, desk.results(s.id).size)
+        assertEquals(0, wb.state().artifacts.count { it.kind == ArtifactKind.ACTOR_RESULT })
+    }
+
     @Test
     fun deskStoresResultWhenFocusGone() = runTest {
         val store = MemStore()
