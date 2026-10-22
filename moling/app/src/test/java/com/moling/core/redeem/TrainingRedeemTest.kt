@@ -321,6 +321,15 @@ class TrainingRedeemTest {
         assertEquals(0, strict.issueCalls)
     }
 
+    @Test fun emptyAllowListRejectsInsteadOfAllowingEverything() {
+        val gate = FakeGate(FakeGate().policy.copy(allowedPackages = emptySet()))
+        gate.clock = at
+        val c = client(gate)
+        assertTrue("空白名单不能当全放行", fails(c.start(pkg, at), GateError.SCOPE_DENIED))
+        assertEquals(0, gate.issueCalls)
+        assertNull(c.snapshot().challenge)
+    }
+
     @Test fun disabledPolicyOrWrongPackageRejected() {
         val disabled = FakeGate(FakeGate().policy.copy(enabled = false))
         disabled.clock = at

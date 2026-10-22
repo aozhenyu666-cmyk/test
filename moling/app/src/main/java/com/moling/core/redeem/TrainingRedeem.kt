@@ -143,7 +143,11 @@ class TrainingRedeemClient(
         }
         if (!policy.enabled) return fail(GateError.POLICY_DENIED, "总控里没有启用训练兑换策略")
         if (policy.strict) return fail(GateError.STRICT_MODE, "现在是严格期，训练不能换娱乐")
-        if (packageName.isBlank() || (policy.allowedPackages.isNotEmpty() && packageName !in policy.allowedPackages)) {
+        if (packageName.isBlank() || policy.allowedPackages.isEmpty()) {
+            // F13-5：空白名单不是“全放行”，是没选任何应用。
+            return fail(GateError.SCOPE_DENIED, "总控里没选任何放行应用，不能兑换")
+        }
+        if (packageName !in policy.allowedPackages) {
             return fail(GateError.SCOPE_DENIED, "这个应用不在你选的放行范围里")
         }
         if (policy.minutesPerPass !in 1..15) return fail(GateError.POLICY_DENIED, "单次放行时长不合理，先在总控里改策略")
