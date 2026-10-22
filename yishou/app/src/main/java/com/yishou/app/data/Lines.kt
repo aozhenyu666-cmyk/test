@@ -97,4 +97,7 @@ abstract class LineDao {
 
     @Query("SELECT * FROM move WHERE createdAt >= :since ORDER BY createdAt")
     abstract fun observeMovesSince(since: Long): Flow<List<Move>>
+
+    @Query("SELECT * FROM move WHERE createdAt >= :from AND createdAt < :to ORDER BY createdAt")
+    abstract suspend fun movesBetween(from: Long, to: Long): List<Move>
 }

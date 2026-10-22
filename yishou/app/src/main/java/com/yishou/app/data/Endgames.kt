@@ -72,4 +72,10 @@ abstract class EndgameDao {
 
     @Query("SELECT * FROM endgame ORDER BY createdAt DESC")
     abstract fun observe(): Flow<List<Endgame>>
+
+    @Query("SELECT * FROM endgame WHERE lastAt >= :from AND lastAt < :to ORDER BY lastAt")
+    abstract suspend fun playedBetween(from: Long, to: Long): List<Endgame>
+
+    @Query("SELECT * FROM endgame WHERE lastAt >= :since ORDER BY lastAt")
+    abstract fun observePlayedSince(since: Long): kotlinx.coroutines.flow.Flow<List<Endgame>>
 }

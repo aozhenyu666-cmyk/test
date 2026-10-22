@@ -234,6 +234,12 @@ class MainActivity : ComponentActivity() {
                     ) { e ->
                         com.yishou.app.ui.SoupScreen(onBack = { nav.navigateUp() }, onBank = { nav.navigate("pool") }, cardId = e.arguments?.getLong("card")?.takeIf { it > 0 })
                     }
+                    composable(
+                        "redo?id={id}",
+                        arguments = listOf(navArgument("id") { type = NavType.LongType; defaultValue = -1L }),
+                    ) { e ->
+                        com.yishou.app.ui.RedoScreen(id = e.arguments?.getLong("id") ?: -1L, onBack = { nav.navigateUp() })
+                    }
                     composable("pool") {
                         com.yishou.app.ui.PoolScreen(onBack = { nav.navigateUp() }, onRoute = { nav.navigate(it) })
                     }

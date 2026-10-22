@@ -112,6 +112,9 @@ class YishouApp : Application() {
     /** 素材池：唯一入口，所有练法从这里拿 */
     val pool: com.yishou.app.pool.Pool by lazy { com.yishou.app.pool.Pool(this) }
 
+    /** 一天的账：各处练的每一手（总结、时之轮都看它） */
+    val dayLedger: com.yishou.app.summary.DayLedger by lazy { com.yishou.app.summary.DayLedger(database) }
+
     /** 刷着练：看屏出题用识图模型，判回答用文字模型 */
     val scrollLook: ChatClient by lazy { ChatClient(config = { settings.vision.value }, http = ChatClient.defaultHttpClient(60), usage = stats) }
     val scrollJudge: ChatClient by lazy { ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(30), usage = stats) }
@@ -312,7 +315,7 @@ class YishouApp : Application() {
             ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(60), usage = stats, onError = logError),
         )
         materials = com.yishou.app.system.MaterialImport(this)
-        summaryEngine = SummaryEngine(database.dao(), coach, prefs = { settings.app.value })
+        summaryEngine = SummaryEngine(database.dao(), coach, prefs = { settings.app.value }, ledger = { from, to -> dayLedger.between(from, to) })
         vision = Vision(
             ChatClient(config = { settings.vision.value }, http = ChatClient.defaultHttpClient(60), usage = stats, onError = logError),
         )

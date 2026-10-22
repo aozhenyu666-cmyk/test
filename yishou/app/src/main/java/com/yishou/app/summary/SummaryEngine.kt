@@ -19,7 +19,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
- * 每晚总结：读当天全部 Round 和当前断点 → 请求总结 → 存 DailySummary，
+ * 每晚总结：读当天全部 Round、一天的账（[Ledger]）和当前断点 → 请求总结 → 存 DailySummary，
  * 并把“明天第一问”写进断点，作为第二天第一轮陪练的那一手。
  */
 class SummaryEngine(
@@ -28,6 +28,8 @@ class SummaryEngine(
     private val prefs: () -> AppPrefs,
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
+    /** 这一天在别处练的（刷题、练思维、海龟汤、残局、刷着练、伴读、主线） */
+    private val ledger: suspend (from: Long, to: Long) -> List<LedgerEntry> = { _, _ -> emptyList() },
 ) {
 
     sealed interface Outcome {
@@ -41,11 +43,14 @@ class SummaryEngine(
         val z = zone()
         val now = clock()
         val p = prefs()
-        val rounds = dao.roundsBetween(WindowClock.startOfDay(date, z), WindowClock.startOfDay(date.plusDays(1), z))
+        val from = WindowClock.startOfDay(date, z)
+        val to = WindowClock.startOfDay(date.plusDays(1), z)
+        val rounds = dao.roundsBetween(from, to)
+        val entries = ledger(from, to)
         val windowMinutes = WindowClock.windowMinutesOn(date, p, z, now)
         val dateText = date.toString()
 
-        if (rounds.isEmpty()) {
+        if (rounds.isEmpty() && entries.isEmpty()) {
             val s = DailySummary(dateText, "", "", NO_RECORD, 0, 0, windowMinutes)
             dao.upsertSummary(s)
             return Outcome.NoRecord(s)
@@ -53,7 +58,7 @@ class SummaryEngine(
 
         val task = dao.getCurrentTask()
         val bp = task?.let { dao.getBreakpoint(it.id) }
-        val result = when (val r = coach.summary(task, bp, rounds)) {
+        val result = when (val r = coach.summary(task, bp, rounds, Ledger.digest(entries, z))) {
             is LlmResult.Err -> return Outcome.Failed(r.error)
             is LlmResult.Ok -> r.value
         }
@@ -62,8 +67,9 @@ class SummaryEngine(
             rule = result.rule,
             tomorrowQuestion = result.tomorrowQuestion,
             note = result.note,
-            roundCount = rounds.size,
-            effectiveCount = rounds.count { it.effective },
+            // 陪练窗口的轮次 + 别处练的每一手
+            roundCount = rounds.size + entries.size,
+            effectiveCount = rounds.count { it.effective } + entries.count { it.mark == LedgerMark.HIT },
             windowMinutes = windowMinutes,
         )
         // 明天第一问既是断点的“下一问”，也是第二天第一轮陪练直接出的那一手
@@ -92,6 +98,7 @@ object SummaryMarkdown {
         breakpoint: Breakpoint?,
         rounds: List<Round>,
         zone: ZoneId = AppZone.zone,
+        day: String = "",
     ): String = buildString {
         appendLine("# 一手 · ${summary.date} 学习记录")
         appendLine()
@@ -122,7 +129,13 @@ object SummaryMarkdown {
             appendLine(summary.note)
             appendLine()
         }
-        appendLine("## 当天原话（${summary.roundCount} 轮，有效 ${summary.effectiveCount} 轮，陪练窗口 ${summary.windowMinutes} 分钟）")
+        if (day.isNotBlank()) {
+            appendLine("## 今天的账")
+            appendLine(day)
+            appendLine()
+        }
+        if (rounds.isEmpty()) return@buildString
+        appendLine("## 陪练窗口原话（${rounds.size} 轮，有效 ${rounds.count { it.effective }} 轮，陪练窗口 ${summary.windowMinutes} 分钟）")
         val time = DateTimeFormatter.ofPattern("HH:mm").withZone(zone)
         rounds.forEachIndexed { i, r ->
             val verdict = when {

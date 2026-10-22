@@ -59,6 +59,7 @@ class FakeCardDao : CardDao() {
     }
     override suspend fun attemptsSince(since: Long) = attempts.filter { it.createdAt >= since }
     override fun observeAttemptsSince(since: Long): Flow<List<CardAttempt>> = emptyFlow()
+    override suspend fun attemptsBetween(from: Long, to: Long) = attempts.filter { it.createdAt in from until to }
 }
 
 class FakeCardGen : CardGen {

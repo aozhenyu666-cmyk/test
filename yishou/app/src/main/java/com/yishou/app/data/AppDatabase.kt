@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class, Material::class, DrillRow::class, Deed::class, MaterialKey::class, Job::class, JobStep::class, Outside::class, Line::class, Move::class, Echo::class, Endgame::class, Impulse::class, Soup::class, PartnerSession::class],
-    version = 13,
+    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class, Material::class, DrillRow::class, Deed::class, MaterialKey::class, Job::class, JobStep::class, Outside::class, Line::class, Move::class, Echo::class, Endgame::class, Impulse::class, Soup::class, PartnerSession::class, ScrollQuizRow::class],
+    version = 14,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -25,8 +25,17 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun impulses(): ImpulseDao
     abstract fun partners(): PartnerDao
     abstract fun soups(): SoupDao
+    abstract fun scrollQuizzes(): ScrollQuizDao
 
     companion object {
+        /** 0.21：刷着练问过的每一句留下来，没接住的回头再想 */
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `scroll_quiz` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `askedAt` INTEGER NOT NULL, `pkg` TEXT NOT NULL, `lens` TEXT NOT NULL, `seen` TEXT NOT NULL, `question` TEXT NOT NULL, `reference` TEXT NOT NULL, `text` TEXT NOT NULL, `answer` TEXT NOT NULL, `verdict` TEXT NOT NULL, `line` TEXT NOT NULL, `answeredAt` INTEGER, `redoAt` INTEGER, `redoVerdict` TEXT NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_scroll_quiz_askedAt` ON `scroll_quiz` (`askedAt`)")
+            }
+        }
+
         val MIGRATION_12_13 = object : Migration(12, 13) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `partner_session` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `material` TEXT NOT NULL, `goal` TEXT NOT NULL, `minutes` INTEGER NOT NULL, `gear` TEXT NOT NULL, `startedAt` INTEGER NOT NULL, `endedAt` INTEGER, `presentMs` INTEGER NOT NULL, `leaves` INTEGER NOT NULL, `closeLine` TEXT NOT NULL, `nextStep` TEXT NOT NULL, `route` TEXT NOT NULL)")
@@ -221,7 +230,7 @@ abstract class AppDatabase : RoomDatabase() {
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "yishou.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
                 .build()
     }
 }

@@ -104,4 +104,7 @@ abstract class CardDao {
 
     @Query("SELECT * FROM card_attempt WHERE createdAt >= :since ORDER BY createdAt")
     abstract fun observeAttemptsSince(since: Long): Flow<List<CardAttempt>>
+
+    @Query("SELECT * FROM card_attempt WHERE createdAt >= :from AND createdAt < :to ORDER BY createdAt")
+    abstract suspend fun attemptsBetween(from: Long, to: Long): List<CardAttempt>
 }

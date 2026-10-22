@@ -64,8 +64,8 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val today = WindowClock.today(System.currentTimeMillis(), AppZone.zone)
             message = when (val r = yishou.summaryEngine.run(today)) {
-                is SummaryEngine.Outcome.Saved -> "已生成今天的总结，明天第一问已写进断点"
-                is SummaryEngine.Outcome.NoRecord -> "今天还没有任何轮次，记为“当日无记录”"
+                is SummaryEngine.Outcome.Saved -> "已生成今天的总结（陪练轮次和各处练的每一手都算上了）"
+                is SummaryEngine.Outcome.NoRecord -> "今天哪儿都还没练，记为“当日无记录”"
                 is SummaryEngine.Outcome.Failed -> "总结失败：${r.error.message}"
             }
             running = false
@@ -76,10 +76,13 @@ class SummaryViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun markdown(summary: DailySummary): String {
         val zone = AppZone.zone
         val date = LocalDate.parse(summary.date)
-        val rounds = dao.roundsBetween(WindowClock.startOfDay(date, zone), WindowClock.startOfDay(date.plusDays(1), zone))
+        val from = WindowClock.startOfDay(date, zone)
+        val to = WindowClock.startOfDay(date.plusDays(1), zone)
+        val rounds = dao.roundsBetween(from, to)
         val task = dao.getCurrentTask()
         val bp = task?.let { dao.getBreakpoint(it.id) }
-        return SummaryMarkdown.build(summary, task, bp, rounds, zone)
+        val day = com.yishou.app.summary.Ledger.digest(yishou.dayLedger.between(from, to), zone, max = 200)
+        return SummaryMarkdown.build(summary, task, bp, rounds, zone, day)
     }
 }
 

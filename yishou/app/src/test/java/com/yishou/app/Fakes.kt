@@ -63,8 +63,11 @@ class FakeCoach : Coach {
         return observeResult
     }
 
-    override suspend fun summary(task: Task?, breakpoint: Breakpoint?, rounds: List<Round>): LlmResult<SummaryResult> {
+    var lastDay: String = ""
+
+    override suspend fun summary(task: Task?, breakpoint: Breakpoint?, rounds: List<Round>, day: String): LlmResult<SummaryResult> {
         summaryCalls++
+        lastDay = day
         return summaryResult
     }
 }

@@ -46,42 +46,39 @@ fun ScrollCard(modifier: Modifier = Modifier) {
     val near = today.event(ScrollService.EVENT_NEAR)
 
     Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(16.dp), modifier = modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("刷着练", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                if (asked > 0) {
+                Column(Modifier.weight(1f)) {
+                    Text("刷着练", fontWeight = FontWeight.Bold)
                     Text(
-                        "今天问了 $asked 句 · 接住 $hit" + if (near > 0) " · 差一点 $near" else "",
-                        style = MaterialTheme.typography.labelMedium,
+                        when {
+                            running -> status ?: (if (interval > 0) "开着 · 刷满 $interval 分钟问一句" else "开着 · 想练就下拉点“考我一下”")
+                            asked > 0 -> "今天问了 $asked 句 · 接住 $hit" + if (near > 0) " · 差一点 $near" else ""
+                            else -> "刷抖音、贴吧时看这一屏问你一句，通知里回"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            }
-            if (!running) {
-                Text(
-                    "刷抖音、贴吧时也能练：它看这一屏，问你一句，你在通知里回一句，接着刷。只在点“考我一下”或刷满设定时间时截屏，截图不保存。",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            } else {
-                Text(status ?: "开着。刷到想练的，下拉通知点“考我一下”。", style = MaterialTheme.typography.bodySmall)
-            }
-            Text("在关注的应用里自动问", style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(0 to "不问", 3 to "3 分钟", 5 to "5 分钟", 10 to "10 分钟").forEach { (m, label) ->
-                    FilterChip(
-                        selected = interval == m,
-                        onClick = {
-                            interval = m
-                            ScrollService.setInterval(context, m)
-                        },
-                        label = { Text(label) },
-                    )
+                if (running) {
+                    OutlinedButton(onClick = { ScrollService.stop(context) }) { Text("停") }
+                } else {
+                    Button(onClick = { context.startActivity(ScrollActivity.startIntent(context)) }) { Text("开始") }
                 }
             }
             if (running) {
-                OutlinedButton(onClick = { ScrollService.stop(context) }) { Text("停") }
-            } else {
-                Button(onClick = { context.startActivity(ScrollActivity.startIntent(context)) }) { Text("开始刷着练") }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(0 to "不自动", 3 to "3 分钟", 5 to "5 分钟", 10 to "10 分钟").forEach { (m, label) ->
+                        FilterChip(
+                            selected = interval == m,
+                            onClick = {
+                                interval = m
+                                ScrollService.setInterval(context, m)
+                            },
+                            label = { Text(label) },
+                        )
+                    }
+                }
             }
         }
     }

@@ -88,4 +88,13 @@ class NextTest {
         assertEquals(r, Next.decode(Next.encode(r)))
         assertEquals(emptyList<Next.Mode>(), Next.decode(null))
     }
+
+    @Test
+    fun scrollMissComesBackBeforeSoup() {
+        val s = Next.Snapshot(scrollMiss = 7L to "咖啡店倒闭", soupCard = 1L to "为什么")
+        val p = Next.pick(s)
+        assertEquals(Next.Mode.SCROLL_REDO, p.mode)
+        assertEquals(7L, p.id)
+        assertEquals(Next.Mode.SOUP, Next.pick(s.copy(recent = listOf(Next.Mode.SCROLL_REDO))).mode)
+    }
 }

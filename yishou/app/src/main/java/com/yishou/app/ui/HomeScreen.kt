@@ -88,6 +88,21 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     val jobs: StateFlow<List<Job>> = yishou.database.jobs().observeJobs()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** 海龟汤、残局、刷着练、伴读：和每晚总结看同一本账 */
+    val elsewhere: StateFlow<List<WheelMark>> = kotlinx.coroutines.flow.combine(
+        yishou.database.soups().observeSince(dayStart),
+        yishou.database.endgames().observePlayedSince(dayStart),
+        yishou.database.scrollQuizzes().observeSince(dayStart),
+        yishou.database.partners().observeSince(dayStart),
+    ) { soups, endgames, quizzes, partners ->
+        val entries = soups.map { com.yishou.app.summary.LedgerFrom.soup(it, "") } +
+            endgames.mapNotNull { com.yishou.app.summary.LedgerFrom.endgame(it) } +
+            quizzes.mapNotNull { com.yishou.app.summary.LedgerFrom.scroll(it) } +
+            quizzes.mapNotNull { com.yishou.app.summary.LedgerFrom.scrollRedo(it) } +
+            partners.map { com.yishou.app.summary.LedgerFrom.partner(it) }
+        entries.filter { it.at >= dayStart }.map { WheelMark(it.at, MarkKind.DRILL, com.yishou.app.summary.Ledger.good(it.mark)) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     val start: Long get() = dayStart
 
     /** “来一手”这次挑中的 */
@@ -164,12 +179,14 @@ fun HomeScreen(
     val outside by vm.outside.collectAsStateWithLifecycle()
     val lines by vm.lines.collectAsStateWithLifecycle()
     val moves by vm.moves.collectAsStateWithLifecycle()
+    val elsewhere by vm.elsewhere.collectAsStateWithLifecycle()
     val prefs by app.settings.app.collectAsStateWithLifecycle()
     val llm by app.settings.llm.collectAsStateWithLifecycle()
-    val marks = remember(cards, drills, deeds, steps, outside, moves) {
+    val marks = remember(cards, drills, deeds, steps, outside, moves, elsewhere) {
         todayMarks(cards, drills, deeds, steps.filter { st -> outside.none { it.jobId == st.jobId } }, vm.start) +
             outside.map { o -> WheelMark(o.createdAt, MarkKind.CARD, o.correct == null || o.correct * 10 >= o.questions * 6) } +
-            moves.filter { it.verdict != com.yishou.app.data.LineVerdict.PARKED }.map { m -> WheelMark(m.createdAt, MarkKind.DRILL, m.verdict == com.yishou.app.data.LineVerdict.OK) }
+            moves.filter { it.verdict != com.yishou.app.data.LineVerdict.PARKED }.map { m -> WheelMark(m.createdAt, MarkKind.DRILL, m.verdict == com.yishou.app.data.LineVerdict.OK) } +
+            elsewhere
     }
     val tide = remember { TideState() }
     val tideHeight = 240.dp

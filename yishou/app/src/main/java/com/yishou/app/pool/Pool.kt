@@ -53,9 +53,12 @@ class Pool(private val app: YishouApp) {
         val fresh = mats.firstOrNull { it.uses == 0 && it.source !in own } ?: mats.firstOrNull { it.uses == 0 && it.source == MaterialSource.BANK }
         val old = mats.filter { it.uses > 0 && (it.usedAt ?: now) < now - 20 * 3_600_000L }.minByOrNull { it.usedAt ?: 0 }
         val line = db.lines().latestOpen()
+        // 刚答完的先别回来，隔半小时再想才有用
+        val miss = db.scrollQuizzes().toRedo(10).firstOrNull { (it.answeredAt ?: now) < now - 30 * 60_000L }
         return Next.Snapshot(
             endgameRedo = due.count { it.seen > 0 && !it.lastHit },
             endgameDue = due.size,
+            scrollMiss = miss?.let { it.id to it.seen.ifBlank { it.question }.take(24) },
             soupCard = soup,
             freshMaterial = fresh?.let { it.id to it.title },
             oldMaterial = old?.let { it.id to it.title },
@@ -78,6 +81,7 @@ class Pool(private val app: YishouApp) {
     /** “来一手”选中以后去哪一页 */
     fun route(p: Next.Pick): String = when (p.mode) {
         Next.Mode.ENDGAME, Next.Mode.ENDGAME_REDO -> "endgame"
+        Next.Mode.SCROLL_REDO -> "redo?id=${p.id ?: -1}"
         Next.Mode.SOUP -> "soup?card=${p.id ?: -1}"
         Next.Mode.DRILL -> "think?m=${p.id ?: -1}&lens=${p.lens.orEmpty()}"
         Next.Mode.ECHO -> "think?m=-1&lens=ECHO"

@@ -85,6 +85,7 @@ class FakeLineDao : LineDao() {
     override suspend fun recentMoves(lineId: Long, n: Int) = moves.filter { it.lineId == lineId }.takeLast(n).reversed()
     override fun observeMoves(lineId: Long): Flow<List<Move>> = emptyFlow()
     override fun observeMovesSince(since: Long): Flow<List<Move>> = emptyFlow()
+    override suspend fun movesBetween(from: Long, to: Long) = moves.filter { it.createdAt in from until to }
 }
 
 class FakeLineCoach : LineCoach {

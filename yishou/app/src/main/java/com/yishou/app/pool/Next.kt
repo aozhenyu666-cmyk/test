@@ -2,13 +2,13 @@ package com.yishou.app.pool
 
 /**
  * “来一手”：不用你挑练法，从池子里挑下一件最值得做的，并说一句为什么。
- * 规则很简单：上次没做好的先回来 → 能逼你自己生假设的（海龟汤）→ 你自己收进来还没练过的 → 到期的 → 刷题。
+ * 规则很简单：上次没做好的（残局、刷着练没接住的）先回来 → 能逼你自己生假设的（海龟汤）→ 你自己收进来还没练过的 → 到期的 → 刷题。
  * 同一种练法不连着来（连着两次就换），想换可以点“换一个”。
  */
 object Next {
 
     enum class Mode(val label: String) {
-        ENDGAME_REDO("残局"), SOUP("海龟汤"), DRILL("练思维"), ENDGAME("残局"), ECHO("回想"), CARDS("刷题"), LINE("主线"), EMPTY("收点素材"),
+        ENDGAME_REDO("残局"), SCROLL_REDO("重想"), SOUP("海龟汤"), DRILL("练思维"), ENDGAME("残局"), ECHO("回想"), CARDS("刷题"), LINE("主线"), EMPTY("收点素材"),
     }
 
     /** 池子现在的样子（由界面层从数据库读出来） */
@@ -17,6 +17,8 @@ object Next {
         val endgameRedo: Int = 0,
         /** 到期的残局数（含上面的） */
         val endgameDue: Int = 0,
+        /** 刷着练里没接住、差一点的一问（id 和刷到的那条） */
+        val scrollMiss: Pair<Long, String>? = null,
         /** 适合煮汤的一道题（id 和题干开头） */
         val soupCard: Pair<Long, String>? = null,
         /** 你自己收进来、还没练过的一段素材 */
@@ -41,6 +43,7 @@ object Next {
     fun pick(s: Snapshot, skip: Set<Mode> = emptySet()): Pick {
         val c = mutableListOf<Pair<Int, Pick>>()
         if (s.endgameRedo > 0) c += 90 to Pick(Mode.ENDGAME_REDO, null, "残局", "上次没点中的 ${s.endgameRedo} 局回来了，趁还记得再走一遍。")
+        s.scrollMiss?.let { (id, seen) -> c += 85 to Pick(Mode.SCROLL_REDO, id, seen, "刷到「$seen」时那一问没接住。现在静下来，再想一次。") }
         s.soupCard?.let { (id, q) -> c += 80 to Pick(Mode.SOUP, id, q, "这道题是问“为什么”的，正好煮汤：只许问是非题，自己问出答案。") }
         s.freshMaterial?.let { (id, t) ->
             val lens = LENSES[s.drillsDone % LENSES.size]

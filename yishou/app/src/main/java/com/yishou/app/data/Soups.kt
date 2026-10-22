@@ -34,4 +34,10 @@ abstract class SoupDao {
 
     @Query("SELECT * FROM soup ORDER BY createdAt DESC")
     abstract fun observe(): Flow<List<Soup>>
+
+    @Query("SELECT * FROM soup WHERE createdAt >= :from AND createdAt < :to ORDER BY createdAt")
+    abstract suspend fun between(from: Long, to: Long): List<Soup>
+
+    @Query("SELECT * FROM soup WHERE createdAt >= :since ORDER BY createdAt")
+    abstract fun observeSince(since: Long): kotlinx.coroutines.flow.Flow<List<Soup>>
 }

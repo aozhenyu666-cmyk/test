@@ -40,4 +40,10 @@ abstract class PartnerDao {
     abstract suspend fun close(id: Long, line: String, next: String): Int
     @Query("DELETE FROM partner_session WHERE id = :id AND endedAt IS NOT NULL")
     abstract suspend fun delete(id: Long)
+
+    @Query("SELECT * FROM partner_session WHERE startedAt >= :from AND startedAt < :to ORDER BY startedAt")
+    abstract suspend fun startedBetween(from: Long, to: Long): List<PartnerSession>
+
+    @Query("SELECT * FROM partner_session WHERE startedAt >= :since ORDER BY startedAt")
+    abstract fun observeSince(since: Long): kotlinx.coroutines.flow.Flow<List<PartnerSession>>
 }

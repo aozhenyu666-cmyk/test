@@ -31,6 +31,7 @@ import com.yishou.app.MainActivity
 import com.yishou.app.R
 import com.yishou.app.YishouApp
 import com.yishou.app.data.MaterialSource
+import com.yishou.app.data.ScrollQuizRow
 import com.yishou.app.gate.GateService
 import com.yishou.app.llm.LlmResult
 import com.yishou.app.log.RunLog
@@ -71,6 +72,8 @@ class ScrollService : Service() {
     private var startedAt = 0L
     private val pace = AutoPace(0)
     private var quiz: Quiz? = null
+    /** 这一问在库里的行号（问出来就记，回了再补上回答和判定） */
+    private var quizId: Long? = null
     private var askJob: Job? = null
     private var judgeJob: Job? = null
     private var watchJob: Job? = null
@@ -178,6 +181,7 @@ class ScrollService : Service() {
         askJob = scope.launch {
             // 从通知栏点的：等通知栏收起、底下的应用露出来再截
             if (delayMs > 0) delay(delayMs)
+            val pkg = GateService.foreground.orEmpty()
             setStatus("正在看这一屏……")
             val dataUrl = withContext(Dispatchers.Default) { burst() }
             if (dataUrl == null) {
@@ -206,6 +210,13 @@ class ScrollService : Service() {
                 is Look.Ask -> {
                     sp.edit().putInt(KEY_LENS, index + 1).apply()
                     quiz = look.quiz
+                    val q = look.quiz
+                    quizId = app.database.scrollQuizzes().insert(
+                        ScrollQuizRow(
+                            askedAt = System.currentTimeMillis(), pkg = pkg, lens = q.lens.name, seen = q.seen,
+                            question = q.question, reference = q.reference, text = q.text,
+                        ),
+                    )
                     pace.asked(System.currentTimeMillis())
                     app.stats.event(EVENT_ASK)
                     setStatus(null)
@@ -220,29 +231,35 @@ class ScrollService : Service() {
             cancelQuiz()
             return
         }
+        val id = quizId
         quiz = null
+        quizId = null
         pace.answered()
         // 先把通知换掉，不然回复框会一直转圈
         notifyQuiz(simple(q.question, "判着……", silent = true))
         judgeJob = scope.launch {
             try {
-                judge(q, answer)
+                judge(q, answer, id)
             } finally {
                 if (projection == null) stopSelf()
             }
         }
     }
 
-    private suspend fun judge(q: Quiz, answer: String) {
+    private suspend fun judge(q: Quiz, answer: String, id: Long?) {
         val quick = ScrollQuiz.quick(answer)
         val judged = quick ?: when (val r = app.scrollJudge.complete(ScrollQuiz.judgeSystem(), ScrollQuiz.judgeUser(q, answer), "刷着练判")) {
             is LlmResult.Ok -> ScrollQuiz.parseJudge(r.value) ?: Judged(Verdict.NEAR, "")
             is LlmResult.Err -> null
         }
+        val dao = app.database.scrollQuizzes()
+        val now = System.currentTimeMillis()
         if (judged == null) {
+            id?.let { dao.answer(it, answer.trim(), "", "", now) }
             notifyQuiz(result(q, answer, null))
             return
         }
+        id?.let { dao.answer(it, answer.trim(), judged.verdict.name, judged.line, now) }
         app.stats.event(
             when (judged.verdict) {
                 Verdict.HIT -> EVENT_HIT
@@ -256,7 +273,10 @@ class ScrollService : Service() {
     }
 
     private fun skip() {
+        val id = quizId
         quiz = null
+        quizId = null
+        if (id != null) app.appScopeLaunch { app.database.scrollQuizzes().answer(id, "", SKIP, "", System.currentTimeMillis()) }
         pace.answered()
         cancelQuiz()
     }
@@ -333,6 +353,7 @@ class ScrollService : Service() {
         _running.value = false
         _status.value = null
         quiz = null
+        quizId = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         // 判卷还在跑就让它判完再退出（结果通知照样发）；没在判的题收掉
         if (judgeJob?.isActive == true) return
@@ -482,6 +503,7 @@ class ScrollService : Service() {
         private const val FRAME_GAP_MS = 1_000L
         private const val FRAME_WIDTH = 360
 
+        const val SKIP = "SKIP"
         const val EVENT_ASK = "scroll_ask"
         const val EVENT_HIT = "scroll_hit"
         const val EVENT_NEAR = "scroll_near"
