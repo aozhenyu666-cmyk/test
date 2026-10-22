@@ -45,6 +45,12 @@ import com.moling.core.mind.Card
 import com.moling.core.mind.DirectorConfig
 import com.moling.core.mind.FileMindStore
 import com.moling.core.spar.MindAct
+import com.moling.core.atlas.AtlasOps
+import com.moling.core.atlas.CandidateResult
+import com.moling.core.atlas.CandidateState
+import com.moling.core.atlas.MemoryCandidate
+import com.moling.core.atlas.MemoryCandidateStatus
+import com.moling.core.atlas.MemoryCandidates
 import com.moling.core.workspace.ArtifactAction
 import com.moling.core.workspace.ArtifactActionKind
 import com.moling.core.workspace.Artifacts
@@ -116,6 +122,12 @@ object BrainHost {
     private val _sources = MutableStateFlow(com.moling.core.web.SourceState())
     val sources: StateFlow<com.moling.core.web.SourceState> = _sources
     private var sourceFile: java.io.File? = null
+
+    /** 第十五批 W10 T6：候选记忆（收进体系图先列候选，他逐条收 / 不要），单独存 mind/candidates.json。 */
+    private val _candidates = MutableStateFlow(CandidateState())
+    val candidates: StateFlow<CandidateState> = _candidates
+    private var candidateFile: java.io.File? = null
+    private val candidateLock = kotlinx.coroutines.sync.Mutex()
 
     /** 第十三批 G1：本地计划代驾（草稿/本地采纳/执行账本），单独存 mind/plan-adoption.json。 */
     private lateinit var planDriver: PlanDriver
@@ -208,6 +220,10 @@ object BrainHost {
             _sources.value = (runCatching {
                 sourceFile?.takeIf { it.exists() }?.readText()?.let { Json.decodeFromString<com.moling.core.web.SourceState>(it) }
             }.getOrNull() ?: com.moling.core.web.SourceState()).let { com.moling.core.web.Sources.prune(it) }
+            candidateFile = File(dir, "candidates.json")
+            _candidates.value = (runCatching {
+                candidateFile?.takeIf { it.exists() }?.readText()?.let { Json.decodeFromString<CandidateState>(it) }
+            }.getOrNull() ?: CandidateState()).let { MemoryCandidates.prune(it) }
             // 计划代驾：状态单独存；旧文件没有就当空。本地采用不会自动发任何指令。
             planFile = File(dir, "plan-adoption.json")
             val planInitial = runCatching {
@@ -799,6 +815,94 @@ object BrainHost {
     suspend fun benchKeep(artifactId: String, topicId: String? = null): Int =
         io("benchKeep", { 0 }) { brain.keepClaims(bench.claims(artifactId), topicId, System.currentTimeMillis()) }
 
+    // ---------------------------------------------------------------- 候选记忆（第十五批 W10 T6）
+
+    /**
+     * 把这份稿子采用过的正文列成候选（纯逻辑，不调模型）。练习靶子也列出来，标着永远不能收；
+     * 稿子旧版本还没决定的不再摆出来。只有他点「收」才走 [benchAcceptCandidate]。
+     */
+    suspend fun benchCandidates(artifactId: String): List<MemoryCandidate> =
+        io("benchCandidates", { emptyList() }) {
+            candidateLock.withLock {
+                val a = bench.state().artifact(artifactId) ?: return@withLock emptyList()
+                val (state, list) = MemoryCandidates.propose(
+                    _candidates.value, a, MemoryCandidates.SOURCE_BOARD, brain.state().atlas, System.currentTimeMillis(),
+                )
+                if (state != _candidates.value) {
+                    _candidates.value = state
+                    saveCandidates()
+                }
+                list
+            }
+        }
+
+    /**
+     * 收一条候选：走旧的 [Brain.keepClaims]（行为不变）把这一条织进当前主题，记下真正新增的节点 id（撤销用）。
+     * 稿子改版 / 稿子没了 / 练习靶子 / 模型没接上都不算成功，候选原样留着。
+     */
+    suspend fun benchAcceptCandidate(id: String): CandidateResult =
+        io("benchAcceptCandidate", { CandidateResult(_candidates.value, error = "刚才没接上，再试一次") }) {
+            candidateLock.withLock {
+                val state = _candidates.value
+                val c = state.items.firstOrNull { it.id == id }
+                    ?: return@withLock CandidateResult(state, error = "这条候选不在了")
+                if (!c.exerciseOnly && c.status == MemoryCandidateStatus.PROPOSED && brain.state().atlas.topics.isEmpty()) {
+                    return@withLock CandidateResult(state, c, error = "体系图里还没有主题；先去体系页开一个，再收")
+                }
+                val a = c.derivedFromArtifactId?.let { bench.state().artifact(it) }
+                val r = MemoryCandidates.accept(state, id, a?.revision, a == null, System.currentTimeMillis()) { cand ->
+                    addCandidateToAtlas(cand)
+                }
+                if (r.state != state) {
+                    _candidates.value = r.state
+                    saveCandidates()
+                }
+                r
+            }
+        }
+
+    /** 不要这条候选。重复点幂等；已经收进去的要先撤销。 */
+    suspend fun benchRejectCandidate(id: String): CandidateResult =
+        io("benchRejectCandidate", { CandidateResult(_candidates.value, error = "刚才没接上，再试一次") }) {
+            candidateLock.withLock {
+                val state = _candidates.value
+                val r = MemoryCandidates.reject(state, id, System.currentTimeMillis())
+                if (r.state != state) {
+                    _candidates.value = r.state
+                    saveCandidates()
+                }
+                r
+            }
+        }
+
+    /** 撤销上一次「收 / 不要」；收过的把它当时新增的节点从体系图删掉。重复撤销幂等。 */
+    suspend fun benchUndoCandidate(id: String): CandidateResult =
+        io("benchUndoCandidate", { CandidateResult(_candidates.value, error = "刚才没接上，再试一次") }) {
+            candidateLock.withLock {
+                val state = _candidates.value
+                val r = MemoryCandidates.undo(state, id, System.currentTimeMillis())
+                if (r.state != state) {
+                    r.removeNodeIds.forEach { runCatching { brain.removeNode(it) } }
+                    _candidates.value = r.state
+                    saveCandidates()
+                }
+                r
+            }
+        }
+
+    /**
+     * 候选 → 体系图。体系图里已经有一条几乎一样的，就不再叫模型、当“并进已有论断”处理（没有新增，撤销也不删它）；
+     * 模型没接上返回 null（不标成功）。[Brain.keepClaims] 本身不动。
+     */
+    private suspend fun addCandidateToAtlas(c: MemoryCandidate): List<String>? {
+        val atlas = runCatching { brain.state().atlas }.getOrNull() ?: return null
+        if (atlas.nodes.any { AtlasOps.similar(it.claim, c.claim) }) return emptyList()
+        val before = atlas.nodes.map { it.id }.toSet()
+        val added = runCatching { brain.keepClaims(listOf(c.claim), null, System.currentTimeMillis()) }.getOrNull()
+        if (added == null || added <= 0) return null
+        return brain.state().atlas.nodes.map { it.id }.filter { it !in before }
+    }
+
     /** 第十批 T2/T3：抓一个真实网页，正文存来源库并作为材料放上当前案板。整次请求 15 秒（WebPort 内 withTimeout）。 */
     suspend fun benchFetchSource(focusId: String, url: String): PortResult<com.moling.core.workspace.Material> =
         io("benchFetch", { PortResult.Failed(PortError("NETWORK", "网络没接上")) }) {
@@ -885,6 +989,20 @@ object BrainHost {
             f.parentFile?.mkdirs()
             val tmp = File(f.path + ".tmp")
             tmp.writeText(Json.encodeToString(_sources.value))
+            if (!tmp.renameTo(f)) {
+                f.delete()
+                tmp.renameTo(f)
+            }
+        }
+    }
+
+    /** 候选记忆的原子写（tmp + rename）；以后加字段也能读旧文件（各字段都有默认值）。 */
+    private fun saveCandidates() {
+        val f = candidateFile ?: return
+        runCatching {
+            f.parentFile?.mkdirs()
+            val tmp = File(f.path + ".tmp")
+            tmp.writeText(Json.encodeToString(_candidates.value))
             if (!tmp.renameTo(f)) {
                 f.delete()
                 tmp.renameTo(f)

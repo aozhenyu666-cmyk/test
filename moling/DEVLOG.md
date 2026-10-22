@@ -1408,3 +1408,23 @@
 - 总控 `MolingProvider` 新增 v2 方法（仍只认墨灵签名；v1 不动）；`Store.trainingIssue / trainingSubmit` 给总控自己的拦截页用。
 - 墨灵 `WireGateV2Port` + `ZkBridge.gateV2`：墨灵侧客户端通过字符串键值和总控说话。界面都没接（见 DEEPSEEK-15 A 部分）。
 - 测试：`TrainingTest` 12 个、`TrainingContractTest` 3 个（墨灵真实客户端 ↔ 总控真实处理）；`tools/core-tests` 590 全过。两边 App 编译以 CI 为准；真机未测。
+
+## B2 W10 T6：候选记忆（第十五批，2026-10-22）
+
+分支 `deepseek/m2-b2-candidates`（起点 `6bf7a69`）。只新增 `core/atlas/Candidates.kt`、`BrainHost` 接线、案板 UI 和测试；**没有改** `Brain.keepClaims`、`zongkong/`、Manifest、权限、签名/包名。
+
+- **数据**：`MemoryCandidate` 记来源（`source`）、从哪份稿子的第几版来（`derivedFromArtifactId` + `artifactRevision`）、依据编号（`sourceIds`）、练习标记（`exerciseOnly`）、和体系图里已有论断的冲突/重复（`conflictsWith`）、状态（PROPOSED / ACCEPTED / REJECTED）、收进去后真正新增的节点（`addedNodeIds`）。`CandidateState` 单独存 `mind/candidates.json`（tmp + rename 原子写，最多 200 条；未决定的不淘汰）。
+- **生成**：只把「他采用过的正文」（或整份采用的稿子）列成候选，练习靶子也列出来但标记 `exerciseOnly`。候选 id 由「稿子 + 版本 + 论断」稳定算出：重复打开窗口不会多出一份，也不重置他已经点过的收/不要。稿子升到新版本时，旧版本还没决定的候选不再摆出来；已经收/不要的记录留着（还能撤销）。不调模型。
+- **收 / 不要 / 撤销**：三条都是幂等的（重复点只算一次，不重复加/删）。收仍走旧的 `Brain.keepClaims`（模型拆解入图，行为不变），收完用前后节点 id 差记下真正新增的节点；体系图里已有几乎一样的论断时不叫模型、按「并进已有论断」算成功（没有新增）。撤销把刚新增的节点从体系图删掉；并进已有论断的不删。**练习靶子永远拒收**：核心 `accept` 直接拒绝，界面也不画「收」按钮。
+- **不误报**：候选不存在、稿子不在、稿子改版、模型没接上（`keepClaims` 返回 0）都返回错误、状态保持 PROPOSED；界面只显示错误，不弹「收进 N 条」。没有主题时提示先去体系页开一个。
+- **界面**：案板「收进体系图」从「列出来一次全收」改成逐条候选；每条显示正文、练习标记或「会和已有论断合并：…」，按钮「收 / 不要」，已决定的显示「撤销」。收进的是当前主题。
+
+**自动检查（实际跑出来的）**
+- `tools/core-tests`：`gradle test`（Gradle 8.9 + JDK 22，`JAVA_HOME=C:\Program Files\Java\jdk-22`，`GRADLE_USER_HOME=C:\codex-build\gradle-home-m4`，ASCII junction `C:/autopilot-b2-wt`）：**59 个测试类、605 个测试、0 失败 0 错误 0 跳过**（新增 `CandidatesTest` 15 个；原 590）。
+- App：`moling/gradlew.bat compileDebugKotlin`（`ANDROID_HOME=C:\codex-build\android-sdk`）**通过**（2m17s）。
+- 真机**未测**：弹窗逐条收、练习靶子没有「收」、撤销后节点真的从体系页消失，都没在手机上点过；模型拆解入图没有真模型验证。CI 未跑（推分支后由 CI 为准）。
+
+**没做到 / 说明**
+- 「收」依赖模型拆解（旧 `keepClaims` 路径）：模型没接上时这条候选留在列表里，不会假装收进去。
+- 冲突判定用 `AtlasOps.similar` 的字面相似（和旧「几乎一样不重复加」同一套），不是语义 / 向量检索；DEEPSEEK-10 T6 的 `HybridRecall` 仍未做。
+- 候选只接案板稿子这一种来源；外脑结果、采蜜、分享还没有生成候选。

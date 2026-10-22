@@ -55,6 +55,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moling.app.BrainHost
 import com.moling.app.live.RadioPanel
+import com.moling.core.atlas.MemoryCandidate
+import com.moling.core.atlas.MemoryCandidateStatus
 import com.moling.core.workspace.ArtifactActionKind
 import com.moling.core.workspace.ArtifactBlock
 import com.moling.core.workspace.ArtifactKind
@@ -86,6 +88,7 @@ fun BenchScreen() {
     val clip = LocalClipboardManager.current
     val ws by BrainHost.workbench.collectAsState()
     val fetching by BrainHost.fetching.collectAsState()
+    val candidates by BrainHost.candidates.collectAsState()
     val focus = ws.active()
     var pasteOpen by remember { mutableStateOf(false) }
     var atlasOpen by remember { mutableStateOf(false) }
@@ -135,6 +138,36 @@ fun BenchScreen() {
         }
     }
 
+    fun acceptCandidate(c: MemoryCandidate) {
+        benchScope.launch {
+            val r = BrainHost.benchAcceptCandidate(c.id)
+            when {
+                r.error.isNotBlank() -> toast(r.error)
+                !r.changed -> {}
+                r.merged -> toast("和体系图里已有的论断合并了，没有新增")
+                else -> toast("收进体系图 " + (r.candidate?.addedNodeIds?.size ?: 0) + " 条")
+            }
+        }
+    }
+
+    fun rejectCandidate(id: String) {
+        benchScope.launch {
+            val r = BrainHost.benchRejectCandidate(id)
+            if (r.error.isNotBlank()) toast(r.error)
+        }
+    }
+
+    fun undoCandidate(id: String) {
+        benchScope.launch {
+            val r = BrainHost.benchUndoCandidate(id)
+            when {
+                r.error.isNotBlank() -> toast(r.error)
+                r.removeNodeIds.isNotEmpty() -> toast("撤销了，删掉刚收进的 " + r.removeNodeIds.size + " 条")
+                r.changed -> toast("撤销了")
+            }
+        }
+    }
+
     if (focus == null) {
         BenchHome(
             ws = ws,
@@ -169,7 +202,11 @@ fun BenchScreen() {
             onRewrite = { a, b -> rewriteTarget = a to b },
             onDelete = { a, b -> deleteTarget = a to b },
             onVersions = { a -> versionsOf = a },
-            onClaims = { a -> claimsOf = a },
+            onClaims = { a ->
+                claimsOf = a
+                // 先生成候选（纯逻辑，不调模型）；他逐条收 / 不要。
+                benchScope.launch { BrainHost.benchCandidates(a.id) }
+            },
             onExport = { a ->
                 val md = BrainHost.benchMarkdown(a.id)
                 if (md.isBlank()) toast("这份还没有可导出的正文") else {
@@ -254,26 +291,62 @@ fun BenchScreen() {
         )
     }
     claimsOf?.let { a ->
-        val claims = BrainHost.benchClaims(a.id)
+        // 第十五批 W10 T6：先列候选，他逐条收 / 不要；练习靶子不给「收」。
+        val items = candidates.items.filter { it.derivedFromArtifactId == a.id && it.artifactRevision == a.revision }
         AlertDialog(
             onDismissRequest = { claimsOf = null },
             title = { Text("收进体系图") },
             text = {
-                Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (claims.isEmpty()) Text("先采用几段，才有能收进体系图的论断。", style = MaterialTheme.typography.bodySmall)
-                    claims.forEach { Text("· " + it, style = MaterialTheme.typography.bodySmall) }
+                Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (items.isEmpty()) {
+                        Text(
+                            "先采用几段，才有能收进体系图的论断。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Text(
+                            "逐条决定；收进去的并到当前主题。练习靶子永远不能收。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    items.forEach { c ->
+                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("· " + c.claim, style = MaterialTheme.typography.bodySmall)
+                            if (c.exerciseOnly) {
+                                Text("练习靶子 · 永远不能收", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                            } else if (c.conflictsWith.isNotEmpty()) {
+                                val names = c.conflictsWith.mapNotNull { id -> BrainHost.state.value.atlas.nodes.firstOrNull { it.id == id }?.claim?.take(18) }
+                                Text(
+                                    "和已有论断差不多，收的时候会合并" + if (names.isEmpty()) "" else "：" + names.joinToString("；"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            when (c.status) {
+                                MemoryCandidateStatus.PROPOSED -> Row {
+                                    if (!c.exerciseOnly) TextButton(onClick = { acceptCandidate(c) }) { Text("收") }
+                                    TextButton(onClick = { rejectCandidate(c.id) }) { Text("不要") }
+                                }
+                                MemoryCandidateStatus.ACCEPTED -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        if (c.addedNodeIds.isEmpty()) "收过了（并进已有论断）" else "收进体系图 " + c.addedNodeIds.size + " 条",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                    TextButton(onClick = { undoCandidate(c.id) }) { Text("撤销") }
+                                }
+                                MemoryCandidateStatus.REJECTED -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("不要了", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    TextButton(onClick = { undoCandidate(c.id) }) { Text("撤销") }
+                                }
+                            }
+                        }
+                    }
                 }
             },
-            confirmButton = {
-                TextButton(enabled = claims.isNotEmpty(), onClick = {
-                    claimsOf = null
-                    benchScope.launch {
-                        val n = BrainHost.benchKeep(a.id)
-                        Toast.makeText(context.applicationContext, "收进体系图 " + n + " 条", Toast.LENGTH_LONG).show()
-                    }
-                }) { Text("收进") }
-            },
-            dismissButton = { TextButton(onClick = { claimsOf = null }) { Text("算了") } },
+            confirmButton = { TextButton(onClick = { claimsOf = null }) { Text("完成") } },
         )
     }
 }

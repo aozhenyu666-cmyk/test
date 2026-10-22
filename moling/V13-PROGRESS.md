@@ -10,7 +10,7 @@
 | I9 J1–J7 | **已合入 8cc1e54**（含来源原文、Claude 审查修复 4 处） | Moling CI通过 | 真机未测，未合入正式包 | [PR15，含PR13代码](https://github.com/aozhenyu666-cmyk/test/pull/15) |
 | 动效打磨 | **已合入 8cc1e54** | Moling CI通过 | 真机未测 | [PR14](https://github.com/aozhenyu666-cmyk/test/pull/14) |
 | P0前置整合 | 已实现：整合PR15（含PR13）+PR14，补 I9 来源点开原文 | 本地编译通过；CI 见分支 | 真机未测；发布 job 应 skipped | [PR16](https://github.com/aozhenyu666-cmyk/test/pull/16) |
-| W10 T1–T9 | **进行中（里程碑2，第十四批修复完成）**：T1/T2(fetch,RSS,HTML,Brave适配)/T3(池、分享解析、分享后台提取正文)/T7(预算与事件) 核心与入口完成，F10-1…F10-7 + 顺手项已修；T4–T6、T8–T9 未做 | core-tests 448 全绿（47 类，V13WebTest 16；此前“442 全绿”已更正，见 DEVLOG 第十四批）；App compileDebugKotlin 通过；真实公网未验 | 真机未测 | [任务](DEEPSEEK-10.md) · [PR17](https://github.com/aozhenyu666-cmyk/test/pull/17) |
+| W10 T1–T9 | **进行中（里程碑2）**：T1/T2(fetch,RSS,HTML,Brave适配)/T3(池、分享解析、分享后台提取正文)/T7(预算与事件) 核心与入口完成，F10-1…F10-7 + 顺手项已修；**T6 候选记忆已完成（第十五批 B2）**；T4、T5、T8–T9 未做；T6 的 HybridRecall 仍未做 | core-tests 59 类 605 全绿（新增 CandidatesTest 15；见 DEVLOG B2）；App compileDebugKotlin 通过；真实公网未验 | 真机未测 | [任务](DEEPSEEK-10.md) · [PR17](https://github.com/aozhenyu666-cmyk/test/pull/17) |
 | W11 R1–R7 | **部分实现 + 第十四批修复完成**：R1 电台核心、R2 案板/对话面板（音频焦点最小版、TTS 令牌）、R3 安静期（「别管我」同 EXIT、明确停止不记 REPLIED、只记这一次出现）、R5 赌局核心完成；F11-1…F11-7 + 小项已修，F11-5 未做；R4/R6 其余只有接口与说明 | core-tests 50 类 481 全绿（HabitTest 8 / FogTest 13 / RadioTest 14 / V13WebTest 16）；App compileDebugKotlin / testDebugUnitTest 通过 | 真机未测；R4/R6/R5 UI 入口未做；F11-5 未接 | [任务](DEEPSEEK-11.md) |
 | W12 A1–A6 | **部分（第十四批 F12-1…F12-7 已修，已合入工作分支）**：A1–A3 外脑会话核心 + 最小界面（分享 / 复制 / 模型 API）；A4 屏幕快照按裁定冻结（已修、不接线）；A2/A5/A6 未做；联络站传输目前只是复制并打开 | 合入后 core-tests 见 DEVLOG 第十四批合入记录 | 真机未测 | [任务](DEEPSEEK-12.md) · [第十四批](DEEPSEEK-14.md) |
 | W13 G1–G4 | **部分（第十四批 F13-1…F13-8 已修）**：G1/G2 计划代驾核心+今天页/设置（已取消自动采用，到点只提醒）；G3 墨灵侧训练兑换协议；G4 系统工具接口与拒绝降级。G5–G7、Z13 未做 | core-tests 510 全绿（51 类；W13 类 62：PlanDriverTest 21、TrainingRedeemTest 26、SystemPortsTest 10、GateV2Test 5）；App compileDebugKotlin 通过；CI build 通过、release skipped | 真机未测；未改 zongkong/权限/Manifest | [任务](DEEPSEEK-13.md) · [第十四批](DEEPSEEK-14.md) |
@@ -35,7 +35,13 @@
 ### W10（2026-10-22）
 - 里程碑1 已提交：Sources/WebPort/Inhale/Cycle 核心与测试；BrainHost 来源库 + 案板「加网页/链接」。
 - 第十四批修复（提交 19cd181…1047588）：F10-1 内网防护逐跳解析 + OkHttp Dns；F10-2 canonical 保留 query、只按完整 URL 复用；F10-3 修好假服务器测试并断言 TOO_LARGE/TOO_MANY_REDIRECTS；F10-4 Content-Type/charset 嗅探；F10-5 网页材料标外部资料；F10-6 sources.json 原子写与 8MB 上限；F10-7 分享后台抓取 + 15 秒总时限；顺手项（跨主机鉴权头、RSS DOCTYPE 降级、删除原文入口）。core-tests 448 全绿；App compileDebugKotlin 通过；真机未测。
-- 未做：设置页搜索/RSS 配置、ShareActivity 提取正文、联网采蜜、Prework 引用校验、HybridRecall/MemoryCandidate、主动循环接线、CognitiveProfile（见 DEVLOG 第十批）。
+- 未做：设置页搜索/RSS 配置、ShareActivity 提取正文、联网采蜜、Prework 引用校验、HybridRecall、主动循环接线、CognitiveProfile（见 DEVLOG 第十批）。
+
+### W10 T6 候选记忆（2026-10-22，分支 `deepseek/m2-b2-candidates`，起点 `6bf7a69`）
+- `core/atlas/Candidates.kt`：MemoryCandidate（来源、稿子+版本、依据 sourceIds、练习标记、冲突节点、addedNodeIds）与 CandidateState；propose 只从「他采用过的正文」生成（练习靶子也列出但标记）、稳定 id 重复不增、旧版本未决定的不再摆；accept/reject/undo 幂等；稿子改版/不在不误报成功。
+- `BrainHost`：候选 StateFlow + `mind/candidates.json` 原子写；`benchCandidates / benchAcceptCandidate / benchRejectCandidate / benchUndoCandidate`。收仍走 `Brain.keepClaims`（未改），并记录新增节点供撤销删除；无主题时明确拒绝。
+- 案板「收进体系图」：先列候选，逐条「收 / 不要 / 撤销」；练习靶子没有「收」按钮，核心也拒收。
+- 自动检查：`tools/core-tests` **59 类 605 测试全绿**（新增 CandidatesTest 15）；App `compileDebugKotlin` 通过。真机未测；HybridRecall 未做；候选目前只接案板来源。
 
 ### P0（2026-10-22）
 - 基于工作分支 `a8b5749` 建 `deepseek/moling-v13-integration`；合入 PR15（`deepseek/moling-workspace`，已含 PR13），再合 PR14（`deepseek/moling-polish`），解决 `CODEX.md`/`DEVLOG.md` 冲突，保留两边记录。
