@@ -169,6 +169,8 @@ object Speaker {
     /** 掐断正在念的（关掉朗读、开始听他说话时）。被掐断的不回调，晚到的云 TTS / 播放也不播。 */
     fun stop() {
         token++
+        // 还在初始化朗读引擎时排队的那一句也作废（否则 stop 之后初始化完又念出来）。
+        pending = null
         runCatching { tts?.stop() }
         synchronized(done) { done.clear() }
         runCatching { player?.stop(); player?.release() }
