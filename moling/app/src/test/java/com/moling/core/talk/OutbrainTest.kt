@@ -405,6 +405,27 @@ class OutbrainTest {
         assertFalse("有结论就不再问", Outbrain.apiAskable(got, a.id))
     }
 
+
+    @Test
+    fun overlongResultKeepsTailAsMaterial() = runTest {
+        val wb = Workbench(store = MemStore(), ask = null)
+        wb.start("申论开头怎么写", "材料", now = 1)
+        val desk = OutbrainDesk(MemStore(), wb)
+        val s = (desk.prepare(Actor.CHATGPT, epShare, now = 2_000) as PortResult.Ok).value
+        desk.open(s.id, 2_100)
+        desk.waiting(s.id, 2_200)
+        val long = "外".repeat(Outbrain.MAX_RESULT_CHARS + 345)
+        val r = desk.receive(long, now = 3_000, source = "paste")
+        val (outcome, artifact) = (r as PortResult.Ok).value
+        assertFalse(outcome.duplicate)
+        assertEquals("稿子里只收 12000 字", Outbrain.MAX_RESULT_CHARS, artifact!!.blocks.first().markdown.length)
+        assertTrue(
+            "超出 12000 的后半段另存成材料，不丢",
+            wb.state().materials.any { it.kind == "actor" && it.text == long.substring(Outbrain.MAX_RESULT_CHARS) },
+        )
+        assertEquals("会话仍算收到结论", OutbrainStatus.RESULT_RECEIVED, desk.state().sessions.single().status)
+    }
+
     // -------------------------------------------------------------- 落案板
 
     @Test

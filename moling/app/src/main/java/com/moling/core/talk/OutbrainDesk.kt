@@ -143,6 +143,9 @@ class OutbrainDesk(
         source: String = "paste",
         actor: Actor = Actor.NONE,
     ): PortResult<Pair<ReceiveOutcome, WorkspaceArtifact?>> = lock.withLock {
+        // 超过上限时：稿子只收前 12000 字（与 Outbrain.MAX_RESULT_CHARS 一致），整段另存一条材料，不丢后半段。
+        val fullText = Outbrain.clean(text)
+        val overflow = fullText.length > Outbrain.MAX_RESULT_CHARS
         val (ns, r) = Outbrain.receive(st, text, now, sessionId, partial, turn, source, actor)
         st = ns
         if (r is PortResult.Failed) return PortResult.Failed(r.error)
@@ -176,6 +179,15 @@ class OutbrainDesk(
                     if (it.id == session.id) it.copy(artifactId = a.id)
                         .withEvent(now, OutbrainEventKind.RESULT_RECEIVED, "落到案板：" + a.id + "（未采用）") else it
                 })
+                if (overflow) {
+                    // 稿子只到 12000；超出的后半段按材料存下来（单条材料上限 6000，分段存），不丢。
+                    fullText.substring(Outbrain.MAX_RESULT_CHARS).chunked(6_000).forEachIndexed { i, part ->
+                        workbench.addMaterial(
+                            session.focusId, part, now, kind = "actor",
+                            title = "外脑原文（超出 " + Outbrain.MAX_RESULT_CHARS + " 字部分" + (if (i > 0) " " + (i + 1) else "") + "）",
+                        )
+                    }
+                }
                 save()
                 PortResult.Ok(outcome to a)
             }

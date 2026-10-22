@@ -414,7 +414,7 @@ private fun CollectDialog(
         confirmButton = {
             TextButton(enabled = canSubmit, onClick = { onSubmit(text, pick) }) { Text("接回案板") }
         },
-        dismissButton = { TextButton(onClick = onClose) { Text("稍后") } },
+        dismissButton = { TextButton(onClick = onClose) { Text("算了") } },
     )
 }
 

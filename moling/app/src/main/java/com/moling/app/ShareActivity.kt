@@ -6,6 +6,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.lifecycle.lifecycleScope
@@ -24,6 +25,34 @@ class ShareActivity : ComponentActivity() {
         setContent { MolingTheme {
             var topic by remember { mutableStateOf(BrainHost.state.value.let { s -> s.atlas.topics.firstOrNull { it.id == s.topicId }?.name.orEmpty() }) }
             var busy by remember { mutableStateOf(false) }
+            // F12-7：多个外脑会话在等时，不 Toast 一句就丢，打开选择弹窗并带上原文。
+            var pendingText by remember { mutableStateOf<String?>(null) }
+            var pendingPicks by remember { mutableStateOf<List<com.moling.core.talk.OutbrainSession>>(emptyList()) }
+            var pendingPick by remember { mutableStateOf<String?>(null) }
+            fun deliverAsOutbrain(sid: String?) {
+                busy = true
+                lifecycleScope.launch {
+                    when (val r = BrainHost.outbrainReceive(text, sid, source = "share")) {
+                        is com.moling.core.workspace.PortResult.Ok -> {
+                            val (outcome, artifact) = r.value
+                            Toast.makeText(
+                                this@ShareActivity,
+                                when {
+                                    outcome.duplicate -> "这段刚才已经收过了"
+                                    artifact != null -> "接回案板了（未采用）"
+                                    outcome.history -> "会话结束了，只进历史"
+                                    else -> "收下了"
+                                },
+                                Toast.LENGTH_LONG,
+                            ).show()
+                            if (artifact != null) startActivity(Intent(this@ShareActivity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(MainActivity.EXTRA_TAB, 3))
+                        }
+                        is com.moling.core.workspace.PortResult.Failed -> Toast.makeText(this@ShareActivity, r.error.message, Toast.LENGTH_LONG).show()
+                    }
+                    busy = false
+                    finish()
+                }
+            }
             AlertDialog(onDismissRequest = { if (!busy) finish() }, title = { Text("分享进墨灵") },
                 text = { Column { Text(text.take(200)); OutlinedTextField(topic, { topic = it.take(80) }, label = { Text("主题") }); TextButton(enabled = !busy, onClick = { Presence.open(this@ShareActivity, 0, text.take(500)); finish() }) { Text("跟墨灵说") }
                     // I9：直接放上案板（不自动开工，进案板后他自己点“替我先做一块”）
@@ -65,27 +94,15 @@ class ShareActivity : ComponentActivity() {
                     // 第十二批：外脑会话在等结果时，这段文字可以直接接回案板（未采用）
                     if (com.moling.core.talk.Outbrain.waiting(BrainHost.outbrainState.value).isNotEmpty()) {
                         TextButton(enabled = !busy, onClick = {
-                            busy = true
-                            lifecycleScope.launch {
-                                when (val r = BrainHost.outbrainReceive(text, null, source = "share")) {
-                                    is com.moling.core.workspace.PortResult.Ok -> {
-                                        val (outcome, artifact) = r.value
-                                        Toast.makeText(
-                                            this@ShareActivity,
-                                            when {
-                                                outcome.duplicate -> "这段刚才已经收过了"
-                                                artifact != null -> "接回案板了（未采用）"
-                                                outcome.history -> "会话结束了，只进历史"
-                                                else -> "收下了"
-                                            },
-                                            Toast.LENGTH_LONG,
-                                        ).show()
-                                        if (artifact != null) startActivity(Intent(this@ShareActivity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(MainActivity.EXTRA_TAB, 3))
-                                    }
-                                    is com.moling.core.workspace.PortResult.Failed -> Toast.makeText(this@ShareActivity, r.error.message, Toast.LENGTH_LONG).show()
-                                }
-                                busy = false
-                                finish()
+                            val waiting = com.moling.core.talk.Outbrain.waiting(BrainHost.outbrainState.value)
+                            val tagged = com.moling.core.talk.Outbrain.taggedSessionId(text)
+                            if (tagged == null && waiting.size > 1) {
+                                // 多会话：先选，不能按时间猜；原文带进弹窗。
+                                pendingText = text
+                                pendingPicks = waiting
+                                pendingPick = null
+                            } else {
+                                deliverAsOutbrain(tagged ?: waiting.singleOrNull()?.id)
                             }
                         }) { Text("这是外脑带回来的结论") }
                     }
@@ -105,6 +122,35 @@ class ShareActivity : ComponentActivity() {
                     }
                 }) { Text(if (busy) "在收…" else "收进体系图") } },
                 dismissButton = { TextButton(enabled = !busy, onClick = { finish() }) { Text("算了") } })
+            val pickText = pendingText
+            if (pickText != null) {
+                AlertDialog(
+                    onDismissRequest = { if (!busy) pendingText = null },
+                    title = { Text("这条结论属于哪个外脑会话？") },
+                    text = {
+                        Column {
+                            Text(pickText.take(200))
+                            pendingPicks.forEach { s ->
+                                Row {
+                                    RadioButton(selected = pendingPick == s.id, onClick = { pendingPick = s.id })
+                                    Text(s.id + " · " + s.pack.question.take(16))
+                                }
+                            }
+                            Text("默认不选，不选不能提交；原文里带 [[外脑:ob-…]] 时按标记认。")
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(enabled = pendingPick != null, onClick = {
+                            val sid = pendingPick
+                            pendingText = null
+                            pendingPicks = emptyList()
+                            pendingPick = null
+                            deliverAsOutbrain(sid)
+                        }) { Text("接回案板") }
+                    },
+                    dismissButton = { TextButton(onClick = { pendingText = null; pendingPicks = emptyList() }) { Text("算了") } },
+                )
+            }
         } }
     }
 }
