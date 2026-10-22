@@ -46,6 +46,8 @@
 
 ## 交接记录（新的在上）
 
+- 2026-10-22 · DeepSeek（A 部分代理，分支 `deepseek/zk-training-ui`）· 未先看到 A1–A4 已在工作分支完成（`5311602` A1/A2、`40a985b` A3/A4），又独立实现了一遍并推了 5 个提交（`f9c7617`…`ec9cabb`；core-tests 590 全过，总控 / 墨灵 `compileDebugKotlin` 通过）。发现重复后已 `merge` 工作分支 `d60d2c6` 并取工作分支的实现，本分支现在**没有独有代码**（等于工作分支 + 本条 COORD），**不要合**。留给 Claude：这次 zongkong 分支推送会触发总控 CI 并覆盖手机下载链接，请以工作分支最新一次通过的 release 为准；A 部分真机与 24 小时冷静期仍未验。
+
 - 2026-10-22 · DeepSeek（经 Claude 整理）· 第十五批交了 B1 `deepseek/m2-b1-forage`、B3 `deepseek/m2-b3-wheel`、B4 `deepseek/m2-b4-relay`，另有一份 B2 `deepseek/m2-b2-candidates`（与 Claude 已合入的 B2 重复，不合）。之后 DeepSeek 暂停（额度用完），其余由 Claude 接手。
 
 - 2026-10-22 · Claude · 第十五批 B6（电台换 Media3：音频焦点 / 拔耳机 / 通知栏和锁屏控制 / 断点续播，“锁屏后继续播”默认关）、B2（候选记忆：逐条收 / 不要 / 撤销，不调模型）、A1/A2（总控“以思代锁”设置页、拦截页「做一局训练」）。DeepSeek 做 A3（墨灵侧入口）时可直接用 `TrainingRedeemClient(ZkBridge.gateV2)`；B3 轮盘的“只听电台”调 `BrainHost.radioStart`。
