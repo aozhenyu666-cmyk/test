@@ -5,6 +5,36 @@
 
 ---
 
+## 2026-10-22 · 第十五批 A：以思代锁的界面（A1 / A2 / A4）
+
+> 分支 `deepseek/zk-training-ui`（从工作分支 `6bf7a69` 拉出）。**没有改** `core/moling/Training.kt`、
+> `core/Policy.kt`、`app/data/Store.kt`、`MolingProvider`，也没有动权限 / Manifest / 签名 / 包名。
+
+### 做了什么
+
+| 任务 | 提交 | 内容 |
+|---|---|---|
+| A1 设置页 | `f9c7617` | 新增 `ui/TrainingSettingsScreen.kt`（路由 `settings/training`，入口在「规则 · 以思代锁」）：读 `Policy.desiredTraining`（含排队中的改动），开关、拦截名单里的应用多选、每次 1–15 分钟、每天次数 / 分钟 / 局数；保存走 `Policy.setTraining`，`Outcome.message` 原样弹窗；排队中的改动显示提交时间、生效时间和剩余时间，可撤回。文案照 DEEPSEEK-15 A1。 |
+| A2 拦截页 | `fab32a5` | `guard/BlockActivity.kt`：把被拦包名传进 `BlockScreen`；只在「`config.training` 开着 + 包名在名单里 + `Training.blocker(status) == null`」时显示「做一局训练（换 N 分钟）」。点 → `store.trainingIssue(pkg)`，失败原样显示 message；成功出 4 道单选 + 5 分钟倒计时，**界面只读题干和选项，不显示 `answer`**。交卷 → `store.trainingSubmit`，回执显示在卡片和「已放行」屏；训练账本作为 `status` 的 key，PASSED 后按原逻辑重判。急事、回桌面、返回手势都没动。 |
+| A4 调试页 | `91e6a76` | `ui/DiagScreen.kt`：「训练账本（最近 10 条）」列出局 id、状态、发出 / 截止、回执（状态 + 码 + message）、通行分钟，不显示题目与答案。墨灵侧调试页同提交（见 moling DEVLOG）。 |
+
+### 自动检查（实际跑出来的）
+
+- `tools/core-tests`：`gradle test`（Gradle 8.11.1 + JDK 22，`JAVA_HOME=C:\Program Files\Java\jdk-22`、
+  `GRADLE_USER_HOME=C:\gradlehome`，ASCII 路径 `C:/autopilot-a15-wt/tools/core-tests`，
+  `--no-daemon -Dorg.gradle.jvmargs=-Xmx2g --max-workers=2`）：**58 个测试类、590 个测试、0 失败 0 错误 0 跳过**。
+  本批只接界面，没有新增 core 测试。
+- 总控 App：`zongkong/gradlew.bat compileDebugKotlin`（`ANDROID_HOME=C:\Android\sdk`）**通过**。
+- 墨灵 App：`moling/gradlew.bat compileDebugKotlin` **通过**（见 moling DEVLOG）。
+- 本机没有跑 CI；推分支后由 GitHub Actions 为准。
+
+### 没做 / 真机未测
+
+- **真机全部未测**：设置页开关与多选、拦截页发题 / 倒计时 / 交卷 / PASSED 后放行、调试页账本都只过了编译。
+- **24 小时冷静期无法本地验证**：开启 / 放宽是不是真的等 24 小时、到期自动生效，只能等真机或线上时间。
+- 「答错歇 3 分钟」「每天局数用完」由 core 判，界面只原样显示 message；没有额外测试。
+- A2 的入口只在 `BlockActivity`（严管时的拦截页），哨兵掉线时的 `SentinelBlockActivity` 没有加——那时总控本身不在线，判不了卷。
+
 ## 2026-10-20 · 接收墨灵的建议
 
 ### 你提的

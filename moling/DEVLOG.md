@@ -1408,3 +1408,36 @@
 - 总控 `MolingProvider` 新增 v2 方法（仍只认墨灵签名；v1 不动）；`Store.trainingIssue / trainingSubmit` 给总控自己的拦截页用。
 - 墨灵 `WireGateV2Port` + `ZkBridge.gateV2`：墨灵侧客户端通过字符串键值和总控说话。界面都没接（见 DEEPSEEK-15 A 部分）。
 - 测试：`TrainingTest` 12 个、`TrainingContractTest` 3 个（墨灵真实客户端 ↔ 总控真实处理）；`tools/core-tests` 590 全过。两边 App 编译以 CI 为准；真机未测。
+
+
+## 第十五批 A：墨灵侧训练兑换入口与调试（A3 / A4，2026-10-22）
+
+> 分支 `deepseek/zk-training-ui`（从工作分支 `6bf7a69` 拉出）。**没有改** `core/redeem/TrainingRedeem.kt`、
+> `app/ZkBridge.kt`、Manifest、权限、签名或包名；只新增 `app/TrainingHost.kt`，改今天页和调试页。
+
+### 做了什么
+
+| 任务 | 提交 | 内容 |
+|---|---|---|
+| A3 今天页 | `1f29815` | 新增 `TrainingHost`（唯一一个 `TrainingRedeemClient(ZkBridge.gateV2)`，题目 / 回执 / 通行在内存里共享）。今天页每 30 秒读一次 `v2.training.policy`：策略开着且今天还有次数 / 分钟时，在「做事 / 娱乐」那一行下面显示「今天还能用训练换 N 次」+「去换」。底部卡片（`ModalBottomSheet`）：当前被拦娱乐包名在策略名单里就直接带上，取不到就列出名单让他点；`start(pkg, now)` 失败原样显示 message；成功出 4 道单选 + 5 分钟倒计时；交卷 `submit(answers, now)` 显示回执；`activePass(now)` 有值时显示「今天多了 N 分钟（一小时内有效）」。三手棋 / 聊天分数没有接进来。 |
+| A4 调试页 | `91e6a76` | `ui/DebugScreen.kt` 新增【训练兑换】：`snapshot().lastMessage` + 最近 5 条回执（状态 / 时间 / message / 通行分钟）；不显示题目和答案。 |
+
+### 自动检查（实际跑出来的）
+
+- `tools/core-tests`：**58 个测试类、590 个测试、0 失败 0 错误 0 跳过**（Gradle 8.11.1 + JDK 22，
+  `--no-daemon -Dorg.gradle.jvmargs=-Xmx2g --max-workers=2`，ASCII 路径 `C:/autopilot-a15-wt/tools/core-tests`）。
+  本批只接界面，没有新增 core 测试。
+- 墨灵 App：`moling/gradlew.bat compileDebugKotlin`（`ANDROID_HOME=C:\Android\sdk`）**通过**。
+- 本机没有跑 CI；推分支后由 GitHub Actions 为准。
+
+### 没做 / 真机未测 / 要 Claude 定夺
+
+- **真机全部未测**：底部卡片、发题 / 倒计时 / 交卷、回执、activePass 文案、调试页都只过了编译。
+- **总控 24 小时冷静期**只走 `v2.training.policy` 的读：真机上策略开着才有入口；开启 / 放宽等 24 小时没验。
+- 总控没装 / 旧总控 / 策略没开：读策略失败时今天页不显示入口（不装成能用）；如果策略读到之后总控被杀，`start` 的
+  `NOT_AVAILABLE` / 其他错误会原样显示在卡片里。
+- **核心文案不一致（没改，等 Claude）**：`core/redeem/TrainingRedeem.kt` 的 `start()` 成功后把
+  `lastMessage` 写成「一局三题，做对至少两题才可能放行（由总控判）」，和实际 4 题对 3 道不符。
+  按「核心已写好不要改」没有动；今天页卡片用的是自己写的 4 题文案，只有调试页的 lastMessage 会原样显示这句旧话。
+- 通行令与题目只在内存里：墨灵进程重启后要重新读策略 / 回执；真正的一局只成功一次、通行分钟都仍由总控账本保证。
+

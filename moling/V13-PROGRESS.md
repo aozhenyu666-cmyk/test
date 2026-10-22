@@ -14,6 +14,7 @@
 | W11 R1–R7 | **部分实现 + 第十四批修复完成**：R1 电台核心、R2 案板/对话面板（音频焦点最小版、TTS 令牌）、R3 安静期（「别管我」同 EXIT、明确停止不记 REPLIED、只记这一次出现）、R5 赌局核心完成；F11-1…F11-7 + 小项已修，F11-5 未做；R4/R6 其余只有接口与说明 | core-tests 50 类 481 全绿（HabitTest 8 / FogTest 13 / RadioTest 14 / V13WebTest 16）；App compileDebugKotlin / testDebugUnitTest 通过 | 真机未测；R4/R6/R5 UI 入口未做；F11-5 未接 | [任务](DEEPSEEK-11.md) |
 | W12 A1–A6 | **部分（第十四批 F12-1…F12-7 已修，已合入工作分支）**：A1–A3 外脑会话核心 + 最小界面（分享 / 复制 / 模型 API）；A4 屏幕快照按裁定冻结（已修、不接线）；A2/A5/A6 未做；联络站传输目前只是复制并打开 | 合入后 core-tests 见 DEVLOG 第十四批合入记录 | 真机未测 | [任务](DEEPSEEK-12.md) · [第十四批](DEEPSEEK-14.md) |
 | W13 G1–G4 | **部分（第十四批 F13-1…F13-8 已修）**：G1/G2 计划代驾核心+今天页/设置（已取消自动采用，到点只提醒）；G3 墨灵侧训练兑换协议；G4 系统工具接口与拒绝降级。G5–G7、Z13 未做 | core-tests 510 全绿（51 类；W13 类 62：PlanDriverTest 21、TrainingRedeemTest 26、SystemPortsTest 10、GateV2Test 5）；App compileDebugKotlin 通过；CI build 通过、release skipped | 真机未测；未改 zongkong/权限/Manifest | [任务](DEEPSEEK-13.md) · [第十四批](DEEPSEEK-14.md) |
+| 第十五批 A（以思代锁界面 A1–A4） | **实现完成（待 Claude 复审）**：总控设置页「以思代锁」、拦截页「做一局训练」（4 道单选、5 分钟倒计时、回执、PASSED 按原逻辑重判）、墨灵今天页入口与底部卡片、两边调试页训练账本；没有改已写好的 core | core-tests 590 全绿（58 类）；总控 / 墨灵 App `compileDebugKotlin` 通过；本机未跑 CI | 真机未测；24 小时冷静期无法本地验证 | [任务](DEEPSEEK-15.md) |
 
 ### W13（2026-10-22，分支 deepseek/moling-planner，基于 4f3c905）
 - G1/G2：`core/flow/PlanAdoption.kt`（PlanDraft/PlanAdoption/PlanOperation/PlanDriver，换日/改版冲突/operationId 幂等/回执分离/UNKNOWN 不重发）；`BrainHost` 存 `mind/plan-adoption.json`，今天页「计划代驾」采纳/不采纳，设置页到点提醒开关与 10/20/30 分钟。**第十四批 F13-1 起没有自动本地采用：到点只推「一键采用」提醒（通知 + 今天页按钮），他点了才算；也不会自动交给总控或执行现实动作。**
@@ -24,13 +25,21 @@
 - 明确未完成：Z13 总控侧策略/挑战/rubric/临时通行与 ContentProvider；GateV2 端口 Android 适配器和训练 UI；G2 发送入口（本批不自动执行）；G5 追链与总控训练界面；G6 交叉/新旧版本/备份恢复；G7 最终验收；真机全部未测。
 - 提交/PR：见本分支 git log；PR 由 Lead 建。
 
+### 第十五批 A（2026-10-22，分支 deepseek/zk-training-ui，基于 6bf7a69）
+- A1：`zongkong/app/src/main/java/com/zongkong/app/ui/TrainingSettingsScreen.kt`（路由 `settings/training`）读 `Policy.desiredTraining`，保存走 `Policy.setTraining` 并原样显示 `Outcome.message`；排队中的改动显示生效时间、可撤回。提交 `f9c7617`。
+- A2：`zongkong/.../guard/BlockActivity.kt` 增加「做一局训练（换 N 分钟）」；只在策略开着、包名在名单、`Training.blocker(status) == null` 时出现；4 道单选 + 5 分钟倒计时，不显示 `answer`；PASSED 后按新额度重判。提交 `fab32a5`。
+- A3：墨灵 `app/TrainingHost.kt` + `ui/TodayScreen.kt`：今天页精力行下入口、底部卡片（包名取不到就从策略名单点）、题目 / 倒计时 / 交卷回执 / activePass 文案；三手棋与聊天分数未接。提交 `1f29815`。
+- A4：总控 `ui/DiagScreen.kt` 训练账本最近 10 条、墨灵 `ui/DebugScreen.kt` lastMessage 与最近回执；都不显示答案。提交 `91e6a76`。
+- 自动检查：`tools/core-tests` 58 类 590 个测试全绿（和合入基线一致，本批无新增 core 测试）；`zongkong/gradlew.bat compileDebugKotlin`、`moling/gradlew.bat compileDebugKotlin` 均通过（JDK 22、Gradle 8.9、`ANDROID_HOME=C:\Android\sdk`、ASCII junction `C:/autopilot-a15-wt`）。
+- 未完成 / 风险：真机未测；总控 24 小时冷静期无法本地验证；`TrainingRedeem.kt` 的 start 成功后 `lastMessage` 仍写「三题 / 两题」，与 4 题对 3 道不一致（按“核心不要改”未动，已记入 DEVLOG，等 Claude 定夺）。
+
 ## 更新格式
 
 每批下方按任务号逐项追加：实际文件/提交、实现状态、测试命令与结果、CI链接、真机支持与未测项、PR与依赖、正式APK源码SHA。旧数据留日期，不能拿本地构建代替正式发布。
 
 缺口统一写在这里并关联任务号；不得只在聊天里说“还差一点”。
 
-当前明确缺口：第八批正式发布验证（P0）；I9/动效真机验收（P0）；W10 T4–T9；W11 R4/R6 与 R5 UI 入口、F11-5 曝光回报、真机；W12–W13 功能（各批）。
+当前明确缺口：第八批正式发布验证（P0）；I9/动效真机验收（P0）；W10 T4–T9；W11 R4/R6 与 R5 UI 入口、F11-5 曝光回报、真机；W12–W13 功能（各批）；第十五批 A（以思代锁界面）真机验收与总控 24 小时冷静期验证。
 
 ### W10（2026-10-22）
 - 里程碑1 已提交：Sources/WebPort/Inhale/Cycle 核心与测试；BrainHost 来源库 + 案板「加网页/链接」。
