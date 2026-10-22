@@ -1273,6 +1273,7 @@
 **自动检查（实际跑出来的）**
 - `tools/core-tests`：`gradle test`（Gradle 8.9 + JDK 22，`JAVA_HOME=C:\Program Files\Java\jdk-22`，ASCII 路径 `C:/autopilot-w13-wt/tools/core-tests`）：**51 个测试类、510 个测试、0 失败 0 错误 0 跳过**。其中 W13 相关：`PlanDriverTest` 21、`TrainingRedeemTest` 26、`SystemPortsTest` 10、`GateV2Test` 5。
 - App：`moling/gradlew.bat compileDebugKotlin`（`ANDROID_HOME=C:\Android\sdk`，ASCII 路径 `C:/autopilot-w13-wt/moling`）**通过**；本批未打包、未跑 Android 单测。
+- CI：GitHub Actions `build` **通过**、`release` skipped（开发分支不发布）：[run 39725106241](https://github.com/aozhenyu666-cmyk/test/actions/runs/39725106241)。
 - 真机**未测**：通知实际弹出、点击进今天页、设置项持久化都未在手机上验。训练兑换/系统工具仍无 UI、未接 Android 适配器。
 
 **没做到 / 说明**

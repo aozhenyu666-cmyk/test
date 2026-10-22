@@ -13,7 +13,7 @@
 | W10 T1–T9 | **进行中（里程碑2，第十四批修复完成）**：T1/T2(fetch,RSS,HTML,Brave适配)/T3(池、分享解析、分享后台提取正文)/T7(预算与事件) 核心与入口完成，F10-1…F10-7 + 顺手项已修；T4–T6、T8–T9 未做 | core-tests 448 全绿（47 类，V13WebTest 16；此前“442 全绿”已更正，见 DEVLOG 第十四批）；App compileDebugKotlin 通过；真实公网未验 | 真机未测 | [任务](DEEPSEEK-10.md) · [PR17](https://github.com/aozhenyu666-cmyk/test/pull/17) |
 | W11 R1–R7 | 任务书已补齐，待实现 | 待验证 | 待验证 | [任务](DEEPSEEK-11.md) |
 | W12 A1–A6 | 任务书已补齐，待实现 | 待验证 | 待验证 | [任务](DEEPSEEK-12.md) |
-| W13 G1–G4 | **部分（第十四批 F13-1…F13-8 已修）**：G1/G2 计划代驾核心+今天页/设置（已取消自动采用，到点只提醒）；G3 墨灵侧训练兑换协议；G4 系统工具接口与拒绝降级。G5–G7、Z13 未做 | core-tests 510 全绿（51 类；W13 类 62：PlanDriverTest 21、TrainingRedeemTest 26、SystemPortsTest 10、GateV2Test 5）；App compileDebugKotlin 通过 | 真机未测；未改 zongkong/权限/Manifest | [任务](DEEPSEEK-13.md) · [第十四批](DEEPSEEK-14.md) |
+| W13 G1–G4 | **部分（第十四批 F13-1…F13-8 已修）**：G1/G2 计划代驾核心+今天页/设置（已取消自动采用，到点只提醒）；G3 墨灵侧训练兑换协议；G4 系统工具接口与拒绝降级。G5–G7、Z13 未做 | core-tests 510 全绿（51 类；W13 类 62：PlanDriverTest 21、TrainingRedeemTest 26、SystemPortsTest 10、GateV2Test 5）；App compileDebugKotlin 通过；CI build 通过、release skipped | 真机未测；未改 zongkong/权限/Manifest | [任务](DEEPSEEK-13.md) · [第十四批](DEEPSEEK-14.md) |
 
 ### W13（2026-10-22，分支 deepseek/moling-planner，基于 4f3c905）
 - G1/G2：`core/flow/PlanAdoption.kt`（PlanDraft/PlanAdoption/PlanOperation/PlanDriver，换日/改版冲突/operationId 幂等/回执分离/UNKNOWN 不重发）；`BrainHost` 存 `mind/plan-adoption.json`，今天页「计划代驾」采纳/不采纳，设置页到点提醒开关与 10/20/30 分钟。**第十四批 F13-1 起没有自动本地采用：到点只推「一键采用」提醒（通知 + 今天页按钮），他点了才算；也不会自动交给总控或执行现实动作。**
