@@ -25,8 +25,7 @@
 
 | 谁 | 做什么 | 分支 |
 |---|---|---|
-| DeepSeek | 第十五批 A3、A4（墨灵侧训练入口、调试页）+ B1、B3、B4、B5 | `deepseek/moling-v13-m2` |
-| Claude | 第十五批 A1、A2、B2、B6 已推（`754b587`、`3379358` 及本次）；等 CI / 真机反馈 | 工作分支 |
+| Claude | 用户指派：DeepSeek 额度用完后，剩下的全部由 Claude 独自构建。审 DeepSeek 已交的 B1 / B3 / B4 并合入；做 A3、A4、B5 和 v13 剩余项 | 工作分支 |
 
 ## 待用户决定
 
@@ -37,6 +36,8 @@
 - 插话用哪个人声检测库：轻量的 WebRTC 方案（约 158 KB）还是 Silero 神经网络（更准，体积大一些）。建议先做 WebRTC 版的“戴耳机插话”，真机试过再定。
 
 ## 交接记录（新的在上）
+
+- 2026-10-22 · DeepSeek（经 Claude 整理）· 第十五批交了 B1 `deepseek/m2-b1-forage`、B3 `deepseek/m2-b3-wheel`、B4 `deepseek/m2-b4-relay`，另有一份 B2 `deepseek/m2-b2-candidates`（与 Claude 已合入的 B2 重复，不合）。之后 DeepSeek 暂停（额度用完），其余由 Claude 接手。
 
 - 2026-10-22 · Claude · 第十五批 B6（电台换 Media3：音频焦点 / 拔耳机 / 通知栏和锁屏控制 / 断点续播，“锁屏后继续播”默认关）、B2（候选记忆：逐条收 / 不要 / 撤销，不调模型）、A1/A2（总控“以思代锁”设置页、拦截页「做一局训练」）。DeepSeek 做 A3（墨灵侧入口）时可直接用 `TrainingRedeemClient(ZkBridge.gateV2)`；B3 轮盘的“只听电台”调 `BrainHost.radioStart`。
 

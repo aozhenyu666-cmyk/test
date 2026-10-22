@@ -117,6 +117,26 @@ fun TrainingSettingsScreen(nav: NavHostController) {
                     }
                 }
             }
+            // 第十五批 A4：最近的训练记录（只显示状态和回执，不显示答案）
+            val book by store.training.collectAsStateWithLifecycle()
+            if (book.challenges.isNotEmpty()) {
+                SectionLabel("最近记录")
+                book.challenges.takeLast(10).asReversed().forEach { c ->
+                    val r = book.receipts.lastOrNull { it.challengeId == c.id }
+                    val pass = book.passes.firstOrNull { it.challengeId == c.id }
+                    Hint(
+                        "${clock(c.issuedAt)} · ${labels[c.pkg] ?: c.pkg} · " +
+                            when (c.state) {
+                                com.zongkong.core.moling.ChallengeState.OPEN -> "进行中"
+                                com.zongkong.core.moling.ChallengeState.PASSED -> "过了"
+                                com.zongkong.core.moling.ChallengeState.FAILED -> "没过"
+                                com.zongkong.core.moling.ChallengeState.EXPIRED -> "作废"
+                            } +
+                            (pass?.let { " · 换了 ${it.minutes} 分钟（到 ${clock(it.expiresAt)}）" } ?: "") +
+                            (r?.let { " · ${it.message.take(30)}" } ?: ""),
+                    )
+                }
+            }
             val live = config.training
             Hint("现在生效的：${if (live.enabled) "开着" else "关着"} · ${live.packages.size} 个应用 · 每次 ${live.minutesPerPass} 分钟 · 每天 ${live.dailyMaxPasses} 次 / ${live.dailyMaxMinutes} 分钟 · ${live.attemptsPerDay} 局")
         }

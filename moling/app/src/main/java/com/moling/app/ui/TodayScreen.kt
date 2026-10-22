@@ -373,6 +373,8 @@ fun TodayScreen(onReady: () -> Unit = {}) {
                     Text(ladder.rung.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
             }
+            // 以思代锁（第十五批 A3）：总控开了训练兑换才出现；娱乐分钟变了就重新问一次
+            TrainingLine(refreshKey = z.playMinutesToday)
         }
 
         if (flow == null) {

@@ -217,6 +217,16 @@ private fun buildReport(
 
     // 5.6 外脑会话（W12 A1–A3）+ 限定捕获（A4，未申请权限）
     appendLine()
+    // 以思代锁（第十五批 A4）：只读墨灵侧客户端的状态；答案不在墨灵这边
+    appendLine("【以思代锁】")
+    runCatching {
+        val t = BrainHost.training.snapshot()
+        appendLine("  最近：${t.lastMessage.ifBlank { "（没做过）" }}")
+        t.challenge?.let { appendLine("  这一局：${it.challengeId} · ${it.packageName} · 截止 ${java.time.Instant.ofEpochMilli(it.expiresAt)}") }
+        t.pass?.let { appendLine("  通行：${it.passId} · ${it.minutes} 分钟 · 到 ${java.time.Instant.ofEpochMilli(it.expiresAt)}") }
+        t.receipts.takeLast(5).forEach { r -> appendLine("  回执 ${r.requestId}：${r.state} ${r.message.take(30)}") }
+    }.onFailure { appendLine("  读不到：${it.message}") }
+    appendLine()
     appendLine("【外脑】")
     val obState = BrainHost.outbrainState.value
     val obActive = com.moling.core.talk.Outbrain.active(obState)

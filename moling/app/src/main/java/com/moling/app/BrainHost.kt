@@ -799,6 +799,24 @@ object BrainHost {
     suspend fun benchKeep(artifactId: String, topicId: String? = null): Int =
         io("benchKeep", { 0 }) { brain.keepClaims(bench.claims(artifactId), topicId, System.currentTimeMillis()) }
 
+    // ---------------------------------------------------------------- 以思代锁·墨灵侧（第十五批 A3）
+
+    /** 墨灵侧训练客户端：题目、判分、通行全在总控；这里只转交和核对回执。 */
+    val training: com.moling.core.redeem.TrainingRedeemClient by lazy { com.moling.core.redeem.TrainingRedeemClient(ZkBridge.gateV2) }
+
+    /** 总控当前的训练策略（总控没装 / 旧版本 / 连不上 → Failed）。 */
+    suspend fun trainingPolicy(): PortResult<com.moling.core.redeem.UnlockPolicyView> =
+        withContext(Dispatchers.IO) {
+            if (ZkBridge.gateV2.capabilities()?.supportsTraining() != true) PortResult.Failed(PortError("NOT_AVAILABLE", "总控没开放训练兑换（没装、旧版本或连不上）"))
+            else runCatching { ZkBridge.gateV2.policy() }.getOrElse { PortResult.Failed(PortError("NOT_AVAILABLE", "总控连不上")) }
+        }
+
+    suspend fun trainingStart(pkg: String): PortResult<com.moling.core.redeem.ChallengeBundle> =
+        withContext(Dispatchers.IO) { runCatching { training.start(pkg, System.currentTimeMillis()) }.getOrElse { PortResult.Failed(PortError("NOT_AVAILABLE", "总控连不上")) } }
+
+    suspend fun trainingSubmit(answers: List<com.moling.core.redeem.ChallengeAnswer>): PortResult<com.moling.core.redeem.ExecutionReceipt> =
+        withContext(Dispatchers.IO) { runCatching { training.submit(answers, System.currentTimeMillis()) }.getOrElse { PortResult.Failed(PortError("NOT_AVAILABLE", "总控连不上")) } }
+
     // ---------------------------------------------------------------- 候选记忆（第十五批 B2）
 
     /** 从一份稿子提候选（只提新的），返回这份稿子还没被他否掉的候选。不调模型。 */
