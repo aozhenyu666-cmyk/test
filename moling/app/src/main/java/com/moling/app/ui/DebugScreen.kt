@@ -161,6 +161,27 @@ private fun buildReport(
     val cost = mind.costToday(day)
     appendLine("模型花费：调用 ${cost.calls} 次 / 输入 ${cost.charsIn} 字 / 输出 ${cost.charsOut} 字 / 失败 ${cost.failures} 次")
 
+    // 4.5 安静期 / 反免疫（R3）：为什么没出现、每种方式管不管用
+    appendLine()
+    appendLine("【安静期 / 反免疫】")
+    val quiet = com.moling.core.live.Habits.quietLine(state.habits, now)
+    appendLine(if (quiet.isBlank()) "安静期：没有（可以自发出现）" else quiet)
+    val habits = com.moling.core.live.Habits.summary(state.habits, now).filterNot { it.contains("安静期") }
+    if (habits.isEmpty()) appendLine("出现方式：还没有记录（低样本，不宣称哪种有效）") else habits.forEach { appendLine("· " + it) }
+
+    // 4.6 赌局（R5）：只列，不改
+    appendLine()
+    appendLine("【赌局】")
+    if (state.bets.isEmpty()) {
+        appendLine("还没有赌局")
+    } else {
+        state.bets.takeLast(10).forEach { b ->
+            appendLine("· " + b.id + " · " + b.kind.label + " · " + b.state.label + " · " + com.moling.core.predict.Bets.line(b))
+        }
+        val brier = com.moling.core.predict.Bets.brier(state.bets)
+        appendLine("可评分赌局 Brier：" + (if (brier < 0) "还没有对过账" else "%.2f".format(brier)) + "（和旧娱乐分钟预测分开）")
+    }
+
     // 5. 后台：心跳 + 前台应用（M9 / M10）
     appendLine()
     appendLine("【后台】")
