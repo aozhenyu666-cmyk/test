@@ -543,6 +543,8 @@ object BrainHost {
             runCatching { postNotices(now, listOf(n)) }
         }
         runCatching { outbrainSweep(now) }
+        // 焦点两小时没动就收起成“可续上”（W10 T8）：不删稿子，续上还是同一件事
+        if (::bench.isInitialized) io("benchExpire", { false }) { bench.expire(now) }
         runCatching { withContext(Dispatchers.IO) { autoSchedule(now) } }
         runCatching { liveTick(now) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "活的墨灵失败", it) }
         // 第十五批 B5：主河道开始 / 结束时的勿扰和歌单提醒（各自开关，默认关）
@@ -858,6 +860,14 @@ object BrainHost {
 
     /** 简报：收下 / 不要。返回收进体系图几条。 */
     suspend fun keepBrief(id: String, keep: Boolean): Int = io("keepBrief", { 0 }) { brain.keepBrief(id, keep, System.currentTimeMillis()) }
+
+    /** 认知画像（W10 T8）：从她真实的出现记录里数，样本不足就说不足。 */
+    fun profile(): com.moling.core.live.Profile? = if (ready) runCatching { brain.profile() }.getOrNull() else null
+
+    /** 画像规律：对 / 停用 / 撤回（null）。只记他的选择，这一批不改她的出现策略。 */
+    suspend fun setProfileRule(id: String, state: com.moling.core.live.PatternState?) {
+        io("setProfileRule", {}) { brain.setProfileRule(id, state, System.currentTimeMillis()) }
+    }
 
     /** 规律：对（生效）/ 不对。 */
     suspend fun setRule(id: String, keep: Boolean) {

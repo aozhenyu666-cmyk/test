@@ -48,9 +48,9 @@ class Workbench(
     suspend fun start(question: String, text: String, now: Long, kind: String = "paste", title: String = ""): Focus = lock.withLock {
         val q = question.trim().ifBlank { text.trim().lineSequence().firstOrNull().orEmpty().take(30) }.ifBlank { "没起名的一件事" }
         val m = text.trim().takeIf { it.isNotBlank() }?.let { Material(next("m"), kind, title.ifBlank { q }.take(40), it.take(6000), now) }
-        val f = Focus(next("f"), q.take(80), startedAt = now, materialIds = listOfNotNull(m?.id))
+        val f = FocusLife.touch(Focus(next("f"), q.take(80), startedAt = now, materialIds = listOfNotNull(m?.id)), now)
         st = st.copy(
-            focuses = st.focuses.map { if (it.status == FocusStatus.ACTIVE) it.copy(status = FocusStatus.PAUSED) else it } + f,
+            focuses = st.focuses.map { if (it.status == FocusStatus.ACTIVE) parked(it, now) else it } + f,
             materials = st.materials + listOfNotNull(m),
         )
         log(now, "开了一件事：${f.question.take(20)}")
@@ -63,25 +63,40 @@ class Workbench(
         val f = st.focus(focusId)?.takeIf { it.status != FocusStatus.ARCHIVED } ?: return@withLock fail(PortError.NOT_FOUND, "这件事不在了")
         val t = text.trim().takeIf { it.isNotBlank() } ?: return@withLock fail(PortError.BAD_ACTION, "材料是空的")
         val m = Material(next("m"), kind, title.ifBlank { t.take(20) }, t.take(6000), now)
-        val nf = f.copy(materialIds = f.materialIds + m.id, revision = f.revision + 1)
+        val nf = FocusLife.touch(f.copy(materialIds = f.materialIds + m.id, revision = f.revision + 1), now)
         st = st.copy(focuses = st.focuses.map { if (it.id == f.id) nf else it }, materials = st.materials + m)
         save()
         PortResult.Ok(nf)
     }
 
-    /** 切回某件事（别的挂起）。 */
+    /** 切回 / 续上某件事（别的挂起）：同一个焦点、同一份材料和稿子，不另起题。 */
     suspend fun switchTo(focusId: String, now: Long): PortResult<Focus> = lock.withLock {
         val f = st.focus(focusId)?.takeIf { it.status != FocusStatus.ARCHIVED } ?: return@withLock fail(PortError.NOT_FOUND, "这件事不在了")
+        val resumed = f.status == FocusStatus.PAUSED
         st = st.copy(focuses = st.focuses.map {
             when {
-                it.id == f.id -> it.copy(status = FocusStatus.ACTIVE)
-                it.status == FocusStatus.ACTIVE -> it.copy(status = FocusStatus.PAUSED)
+                it.id == f.id -> FocusLife.touch(it.copy(status = FocusStatus.ACTIVE, pausedAt = 0, pauseReason = ""), now)
+                it.status == FocusStatus.ACTIVE -> parked(it, now)
                 else -> it
             }
         })
+        if (resumed) log(now, "续上：${f.question.take(20)}")
         save()
         PortResult.Ok(st.focus(focusId)!!)
     }
+
+    /** 两小时没动的“正在做”收起成可续上（心跳里调）；有变化返回 true。 */
+    suspend fun expire(now: Long): Boolean = lock.withLock {
+        val next = FocusLife.expire(st, now)
+        if (next === st) return@withLock false
+        st.focuses.filter { it.status == FocusStatus.ACTIVE && next.focus(it.id)?.status == FocusStatus.PAUSED }
+            .forEach { log(now, "两小时没动，先收起：${it.question.take(20)}") }
+        st = st.copy(focuses = next.focuses)
+        save()
+        true
+    }
+
+    private fun parked(f: Focus, now: Long) = f.copy(status = FocusStatus.PAUSED, pausedAt = now, pauseReason = FocusLife.SWITCHED)
 
     /** 收起一件事：还在做的代工取消，结果回来也不要了。 */
     suspend fun archive(focusId: String, now: Long): PortResult<Focus> = lock.withLock {

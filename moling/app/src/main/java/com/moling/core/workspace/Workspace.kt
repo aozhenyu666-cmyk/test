@@ -35,7 +35,12 @@ data class Focus(
     val goal: String = "",
     val status: FocusStatus = FocusStatus.ACTIVE,
     val startedAt: Long,
+    /** 他最后一次碰这件事之后两小时（[FocusLife.ACTIVE_MS]）；0 = 旧记录，按最后动静算。 */
     val expiresAt: Long = 0,
+    /** 收起（到期 / 他切走）的时候；0 = 没收起过。 */
+    val pausedAt: Long = 0,
+    /** 为什么收起：expired = 两小时没动自己收起；switched = 他开了 / 切到别的事。 */
+    val pauseReason: String = "",
     /** 材料或问题变了就 + 1；基于旧版本的作业结果回来时作废。 */
     val revision: Long = 1,
     val materialIds: List<String> = emptyList(),
@@ -205,6 +210,56 @@ data class WorkbenchState(
     fun job(id: String) = jobs.firstOrNull { it.id == id }
     /** 撤销栈（新的在后）。 */
     fun versions(artifactId: String) = history.filter { it.artifactId == artifactId }
+}
+
+/**
+ * 焦点的寿命（v13 W10 T8）：一件事默认活跃两小时，从他最后一次碰它算起（开、切回来、补材料、在稿子上动一下）。
+ * 到期就收起成“可以续上”：材料、稿子、撤销历史都不删；他点续上就是同一件事（同一个 id），不另起题。
+ * 她在做的代工还没回来时不收起（免得结果回来找不到人）。
+ */
+object FocusLife {
+    const val ACTIVE_MS = 2 * 3_600_000L
+    const val EXPIRED = "expired"
+    const val SWITCHED = "switched"
+
+    /** 他最后一次碰这件事的时间。 */
+    fun lastTouch(st: WorkbenchState, f: Focus): Long = maxOf(
+        f.startedAt,
+        if (f.expiresAt > 0) f.expiresAt - ACTIVE_MS else 0L,
+        st.materialsOf(f).maxOfOrNull { it.at } ?: 0L,
+        st.artifacts.filter { it.focusId == f.id }.maxOfOrNull { it.updatedAt } ?: 0L,
+    )
+
+    fun dueAt(st: WorkbenchState, f: Focus): Long = lastTouch(st, f) + ACTIVE_MS
+
+    private fun busy(st: WorkbenchState, f: Focus, now: Long) =
+        st.jobs.any { it.focusId == f.id && (it.status == JobStatus.RUNNING || it.status == JobStatus.QUEUED) && now < it.deadline }
+
+    /** 到期的那件“正在做”的事收起成可续上；没变返回原对象。 */
+    fun expire(st: WorkbenchState, now: Long): WorkbenchState {
+        val due = st.focuses.filter { it.status == FocusStatus.ACTIVE && now >= dueAt(st, it) && !busy(st, it, now) }.map { it.id }.toSet()
+        if (due.isEmpty()) return st
+        return st.copy(focuses = st.focuses.map {
+            if (it.id in due) it.copy(status = FocusStatus.PAUSED, pausedAt = now, pauseReason = EXPIRED) else it
+        })
+    }
+
+    /** 他碰了一下：再活两小时。 */
+    fun touch(f: Focus, now: Long): Focus = f.copy(expiresAt = maxOf(f.expiresAt, now + ACTIVE_MS))
+
+    /** 收起的事上给他看的一行：多久前收起的、有几份稿子、几条材料。 */
+    fun resumeLine(st: WorkbenchState, f: Focus, now: Long): String {
+        val drafts = st.artifactsOf(f.id).size
+        val mats = f.materialIds.size
+        val ago = ((now - (if (f.pausedAt > 0) f.pausedAt else lastTouch(st, f))) / 60_000L).coerceAtLeast(0)
+        val whenText = when {
+            ago < 60 -> "$ago 分钟前"
+            ago < 24 * 60 -> "${ago / 60} 小时前"
+            else -> "${ago / (24 * 60)} 天前"
+        }
+        val why = if (f.pauseReason == EXPIRED) "两小时没动，先收起了" else "收起"
+        return "$why · $whenText · 材料 $mats 条 · 稿子 $drafts 份 · 点一下续上（原样接着做）"
+    }
 }
 
 /** 稿子上的纯操作（不调模型、不加锁）。 */

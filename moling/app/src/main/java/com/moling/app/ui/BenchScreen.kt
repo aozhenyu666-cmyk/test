@@ -347,15 +347,23 @@ private fun BenchHome(ws: WorkbenchState, onPaste: () -> Unit, onAtlas: () -> Un
         BenchEntry("去查一下", "从体系图最大的缺口联网查一份：支持 / 反对 + 来源（没配搜索就没有结果，不造假）。", onForage, 3)
         val paused = ws.focuses.filter { it.status == FocusStatus.PAUSED }
         if (paused.isNotEmpty()) {
-            Text("收起的事", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
-            paused.forEach { f ->
+            Text("可以续上的事", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+            val now = System.currentTimeMillis()
+            paused.sortedByDescending { com.moling.core.workspace.FocusLife.lastTouch(ws, it) }.forEach { f ->
                 Surface(
                     shape = MaterialTheme.shapes.medium,
                     color = MaterialTheme.colorScheme.surface,
                     border = BorderStroke(0.7.dp, Ink.copy(alpha = 0.14f)),
                     modifier = Modifier.fillMaxWidth().clickable { onSwitch(f) },
                 ) {
-                    Text(f.question.ifBlank { "（没写问题）" }, Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium)
+                    Column(Modifier.padding(12.dp)) {
+                        Text(f.question.ifBlank { "（没写问题）" }, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            com.moling.core.workspace.FocusLife.resumeLine(ws, f, now),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }

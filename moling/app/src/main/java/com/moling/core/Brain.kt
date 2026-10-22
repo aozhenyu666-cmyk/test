@@ -303,6 +303,8 @@ data class BrainState(
     /** 过路费（TOLL）今天收了几回（W11 R4：每天最多 [TOLL_PER_DAY] 回）。 */
     val tollDay: String = "",
     val tolls: Int = 0,
+    /** 认知画像里的规律他怎么选的（W10 T8）：id → 对（ACCEPTED）/ 停用（DISABLED）；只给他看，不改策略。 */
+    val profileRules: Map<String, com.moling.core.live.PatternState> = emptyMap(),
     /** 每天的手机使用（只有应用和时间，没有内容），留 30 天。 */
     val usageDays: List<UsageDay> = emptyList(),
     /** 提议编号用的流水号。 */
@@ -1485,6 +1487,16 @@ class Brain(
 
     suspend fun setRule(id: String, keep: Boolean, now: Long) = lock.withLock {
         st = st.copy(rules = st.rules.map { if (it.id == id) it.copy(status = if (keep) "kept" else "dropped") else it })
+        mark(MindAct.JUDGE, now)
+        save()
+    }
+
+    /** 认知画像（W10 T8）：从真实出现记录里数，样本不足就说不足。 */
+    fun profile(): com.moling.core.live.Profile = com.moling.core.live.CognitiveProfile.build(st.habits, st.profileRules)
+
+    /** 画像规律：他点“对” / “停用” / “撤回选择”（[state] = null）。只记他的选择，不改她的出现策略。 */
+    suspend fun setProfileRule(id: String, state: com.moling.core.live.PatternState?, now: Long) = lock.withLock {
+        st = st.copy(profileRules = if (state == null || state == com.moling.core.live.PatternState.PROPOSED) st.profileRules - id else st.profileRules + (id to state))
         mark(MindAct.JUDGE, now)
         save()
     }
