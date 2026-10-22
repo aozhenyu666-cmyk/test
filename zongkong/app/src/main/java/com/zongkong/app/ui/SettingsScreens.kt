@@ -145,6 +145,14 @@ fun SettingsScreen(nav: NavHostController) {
         SectionLabel("规则")
         MenuItem("关卡", "${config.gates.size} 道：每个部门每天要交什么", "settings/gates", nav)
         MenuItem("拦截名单", "${config.blocked.size} 个应用：严管时打开就被弹回", "settings/block", nav)
+        MenuItem(
+            "以思代锁",
+            when {
+                config.training.enabled -> "开着：每次换 ${config.training.minutesPerPass} 分钟 · 每天 ${config.training.dailyMaxPasses} 次 / ${config.training.dailyMaxMinutes} 分钟"
+                else -> "没开：答几道有标准答案的题，换一点今天的娱乐分钟"
+            } + if (config.pending.any { it.op is ChangeOp.Training }) " · 有待生效的改动" else "",
+            "settings/training", nav,
+        )
         MenuItem("墨灵的授权书", if (grants.grants.isEmpty()) "没有授权：墨灵的建议都要你点执行" else "已授权 ${grants.grants.size} 类", "settings/moling", nav)
         MenuItem(
             "低屏模式",
