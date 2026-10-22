@@ -1408,3 +1408,9 @@
 - 总控 `MolingProvider` 新增 v2 方法（仍只认墨灵签名；v1 不动）；`Store.trainingIssue / trainingSubmit` 给总控自己的拦截页用。
 - 墨灵 `WireGateV2Port` + `ZkBridge.gateV2`：墨灵侧客户端通过字符串键值和总控说话。界面都没接（见 DEEPSEEK-15 A 部分）。
 - 测试：`TrainingTest` 12 个、`TrainingContractTest` 3 个（墨灵真实客户端 ↔ 总控真实处理）；`tools/core-tests` 590 全过。两边 App 编译以 CI 为准；真机未测。
+
+## 第十五批 Claude 部分（2026-10-22）
+- **B6 电台换 Media3**：每段先合成成音频文件（云端语音或系统朗读 `synthesizeToFile`），交给 ExoPlayer 播：音频焦点、拔耳机暂停、来电 / 导航让路、暂停后接着播；MediaSessionService 提供通知栏 / 锁屏 / 耳机按键（下一段 = 跳过，停止 = 停止，都经过状态机）。播放器停在半路，状态机跟着暂停。设置“电台锁屏后继续播”默认关（关着时熄屏 / 离开面板就停，和以前一样）。手写的焦点 / 拔耳机代码删掉；停止电台不碰别的朗读。
+- **B2 候选记忆**：`core/atlas/MemoryCandidates.kt`；案板「收进体系图」改成候选列表，逐条收 / 不要 / 撤销；练习靶子收不进，已有的 / 点过不要的不再推，相关论断列出来让他判断；收下是原话（不调模型）。`MemoryCandidatesTest` 8 个。
+- **A1/A2 总控侧以思代锁界面**：设置页「以思代锁」（读排队设置、保存走 `Policy.setTraining`、显示待生效）；拦截页在“挣来的娱乐用完了”那一条下面，满足条件才出现「做一局训练」，4 道单选、5 分钟倒计时、交卷看回执，过了重新判断拦截。题目答案不显示。
+- core-tests 598 全过；App 编译以 CI 为准；真机未测。

@@ -63,13 +63,13 @@ class BlockActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = goHome()
         })
-        setContent { ZkTheme { BlockScreen(blockedLabel(), ::goHome, ::openRoute, ::finish) } }
+        setContent { ZkTheme { BlockScreen(blockedLabel(), intent.getStringExtra(EXTRA_PKG).orEmpty(), ::goHome, ::openRoute, ::finish) } }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        setContent { ZkTheme { BlockScreen(blockedLabel(), ::goHome, ::openRoute, ::finish) } }
+        setContent { ZkTheme { BlockScreen(blockedLabel(), intent.getStringExtra(EXTRA_PKG).orEmpty(), ::goHome, ::openRoute, ::finish) } }
     }
 
     private fun blockedLabel(): String {
@@ -108,7 +108,7 @@ class BlockActivity : ComponentActivity() {
 }
 
 @Composable
-private fun BlockScreen(appLabel: String, goHome: () -> Unit, openRoute: (String) -> Unit, release: () -> Unit) {
+private fun BlockScreen(appLabel: String, pkg: String, goHome: () -> Unit, openRoute: (String) -> Unit, release: () -> Unit) {
     val context = LocalContext.current
     val store = context.zk.store
     val config by store.config.collectAsStateWithLifecycle()
@@ -148,7 +148,7 @@ private fun BlockScreen(appLabel: String, goHome: () -> Unit, openRoute: (String
                 Button(onClick = release, modifier = Modifier.fillMaxWidth()) { Text("继续") }
             }
         } else {
-            StrictBody(status, config.emergencyMinutes, goHome, openRoute, release)
+            StrictBody(status, config.emergencyMinutes, goHome, openRoute, release, pkg, config.training)
         }
     }
 }
@@ -160,6 +160,8 @@ private fun StrictBody(
     goHome: () -> Unit,
     openRoute: (String) -> Unit,
     release: () -> Unit,
+    pkg: String = "",
+    training: com.zongkong.core.moling.TrainingPolicy = com.zongkong.core.moling.TrainingPolicy(),
 ) {
     val context = LocalContext.current
     val store = context.zk.store
@@ -222,6 +224,12 @@ private fun StrictBody(
                     Text("已用 ${r.usedMin} 分钟，今天挣到 ${r.allowedMin} 分钟。", style = MaterialTheme.typography.bodyMedium.merge(Mono))
                     Hint("做完一步 +20 分钟，实打实做事每半小时 +10。不做事，就只有每天的底数。")
                     Button(onClick = { openRoute("home") }, modifier = Modifier.fillMaxWidth()) { Text("去做下一步") }
+                    // 以思代锁：只在“挣来的用完了”是唯一原因、策略开着、这个应用在名单里时出现
+                    if (com.zongkong.app.ui.trainingAvailable(status, training, pkg)) {
+                        com.zongkong.app.ui.TrainingCard(pkg, training.minutesPerPass) {
+                            if (!store.status().strict) release()
+                        }
+                    }
                 }
                 is Reason.Debt -> Panel(accent = sig.strict, onClick = { openRoute("start/${r.actionKey}") }) {
                     Text("「${r.title}」过了点还没开始", style = MaterialTheme.typography.titleMedium)
