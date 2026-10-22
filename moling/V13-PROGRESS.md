@@ -42,3 +42,4 @@
 - 自动检查：core-tests **472 全绿**（新增 30）；App 本地 `compileDebugKotlin`、`testDebugUnitTest` 通过；真机未跑。
 - 未完成：R4 材料化 FOG/TOLL/Chess；R6 轮盘/音频焦点/VoiceSession/微停顿；R5 卡片/电台赌局入口。不新增权限。
 
+
