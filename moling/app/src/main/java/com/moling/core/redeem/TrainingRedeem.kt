@@ -101,6 +101,8 @@ data class RedeemState(
     val receipts: List<ExecutionReceipt> = emptyList(),
     val pass: TemporaryPass? = null,
     val lastMessage: String = "",
+    /** 发起挑战的流水号：每次 start 都加一，保证 requestId 唯一（F13-6）。 */
+    val issueSeq: Long = 0,
 )
 
 /** 总控 v2 训练兑换的端口。实现方负责 ContentProvider/Binder、包名与签名校验；这里只管协议。 */
@@ -134,6 +136,9 @@ class TrainingRedeemClient(
     @Synchronized
     fun start(packageName: String, now: Long): PortResult<ChallengeBundle> {
         val p = port ?: return fail(GateError.NOT_AVAILABLE, "总控没装或连不上，不能兑换")
+        // F13-6：requestId 每次唯一（计数持久化在状态里），不再按天固定。
+        val issueNo = state.issueSeq + 1
+        state = state.copy(issueSeq = issueNo)
         // F13-4：没拿到能力协商就当不支持，不能默认放行。
         val caps = p.capabilities() ?: return fail(GateError.NOT_AVAILABLE, "总控没给能力协商，不知道支不支持训练兑换")
         if (!caps.supportsTraining()) return fail(GateError.NOT_AVAILABLE, "总控这个版本不支持训练兑换")
@@ -155,7 +160,7 @@ class TrainingRedeemClient(
         if (policy.validUntil in 1..now) return fail(GateError.EXPIRED, "训练兑换策略已经过期")
         state.pass?.takeIf { it.expiresAt > now }?.let { return fail(GateError.NOT_AVAILABLE, "还有一次没到期的放行，先用完再来") }
         val today = com.moling.core.mind.dayKey(now)
-        val requestId = "issue-${policy.policyId}-${policy.policyRevision}-${packageName}-${today}"
+        val requestId = "issue-${policy.policyId}-${policy.policyRevision}-${packageName}-${today}-${issueNo}"
         return when (val r = p.issue(policy.policyId, packageName, requestId)) {
             is PortResult.Ok -> {
                 val c = r.value

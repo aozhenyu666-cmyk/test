@@ -43,6 +43,7 @@ class TrainingRedeemTest {
     ) : GateV2Port {
         var clock = 0L
         var issueCalls = 0
+        val issueRequestIds = mutableListOf<String>()
         var submitCalls = 0
         var receiptCalls = 0
         var passesIssued = 0
@@ -62,6 +63,7 @@ class TrainingRedeemTest {
 
         override fun issue(policyId: String, packageName: String, requestId: String): PortResult<ChallengeBundle> {
             issueCalls++
+            issueRequestIds += requestId
             issueOverride?.let { return it() }
             val bundle = ChallengeBundle(
                 challengeId = "ch-1",
@@ -343,6 +345,16 @@ class TrainingRedeemTest {
         val longPass = FakeGate(FakeGate().policy.copy(minutesPerPass = 60))
         longPass.clock = at
         assertTrue(fails(client(longPass).start(pkg, at), GateError.POLICY_DENIED))
+    }
+
+    @Test fun issueRequestIdIsUniquePerStart() {
+        val gate = FakeGate()
+        gate.clock = at
+        val c = client(gate)
+        assertTrue(c.start(pkg, at) is PortResult.Ok)
+        assertTrue(c.start(pkg, at + 1_000) is PortResult.Ok)
+        assertEquals(2, gate.issueRequestIds.size)
+        assertEquals("每次发起挑战的 requestId 必须不同", 2, gate.issueRequestIds.toSet().size)
     }
 
     @Test fun capabilitiesNullIsNotAvailable() {
