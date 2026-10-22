@@ -25,8 +25,8 @@
 
 | 谁 | 做什么 | 分支 |
 |---|---|---|
-| DeepSeek | 第十五批：以思代锁界面（A）+ v13 第二阶段（B1–B5） | `deepseek/zk-training-ui`、`deepseek/moling-v13-m2` |
-| Claude | 第十五批 B6：电台换 Media3 底座（用户指派给 Claude） | 工作分支 |
+| DeepSeek | 第十五批 A3、A4（墨灵侧训练入口、调试页）+ B1、B3、B4、B5 | `deepseek/moling-v13-m2` |
+| Claude | 第十五批 B6 电台 Media3（已推 `754b587`）→ B2 候选记忆 → A1、A2 总控侧训练界面（用户指派给 Claude） | 工作分支 |
 
 ## 待用户决定
 
