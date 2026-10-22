@@ -1421,7 +1421,7 @@
 **自动检查（实际跑出来的）**
 - `tools/core-tests`：`gradle test`（Gradle 8.11.1 + JDK 22；本 worktree 路径含中文会让测试 JVM 类路径乱码，用 ASCII junction `C:/b3w` 指向本 worktree 跑）：**59 个测试类、594 个测试、0 失败 0 错误 0 跳过**（跑之前基线 58 类 590；本批 +4：`HabitTest` +1、`ExposureTest` 3）。
 - App：`moling/gradlew.bat compileDebugKotlin`（Gradle 8.9、`ANDROID_HOME=C:\codex-build\android-sdk`、路径 `C:/b3w/moling`）**通过**；没打包、没跑 Android 单测。
-- CI：未在本机跑，见分支 PR 的 Actions 结果。
+- CI：GitHub Actions `moling-android` **通过**（run [39730183311](https://github.com/aozhenyu666-cmyk/test/actions/runs/39730183311)，分支 `deepseek/m2-b3-wheel` 的 `0ff0a04`）。只动 `moling/`，不触发总控 CI、不动总控下载包。
 - 真机**未测**：轮盘点击 / 拖拽手感、窗口变大后是否真不出屏、展开收起是否真的不抢焦点、悬窗被系统 / 厂商拦时是否真的回报 UNOBSERVED，都要在手机上验。
 
 **没做到 / 说明**
