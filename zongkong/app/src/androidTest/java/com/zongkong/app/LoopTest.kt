@@ -12,6 +12,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -79,6 +80,8 @@ class LoopTest {
                 watch = com.zongkong.core.WatchConfig(openGate = false),
             )
         }
+        // 今天交过的关卡、娱乐时长清零：每个测试从干净的一天开始（不然前一个测试交过的“今日部署”会带过来）
+        app.store.updateToday { com.zongkong.core.DayLog(it.date) }
         app.store.updateHq { com.zongkong.core.hq.HqBook() }
         app.store.updateDossier { com.zongkong.core.boss.Dossier() }
         app.store.updateVein { com.zongkong.core.vein.Vein() }
@@ -318,6 +321,8 @@ class LoopTest {
         // 回到对话：工具步骤折叠显示、选项按钮
         scenario!!.onActivity { it.onBackPressedDispatcher.onBackPressed() }
         waitText("现在就开始", 10_000)
+        // 工具步骤在最后一条回复上面：对话已经滚到底，先滚回去再找
+        compose.onNodeWithTag("chat-list").performScrollToNode(hasText("已执行", substring = true))
         waitText("已执行", 5_000)
         shot("e2e-09-chat-after-tools")
         // 模型收到了工具定义和工具结果
