@@ -52,6 +52,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Surface
 import com.moling.app.BrainHost
+import com.moling.core.link.describe
 import com.moling.app.ui.art.InkBubbles
 import com.moling.app.ui.art.InkClouds
 import com.moling.app.ui.art.InkFlame
@@ -508,6 +509,27 @@ fun TodayScreen(onReady: () -> Unit = {}) {
                                 com.moling.core.flow.AdoptionState.LOCAL_ADOPTED,
                             ),
                         ) { Text("不采纳") }
+                    }
+                    // G2：已经本地采用 → 他点了才按授权书交给总控；账本里每条的状态照总控回执写
+                    if (adoption?.state == com.moling.core.flow.AdoptionState.LOCAL_ADOPTED) {
+                        OutlinedButton(onClick = {
+                            todayScope.launch {
+                                val msg = runCatching { BrainHost.executePlan(System.currentTimeMillis()) }.getOrDefault("刚才没接上")
+                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                            }
+                        }) { Text("交给总控（按授权书）") }
+                    }
+                    val ops = planState.operations.filter { it.planId == todayDraft?.planId }.takeLast(6)
+                    if (ops.isNotEmpty()) {
+                        Text("交给总控的：", style = MaterialTheme.typography.labelMedium)
+                        ops.forEach { op ->
+                            Text(
+                                "· " + op.command.describe().substringBefore("。原因").take(28) + " — " + op.state.label +
+                                    if (op.message.isNotBlank()) "（" + op.message.take(24) + "）" else "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }

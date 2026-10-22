@@ -42,6 +42,9 @@ import com.moling.core.flow.FlowPlan
 import com.moling.core.flow.PlanDriver
 import com.moling.core.flow.PlanDriverState
 import com.moling.core.flow.PlanResult
+import com.moling.core.flow.OperationState
+import com.moling.core.flow.PlanReceipt
+import com.moling.core.link.power
 import com.moling.core.guard.GuardSample
 import com.moling.core.link.ZkStatus
 import com.moling.core.mind.Actor
@@ -438,9 +441,59 @@ object BrainHost {
     }
 
     /** 心跳每分钟喂一次：到点只发「一键采用」提醒，不自动采用、不发指令。 */
-    suspend fun tickPlan(now: Long): PlanDriverState = planIo({ _plan.value }) {
-        planDriver.tick(now)
-        planDriver.snapshot()
+    suspend fun tickPlan(now: Long): PlanDriverState {
+        val st = planIo({ _plan.value }) {
+            planDriver.tick(now)
+            planDriver.snapshot()
+        }
+        // G2：问一问还没有最终结果的动作（锁外调总控，回来再记）
+        st.operations.filter { (it.state == OperationState.ZK_PENDING || it.state == OperationState.ACTIVE) && it.receiptId.isNotBlank() }
+            .take(5)
+            .forEach { op ->
+                val r = withContext(Dispatchers.IO) { runCatching { ZkBridge.result(op.receiptId) }.getOrNull() } ?: return@forEach
+                val final = com.moling.core.flow.PlanReceipts.finalOf(r.state)
+                if (final != "PENDING") planIo({ null }) { planDriver.recordFinal(op.operationId, op.receiptId, final, r.message, now) }
+            }
+        return _plan.value
+    }
+
+    /**
+     * G2：他点「交给总控」——今天这份已经本地采用的计划，逐条按授权书交给总控：先在账本里记一笔，再发，回执写回账本。
+     * 授权书内总控倒计时 60 秒执行（可以在总控取消），授权外总控照旧问他；墨灵现在的权柄不允许的指令不发。
+     * 调总控时不拿账本的锁；发出去没回执（连不上 / 中断）记“结果未知”，不盲目重发。
+     */
+    suspend fun executePlan(now: Long): String {
+        if (!ready) return "还没准备好"
+        val plan = _state.value.flow?.takeIf { it.day == Brain.calendarDay(now) } ?: return "今天还没有水道"
+        val tier = brain.tier()
+        val all = com.moling.core.flow.Flow.toCommands(plan, com.moling.core.flow.Flow.dayStart(plan.day))
+        val commands = all.filter { com.moling.core.link.ZkWire.valid(it) && com.moling.core.power.Charter.check(it.power(), tier).allowed }
+        if (commands.isEmpty()) return "没有现在的权柄允许交给总控的指令"
+        val prep = planIo({ null }) { planDriver.prepareExecution(plan, commands, now) } ?: return "刚才没接上，等会儿再试"
+        if (!prep.ok) return prep.message
+        var sent = 0
+        var unknown = 0
+        var rejected = 0
+        for (op in prep.operations) {
+            if (op.state != OperationState.PREPARED) continue
+            planIo({ null }) { planDriver.markSending(op.operationId, System.currentTimeMillis()) } ?: continue
+            val r = withContext(Dispatchers.IO) { runCatching { ZkBridge.sendAuto(op.command) }.getOrNull() }
+            val at = System.currentTimeMillis()
+            if (r == null) {
+                planIo({ null }) { planDriver.markUnknown(op.operationId, at, "连不上总控：发没发到不确定，不重发，等能查回执再说") }
+                unknown++
+                break
+            }
+            planIo({ null }) { planDriver.recordReceipt(op.operationId, PlanReceipt(r.id, r.ok, r.auto, r.message, at), at) }
+            if (r.ok) sent++ else rejected++
+        }
+        val skipped = all.size - commands.size
+        return buildList {
+            if (sent > 0) add("交给总控 $sent 条（授权内 60 秒后执行、可在总控取消；授权外要你在总控确认）")
+            if (rejected > 0) add("总控拒了 $rejected 条")
+            if (unknown > 0) add("有 1 条结果未知，没有重发")
+            if (skipped > 0) add("$skipped 条现在的权柄不允许，没发")
+        }.joinToString("；").ifBlank { "没有发出任何指令" }
     }
 
     private suspend fun registerPlan(plan: FlowPlan, now: Long, focusKey: String = "") {

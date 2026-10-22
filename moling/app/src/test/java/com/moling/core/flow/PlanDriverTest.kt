@@ -259,6 +259,26 @@ class PlanDriverTest {
         assertTrue("他再点才算", h.driver.adopt(changed, at(9, 6)).ok)
     }
 
+    @Test fun zongkongStatesMapToLedgerFinals() {
+        assertEquals("DONE", PlanReceipts.finalOf("DONE"))
+        assertEquals("倒计时中还不算执行", "PENDING", PlanReceipts.finalOf("SCHEDULED"))
+        assertEquals("PENDING", PlanReceipts.finalOf("PENDING"))
+        assertEquals("你在总控取消了", "DECLINED", PlanReceipts.finalOf("VETOED"))
+        assertEquals("DECLINED", PlanReceipts.finalOf("declined"))
+        assertEquals("EXPIRED", PlanReceipts.finalOf("EXPIRED"))
+        assertEquals("FAILED", PlanReceipts.finalOf("FAILED"))
+        // 发过、总控说过期 → 不写“没发”
+        val h = Harness(AdoptPolicy(remind = true))
+        val p = plan()
+        h.driver.putDraft(p, at(9))
+        h.driver.adopt(p, at(9, 1))
+        val op = h.driver.prepareExecution(p, listOf(ZkCommand.Note("x", "计划")), at(9, 2)).operations.single().operationId
+        h.driver.markSending(op, at(9, 3))
+        h.driver.recordReceipt(op, PlanReceipt("r-1", ok = true, auto = true, message = "倒计时"), at(9, 4))
+        h.driver.recordFinal(op, "r-1", PlanReceipts.finalOf("VETOED"), "你取消了", at(9, 5))
+        assertEquals(OperationState.REJECTED, h.driver.operation(op)!!.state)
+    }
+
     @Test fun rewriteAfterReminderRestartsTheCountdown() {
         val h = Harness(AdoptPolicy(remind = true))
         h.driver.putDraft(plan(), at(9))

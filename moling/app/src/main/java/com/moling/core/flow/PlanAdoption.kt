@@ -174,6 +174,17 @@ data class ExecutionPreparation(
     val conflicts: List<PlanConflict> = emptyList(),
 )
 
+/** 总控那边的指令状态 → 账本的最终状态（G2）。倒计时中（SCHEDULED）还不算执行。 */
+object PlanReceipts {
+    fun finalOf(zkState: String): String = when (zkState.trim().uppercase()) {
+        "DONE" -> "DONE"
+        "FAILED" -> "FAILED"
+        "DECLINED", "VETOED" -> "DECLINED"
+        "EXPIRED" -> "EXPIRED"
+        else -> "PENDING"
+    }
+}
+
 object PlanContents {
     /** 计划内容的稳定 hash：意图、水道（含时间/状态）、风险。 */
     fun hash(plan: FlowPlan): String {
