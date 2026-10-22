@@ -84,7 +84,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * 墨灵的外壳：底部三个标签（对话 / 今天 / 体系），右上角设置。
+ * 墨灵的外壳：底部四个标签（对话 / 今天 / 体系 / 案板），右上角设置。
  * 通知点进来会带上要打开的标签（[EXTRA_TAB]）。
  */
 class MainActivity : ComponentActivity() {
@@ -233,6 +233,7 @@ private fun MolingShell(requestedTab: MutableIntState) {
                 val s0 by animateFloatAsState(if (tab == 0) 1.10f else 0.92f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMediumLow), label = "tabScale0")
                 val s1 by animateFloatAsState(if (tab == 1) 1.10f else 0.92f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMediumLow), label = "tabScale1")
                 val s2 by animateFloatAsState(if (tab == 2) 1.10f else 0.92f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMediumLow), label = "tabScale2")
+                val s3 by animateFloatAsState(if (tab == 3) 1.10f else 0.92f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMediumLow), label = "tabScale3")
                 NavigationBarItem(
                     selected = tab == 0,
                     onClick = { tab = 0 },
@@ -252,6 +253,13 @@ private fun MolingShell(requestedTab: MutableIntState) {
                     onClick = { tab = 2 },
                     icon = { Box(Modifier.graphicsLayer { scaleX = s2; scaleY = s2 }) { InkGalaxy(Modifier.size(30.dp), animated = tab == 2) } },
                     label = { Text("体系") },
+                    colors = itemColors,
+                )
+                NavigationBarItem(
+                    selected = tab == 3,
+                    onClick = { tab = 3 },
+                    icon = { Box(Modifier.graphicsLayer { scaleX = s3; scaleY = s3 }) { InkBench(Modifier.size(30.dp)) } },
+                    label = { Text("案板") },
                     colors = itemColors,
                 )
             }
@@ -278,7 +286,8 @@ private fun MolingShell(requestedTab: MutableIntState) {
                     when (which) {
                         0 -> ChatScreen()
                         1 -> TodayScreen(onReady = { readyOpen = true })
-                        else -> AtlasScreen()
+                        2 -> AtlasScreen()
+                        else -> BenchScreen()
                     }
                 }
             }
