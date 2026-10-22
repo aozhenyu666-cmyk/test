@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">桌宠</string>
+    <string name="bootstrap_status">基础工程已就绪，桌宠功能待接入</string>
+</resources>
