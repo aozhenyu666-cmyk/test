@@ -520,6 +520,7 @@ class OutbrainTest {
         assertTrue(board.contains("申论开头怎么写"))
         assertFalse("分享路线不上联络站黑板", board.contains("[[外脑:" + share.id + "]]"))
         assertTrue("写清推上去不代表他看过", board.contains("不代表他看过任何回答"))
+        assertEquals("宿主按这个列表把 OPENED 标成推上去了", listOf(relay.id), Outbrain.relayBoardSessions(st, 1_500).map { it.id })
         // 上限：整段不超过 maxChars
         assertTrue(Outbrain.relayBoard(st, 1_500, maxChars = 400).length <= 400)
         // 结果回来 / 取消 / 过期：从黑板上撤下
@@ -539,8 +540,10 @@ class OutbrainTest {
         val (s0, r0) = Outbrain.prepare(OutbrainState(), f, pack, Actor.CHATGPT, epRelay, now = 1_000)
         val relay = (r0 as PortResult.Ok).value
         val opened = Outbrain.open(s0, relay.id, 1_100).first
+        assertFalse("只是打开过，还没推上黑板", Outbrain.pushedToBoard(opened.sessions.single()))
         val (pushed, pr) = Outbrain.relayPushed(opened, relay.id, 1_200)
         assertTrue(pr is PortResult.Ok)
+        assertTrue(Outbrain.pushedToBoard(pushed.sessions.single()))
         assertEquals("推上黑板后开始等结果", OutbrainStatus.WAITING_RESULT, pushed.sessions.single().status)
         assertTrue("时间线只说推上去了", pushed.sessions.single().timeline.last().note.contains("不是已读"))
         assertTrue("推上去之后还留在黑板上等", Outbrain.relayBoard(pushed, 1_300).contains("[[外脑:" + relay.id + "]]"))

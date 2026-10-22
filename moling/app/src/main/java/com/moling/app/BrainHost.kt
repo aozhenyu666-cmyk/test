@@ -506,6 +506,19 @@ object BrainHost {
                 absorb = { items -> io("absorb", { Absorbed() }) { brain.absorb(items, now) } },
             )
         } ?: return null
+        // 黑板推上去了：这次真带上的 OPENED 联络站会话都算“推上去了”（外脑还没来读，仍然不是已读）。
+        // 放在这里而不是只放在“推到联络站”按钮里：推送失败后由心跳补推成功也算数。
+        if (r.pushed) {
+            val ids = Outbrain.relayBoardSessions(outbrain.state(), now)
+                // OPENED = 刚点“推到联络站”；没标的 WAITING = 旧版本留下的“复制并打开”会话，这次补推上也记上。
+                .filter { it.status == OutbrainStatus.OPENED || (it.status == OutbrainStatus.WAITING_RESULT && !Outbrain.pushedToBoard(it)) }
+                .map { it.id }
+            if (ids.isNotEmpty()) {
+                withContext(Dispatchers.IO) {
+                    ids.forEach { id -> runCatching { outbrain.relayPushed(id, now) } }
+                }
+            }
+        }
         refreshState()
         tellAbsorbed(r.absorbed)
         return r
@@ -998,7 +1011,8 @@ object BrainHost {
             OutbrainStatus.CANCELLED -> return "已经取消了，不再推"
             OutbrainStatus.EXPIRED -> return "到点没回来：要接着推，先在收线卡里手动接回"
             OutbrainStatus.RESULT_RECEIVED, OutbrainStatus.REVIEWED -> return "结论已经回来了，不用再推"
-            OutbrainStatus.WAITING_RESULT -> return "已经在等结果了：黑板上有这一包，到点没回来才撤下"
+            OutbrainStatus.WAITING_RESULT ->
+                if (Outbrain.pushedToBoard(session)) return "已经在等结果了：黑板上有这一包，到点没回来才撤下"
             OutbrainStatus.PREPARED, OutbrainStatus.OPENED -> Unit
         }
         if (!settings.relay().ready()) return "联络站还没配置：先去贯通页填地址和令牌"
@@ -1015,7 +1029,7 @@ object BrainHost {
             io("outbrainRelayFailed", {}) { outbrain.markError(sessionId, now, "没推上黑板") }
             return "这次没推上去：" + r.status + "（之后同步还会再试）"
         }
-        io("outbrainRelayPushed", {}) { outbrain.relayPushed(sessionId, now) }
+        // relayResult 推送成功时已经把这次带上的 OPENED 会话标成“推上去了”。
         return if (r.status.startsWith("同步失败")) {
             "进场包推上去了（收件箱这次没连上，下次再收）"
         } else {

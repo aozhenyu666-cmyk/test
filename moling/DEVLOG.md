@@ -1407,7 +1407,7 @@
 
 分支 `deepseek/m2-b4-relay`（基于工作分支 `6bf7a69`）。之前 RELAY 路线和“分享 / 复制”一样：只复制进场包、打开外脑 App，黑板里根本没有这一包；这次把传输真接上。只动 `core/talk/Outbrain*` 和 `moling/app` 的 `RelaySync` / `BrainHost` / 外脑卡片 / 贯通页，**没改 `zongkong/`、没有加权限 / Manifest / 签名 / 包名**。
 
-- 推上黑板：`Outbrain.relayBoard(state, now)` 只把已经推上去 / 还在等的 RELAY 会话放进黑板（PREPARED 还没推不放；结果回来 / 取消 / 过期就撤下），整段 6000 字、最多 2 个会话封顶；段里写明“推上黑板只代表到了这里，发回来也只到收件箱，不代表他看过任何回答”。`BrainHost.relayResult` 把它接在 `brain.handoff` 后面，`RelaySync` 照旧按文字哈希推送；`RelaySync.Result` 新增 `pushed`，推送成功但收件箱失败也仍然算推上去了。
+- 推上黑板：`Outbrain.relayBoard(state, now)` 只把已经推上去 / 还在等的 RELAY 会话放进黑板（PREPARED 还没推不放；结果回来 / 取消 / 过期就撤下），整段 6000 字、最多 2 个会话封顶；段里写明“推上黑板只代表到了这里，发回来也只到收件箱，不代表他看过任何回答”。`BrainHost.relayResult` 把它接在 `brain.handoff` 后面，`RelaySync` 照旧按文字哈希推送；`RelaySync.Result` 新增 `pushed`，推送成功但收件箱失败也仍然算推上去了。推送成功后 `relayResult` 把这次黑板真带上的 OPENED / 还没标记的旧 WAITING 会话标成 `relayPushed`（心跳补推也算），所以“推上去了”只出现在真推成功之后；推失败时会话停在 OPENED，界面写“还没推上黑板”。
 - 真实送出：外脑卡片对 RELAY 路线改走 `BrainHost.outbrainSendRelay`：`open` → 强制同步一次（黑板带上这一包）→ 只有推送真的成功才 `Outbrain.relayPushed` 进 WAITING_RESULT，提示“进场包推上去了（等外脑来读，不是已读）”。联络站没配置 / 没推上去就只说没推上去，不打开别的 App，也不拿复制冒充已发；分享路线仍复制并打开，API 路线不变。
 - 回来认领：`OutbrainDesk.receiveRelayTagged` 把收件箱里带 `[[外脑:ob-…]]` 的按会话认领（还在等的落案板未采用稿子；已取消 / 过期 / 已复查的只进历史），对不上任何会话的标记也认领进历史，不再漏给大脑当材料；没标记的照旧交给大脑。
 - 界面：外脑卡片状态改成“推上去了，等外脑来读”，按钮改成“推到联络站”，预览弹窗与贯通页都写明“推上去不代表外脑读过”。

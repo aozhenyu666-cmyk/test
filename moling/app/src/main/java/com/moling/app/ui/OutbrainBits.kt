@@ -60,10 +60,18 @@ private val obScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 private fun statusText(s: OutbrainSession): String = when (s.status) {
     OutbrainStatus.PREPARED -> "准备好了，还没送出"
     OutbrainStatus.OPENED ->
-        if (s.transport == OutbrainTransport.RELAY) "推上去了，等外脑来读" else "已打开外脑"
+        if (s.transport == OutbrainTransport.RELAY) {
+            if (Outbrain.pushedToBoard(s)) "推上去了，等外脑来读" else "还没推上黑板"
+        } else {
+            "已打开外脑"
+        }
     OutbrainStatus.WAITING_RESULT -> when {
         // 联络站：只保证推上黑板了；外脑读没读、答没答都不知道。
-        s.transport == OutbrainTransport.RELAY -> if (s.closedAt > 0) "退场了，还在等外脑来读" else "推上去了，等外脑来读"
+        s.transport == OutbrainTransport.RELAY -> when {
+            !Outbrain.pushedToBoard(s) -> "等结果（还没推上黑板）"
+            s.closedAt > 0 -> "退场了，还在等外脑来读"
+            else -> "推上去了，等外脑来读"
+        }
         s.closedAt > 0 -> "退场了，还在等结果"
         else -> "等结果回来"
     }
