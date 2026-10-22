@@ -117,7 +117,11 @@ fun RadioPanel(ws: WorkbenchState, focus: Focus? = ws.active()) {
                 Column(Modifier.weight(1f)) {
                     Text("陪我听一会 · " + s.state.label, style = MaterialTheme.typography.titleSmall)
                     Text(
-                        "第 " + (s.index + 1) + "/" + s.segments.size + " 段" + if (left > 0) " · 还剩 " + left + " 秒" else "",
+                        "第 " + (s.index + 1) + "/" + s.segments.size + " 段" + when {
+                            s.state == RadioState.PAUSED -> " · 已暂停（继续从这一段开头念）"
+                            left > 0 -> " · 还剩 " + left + " 秒"
+                            else -> ""
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -138,7 +142,7 @@ fun RadioPanel(ws: WorkbenchState, focus: Focus? = ws.active()) {
             if (seg != null) {
                 Text(
                     when (seg.kind) {
-                        SegmentKind.QUOTE -> "材料原文"
+                        SegmentKind.QUOTE -> "引用"
                         SegmentKind.IDEA -> "她的整理（可能不全对）"
                         SegmentKind.QUESTION -> "她留的话"
                     },
@@ -159,10 +163,11 @@ fun RadioPanel(ws: WorkbenchState, focus: Focus? = ws.active()) {
                     }
                 }) { Text(if (s.state == RadioState.PAUSED) "继续" else "暂停") }
                 OutlinedButton(onClick = { scope.launch { runCatching { BrainHost.radioSkip(s.id) } } }) { Text("跳过") }
-                TextButton(onClick = { scope.launch { runCatching { BrainHost.stopLive() } } }) { Text("先安静") }
             }
+            // 这是“让她安静两小时”，不是电台控件：挪出暂停/跳过/停止那一排，名字写明白。
+            TextButton(onClick = { scope.launch { runCatching { BrainHost.stopLive() } } }) { Text("这两小时别主动找我") }
             Text(
-                "只听不回：不扣分，也不会追着问。停止后这一段不会再自动恢复。",
+                "只听不回：不扣分，也不会追着问。停止后这一段不会再自动恢复；暂停后继续从这一段开头重新念。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
