@@ -18,6 +18,8 @@ const val GATE_V2 = 2
 /** v2 方法名。 */
 object GateV2Method {
     const val CAPABILITIES = "v2.capabilities"
+    /** 总控当前的训练兑换策略（只读视图）。 */
+    const val TRAINING_POLICY = "v2.training.policy"
     const val CHALLENGE_ISSUE = "v2.challenge.issue"
     const val CHALLENGE_SUBMIT = "v2.challenge.submit"
     const val RECEIPT = "v2.receipt"

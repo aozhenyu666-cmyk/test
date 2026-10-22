@@ -269,6 +269,54 @@ class Store(private val context: Context) {
         next
     }
 
+    // 以思代锁：训练换来的娱乐分钟账本（发过的题、回执、通行）。单独一份文件，不进 Config / 备份字段。
+    private val _training = MutableStateFlow(loadJson("training.json", com.zongkong.core.moling.TrainingBook.serializer()) ?: com.zongkong.core.moling.TrainingBook())
+    val training: StateFlow<com.zongkong.core.moling.TrainingBook> = _training.asStateFlow()
+
+    fun updateTraining(f: (com.zongkong.core.moling.TrainingBook) -> com.zongkong.core.moling.TrainingBook): com.zongkong.core.moling.TrainingBook = synchronized(workLock) {
+        val next = f(_training.value)
+        if (next != _training.value) {
+            _training.value = next
+            val text = ZkJson.encodeToString(com.zongkong.core.moling.TrainingBook.serializer(), next)
+            io.execute { writeAtomic(File(dir, "training.json"), text) }
+        }
+        next
+    }
+
+    private val trainingRng = java.security.SecureRandom()
+
+    /** 墨灵的 v2 请求（MolingProvider 验过签名后调用）：同一套规则、同一本账。 */
+    fun trainingCall(method: String, request: Map<String, String>, now: Long = System.currentTimeMillis()): Map<String, String> {
+        val status = status(now)
+        var resp: Map<String, String> = emptyMap()
+        updateTraining { b ->
+            val (next, r) = com.zongkong.core.moling.TrainingWire.handle(method, request, _config.value.training, b, status, now, zone, trainingRng)
+            resp = r
+            next
+        }
+        return resp
+    }
+
+    /** 总控自己的拦截页「做一局训练」：发题（返回的题带答案，只给总控自己的界面判分前保存，界面上不要显示 answer）。 */
+    fun trainingIssue(pkg: String, now: Long = System.currentTimeMillis()): com.zongkong.core.moling.TrainingOutcome<com.zongkong.core.moling.TrainingChallenge> {
+        val status = status(now)
+        var out: com.zongkong.core.moling.TrainingOutcome<com.zongkong.core.moling.TrainingChallenge>? = null
+        updateTraining { b ->
+            com.zongkong.core.moling.Training.issue(_config.value.training, b, status, pkg, "zk-" + now.toString(36), now, zone, trainingRng).also { out = it }.book
+        }
+        return out!!
+    }
+
+    /** 总控自己的拦截页交卷。[answers] = 题号 → 选项 id。 */
+    fun trainingSubmit(challengeId: String, nonce: String, answers: Map<String, String>, now: Long = System.currentTimeMillis()): com.zongkong.core.moling.TrainingReceipt {
+        val status = status(now)
+        var out: com.zongkong.core.moling.TrainingReceipt? = null
+        updateTraining { b ->
+            com.zongkong.core.moling.Training.submit(_config.value.training, b, status, "zk-submit-$challengeId", challengeId, nonce, answers, now, zone).also { out = it.value }.book
+        }
+        return out!!
+    }
+
     private fun <T> loadJson(name: String, ser: kotlinx.serialization.KSerializer<T>): T? {
         val f = File(dir, name)
         if (!f.exists()) return null
@@ -397,7 +445,9 @@ class Store(private val context: Context) {
     fun status(now: Long = System.currentTimeMillis()): Status {
         refresh(now)
         val c = _config.value
-        val earned = if (c.earn.enabled) com.zongkong.core.plan.Earn.earned(_work.value, now, zone, c.earn) else null
+        // 训练换来的分钟算进“今天挣到的”：同一本账、同一个每天总上限，用完照旧拦
+        val bonus = com.zongkong.core.moling.Training.bonusMinutes(_training.value, now, zone)
+        val earned = if (c.earn.enabled) com.zongkong.core.plan.Earn.earned(_work.value, now, zone, c.earn) + bonus else null
         val debt = if (c.earn.enabled) com.zongkong.core.plan.Earn.debt(_work.value, _plans.value, now, zone, c.earn)?.let { it.key to it.title } else null
         return Engine.evaluate(c, _today.value, now, zone, focusLock(now), _hq.value.active, absence(now), earned, debt, control = _control.value, holds = _moling.value.holds)
     }

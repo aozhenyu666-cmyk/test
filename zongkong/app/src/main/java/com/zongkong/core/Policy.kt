@@ -232,6 +232,47 @@ object Policy {
         return Outcome(base.copy(hq = tight).queue(ChangeOp.Hq(hq), summary, now), now = nowList, later = listOf(summary))
     }
 
+    // ---------- 以思代锁（训练换时间） ----------
+
+    /** 排队中的训练兑换设置；没有就是现在的。设置页从这里开始改。 */
+    fun desiredTraining(config: Config): com.zongkong.core.moling.TrainingPolicy =
+        (config.pending.lastOrNull { it.op is ChangeOp.Training }?.op as? ChangeOp.Training)?.policy ?: config.training
+
+    /**
+     * 改训练兑换：收紧（关掉、少选应用、减分钟 / 次数 / 局数）立即生效；开启和任何放宽 24 小时后生效。
+     * 每次真正生效的改动 revision + 1，已经发出的题随之作废。
+     */
+    fun setTraining(config: Config, wanted: com.zongkong.core.moling.TrainingPolicy, now: Long): Outcome {
+        val old = config.training
+        val want = wanted.normalized().copy(revision = old.revision)
+        val base = config.copy(pending = config.pending.filterNot { it.op is ChangeOp.Training })
+        val tight = stricterTraining(old, want)
+        val nowList = if (tight != old) listOf("训练兑换收紧") else emptyList()
+        val applied = if (tight != old) tight.copy(revision = old.revision + 1) else old
+        if (tight == want) return Outcome(base.copy(training = applied), now = nowList)
+        val summary = "训练兑换：" + looserTraining(tight, want).joinToString("、")
+        return Outcome(base.copy(training = applied).queue(ChangeOp.Training(want), summary, now), now = nowList, later = listOf(summary))
+    }
+
+    /** 两份设置里每一项取更严的那个。 */
+    fun stricterTraining(a: com.zongkong.core.moling.TrainingPolicy, b: com.zongkong.core.moling.TrainingPolicy) = a.copy(
+        enabled = a.enabled && b.enabled,
+        packages = a.packages intersect b.packages,
+        minutesPerPass = minOf(a.minutesPerPass, b.minutesPerPass),
+        dailyMaxPasses = minOf(a.dailyMaxPasses, b.dailyMaxPasses),
+        dailyMaxMinutes = minOf(a.dailyMaxMinutes, b.dailyMaxMinutes),
+        attemptsPerDay = minOf(a.attemptsPerDay, b.attemptsPerDay),
+    )
+
+    fun looserTraining(old: com.zongkong.core.moling.TrainingPolicy, new: com.zongkong.core.moling.TrainingPolicy): List<String> = buildList {
+        if (new.enabled && !old.enabled) add("开启")
+        if (!old.packages.containsAll(new.packages)) add("多选了应用")
+        if (new.minutesPerPass > old.minutesPerPass) add("每次换到 ${new.minutesPerPass} 分钟")
+        if (new.dailyMaxPasses > old.dailyMaxPasses) add("每天 ${new.dailyMaxPasses} 次")
+        if (new.dailyMaxMinutes > old.dailyMaxMinutes) add("每天最多 ${new.dailyMaxMinutes} 分钟")
+        if (new.attemptsPerDay > old.attemptsPerDay) add("每天 ${new.attemptsPerDay} 局")
+    }
+
     // ---------- 总控者 ----------
 
     /** 排队中的总控者设置；没有就是现在的。 */
@@ -323,6 +364,8 @@ object Policy {
         is ChangeOp.Hq -> c.copy(hq = op.hq)
         is ChangeOp.Boss -> c.copy(boss = op.boss)
         is ChangeOp.Ai -> c.copy(ai = op.ai)
+        // 到点的放宽：在当时的设置上生效，版本 + 1（已经发出的题作废）
+        is ChangeOp.Training -> c.copy(training = op.policy.normalized().copy(revision = c.training.revision + 1))
     }
 
     private fun Config.queue(op: ChangeOp, summary: String, now: Long): Config {

@@ -57,3 +57,71 @@ class ContractTest {
         assertEquals(listOf(listOf("上岸"), listOf("申论 3 篇"), listOf("背单词"), listOf("a.b")), listOf(m.aims, m.weekDeliverables, m.upcoming, m.blocked))
     }
 }
+
+/** 以思代锁：墨灵的真实客户端 ↔ 总控的真实处理，中间只有字符串键值（和 ContentProvider 一样）。 */
+class TrainingContractTest {
+    private val zone = com.zongkong.core.DayClock.BEIJING
+    private val now0 = java.time.LocalDateTime.of(2026, 10, 22, 15, 0).atZone(zone).toInstant().toEpochMilli()
+    private val douyin = "com.ss.android.ugc.aweme"
+    private val policy = com.zongkong.core.moling.TrainingPolicy(enabled = true, packages = setOf(douyin), revision = 3)
+    private fun status(vararg r: com.zongkong.core.Reason) = com.zongkong.core.Status(
+        now = now0, date = "2026-10-22", strict = r.isNotEmpty(), reasons = r.toList(), gates = emptyList(), emergencyUntil = null,
+        emergencyLeft = 1, degradedLeft = 2, paused = false, lastActivity = null, silenceDueAt = null, playMin = 40, quotaMin = 40,
+    )
+
+    private class Zk(var policy: com.zongkong.core.moling.TrainingPolicy, var status: com.zongkong.core.Status, val zone: java.time.ZoneId) {
+        var book = com.zongkong.core.moling.TrainingBook()
+        var now = 0L
+        val rnd = java.util.Random(5)
+        fun call(method: String, req: Map<String, String>): Map<String, String> {
+            val (b, resp) = com.zongkong.core.moling.TrainingWire.handle(method, req, policy, book, status, now, zone, rnd)
+            book = b
+            return resp
+        }
+    }
+
+    private fun client(zk: Zk) = com.moling.core.redeem.TrainingRedeemClient(com.moling.core.redeem.WireGateV2Port({ m, r -> zk.call(m, r) }, { zk.now }))
+
+    @Test fun fullLoopPassesThroughMolingsReceiptCheck() {
+        val zk = Zk(policy, status(com.zongkong.core.Reason.Budget(40, 40)), zone).apply { now = now0 }
+        val c = client(zk)
+        val bundle = (c.start(douyin, now0) as com.moling.core.workspace.PortResult.Ok).value
+        assertEquals(4, bundle.questions.size)
+        assertEquals(3L, bundle.policyRevision)
+        // 墨灵只拿到题干和选项；正确答案只有总控账本里有
+        val key = zk.book.challenges.single().questions.associate { it.id to it.answer }
+        val answers = bundle.questions.map { com.moling.core.redeem.ChallengeAnswer(it.id, key.getValue(it.id)) }
+        zk.now = now0 + 60_000
+        val r = (c.submit(answers, zk.now) as com.moling.core.workspace.PortResult.Ok).value
+        assertEquals("PASSED", r.state)
+        val pass = c.activePass(zk.now)!!
+        assertEquals(10, pass.minutes)
+        assertEquals(douyin, pass.packageName)
+        assertEquals("总控那边记了同一张通行", zk.book.passes.single().passId, pass.passId)
+        // 再交一次：同一张回执，总控不多发
+        c.submit(answers, zk.now + 1_000)
+        assertEquals(1, zk.book.passes.size)
+    }
+
+    @Test fun wrongAnswersAndStrictModeGiveNoPass() {
+        val zk = Zk(policy, status(com.zongkong.core.Reason.Budget(40, 40)), zone).apply { now = now0 }
+        val c = client(zk)
+        val bundle = (c.start(douyin, now0) as com.moling.core.workspace.PortResult.Ok).value
+        val key = zk.book.challenges.single().questions.associate { it.id to it.answer }
+        val wrong = bundle.questions.map { q -> com.moling.core.redeem.ChallengeAnswer(q.id, q.options.first { it.id != key[q.id] }.id) }
+        c.submit(wrong, now0 + 30_000)
+        assertNull(c.activePass(now0 + 31_000))
+        assertEquals(0, zk.book.passes.size)
+
+        val strict = Zk(policy, status(com.zongkong.core.Reason.Budget(40, 40), com.zongkong.core.Reason.Debt("k", "写申论")), zone).apply { now = now0 }
+        val r = client(strict).start(douyin, now0)
+        assert(r is com.moling.core.workspace.PortResult.Failed)
+        assertEquals("STRICT_MODE", (r as com.moling.core.workspace.PortResult.Failed).error.code)
+    }
+
+    @Test fun oldZongkongWithoutV2MeansNotAvailable() {
+        val c = com.moling.core.redeem.TrainingRedeemClient(com.moling.core.redeem.WireGateV2Port({ _, _ -> mapOf("error" to "不认识的请求") }))
+        val r = c.start(douyin, now0)
+        assertEquals("NOT_AVAILABLE", (r as com.moling.core.workspace.PortResult.Failed).error.code)
+    }
+}

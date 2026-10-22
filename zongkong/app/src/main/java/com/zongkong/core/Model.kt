@@ -163,6 +163,8 @@ data class Config(
     val takeover: com.zongkong.core.control.TakeoverConfig = com.zongkong.core.control.TakeoverConfig(),
     /** 墨灵导演（试验）：小窗、接力、感知的统一入口。默认关，关着时总控行为一点不变。 */
     val mailuo: MailuoConfig = MailuoConfig(),
+    /** 以思代锁：训练换今天的娱乐分钟（默认关；开启 / 放宽 24 小时后生效）。 */
+    val training: com.zongkong.core.moling.TrainingPolicy = com.zongkong.core.moling.TrainingPolicy(),
 )
 
 /**
@@ -425,4 +427,8 @@ sealed class ChangeOp {
     @Serializable
     @SerialName("ai")
     data class Ai(val ai: AiConfig) : ChangeOp()
+
+    @Serializable
+    @SerialName("training")
+    data class Training(val policy: com.zongkong.core.moling.TrainingPolicy) : ChangeOp()
 }

@@ -78,6 +78,24 @@ object ZkBridge : ZkPort {
             .getOrNull()
     }
 
+    /**
+     * v2（以思代锁）：把一次请求原样交给总控，返回响应键值。
+     * 总控没装 / 被杀 / 旧版本只回一个 error 键 → null（上层当作不支持，退回 v1，不伪造结果）。
+     */
+    fun v2(method: String, request: Map<String, String>): Map<String, String>? {
+        val ctx = app ?: return null
+        val extras = Bundle()
+        request.forEach { (k, v) -> extras.putString(k, v) }
+        val b = runCatching { ctx.contentResolver.call(uri, method, null, extras) }
+            .onFailure { Log.w(TAG, "总控 v2 $method 失败", it) }
+            .getOrNull() ?: return null
+        val map = toMap(b)
+        return if ("error" in map && "ok" !in map) null else map
+    }
+
+    /** 训练兑换的端口（墨灵侧客户端用它和总控说话）。 */
+    val gateV2: com.moling.core.redeem.GateV2Port by lazy { com.moling.core.redeem.WireGateV2Port({ m, r -> v2(m, r) }) }
+
     /** 指令 → Bundle（约定里全是字符串）→ 总控。 */
     private fun call(ctx: Context, fields: Map<String, String>): Bundle? {
         val extras = Bundle()

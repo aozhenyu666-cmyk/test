@@ -51,7 +51,14 @@ class MolingProvider : ContentProvider() {
                     ?: return bundleOf(MolingLink.STATE to "", MolingLink.MESSAGE to "总控里没有这条")
                 bundleOf(MolingLink.STATE to o.state.name, MolingLink.MESSAGE to o.result.ifBlank { o.state.label })
             }
-            else -> bundleOf(MolingLink.ERROR to "不认识的请求：$method")
+            // v2：训练兑换（以思代锁）。题目、答案、判分、通行全在总控；v1 的三个方法不受影响。
+            else -> if (method.startsWith("v2.")) {
+                val req = extras?.keySet().orEmpty().mapNotNull { k -> extras?.getString(k)?.let { k to it } }.toMap()
+                val resp = app.store.trainingCall(method, req, now)
+                bundleOf(*resp.toList().toTypedArray())
+            } else {
+                bundleOf(MolingLink.ERROR to "不认识的请求：$method")
+            }
         }
     }
 
