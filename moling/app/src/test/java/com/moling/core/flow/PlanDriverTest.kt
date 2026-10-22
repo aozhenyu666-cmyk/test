@@ -259,6 +259,73 @@ class PlanDriverTest {
         assertTrue("他再点才算", h.driver.adopt(changed, at(9, 6)).ok)
     }
 
+    @Test fun pendingReceiptIsNeverExpiredLocallyAndCanBeQueried() {
+        val h = Harness(AdoptPolicy(remind = true, operationTtlMs = 60_000L))
+        val p = plan()
+        h.driver.putDraft(p, at(9))
+        h.driver.adopt(p, at(9, 1))
+        val prepared = h.driver.prepareExecution(p, listOf(ZkCommand.Note("x", "计划")), at(9, 2))
+        val op = prepared.operations.single().operationId
+        h.driver.markSending(op, at(9, 3))
+        h.driver.recordReceipt(op, PlanReceipt("r-1", ok = true, auto = false, message = "总控等确认"), at(9, 4))
+        assertEquals(OperationState.ZK_PENDING, h.driver.operation(op)!!.state)
+
+        h.driver.tick(at(9, 30))
+        assertEquals("ZK_PENDING 不在本地过期", OperationState.ZK_PENDING, h.driver.operation(op)!!.state)
+        assertEquals("到点去查回执", listOf(op), h.driver.receiptsToQuery(at(9, 30)).map { it.operationId })
+        assertEquals(0, h.driver.snapshot().operations.count { it.state == OperationState.EXPIRED })
+    }
+
+    @Test fun interruptedSendingBecomesUnknownOnExpire() {
+        val h = Harness(AdoptPolicy(remind = true, operationTtlMs = 60_000L))
+        val p = plan()
+        h.driver.putDraft(p, at(9))
+        h.driver.adopt(p, at(9, 1))
+        val prepared = h.driver.prepareExecution(p, listOf(ZkCommand.Note("x", "计划")), at(9, 2))
+        val op = prepared.operations.single().operationId
+        h.driver.markSending(op, at(9, 3))
+        h.driver.expire(at(9, 30))
+        assertEquals("SENDING 中断是结果未知，不是没发", OperationState.UNKNOWN, h.driver.operation(op)!!.state)
+        assertEquals(0, h.driver.snapshot().operations.count { it.state == OperationState.EXPIRED })
+    }
+
+    @Test fun planRewriteWhileSendingBecomesUnknownNotCancelled() {
+        val h = Harness(AdoptPolicy(remind = true))
+        val p = plan()
+        h.driver.putDraft(p, at(9))
+        h.driver.adopt(p, at(9, 1))
+        val prepared = h.driver.prepareExecution(p, listOf(ZkCommand.Note("x", "计划")), at(9, 2))
+        val op = prepared.operations.single().operationId
+        h.driver.markSending(op, at(9, 3))
+        h.driver.putDraft(plan(intent = "改成下午推"), at(9, 4))
+        assertEquals("正在发的不能记成已取消（没发）", OperationState.UNKNOWN, h.driver.operation(op)!!.state)
+    }
+
+    @Test fun cancelNeverMarksSendingOrSentAsNotSent() {
+        val h = Harness(AdoptPolicy(remind = true))
+        val p = plan()
+        h.driver.putDraft(p, at(9))
+        h.driver.adopt(p, at(9, 1))
+        val prepared = h.driver.prepareExecution(
+            p,
+            listOf(ZkCommand.Note("a", "计划"), ZkCommand.Note("b", "计划"), ZkCommand.Note("c", "计划")),
+            at(9, 2),
+        )
+        val active = prepared.operations[0].operationId
+        val sending = prepared.operations[1].operationId
+        val unsent = prepared.operations[2].operationId
+        h.driver.markSending(active, at(9, 3))
+        h.driver.recordReceipt(active, PlanReceipt("r-1", ok = true, auto = true, message = "执行了"), at(9, 4))
+        h.driver.markSending(sending, at(9, 5))
+
+        val out = h.driver.cancel(at(9, 6))
+        assertTrue(out.ok)
+        assertEquals(OperationState.ACTIVE, h.driver.operation(active)!!.state)
+        assertEquals("正在发的记 UNKNOWN", OperationState.UNKNOWN, h.driver.operation(sending)!!.state)
+        assertEquals("真正没发的才取消", OperationState.CANCELLED, h.driver.operation(unsent)!!.state)
+        assertTrue("说清楚正在发的不能撤销", out.message.contains("结果未知"))
+    }
+
     @Test fun prepareRequiresLocalAdoptionAndCurrentPlan() {
         val h = Harness(AdoptPolicy(remind = true))
         val p = plan()

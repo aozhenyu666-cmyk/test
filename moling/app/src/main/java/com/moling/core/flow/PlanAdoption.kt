@@ -285,10 +285,14 @@ class PlanDriver(
                 val active = adopt.state == AdoptionState.ACTIVE
                 if (unsent) {
                     ops = ops.map {
-                        if (it.planId == draft.planId && it.planRevision < draft.revision &&
-                            it.state in setOf(OperationState.PREPARED, OperationState.SENDING)
-                        ) {
-                            it.copy(state = OperationState.CANCELLED, message = "计划改版，取消未发送")
+                        if (it.planId == draft.planId && it.planRevision < draft.revision) {
+                            when (it.state) {
+                                OperationState.PREPARED ->
+                                    it.copy(state = OperationState.CANCELLED, message = "计划改版，取消未发送")
+                                OperationState.SENDING ->
+                                    it.copy(state = OperationState.UNKNOWN, message = "计划改版时正在发送，结果未知，去查回执")
+                                else -> it
+                            }
                         } else it
                     }
                 }
@@ -400,24 +404,28 @@ class PlanDriver(
      */
     fun cancel(now: Long, reason: String = "你取消了"): PlanResult {
         val adopt = state.adoption ?: return PlanResult.fail("没有正在使用的计划")
-        val unsent = state.operations.filter {
-            it.planId == adopt.planId && it.planRevision == adopt.planRevision &&
-                it.state in setOf(OperationState.PREPARED, OperationState.SENDING, OperationState.EXPIRED)
+        val mine = state.operations.filter {
+            it.planId == adopt.planId && it.planRevision == adopt.planRevision
         }
-        val sent = state.operations.filter {
-            it.planId == adopt.planId && it.planRevision == adopt.planRevision &&
-                it.state in setOf(OperationState.ZK_PENDING, OperationState.ACTIVE, OperationState.EXECUTED, OperationState.UNKNOWN)
+        val unsent = mine.filter { it.state == OperationState.PREPARED }
+        val sending = mine.filter { it.state == OperationState.SENDING }
+        val sent = mine.filter {
+            it.state in setOf(OperationState.ZK_PENDING, OperationState.ACTIVE, OperationState.EXECUTED, OperationState.UNKNOWN)
         }
         val ops = state.operations.map {
-            if (it in unsent && it.state != OperationState.EXPIRED) {
-                it.copy(state = OperationState.CANCELLED, message = reason)
-            } else it
+            when {
+                it in unsent -> it.copy(state = OperationState.CANCELLED, message = reason)
+                // F13-3：正在发的可能已经到总控了，不能记成“已取消（没发）”。
+                it in sending -> it.copy(state = OperationState.UNKNOWN, message = "取消时正在发送，结果未知，去查回执")
+                else -> it
+            }
         }
         val detail = buildString {
             append(reason)
             if (unsent.isNotEmpty()) append("；还没发的 ${unsent.size} 条已取消")
+            if (sending.isNotEmpty()) append("；正在发的 ${sending.size} 条结果未知，不当作没发")
             if (sent.isNotEmpty()) append("；已经发给总控的 ${sent.size} 条按回执处理，本地撤销不了现实动作")
-            if (unsent.isEmpty() && sent.isEmpty()) append("；没有要发的动作")
+            if (unsent.isEmpty() && sending.isEmpty() && sent.isEmpty()) append("；没有要发的动作")
         }
         val next = adopt.copy(
             state = AdoptionState.CANCELLED,
@@ -562,7 +570,7 @@ class PlanDriver(
         return next
     }
 
-    /** 只把“还没发且过期”的动作标过期；已发出的不动。 */
+    /** 只把“还没发且过期”的动作标过期；SENDING 中断记 UNKNOWN；ZK_PENDING 绝不本地过期。 */
     fun expire(now: Long): List<PlanOperation> {
         val ops = expireOperations(state.operations, now)
         val changed = ops.filterIndexed { i, o -> state.operations[i] != o }
@@ -570,8 +578,15 @@ class PlanDriver(
         return changed
     }
 
-    /** 未发送、可取消的动作数。 */
-    fun unsentCount(): Int = state.operations.count { it.state in setOf(OperationState.PREPARED, OperationState.SENDING) }
+    /**
+     * ZK_PENDING 且超过预计确认时间：调用方拿这些去总控查回执（F13-3）。
+     * 这里不在本地判过期、也不重发。
+     */
+    fun receiptsToQuery(now: Long): List<PlanOperation> =
+        state.operations.filter { it.state == OperationState.ZK_PENDING && it.expiresAt in 1..now }
+
+    /** 还没开始发、可以安全取消的动作数。 */
+    fun unsentCount(): Int = state.operations.count { it.state == OperationState.PREPARED }
 
     /** 已经发出/有回执的动作数。 */
     fun sentCount(): Int = state.operations.count {
@@ -639,9 +654,14 @@ class PlanDriver(
     }
 
     private fun expireOperations(ops: List<PlanOperation>, now: Long): List<PlanOperation> = ops.map {
-        if (it.state in setOf(OperationState.PREPARED, OperationState.SENDING, OperationState.ZK_PENDING) && it.expiresAt in 1..now) {
-            it.copy(state = OperationState.EXPIRED, message = "准备太久没发，过期了")
-        } else it
+        when {
+            it.state == OperationState.PREPARED && it.expiresAt in 1..now ->
+                it.copy(state = OperationState.EXPIRED, message = "准备太久没发，过期了")
+            // F13-3：发送中断不等于没发，可能总控已经收到了。
+            it.state == OperationState.SENDING && it.expiresAt in 1..now ->
+                it.copy(state = OperationState.UNKNOWN, message = "发送中断，结果未知，去查回执")
+            else -> it
+        }
     }
 
     private fun commit(next: PlanDriverState) {
