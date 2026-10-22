@@ -131,7 +131,8 @@ object PetOverlay {
             it.putExtra(EXTRA_KIND, kind)
         }
         // F11-5：悬窗服务没起来（后台限制 / 厂商限制）＝这次其实没出现，记 UNOBSERVED，不算他冷落。
-        if (!ok) markUnobserved(if (whisper) Modality.WHISPER else Modality.PET)
+        // 耳语不记：话已经在耳机里念完（念完才亮这个“回她”气泡），只是气泡没亮。
+        if (!ok && !whisper) markUnobserved(Modality.PET)
     }
 
     /** Z2 盯着你：中上部 2 倍大墨滴 + 45 秒圆环，不说话。 */
@@ -498,7 +499,8 @@ class PetOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             petParams = null
             Log.w(TAG, "桌宠窗口加不上：${it.javaClass.simpleName}")
             // F11-5：系统 / 厂商不让加这扇窗：这次其实没出现，记 UNOBSERVED。
-            markUnobserved(modality)
+            // 耳语不记：耳机里那句已经念完了，只是“回她”气泡没亮。
+            if (modality != Modality.WHISPER) markUnobserved(modality)
             maybeStop()
             return
         }
