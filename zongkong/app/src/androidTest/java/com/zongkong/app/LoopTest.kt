@@ -1018,7 +1018,8 @@ class LoopTest {
         val bj = app.store.zone
         val rnd = kotlin.random.Random(10)
         fun at(min: Long) = fmt.format(java.time.Instant.ofEpochMilli(now + min * 60_000L).atZone(bj))
-        app.store.updateConfig { it.copy(earn = com.zongkong.core.EarnConfig(), dailyQuotaMin = 120) }
+        // 只留早上的部署这一道关：别的关卡在深夜（比如 0 点多）会先占住首页的严管卡，这里只测欠账
+        app.store.updateConfig { it.copy(earn = com.zongkong.core.EarnConfig(), dailyQuotaMin = 120, gates = it.gates.filter { g -> g.id == "plan_morning" }) }
         app.store.updatePlans { com.zongkong.core.plan.PlanBook() }
         var key = ""
         app.store.updateWork { w0 ->
@@ -1094,10 +1095,12 @@ class LoopTest {
         waitFor(hasTestTag("plan-actions-${added.key}"), 5_000, "这一段的按钮")
         settle()
         shot("e2e-107-plan-row-open")
+        val before = java.time.ZonedDateTime.parse(app.store.work.value.rec(added.key)!!.plan!!.start)
         compose.onNode(hasText("延到明天")).performScrollTo().performClick()
         waitText("到点再叫你", 5_000)
         val moved = app.store.work.value.rec(added.key)!!
-        assertTrue(moved.plan!!.start, moved.plan!!.start.startsWith(com.zongkong.core.DayClock.date(now, bj).plusDays(1).toString()) || h >= 23)
+        // 延到明天 = 原来那一段的第二天同一时间（按日历日，深夜 0 点多也对）
+        assertEquals(before.plusDays(1).toInstant(), java.time.ZonedDateTime.parse(moved.plan!!.start).toInstant())
         // 待安排：点“下午 / 今晚”就排进去
         compose.onNodeWithTag("plan-loose").performScrollTo()
         compose.onAllNodes(hasText("今晚")).onFirst().performClick()
@@ -1193,13 +1196,15 @@ class LoopTest {
     @Test
     fun chatRunsTheDay() {
         val bj = app.store.zone
-        val h = java.time.Instant.ofEpochMilli(System.currentTimeMillis()).atZone(bj).hour
-        val start = (h + 1).coerceAtMost(22)
+        // 十分钟后开始、做一小时（不跨过午夜），任何时候跑都还在今天、还没结束
+        val z = java.time.ZonedDateTime.now(bj).withSecond(0).withNano(0).plusMinutes(10)
+        val e = minOf(z.plusMinutes(60), z.withHour(23).withMinute(59))
+        val span = "%02d:%02d-%02d:%02d".format(z.hour, z.minute, e.hour, e.minute)
         val llm = mockLlm(
-            toolTurn("add_action" to """{"title":"刷 20 道资料分析","time":"今天 $start:00-${start + 1}:00","criteria":"做完并对答案"}"""),
-            sayTurn("排上了：今天 $start:00-${start + 1}:00 刷 20 道资料分析。就这样？\n【选项】好｜再改改"),
+            toolTurn("add_action" to """{"title":"刷 20 道资料分析","time":"今天 $span","criteria":"做完并对答案"}"""),
+            sayTurn("排上了：今天 $span 刷 20 道资料分析。就这样？\n【选项】好｜再改改"),
             toolTurn("confirm_plan" to "{}"),
-            sayTurn("今日部署过了。$start:00 我叫你。"),
+            sayTurn("今日部署过了。到点我叫你。"),
         )
         app.store.updateConfig { it.copy(startOnChat = true, ai = com.zongkong.core.AiConfig(llm.url("/v1").toString(), "sk-test", "mock-model")) }
         scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java))
@@ -1213,7 +1218,8 @@ class LoopTest {
         val a = app.store.work.value.actions().single { it.title == "刷 20 道资料分析" }
         assertEquals(com.zongkong.core.plan.QuickPlan.DAILY, app.store.work.value.rec(a.threadKey)!!.title)
         // 顶上的今天跟着变：下一段就是它
-        waitFor(hasTestTag("chat-today") and hasText("刷 20 道资料分析", substring = true), 10_000, "顶栏显示下一段")
+        // 文字在顶栏的子节点上（顶栏本身不合并子节点）
+        waitFor(hasText("刷 20 道资料分析", substring = true) and androidx.compose.ui.test.hasAnyAncestor(hasTestTag("chat-today")), 10_000, "顶栏显示下一段")
         settle()
         shot("e2e-121-chat-planned")
         compose.onNode(hasText("好")).performClick()
