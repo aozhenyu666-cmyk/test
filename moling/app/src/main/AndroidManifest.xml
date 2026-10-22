@@ -10,6 +10,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- 第十五批 B6：电台在通知栏 / 锁屏继续放（安装时权限，不弹窗；只有电台在播时才前台） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- 第十五批 B5：只在他打开“日历”开关时向他申请；不开就不会弹窗 -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <!-- 勿扰：普通权限，真正的授权要他在系统“勿扰权限”里手动打开 -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- 看前台应用：用户在系统“使用情况访问”里手动打开；不开就降级（少看一样，调试页写明） -->
     <uses-permission
@@ -28,6 +32,11 @@
         <!-- “去聊”时要打开演员：不声明就看不见/打不开 Gemini 和 ChatGPT -->
         <package android:name="com.google.android.apps.bard" />
         <package android:name="com.openai.chatgpt" />
+        <!-- 歌单：列出能打开他那个链接的音乐 App -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
     </queries>
 
     <application

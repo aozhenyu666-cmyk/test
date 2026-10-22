@@ -572,6 +572,7 @@ fun SettingsScreen(onDone: () -> Unit) {
             }
 
             }
+            if (section == "tools") ToolsSettings()
             if (section == "mem") {
             Text("记忆", style = MaterialTheme.typography.titleSmall)
             Text(
@@ -860,6 +861,7 @@ private val SECTIONS = listOf(
     "zk" to "总控与权柄",
     "bg" to "后台与权限",
     "mem" to "记忆与备份",
+    "tools" to "系统工具",
 )
 
 /**
@@ -923,6 +925,7 @@ private fun SettingsHub(
     com.moling.app.ui.art.InkTitle("手机")
     Card("后台与权限", "后台陪着${if (background) "开" else "关"} · 看前台应用${if (usageAllowed) "已允许" else "没开"}", { com.moling.app.ui.art.InkRing(if (background && usageAllowed) 1f else 0.5f, m) }) { open("bg") }
     Card("在你身边", "小窗、先答一问、晨报、分享", { com.moling.app.ui.art.InkClouds(m, animated = false) }, openPresence)
+    Card("系统工具", "日历忙闲 · 主河道勿扰 · 歌单提醒（各自开关，默认关）", { com.moling.app.ui.art.InkWaves(m, lines = 5, animated = false) }) { open("tools") }
     Card("记忆与备份", "moling.json：$memory", { com.moling.app.ui.art.InkPapers(m, animated = false) }) { open("mem") }
     Card("调试", "只读：权柄、总控、提议、导演、后台、日志", { com.moling.app.ui.art.InkGalaxy(m, animated = false) }, openDebug)
     Text(

@@ -359,8 +359,17 @@ object BrainHost {
 
     // ---------------------------------------------------------------- 今天
 
+    /** 今天日历上的忙碌时段（他开了日历、给了权限、选了日历才有；否则空，排水道照旧）。 */
+    private fun calendarBusy(now: Long): List<com.moling.core.flow.Busy> {
+        val ctx = appContext ?: return emptyList()
+        val cal = com.moling.app.system.AndroidCalendar(ctx, com.moling.app.system.ToolsStore(ctx))
+        if (!cal.capability().usable) return emptyList()
+        val start = com.moling.core.flow.Flow.dayStart(com.moling.core.Brain.calendarDay(now))
+        return cal.readBusy(start, start + 24 * 3_600_000L).value.orEmpty()
+    }
+
     suspend fun planDay(now: Long, force: Boolean = false): FlowPlan {
-        val plan = io("planDay", { _state.value.flow ?: fallbackPlan(now) }) { brain.planDay(now, force) }
+        val plan = io("planDay", { _state.value.flow ?: fallbackPlan(now) }) { brain.planDay(now, force, calendarBusy(now)) }
         // 排好就登记成计划草稿；只是草稿，不自动采用、不交给总控。
         runCatching { registerPlan(plan, now) }.onFailure { Log.w(TAG, "记计划草稿失败", it) }
         return plan
@@ -457,6 +466,12 @@ object BrainHost {
         runCatching { outbrainSweep(now) }
         runCatching { withContext(Dispatchers.IO) { autoSchedule(now) } }
         runCatching { liveTick(now) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "活的墨灵失败", it) }
+        // 第十五批 B5：主河道开始 / 结束时的勿扰和歌单提醒（各自开关，默认关）
+        runCatching {
+            appContext?.let { ctx ->
+                com.moling.app.system.SystemCues.tick(ctx, _state.value.flow?.takeIf { it.day == com.moling.core.Brain.calendarDay(now) }, now)
+            }?.let { Log.i(TAG, "系统工具：$it") }
+        }
         if (interactive()) runCatching { refreshUsage() }
         runCatching { relay(now, force = false) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "联络站同步失败", it) }
         runCatching { mirror(now, force = false) }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "Notion 同步失败", it) }
@@ -1172,7 +1187,7 @@ object BrainHost {
             if (settings.autoPlan() && interactive() && brain.needsPlan(now)) {
                 // 先用昨晚的亮屏 / 熄屏推算睡了多久（没权限就跳过），睡得少主河道会排短一点
                 runCatching { brain.sleep(Usage.screenEvents(ctx, now - 36 * 3_600_000L, now), now) }
-                val plan = runCatching { brain.planDay(now) }.getOrNull()
+                val plan = runCatching { brain.planDay(now, busy = calendarBusy(now)) }.getOrNull()
                 if (plan != null) {
                     refreshState()
                     runCatching { registerPlan(plan, now) }
