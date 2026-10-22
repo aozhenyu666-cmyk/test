@@ -16,6 +16,7 @@ import com.moling.core.workspace.PortResult
 object Outbrain {
     const val TIMELINE_KEEP = 60
     const val DEFAULT_TTL_MS = 30 * 60_000L
+    const val DEFAULT_SNOOZE_MS = 3_600_000L
     const val MAX_RESULT_CHARS = 12_000
 
     // 会话 id 带时间戳：ob-<seq>-<now>（旧数据 ob-<seq> 也认）。
@@ -119,12 +120,45 @@ object Outbrain {
         return commit(state, n) to PortResult.Ok(n)
     }
 
+    /** 「不要了」：过期会话也能清掉，不留一条永远挂着的待收线。 */
     fun cancel(state: OutbrainState, sessionId: String, now: Long): Pair<OutbrainState, PortResult<OutbrainSession>> =
         move(
             state, sessionId, now,
-            setOf(OutbrainStatus.PREPARED, OutbrainStatus.OPENED, OutbrainStatus.WAITING_RESULT, OutbrainStatus.RESULT_RECEIVED),
+            setOf(OutbrainStatus.PREPARED, OutbrainStatus.OPENED, OutbrainStatus.WAITING_RESULT, OutbrainStatus.RESULT_RECEIVED, OutbrainStatus.EXPIRED),
         ) {
-            it.copy(status = OutbrainStatus.CANCELLED, closedAt = now).withEvent(now, OutbrainEventKind.CANCELLED)
+            it.copy(status = OutbrainStatus.CANCELLED, closedAt = if (it.closedAt == 0L) now else it.closedAt, snoozeUntil = 0)
+                .withEvent(now, OutbrainEventKind.CANCELLED)
+        }
+
+    /** 「稍后」：1 小时内不再提醒、不挂常驻通知；会话状态不变，结果照样能收。 */
+    fun snooze(
+        state: OutbrainState,
+        sessionId: String,
+        now: Long,
+        durationMs: Long = DEFAULT_SNOOZE_MS,
+    ): Pair<OutbrainState, PortResult<OutbrainSession>> =
+        move(
+            state, sessionId, now,
+            setOf(OutbrainStatus.PREPARED, OutbrainStatus.OPENED, OutbrainStatus.WAITING_RESULT, OutbrainStatus.RESULT_RECEIVED, OutbrainStatus.EXPIRED),
+        ) {
+            it.copy(snoozeUntil = now + durationMs.coerceIn(60_000L, 24 * 3_600_000L))
+                .withEvent(now, OutbrainEventKind.SNOOZED, "1 小时后再提醒")
+        }
+
+    /** 过期会话手动接回：重新进入等结果，后来的结果还能落案板（只有他点才算）。 */
+    fun reopen(
+        state: OutbrainState,
+        sessionId: String,
+        now: Long,
+        ttlMs: Long = DEFAULT_TTL_MS,
+    ): Pair<OutbrainState, PortResult<OutbrainSession>> =
+        move(state, sessionId, now, setOf(OutbrainStatus.EXPIRED)) {
+            it.copy(
+                status = OutbrainStatus.WAITING_RESULT,
+                closedAt = 0,
+                expiresAt = now + ttlMs.coerceIn(60_000L, 24 * 3_600_000L),
+                snoozeUntil = 0,
+            ).withEvent(now, OutbrainEventKind.REOPENED, "手动接回，接着等")
         }
 
     /** 他看过了这条结论（采用与否另说；这里只结束会话）。 */
@@ -276,6 +310,22 @@ object Outbrain {
     fun waiting(state: OutbrainState): List<OutbrainSession> = state.sessions.filter {
         it.status == OutbrainStatus.WAITING_RESULT || it.status == OutbrainStatus.OPENED ||
             it.status == OutbrainStatus.PREPARED
+    }
+
+    /**
+     * 该提醒/挂通知的那一条：跳过点了「稍后」且还没到点的。
+     * 优先还在等的，其次退场/过期没收到结论的；没有就 null（宿主撤掉常驻通知）。
+     */
+    fun reminder(state: OutbrainState, now: Long): OutbrainSession? {
+        val awake = state.sessions.filter { it.snoozeUntil <= now }
+        return awake.lastOrNull { s ->
+            (s.status == OutbrainStatus.PREPARED || s.status == OutbrainStatus.OPENED ||
+                s.status == OutbrainStatus.WAITING_RESULT) && s.closedAt == 0L
+        } ?: awake.lastOrNull { s ->
+            (s.closedAt > 0 || s.status == OutbrainStatus.EXPIRED) &&
+                s.status != OutbrainStatus.CANCELLED && s.status != OutbrainStatus.REVIEWED &&
+                s.status != OutbrainStatus.RESULT_RECEIVED && finalResults(state, s.id).isEmpty()
+        }
     }
 
     fun latest(state: OutbrainState, focusId: String? = null): OutbrainSession? =

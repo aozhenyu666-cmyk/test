@@ -76,6 +76,8 @@ fun OutbrainCard(focusId: String? = null, allowSend: Boolean = false, onOpenBenc
     val state = st
     val active = Outbrain.active(state)
     val collect = Outbrain.needCollect(state).lastOrNull()
+    // 收线可选：还在等的 + 退场/过期没收到结论的（过期也能手动接回）
+    val collectables = (Outbrain.waiting(state) + Outbrain.needCollect(state)).distinctBy { it.id }
     val landed = state.sessions.lastOrNull { it.status == OutbrainStatus.RESULT_RECEIVED && !it.artifactId.isNullOrBlank() }
     var sendOpen by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf<OutbrainSession?>(null) }
@@ -155,10 +157,16 @@ fun OutbrainCard(focusId: String? = null, allowSend: Boolean = false, onOpenBenc
                     TextButton(onClick = { collectOpen = true }) { Text("粘贴一次") }
                     TextButton(onClick = {
                         obScope.launch {
-                            toast("先留着，等你想说再收")
-                            BrainHost.outbrainSweep(System.currentTimeMillis())
+                            val r = BrainHost.outbrainSnooze(collect.id)
+                            toast(if (r is PortResult.Ok) "好，1 小时后再提醒" else "刚才没接上，再试一次")
                         }
                     }) { Text("稍后") }
+                    TextButton(onClick = {
+                        obScope.launch {
+                            BrainHost.outbrainCancel(collect.id)
+                            toast("这条不要了")
+                        }
+                    }) { Text("不要了") }
                 }
                 if (landed != null && active == null) {
                     TextButton(onClick = { resultOpen = landed }) { Text("看看结论") }
@@ -214,11 +222,15 @@ fun OutbrainCard(focusId: String? = null, allowSend: Boolean = false, onOpenBenc
 
     if (collectOpen) {
         CollectDialog(
-            sessions = Outbrain.waiting(state),
+            sessions = collectables,
             onClose = { collectOpen = false },
             onSubmit = { text, sid ->
                 collectOpen = false
                 obScope.launch {
+                    // 过期会话：他手动接回后再收，才落案板（不自动接、不按时间猜）。
+                    if (sid != null && state.sessions.firstOrNull { it.id == sid }?.status == OutbrainStatus.EXPIRED) {
+                        BrainHost.outbrainReopen(sid)
+                    }
                     when (val r = BrainHost.outbrainReceive(text, sid, source = "paste")) {
                         is PortResult.Ok -> {
                             val (outcome, artifact) = r.value
@@ -378,7 +390,10 @@ private fun CollectDialog(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             RadioButton(selected = pick == s.id, onClick = { pick = s.id })
-                            Text(s.id + " · " + s.pack.question.take(16), style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                s.id + " · " + s.pack.question.take(16) + if (s.status == OutbrainStatus.EXPIRED) "（到点没回来，接回后再收）" else "",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
                         }
                     }
                 }

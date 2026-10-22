@@ -203,7 +203,7 @@ object EntryPackLimits {
 // ------------------------------------------------------------------ 会话
 
 @Serializable
-enum class OutbrainEventKind { PREPARED, OPENED, WAITING, RESULT_PARTIAL, RESULT_RECEIVED, REVIEWED, CANCELLED, EXPIRED, CLOSED, RECOVERED, DEGRADED, ATTRIBUTION }
+enum class OutbrainEventKind { PREPARED, OPENED, WAITING, RESULT_PARTIAL, RESULT_RECEIVED, REVIEWED, CANCELLED, EXPIRED, CLOSED, RECOVERED, DEGRADED, ATTRIBUTION, REOPENED, SNOOZED }
 
 @Serializable
 data class OutbrainEvent(val at: Long, val kind: OutbrainEventKind, val note: String = "")
@@ -228,6 +228,8 @@ data class OutbrainSession(
     val resultIds: List<String> = emptyList(),
     val artifactId: String? = null,
     val lastError: String = "",
+    /** 他点了「稍后」：这个时间前不再提醒/挂常驻通知。 */
+    val snoozeUntil: Long = 0,
 ) {
     /** 还在等他/外脑回来（没关、没取消、没复查）。 */
     fun live(): Boolean = status == OutbrainStatus.PREPARED || status == OutbrainStatus.OPENED ||

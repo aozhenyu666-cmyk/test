@@ -829,6 +829,14 @@ object BrainHost {
     suspend fun outbrainCancel(sessionId: String): PortResult<com.moling.core.talk.OutbrainSession> =
         io("outbrainCancel", { offline() }) { outbrain.cancel(sessionId, System.currentTimeMillis()) }
 
+    /** 收线卡「稍后」：真的推迟 1 小时再提醒，撤掉常驻通知（不再永远挂着）。 */
+    suspend fun outbrainSnooze(sessionId: String): PortResult<com.moling.core.talk.OutbrainSession> =
+        io("outbrainSnooze", { offline() }) { outbrain.snooze(sessionId, System.currentTimeMillis()) }
+
+    /** 过期会话「手动接回」：重新进入等结果，晚到的结果还能落案板。 */
+    suspend fun outbrainReopen(sessionId: String): PortResult<com.moling.core.talk.OutbrainSession> =
+        io("outbrainReopen", { offline() }) { outbrain.reopen(sessionId, System.currentTimeMillis()) }
+
     /** 心跳里扫一次：到点没回来的会话标过期（收线卡还在，仍可人工归档结果）。 */
     suspend fun outbrainSweep(now: Long = System.currentTimeMillis()): Int =
         if (ready) runCatching { outbrain.sweep(now) }.getOrDefault(0) else 0

@@ -117,6 +117,15 @@ class OutbrainDesk(
         Outbrain.cancel(st, sessionId, now)
     }
 
+    /** 「稍后」：1 小时内不再提醒/挂常驻通知。 */
+    suspend fun snooze(sessionId: String, now: Long, durationMs: Long = Outbrain.DEFAULT_SNOOZE_MS): PortResult<OutbrainSession> =
+        step(now) { Outbrain.snooze(st, sessionId, now, durationMs) }
+
+    /** 过期会话手动接回：重新进入等结果，晚到的结果还能落案板。 */
+    suspend fun reopen(sessionId: String, now: Long): PortResult<OutbrainSession> = step(now) {
+        Outbrain.reopen(st, sessionId, now)
+    }
+
     suspend fun reviewed(sessionId: String, now: Long): PortResult<OutbrainSession> = step(now) {
         Outbrain.reviewed(st, sessionId, now)
     }

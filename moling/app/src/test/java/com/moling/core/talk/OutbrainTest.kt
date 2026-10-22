@@ -308,6 +308,78 @@ class OutbrainTest {
         assertEquals(2, wb.state().artifacts.count { it.kind == ArtifactKind.ACTOR_RESULT && it.focusId == f2.id })
     }
 
+
+    // -------------------------------------------------------------- F12-4 过期 / 稍后
+
+    @Test
+    fun expiredCanBeSnoozedClearedAndReopened() {
+        val f = focus(listOf(material("m-1", "材料")))
+        val pack = { sid: String -> Packs.build(sid, f, listOf(material("m-1", "材料")), emptyList(), now = 1) }
+        val (s0, r0) = Outbrain.prepare(OutbrainState(), f, pack, Actor.CHATGPT, epShare, now = 1_000, ttlMs = 60_000)
+        val a = (r0 as PortResult.Ok).value
+        var st = Outbrain.open(s0, a.id, 1_100).first
+        st = Outbrain.waiting(st, a.id, 1_200).first
+        val (expired, n) = Outbrain.expire(st, now = 62_000)
+        assertEquals(1, n)
+        // 「稍后」：会话还在收线卡里，但 1 小时内不提醒
+        val (snoozed, sr) = Outbrain.snooze(expired, a.id, now = 62_500)
+        assertTrue(sr is PortResult.Ok)
+        assertTrue("稍后仍然要收线", Outbrain.needCollect(snoozed).any { it.id == a.id })
+        assertNull("1 小时内不再提醒", Outbrain.reminder(snoozed, 62_500))
+        assertNotNull("1 小时后回来提醒", Outbrain.reminder(snoozed, 62_500 + Outbrain.DEFAULT_SNOOZE_MS + 1))
+        // 「不要了」：过期也能清
+        val (cancelled, cr) = Outbrain.cancel(expired, a.id, now = 63_000)
+        assertTrue(cr is PortResult.Ok)
+        assertEquals(OutbrainStatus.CANCELLED, cancelled.sessions.single().status)
+        assertTrue("清掉后不再挂收线卡", Outbrain.needCollect(cancelled).isEmpty())
+        // 过期后手动接回：重新进入等结果，补回来的结论照常落案板
+        val (reopened, rr) = Outbrain.reopen(expired, a.id, now = 64_000)
+        assertTrue(rr is PortResult.Ok)
+        assertEquals(OutbrainStatus.WAITING_RESULT, reopened.sessions.single().status)
+        assertEquals(0L, reopened.sessions.single().closedAt)
+        val (back, br) = Outbrain.receive(reopened, "补回来的结论", now = 65_000, sessionId = a.id)
+        val out = (br as PortResult.Ok).value
+        assertFalse("手动接回后不再只进历史", out.history)
+        assertTrue(out.attached)
+        assertEquals(OutbrainStatus.RESULT_RECEIVED, back.sessions.single().status)
+    }
+
+    @Test
+    fun deskReopensExpiredSessionThenLandsArtifact() = runTest {
+        val wb = Workbench(store = MemStore(), ask = null)
+        wb.start("申论开头怎么写", "材料", now = 1)
+        val desk = OutbrainDesk(MemStore(), wb)
+        val s = (desk.prepare(Actor.CHATGPT, epShare, now = 2_000, ttlMs = 60_000) as PortResult.Ok).value
+        desk.open(s.id, 2_100)
+        desk.waiting(s.id, 2_200)
+        assertEquals(1, desk.sweep(3_000_000))
+        assertEquals(OutbrainStatus.EXPIRED, desk.state().sessions.single().status)
+        // 过期时直接收：只进历史（不自动接回）
+        val late = desk.receive("过期后直接粘的", now = 3_000_100, sessionId = s.id)
+        assertTrue((late as PortResult.Ok).value.first.history)
+        // 他手动接回：再收就落案板
+        assertTrue(desk.reopen(s.id, 3_000_200) is PortResult.Ok)
+        val r = desk.receive("接回后的结论", now = 3_000_300, sessionId = s.id)
+        val (outcome, artifact) = (r as PortResult.Ok).value
+        assertFalse(outcome.history)
+        assertNotNull("手动接回后落上案板", artifact)
+        assertEquals(OutbrainStatus.RESULT_RECEIVED, desk.state().sessions.single().status)
+    }
+
+    @Test
+    fun snoozeHidesReminderUntilDue() {
+        val f = focus(listOf(material("m-1", "材料")))
+        val pack = { sid: String -> Packs.build(sid, f, listOf(material("m-1", "材料")), emptyList(), now = 1) }
+        val (s0, r0) = Outbrain.prepare(OutbrainState(), f, pack, Actor.CHATGPT, epShare, now = 1_000)
+        val a = (r0 as PortResult.Ok).value
+        val waiting = Outbrain.waiting(s0, a.id, 1_100).first
+        assertNotNull("在等的会话会提醒", Outbrain.reminder(waiting, 1_500))
+        val (snoozed, _) = Outbrain.snooze(waiting, a.id, now = 2_000, durationMs = 3_600_000)
+        assertNull("稍后期间不提醒", Outbrain.reminder(snoozed, 3_000_000))
+        assertEquals("稍后不改状态", OutbrainStatus.WAITING_RESULT, snoozed.sessions.single().status)
+        assertNotNull("到点再提醒", Outbrain.reminder(snoozed, 3_602_001))
+    }
+
     // -------------------------------------------------------------- 落案板
 
     @Test
