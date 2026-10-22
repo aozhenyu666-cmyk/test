@@ -312,6 +312,9 @@ fun ChatScreen() {
 
         )
 
+        // 第十二批：外脑会话（进场 / 等结果 / 收线）；没有会话时不占地方。
+        if (!typing) Box(Modifier.padding(horizontal = 12.dp)) { OutbrainCard() }
+
         if (state.talk.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Column(

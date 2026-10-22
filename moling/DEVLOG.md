@@ -1179,6 +1179,35 @@
 
 ---
 
+## 第十二批 W12：外脑会话闭环与限定捕获（DeepSeek）
+
+分支 `deepseek/moling-outbrain`，从 W10 `4f3c905` 拉出。**A1–A3 核心完成 + 最小 UI 接线；A4 只做接口 + 拒绝降级 + 文档；A5/A6 未做。**
+
+**任务号与实现**
+- **A1 会话状态机**：`core/talk/Outbrain.kt`（Endpoint/Router/EntryPack/EntryMaterial/EntryBlock/OutbrainSession/ActorResult/OutbrainState/Codec）、`core/talk/OutbrainMachine.kt`（PREPARED→OPENED→WAITING_RESULT→RESULT_RECEIVED→REVIEWED，另有 CANCELLED/EXPIRED）。会话绑定 sessionId/focusId/focusRevision/payloadHash/起止时间；prepare 按“同一焦点版本 + 同一端点 + 同一份进场包”幂等；重启 `recover` 保留等待；过期仍可人工归档结果（直接收只进历史，不改过期状态、不覆盖当前焦点；第十四批加了“手动接回” `reopen`，接回后再收才落案板）。
+- **三条传输**：① 分享/复制（进场包文本 + `[[外脑:ob-…]]` 标记，用户手动送出，**实际就是复制并打开外脑 App，不是自动发**）；② 配置的模型 API（`BrainHost.outbrainAskApi` 复用 `MolingAsk` 现有凭据、超时与用量记账，带同一 sessionId）；③ 联络站 MCP **只做了“收”**：`RelaySync.routeOutbrain` 把带标记的收件箱条目先交给外脑会话认领，认领过的不再重复交大脑吸收；**没有把进场包推到黑板**，发还是①的复制+打开。都未配置/断网时明确失败并保留会话，不伪造外脑回复。
+- **选路**：`OutbrainRouter` 按“需要的能力 + configured + 用户偏好（端点排序/传输偏好）”选，不按模型名硬编码猜能力。
+- **A2 进场包**：问题、目标、体系图主干（`Workbench.atlasLines`）、最大缺口、材料摘要（≤6 条 × 400 字）、待审草稿块（≤4 块 × 500 字，只取未采用）、回合制契约、返回格式、来源索引；整包 3500 字封顶；敏感材料默认不放，预览可逐条去掉；不把整库复制给外部服务。胶囊（`OverlayService`）显示外脑状态，收线回收线卡。
+- **A3 结果回流**：`Workbench.attachActorResult` 把结论落成 `ACTOR_RESULT` 稿子（READY_FOR_REVIEW、QUOTE、未采用）+ 一条 `kind=actor` 材料挂到焦点；同 sessionId 再来追加块，相同文本幂等；焦点归档/不存在只进历史。`Outbrain.receive` 按 sessionId 优先；没有 id 且多个会话在等返回 `NEEDS_ATTRIBUTION`，不按时间猜；partial（流式上屏一半）只进时间线，不落稿子、不覆盖最终版；取消/过期/复查后的迟到结果只进历史。
+- **A4 限定捕获**：`core/talk/Capture.kt` 只有接口与纯校验：CaptureSelection/Policy/Lease/Cursor/Page/Probe/Degrade；**校验的是调用方（墨灵）的 UID→包名 + 固定证书**（不是目标 App；不信 payload 自报包名）；节点最多 64 / 8192 字，poll 最多 4 快照、整包 ≤32KiB，cursor 分页，漏页 gap=true；坐标只在 2 秒内、同窗口修订/尺寸/旋转有效；只带实际观察到的 scroll/window 信号，不推算手势；无节点/游戏/视频帧标 UNSUPPORTED，回退分享/粘贴。**本版不申请无障碍/屏幕权限，也不读真实节点**。
+- **最小 UI**：`ui/OutbrainBits.kt`（发到外脑 → 选端点 + 预览材料 → 复制/打开/API 问 → 收线（粘贴 + 多会话点归属）→ 看结论 → 看案板）；对话页和案板都显示“外脑”这条；`MainActivity` 恢复第四个「案板」标签（P0 合并时丢了 J1 的接线），否则案板不可达；分享面板在有会话等结果时出现「这是外脑带回来的结论」；通知/胶囊显示外脑会话；调试页显示会话与“A4 未开启”说明。
+- 总控未改，无新增权限，未动签名/包名/授权书/冷静期。
+
+**自动检查**
+- `tools/core-tests`：**461 个全绿**（原 442 + 新增 19：Outbrain 选路/进场包/状态机/归属/迟到结果/过期/重启恢复/落案板/焦点归档共 10，Capture 权限/分页/坐标/信号/停止/降级共 9）。
+- App：`compileDebugKotlin` 通过（C:/autopilot-w12-wt，ASCII 路径）。
+- 真实外脑 App / 真实模型 API / 联络站均**未在真机验证**；模型 API 只有编译与代码路径，未发真实请求。
+
+**未完成（如实）**
+- A2 辅助填入（ACTION_SET_TEXT 探针、失败提示粘贴）未实现：需要无障碍，按本批“不申请权限”只留说明与降级。
+- A4 真实 `v2.capture.begin/poll/end` Binder 服务与探针报告未实现，只做了可测试的核心协议与拒绝降级；没有权限所以也没有真实节点。
+- A5 语音收线与微停顿接线未做。
+- A6 的真机逐传输记录（同一焦点外脑实际看到、两会话交错、撤权/锁屏/杀进程）未做。
+- Notion outbox 归档/重试/幂等页面 ID 未接外脑结果；进场包摘要还是截断而非模型压缩；“胶囊里直接收线”目前是回到对话页收线。
+- 来源：没有把外脑结果做成 MemoryCandidate（采用后仍走现有 `benchKeep`）。
+
+---
+
 ## 第十四批修复（#17 W10，2026-10-22）
 
 只修不加新功能。`deepseek/moling-web-memory` 先把工作分支最新 `b2b47fb` merge 进来（`606f740`，冲突已解），再按 F10-1…F10-7 + 顺手项逐个修，每个修复一个提交。
@@ -1206,3 +1235,30 @@
 - prune 删正文不会把对应 `SourceRef.status` 改成 PARTIAL / DELETED；材料里那份正文还在。
 - 本批没有改 `zongkong/`、Manifest、权限，也没有动 `core/workspace`、`core/strategy` 其它行（只改点名的 `materialLines` 与调用处）、`core/live/Live.kt`、`Brain.kt`。
 
+---
+
+## 第十四批修复（#19 W12，2026-10-22）
+
+只修不加。先把 `deepseek/moling-web-memory` 最新 `a378568` merge 进来（`a9cff7d`，DEVLOG / V13-PROGRESS 冲突保留两边），再按 F12-1…F12-7 一个修复一个提交。W12 A2/A4 仍冻结：Capture 只改纯逻辑，不接线、不申请权限。
+
+| 编号 | 提交 | 改了什么 | 对应测试 |
+|---|---|---|---|
+| F12-1 | `e064eb2` | `Workbench.attachActorResult` 追加分支：新块 `accepted=false`、稿子回 `READY_FOR_REVIEW`；整份采用过的旧块保持“采用过”，新文字不混进 `claims()`。截断从 4000 改成与 `MAX_RESULT_CHARS` 一致的 12000。只改这一个方法 | `OutbrainTest.appendedResultReturnsToReviewAndIsNotClaimed` |
+| F12-2 | `51f6550` | 会话 id 改成 `ob-<seq>-<now>`（标记正则兼容旧 `ob-<seq>`）；`outbrain.json` 读坏时 seq 用当前毫秒起，不再从 0 重用编号；复用旧稿前核对同焦点、`outbrain:<sessionId>` 标记、未归档、确为 `ACTOR_RESULT`，否则新建 | `sessionIdsCarryTimestampAndSurviveUnreadableFile`、`attachReusesOnlyMatchingOutbrainArtifact` |
+| F12-3 | `11e6dfb` | 收线弹窗多会话默认不选、不选不能提交；`[[外脑:ob-…]]` 在 `Outbrain.receive` 里优先于手选，落库前去掉标记；`BrainHost` 不再先 `clean` 把标记洗掉 | `pastedTagWinsOverManualPickAndIsStripped`（弹窗禁用逻辑只有编译验证） |
+| F12-4 | `0d12ded` | 过期会话可「不要了」（cancel 接受 EXPIRED）、可「手动接回」（reopen 回 WAITING_RESULT，之后的结论才落案板）；「稍后」写 `snoozeUntil` 推迟 1 小时，期间不挂常驻通知，到点 `reminder` 再提醒；收线弹窗能选到过期会话 | `expiredCanBeSnoozedClearedAndReopened`、`deskReopensExpiredSessionThenLandsArtifact`、`snoozeHidesReminderUntilDue` |
+| F12-5 | `6ab53f1`、`afc0e90` | 「用 API 问」只在 PREPARED/OPENED 且没有最终结论时调模型；`BrainHost` 每会话一个进行中标记，连点只发一次；取消/过期/已有结论/别的传输先收到时，回来的回答不再收、不再花第二次；UI 不再先 open 再问；请求失败只 open 不 waiting，状态仍是 OPENED，可再点重试 | `apiAskOnlyBeforeResultAndNotAfterCancelOrExpire`（含失败后可重试；host 的进行中标记无单测） |
+| F12-6 | `d10aa5f` | Capture 只修纯逻辑：校验调用方（墨灵）UID→包名+固定证书，不再拿目标 App 包名当调用方；`begin` 的范围只能来自总控用户选择，请求换应用/开用户没勾的开关/延长 TTL 都拒绝；`actorTurns` 只多给段落/说明，不能放大成全部可见文字；排除密码/验证/支付/通知节点和输入框/按钮 | `callerIsVerifiedAsMolingNotTargetApp`、`requestCannotWidenUserSelection`、`secretsAndTurnsAreExcludedFromCapture` |
+| F12-7 | `8d14b8b` | 分享回流遇到多个会话在等时打开选择弹窗并带原文，不再 Toast 一句就丢；结果统一按 `MAX_RESULT_CHARS`（12000）截断，超出的后半段分段另存为材料；API 回答也走 `Outbrain.clean()` 去标记；收线弹窗移除输入框的 12000 截断 | `overlongResultKeepsTailAsMaterial`（分享弹窗只有编译验证） |
+
+**自动检查（实际跑出来的）**
+- `tools/core-tests`：`gradle test`（Gradle 8.9 + JDK 22，`JAVA_HOME=C:\Program Files\Java\jdk-22`、`GRADLE_USER_HOME=C:\codex-build\gradle-home-m4`，ASCII 路径 `C:/autopilot-w12-wt/tools/core-tests`）：**49 个测试类、478 个测试、0 失败 0 错误**（原 467，本批新增 11）。
+- App：`moling/gradlew.bat compileDebugKotlin`（`ANDROID_HOME=C:\codex-build\android-sdk`）**通过**；本地没有打包，也没有跑 App 单测。
+- 真机**未测**；真实外脑 App / 模型 API / 联络站**未验**。
+
+**限制 / 没做到的**
+- F12-4 的“通知可划掉”没做，采用的是“稍后 1 小时后再提醒”方案；过期会话在他接回或点「不要了」前仍会在到点后提醒。
+- F12-5 的“进行中标记”在 `BrainHost` 内存里，只有纯逻辑 `apiAskable` 有单测；真实模型请求没发。
+- F12-6 仍未接线：没有 Binder 服务、没有无障碍/屏幕权限；打包时要把墨灵自己的证书指纹填进 `CaptureTrust`（空 = 一律拒绝，默认安全）。
+- F12-7 的分享选择弹窗、通知推迟、收线 UI 只有 `compileDebugKotlin` 通过，真机未测。
+- 本批没有改 `zongkong/`、Manifest、权限、签名/包名；`Workbench.kt` 只改 `attachActorResult`，`Capture.kt` 只改纯逻辑。

@@ -26,8 +26,10 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.*
 import androidx.savedstate.*
+import com.moling.app.BrainHost
 import com.moling.app.ui.MolingTheme
 import com.moling.core.mind.*
+import com.moling.core.talk.Outbrain
 import kotlinx.coroutines.*
 
 /** 普通服务，由已有的前台心跳保活。窗口仅占圆点/卡片区域，不接管其他 App。 */
@@ -110,6 +112,8 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val session by Presence.session.collectAsState()
         val director by Presence.card.collectAsState()
         val question by Presence.question.collectAsState()
+        val obState by BrainHost.outbrainState.collectAsState()
+        val ob = Outbrain.active(obState)
         if (!expanded) {
             val pulse by rememberInfiniteTransition(label = "墨灵在").animateFloat(.88f, 1f, infiniteRepeatable(tween(1100), RepeatMode.Reverse), label = "呼吸")
             Box(Modifier.size(44.dp).pointerInput(Unit) {
@@ -136,6 +140,15 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     TextButton(onClick = { Presence.nextQuestion(this@OverlayService) }) { Text("下一问") }
                     action("卡住了") { c?.let { Presence.respond(this@OverlayService, Reply.Stuck(it.id, clock)) } }
                     TextButton(onClick = { PresenceActivity.open(this@OverlayService, "conclude") }) { Text("收线") }
+                } else if (ob != null) {
+                    // 第十二批：外脑会话的在场胶囊（只显示状态；收线回对话页做，不在这抢输入焦点）
+                    Text("外脑 · " + ob.actor.label, style = MaterialTheme.typography.titleMedium)
+                    Text(ob.pack.question.take(30))
+                    Text(
+                        if (ob.status == com.moling.core.talk.OutbrainStatus.WAITING_RESULT) "等结果回来；没结果就收线卡" else "准备好了，等他送出去",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    action("收线") { Presence.open(this@OverlayService, 0, "") }
                 } else director?.let { c ->
                     Text(c.title, style = MaterialTheme.typography.titleMedium); Text(c.ask)
                     c.sayLines.forEach { Text(it) }

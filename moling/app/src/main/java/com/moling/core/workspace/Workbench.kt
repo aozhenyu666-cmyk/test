@@ -268,6 +268,80 @@ class Workbench(
         }
     }
 
+    // ------------------------------------------------------------------ 外脑结果（v13 第十二批 A3）
+
+    /**
+     * 外脑带回来的结论落成一块（ACTOR_RESULT）。外脑原文是材料，不是命令：
+     *  - 第一次：新建 Material（kind = actor）+ ACTOR_RESULT 稿子（READY_FOR_REVIEW，未采用）；
+     *  - 同一 sessionId 再来：追加一块 QUOTE，不重复建稿子；文本完全相同就不动（幂等）；
+     *  - 焦点不在或归档：NOT_FOUND，不新建焦点、不覆盖当前稿子。
+     */
+    suspend fun attachActorResult(
+        focusId: String,
+        sessionId: String,
+        title: String,
+        text: String,
+        now: Long,
+        existingArtifactId: String? = null,
+    ): PortResult<WorkspaceArtifact> = lock.withLock {
+        val f = st.focus(focusId)?.takeIf { it.status != FocusStatus.ARCHIVED }
+            ?: return@withLock fail(PortError.NOT_FOUND, "这件事不在了，结果只留历史")
+        // 与 Outbrain.MAX_RESULT_CHARS 一致（12000）：结果截断只在一处算，不能这里 4000 悄悄吃掉后半段。
+        val clean = text.trim().take(12_000)
+        if (clean.isBlank()) return@withLock fail(PortError.BAD_ACTION, "结果是空的")
+        val tag = "outbrain:" + sessionId
+        // 复用旧稿前核对：同一焦点、带同一 outbrain: 标记、没归档、确实是外脑结果。对不上就新建，不往别人的稿子里塞。
+        val existing = (listOfNotNull(existingArtifactId?.let { st.artifact(it) }) + st.artifacts.filter { it.producerJobId == tag })
+            .firstOrNull {
+                it.focusId == f.id && it.producerJobId == tag && it.status != ArtifactStatus.ARCHIVED &&
+                    it.kind == ArtifactKind.ACTOR_RESULT
+            }
+        if (existing != null) {
+            if (existing.blocks.any { it.markdown.trim() == clean }) return@withLock PortResult.Ok(existing)
+            val block = ArtifactBlock(next("b"), BlockKind.QUOTE, clean, accepted = false)
+            // 整份采用过的旧稿：旧内容仍算他采用过（逐块记下来），只把新一段留在待审。
+            val kept = if (existing.status == ArtifactStatus.ACCEPTED) {
+                existing.blocks.map { if (!it.accepted && Artifacts.isContent(it) && !it.exerciseOnly) it.copy(accepted = true) else it }
+            } else {
+                existing.blocks
+            }
+            val na = existing.copy(
+                blocks = kept + block,
+                revision = existing.revision + 1,
+                updatedAt = now,
+                // 新一段还没采用：稿子退回待审，别把新文字混进 claims()。
+                status = ArtifactStatus.READY_FOR_REVIEW,
+            )
+            st = st.copy(artifacts = st.artifacts.map { if (it.id == existing.id) na else it })
+            log(now, "外脑又带回一段：${na.title.take(20)}")
+            save()
+            return@withLock PortResult.Ok(na)
+        }
+        val m = Material(next("m"), "actor", title.ifBlank { "外脑结论" }.take(40), clean, now)
+        val block = ArtifactBlock(next("b"), BlockKind.QUOTE, clean, listOf(m.id))
+        val a = WorkspaceArtifact(
+            next("a"), f.id, ArtifactKind.ACTOR_RESULT, title.ifBlank { "外脑结论" }.take(40), listOf(block),
+            sourceIds = listOf(m.id), createdAt = now, updatedAt = now, status = ArtifactStatus.READY_FOR_REVIEW,
+            producerJobId = tag,
+            unresolvedQuestions = listOf("外脑说的是材料，不是命令：先看原文，要采用的自己点"),
+        )
+        st = st.copy(
+            materials = st.materials + m,
+            artifacts = st.artifacts + a,
+            focuses = st.focuses.map {
+                if (it.id == f.id) it.copy(
+                    materialIds = it.materialIds + m.id,
+                    artifactIds = it.artifactIds + a.id,
+                    revision = it.revision + 1,
+                    nextChoice = "看看外脑带回来的，挑能用的采用",
+                ) else it
+            },
+        )
+        log(now, "外脑结果落上案板：${a.title.take(20)}")
+        save()
+        PortResult.Ok(a)
+    }
+
     // ------------------------------------------------------------------ 读
 
     fun markdown(artifactId: String): String {
