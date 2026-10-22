@@ -20,16 +20,20 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,6 +56,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Surface
 import com.moling.app.BrainHost
+import com.moling.app.TrainingHost
+import com.moling.app.Usage
 import com.moling.app.ui.art.InkBubbles
 import com.moling.app.ui.art.InkClouds
 import com.moling.app.ui.art.InkFlame
@@ -91,6 +97,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** 今天页独用的协程域：切到别的标签也不打断正在排的水道，也不让提议执行到一半被取消。 */
 private val todayScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -138,6 +145,25 @@ fun TodayScreen(onReady: () -> Unit = {}) {
     LaunchedEffect(pushed) { if (pushed != null) card = pushed }
     LaunchedEffect(Unit) { if (card == null) card = BrainHost.currentCard(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { BrainHost.refreshUsage(force = true) }
+
+    // 以思代锁（A3）：总控 v2 的训练策略。连不上 / 旧总控 / 策略没开时保持 null，界面不装成能用。
+    var trainingPolicy by remember { mutableStateOf<com.moling.core.redeem.UnlockPolicyView?>(null) }
+    var trainingPolicyKey by remember { mutableIntStateOf(0) }
+    var trainingSheet by remember { mutableStateOf(false) }
+    var trainingForegroundPkg by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(trainingPolicyKey) {
+        while (true) {
+            val p = runCatching { withContext(Dispatchers.IO) { TrainingHost.policy() } }.getOrNull()
+            trainingPolicy = (p as? com.moling.core.workspace.PortResult.Ok)?.value
+            delay(30_000)
+        }
+    }
+    LaunchedEffect(clock) {
+        // 当前在前台的娱乐应用：只用来给「去换」带上默认包名；取不到就让他在策略名单里点一个。
+        if (runCatching { Usage.allowed(context) }.getOrDefault(false)) {
+            trainingForegroundPkg = runCatching { Usage.foreground(context) }.getOrNull()?.pkg
+        }
+    }
 
     fun toast(text: String) {
         Toast.makeText(context.applicationContext, text, Toast.LENGTH_LONG).show()
@@ -371,6 +397,19 @@ fun TodayScreen(onReady: () -> Unit = {}) {
                 if (ladder != null && !ladder.answered && ladder.idleSince == 0L) {
                     InkSteps(ladder.rung.ordinal + 1, com.moling.core.watch.Rung.entries.size, Modifier.size(36.dp))
                     Text(ladder.rung.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                }
+            }
+            // 以思代锁（A3）：总控开了训练兑换、今天还有剩余，才在精力下面给入口。
+            val tp = trainingPolicy
+            if (tp != null && tp.enabled && tp.remainingPassesToday > 0 && tp.remainingMinutesToday > 0) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "今天还能用训练换 ${tp.remainingPassesToday} 次",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedButton(onClick = { trainingSheet = true }) { Text("去换") }
                 }
             }
         }
@@ -744,6 +783,17 @@ fun TodayScreen(onReady: () -> Unit = {}) {
                 ) { Text("记下") }
             },
             dismissButton = { TextButton(onClick = { conclusionCard = null }) { Text("取消") } },
+        )
+    }
+
+    // 以思代锁（A3）：底部卡片；只有总控给了策略才打开，策略没开到不了这里。
+    val shownTrainingPolicy = trainingPolicy
+    if (trainingSheet && shownTrainingPolicy != null) {
+        TrainingRedeemSheet(
+            policy = shownTrainingPolicy,
+            foregroundPkg = trainingForegroundPkg,
+            onDismiss = { trainingSheet = false },
+            onChanged = { trainingPolicyKey++ },
         )
     }
 }
@@ -1127,3 +1177,172 @@ private fun WeekGrid(week: List<UsageDay>) {
         }
     }
 }
+
+/**
+ * 以思代锁：墨灵今天页的底部卡片（A3）。
+ *
+ * 题目、判分、额度、通行令都由总控出；这里只显示题干/选项、倒计时和总控回执。
+ * 三手棋、聊天里的分数不能接进来——那些只在墨灵内部陪练，不能换现实时间。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TrainingRedeemSheet(
+    policy: com.moling.core.redeem.UnlockPolicyView,
+    foregroundPkg: String?,
+    onDismiss: () -> Unit,
+    onChanged: () -> Unit,
+) {
+    val context = LocalContext.current
+    val client = TrainingHost.client
+    var pkg by remember { mutableStateOf(foregroundPkg?.takeIf { it in policy.allowedPackages }) }
+    var challenge by remember { mutableStateOf<com.moling.core.redeem.ChallengeBundle?>(null) }
+    var answers by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var remaining by remember { mutableLongStateOf(0L) }
+    var note by remember { mutableStateOf<String?>(null) }
+    var pass by remember { mutableStateOf<com.moling.core.redeem.TemporaryPass?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    // activePass 每秒看一眼：过期就自己消失，不续期、不本地续一分钟。
+    LaunchedEffect(Unit) {
+        while (true) {
+            pass = client.activePass(System.currentTimeMillis())
+            delay(1_000)
+        }
+    }
+    LaunchedEffect(challenge?.challengeId) {
+        val c = challenge ?: return@LaunchedEffect
+        while (true) {
+            remaining = ((c.expiresAt - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
+            if (remaining <= 0) break
+            delay(1_000)
+        }
+        remaining = 0
+    }
+
+    fun start(target: String) {
+        if (busy) return
+        busy = true
+        when (val r = client.start(target, System.currentTimeMillis())) {
+            is com.moling.core.workspace.PortResult.Ok -> {
+                challenge = r.value
+                remaining = ((r.value.expiresAt - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
+                answers = emptyMap()
+                note = null
+                onChanged()
+            }
+            is com.moling.core.workspace.PortResult.Failed -> note = r.error.message
+        }
+        busy = false
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = 620.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("做一局训练，换 ${policy.minutesPerPass} 分钟", style = MaterialTheme.typography.titleLarge)
+            Text(
+                "4 道题对 3 道才过；5 分钟内交卷。换来的是今天的娱乐分钟，一小时内有效，用完照旧拦。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            note?.let {
+                Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            val active = pass
+            if (active != null) {
+                Text(
+                    "今天多了 ${active.minutes} 分钟（一小时内有效）",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            val c = challenge
+            if (c == null && active != null) {
+                Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("好") }
+            } else if (c == null) {
+                val target = pkg
+                if (target == null) {
+                    Text("现在没在被拦的娱乐应用里。选一个要换的应用：", style = MaterialTheme.typography.bodyMedium)
+                    if (policy.allowedPackages.isEmpty()) {
+                        Text(
+                            "总控里还没选任何能换的应用。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    policy.allowedPackages.sortedBy { TrainingHost.label(context, it) }.forEach { p ->
+                        OutlinedButton(onClick = { pkg = p }, modifier = Modifier.fillMaxWidth()) {
+                            Text(TrainingHost.label(context, p))
+                        }
+                    }
+                } else {
+                    Text("这次换给「${TrainingHost.label(context, target)}」", style = MaterialTheme.typography.bodyMedium)
+                    Button(onClick = { start(target) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                        Text("开始一局（换 ${policy.minutesPerPass} 分钟）")
+                    }
+                    if (policy.allowedPackages.size > 1) {
+                        TextButton(onClick = { pkg = null }) { Text("换一个应用") }
+                    }
+                }
+            } else if (remaining <= 0) {
+                Text("这一局超时了（5 分钟没交卷）。", style = MaterialTheme.typography.bodyMedium)
+                Button(
+                    onClick = { challenge = null; note = "超时了，这一局作废。" },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("知道了") }
+            } else {
+                c.questions.forEach { q ->
+                    Text(q.stem, style = MaterialTheme.typography.bodyLarge)
+                    q.options.forEach { o ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { answers = answers + (q.id to o.id) }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = answers[q.id] == o.id, onClick = { answers = answers + (q.id to o.id) })
+                            Text(o.text, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+                Text(
+                    "还剩 ${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(
+                    onClick = {
+                        if (!busy) {
+                            busy = true
+                            val submission = c.questions.map { q ->
+                                com.moling.core.redeem.ChallengeAnswer(q.id, answers[q.id].orEmpty())
+                            }
+                            when (val r = client.submit(submission, System.currentTimeMillis())) {
+                                is com.moling.core.workspace.PortResult.Ok -> {
+                                    note = r.value.message
+                                    if (r.value.pass != null) pass = r.value.pass
+                                    challenge = null
+                                    answers = emptyMap()
+                                    onChanged()
+                                }
+                                is com.moling.core.workspace.PortResult.Failed -> note = r.error.message
+                            }
+                            busy = false
+                        }
+                    },
+                    enabled = !busy && c.questions.all { answers.containsKey(it.id) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("交卷") }
+                TextButton(onClick = { challenge = null; note = "这一局先不交了；开过就算一次尝试。" }) { Text("先不做") }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
