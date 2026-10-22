@@ -847,33 +847,60 @@ object BrainHost {
      */
     suspend fun outbrainAskApi(sessionId: String): String {
         if (!ready) return "还没准备好"
-        val session = outbrain.state().sessions.firstOrNull { it.id == sessionId } ?: return "这个外脑会话不在了"
+        val st = outbrain.state()
+        val session = st.sessions.firstOrNull { it.id == sessionId } ?: return "这个外脑会话不在了"
         val ep = outbrainEndpoints().firstOrNull { it.id == session.endpointId }
         if (ep == null || ep.transport != OutbrainTransport.API || !ep.configured) return "这个会话不是模型 API 路线"
-        io("outbrainApiOpen", {}) {
-            val now = System.currentTimeMillis()
-            outbrain.open(sessionId, now)
-            outbrain.waiting(sessionId, now)
-        }
-        val system = "你是外脑：只回答他这一件事，按返回格式给结论 / 依据 / 不确定。不客套，不替他改稿，不提交任何东西。"
-        val reply = runCatching { askModel.ask(system, session.pack.text() + "\n\n【按上面的返回格式，最多 600 字回答】") }.getOrNull()
-        if (reply.isNullOrBlank()) {
-            io("outbrainApiErr", {}) { outbrain.markError(sessionId, System.currentTimeMillis(), "模型没接上") }
-            return "模型没接上：结果没回来，可以改用分享或粘贴"
-        }
-        return when (val r = io<PortResult<Pair<ReceiveOutcome, WorkspaceArtifact?>>?>("outbrainApiRecv", { null }) {
-                outbrain.receive(reply, System.currentTimeMillis(), sessionId = sessionId, source = "api")
-            }) {
-            is PortResult.Ok -> {
-                val (outcome, artifact) = r.value
-                if (outcome.duplicate) "这一段刚才已经收过了"
-                else if (artifact != null) "外脑回来了：已放上案板材料（未采用）"
-                else "外脑回来了，但会话已经结束，只记进历史"
+        // 只在 PREPARED/OPENED 且没有结果时问；取消/过期/已有结论都不再调模型（防重复花钱）。
+        if (!Outbrain.apiAskable(st, sessionId)) {
+            return when {
+                Outbrain.finalResults(st, sessionId).isNotEmpty() -> "这个会话已经有结论了，不重复问"
+                session.status == com.moling.core.talk.OutbrainStatus.CANCELLED -> "已经取消了，不再问"
+                session.status == com.moling.core.talk.OutbrainStatus.EXPIRED -> "到点没回来：要接着问，先在收线卡里手动接回"
+                else -> "正在等结果：等这次回来或先收线，不重复问"
             }
-            is PortResult.Failed -> "回来了但没接上：" + r.error.message
-            null -> "刚才没接上，再试一次"
+        }
+        // 每会话一个进行中标记：连点/两个界面同时点只发一次请求。
+        if (!apiInFlight.add(sessionId)) return "正在问，别重复点"
+        try {
+            val opened = io<PortResult<com.moling.core.talk.OutbrainSession>?>("outbrainApiOpen", { null }) {
+                val now = System.currentTimeMillis()
+                val o = outbrain.open(sessionId, now)
+                if (o is PortResult.Failed) o else outbrain.waiting(sessionId, now)
+            }
+            if (opened == null) return "刚才没接上，再试一次"
+            if (opened is PortResult.Failed) return opened.error.message
+            val system = "你是外脑：只回答他这一件事，按返回格式给结论 / 依据 / 不确定。不客套，不替他改稿，不提交任何东西。"
+            val reply = runCatching { askModel.ask(system, session.pack.text() + "\n\n【按上面的返回格式，最多 600 字回答】") }.getOrNull()
+            if (reply.isNullOrBlank()) {
+                io("outbrainApiErr", {}) { outbrain.markError(sessionId, System.currentTimeMillis(), "模型没接上") }
+                return "模型没接上：结果没回来，可以改用分享或粘贴"
+            }
+            // 回来时他可能已经取消/过期，或者别的传输先收到了：这时不再收、不再花第二次。
+            val nowSt = outbrain.state()
+            val cur = nowSt.sessions.firstOrNull { it.id == sessionId } ?: return "会话不在了，这次回答没接"
+            if (cur.status == com.moling.core.talk.OutbrainStatus.CANCELLED) return "已经取消了，这次回答不用"
+            if (cur.status == com.moling.core.talk.OutbrainStatus.EXPIRED) return "会话已经过期，这次回答没接；要收先手动接回"
+            if (Outbrain.finalResults(nowSt, sessionId).isNotEmpty()) return "已经收到结论了，这次回答没覆盖"
+            return when (val r = io<PortResult<Pair<ReceiveOutcome, WorkspaceArtifact?>>?>("outbrainApiRecv", { null }) {
+                    outbrain.receive(reply, System.currentTimeMillis(), sessionId = sessionId, source = "api")
+                }) {
+                is PortResult.Ok -> {
+                    val (outcome, artifact) = r.value
+                    if (outcome.duplicate) "这一段刚才已经收过了"
+                    else if (artifact != null) "外脑回来了：已放上案板材料（未采用）"
+                    else "外脑回来了，但会话已经结束，只记进历史"
+                }
+                is PortResult.Failed -> "回来了但没接上：" + r.error.message
+                null -> "刚才没接上，再试一次"
+            }
+        } finally {
+            apiInFlight.remove(sessionId)
         }
     }
+
+    /** 同一会话同时只允许一个模型 API 请求在跑。 */
+    private val apiInFlight: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     private fun <T> offline(): PortResult<T> = PortResult.Failed(PortError(PortError.OFFLINE, "刚才没接上，再试一次"))
 

@@ -328,6 +328,17 @@ object Outbrain {
         }
     }
 
+    /**
+     * 模型 API 只在「还没送出结果、也没有最终结论」时能问一次：
+     * 已经取消/过期/收到结论，或者正在等，就不再调模型（防重复花钱）。
+     * 「正在跑」的标记由宿主管（同一个会话同时只允许一个请求）。
+     */
+    fun apiAskable(state: OutbrainState, sessionId: String): Boolean {
+        val s = state.sessions.firstOrNull { it.id == sessionId } ?: return false
+        if (s.status != OutbrainStatus.PREPARED && s.status != OutbrainStatus.OPENED) return false
+        return finalResults(state, sessionId).isEmpty()
+    }
+
     fun latest(state: OutbrainState, focusId: String? = null): OutbrainSession? =
         state.sessions.lastOrNull { focusId == null || it.focusId == focusId }
 

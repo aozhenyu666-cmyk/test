@@ -101,10 +101,11 @@ fun OutbrainCard(focusId: String? = null, allowSend: Boolean = false, onOpenBenc
         }
         clip.setText(AnnotatedString(text))
         obScope.launch {
-            BrainHost.outbrainOpen(session.id)
             if (session.transport == OutbrainTransport.API) {
+                // 这里不先 open：让 outbrainAskApi 自己判 PREPARED/OPENED，连点不会发两次请求。
                 toast(BrainHost.outbrainAskApi(session.id))
             } else {
+                BrainHost.outbrainOpen(session.id)
                 val launch = runCatching { context.packageManager.getLaunchIntentForPackage(session.actor.pkg) }.getOrNull()
                 if (launch != null) {
                     runCatching { context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }

@@ -380,6 +380,31 @@ class OutbrainTest {
         assertNotNull("到点再提醒", Outbrain.reminder(snoozed, 3_602_001))
     }
 
+
+    // -------------------------------------------------------------- F12-5 API 防重复花钱
+
+    @Test
+    fun apiAskOnlyBeforeResultAndNotAfterCancelOrExpire() {
+        val f = focus(listOf(material("m-1", "材料")))
+        val pack = { sid: String -> Packs.build(sid, f, listOf(material("m-1", "材料")), emptyList(), now = 1) }
+        val (s0, r0) = Outbrain.prepare(OutbrainState(), f, pack, Actor.CHATGPT, epShare, now = 1_000)
+        val a = (r0 as PortResult.Ok).value
+        assertTrue("PREPARED 可以问", Outbrain.apiAskable(s0, a.id))
+        val opened = Outbrain.open(s0, a.id, 1_100).first
+        assertTrue("OPENED 可以问", Outbrain.apiAskable(opened, a.id))
+        val waiting = Outbrain.waiting(opened, a.id, 1_200).first
+        assertFalse("已经在等结果（请求在跑）就不再问", Outbrain.apiAskable(waiting, a.id))
+        val cancelled = Outbrain.cancel(waiting, a.id, 1_300).first
+        assertFalse("取消后不再问", Outbrain.apiAskable(cancelled, a.id))
+        val (e0, er) = Outbrain.prepare(OutbrainState(), f, pack, Actor.CHATGPT, epShare, now = 1_000, ttlMs = 60_000)
+        val eid = (er as PortResult.Ok).value.id
+        val expired = Outbrain.expire(Outbrain.waiting(e0, eid, 1_100).first, now = 62_000).first
+        assertFalse("过期后不再问", Outbrain.apiAskable(expired, eid))
+        // 已经收到结论（哪怕状态被标成已收）也不再问
+        val got = Outbrain.receive(opened, "结论", now = 1_400, sessionId = a.id).first
+        assertFalse("有结论就不再问", Outbrain.apiAskable(got, a.id))
+    }
+
     // -------------------------------------------------------------- 落案板
 
     @Test
