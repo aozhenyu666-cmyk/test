@@ -68,6 +68,8 @@ class V13WebTest {
         assertNull(Sources.checkUrl("http://ok.example/x", resolve = { listOf(InetAddress.getByName("93.184.216.34")) }))
         // 解析不出来不在这里判死（连接阶段 OkHttp Dns 会再查并拒绝内网）
         assertNull(Sources.checkUrl("http://not.resolvable.example/x", resolve = { emptyList() }))
+        // 仅测试放行钩子：生产默认 false，测试构造时注入
+        assertNull(Sources.checkUrl("http://localhost:8080/a", true))
     }
 
 
@@ -195,18 +197,30 @@ class V13WebTest {
         val port = HttpWebPort(allowPrivateForTest = true)
         val r = port.fetch(server.url("/a").toString())
         assertTrue(r is PortResult.Ok)
-        assertEquals("正文", (r as PortResult.Ok).value.text.trim())
+        val page = (r as PortResult.Ok).value
+        assertEquals("正文", page.text.trim())
+        assertEquals("X", page.title)
         server.shutdown()
     }
 
     @Test
-    fun fetchRejectsTooLargeAndRedirects() = runBlocking {
-        val server = MockWebServer()
-        server.enqueue(MockResponse().setBody("x".repeat(2 * 1024 * 1024 + 10)))
-        server.start()
-        val port = HttpWebPort(allowPrivateForTest = true)
-        assertTrue(port.fetch(server.url("/big").toString()) is PortResult.Failed)
-        server.shutdown()
+    fun fetchRejectsTooLargeAndTooManyRedirects() = runBlocking {
+        val big = MockWebServer()
+        big.enqueue(MockResponse().setBody("x".repeat(WebLimits.MAX_BYTES + 10)).setHeader("Content-Type", "text/html"))
+        big.start()
+        val bigResult = HttpWebPort(allowPrivateForTest = true).fetch(big.url("/big").toString())
+        assertTrue(bigResult is PortResult.Failed)
+        assertEquals("TOO_LARGE", (bigResult as PortResult.Failed).error.code)
+        big.shutdown()
+
+        val red = MockWebServer()
+        red.start()
+        val next = red.url("/next").toString()
+        repeat(6) { red.enqueue(MockResponse().setResponseCode(302).setHeader("Location", next)) }
+        val redResult = HttpWebPort(allowPrivateForTest = true).fetch(red.url("/start").toString())
+        assertTrue(redResult is PortResult.Failed)
+        assertEquals("TOO_MANY_REDIRECTS", (redResult as PortResult.Failed).error.code)
+        red.shutdown()
     }
 
 

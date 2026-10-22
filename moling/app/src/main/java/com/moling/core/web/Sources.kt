@@ -128,11 +128,13 @@ object Sources {
      *
      * F10-1：先按字面地址判；域名则 InetAddress.getAllByName 解析一次，**任一**地址是
      * 回环 / any-local / 链路本地 / site-local / 组播 / fc00::/7 / 100.64/10 / IPv4 映射到这些就拒绝。
+     * [allowPrivate] 只给测试用（MockWebServer 在 localhost），生产路径永远 false。
      * [resolve] 只给测试注入“域名解析到内网”的假解析器；解析不出来不在这里判死
      * （连接侧 OkHttp 的 Dns 钩子会再查一次并拒绝内网，那里才是最终防线）。
      */
     fun checkUrl(
         raw: String,
+        allowPrivate: Boolean = false,
         resolve: (String) -> List<InetAddress> = ::resolveHost,
     ): String? {
         val u = runCatching { URI(raw.trim()) }.getOrNull() ?: return "链接看不懂"
@@ -140,6 +142,8 @@ object Sources {
         var host = u.host?.lowercase() ?: return "链接里没有域名"
         host = host.removePrefix("[").removeSuffix("]")
         if (host.isBlank()) return "链接里没有域名"
+        // F10-3：仅测试放行钩子（构造参数注入），生产路径 false
+        if (allowPrivate) return null
         if (host == "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return "不访问本机地址"
         if (host == "169.254.169.254" || host.startsWith("169.254.")) return "不访问元数据地址"
         if (isIpLiteral(host)) {

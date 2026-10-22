@@ -136,8 +136,8 @@ class HttpWebPort(
         var hop = 0
         while (true) {
             // F10-1：每一跳（含重定向后的地址）都重新校验，并解析一次域名
-            val bad = Sources.checkUrl(current)
-            if (bad != null && !(allowPrivateForTest && bad.contains("内网"))) return Failed(PortError("BLOCKED", bad))
+            val bad = Sources.checkUrl(current, allowPrivateForTest)
+            if (bad != null) return Failed(PortError("BLOCKED", bad))
             val request = try {
                 Request.Builder().url(current).apply {
                     header("User-Agent", "Moling/1.0 (personal assistant)")
@@ -159,7 +159,7 @@ class HttpWebPort(
                 if (code in 300..399) {
                     val loc = resp.header("Location")
                     if (loc.isNullOrBlank()) return@use Failed(PortError("BAD_REDIRECT", "重定向没有目标"))
-                    if (hop >= WebLimits.MAX_REDIRECTS) return@use Failed(PortError("BAD_REDIRECT", "跳转太多"))
+                    if (hop >= WebLimits.MAX_REDIRECTS) return@use Failed(PortError("TOO_MANY_REDIRECTS", "跳转太多"))
                     current = runCatching { URI(current).resolve(loc).toString() }
                         .getOrElse { return@use Failed(PortError("BAD_REDIRECT", "重定向目标看不懂")) }
                     hop += 1
