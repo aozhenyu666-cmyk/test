@@ -1224,7 +1224,7 @@ class LoopTest {
         waitFor(hasText("刷 20 道资料分析", substring = true) and androidx.compose.ui.test.hasAnyAncestor(hasTestTag("chat-today")), 10_000, "顶栏显示下一段")
         settle()
         shot("e2e-121-chat-planned")
-        compose.onNode(hasText("好")).performClick()
+        compose.onNode(hasText("好")).performScrollTo().performClick()
         // 等这一轮说完；等不到就把对话原样带进失败信息（看清是哪一步卡住）
         try {
             compose.waitUntil(30_000) { !app.chat.busy.value && app.chat.log.value.messages.any { it.content.contains("今日部署过了") } }

@@ -136,7 +136,8 @@ fun ChatScreen(nav: NavHostController) {
     }
     LaunchedEffect(items.size, busy) {
         val n = items.size + (if (busy) 1 else 0)
-        if (n > 0) list.animateScrollToItem(n - 1)
+        // 滚到最后一条的底部（不是顶部）：长回复下面的选项按钮要看得见
+        if (n > 0) list.animateScrollToItem(n - 1, scrollOffset = 100_000)
     }
     // 别的页面带过来的一句话（快捷按钮、“问参谋”）
     LaunchedEffect(Unit) {
@@ -281,7 +282,7 @@ fun ChatScreen(nav: NavHostController) {
         }
 
         // ---------- 常用说法（空着时） ----------
-        if (input.isEmpty() && image.isBlank() && !busy && items.isNotEmpty()) ChatStarters(send = { chat.send(it) }, fill = { input = it })
+        if (input.isEmpty() && image.isBlank() && !busy && items.isNotEmpty() && (items.last() as? Item.Said)?.options.isNullOrEmpty()) ChatStarters(send = { chat.send(it) }, fill = { input = it })
 
         // ---------- 输入栏 ----------
         Surface(
