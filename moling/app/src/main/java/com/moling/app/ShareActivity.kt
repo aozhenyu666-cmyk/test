@@ -39,6 +39,29 @@ class ShareActivity : ComponentActivity() {
                             }
                         }
                     }) { Text("放上案板") }
+                    TextButton(enabled = !busy, onClick = {
+                        // F10-7：先建焦点 + 链接材料，马上跳案板；正文在后台抓（可取消），不在这里等
+                        busy = true
+                        val item = com.moling.core.intake.InhaleParse.fromShare(text, System.currentTimeMillis())
+                        lifecycleScope.launch {
+                            val f = runCatching { BrainHost.benchStart("", text) }.getOrNull()
+                            if (f == null) {
+                                Toast.makeText(this@ShareActivity, "没放上去，再试一次", Toast.LENGTH_SHORT).show()
+                                busy = false
+                                return@launch
+                            }
+                            if (item.url.isNotBlank()) {
+                                runCatching { BrainHost.benchAddMaterial(f.id, item.url) }
+                                BrainHost.startBenchFetch(f.id, item.url)
+                                Toast.makeText(this@ShareActivity, "放上案板了，正文在后台取", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(this@ShareActivity, "放上案板了", Toast.LENGTH_SHORT).show()
+                            }
+                            busy = false
+                            startActivity(Intent(this@ShareActivity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(MainActivity.EXTRA_TAB, 3))
+                            finish()
+                        }
+                    }) { Text("提取正文放上案板") }
                     // 别的 AI 的回答（交接包发出去后回来的）：交给她把关——回答问题、收论断、改“了解”要你点头
                     TextButton(enabled = !busy, onClick = {
                         busy = true

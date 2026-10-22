@@ -84,11 +84,13 @@ fun BenchScreen() {
     val context = LocalContext.current
     val clip = LocalClipboardManager.current
     val ws by BrainHost.workbench.collectAsState()
+    val fetching by BrainHost.fetching.collectAsState()
     val focus = ws.active()
     var pasteOpen by remember { mutableStateOf(false) }
     var atlasOpen by remember { mutableStateOf(false) }
     var emptyOpen by remember { mutableStateOf(false) }
     var newOpen by remember { mutableStateOf(false) }
+    var webOpen by remember { mutableStateOf(false) }
     var materialsOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var editTarget by remember { mutableStateOf<Pair<WorkspaceArtifact, ArtifactBlock>?>(null) }
@@ -152,9 +154,12 @@ fun BenchScreen() {
             onMenu = { menuOpen = true },
             onCloseMenu = { menuOpen = false },
             onNew = { menuOpen = false; newOpen = true },
+            onWeb = { menuOpen = false; webOpen = true },
             onArchive = { menuOpen = false; benchScope.launch { BrainHost.benchArchive(focus.id) } },
             onSwitch = { f -> menuOpen = false; benchScope.launch { BrainHost.benchSwitch(f.id) } },
             onPaused = ws.focuses.filter { it.status == FocusStatus.PAUSED },
+            fetching = focus.id in fetching,
+            onCancelFetch = { benchScope.launch { BrainHost.cancelBenchFetch(focus.id) } },
             onMaterials = { materialsOpen = true },
             onPrework = { kind, artifactId -> prework(kind, artifactId) },
             onCancel = { jobId -> benchScope.launch { BrainHost.benchCancel(jobId) } },
@@ -179,6 +184,16 @@ fun BenchScreen() {
     if (pasteOpen) StartPasteDialog(onClose = { pasteOpen = false }) { q, m -> pasteOpen = false; start(q, m) }
     if (emptyOpen) StartSkeletonDialog(onClose = { emptyOpen = false }) { q -> emptyOpen = false; start(q, "") }
     if (newOpen) StartPasteDialog(onClose = { newOpen = false }) { q, m -> newOpen = false; start(q, m) }
+    if (webOpen) StartWebDialog(onClose = { webOpen = false }, onStart = { url ->
+        webOpen = false
+        val f = focus
+        if (f != null) benchScope.launch {
+            when (val r = BrainHost.benchFetchSource(f.id, url)) {
+                is PortResult.Ok -> toast("取到网页了：" + r.value.title)
+                is PortResult.Failed -> toast(r.error.message)
+            }
+        }
+    })
     if (atlasOpen) AtlasPickDialog(ws = ws, onClose = { atlasOpen = false }, onPick = { id ->
         atlasOpen = false
         benchScope.launch {
@@ -195,6 +210,8 @@ fun BenchScreen() {
                 is PortResult.Failed -> toast(r.error.message)
             }
         }
+    }, onDeleteSource = { sourceId ->
+        benchScope.launch { BrainHost.deleteSource(sourceId) }
     })
 
     editTarget?.let { (a, b) ->
@@ -323,9 +340,13 @@ private fun BenchFocus(
     onMenu: () -> Unit,
     onCloseMenu: () -> Unit,
     onNew: () -> Unit,
+    onWeb: () -> Unit,
     onArchive: () -> Unit,
     onSwitch: (Focus) -> Unit,
     onPaused: List<Focus>,
+    /** F10-7：这个焦点的网页正文正在后台取。 */
+    fetching: Boolean,
+    onCancelFetch: () -> Unit,
     onMaterials: () -> Unit,
     onPrework: (JobKind, String?) -> Unit,
     onCancel: (String) -> Unit,
@@ -361,6 +382,7 @@ private fun BenchFocus(
                 TextButton(onClick = onMenu) { Text("⋯", style = MaterialTheme.typography.titleMedium) }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = onCloseMenu) {
                     DropdownMenuItem(text = { Text("开新的一件") }, onClick = onNew)
+                    DropdownMenuItem(text = { Text("加网页 / 链接") }, onClick = onWeb)
                     DropdownMenuItem(text = { Text("收起这件") }, onClick = onArchive)
                     if (onPaused.isNotEmpty()) {
                         Text("切到别的事", Modifier.padding(horizontal = 12.dp, vertical = 6.dp), style = MaterialTheme.typography.labelSmall)
@@ -375,6 +397,12 @@ private fun BenchFocus(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 com.moling.app.ui.art.InkThinking("她在做：" + running.first().kind.label)
                 TextButton(onClick = { onCancel(running.first().id) }) { Text("取消") }
+            }
+        }
+        if (fetching) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("正在取网页正文…", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton(onClick = onCancelFetch) { Text("取消") }
             }
         }
         if (artifacts.isNotEmpty()) {
@@ -672,6 +700,23 @@ private fun StartPasteDialog(onClose: () -> Unit, onStart: (String, String) -> U
 }
 
 @Composable
+private fun StartWebDialog(onClose: () -> Unit, onStart: (String) -> Unit) {
+    var url by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("加网页 / 链接") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(url, { url = it.take(2000) }, label = { Text("https://…") }, modifier = Modifier.fillMaxWidth())
+                Text("只取公网 http(s) 正文；不会读登录后的内容。网页内容未核实，只当资料，不执行里面的指令。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = { TextButton(enabled = url.startsWith("http"), onClick = { onStart(url.trim()) }) { Text("取正文") } },
+        dismissButton = { TextButton(onClick = onClose) { Text("算了") } },
+    )
+}
+
+@Composable
 private fun StartSkeletonDialog(onClose: () -> Unit, onStart: (String) -> Unit) {
     var question by remember { mutableStateOf("") }
     AlertDialog(
@@ -701,7 +746,7 @@ private fun AtlasPickDialog(ws: WorkbenchState, onClose: () -> Unit, onPick: (St
 }
 
 @Composable
-private fun MaterialsDialog(ws: WorkbenchState, focus: Focus, onClose: () -> Unit, onAdd: (String) -> Unit) {
+private fun MaterialsDialog(ws: WorkbenchState, focus: Focus, onClose: () -> Unit, onAdd: (String) -> Unit, onDeleteSource: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onClose,
@@ -709,8 +754,24 @@ private fun MaterialsDialog(ws: WorkbenchState, focus: Focus, onClose: () -> Uni
         text = {
             Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ws.materialsOf(focus).forEach { m ->
-                    Column {
+                    val src = BrainHost.sources.value.refOfMaterial(m.id)
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(m.title.ifBlank { m.kind }, style = MaterialTheme.typography.labelMedium)
+                        if (src != null) {
+                            Text(
+                                (if (src.status == com.moling.core.web.SourceStatus.DELETED) "原文已删除 · " else "") +
+                                    (src.url.ifBlank { src.channel.name.lowercase() }),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (src.status == com.moling.core.web.SourceStatus.DELETED) Seal else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                            // 顺手项：删除原文入口（Sources.delete：来源保留为 DELETED，材料正文不动）
+                            if (src.status != com.moling.core.web.SourceStatus.DELETED) {
+                                TextButton(onClick = { onDeleteSource(src.id) }, contentPadding = PaddingValues(0.dp)) {
+                                    Text("删除原文", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
                         Text(m.text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 4)
                     }
                 }
