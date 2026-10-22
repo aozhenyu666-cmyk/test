@@ -36,9 +36,10 @@
 ### W12（2026-10-22）
 - 分支 `deepseek/moling-outbrain`（基于 W10 `4f3c905`）。实现 A1–A3 核心：`core/talk/Outbrain.kt`（选路/进场包/会话/结果/编码）、`OutbrainMachine.kt`（PREPARED→…→REVIEWED + CANCELLED/EXPIRED、幂等、归属、partial、过期、重启恢复）、`OutbrainDesk.kt`（持久化 + 结果落案板）、`Workbench.attachActorResult`（ACTOR_RESULT 未采用 + 材料，同会话追加、文本幂等）。
 - 三条传输：分享/复制、模型 API（复用现有凭据/用量）、联络站（`RelaySync.routeOutbrain` 按 `[[外脑:ob-…]]` 认领）；未配置/失败不伪造。
-- A4 `core/talk/Capture.kt`：UID→包名+证书校验、64 节点/8192 字/4 快照/32KiB、cursor/gap、坐标 2 秒/窗口失效、只带观察信号、UNSUPPORTED/DENIED 降级；**不申请无障碍/屏幕权限**。
+- A4 `core/talk/Capture.kt`：调用方（墨灵）UID→包名+固定证书校验（不是目标 App）、范围只能来自总控用户选择、64 节点/8192 字/4 快照/32KiB、cursor/gap、坐标 2 秒/窗口失效、只带观察信号、UNSUPPORTED/DENIED 降级；**不申请无障碍/屏幕权限**。
 - 最小 UI：`ui/OutbrainBits.kt`（发到外脑/预览材料/复制/打开/API 问/收线/看结论/看案板）、对话页+案板显示、胶囊状态、分享面板接回、调试页状态；`MainActivity` 恢复第四个「案板」标签（P0 合并丢失 J1 接线）。
-- 自动检查：`tools/core-tests` **461 全绿**（442 + 19）；App `compileDebugKotlin` 通过（C:/autopilot-w12-wt）。**真机未测，真实 API/联络站未验**。
+- 第十四批修复（提交 `e064eb2`…`8d14b8b`）：F12-1 追加结果回待审且 claims 不含新文本；F12-2 会话 id 加时间戳/读坏文件不重用编号/复用旧稿前核对；F12-3 收线默认不选、标记优先；F12-4 过期可清/手动接回/“稍后”真推迟 1 小时；F12-5 API 防重复花钱；F12-6 Capture 只修不接线（校验墨灵调用方、actorTurns 不放大、排除密码/验证/支付/通知、范围只能来自用户选择）；F12-7 分享回流多会话弹窗带原文、12000 截断、超出另存材料、API 回答过 clean()。
+- 自动检查：`tools/core-tests` **49 类 478 测试全绿**（本批新增 11）；App `compileDebugKotlin` 通过（C:/autopilot-w12-wt）。**真机未测，真实 API/联络站未验**。
 - 未完成：A2 辅助填入（需无障碍，只留降级）、A4 真实 Binder 服务与探针、A5 语音收线/微停顿、A6 真机逐传输、Notion outbox 归档、外脑结果 MemoryCandidate。
 
 ### 总控者审查（Claude，2026-10-22）
