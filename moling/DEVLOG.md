@@ -1441,3 +1441,23 @@
 - 同一批来源已经查过时直接复用它（不重复调模型）；换问题或来源变了才会新建一份发现。
 - 网页正文只截前 1200 字进提示词（原文整篇进来源库）；模型没接上时只列摘录，不假装整理过。
 - 没有改 `zongkong/`；没有加权限 / Manifest / 签名 / 包名。
+## 第十五批 B3（W11 R6 桌宠轻轮盘 + F11-5 曝光，2026-10-22）
+
+分支 `deepseek/m2-b3-wheel`（基于工作分支 `6bf7a69`）。只改 `moling/`：`app/live/`（`PetOverlay` / `Appear`）、`core/live/Habit.kt`、`BrainHost`，以及 `Brain.kt` 里曝光需要的两处最小接线（`react` 的一个判断 + 新方法 `markUnobserved`）。`zongkong/`、Manifest、权限、签名/包名都没碰。
+
+| 编号 | 提交 | 改了什么 | 对应测试 |
+|---|---|---|---|
+| W11 R6 | `03e829f` | 点桌宠（Z1）展开轻轮盘：墨滴周围四个轻按钮——破雾点选 / 当场捉虫 / 只听电台 / 先安静；再点墨滴、点轮盘空白处或 20 秒不动就收起。四个动作都复用已有入口：破雾点选＝原来“点桌宠开卡片”（`LiveScreens.peek`，选项由它带走）、当场捉虫＝`QuizActivity`、只听电台＝`BrainHost.radioStart`→`RadioHost`（只念案板已有材料）、先安静＝`BrainHost.stopLive`（两小时）。轮盘只是同一扇 `FLAG_NOT_FOCUSABLE` 悬窗里的 Compose 状态：展开 / 收起不请求焦点、不弹新窗口，窗口变大后只用 `updateViewLayout` 挪回屏内。没有可点选项时「破雾点选」是灰的（不是点了才说不行的按钮）；出不了题 / 没材料念电台时留在轮盘上原样说明白；耳语（8 秒「回她」气泡）不展开轮盘，点开仍是原卡片 | 只有编译验证（`compileDebugKotlin` 通过），无单测；真机未测 |
+| F11-5 | `03e829f`、`16cd9bf` | 曝光接上：`Habits.unobserved()` 只把这一种方式最近一笔还没反应的记录标成 `Exposure.UNOBSERVED`（找不到就不补假记录）；`Brain.markUnobserved()` + `BrainHost.unobserved()`；`Appear.show` 在退回卡片 / 通知的分支记 UNOBSERVED（设置里关了这种出现、没有悬窗权限、桌宠被长按静音、没戴耳机耳语、没材料出题）；`PetOverlay` 在悬窗服务起不来、桌宠 / 盯着你窗口加不上（厂商拦）时也记。`Brain.react` 对 UNOBSERVED 的那一次不再把 IGNORED / 秒划算成“他冷落”（`Habits.react` 本来就把 UNOBSERVED 排除在冷却和管用率外）。`16cd9bf` 补上耳语那一半：耳机里已经念完、只是“回她”气泡没亮不算 UNOBSERVED | `HabitTest.unobservedMarksThePendingAppearanceOnly`、`ExposureTest.unobservedAppearanceIsNotCountedAsIgnored`、`ExposureTest.observedBadReactionStillCounts`、`ExposureTest.markUnobservedWithoutThisAppearanceChangesNothing` |
+
+**自动检查（实际跑出来的）**
+- `tools/core-tests`：`gradle test`（Gradle 8.11.1 + JDK 22；本 worktree 路径含中文会让测试 JVM 类路径乱码，用 ASCII junction `C:/b3w` 指向本 worktree 跑）：**59 个测试类、594 个测试、0 失败 0 错误 0 跳过**（跑之前基线 58 类 590；本批 +4：`HabitTest` +1、`ExposureTest` 3）。
+- App：`moling/gradlew.bat compileDebugKotlin`（Gradle 8.9、`ANDROID_HOME=C:\codex-build\android-sdk`、路径 `C:/b3w/moling`）**通过**；没打包、没跑 Android 单测。
+- CI：未在本机跑，见分支 PR 的 Actions 结果。
+- 真机**未测**：轮盘点击 / 拖拽手感、窗口变大后是否真不出屏、展开收起是否真的不抢焦点、悬窗被系统 / 厂商拦时是否真的回报 UNOBSERVED，都要在手机上验。
+
+**没做到 / 说明**
+- F11-5 只覆盖“App 能判断出来”的情况：权限 / 设置导致的退回，以及 `startService` / `addView` 抛错。窗口加上了但被系统叠在别的窗口后面、通知被关掉、耳机中途断开（`Whisper.say` 仍会念、气泡仍会亮）这类，App 侧看不出来，仍按 SHOWN 记。耳语也一样：耳机里那句已经念完、只是“回她”气泡没亮时**不**记 UNOBSERVED（他其实听到了），只有“根本没戴耳机 / 不能耳语、退回卡片”才记。
+- 轮盘没有“点窗外收起”：悬窗不是模态窗口，窗外属于别的应用，碰不到。收起靠再点墨滴、点轮盘空白处或 20 秒不动。
+- 只听电台是从轮盘直接开 `RadioHost`，不跳到案板面板；要停得自己进案板 / 对话页点「停止」（轮盘的 Toast 里写了这句）。
+

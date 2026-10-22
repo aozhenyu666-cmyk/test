@@ -78,6 +78,7 @@ import com.moling.core.live.Spirits
 import com.moling.core.live.Trigger
 import com.moling.core.autopilot.AutopilotSignal
 import com.moling.core.live.Can
+import com.moling.core.live.Exposure
 import com.moling.core.live.HabitBook
 import com.moling.core.live.Habits
 import com.moling.core.live.Modality
@@ -1578,14 +1579,27 @@ class Brain(
      */
     suspend fun react(modality: Modality, reaction: Reaction, ms: Long, now: Long) = lock.withLock {
         val sp = Spirits.today(st.spirit, calendarDay(now))
+        // F11-5：那一次其实没被他看到（浮层被系统拦 / 没戴耳机 / 窗口没加上）：不算“他不理我”。
+        val observed = Habits.lastExposure(st.habits, modality) != Exposure.UNOBSERVED
         st = st.copy(
             habits = Habits.react(st.habits, modality, reaction, ms, now),
             spirit = when {
                 reaction == Reaction.REPLIED -> sp.copy(ignored = 0)
-                reaction.bad && modality != Modality.GATE -> sp.copy(ignored = sp.ignored + 1)
+                reaction.bad && observed && modality != Modality.GATE -> sp.copy(ignored = sp.ignored + 1)
                 else -> sp
             },
         )
+        save()
+    }
+
+    /**
+     * 这一次出现其实没被他看到（浮层被系统 / 厂商拦了、窗口没加上、没戴耳机）：把最近一笔还没反应的记录标成
+     * [Exposure.UNOBSERVED]（F11-5）。之后他就算没理，也不进“冷落”计数。找不到这一次出现就什么都不做。
+     */
+    suspend fun markUnobserved(modality: Modality, now: Long) = lock.withLock {
+        val next = Habits.unobserved(st.habits, modality)
+        if (next == st.habits) return@withLock
+        st = st.copy(habits = next, log = st.log + "${hm(now)} ${modality.label}：那一次没真的显示出来，不算他冷落")
         save()
     }
 

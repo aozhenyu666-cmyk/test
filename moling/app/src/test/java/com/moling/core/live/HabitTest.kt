@@ -78,6 +78,23 @@ class HabitTest {
         org.junit.Assert.assertNull(Habits.lastExposure(b, Modality.STARE))
     }
 
+    @Test fun unobservedMarksThePendingAppearanceOnly() {
+        var b = Habits.shown(HabitBook(), Modality.PEEK, t0)
+        b = Habits.react(b, Modality.PEEK, Reaction.REPLIED, 100, t0 + 1)
+        b = Habits.shown(b, Modality.PET, t0 + 2)
+        val marked = Habits.unobserved(b, Modality.PET)
+        assertEquals(Exposure.UNOBSERVED, marked.marks.last().exposure)
+        assertEquals("别的一次出现不跟着变", Exposure.SHOWN, marked.marks.first().exposure)
+        // 这一笔已经回应过的：没有“还没反应的这一次”，就不改、也不新增
+        val replied = Habits.react(Habits.shown(HabitBook(), Modality.PET, t0), Modality.PET, Reaction.REPLIED, 100, t0 + 1)
+        val untouched = Habits.unobserved(replied, Modality.PET)
+        assertEquals(1, untouched.marks.size)
+        assertEquals(Exposure.SHOWN, untouched.marks.single().exposure)
+        assertEquals(Reaction.REPLIED, untouched.marks.single().reaction)
+        // 根本没有这一种出现：不凭空补一条
+        assertEquals(0, Habits.unobserved(HabitBook(), Modality.STARE).marks.size)
+    }
+
     @Test fun summaryIncludesQuietLine() {
         val b = Habits.explicitStop(HabitBook(), t0)
         assertTrue(Habits.summary(b, t0 + 1_000).first().contains("安静期"))
