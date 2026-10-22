@@ -75,5 +75,14 @@ A 部分真机验收：总控开启策略（看到“24 小时后生效”）→
 ### B5 W13 G4：系统工具适配器（I）
 - 日历：用户选日历后读忙闲；写日程用系统 `ACTION_INSERT` 由他保存。勿扰：只恢复墨灵自己改过的状态。歌单：显式 Intent 打开他选的 URI。每项独立开关、拒绝权限能降级、没回执不写“已完成”。新增权限只在他点开对应开关时申请。
 
+### B6 电台底座换成 Media3（I，可以和 B1 并行，优先于 B3）
+- 依赖：`androidx.media3:media3-exoplayer` 和 `media3-session`（Apache-2.0）。只加这两个模块。
+- 播放统一走一个 `ExoPlayer`：云端朗读本来就是音频文件；系统朗读先 `synthesizeToFile` 成文件再播。`setAudioAttributes(…, handleAudioFocus = true)` + `setHandleAudioBecomingNoisy(true)`，删掉 `RadioHost` 里手写的焦点 / 拔耳机 / 熄屏广播（逻辑交给播放器）。
+- `MediaSessionService`：通知栏和锁屏有暂停 / 继续 / 跳过 / 停止。“锁屏后继续播”做成设置开关，**默认关**（关着时熄屏仍然停，和现在一致）；需要的前台服务类型（媒体播放）权限照 Android 14 的要求在清单里声明。
+- 暂停后从原位置继续（不再从段首重念）。
+- `RadioEngine` 的状态机和 `accepts(session, seg, gen)` 检查保留：播放器回调到了也先过状态机，停止后迟到的不能再播。
+- 耳语（Whisper）和对话朗读之后再迁，本项只做电台；但不能让电台的停止掐断别的朗读（第十四批复审修过的问题不能回来）。
+- 人声检测 / 插话**本批不做**（见根目录 `COORD.md` 待讨论）。
+
 ## 交付
 每个 PR：任务号清单、`gradle test` 实际结果、两边 CI 链接、真机未测项。A 部分动了 `zongkong/` 的，PR 描述里写清“会更新总控下载包”。全部由 Claude 复审合入。
