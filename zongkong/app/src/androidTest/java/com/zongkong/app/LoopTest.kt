@@ -1243,7 +1243,13 @@ class LoopTest {
         settle()
         shot("e2e-122-chat-confirmed")
         val gate = app.store.status().gates.firstOrNull { it.gate.id == com.zongkong.app.data.Actions.PLAN_GATE }
-        if (gate != null && gate.phase != com.zongkong.core.GatePhase.NOT_OPEN) assertTrue("今日部署应已通过：${gate.phase}", gate.done)
+        if (gate != null && gate.phase != com.zongkong.core.GatePhase.NOT_OPEN) {
+            assertTrue("今日部署应已通过：${gate.phase}", gate.done)
+            // 顶栏“还差”里马上去掉今日部署
+            compose.waitUntil(5_000) { compose.onAllNodes(hasText("今日部署（", substring = true)).fetchSemanticsNodes().isEmpty() }
+        }
+        settle()
+        shot("e2e-123-chat-bar-updated")
         llm.shutdown()
     }
 }

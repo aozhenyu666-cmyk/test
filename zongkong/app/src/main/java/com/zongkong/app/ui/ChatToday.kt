@@ -40,8 +40,10 @@ fun ChatTodayBar(nav: NavHostController, say: (String) -> Unit) {
     val sig = LocalSignals.current
     val work by store.work.collectAsStateWithLifecycle()
     val config by store.config.collectAsStateWithLifecycle()
+    val day by store.today.collectAsStateWithLifecycle()
     val now = rememberNow(30_000)
-    val status = remember(config, work.session, now) { store.status(now) }
+    // 交了关卡（今天的记录变了）马上刷新，不等 30 秒
+    val status = remember(config, day, work, now) { store.status(System.currentTimeMillis()) }
     val zone = store.zone
     val missing = remember(now / 60_000) { PermissionStatus.missingCritical(context) }
     val slot = remember(work, now) {
