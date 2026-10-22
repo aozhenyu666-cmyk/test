@@ -13,13 +13,14 @@
 | W10 T1–T9 | **进行中（里程碑2，第十四批修复完成）**：T1/T2(fetch,RSS,HTML,Brave适配)/T3(池、分享解析、分享后台提取正文)/T7(预算与事件) 核心与入口完成，F10-1…F10-7 + 顺手项已修；T4–T6、T8–T9 未做 | core-tests 448 全绿（47 类，V13WebTest 16；此前“442 全绿”已更正，见 DEVLOG 第十四批）；App compileDebugKotlin 通过；真实公网未验 | 真机未测 | [任务](DEEPSEEK-10.md) · [PR17](https://github.com/aozhenyu666-cmyk/test/pull/17) |
 | W11 R1–R7 | 任务书已补齐，待实现 | 待验证 | 待验证 | [任务](DEEPSEEK-11.md) |
 | W12 A1–A6 | 任务书已补齐，待实现 | 待验证 | 待验证 | [任务](DEEPSEEK-12.md) |
-| W13 G1–G4 | **部分**：G1/G2 计划代驾核心+今天页/设置；G3 墨灵侧训练兑换协议；G4 系统工具接口与拒绝降级。G5–G7、Z13 未做 | core-tests 493 全绿（新增 51）；App compileDebugKotlin 通过 | 真机未测；未改 zongkong/权限/Manifest | [任务](DEEPSEEK-13.md) |
+| W13 G1–G4 | **部分（第十四批 F13-1…F13-8 已修）**：G1/G2 计划代驾核心+今天页/设置（已取消自动采用，到点只提醒）；G3 墨灵侧训练兑换协议；G4 系统工具接口与拒绝降级。G5–G7、Z13 未做 | core-tests 510 全绿（51 类；W13 类 62：PlanDriverTest 21、TrainingRedeemTest 26、SystemPortsTest 10、GateV2Test 5）；App compileDebugKotlin 通过 | 真机未测；未改 zongkong/权限/Manifest | [任务](DEEPSEEK-13.md) · [第十四批](DEEPSEEK-14.md) |
 
 ### W13（2026-10-22，分支 deepseek/moling-planner，基于 4f3c905）
-- G1/G2：`core/flow/PlanAdoption.kt`（PlanDraft/PlanAdoption/PlanOperation/PlanDriver，可见时间/换日/改版冲突/operationId 幂等/回执分离/UNKNOWN 不重发）；`BrainHost` 存 `mind/plan-adoption.json`，今天页「计划代驾」采纳/不采纳，设置页开关与 10/20/30 分钟。**本地采纳不会自动交给总控或执行现实动作。**
+- G1/G2：`core/flow/PlanAdoption.kt`（PlanDraft/PlanAdoption/PlanOperation/PlanDriver，换日/改版冲突/operationId 幂等/回执分离/UNKNOWN 不重发）；`BrainHost` 存 `mind/plan-adoption.json`，今天页「计划代驾」采纳/不采纳，设置页到点提醒开关与 10/20/30 分钟。**第十四批 F13-1 起没有自动本地采用：到点只推「一键采用」提醒（通知 + 今天页按钮），他点了才算；也不会自动交给总控或执行现实动作。**
 - G3：`core/link/GateV2.kt`（v2 外壳/能力协商/错误码，不动 v1 与 ZK_LINK_VERSION）与 `core/redeem/TrainingRedeem.kt`（墨灵侧协议；pass 只认总控回执并核对绑定；未验证不发奖）。总控侧 Z13 未做。
 - G4：`core/system/SystemPorts.kt`（日历/勿扰/歌单端口、能力状态、默认明确拒绝；日历去重/编辑页等待用户保存/勿扰只恢复自己改的档位/歌单 URI 校验）。未加权限、未改 Manifest、未接 Android 适配器。
-- 自动检查：`tools/core-tests` 493 个全绿，0 失败（新增 51：PlanDriverTest 15、TrainingRedeemTest 21、SystemPortsTest 10、GateV2Test 5），在 ASCII 路径 `C:/autopilot-w13-wt` 运行；App `compileDebugKotlin` 通过。中文路径跑 core-tests 有 JVM 类路径编码问题，已改用 ASCII junction。
+- 第十四批修复（提交 `7f0f496`…`df7ac6d`）：F13-1 取消自动采用与可见时间、到点只提醒；F13-2 不采纳/拒绝粘住；F13-3 SENDING→UNKNOWN、ZK_PENDING 不本地过期、已发不记没发；F13-4 capabilities 缺失拒绝；F13-5 空白名单拒绝；F13-6 requestId 唯一；F13-7 锁内改状态、锁外调端口（“只成功一次”由总控保证）；F13-8 定稿文案改“你已定稿”；小项 acceptReceipt 一致。详见 DEVLOG 第十四批。
+- 自动检查：`tools/core-tests` **510 个全绿，0 失败**（51 类；W13 类 62：PlanDriverTest 21、TrainingRedeemTest 26、SystemPortsTest 10、GateV2Test 5），在 ASCII 路径 `C:/autopilot-w13-wt` 运行；App `compileDebugKotlin` 通过。中文路径跑 core-tests 有 JVM 类路径编码问题，已改用 ASCII junction。
 - 明确未完成：Z13 总控侧策略/挑战/rubric/临时通行与 ContentProvider；GateV2 端口 Android 适配器和训练 UI；G2 发送入口（本批不自动执行）；G5 追链与总控训练界面；G6 交叉/新旧版本/备份恢复；G7 最终验收；真机全部未测。
 - 提交/PR：见本分支 git log；PR 由 Lead 建。
 

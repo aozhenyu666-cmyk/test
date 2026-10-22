@@ -1251,3 +1251,32 @@
 - 分享后台抓取完成 / 失败后没有通知（材料出现或案板提示消失），只有案板里的“正在取网页正文…”。
 - prune 删正文不会把对应 `SourceRef.status` 改成 PARTIAL / DELETED；材料里那份正文还在。
 - 本批没有改 `zongkong/`、Manifest、权限，也没有动 `core/workspace`、`core/strategy` 其它行（只改点名的 `materialLines` 与调用处）、`core/live/Live.kt`、`Brain.kt`。
+
+---
+
+## 第十四批修复（#20 W13，2026-10-22）
+
+只修不加新功能。先把 `origin/deepseek/moling-web-memory`（#17 按 F10 修好）merge 进 `deepseek/moling-planner`（`06dc724`，冲突按“保留双方有效改动、以 #17 修复为准”解），再按 F13-1…F13-8 + 小项逐个修，每个修复一个提交。没有改 `zongkong/`、没有加权限、没有改 Manifest/签名/包名；W12 A4/A2 冻结未碰；W13 不做 Z13、没有自动采用/执行；训练兑换与系统工具仍不接线。
+
+| 编号 | 提交 | 改了什么 | 对应测试 |
+|---|---|---|---|
+| F13-1 | `7f0f496` | 取消“20 分钟没改就自动本地采用”与 `interactive()` 可见时间累计：`PlanDriver.tick(now)` 只看墙钟，到 `remindAfterMs` 只在 `PlanAdoption.remindedAt` 记一次提醒；`LOCAL_ADOPTED` 只能由 `adopt()`（他点）产生。`BrainHost` 到点发 `plan_adopt` 通知（今天页同时显示「一键采用」按钮），设置页改成“到点提醒我一键采用”（默认开，10/20/30 分钟） | `PlanDriverTest.reminderCanBeTurnedOffAndNeverAdopts`、`reminderAtTwentyMinutesNeverAdopts`、`confirmedPlanIsNotReminded`、`restartDoesNotAdoptOrRemindYesterdayDraft` |
+| F13-2 | `fd49c4c` | 计划改版时 `CANCELLED / REJECTED` 粘住，不再重置成 `DRAFT`；只有他再点采纳才改状态（`putDraft`） | `cancelledAdoptionStaysCancelledAfterPlanRewrite`、`rejectedAdoptionStaysRejectedAfterPlanRewrite` |
+| F13-3 | `ddbfc01` | `SENDING` 中断（超时/改稿/取消）一律 `UNKNOWN`，不记 `CANCELLED`（“已取消（没发）”）也不记 `EXPIRED`；`ZK_PENDING` 不在本地过期，新增 `receiptsToQuery(now)` 交调用方去查回执；`cancel()` 只取消真正 `PREPARED` 的，已发/发送中按回执/未知处理 | `pendingReceiptIsNeverExpiredLocallyAndCanBeQueried`、`interruptedSendingBecomesUnknownOnExpire`、`planRewriteWhileSendingBecomesUnknownNotCancelled`、`cancelNeverMarksSendingOrSentAsNotSent` |
+| F13-4 | `22ad126` | `capabilities() == null` 直接 `NOT_AVAILABLE`，不再默认放行 | `TrainingRedeemTest.capabilitiesNullIsNotAvailable` |
+| F13-5 | `8a459e8` | 允许列表为空 = 没选任何应用，`SCOPE_DENIED` 拒绝，不再当“全放行” | `emptyAllowListRejectsInsteadOfAllowingEverything` |
+| F13-6 | `4b2749e` | 发起挑战的 `requestId` 加持久计数（`RedeemState.issueSeq`），每次 `start()` 唯一，不再按天固定 | `issueRequestIdIsUniquePerStart` |
+| F13-7 | `8d5b15f` | `TrainingRedeemClient` 去掉 `@Synchronized`：`start/submit/query/activePass` 锁内只读写状态，能力/策略/发起/交卷/查回执都在锁外调端口；并发时“一局只成功一次”最终由总控按 challengeId/requestId 保证（DEVLOG 保留此说明） | `portCallDoesNotHoldTheClientLock`；`concurrentSubmitOnlyOnePass` 改为由 Fake 总控按 requestId 去重后仍只发一份放行 |
+| F13-8 | `1a7a364` | 今天页 `flow.confirmed` 文案改为「定稿：你已定稿 / 还没定稿」，不再写“总控已确认”；只有读到 `LOCAL_ADOPTED` 时才写“今天页和提醒按这份计划走”，到点提醒文案不再暗示已采纳 | 纯文案/UI，无核心测试；以 `compileDebugKotlin` 通过为准 |
+| 小项 | `df7ac6d` | `acceptReceipt` 对“总控拒绝”和“通过但没发行临时放行”走同一条回执路径：都返回这张回执（`pass == null`），都不当授权；删掉不可达的“没确认通过”分支 | `deniedAndPassedWithoutPassUseSameReceiptPath`；更新 `passedStateWithoutPassIsNotAwarded`、`passedStateWithoutPassCannotBecomeAuthorization`、`queryNeverFabricatesPass` |
+
+**自动检查（实际跑出来的）**
+- `tools/core-tests`：`gradle test`（Gradle 8.9 + JDK 22，`JAVA_HOME=C:\Program Files\Java\jdk-22`，ASCII 路径 `C:/autopilot-w13-wt/tools/core-tests`）：**51 个测试类、510 个测试、0 失败 0 错误 0 跳过**。其中 W13 相关：`PlanDriverTest` 21、`TrainingRedeemTest` 26、`SystemPortsTest` 10、`GateV2Test` 5。
+- App：`moling/gradlew.bat compileDebugKotlin`（`ANDROID_HOME=C:\Android\sdk`，ASCII 路径 `C:/autopilot-w13-wt/moling`）**通过**；本批未打包、未跑 Android 单测。
+- 真机**未测**：通知实际弹出、点击进今天页、设置项持久化都未在手机上验。训练兑换/系统工具仍无 UI、未接 Android 适配器。
+
+**没做到 / 说明**
+- F13-1 的提醒依赖心跳（`HeartService` 前台 60 秒 / 息屏 300 秒一次与打开 App）；进程被杀期间不会准时提醒，下一次心跳才补发。
+- F13-3 只提供 `receiptsToQuery`，真正去总控查回执的调用入口要等 Z13 的 v2 端口接线；本批不拿 IPC 做回执轮询。
+- F13-7 客户端不再保证并发只成功一次；真正的幂等保证在总控（按 challengeId/requestId），这一条写进代码注释与本记录。
+- 本批没有改 `zongkong/`、Manifest、权限、签名/包名，也没有碰 W12 的 Capture/外脑冻结部分。
