@@ -122,6 +122,19 @@ class FogTest {
         assertEquals(Reaction.STOPPED, b.state().habits.marks.last().reaction)
     }
 
+    @Test fun fogExitWithoutGateIsNotAReleaseAndClearsIgnored() = runTest {
+        val b = brain(null)
+        // 先攒一次冷落
+        b.react(Modality.PEEK, Reaction.IGNORED, 0, at(14))
+        assertEquals(1, b.state().spirit.ignored)
+        b.live(Trigger.AUTOPILOT, Activity("launcher", "桌面", "OTHER", 0), at(15), roll = 0.9)
+        val r = b.tap(Live.EXIT, at(15, 1), modality = Modality.PEEK)
+        assertFalse("不拦人的破雾点退出，不该说放行", r.release)
+        assertEquals("他点了就不算冷落", 0, b.state().spirit.ignored)
+        assertTrue(Habits.isQuiet(b.state().habits, at(15, 2)))
+        assertFalse("退出的话不说一个不存在的恢复按钮", r.line.contains("点「恢复」"))
+    }
+
     @Test fun threeTapsBringHimOut() = runTest {
         val b = brain(null)
         // 在桌面和几个应用之间横跳（不是娱乐应用，不会拦）

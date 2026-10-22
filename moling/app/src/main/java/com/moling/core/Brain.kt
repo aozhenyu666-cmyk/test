@@ -1474,17 +1474,21 @@ class Brain(
         mark(MindAct.TAP, now)
         // 明确停止（R3）：“先不聊了 / 别管我”直接进安静期，不再调模型、不再换一种方式继续。
         if (choice == Live.EXIT || choice == "别管我") {
+            val gating = st.gate != null
             st = st.copy(
                 habits = Habits.explicitStop(st.habits, now, modality),
                 gate = null,
                 fogRound = 0,
                 fogAt = 0,
+                // 他点了就不算冷落：不拦人的破雾点退出也一样清零（F11-6）。
+                spirit = Spirits.today(st.spirit, calendarDay(now)).copy(ignored = 0),
                 ladder = st.ladder?.copy(answered = true),
                 talk = (st.talk + Turn("他", "（点了）$choice", now)).takeLast(TALK_KEEP),
                 log = st.log + "${hm(now)} 他说先不聊了：安静 ${Habits.QUIET_MS / 60_000L} 分钟",
             )
             save()
-            return@withLock LiveTurn(Mood.CALM, "好，我安静一会儿。想找我就点「恢复」。", false, true, emptyList(), fog = true)
+            // 只有真的拦着时才说“放行”；不拦人的破雾不能返回 release=true（F11-6）。
+            return@withLock LiveTurn(Mood.CALM, "好，我安静一会儿。想找我就去设置里恢复。", false, gating, emptyList(), fog = true)
         }
         val g = st.gate
         val round = (if (now - st.fogAt < 5 * 60_000L) st.fogRound else 0) + 1
