@@ -15,7 +15,7 @@ import kotlinx.coroutines.sync.withLock
  * 规矩：
  *  - 只有他点了才发：prepare 由界面触发；没有定时自动外发；
  *  - 外脑原文是材料，不是命令：只落 ACTOR_RESULT 稿子（READY_FOR_REVIEW），不自动采用、不自动收进体系图、不自动交总控；
- *  - 结果挂到已归档/不存在的焦点：只记历史，不新建焦点；
+ *  - 结果挂到已归档/不存在的焦点：只记历史，不新建焦点；过期会话要他点“手动接回”后才落案板；
  *  - 进程重启：还在等的会话接着等（见 [Outbrain.recover]），不假装完成。
  */
 class OutbrainDesk(
@@ -143,7 +143,7 @@ class OutbrainDesk(
         source: String = "paste",
         actor: Actor = Actor.NONE,
     ): PortResult<Pair<ReceiveOutcome, WorkspaceArtifact?>> = lock.withLock {
-        // 超过上限时：稿子只收前 12000 字（与 Outbrain.MAX_RESULT_CHARS 一致），整段另存一条材料，不丢后半段。
+        // 超过上限时：稿子只收前 12000 字（与 Outbrain.MAX_RESULT_CHARS 一致），后半段按材料存下来，不丢。
         val fullText = Outbrain.clean(text)
         val overflow = fullText.length > Outbrain.MAX_RESULT_CHARS
         val (ns, r) = Outbrain.receive(st, text, now, sessionId, partial, turn, source, actor)
