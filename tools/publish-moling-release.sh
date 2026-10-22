@@ -74,7 +74,13 @@ APK SHA-256 $digest
 # 3) 已有 release 原地更新（不删除 release/tag）；首次才创建。
 if $GH release view "$TAG" --json tagName,isDraft >/dev/null 2>&1; then
   echo "更新已有 release $TAG（不删除）"
-  $GH api -X PATCH "repos/$REPO/releases/tags/$TAG" \
+  # GitHub 只支持按数字 id 改 release（PATCH /releases/tags/{tag} 是 404）
+  release_id="$($GH api "repos/$REPO/releases/tags/$TAG" --jq .id)"
+  if [ -z "$release_id" ]; then
+    echo "发布失败：取不到 release $TAG 的 id，本次未改动" >&2
+    exit 1
+  fi
+  $GH api -X PATCH "repos/$REPO/releases/$release_id" \
     -f target_commitish="$SHA" -f name="$title" -f body="$notes" \
     -F draft=false -F prerelease=true >/dev/null
   $GH api -X PATCH "repos/$REPO/git/refs/tags/$TAG" \
