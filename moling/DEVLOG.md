@@ -1247,7 +1247,7 @@
 | F12-2 | `51f6550` | 会话 id 改成 `ob-<seq>-<now>`（标记正则兼容旧 `ob-<seq>`）；`outbrain.json` 读坏时 seq 用当前毫秒起，不再从 0 重用编号；复用旧稿前核对同焦点、`outbrain:<sessionId>` 标记、未归档、确为 `ACTOR_RESULT`，否则新建 | `sessionIdsCarryTimestampAndSurviveUnreadableFile`、`attachReusesOnlyMatchingOutbrainArtifact` |
 | F12-3 | `11e6dfb` | 收线弹窗多会话默认不选、不选不能提交；`[[外脑:ob-…]]` 在 `Outbrain.receive` 里优先于手选，落库前去掉标记；`BrainHost` 不再先 `clean` 把标记洗掉 | `pastedTagWinsOverManualPickAndIsStripped`（弹窗禁用逻辑只有编译验证） |
 | F12-4 | `0d12ded` | 过期会话可「不要了」（cancel 接受 EXPIRED）、可「手动接回」（reopen 回 WAITING_RESULT，之后的结论才落案板）；「稍后」写 `snoozeUntil` 推迟 1 小时，期间不挂常驻通知，到点 `reminder` 再提醒；收线弹窗能选到过期会话 | `expiredCanBeSnoozedClearedAndReopened`、`deskReopensExpiredSessionThenLandsArtifact`、`snoozeHidesReminderUntilDue` |
-| F12-5 | `6ab53f1` | 「用 API 问」只在 PREPARED/OPENED 且没有最终结论时调模型；`BrainHost` 每会话一个进行中标记，连点只发一次；取消/过期/已有结论/别的传输先收到时，回来的回答不再收、不再花第二次；UI 不再先 open 再问 | `apiAskOnlyBeforeResultAndNotAfterCancelOrExpire`（host 的进行中标记无单测） |
+| F12-5 | `6ab53f1`、`afc0e90` | 「用 API 问」只在 PREPARED/OPENED 且没有最终结论时调模型；`BrainHost` 每会话一个进行中标记，连点只发一次；取消/过期/已有结论/别的传输先收到时，回来的回答不再收、不再花第二次；UI 不再先 open 再问；请求失败只 open 不 waiting，状态仍是 OPENED，可再点重试 | `apiAskOnlyBeforeResultAndNotAfterCancelOrExpire`（含失败后可重试；host 的进行中标记无单测） |
 | F12-6 | `d10aa5f` | Capture 只修纯逻辑：校验调用方（墨灵）UID→包名+固定证书，不再拿目标 App 包名当调用方；`begin` 的范围只能来自总控用户选择，请求换应用/开用户没勾的开关/延长 TTL 都拒绝；`actorTurns` 只多给段落/说明，不能放大成全部可见文字；排除密码/验证/支付/通知节点和输入框/按钮 | `callerIsVerifiedAsMolingNotTargetApp`、`requestCannotWidenUserSelection`、`secretsAndTurnsAreExcludedFromCapture` |
 | F12-7 | `8d14b8b` | 分享回流遇到多个会话在等时打开选择弹窗并带原文，不再 Toast 一句就丢；结果统一按 `MAX_RESULT_CHARS`（12000）截断，超出的后半段分段另存为材料；API 回答也走 `Outbrain.clean()` 去标记；收线弹窗移除输入框的 12000 截断 | `overlongResultKeepsTailAsMaterial`（分享弹窗只有编译验证） |
 
