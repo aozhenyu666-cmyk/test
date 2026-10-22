@@ -1,6 +1,13 @@
 package com.moling.app.live
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.os.Build
 import com.moling.app.ui.Speaker
 import com.moling.core.live.Radio
 import com.moling.core.live.RadioContent
@@ -38,12 +45,73 @@ object RadioHost {
     private var tickJob: Job? = null
     private var appContext: Context? = null
 
+    // R6 音频焦点（本批只做最小正确版）：出声前要焦点；失焦 / 拔耳机 / 来电 / 熄屏 / 离开面板一律停。
+    private var audio: AudioManager? = null
+    private var focusRequest: AudioFocusRequest? = null
+    private var focusListener: AudioManager.OnAudioFocusChangeListener? = null
+    private var focusGranted = false
+    private var noisyReceiver: BroadcastReceiver? = null
+    private var screenOffReceiver: BroadcastReceiver? = null
+
     /** 已经念过的段（session:segment:generation），避免重组 / tick 重复开念。 */
     private var spokenKey = ""
 
     fun init(context: Context) {
-        appContext = context.applicationContext
-        Speaker.prepare(context.applicationContext)
+        val app = context.applicationContext
+        appContext = app
+        Speaker.prepare(app)
+        if (audio == null) {
+            audio = app.getSystemService(AudioManager::class.java)
+            // 照 Whisper 的写法请求焦点：来电 / 导航 / 别的应用要出声，系统收回焦点时马上停。
+            focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+                if (change < 0) stopAll()
+            }
+            val noisy = object : BroadcastReceiver() {
+                override fun onReceive(c: Context?, i: Intent?) = stopAll()
+            }
+            noisyReceiver = noisy
+            register(app, noisy, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
+            val off = object : BroadcastReceiver() {
+                override fun onReceive(c: Context?, i: Intent?) = stopAll()
+            }
+            screenOffReceiver = off
+            register(app, off, IntentFilter(Intent.ACTION_SCREEN_OFF))
+        }
+    }
+
+    /** 动态注册系统广播：Android 13 起要写明不导出；系统广播照常收得到。 */
+    private fun register(app: Context, receiver: BroadcastReceiver, filter: IntentFilter) {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= 33) app.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            else @Suppress("UnspecifiedRegisterReceiverFlag") app.registerReceiver(receiver, filter)
+        }
+    }
+
+    /** 出声前拿一次音频焦点；拿不到就只出文字、不出声（不硬抢别人的声音）。 */
+    private fun takeFocus(): Boolean {
+        if (focusGranted) return true
+        val am = audio ?: return false
+        val listener = focusListener ?: return false
+        val request = focusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build(),
+            )
+            .setOnAudioFocusChangeListener(listener)
+            .build()
+            .also { focusRequest = it }
+        focusGranted = runCatching { am.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED }.getOrDefault(false)
+        return focusGranted
+    }
+
+    private fun dropFocus() {
+        if (!focusGranted) return
+        focusGranted = false
+        val am = audio ?: return
+        val request = focusRequest ?: return
+        runCatching { am.abandonAudioFocusRequest(request) }
     }
 
     fun start(
@@ -67,6 +135,7 @@ object RadioHost {
         if (r is PortResult.Ok) {
             Speaker.stop()
             spokenKey = ""
+            dropFocus()
         }
         publish()
         return r
@@ -84,6 +153,7 @@ object RadioHost {
         if (r is PortResult.Ok) {
             Speaker.stop()
             spokenKey = ""
+            dropFocus()
         }
         publish()
         syncSpeech()
@@ -94,6 +164,7 @@ object RadioHost {
         val r = engine.stop(sessionId, now)
         Speaker.stop()
         spokenKey = ""
+        dropFocus()
         publish()
         tickJob?.cancel()
         tickJob = null
@@ -105,6 +176,7 @@ object RadioHost {
         engine.current?.let { engine.stop(it.id, System.currentTimeMillis()) }
         Speaker.stop()
         spokenKey = ""
+        dropFocus()
         publish()
         tickJob?.cancel()
         tickJob = null
@@ -122,6 +194,7 @@ object RadioHost {
                 syncSpeech()
                 if (!s.active) break
             }
+            dropFocus()
             tickJob = null
         }
     }
@@ -142,6 +215,8 @@ object RadioHost {
         val segmentId = seg.id
         val generation = s.generation
         ensureTick()
+        // 拿不到音频焦点就只出文字：段按 deadline 往下走，不硬外放。
+        if (!takeFocus()) return
         Speaker.speak(seg.text) {
             // 迟到 / 已经停止的回调：状态机不认就不动
             val now = System.currentTimeMillis()

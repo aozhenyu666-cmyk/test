@@ -17,6 +17,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -56,6 +57,10 @@ fun RadioPanel(ws: WorkbenchState, focus: Focus? = ws.active()) {
             now = System.currentTimeMillis()
             delay(500)
         }
+    }
+    // 离开面板就停：不把电台留在后台一个人念（音频焦点 / 拔耳机 / 来电 / 熄屏在 RadioHost 里处理）。
+    DisposableEffect(Unit) {
+        onDispose { BrainHost.radioStopAll() }
     }
 
     fun toast(msg: String) = Toast.makeText(context.applicationContext, msg, Toast.LENGTH_SHORT).show()
