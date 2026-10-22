@@ -227,6 +227,44 @@ class V13WebTest {
 
 
     @Test
+    fun fetchRejectsUnsupportedContentType() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"ok":true}""").setHeader("Content-Type", "application/json"))
+        server.start()
+        val r = HttpWebPort(allowPrivateForTest = true).fetch(server.url("/api").toString())
+        assertTrue(r is PortResult.Failed)
+        assertEquals("UNSUPPORTED", (r as PortResult.Failed).error.code)
+        server.shutdown()
+    }
+    @Test
+    fun fetchSniffsGbkMetaCharset() = runBlocking {
+        val server = MockWebServer()
+        val html = """<html><head><meta charset="gbk"><title>标题</title></head><body><p>中文正文</p></body></html>"""
+        val bytes = html.toByteArray(Charset.forName("GBK"))
+        server.enqueue(MockResponse().setBody(Buffer().write(bytes)).setHeader("Content-Type", "text/html"))
+        server.start()
+        val r = HttpWebPort(allowPrivateForTest = true).fetch(server.url("/gbk").toString())
+        assertTrue(r is PortResult.Ok)
+        val page = (r as PortResult.Ok).value
+        assertEquals("标题", page.title)
+        assertTrue(page.text.contains("中文正文"))
+        server.shutdown()
+    }
+    @Test
+    fun readFeedAcceptsXmlContentType() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .setBody("<rss><channel><item><title>A</title><link>https://e.com/a</link></item></channel></rss>")
+                .setHeader("Content-Type", "application/rss+xml; charset=utf-8")
+        )
+        server.start()
+        val r = HttpWebPort(allowPrivateForTest = true).readFeed(server.url("/feed").toString())
+        assertTrue(r is PortResult.Ok)
+        assertEquals("https://e.com/a", (r as PortResult.Ok).value.first().url)
+        server.shutdown()
+    }
+    @Test
     fun searchWithoutKeyIsNotConfigured() = runBlocking {
         val r = HttpWebPort().search("q")
         assertTrue(r is PortResult.Failed)

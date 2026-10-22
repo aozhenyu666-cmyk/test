@@ -42,9 +42,53 @@ interface WebPort {
 object WebLimits {
     const val MAX_BYTES = 2 * 1024 * 1024
     const val MAX_REDIRECTS = 3
+
+    /** 整次请求（连接 + 每一跳 + 读完正文）的总时限。 */
     const val TIMEOUT_MS = 15_000
     const val CONNECT_TIMEOUT_MS = 10_000
     const val READ_TIMEOUT_MS = 10_000
+}
+
+/** F10-4：Content-Type 只认网页 / 纯文本；RSS 只认 XML 类。 */
+object WebContent {
+    fun mediaType(ct: String): String = ct.substringBefore(';').trim().lowercase()
+
+    fun isHtmlLike(ct: String): Boolean {
+        val m = mediaType(ct)
+        // 有些服务器不给 Content-Type：按网页试一次，解析不出正文会明确失败（NO_BODY）
+        if (m.isBlank()) return true
+        return m == "text/html" || m == "application/xhtml+xml" || m == "text/plain"
+    }
+
+    fun isXml(ct: String): Boolean {
+        val m = mediaType(ct)
+        if (m.isBlank()) return true
+        return m == "application/rss+xml" || m == "application/atom+xml" || m == "application/xml" ||
+            m == "text/xml" || m.endsWith("+xml")
+    }
+
+    fun label(ct: String): String = mediaType(ct).ifBlank { "没写类型" }
+}
+
+/** F10-4：charset 先看头部，再看 meta charset / XML 声明（GBK 页面靠这个）。 */
+object WebText {
+    private val CHARSET_RE = Regex("""charset\s*=\s*["']?([\w.:+-]+)""", RegexOption.IGNORE_CASE)
+    private val XML_ENCODING_RE = Regex("""encoding\s*=\s*["']([\w.:+-]+)["']""", RegexOption.IGNORE_CASE)
+
+    fun headerCharset(contentType: String): String? =
+        CHARSET_RE.find(contentType)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+
+    fun sniff(bytes: ByteArray): String? {
+        val head = String(bytes, 0, minOf(bytes.size, 4096), Charsets.ISO_8859_1)
+        return CHARSET_RE.find(head)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+            ?: XML_ENCODING_RE.find(head)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+    }
+
+    fun decode(bytes: ByteArray, contentType: String): String {
+        val name = headerCharset(contentType) ?: sniff(bytes) ?: "UTF-8"
+        val charset = runCatching { Charset.forName(name) }.getOrDefault(Charsets.UTF_8)
+        return runCatching { String(bytes, charset) }.getOrDefault(String(bytes, Charsets.UTF_8))
+    }
 }
 
 class HttpWebPort(
@@ -103,10 +147,14 @@ class HttpWebPort(
         return when (r) {
             is Failed -> PortResult.Failed(r.error)
             is Fetch -> {
-                val raw = r.text()
-                val text = HtmlText.from(raw)
-                if (text.isBlank()) PortResult.Failed(PortError("NO_BODY", "这个页面没有可读正文（可能需要登录，或不是网页）"))
-                else PortResult.Ok(WebPage(url, r.finalUrl, HtmlText.title(raw), text, System.currentTimeMillis(), text.length < raw.length))
+                if (!WebContent.isHtmlLike(r.contentType)) {
+                    PortResult.Failed(PortError("UNSUPPORTED", "这个链接不是网页（" + WebContent.label(r.contentType) + "），没有当材料"))
+                } else {
+                    val raw = r.text()
+                    val text = HtmlText.from(raw)
+                    if (text.isBlank()) PortResult.Failed(PortError("NO_BODY", "这个页面没有可读正文（可能需要登录，或不是网页）"))
+                    else PortResult.Ok(WebPage(url, r.finalUrl, HtmlText.title(raw), text, System.currentTimeMillis(), text.length < raw.length))
+                }
             }
         }
     }
@@ -114,14 +162,13 @@ class HttpWebPort(
     override suspend fun readFeed(url: String): PortResult<List<FeedItem>> =
         when (val r = get(url, mapOf("Accept" to "application/rss+xml,application/atom+xml,application/xml,text/xml"))) {
             is Failed -> PortResult.Failed(r.error)
-            is Fetch -> Rss.parse(r.text())
+            is Fetch -> if (!WebContent.isXml(r.contentType)) {
+                PortResult.Failed(PortError("UNSUPPORTED", "这个链接不是订阅源（" + WebContent.label(r.contentType) + "）"))
+            } else Rss.parse(r.text())
         }
 
     private data class Fetch(val finalUrl: String, val bytes: ByteArray, val contentType: String) : Got {
-        fun text(): String {
-            val charset = contentType.substringAfter("charset=", "").trim().trim('"').ifBlank { "UTF-8" }
-            return runCatching { String(bytes, Charset.forName(charset)) }.getOrDefault(String(bytes, Charsets.UTF_8))
-        }
+        fun text(): String = WebText.decode(bytes, contentType)
     }
 
     private data class Failed(val error: PortError) : Got
