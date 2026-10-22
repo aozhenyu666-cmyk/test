@@ -7,4 +7,9 @@
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowIsFloating">true</item>
     </style>
+
+    <!-- 刷着练的跳板页：透明、没有动画，做完一件事就关 -->
+    <style name="Theme.Yishou.Clear" parent="android:Theme.Translucent.NoTitleBar">
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
 </resources>

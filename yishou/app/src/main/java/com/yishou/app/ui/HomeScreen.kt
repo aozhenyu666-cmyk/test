@@ -224,6 +224,9 @@ fun HomeScreen(
                 )
             }
 
+            // 刷抖音、贴吧时也练：看这一屏问一句，通知里回
+            ScrollCard()
+
             // 想自己挑练法时用；平时点上面的“来一手”就够了
             androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = onSoup) { Text("海龟汤") }

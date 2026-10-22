@@ -143,6 +143,32 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
+        <!-- 刷着练：用户同意看屏后，只在点“考我一下”或在关注的应用里刷满设定分钟时截一屏出题；截图不保存，60 分钟自动停 -->
+        <service
+            android:name=".scroll.ScrollService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!-- 刷着练的跳板：开始（看屏授权）、考我一下（收起通知栏再截）、去 AI 里接着聊 -->
+        <activity
+            android:name=".scroll.ScrollActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity="${applicationId}.scroll"
+            android:theme="@style/Theme.Yishou.Clear" />
+
+        <!-- 快捷开关“考我一下”：自己在系统快捷开关里加上才会出现 -->
+        <service
+            android:name=".scroll.ScrollTile"
+            android:exported="true"
+            android:icon="@drawable/ic_stat_yishou"
+            android:label="考我一下"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
         <service
             android:name=".window.WindowService"
             android:exported="false"

@@ -112,6 +112,10 @@ class YishouApp : Application() {
     /** 素材池：唯一入口，所有练法从这里拿 */
     val pool: com.yishou.app.pool.Pool by lazy { com.yishou.app.pool.Pool(this) }
 
+    /** 刷着练：看屏出题用识图模型，判回答用文字模型 */
+    val scrollLook: ChatClient by lazy { ChatClient(config = { settings.vision.value }, http = ChatClient.defaultHttpClient(60), usage = stats) }
+    val scrollJudge: ChatClient by lazy { ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(30), usage = stats) }
+
     /** 一手自己的语音伙伴（听写 → 文字模型 → 朗读） */
     val partnerVoice: com.yishou.app.partner.PartnerVoice by lazy { com.yishou.app.partner.PartnerVoice(this) }
 

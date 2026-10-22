@@ -99,6 +99,11 @@ class GateActivity : ComponentActivity() {
                     c = c,
                     vm = vm,
                     onReturn = ::returnToApp,
+                    onScroll = {
+                        val pkg = vm.state.value.triggerPackage
+                        finishAndRemoveTask()
+                        startActivity(com.yishou.app.scroll.ScrollActivity.startIntent(this, pkg))
+                    },
                     onHome = { if (s.isTest) finish() else goHome() },
                     onOpenWindow = {
                         startActivity(Intent(this, WindowActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -197,6 +202,7 @@ private fun GateScreen(
     c: SessionState,
     vm: GateViewModel,
     onReturn: () -> Unit,
+    onScroll: () -> Unit,
     onHome: () -> Unit,
     onOpenWindow: () -> Unit,
 ) {
@@ -238,6 +244,9 @@ private fun GateScreen(
                     Text("说好看完：${s.exit}", style = MaterialTheme.typography.bodyLarge)
                     Text("到点会提醒你。下次打开先问你做了没有。", style = MaterialTheme.typography.bodySmall)
                     Button(onClick = onReturn, modifier = Modifier.fillMaxWidth()) { Text("回到「${s.appLabel}」") }
+                    if (!s.isTest && !com.yishou.app.scroll.ScrollService.running.value) {
+                        OutlinedButton(onClick = onScroll, modifier = Modifier.fillMaxWidth()) { Text("边刷边练：刷的时候考我") }
+                    }
                 }
                 s.inWindow -> {
                     Text(
