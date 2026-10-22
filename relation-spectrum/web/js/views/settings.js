@@ -1,4 +1,4 @@
-// Settings: AI provider, Notion connection + sync, personal parameters, data import/export.
+// Settings: GPT connection, Notion connection + sync, personal parameters, data import/export.
 
 import { h, mount, field, segmented, toast, ask, copyText } from '../ui/dom.js';
 import { getSettings, updateSettings } from '../services/settings.js';
@@ -7,21 +7,14 @@ import * as db from '../store/db.js';
 import { initDatabases, syncAll, lastSyncAt, normalizeNotionId, pushSeedCases } from '../services/notion-sync.js';
 import { loadDemoData } from '../data/demo.js';
 import { gptInstructions, notionOpenApi, GPT_SETUP_STEPS } from '../core/gpt-kit.js';
-import { inClaudeViewer, getDownloads } from '../services/claude-host.js';
 
-// One-tap provider presets. Model names change often: edit the model field if your
-// account offers a newer one.
+// One-tap presets for OpenAI and OpenAI-compatible services. Model names change often:
+// edit the model field if your account offers a newer one.
 const PRESETS = [
-  { label: 'Claude', provider: 'anthropic', baseUrl: '', model: 'claude-opus-5-5' },
-  { label: 'OpenAI GPT', provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
-  { label: 'DeepSeek', provider: 'openai', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
-  { label: 'OpenRouter', provider: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o-mini' },
+  { label: 'OpenAI GPT', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+  { label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o-mini' },
 ];
-
-const MODEL_HINT = {
-  anthropic: '默认 claude-opus-5-5；想省钱可填 claude-sonnet-5-5 或 claude-haiku-5-5',
-  openai: '如 gpt-4o-mini、deepseek-chat。浏览器直连时请选允许跨域的服务商，如 OpenRouter、DeepSeek',
-};
 
 export async function renderSettings(root) {
   const s = getSettings();
@@ -35,31 +28,23 @@ export async function renderSettings(root) {
   // ---------------- AI
   const mode = segmented({ auto: '自动', server: '只走服务器', direct: '浏览器直连' }, s.llm.mode || 'auto', () => syncProvider());
   const modeHint = h('span.field-hint');
-  const provider = segmented({ anthropic: 'Claude', openai: 'OpenAI 兼容' }, s.llm.provider || serverInfo?.llm?.provider || 'anthropic', () => syncProvider());
-  const model = h('input', { value: s.llm.model, placeholder: '留空用服务器默认值' });
-  const apiKey = h('input', { type: 'password', value: s.llm.apiKey, placeholder: '留空则用服务器 .env 里的 Key', autocomplete: 'off' });
-  const baseUrl = h('input', { value: s.llm.baseUrl, placeholder: 'https://api.deepseek.com/v1' });
-  const effort = h('select', ['', 'low', 'medium', 'high'].map((v) => h('option', { value: v, selected: v === s.llm.effort }, v || '默认（medium）')));
-  const modelHint = h('span.field-hint');
-  const baseUrlField = field('接口地址（Base URL）', baseUrl);
-  const effortField = field('思考深度', effort, '越高越仔细，也越慢越贵');
+  const model = h('input', { value: s.llm.model, placeholder: '留空用默认值 gpt-4o-mini' });
+  const apiKey = h('input', { type: 'password', value: s.llm.apiKey, placeholder: '留空则用服务器 .env 里的 OPENAI_API_KEY', autocomplete: 'off' });
+  const baseUrl = h('input', { value: s.llm.baseUrl, placeholder: 'https://api.openai.com/v1' });
+  const jsonMode = h('select', [['auto', '自动（OpenAI 官方用严格格式，其他用普通 JSON）'], ['schema', '严格 JSON Schema'], ['object', '普通 JSON']]
+    .map(([v, label]) => h('option', { value: v, selected: v === (s.llm.jsonMode || 'auto') }, label)));
   const syncProvider = () => {
-    const p = provider.value;
     modeHint.textContent = {
       auto: '电脑上的服务器开着就走服务器，连不上时自动改为浏览器直连（需要在下面填 Key）。出门用手机时选这个。',
       server: 'Key 可以只写在电脑的 .env 里，手机上不存 Key。服务器没开时 AI 功能不可用。',
-      direct: '不经过电脑，手机浏览器直接调用大模型。Key 保存在这台设备上，只在自己的手机上这样用。',
+      direct: '不经过电脑，手机浏览器直接调用 GPT。Key 保存在这台设备上，只在自己的手机上这样用。',
     }[mode.value];
-    modelHint.textContent = MODEL_HINT[p];
-    baseUrlField.hidden = p !== 'openai';
-    effortField.hidden = p !== 'anthropic';
   };
   syncProvider();
 
   const presets = h('div.chips-row', PRESETS.map((pr) => h('button.chip', {
     type: 'button',
     onclick: () => {
-      provider.value = pr.provider;
       baseUrl.value = pr.baseUrl;
       model.value = pr.model;
       syncProvider();
@@ -69,7 +54,7 @@ export async function renderSettings(root) {
   }, pr.label)));
 
   const saveAi = () => {
-    updateSettings({ llm: { mode: mode.value, provider: provider.value, model: model.value.trim(), apiKey: apiKey.value.trim(), baseUrl: baseUrl.value.trim(), effort: effort.value } });
+    updateSettings({ llm: { mode: mode.value, model: model.value.trim(), apiKey: apiKey.value.trim(), baseUrl: baseUrl.value.trim(), jsonMode: jsonMode.value } });
     toast('已保存', 'good');
   };
 
@@ -79,7 +64,7 @@ export async function renderSettings(root) {
     ev.target.textContent = '测试中…';
     try {
       const { model: m, via } = await api.analyze('parse', { text: '我：周末一起吃饭吗\nTA：最近忙，改天吧' });
-      toast(`连接成功：${m}（${{ direct: '浏览器直连', claude: 'claude.ai', server: '经过服务器' }[via] || via}）`, 'good');
+      toast(`连接成功：${m}（${{ direct: '浏览器直连', server: '经过服务器' }[via] || via}）`, 'good');
     } catch (err) {
       toast(err.message, 'danger');
     } finally {
@@ -199,20 +184,6 @@ export async function renderSettings(root) {
     const data = await db.exportAll();
     const filename = `relation-spectrum-${new Date().toISOString().slice(0, 10)}.json`;
     const text = JSON.stringify(data, null, 2);
-    const downloads = await getDownloads();
-    if (downloads) {
-      try {
-        await downloads.save({ filename, data: text });
-      } catch (err) {
-        if (err?.code !== 'cancelled' && err?.code !== 'declined') toast('没有保存文件', 'warn');
-      }
-      return;
-    }
-    if (inClaudeViewer()) {
-      await copyText(text);
-      toast('这里不能直接下载，已把数据复制到剪贴板', 'warn');
-      return;
-    }
     const blob = new Blob([text], { type: 'application/json' });
     const a = h('a', { href: URL.createObjectURL(blob), download: filename });
     document.body.append(a);
@@ -233,36 +204,29 @@ export async function renderSettings(root) {
     },
   });
 
-  const viewer = inClaudeViewer();
-  const serverLine = viewer
-    ? h('p.small', 'AI 由你登录的 Claude 账号直接提供，不需要填 Key。第一次分析时会弹出提示，选“允许”即可。想用 GPT、DeepSeek 等其他模型，请用电脑版或自己部署的网页版。')
-    : serverInfo?.error
+  const serverLine = serverInfo?.error
     ? h('p.small.warn-text', '现在连不上电脑上的服务器。AI 可以用“自动”或“浏览器直连”继续用；Notion 同步要等连上服务器。数据都保存在这台设备上。')
-    : h('p.small.muted', `服务器默认：${serverInfo.llm.provider} / ${serverInfo.llm.model}${serverInfo.llm.hasKey ? '（已配置 Key）' : '（未配置 Key）'} · Notion ${serverInfo.notion.hasToken ? '已配置' : '未配置'}`);
+    : h('p.small.muted', `服务器默认：${serverInfo.llm.model}${serverInfo.llm.hasKey ? '（已配置 Key）' : '（未配置 Key）'} · Notion ${serverInfo.notion.hasToken ? '已配置' : '未配置'}`);
 
   mount(root,
     h('header.page-head', h('h1', '设置')),
 
     h('section.card.form',
-      h('h3', 'AI 模型'),
+      h('h3', 'AI 模型（GPT）'),
       serverLine,
-      viewer ? null : [
-        h('div.field', h('span.field-label', '快速选择'), presets),
-        h('div.field', h('span.field-label', '连接方式'), mode.el, modeHint),
-        h('div.field', h('span.field-label', '服务商'), provider.el),
-        h('label.field', h('span.field-label', '模型'), model, modelHint),
-        field('API Key', apiKey, '只保存在这台设备上。走服务器时由你自己的服务器转发；浏览器直连时直接发给服务商'),
-        baseUrlField,
-        effortField,
-      ],
+      h('div.field', h('span.field-label', '快速选择'), presets),
+      h('div.field', h('span.field-label', '连接方式'), mode.el, modeHint),
+      field('API Key', apiKey, '只保存在这台设备上。走服务器时由你自己的服务器转发；浏览器直连时直接发给服务商'),
+      field('模型', model, '填你账号可用的模型名，如 gpt-4o-mini、deepseek-chat'),
+      field('接口地址（Base URL）', baseUrl, '用 OpenAI 官方留空即可；用 DeepSeek、OpenRouter 等点上面的快速选择'),
+      field('返回格式', jsonMode, '某些兼容服务不支持严格格式时，改成“普通 JSON”'),
       h('div.row-wrap',
-        viewer ? null : h('button.btn.primary', { type: 'button', onclick: saveAi }, '保存'),
+        h('button.btn.primary', { type: 'button', onclick: saveAi }, '保存'),
         h('button.btn', { type: 'button', onclick: testAi }, '测试连接')),
     ),
 
     h('section.card.form',
       h('h3', 'Notion 同步（可选）'),
-      viewer ? h('p.small.warn-text', '在 claude.ai 里打开时不能连接 Notion（页面不能访问外部网站）。下面的设置会保存，用电脑版或自己部署的网页版时再同步。') : null,
       h('ol.steps',
         h('li', '打开 notion.so/my-integrations，新建一个 Integration，复制它的 Token。'),
         h('li', '在 Notion 里新建一个空页面，比如“关系光谱”。点右上角 ··· → 连接 → 选你的 Integration。'),

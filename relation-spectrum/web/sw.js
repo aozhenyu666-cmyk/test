@@ -3,7 +3,7 @@
 // them in the background (stale-while-revalidate). /api/* and other origins are never cached.
 // Bump VERSION when the shell list changes. test/core.test.js checks the list is complete.
 
-const VERSION = 'rs-v3';
+const VERSION = 'rs-v4';
 
 const SHELL = [
   './',
@@ -26,7 +26,6 @@ const SHELL = [
   'js/data/demo.js',
   'js/data/seed-cases.js',
   'js/services/api.js',
-  'js/services/claude-host.js',
   'js/services/notion-sync.js',
   'js/services/settings.js',
   'js/store/db.js',

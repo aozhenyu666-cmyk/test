@@ -1,5 +1,4 @@
 // Build helpers.
-//   node scripts/build.mjs artifact   → dist/artifact/page.html (page for a claude.ai artifact)
 //   node scripts/build.mjs gpt-kit    → integrations/chatgpt/* (custom GPT instructions + Action schema)
 //   node scripts/build.mjs package    → dist/*.zip (web app for static hosting, full project)
 
@@ -13,20 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { version } = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
 const cmd = process.argv[2];
 
-if (cmd === 'artifact') {
-  // The artifact host wraps the page in its own <html>/<head>/<body>, so the page holds
-  // only its content; css/ and js/ are published next to it from web/.
-  const out = path.join(root, 'dist', 'artifact');
-  mkdirSync(out, { recursive: true });
-  writeFileSync(path.join(out, 'page.html'), `<title>关系光谱</title>
-<link rel="stylesheet" href="css/app.css">
-<main id="view" class="view" aria-live="polite"></main>
-<nav id="nav" class="nav" aria-label="主导航"></nav>
-<div id="toasts" class="toasts" aria-live="polite"></div>
-<script type="module" src="js/app.js"></script>
-`);
-  console.log('dist/artifact/page.html');
-} else if (cmd === 'gpt-kit') {
+if (cmd === 'gpt-kit') {
   const out = path.join(root, 'integrations', 'chatgpt');
   mkdirSync(out, { recursive: true });
   writeFileSync(path.join(out, 'instructions.txt'), gptInstructions({
@@ -74,6 +60,6 @@ ${GPT_SETUP_STEPS.map((t, i) => `${i + 1}. ${t}`).join('\n')}
   console.log(path.relative(root, webZip));
   console.log(path.relative(root, fullZip));
 } else {
-  console.error('用法：node scripts/build.mjs artifact | gpt-kit | package');
+  console.error('用法：node scripts/build.mjs gpt-kit | package');
   process.exit(1);
 }

@@ -9,8 +9,7 @@
 // Paths are relative ('api/...') so the app also works from a sub-path such as GitHub Pages.
 
 import { getSettings } from './settings.js';
-import { buildDirectRequest, readAnthropicMessage, readOpenAIMessage, httpErrorMessage, buildSamplePrompt } from '../core/llm-request.js';
-import { inClaudeViewer, getSample, sampleErrorMessage } from './claude-host.js';
+import { buildRequest, readChatResponse, httpErrorMessage } from '../core/llm-request.js';
 
 function headers(extra = {}) {
   const s = getSettings();
@@ -53,7 +52,6 @@ async function serverFetch(path, init) {
 let serverState = { ok: null, at: 0, info: null };
 
 export async function health({ force = false } = {}) {
-  if (inClaudeViewer()) throw new ApiError('在 claude.ai 里打开时没有本地服务器', 0, { unreachable: true });
   if (!force && serverState.ok !== null && Date.now() - serverState.at < 60000) {
     if (serverState.ok) return serverState.info;
     throw new ApiError('本地服务器不可用', 0, { unreachable: true });
@@ -87,8 +85,6 @@ export async function serverAvailable() {
  * Returns { result, model, provider, via: 'server' | 'direct' }.
  */
 export async function analyze(kind, input) {
-  // Inside claude.ai the page cannot reach any API; Claude answers on the viewer's account.
-  if (inClaudeViewer()) return viaClaudeViewer(kind, input);
   const { llm } = getSettings();
   const mode = llm.mode || 'auto';
   if (mode === 'direct') return direct(kind, input);
@@ -104,24 +100,10 @@ export async function analyze(kind, input) {
   }
 }
 
-async function viaClaudeViewer(kind, input) {
-  const sample = await getSample();
-  if (!sample) throw new ApiError('这个页面现在用不了 Claude。请在 claude.ai 或 Claude App 里打开。', 0);
-  const { prompt, modelTier } = buildSamplePrompt(kind, input);
-  try {
-    // Role-play turns must not replay a cached reply.
-    const result = await sample.json(prompt, { modelTier, ...(kind === 'roleplay' ? { cache: false } : {}) });
-    if (!result || typeof result !== 'object' || Array.isArray(result)) throw { code: 'invalid_json' };
-    return { result, model: 'Claude（claude.ai）', provider: 'claude', via: 'claude' };
-  } catch (e) {
-    throw new ApiError(sampleErrorMessage(e), e?.code === 'not_granted' ? 403 : 0);
-  }
-}
-
 async function viaServer(kind, input) {
   const { llm } = getSettings();
   const override = Object.fromEntries(
-    Object.entries(llm).filter(([k, v]) => v && ['provider', 'model', 'apiKey', 'baseUrl', 'effort'].includes(k)),
+    Object.entries(llm).filter(([k, v]) => v && ['model', 'apiKey', 'baseUrl', 'jsonMode'].includes(k)),
   );
   const out = await serverFetch('analyze', {
     method: 'POST',
@@ -134,32 +116,25 @@ async function viaServer(kind, input) {
 async function direct(kind, input) {
   const { llm } = getSettings();
   if (!llm.apiKey) {
-    throw new ApiError('本地服务器没开。要在手机上单独使用，请在设置页把连接方式改为“自动”或“浏览器直连”，并填写 API Key。', 401);
+    throw new ApiError('本地服务器没开。要在手机上单独使用，请在设置页把连接方式改为“自动”或“浏览器直连”，并填写 GPT 的 API Key。', 401);
   }
-  const cfg = { provider: llm.provider || 'anthropic', apiKey: llm.apiKey, model: llm.model, baseUrl: llm.baseUrl, effort: llm.effort };
-  const req = buildDirectRequest(kind, input, cfg);
+  const cfg = { apiKey: llm.apiKey, model: llm.model, baseUrl: llm.baseUrl, jsonMode: llm.jsonMode };
+  const req = buildRequest(kind, input, cfg);
   let res;
   try {
     res = await fetch(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
   } catch {
-    throw new ApiError(
-      req.provider === 'openai'
-        ? `无法直连 ${req.url}。这个服务商可能不允许浏览器直接调用，换一个支持跨域的（如 OpenRouter、DeepSeek）或打开本地服务器。`
-        : '无法连接 Claude，请检查网络。',
-      0,
-    );
+    throw new ApiError(`无法直连 ${req.url}。请检查网络；如果这个服务商不允许浏览器直接调用，换一个允许的（如 OpenAI、OpenRouter、DeepSeek）或打开本地服务器。`, 0);
   }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(httpErrorMessage(req.provider, res.status, data), res.status);
-  const out = req.provider === 'openai' ? readOpenAIMessage(data, cfg.model) : readAnthropicMessage(data);
-  return { ...out, provider: req.provider, via: 'direct' };
+  if (!res.ok) throw new ApiError(httpErrorMessage(res.status, data), res.status);
+  return { ...readChatResponse(data, cfg.model), provider: 'openai', via: 'direct' };
 }
 
 // ---- Notion (server only)
 
 /** Raw Notion call through the proxy. path like 'databases/xxx/query'. */
 export async function notion(method, path, body) {
-  if (inClaudeViewer()) throw new ApiError('在 claude.ai 里打开时不能同步 Notion。请用电脑版（npm start）同步：先在这里导出 JSON，再在电脑版导入。', 0, { unreachable: true });
   const { notion: n } = getSettings();
   const extra = n.token ? { 'x-notion-token': n.token } : {};
   for (let attempt = 0; attempt < 4; attempt++) {

@@ -4,7 +4,6 @@ import { readFileSync } from 'node:fs';
 
 import { gptInstructions, notionOpenApi, GPT_INSTRUCTIONS_LIMIT } from '../web/js/core/gpt-kit.js';
 import { entitiesDbBody, interactionsDbBody, casesDbBody, caseToProps, P } from '../web/js/core/notion-schema.js';
-import { buildSamplePrompt, anthropicParams } from '../web/js/core/llm-request.js';
 import { SEED_CASES } from '../web/js/data/seed-cases.js';
 
 const ids = { entitiesDb: 'e'.repeat(32), interactionsDb: 'i'.repeat(32), casesDb: 'c'.repeat(32) };
@@ -55,17 +54,6 @@ test('the generated kit files match the in-app kit', () => {
   assert.match(text, /<Entities_DB 的 ID>/);
 });
 
-test('claude.ai prompt carries the same system prompt, schema and input as the API call', () => {
-  const input = { situation: '朋友连续推脱', draft: '你爱咋咋吧', myGuess: '他不想理我' };
-  const { prompt, modelTier } = buildSamplePrompt('decode', input);
-  const { params } = anthropicParams('decode', input);
-  assert.ok(prompt.startsWith(params.system));
-  assert.ok(prompt.includes(params.messages[0].content));
-  assert.ok(prompt.includes('"blowup_risk"'));
-  assert.equal(modelTier, 'default');
-  assert.equal(buildSamplePrompt('roleplay', { situation: 'x', history: [{ role: 'me', text: 'hi' }] }).modelTier, 'quick');
-});
-
 test('reference cases become valid Notion pages', () => {
   for (const c of SEED_CASES) {
     const props = caseToProps({ ...c, id: `seed:${c.id}`, title: `【参考】${c.title}`, createdAt: 1, updatedAt: 1 }, null);
@@ -75,11 +63,4 @@ test('reference cases become valid Notion pages', () => {
     }
     assert.ok(JSON.parse(props[P.resultJson].rich_text.map((t) => t.text.content).join('')).playbook.length === 3);
   }
-});
-
-test('artifact page holds content only', () => {
-  const page = readFileSync(new URL('../dist/artifact/page.html', import.meta.url), 'utf8');
-  assert.doesNotMatch(page, /<html|<head|<body|<!doctype/i);
-  assert.match(page, /<title>关系光谱<\/title>/);
-  assert.match(page, /src="js\/app.js"/);
 });

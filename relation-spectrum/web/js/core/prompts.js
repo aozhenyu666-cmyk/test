@@ -54,7 +54,7 @@ const DRAFT_RULES = `
 `.trim();
 
 // ---------------------------------------------------------------------------
-// JSON Schemas (subset supported by Claude structured outputs: no min/max constraints,
+// JSON Schemas (subset accepted by OpenAI strict structured outputs: no min/max constraints,
 // additionalProperties: false on every object, every property required)
 // ---------------------------------------------------------------------------
 

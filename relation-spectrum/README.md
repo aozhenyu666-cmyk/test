@@ -17,9 +17,8 @@
 
 | 方式 | 链接 | 说明 |
 |---|---|---|
-| claude.ai 网页版 | https://claude.ai/artifact/J74sV8MTyUJXy46HZF4b87 | 登录 Claude 后直接打开。AI 用你的 Claude 账号，不用填 Key；不能连 Notion |
-| 网页版安装包 | [relation-spectrum-web-0.3.0.zip](https://github.com/aozhenyu666-cmyk/test/raw/ccr-09eb4a18-8qnot9/relation-spectrum/dist/relation-spectrum-web-0.3.0.zip) | 解压后上传到 Netlify、Cloudflare Pages 等静态托管，手机打开后“添加到主屏幕” |
-| 完整项目 | [relation-spectrum-0.3.0.zip](https://github.com/aozhenyu666-cmyk/test/raw/ccr-09eb4a18-8qnot9/relation-spectrum/dist/relation-spectrum-0.3.0.zip) | 电脑上 `npm install && npm start`，支持 Notion 同步和所有模型 |
+| 网页版安装包 | [relation-spectrum-web-0.4.0.zip](https://github.com/aozhenyu666-cmyk/test/raw/ccr-09eb4a18-8qnot9/relation-spectrum/dist/relation-spectrum-web-0.4.0.zip) | 解压后上传到 Netlify、Cloudflare Pages 等静态托管，手机打开后“添加到主屏幕” |
+| 完整项目 | [relation-spectrum-0.4.0.zip](https://github.com/aozhenyu666-cmyk/test/raw/ccr-09eb4a18-8qnot9/relation-spectrum/dist/relation-spectrum-0.4.0.zip) | 电脑上 `npm install && npm start`，支持 Notion 同步 |
 
 重新打包：`npm run package`。
 
@@ -38,7 +37,7 @@
 ```bash
 cd relation-spectrum
 npm install
-cp .env.example .env    # 填上 ANTHROPIC_API_KEY（也可以稍后在网页“设置”里填）
+cp .env.example .env    # 填上 OPENAI_API_KEY（也可以稍后在网页“设置”里填）
 npm start
 ```
 
@@ -53,7 +52,7 @@ npm start
 把 `web/` 文件夹放到任意一个静态网站托管上（Netlify、Vercel、Cloudflare Pages，或者 GitHub Pages），用手机打开。然后：
 
 1. 设置 → AI 模型 → 连接方式选“自动”或“浏览器直连”
-2. 填 Claude API Key（或者一个允许浏览器直连的 OpenAI 兼容接口，如 OpenRouter、DeepSeek）
+2. 点“OpenAI GPT”预设，填 OpenAI 的 API Key（也可以用 DeepSeek、OpenRouter 等兼容接口）
 3. 浏览器菜单里选“添加到主屏幕”
 
 App 会缓存到手机里，没网也能打开、记录和查看；AI 分析需要联网。数据存在手机浏览器里，回家后连上电脑的服务器再同步到 Notion。
@@ -76,12 +75,14 @@ Notion 同步始终需要服务器，因为 Notion 不允许浏览器直接调�
 
 ## 大模型
 
-| 服务商 | 配置 |
-|---|---|
-| Claude（默认） | `ANTHROPIC_API_KEY`，模型默认 `claude-opus-5-5`，可改成 `claude-sonnet-5-5` 或 `claude-haiku-5-5` 省钱 |
-| OpenAI GPT、DeepSeek、OpenRouter 等（设置页有一键预设） | `LLM_PROVIDER=openai`，再填 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` |
+App 只连接 GPT（OpenAI 的 chat/completions 接口）和 Notion。
 
-Claude 用结构化输出保证返回合法 JSON，并开启了拒答时自动换模型重试（`fallbacks: "default"`）。聊天解析和对线预演用低思考深度，速度更快。
+| 服务 | 配置 |
+|---|---|
+| OpenAI GPT（默认） | `OPENAI_API_KEY`，模型默认 `gpt-4o-mini`，可改成你账号可用的任何模型 |
+| DeepSeek、OpenRouter 等兼容接口 | 再填 `OPENAI_BASE_URL` 和 `OPENAI_MODEL`；设置页有一键预设 |
+
+连 OpenAI 官方时用严格 JSON Schema（Structured Outputs）保证返回格式；兼容接口用普通 JSON 模式，Schema 写在提示词里。不支持的服务可以在设置里把“返回格式”改成“普通 JSON”。
 
 ## 和 ChatGPT 并肩使用
 
@@ -111,7 +112,7 @@ App 本身也可以直接用 GPT 做分析：设置 → AI 模型 → 快速选�
 ```
 server/
   server.js         本地服务器：网页、/api/analyze、Notion 转发
-  llm.js            Claude（官方 SDK）/ OpenAI 兼容接口
+  llm.js            转发 GPT 请求（OpenAI 及兼容接口）
   notion-init.js    命令行建 Notion 表
 web/
   sw.js             离线缓存（PWA）
@@ -130,9 +131,9 @@ web/
 test/
   core.test.js        算法、提示词、Notion 映射
   v2.test.js          参考案例结构、本地解析、直觉校准、对线预演、直连请求、离线缓存
-  v3.test.js          ChatGPT 指令和 Action 结构、claude.ai 版提示词、参考案例写入 Notion
+  v3.test.js          ChatGPT 指令和 Action 结构、参考案例写入 Notion
 integrations/chatgpt/ 自定义 GPT 的指令和 Notion Action（npm run gpt:kit 生成）
-scripts/build.mjs     打包：claude.ai 页面、ChatGPT 套件、zip
+scripts/build.mjs     打包：ChatGPT 套件、zip
 ```
 
 ## 测试

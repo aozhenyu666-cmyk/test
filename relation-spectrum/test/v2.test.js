@@ -8,7 +8,7 @@ import { SCHEMAS, buildUserMessage } from '../web/js/core/prompts.js';
 import { SEED_CASES } from '../web/js/data/seed-cases.js';
 import { parseLocal, extractMinutes, extractMoney, splitLines } from '../web/js/core/parse-local.js';
 import { calibrationStats, mismatchLines, needsOutcome } from '../web/js/core/calibration.js';
-import { buildDirectRequest, anthropicParams, readAnthropicMessage } from '../web/js/core/llm-request.js';
+import { buildRequest, chatBody, readChatResponse, resolveJsonMode } from '../web/js/core/llm-request.js';
 import { caseToProps, pageToCase } from '../web/js/core/notion-schema.js';
 import { newCase } from '../web/js/core/models.js';
 
@@ -197,39 +197,50 @@ test('role-play message tracks rounds and asks for a debrief on the last one', (
 
 // ---------------------------------------------------------------- direct mode
 
-test('direct mode: Anthropic request carries the browser-access header and fallbacks', () => {
-  const r = buildDirectRequest('decode', { situation: 'x' }, { provider: 'anthropic', apiKey: 'sk-test', model: 'claude-opus-5-5' });
-  assert.equal(r.url, 'https://api.anthropic.com/v1/messages');
-  assert.equal(r.headers['anthropic-dangerous-direct-browser-access'], 'true');
-  assert.equal(r.headers['x-api-key'], 'sk-test');
-  assert.equal(r.headers['anthropic-beta'], 'server-side-fallback-2026-07-01');
-  assert.equal(r.body.fallbacks, 'default');
-  assert.equal(r.body.output_config.format.type, 'json_schema');
-
-  const haiku = buildDirectRequest('parse', { text: 'x' }, { provider: 'anthropic', apiKey: 'k', model: 'claude-haiku-5-5' });
-  assert.equal(haiku.headers['anthropic-beta'], undefined);
-  assert.equal(haiku.body.fallbacks, undefined);
-  assert.equal(haiku.body.output_config.effort, 'low');
+test('GPT request: OpenAI official uses strict JSON schema', () => {
+  const r = buildRequest('decode', { situation: 'x' }, { apiKey: 'sk-test', model: 'gpt-4o-mini' });
+  assert.equal(r.url, 'https://api.openai.com/v1/chat/completions');
+  assert.equal(r.headers.authorization, 'Bearer sk-test');
+  assert.equal(r.body.model, 'gpt-4o-mini');
+  assert.equal(r.body.response_format.type, 'json_schema');
+  assert.equal(r.body.response_format.json_schema.strict, true);
+  assert.deepEqual(r.body.response_format.json_schema.schema, SCHEMAS.decode);
+  assert.equal(r.body.messages[0].role, 'system');
+  assert.match(r.body.messages[0].content, /潜台词与软拒绝解码器/);
 });
 
-test('direct mode: OpenAI-compatible request and missing key', () => {
-  const r = buildDirectRequest('game', { situation: 'x' }, { provider: 'openai', apiKey: 'k', baseUrl: 'https://api.deepseek.com/v1/', model: 'deepseek-chat' });
+test('GPT request: compatible services use plain JSON with the schema in the prompt', () => {
+  const r = buildRequest('game', { situation: 'x' }, { apiKey: 'k', baseUrl: 'https://api.deepseek.com/v1/', model: 'deepseek-chat' });
   assert.equal(r.url, 'https://api.deepseek.com/v1/chat/completions');
-  assert.equal(r.headers.authorization, 'Bearer k');
   assert.equal(r.body.response_format.type, 'json_object');
-  assert.throws(() => buildDirectRequest('decode', {}, { provider: 'anthropic' }), /API Key/);
+  assert.match(r.body.messages[0].content, /"core_exchange"/);
+  assert.equal(resolveJsonMode({ baseUrl: 'https://openrouter.ai/api/v1', jsonMode: 'schema' }), 'schema');
+  assert.equal(resolveJsonMode({ jsonMode: 'object' }), 'object');
+  assert.throws(() => buildRequest('decode', {}, {}), /API Key/);
 });
 
-test('server and direct mode build identical Claude params', () => {
-  const a = anthropicParams('audit', { entity: { name: 'x', tier: 'kin' }, interactions: [] }, { model: 'claude-sonnet-5-5' });
-  const b = buildDirectRequest('audit', { entity: { name: 'x', tier: 'kin' }, interactions: [] }, { provider: 'anthropic', apiKey: 'k', model: 'claude-sonnet-5-5' });
-  assert.deepEqual(a.params, b.body);
+test('server and direct mode send the same body', () => {
+  const input = { entity: { name: 'x', tier: 'kin' }, interactions: [] };
+  assert.deepEqual(chatBody('audit', input, { model: 'm' }), buildRequest('audit', input, { apiKey: 'k', model: 'm' }).body);
 });
 
-test('readAnthropicMessage handles refusal and text', () => {
-  assert.throws(() => readAnthropicMessage({ stop_reason: 'refusal', content: [] }), /拒绝/);
-  const ok = readAnthropicMessage({ stop_reason: 'end_turn', model: 'm', content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: '{"a":1}' }] });
-  assert.deepEqual(ok, { result: { a: 1 }, model: 'm' });
+test('readChatResponse handles refusal, truncation and text', () => {
+  assert.throws(() => readChatResponse({ choices: [{ message: { refusal: 'no' } }] }), /拒绝/);
+  assert.throws(() => readChatResponse({ choices: [{ finish_reason: 'length', message: { content: '{' } }] }), /截断/);
+  const ok = readChatResponse({ model: 'gpt-x', choices: [{ finish_reason: 'stop', message: { content: '```json\n{"a":1}\n```' } }] });
+  assert.deepEqual(ok, { result: { a: 1 }, model: 'gpt-x' });
+});
+
+test('the app only talks to GPT and Notion: no other AI vendor in the code', () => {
+  const otherVendor = new RegExp(['anth', 'ropic|cla', 'ude'].join(''), 'i');
+  const walk = (dir) => readdirSync(dir).flatMap((f) => {
+    const p = path.join(dir, f);
+    return statSync(p).isDirectory() ? walk(p) : [p];
+  });
+  const files = [...walk(path.join(root, 'web')), ...walk(path.join(root, 'server')), path.join(root, 'package.json'), path.join(root, '.env.example')]
+    .filter((f) => /\.(js|json|html|example|webmanifest)$/.test(f));
+  const hits = files.filter((f) => otherVendor.test(readFileSync(f, 'utf8'))).map((f) => path.relative(root, f));
+  assert.deepEqual(hits, []);
 });
 
 // ---------------------------------------------------------------- PWA

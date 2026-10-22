@@ -158,7 +158,7 @@ function loadDotEnv(file) {
 server.listen(PORT, HOST, () => {
   const llm = resolveConfig();
   console.log(`关系光谱已启动：http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
-  console.log(`  大模型：${llm.provider} / ${llm.model} ${llm.apiKey ? '' : '（未在环境变量配置 Key，可在设置页填写）'}`);
+  console.log(`  GPT：${llm.model}（${llm.baseUrl}）${llm.apiKey ? '' : '，未在环境变量配置 Key，可在设置页填写'}`);
   console.log(`  Notion：${process.env.NOTION_TOKEN ? '已配置' : '未配置（可选）'}`);
   if (HOST === '0.0.0.0' && !ACCESS_TOKEN) {
     console.warn('  警告：服务对局域网开放但没有设置 ACCESS_TOKEN，任何人都能用你的 API Key。');

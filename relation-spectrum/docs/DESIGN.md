@@ -94,7 +94,7 @@ Gemini 给的框架整体可用，我做了这几处修改：
 
 ## 4. 三个 AI 引擎（`web/js/core/prompts.js`）
 
-三个引擎都强制返回 JSON（Claude 用 Structured Outputs，OpenAI 兼容接口用 JSON 模式），前端直接渲染成概率条、筹码图和话术卡片。
+所有引擎都强制返回 JSON（OpenAI 官方用严格 Structured Outputs，其他兼容接口用 JSON 模式），前端直接渲染成概率条、筹码图和话术卡片。
 
 1. **潜台词与软拒绝解码器**：给出对方行为的几种解释及概率（必须包含善意解释）、你可能的认知偏差、当前关系阶段、冷静阀检查、三档回复话术、建议观察几天再行动。
 2. **多方博弈拆解器**：各方的公开立场、真实利益、隐性成本、筹码、底牌（BATNA）、话语权对比，以及可能达成协议的空间和三档策略。
@@ -107,8 +107,8 @@ Gemini 给的框架整体可用，我做了这几处修改：
 ```
 浏览器（手机/电脑）                         本地 Node 服务器 (server/)
 ┌───────────────────────────┐           ┌──────────────────────────┐
-│ 看板 / 关系 / 记录 / 沙盘   │  /api/*   │ /api/analyze → Claude 或  │
-│ scoring.js（纯本地计算）    │ ────────▶ │     OpenAI 兼容接口        │
+│ 看板 / 关系 / 记录 / 沙盘   │  /api/*   │ /api/analyze → GPT       │
+│ scoring.js（纯本地计算）    │ ────────▶ │  （OpenAI 及兼容接口）     │
 │ IndexedDB（离线可用）       │           │ /api/notion/* → Notion   │
 │ notion-sync.js（双向同步）  │           │ 静态文件服务              │
 └───────────────────────────┘           └──────────────────────────┘
@@ -141,8 +141,8 @@ Gemini 给的框架整体可用，我做了这几处修改：
 
 ### 6.5 手机随身可用
 - PWA：`manifest.webmanifest` + 图标 + `sw.js`。首次打开后缓存全部页面文件，断网也能打开
-- 直连降级：`services/api.js` 先探测本地服务器（`api/health`），连不上就从浏览器直接调用大模型。Claude 直连使用 `anthropic-dangerous-direct-browser-access` 请求头
-- 请求构造集中在 `core/llm-request.js`，服务器和浏览器发出的 Claude 请求参数完全一致（有测试保证）
+- 直连降级：`services/api.js` 先探测本地服务器（`api/health`），连不上就从浏览器直接调用 GPT 接口
+- 请求构造集中在 `core/llm-request.js`，服务器和浏览器发出的 GPT 请求完全一致（有测试保证）
 - 所有路径改成相对路径，`web/` 可以直接部署到任意静态托管的子路径下
 
 ## 7. 下一步可以做的
