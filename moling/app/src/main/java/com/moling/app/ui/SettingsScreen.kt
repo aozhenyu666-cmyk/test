@@ -424,6 +424,9 @@ fun SettingsScreen(onDone: () -> Unit) {
             }
 
             }
+            if (section == "sys") {
+                SystemToolsSection()
+            }
             if (section == "live") {
             // ---------------------------------------------------------------- 活的墨灵（v5）
             Text("活的墨灵", style = MaterialTheme.typography.titleSmall)
@@ -859,6 +862,7 @@ private val SECTIONS = listOf(
     "live" to "活的墨灵",
     "zk" to "总控与权柄",
     "bg" to "后台与权限",
+    "sys" to "系统工具",
     "mem" to "记忆与备份",
 )
 
@@ -922,6 +926,7 @@ private fun SettingsHub(
     Card("总控与权柄", "$zk · 上限「$tier」", { com.moling.app.ui.art.InkSteps(2, 3, m) }) { open("zk") }
     com.moling.app.ui.art.InkTitle("手机")
     Card("后台与权限", "后台陪着${if (background) "开" else "关"} · 看前台应用${if (usageAllowed) "已允许" else "没开"}", { com.moling.app.ui.art.InkRing(if (background && usageAllowed) 1f else 0.5f, m) }) { open("bg") }
+    Card("系统工具", "日历忙闲 · 勿扰 · 歌单（各自独立开关）", { com.moling.app.ui.art.InkSteps(2, 3, m) }) { open("sys") }
     Card("在你身边", "小窗、先答一问、晨报、分享", { com.moling.app.ui.art.InkClouds(m, animated = false) }, openPresence)
     Card("记忆与备份", "moling.json：$memory", { com.moling.app.ui.art.InkPapers(m, animated = false) }) { open("mem") }
     Card("调试", "只读：权柄、总控、提议、导演、后台、日志", { com.moling.app.ui.art.InkGalaxy(m, animated = false) }, openDebug)

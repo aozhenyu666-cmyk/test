@@ -5,8 +5,13 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
+import com.moling.app.system.SystemToolConfig
 import com.moling.core.mind.BEIJING
 import com.moling.core.mind.DEFAULT_PERSONA
+import com.moling.core.system.DndChange
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.time.LocalDate
 
 /** 文字模型的配置。人格和称呼也放这里：导演和对话页都从这份配置取。 */
@@ -280,6 +285,46 @@ class SettingsStore(context: Context) {
         toggles.edit().putBoolean(KEY_FADE, on).apply()
     }
 
+    // ---------------------------------------------------------------- B5 系统工具
+
+    /**
+     * 日历 / 勿扰 / 歌单三项各自独立。
+     * 日历只存用户选中的日历；勿扰只存墨灵自己留下的那次改动（用来“只恢复自己改过的”）。
+     */
+    fun systemTools(): SystemToolConfig = SystemToolConfig(
+        calendarOn = toggles.getBoolean(KEY_SYS_CALENDAR_ON, false),
+        calendarId = toggles.getString(KEY_SYS_CALENDAR_ID, null).orEmpty(),
+        calendarName = toggles.getString(KEY_SYS_CALENDAR_NAME, null).orEmpty(),
+        dndOn = toggles.getBoolean(KEY_SYS_DND_ON, false),
+        playlistOn = toggles.getBoolean(KEY_SYS_PLAYLIST_ON, false),
+        playlistPackage = toggles.getString(KEY_SYS_PLAYLIST_PACKAGE, null).orEmpty(),
+        playlistUri = toggles.getString(KEY_SYS_PLAYLIST_URI, null).orEmpty(),
+        playlistMissing = toggles.getBoolean(KEY_SYS_PLAYLIST_MISSING, false),
+    )
+
+    fun saveSystemTools(c: SystemToolConfig) {
+        toggles.edit()
+            .putBoolean(KEY_SYS_CALENDAR_ON, c.calendarOn)
+            .putString(KEY_SYS_CALENDAR_ID, c.calendarId)
+            .putString(KEY_SYS_CALENDAR_NAME, c.calendarName)
+            .putBoolean(KEY_SYS_DND_ON, c.dndOn)
+            .putBoolean(KEY_SYS_PLAYLIST_ON, c.playlistOn)
+            .putString(KEY_SYS_PLAYLIST_PACKAGE, c.playlistPackage)
+            .putString(KEY_SYS_PLAYLIST_URI, c.playlistUri)
+            .putBoolean(KEY_SYS_PLAYLIST_MISSING, c.playlistMissing)
+            .apply()
+    }
+
+    /** 墨灵上次改勿扰的记录；空 = 没改过，或已经恢复/过期/被你改回去了。 */
+    fun dndChange(): DndChange? = runCatching {
+        toggles.getString(KEY_SYS_DND_CHANGE, null)?.let { Json.decodeFromString<DndChange>(it) }
+    }.getOrNull()
+
+    fun saveDndChange(c: DndChange?) {
+        if (c == null) toggles.edit().remove(KEY_SYS_DND_CHANGE).apply()
+        else toggles.edit().putString(KEY_SYS_DND_CHANGE, Json.encodeToString(c)).apply()
+    }
+
     /** 北京时间日期。按用户的作息，一天从零点算。 */
     private fun todayKey(): String = LocalDate.now(BEIJING).toString()
 
@@ -301,6 +346,16 @@ class SettingsStore(context: Context) {
         private const val KEY_WHISPER = "whisper"
         private const val KEY_FADE = "fade"
         private const val KEY_DISABLED_MODALITIES = "disabled_modalities"
+        // B5 系统工具：三项独立开关；勿扰记录只存墨灵自己改过的那一次。
+        private const val KEY_SYS_CALENDAR_ON = "sys_calendar_on"
+        private const val KEY_SYS_CALENDAR_ID = "sys_calendar_id"
+        private const val KEY_SYS_CALENDAR_NAME = "sys_calendar_name"
+        private const val KEY_SYS_DND_ON = "sys_dnd_on"
+        private const val KEY_SYS_DND_CHANGE = "sys_dnd_change"
+        private const val KEY_SYS_PLAYLIST_ON = "sys_playlist_on"
+        private const val KEY_SYS_PLAYLIST_PACKAGE = "sys_playlist_package"
+        private const val KEY_SYS_PLAYLIST_URI = "sys_playlist_uri"
+        private const val KEY_SYS_PLAYLIST_MISSING = "sys_playlist_missing"
 
         private const val DEFAULT_BASE_URL = "https://api.deepseek.com"
         private const val DEFAULT_MODEL = "deepseek-chat"

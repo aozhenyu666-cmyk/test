@@ -1408,3 +1408,31 @@
 - 总控 `MolingProvider` 新增 v2 方法（仍只认墨灵签名；v1 不动）；`Store.trainingIssue / trainingSubmit` 给总控自己的拦截页用。
 - 墨灵 `WireGateV2Port` + `ZkBridge.gateV2`：墨灵侧客户端通过字符串键值和总控说话。界面都没接（见 DEEPSEEK-15 A 部分）。
 - 测试：`TrainingTest` 12 个、`TrainingContractTest` 3 个（墨灵真实客户端 ↔ 总控真实处理）；`tools/core-tests` 590 全过。两边 App 编译以 CI 为准；真机未测。
+
+## 第十五批 B5（W13 G4）系统工具适配器（2026-10-22）
+
+分支 `deepseek/m2-b5-system`（基于工作分支 `6bf7a69`）。只做墨灵侧：`app/system` 适配器、设置页「系统工具」、调试页只读状态和 `BrainHost.planDay` 的忙闲接线。没有改 `zongkong/`、没有改 core `SystemPorts` 的契约；新增权限只有 `READ_CALENDAR`，并且只在他点开日历开关时申请。
+
+**做了什么**
+- `app/system/SystemToolConfig.kt`：三项独立配置（日历开关 + 选中的日历、勿扰开关、歌单开关 + 包名 + URI）；`SystemToolRules` 纯规则把“开关 / 权限 / 配置”算成 `READY / NOT_CONFIGURED / PERMISSION_DENIED / REVOKED / UNSUPPORTED / APP_MISSING`；`SystemToolTimes` 解析 HH:mm 和今天的毫秒范围。
+- `app/system/AndroidSystemPorts.kt`：实现 core 的 `CalendarPort / DndPort / PlaylistPort`。
+  - 日历：`CalendarContract.Instances` 只读“用户选中的那个日历”的忙闲，没权限明确失败，不返回空列表冒充“今天没安排”。写日程只发 `ACTION_INSERT` 系统编辑页，返回 `needsUserSave=true`，不写成已保存；直接写入明确拒绝（本批不申请 `WRITE_CALENDAR`）。`AndroidCalendars` 只列可见日历。
+  - 勿扰：读 `NotificationManager.currentInterruptionFilter`，改完读回比对，系统没接受就 `FAILED`；恢复只根据墨灵自己留下的 `DndChange`（`DndPolicy.plan`）——你期间手动改过 / 已回原样 / 超过 6 小时都不覆盖。没有通知策略访问就明确报错并引导去系统设置。
+  - 歌单：`PlaylistTargets.check` 通过才发显式 `ACTION_VIEW` + `setPackage`；成功只说明“系统接受了打开”，不表示正在播放；`ActivityNotFoundException` → `APP_MISSING` 并退回配置；不模拟播放成功。
+- `app/system/SystemToolHost.kt` + `data/Settings.kt`：三项开关/配置持久化；上次勿扰改动单独存（复用 `DndChange`），恢复后清掉；动作记录（时间 / 成功或错误 / 能否撤销，最多 20 条）；`busyForPlanning(now)` 只在“开关开 + 选了日历 + 有权限 + 读取成功”时返回忙闲，其余情况返回空。
+- 接线：`BrainHost.planDay` 把日历忙闲传给 core 早已存在的 `Brain.planDay(now, force, busy)`（没有改 core 行为；日历不可用时照常排计划）；`ui/SystemToolsSection.kt` 设置页新卡「系统工具」（选日历后读忙闲、今天忙闲、打开系统日程编辑页、勿扰改/恢复、歌单配置与打开、每项状态和最近动作）；调试页新增只读 `【系统工具】` 段。
+- `AndroidManifest.xml` 只加 `READ_CALENDAR`；勿扰走系统“通知策略访问”特殊权限（不新增运行时权限）；歌单不加权限、不加 `queries`。
+
+**自动检查（实际跑出来的）**
+- `tools/core-tests`：**58 个测试类、590 个测试、0 失败 0 错误 0 跳过**。Gradle 8.9 + JDK 22，ASCII 路径 `C:/autopilot-b5-wt/tools/core-tests`；第一次 daemon OOM，第二次加 `-Xmx4g` 和 `kotlin.compiler.execution.strategy=in-process` 通过。core 没改，数字与第十五批基线一致。
+- App：`moling/gradlew.bat testDebugUnitTest`（`C:/autopilot-b5-wt/moling`，`ANDROID_HOME=C:\Android\Sdk`，`JAVA_HOME=jdk-22`，ASCII `GRADLE_USER_HOME=C:\gradlehome`）：**28 个测试类、293 个测试、0 失败 0 错误 0 跳过**；新增 `SystemToolRulesTest` 8 个（日历/勿扰/歌单能力状态、歌单缺失降级、三项独立、HH:mm 解析）。
+- CI：push 后由 `moling-android` 跑 `testDebugUnitTest assembleDebug`；开发分支 `release` 应为 skipped。结果以实际 run 为准。
+- 真机**未测**：本地没有 Android 真机/模拟器。
+
+**没做到 / 限制**
+- 日历真机未验：选日历、真实忙闲、系统编辑页保存回执、权限拒绝/撤销、没有日历 App 的降级都只在代码与纯逻辑单测里验证。
+- 勿扰真机未验：不同厂商 ROM 的勿扰档位和 `interruptionFilter` 映射未测；读回一致只证明系统接受了 filter，不证明所有通知都按预期静音。
+- 歌单真机未验：真实音乐 App 的显式 Intent 未测试；“没装目标 App”的降级只有规则单测/编译验证。
+- 本批只有设置页/端口入口：**没有做**“进入选定水道自动打开歌单”“专注时自动改勿扰”，不自动动系统状态。
+- 未做直接写日历（不申请 `WRITE_CALENDAR`）；未改总控、未改 core `SystemPorts` 契约、未改其他分支。
+

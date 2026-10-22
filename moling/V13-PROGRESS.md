@@ -13,12 +13,13 @@
 | W10 T1–T9 | **进行中（里程碑2，第十四批修复完成）**：T1/T2(fetch,RSS,HTML,Brave适配)/T3(池、分享解析、分享后台提取正文)/T7(预算与事件) 核心与入口完成，F10-1…F10-7 + 顺手项已修；T4–T6、T8–T9 未做 | core-tests 448 全绿（47 类，V13WebTest 16；此前“442 全绿”已更正，见 DEVLOG 第十四批）；App compileDebugKotlin 通过；真实公网未验 | 真机未测 | [任务](DEEPSEEK-10.md) · [PR17](https://github.com/aozhenyu666-cmyk/test/pull/17) |
 | W11 R1–R7 | **部分实现 + 第十四批修复完成**：R1 电台核心、R2 案板/对话面板（音频焦点最小版、TTS 令牌）、R3 安静期（「别管我」同 EXIT、明确停止不记 REPLIED、只记这一次出现）、R5 赌局核心完成；F11-1…F11-7 + 小项已修，F11-5 未做；R4/R6 其余只有接口与说明 | core-tests 50 类 481 全绿（HabitTest 8 / FogTest 13 / RadioTest 14 / V13WebTest 16）；App compileDebugKotlin / testDebugUnitTest 通过 | 真机未测；R4/R6/R5 UI 入口未做；F11-5 未接 | [任务](DEEPSEEK-11.md) |
 | W12 A1–A6 | **部分（第十四批 F12-1…F12-7 已修，已合入工作分支）**：A1–A3 外脑会话核心 + 最小界面（分享 / 复制 / 模型 API）；A4 屏幕快照按裁定冻结（已修、不接线）；A2/A5/A6 未做；联络站传输目前只是复制并打开 | 合入后 core-tests 见 DEVLOG 第十四批合入记录 | 真机未测 | [任务](DEEPSEEK-12.md) · [第十四批](DEEPSEEK-14.md) |
-| W13 G1–G4 | **部分（第十四批 F13-1…F13-8 已修）**：G1/G2 计划代驾核心+今天页/设置（已取消自动采用，到点只提醒）；G3 墨灵侧训练兑换协议；G4 系统工具接口与拒绝降级。G5–G7、Z13 未做 | core-tests 510 全绿（51 类；W13 类 62：PlanDriverTest 21、TrainingRedeemTest 26、SystemPortsTest 10、GateV2Test 5）；App compileDebugKotlin 通过；CI build 通过、release skipped | 真机未测；未改 zongkong/权限/Manifest | [任务](DEEPSEEK-13.md) · [第十四批](DEEPSEEK-14.md) |
+| W13 G1–G4 | **部分（第十四批 F13-1…F13-8 已修；第十五批 B5 补 G4 适配器）**：G1/G2 计划代驾核心+今天页/设置（已取消自动采用，到点只提醒）；G3 墨灵侧训练兑换协议；G4 系统工具 Android 适配器+设置页（日历忙闲/ACTION_INSERT、勿扰只恢复自己记录、歌单显式 Intent）。G5–G7、Z13 未做 | core-tests 590 全绿（58 类；SystemPortsTest 10）；App testDebugUnitTest 293 全绿（28 类，新增 SystemToolRulesTest 8）；CI 以 push 后 run 为准 | 真机未测（G4 适配器）；B5 只加 READ_CALENDAR 且点开关才申请；未改 zongkong、core SystemPorts 契约、签名/包名 | [任务](DEEPSEEK-13.md) · [第十五批](DEEPSEEK-15.md) · [第十四批](DEEPSEEK-14.md) |
 
 ### W13（2026-10-22，分支 deepseek/moling-planner，基于 4f3c905）
 - G1/G2：`core/flow/PlanAdoption.kt`（PlanDraft/PlanAdoption/PlanOperation/PlanDriver，换日/改版冲突/operationId 幂等/回执分离/UNKNOWN 不重发）；`BrainHost` 存 `mind/plan-adoption.json`，今天页「计划代驾」采纳/不采纳，设置页到点提醒开关与 10/20/30 分钟。**第十四批 F13-1 起没有自动本地采用：到点只推「一键采用」提醒（通知 + 今天页按钮），他点了才算；也不会自动交给总控或执行现实动作。**
 - G3：`core/link/GateV2.kt`（v2 外壳/能力协商/错误码，不动 v1 与 ZK_LINK_VERSION）与 `core/redeem/TrainingRedeem.kt`（墨灵侧协议；pass 只认总控回执并核对绑定；未验证不发奖）。总控侧 Z13 未做。
 - G4：`core/system/SystemPorts.kt`（日历/勿扰/歌单端口、能力状态、默认明确拒绝；日历去重/编辑页等待用户保存/勿扰只恢复自己改的档位/歌单 URI 校验）。未加权限、未改 Manifest、未接 Android 适配器。
+- 第十五批 B5（G4 适配器，2026-10-22）：新增 `app/system/`（`SystemToolConfig` 纯规则、`AndroidSystemPorts` 实现 core 三个端口、`SystemToolHost` 持久化与动作记录）；设置页「系统工具」三项独立开关（日历选完后读忙闲、`ACTION_INSERT` 写日程由用户保存、勿扰改/恢复自己改过的档位、歌单显式 Intent）；调试页只读能力状态/最近动作；`BrainHost.planDay` 用日历忙闲。只加 `READ_CALENDAR`，点开关才申请；不申请 `WRITE_CALENDAR`。core-tests 590 全绿；App testDebugUnitTest 293 全绿；真机未测。未做进入水道自动打开歌单/专注自动勿扰。
 - 第十四批修复（提交 `7f0f496`…`df7ac6d`）：F13-1 取消自动采用与可见时间、到点只提醒；F13-2 不采纳/拒绝粘住；F13-3 SENDING→UNKNOWN、ZK_PENDING 不本地过期、已发不记没发；F13-4 capabilities 缺失拒绝；F13-5 空白名单拒绝；F13-6 requestId 唯一；F13-7 锁内改状态、锁外调端口（“只成功一次”由总控保证）；F13-8 定稿文案改“你已定稿”；小项 acceptReceipt 一致。详见 DEVLOG 第十四批。
 - 自动检查：`tools/core-tests` **510 个全绿，0 失败**（51 类；W13 类 62：PlanDriverTest 21、TrainingRedeemTest 26、SystemPortsTest 10、GateV2Test 5），在 ASCII 路径 `C:/autopilot-w13-wt` 运行；App `compileDebugKotlin` 通过。中文路径跑 core-tests 有 JVM 类路径编码问题，已改用 ASCII junction。
 - 明确未完成：Z13 总控侧策略/挑战/rubric/临时通行与 ContentProvider；GateV2 端口 Android 适配器和训练 UI；G2 发送入口（本批不自动执行）；G5 追链与总控训练界面；G6 交叉/新旧版本/备份恢复；G7 最终验收；真机全部未测。
@@ -30,7 +31,7 @@
 
 缺口统一写在这里并关联任务号；不得只在聊天里说“还差一点”。
 
-当前明确缺口：第八批正式发布验证（P0）；I9/动效真机验收（P0）；W10 T4–T9；W11 R4/R6 与 R5 UI 入口、F11-5 曝光回报、真机；W12–W13 功能（各批）。
+当前明确缺口：第八批正式发布验证（P0）；I9/动效真机验收（P0）；W10 T4–T9；W11 R4/R6 与 R5 UI 入口、F11-5 曝光回报、真机；W12–W13 功能（各批）；B5 系统工具真机验收（日历/勿扰/歌单）。
 
 ### W10（2026-10-22）
 - 里程碑1 已提交：Sources/WebPort/Inhale/Cycle 核心与测试；BrainHost 来源库 + 案板「加网页/链接」。

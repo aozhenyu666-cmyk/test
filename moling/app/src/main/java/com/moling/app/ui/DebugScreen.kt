@@ -65,7 +65,7 @@ fun DebugScreen(onDone: () -> Unit) {
             foreground = foreground,
             category = category,
             bench = BrainHost.workbench.value,
-        ) + "\n\n" + com.moling.app.overlay.Presence.debug(context)
+        ) + "\n\n" + systemToolsReport() + "\n\n" + com.moling.app.overlay.Presence.debug(context)
     }.getOrElse { "调试信息生成失败：${it.message ?: it.javaClass.simpleName}" }
 
     Column(Modifier.fillMaxSize()) {
@@ -243,6 +243,42 @@ private fun buildReport(
  */
 private fun zkFields(s: ZkStatus): List<String> =
     s.toString().removePrefix("ZkStatus(").removeSuffix(")").split(", ").filter { it.isNotBlank() }
+
+/** B5：系统工具只读快照（能力状态、最近动作、勿扰记录）；不调用、不写入。 */
+private fun systemToolsReport(): String = runCatching {
+    val s = BrainHost.systemTools.state.value
+    buildString {
+        appendLine("【系统工具】")
+        com.moling.app.system.SystemToolKind.entries.forEach { kind ->
+            val cap = s.capability(kind)
+            val detail = if (cap != null && cap.detail.isNotBlank()) "（${cap.detail}）" else ""
+            appendLine("· ${kind.label}：${cap?.state?.label ?: "—"}$detail")
+        }
+        appendLine(
+            "日历：" + if (s.syncedAt > 0) {
+                "最近同步 ${hms(s.syncedAt)} · ${s.busy.size} 段忙闲"
+            } else {
+                "还没读过忙闲"
+            },
+        )
+        val change = s.dndChange
+        appendLine(
+            "勿扰：" + (change?.let { "墨灵上次 ${it.original.label} → ${it.applied.label}（${hms(it.at)}）" }
+                ?: "没有墨灵改过的记录"),
+        )
+        if (s.actions.isEmpty()) {
+            appendLine("最近动作：还没有")
+        } else {
+            appendLine("最近动作：")
+            s.actions.take(8).forEach { a ->
+                appendLine(
+                    "· ${hms(a.at)} · ${a.kind.label} · ${if (a.ok) "成功" else "没成"} · ${a.message}" +
+                        if (a.undo.isNotBlank()) "（${a.undo}）" else "",
+                )
+            }
+        }
+    }
+}.getOrElse { "【系统工具】\n读取失败：${it.message ?: it.javaClass.simpleName}" }
 
 private val HMS = DateTimeFormatter.ofPattern("HH:mm:ss")
 

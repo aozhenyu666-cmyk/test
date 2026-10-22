@@ -6,6 +6,7 @@ import android.util.Log
 import com.moling.app.data.LlmClient
 import com.moling.app.data.MolingAsk
 import com.moling.app.data.SettingsStore
+import com.moling.app.system.SystemToolHost
 import com.moling.core.Brain
 import com.moling.core.BrainFacts
 import com.moling.core.BrainState
@@ -112,6 +113,12 @@ object BrainHost {
     val workbench: StateFlow<WorkbenchState> = _bench
     private lateinit var settings: SettingsStore
 
+    /** B5：日历 / 勿扰 / 歌单的系统适配器（三项独立开关，拒绝权限只降级这一项）。 */
+    private lateinit var systemToolsHost: SystemToolHost
+
+    /** 设置页 / 调试页 / 排计划读这里。 */
+    val systemTools: SystemToolHost get() = systemToolsHost
+
     /** 第十批：来源库（SourceRef + 正文 + Material 映射），与案板分开存，避免大正文进状态。 */
     private val _sources = MutableStateFlow(com.moling.core.web.SourceState())
     val sources: StateFlow<com.moling.core.web.SourceState> = _sources
@@ -165,6 +172,7 @@ object BrainHost {
 
             ZkBridge.init(app)
             settings = SettingsStore(app)
+            systemToolsHost = SystemToolHost(app, settings)
             val ask = MolingAsk(settings, LlmClient({ settings.load() })).also { askModel = it }
             // 深想模型：没填就和平时同一个（大脑里 deep = null 时退回 ask）
             val deep = MolingAsk(settings, LlmClient({ settings.load().deep() }, timeoutSec = 120, withTemperature = false), timeoutMs = 125_000L)
@@ -360,7 +368,9 @@ object BrainHost {
     // ---------------------------------------------------------------- 今天
 
     suspend fun planDay(now: Long, force: Boolean = false): FlowPlan {
-        val plan = io("planDay", { _state.value.flow ?: fallbackPlan(now) }) { brain.planDay(now, force) }
+        // B5：日历开着且读成功时，把今天的忙闲交给水道绕开；不可用就是空，排计划照常。
+        val busy = runCatching { systemTools.busyForPlanning(now) }.getOrDefault(emptyList())
+        val plan = io("planDay", { _state.value.flow ?: fallbackPlan(now) }) { brain.planDay(now, force, busy) }
         // 排好就登记成计划草稿；只是草稿，不自动采用、不交给总控。
         runCatching { registerPlan(plan, now) }.onFailure { Log.w(TAG, "记计划草稿失败", it) }
         return plan

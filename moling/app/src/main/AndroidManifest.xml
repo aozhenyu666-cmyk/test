@@ -16,6 +16,10 @@
 
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!-- B5 系统工具·日历：只在他点开“日历”开关时申请；拒绝就只降级这一项。
+         不申请 WRITE_CALENDAR：写日程走系统 ACTION_INSERT 编辑页，由他自己保存。 -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+
     <queries>
         <!-- 语音输入走系统识别界面：录音由系统负责，墨灵不申请录音权限 -->
         <intent>
