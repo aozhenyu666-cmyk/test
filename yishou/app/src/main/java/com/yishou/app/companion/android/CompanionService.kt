@@ -102,7 +102,14 @@ class CompanionService : Service() {
     private fun started(intent: Intent?): Boolean {
         if (session != null) return true
         ensureChannel(this)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        // 没有录音权限时不能带 microphone 类型起前台服务，系统会直接拒绝
+        val micReady = app.voice.hasPermission()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // 后台开麦要 microphone 类型（Android 11 起），投屏要 mediaProjection；有麦克风就一起要
+            val types = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or
+                (if (micReady) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
+            startForeground(ID, notification("正在准备"), types)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(ID, notification("正在准备"), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         } else {
             startForeground(ID, notification("正在准备"))
@@ -111,7 +118,7 @@ class CompanionService : Service() {
         val ready = com.yishou.app.companion.core.CompanionChecks.startup(
             llmReady = app.settings.llm.value.isComplete,
             sttReady = app.settings.speech.value.sttReady,
-            canRecord = app.voice.hasPermission(),
+            canRecord = micReady,
             notifyAllowed = androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled(),
         )
         if (!ready.canStart) return fail(ready.blockers.first())

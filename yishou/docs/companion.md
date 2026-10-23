@@ -157,6 +157,8 @@ export GRADLE_USER_HOME="C:/wb/gh"
 - **听不清不算答错**：听写失败、没开口，都提示「打字也行」，不记 MISS。
 - **打字会先关麦**：免得你打字时还在录。
 - **资源**：麦克风和内录各是一条 `AudioRecord`；开麦失败会直说原因并退回打字，不静默。
+- **后台开麦**：前台服务同时声明 `mediaProjection` 与 `microphone` 类型。Android 11 起 App 切到后台后，
+  只有 `microphone` 类型的前台服务才拿得到麦克风；没录音权限时只起投屏类型，不会因缺权限起服务失败。
 - 纯逻辑在 `companion/core/VoiceAnswer.kt`，有 JVM 测试；Android 侧复用一手原来的 `VoiceInput`（VAD 自动停）。
 
 ## 11. 明确的未验证项
