@@ -273,6 +273,7 @@ class CompanionService : Service() {
             missed++
             stopListening()
             publish("这一问没接上，记一笔（不算答错）")
+            resumeIfOurs()
         }
         publish(Capsule.text(capsuleState()), running = true)
 
@@ -290,7 +291,7 @@ class CompanionService : Service() {
                         listenAnswer()
                     }
                     is AskOutcome.NeedManual -> publish(out.hint, question = null, hint = out.hint)
-                    is AskOutcome.Waited -> Unit
+                    is AskOutcome.Waited -> resumeIfOurs()
                     is AskOutcome.Busy -> Unit
                 }
             }
@@ -318,12 +319,15 @@ class CompanionService : Service() {
         val tl = timeline ?: return
         if (tl.observePosition(pos, elapsed())) {
             session?.sourceChanged()
+            media?.forgetPause()
             publish("跳播了：开新的一段，刚才那一问作废")
         }
     }
 
     private fun adopt(newPkg: String) {
         stopListening()
+        // 换了 App：旧的暂停不能拿去恢复新视频
+        media?.forgetPause()
         val first = pkg.isBlank()
         pkg = newPkg
         if (sessionId > 0) {
@@ -361,6 +365,22 @@ class CompanionService : Service() {
         p
     }
 
+    /**
+     * 把「这一次确实由自己按停」的播放器接着放。
+     *
+     * 没停过、换了 App、用户自己已经按了继续，都什么都不做；
+     * 发了指令却没接着放，要如实说，不能显示成「已继续」。
+     */
+    private fun resumeIfOurs() {
+        val m = media ?: return
+        scope.launch {
+            when (val r = m.resumeOwn()) {
+                is ResumeResult.Failed -> publish("没能自动接着放：undefined；你手动点一下播放")
+                else -> Unit
+            }
+        }
+    }
+
     // ---- 语音作答 ----
 
     /**
@@ -373,7 +393,8 @@ class CompanionService : Service() {
         if (!VoiceAnswer.shouldListen(sess.phase())) return
         if (listening?.isActive == true) return
         listening = scope.launch {
-            val heard = app.voice.listen()
+            // 回答问题会停下来想，把「说完了」的安静阈值放宽一点，别把思考当结束
+            val heard = app.voice.listen(silenceMs = 2_400, waitMs = 10_000)
             if (!isActive) return@launch
             when (heard) {
                 is Heard.Text -> {
@@ -415,6 +436,8 @@ class CompanionService : Service() {
                 )
                 // 下次出题要接上这次的差值
                 memory = store?.weakMemory(3).orEmpty()
+                // 这一问走完了：如果是自己按停的，接着放
+                resumeIfOurs()
             }
         }
     }
@@ -435,6 +458,7 @@ class CompanionService : Service() {
         stopListening()
         sess.dropQuestion()
         publish("这一问跳过了（不算答错）", question = null, hint = null)
+        resumeIfOurs()
     }
 
     private fun capsuleState(): CapsuleState = CapsuleState(
@@ -454,6 +478,7 @@ class CompanionService : Service() {
         if (stopped) return
         stopped = true
         stopListening()
+        media?.forgetPause()
         ticker?.cancel()
         ticker = null
         tap?.flush()

@@ -30,6 +30,9 @@ enum class PauseOutcome(val label: String, val verdict: ProbeVerdict) {
     UNSUPPORTED("没有可控制的播放会话", ProbeVerdict.UNSUPPORTED),
 }
 
+/** 恢复该不该做、该不该报告 */
+enum class ResumePlan { PLAY, LEAVE, ALREADY_PLAYING }
+
 /**
  * 暂停的判据：只认「发完指令之后再看一眼状态」。
  *
@@ -50,4 +53,24 @@ object PauseProof {
     /** 恢复同样要核实：只在「本次确实是自己停的」前提下才允许恢复 */
     fun canResume(outcome: PauseOutcome, stillSameSession: Boolean, userTouched: Boolean): Boolean =
         outcome == PauseOutcome.VERIFIED && stillSameSession && !userTouched
+
+    /**
+     * 恢复这一步具体做什么。
+     *
+     * 三种结果要分开：
+     * - 已经在放（用户自己按了继续）→ 不再发指令，也不要报告「我恢复了」；
+     * - 还是暂停着、且确实是自己停的同一路 → 才去按播放；
+     * - 别的会话、别的状态、本来就没停住 → 留给你自己决定。
+     */
+    fun resumePlan(
+        outcome: PauseOutcome,
+        stillSameSession: Boolean,
+        userTouched: Boolean,
+        state: PlayState,
+    ): ResumePlan = when {
+        !canResume(outcome, stillSameSession, userTouched) -> ResumePlan.LEAVE
+        state == PlayState.PLAYING -> ResumePlan.ALREADY_PLAYING
+        state == PlayState.PAUSED -> ResumePlan.PLAY
+        else -> ResumePlan.LEAVE
+    }
 }

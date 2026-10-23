@@ -63,14 +63,20 @@ class VoiceInput(private val app: YishouApp) {
     /** 用的是哪种听写，显示在界面上 */
     fun engineName(): String = if (app.settings.speech.value.sttReady) "语音接口" else "系统识别"
 
-    suspend fun listen(): Heard {
+    /**
+     * 听一段。
+     *
+     * [silenceMs] 是「说完了」的判定：听回答时可以放宽，让人停下来想一想；
+     * [waitMs] 是一直没开口多久算没说。默认值和语音伙伴原来一致。
+     */
+    suspend fun listen(silenceMs: Long = 1_600, waitMs: Long = 8_000): Heard {
         if (!hasPermission()) return Heard.Failed("没有麦克风权限。点麦克风时在系统弹窗里允许。")
         if (!busy.compareAndSet(false, true)) return Heard.Failed("另一处正在听")
         stopFlag = AtomicBoolean(false)
         cancelFlag = AtomicBoolean(false)
         return try {
             _phase.value = ListenPhase.LISTENING
-            if (app.settings.speech.value.sttReady) listenApi() else listenSystem()
+            if (app.settings.speech.value.sttReady) listenApi(silenceMs, waitMs) else listenSystem(silenceMs)
         } finally {
             _phase.value = ListenPhase.IDLE
             _level.value = 0f
@@ -90,11 +96,11 @@ class VoiceInput(private val app: YishouApp) {
         main.post { recognizer?.cancel() }
     }
 
-    private suspend fun listenApi(): Heard {
+    private suspend fun listenApi(silenceMs: Long, waitMs: Long): Heard {
         val stop = stopFlag
         val cancel = cancelFlag
         val pcm = try {
-            record(stop, cancel)
+            record(stop, cancel, silenceMs, waitMs)
         } catch (e: Exception) {
             RunLog.e("录音", "麦克风打不开", e)
             return Heard.Failed("麦克风打不开：${e.message ?: e.javaClass.simpleName}")
@@ -113,7 +119,12 @@ class VoiceInput(private val app: YishouApp) {
 
     /** 录一段话：说完自动停；一直没开口返回 null。 */
     @SuppressLint("MissingPermission")
-    private suspend fun record(stop: AtomicBoolean, cancel: AtomicBoolean): ByteArray? = withContext(Dispatchers.IO) {
+    private suspend fun record(
+        stop: AtomicBoolean,
+        cancel: AtomicBoolean,
+        silenceMs: Long,
+        waitMs: Long,
+    ): ByteArray? = withContext(Dispatchers.IO) {
         val min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val rec = AudioRecord(
             MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE,
@@ -123,7 +134,7 @@ class VoiceInput(private val app: YishouApp) {
             rec.release()
             throw IllegalStateException("AudioRecord 初始化失败")
         }
-        val vad = Vad()
+        val vad = Vad(silenceMs = silenceMs, waitMs = waitMs)
         val frame = ShortArray(RATE / 50)
         val out = ByteArrayOutputStream()
         rec.startRecording()
@@ -149,7 +160,7 @@ class VoiceInput(private val app: YishouApp) {
         if (spoke && !cancel.get()) out.toByteArray() else null
     }
 
-    private suspend fun listenSystem(): Heard = withContext(Dispatchers.Main) {
+    private suspend fun listenSystem(silenceMs: Long): Heard = withContext(Dispatchers.Main) {
         if (!SpeechRecognizer.isRecognitionAvailable(app)) {
             return@withContext Heard.Failed("这台手机没有可用的系统语音识别。到设置 → 语音 填一个听写接口就能用。")
         }
@@ -188,7 +199,7 @@ class VoiceInput(private val app: YishouApp) {
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
-                .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_600L)
+                .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, silenceMs)
             try {
                 sr.startListening(intent)
             } catch (e: Exception) {
