@@ -154,6 +154,13 @@
             </intent-filter>
         </service>
 
+        <!-- 视频陪练：用户点了开始并同意看屏后，在别的 App 上面持续听声音、看关键帧；
+             常驻通知带「停」，停止即释放投屏与录音 -->
+        <service
+            android:name=".companion.android.CompanionService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
         <!-- 刷着练：用户同意看屏后，只在点“考我一下”或在关注的应用里刷满设定分钟时截一屏出题；截图不保存，60 分钟自动停 -->
         <service
             android:name=".scroll.ScrollService"

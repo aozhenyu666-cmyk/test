@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.yishou.app.ui.ConsoleScreen
 import com.yishou.app.ui.CompanionProbeScreen
+import com.yishou.app.ui.CompanionScreen
 import com.yishou.app.ui.DieFace
 import com.yishou.app.ui.theme.StoneMark
 import androidx.navigation.navArgument
@@ -189,10 +190,14 @@ class MainActivity : ComponentActivity() {
                             onWatchedApps = { nav.navigate("watched") },
                             onLog = { nav.navigate("log") },
                             onProbe = { nav.navigate("probe") },
+                            onCompanion = { nav.navigate("companion") },
                         )
                     }
                     composable("probe") {
                         CompanionProbeScreen(onBack = { nav.navigateUp() })
+                    }
+                    composable("companion") {
+                        CompanionScreen(onBack = { nav.navigateUp() })
                     }
                     composable("newtask") {
                         TaskEditScreen(taskId = null, onBack = { nav.navigateUp() })

@@ -81,6 +81,12 @@ interface CoachPorts {
 
     /** 记一笔：这一问、他怎么答的、差在哪 */
     suspend fun record(turnId: Long, question: String, answer: String, delta: String, verdict: Verdict, move: ThinkMove)
+
+    /**
+     * 把这一问的出处和材料原文交出去，记账时一起落库（原文和推断要分开存）。
+     * 默认什么都不做：只关心流程的假端口不用管它。
+     */
+    fun rememberContext(evidenceIds: List<Long>, sourceText: String) {}
 }
 
 /**
@@ -114,6 +120,8 @@ class Conductor(
         if (outcome != DecisionOutcome.ACCEPTED) return AskOutcome.Waited("会话没接这条建议（$outcome）")
         lastDecision = decision
         lastMove = plan.move
+        // 出处和原文交给记账口，答案落库时一起留档
+        ports.rememberContext(decision.evidenceIds, input.slice.text)
 
         val receipt = ports.pause()
         val effects = session.onPauseReceipt(receipt)

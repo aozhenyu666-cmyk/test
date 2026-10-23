@@ -82,7 +82,8 @@ data class Chunk(val startMs: Long, val endMs: Long, val text: String, val quali
 class TranscriptAssembler(
     private val sessionId: Long,
     private val appPackage: String,
-    private val epoch: Int,
+    /** 这一段材料的代号：换段以后旧转写不许进新段 */
+    val epoch: Int,
     private val nextId: () -> Long,
     /** 块之间超过这个间隔就算缺口 */
     private val gapThresholdMs: Long = 1_500,
