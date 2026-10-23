@@ -10,8 +10,8 @@
 
 | 产物 | 路径 | 说明 |
 |---|---|---|
-| debug APK | `_pet-reports/deepseek-v2/app-debug.apk`（workspace 内绝对路径：`C:\Users\敖震宇\Documents\deepseek-harness\default-workspace\_pet-reports\deepseek-v2\app-debug.apk`） | 28,010,039 bytes |
-| APK SHA-256 | `4D7B2F131B3F53E6DBD3B04C6224F97F7B3AAFB3BB254D181E125D9238679449` | 重新计算于本文件写入前 |
+| debug APK | `_pet-reports/deepseek-v2/app-debug.apk`（workspace 内绝对路径：`C:\Users\敖震宇\Documents\deepseek-harness\default-workspace\_pet-reports\deepseek-v2\app-debug.apk`） | 28,100,993 bytes |
+| APK SHA-256 | `FD7940A61D8D73E741D5FBD6CF1958E77B5A9436635A23819B796FAA5CB5A055` | 重新计算于 IME inset 修正后的最终构建 |
 | 仪器测试 APK | `_pet-reports/deepseek-v2/app-debug-androidTest.apk` | 2,307,422 bytes；**只编译，未执行** |
 | 仪器测试 APK SHA-256 | `F1A8A1983F9E031338D092B6D327DDA19CAA8748A0BBD3DBA46EE4ECD05E55D4` | |
 | lint 报告 | `_pet-reports/deepseek-v2/lint-results-debug.txt` | 0 errors / 5 warnings |

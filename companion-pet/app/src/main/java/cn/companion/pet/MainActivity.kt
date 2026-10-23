@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -78,7 +79,7 @@ class MainActivity : ComponentActivity() {
         val tabs = listOf("开始", "设置", "记忆", "统计")
         val colors = LocalCompanionColors.current
         Scaffold(containerColor = colors.paper) { inner ->
-            Column(Modifier.padding(inner).fillMaxSize().background(colors.paper)) {
+            Column(Modifier.padding(inner).fillMaxSize().imePadding().background(colors.paper)) {
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                     Eyebrow("COMPANION")
                     Text("桌宠", style = MaterialTheme.typography.headlineMedium, color = colors.ink)
