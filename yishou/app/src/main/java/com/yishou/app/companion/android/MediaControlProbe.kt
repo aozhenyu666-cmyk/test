@@ -6,9 +6,11 @@ import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.service.notification.NotificationListenerService
 import androidx.core.app.NotificationManagerCompat
+import com.yishou.app.companion.core.MediaPosition
 import com.yishou.app.companion.core.PauseOutcome
 import com.yishou.app.companion.core.PauseProof
 import com.yishou.app.companion.core.PlayState
+import com.yishou.app.companion.core.PositionSource
 import com.yishou.app.log.RunLog
 import kotlinx.coroutines.delay
 
@@ -86,6 +88,36 @@ class MediaControlProbe(private val context: Context) {
             RunLog.e("陪练探针", "发恢复指令失败", e)
             false to "恢复指令失败：${e.message ?: e.javaClass.simpleName}"
         }
+    }
+
+    /**
+     * 现在真正在放音的 App（不含一手自己）。
+     *
+     * 用它来认「这一场到底在听谁」：开局时用户还停在一手，拿不到目标应用；
+     * 等目标 App 开始出声再认，比让用户手填包名可靠。认不出就返回 null，不乱猜。
+     */
+    fun playingPackages(): List<String> {
+        if (!hasAccess()) return emptyList()
+        return sessions()
+            .filter { c ->
+                val pkg = c.packageName
+                pkg != null && pkg != context.packageName && PlayState.of(c.playbackState?.state ?: -1) == PlayState.PLAYING
+            }
+            .mapNotNull { it.packageName }
+            .distinct()
+    }
+
+    fun playingPackage(): String? = playingPackages().firstOrNull()
+
+    /**
+     * 目标 App 的播放进度。只在它确实在放的时候给：
+     * 暂停时播放器会把位置冻住，拿它当跳播证据会误判。
+     */
+    fun positionOf(pkg: String): MediaPosition? {
+        val c = sessions().firstOrNull { it.packageName == pkg } ?: return null
+        val st = c.playbackState ?: return null
+        if (PlayState.of(st.state) != PlayState.PLAYING) return null
+        return MediaPosition(st.position.takeIf { it >= 0 }, PositionSource.MEDIA_SESSION)
     }
 
     /** 找自己那个自控播放器用的标签 */

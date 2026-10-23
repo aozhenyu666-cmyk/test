@@ -23,16 +23,27 @@ class CompanionStore(private val context: Context, private val db: AppDatabase) 
 
     private val dao get() = db.companion()
 
-    suspend fun openSession(goal: String, minutes: Int, gear: String, pkg: String): Long =
+    /**
+     * 开场。场次 ID 就用开局那一刻的墙上时间显式写进主键：
+     * 服务里端口、会话、时间轴都先拿到了这个值，数据库行号后到；
+     * 不用同一个值的话，问答会记到场次行号之外，回看和删附件都对不上。
+     */
+    suspend fun openSession(startedAt: Long, goal: String, minutes: Int, gear: String, pkg: String): Long {
         dao.openSession(
             CompanionSessionRow(
-                startedAt = System.currentTimeMillis(),
+                id = startedAt,
+                startedAt = startedAt,
                 goal = goal.trim(),
                 minutes = minutes,
                 gear = gear,
                 pkg = pkg,
             ),
         )
+        return startedAt
+    }
+
+    /** 认出来在听谁以后补上目标包名 */
+    suspend fun setPkg(sessionId: Long, pkg: String) = dao.setPkg(sessionId, pkg)
 
     suspend fun closeSession(id: Long, materialSec: Int, asked: Int, missed: Int) =
         dao.closeSession(id, System.currentTimeMillis(), materialSec, asked, missed)

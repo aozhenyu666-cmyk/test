@@ -7,6 +7,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
 
 /** 一场视频陪练。 */
 @Entity(tableName = "companion_session", indices = [Index("startedAt")])
@@ -106,4 +107,16 @@ abstract class CompanionDao {
 
     @Query("SELECT * FROM companion_session ORDER BY startedAt DESC LIMIT :n")
     abstract suspend fun recentSessions(n: Int): List<CompanionSessionRow>
+
+    /** 认出来这次在听谁以后补上目标包名（开局时可能还不知道） */
+    @Query("UPDATE companion_session SET pkg = :pkg WHERE id = :id")
+    abstract suspend fun setPkg(id: Long, pkg: String)
+
+    /** 首页时之轮用：这段时间答过的（没答的不进账） */
+    @Query("SELECT * FROM companion_turn WHERE answeredAt >= :from ORDER BY answeredAt DESC")
+    abstract fun observeAnsweredSince(from: Long): Flow<List<CompanionTurnRow>>
+
+    /** 回看用：这一场问过什么、你怎么答的 */
+    @Query("SELECT * FROM companion_turn WHERE sessionId = :sessionId ORDER BY askedAt DESC")
+    abstract fun observeTurnsOf(sessionId: Long): Flow<List<CompanionTurnRow>>
 }

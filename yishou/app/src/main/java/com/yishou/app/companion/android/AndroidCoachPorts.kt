@@ -33,7 +33,8 @@ class AndroidCoachPorts(
     private val media: MediaControlProbe,
     private val store: CompanionStore,
     private val sessionId: Long,
-    private val pkg: String,
+    /** 这次在听谁：开局时可能还不知道，等媒体会话报出来再更新 */
+    private val pkg: () -> String,
     private val epoch: () -> Int,
     private val now: () -> Long,
 ) : CoachPorts {
@@ -57,8 +58,12 @@ class AndroidCoachPorts(
     }
 
     override suspend fun pause(): MediaReceipt {
-        val (outcome, _) = media.pauseAndVerify { it.packageName != app.packageName }
-        return MediaReceipt("$pkg/$sessionId", outcome, now(), epoch())
+        val target = pkg()
+        // 认得目标就只停它；认不出才退回「不是自己」——宁可停不了，也不停到别的 App
+        val (outcome, _) = media.pauseAndVerify { c ->
+            c.packageName != app.packageName && (target.isBlank() || c.packageName == target)
+        }
+        return MediaReceipt("$target/$sessionId", outcome, now(), epoch())
     }
 
     override suspend fun speak(text: String): Boolean {

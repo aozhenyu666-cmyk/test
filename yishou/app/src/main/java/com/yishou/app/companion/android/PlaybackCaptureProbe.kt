@@ -124,6 +124,15 @@ class PlaybackCaptureProbe(private val context: Context) {
         return null
     }
 
+    /**
+     * 换了目标 App：按新的 UID 重建内录。
+     * 开局时还不知道在听谁，等媒体会话报出目标再绑；绑不上就返回原因，由上层如实显示。
+     */
+    fun rebind(projection: MediaProjection, scope: CoroutineScope, targetUid: Int?): String? {
+        stop()
+        return start(projection, scope, targetUid)
+    }
+
     fun stop() {
         job?.cancel()
         job = null

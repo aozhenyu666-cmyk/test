@@ -60,6 +60,7 @@ class CompanionService : Service() {
     private var tap: TranscriptTap? = null
     private var speaker: Speaker? = null
     private var store: CompanionStore? = null
+    private var media: MediaControlProbe? = null
 
     private var timeline: ContextTimeline? = null
     private var assembler: TranscriptAssembler? = null
@@ -143,7 +144,8 @@ class CompanionService : Service() {
         }, android.os.Handler(android.os.Looper.getMainLooper()))
 
         startedWall = System.currentTimeMillis()
-        sessionId = 0
+        // 场次 ID 就用这个时间：端口、会话、时间轴、数据库主键必须是同一个值
+        sessionId = startedWall
         nextObsId = 0
         asked = 0
         missed = 0
@@ -153,6 +155,8 @@ class CompanionService : Service() {
         speaker = s
         val st = CompanionStore(this, app.database)
         store = st
+        val mediaProbe = MediaControlProbe(this)
+        media = mediaProbe
         val tl = ContextTimeline(sessionId = startedWall)
         timeline = tl
         assembler = TranscriptAssembler(
@@ -170,10 +174,10 @@ class CompanionService : Service() {
             app = app,
             chat = { ChatClient(config = { app.settings.llm.value }, http = ChatClient.defaultHttpClient(60), usage = app.stats) },
             speaker = s,
-            media = MediaControlProbe(this),
+            media = mediaProbe,
             store = st,
             sessionId = startedWall,
-            pkg = pkg,
+            pkg = { pkg },
             epoch = { tl.epoch() },
             now = { System.currentTimeMillis() },
         )
@@ -203,7 +207,7 @@ class CompanionService : Service() {
 
         frames = ScreenFrameProbe(this).also { it.start(p) }
 
-        app.appScopeLaunch { sessionId = st.openSession(goal, minutes, gear, pkg) }
+        app.appScopeLaunch { st.openSession(startedWall, goal, minutes, gear, pkg) }
 
         ready.notes.forEach { RunLog.e("视频陪练", it) }
         if (ready.notes.isNotEmpty()) publish(ready.notes.joinToString("；"))
@@ -251,6 +255,8 @@ class CompanionService : Service() {
     private fun step() {
         val sess = session ?: return
         val co = conductor ?: return
+        // 先认目标、认跳播：认出换了一段，旧问题就不能再出声
+        watchSource()
         if (co.tick()) {
             missed++
             publish("这一问没接上，记一笔（不算答错）")
@@ -274,6 +280,69 @@ class CompanionService : Service() {
                 }
             }
         }
+    }
+
+    // ---- 认目标、认跳播 ----
+
+    /**
+     * 这一场到底在听谁。
+     *
+     * 开局时用户还停在一手，拿不到目标应用；等媒体会话报出正在放音的 App 再认，
+     * 比让用户手填包名可靠。换 App 就当换了一段，旧问题作废。
+     */
+    private fun watchSource() {
+        val m = media ?: return
+        // 前台那个 App 又确实在放音，才认它；否则挑一个正在放音的会话，避免把后台音乐当成目标
+        val fg = com.yishou.app.gate.GateService.foreground
+        val playing = m.playingPackages()
+        val pick = fg?.takeIf { it != packageName && it in playing } ?: playing.firstOrNull()
+        if (pick != null && pick != pkg) adopt(pick)
+        val target = pkg
+        if (target.isBlank()) return
+        val pos = m.positionOf(target) ?: return
+        val tl = timeline ?: return
+        if (tl.observePosition(pos, elapsed())) {
+            session?.sourceChanged()
+            publish("跳播了：开新的一段，刚才那一问作废")
+        }
+    }
+
+    private fun adopt(newPkg: String) {
+        val first = pkg.isBlank()
+        pkg = newPkg
+        if (sessionId > 0) {
+            val id = sessionId
+            store?.let { s -> app.appScopeLaunch { s.setPkg(id, newPkg) } }
+        }
+        if (!first) {
+            session?.sourceChanged()
+            timeline?.bumpEpoch()
+            publish("换成了${appLabel(newPkg)}，开新的一段")
+        } else {
+            publish("在听${appLabel(newPkg)}")
+        }
+        // 认出来以后把内录收窄到这个 App，别把别的 App 的播放当材料
+        val uid = runCatching { packageManager.getApplicationInfo(newPkg, 0).uid }.getOrNull() ?: return
+        val proj = projection ?: return
+        val a = audio ?: return
+        app.appScopeLaunch {
+            val err = a.rebind(proj, scope, uid)
+            if (err != null) {
+                // 收窄失败就退回「所有 App 的声音」：宁可范围大一点，也不能一场没声音
+                RunLog.e("视频陪练", "按目标 UID 重建内录失败：$err")
+                val fallback = a.start(proj, scope, null)
+                publish(
+                    if (fallback == null) "听不到这个 App 的声音了？先按「所有 App」收着"
+                    else "内录没恢复：$fallback",
+                )
+            }
+        }
+    }
+
+    private fun appLabel(p: String): String = try {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(p, 0)).toString()
+    } catch (e: Exception) {
+        p
     }
 
     // ---- 界面动作 ----

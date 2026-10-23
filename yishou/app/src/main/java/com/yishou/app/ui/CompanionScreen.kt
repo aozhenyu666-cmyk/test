@@ -25,6 +25,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -54,6 +55,11 @@ fun CompanionScreen(onBack: () -> Unit) {
     val yishou = context.applicationContext as com.yishou.app.YishouApp
     val llmReady by yishou.settings.llm.collectAsStateWithLifecycle()
     val speech by yishou.settings.speech.collectAsStateWithLifecycle()
+    // 回看用：最近三天答过的，证明「问题和你的回答」真的记下来了
+    val recent by remember {
+        yishou.database.companion()
+            .observeAnsweredSince(System.currentTimeMillis() - 3L * 24 * 3_600_000)
+    }.collectAsStateWithLifecycle(emptyList())
     val ready = CompanionChecks.startup(
         llmReady = llmReady.isComplete,
         sttReady = speech.sttReady,
@@ -171,6 +177,29 @@ fun CompanionScreen(onBack: () -> Unit) {
             if (view.note.isNotBlank()) {
                 Card {
                     Text(view.note, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+
+            if (recent.isNotEmpty()) {
+                Card {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("最近记下的", fontWeight = FontWeight.SemiBold)
+                        recent.take(6).forEach { t ->
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text("问：${t.question}", style = MaterialTheme.typography.bodySmall)
+                                if (t.answer.isNotBlank()) {
+                                    Text("你答：${t.answer}", style = MaterialTheme.typography.bodySmall)
+                                }
+                                if (t.delta.isNotBlank()) {
+                                    Text(
+                                        "差值：${t.delta}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
