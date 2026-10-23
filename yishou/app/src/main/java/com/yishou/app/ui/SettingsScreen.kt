@@ -58,6 +58,7 @@ fun SettingsScreen(
     onPermissions: () -> Unit,
     onWatchedApps: () -> Unit,
     onLog: () -> Unit = {},
+    onProbe: () -> Unit = {},
     vm: SettingsViewModel = viewModel(),
 ) {
     val saved by vm.llm.collectAsStateWithLifecycle()
@@ -114,6 +115,7 @@ fun SettingsScreen(
             HorizontalDivider()
             SectionTitle("入口思考页")
             NavRow("权限与运行状态", "无障碍、通知、闹钟、电池，以及 vivo 的手动设置", onPermissions)
+            NavRow("陪练探针（调试）", "验内录、关键帧、暂停能不能真的拿到；只观察，不调模型", onProbe)
             NavRow(
                 "关注的应用与放行时长",
                 "已关注 ${prefs.watched.size} 个应用，${prefs.groups.size} 个应用组",

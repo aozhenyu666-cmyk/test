@@ -30,6 +30,8 @@ import androidx.core.app.RemoteInput
 import com.yishou.app.MainActivity
 import com.yishou.app.R
 import com.yishou.app.YishouApp
+import com.yishou.app.companion.android.CaptureArbiter
+import com.yishou.app.companion.core.CaptureHolder
 import com.yishou.app.data.MaterialSource
 import com.yishou.app.data.ScrollQuizRow
 import com.yishou.app.gate.GateService
@@ -110,6 +112,14 @@ class ScrollService : Service() {
             startForeground(ID_RUNNING, n)
         }
         if (projection != null) return
+
+        // 投屏只有一份：看屏或陪练探针占着的时候不硬开
+        CaptureArbiter.acquire(CaptureHolder.SCROLL)?.let { reason ->
+            RunLog.e("刷着练", reason)
+            _status.value = reason
+            stopAll()
+            return
+        }
 
         val code = intent.getIntExtra(EXTRA_CODE, 0)
         @Suppress("DEPRECATION")
@@ -390,6 +400,7 @@ class ScrollService : Service() {
         quiz = null
         quizId = null
         drill = null
+        CaptureArbiter.release(CaptureHolder.SCROLL)
         stopForeground(STOP_FOREGROUND_REMOVE)
         // 判卷还在跑就让它判完再退出（结果通知照样发）；没在判的题收掉
         if (judgeJob?.isActive == true) return

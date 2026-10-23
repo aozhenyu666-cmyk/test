@@ -19,6 +19,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.yishou.app.ui.ConsoleScreen
+import com.yishou.app.ui.CompanionProbeScreen
 import com.yishou.app.ui.DieFace
 import com.yishou.app.ui.theme.StoneMark
 import androidx.navigation.navArgument
@@ -187,7 +188,11 @@ class MainActivity : ComponentActivity() {
                             onPermissions = { nav.navigate("permissions") },
                             onWatchedApps = { nav.navigate("watched") },
                             onLog = { nav.navigate("log") },
+                            onProbe = { nav.navigate("probe") },
                         )
+                    }
+                    composable("probe") {
+                        CompanionProbeScreen(onBack = { nav.navigateUp() })
                     }
                     composable("newtask") {
                         TaskEditScreen(taskId = null, onBack = { nav.navigateUp() })
