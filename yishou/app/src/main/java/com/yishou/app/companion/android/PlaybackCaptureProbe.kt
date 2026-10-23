@@ -48,6 +48,10 @@ class PlaybackCaptureProbe(private val context: Context) {
     private var job: Job? = null
     private var signal = AudioSignal()
 
+    /** 需要拿到原始 PCM 的人从这里挂上来（分块转写照此）。回调在后台线程。 */
+    @Volatile
+    var tap: ((samples: ShortArray, count: Int, atMs: Long) -> Unit)? = null
+
     /** 开始读；成功返回 null，失败返回能直接显示的原因 */
     @SuppressLint("MissingPermission")
     fun start(projection: MediaProjection, scope: CoroutineScope, targetUid: Int? = null): String? {
@@ -110,6 +114,7 @@ class PlaybackCaptureProbe(private val context: Context) {
                     if (n <= 0) break
                     val rms = Pcm.rmsOf(frame, n)
                     signal.feed(rms, Pcm.durationMs(n, SAMPLE_RATE))
+                    tap?.invoke(frame, n, signal.totalMs)
                     _level.value = (rms / 4000.0).coerceIn(0.0, 1.0).toFloat()
                     _summary.value = signal.summary()
                 }
