@@ -27,6 +27,8 @@ class DayLedger(private val db: AppDatabase) {
         }
         db.partners().startedBetween(from, to).forEach { out += LedgerFrom.partner(it) }
         db.lines().movesBetween(from, to).forEach { m -> LedgerFrom.move(m)?.let(out::add) }
+        // 视频陪练的一问也进同一本账：没答的不进，跳过和没判成记「记了一笔」
+        db.companion().answeredBetween(from, to).forEach { t -> LedgerFrom.companionTurn(t)?.let(out::add) }
         return out.sortedBy { it.at }
     }
 }

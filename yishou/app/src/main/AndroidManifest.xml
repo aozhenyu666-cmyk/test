@@ -155,11 +155,13 @@
         </service>
 
         <!-- 视频陪练：用户点了开始并同意看屏后，在别的 App 上面持续听声音、看关键帧；
-             常驻通知带「停」，停止即释放投屏与录音 -->
+             常驻通知带「停」，停止即释放投屏与录音。
+             类型里必须带 microphone：Android 11 起，App 切到后台后只有在 microphone 类型的前台服务里
+             才拿得到麦克风；只写 mediaProjection 时，问题念完开麦会是一段静音。 -->
         <service
             android:name=".companion.android.CompanionService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
+            android:foregroundServiceType="mediaProjection|microphone" />
 
         <!-- 探针：同样必须由一个 mediaProjection 类型的前台服务持有投屏，
              否则 Android 14 起系统会拒绝 getMediaProjection（弹窗点了同意也拿不到） -->

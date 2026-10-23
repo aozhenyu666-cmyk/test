@@ -20,11 +20,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -34,7 +37,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yishou.app.companion.android.CompanionService
+import com.yishou.app.companion.android.CompanionStore
 import com.yishou.app.companion.core.CompanionChecks
+import kotlinx.coroutines.launch
 
 /**
  * 视频陪练：选目标、开一场、看胶囊、答题。
@@ -50,10 +55,19 @@ fun CompanionScreen(onBack: () -> Unit) {
     var minutes by rememberSaveable { mutableStateOf(25) }
     var gear by rememberSaveable { mutableStateOf("ACCOMPANY") }
     var answer by rememberSaveable { mutableStateOf("") }
+    var keepImages by rememberSaveable { mutableStateOf(false) }
+    var cleanNote by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     val yishou = context.applicationContext as com.yishou.app.YishouApp
     val llmReady by yishou.settings.llm.collectAsStateWithLifecycle()
     val speech by yishou.settings.speech.collectAsStateWithLifecycle()
+    // 回看用：最近三天答过的，证明「问题和你的回答」真的记下来了
+    val recent by remember {
+        yishou.database.companion()
+            .observeAnsweredSince(System.currentTimeMillis() - 3L * 24 * 3_600_000)
+    }.collectAsStateWithLifecycle(emptyList())
+    val voicePhase by yishou.voice.phase.collectAsStateWithLifecycle()
     val ready = CompanionChecks.startup(
         llmReady = llmReady.isComplete,
         sttReady = speech.sttReady,
@@ -65,7 +79,7 @@ fun CompanionScreen(onBack: () -> Unit) {
         val data = r.data
         if (r.resultCode == Activity.RESULT_OK && data != null) {
             // 目标应用的包名先留空：从无障碍那侧拿当前前台更准，接上了再填
-            CompanionService.start(context, r.resultCode, data, goal, minutes, gear, pkg = "")
+            CompanionService.start(context, r.resultCode, data, goal, minutes, gear, pkg = "", keepImages = keepImages)
         }
     }
 
@@ -99,6 +113,14 @@ fun CompanionScreen(onBack: () -> Unit) {
                         listOf("ACCOMPANY" to "陪", "LURE" to "诱", "STRICT" to "严").forEach { (k, label) ->
                             FilterChip(selected = gear == k, onClick = { gear = k }, label = { Text(label) }, enabled = !view.running)
                         }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Switch(checked = keepImages, onCheckedChange = { keepImages = it }, enabled = !view.running)
+                        Text(
+                            "保留训练卡图片（只存被选中的那一屏，可删）",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
@@ -151,10 +173,27 @@ fun CompanionScreen(onBack: () -> Unit) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("它问：", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(q, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                        if (voicePhase == com.yishou.app.speech.ListenPhase.LISTENING) {
+                            Text(
+                                "在听你说…说完自己停",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { yishou.voice.finish() }) { Text("我说完了") }
+                                TextButton(onClick = { yishou.voice.cancel() }) { Text("不说了") }
+                            }
+                        } else if (voicePhase == com.yishou.app.speech.ListenPhase.TRANSCRIBING) {
+                            Text(
+                                "在把你说的转成文字…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         OutlinedTextField(
                             value = answer,
                             onValueChange = { answer = it },
-                            label = { Text("说你的想法（这一步先用打字）") },
+                            label = { Text("也可以直接打字") },
                             modifier = Modifier.fillMaxWidth(),
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -174,9 +213,55 @@ fun CompanionScreen(onBack: () -> Unit) {
                 }
             }
 
+            if (recent.isNotEmpty()) {
+                Card {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("最近记下的", fontWeight = FontWeight.SemiBold)
+                        recent.take(6).forEach { t ->
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text("问：${t.question}", style = MaterialTheme.typography.bodySmall)
+                                if (t.answer.isNotBlank()) {
+                                    Text("你答：${t.answer}", style = MaterialTheme.typography.bodySmall)
+                                }
+                                if (t.delta.isNotBlank()) {
+                                    Text(
+                                        "差值：${t.delta}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Card {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("留痕清理", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "删掉最近三天的陪练记录和卡片图片；删了不能恢复。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                val (sessions, files) = CompanionStore(context, yishou.database)
+                                    .deleteSessionsSince(System.currentTimeMillis() - 3L * 24 * 3_600_000)
+                                cleanNote = "删了 ${sessions} 场、${files} 张卡片图"
+                            }
+                        },
+                        enabled = !view.running,
+                    ) { Text("清掉最近三天的陪练记录") }
+                    cleanNote?.let { n ->
+                        Text(n, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
             Text(
                 "内录只能听别的 App 的声音，一手自己放的朗读不会被录进去；目标 App 若禁止被采集，胶囊会写「声音缺失」。\n" +
-                    "这一版先打字作答，语音作答和浮窗还没接。",
+                    "问题念完会自动开麦听你答，说完自己停；没听清就打字，浮窗还没接。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 24.dp),

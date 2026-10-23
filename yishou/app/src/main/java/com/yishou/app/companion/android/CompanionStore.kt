@@ -2,6 +2,7 @@ package com.yishou.app.companion.android
 
 import android.content.Context
 import com.yishou.app.companion.core.AttemptMemory
+import com.yishou.app.companion.core.CardImage
 import com.yishou.app.companion.core.CompanionKeys
 import com.yishou.app.companion.core.ThinkMove
 import com.yishou.app.companion.core.Verdict
@@ -23,16 +24,27 @@ class CompanionStore(private val context: Context, private val db: AppDatabase) 
 
     private val dao get() = db.companion()
 
-    suspend fun openSession(goal: String, minutes: Int, gear: String, pkg: String): Long =
+    /**
+     * 开场。场次 ID 就用开局那一刻的墙上时间显式写进主键：
+     * 服务里端口、会话、时间轴都先拿到了这个值，数据库行号后到；
+     * 不用同一个值的话，问答会记到场次行号之外，回看和删附件都对不上。
+     */
+    suspend fun openSession(startedAt: Long, goal: String, minutes: Int, gear: String, pkg: String): Long {
         dao.openSession(
             CompanionSessionRow(
-                startedAt = System.currentTimeMillis(),
+                id = startedAt,
+                startedAt = startedAt,
                 goal = goal.trim(),
                 minutes = minutes,
                 gear = gear,
                 pkg = pkg,
             ),
         )
+        return startedAt
+    }
+
+    /** 认出来在听谁以后补上目标包名 */
+    suspend fun setPkg(sessionId: Long, pkg: String) = dao.setPkg(sessionId, pkg)
 
     suspend fun closeSession(id: Long, materialSec: Int, asked: Int, missed: Int) =
         dao.closeSession(id, System.currentTimeMillis(), materialSec, asked, missed)
@@ -90,9 +102,22 @@ class CompanionStore(private val context: Context, private val db: AppDatabase) 
         dao.clearSession(sessionId)
         var removed = 0
         paths.forEach { p ->
+            // 只删自家目录下的卡片图：坏路径不能带着我们把别处的文件删了
+            if (!CardImage.owned(context.filesDir, p)) {
+                RunLog.e("陪练记录", "这条附件路径不归我们管，跳过：$p")
+                return@forEach
+            }
             val f = File(p)
             if (f.exists() && f.delete()) removed++ else if (f.exists()) RunLog.e("陪练记录", "删不掉附件：$p")
         }
         return removed
+    }
+
+    /** 删掉某时间之后的场次（含卡片图）：返回「删了几场、删了几个文件」 */
+    suspend fun deleteSessionsSince(from: Long): Pair<Int, Int> {
+        val ids = dao.sessionIdsSince(from)
+        var files = 0
+        ids.forEach { files += deleteSession(it) }
+        return ids.size to files
     }
 }

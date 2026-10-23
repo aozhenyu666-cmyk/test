@@ -88,18 +88,20 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     val jobs: StateFlow<List<Job>> = yishou.database.jobs().observeJobs()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** 海龟汤、残局、刷着练、伴读：和每晚总结看同一本账 */
+    /** 海龟汤、残局、刷着练、伴读、视频陪练：和每晚总结看同一本账 */
     val elsewhere: StateFlow<List<WheelMark>> = kotlinx.coroutines.flow.combine(
         yishou.database.soups().observeSince(dayStart),
         yishou.database.endgames().observePlayedSince(dayStart),
         yishou.database.scrollQuizzes().observeSince(dayStart),
         yishou.database.partners().observeSince(dayStart),
-    ) { soups, endgames, quizzes, partners ->
+        yishou.database.companion().observeAnsweredSince(dayStart),
+    ) { soups, endgames, quizzes, partners, turns ->
         val entries = soups.map { com.yishou.app.summary.LedgerFrom.soup(it, "") } +
             endgames.mapNotNull { com.yishou.app.summary.LedgerFrom.endgame(it) } +
             quizzes.mapNotNull { com.yishou.app.summary.LedgerFrom.scroll(it) } +
             quizzes.mapNotNull { com.yishou.app.summary.LedgerFrom.scrollRedo(it) } +
-            partners.map { com.yishou.app.summary.LedgerFrom.partner(it) }
+            partners.map { com.yishou.app.summary.LedgerFrom.partner(it) } +
+            turns.mapNotNull { com.yishou.app.summary.LedgerFrom.companionTurn(it) }
         entries.filter { it.at >= dayStart }.map { WheelMark(it.at, MarkKind.DRILL, com.yishou.app.summary.Ledger.good(it.mark)) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 

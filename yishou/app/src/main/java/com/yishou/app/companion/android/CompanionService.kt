@@ -16,6 +16,7 @@ import com.yishou.app.R
 import com.yishou.app.YishouApp
 import com.yishou.app.companion.core.AskOutcome
 import com.yishou.app.companion.core.Capsule
+import com.yishou.app.companion.core.CardImage
 import com.yishou.app.companion.core.CapsuleState
 import com.yishou.app.companion.core.CaptureHolder
 import com.yishou.app.companion.core.Chunk
@@ -26,6 +27,8 @@ import com.yishou.app.companion.core.ContextTimeline
 import com.yishou.app.companion.core.InterruptBudget
 import com.yishou.app.companion.core.TranscriptAssembler
 import com.yishou.app.companion.core.VideoCoach
+import com.yishou.app.companion.core.VoiceAnswer
+import com.yishou.app.speech.Heard
 import com.yishou.app.llm.ChatClient
 import com.yishou.app.log.RunLog
 import com.yishou.app.look.ScreenLookService
@@ -60,6 +63,7 @@ class CompanionService : Service() {
     private var tap: TranscriptTap? = null
     private var speaker: Speaker? = null
     private var store: CompanionStore? = null
+    private var media: MediaControlProbe? = null
 
     private var timeline: ContextTimeline? = null
     private var assembler: TranscriptAssembler? = null
@@ -72,7 +76,11 @@ class CompanionService : Service() {
     private var startedWall = 0L
     private var goal = ""
     private var pkg = ""
+    /** 用户这次是否要保留训练卡图片；默认不存 */
+    private var keepImages = false
     private var ticker: Job? = null
+    /** 正在听用户答这一问；同一时间只开一次麦 */
+    private var listening: Job? = null
     private var lastTryAt = 0L
     private var nextObsId = 0L
     private var asked = 0
@@ -88,6 +96,7 @@ class CompanionService : Service() {
             ACTION_ANSWER -> answer(intent.getStringExtra(EXTRA_TEXT).orEmpty())
             ACTION_READY -> ready()
             ACTION_SKIP -> skip()
+            ACTION_VOICE_DONE -> app.voice.finish()
             ACTION_STOP -> stopAll()
             else -> if (!started(intent)) stopSelf()
         }
@@ -97,7 +106,14 @@ class CompanionService : Service() {
     private fun started(intent: Intent?): Boolean {
         if (session != null) return true
         ensureChannel(this)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        // 没有录音权限时不能带 microphone 类型起前台服务，系统会直接拒绝
+        val micReady = app.voice.hasPermission()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // 后台开麦要 microphone 类型（Android 11 起），投屏要 mediaProjection；有麦克风就一起要
+            val types = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or
+                (if (micReady) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
+            startForeground(ID, notification("正在准备"), types)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(ID, notification("正在准备"), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         } else {
             startForeground(ID, notification("正在准备"))
@@ -106,7 +122,7 @@ class CompanionService : Service() {
         val ready = com.yishou.app.companion.core.CompanionChecks.startup(
             llmReady = app.settings.llm.value.isComplete,
             sttReady = app.settings.speech.value.sttReady,
-            canRecord = app.voice.hasPermission(),
+            canRecord = micReady,
             notifyAllowed = androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled(),
         )
         if (!ready.canStart) return fail(ready.blockers.first())
@@ -122,6 +138,7 @@ class CompanionService : Service() {
         if (data == null || code == 0) return fail("没有拿到投屏授权")
 
         goal = intent.getStringExtra(EXTRA_GOAL).orEmpty()
+        keepImages = intent?.getBooleanExtra(EXTRA_KEEP_IMAGES, false) == true
         val minutes = intent.getIntExtra(EXTRA_MINUTES, 25)
         val gear = intent.getStringExtra(EXTRA_GEAR) ?: "ACCOMPANY"
         pkg = intent.getStringExtra(EXTRA_PKG).orEmpty()
@@ -143,7 +160,8 @@ class CompanionService : Service() {
         }, android.os.Handler(android.os.Looper.getMainLooper()))
 
         startedWall = System.currentTimeMillis()
-        sessionId = 0
+        // 场次 ID 就用这个时间：端口、会话、时间轴、数据库主键必须是同一个值
+        sessionId = startedWall
         nextObsId = 0
         asked = 0
         missed = 0
@@ -153,6 +171,8 @@ class CompanionService : Service() {
         speaker = s
         val st = CompanionStore(this, app.database)
         store = st
+        val mediaProbe = MediaControlProbe(this)
+        media = mediaProbe
         val tl = ContextTimeline(sessionId = startedWall)
         timeline = tl
         assembler = TranscriptAssembler(
@@ -170,12 +190,13 @@ class CompanionService : Service() {
             app = app,
             chat = { ChatClient(config = { app.settings.llm.value }, http = ChatClient.defaultHttpClient(60), usage = app.stats) },
             speaker = s,
-            media = MediaControlProbe(this),
+            media = mediaProbe,
             store = st,
             sessionId = startedWall,
-            pkg = pkg,
+            pkg = { pkg },
             epoch = { tl.epoch() },
             now = { System.currentTimeMillis() },
+            image = { turnId -> captureCard(turnId) },
         )
         ports = pt
         conductor = Conductor(sess, ch, pt, { elapsed() })
@@ -201,9 +222,13 @@ class CompanionService : Service() {
             ).also { t -> a.tap = { buf, n, at -> t.feed(buf, n, at) } }
         }
 
-        frames = ScreenFrameProbe(this).also { it.start(p) }
+        frames = ScreenFrameProbe(this).also {
+            // 只有用户说要留卡片图才在内存里多压一份 JPEG，不为了存卡持续录屏
+            it.encodeJpeg = keepImages
+            it.start(p)
+        }
 
-        app.appScopeLaunch { sessionId = st.openSession(goal, minutes, gear, pkg) }
+        app.appScopeLaunch { st.openSession(startedWall, goal, minutes, gear, pkg) }
 
         ready.notes.forEach { RunLog.e("视频陪练", it) }
         if (ready.notes.isNotEmpty()) publish(ready.notes.joinToString("；"))
@@ -251,9 +276,13 @@ class CompanionService : Service() {
     private fun step() {
         val sess = session ?: return
         val co = conductor ?: return
+        // 先认目标、认跳播：认出换了一段，旧问题就不能再出声
+        watchSource()
         if (co.tick()) {
             missed++
+            stopListening()
             publish("这一问没接上，记一笔（不算答错）")
+            resumeIfOurs()
         }
         publish(Capsule.text(capsuleState()), running = true)
 
@@ -267,20 +296,162 @@ class CompanionService : Service() {
                     is AskOutcome.Asked -> {
                         asked++
                         publish("", question = out.question)
+                        // 念完才开始听：念的时候开麦会把朗读录进去
+                        listenAnswer()
                     }
                     is AskOutcome.NeedManual -> publish(out.hint, question = null, hint = out.hint)
-                    is AskOutcome.Waited -> Unit
+                    is AskOutcome.Waited -> resumeIfOurs()
                     is AskOutcome.Busy -> Unit
                 }
             }
         }
     }
 
+    // ---- 认目标、认跳播 ----
+
+    /**
+     * 这一场到底在听谁。
+     *
+     * 开局时用户还停在一手，拿不到目标应用；等媒体会话报出正在放音的 App 再认，
+     * 比让用户手填包名可靠。换 App 就当换了一段，旧问题作废。
+     */
+    private fun watchSource() {
+        val m = media ?: return
+        // 前台那个 App 又确实在放音，才认它；否则挑一个正在放音的会话，避免把后台音乐当成目标
+        val fg = com.yishou.app.gate.GateService.foreground
+        val playing = m.playingPackages()
+        val pick = fg?.takeIf { it != packageName && it in playing } ?: playing.firstOrNull()
+        if (pick != null && pick != pkg) adopt(pick)
+        val target = pkg
+        if (target.isBlank()) return
+        val pos = m.positionOf(target) ?: return
+        val tl = timeline ?: return
+        if (tl.observePosition(pos, elapsed())) {
+            session?.sourceChanged()
+            media?.forgetPause()
+            publish("跳播了：开新的一段，刚才那一问作废")
+        }
+    }
+
+    private fun adopt(newPkg: String) {
+        stopListening()
+        // 换了 App：旧的暂停不能拿去恢复新视频
+        media?.forgetPause()
+        val first = pkg.isBlank()
+        pkg = newPkg
+        if (sessionId > 0) {
+            val id = sessionId
+            store?.let { s -> app.appScopeLaunch { s.setPkg(id, newPkg) } }
+        }
+        if (!first) {
+            session?.sourceChanged()
+            timeline?.bumpEpoch()
+            publish("换成了${appLabel(newPkg)}，开新的一段")
+        } else {
+            publish("在听${appLabel(newPkg)}")
+        }
+        // 认出来以后把内录收窄到这个 App，别把别的 App 的播放当材料
+        val uid = runCatching { packageManager.getApplicationInfo(newPkg, 0).uid }.getOrNull() ?: return
+        val proj = projection ?: return
+        val a = audio ?: return
+        app.appScopeLaunch {
+            val err = a.rebind(proj, scope, uid)
+            if (err != null) {
+                // 收窄失败就退回「所有 App 的声音」：宁可范围大一点，也不能一场没声音
+                RunLog.e("视频陪练", "按目标 UID 重建内录失败：$err")
+                val fallback = a.start(proj, scope, null)
+                publish(
+                    if (fallback == null) "听不到这个 App 的声音了？先按「所有 App」收着"
+                    else "内录没恢复：$fallback",
+                )
+            }
+        }
+    }
+
+    private fun appLabel(p: String): String = try {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(p, 0)).toString()
+    } catch (e: Exception) {
+        p
+    }
+
+    /**
+     * 把「这一次确实由自己按停」的播放器接着放。
+     *
+     * 没停过、换了 App、用户自己已经按了继续，都什么都不做；
+     * 发了指令却没接着放，要如实说，不能显示成「已继续」。
+     */
+    private fun resumeIfOurs() {
+        val m = media ?: return
+        scope.launch {
+            when (val r = m.resumeOwn()) {
+                is ResumeResult.Failed -> publish("没能自动接着放：undefined；你手动点一下播放")
+                else -> Unit
+            }
+        }
+    }
+
+    // ---- 训练卡图片 ----
+
+    /**
+     * 只存被选入卡片的那一屏。
+     *
+     * 没开「保留训练卡图片」、或者这一问没有可留的帧，就什么都不写；
+     * 不为了存卡持续录屏，也不在用户没同意时落任何图片。
+     */
+    private fun captureCard(turnId: Long): String? {
+        if (!keepImages) return null
+        val bytes = frames?.latestJpegBytes() ?: return null
+        return try {
+            val f = CardImage.file(filesDir, sessionId, turnId)
+            f.parentFile?.mkdirs()
+            f.writeBytes(bytes)
+            f.absolutePath
+        } catch (e: Exception) {
+            RunLog.e("视频陪练", "存训练卡图片失败", e)
+            null
+        }
+    }
+
+    // ---- 语音作答 ----
+
+    /**
+     * 问题念完、在等回答时才开麦；说完自动停（VAD），也可以手动「说完了」。
+     *
+     * 听不清、听写失败都退回打字，不记成答错；说出口的那句和打字走同一条 [answer]。
+     */
+    private fun listenAnswer() {
+        val sess = session ?: return
+        if (!VoiceAnswer.shouldListen(sess.phase())) return
+        if (listening?.isActive == true) return
+        listening = scope.launch {
+            // 回答问题会停下来想，把「说完了」的安静阈值放宽一点，别把思考当结束
+            val heard = app.voice.listen(silenceMs = 2_400, waitMs = 10_000)
+            if (!isActive) return@launch
+            when (heard) {
+                is Heard.Text -> {
+                    val text = VoiceAnswer.accept(heard.text)
+                    if (text == null) publish(VoiceAnswer.missed()) else answer(text, fromVoice = true)
+                }
+                Heard.Nothing -> publish(VoiceAnswer.missed())
+                is Heard.Failed -> publish(VoiceAnswer.missed(heard.message))
+            }
+        }
+    }
+
+    /** 不在等回答时把麦关掉：念问题、判答案、换段、停掉都不该继续录 */
+    private fun stopListening() {
+        listening?.cancel()
+        listening = null
+        app.voice.cancel()
+    }
+
     // ---- 界面动作 ----
 
-    private fun answer(text: String) {
+    private fun answer(text: String, fromVoice: Boolean = false) {
         val co = conductor ?: return
         if (text.isBlank()) return
+        // 打字作答时把麦收掉；语音那条路已经自己结束了，别再取消自己
+        if (fromVoice) listening = null else stopListening()
         val material = timeline?.slice(elapsed(), System.currentTimeMillis() + 20_000)?.text.orEmpty()
         scope.launch {
             val r = co.answer(text, material)
@@ -296,6 +467,8 @@ class CompanionService : Service() {
                 )
                 // 下次出题要接上这次的差值
                 memory = store?.weakMemory(3).orEmpty()
+                // 这一问走完了：如果是自己按停的，接着放
+                resumeIfOurs()
             }
         }
     }
@@ -313,8 +486,12 @@ class CompanionService : Service() {
 
     private fun skip() {
         val sess = session ?: return
+        // 没有正在等回答的问题时点「跳过」什么都不该发生
+        if (sess.question() == null) return
+        stopListening()
         sess.dropQuestion()
         publish("这一问跳过了（不算答错）", question = null, hint = null)
+        resumeIfOurs()
     }
 
     private fun capsuleState(): CapsuleState = CapsuleState(
@@ -333,6 +510,8 @@ class CompanionService : Service() {
     private fun stopAll() {
         if (stopped) return
         stopped = true
+        stopListening()
+        media?.forgetPause()
         ticker?.cancel()
         ticker = null
         tap?.flush()
@@ -379,6 +558,15 @@ class CompanionService : Service() {
             this, 72, Intent(this, CompanionService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        // 人还在别的 App 里看视频，不能要求他切回来才能结束说话
+        val done = PendingIntent.getService(
+            this, 75, Intent(this, CompanionService::class.java).setAction(ACTION_VOICE_DONE),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val skip = PendingIntent.getService(
+            this, 76, Intent(this, CompanionService::class.java).setAction(ACTION_SKIP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_yishou)
             .setContentTitle("一手 · 视频陪练")
@@ -387,6 +575,8 @@ class CompanionService : Service() {
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(open)
+            .addAction(0, "说完了", done)
+            .addAction(0, "跳过", skip)
             .addAction(0, "停", stop)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
@@ -406,8 +596,12 @@ class CompanionService : Service() {
             hint = hint,
             phase = session?.phase()?.label.orEmpty(),
         )
+        // 通知栏也直接写问题：用户不切回一手也能看第二眼
+        val text = question?.takeIf { it.isNotBlank() }?.let { "问：$it" }
+            ?: hint?.takeIf { it.isNotBlank() }
+            ?: note.ifBlank { _view.value.capsule }
         try {
-            getSystemService(NotificationManager::class.java).notify(ID, notification(note.ifBlank { _view.value.capsule }))
+            getSystemService(NotificationManager::class.java).notify(ID, notification(text))
         } catch (e: SecurityException) { }
     }
 
@@ -426,6 +620,7 @@ class CompanionService : Service() {
         private const val ACTION_ANSWER = "answer"
         private const val ACTION_READY = "ready"
         private const val ACTION_SKIP = "skip"
+        private const val ACTION_VOICE_DONE = "voice_done"
         private const val ACTION_STOP = "stop"
         private const val EXTRA_CODE = "code"
         private const val EXTRA_DATA = "data"
@@ -434,6 +629,7 @@ class CompanionService : Service() {
         private const val EXTRA_GEAR = "gear"
         private const val EXTRA_PKG = "pkg"
         private const val EXTRA_TEXT = "text"
+        private const val EXTRA_KEEP_IMAGES = "keep_images"
 
         private val _view = MutableStateFlow(View())
         val view: StateFlow<View> = _view.asStateFlow()
@@ -444,7 +640,16 @@ class CompanionService : Service() {
             )
         }
 
-        fun start(context: Context, code: Int, data: Intent, goal: String, minutes: Int, gear: String, pkg: String) {
+        fun start(
+            context: Context,
+            code: Int,
+            data: Intent,
+            goal: String,
+            minutes: Int,
+            gear: String,
+            pkg: String,
+            keepImages: Boolean = false,
+        ) {
             context.startForegroundService(
                 Intent(context, CompanionService::class.java)
                     .putExtra(EXTRA_CODE, code)
@@ -452,7 +657,8 @@ class CompanionService : Service() {
                     .putExtra(EXTRA_GOAL, goal)
                     .putExtra(EXTRA_MINUTES, minutes)
                     .putExtra(EXTRA_GEAR, gear)
-                    .putExtra(EXTRA_PKG, pkg),
+                    .putExtra(EXTRA_PKG, pkg)
+                    .putExtra(EXTRA_KEEP_IMAGES, keepImages),
             )
         }
 
@@ -465,6 +671,9 @@ class CompanionService : Service() {
         fun answer(context: Context, text: String) = action(context, ACTION_ANSWER, text)
         fun ready(context: Context) = action(context, ACTION_READY)
         fun skip(context: Context) = action(context, ACTION_SKIP)
+
+        /** 说完了：通知栏就能结束这一次收音，不用切回一手 */
+        fun voiceDone(context: Context) = action(context, ACTION_VOICE_DONE)
         fun stop(context: Context) = action(context, ACTION_STOP)
     }
 }

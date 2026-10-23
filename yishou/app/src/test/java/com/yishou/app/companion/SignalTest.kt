@@ -6,6 +6,7 @@ import com.yishou.app.companion.core.PauseProof
 import com.yishou.app.companion.core.Pcm
 import com.yishou.app.companion.core.PlayState
 import com.yishou.app.companion.core.ProbeVerdict
+import com.yishou.app.companion.core.ResumePlan
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -88,6 +89,19 @@ class SignalTest {
         assertFalse(PauseProof.canResume(PauseOutcome.VERIFIED, stillSameSession = false, userTouched = false))
         assertFalse(PauseProof.canResume(PauseOutcome.VERIFIED, stillSameSession = true, userTouched = true))
         assertFalse(PauseProof.canResume(PauseOutcome.STILL_PLAYING, stillSameSession = true, userTouched = false))
+    }
+
+    @Test
+    fun `恢复：只在还是暂停时按播放`() {
+        assertEquals(ResumePlan.PLAY, PauseProof.resumePlan(PauseOutcome.VERIFIED, true, false, PlayState.PAUSED))
+        // 用户自己已经按了继续：不再发指令，也不报告「我恢复了」
+        assertEquals(ResumePlan.ALREADY_PLAYING, PauseProof.resumePlan(PauseOutcome.VERIFIED, true, false, PlayState.PLAYING))
+        // 不是自己停住的、换了会话、用户插手、状态不明：一律留给用户
+        assertEquals(ResumePlan.LEAVE, PauseProof.resumePlan(PauseOutcome.STILL_PLAYING, true, false, PlayState.PAUSED))
+        assertEquals(ResumePlan.LEAVE, PauseProof.resumePlan(PauseOutcome.UNSUPPORTED, true, false, PlayState.PAUSED))
+        assertEquals(ResumePlan.LEAVE, PauseProof.resumePlan(PauseOutcome.VERIFIED, false, false, PlayState.PAUSED))
+        assertEquals(ResumePlan.LEAVE, PauseProof.resumePlan(PauseOutcome.VERIFIED, true, true, PlayState.PAUSED))
+        assertEquals(ResumePlan.LEAVE, PauseProof.resumePlan(PauseOutcome.VERIFIED, true, false, PlayState.STOPPED))
     }
 
     @Test
