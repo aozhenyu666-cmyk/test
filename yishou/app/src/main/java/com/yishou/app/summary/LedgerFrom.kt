@@ -1,6 +1,7 @@
 package com.yishou.app.summary
 
 import com.yishou.app.data.CardAttempt
+import com.yishou.app.data.CompanionTurnRow
 import com.yishou.app.data.DrillRow
 import com.yishou.app.data.Endgame
 import com.yishou.app.data.LineVerdict
@@ -94,5 +95,23 @@ object LedgerFrom {
     fun move(m: Move): LedgerEntry? {
         if (m.verdict == LineVerdict.PARKED) return null
         return LedgerEntry(m.createdAt, LedgerKind.LINE, if (m.verdict == LineVerdict.OK) LedgerMark.HIT else LedgerMark.MISS, m.question, m.answer, m.note)
+    }
+
+    /**
+     * 视频陪练的一问。
+     *
+     * 没答的不进账；**跳过和没判成都记 NONE，不记 MISS**——识别坏了、网络断了、
+     * 用户不想答，这些都不该在账上变成「没接住」。
+     */
+    fun companionTurn(t: CompanionTurnRow): LedgerEntry? {
+        val at = t.answeredAt ?: return null
+        val mark = when (t.verdict) {
+            "HIT" -> LedgerMark.HIT
+            "NEAR" -> LedgerMark.NEAR
+            "MISS" -> LedgerMark.MISS
+            else -> LedgerMark.NONE
+        }
+        val what = "视频陪练·${t.move}：${t.question.ifBlank { "一问" }}"
+        return LedgerEntry(at, LedgerKind.VIDEO, mark, what, t.answer, t.delta)
     }
 }

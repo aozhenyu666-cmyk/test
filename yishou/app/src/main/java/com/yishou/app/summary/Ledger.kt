@@ -17,6 +17,7 @@ enum class LedgerKind(val label: String) {
     PARTNER("伴读"),
     LINE("主线"),
     ROUND("陪练"),
+    VIDEO("视频陪练"),
 }
 
 /** 这一手落得怎么样：接住、差一点、没接住；伴读这种没有对错的记 NONE */

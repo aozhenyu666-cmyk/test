@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class, Material::class, DrillRow::class, Deed::class, MaterialKey::class, Job::class, JobStep::class, Outside::class, Line::class, Move::class, Echo::class, Endgame::class, Impulse::class, Soup::class, PartnerSession::class, ScrollQuizRow::class],
-    version = 14,
+    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class, Material::class, DrillRow::class, Deed::class, MaterialKey::class, Job::class, JobStep::class, Outside::class, Line::class, Move::class, Echo::class, Endgame::class, Impulse::class, Soup::class, PartnerSession::class, ScrollQuizRow::class, CompanionSessionRow::class, CompanionTurnRow::class],
+    version = 15,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -26,8 +26,21 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun partners(): PartnerDao
     abstract fun soups(): SoupDao
     abstract fun scrollQuizzes(): ScrollQuizDao
+    abstract fun companion(): CompanionDao
 
     companion object {
+        /**
+         * 0.23：视频陪练的两张新表。
+         *
+         * 只新建，不动任何旧表——旧数据原样保留。
+         * 建表语句放在 [CompanionSchemaSql]，测试会拿它和 Room 导出的 schema 比对。
+         */
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                CompanionSchemaSql.CREATE.forEach { db.execSQL(it) }
+            }
+        }
+
         /** 0.21：刷着练问过的每一句留下来，没接住的回头再想 */
         val MIGRATION_13_14 = object : Migration(13, 14) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -230,7 +243,7 @@ abstract class AppDatabase : RoomDatabase() {
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "yishou.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
                 .build()
     }
 }
