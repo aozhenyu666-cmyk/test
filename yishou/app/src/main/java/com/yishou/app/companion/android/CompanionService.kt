@@ -130,9 +130,9 @@ class CompanionService : Service() {
             getSystemService(android.media.projection.MediaProjectionManager::class.java).getMediaProjection(code, data)
         } catch (e: Exception) {
             RunLog.e("视频陪练", "拿不到投屏授权", e)
-            null
+            return fail("系统拒绝给投屏：${e.message ?: e.javaClass.simpleName}")
         }
-        if (p == null) return fail("没有拿到投屏授权")
+        if (p == null) return fail("没有拿到投屏授权（系统回执无效，回执码 $code）")
         projection = p
         p.registerCallback(object : android.media.projection.MediaProjection.Callback() {
             override fun onStop() {

@@ -161,6 +161,13 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
+        <!-- 探针：同样必须由一个 mediaProjection 类型的前台服务持有投屏，
+             否则 Android 14 起系统会拒绝 getMediaProjection（弹窗点了同意也拿不到） -->
+        <service
+            android:name=".companion.android.CompanionProbeService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
         <!-- 刷着练：用户同意看屏后，只在点“考我一下”或在关注的应用里刷满设定分钟时截一屏出题；截图不保存，60 分钟自动停 -->
         <service
             android:name=".scroll.ScrollService"
