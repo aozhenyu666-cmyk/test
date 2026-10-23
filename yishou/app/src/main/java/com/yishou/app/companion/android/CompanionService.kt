@@ -93,6 +93,7 @@ class CompanionService : Service() {
             ACTION_ANSWER -> answer(intent.getStringExtra(EXTRA_TEXT).orEmpty())
             ACTION_READY -> ready()
             ACTION_SKIP -> skip()
+            ACTION_VOICE_DONE -> app.voice.finish()
             ACTION_STOP -> stopAll()
             else -> if (!started(intent)) stopSelf()
         }
@@ -499,6 +500,11 @@ class CompanionService : Service() {
             this, 72, Intent(this, CompanionService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        // 人还在别的 App 里看视频，不能要求他切回来才能结束说话
+        val done = PendingIntent.getService(
+            this, 75, Intent(this, CompanionService::class.java).setAction(ACTION_VOICE_DONE),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_yishou)
             .setContentTitle("一手 · 视频陪练")
@@ -507,6 +513,7 @@ class CompanionService : Service() {
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(open)
+            .addAction(0, "说完了", done)
             .addAction(0, "停", stop)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
@@ -546,6 +553,7 @@ class CompanionService : Service() {
         private const val ACTION_ANSWER = "answer"
         private const val ACTION_READY = "ready"
         private const val ACTION_SKIP = "skip"
+        private const val ACTION_VOICE_DONE = "voice_done"
         private const val ACTION_STOP = "stop"
         private const val EXTRA_CODE = "code"
         private const val EXTRA_DATA = "data"
@@ -585,6 +593,9 @@ class CompanionService : Service() {
         fun answer(context: Context, text: String) = action(context, ACTION_ANSWER, text)
         fun ready(context: Context) = action(context, ACTION_READY)
         fun skip(context: Context) = action(context, ACTION_SKIP)
+
+        /** 说完了：通知栏就能结束这一次收音，不用切回一手 */
+        fun voiceDone(context: Context) = action(context, ACTION_VOICE_DONE)
         fun stop(context: Context) = action(context, ACTION_STOP)
     }
 }
