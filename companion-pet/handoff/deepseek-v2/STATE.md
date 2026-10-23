@@ -23,5 +23,5 @@
   - 预算并发请求次数、相关召回/纠正/遗忘、主动话题静频
   - 360/430dp、深浅色、字体 1.3、TalkBack、减少动画
 - 下一条动作：在 iQOO 12 上按 VALIDATION.md “V2 新增验收项”逐项记录；若发现设备问题，回到对应阶段修复并补测试
-- 检查点：D0 `c1b211b`；D1-D3 `6488b85`；D4-D5 见本轮最后一次提交
-- 注意：`6488b85` 的 CI 首次失败是 Maven Central 429（依赖解析），不是测试失败；已重跑，最终结果以 Actions 为准
+- 检查点：D0 `c1b211b`；D1-D3 `6488b85`；D4-D5 代码提交 `18a9b6c`
+- CI：`18a9b6c` 运行 `https://github.com/aozhenyu666-cmyk/test/actions/runs/39966215171` 结论 success；`6488b85` 首次失败是 Maven Central 429（依赖解析），随后被新 push 的并发组取消，不是测试失败
