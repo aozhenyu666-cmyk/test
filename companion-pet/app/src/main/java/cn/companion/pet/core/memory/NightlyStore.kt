@@ -88,12 +88,17 @@ class NightlyStore(
     fun prepare(today: LocalDate = LocalDate.now(clock)): PreparedNightly? = synchronized(lock) {
         LegacyEventImport.ensure(memory, events, zone)
         val day = events.pendingDays().firstOrNull { !it.isAfter(today) } ?: return null
-        val pending = events.pendingForDay(day)
-        if (pending.isEmpty()) return null
-
+        val allPending = events.pendingForDay(day)
+        if (allPending.isEmpty()) return null
         val profile = memory.profile()
         val persona = memory.persona()
         val deleted = memory.tombstones()
+        // 用户忘记的内容不进入夜间整理；被过滤的事件直接标记已处理，避免永远卡在待处理里。
+        val pending = allPending.filter { ProfileRules.normalize(it.text) !in deleted }
+        if (pending.isEmpty()) {
+            events.markArchived(day, allPending.map { it.id })
+            return null
+        }
         val profileVersion = hash(profile)
         val id = batchId(day, pending, profileVersion)
         val stored = readBatch(id)

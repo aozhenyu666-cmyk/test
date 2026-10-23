@@ -4,27 +4,27 @@
 执行器：DeepSeek Harness
 分支：`pet-v15/deepseek-continuity-v2`
 基线：`a9cbe7cb55e02ab44d3d64d2245b18fe0da2f24e`
-本轮代码提交：`18a9b6ccd83eaee93e564562b62dfe13a9e366a8`（D4-D5 界面与交付）；D1-D3 检查点 `6488b85fe39326de57248ccb552bdd58e6fff532`；D0 为 `c1b211bca9a3f5b6c73522239e5f43761c812939`。这份交付文档本身可能在此后再有一个 docs-only 提交，不改变代码。
+代码检查点：D0 `c1b211b`；D1-D3 `6488b85`；D4-D5 界面与交付 `18a9b6c`；之后又补了“遗忘内容不进入夜间整理”的修正（最终代码 SHA 见交付回复与 `git log -1`，本文档不再自引用）。
 
 ## 1. 产物
 
 | 产物 | 路径 | 说明 |
 |---|---|---|
 | debug APK | `_pet-reports/deepseek-v2/app-debug.apk`（workspace 内绝对路径：`C:\Users\敖震宇\Documents\deepseek-harness\default-workspace\_pet-reports\deepseek-v2\app-debug.apk`） | 28,100,993 bytes |
-| APK SHA-256 | `FD7940A61D8D73E741D5FBD6CF1958E77B5A9436635A23819B796FAA5CB5A055` | 重新计算于 IME inset 修正后的最终构建 |
+| APK SHA-256 | `54B71E5EC9C294BA49DAB6CCD16E5ECB03BC111CFE8FD29B377C0BA5EFBF9220` | 重新计算于 IME inset 修正后的最终构建 |
 | 仪器测试 APK | `_pet-reports/deepseek-v2/app-debug-androidTest.apk` | 2,307,422 bytes；**只编译，未执行** |
 | 仪器测试 APK SHA-256 | `F1A8A1983F9E031338D092B6D327DDA19CAA8748A0BBD3DBA46EE4ECD05E55D4` | |
 | lint 报告 | `_pet-reports/deepseek-v2/lint-results-debug.txt` | 0 errors / 5 warnings |
 | 基线审计 | `companion-pet/handoff/deepseek-v2/BASELINE.md` | D0 源码位置与复现设计 |
 | 状态记录 | `companion-pet/handoff/deepseek-v2/STATE.md` | 每阶段检查点与命令 |
 
-CI：代码提交 `18a9b6c` 的运行 `https://github.com/aozhenyu666-cmyk/test/actions/runs/39966215171`，结论 **success**（2026-10-23）。分支全部运行见 `https://github.com/aozhenyu666-cmyk/test/actions`。
+CI：分支 `pet-v15/deepseek-continuity-v2` 的 `fix(pet): handle IME insets...` 与 `docs(pet): record final code SHA...` 两次运行均 **success**（`39966215171`、`39967136744`）。最终“遗忘过滤”修正提交的 CI 结果以 Actions 分支页面为准；本说明不把未完成的运行写成通过。分支全部运行见 `https://github.com/aozhenyu666-cmyk/test/actions`。
 注意：`6488b85` 的 CI 第一次失败是 **Maven Central 返回 429 Too Many Requests**（解析 AGP 传递依赖），不是代码/测试失败；重跑被新 push 的并发组取消，随后 `a1e654d` / `18a9b6c` 的运行通过。
 
 ## 2. 实际执行结果
 
 ```text
-:app:testDebugUnitTest          PASS   161 tests / 0 failures / 0 skipped
+:app:testDebugUnitTest          PASS   162 tests / 0 failures / 0 skipped
 :app:lintDebug                  PASS   0 errors / 5 warnings
 :app:assembleDebug              PASS   app-debug.apk
 :app:assembleDebugAndroidTest   PASS   app-debug-androidTest.apk（仅编译）

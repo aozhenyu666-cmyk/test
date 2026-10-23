@@ -11,9 +11,9 @@
   - D4：`ui/theme/{Tokens,CompanionTheme}.kt`、`ui/components/CompanionUi.kt`、`MainActivity.kt`、四个 Tab
   - D5：README/PLAN/VALIDATION、本目录 DELIVERY.md、仪器测试 `EventLogInstrumentedTest`、`SecretStoreInstrumentedTest`
 - 真实测试命令与结果（本机 ASCII 构建副本，JDK 22 / SDK 35 / Gradle 8.10.2 / AGP 8.7.3）：
-  - `:app:testDebugUnitTest` → PASS，**161 tests / 0 failures / 0 skipped**
+  - `:app:testDebugUnitTest` → PASS，**162 tests / 0 failures / 0 skipped**
   - `:app:lintDebug` → PASS，**0 errors / 5 warnings**
-  - `:app:assembleDebug` → PASS，`app-debug.apk` 28,100,993 bytes，SHA-256 `FD7940A61D8D73E741D5FBD6CF1958E77B5A9436635A23819B796FAA5CB5A055`
+  - `:app:assembleDebug` → PASS，`app-debug.apk` 28,100,993 bytes，SHA-256 `54B71E5EC9C294BA49DAB6CCD16E5ECB03BC111CFE8FD29B377C0BA5EFBF9220`
   - `:app:assembleDebugAndroidTest` → PASS，仅编译（新增 2 个设备测试）
   - 产物副本：`_pet-reports/deepseek-v2/`
 - 未运行：`:app:connectedDebugAndroidTest`（本机 adb 不可用、无设备）

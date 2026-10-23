@@ -125,4 +125,15 @@ class NightlyBatchTest {
         assertEquals(1, e.log.pendingForDay(day).size)
     }
 
+
+    @Test
+    fun forgottenContentIsNotSentToNightly() {
+        val e = env()
+        e.memory.addDeletedText("秘密")
+        e.log.append(EventKind.EXCHANGE, "秘密", occurredAt = at(day, 10))
+        assertNull(e.nightly.prepare(today))
+        assertEquals(0, e.log.pendingForDay(day).size)
+        assertNull(e.nightly.prepare(today))
+    }
+
 }
