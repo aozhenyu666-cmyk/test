@@ -62,11 +62,19 @@ class ScrollActivity : ComponentActivity() {
 
     private fun begin() {
         val app = application as YishouApp
-        if (!app.settings.vision.value.isComplete) {
-            Toast.makeText(this, "先到 设置 → 识图模型 填好接口，一手才看得懂屏幕。", Toast.LENGTH_LONG).show()
+        val prefs = app.settings.app.value
+        val ready = ScrollChecks.preflight(
+            visionReady = app.settings.vision.value.isComplete,
+            watchedCount = prefs.watched.size,
+            notifyAllowed = androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled(),
+        )
+        if (!ready.canStart) {
+            // 缺东西就直说，并且不启动——开了也只会一声不响
+            Toast.makeText(this, ready.blockers.first(), Toast.LENGTH_LONG).show()
             back()
             return
         }
+        ready.warnings.firstOrNull()?.let { Toast.makeText(this, it, Toast.LENGTH_LONG).show() }
         if (ScrollService.running.value) {
             back()
             return

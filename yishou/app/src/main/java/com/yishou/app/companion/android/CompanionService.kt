@@ -102,6 +102,15 @@ class CompanionService : Service() {
         } else {
             startForeground(ID, notification("正在准备"))
         }
+        // 缺东西就别开：开一场一个字都不说的会话，比不开更糟
+        val ready = com.yishou.app.companion.core.CompanionChecks.startup(
+            llmReady = app.settings.llm.value.isComplete,
+            sttReady = app.settings.speech.value.sttReady,
+            canRecord = app.voice.hasPermission(),
+            notifyAllowed = androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled(),
+        )
+        if (!ready.canStart) return fail(ready.blockers.first())
+
         // 投屏只有一份：看屏、刷着练占着的时候不硬开
         if (ScreenLookService.running.value) return fail("看屏正开着，先到通知栏停掉看屏")
         if (ScrollService.running.value) return fail("刷着练正开着，先到通知栏停掉刷着练")
@@ -121,9 +130,9 @@ class CompanionService : Service() {
             getSystemService(android.media.projection.MediaProjectionManager::class.java).getMediaProjection(code, data)
         } catch (e: Exception) {
             RunLog.e("视频陪练", "拿不到投屏授权", e)
-            null
+            return fail("系统拒绝给投屏：${e.message ?: e.javaClass.simpleName}")
         }
-        if (p == null) return fail("没有拿到投屏授权")
+        if (p == null) return fail("没有拿到投屏授权（系统回执无效，回执码 $code）")
         projection = p
         p.registerCallback(object : android.media.projection.MediaProjection.Callback() {
             override fun onStop() {
@@ -195,6 +204,9 @@ class CompanionService : Service() {
         frames = ScreenFrameProbe(this).also { it.start(p) }
 
         app.appScopeLaunch { sessionId = st.openSession(goal, minutes, gear, pkg) }
+
+        ready.notes.forEach { RunLog.e("视频陪练", it) }
+        if (ready.notes.isNotEmpty()) publish(ready.notes.joinToString("；"))
 
         ticker = scope.launch {
             while (isActive) {

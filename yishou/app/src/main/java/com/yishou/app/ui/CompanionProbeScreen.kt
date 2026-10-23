@@ -6,7 +6,6 @@ import android.media.projection.MediaProjectionManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,7 +22,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,7 +33,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.yishou.app.companion.android.CompanionProbe
+import com.yishou.app.companion.android.CompanionProbeService
+import com.yishou.app.companion.android.MediaControlProbe
 import com.yishou.app.companion.android.PlaybackCaptureProbe
 import com.yishou.app.companion.core.Capability
 import com.yishou.app.companion.core.ProbeVerdict
@@ -44,32 +43,31 @@ import com.yishou.app.companion.core.ProbeVerdict
  * 陪练探针（调试页）：把 T1 要验的三件事摆在一页上——
  * 内录有没有真声音、画面有没有真变化、暂停是不是真的停住了；另外加一栏资源互斥。
  *
- * 这一页只观察、不提问，也不发模型请求，所以不花模型钱。
+ * 采集跑在 [CompanionProbeService] 里：Android 14 起没有 mediaProjection 类型的前台服务，
+ * 系统会拒绝给投屏（弹窗同意了也拿不到）。这一页只发指令、看结果。
+ * 只观察、不提问、不发模型请求，不花模型钱。
  */
 @Composable
 fun CompanionProbeScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    val probe = remember { CompanionProbe(context) }
-    val report by probe.report.collectAsStateWithLifecycle()
-    val status by probe.status.collectAsStateWithLifecycle()
-    val note by probe.note.collectAsStateWithLifecycle()
-    val level by probe.audioLevel.collectAsStateWithLifecycle()
-    val audioSummary by probe.audioSummary.collectAsStateWithLifecycle()
-    val frameSummary by probe.frameSummary.collectAsStateWithLifecycle()
-    val playerNote by probe.playerNote.collectAsStateWithLifecycle()
-    var hasNotificationAccess by remember { mutableStateOf(probe.notificationAccess()) }
-    var sessionText by remember { mutableStateOf(probe.sessionDescription()) }
+    val report by CompanionProbeService.report.collectAsStateWithLifecycle()
+    val status by CompanionProbeService.status.collectAsStateWithLifecycle()
+    val note by CompanionProbeService.note.collectAsStateWithLifecycle()
+    val level by CompanionProbeService.level.collectAsStateWithLifecycle()
+    val audioSummary by CompanionProbeService.audioSummary.collectAsStateWithLifecycle()
+    val frameSummary by CompanionProbeService.frameSummary.collectAsStateWithLifecycle()
+    val playerNote by CompanionProbeService.playerNote.collectAsStateWithLifecycle()
 
-    DisposableEffect(Unit) {
-        onDispose { probe.shutdown() }
-    }
+    val media = remember { MediaControlProbe(context) }
+    var hasNotificationAccess by remember { mutableStateOf(media.hasAccess()) }
+    var sessionText by remember { mutableStateOf(media.describe()) }
 
     val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         val data = r.data
         if (r.resultCode == Activity.RESULT_OK && data != null) {
-            probe.startCapture(r.resultCode, data)?.let { probe.say(it) }
+            CompanionProbeService.start(context, r.resultCode, data)
         } else {
-            probe.say("没有同意投屏，这次没开始观察。")
+            CompanionProbeService.say("没有同意投屏，这次没开始观察。")
         }
     }
 
@@ -83,7 +81,7 @@ fun CompanionProbeScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
-                "这一页只验证能不能拿到东西，不提问、不调模型。结论按“有证据才算可用”记。",
+                "这一页只验证能不能拿到东西，不提问、不调模型。结论按「有证据才算可用」记。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -100,8 +98,8 @@ fun CompanionProbeScreen(onBack: () -> Unit) {
                             },
                             enabled = !status.running,
                         ) { Text("开始观察") }
-                        OutlinedButton(onClick = { probe.finishCapture() }, enabled = status.running) { Text("现在就出结论") }
-                        TextButton(onClick = { probe.stopAll() }) { Text("全部停掉") }
+                        OutlinedButton(onClick = { CompanionProbeService.finish(context) }, enabled = status.running) { Text("现在就出结论") }
+                        TextButton(onClick = { CompanionProbeService.stop(context) }) { Text("全部停掉") }
                     }
                     Text(status.sound, style = MaterialTheme.typography.bodySmall)
                     Text("音量条：" + "▮".repeat((level * 12).toInt().coerceIn(0, 12)).padEnd(12, '·'), style = MaterialTheme.typography.bodySmall)
@@ -110,10 +108,24 @@ fun CompanionProbeScreen(onBack: () -> Unit) {
                     Text(audioSummary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(frameSummary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
+                        "这一页只数帧：不录屏、不存图、也不会给你看画面——它只回答「能不能拿到」。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
                         PlaybackCaptureProbe.limitationNote() + "要用你真在用的视频 App 来验这一项。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    // 开了却什么都没读到：把最可能的三个原因直接摆出来，别让人对着空白猜
+                    if (status.running && status.elapsedSec >= 5 && level <= 0.001f && !status.frames.contains("帧 /")) {
+                        Text(
+                            "还没读到声音，也没收到画面。按顺序确认：① 目标 App 真的在出声（不是静音、不是耳机）；" +
+                                "② 系统弹窗里点的是「立即开始」而不是返回；③ 下拉通知栏里系统投屏还在跑。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             }
 
@@ -129,21 +141,21 @@ fun CompanionProbeScreen(onBack: () -> Unit) {
                             context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                         }) { Text("去开通知使用权") }
                         OutlinedButton(onClick = {
-                            hasNotificationAccess = probe.notificationAccess()
-                            sessionText = probe.sessionDescription()
+                            hasNotificationAccess = media.hasAccess()
+                            sessionText = media.describe()
                         }) { Text("刷新会话") }
                     }
                     Text(sessionText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("自控播放器（用一手自己的声音验这条路径）", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { probe.startSelfPlayer() }) { Text("开") }
-                        OutlinedButton(onClick = { probe.pauseSelfPlayer() }) { Text("测暂停") }
-                        TextButton(onClick = { probe.stopSelfPlayer() }) { Text("关") }
+                        OutlinedButton(onClick = { CompanionProbeService.startSelfPlayer(context) }) { Text("开") }
+                        OutlinedButton(onClick = { CompanionProbeService.pauseSelfPlayer(context) }) { Text("测暂停") }
+                        TextButton(onClick = { CompanionProbeService.stopSelfPlayer(context) }) { Text("关") }
                     }
                     Text(playerNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Button(onClick = {
-                        hasNotificationAccess = probe.notificationAccess()
-                        probe.pauseTargetApp()
+                        hasNotificationAccess = media.hasAccess()
+                        CompanionProbeService.pauseTargetApp(context)
                     }) { Text("直接测你正在放的那个 App") }
                 }
             }
@@ -172,7 +184,7 @@ fun CompanionProbeScreen(onBack: () -> Unit) {
                     }
                     if (report.results.isEmpty()) {
                         Text(
-                            "还没有结论。先点上面的“开始观察”，并让目标 App 真的放出声音。",
+                            "还没有结论。先点上面的「开始观察」，并让目标 App 真的放出声音。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -181,7 +193,7 @@ fun CompanionProbeScreen(onBack: () -> Unit) {
             }
 
             note?.let {
-                Card(Modifier.background(MaterialTheme.colorScheme.surfaceVariant)) {
+                Card {
                     Column(Modifier.padding(12.dp)) {
                         Text(it, style = MaterialTheme.typography.bodySmall)
                     }

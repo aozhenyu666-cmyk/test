@@ -94,12 +94,15 @@ class CompanionProbe(private val context: Context) {
         val p = try {
             context.getSystemService(MediaProjectionManager::class.java).getMediaProjection(resultCode, data)
         } catch (e: Exception) {
+            // 以前这里把异常吞了，只回一句「没拿到授权」，查不出为什么。
+            // 常见原因：Android 14 起要求先有 mediaProjection 类型的前台服务，否则直接拒绝。
             RunLog.e("陪练探针", "拿不到投屏授权", e)
-            null
+            CaptureArbiter.release(CaptureHolder.COMPANION)
+            return "系统拒绝给投屏：${e.message ?: e.javaClass.simpleName}"
         }
         if (p == null || resultCode != Activity.RESULT_OK) {
             CaptureArbiter.release(CaptureHolder.COMPANION)
-            return "没有拿到投屏授权"
+            return "没有拿到投屏授权（系统回执无效，回执码 $resultCode）"
         }
         projection = p
         revoked = false

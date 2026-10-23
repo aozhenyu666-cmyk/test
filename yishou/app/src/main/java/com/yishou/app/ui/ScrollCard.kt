@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yishou.app.YishouApp
 import com.yishou.app.scroll.ScrollActivity
+import com.yishou.app.scroll.ScrollChecks
 import com.yishou.app.scroll.ScrollService
 import com.yishou.app.settings.AppZone
 import java.time.LocalDate
@@ -40,7 +41,17 @@ fun ScrollCard(modifier: Modifier = Modifier) {
     val status by ScrollService.status.collectAsStateWithLifecycle()
     val version by app.stats.version.collectAsStateWithLifecycle()
     var interval by remember { mutableIntStateOf(ScrollService.interval(context)) }
+    val prefs by app.settings.app.collectAsStateWithLifecycle()
     val today = remember(version) { app.stats.day(LocalDate.now(AppZone.zone)) }
+    // 开着却一直不自动问，多半是这三件事之一；直接写在卡片上，别让人猜
+    val idleHint = remember(running, prefs.watched.size, interval) {
+        ScrollChecks.idleHint(
+            running = running,
+            watchedCount = prefs.watched.size,
+            currentAppWatched = null,
+            intervalMinutes = interval,
+        )
+    }
     val asked = today.event(ScrollService.EVENT_ASK)
     val hit = today.event(ScrollService.EVENT_HIT)
     val near = today.event(ScrollService.EVENT_NEAR)
@@ -52,6 +63,7 @@ fun ScrollCard(modifier: Modifier = Modifier) {
                     Text("刷着练", fontWeight = FontWeight.Bold)
                     Text(
                         when {
+                            running && idleHint != null -> "开着，但不会自动问：$idleHint"
                             running -> status ?: (if (interval > 0) "开着 · 刷满 $interval 分钟问一句" else "开着 · 想练就下拉点“考我一下”")
                             asked > 0 -> "今天问了 $asked 句 · 接住 $hit" + if (near > 0) " · 差一点 $near" else ""
                             else -> "刷抖音、贴吧时看这一屏问你一句，通知里回"
