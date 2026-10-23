@@ -6,31 +6,42 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.dp
 import cn.companion.pet.ui.MemoryTab
 import cn.companion.pet.ui.SettingsTab
 import cn.companion.pet.ui.StartTab
 import cn.companion.pet.ui.StatsTab
+import cn.companion.pet.ui.components.Eyebrow
+import cn.companion.pet.ui.theme.CompanionMotion
+import cn.companion.pet.ui.theme.CompanionTheme
+import cn.companion.pet.ui.theme.LocalCompanionColors
 
 /**
- * 设置页：开始（权限引导）、设置、记忆、统计。
+ * 设置页：开始（权限与状态）、设置、记忆、统计。四页信息层次一致：
+ * 眉标 + 标题 + 分组细线，不用卡片墙。
  */
 class MainActivity : ComponentActivity() {
 
@@ -40,11 +51,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            val dark = isSystemInDarkTheme()
-            MaterialTheme(
-                colorScheme = if (dark) darkColorScheme(primary = Color(0xFFF2B67C)) else lightColorScheme(primary = Color(0xFFB8682A)),
-            ) {
-                Surface(modifier = Modifier.fillMaxSize()) { Root() }
+            CompanionTheme {
+                Surface(color = MaterialTheme.colorScheme.background) { Root() }
             }
         }
     }
@@ -64,15 +72,23 @@ class MainActivity : ComponentActivity() {
         permissionLauncher.launch(perms.toTypedArray())
     }
 
-    @androidx.compose.runtime.Composable
+    @Composable
     private fun Root() {
         var tab by rememberSaveable { mutableIntStateOf(0) }
         val tabs = listOf("开始", "设置", "记忆", "统计")
-        Scaffold { inner ->
-            Column(Modifier.padding(inner)) {
-                TabRow(selectedTabIndex = tab) {
-                    tabs.forEachIndexed { i, t -> Tab(selected = tab == i, onClick = { tab = i }, text = { Text(t) }) }
+        val colors = LocalCompanionColors.current
+        Scaffold(containerColor = colors.paper) { inner ->
+            Column(Modifier.padding(inner).fillMaxSize().background(colors.paper)) {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    Eyebrow("COMPANION")
+                    Text("桌宠", style = MaterialTheme.typography.headlineMedium, color = colors.ink)
                 }
+                Row(Modifier.fillMaxWidth().selectableGroup()) {
+                    tabs.forEachIndexed { index, label ->
+                        TabItem(label, selected = tab == index, modifier = Modifier.weight(1f)) { tab = index }
+                    }
+                }
+                HorizontalDivider(color = colors.rule)
                 when (tab) {
                     0 -> StartTab(this@MainActivity, resumeTick)
                     1 -> SettingsTab(this@MainActivity)
@@ -80,6 +96,32 @@ class MainActivity : ComponentActivity() {
                     else -> StatsTab(resumeTick)
                 }
             }
+        }
+    }
+
+    @Composable
+    private fun TabItem(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+        val colors = LocalCompanionColors.current
+        Column(
+            Modifier
+                .then(modifier)
+                .height(48.dp)
+                .selectable(selected = selected, role = Role.Tab, onClick = onClick),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (selected) colors.ink else colors.ink2,
+                )
+            }
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(if (selected) 2.dp else 0.dp)
+                    .background(colors.signal),
+            )
         }
     }
 }

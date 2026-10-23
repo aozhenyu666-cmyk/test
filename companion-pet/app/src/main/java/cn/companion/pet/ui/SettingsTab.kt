@@ -43,6 +43,10 @@ import cn.companion.pet.bridge.Assistants
 import cn.companion.pet.core.session.AssistantApp
 import cn.companion.pet.net.EndpointPolicy
 import cn.companion.pet.net.ModelProvider
+import cn.companion.pet.ui.components.PageHeader
+import cn.companion.pet.ui.theme.CompanionSpacing
+import cn.companion.pet.ui.components.GroupTitle
+import cn.companion.pet.ui.components.ToggleRow
 import cn.companion.pet.work.NightlyWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -56,9 +60,10 @@ fun SettingsTab(context: Context) {
     fun toast(t: String) = Toast.makeText(context, t, Toast.LENGTH_SHORT).show()
 
     Column(
-        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
+        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = CompanionSpacing.page, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        PageHeader("设置", "连接、陪伴、感知、深聊、表现。改动保存后立即生效。")
         Section("搭话用的模型")
         Text("桌宠主动开口、想一想、整理记忆都用这里的模型。点一下填好常用服务商，Key 要换成对应服务商的。", style = MaterialTheme.typography.bodySmall)
         var endpoint by remember { mutableStateOf(s.endpoint) }
@@ -222,8 +227,7 @@ fun SettingsTab(context: Context) {
 
 @Composable
 private fun Section(title: String) {
-    HorizontalDivider(Modifier.padding(top = 6.dp))
-    Text(title, style = MaterialTheme.typography.titleMedium)
+    GroupTitle(title)
 }
 
 @Composable
@@ -234,13 +238,7 @@ private fun NumberField(label: String, value: String, modifier: Modifier = Modif
 
 @Composable
 private fun Toggle(title: String, desc: String, value: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleSmall)
-            Text(desc, style = MaterialTheme.typography.bodySmall)
-        }
-        Switch(value, onChange)
-    }
+    ToggleRow(title = title, description = desc, checked = value, onChange = onChange)
 }
 
 @Composable

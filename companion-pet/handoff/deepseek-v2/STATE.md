@@ -2,25 +2,26 @@
 
 - 分支：`pet-v15/deepseek-continuity-v2`
 - 基线 SHA：`a9cbe7cb55e02ab44d3d64d2245b18fe0da2f24e`
-- 当前阶段：**D1 / D2 / D3 代码与 JVM 测试完成，D4 进行中**
-- 数据格式版本：
-  - 旧 Markdown（persona/profile/today/diary/letters/archive）继续可读可编辑
-  - 新增 `events-v1` 事件日志（`events/events-YYYY-MM.jsonl`，每行一个事件，含 id/occurredAt/day/kind/text/source）
-  - 新增 `facts.json`（结构化事实，含 factKey/version/supersededBy/deleted）
-  - 新增 `nightly/batch-*.json`、`nightly/journal-*.json`、`nightly/archived-<day>.txt`
-  - 新增 `state.json`、`topics.json`
-- 实现文件（摘要）：
-  - D1：`core/companion/CompanionEvent.kt`、`EventLog.kt`、`LegacyEventImport.kt`；`core/memory/NightlyStore.kt`；`core/probe/AtomicBudget.kt`；`data/BudgetPrefs.kt`；`work/NightlyWorker.kt`
-  - D2：`core/companion/Fact.kt`、`FactStore.kt`、`MemoryRecall.kt`、`CompanionContextAssembler.kt`、`Material.kt`；`ui/MemoryTab.kt` 的事实确认/更正/忘记；`service/PetBrain.kt` 的开关接入
-  - D3：`core/companion/CompanionState.kt`、`TopicQueue.kt`；`service/PetBrain.kt` 的状态/话题接入；`work/NightlyWorker.kt` 的日记话题入队
-- 真实测试命令与结果（本机 ASCII 构建副本，JDK 22 / SDK 35 / Gradle 8.10.2）：
+- 当前阶段：**D0-D5 完成（D5 设备项保留待测）**
+- 数据格式版本：旧 Markdown 保留；新增 `events-v1`、`facts.json`、`nightly/batch-*.json`、`nightly/journal-*.json`、`nightly/archived-<day>.txt`、`state.json`、`topics.json`
+- 实现文件：
+  - D1：`core/companion/{CompanionEvent,EventLog,LegacyEventImport}.kt`、`core/memory/NightlyStore.kt`、`core/probe/AtomicBudget.kt`、`data/BudgetPrefs.kt`、`work/NightlyWorker.kt`
+  - D2：`core/companion/{Fact,FactStore,MemoryRecall,CompanionContextAssembler,Material}.kt`、`ui/MemoryTab.kt`、`service/PetBrain.kt`、`data/Settings.kt`
+  - D3：`core/companion/{CompanionState,TopicQueue}.kt`、`service/PetBrain.kt`、`work/NightlyWorker.kt`
+  - D4：`ui/theme/{Tokens,CompanionTheme}.kt`、`ui/components/CompanionUi.kt`、`MainActivity.kt`、四个 Tab
+  - D5：README/PLAN/VALIDATION、本目录 DELIVERY.md、仪器测试 `EventLogInstrumentedTest`、`SecretStoreInstrumentedTest`
+- 真实测试命令与结果（本机 ASCII 构建副本，JDK 22 / SDK 35 / Gradle 8.10.2 / AGP 8.7.3）：
   - `:app:testDebugUnitTest` → PASS，**161 tests / 0 failures / 0 skipped**
-  - 覆盖：跨午夜、事件归属日、幂等迁移、夜间批次只归档批次内事件、请求中新增交流、请求中改/删档案、journal 各步骤故障注入恢复、重复 jobId、预算并发最后一名额、重启恢复、事实纠正/遗忘/重放不复活、相关召回与不相关不注入、5000 码点上限、emoji 截断、素材指令不越权、状态衰减/重启、话题一次性与静默/冷却/去重
-  - D4/D5 前尚未重跑：`:app:lintDebug`、`:app:assembleDebug`、`:app:assembleDebugAndroidTest`（D5 统一跑）
+  - `:app:lintDebug` → PASS，**0 errors / 5 warnings**
+  - `:app:assembleDebug` → PASS，`app-debug.apk` 28,010,039 bytes，SHA-256 `4D7B2F131B3F53E6DBD3B04C6224F97F7B3AAFB3BB254D181E125D9238679449`
+  - `:app:assembleDebugAndroidTest` → PASS，仅编译（新增 2 个设备测试）
+  - 产物副本：`_pet-reports/deepseek-v2/`
 - 未运行：`:app:connectedDebugAndroidTest`（本机 adb 不可用、无设备）
-- 已知待办：
-  - D4a：theme/tokens + 基础组件 + 开始页
-  - D4b：设置/记忆/统计页迁移，接上真实数据与删除/更正
-  - D5：全量单测 + lint + APK、README/PLAN/VALIDATION、APK 路径/SHA-256、待测列表
-- 下一条动作：D4a 建立 `ui/theme/` 与 `ui/components/`，迁移开始页；编译通过后继续 D4b
-- 本检查点：D0 审计 `handoff/deepseek-v2/BASELINE.md`；D1-D3 代码与测试
+- 已知待办（全部为真机/设备项）：
+  - iQOO 12 常驻/保活/悬浮窗/无障碍/键盘/权限/锁屏心跳
+  - 跨午夜、请求中新增/改档、强杀恢复的真机观察
+  - 预算并发请求次数、相关召回/纠正/遗忘、主动话题静频
+  - 360/430dp、深浅色、字体 1.3、TalkBack、减少动画
+- 下一条动作：在 iQOO 12 上按 VALIDATION.md “V2 新增验收项”逐项记录；若发现设备问题，回到对应阶段修复并补测试
+- 检查点：D0 `c1b211b`；D1-D3 `6488b85`；D4-D5 见本轮最后一次提交
+- 注意：`6488b85` 的 CI 首次失败是 Maven Central 429（依赖解析），不是测试失败；已重跑，最终结果以 Actions 为准

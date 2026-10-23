@@ -28,6 +28,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import cn.companion.pet.PetApp
+import cn.companion.pet.ui.components.EmptyNote
+import cn.companion.pet.ui.components.GroupTitle
+import cn.companion.pet.ui.components.PageHeader
+import cn.companion.pet.ui.components.Panel
+import cn.companion.pet.ui.components.Rule
+import cn.companion.pet.ui.components.SourceTag
+import cn.companion.pet.ui.theme.CompanionSpacing
+import cn.companion.pet.ui.theme.LocalCompanionColors
 import cn.companion.pet.core.companion.Confidence
 import cn.companion.pet.core.companion.EventKind
 import cn.companion.pet.core.companion.Fact
@@ -85,10 +93,11 @@ fun MemoryTab(resumeTick: Int) {
     }
 
     Column(
-        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
+        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = CompanionSpacing.page, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("它对你的了解", style = MaterialTheme.typography.titleMedium)
+        PageHeader("记忆", "它对你的了解、最近的交流、念头、日记和信。来源和删除都能核对。")
+        GroupTitle("它对你的了解")
         Text("[他说过] 是你亲口说的，[我推测] 是它猜的。猜错了就删掉，删掉的不会被它再写回来。", style = MaterialTheme.typography.bodySmall)
         if (editing) {
             OutlinedTextField(draft, { draft = it }, Modifier.fillMaxWidth().heightIn(min = 200.dp))
@@ -108,8 +117,8 @@ fun MemoryTab(resumeTick: Int) {
             OutlinedButton(onClick = { draft = snap.profile.joinToString("\n"); editing = true }) { Text("整段编辑") }
         }
 
-        HorizontalDivider()
-        Text("它记住的事", style = MaterialTheme.typography.titleMedium)
+        Rule()
+        GroupTitle("它记住的事")
         Text("每条都标了来源。它猜的可以点“对”确认；说错了点“更正”；不想留就“忘记”，删除后旧记录不会从摘要里复活。", style = MaterialTheme.typography.bodySmall)
         if (snap.facts.isEmpty()) Text("还没有结构化记忆。打开设置里的“连续性”后，它会在交流里慢慢积累。", style = MaterialTheme.typography.bodySmall)
         snap.facts.forEach { fact ->
@@ -127,13 +136,13 @@ fun MemoryTab(resumeTick: Int) {
             )
         }
 
-        HorizontalDivider()
-        Text("今天的交流（${snap.today.size}）", style = MaterialTheme.typography.titleMedium)
+        Rule()
+        GroupTitle("今天的交流")
         snap.today.takeLast(30).reversed().forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
 io { app.events.clearDay(LocalDate.now()); memory.todayFile.delete() }
 
-        HorizontalDivider()
-        Text("念头卡", style = MaterialTheme.typography.titleMedium)
+        Rule()
+        GroupTitle("念头卡")
         Text("点桌宠 → 记个念头，说一句就记下，连同当时在看的那句原文。", style = MaterialTheme.typography.bodySmall)
         var digest by remember { mutableStateOf<String?>(null) }
         var digesting by remember { mutableStateOf(false) }
@@ -175,8 +184,8 @@ io { app.events.clearDay(LocalDate.now()); memory.todayFile.delete() }
             }) { Text(if (digesting) "整理中……" else "把 ${latest.first} 的念头整理成笔记") }
         }
         digest?.let { d ->
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp)) {
+    Panel {
+        Column(Modifier.padding(vertical = 2.dp)) {
                     Text(d, style = MaterialTheme.typography.bodyMedium)
                     TextButton(onClick = {
                         val cm = context.getSystemService(android.content.ClipboardManager::class.java)
@@ -186,13 +195,13 @@ io { app.events.clearDay(LocalDate.now()); memory.todayFile.delete() }
             }
         }
 
-        HorizontalDivider()
-        Text("它写给你的信", style = MaterialTheme.typography.titleMedium)
+        Rule()
+        GroupTitle("它写给你的信")
         if (snap.letters.isEmpty()) Text("还没有。", style = MaterialTheme.typography.bodySmall)
         snap.letters.forEach { (d, t) -> Entry(d, t) { io { java.io.File(memory.lettersDir, "$d.md").delete() } } }
 
-        HorizontalDivider()
-        Text("它给自己的日记", style = MaterialTheme.typography.titleMedium)
+        Rule()
+        GroupTitle("它给自己的日记")
         Text("不是写给你的，但你可以看。", style = MaterialTheme.typography.bodySmall)
         if (snap.diaries.isEmpty()) Text("还没有。", style = MaterialTheme.typography.bodySmall)
         snap.diaries.forEach { (d, t) -> Entry(d, t) { io { java.io.File(memory.diaryDir, "$d.md").delete() } } }
@@ -201,8 +210,8 @@ io { app.events.clearDay(LocalDate.now()); memory.todayFile.delete() }
 
 @Composable
 private fun Entry(date: LocalDate, text: String, onDelete: () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp)) {
+    Panel {
+        Column(Modifier.padding(vertical = 2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(date.toString(), Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
                 TextButton(onClick = onDelete) { Text("删") }
@@ -231,10 +240,10 @@ private fun FactRow(fact: Fact, onConfirm: () -> Unit, onCorrect: (String) -> Un
             }
         } else {
             Text(fact.text, style = MaterialTheme.typography.bodyMedium)
-            Text(
-                (if (fact.confidence == Confidence.SAID) "你说过" else "尚未确认") + " · " + date,
-                style = MaterialTheme.typography.bodySmall,
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                SourceTag(if (fact.confidence == Confidence.SAID) "你说过" else "尚未确认")
+                Text(date, style = MaterialTheme.typography.bodySmall, color = LocalCompanionColors.current.ink2)
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (fact.confidence == Confidence.GUESSED) TextButton(onClick = onConfirm) { Text("对") }
                 TextButton(onClick = { editing = true }) { Text("更正") }

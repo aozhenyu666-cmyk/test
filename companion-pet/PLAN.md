@@ -15,6 +15,23 @@
 | M6 记忆、日记、信 | 代码完成 |
 | M7 设置、统计、锁屏心跳 | 代码完成 |
 | M8 真机验收 | 待在 iQOO 12 上做，清单见 VALIDATION.md |
+| M9 记录可靠性（D1） | 代码完成：事件日志、固定夜间批次、journal 恢复、原子预算；161 个 JVM 测试中的针对性用例通过 |
+| M10 连续交流（D2） | 代码完成（默认关）：有界召回、结构化事实、确认/更正/忘记、上下文组装；JVM 测试覆盖 |
+| M11 状态与话题（D3） | 代码完成（默认关）：精力/兴趣/亲近感衰减、话题队列与本地闸门、素材 fixture；JVM 测试覆盖 |
+| M12 原生界面（D4） | 完成 tokens/组件/四页迁移；深色与字体放大未在真机验收 |
+| M13 交付（D5） | 进行中：全量构建、文档、APK 与待测清单 |
+
+
+## V2 连续性增强（2026-10-23）
+
+命令包：`companion-pet-command-pack-v2`。执行分支 `pet-v15/deepseek-continuity-v2`，基线 `a9cbe7c`。
+
+- D1：事件日志（`core/companion/`）、夜间固定批次与 journal 提交（`core/memory/NightlyStore.kt`）、所有模型入口的原子预算（`core/probe/AtomicBudget.kt`）。
+- D2：结构化事实（`FactStore`）、本地相关召回（`MemoryRecall`）、统一上下文组装（`CompanionContextAssembler`）、记忆页确认/更正/忘记。
+- D3：`PetStateStore` 三维状态与时间衰减、`TopicQueue` + `TopicGate`、`MaterialAdapter` 本地 fixture。
+- D4：`ui/theme/` tokens 与 `ui/components/`，开始/设置/记忆/统计四页迁移。
+- 设备验收仍未完成；不把仪器测试 APK 编译当成真机通过。
+
 
 ## 总体决定
 
