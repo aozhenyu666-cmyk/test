@@ -20,13 +20,26 @@
 | debug APK | 构建成功 | 28,100,993 bytes，SHA-256 `54B71E5EC9C294BA49DAB6CCD16E5ECB03BC111CFE8FD29B377C0BA5EFBF9220` |
 | 仪器测试 APK | 构建成功 | 只编译，未执行 |
 | 远端 CI | **success** | https://github.com/aozhenyu666-cmyk/test/actions/runs/39968655136 |
-| 真机功能/体验 | **未验证** | 本机 adb 不可用、无设备；不能写成通过 |
+| 真机功能/体验 | **未验证** | 本机 adb 已可用（修正 TEMP 后），但当前没有已授权设备；不能写成通过 |
 
 一句话：**自动化能证明的已经通过了；真机才能证明的部分，目前没有证据。** 第 5 节列出我需要你提供/授权的数据，才能把“待测”改成“通过/失败”。
 
 ---
 
 ## 2. 已获取的自动化证据
+
+### 2.0 设备接入检查（2026-10-23 23:25）
+
+| 检查 | 结果 |
+|---|---|
+| ADB 版本 | 37.0.1（platform-tools） |
+| `adb devices -l` | **空列表**（无已授权 USB/无线设备） |
+| ADB 启动问题 | 默认 TEMP 下 `adb.log` 被拒；把 TEMP/TMP 指到 workspace 的 `_adb-temp` 后 server 正常启动 |
+| mDNS | 发现 `adb-10AE5U23LT004DN-s24bzX _adb-tls-connect._tcp 192.168.1.2:45633`（iQOO 12 的无线调试服务） |
+| 连通性 | `192.168.1.2` 可 ping 通；`45633` TCP **连接被拒绝**；`5555` 未开放 |
+| USB | PnP 有 `Android ADB Interface` / `Android Composite ADB Interface` 记录，但状态 Unknown；没有已授权 ADB 会话 |
+
+结论：环境已就绪，**缺的是一条已授权的 ADB 通道**（USB 调试授权，或无线调试配对码/新端口）。
 
 ### 2.1 环境
 
@@ -38,6 +51,8 @@
 | Android SDK | platform 35、build-tools 35.0.0 |
 | AGP / Kotlin | 8.7.3 / 2.0.21 |
 | 构建方式 | ASCII 镜像副本 + `android.aapt2FromMavenOverride` + in-process Kotlin（仅本机适配，不提交） |
+| DSH | DeepSeek Harness 0.2.1-rc.2（desktop profile） |
+| Node / npm | Node 24.19.0 / npm 11.17.0 |
 
 ### 2.2 命令结果
 
