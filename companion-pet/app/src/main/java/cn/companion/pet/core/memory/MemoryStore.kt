@@ -67,6 +67,9 @@ class MemoryStore(val root: File) {
     fun tombstones(): Set<String> =
         if (deletedFile.exists()) deletedFile.readLines().map { it.trim() }.filter { it.isNotEmpty() }.toSet() else emptySet()
 
+    /** 用户点“忘记”一条事实时，把内容写入删除清单，防止旧来源重放复活。 */
+    fun addDeletedText(text: String) = addTombstones(listOf(text))
+
     private fun addTombstones(lines: Collection<String>) {
         val all = tombstones() + lines.map { ProfileRules.normalize(it) }.filter { it.isNotEmpty() }
         writeAtomic(deletedFile, all.joinToString("\n"))
@@ -77,11 +80,20 @@ class MemoryStore(val root: File) {
     /**
      * 追加一行交流记录。第一行是日期头，用来让每晚整理知道这是哪一天的。
      * 只记交流本身和回应，屏幕原文不进来。
+     *
+     * 跨午夜保护：如果文件头是另一天，先把旧内容归档到 archive/<旧日期>.md，
+     * 再以新日期重写头部。旧内容不删除，避免跨日时把两天的交流写进同一个文件。
      */
     fun appendToday(today: LocalDate, line: String) {
         val clean = line.replace('\n', ' ').trim()
         if (clean.isEmpty()) return
-        if (!todayFile.exists() || todayFile.length() == 0L) {
+        val current = todayDate()
+        if (current != null && current != today && todayFile.exists()) {
+            val old = todayFile.readText()
+            val archive = File(archiveDir, "$current.md")
+            if (archive.exists()) archive.appendText("\n$old") else writeAtomic(archive, old)
+            writeAtomic(todayFile, "# $today\n")
+        } else if (!todayFile.exists() || todayFile.length() == 0L) {
             writeAtomic(todayFile, "# $today\n")
         }
         todayFile.appendText("$clean\n")
@@ -129,35 +141,6 @@ class MemoryStore(val root: File) {
 
     fun listDates(dir: File): List<LocalDate> =
         dir.listFiles().orEmpty().mapNotNull { runCatching { LocalDate.parse(it.nameWithoutExtension) }.getOrNull() }.sortedDescending()
-
-    // ---------- 每晚整理的提交 ----------
-
-    /**
-     * 三样输出已经全部校验通过后，作为一批提交：先全部写临时文件，再逐个改名，
-     * 最后把 today.md 归档。归档已存在时追加（重试不会丢之前归档的内容）。
-     */
-    fun commitNightly(day: LocalDate, output: NightlyOutput) {
-        val profileText = ProfileRules.applyTombstones(output.profileLines, tombstones()).joinToString("\n")
-        val staged = listOf(
-            profileFile to profileText,
-            File(diaryDir, "$day.md") to output.diary,
-            File(lettersDir, "$day.md") to output.letter,
-        ).map { (target, text) ->
-            val tmp = File(target.parentFile, ".${target.name}.tmp")
-            tmp.writeText(text)
-            tmp to target
-        }
-        staged.forEach { (tmp, target) -> replace(tmp, target) }
-        archiveToday(day)
-    }
-
-    private fun archiveToday(day: LocalDate) {
-        if (!todayFile.exists()) return
-        val content = todayFile.readText()
-        val archive = File(archiveDir, "$day.md")
-        if (archive.exists()) archive.appendText("\n$content") else writeAtomic(archive, content)
-        todayFile.delete()
-    }
 
     /** 删除 [keepDays] 天以前的归档。 */
     fun pruneArchive(today: LocalDate, keepDays: Long = 30) {

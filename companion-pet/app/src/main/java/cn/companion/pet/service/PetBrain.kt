@@ -13,7 +13,14 @@ import cn.companion.pet.a11y.PerceptionHub
 import cn.companion.pet.bridge.Assistants
 import cn.companion.pet.bridge.GeminiLauncher
 import cn.companion.pet.core.bridge.BridgeContext
+import cn.companion.pet.core.companion.PetStateStore
+import cn.companion.pet.core.companion.StateEvent
+import cn.companion.pet.core.companion.Topic
+import cn.companion.pet.core.companion.TopicGate
+import cn.companion.pet.core.companion.TopicQueue
+import cn.companion.pet.core.companion.CompanionContextAssembler
 import cn.companion.pet.core.bridge.GeminiBridgeTextBuilder
+import cn.companion.pet.core.companion.EventKind
 import cn.companion.pet.core.life.PetLife
 import cn.companion.pet.core.life.WeightyMoments
 import cn.companion.pet.core.memory.Exchange
@@ -63,6 +70,7 @@ import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import java.util.UUID
 
 /**
  * 桌宠的大脑：所有“什么时候开口、说什么、用户回应后怎么走”的决定都在这里。
@@ -78,6 +86,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private val handler = Handler(Looper.getMainLooper())
 
     private val overlay = PetOverlay(context, settings, this, this)
+    private val assembler by lazy { CompanionContextAssembler(app.events, app.facts) }
+    private val stateStore by lazy { PetStateStore(memory.root) }
+    private val topics by lazy { TopicQueue(memory.root) }
+    private val topicGate by lazy { TopicGate(topics) }
+    private var lastProactiveAt = 0L
     private val scheduler = SpeakScheduler(settings.rhythm())
     private val life = PetLife()
     private val weighty = WeightyMoments()
@@ -101,11 +114,15 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val userStarted: Boolean = false,
         /** 锁屏心跳后的那一句，忽略不升级。 */
         val noEscalation: Boolean = false,
+        val id: String = UUID.randomUUID().toString(),
+        val topicId: String? = null,
     ) {
         var interacting = false
         var userReply: String? = null
         var petReply: String? = null
         var gemini = GeminiExit.NONE
+        var userReplyAt: Long = 0L
+        var petReplyAt: Long = 0L
         var attentionDone = false
         var nudgeDone = false
         var ended = false
@@ -199,7 +216,18 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             return
         }
         val focus = SceneClassifier.focusActive(now, PerceptionHub.trail, settings.appLists())
-        if (scheduler.isDue(now, focus)) speak(stuck = false)
+        if (scheduler.isDue(now, focus)) {
+            val topic = if (settings.continuityEnabled) {
+                topicGate.next(
+                    now = now,
+                    quiet = scheduler.isQuiet(now),
+                    userActive = active,
+                    lastProactiveAt = lastProactiveAt,
+                    recentTexts = recentExchangeLines(20).toSet(),
+                )
+            } else null
+            speak(stuck = false, topic = topic)
+        }
     }
 
     private fun escalate(c: Conversation, now: Long) {
@@ -230,7 +258,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     // ---------- 开口 ----------
 
-    private fun speak(stuck: Boolean, afterHeartbeat: Boolean = false) {
+    private fun speak(stuck: Boolean, afterHeartbeat: Boolean = false, topic: Topic? = null) {
         val now = now()
         if (probeJob?.isActive == true || convo != null || session != null || think != null || noteDraft != null) return
         heartbeatWaiting = false
@@ -242,7 +270,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             scheduler.onSpoke(now)
             return
         }
-        if (stats.get(Stats.Kind.API_CALLS) >= settings.dailyLimit) {
+        if (app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()) <= 0) {
             // 到上限：当天只保留动画和震动
             overlay.attention(); haptics.tap()
             scheduler.onSpoke(now)
@@ -264,7 +292,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             rephrase = rephraseNext,
             weighty = isWeighty,
             stuck = stuck,
-            petState = life.state.label,
+            petState = life.state.label + " · " + stateStore.summary(stateStore.current()),
+            topic = topic?.summary,
             afterHeartbeat = afterHeartbeat,
         )
 
@@ -272,8 +301,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             overlay.setMood(Mood.THINKING)
             val opening = withContext(Dispatchers.IO) {
                 synchronized(app.memoryLock) {
-                    ProbePrompt.opening(memory.persona(), memory.profile(), memory.todayRecent(20), memory.diarySummary(LocalDate.now()), moment)
+                    openingMessages(moment, decision.screenText)
                 }
+            }
+            if (!app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
+                overlay.setMood(Mood.IDLE)
+                scheduler.retrySoon(now())
+                return@launch
             }
             stats.add(Stats.Kind.API_CALLS)
             val result = app.client.complete(ChatRequest(settings.endpoint, settings.model, key, opening))
@@ -286,17 +320,19 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 else -> {
                     if (isWeighty) { weighty.markUsed(today); stats.add(Stats.Kind.WEIGHTY) }
                     rephraseNext = false
-                    present(decision, reply, opening, noEscalation = afterHeartbeat)
+                    present(decision, reply, opening, noEscalation = afterHeartbeat, topic = topic)
                 }
             }
         }
     }
 
-    private fun present(decision: SceneDecision, reply: ProbeReply, opening: List<ChatMessage>, noEscalation: Boolean) {
+    private fun present(decision: SceneDecision, reply: ProbeReply, opening: List<ChatMessage>, noEscalation: Boolean, topic: Topic? = null) {
         val now = now()
         scheduler.onSpoke(now)
         stats.add(Stats.Kind.SPOKE)
-        convo = Conversation(decision, reply, opening, now, noEscalation = noEscalation)
+        convo = Conversation(decision, reply, opening, now, noEscalation = noEscalation, topicId = topic?.id)
+        lastProactiveAt = now
+        topic?.let { topics.markShared(it.id, now) }
         overlay.setMood(reply.mood)
         overlay.setTalking(true)
         haptics.tap()
@@ -407,6 +443,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             Conversation(d, ProbeReply("", "", Mood.IDLE, false, false), buildOpeningSync(d), now(), userStarted = true).also { convo = it }
         }
         c.interacting = true
+        c.userReplyAt = now()
+        stateStore.apply(StateEvent.USER_REPLIED)
         if (c.userReply == null) stats.add(Stats.Kind.REPLIED)
         c.userReply = said
 
@@ -421,13 +459,14 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun replyRound(c: Conversation, said: String) {
         val key = apiKey()
-        val canCall = key != null && stats.get(Stats.Kind.API_CALLS) < settings.dailyLimit && c.opening.isNotEmpty()
+        val canCall = key != null && c.opening.isNotEmpty() &&
+            app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()) > 0
         overlay.setMood(Mood.THINKING)
         overlay.showBubble(BubbleSpec("……", textOnly = true))
         probeJob = scope.launch {
             var text: String? = null
             var mood = Mood.IDLE
-            if (canCall) {
+            if (canCall && app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
                 stats.add(Stats.Kind.API_CALLS)
                 val hook = c.reply.hookText.ifEmpty { "嗯？" }
                 val r = app.client.complete(ChatRequest(settings.endpoint, settings.model, key!!, ProbePrompt.reply(c.opening, hook, said)))
@@ -441,6 +480,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             // 调用失败不弹错误：点点头收尾
             val final = text ?: "嗯，我听到了。"
             c.petReply = final
+            c.petReplyAt = now()
             overlay.setMood(mood)
             overlay.setTalking(true)
             if (settings.ttsEnabled) speech.say(final)
@@ -537,6 +577,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         overlay.retreat()
         overlay.setMood(Mood.IDLE)
         if (!c.userStarted && c.userReply == null && c.gemini == GeminiExit.NONE) stats.add(Stats.Kind.IGNORED)
+        if (!c.userStarted && c.userReply == null && c.gemini == GeminiExit.NONE) {
+            stateStore.apply(StateEvent.PROACTIVE_IGNORED)
+            c.topicId?.let { topics.dismiss(it) }
+        }
         // 用户点开又什么都没说的空对话，不记
         if (c.userStarted && c.userReply == null) return
         if (TodayLog.wantsForget(c.userReply)) return
@@ -550,7 +594,18 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 gemini = c.gemini,
             ),
         )
-        scope.launch(Dispatchers.IO) { synchronized(app.memoryLock) { memory.appendToday(LocalDate.now(), line) } }
+        val hook = c.reply.hookText.ifEmpty { "（他先开口）" }
+        val userAt = if (c.userReply != null) c.userReplyAt else c.shownAt
+        val petAt = if (c.petReply != null) c.petReplyAt else c.shownAt
+        scope.launch(Dispatchers.IO) {
+            synchronized(app.memoryLock) {
+                val ids = mutableListOf<String>()
+                ids += app.events.append(EventKind.PROACTIVE, hook, occurredAt = c.shownAt, source = "proactive", conversationId = c.id).id
+                c.userReply?.let { ids += app.events.append(EventKind.USER_INPUT, it, occurredAt = userAt, source = "chat", conversationId = c.id).id }
+                c.petReply?.let { ids += app.events.append(EventKind.PET_REPLY, it, occurredAt = petAt, source = "chat", conversationId = c.id).id }
+                app.events.append(EventKind.EXCHANGE, line, occurredAt = now(), source = "chat", conversationId = c.id, sourceIds = ids)
+            }
+        }
     }
 
     // ---------- AI 会话（守住和 Gemini / ChatGPT / 千问 的对话） ----------
@@ -712,7 +767,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val mode = if (summary.mode == SessionMode.LIVE) "一起看" else "文字深聊"
         val line = "- ${HHMM.format(java.time.Instant.ofEpochMilli(summary.startedAt).atZone(java.time.ZoneId.systemDefault()))} | ${sessionApp.label} 会话 | " +
             "$mode，$minutes 分钟，离开 ${summary.leaves} 次，拉回 ${summary.pullBacks} 次（${summary.reason.label}）"
-        scope.launch(Dispatchers.IO) { synchronized(app.memoryLock) { memory.appendToday(LocalDate.now(), line) } }
+        scope.launch(Dispatchers.IO) { synchronized(app.memoryLock) { app.events.append(EventKind.SESSION, line, source = "session") } }
         if (announce && summary.reason != EndReason.USER) {
             overlay.showBubble(BubbleSpec("和 ${sessionApp.label} 的会话结束了（${summary.reason.label}），聊了 $minutes 分钟。", textOnly = true)) {
                 handler.postDelayed({ if (convo == null && session == null && think == null) overlay.hideBubble() }, 5000)
@@ -807,7 +862,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         flow.mode = mode
         flow.touchedAt = now()
         val key = apiKey()
-        if (key == null || stats.get(Stats.Kind.API_CALLS) >= settings.dailyLimit) {
+        if (key == null || app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()) <= 0) {
             thinkNotice(if (key == null) "还没填模型的 API Key，到设置里填一下。" else "今天的调用次数用完了，明天再陪你想。")
             return
         }
@@ -816,6 +871,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         probeJob = scope.launch {
             val messages = withContext(Dispatchers.IO) {
                 synchronized(app.memoryLock) { ThinkPrompt.build(memory.persona(), memory.profile(), mode, flow.material) }
+            }
+            if (!app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
+                thinkNotice("今天的调用次数用完了，明天再陪你想。")
+                return@launch
             }
             stats.add(Stats.Kind.API_CALLS)
             val r = app.client.complete(
@@ -863,12 +922,16 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         flow.touchedAt = now()
         flow.qa += q to said
         val key = apiKey()
-        if (key == null || stats.get(Stats.Kind.API_CALLS) >= settings.dailyLimit) { showThinkFollowUp(flow, "记下了。"); return }
+        if (key == null || app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()) <= 0) { showThinkFollowUp(flow, "记下了。"); return }
         overlay.setMood(Mood.THINKING)
         overlay.showBubble(BubbleSpec("……", textOnly = true))
         probeJob = scope.launch {
             val messages = withContext(Dispatchers.IO) {
                 synchronized(app.memoryLock) { ThinkPrompt.feedback(memory.persona(), flow.mode, flow.material, q, said) }
+            }
+            if (!app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
+                showThinkFollowUp(flow, "记下了。")
+                return@launch
             }
             stats.add(Stats.Kind.API_CALLS)
             val r = app.client.complete(ChatRequest(settings.endpoint, settings.model, key, messages, maxTokens = 250, timeoutMillis = ThinkPrompt.TIMEOUT_MILLIS))
@@ -878,7 +941,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
         // 他自己的回答是他的想法，记进今天的流水（以后整理档案能用上）
         val line = "- ${timeText()} | 想一想·${flow.mode.label} | 问：$q | 他答：${said.replace('\n', ' ')}"
-        if (!TodayLog.wantsForget(said)) scope.launch(Dispatchers.IO) { synchronized(app.memoryLock) { memory.appendToday(LocalDate.now(), line) } }
+        if (!TodayLog.wantsForget(said)) scope.launch(Dispatchers.IO) { synchronized(app.memoryLock) { app.events.append(EventKind.EXCHANGE, line, source = "think") } }
     }
 
     private fun showThinkFollowUp(flow: ThinkFlow, reply: String) {
@@ -961,7 +1024,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         scope.launch(Dispatchers.IO) {
             synchronized(app.memoryLock) {
                 app.thoughts.add(today, t)
-                memory.appendToday(today, "- ${t.time} | 念头 | ${said.replace('\n', ' ')}")
+                val noteEvent = app.events.append(EventKind.NOTE, said, source = "note")
+                app.events.append(EventKind.EXCHANGE, "- " + t.time + " | 念头 | " + said.replace('\n', ' '), source = "note")
+                stateStore.apply(StateEvent.USER_NOTE)
+                topics.enqueue(said, listOf(noteEvent.id))
             }
         }
         lastSavedNote = today
@@ -1012,11 +1078,19 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     ) { ScreenTextCleaner.clean(PerceptionHub.readScreen(), ScreenTextCleaner.PROBE_MAX_CHARS) }
 
     private fun buildOpeningSync(decision: SceneDecision): List<ChatMessage> = synchronized(app.memoryLock) {
-        ProbePrompt.opening(
-            memory.persona(), memory.profile(), memory.todayRecent(20), memory.diarySummary(LocalDate.now()),
+        openingMessages(
             ProbeMoment(timeText(), decision.scene, PerceptionHub.trail.foreground?.let { label(it) } ?: "不清楚", trajectory(now()), decision.screenText, petState = life.state.label),
+            decision.screenText,
         )
     }
+
+    /** 连续性开关打开时走有界召回；关掉时仍用旧的整份 profile 路径。 */
+    private fun openingMessages(moment: ProbeMoment, material: String?): List<ChatMessage> =
+        if (settings.continuityEnabled) {
+            assembler.assemble(memory.persona(), moment, material, now(), memory.tombstones())
+        } else {
+            ProbePrompt.opening(memory.persona(), memory.profile(), recentExchangeLines(20), memory.diarySummary(LocalDate.now()), moment)
+        }
 
     private fun apiKey(): String? = app.apiKey()
 
@@ -1034,6 +1108,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         return context.packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
             .map { it.activityInfo.packageName }.toSet()
     }
+
+    /** 最近的真实交流行（开口/回应/念头等），用于探针和夜间整理的上下文。 */
+    private fun recentExchangeLines(limit: Int): List<String> =
+        app.events.all().filter { it.kind == EventKind.EXCHANGE || it.kind == EventKind.LEGACY_LINE }.map { it.text }.takeLast(limit)
 
     private fun timeText(): String = LocalTime.now().format(HHMM)
 

@@ -12,6 +12,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import cn.companion.pet.PetApp
 import cn.companion.pet.core.memory.Nightly
+import cn.companion.pet.core.memory.NightlyCommitOutcome
 import cn.companion.pet.data.Stats
 import cn.companion.pet.net.ChatRequest
 import cn.companion.pet.net.ChatResult
@@ -38,33 +39,35 @@ class NightlyWorker(context: Context, params: WorkerParameters) : CoroutineWorke
 
     private suspend fun run(app: PetApp): Int {
         val key = app.apiKey() ?: return DONE
-        if (app.stats.get(Stats.Kind.API_CALLS) >= app.settings.dailyLimit) return DONE
-
-        val memory = app.memory
-        val prepared = synchronized(app.memoryLock) {
-            val day = memory.todayDate() ?: LocalDate.now().minusDays(1)
-            // 这天没有任何交流、也已经写过日记：不用再花一次调用
-            if (memory.todayLines().isEmpty() && memory.diary(day) != null) return DONE
-            Triple(
-                day,
-                Nightly.prompt(memory.persona(), memory.profile(), memory.todayLines(), memory.diary(day.minusDays(1)).orEmpty(), memory.tombstones()),
-                memory.profileLines(),
-            )
-        }
-        val (day, messages, oldProfile) = prepared
-
+        // 上次提交如果在任意一步中断，先把 journal 做完；这一步不花预算。
+        app.nightly.recover()
+        // 批次只取“准备那一刻”的待处理事件；请求期间新增的事件不进批次。
+        val prepared = app.nightly.prepare(LocalDate.now()) ?: return DONE
+        val today = LocalDate.now().toString()
+        // 所有调用入口共用同一本预算：先预留，再发请求。
+        if (!app.budget.reserve(app.settings.dailyLimit, today)) return DONE
         app.stats.add(Stats.Kind.API_CALLS)
+
+        val oldProfile = synchronized(app.memoryLock) { app.memory.profileLines() }
         val result = app.client.complete(
-            ChatRequest(app.settings.endpoint, app.settings.model, key, messages, maxTokens = Nightly.MAX_TOKENS, timeoutMillis = Nightly.TIMEOUT_MILLIS),
+            ChatRequest(app.settings.endpoint, app.settings.model, key, prepared.messages, maxTokens = Nightly.MAX_TOKENS, timeoutMillis = Nightly.TIMEOUT_MILLIS),
         )
         val output = (result as? ChatResult.Success)?.let { Nightly.parse(it.content, oldProfile) }
             ?: return if (runAttemptCount < 2) RETRY else DONE
 
-        synchronized(app.memoryLock) {
-            memory.commitNightly(day, output)
-            memory.pruneArchive(LocalDate.now())
+        return when (app.nightly.commit(prepared.batch, output)) {
+            // 提交成功（或这次 job 已经提交过）：本轮结束，不重复归档。
+            NightlyCommitOutcome.COMMITTED, NightlyCommitOutcome.ALREADY_COMMITTED -> {
+                // 日记里值得接着聊的一句进入话题队列；来源是这一批真实事件。
+                if (output.diary.isNotBlank() && prepared.batch.eventIds.isNotEmpty()) {
+                    app.topics.enqueue(output.diary.take(80), prepared.batch.eventIds)
+                }
+                synchronized(app.memoryLock) { app.memory.pruneArchive(LocalDate.now()) }
+                DONE
+            }
+            // 档案在请求期间被用户改过、或批次状态不对：下一次用新快照重算。
+            NightlyCommitOutcome.CONFLICT, NightlyCommitOutcome.MISSING -> if (runAttemptCount < 2) RETRY else DONE
         }
-        return DONE
     }
 
     companion object {

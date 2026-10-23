@@ -1,0 +1,174 @@
+package cn.companion.pet.core.companion
+
+import java.io.File
+import java.time.Clock
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.UUID
+
+/**
+ * 按月追加的 JSONL 事件日志。每行一个事件，写坏的最后一行在读取时跳过。
+ *
+ * 只负责“记录事实”，不负责预算、不负责模型请求。所有读写都在同一把锁里，
+ * 以适配应用内服务、WorkManager 和设置页共用一个进程的情况。
+ */
+class EventLog(
+    root: File,
+    private val clock: Clock = Clock.systemDefaultZone(),
+    val zone: ZoneId = clock.zone,
+) {
+    val eventsDir = File(root, "events")
+    private val nightlyDir = File(root, "nightly")
+    private val lock = Any()
+    private val monthFormat = DateTimeFormatter.ofPattern("yyyy-MM")
+
+    init {
+        eventsDir.mkdirs()
+        nightlyDir.mkdirs()
+    }
+
+    fun dayOf(occurredAt: Long): LocalDate = Instant.ofEpochMilli(occurredAt).atZone(zone).toLocalDate()
+
+    fun append(
+        kind: EventKind,
+        text: String,
+        occurredAt: Long = clock.millis(),
+        source: String = "chat",
+        conversationId: String? = null,
+        sourceIds: List<String> = emptyList(),
+        factKey: String? = null,
+        confidence: Confidence = Confidence.SAID,
+    ): CompanionEvent {
+        val clean = sanitize(text)
+        if (clean.isEmpty()) {
+            // 空文本也返回一条可识别的事件，但不落盘，避免产生“空事实”。
+            return CompanionEvent(
+                id = UUID.randomUUID().toString(),
+                occurredAt = occurredAt,
+                day = dayOf(occurredAt).toString(),
+                kind = kind,
+                text = "",
+                source = source,
+                conversationId = conversationId,
+                sourceIds = sourceIds,
+                factKey = factKey,
+                confidence = confidence,
+            )
+        }
+        val event = CompanionEvent(
+            id = UUID.randomUUID().toString(),
+            occurredAt = occurredAt,
+            day = dayOf(occurredAt).toString(),
+            kind = kind,
+            text = clean,
+            source = source,
+            conversationId = conversationId,
+            sourceIds = sourceIds,
+            factKey = factKey,
+            confidence = confidence,
+        )
+        appendEvent(event)
+        return event
+    }
+
+    fun appendEvent(event: CompanionEvent) {
+        synchronized(lock) {
+            val file = monthlyFile(event.day)
+            file.appendText(EventJson.encodeToString(CompanionEvent.serializer(), event) + "\n")
+        }
+    }
+
+    /** 全部事件，按发生时间和 id 排成确定顺序。 */
+    fun all(): List<CompanionEvent> = synchronized(lock) {
+        eventsDir.listFiles { f -> f.isFile && f.name.endsWith(".jsonl") }
+            .orEmpty()
+            .sortedBy { it.name }
+            .flatMap { readFile(it) }
+            .sortedWith(compareBy({ it.occurredAt }, { it.id }))
+    }
+
+    fun forDay(day: LocalDate): List<CompanionEvent> {
+        val key = day.toString()
+        return all().filter { it.day == key }
+    }
+
+    /** 还没被夜间批次确认的事件。已归档 id 写在 archived-<day>.txt 里。 */
+    fun pendingForDay(day: LocalDate): List<CompanionEvent> {
+        val archived = archivedIds(day)
+        return forDay(day).filter { it.id !in archived }
+    }
+
+    fun pendingDays(): List<LocalDate> = all()
+        .groupBy { it.day }
+        .filterKeys { runCatching { LocalDate.parse(it) }.isSuccess }
+        .filter { (day, list) -> list.any { it.id !in archivedIds(LocalDate.parse(day)) } }
+        .keys
+        .map { LocalDate.parse(it) }
+        .sorted()
+
+    fun archivedIds(day: LocalDate): Set<String> = synchronized(lock) {
+        val f = archiveIdsFile(day)
+        if (!f.exists()) emptySet()
+        else f.readLines().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+    }
+
+    /** 幂等：同一批 id 重复执行不会产生额外记录。 */
+    fun markArchived(day: LocalDate, ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        synchronized(lock) {
+            val all = archivedIds(day) + ids
+            writeAtomic(archiveIdsFile(day), all.joinToString("\n"))
+        }
+    }
+
+    /** 用户主动清空某一天的记录。只影响事件日志和该天归档标记，不动档案/日记/信。 */
+    fun clearDay(day: LocalDate) {
+        synchronized(lock) {
+            val file = monthlyFile(day.toString())
+            if (file.exists()) {
+                val kept = file.useLines { seq -> seq.filter { line ->
+                    val trimmed = line.trim()
+                    if (trimmed.isEmpty()) return@filter false
+                    val event = runCatching { EventJson.decodeFromString(CompanionEvent.serializer(), trimmed) }.getOrNull()
+                    event != null && event.day != day.toString()
+                }.toList() }
+                writeAtomic(file, if (kept.isEmpty()) "" else kept.joinToString("\n") + "\n")
+            }
+            archiveIdsFile(day).delete()
+        }
+    }
+
+    fun recent(limit: Int): List<CompanionEvent> = all().takeLast(limit)
+
+    private fun monthlyFile(day: String): File {
+        val month = runCatching { LocalDate.parse(day).format(monthFormat) }.getOrElse { day.take(7) }
+        return File(eventsDir, "events-" + month + ".jsonl")
+    }
+
+    private fun archiveIdsFile(day: LocalDate): File = File(nightlyDir, "archived-" + day + ".txt")
+
+    private fun readFile(file: File): List<CompanionEvent> = file.useLines { lines ->
+        lines.mapNotNull { line ->
+            val trimmed = line.trim()
+            if (trimmed.isEmpty()) return@mapNotNull null
+            runCatching {
+                EventJson.decodeFromString(CompanionEvent.serializer(), trimmed)
+            }.getOrNull()
+        }.toList()
+    }
+
+    private fun sanitize(text: String): String =
+        text.replace("\r", " ").replace("\n", " ").trim()
+
+    private fun writeAtomic(target: File, text: String) {
+        target.parentFile?.mkdirs()
+        val tmp = File(target.parentFile, "." + target.name + ".tmp")
+        tmp.writeText(text)
+        if (!tmp.renameTo(target)) {
+            target.delete()
+            check(tmp.renameTo(target)) { "rename failed: " + target.name }
+        }
+    }
+}

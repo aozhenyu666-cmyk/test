@@ -54,6 +54,8 @@ class Settings(context: Context) {
     var sessionPackage by str("session_package", "")
     /** 划过留痕：滑动时在内存里记下经过的段落。 */
     var skimEnabled by bool("skim", true)
+    /** 新连续性路径：按相关召回 + 结构化事实；默认关，关掉后走旧的整份 profile 路径。 */
+    var continuityEnabled by bool("continuity", false)
     var geminiAutoSend by bool("gemini_auto_send", false)
     var ttsEnabled by bool("tts", false)
     var petPaused by bool("paused", false)

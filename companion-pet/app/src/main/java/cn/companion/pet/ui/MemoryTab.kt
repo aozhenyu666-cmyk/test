@@ -28,6 +28,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import cn.companion.pet.PetApp
+import cn.companion.pet.core.companion.Confidence
+import cn.companion.pet.core.companion.EventKind
+import cn.companion.pet.core.companion.Fact
 import cn.companion.pet.core.memory.ProfileRules
 import cn.companion.pet.core.think.ThoughtNotes
 import cn.companion.pet.data.Stats
@@ -40,6 +43,7 @@ import java.time.LocalDate
 
 private data class MemorySnapshot(
     val profile: List<String> = emptyList(),
+    val facts: List<Fact> = emptyList(),
     val today: List<String> = emptyList(),
     val diaries: List<Pair<LocalDate, String>> = emptyList(),
     val letters: List<Pair<LocalDate, String>> = emptyList(),
@@ -63,7 +67,10 @@ fun MemoryTab(resumeTick: Int) {
             synchronized(app.memoryLock) {
                 MemorySnapshot(
                     profile = memory.profileLines(),
-                    today = memory.todayLines(),
+                    facts = app.facts.live(),
+                    today = app.events.forDay(LocalDate.now())
+                        .filter { it.kind == EventKind.EXCHANGE || it.kind == EventKind.LEGACY_LINE }
+                        .map { it.text },
                     diaries = memory.listDates(memory.diaryDir).take(7).map { it to memory.diary(it).orEmpty() },
                     letters = memory.listDates(memory.lettersDir).take(7).map { it to memory.letter(it).orEmpty() },
                     thoughts = app.thoughts.dates().take(7).map { it to app.thoughts.list(it) }.filter { it.second.isNotEmpty() },
@@ -102,9 +109,28 @@ fun MemoryTab(resumeTick: Int) {
         }
 
         HorizontalDivider()
+        Text("它记住的事", style = MaterialTheme.typography.titleMedium)
+        Text("每条都标了来源。它猜的可以点“对”确认；说错了点“更正”；不想留就“忘记”，删除后旧记录不会从摘要里复活。", style = MaterialTheme.typography.bodySmall)
+        if (snap.facts.isEmpty()) Text("还没有结构化记忆。打开设置里的“连续性”后，它会在交流里慢慢积累。", style = MaterialTheme.typography.bodySmall)
+        snap.facts.forEach { fact ->
+            FactRow(
+                fact = fact,
+                onConfirm = { io { app.facts.confirm(fact.id) } },
+                onCorrect = { text -> io { app.facts.correct(fact.id, text) } },
+                onForget = {
+                    io {
+                        app.facts.forget(fact.id)
+                        memory.addDeletedText(fact.text)
+                        app.events.append(EventKind.FORGET, fact.text, source = "user")
+                    }
+                },
+            )
+        }
+
+        HorizontalDivider()
         Text("今天的交流（${snap.today.size}）", style = MaterialTheme.typography.titleMedium)
         snap.today.takeLast(30).reversed().forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
-        if (snap.today.isNotEmpty()) TextButton(onClick = { io { memory.todayFile.delete() } }) { Text("清空今天的记录") }
+io { app.events.clearDay(LocalDate.now()); memory.todayFile.delete() }
 
         HorizontalDivider()
         Text("念头卡", style = MaterialTheme.typography.titleMedium)
@@ -132,6 +158,11 @@ fun MemoryTab(resumeTick: Int) {
                 digesting = true
                 scope.launch {
                     val messages = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { ThoughtNotes.digestPrompt(memory.persona(), latest.second) } }
+                    if (!app.budget.reserve(app.settings.dailyLimit, LocalDate.now().toString())) {
+                        digest = "今天的调用次数用完了，明天再整理。"
+                        digesting = false
+                        return@launch
+                    }
                     app.stats.add(Stats.Kind.API_CALLS)
                     val r = app.client.complete(ChatRequest(app.settings.endpoint, app.settings.model, key, messages, maxTokens = 800, timeoutMillis = 30_000))
                     val text = (r as? ChatResult.Success)?.content?.trim()
@@ -177,6 +208,38 @@ private fun Entry(date: LocalDate, text: String, onDelete: () -> Unit) {
                 TextButton(onClick = onDelete) { Text("删") }
             }
             Text(text, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun FactRow(fact: Fact, onConfirm: () -> Unit, onCorrect: (String) -> Unit, onForget: () -> Unit) {
+    var editing by remember(fact.id) { mutableStateOf(false) }
+    var draft by remember(fact.id) { mutableStateOf(fact.text) }
+    val date = java.time.Instant.ofEpochMilli(fact.createdAt)
+        .atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString()
+    Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        if (editing) {
+            OutlinedTextField(draft, { draft = it }, Modifier.fillMaxWidth(), label = { Text("更正这条") })
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    val text = draft.trim()
+                    if (text.isNotEmpty()) onCorrect(text)
+                    editing = false
+                }) { Text("保存") }
+                OutlinedButton(onClick = { editing = false; draft = fact.text }) { Text("取消") }
+            }
+        } else {
+            Text(fact.text, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                (if (fact.confidence == Confidence.SAID) "你说过" else "尚未确认") + " · " + date,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (fact.confidence == Confidence.GUESSED) TextButton(onClick = onConfirm) { Text("对") }
+                TextButton(onClick = { editing = true }) { Text("更正") }
+                TextButton(onClick = onForget) { Text("忘记") }
+            }
         }
     }
 }

@@ -1,23 +1,40 @@
 package cn.companion.pet.core.memory
 
+import cn.companion.pet.core.companion.EventKind
+import cn.companion.pet.core.companion.EventLog
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.time.Clock
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 
 class MemoryStoreTest {
     @get:Rule
     val tmp = TemporaryFolder()
 
     private val day = LocalDate.of(2026, 10, 22)
+    private val zone: ZoneId = ZoneId.of("Asia/Shanghai")
+    private val clock: Clock = Clock.fixed(Instant.parse("2026-10-23T00:00:00Z"), zone)
 
     private fun store() = MemoryStore(tmp.root)
+
+    private fun eventAt(day: LocalDate): Long =
+        day.atTime(12, 0).atZone(zone).toInstant().toEpochMilli()
+
+    private fun commit(memory: MemoryStore, day: LocalDate, lines: List<String>, output: NightlyOutput) {
+        val log = EventLog(memory.root, clock, zone)
+        lines.forEach { log.append(EventKind.EXCHANGE, it, occurredAt = eventAt(day)) }
+        val nightly = NightlyStore(memory, log, clock, zone)
+        val prepared = nightly.prepare(day.plusDays(1)) ?: error("no batch")
+        assertEquals(NightlyCommitOutcome.COMMITTED, nightly.commit(prepared.batch, output))
+    }
 
     @Test
     fun personaDefaultsAndSaves() {
@@ -54,17 +71,15 @@ class MemoryStoreTest {
     @Test
     fun nightlyCommitWritesAllAndArchives() {
         val s = store()
-        s.appendToday(day, "- 交流")
         val out = Nightly.parse(
             """{"profile":"[他说过] 喜欢猫\n随便一行\n[我推测] 晚上效率低","diary":"今天他理我了","letter":"昨天你说的猫叫什么？"}""",
             emptyList(),
         )!!
         assertEquals(2, out.profileLines.size)
-        s.commitNightly(day, out)
+        commit(s, day, listOf("- 交流"), out)
         assertEquals("[他说过] 喜欢猫\n[我推测] 晚上效率低", s.profile())
         assertEquals("今天他理我了", s.diary(day))
         assertEquals("昨天你说的猫叫什么？", s.letter(day))
-        assertFalse(s.todayFile.exists())
         assertTrue(File(s.archiveDir, "$day.md").readText().contains("- 交流"))
     }
 
@@ -76,7 +91,7 @@ class MemoryStoreTest {
         assertEquals(listOf("[他说过] 喜欢猫"), s.profileLines())
         // 模型换了标签、加了空格又写回来
         val out = Nightly.parse("""{"profile":"[他说过] 喜欢猫\n[他说过] 怕 狗","diary":"d","letter":"l"}""", s.profileLines())!!
-        s.commitNightly(day, out)
+        commit(s, day, listOf("- x"), out)
         assertEquals(listOf("[他说过] 喜欢猫"), s.profileLines())
     }
 
@@ -95,8 +110,10 @@ class MemoryStoreTest {
         assertNull(Nightly.parse("not json", emptyList()))
         // 旧档案非空但模型输出的档案一行都不合格：拒绝，避免一夜清空
         assertNull(Nightly.parse("""{"profile":"乱写","diary":"d","letter":"l"}""", listOf("[他说过] a")))
-        assertNull(Nightly.parse("""{"profile":"","diary":"d","letter":"${"长".repeat(200)}"}""", emptyList()))
-        assertNotNull(Nightly.parse("""{"profile":"","diary":"d","letter":"l"}""", emptyList()))
+        val tooLongLetter = "长".repeat(200)
+        val longLetterJson = "{\"profile\":\"\",\"diary\":\"d\",\"letter\":\"" + tooLongLetter + "\"}"
+        assertNull(Nightly.parse(longLetterJson, emptyList()))
+        assertTrue(Nightly.parse("""{"profile":"","diary":"d","letter":"l"}""", emptyList()) != null)
     }
 
     @Test
@@ -113,17 +130,21 @@ class MemoryStoreTest {
     @Test
     fun retryAppendsToExistingArchive() {
         val s = store()
-        s.appendToday(day, "- first")
-        s.commitNightly(day, NightlyOutput(emptyList(), "d", "l"))
-        s.appendToday(day, "- second")
-        s.commitNightly(day, NightlyOutput(emptyList(), "d2", "l2"))
+        val log = EventLog(s.root, clock, zone)
+        log.append(EventKind.EXCHANGE, "- first", occurredAt = eventAt(day))
+        val nightly = NightlyStore(s, log, clock, zone)
+        val first = nightly.prepare(day.plusDays(1))!!
+        assertEquals(NightlyCommitOutcome.COMMITTED, nightly.commit(first.batch, NightlyOutput(emptyList(), "d", "l")))
+        log.append(EventKind.EXCHANGE, "- second", occurredAt = eventAt(day))
+        val second = nightly.prepare(day.plusDays(1))!!
+        assertEquals(NightlyCommitOutcome.COMMITTED, nightly.commit(second.batch, NightlyOutput(emptyList(), "d2", "l2")))
         val a = File(s.archiveDir, "$day.md").readText()
         assertTrue(a.contains("- first") && a.contains("- second"))
     }
 
     @Test
     fun profileClampedTo3000() {
-        val lines = (1..400).map { "[他说过] 第${it}条记忆内容" }
+        val lines = (1..400).map { "[他说过] 第" + it + "条记忆内容" }
         val c = ProfileRules.clamp(lines)
         assertTrue(c.joinToString("\n").codePointCount(0, c.joinToString("\n").length) <= 3000)
         assertTrue(c.size < lines.size)
@@ -132,7 +153,7 @@ class MemoryStoreTest {
     @Test
     fun unreadLetterAndDiarySummary() {
         val s = store()
-        s.commitNightly(day, NightlyOutput(emptyList(), "昨天的日记", "信"))
+        commit(s, day, listOf("- 交流"), NightlyOutput(emptyList(), "昨天的日记", "信"))
         assertEquals(day to "信", s.unreadLetter())
         s.markLetterRead(day)
         assertNull(s.unreadLetter())
@@ -143,8 +164,8 @@ class MemoryStoreTest {
     @Test
     fun pruneOldArchives() {
         val s = store()
-        File(s.archiveDir, "${day.minusDays(31)}.md").writeText("old")
-        File(s.archiveDir, "${day.minusDays(5)}.md").writeText("new")
+        File(s.archiveDir, day.minusDays(31).toString() + ".md").writeText("old")
+        File(s.archiveDir, day.minusDays(5).toString() + ".md").writeText("new")
         s.pruneArchive(day)
         assertEquals(listOf(day.minusDays(5)), s.listDates(s.archiveDir))
     }
@@ -155,5 +176,16 @@ class MemoryStoreTest {
         s.saveProfileByUser("[我推测] 喜欢夜里看书")
         s.confirmProfileLine("[我推测] 喜欢夜里看书")
         assertEquals("[他说过] 喜欢夜里看书", s.profile())
+    }
+
+    @Test
+    fun appendAcrossMidnightArchivesOldDay() {
+        val s = store()
+        val next = day.plusDays(1)
+        s.appendToday(day, "- old")
+        s.appendToday(next, "- new")
+        assertEquals(next, s.todayDate())
+        assertEquals(listOf("- new"), s.todayLines())
+        assertTrue(File(s.archiveDir, "$day.md").readText().contains("- old"))
     }
 }

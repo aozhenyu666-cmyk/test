@@ -24,6 +24,8 @@ data class ProbeMoment(
     val petState: String = "",
     /** 锁屏心跳后亮屏的那一句。 */
     val afterHeartbeat: Boolean = false,
+    /** 从待分享话题队列里选出的一条，必须带真实来源。 */
+    val topic: String? = null,
 )
 
 /**
@@ -69,6 +71,9 @@ object ProbePrompt {
         if (moment.rephrase) sb.append("- 上次说的话他完全没理，这次换一种完全不同的说法和话题类型。\n")
         if (moment.weighty) sb.append("- 这是今天少有的“有分量的开口”：从我的日记或攒下的想法里挑一件想认真跟他说的事，比如“我有件事想跟你说”。\n")
         if (moment.afterHeartbeat) sb.append("- 他刚亮屏，锁屏那段时间我轻轻敲过他。问一句刚才脑子里在想什么。\n")
+        moment.topic?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            sb.append("- 我想接着聊的事（来自真实交流/笔记/日记，不是编的）：").append(it).append('\n')
+        }
         val screen = if (moment.scene == Scene.LEARNING) moment.screenText?.trim().orEmpty() else ""
         if (screen.isNotEmpty()) {
             sb.append("\n").append(SCREEN_OPEN).append('\n')

@@ -1,0 +1,144 @@
+package cn.companion.pet.core.companion
+
+import cn.companion.pet.core.probe.ProbeMoment
+import cn.companion.pet.core.probe.ProbePrompt
+import cn.companion.pet.core.scene.Scene
+import cn.companion.pet.core.text.UnicodeText
+import cn.companion.pet.net.ChatMessage
+import cn.companion.pet.net.ChatRole
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
+data class ContextLimits(
+    val recallMaxItems: Int = 6,
+    val recallMaxChars: Int = 800,
+    val recentMaxItems: Int = 12,
+    val recentMaxChars: Int = 2400,
+    val dynamicMaxChars: Int = 5000,
+    val materialMaxChars: Int = 1200,
+)
+
+/**
+ * 统一的上下文组装器：稳定 persona 作为指令；记忆、最近交流、素材都作为带来源的数据。
+ *
+ * 这里不读整份 profile。连续性开关打开后，长期了解通过结构化事实和有界召回进入；
+ * 关掉开关时调用方仍走旧的 ProbePrompt 路径。
+ */
+class CompanionContextAssembler(
+    private val events: EventLog,
+    private val facts: FactStore,
+    private val zone: ZoneId = events.zone,
+    private val recall: MemoryRecall = MemoryRecall(events, facts, zone),
+) {
+    fun assemble(
+        persona: String,
+        moment: ProbeMoment,
+        material: String?,
+        now: Long,
+        tombstones: Set<String> = emptySet(),
+        limits: ContextLimits = ContextLimits(),
+    ): List<ChatMessage> {
+        val recent = recentLines(limits)
+        val query = buildQuery(moment, events, now)
+        val recalled = recall.recall(
+            query = query,
+            now = now,
+            tombstones = tombstones,
+            excludeTexts = recent.map { it.second }.toSet(),
+            limits = RecallLimits(limits.recallMaxItems, limits.recallMaxChars),
+        )
+
+        val system = ChatMessage(ChatRole.SYSTEM, persona.trim() + "\n\n" + ProbePrompt.FORMAT_RULES)
+        val body = StringBuilder()
+        body.append("# 我记得的相关的事（按相关性，最多 ").append(limits.recallMaxItems).append(" 条）\n")
+        if (recalled.isEmpty()) {
+            body.append("（没有足够相关的事，不硬凑）\n")
+        } else {
+            recalled.forEach { item ->
+                body.append("- ").append(item.day).append(" · ").append(item.sourceLabel).append(" · ").append(item.text).append('\n')
+            }
+        }
+        body.append("\n# 最近的交流（最多 ").append(limits.recentMaxItems).append(" 条）\n")
+        if (recent.isEmpty()) body.append("（还没有交流记录）\n") else recent.forEach { body.append(it.first).append('\n') }
+
+        moment.topic?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            body.append("\n# 想接着聊的事（有真实来源）\n- ").append(it).append('\n')
+        }
+        body.append("\n# 此刻\n")
+        body.append("- 时间：").append(moment.timeText).append('\n')
+        body.append("- 场景：").append(moment.scene.label).append('\n')
+        body.append("- 前台：").append(moment.foregroundLabel).append('\n')
+        body.append("- 行为轨迹：").append(moment.trajectory).append('\n')
+        if (moment.petState.isNotBlank()) body.append("- 我自己此刻：").append(moment.petState).append('\n')
+        if (moment.stuck) body.append("- 他在同一页停了一分半钟没动，可能卡住了。针对屏幕上的具体段落说一句。\n")
+        if (moment.escalating) body.append("- 他还没回应上一句。\n")
+        if (moment.rephrase) body.append("- 上次说的话他完全没理，这次换一种完全不同的说法和话题类型。\n")
+        if (moment.weighty) body.append("- 这是今天少有的“有分量的开口”：从我攒下的话题或日记里挑一件想认真跟他说的事。\n")
+        if (moment.afterHeartbeat) body.append("- 他刚亮屏，锁屏那段时间我轻轻敲过他。问一句刚才脑子里在想什么。\n")
+
+        val screen = if (moment.scene == Scene.LEARNING) material?.trim().orEmpty() else ""
+        if (screen.isNotEmpty()) {
+            body.append('\n').append(ProbePrompt.SCREEN_OPEN).append('\n')
+            body.append(UnicodeText.truncate(sanitizeMarkers(screen), limits.materialMaxChars)).append('\n')
+            body.append(ProbePrompt.SCREEN_CLOSE).append('\n')
+        }
+
+        var text = body.toString()
+        // 产品上限是“整个动态上下文”5000 码点。超了就按确定顺序先删最早的最近交流，再截素材。
+        while (UnicodeText.count(text) > limits.dynamicMaxChars && recent.isNotEmpty()) {
+            val firstLine = recent.first().first
+            text = text.replaceFirst(firstLine + "\n", "")
+            return trimmedCopy(persona, text, limits.dynamicMaxChars)
+        }
+        if (UnicodeText.count(text) > limits.dynamicMaxChars) {
+            text = UnicodeText.truncate(text, limits.dynamicMaxChars)
+        }
+        return listOf(system, ChatMessage(ChatRole.USER, text.trimEnd()))
+    }
+
+    private fun trimmedCopy(persona: String, text: String, max: Int): List<ChatMessage> =
+        listOf(
+            ChatMessage(ChatRole.SYSTEM, persona.trim() + "\n\n" + ProbePrompt.FORMAT_RULES),
+            ChatMessage(ChatRole.USER, UnicodeText.truncate(text, max).trimEnd()),
+        )
+
+    /** 最近交流用已经格式化的一行一条，最多 12 条/2400 码点（从旧到新裁剪）。 */
+    private fun recentLines(limits: ContextLimits): List<Pair<String, String>> {
+        val all = events.all()
+            .filter { it.kind == EventKind.EXCHANGE || it.kind == EventKind.LEGACY_LINE }
+            .takeLast(limits.recentMaxItems)
+            .map { it.text to it.text }
+            .toMutableList()
+        var used = all.sumOf { UnicodeText.count(it.first) + 1 }
+        while (all.isNotEmpty() && used > limits.recentMaxChars) {
+            used -= UnicodeText.count(all.first().first) + 1
+            all.removeAt(0)
+        }
+        return all
+    }
+
+    private fun buildQuery(moment: ProbeMoment, events: EventLog, now: Long): String {
+        val userLines = events.all()
+            .filter { it.kind == EventKind.USER_INPUT || it.kind == EventKind.NOTE }
+            .takeLast(6)
+            .joinToString(" ") { it.text }
+        return listOf(
+            moment.screenText.orEmpty(),
+            moment.trajectory,
+            moment.foregroundLabel,
+            moment.scene.label,
+            userLines,
+        ).joinToString("\n")
+    }
+
+    private fun sanitizeMarkers(text: String): String =
+        text.replace(ProbePrompt.SCREEN_CLOSE, "</screen_material_>")
+            .replace(ProbePrompt.SCREEN_OPEN, "<screen_material_>")
+
+    companion object {
+        val TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+        fun dayOf(epochMillis: Long, zone: ZoneId): String =
+            Instant.ofEpochMilli(epochMillis).atZone(zone).toLocalDate().toString()
+    }
+}

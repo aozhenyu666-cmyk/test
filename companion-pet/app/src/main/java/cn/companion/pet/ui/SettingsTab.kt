@@ -189,6 +189,14 @@ fun SettingsTab(context: Context) {
         var tts by remember { mutableStateOf(s.ttsEnabled) }
         Toggle("语音播报", "用系统 TTS 念出它说的话。默认关，机械音会破坏伴生感。", tts) { tts = it; s.ttsEnabled = it }
 
+        Section("连续性")
+        var continuity by remember { mutableStateOf(s.continuityEnabled) }
+        Toggle(
+            "按相关召回 + 结构化记忆",
+            "打开后，上下文只带与当前话题相关的记忆和最近交流，不再把整份档案塞进去；关掉则回到旧路径。默认关，先在调试里验证。",
+            continuity,
+        ) { continuity = it; s.continuityEnabled = it }
+
         Section("人设")
         var persona by remember { mutableStateOf("") }
         LaunchedEffect(Unit) { persona = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { app.memory.persona() } } }

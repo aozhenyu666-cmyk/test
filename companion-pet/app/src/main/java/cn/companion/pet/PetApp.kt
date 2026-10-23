@@ -1,8 +1,15 @@
 package cn.companion.pet
 
 import android.app.Application
+import cn.companion.pet.core.companion.EventLog
+import cn.companion.pet.core.companion.FactStore
+import cn.companion.pet.core.companion.TopicQueue
+import cn.companion.pet.core.companion.LegacyEventImport
 import cn.companion.pet.core.memory.MemoryStore
+import cn.companion.pet.core.memory.NightlyStore
+import cn.companion.pet.core.probe.AtomicBudget
 import cn.companion.pet.core.think.ThoughtNotes
+import cn.companion.pet.data.BudgetPrefs
 import cn.companion.pet.data.SecretReadResult
 import cn.companion.pet.data.SecretStore
 import cn.companion.pet.data.Settings
@@ -20,6 +27,16 @@ class PetApp : Application() {
     lateinit var secrets: SecretStore
         private set
     lateinit var memory: MemoryStore
+        private set
+    lateinit var events: EventLog
+        private set
+    lateinit var nightly: NightlyStore
+        private set
+    lateinit var facts: FactStore
+        private set
+    lateinit var topics: TopicQueue
+        private set
+    lateinit var budget: AtomicBudget
         private set
     lateinit var thoughts: ThoughtNotes
         private set
@@ -52,7 +69,16 @@ class PetApp : Application() {
         stats = Stats(this)
         secrets = SecretStore(this)
         memory = MemoryStore(File(filesDir, "memory"))
+        events = EventLog(memory.root)
+        facts = FactStore(memory.root)
+        topics = TopicQueue(memory.root)
+        nightly = NightlyStore(memory, events, facts = facts)
+        budget = AtomicBudget(BudgetPrefs(this))
         thoughts = ThoughtNotes(File(memory.root, "notes"))
+        // 旧 today.md 只在第一次启动迁移一次；迁移有备份且幂等。
+        LegacyEventImport.ensure(memory, events)
+        // 上次提交如果中途崩溃，先把 journal 做完。
+        nightly.recover()
         NightlyWorker.schedule(this)
     }
 
