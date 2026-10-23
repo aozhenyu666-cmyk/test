@@ -28,6 +28,8 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.yishou.app.R
 import com.yishou.app.YishouApp
+import com.yishou.app.companion.android.CaptureArbiter
+import com.yishou.app.companion.core.CaptureHolder
 import com.yishou.app.llm.LlmResult
 import com.yishou.app.stats.DayStats
 import com.yishou.app.system.Notifications
@@ -90,6 +92,13 @@ class ScreenLookService : Service() {
             startForeground(ID_FOREGROUND, n)
         }
         if (projection != null) return
+
+        // 投屏只有一份：陪练探针或刷着练占着的时候不硬开，说清楚是谁
+        CaptureArbiter.acquire(CaptureHolder.SCREEN_LOOK)?.let { reason ->
+            _status.value = reason
+            stopAll()
+            return
+        }
 
         val code = intent.getIntExtra(EXTRA_CODE, 0)
         @Suppress("DEPRECATION")
@@ -255,6 +264,7 @@ class ScreenLookService : Service() {
         }
         speaker?.shutdown()
         speaker = null
+        CaptureArbiter.release(CaptureHolder.SCREEN_LOOK)
         _running.value = false
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
