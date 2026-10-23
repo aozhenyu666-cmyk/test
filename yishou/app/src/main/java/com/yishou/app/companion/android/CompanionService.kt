@@ -16,6 +16,7 @@ import com.yishou.app.R
 import com.yishou.app.YishouApp
 import com.yishou.app.companion.core.AskOutcome
 import com.yishou.app.companion.core.Capsule
+import com.yishou.app.companion.core.CardImage
 import com.yishou.app.companion.core.CapsuleState
 import com.yishou.app.companion.core.CaptureHolder
 import com.yishou.app.companion.core.Chunk
@@ -75,6 +76,8 @@ class CompanionService : Service() {
     private var startedWall = 0L
     private var goal = ""
     private var pkg = ""
+    /** 用户这次是否要保留训练卡图片；默认不存 */
+    private var keepImages = false
     private var ticker: Job? = null
     /** 正在听用户答这一问；同一时间只开一次麦 */
     private var listening: Job? = null
@@ -135,6 +138,7 @@ class CompanionService : Service() {
         if (data == null || code == 0) return fail("没有拿到投屏授权")
 
         goal = intent.getStringExtra(EXTRA_GOAL).orEmpty()
+        keepImages = intent?.getBooleanExtra(EXTRA_KEEP_IMAGES, false) == true
         val minutes = intent.getIntExtra(EXTRA_MINUTES, 25)
         val gear = intent.getStringExtra(EXTRA_GEAR) ?: "ACCOMPANY"
         pkg = intent.getStringExtra(EXTRA_PKG).orEmpty()
@@ -192,6 +196,7 @@ class CompanionService : Service() {
             pkg = { pkg },
             epoch = { tl.epoch() },
             now = { System.currentTimeMillis() },
+            image = { turnId -> captureCard(turnId) },
         )
         ports = pt
         conductor = Conductor(sess, ch, pt, { elapsed() })
@@ -217,7 +222,11 @@ class CompanionService : Service() {
             ).also { t -> a.tap = { buf, n, at -> t.feed(buf, n, at) } }
         }
 
-        frames = ScreenFrameProbe(this).also { it.start(p) }
+        frames = ScreenFrameProbe(this).also {
+            // 只有用户说要留卡片图才在内存里多压一份 JPEG，不为了存卡持续录屏
+            it.encodeJpeg = keepImages
+            it.start(p)
+        }
 
         app.appScopeLaunch { st.openSession(startedWall, goal, minutes, gear, pkg) }
 
@@ -378,6 +387,28 @@ class CompanionService : Service() {
                 is ResumeResult.Failed -> publish("没能自动接着放：undefined；你手动点一下播放")
                 else -> Unit
             }
+        }
+    }
+
+    // ---- 训练卡图片 ----
+
+    /**
+     * 只存被选入卡片的那一屏。
+     *
+     * 没开「保留训练卡图片」、或者这一问没有可留的帧，就什么都不写；
+     * 不为了存卡持续录屏，也不在用户没同意时落任何图片。
+     */
+    private fun captureCard(turnId: Long): String? {
+        if (!keepImages) return null
+        val bytes = frames?.latestJpegBytes() ?: return null
+        return try {
+            val f = CardImage.file(filesDir, sessionId, turnId)
+            f.parentFile?.mkdirs()
+            f.writeBytes(bytes)
+            f.absolutePath
+        } catch (e: Exception) {
+            RunLog.e("视频陪练", "存训练卡图片失败", e)
+            null
         }
     }
 
@@ -587,6 +618,7 @@ class CompanionService : Service() {
         private const val EXTRA_GEAR = "gear"
         private const val EXTRA_PKG = "pkg"
         private const val EXTRA_TEXT = "text"
+        private const val EXTRA_KEEP_IMAGES = "keep_images"
 
         private val _view = MutableStateFlow(View())
         val view: StateFlow<View> = _view.asStateFlow()
@@ -597,7 +629,16 @@ class CompanionService : Service() {
             )
         }
 
-        fun start(context: Context, code: Int, data: Intent, goal: String, minutes: Int, gear: String, pkg: String) {
+        fun start(
+            context: Context,
+            code: Int,
+            data: Intent,
+            goal: String,
+            minutes: Int,
+            gear: String,
+            pkg: String,
+            keepImages: Boolean = false,
+        ) {
             context.startForegroundService(
                 Intent(context, CompanionService::class.java)
                     .putExtra(EXTRA_CODE, code)
@@ -605,7 +646,8 @@ class CompanionService : Service() {
                     .putExtra(EXTRA_GOAL, goal)
                     .putExtra(EXTRA_MINUTES, minutes)
                     .putExtra(EXTRA_GEAR, gear)
-                    .putExtra(EXTRA_PKG, pkg),
+                    .putExtra(EXTRA_PKG, pkg)
+                    .putExtra(EXTRA_KEEP_IMAGES, keepImages),
             )
         }
 

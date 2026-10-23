@@ -1,6 +1,7 @@
 package com.yishou.app.companion.android
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -13,6 +14,8 @@ import android.os.Looper
 import com.yishou.app.companion.core.FrameCadence
 import com.yishou.app.companion.core.FrameDecision
 import com.yishou.app.log.RunLog
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,6 +44,16 @@ class ScreenFrameProbe(private val context: Context) {
         private set
     var kept: Int = 0
         private set
+
+    /** 用户开了「保留训练卡图片」才在保留帧上压一份 JPEG；不持续存录屏 */
+    @Volatile
+    var encodeJpeg: Boolean = false
+
+    @Volatile
+    private var latestJpeg: ByteArray? = null
+
+    /** 最近一张被留下的帧（JPEG）。没开保留或还没留下过就是 null */
+    fun latestJpegBytes(): ByteArray? = latestJpeg?.copyOf()
 
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) {}
@@ -106,8 +119,45 @@ class ScreenFrameProbe(private val context: Context) {
     private fun onFrame(img: Image) {
         seen++
         val at = System.currentTimeMillis()
-        if (cadence.offer(fingerprint(img), at) == FrameDecision.KEEP) kept++
+        val decision = cadence.offer(fingerprint(img), at)
+        if (decision == FrameDecision.KEEP) {
+            kept++
+            if (encodeJpeg) latestJpeg = toJpeg(img)
+        }
         _stats.value = "看到 $seen 帧，留下 $kept 帧"
+    }
+
+    /** 把这一帧压成 JPEG；只在保留帧上做，够存一张训练卡图就行 */
+    private fun toJpeg(img: Image): ByteArray? = try {
+        val plane = img.planes[0]
+        val buf = plane.buffer
+        val width = img.width
+        val height = img.height
+        val pixelStride = plane.pixelStride
+        val rowStride = plane.rowStride
+        val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        if (rowStride == width * pixelStride) {
+            bmp.copyPixelsFromBuffer(buf)
+        } else {
+            // 有的机型每行会补到对齐宽度，得把补的那些字节剔掉再拷
+            val tight = ByteBuffer.allocate(width * height * pixelStride)
+            val row = ByteArray(width * pixelStride)
+            val start = buf.position()
+            for (y in 0 until height) {
+                buf.position(start + y * rowStride)
+                buf.get(row, 0, row.size)
+                tight.put(row)
+            }
+            tight.rewind()
+            bmp.copyPixelsFromBuffer(tight)
+        }
+        val out = ByteArrayOutputStream()
+        bmp.compress(Bitmap.CompressFormat.JPEG, 72, out)
+        bmp.recycle()
+        out.toByteArray()
+    } catch (e: Exception) {
+        RunLog.e("陪练探针", "把这一帧压成图片失败", e)
+        null
     }
 
     /** 抽几百个字节算个指纹：画面没变就是同一个数，不用逐像素比 */
@@ -142,6 +192,7 @@ class ScreenFrameProbe(private val context: Context) {
             latest?.close()
             latest = null
         }
+        latestJpeg = null
         display?.release()
         display = null
         reader?.close()

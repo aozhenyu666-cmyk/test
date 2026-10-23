@@ -116,6 +116,10 @@ abstract class CompanionDao {
     @Query("SELECT * FROM companion_turn WHERE answeredAt >= :from ORDER BY answeredAt DESC")
     abstract fun observeAnsweredSince(from: Long): Flow<List<CompanionTurnRow>>
 
+    /** 删记录用：这段时间开过的场次 */
+    @Query("SELECT id FROM companion_session WHERE startedAt >= :from")
+    abstract suspend fun sessionIdsSince(from: Long): List<Long>
+
     /** 回看用：这一场问过什么、你怎么答的 */
     @Query("SELECT * FROM companion_turn WHERE sessionId = :sessionId ORDER BY askedAt DESC")
     abstract fun observeTurnsOf(sessionId: Long): Flow<List<CompanionTurnRow>>

@@ -2,6 +2,7 @@ package com.yishou.app.companion.android
 
 import android.content.Context
 import com.yishou.app.companion.core.AttemptMemory
+import com.yishou.app.companion.core.CardImage
 import com.yishou.app.companion.core.CompanionKeys
 import com.yishou.app.companion.core.ThinkMove
 import com.yishou.app.companion.core.Verdict
@@ -101,9 +102,22 @@ class CompanionStore(private val context: Context, private val db: AppDatabase) 
         dao.clearSession(sessionId)
         var removed = 0
         paths.forEach { p ->
+            // 只删自家目录下的卡片图：坏路径不能带着我们把别处的文件删了
+            if (!CardImage.owned(context.filesDir, p)) {
+                RunLog.e("陪练记录", "这条附件路径不归我们管，跳过：$p")
+                return@forEach
+            }
             val f = File(p)
             if (f.exists() && f.delete()) removed++ else if (f.exists()) RunLog.e("陪练记录", "删不掉附件：$p")
         }
         return removed
+    }
+
+    /** 删掉某时间之后的场次（含卡片图）：返回「删了几场、删了几个文件」 */
+    suspend fun deleteSessionsSince(from: Long): Pair<Int, Int> {
+        val ids = dao.sessionIdsSince(from)
+        var files = 0
+        ids.forEach { files += deleteSession(it) }
+        return ids.size to files
     }
 }

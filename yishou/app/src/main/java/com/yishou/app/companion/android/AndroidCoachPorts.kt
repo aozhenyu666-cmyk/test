@@ -37,6 +37,8 @@ class AndroidCoachPorts(
     private val pkg: () -> String,
     private val epoch: () -> Int,
     private val now: () -> Long,
+    /** 用户开了「保留训练卡图片」时，把这一问对应的那一屏存下来并返回路径 */
+    private val image: (turnId: Long) -> String? = { null },
 ) : CoachPorts {
 
     /** 这一问的出处和原文，记账时用 */
@@ -107,6 +109,7 @@ class AndroidCoachPorts(
             evidenceIds = evidenceIds,
             sourceText = sourceText,
             epoch = epoch(),
+            imagePath = image(turnId),
         )
         store.answered(sessionId, turnId, answer, verdict, delta)
     }
