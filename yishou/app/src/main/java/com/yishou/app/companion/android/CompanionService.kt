@@ -26,6 +26,8 @@ import com.yishou.app.companion.core.ContextTimeline
 import com.yishou.app.companion.core.InterruptBudget
 import com.yishou.app.companion.core.TranscriptAssembler
 import com.yishou.app.companion.core.VideoCoach
+import com.yishou.app.companion.core.VoiceAnswer
+import com.yishou.app.speech.Heard
 import com.yishou.app.llm.ChatClient
 import com.yishou.app.log.RunLog
 import com.yishou.app.look.ScreenLookService
@@ -74,6 +76,8 @@ class CompanionService : Service() {
     private var goal = ""
     private var pkg = ""
     private var ticker: Job? = null
+    /** 正在听用户答这一问；同一时间只开一次麦 */
+    private var listening: Job? = null
     private var lastTryAt = 0L
     private var nextObsId = 0L
     private var asked = 0
@@ -259,6 +263,7 @@ class CompanionService : Service() {
         watchSource()
         if (co.tick()) {
             missed++
+            stopListening()
             publish("这一问没接上，记一笔（不算答错）")
         }
         publish(Capsule.text(capsuleState()), running = true)
@@ -273,6 +278,8 @@ class CompanionService : Service() {
                     is AskOutcome.Asked -> {
                         asked++
                         publish("", question = out.question)
+                        // 念完才开始听：念的时候开麦会把朗读录进去
+                        listenAnswer()
                     }
                     is AskOutcome.NeedManual -> publish(out.hint, question = null, hint = out.hint)
                     is AskOutcome.Waited -> Unit
@@ -308,6 +315,7 @@ class CompanionService : Service() {
     }
 
     private fun adopt(newPkg: String) {
+        stopListening()
         val first = pkg.isBlank()
         pkg = newPkg
         if (sessionId > 0) {
@@ -345,11 +353,45 @@ class CompanionService : Service() {
         p
     }
 
+    // ---- 语音作答 ----
+
+    /**
+     * 问题念完、在等回答时才开麦；说完自动停（VAD），也可以手动「说完了」。
+     *
+     * 听不清、听写失败都退回打字，不记成答错；说出口的那句和打字走同一条 [answer]。
+     */
+    private fun listenAnswer() {
+        val sess = session ?: return
+        if (!VoiceAnswer.shouldListen(sess.phase())) return
+        if (listening?.isActive == true) return
+        listening = scope.launch {
+            val heard = app.voice.listen()
+            if (!isActive) return@launch
+            when (heard) {
+                is Heard.Text -> {
+                    val text = VoiceAnswer.accept(heard.text)
+                    if (text == null) publish(VoiceAnswer.missed()) else answer(text, fromVoice = true)
+                }
+                Heard.Nothing -> publish(VoiceAnswer.missed())
+                is Heard.Failed -> publish(VoiceAnswer.missed(heard.message))
+            }
+        }
+    }
+
+    /** 不在等回答时把麦关掉：念问题、判答案、换段、停掉都不该继续录 */
+    private fun stopListening() {
+        listening?.cancel()
+        listening = null
+        app.voice.cancel()
+    }
+
     // ---- 界面动作 ----
 
-    private fun answer(text: String) {
+    private fun answer(text: String, fromVoice: Boolean = false) {
         val co = conductor ?: return
         if (text.isBlank()) return
+        // 打字作答时把麦收掉；语音那条路已经自己结束了，别再取消自己
+        if (fromVoice) listening = null else stopListening()
         val material = timeline?.slice(elapsed(), System.currentTimeMillis() + 20_000)?.text.orEmpty()
         scope.launch {
             val r = co.answer(text, material)
@@ -382,6 +424,7 @@ class CompanionService : Service() {
 
     private fun skip() {
         val sess = session ?: return
+        stopListening()
         sess.dropQuestion()
         publish("这一问跳过了（不算答错）", question = null, hint = null)
     }
@@ -402,6 +445,7 @@ class CompanionService : Service() {
     private fun stopAll() {
         if (stopped) return
         stopped = true
+        stopListening()
         ticker?.cancel()
         ticker = null
         tap?.flush()

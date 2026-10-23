@@ -60,6 +60,7 @@ fun CompanionScreen(onBack: () -> Unit) {
         yishou.database.companion()
             .observeAnsweredSince(System.currentTimeMillis() - 3L * 24 * 3_600_000)
     }.collectAsStateWithLifecycle(emptyList())
+    val voicePhase by yishou.voice.phase.collectAsStateWithLifecycle()
     val ready = CompanionChecks.startup(
         llmReady = llmReady.isComplete,
         sttReady = speech.sttReady,
@@ -157,10 +158,27 @@ fun CompanionScreen(onBack: () -> Unit) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("它问：", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(q, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                        if (voicePhase == com.yishou.app.speech.ListenPhase.LISTENING) {
+                            Text(
+                                "在听你说…说完自己停",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { yishou.voice.finish() }) { Text("我说完了") }
+                                TextButton(onClick = { yishou.voice.cancel() }) { Text("不说了") }
+                            }
+                        } else if (voicePhase == com.yishou.app.speech.ListenPhase.TRANSCRIBING) {
+                            Text(
+                                "在把你说的转成文字…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         OutlinedTextField(
                             value = answer,
                             onValueChange = { answer = it },
-                            label = { Text("说你的想法（这一步先用打字）") },
+                            label = { Text("也可以直接打字") },
                             modifier = Modifier.fillMaxWidth(),
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -205,7 +223,7 @@ fun CompanionScreen(onBack: () -> Unit) {
 
             Text(
                 "内录只能听别的 App 的声音，一手自己放的朗读不会被录进去；目标 App 若禁止被采集，胶囊会写「声音缺失」。\n" +
-                    "这一版先打字作答，语音作答和浮窗还没接。",
+                    "问题念完会自动开麦听你答，说完自己停；没听清就打字，浮窗还没接。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 24.dp),
