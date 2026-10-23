@@ -486,6 +486,8 @@ class CompanionService : Service() {
 
     private fun skip() {
         val sess = session ?: return
+        // 没有正在等回答的问题时点「跳过」什么都不该发生
+        if (sess.question() == null) return
         stopListening()
         sess.dropQuestion()
         publish("这一问跳过了（不算答错）", question = null, hint = null)
@@ -561,6 +563,10 @@ class CompanionService : Service() {
             this, 75, Intent(this, CompanionService::class.java).setAction(ACTION_VOICE_DONE),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        val skip = PendingIntent.getService(
+            this, 76, Intent(this, CompanionService::class.java).setAction(ACTION_SKIP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_yishou)
             .setContentTitle("一手 · 视频陪练")
@@ -570,6 +576,7 @@ class CompanionService : Service() {
             .setOnlyAlertOnce(true)
             .setContentIntent(open)
             .addAction(0, "说完了", done)
+            .addAction(0, "跳过", skip)
             .addAction(0, "停", stop)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
@@ -589,8 +596,12 @@ class CompanionService : Service() {
             hint = hint,
             phase = session?.phase()?.label.orEmpty(),
         )
+        // 通知栏也直接写问题：用户不切回一手也能看第二眼
+        val text = question?.takeIf { it.isNotBlank() }?.let { "问：$it" }
+            ?: hint?.takeIf { it.isNotBlank() }
+            ?: note.ifBlank { _view.value.capsule }
         try {
-            getSystemService(NotificationManager::class.java).notify(ID, notification(note.ifBlank { _view.value.capsule }))
+            getSystemService(NotificationManager::class.java).notify(ID, notification(text))
         } catch (e: SecurityException) { }
     }
 
