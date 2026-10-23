@@ -164,6 +164,16 @@ class PetOverlay(
             View.MeasureSpec.makeMeasureSpec(maxW, View.MeasureSpec.AT_MOST),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
         )
+        // 纯文字气泡（收尾句、信）没有按钮撑宽度；打字机刚开始时文字为空，
+        // 若直接按空文本测量，窗口会缩成一条竖线，中文变成一字一行。
+        // 给一个最小宽度并按 EXACTLY 重新测量，保证正常换行。
+        val minW = dp(200f).toInt()
+        if (bubble.measuredWidth < minW) {
+            bubble.measure(
+                View.MeasureSpec.makeMeasureSpec(minW, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            )
+        }
         val bw = bubble.measuredWidth
         val bh = bubble.measuredHeight
         bubbleParams.width = bw

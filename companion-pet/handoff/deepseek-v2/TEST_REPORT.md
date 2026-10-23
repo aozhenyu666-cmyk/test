@@ -17,7 +17,7 @@
 | 代码可编译 | 通过 | 本机 Gradle 构建 + CI |
 | JVM 单元测试 | **162 / 162 通过，0 失败** | `test-results/testDebugUnitTest/*.xml` |
 | lint | **0 errors / 5 warnings** | `lint-results-debug.txt` |
-| debug APK | 构建成功 | 28,100,993 bytes，SHA-256 `54B71E5EC9C294BA49DAB6CCD16E5ECB03BC111CFE8FD29B377C0BA5EFBF9220` |
+| debug APK | 构建成功 | 28,434,809 bytes，SHA-256 `8FA4E37C4FCB60A671491DA644DA8828EBC84D0FDFDA2A7821EFCAB93124AE17` |
 | 仪器测试 APK | 构建成功 | 只编译，未执行 |
 | 远端 CI | **success** | https://github.com/aozhenyu666-cmyk/test/actions/runs/39968655136 |
 | 真机功能/体验 | **部分验证** | iQOO 12 已连接，安装/启动/权限/悬浮窗/文字输入/锁屏存活有证据；锁屏解锁后的恢复、夜间并发、召回、UI 适配等仍待测。详见 [DEVICE_TEST_RESULTS.md](DEVICE_TEST_RESULTS.md) |

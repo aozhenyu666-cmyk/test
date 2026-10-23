@@ -3,6 +3,8 @@ package cn.companion.pet.ui
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -12,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,9 +37,11 @@ import cn.companion.pet.ui.components.SourceTag
 import cn.companion.pet.ui.theme.CompanionShapes
 import cn.companion.pet.ui.theme.CompanionSpacing
 import cn.companion.pet.ui.theme.LocalCompanionColors
+import kotlinx.coroutines.delay
 import java.time.LocalDate
 
 /** 首次引导 + 当前状态。每一行都能直接跳到系统里对应的设置页。 */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun StartTab(activity: MainActivity, resumeTick: Int) {
     val app = PetApp.instance
@@ -51,6 +56,15 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
     var running by remember(resumeTick) { mutableStateOf(PetService.running) }
     var paused by remember(resumeTick) { mutableStateOf(app.settings.petPaused) }
     val a11yConnected by PerceptionHub.connected.collectAsState()
+    // 服务可能由看门狗/开机/升级在页面停留期间拉起，静态 running 不会触发重组。
+    // 每秒对齐一次，避免出现“角色已在屏幕上，状态却写着已停止”。
+    LaunchedEffect(Unit) {
+        while (true) {
+            if (running != PetService.running) running = PetService.running
+            if (paused != app.settings.petPaused) paused = app.settings.petPaused
+            delay(1500)
+        }
+    }
     val recent = remember(resumeTick) {
         app.events.forDay(LocalDate.now())
             .filter { it.kind == EventKind.EXCHANGE || it.kind == EventKind.LEGACY_LINE }
@@ -82,7 +96,11 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
                 Text("状态", style = MaterialTheme.typography.bodyMedium, color = colors.ink2)
                 SourceTag(status, highlighted = running && !paused)
             }
-            Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                Modifier.padding(top = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 CutAction(
                     text = if (running) "重新唤出" else "启动桌宠",
                     highlighted = true,

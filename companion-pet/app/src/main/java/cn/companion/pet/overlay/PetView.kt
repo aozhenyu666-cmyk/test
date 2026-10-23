@@ -136,12 +136,13 @@ class PetView(context: Context) : View(context) {
         val eyeY = cy - bodyH * 0.06f
         val eyeDx = bodyW * 0.18f
         val eyeR = s * 0.055f
+        // 道具画在脸之前，避免书本/信纸盖住嘴；位置也放低到身体下沿。
+        drawProps(canvas, cx, top, bottom, bodyW, s, t)
         drawEyes(canvas, cx + look, eyeY, eyeDx, eyeR, t)
         canvas.drawCircle(cx - eyeDx * 1.6f, eyeY + eyeR * 1.8f, eyeR * 0.9f, cheek)
         canvas.drawCircle(cx + eyeDx * 1.6f, eyeY + eyeR * 1.8f, eyeR * 0.9f, cheek)
         drawMouth(canvas, cx + look, eyeY + eyeR * 2.2f, s, t)
 
-        drawProps(canvas, cx, top, bottom, bodyW, s, t)
         canvas.restore()
 
         drawOverhead(canvas, cx, top, s, t)
@@ -235,7 +236,7 @@ class PetView(context: Context) : View(context) {
     }
 
     private fun drawProps(canvas: Canvas, cx: Float, top: Float, bottom: Float, bodyW: Float, s: Float, t: Float) {
-        val propY = bottom - s * 0.2f
+        val propY = bottom - s * 0.10f
         when {
             holdingLetter -> {
                 val wob = sin(t * 4f) * s * 0.015f

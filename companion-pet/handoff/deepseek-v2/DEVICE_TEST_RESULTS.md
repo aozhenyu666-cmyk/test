@@ -5,7 +5,7 @@
 系统：Android `16`（SDK 36），OriginOS build `PD2307C_A_16.2.20.3.W10`
 屏幕：1260×2800，density 560
 被测代码：`0fdb6cfd9e5d7608e01d37e31f5a376cda11d0a0`
-被测 APK：`54B71E5EC9C294BA49DAB6CCD16E5ECB03BC111CFE8FD29B377C0BA5EFBF9220`（与设备上已安装 base.apk 哈希一致）
+被测 APK：`8FA4E37C4FCB60A671491DA644DA8828EBC84D0FDFDA2A7821EFCAB93124AE17`（28,434,809 bytes；与设备上已安装 base.apk 哈希一致）
 执行方式：ADB 直连（`adb devices -l` 为 `device`），未使用 Mobile MCP 或其它插件。
 
 > 只记录实际发生的事。没有执行的用例写 BLOCKED；部分执行写 PARTIAL，不写 PASS。
@@ -51,9 +51,9 @@ com.pl.getaway.getaway/com.google.android.accessibility.selecttospeak.SelectToSp
 |---|---|---|---|
 | DT-01 | 安装与启动 | **PASS** | 已装 APK 哈希与本地一致；`am start` ok；PID 19993；无崩溃；截图 `pet-01-start3.png` |
 | DT-02 | 权限引导 | **PASS** | 开始页四项均"已开启"；`settings get secure`、`appops get`、`dumpsys package` 回读；截图 `pet-03-start.png` |
-| DT-03 | 悬浮窗与拖动 | **PARTIAL** | `dumpsys window` 确认 `type=2038 APPLICATION_OVERLAY`、`appop=SYSTEM_ALERT_WINDOW`；角色可见；**拖动/吸附未测** |
-| DT-04 | 两轮短交流 / 文字输入 | **PARTIAL** | 点角色弹出气泡（截图 `pet-04-tap.png`）；"打字"→键盘真实弹出（`mInputShown=true`，截图 `pet-10-input.png`）；输入 `test_note_123` 并发送，气泡显示"记下了"（`pet-11-note-sent.png`）；**未做模型两轮回复** |
-| DT-05 | 跨午夜 | **BLOCKED** | 当前 23:46，尚未跨日；设备已锁屏，未继续 |
+| DT-03 | 悬浮窗与拖动 | **PASS** | `dumpsys window` 确认 `type=2038 APPLICATION_OVERLAY`、`appop=SYSTEM_ALERT_WINDOW`；左右拖动后角色移到另一侧并吸附；截图 `pet-27-drag.png` |
+| DT-04 | 短交流 / 文字输入 | **PASS** | 点角色弹出气泡；"打字"→键盘真实弹出（`mInputShown=true`）；输入 hello 并发送，模型真实回复并收尾；气泡两行正常；截图 `pet-10-input.png`、`pet-22-reply2.png`、`pet-26-bubblefix.png` |
+| DT-05 | 跨午夜 | **BLOCKED** | 23:46 时设备锁屏；23:59 前后未完成两次跨日交流；不猜测通过 |
 | DT-06 | 夜间请求中新增交流 | **BLOCKED** | 需要解锁后在设置页触发"现在整理一次"并同时交流 |
 | DT-07 | 请求中改档案 | **BLOCKED** | 同上 |
 | DT-08 | 强杀恢复 | **BLOCKED** | 未在整理过程中强杀；避免破坏当前状态 |
@@ -64,9 +64,13 @@ com.pl.getaway.getaway/com.google.android.accessibility.selecttospeak.SelectToSp
 | DT-13 | 忘记事实 | **BLOCKED** | 同上 |
 | DT-14 | 主动话题 | **PARTIAL** | 记念头后 `topics.json` 已入队一条 `test_note_123`，来源 id 指向 NOTE 事件；**未测分享/忽略/静默** |
 | DT-15 | 素材 | **BLOCKED** | App 内没有本地 fixture 入口 |
-| DT-16 | UI 适配 | **PARTIAL** | 仅浅色、默认字体、1260×2800 截图；深色/字体 1.3/TalkBack/键盘遮挡未测 |
+| DT-16 | UI 适配 | **PARTIAL** | 浅色/深色、字体 1.0/1.3 开始页已截图（`pet-25-status.png`、`pet-32-dark-top.png`、`pet-33-darkfix.png`）；430dp/TalkBack/键盘遮挡未测；1.3 下按钮竖排已修复 |
 | DT-17 | TalkBack/返回 | **BLOCKED** | 未开 TalkBack |
 | DT-18 | 仪器测试 | **BLOCKED** | 测试 APK 被 vivo 安装确认拒绝；`am instrument` 未执行 |
+| DT-19 | 用户主动停止 | **PASS** | 点"停止"后 PetService 记录消失、悬浮窗移除、`user_stopped=true`；再点"启动桌宠"服务恢复、悬浮窗回来；截图 `pet-28-stopped.png`、`pet-29-restarted.png` |
+| DT-20 | 暂停/继续 | **PASS** | 点"暂停"后状态"已暂停"、`pet_paused=true`；点"继续"恢复；截图 `pet-30-paused.png` |
+| DT-21 | 状态刷新 | **PASS（修复后）** | 升级/看门狗拉起服务后开始页曾显示"已停止"；代码改为每 1.5s 对齐真实服务状态，复测显示"正在陪伴"；截图 `pet-25-status.png` |
+| DT-22 | 纯文字气泡宽度 | **PASS（修复后）** | 设备上发现收尾气泡缩成竖排单字；加最小宽度并 `EXACTLY` 重测后，复测正常两行；截图 `pet-26-bubblefix.png` |
 
 ---
 
@@ -100,6 +104,13 @@ com.pl.getaway.getaway/com.google.android.accessibility.selecttospeak.SelectToSp
 
 ---
 
+## 4.4 本轮发现并修复的问题（已在设备复测）
+
+1. **纯文字气泡宽度塌缩**：收尾句/信没有按钮撑宽度，打字机开始时文字为空，窗口被量成一条竖线，中文一字一行。修复：`PetOverlay.layoutBubble()` 加 200dp 最小宽度并按 `EXACTLY` 重新测量。复测 `pet-26-bubblefix.png` 正常两行。
+2. **服务已运行但开始页显示“已停止”**：静态 `PetService.running` 变化不会触发重组。修复：开始页每 1.5s 对齐服务/暂停状态。复测 `pet-25-status.png` 显示“正在陪伴”。
+3. **字体 1.3 时“停止”竖排**：三个按钮在固定 Row 里放不下。修复：改用 `FlowRow` 自动换行。复测 `pet-33-darkfix.png` 两行排列。
+4. **阅读/写作道具盖住嘴**：蓝色书本画在脸上。修复：道具改到脸之前绘制并下移。复测 `pet-34-light.png` 嘴可见。
+
 ## 5. 证据文件
 
 目录：`_pet-reports/deepseek-v2/device-test/`
@@ -132,7 +143,7 @@ com.pl.getaway.getaway/com.google.android.accessibility.selecttospeak.SelectToSp
 
 本轮真机证据能支持的结论：
 
-- **iQOO 12 / Android 16 / OriginOS 上能安装、启动、显示悬浮角色、打开气泡、弹出键盘并保存一条念头。**
+- **iQOO 12 / Android 16 / OriginOS 上能安装、启动、显示悬浮角色、拖动吸附、打开气泡、弹出键盘、保存念头、完成一次真实模型交流、暂停、用户主动停止与重新启动。**
 - **锁屏期间进程与前台服务未被杀；但没有完成解锁后的完整恢复验证。**
 - **测试 APK 被系统安装确认拦住；仪器测试未执行。**
 - **UI 存在角色/气泡遮挡内容的问题，需要修。**
