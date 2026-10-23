@@ -10,7 +10,7 @@
 
 | ID | 问题 | 修复 | 回归证据 |
 |---|---|---|---|
-| **B1** | 打开记忆页直接在组合体里清空当天事件 | 删除组合期副作用；改为“清空今天的记录”按钮 + 二次确认对话框；确认后才执行 `clearDay` | `MemoryTabSideEffectTest`（仪器测试，已编译；设备断开未执行）；代码审阅 |
+| **B1** | 打开记忆页直接在组合体里清空当天事件 | 删除组合期副作用；改为“清空今天的记录”按钮 + 二次确认对话框；确认后才执行 `clearDay` | 设备复测：打开前后均 20 条事件，未清空（`pet-41-memory-b1.png`）；`MemoryTabSideEffectTest` 已编译，测试 APK 仍被 vivo 拒绝安装 |
 | **H1** | 夜间提交与 UI 编辑不共用锁；版本检查后可被用户编辑覆盖 | `MemoryStore` 暴露共享 `lock`，`PetApp.memoryLock` 指向它；`NightlyStore` 使用同一把锁；提交前冻结 profile/diary/letter 的 beforeHash，再迭代输出；用户中途改动会命中冲突而不是被覆盖 | `ReviewRegressionTest.userConfirmationBetweenVersionCheckAndJournalSnapshotIsNotOverwritten` 通过 |
 | **H2** | 用户更正的事实被旧 profile 同步反覆盖 | 新增 `FactOrigin`；用户确认/更正标记 `USER`，夜间同步标记 `PROFILE_SYNC`；同步遇到同 key 的 USER 事实直接返回，不创建旧版本 | `userCorrectionSurvivesNextProfileSync` 通过 |
 | **H3** | 忘记只软删事实，最近上下文/夜间/topic/journal 恢复仍使用旧内容 | 召回、最近交流、夜间输入、话题队列、旧 prompt 路径都按 tombstone **包含匹配**过滤；journal 增加 `deletedVersion`，恢复前不一致则废弃；话题队列读 `deleted.txt` 过滤 | 4 个 H3 回归（recent/nightly/topic/recovery）通过 |
@@ -46,7 +46,7 @@ APK SHA-256：`C55E6E9C606284DC22807B679F9CC152113849A4EE1256DA01DB221617EB9EE7`
 
 ## 3. 仍未覆盖 / 需要下一轮设备验证
 
-- **B1**：设备已断开，`MemoryTabSideEffectTest` 未执行；下一轮先装新 APK，打开记忆页前后对比 `events` 行数。
+- **B1**：设备复测通过（20→20 条事件，截图 `pet-41-memory-b1.png`）；`MemoryTabSideEffectTest` 未执行（测试 APK 被 vivo 安装确认拒绝）。
 - **H1**：JVM 确定性时序回归通过；真实 UI 并发（用户编辑 vs 夜间 commit）仍需设备/多线程栅栏验证。
 - **H2/H3**：逻辑回归通过；真实夜间产出的 facts 与重启/重放链路仍建议在设备上跑一次。
 - **M4**：仪器测试编译通过，未在设备执行。

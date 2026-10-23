@@ -1,13 +1,13 @@
-# 真机测试结果（第一段）
+# 真机测试结果（第一/二段）
 
-日期：2026-10-23 23:37–23:46（Asia/Shanghai）
+日期：2026-10-23 23:37 – 2026-10-24 01:10（Asia/Shanghai）
 设备：vivo iQOO 12，型号 `V2307A`（产品 `PD2307`），序列号 `10AE5U23LT004DN`
 系统：Android `16`（SDK 36），OriginOS build `PD2307C_A_16.2.20.3.W10`
 屏幕：1260×2800，density 560
-被测代码：`0fdb6cfd9e5d7608e01d37e31f5a376cda11d0a0`
-被测 APK：`8FA4E37C4FCB60A671491DA644DA8828EBC84D0FDFDA2A7821EFCAB93124AE17`（28,434,809 bytes；与设备上已安装 base.apk 哈希一致）
+被测代码：`893091f44d23dc253f4364015fc0b4420a78f90c`（review 修复后；设备结果包含 4a19657 前后的两段）
+被测 APK：`C55E6E9C606284DC22807B679F9CC152113849A4EE1256DA01DB221617EB9EE7`（28,354,937 bytes；与设备上已安装 base.apk 哈希一致）
 
-> 本文件记录的是 APK `8FA4E37C...` 的设备结果。review 修复后的新 APK 为 `C55E6E9C...`（28,354,937 bytes），尚未在设备上执行；设备在修复构建完成后断开，B1 记忆页副作用测试待重连后执行。
+> 本文件记录的是 review 修复后的 APK `C55E6E9C...`（28,354,937 bytes）。B1 记忆页副作用已在设备复测：打开前后均为 20 条事件，未被清空。
 执行方式：ADB 直连（`adb devices -l` 为 `device`），未使用 Mobile MCP 或其它插件。
 
 > 只记录实际发生的事。没有执行的用例写 BLOCKED；部分执行写 PARTIAL，不写 PASS。
@@ -55,7 +55,7 @@ com.pl.getaway.getaway/com.google.android.accessibility.selecttospeak.SelectToSp
 | DT-02 | 权限引导 | **PASS** | 开始页四项均"已开启"；`settings get secure`、`appops get`、`dumpsys package` 回读；截图 `pet-03-start.png` |
 | DT-03 | 悬浮窗与拖动 | **PASS** | `dumpsys window` 确认 `type=2038 APPLICATION_OVERLAY`、`appop=SYSTEM_ALERT_WINDOW`；左右拖动后角色移到另一侧并吸附；截图 `pet-27-drag.png` |
 | DT-04 | 短交流 / 文字输入 | **PASS** | 点角色弹出气泡；"打字"→键盘真实弹出（`mInputShown=true`）；输入 hello 并发送，模型真实回复并收尾；气泡两行正常；截图 `pet-10-input.png`、`pet-22-reply2.png`、`pet-26-bubblefix.png` |
-| DT-05 | 跨午夜 | **BLOCKED** | 23:46 时设备锁屏；23:59 前后未完成两次跨日交流；不猜测通过 |
+| DT-05 | 跨午夜 | **PARTIAL** | 事件日志出现 23:59 的 proactive（day 2026-10-23）和 00:01 的 exchange（day 2026-10-24），归属日分开；但没有用户主动回复的受控两次交流，仍不写成完整通过 |
 | DT-06 | 夜间请求中新增交流 | **BLOCKED** | 需要解锁后在设置页触发"现在整理一次"并同时交流 |
 | DT-07 | 请求中改档案 | **BLOCKED** | 同上 |
 | DT-08 | 强杀恢复 | **BLOCKED** | 未在整理过程中强杀；避免破坏当前状态 |
@@ -113,6 +113,13 @@ com.pl.getaway.getaway/com.google.android.accessibility.selecttospeak.SelectToSp
 3. **字体 1.3 时“停止”竖排**：三个按钮在固定 Row 里放不下。修复：改用 `FlowRow` 自动换行。复测 `pet-33-darkfix.png` 两行排列。
 4. **阅读/写作道具盖住嘴**：蓝色书本画在脸上。修复：道具改到脸之前绘制并下移。复测 `pet-34-light.png` 嘴可见。
 
+## 4.5 review 修复后的设备复测（2026-10-24 01:10）
+
+- 安装 review 修复 APK `C55E6E9C...`（versionName 0.3.0，28,354,937 bytes）。
+- 打开“记忆”页前：`events-2026-10.jsonl` 为 **20 行**；打开并等待 3 秒后仍为 **20 行**，未被清空；页面显示“清空今天的记录”按钮但未弹确认框。截图 `pet-41-memory-b1.png`。**B1 设备级验证通过。**
+- 事件日志同时出现跨午夜证据：`23:59` 的 proactive 归属 `2026-10-23`，`00:01` 的 exchange 归属 `2026-10-24`；说明写入时按设备时区归日，没有把次日事件追加到旧日文件。由于没有受控的用户回复两次交流，DT-05 仍为 PARTIAL。
+- 测试 APK 仍被 vivo 安装确认拒绝（`INSTALL_FAILED_ABORTED: User rejected permissions`），`MemoryTabSideEffectTest` / `BootstrapSmokeTest` 仍未执行。
+
 ## 5. 证据文件
 
 目录：`_pet-reports/deepseek-v2/device-test/`
@@ -136,7 +143,7 @@ com.pl.getaway.getaway/com.google.android.accessibility.selecttospeak.SelectToSp
 
 1. **解锁手机并保持亮屏**（当前在安全锁屏；不需要把 PIN 告诉我）。
 2. 继续：拖动吸附、两轮模型交流、夜间整理/强杀恢复、预算、连续性开关、暗色/字体 1.3、TalkBack。
-3. 如果今晚能等到 **23:58–00:05**，顺便做 DT-05 跨午夜。
+3. DT-05 目前只有事件归属日证据（23:59 day23 / 00:01 day24）；完整两次交流仍需另选跨午夜窗口，不能补假结论。
 4. 若要跑 DT-18：在手机上允许一次"USB 安装"确认，或手动安装测试 APK；否则保持 BLOCKED。
 
 ---
