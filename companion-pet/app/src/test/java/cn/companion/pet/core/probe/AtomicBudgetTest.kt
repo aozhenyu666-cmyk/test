@@ -13,7 +13,7 @@ class AtomicBudgetTest {
     private class MemoryPersistence : BudgetPersistence {
         private val map = ConcurrentHashMap<String, Int>()
         override fun load(day: String): Int = map[day] ?: 0
-        override fun save(day: String, used: Int) { map[day] = used }
+        override fun save(day: String, used: Int): Boolean { map[day] = used; return true }
     }
 
     @Test
@@ -57,6 +57,17 @@ class AtomicBudgetTest {
     fun zeroLimitNeverReserves() {
         val budget = AtomicBudget(MemoryPersistence())
         assertFalse(budget.reserve(0, "2026-10-23"))
+        assertEquals(0, budget.used("2026-10-23"))
+    }
+
+    @Test
+    fun failedPersistDoesNotReserve() {
+        val failing = object : BudgetPersistence {
+            override fun load(day: String): Int = 0
+            override fun save(day: String, used: Int): Boolean = false
+        }
+        val budget = AtomicBudget(failing)
+        assertFalse(budget.reserve(10, "2026-10-23"))
         assertEquals(0, budget.used("2026-10-23"))
     }
 }

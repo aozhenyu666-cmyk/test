@@ -24,6 +24,7 @@ import cn.companion.pet.core.companion.EventKind
 import cn.companion.pet.core.life.PetLife
 import cn.companion.pet.core.life.WeightyMoments
 import cn.companion.pet.core.memory.Exchange
+import cn.companion.pet.core.memory.ProfileRules
 import cn.companion.pet.core.memory.GeminiExit
 import cn.companion.pet.core.memory.TodayLog
 import cn.companion.pet.core.probe.ContentGuard
@@ -1089,7 +1090,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         if (settings.continuityEnabled) {
             assembler.assemble(memory.persona(), moment, material, now(), memory.tombstones())
         } else {
-            ProbePrompt.opening(memory.persona(), memory.profile(), recentExchangeLines(20), memory.diarySummary(LocalDate.now()), moment)
+            val profile = ProfileRules.applyTombstones(memory.profileLines(), memory.tombstones()).joinToString("\n")
+            ProbePrompt.opening(memory.persona(), profile, recentExchangeLines(20), memory.diarySummary(LocalDate.now()), moment)
         }
 
     private fun apiKey(): String? = app.apiKey()
@@ -1111,7 +1113,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     /** 最近的真实交流行（开口/回应/念头等），用于探针和夜间整理的上下文。 */
     private fun recentExchangeLines(limit: Int): List<String> =
-        app.events.all().filter { it.kind == EventKind.EXCHANGE || it.kind == EventKind.LEGACY_LINE }.map { it.text }.takeLast(limit)
+        app.events.all()
+            .filter { it.kind == EventKind.EXCHANGE || it.kind == EventKind.LEGACY_LINE }
+            .filter { !memory.forgottenMatches(it.text) }
+            .map { it.text }
+            .takeLast(limit)
 
     private fun timeText(): String = LocalTime.now().format(HHMM)
 

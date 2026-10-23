@@ -51,8 +51,18 @@ class TopicQueue(
     }
 
     fun candidates(now: Long = clock.millis()): List<Topic> = synchronized(lock) {
-        read().filter { !it.dismissed && it.sharedAt == null && it.expiresAt > now }
-            .sortedBy { it.createdAt }
+        val deleted = tombstones()
+        read().filter { topic ->
+            !topic.dismissed && topic.sharedAt == null && topic.expiresAt > now &&
+                deleted.none { it.isNotEmpty() && ProfileRules.normalize(topic.summary).contains(it) }
+        }.sortedBy { it.createdAt }
+    }
+
+    /** 与 MemoryStore 共用 deleted.txt：忘记的内容不能让旧话题继续被分享。 */
+    private fun tombstones(): List<String> {
+        val file = File(root, "deleted.txt")
+        if (!file.exists()) return emptyList()
+        return file.readLines().map { it.trim() }.filter { it.isNotEmpty() }
     }
 
     fun markShared(id: String, now: Long = clock.millis()) {
@@ -101,9 +111,12 @@ class TopicGate(private val queue: TopicQueue) {
         recentTexts: Set<String> = emptySet(),
     ): Topic? {
         if (quiet || !userActive) return null
-        if (lastProactiveAt > 0 && now - lastProactiveAt < cooldownMillis) return null
         val recent = recentTexts.map { ProfileRules.normalize(it) }.toSet()
-        return queue.candidates(now).firstOrNull { ProfileRules.normalize(it.summary) !in recent }
+        // 冷却是“话题从入队起至少等 30 分钟”，不是“距上次普通开口 30 分钟”。
+        // 后者会被 6–12 分钟的普通搭话不断重置，导致队列长期出不来（M2）。
+        return queue.candidates(now).firstOrNull { topic ->
+            now - topic.createdAt >= cooldownMillis && ProfileRules.normalize(topic.summary) !in recent
+        }
     }
 
     companion object {

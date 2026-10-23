@@ -18,6 +18,7 @@ class BootstrapSmokeTest {
     @Test
     fun startTabShowsOverlayStep() {
         composeRule.onNodeWithText("开始").assertIsDisplayed()
-        composeRule.onNodeWithText("悬浮窗", substring = true).assertIsDisplayed()
+        // 精确匹配权限标题；substring 会同时匹配到“先开悬浮窗权限…”提示（M4）。
+        composeRule.onNodeWithText("悬浮窗").assertIsDisplayed()
     }
 }

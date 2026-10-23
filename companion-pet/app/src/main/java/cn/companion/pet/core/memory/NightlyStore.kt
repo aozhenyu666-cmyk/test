@@ -52,6 +52,8 @@ data class NightlyJournal(
     val archiveLines: List<String>,
     val eventIds: List<String>,
     val createdAt: Long,
+    /** journal 写入时的删除版本；恢复前必须一致，否则用户已经忘记过内容。 */
+    val deletedVersion: String = "",
 )
 
 data class PreparedNightly(val batch: NightlyBatch, val messages: List<ChatMessage>)
@@ -74,7 +76,9 @@ class NightlyStore(
     private val facts: cn.companion.pet.core.companion.FactStore? = null,
 ) {
     private val nightlyDir = File(memory.root, "nightly")
-    private val lock = Any()
+
+    /** 与 UI 共用 memory.lock；不能再用独立锁，否则版本检查与用户编辑之间仍有窗口。 */
+    private val lock: Any = memory.lock
     private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
@@ -94,7 +98,7 @@ class NightlyStore(
         val persona = memory.persona()
         val deleted = memory.tombstones()
         // 用户忘记的内容不进入夜间整理；被过滤的事件直接标记已处理，避免永远卡在待处理里。
-        val pending = allPending.filter { ProfileRules.normalize(it.text) !in deleted }
+        val pending = allPending.filter { !isForgotten(it.text, deleted) }
         if (pending.isEmpty()) {
             events.markArchived(day, allPending.map { it.id })
             return null
@@ -135,14 +139,27 @@ class NightlyStore(
             return NightlyCommitOutcome.CONFLICT
         }
 
-        val profileText = ProfileRules.applyTombstones(output.profileLines, memory.tombstones()).joinToString("\n")
+        // 先冻结提交基线，再迭代模型输出。用户可能在输出列表求值期间改档案；
+        // 如果那时才读取 beforeHash，会把用户的新版本误当成可覆盖基线（H1）。
+        val deletedBefore = memory.tombstones()
         val day = LocalDate.parse(stored.day)
+        val diaryRel = "diary/" + day + ".md"
+        val letterRel = "letters/" + day + ".md"
+        val profileBeforeHash = existingHash("profile.md")
+        val diaryBefore = existingHash(diaryRel)
+        val letterBefore = existingHash(letterRel)
+
+        val profileText = ProfileRules.applyTombstones(output.profileLines, memory.tombstones()).joinToString("\n")
         val targets = listOf(
-            target("profile.md", profileText),
-            target("diary/" + day + ".md", output.diary),
-            target("letters/" + day + ".md", output.letter),
+            JournalTarget("profile.md", profileBeforeHash, hash(profileText), profileText),
+            JournalTarget(diaryRel, diaryBefore, hash(output.diary), output.diary),
+            JournalTarget(letterRel, letterBefore, hash(output.letter), output.letter),
         )
-        val batchEvents = events.pendingForDay(day).filter { it.id in stored.eventIds }
+        val batchEvents = events.pendingForDay(day).filter { it.id in stored.eventIds && !isForgotten(it.text, deletedBefore) }
+        if (batchEvents.isEmpty()) {
+            batchFile(stored.id).delete()
+            return NightlyCommitOutcome.CONFLICT
+        }
         val journal = NightlyJournal(
             batchId = stored.id,
             day = stored.day,
@@ -150,6 +167,7 @@ class NightlyStore(
             archiveLines = renderLines(batchEvents),
             eventIds = batchEvents.map { it.id },
             createdAt = clock.millis(),
+            deletedVersion = hash(deletedBefore.sorted().joinToString("\n")),
         )
         writeJson(journalFile(stored.id), journal)
         fault("journal-written")
@@ -206,6 +224,8 @@ class NightlyStore(
     }
 
     private fun applyJournal(journal: NightlyJournal) {
+        val currentDeleted = hash(memory.tombstones().sorted().joinToString("\n"))
+        if (journal.deletedVersion != currentDeleted) throw UserEditConflict()
         journal.targets.forEach { target ->
             fault("target:" + target.relativePath)
             val file = File(memory.root, target.relativePath)
@@ -237,10 +257,16 @@ class NightlyStore(
         writeAtomic(archive, body)
     }
 
-    private fun target(relativePath: String, afterText: String): JournalTarget {
+    private fun existingHash(relativePath: String): String? {
         val file = File(memory.root, relativePath)
-        val before = if (file.exists()) hash(file.readText()) else null
-        return JournalTarget(relativePath, before, hash(afterText), afterText)
+        return if (file.exists()) hash(file.readText()) else null
+    }
+
+    /** 交流行带时间/角色前缀，不能用整行相等判断；包含已删除文本即视为遗忘。 */
+    private fun isForgotten(text: String, deleted: Set<String>): Boolean {
+        val normalized = ProfileRules.normalize(text)
+        if (normalized.isEmpty()) return false
+        return deleted.any { it.isNotEmpty() && normalized.contains(it) }
     }
 
     private fun renderLines(events: List<CompanionEvent>): List<String> = events.map { e ->

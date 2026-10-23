@@ -6,9 +6,9 @@
 
 | 项目 | 结果 | 说明 |
 |---|---|---|
-| JVM 单元测试（core + net + companion） | **162 个通过，0 失败**（2026-10-23 本轮实测） | 原有场景/节奏/注入/网络测试，加上跨午夜、事件归属日、幂等迁移、夜间批次只归档批次内事件、请求中新增交流、请求中改/删档案、journal 各步骤恢复、重复 jobId、预算并发、事实纠正/遗忘/重放、遗忘内容不进夜间整理、相关召回与 5000 码点上限、状态衰减、话题一次性、素材 fixture |
-| WorkBuddy 的文字清洗与桥接模板测试 | 已包含在上面的 162 个里 | — |
-| lint | **0 errors / 5 warnings** | 依赖版本提示、`BudgetPrefs.commit()` 的有意同步写、既有 `SwitchIntDef`；不阻断构建 |
+| JVM 单元测试（core + net + companion） | **174 个通过，0 失败**（2026-10-23 本轮实测） | 原有场景/节奏/注入/网络测试，加上跨午夜、事件归属日、幂等迁移、夜间批次只归档批次内事件、请求中新增交流、请求中改/删档案、journal 各步骤恢复、重复 jobId、预算并发、事实纠正/遗忘/重放、遗忘内容不进夜间整理、相关召回与 5000 码点上限、状态衰减、话题一次性、素材 fixture |
+| WorkBuddy 的文字清洗与桥接模板测试 | 已包含在上面的 174 个里 | — |
+| lint | **0 errors / 4 warnings** | 依赖版本提示、`BudgetPrefs.commit()` 的有意同步写、既有 `SwitchIntDef`；不阻断构建 |
 | CI 构建、lint、APK | 见 Actions | 分支 `pet-v15/deepseek-continuity-v2` 的界面/交付提交运行成功；最终遗忘过滤修正以最后一次运行为准 |
 | debug APK / 仪器测试 APK | 均构建成功 | 仪器测试 APK **只编译**，本机无设备可执行 |
 | 设备测试（Keystore、启动页、事件日志文件） | 未运行 | 本机 adb 不可用、没有连接真机或模拟器；`SecretStoreInstrumentedTest`、`EventLogInstrumentedTest`、`BootstrapSmokeTest` 只编译 |

@@ -76,8 +76,26 @@ class EventLog(
     fun appendEvent(event: CompanionEvent) {
         synchronized(lock) {
             val file = monthlyFile(event.day)
+            repairTruncatedTail(file)
             file.appendText(EventJson.encodeToString(CompanionEvent.serializer(), event) + "\n")
         }
+    }
+
+    /**
+     * 上次崩溃可能留下没有换行的半行 JSON。直接 append 会把新事件接到坏行后面，
+     * 变成一条无法解析的 JSONL，下一次读取时连新事件一起丢掉。
+     * 这里在同一把写锁里把坏尾行隔离到 broken-tails.log，再截断到最后一个完整换行。
+     */
+    private fun repairTruncatedTail(file: File) {
+        if (!file.exists() || file.length() == 0L) return
+        val text = file.readText()
+        if (text.endsWith("\n")) return
+        val lastNewline = text.lastIndexOf('\n')
+        val broken = if (lastNewline >= 0) text.substring(lastNewline + 1) else text
+        if (broken.isNotEmpty()) {
+            File(eventsDir, "broken-tails.log").appendText(clock.millis().toString() + " | " + broken + "\n")
+        }
+        writeAtomic(file, if (lastNewline >= 0) text.substring(0, lastNewline + 1) else "")
     }
 
     /** 全部事件，按发生时间和 id 排成确定顺序。 */

@@ -45,7 +45,8 @@ class PetStateStore(
     }
 
     fun apply(event: StateEvent, now: Long = clock.millis()): PetState = synchronized(lock) {
-        val base = read()
+        // 先按真实经过时间衰减，再加事件增量；否则 24 小时的空档会被一次事件抹掉（M1）。
+        val base = read().decay(now, halfLifeHours)
         val next = when (event) {
             StateEvent.USER_REPLIED -> base.copy(
                 closeness = (base.closeness + 0.06).coerceAtMost(1.0),

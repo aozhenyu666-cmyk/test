@@ -6,7 +6,8 @@ package cn.companion.pet.core.probe
  */
 interface BudgetPersistence {
     fun load(day: String): Int
-    fun save(day: String, used: Int)
+    /** 返回是否耐久写入成功；失败时调用方必须拒绝这次预留。 */
+    fun save(day: String, used: Int): Boolean
 }
 
 /**
@@ -25,8 +26,8 @@ class AtomicBudget(private val persistence: BudgetPersistence) {
         if (limit <= 0) return false
         val used = persistence.load(day)
         if (used >= limit) return false
+        // 只有确认落盘成功才允许发请求；失败时不能假装预留成功（M3）。
         persistence.save(day, used + 1)
-        true
     }
 
     fun used(day: String): Int = synchronized(lock) { persistence.load(day) }

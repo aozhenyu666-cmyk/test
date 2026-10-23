@@ -56,12 +56,16 @@ class TopicQueueTest {
     fun gateRespectsQuietCooldownAndDuplicates() {
         val q = queue()
         val gate = TopicGate(q)
-        q.enqueue("昨天说的猫", listOf("e1"))
+        q.enqueue("昨天说的猫", listOf("e1"), now = now - 31 * 60 * 1000)
 
         assertNull(gate.next(now, quiet = true, userActive = true, lastProactiveAt = 0))
         assertNull(gate.next(now, quiet = false, userActive = false, lastProactiveAt = 0))
-        assertNull(gate.next(now, quiet = false, userActive = true, lastProactiveAt = now - 10 * 60 * 1000))
         assertNull(gate.next(now, quiet = false, userActive = true, lastProactiveAt = 0, recentTexts = setOf("昨天说的猫")))
-        assertNotNull(gate.next(now, quiet = false, userActive = true, lastProactiveAt = now - 31 * 60 * 1000))
+        assertNotNull(gate.next(now, quiet = false, userActive = true, lastProactiveAt = 0))
+
+        // 刚入队的话题至少等 30 分钟，避免一入队就开口。
+        val fresh = TopicQueue(tmp.newFolder("fresh"), clock)
+        fresh.enqueue("刚想到的话题", listOf("e2"))
+        assertNull(TopicGate(fresh).next(now, quiet = false, userActive = true, lastProactiveAt = 0))
     }
 }

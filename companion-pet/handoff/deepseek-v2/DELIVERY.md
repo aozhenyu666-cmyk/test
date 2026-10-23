@@ -4,17 +4,17 @@
 执行器：DeepSeek Harness
 分支：`pet-v15/deepseek-continuity-v2`
 基线：`a9cbe7cb55e02ab44d3d64d2245b18fe0da2f24e`
-代码检查点：D0 `c1b211b`；D1-D3 `6488b85`；D4-D5 界面与交付 `18a9b6c`；之后又补了“遗忘内容不进入夜间整理”的修正（最终代码 SHA 见交付回复与 `git log -1`，本文档不再自引用）。
+代码检查点：D0 `c1b211b`；D1-D3 `6488b85`；D4-D5 界面与交付 `18a9b6c`；之后补了“遗忘内容不进入夜间整理”的修正；2026-10-24 按 GPT/Codex 独立审查修复 B1/H1-H4/M1-M4（回应见 [REVIEW_RESPONSE_4a19657.md](REVIEW_RESPONSE_4a19657.md)，原始审查见 [external-review/](external-review/)）。最终代码 SHA 见交付回复与 `git log -1`，本文档不自引用。
 
 ## 1. 产物
 
 | 产物 | 路径 | 说明 |
 |---|---|---|
-| debug APK | `_pet-reports/deepseek-v2/app-debug.apk`（workspace 内绝对路径：`C:\Users\敖震宇\Documents\deepseek-harness\default-workspace\_pet-reports\deepseek-v2\app-debug.apk`） | 28,434,809 bytes |
-| APK SHA-256 | `8FA4E37C4FCB60A671491DA644DA8828EBC84D0FDFDA2A7821EFCAB93124AE17` | 重新计算于 IME inset 修正后的最终构建 |
+| debug APK | `_pet-reports/deepseek-v2/app-debug.apk`（workspace 内绝对路径：`C:\Users\敖震宇\Documents\deepseek-harness\default-workspace\_pet-reports\deepseek-v2\app-debug.apk`） | 28,354,937 bytes |
+| APK SHA-256 | `C55E6E9C606284DC22807B679F9CC152113849A4EE1256DA01DB221617EB9EE7` | review 修复后的最终构建 |
 | 仪器测试 APK | `_pet-reports/deepseek-v2/app-debug-androidTest.apk` | 2,307,422 bytes；**只编译，未执行** |
 | 仪器测试 APK SHA-256 | `F1A8A1983F9E031338D092B6D327DDA19CAA8748A0BBD3DBA46EE4ECD05E55D4` | |
-| lint 报告 | `_pet-reports/deepseek-v2/lint-results-debug.txt` | 0 errors / 5 warnings |
+| lint 报告 | `_pet-reports/deepseek-v2/lint-results-debug.txt` | 0 errors / 4 warnings |
 | 基线审计 | `companion-pet/handoff/deepseek-v2/BASELINE.md` | D0 源码位置与复现设计 |
 | 状态记录 | `companion-pet/handoff/deepseek-v2/STATE.md` | 每阶段检查点与命令 |
 
@@ -24,8 +24,8 @@ CI：分支 `pet-v15/deepseek-continuity-v2` 的 `fix(pet): handle IME insets...
 ## 2. 实际执行结果
 
 ```text
-:app:testDebugUnitTest          PASS   162 tests / 0 failures / 0 skipped
-:app:lintDebug                  PASS   0 errors / 5 warnings
+:app:testDebugUnitTest          PASS   174 tests / 0 failures / 0 skipped
+:app:lintDebug                  PASS   0 errors / 4 warnings
 :app:assembleDebug              PASS   app-debug.apk
 :app:assembleDebugAndroidTest   PASS   app-debug-androidTest.apk（仅编译）
 :app:connectedDebugAndroidTest  未运行（本机无设备，adb 不可用）

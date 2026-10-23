@@ -39,7 +39,7 @@ class CompanionContextAssembler(
         tombstones: Set<String> = emptySet(),
         limits: ContextLimits = ContextLimits(),
     ): List<ChatMessage> {
-        val recent = recentLines(limits)
+        val recent = recentLines(limits, tombstones)
         val query = buildQuery(moment, events, now)
         val recalled = recall.recall(
             query = query,
@@ -104,9 +104,13 @@ class CompanionContextAssembler(
         )
 
     /** 最近交流用已经格式化的一行一条，最多 12 条/2400 码点（从旧到新裁剪）。 */
-    private fun recentLines(limits: ContextLimits): List<Pair<String, String>> {
+    private fun recentLines(limits: ContextLimits, tombstones: Set<String>): List<Pair<String, String>> {
         val all = events.all()
             .filter { it.kind == EventKind.EXCHANGE || it.kind == EventKind.LEGACY_LINE }
+            .filter { event ->
+                val n = cn.companion.pet.core.memory.ProfileRules.normalize(event.text)
+                n.isNotEmpty() && tombstones.none { it.isNotEmpty() && n.contains(it) }
+            }
             .takeLast(limits.recentMaxItems)
             .map { it.text to it.text }
             .toMutableList()

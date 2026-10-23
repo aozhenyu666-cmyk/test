@@ -101,7 +101,7 @@ app/src/main/java/cn/companion/pet/
 
 ## 构建与测试
 
-CI（`.github/workflows/companion-pet-android.yml`）每次推送都跑单元测试、lint、构建 debug APK 和设备测试 APK。本轮本地实测：**162 个 JVM 测试通过、0 失败**；lint 0 errors；设备测试 APK 只编译，未在真机执行。
+CI（`.github/workflows/companion-pet-android.yml`）每次推送都跑单元测试、lint、构建 debug APK 和设备测试 APK。本轮本地实测：**174 个 JVM 测试通过、0 失败**；lint 0 errors；设备测试 APK 只编译，未在真机执行。
 
 本地需要 JDK 17、Android SDK 35：
 

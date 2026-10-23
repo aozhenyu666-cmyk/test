@@ -9,9 +9,9 @@ class BudgetPrefs(context: Context) : BudgetPersistence {
 
     override fun load(day: String): Int = prefs.getInt(KEY_PREFIX + day, 0)
 
-    override fun save(day: String, used: Int) {
+    override fun save(day: String, used: Int): Boolean {
         // commit() 同步落盘：预留成功后进程立刻被杀也不会在重启后多出一格。
-        prefs.edit().putInt(KEY_PREFIX + day, used).commit()
+        return prefs.edit().putInt(KEY_PREFIX + day, used).commit()
     }
 
     companion object {

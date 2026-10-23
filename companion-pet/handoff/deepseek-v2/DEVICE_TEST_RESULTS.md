@@ -6,6 +6,8 @@
 屏幕：1260×2800，density 560
 被测代码：`0fdb6cfd9e5d7608e01d37e31f5a376cda11d0a0`
 被测 APK：`8FA4E37C4FCB60A671491DA644DA8828EBC84D0FDFDA2A7821EFCAB93124AE17`（28,434,809 bytes；与设备上已安装 base.apk 哈希一致）
+
+> 本文件记录的是 APK `8FA4E37C...` 的设备结果。review 修复后的新 APK 为 `C55E6E9C...`（28,354,937 bytes），尚未在设备上执行；设备在修复构建完成后断开，B1 记忆页副作用测试待重连后执行。
 执行方式：ADB 直连（`adb devices -l` 为 `device`），未使用 Mobile MCP 或其它插件。
 
 > 只记录实际发生的事。没有执行的用例写 BLOCKED；部分执行写 PARTIAL，不写 PASS。

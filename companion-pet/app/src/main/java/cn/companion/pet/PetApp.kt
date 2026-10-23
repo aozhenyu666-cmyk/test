@@ -60,7 +60,7 @@ class PetApp : Application() {
     fun invalidateKey() { keyLoaded = false }
 
     /** 记忆文件的读写都经过这把锁：服务、每晚整理、设置页编辑互斥。 */
-    val memoryLock = Any()
+    val memoryLock: Any get() = memory.lock
 
     override fun onCreate() {
         super.onCreate()

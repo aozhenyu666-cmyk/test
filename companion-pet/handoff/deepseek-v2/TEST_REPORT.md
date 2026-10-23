@@ -15,9 +15,9 @@
 | 项目 | 结论 | 证据 |
 |---|---|---|
 | 代码可编译 | 通过 | 本机 Gradle 构建 + CI |
-| JVM 单元测试 | **162 / 162 通过，0 失败** | `test-results/testDebugUnitTest/*.xml` |
-| lint | **0 errors / 5 warnings** | `lint-results-debug.txt` |
-| debug APK | 构建成功 | 28,434,809 bytes，SHA-256 `8FA4E37C4FCB60A671491DA644DA8828EBC84D0FDFDA2A7821EFCAB93124AE17` |
+| JVM 单元测试 | **174 / 174 通过，0 失败** | `test-results/testDebugUnitTest/*.xml` |
+| lint | **0 errors / 4 warnings** | `lint-results-debug.txt` |
+| debug APK | 构建成功 | 28,354,937 bytes，SHA-256 `C55E6E9C606284DC22807B679F9CC152113849A4EE1256DA01DB221617EB9EE7` |
 | 仪器测试 APK | 构建成功 | 只编译，未执行 |
 | 远端 CI | **success** | https://github.com/aozhenyu666-cmyk/test/actions/runs/39968655136 |
 | 真机功能/体验 | **部分验证** | iQOO 12 已连接，安装/启动/权限/悬浮窗/文字输入/锁屏存活有证据；锁屏解锁后的恢复、夜间并发、召回、UI 适配等仍待测。详见 [DEVICE_TEST_RESULTS.md](DEVICE_TEST_RESULTS.md) |
@@ -57,8 +57,8 @@
 ### 2.2 命令结果
 
 ```text
-:app:testDebugUnitTest          PASS   162 tests / 0 failures / 0 skipped
-:app:lintDebug                  PASS   0 errors / 5 warnings
+:app:testDebugUnitTest          PASS   174 tests / 0 failures / 0 skipped
+:app:lintDebug                  PASS   0 errors / 4 warnings
 :app:assembleDebug              PASS   app-debug.apk
 :app:assembleDebugAndroidTest   PASS   app-debug-androidTest.apk（仅编译）
 :app:connectedDebugAndroidTest  未运行（无设备，adb 不可用）
@@ -79,7 +79,7 @@
 | `core.memory.MemoryStoreTest` | 15 | 档案/日记/信、删除不复活、跨午夜归档、旧行为 |
 | `core.memory.NightlyBatchTest` | 8 | 只归档批次、请求中新增/改/删、幂等、遗忘不进整理、积压顺序 |
 | `core.memory.NightlyRecoveryTest` | 4 | 每个提交步骤故障恢复、恢复幂等、恢复时新事件、用户改动优先 |
-| `core.probe.AtomicBudgetTest` | 4 | 并发最后名额、重启恢复、跨日、零上限 |
+| `core.probe.AtomicBudgetTest` | 5 | 并发最后名额、重启恢复、跨日、零上限 |
 | `core.probe.ProbeTest` | 12 | 提示词前缀、解析、注入隔离、调用上限 |
 | `core.rhythm.SpeakSchedulerTest` | 9 | 节奏、安静时段、忽略后提前 |
 | `core.scene.SceneClassifierTest` | 13 | 学习/游荡/普通/排除 |
@@ -88,7 +88,8 @@
 | `core.text.UnicodeTextTest` | 7 | 码点计数/截断 |
 | `core.think.ThinkTest` | 12 | 想一想/念头 |
 | `net.DeepSeekClientTest` | 10 | 超时、重定向、取消、超限、不重试 |
-| **合计** | **162** | |
+| `audit.ReviewRegressionTest` | 11 | 独立审查回归：H1/H2/H3/H4/M1/M2 与对照用例 |
+| **合计** | **174** | |
 
 ### 2.4 新增关键用例（节选）
 

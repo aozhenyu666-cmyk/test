@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
@@ -69,6 +70,7 @@ fun MemoryTab(resumeTick: Int) {
     var snap by remember { mutableStateOf(MemorySnapshot()) }
     var editing by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf("") }
+    var confirmClearToday by remember { mutableStateOf(false) }
 
     LaunchedEffect(resumeTick, reload) {
         snap = withContext(Dispatchers.IO) {
@@ -139,7 +141,23 @@ fun MemoryTab(resumeTick: Int) {
         Rule()
         GroupTitle("今天的交流")
         snap.today.takeLast(30).reversed().forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
-io { app.events.clearDay(LocalDate.now()); memory.todayFile.delete() }
+        if (snap.today.isNotEmpty()) {
+            TextButton(onClick = { confirmClearToday = true }) { Text("清空今天的记录") }
+        }
+        if (confirmClearToday) {
+            AlertDialog(
+                onDismissRequest = { confirmClearToday = false },
+                title = { Text("清空今天的记录？") },
+                text = { Text("会删除今天的事件日志和 today.md；档案、日记、信不会删除。删除后无法从摘要里恢复。") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        confirmClearToday = false
+                        io { app.events.clearDay(LocalDate.now()); memory.todayFile.delete() }
+                    }) { Text("删除") }
+                },
+                dismissButton = { TextButton(onClick = { confirmClearToday = false }) { Text("取消") } },
+            )
+        }
 
         Rule()
         GroupTitle("念头卡")

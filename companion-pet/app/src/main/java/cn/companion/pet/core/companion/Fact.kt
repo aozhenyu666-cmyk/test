@@ -22,7 +22,12 @@ data class Fact(
     val version: Int = 1,
     val supersededBy: String? = null,
     val deleted: Boolean = false,
+    /** 用户显式确认/更正的事实优先于夜间档案同步，避免旧 profile 反覆盖。 */
+    val origin: FactOrigin = FactOrigin.PROFILE_SYNC,
 )
+
+@Serializable
+enum class FactOrigin { USER, PROFILE_SYNC }
 
 /**
  * factKey 的生成规则：

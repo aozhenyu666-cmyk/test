@@ -40,6 +40,7 @@ class FactStore(
         sourceEventIds: List<String> = emptyList(),
         tombstones: Set<String> = emptySet(),
         factKey: String? = null,
+        origin: FactOrigin = FactOrigin.USER,
         now: Long = clock.millis(),
     ): Fact? {
         val clean = text.trim().removePrefix("-").trim()
@@ -49,6 +50,10 @@ class FactStore(
             val list = readLocked()
             val key = factKey ?: FactKeys.of(clean).ifEmpty { return null }
             val current = list.filter { it.factKey == key && !it.deleted && it.supersededBy == null }
+            // 用户显式确认/更正过的事实不能被旧 profile 的同步覆盖回去。
+            if (origin == FactOrigin.PROFILE_SYNC) {
+                current.firstOrNull { it.origin == FactOrigin.USER }?.let { return it }
+            }
             if (confidence == Confidence.GUESSED && current.any { it.confidence == Confidence.SAID }) {
                 return current.first { it.confidence == Confidence.SAID }
             }
@@ -64,6 +69,7 @@ class FactStore(
                 createdAt = now,
                 sourceEventIds = sourceEventIds,
                 version = version,
+                origin = origin,
             )
             val replaced = list.map { old ->
                 if (old.factKey == key && old.supersededBy == null && !old.deleted) old.copy(supersededBy = fact.id) else old
@@ -85,13 +91,13 @@ class FactStore(
         sourceEventIds: List<String> = emptyList(),
         tombstones: Set<String> = emptySet(),
         now: Long = clock.millis(),
-    ): Fact? = record(text, Confidence.GUESSED, sourceEventIds, tombstones, now = now)
+    ): Fact? = record(text, Confidence.GUESSED, sourceEventIds, tombstones, origin = FactOrigin.PROFILE_SYNC, now = now)
 
     /** 用户确认“猜对了”：同一条事实升级为 [Confidence.SAID]，版本 +1。 */
     fun confirm(id: String): Fact? = synchronized(lock) {
         val list = readLocked()
         val fact = list.firstOrNull { it.id == id && !it.deleted } ?: return null
-        val updated = fact.copy(confidence = Confidence.SAID, version = fact.version + 1)
+        val updated = fact.copy(confidence = Confidence.SAID, version = fact.version + 1, origin = FactOrigin.USER)
         writeLocked(list.map { if (it.id == id) updated else it })
         updated
     }
@@ -110,6 +116,7 @@ class FactStore(
             createdAt = clock.millis(),
             sourceEventIds = old.sourceEventIds,
             version = old.version + 1,
+            origin = FactOrigin.USER,
         )
         writeLocked(list.map { if (it.id == id) it.copy(supersededBy = fact.id) else it } + fact)
         fact
@@ -137,7 +144,7 @@ class FactStore(
             }
             val text = line.removePrefix(ProfileRules.SAID).removePrefix(ProfileRules.GUESS).trim()
             val before = live().size
-            record(text, confidence, sourceEventIds, tombstones)
+            record(text, confidence, sourceEventIds, tombstones, origin = FactOrigin.PROFILE_SYNC)
             if (live().size > before) added += 1
         }
         return added

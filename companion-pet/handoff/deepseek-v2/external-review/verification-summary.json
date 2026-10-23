@@ -1,0 +1,28 @@
+{
+  "commit": "4a19657fefbe2f8d35d10d2a22a6343654a47f30",
+  "baseline": {
+    "tests": 162,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "lint_errors": 0,
+    "lint_warnings": 19,
+    "build_exit_code": 0
+  },
+  "regression": {
+    "tests": 11,
+    "failures": 9,
+    "errors": 0,
+    "skipped": 0,
+    "build_exit_code": 1
+  },
+  "findings": {
+    "blocker": 1,
+    "high": 4,
+    "medium": 4,
+    "low": 0
+  },
+  "device_tests_executed": false,
+  "source_modified": false,
+  "conclusion": "需要先修"
+}

@@ -15,6 +15,9 @@ import java.time.LocalDate
  */
 class MemoryStore(val root: File) {
 
+    /** 与 UI、夜间整理共享的事务锁：所有 Markdown/事件写入都应经过它。 */
+    val lock = Any()
+
     val personaFile = File(root, "persona.md")
     val profileFile = File(root, "profile.md")
     val todayFile = File(root, "today.md")
@@ -35,7 +38,9 @@ class MemoryStore(val root: File) {
         return personaFile.readText()
     }
 
-    fun savePersona(text: String) = writeAtomic(personaFile, text.ifBlank { DefaultPersona.TEXT })
+    fun savePersona(text: String) = synchronized(lock) {
+        writeAtomic(personaFile, text.ifBlank { DefaultPersona.TEXT })
+    }
 
     // ---------- 档案 ----------
 
@@ -44,31 +49,38 @@ class MemoryStore(val root: File) {
     fun profileLines(): List<String> = profile().lines().map { it.trim() }.filter { it.isNotEmpty() }
 
     /** 用户在 App 里改档案：整份覆盖；被删掉的行记入删除清单。 */
-    fun saveProfileByUser(text: String) {
+    fun saveProfileByUser(text: String) { synchronized(lock) {
         val before = profileLines().toSet()
         val after = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
         val removed = before - after.toSet()
         if (removed.isNotEmpty()) addTombstones(removed)
         writeAtomic(profileFile, ProfileRules.clamp(after).joinToString("\n"))
-    }
+    } }
 
-    fun deleteProfileLine(line: String) {
+    fun deleteProfileLine(line: String) { synchronized(lock) {
         val lines = profileLines()
         addTombstones(listOf(line))
         writeAtomic(profileFile, lines.filter { it != line.trim() }.joinToString("\n"))
-    }
+    } }
 
     /** 把一条 [我推测] 改成 [他说过]（用户确认推测正确）。 */
-    fun confirmProfileLine(line: String) {
+    fun confirmProfileLine(line: String) { synchronized(lock) {
         val fixed = line.trim().replaceFirst(ProfileRules.GUESS, ProfileRules.SAID)
         writeAtomic(profileFile, profileLines().map { if (it == line.trim()) fixed else it }.joinToString("\n"))
+    } }
+
+    /** 一段文本是否包含任一已删除内容；用于交流行、摘要、话题等带前缀的文本。 */
+    fun forgottenMatches(text: String): Boolean {
+        val normalized = ProfileRules.normalize(text)
+        if (normalized.isEmpty()) return false
+        return tombstones().any { it.isNotEmpty() && normalized.contains(it) }
     }
 
     fun tombstones(): Set<String> =
         if (deletedFile.exists()) deletedFile.readLines().map { it.trim() }.filter { it.isNotEmpty() }.toSet() else emptySet()
 
     /** 用户点“忘记”一条事实时，把内容写入删除清单，防止旧来源重放复活。 */
-    fun addDeletedText(text: String) = addTombstones(listOf(text))
+    fun addDeletedText(text: String) = synchronized(lock) { addTombstones(listOf(text)) }
 
     private fun addTombstones(lines: Collection<String>) {
         val all = tombstones() + lines.map { ProfileRules.normalize(it) }.filter { it.isNotEmpty() }
@@ -84,7 +96,7 @@ class MemoryStore(val root: File) {
      * 跨午夜保护：如果文件头是另一天，先把旧内容归档到 archive/<旧日期>.md，
      * 再以新日期重写头部。旧内容不删除，避免跨日时把两天的交流写进同一个文件。
      */
-    fun appendToday(today: LocalDate, line: String) {
+    fun appendToday(today: LocalDate, line: String) { synchronized(lock) {
         val clean = line.replace('\n', ' ').trim()
         if (clean.isEmpty()) return
         val current = todayDate()
@@ -97,7 +109,7 @@ class MemoryStore(val root: File) {
             writeAtomic(todayFile, "# $today\n")
         }
         todayFile.appendText("$clean\n")
-    }
+    } }
 
     fun todayLines(): List<String> =
         if (todayFile.exists()) todayFile.readLines().filter { it.isNotBlank() && !it.startsWith("# ") } else emptyList()
@@ -150,12 +162,12 @@ class MemoryStore(val root: File) {
         }
     }
 
-    fun writeAtomic(target: File, text: String) {
+    fun writeAtomic(target: File, text: String) { synchronized(lock) {
         target.parentFile?.mkdirs()
         val tmp = File(target.parentFile, ".${target.name}.tmp")
         tmp.writeText(text)
         replace(tmp, target)
-    }
+    } }
 
     private fun replace(tmp: File, target: File) {
         if (!tmp.renameTo(target)) {

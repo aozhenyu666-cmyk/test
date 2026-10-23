@@ -11,15 +11,17 @@
   - D4：`ui/theme/{Tokens,CompanionTheme}.kt`、`ui/components/CompanionUi.kt`、`MainActivity.kt`、四个 Tab
   - D5：README/PLAN/VALIDATION、本目录 DELIVERY.md、仪器测试 `EventLogInstrumentedTest`、`SecretStoreInstrumentedTest`
 - 真实测试命令与结果（本机 ASCII 构建副本，JDK 22 / SDK 35 / Gradle 8.10.2 / AGP 8.7.3）：
-  - `:app:testDebugUnitTest` → PASS，**162 tests / 0 failures / 0 skipped**
-  - `:app:lintDebug` → PASS，**0 errors / 5 warnings**
-  - `:app:assembleDebug` → PASS，`app-debug.apk` 28,434,809 bytes，SHA-256 `8FA4E37C4FCB60A671491DA644DA8828EBC84D0FDFDA2A7821EFCAB93124AE17`
+  - `:app:testDebugUnitTest` → PASS，**174 tests / 0 failures / 0 skipped**
+  - `:app:lintDebug` → PASS，**0 errors / 4 warnings**
+  - `:app:assembleDebug` → PASS，`app-debug.apk` 28,354,937 bytes，SHA-256 `C55E6E9C606284DC22807B679F9CC152113849A4EE1256DA01DB221617EB9EE7`
   - `:app:assembleDebugAndroidTest` → PASS，仅编译（新增 2 个设备测试）
   - 产物副本：`_pet-reports/deepseek-v2/`
 - 未运行：`:app:connectedDebugAndroidTest`（测试 APK 被 vivo 安装确认拒绝；设备已连接但仪器测试未执行）
 - 真机第一段：iQOO 12 / Android 16 已安装启动、权限、悬浮窗、气泡、键盘输入、笔记落盘、锁屏存活；结果见 [DEVICE_TEST_RESULTS.md](DEVICE_TEST_RESULTS.md)
 - 真机第二段：拖动吸附、真实模型交流、暂停/继续、用户停止/重启、浅色/深色/字体1.3；设备发现并修复 4 个问题（气泡宽度、状态刷新、1.3按钮竖排、道具挡嘴），APK 已重新安装并复测
 - 仍未测：跨午夜、夜间并发/强杀恢复、预算、召回/纠正/遗忘、TalkBack、430dp、仪器测试（测试APK被vivo安装确认拒绝）
+- 独立审查（GPT 云端 4a19657）已处理：B1 + H1-H4 + M1-M4 全部修复，新增 11 个独立回归 + 1 个预算失败测试；174 tests / 0 failures；lint 0/4；APK C55E…；回应见 REVIEW_RESPONSE_4a19657.md
+- 设备在 review 修复构建后断开（adb devices 空），新 APK 的 B1 记忆页副作用、仪器测试尚未执行
 - 已知待办（全部为真机/设备项）：
   - iQOO 12 常驻/保活/悬浮窗/无障碍/键盘/权限/锁屏心跳
   - 跨午夜、请求中新增/改档、强杀恢复的真机观察
