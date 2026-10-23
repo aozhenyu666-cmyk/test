@@ -16,7 +16,8 @@
   - `:app:assembleDebug` → PASS，`app-debug.apk` 28,100,993 bytes，SHA-256 `54B71E5EC9C294BA49DAB6CCD16E5ECB03BC111CFE8FD29B377C0BA5EFBF9220`
   - `:app:assembleDebugAndroidTest` → PASS，仅编译（新增 2 个设备测试）
   - 产物副本：`_pet-reports/deepseek-v2/`
-- 未运行：`:app:connectedDebugAndroidTest`（本机 adb 不可用、无设备）
+- 未运行：`:app:connectedDebugAndroidTest`（测试 APK 被 vivo 安装确认拒绝；设备已连接但仪器测试未执行）
+- 真机第一段：iQOO 12 / Android 16 已安装启动、权限、悬浮窗、气泡、键盘输入、笔记落盘、锁屏存活；结果见 [DEVICE_TEST_RESULTS.md](DEVICE_TEST_RESULTS.md)
 - 已知待办（全部为真机/设备项）：
   - iQOO 12 常驻/保活/悬浮窗/无障碍/键盘/权限/锁屏心跳
   - 跨午夜、请求中新增/改档、强杀恢复的真机观察

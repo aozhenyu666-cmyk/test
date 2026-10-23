@@ -20,7 +20,7 @@
 | debug APK | 构建成功 | 28,100,993 bytes，SHA-256 `54B71E5EC9C294BA49DAB6CCD16E5ECB03BC111CFE8FD29B377C0BA5EFBF9220` |
 | 仪器测试 APK | 构建成功 | 只编译，未执行 |
 | 远端 CI | **success** | https://github.com/aozhenyu666-cmyk/test/actions/runs/39968655136 |
-| 真机功能/体验 | **未验证** | 本机 adb 已可用（修正 TEMP 后），但当前没有已授权设备；不能写成通过 |
+| 真机功能/体验 | **部分验证** | iQOO 12 已连接，安装/启动/权限/悬浮窗/文字输入/锁屏存活有证据；锁屏解锁后的恢复、夜间并发、召回、UI 适配等仍待测。详见 [DEVICE_TEST_RESULTS.md](DEVICE_TEST_RESULTS.md) |
 
 一句话：**自动化能证明的已经通过了；真机才能证明的部分，目前没有证据。** 第 5 节列出我需要你提供/授权的数据，才能把“待测”改成“通过/失败”。
 
@@ -33,13 +33,13 @@
 | 检查 | 结果 |
 |---|---|
 | ADB 版本 | 37.0.1（platform-tools） |
-| `adb devices -l` | **空列表**（无已授权 USB/无线设备） |
+| `adb devices -l` | 23:37 起显示 `10AE5U23LT004DN device product:PD2307 model:V2307A`（iQOO 12） |
 | ADB 启动问题 | 默认 TEMP 下 `adb.log` 被拒；把 TEMP/TMP 指到 workspace 的 `_adb-temp` 后 server 正常启动 |
 | mDNS | 发现 `adb-10AE5U23LT004DN-s24bzX _adb-tls-connect._tcp 192.168.1.2:45633`（iQOO 12 的无线调试服务） |
 | 连通性 | `192.168.1.2` 可 ping 通；`45633` TCP **连接被拒绝**；`5555` 未开放 |
 | USB | PnP 有 `Android ADB Interface` / `Android Composite ADB Interface` 记录，但状态 Unknown；没有已授权 ADB 会话 |
 
-结论：环境已就绪，**缺的是一条已授权的 ADB 通道**（USB 调试授权，或无线调试配对码/新端口）。
+结论：环境已就绪，设备已通过 ADB 连接；第一段真机结果见 [DEVICE_TEST_RESULTS.md](DEVICE_TEST_RESULTS.md)。
 
 ### 2.1 环境
 
