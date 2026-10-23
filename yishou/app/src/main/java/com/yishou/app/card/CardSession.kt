@@ -45,6 +45,14 @@ data class SessionState(
     val predicted: String? = null,
     /** 连着快、连着错之后，这一组剩下的都先说再选 */
     val rushNote: String? = null,
+    /** 先说的是套话：正在被追问的这一刀（null 表示没在追问） */
+    val drillAsk: String? = null,
+    /** 上一刀没收下的原因 */
+    val drillHint: String? = null,
+    val drillStep: Int = 0,
+    val drillTotal: Int = 0,
+    /** 先说的那句打中了正确选项独有的字：选项一亮直接选 */
+    val bullseye: Boolean = false,
 ) {
     val index: Int get() = results.size
 }
@@ -65,6 +73,8 @@ class CardSession(
     private val _state = MutableStateFlow(SessionState())
     val state: StateFlow<SessionState> = _state.asStateFlow()
     private var recorded: CardAttempt? = null
+    /** 先说的是套话时的那串追问 */
+    private var drill: com.yishou.app.sharp.Drill? = null
 
     /** 开一组；deal 为 false 时只开组不发牌（拍下的题随后用 [useDealt] 放进来） */
     suspend fun start(mode: String, focus: Skill?, size: Int, deal: Boolean = true) {
@@ -92,12 +102,15 @@ class CardSession(
             is LlmResult.Err -> _state.update { it.copy(loading = false, error = r.error.message) }
             is LlmResult.Ok -> {
                 recorded = null
+                drill = null
                 val cfg = RoundConfig(checks = if (gate) 0 else Progress.checks(hist), allowChange = !gate)
                 _state.update {
                     it.copy(
                         loading = false, dealt = r.value, round = Round(r.value.card, cfg),
                         hidden = false, notes = "", needsKey = false, cardStartedAt = clock(),
-                        mustPredict = !gate && (predictFirst || it.rushNote != null), predicted = null,
+                        // 入口也先说再选：入口是一天里最常见的一张，最不能让人靠蒙过去
+                        mustPredict = predictFirst || it.rushNote != null, predicted = null,
+                        drillAsk = null, drillHint = null, drillStep = 0, drillTotal = 0, bullseye = false,
                     )
                 }
             }
@@ -107,18 +120,50 @@ class CardSession(
     /** 拍下的真题直接作为下一张 */
     fun useDealt(d: Dealt, checks: Int) {
         recorded = null
+        drill = null
         _state.update {
             it.copy(
                 dealt = d, round = Round(d.card, RoundConfig(checks, allowChange = true)), hidden = false, notes = "", needsKey = false,
                 cardStartedAt = clock(), error = null, mustPredict = predictFirst || it.rushNote != null, predicted = null,
+                drillAsk = null, drillHint = null, drillStep = 0, drillTotal = 0, bullseye = false,
             )
         }
     }
 
-    /** 先说再选：说了几个字才放出选项 */
+    /**
+     * 先说再选。说中了正确选项独有的字：亮选项时告诉你“靶心对了”，直接选；
+     * 说的是套话（“不知道”“差不多”“A 吧”）：先被追问两刀（照抄题干关键字、说出正确答案必须满足什么），切完才亮选项。
+     */
     fun predict(text: String) {
-        if (com.yishou.app.think.Words.substance(text) < 2) return
-        _state.update { it.copy(predicted = text.trim()) }
+        val s = _state.value
+        val card = s.round?.card ?: return
+        if (text.isBlank()) return
+        // 拍的、没核对过答案的题：答案不可靠，不对靶心
+        val verified = s.dealt?.row?.verified == true
+        val d = drill
+        if (d != null) {
+            d.reply(text)
+            if (!d.done) {
+                _state.update { it.copy(drillAsk = d.current?.ask, drillHint = d.hint, drillStep = d.index) }
+                return
+            }
+            drill = null
+            _state.update {
+                it.copy(
+                    predicted = d.said(), drillAsk = null, drillHint = null,
+                    bullseye = verified && com.yishou.app.sharp.Sharp.bullseye(d.said(), card.options, card.answer),
+                )
+            }
+            return
+        }
+        if (com.yishou.app.sharp.Sharp.hollow(text) != null) {
+            val source = (card.sentences + card.question).joinToString("")
+            val nd = com.yishou.app.sharp.Drill(text, com.yishou.app.sharp.Sharp.cardCuts(), source)
+            drill = nd
+            _state.update { it.copy(drillAsk = nd.current?.ask, drillHint = null, drillStep = 0, drillTotal = nd.cuts.size) }
+            return
+        }
+        _state.update { it.copy(predicted = text.trim(), bullseye = verified && com.yishou.app.sharp.Sharp.bullseye(text, card.options, card.answer)) }
     }
 
     fun hide() = _state.update { if (it.level >= 2) it.copy(hidden = true) else it }
@@ -238,6 +283,7 @@ class CardSession(
 
     fun stop() {
         recorded = null
+        drill = null
         _state.value = SessionState()
     }
 }

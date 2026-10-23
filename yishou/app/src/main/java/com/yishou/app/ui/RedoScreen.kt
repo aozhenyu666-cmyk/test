@@ -51,6 +51,11 @@ data class RedoState(
     val judged: Judged? = null,
     val done: Boolean = false,
     val saved: Boolean = false,
+    /** 回的是套话：正在追问的这一刀 */
+    val cutAsk: String? = null,
+    val cutHint: String? = null,
+    val cutStep: Int = 0,
+    val cutTotal: Int = 0,
 )
 
 /** 重想：刷着练里没接住的一问，静下来再答一次 */
@@ -68,16 +73,42 @@ class RedoViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun quiz(r: ScrollQuizRow) = Quiz(r.seen, r.question, Lens.entries.firstOrNull { it.name == r.lens } ?: Lens.CLAIM, r.reference, r.text)
 
+    private var drill: com.yishou.app.sharp.Drill? = null
+
+    /** 交一句。套话先追问几刀再判，追问出来的最多算“差一点” */
     fun submit(answer: String) {
         val r = _state.value.row ?: return
         if (_state.value.busy || _state.value.done) return
+        val d = drill
+        var text = answer
+        var chased = false
+        if (d != null) {
+            d.reply(answer)
+            if (!d.done) {
+                _state.update { it.copy(cutAsk = d.current?.ask, cutHint = d.hint, cutStep = d.index) }
+                return
+            }
+            drill = null
+            text = d.transcript()
+            chased = true
+            _state.update { it.copy(cutAsk = null, cutHint = null) }
+        } else {
+            val h = com.yishou.app.sharp.Sharp.hollow(answer)
+            if (h != null) {
+                val nd = com.yishou.app.sharp.Drill(answer, com.yishou.app.sharp.Sharp.cuts(h, r.text.isNotBlank()), r.text)
+                drill = nd
+                _state.update { it.copy(cutAsk = nd.current?.ask, cutHint = null, cutStep = 0, cutTotal = nd.cuts.size) }
+                return
+            }
+        }
         _state.update { it.copy(busy = true) }
         viewModelScope.launch {
             val q = quiz(r)
-            val judged = ScrollQuiz.quick(answer) ?: when (val res = yishou.scrollJudge.complete(ScrollQuiz.judgeSystem(), ScrollQuiz.judgeUser(q, answer), "重想判")) {
+            val raw = (if (chased) null else ScrollQuiz.quick(text)) ?: when (val res = yishou.scrollJudge.complete(ScrollQuiz.judgeSystem(), ScrollQuiz.judgeUser(q, text), "重想判")) {
                 is LlmResult.Ok -> ScrollQuiz.parseJudge(res.value) ?: Judged(Verdict.NEAR, "")
                 is LlmResult.Err -> null
             }
+            val judged = if (chased && raw?.verdict == Verdict.HIT) Judged(Verdict.NEAR, "追问出来的，下次第一句就说到这儿。" + raw?.line.orEmpty()) else raw
             dao.redo(r.id, judged?.verdict?.name.orEmpty(), System.currentTimeMillis())
             _state.update { it.copy(busy = false, judged = judged, done = true) }
         }
@@ -125,9 +156,25 @@ fun RedoScreen(id: Long, onBack: () -> Unit, vm: RedoViewModel = viewModel()) {
                     Text(r.question, style = MaterialTheme.typography.headlineSmall)
                     if (r.answer.isNotBlank() && r.answer != "不知道") Text("当时你说：${r.answer}", style = MaterialTheme.typography.bodySmall)
                     if (!s.done) {
-                        VoiceTextField(answer, { answer = it }, "这次怎么想", Modifier.fillMaxWidth(), minLines = 2, enabled = !s.busy)
-                        Button(onClick = { vm.submit(answer) }, enabled = answer.isNotBlank() && !s.busy, modifier = Modifier.fillMaxWidth()) {
-                            Text(if (s.busy) "判着……" else "交")
+                        val chasing = s.cutAsk != null
+                        if (chasing) {
+                            Text("追问 ${s.cutStep + 1}/${s.cutTotal}：${s.cutAsk}", style = MaterialTheme.typography.titleSmall)
+                            s.cutHint?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+                        }
+                        val pulse = idlePulse(answer, listOf("先只说一件事：它最想让你信哪一句？", "抄一句屏幕上的字也行。"))
+                        pulse?.let { Text(it, color = MaterialTheme.colorScheme.tertiary) }
+                        VoiceTextField(answer, { answer = it }, if (chasing) "这一刀" else "这次怎么想", Modifier.fillMaxWidth(), minLines = 2, enabled = !s.busy)
+                        Button(
+                            onClick = {
+                                val before = s.cutStep
+                                vm.submit(answer)
+                                // 收下了这一刀（或者进了追问）就清空，好写下一刀；没收下留着改
+                                if (vm.state.value.cutStep != before || vm.state.value.cutAsk != s.cutAsk) answer = ""
+                            },
+                            enabled = answer.isNotBlank() && !s.busy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (s.busy) "判着……" else if (chasing) "交这一刀" else "交")
                         }
                     } else {
                         val j = s.judged

@@ -74,6 +74,8 @@ class ScrollService : Service() {
     private var quiz: Quiz? = null
     /** 这一问在库里的行号（问出来就记，回了再补上回答和判定） */
     private var quizId: Long? = null
+    /** 回的是套话：正在追问的那一串（一刀一刀在通知里回） */
+    private var drill: com.yishou.app.sharp.Drill? = null
     private var askJob: Job? = null
     private var judgeJob: Job? = null
     private var watchJob: Job? = null
@@ -85,7 +87,7 @@ class ScrollService : Service() {
             ACTION_START -> start(intent)
             ACTION_ASK -> ask(intent.getLongExtra(EXTRA_DELAY, 0), auto = false)
             ACTION_REPLY -> reply(RemoteInput.getResultsFromIntent(intent)?.getCharSequence(KEY_REPLY)?.toString().orEmpty())
-            ACTION_REVEAL -> reply("不知道")
+            ACTION_REVEAL -> reply("不知道", reveal = true)
             ACTION_SKIP -> skip()
             ACTION_INTERVAL -> {
                 pace.setInterval(prefs(this).getInt(KEY_INTERVAL, DEFAULT_INTERVAL))
@@ -226,11 +228,41 @@ class ScrollService : Service() {
         }
     }
 
-    private fun reply(answer: String) {
+    /**
+     * 回了一句。套话（“太绝对了”“不知道”“有道理”）不直接判，先在通知里追问两三刀：
+     * 照抄屏幕上的哪几个字、举个具体例子、改成什么样才站得住。切完再判，而且最多判“差一点”。
+     * 点“看参考”是认了说不出：直接给参考，不追问。
+     */
+    private fun reply(answer: String, reveal: Boolean = false) {
         val q = quiz ?: run {
             cancelQuiz()
             return
         }
+        val d = drill
+        if (!reveal && d != null) {
+            d.reply(answer)
+            if (!d.done) {
+                showCut(q, d)
+                return
+            }
+            drill = null
+            finish(q, d.transcript(), chased = true)
+            return
+        }
+        drill = null
+        if (!reveal) {
+            val h = com.yishou.app.sharp.Sharp.hollow(answer)
+            if (h != null) {
+                val nd = com.yishou.app.sharp.Drill(answer, com.yishou.app.sharp.Sharp.cuts(h, q.text.isNotBlank()), q.text)
+                drill = nd
+                showCut(q, nd)
+                return
+            }
+        }
+        finish(q, answer, chased = false)
+    }
+
+    private fun finish(q: Quiz, answer: String, chased: Boolean) {
         val id = quizId
         quiz = null
         quizId = null
@@ -239,19 +271,21 @@ class ScrollService : Service() {
         notifyQuiz(simple(q.question, "判着……", silent = true))
         judgeJob = scope.launch {
             try {
-                judge(q, answer, id)
+                judge(q, answer, id, chased)
             } finally {
                 if (projection == null) stopSelf()
             }
         }
     }
 
-    private suspend fun judge(q: Quiz, answer: String, id: Long?) {
-        val quick = ScrollQuiz.quick(answer)
-        val judged = quick ?: when (val r = app.scrollJudge.complete(ScrollQuiz.judgeSystem(), ScrollQuiz.judgeUser(q, answer), "刷着练判")) {
+    private suspend fun judge(q: Quiz, answer: String, id: Long?, chased: Boolean) {
+        val quick = if (chased) null else ScrollQuiz.quick(answer)
+        val raw = quick ?: when (val r = app.scrollJudge.complete(ScrollQuiz.judgeSystem(), ScrollQuiz.judgeUser(q, answer), "刷着练判")) {
             is LlmResult.Ok -> ScrollQuiz.parseJudge(r.value) ?: Judged(Verdict.NEAR, "")
             is LlmResult.Err -> null
         }
+        // 被追问出来的不算一击即中
+        val judged = if (chased && raw?.verdict == Verdict.HIT) Judged(Verdict.NEAR, "追问出来的，下次第一句就说到这儿。" + raw?.line.orEmpty()) else raw
         val dao = app.database.scrollQuizzes()
         val now = System.currentTimeMillis()
         if (judged == null) {
@@ -274,6 +308,7 @@ class ScrollService : Service() {
 
     private fun skip() {
         val id = quizId
+        drill = null
         quiz = null
         quizId = null
         if (id != null) app.appScopeLaunch { app.database.scrollQuizzes().answer(id, "", SKIP, "", System.currentTimeMillis()) }
@@ -354,6 +389,7 @@ class ScrollService : Service() {
         _status.value = null
         quiz = null
         quizId = null
+        drill = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         // 判卷还在跑就让它判完再退出（结果通知照样发）；没在判的题收掉
         if (judgeJob?.isActive == true) return
@@ -398,15 +434,45 @@ class ScrollService : Service() {
             .build()
     }
 
-    private fun showQuiz(q: Quiz) {
+    private fun replyAction(label: String): NotificationCompat.Action {
         val input = RemoteInput.Builder(KEY_REPLY).setLabel("一句话回").build()
         val replyIntent = Intent(this, ScrollService::class.java).setAction(ACTION_REPLY)
         val mutable = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
         val replyPi = PendingIntent.getService(this, 42, replyIntent, mutable or PendingIntent.FLAG_UPDATE_CURRENT)
-        val replyAction = NotificationCompat.Action.Builder(0, "回一句", replyPi)
+        return NotificationCompat.Action.Builder(0, label, replyPi)
             .addRemoteInput(input)
             .setAllowGeneratedReplies(false)
             .build()
+    }
+
+    /** 追问的一刀：同一条通知原地换内容，不再响 */
+    private fun showCut(q: Quiz, d: com.yishou.app.sharp.Drill) {
+        val cut = d.current ?: return
+        val body = buildString {
+            d.hint?.let { append(it).append("\n") }
+            append(cut.ask)
+            append("\n\n问的是：").append(q.question)
+            append("\n你先说的：").append(d.first.trim())
+        }
+        val n = NotificationCompat.Builder(this, CH_QUIZ)
+            .setSmallIcon(R.drawable.ic_stat_yishou)
+            .setContentTitle("追问 ${d.index + 1}/${d.cuts.size}")
+            .setContentText(d.hint ?: cut.ask)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .addAction(replyAction("回这一刀"))
+            .addAction(0, "看参考", service(ACTION_REVEAL, 43))
+            .addAction(0, "跳过", service(ACTION_SKIP, 44))
+            .setDeleteIntent(service(ACTION_SKIP, 45))
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setTimeoutAfter(AutoPace.PENDING_MS)
+            .build()
+        notifyQuiz(n)
+    }
+
+    private fun showQuiz(q: Quiz) {
+        val replyAction = replyAction("回一句")
         val body = q.question + if (q.seen.isNotBlank()) "\n刷到：${q.seen}" else ""
         val n = NotificationCompat.Builder(this, CH_QUIZ)
             .setSmallIcon(R.drawable.ic_stat_yishou)

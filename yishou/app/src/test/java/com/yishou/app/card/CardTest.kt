@@ -306,6 +306,31 @@ class CardTest {
         assertTrue(s.state.value.results.single().firstCorrect)
     }
 
+    @Test
+    fun gateMakesYouSayItFirstAndChasesTemplates() = runTest {
+        fun session() = CardSession(CardEngine(FakeCardDao(), FakeCardGen(), clock = { t }), FakeDao(), FakeCoachDao(), clock = { t }, predictFirst = true)
+        val g = session()
+        g.start(CardMode.GATE, null, size = 1)
+        assertTrue(g.state.value.mustPredict)
+        // 说套话：先被追问，选项不亮
+        g.predict("不知道")
+        assertTrue(g.state.value.drillAsk != null)
+        assertEquals(null, g.state.value.predicted)
+        g.predict("文章很好")
+        assertTrue(g.state.value.drillHint!!.contains("原文里找不到"))
+        g.predict("意在说明")
+        assertEquals(1, g.state.value.drillStep)
+        g.predict("要说出作者最后主张城市该怎么做")
+        assertEquals(null, g.state.value.drillAsk)
+        assertTrue(g.state.value.predicted != null)
+        // 一句话说中：靶心对了
+        val h = session()
+        h.start(CardMode.GATE, null, size = 1)
+        h.predict("城市应该多种行道树")
+        assertTrue(h.state.value.bullseye)
+        assertEquals(null, h.state.value.drillAsk)
+    }
+
     private fun assertThrows(block: () -> Unit) {
         try {
             block()

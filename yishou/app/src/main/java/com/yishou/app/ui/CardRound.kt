@@ -249,18 +249,33 @@ private fun BetStep(card: Card, s: SessionState, a: CardActions) {
     var option by remember(card) { mutableStateOf<Int?>(null) }
     var conf by remember(card) { mutableStateOf<Conf?>(null) }
     s.rushNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-    // 先说再选：选项先藏着
+    // 先说再选：选项先藏着。说中了直接选；说套话先被追问两刀
     if (s.mustPredict && s.predicted == null) {
-        var said by remember(card) { mutableStateOf("") }
+        val chasing = s.drillAsk != null
+        var said by remember(card, s.drillStep, chasing) { mutableStateOf("") }
+        val pulse = idlePulse(
+            said,
+            if (chasing) listOf("先抄几个字也行，别空着。") else listOf("先只说：题目问的是什么？", "说出你觉得最关键的一个词也行。"),
+        )
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("先别看选项：用自己的话说答案（几个字就行）。", style = MaterialTheme.typography.bodyMedium)
-            VoiceTextField(said, { said = it }, "我觉得答案是……", Modifier.fillMaxWidth())
-            Button(onClick = { a.predict(said) }, enabled = com.yishou.app.think.Words.substance(said) >= 2, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("说好了，看选项") }
+            if (!chasing) {
+                Text("先别看选项：正确答案必须长什么样？用自己的话说一句。", style = MaterialTheme.typography.bodyMedium)
+                Text("说中了，选项一亮直接选；说“不知道”“差不多”这类，要先被追问两刀。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Text("追问 ${s.drillStep + 1}/${s.drillTotal}：${s.drillAsk}", style = MaterialTheme.typography.titleSmall)
+                s.drillHint?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+            }
+            pulse?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.tertiary) }
+            VoiceTextField(said, { said = it }, if (chasing) "这一刀" else "正确答案应该……", Modifier.fillMaxWidth())
+            Button(onClick = { a.predict(said) }, enabled = said.isNotBlank(), modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                Text(if (chasing) "交这一刀" else "说好了")
+            }
         }
         return
     }
     // 读完再选：按材料长短锁几秒
-    val unlockAt = if (s.mode == com.yishou.app.data.CardMode.GATE) 0L else s.cardStartedAt + com.yishou.app.card.AntiRandom.minReadMs(card)
+    // 说中靶心的不用再等：想透了就该更快
+    val unlockAt = if (s.mode == com.yishou.app.data.CardMode.GATE || s.bullseye) 0L else s.cardStartedAt + com.yishou.app.card.AntiRandom.minReadMs(card)
     var now by remember(card) { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
     androidx.compose.runtime.LaunchedEffect(unlockAt) {
         while (now < unlockAt) {
@@ -272,7 +287,8 @@ private fun BetStep(card: Card, s: SessionState, a: CardActions) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         s.predicted?.let { p ->
             Text("你先说的：$p", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
-            com.yishou.app.card.AntiRandom.closest(p, card)?.let { i ->
+            if (s.bullseye) Text("靶心对了。选出来就过。", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            else com.yishou.app.card.AntiRandom.closest(p, card)?.let { i ->
                 Text("最接近 ${Card.letter(i)}。对照一下再定。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
