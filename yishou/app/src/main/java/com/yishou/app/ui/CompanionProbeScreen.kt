@@ -110,10 +110,24 @@ fun CompanionProbeScreen(onBack: () -> Unit) {
                     Text(audioSummary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(frameSummary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
+                        "这一页只数帧：不录屏、不存图、也不会给你看画面——它只回答「能不能拿到」。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
                         PlaybackCaptureProbe.limitationNote() + "要用你真在用的视频 App 来验这一项。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    // 开了却什么都没读到：把最可能的三个原因直接摆出来，别让人对着空白猜
+                    if (status.running && status.elapsedSec >= 5 && level <= 0.001f && !status.frames.contains("帧 /")) {
+                        Text(
+                            "还没读到声音，也没收到画面。按顺序确认：① 目标 App 真的在出声（不是静音、不是耳机）；" +
+                                "② 系统弹窗里点的是「立即开始」而不是返回；③ 下拉通知栏里系统投屏还在跑。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             }
 

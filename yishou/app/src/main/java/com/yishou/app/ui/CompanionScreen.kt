@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yishou.app.companion.android.CompanionService
+import com.yishou.app.companion.core.CompanionChecks
 
 /**
  * 视频陪练：选目标、开一场、看胶囊、答题。
@@ -49,6 +50,16 @@ fun CompanionScreen(onBack: () -> Unit) {
     var minutes by rememberSaveable { mutableStateOf(25) }
     var gear by rememberSaveable { mutableStateOf("ACCOMPANY") }
     var answer by rememberSaveable { mutableStateOf("") }
+
+    val yishou = context.applicationContext as com.yishou.app.YishouApp
+    val llmReady by yishou.settings.llm.collectAsStateWithLifecycle()
+    val speech by yishou.settings.speech.collectAsStateWithLifecycle()
+    val ready = CompanionChecks.startup(
+        llmReady = llmReady.isComplete,
+        sttReady = speech.sttReady,
+        canRecord = yishou.voice.hasPermission(),
+        notifyAllowed = androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled(),
+    )
 
     val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         val data = r.data
@@ -96,10 +107,22 @@ fun CompanionScreen(onBack: () -> Unit) {
                                     context.getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent(),
                                 )
                             },
-                            enabled = !view.running,
+                            enabled = !view.running && ready.canStart,
                         ) { Text("开始（要同意看屏和内录）") }
                         OutlinedButton(onClick = { CompanionService.stop(context) }, enabled = view.running) { Text("停") }
                     }
+                }
+            }
+
+            // 缺什么先说在前面：不然点了开始也只会安静地听
+            ready.blockers.forEach { b ->
+                Card {
+                    Text(b, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                }
+            }
+            ready.notes.forEach { n ->
+                Card {
+                    Text(n, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
