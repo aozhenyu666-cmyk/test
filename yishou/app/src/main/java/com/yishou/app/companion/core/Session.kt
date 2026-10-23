@@ -183,9 +183,22 @@ class CompanionSession(
         return listOf(SessionEffect.WaitAnswer(now + answerWaitMs))
     }
 
-    /** 用户答了 */
-    fun answer(text: String): List<SessionEffect> {
+    /**
+     * 手上的问题作废，但材料没换（epoch 不动）。
+     * 用于「念到一半被打断」「暂停总也等不来」这类情况：问题丢了，回去听，不记没接。
+     */
+    fun dropQuestion(): List<SessionEffect> {
         if (stopped) return emptyList()
+        if (active == null && pending == null) return emptyList()
+        active = null
+        pending = null
+        answer = null
+        phase = Phase.OBSERVE
+        return listOf(SessionEffect.CancelPending)
+    }
+
+    /** 用户答了 */
+    fun answer(text: String): List<SessionEffect> {        if (stopped) return emptyList()
         if (phase != Phase.WAIT_ANSWER) return emptyList()
         if (active == null) return emptyList()
         answer = text
@@ -205,8 +218,7 @@ class CompanionSession(
         return listOf(SessionEffect.Record(a.turnId, a.question, said, note))
     }
 
-    /** 记完了，回去听。留着单独一道，是为了让上层确认真的写进去了 */
-    fun onRecorded(): List<SessionEffect> {
+    /** 记完了，回去听。留着单独一道，是为了让上层确认真的写进去了 */    fun onRecorded(): List<SessionEffect> {
         if (stopped) return emptyList()
         if (phase != Phase.RECORD) return emptyList()
         phase = Phase.OBSERVE
