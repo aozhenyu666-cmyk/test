@@ -25,8 +25,13 @@ sealed interface SecretWriteResult {
  * API Key 存储：AndroidKeyStore 里不可导出的 AES-GCM 密钥加密，密文放独立的私有 SharedPreferences。
  * 加解密会碰磁盘和 Keystore，调用方放在 IO 线程。
  */
-class SecretStore(context: Context) {
-    private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+class SecretStore(
+    context: Context,
+    prefsName: String = PREFS,
+    /** 每个存储用自己的 Keystore 别名；视觉服务的 Key 与搭话 Key 分开存。 */
+    private val alias: String = ALIAS,
+) {
+    private val prefs = context.applicationContext.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
 
     fun read(): SecretReadResult {
         val version = prefs.getInt(KEY_VERSION, 0)
@@ -77,12 +82,12 @@ class SecretStore(context: Context) {
 
     private fun keyStore(): KeyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
 
-    private fun existingKey(): SecretKey? = (keyStore().getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
+    private fun existingKey(): SecretKey? = (keyStore().getEntry(alias, null) as? KeyStore.SecretKeyEntry)?.secretKey
 
     private fun createKey(): SecretKey {
         val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
         gen.init(
-            KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+            KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setKeySize(256)
@@ -93,7 +98,7 @@ class SecretStore(context: Context) {
 
     private fun deleteKey() {
         val ks = keyStore()
-        if (ks.containsAlias(ALIAS)) ks.deleteEntry(ALIAS)
+        if (ks.containsAlias(alias)) ks.deleteEntry(alias)
     }
 
     companion object {

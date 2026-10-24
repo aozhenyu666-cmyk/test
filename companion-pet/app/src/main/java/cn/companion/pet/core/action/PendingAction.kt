@@ -17,6 +17,8 @@ data class PendingAction(
     val id: String,
     val kind: ActionKind,
     val args: Map<String, String>,
+    /** 参数指纹；批准/重开时核对，防止文件或调用方改参。 */
+    val argsHash: String = "",
     val preview: String,
     /** 创建时的前台**包名**（不是显示名）；批准时必须仍是这个应用。 */
     val packageName: String = "",
@@ -30,14 +32,19 @@ data class PendingAction(
     val approvedAt: Long = 0,
     /** 由目标任务提出时记下任务 ID，执行结果回写到该任务。 */
     val taskId: String = "",
+    /** 用户显式“重新确认”的次数；每次重新确认对应一个新的执行 ID。 */
+    val attempt: Int = 0,
 ) {
     fun argsHash(): String = MessageDigest.getInstance("SHA-256")
         .digest((kind.name + args.toSortedMap().entries.joinToString("") { it.key + "=" + it.value })
             .toByteArray(Charsets.UTF_8))
         .joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
-    /** 执行 ID 固定：同一条批准无论重试多少次都落在同一个账本条目上，不会重复执行。 */
-    val executionId: String get() = EXECUTION_PREFIX + id
+    /**
+     * 执行 ID：同一次批准无论重试多少次都落在同一个账本条目上，不会重复执行；
+     * 用户显式重新确认（[PendingActionStore.reopen]）后换一个新 ID，否则账本会把它当成同一次而永远不执行。
+     */
+    val executionId: String get() = EXECUTION_PREFIX + id + (if (attempt > 0) "-r$attempt" else "")
 
     companion object {
         const val EXECUTION_PREFIX = "pending-"
@@ -71,8 +78,11 @@ class PendingActionStore(
                ttlMillis: Long = 5 * 60 * 1000, taskId: String = ""): PendingAction? = synchronized(lock) {
         val all = read()
         if (all.count { it.status == PendingStatus.PENDING } >= maxItems) { lastError = "待确认动作已达上限"; return null }
-        val action = PendingAction(UUID.randomUUID().toString(), kind, args.toMap(), preview.take(300), packageName,
-            observationId, sourceIds.take(5), now, now + ttlMillis, UUID.randomUUID().toString(), taskId = taskId)
+        val base = PendingAction(id = UUID.randomUUID().toString(), kind = kind, args = args.toMap(),
+            preview = preview.take(300), packageName = packageName, observationId = observationId,
+            sourceIds = sourceIds.take(5), createdAt = now, expiresAt = now + ttlMillis,
+            nonce = UUID.randomUUID().toString(), taskId = taskId)
+        val action = base.copy(argsHash = base.argsHash())
         if (!write(all + action)) return null
         action
     }
@@ -93,6 +103,10 @@ class PendingActionStore(
             lastError = "确认内容已变化，请重新查看"
             return null
         }
+        if (item.argsHash.isNotBlank() && item.argsHash != item.argsHash()) {
+            lastError = "参数指纹不一致，拒绝执行"
+            return null
+        }
         if (item.packageName.isNotBlank() && foregroundPackage != item.packageName) {
             lastError = "前台已切换，不能执行旧确认"
             return null
@@ -100,6 +114,17 @@ class PendingActionStore(
         val approved = item.copy(status = PendingStatus.APPROVED, approvedAt = now)
         if (!write(all.map { if (it.id == id) approved else it })) return null
         approved
+    }
+
+    /** 批准后未执行/崩溃：只能显式重开，重新确认，不静默重放。 */
+    fun reopen(id: String, now: Long, ttlMillis: Long = 5 * 60 * 1000): PendingAction? = synchronized(lock) {
+        val all = read()
+        val item = all.firstOrNull { it.id == id && (it.status == PendingStatus.APPROVED || it.status == PendingStatus.INTERRUPTED) }
+            ?: return null
+        val reopened = item.copy(status = PendingStatus.PENDING, nonce = UUID.randomUUID().toString(),
+            createdAt = now, expiresAt = now + ttlMillis, approvedAt = 0, result = null, attempt = item.attempt + 1)
+        if (!write(all.map { if (it.id == id) reopened else it })) return null
+        reopened
     }
 
     fun rejectOrCancel(id: String, status: PendingStatus = PendingStatus.REJECTED): Boolean = synchronized(lock) {

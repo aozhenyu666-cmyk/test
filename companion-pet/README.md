@@ -6,7 +6,7 @@
 
 需求依据：[V1.5 需求文档](https://claude.ai/artifact/GBaCjrc1shZXy4v391C4zu)，开发计划见 [PLAN.md](PLAN.md)。
 
-当前版本为 **0.5.3（versionCode 21）**：开始页新增“复制诊断信息”（崩溃堆栈、系统退出原因），无障碍服务和前台服务加固，说话默认改用输入法话筒，自主模式漏写来源时不再静默无反应。0.5.2：改为固定签名并提供直链下载，以后新版本可直接覆盖安装、不丢权限和数据（从旧版升到 0.5.2 需要最后卸载一次）。功能同 0.5.1：在 DeepSeek 的 B0–B4 Agent 能力（视觉、设备控制、长期目标、待确认动作、Shizuku 诊断）之上，修复独立审计发现的问题——待确认动作现在能在悬浮气泡上批准并执行、积压事件不再丢、空目标不再吞掉 Agent、目标步骤能完成、设备动作和截图绑定真实活动窗口并在动作后重新观察核对，见 [0.5.1 修复](handoff/claude-b4-fix/STATE.md)。真机仍未验证。0.3.7：修复开口经常无声（输出被截断/超时）、模型调用失败无提示（开始页现在显示上次调用结果，设置页可“测试连接”）、连续性召回被刚说过的话占满、夜间整理在档案变长后一直失败、念头撤销不干净，见 [本轮修复](handoff/claude-fix/STATE.md)。0.3.6：设置页新增能力面板，可查记忆、看素材、确认保存念头、打开 AI 应用和朗读。写动作增加跨重启账本与最近操作核对；工具念头兼容旧 Markdown。见 [本轮交付](handoff/capabilities-v5/STATE.md) 与 [恢复设计](handoff/capabilities-v5/C2_RECOVERY.md)。设备覆盖升级、真实 App/TTS 和旋转仍待设备执行；构建成功不代表真机通过。
+当前版本为 **0.5.4（versionCode 22）**：合并 DeepSeek 的 C0–C2（待确认参数指纹与观察绑定、脱敏诊断、C2 验收清单与冒烟脚本），视觉改为可单独配置（搭话用 DeepSeek、看图用千问），“看一眼”失败时写明原因，见 [0.5.4 说明](handoff/claude-c2/STATE.md)。0.5.3：开始页新增“复制诊断信息”（崩溃堆栈、系统退出原因），无障碍服务和前台服务加固，说话默认改用输入法话筒，自主模式漏写来源时不再静默无反应。0.5.2：改为固定签名并提供直链下载，以后新版本可直接覆盖安装、不丢权限和数据（从旧版升到 0.5.2 需要最后卸载一次）。功能同 0.5.1：在 DeepSeek 的 B0–B4 Agent 能力（视觉、设备控制、长期目标、待确认动作、Shizuku 诊断）之上，修复独立审计发现的问题——待确认动作现在能在悬浮气泡上批准并执行、积压事件不再丢、空目标不再吞掉 Agent、目标步骤能完成、设备动作和截图绑定真实活动窗口并在动作后重新观察核对，见 [0.5.1 修复](handoff/claude-b4-fix/STATE.md)。真机仍未验证。0.3.7：修复开口经常无声（输出被截断/超时）、模型调用失败无提示（开始页现在显示上次调用结果，设置页可“测试连接”）、连续性召回被刚说过的话占满、夜间整理在档案变长后一直失败、念头撤销不干净，见 [本轮修复](handoff/claude-fix/STATE.md)。0.3.6：设置页新增能力面板，可查记忆、看素材、确认保存念头、打开 AI 应用和朗读。写动作增加跨重启账本与最近操作核对；工具念头兼容旧 Markdown。见 [本轮交付](handoff/capabilities-v5/STATE.md) 与 [恢复设计](handoff/capabilities-v5/C2_RECOVERY.md)。设备覆盖升级、真实 App/TTS 和旋转仍待设备执行；构建成功不代表真机通过。
 
 基础记忆层的历史实现见 [0.3.1 交接](handoff/codex-foundation-v3/STATE.md)。设备覆盖升级的条件见 [升级验证](handoff/codex-foundation-v3/UPGRADE_VALIDATION.md)，不能把 APK 构建成功当成手机已验证。
 
@@ -110,7 +110,7 @@ app/src/main/java/cn/companion/pet/
 
 ## 构建与测试
 
-CI（`.github/workflows/companion-pet-android.yml`）每次推送都跑单元测试、lint、构建 debug APK 和设备测试 APK。0.5.1 本地实测：**358 个 JVM 测试通过、0 失败**（APK 和 lint 以 CI 为准）；设备测试 APK 只编译，未在真机执行。
+CI（`.github/workflows/companion-pet-android.yml`）每次推送都跑单元测试、lint、构建 debug APK 和设备测试 APK。0.5.4 本地实测：**365 个 JVM 测试通过、0 失败**（APK 和 lint 以 CI 为准）；设备测试 APK 只编译，未在真机执行。
 
 本地需要 JDK 17、Android SDK 35：
 

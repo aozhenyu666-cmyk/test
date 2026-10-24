@@ -97,3 +97,29 @@ class VisionTest {
         assertTrue(!called)
     }
 }
+/** 真机：“看了，但视觉模型没给出可用的结果”——不按 JSON 回答的模型也要给出主题，而不是整个丢掉。 */
+class VisionLenientParseTest {
+    private val analyzer = VisionAnalyzer(object : cn.companion.pet.net.ChatCompletionClient {
+        override suspend fun complete(request: cn.companion.pet.net.ChatRequest) = cn.companion.pet.net.ChatResult.Success("")
+    }) { null }
+
+    @org.junit.Test
+    fun plainTextAnswerBecomesLowConfidenceSubject() {
+        val s = analyzer.parse("这是一个示例网页，标题是 Example Domain。\n下面有一段说明文字。")!!
+        org.junit.Assert.assertEquals("这是一个示例网页，标题是 Example Domain。", s.subject)
+        org.junit.Assert.assertEquals("low", s.confidence)
+    }
+
+    @org.junit.Test
+    fun jsonStillParsedNormally() {
+        val s = analyzer.parse("""{"subject":"设置页","elements":["开关"],"uncertain":[],"changes":"","next_step":"","confidence":"high"}""")!!
+        org.junit.Assert.assertEquals("设置页", s.subject)
+        org.junit.Assert.assertEquals(listOf("开关"), s.elements)
+    }
+
+    @org.junit.Test
+    fun brokenJsonOrEmptyIsStillNull() {
+        org.junit.Assert.assertNull(analyzer.parse("{\"subject\": \"被截断"))
+        org.junit.Assert.assertNull(analyzer.parse("   "))
+    }
+}

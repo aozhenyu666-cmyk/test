@@ -59,6 +59,8 @@ data class AgentContext(
     val taskId: String? = null,
     /** 前台应用的**包名**（[foreground] 只是给模型看的显示名）。待确认动作按它绑定前台。 */
     val foregroundPackage: String? = null,
+    /** 最近一次合法观察 ID；设备动作/待确认可绑定它，避免过期观察被复用。 */
+    val observationId: String? = null,
 )
 
 data class AgentModelConfig(

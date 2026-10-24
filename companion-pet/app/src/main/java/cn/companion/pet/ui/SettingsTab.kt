@@ -63,6 +63,10 @@ import cn.companion.pet.core.goal.GoalDecision
 import cn.companion.pet.core.goal.GoalStatus
 import cn.companion.pet.core.action.PendingAction
 import cn.companion.pet.core.action.PendingStatus
+import cn.companion.pet.core.diagnostics.DiagnosticInputs
+import cn.companion.pet.core.diagnostics.DiagnosticReport
+import android.content.ClipData
+import android.content.ClipboardManager
 import cn.companion.pet.data.SecretWriteResult
 import cn.companion.pet.bridge.Assistants
 import cn.companion.pet.core.session.AssistantApp
@@ -135,6 +139,7 @@ fun SettingsTab(context: Context) {
         }
         GoalSection()
         PendingActionSection()
+        DiagnosticSection(context)
         Section("搭话用的模型")
         Text("桌宠主动开口、想一想、整理记忆都用这里的模型。点一下填好常用服务商，Key 要换成对应服务商的。", style = MaterialTheme.typography.bodySmall)
         var endpoint by remember { mutableStateOf(s.endpoint) }
@@ -420,19 +425,46 @@ private fun ScreenDiagnosticSection(context: Context) {
     var upload by remember { mutableStateOf(app.settings.visionUploadEnabled) }
     GroupTitle("看一眼（诊断）")
     Text("要让它看某个 App：在那个 App 里点一下桌宠 → “看一眼”。在这里点只能用来检查截图权限：此刻前台是桌宠自己，会被拒绝。截图只在本机显示，不落盘；打开下面的开关才会发给视觉模型。", style = MaterialTheme.typography.bodySmall)
+    // 视觉服务可以和搭话分开：搭话用 DeepSeek、看图用千问。地址/Key 留空就沿用搭话的。
+    var visionEndpoint by remember { mutableStateOf(app.settings.visionEndpoint) }
     var visionModel by remember { mutableStateOf(app.settings.visionModel) }
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(visionModel, { visionModel = it }, Modifier.weight(1f), singleLine = true,
-            label = { Text("视觉模型名（用上面同一个接口地址和 Key）") })
-        OutlinedButton(onClick = {
-            if (visionModel.isNotBlank()) {
-                app.settings.visionModel = visionModel.trim()
-                android.widget.Toast.makeText(context, "已保存视觉模型", android.widget.Toast.LENGTH_SHORT).show()
-            }
-        }) { Text("保存") }
-    }
-    Text("要选能看图的模型，例如千问用 qwen-vl-plus、GPT 用 gpt-4.1-mini。看一眼失败时，开始页“上次调用模型”会写原因。",
+    var visionKey by remember { mutableStateOf("") }
+    Text("看图的模型：搭话模型（比如 DeepSeek）多半不能看图，要另选一个。点一下填好，再填对应服务商的 Key。",
         style = MaterialTheme.typography.bodySmall)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        OutlinedButton(onClick = { visionEndpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1"; visionModel = "qwen-vl-plus" }) { Text("千问看图") }
+        OutlinedButton(onClick = { visionEndpoint = "https://api.openai.com/v1"; visionModel = "gpt-4.1-mini" }) { Text("GPT 看图") }
+    }
+    OutlinedTextField(visionEndpoint, { visionEndpoint = it }, Modifier.fillMaxWidth(), singleLine = true,
+        label = { Text("视觉接口地址（留空 = 和搭话相同）") },
+        isError = visionEndpoint.isNotBlank() && !EndpointPolicy.isValid(visionEndpoint))
+    OutlinedTextField(visionModel, { visionModel = it }, Modifier.fillMaxWidth(), singleLine = true,
+        label = { Text("视觉模型名（必填，例如 qwen-vl-plus）") })
+    OutlinedTextField(visionKey, { visionKey = it }, Modifier.fillMaxWidth(), singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        label = { Text("视觉 Key（留空 = 用搭话的 Key；已保存的不显示）") })
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = {
+            if (visionEndpoint.isNotBlank() && !EndpointPolicy.isValid(visionEndpoint)) {
+                android.widget.Toast.makeText(context, "视觉接口地址要是 https 开头", android.widget.Toast.LENGTH_SHORT).show()
+                return@OutlinedButton
+            }
+            app.settings.visionEndpoint = visionEndpoint.trim()
+            app.settings.visionModel = visionModel.trim()
+            val k = visionKey
+            scope.launch {
+                if (k.isNotBlank()) withContext(Dispatchers.IO) { app.visionSecrets.save(k) }
+                visionKey = ""
+                android.widget.Toast.makeText(context, "已保存看图设置", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }) { Text("保存看图设置") }
+        TextButton(onClick = {
+            scope.launch {
+                withContext(Dispatchers.IO) { app.visionSecrets.clear() }
+                android.widget.Toast.makeText(context, "已清除视觉 Key，改用搭话的 Key", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }) { Text("清除视觉 Key") }
+    }
     Toggle("允许把截图发给视觉模型", "默认关。打开后，仅在点击“看一眼”并成功截图后，按一次全局预算发送给视觉模型；排除/敏感窗口不上传。", upload) {
         upload = it; app.settings.visionUploadEnabled = it
     }
@@ -616,6 +648,17 @@ private fun PendingActionSection() {
             Text(item.kind.name + " · " + label, style = MaterialTheme.typography.bodyMedium)
             Text(item.preview, style = MaterialTheme.typography.bodySmall)
             item.result?.let { Text("回执：" + it.status.name + " · " + it.reason, style = MaterialTheme.typography.bodySmall) }
+            if (item.status == PendingStatus.APPROVED || item.status == PendingStatus.INTERRUPTED) {
+                OutlinedButton(onClick = {
+                    scope.launch {
+                        val reopened = withContext(Dispatchers.IO) {
+                            app.pendingActions.reopen(item.id, System.currentTimeMillis())
+                        }
+                        message = if (reopened == null) "无法重开：状态已变化" else "已重开，需要重新确认"
+                        tick++
+                    }
+                }) { Text("重新确认") }
+            }
             if (item.status == PendingStatus.PENDING) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = {
@@ -642,5 +685,57 @@ private fun PendingActionSection() {
             }
         }
         HorizontalDivider()
+    }
+}
+
+@Composable
+private fun DiagnosticSection(context: Context) {
+    val app = PetApp.instance
+    val scope = rememberCoroutineScope()
+    var report by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    GroupTitle("设备诊断 / 验收")
+    Text("生成脱敏报告；不包含 Key、截图/Base64、聊天原文、输入文本。", style = MaterialTheme.typography.bodySmall)
+    Button(enabled = !busy, onClick = {
+        busy = true
+        scope.launch {
+            val text = withContext(Dispatchers.IO) {
+                val info = context.packageManager.getPackageInfo(context.packageName, 0)
+                val obs = app.screenObservations.latest()
+                val pkg = cn.companion.pet.a11y.PerceptionHub.trail.foreground
+                val capability = cn.companion.pet.core.device.ShizukuCapabilityRunner(
+                    AndroidShizukuProbe(context), AndroidShizukuCommandPort()).readSdkDiagnostic()
+                val history = app.actions.history(1).firstOrNull()
+                DiagnosticReport.render(DiagnosticInputs(
+                    versionName = info.versionName ?: "?",
+                    versionCode = if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong(),
+                    now = System.currentTimeMillis(),
+                    accessibilityConnected = cn.companion.pet.a11y.PerceptionHub.service != null,
+                    screenshotStatus = obs?.status?.name ?: "NOT_CAPTURED",
+                    screenshotReason = obs?.summary.orEmpty().take(80),
+                    visionConfigured = app.visionConfig() != null,
+                    visionUploadEnabled = app.settings.visionUploadEnabled,
+                    budgetRemaining = app.budget.remaining(app.settings.dailyLimit, java.time.LocalDate.now().toString()),
+                    foregroundPackage = pkg,
+                    foregroundAllowed = pkg != null && pkg in app.settings.deviceAllowedApps,
+                    shizukuStatus = AndroidShizukuProbe(context).diagnostic().status.name,
+                    capabilityStatus = capability.status.name,
+                    capabilityReason = capability.reason.take(80),
+                    autonomyEnabled = app.settings.agentAutonomy,
+                    goalStatus = app.goalStore.status.name,
+                    pendingCount = app.pendingActions.list(System.currentTimeMillis()).count { it.status == PendingStatus.PENDING },
+                    lastAction = history?.let { it.kind.name + " " + (it.status?.name ?: "已准备") } ?: "无",
+                ))
+            }
+            report = text
+            busy = false
+        }
+    }) { Text("生成脱敏诊断") }
+    report?.let { text ->
+        Text(text, style = MaterialTheme.typography.bodySmall)
+        TextButton(onClick = {
+            val cm = context.getSystemService(ClipboardManager::class.java)
+            cm?.setPrimaryClip(ClipData.newPlainText("Companion Pet diagnostic", text))
+        }) { Text("复制报告") }
     }
 }

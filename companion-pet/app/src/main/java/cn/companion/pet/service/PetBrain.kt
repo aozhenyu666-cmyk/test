@@ -432,6 +432,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                         userActive = active,
                         lastActionAt = app.agentTrace.lastAt(),
                         observation = app.screenObservations.latestValid(now)?.summary,
+                        observationId = app.screenObservations.latestValid(now)?.id,
                     )
                 }
             }
@@ -504,10 +505,22 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             if (!settings.visionUploadEnabled) {
                 lookNotice("截到了，但还没允许把截图发给视觉模型（设置 → 看一眼）。"); return@launch
             }
+            if (withContext(Dispatchers.IO) { app.visionConfig() } == null) {
+                lookNotice("截到了，但还没选能看图的模型：设置 → 看一眼 → 点“千问看图”或填一个视觉模型名。"); return@launch
+            }
             if (!app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) { lookNotice("今天的调用次数用完了。"); return@launch }
             stats.add(Stats.Kind.API_CALLS)
+            val askedAt = now()
             val summary = withContext(Dispatchers.IO) { app.visionAnalyzer.analyze(jpeg) }
-            if (summary == null) { lookNotice("看了，但视觉模型没给出能用的结果。"); return@launch }
+            if (summary == null) {
+                // 说清楚是哪一步：请求失败（Key/模型名/网络）还是模型回了但看不懂。
+                val call = app.callStatus.last()?.takeIf { it.at >= askedAt }
+                lookNotice(
+                    if (call != null && !call.ok) "截图成功，但视觉模型调用失败：" + call.message
+                    else "截图成功，模型也回了，但内容没法解析。换一个视觉模型试试（比如 qwen-vl-plus）。",
+                )
+                return@launch
+            }
             val at = now()
             val text = (summary.subject + (if (summary.elements.isEmpty()) "" else "；" + summary.elements.take(5).joinToString("、"))).take(300)
             app.screenObservations.publish(cn.companion.pet.core.vision.ScreenObservation(

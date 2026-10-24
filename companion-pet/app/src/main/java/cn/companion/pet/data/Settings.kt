@@ -59,7 +59,10 @@ class Settings(context: Context) {
     /** A1 自主决策：默认关；只自动执行只读工具，写入/打开/朗读只提议不执行。 */
     var agentAutonomy by bool("agent_autonomy", false)
     /** 视觉模型单独配置；默认 deepseek-flash，截图上传必须显式打开。 */
-    var visionModel by str("vision_model", "deepseek-flash")
+    /** 能看图的模型名；空 = 还没配置，“看一眼”不会发请求。 */
+    var visionModel by str("vision_model_v2", "")
+    /** 视觉服务的接口地址；空 = 和搭话用同一个地址。 */
+    var visionEndpoint by str("vision_endpoint", "")
     var visionUploadEnabled by bool("vision_upload", false)
     /** A3：允许 Agent 操作的应用名单；空名单时全部拒绝。 */
     var deviceAllowedApps by set("device_apps")

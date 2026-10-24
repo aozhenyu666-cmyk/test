@@ -156,6 +156,7 @@ class AgentLoop(
                     preview = AgentReport.needsConfirmation(decision) + " | " + decision.args.entries.joinToString(", ") { it.key + "=" + it.value.take(60) },
                     // 绑定包名，不是显示名：批准时拿当前前台包名比对（审计 P0-1）。
                     packageName = context.foregroundPackage.orEmpty(),
+                    observationId = context.observationId.orEmpty(),
                     sourceIds = decision.sourceIds,
                     now = context.now,
                     taskId = context.taskId.orEmpty(),

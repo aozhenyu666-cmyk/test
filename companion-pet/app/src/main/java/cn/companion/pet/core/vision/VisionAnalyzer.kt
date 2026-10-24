@@ -44,18 +44,27 @@ class VisionAnalyzer(
                 ChatMessage(ChatRole.SYSTEM, SYSTEM),
                 ChatMessage(ChatRole.USER, "请分析这张截图。$prompt", listOf(dataUrl)),
             ),
-            maxTokens = 320,
+            // 中文 JSON（主题 + 元素列表 + 无法确认的部分）320 token 常被截断，截断后就“没有可用结果”。
+            maxTokens = 600,
             timeoutMillis = 20_000,
         )
         val content = (client.complete(request) as? ChatResult.Success)?.content ?: return null
         return parse(content)
     }
 
-    private fun parse(content: String): VisionSummary? {
+    internal fun parse(content: String): VisionSummary? {
         val start = content.indexOf('{')
         val end = content.lastIndexOf('}')
-        if (start < 0 || end <= start) return null
-        val root = runCatching { Json.parseToJsonElement(content.substring(start, end + 1)).jsonObject }.getOrNull() ?: return null
+        val root = if (start >= 0 && end > start) {
+            runCatching { Json.parseToJsonElement(content.substring(start, end + 1)).jsonObject }.getOrNull()
+        } else null
+        // 有些视觉模型不按 JSON 回，而是直接一段话：取第一句当主题，标成低置信，而不是整个丢掉。
+        if (root == null) {
+            val plain = content.replace("```json", "").replace("```", "").trim()
+            if (plain.isBlank() || plain.startsWith("{")) return null
+            val first = plain.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty()
+            return VisionSummary(first.take(80), emptyList(), emptyList(), "", "", "low", content.take(1200))
+        }
         return VisionSummary(
             subject = root["subject"]?.jsonPrimitive?.contentOrNull.orEmpty(),
             elements = (root["elements"] as? JsonArray)?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty(),

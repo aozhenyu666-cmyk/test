@@ -145,9 +145,17 @@ class PetApp : Application() {
         return AgentModelConfig(settings.endpoint, settings.model, key)
     }
 
+    /** 视觉服务单独的 Key（可空，空时用搭话的 Key）。读写碰 Keystore，放 IO 线程。 */
+    val visionSecrets by lazy { SecretStore(this, "vision_secret_store", "companion-pet-vision-token") }
+
+    /**
+     * 视觉配置：模型名必须由用户填（DeepSeek 搭话模型多半不能看图）；地址、Key 留空就沿用搭话的。
+     * 这样可以搭话用 DeepSeek、看图用千问。
+     */
     fun visionConfig(): VisionModelConfig? {
-        val key = apiKey() ?: return null
-        return VisionModelConfig(settings.endpoint, settings.visionModel, key)
+        val model = settings.visionModel.trim().ifBlank { return null }
+        val key = (visionSecrets.read() as? SecretReadResult.Available)?.value ?: apiKey() ?: return null
+        return VisionModelConfig(settings.visionEndpoint.ifBlank { settings.endpoint }, model, key)
     }
 
     /** 记忆文件的读写都经过这把锁：服务、每晚整理、设置页编辑互斥。 */

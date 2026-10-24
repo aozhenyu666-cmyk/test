@@ -112,6 +112,23 @@ class PendingConfirmationTest {
     }
 
     @Test
+    fun reconfirmingAnInterruptedItemRunsItOnceWithAFreshExecutionId() {
+        val store = PendingActionStore(tmp.root)
+        val adapter = Counting()
+        val runner = ActionRunner(mapOf(ActionKind.SAVE_NOTE to adapter), journal = FileActionJournal(File(tmp.root, "journal")))
+        val item = store.create(ActionKind.SAVE_NOTE, mapOf("text" to "a"), "p", "com.test", now = 1_000)!!
+        store.approve(item.id, 1_100, "com.test", item.nonce)
+        store.recoverInterrupted(2_000) { null } // 进程在执行前死掉
+        assertEquals(PendingStatus.INTERRUPTED, store.find(item.id)!!.status)
+        val reopened = store.reopen(item.id, 3_000)!!
+        assertEquals(1, reopened.attempt)
+        val done = PendingExecutor(store, runner).approveAndRun(item.id, 3_100, "com.test", reopened.nonce)
+        assertEquals(ActionStatus.SUCCESS, (done as PendingExecutor.Outcome.Executed).result.status)
+        assertEquals("pending-" + item.id + "-r1", done.result.actionId)
+        assertEquals(1, adapter.calls.get())
+    }
+
+    @Test
     fun corruptFileIsBackedUpNotOverwritten() {
         val dir = File(tmp.root, "actions").apply { mkdirs() }
         File(dir, "pending.json").writeText("[{\"id\":\"old\",broken")
