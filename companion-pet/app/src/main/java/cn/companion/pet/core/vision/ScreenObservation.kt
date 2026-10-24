@@ -36,6 +36,8 @@ data class ScreenCaptureAttempt(
     val width: Int = 0,
     val height: Int = 0,
     val error: String = "",
+    /** 实际被截的窗口所属应用；观察结果按它记，不用感知服务记录的前台。 */
+    val packageName: String = "",
 )
 
 object ScreenCapturePolicy {

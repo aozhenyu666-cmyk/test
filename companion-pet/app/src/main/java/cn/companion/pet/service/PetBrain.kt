@@ -475,6 +475,57 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
     }
 
+    // ---------- 看一眼：在用户正在看的 App 里截图 ----------
+
+    /**
+     * 从悬浮气泡触发：悬浮窗不是活动窗口，所以截到的是用户正在看的 App（审计 P1-3）。
+     * 截图不落盘；只有用户打开了上传开关、预算够，才发给视觉模型，摘要作为 60 秒有效的观察。
+     */
+    private fun lookOnce() {
+        endConversation()
+        if (android.os.Build.VERSION.SDK_INT < 30) { lookNotice("这台手机的系统版本太低，不能截图。"); return }
+        overlay.setMood(Mood.THINKING)
+        scope.launch {
+            delay(350) // 先让气泡收起，别把它拍进去
+            val attempt = withContext(Dispatchers.IO) {
+                val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+                try {
+                    cn.companion.pet.a11y.ScreenCaptureGateway.captureBlocking(PerceptionHub.service, executor, 5_000)
+                } finally {
+                    executor.shutdown()
+                }
+            }
+            val jpeg = attempt.jpeg
+            if (attempt.status != cn.companion.pet.core.vision.CapturedStatus.OK || jpeg == null) {
+                lookNotice("没截到：" + attempt.error.ifBlank { attempt.status.name }); return@launch
+            }
+            if (attempt.packageName in settings.excludeApps) { lookNotice("这个 App 在排除名单里，我不看。"); return@launch }
+            if (!settings.visionUploadEnabled) {
+                lookNotice("截到了，但还没允许把截图发给视觉模型（设置 → 看一眼）。"); return@launch
+            }
+            if (!app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) { lookNotice("今天的调用次数用完了。"); return@launch }
+            stats.add(Stats.Kind.API_CALLS)
+            val summary = withContext(Dispatchers.IO) { app.visionAnalyzer.analyze(jpeg) }
+            if (summary == null) { lookNotice("看了，但视觉模型没给出能用的结果。"); return@launch }
+            val at = now()
+            val text = (summary.subject + (if (summary.elements.isEmpty()) "" else "；" + summary.elements.take(5).joinToString("、"))).take(300)
+            app.screenObservations.publish(cn.companion.pet.core.vision.ScreenObservation(
+                id = UUID.randomUUID().toString(), capturedAt = at, packageName = attempt.packageName,
+                source = cn.companion.pet.core.vision.ObservationSource.VISION, screenshotAvailable = true,
+                nodesAvailable = false, visionAvailable = true, status = cn.companion.pet.core.vision.CapturedStatus.OK,
+                summary = text, expiresAt = at + 60_000,
+            ))
+            lookNotice("我看了一眼：" + summary.subject.ifBlank { "看不太清" })
+        }
+    }
+
+    private fun lookNotice(text: String) {
+        overlay.setMood(Mood.IDLE)
+        overlay.showBubble(BubbleSpec(text, textOnly = true)) {
+            handler.postDelayed({ if (convo == null && think == null && pendingBubbleId == null) overlay.hideBubble() }, 6000)
+        }
+    }
+
     // ---------- 待确认动作：在当前 App 里直接确认 ----------
 
     private var pendingBubbleId: String? = null
@@ -570,7 +621,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         overlay.setMood(Mood.CURIOUS)
         overlay.showBubble(
             entrySpec(greeting, decision.scene, false).copy(
-                extra = listOf(BubbleAction("想一想") { openThinkMenu() }, BubbleAction("记个念头") { startNote() }),
+                extra = listOf(
+                    BubbleAction("想一想") { openThinkMenu() },
+                    BubbleAction("记个念头") { startNote() },
+                    BubbleAction("看一眼") { lookOnce() },
+                ),
             ),
         )
     }

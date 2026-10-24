@@ -26,11 +26,20 @@ object ScreenCaptureGateway {
         val svc = service ?: return ScreenCaptureAttempt(CapturedStatus.NOT_CONNECTED, error = "无障碍服务未连接")
         val root = runCatching { svc.rootInActiveWindow }.getOrNull()
             ?: return ScreenCaptureAttempt(CapturedStatus.NO_ACTIVE_WINDOW, error = "没有活动窗口")
+        val windowPackage = root.packageName?.toString().orEmpty()
+        // 活动窗口是桌宠自己（设置页/能力面板）时不截：那张图不是用户在看的 App（审计 P1-3）。
+        if (windowPackage == svc.packageName) {
+            return ScreenCaptureAttempt(CapturedStatus.NO_ACTIVE_WINDOW, error = "当前是桌宠自己的界面；请在要看的 App 里点桌宠 → 看一眼",
+                packageName = windowPackage)
+        }
         val latch = CountDownLatch(1)
+        val gaveUp = java.util.concurrent.atomic.AtomicBoolean(false)
         var success: AccessibilityService.ScreenshotResult? = null
         var failure = 0
         val callback = object : AccessibilityService.TakeScreenshotCallback {
             override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
+                // 超时之后才到的截图没人接收，要在这里释放，否则 HardwareBuffer 泄漏。
+                if (gaveUp.get()) { runCatching { result.hardwareBuffer.close() }; return }
                 success = result
                 latch.countDown()
             }
@@ -50,6 +59,9 @@ object ScreenCaptureGateway {
             return ScreenCaptureAttempt(CapturedStatus.ERROR, error = t.javaClass.simpleName)
         }
         if (!latch.await(timeoutMillis, TimeUnit.MILLISECONDS)) {
+            gaveUp.set(true)
+            // 标记和回调之间的竞态：回调若恰好在这之前写入了结果，也一并释放。
+            success?.let { runCatching { it.hardwareBuffer.close() } }
             return ScreenCaptureAttempt(CapturedStatus.TIMEOUT, error = "截图超时")
         }
         val buffer = success?.hardwareBuffer ?: return ScreenCaptureAttempt(mapFailure(failure), error = "截图失败码 " + failure)
@@ -65,7 +77,7 @@ object ScreenCaptureGateway {
                 ?: return ScreenCaptureAttempt(CapturedStatus.ERROR, error = "截图过大")
             if (scaled !== bitmap) scaled.recycle()
             bitmap.recycle()
-            ScreenCaptureAttempt(CapturedStatus.OK, jpeg, width, height)
+            ScreenCaptureAttempt(CapturedStatus.OK, jpeg, width, height, packageName = windowPackage)
         } catch (t: Throwable) {
             ScreenCaptureAttempt(CapturedStatus.ERROR, error = t.javaClass.simpleName)
         } finally {

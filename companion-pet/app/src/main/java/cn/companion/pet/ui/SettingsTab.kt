@@ -415,7 +415,7 @@ private fun ScreenDiagnosticSection(context: Context) {
     var visionSummary by remember { mutableStateOf<String?>(null) }
     var upload by remember { mutableStateOf(app.settings.visionUploadEnabled) }
     GroupTitle("看一眼（诊断）")
-    Text("只在点击时向系统请求一张原生截图，默认只在本机显示；不上传、不落盘。", style = MaterialTheme.typography.bodySmall)
+    Text("要让它看某个 App：在那个 App 里点一下桌宠 → “看一眼”。在这里点只能用来检查截图权限：此刻前台是桌宠自己，会被拒绝。截图只在本机显示，不落盘；打开下面的开关才会发给视觉模型。", style = MaterialTheme.typography.bodySmall)
     Toggle("允许把截图发给视觉模型", "默认关。打开后，仅在点击“看一眼”并成功截图后，按一次全局预算发送给视觉模型；排除/敏感窗口不上传。", upload) {
         upload = it; app.settings.visionUploadEnabled = it
     }
@@ -456,7 +456,7 @@ private fun ScreenDiagnosticSection(context: Context) {
                 }
                 app.screenObservations.publish(ScreenObservation(
                     id = java.util.UUID.randomUUID().toString(), capturedAt = System.currentTimeMillis(),
-                    packageName = PerceptionHub.trail.foreground ?: "unknown", source = ObservationSource.SCREENSHOT,
+                    packageName = attempt.packageName.ifBlank { "unknown" }, source = ObservationSource.SCREENSHOT,
                     screenshotAvailable = true, nodesAvailable = false, visionAvailable = upload && visionText.isNotBlank(),
                     status = CapturedStatus.OK, summary = visionText.ifBlank { "用户点击诊断截图" },
                     expiresAt = System.currentTimeMillis() + 60_000,

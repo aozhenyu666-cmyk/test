@@ -162,6 +162,8 @@ object AgentPolicy {
 object AgentReport {
     fun text(decision: AgentDecision.ToolCall, result: ActionResult): String {
         val ok = result.status == ActionStatus.SUCCESS
+        // 已经做了但核实不了，不能说成“没成功”：用户可能因此再点一次（审计 P2-5）。
+        if (!ok && result.data["unverified"] == "true") return "我已经" + label(decision.kind) + "了，但还没法确认结果，你看一眼屏幕：" + result.reason
         if (!ok) return "我试了" + label(decision.kind) + "，但没成功：" + result.reason
         val observed = result.data["text"]?.replace("\n", " · ")?.take(160)
         return when (decision.kind) {
@@ -181,7 +183,12 @@ object AgentReport {
         }
     }
 
-    fun lead(result: ActionResult): String = when (result.status) {
+    fun lead(result: ActionResult): String = when {
+        result.data["unverified"] == "true" -> "（回执：已执行，未核实）"
+        else -> leadFor(result.status)
+    }
+
+    private fun leadFor(status: ActionStatus): String = when (status) {
         ActionStatus.SUCCESS -> "（回执：成功）"
         ActionStatus.UNAVAILABLE -> "（回执：暂不可用）"
         ActionStatus.CANCELLED -> "（回执：已取消；已发生的操作不回滚）"

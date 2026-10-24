@@ -39,7 +39,13 @@ class AndroidDeviceController(
         }.getOrDefault(false),
         accessibilityConnected = PerceptionHub.service != null,
         shizuku = shizuku.diagnostic().status,
+        activeWindowPackage = activePackage(),
+        ownPackage = context.packageName,
     )
+
+    /** 真正接收操作的窗口。感知记录会忽略桌宠自己，这里不会。 */
+    private fun activePackage(): String? =
+        runCatching { PerceptionHub.service?.rootInActiveWindow?.packageName?.toString() }.getOrNull()
 
     override fun observe(now: Long): DeviceResult {
         val service = PerceptionHub.service ?: return DeviceResult(DeviceStatus.UNAVAILABLE, "无障碍服务未连接")
@@ -62,6 +68,23 @@ class AndroidDeviceController(
         val obs = latest
         val policy = DevicePolicy.check(command, snap, obs, settings.deviceAllowedApps, now)
         if (!policy.allowed) return DeviceResult(DeviceStatus.UNAVAILABLE, policy.reason, obs?.id)
+        val raw = perform(command, snap, obs, now)
+        return if (raw.status == DeviceStatus.UNVERIFIED) verifyAfter(command, obs, raw) else raw
+    }
+
+    /**
+     * 动作后等界面稳定，再观察一次核对（审计 P2-5）。打开应用/输入文字能给出 SUCCESS 或 FAILED；
+     * 点击/滚动/返回只附“页面是否变化”，仍是 UNVERIFIED。只在工作线程调用。
+     */
+    private fun verifyAfter(command: DeviceCommand, before: DeviceObservation?, raw: DeviceResult): DeviceResult {
+        runCatching { Thread.sleep(VERIFY_DELAY_MILLIS) }
+        val again = observe(System.currentTimeMillis())
+        val after = if (again.status == DeviceStatus.SUCCESS) latest else null
+        val verdict = cn.companion.pet.core.device.DeviceVerifier.verify(command, before, after, activePackage())
+        return DeviceResult(verdict.status, verdict.reason, after?.id ?: raw.observationId, raw.actionId, raw.evidence + verdict.evidence)
+    }
+
+    private fun perform(command: DeviceCommand, snap: DeviceSnapshot, obs: DeviceObservation?, now: Long): DeviceResult {
         return when (command) {
             DeviceCommand.GetState -> DeviceResult(DeviceStatus.SUCCESS, "状态读取成功",
                 evidence = mapOf("foreground" to (snap.foregroundPackage ?: "?"), "unlocked" to snap.unlocked.toString(),
@@ -168,5 +191,9 @@ class AndroidDeviceController(
         return NodeRef(id, observationId, node.packageName?.toString() ?: "", text, rid,
             node.className?.toString() ?: "", node.isClickable, node.isEditable, node.isScrollable,
             rect.left, rect.top, rect.right, rect.bottom)
+    }
+
+    private companion object {
+        const val VERIFY_DELAY_MILLIS = 700L
     }
 }
