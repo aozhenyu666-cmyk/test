@@ -12,11 +12,14 @@ import cn.companion.pet.core.memory.NightlyStore
 import cn.companion.pet.core.probe.AtomicBudget
 import cn.companion.pet.core.think.ThoughtNotes
 import cn.companion.pet.data.BudgetPrefs
+import cn.companion.pet.data.CallStatusPrefs
 import cn.companion.pet.data.SecretReadResult
 import cn.companion.pet.data.SecretStore
 import cn.companion.pet.data.Settings
 import cn.companion.pet.data.Stats
+import cn.companion.pet.net.ChatCompletionClient
 import cn.companion.pet.net.DeepSeekClient
+import cn.companion.pet.net.RecordingChatClient
 import cn.companion.pet.service.AndroidActionAdapters
 import cn.companion.pet.work.NightlyWorker
 import java.io.File
@@ -56,7 +59,9 @@ class PetApp : Application() {
         private set
     lateinit var noteActions: cn.companion.pet.core.action.DurableNoteAdapter
         private set
-    val client by lazy { DeepSeekClient() }
+    /** 最近一次调用模型的结果，“开始”页据此告诉用户为什么它不开口。 */
+    val callStatus by lazy { CallStatusPrefs(this) }
+    val client: ChatCompletionClient by lazy { RecordingChatClient(DeepSeekClient(), callStatus) }
     private val speechHolder = lazy { cn.companion.pet.service.Speech(this) }
     val speech: cn.companion.pet.service.Speech get() = speechHolder.value
     fun stopSpeech() {

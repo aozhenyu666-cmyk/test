@@ -42,14 +42,18 @@ class CompanionContextAssembler(
         userQuery: String? = null,
     ): List<ChatMessage> {
         materials?.purgeExpired(now)
-        val recent = recentLines(limits, tombstones, now)
+        val recentEvents = recentEvents(limits, tombstones, now)
+        val recent = recentEvents.map { it.text to it.text }
         val query = userQuery?.takeIf { it.isNotBlank() } ?: buildQuery(moment, now, tombstones)
+        // 已经在“最近交流”里的事件及其来源，召回不再重复。
+        val recentIds = recentEvents.flatMap { it.sourceIds + it.id }.toSet()
         val recalled = recall.recall(
             query = query,
             now = now,
             tombstones = tombstones,
             excludeTexts = recent.map { it.second }.toSet(),
             limits = RecallLimits(limits.recallMaxItems, limits.recallMaxChars),
+            excludeIds = recentIds,
         )
 
         val system = ChatMessage(ChatRole.SYSTEM, persona.trim() + "\n\n" + ProbePrompt.FORMAT_RULES)
@@ -110,18 +114,17 @@ class CompanionContextAssembler(
     }
 
     /** 最近交流用已经格式化的一行一条，最多 12 条/2400 码点（从旧到新裁剪）。 */
-    private fun recentLines(limits: ContextLimits, tombstones: Set<String>, now: Long): List<Pair<String, String>> {
+    private fun recentEvents(limits: ContextLimits, tombstones: Set<String>, now: Long): List<CompanionEvent> {
         val snapshot = events.all()
         val visibility = EventVisibility(snapshot, tombstones, now)
         val all = snapshot
             .filter { it.kind == EventKind.EXCHANGE || it.kind == EventKind.LEGACY_LINE }
             .filter { visibility.allows(it) }
             .takeLast(limits.recentMaxItems)
-            .map { it.text to it.text }
             .toMutableList()
-        var used = all.sumOf { UnicodeText.count(it.first) + 1 }
+        var used = all.sumOf { UnicodeText.count(it.text) + 1 }
         while (all.isNotEmpty() && used > limits.recentMaxChars) {
-            used -= UnicodeText.count(all.first().first) + 1
+            used -= UnicodeText.count(all.first().text) + 1
             all.removeAt(0)
         }
         return all

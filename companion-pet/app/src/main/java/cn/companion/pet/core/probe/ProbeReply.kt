@@ -27,12 +27,13 @@ object ProbeReplyParser {
      * 允许外面包一层 ```json 代码块，这是模型常见的不听话。
      */
     fun parse(content: String): ProbeReply? {
-        val json = extractObject(content) ?: return null
-        val obj = try {
-            Json.parseToJsonElement(json).jsonObject
-        } catch (e: Exception) {
-            return null
-        }
+        val obj = extractObject(content)?.let { json ->
+            try {
+                Json.parseToJsonElement(json).jsonObject
+            } catch (e: Exception) {
+                null
+            }
+        } ?: return salvage(content)
         val skip = obj.bool("skip") ?: false
         val hook = obj.str("hook_text")?.trim().orEmpty()
         if (!skip && hook.isEmpty()) return null
@@ -41,6 +42,30 @@ object ProbeReplyParser {
             contextSummary = UnicodeText.truncate(obj.str("context_summary")?.trim().orEmpty(), MAX_SUMMARY_CHARS),
             mood = obj.str("mood")?.trim()?.uppercase()?.let { m -> Mood.entries.firstOrNull { it.name == m } } ?: Mood.IDLE,
             suggestGemini = obj.bool("suggest_gemini") ?: false,
+            skip = skip,
+        )
+    }
+
+    /**
+     * 输出被 max_tokens 截断时 JSON 没有收尾，但前面的字段往往已经完整。
+     * 只接受“引号已经闭合”的 hook_text；半句话宁可不说。
+     */
+    private fun salvage(content: String): ProbeReply? {
+        val start = content.indexOf('{')
+        if (start < 0) return null
+        val body = content.substring(start)
+        fun field(key: String): String? = Regex("\"" + key + "\"\\s*:\\s*(\"(?:[^\"\\\\]|\\\\.)*\")")
+            .find(body)?.groupValues?.get(1)
+            ?.let { runCatching { (Json.parseToJsonElement(it) as JsonPrimitive).content }.getOrNull() }
+        fun flag(key: String): Boolean? = Regex("\"" + key + "\"\\s*:\\s*(true|false)").find(body)?.groupValues?.get(1)?.toBoolean()
+        val skip = flag("skip") ?: false
+        val hook = field("hook_text")?.trim().orEmpty()
+        if (hook.isEmpty() && !skip) return null
+        return ProbeReply(
+            hookText = UnicodeText.truncate(hook, MAX_HOOK_CHARS),
+            contextSummary = UnicodeText.truncate(field("context_summary")?.trim().orEmpty(), MAX_SUMMARY_CHARS),
+            mood = field("mood")?.trim()?.uppercase()?.let { m -> Mood.entries.firstOrNull { it.name == m } } ?: Mood.IDLE,
+            suggestGemini = flag("suggest_gemini") ?: false,
             skip = skip,
         )
     }

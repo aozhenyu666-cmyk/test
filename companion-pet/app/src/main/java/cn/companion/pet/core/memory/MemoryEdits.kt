@@ -45,6 +45,16 @@ class MemoryEdits(
         true
     }
 
+    /**
+     * 用户刚记下又点了“撤销”。追加一条指向原事件的 FORGET：念头本身、派生的交流行、
+     * 由它入队的话题和夜间整理都会通过来源失效看不到它。
+     * 不写删除清单——以后他重新说同样的话，是新的授权，仍然可以记。
+     */
+    fun retractNote(noteEventId: String) = synchronized(memory.lock) {
+        events.append(EventKind.FORGET, "（撤销的念头）", source = "user", sourceIds = listOf(noteEventId))
+        Unit
+    }
+
     fun confirmProfileLine(line: String) = synchronized(memory.lock) {
         val matching = facts.live().firstOrNull { ProfileRules.normalize(it.text) == ProfileRules.normalize(line) }
         if (matching != null) confirm(matching.id) else {

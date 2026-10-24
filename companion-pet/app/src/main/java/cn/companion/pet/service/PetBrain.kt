@@ -52,6 +52,8 @@ import cn.companion.pet.core.session.SessionMode
 import cn.companion.pet.core.session.SessionSummary
 import cn.companion.pet.core.text.ScreenTextCleaner
 import cn.companion.pet.data.Stats
+import cn.companion.pet.net.CallDiagnosis
+import cn.companion.pet.net.CallStatus
 import cn.companion.pet.net.ChatMessage
 import cn.companion.pet.net.ChatRequest
 import cn.companion.pet.net.ChatResult
@@ -316,11 +318,14 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 return@launch
             }
             stats.add(Stats.Kind.API_CALLS)
-            val result = app.client.complete(ChatRequest(settings.endpoint, settings.model, key, opening))
+            val result = app.client.complete(
+                ChatRequest(settings.endpoint, settings.model, key, opening, maxTokens = ProbePrompt.REPLY_MAX_TOKENS, timeoutMillis = ProbePrompt.TIMEOUT_MILLIS),
+            )
             overlay.setMood(Mood.IDLE)
             val unchanged = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { inputVersion == memoryVersion() } }
             if (!unchanged) { scheduler.retrySoon(now()); return@launch }
             val reply = (result as? ChatResult.Success)?.let { ProbeReplyParser.parse(it.content) }
+            if (result is ChatResult.Success && reply == null) noteBadFormat()
             when {
                 reply == null -> scheduler.onSpoke(now()) // 失败或解析失败：静默，按正常节奏下次再来
                 reply.skip || ContentGuard.violates(reply.hookText) -> scheduler.retrySoon(now())
@@ -483,9 +488,12 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                         ProbePrompt.reply(buildOpeningSync(c.decision, said), hook, said) to memoryVersion()
                     }
                 }
-                val r = app.client.complete(ChatRequest(settings.endpoint, settings.model, key!!, messages))
+                val r = app.client.complete(
+                    ChatRequest(settings.endpoint, settings.model, key!!, messages, maxTokens = ProbePrompt.REPLY_MAX_TOKENS, timeoutMillis = ProbePrompt.TIMEOUT_MILLIS),
+                )
                 val unchanged = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { inputVersion == memoryVersion() } }
                 val parsed = if (unchanged) (r as? ChatResult.Success)?.let { ProbeReplyParser.parse(it.content) } else null
+                if (unchanged && r is ChatResult.Success && parsed == null) noteBadFormat()
                 if (parsed != null && !parsed.skip && !ContentGuard.violates(parsed.hookText)) {
                     text = parsed.hookText
                     mood = parsed.mood
@@ -1036,10 +1044,12 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         noteDraft = null
         val today = LocalDate.now()
         val t = ThoughtNotes.Thought(timeText(), d.app, d.quote, said)
-        scope.launch(Dispatchers.IO) {
+        var noteEventId: String? = null
+        val saving = scope.launch(Dispatchers.IO) {
             synchronized(app.memoryLock) {
                 app.thoughts.add(today, t)
                 val noteEvent = app.events.append(EventKind.NOTE, said, source = "note")
+                noteEventId = noteEvent.id
                 app.events.append(EventKind.EXCHANGE, "- " + t.time + " | 念头 | " + said.replace('\n', ' '), source = "note", sourceIds = listOf(noteEvent.id))
                 stateStore.apply(StateEvent.USER_NOTE)
                 topics.enqueue(said, listOf(noteEvent.id))
@@ -1052,7 +1062,14 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 "记下了：$said", instant = true,
                 actions = listOf(
                     BubbleAction("撤销") {
-                        scope.launch(Dispatchers.IO) { synchronized(app.memoryLock) { app.thoughts.removeLast(today) } }
+                        scope.launch(Dispatchers.IO) {
+                            saving.join() // 先等保存写完，否则撤销会落在保存之前
+                            synchronized(app.memoryLock) {
+                                app.thoughts.removeLast(today)
+                                // 只删笔记文件不够：事件、交流行和话题还在，会被召回或主动提起。
+                                noteEventId?.let { app.memoryEdits.retractNote(it) }
+                            }
+                        }
                         overlay.hideBubble()
                     },
                     BubbleAction("好") { overlay.hideBubble() },
@@ -1119,6 +1136,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     )
 
     private fun apiKey(): String? = app.apiKey()
+
+    /** 网络是通的，但模型没按格式回：也要让“开始”页看得到，不然只是莫名其妙不说话。 */
+    private fun noteBadFormat() {
+        app.callStatus.record(CallStatus(false, CallDiagnosis.BAD_FORMAT, now()))
+    }
 
     private fun trajectory(now: Long) = PerceptionHub.trail.summary(now, ::label)
 

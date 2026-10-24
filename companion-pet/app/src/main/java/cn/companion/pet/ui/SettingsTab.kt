@@ -43,6 +43,12 @@ import cn.companion.pet.PetApp
 import cn.companion.pet.data.SecretWriteResult
 import cn.companion.pet.bridge.Assistants
 import cn.companion.pet.core.session.AssistantApp
+import cn.companion.pet.data.Stats
+import cn.companion.pet.net.CallDiagnosis
+import cn.companion.pet.net.ChatMessage
+import cn.companion.pet.net.ChatRequest
+import cn.companion.pet.net.ChatResult
+import cn.companion.pet.net.ChatRole
 import cn.companion.pet.net.EndpointPolicy
 import cn.companion.pet.net.ModelProvider
 import cn.companion.pet.ui.components.PageHeader
@@ -91,6 +97,7 @@ fun SettingsTab(context: Context) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
                 if (!EndpointPolicy.isValid(endpoint)) { toast("接口地址要是 https 开头"); return@Button }
+                if (endpoint.trim() != s.endpoint || model.trim() != s.model || key.isNotBlank()) app.callStatus.clear()
                 s.endpoint = endpoint.trim(); s.model = model.trim()
                 s.dailyLimit = limit.toIntOrNull()?.coerceIn(1, 2000) ?: s.dailyLimit
                 if (key.isNotBlank()) {
@@ -104,8 +111,25 @@ fun SettingsTab(context: Context) {
                 } else toast("已保存")
             }) { Text("保存") }
             OutlinedButton(onClick = {
-                scope.launch { withContext(Dispatchers.IO) { app.secrets.clear() }; app.invalidateKey(); toast("已清除 Key") }
+                scope.launch { withContext(Dispatchers.IO) { app.secrets.clear() }; app.invalidateKey(); app.callStatus.clear(); toast("已清除 Key") }
             }) { Text("清除 Key") }
+            // 用已保存的地址/模型/Key 真发一次很短的请求，失败时直接告诉原因。
+            OutlinedButton(onClick = {
+                val savedKey = app.apiKey()
+                if (savedKey == null) { toast("先填 Key 并点保存"); return@OutlinedButton }
+                toast("正在测试 ${s.model}…")
+                scope.launch {
+                    val today = java.time.LocalDate.now().toString()
+                    val reserved = withContext(Dispatchers.IO) { app.budget.reserve(s.dailyLimit, today) }
+                    if (!reserved) { toast("今天的调用额度用完了，明天再测"); return@launch }
+                    app.stats.add(Stats.Kind.API_CALLS)
+                    val result = app.client.complete(
+                        ChatRequest(s.endpoint, s.model, savedKey, listOf(ChatMessage(ChatRole.USER, "只回复两个字：在呢")), maxTokens = 64, timeoutMillis = 20_000L),
+                    )
+                    val text = if (result is ChatResult.Success) "连接正常（${s.model}）" else "没连上：" + CallDiagnosis.describe(result)
+                    Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+                }
+            }) { Text("测试连接") }
         }
 
         Section("开口节奏")

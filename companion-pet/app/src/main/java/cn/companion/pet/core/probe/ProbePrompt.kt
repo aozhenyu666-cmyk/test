@@ -35,6 +35,13 @@ data class ProbeMoment(
  */
 object ProbePrompt {
     const val MAX_SCREEN_CHARS = 1200
+    /**
+     * 开口/接话的输出上限。格式里有 30 字气泡 + 100 字摘要 + 字段名，中文约 1 token/字，
+     * 原来的 150 经常把 JSON 截断，解析失败后桌宠就一声不吭。
+     */
+    const val REPLY_MAX_TOKENS = 400
+    /** 上下文最多约 5000 字，高峰期 10 秒常常超时。 */
+    const val TIMEOUT_MILLIS = 20_000L
     const val SCREEN_OPEN = "<screen_material>"
     const val SCREEN_CLOSE = "</screen_material>"
 

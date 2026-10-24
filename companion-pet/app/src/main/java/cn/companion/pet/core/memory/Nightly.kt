@@ -13,8 +13,9 @@ data class NightlyOutput(val profileLines: List<String>, val diary: String, val 
  * 每晚整理：一次请求产出新档案、它给自己的日记、给用户的信。
  */
 object Nightly {
-    const val MAX_TOKENS = 2000
-    const val TIMEOUT_MILLIS = 60_000L
+    /** 档案最多 3000 字 + 日记 200 字 + 信 100 字，2000 token 会在档案变长后把 JSON 截断，整理从此一直失败。 */
+    const val MAX_TOKENS = 4096
+    const val TIMEOUT_MILLIS = 180_000L
     const val MAX_LETTER_CHARS = 100
 
     fun prompt(persona: String, profile: String, todayLines: List<String>, yesterdayDiary: String, deleted: Set<String>): List<ChatMessage> {

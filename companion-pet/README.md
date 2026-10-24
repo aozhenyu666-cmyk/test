@@ -4,7 +4,7 @@
 
 需求依据：[V1.5 需求文档](https://claude.ai/artifact/GBaCjrc1shZXy4v391C4zu)，开发计划见 [PLAN.md](PLAN.md)。
 
-当前版本为 **0.3.6（versionCode 9）**：设置页新增能力面板，可查记忆、看素材、确认保存念头、打开 AI 应用和朗读。写动作增加跨重启账本与最近操作核对；工具念头兼容旧 Markdown。见 [本轮交付](handoff/capabilities-v5/STATE.md) 与 [恢复设计](handoff/capabilities-v5/C2_RECOVERY.md)。设备覆盖升级、真实 App/TTS 和旋转仍待设备执行；构建成功不代表真机通过。
+当前版本为 **0.3.7（versionCode 10）**：修复开口经常无声（输出被截断/超时）、模型调用失败无提示（开始页现在显示上次调用结果，设置页可“测试连接”）、连续性召回被刚说过的话占满、夜间整理在档案变长后一直失败、念头撤销不干净，见 [本轮修复](handoff/claude-fix/STATE.md)。0.3.6：设置页新增能力面板，可查记忆、看素材、确认保存念头、打开 AI 应用和朗读。写动作增加跨重启账本与最近操作核对；工具念头兼容旧 Markdown。见 [本轮交付](handoff/capabilities-v5/STATE.md) 与 [恢复设计](handoff/capabilities-v5/C2_RECOVERY.md)。设备覆盖升级、真实 App/TTS 和旋转仍待设备执行；构建成功不代表真机通过。
 
 基础记忆层的历史实现见 [0.3.1 交接](handoff/codex-foundation-v3/STATE.md)。设备覆盖升级的条件见 [升级验证](handoff/codex-foundation-v3/UPGRADE_VALIDATION.md)，不能把 APK 构建成功当成手机已验证。
 
@@ -105,7 +105,7 @@ app/src/main/java/cn/companion/pet/
 
 ## 构建与测试
 
-CI（`.github/workflows/companion-pet-android.yml`）每次推送都跑单元测试、lint、构建 debug APK 和设备测试 APK。本轮本地实测：**174 个 JVM 测试通过、0 失败**；lint 0 errors；设备测试 APK 只编译，未在真机执行。
+CI（`.github/workflows/companion-pet-android.yml`）每次推送都跑单元测试、lint、构建 debug APK 和设备测试 APK。0.3.7 本地实测：**275 个 JVM 测试通过、0 失败**（APK 和 lint 以 CI 为准）；设备测试 APK 只编译，未在真机执行。
 
 本地需要 JDK 17、Android SDK 35：
 

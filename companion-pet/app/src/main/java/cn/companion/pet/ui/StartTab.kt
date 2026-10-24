@@ -41,6 +41,7 @@ import cn.companion.pet.ui.theme.LocalCompanionColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import cn.companion.pet.net.CallStatus
 import java.time.LocalDate
 
 private data class StartSnapshot(
@@ -48,6 +49,7 @@ private data class StartSnapshot(
     val used: Int = 0,
     val limit: Int = 0,
     val recent: List<String> = emptyList(),
+    val lastCall: CallStatus? = null,
 )
 
 /** 首次引导 + 当前状态。每一行都能直接跳到系统里对应的设置页。 */
@@ -85,6 +87,7 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
                             .filter { it.kind == EventKind.EXCHANGE || it.kind == EventKind.LEGACY_LINE }
                             .filter { visibility.allows(it) }
                             .takeLast(3).reversed().map { it.text },
+                        lastCall = app.callStatus.last(),
                     )
                 }.getOrDefault(snapshot)
             }
@@ -92,6 +95,7 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
         }
     }
     val recent = snapshot.recent
+    val lastCall = snapshot.lastCall
 
     val status = when {
         paused -> "已暂停"
@@ -102,6 +106,7 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
         !overlay -> "先开悬浮窗权限，它才能出现。"
         !hasKey -> "还没填模型的 API Key：它会出现，但不会开口。"
         snapshot.limit > 0 && snapshot.used >= snapshot.limit -> "今天的调用额度用完了。它会继续陪着你，明天恢复开口。"
+        lastCall != null && !lastCall.ok -> "最近一次调用模型没成功：${lastCall.message}。修好之前它不会开口，可以到设置里点“测试连接”。"
         !a11y -> "没开无障碍：它不知道你在用什么 App，只能按普通场景搭话。"
         else -> "一切就绪。"
     }
@@ -120,6 +125,16 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
             if (snapshot.limit > 0) {
                 Text("今天已调用 ${snapshot.used} / ${snapshot.limit} 次", style = MaterialTheme.typography.bodySmall,
                     color = colors.ink2, modifier = Modifier.padding(top = 8.dp))
+            }
+            lastCall?.let { call ->
+                val time = java.time.Instant.ofEpochMilli(call.at).atZone(java.time.ZoneId.systemDefault())
+                    .format(java.time.format.DateTimeFormatter.ofPattern("M月d日 HH:mm"))
+                Text(
+                    if (call.ok) "上次调用模型：$time 成功" else "上次调用模型：$time 失败 · ${call.message}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (call.ok) colors.ink2 else MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
             }
             FlowRow(
                 Modifier.padding(top = 12.dp),
