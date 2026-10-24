@@ -36,8 +36,9 @@ class AgentLoop(
         context: AgentContext,
         autonomy: Boolean,
         cancelled: () -> Boolean = { false },
+        stableTurnId: String? = null,
     ): AgentTurnResult {
-        val turnId = "agent-" + idFactory()
+        val turnId = stableTurnId ?: ("agent-" + idFactory())
         if (!autonomy) return finish(turnId, context, AgentTurnStatus.DISABLED, null, null, "", "自主模式未开启", 0)
         if (cancelled()) return finish(turnId, context, AgentTurnStatus.CANCELLED, null, null, "", "已取消", 0)
         if (context.budgetRemaining <= 0 || !budget.reserve(context.day)) {

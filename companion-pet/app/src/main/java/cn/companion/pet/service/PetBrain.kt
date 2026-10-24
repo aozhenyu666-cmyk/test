@@ -244,6 +244,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
         convo?.let { escalate(it, now); return }
         if (probeJob?.isActive == true || settings.petPaused) return
+        // 忙时错过的积压事件，空闲后补扫一次；不是每 tick 都做模型请求。
+        if (settings.agentAutonomy && now - lastAgentScanAt > 5_000) handler.post(agentTrigger)
 
         if (PerceptionHub.stuck.check(now)) {
             if (!scheduler.isQuiet(now)) speak(stuck = true)
@@ -383,7 +385,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 synchronized(app.memoryLock) {
                     val snapshot = app.events.all()
                     val visibility = EventVisibility(snapshot, memory.tombstones(), now)
-                    agentScanner.next(snapshot, app.agentTrace.processedEventIds(500), now, visibility)
+                    agentScanner.next(snapshot, app.agentEventLedger.processed(now), now, visibility)
                 }
             } ?: return@launch
             if (!settings.agentAutonomy || !active || settings.petPaused || scheduler.isQuiet(now())) return@launch
@@ -416,6 +418,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                         quiet = scheduler.isQuiet(now),
                         userActive = active,
                         lastActionAt = app.agentTrace.lastAt(),
+                        observation = app.screenObservations.latestValid(now)?.summary,
                     )
                 }
             }
@@ -423,8 +426,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             val result = withContext(Dispatchers.IO) {
                 check(Looper.myLooper() != Looper.getMainLooper()) { "agent must run off main" }
                 app.agentLoop.run(context, settings.agentAutonomy,
-                    cancelled = { !settings.agentAutonomy || !active })
+                    cancelled = { !settings.agentAutonomy || !active },
+                    stableTurnId = "agent-event-" + event.id)
             }
+            withContext(Dispatchers.IO) { app.agentEventLedger.mark(event.id, now) }
             overlay.setMood(Mood.IDLE)
             if (!active || !settings.agentAutonomy || convo != null) return@launch
             val spoke = result.text.isNotBlank()

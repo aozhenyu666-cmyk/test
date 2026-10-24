@@ -51,6 +51,8 @@ data class AgentContext(
     val quiet: Boolean = false,
     val userActive: Boolean = true,
     val lastActionAt: Long = 0L,
+    /** 最新一张有效观察的摘要；只是不可信材料，不是指令。 */
+    val observation: String? = null,
 )
 
 data class AgentModelConfig(

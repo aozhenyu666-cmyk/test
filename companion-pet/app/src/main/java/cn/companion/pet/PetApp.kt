@@ -8,10 +8,14 @@ import cn.companion.pet.core.companion.LegacyEventImport
 import cn.companion.pet.core.companion.MaterialInbox
 import cn.companion.pet.core.action.ActionRunner
 import cn.companion.pet.core.agent.AgentBudgetPort
+import cn.companion.pet.core.agent.AgentEventLedger
 import cn.companion.pet.core.agent.AgentLoop
 import cn.companion.pet.core.agent.AgentModelConfig
 import cn.companion.pet.core.agent.AgentTraceStore
 import cn.companion.pet.core.agent.ModelAgentDecisionSource
+import cn.companion.pet.core.vision.ScreenObservationStore
+import cn.companion.pet.core.vision.VisionAnalyzer
+import cn.companion.pet.core.vision.VisionModelConfig
 import cn.companion.pet.core.memory.MemoryStore
 import cn.companion.pet.core.memory.NightlyStore
 import cn.companion.pet.core.probe.AtomicBudget
@@ -61,6 +65,10 @@ class PetApp : Application() {
         private set
     lateinit var agentTrace: AgentTraceStore
         private set
+    lateinit var agentEventLedger: AgentEventLedger
+        private set
+    val screenObservations = ScreenObservationStore()
+    val visionAnalyzer by lazy { VisionAnalyzer(client) { visionConfig() } }
     lateinit var agentLoop: AgentLoop
         private set
     lateinit var noteActions: cn.companion.pet.core.action.DurableNoteAdapter
@@ -113,6 +121,11 @@ class PetApp : Application() {
         return AgentModelConfig(settings.endpoint, settings.model, key)
     }
 
+    fun visionConfig(): VisionModelConfig? {
+        val key = apiKey() ?: return null
+        return VisionModelConfig(settings.endpoint, settings.visionModel, key)
+    }
+
     /** 记忆文件的读写都经过这把锁：服务、每晚整理、设置页编辑互斥。 */
     val memoryLock: Any get() = memory.lock
 
@@ -140,6 +153,7 @@ class PetApp : Application() {
             })
         actions = AndroidActionAdapters.build(this)
         agentTrace = AgentTraceStore(memory.root)
+        agentEventLedger = AgentEventLedger(memory.root)
         agentLoop = AgentLoop(
             source = ModelAgentDecisionSource(client) { agentModelConfig() },
             runner = actions,

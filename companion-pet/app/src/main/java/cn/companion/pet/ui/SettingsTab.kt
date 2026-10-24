@@ -3,7 +3,20 @@ package cn.companion.pet.ui
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import cn.companion.pet.a11y.PerceptionHub
+import cn.companion.pet.a11y.ScreenCaptureGateway
+import cn.companion.pet.core.vision.CapturedStatus
+import cn.companion.pet.core.vision.ObservationSource
+import cn.companion.pet.core.vision.ScreenCaptureAttempt
+import cn.companion.pet.core.vision.ScreenCapturePolicy
+import cn.companion.pet.core.vision.ScreenObservation
+import java.util.concurrent.Executors
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -81,6 +94,7 @@ fun SettingsTab(context: Context) {
             agentOn,
         ) { agentOn = it; s.agentAutonomy = it }
         AgentTracePreview()
+        ScreenDiagnosticSection(context)
         Section("搭话用的模型")
         Text("桌宠主动开口、想一想、整理记忆都用这里的模型。点一下填好常用服务商，Key 要换成对应服务商的。", style = MaterialTheme.typography.bodySmall)
         var endpoint by remember { mutableStateOf(s.endpoint) }
@@ -331,4 +345,75 @@ private fun AgentTracePreview() {
         }
     }
     TextButton(onClick = { tick++ }) { Text("刷新轨迹") }
+}
+
+@Composable
+private fun ScreenDiagnosticSection(context: Context) {
+    val app = PetApp.instance
+    val scope = rememberCoroutineScope()
+    var status by remember { mutableStateOf("尚未请求截图") }
+    var preview by remember { mutableStateOf<Bitmap?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var visionSummary by remember { mutableStateOf<String?>(null) }
+    var upload by remember { mutableStateOf(app.settings.visionUploadEnabled) }
+    GroupTitle("看一眼（诊断）")
+    Text("只在点击时向系统请求一张原生截图，默认只在本机显示；不上传、不落盘。", style = MaterialTheme.typography.bodySmall)
+    Toggle("允许把截图发给视觉模型", "默认关。打开后，仅在点击“看一眼”并成功截图后，按一次全局预算发送给视觉模型；排除/敏感窗口不上传。", upload) {
+        upload = it; app.settings.visionUploadEnabled = it
+    }
+    Button(enabled = !busy, onClick = {
+        if (busy) return@Button
+        busy = true
+        status = "正在请求系统截图…"
+        scope.launch {
+            val attempt = withContext(Dispatchers.IO) {
+                val now = System.currentTimeMillis()
+                val pkg = PerceptionHub.trail.foreground
+                val policy = ScreenCapturePolicy.canCapture(pkg, context.packageName, app.settings.excludeApps, now, 0L, false)
+                if (policy != CapturedStatus.OK) ScreenCaptureAttempt(policy, error = "当前窗口不允许截图")
+                else {
+                    val executor = Executors.newSingleThreadExecutor()
+                    try {
+                        ScreenCaptureGateway.captureBlocking(PerceptionHub.service, executor, 5_000)
+                    } finally {
+                        executor.shutdown()
+                    }
+                }
+            }
+            val jpeg = attempt.jpeg
+            if (attempt.status == CapturedStatus.OK && jpeg != null) {
+                val bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                preview = bitmap
+                status = "原生截图成功：" + attempt.width + "×" + attempt.height + "，" + jpeg.size + " bytes"
+                var visionText = ""
+                if (upload) {
+                    val day = java.time.LocalDate.now().toString()
+                    if (app.budget.reserve(app.settings.dailyLimit, day)) {
+                        cn.companion.pet.data.Stats.Kind.API_CALLS.let { app.stats.add(it) }
+                        visionSummary = withContext(Dispatchers.IO) { app.visionAnalyzer.analyze(jpeg) }?.subject
+                        visionText = visionSummary ?: "视觉模型未返回可解析摘要"
+                    } else {
+                        visionText = "今日模型额度不足，未上传"
+                    }
+                }
+                app.screenObservations.publish(ScreenObservation(
+                    id = java.util.UUID.randomUUID().toString(), capturedAt = System.currentTimeMillis(),
+                    packageName = PerceptionHub.trail.foreground ?: "unknown", source = ObservationSource.SCREENSHOT,
+                    screenshotAvailable = true, nodesAvailable = false, visionAvailable = upload && visionText.isNotBlank(),
+                    status = CapturedStatus.OK, summary = visionText.ifBlank { "用户点击诊断截图" },
+                    expiresAt = System.currentTimeMillis() + 60_000,
+                ))
+            } else {
+                status = "截图未完成：" + attempt.status.name + (if (attempt.error.isBlank()) "" else " · " + attempt.error)
+            }
+            busy = false
+        }
+    }) { Text("看一眼（原生截图）") }
+    Text(status, style = MaterialTheme.typography.bodySmall)
+    preview?.let { bmp ->
+        Image(bmp.asImageBitmap(), contentDescription = "本机截图预览", modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp), contentScale = ContentScale.Fit)
+        TextButton(onClick = { preview?.recycle(); preview = null }) { Text("关闭预览") }
+    }
+    visionSummary?.let { Text("视觉摘要：" + it, style = MaterialTheme.typography.bodySmall) }
+    Text("截图成功 ≠ 模型已理解；上传开关关闭时不会请求视觉模型。", style = MaterialTheme.typography.bodySmall)
 }
