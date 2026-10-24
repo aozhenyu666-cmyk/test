@@ -17,6 +17,7 @@ import cn.companion.pet.core.vision.ScreenObservationStore
 import cn.companion.pet.core.goal.GoalStore
 import cn.companion.pet.core.goal.GoalSupervisor
 import cn.companion.pet.core.goal.GoalAgentCoordinator
+import cn.companion.pet.core.action.PendingActionStore
 import cn.companion.pet.core.vision.VisionAnalyzer
 import cn.companion.pet.core.vision.VisionModelConfig
 import cn.companion.pet.core.memory.MemoryStore
@@ -80,6 +81,8 @@ class PetApp : Application() {
     lateinit var goalSupervisor: GoalSupervisor
         private set
     lateinit var goalCoordinator: GoalAgentCoordinator
+        private set
+    lateinit var pendingActions: PendingActionStore
         private set
     val visionAnalyzer by lazy { VisionAnalyzer(client) { visionConfig() } }
     lateinit var agentLoop: AgentLoop
@@ -170,6 +173,7 @@ class PetApp : Application() {
         agentEventLedger = AgentEventLedger(memory.root)
         goalStore = GoalStore(memory.root)
         goalSupervisor = GoalSupervisor(goalStore)
+        pendingActions = PendingActionStore(memory.root)
         // agentLoop 在下方 actions 之后初始化；这里用 lazy 不行，放到 agentLoop 初始化后。
         
         agentLoop = AgentLoop(
@@ -181,6 +185,7 @@ class PetApp : Application() {
             },
             trace = agentTrace,
             planner = actionPlanner,
+            pending = pendingActions,
         )
         goalCoordinator = GoalAgentCoordinator(goalStore, goalSupervisor, agentLoop)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_NOT_EXPORTED)

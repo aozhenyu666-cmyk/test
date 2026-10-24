@@ -58,6 +58,9 @@ import cn.companion.pet.core.agent.AgentTrace
 import cn.companion.pet.core.goal.Goal
 import cn.companion.pet.core.goal.GoalDecision
 import cn.companion.pet.core.goal.GoalStatus
+import cn.companion.pet.core.action.PendingAction
+import cn.companion.pet.core.action.PendingStatus
+import cn.companion.pet.core.action.ActionRequest
 import cn.companion.pet.data.SecretWriteResult
 import cn.companion.pet.bridge.Assistants
 import cn.companion.pet.core.session.AssistantApp
@@ -116,6 +119,7 @@ fun SettingsTab(context: Context) {
             s.deviceAllowedApps = it
         }
         GoalSection()
+        PendingActionSection()
         Section("搭话用的模型")
         Text("桌宠主动开口、想一想、整理记忆都用这里的模型。点一下填好常用服务商，Key 要换成对应服务商的。", style = MaterialTheme.typography.bodySmall)
         var endpoint by remember { mutableStateOf(s.endpoint) }
@@ -496,5 +500,51 @@ private fun GoalSection() {
                 }
             }) { Text("删除") }
         }
+    }
+}
+
+@Composable
+private fun PendingActionSection() {
+    val app = PetApp.instance
+    val scope = rememberCoroutineScope()
+    var tick by remember { mutableIntStateOf(0) }
+    var items by remember { mutableStateOf<List<PendingAction>>(emptyList()) }
+    var message by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(tick) { items = withContext(Dispatchers.IO) { app.pendingActions.list(System.currentTimeMillis()) } }
+    GroupTitle("待确认动作")
+    Text("模型提议写动作/打开/朗读时，先停在这里；默认不执行。允许后仍会重新检查前台、白名单和观察时效。", style = MaterialTheme.typography.bodySmall)
+    message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    items.forEach { item ->
+        Column(Modifier.fillMaxWidth()) {
+            Text(item.kind.name + " · " + item.status.name, style = MaterialTheme.typography.bodyMedium)
+            Text(item.preview, style = MaterialTheme.typography.bodySmall)
+            if (item.status == PendingStatus.PENDING) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = {
+                        scope.launch {
+                            val approved = withContext(Dispatchers.IO) {
+                                app.pendingActions.approve(item.id, System.currentTimeMillis(),
+                                    cn.companion.pet.a11y.PerceptionHub.trail.foreground)
+                            }
+                            if (approved == null) { message = "未批准：已过期或前台已切换"; tick++ } else {
+                                val result = withContext(Dispatchers.IO) {
+                                    app.actions.execute(ActionRequest("pending-" + approved.id, approved.kind, approved.args))
+                                }
+                                withContext(Dispatchers.IO) { app.pendingActions.finish(approved.id, result) }
+                                message = result.kind.name + " · " + result.status.name + " · " + result.reason
+                                tick++
+                            }
+                        }
+                    }) { Text("允许本次") }
+                    OutlinedButton(onClick = {
+                        scope.launch {
+                            withContext(Dispatchers.IO) { app.pendingActions.rejectOrCancel(item.id) }
+                            message = "已拒绝"; tick++
+                        }
+                    }) { Text("拒绝") }
+                }
+            }
+        }
+        HorizontalDivider()
     }
 }

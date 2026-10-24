@@ -23,6 +23,7 @@ class AgentLoop(
     private val planner: ActionPlanner,
     private val timeoutMillis: Long = 15_000,
     private val idFactory: () -> String = { UUID.randomUUID().toString() },
+    private val pending: cn.companion.pet.core.action.PendingActionStore? = null,
 ) {
     @Volatile
     private var activeActionId: String? = null
@@ -137,6 +138,18 @@ class AgentLoop(
             is AgentDecision.NoAction -> decision.reason
             is AgentDecision.Invalid -> decision.reason
             null -> ""
+        }
+        if (status == AgentTurnStatus.NEEDS_CONFIRMATION && decision is AgentDecision.ToolCall) {
+            runCatching {
+                pending?.create(
+                    kind = decision.kind,
+                    args = decision.args,
+                    preview = AgentReport.needsConfirmation(decision) + " | " + decision.args.entries.joinToString(", ") { it.key + "=" + it.value.take(60) },
+                    packageName = context.foreground,
+                    sourceIds = decision.sourceIds,
+                    now = context.now,
+                )
+            }
         }
         trace.append(AgentTrace(
             id = turnId,
