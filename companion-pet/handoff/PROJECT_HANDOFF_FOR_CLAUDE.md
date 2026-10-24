@@ -1,4 +1,4 @@
-# 墨灵 Android Agent：给 Claude 的全局交接
+# 桌宠 / Companion Pet Android Agent：给 Claude 的全局交接
 
 更新：2026-10-24。仓库：https://github.com/aozhenyu666-cmyk/test 。只改 companion-pet/。
 当前分支：deepseek/moling-b4-e2e-release；HEAD：868aedf（代码 bd85013）。
@@ -6,7 +6,7 @@
 
 ## 启动提示（复制给 Claude）
 
-你是接手墨灵 Android Agent 的 Claude Code。先读本文件、ALL_STAGES_SUMMARY.md 和各阶段 STATE.md，再读源码。不要 reset/force push、不要覆盖其他分支、不要改 companion-pet/ 之外工程。
+你是接手桌宠 / Companion Pet Android Agent 的 Claude Code。先读本文件、ALL_STAGES_SUMMARY.md 和各阶段 STATE.md，再读源码。不要 reset/force push、不要覆盖其他分支、不要改 companion-pet/ 之外工程。
 先 git fetch --prune，核对 origin/deepseek/moling-b4-e2e-release 和 git status。无设备时只做代码审查、JVM/CI、自动化脚本；所有设备/真实 API/Shizuku 项标 NOT_RUN，不得写成通过。
 禁止：打印/上传 API Key、截图、Base64、完整聊天、密码/验证码；启用任意 Shell、root/Sui、静默支付/删除/发送。
 重点审查：GoalStore 原子写入、DevicePolicy 前台/节点校验、PendingAction 一次性批准、Shizuku 固定能力、GoalAgentCoordinator 不把 UNVERIFIED 当成功。

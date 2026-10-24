@@ -1,4 +1,4 @@
-# 墨灵 A1.5 → A2 → A3 → A4 总交接
+# 桌宠 / Companion Pet A1.5 → A2 → A3 → A4 总交接
 
 日期：2026-10-24。仓库 aozhenyu666-cmyk/test，仅 companion-pet/。
 结论：三批源码、JVM 测试、构建、提交、推送、CI 都完成；真机/真实 API 全部未验证。
