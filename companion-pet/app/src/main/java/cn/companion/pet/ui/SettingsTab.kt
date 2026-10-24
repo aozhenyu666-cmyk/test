@@ -10,6 +10,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import cn.companion.pet.a11y.PerceptionHub
+import cn.companion.pet.a11y.AndroidShizukuProbe
+import cn.companion.pet.a11y.AndroidShizukuCommandPort
+import cn.companion.pet.core.device.ShizukuCapabilityRunner
 import cn.companion.pet.a11y.ScreenCaptureGateway
 import cn.companion.pet.core.vision.CapturedStatus
 import cn.companion.pet.core.vision.ObservationSource
@@ -102,7 +105,8 @@ fun SettingsTab(context: Context) {
         AgentTracePreview()
         ScreenDiagnosticSection(context)
         Section("设备操作（A3）")
-        val shizuku = remember { cn.companion.pet.a11y.AndroidShizukuProbe(context) }
+        val shizuku = remember { AndroidShizukuProbe(context) }
+        val capability = remember { ShizukuCapabilityRunner(shizuku, AndroidShizukuCommandPort()) }
         var shizukuText by remember { mutableStateOf(shizuku.diagnostic().detail.ifBlank { shizuku.diagnostic().status.name }) }
         Text("Shizuku 只用于状态/授权，不执行任意 Shell。未安装/未运行时，Intent 和无障碍动作仍可用。", style = MaterialTheme.typography.bodySmall)
         Text("Shizuku：" + shizukuText, style = MaterialTheme.typography.bodySmall)
@@ -114,6 +118,12 @@ fun SettingsTab(context: Context) {
                 shizuku.requestPermission()
                 shizukuText = "已打开系统授权；请刷新状态"
             }) { Text("请求权限") }
+            OutlinedButton(onClick = {
+                scope.launch {
+                    val r = withContext(Dispatchers.IO) { capability.readSdkDiagnostic() }
+                    shizukuText = "固定 Binder 能力：" + r.status.name + (if (r.value.isBlank()) "" else " · 版本 " + r.value) + (if (r.reason.isBlank()) "" else " · " + r.reason)
+                }
+            }) { Text("读取 Shizuku 版本") }
         }
         AppListRow(context, "允许 Agent 操作的应用", "空名单时拒绝所有设备动作；只打开/点击/输入这些应用。", s.deviceAllowedApps) {
             s.deviceAllowedApps = it
