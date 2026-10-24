@@ -55,6 +55,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import cn.companion.pet.PetApp
 import cn.companion.pet.core.agent.AgentTrace
+import cn.companion.pet.core.goal.Goal
+import cn.companion.pet.core.goal.GoalDecision
+import cn.companion.pet.core.goal.GoalStatus
 import cn.companion.pet.data.SecretWriteResult
 import cn.companion.pet.bridge.Assistants
 import cn.companion.pet.core.session.AssistantApp
@@ -112,6 +115,7 @@ fun SettingsTab(context: Context) {
         AppListRow(context, "允许 Agent 操作的应用", "空名单时拒绝所有设备动作；只打开/点击/输入这些应用。", s.deviceAllowedApps) {
             s.deviceAllowedApps = it
         }
+        GoalSection()
         Section("搭话用的模型")
         Text("桌宠主动开口、想一想、整理记忆都用这里的模型。点一下填好常用服务商，Key 要换成对应服务商的。", style = MaterialTheme.typography.bodySmall)
         var endpoint by remember { mutableStateOf(s.endpoint) }
@@ -433,4 +437,60 @@ private fun ScreenDiagnosticSection(context: Context) {
     }
     visionSummary?.let { Text("视觉摘要：" + it, style = MaterialTheme.typography.bodySmall) }
     Text("截图成功 ≠ 模型已理解；上传开关关闭时不会请求视觉模型。", style = MaterialTheme.typography.bodySmall)
+}
+
+@Composable
+private fun GoalSection() {
+    val app = PetApp.instance
+    val scope = rememberCoroutineScope()
+    var tick by remember { mutableIntStateOf(0) }
+    var goals by remember { mutableStateOf<List<Goal>>(emptyList()) }
+    var text by remember { mutableStateOf("") }
+    var plan by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(tick) {
+        goals = withContext(Dispatchers.IO) { app.goalStore.state().goals }
+        plan = withContext(Dispatchers.IO) {
+            val p = app.goalSupervisor.decide(System.currentTimeMillis(),
+                app.budget.remaining(app.settings.dailyLimit, java.time.LocalDate.now().toString()))
+            p.decision.name + " · " + p.reason
+        }
+    }
+    GroupTitle("长期目标（实验）")
+    Text("目标只保存计划和状态，不会自动执行高风险操作；关闭/删除后不再被旧调用复活。", style = MaterialTheme.typography.bodySmall)
+    OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth(), label = { Text("想让它长期关注什么") })
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = {
+            val value = text.trim(); if (value.isBlank()) return@Button
+            scope.launch {
+                withContext(Dispatchers.IO) { app.goalStore.addGoal(value, now = System.currentTimeMillis()) }
+                text = ""; tick++
+            }
+        }) { Text("添加目标") }
+        TextButton(onClick = { tick++ }) { Text("刷新") }
+    }
+    plan?.let { Text("下一步：" + it, style = MaterialTheme.typography.bodySmall) }
+    goals.forEach { goal ->
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Column(Modifier.weight(1f)) {
+                Text(goal.text, style = MaterialTheme.typography.bodyMedium)
+                Text(goal.status.name, style = MaterialTheme.typography.bodySmall)
+            }
+            TextButton(onClick = {
+                scope.launch {
+                    withContext(Dispatchers.IO) {
+                        app.goalStore.setGoalStatus(goal.id,
+                            if (goal.status == GoalStatus.ACTIVE) GoalStatus.PAUSED else GoalStatus.ACTIVE,
+                            System.currentTimeMillis())
+                    }
+                    tick++
+                }
+            }) { Text(if (goal.status == GoalStatus.ACTIVE) "暂停" else "恢复") }
+            TextButton(onClick = {
+                scope.launch {
+                    withContext(Dispatchers.IO) { app.goalStore.deleteGoal(goal.id, System.currentTimeMillis()) }
+                    tick++
+                }
+            }) { Text("删除") }
+        }
+    }
 }

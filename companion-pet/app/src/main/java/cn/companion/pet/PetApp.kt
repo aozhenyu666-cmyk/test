@@ -14,6 +14,8 @@ import cn.companion.pet.core.agent.AgentModelConfig
 import cn.companion.pet.core.agent.AgentTraceStore
 import cn.companion.pet.core.agent.ModelAgentDecisionSource
 import cn.companion.pet.core.vision.ScreenObservationStore
+import cn.companion.pet.core.goal.GoalStore
+import cn.companion.pet.core.goal.GoalSupervisor
 import cn.companion.pet.core.vision.VisionAnalyzer
 import cn.companion.pet.core.vision.VisionModelConfig
 import cn.companion.pet.core.memory.MemoryStore
@@ -72,6 +74,10 @@ class PetApp : Application() {
     lateinit var agentEventLedger: AgentEventLedger
         private set
     val screenObservations = ScreenObservationStore()
+    lateinit var goalStore: GoalStore
+        private set
+    lateinit var goalSupervisor: GoalSupervisor
+        private set
     val visionAnalyzer by lazy { VisionAnalyzer(client) { visionConfig() } }
     lateinit var agentLoop: AgentLoop
         private set
@@ -159,6 +165,8 @@ class PetApp : Application() {
         actions = AndroidActionAdapters.build(this)
         agentTrace = AgentTraceStore(memory.root)
         agentEventLedger = AgentEventLedger(memory.root)
+        goalStore = GoalStore(memory.root)
+        goalSupervisor = GoalSupervisor(goalStore)
         agentLoop = AgentLoop(
             source = ModelAgentDecisionSource(client) { agentModelConfig() },
             runner = actions,
