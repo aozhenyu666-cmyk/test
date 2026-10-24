@@ -528,6 +528,17 @@ private fun PendingActionSection() {
         Column(Modifier.fillMaxWidth()) {
             Text(item.kind.name + " · " + item.status.name, style = MaterialTheme.typography.bodyMedium)
             Text(item.preview, style = MaterialTheme.typography.bodySmall)
+            if (item.status == PendingStatus.APPROVED) {
+                OutlinedButton(onClick = {
+                    scope.launch {
+                        val reopened = withContext(Dispatchers.IO) {
+                            app.pendingActions.reopen(item.id, System.currentTimeMillis())
+                        }
+                        message = if (reopened == null) "无法重开：状态已变化" else "已重开，需要重新确认"
+                        tick++
+                    }
+                }) { Text("重新确认") }
+            }
             if (item.status == PendingStatus.PENDING) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = {

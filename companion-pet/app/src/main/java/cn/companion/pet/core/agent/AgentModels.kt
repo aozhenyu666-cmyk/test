@@ -57,6 +57,8 @@ data class AgentContext(
     val goalSummary: String? = null,
     val goalId: String? = null,
     val taskId: String? = null,
+    /** 最近一次合法观察 ID；设备动作/待确认可绑定它，避免过期观察被复用。 */
+    val observationId: String? = null,
 )
 
 data class AgentModelConfig(

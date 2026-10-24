@@ -421,6 +421,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                         userActive = active,
                         lastActionAt = app.agentTrace.lastAt(),
                         observation = app.screenObservations.latestValid(now)?.summary,
+                        observationId = app.screenObservations.latestValid(now)?.id,
                     )
                 }
             }

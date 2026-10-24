@@ -46,4 +46,15 @@ class PendingActionTest {
         assertEquals(PendingStatus.EXECUTED, store.list(1_200).single().status)
         assertEquals("已保存", store.list(1_200).single().result?.reason)
     }
+
+    @Test
+    fun approvedCanOnlyBeReopenedExplicitly() {
+        val store = PendingActionStore(tmp.root)
+        val item = store.create(ActionKind.SAVE_NOTE, mapOf("text" to "x"), "保存", now = 1_000)!!
+        assertNotNull(store.approve(item.id, 1_100))
+        val reopened = store.reopen(item.id, 1_200)
+        assertNotNull(reopened)
+        assertEquals(PendingStatus.PENDING, reopened!!.status)
+        assertNotNull(store.approve(item.id, 1_300))
+    }
 }

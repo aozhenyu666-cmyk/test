@@ -14,6 +14,8 @@ data class PendingAction(
     val id: String,
     val kind: ActionKind,
     val args: Map<String, String>,
+    /** 参数指纹；批准/重开时核对，防止文件或调用方改参。 */
+    val argsHash: String = "",
     val preview: String,
     val packageName: String = "",
     val observationId: String = "",
@@ -49,8 +51,9 @@ class PendingActionStore(private val root: File, private val maxItems: Int = 20)
                ttlMillis: Long = 5 * 60 * 1000): PendingAction? = synchronized(lock) {
         val all = read()
         if (all.count { it.status == PendingStatus.PENDING } >= maxItems) { lastError = "待确认动作已达上限"; return null }
-        val action = PendingAction(UUID.randomUUID().toString(), kind, args.toMap(), preview.take(300), packageName,
+        val base = PendingAction(UUID.randomUUID().toString(), kind, args.toMap(), "", preview.take(300), packageName,
             observationId, sourceIds.take(5), now, now + ttlMillis, UUID.randomUUID().toString())
+        val action = base.copy(argsHash = base.argsHash())
         if (!write(all + action)) return null
         action
     }
@@ -63,6 +66,10 @@ class PendingActionStore(private val root: File, private val maxItems: Int = 20)
             write(all.map { if (it.id == id && it.status == PendingStatus.PENDING) it.copy(status = PendingStatus.EXPIRED) else it })
             return null
         }
+        if (item.argsHash.isNotBlank() && item.argsHash != item.argsHash()) {
+            lastError = "参数指纹不一致，拒绝执行"
+            return null
+        }
         if (item.packageName.isNotBlank() && foregroundPackage != item.packageName) {
             lastError = "前台已切换，不能执行旧确认"
             return null
@@ -70,6 +77,16 @@ class PendingActionStore(private val root: File, private val maxItems: Int = 20)
         val approved = item.copy(status = PendingStatus.APPROVED)
         if (!write(all.map { if (it.id == id) approved else it })) return null
         approved
+    }
+
+    /** 批准后未执行/崩溃：只能显式重开，重新确认，不静默重放。 */
+    fun reopen(id: String, now: Long, ttlMillis: Long = 5 * 60 * 1000): PendingAction? = synchronized(lock) {
+        val all = read()
+        val item = all.firstOrNull { it.id == id && it.status == PendingStatus.APPROVED } ?: return null
+        val reopened = item.copy(status = PendingStatus.PENDING, nonce = UUID.randomUUID().toString(),
+            createdAt = now, expiresAt = now + ttlMillis)
+        if (!write(all.map { if (it.id == id) reopened else it })) return null
+        reopened
     }
 
     fun rejectOrCancel(id: String, status: PendingStatus = PendingStatus.REJECTED): Boolean = synchronized(lock) {

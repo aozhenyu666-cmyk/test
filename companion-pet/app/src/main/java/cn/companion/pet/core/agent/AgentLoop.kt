@@ -146,6 +146,7 @@ class AgentLoop(
                     args = decision.args,
                     preview = AgentReport.needsConfirmation(decision) + " | " + decision.args.entries.joinToString(", ") { it.key + "=" + it.value.take(60) },
                     packageName = context.foreground,
+                    observationId = context.observationId.orEmpty(),
                     sourceIds = decision.sourceIds,
                     now = context.now,
                 )
