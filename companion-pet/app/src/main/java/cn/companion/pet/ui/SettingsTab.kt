@@ -64,6 +64,10 @@ import cn.companion.pet.core.goal.GoalStatus
 import cn.companion.pet.core.action.PendingAction
 import cn.companion.pet.core.action.PendingStatus
 import cn.companion.pet.core.action.ActionRequest
+import cn.companion.pet.core.diagnostics.DiagnosticInputs
+import cn.companion.pet.core.diagnostics.DiagnosticReport
+import android.content.ClipData
+import android.content.ClipboardManager
 import cn.companion.pet.data.SecretWriteResult
 import cn.companion.pet.bridge.Assistants
 import cn.companion.pet.core.session.AssistantApp
@@ -130,6 +134,7 @@ fun SettingsTab(context: Context) {
         }
         GoalSection()
         PendingActionSection()
+        DiagnosticSection(context)
         Section("搭话用的模型")
         Text("桌宠主动开口、想一想、整理记忆都用这里的模型。点一下填好常用服务商，Key 要换成对应服务商的。", style = MaterialTheme.typography.bodySmall)
         var endpoint by remember { mutableStateOf(s.endpoint) }
@@ -567,5 +572,57 @@ private fun PendingActionSection() {
             }
         }
         HorizontalDivider()
+    }
+}
+
+@Composable
+private fun DiagnosticSection(context: Context) {
+    val app = PetApp.instance
+    val scope = rememberCoroutineScope()
+    var report by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    GroupTitle("设备诊断 / 验收")
+    Text("生成脱敏报告；不包含 Key、截图/Base64、聊天原文、输入文本。", style = MaterialTheme.typography.bodySmall)
+    Button(enabled = !busy, onClick = {
+        busy = true
+        scope.launch {
+            val text = withContext(Dispatchers.IO) {
+                val info = context.packageManager.getPackageInfo(context.packageName, 0)
+                val obs = app.screenObservations.latest()
+                val pkg = cn.companion.pet.a11y.PerceptionHub.trail.foreground
+                val capability = cn.companion.pet.core.device.ShizukuCapabilityRunner(
+                    AndroidShizukuProbe(context), AndroidShizukuCommandPort()).readSdkDiagnostic()
+                val history = app.actions.history(1).firstOrNull()
+                DiagnosticReport.render(DiagnosticInputs(
+                    versionName = info.versionName ?: "?",
+                    versionCode = if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong(),
+                    now = System.currentTimeMillis(),
+                    accessibilityConnected = cn.companion.pet.a11y.PerceptionHub.service != null,
+                    screenshotStatus = obs?.status?.name ?: "NOT_CAPTURED",
+                    screenshotReason = obs?.summary.orEmpty().take(80),
+                    visionConfigured = app.apiKey() != null && app.settings.visionModel.isNotBlank(),
+                    visionUploadEnabled = app.settings.visionUploadEnabled,
+                    budgetRemaining = app.budget.remaining(app.settings.dailyLimit, java.time.LocalDate.now().toString()),
+                    foregroundPackage = pkg,
+                    foregroundAllowed = pkg != null && pkg in app.settings.deviceAllowedApps,
+                    shizukuStatus = AndroidShizukuProbe(context).diagnostic().status.name,
+                    capabilityStatus = capability.status.name,
+                    capabilityReason = capability.reason.take(80),
+                    autonomyEnabled = app.settings.agentAutonomy,
+                    goalStatus = app.goalStore.status.name,
+                    pendingCount = app.pendingActions.list(System.currentTimeMillis()).count { it.status == PendingStatus.PENDING },
+                    lastAction = history?.let { it.kind.name + " " + (it.status?.name ?: "已准备") } ?: "无",
+                ))
+            }
+            report = text
+            busy = false
+        }
+    }) { Text("生成脱敏诊断") }
+    report?.let { text ->
+        Text(text, style = MaterialTheme.typography.bodySmall)
+        TextButton(onClick = {
+            val cm = context.getSystemService(ClipboardManager::class.java)
+            cm?.setPrimaryClip(ClipData.newPlainText("Companion Pet diagnostic", text))
+        }) { Text("复制报告") }
     }
 }
