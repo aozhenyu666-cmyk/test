@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">桌宠</string>
-    <string name="channel_name">桌宠常驻</string>
-    <string name="a11y_label">桌宠 · 感知</string>
+    <string name="app_name">同桌</string>
+    <string name="channel_name">同桌常驻</string>
+    <string name="a11y_label">同桌 · 感知</string>
     <string name="a11y_description">让桌宠知道你正在用哪个 App、是不是在来回切换或滑动，以及在学习场景下读一次屏幕上的文字来找话题。屏幕文字只在需要开口时读取，不保存到文件。另有一个默认关闭的实验开关“Gemini 自动发送”会用它在 Gemini 里填入文字并点发送。</string>
 </resources>
