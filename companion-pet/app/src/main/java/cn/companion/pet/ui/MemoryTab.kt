@@ -141,6 +141,8 @@ fun MemoryTab(resumeTick: Int) {
         }
 
         Rule()
+        MaterialInboxSection()
+        Rule()
         GroupTitle("今天的交流")
         snap.today.takeLast(30).reversed().forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
         if (snap.today.isNotEmpty()) {

@@ -37,6 +37,7 @@ enum class EventKind {
     @SerialName("correction") CORRECTION,
     @SerialName("forget") FORGET,
     @SerialName("fact") FACT,
+    @SerialName("material") MATERIAL,
     @SerialName("material_summary") MATERIAL_SUMMARY,
     @SerialName("note") NOTE,
     @SerialName("session") SESSION,

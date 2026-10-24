@@ -30,6 +30,7 @@ class CompanionContextAssembler(
     private val facts: FactStore,
     private val zone: ZoneId = events.zone,
     private val recall: MemoryRecall = MemoryRecall(events, facts, zone),
+    private val materials: MaterialInbox? = null,
 ) {
     fun assemble(
         persona: String,
@@ -66,6 +67,8 @@ class CompanionContextAssembler(
         moment.topic?.trim()?.takeIf { it.isNotEmpty() }?.let {
             body.append("\n# 想接着聊的事（有真实来源）\n- ").append(it).append('\n')
         }
+        val sharedBlock = materials?.contextBlock(now, maxItems = 2, maxChars = 900).orEmpty()
+        if (sharedBlock.isNotEmpty()) body.append('\n').append(sharedBlock).append('\n')
         body.append("\n# 此刻\n")
         body.append("- 时间：").append(moment.timeText).append('\n')
         body.append("- 场景：").append(moment.scene.label).append('\n')
@@ -94,6 +97,10 @@ class CompanionContextAssembler(
             val withoutMaterial = text.removeSuffix(materialBlock)
             val available = limits.dynamicMaxChars - UnicodeText.count(withoutMaterial) - UnicodeText.count(screenBlock(""))
             text = if (available > 0) withoutMaterial + screenBlock(UnicodeText.truncate(screenText, available)) else withoutMaterial
+        }
+        if (UnicodeText.count(text) > limits.dynamicMaxChars && sharedBlock.isNotEmpty()) {
+            // 分享材料是可选的证据块；超预算时整块丢弃，优先保留对话与当前素材标记。
+            text = text.replace(sharedBlock, "").replace("\n\n\n", "\n\n")
         }
         if (UnicodeText.count(text) > limits.dynamicMaxChars) {
             text = UnicodeText.truncate(text, limits.dynamicMaxChars)

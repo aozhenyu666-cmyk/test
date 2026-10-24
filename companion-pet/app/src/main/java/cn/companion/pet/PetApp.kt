@@ -5,6 +5,7 @@ import cn.companion.pet.core.companion.EventLog
 import cn.companion.pet.core.companion.FactStore
 import cn.companion.pet.core.companion.TopicQueue
 import cn.companion.pet.core.companion.LegacyEventImport
+import cn.companion.pet.core.companion.MaterialInbox
 import cn.companion.pet.core.memory.MemoryStore
 import cn.companion.pet.core.memory.NightlyStore
 import cn.companion.pet.core.probe.AtomicBudget
@@ -37,6 +38,8 @@ class PetApp : Application() {
     lateinit var memoryEdits: cn.companion.pet.core.memory.MemoryEdits
         private set
     lateinit var topics: TopicQueue
+        private set
+    lateinit var materialInbox: MaterialInbox
         private set
     lateinit var budget: AtomicBudget
         private set
@@ -74,6 +77,7 @@ class PetApp : Application() {
         events = EventLog(memory.root)
         facts = FactStore(memory.root)
         topics = TopicQueue(memory.root, events = events)
+        materialInbox = MaterialInbox(memory.root, events, topics = topics, lock = memory.lock)
         memoryEdits = cn.companion.pet.core.memory.MemoryEdits(memory, facts, events)
         nightly = NightlyStore(memory, events, facts = facts)
         budget = AtomicBudget(BudgetPrefs(this))

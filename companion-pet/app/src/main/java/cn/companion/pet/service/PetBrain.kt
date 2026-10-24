@@ -87,9 +87,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private val handler = Handler(Looper.getMainLooper())
 
     private val overlay = PetOverlay(context, settings, this, this)
-    private val assembler by lazy { CompanionContextAssembler(app.events, app.facts) }
+    private val assembler by lazy { CompanionContextAssembler(app.events, app.facts, materials = app.materialInbox) }
     private val stateStore by lazy { PetStateStore(memory.root) }
-    private val topics by lazy { TopicQueue(memory.root) }
+    private val topics by lazy { app.topics }
     private val topicGate by lazy { TopicGate(topics) }
     private var lastProactiveAt = 0L
     private val scheduler = SpeakScheduler(settings.rhythm())
