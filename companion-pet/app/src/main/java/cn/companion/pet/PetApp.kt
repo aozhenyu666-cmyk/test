@@ -155,6 +155,8 @@ class PetApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // 最先装上：之后任何未捕获异常都会留下记录，开始页可以一键复制给开发者。
+        cn.companion.pet.data.Diagnostics.install(this)
         instance = this
         settings = Settings(this)
         stats = Stats(this)

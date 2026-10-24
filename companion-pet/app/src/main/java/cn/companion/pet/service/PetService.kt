@@ -43,6 +43,11 @@ class PetService : Service() {
         super.onCreate()
         running = true
         goForeground()
+        if (foregroundFailed) {
+            running = false
+            stopSelf()
+            return
+        }
         if (!AndroidSettings.canDrawOverlays(this)) {
             // 没有悬浮窗权限就没法显示角色：不硬撑，停掉，等用户在 App 里授权
             stopSelf()
@@ -116,10 +121,19 @@ class PetService : Service() {
                 startForeground(ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             }
         } catch (e: Exception) {
-            // 后台启动时系统不允许 microphone 类型：退回只用 specialUse
-            startForeground(ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            // 后台启动时系统不允许 microphone 类型：退回只用 specialUse。
+            // 这一步也被拒（例如 Android 15 起后台无可见悬浮窗时）就安静地停下，不让整个进程崩掉，
+            // 否则同进程的无障碍服务会一起被系统标成“出现故障”。
+            try {
+                startForeground(ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } catch (e2: Exception) {
+                foregroundFailed = true
+            }
         }
     }
+
+    /** 前台通知没能挂上：本次不启动桌宠，等用户打开 App 时再拉起。 */
+    private var foregroundFailed = false
 
     companion object {
         const val ACTION_STOP = "cn.companion.pet.STOP"

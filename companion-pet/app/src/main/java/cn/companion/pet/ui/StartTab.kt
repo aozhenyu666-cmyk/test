@@ -50,6 +50,8 @@ private data class StartSnapshot(
     val limit: Int = 0,
     val recent: List<String> = emptyList(),
     val lastCall: CallStatus? = null,
+    /** 最近一次异常退出（崩溃/卡死/被系统杀），只显示 24 小时内的。 */
+    val lastExit: cn.companion.pet.data.Diagnostics.Exit? = null,
 )
 
 /** 首次引导 + 当前状态。每一行都能直接跳到系统里对应的设置页。 */
@@ -88,6 +90,8 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
                             .filter { visibility.allows(it) }
                             .takeLast(3).reversed().map { it.text },
                         lastCall = app.callStatus.last(),
+                        lastExit = cn.companion.pet.data.Diagnostics.lastAbnormal(app)
+                            ?.takeIf { System.currentTimeMillis() - it.at < 24 * 60 * 60 * 1000L },
                     )
                 }.getOrDefault(snapshot)
             }
@@ -136,6 +140,19 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }
+            snapshot.lastExit?.let { exit ->
+                val time = java.time.Instant.ofEpochMilli(exit.at).atZone(java.time.ZoneId.systemDefault())
+                    .format(java.time.format.DateTimeFormatter.ofPattern("M月d日 HH:mm"))
+                Text("上次异常退出：$time · ${exit.reason}", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 4.dp))
+            }
+            // 真机出问题时不用连电脑：复制崩溃堆栈、系统退出原因、版本和机型，发给开发者。
+            androidx.compose.material3.TextButton(onClick = {
+                val text = cn.companion.pet.data.Diagnostics.report(activity, a11yConnected)
+                val cm = activity.getSystemService(android.content.ClipboardManager::class.java)
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("同桌诊断", text))
+                Toast.makeText(activity, "诊断信息已复制，粘贴发给开发者即可", Toast.LENGTH_SHORT).show()
+            }) { Text("复制诊断信息") }
             FlowRow(
                 Modifier.padding(top = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),

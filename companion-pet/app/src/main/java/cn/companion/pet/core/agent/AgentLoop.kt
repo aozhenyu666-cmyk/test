@@ -66,16 +66,20 @@ class AgentLoop(
             is AgentDecision.Invalid -> finish(turnId, context, AgentTurnStatus.INVALID, decision, null, "", decision.reason, 1)
             is AgentDecision.NoAction -> finish(turnId, context, AgentTurnStatus.NO_ACTION, decision, null, "", decision.reason, 1)
             is AgentDecision.ToolCall -> {
-                val auth = if (allowedKinds != null && decision.kind !in allowedKinds)
+                // 模型常常漏写 source_ids：这一轮本来就是被这条真实事件（用户的念头/素材）触发的，
+                // 用它作来源即可；以前漏写就被静默拒绝，用户看到的是“没有任何反应”。
+                val call = if (decision.sourceIds.isEmpty() && context.eventId != null)
+                    decision.copy(sourceIds = listOf(context.eventId)) else decision
+                val auth = if (allowedKinds != null && call.kind !in allowedKinds)
                     AgentAuthorization(false, false, "和目标的这一步不符")
-                else AgentPolicy.authorize(decision, autonomy, planner, context)
+                else AgentPolicy.authorize(call, autonomy, planner, context)
                 if (!auth.allowed) {
-                    finish(turnId, context, AgentTurnStatus.DENIED, decision, null, "", auth.reason, 1)
+                    finish(turnId, context, AgentTurnStatus.DENIED, call, null, "", auth.reason, 1)
                 } else if (auth.requiresConfirmation) {
-                    finish(turnId, context, AgentTurnStatus.NEEDS_CONFIRMATION, decision, null,
-                        AgentReport.needsConfirmation(decision), auth.reason, 1)
+                    finish(turnId, context, AgentTurnStatus.NEEDS_CONFIRMATION, call, null,
+                        AgentReport.needsConfirmation(call), auth.reason, 1)
                 } else {
-                    execute(turnId, context, decision)
+                    execute(turnId, context, call)
                 }
             }
         }

@@ -80,7 +80,7 @@ class PetOverlay(
     fun setInSession(v: Boolean) { pet.inSession = v }
 
     /** 气泡里打开输入框（并让窗口能弹输入法）。 */
-    fun openBubbleInput() { if (bubbleShown) bubble.openInput() }
+    fun openBubbleInput(hint: String? = null) { if (bubbleShown) bubble.openInput(hint) }
 
     /** 只换气泡文字（倒计时每秒更新），尺寸变化时重新摆位置。 */
     fun updateBubbleText(text: String) {

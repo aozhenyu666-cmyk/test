@@ -112,7 +112,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private val speech by lazy { app.speech }
     private val power = context.getSystemService(PowerManager::class.java)
     private val keyguard = context.getSystemService(KeyguardManager::class.java)
-    private val labels = HashMap<String, String>()
+    /** 主线程和工作线程（Agent 组装上下文）都会查，用并发安全的表。 */
+    private val labels = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val launchers: Set<String> by lazy { queryLaunchers() }
 
     /** 一次交流：桌宠开口 → 用户最多回一句 → 桌宠接一句收尾。 */
@@ -592,7 +593,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun entrySpec(text: String, scene: Scene, highlightGemini: Boolean) = BubbleSpec(
         text = text,
-        showMic = voice.available,
+        showMic = systemVoice,
         geminiHighlighted = highlightGemini,
         geminiLabel = "去 ${assistants.current.label}",
         showLive = scene == Scene.LEARNING,
@@ -643,7 +644,26 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private var listeningFromHold = false
 
+    /** 用系统语音识别：用户在设置里打开、且系统确实有识别服务和麦克风权限。默认走输入法话筒。 */
+    private val systemVoice: Boolean get() = settings.systemVoice && voice.available
+
+    /**
+     * 默认的“说话”：弹出输入框，让用户点输入法自带的话筒（例如豆包输入法）。
+     * 系统 SpeechRecognizer 在不少国产机后台会立刻失败，用户只看到“没听清”。
+     */
+    private fun speakViaKeyboard() {
+        if (convo == null && session == null && think == null && noteDraft == null) {
+            val d = classify(now())
+            convo = Conversation(d, ProbeReply("", "", Mood.CURIOUS, false, false), buildOpeningSync(d), now(), userStarted = true)
+            overlay.setMood(Mood.CURIOUS)
+            overlay.showBubble(entrySpec("说吧，我听着。", d.scene, false).copy(instant = true))
+        }
+        convo?.interacting = true
+        overlay.openBubbleInput("点输入法上的话筒说话，或者直接打字")
+    }
+
     private fun startListening(fromHold: Boolean) {
+        if (!systemVoice) { speakViaKeyboard(); return }
         convo?.interacting = true
         if (!voice.available) {
             overlay.showBubble(
@@ -688,7 +708,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private fun onUserInput(text: String?, fromHold: Boolean) {
         val said = text?.trim().orEmpty()
         if (said.isEmpty()) {
-            overlay.showBubble(BubbleSpec("没听清，再说一次？", showMic = voice.available, showGemini = false))
+            val error = voice.lastError
+            val message = if (error == null) "没听清，再说一次？"
+            else "系统语音识别失败：" + VoiceInput.describe(error) + "。可以点“打字”，用输入法上的话筒说；或在设置里关掉“用系统语音识别”。"
+            overlay.showBubble(BubbleSpec(message, showMic = systemVoice, showGemini = false))
             return
         }
         val c = convo ?: run {
@@ -1159,7 +1182,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val actions = mutableListOf<BubbleAction>()
         if (flow.question != null) {
             flow.awaitingAnswer = true
-            if (voice.available) actions += BubbleAction("说一句", highlighted = true) { thinkVoice { answerThink(it) } }
+            if (systemVoice) actions += BubbleAction("说一句", highlighted = true) { thinkVoice { answerThink(it) } }
             actions += BubbleAction("打字") { overlay.openBubbleInput() }
             if (r.questions.size > 1) actions += BubbleAction("换个问题") { nextQuestion() }
         }
@@ -1271,7 +1294,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         } else ""
         noteDraft = NoteDraft(fg?.let { label(it) } ?: "手机", quote, now())
         val actions = mutableListOf<BubbleAction>()
-        if (voice.available) actions += BubbleAction("说一句", highlighted = true) { thinkVoice { saveNote(it) } }
+        if (systemVoice) actions += BubbleAction("说一句", highlighted = true) { thinkVoice { saveNote(it) } }
         actions += BubbleAction("打字") { overlay.openBubbleInput() }
         actions += BubbleAction("×") { endThink() }
         overlay.setMood(Mood.CURIOUS)

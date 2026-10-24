@@ -285,6 +285,10 @@ fun SettingsTab(context: Context) {
             tts = it; s.ttsEnabled = it
             if (!it) app.stopSpeech()
         }
+        var sysVoice by remember { mutableStateOf(s.systemVoice) }
+        Toggle("用系统语音识别（实验）",
+            "默认关：按住角色时弹出输入框，点输入法上的话筒说话（比如豆包输入法），更稳。打开后改用系统语音识别；在后台或没有识别服务时会失败，失败时会说明原因。",
+            sysVoice) { sysVoice = it; s.systemVoice = it }
 
         Section("连续性")
         var continuity by remember { mutableStateOf(s.continuityEnabled) }

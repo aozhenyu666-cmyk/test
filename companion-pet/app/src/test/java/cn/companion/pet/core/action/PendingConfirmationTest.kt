@@ -73,6 +73,20 @@ class PendingConfirmationTest {
     }
 
     @Test
+    fun missingSourceIdFallsBackToTheTriggeringEvent() = runBlocking {
+        // 真机 G2：“帮我打开 Gemini”没有反应——模型漏写 source_ids，以前会被静默拒绝。
+        val pending = PendingActionStore(tmp.root)
+        val source = object : AgentDecisionSource {
+            override suspend fun decide(context: AgentContext): String =
+                """{"decision":"tool_call","tool":"OPEN_ASSISTANT","args":{"target":"GEMINI"},"reason":"他想打开 Gemini"}"""
+        }
+        val turn = AgentLoop(source, ActionRunner(emptyMap()), budget, traces, ActionPlanner(), pending = pending)
+            .run(agentContext(), autonomy = true)
+        assertEquals(AgentTurnStatus.NEEDS_CONFIRMATION, turn.status)
+        assertEquals(listOf("e1"), pending.find(turn.pendingId!!)!!.sourceIds)
+    }
+
+    @Test
     fun wrongNonceIsRejected() {
         val store = PendingActionStore(tmp.root)
         val item = store.create(ActionKind.SAVE_NOTE, mapOf("text" to "x"), "p", "com.test", now = 1_000)!!

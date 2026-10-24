@@ -65,6 +65,8 @@ class Settings(context: Context) {
     var deviceAllowedApps by set("device_apps")
     var geminiAutoSend by bool("gemini_auto_send", false)
     var ttsEnabled by bool("tts", false)
+    /** 默认关：说话改为弹出输入框、用输入法自带的话筒。系统语音识别在不少国产机后台会直接失败。 */
+    var systemVoice by bool("system_voice", false)
     var petPaused by bool("paused", false)
     var onboardingDone by bool("onboarding_done", false)
 

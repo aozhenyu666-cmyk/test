@@ -113,6 +113,7 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
     fun show(spec: BubbleSpec, onFinishedTyping: (() -> Unit)? = null) {
         inputRow.visibility = GONE
         input.setText("")
+        input.hint = "想说什么"
         actions.removeAllViews()
         if (spec.actions.isNotEmpty()) {
             spec.actions.forEach { a -> actions.addView(chip(a.label, a.highlighted) { a.onClick() }) }
@@ -160,7 +161,11 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
         handler.postDelayed({ step() }, 55)
     }
 
-    fun openInput() = startTyping()
+    /** 程序打开输入框；[hint] 例如“点输入法上的话筒说话”。 */
+    fun openInput(hint: String? = null) {
+        input.hint = hint ?: "想说什么"
+        startTyping()
+    }
 
     private fun startTyping() {
         inputRow.visibility = VISIBLE

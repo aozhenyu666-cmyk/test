@@ -19,6 +19,10 @@ class VoiceInput(private val context: Context) {
     private var partial = ""
     private var callback: ((String?) -> Unit)? = null
 
+    /** 上一次失败的系统错误码；成功或重新开始时清空。用于告诉用户真正的原因，而不是一律“没听清”。 */
+    var lastError: Int? = null
+        private set
+
     val available: Boolean
         get() = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED &&
             SpeechRecognizer.isRecognitionAvailable(context)
@@ -26,6 +30,7 @@ class VoiceInput(private val context: Context) {
     /** 开始听。[onResult] 收到最终文字（失败或没听清为 null），只回调一次。 */
     fun start(onResult: (String?) -> Unit) {
         cancel()
+        lastError = null
         if (!available) { onResult(null); return }
         partial = ""
         callback = onResult
@@ -40,7 +45,10 @@ class VoiceInput(private val context: Context) {
             override fun onPartialResults(partialResults: Bundle?) {
                 partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { partial = it }
             }
-            override fun onError(error: Int) = finish(partial.takeIf { it.isNotBlank() })
+            override fun onError(error: Int) {
+                if (partial.isBlank()) lastError = error
+                finish(partial.takeIf { it.isNotBlank() })
+            }
             override fun onReadyForSpeech(params: Bundle?) = Unit
             override fun onBeginningOfSpeech() = Unit
             override fun onRmsChanged(rmsdB: Float) = Unit
@@ -76,5 +84,19 @@ class VoiceInput(private val context: Context) {
         runCatching { recognizer?.destroy() }
         recognizer = null
         cb?.invoke(text)
+    }
+
+    companion object {
+        fun describe(error: Int): String = when (error) {
+            SpeechRecognizer.ERROR_NETWORK_TIMEOUT, SpeechRecognizer.ERROR_NETWORK -> "网络问题"
+            SpeechRecognizer.ERROR_AUDIO -> "录不到声音（后台时系统可能不给麦克风）"
+            SpeechRecognizer.ERROR_SERVER, SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> "识别服务出错或断开"
+            SpeechRecognizer.ERROR_CLIENT -> "识别服务拒绝了请求"
+            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "没听到说话"
+            SpeechRecognizer.ERROR_NO_MATCH -> "没识别出文字"
+            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "识别服务正忙"
+            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "没有麦克风权限（后台启动时系统也会这样）"
+            else -> "错误码 $error"
+        }
     }
 }

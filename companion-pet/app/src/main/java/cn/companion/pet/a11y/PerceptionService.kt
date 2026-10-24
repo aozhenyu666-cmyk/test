@@ -27,12 +27,23 @@ class PerceptionService : AccessibilityService() {
         PerceptionHub.service = this
         PerceptionHub.reader = { readWindowText() }
         PerceptionHub.setConnected(true)
-        // 系统会在进程被杀后重新绑定无障碍服务：借这个机会把桌宠拉回来（用户主动停止过则不拉）
-        if (!PetService.running) PetService.startIfAllowed(this)
+        // 系统会在进程被杀后重新绑定无障碍服务：借这个机会把桌宠拉回来（用户主动停止过则不拉）。
+        // 任何失败都只放弃这一次拉起，不能让无障碍服务跟着出错。
+        runCatching { if (!PetService.running) PetService.startIfAllowed(this) }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
+        // 这里的异常会让系统把服务标成“此服务出现故障”，并要求用户手动关掉再打开。
+        // 感知只是辅助信息，宁可丢一个事件也不能让服务崩掉。
+        try {
+            handle(event)
+        } catch (e: Exception) {
+            android.util.Log.w("PerceptionService", "event dropped", e)
+        }
+    }
+
+    private fun handle(event: AccessibilityEvent) {
         val pkg = event.packageName?.toString() ?: return
         if (pkg in ignored) return
         val now = System.currentTimeMillis()
@@ -80,7 +91,10 @@ class PerceptionService : AccessibilityService() {
         val stack = ArrayDeque<Pair<AccessibilityNodeInfo, Boolean>>()
         stack.addLast(root to false)
         var visited = 0
-        while (stack.isNotEmpty() && visited < MAX_NODES) {
+        // 读节点是跨进程调用，且多半在主线程：主线程同时负责处理无障碍事件，卡久了系统会判定服务故障或 ANR。
+        // 给一个时间上限，读不完就用已经读到的。
+        val deadline = android.os.SystemClock.uptimeMillis() + MAX_READ_MILLIS
+        while (stack.isNotEmpty() && visited < MAX_NODES && android.os.SystemClock.uptimeMillis() < deadline) {
             val (node, inScroll) = stack.removeLast()
             visited++
             if (node.isPassword) continue
@@ -95,6 +109,7 @@ class PerceptionService : AccessibilityService() {
     }
 
     companion object {
-        private const val MAX_NODES = 800
+        private const val MAX_NODES = 600
+        private const val MAX_READ_MILLIS = 150L
     }
 }
