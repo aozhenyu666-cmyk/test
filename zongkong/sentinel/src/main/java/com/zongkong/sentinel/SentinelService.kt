@@ -30,6 +30,7 @@ class SentinelService : AccessibilityService() {
         override fun run() {
             try {
                 Store.touch()
+                DeviceLock.sync(this@SentinelService) // 解除「准备卸载」结束后，把卸载锁重新锁上
                 watch()
                 // 一直停在一个被拦的应用里（没有新的窗口事件）：也再看一眼
                 lastPkg?.let { check(it, probed = false) }
@@ -125,7 +126,7 @@ class SentinelService : AccessibilityService() {
      */
     private fun check(pkg: String, probed: Boolean) {
         val st = Store.state(this)
-        if (!Decide.shouldBlock(st, System.currentTimeMillis(), pkg, Sys.mainInstalled(this))) return
+        if (!Decide.shouldBlock(st, System.currentTimeMillis(), pkg, Sys.mainInstalled(this), released = Store.releaseGranted(this))) return
         if (!interactive()) return
         if (!probed) {
             // 刚切过来：总控也同时收到了这个窗口事件，给它 1.5 秒写心跳，再去问

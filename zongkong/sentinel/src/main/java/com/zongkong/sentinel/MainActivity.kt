@@ -57,6 +57,26 @@ class MainActivity : Activity() {
             packageManager.getLaunchIntentForPackage(Proto.MAIN_PKG)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
         }
 
+        // 自律体：解除 / 停用总控都要走闸门（0.15）
+        val rel = Store.release(this)
+        if (rel != null) {
+            val phase = Release.phase(rel, now, android.os.SystemClock.elapsedRealtime(), Store.releaseRule)
+            ui.text("● 解除申请（${rel.kind.label}）：" + when (phase) {
+                Release.Phase.COOLING -> "冷静期，还剩 ${Decide.ago(Release.coolingLeft(rel, now, android.os.SystemClock.elapsedRealtime(), Store.releaseRule))}"
+                Release.Phase.VERIFY -> "等二次核验"
+                Release.Phase.GRANTED -> "已解除，到 ${hm(rel.grantedUntil)} 恢复"
+                else -> "已结束"
+            }, 15f, if (phase == Release.Phase.GRANTED) Ui.RED else Ui.MUTED, bold = true)
+        }
+        ui.button(if (rel == null) "解除 / 停用总控…" else "解除申请 →", primary = false) {
+            startActivity(Intent(this, ReleaseActivity::class.java))
+        }
+        if (DeviceLock.isOwner(this)) ui.text("● 防卸载开着（设备所有者）：卸载 / 停用都得先走解除闸门。", 13f, Ui.GREEN)
+        else ui.text(
+            "防卸载没开：普通安装挡不住卸载。想真正锁死（卸载、停用都得走解除闸门），在一台没登录账号的手机上用电脑执行一次：\n${DeviceLock.setupOwnerCommand()}",
+            13f, Ui.MUTED,
+        )
+
         ui.text("\n自动修复", 16f, bold = true)
         ui.text(
             if (Sys.canWrite(this)) "有“写安全设置”权限：总控掉了，哨兵会自己把它挂回去（两分钟试一次）。"
@@ -72,4 +92,6 @@ class MainActivity : Activity() {
         }
         setContentView(ui.scroll())
     }
+
+    private fun hm(t: Long) = java.time.Instant.ofEpochMilli(t).atZone(java.time.ZoneId.of("Asia/Shanghai")).let { "%02d:%02d".format(it.hour, it.minute) }
 }

@@ -65,7 +65,7 @@ object Diag {
     val KINDS = setOf(
         "connected", "unbound", "destroyed", "offline", "stale", "rebind_ok",
         "rebind_fail", "disabled", "bounce", "lockdown", "event_error", "watchdog",
-        "crash", "autoblock", "sentinel_on", "sentinel_off", "sentinel_takeover", "sentinel_main_back", "sentinel_wake",
+        "crash", "autoblock", "sentinel_on", "sentinel_off", "sentinel_takeover", "sentinel_main_back", "sentinel_wake", "released",
     )
 
     private val lock = Any()

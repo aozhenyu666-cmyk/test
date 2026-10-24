@@ -53,6 +53,12 @@ object SentinelClient {
     @Volatile var last: Info? = null
         private set
 
+    /** 哨兵那边的解除闸门生效到几点（墙上时间）；每次和哨兵通话都更新。0 = 没解除。 */
+    @Volatile private var releasedUntilMs = 0L
+
+    /** 哨兵的解除闸门现在是不是生效（总控据此让路：不拦、不进总控时间）。 */
+    fun released(now: Long = System.currentTimeMillis()): Boolean = now < releasedUntilMs
+
     private val exec = Executors.newSingleThreadExecutor { r -> Thread(r, "sentinel-link").apply { isDaemon = true } }
 
     fun installed(c: Context): Boolean = try {
@@ -85,6 +91,11 @@ object SentinelClient {
         }
     }
 
+    /** 从哨兵回来的 Bundle 里读解除闸门的到期时间。 */
+    private fun readReleased(r: Bundle?) {
+        if (r != null && !r.containsKey("error")) releasedUntilMs = r.getLong("releasedUntil", 0L)
+    }
+
     /** 问一句哨兵在不在跑（同步，跨进程一次，通常几毫秒）。没装、不是真的、叫不应：null。 */
     fun ping(c: Context): Info? = call(c, "ping", null)
 
@@ -96,6 +107,7 @@ object SentinelClient {
                 Log.w(TAG, "哨兵拒绝：${r.getString("error")}")
                 return null
             }
+            readReleased(r)
             Info(
                 r.getBoolean("running"), r.getLong("beat"), r.getInt("takeovers"), r.getLong("lastTakeover"),
                 r.getBoolean("canWrite"), r.getString("version").orEmpty(), r.getStringArray("log")?.toList() ?: last?.log.orEmpty(),

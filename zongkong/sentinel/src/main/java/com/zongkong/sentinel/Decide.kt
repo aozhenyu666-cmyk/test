@@ -38,8 +38,9 @@ object Decide {
      * 打开 [pkg] 时要不要拦。
      * 总控没装、或者从没连上过哨兵：不拦（还没开始守）。总控在线：不拦（总控自己管）。休假 / 紧急放行中：不拦。
      */
-    fun shouldBlock(s: State?, now: Long, pkg: String, mainInstalled: Boolean): Boolean {
+    fun shouldBlock(s: State?, now: Long, pkg: String, mainInstalled: Boolean, released: Boolean = false): Boolean {
         if (!mainInstalled || s == null) return false
+        if (released) return false // 解除闸门生效中（走过冷静期 + 二次核验）
         if (mainAlive(s, now)) return false
         if (now < s.freeUntil) return false
         val list = s.blocked.takeIf { it.isNotEmpty() } ?: DEFAULT_BLOCKED

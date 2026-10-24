@@ -80,6 +80,62 @@ object Store {
         p.edit().putInt("takeovers", p.getInt("takeovers", 0) + 1).putLong("lastTakeover", System.currentTimeMillis()).apply()
     }
 
+    // ---------- 解除闸门（0.15） ----------
+
+    @Volatile private var releaseLoaded = false
+    @Volatile private var releaseMem: Release.Request? = null
+
+    @Synchronized
+    fun release(c: Context): Release.Request? {
+        if (!releaseLoaded) {
+            releaseLoaded = true
+            releaseMem = try {
+                val file = f(c, "release.json")
+                if (!file.exists()) null else JSONObject(file.readText()).let { o ->
+                    Release.Request(
+                        Release.Kind.valueOf(o.getString("kind")),
+                        o.getString("analysis"),
+                        o.getLong("s1w"), o.getLong("s1m"),
+                        o.optLong("s2w"), o.optLong("grant"),
+                    )
+                }
+            } catch (e: Throwable) {
+                null
+            }
+        }
+        return releaseMem
+    }
+
+    /** 存 / 清当前的解除申请（null = 清掉）。 */
+    @Synchronized
+    fun putRelease(c: Context, req: Release.Request?) {
+        release(c)
+        releaseMem = req
+        try {
+            val file = f(c, "release.json")
+            if (req == null) { file.delete(); return }
+            val o = JSONObject()
+                .put("kind", req.kind.name).put("analysis", req.analysis)
+                .put("s1w", req.stage1Wall).put("s1m", req.stage1Mono)
+                .put("s2w", req.stage2Wall).put("grant", req.grantedUntil)
+            val tmp = f(c, "release.json.tmp")
+            tmp.writeText(o.toString())
+            if (!tmp.renameTo(file)) { file.writeText(o.toString()); tmp.delete() }
+        } catch (e: Throwable) {
+            Log.w(TAG, "写解除申请失败", e)
+        }
+    }
+
+    /** 闸门参数：固定默认（以后要可调再从总控写过来）。 */
+    val releaseRule = Release.Rule()
+
+    /** 现在是不是有生效中的解除（哨兵据此不拦，总控据此让路）。顺手清掉已走完的申请。 */
+    fun releaseGranted(c: Context, wall: Long = System.currentTimeMillis(), mono: Long = android.os.SystemClock.elapsedRealtime()): Boolean {
+        val req = release(c) ?: return false
+        if (Release.done(req, wall, mono, releaseRule)) { putRelease(c, null); return false }
+        return Release.granted(req, wall, mono, releaseRule)
+    }
+
     // ---------- 记录（最近 80 条） ----------
 
     private val ZONE: ZoneId = ZoneId.of("Asia/Shanghai")

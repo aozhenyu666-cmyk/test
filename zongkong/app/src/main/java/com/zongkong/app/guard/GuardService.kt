@@ -70,6 +70,7 @@ class GuardService : AccessibilityService() {
         }
     }
     private var lastBounce = 0L
+    private var releasedLogged = false
     private var lastStatusText = ""
     private var lastSync = 0L
 
@@ -173,6 +174,12 @@ class GuardService : AccessibilityService() {
             fgStartedAt = now
             store.logSwitch(now, pkg)
         }
+        // 哨兵的解除闸门生效中（走过冷静期 + 二次手写核验）：总控也让路，什么都不拦
+        if (SentinelClient.released(now)) {
+            if (!releasedLogged) { releasedLogged = true; runCatching { Diag.log(this, "released", "哨兵解除闸门生效，总控让路") } }
+            return
+        }
+        releasedLogged = false
         if (lockdown(pkg, now)) return
         enforce(pkg, now)
         // 低屏模式：连续用太久的应用弹回去做题（不拦全封，只限时 + 冷却 + 做题）

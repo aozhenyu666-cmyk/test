@@ -38,6 +38,25 @@
             android:launchMode="singleTask"
             android:taskAffinity="com.zongkong.sentinel.block" />
 
+        <!-- 解除闸门：手写分析 + 冷静期 + 二次核验 -->
+        <activity
+            android:name=".ReleaseActivity"
+            android:exported="false"
+            android:launchMode="singleTask" />
+
+        <!-- 设备管理器：设成设备所有者后能锁住卸载（可选，adb 设一次） -->
+        <receiver
+            android:name=".AdminReceiver"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
         <!-- 总控往这里写心跳和拦截状态；只认总控的签名 -->
         <provider
             android:name=".LinkProvider"

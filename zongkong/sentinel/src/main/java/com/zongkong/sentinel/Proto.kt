@@ -24,4 +24,6 @@ object Proto {
     const val VERSION = "version"
     const val LOG = "log"
     const val ERROR = "error"
+    /** 解除闸门生效到几点（墙上时间毫秒）；0 = 没有解除。总控据此让路。 */
+    const val RELEASED_UNTIL = "releasedUntil"
 }

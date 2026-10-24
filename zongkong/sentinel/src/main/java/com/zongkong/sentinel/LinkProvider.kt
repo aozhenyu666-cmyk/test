@@ -45,6 +45,8 @@ class LinkProvider : ContentProvider() {
         putLong(Proto.LAST_TAKEOVER, Store.lastTakeover(c))
         putBoolean(Proto.CAN_WRITE, Sys.canWrite(c))
         putString(Proto.VERSION, try { c.packageManager.getPackageInfo(c.packageName, 0).versionName } catch (_: Throwable) { "" })
+        // 解除闸门生效中：告诉总控让路（总控还活着时也不拦）
+        putLong(Proto.RELEASED_UNTIL, if (Store.releaseGranted(c)) (Store.release(c)?.grantedUntil ?: 0L) else 0L)
         if (withLog) putStringArray(Proto.LOG, Store.recent(c, 20).toTypedArray())
     }
 
