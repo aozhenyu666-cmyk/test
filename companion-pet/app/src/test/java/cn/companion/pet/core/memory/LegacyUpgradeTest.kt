@@ -75,4 +75,23 @@ class LegacyUpgradeTest {
         assertEquals(state, File(tmp.root, "state.json").readText())
         assertEquals(topics, File(tmp.root, "topics.json").readText())
     }
+
+    @Test fun legacyUserConfirmationStaysAuthoritativeAcrossTheNextNightlyCommit() {
+        listOf("", ",\"origin\":\"USER\"").forEachIndexed { index, origin ->
+            val root = File(tmp.root, "confirmed-$index").apply { mkdirs() }
+            File(root, "facts.json").writeText("""[{"id":"confirmed","factKey":"legacy-key","text":"合成已确认偏好","confidence":"said","createdAt":1792756800000,"version":2$origin}]""")
+            val memory = MemoryStore(root)
+            memory.saveProfileByUser("[我推测] 合成已确认偏好")
+            val events = EventLog(root, clock)
+            events.append(EventKind.EXCHANGE, "合成交流")
+            val facts = FactStore(root, clock)
+            val nightly = NightlyStore(memory, events, clock, facts = facts)
+            val day = LocalDate.of(2026, 10, 23)
+            val batch = nightly.prepare(day)!!.batch
+            assertEquals(NightlyCommitOutcome.COMMITTED, nightly.commit(batch,
+                NightlyOutput(listOf("[我推测] 合成已确认偏好"), "合成日记", "合成信")))
+            assertEquals("[他说过] 合成已确认偏好", memory.profile())
+            assertEquals(Confidence.SAID, facts.live().single().confidence)
+        }
+    }
 }

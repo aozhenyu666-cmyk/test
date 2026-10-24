@@ -3,6 +3,8 @@ package cn.companion.pet.core.companion
 import cn.companion.pet.core.memory.ProfileRules
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import java.io.File
 import java.time.Clock
 import java.time.Instant
@@ -175,8 +177,7 @@ class FactStore(
     fun protectUserFacts(lines: List<String>, tombstones: Set<String>): List<String> {
         val all = all()
         val userFacts = all.filter { !it.deleted && it.supersededBy == null &&
-            (it.origin == FactOrigin.USER_EDIT || (it.origin == FactOrigin.USER &&
-                all.any { old -> old.factKey == it.factKey && old.supersededBy == it.id })) }
+            (it.origin == FactOrigin.USER_EDIT || (it.origin == FactOrigin.USER && it.version > 1)) }
             .filter { ProfileRules.normalize(it.text) !in tombstones }
         val protectedKeys = userFacts.map { it.factKey }.toSet()
         val replacedTexts = all.filter { it.factKey in protectedKeys || it.deleted }
@@ -192,7 +193,14 @@ class FactStore(
     private fun readLocked(): List<Fact> {
         if (!file.exists()) return emptyList()
         return runCatching {
-            json.decodeFromString(ListSerializer(Fact.serializer()), file.readText())
+            json.parseToJsonElement(file.readText()).jsonArray.map { element ->
+                val fact = json.decodeFromJsonElement(Fact.serializer(), element)
+                // Before origin existed, confirm/correct were the paths that made a SAID v2+.
+                // Do not classify an explicitly PROFILE_SYNC record from newer versions this way.
+                if ("origin" !in element.jsonObject && fact.version > 1 && fact.confidence == Confidence.SAID) {
+                    fact.copy(origin = FactOrigin.USER_EDIT)
+                } else fact
+            }
         }.getOrElse { emptyList() }
     }
 

@@ -6,7 +6,7 @@
   "jdk": "Temurin 17.0.21+9",
   "compile_sdk": 35,
   "unit_tests": {
-    "tests": 197,
+    "tests": 198,
     "failures": 0,
     "errors": 0,
     "skipped": 0
@@ -24,7 +24,7 @@
   "artifacts": {
     "companion-pet-v0.3.1-debug.apk": {
       "bytes": 28425829,
-      "sha256": "3efd180d41a336e76028c24015aac5b08ffd949324a686a0ec67e1759697baf2"
+      "sha256": "72e384330a572900fe99fbe58fea0f30ecac98d0ccece4ee2da9543f92b972a5"
     },
     "companion-pet-v0.3.1-androidTest.apk": {
       "bytes": 2306085,
