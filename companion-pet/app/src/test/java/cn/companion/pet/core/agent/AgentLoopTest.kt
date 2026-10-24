@@ -33,12 +33,14 @@ class AgentLoopTest {
     private class ReportingSource(var content: String?, private val reportText: String) : AgentDecisionSource {
         override val canReport: Boolean = true
         val calls = AtomicInteger(0)
+        val reportCalls = AtomicInteger(0)
         var lastReceipt: ActionResult? = null
         override suspend fun decide(context: AgentContext): String? {
             calls.incrementAndGet()
             return content
         }
         override suspend fun report(context: AgentContext, decision: AgentDecision.ToolCall, result: ActionResult): String? {
+            reportCalls.incrementAndGet()
             lastReceipt = result
             return reportText
         }
@@ -277,5 +279,20 @@ class AgentLoopTest {
         val foreign = agent.run(context().copy(eventIds = listOf("e2")), true)
         assertEquals(AgentTurnStatus.DENIED, foreign.status)
         assertEquals(0, adapter.calls.get())
+    }
+
+    @Test
+    fun cancelledActionSkipsSecondModelCall() = runBlocking {
+        val source = ReportingSource("""{"decision":"tool_call","tool":"READ_MATERIALS","reason":"x"}""", "不该出现")
+        val adapter = CountingAdapter(ActionStatus.CANCELLED)
+        val budget = FakeBudget(10)
+        val runner = ActionRunner(mapOf(ActionKind.READ_MATERIALS to adapter))
+        val agent = AgentLoop(source, runner, budget, object : AgentTraceSink {
+            override fun append(trace: AgentTrace) {}
+        }, ActionPlanner(), 1_000, { "cancel" })
+        val result = agent.run(context(), true)
+        assertEquals(AgentTurnStatus.CANCELLED, result.status)
+        assertEquals(0, source.reportCalls.get())
+        assertEquals(1, result.modelAttempts)
     }
 }

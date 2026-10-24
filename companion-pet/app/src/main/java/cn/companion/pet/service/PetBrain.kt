@@ -168,7 +168,12 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         app.events.addListener(agentListener)
         handler.postDelayed(agentTrigger, 1_200)
         PerceptionHub.onScroll = { pkg -> onScrollEvent(pkg) }
-        scope.launch { settings.changes.collect { scheduler.config = settings.rhythm() } }
+        scope.launch {
+            settings.changes.collect {
+                scheduler.config = settings.rhythm()
+                if (settings.agentAutonomy) scheduleAgentScan() else app.agentLoop.cancel()
+            }
+        }
     }
 
     fun stop() {

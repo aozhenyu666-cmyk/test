@@ -50,15 +50,15 @@
 ## 3. 验证
 
 ```text
-:app:testDebugUnitTest          PASS   288 tests / 0 failures
+:app:testDebugUnitTest          PASS   289 tests / 0 failures
 :app:lintDebug                  PASS   0 errors / 5 warnings
-:app:assembleDebug              PASS   28,719,497 bytes
+:app:assembleDebug              PASS   28,719,637 bytes
 :app:assembleDebugAndroidTest   PASS   仪器 APK 仅编译
 ```
 
-APK SHA-256：`D1C057A81FAA59863816E7BBB6C6C8A28F00984798AE2A11295C0B74EA433ADA`
+APK SHA-256：`31C605EBE97F799EB00B9A9D6C3F2CF2EDDD92C4CCE58D7CA2ECFCED1E9C9C55`
 
-新增 10 个 JVM 用例：NOTE 后接 EXCHANGE、同毫秒两条、重启已处理 ID、删除不复活、超过 7 天忽略、事件监听、真实安静/越权来源拒绝、第二次回执模型调用、只够一次预算回退、回执请求契约。基线 278 个测试保留。
+新增 11 个 JVM 用例：NOTE 后接 EXCHANGE、同毫秒两条、重启已处理 ID、删除不复活、超过 7 天忽略、事件监听、真实安静/越权来源拒绝、第二次回执模型调用、只够一次预算回退、回执请求契约、取消后不再发第二次模型请求。基线 278 个测试保留。
 
 ## 4. 边界（未执行）
 

@@ -87,7 +87,9 @@ class AgentLoop(
         }
         val status = if (result.status == ActionStatus.CANCELLED) AgentTurnStatus.CANCELLED else AgentTurnStatus.EXECUTED
         val fallback = AgentReport.text(decision, result)
-        val report = report(context, decision, result, fallback)
+        // 已取消就不再发第二次模型请求；回执如实说明可能已发生的副作用。
+        val report = if (status == AgentTurnStatus.CANCELLED) fallback to 0
+        else report(context, decision, result, fallback)
         return finish(turnId, context, status, decision, result, report.first, result.reason, 1 + report.second)
     }
 
