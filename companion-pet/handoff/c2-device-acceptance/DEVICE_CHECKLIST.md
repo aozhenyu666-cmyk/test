@@ -68,4 +68,6 @@ adb -s <serial> shell run-as cn.companion.pet cat files/memory/goals/state.json
 adb -s <serial> shell run-as cn.companion.pet cat files/memory/actions/pending.json
 ~~~
 
-证据只记步骤/状态/截图路径；不导出 Key、Cookie、截图原文、Base64、私人聊天。
+证据只记步骤/状态/截图路径；不导出 Key、Cookie、截图原文、Base64、私人聊天。 
+自动化辅助：python companion-pet/tools/c2_device_smoke.py --adb <adb.exe> --apk <apk> --evidence-dir <dir>
+无设备时生成 NOT_RUN JSON；不读取 Key/截图原文。
