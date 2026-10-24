@@ -385,7 +385,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 synchronized(app.memoryLock) {
                     val snapshot = app.events.all()
                     val visibility = EventVisibility(snapshot, memory.tombstones(), now)
-                    agentScanner.next(snapshot, app.agentEventLedger.processed(now), now, visibility)
+                    agentScanner.next(snapshot, app.agentEventLedger.processed(now), now, visibility,
+                        app.agentEventLedger.highWater())
                 }
             } ?: return@launch
             if (!settings.agentAutonomy || !active || settings.petPaused || scheduler.isQuiet(now())) return@launch

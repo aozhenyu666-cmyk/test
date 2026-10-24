@@ -469,6 +469,10 @@ private fun GoalSection() {
         TextButton(onClick = { tick++ }) { Text("刷新") }
     }
     plan?.let { Text("下一步：" + it, style = MaterialTheme.typography.bodySmall) }
+    app.goalStore.lastError?.let { Text("目标存储：" + it, style = MaterialTheme.typography.bodySmall) }
+    if (app.goalStore.status == cn.companion.pet.core.goal.GoalStoreStatus.CORRUPT) {
+        Text("目标文件损坏，已停止写入；不会把损坏当成空目标。", style = MaterialTheme.typography.bodySmall)
+    }
     goals.forEach { goal ->
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column(Modifier.weight(1f)) {

@@ -139,7 +139,13 @@ class AndroidDeviceController(
         while (stack.isNotEmpty() && visited < 800) {
             val node = stack.removeLast(); visited++
             val ref = toRef(node, "", 0)
-            if (ref.id == id) return node
+            if (ref.id == id) {
+                val expected = latest?.nodes?.firstOrNull { it.id == id } ?: return null
+                val same = ref.packageName == expected.packageName && ref.clickable == expected.clickable &&
+                    ref.editable == expected.editable && ref.left == expected.left && ref.top == expected.top &&
+                    ref.right == expected.right && ref.bottom == expected.bottom
+                return if (same) node else null
+            }
             for (i in node.childCount - 1 downTo 0) node.getChild(i)?.let { stack.addLast(it) }
         }
         return null

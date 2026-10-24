@@ -86,6 +86,21 @@ object DevicePolicy {
         if (pkg in sensitivePackages) return DevicePolicyDecision(false, "敏感系统/商店应用")
         if (command !is DeviceCommand.GetState && command !is DeviceCommand.OpenApp) {
             if (observation == null || !observation.valid(now)) return DevicePolicyDecision(false, "观察已过期")
+            if (snapshot.foregroundPackage != observation.packageName) return DevicePolicyDecision(false, "前台已切换，拒绝旧观察")
+            val target = when (command) {
+                is DeviceCommand.TapNode -> observation.nodes.firstOrNull { it.id == command.nodeId }
+                is DeviceCommand.InputText -> observation.nodes.firstOrNull { it.id == command.nodeId }
+                else -> null
+            }
+            if ((command is DeviceCommand.TapNode || command is DeviceCommand.InputText) && target == null) {
+                return DevicePolicyDecision(false, "节点不存在")
+            }
+            if (command is DeviceCommand.InputText && target?.editable != true) {
+                return DevicePolicyDecision(false, "目标不是可编辑输入框")
+            }
+            if (target != null && (target.right <= target.left || target.bottom <= target.top)) {
+                return DevicePolicyDecision(false, "节点边界无效")
+            }
         }
         if (command is DeviceCommand.InputText && command.text.length > 300) {
             return DevicePolicyDecision(false, "输入文本过长")

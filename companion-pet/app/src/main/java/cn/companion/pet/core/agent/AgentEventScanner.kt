@@ -17,10 +17,12 @@ class AgentEventScanner(
         processedIds: Set<String>,
         now: Long,
         visibility: EventVisibility,
+        highWaterAt: Long = 0L,
     ): CompanionEvent? = events.firstOrNull { event ->
         (event.kind == EventKind.NOTE || event.kind == EventKind.MATERIAL) &&
             event.id !in processedIds &&
             event.occurredAt >= now - maxAgeMillis &&
+                event.occurredAt >= highWaterAt &&
             event.source != "agent" &&
             event.source != "tool" &&
             visibility.allows(event)

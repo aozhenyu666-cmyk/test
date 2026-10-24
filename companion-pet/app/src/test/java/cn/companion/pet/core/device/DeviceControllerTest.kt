@@ -14,8 +14,8 @@ class DeviceControllerTest {
     private fun node(id: String = "n1") = NodeRef(id, "o1", "com.test", "按钮", "id/button", "Button",
         clickable = true, editable = false, scrollable = false, left = 0, top = 0, right = 10, bottom = 10)
     private fun obs(expires: Long = 20_000L) = DeviceObservation("o1", "com.test", now, expires, listOf(node()))
-    private fun snap(unlocked: Boolean = true, connected: Boolean = true) =
-        DeviceSnapshot("com.test", unlocked, connected, ShizukuStatus.READY)
+    private fun snap(unlocked: Boolean = true, connected: Boolean = true, packageName: String = "com.test") =
+        DeviceSnapshot(packageName, unlocked, connected, ShizukuStatus.READY)
 
     @Test
     fun shizukuStatusMapping() {
@@ -66,5 +66,13 @@ class DeviceControllerTest {
         val result = adapter.execute(ActionRequest("a2", ActionKind.GET_DEVICE_STATE))
         assertEquals(ActionStatus.SUCCESS, result.status)
         assertEquals("com.test", result.data["foreground"])
+    }
+
+    @Test
+    fun foregroundSwitchAndInputShapeAreRejected() {
+        assertFalse(DevicePolicy.check(DeviceCommand.TapNode("n1"), snap(packageName = "com.other"), obs(), setOf("com.test"), now).allowed)
+        assertFalse(DevicePolicy.check(DeviceCommand.InputText("n1", "text"), snap(), obs(), setOf("com.test"), now).allowed)
+        val invalidBounds = obs().copy(nodes = listOf(node().copy(right = 0)))
+        assertFalse(DevicePolicy.check(DeviceCommand.TapNode("n1"), snap(), invalidBounds, setOf("com.test"), now).allowed)
     }
 }
