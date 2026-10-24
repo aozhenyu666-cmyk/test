@@ -59,3 +59,16 @@
 - core/device/DeviceController.kt、DeviceActionAdapter.kt、ShizukuBridge.kt、a11y/AndroidDeviceController.kt
 - core/goal/GoalModels.kt、GoalStore.kt、GoalSupervisor.kt
 - 各阶段 handoff/*/STATE.md 与 DEVICE_CHECKLIST.md
+## B0-B4 施工结果
+
+| 阶段 | 分支 | 提交 | 版本 | JVM | CI |
+|---|---|---|---|---:|---|
+| B0 | deepseek/moling-b0-integrity | af71cc1 | 0.4.1 / 14 | 313 | 40079898443 |
+| B1 | deepseek/moling-b1-goal-agent | 03f05bc | 0.4.2 / 15 | 317 | 40080607565 |
+| B2 | deepseek/moling-b2-confirmation | 3be7d0a | 0.4.3 / 16 | 320 | pending |
+| B3 | deepseek/moling-b3-shizuku-real | c430a1f | 0.4.4 / 17 | 323 | pending |
+| B4 | deepseek/moling-b4-e2e-release | this commit | 0.5.0 / 18 | 323 | pending |
+
+B0 修好 GoalStore 假成功/损坏覆盖、设备前台绑定、事件高水位；B1 接通 Goal→AgentLoop→ActionRunner→episode；B2 加持久 PendingAction 与确认 UI；B3 加固定 Shizuku Binder 版本读取（无 shell）；B4 加设备验收清单与最终 APK。
+
+真机、真实 API、真实 Shizuku 全部 NOT_RUN；不能把 JVM/CI 当设备通过。
