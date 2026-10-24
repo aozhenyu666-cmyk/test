@@ -65,10 +65,10 @@
 |---|---|---|---|---:|---|
 | B0 | deepseek/moling-b0-integrity | af71cc1 | 0.4.1 / 14 | 313 | 40079898443 |
 | B1 | deepseek/moling-b1-goal-agent | 03f05bc | 0.4.2 / 15 | 317 | 40080607565 |
-| B2 | deepseek/moling-b2-confirmation | 3be7d0a | 0.4.3 / 16 | 320 | pending |
-| B3 | deepseek/moling-b3-shizuku-real | c430a1f | 0.4.4 / 17 | 323 | pending |
-| B4 | deepseek/moling-b4-e2e-release | this commit | 0.5.0 / 18 | 323 | pending |
+| B2 | deepseek/moling-b2-confirmation | 3be7d0a | 0.4.3 / 16 | 320 | 40081413757 |
+| B3 | deepseek/moling-b3-shizuku-real | c430a1f | 0.4.4 / 17 | 323 | 40081846891 |
+| B4 | deepseek/moling-b4-e2e-release | bd85013 | 0.5.0 / 18 | 323 | 40082053011 |
 
-B0 修好 GoalStore 假成功/损坏覆盖、设备前台绑定、事件高水位；B1 接通 Goal→AgentLoop→ActionRunner→episode；B2 加持久 PendingAction 与确认 UI；B3 加固定 Shizuku Binder 版本读取（无 shell）；B4 加设备验收清单与最终 APK。
+B0 修好 GoalStore 假成功/损坏覆盖、设备前台绑定、事件高水位；B1 接通 Goal→AgentLoop→ActionRunner→episode；B2 加持久 PendingAction 与确认 UI；B3 加固定 Shizuku Binder 版本读取（无 shell）；B4 加设备验收清单与最终 APK（76726046D96ACCD6F9945D3A59A696617A63F91CB2B7E74DB55342BA0D93F3DB）。
 
 真机、真实 API、真实 Shizuku 全部 NOT_RUN；不能把 JVM/CI 当设备通过。
