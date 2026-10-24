@@ -56,6 +56,8 @@ class Settings(context: Context) {
     var skimEnabled by bool("skim", true)
     /** 新连续性路径：按相关召回 + 结构化事实；默认关，关掉后走旧的整份 profile 路径。 */
     var continuityEnabled by bool("continuity", false)
+    /** A1 自主决策：默认关；只自动执行只读工具，写入/打开/朗读只提议不执行。 */
+    var agentAutonomy by bool("agent_autonomy", false)
     var geminiAutoSend by bool("gemini_auto_send", false)
     var ttsEnabled by bool("tts", false)
     var petPaused by bool("paused", false)

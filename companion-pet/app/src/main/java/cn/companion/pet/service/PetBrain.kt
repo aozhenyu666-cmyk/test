@@ -20,7 +20,11 @@ import cn.companion.pet.core.companion.TopicGate
 import cn.companion.pet.core.companion.TopicQueue
 import cn.companion.pet.core.companion.CompanionContextAssembler
 import cn.companion.pet.core.bridge.GeminiBridgeTextBuilder
+import cn.companion.pet.core.companion.CompanionEvent
 import cn.companion.pet.core.companion.EventKind
+import cn.companion.pet.core.agent.AgentContext
+import cn.companion.pet.core.agent.AgentTrigger
+import cn.companion.pet.core.action.VisibleMemoryReader
 import cn.companion.pet.core.life.PetLife
 import cn.companion.pet.core.life.WeightyMoments
 import cn.companion.pet.core.memory.Exchange
@@ -88,6 +92,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private val overlay = PetOverlay(context, settings, this, this)
     private val assembler by lazy { CompanionContextAssembler(app.events, app.facts, materials = app.materialInbox) }
+    private val visibleMemory by lazy { VisibleMemoryReader(memory, app.events, app.facts) }
     private val stateStore by lazy { PetStateStore(memory.root) }
     private val topics by lazy { app.topics }
     private val topicGate by lazy { TopicGate(topics) }
@@ -170,6 +175,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     fun onScreenOff() {
         active = false
+        app.agentLoop.cancel()
         app.actions.cancelAll() // 锁屏后按现有规则停止动作
         scheduler.onScreenOff()
         probeJob?.cancel()
@@ -267,6 +273,14 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         if (probeJob?.isActive == true || convo != null || session != null || think != null || noteDraft != null) return
         heartbeatWaiting = false
 
+        if (settings.agentAutonomy && !scheduler.isQuiet(now)) {
+            val event = latestAgentEvent(now)
+            if (event != null) {
+                runAgentTurn(event, now)
+                return
+            }
+        }
+
         val key = apiKey()
         if (key == null) {
             // 没配置 Key：只做个动作，不打扰
@@ -329,6 +343,55 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                     if (isWeighty) { weighty.markUsed(today); stats.add(Stats.Kind.WEIGHTY) }
                     rephraseNext = false
                     present(decision, reply, opening, noEscalation = afterHeartbeat, topic = topic, inputVersion = inputVersion)
+                }
+            }
+        }
+    }
+
+    /** 只让新素材/用户念头触发一次；已处理过的事件不会重复。 */
+    private fun latestAgentEvent(now: Long): CompanionEvent? {
+        if (!active) return null
+        val latest = runCatching { app.events.all().lastOrNull() }.getOrNull() ?: return null
+        if (latest.occurredAt < now - 2 * 60 * 60 * 1000L) return null
+        if (latest.occurredAt <= app.agentTrace.lastAt()) return null
+        if (latest.source == "agent" || latest.source == "tool") return null
+        return when (latest.kind) {
+            EventKind.MATERIAL, EventKind.NOTE -> latest
+            else -> null
+        }
+    }
+
+    private fun runAgentTurn(event: CompanionEvent, now: Long) {
+        val decision = classify(now)
+        if (decision.scene == Scene.EXCLUDED) return
+        probeJob = scope.launch {
+            overlay.setMood(Mood.THINKING)
+            val context = withContext(Dispatchers.IO) {
+                synchronized(app.memoryLock) {
+                    val lines = visibleMemory.read("", 5)
+                    val titles = app.materialInbox.all().map { it.title.ifBlank { it.url ?: it.id } }.take(5)
+                    val ids = app.events.all().takeLast(5).map { it.id }
+                    AgentContext(
+                        trigger = if (event.kind == EventKind.MATERIAL) AgentTrigger.MATERIAL_SAVED else AgentTrigger.NOTE_SAVED,
+                        now = now,
+                        day = LocalDate.now().toString(),
+                        scene = decision.scene.name,
+                        foreground = PerceptionHub.trail.foreground?.let { label(it) } ?: "不清楚",
+                        memoryLines = lines,
+                        materialTitles = titles,
+                        eventIds = ids,
+                        budgetRemaining = app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()),
+                    )
+                }
+            }
+            val result = app.agentLoop.run(context, settings.agentAutonomy)
+            overlay.setMood(Mood.IDLE)
+            scheduler.onSpoke(now)
+            if (result.text.isNotBlank()) {
+                stats.add(Stats.Kind.SPOKE)
+                overlay.setTalking(true)
+                overlay.showBubble(BubbleSpec(result.text, textOnly = true)) {
+                    overlay.setTalking(false)
                 }
             }
         }

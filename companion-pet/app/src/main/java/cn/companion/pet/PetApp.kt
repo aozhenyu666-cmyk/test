@@ -7,6 +7,11 @@ import cn.companion.pet.core.companion.TopicQueue
 import cn.companion.pet.core.companion.LegacyEventImport
 import cn.companion.pet.core.companion.MaterialInbox
 import cn.companion.pet.core.action.ActionRunner
+import cn.companion.pet.core.agent.AgentBudgetPort
+import cn.companion.pet.core.agent.AgentLoop
+import cn.companion.pet.core.agent.AgentModelConfig
+import cn.companion.pet.core.agent.AgentTraceStore
+import cn.companion.pet.core.agent.ModelAgentDecisionSource
 import cn.companion.pet.core.memory.MemoryStore
 import cn.companion.pet.core.memory.NightlyStore
 import cn.companion.pet.core.probe.AtomicBudget
@@ -54,6 +59,10 @@ class PetApp : Application() {
         private set
     lateinit var actions: ActionRunner
         private set
+    lateinit var agentTrace: AgentTraceStore
+        private set
+    lateinit var agentLoop: AgentLoop
+        private set
     lateinit var noteActions: cn.companion.pet.core.action.DurableNoteAdapter
         private set
     val client by lazy { DeepSeekClient() }
@@ -99,6 +108,11 @@ class PetApp : Application() {
 
     fun invalidateKey() { keyLoaded = false }
 
+    private fun agentModelConfig(): AgentModelConfig? {
+        val key = apiKey() ?: return null
+        return AgentModelConfig(settings.endpoint, settings.model, key)
+    }
+
     /** 记忆文件的读写都经过这把锁：服务、每晚整理、设置页编辑互斥。 */
     val memoryLock: Any get() = memory.lock
 
@@ -125,6 +139,17 @@ class PetApp : Application() {
                     getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == false
             })
         actions = AndroidActionAdapters.build(this)
+        agentTrace = AgentTraceStore(memory.root)
+        agentLoop = AgentLoop(
+            source = ModelAgentDecisionSource(client) { agentModelConfig() },
+            runner = actions,
+            budget = object : AgentBudgetPort {
+                override fun reserve(day: String) = budget.reserve(settings.dailyLimit, day)
+                override fun remaining(day: String) = budget.remaining(settings.dailyLimit, day)
+            },
+            trace = agentTrace,
+            planner = actionPlanner,
+        )
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
         // 旧 today.md 只在第一次启动迁移一次；迁移有备份且幂等。

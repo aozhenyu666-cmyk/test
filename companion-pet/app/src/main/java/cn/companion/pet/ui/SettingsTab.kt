@@ -30,6 +30,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -40,6 +41,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import cn.companion.pet.PetApp
+import cn.companion.pet.core.agent.AgentTrace
 import cn.companion.pet.data.SecretWriteResult
 import cn.companion.pet.bridge.Assistants
 import cn.companion.pet.core.session.AssistantApp
@@ -71,6 +73,14 @@ fun SettingsTab(context: Context) {
         OutlinedButton(onClick = { context.startActivity(Intent(context, cn.companion.pet.CapabilityActivity::class.java)) }) {
             Text("打开能力面板")
         }
+        Section("自主模式（实验）")
+        var agentOn by remember { mutableStateOf(s.agentAutonomy) }
+        Toggle(
+            "让模型自己决定用一次工具",
+            "开启后，新素材或用户念头会触发一次模型决策。只自动执行读取记忆/素材；保存念头、打开 AI 应用、朗读只记为需要确认，不会自动做。每次决策都记入下方轨迹。默认关，会消耗一次每日模型额度。",
+            agentOn,
+        ) { agentOn = it; s.agentAutonomy = it }
+        AgentTracePreview()
         Section("搭话用的模型")
         Text("桌宠主动开口、想一想、整理记忆都用这里的模型。点一下填好常用服务商，Key 要换成对应服务商的。", style = MaterialTheme.typography.bodySmall)
         var endpoint by remember { mutableStateOf(s.endpoint) }
@@ -305,4 +315,20 @@ private fun AppPicker(context: Context, title: String, initial: Set<String>, onD
         confirmButton = { TextButton(onClick = { onDone(chosen) }) { Text("完成") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
+}
+
+@Composable
+private fun AgentTracePreview() {
+    val app = PetApp.instance
+    var tick by remember { mutableIntStateOf(0) }
+    var traces by remember { mutableStateOf<List<AgentTrace>>(emptyList()) }
+    LaunchedEffect(tick) { traces = withContext(Dispatchers.IO) { app.agentTrace.recent(5) } }
+    if (traces.isEmpty()) {
+        Text("还没有决策轨迹。开启自主模式并保存一条素材/念头后，这里会出现摘要。", style = MaterialTheme.typography.bodySmall)
+    } else {
+        traces.forEach { t ->
+            Text(t.status + " · " + (t.tool ?: "no_action") + " · " + (t.resultReason.ifBlank { t.decisionReason }).take(100), style = MaterialTheme.typography.bodySmall)
+        }
+    }
+    TextButton(onClick = { tick++ }) { Text("刷新轨迹") }
 }
