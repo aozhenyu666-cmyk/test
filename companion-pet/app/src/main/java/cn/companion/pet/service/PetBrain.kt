@@ -168,6 +168,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     fun onScreenOff() {
         active = false
+        app.actions.cancelAll() // 锁屏后按现有规则停止动作
         scheduler.onScreenOff()
         probeJob?.cancel()
         voice.cancel()

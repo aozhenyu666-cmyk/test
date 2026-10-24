@@ -6,6 +6,7 @@ import cn.companion.pet.core.companion.FactStore
 import cn.companion.pet.core.companion.TopicQueue
 import cn.companion.pet.core.companion.LegacyEventImport
 import cn.companion.pet.core.companion.MaterialInbox
+import cn.companion.pet.core.action.ActionRunner
 import cn.companion.pet.core.memory.MemoryStore
 import cn.companion.pet.core.memory.NightlyStore
 import cn.companion.pet.core.probe.AtomicBudget
@@ -16,6 +17,7 @@ import cn.companion.pet.data.SecretStore
 import cn.companion.pet.data.Settings
 import cn.companion.pet.data.Stats
 import cn.companion.pet.net.DeepSeekClient
+import cn.companion.pet.service.AndroidActionAdapters
 import cn.companion.pet.work.NightlyWorker
 import java.io.File
 
@@ -44,6 +46,8 @@ class PetApp : Application() {
     lateinit var budget: AtomicBudget
         private set
     lateinit var thoughts: ThoughtNotes
+        private set
+    lateinit var actions: ActionRunner
         private set
     val client by lazy { DeepSeekClient() }
 
@@ -82,6 +86,7 @@ class PetApp : Application() {
         nightly = NightlyStore(memory, events, facts = facts)
         budget = AtomicBudget(BudgetPrefs(this))
         thoughts = ThoughtNotes(File(memory.root, "notes"))
+        actions = AndroidActionAdapters.build(this)
         // 旧 today.md 只在第一次启动迁移一次；迁移有备份且幂等。
         LegacyEventImport.ensure(memory, events)
         // 上次提交如果中途崩溃，先把 journal 做完。
