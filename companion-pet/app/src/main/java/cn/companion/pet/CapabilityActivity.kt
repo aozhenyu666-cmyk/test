@@ -5,12 +5,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import cn.companion.pet.core.action.*
 import cn.companion.pet.ui.CapabilityPanel
 import cn.companion.pet.ui.theme.CompanionTheme
 import java.util.concurrent.Executors
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /** Retains ownership across rotation; leaving the activity cancels only this panel's work. */
 class CapabilityActivity : ComponentActivity() {
@@ -28,9 +30,16 @@ class CapabilityActivity : ComponentActivity() {
         }
         setContent {
             val state by owner.session.state.collectAsState()
+            val history by owner.history.collectAsState()
+            val historyError by owner.historyError.collectAsState()
+            LaunchedEffect(state.phase, state.request?.id) {
+                if (state.phase == ActionPhase.FINISHED) owner.refreshHistory()
+            }
             CompanionTheme {
                 CapabilityPanel(state, owner.session::submit, owner.session::cancel,
-                    onCheck = { state.request?.let(owner.session::check) }, onBack = { finish() })
+                    onCheck = { state.request?.let(owner.session::check) }, onBack = { finish() },
+                    history = history, historyError = historyError,
+                    onHistoryCheck = { owner.session.check(ActionRequest(it.id, it.kind)) })
             }
         }
     }
@@ -50,8 +59,17 @@ class CapabilityActivity : ComponentActivity() {
     }
 }
 
-class CapabilityOwner(app: PetApp) : ViewModel() {
+class CapabilityOwner(private val app: PetApp) : ViewModel() {
     private val executor = Executors.newSingleThreadExecutor()
     val session = ActionSession(app.actions, executor, stopSpeech = { id -> app.speech.stop(id) })
+    val history = MutableStateFlow<List<ActionHistoryEntry>>(emptyList())
+    val historyError = MutableStateFlow<String?>(null)
+    init { refreshHistory() }
+    fun refreshHistory() {
+        runCatching { executor.execute {
+            try { history.value = app.actions.history(); historyError.value = null }
+            catch (_: Exception) { history.value = emptyList(); historyError.value = "执行记录暂不可读，请先核对已有操作，避免重复保存" }
+        } }
+    }
     override fun onCleared() { session.close(); executor.shutdownNow() }
 }

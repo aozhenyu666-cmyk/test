@@ -25,12 +25,14 @@ class ActionSession(
     val state: StateFlow<ActionSessionState> = mutable
     private var closed = false
     private var generation = 0L
+    private var executionId: String? = null
     private val speechIds = mutableSetOf<String>()
 
     fun submit(kind: ActionKind, args: Map<String, String>): Boolean = synchronized(lock) {
         if (closed || mutable.value.busy) return false
         val request = ActionRequest(UUID.randomUUID().toString(), kind, args.toMap())
         val ticket = ++generation
+        executionId = request.id
         if (kind == ActionKind.SPEAK) speechIds += request.id
         mutable.value = ActionSessionState(ActionPhase.PENDING, request)
         try {
@@ -55,13 +57,23 @@ class ActionSession(
     fun check(request: ActionRequest) = synchronized(lock) {
         if (closed || mutable.value.busy) return
         val ticket = ++generation
+        executionId = null // looking up an ID never transfers ownership of its original execution
         mutable.value = ActionSessionState(ActionPhase.PENDING, request)
-        executor.execute {
-            val result = runCatching { runner.result(request.id) }.getOrNull() ?: ActionResult(request.id, request.kind,
-                ActionStatus.FAILED, "结果未确认，请先核对；不会自动重做")
-            synchronized(lock) {
-                if (!closed && generation == ticket) mutable.value = ActionSessionState(ActionPhase.FINISHED, request, result)
+        try {
+            executor.execute {
+                synchronized(lock) {
+                    if (closed || generation != ticket) return@execute
+                    mutable.value = ActionSessionState(ActionPhase.RUNNING, request)
+                }
+                val result = runCatching { runner.result(request.id) }.getOrNull() ?: ActionResult(request.id, request.kind,
+                    ActionStatus.FAILED, "结果未确认，请先核对；不会自动重做")
+                synchronized(lock) {
+                    if (!closed && generation == ticket) mutable.value = ActionSessionState(ActionPhase.FINISHED, request, result)
+                }
             }
+        } catch (_: RuntimeException) {
+            mutable.value = ActionSessionState(ActionPhase.FINISHED, request,
+                ActionResult(request.id, request.kind, ActionStatus.FAILED, "暂时无法核对执行记录，请稍后再查"))
         }
     }
 
@@ -70,9 +82,9 @@ class ActionSession(
         if (previous.busy) {
             val request = previous.request ?: return
             ++generation // queued and late results cannot update a cancelled UI operation
-            val cancelled = runner.cancel(request.id)
+            val cancelled = executionId?.let(runner::cancel) ?: false
             mutable.value = ActionSessionState(ActionPhase.FINISHED, request,
-                if (!cancelled) runner.result(request.id) else null)
+                if (!cancelled) runner.peekResult(request.id) else null)
                 .let { if (it.result != null) it else it.copy(result = ActionResult(request.id, request.kind,
                     ActionStatus.CANCELLED, "已请求取消；已发生的操作不回滚")) }
         }

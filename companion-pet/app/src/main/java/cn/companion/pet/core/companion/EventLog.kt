@@ -22,7 +22,7 @@ class EventLog(
 ) {
     val eventsDir = File(root, "events")
     private val nightlyDir = File(root, "nightly")
-    private val lock = Any()
+    private val lock = cn.companion.pet.core.storage.DurableFiles.mutex(eventsDir)
     private val monthFormat = DateTimeFormatter.ofPattern("yyyy-MM")
 
     init {
@@ -83,6 +83,21 @@ class EventLog(
             repairTruncatedTail(file)
             file.appendText(EventJson.encodeToString(CompanionEvent.serializer(), event) + "\n")
         }
+    }
+
+    /** Stable tool receipts are repairable after interruption without duplicating their NOTE. */
+    fun appendEventOnce(event: CompanionEvent): CompanionEvent = synchronized(lock) {
+        all().firstOrNull { it.id == event.id }?.let { existing ->
+            check(existing == event) { "Event identity conflict" }
+            return@synchronized existing
+        }
+        val file = monthlyFile(event.day)
+        repairTruncatedTail(file)
+        java.io.FileOutputStream(file, true).use { out ->
+            out.write((EventJson.encodeToString(CompanionEvent.serializer(), event) + "\n").toByteArray(Charsets.UTF_8))
+            out.fd.sync()
+        }
+        event
     }
 
     /**

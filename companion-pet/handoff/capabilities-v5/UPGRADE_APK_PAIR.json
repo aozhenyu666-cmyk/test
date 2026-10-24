@@ -1,0 +1,22 @@
+{
+  "apk_pair": "passed",
+  "device_upgrade": "not_executed",
+  "old": {
+    "package": "cn.companion.pet",
+    "version_code": 8,
+    "version_name": "0.3.5",
+    "signers_sha256": [
+      "62707676cc93f36db9ad4c656b7cd369098126f35e94632788a5fa0c4bd43732"
+    ],
+    "apk_sha256": "0e38c6d4c09145f6f691eda656370d21b3f5c7434400efb8988c781a995e57e4"
+  },
+  "new": {
+    "package": "cn.companion.pet",
+    "version_code": 9,
+    "version_name": "0.3.6",
+    "signers_sha256": [
+      "62707676cc93f36db9ad4c656b7cd369098126f35e94632788a5fa0c4bd43732"
+    ],
+    "apk_sha256": "c58b06885861b97d7b9a6ff2a972891fd7c43dd6968676e16c21c0afeb1669ca"
+  }
+}

@@ -5,6 +5,9 @@ import cn.companion.pet.net.ChatMessage
 import cn.companion.pet.net.ChatRole
 import java.io.File
 import java.time.LocalDate
+import cn.companion.pet.core.storage.DurableFiles
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 /**
  * 念头速记：看东西时冒出的想法，按住说一句就记下来，连同当时在看的那一句原文。
@@ -14,41 +17,86 @@ import java.time.LocalDate
  */
 class ThoughtNotes(private val dir: File) {
 
-    data class Thought(val time: String, val app: String, val quote: String, val text: String)
+    @Serializable
+    data class Thought(val time: String, val app: String, val quote: String, val text: String, val id: String? = null)
+
+    @Serializable
+    data class ActionNote(val id: String, val fingerprint: String, val day: String,
+        val occurredAt: Long, val thought: Thought?)
+
+    private val lock = DurableFiles.mutex(dir)
+    private val indexed = File(dir, ".action-notes")
+    private val json = Json { encodeDefaults = true }
 
     init { dir.mkdirs() }
 
-    fun add(date: LocalDate, t: Thought) {
+    fun add(date: LocalDate, t: Thought) = synchronized(lock) {
         val line = "- ${t.time} | ${clean(t.app)} | 「${clean(UnicodeText.truncate(t.quote, 80))}」 | ${clean(t.text)}\n"
         File(dir, "$date.md").appendText(line)
     }
 
-    fun list(date: LocalDate): List<Thought> {
+    private fun legacy(date: LocalDate): List<Thought> {
         val f = File(dir, "$date.md")
         if (!f.exists()) return emptyList()
         return f.readLines().mapNotNull { parse(it) }
     }
 
+    fun list(date: LocalDate): List<Thought> = synchronized(lock) {
+        legacy(date) + actionNotes().filter { it.day == date.toString() }.sortedBy { it.occurredAt }.mapNotNull { it.thought }
+    }
+
+    internal fun actionNote(id: String): ActionNote? = synchronized(lock) {
+        val file = actionFile(id)
+        if (!file.exists()) null else json.decodeFromString(ActionNote.serializer(), file.readText()).also { check(it.id == id) }
+    }
+
+    internal fun saveAction(id: String, fingerprint: String, date: LocalDate, occurredAt: Long, thought: Thought): ActionNote = synchronized(lock) {
+        actionNote(id)?.let { check(it.fingerprint == fingerprint); return@synchronized it }
+        val stored = thought.copy(app = clean(thought.app), quote = clean(UnicodeText.truncate(thought.quote, 80)), text = clean(thought.text), id = id)
+        val record = ActionNote(id, fingerprint, date.toString(), occurredAt, stored)
+        writeAction(record)
+        record
+    }
+
+    private fun actionFile(id: String): File {
+        val name = java.security.MessageDigest.getInstance("SHA-256").digest(id.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 255) }
+        return File(indexed, "$name.json")
+    }
+    private fun writeAction(record: ActionNote) = DurableFiles.write(actionFile(record.id), json.encodeToString(ActionNote.serializer(), record))
+    private fun actionNotes(): List<ActionNote> = indexed.listFiles { file -> file.extension == "json" }.orEmpty()
+        .map { json.decodeFromString(ActionNote.serializer(), it.readText()) }
+
     /** 删掉某天最后一条（“撤销”）。 */
-    fun removeLast(date: LocalDate) {
+    fun removeLast(date: LocalDate): Unit = synchronized(lock) {
         val f = File(dir, "$date.md")
         if (!f.exists()) return
         val lines = f.readLines().filter { it.isNotBlank() }
         if (lines.isEmpty()) return
         val rest = lines.dropLast(1)
         if (rest.isEmpty()) f.delete() else f.writeText(rest.joinToString("\n", postfix = "\n"))
+        Unit
     }
 
-    fun delete(date: LocalDate, t: Thought) {
+    fun delete(date: LocalDate, t: Thought): Unit = synchronized(lock) {
+        if (t.id != null) {
+            val record = actionNote(t.id) ?: return
+            check(record.day == date.toString())
+            // Keep only the identity receipt, never resurrect a deleted body on replay.
+            writeAction(record.copy(thought = null))
+            return
+        }
         val f = File(dir, "$date.md")
-        val kept = list(date).filter { it != t }
+        val kept = legacy(date).filter { it != t }
         if (kept.isEmpty()) { f.delete(); return }
         f.writeText(kept.joinToString("") { "- ${it.time} | ${it.app} | 「${it.quote}」 | ${it.text}\n" })
     }
 
-    fun dates(): List<LocalDate> = dir.listFiles().orEmpty()
-        .mapNotNull { runCatching { LocalDate.parse(it.nameWithoutExtension) }.getOrNull() }
-        .sortedDescending()
+    fun dates(): List<LocalDate> = synchronized(lock) {
+        (dir.listFiles().orEmpty().filter { it.isFile && it.extension == "md" }
+            .mapNotNull { runCatching { LocalDate.parse(it.nameWithoutExtension) }.getOrNull() } +
+            actionNotes().filter { it.thought != null }.map { LocalDate.parse(it.day) }).distinct().sortedDescending()
+    }
 
     private fun parse(line: String): Thought? {
         if (!line.startsWith("- ")) return null

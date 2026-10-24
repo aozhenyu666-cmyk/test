@@ -29,6 +29,9 @@ fun CapabilityPanel(
     onCancel: () -> Unit,
     onCheck: () -> Unit,
     onBack: () -> Unit,
+    history: List<ActionHistoryEntry> = emptyList(),
+    historyError: String? = null,
+    onHistoryCheck: (ActionHistoryEntry) -> Unit = {},
 ) {
     var selected by rememberSaveable { mutableStateOf(ActionKind.READ_MEMORY.name) }
     var input by rememberSaveable(selected) { mutableStateOf("") }
@@ -95,6 +98,29 @@ fun CapabilityPanel(
             if (state.request != null && !state.busy) {
                 TextButton(onClick = onCheck) { Text("查看上次操作结果") }
                 Text("此按钮只核对记录；再次点执行会发起一项新操作。", style = MaterialTheme.typography.bodySmall)
+            }
+            historyError?.let { Text(it) }
+            if (history.isNotEmpty()) {
+                GroupTitle("最近写入和系统操作")
+                Text("重启后也可核对。未确认的打开或朗读不会自动重做。", style = MaterialTheme.typography.bodySmall)
+                history.forEach { entry ->
+                    val time = java.time.Instant.ofEpochMilli(entry.preparedAt).atZone(java.time.ZoneId.systemDefault())
+                        .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column(Modifier.weight(1f)) {
+                            Text(entry.kind.label())
+                            Text(time + " · " + when (entry.status) {
+                                null -> "需要核对"
+                                ActionStatus.SUCCESS -> "已收到成功回执"
+                                ActionStatus.UNAVAILABLE -> "暂不可用"
+                                ActionStatus.FAILED -> "未完成"
+                                ActionStatus.CANCELLED -> "已取消"
+                            }, style = MaterialTheme.typography.bodySmall)
+                        }
+                        TextButton(enabled = !state.busy, onClick = { onHistoryCheck(entry) }) { Text("核对") }
+                    }
+                    Rule()
+                }
             }
         }
     }

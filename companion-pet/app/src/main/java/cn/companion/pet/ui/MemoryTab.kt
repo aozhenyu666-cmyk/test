@@ -177,7 +177,7 @@ fun MemoryTab(resumeTick: Int) {
                         Text("${t.time} ${t.text}", style = MaterialTheme.typography.bodyMedium)
                         if (t.quote.isNotBlank()) Text("「${t.quote}」· ${t.app}", style = MaterialTheme.typography.bodySmall)
                     }
-                    TextButton(onClick = { io { app.thoughts.delete(d, t) } }) { Text("删") }
+                    TextButton(onClick = { io { app.noteActions.delete(d, t) } }) { Text("删") }
                 }
             }
         }

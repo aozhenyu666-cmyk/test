@@ -8,19 +8,13 @@ import cn.companion.pet.PetApp
 import cn.companion.pet.bridge.Assistants
 import cn.companion.pet.bridge.GeminiLauncher
 import cn.companion.pet.core.action.*
-import cn.companion.pet.core.companion.EventKind
 import cn.companion.pet.core.session.AssistantApp
-import cn.companion.pet.core.think.ThoughtNotes
-import java.time.LocalDate
-import java.time.LocalTime
-import java.time.format.DateTimeFormatter
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
 /** Synchronous tool API: call off the UI thread. Android effects are dispatched to the main looper. */
 object AndroidActionAdapters {
-    private val HHMM = DateTimeFormatter.ofPattern("HH:mm")
 
     private fun adapter(block: (ActionRequest, ActionCancellation) -> ActionResult) = object : ActionAdapter {
         override fun execute(request: ActionRequest) = execute(request, ActionCancellation())
@@ -54,11 +48,13 @@ object AndroidActionAdapters {
         return try { result.get(5, TimeUnit.SECONDS) }
         catch (_: TimeoutException) {
             handler.removeCallbacks(task)
-            ActionResult(request.id, request.kind, ActionStatus.FAILED, "系统未及时返回，请核对动作状态")
+            ActionResult(request.id, request.kind, ActionStatus.FAILED, "系统未及时返回，操作结果需要核对",
+                mapOf("needsReview" to "true"))
         } catch (_: InterruptedException) {
             handler.removeCallbacks(task)
             Thread.currentThread().interrupt()
-            ActionResult(request.id, request.kind, ActionStatus.CANCELLED, "系统动作等待已取消")
+            ActionResult(request.id, request.kind, ActionStatus.CANCELLED, "系统动作等待已取消，操作结果需要核对",
+                mapOf("needsReview" to "true"))
         } finally { remove() }
     }
 
@@ -90,16 +86,7 @@ object AndroidActionAdapters {
                 ActionResult(request.id, request.kind, ActionStatus.SUCCESS, "已读取当前可见素材及证据等级",
                     mapOf("text" to text, "displayText" to display))
             },
-            ActionKind.SAVE_NOTE to adapter { request, cancellation ->
-                val event = synchronized(app.memoryLock) {
-                    cancellation.throwIfCancelled()
-                    if (!userPresent(app)) return@adapter ActionResult(request.id, request.kind, ActionStatus.CANCELLED, "屏幕已锁定，未保存念头")
-                    val text = request.args.getValue("text").trim()
-                    app.thoughts.add(LocalDate.now(), ThoughtNotes.Thought(LocalTime.now().format(HHMM), "工具", "", text))
-                    app.events.append(EventKind.NOTE, text, source = "tool")
-                }
-                ActionResult(request.id, request.kind, ActionStatus.SUCCESS, "念头已保存", mapOf("eventId" to event.id))
-            },
+            ActionKind.SAVE_NOTE to app.noteActions,
             ActionKind.OPEN_ASSISTANT to adapter { request, cancellation ->
                 mainAction(request, cancellation) {
                     cancellation.throwIfCancelled()
@@ -119,6 +106,6 @@ object AndroidActionAdapters {
                 if (!userPresent(app)) ActionResult(request.id, request.kind, ActionStatus.CANCELLED, "屏幕已锁定，未提交播报")
                 else speechAdapter.execute(request, cancellation)
             },
-        ))
+        ), journal = FileActionJournal(java.io.File(app.memory.root, "action-journal")))
     }
 }

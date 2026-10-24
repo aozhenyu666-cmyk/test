@@ -3,6 +3,7 @@ package cn.companion.pet.core.action
 import java.util.concurrent.CompletableFuture
 
 /** 第一批受限工具；不含无障碍写操作、Shell、外部评论或 QQ 群发。 */
+@kotlinx.serialization.Serializable
 enum class ActionKind {
     READ_MEMORY,
     READ_MATERIALS,
@@ -11,6 +12,7 @@ enum class ActionKind {
     SPEAK,
 }
 
+@kotlinx.serialization.Serializable
 enum class ActionStatus { SUCCESS, UNAVAILABLE, FAILED, CANCELLED }
 
 data class ActionRequest(
@@ -19,6 +21,7 @@ data class ActionRequest(
     val args: Map<String, String> = emptyMap(),
 )
 
+@kotlinx.serialization.Serializable
 data class ActionResult(
     val actionId: String,
     val kind: ActionKind,
@@ -31,6 +34,8 @@ data class ActionResult(
 interface ActionAdapter {
     fun execute(request: ActionRequest): ActionResult
     fun execute(request: ActionRequest, cancellation: ActionCancellation): ActionResult = execute(request)
+    /** Inspect an existing durable effect; never execute the original effect again. */
+    fun recover(receipt: WriteReceipt): ActionResult? = null
 }
 
 /** Cooperative cancellation delivered to adapters; already committed effects are not rolled back. */
@@ -65,12 +70,13 @@ class ActionCancellation {
 /**
  * Process-local write deduplication, fresh reads, bounded identity history, and cooperative cancellation.
  * This is a synchronous API: Android callers dispatch it off the main thread and own their UI scope.
- * It does not provide durable deduplication across process death or spend model-call budget.
+ * Optional journal protects writes across process death. Reads always use current visibility.
  */
 class ActionRunner(
     private val adapters: Map<ActionKind, ActionAdapter>,
     private val maxIdLength: Int = 80,
     private val maxRememberedActions: Int = 2048,
+    private val journal: FileActionJournal? = null,
 ) {
     private data class Entry(
         val request: ActionRequest,
@@ -109,7 +115,7 @@ class ActionRunner(
         }
         val result = try {
             entry.cancellation.throwIfCancelled()
-            validate(frozen) ?: runAdapter(frozen, entry.cancellation).let {
+            validate(frozen) ?: runDurable(frozen, fingerprint, entry.cancellation).let {
                 if (it.actionId == frozen.id && it.kind == frozen.kind) it else fail(frozen, "执行器返回的动作身份不一致")
             }
         } catch (_: java.util.concurrent.CancellationException) {
@@ -119,9 +125,10 @@ class ActionRunner(
             fail(frozen, "动作执行失败，请重试或检查能力是否可用")
         }
         return synchronized(lock) {
-            val final = if (frozen.id in cancelledIds) cancelled(frozen) else result
+            val final = if (frozen.id in cancelledIds && (journal == null || isRead(frozen.kind))) cancelled(frozen) else result
             // Reads must use the current visibility snapshot after an edit/forget, never cached content.
-            if (!isRead(frozen.kind)) results[frozen.id] = final
+            if (!isRead(frozen.kind) && final.data["needsReview"] != "true") results[frozen.id] = final
+            else results.remove(frozen.id)
             inFlight.remove(frozen.id)
             entry.future.complete(final)
             final
@@ -134,7 +141,8 @@ class ActionRunner(
             if (id !in fingerprints && id !in cancelledIds && (fingerprints.keys + cancelledIds).size >= maxRememberedActions) return false
             cancelledIds.add(id)
             inFlight[id]?.also {
-                val result = cancelled(it.request)
+                val result = if (journal != null && !isRead(it.request.kind)) cancelled(it.request).copy(
+                    reason = "已请求取消，操作结果需要核对；已发生的操作不回滚", data = mapOf("needsReview" to "true")) else cancelled(it.request)
                 if (!isRead(it.request.kind)) results[id] = result
                 it.future.complete(result)
             }
@@ -154,7 +162,51 @@ class ActionRunner(
         ids.forEach { cancel(it) }
     }
 
-    fun result(id: String): ActionResult? = synchronized(lock) { results[id] }
+    /** May inspect/repair an already saved note receipt; never repeats the original action. Off-main. */
+    fun result(id: String): ActionResult? {
+        val store = journal ?: return peekResult(id)
+        val receipt = store.receipt(id) ?: return peekResult(id)
+        receipt.result?.let { return it }
+        return try {
+            val recovered = adapters[receipt.kind]?.recover(receipt)
+                ?: return FileActionJournal.unknown(id, receipt.kind)
+            if (recovered.actionId != id || recovered.kind != receipt.kind || recovered.data["needsReview"] == "true")
+                return FileActionJournal.unknown(id, receipt.kind)
+            store.commit(ActionRequest(id, receipt.kind), receipt.fingerprint, recovered)
+        } catch (_: Exception) { FileActionJournal.unknown(id, receipt.kind) }
+    }
+
+    internal fun peekResult(id: String): ActionResult? = synchronized(lock) { results[id] }
+
+    fun history(limit: Int = 10): List<ActionHistoryEntry> = journal?.history(limit).orEmpty()
+
+    private fun runDurable(request: ActionRequest, fingerprint: String, cancellation: ActionCancellation): ActionResult {
+        val store = journal ?: return runAdapter(request, cancellation)
+        if (isRead(request.kind)) {
+            return try {
+                if (store.receipt(request.id) != null) fail(request, "同一执行 ID 不能更换动作或参数")
+                else runAdapter(request, cancellation)
+            } catch (_: Exception) { fail(request, "执行记录不可用，无法核对动作身份") }
+        }
+        val claim = try { store.prepare(request, fingerprint) }
+        catch (_: Exception) { return fail(request, "执行记录不可用，未开始新操作") }
+        if (claim is WriteClaim.Rejected) return fail(request, claim.reason)
+        return try {
+            val result = if (claim is WriteClaim.Existing) {
+                claim.receipt.result ?: adapters[request.kind]?.recover(claim.receipt)
+                    ?: return FileActionJournal.unknown(request.id, request.kind)
+            } else runAdapter(request, cancellation)
+            if (result.actionId != request.id || result.kind != request.kind) return FileActionJournal.unknown(request.id, request.kind)
+            if (result.data["needsReview"] == "true") return FileActionJournal.unknown(request.id, request.kind)
+            store.commit(request, fingerprint, result)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            FileActionJournal.unknown(request.id, request.kind)
+        } catch (_: Exception) {
+            // Prepared is retained even if an adapter committed an effect before losing its receipt.
+            FileActionJournal.unknown(request.id, request.kind)
+        }
+    }
 
     private fun runAdapter(request: ActionRequest, cancellation: ActionCancellation): ActionResult {
         cancellation.throwIfCancelled()
@@ -194,17 +246,19 @@ class ActionRunner(
         return null
     }
 
-    private fun fingerprint(request: ActionRequest): String {
-        val canonical = request.kind.name + request.args.toSortedMap().entries.joinToString("") {
-            it.key.length.toString() + ":" + it.key + it.value.length + ":" + it.value
-        }
-        return java.security.MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it.toInt() and 255) }
-    }
+    private fun fingerprint(request: ActionRequest): String = requestFingerprint(request)
 
     private fun isRead(kind: ActionKind) = kind == ActionKind.READ_MEMORY || kind == ActionKind.READ_MATERIALS
     private fun fail(request: ActionRequest, reason: String) = ActionResult(request.id, request.kind, ActionStatus.FAILED, reason)
     private fun cancelled(request: ActionRequest) = ActionResult(request.id, request.kind, ActionStatus.CANCELLED, "已取消；已开始的原子操作不回滚")
+}
+
+internal fun requestFingerprint(request: ActionRequest): String {
+    val canonical = request.kind.name + request.args.toSortedMap().entries.joinToString("") {
+        it.key.length.toString() + ":" + it.key + it.value.length + ":" + it.value
+    }
+    return java.security.MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it.toInt() and 255) }
 }
 
 data class ActionPlan(

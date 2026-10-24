@@ -54,6 +54,8 @@ class PetApp : Application() {
         private set
     lateinit var actions: ActionRunner
         private set
+    lateinit var noteActions: cn.companion.pet.core.action.DurableNoteAdapter
+        private set
     val client by lazy { DeepSeekClient() }
     private val speechHolder = lazy { cn.companion.pet.service.Speech(this) }
     val speech: cn.companion.pet.service.Speech get() = speechHolder.value
@@ -116,6 +118,12 @@ class PetApp : Application() {
         nightly = NightlyStore(memory, events, facts = facts)
         budget = AtomicBudget(BudgetPrefs(this))
         thoughts = ThoughtNotes(File(memory.root, "notes"))
+        noteActions = cn.companion.pet.core.action.DurableNoteAdapter(thoughts, events, memoryLock,
+            available = {
+                android.os.Looper.myLooper() != android.os.Looper.getMainLooper() &&
+                    getSystemService(android.os.PowerManager::class.java)?.isInteractive == true &&
+                    getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == false
+            })
         actions = AndroidActionAdapters.build(this)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))

@@ -4,7 +4,7 @@
 
 需求依据：[V1.5 需求文档](https://claude.ai/artifact/GBaCjrc1shZXy4v391C4zu)，开发计划见 [PLAN.md](PLAN.md)。
 
-当前版本为 **0.3.4（versionCode 7）**：素材收件箱、证据等级和受限工具 API 已实现并完成独立修复。结果与边界见 [素材/工具交接](handoff/material-v4/STATE.md)，下一轮见 [DeepSeek C 阶段命令](handoff/material-v4/DEEPSEEK_C.md)。工具 UI 与设备验证仍待完成。
+当前版本为 **0.3.6（versionCode 9）**：设置页新增能力面板，可查记忆、看素材、确认保存念头、打开 AI 应用和朗读。写动作增加跨重启账本与最近操作核对；工具念头兼容旧 Markdown。见 [本轮交付](handoff/capabilities-v5/STATE.md) 与 [恢复设计](handoff/capabilities-v5/C2_RECOVERY.md)。设备覆盖升级、真实 App/TTS 和旋转仍待设备执行；构建成功不代表真机通过。
 
 基础记忆层的历史实现见 [0.3.1 交接](handoff/codex-foundation-v3/STATE.md)。设备覆盖升级的条件见 [升级验证](handoff/codex-foundation-v3/UPGRADE_VALIDATION.md)，不能把 APK 构建成功当成手机已验证。
 

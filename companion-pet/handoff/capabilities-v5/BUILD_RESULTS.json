@@ -1,0 +1,31 @@
+{
+  "version": "0.3.6",
+  "versionCode": 9,
+  "baseline": "b1e47e9fbf1824db2ab0d350f6fc37117aea25bb",
+  "c1Commit": "71970bb87c3fc643cbc2fd50590f52fe3eae5574",
+  "jdk": "17.0.21+9",
+  "androidCompileSdk": 35,
+  "tasks": [
+    ":app:testDebugUnitTest",
+    ":app:lintDebug",
+    ":app:assembleDebug",
+    ":app:assembleDebugAndroidTest"
+  ],
+  "tests": 264,
+  "failures": 0,
+  "errors": 0,
+  "lintErrors": 0,
+  "lintWarnings": 20,
+  "upgradeGuardTests": 3,
+  "deviceTests": "NOT_EXECUTED",
+  "physicalUpgrade": "NOT_EXECUTED",
+  "offlineApkPair": "PASS",
+  "apk": {
+    "bytes": 28546581,
+    "sha256": "c58b06885861b97d7b9a6ff2a972891fd7c43dd6968676e16c21c0afeb1669ca"
+  },
+  "androidTestApk": {
+    "bytes": 2361938,
+    "sha256": "c9c996bd239f4a668525203cf6a9bc4951df486e34d65cd5b7e405d97eb3e940"
+  }
+}

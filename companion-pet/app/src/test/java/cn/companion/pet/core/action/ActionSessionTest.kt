@@ -93,4 +93,28 @@ class ActionSessionTest {
         session.submit(ActionKind.SPEAK, mapOf("text" to "你好"))
         assertEquals(ActionStatus.UNAVAILABLE, session.state.value.result!!.status)
     }
+
+    @Test fun cancellingLookupDoesNotCancelAnotherOwnersExecution() {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val pool = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val runner = ActionRunner(mapOf(ActionKind.SAVE_NOTE to object : ActionAdapter {
+            override fun execute(request: ActionRequest): ActionResult {
+                entered.countDown(); check(release.await(3, java.util.concurrent.TimeUnit.SECONDS))
+                return ActionResult(request.id, request.kind, ActionStatus.SUCCESS)
+            }
+        }))
+        val request = ActionRequest("another-owner", ActionKind.SAVE_NOTE, mapOf("text" to "合成内容"))
+        try {
+            val original = pool.submit<ActionResult> { runner.execute(request) }
+            assertTrue(entered.await(3, java.util.concurrent.TimeUnit.SECONDS))
+            val queue = mutableListOf<Runnable>()
+            val session = ActionSession(runner, Executor { queue += it })
+            session.check(request)
+            session.close()
+            release.countDown()
+            assertEquals(ActionStatus.SUCCESS, original.get(3, java.util.concurrent.TimeUnit.SECONDS).status)
+            queue.single().run()
+        } finally { release.countDown(); pool.shutdownNow() }
+    }
 }
