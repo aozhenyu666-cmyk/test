@@ -54,7 +54,7 @@ class TopicQueue(
     fun candidates(now: Long = clock.millis()): List<Topic> = synchronized(lock) {
         val deleted = tombstones()
         val snapshot = events?.all()
-        val visibility = snapshot?.let { EventVisibility(it, deleted.toSet()) }
+        val visibility = snapshot?.let { EventVisibility(it, deleted.toSet(), now) }
         val visibleIds = snapshot?.filter { visibility!!.allows(it) }?.map { it.id }?.toSet()
         read().filter { topic ->
             !topic.dismissed && topic.sharedAt == null && topic.expiresAt > now &&
@@ -74,6 +74,12 @@ class TopicQueue(
         synchronized(lock) {
             write(read().map { if (it.id == id && it.sharedAt == null) it.copy(sharedAt = now) else it })
         }
+    }
+
+    /** Refresh an unshared material's wording without creating a duplicate topic. */
+    fun refreshSource(sourceId: String, summary: String) = synchronized(lock) {
+        val clean = cn.companion.pet.core.text.UnicodeText.truncate(summary.trim(), 120)
+        write(read().map { if (!it.dismissed && it.sharedAt == null && it.sourceIds == listOf(sourceId)) it.copy(summary = clean) else it })
     }
 
     fun dismiss(id: String) {

@@ -42,7 +42,7 @@ class MemoryRecall(
 
         val candidates = mutableListOf<RecallItem>()
         val snapshot = events.all()
-        val visibility = EventVisibility(snapshot, tombstones)
+        val visibility = EventVisibility(snapshot, tombstones, now)
         facts.live().forEach { fact ->
             if (!visibility.allows(fact)) return@forEach
             val label = if (fact.confidence == Confidence.SAID) "你说过" else "尚未确认"

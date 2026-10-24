@@ -4,7 +4,9 @@
 
 需求依据：[V1.5 需求文档](https://claude.ai/artifact/GBaCjrc1shZXy4v391C4zu)，开发计划见 [PLAN.md](PLAN.md)。
 
-当前基础完善版本为 **0.3.1（versionCode 4）**：记忆更正同步档案、来源失效、当前问题召回与夜间过期结果保护。实现与自动化结果见 [本轮交接](handoff/codex-foundation-v3/STATE.md)；后续开发见 [DeepSeek 命令](handoff/codex-foundation-v3/DEEPSEEK_NEXT.md)。设备覆盖升级的条件与待测项见 [升级验证](handoff/codex-foundation-v3/UPGRADE_VALIDATION.md)，不能把 APK 构建成功当成手机已验证。
+当前版本为 **0.3.4（versionCode 7）**：素材收件箱、证据等级和受限工具 API 已实现并完成独立修复。结果与边界见 [素材/工具交接](handoff/material-v4/STATE.md)，下一轮见 [DeepSeek C 阶段命令](handoff/material-v4/DEEPSEEK_C.md)。工具 UI 与设备验证仍待完成。
+
+基础记忆层的历史实现见 [0.3.1 交接](handoff/codex-foundation-v3/STATE.md)。设备覆盖升级的条件见 [升级验证](handoff/codex-foundation-v3/UPGRADE_VALIDATION.md)，不能把 APK 构建成功当成手机已验证。
 
 ## 安装
 

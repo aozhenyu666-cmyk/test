@@ -30,93 +30,146 @@ data class ActionResult(
 /** 真实执行或 fake 执行都走这个接口；结果必须能区分四种状态。 */
 interface ActionAdapter {
     fun execute(request: ActionRequest): ActionResult
+    fun execute(request: ActionRequest, cancellation: ActionCancellation): ActionResult = execute(request)
+}
+
+/** Cooperative cancellation delivered to adapters; already committed effects are not rolled back. */
+class ActionCancellation {
+    private val lock = Any()
+    @Volatile var isCancelled: Boolean = false
+        private set
+    private val callbacks = mutableListOf<() -> Unit>()
+
+    fun throwIfCancelled() {
+        if (isCancelled) throw java.util.concurrent.CancellationException("Action cancelled")
+    }
+
+    fun onCancel(callback: () -> Unit): () -> Unit {
+        val callNow = synchronized(lock) {
+            if (isCancelled) true else { callbacks += callback; false }
+        }
+        if (callNow) callback()
+        return { synchronized(lock) { callbacks.remove(callback) }; Unit }
+    }
+
+    internal fun cancel() {
+        val pending = synchronized(lock) {
+            if (isCancelled) return
+            isCancelled = true
+            callbacks.toList().also { callbacks.clear() }
+        }
+        pending.forEach { runCatching { it() } }
+    }
 }
 
 /**
- * 工具执行器：
- * - 同一个 execution id 只执行一次，重试返回同一结果（写操作不会重复保存/拉起）；
- * - 可取消；取消中的结果统一为 CANCELLED；
- * - 参数只接受白名单 key 和长度限制；
- * - 不持有模型预算；本轮没有模型工具调用，模型尝试与动作次数分开记录。
+ * Process-local write deduplication, fresh reads, bounded identity history, and cooperative cancellation.
+ * This is a synchronous API: Android callers dispatch it off the main thread and own their UI scope.
+ * It does not provide durable deduplication across process death or spend model-call budget.
  */
 class ActionRunner(
     private val adapters: Map<ActionKind, ActionAdapter>,
     private val maxIdLength: Int = 80,
+    private val maxRememberedActions: Int = 2048,
 ) {
+    private data class Entry(
+        val request: ActionRequest,
+        val future: CompletableFuture<ActionResult> = CompletableFuture(),
+        val cancellation: ActionCancellation = ActionCancellation(),
+    )
     private val lock = Any()
     private val results = HashMap<String, ActionResult>()
-    private val cancelled = HashSet<String>()
-    private val inFlight = HashMap<String, CompletableFuture<ActionResult>>()
+    private val cancelledIds = HashSet<String>()
+    private val fingerprints = HashMap<String, String>()
+    private val inFlight = HashMap<String, Entry>()
 
     fun execute(request: ActionRequest): ActionResult {
-        val future: CompletableFuture<ActionResult>
+        val frozen = try { request.copy(args = java.util.Collections.unmodifiableMap(LinkedHashMap(request.args))) }
+        catch (_: Exception) { return fail(request, "动作参数无法读取") }
+        if (frozen.id.isBlank() || frozen.id.length > maxIdLength) return fail(frozen, "执行 ID 不合法")
+        val fingerprint = fingerprint(frozen)
+        val entry: Entry
         val owner: Boolean
         synchronized(lock) {
-            results[request.id]?.let { return it }
-            if (request.id.isBlank() || request.id.length > maxIdLength) {
-                return fail(request, "执行 ID 不合法")
+            val previous = fingerprints[frozen.id]
+            if (previous != null && previous != fingerprint) return fail(frozen, "同一执行 ID 不能更换动作或参数")
+            if (previous == null) {
+                if ((fingerprints.keys + cancelledIds).size >= maxRememberedActions) return fail(frozen, "本次运行的动作记录已达上限")
+                fingerprints[frozen.id] = fingerprint
             }
-            if (request.id in cancelled) {
-                val r = cancelled(request)
-                results[request.id] = r
-                return r
-            }
-            val existing = inFlight[request.id]
-            if (existing != null) {
-                future = existing
-                owner = false
-            } else {
-                future = CompletableFuture()
-                inFlight[request.id] = future
-                owner = true
-            }
+            results[frozen.id]?.let { return it }
+            if (frozen.id in cancelledIds) return cancelled(frozen)
+            val existing = inFlight[frozen.id]
+            if (existing != null) { entry = existing; owner = false }
+            else { entry = Entry(frozen); inFlight[frozen.id] = entry; owner = true }
         }
-        if (!owner) return future.get()
-
+        if (!owner) return try { entry.future.get() } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            cancelled(frozen)
+        }
         val result = try {
-            validate(request) ?: runAdapter(request)
-        } catch (t: Throwable) {
-            fail(request, "执行异常：" + (t.message ?: "unknown").take(80))
+            entry.cancellation.throwIfCancelled()
+            validate(frozen) ?: runAdapter(frozen, entry.cancellation).let {
+                if (it.actionId == frozen.id && it.kind == frozen.kind) it else fail(frozen, "执行器返回的动作身份不一致")
+            }
+        } catch (_: java.util.concurrent.CancellationException) {
+            cancelled(frozen)
+        } catch (_: Exception) {
+            // Exception text may contain private paths or adapter arguments; keep it out of results.
+            fail(frozen, "动作执行失败，请重试或检查能力是否可用")
         }
-        val finalResult: ActionResult
-        synchronized(lock) {
-            finalResult = if (request.id in cancelled) cancelled(request) else result
-            results[request.id] = finalResult
-            inFlight.remove(request.id)
-            future.complete(finalResult)
+        return synchronized(lock) {
+            val final = if (frozen.id in cancelledIds) cancelled(frozen) else result
+            // Reads must use the current visibility snapshot after an edit/forget, never cached content.
+            if (!isRead(frozen.kind)) results[frozen.id] = final
+            inFlight.remove(frozen.id)
+            entry.future.complete(final)
+            final
         }
-        return finalResult
     }
 
-    fun cancel(id: String): Boolean = synchronized(lock) {
-        if (results.containsKey(id)) return false
-        cancelled.add(id)
-        true
+    fun cancel(id: String): Boolean {
+        val entry = synchronized(lock) {
+            if (id.isBlank() || id.length > maxIdLength || results.containsKey(id)) return false
+            if (id !in fingerprints && id !in cancelledIds && (fingerprints.keys + cancelledIds).size >= maxRememberedActions) return false
+            cancelledIds.add(id)
+            inFlight[id]?.also {
+                val result = cancelled(it.request)
+                if (!isRead(it.request.kind)) results[id] = result
+                it.future.complete(result)
+            }
+        }
+        entry?.cancellation?.cancel()
+        return true
     }
 
-    /** 锁屏/离开界面时调用：正在执行的、尚未开始的动作都取消。 */
+    /** Cancels registered work, including work waiting on an adapter. New calls need their own scope. */
     fun cancelAll() {
-        synchronized(lock) {
-            cancelled.addAll(inFlight.keys)
-        }
+        val ids = synchronized(lock) { inFlight.keys.toList() }
+        ids.forEach { cancel(it) }
+    }
+
+    fun cancelKind(kind: ActionKind) {
+        val ids = synchronized(lock) { inFlight.filterValues { it.request.kind == kind }.keys.toList() }
+        ids.forEach { cancel(it) }
     }
 
     fun result(id: String): ActionResult? = synchronized(lock) { results[id] }
 
-    private fun runAdapter(request: ActionRequest): ActionResult {
+    private fun runAdapter(request: ActionRequest, cancellation: ActionCancellation): ActionResult {
+        cancellation.throwIfCancelled()
         val adapter = adapters[request.kind] ?: return ActionResult(
             request.id, request.kind, ActionStatus.UNAVAILABLE, "这个动作还没有可用执行器",
         )
-        return adapter.execute(request)
+        return adapter.execute(request, cancellation)
     }
 
     private fun validate(request: ActionRequest): ActionResult? {
         val allowed = when (request.kind) {
             ActionKind.READ_MEMORY -> setOf("query", "limit")
             ActionKind.READ_MATERIALS -> setOf("limit")
-            ActionKind.SAVE_NOTE -> setOf("text")
+            ActionKind.SAVE_NOTE, ActionKind.SPEAK -> setOf("text")
             ActionKind.OPEN_ASSISTANT -> setOf("target")
-            ActionKind.SPEAK -> setOf("text")
         }
         if (request.args.keys.any { it !in allowed }) return fail(request, "动作参数不在白名单")
         val max = when (request.kind) {
@@ -126,17 +179,32 @@ class ActionRunner(
             ActionKind.OPEN_ASSISTANT -> 40
             ActionKind.SPEAK -> 300
         }
-        if (request.args.values.any { it.length > max * 4 }) return fail(request, "动作参数过长")
-        if (request.kind == ActionKind.SAVE_NOTE && request.args["text"].isNullOrBlank()) return fail(request, "没有可保存的念头")
-        if (request.kind == ActionKind.SPEAK && request.args["text"].isNullOrBlank()) return fail(request, "没有可播报的文字")
+        if (request.args.values.any { cn.companion.pet.core.text.UnicodeText.count(it) > max }) return fail(request, "动作参数过长")
+        if (request.kind == ActionKind.SAVE_NOTE || request.kind == ActionKind.SPEAK) {
+            if (request.args["text"].isNullOrBlank()) return fail(request, "没有可处理的文字")
+        }
+        request.args["limit"]?.let {
+            val limit = it.toIntOrNull()
+            val upper = if (request.kind == ActionKind.READ_MEMORY) 20 else 10
+            if (limit == null || limit !in 1..upper) return fail(request, "条数不合法")
+        }
+        request.args["target"]?.let { target ->
+            if (cn.companion.pet.core.session.AssistantApp.entries.none { it.name == target }) return fail(request, "未知的 AI App")
+        }
         return null
     }
 
-    private fun fail(request: ActionRequest, reason: String): ActionResult =
-        ActionResult(request.id, request.kind, ActionStatus.FAILED, reason)
+    private fun fingerprint(request: ActionRequest): String {
+        val canonical = request.kind.name + request.args.toSortedMap().entries.joinToString("") {
+            it.key.length.toString() + ":" + it.key + it.value.length + ":" + it.value
+        }
+        return java.security.MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 255) }
+    }
 
-    private fun cancelled(request: ActionRequest): ActionResult =
-        ActionResult(request.id, request.kind, ActionStatus.CANCELLED, "已取消")
+    private fun isRead(kind: ActionKind) = kind == ActionKind.READ_MEMORY || kind == ActionKind.READ_MATERIALS
+    private fun fail(request: ActionRequest, reason: String) = ActionResult(request.id, request.kind, ActionStatus.FAILED, reason)
+    private fun cancelled(request: ActionRequest) = ActionResult(request.id, request.kind, ActionStatus.CANCELLED, "已取消；已开始的原子操作不回滚")
 }
 
 data class ActionPlan(
@@ -152,6 +220,7 @@ data class ActionPlan(
  */
 class ActionPlanner(
     private val cooldownMillis: Long = 10 * 60 * 1000L,
+    private val sourceAvailable: (String) -> Boolean = { it.isNotBlank() },
 ) {
     fun decide(
         kind: ActionKind,
@@ -167,6 +236,7 @@ class ActionPlanner(
             !userActive -> "用户不在"
             budgetRemaining <= 0 -> "今日预算已用完"
             sourceIds.isEmpty() && kind != ActionKind.READ_MEMORY && kind != ActionKind.READ_MATERIALS -> "没有真实来源"
+            sourceIds.any { !sourceAvailable(it) } -> "来源已失效或不存在"
             lastActionAt > 0 && now - lastActionAt < cooldownMillis -> "冷却中"
             else -> "条件满足，可以进入下一步"
         }

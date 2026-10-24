@@ -41,6 +41,7 @@ class EventLog(
         sourceIds: List<String> = emptyList(),
         factKey: String? = null,
         confidence: Confidence = Confidence.SAID,
+        expiresAt: Long? = null,
     ): CompanionEvent {
         val clean = sanitize(text)
         if (clean.isEmpty()) {
@@ -56,6 +57,7 @@ class EventLog(
                 sourceIds = sourceIds,
                 factKey = factKey,
                 confidence = confidence,
+                expiresAt = expiresAt,
             )
         }
         val event = CompanionEvent(
@@ -69,6 +71,7 @@ class EventLog(
             sourceIds = sourceIds,
             factKey = factKey,
             confidence = confidence,
+            expiresAt = expiresAt,
         )
         appendEvent(event)
         return event

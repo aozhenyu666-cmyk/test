@@ -6,12 +6,14 @@ import cn.companion.pet.core.memory.ProfileRules
 class EventVisibility(
     events: List<CompanionEvent>,
     private val tombstones: Set<String> = emptySet(),
+    now: Long = System.currentTimeMillis(),
 ) {
     val invalidSourceIds: Set<String>
 
     init {
         val invalid = events.filter { it.kind == EventKind.FORGET || it.kind == EventKind.CORRECTION }
             .flatMap { it.sourceIds }.toMutableSet()
+        invalid.addAll(events.filter { it.expiresAt?.let { end -> end <= now } == true }.map { it.id })
         // Control events point at the sources they replace; their new content remains usable.
         do {
             var changed = false

@@ -195,7 +195,10 @@ fun SettingsTab(context: Context) {
 
         Section("其他")
         var tts by remember { mutableStateOf(s.ttsEnabled) }
-        Toggle("语音播报", "用系统 TTS 念出它说的话。默认关，机械音会破坏伴生感。", tts) { tts = it; s.ttsEnabled = it }
+        Toggle("语音播报", "用系统 TTS 念出它说的话。默认关，机械音会破坏伴生感。", tts) {
+            tts = it; s.ttsEnabled = it
+            if (!it) app.stopSpeech()
+        }
 
         Section("连续性")
         var continuity by remember { mutableStateOf(s.continuityEnabled) }

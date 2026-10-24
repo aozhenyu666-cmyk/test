@@ -6,7 +6,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -24,6 +25,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -51,9 +57,9 @@ class MaterialShareActivity : ComponentActivity() {
         if (incoming?.action != Intent.ACTION_SEND) {
             invalid = "只支持分享文字或链接。"
         } else {
-            val text = incoming.getStringExtra(Intent.EXTRA_TEXT).orEmpty()
-            val title = incoming.getStringExtra(Intent.EXTRA_TITLE)
-                ?: incoming.getStringExtra(Intent.EXTRA_SUBJECT)
+            val text = incoming.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString().orEmpty()
+            val title = incoming.getCharSequenceExtra(Intent.EXTRA_TITLE)?.toString()
+                ?: incoming.getCharSequenceExtra(Intent.EXTRA_SUBJECT)?.toString()
             if (text.isBlank()) invalid = "这次分享没有文字内容。" else {
                 draft = MaterialDraftParser.fromShare(text, title, "share")
             }
@@ -68,15 +74,18 @@ class MaterialShareActivity : ComponentActivity() {
     }
 
     @Composable
+    @OptIn(ExperimentalLayoutApi::class)
     private fun ShareScreen(initial: MaterialDraft, error: String?) {
         val app = PetApp.instance
-        var title by remember { mutableStateOf(initial.title) }
-        var url by remember { mutableStateOf(initial.url.orEmpty()) }
-        var body by remember { mutableStateOf(initial.body) }
-        var note by remember { mutableStateOf(initial.note) }
+        var title by rememberSaveable { mutableStateOf(initial.title) }
+        var url by rememberSaveable { mutableStateOf(initial.url.orEmpty()) }
+        var body by rememberSaveable { mutableStateOf(initial.body) }
+        var note by rememberSaveable { mutableStateOf(initial.note) }
         var type by remember { mutableStateOf<MaterialContentType?>(null) }
         var result by remember { mutableStateOf<String?>(error) }
-        var saved by remember { mutableStateOf(false) }
+        var saved by rememberSaveable { mutableStateOf(false) }
+        var saving by remember { mutableStateOf(false) }
+        val scope = rememberCoroutineScope()
 
         Scaffold { inner ->
             Column(
@@ -88,31 +97,31 @@ class MaterialShareActivity : ComponentActivity() {
                 if (initial.url == null && initial.body.isBlank()) {
                     Text("这次分享没有可识别的内容。", style = MaterialTheme.typography.bodyMedium)
                 }
-                OutlinedTextField(title, { title = it }, Modifier.fillMaxWidth(), label = { Text("标题（可选）") }, singleLine = true)
-                OutlinedTextField(url, { url = it }, Modifier.fillMaxWidth(), label = { Text("链接（可选）") }, singleLine = true)
+                OutlinedTextField(title, { title = it }, Modifier.fillMaxWidth(), label = { Text("标题（可选）") }, singleLine = true, enabled = !saving && !saved)
+                OutlinedTextField(url, { url = it }, Modifier.fillMaxWidth(), label = { Text("链接（可选）") }, singleLine = true, enabled = !saving && !saved)
                 OutlinedTextField(
-                    body, { body = it }, Modifier.fillMaxWidth(), minLines = 6,
+                    body, { body = it }, Modifier.fillMaxWidth(), minLines = 6, enabled = !saving && !saved,
                     label = { Text(if (body.isBlank()) "摘录 / 字幕（没有正文就留空）" else "摘录 / 字幕") },
                 )
-                OutlinedTextField(note, { note = it }, Modifier.fillMaxWidth(), label = { Text("你的附言（可选）") })
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TypeChip("只有链接", type == MaterialContentType.LINK_ONLY || (type == null && body.isBlank())) {
+                OutlinedTextField(note, { note = it }, Modifier.fillMaxWidth(), label = { Text("你的附言（可选）") }, enabled = !saving && !saved)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TypeChip("只有链接", type == MaterialContentType.LINK_ONLY || (type == null && body.isBlank()), enabled = !saving && !saved) {
                         type = MaterialContentType.LINK_ONLY
                     }
-                    TypeChip("摘录", type == MaterialContentType.EXCERPT || (type == null && body.isNotBlank())) {
+                    TypeChip("摘录", type == MaterialContentType.EXCERPT || (type == null && body.isNotBlank()), enabled = !saving && !saved) {
                         type = MaterialContentType.EXCERPT
                     }
-                    TypeChip("字幕/全文", type == MaterialContentType.TRANSCRIPT) {
+                    TypeChip("字幕/全文", type == MaterialContentType.TRANSCRIPT, enabled = !saving && !saved) {
                         type = MaterialContentType.TRANSCRIPT
                     }
                 }
                 if (type == MaterialContentType.LINK_ONLY && body.isNotBlank()) {
-                    Text("选了“只有链接”时不会保存正文；要保存正文请选“摘录”。", style = MaterialTheme.typography.bodySmall)
+                    Text("选了“只有链接”且带正文时会拒绝保存；要保存正文请选“摘录”。", style = MaterialTheme.typography.bodySmall)
                 }
                 CutAction(
                     text = if (saved) "完成" else "保存这份材料",
                     highlighted = true,
-                    enabled = !saved,
+                    enabled = !saved && !saving,
                     onClick = {
                         val d = MaterialDraft(
                             url = url.takeIf { it.isNotBlank() },
@@ -122,17 +131,19 @@ class MaterialShareActivity : ComponentActivity() {
                             contentType = type,
                             source = "share",
                         )
-                        when (val r = app.materialInbox.save(d)) {
-                            is MaterialSaveResult.Created -> {
-                                val name = r.material.title.ifBlank { r.material.url ?: "这条素材" }
-                                result = "已收下：" + name
-                                saved = true
+                        if (!saving) {
+                            saving = true
+                            scope.launch {
+                                try {
+                                    val outcome = withContext(Dispatchers.IO) { runCatching { app.materialInbox.save(d) } }
+                                    when (val r = outcome.getOrNull()) {
+                                        is MaterialSaveResult.Created -> { result = "已收下：" + r.material.title.ifBlank { r.material.url ?: "这条素材" }; saved = true }
+                                        is MaterialSaveResult.AlreadySaved -> { result = "已经收过这条素材，内容已更新。"; saved = true }
+                                        is MaterialSaveResult.Rejected -> result = "没有保存：" + r.reason
+                                        null -> result = "没有保存成功，原内容已保留，请重试。"
+                                    }
+                                } finally { saving = false }
                             }
-                            is MaterialSaveResult.AlreadySaved -> {
-                                result = "已经收过这条素材，内容已更新。"
-                                saved = true
-                            }
-                            is MaterialSaveResult.Rejected -> result = "没有保存：" + r.reason
                         }
                     },
                 )
@@ -143,7 +154,7 @@ class MaterialShareActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun TypeChip(label: String, selected: Boolean, onClick: () -> Unit) {
-        if (selected) Button(onClick = onClick) { Text(label) } else OutlinedButton(onClick = onClick) { Text(label) }
+    private fun TypeChip(label: String, selected: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
+        if (selected) Button(enabled = enabled, onClick = onClick) { Text(label) } else OutlinedButton(enabled = enabled, onClick = onClick) { Text(label) }
     }
 }

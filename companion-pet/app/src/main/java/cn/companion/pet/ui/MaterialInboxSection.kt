@@ -2,7 +2,8 @@ package cn.companion.pet.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.heightIn
@@ -18,6 +19,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -37,7 +40,8 @@ import java.time.ZoneId
  * 应用内手动粘贴入口 + 已保存素材列表。保存是纯本地操作，不调用模型，不消耗预算。
  */
 @Composable
-fun MaterialInboxSection() {
+@OptIn(ExperimentalLayoutApi::class)
+fun MaterialInboxSection(resumeTick: Int = 0) {
     val app = PetApp.instance
     var reload by remember { mutableIntStateOf(0) }
     var items by remember { mutableStateOf<List<SharedMaterial>>(emptyList()) }
@@ -45,9 +49,17 @@ fun MaterialInboxSection() {
     var title by remember { mutableStateOf("") }
     var type by remember { mutableStateOf<MaterialContentType?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
-    LaunchedEffect(reload) {
-        items = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { app.materialInbox.all() } }
+    LaunchedEffect(resumeTick, reload) {
+        val outcome = withContext(Dispatchers.IO) { runCatching {
+            val current = app.materialInbox.all()
+            check(app.materialInbox.storageReadable())
+            current
+        } }
+        items = outcome.getOrDefault(emptyList())
+        if (outcome.isFailure) message = "素材暂不可读取，原文件已保留。"
     }
 
     fun save() {
@@ -55,36 +67,41 @@ fun MaterialInboxSection() {
             title = title,
             contentType = type,
         )
-        val result = synchronized(app.memoryLock) { app.materialInbox.save(draft) }
-        message = when (result) {
-            is MaterialSaveResult.Created -> "已收下：" + (result.material.title.ifBlank { "这条素材" })
-            is MaterialSaveResult.AlreadySaved -> "已经收过，内容已更新。"
-            is MaterialSaveResult.Rejected -> "没有保存：" + result.reason
-        }
-        if (result !is MaterialSaveResult.Rejected) {
-            paste = ""
-            title = ""
-            type = null
-            reload++
+        if (busy) return
+        busy = true
+        scope.launch {
+            try {
+                val outcome = withContext(Dispatchers.IO) { runCatching { app.materialInbox.save(draft) } }
+                val result = outcome.getOrNull()
+                message = when (result) {
+                    is MaterialSaveResult.Created -> "已收下：" + result.material.title.ifBlank { "这条素材" }
+                    is MaterialSaveResult.AlreadySaved -> "已经收过，内容已更新。"
+                    is MaterialSaveResult.Rejected -> "没有保存：" + result.reason
+                    null -> "没有保存成功，请重试。"
+                }
+                if (result != null && result !is MaterialSaveResult.Rejected) {
+                    paste = ""; title = ""; type = null; reload++
+                }
+            } finally { busy = false }
         }
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("素材收件箱", style = MaterialTheme.typography.titleMedium)
         Text("从 B站、浏览器或阅读器分享文字/链接，或在下面粘贴。只保存你主动给的标题、链接和摘录，不抓网页、不读其他 App 的聊天。", style = MaterialTheme.typography.bodySmall)
-        OutlinedTextField(title, { title = it }, Modifier.fillMaxWidth(), label = { Text("标题（可选）") }, singleLine = true)
+        OutlinedTextField(title, { title = it }, Modifier.fillMaxWidth(), label = { Text("标题（可选）") }, singleLine = true, enabled = !busy)
         OutlinedTextField(
             paste, { paste = it }, Modifier.fillMaxWidth().heightIn(min = 100.dp),
-            label = { Text("粘贴链接、摘录或字幕") },
+            label = { Text("粘贴链接、摘录或字幕") }, enabled = !busy,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TypeButton("只有链接", type == MaterialContentType.LINK_ONLY) { type = MaterialContentType.LINK_ONLY }
-            TypeButton("摘录", type == MaterialContentType.EXCERPT) { type = MaterialContentType.EXCERPT }
-            TypeButton("字幕/全文", type == MaterialContentType.TRANSCRIPT) { type = MaterialContentType.TRANSCRIPT }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            TypeButton("只有链接", type == MaterialContentType.LINK_ONLY, enabled = !busy) { type = MaterialContentType.LINK_ONLY }
+            TypeButton("摘录", type == MaterialContentType.EXCERPT, enabled = !busy) { type = MaterialContentType.EXCERPT }
+            TypeButton("字幕/全文", type == MaterialContentType.TRANSCRIPT, enabled = !busy) { type = MaterialContentType.TRANSCRIPT }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { save() }) { Text("保存到收件箱") }
-            TextButton(onClick = { paste = ""; title = ""; type = null; message = null }) { Text("清空") }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(enabled = !busy, onClick = { save() }) { Text("保存到收件箱") }
+            TextButton(enabled = !busy, onClick = { paste = ""; title = ""; type = null; message = null }) { Text("清空") }
         }
         message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         if (items.isEmpty()) {
@@ -100,10 +117,19 @@ fun MaterialInboxSection() {
                     )
                     if (item.note.isNotBlank()) Text("附言：" + item.note, style = MaterialTheme.typography.bodySmall)
                     if (item.body.isNotBlank()) Text(item.body.take(120), style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = {
-                        synchronized(app.memoryLock) { app.materialInbox.delete(item.id) }
-                        message = "已删除这条素材；来源话题和上下文入口一并失效。"
-                        reload++
+                    TextButton(enabled = !busy, onClick = {
+                        busy = true
+                        scope.launch {
+                            try {
+                                val outcome = withContext(Dispatchers.IO) { runCatching { app.materialInbox.delete(item.id) } }
+                                message = when {
+                                    outcome.isFailure -> "没有删除成功，请重试。"
+                                    outcome.getOrDefault(false) -> "已删除素材，相关来源已退出使用。"
+                                    else -> "这条素材已不在收件箱，已刷新。"
+                                }
+                                reload++
+                            } finally { busy = false }
+                        }
                     }) { Text("删除") }
                 }
             }
@@ -112,8 +138,8 @@ fun MaterialInboxSection() {
 }
 
 @Composable
-private fun TypeButton(label: String, selected: Boolean, onClick: () -> Unit) {
-    if (selected) Button(onClick = onClick) { Text(label) } else OutlinedButton(onClick = onClick) { Text(label) }
+private fun TypeButton(label: String, selected: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
+    if (selected) Button(enabled = enabled, onClick = onClick) { Text(label) } else OutlinedButton(enabled = enabled, onClick = onClick) { Text(label) }
 }
 
 private fun date(epochMillis: Long): String =

@@ -100,7 +100,7 @@ class NightlyStore(
         val persona = memory.persona()
         val deleted = memory.tombstones()
         // 用户忘记的内容不进入夜间整理；被过滤的事件直接标记已处理，避免永远卡在待处理里。
-        val visibility = EventVisibility(events.all(), deleted)
+        val visibility = EventVisibility(events.all(), deleted, clock.millis())
         val pending = allPending.filter { visibility.allows(it) }
         if (pending.isEmpty()) {
             events.markArchived(day, allPending.map { it.id })
@@ -131,8 +131,7 @@ class NightlyStore(
             persona = persona,
             profile = ProfileRules.applyTombstones(profile.lines(), deleted).joinToString("\n"),
             todayLines = renderLines(pending),
-            yesterdayDiary = memory.diary(day.minusDays(1)).orEmpty().lines()
-                .filterNot { EventVisibility.containsForgotten(it, deleted) }.joinToString("\n"),
+            yesterdayDiary = diaryForContext(day.minusDays(1), clock.millis()),
             deleted = deleted,
         )
         PreparedNightly(batch, messages)
@@ -141,6 +140,13 @@ class NightlyStore(
     fun commit(batch: NightlyBatch, output: NightlyOutput): NightlyCommitOutcome = synchronized(lock) {
         val stored = readBatch(batch.id) ?: return NightlyCommitOutcome.MISSING
         if (stored.status == STATUS_COMMITTED) return NightlyCommitOutcome.ALREADY_COMMITTED
+        val currentEvents = events.all()
+        val currentVisibility = EventVisibility(currentEvents, memory.tombstones(), clock.millis())
+        val visibleIds = currentEvents.filter { currentVisibility.allows(it) }.map { it.id }.toSet()
+        if (stored.eventIds.any { it !in visibleIds }) {
+            batchFile(stored.id).delete()
+            return NightlyCommitOutcome.CONFLICT
+        }
         if (stored.profileVersion != hash(memory.profile()) ||
             stored.personaVersion != hash(memory.persona()) ||
             stored.deletedVersion != hash(memory.tombstones().sorted().joinToString("\n")) ||
@@ -169,7 +175,7 @@ class NightlyStore(
             JournalTarget(diaryRel, diaryBefore, hash(diaryText), diaryText),
             JournalTarget(letterRel, letterBefore, hash(letterText), letterText),
         )
-        val visibility = EventVisibility(events.all(), deletedBefore)
+        val visibility = EventVisibility(events.all(), deletedBefore, clock.millis())
         val batchEvents = events.pendingForDay(day).filter { it.id in stored.eventIds && visibility.allows(it) }
         if (batchEvents.isEmpty()) {
             batchFile(stored.id).delete()
@@ -241,6 +247,10 @@ class NightlyStore(
     private fun applyJournal(journal: NightlyJournal) {
         val currentDeleted = hash(memory.tombstones().sorted().joinToString("\n"))
         if (journal.deletedVersion != currentDeleted) throw UserEditConflict()
+        val snapshot = events.all()
+        val visibility = EventVisibility(snapshot, memory.tombstones(), clock.millis())
+        val allowedIds = snapshot.filter { visibility.allows(it) }.map { it.id }.toSet()
+        if (journal.eventIds.any { it !in allowedIds }) throw UserEditConflict()
         // Validate every file before the first write; a diary conflict must not leave a new profile behind.
         journal.targets.forEach { target ->
             val current = existingHash(target.relativePath)
@@ -260,6 +270,21 @@ class NightlyStore(
         appendArchive(journal)
         fault("mark-archived")
         events.markArchived(LocalDate.parse(journal.day), journal.eventIds)
+    }
+
+    /** A day's derived diary is not model evidence once one of its recorded sources was withdrawn. */
+    fun diaryForContext(day: LocalDate, now: Long = clock.millis()): String = synchronized(lock) {
+        val snapshot = events.all()
+        val visibility = EventVisibility(snapshot, memory.tombstones(), now)
+        if (snapshot.any { it.day == day.toString() && it.kind != EventKind.FORGET && !visibility.allows(it) }) return ""
+        memory.diary(day).orEmpty().lines()
+            .filterNot { EventVisibility.containsForgotten(it, memory.tombstones()) }.joinToString("\n")
+    }
+
+    fun diarySummary(today: LocalDate, maxChars: Int = 200): String = synchronized(lock) {
+        memory.listDates(memory.diaryDir).filter { it < today }.firstNotNullOfOrNull { day ->
+            diaryForContext(day).takeIf { it.isNotBlank() }
+        }?.let { cn.companion.pet.core.text.UnicodeText.truncate(it.replace('\n', ' '), maxChars) }.orEmpty()
     }
 
     /** 归档文件内带批次标记，崩溃重试时不会重复追加同一批。 */

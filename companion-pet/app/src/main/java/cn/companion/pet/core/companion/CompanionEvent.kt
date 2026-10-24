@@ -26,6 +26,8 @@ data class CompanionEvent(
     /** 稳定事实键；同键的新事实会让旧事实失效。 */
     val factKey: String? = null,
     val confidence: Confidence = Confidence.SAID,
+    /** Optional source lifetime. Derived material stops being usable even before disk cleanup runs. */
+    val expiresAt: Long? = null,
 )
 
 @Serializable

@@ -1,0 +1,47 @@
+{
+  "base_commit": "ae19ab9cd974b658d9459c530064b42adb823287",
+  "branch": "pet-v15/codex-material-review-v4",
+  "version_name": "0.3.4",
+  "version_code": 7,
+  "jdk": "Temurin 17.0.21+9",
+  "compile_sdk": 35,
+  "baseline_tests": 217,
+  "baseline_regression": {
+    "tests": 11,
+    "failures": 11,
+    "errors": 0,
+    "skipped": 0
+  },
+  "fixed_unit_tests": {
+    "tests": 246,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "python_upgrade_guard_tests": {
+    "tests": 3,
+    "failures": 0
+  },
+  "lint": {
+    "errors": 0,
+    "warnings": 20
+  },
+  "device_tests_executed": false,
+  "device_upgrade_executed": false,
+  "findings": {
+    "blocker": 0,
+    "high": 5,
+    "medium": 6,
+    "low": 1
+  },
+  "artifacts": {
+    "companion-pet-v0.3.4-debug.apk": {
+      "bytes": 28288719,
+      "sha256": "8098424559271a2b913dee7ea78387d67c09b2c4432a46482fc06bf55cca39eb"
+    },
+    "companion-pet-v0.3.4-androidTest.apk": {
+      "bytes": 2324762,
+      "sha256": "7373b2c8f6c4cb54982d7879d0ee7b601c47f9bc38da17f072afb2d3a5e15cd7"
+    }
+  }
+}

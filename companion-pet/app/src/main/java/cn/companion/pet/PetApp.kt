@@ -20,6 +20,11 @@ import cn.companion.pet.net.DeepSeekClient
 import cn.companion.pet.service.AndroidActionAdapters
 import cn.companion.pet.work.NightlyWorker
 import java.io.File
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 
 /** 全局单例的唯一出处。 */
 class PetApp : Application() {
@@ -50,6 +55,30 @@ class PetApp : Application() {
     lateinit var actions: ActionRunner
         private set
     val client by lazy { DeepSeekClient() }
+    private val speechHolder = lazy { cn.companion.pet.service.Speech(this) }
+    val speech: cn.companion.pet.service.Speech get() = speechHolder.value
+    fun stopSpeech() {
+        actions.cancelKind(cn.companion.pet.core.action.ActionKind.SPEAK)
+        if (speechHolder.isInitialized()) speech.stopAll()
+    }
+    val actionPlanner by lazy {
+        cn.companion.pet.core.action.ActionPlanner(sourceAvailable = { id ->
+            synchronized(memoryLock) {
+                materialInbox.purgeExpired()
+                val snapshot = events.all()
+                val visibility = cn.companion.pet.core.companion.EventVisibility(snapshot, memory.tombstones())
+                snapshot.any { it.id == id && visibility.allows(it) }
+            }
+        })
+    }
+    private val screenOffReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_SCREEN_OFF) {
+                actions.cancelAll()
+                if (speechHolder.isInitialized()) speech.stopAll()
+            }
+        }
+    }
 
     @Volatile
     private var cachedKey: String? = null
@@ -82,16 +111,26 @@ class PetApp : Application() {
         facts = FactStore(memory.root)
         topics = TopicQueue(memory.root, events = events)
         materialInbox = MaterialInbox(memory.root, events, topics = topics, lock = memory.lock)
+        materialInbox.purgeExpired()
         memoryEdits = cn.companion.pet.core.memory.MemoryEdits(memory, facts, events)
         nightly = NightlyStore(memory, events, facts = facts)
         budget = AtomicBudget(BudgetPrefs(this))
         thoughts = ThoughtNotes(File(memory.root, "notes"))
         actions = AndroidActionAdapters.build(this)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_NOT_EXPORTED)
+        else registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
         // 旧 today.md 只在第一次启动迁移一次；迁移有备份且幂等。
         LegacyEventImport.ensure(memory, events)
         // 上次提交如果中途崩溃，先把 journal 做完。
         nightly.recover()
         NightlyWorker.schedule(this)
+    }
+
+    override fun onTerminate() {
+        runCatching { unregisterReceiver(screenOffReceiver) }
+        actions.cancelAll()
+        if (speechHolder.isInitialized()) speech.shutdown()
+        super.onTerminate()
     }
 
     companion object {

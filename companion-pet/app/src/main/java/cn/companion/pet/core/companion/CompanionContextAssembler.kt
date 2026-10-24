@@ -41,7 +41,8 @@ class CompanionContextAssembler(
         limits: ContextLimits = ContextLimits(),
         userQuery: String? = null,
     ): List<ChatMessage> {
-        val recent = recentLines(limits, tombstones)
+        materials?.purgeExpired(now)
+        val recent = recentLines(limits, tombstones, now)
         val query = userQuery?.takeIf { it.isNotBlank() } ?: buildQuery(moment, now, tombstones)
         val recalled = recall.recall(
             query = query,
@@ -109,9 +110,9 @@ class CompanionContextAssembler(
     }
 
     /** 最近交流用已经格式化的一行一条，最多 12 条/2400 码点（从旧到新裁剪）。 */
-    private fun recentLines(limits: ContextLimits, tombstones: Set<String>): List<Pair<String, String>> {
+    private fun recentLines(limits: ContextLimits, tombstones: Set<String>, now: Long): List<Pair<String, String>> {
         val snapshot = events.all()
-        val visibility = EventVisibility(snapshot, tombstones)
+        val visibility = EventVisibility(snapshot, tombstones, now)
         val all = snapshot
             .filter { it.kind == EventKind.EXCHANGE || it.kind == EventKind.LEGACY_LINE }
             .filter { visibility.allows(it) }
@@ -128,7 +129,7 @@ class CompanionContextAssembler(
 
     private fun buildQuery(moment: ProbeMoment, now: Long, tombstones: Set<String>): String {
         val snapshot = events.all()
-        val visibility = EventVisibility(snapshot, tombstones)
+        val visibility = EventVisibility(snapshot, tombstones, now)
         val userLines = snapshot
             .filter { it.kind == EventKind.USER_INPUT || it.kind == EventKind.NOTE || it.kind == EventKind.CORRECTION }
             .filter { it.occurredAt <= now && visibility.allows(it) }

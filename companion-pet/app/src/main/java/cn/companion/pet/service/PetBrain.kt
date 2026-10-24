@@ -99,7 +99,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private val voice = VoiceInput(context)
     private val gemini = GeminiLauncher(context)
     private val assistants = Assistants(context, settings)
-    private val speech = Speech(context)
+    private val speech by lazy { app.speech }
     private val power = context.getSystemService(PowerManager::class.java)
     private val keyguard = context.getSystemService(KeyguardManager::class.java)
     private val labels = HashMap<String, String>()
@@ -117,6 +117,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val noEscalation: Boolean = false,
         val id: String = UUID.randomUUID().toString(),
         val topicId: String? = null,
+        val inputVersion: String? = null,
     ) {
         var interacting = false
         var userReply: String? = null
@@ -155,6 +156,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     fun stop() {
+        app.actions.cancelAll()
         PerceptionHub.onScroll = null
         handler.removeCallbacksAndMessages(null)
         voice.cancel()
@@ -303,6 +305,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             overlay.setMood(Mood.THINKING)
             val (opening, inputVersion) = withContext(Dispatchers.IO) {
                 synchronized(app.memoryLock) {
+                    app.materialInbox.purgeExpired(now())
                     val eligible = topic == null || topics.candidates(now()).any { it.id == topic.id }
                     openingMessages(if (eligible) moment else moment.copy(topic = null), decision.screenText) to memoryVersion()
                 }
@@ -325,17 +328,17 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 else -> {
                     if (isWeighty) { weighty.markUsed(today); stats.add(Stats.Kind.WEIGHTY) }
                     rephraseNext = false
-                    present(decision, reply, opening, noEscalation = afterHeartbeat, topic = topic)
+                    present(decision, reply, opening, noEscalation = afterHeartbeat, topic = topic, inputVersion = inputVersion)
                 }
             }
         }
     }
 
-    private fun present(decision: SceneDecision, reply: ProbeReply, opening: List<ChatMessage>, noEscalation: Boolean, topic: Topic? = null) {
+    private fun present(decision: SceneDecision, reply: ProbeReply, opening: List<ChatMessage>, noEscalation: Boolean, topic: Topic? = null, inputVersion: String? = null) {
         val now = now()
         scheduler.onSpoke(now)
         stats.add(Stats.Kind.SPOKE)
-        convo = Conversation(decision, reply, opening, now, noEscalation = noEscalation, topicId = topic?.id)
+        convo = Conversation(decision, reply, opening, now, noEscalation = noEscalation, topicId = topic?.id, inputVersion = inputVersion)
         lastProactiveAt = now
         topic?.let { topics.markShared(it.id, now) }
         overlay.setMood(reply.mood)
@@ -475,7 +478,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 stats.add(Stats.Kind.API_CALLS)
                 val (messages, inputVersion) = withContext(Dispatchers.IO) {
                     synchronized(app.memoryLock) {
-                        val hook = c.reply.hookText.takeUnless { memory.forgottenMatches(it) }.orEmpty().ifEmpty { "嗯？" }
+                        val changed = c.inputVersion != null && c.inputVersion != memoryVersion()
+                        val hook = c.reply.hookText.takeUnless { changed || memory.forgottenMatches(it) }.orEmpty().ifEmpty { "嗯？" }
                         ProbePrompt.reply(buildOpeningSync(c.decision, said), hook, said) to memoryVersion()
                     }
                 }
@@ -1102,13 +1106,16 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             assembler.assemble(memory.persona(), moment, material, now(), memory.tombstones(), userQuery = userQuery)
         } else {
             val profile = ProfileRules.applyTombstones(memory.profileLines(), memory.tombstones()).joinToString("\n")
-            val diary = memory.diarySummary(LocalDate.now()).takeUnless { memory.forgottenMatches(it) }.orEmpty()
-            ProbePrompt.opening(memory.persona(), profile, recentExchangeLines(20), diary, moment)
+            val diary = app.nightly.diarySummary(LocalDate.now())
+            val shared = app.materialInbox.contextBlock(now())
+            ProbePrompt.opening(memory.persona(), profile, recentExchangeLines(20), diary, moment).map {
+                if (it.role == cn.companion.pet.net.ChatRole.USER && shared.isNotEmpty()) it.copy(content = it.content + "\n\n" + shared) else it
+            }
         }
 
     /** Drop in-flight answers if the user changed the memory they were based on. */
     private fun memoryVersion(): String = cn.companion.pet.core.memory.NightlyStore.hash(
-        listOf(memory.persona(), memory.profile(), memory.tombstones().sorted().joinToString("\n"), app.facts.versionHash()).joinToString("\u0000"),
+        listOf(memory.persona(), memory.profile(), memory.tombstones().sorted().joinToString("\n"), app.facts.versionHash(), app.materialInbox.versionHash()).joinToString("\u0000"),
     )
 
     private fun apiKey(): String? = app.apiKey()
