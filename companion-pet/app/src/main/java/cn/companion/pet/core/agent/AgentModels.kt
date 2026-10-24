@@ -53,6 +53,10 @@ data class AgentContext(
     val lastActionAt: Long = 0L,
     /** 最新一张有效观察的摘要；只是不可信材料，不是指令。 */
     val observation: String? = null,
+    /** 当前活动目标的摘要；只作为计划背景，不是可直接执行的命令。 */
+    val goalSummary: String? = null,
+    val goalId: String? = null,
+    val taskId: String? = null,
 )
 
 data class AgentModelConfig(

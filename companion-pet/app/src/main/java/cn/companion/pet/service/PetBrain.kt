@@ -23,6 +23,7 @@ import cn.companion.pet.core.bridge.GeminiBridgeTextBuilder
 import cn.companion.pet.core.companion.CompanionEvent
 import cn.companion.pet.core.companion.EventKind
 import cn.companion.pet.core.companion.EventVisibility
+import cn.companion.pet.core.goal.GoalStatus
 import cn.companion.pet.core.agent.AgentContext
 import cn.companion.pet.core.agent.AgentEventScanner
 import cn.companion.pet.core.agent.AgentTrigger
@@ -423,22 +424,31 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                     )
                 }
             }
-            // 模型、工具、轨迹全部在 IO；回来只做 UI。严格检测避免回归到主线程。
-            val result = withContext(Dispatchers.IO) {
+            // 模型、工具、轨迹、目标状态全部在 IO；回来只做 UI。严格检测避免回归到主线程。
+            var spokenText = ""
+            withContext(Dispatchers.IO) {
                 check(Looper.myLooper() != Looper.getMainLooper()) { "agent must run off main" }
-                app.agentLoop.run(context, settings.agentAutonomy,
-                    cancelled = { !settings.agentAutonomy || !active },
-                    stableTurnId = "agent-event-" + event.id)
+                val goalActive = app.goalStore.state().goals.any { it.status == GoalStatus.ACTIVE }
+                if (goalActive) {
+                    val goalTurn = app.goalCoordinator.runOnce(context, settings.agentAutonomy,
+                        observationValid = app.screenObservations.latestValid(now) != null,
+                        cancelled = { !settings.agentAutonomy || !active })
+                    spokenText = goalTurn.agent?.text ?: goalTurn.note
+                } else {
+                    val result = app.agentLoop.run(context, settings.agentAutonomy,
+                        cancelled = { !settings.agentAutonomy || !active },
+                        stableTurnId = "agent-event-" + event.id)
+                    spokenText = result.text
+                }
+                app.agentEventLedger.mark(event.id, now)
             }
-            withContext(Dispatchers.IO) { app.agentEventLedger.mark(event.id, now) }
             overlay.setMood(Mood.IDLE)
             if (!active || !settings.agentAutonomy || convo != null) return@launch
-            val spoke = result.text.isNotBlank()
-            if (spoke) {
+            if (spokenText.isNotBlank()) {
                 scheduler.onSpoke(now)
                 stats.add(Stats.Kind.SPOKE)
                 overlay.setTalking(true)
-                overlay.showBubble(BubbleSpec(result.text, textOnly = true)) {
+                overlay.showBubble(BubbleSpec(spokenText, textOnly = true)) {
                     overlay.setTalking(false)
                 }
             } else {
