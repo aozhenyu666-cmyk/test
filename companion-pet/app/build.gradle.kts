@@ -13,13 +13,28 @@ android {
         applicationId = "cn.companion.pet"
         minSdk = 30
         targetSdk = 35
-        versionCode = 19
-        versionName = "0.5.1"
+        versionCode = 20
+        versionName = "0.5.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // 固定签名：每次构建（本地或 GitHub Actions）都用同一把钥匙，新 APK 才能直接覆盖安装，
+    // 不用卸载重装、不丢权限和数据。没有这段时，CI 每次随机生成调试签名，每次都只能卸载重装。
+    // 这是只给本自用项目的调试钥匙，密码公开；仓库是公开的，别人也能用它签名——不要拿它签别的应用。
+    signingConfigs {
+        getByName("debug") {
+            storeFile = rootProject.file("keystore/tongzhuo-debug.jks")
+            storePassword = "android"
+            keyAlias = "tongzhuo"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(

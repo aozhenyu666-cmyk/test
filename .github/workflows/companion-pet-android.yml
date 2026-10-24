@@ -22,6 +22,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # 只有“发布最新 APK”这一步需要写权限（创建 Release）；拉取请求的构建不发布。
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: companion-pet
@@ -87,3 +90,37 @@ jobs:
           name: companion-pet-debug-${{ github.sha }}
           path: companion-pet/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
+
+      # 固定直链（用户已同意公开）：每次推送构建成功后，把 APK 放到滚动更新的 Release “tongzhuo-latest”。
+      # 链接永远是 https://github.com/<仓库>/releases/download/tongzhuo-latest/tongzhuo.apk，
+      # 无需登录、无需解压，手机浏览器直接下载安装。
+      - name: Publish APK to the tongzhuo-latest release
+        if: success() && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          CODE=$(grep -oP 'versionCode = \K[0-9]+' app/build.gradle.kts)
+          cp app/build/outputs/apk/debug/app-debug.apk tongzhuo.apk
+          SHA256=$(sha256sum tongzhuo.apk | cut -d' ' -f1)
+          TAG=tongzhuo-latest
+          NOTES=$(printf '%s\n\n%s\n%s\n%s\n\n%s' \
+            "同桌 ${VERSION}（versionCode ${CODE}），最新一次构建成功的调试版。" \
+            "分支：${GITHUB_REF_NAME}" \
+            "提交：${GITHUB_SHA}" \
+            "SHA-256：${SHA256}" \
+            "固定签名，可以直接覆盖安装，不用卸载。真机未必验证过，见仓库 companion-pet/handoff。")
+          for attempt in 1 2 3; do
+            gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
+            if gh release create "$TAG" tongzhuo.apk --target "$GITHUB_SHA" --prerelease \
+                --title "同桌 ${VERSION}（最新构建）" --notes "$NOTES"; then
+              echo "Published https://github.com/${GH_REPO}/releases/download/${TAG}/tongzhuo.apk"
+              exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "Release publish failed" >&2
+          exit 1
