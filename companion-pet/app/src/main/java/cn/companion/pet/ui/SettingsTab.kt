@@ -63,7 +63,6 @@ import cn.companion.pet.core.goal.GoalDecision
 import cn.companion.pet.core.goal.GoalStatus
 import cn.companion.pet.core.action.PendingAction
 import cn.companion.pet.core.action.PendingStatus
-import cn.companion.pet.core.action.ActionRequest
 import cn.companion.pet.data.SecretWriteResult
 import cn.companion.pet.bridge.Assistants
 import cn.companion.pet.core.session.AssistantApp
@@ -483,10 +482,11 @@ private fun GoalSection() {
     val scope = rememberCoroutineScope()
     var tick by remember { mutableIntStateOf(0) }
     var goals by remember { mutableStateOf<List<Goal>>(emptyList()) }
+    var tasks by remember { mutableStateOf<List<cn.companion.pet.core.goal.Task>>(emptyList()) }
     var text by remember { mutableStateOf("") }
     var plan by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(tick) {
-        goals = withContext(Dispatchers.IO) { app.goalStore.state().goals }
+        withContext(Dispatchers.IO) { app.goalStore.state() }.let { goals = it.goals; tasks = it.tasks }
         plan = withContext(Dispatchers.IO) {
             val p = app.goalSupervisor.decide(System.currentTimeMillis(),
                 app.budget.remaining(app.settings.dailyLimit, java.time.LocalDate.now().toString()))
@@ -494,7 +494,7 @@ private fun GoalSection() {
         }
     }
     GroupTitle("长期目标（实验）")
-    Text("目标只保存计划和状态，不会自动执行高风险操作；关闭/删除后不再被旧调用复活。", style = MaterialTheme.typography.bodySmall)
+    Text("给目标加上具体的一步，它才会在你记念头/存素材时按这一步去做；只读步骤可自动执行，写步骤会先问你。目标完成要你自己确认。", style = MaterialTheme.typography.bodySmall)
     OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth(), label = { Text("想让它长期关注什么") })
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = {
@@ -512,28 +512,68 @@ private fun GoalSection() {
         Text("目标文件损坏，已停止写入；不会把损坏当成空目标。", style = MaterialTheme.typography.bodySmall)
     }
     goals.forEach { goal ->
+        GoalCard(goal, tasks.filter { it.goalId == goal.id }) { tick++ }
+    }
+}
+
+/** 一个目标：下一步列表 + 加步骤 + 重试/标记完成；目标完成要用户自己点。 */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun GoalCard(goal: Goal, tasks: List<cn.companion.pet.core.goal.Task>, changed: () -> Unit) {
+    val app = PetApp.instance
+    val scope = rememberCoroutineScope()
+    var step by remember(goal.id) { mutableStateOf("") }
+    fun io(block: () -> Unit) = scope.launch { withContext(Dispatchers.IO) { block() }; changed() }
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column(Modifier.weight(1f)) {
                 Text(goal.text, style = MaterialTheme.typography.bodyMedium)
                 Text(goal.status.name, style = MaterialTheme.typography.bodySmall)
             }
-            TextButton(onClick = {
-                scope.launch {
-                    withContext(Dispatchers.IO) {
-                        app.goalStore.setGoalStatus(goal.id,
-                            if (goal.status == GoalStatus.ACTIVE) GoalStatus.PAUSED else GoalStatus.ACTIVE,
-                            System.currentTimeMillis())
-                    }
-                    tick++
-                }
-            }) { Text(if (goal.status == GoalStatus.ACTIVE) "暂停" else "恢复") }
-            TextButton(onClick = {
-                scope.launch {
-                    withContext(Dispatchers.IO) { app.goalStore.deleteGoal(goal.id, System.currentTimeMillis()) }
-                    tick++
-                }
-            }) { Text("删除") }
+            if (goal.status == GoalStatus.ACTIVE || goal.status == GoalStatus.PAUSED) {
+                TextButton(onClick = {
+                    io { app.goalStore.setGoalStatus(goal.id,
+                        if (goal.status == GoalStatus.ACTIVE) GoalStatus.PAUSED else GoalStatus.ACTIVE, System.currentTimeMillis()) }
+                }) { Text(if (goal.status == GoalStatus.ACTIVE) "暂停" else "恢复") }
+            }
+            TextButton(onClick = { io { app.goalStore.deleteGoal(goal.id, System.currentTimeMillis()) } }) { Text("删除") }
         }
+        tasks.forEach { task ->
+            Text("· " + task.nextStep + "（" + task.status.name + "）" + (if (task.evidence.isBlank()) "" else " " + task.evidence),
+                style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (task.status == cn.companion.pet.core.goal.TaskStatus.BLOCKED) {
+                    TextButton(onClick = { io { app.goalStore.setTaskStatus(task.id, cn.companion.pet.core.goal.TaskStatus.PENDING,
+                        "你点了重试", System.currentTimeMillis(), wakeCondition = "") } }) { Text("重试") }
+                }
+                if (task.status != cn.companion.pet.core.goal.TaskStatus.DONE) {
+                    TextButton(onClick = { io { app.goalStore.setTaskStatus(task.id, cn.companion.pet.core.goal.TaskStatus.DONE,
+                        "你确认这一步已完成", System.currentTimeMillis(), wakeCondition = "") } }) { Text("这步已完成") }
+                }
+            }
+        }
+        if (goal.status == GoalStatus.ACTIVE) {
+            if (tasks.isNotEmpty() && tasks.all { it.status == cn.companion.pet.core.goal.TaskStatus.DONE }) {
+                Button(onClick = { io { app.goalStore.setGoalStatus(goal.id, GoalStatus.COMPLETED, System.currentTimeMillis()) } }) {
+                    Text("步骤都完成了，确认目标完成")
+                }
+            }
+            OutlinedTextField(step, { step = it }, Modifier.fillMaxWidth(), label = { Text("加一步（它只会用你选的那一种工具）") })
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(
+                    Triple("查记忆", "READ_MEMORY", "read"),
+                    Triple("看素材", "READ_MATERIALS", "read"),
+                    Triple("记念头（要你确认）", "SAVE_NOTE", "write"),
+                ).forEach { (label, kind, risk) ->
+                    OutlinedButton(onClick = {
+                        val value = step.trim(); if (value.isBlank()) return@OutlinedButton
+                        io { app.goalStore.addTask(goal.id, value, kind, risk, now = System.currentTimeMillis()) }
+                        step = ""
+                    }) { Text(label) }
+                }
+            }
+        }
+        HorizontalDivider()
     }
 }
 
@@ -546,33 +586,38 @@ private fun PendingActionSection() {
     var message by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(tick) { items = withContext(Dispatchers.IO) { app.pendingActions.list(System.currentTimeMillis()) } }
     GroupTitle("待确认动作")
-    Text("模型提议写动作/打开/朗读时，先停在这里；默认不执行。允许后仍会重新检查前台、白名单和观察时效。", style = MaterialTheme.typography.bodySmall)
+    Text("模型提议写动作/打开/朗读时，会先在桌宠气泡上问你；没来得及点的也留在这里。允许后仍会重新检查前台、白名单和观察时效。" +
+        "点击、输入这类动作最好在气泡上确认：在这里确认时前台已经不是原来的 App，多半会被拒绝。", style = MaterialTheme.typography.bodySmall)
     message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    app.pendingActions.lastError?.let { Text("待确认存储：" + it, style = MaterialTheme.typography.bodySmall) }
     items.forEach { item ->
         Column(Modifier.fillMaxWidth()) {
-            Text(item.kind.name + " · " + item.status.name, style = MaterialTheme.typography.bodyMedium)
+            val label = when (item.status) {
+                PendingStatus.INTERRUPTED -> "批准后程序中断，结果未知（不会自动重做，请自己核对）"
+                else -> item.status.name
+            }
+            Text(item.kind.name + " · " + label, style = MaterialTheme.typography.bodyMedium)
             Text(item.preview, style = MaterialTheme.typography.bodySmall)
+            item.result?.let { Text("回执：" + it.status.name + " · " + it.reason, style = MaterialTheme.typography.bodySmall) }
             if (item.status == PendingStatus.PENDING) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = {
                         scope.launch {
-                            val approved = withContext(Dispatchers.IO) {
-                                app.pendingActions.approve(item.id, System.currentTimeMillis(),
-                                    cn.companion.pet.a11y.PerceptionHub.trail.foreground)
+                            val outcome = withContext(Dispatchers.IO) {
+                                app.pendingExecutor.approveAndRun(item.id, System.currentTimeMillis(),
+                                    cn.companion.pet.a11y.PerceptionHub.trail.foreground, item.nonce)
                             }
-                            if (approved == null) { message = "未批准：已过期或前台已切换"; tick++ } else {
-                                val result = withContext(Dispatchers.IO) {
-                                    app.actions.execute(ActionRequest("pending-" + approved.id, approved.kind, approved.args))
-                                }
-                                withContext(Dispatchers.IO) { app.pendingActions.finish(approved.id, result) }
-                                message = result.kind.name + " · " + result.status.name + " · " + result.reason
-                                tick++
+                            message = when (outcome) {
+                                is cn.companion.pet.core.action.PendingExecutor.Outcome.Rejected -> "未执行：" + outcome.reason
+                                is cn.companion.pet.core.action.PendingExecutor.Outcome.Executed ->
+                                    outcome.result.kind.name + " · " + outcome.result.status.name + " · " + outcome.result.reason
                             }
+                            tick++
                         }
                     }) { Text("允许本次") }
                     OutlinedButton(onClick = {
                         scope.launch {
-                            withContext(Dispatchers.IO) { app.pendingActions.rejectOrCancel(item.id) }
+                            withContext(Dispatchers.IO) { app.pendingExecutor.reject(item.id) }
                             message = "已拒绝"; tick++
                         }
                     }) { Text("拒绝") }

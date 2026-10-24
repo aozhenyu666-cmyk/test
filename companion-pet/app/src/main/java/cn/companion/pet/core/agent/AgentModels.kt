@@ -57,6 +57,8 @@ data class AgentContext(
     val goalSummary: String? = null,
     val goalId: String? = null,
     val taskId: String? = null,
+    /** 前台应用的**包名**（[foreground] 只是给模型看的显示名）。待确认动作按它绑定前台。 */
+    val foregroundPackage: String? = null,
 )
 
 data class AgentModelConfig(
@@ -109,6 +111,8 @@ data class AgentTurnResult(
     val text: String,
     val reason: String,
     val modelAttempts: Int,
+    /** NEEDS_CONFIRMATION 时新建的待确认动作 ID；没建成为 null。 */
+    val pendingId: String? = null,
 )
 
 /** 只读工具可自动；写入、打开外部 App、朗读必须由用户确认，本轮不自动执行。 */

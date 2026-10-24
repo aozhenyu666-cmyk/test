@@ -38,6 +38,8 @@ class AgentLoop(
         autonomy: Boolean,
         cancelled: () -> Boolean = { false },
         stableTurnId: String? = null,
+        /** 目标任务限定的工具；模型选了别的就拒绝，不执行。null 表示不限。 */
+        allowedKinds: Set<ActionKind>? = null,
     ): AgentTurnResult {
         val turnId = stableTurnId ?: ("agent-" + idFactory())
         if (!autonomy) return finish(turnId, context, AgentTurnStatus.DISABLED, null, null, "", "自主模式未开启", 0)
@@ -64,7 +66,9 @@ class AgentLoop(
             is AgentDecision.Invalid -> finish(turnId, context, AgentTurnStatus.INVALID, decision, null, "", decision.reason, 1)
             is AgentDecision.NoAction -> finish(turnId, context, AgentTurnStatus.NO_ACTION, decision, null, "", decision.reason, 1)
             is AgentDecision.ToolCall -> {
-                val auth = AgentPolicy.authorize(decision, autonomy, planner, context)
+                val auth = if (allowedKinds != null && decision.kind !in allowedKinds)
+                    AgentAuthorization(false, false, "和目标的这一步不符")
+                else AgentPolicy.authorize(decision, autonomy, planner, context)
                 if (!auth.allowed) {
                     finish(turnId, context, AgentTurnStatus.DENIED, decision, null, "", auth.reason, 1)
                 } else if (auth.requiresConfirmation) {
@@ -139,17 +143,20 @@ class AgentLoop(
             is AgentDecision.Invalid -> decision.reason
             null -> ""
         }
+        var pendingId: String? = null
         if (status == AgentTurnStatus.NEEDS_CONFIRMATION && decision is AgentDecision.ToolCall) {
-            runCatching {
+            pendingId = runCatching {
                 pending?.create(
                     kind = decision.kind,
                     args = decision.args,
                     preview = AgentReport.needsConfirmation(decision) + " | " + decision.args.entries.joinToString(", ") { it.key + "=" + it.value.take(60) },
-                    packageName = context.foreground,
+                    // 绑定包名，不是显示名：批准时拿当前前台包名比对（审计 P0-1）。
+                    packageName = context.foregroundPackage.orEmpty(),
                     sourceIds = decision.sourceIds,
                     now = context.now,
-                )
-            }
+                    taskId = context.taskId.orEmpty(),
+                )?.id
+            }.getOrNull()
         }
         trace.append(AgentTrace(
             id = turnId,
@@ -165,6 +172,6 @@ class AgentLoop(
             modelAttempts = attempts,
             eventId = context.eventId,
         ))
-        return AgentTurnResult(turnId, status, decision, result, text, reason, attempts)
+        return AgentTurnResult(turnId, status, decision, result, text, reason, attempts, pendingId)
     }
 }

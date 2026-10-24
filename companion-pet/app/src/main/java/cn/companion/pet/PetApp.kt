@@ -87,6 +87,9 @@ class PetApp : Application() {
         private set
     lateinit var pendingActions: PendingActionStore
         private set
+    /** 批准并执行待确认动作的唯一入口（设置页和悬浮气泡共用）。 */
+    lateinit var pendingExecutor: cn.companion.pet.core.action.PendingExecutor
+        private set
     val visionAnalyzer by lazy { VisionAnalyzer(client) { visionConfig() } }
     lateinit var agentLoop: AgentLoop
         private set
@@ -177,7 +180,12 @@ class PetApp : Application() {
         agentTrace = AgentTraceStore(memory.root)
         agentEventLedger = AgentEventLedger(memory.root)
         goalStore = GoalStore(memory.root)
-        goalSupervisor = GoalSupervisor(goalStore)
+        goalSupervisor = GoalSupervisor(goalStore) { id ->
+            pendingActions.find(id)?.let {
+                (it.status == cn.companion.pet.core.action.PendingStatus.PENDING && System.currentTimeMillis() <= it.expiresAt) ||
+                    it.status == cn.companion.pet.core.action.PendingStatus.APPROVED
+            } == true
+        }
         pendingActions = PendingActionStore(memory.root)
         // agentLoop 在下方 actions 之后初始化；这里用 lazy 不行，放到 agentLoop 初始化后。
         
@@ -193,6 +201,19 @@ class PetApp : Application() {
             pending = pendingActions,
         )
         goalCoordinator = GoalAgentCoordinator(goalStore, goalSupervisor, agentLoop)
+        pendingExecutor = cn.companion.pet.core.action.PendingExecutor(
+            pendingActions, actions,
+            onFinished = { action, result ->
+                if (action.taskId.isNotBlank()) goalStore.applyPendingResult(action.taskId, result, System.currentTimeMillis())
+            },
+            onRejected = { action ->
+                if (action.taskId.isNotBlank()) goalStore.markTaskRejected(action.taskId, System.currentTimeMillis())
+            },
+        )
+        // 上次“批准后、写回执前”被杀的确认：查账本补结果，查不到标为中断，绝不自动重做。
+        Thread {
+            runCatching { pendingActions.recoverInterrupted(System.currentTimeMillis()) { id -> actions.result(id) } }
+        }.start()
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
         // 旧 today.md 只在第一次启动迁移一次；迁移有备份且幂等。

@@ -67,10 +67,11 @@ class GoalAgentCoordinatorTest {
         val result = coordinator.runOnce(context(1_000), autonomy = true)
         assertEquals(GoalDecision.READ_TOOL, result.plan.decision)
         assertEquals(1, adapter.calls.get())
-        assertEquals(TaskStatus.WAITING, result.taskStatus)
+        // 0.5.1：只读这一步成功即 DONE。原断言 WAITING 会让同一步每个事件都重跑、永远完不成（审计 P2-1）。
+        assertEquals(TaskStatus.DONE, result.taskStatus)
         assertTrue(result.agent?.execution?.status == ActionStatus.SUCCESS)
         val reopened = GoalStore(tmp.root)
-        assertEquals(TaskStatus.WAITING, reopened.state().tasks.single().status)
+        assertEquals(TaskStatus.DONE, reopened.state().tasks.single().status)
         assertTrue(reopened.state().episodes.any { it.actionId != null })
     }
 

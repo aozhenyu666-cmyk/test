@@ -396,6 +396,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 }
             } ?: return@launch
             if (!settings.agentAutonomy || !active || settings.petPaused || scheduler.isQuiet(now())) return@launch
+            // 最早那条还在退避期就等它，不跳到后面的事件（跳过会把高水位推过它）。
+            val retryAt = withContext(Dispatchers.IO) { app.agentEventLedger.retryAt(event.id) }
+            if (retryAt > now()) return@launch
             runAgentTurn(event, now)
         }
     }
@@ -411,12 +414,14 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                     val lines = visibleMemory.read("", 5)
                     val titles = app.materialInbox.all().map { it.title.ifBlank { it.url ?: it.id } }.take(5)
                     val ids = (app.events.all().takeLast(10).map { it.id } + event.id).distinct()
+                    val fgPackage = PerceptionHub.trail.foreground
                     AgentContext(
                         trigger = if (event.kind == EventKind.MATERIAL) AgentTrigger.MATERIAL_SAVED else AgentTrigger.NOTE_SAVED,
                         now = now,
                         day = LocalDate.now().toString(),
                         scene = decision.scene.name,
-                        foreground = PerceptionHub.trail.foreground?.let { label(it) } ?: "不清楚",
+                        foreground = fgPackage?.let { label(it) } ?: "不清楚",
+                        foregroundPackage = fgPackage,
                         memoryLines = lines,
                         materialTitles = titles,
                         eventIds = ids,
@@ -431,25 +436,32 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             }
             // 模型、工具、轨迹、目标状态全部在 IO；回来只做 UI。严格检测避免回归到主线程。
             var spokenText = ""
+            var pending: cn.companion.pet.core.action.PendingAction? = null
             withContext(Dispatchers.IO) {
                 check(Looper.myLooper() != Looper.getMainLooper()) { "agent must run off main" }
+                val cancelled = { !settings.agentAutonomy || !active }
                 val goalActive = app.goalStore.state().goals.any { it.status == GoalStatus.ACTIVE }
-                if (goalActive) {
-                    val goalTurn = app.goalCoordinator.runOnce(context, settings.agentAutonomy,
-                        observationValid = app.screenObservations.latestValid(now) != null,
-                        cancelled = { !settings.agentAutonomy || !active })
-                    spokenText = goalTurn.agent?.text ?: goalTurn.note
-                } else {
-                    val result = app.agentLoop.run(context, settings.agentAutonomy,
-                        cancelled = { !settings.agentAutonomy || !active },
-                        stableTurnId = "agent-event-" + event.id)
-                    spokenText = result.text
+                val goalTurn = if (goalActive) app.goalCoordinator.runOnce(context, settings.agentAutonomy,
+                    observationValid = app.screenObservations.latestValid(now) != null, cancelled = cancelled) else null
+                // 目标没有可执行的步骤时照常走普通 AgentLoop，不让一个空目标吞掉所有事件（审计 P0-2）。
+                val turn = if (goalTurn?.handled == true) goalTurn.agent
+                else app.agentLoop.run(context, settings.agentAutonomy, cancelled = cancelled,
+                    stableTurnId = "agent-event-" + event.id)
+                spokenText = turn?.text.orEmpty()
+                pending = turn?.pendingId?.let { app.pendingActions.find(it) }
+                // 账本记“发生时间”；临时失败退避重试，没调用模型就不记账（审计 P1-2、P2-4）。
+                when (cn.companion.pet.core.agent.EventDisposition.of(turn?.status)) {
+                    cn.companion.pet.core.agent.EventDisposition.DONE -> app.agentEventLedger.mark(event.id, event.occurredAt)
+                    cn.companion.pet.core.agent.EventDisposition.RETRY -> app.agentEventLedger.recordFailure(event.id, event.occurredAt, now())
+                    cn.companion.pet.core.agent.EventDisposition.HOLD -> Unit
                 }
-                app.agentEventLedger.mark(event.id, now)
             }
             overlay.setMood(Mood.IDLE)
             if (!active || !settings.agentAutonomy || convo != null) return@launch
-            if (spokenText.isNotBlank()) {
+            val proposal = pending
+            if (proposal != null && proposal.status == cn.companion.pet.core.action.PendingStatus.PENDING) {
+                showPendingConfirmation(proposal, spokenText)
+            } else if (spokenText.isNotBlank()) {
                 scheduler.onSpoke(now)
                 stats.add(Stats.Kind.SPOKE)
                 overlay.setTalking(true)
@@ -459,6 +471,56 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             } else {
                 // 没有动作/被拒绝/失败时，把正常的搭话机会还给原节奏。
                 scheduler.retrySoon(now)
+            }
+        }
+    }
+
+    // ---------- 待确认动作：在当前 App 里直接确认 ----------
+
+    private var pendingBubbleId: String? = null
+
+    /**
+     * 在悬浮气泡上问“允许这次吗”。用户此刻还在原来的 App 里，所以前台包名、设备观察都还对得上；
+     * 到设置页里批准时前台已经变成桌宠自己，点击/输入这类动作基本无法成立（审计 P1-4）。
+     */
+    private fun showPendingConfirmation(item: cn.companion.pet.core.action.PendingAction, text: String) {
+        pendingBubbleId = item.id
+        scheduler.onSpoke(now())
+        haptics.tap()
+        overlay.setMood(Mood.CURIOUS)
+        overlay.showBubble(BubbleSpec(
+            text.ifBlank { "我想" + cn.companion.pet.core.agent.AgentReport.label(item.kind) + "，需要你确认。" },
+            instant = true,
+            actions = listOf(
+                BubbleAction("允许这次", highlighted = true) { approvePending(item) },
+                BubbleAction("不用") {
+                    pendingBubbleId = null
+                    scope.launch(Dispatchers.IO) { app.pendingExecutor.reject(item.id) }
+                    overlay.hideBubble()
+                },
+            ),
+        ))
+        // 不理它就悄悄收起；确认仍留在设置页，5 分钟后过期。
+        handler.postDelayed({ if (pendingBubbleId == item.id && convo == null) { pendingBubbleId = null; overlay.hideBubble() } }, 60_000)
+    }
+
+    private fun approvePending(item: cn.companion.pet.core.action.PendingAction) {
+        pendingBubbleId = null
+        overlay.showBubble(BubbleSpec("……", textOnly = true))
+        scope.launch {
+            val outcome = withContext(Dispatchers.IO) {
+                app.pendingExecutor.approveAndRun(item.id, now(), PerceptionHub.trail.foreground, item.nonce)
+            }
+            val message = when (outcome) {
+                is cn.companion.pet.core.action.PendingExecutor.Outcome.Rejected -> "没有执行：" + outcome.reason
+                is cn.companion.pet.core.action.PendingExecutor.Outcome.Executed -> {
+                    val call = cn.companion.pet.core.agent.AgentDecision.ToolCall(outcome.action.kind, outcome.action.args, emptyList(), "")
+                    cn.companion.pet.core.agent.AgentReport.lead(outcome.result) + cn.companion.pet.core.agent.AgentReport.text(call, outcome.result)
+                }
+            }
+            overlay.setMood(Mood.IDLE)
+            overlay.showBubble(BubbleSpec(message, textOnly = true)) {
+                handler.postDelayed({ if (convo == null && think == null && pendingBubbleId == null) overlay.hideBubble() }, 5000)
             }
         }
     }

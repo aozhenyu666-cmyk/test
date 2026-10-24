@@ -86,12 +86,34 @@ class GoalStore(
         task
     }
 
-    fun setTaskStatus(id: String, status: TaskStatus, evidence: String, now: Long): Boolean = synchronized(lock) {
+    fun setTaskStatus(id: String, status: TaskStatus, evidence: String, now: Long, wakeCondition: String? = null): Boolean = synchronized(lock) {
         if (!ready()) return false
         val s = read()
-        if (s.tasks.none { it.id == id }) return false
-        write(s.copy(tasks = s.tasks.map { if (it.id == id) it.copy(status = status, evidence = evidence.take(200), updatedAt = now) else it }))
+        val task = s.tasks.firstOrNull { it.id == id } ?: return false
+        val goals = if (status == TaskStatus.DONE) s.goals.map { if (it.id == task.goalId) it.copy(lastProgressAt = now) else it } else s.goals
+        write(s.copy(goals = goals, tasks = s.tasks.map {
+            if (it.id == id) it.copy(status = status, evidence = evidence.take(200), updatedAt = now,
+                wakeCondition = wakeCondition ?: it.wakeCondition) else it
+        }))
     }
+
+    /**
+     * 用户批准的写动作执行完后回写任务：只有回执 SUCCESS 才算 DONE；
+     * 已执行但无法核实、失败、不可用都停在 BLOCKED 等用户处理；被取消回到 PENDING 可再提议。
+     */
+    fun applyPendingResult(taskId: String, result: cn.companion.pet.core.action.ActionResult, now: Long): Boolean {
+        val (status, evidence) = when {
+            result.status == cn.companion.pet.core.action.ActionStatus.SUCCESS -> TaskStatus.DONE to ("已执行：" + result.reason)
+            result.data["unverified"] == "true" -> TaskStatus.BLOCKED to ("已执行但没能确认结果，请看一眼后手动标记：" + result.reason)
+            result.status == cn.companion.pet.core.action.ActionStatus.CANCELLED -> TaskStatus.PENDING to "执行被取消，可以再提议"
+            else -> TaskStatus.BLOCKED to ("没成功：" + result.reason)
+        }
+        return setTaskStatus(taskId, status, evidence, now, wakeCondition = "")
+    }
+
+    /** 用户拒绝了这一步：停在 BLOCKED，不再反复提议，直到用户在设置页点“重试”。 */
+    fun markTaskRejected(taskId: String, now: Long): Boolean =
+        setTaskStatus(taskId, TaskStatus.BLOCKED, "你拒绝了这一步", now, wakeCondition = "")
 
     fun addFollowUp(goalId: String, condition: String, nextCheckAt: Long): FollowUp? = synchronized(lock) {
         if (!ready()) return null
