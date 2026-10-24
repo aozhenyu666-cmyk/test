@@ -9,7 +9,7 @@ import java.io.File
  */
 class AgentTraceStore(
     private val root: File,
-    private val maxEntries: Int = 100,
+    private val maxEntries: Int = 500,
 ) : AgentTraceSink {
     private val file = File(root, "agent/traces.jsonl")
     private val lock = Any()
@@ -33,4 +33,8 @@ class AgentTraceStore(
     }
 
     fun lastAt(): Long = recent(1).lastOrNull()?.at ?: 0L
+
+    /** 已处理事件 ID；跨进程重启后仍能防止同一 NOTE/MATERIAL 被重复决策。 */
+    fun processedEventIds(limit: Int = 100): Set<String> =
+        recent(limit).mapNotNull { it.eventId }.toSet()
 }

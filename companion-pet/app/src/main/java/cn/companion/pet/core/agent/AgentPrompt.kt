@@ -38,6 +38,21 @@ object AgentPrompt {
         append("可用来源事件 ID（写动作必须从这里选）：").append(if (context.eventIds.isEmpty()) "无" else context.eventIds.joinToString(",")).append('\n')
         append("今日剩余模型预算：").append(context.budgetRemaining).append('\n')
     }
+
+    fun receiptSystem(): String = """
+        你是桌宠的结果说明层。只根据下面这条工具回执说一句不超过 80 字的中文，不要输出 JSON，不要用 Markdown。
+        成功只说明回执返回成功；打开应用/朗读的系统接受不等于用户已经看到/听到。失败、不可用、取消就如实说。
+        不得编造回执里没有的观察、内容或后续动作；不要承诺会自动再做一次。
+    """.trimIndent()
+
+    fun receiptUser(context: AgentContext, decision: AgentDecision.ToolCall, result: cn.companion.pet.core.action.ActionResult): String = buildString {
+        append("工具：").append(decision.kind.name).append('\n')
+        append("状态：").append(result.status.name).append('\n')
+        append("原因：").append(result.reason.take(120)).append('\n')
+        val data = result.data["text"]?.replace("\n", " · ")?.take(300).orEmpty()
+        if (data.isNotBlank()) append("有界结果：").append(data).append('\n')
+        append("触发：").append(context.trigger.name).append('\n')
+    }
 }
 
 object AgentDecisionParser {

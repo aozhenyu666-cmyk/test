@@ -62,7 +62,7 @@ class AgentLoop(
             is AgentDecision.Invalid -> finish(turnId, context, AgentTurnStatus.INVALID, decision, null, "", decision.reason, 1)
             is AgentDecision.NoAction -> finish(turnId, context, AgentTurnStatus.NO_ACTION, decision, null, "", decision.reason, 1)
             is AgentDecision.ToolCall -> {
-                val auth = AgentPolicy.authorize(decision, autonomy, planner, context.now)
+                val auth = AgentPolicy.authorize(decision, autonomy, planner, context)
                 if (!auth.allowed) {
                     finish(turnId, context, AgentTurnStatus.DENIED, decision, null, "", auth.reason, 1)
                 } else if (auth.requiresConfirmation) {
@@ -75,7 +75,7 @@ class AgentLoop(
         }
     }
 
-    private fun execute(turnId: String, context: AgentContext, decision: AgentDecision.ToolCall): AgentTurnResult {
+    private suspend fun execute(turnId: String, context: AgentContext, decision: AgentDecision.ToolCall): AgentTurnResult {
         val actionId = turnId + "-" + decision.kind.name.lowercase()
         activeActionId = actionId
         val result: ActionResult = try {
@@ -86,8 +86,36 @@ class AgentLoop(
             activeActionId = null
         }
         val status = if (result.status == ActionStatus.CANCELLED) AgentTurnStatus.CANCELLED else AgentTurnStatus.EXECUTED
-        val text = AgentReport.text(decision, result)
-        return finish(turnId, context, status, decision, result, text, result.reason, 1)
+        val fallback = AgentReport.text(decision, result)
+        val report = report(context, decision, result, fallback)
+        return finish(turnId, context, status, decision, result, report.first, result.reason, 1 + report.second)
+    }
+
+    /**
+     * 第二次、且只第二次模型调用：把有界回执交给模型总结/判断下一步。
+     * 失败、超时或预算不足一律回退本地模板；绝不再发第三次。
+     */
+    private suspend fun report(
+        context: AgentContext,
+        decision: AgentDecision.ToolCall,
+        result: ActionResult,
+        fallback: String,
+    ): Pair<String, Int> {
+        if (!source.canReport) return fallback to 0
+        if (budget.remaining(context.day) <= 0) return fallback to 0
+        if (!budget.reserve(context.day)) return fallback to 0
+        val content = try {
+            withTimeout(timeoutMillis) { source.report(context, decision, result) }
+        } catch (_: TimeoutCancellationException) {
+            null
+        } catch (_: CancellationException) {
+            null
+        } catch (_: Exception) {
+            null
+        }
+        if (content.isNullOrBlank()) return fallback to 1
+        val lead = AgentReport.lead(result)
+        return (lead + content.take(180)) to 1
     }
 
     private fun finish(
@@ -119,6 +147,7 @@ class AgentLoop(
             actionStatus = result?.status?.name,
             resultReason = reason.take(160),
             modelAttempts = attempts,
+            eventId = context.eventId,
         ))
         return AgentTurnResult(turnId, status, decision, result, text, reason, attempts)
     }

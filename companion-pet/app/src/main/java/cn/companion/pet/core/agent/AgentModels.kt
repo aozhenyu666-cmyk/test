@@ -46,6 +46,11 @@ data class AgentContext(
     val materialTitles: List<String>,
     val eventIds: List<String>,
     val budgetRemaining: Int,
+    /** 本次触发对应的真实事件；写入/删除撤销后不能再用。 */
+    val eventId: String? = null,
+    val quiet: Boolean = false,
+    val userActive: Boolean = true,
+    val lastActionAt: Long = 0L,
 )
 
 data class AgentModelConfig(
@@ -57,6 +62,12 @@ data class AgentModelConfig(
 /** 决策来源：生产是 OpenAI 兼容模型，测试是固定 JSON；不负责预算和工具执行。 */
 interface AgentDecisionSource {
     suspend fun decide(context: AgentContext): String?
+
+    /** 是否会真的发第二次回执模型请求；默认不报告，避免测试/本地 fake 白占预算。 */
+    val canReport: Boolean get() = false
+
+    /** 受预算保护的一次回执总结；返回 null 时由 AgentLoop 使用本地如实模板。 */
+    suspend fun report(context: AgentContext, decision: AgentDecision.ToolCall, result: ActionResult): String? = null
 }
 
 interface AgentBudgetPort {
@@ -81,6 +92,7 @@ data class AgentTrace(
     val actionStatus: String? = null,
     val resultReason: String = "",
     val modelAttempts: Int = 0,
+    val eventId: String? = null,
 )
 
 data class AgentTurnResult(
@@ -103,24 +115,30 @@ object AgentPolicy {
         decision: AgentDecision.ToolCall,
         autonomy: Boolean,
         planner: ActionPlanner,
-        now: Long,
-        userActive: Boolean = true,
+        context: AgentContext,
     ): AgentAuthorization {
         if (!autonomy) return AgentAuthorization(false, false, "自主模式未开启")
+        if (context.quiet) return AgentAuthorization(false, false, "安静时段")
+        if (!context.userActive) return AgentAuthorization(false, false, "用户不在")
+        if (context.budgetRemaining <= 0) return AgentAuthorization(false, false, "今日预算已用完")
         if (decision.kind in readOnly) {
             return AgentAuthorization(true, false, "只读工具可自动执行")
         }
         if (decision.sourceIds.isEmpty()) {
             return AgentAuthorization(false, false, "写入/外部动作缺少真实来源")
         }
+        val authorized = context.eventIds.toSet()
+        if (decision.sourceIds.any { it !in authorized }) {
+            return AgentAuthorization(false, false, "来源不在本次授权上下文")
+        }
         val plan: ActionPlan = planner.decide(
             kind = decision.kind,
             sourceIds = decision.sourceIds,
-            now = now,
-            lastActionAt = 0L,
-            quiet = false,
-            userActive = userActive,
-            budgetRemaining = 1,
+            now = context.now,
+            lastActionAt = context.lastActionAt,
+            quiet = context.quiet,
+            userActive = context.userActive,
+            budgetRemaining = context.budgetRemaining,
         )
         if (!plan.allowed) return AgentAuthorization(false, false, plan.reason)
         return AgentAuthorization(true, true, "需要用户明确确认")
@@ -140,6 +158,13 @@ object AgentReport {
             ActionKind.OPEN_ASSISTANT -> "我打开了 " + (decision.args["target"] ?: "AI 应用") + "，但只能算系统接受了请求。"
             ActionKind.SPEAK -> "我提交了朗读；成功只代表系统引擎接受，不代表你已经听到。"
         }
+    }
+
+    fun lead(result: ActionResult): String = when (result.status) {
+        ActionStatus.SUCCESS -> "（回执：成功）"
+        ActionStatus.UNAVAILABLE -> "（回执：暂不可用）"
+        ActionStatus.CANCELLED -> "（回执：已取消；已发生的操作不回滚）"
+        ActionStatus.FAILED -> "（回执：失败）"
     }
 
     fun needsConfirmation(decision: AgentDecision.ToolCall): String =

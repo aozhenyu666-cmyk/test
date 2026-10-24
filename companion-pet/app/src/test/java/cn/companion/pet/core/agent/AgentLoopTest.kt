@@ -30,6 +30,20 @@ class AgentLoopTest {
         }
     }
 
+    private class ReportingSource(var content: String?, private val reportText: String) : AgentDecisionSource {
+        override val canReport: Boolean = true
+        val calls = AtomicInteger(0)
+        var lastReceipt: ActionResult? = null
+        override suspend fun decide(context: AgentContext): String? {
+            calls.incrementAndGet()
+            return content
+        }
+        override suspend fun report(context: AgentContext, decision: AgentDecision.ToolCall, result: ActionResult): String? {
+            lastReceipt = result
+            return reportText
+        }
+    }
+
     private class FakeBudget(var left: Int = 10) : AgentBudgetPort {
         var reserves = 0
         override fun reserve(day: String): Boolean {
@@ -45,7 +59,8 @@ class AgentLoopTest {
         val calls = AtomicInteger(0)
         override fun execute(request: ActionRequest): ActionResult {
             calls.incrementAndGet()
-            return ActionResult(request.id, request.kind, status, if (status == ActionStatus.SUCCESS) "2 条素材" else "没有权限")
+            return ActionResult(request.id, request.kind, status, if (status == ActionStatus.SUCCESS) "2 条素材" else "没有权限",
+                if (status == ActionStatus.SUCCESS) mapOf("text" to "标题：合成素材") else emptyMap())
         }
     }
 
@@ -86,7 +101,7 @@ class AgentLoopTest {
         assertEquals(AgentTurnStatus.EXECUTED, result.status)
         assertEquals(ActionStatus.SUCCESS, result.execution?.status)
         assertEquals(1, adapter.calls.get())
-        assertTrue(result.text.contains("2 条素材"))
+        assertTrue(result.text.contains("标题：合成素材"))
         assertEquals("EXECUTED", traces.single().status)
         assertEquals("READ_MATERIALS", traces.single().tool)
         assertEquals(1, traces.single().modelAttempts)
@@ -215,6 +230,52 @@ class AgentLoopTest {
         val (agent, _) = loop(source, adapter)
         val result = agent.run(context(), true)
         assertEquals(AgentTurnStatus.INVALID, result.status)
+        assertEquals(0, adapter.calls.get())
+    }
+
+    @Test
+    fun receiptGoesBackToSecondModelCall() = runBlocking {
+        val source = ReportingSource("""{"decision":"tool_call","tool":"READ_MATERIALS","reason":"x"}""", "看到了这条素材")
+        val adapter = CountingAdapter()
+        val budget = FakeBudget(10)
+        val traces = mutableListOf<AgentTrace>()
+        val runner = ActionRunner(mapOf(ActionKind.READ_MATERIALS to adapter))
+        val agent = AgentLoop(source, runner, budget, object : AgentTraceSink {
+            override fun append(trace: AgentTrace) { traces += trace }
+        }, ActionPlanner(sourceAvailable = { it == "e1" }), 1_000, { "report" })
+        val result = agent.run(context(), true)
+        assertEquals(2, result.modelAttempts)
+        assertEquals(2, budget.reserves)
+        assertEquals("标题：合成素材", source.lastReceipt?.data?.get("text"))
+        assertTrue(result.text.startsWith("（回执：成功）"))
+        assertTrue(result.text.contains("看到了这条素材"))
+        assertEquals(2, traces.single().modelAttempts)
+    }
+
+    @Test
+    fun budgetOnlyOneFallsBackToLocalTemplate() = runBlocking {
+        val source = ReportingSource("""{"decision":"tool_call","tool":"READ_MATERIALS","reason":"x"}""", "不该出现")
+        val adapter = CountingAdapter()
+        val budget = FakeBudget(1)
+        val runner = ActionRunner(mapOf(ActionKind.READ_MATERIALS to adapter))
+        val agent = AgentLoop(source, runner, budget, object : AgentTraceSink {
+            override fun append(trace: AgentTrace) {}
+        }, ActionPlanner(), 1_000, { "one" })
+        val result = agent.run(context(budget = 1), true)
+        assertEquals(1, result.modelAttempts)
+        assertFalse(result.text.contains("不该出现"))
+        assertTrue(result.text.contains("标题：合成素材"))
+    }
+
+    @Test
+    fun quietOrForeignSourceIsDenied() = runBlocking {
+        val source = FakeSource("""{"decision":"tool_call","tool":"SAVE_NOTE","args":{"text":"x"},"source_ids":["e1"],"reason":"x"}""")
+        val adapter = CountingAdapter()
+        val (agent, _) = loop(source, adapter)
+        val quiet = agent.run(context().copy(quiet = true), true)
+        assertEquals(AgentTurnStatus.DENIED, quiet.status)
+        val foreign = agent.run(context().copy(eventIds = listOf("e2")), true)
+        assertEquals(AgentTurnStatus.DENIED, foreign.status)
         assertEquals(0, adapter.calls.get())
     }
 }

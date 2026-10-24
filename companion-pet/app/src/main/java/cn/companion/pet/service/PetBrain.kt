@@ -22,7 +22,9 @@ import cn.companion.pet.core.companion.CompanionContextAssembler
 import cn.companion.pet.core.bridge.GeminiBridgeTextBuilder
 import cn.companion.pet.core.companion.CompanionEvent
 import cn.companion.pet.core.companion.EventKind
+import cn.companion.pet.core.companion.EventVisibility
 import cn.companion.pet.core.agent.AgentContext
+import cn.companion.pet.core.agent.AgentEventScanner
 import cn.companion.pet.core.agent.AgentTrigger
 import cn.companion.pet.core.action.VisibleMemoryReader
 import cn.companion.pet.core.life.PetLife
@@ -137,6 +139,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private var convo: Conversation? = null
     private var probeJob: Job? = null
+    private var agentScanJob: Job? = null
+    private var lastAgentScanAt = 0L
+    private val agentScanner = AgentEventScanner()
+    private val agentTrigger = Runnable { maybeScanAgent(now()) }
+    private val agentListener: (CompanionEvent) -> Unit = {
+        handler.post { scheduleAgentScan() }
+    }
     private var active = false
     private var rephraseNext = false
     private var heartbeatWaiting = false
@@ -156,11 +165,17 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         active = isUserActive()
         if (active) onUserPresent()
         handler.post(ticker)
+        app.events.addListener(agentListener)
+        handler.postDelayed(agentTrigger, 1_200)
         PerceptionHub.onScroll = { pkg -> onScrollEvent(pkg) }
         scope.launch { settings.changes.collect { scheduler.config = settings.rhythm() } }
     }
 
     fun stop() {
+        app.events.removeListener(agentListener)
+        handler.removeCallbacks(agentTrigger)
+        agentScanJob?.cancel()
+        app.agentLoop.cancel()
         app.actions.cancelAll()
         PerceptionHub.onScroll = null
         handler.removeCallbacksAndMessages(null)
@@ -175,6 +190,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     fun onScreenOff() {
         active = false
+        agentScanJob?.cancel()
+        handler.removeCallbacks(agentTrigger)
         app.agentLoop.cancel()
         app.actions.cancelAll() // 锁屏后按现有规则停止动作
         scheduler.onScreenOff()
@@ -192,6 +209,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         active = true
         Heartbeat.cancel(context)
         scheduler.onScreenOn(now())
+        handler.removeCallbacks(agentTrigger)
+        handler.postDelayed(agentTrigger, 1_200)
         heartbeatWaiting = Heartbeat.consumePending(context)
         checkLetter()
         if (heartbeatWaiting) {
@@ -273,14 +292,6 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         if (probeJob?.isActive == true || convo != null || session != null || think != null || noteDraft != null) return
         heartbeatWaiting = false
 
-        if (settings.agentAutonomy && !scheduler.isQuiet(now)) {
-            val event = latestAgentEvent(now)
-            if (event != null) {
-                runAgentTurn(event, now)
-                return
-            }
-        }
-
         val key = apiKey()
         if (key == null) {
             // 没配置 Key：只做个动作，不打扰
@@ -348,20 +359,35 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
     }
 
-    /** 只让新素材/用户念头触发一次；已处理过的事件不会重复。 */
-    private fun latestAgentEvent(now: Long): CompanionEvent? {
-        if (!active) return null
-        val latest = runCatching { app.events.all().lastOrNull() }.getOrNull() ?: return null
-        if (latest.occurredAt < now - 2 * 60 * 60 * 1000L) return null
-        if (latest.occurredAt <= app.agentTrace.lastAt()) return null
-        if (latest.source == "agent" || latest.source == "tool") return null
-        return when (latest.kind) {
-            EventKind.MATERIAL, EventKind.NOTE -> latest
-            else -> null
+    /** 短防抖：事件写入后 1.2 秒再看一次，避免一次保存连发多个事件。 */
+    private fun scheduleAgentScan() {
+        handler.removeCallbacks(agentTrigger)
+        handler.postDelayed(agentTrigger, 1_200)
+    }
+
+    private fun maybeScanAgent(now: Long) {
+        if (!settings.agentAutonomy || !active || settings.petPaused) return
+        if (probeJob?.isActive == true || convo != null || session != null || think != null || noteDraft != null) return
+        if (!isUserActive() || scheduler.isQuiet(now)) return
+        if (app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()) <= 0) return
+        if (now - lastAgentScanAt < 1_000) return
+        lastAgentScanAt = now
+        agentScanJob?.cancel()
+        agentScanJob = scope.launch {
+            val event = withContext(Dispatchers.IO) {
+                synchronized(app.memoryLock) {
+                    val snapshot = app.events.all()
+                    val visibility = EventVisibility(snapshot, memory.tombstones(), now)
+                    agentScanner.next(snapshot, app.agentTrace.processedEventIds(500), now, visibility)
+                }
+            } ?: return@launch
+            if (!settings.agentAutonomy || !active || settings.petPaused || scheduler.isQuiet(now())) return@launch
+            runAgentTurn(event, now)
         }
     }
 
     private fun runAgentTurn(event: CompanionEvent, now: Long) {
+        if (probeJob?.isActive == true) return
         val decision = classify(now)
         if (decision.scene == Scene.EXCLUDED) return
         probeJob = scope.launch {
@@ -370,7 +396,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 synchronized(app.memoryLock) {
                     val lines = visibleMemory.read("", 5)
                     val titles = app.materialInbox.all().map { it.title.ifBlank { it.url ?: it.id } }.take(5)
-                    val ids = app.events.all().takeLast(5).map { it.id }
+                    val ids = (app.events.all().takeLast(10).map { it.id } + event.id).distinct()
                     AgentContext(
                         trigger = if (event.kind == EventKind.MATERIAL) AgentTrigger.MATERIAL_SAVED else AgentTrigger.NOTE_SAVED,
                         now = now,
@@ -381,18 +407,32 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                         materialTitles = titles,
                         eventIds = ids,
                         budgetRemaining = app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()),
+                        eventId = event.id,
+                        quiet = scheduler.isQuiet(now),
+                        userActive = active,
+                        lastActionAt = app.agentTrace.lastAt(),
                     )
                 }
             }
-            val result = app.agentLoop.run(context, settings.agentAutonomy)
+            // 模型、工具、轨迹全部在 IO；回来只做 UI。严格检测避免回归到主线程。
+            val result = withContext(Dispatchers.IO) {
+                check(Looper.myLooper() != Looper.getMainLooper()) { "agent must run off main" }
+                app.agentLoop.run(context, settings.agentAutonomy,
+                    cancelled = { !settings.agentAutonomy || !active })
+            }
             overlay.setMood(Mood.IDLE)
-            scheduler.onSpoke(now)
-            if (result.text.isNotBlank()) {
+            if (!active || !settings.agentAutonomy || convo != null) return@launch
+            val spoke = result.text.isNotBlank()
+            if (spoke) {
+                scheduler.onSpoke(now)
                 stats.add(Stats.Kind.SPOKE)
                 overlay.setTalking(true)
                 overlay.showBubble(BubbleSpec(result.text, textOnly = true)) {
                     overlay.setTalking(false)
                 }
+            } else {
+                // 没有动作/被拒绝/失败时，把正常的搭话机会还给原节奏。
+                scheduler.retrySoon(now)
             }
         }
     }

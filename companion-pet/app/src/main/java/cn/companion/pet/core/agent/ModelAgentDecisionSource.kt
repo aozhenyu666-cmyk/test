@@ -11,6 +11,8 @@ class ModelAgentDecisionSource(
     private val client: ChatCompletionClient,
     private val config: () -> AgentModelConfig?,
 ) : AgentDecisionSource {
+    override val canReport: Boolean = true
+
     override suspend fun decide(context: AgentContext): String? {
         val cfg = config() ?: return null
         if (cfg.endpoint.isBlank() || cfg.model.isBlank() || cfg.apiKey.isBlank()) return null
@@ -24,6 +26,27 @@ class ModelAgentDecisionSource(
             ),
             maxTokens = 260,
             timeoutMillis = 15_000,
+        )
+        return (client.complete(request) as? ChatResult.Success)?.content
+    }
+
+    override suspend fun report(
+        context: AgentContext,
+        decision: AgentDecision.ToolCall,
+        result: cn.companion.pet.core.action.ActionResult,
+    ): String? {
+        val cfg = config() ?: return null
+        if (cfg.endpoint.isBlank() || cfg.model.isBlank() || cfg.apiKey.isBlank()) return null
+        val request = ChatRequest(
+            endpoint = cfg.endpoint,
+            model = cfg.model,
+            apiKey = cfg.apiKey,
+            messages = listOf(
+                ChatMessage(ChatRole.SYSTEM, AgentPrompt.receiptSystem()),
+                ChatMessage(ChatRole.USER, AgentPrompt.receiptUser(context, decision, result)),
+            ),
+            maxTokens = 180,
+            timeoutMillis = 10_000,
         )
         return (client.complete(request) as? ChatResult.Success)?.content
     }
