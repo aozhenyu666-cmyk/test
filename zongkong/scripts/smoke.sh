@@ -193,6 +193,19 @@ for i in $(seq 1 14); do
 done
 echo "SENTINEL_HEALS_MAIN=$HEALED" >> "$OUT/result.txt"
 adb shell run-as $SP cat files/log.txt > "$OUT/sentinel-log.txt" 2>&1 || true
+
+# ---------- 解除闸门（0.15）：界面能打开、不崩（核心逻辑由单元测试覆盖） ----------
+adb logcat -c
+adb shell am start -n $SP/.MainActivity >/dev/null; sleep 2
+shot 18-sentinel-home
+adb shell am start -n $SP/.ReleaseActivity >/dev/null; sleep 2
+shot 19-release-pick
+# 点第一个「改规则」进第一关的手写页（坐标约值；点不中也没关系，下面只断言不崩）
+adb shell input tap 160 560 >/dev/null; sleep 2
+shot 20-release-stage1
+RES=$(adb shell dumpsys activity activities | grep -E "topResumedActivity" | head -1)
+if echo "$RES" | grep -q "$SP/" && ! adb logcat -d | grep -qE "AndroidRuntime.*$SP"; then echo "RELEASE_UI=OK" >> "$OUT/result.txt"; else echo "RELEASE_UI=FAIL" >> "$OUT/result.txt"; adb logcat -d | grep -A20 "AndroidRuntime" | tail -40; fi
+
 adb shell settings put secure enabled_accessibility_services $GUARD:$SVC
 
 adb logcat -d | grep -E "AndroidRuntime|FATAL|SeedReceiver|GuardService|Store|Sentinel|CrashShield" | tail -200 > "$OUT/logcat.txt"
