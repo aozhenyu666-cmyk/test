@@ -1,6 +1,7 @@
 package cn.companion.pet.core.companion
 
 import java.io.File
+import java.io.RandomAccessFile
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
@@ -88,14 +89,31 @@ class EventLog(
      */
     private fun repairTruncatedTail(file: File) {
         if (!file.exists() || file.length() == 0L) return
-        val text = file.readText()
-        if (text.endsWith("\n")) return
-        val lastNewline = text.lastIndexOf('\n')
-        val broken = if (lastNewline >= 0) text.substring(lastNewline + 1) else text
-        if (broken.isNotEmpty()) {
-            File(eventsDir, "broken-tails.log").appendText(clock.millis().toString() + " | " + broken + "\n")
+        RandomAccessFile(file, "rw").use { data ->
+            val end = data.length()
+            data.seek(end - 1)
+            if (data.read() == '\n'.code) return
+            var boundary = end - 1
+            while (boundary >= 0) {
+                data.seek(boundary)
+                if (data.read() == '\n'.code) break
+                boundary--
+            }
+            val start = boundary + 1
+            val bytes = ByteArray((end - start).toInt())
+            data.seek(start)
+            data.readFully(bytes)
+            val tail = bytes.toString(Charsets.UTF_8)
+            val complete = runCatching { EventJson.decodeFromString(CompanionEvent.serializer(), tail) }.isSuccess
+            if (complete) {
+                // A crash between JSON and newline must not discard an otherwise complete event.
+                data.seek(end)
+                data.write('\n'.code)
+            } else {
+                File(eventsDir, "broken-tails.log").appendText(clock.millis().toString() + " | " + tail + "\n")
+                data.setLength(start)
+            }
         }
-        writeAtomic(file, if (lastNewline >= 0) text.substring(0, lastNewline + 1) else "")
     }
 
     /** 全部事件，按发生时间和 id 排成确定顺序。 */
@@ -107,9 +125,11 @@ class EventLog(
             .sortedWith(compareBy({ it.occurredAt }, { it.id }))
     }
 
-    fun forDay(day: LocalDate): List<CompanionEvent> {
+    fun forDay(day: LocalDate): List<CompanionEvent> = synchronized(lock) {
         val key = day.toString()
-        return all().filter { it.day == key }
+        val file = monthlyFile(key)
+        if (!file.exists()) emptyList() else readFile(file).filter { it.day == key }
+            .sortedWith(compareBy({ it.occurredAt }, { it.id }))
     }
 
     /** 还没被夜间批次确认的事件。已归档 id 写在 archived-<day>.txt 里。 */

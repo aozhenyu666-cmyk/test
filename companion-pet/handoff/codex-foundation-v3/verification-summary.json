@@ -1,0 +1,38 @@
+{
+  "base_commit": "9491f9b2508552bfaf50e6b5de28f1586f995503",
+  "branch": "pet-v15/codex-foundation-v3",
+  "version_name": "0.3.1",
+  "version_code": 4,
+  "jdk": "Temurin 17.0.21+9",
+  "compile_sdk": 35,
+  "unit_tests": {
+    "tests": 197,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "python_upgrade_guard_tests": {
+    "tests": 3,
+    "failures": 0
+  },
+  "lint": {
+    "errors": 0,
+    "warnings": 19
+  },
+  "device_upgrade_executed": false,
+  "instrumented_tests_executed": false,
+  "artifacts": {
+    "companion-pet-v0.3.1-debug.apk": {
+      "bytes": 28425829,
+      "sha256": "3efd180d41a336e76028c24015aac5b08ffd949324a686a0ec67e1759697baf2"
+    },
+    "companion-pet-v0.3.1-androidTest.apk": {
+      "bytes": 2306085,
+      "sha256": "eb0fcece282a7d7936ca67327dd13808cfc0f4345cd0527111745663542e2af9"
+    },
+    "companion-pet-v0.3.0-upgrade-fixture.apk": {
+      "bytes": 28026423,
+      "sha256": "df282e8aa2863e02a56d4a108cecf16fb810fbee9c5f574895945733a3994ef8"
+    }
+  }
+}

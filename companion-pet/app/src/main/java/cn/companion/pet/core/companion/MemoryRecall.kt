@@ -41,8 +41,10 @@ class MemoryRecall(
         if (queryTokens.isEmpty()) return emptyList()
 
         val candidates = mutableListOf<RecallItem>()
+        val snapshot = events.all()
+        val visibility = EventVisibility(snapshot, tombstones)
         facts.live().forEach { fact ->
-            if (containsForgotten(fact.text, tombstones)) return@forEach
+            if (!visibility.allows(fact)) return@forEach
             val label = if (fact.confidence == Confidence.SAID) "你说过" else "尚未确认"
             candidates += RecallItem(
                 text = fact.text,
@@ -52,10 +54,10 @@ class MemoryRecall(
                 score = 0,
             )
         }
-        events.all().forEach { event ->
+        snapshot.forEach { event ->
             if (event.kind !in RECALL_KINDS) return@forEach
             val normalized = ProfileRules.normalize(event.text)
-            if (normalized.isEmpty() || containsForgotten(event.text, tombstones)) return@forEach
+            if (normalized.isEmpty() || !visibility.allows(event)) return@forEach
             candidates += RecallItem(
                 text = event.text,
                 sourceLabel = "交流",
@@ -129,12 +131,6 @@ class MemoryRecall(
 
         fun dayOf(epochMillis: Long, zone: ZoneId): String =
             Instant.ofEpochMilli(epochMillis).atZone(zone).toLocalDate().toString()
-    }
-
-    private fun containsForgotten(text: String, tombstones: Set<String>): Boolean {
-        val normalized = ProfileRules.normalize(text)
-        if (normalized.isEmpty()) return false
-        return tombstones.any { it.isNotEmpty() && normalized.contains(it) }
     }
 
     private fun dayOf(epochMillis: Long): String = dayOf(epochMillis, zone)

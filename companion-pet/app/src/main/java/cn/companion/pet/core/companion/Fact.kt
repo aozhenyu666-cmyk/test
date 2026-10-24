@@ -27,7 +27,7 @@ data class Fact(
 )
 
 @Serializable
-enum class FactOrigin { USER, PROFILE_SYNC }
+enum class FactOrigin { USER, PROFILE_SYNC, USER_EDIT }
 
 /**
  * factKey 的生成规则：

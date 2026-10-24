@@ -26,6 +26,7 @@ import cn.companion.pet.MainActivity
 import cn.companion.pet.PetApp
 import cn.companion.pet.a11y.PerceptionHub
 import cn.companion.pet.core.companion.EventKind
+import cn.companion.pet.core.companion.EventVisibility
 import cn.companion.pet.service.PetService
 import cn.companion.pet.ui.components.CutAction
 import cn.companion.pet.ui.components.EmptyNote
@@ -38,7 +39,16 @@ import cn.companion.pet.ui.theme.CompanionShapes
 import cn.companion.pet.ui.theme.CompanionSpacing
 import cn.companion.pet.ui.theme.LocalCompanionColors
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
+
+private data class StartSnapshot(
+    val hasKey: Boolean = false,
+    val used: Int = 0,
+    val limit: Int = 0,
+    val recent: List<String> = emptyList(),
+)
 
 /** 首次引导 + 当前状态。每一行都能直接跳到系统里对应的设置页。 */
 @OptIn(ExperimentalLayoutApi::class)
@@ -52,26 +62,36 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
     val mic = remember(resumeTick) { Permissions.mic(activity) }
     val notif = remember(resumeTick) { Permissions.notifications(activity) }
     val battery = remember(resumeTick) { Permissions.batteryUnrestricted(activity) }
-    val hasKey = remember(resumeTick) { app.apiKey() != null }
+    var snapshot by remember { mutableStateOf(StartSnapshot()) }
+    val hasKey = snapshot.hasKey
     var running by remember(resumeTick) { mutableStateOf(PetService.running) }
     var paused by remember(resumeTick) { mutableStateOf(app.settings.petPaused) }
     val a11yConnected by PerceptionHub.connected.collectAsState()
     // 服务可能由看门狗/开机/升级在页面停留期间拉起，静态 running 不会触发重组。
     // 每秒对齐一次，避免出现“角色已在屏幕上，状态却写着已停止”。
-    LaunchedEffect(Unit) {
+    LaunchedEffect(resumeTick) {
         while (true) {
             if (running != PetService.running) running = PetService.running
             if (paused != app.settings.petPaused) paused = app.settings.petPaused
+            snapshot = withContext(Dispatchers.IO) {
+                runCatching {
+                    val eventSnapshot = app.events.all()
+                    val visibility = EventVisibility(eventSnapshot, app.memory.tombstones())
+                    StartSnapshot(
+                        hasKey = app.apiKey() != null,
+                        used = app.budget.used(LocalDate.now().toString()),
+                        limit = app.settings.dailyLimit,
+                        recent = eventSnapshot.filter { it.day == LocalDate.now().toString() }
+                            .filter { it.kind == EventKind.EXCHANGE || it.kind == EventKind.LEGACY_LINE }
+                            .filter { visibility.allows(it) }
+                            .takeLast(3).reversed().map { it.text },
+                    )
+                }.getOrDefault(snapshot)
+            }
             delay(1500)
         }
     }
-    val recent = remember(resumeTick) {
-        app.events.forDay(LocalDate.now())
-            .filter { it.kind == EventKind.EXCHANGE || it.kind == EventKind.LEGACY_LINE }
-            .map { it.text }
-            .takeLast(3)
-            .reversed()
-    }
+    val recent = snapshot.recent
 
     val status = when {
         paused -> "已暂停"
@@ -81,6 +101,7 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
     val hint = when {
         !overlay -> "先开悬浮窗权限，它才能出现。"
         !hasKey -> "还没填模型的 API Key：它会出现，但不会开口。"
+        snapshot.limit > 0 && snapshot.used >= snapshot.limit -> "今天的调用额度用完了。它会继续陪着你，明天恢复开口。"
         !a11y -> "没开无障碍：它不知道你在用什么 App，只能按普通场景搭话。"
         else -> "一切就绪。"
     }
@@ -95,6 +116,10 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("状态", style = MaterialTheme.typography.bodyMedium, color = colors.ink2)
                 SourceTag(status, highlighted = running && !paused)
+            }
+            if (snapshot.limit > 0) {
+                Text("今天已调用 ${snapshot.used} / ${snapshot.limit} 次", style = MaterialTheme.typography.bodySmall,
+                    color = colors.ink2, modifier = Modifier.padding(top = 8.dp))
             }
             FlowRow(
                 Modifier.padding(top = 12.dp),

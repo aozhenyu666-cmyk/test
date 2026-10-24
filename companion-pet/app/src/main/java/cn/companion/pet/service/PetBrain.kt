@@ -300,9 +300,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
         probeJob = scope.launch {
             overlay.setMood(Mood.THINKING)
-            val opening = withContext(Dispatchers.IO) {
+            val (opening, inputVersion) = withContext(Dispatchers.IO) {
                 synchronized(app.memoryLock) {
-                    openingMessages(moment, decision.screenText)
+                    val eligible = topic == null || topics.candidates(now()).any { it.id == topic.id }
+                    openingMessages(if (eligible) moment else moment.copy(topic = null), decision.screenText) to memoryVersion()
                 }
             }
             if (!app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
@@ -313,6 +314,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             stats.add(Stats.Kind.API_CALLS)
             val result = app.client.complete(ChatRequest(settings.endpoint, settings.model, key, opening))
             overlay.setMood(Mood.IDLE)
+            val unchanged = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { inputVersion == memoryVersion() } }
+            if (!unchanged) { scheduler.retrySoon(now()); return@launch }
             val reply = (result as? ChatResult.Success)?.let { ProbeReplyParser.parse(it.content) }
             when {
                 reply == null -> scheduler.onSpoke(now()) // 失败或解析失败：静默，按正常节奏下次再来
@@ -469,9 +472,15 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             var mood = Mood.IDLE
             if (canCall && app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
                 stats.add(Stats.Kind.API_CALLS)
-                val hook = c.reply.hookText.ifEmpty { "嗯？" }
-                val r = app.client.complete(ChatRequest(settings.endpoint, settings.model, key!!, ProbePrompt.reply(c.opening, hook, said)))
-                val parsed = (r as? ChatResult.Success)?.let { ProbeReplyParser.parse(it.content) }
+                val (messages, inputVersion) = withContext(Dispatchers.IO) {
+                    synchronized(app.memoryLock) {
+                        val hook = c.reply.hookText.takeUnless { memory.forgottenMatches(it) }.orEmpty().ifEmpty { "嗯？" }
+                        ProbePrompt.reply(buildOpeningSync(c.decision, said), hook, said) to memoryVersion()
+                    }
+                }
+                val r = app.client.complete(ChatRequest(settings.endpoint, settings.model, key!!, messages))
+                val unchanged = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { inputVersion == memoryVersion() } }
+                val parsed = if (unchanged) (r as? ChatResult.Success)?.let { ProbeReplyParser.parse(it.content) } else null
                 if (parsed != null && !parsed.skip && !ContentGuard.violates(parsed.hookText)) {
                     text = parsed.hookText
                     mood = parsed.mood
@@ -1026,7 +1035,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             synchronized(app.memoryLock) {
                 app.thoughts.add(today, t)
                 val noteEvent = app.events.append(EventKind.NOTE, said, source = "note")
-                app.events.append(EventKind.EXCHANGE, "- " + t.time + " | 念头 | " + said.replace('\n', ' '), source = "note")
+                app.events.append(EventKind.EXCHANGE, "- " + t.time + " | 念头 | " + said.replace('\n', ' '), source = "note", sourceIds = listOf(noteEvent.id))
                 stateStore.apply(StateEvent.USER_NOTE)
                 topics.enqueue(said, listOf(noteEvent.id))
             }
@@ -1078,21 +1087,28 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         now, PerceptionHub.trail, settings.appLists(), launchers,
     ) { ScreenTextCleaner.clean(PerceptionHub.readScreen(), ScreenTextCleaner.PROBE_MAX_CHARS) }
 
-    private fun buildOpeningSync(decision: SceneDecision): List<ChatMessage> = synchronized(app.memoryLock) {
+    private fun buildOpeningSync(decision: SceneDecision, userQuery: String? = null): List<ChatMessage> = synchronized(app.memoryLock) {
         openingMessages(
             ProbeMoment(timeText(), decision.scene, PerceptionHub.trail.foreground?.let { label(it) } ?: "不清楚", trajectory(now()), decision.screenText, petState = life.state.label),
             decision.screenText,
+            userQuery,
         )
     }
 
     /** 连续性开关打开时走有界召回；关掉时仍用旧的整份 profile 路径。 */
-    private fun openingMessages(moment: ProbeMoment, material: String?): List<ChatMessage> =
+    private fun openingMessages(moment: ProbeMoment, material: String?, userQuery: String? = null): List<ChatMessage> =
         if (settings.continuityEnabled) {
-            assembler.assemble(memory.persona(), moment, material, now(), memory.tombstones())
+            assembler.assemble(memory.persona(), moment, material, now(), memory.tombstones(), userQuery = userQuery)
         } else {
             val profile = ProfileRules.applyTombstones(memory.profileLines(), memory.tombstones()).joinToString("\n")
-            ProbePrompt.opening(memory.persona(), profile, recentExchangeLines(20), memory.diarySummary(LocalDate.now()), moment)
+            val diary = memory.diarySummary(LocalDate.now()).takeUnless { memory.forgottenMatches(it) }.orEmpty()
+            ProbePrompt.opening(memory.persona(), profile, recentExchangeLines(20), diary, moment)
         }
+
+    /** Drop in-flight answers if the user changed the memory they were based on. */
+    private fun memoryVersion(): String = cn.companion.pet.core.memory.NightlyStore.hash(
+        listOf(memory.persona(), memory.profile(), memory.tombstones().sorted().joinToString("\n"), app.facts.versionHash()).joinToString("\u0000"),
+    )
 
     private fun apiKey(): String? = app.apiKey()
 
@@ -1112,12 +1128,15 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     /** 最近的真实交流行（开口/回应/念头等），用于探针和夜间整理的上下文。 */
-    private fun recentExchangeLines(limit: Int): List<String> =
-        app.events.all()
+    private fun recentExchangeLines(limit: Int): List<String> {
+        val snapshot = app.events.all()
+        val visibility = cn.companion.pet.core.companion.EventVisibility(snapshot, memory.tombstones())
+        return snapshot
             .filter { it.kind == EventKind.EXCHANGE || it.kind == EventKind.LEGACY_LINE }
-            .filter { !memory.forgottenMatches(it.text) }
+            .filter { visibility.allows(it) }
             .map { it.text }
             .takeLast(limit)
+    }
 
     private fun timeText(): String = LocalTime.now().format(HHMM)
 

@@ -3,6 +3,7 @@ package cn.companion.pet.core.memory
 import cn.companion.pet.core.companion.CompanionEvent
 import cn.companion.pet.core.companion.EventKind
 import cn.companion.pet.core.companion.EventLog
+import cn.companion.pet.core.companion.EventVisibility
 import cn.companion.pet.core.companion.LegacyEventImport
 import cn.companion.pet.net.ChatMessage
 import kotlinx.serialization.Serializable
@@ -27,6 +28,7 @@ data class NightlyBatch(
     val createdAt: Long,
     val status: String = NightlyStore.STATUS_PREPARED,
     val outputHash: String? = null,
+    val factsVersion: String = "",
 )
 
 /** 提交日志中的单个目标文件。beforeHash 为 null 表示提交前文件不存在。 */
@@ -98,13 +100,17 @@ class NightlyStore(
         val persona = memory.persona()
         val deleted = memory.tombstones()
         // 用户忘记的内容不进入夜间整理；被过滤的事件直接标记已处理，避免永远卡在待处理里。
-        val pending = allPending.filter { !isForgotten(it.text, deleted) }
+        val visibility = EventVisibility(events.all(), deleted)
+        val pending = allPending.filter { visibility.allows(it) }
         if (pending.isEmpty()) {
             events.markArchived(day, allPending.map { it.id })
             return null
         }
         val profileVersion = hash(profile)
-        val id = batchId(day, pending, profileVersion)
+        val personaVersion = hash(persona)
+        val deletedVersion = hash(deleted.sorted().joinToString("\n"))
+        val factsVersion = facts?.versionHash().orEmpty()
+        val id = batchId(day, pending, listOf(profileVersion, personaVersion, deletedVersion, factsVersion).joinToString("|"))
         val stored = readBatch(id)
         if (stored != null && stored.status == STATUS_COMMITTED) return null
         val batch = stored ?: NightlyBatch(
@@ -112,9 +118,10 @@ class NightlyStore(
             day = day.toString(),
             eventIds = pending.map { it.id },
             profileVersion = profileVersion,
-            personaVersion = hash(persona),
-            deletedVersion = hash(deleted.sorted().joinToString("\n")),
+            personaVersion = personaVersion,
+            deletedVersion = deletedVersion,
             createdAt = clock.millis(),
+            factsVersion = factsVersion,
         ).also { writeJson(batchFile(id), it) }
 
         // 已经有提交日志：不要重新请求，交给 recover() 完成。
@@ -122,9 +129,10 @@ class NightlyStore(
 
         val messages = Nightly.prompt(
             persona = persona,
-            profile = profile,
+            profile = ProfileRules.applyTombstones(profile.lines(), deleted).joinToString("\n"),
             todayLines = renderLines(pending),
-            yesterdayDiary = memory.diary(day.minusDays(1)).orEmpty(),
+            yesterdayDiary = memory.diary(day.minusDays(1)).orEmpty().lines()
+                .filterNot { EventVisibility.containsForgotten(it, deleted) }.joinToString("\n"),
             deleted = deleted,
         )
         PreparedNightly(batch, messages)
@@ -133,7 +141,10 @@ class NightlyStore(
     fun commit(batch: NightlyBatch, output: NightlyOutput): NightlyCommitOutcome = synchronized(lock) {
         val stored = readBatch(batch.id) ?: return NightlyCommitOutcome.MISSING
         if (stored.status == STATUS_COMMITTED) return NightlyCommitOutcome.ALREADY_COMMITTED
-        if (stored.profileVersion != hash(memory.profile())) {
+        if (stored.profileVersion != hash(memory.profile()) ||
+            stored.personaVersion != hash(memory.persona()) ||
+            stored.deletedVersion != hash(memory.tombstones().sorted().joinToString("\n")) ||
+            stored.factsVersion != facts?.versionHash().orEmpty()) {
             // 用户在请求期间改了档案：不覆盖，作废批次，事件继续保持待处理。
             batchFile(stored.id).delete()
             return NightlyCommitOutcome.CONFLICT
@@ -149,13 +160,17 @@ class NightlyStore(
         val diaryBefore = existingHash(diaryRel)
         val letterBefore = existingHash(letterRel)
 
-        val profileText = ProfileRules.applyTombstones(output.profileLines, memory.tombstones()).joinToString("\n")
+        val protected = facts?.protectUserFacts(output.profileLines, deletedBefore) ?: output.profileLines
+        val profileText = ProfileRules.applyTombstones(protected, deletedBefore).joinToString("\n")
+        val diaryText = output.diary.lines().filterNot { EventVisibility.containsForgotten(it, deletedBefore) }.joinToString("\n")
+        val letterText = output.letter.lines().filterNot { EventVisibility.containsForgotten(it, deletedBefore) }.joinToString("\n")
         val targets = listOf(
             JournalTarget("profile.md", profileBeforeHash, hash(profileText), profileText),
-            JournalTarget(diaryRel, diaryBefore, hash(output.diary), output.diary),
-            JournalTarget(letterRel, letterBefore, hash(output.letter), output.letter),
+            JournalTarget(diaryRel, diaryBefore, hash(diaryText), diaryText),
+            JournalTarget(letterRel, letterBefore, hash(letterText), letterText),
         )
-        val batchEvents = events.pendingForDay(day).filter { it.id in stored.eventIds && !isForgotten(it.text, deletedBefore) }
+        val visibility = EventVisibility(events.all(), deletedBefore)
+        val batchEvents = events.pendingForDay(day).filter { it.id in stored.eventIds && visibility.allows(it) }
         if (batchEvents.isEmpty()) {
             batchFile(stored.id).delete()
             return NightlyCommitOutcome.CONFLICT
@@ -226,6 +241,11 @@ class NightlyStore(
     private fun applyJournal(journal: NightlyJournal) {
         val currentDeleted = hash(memory.tombstones().sorted().joinToString("\n"))
         if (journal.deletedVersion != currentDeleted) throw UserEditConflict()
+        // Validate every file before the first write; a diary conflict must not leave a new profile behind.
+        journal.targets.forEach { target ->
+            val current = existingHash(target.relativePath)
+            if (current != target.beforeHash && current != target.afterHash) throw UserEditConflict()
+        }
         journal.targets.forEach { target ->
             fault("target:" + target.relativePath)
             val file = File(memory.root, target.relativePath)
@@ -260,13 +280,6 @@ class NightlyStore(
     private fun existingHash(relativePath: String): String? {
         val file = File(memory.root, relativePath)
         return if (file.exists()) hash(file.readText()) else null
-    }
-
-    /** 交流行带时间/角色前缀，不能用整行相等判断；包含已删除文本即视为遗忘。 */
-    private fun isForgotten(text: String, deleted: Set<String>): Boolean {
-        val normalized = ProfileRules.normalize(text)
-        if (normalized.isEmpty()) return false
-        return deleted.any { it.isNotEmpty() && normalized.contains(it) }
     }
 
     private fun renderLines(events: List<CompanionEvent>): List<String> = events.map { e ->

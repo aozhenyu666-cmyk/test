@@ -2,6 +2,8 @@ package cn.companion.pet.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -40,6 +42,7 @@ import cn.companion.pet.ui.theme.LocalCompanionColors
 import cn.companion.pet.core.companion.Confidence
 import cn.companion.pet.core.companion.EventKind
 import cn.companion.pet.core.companion.Fact
+import cn.companion.pet.core.companion.EventVisibility
 import cn.companion.pet.core.memory.ProfileRules
 import cn.companion.pet.core.think.ThoughtNotes
 import cn.companion.pet.data.Stats
@@ -61,6 +64,7 @@ private data class MemorySnapshot(
 
 /** 记忆查看与编辑：档案（可纠正、删除推测）、今天的流水、日记、信。 */
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 fun MemoryTab(resumeTick: Int) {
     val app = PetApp.instance
     val memory = app.memory
@@ -75,11 +79,14 @@ fun MemoryTab(resumeTick: Int) {
     LaunchedEffect(resumeTick, reload) {
         snap = withContext(Dispatchers.IO) {
             synchronized(app.memoryLock) {
+                val eventSnapshot = app.events.all()
+                val visibility = EventVisibility(eventSnapshot, memory.tombstones())
                 MemorySnapshot(
                     profile = memory.profileLines(),
-                    facts = app.facts.live(),
-                    today = app.events.forDay(LocalDate.now())
+                    facts = app.facts.live().filter { visibility.allows(it) },
+                    today = eventSnapshot.filter { it.day == LocalDate.now().toString() }
                         .filter { it.kind == EventKind.EXCHANGE || it.kind == EventKind.LEGACY_LINE }
+                        .filter { visibility.allows(it) }
                         .map { it.text },
                     diaries = memory.listDates(memory.diaryDir).take(7).map { it to memory.diary(it).orEmpty() },
                     letters = memory.listDates(memory.lettersDir).take(7).map { it to memory.letter(it).orEmpty() },
@@ -90,8 +97,9 @@ fun MemoryTab(resumeTick: Int) {
     }
 
     fun io(block: () -> Unit) = scope.launch {
-        withContext(Dispatchers.IO) { synchronized(app.memoryLock) { block() } }
-        reload++
+        val result = withContext(Dispatchers.IO) { runCatching { synchronized(app.memoryLock) { block() } } }
+        if (result.isSuccess) reload++
+        else android.widget.Toast.makeText(context, "没有保存成功，请重试。", android.widget.Toast.LENGTH_SHORT).show()
     }
 
     Column(
@@ -103,8 +111,8 @@ fun MemoryTab(resumeTick: Int) {
         Text("[他说过] 是你亲口说的，[我推测] 是它猜的。猜错了就删掉，删掉的不会被它再写回来。", style = MaterialTheme.typography.bodySmall)
         if (editing) {
             OutlinedTextField(draft, { draft = it }, Modifier.fillMaxWidth().heightIn(min = 200.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { val d = draft; io { memory.saveProfileByUser(d) }; editing = false }) { Text("保存") }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { val d = draft; io { app.memoryEdits.saveProfile(d) }; editing = false }) { Text("保存") }
                 OutlinedButton(onClick = { editing = false }) { Text("取消") }
             }
         } else {
@@ -112,8 +120,8 @@ fun MemoryTab(resumeTick: Int) {
             snap.profile.forEach { line ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(line, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                    if (line.startsWith(ProfileRules.GUESS)) TextButton(onClick = { io { memory.confirmProfileLine(line) } }) { Text("对") }
-                    TextButton(onClick = { io { memory.deleteProfileLine(line) } }) { Text("删") }
+                    if (line.startsWith(ProfileRules.GUESS)) TextButton(onClick = { io { app.memoryEdits.confirmProfileLine(line) } }) { Text("对") }
+                    TextButton(onClick = { io { app.memoryEdits.deleteProfileLine(line) } }) { Text("删") }
                 }
             }
             OutlinedButton(onClick = { draft = snap.profile.joinToString("\n"); editing = true }) { Text("整段编辑") }
@@ -126,15 +134,9 @@ fun MemoryTab(resumeTick: Int) {
         snap.facts.forEach { fact ->
             FactRow(
                 fact = fact,
-                onConfirm = { io { app.facts.confirm(fact.id) } },
-                onCorrect = { text -> io { app.facts.correct(fact.id, text) } },
-                onForget = {
-                    io {
-                        app.facts.forget(fact.id)
-                        memory.addDeletedText(fact.text)
-                        app.events.append(EventKind.FORGET, fact.text, source = "user")
-                    }
-                },
+                onConfirm = { io { app.memoryEdits.confirm(fact.id) } },
+                onCorrect = { text -> io { app.memoryEdits.correct(fact.id, text) } },
+                onForget = { io { app.memoryEdits.forget(fact.id) } },
             )
         }
 
@@ -148,7 +150,7 @@ fun MemoryTab(resumeTick: Int) {
             AlertDialog(
                 onDismissRequest = { confirmClearToday = false },
                 title = { Text("清空今天的记录？") },
-                text = { Text("会删除今天的事件日志和 today.md；档案、日记、信不会删除。删除后无法从摘要里恢复。") },
+                text = { Text("会清除今天的交流列表；已生成的档案、日记和信会保留。要忘记某件事，请在“它记住的事”里操作。") },
                 confirmButton = {
                     TextButton(onClick = {
                         confirmClearToday = false
@@ -240,6 +242,7 @@ private fun Entry(date: LocalDate, text: String, onDelete: () -> Unit) {
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun FactRow(fact: Fact, onConfirm: () -> Unit, onCorrect: (String) -> Unit, onForget: () -> Unit) {
     var editing by remember(fact.id) { mutableStateOf(false) }
     var draft by remember(fact.id) { mutableStateOf(fact.text) }
@@ -248,7 +251,7 @@ private fun FactRow(fact: Fact, onConfirm: () -> Unit, onCorrect: (String) -> Un
     Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
         if (editing) {
             OutlinedTextField(draft, { draft = it }, Modifier.fillMaxWidth(), label = { Text("更正这条") })
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
                     val text = draft.trim()
                     if (text.isNotEmpty()) onCorrect(text)
@@ -262,7 +265,7 @@ private fun FactRow(fact: Fact, onConfirm: () -> Unit, onCorrect: (String) -> Un
                 SourceTag(if (fact.confidence == Confidence.SAID) "你说过" else "尚未确认")
                 Text(date, style = MaterialTheme.typography.bodySmall, color = LocalCompanionColors.current.ink2)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (fact.confidence == Confidence.GUESSED) TextButton(onClick = onConfirm) { Text("对") }
                 TextButton(onClick = { editing = true }) { Text("更正") }
                 TextButton(onClick = onForget) { Text("忘记") }

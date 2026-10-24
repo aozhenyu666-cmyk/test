@@ -6,6 +6,8 @@ import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -53,6 +55,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 fun SettingsTab(context: Context) {
     val app = PetApp.instance
     val s = app.settings
@@ -68,9 +71,9 @@ fun SettingsTab(context: Context) {
         Text("桌宠主动开口、想一想、整理记忆都用这里的模型。点一下填好常用服务商，Key 要换成对应服务商的。", style = MaterialTheme.typography.bodySmall)
         var endpoint by remember { mutableStateOf(s.endpoint) }
         var model by remember { mutableStateOf(s.model) }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             ModelProvider.entries.forEach { p ->
-                OutlinedButton(onClick = { endpoint = p.endpoint; model = p.model }, Modifier.weight(1f)) { Text(p.shortLabel) }
+                OutlinedButton(onClick = { endpoint = p.endpoint; model = p.model }) { Text(p.shortLabel) }
             }
         }
         var key by remember { mutableStateOf("") }
@@ -81,7 +84,7 @@ fun SettingsTab(context: Context) {
         OutlinedTextField(key, { key = it }, Modifier.fillMaxWidth(), label = { Text(if (app.apiKey() != null) "API Key（已保存，留空不改）" else "API Key") },
             singleLine = true, visualTransformation = PasswordVisualTransformation())
         NumberField("每日调用上限", limit) { limit = it }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
                 if (!EndpointPolicy.isValid(endpoint)) { toast("接口地址要是 https 开头"); return@Button }
                 s.endpoint = endpoint.trim(); s.model = model.trim()
@@ -141,7 +144,7 @@ fun SettingsTab(context: Context) {
         Section("深聊用哪个 AI")
         val assistants = remember { Assistants(context, s) }
         var chosen by remember { mutableStateOf(assistants.current) }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             AssistantApp.entries.forEach { a ->
                 val selected = a == chosen
                 if (selected) Button(onClick = {}) { Text(a.label) }
@@ -206,7 +209,7 @@ fun SettingsTab(context: Context) {
         var persona by remember { mutableStateOf("") }
         LaunchedEffect(Unit) { persona = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { app.memory.persona() } } }
         OutlinedTextField(persona, { persona = it }, Modifier.fillMaxWidth().heightIn(min = 160.dp), label = { Text("persona.md") })
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
                 val text = persona
                 scope.launch { withContext(Dispatchers.IO) { synchronized(app.memoryLock) { app.memory.savePersona(text) } }; toast("人设已保存") }

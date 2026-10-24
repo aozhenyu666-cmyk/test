@@ -59,8 +59,9 @@ class NightlyWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             // 提交成功（或这次 job 已经提交过）：本轮结束，不重复归档。
             NightlyCommitOutcome.COMMITTED, NightlyCommitOutcome.ALREADY_COMMITTED -> {
                 // 日记里值得接着聊的一句进入话题队列；来源是这一批真实事件。
-                if (output.diary.isNotBlank() && prepared.batch.eventIds.isNotEmpty()) {
-                    app.topics.enqueue(output.diary.take(80), prepared.batch.eventIds)
+                val diary = synchronized(app.memoryLock) { app.memory.diary(java.time.LocalDate.parse(prepared.batch.day)).orEmpty() }
+                if (diary.isNotBlank() && prepared.batch.eventIds.isNotEmpty()) {
+                    app.topics.enqueue(diary.take(80), prepared.batch.eventIds)
                 }
                 synchronized(app.memoryLock) { app.memory.pruneArchive(LocalDate.now()) }
                 DONE

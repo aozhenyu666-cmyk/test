@@ -52,7 +52,8 @@ class MemoryStore(val root: File) {
     fun saveProfileByUser(text: String) { synchronized(lock) {
         val before = profileLines().toSet()
         val after = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
-        val removed = before - after.toSet()
+        val normalizedAfter = after.map { ProfileRules.normalize(it) }.toSet()
+        val removed = before.filter { ProfileRules.normalize(it) !in normalizedAfter }
         if (removed.isNotEmpty()) addTombstones(removed)
         writeAtomic(profileFile, ProfileRules.clamp(after).joinToString("\n"))
     } }

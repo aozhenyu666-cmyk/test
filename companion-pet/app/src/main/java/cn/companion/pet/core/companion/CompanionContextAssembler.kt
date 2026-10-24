@@ -38,9 +38,10 @@ class CompanionContextAssembler(
         now: Long,
         tombstones: Set<String> = emptySet(),
         limits: ContextLimits = ContextLimits(),
+        userQuery: String? = null,
     ): List<ChatMessage> {
         val recent = recentLines(limits, tombstones)
-        val query = buildQuery(moment, events, now)
+        val query = userQuery?.takeIf { it.isNotBlank() } ?: buildQuery(moment, now, tombstones)
         val recalled = recall.recall(
             query = query,
             now = now,
@@ -78,18 +79,21 @@ class CompanionContextAssembler(
         if (moment.afterHeartbeat) body.append("- 他刚亮屏，锁屏那段时间我轻轻敲过他。问一句刚才脑子里在想什么。\n")
 
         val screen = if (moment.scene == Scene.LEARNING) material?.trim().orEmpty() else ""
-        if (screen.isNotEmpty()) {
-            body.append('\n').append(ProbePrompt.SCREEN_OPEN).append('\n')
-            body.append(UnicodeText.truncate(sanitizeMarkers(screen), limits.materialMaxChars)).append('\n')
-            body.append(ProbePrompt.SCREEN_CLOSE).append('\n')
-        }
+        val screenText = UnicodeText.truncate(sanitizeMarkers(screen), limits.materialMaxChars)
+        fun screenBlock(text: String) = "\n" + ProbePrompt.SCREEN_OPEN + "\n" + text + "\n" + ProbePrompt.SCREEN_CLOSE + "\n"
+        val materialBlock = if (screen.isNotEmpty()) screenBlock(screenText) else ""
+        body.append(materialBlock)
 
         var text = body.toString()
         // 产品上限是“整个动态上下文”5000 码点。超了就按确定顺序先删最早的最近交流，再截素材。
-        while (UnicodeText.count(text) > limits.dynamicMaxChars && recent.isNotEmpty()) {
-            val firstLine = recent.first().first
-            text = text.replaceFirst(firstLine + "\n", "")
-            return trimmedCopy(persona, text, limits.dynamicMaxChars)
+        for ((line, _) in recent) {
+            if (UnicodeText.count(text) <= limits.dynamicMaxChars) break
+            text = text.replaceFirst(line + "\n", "")
+        }
+        if (UnicodeText.count(text) > limits.dynamicMaxChars && materialBlock.isNotEmpty()) {
+            val withoutMaterial = text.removeSuffix(materialBlock)
+            val available = limits.dynamicMaxChars - UnicodeText.count(withoutMaterial) - UnicodeText.count(screenBlock(""))
+            text = if (available > 0) withoutMaterial + screenBlock(UnicodeText.truncate(screenText, available)) else withoutMaterial
         }
         if (UnicodeText.count(text) > limits.dynamicMaxChars) {
             text = UnicodeText.truncate(text, limits.dynamicMaxChars)
@@ -97,20 +101,13 @@ class CompanionContextAssembler(
         return listOf(system, ChatMessage(ChatRole.USER, text.trimEnd()))
     }
 
-    private fun trimmedCopy(persona: String, text: String, max: Int): List<ChatMessage> =
-        listOf(
-            ChatMessage(ChatRole.SYSTEM, persona.trim() + "\n\n" + ProbePrompt.FORMAT_RULES),
-            ChatMessage(ChatRole.USER, UnicodeText.truncate(text, max).trimEnd()),
-        )
-
     /** 最近交流用已经格式化的一行一条，最多 12 条/2400 码点（从旧到新裁剪）。 */
     private fun recentLines(limits: ContextLimits, tombstones: Set<String>): List<Pair<String, String>> {
-        val all = events.all()
+        val snapshot = events.all()
+        val visibility = EventVisibility(snapshot, tombstones)
+        val all = snapshot
             .filter { it.kind == EventKind.EXCHANGE || it.kind == EventKind.LEGACY_LINE }
-            .filter { event ->
-                val n = cn.companion.pet.core.memory.ProfileRules.normalize(event.text)
-                n.isNotEmpty() && tombstones.none { it.isNotEmpty() && n.contains(it) }
-            }
+            .filter { visibility.allows(it) }
             .takeLast(limits.recentMaxItems)
             .map { it.text to it.text }
             .toMutableList()
@@ -122,9 +119,12 @@ class CompanionContextAssembler(
         return all
     }
 
-    private fun buildQuery(moment: ProbeMoment, events: EventLog, now: Long): String {
-        val userLines = events.all()
-            .filter { it.kind == EventKind.USER_INPUT || it.kind == EventKind.NOTE }
+    private fun buildQuery(moment: ProbeMoment, now: Long, tombstones: Set<String>): String {
+        val snapshot = events.all()
+        val visibility = EventVisibility(snapshot, tombstones)
+        val userLines = snapshot
+            .filter { it.kind == EventKind.USER_INPUT || it.kind == EventKind.NOTE || it.kind == EventKind.CORRECTION }
+            .filter { it.occurredAt <= now && visibility.allows(it) }
             .takeLast(6)
             .joinToString(" ") { it.text }
         return listOf(

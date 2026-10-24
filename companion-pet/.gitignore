@@ -7,3 +7,6 @@ captures/
 local.properties
 .externalNativeBuild
 .cxx
+.kotlin/
+__pycache__/
+*.pyc

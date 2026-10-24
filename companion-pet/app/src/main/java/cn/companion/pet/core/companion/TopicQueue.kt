@@ -27,6 +27,7 @@ data class Topic(
 class TopicQueue(
     private val root: File,
     private val clock: Clock = Clock.systemDefaultZone(),
+    private val events: EventLog? = null,
 ) {
     private val file = File(root, "topics.json")
     private val lock = Any()
@@ -52,8 +53,12 @@ class TopicQueue(
 
     fun candidates(now: Long = clock.millis()): List<Topic> = synchronized(lock) {
         val deleted = tombstones()
+        val snapshot = events?.all()
+        val visibility = snapshot?.let { EventVisibility(it, deleted.toSet()) }
+        val visibleIds = snapshot?.filter { visibility!!.allows(it) }?.map { it.id }?.toSet()
         read().filter { topic ->
             !topic.dismissed && topic.sharedAt == null && topic.expiresAt > now &&
+                (visibleIds == null || topic.sourceIds.all { it in visibleIds }) &&
                 deleted.none { it.isNotEmpty() && ProfileRules.normalize(topic.summary).contains(it) }
         }.sortedBy { it.createdAt }
     }

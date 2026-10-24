@@ -4,6 +4,8 @@
 
 需求依据：[V1.5 需求文档](https://claude.ai/artifact/GBaCjrc1shZXy4v391C4zu)，开发计划见 [PLAN.md](PLAN.md)。
 
+当前基础完善版本为 **0.3.1（versionCode 4）**：记忆更正同步档案、来源失效、当前问题召回与夜间过期结果保护。实现与自动化结果见 [本轮交接](handoff/codex-foundation-v3/STATE.md)；后续开发见 [DeepSeek 命令](handoff/codex-foundation-v3/DEEPSEEK_NEXT.md)。设备覆盖升级的条件与待测项见 [升级验证](handoff/codex-foundation-v3/UPGRADE_VALIDATION.md)，不能把 APK 构建成功当成手机已验证。
+
 ## 安装
 
 1. 在 GitHub Actions 的 “Companion Pet Android” 运行记录里下载 `companion-pet-debug-<commit>`，解压得到 `app-debug.apk`，传到手机安装。

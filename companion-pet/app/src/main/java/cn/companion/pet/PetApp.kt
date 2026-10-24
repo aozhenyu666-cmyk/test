@@ -34,6 +34,8 @@ class PetApp : Application() {
         private set
     lateinit var facts: FactStore
         private set
+    lateinit var memoryEdits: cn.companion.pet.core.memory.MemoryEdits
+        private set
     lateinit var topics: TopicQueue
         private set
     lateinit var budget: AtomicBudget
@@ -71,7 +73,8 @@ class PetApp : Application() {
         memory = MemoryStore(File(filesDir, "memory"))
         events = EventLog(memory.root)
         facts = FactStore(memory.root)
-        topics = TopicQueue(memory.root)
+        topics = TopicQueue(memory.root, events = events)
+        memoryEdits = cn.companion.pet.core.memory.MemoryEdits(memory, facts, events)
         nightly = NightlyStore(memory, events, facts = facts)
         budget = AtomicBudget(BudgetPrefs(this))
         thoughts = ThoughtNotes(File(memory.root, "notes"))
