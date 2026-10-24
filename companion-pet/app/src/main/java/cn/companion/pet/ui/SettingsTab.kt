@@ -416,6 +416,19 @@ private fun ScreenDiagnosticSection(context: Context) {
     var upload by remember { mutableStateOf(app.settings.visionUploadEnabled) }
     GroupTitle("看一眼（诊断）")
     Text("要让它看某个 App：在那个 App 里点一下桌宠 → “看一眼”。在这里点只能用来检查截图权限：此刻前台是桌宠自己，会被拒绝。截图只在本机显示，不落盘；打开下面的开关才会发给视觉模型。", style = MaterialTheme.typography.bodySmall)
+    var visionModel by remember { mutableStateOf(app.settings.visionModel) }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(visionModel, { visionModel = it }, Modifier.weight(1f), singleLine = true,
+            label = { Text("视觉模型名（用上面同一个接口地址和 Key）") })
+        OutlinedButton(onClick = {
+            if (visionModel.isNotBlank()) {
+                app.settings.visionModel = visionModel.trim()
+                android.widget.Toast.makeText(context, "已保存视觉模型", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }) { Text("保存") }
+    }
+    Text("要选能看图的模型，例如千问用 qwen-vl-plus、GPT 用 gpt-4.1-mini。看一眼失败时，开始页“上次调用模型”会写原因。",
+        style = MaterialTheme.typography.bodySmall)
     Toggle("允许把截图发给视觉模型", "默认关。打开后，仅在点击“看一眼”并成功截图后，按一次全局预算发送给视觉模型；排除/敏感窗口不上传。", upload) {
         upload = it; app.settings.visionUploadEnabled = it
     }
