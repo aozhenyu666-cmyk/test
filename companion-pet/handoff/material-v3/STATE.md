@@ -10,7 +10,7 @@
 
 ## B 受限工具（本提交）
 
-- 版本 0.3.3 / versionCode 6；测试 216 / 0；lint 0/5；APK `463BE1EC0E380FE659368409490114184EA541A0F4697D6655D59C5F0EDB8CD5`（28,223,183 bytes）。
+- 版本 0.3.3 / versionCode 6；测试 217 / 0；lint 0/5；APK `2F4B7E94BC8B66D8A9F68926B3A975FEBE83551A83CBF69EAC8FF25F4590FF9A`（28,415,017 bytes）。
 - 5 个第一批动作、四态结果、执行 ID 幂等、取消/cancelAll、参数白名单、dry-run planner。
 - 无模型工具调用、无新增权限；真实 App/TTS 未在设备验证，fake 测试不冒充真机。
 

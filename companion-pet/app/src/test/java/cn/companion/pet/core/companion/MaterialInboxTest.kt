@@ -170,4 +170,12 @@ class MaterialInboxTest {
         assertEquals(MaterialInbox.MAX_NOTE, created.material.note.length)
         assertEquals(0, budget.used("2026-10-24"))
     }
+
+    @Test
+    fun explicitLinkOnlyWithBodyIsRejected() {
+        val e = env()
+        val result = e.inbox.save(MaterialDraft(url = "https://example.com/v", body = "正文", contentType = MaterialContentType.LINK_ONLY), now)
+        assertTrue(result is MaterialSaveResult.Rejected)
+        assertEquals(0, e.events.all().size)
+    }
 }

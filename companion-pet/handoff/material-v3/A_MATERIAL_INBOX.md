@@ -9,7 +9,7 @@
 - Android `ACTION_SEND` `text/plain` 接收 Activity（`.MaterialShareActivity`）：先预览标题/链接/摘录/附言与类型，再点保存。
 - 应用内手动粘贴入口在“记忆 → 素材收件箱”，同一套 `MaterialDraftParser` / `MaterialInbox`。
 - 只保存用户主动给的标题、URL、摘录/字幕、附言；不登录、不抓网页、不读 Cookie、不读其它 App 聊天。
-- 内容类型：`LINK_ONLY` / `EXCERPT` / `TRANSCRIPT`；只有链接时提示“不能假装知道内容”，话题只问想一起看什么。
+- 内容类型：`LINK_ONLY` / `EXCERPT` / `TRANSCRIPT`；只有链接时提示“不能假装知道内容”，话题只问想一起看什么。显式选“只有链接”却带正文会被拒绝，避免把链接当成已读完。
 - 保存生成真实 `MATERIAL` 事件；话题的 `sourceIds` 引用该事件。删除/过期追加 `FORGET`，`EventVisibility` 使派生话题失效；收件箱本身移除后上下文也不再有该材料。
 - 同一规范化 URL 幂等更新，不复制卡片；无 URL 的不同摘录按文本 key 分开；URL 拒绝 `file:`/`content:`/`javascript:`/userinfo/超长。
 - 上限：30 条、正文 4000 码点、标题 200、附言 500、URL 2048、保留 14 天。

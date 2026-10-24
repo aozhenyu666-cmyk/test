@@ -138,7 +138,8 @@ class MaterialInbox(
         }
         val type = when (draft.contentType) {
             MaterialContentType.LINK_ONLY -> {
-                if (body.isNotBlank()) MaterialContentType.EXCERPT else MaterialContentType.LINK_ONLY
+                if (body.isNotBlank()) return MaterialSaveResult.Rejected("只有链接时不要带正文")
+                MaterialContentType.LINK_ONLY
             }
             MaterialContentType.EXCERPT -> {
                 if (body.isBlank()) return MaterialSaveResult.Rejected("摘录不能为空")

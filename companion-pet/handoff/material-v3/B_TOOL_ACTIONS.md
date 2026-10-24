@@ -36,13 +36,13 @@
 ## 验证
 
 ```text
-:app:testDebugUnitTest          PASS   216 tests / 0 failures
+:app:testDebugUnitTest          PASS   217 tests / 0 failures
 :app:lintDebug                  PASS   0 errors / 5 warnings
-:app:assembleDebug              PASS   28,223,183 bytes
+:app:assembleDebug              PASS   28,415,017 bytes
 :app:assembleDebugAndroidTest   PASS   仪器 APK 仅编译
 ```
 
-APK SHA-256：`463BE1EC0E380FE659368409490114184EA541A0F4697D6655D59C5F0EDB8CD5`
+APK SHA-256：`2F4B7E94BC8B66D8A9F68926B3A975FEBE83551A83CBF69EAC8FF25F4590FF9A`
 
 新增 `ActionRunnerTest` 7 项：成功/失败/不可用/参数校验、同 ID 只执行一次、并发同 ID 只执行一次、取消晚到成功、cancelAll、dry-run 条件、adapter UNAVAILABLE。
 
