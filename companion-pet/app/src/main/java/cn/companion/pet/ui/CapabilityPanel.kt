@@ -19,6 +19,14 @@ fun ActionKind.label(): String = when (this) {
     ActionKind.SAVE_NOTE -> "保存念头"
     ActionKind.OPEN_ASSISTANT -> "打开 AI 应用"
     ActionKind.SPEAK -> "朗读文字"
+    ActionKind.GET_DEVICE_STATE -> "设备状态"
+    ActionKind.FIND_NODE -> "查找控件"
+    ActionKind.OPEN_APP -> "打开应用"
+    ActionKind.TAP_NODE -> "点击控件"
+    ActionKind.SCROLL -> "滚动页面"
+    ActionKind.INPUT_TEXT -> "输入文字"
+    ActionKind.BACK -> "返回"
+    ActionKind.GET_LAST_OBSERVATION -> "最近观察"
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -36,6 +44,7 @@ fun CapabilityPanel(
     var selected by rememberSaveable { mutableStateOf(ActionKind.READ_MEMORY.name) }
     var input by rememberSaveable(selected) { mutableStateOf("") }
     var target by rememberSaveable { mutableStateOf(AssistantApp.GEMINI.name) }
+    var deviceText by rememberSaveable(selected) { mutableStateOf("") }
     var preview by remember { mutableStateOf<Map<String, String>?>(null) }
     val kind = ActionKind.valueOf(selected)
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -66,6 +75,20 @@ fun CapabilityPanel(
                     Text("系统接受打开请求后，请在目标应用中核对。", style = MaterialTheme.typography.bodySmall)
                 }
                 ActionKind.READ_MATERIALS -> Text("只查看你主动保存、仍然有效的素材，并标明只有链接、摘录或字幕。")
+                ActionKind.GET_DEVICE_STATE, ActionKind.BACK, ActionKind.GET_LAST_OBSERVATION ->
+                    Text("只做一次受限制的原生调用；结果需要重新观察，不能仅凭 API 返回 true 声称完成。")
+                ActionKind.FIND_NODE -> OutlinedTextField(input, { input = it }, Modifier.fillMaxWidth(),
+                    enabled = !state.busy, label = { Text("控件文字/资源 ID") })
+                ActionKind.OPEN_APP -> OutlinedTextField(input, { input = it }, Modifier.fillMaxWidth(),
+                    enabled = !state.busy, label = { Text("已授权应用的包名") })
+                ActionKind.TAP_NODE, ActionKind.SCROLL -> OutlinedTextField(input, { input = it }, Modifier.fillMaxWidth(),
+                    enabled = !state.busy, label = { Text("最近观察里的节点 ID") })
+                ActionKind.INPUT_TEXT -> {
+                    OutlinedTextField(input, { input = it }, Modifier.fillMaxWidth(), enabled = !state.busy,
+                        label = { Text("最近观察里的输入框节点 ID") })
+                    OutlinedTextField(deviceText, { deviceText = it }, Modifier.fillMaxWidth(), enabled = !state.busy,
+                        label = { Text("要写入的普通文字（不要密码/验证码）") })
+                }
             }
             if (kind == ActionKind.SPEAK) Text("需在设置中开启朗读。提交成功表示语音引擎已接受，不代表已播完。",
                 style = MaterialTheme.typography.bodySmall)
@@ -75,6 +98,12 @@ fun CapabilityPanel(
                     ActionKind.READ_MATERIALS -> emptyMap()
                     ActionKind.SAVE_NOTE, ActionKind.SPEAK -> mapOf("text" to input)
                     ActionKind.OPEN_ASSISTANT -> mapOf("target" to target)
+                    ActionKind.GET_DEVICE_STATE, ActionKind.BACK, ActionKind.GET_LAST_OBSERVATION -> emptyMap()
+                    ActionKind.FIND_NODE -> mapOf("query" to input)
+                    ActionKind.OPEN_APP -> mapOf("package" to input)
+                    ActionKind.TAP_NODE -> mapOf("node_id" to input)
+                    ActionKind.SCROLL -> mapOf("node_id" to input)
+                    ActionKind.INPUT_TEXT -> mapOf("node_id" to input, "text" to deviceText)
                 }
                 if (kind == ActionKind.SAVE_NOTE) preview = args.toMap() else onSubmit(kind, args)
             })

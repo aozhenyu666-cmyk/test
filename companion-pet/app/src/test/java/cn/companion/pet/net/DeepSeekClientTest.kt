@@ -151,4 +151,19 @@ class DeepSeekClientTest {
         assertTrue(job.isCancelled)
         assertFalse(finished)
     }
+
+    @Test
+    fun sendsImageContentBlocksForVision() = runBlocking {
+        server.enqueue(ok("看到了"))
+        val request = req().copy(messages = listOf(
+            ChatMessage(ChatRole.USER, "看图", listOf("data:image/jpeg;base64,AAAA")),
+        ))
+        client.complete(request)
+        val body = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        val content = body["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray
+        assertEquals("text", content[0].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("image_url", content[1].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("data:image/jpeg;base64,AAAA",
+            content[1].jsonObject["image_url"]!!.jsonObject["url"]!!.jsonPrimitive.content)
+    }
 }

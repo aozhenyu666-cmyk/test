@@ -3,5 +3,6 @@
     android:accessibilityEventTypes="typeWindowStateChanged|typeViewScrolled"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
     android:description="@string/a11y_description"
     android:notificationTimeout="200" />

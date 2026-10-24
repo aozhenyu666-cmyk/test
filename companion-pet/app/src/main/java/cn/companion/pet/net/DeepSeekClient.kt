@@ -48,7 +48,19 @@ class DeepSeekClient(base: OkHttpClient = OkHttpClient()) : ChatCompletionClient
                 request.messages.forEach { m ->
                     add(buildJsonObject {
                         put("role", m.role.name.lowercase())
-                        put("content", m.content)
+                        if (m.imageDataUrls.isEmpty()) {
+                            put("content", m.content)
+                        } else {
+                            put("content", buildJsonArray {
+                                add(buildJsonObject { put("type", "text"); put("text", m.content) })
+                                m.imageDataUrls.take(2).forEach { url ->
+                                    add(buildJsonObject {
+                                        put("type", "image_url")
+                                        put("image_url", buildJsonObject { put("url", url) })
+                                    })
+                                }
+                            })
+                        }
                     })
                 }
             })

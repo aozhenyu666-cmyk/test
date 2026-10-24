@@ -56,6 +56,13 @@ class Settings(context: Context) {
     var skimEnabled by bool("skim", true)
     /** 新连续性路径：按相关召回 + 结构化事实；默认关，关掉后走旧的整份 profile 路径。 */
     var continuityEnabled by bool("continuity", false)
+    /** A1 自主决策：默认关；只自动执行只读工具，写入/打开/朗读只提议不执行。 */
+    var agentAutonomy by bool("agent_autonomy", false)
+    /** 视觉模型单独配置；默认 deepseek-flash，截图上传必须显式打开。 */
+    var visionModel by str("vision_model", "deepseek-flash")
+    var visionUploadEnabled by bool("vision_upload", false)
+    /** A3：允许 Agent 操作的应用名单；空名单时全部拒绝。 */
+    var deviceAllowedApps by set("device_apps")
     var geminiAutoSend by bool("gemini_auto_send", false)
     var ttsEnabled by bool("tts", false)
     var petPaused by bool("paused", false)

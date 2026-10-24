@@ -10,6 +10,14 @@ enum class ActionKind {
     SAVE_NOTE,
     OPEN_ASSISTANT,
     SPEAK,
+    GET_DEVICE_STATE,
+    FIND_NODE,
+    OPEN_APP,
+    TAP_NODE,
+    SCROLL,
+    INPUT_TEXT,
+    BACK,
+    GET_LAST_OBSERVATION,
 }
 
 @kotlinx.serialization.Serializable
@@ -222,6 +230,12 @@ class ActionRunner(
             ActionKind.READ_MATERIALS -> setOf("limit")
             ActionKind.SAVE_NOTE, ActionKind.SPEAK -> setOf("text")
             ActionKind.OPEN_ASSISTANT -> setOf("target")
+            ActionKind.GET_DEVICE_STATE, ActionKind.BACK, ActionKind.GET_LAST_OBSERVATION -> emptySet()
+            ActionKind.FIND_NODE -> setOf("query", "by_resource_id")
+            ActionKind.OPEN_APP -> setOf("package")
+            ActionKind.TAP_NODE -> setOf("node_id")
+            ActionKind.SCROLL -> setOf("node_id", "forward")
+            ActionKind.INPUT_TEXT -> setOf("node_id", "text")
         }
         if (request.args.keys.any { it !in allowed }) return fail(request, "动作参数不在白名单")
         val max = when (request.kind) {
@@ -230,11 +244,21 @@ class ActionRunner(
             ActionKind.SAVE_NOTE -> 500
             ActionKind.OPEN_ASSISTANT -> 40
             ActionKind.SPEAK -> 300
+            ActionKind.GET_DEVICE_STATE, ActionKind.BACK, ActionKind.GET_LAST_OBSERVATION -> 0
+            ActionKind.FIND_NODE -> 120
+            ActionKind.OPEN_APP -> 200
+            ActionKind.TAP_NODE -> 80
+            ActionKind.SCROLL -> 80
+            ActionKind.INPUT_TEXT -> 300
         }
         if (request.args.values.any { cn.companion.pet.core.text.UnicodeText.count(it) > max }) return fail(request, "动作参数过长")
-        if (request.kind == ActionKind.SAVE_NOTE || request.kind == ActionKind.SPEAK) {
+        if (request.kind == ActionKind.SAVE_NOTE || request.kind == ActionKind.SPEAK ||
+            request.kind == ActionKind.INPUT_TEXT) {
             if (request.args["text"].isNullOrBlank()) return fail(request, "没有可处理的文字")
         }
+        if (request.kind == ActionKind.TAP_NODE && request.args["node_id"].isNullOrBlank()) return fail(request, "缺少节点")
+        if (request.kind == ActionKind.OPEN_APP && request.args["package"].isNullOrBlank()) return fail(request, "缺少应用包名")
+        if (request.kind == ActionKind.INPUT_TEXT && request.args["node_id"].isNullOrBlank()) return fail(request, "缺少输入框")
         request.args["limit"]?.let {
             val limit = it.toIntOrNull()
             val upper = if (request.kind == ActionKind.READ_MEMORY) 20 else 10
@@ -248,7 +272,8 @@ class ActionRunner(
 
     private fun fingerprint(request: ActionRequest): String = requestFingerprint(request)
 
-    private fun isRead(kind: ActionKind) = kind == ActionKind.READ_MEMORY || kind == ActionKind.READ_MATERIALS
+    private fun isRead(kind: ActionKind) = kind == ActionKind.READ_MEMORY || kind == ActionKind.READ_MATERIALS ||
+        kind == ActionKind.GET_DEVICE_STATE || kind == ActionKind.FIND_NODE || kind == ActionKind.GET_LAST_OBSERVATION
     private fun fail(request: ActionRequest, reason: String) = ActionResult(request.id, request.kind, ActionStatus.FAILED, reason)
     private fun cancelled(request: ActionRequest) = ActionResult(request.id, request.kind, ActionStatus.CANCELLED, "已取消；已开始的原子操作不回滚")
 }

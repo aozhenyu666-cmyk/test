@@ -3,7 +3,23 @@ package cn.companion.pet.ui
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import cn.companion.pet.a11y.PerceptionHub
+import cn.companion.pet.a11y.AndroidShizukuProbe
+import cn.companion.pet.a11y.AndroidShizukuCommandPort
+import cn.companion.pet.core.device.ShizukuCapabilityRunner
+import cn.companion.pet.a11y.ScreenCaptureGateway
+import cn.companion.pet.core.vision.CapturedStatus
+import cn.companion.pet.core.vision.ObservationSource
+import cn.companion.pet.core.vision.ScreenCaptureAttempt
+import cn.companion.pet.core.vision.ScreenCapturePolicy
+import cn.companion.pet.core.vision.ScreenObservation
+import java.util.concurrent.Executors
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -30,6 +46,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -40,6 +57,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import cn.companion.pet.PetApp
+import cn.companion.pet.core.agent.AgentTrace
+import cn.companion.pet.core.goal.Goal
+import cn.companion.pet.core.goal.GoalDecision
+import cn.companion.pet.core.goal.GoalStatus
+import cn.companion.pet.core.action.PendingAction
+import cn.companion.pet.core.action.PendingStatus
+import cn.companion.pet.core.action.ActionRequest
 import cn.companion.pet.data.SecretWriteResult
 import cn.companion.pet.bridge.Assistants
 import cn.companion.pet.core.session.AssistantApp
@@ -77,6 +101,41 @@ fun SettingsTab(context: Context) {
         OutlinedButton(onClick = { context.startActivity(Intent(context, cn.companion.pet.CapabilityActivity::class.java)) }) {
             Text("打开能力面板")
         }
+        Section("自主模式（实验）")
+        var agentOn by remember { mutableStateOf(s.agentAutonomy) }
+        Toggle(
+            "让模型自己决定用一次工具",
+            "开启后，新素材或用户念头会触发一次模型决策。只自动执行读取记忆/素材；保存念头、打开 AI 应用、朗读只记为需要确认，不会自动做。每次决策都记入下方轨迹。默认关，会消耗一次每日模型额度。",
+            agentOn,
+        ) { agentOn = it; s.agentAutonomy = it }
+        AgentTracePreview()
+        ScreenDiagnosticSection(context)
+        Section("设备操作（A3）")
+        val shizuku = remember { AndroidShizukuProbe(context) }
+        val capability = remember { ShizukuCapabilityRunner(shizuku, AndroidShizukuCommandPort()) }
+        var shizukuText by remember { mutableStateOf(shizuku.diagnostic().detail.ifBlank { shizuku.diagnostic().status.name }) }
+        Text("Shizuku 只用于状态/授权，不执行任意 Shell。未安装/未运行时，Intent 和无障碍动作仍可用。", style = MaterialTheme.typography.bodySmall)
+        Text("Shizuku：" + shizukuText, style = MaterialTheme.typography.bodySmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { shizukuText = shizuku.diagnostic().detail }, enabled = !shizukuText.contains("请求")) {
+                Text("刷新状态")
+            }
+            OutlinedButton(onClick = {
+                shizuku.requestPermission()
+                shizukuText = "已打开系统授权；请刷新状态"
+            }) { Text("请求权限") }
+            OutlinedButton(onClick = {
+                scope.launch {
+                    val r = withContext(Dispatchers.IO) { capability.readSdkDiagnostic() }
+                    shizukuText = "固定 Binder 能力：" + r.status.name + (if (r.value.isBlank()) "" else " · 版本 " + r.value) + (if (r.reason.isBlank()) "" else " · " + r.reason)
+                }
+            }) { Text("读取 Shizuku 版本") }
+        }
+        AppListRow(context, "允许 Agent 操作的应用", "空名单时拒绝所有设备动作；只打开/点击/输入这些应用。", s.deviceAllowedApps) {
+            s.deviceAllowedApps = it
+        }
+        GoalSection()
+        PendingActionSection()
         Section("搭话用的模型")
         Text("桌宠主动开口、想一想、整理记忆都用这里的模型。点一下填好常用服务商，Key 要换成对应服务商的。", style = MaterialTheme.typography.bodySmall)
         var endpoint by remember { mutableStateOf(s.endpoint) }
@@ -329,4 +388,197 @@ private fun AppPicker(context: Context, title: String, initial: Set<String>, onD
         confirmButton = { TextButton(onClick = { onDone(chosen) }) { Text("完成") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
+}
+
+@Composable
+private fun AgentTracePreview() {
+    val app = PetApp.instance
+    var tick by remember { mutableIntStateOf(0) }
+    var traces by remember { mutableStateOf<List<AgentTrace>>(emptyList()) }
+    LaunchedEffect(tick) { traces = withContext(Dispatchers.IO) { app.agentTrace.recent(5) } }
+    if (traces.isEmpty()) {
+        Text("还没有决策轨迹。开启自主模式并保存一条素材/念头后，这里会出现摘要。", style = MaterialTheme.typography.bodySmall)
+    } else {
+        traces.forEach { t ->
+            Text(t.status + " · " + (t.tool ?: "no_action") + " · " + (t.resultReason.ifBlank { t.decisionReason }).take(100), style = MaterialTheme.typography.bodySmall)
+        }
+    }
+    TextButton(onClick = { tick++ }) { Text("刷新轨迹") }
+}
+
+@Composable
+private fun ScreenDiagnosticSection(context: Context) {
+    val app = PetApp.instance
+    val scope = rememberCoroutineScope()
+    var status by remember { mutableStateOf("尚未请求截图") }
+    var preview by remember { mutableStateOf<Bitmap?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var visionSummary by remember { mutableStateOf<String?>(null) }
+    var upload by remember { mutableStateOf(app.settings.visionUploadEnabled) }
+    GroupTitle("看一眼（诊断）")
+    Text("只在点击时向系统请求一张原生截图，默认只在本机显示；不上传、不落盘。", style = MaterialTheme.typography.bodySmall)
+    Toggle("允许把截图发给视觉模型", "默认关。打开后，仅在点击“看一眼”并成功截图后，按一次全局预算发送给视觉模型；排除/敏感窗口不上传。", upload) {
+        upload = it; app.settings.visionUploadEnabled = it
+    }
+    Button(enabled = !busy, onClick = {
+        if (busy) return@Button
+        busy = true
+        status = "正在请求系统截图…"
+        scope.launch {
+            val attempt = withContext(Dispatchers.IO) {
+                val now = System.currentTimeMillis()
+                val pkg = PerceptionHub.trail.foreground
+                val policy = ScreenCapturePolicy.canCapture(pkg, context.packageName, app.settings.excludeApps, now, 0L, false)
+                if (policy != CapturedStatus.OK) ScreenCaptureAttempt(policy, error = "当前窗口不允许截图")
+                else {
+                    val executor = Executors.newSingleThreadExecutor()
+                    try {
+                        ScreenCaptureGateway.captureBlocking(PerceptionHub.service, executor, 5_000)
+                    } finally {
+                        executor.shutdown()
+                    }
+                }
+            }
+            val jpeg = attempt.jpeg
+            if (attempt.status == CapturedStatus.OK && jpeg != null) {
+                val bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                preview = bitmap
+                status = "原生截图成功：" + attempt.width + "×" + attempt.height + "，" + jpeg.size + " bytes"
+                var visionText = ""
+                if (upload) {
+                    val day = java.time.LocalDate.now().toString()
+                    if (app.budget.reserve(app.settings.dailyLimit, day)) {
+                        cn.companion.pet.data.Stats.Kind.API_CALLS.let { app.stats.add(it) }
+                        visionSummary = withContext(Dispatchers.IO) { app.visionAnalyzer.analyze(jpeg) }?.subject
+                        visionText = visionSummary ?: "视觉模型未返回可解析摘要"
+                    } else {
+                        visionText = "今日模型额度不足，未上传"
+                    }
+                }
+                app.screenObservations.publish(ScreenObservation(
+                    id = java.util.UUID.randomUUID().toString(), capturedAt = System.currentTimeMillis(),
+                    packageName = PerceptionHub.trail.foreground ?: "unknown", source = ObservationSource.SCREENSHOT,
+                    screenshotAvailable = true, nodesAvailable = false, visionAvailable = upload && visionText.isNotBlank(),
+                    status = CapturedStatus.OK, summary = visionText.ifBlank { "用户点击诊断截图" },
+                    expiresAt = System.currentTimeMillis() + 60_000,
+                ))
+            } else {
+                status = "截图未完成：" + attempt.status.name + (if (attempt.error.isBlank()) "" else " · " + attempt.error)
+            }
+            busy = false
+        }
+    }) { Text("看一眼（原生截图）") }
+    Text(status, style = MaterialTheme.typography.bodySmall)
+    preview?.let { bmp ->
+        Image(bmp.asImageBitmap(), contentDescription = "本机截图预览", modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp), contentScale = ContentScale.Fit)
+        TextButton(onClick = { preview?.recycle(); preview = null }) { Text("关闭预览") }
+    }
+    visionSummary?.let { Text("视觉摘要：" + it, style = MaterialTheme.typography.bodySmall) }
+    Text("截图成功 ≠ 模型已理解；上传开关关闭时不会请求视觉模型。", style = MaterialTheme.typography.bodySmall)
+}
+
+@Composable
+private fun GoalSection() {
+    val app = PetApp.instance
+    val scope = rememberCoroutineScope()
+    var tick by remember { mutableIntStateOf(0) }
+    var goals by remember { mutableStateOf<List<Goal>>(emptyList()) }
+    var text by remember { mutableStateOf("") }
+    var plan by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(tick) {
+        goals = withContext(Dispatchers.IO) { app.goalStore.state().goals }
+        plan = withContext(Dispatchers.IO) {
+            val p = app.goalSupervisor.decide(System.currentTimeMillis(),
+                app.budget.remaining(app.settings.dailyLimit, java.time.LocalDate.now().toString()))
+            p.decision.name + " · " + p.reason
+        }
+    }
+    GroupTitle("长期目标（实验）")
+    Text("目标只保存计划和状态，不会自动执行高风险操作；关闭/删除后不再被旧调用复活。", style = MaterialTheme.typography.bodySmall)
+    OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth(), label = { Text("想让它长期关注什么") })
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = {
+            val value = text.trim(); if (value.isBlank()) return@Button
+            scope.launch {
+                withContext(Dispatchers.IO) { app.goalStore.addGoal(value, now = System.currentTimeMillis()) }
+                text = ""; tick++
+            }
+        }) { Text("添加目标") }
+        TextButton(onClick = { tick++ }) { Text("刷新") }
+    }
+    plan?.let { Text("下一步：" + it, style = MaterialTheme.typography.bodySmall) }
+    app.goalStore.lastError?.let { Text("目标存储：" + it, style = MaterialTheme.typography.bodySmall) }
+    if (app.goalStore.status == cn.companion.pet.core.goal.GoalStoreStatus.CORRUPT) {
+        Text("目标文件损坏，已停止写入；不会把损坏当成空目标。", style = MaterialTheme.typography.bodySmall)
+    }
+    goals.forEach { goal ->
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Column(Modifier.weight(1f)) {
+                Text(goal.text, style = MaterialTheme.typography.bodyMedium)
+                Text(goal.status.name, style = MaterialTheme.typography.bodySmall)
+            }
+            TextButton(onClick = {
+                scope.launch {
+                    withContext(Dispatchers.IO) {
+                        app.goalStore.setGoalStatus(goal.id,
+                            if (goal.status == GoalStatus.ACTIVE) GoalStatus.PAUSED else GoalStatus.ACTIVE,
+                            System.currentTimeMillis())
+                    }
+                    tick++
+                }
+            }) { Text(if (goal.status == GoalStatus.ACTIVE) "暂停" else "恢复") }
+            TextButton(onClick = {
+                scope.launch {
+                    withContext(Dispatchers.IO) { app.goalStore.deleteGoal(goal.id, System.currentTimeMillis()) }
+                    tick++
+                }
+            }) { Text("删除") }
+        }
+    }
+}
+
+@Composable
+private fun PendingActionSection() {
+    val app = PetApp.instance
+    val scope = rememberCoroutineScope()
+    var tick by remember { mutableIntStateOf(0) }
+    var items by remember { mutableStateOf<List<PendingAction>>(emptyList()) }
+    var message by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(tick) { items = withContext(Dispatchers.IO) { app.pendingActions.list(System.currentTimeMillis()) } }
+    GroupTitle("待确认动作")
+    Text("模型提议写动作/打开/朗读时，先停在这里；默认不执行。允许后仍会重新检查前台、白名单和观察时效。", style = MaterialTheme.typography.bodySmall)
+    message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    items.forEach { item ->
+        Column(Modifier.fillMaxWidth()) {
+            Text(item.kind.name + " · " + item.status.name, style = MaterialTheme.typography.bodyMedium)
+            Text(item.preview, style = MaterialTheme.typography.bodySmall)
+            if (item.status == PendingStatus.PENDING) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = {
+                        scope.launch {
+                            val approved = withContext(Dispatchers.IO) {
+                                app.pendingActions.approve(item.id, System.currentTimeMillis(),
+                                    cn.companion.pet.a11y.PerceptionHub.trail.foreground)
+                            }
+                            if (approved == null) { message = "未批准：已过期或前台已切换"; tick++ } else {
+                                val result = withContext(Dispatchers.IO) {
+                                    app.actions.execute(ActionRequest("pending-" + approved.id, approved.kind, approved.args))
+                                }
+                                withContext(Dispatchers.IO) { app.pendingActions.finish(approved.id, result) }
+                                message = result.kind.name + " · " + result.status.name + " · " + result.reason
+                                tick++
+                            }
+                        }
+                    }) { Text("允许本次") }
+                    OutlinedButton(onClick = {
+                        scope.launch {
+                            withContext(Dispatchers.IO) { app.pendingActions.rejectOrCancel(item.id) }
+                            message = "已拒绝"; tick++
+                        }
+                    }) { Text("拒绝") }
+                }
+            }
+        }
+        HorizontalDivider()
+    }
 }

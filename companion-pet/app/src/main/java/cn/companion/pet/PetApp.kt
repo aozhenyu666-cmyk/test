@@ -7,6 +7,19 @@ import cn.companion.pet.core.companion.TopicQueue
 import cn.companion.pet.core.companion.LegacyEventImport
 import cn.companion.pet.core.companion.MaterialInbox
 import cn.companion.pet.core.action.ActionRunner
+import cn.companion.pet.core.agent.AgentBudgetPort
+import cn.companion.pet.core.agent.AgentEventLedger
+import cn.companion.pet.core.agent.AgentLoop
+import cn.companion.pet.core.agent.AgentModelConfig
+import cn.companion.pet.core.agent.AgentTraceStore
+import cn.companion.pet.core.agent.ModelAgentDecisionSource
+import cn.companion.pet.core.vision.ScreenObservationStore
+import cn.companion.pet.core.goal.GoalStore
+import cn.companion.pet.core.goal.GoalSupervisor
+import cn.companion.pet.core.goal.GoalAgentCoordinator
+import cn.companion.pet.core.action.PendingActionStore
+import cn.companion.pet.core.vision.VisionAnalyzer
+import cn.companion.pet.core.vision.VisionModelConfig
 import cn.companion.pet.core.memory.MemoryStore
 import cn.companion.pet.core.memory.NightlyStore
 import cn.companion.pet.core.probe.AtomicBudget
@@ -20,6 +33,8 @@ import cn.companion.pet.data.Stats
 import cn.companion.pet.net.ChatCompletionClient
 import cn.companion.pet.net.DeepSeekClient
 import cn.companion.pet.net.RecordingChatClient
+import cn.companion.pet.a11y.AndroidDeviceController
+import cn.companion.pet.a11y.AndroidShizukuProbe
 import cn.companion.pet.service.AndroidActionAdapters
 import cn.companion.pet.work.NightlyWorker
 import java.io.File
@@ -56,6 +71,24 @@ class PetApp : Application() {
     lateinit var thoughts: ThoughtNotes
         private set
     lateinit var actions: ActionRunner
+        private set
+    lateinit var deviceController: cn.companion.pet.core.device.DeviceController
+        private set
+    lateinit var agentTrace: AgentTraceStore
+        private set
+    lateinit var agentEventLedger: AgentEventLedger
+        private set
+    val screenObservations = ScreenObservationStore()
+    lateinit var goalStore: GoalStore
+        private set
+    lateinit var goalSupervisor: GoalSupervisor
+        private set
+    lateinit var goalCoordinator: GoalAgentCoordinator
+        private set
+    lateinit var pendingActions: PendingActionStore
+        private set
+    val visionAnalyzer by lazy { VisionAnalyzer(client) { visionConfig() } }
+    lateinit var agentLoop: AgentLoop
         private set
     lateinit var noteActions: cn.companion.pet.core.action.DurableNoteAdapter
         private set
@@ -104,6 +137,16 @@ class PetApp : Application() {
 
     fun invalidateKey() { keyLoaded = false }
 
+    private fun agentModelConfig(): AgentModelConfig? {
+        val key = apiKey() ?: return null
+        return AgentModelConfig(settings.endpoint, settings.model, key)
+    }
+
+    fun visionConfig(): VisionModelConfig? {
+        val key = apiKey() ?: return null
+        return VisionModelConfig(settings.endpoint, settings.visionModel, key)
+    }
+
     /** 记忆文件的读写都经过这把锁：服务、每晚整理、设置页编辑互斥。 */
     val memoryLock: Any get() = memory.lock
 
@@ -129,7 +172,27 @@ class PetApp : Application() {
                     getSystemService(android.os.PowerManager::class.java)?.isInteractive == true &&
                     getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == false
             })
+        deviceController = AndroidDeviceController(this, settings, AndroidShizukuProbe(this))
         actions = AndroidActionAdapters.build(this)
+        agentTrace = AgentTraceStore(memory.root)
+        agentEventLedger = AgentEventLedger(memory.root)
+        goalStore = GoalStore(memory.root)
+        goalSupervisor = GoalSupervisor(goalStore)
+        pendingActions = PendingActionStore(memory.root)
+        // agentLoop 在下方 actions 之后初始化；这里用 lazy 不行，放到 agentLoop 初始化后。
+        
+        agentLoop = AgentLoop(
+            source = ModelAgentDecisionSource(client) { agentModelConfig() },
+            runner = actions,
+            budget = object : AgentBudgetPort {
+                override fun reserve(day: String) = budget.reserve(settings.dailyLimit, day)
+                override fun remaining(day: String) = budget.remaining(settings.dailyLimit, day)
+            },
+            trace = agentTrace,
+            planner = actionPlanner,
+            pending = pendingActions,
+        )
+        goalCoordinator = GoalAgentCoordinator(goalStore, goalSupervisor, agentLoop)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
         // 旧 today.md 只在第一次启动迁移一次；迁移有备份且幂等。

@@ -24,6 +24,7 @@ class EventLog(
     private val nightlyDir = File(root, "nightly")
     private val lock = cn.companion.pet.core.storage.DurableFiles.mutex(eventsDir)
     private val monthFormat = DateTimeFormatter.ofPattern("yyyy-MM")
+    private val listeners = java.util.concurrent.CopyOnWriteArrayList<(CompanionEvent) -> Unit>()
 
     init {
         eventsDir.mkdirs()
@@ -83,6 +84,15 @@ class EventLog(
             repairTruncatedTail(file)
             file.appendText(EventJson.encodeToString(CompanionEvent.serializer(), event) + "\n")
         }
+        notifyListeners(event)
+    }
+
+    fun addListener(listener: (CompanionEvent) -> Unit) { listeners += listener }
+
+    fun removeListener(listener: (CompanionEvent) -> Unit) { listeners -= listener }
+
+    private fun notifyListeners(event: CompanionEvent) {
+        listeners.forEach { runCatching { it(event) } }
     }
 
     /** Stable tool receipts are repairable after interruption without duplicating their NOTE. */
@@ -97,6 +107,7 @@ class EventLog(
             out.write((EventJson.encodeToString(CompanionEvent.serializer(), event) + "\n").toByteArray(Charsets.UTF_8))
             out.fd.sync()
         }
+        notifyListeners(event)
         event
     }
 

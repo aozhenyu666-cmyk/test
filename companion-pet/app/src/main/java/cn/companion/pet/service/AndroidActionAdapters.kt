@@ -60,6 +60,7 @@ object AndroidActionAdapters {
 
     fun build(app: PetApp): ActionRunner {
         val reader = VisibleMemoryReader(app.memory, app.events, app.facts)
+        val device = cn.companion.pet.core.device.DeviceActionAdapter(app.deviceController)
         val speechAdapter by lazy { SpeechActionAdapter(app.speech, enabled = { app.settings.ttsEnabled }) }
         return ActionRunner(mapOf(
             ActionKind.READ_MEMORY to adapter { request, cancellation ->
@@ -106,6 +107,14 @@ object AndroidActionAdapters {
                 if (!userPresent(app)) ActionResult(request.id, request.kind, ActionStatus.CANCELLED, "屏幕已锁定，未提交播报")
                 else speechAdapter.execute(request, cancellation)
             },
+            ActionKind.GET_DEVICE_STATE to device,
+            ActionKind.FIND_NODE to device,
+            ActionKind.OPEN_APP to device,
+            ActionKind.TAP_NODE to device,
+            ActionKind.SCROLL to device,
+            ActionKind.INPUT_TEXT to device,
+            ActionKind.BACK to device,
+            ActionKind.GET_LAST_OBSERVATION to device,
         ), journal = FileActionJournal(java.io.File(app.memory.root, "action-journal")))
     }
 }

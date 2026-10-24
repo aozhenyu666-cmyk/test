@@ -2,7 +2,12 @@ package cn.companion.pet.net
 
 enum class ChatRole { SYSTEM, USER, ASSISTANT }
 
-data class ChatMessage(val role: ChatRole, val content: String)
+data class ChatMessage(
+    val role: ChatRole,
+    val content: String,
+    /** JPEG data URL；为空时仍发送普通字符串 content，兼容旧接口。 */
+    val imageDataUrls: List<String> = emptyList(),
+)
 
 data class ChatRequest(
     val endpoint: String,
