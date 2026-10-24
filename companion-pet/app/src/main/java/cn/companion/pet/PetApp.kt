@@ -26,6 +26,8 @@ import cn.companion.pet.data.SecretStore
 import cn.companion.pet.data.Settings
 import cn.companion.pet.data.Stats
 import cn.companion.pet.net.DeepSeekClient
+import cn.companion.pet.a11y.AndroidDeviceController
+import cn.companion.pet.a11y.AndroidShizukuProbe
 import cn.companion.pet.service.AndroidActionAdapters
 import cn.companion.pet.work.NightlyWorker
 import java.io.File
@@ -62,6 +64,8 @@ class PetApp : Application() {
     lateinit var thoughts: ThoughtNotes
         private set
     lateinit var actions: ActionRunner
+        private set
+    lateinit var deviceController: cn.companion.pet.core.device.DeviceController
         private set
     lateinit var agentTrace: AgentTraceStore
         private set
@@ -151,6 +155,7 @@ class PetApp : Application() {
                     getSystemService(android.os.PowerManager::class.java)?.isInteractive == true &&
                     getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == false
             })
+        deviceController = AndroidDeviceController(this, settings, AndroidShizukuProbe(this))
         actions = AndroidActionAdapters.build(this)
         agentTrace = AgentTraceStore(memory.root)
         agentEventLedger = AgentEventLedger(memory.root)

@@ -17,6 +17,14 @@ object AgentPrompt {
         - SAVE_NOTE：保存用户明确要求记下的念头。参数 {"text":"..."}，需要真实 source_id
         - OPEN_ASSISTANT：打开已配置的 AI App。参数 {"target":"GEMINI|CHATGPT|QWEN"}，需要真实 source_id
         - SPEAK：朗读文字。参数 {"text":"..."}，需要真实 source_id
+        - GET_DEVICE_STATE：读取前台/锁屏/无障碍/Shizuku 状态
+        - FIND_NODE：在最近一次合法观察中查找控件。参数 {"query":"..."}
+        - OPEN_APP：打开授权名单内已安装应用。参数 {"package":"..."}
+        - TAP_NODE：点击最近观察里的节点。参数 {"node_id":"..."}
+        - SCROLL：滚动最近观察里的节点。参数 {"node_id":"...","forward":"true"}
+        - INPUT_TEXT：向授权输入框写普通文字。参数 {"node_id":"...","text":"..."}
+        - BACK：请求系统返回
+        - GET_LAST_OBSERVATION：读取未过期的最近观察
         规则：
         1. 只依据下面给出的场景、记忆摘要、素材标题和事件 ID；不要编造屏幕内容、聊天记录或工具结果。
         2. 只读工具可以在自主模式下直接执行；写入、打开外部 App、朗读都只会被记录为“需要确认”，不会自动做。

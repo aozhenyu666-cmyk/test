@@ -61,6 +61,8 @@ class Settings(context: Context) {
     /** 视觉模型单独配置；默认 deepseek-flash，截图上传必须显式打开。 */
     var visionModel by str("vision_model", "deepseek-flash")
     var visionUploadEnabled by bool("vision_upload", false)
+    /** A3：允许 Agent 操作的应用名单；空名单时全部拒绝。 */
+    var deviceAllowedApps by set("device_apps")
     var geminiAutoSend by bool("gemini_auto_send", false)
     var ttsEnabled by bool("tts", false)
     var petPaused by bool("paused", false)

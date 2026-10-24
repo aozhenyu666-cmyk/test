@@ -111,7 +111,10 @@ data class AgentTurnResult(
 data class AgentAuthorization(val allowed: Boolean, val requiresConfirmation: Boolean, val reason: String)
 
 object AgentPolicy {
-    private val readOnly = setOf(ActionKind.READ_MEMORY, ActionKind.READ_MATERIALS)
+    private val readOnly = setOf(
+        ActionKind.READ_MEMORY, ActionKind.READ_MATERIALS,
+        ActionKind.GET_DEVICE_STATE, ActionKind.FIND_NODE, ActionKind.GET_LAST_OBSERVATION,
+    )
 
     fun authorize(
         decision: AgentDecision.ToolCall,
@@ -159,6 +162,14 @@ object AgentReport {
             ActionKind.SAVE_NOTE -> "我把这个念头记下了。"
             ActionKind.OPEN_ASSISTANT -> "我打开了 " + (decision.args["target"] ?: "AI 应用") + "，但只能算系统接受了请求。"
             ActionKind.SPEAK -> "我提交了朗读；成功只代表系统引擎接受，不代表你已经听到。"
+            ActionKind.GET_DEVICE_STATE -> "设备状态：" + (result.data["foreground"] ?: result.reason)
+            ActionKind.FIND_NODE -> "找到：" + (result.data.values.firstOrNull() ?: result.reason)
+            ActionKind.OPEN_APP -> "我请求打开应用；需要重新观察确认前台。"
+            ActionKind.TAP_NODE -> "我点了控件；需要重新观察确认结果。"
+            ActionKind.SCROLL -> "我滚动了页面；需要重新观察确认结果。"
+            ActionKind.INPUT_TEXT -> "我写入了文字；需要重新观察确认输入框。"
+            ActionKind.BACK -> "我请求返回；需要重新观察确认前台。"
+            ActionKind.GET_LAST_OBSERVATION -> "最近观察：" + result.reason
         }
     }
 
@@ -178,5 +189,13 @@ object AgentReport {
         ActionKind.SAVE_NOTE -> "保存念头"
         ActionKind.OPEN_ASSISTANT -> "打开 AI 应用"
         ActionKind.SPEAK -> "朗读"
+        ActionKind.GET_DEVICE_STATE -> "读取设备状态"
+        ActionKind.FIND_NODE -> "查找控件"
+        ActionKind.OPEN_APP -> "打开应用"
+        ActionKind.TAP_NODE -> "点击控件"
+        ActionKind.SCROLL -> "滚动页面"
+        ActionKind.INPUT_TEXT -> "输入文字"
+        ActionKind.BACK -> "返回"
+        ActionKind.GET_LAST_OBSERVATION -> "读取最近观察"
     }
 }

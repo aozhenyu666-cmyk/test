@@ -95,6 +95,23 @@ fun SettingsTab(context: Context) {
         ) { agentOn = it; s.agentAutonomy = it }
         AgentTracePreview()
         ScreenDiagnosticSection(context)
+        Section("设备操作（A3）")
+        val shizuku = remember { cn.companion.pet.a11y.AndroidShizukuProbe(context) }
+        var shizukuText by remember { mutableStateOf(shizuku.diagnostic().detail.ifBlank { shizuku.diagnostic().status.name }) }
+        Text("Shizuku 只用于状态/授权，不执行任意 Shell。未安装/未运行时，Intent 和无障碍动作仍可用。", style = MaterialTheme.typography.bodySmall)
+        Text("Shizuku：" + shizukuText, style = MaterialTheme.typography.bodySmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { shizukuText = shizuku.diagnostic().detail }, enabled = !shizukuText.contains("请求")) {
+                Text("刷新状态")
+            }
+            OutlinedButton(onClick = {
+                shizuku.requestPermission()
+                shizukuText = "已打开系统授权；请刷新状态"
+            }) { Text("请求权限") }
+        }
+        AppListRow(context, "允许 Agent 操作的应用", "空名单时拒绝所有设备动作；只打开/点击/输入这些应用。", s.deviceAllowedApps) {
+            s.deviceAllowedApps = it
+        }
         Section("搭话用的模型")
         Text("桌宠主动开口、想一想、整理记忆都用这里的模型。点一下填好常用服务商，Key 要换成对应服务商的。", style = MaterialTheme.typography.bodySmall)
         var endpoint by remember { mutableStateOf(s.endpoint) }
