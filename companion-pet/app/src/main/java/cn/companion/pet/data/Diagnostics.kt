@@ -64,6 +64,14 @@ object Diagnostics {
         append("机型：").append(Build.MANUFACTURER).append(' ').append(Build.MODEL)
             .append("，Android ").append(Build.VERSION.RELEASE).append(" (SDK ").append(Build.VERSION.SDK_INT).append(")\n")
         append("无障碍此刻已连上：").append(accessibilityConnected).append('\n')
+        val battery = runCatching {
+            context.getSystemService(android.os.PowerManager::class.java)?.isIgnoringBatteryOptimizations(context.packageName)
+        }.getOrNull()
+        append("电池不受限制：").append(battery?.toString() ?: "未知").append('\n')
+        (context.applicationContext as? cn.companion.pet.PetApp)?.let { app ->
+            runCatching { app.visionSetup().label() }.getOrNull()?.let { append("看图状态：").append(it).append('\n') }
+            runCatching { app.visionEvidence.last()?.label() }.getOrNull()?.let { append("上次看一眼：").append(it).append('\n') }
+        }
         append("\n最近的进程退出（新的在前）：\n")
         val exits = recentExits(context, 8)
         if (exits.isEmpty()) append("（系统没有记录）\n")

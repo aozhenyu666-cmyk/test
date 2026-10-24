@@ -19,6 +19,12 @@ data class DiagnosticInputs(
     val goalStatus: String,
     val pendingCount: Int,
     val lastAction: String,
+    /** 看图状态一行（不含 Key），例如“已配置：qwen-vl-plus @ dashscope.aliyuncs.com（用视觉 Key）”。 */
+    val visionSetup: String = "",
+    /** 最近一次看一眼的证据（类型/大小/指纹/结论），不含图片或回复原文。 */
+    val lastVision: String = "",
+    /** 是否已免除电池优化（null = 读不到）。国产机不免除时后台服务容易被清理。 */
+    val batteryUnrestricted: Boolean? = null,
 )
 
 /** 可复制的脱敏诊断：不含 Key、截图/Base64、聊天原文、输入文本或密码。 */
@@ -30,6 +36,9 @@ object DiagnosticReport {
         appendLine("无障碍：" + yesNo(input.accessibilityConnected))
         appendLine("截图：" + input.screenshotStatus + (if (input.screenshotReason.isBlank()) "" else " · " + input.screenshotReason))
         appendLine("视觉模型已配置：" + yesNo(input.visionConfigured) + "；上传开关：" + yesNo(input.visionUploadEnabled))
+        if (input.visionSetup.isNotBlank()) appendLine("看图状态：" + input.visionSetup)
+        appendLine("上次看一眼：" + input.lastVision.ifBlank { "无记录" })
+        appendLine("电池不受限制：" + (input.batteryUnrestricted?.let(::yesNo) ?: "未知"))
         appendLine("今日剩余模型预算：" + input.budgetRemaining)
         appendLine("前台：" + (input.foregroundPackage ?: "unknown") + "；在白名单：" + yesNo(input.foregroundAllowed))
         appendLine("Shizuku：" + input.shizukuStatus + "；固定能力：" + input.capabilityStatus + (if (input.capabilityReason.isBlank()) "" else " · " + input.capabilityReason))

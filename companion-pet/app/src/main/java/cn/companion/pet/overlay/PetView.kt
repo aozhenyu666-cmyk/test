@@ -22,6 +22,10 @@ import kotlin.math.sin
  * 待机 24 帧，做动作时 60 帧；不可见时停止绘制以省电。
  */
 class PetView(context: Context) : View(context) {
+    init {
+        // 读屏和验收脚本靠这个找到桌宠（悬浮窗位置会变，不能用固定坐标）。
+        contentDescription = "桌宠"
+    }
 
     var mood: Mood = Mood.IDLE
         set(value) { field = value; kick() }

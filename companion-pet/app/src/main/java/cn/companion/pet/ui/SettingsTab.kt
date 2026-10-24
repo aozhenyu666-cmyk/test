@@ -51,6 +51,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
@@ -90,240 +93,291 @@ import kotlinx.coroutines.withContext
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
 fun SettingsTab(context: Context) {
+    var group by rememberSaveable { mutableIntStateOf(0) }
+    Column(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = CompanionSpacing.page, vertical = 8.dp)) {
+            PageHeader("设置", "按分区找：看图的 Key 在“模型与看图”，允许名单和 Shizuku 在“设备与权限”。改动保存后立即生效。")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                SETTINGS_GROUPS.forEachIndexed { i, label ->
+                    val tag = Modifier.testTag("settings_group_" + i)
+                    if (i == group) Button(onClick = {}, modifier = tag) { Text(label) }
+                    else OutlinedButton(onClick = { group = i }, modifier = tag) { Text(label) }
+                }
+            }
+        }
+        HorizontalDivider()
+        // 每个分区各自记住滚动位置。
+        key(group) {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = CompanionSpacing.page, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                when (group) {
+                    0 -> { ModelSettings(context); ScreenDiagnosticSection(context) }
+                    1 -> DeviceSettings(context)
+                    2 -> { AutonomySettings(); GoalSection(); PendingActionSection() }
+                    3 -> CompanionSettings(context)
+                    else -> { DiagnosticSection(context); DebugSettings(context) }
+                }
+            }
+        }
+    }
+}
+
+private val SETTINGS_GROUPS = listOf("模型与看图", "设备与权限", "自主与目标", "陪伴", "诊断")
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun ModelSettings(context: Context) {
     val app = PetApp.instance
     val s = app.settings
     val scope = rememberCoroutineScope()
     fun toast(t: String) = Toast.makeText(context, t, Toast.LENGTH_SHORT).show()
-
-    Column(
-        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = CompanionSpacing.page, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        PageHeader("设置", "连接、陪伴、感知、深聊、表现。改动保存后立即生效。")
-        Section("能力")
-        OutlinedButton(onClick = { context.startActivity(Intent(context, cn.companion.pet.CapabilityActivity::class.java)) }) {
-            Text("打开能力面板")
+    Section("搭话用的模型")
+    Text("桌宠主动开口、想一想、整理记忆都用这里的模型。点一下填好常用服务商，Key 要换成对应服务商的。", style = MaterialTheme.typography.bodySmall)
+    var endpoint by remember { mutableStateOf(s.endpoint) }
+    var model by remember { mutableStateOf(s.model) }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        ModelProvider.entries.forEach { p ->
+            OutlinedButton(onClick = { endpoint = p.endpoint; model = p.model }) { Text(p.shortLabel) }
         }
-        Section("自主模式（实验）")
-        var agentOn by remember { mutableStateOf(s.agentAutonomy) }
-        Toggle(
-            "让模型自己决定用一次工具",
-            "开启后，新素材或用户念头会触发一次模型决策。只自动执行读取记忆/素材；保存念头、打开 AI 应用、朗读只记为需要确认，不会自动做。每次决策都记入下方轨迹。默认关，会消耗一次每日模型额度。",
-            agentOn,
-        ) { agentOn = it; s.agentAutonomy = it }
-        AgentTracePreview()
-        ScreenDiagnosticSection(context)
-        Section("设备操作（A3）")
-        val shizuku = remember { AndroidShizukuProbe(context) }
-        val capability = remember { ShizukuCapabilityRunner(shizuku, AndroidShizukuCommandPort()) }
-        var shizukuText by remember { mutableStateOf(shizuku.diagnostic().detail.ifBlank { shizuku.diagnostic().status.name }) }
-        Text("Shizuku 只用于状态/授权，不执行任意 Shell。未安装/未运行时，Intent 和无障碍动作仍可用。", style = MaterialTheme.typography.bodySmall)
-        Text("Shizuku：" + shizukuText, style = MaterialTheme.typography.bodySmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { shizukuText = shizuku.diagnostic().detail }, enabled = !shizukuText.contains("请求")) {
-                Text("刷新状态")
-            }
-            OutlinedButton(onClick = {
-                shizuku.requestPermission()
-                shizukuText = "已打开系统授权；请刷新状态"
-            }) { Text("请求权限") }
-            OutlinedButton(onClick = {
-                scope.launch {
-                    val r = withContext(Dispatchers.IO) { capability.readSdkDiagnostic() }
-                    shizukuText = "固定 Binder 能力：" + r.status.name + (if (r.value.isBlank()) "" else " · 版本 " + r.value) + (if (r.reason.isBlank()) "" else " · " + r.reason)
-                }
-            }) { Text("读取 Shizuku 版本") }
-        }
-        AppListRow(context, "允许 Agent 操作的应用", "空名单时拒绝所有设备动作；只打开/点击/输入这些应用。", s.deviceAllowedApps) {
-            s.deviceAllowedApps = it
-        }
-        GoalSection()
-        PendingActionSection()
-        DiagnosticSection(context)
-        Section("搭话用的模型")
-        Text("桌宠主动开口、想一想、整理记忆都用这里的模型。点一下填好常用服务商，Key 要换成对应服务商的。", style = MaterialTheme.typography.bodySmall)
-        var endpoint by remember { mutableStateOf(s.endpoint) }
-        var model by remember { mutableStateOf(s.model) }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            ModelProvider.entries.forEach { p ->
-                OutlinedButton(onClick = { endpoint = p.endpoint; model = p.model }) { Text(p.shortLabel) }
-            }
-        }
-        var key by remember { mutableStateOf("") }
-        var limit by remember { mutableStateOf(s.dailyLimit.toString()) }
-        OutlinedTextField(endpoint, { endpoint = it }, Modifier.fillMaxWidth(), label = { Text("接口地址（OpenAI 兼容）") }, singleLine = true,
-            isError = !EndpointPolicy.isValid(endpoint))
-        OutlinedTextField(model, { model = it }, Modifier.fillMaxWidth(), label = { Text("模型名") }, singleLine = true)
-        OutlinedTextField(key, { key = it }, Modifier.fillMaxWidth(), label = { Text(if (app.apiKey() != null) "API Key（已保存，留空不改）" else "API Key") },
-            singleLine = true, visualTransformation = PasswordVisualTransformation())
-        NumberField("每日调用上限", limit) { limit = it }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
-                if (!EndpointPolicy.isValid(endpoint)) { toast("接口地址要是 https 开头"); return@Button }
-                if (endpoint.trim() != s.endpoint || model.trim() != s.model || key.isNotBlank()) app.callStatus.clear()
-                s.endpoint = endpoint.trim(); s.model = model.trim()
-                s.dailyLimit = limit.toIntOrNull()?.coerceIn(1, 2000) ?: s.dailyLimit
-                if (key.isNotBlank()) {
-                    val k = key
-                    scope.launch {
-                        val r = withContext(Dispatchers.IO) { app.secrets.save(k) }
-                        app.invalidateKey()
-                        toast(if (r == SecretWriteResult.Success) "已保存" else "Key 保存失败")
-                        key = ""
-                    }
-                } else toast("已保存")
-            }) { Text("保存") }
-            OutlinedButton(onClick = {
-                scope.launch { withContext(Dispatchers.IO) { app.secrets.clear() }; app.invalidateKey(); app.callStatus.clear(); toast("已清除 Key") }
-            }) { Text("清除 Key") }
-            // 用已保存的地址/模型/Key 真发一次很短的请求，失败时直接告诉原因。
-            OutlinedButton(onClick = {
-                val savedKey = app.apiKey()
-                if (savedKey == null) { toast("先填 Key 并点保存"); return@OutlinedButton }
-                toast("正在测试 ${s.model}…")
-                scope.launch {
-                    val today = java.time.LocalDate.now().toString()
-                    val reserved = withContext(Dispatchers.IO) { app.budget.reserve(s.dailyLimit, today) }
-                    if (!reserved) { toast("今天的调用额度用完了，明天再测"); return@launch }
-                    app.stats.add(Stats.Kind.API_CALLS)
-                    val result = app.client.complete(
-                        ChatRequest(s.endpoint, s.model, savedKey, listOf(ChatMessage(ChatRole.USER, "只回复两个字：在呢")), maxTokens = 64, timeoutMillis = 20_000L),
-                    )
-                    val text = if (result is ChatResult.Success) "连接正常（${s.model}）" else "没连上：" + CallDiagnosis.describe(result)
-                    Toast.makeText(context, text, Toast.LENGTH_LONG).show()
-                }
-            }) { Text("测试连接") }
-        }
-
-        Section("开口节奏")
-        var minI by remember { mutableStateOf(s.minIntervalMin.toString()) }
-        var maxI by remember { mutableStateOf(s.maxIntervalMin.toString()) }
-        var qs by remember { mutableStateOf((s.quietStartMin / 60).toString()) }
-        var qe by remember { mutableStateOf((s.quietEndMin / 60).toString()) }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            NumberField("最短间隔（分钟）", minI, Modifier.weight(1f)) { minI = it }
-            NumberField("最长间隔（分钟）", maxI, Modifier.weight(1f)) { maxI = it }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            NumberField("安静开始（点）", qs, Modifier.weight(1f)) { qs = it }
-            NumberField("安静结束（点）", qe, Modifier.weight(1f)) { qe = it }
-        }
-        Button(onClick = {
-            s.minIntervalMin = minI.toIntOrNull()?.coerceIn(1, 120) ?: s.minIntervalMin
-            s.maxIntervalMin = maxI.toIntOrNull()?.coerceIn(s.minIntervalMin, 240) ?: s.maxIntervalMin
-            s.quietStartMin = (qs.toIntOrNull()?.coerceIn(0, 23) ?: 0) * 60
-            s.quietEndMin = (qe.toIntOrNull()?.coerceIn(0, 23) ?: 7) * 60
-            toast("已保存")
-        }) { Text("保存节奏") }
-
-        var heartbeat by remember { mutableStateOf(s.heartbeatEnabled) }
-        var hbInterval by remember { mutableStateOf(s.heartbeatIntervalMin.toString()) }
-        Toggle("防跑马模式（锁屏心跳）", "锁屏期间定时轻轻震一下，亮屏后它问你刚才在想什么。默认关。", heartbeat) {
-            heartbeat = it; s.heartbeatEnabled = it
-        }
-        if (heartbeat) NumberField("心跳间隔（分钟）", hbInterval) {
-            hbInterval = it; it.toIntOrNull()?.let { v -> s.heartbeatIntervalMin = v.coerceIn(5, 120) }
-        }
-
-        Section("App 名单")
-        Text("名单留空也能用：游荡靠切换频率判断，学习靠屏幕上有没有大段正文。", style = MaterialTheme.typography.bodySmall)
-        AppListRow(context, "学习 App", "前台是这些时按学习场景聊屏幕内容", s.learningApps) { s.learningApps = it }
-        AppListRow(context, "信息流 App", "前台是这些时只聊状态，不聊内容", s.feedApps) { s.feedApps = it }
-        AppListRow(context, "专注 App", "连续用 15 分钟以上，开口间隔翻倍", s.focusApps) { s.focusApps = it }
-        AppListRow(context, "排除 App", "前台是这些时不开口、不读屏", s.excludeApps) { s.excludeApps = it }
-
-        Section("深聊用哪个 AI")
-        val assistants = remember { Assistants(context, s) }
-        var chosen by remember { mutableStateOf(assistants.current) }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            AssistantApp.entries.forEach { a ->
-                val selected = a == chosen
-                if (selected) Button(onClick = {}) { Text(a.label) }
-                else OutlinedButton(onClick = { chosen = a; s.assistant = a.name }) { Text(a.label) }
-            }
-        }
-        val found = remember(chosen) { chosen.resolve(assistants.installed(), assistants.override(chosen)) }
-        Text(
-            if (found != null) "已找到 ${chosen.label}：$found" else "没在手机上找到 ${chosen.label}。装了的话，在下面填它的包名。",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        var pkg by remember(chosen) { mutableStateOf(assistants.override(chosen)) }
-        OutlinedTextField(pkg, { pkg = it; assistants.setOverride(chosen, it.trim()) }, Modifier.fillMaxWidth(),
-            label = { Text("${chosen.label} 包名（留空自动找）") }, singleLine = true)
-        var auto by remember { mutableStateOf(s.geminiAutoSend) }
-        Toggle("自动发送（实验）", "打开 AI App 后用无障碍自动粘贴并点发送；3 秒找不到输入框就退回手动粘贴。", auto) {
-            auto = it; s.geminiAutoSend = it
-        }
-
-        Section("AI 会话")
-        Text("和 Gemini、ChatGPT 或千问聊天时，桌宠头上会出现蓝色的 G。文字深聊中切到别的 App，它先倒计时提醒，到点把你拉回原来的对话；“一起看”本来就要切出去看东西，只记录不拉回。点桌宠可以随时结束会话。",
-            style = MaterialTheme.typography.bodySmall)
-        var autoStart by remember { mutableStateOf(s.sessionAutoStart) }
-        Toggle("打开 AI App 自动开始", "自己打开 Gemini / ChatGPT / 千问 停留 ${s.sessionAutoStartSec} 秒，就算开始一次会话。从桌宠点“去 …”会直接开始。", autoStart) {
-            autoStart = it; s.sessionAutoStart = it
-        }
-        var pull by remember { mutableStateOf(s.sessionPullBack) }
-        Toggle("切出去时拉回", "关掉后只记录离开次数，不倒计时、不拉回。", pull) { pull = it; s.sessionPullBack = it }
-        var grace by remember { mutableStateOf(s.sessionGraceSec.toString()) }
-        var allowedGrace by remember { mutableStateOf(s.sessionAllowedGraceSec.toString()) }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            NumberField("宽限（秒）", grace, Modifier.weight(1f)) {
-                grace = it; it.toIntOrNull()?.let { v -> s.sessionGraceSec = v.coerceIn(3, 600) }
-            }
-            NumberField("允许的 App 宽限（秒）", allowedGrace, Modifier.weight(1f)) {
-                allowedGrace = it; it.toIntOrNull()?.let { v -> s.sessionAllowedGraceSec = v.coerceIn(3, 3600) }
-            }
-        }
-        AppListRow(context, "会话中允许的 App", "切到这些 App（如笔记、词典、要复制资料的阅读器）宽限更长；学习 App 也算", s.sessionAllowedApps) {
-            s.sessionAllowedApps = it
-        }
-
-        Section("想一想")
-        var skimOn by remember { mutableStateOf(s.skimEnabled) }
-        Toggle("划过留痕", "滑动时把经过的段落记在内存里，点桌宠 → 想一想 → 划过了啥，就能回看。只留 10 分钟、熄屏就清空，不存文件；信息流 App、排除 App 和 AI App 里不记。", skimOn) {
-            skimOn = it; s.skimEnabled = it
-        }
-
-        Section("其他")
-        var tts by remember { mutableStateOf(s.ttsEnabled) }
-        Toggle("语音播报", "用系统 TTS 念出它说的话。默认关，机械音会破坏伴生感。", tts) {
-            tts = it; s.ttsEnabled = it
-            if (!it) app.stopSpeech()
-        }
-        var sysVoice by remember { mutableStateOf(s.systemVoice) }
-        Toggle("用系统语音识别（实验）",
-            "默认关：按住角色时弹出输入框，点输入法上的话筒说话（比如豆包输入法），更稳。打开后改用系统语音识别；在后台或没有识别服务时会失败，失败时会说明原因。",
-            sysVoice) { sysVoice = it; s.systemVoice = it }
-
-        Section("连续性")
-        var continuity by remember { mutableStateOf(s.continuityEnabled) }
-        Toggle(
-            "按相关召回 + 结构化记忆",
-            "打开后，上下文只带与当前话题相关的记忆和最近交流，不再把整份档案塞进去；关掉则回到旧路径。默认关，先在调试里验证。",
-            continuity,
-        ) { continuity = it; s.continuityEnabled = it }
-
-        Section("人设")
-        var persona by remember { mutableStateOf("") }
-        LaunchedEffect(Unit) { persona = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { app.memory.persona() } } }
-        OutlinedTextField(persona, { persona = it }, Modifier.fillMaxWidth().heightIn(min = 160.dp), label = { Text("persona.md") })
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
-                val text = persona
-                scope.launch { withContext(Dispatchers.IO) { synchronized(app.memoryLock) { app.memory.savePersona(text) } }; toast("人设已保存") }
-            }) { Text("保存人设") }
-            OutlinedButton(onClick = {
-                scope.launch {
-                    persona = withContext(Dispatchers.IO) {
-                        synchronized(app.memoryLock) { app.memory.savePersona(""); app.memory.persona() }
-                    }
-                }
-            }) { Text("恢复默认") }
-        }
-
-        Section("调试")
-        OutlinedButton(onClick = { NightlyWorker.runNow(context); toast("已排队，联网时会整理一次") }) { Text("现在整理一次记忆") }
     }
+    var key by remember { mutableStateOf("") }
+    var limit by remember { mutableStateOf(s.dailyLimit.toString()) }
+    OutlinedTextField(endpoint, { endpoint = it }, Modifier.fillMaxWidth(), label = { Text("接口地址（OpenAI 兼容）") }, singleLine = true,
+        isError = !EndpointPolicy.isValid(endpoint))
+    OutlinedTextField(model, { model = it }, Modifier.fillMaxWidth(), label = { Text("模型名") }, singleLine = true)
+    OutlinedTextField(key, { key = it }, Modifier.fillMaxWidth(), label = { Text(if (app.apiKey() != null) "API Key（已保存，留空不改）" else "API Key") },
+        singleLine = true, visualTransformation = PasswordVisualTransformation())
+    NumberField("每日调用上限", limit) { limit = it }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = {
+            if (!EndpointPolicy.isValid(endpoint)) { toast("接口地址要是 https 开头"); return@Button }
+            if (endpoint.trim() != s.endpoint || model.trim() != s.model || key.isNotBlank()) app.callStatus.clear()
+            s.endpoint = endpoint.trim(); s.model = model.trim()
+            s.dailyLimit = limit.toIntOrNull()?.coerceIn(1, 2000) ?: s.dailyLimit
+            if (key.isNotBlank()) {
+                val k = key
+                scope.launch {
+                    val r = withContext(Dispatchers.IO) { app.secrets.save(k) }
+                    app.invalidateKey()
+                    toast(if (r == SecretWriteResult.Success) "已保存" else "Key 保存失败")
+                    key = ""
+                }
+            } else toast("已保存")
+        }) { Text("保存") }
+        OutlinedButton(onClick = {
+            scope.launch { withContext(Dispatchers.IO) { app.secrets.clear() }; app.invalidateKey(); app.callStatus.clear(); toast("已清除 Key") }
+        }) { Text("清除 Key") }
+        // 用已保存的地址/模型/Key 真发一次很短的请求，失败时直接告诉原因。
+        OutlinedButton(onClick = {
+            val savedKey = app.apiKey()
+            if (savedKey == null) { toast("先填 Key 并点保存"); return@OutlinedButton }
+            toast("正在测试 ${s.model}…")
+            scope.launch {
+                val today = java.time.LocalDate.now().toString()
+                val reserved = withContext(Dispatchers.IO) { app.budget.reserve(s.dailyLimit, today) }
+                if (!reserved) { toast("今天的调用额度用完了，明天再测"); return@launch }
+                app.stats.add(Stats.Kind.API_CALLS)
+                val result = app.client.complete(
+                    ChatRequest(s.endpoint, s.model, savedKey, listOf(ChatMessage(ChatRole.USER, "只回复两个字：在呢")), maxTokens = 64, timeoutMillis = 20_000L),
+                )
+                val text = if (result is ChatResult.Success) "连接正常（${s.model}）" else "没连上：" + CallDiagnosis.describe(result)
+                Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+            }
+        }) { Text("测试连接") }
+    }
+
+}
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun DeviceSettings(context: Context) {
+    val s = PetApp.instance.settings
+    val scope = rememberCoroutineScope()
+    Section("能力")
+    OutlinedButton(onClick = { context.startActivity(Intent(context, cn.companion.pet.CapabilityActivity::class.java)) }) {
+        Text("打开能力面板")
+    }
+    Section("设备操作")
+    val shizuku = remember { AndroidShizukuProbe(context) }
+    val capability = remember { ShizukuCapabilityRunner(shizuku, AndroidShizukuCommandPort()) }
+    var shizukuText by remember { mutableStateOf(shizuku.diagnostic().detail.ifBlank { shizuku.diagnostic().status.name }) }
+    Text("Shizuku 只用于状态/授权，不执行任意 Shell。未安装/未运行时，Intent 和无障碍动作仍可用。", style = MaterialTheme.typography.bodySmall)
+    Text("Shizuku：" + shizukuText, style = MaterialTheme.typography.bodySmall)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { shizukuText = shizuku.diagnostic().detail }, enabled = !shizukuText.contains("请求")) {
+            Text("刷新状态")
+        }
+        OutlinedButton(onClick = {
+            shizuku.requestPermission()
+            shizukuText = "已打开系统授权；请刷新状态"
+        }) { Text("请求权限") }
+        OutlinedButton(onClick = {
+            scope.launch {
+                val r = withContext(Dispatchers.IO) { capability.readSdkDiagnostic() }
+                shizukuText = "固定 Binder 能力：" + r.status.name + (if (r.value.isBlank()) "" else " · 版本 " + r.value) + (if (r.reason.isBlank()) "" else " · " + r.reason)
+            }
+        }) { Text("读取 Shizuku 版本") }
+    }
+    AppListRow(context, "允许 Agent 操作的应用", "空名单时拒绝所有设备动作（这是有意的）；只打开/点击/输入这些应用。测试时放一个专用的测试 App，不要放系统设置、应用商店、银行或支付类 App。", s.deviceAllowedApps) {
+        s.deviceAllowedApps = it
+    }
+}
+
+@Composable
+private fun AutonomySettings() {
+    val s = PetApp.instance.settings
+    Section("自主模式（实验）")
+    var agentOn by remember { mutableStateOf(s.agentAutonomy) }
+    Toggle(
+        "让模型自己决定用一次工具",
+        "开启后，新素材或用户念头会触发一次模型决策。只自动执行读取记忆/素材；保存念头、打开 AI 应用、朗读只记为需要确认，不会自动做。每次决策都记入下方轨迹。默认关，会消耗一次每日模型额度。",
+        agentOn,
+    ) { agentOn = it; s.agentAutonomy = it }
+    AgentTracePreview()
+}
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun CompanionSettings(context: Context) {
+    val app = PetApp.instance
+    val s = app.settings
+    val scope = rememberCoroutineScope()
+    fun toast(t: String) = Toast.makeText(context, t, Toast.LENGTH_SHORT).show()
+    Section("开口节奏")
+    var minI by remember { mutableStateOf(s.minIntervalMin.toString()) }
+    var maxI by remember { mutableStateOf(s.maxIntervalMin.toString()) }
+    var qs by remember { mutableStateOf((s.quietStartMin / 60).toString()) }
+    var qe by remember { mutableStateOf((s.quietEndMin / 60).toString()) }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        NumberField("最短间隔（分钟）", minI, Modifier.weight(1f)) { minI = it }
+        NumberField("最长间隔（分钟）", maxI, Modifier.weight(1f)) { maxI = it }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        NumberField("安静开始（点）", qs, Modifier.weight(1f)) { qs = it }
+        NumberField("安静结束（点）", qe, Modifier.weight(1f)) { qe = it }
+    }
+    Button(onClick = {
+        s.minIntervalMin = minI.toIntOrNull()?.coerceIn(1, 120) ?: s.minIntervalMin
+        s.maxIntervalMin = maxI.toIntOrNull()?.coerceIn(s.minIntervalMin, 240) ?: s.maxIntervalMin
+        s.quietStartMin = (qs.toIntOrNull()?.coerceIn(0, 23) ?: 0) * 60
+        s.quietEndMin = (qe.toIntOrNull()?.coerceIn(0, 23) ?: 7) * 60
+        toast("已保存")
+    }) { Text("保存节奏") }
+
+    var heartbeat by remember { mutableStateOf(s.heartbeatEnabled) }
+    var hbInterval by remember { mutableStateOf(s.heartbeatIntervalMin.toString()) }
+    Toggle("防跑马模式（锁屏心跳）", "锁屏期间定时轻轻震一下，亮屏后它问你刚才在想什么。默认关。", heartbeat) {
+        heartbeat = it; s.heartbeatEnabled = it
+    }
+    if (heartbeat) NumberField("心跳间隔（分钟）", hbInterval) {
+        hbInterval = it; it.toIntOrNull()?.let { v -> s.heartbeatIntervalMin = v.coerceIn(5, 120) }
+    }
+
+    Section("App 名单")
+    Text("名单留空也能用：游荡靠切换频率判断，学习靠屏幕上有没有大段正文。", style = MaterialTheme.typography.bodySmall)
+    AppListRow(context, "学习 App", "前台是这些时按学习场景聊屏幕内容", s.learningApps) { s.learningApps = it }
+    AppListRow(context, "信息流 App", "前台是这些时只聊状态，不聊内容", s.feedApps) { s.feedApps = it }
+    AppListRow(context, "专注 App", "连续用 15 分钟以上，开口间隔翻倍", s.focusApps) { s.focusApps = it }
+    AppListRow(context, "排除 App", "前台是这些时不开口、不读屏", s.excludeApps) { s.excludeApps = it }
+
+    Section("深聊用哪个 AI")
+    val assistants = remember { Assistants(context, s) }
+    var chosen by remember { mutableStateOf(assistants.current) }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        AssistantApp.entries.forEach { a ->
+            val selected = a == chosen
+            if (selected) Button(onClick = {}) { Text(a.label) }
+            else OutlinedButton(onClick = { chosen = a; s.assistant = a.name }) { Text(a.label) }
+        }
+    }
+    val found = remember(chosen) { chosen.resolve(assistants.installed(), assistants.override(chosen)) }
+    Text(
+        if (found != null) "已找到 ${chosen.label}：$found" else "没在手机上找到 ${chosen.label}。装了的话，在下面填它的包名。",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    var pkg by remember(chosen) { mutableStateOf(assistants.override(chosen)) }
+    OutlinedTextField(pkg, { pkg = it; assistants.setOverride(chosen, it.trim()) }, Modifier.fillMaxWidth(),
+        label = { Text("${chosen.label} 包名（留空自动找）") }, singleLine = true)
+    var auto by remember { mutableStateOf(s.geminiAutoSend) }
+    Toggle("自动发送（实验）", "打开 AI App 后用无障碍自动粘贴并点发送；3 秒找不到输入框就退回手动粘贴。", auto) {
+        auto = it; s.geminiAutoSend = it
+    }
+
+    Section("AI 会话")
+    Text("和 Gemini、ChatGPT 或千问聊天时，桌宠头上会出现蓝色的 G。文字深聊中切到别的 App，它先倒计时提醒，到点把你拉回原来的对话；“一起看”本来就要切出去看东西，只记录不拉回。点桌宠可以随时结束会话。",
+        style = MaterialTheme.typography.bodySmall)
+    var autoStart by remember { mutableStateOf(s.sessionAutoStart) }
+    Toggle("打开 AI App 自动开始", "自己打开 Gemini / ChatGPT / 千问 停留 ${s.sessionAutoStartSec} 秒，就算开始一次会话。从桌宠点“去 …”会直接开始。", autoStart) {
+        autoStart = it; s.sessionAutoStart = it
+    }
+    var pull by remember { mutableStateOf(s.sessionPullBack) }
+    Toggle("切出去时拉回", "关掉后只记录离开次数，不倒计时、不拉回。", pull) { pull = it; s.sessionPullBack = it }
+    var grace by remember { mutableStateOf(s.sessionGraceSec.toString()) }
+    var allowedGrace by remember { mutableStateOf(s.sessionAllowedGraceSec.toString()) }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        NumberField("宽限（秒）", grace, Modifier.weight(1f)) {
+            grace = it; it.toIntOrNull()?.let { v -> s.sessionGraceSec = v.coerceIn(3, 600) }
+        }
+        NumberField("允许的 App 宽限（秒）", allowedGrace, Modifier.weight(1f)) {
+            allowedGrace = it; it.toIntOrNull()?.let { v -> s.sessionAllowedGraceSec = v.coerceIn(3, 3600) }
+        }
+    }
+    AppListRow(context, "会话中允许的 App", "切到这些 App（如笔记、词典、要复制资料的阅读器）宽限更长；学习 App 也算", s.sessionAllowedApps) {
+        s.sessionAllowedApps = it
+    }
+
+    Section("想一想")
+    var skimOn by remember { mutableStateOf(s.skimEnabled) }
+    Toggle("划过留痕", "滑动时把经过的段落记在内存里，点桌宠 → 想一想 → 划过了啥，就能回看。只留 10 分钟、熄屏就清空，不存文件；信息流 App、排除 App 和 AI App 里不记。", skimOn) {
+        skimOn = it; s.skimEnabled = it
+    }
+
+    Section("其他")
+    var tts by remember { mutableStateOf(s.ttsEnabled) }
+    Toggle("语音播报", "用系统 TTS 念出它说的话。默认关，机械音会破坏伴生感。", tts) {
+        tts = it; s.ttsEnabled = it
+        if (!it) app.stopSpeech()
+    }
+    var sysVoice by remember { mutableStateOf(s.systemVoice) }
+    Toggle("用系统语音识别（实验）",
+        "默认关：按住角色时弹出输入框，点输入法上的话筒说话（比如豆包输入法），更稳。打开后改用系统语音识别；在后台或没有识别服务时会失败，失败时会说明原因。",
+        sysVoice) { sysVoice = it; s.systemVoice = it }
+
+    Section("连续性")
+    var continuity by remember { mutableStateOf(s.continuityEnabled) }
+    Toggle(
+        "按相关召回 + 结构化记忆",
+        "打开后，上下文只带与当前话题相关的记忆和最近交流，不再把整份档案塞进去；关掉则回到旧路径。默认关，先在调试里验证。",
+        continuity,
+    ) { continuity = it; s.continuityEnabled = it }
+
+    Section("人设")
+    var persona by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) { persona = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { app.memory.persona() } } }
+    OutlinedTextField(persona, { persona = it }, Modifier.fillMaxWidth().heightIn(min = 160.dp), label = { Text("persona.md") })
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = {
+            val text = persona
+            scope.launch { withContext(Dispatchers.IO) { synchronized(app.memoryLock) { app.memory.savePersona(text) } }; toast("人设已保存") }
+        }) { Text("保存人设") }
+        OutlinedButton(onClick = {
+            scope.launch {
+                persona = withContext(Dispatchers.IO) {
+                    synchronized(app.memoryLock) { app.memory.savePersona(""); app.memory.persona() }
+                }
+            }
+        }) { Text("恢复默认") }
+    }
+
+}
+
+@Composable
+private fun DebugSettings(context: Context) {
+    fun toast(t: String) = Toast.makeText(context, t, Toast.LENGTH_SHORT).show()
+    Section("调试")
+    OutlinedButton(onClick = { NightlyWorker.runNow(context); toast("已排队，联网时会整理一次") }) { Text("现在整理一次记忆") }
 }
 
 @Composable
@@ -423,9 +477,22 @@ private fun ScreenDiagnosticSection(context: Context) {
     var busy by remember { mutableStateOf(false) }
     var visionSummary by remember { mutableStateOf<String?>(null) }
     var upload by remember { mutableStateOf(app.settings.visionUploadEnabled) }
-    GroupTitle("看一眼（诊断）")
-    Text("要让它看某个 App：在那个 App 里点一下桌宠 → “看一眼”。在这里点只能用来检查截图权限：此刻前台是桌宠自己，会被拒绝。截图只在本机显示，不落盘；打开下面的开关才会发给视觉模型。", style = MaterialTheme.typography.bodySmall)
-    // 视觉服务可以和搭话分开：搭话用 DeepSeek、看图用千问。地址/Key 留空就沿用搭话的。
+    var setupTick by remember { mutableIntStateOf(0) }
+    var setupLabel by remember { mutableStateOf("读取中…") }
+    var lastLook by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(setupTick) {
+        setupLabel = withContext(Dispatchers.IO) { app.visionSetup().label() }
+        lastLook = withContext(Dispatchers.IO) { app.visionEvidence.last() }?.let { e ->
+            java.time.Instant.ofEpochMilli(e.at).atZone(java.time.ZoneId.systemDefault()).toLocalTime().withNano(0).toString() + " " + e.label()
+        }
+    }
+    GroupTitle("看图（看一眼）")
+    Text("用法：在要看的 App 里点一下桌宠 → “看一眼”。它截一张图发给下面的视觉模型，回一句“我看了一眼：…”。", style = MaterialTheme.typography.bodySmall)
+    Text("看图状态：" + setupLabel, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("vision_status"))
+    Text("上传截图：" + (if (upload) "已允许" else "未允许（下面的开关）"), style = MaterialTheme.typography.bodySmall)
+    Text("上次看一眼：" + (lastLook ?: "还没有记录"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("vision_last"))
+    TextButton(onClick = { setupTick++ }) { Text("刷新状态") }
+    // 视觉服务可以和搭话分开：搭话用 DeepSeek、看图用千问。地址留空沿用搭话的；换了服务商要填它自己的 Key。
     var visionEndpoint by remember { mutableStateOf(app.settings.visionEndpoint) }
     var visionModel by remember { mutableStateOf(app.settings.visionModel) }
     var visionKey by remember { mutableStateOf("") }
@@ -442,7 +509,7 @@ private fun ScreenDiagnosticSection(context: Context) {
         label = { Text("视觉模型名（必填，例如 qwen-vl-plus）") })
     OutlinedTextField(visionKey, { visionKey = it }, Modifier.fillMaxWidth(), singleLine = true,
         visualTransformation = PasswordVisualTransformation(),
-        label = { Text("视觉 Key（留空 = 用搭话的 Key；已保存的不显示）") })
+        label = { Text("视觉 Key（看图和搭话不是同一家时必填；已保存的不显示）") })
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = {
             if (visionEndpoint.isNotBlank() && !EndpointPolicy.isValid(visionEndpoint)) {
@@ -455,19 +522,23 @@ private fun ScreenDiagnosticSection(context: Context) {
             scope.launch {
                 if (k.isNotBlank()) withContext(Dispatchers.IO) { app.visionSecrets.save(k) }
                 visionKey = ""
+                setupTick++
                 android.widget.Toast.makeText(context, "已保存看图设置", android.widget.Toast.LENGTH_SHORT).show()
             }
         }) { Text("保存看图设置") }
         TextButton(onClick = {
             scope.launch {
                 withContext(Dispatchers.IO) { app.visionSecrets.clear() }
-                android.widget.Toast.makeText(context, "已清除视觉 Key，改用搭话的 Key", android.widget.Toast.LENGTH_SHORT).show()
+                setupTick++
+                android.widget.Toast.makeText(context, "已清除视觉 Key", android.widget.Toast.LENGTH_SHORT).show()
             }
         }) { Text("清除视觉 Key") }
     }
     Toggle("允许把截图发给视觉模型", "默认关。打开后，仅在点击“看一眼”并成功截图后，按一次全局预算发送给视觉模型；排除/敏感窗口不上传。", upload) {
         upload = it; app.settings.visionUploadEnabled = it
     }
+    GroupTitle("截图权限检查")
+    Text("只检查本机能不能截图，不看别的 App：此刻前台是桌宠自己的设置页，会被拒绝（NO_ACTIVE_WINDOW），这是正常的。截图只在本机显示，不落盘。", style = MaterialTheme.typography.bodySmall)
     Button(enabled = !busy, onClick = {
         if (busy) return@Button
         busy = true
@@ -515,7 +586,7 @@ private fun ScreenDiagnosticSection(context: Context) {
             }
             busy = false
         }
-    }) { Text("看一眼（原生截图）") }
+    }) { Text("检查截图权限") }
     Text(status, style = MaterialTheme.typography.bodySmall)
     preview?.let { bmp ->
         Image(bmp.asImageBitmap(), contentDescription = "本机截图预览", modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp), contentScale = ContentScale.Fit)
@@ -559,6 +630,10 @@ private fun GoalSection() {
     app.goalStore.lastError?.let { Text("目标存储：" + it, style = MaterialTheme.typography.bodySmall) }
     if (app.goalStore.status == cn.companion.pet.core.goal.GoalStoreStatus.CORRUPT) {
         Text("目标文件损坏，已停止写入；不会把损坏当成空目标。", style = MaterialTheme.typography.bodySmall)
+    }
+    if (goals.isEmpty()) {
+        Text("还没有目标。在上面写一个并点“添加目标”，再给它加一步，它才会开始跟进。", style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.testTag("goals_empty"))
     }
     goals.forEach { goal ->
         GoalCard(goal, tasks.filter { it.goalId == goal.id }) { tick++ }
@@ -639,6 +714,10 @@ private fun PendingActionSection() {
         "点击、输入这类动作最好在气泡上确认：在这里确认时前台已经不是原来的 App，多半会被拒绝。", style = MaterialTheme.typography.bodySmall)
     message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     app.pendingActions.lastError?.let { Text("待确认存储：" + it, style = MaterialTheme.typography.bodySmall) }
+    if (items.none { it.status == PendingStatus.PENDING }) {
+        Text("现在没有要你确认的动作。打开“自主模式”并给目标加一个写步骤（比如“记念头”），它提议时会出现在这里。",
+            style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("pending_empty"))
+    }
     items.forEach { item ->
         Column(Modifier.fillMaxWidth()) {
             val label = when (item.status) {
@@ -725,6 +804,9 @@ private fun DiagnosticSection(context: Context) {
                     goalStatus = app.goalStore.status.name,
                     pendingCount = app.pendingActions.list(System.currentTimeMillis()).count { it.status == PendingStatus.PENDING },
                     lastAction = history?.let { it.kind.name + " " + (it.status?.name ?: "已准备") } ?: "无",
+                    visionSetup = app.visionSetup().label(),
+                    lastVision = app.visionEvidence.last()?.label().orEmpty(),
+                    batteryUnrestricted = runCatching { Permissions.batteryUnrestricted(context) }.getOrNull(),
                 ))
             }
             report = text

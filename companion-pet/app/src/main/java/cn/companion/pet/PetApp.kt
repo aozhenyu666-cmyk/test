@@ -149,14 +149,21 @@ class PetApp : Application() {
     val visionSecrets by lazy { SecretStore(this, "vision_secret_store", "companion-pet-vision-token") }
 
     /**
-     * 视觉配置：模型名必须由用户填（DeepSeek 搭话模型多半不能看图）；地址、Key 留空就沿用搭话的。
-     * 这样可以搭话用 DeepSeek、看图用千问。
+     * 视觉配置：模型名必须由用户填（DeepSeek 搭话模型多半不能看图）。
+     * 地址留空沿用搭话的；搭话 Key 只在看图和搭话是同一家时才沿用，换了服务商必须填视觉 Key。
      */
-    fun visionConfig(): VisionModelConfig? {
-        val model = settings.visionModel.trim().ifBlank { return null }
-        val key = (visionSecrets.read() as? SecretReadResult.Available)?.value ?: apiKey() ?: return null
-        return VisionModelConfig(settings.visionEndpoint.ifBlank { settings.endpoint }, model, key)
-    }
+    fun visionSetup(): cn.companion.pet.core.vision.VisionSetup = cn.companion.pet.core.vision.VisionSetupResolver.resolve(
+        visionModel = settings.visionModel,
+        visionEndpoint = settings.visionEndpoint,
+        chatEndpoint = settings.endpoint,
+        visionKey = (visionSecrets.read() as? SecretReadResult.Available)?.value,
+        chatKey = apiKey(),
+    )
+
+    fun visionConfig(): VisionModelConfig? = visionSetup().config
+
+    /** 最近一次看图的证据（不含图片/Key/回复原文）。 */
+    val visionEvidence by lazy { cn.companion.pet.data.VisionEvidencePrefs(this) }
 
     /** 记忆文件的读写都经过这把锁：服务、每晚整理、设置页编辑互斥。 */
     val memoryLock: Any get() = memory.lock

@@ -30,6 +30,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.testTagsAsResourceId
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.unit.dp
 import cn.companion.pet.ui.MemoryTab
 import cn.companion.pet.ui.SettingsTab
@@ -73,12 +77,14 @@ class MainActivity : ComponentActivity() {
         permissionLauncher.launch(perms.toTypedArray())
     }
 
+    @OptIn(ExperimentalComposeUiApi::class)
     @Composable
     private fun Root() {
         var tab by rememberSaveable { mutableIntStateOf(0) }
         val tabs = listOf("开始", "设置", "记忆", "统计")
         val colors = LocalCompanionColors.current
-        Scaffold(containerColor = colors.paper) { inner ->
+        // 让 testTag 出现在 uiautomator dump 的 resource-id 里，验收脚本按它找按钮，不靠坐标。
+        Scaffold(containerColor = colors.paper, modifier = Modifier.semantics { testTagsAsResourceId = true }) { inner ->
             Column(Modifier.padding(inner).fillMaxSize().imePadding().background(colors.paper)) {
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                     Eyebrow("COMPANION")
@@ -86,7 +92,7 @@ class MainActivity : ComponentActivity() {
                 }
                 Row(Modifier.fillMaxWidth().selectableGroup()) {
                     tabs.forEachIndexed { index, label ->
-                        TabItem(label, selected = tab == index, modifier = Modifier.weight(1f)) { tab = index }
+                        TabItem(label, selected = tab == index, modifier = Modifier.weight(1f).testTag("tab_" + index)) { tab = index }
                     }
                 }
                 HorizontalDivider(color = colors.rule)

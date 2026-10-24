@@ -199,7 +199,7 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
 
         GroupTitle("推荐")
         Step("麦克风和通知", "按住说话要用麦克风；通知用来常驻和快速暂停。", mic && notif) { activity.requestMic() }
-        Step("不限制电池", "关掉电池优化，后台才不容易被杀。", battery) { activity.startActivity(Permissions.batteryIntent(activity)) }
+        Step("不限制电池", "关掉电池优化，后台才不容易被杀。无障碍显示“此服务出现故障”、桌宠自己消失，多半是被系统清理了，先开这一项。", battery) { activity.startActivity(Permissions.batteryIntent(activity)) }
 
         GroupTitle(if (Permissions.isVivo()) "vivo / iQOO 还需要" else "国产系统还需要")
         SettingRow(

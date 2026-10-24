@@ -205,6 +205,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         app.actions.cancelAll() // 锁屏后按现有规则停止动作
         scheduler.onScreenOff()
         probeJob?.cancel()
+        lookJob?.cancel()
         voice.cancel()
         endConversation()
         endThink()
@@ -272,8 +273,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun escalate(c: Conversation, now: Long) {
         val age = now - c.shownAt
-        // 兜底：点开没说话 20 秒、或任何对话挂了 5 分钟，都自动收起
-        if ((c.userStarted && !c.interacting && age > 20_000) || age > 5 * 60_000L) {
+        // 兜底：点开没说话 45 秒（留够时间点菜单）、或任何对话挂了 5 分钟，都自动收起
+        if ((c.userStarted && !c.interacting && age > 45_000) || age > 5 * 60_000L) {
             endConversation()
             return
         }
@@ -300,7 +301,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun speak(stuck: Boolean, afterHeartbeat: Boolean = false, topic: Topic? = null) {
         val now = now()
-        if (probeJob?.isActive == true || convo != null || session != null || think != null || noteDraft != null) return
+        if (probeJob?.isActive == true || lookJob?.isActive == true || now() < lookNoticeUntil || convo != null || session != null || think != null || noteDraft != null) return
         heartbeatWaiting = false
 
         val key = apiKey()
@@ -363,7 +364,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             when {
                 reply == null -> scheduler.onSpoke(now()) // 失败或解析失败：静默，按正常节奏下次再来
                 reply.skip || ContentGuard.violates(reply.hookText) -> scheduler.retrySoon(now())
-                !active || convo != null -> scheduler.retrySoon(now())
+                !active || convo != null || lookJob?.isActive == true || now() < lookNoticeUntil -> scheduler.retrySoon(now())
                 else -> {
                     if (isWeighty) { weighty.markUsed(today); stats.add(Stats.Kind.WEIGHTY) }
                     rephraseNext = false
@@ -381,7 +382,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun maybeScanAgent(now: Long) {
         if (!settings.agentAutonomy || !active || settings.petPaused) return
-        if (probeJob?.isActive == true || convo != null || session != null || think != null || noteDraft != null) return
+        if (probeJob?.isActive == true || lookJob?.isActive == true || now() < lookNoticeUntil || convo != null || session != null || think != null || noteDraft != null) return
         if (!isUserActive() || scheduler.isQuiet(now)) return
         if (app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()) <= 0) return
         if (now - lastAgentScanAt < 1_000) return
@@ -483,11 +484,17 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
      * 从悬浮气泡触发：悬浮窗不是活动窗口，所以截到的是用户正在看的 App（审计 P1-3）。
      * 截图不落盘；只有用户打开了上传开关、预算够，才发给视觉模型，摘要作为 60 秒有效的观察。
      */
+    /** “看一眼”进行中：这段时间不主动开口，免得搭话气泡盖掉看图结果。 */
+    private var lookJob: Job? = null
+
     private fun lookOnce() {
         endConversation()
         if (android.os.Build.VERSION.SDK_INT < 30) { lookNotice("这台手机的系统版本太低，不能截图。"); return }
+        if (lookJob?.isActive == true) return
         overlay.setMood(Mood.THINKING)
-        scope.launch {
+        lookJob = scope.launch {
+            fun evidence(e: cn.companion.pet.core.vision.VisionEvidence) { runCatching { app.visionEvidence.record(e) } }
+            val startedAt = now()
             delay(350) // 先让气泡收起，别把它拍进去
             val attempt = withContext(Dispatchers.IO) {
                 val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
@@ -499,25 +506,40 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             }
             val jpeg = attempt.jpeg
             if (attempt.status != cn.companion.pet.core.vision.CapturedStatus.OK || jpeg == null) {
-                lookNotice("没截到：" + attempt.error.ifBlank { attempt.status.name }); return@launch
+                val why = attempt.error.ifBlank { attempt.status.name }
+                evidence(cn.companion.pet.core.vision.VisionEvidence(startedAt, cn.companion.pet.core.vision.VisionOutcome.CAPTURE_FAILED,
+                    failure = attempt.status.name))
+                lookNotice("没截到：$why"); return@launch
             }
             if (attempt.packageName in settings.excludeApps) { lookNotice("这个 App 在排除名单里，我不看。"); return@launch }
+            val setup = withContext(Dispatchers.IO) { app.visionSetup() }
             if (!settings.visionUploadEnabled) {
-                lookNotice("截到了，但还没允许把截图发给视觉模型（设置 → 看一眼）。"); return@launch
+                evidence(cn.companion.pet.core.vision.VisionEvidence(startedAt, cn.companion.pet.core.vision.VisionOutcome.UPLOAD_OFF,
+                    setup.model, setup.host))
+                lookNotice("截到了，但还没允许把截图发给视觉模型（设置 → 模型与看图）。"); return@launch
             }
-            if (withContext(Dispatchers.IO) { app.visionConfig() } == null) {
-                lookNotice("截到了，但还没选能看图的模型：设置 → 看一眼 → 点“千问看图”或填一个视觉模型名。"); return@launch
+            if (!setup.ready) {
+                evidence(cn.companion.pet.core.vision.VisionEvidence(startedAt, cn.companion.pet.core.vision.VisionOutcome.NOT_CONFIGURED,
+                    setup.model, setup.host, failure = setup.status.name))
+                lookNotice("截到了，但看图还没配好：" + setup.label().removePrefix("未配置：")); return@launch
             }
-            if (!app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) { lookNotice("今天的调用次数用完了。"); return@launch }
+            if (!app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
+                evidence(cn.companion.pet.core.vision.VisionEvidence(startedAt, cn.companion.pet.core.vision.VisionOutcome.BUDGET,
+                    setup.model, setup.host))
+                lookNotice("今天的调用次数用完了。"); return@launch
+            }
             stats.add(Stats.Kind.API_CALLS)
-            val askedAt = now()
-            val summary = withContext(Dispatchers.IO) { app.visionAnalyzer.analyze(jpeg) }
+            val run = withContext(Dispatchers.IO) { app.visionAnalyzer.analyzeDetailed(jpeg, attempt.width, attempt.height) }
+            evidence(run.evidence)
+            val summary = run.summary
             if (summary == null) {
                 // 说清楚是哪一步：请求失败（Key/模型名/网络）还是模型回了但看不懂。
-                val call = app.callStatus.last()?.takeIf { it.at >= askedAt }
                 lookNotice(
-                    if (call != null && !call.ok) "截图成功，但视觉模型调用失败：" + call.message
-                    else "截图成功，模型也回了，但内容没法解析。换一个视觉模型试试（比如 qwen-vl-plus）。",
+                    when (run.evidence.outcome) {
+                        cn.companion.pet.core.vision.VisionOutcome.REQUEST_FAILED -> "截图成功，但视觉模型调用失败：" + run.evidence.failure
+                        cn.companion.pet.core.vision.VisionOutcome.PARSE_FAILED -> "截图成功，模型也回了，但内容没法解析。换一个视觉模型试试（比如 qwen-vl-plus）。"
+                        else -> "截图成功，但看图没配好：" + run.evidence.failure
+                    },
                 )
                 return@launch
             }
@@ -529,11 +551,15 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 nodesAvailable = false, visionAvailable = true, status = cn.companion.pet.core.vision.CapturedStatus.OK,
                 summary = text, expiresAt = at + 60_000,
             ))
-            lookNotice("我看了一眼：" + summary.subject.ifBlank { "看不太清" })
+            lookNotice(LOOK_RESULT_PREFIX + summary.subject.ifBlank { "看不太清" })
         }
     }
 
+    /** 看图结果/失败原因显示期间也不主动开口。 */
+    private var lookNoticeUntil = 0L
+
     private fun lookNotice(text: String) {
+        lookNoticeUntil = now() + 6_500
         overlay.setMood(Mood.IDLE)
         overlay.showBubble(BubbleSpec(text, textOnly = true)) {
             handler.postDelayed({ if (convo == null && think == null && pendingBubbleId == null) overlay.hideBubble() }, 6000)
@@ -1450,6 +1476,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private fun now() = System.currentTimeMillis()
 
     companion object {
+        /** “看一眼”成功时气泡的开头；验收脚本靠它区分看图结果和普通搭话。 */
+        const val LOOK_RESULT_PREFIX = "我看了一眼："
         private val HHMM = DateTimeFormatter.ofPattern("HH:mm")
         private const val PROMPT_COUNTDOWN = "countdown"
         private const val PROMPT_ASK = "ask"
