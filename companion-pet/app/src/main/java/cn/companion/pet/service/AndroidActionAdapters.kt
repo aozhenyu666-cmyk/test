@@ -75,11 +75,20 @@ object AndroidActionAdapters {
                 ActionResult(request.id, request.kind, ActionStatus.SUCCESS, "读取到 ${lines.size} 条可见记忆", mapOf("text" to lines.joinToString("\n")))
             },
             ActionKind.READ_MATERIALS to adapter { request, cancellation ->
-                val text = synchronized(app.memoryLock) {
+                val (text, display) = synchronized(app.memoryLock) {
                     cancellation.throwIfCancelled()
-                    app.materialInbox.contextBlock(System.currentTimeMillis(), request.args["limit"]?.toIntOrNull() ?: 5, 4000)
+                    val now = System.currentTimeMillis()
+                    val limit = request.args["limit"]?.toIntOrNull() ?: 5
+                    val text = app.materialInbox.contextBlock(now, limit, 4000)
+                    val display = app.materialInbox.all(now).take(limit).joinToString("\n\n") { item ->
+                        listOf(item.title.ifBlank { "未命名素材" }, item.evidenceLabel(), item.url.orEmpty(),
+                            cn.companion.pet.core.text.UnicodeText.truncate(item.body, 500), item.note)
+                            .filter { it.isNotBlank() }.joinToString("\n")
+                    }.ifBlank { "还没有可见素材" }
+                    text to display
                 }
-                ActionResult(request.id, request.kind, ActionStatus.SUCCESS, "已读取当前可见素材及证据等级", mapOf("text" to text))
+                ActionResult(request.id, request.kind, ActionStatus.SUCCESS, "已读取当前可见素材及证据等级",
+                    mapOf("text" to text, "displayText" to display))
             },
             ActionKind.SAVE_NOTE to adapter { request, cancellation ->
                 val event = synchronized(app.memoryLock) {

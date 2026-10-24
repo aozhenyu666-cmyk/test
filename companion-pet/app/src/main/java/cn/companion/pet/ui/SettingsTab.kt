@@ -67,6 +67,10 @@ fun SettingsTab(context: Context) {
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         PageHeader("设置", "连接、陪伴、感知、深聊、表现。改动保存后立即生效。")
+        Section("能力")
+        OutlinedButton(onClick = { context.startActivity(Intent(context, cn.companion.pet.CapabilityActivity::class.java)) }) {
+            Text("打开能力面板")
+        }
         Section("搭话用的模型")
         Text("桌宠主动开口、想一想、整理记忆都用这里的模型。点一下填好常用服务商，Key 要换成对应服务商的。", style = MaterialTheme.typography.bodySmall)
         var endpoint by remember { mutableStateOf(s.endpoint) }

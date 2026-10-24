@@ -44,6 +44,8 @@
         android:theme="@style/Theme.CompanionPet"
         android:usesCleartextTraffic="false">
 
+        <activity android:name=".CapabilityActivity" android:exported="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

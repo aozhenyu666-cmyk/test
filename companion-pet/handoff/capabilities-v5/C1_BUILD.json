@@ -1,0 +1,11 @@
+{
+  "version": "0.3.5",
+  "versionCode": 8,
+  "tests": 250,
+  "failures": 0,
+  "lintErrors": 0,
+  "lintWarnings": 20,
+  "upgradeGuardTests": 3,
+  "deviceTests": "NOT_EXECUTED",
+  "apkSha256": "0e38c6d4c09145f6f691eda656370d21b3f5c7434400efb8988c781a995e57e4"
+}
