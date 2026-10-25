@@ -51,6 +51,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.key
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.testTag
@@ -93,18 +94,25 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * 设置（右上角进入，不占主导航）：权限、模型与看图、陪伴、设备、诊断。
+ * 记忆/目标/技能/人设/统计这些“它自己的东西”在“我的”里。
+ */
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
-fun SettingsTab(context: Context) {
-    var group by rememberSaveable { mutableIntStateOf(0) }
+fun SettingsScreen(activity: cn.companion.pet.MainActivity, resumeTick: Int, group: Int, onGroup: (Int) -> Unit, onBack: () -> Unit) {
+    val context: Context = activity
     Column(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = CompanionSpacing.page, vertical = 8.dp)) {
-            PageHeader("设置", "按分区找：看图的 Key 在“模型与看图”，允许名单和 Shizuku 在“设备与权限”。改动保存后立即生效。")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onBack, modifier = Modifier.testTag("settings_back")) { Text("‹ 返回") }
+                Text("设置", style = MaterialTheme.typography.titleLarge, color = LocalCompanionColors.current.ink)
+            }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 SETTINGS_GROUPS.forEachIndexed { i, label ->
                     val tag = Modifier.testTag("settings_group_" + i)
                     if (i == group) Button(onClick = {}, modifier = tag, shape = CompanionShapes.button) { Text(label) }
-                    else OutlinedButton(onClick = { group = i }, modifier = tag, shape = CompanionShapes.button) { Text(label) }
+                    else OutlinedButton(onClick = { onGroup(i) }, modifier = tag, shape = CompanionShapes.button) { Text(label) }
                 }
             }
         }
@@ -116,18 +124,36 @@ fun SettingsTab(context: Context) {
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 when (group) {
-                    0 -> { ModelSettings(context); ScreenDiagnosticSection(context) }
-                    1 -> DeviceSettings(context)
-                    2 -> { AutonomySettings(); GoalSection(); PendingActionSection() }
-                    3 -> CompanionSettings(context)
-                    else -> { DiagnosticSection(context); DebugSettings(context) }
+                    SETTINGS_PERMISSIONS -> PermissionsSection(activity, resumeTick)
+                    SETTINGS_MODELS -> { ModelSettings(context); ScreenDiagnosticSection(context) }
+                    SETTINGS_COMPANION -> CompanionSettings(context)
+                    SETTINGS_DEVICE -> DeviceSettings(context)
+                    else -> {
+                        CrashReportSection(activity)
+                        GroupTitle("决策轨迹")
+                        AgentTracePreview()
+                        DiagnosticSection(context)
+                        DebugSettings(context)
+                    }
                 }
             }
         }
     }
 }
 
-private val SETTINGS_GROUPS = listOf("模型与看图", "设备与权限", "自主与目标", "陪伴", "诊断")
+/** 崩溃/卡死/被系统杀的报告：真机出问题时一键复制发给开发者。 */
+@Composable
+private fun CrashReportSection(activity: cn.companion.pet.MainActivity) {
+    val a11yConnected by cn.companion.pet.a11y.PerceptionHub.connected.collectAsState()
+    GroupTitle("崩溃与退出记录")
+    Text("包含崩溃堆栈、系统给出的退出原因、版本和机型；不含聊天、屏幕文字或 Key。", style = MaterialTheme.typography.bodySmall)
+    Button(onClick = {
+        val text = cn.companion.pet.data.Diagnostics.report(activity, a11yConnected)
+        val cm = activity.getSystemService(ClipboardManager::class.java)
+        cm?.setPrimaryClip(ClipData.newPlainText("同桌诊断", text))
+        Toast.makeText(activity, "诊断信息已复制，粘贴发给开发者即可", Toast.LENGTH_SHORT).show()
+    }, shape = CompanionShapes.button) { Text("复制诊断信息") }
+}
 
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
@@ -240,20 +266,19 @@ private fun DeviceSettings(context: Context) {
     AppListRow(context, "允许 Agent 操作的应用", "空名单时拒绝所有设备动作（这是有意的）；只打开/点击/输入这些应用。测试时放一个专用的测试 App，不要放系统设置、应用商店、银行或支付类 App。", s.deviceAllowedApps) {
         s.deviceAllowedApps = it
     }
-    SkillsSection(context)
+    Text("技能、目标、待确认在“我的”里。", style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable
-private fun AutonomySettings() {
+internal fun AutonomySettings() {
     val s = PetApp.instance.settings
-    Section("自主模式（实验）")
+    Section("让它自己动手（实验）")
     var agentOn by remember { mutableStateOf(s.agentAutonomy) }
     Toggle(
         "让模型自己决定用一次工具",
-        "开启后，新素材或用户念头会触发一次模型决策。只自动执行读取记忆/素材；保存念头、打开 AI 应用、朗读只记为需要确认，不会自动做。每次决策都记入下方轨迹。默认关，会消耗一次每日模型额度。",
+        "开启后，新素材或用户念头会触发一次模型决策。只自动执行读取记忆/素材；保存念头、打开 AI 应用、朗读只记为需要确认，不会自动做。每次决策都记在 设置 → 诊断 → 决策轨迹。默认关，会消耗一次每日模型额度。",
         agentOn,
     ) { agentOn = it; s.agentAutonomy = it }
-    AgentTracePreview()
 }
 
 @Composable
@@ -370,8 +395,16 @@ private fun CompanionSettings(context: Context) {
         "打开后，上下文只带与当前话题相关的记忆和最近交流，不再把整份档案塞进去；关掉则回到旧路径。默认关，先在调试里验证。",
         continuity,
     ) { continuity = it; s.continuityEnabled = it }
+}
 
-    Section("人设")
+/** 人设（persona.md）：在“我的 → 人设”里编辑。 */
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+internal fun PersonaSection(context: Context) {
+    val app = PetApp.instance
+    val scope = rememberCoroutineScope()
+    fun toast(t: String) = Toast.makeText(context, t, Toast.LENGTH_SHORT).show()
+    Text("它说话的口气、关心什么、不碰什么，都写在这里。留空恢复默认。", style = MaterialTheme.typography.bodySmall)
     var persona by remember { mutableStateOf("") }
     LaunchedEffect(Unit) { persona = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { app.memory.persona() } } }
     OutlinedTextField(persona, { persona = it }, Modifier.fillMaxWidth().heightIn(min = 160.dp), label = { Text("persona.md") })
@@ -665,7 +698,7 @@ private fun ScreenDiagnosticSection(context: Context) {
 /** 技能：固定步骤，按元素回放（参考 JARVIS Skills v3）。点/写的步骤在桌宠上挑元素录，这里管理和补简单步骤。 */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SkillsSection(context: Context) {
+internal fun SkillsSection(context: Context) {
     val app = PetApp.instance
     val scope = rememberCoroutineScope()
     var tick by remember { mutableIntStateOf(0) }
@@ -676,7 +709,7 @@ private fun SkillsSection(context: Context) {
     fun io(block: () -> Unit) = scope.launch { withContext(Dispatchers.IO) { block() }; tick++ }
     GroupTitle("技能")
     Text("把常用操作存成固定步骤，一键重放。录法：在要用的 App 里点桌宠 → 技能 → 录新技能，再一步步点桌宠挑要点的按钮/要写的输入框（会边录边帮你做）。" +
-        "回放时按元素找，找不到就停下并告诉你哪一步，不会乱点。只能操作“允许 Agent 操作的应用”里的 App。", style = MaterialTheme.typography.bodySmall)
+        "回放时按元素找，找不到就停下并告诉你哪一步，不会乱点。只能操作 设置 → 设备 →“允许 Agent 操作的应用”里的 App。", style = MaterialTheme.typography.bodySmall)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(name, { name = it }, Modifier.weight(1f), label = { Text("新技能名字") }, singleLine = true)
         Button(onClick = {
@@ -726,7 +759,7 @@ private fun SkillsSection(context: Context) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
                     val launcher = app.skillLauncher
-                    message = if (launcher == null) "先在“开始”页启动桌宠，技能由桌宠来跑。" else {
+                    message = if (launcher == null) "先在“今天”页启动桌宠，技能由桌宠来跑。" else {
                         launcher(skill.id); "已交给桌宠运行「${skill.name}」：进度看桌宠气泡，点桌宠可以停。"
                     }
                 }, enabled = skill.steps.isNotEmpty()) { Text("▶ 运行") }
@@ -749,7 +782,7 @@ private fun SkillsSection(context: Context) {
 }
 
 @Composable
-private fun GoalSection() {
+internal fun GoalSection() {
     val app = PetApp.instance
     val scope = rememberCoroutineScope()
     var tick by remember { mutableIntStateOf(0) }
@@ -854,7 +887,7 @@ private fun GoalCard(goal: Goal, tasks: List<cn.companion.pet.core.goal.Task>, c
 }
 
 @Composable
-private fun PendingActionSection() {
+internal fun PendingActionSection() {
     val app = PetApp.instance
     val scope = rememberCoroutineScope()
     var tick by remember { mutableIntStateOf(0) }

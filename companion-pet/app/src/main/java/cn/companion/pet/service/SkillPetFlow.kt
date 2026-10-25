@@ -230,7 +230,7 @@ class SkillPetFlow(
         recordingId = null
         scope.launch {
             val skill = withContext(Dispatchers.IO) { store.get(id) }
-            notice(if (skill == null) "没找到这个技能。" else "已保存「${skill.name}」，共 ${skill.steps.size} 步。点我 → 技能 → ▶ 就能重放；设置 → 设备与权限 里可以调整。")
+            notice(if (skill == null) "没找到这个技能。" else "已保存「${skill.name}」，共 ${skill.steps.size} 步。点我 → 技能 → ▶ 就能重放；“我的 → 技能”里可以调整。")
         }
     }
 

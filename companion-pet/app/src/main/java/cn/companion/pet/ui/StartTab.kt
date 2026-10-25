@@ -60,23 +60,22 @@ private data class StartSnapshot(
     val lastExit: cn.companion.pet.data.Diagnostics.Exit? = null,
 )
 
-/** 首次引导 + 当前状态。每一行都能直接跳到系统里对应的设置页。 */
+/**
+ * 今天：状态、启动/暂停、快捷入口、最近交流。权限和设置不在这里铺开：
+ * 还差什么只显示一张小卡，点一下打开设置里对应的分区。
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun StartTab(activity: MainActivity, resumeTick: Int) {
+fun StartTab(activity: MainActivity, resumeTick: Int, openSettings: (Int) -> Unit, openMine: (Int) -> Unit) {
     val app = PetApp.instance
     val colors = LocalCompanionColors.current
     // resumeTick 变化时重新计算
     val overlay = remember(resumeTick) { Permissions.overlay(activity) }
     val a11y = remember(resumeTick) { Permissions.accessibility(activity) }
-    val mic = remember(resumeTick) { Permissions.mic(activity) }
-    val notif = remember(resumeTick) { Permissions.notifications(activity) }
-    val battery = remember(resumeTick) { Permissions.batteryUnrestricted(activity) }
     var snapshot by remember { mutableStateOf(StartSnapshot()) }
     val hasKey = snapshot.hasKey
     var running by remember(resumeTick) { mutableStateOf(PetService.running) }
     var paused by remember(resumeTick) { mutableStateOf(app.settings.petPaused) }
-    val a11yConnected by PerceptionHub.connected.collectAsState()
     // 服务可能由看门狗/开机/升级在页面停留期间拉起，静态 running 不会触发重组。
     // 每秒对齐一次，避免出现“角色已在屏幕上，状态却写着已停止”。
     LaunchedEffect(resumeTick) {
@@ -126,7 +125,7 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
             .padding(horizontal = CompanionSpacing.page, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        PageHeader("今天", hint)
+        PageHeader("今天", hint.takeIf { it != "一切就绪。" })
         HeroPanel {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -157,16 +156,9 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
             snapshot.lastExit?.let { exit ->
                 val time = java.time.Instant.ofEpochMilli(exit.at).atZone(java.time.ZoneId.systemDefault())
                     .format(java.time.format.DateTimeFormatter.ofPattern("M月d日 HH:mm"))
-                Text("上次异常退出：$time · ${exit.reason}", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 4.dp))
+                Text("上次异常退出：$time · ${exit.reason}（设置 → 诊断 可复制报告）", style = MaterialTheme.typography.bodySmall,
+                    color = colors.danger, modifier = Modifier.padding(top = 4.dp).clickable { openSettings(SETTINGS_DIAGNOSTICS) })
             }
-            // 真机出问题时不用连电脑：复制崩溃堆栈、系统退出原因、版本和机型，发给开发者。
-            androidx.compose.material3.TextButton(onClick = {
-                val text = cn.companion.pet.data.Diagnostics.report(activity, a11yConnected)
-                val cm = activity.getSystemService(android.content.ClipboardManager::class.java)
-                cm.setPrimaryClip(android.content.ClipData.newPlainText("同桌诊断", text))
-                Toast.makeText(activity, "诊断信息已复制，粘贴发给开发者即可", Toast.LENGTH_SHORT).show()
-            }) { Text("复制诊断信息") }
             FlowRow(
                 Modifier.padding(top = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -201,58 +193,38 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
             }
         }
 
-        WaveArt(Modifier.padding(top = 6.dp), height = 56.dp)
+        // 还差的设置：一张小卡，点哪项就去设置里对应的分区。
+        val gaps = buildList {
+            if (!overlay) add(SetupGap("悬浮窗权限", SETTINGS_PERMISSIONS))
+            if (!a11y) add(SetupGap("无障碍服务", SETTINGS_PERMISSIONS))
+            if (!hasKey) add(SetupGap("模型 Key", SETTINGS_MODELS))
+        }
+        if (gaps.isNotEmpty()) {
+            Panel {
+                Text("还差 ${gaps.size} 项设置", style = MaterialTheme.typography.titleSmall, color = colors.ink)
+                FlowRow(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    gaps.forEach { gap ->
+                        OutlinedButton(shape = CompanionShapes.button, onClick = { openSettings(gap.settingsGroup) }) { Text(gap.label + " →") }
+                    }
+                }
+            }
+        }
+
+        WaveArt(Modifier.padding(top = 6.dp), height = 48.dp)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            QuickCard("看一眼", "截图 / 视觉", Modifier.weight(1f)) {
+            QuickCard("看一眼", "截图问它", Modifier.weight(1f)) {
                 Toast.makeText(activity, "到要看的 App 里点桌宠 → 看一眼", Toast.LENGTH_SHORT).show()
             }
             QuickCard("记念头", "一句话留下", Modifier.weight(1f)) {
                 Toast.makeText(activity, "点桌宠 → 记个念头", Toast.LENGTH_SHORT).show()
             }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            QuickCard("技能", "一键重放操作", Modifier.weight(1f)) { openMine(MINE_SKILLS) }
             QuickCard("去 AI", "带上下文深聊", Modifier.weight(1f)) {
                 Toast.makeText(activity, "点桌宠 → 去 " + (cn.companion.pet.core.session.AssistantApp.entries.firstOrNull { it.name == app.settings.assistant }?.label ?: "AI"), Toast.LENGTH_SHORT).show()
             }
         }
-        Panel {
-            Text("接下来", style = MaterialTheme.typography.titleMedium, color = colors.ink)
-            Text("先确认权限；权限齐了以后，它会自己决定什么时候开口。", style = MaterialTheme.typography.bodySmall, color = colors.ink2, modifier = Modifier.padding(top = 6.dp))
-        }
-
-        GroupTitle("必需")
-        Step("悬浮窗", "让角色显示在其他 App 上面。", overlay) { activity.startActivity(Permissions.overlayIntent(activity)) }
-        Step(
-            "无障碍服务",
-            "只用来知道前台是哪个 App、有没有在滚动；学习场景开口前读一次屏幕文字。" +
-                "如果开关是灰的：到“应用详情 → 右上角 ⋮ → 允许受限制的设置”，再回来开。" +
-                if (a11y && !a11yConnected) "（已打开，但服务还没连上，可以关掉再打开一次）" else "",
-            a11y,
-        ) { activity.startActivity(Permissions.accessibilityIntent()) }
-
-        GroupTitle("推荐")
-        Step("麦克风和通知", "按住说话要用麦克风；通知用来常驻和快速暂停。", mic && notif) { activity.requestMic() }
-        Step("不限制电池", "关掉电池优化，后台才不容易被杀。无障碍显示“此服务出现故障”、桌宠自己消失，多半是被系统清理了，先开这一项。", battery) { activity.startActivity(Permissions.batteryIntent(activity)) }
-
-        GroupTitle(if (Permissions.isVivo()) "vivo / iQOO 还需要" else "国产系统还需要")
-        SettingRow(
-            "允许自启动 / 后台高耗电",
-            "i 管家 → 应用管理 → 权限管理 → 自启动，打开“桌宠”；电池 → 后台耗电管理，选“允许后台高耗电”。",
-            value = "去设置",
-            onClick = {
-                if (!Permissions.tryStart(activity, Permissions.vivoAutoStartIntents())) {
-                    activity.startActivity(Permissions.appDetails(activity))
-                }
-            },
-        )
-        SettingRow(
-            "后台弹出界面",
-            "应用详情 → 权限 → 后台弹出界面 → 允许。不开的话，点“去 Gemini”时可能拉不起来。",
-            value = "应用详情",
-            onClick = { activity.startActivity(Permissions.appDetails(activity)) },
-        )
-        SettingRow(
-            "在最近任务里锁定",
-            "打开最近任务，按住“桌宠”的卡片往下拉（或点锁形图标），锁住后一键清理不会杀掉它。",
-        )
 
         GroupTitle("最近交流")
         if (recent.isEmpty()) {
@@ -265,16 +237,6 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
             }
         }
     }
-}
-
-@Composable
-private fun Step(title: String, desc: String, done: Boolean, onFix: () -> Unit) {
-    SettingRow(
-        title = title,
-        description = desc,
-        value = if (done) "已开启" else "未开启",
-        onClick = if (done) null else onFix,
-    )
 }
 
 @Composable

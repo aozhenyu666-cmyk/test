@@ -4,6 +4,7 @@ import android.Manifest
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -24,9 +25,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -37,10 +40,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.unit.dp
-import cn.companion.pet.ui.MemoryTab
-import cn.companion.pet.ui.SettingsTab
+import cn.companion.pet.ui.MINE_MEMORY
+import cn.companion.pet.ui.MineTab
+import cn.companion.pet.ui.SETTINGS_PERMISSIONS
+import cn.companion.pet.ui.SettingsScreen
 import cn.companion.pet.ui.StartTab
-import cn.companion.pet.ui.StatsTab
 import cn.companion.pet.ui.components.Eyebrow
 import cn.companion.pet.ui.theme.CompanionMotion
 import cn.companion.pet.ui.theme.CompanionTheme
@@ -77,35 +81,52 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalComposeUiApi::class)
     @Composable
     private fun Root() {
+        // 主导航只有“今天 / 我的”；设置放在右上角，打开后是单独一页，返回键回来。
         var tab by rememberSaveable { mutableIntStateOf(0) }
-        val tabs = listOf("今天", "设置", "记忆", "统计")
+        var mineSection by rememberSaveable { mutableIntStateOf(MINE_MEMORY) }
+        var settingsOpen by rememberSaveable { mutableStateOf(false) }
+        var settingsGroup by rememberSaveable { mutableIntStateOf(SETTINGS_PERMISSIONS) }
+        val openSettings: (Int) -> Unit = { g -> settingsGroup = g; settingsOpen = true }
+        val openMine: (Int) -> Unit = { m -> mineSection = m; tab = 1 }
+        BackHandler(enabled = settingsOpen) { settingsOpen = false }
+        val tabs = listOf("今天", "我的")
         val colors = LocalCompanionColors.current
         // 让 testTag 出现在 uiautomator dump 的 resource-id 里，验收脚本按它找按钮，不靠坐标。
         Scaffold(containerColor = colors.paper, modifier = Modifier.semantics { testTagsAsResourceId = true }) { inner ->
             Column(Modifier.padding(inner).fillMaxSize().imePadding().background(colors.paper)) {
-                Column(Modifier.padding(horizontal = 22.dp, vertical = 16.dp)) {
-                    Eyebrow("COMPANION / 桌宠")
-                    Text("桌宠", style = MaterialTheme.typography.headlineMedium, color = colors.ink)
-                }
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                        .background(colors.chip, RoundedCornerShape(18.dp))
-                        .padding(4.dp),
-                ) {
-                    Row(Modifier.fillMaxWidth().selectableGroup()) {
-                        tabs.forEachIndexed { index, label ->
-                            TabItem(label, selected = tab == index, modifier = Modifier.weight(1f).testTag("tab_" + index)) { tab = index }
+                if (settingsOpen) {
+                    SettingsScreen(this@MainActivity, resumeTick, settingsGroup, onGroup = { settingsGroup = it }, onBack = { settingsOpen = false })
+                } else {
+                    Row(
+                        Modifier.fillMaxWidth().padding(start = 22.dp, end = 12.dp, top = 16.dp, bottom = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Eyebrow("COMPANION / 桌宠")
+                            Text("桌宠", style = MaterialTheme.typography.headlineMedium, color = colors.ink)
+                        }
+                        TextButton(onClick = { openSettings(settingsGroup) }, modifier = Modifier.testTag("open_settings")) {
+                            Text("⚙ 设置", style = MaterialTheme.typography.labelLarge, color = colors.ink2)
                         }
                     }
-                }
-                HorizontalDivider(color = colors.rule, modifier = Modifier.padding(top = 12.dp))
-                when (tab) {
-                    0 -> StartTab(this@MainActivity, resumeTick)
-                    1 -> SettingsTab(this@MainActivity)
-                    2 -> MemoryTab(resumeTick)
-                    else -> StatsTab(resumeTick)
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .background(colors.chip, RoundedCornerShape(18.dp))
+                            .padding(4.dp),
+                    ) {
+                        Row(Modifier.fillMaxWidth().selectableGroup()) {
+                            tabs.forEachIndexed { index, label ->
+                                TabItem(label, selected = tab == index, modifier = Modifier.weight(1f).testTag("tab_" + index)) { tab = index }
+                            }
+                        }
+                    }
+                    HorizontalDivider(color = colors.rule, modifier = Modifier.padding(top = 12.dp))
+                    when (tab) {
+                        0 -> StartTab(this@MainActivity, resumeTick, openSettings, openMine)
+                        else -> MineTab(this@MainActivity, resumeTick, mineSection) { mineSection = it }
+                    }
                 }
             }
         }

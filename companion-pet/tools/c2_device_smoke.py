@@ -348,9 +348,11 @@ def main():
     report["status"]["launch"] = "PASS" if (PKG + "/.MainActivity") in top or (PKG + "/" + PKG + ".MainActivity") in top else "UNVERIFIED"
     report["version"] = shell(serial, "dumpsys package %s | grep -E 'versionName|versionCode'" % PKG)[:200]
 
-    # B1：打开“记忆”页不能清空当天事件。
+    # B1：打开“记忆”页不能清空当天事件。0.5.8 起记忆在“我的”里（默认分区就是记忆）。
     before = event_lines(serial)
-    tapped = tap_text(serial, "记忆")
+    tapped = tap_text(serial, "我的")
+    if tapped != "TAPPED":
+        tapped = tap_text(serial, "记忆")
     if tapped == "TAPPED":
         time.sleep(3)
         after = event_lines(serial)
