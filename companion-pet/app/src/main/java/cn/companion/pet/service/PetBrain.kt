@@ -50,6 +50,17 @@ import cn.companion.pet.core.session.EndReason
 import cn.companion.pet.core.session.ChatSession
 import cn.companion.pet.core.session.AssistantApp
 import cn.companion.pet.core.skim.SkimBuffer
+import cn.companion.pet.core.training.BuiltInQuestions
+import cn.companion.pet.core.training.EnforcementAction
+import cn.companion.pet.core.training.EnforcementRules
+import cn.companion.pet.core.training.InteractionMode
+import cn.companion.pet.core.training.SlotKind
+import cn.companion.pet.core.training.TrainingController
+import cn.companion.pet.core.training.TrainingOutcome
+import cn.companion.pet.core.training.TrainingPrompt
+import cn.companion.pet.core.training.TrainingSession
+import cn.companion.pet.core.training.TriggerReason
+import cn.companion.pet.core.training.AssistanceLevel
 import cn.companion.pet.core.continuity.StrictEvalPrompt
 import cn.companion.pet.core.continuity.StrictEndReason
 import cn.companion.pet.core.continuity.Evaluation
@@ -142,6 +153,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private val visibleMemory by lazy { VisibleMemoryReader(memory, app.events, app.facts) }
     private val stateStore by lazy { PetStateStore(memory.root) }
     private val strictStore by lazy { StrictSessionStore(memory.root) }
+    /** 训练回合（双形态）。null 表示当前没有训练。 */
+    private var training: TrainingController? = null
+    private var trainingQuestion: cn.companion.pet.core.training.TrainingQuestion? = null
+    private val enforcement = EnforcementRules()
+    private var trainingMode = InteractionMode.WARM
     private val topics by lazy { app.topics }
     private val topicGate by lazy { TopicGate(topics) }
     private var lastProactiveAt = 0L
@@ -948,6 +964,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         overlay.showBubble(
             entrySpec(greeting, decision.scene, false).copy(
                 extra = listOf(
+                    BubbleAction("开始陪练") { openTraining() },
                     BubbleAction("想一想") { openThinkMenu() },
                     BubbleAction("记个念头") { startNote() },
                     BubbleAction("看一眼") { lookOnce() },
@@ -1022,6 +1039,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         when {
             skillsInitialized && skills.awaitingText -> { skills.submitText(text); return }
             noteDraft != null -> { saveNote(text); return }
+            training != null -> { submitTraining(text, emptyList(), "text", AssistanceLevel.INDEPENDENT); return }
             think?.awaitingAnswer == true -> { answerThink(text); return }
         }
         onUserInput(text, fromHold = false)
@@ -1702,6 +1720,176 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         overlay.showBubble(BubbleSpec(text, textOnly = true)) { handler.postDelayed({ if (convo == null) endThink() }, 4000) }
     }
 
+
+
+    // ---------- 双形态训练（批次 A） ----------
+
+    /** 打开训练：有题立即出题；没有就取内置示例，绝不留空白等用户想题。 */
+    private fun openTraining() {
+        endConversation()
+        val answered = app.events.all()
+            .filter { it.text.contains("训练完成") }
+            .flatMap { Regex("q:([a-z0-9-]+)").findAll(it.text).map { m -> m.groupValues[1] }.toList() }
+            .toSet()
+        val q = BuiltInQuestions.pick(answered)
+        trainingQuestion = q
+        val c = TrainingController(
+            TrainingSession(
+                id = "train-" + now(),
+                interactionMode = trainingMode,
+                createdAt = now(),
+                updatedAt = now(),
+            ),
+        )
+        c.bind(q)
+        training = c
+        val out = c.present(now())
+        if (out is TrainingOutcome.Present) showTrainingQuestion(q, out.ask)
+    }
+
+    private fun showTrainingQuestion(q: cn.companion.pet.core.training.TrainingQuestion, ask: String) {
+        val tag = if (q.builtInSample) "内置示例题 · " else ""
+        val body = tag + q.stem + "\n\n" + ask
+        val actions = mutableListOf<BubbleAction>()
+        q.sentences.take(2).forEachIndexed { i, s ->
+            actions += BubbleAction("选第 " + (i + 1) + " 句") {
+                submitTraining(transcript = s, selected = listOf(i), modality = "choice", assistance = AssistanceLevel.RECOGNIZED_WITH_CHOICES)
+            }
+        }
+        actions += BubbleAction("打字") { overlay.openBubbleInput() }
+        actions += BubbleAction("我不会") { submitTrainingSupport() }
+        actions += BubbleAction("×") { endTraining() }
+        overlay.showBubble(BubbleSpec(body, instant = true, actions = actions))
+    }
+
+    private fun submitTrainingSupport() {
+        val c = training ?: return
+        val out = c.scaffold(now())
+        if (out is TrainingOutcome.Scaffold) {
+            val actions = out.options.mapIndexed { i, opt ->
+                BubbleAction("选 " + (i + 1)) {
+                    submitTraining(opt, listOf(i), "choice", AssistanceLevel.RECOGNIZED_WITH_CHOICES)
+                }
+            } + BubbleAction("×") { endTraining() }
+            overlay.showBubble(BubbleSpec(out.text + "\n\n" + out.options.mapIndexed { i, o -> (i + 1).toString() + ". " + o }.joinToString("\n"), instant = true, actions = actions))
+        }
+    }
+
+    private fun submitTraining(
+        transcript: String,
+        selected: List<Int> = emptyList(),
+        modality: String = "text",
+        assistance: AssistanceLevel = AssistanceLevel.INDEPENDENT,
+    ) {
+        val c = training ?: return
+        val out = c.submit(transcript, selected, modality, assistance, now())
+        if (out is TrainingOutcome.Rejected) { overlay.showBubble(BubbleSpec(out.reason, textOnly = true)); return }
+        val q = trainingQuestion ?: return
+        val slot = c.current.currentSlotKind ?: return
+        val key = apiKey()
+        if (key == null || app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()) <= 0) {
+            // 本地降级：不冒充通过，也不判用户失败。
+            overlay.showBubble(BubbleSpec("模型这会儿用不了，我不假装给你过。先记下你的回答，等能用了再核。", textOnly = true))
+            return
+        }
+        overlay.setMood(Mood.THINKING)
+        overlay.showBubble(BubbleSpec("我核对一下……", textOnly = true))
+        probeJob = scope.launch {
+            val messages = withContext(Dispatchers.IO) {
+                synchronized(app.memoryLock) { TrainingPrompt.build(memory.persona(), c.current.interactionMode, q, slot, transcript, selected) }
+            }
+            if (!app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
+                overlay.showBubble(BubbleSpec("今天的次数用完了。你的回答我留着。", textOnly = true))
+                return@launch
+            }
+            stats.add(Stats.Kind.API_CALLS)
+            val r = app.client.complete(ChatRequest(settings.endpoint, settings.model, key, messages, maxTokens = TrainingPrompt.MAX_TOKENS, timeoutMillis = TrainingPrompt.TIMEOUT_MILLIS))
+            // 迟到的结果一律丢弃：会话已换、已结束、或槽位已变。
+            val live = training
+            if (live !== c || !c.current.active) return@launch
+            val advice = (r as? ChatResult.Success)?.let { TrainingPrompt.parse(it.content, c.current, slot) }
+            if (advice == null) {
+                overlay.showBubble(BubbleSpec("我这边核对超时了。你的回答留着，要不再说一句？", textOnly = true))
+                return@launch
+            }
+            handleTrainingAdvice(c, advice)
+        }
+    }
+
+    private fun handleTrainingAdvice(c: TrainingController, advice: cn.companion.pet.core.training.EvaluationAdvice) {
+        val out = c.acceptAdvice(advice, now())
+        when (out) {
+            is TrainingOutcome.Completed -> {
+                overlay.showBubble(BubbleSpec(out.summary, textOnly = true)) { handler.postDelayed({ endTraining() }, 5000) }
+                logTrainingResult(c, completed = true)
+            }
+            is TrainingOutcome.NextSlot -> {
+                val q = trainingQuestion ?: return
+                overlay.showBubble(BubbleSpec("这一步过了。\n\n" + out.ask, instant = true,
+                    actions = listOf(
+                        BubbleAction("打字") { overlay.openBubbleInput() },
+                        BubbleAction("我不会") { submitTrainingSupport() },
+                        BubbleAction("×") { endTraining() },
+                    ),
+                ))
+            }
+            is TrainingOutcome.Waiting -> overlay.showBubble(BubbleSpec(out.ask, instant = true,
+                actions = listOf(
+                    BubbleAction("打字") { overlay.openBubbleInput() },
+                    BubbleAction("我不会") { submitTrainingSupport() },
+                    BubbleAction("×") { endTraining() },
+                ),
+            ))
+            is TrainingOutcome.Recovery -> overlay.showBubble(BubbleSpec(out.text, instant = true,
+                actions = listOf(
+                    BubbleAction("换一题") { openTraining() },
+                    BubbleAction("×") { endTraining() },
+                ),
+            ))
+            is TrainingOutcome.Rejected -> overlay.showBubble(BubbleSpec(out.reason, textOnly = true))
+            else -> Unit
+        }
+    }
+
+    /** 强制规则入口：拒绝 / 未答 / 编造 → 切严格模态，不是只提示。 */
+    private fun onTrainingViolation(reason: TriggerReason) {
+        val c = training
+        val decision = enforcement.evaluate(
+            reason = reason,
+            mode = c?.current?.interactionMode ?: trainingMode,
+            hasPendingQuestion = c?.current?.active == true,
+        )
+        when (decision.action) {
+            EnforcementAction.FORCE_COACH -> {
+                trainingMode = InteractionMode.COACH
+                c?.switchMode(InteractionMode.COACH, now())
+                overlay.setMood(Mood.CURIOUS)
+                overlay.showBubble(BubbleSpec(decision.message, instant = true))
+                if (c == null) openTraining()
+            }
+            EnforcementAction.LOCK_COACH_SLOT, EnforcementAction.ONE_MORE_CHANCE ->
+                overlay.showBubble(BubbleSpec(decision.message, instant = true))
+            EnforcementAction.DOWNGRADE_TECHNICAL ->
+                overlay.showBubble(BubbleSpec(decision.message, instant = true))
+            EnforcementAction.NONE -> Unit
+        }
+    }
+
+    private fun endTraining() {
+        training?.let { logTrainingResult(it, completed = false) }
+        training = null
+        trainingQuestion = null
+        enforcement.reset()
+        overlay.hideBubble()
+        overlay.setMood(Mood.IDLE)
+    }
+
+    private fun logTrainingResult(c: TrainingController, completed: Boolean) {
+        val q = trainingQuestion ?: return
+        val line = "- " + timeText() + " | 训练" + (if (completed) "完成" else "中止") +
+            " | q:" + q.id + " | " + c.summary()
+        scope.launch(Dispatchers.IO) { synchronized(app.memoryLock) { app.events.append(EventKind.EXCHANGE, line, source = "training") } }
+    }
 
     // ---------- 严格陪伴（持续闭环） ----------
 
