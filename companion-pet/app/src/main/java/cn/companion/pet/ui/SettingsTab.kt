@@ -147,6 +147,20 @@ private fun ModelSettings(context: Context) {
     OutlinedTextField(endpoint, { endpoint = it }, Modifier.fillMaxWidth(), label = { Text("接口地址（OpenAI 兼容）") }, singleLine = true,
         isError = !EndpointPolicy.isValid(endpoint))
     OutlinedTextField(model, { model = it }, Modifier.fillMaxWidth(), label = { Text("模型名") }, singleLine = true)
+    var chatModels by remember { mutableStateOf<List<String>>(emptyList()) }
+    var chatModelsNote by remember { mutableStateOf<String?>(null) }
+    TextButton(onClick = {
+        val k = key.ifBlank { app.apiKey().orEmpty() }
+        if (k.isBlank()) { toast("先填 Key"); return@TextButton }
+        chatModelsNote = "正在获取…"
+        scope.launch {
+            when (val r = app.modelLister.list(endpoint, k)) {
+                is cn.companion.pet.net.ModelLister.Result.Success -> { chatModels = r.models; chatModelsNote = "点一个填进上面的模型名（共 ${r.models.size} 个）" }
+                is cn.companion.pet.net.ModelLister.Result.Failure -> { chatModels = emptyList(); chatModelsNote = "没取到：" + r.reason }
+            }
+        }
+    }) { Text("获取模型列表") }
+    ModelChoices(chatModels, chatModelsNote, highlight = { false }) { model = it }
     OutlinedTextField(key, { key = it }, Modifier.fillMaxWidth(), label = { Text(if (app.apiKey() != null) "API Key（已保存，留空不改）" else "API Key") },
         singleLine = true, visualTransformation = PasswordVisualTransformation())
     NumberField("每日调用上限", limit) { limit = it }
@@ -223,6 +237,7 @@ private fun DeviceSettings(context: Context) {
     AppListRow(context, "允许 Agent 操作的应用", "空名单时拒绝所有设备动作（这是有意的）；只打开/点击/输入这些应用。测试时放一个专用的测试 App，不要放系统设置、应用商店、银行或支付类 App。", s.deviceAllowedApps) {
         s.deviceAllowedApps = it
     }
+    SkillsSection(context)
 }
 
 @Composable
@@ -380,6 +395,22 @@ private fun DebugSettings(context: Context) {
     OutlinedButton(onClick = { NightlyWorker.runNow(context); toast("已排队，联网时会整理一次") }) { Text("现在整理一次记忆") }
 }
 
+/** 模型列表：最多显示 40 个，点一下填进模型名。 */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ModelChoices(models: List<String>, note: String?, highlight: (String) -> Boolean, onPick: (String) -> Unit) {
+    note?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    if (models.isEmpty()) return
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        models.take(40).forEach { m ->
+            TextButton(onClick = { onPick(m) }) {
+                Text(m, style = if (highlight(m)) MaterialTheme.typography.labelLarge.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                else MaterialTheme.typography.labelMedium)
+            }
+        }
+    }
+}
+
 @Composable
 private fun Section(title: String) {
     GroupTitle(title)
@@ -507,6 +538,29 @@ private fun ScreenDiagnosticSection(context: Context) {
         isError = visionEndpoint.isNotBlank() && !EndpointPolicy.isValid(visionEndpoint))
     OutlinedTextField(visionModel, { visionModel = it }, Modifier.fillMaxWidth(), singleLine = true,
         label = { Text("视觉模型名（必填，例如 qwen-vl-plus）") })
+    var visionModels by remember { mutableStateOf<List<String>>(emptyList()) }
+    var visionModelsNote by remember { mutableStateOf<String?>(null) }
+    TextButton(onClick = {
+        visionModelsNote = "正在获取…"
+        scope.launch {
+            val k = visionKey.ifBlank {
+                withContext(Dispatchers.IO) {
+                    val saved = (app.visionSecrets.read() as? cn.companion.pet.data.SecretReadResult.Available)?.value
+                    cn.companion.pet.core.vision.VisionSetupResolver.resolve("probe", visionEndpoint, app.settings.endpoint, saved, app.apiKey())
+                        .config?.apiKey.orEmpty()
+                }
+            }
+            if (k.isBlank()) { visionModelsNote = "先填这个服务商的视觉 Key"; return@launch }
+            when (val r = app.modelLister.list(visionEndpoint.ifBlank { app.settings.endpoint }, k)) {
+                is cn.companion.pet.net.ModelLister.Result.Success -> {
+                    visionModels = r.models.sortedByDescending { cn.companion.pet.net.ModelLister.looksVisual(it) }
+                    visionModelsNote = "加粗的名字看起来能看图（只是按名字猜）。点一个填进上面。"
+                }
+                is cn.companion.pet.net.ModelLister.Result.Failure -> { visionModels = emptyList(); visionModelsNote = "没取到：" + r.reason }
+            }
+        }
+    }) { Text("获取模型列表") }
+    ModelChoices(visionModels, visionModelsNote, highlight = { cn.companion.pet.net.ModelLister.looksVisual(it) }) { visionModel = it }
     OutlinedTextField(visionKey, { visionKey = it }, Modifier.fillMaxWidth(), singleLine = true,
         visualTransformation = PasswordVisualTransformation(),
         label = { Text("视觉 Key（看图和搭话不是同一家时必填；已保存的不显示）") })
@@ -594,6 +648,92 @@ private fun ScreenDiagnosticSection(context: Context) {
     }
     visionSummary?.let { Text("视觉摘要：" + it, style = MaterialTheme.typography.bodySmall) }
     Text("截图成功 ≠ 模型已理解；上传开关关闭时不会请求视觉模型。", style = MaterialTheme.typography.bodySmall)
+}
+
+/** 技能：固定步骤，按元素回放（参考 JARVIS Skills v3）。点/写的步骤在桌宠上挑元素录，这里管理和补简单步骤。 */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SkillsSection(context: Context) {
+    val app = PetApp.instance
+    val scope = rememberCoroutineScope()
+    var tick by remember { mutableIntStateOf(0) }
+    var skills by remember { mutableStateOf<List<cn.companion.pet.core.skill.Skill>>(emptyList()) }
+    var name by remember { mutableStateOf("") }
+    var message by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(tick) { skills = withContext(Dispatchers.IO) { app.skillStore.list() } }
+    fun io(block: () -> Unit) = scope.launch { withContext(Dispatchers.IO) { block() }; tick++ }
+    GroupTitle("技能")
+    Text("把常用操作存成固定步骤，一键重放。录法：在要用的 App 里点桌宠 → 技能 → 录新技能，再一步步点桌宠挑要点的按钮/要写的输入框（会边录边帮你做）。" +
+        "回放时按元素找，找不到就停下并告诉你哪一步，不会乱点。只能操作“允许 Agent 操作的应用”里的 App。", style = MaterialTheme.typography.bodySmall)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(name, { name = it }, Modifier.weight(1f), label = { Text("新技能名字") }, singleLine = true)
+        Button(onClick = {
+            val n = name.trim(); if (n.isEmpty()) return@Button
+            io { app.skillStore.create(n, System.currentTimeMillis()) }; name = ""
+        }) { Text("新建") }
+    }
+    message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    app.skillStore.lastError?.let { Text("技能存储：" + it, style = MaterialTheme.typography.bodySmall) }
+    if (skills.isEmpty()) Text("还没有技能。", style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("skills_empty"))
+    skills.forEach { skill ->
+        var manual by remember(skill.id) { mutableStateOf("") }
+        var pickApp by remember(skill.id) { mutableStateOf(false) }
+        Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            Text(skill.name, style = MaterialTheme.typography.titleSmall)
+            val last = if (skill.lastRunAt == 0L) "还没运行过" else
+                "上次" + (if (skill.lastRunOk == true) "成功" else "没成功") + " · " +
+                    java.time.Instant.ofEpochMilli(skill.lastRunAt).atZone(java.time.ZoneId.systemDefault()).toLocalTime().withNano(0)
+            Text(skill.steps.size.toString() + " 步 · " + last, style = MaterialTheme.typography.bodySmall)
+            skill.steps.forEachIndexed { i, step ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text((i + 1).toString() + ". " + step.describe(), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { io { app.skillStore.moveStep(skill.id, step.id, -1, System.currentTimeMillis()) } }, enabled = i > 0) { Text("▲") }
+                    TextButton(onClick = { io { app.skillStore.moveStep(skill.id, step.id, 1, System.currentTimeMillis()) } }, enabled = i < skill.steps.size - 1) { Text("▼") }
+                    TextButton(onClick = { io { app.skillStore.removeStep(skill.id, step.id, System.currentTimeMillis()) } }) { Text("删") }
+                }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                fun add(step: cn.companion.pet.core.skill.SkillStep) = io { app.skillStore.addStep(skill.id, step, System.currentTimeMillis()) }
+                fun id() = java.util.UUID.randomUUID().toString()
+                OutlinedButton(onClick = { pickApp = true }) { Text("+打开应用") }
+                OutlinedButton(onClick = { add(cn.companion.pet.core.skill.SkillStep(id(), cn.companion.pet.core.skill.SkillStepType.BACK)) }) { Text("+返回") }
+                OutlinedButton(onClick = { add(cn.companion.pet.core.skill.SkillStep(id(), cn.companion.pet.core.skill.SkillStepType.SCROLL, forward = true)) }) { Text("+往下滚") }
+                OutlinedButton(onClick = { add(cn.companion.pet.core.skill.SkillStep(id(), cn.companion.pet.core.skill.SkillStepType.SCROLL, forward = false)) }) { Text("+往上滚") }
+                OutlinedButton(onClick = { add(cn.companion.pet.core.skill.SkillStep(id(), cn.companion.pet.core.skill.SkillStepType.WAIT, waitMs = 2_000)) }) { Text("+等2秒") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(manual, { manual = it }, Modifier.weight(1f), singleLine = true,
+                    label = { Text("按文字点（例如“发送”）") })
+                OutlinedButton(onClick = {
+                    val t = manual.trim(); if (t.isEmpty()) return@OutlinedButton
+                    io { app.skillStore.addStep(skill.id, cn.companion.pet.core.skill.SkillStep(java.util.UUID.randomUUID().toString(),
+                        cn.companion.pet.core.skill.SkillStepType.TAP, target = cn.companion.pet.core.skill.ElementTarget(text = t)), System.currentTimeMillis()) }
+                    manual = ""
+                }) { Text("+点") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    val launcher = app.skillLauncher
+                    message = if (launcher == null) "先在“开始”页启动桌宠，技能由桌宠来跑。" else {
+                        launcher(skill.id); "已交给桌宠运行「${skill.name}」：进度看桌宠气泡，点桌宠可以停。"
+                    }
+                }, enabled = skill.steps.isNotEmpty()) { Text("▶ 运行") }
+                TextButton(onClick = { io { app.skillStore.delete(skill.id) } }) { Text("删除技能") }
+            }
+            if (skill.lastRunLog.isNotEmpty()) {
+                Text("上次运行：\n" + skill.lastRunLog.joinToString("\n"), style = MaterialTheme.typography.bodySmall)
+            }
+            HorizontalDivider()
+        }
+        if (pickApp) AppPicker(context, "要打开的应用（选一个）", emptySet(), onDismiss = { pickApp = false }) { chosen ->
+            pickApp = false
+            chosen.firstOrNull()?.let { pkg ->
+                val label = runCatching { context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
+                io { app.skillStore.addStep(skill.id, cn.companion.pet.core.skill.SkillStep(java.util.UUID.randomUUID().toString(),
+                    cn.companion.pet.core.skill.SkillStepType.OPEN_APP, appPackage = pkg, appLabel = label), System.currentTimeMillis()) }
+            }
+        }
+    }
 }
 
 @Composable

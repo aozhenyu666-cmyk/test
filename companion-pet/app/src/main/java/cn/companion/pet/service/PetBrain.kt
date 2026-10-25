@@ -96,6 +96,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private val handler = Handler(Looper.getMainLooper())
 
     private val overlay = PetOverlay(context, settings, this, this)
+    private val skills by lazy {
+        skillsInitialized = true
+        SkillPetFlow(app, overlay, scope, handler, ::label) { overlay.setMood(Mood.IDLE) }
+    }
     private val assembler by lazy { CompanionContextAssembler(app.events, app.facts, materials = app.materialInbox) }
     private val visibleMemory by lazy { VisibleMemoryReader(memory, app.events, app.facts) }
     private val stateStore by lazy { PetStateStore(memory.root) }
@@ -162,6 +166,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     fun start() {
+        // 设置页“运行”技能时交给桌宠来跑：进度和结果显示在气泡上，点桌宠可以停。
+        app.skillLauncher = { id -> handler.post { endConversation(); skills.runSkill(id) } }
         memory.persona() // 首次运行写入默认人设
         weighty.restore(LocalDate.now().toString(), stats.get(Stats.Kind.WEIGHTY))
         overlay.show()
@@ -181,6 +187,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     fun stop() {
+        app.skillLauncher = null
+        if (skillsInitialized) skills.cancel()
         app.events.removeListener(agentListener)
         handler.removeCallbacks(agentTrigger)
         agentScanJob?.cancel()
@@ -206,6 +214,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         scheduler.onScreenOff()
         probeJob?.cancel()
         lookJob?.cancel()
+        if (skillsInitialized) skills.cancel()
         voice.cancel()
         endConversation()
         endThink()
@@ -301,7 +310,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun speak(stuck: Boolean, afterHeartbeat: Boolean = false, topic: Topic? = null) {
         val now = now()
-        if (probeJob?.isActive == true || lookJob?.isActive == true || now() < lookNoticeUntil || convo != null || session != null || think != null || noteDraft != null) return
+        if (probeJob?.isActive == true || lookJob?.isActive == true || now() < lookNoticeUntil || skillsBusy() || convo != null || session != null || think != null || noteDraft != null) return
         heartbeatWaiting = false
 
         val key = apiKey()
@@ -364,7 +373,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             when {
                 reply == null -> scheduler.onSpoke(now()) // 失败或解析失败：静默，按正常节奏下次再来
                 reply.skip || ContentGuard.violates(reply.hookText) -> scheduler.retrySoon(now())
-                !active || convo != null || lookJob?.isActive == true || now() < lookNoticeUntil -> scheduler.retrySoon(now())
+                !active || convo != null || lookJob?.isActive == true || now() < lookNoticeUntil || skillsBusy() -> scheduler.retrySoon(now())
                 else -> {
                     if (isWeighty) { weighty.markUsed(today); stats.add(Stats.Kind.WEIGHTY) }
                     rephraseNext = false
@@ -382,7 +391,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun maybeScanAgent(now: Long) {
         if (!settings.agentAutonomy || !active || settings.petPaused) return
-        if (probeJob?.isActive == true || lookJob?.isActive == true || now() < lookNoticeUntil || convo != null || session != null || think != null || noteDraft != null) return
+        if (probeJob?.isActive == true || lookJob?.isActive == true || now() < lookNoticeUntil || skillsBusy() || convo != null || session != null || think != null || noteDraft != null) return
         if (!isUserActive() || scheduler.isQuiet(now)) return
         if (app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()) <= 0) return
         if (now - lastAgentScanAt < 1_000) return
@@ -555,6 +564,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
     }
 
+    private var skillsInitialized = false
+    /** 技能运行/录制/菜单期间不主动开口；没用过技能时不创建它。 */
+    private fun skillsBusy(): Boolean = skillsInitialized && skills.busy
+
     /** 看图结果/失败原因显示期间也不主动开口。 */
     private var lookNoticeUntil = 0L
 
@@ -641,6 +654,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     // ---------- 用户主动 ----------
 
     override fun onPetTapped() {
+        if (skillsBusy() && skills.onPetTapped()) return
         if (session != null) {
             if (overlay.isBubbleShown) hideSessionPrompt() else showSessionMenu()
             return
@@ -665,6 +679,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                     BubbleAction("想一想") { openThinkMenu() },
                     BubbleAction("记个念头") { startNote() },
                     BubbleAction("看一眼") { lookOnce() },
+                    BubbleAction("技能") { endConversation(); skills.openMenu() },
                 ),
             ),
         )
@@ -732,6 +747,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     override fun onTextSubmitted(text: String) {
         overlay.setBubbleFocusable(false)
         when {
+            skillsInitialized && skills.awaitingText -> { skills.submitText(text); return }
             noteDraft != null -> { saveNote(text); return }
             think?.awaitingAnswer == true -> { answerThink(text); return }
         }

@@ -162,6 +162,14 @@ class PetApp : Application() {
 
     fun visionConfig(): VisionModelConfig? = visionSetup().config
 
+    /** 桌宠在运行时由它注册：设置页点“运行”就交给桌宠跑。没在运行时为 null。 */
+    @Volatile var skillLauncher: ((String) -> Unit)? = null
+
+    val modelLister by lazy { cn.companion.pet.net.ModelLister() }
+
+    /** 用户自己搭的技能（固定步骤，按元素回放）。 */
+    val skillStore by lazy { cn.companion.pet.core.skill.SkillStore(java.io.File(filesDir, "memory")) }
+
     /** 最近一次看图的证据（不含图片/Key/回复原文）。 */
     val visionEvidence by lazy { cn.companion.pet.data.VisionEvidencePrefs(this) }
 

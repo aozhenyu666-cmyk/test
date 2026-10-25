@@ -63,6 +63,8 @@ class AndroidDeviceController(
             observationId = observation.id, evidence = mapOf("foreground" to observation.packageName))
     }
 
+    override fun lastObservation(): DeviceObservation? = latest
+
     override fun execute(command: DeviceCommand, now: Long): DeviceResult {
         val snap = snapshot(now)
         val obs = latest

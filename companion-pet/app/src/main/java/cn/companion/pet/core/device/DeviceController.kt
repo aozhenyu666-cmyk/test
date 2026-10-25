@@ -65,6 +65,8 @@ interface DeviceController {
     fun snapshot(now: Long = System.currentTimeMillis()): DeviceSnapshot
     fun observe(now: Long = System.currentTimeMillis()): DeviceResult
     fun execute(command: DeviceCommand, now: Long = System.currentTimeMillis()): DeviceResult
+    /** 最近一次 [observe] 得到的观察（技能找元素用）；没有就 null。 */
+    fun lastObservation(): DeviceObservation? = null
 }
 
 data class DevicePolicyDecision(val allowed: Boolean, val reason: String)
