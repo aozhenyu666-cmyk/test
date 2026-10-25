@@ -26,6 +26,9 @@ class PerceptionService : AccessibilityService() {
         ignored = (imes + listOf(packageName, "com.android.systemui", "android")).toSet()
         PerceptionHub.service = this
         PerceptionHub.reader = { readWindowText() }
+        PerceptionHub.activePackageReader = {
+            runCatching { rootInActiveWindow?.packageName?.toString() }.getOrNull()
+        }
         PerceptionHub.setConnected(true)
         // 系统会在进程被杀后重新绑定无障碍服务：借这个机会把桌宠拉回来（用户主动停止过则不拉）。
         // 任何失败都只放弃这一次拉起，不能让无障碍服务跟着出错。
@@ -49,8 +52,11 @@ class PerceptionService : AccessibilityService() {
         val now = System.currentTimeMillis()
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                PerceptionHub.trail.onForeground(pkg, now)
-                PerceptionHub.stuck.onPage("$pkg/${event.className}", now)
+                // 窗口事件会抖动（菜单、键盘、权限框、系统栏）。短暂防抖后再读实际活动窗口确认。
+                pendingPkg = pkg
+                pendingAt = now
+                handler.removeCallbacks(confirmForeground)
+                handler.postDelayed(confirmForeground, DEBOUNCE_MILLIS)
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 PerceptionHub.trail.onScroll(pkg, now)
@@ -60,9 +66,26 @@ class PerceptionService : AccessibilityService() {
         }
     }
 
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var pendingPkg: String? = null
+    private var pendingAt = 0L
+    private val confirmForeground = Runnable {
+        val expected = pendingPkg ?: return@Runnable
+        val now = System.currentTimeMillis()
+        if (now - pendingAt + 1 < DEBOUNCE_MILLIS) return@Runnable
+        pendingPkg = null
+        val active = runCatching { rootInActiveWindow?.packageName?.toString() }.getOrNull()
+        if (active.isNullOrBlank() || active in ignored) return@Runnable
+        if (active != expected) return@Runnable
+        PerceptionHub.trail.onForeground(active, now)
+        PerceptionHub.stuck.onPage("$active", now)
+        PerceptionHub.onForegroundConfirmed?.invoke(active)
+    }
+
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
+        handler.removeCallbacks(confirmForeground)
         disconnect()
         super.onDestroy()
     }
@@ -76,6 +99,7 @@ class PerceptionService : AccessibilityService() {
         if (PerceptionHub.service === this) {
             PerceptionHub.service = null
             PerceptionHub.reader = null
+            PerceptionHub.activePackageReader = null
             PerceptionHub.setConnected(false)
         }
     }
@@ -111,5 +135,7 @@ class PerceptionService : AccessibilityService() {
     companion object {
         private const val MAX_NODES = 600
         private const val MAX_READ_MILLIS = 150L
+        /** 窗口事件抖动：250–500ms 内以实际活动窗口为准。 */
+        private const val DEBOUNCE_MILLIS = 300L
     }
 }

@@ -79,6 +79,7 @@ import cn.companion.pet.net.ChatRole
 import cn.companion.pet.net.EndpointPolicy
 import cn.companion.pet.net.ModelProvider
 import cn.companion.pet.ui.components.PageHeader
+import cn.companion.pet.ui.theme.LocalCompanionColors
 import cn.companion.pet.ui.theme.CompanionSpacing
 import cn.companion.pet.ui.components.GroupTitle
 import cn.companion.pet.ui.components.ToggleRow
@@ -258,6 +259,16 @@ fun SettingsTab(context: Context) {
         Section("AI 会话")
         Text("和 Gemini、ChatGPT 或千问聊天时，桌宠头上会出现蓝色的 G。文字深聊中切到别的 App，它先倒计时提醒，到点把你拉回原来的对话；“一起看”本来就要切出去看东西，只记录不拉回。点桌宠可以随时结束会话。",
             style = MaterialTheme.typography.bodySmall)
+        var strict by remember { mutableStateOf(s.focusEnforcement == "STRICT") }
+        Toggle("严格守护（STRICT）", "开启后离开目标应用只给很短宽限，随后立刻显示全屏拦截层，直到回到目标、到期或你紧急退出。默认关；关掉是 SOFT 提醒。", strict) {
+            strict = it; s.focusEnforcement = if (it) "STRICT" else "SOFT"
+        }
+        var focusMinutesText by remember { mutableStateOf(s.focusMinutes.toString()) }
+        NumberField("守护时长（分钟）", focusMinutesText) {
+            focusMinutesText = it; it.toIntOrNull()?.let { v -> s.focusMinutes = v.coerceIn(5, 180) }
+        }
+        Text("自动识别只是补充：手动打开 AI App 后要停留几秒才建立会话。要立刻建立约束，用桌宠菜单里的“开始守护并打开”。",
+            style = MaterialTheme.typography.bodySmall, color = LocalCompanionColors.current.ink2)
         var autoStart by remember { mutableStateOf(s.sessionAutoStart) }
         Toggle("打开 AI App 自动开始", "自己打开 Gemini / ChatGPT / 千问 停留 ${s.sessionAutoStartSec} 秒，就算开始一次会话。从桌宠点“去 …”会直接开始。", autoStart) {
             autoStart = it; s.sessionAutoStart = it

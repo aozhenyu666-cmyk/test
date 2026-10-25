@@ -12,6 +12,16 @@ import cn.companion.pet.a11y.GeminiAutoSender
 import cn.companion.pet.a11y.PerceptionHub
 import cn.companion.pet.bridge.Assistants
 import cn.companion.pet.bridge.GeminiLauncher
+import cn.companion.pet.core.focus.FocusContract
+import cn.companion.pet.core.focus.FocusController
+import cn.companion.pet.core.focus.FocusDevicePort
+import cn.companion.pet.core.focus.FocusEnforcement
+import cn.companion.pet.core.focus.FocusMode
+import cn.companion.pet.core.focus.FocusOverlayPort
+import cn.companion.pet.core.focus.FocusScheduler
+import cn.companion.pet.core.focus.FocusState
+import cn.companion.pet.core.focus.StartResult
+import cn.companion.pet.overlay.FocusOverlay
 import cn.companion.pet.core.bridge.BridgeContext
 import cn.companion.pet.core.companion.PetStateStore
 import cn.companion.pet.core.companion.StateEvent
@@ -96,6 +106,32 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private val handler = Handler(Looper.getMainLooper())
 
     private val overlay = PetOverlay(context, settings, this, this)
+    /** 专注守护：全屏拦截层 + 真实前台核验；只有用户显式开启 STRICT 才拦截。 */
+    private val focusOverlay: FocusOverlay by lazy {
+        FocusOverlay(
+            context,
+            onReturn = { focusController.returnNow() },
+            onPause = { focusController.pause() },
+            onAbort = { focusController.abort() },
+        )
+    }
+    private val focusController: FocusController by lazy {
+        FocusController(
+            root = memory.root,
+            device = object : FocusDevicePort {
+                override fun launch(pkg: String): Boolean =
+                    gemini.launch(pkg, adjacent = false) == GeminiLauncher.Outcome.LAUNCHED
+                override fun activePackage(): String? = PerceptionHub.activePackage() ?: PerceptionHub.trail.foreground
+            },
+            overlay = object : FocusOverlayPort {
+                override fun show(targetLabel: String, reason: String) = focusOverlay.show(targetLabel, reason)
+                override fun hide() = focusOverlay.hide()
+            },
+            scheduler = object : FocusScheduler {
+                override fun post(delayMillis: Long, task: () -> Unit) { handler.postDelayed(task, delayMillis) }
+            },
+        )
+    }
     private val assembler by lazy { CompanionContextAssembler(app.events, app.facts, materials = app.materialInbox) }
     private val visibleMemory by lazy { VisibleMemoryReader(memory, app.events, app.facts) }
     private val stateStore by lazy { PetStateStore(memory.root) }
@@ -166,12 +202,15 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         weighty.restore(LocalDate.now().toString(), stats.get(Stats.Kind.WEIGHTY))
         overlay.show()
         restoreSession()
+        // 服务重启后恢复未结束的守护；已过期/已结束的不复活。
+        runCatching { focusRestore() }
         active = isUserActive()
         if (active) onUserPresent()
         handler.post(ticker)
         app.events.addListener(agentListener)
         handler.postDelayed(agentTrigger, 1_200)
         PerceptionHub.onScroll = { pkg -> onScrollEvent(pkg) }
+        PerceptionHub.onForegroundConfirmed = { pkg -> onFocusForeground(pkg) }
         scope.launch {
             settings.changes.collect {
                 scheduler.config = settings.rhythm()
@@ -187,6 +226,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         app.agentLoop.cancel()
         app.actions.cancelAll()
         PerceptionHub.onScroll = null
+        PerceptionHub.onForegroundConfirmed = null
+        runCatching { focusOverlay.destroy() }
         handler.removeCallbacksAndMessages(null)
         voice.cancel()
         speech.shutdown()
@@ -234,6 +275,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun tick() {
         val now = now()
+        // 守护优先：到期/宽限到点要按秒判断，即使会话逻辑提前 return 也不能漏。
+        runCatching { focusController.tick() }
         if (convo == null && life.tick(now)) overlay.setLife(life.state)
         // Gemini 会话期间：只守着会话，不主动搭话
         session?.let { handleSession(it, now); return }
@@ -636,6 +679,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         overlay.showBubble(
             entrySpec(greeting, decision.scene, false).copy(
                 extra = listOf(
+                    BubbleAction("开始守护并打开") { startFocusGuard() },
                     BubbleAction("想一想") { openThinkMenu() },
                     BubbleAction("记个念头") { startNote() },
                     BubbleAction("看一眼") { lookOnce() },
@@ -948,6 +992,55 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         overlay.setInSession(true)
     }
 
+
+    // ---------- 专注守护（C3） ----------
+
+    /** 显式入口：先建立并持久化契约，再打开目标；失败不留虚假会话。 */
+    fun startFocusGuard(): StartResult {
+        val target = assistants.current
+        val pkg = assistants.packageOf(target) ?: return StartResult.Failed("没找到 ${target.label}，可以在设置里填包名")
+        val now = now()
+        val strict = settings.focusEnforcement == "STRICT"
+        val contract = FocusContract(
+            sessionId = "focus-" + now,
+            targetPackage = pkg,
+            targetLabel = target.label,
+            startedAt = now,
+            expiresAt = now + settings.focusMinutes.coerceIn(5, 180) * 60_000L,
+            mode = FocusMode.TEXT,
+            enforcement = if (strict) FocusEnforcement.STRICT else FocusEnforcement.SOFT,
+            allowedPackages = allowedForSession(),
+            graceMillis = settings.sessionGraceSec.coerceIn(3, 600) * 1000L,
+            allowedGraceMillis = settings.sessionAllowedGraceSec.coerceIn(3, 3600) * 1000L,
+        )
+        val result = focusController.start(contract, PerceptionHub.activePackage() ?: PerceptionHub.trail.foreground)
+        when (result) {
+            StartResult.Started -> {
+                startSession(SessionMode.TEXT, target, pkg)
+                gemini.toast(if (strict) "已开始严格守护 " + target.label + "，" + settings.focusMinutes + " 分钟" else "已开始守护 " + target.label)
+            }
+            is StartResult.Failed -> gemini.toast(result.reason)
+        }
+        return result
+    }
+
+    /** 前台确认后交给守护状态机。 */
+    private fun onFocusForeground(pkg: String) {
+        runCatching { focusController.onForeground(pkg) }
+        if (focusController.state == FocusState.AWAY_GRACE) {
+            runCatching { focusController.onConfirmedLeave(pkg) }
+        }
+    }
+
+    fun focusState(): FocusState? = focusController.state
+
+    fun focusRestore() {
+        val snap = focusController.restore() ?: return
+        val fg = PerceptionHub.activePackage() ?: PerceptionHub.trail.foreground
+        if (fg != null) onFocusForeground(fg)
+        if (snap.state == FocusState.BLOCKING) focusController.onGraceElapsed()
+    }
+
     private fun allowedForSession() = settings.sessionAllowedApps + settings.learningApps
 
     /** 自己打开 Gemini / ChatGPT / 千问 并停留一会儿，也算开始一次会话。 */
@@ -1045,8 +1138,21 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun pullBack() {
         hideSessionPrompt()
+        // 有显式守护时，走“启动 -> 重新确认前台 -> 失败保持拦截”的闭环。
+        if (focusController.state != null) {
+            focusController.returnNow()
+            stats.add(Stats.Kind.PULLBACKS)
+            return
+        }
         when (gemini.launch(sessionPkg, adjacent = false)) {
-            GeminiLauncher.Outcome.LAUNCHED -> stats.add(Stats.Kind.PULLBACKS)
+            GeminiLauncher.Outcome.LAUNCHED -> {
+                stats.add(Stats.Kind.PULLBACKS)
+                // 没有守护契约时也核验一次：启动了但没到前台，必须如实告知。
+                handler.postDelayed({
+                    val fg = PerceptionHub.activePackage() ?: PerceptionHub.trail.foreground
+                    if (fg != sessionPkg) gemini.toast("已请求打开 ${sessionApp.label}，但它没有回到前台。vivo 上要在应用权限里允许“后台弹出界面”")
+                }, 1_000)
+            }
             else -> gemini.toast("没能打开 ${sessionApp.label}。vivo 上要在应用权限里允许“后台弹出界面”")
         }
     }

@@ -34,7 +34,12 @@ class Settings(context: Context) {
     var heartbeatIntervalMin by int("heartbeat_interval", 20)
 
     var sessionAutoStart by bool("session_auto_start", true)
-    var sessionAutoStartSec by int("session_auto_start_sec", 20)
+    /** 手动打开 AI App 后多久认定为“想深聊”。显式“开始守护”入口不依赖它。 */
+    var sessionAutoStartSec by int("session_auto_start_sec", 10)
+    /** 守护默认宽限；STRICT 下到点立刻拦截。 */
+    var focusEnforcement by str("focus_enforcement", "SOFT")
+    /** 守护时长（分钟），到期自动结束。 */
+    var focusMinutes by int("focus_minutes", 25)
     var sessionPullBack by bool("session_pull_back", true)
     var sessionGraceSec by int("session_grace_sec", 10)
     var sessionAllowedGraceSec by int("session_allowed_grace_sec", 90)
