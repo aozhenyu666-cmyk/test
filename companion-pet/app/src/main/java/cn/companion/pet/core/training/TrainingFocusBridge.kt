@@ -41,6 +41,10 @@ class TrainingFocusBridge(
         foregroundPackage: String?,
         ownPackage: String,
         allowedFocusPackages: Set<String> = emptySet(),
+        /** 开始训练时所在的应用：训练气泡浮在它上面，待在这里不算离开。 */
+        basePackage: String? = null,
+        /** 桌面：回桌面不算去娱乐。 */
+        homePackages: Set<String> = emptySet(),
     ): FocusDecision {
         if (session == null || !session.active) {
             return FocusDecision(FocusVerdict.NOT_APPLICABLE, "没有进行中的训练", shouldBlock = false)
@@ -52,6 +56,12 @@ class TrainingFocusBridge(
         }
         if (pkg == ownPackage) {
             return FocusDecision(FocusVerdict.IN_TRAINING, "在训练界面内", shouldBlock = false)
+        }
+        if (pkg == basePackage) {
+            return FocusDecision(FocusVerdict.IN_TRAINING, "在开始训练时的应用里", shouldBlock = false)
+        }
+        if (pkg in homePackages) {
+            return FocusDecision(FocusVerdict.NOT_APPLICABLE, "在桌面", shouldBlock = false)
         }
         if (pkg in allowedReadingPackages || pkg in allowedFocusPackages) {
             return FocusDecision(FocusVerdict.ALLOWED_READING, "允许的阅读/资料应用", shouldBlock = false)

@@ -37,7 +37,10 @@ class TrainingStore(private val root: File) {
     fun load(): Wrapper? = synchronized(lock) {
         if (!file.exists()) return null
         runCatching { json.decodeFromString(Wrapper.serializer(), file.readText()) }
-            .onFailure { lastError = "训练会话文件读不了：" + it.javaClass.simpleName }
+            .onFailure {
+                lastError = "训练会话文件读不了：" + it.javaClass.simpleName
+                runCatching { file.renameTo(File(file.parentFile, file.name + ".corrupt-" + System.currentTimeMillis())) }
+            }
             .getOrNull()
     }
 
@@ -49,7 +52,10 @@ class TrainingStore(private val root: File) {
         data object None : Restore
     }
 
-    /** [now] 为本次启动的可信单调时间；空窗按 updatedAt 到 now 计算。 */
+    /**
+     * [now] 必须和会话里的 updatedAt 同一个时钟（墙上时间）：单调时钟重启会归零，不能跨进程比较。
+     * 空窗按 updatedAt 到 now 计算（调用方定期心跳落盘，误差在心跳间隔内）。
+     */
     fun restore(now: Long): Restore = synchronized(lock) {
         val w = load() ?: return Restore.None
         if (!w.session.active) return Restore.Finished(w.session)

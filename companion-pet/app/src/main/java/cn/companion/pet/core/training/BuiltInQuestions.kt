@@ -19,6 +19,7 @@ object BuiltInQuestions {
             premisePolicy = PremisePolicy.CLOSED,
             requiredSlots = listOf(SlotKind.LOCATE, SlotKind.CONNECT),
             builtInSample = true,
+            scaffolds = mapOf(SlotKind.CONNECT to listOf("样本是自愿参加的", "人数只有 20 个")),
         ),
         TrainingQuestion(
             id = "sample-cause-01",
@@ -30,6 +31,7 @@ object BuiltInQuestions {
             premisePolicy = PremisePolicy.CLOSED,
             requiredSlots = listOf(SlotKind.LOCATE, SlotKind.CONNECT),
             builtInSample = true,
+            scaffolds = mapOf(SlotKind.CONNECT to listOf("同一时间可能还有别的变化", "只看了前后两个时间点")),
         ),
         TrainingQuestion(
             id = "sample-open-01",
@@ -41,6 +43,10 @@ object BuiltInQuestions {
             premisePolicy = PremisePolicy.OPEN,
             requiredSlots = listOf(SlotKind.LOCATE, SlotKind.CONNECT, SlotKind.EXAMINE),
             builtInSample = true,
+            scaffolds = mapOf(
+                SlotKind.CONNECT to listOf("只调查了一类人", "长寿可能另有原因"),
+                SlotKind.EXAMINE to listOf("体力劳动者", "农村老人"),
+            ),
         ),
     )
 

@@ -60,6 +60,12 @@ data class StrictSessionState(
     val passedIndependently: Int = 0,
     val endReason: String = "",
     val updatedAt: Long = 0,
+    /** 第几步（持续闭环：一步过了接着下一步，直到到期）。 */
+    val stepIndex: Int = 1,
+    /** 本步尝试次数；“提示后通过”按本步算，不按整回合算。 */
+    val stepAttempts: Int = 0,
+    /** 本步是否用过“我不会”/拆小支架。 */
+    val stepHelped: Boolean = false,
 ) {
     val active: Boolean get() = phase !in TERMINAL
     val remainingMillis: Long get() = (endsAt - updatedAt).coerceAtLeast(0)
@@ -119,6 +125,7 @@ class StrictSessionMachine(var state: StrictSessionState) {
             lastAnswer = text.take(1000),
             silence = null,
             attempts = state.attempts + 1,
+            stepAttempts = state.stepAttempts + 1,
             updatedAt = now,
         )
         return StrictOutcome.None
@@ -126,8 +133,16 @@ class StrictSessionMachine(var state: StrictSessionState) {
 
     fun needsSupport(now: Long): StrictOutcome {
         if (!state.active) return StrictOutcome.None
-        state = state.copy(revision = state.revision + 1, phase = Phase.SUPPORT, silence = SilenceReason.NEED_SUPPORT, updatedAt = now)
-        return StrictOutcome.Support("这一步拆小一点：只找出原句里表示转折的那一处，其他先不管。")
+        state = state.copy(revision = state.revision + 1, phase = Phase.SUPPORT, silence = SilenceReason.NEED_SUPPORT,
+            stepHelped = true, updatedAt = now)
+        return StrictOutcome.Support(supportText(state))
+    }
+
+    /** 模型用不了/超时/解析失败：回到等待，不判通过也不判失败。 */
+    fun evaluationUnavailable(now: Long): StrictOutcome {
+        if (!state.active || state.phase != Phase.EVALUATING) return StrictOutcome.None
+        state = state.copy(revision = state.revision + 1, phase = Phase.WAITING, health = Health.DEGRADED, updatedAt = now)
+        return StrictOutcome.None
     }
 
     /** 本地校验后才采纳；schema/会话/步骤/版本不符一律丢弃。 */
@@ -139,7 +154,29 @@ class StrictSessionMachine(var state: StrictSessionState) {
         if (state.phase != Phase.EVALUATING) return StrictOutcome.Rejected("当前不在核验阶段")
         return when (evaluation.verdict) {
             Verdict.PASS -> {
-                val afterHelp = state.attempts > 1
+                val afterHelp = state.stepHelped || state.stepAttempts > 1
+                val next = evaluation.nextPrompt.trim().take(200)
+                if (next.isNotEmpty() && now < state.endsAt) {
+                    // 持续闭环：这一步过了，时间还在 → 进入下一步，而不是一答就结束。
+                    state = state.copy(
+                        revision = state.revision + 1,
+                        stepIndex = state.stepIndex + 1,
+                        stepId = "step-" + (state.stepIndex + 1),
+                        phase = Phase.WAITING,
+                        question = next,
+                        gap = "",
+                        nextAction = next.take(160),
+                        silence = null,
+                        reminders = 0,
+                        stepAttempts = 0,
+                        stepHelped = false,
+                        health = Health.OK,
+                        passedAfterHelp = state.passedAfterHelp + if (afterHelp) 1 else 0,
+                        passedIndependently = state.passedIndependently + if (afterHelp) 0 else 1,
+                        updatedAt = now,
+                    )
+                    return StrictOutcome.Accepted(Verdict.PASS, evaluation.feedback.ifBlank { "这一步成了。" }, next)
+                }
                 state = state.copy(
                     revision = state.revision + 1,
                     phase = Phase.COMPLETED,
@@ -150,15 +187,15 @@ class StrictSessionMachine(var state: StrictSessionState) {
                     endReason = StrictEndReason.COMPLETED.name,
                     updatedAt = now,
                 )
-                StrictOutcome.Accepted(Verdict.PASS, evaluation.feedback.ifBlank { "这一步成了。" }, state.nextAction)
+                StrictOutcome.Accepted(Verdict.PASS, evaluation.feedback.ifBlank { "这一步成了。" }, "")
             }
             Verdict.NEED_SUPPORT -> {
-                state = state.copy(revision = state.revision + 1, phase = Phase.SUPPORT,
+                state = state.copy(revision = state.revision + 1, phase = Phase.SUPPORT, stepHelped = true,
                     silence = SilenceReason.NEED_SUPPORT, gap = evaluation.criteriaMissing.joinToString("；").take(160), updatedAt = now)
-                StrictOutcome.Support(evaluation.feedback.ifBlank { "先把这一步再拆小一点。" })
+                StrictOutcome.Support(evaluation.feedback.ifBlank { supportText(state) })
             }
             Verdict.NEED_EVIDENCE -> {
-                state = state.copy(revision = state.revision + 1, phase = Phase.WAITING,
+                state = state.copy(revision = state.revision + 1, phase = Phase.WAITING, health = Health.OK,
                     gap = evaluation.criteriaMissing.joinToString("；").take(160),
                     nextAction = evaluation.nextPrompt.take(160), updatedAt = now)
                 StrictOutcome.Accepted(Verdict.NEED_EVIDENCE,
@@ -224,6 +261,11 @@ class StrictSessionMachine(var state: StrictSessionState) {
     }
 
     companion object {
+        /** 拆小支架：按本步缺口说，没有缺口就退到“先说出你现在的理解”。不再写死某道题的内容。 */
+        fun supportText(s: StrictSessionState): String =
+            if (s.gap.isNotBlank()) "这一步拆小一点：只补这一点——" + s.gap + "。其他先不管。"
+            else "这一步拆小一点：先别管完整答案，用一句话说出你现在的理解，哪怕不确定。"
+
         const val MAX_REMINDERS = 2
         const val REMIND_AT_MILLIS = 30_000L
         const val SHRINK_AT_MILLIS = 60_000L

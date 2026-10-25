@@ -30,17 +30,26 @@ class FocusOverlay(
     private val onPause: () -> Unit,
     private val onAbort: () -> Unit,
 ) {
+    /** 三个按钮的文字：守护和训练共用同一个拦截层（只有一个“拉回”拥有者），文字跟着当前拥有者变。 */
+    data class Labels(
+        val back: String = "返回目标应用",
+        val pause: String = "暂停 5 分钟",
+        val abort: String = "结束守护（紧急退出）",
+    )
+
     private var root: LinearLayout? = null
+    private var buttons: List<Button> = emptyList()
     private var title: TextView? = null
     private var detail: TextView? = null
     private var attachedTo: WindowManager? = null
 
     val isShown: Boolean get() = attachedTo != null
 
-    fun show(targetLabel: String, reason: String): OverlayResult {
+    fun show(targetLabel: String, reason: String, labels: Labels = Labels()): OverlayResult {
         attachedTo?.let {
             title?.text = "回到「$targetLabel」"
             detail?.text = reason
+            applyLabels(labels)
             return OverlayResult(true)
         }
         val a11y = accessibility()
@@ -51,6 +60,7 @@ class FocusOverlay(
         }
         val wm = host.getSystemService(WindowManager::class.java) ?: return OverlayResult(false, "拿不到 WindowManager")
         val view = build(host, targetLabel, reason)
+        applyLabels(labels)
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -73,6 +83,11 @@ class FocusOverlay(
         root?.let { runCatching { wm.removeView(it) } }
         attachedTo = null
         root = null
+        buttons = emptyList()
+    }
+
+    private fun applyLabels(l: Labels) {
+        listOf(l.back, l.pause, l.abort).zip(buttons).forEach { (text, b) -> b.text = text }
     }
 
     private fun build(host: Context, targetLabel: String, reason: String): LinearLayout {
@@ -94,9 +109,13 @@ class FocusOverlay(
         }
         box.addView(t)
         box.addView(d, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(14) })
-        box.addView(button(host, "返回目标应用", primary = true) { onReturn() }, lp(26))
-        box.addView(button(host, "暂停 5 分钟", primary = false) { onPause() }, lp(12))
-        box.addView(button(host, "结束守护（紧急退出）", primary = false, danger = true) { onAbort() }, lp(12))
+        val back = button(host, "返回目标应用", primary = true) { onReturn() }
+        val pause = button(host, "暂停 5 分钟", primary = false) { onPause() }
+        val abort = button(host, "结束守护（紧急退出）", primary = false, danger = true) { onAbort() }
+        box.addView(back, lp(26))
+        box.addView(pause, lp(12))
+        box.addView(abort, lp(12))
+        buttons = listOf(back, pause, abort)
         title = t; detail = d
         return box
     }

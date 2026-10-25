@@ -48,6 +48,7 @@ class TrainingController(private var session: TrainingSession) {
         now: Long,
     ): TrainingOutcome {
         if (!session.active) return TrainingOutcome.Rejected("会话已结束")
+        if (session.state == TrainingState.EVALUATING) return TrainingOutcome.Rejected("还在核对上一句，等我一下。")
         val slot = session.currentSlotKind ?: return TrainingOutcome.Rejected("没有待完成的槽位")
         if (transcript.isBlank() && selectedSentenceIds.isEmpty()) return TrainingOutcome.None
         val requestId = "req-" + session.revision + "-" + now
@@ -70,6 +71,16 @@ class TrainingController(private var session: TrainingSession) {
         )
         return TrainingOutcome.None
     }
+
+    /** 模型用不了/超时/解析失败：回到等待，不冒充通过，也不判用户失败（否则会卡在核验中）。 */
+    fun evaluationFailed(now: Long): TrainingOutcome {
+        if (!session.active || session.state != TrainingState.EVALUATING) return TrainingOutcome.None
+        session = session.copy(revision = session.revision + 1, state = TrainingState.WAITING_INPUT, pendingRequestId = "", updatedAt = now)
+        return TrainingOutcome.Waiting(askFor(session.currentSlotKind ?: SlotKind.LOCATE))
+    }
+
+    /** 当前槽位的问法（恢复/重显时用）。 */
+    fun currentAsk(): String = askFor(session.currentSlotKind ?: SlotKind.LOCATE)
 
     /** 采纳模型建议：schema、会话、题号、槽位、请求号任一不符都要丢弃。 */
     fun acceptAdvice(advice: EvaluationAdvice, now: Long): TrainingOutcome {
@@ -150,10 +161,11 @@ class TrainingController(private var session: TrainingSession) {
         if (session.state != TrainingState.WAITING_INPUT) return TrainingOutcome.None
         val q = question ?: return TrainingOutcome.None
         session = session.copy(state = TrainingState.SCAFFOLDED, updatedAt = now)
-        val options = when (session.currentSlotKind) {
-            SlotKind.LOCATE -> q.sentences.take(2).ifEmpty { listOf("任何人的正确率都会提高", "这 20 人") }
-            SlotKind.CONNECT -> listOf("样本是自愿参加的", "人数只有 20 个")
-            else -> listOf("举一个没参加训练的人", "举一个参加但没提高的人")
+        val slot = session.currentSlotKind ?: SlotKind.LOCATE
+        val options = q.scaffolds[slot]?.filter { it.isNotBlank() }?.take(3)?.takeIf { it.size >= 2 } ?: when (slot) {
+            SlotKind.LOCATE -> q.sentences.take(2).takeIf { it.size >= 2 } ?: listOf("结论那一句", "给出依据的那一句")
+            SlotKind.CONNECT -> listOf("依据覆盖的范围比结论小", "依据和结论之间缺了一步原因")
+            SlotKind.EXAMINE -> listOf("找一个题设没覆盖到的人或情况", "找一个符合条件但结论不成立的情况")
         }
         return TrainingOutcome.Scaffold("先缩小一点：下面两条里，哪一条和当前推理最相关？", options)
     }
@@ -172,7 +184,8 @@ class TrainingController(private var session: TrainingSession) {
     }
 
     fun resume(now: Long): TrainingOutcome {
-        if (session.state != TrainingState.INTERRUPTED) return TrainingOutcome.None
+        // 恢复态（沉默太久/题目有问题）和中断态都能接着来；原实现只认 INTERRUPTED，“继续”按钮点了没反应。
+        if (session.state != TrainingState.INTERRUPTED && session.state != TrainingState.RECOVERY) return TrainingOutcome.None
         session = session.copy(state = TrainingState.WAITING_INPUT, updatedAt = now)
         val slot = session.currentSlotKind ?: SlotKind.LOCATE
         return TrainingOutcome.Waiting(askFor(slot))

@@ -20,7 +20,11 @@ class StrictSessionStore(private val root: File) {
     fun load(): StrictSessionState? = synchronized(lock) {
         if (!file.exists()) return null
         runCatching { json.decodeFromString(StrictSessionState.serializer(), file.readText()) }
-            .onFailure { lastError = "严格会话文件读不了：" + it.javaClass.simpleName }
+            .onFailure {
+                lastError = "严格会话文件读不了：" + it.javaClass.simpleName
+                // 坏文件留底再挪开：不当成“没有回合”悄悄覆盖，也不每次启动都撞一遍。
+                runCatching { file.renameTo(File(file.parentFile, file.name + ".corrupt-" + System.currentTimeMillis())) }
+            }
             .getOrNull()
     }
 
@@ -66,6 +70,10 @@ class StrictSessionStore(private val root: File) {
             // 重启后输入通道状态未知，先标降级，等真实信号再升回 OK。
             health = Health.DEGRADED,
             silence = null,
+            // 进程死时正在核对：那次请求已经丢了，回到等待，答案留在 lastAnswer，不判通过也不判失败。
+            phase = if (state.phase == Phase.EVALUATING || state.phase == Phase.READY || state.phase == Phase.PROMPTING) Phase.WAITING else state.phase,
+            // 只有丢掉了一次在途核对才升版本，让那次迟到的结果作废。
+            revision = if (state.phase == Phase.EVALUATING) state.revision + 1 else state.revision,
         )
         save(resumed)
         Restore.Resume(resumed, gap)

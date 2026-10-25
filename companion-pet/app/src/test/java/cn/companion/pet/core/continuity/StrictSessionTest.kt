@@ -49,7 +49,10 @@ class StrictSessionTest {
         m.submit("最后一句", 2_000)
         val out = m.acceptEvaluation(eval(m, Verdict.PASS), 3_000)
         assertTrue(out is StrictOutcome.Accepted)
-        assertEquals(Phase.COMPLETED, m.state.phase)
+        // 持续闭环：有下一问且没到期 → 进入下一步，不是一答就结束。
+        assertEquals(Phase.WAITING, m.state.phase)
+        assertEquals(2, m.state.stepIndex)
+        assertEquals("哪句话支持你？", m.state.question)
         assertEquals(1, m.state.passedIndependently)
     }
 

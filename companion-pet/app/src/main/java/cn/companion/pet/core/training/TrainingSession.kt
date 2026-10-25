@@ -39,6 +39,8 @@ data class TrainingQuestion(
     val requiredSlots: List<SlotKind> = listOf(SlotKind.LOCATE, SlotKind.CONNECT),
     /** 是否内置示例（不是真实题库，必须在 UI 上标明）。 */
     val builtInSample: Boolean = true,
+    /** “我不会”时给的两条缩小选项，按槽位配；没配就用通用的，不再写死某一道题。 */
+    val scaffolds: Map<SlotKind, List<String>> = emptyMap(),
 )
 
 @Serializable
