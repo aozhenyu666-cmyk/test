@@ -29,6 +29,9 @@ import com.yishou.app.window.WindowScheduler
 import com.yishou.app.log.RunLog
 import com.yishou.app.speech.SpeechApi
 import com.yishou.app.speech.VoiceInput
+import com.yishou.app.healthwire.Facts
+import com.yishou.app.healthwire.LocalPolicy
+import com.yishou.app.healthwire.YishouGuard
 
 /*
  * 「一手」透明原则（同样显示在应用内“关于”页）：
@@ -125,5 +128,13 @@ class YishouApp : Application() {
         Reminders.scheduleNudge(this)
         Reminders.scheduleIdle(this)
         SummaryScheduler.schedule(this, replace = false)
+
+        // v2：本地监管（健康事实 + 本地规则 + 有限兜底 + 哨兵连接）在自己的后台线程上跑，
+        // 不占用无障碍事件线程（规范 §2.1 / T05 的教训）。
+        YishouGuard.install(this)
+        // 上次如果按过紧急暂停，启动时把暂停状态恢复进内存事实。
+        // 两条来源任一成立都算暂停：规则上的 STOPPED、独立的暂停标记文件（窗口翻页/重启都不丢）。
+        val guardStore = YishouGuard.policies(this)
+        if (LocalPolicy.anyStopped(guardStore.load()) || guardStore.emergencyStopped()) Facts.setPaused(true)
     }
 }

@@ -13,8 +13,9 @@ android {
         applicationId = "com.yishou.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 9
-        versionName = "0.9.0"
+        // v2 健康协议接入：版本号升一位，便于和 v1 区分（签名配置不变，规范 §9）。
+        versionCode = 10
+        versionName = "0.10.0-health-v2"
     }
 
     signingConfigs {

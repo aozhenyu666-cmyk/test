@@ -154,11 +154,33 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <!-- 一手自己的健康适配器：哨兵用 challenge 检查「无障碍执行线程真的在处理」。
+             只接受哨兵的签名（见 link/Partner.kt），别的应用调用一律拒绝。 -->
+        <provider
+            android:name=".healthwire.HealthProvider"
+            android:authorities="com.yishou.app.health"
+            android:exported="true" />
+
         <!-- 总控连接：只走 call()，只认总控的签名（见 link/Partner.kt），别的应用调用一律拒绝 -->
         <provider
             android:name=".link.LinkProvider"
             android:authorities="com.yishou.app.link"
             android:exported="true" />
+
+        <!-- 设备管理员：只申请锁屏（force-lock）这一项能力；不碰锁屏密码、不清数据、不启用防卸载 -->
+        <receiver
+            android:name=".healthwire.YishouAdmin"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:description="@string/admin_description"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
 
         <receiver
             android:name=".window.RescheduleReceiver"

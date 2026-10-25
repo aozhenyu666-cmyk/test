@@ -32,6 +32,7 @@ import com.yishou.app.ui.WatchedAppsScreen
 import com.yishou.app.ui.SettingsScreen
 import com.yishou.app.ui.StatusScreen
 import com.yishou.app.ui.TaskEditScreen
+import com.yishou.app.ui.WatchHealthScreen
 import com.yishou.app.ui.theme.YishouTheme
 import com.yishou.app.window.WindowActivity
 
@@ -131,7 +132,13 @@ class MainActivity : ComponentActivity() {
                         AboutScreen(onBack = { nav.navigateUp() })
                     }
                     composable("permissions") {
-                        PermissionsScreen(onBack = { nav.navigateUp() })
+                        PermissionsScreen(
+                            onBack = { nav.navigateUp() },
+                            onOpenHealth = { nav.navigate("health") },
+                        )
+                    }
+                    composable("health") {
+                        WatchHealthScreen(onBack = { nav.navigateUp() })
                     }
                     composable("watched") {
                         WatchedAppsScreen(onBack = { nav.navigateUp() })

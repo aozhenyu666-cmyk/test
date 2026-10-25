@@ -17,6 +17,7 @@ import com.yishou.app.look.ScreenLookService
 import com.yishou.app.system.AttachmentController
 import com.yishou.app.system.Reminders
 import com.yishou.app.gate.GateService
+import com.yishou.app.healthwire.LaunchTracker
 import com.yishou.app.speech.Heard
 import com.yishou.app.speech.ListenPhase
 import com.yishou.app.speech.Spoken
@@ -343,6 +344,10 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 拉回：两次提醒之后还没动静，把窗口页拉到前台（不管你在哪个应用），再把这一手读一遍。
      * 你在窗口允许的学习应用、相机、电话里，或者屏幕关着时，不拉，只朗读。
+     *
+     * **T18**：`bringToFront` 返回 true 只说明「请求已发出」，不是「已经拉回来了」。
+     * 真正确认要靠 [LaunchTracker]：窗口页自己 onResume 才算到位；等满预算还没到位，
+     * 就如实改发通知（不假装成功，规范 §0 铁律 4）。
      */
     private fun pullBack(k: Int) {
         if (!active) return
@@ -353,17 +358,36 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
         if (canPull) {
             val intent = Intent(yishou, WindowActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            if (!GateService.bringToFront(intent)) {
-                Notifications.showReminder(
-                    yishou, Notifications.ID_WINDOW,
-                    "这一手还在等你",
-                    "已经提醒过两次。点开回到陪练窗口，从这一手接着走。",
-                    WindowActivity::class.java,
-                )
-            }
+            val requested = GateService.bringToFrontWithReceipt(intent)
+            val launchId = requested
             yishou.stats.event(DayStats.PULL_BACK)
+            if (launchId == null) {
+                notifyPullFailed("系统没有接受拉回请求")
+            } else {
+                // 观测：等窗口页自己报前台；到点还没到就认账并改发通知。
+                viewModelScope.launch {
+                    delay(LaunchTracker.DEFAULT_VERIFY_WITHIN_MS + 500)
+                    val r = LaunchTracker.all().firstOrNull { it.launchId == launchId }
+                    if (r == null || !r.verified) {
+                        notifyPullFailed(r?.note ?: "没等到窗口页到前台")
+                    }
+                }
+            }
         }
         if (yishou.settings.app.value.ttsEnabled) speaker.speak("回来。这一手还在等你：${spokenText()}") { maybeListen() }
+    }
+
+    private fun notifyPullFailed(reason: String) {
+        try {
+            Notifications.showReminder(
+                yishou, Notifications.ID_WINDOW,
+                "这一手还在等你",
+                "已经提醒过两次，但没把窗口拉回来（$reason）。点开回到陪练窗口，从这一手接着走。",
+                WindowActivity::class.java,
+            )
+        } catch (e: Exception) {
+            // 通知发不出也不影响计时与朗读
+        }
     }
 
     // ---------- 语音 ----------

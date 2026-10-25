@@ -88,7 +88,10 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             val task = dao.getCurrentTask()
             val bp = task?.let { dao.getBreakpoint(it.id) }
             val last = dao.lastRound()
-            val zk = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.yishou.app.link.ZongkongClient.status(yishou, maxAgeMs = 0) }
+            // v2：总控状态只在这条 IO 协程里读一次（带超时），事件线程不再同步跨进程（规范 §8）。
+            val zk = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.yishou.app.healthwire.ZongkongLink.fetchOnce(yishou)
+            }
             val resume = last?.takeIf { (now - it.createdAt) / 60_000 >= CoachMessages.RESUME_GAP_MINUTES }
             _state.update {
                 it.copy(

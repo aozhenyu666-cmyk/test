@@ -78,7 +78,7 @@ private val MANUAL_ITEMS = listOf(
 )
 
 @Composable
-fun PermissionsScreen(onBack: () -> Unit) {
+fun PermissionsScreen(onBack: () -> Unit, onOpenHealth: () -> Unit = {}) {
     val context = LocalContext.current
     val app = context.applicationContext as YishouApp
     val prefs by app.settings.app.collectAsStateWithLifecycle()
@@ -222,6 +222,15 @@ fun PermissionsScreen(onBack: () -> Unit) {
                 onClick = { context.startActivity(GateActivity.testIntent(context)) },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("打开一次思考页（测试，不放行）") }
+
+            Text("监管与健康", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            PermissionCard(
+                title = "健康与监管",
+                detail = "看一手自己的真实响应状态、锁屏权限，以及紧急暂停（本地立即生效，停掉自动锁屏）。",
+                ok = true,
+                action = "查看",
+            ) { onOpenHealth() }
+            OutlinedButton(onClick = onOpenHealth, modifier = Modifier.fillMaxWidth()) { Text("打开健康与监管") }
         }
     }
 }

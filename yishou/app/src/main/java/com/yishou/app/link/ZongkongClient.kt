@@ -2,34 +2,14 @@ package com.yishou.app.link
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 
-/** 一手这边读总控的状态。总控没装、版本太旧或签名不对时返回 null。 */
+/**
+ * 一手这边「打开总控」的入口。
+ *
+ * v2 起**不再提供 `status()`**：无障碍事件线程里同步读总控状态会把整条事件通道拖死（报告 §8）。
+ * 读总控状态的正确入口是 [com.yishou.app.healthwire.ZongkongLink]（缓存 + 后台 + 超时 + 失联态）。
+ */
 object ZongkongClient {
-    private val uri: Uri = Uri.parse("content://${Link.ZONGKONG_AUTHORITY}")
-
-    /** 短时间缓存：无障碍事件一秒能来好几次，不必每次都问。 */
-    @Volatile private var cached: Pair<Long, ZongkongStatus?>? = null
-
-    fun status(context: Context, maxAgeMs: Long = 3_000): ZongkongStatus? {
-        val now = System.currentTimeMillis()
-        cached?.let { (at, s) -> if (now - at < maxAgeMs) return s }
-        val s = fetch(context)
-        cached = now to s
-        return s
-    }
-
-    private fun fetch(context: Context): ZongkongStatus? {
-        if (!Partner.zongkongGenuine(context)) return null
-        return try {
-            val b = context.contentResolver.call(uri, Link.STATUS, null, null) ?: return null
-            if (b.containsKey(Link.ERROR)) return null
-            @Suppress("DEPRECATION")
-            ZongkongStatus.fromMap(b.keySet().associateWith { b.get(it) })
-        } catch (e: Exception) {
-            null
-        }
-    }
 
     fun open(context: Context, route: String? = null): Boolean {
         val intent = context.packageManager.getLaunchIntentForPackage(Partner.ZONGKONG) ?: return false

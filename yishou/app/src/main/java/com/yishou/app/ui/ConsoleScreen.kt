@@ -67,6 +67,7 @@ import java.time.ZoneId
 import com.yishou.app.link.Partner
 import com.yishou.app.link.ZongkongClient
 import com.yishou.app.link.ZongkongStatus
+import com.yishou.app.healthwire.ZongkongLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -340,7 +341,8 @@ private fun ZongkongPanel(resumeKey: Int) {
     val installed = remember(resumeKey) { Partner.installed(context) }
     if (!installed) return
     val zk by produceState<ZongkongStatus?>(null, resumeKey) {
-        value = withContext(Dispatchers.IO) { ZongkongClient.status(context, maxAgeMs = 0) }
+        // v2：带超时的一次性读取（这条在 IO 上跑，界面不会卡住）。
+        value = withContext(Dispatchers.IO) { ZongkongLink.fetchOnce(context) }
     }
     val open = { ZongkongClient.open(context); Unit }
     Panel("总控", onClick = open) {
