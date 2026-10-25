@@ -34,6 +34,8 @@ data class VisionEvidence(
     val failure: String = "",
     /** 回复里的摘要字数；不存摘要本身。 */
     val summaryChars: Int = 0,
+    /** 图上画了几个编号框。 */
+    val marks: Int = 0,
 ) {
     fun label(): String = buildString {
         append(
@@ -51,7 +53,9 @@ data class VisionEvidence(
             append(" · 发出 ").append(imageBlocks).append(" 张图（").append(mime).append("，")
                 .append(imageBytes / 1024).append(" KB")
             if (width > 0) append("，").append(width).append("×").append(height)
-            append("，指纹 ").append(imageSha256).append("）")
+            append("，指纹 ").append(imageSha256)
+            if (marks > 0) append("，标号 ").append(marks).append(" 个")
+            append("）")
         }
         if (model.isNotBlank()) append(" · ").append(model).append(" @ ").append(host)
         if (durationMs > 0) append(" · ").append(durationMs).append(" ms")

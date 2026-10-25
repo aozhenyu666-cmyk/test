@@ -206,7 +206,7 @@ def parse_vision_evidence(prefs_xml):
             except Exception:
                 return None
             keep = ("at", "outcome", "model", "host", "imageBlocks", "mime", "imageBytes", "width", "height",
-                    "imageSha256", "durationMs", "failure", "summaryChars")
+                    "imageSha256", "durationMs", "failure", "summaryChars", "marks")
             return {k: data.get(k) for k in keep}
     return None
 

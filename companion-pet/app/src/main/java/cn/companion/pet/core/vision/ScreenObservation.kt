@@ -38,6 +38,8 @@ data class ScreenCaptureAttempt(
     val error: String = "",
     /** 实际被截的窗口所属应用；观察结果按它记，不用感知服务记录的前台。 */
     val packageName: String = "",
+    /** 画在图上的编号框数量（见 ScreenMarks）。 */
+    val marksDrawn: Int = 0,
 )
 
 object ScreenCapturePolicy {

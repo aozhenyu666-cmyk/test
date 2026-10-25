@@ -505,10 +505,16 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             fun evidence(e: cn.companion.pet.core.vision.VisionEvidence) { runCatching { app.visionEvidence.record(e) } }
             val startedAt = now()
             delay(350) // 先让气泡收起，别把它拍进去
+            // 截图前读一次无障碍节点，给可点元素编号；同一张编号表发给视觉模型。
+            val marks = if (!settings.visionMarks) emptyList() else withContext(Dispatchers.IO) {
+                val observed = runCatching { app.deviceController.observe() }.getOrNull()
+                val obs = if (observed?.status == cn.companion.pet.core.device.DeviceStatus.SUCCESS) app.deviceController.lastObservation() else null
+                obs?.let { cn.companion.pet.core.vision.ScreenMarks.plan(it.nodes) }.orEmpty()
+            }
             val attempt = withContext(Dispatchers.IO) {
                 val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
                 try {
-                    cn.companion.pet.a11y.ScreenCaptureGateway.captureBlocking(PerceptionHub.service, executor, 5_000)
+                    cn.companion.pet.a11y.ScreenCaptureGateway.captureBlocking(PerceptionHub.service, executor, 5_000, marks)
                 } finally {
                     executor.shutdown()
                 }
@@ -538,8 +544,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 lookNotice("今天的调用次数用完了。"); return@launch
             }
             stats.add(Stats.Kind.API_CALLS)
-            val run = withContext(Dispatchers.IO) { app.visionAnalyzer.analyzeDetailed(jpeg, attempt.width, attempt.height) }
-            evidence(run.evidence)
+            val table = if (attempt.marksDrawn > 0) cn.companion.pet.core.vision.ScreenMarks.promptTable(marks) else ""
+            val prompt = cn.companion.pet.core.vision.VisionAnalyzer.DEFAULT_PROMPT + (if (table.isEmpty()) "" else "\n" + table)
+            val run = withContext(Dispatchers.IO) { app.visionAnalyzer.analyzeDetailed(jpeg, attempt.width, attempt.height, prompt) }
+            evidence(run.evidence.copy(marks = attempt.marksDrawn))
             val summary = run.summary
             if (summary == null) {
                 // 说清楚是哪一步：请求失败（Key/模型名/网络）还是模型回了但看不懂。

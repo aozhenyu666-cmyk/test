@@ -64,6 +64,8 @@ class Settings(context: Context) {
     /** 视觉服务的接口地址；空 = 和搭话用同一个地址。 */
     var visionEndpoint by str("vision_endpoint", "")
     var visionUploadEnabled by bool("vision_upload", false)
+    /** 看一眼时在截图上给可点元素标号，并把编号表发给视觉模型。 */
+    var visionMarks by bool("vision_marks", true)
     /** A3：允许 Agent 操作的应用名单；空名单时全部拒绝。 */
     var deviceAllowedApps by set("device_apps")
     var geminiAutoSend by bool("gemini_auto_send", false)

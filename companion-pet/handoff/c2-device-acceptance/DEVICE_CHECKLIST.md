@@ -64,6 +64,25 @@ APK 来源：https://github.com/aozhenyu666-cmyk/test/releases/download/tongzhuo
 预期：旧记忆/素材/目标/待确认状态迁移安全；签名/版本递增核对；不伪造升级通过。
 状态：NOT_RUN
 
+## 10 技能（0.5.6 新增）
+前置：设置 → 设备与权限 → “允许 Agent 操作的应用”里放一个专用测试 App（例如计算器/备忘录），桌宠在运行。
+步骤：
+1. 打开测试 App → 点桌宠 → 技能 → 录新技能，起名。
+2. 点桌宠 → “选这一步”：应列出这一屏能点的元素（①②③…，输入框带 ✎）。选“打开<App>”，再选 2–3 个按钮/输入框；每选一个应立刻帮你做，并说“记下了，也做了”。
+3. “完成”→ 回桌面 → 点桌宠 → 技能 → ▶ 技能名：应自己打开 App 并按顺序做完，气泡显示“第 i/n 步”，最后说“做完了”。
+4. 回放中点桌宠：应立刻停下，说“好，停下”。
+5. 在 App 里改一下界面（例如换页）再回放：找不到元素时应在那一步停下，说“第 N 步没成功：等了 8 秒没找到…”，不乱点。
+6. 设置 → 设备与权限 → 技能：能看到步骤、上次运行日志（✓/?/✗），能上下移动、删除步骤。
+7. 把测试 App 移出允许名单再回放：应拒绝（应用不在授权名单）。
+预期：只按元素点，不存坐标；失败即停并说清哪一步；锁屏自动停止。
+状态：NOT_RUN
+
+## 11 截图标号（0.5.6 新增）
+前置：同第 2 项；设置 → 模型与看图 → “截图上给按钮标号”默认开。
+步骤：在有几个按钮的普通页面点桌宠 → 看一眼；设置 → 模型与看图 → “上次看一眼”。
+预期：证据里出现“标号 N 个”；回复提到元素时带编号（例如“[3] 发送”）。关掉开关后标号为 0。截图仍只在内存里，不落盘。
+状态：NOT_RUN
+
 ## 最小命令
 
 ~~~text
@@ -74,6 +93,8 @@ adb -s <serial> shell dumpsys package cn.companion.pet | findstr versionName ver
 adb -s <serial> shell run-as cn.companion.pet cat files/memory/agent/traces.jsonl
 adb -s <serial> shell run-as cn.companion.pet cat files/memory/goals/state.json
 adb -s <serial> shell run-as cn.companion.pet cat files/memory/actions/pending.json
+adb -s <serial> shell run-as cn.companion.pet cat files/memory/skills/skills.json
+adb -s <serial> shell run-as cn.companion.pet cat shared_prefs/vision_evidence.xml
 ~~~
 
 证据只记步骤/状态/截图路径；不导出 Key、Cookie、截图原文、Base64、私人聊天。 

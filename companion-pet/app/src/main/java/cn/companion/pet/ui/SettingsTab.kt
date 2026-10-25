@@ -591,6 +591,10 @@ private fun ScreenDiagnosticSection(context: Context) {
     Toggle("允许把截图发给视觉模型", "默认关。打开后，仅在点击“看一眼”并成功截图后，按一次全局预算发送给视觉模型；排除/敏感窗口不上传。", upload) {
         upload = it; app.settings.visionUploadEnabled = it
     }
+    var marksOn by remember { mutableStateOf(app.settings.visionMarks) }
+    Toggle("截图上给按钮标号", "看一眼时在截图上用红框和数字标出能点/能写的元素，并把同样的编号表发给视觉模型，它说“[3] 发送”就能对上是哪个按钮。只用屏幕上本来就显示的文字。", marksOn) {
+        marksOn = it; app.settings.visionMarks = it
+    }
     GroupTitle("截图权限检查")
     Text("只检查本机能不能截图，不看别的 App：此刻前台是桌宠自己的设置页，会被拒绝（NO_ACTIVE_WINDOW），这是正常的。截图只在本机显示，不落盘。", style = MaterialTheme.typography.bodySmall)
     Button(enabled = !busy, onClick = {
