@@ -56,8 +56,10 @@ class PetView(context: Context) : View(context) {
     private val ink = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(70, 48, 38) }
     private val white = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val cheek = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(150, 255, 128, 128) }
-    private val paper = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 252, 240) }
-    private val accent = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(108, 142, 230) }
+    // 与界面 paper token 同源（#F7F3EA）
+    private val paper = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(247, 243, 234) }
+    // 与界面 token 同源：珊瑚强调（light accent #C9512E）
+    private val accent = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(201, 81, 46) }
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(70, 48, 38); textAlign = Paint.Align.CENTER }
     private val badgeText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE; textAlign = Paint.Align.CENTER; isFakeBoldText = true

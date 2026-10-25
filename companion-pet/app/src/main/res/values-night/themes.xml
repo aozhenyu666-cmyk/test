@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色模式下用同样的无 ActionBar 主题，但底色跟随深色，避免启动闪白。 -->
+    <style name="Theme.CompanionPet" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#16140F</item>
+    </style>
+</resources>

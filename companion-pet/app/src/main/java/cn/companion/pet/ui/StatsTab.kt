@@ -23,7 +23,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import cn.companion.pet.PetApp
 import cn.companion.pet.data.Stats
-import cn.companion.pet.ui.components.EmptyNote
+import cn.companion.pet.ui.components.EmptyState
 import cn.companion.pet.ui.components.PageHeader
 import cn.companion.pet.ui.components.Panel
 import cn.companion.pet.ui.components.Rule
@@ -47,7 +47,11 @@ fun StatsTab(resumeTick: Int) {
     ) {
         PageHeader("统计", "最近 " + (if (days.isEmpty()) 0 else days.size) + " 天。没有可靠 token/定价，不算精确费用。")
         if (days.isEmpty()) {
-            EmptyNote("还没有数据。")
+            EmptyState(
+                title = "还没有统计数据",
+                description = "它开口、你回应之后，这里才会出现数字。刚开始用是空的，不是坏了。",
+                actionLabel = null,
+            )
             return@Column
         }
         val recent = days.takeLast(7)
@@ -74,6 +78,8 @@ fun StatsTab(resumeTick: Int) {
             }
         }
         Text("回应率低：先改人设和钩子。回应了但没拉住：再调开口频率。", style = MaterialTheme.typography.bodySmall, color = colors.ink2)
+        Text("下面的表格可以左右滑动查看全部列。", style = MaterialTheme.typography.labelSmall, color = colors.ink2,
+            modifier = Modifier.padding(top = 8.dp))
         Column(Modifier.horizontalScroll(rememberScrollState())) {
             Row {
                 Cell("日期", 92, bold = true)

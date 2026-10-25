@@ -100,7 +100,7 @@ class PetService : Service() {
         val pause = PendingIntent.getService(this, 1, Intent(this, PetService::class.java).setAction(ACTION_TOGGLE_PAUSE), PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(this, 2, Intent(this, PetService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE)
         val notification = Notification.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_pet)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(if (paused) "桌宠在安静待着" else "桌宠在你身边")
             .setContentText(if (paused) "不会主动开口" else "点这里打开设置")
             .setContentIntent(open)

@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 仅提供 Compose 承载用的无 ActionBar 主题，不额外引入 Material 组件库。 -->
-    <style name="Theme.CompanionPet" parent="@android:style/Theme.Material.Light.NoActionBar" />
+    <!-- 仅提供 Compose 承载用的无 ActionBar 主题；底色与界面 paper token 一致，避免启动闪白。 -->
+    <style name="Theme.CompanionPet" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F7F3EA</item>
+    </style>
 </resources>

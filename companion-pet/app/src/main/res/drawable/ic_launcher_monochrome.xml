@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 主题图标（Material You）用单色剪影。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#000000"
+        android:pathData="M54,24 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0" />
+    <path
+        android:fillColor="#000000"
+        android:pathData="M54,33 C70,33 81,43 81,58 C81,73 70,83 54,83 C38,83 27,73 27,58 C27,43 38,33 54,33 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M45,55 m-3.6,0 a3.6,3.6 0 1,0 7.2,0 a3.6,3.6 0 1,0 -7.2,0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M63,55 m-3.6,0 a3.6,3.6 0 1,0 7.2,0 a3.6,3.6 0 1,0 -7.2,0" />
+</vector>

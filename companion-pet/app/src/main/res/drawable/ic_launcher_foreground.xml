@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 同桌 Launcher 前景：圆头 + 单侧小触角 + 对话小卷，108dp 画布内安全区 72dp。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 耳朵/触角 -->
+    <path
+        android:fillColor="#1C1A16"
+        android:pathData="M54,26 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0" />
+    <path
+        android:strokeColor="#1C1A16"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:pathData="M54,30.5 L54,36" />
+    <!-- 头部主体 -->
+    <path
+        android:fillColor="#E8794F"
+        android:strokeColor="#1C1A16"
+        android:strokeWidth="3"
+        android:pathData="M54,36 C69.5,36 80,45.5 80,58.5 C80,71.5 69.5,81 54,81 C38.5,81 28,71.5 28,58.5 C28,45.5 38.5,36 54,36 Z" />
+    <!-- 眼睛 -->
+    <path
+        android:fillColor="#1C1A16"
+        android:pathData="M45,56 m-3.6,0 a3.6,3.6 0 1,0 7.2,0 a3.6,3.6 0 1,0 -7.2,0" />
+    <path
+        android:fillColor="#1C1A16"
+        android:pathData="M63,56 m-3.6,0 a3.6,3.6 0 1,0 7.2,0 a3.6,3.6 0 1,0 -7.2,0" />
+    <!-- 嘴（一条平静的小弧） -->
+    <path
+        android:strokeColor="#1C1A16"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:pathData="M50,66 Q54,69.5 58,66" />
+</vector>

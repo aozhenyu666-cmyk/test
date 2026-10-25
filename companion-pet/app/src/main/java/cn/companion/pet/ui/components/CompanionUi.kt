@@ -168,13 +168,13 @@ fun ToggleRow(
 fun SourceTag(text: String, highlighted: Boolean = false) {
     val colors = LocalCompanionColors.current
     Surface(
-        color = if (highlighted) colors.signal else colors.chip,
-        shape = RoundedCornerShape(999.dp),
+        color = if (highlighted) colors.accent else colors.chip,
+        shape = CompanionShapes.pill,
     ) {
         Text(
             text,
             style = MaterialTheme.typography.labelMedium,
-            color = if (highlighted) colors.onSignal else colors.ink2,
+            color = if (highlighted) colors.onAccent else colors.ink2,
             modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
         )
     }
@@ -191,8 +191,8 @@ fun CutAction(
     container: Color? = null,
 ) {
     val colors = LocalCompanionColors.current
-    val bg = container ?: if (highlighted) colors.signal else colors.ink
-    val fg = if (highlighted) colors.onSignal else colors.paper
+    val bg = container ?: if (highlighted) colors.accent else colors.ink
+    val fg = if (highlighted) colors.onAccent else colors.paper
     Button(
         onClick = onClick,
         enabled = enabled,
@@ -222,4 +222,30 @@ fun EmptyNote(text: String) {
         color = LocalCompanionColors.current.ink2,
         modifier = Modifier.padding(vertical = 10.dp),
     )
+}
+
+/**
+ * 空状态：说明 + 一个明确的下一步。
+ * 只显示一句灰字会让用户不知道能做什么，这是审计里的 P2。
+ */
+@Composable
+fun EmptyState(
+    title: String,
+    description: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
+    val colors = LocalCompanionColors.current
+    Panel {
+        Text(title, style = MaterialTheme.typography.titleMedium, color = colors.ink)
+        Text(
+            description,
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.ink2,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        if (actionLabel != null && onAction != null) {
+            CutAction(actionLabel, onAction, modifier = Modifier.padding(top = 12.dp), highlighted = true)
+        }
+    }
 }

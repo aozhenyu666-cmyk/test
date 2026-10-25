@@ -129,11 +129,11 @@ fun StartTab(activity: MainActivity, resumeTick: Int, openSettings: (Int) -> Uni
         HeroPanel {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("它现在", style = MaterialTheme.typography.labelMedium, color = colors.signal)
+                    Text("它现在", style = MaterialTheme.typography.labelMedium, color = colors.accent)
                     Text("一个会观察、会等待的同伴", style = MaterialTheme.typography.bodySmall,
                         color = colors.paper.copy(alpha = 0.72f), modifier = Modifier.padding(top = 4.dp))
                 }
-                OrbitArt(size = 104.dp, accent = colors.accent, core = colors.signal)
+                OrbitArt(size = 104.dp, accent = colors.accent, core = colors.warning)
             }
             Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(status, style = MaterialTheme.typography.titleLarge, color = colors.paper, modifier = Modifier.weight(1f))

@@ -102,8 +102,8 @@ class MainActivity : ComponentActivity() {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Eyebrow("COMPANION / 桌宠")
-                            Text("桌宠", style = MaterialTheme.typography.headlineMedium, color = colors.ink)
+                            Eyebrow("COMPANION")
+                            Text("同桌", style = MaterialTheme.typography.headlineMedium, color = colors.ink)
                         }
                         TextButton(onClick = { openSettings(settingsGroup) }, modifier = Modifier.testTag("open_settings")) {
                             Text("⚙ 设置", style = MaterialTheme.typography.labelLarge, color = colors.ink2)

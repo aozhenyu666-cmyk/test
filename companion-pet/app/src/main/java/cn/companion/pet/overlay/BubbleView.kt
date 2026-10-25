@@ -214,7 +214,7 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
         setPadding(padH, padV, padH, padV)
         background = GradientDrawable().apply {
             cornerRadius = dp(14f)
-            setColor(if (highlighted) ACCENT else Color.rgb(255, 244, 230))
+            setColor(if (highlighted) ACCENT else Color.rgb(255, 253, 248))
             setStroke(dp(1.5f).toInt(), INK)
         }
         layoutParams = android.view.ViewGroup.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
@@ -260,8 +260,9 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
 
     companion object {
         private const val MIC_TAG = "mic"
-        val INK = Color.rgb(70, 48, 38)
-        val ACCENT = Color.rgb(108, 142, 230)
+        // 与界面 token 同源：墨 #1C1A16、珊瑚 #C9512E。
+        val INK = Color.rgb(28, 26, 22)
+        val ACCENT = Color.rgb(201, 81, 46)
     }
 }
 
