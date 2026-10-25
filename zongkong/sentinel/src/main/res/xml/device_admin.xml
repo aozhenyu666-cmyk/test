@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 设备管理器：设成设备所有者后用来锁卸载。不要额外权限。 -->
+<!--
+  设备管理器策略声明（规范 §5.1 / 报告 §4）。
+
+  force-lock：允许 DevicePolicyManager.lockNow() 立刻锁屏。
+  本轮**不要求** Device Owner，**不启用**防卸载（setUninstallBlocked 那条分支保持关闭）。
+  这里不声明 wipe-data / reset-password 等破坏性策略，也不读取或设置用户的锁屏凭据。
+-->
 <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-policies />
+    <uses-policies>
+        <force-lock />
+    </uses-policies>
 </device-admin>

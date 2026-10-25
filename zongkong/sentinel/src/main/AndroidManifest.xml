@@ -2,16 +2,22 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- 总控掉线时提醒你 -->
+    <!-- 总控掉线时提醒你；:watch 的前台通知也要它 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- 自己把总控的无障碍服务重新挂上：要在电脑上 adb 授权一次；不授权就只拦、只提醒 -->
+    <!-- 自己把总控/三个客户端的无障碍服务重新挂上：要在电脑上 adb 授权一次；不授权就只拦、只提醒 -->
     <uses-permission
         android:name="android.permission.WRITE_SECURE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
 
-    <!-- 只需要看见总控（判断装没装、叫醒它） -->
+    <!-- `:watch` 前台服务：类型如实声明为 specialUse（规范 §2.1：不许用虚假音频/定位保活） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- 需要看见三个客户端（判断装没装、发挑战）和总控（叫醒它） -->
     <queries>
         <package android:name="com.zongkong.app" />
+        <package android:name="com.yishou.app" />
+        <package android:name="cn.companion.pet" />
     </queries>
 
     <application
@@ -38,13 +44,13 @@
             android:launchMode="singleTask"
             android:taskAffinity="com.zongkong.sentinel.block" />
 
-        <!-- 解除闸门：手写分析 + 冷静期 + 二次核验 -->
+        <!-- 解除闸门（正常解除）：手写分析 + 冷静期 + 二次核验。紧急暂停不走这里。 -->
         <activity
             android:name=".ReleaseActivity"
             android:exported="false"
             android:launchMode="singleTask" />
 
-        <!-- 设备管理器：设成设备所有者后能锁住卸载（可选，adb 设一次） -->
+        <!-- 设备管理器：本轮只用来 force-lock 锁屏；不要求 Device Owner，防卸载不启用 -->
         <receiver
             android:name=".AdminReceiver"
             android:exported="true"
@@ -57,11 +63,29 @@
             </intent-filter>
         </receiver>
 
-        <!-- 总控往这里写心跳和拦截状态；只认总控的签名 -->
+        <!-- 总控往这里写心跳和拦截状态（v1 兼容通道）；只认总控的签名 -->
         <provider
             android:name=".LinkProvider"
             android:authorities="com.zongkong.sentinel.link"
             android:exported="true" />
+
+        <!-- v2 健康协议入口：register / syncPolicy / reportReceipt / ping；跑在 :watch（规范 §3.1） -->
+        <provider
+            android:name=".watch.WatchProvider"
+            android:authorities="com.zongkong.sentinel.health"
+            android:exported="true"
+            android:process=":watch" />
+
+        <!-- 独立 :watch 进程：健康调度、策略持久化、执行仲裁、管理员锁屏（规范 §2.1） -->
+        <service
+            android:name=".watch.WatchService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:process=":watch">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="本地自律监管的健康探测与到点锁屏看护；无网络、无模型、不做媒体或定位" />
+        </service>
 
         <service
             android:name=".SentinelService"

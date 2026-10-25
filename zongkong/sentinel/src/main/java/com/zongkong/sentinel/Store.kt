@@ -219,18 +219,29 @@ object Sys {
     }
 
     /**
-     * 直接问总控：你的眼睛（无障碍服务）在不在？顺便把它的进程拉起来（死了的话），它起来后会自己检查、自己修。
-     * 同步调用，要在后台线程里做。true = 在；false = 不在或者叫不应。
+     * v2：**只负责把总控的进程拉活**，不判断健康。
+     *
+     * 规范 §8 明确要求：`wake` 的返回值（总控老版本直接回 `GuardService.running`）**不能**当健康凭据。
+     * 健康一律由 `:watch` 的 v2 挑战 ack 判定（见 `watch/HealthScheduler` 与 `HealthEvaluator`）。
+     * 所以这里**故意返回 Unit**：调用方拿不到那个布尔，就不可能再拿它糊弄健康状态（T02）。
+     *
+     * 同步调用，要在后台线程里做。
      */
-    fun askMain(c: Context): Boolean = try {
-        c.contentResolver.call(android.net.Uri.parse(Proto.MAIN_WAKE_URI), Proto.WAKE, null, null)?.getBoolean("guard") == true
-    } catch (e: Throwable) {
-        Log.w(TAG, "叫不应总控", e)
-        false
+    fun wakeMain(c: Context) {
+        try {
+            c.contentResolver.call(android.net.Uri.parse(Proto.MAIN_WAKE_URI), Proto.WAKE, null, null)
+        } catch (e: Throwable) {
+            Log.w(TAG, "叫总控的进程失败（不影响健康判定）", e)
+        }
     }
 
-    fun wakeMain(c: Context) {
-        Thread { askMain(c) }.start()
+    /** 只为兼容保留的内部探测（不要用它判断健康，返回值仅表示「总控应答了这个老接口」）。 */
+    @Deprecated("不要用 running 布尔当健康凭据（规范 §8 / T02）；健康只看 v2 挑战 ack")
+    private fun oldV1GuardFlag(c: Context): Boolean = try {
+        c.contentResolver.call(android.net.Uri.parse(Proto.MAIN_WAKE_URI), Proto.WAKE, null, null)
+            ?.getBoolean("guard") == true
+    } catch (_: Throwable) {
+        false
     }
 
     fun grantCommands(): String =
