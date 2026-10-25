@@ -148,7 +148,7 @@ class GuardTickCore(
             incidentKey = incidentKey,
             // ⚠️ T15 的唯一接线点（t13 的 bug 就在这里：曾经恒用默认值 0）。
             // 注入实验请改这一行 —— 改了它 [RepairGraceWiringTest] 必须变红。
-            repairGraceUntilMono = 0L,
+            repairGraceUntilMono = grace.untilMono,
         )
         lastDecision = attempt.reason
         val req = attempt.request ?: return TickOutcome.NotFired
