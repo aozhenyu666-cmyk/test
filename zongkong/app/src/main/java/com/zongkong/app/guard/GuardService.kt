@@ -2,6 +2,7 @@ package com.zongkong.app.guard
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
+import android.os.Handler
 import android.os.PowerManager
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -91,6 +92,19 @@ class GuardService : AccessibilityService() {
     private fun connected() {
         running = true
         runCatching { Diag.log(this, "connected", "无障碍服务连上；SDK=${android.os.Build.VERSION.SDK_INT}") }
+        // v2：换一个新的无障碍实例（重建必须换新），并把挑战投递口挂到这条主线程上（T02/T11）。
+        runCatching {
+            com.zongkong.app.healthwire.GuardHealth.init(this)
+            // 投递目标就是本服务的主线程 Handler —— 无障碍回调、tick 都在这里跑。
+            val instance = com.zongkong.app.healthwire.GuardHealth.onA11yConnected(this, Handler(mainLooper))
+            // 注册走后台线程：onServiceConnected 是 a11y 主线程，不能在这里同步跨进程（T05）。
+            SentinelClient.registerAsync(
+                this,
+                instance,
+                versionName = com.zongkong.app.BuildConfig.VERSION_NAME,
+                versionCode = com.zongkong.app.BuildConfig.VERSION_CODE.toLong(),
+            )
+        }.onFailure { Log.w(TAG, "初始化健康协议失败", it) }
         val now = System.currentTimeMillis()
         val hb = store.heartbeat
         if (hb > 0 && now - hb > OFFLINE_THRESHOLD) {
@@ -149,19 +163,26 @@ class GuardService : AccessibilityService() {
 
     private var lastSentinelWrite = 0L
 
-    /** 给哨兵写心跳和现在的拦截状态（最多 5 秒一次）。哨兵看到心跳停了就接管。 */
-    private fun beatSentinel(now: Long, status: () -> com.zongkong.core.Status) {
+    /**
+     * v2：和哨兵保持一次 v2 ping（最多 5 秒一次）。
+     *
+     * 注意这里**不再**把「总控在跑」当健康凭据推给哨兵 —— 那正是报告 §3.2 / §8 说的假在线。
+     * 健康由哨兵反过来发 `challenge`（[com.zongkong.app.healthwire.HealthWireProvider]），
+     * 只有真的在 a11y 主线程上处理完才算 ack。
+     */
+    private fun beatSentinel(now: Long) {
         if (now - lastSentinelWrite < 5_000) return
         lastSentinelWrite = now
-        val c = store.config.value
-        val st = status()
-        SentinelClient.push(this, c.blocked, st.strict, maxOf(c.pausedUntil, st.emergencyUntil ?: 0L), now)
+        // 状态已在本地生效；哨兵的拦截由它自己按策略判断，这里只做一次连通性 ping。
+        runCatching { com.zongkong.app.guard.SentinelClient.refresh(this) }
     }
 
     private fun onWindow(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        // v2：登记一个「真的处理过的窗口事件」，供哨兵判断事件通道是否失灵（T03）。
+        runCatching { com.zongkong.app.healthwire.GuardHealth.noteWindowEvent() }
         val pkg = event.packageName?.toString() ?: return
-        System.currentTimeMillis().let { t -> beatSentinel(t) { store.status(t) } }
+        beatSentinel(System.currentTimeMillis())
         Log.d(TAG, "窗口切换：$pkg / ${event.className}")
         if (pkg in overlays()) return
         val now = System.currentTimeMillis()
@@ -275,7 +296,9 @@ class GuardService : AccessibilityService() {
         store.heartbeat = now
         if (interactive()) accountPlay(now) else fgSince = now
         val status = store.status(now)
-        beatSentinel(now) { status }
+        beatSentinel(now)
+        // v2：本地规则兜底（哨兵失联且自己健康时，按本地规则有限锁屏一次）。
+        runCatching { com.zongkong.app.healthwire.LocalGuardian.tick(this, now) }
         fgPkg?.let { if (status.strict) enforce(it, now) }
         // 低屏模式：没有窗口切换事件时也按秒盯着（比如一直停在一个应用里）
         fgPkg?.let { p -> runCatching { Watch.tick(this, p, now) } }
@@ -485,10 +508,13 @@ class GuardService : AccessibilityService() {
     }
 
     private fun offline() {
+        // v2：**先**把健康台账里的实例/ack 作废，再判断 running。
+        // 否则出现「进程还在、线程已经卡死」时，台账里还挂着一个旧 ack，界面就会显示成健康。
+        runCatching { com.zongkong.app.healthwire.GuardHealth.onA11yDisconnected() }
         if (!running) return
         running = false
         runCatching { Diag.log(this, "offline", "无障碍服务离线（拦不住、看不到）") }
-        // 告诉哨兵：总控这就下线了，马上接管（崩溃时走不到这里，哨兵等心跳停 90 秒）
+        // 告诉哨兵：总控这就下线了（v2：只做一次 ping 让哨兵立刻重探；不再靠心跳布尔判活）
         runCatching { SentinelClient.push(this, store.config.value.blocked, true, store.config.value.pausedUntil, at = 0L) }
         accountPlay(System.currentTimeMillis())
         store.logSwitch(System.currentTimeMillis(), com.zongkong.core.boss.Timeline.GAP)

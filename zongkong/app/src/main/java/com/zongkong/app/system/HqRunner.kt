@@ -47,8 +47,11 @@ object HqRunner {
         app.actions.device.maybeSync()
 
         val due = Hq.due(cfg, store.hq.value.sessions, now, zone)
-        // 进程刚被闹钟拉起来时服务可能还没连上：一分半内有过心跳也算在
-        val eyes = com.zongkong.app.guard.GuardService.running || now - store.heartbeat < 90_000
+        // v2：眼睛在不在，看真实健康状态（真实 ack），不看进程里的 running 布尔。
+        val eyes = runCatching {
+            com.zongkong.app.healthwire.PermissionStatusBridge.status(context) ==
+                com.zongkong.app.health.HealthStatus.HEALTHY
+        }.getOrDefault(false)
         when (due) {
             Hq.Due.SOON -> if (store.firstAlert("hq-soon")) {
                 Notifications.alert(context, "10 分钟后是总控时间", "${DayClock.hhmm(cfg.at)} 开始，${cfg.minutes} 分钟。手上的事收个尾。", "hq")
@@ -344,9 +347,13 @@ object HqRunner {
         return Unit
     }
 
-    /** 记录时附上现在的状况：服务在不在、通知能不能发。 */
+    /** 记录时附上现在的状况：眼睛有没有真实响应、通知能不能发。 */
     private fun diag(context: Context): String = buildString {
-        if (!com.zongkong.app.guard.GuardService.running && System.currentTimeMillis() - context.zk.store.heartbeat > 90_000) append("（无障碍服务没在运行）")
+        val healthy = runCatching {
+            com.zongkong.app.healthwire.PermissionStatusBridge.status(context) ==
+                com.zongkong.app.health.HealthStatus.HEALTHY
+        }.getOrDefault(false)
+        if (!healthy) append("（无障碍没有真实响应）")
         if (!Notifications.canPost(context)) append("（通知被关了）")
     }
 

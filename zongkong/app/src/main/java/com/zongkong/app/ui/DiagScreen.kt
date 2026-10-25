@@ -89,6 +89,7 @@ fun DiagScreen(nav: NavHostController) {
     var confirmClear by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf<String?>(null) }
 
+    // v2：healthy 只认「无障碍开了 + 真实 dispatcherAck 新鲜」，不看进程里的 running 布尔。
     val healthy = summary.accessibilityEnabled && summary.serviceRunning
 
     fun share() {
@@ -134,7 +135,39 @@ fun DiagScreen(nav: NavHostController) {
                     Tag(if (healthy) "在线" else "离线", if (healthy) sig.free else sig.strict)
                 }
                 KeyValue("无障碍设置", if (summary.accessibilityEnabled) "已开启" else "关着", if (summary.accessibilityEnabled) sig.free else sig.strict)
-                KeyValue("服务", if (summary.serviceRunning) "在运行" else "没在运行", if (summary.serviceRunning) sig.free else sig.strict)
+                KeyValue("服务", if (summary.serviceRunning) "真实响应中" else "没有真实响应", if (summary.serviceRunning) sig.free else sig.strict)
+                // v2：把健康判定依据摊开，避免把「进程活着」读成「在干活」。
+                run {
+                    val v = remember(key) {
+                        runCatching {
+                            com.zongkong.app.healthwire.GuardHealth.init(context)
+                            com.zongkong.app.healthwire.GuardHealth.verdict(
+                                com.zongkong.app.healthwire.GuardHealth.permissionEnabled(context),
+                            )
+                        }.getOrNull()
+                    }
+                    KeyValue(
+                        "健康判定",
+                        v?.let { "${it.status.name}：${it.reason}" } ?: "证据不足",
+                        if (v?.healthy == true) sig.free else sig.warn,
+                    )
+                    KeyValue(
+                        "执行台账",
+                        runCatching { com.zongkong.app.healthwire.GuardHealth.ledger.summary() }.getOrDefault("读不到"),
+                        sig.muted,
+                    )
+                    KeyValue(
+                        "最近一次挑战",
+                        runCatching { com.zongkong.app.healthwire.GuardHealth.lastChallenge.ifBlank { "还没收到挑战" } }
+                            .getOrDefault("读不到"),
+                        sig.muted,
+                    )
+                    KeyValue(
+                        "哨兵",
+                        runCatching { com.zongkong.app.guard.SentinelClient.describe(context) }.getOrDefault("读不到"),
+                        sig.muted,
+                    )
+                }
                 KeyValue(
                     "今天失联",
                     "${summary.lostCount} 次 · 共 ${span(summary.lostTotalMs)}" +

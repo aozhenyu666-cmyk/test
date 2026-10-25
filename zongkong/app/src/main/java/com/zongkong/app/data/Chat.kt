@@ -197,7 +197,16 @@ class ChatRepo(private val context: Context, private val store: Store, private v
             val boss = store.config.value.boss
             append("- 手机使用记录：")
             append(if (com.zongkong.app.system.Usage.granted(context)) "有系统的“使用情况访问”授权，总控没运行的时段也查得到\n" else "只有总控自己记的（没授权“使用情况访问”），总控没在运行的时段是空白\n")
-            append("- 无障碍服务：${if (com.zongkong.app.guard.GuardService.running) "运行中" else "没在运行（拦不住、记不到，提醒用户去权限页打开）"}\n")
+            // v2：告诉模型的是「真实响应状态」，不是进程里的 running 布尔；模型只解释、不宣布健康。
+            append(
+                "- 无障碍服务：" + run {
+                    val st = runCatching {
+                        com.zongkong.app.healthwire.PermissionStatusBridge.status(context)
+                    }.getOrDefault(com.zongkong.app.health.HealthStatus.UNKNOWN)
+                    if (st == com.zongkong.app.health.HealthStatus.HEALTHY) "真实响应中"
+                    else "没有真实响应（${com.zongkong.app.healthwire.HealthLabels.status(st)}；拦不住、记不到，提醒用户去权限页）"
+                } + "\n",
+            )
             append("- 截图抽查：")
             append(if (boss.shots) "开着，亮屏时每小时约 ${boss.shotsPerHour} 张，留 ${boss.keepDays} 天；连续娱乐时也会截一张\n" else "没开（用户在“总控 → 档案”里能开；你可以建议）\n")
             append("- 照片：用户发来的照片会附上拍摄时间；没有拍摄时间的多半是截图或转存的旧图\n")

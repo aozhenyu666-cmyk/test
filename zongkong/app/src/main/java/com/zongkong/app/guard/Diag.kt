@@ -104,7 +104,11 @@ object Diag {
     /** 今天的摘要（逻辑日：凌晨 4 点换日）：次数、最长失联、最近一次原因猜测 + 当前状态。 */
     fun summaryToday(context: Context, now: Long = System.currentTimeMillis()): DiagSummary {
         val enabled = accessibilityEnabled(context)
-        val running = runCatching { GuardService.running }.getOrDefault(false)
+        // v2：这里给的是「真实响应」而不是进程里的 running 布尔（进程活着但线程卡死时 running 会骗人）。
+        val running = runCatching {
+            com.zongkong.app.healthwire.PermissionStatusBridge.status(context) ==
+                com.zongkong.app.health.HealthStatus.HEALTHY
+        }.getOrDefault(false)
         val ignoring = ignoringBattery(context)
         val zone = DayClock.BEIJING
         val date = DayClock.date(now, zone)

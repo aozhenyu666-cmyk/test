@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  设备管理员策略声明（规范 §5.1）：
+  只声明 force-lock —— 用于 DevicePolicyManager.lockNow() 独立锁屏。
+  刻意不声明 watch-login / reset-password / wipe-data / disable-camera 等任何权限；
+  总控不读取、不设置、不重置用户的锁屏凭据。
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <force-lock />
+    </uses-policies>
+</device-admin>

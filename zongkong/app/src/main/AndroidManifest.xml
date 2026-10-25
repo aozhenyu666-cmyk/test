@@ -131,10 +131,34 @@
         </provider>
 
         <!-- 哨兵（独立应用 com.zongkong.sentinel）看到总控掉线时碰一下这里：把总控的进程拉起来、让它自查。只认哨兵的签名 -->
+        <!-- v2：wake 只负责拉活进程；它**不再**回 guardRunning 这类布尔当健康凭据（规范 §8） -->
         <provider
             android:name=".guard.SentinelWakeProvider"
             android:authorities="com.zongkong.app.sentinel"
             android:exported="true" />
+
+        <!-- v2 健康协议：哨兵 → 总控的挑战入口（规范 §3.2，authority 固定）。
+             challenge 会被投递到 GuardService 的 a11y 主线程处理完再带回；Binder 线程只等 + 超时。
+             只接受哨兵签名（见 HealthWireProvider.Auth）。 -->
+        <provider
+            android:name=".healthwire.HealthWireProvider"
+            android:authorities="com.zongkong.app.health"
+            android:exported="true" />
+
+        <!-- 设备管理员：只为 force-lock（独立锁屏）。声明见 res/xml/device_admin.xml，不含任何其它策略 -->
+        <receiver
+            android:name=".guard.ZkDeviceAdmin"
+            android:exported="true"
+            android:label="总控设备管理员（独立锁屏）"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
 
         <!-- 无障碍服务：只读前台应用包名，见 res/xml/guard_service.xml -->
         <service
