@@ -143,6 +143,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         var attentionDone = false
         var nudgeDone = false
         var ended = false
+        /** C3：用户明确点 × / 点桌宠收起。 */
+        var dismissed = false
+        /** C3：走完了“被忽略”的升级。 */
+        var ignoredFully = false
     }
 
     private var convo: Conversation? = null
@@ -181,6 +185,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         scope.launch {
             settings.changes.collect {
                 scheduler.config = settings.rhythm()
+                if (settings.presenceEnabled) {
+                    app.presencePolicy.config = app.presencePolicy.config.copy(dailyCap = settings.presenceDailyCap)
+                    if (settings.petPaused && !lastPausedSeen) app.presencePolicy.feedback(cn.companion.pet.core.presence.PresenceFeedback.PAUSED, now())
+                }
+                lastPausedSeen = settings.petPaused
                 if (settings.agentAutonomy) scheduleAgentScan() else app.agentLoop.cancel()
             }
         }
@@ -261,6 +270,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // 忙时错过的积压事件，空闲后补扫一次；不是每 tick 都做模型请求。
         if (settings.agentAutonomy && now - lastAgentScanAt > 5_000) handler.post(agentTrigger)
 
+        // C3：开启本机主动陪伴后，由协调器决定“微反应 / 本机提示 / 调模型 / 安静”，替代下面的旧逻辑。
+        if (settings.presenceEnabled) { presenceTick(now); return }
         if (PerceptionHub.stuck.check(now)) {
             if (!scheduler.isQuiet(now)) speak(stuck = true)
             return
@@ -299,6 +310,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             EscalationLevel.NUDGE -> if (!c.nudgeDone) { c.nudgeDone = true; haptics.nudge(); overlay.nudgeInward() }
             EscalationLevel.RETREAT -> {
                 overlay.retreat()
+                c.ignoredFully = true
                 endConversation()
                 scheduler.onIgnoredFully(now)
                 rephraseNext = true
@@ -306,9 +318,144 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
     }
 
+    // ---------- C3：本机主动性（开关打开时才走这里） ----------
+
+    private var lastPausedSeen = false
+    private var lastPresenceEvalAt = 0L
+    /** 最近一次真实交流（用户回话/主动找它）；进程重启后从 0 开始。 */
+    private var lastInteractionAt = 0L
+    /** 角色表现参数的内存缓存：最多 5 分钟读一次文件，事件发生时直接用返回值更新。 */
+    private var petStateCache: cn.companion.pet.core.companion.PetState? = null
+    private var petStateReadAt = 0L
+
+    private fun petState(now: Long): cn.companion.pet.core.companion.PetState {
+        val cached = petStateCache
+        if (cached != null && now - petStateReadAt < 5 * 60_000L) return cached
+        return stateStore.current(now).also { petStateCache = it; petStateReadAt = now }
+    }
+
+    /** 用户自己找它：忽略计数清零，记下交流时间。 */
+    private fun noteUserInitiated() {
+        lastInteractionAt = now()
+        if (settings.presenceEnabled) app.presencePolicy.userInitiated(now())
+    }
+
+    /** 此刻在忙什么（非空就不插嘴）。 */
+    private fun presenceBusy(now: Long): String? = when {
+        session != null -> "深聊"
+        think != null -> "想一想"
+        noteDraft != null -> "记念头"
+        skillsBusy() -> "技能"
+        lookJob?.isActive == true || now < lookNoticeUntil -> "看一眼"
+        probeJob?.isActive == true -> "模型请求中"
+        convo != null -> "对话中"
+        else -> null
+    }
+
+    /**
+     * 每 5 秒用内存里的轨迹评估一次；不读写文件、不调模型。只有到点时才会读一次待续话题。
+     * 不新增计时器：挂在原来每秒一次的 tick 上。
+     */
+    private fun presenceTick(now: Long) {
+        if (now - lastPresenceEvalAt < 5_000L) return
+        lastPresenceEvalAt = now
+        val trail = PerceptionHub.trail
+        val lists = settings.appLists()
+        val fg = trail.foreground
+        val stuck = PerceptionHub.stuck.check(now)
+        // 卡壳时才读一次屏幕判断是不是学习页（和旧逻辑一致：名单里或屏幕有大段正文）。
+        val learning = fg != null && (fg in lists.learning || (stuck && classify(now).scene == Scene.LEARNING))
+        val focus = SceneClassifier.focusActive(now, trail, lists)
+        val state = petState(now)
+        val budgetLeft = app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()) > 0
+        val signals = cn.companion.pet.core.presence.PresenceSignals(
+            now = now,
+            foreground = fg,
+            foregroundLabel = fg?.let { label(it) } ?: "手机",
+            foregroundSince = trail.foregroundSince,
+            distinctApps60s = trail.distinctAppsWithin(now, 60_000L),
+            switches60s = trail.switchCountWithin(now, 60_000L),
+            inFeed = fg != null && fg in lists.feed,
+            inLearning = learning,
+            inFocus = fg != null && fg in lists.focus,
+            excluded = fg != null && fg in lists.exclude,
+            inLauncher = fg != null && fg in launchers,
+            stuck = stuck,
+            scheduledDue = scheduler.isDue(now, focus),
+            quiet = scheduler.isQuiet(now),
+            userActive = active,
+            paused = settings.petPaused,
+            busy = presenceBusy(now),
+            canCallModel = apiKey() != null && budgetLeft,
+            sinceInteractionMillis = lastInteractionAt.takeIf { it > 0 }?.let { now - it },
+            energy = state.energy,
+            interest = state.interest,
+        )
+        var dueTopic: Topic? = null
+        val d = app.presenceEngine.evaluate(signals) {
+            if (!settings.continuityEnabled) false
+            else topicGate.next(now = now, quiet = signals.quiet, userActive = active, lastProactiveAt = lastProactiveAt,
+                recentTexts = recentExchangeLines(20).toSet()).also { dueTopic = it } != null
+        }
+        when (d.kind) {
+            cn.companion.pet.core.presence.PresenceKind.MICRO_REACTION -> { playMicro(d); app.presenceEngine.commit(d, now) }
+            cn.companion.pet.core.presence.PresenceKind.LOCAL_NUDGE -> if (showLocalNudge(d, signals)) app.presenceEngine.commit(d, now)
+            cn.companion.pet.core.presence.PresenceKind.MODEL_REASONING -> {
+                app.presenceEngine.commit(d, now)
+                val reason = d.reasoning?.prompt.orEmpty() + if (d.reason.isNotBlank()) "（" + d.reason + "）" else ""
+                speak(stuck = d.reasoning == cn.companion.pet.core.presence.ReasoningReason.STUCK,
+                    topic = if (d.reasoning == cn.companion.pet.core.presence.ReasoningReason.SCHEDULED) dueTopic else null,
+                    presenceReason = reason)
+            }
+            cn.companion.pet.core.presence.PresenceKind.SILENT -> if (d.consumeSchedule) scheduler.onSpoke(now)
+        }
+    }
+
+    /** 微反应：只换表情/做一个已有的小动作，2.5 秒后回到平常；不震动、不说话。 */
+    private fun playMicro(d: cn.companion.pet.core.presence.PresenceDecision) {
+        val mood = when (d.micro) {
+            cn.companion.pet.core.presence.MicroReaction.NOD, cn.companion.pet.core.presence.MicroReaction.CHEER -> Mood.HAPPY
+            cn.companion.pet.core.presence.MicroReaction.LOOK -> Mood.CURIOUS
+            cn.companion.pet.core.presence.MicroReaction.YAWN -> Mood.SLEEPY
+            null -> return
+        }
+        overlay.setMood(mood)
+        if (d.intense && d.micro == cn.companion.pet.core.presence.MicroReaction.LOOK) overlay.attention()
+        handler.postDelayed({
+            if (convo == null && probeJob?.isActive != true && think == null && noteDraft == null && !skillsBusy()) overlay.setMood(Mood.IDLE)
+        }, 2_500)
+    }
+
+    /**
+     * 本机提示：走原来的气泡和对话流程（回话、忽略升级、关闭、写日志都照旧），只是开场白来自本机规则、不调模型。
+     * 用户回话后的接话仍走原来的回复流程（那是用户发起的交流）。
+     */
+    private fun showLocalNudge(d: cn.companion.pet.core.presence.PresenceDecision, s: cn.companion.pet.core.presence.PresenceSignals): Boolean {
+        val text = d.nudgeText?.takeIf { it.isNotBlank() && !ContentGuard.violates(it) } ?: return false
+        if (convo != null || probeJob?.isActive == true || presenceBusy(now()) != null || !active) return false
+        val scene = when { s.inLearning -> Scene.LEARNING; s.inFeed -> Scene.WANDERING; else -> Scene.NORMAL }
+        rephraseNext = false
+        present(SceneDecision(scene, null), ProbeReply(text, "", Mood.CURIOUS, false, false),
+            opening = listOf(ChatMessage(cn.companion.pet.net.ChatRole.SYSTEM, LOCAL_NUDGE_MARK)), noEscalation = false, haptic = false)
+        return true
+    }
+
+    /** 当天短期记忆（只在调模型前、IO 线程、持有 memoryLock 时调用）。 */
+    private fun todayDigest(): List<String> {
+        val events = app.events.all()
+        val visibility = EventVisibility(events, memory.tombstones(), now())
+        val today = LocalDate.now().toString()
+        val done = runCatching {
+            app.skillStore.list().filter { it.lastRunAt > 0 && java.time.Instant.ofEpochMilli(it.lastRunAt).atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString() == today }
+                .map { "技能「" + it.name + "」" + if (it.lastRunOk == true) "做完了" else "没做完" }
+        }.getOrDefault(emptyList())
+        return cn.companion.pet.core.presence.TodayDigest.build(events, visibility, today, topics.candidates(now()), done,
+            forgotten = { memory.forgottenMatches(it) }, now = now())
+    }
+
     // ---------- 开口 ----------
 
-    private fun speak(stuck: Boolean, afterHeartbeat: Boolean = false, topic: Topic? = null) {
+    private fun speak(stuck: Boolean, afterHeartbeat: Boolean = false, topic: Topic? = null, presenceReason: String = "") {
         val now = now()
         if (probeJob?.isActive == true || lookJob?.isActive == true || now() < lookNoticeUntil || skillsBusy() || convo != null || session != null || think != null || noteDraft != null) return
         heartbeatWaiting = false
@@ -345,6 +492,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             petState = life.state.label + " · " + stateStore.summary(stateStore.current()),
             topic = topic?.summary,
             afterHeartbeat = afterHeartbeat,
+            presenceReason = presenceReason,
         )
 
         probeJob = scope.launch {
@@ -353,7 +501,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 synchronized(app.memoryLock) {
                     app.materialInbox.purgeExpired(now())
                     val eligible = topic == null || topics.candidates(now()).any { it.id == topic.id }
-                    openingMessages(if (eligible) moment else moment.copy(topic = null), decision.screenText) to memoryVersion()
+                    val withToday = if (settings.presenceEnabled) moment.copy(today = todayDigest()) else moment
+                    openingMessages(if (eligible) withToday else withToday.copy(topic = null), decision.screenText) to memoryVersion()
                 }
             }
             if (!app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
@@ -473,7 +622,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             val proposal = pending
             if (proposal != null && proposal.status == cn.companion.pet.core.action.PendingStatus.PENDING) {
                 showPendingConfirmation(proposal, spokenText)
+            } else if (spokenText.isNotBlank() && settings.presenceEnabled && !app.presencePolicy.check(now(), settings.petPaused).allowed) {
+                // C3：克制策略不允许主动开口时，Agent 的普通发言只留在轨迹里，不弹气泡。
+                scheduler.onSpoke(now)
             } else if (spokenText.isNotBlank()) {
+                if (settings.presenceEnabled) app.presencePolicy.recordShown(now())
                 scheduler.onSpoke(now)
                 stats.add(Stats.Kind.SPOKE)
                 overlay.setTalking(true)
@@ -637,16 +790,17 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
     }
 
-    private fun present(decision: SceneDecision, reply: ProbeReply, opening: List<ChatMessage>, noEscalation: Boolean, topic: Topic? = null, inputVersion: String? = null) {
+    private fun present(decision: SceneDecision, reply: ProbeReply, opening: List<ChatMessage>, noEscalation: Boolean, topic: Topic? = null, inputVersion: String? = null, haptic: Boolean = true) {
         val now = now()
         scheduler.onSpoke(now)
         stats.add(Stats.Kind.SPOKE)
+        if (settings.presenceEnabled) app.presencePolicy.recordShown(now)
         convo = Conversation(decision, reply, opening, now, noEscalation = noEscalation, topicId = topic?.id, inputVersion = inputVersion)
         lastProactiveAt = now
         topic?.let { topics.markShared(it.id, now) }
         overlay.setMood(reply.mood)
         overlay.setTalking(true)
-        haptics.tap()
+        if (haptic) haptics.tap()
         if (settings.ttsEnabled) speech.say(reply.hookText)
         overlay.showBubble(entrySpec(reply.hookText, decision.scene, reply.suggestGemini)) { overlay.setTalking(false) }
     }
@@ -669,11 +823,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
         if (think != null || noteDraft != null) { endThink(); return }
         if (overlay.isBubbleShown) {
+            convo?.let { if (!it.userStarted) it.dismissed = true }
             endConversation()
             return
         }
         if (showLetterIfAny()) return
         if (probeJob?.isActive == true) return
+        noteUserInitiated()
         // 用户点它：开一个不需要调 API 的轻量对话入口
         val decision = classify(now())
         val greeting = listOf("嗯？", "叫我？", "怎么啦", "在呢").random()
@@ -766,7 +922,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         convo?.interacting = true
     }
 
-    override fun onClose() = endConversation()
+    override fun onClose() {
+        convo?.let { if (!it.userStarted) it.dismissed = true }
+        endConversation()
+    }
 
     private fun onUserInput(text: String?, fromHold: Boolean) {
         val said = text?.trim().orEmpty()
@@ -784,7 +943,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
         c.interacting = true
         c.userReplyAt = now()
-        stateStore.apply(StateEvent.USER_REPLIED)
+        petStateCache = stateStore.apply(StateEvent.USER_REPLIED)
+        noteUserInitiated()
         if (c.userReply == null) stats.add(Stats.Kind.REPLIED)
         c.userReply = said
 
@@ -927,7 +1087,22 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         overlay.retreat()
         overlay.setMood(Mood.IDLE)
         if (!c.userStarted && c.userReply == null && c.gemini == GeminiExit.NONE) stats.add(Stats.Kind.IGNORED)
-        if (!c.userStarted && c.userReply == null && c.gemini == GeminiExit.NONE) {
+        if (settings.presenceEnabled && !c.userStarted) {
+            // C3：区分“回应 / 没理 / 明确关掉”；锁屏、切去深聊等中断不算反馈。
+            val feedback = when {
+                c.userReply != null || c.gemini != GeminiExit.NONE -> cn.companion.pet.core.presence.PresenceFeedback.INTERACTED
+                c.dismissed -> cn.companion.pet.core.presence.PresenceFeedback.DISMISSED
+                c.ignoredFully -> cn.companion.pet.core.presence.PresenceFeedback.IGNORED
+                else -> null
+            }
+            feedback?.let { app.presencePolicy.feedback(it, now()) }
+            if (feedback == cn.companion.pet.core.presence.PresenceFeedback.INTERACTED) lastInteractionAt = now()
+            if (feedback == cn.companion.pet.core.presence.PresenceFeedback.IGNORED) {
+                petStateCache = stateStore.apply(StateEvent.PROACTIVE_IGNORED)
+                c.topicId?.let { topics.dismiss(it) }
+            }
+            if (feedback == cn.companion.pet.core.presence.PresenceFeedback.DISMISSED) c.topicId?.let { topics.dismiss(it) }
+        } else if (!c.userStarted && c.userReply == null && c.gemini == GeminiExit.NONE) {
             stateStore.apply(StateEvent.PROACTIVE_IGNORED)
             c.topicId?.let { topics.dismiss(it) }
         }
@@ -942,6 +1117,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 userReply = c.userReply,
                 petReply = c.petReply,
                 gemini = c.gemini,
+                dismissed = c.dismissed,
             ),
         )
         val hook = c.reply.hookText.ifEmpty { "（他先开口）" }
@@ -1500,6 +1676,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private fun now() = System.currentTimeMillis()
 
     companion object {
+        /** 本机提示的占位开场（回话时会按当时上下文重新组装，不发给模型）。 */
+        const val LOCAL_NUDGE_MARK = "local-nudge"
         /** “看一眼”成功时气泡的开头；验收脚本靠它区分看图结果和普通搭话。 */
         const val LOOK_RESULT_PREFIX = "我看了一眼："
         private val HHMM = DateTimeFormatter.ofPattern("HH:mm")

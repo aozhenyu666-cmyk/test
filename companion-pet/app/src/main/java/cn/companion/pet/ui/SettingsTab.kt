@@ -130,6 +130,7 @@ fun SettingsScreen(activity: cn.companion.pet.MainActivity, resumeTick: Int, gro
                     SETTINGS_DEVICE -> DeviceSettings(context)
                     else -> {
                         CrashReportSection(activity)
+                        PresenceDiagnostics()
                         GroupTitle("决策轨迹")
                         AgentTracePreview()
                         DiagnosticSection(context)
@@ -139,6 +140,34 @@ fun SettingsScreen(activity: cn.companion.pet.MainActivity, resumeTick: Int, gro
             }
         }
     }
+}
+
+/** C3 本机主动性的脱敏统计：只有计数和原因，没有任何屏幕内容。 */
+@Composable
+private fun PresenceDiagnostics() {
+    val app = PetApp.instance
+    var tick by remember { mutableIntStateOf(0) }
+    GroupTitle("本机主动陪伴统计")
+    if (!app.settings.presenceEnabled) {
+        Text("没开（设置 → 陪伴 → 本机主动陪伴）。", style = MaterialTheme.typography.bodySmall)
+        return
+    }
+    val st = remember(tick) { app.presenceEngine.stats }
+    val policy = remember(tick) { app.presencePolicy.snapshot() }
+    val now = System.currentTimeMillis()
+    val lines = buildList {
+        add("本次运行评估 ${st.evaluations} 次：小动作 ${st.micro}、本机提示 ${st.nudges}、调模型 ${st.modelCalls}")
+        add("今天主动开口 ${app.presencePolicy.spokenToday(now)} / ${app.presencePolicy.config.dailyCap}；连续没回应 ${policy.consecutiveIgnores} 次")
+        if (policy.ignoreCooldownUntil > now) add("没回应冷却还剩 ${(policy.ignoreCooldownUntil - now) / 60_000 + 1} 分钟")
+        if (policy.dismissedUntil > now) add("你关掉后安静还剩 ${(policy.dismissedUntil - now) / 60_000 + 1} 分钟")
+        if (policy.lastFeedback.isNotBlank()) add("上次反馈：" + when (policy.lastFeedback) {
+            "INTERACTED" -> "回应了"; "IGNORED" -> "没理"; "DISMISSED" -> "关掉了"; "PAUSED" -> "暂停了"; else -> policy.lastFeedback
+        })
+        if (st.lastDecision.isNotBlank()) add("最近一次：" + st.lastDecision)
+        if (st.silentReasons.isNotEmpty()) add("安静的原因：" + st.silentReasons.entries.joinToString("、") { it.key + " " + it.value })
+    }
+    lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+    TextButton(onClick = { tick++ }) { Text("刷新") }
 }
 
 /** 崩溃/卡死/被系统杀的报告：真机出问题时一键复制发给开发者。 */
@@ -288,6 +317,22 @@ private fun CompanionSettings(context: Context) {
     val s = app.settings
     val scope = rememberCoroutineScope()
     fun toast(t: String) = Toast.makeText(context, t, Toast.LENGTH_SHORT).show()
+    Section("本机主动陪伴（实验）")
+    var presenceOn by remember { mutableStateOf(s.presenceEnabled) }
+    Toggle("本机主动陪伴",
+        "打开后它一直在场：看你切换、停留、卡壳这些真实信号，先做小动作（不花额度），有依据时说一句简短提示（不调模型），复杂情境才调模型。" +
+            "连续 3 次没回应会安静 30 分钟；点 × 收起也会安静 30 分钟。关掉就完全回到原来的开口方式。",
+        presenceOn) { presenceOn = it; s.presenceEnabled = it }
+    if (presenceOn) {
+        var cap by remember { mutableIntStateOf(s.presenceDailyCap) }
+        Text("每天主动开口最多（你主动找它、纯动画不算）：", style = MaterialTheme.typography.bodySmall)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            cn.companion.pet.core.presence.PresenceConfig.CAP_CHOICES.forEach { c ->
+                if (c == cap) Button(onClick = {}, shape = CompanionShapes.button) { Text("$c 次") }
+                else OutlinedButton(onClick = { cap = c; s.presenceDailyCap = c }, shape = CompanionShapes.button) { Text("$c 次") }
+            }
+        }
+    }
     Section("开口节奏")
     var minI by remember { mutableStateOf(s.minIntervalMin.toString()) }
     var maxI by remember { mutableStateOf(s.maxIntervalMin.toString()) }

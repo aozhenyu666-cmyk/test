@@ -80,6 +80,8 @@ class CompanionContextAssembler(
         body.append("- 前台：").append(moment.foregroundLabel).append('\n')
         body.append("- 行为轨迹：").append(moment.trajectory).append('\n')
         if (moment.petState.isNotBlank()) body.append("- 我自己此刻：").append(moment.petState).append('\n')
+        if (moment.presenceReason.isNotBlank()) body.append("- 这次开口的原因（事实）：").append(moment.presenceReason).append("。只陈述事实，不要猜他的心理。\n")
+        if (moment.today.isNotEmpty()) body.append("- 今天的前情：\n").append(moment.today.joinToString("\n") { "  · $it" }).append('\n')
         if (moment.stuck) body.append("- 他在同一页停了一分半钟没动，可能卡住了。针对屏幕上的具体段落说一句。\n")
         if (moment.escalating) body.append("- 他还没回应上一句。\n")
         if (moment.rephrase) body.append("- 上次说的话他完全没理，这次换一种完全不同的说法和话题类型。\n")

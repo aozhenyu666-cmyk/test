@@ -13,8 +13,8 @@ android {
         applicationId = "cn.companion.pet"
         minSdk = 30
         targetSdk = 35
-        versionCode = 26
-        versionName = "0.5.8"
+        versionCode = 27
+        versionName = "0.6.0-c3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

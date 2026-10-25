@@ -34,10 +34,27 @@ class PetStateStore(
     private val root: File,
     private val clock: Clock = Clock.systemDefaultZone(),
     private val halfLifeHours: Double = 6.0,
+    /** 同目录原子替换；测试里可以换成失败的实现，确认旧状态不丢。 */
+    private val replace: (File, File) -> Boolean = { from, to ->
+        runCatching {
+            java.nio.file.Files.move(from.toPath(), to.toPath(),
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            true
+        }.getOrElse {
+            runCatching {
+                java.nio.file.Files.move(from.toPath(), to.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                true
+            }.getOrDefault(false)
+        }
+    },
 ) {
     private val file = File(root, "state.json")
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val lock = Any()
+
+    /** 最近一次写入/读取失败的原因；成功后清空。 */
+    @Volatile var lastError: String? = null
+        private set
 
     fun current(now: Long = clock.millis()): PetState = synchronized(lock) {
         val stored = read()
@@ -71,6 +88,7 @@ class PetStateStore(
             )
         }
         val updated = next.copy(updatedAt = now)
+        // 写失败时旧文件原样保留（不先删旧文件）；返回这次的值供本次使用，lastError 记下原因。
         write(updated)
         updated
     }
@@ -86,16 +104,25 @@ class PetStateStore(
     private fun read(): PetState {
         if (!file.exists()) return PetState(updatedAt = clock.millis())
         return runCatching { json.decodeFromString(PetState.serializer(), file.readText()) }
-            .getOrElse { PetState(updatedAt = clock.millis()) }
+            .getOrElse {
+                // 损坏的文件另存一份，不让下一次写入悄悄覆盖掉。
+                val backup = File(file.parentFile, "state.corrupt-" + clock.millis() + ".json")
+                lastError = if (file.renameTo(backup)) "状态文件损坏，已另存为 " + backup.name else "状态文件损坏"
+                PetState(updatedAt = clock.millis())
+            }
     }
 
-    private fun write(state: PetState) {
-        file.parentFile?.mkdirs()
-        val tmp = File(file.parentFile, "." + file.name + ".tmp")
-        tmp.writeText(json.encodeToString(PetState.serializer(), state))
-        if (!tmp.renameTo(file)) {
-            file.delete()
-            check(tmp.renameTo(file)) { "rename failed: state.json" }
+    /** 先写临时文件，再原子替换；替换失败时旧 state.json 不动，返回 false。 */
+    private fun write(state: PetState): Boolean {
+        return try {
+            file.parentFile?.mkdirs()
+            val tmp = File(file.parentFile, "." + file.name + ".tmp")
+            tmp.writeText(json.encodeToString(PetState.serializer(), state))
+            if (replace(tmp, file)) { lastError = null; true }
+            else { tmp.delete(); lastError = "状态写入失败，保留旧状态"; false }
+        } catch (e: Exception) {
+            lastError = "状态写入失败，保留旧状态"
+            false
         }
     }
 }

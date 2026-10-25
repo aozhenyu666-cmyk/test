@@ -11,6 +11,8 @@ data class Exchange(
     val userReply: String?,
     val petReply: String? = null,
     val gemini: GeminiExit = GeminiExit.NONE,
+    /** 用户明确点了 × / 收起（区别于没理）。 */
+    val dismissed: Boolean = false,
 )
 
 object TodayLog {
@@ -20,7 +22,7 @@ object TodayLog {
     fun wantsForget(reply: String?): Boolean = reply != null && forgetPhrases.any { reply.contains(it) }
 
     fun format(e: Exchange): String {
-        val reply = e.userReply?.let { "回应：${oneLine(it)}" } ?: "（被忽略）"
+        val reply = e.userReply?.let { "回应：${oneLine(it)}" } ?: if (e.dismissed) "（他关掉了）" else "（被忽略）"
         val pet = e.petReply?.let { " | 我接：${oneLine(it)}" } ?: ""
         return "- ${e.timeText} | ${e.sceneLabel} | 我说：${oneLine(e.hook)} | $reply$pet | Gemini：${e.gemini.label}"
     }

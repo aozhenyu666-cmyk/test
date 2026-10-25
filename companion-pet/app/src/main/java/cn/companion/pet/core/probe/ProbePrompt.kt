@@ -26,6 +26,10 @@ data class ProbeMoment(
     val afterHeartbeat: Boolean = false,
     /** 从待分享话题队列里选出的一条，必须带真实来源。 */
     val topic: String? = null,
+    /** C3：当天的短期记忆（已脱敏、遵守遗忘标记），让开口接得上前文。关掉 C3 时为空。 */
+    val today: List<String> = emptyList(),
+    /** C3：这次为什么开口（本机协调器给出的事实原因）。关掉 C3 时为空。 */
+    val presenceReason: String = "",
 )
 
 /**
@@ -73,6 +77,8 @@ object ProbePrompt {
         sb.append("- 前台：").append(moment.foregroundLabel).append('\n')
         sb.append("- 行为轨迹：").append(moment.trajectory).append('\n')
         if (moment.petState.isNotBlank()) sb.append("- 我自己此刻：").append(moment.petState).append('\n')
+        if (moment.presenceReason.isNotBlank()) sb.append("- 这次开口的原因（事实）：").append(moment.presenceReason).append("。只陈述事实，不要猜他的心理。\n")
+        if (moment.today.isNotEmpty()) sb.append("- 今天的前情：\n").append(moment.today.joinToString("\n") { "  · $it" }).append('\n')
         if (moment.stuck) sb.append("- 他在同一页停了一分半钟没动，可能卡住了。针对屏幕上的具体段落说一句。\n")
         if (moment.escalating) sb.append("- 他还没回应上一句。\n")
         if (moment.rephrase) sb.append("- 上次说的话他完全没理，这次换一种完全不同的说法和话题类型。\n")

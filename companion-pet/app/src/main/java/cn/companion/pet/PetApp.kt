@@ -167,6 +167,15 @@ class PetApp : Application() {
 
     val modelLister by lazy { cn.companion.pet.net.ModelLister() }
 
+    /** C3 本机主动性：克制状态（持久化）+ 协调器（内存统计）。设置页诊断读它，桌宠大脑用它。 */
+    val presencePolicy by lazy {
+        cn.companion.pet.core.presence.PresencePolicy(
+            cn.companion.pet.core.presence.PresenceConfig(dailyCap = settings.presenceDailyCap),
+            cn.companion.pet.core.presence.PresencePolicyStore(java.io.File(filesDir, "memory")),
+        )
+    }
+    val presenceEngine by lazy { cn.companion.pet.core.presence.LocalPresenceEngine(presencePolicy) }
+
     /** 用户自己搭的技能（固定步骤，按元素回放）。 */
     val skillStore by lazy { cn.companion.pet.core.skill.SkillStore(java.io.File(filesDir, "memory")) }
 
