@@ -449,6 +449,21 @@ private fun CompanionSettings(context: Context) {
         s.sessionAllowedApps = it
     }
 
+    Section("陪练与专注策略")
+    Text("开始陪练在桌宠菜单里：点桌宠 → 开始陪练。这里只设策略。", style = MaterialTheme.typography.bodySmall)
+    var practiceBreak by remember { mutableStateOf(s.focusPolicyType == "PRACTICE_FOR_BREAK") }
+    Toggle("练习换休息", "关：固定专注，做完题也不产生娱乐许可。开：完成一个微练习可换一段限定休息。默认关。", practiceBreak) {
+        practiceBreak = it; s.focusPolicyType = if (it) "PRACTICE_FOR_BREAK" else "FIXED_FOCUS"
+    }
+    if (practiceBreak) {
+        var restText by remember { mutableStateOf(s.restMinutes.toString()) }
+        NumberField("每次休息（分钟）", restText) {
+            restText = it; it.toIntOrNull()?.let { v -> s.restMinutes = v.coerceIn(1, 60) }
+        }
+    }
+    Text("训练没做完就切到别的 App，会提示回到训练；拒绝、沉默或编造两次以上会强制切到陪练。紧急退出始终可用。",
+        style = MaterialTheme.typography.bodySmall)
+
     Section("严格陪伴")
     var strictOn by remember { mutableStateOf(s.strictEnabled) }
     Toggle("开启严格陪伴", "开启后，点桌宠 → 想一想 会多一个“严格陪我想”：给你一个有时限的回合，围绕当前材料持续接话，指出缺的具体依据，到期按实际成果结算。普通聊天不受影响；随时可以说“我不会”或点 × 结束。", strictOn) {

@@ -52,6 +52,12 @@ import cn.companion.pet.core.session.AssistantApp
 import cn.companion.pet.core.skim.SkimBuffer
 import cn.companion.pet.core.training.BuiltInQuestions
 import cn.companion.pet.core.training.EnforcementAction
+import cn.companion.pet.core.training.TrainingStore
+import cn.companion.pet.core.training.TrainingTimer
+import cn.companion.pet.core.training.TrainingFocusBridge
+import cn.companion.pet.core.training.FocusVerdict
+import cn.companion.pet.core.training.RestGrantStore
+import cn.companion.pet.core.training.FocusPolicyType
 import cn.companion.pet.core.training.EnforcementRules
 import cn.companion.pet.core.training.InteractionMode
 import cn.companion.pet.core.training.SlotKind
@@ -158,6 +164,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private var trainingQuestion: cn.companion.pet.core.training.TrainingQuestion? = null
     private val enforcement = EnforcementRules()
     private var trainingMode = InteractionMode.WARM
+    private val trainingStore by lazy { TrainingStore(memory.root) }
+    private val restGrants by lazy { RestGrantStore(memory.root) }
+    private val trainingTimer = TrainingTimer()
+    private val focusBridge by lazy { TrainingFocusBridge() }
     private val topics by lazy { app.topics }
     private val topicGate by lazy { TopicGate(topics) }
     private var lastProactiveAt = 0L
@@ -233,6 +243,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         restoreSession()
         // 严格回合跨重启恢复；到期/已结束的不复活。
         runCatching { restoreStrict() }
+        // 训练回合跨重启恢复：回到同一题同一槽位，并如实说明空窗。
+        runCatching { restoreTraining() }
         // 守护：杀进程/重启后恢复；已结束/过期/损坏的不复活。
         runCatching { focusController.restore() }
         app.focusStatus = { focusController.status() }
@@ -319,6 +331,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val now = now()
         // 守护按秒推进（到期、宽限、重试），不受下面任何提前 return 影响；熄屏/锁屏时不拉回。
         runCatching { focusController.tick(interactive = active) }
+        // 训练计时用单调时钟推进；熄屏/锁屏不催。
+        runCatching { if (active) tickTraining(mono()) }
         if (convo == null && life.tick(now)) overlay.setLife(life.state)
         // Gemini 会话期间：只守着会话，不主动搭话
         session?.let { handleSession(it, now); return }
@@ -1744,7 +1758,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         c.bind(q)
         training = c
         val out = c.present(now())
-        if (out is TrainingOutcome.Present) showTrainingQuestion(q, out.ask)
+        if (out is TrainingOutcome.Present) {
+            trainingTimer.arm(now(), stemLength = q.stem.length)
+            showTrainingQuestion(q, out.ask)
+        }
+        persistTraining()
     }
 
     private fun showTrainingQuestion(q: cn.companion.pet.core.training.TrainingQuestion, ask: String) {
@@ -1794,6 +1812,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
         overlay.setMood(Mood.THINKING)
         overlay.showBubble(BubbleSpec("我核对一下……", textOnly = true))
+        // 模型请求期间暂停计时：等待不算用户沉默。
+        trainingTimer.pause(now())
+        persistTraining()
         probeJob = scope.launch {
             val messages = withContext(Dispatchers.IO) {
                 synchronized(app.memoryLock) { TrainingPrompt.build(memory.persona(), c.current.interactionMode, q, slot, transcript, selected) }
@@ -1805,6 +1826,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             stats.add(Stats.Kind.API_CALLS)
             val r = app.client.complete(ChatRequest(settings.endpoint, settings.model, key, messages, maxTokens = TrainingPrompt.MAX_TOKENS, timeoutMillis = TrainingPrompt.TIMEOUT_MILLIS))
             // 迟到的结果一律丢弃：会话已换、已结束、或槽位已变。
+            trainingTimer.resume(now())
             val live = training
             if (live !== c || !c.current.active) return@launch
             val advice = (r as? ChatResult.Success)?.let { TrainingPrompt.parse(it.content, c.current, slot) }
@@ -1851,6 +1873,142 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
     }
 
+
+    /** 每次训练状态变化落盘；失败只记诊断，不打断用户。 */
+    private fun persistTraining() {
+        val c = training ?: return
+        val q = trainingQuestion ?: return
+        trainingStore.save(c.current, q)
+    }
+
+    /** 训练计时推进：到期给支架，再到期进恢复。绝不无限催促。 */
+
+    /** 单调时钟：训练内计时不受系统时间调整影响。 */
+    private fun mono(): Long = android.os.SystemClock.elapsedRealtime()
+
+    /** 恢复未结束的训练：回到原题原槽位，明确告知断开的空窗。 */
+    private fun restoreTraining() {
+        val now = mono()
+        when (val r = trainingStore.restore(now)) {
+            is TrainingStore.Restore.Resume -> {
+                val c = TrainingController(r.session)
+                c.bind(r.question)
+                training = c
+                trainingQuestion = r.question
+                trainingMode = r.session.interactionMode
+                trainingTimer.arm(now, stemLength = r.question.stem.length)
+                val gapMin = (r.gapMillis / 60_000).coerceAtLeast(0)
+                val note = if (gapMin > 0) "刚才我这边断开了 " + gapMin + " 分钟，那段时间没记到。\n" else ""
+                val ask = when (r.session.currentSlotKind) {
+                    SlotKind.LOCATE -> "接着刚才：先指出结论里的范围词。"
+                    SlotKind.CONNECT -> "接着刚才：说清这句为什么还不足以支持结论。"
+                    SlotKind.EXAMINE -> "接着刚才：举一种没被覆盖的情况。"
+                    null -> "接着刚才那一步。"
+                }
+                overlay.showBubble(BubbleSpec(note + r.question.stem + "\n\n" + ask, instant = true,
+                    actions = listOf(
+                        BubbleAction("打字") { overlay.openBubbleInput() },
+                        BubbleAction("我不会") { submitTrainingSupport() },
+                        BubbleAction("×") { endTraining() },
+                    ),
+                ))
+            }
+            is TrainingStore.Restore.Finished -> trainingStore.clear()
+            TrainingStore.Restore.None -> Unit
+        }
+    }
+
+    private fun tickTraining(now: Long) {
+        val c = training ?: return
+        if (!c.current.active) return
+        if (trainingTimer.isRecovery()) return
+        if (!trainingTimer.shouldNudge(now)) return
+        val stage = trainingTimer.currentStage
+        when (stage) {
+            TrainingTimer.Stage.WAITING_FIRST -> {
+                trainingTimer.afterScaffold(now)
+                submitTrainingSupport()
+            }
+            TrainingTimer.Stage.WAITING_AFTER_SCAFFOLD -> {
+                trainingTimer.afterVoice(now)
+                onTrainingViolation(TriggerReason.NO_RESPONSE)
+            }
+            TrainingTimer.Stage.WAITING_AFTER_VOICE -> {
+                trainingTimer.toRecovery()
+                val out = c.recover(now)
+                persistTraining()
+                if (out is TrainingOutcome.Recovery) {
+                    overlay.showBubble(BubbleSpec(out.text, instant = true,
+                        actions = listOf(
+                            BubbleAction("继续") { resumeTraining() },
+                            BubbleAction("换一题") { openTraining() },
+                            BubbleAction("×") { endTraining() },
+                        ),
+                    ))
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    private fun resumeTraining() {
+        val c = training ?: return
+        val now = now()
+        val out = c.resume(now)
+        trainingTimer.arm(now)
+        persistTraining()
+        if (out is TrainingOutcome.Waiting) {
+            overlay.showBubble(BubbleSpec(out.ask, instant = true,
+                actions = listOf(
+                    BubbleAction("打字") { overlay.openBubbleInput() },
+                    BubbleAction("我不会") { submitTrainingSupport() },
+                    BubbleAction("×") { endTraining() },
+                ),
+            ))
+        }
+    }
+
+    /** 前台确认后调用：训练未完成却去了娱乐 App → 拦截回训练。 */
+    private fun onTrainingForeground(pkg: String) {
+        val c = training ?: return
+        val d = focusBridge.decide(
+            session = c.current,
+            foregroundPackage = pkg,
+            ownPackage = context.packageName,
+            allowedFocusPackages = allowedForSession(),
+        )
+        if (!d.shouldBlock) return
+        overlay.showBubble(BubbleSpec(d.reason, instant = true,
+            actions = listOf(
+                BubbleAction("回到训练", highlighted = true) { bringTrainingBack() },
+                BubbleAction("×") { endTraining() },
+            ),
+        ))
+    }
+
+    private fun bringTrainingBack() {
+        runCatching {
+            val i = android.content.Intent(context, cn.companion.pet.MainActivity::class.java)
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            context.startActivity(i)
+        }
+    }
+
+    /** 训练完成后的可选休息许可（练习换休息策略）。 */
+    private fun maybeGrantRest(now: Long) {
+        val c = training ?: return
+        val policy = if (settings.focusPolicyType == FocusPolicyType.PRACTICE_FOR_BREAK.name) FocusPolicyType.PRACTICE_FOR_BREAK else FocusPolicyType.FIXED_FOCUS
+        val g = restGrants.grant(
+            policy = policy,
+            sessionId = c.current.id,
+            eventId = "complete-" + c.current.id,
+            allowedPackages = emptySet(),
+            durationMillis = settings.restMinutes.coerceIn(1, 60) * 60_000L,
+            now = now,
+        ) ?: return
+        overlay.showBubble(BubbleSpec("练完了。给你 " + settings.restMinutes + " 分钟休息。", textOnly = true)) { handler.postDelayed({ overlay.hideBubble() }, 4000) }
+    }
+
     /** 强制规则入口：拒绝 / 未答 / 编造 → 切严格模态，不是只提示。 */
     private fun onTrainingViolation(reason: TriggerReason) {
         val c = training
@@ -1879,6 +2037,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         training?.let { logTrainingResult(it, completed = false) }
         training = null
         trainingQuestion = null
+        trainingTimer.disarm()
+        trainingStore.clear()
         enforcement.reset()
         overlay.hideBubble()
         overlay.setMood(Mood.IDLE)

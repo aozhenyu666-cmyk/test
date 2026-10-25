@@ -30,6 +30,11 @@ class Settings(context: Context) {
     var focusApps by set("focus_apps")
     var excludeApps by set("exclude_apps")
 
+    /** 专注策略：FIXED_FOCUS 不产生休息许可；PRACTICE_FOR_BREAK 练完换休息。 */
+    var focusPolicyType by str("focus_policy_type", "FIXED_FOCUS")
+    /** 练习换休息时，一次兑换多少分钟。 */
+    var restMinutes by int("rest_minutes", 10)
+
     /** 严格陪伴：默认关；开启后“想一想”进入有时限的受约束回合。 */
     var strictEnabled by bool("strict_enabled", false)
     var strictMinutes by int("strict_minutes", 10)
