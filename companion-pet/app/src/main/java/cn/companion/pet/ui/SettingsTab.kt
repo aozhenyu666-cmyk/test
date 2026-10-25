@@ -80,6 +80,9 @@ import cn.companion.pet.net.EndpointPolicy
 import cn.companion.pet.net.ModelProvider
 import cn.companion.pet.ui.components.PageHeader
 import cn.companion.pet.ui.theme.CompanionSpacing
+import cn.companion.pet.ui.theme.CompanionShapes
+import cn.companion.pet.ui.theme.LocalCompanionColors
+import cn.companion.pet.ui.components.Panel
 import cn.companion.pet.ui.components.GroupTitle
 import cn.companion.pet.ui.components.ToggleRow
 import cn.companion.pet.work.NightlyWorker
@@ -94,11 +97,26 @@ fun SettingsTab(context: Context) {
     val s = app.settings
     val scope = rememberCoroutineScope()
     fun toast(t: String) = Toast.makeText(context, t, Toast.LENGTH_SHORT).show()
+    val scroll = rememberScrollState()
+    fun jump(fraction: Float) {
+        scope.launch { scroll.animateScrollTo((scroll.maxValue * fraction).toInt()) }
+    }
     Column(
-        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = CompanionSpacing.page, vertical = 12.dp),
+        Modifier.fillMaxWidth().verticalScroll(scroll).padding(horizontal = CompanionSpacing.page, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         PageHeader("设置", "连接、陪伴、感知、深聊、表现。改动保存后立即生效。")
+        Panel {
+            Text("快速跳转", style = MaterialTheme.typography.titleMedium, color = LocalCompanionColors.current.ink)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(shape = CompanionShapes.button, onClick = { jump(0.0f) }) { Text("能力") }
+                OutlinedButton(shape = CompanionShapes.button, onClick = { jump(0.18f) }) { Text("看图") }
+                OutlinedButton(shape = CompanionShapes.button, onClick = { jump(0.38f) }) { Text("设备") }
+                OutlinedButton(shape = CompanionShapes.button, onClick = { jump(0.54f) }) { Text("目标") }
+                OutlinedButton(shape = CompanionShapes.button, onClick = { jump(0.68f) }) { Text("模型") }
+                OutlinedButton(shape = CompanionShapes.button, onClick = { jump(1.0f) }) { Text("底部") }
+            }
+        }
         Section("能力")
         OutlinedButton(onClick = { context.startActivity(Intent(context, cn.companion.pet.CapabilityActivity::class.java)) }) {
             Text("打开能力面板")
@@ -430,6 +448,17 @@ private fun ScreenDiagnosticSection(context: Context) {
     var visionKey by remember { mutableStateOf("") }
     Text("看图的模型：搭话模型（比如 DeepSeek）多半不能看图，要另选一个。点一下填好，再填对应服务商的 Key。",
         style = MaterialTheme.typography.bodySmall)
+    Panel {
+        Text("视觉状态", style = MaterialTheme.typography.labelLarge)
+        Text(
+            "地址：" + app.settings.visionEndpoint.ifBlank { "沿用搭话地址" } +
+                "\n模型：" + app.settings.visionModel.ifBlank { "未配置" } +
+                "\nKey：" + if (app.visionConfig() != null) "已配置" else "未配置" +
+                "\n上传：" + if (app.settings.visionUploadEnabled) "开" else "关",
+            style = MaterialTheme.typography.bodySmall,
+            color = LocalCompanionColors.current.ink2,
+        )
+    }
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         OutlinedButton(onClick = { visionEndpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1"; visionModel = "qwen-vl-plus" }) { Text("千问看图") }
         OutlinedButton(onClick = { visionEndpoint = "https://api.openai.com/v1"; visionModel = "gpt-4.1-mini" }) { Text("GPT 看图") }
