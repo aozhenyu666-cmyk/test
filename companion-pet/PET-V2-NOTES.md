@@ -471,3 +471,16 @@ assertEquals("user", back.policies.first().issuer)   // ← 断言的是自己�
 
 > 仍未真机验证：哨兵实际接受并落盘同桌的规则（需要哨兵 + 同桌同时装在真机上）。
 > 本轮只到「报文内容与哨兵的门在代码级一致」这一层，真机项仍记 NOT_RUN。
+
+---
+
+## 提交记录（captain，2026-10-25 23:2x）
+
+本工作树已提交入库（仅本地，未 push）：
+
+| 分支 | 提交 | 基线 |
+| --- | --- | --- |
+| `deepseek/pet-v2` | `4de95a4` | `a06ac65` |
+
+提交后强制重跑 `--rerun-tasks`：**521 tests / 0 failures / 0 errors**。
+真机项仍全部 NOT_RUN（本机无设备）。
