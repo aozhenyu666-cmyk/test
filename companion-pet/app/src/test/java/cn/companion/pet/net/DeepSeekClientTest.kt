@@ -143,7 +143,9 @@ class DeepSeekClientTest {
 
     @Test
     fun cancellationPropagates() = runBlocking {
-        server.enqueue(MockResponse().setBody("{}").setHeadersDelay(5, TimeUnit.SECONDS))
+        // 延迟要明显短于 MockWebServer.shutdown() 的 5 秒等待，否则 tearDown 偶尔抛 IOException（CI 上出现过）。
+        // 取消发生在服务端收到请求后立刻，2 秒足够让请求保持挂起。
+        server.enqueue(MockResponse().setBody("{}").setHeadersDelay(2, TimeUnit.SECONDS))
         var finished = false
         val job = async { client.complete(req(timeout = 10_000)).also { finished = true } }
         withTimeout(2_000) { while (server.requestCount == 0) kotlinx.coroutines.delay(10) }
