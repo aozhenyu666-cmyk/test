@@ -1,6 +1,7 @@
 package cn.companion.pet.ui
 
 import android.widget.Toast
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -20,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import cn.companion.pet.MainActivity
@@ -29,6 +31,10 @@ import cn.companion.pet.core.companion.EventKind
 import cn.companion.pet.core.companion.EventVisibility
 import cn.companion.pet.service.PetService
 import cn.companion.pet.ui.components.CutAction
+import cn.companion.pet.ui.components.HeroPanel
+import cn.companion.pet.ui.components.OrbitArt
+import cn.companion.pet.ui.components.WaveArt
+import cn.companion.pet.ui.components.QuietAction
 import cn.companion.pet.ui.components.EmptyNote
 import cn.companion.pet.ui.components.GroupTitle
 import cn.companion.pet.ui.components.PageHeader
@@ -120,15 +126,23 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
             .padding(horizontal = CompanionSpacing.page, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        PageHeader("屏幕边上的同伴", hint)
-        Panel {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("状态", style = MaterialTheme.typography.bodyMedium, color = colors.ink2)
-                SourceTag(status, highlighted = running && !paused)
+        PageHeader("今天", hint)
+        HeroPanel {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("它现在", style = MaterialTheme.typography.labelMedium, color = colors.signal)
+                    Text("一个会观察、会等待的同伴", style = MaterialTheme.typography.bodySmall,
+                        color = colors.paper.copy(alpha = 0.72f), modifier = Modifier.padding(top = 4.dp))
+                }
+                OrbitArt(size = 104.dp, accent = colors.accent, core = colors.signal)
+            }
+            Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(status, style = MaterialTheme.typography.titleLarge, color = colors.paper, modifier = Modifier.weight(1f))
+                SourceTag(if (running && !paused) "在线" else "离线", highlighted = running && !paused)
             }
             if (snapshot.limit > 0) {
-                Text("今天已调用 ${snapshot.used} / ${snapshot.limit} 次", style = MaterialTheme.typography.bodySmall,
-                    color = colors.ink2, modifier = Modifier.padding(top = 8.dp))
+                Text("今天已开口 " + snapshot.used + " / " + snapshot.limit + " 次", style = MaterialTheme.typography.bodySmall,
+                    color = colors.paper.copy(alpha = 0.72f), modifier = Modifier.padding(top = 10.dp))
             }
             lastCall?.let { call ->
                 val time = java.time.Instant.ofEpochMilli(call.at).atZone(java.time.ZoneId.systemDefault())
@@ -136,7 +150,7 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
                 Text(
                     if (call.ok) "上次调用模型：$time 成功" else "上次调用模型：$time 失败 · ${call.message}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (call.ok) colors.ink2 else MaterialTheme.colorScheme.error,
+                    color = if (call.ok) colors.paper.copy(alpha = 0.72f) else colors.danger,
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }
@@ -185,6 +199,23 @@ fun StartTab(activity: MainActivity, resumeTick: Int) {
                     },
                 ) { Text("停止") }
             }
+        }
+
+        WaveArt(Modifier.padding(top = 6.dp), height = 56.dp)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            QuickCard("看一眼", "截图 / 视觉", Modifier.weight(1f)) {
+                Toast.makeText(activity, "到要看的 App 里点桌宠 → 看一眼", Toast.LENGTH_SHORT).show()
+            }
+            QuickCard("记念头", "一句话留下", Modifier.weight(1f)) {
+                Toast.makeText(activity, "点桌宠 → 记个念头", Toast.LENGTH_SHORT).show()
+            }
+            QuickCard("去 AI", "带上下文深聊", Modifier.weight(1f)) {
+                Toast.makeText(activity, "点桌宠 → 去 " + app.settings.assistant, Toast.LENGTH_SHORT).show()
+            }
+        }
+        Panel {
+            Text("接下来", style = MaterialTheme.typography.titleMedium, color = colors.ink)
+            Text("先确认权限；权限齐了以后，它会自己决定什么时候开口。", style = MaterialTheme.typography.bodySmall, color = colors.ink2, modifier = Modifier.padding(top = 6.dp))
         }
 
         GroupTitle("必需")
@@ -244,4 +275,20 @@ private fun Step(title: String, desc: String, done: Boolean, onFix: () -> Unit) 
         value = if (done) "已开启" else "未开启",
         onClick = if (done) null else onFix,
     )
+}
+
+@Composable
+private fun QuickCard(title: String, subtitle: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val colors = LocalCompanionColors.current
+    androidx.compose.material3.Surface(
+        modifier.clickable(onClick = onClick),
+        color = colors.panel,
+        shape = CompanionShapes.small,
+        border = androidx.compose.foundation.BorderStroke(1.dp, colors.rule),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Text(title, style = MaterialTheme.typography.labelLarge, color = colors.ink)
+            Text(subtitle, style = MaterialTheme.typography.labelSmall, color = colors.ink2, modifier = Modifier.padding(top = 2.dp))
+        }
+    }
 }

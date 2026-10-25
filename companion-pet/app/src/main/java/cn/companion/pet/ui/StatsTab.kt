@@ -1,10 +1,12 @@
 package cn.companion.pet.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -14,6 +16,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -21,11 +25,11 @@ import cn.companion.pet.PetApp
 import cn.companion.pet.data.Stats
 import cn.companion.pet.ui.components.EmptyNote
 import cn.companion.pet.ui.components.PageHeader
+import cn.companion.pet.ui.components.Panel
 import cn.companion.pet.ui.components.Rule
 import cn.companion.pet.ui.theme.CompanionSpacing
 import cn.companion.pet.ui.theme.LocalCompanionColors
 
-/** 每天的开口、回应、忽略、进 Gemini 次数。回应率低先改人设，回应了没拉住再调节奏。 */
 @Composable
 fun StatsTab(resumeTick: Int) {
     val stats = PetApp.instance.stats
@@ -39,12 +43,35 @@ fun StatsTab(resumeTick: Int) {
     Column(
         Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
             .padding(horizontal = CompanionSpacing.page, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        PageHeader("统计", "最近 " + (if (days.isEmpty()) 0 else days.size) + " 天。次数口径与 Stats 一致；没有可靠 token/定价信息，所以不算精确费用。")
+        PageHeader("统计", "最近 " + (if (days.isEmpty()) 0 else days.size) + " 天。没有可靠 token/定价，不算精确费用。")
         if (days.isEmpty()) {
             EmptyNote("还没有数据。")
             return@Column
+        }
+        val recent = days.takeLast(7)
+        Panel {
+            Text("最近七天", style = MaterialTheme.typography.titleMedium, color = colors.ink)
+            Text("橙：开口　墨：回应", style = MaterialTheme.typography.labelSmall, color = colors.ink2,
+                modifier = Modifier.padding(top = 2.dp, bottom = 8.dp))
+            val max = recent.maxOfOrNull { maxOf(stats.get(Stats.Kind.SPOKE, it), stats.get(Stats.Kind.REPLIED, it)) }?.coerceAtLeast(1) ?: 1
+            Canvas(Modifier.fillMaxWidth().height(120.dp)) {
+                val slot = size.width / recent.size
+                val barW = slot * 0.22f
+                recent.forEachIndexed { i, day ->
+                    val x = slot * i + slot * 0.28f
+                    val spoke = stats.get(Stats.Kind.SPOKE, day)
+                    val replied = stats.get(Stats.Kind.REPLIED, day)
+                    val h1 = size.height * spoke / max
+                    val h2 = size.height * replied / max
+                    drawRect(colors.accent.copy(alpha = 0.85f), Offset(x, size.height - h1), Size(barW, h1))
+                    drawRect(colors.ink.copy(alpha = 0.75f), Offset(x + barW + 4f, size.height - h2), Size(barW, h2))
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                recent.forEach { d -> Text(d.toString().substring(5), style = MaterialTheme.typography.labelSmall, color = colors.ink2) }
+            }
         }
         Text("回应率低：先改人设和钩子。回应了但没拉住：再调开口频率。", style = MaterialTheme.typography.bodySmall, color = colors.ink2)
         Column(Modifier.horizontalScroll(rememberScrollState())) {

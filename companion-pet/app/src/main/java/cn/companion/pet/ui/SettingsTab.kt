@@ -94,7 +94,6 @@ fun SettingsTab(context: Context) {
     val s = app.settings
     val scope = rememberCoroutineScope()
     fun toast(t: String) = Toast.makeText(context, t, Toast.LENGTH_SHORT).show()
-
     Column(
         Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = CompanionSpacing.page, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),

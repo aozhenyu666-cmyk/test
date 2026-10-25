@@ -14,13 +14,14 @@ fun CompanionTheme(
     content: @Composable () -> Unit,
 ) {
     val colors = if (darkTheme) DarkCompanionColors else LightCompanionColors
-    // Material primary 用墨色：避免默认焦点/光标变成不可读的黄色。
     val scheme = if (darkTheme) {
         darkColorScheme(
-            primary = colors.ink,
-            onPrimary = colors.paper,
+            primary = colors.accent,
+            onPrimary = colors.onAccent,
             secondary = colors.signal,
             onSecondary = colors.onSignal,
+            tertiary = colors.ink,
+            onTertiary = colors.paper,
             background = colors.paper,
             onBackground = colors.ink,
             surface = colors.panel,
@@ -32,10 +33,12 @@ fun CompanionTheme(
         )
     } else {
         lightColorScheme(
-            primary = colors.ink,
-            onPrimary = colors.paper,
+            primary = colors.accent,
+            onPrimary = colors.onAccent,
             secondary = colors.signal,
             onSecondary = colors.onSignal,
+            tertiary = colors.ink,
+            onTertiary = colors.paper,
             background = colors.paper,
             onBackground = colors.ink,
             surface = colors.panel,
@@ -51,7 +54,7 @@ fun CompanionTheme(
         small = CompanionShapes.small,
         medium = CompanionShapes.button,
         large = CompanionShapes.button,
-        extraLarge = CompanionShapes.button,
+        extraLarge = CompanionShapes.hero,
     )
     CompositionLocalProvider(LocalCompanionColors provides colors) {
         MaterialTheme(colorScheme = scheme, typography = CompanionTypography, shapes = shapes, content = content)

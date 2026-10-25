@@ -107,6 +107,14 @@ fun MemoryTab(resumeTick: Int) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         PageHeader("记忆", "它对你的了解、最近的交流、念头、日记和信。来源和删除都能核对。")
+        Panel {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                MetricMini("档案", snap.profile.size.toString(), Modifier.weight(1f))
+                MetricMini("事实", snap.facts.size.toString(), Modifier.weight(1f))
+                MetricMini("今天", snap.today.size.toString(), Modifier.weight(1f))
+                MetricMini("念头", snap.thoughts.sumOf { it.second.size }.toString(), Modifier.weight(1f))
+            }
+        }
         GroupTitle("它对你的了解")
         Text("[他说过] 是你亲口说的，[我推测] 是它猜的。猜错了就删掉，删掉的不会被它再写回来。", style = MaterialTheme.typography.bodySmall)
         if (editing) {
@@ -273,5 +281,14 @@ private fun FactRow(fact: Fact, onConfirm: () -> Unit, onCorrect: (String) -> Un
                 TextButton(onClick = onForget) { Text("忘记") }
             }
         }
+    }
+}
+
+@Composable
+private fun MetricMini(label: String, value: String, modifier: Modifier = Modifier) {
+    val colors = LocalCompanionColors.current
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, style = MaterialTheme.typography.titleLarge, color = colors.ink)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = colors.ink2)
     }
 }
