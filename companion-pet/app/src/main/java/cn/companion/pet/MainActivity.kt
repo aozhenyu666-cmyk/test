@@ -14,9 +14,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -44,13 +46,8 @@ import cn.companion.pet.ui.theme.CompanionMotion
 import cn.companion.pet.ui.theme.CompanionTheme
 import cn.companion.pet.ui.theme.LocalCompanionColors
 
-/**
- * 设置页：开始（权限与状态）、设置、记忆、统计。四页信息层次一致：
- * 眉标 + 标题 + 分组细线，不用卡片墙。
- */
 class MainActivity : ComponentActivity() {
 
-    /** 每次回到前台 +1，让各页重新读取权限状态和文件。 */
     private var resumeTick by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -81,21 +78,29 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Root() {
         var tab by rememberSaveable { mutableIntStateOf(0) }
-        val tabs = listOf("开始", "设置", "记忆", "统计")
+        val tabs = listOf("今天", "设置", "记忆", "统计")
         val colors = LocalCompanionColors.current
         // 让 testTag 出现在 uiautomator dump 的 resource-id 里，验收脚本按它找按钮，不靠坐标。
         Scaffold(containerColor = colors.paper, modifier = Modifier.semantics { testTagsAsResourceId = true }) { inner ->
             Column(Modifier.padding(inner).fillMaxSize().imePadding().background(colors.paper)) {
-                Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                    Eyebrow("COMPANION")
+                Column(Modifier.padding(horizontal = 22.dp, vertical = 16.dp)) {
+                    Eyebrow("COMPANION / 桌宠")
                     Text("桌宠", style = MaterialTheme.typography.headlineMedium, color = colors.ink)
                 }
-                Row(Modifier.fillMaxWidth().selectableGroup()) {
-                    tabs.forEachIndexed { index, label ->
-                        TabItem(label, selected = tab == index, modifier = Modifier.weight(1f).testTag("tab_" + index)) { tab = index }
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .background(colors.chip, RoundedCornerShape(18.dp))
+                        .padding(4.dp),
+                ) {
+                    Row(Modifier.fillMaxWidth().selectableGroup()) {
+                        tabs.forEachIndexed { index, label ->
+                            TabItem(label, selected = tab == index, modifier = Modifier.weight(1f).testTag("tab_" + index)) { tab = index }
+                        }
                     }
                 }
-                HorizontalDivider(color = colors.rule)
+                HorizontalDivider(color = colors.rule, modifier = Modifier.padding(top = 12.dp))
                 when (tab) {
                     0 -> StartTab(this@MainActivity, resumeTick)
                     1 -> SettingsTab(this@MainActivity)
@@ -109,25 +114,18 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun TabItem(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
         val colors = LocalCompanionColors.current
-        Column(
+        Box(
             Modifier
                 .then(modifier)
-                .height(48.dp)
+                .height(44.dp)
+                .background(if (selected) colors.panel else colors.chip, RoundedCornerShape(14.dp))
                 .selectable(selected = selected, role = Role.Tab, onClick = onClick),
-            horizontalAlignment = Alignment.CenterHorizontally,
+            contentAlignment = Alignment.Center,
         ) {
-            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                Text(
-                    label,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (selected) colors.ink else colors.ink2,
-                )
-            }
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(if (selected) 2.dp else 0.dp)
-                    .background(colors.signal),
+            Text(
+                label,
+                style = MaterialTheme.typography.labelLarge,
+                color = if (selected) colors.ink else colors.ink2,
             )
         }
     }

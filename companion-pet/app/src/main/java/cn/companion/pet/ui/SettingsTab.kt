@@ -83,6 +83,9 @@ import cn.companion.pet.net.EndpointPolicy
 import cn.companion.pet.net.ModelProvider
 import cn.companion.pet.ui.components.PageHeader
 import cn.companion.pet.ui.theme.CompanionSpacing
+import cn.companion.pet.ui.theme.CompanionShapes
+import cn.companion.pet.ui.theme.LocalCompanionColors
+import cn.companion.pet.ui.components.Panel
 import cn.companion.pet.ui.components.GroupTitle
 import cn.companion.pet.ui.components.ToggleRow
 import cn.companion.pet.work.NightlyWorker
@@ -100,8 +103,8 @@ fun SettingsTab(context: Context) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 SETTINGS_GROUPS.forEachIndexed { i, label ->
                     val tag = Modifier.testTag("settings_group_" + i)
-                    if (i == group) Button(onClick = {}, modifier = tag) { Text(label) }
-                    else OutlinedButton(onClick = { group = i }, modifier = tag) { Text(label) }
+                    if (i == group) Button(onClick = {}, modifier = tag, shape = CompanionShapes.button) { Text(label) }
+                    else OutlinedButton(onClick = { group = i }, modifier = tag, shape = CompanionShapes.button) { Text(label) }
                 }
             }
         }
@@ -519,10 +522,15 @@ private fun ScreenDiagnosticSection(context: Context) {
     }
     GroupTitle("看图（看一眼）")
     Text("用法：在要看的 App 里点一下桌宠 → “看一眼”。它截一张图发给下面的视觉模型，回一句“我看了一眼：…”。", style = MaterialTheme.typography.bodySmall)
-    Text("看图状态：" + setupLabel, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("vision_status"))
-    Text("上传截图：" + (if (upload) "已允许" else "未允许（下面的开关）"), style = MaterialTheme.typography.bodySmall)
-    Text("上次看一眼：" + (lastLook ?: "还没有记录"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("vision_last"))
-    TextButton(onClick = { setupTick++ }) { Text("刷新状态") }
+    Panel {
+        Text("看图状态：" + setupLabel, style = MaterialTheme.typography.bodyMedium, color = LocalCompanionColors.current.ink,
+            modifier = Modifier.testTag("vision_status"))
+        Text("上传截图：" + (if (upload) "已允许" else "未允许（下面的开关）"), style = MaterialTheme.typography.bodySmall,
+            color = LocalCompanionColors.current.ink2)
+        Text("上次看一眼：" + (lastLook ?: "还没有记录"), style = MaterialTheme.typography.bodySmall,
+            color = LocalCompanionColors.current.ink2, modifier = Modifier.testTag("vision_last"))
+        TextButton(onClick = { setupTick++ }) { Text("刷新状态") }
+    }
     // 视觉服务可以和搭话分开：搭话用 DeepSeek、看图用千问。地址留空沿用搭话的；换了服务商要填它自己的 Key。
     var visionEndpoint by remember { mutableStateOf(app.settings.visionEndpoint) }
     var visionModel by remember { mutableStateOf(app.settings.visionModel) }

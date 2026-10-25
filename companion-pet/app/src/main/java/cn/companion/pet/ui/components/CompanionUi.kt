@@ -8,11 +8,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -33,23 +35,23 @@ import cn.companion.pet.ui.theme.LocalCompanionColors
 @Composable
 fun Eyebrow(text: String) {
     Text(
-        "// " + text,
+        text.uppercase(),
         style = MaterialTheme.typography.labelSmall,
-        color = LocalCompanionColors.current.ink2,
-        modifier = Modifier.padding(bottom = 6.dp),
+        color = LocalCompanionColors.current.accent,
+        modifier = Modifier.padding(bottom = 4.dp),
     )
 }
 
 @Composable
 fun PageHeader(title: String, subtitle: String? = null) {
-    Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
         Text(title, style = MaterialTheme.typography.headlineMedium, color = LocalCompanionColors.current.ink)
         if (!subtitle.isNullOrBlank()) {
             Text(
                 subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = LocalCompanionColors.current.ink2,
-                modifier = Modifier.padding(top = 4.dp),
+                modifier = Modifier.padding(top = 6.dp),
             )
         }
     }
@@ -61,9 +63,8 @@ fun GroupTitle(text: String) {
         text,
         style = MaterialTheme.typography.titleMedium,
         color = LocalCompanionColors.current.ink,
-        modifier = Modifier.padding(top = CompanionSpacing.group, bottom = 2.dp),
+        modifier = Modifier.padding(top = CompanionSpacing.group, bottom = 8.dp),
     )
-    HorizontalDivider(color = LocalCompanionColors.current.rule)
 }
 
 @Composable
@@ -73,14 +74,28 @@ fun Rule() {
 
 @Composable
 fun Panel(content: @Composable () -> Unit) {
-    Surface(color = LocalCompanionColors.current.panel, shape = CompanionShapes.small) {
-        Column(Modifier.fillMaxWidth().padding(CompanionSpacing.row)) { content() }
+    Surface(
+        color = LocalCompanionColors.current.panel,
+        shape = CompanionShapes.small,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+        border = androidx.compose.foundation.BorderStroke(1.dp, LocalCompanionColors.current.rule),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(CompanionSpacing.card)) { content() }
     }
 }
 
-/**
- * 一条设置/状态行。点击热区至少 48dp；副标题说明写在字段下而不是 placeholder。
- */
+@Composable
+fun HeroPanel(content: @Composable () -> Unit) {
+    Surface(
+        color = LocalCompanionColors.current.ink,
+        shape = CompanionShapes.hero,
+        tonalElevation = 0.dp,
+    ) {
+        Column(Modifier.fillMaxWidth().padding(20.dp)) { content() }
+    }
+}
+
 @Composable
 fun SettingRow(
     title: String,
@@ -95,7 +110,7 @@ fun SettingRow(
         base.clickable(role = Role.Button, onClick = onClick)
     } else base
     Row(
-        clickable.padding(vertical = 10.dp),
+        clickable.padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -106,12 +121,12 @@ fun SettingRow(
                     description,
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.ink2,
-                    modifier = Modifier.padding(top = 2.dp),
+                    modifier = Modifier.padding(top = 3.dp),
                 )
             }
         }
         if (value != null) {
-            Text(value, style = MaterialTheme.typography.bodyMedium, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(value, style = MaterialTheme.typography.labelMedium, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         trailing?.invoke()
     }
@@ -135,7 +150,7 @@ fun ToggleRow(
                 contentDescription = title
                 role = Role.Switch
             }
-            .padding(vertical = 8.dp),
+            .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -154,13 +169,13 @@ fun SourceTag(text: String, highlighted: Boolean = false) {
     val colors = LocalCompanionColors.current
     Surface(
         color = if (highlighted) colors.signal else colors.chip,
-        shape = CompanionShapes.small,
+        shape = RoundedCornerShape(999.dp),
     ) {
         Text(
             text,
             style = MaterialTheme.typography.labelMedium,
             color = if (highlighted) colors.onSignal else colors.ink2,
-            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
         )
     }
 }
@@ -190,11 +205,21 @@ fun CutAction(
 }
 
 @Composable
+fun QuietAction(text: String, onClick: () -> Unit, enabled: Boolean = true) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        shape = CompanionShapes.button,
+        modifier = Modifier.heightIn(min = CompanionSpacing.minTouch),
+    ) { Text(text, style = MaterialTheme.typography.labelLarge) }
+}
+
+@Composable
 fun EmptyNote(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.bodySmall,
         color = LocalCompanionColors.current.ink2,
-        modifier = Modifier.padding(vertical = 8.dp),
+        modifier = Modifier.padding(vertical = 10.dp),
     )
 }
