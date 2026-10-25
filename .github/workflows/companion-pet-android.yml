@@ -94,7 +94,7 @@ jobs:
       # 固定直链（用户已同意公开）：每次推送构建成功后，把 APK 放到滚动更新的 Release “tongzhuo-latest”。
       # 链接永远是 https://github.com/<仓库>/releases/download/tongzhuo-latest/tongzhuo.apk，
       # 无需登录、无需解压，手机浏览器直接下载安装。
-      - name: Publish APK to the tongzhuo-latest release
+      - name: Publish APK (main → tongzhuo-latest, other branches → tongzhuo-preview)
         if: success() && github.event_name != 'pull_request'
         shell: bash
         env:
@@ -106,9 +106,14 @@ jobs:
           CODE=$(grep -oP 'versionCode = \K[0-9]+' app/build.gradle.kts)
           cp app/build/outputs/apk/debug/app-debug.apk tongzhuo.apk
           SHA256=$(sha256sum tongzhuo.apk | cut -d' ' -f1)
-          TAG=tongzhuo-latest
+          # 只有主线更新正式直链；其他分支（实验/未验收）放到单独的预览链接，不覆盖正式版。
+          if [ "${GITHUB_REF_NAME}" = "ccr-2899d69f-xlzjh6" ]; then
+            TAG=tongzhuo-latest; KIND="最新构建"; LEAD="最新一次构建成功的调试版。"
+          else
+            TAG=tongzhuo-preview; KIND="预览·未验收"; LEAD="实验分支的预览构建，未经真机验收，不是正式版。"
+          fi
           NOTES=$(printf '%s\n\n%s\n%s\n%s\n\n%s' \
-            "同桌 ${VERSION}（versionCode ${CODE}），最新一次构建成功的调试版。" \
+            "同桌 ${VERSION}（versionCode ${CODE}），${LEAD}" \
             "分支：${GITHUB_REF_NAME}" \
             "提交：${GITHUB_SHA}" \
             "SHA-256：${SHA256}" \
@@ -116,7 +121,7 @@ jobs:
           for attempt in 1 2 3; do
             gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
             if gh release create "$TAG" tongzhuo.apk --target "$GITHUB_SHA" --prerelease \
-                --title "同桌 ${VERSION}（最新构建）" --notes "$NOTES"; then
+                --title "同桌 ${VERSION}（${KIND}）" --notes "$NOTES"; then
               echo "Published https://github.com/${GH_REPO}/releases/download/${TAG}/tongzhuo.apk"
               exit 0
             fi
