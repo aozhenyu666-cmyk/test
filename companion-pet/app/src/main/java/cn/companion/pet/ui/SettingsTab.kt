@@ -79,6 +79,8 @@ import cn.companion.pet.net.ChatRole
 import cn.companion.pet.net.EndpointPolicy
 import cn.companion.pet.net.ModelProvider
 import cn.companion.pet.ui.components.PageHeader
+import cn.companion.pet.ui.components.Panel
+import cn.companion.pet.ui.theme.LocalCompanionColors
 import cn.companion.pet.ui.theme.CompanionSpacing
 import cn.companion.pet.ui.components.GroupTitle
 import cn.companion.pet.ui.components.ToggleRow
@@ -113,6 +115,11 @@ fun SettingsTab(context: Context) {
         ) { agentOn = it; s.agentAutonomy = it }
         AgentTracePreview()
         ScreenDiagnosticSection(context)
+        Section("自动观察（C3）")
+        Panel {
+            Text("默认关闭，只对白名单 App、亮屏、间隔和每日次数内观察；不会后台常驻截图。", style = MaterialTheme.typography.bodySmall, color = LocalCompanionColors.current.ink2)
+            Text("当前：C3 策略已就绪；自动截图执行开关未开放。", style = MaterialTheme.typography.bodySmall, color = LocalCompanionColors.current.ink2, modifier = Modifier.padding(top = 6.dp))
+        }
         Section("设备操作（A3）")
         val shizuku = remember { AndroidShizukuProbe(context) }
         val capability = remember { ShizukuCapabilityRunner(shizuku, AndroidShizukuCommandPort()) }
