@@ -130,6 +130,7 @@ fun SettingsScreen(activity: cn.companion.pet.MainActivity, resumeTick: Int, gro
                     SETTINGS_DEVICE -> DeviceSettings(context)
                     else -> {
                         CrashReportSection(activity)
+                        FocusDiagnostics()
                         PresenceDiagnostics()
                         GroupTitle("决策轨迹")
                         AgentTracePreview()
@@ -140,6 +141,28 @@ fun SettingsScreen(activity: cn.companion.pet.MainActivity, resumeTick: Int, gro
             }
         }
     }
+}
+
+/** 专注守护状态：只显示状态、剩余时间和最近一次结果。 */
+@Composable
+private fun FocusDiagnostics() {
+    val app = PetApp.instance
+    var tick by remember { mutableIntStateOf(0) }
+    GroupTitle("专注守护")
+    val st = remember(tick) { app.focusStatus?.invoke() }
+    val lines = when {
+        st == null -> listOf("桌宠没在运行。")
+        !st.active -> listOf("现在没有守护。" + if (st.storeError.isNotBlank()) "（" + st.storeError + "）" else "")
+        else -> buildList {
+            add("守护 ${st.targetLabel}（" + (if (st.enforcement == cn.companion.pet.core.focus.FocusEnforcement.STRICT) "严格" else "提醒") + "）· 状态 ${st.state} · 还剩 ${st.secondsLeft / 60} 分 ${st.secondsLeft % 60} 秒")
+            if (st.returnAttempts > 0) add("自动返回已尝试 ${st.returnAttempts} 次")
+            if (st.lastResult.isNotBlank()) add("最近：" + st.lastResult)
+            add("拦截层：" + if (st.overlayShown) "显示中" else if (st.overlayError.isNotBlank()) "没能显示（" + st.overlayError + "）" else "未显示")
+            if (st.storeError.isNotBlank()) add("存储：" + st.storeError)
+        }
+    }
+    lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+    TextButton(onClick = { tick++ }) { Text("刷新") }
 }
 
 /** C3 本机主动性的脱敏统计：只有计数和原因，没有任何屏幕内容。 */
@@ -396,6 +419,16 @@ private fun CompanionSettings(context: Context) {
     Section("AI 会话")
     Text("和 Gemini、ChatGPT 或千问聊天时，桌宠头上会出现蓝色的 G。文字深聊中切到别的 App，它先倒计时提醒，到点把你拉回原来的对话；“一起看”本来就要切出去看东西，只记录不拉回。点桌宠可以随时结束会话。",
         style = MaterialTheme.typography.bodySmall)
+    Section("专注守护")
+    Text("点桌宠 →“守护着去 …”：先建立守护再打开 AI App，守护期间离开会被管。时长到了自动结束；随时可以暂停 5 分钟或结束守护（紧急退出）。", style = MaterialTheme.typography.bodySmall)
+    var strict by remember { mutableStateOf(s.focusEnforcement == "STRICT") }
+    Toggle("严格守护（STRICT）", "默认关（只用气泡提醒）。打开后离开超过宽限就显示全屏拦截层，并自动尝试把你带回去（最多 3 次，每次都核验是否真的回去了）；拦截层上始终有暂停和紧急退出。", strict) {
+        strict = it; s.focusEnforcement = if (it) "STRICT" else "SOFT"
+    }
+    var focusMinutesText by remember { mutableStateOf(s.focusMinutes.toString()) }
+    NumberField("守护时长（分钟，5–180）", focusMinutesText) {
+        focusMinutesText = it; it.toIntOrNull()?.let { v -> s.focusMinutes = v.coerceIn(5, 180) }
+    }
     var autoStart by remember { mutableStateOf(s.sessionAutoStart) }
     Toggle("打开 AI App 自动开始", "自己打开 Gemini / ChatGPT / 千问 停留 ${s.sessionAutoStartSec} 秒，就算开始一次会话。从桌宠点“去 …”会直接开始。", autoStart) {
         autoStart = it; s.sessionAutoStart = it

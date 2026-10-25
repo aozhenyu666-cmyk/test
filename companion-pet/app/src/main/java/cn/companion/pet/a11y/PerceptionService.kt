@@ -51,6 +51,9 @@ class PerceptionService : AccessibilityService() {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 PerceptionHub.trail.onForeground(pkg, now)
                 PerceptionHub.stuck.onPage("$pkg/${event.className}", now)
+                // 专注守护另走一条“防抖 + 读真实活动窗口”的确认，原有轨迹/卡壳逻辑不变。
+                handler.removeCallbacks(confirmForeground)
+                handler.postDelayed(confirmForeground, CONFIRM_DELAY_MILLIS)
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 PerceptionHub.trail.onScroll(pkg, now)
@@ -60,9 +63,22 @@ class PerceptionService : AccessibilityService() {
         }
     }
 
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val confirmForeground = Runnable {
+        try {
+            val active = rootInActiveWindow?.packageName?.toString()
+            if (!active.isNullOrBlank() && active !in ignored && active !in cn.companion.pet.core.focus.ForegroundGate.DEFAULT_SYSTEM) {
+                PerceptionHub.onForegroundConfirmed?.invoke(active)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PerceptionService", "confirm dropped", e)
+        }
+    }
+
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
+        handler.removeCallbacks(confirmForeground)
         disconnect()
         super.onDestroy()
     }
@@ -109,6 +125,8 @@ class PerceptionService : AccessibilityService() {
     }
 
     companion object {
+        /** 窗口事件会抖动（菜单、键盘、权限框）：等这么久再读真实活动窗口。 */
+        private const val CONFIRM_DELAY_MILLIS = 300L
         private const val MAX_NODES = 600
         private const val MAX_READ_MILLIS = 150L
     }

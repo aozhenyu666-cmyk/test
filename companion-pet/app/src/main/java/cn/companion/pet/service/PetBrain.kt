@@ -100,6 +100,33 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         skillsInitialized = true
         SkillPetFlow(app, overlay, scope, handler, ::label) { overlay.setMood(Mood.IDLE) }
     }
+    // ---------- 专注守护（移植自 deepseek/c3-focus-guard，按审计修过）：唯一的“拉回”拥有者 ----------
+    private val focusGate by lazy { cn.companion.pet.core.focus.ForegroundGate(context.packageName) }
+    private val focusOverlay by lazy {
+        cn.companion.pet.overlay.FocusOverlay(context, { PerceptionHub.service },
+            onReturn = { focusController.userReturn() },
+            onPause = { focusController.pause() },
+            onAbort = { endFocusByUser() })
+    }
+    private val focusController by lazy {
+        cn.companion.pet.core.focus.FocusController(
+            store = cn.companion.pet.core.focus.FocusStore(memory.root),
+            device = object : cn.companion.pet.core.focus.FocusDevicePort {
+                override fun launch(pkg: String): Boolean = gemini.launch(pkg, adjacent = false) == GeminiLauncher.Outcome.LAUNCHED
+                override fun activePackage(): String? = PerceptionHub.activePackage()?.takeUnless { focusGate.isTransient(it) }
+            },
+            ui = object : cn.companion.pet.core.focus.FocusUiPort {
+                override fun showBlock(targetLabel: String, reason: String) = focusOverlay.show(targetLabel, reason)
+                override fun hideBlock() = focusOverlay.hide()
+                override fun remind(targetLabel: String, text: String) = showFocusRemind(text)
+                override fun ended(targetLabel: String, reason: cn.companion.pet.core.focus.FocusEndReason) = onFocusEnded(targetLabel, reason)
+            },
+            scheduler = object : cn.companion.pet.core.focus.FocusScheduler {
+                override fun post(delayMillis: Long, task: () -> Unit) { handler.postDelayed(task, delayMillis) }
+            },
+        )
+    }
+    private val focusActive: Boolean get() = focusController.active
     private val assembler by lazy { CompanionContextAssembler(app.events, app.facts, materials = app.materialInbox) }
     private val visibleMemory by lazy { VisibleMemoryReader(memory, app.events, app.facts) }
     private val stateStore by lazy { PetStateStore(memory.root) }
@@ -176,12 +203,16 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         weighty.restore(LocalDate.now().toString(), stats.get(Stats.Kind.WEIGHTY))
         overlay.show()
         restoreSession()
+        // 守护：杀进程/重启后恢复；已结束/过期/损坏的不复活。
+        runCatching { focusController.restore() }
+        app.focusStatus = { focusController.status() }
         active = isUserActive()
         if (active) onUserPresent()
         handler.post(ticker)
         app.events.addListener(agentListener)
         handler.postDelayed(agentTrigger, 1_200)
         PerceptionHub.onScroll = { pkg -> onScrollEvent(pkg) }
+        PerceptionHub.onForegroundConfirmed = { pkg -> runCatching { focusController.onForeground(pkg) } }
         scope.launch {
             settings.changes.collect {
                 scheduler.config = settings.rhythm()
@@ -204,6 +235,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         app.agentLoop.cancel()
         app.actions.cancelAll()
         PerceptionHub.onScroll = null
+        PerceptionHub.onForegroundConfirmed = null
+        app.focusStatus = null
+        runCatching { focusOverlay.hide() }
         handler.removeCallbacksAndMessages(null)
         voice.cancel()
         speech.shutdown()
@@ -253,6 +287,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun tick() {
         val now = now()
+        // 守护按秒推进（到期、宽限、重试），不受下面任何提前 return 影响；熄屏/锁屏时不拉回。
+        runCatching { focusController.tick(interactive = active) }
         if (convo == null && life.tick(now)) overlay.setLife(life.state)
         // Gemini 会话期间：只守着会话，不主动搭话
         session?.let { handleSession(it, now); return }
@@ -342,6 +378,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     /** 此刻在忙什么（非空就不插嘴）。 */
     private fun presenceBusy(now: Long): String? = when {
+        focusActive || focusOverlay.isShown -> "守护"
         session != null -> "深聊"
         think != null -> "想一想"
         noteDraft != null -> "记念头"
@@ -451,6 +488,61 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }.getOrDefault(emptyList())
         return cn.companion.pet.core.presence.TodayDigest.build(events, visibility, today, topics.candidates(now()), done,
             forgotten = { memory.forgottenMatches(it) }, now = now())
+    }
+
+    // ---------- 专注守护：入口、提醒、结束 ----------
+
+    /** 显式入口：先建立并保存契约，再打开目标；失败不留下守护。 */
+    private fun startFocusGuard() {
+        val target = assistants.current
+        val pkg = assistants.packageOf(target) ?: run { gemini.toast("没找到 ${target.label}，可以在设置里填包名"); return }
+        val now = now()
+        val strict = settings.focusEnforcement == "STRICT"
+        val minutes = settings.focusMinutes.coerceIn(5, 180)
+        val contract = cn.companion.pet.core.focus.FocusContract(
+            sessionId = "focus-" + now,
+            targetPackage = pkg,
+            targetLabel = target.label,
+            startedAt = now,
+            expiresAt = now + minutes * 60_000L,
+            mode = cn.companion.pet.core.focus.FocusMode.TEXT,
+            enforcement = if (strict) cn.companion.pet.core.focus.FocusEnforcement.STRICT else cn.companion.pet.core.focus.FocusEnforcement.SOFT,
+            allowedPackages = allowedForSession(),
+            graceMillis = settings.sessionGraceSec.coerceIn(3, 600) * 1000L,
+            allowedGraceMillis = settings.sessionAllowedGraceSec.coerceIn(3, 3600) * 1000L,
+        )
+        when (val r = focusController.start(contract, PerceptionHub.activePackage() ?: PerceptionHub.trail.foreground)) {
+            cn.companion.pet.core.focus.StartResult.Started -> {
+                if (session == null) startSession(SessionMode.TEXT, target, pkg)
+                gemini.toast((if (strict) "已开始严格守护 " else "已开始守护 ") + target.label + "，$minutes 分钟")
+            }
+            is cn.companion.pet.core.focus.StartResult.Failed -> gemini.toast(r.reason)
+        }
+    }
+
+    /** SOFT 提醒：桌宠气泡，不全屏。 */
+    private fun showFocusRemind(text: String) {
+        if (convo != null) endConversation()
+        haptics.tap()
+        overlay.attention()
+        overlay.showBubble(BubbleSpec(text, instant = true, actions = listOf(
+            BubbleAction("现在回去", highlighted = true) { overlay.hideBubble(); focusController.userReturn() },
+            BubbleAction("暂停 5 分钟") { overlay.hideBubble(); focusController.pause() },
+            BubbleAction("结束守护") { overlay.hideBubble(); endFocusByUser() },
+        )))
+    }
+
+    /** 紧急退出 / 结束守护：守护和会话一起停，不会被任何自动逻辑重启。 */
+    private fun endFocusByUser() {
+        if (focusActive) focusController.abort()
+        if (session != null) endSessionByUser()
+    }
+
+    private fun onFocusEnded(label: String, reason: cn.companion.pet.core.focus.FocusEndReason) {
+        if (reason == cn.companion.pet.core.focus.FocusEndReason.USER_ABORTED) return
+        overlay.showBubble(BubbleSpec("和 $label 的守护结束了（${reason.label}）。", textOnly = true)) {
+            handler.postDelayed({ if (convo == null && think == null) overlay.hideBubble() }, 5000)
+        }
     }
 
     // ---------- 开口 ----------
@@ -844,6 +936,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                     BubbleAction("记个念头") { startNote() },
                     BubbleAction("看一眼") { lookOnce() },
                     BubbleAction("技能") { endConversation(); skills.openMenu() },
+                    BubbleAction("守护着去 ${assistants.current.label}") { endConversation(); startFocusGuard() },
                 ),
             ),
         )
@@ -1196,6 +1289,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     private fun handleSession(s: ChatSession, now: Long) {
+        // 有效守护期间由守护独占“离开/倒计时/拉回”，普通会话不再并行拉回或因离开太久自动结束。
+        if (focusActive) {
+            if (sessionPrompt == PROMPT_COUNTDOWN || sessionPrompt == PROMPT_ASK) hideSessionPrompt()
+            return
+        }
         s.allowedPackages = allowedForSession()
         s.config = settings.sessionConfig()
         val fg = PerceptionHub.trail.foreground
@@ -1266,11 +1364,17 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             BubbleAction("结束会话") { endSessionByUser() },
         )
         if (s.isPaused) actions.add(1, BubbleAction("继续守着") { session?.keepGoing(now()); hideSessionPrompt() })
-        overlay.showBubble(BubbleSpec("${sessionApp.label} 会话中（$modeText）· 已经 $minutes 分钟$status", instant = true, actions = actions))
+        val focus = focusController.status()
+        val focusText = if (focus.active) {
+            actions.add(1, BubbleAction("暂停守护 5 分钟") { focusController.pause(); hideSessionPrompt() })
+            "；守护（" + (if (focus.enforcement == cn.companion.pet.core.focus.FocusEnforcement.STRICT) "严格" else "提醒") + "）还剩 " + (focus.secondsLeft / 60 + 1) + " 分钟"
+        } else ""
+        overlay.showBubble(BubbleSpec("${sessionApp.label} 会话中（$modeText）· 已经 $minutes 分钟$status$focusText", instant = true, actions = actions))
     }
 
     private fun pullBack() {
         hideSessionPrompt()
+        if (focusActive) { focusController.userReturn(); stats.add(Stats.Kind.PULLBACKS); return }
         when (gemini.launch(sessionPkg, adjacent = false)) {
             GeminiLauncher.Outcome.LAUNCHED -> stats.add(Stats.Kind.PULLBACKS)
             else -> gemini.toast("没能打开 ${sessionApp.label}。vivo 上要在应用权限里允许“后台弹出界面”")
@@ -1278,6 +1382,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     private fun endSessionByUser() {
+        if (focusActive) focusController.abort()
         val s = session ?: return
         if (s.isAssistant(PerceptionHub.trail.foreground)) autoStartBlocked = true
         finishSession(s.end(now()).summary, announce = false)

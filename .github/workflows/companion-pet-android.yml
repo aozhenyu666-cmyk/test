@@ -91,11 +91,12 @@ jobs:
           path: companion-pet/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
 
-      # 固定直链（用户已同意公开）：每次推送构建成功后，把 APK 放到滚动更新的 Release “tongzhuo-latest”。
-      # 链接永远是 https://github.com/<仓库>/releases/download/tongzhuo-latest/tongzhuo.apk，
-      # 无需登录、无需解压，手机浏览器直接下载安装。
-      - name: Publish APK (main → tongzhuo-latest, other branches → tongzhuo-preview)
-        if: success() && github.event_name != 'pull_request'
+      # 发布隔离（见 companion-pet/handoff/release-isolation/STATE.md）：
+      # - 这个构建工作流【永远不写】正式链接（tongzhuo-latest / tongzhuo-stable）。
+      # - 每个分支推送只发到自己的预览链接 tongzhuo-preview-<分支名>，互不覆盖；拉取请求不发布。
+      # - 正式版只由手动触发的 companion-pet-release.yml 在主线发布到 tongzhuo-stable，且 versionCode 只能升不能降。
+      - name: Publish per-branch preview APK
+        if: success() && github.event_name == 'push'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -104,28 +105,24 @@ jobs:
           set -euo pipefail
           VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
           CODE=$(grep -oP 'versionCode = \K[0-9]+' app/build.gradle.kts)
+          SLUG=$(echo "${GITHUB_REF_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-50)
+          TAG="tongzhuo-preview-${SLUG}"
+          case "$TAG" in tongzhuo-latest|tongzhuo-stable) echo "refusing to write official tag" >&2; exit 1;; esac
           cp app/build/outputs/apk/debug/app-debug.apk tongzhuo.apk
           SHA256=$(sha256sum tongzhuo.apk | cut -d' ' -f1)
-          # 只有主线更新正式直链；其他分支（实验/未验收）放到单独的预览链接，不覆盖正式版。
-          if [ "${GITHUB_REF_NAME}" = "ccr-2899d69f-xlzjh6" ]; then
-            TAG=tongzhuo-latest; KIND="最新构建"; LEAD="最新一次构建成功的调试版。"
-          else
-            TAG=tongzhuo-preview; KIND="预览·未验收"; LEAD="实验分支的预览构建，未经真机验收，不是正式版。"
-          fi
           NOTES=$(printf '%s\n\n%s\n%s\n%s\n\n%s' \
-            "同桌 ${VERSION}（versionCode ${CODE}），${LEAD}" \
+            "同桌 ${VERSION}（versionCode ${CODE}），分支预览构建，未经真机验收，不是正式版。" \
             "分支：${GITHUB_REF_NAME}" \
             "提交：${GITHUB_SHA}" \
             "SHA-256：${SHA256}" \
-            "固定签名，可以直接覆盖安装，不用卸载。真机未必验证过，见仓库 companion-pet/handoff。")
+            "固定签名，可以覆盖安装；versionCode 比手机上的低时系统会拒绝安装（不要为此卸载）。")
           for attempt in 1 2 3; do
             gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
             if gh release create "$TAG" tongzhuo.apk --target "$GITHUB_SHA" --prerelease \
-                --title "同桌 ${VERSION}（${KIND}）" --notes "$NOTES"; then
-              echo "Published https://github.com/${GH_REPO}/releases/download/${TAG}/tongzhuo.apk"
+                --title "同桌 ${VERSION}（预览·${GITHUB_REF_NAME}）" --notes "$NOTES"; then
+              echo "Preview: https://github.com/${GH_REPO}/releases/download/${TAG}/tongzhuo.apk"
               exit 0
             fi
             sleep $((attempt * 5))
           done
-          echo "Release publish failed" >&2
           exit 1

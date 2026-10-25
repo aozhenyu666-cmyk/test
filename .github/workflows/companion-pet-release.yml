@@ -1,0 +1,93 @@
+name: Companion Pet official release
+
+# 正式版发布（只能手动触发、只能在主线跑）。写入的 tag 是 tongzhuo-stable：
+# 旧分支里的旧工作流只认识 tongzhuo-latest，永远写不到这里，所以不会再被旧版本覆盖。
+# 建议在仓库 Settings → Environments 给 official-release 加“需要审批”，发布前由负责人点确认。
+# 迁移/回滚见 companion-pet/handoff/release-isolation/STATE.md。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: companion-pet-official-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/ccr-2899d69f-xlzjh6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: official-release
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: companion-pet
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$SDK_ROOT" ]; then
+            echo "ANDROID_HOME is not set on this runner" >&2
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK_ROOT"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(command -v sdkmanager || true)"
+          fi
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "sdkmanager not found" >&2
+            exit 1
+          fi
+          echo "sdkmanager=$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+
+      - name: Unit tests, lint and build APKs
+        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
+
+      - name: Publish to tongzhuo-stable (versionCode must increase)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG=tongzhuo-stable
+          VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          CODE=$(grep -oP 'versionCode = \K[0-9]+' app/build.gradle.kts)
+          OLD=$(gh release view "$TAG" --json body --jq .body 2>/dev/null | grep -oP 'versionCode \K[0-9]+' | head -1 || true)
+          if [ -n "${OLD}" ] && [ "${CODE}" -le "${OLD}" ]; then
+            echo "Refusing: versionCode ${CODE} is not greater than the published ${OLD}" >&2
+            exit 1
+          fi
+          cp app/build/outputs/apk/debug/app-debug.apk tongzhuo.apk
+          SHA256=$(sha256sum tongzhuo.apk | cut -d' ' -f1)
+          NOTES=$(printf '%s\n\n%s\n%s\n%s\n\n%s' \
+            "同桌 ${VERSION}（versionCode ${CODE}），正式版。" \
+            "分支：${GITHUB_REF_NAME}" \
+            "提交：${GITHUB_SHA}" \
+            "SHA-256：${SHA256}" \
+            "固定签名，可以直接覆盖安装，不用卸载。")
+          # tag 一旦建好就固定在旧提交上，所以删掉重建（版本检查已在上面通过）。
+          gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
+          gh release create "$TAG" tongzhuo.apk --target "$GITHUB_SHA" --title "同桌 ${VERSION}（正式版）" --notes "$NOTES"
+          echo "Official: https://github.com/${GH_REPO}/releases/download/${TAG}/tongzhuo.apk"

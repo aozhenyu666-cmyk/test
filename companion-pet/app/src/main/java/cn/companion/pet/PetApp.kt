@@ -175,6 +175,8 @@ class PetApp : Application() {
         )
     }
     val presenceEngine by lazy { cn.companion.pet.core.presence.LocalPresenceEngine(presencePolicy) }
+    /** 桌宠运行时注册：设置页诊断读守护状态。没在运行时为 null。 */
+    @Volatile var focusStatus: (() -> cn.companion.pet.core.focus.FocusStatus)? = null
 
     /** 用户自己搭的技能（固定步骤，按元素回放）。 */
     val skillStore by lazy { cn.companion.pet.core.skill.SkillStore(java.io.File(filesDir, "memory")) }

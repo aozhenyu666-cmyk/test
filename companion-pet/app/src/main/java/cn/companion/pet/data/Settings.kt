@@ -35,6 +35,10 @@ class Settings(context: Context) {
 
     var sessionAutoStart by bool("session_auto_start", true)
     var sessionAutoStartSec by int("session_auto_start_sec", 20)
+    /** 专注守护：SOFT 只提醒（默认）；STRICT 到点全屏拦截并有界自动拉回，必须用户自己打开。 */
+    var focusEnforcement by str("focus_enforcement", "SOFT")
+    /** 守护时长（分钟），5–180，到期自动结束。 */
+    var focusMinutes by int("focus_minutes", 25)
     var sessionPullBack by bool("session_pull_back", true)
     var sessionGraceSec by int("session_grace_sec", 10)
     var sessionAllowedGraceSec by int("session_allowed_grace_sec", 90)

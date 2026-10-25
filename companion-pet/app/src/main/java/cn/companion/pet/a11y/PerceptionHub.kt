@@ -26,8 +26,14 @@ object PerceptionHub {
     /** 有滚动时通知桌宠服务（划过留痕用）。只传包名，不传内容。 */
     var onScroll: ((String) -> Unit)? = null
 
+    /** 防抖后用真实活动窗口确认过的前台切换（专注守护用）；只传包名。 */
+    var onForegroundConfirmed: ((String) -> Unit)? = null
+
     fun setConnected(value: Boolean) { _connected.value = value }
 
     /** 现读一次当前窗口的文字。服务没连上或读失败返回空列表。 */
     fun readScreen(): List<TextCandidate> = runCatching { reader?.invoke() }.getOrNull().orEmpty()
+
+    /** 当前真正活动窗口的包名；服务没连上或读失败返回 null。 */
+    fun activePackage(): String? = runCatching { service?.rootInActiveWindow?.packageName?.toString() }.getOrNull()
 }
