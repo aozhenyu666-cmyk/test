@@ -49,12 +49,20 @@ TodayDigest：只读现有事件日志、待续话题、技能运行记录，挑
 两小时、每 5 秒评估、学习 20 分钟 / 信息流 15 分钟 / 一分钟乱切交替、9 分钟一次到点：
 旧逻辑 13 次模型调用；C3 **7 次**模型调用 + 3 次本机提示 + 9 次微反应（PresenceSimulationTest）。
 
-## 测试
+## 测试与 CI
 
-JVM 403 个全过（新增 PresenceTest 14 个、PresenceSimulationTest 1 个；原有用例全部保留）。
-Android 编译/lint/打包看 CI。本环境不能跑 Gradle Android 任务。
+- JVM 403 个全过（新增 PresenceTest 14 个、PresenceSimulationTest 1 个；原有用例全部保留，断言未放宽）。
+- CI 四项 Gradle（testDebugUnitTest / lintDebug / assembleDebug / assembleDebugAndroidTest）：
+  - run 75（27ed007）：Android 编译、lint 通过；`DeepSeekClientTest.cancellationPropagates` 在 tearDown 抛 IOException（与 C3 无关的既有用例）。
+    原因：模拟响应挂 5 秒，正好等于 MockWebServer.shutdown() 的 5 秒等待，偶发竞态。改为挂 2 秒（取消在收到请求后立即发生），断言不变。
+  - run 76（e05886c）：**全部通过**。https://github.com/aozhenyu666-cmyk/test/actions/runs/40159512101
+- 预览 APK：0.6.0-c3 / 27，SHA-256 `cd0e50a7bde006641cd3ce72555867346c309d8c1a78433a2d2438e87f398982`，
+  https://github.com/aozhenyu666-cmyk/test/releases/download/tongzhuo-preview/tongzhuo.apk（未验收，不是正式版）。
 
 ## CI 发布
+
+注意：DeepSeek 的 `deepseek/moling-c3-proactivity`（基于 0.5.4）用的还是旧工作流，推送后把正式直链覆盖成了 0.5.4 / 22（比手机上的 0.5.8 / 26 低，装不上）。
+已手动重跑主线构建恢复正式直链。这个保护只有在各分支都带上新工作流后才完全生效；建议主线也合入这一处工作流改动，DeepSeek 以后从主线开分支。
 
 改了 `.github/workflows/companion-pet-android.yml` 的发布步骤（companion-pet/ 之外唯一改动）：
 只有主线 `ccr-2899d69f-xlzjh6` 更新正式直链 `tongzhuo-latest`；其他分支发到 `tongzhuo-preview`（标“预览·未验收”），不覆盖正式版。
