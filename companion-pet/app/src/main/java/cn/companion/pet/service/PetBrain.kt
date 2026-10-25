@@ -59,6 +59,7 @@ import cn.companion.pet.core.continuity.SilenceReason
 import cn.companion.pet.core.continuity.StrictOutcome
 import cn.companion.pet.core.continuity.StrictSessionMachine
 import cn.companion.pet.core.continuity.StrictSessionState
+import cn.companion.pet.core.continuity.StrictSessionStore
 import cn.companion.pet.core.continuity.Verdict
 import cn.companion.pet.core.think.ThinkMode
 import cn.companion.pet.core.think.ThinkPrompt
@@ -140,6 +141,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private val assembler by lazy { CompanionContextAssembler(app.events, app.facts, materials = app.materialInbox) }
     private val visibleMemory by lazy { VisibleMemoryReader(memory, app.events, app.facts) }
     private val stateStore by lazy { PetStateStore(memory.root) }
+    private val strictStore by lazy { StrictSessionStore(memory.root) }
     private val topics by lazy { app.topics }
     private val topicGate by lazy { TopicGate(topics) }
     private var lastProactiveAt = 0L
@@ -213,6 +215,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         weighty.restore(LocalDate.now().toString(), stats.get(Stats.Kind.WEIGHTY))
         overlay.show()
         restoreSession()
+        // 严格回合跨重启恢复；到期/已结束的不复活。
+        runCatching { restoreStrict() }
         // 守护：杀进程/重启后恢复；已结束/过期/损坏的不复活。
         runCatching { focusController.restore() }
         app.focusStatus = { focusController.status() }
@@ -1587,6 +1591,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val machine = flow.strict
         if (machine != null) {
             machine.submit(said, now())
+            persistStrict(flow)
             evaluateStrict(flow, machine, q, said)
             return
         }
@@ -1648,7 +1653,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 showStrictReply(flow, "我这边核对超时了，你说的我留着。要不你自己说下一句？", "")
                 return@launch
             }
-            when (val out = machine.acceptEvaluation(parsed, now())) {
+            val out = machine.acceptEvaluation(parsed, now())
+            strictStore.save(machine.state)
+            when (out) {
                 is StrictOutcome.Accepted -> showStrictReply(flow, out.text, out.nextPrompt)
                 is StrictOutcome.Support -> showStrictReply(flow, out.text, "")
                 else -> showStrictReply(flow, "记下了。", "")
@@ -1709,6 +1716,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         flow.waitSince = now()
         val q = flow.question ?: "先用一句话说清：这段最关键的一点是什么？"
         machine.ask(q, criteria, now())
+        persistStrict(flow)
         overlay.showBubble(BubbleSpec(
             "严格陪伴 " + minutes + " 分钟。\n问题：" + q + "\n\n直接说，不用点录音。\n（随时可以说“我不会”，或点 × 结束）",
             instant = true,
@@ -1719,12 +1727,51 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         ))
     }
 
+
+    /** 严格回合每次状态变化都落盘；失败只在诊断里记，不打断用户。 */
+    private fun persistStrict(flow: ThinkFlow) {
+        val m = flow.strict ?: return
+        strictStore.save(m.state)
+    }
+
+    /** 服务启动/重建界面后恢复未结束的严格回合；到期或已结束的不复活。 */
+    private fun restoreStrict() {
+        val r = strictStore.restore(now())
+        when (r) {
+            is StrictSessionStore.Restore.Resume -> {
+                val flow = ThinkFlow("", "恢复的回合", "")
+                flow.strict = StrictSessionMachine(r.state)
+                flow.waitSince = now()
+                flow.touchedAt = now()
+                think = flow
+                // 明确告知中断空窗，不补造期间行为。
+                val gapMin = (r.gapMillis / 60_000).coerceAtLeast(0)
+                val note = if (gapMin > 0) "刚才我这边断开了 " + gapMin + " 分钟，那段时间看不到。\n" else ""
+                overlay.showBubble(BubbleSpec(
+                    note + "接着刚才的：" + r.state.question + "\n\n说就行，也可以说“我不会”。",
+                    instant = true,
+                    actions = listOf(
+                        BubbleAction("我不会") { strictNeedsSupport() },
+                        BubbleAction("结束") { strictAbort() },
+                    ),
+                ))
+            }
+            is StrictSessionStore.Restore.Expired -> {
+                strictStore.save(r.state)
+                overlay.showBubble(BubbleSpec("上一回合已经到期了。", textOnly = true)) { handler.postDelayed({ overlay.hideBubble() }, 4000) }
+            }
+            is StrictSessionStore.Restore.Finished -> strictStore.clear()
+            StrictSessionStore.Restore.None -> Unit
+        }
+    }
+
     private fun strictNeedsSupport() {
         val flow = think ?: return
         val m = flow.strict ?: return
         val out = m.needsSupport(now())
         flow.touchedAt = now()
         flow.waitSince = now()
+        persistStrict(flow)
         if (out is StrictOutcome.Support) overlay.showBubble(BubbleSpec(out.text + "\n\n（答不上来也没关系，我们一起拆）", instant = true))
     }
 
@@ -1733,6 +1780,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val m = flow.strict ?: return
         val out = m.abort(now())
         if (out is StrictOutcome.Finished) {
+            strictStore.save(m.state)
             overlay.showBubble(BubbleSpec("结束了。" + out.summary, textOnly = true)) { handler.postDelayed({ endThink() }, 3000) }
         }
         flow.strict = null
@@ -1744,6 +1792,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val m = flow.strict ?: return
         val tick = m.tick(now)
         if (tick is StrictOutcome.Finished) {
+            strictStore.save(m.state)
             overlay.showBubble(BubbleSpec("这一回合结束：" + tick.summary, textOnly = true)) { handler.postDelayed({ endThink() }, 5000) }
             flow.strict = null
             return
@@ -1755,6 +1804,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             val out = m.remind(now)
             if (out is StrictOutcome.Ask) {
                 flow.waitSince = now
+                persistStrict(flow)
                 overlay.showBubble(BubbleSpec(out.text, instant = true))
             }
         }
@@ -1762,6 +1812,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun endThink() {
         if (think == null && noteDraft == null) return
+        // 用户主动收起：作废这一回合，不留可在重启后复活的残留。
+        think?.strict?.let { m ->
+            if (m.state.active) strictStore.save(m.abort(now()).let { m.state })
+        }
         think = null
         noteDraft = null
         voice.cancel()
