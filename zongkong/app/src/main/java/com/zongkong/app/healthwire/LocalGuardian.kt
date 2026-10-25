@@ -26,19 +26,42 @@ object LocalGuardian {
 
     private val fallback = LocalFallback(source = "zongkong")
 
-    /** 上次巡检的时刻（执行器不跑在无障碍 Handler 上，用系统单调时钟自己控节奏）。 */
-    @Volatile private var lastTickMono = 0L
+    /**
+     * 修复宽限（T15）：锁屏确认之后的一段时间内不重锁，别把用户挡在修权限的路上。
+     *
+     * 与 `LockArbiter` 的分工：仲裁防「同一事件反复锁」；这里防「用户正在修权限时被打扰」。
+     * 两件事不能互相替代 —— 仲裁次数用完之后仍可能换个事件再锁。
+     */
+    private val repairGrace = RepairGrace(defaultGraceMs = com.zongkong.app.health.HealthConfig().repairGraceMs)
+
+    /**
+     * 巡检核心：**`tickNow()` 与测试驱动的是同一个实例、同一份 `tick(...)` 逻辑**（t14）。
+     *
+     * 以前 `tickNow` 自己内联着整段判定，测试只能手搓 `fallback.decide(...)` 并自己传参，
+     * 于是「宽限到底有没有被传下去」这条接线根本没被覆盖 —— 把 bug 注入回去测试照样全绿。
+     */
+    private val core = GuardTickCore(
+        fallback = fallback,
+        grace = repairGrace,
+        incidentKey = INCIDENT_SENTINEL_DOWN,
+    )
+
+    /** 修复宽限到期时刻（对外只读，便于诊断与单测断言）。 */
+    val repairGraceUntilMono: Long get() = core.repairGraceUntilMono
+
+    // ---------- 状态（由 core 持有，这里只转发，避免两份真相） ----------
+
+    /** 最近一次回执（界面/诊断用）。 */
+    val lastReceipt: LockReceipt? get() = core.lastReceipt
+
+    /** 最近一次兜底判定说明（给状态页说人话）。 */
+    val lastDecision: String get() = core.lastDecision
+
+    /** 累计真正执行过几次锁屏（诊断/单测用）。 */
+    val lockCount: Int get() = core.lockCount
 
     /** 当前事件键：哨兵失联这一件事（同一件事不重复锁）。 */
     private const val INCIDENT_SENTINEL_DOWN = "sentinel-unreachable"
-
-    /** 最近一次回执（界面/诊断用）。 */
-    @Volatile var lastReceipt: LockReceipt? = null
-        private set
-
-    /** 最近一次兜底判定说明（给状态页说人话）。 */
-    @Volatile var lastDecision: String = ""
-        private set
 
     /**
      * 从无障碍线程/常驻服务里调用：**只投递，不阻塞**。
@@ -57,52 +80,36 @@ object LocalGuardian {
         Thread(r, "local-guardian").apply { isDaemon = true }
     }
 
-    private fun tickNow(context: Context, nowWall: Long) {
-        val nowMono = mono()
-        if (nowMono - lastTickMono < 15_000L) return
-        lastTickMono = nowMono
-        val store = GuardHealth.init(context)
-        val policies = store.policies
-        if (policies.isEmpty()) {
-            lastDecision = "没有本地规则"
-            return
-        }
-        // 紧急暂停：本地立刻生效，不问网络/模型。
-        if (store.emergencyStopped()) {
-            GuardHealth.setPaused(true)
-            lastDecision = "紧急暂停生效中：不会自动锁屏"
-            return
-        }
-        GuardHealth.setPaused(false)
-        val v = GuardHealth.verdict(GuardHealth.permissionEnabled())
-        val selfHealthy = v.status == HealthStatus.HEALTHY
-        // 只读缓存（不跨进程等）：缓存由后台 [refresh] 更新，避免把 a11y 线程挂在 Binder 上（T05）。
-        SentinelClient.probeAsync(context)
-        val sentinel = SentinelClient.linkCached(context)
-        val sentinelHealthy = sentinel == SentinelClient.Link.RESPONDING
-        val attempt = fallback.decide(
-            policies = policies,
-            nowWall = nowWall,
-            nowMono = nowMono,
-            sentinelHealthy = sentinelHealthy,
-            selfHealthy = selfHealthy,
-            emergencyStopped = false,
-            incidentKey = INCIDENT_SENTINEL_DOWN,
-        )
-        lastDecision = attempt.reason
-        val req = attempt.request ?: return
-        val receipt = LocalLockExecutor.lock(context, req, nowWall)
-        fallback.record(req, receipt.state, nowMono)
-        GuardHealth.noteReceipt(receipt)
-        lastReceipt = receipt
-        runCatching { Diag.log(context, "local_lock", "${receipt.state}：${receipt.note}（${receipt.reason}）") }
-        // 回执上报哨兵（失败不改锁屏结论：本地已经执行并观测过了）。
-        val reported = SentinelClient.reportReceipt(context, receipt)
-        if (!reported) {
-            runCatching { Diag.log(context, "receipt_unsent", "回执没送到哨兵：${receipt.incidentId}") }
-        }
-        if (receipt.state != LockState.OBSERVED_LOCKED) {
-            // 没观测到锁上：在通知里说清楚，不假装成功。
+    /**
+     * 生产环境的 ports：把 tickNow 原本内联的每一次外部调用原样搬进来。
+     *
+     * 这里**只做接线**，不含任何判定逻辑 —— 判定全在 [GuardTickCore.tick] 里，
+     * 测试驱动的也是那同一份。
+     */
+    private fun ports(context: Context): GuardTickPorts = GuardTickPorts(
+        mono = mono,
+        policies = { GuardHealth.init(context).policies },
+        emergencyStopped = {
+            val stopped = GuardHealth.init(context).emergencyStopped()
+            GuardHealth.setPaused(stopped)
+            stopped
+        },
+        selfHealthy = {
+            GuardHealth.verdict(GuardHealth.permissionEnabled()).status == HealthStatus.HEALTHY
+        },
+        probeSentinel = { SentinelClient.probeAsync(context) },
+        sentinelHealthy = { SentinelClient.linkCached(context) == SentinelClient.Link.RESPONDING },
+        keyguardLocked = {
+            runCatching { LocalLockExecutor.facts(context) }.getOrNull()?.let {
+                it.deviceLocked || it.keyguardShowing
+            }
+        },
+        lock = { req, nowWall -> LocalLockExecutor.lock(context, req, nowWall) },
+        reportReceipt = { receipt ->
+            GuardHealth.noteReceipt(receipt)
+            SentinelClient.reportReceipt(context, receipt)
+        },
+        notifyUnverified = { receipt ->
             runCatching {
                 com.zongkong.app.system.Notifications.alert(
                     context,
@@ -111,8 +118,36 @@ object LocalGuardian {
                     "settings/perm",
                 )
             }
-        }
+            Unit
+        },
+        diag = { kind, detail -> runCatching { Diag.log(context, kind, detail) } },
+    )
+
+    private fun tickNow(context: Context, nowWall: Long) {
+        // 全部判定与副作用编排都在 core.tick 里；这里只提供生产端口的实现。
+        core.tick(ports(context), nowWall)
     }
+
+    /**
+     * T15：锁屏之后起修复宽限。**纯函数**，便于单测直接钉住"生产代码真的计算并写入这个时刻"。
+     *
+     * 退化策略说明（不要假装能精确感知解锁）：
+     *  - 理想信号是 Keyguard 的 locked→unlocked 跳变，由 [observeKeyguard] 处理；
+     *  - 但巡检是 15 秒一个 tick，锁屏→解锁→进设置常常整个落在两个 tick 之间，**观测不到**；
+     *  - 所以只要这次锁屏确实发生过（见 [RepairGrace.armAfterReceipt]），就**立即**开始计宽限。
+     *    代价是「本该锁的时候少锁一次」，远小于「把用户挡在修复权限的界面外面」。
+     *  - 真机必须验证：宽限是否够用户走完 设置→无障碍→关开 的路程。
+     *
+     * @return 新的宽限到期时刻（单调）；0 = 这次不起宽限。
+     */
+    internal fun armGraceAfterLock(
+        grace: RepairGrace,
+        policies: List<LocalPolicy>,
+        receiptState: LockState,
+        nowWall: Long,
+        nowMono: Long,
+        fallbackGraceMs: Long = com.zongkong.app.health.HealthConfig().repairGraceMs,
+    ): Long = GuardTickCore.armGraceAfterLock(grace, policies, receiptState, nowWall, nowMono, fallbackGraceMs)
 
     /**
      * 紧急暂停（报告 §3.6 / 规范 §6）：本地一键、立即生效、记录原因与时间，然后尽量上报哨兵。
@@ -141,7 +176,9 @@ object LocalGuardian {
         val rev = store.clearEmergency()
         GuardHealth.setPaused(false)
         GuardHealth.noteRuleRevision(rev)
-        runCatching { Diag.log(context, "emergency_resume", "解除紧急暂停，恢复监管（规则版本 $rev）") }
+        // 用户主动恢复监管：清掉修复宽限，立刻按真实事实重新判断（一手 :284 同口径）。
+        repairGrace.clear()
+        runCatching { Diag.log(context, "emergency_resume", "解除紧急暂停，恢复监管（规则版本 $rev）；清空修复宽限") }
         val (ok, accepted) = SentinelClient.syncPolicy(context, store.policyJson())
         return if (ok) "已恢复监管；哨兵已接受（规则版本 $accepted）" else "已恢复监管；哨兵未确认"
     }
@@ -159,10 +196,28 @@ object LocalGuardian {
     fun store(context: Context): ClientPolicyStore = GuardHealth.init(context)
 
     fun resetForTest() {
-        lastTickMono = 0
-        lastReceipt = null
-        lastDecision = ""
+        core.resetAll()
     }
+
+    /** 单测/诊断：当前修复宽限的说明。 */
+    fun repairGraceText(): String = repairGrace.describe(mono())
+
+    /** 单测：把宽限状态机暴露出来（只读用途，不改语义）。 */
+    fun repairGraceState(): RepairGrace = repairGrace
+
+    /**
+     * **测试入口**：用注入的 ports 驱动**生产同一个** [GuardTickCore]（t14）。
+     *
+     * 关键：这里不是副本 —— `tickNow()` 调的就是 `core.tick(...)`，
+     * 所以「宽限有没有被传进 decide」这条接线在这里被真实覆盖。
+     * 把 `GuardTickCore.tick` 里那行 `repairGraceUntilMono = grace.untilMono` 改成 0，
+     * `RepairGraceWiringTest` 必须变红。
+     */
+    internal fun tickWithPortsForTest(ports: GuardTickPorts, nowWall: Long): TickOutcome =
+        core.tick(ports, nowWall)
+
+    /** 测试用：重置 core（含宽限）。 */
+    internal fun resetCoreForTest() = core.resetAll()
 
     fun nowMono(): Long = mono()
 
