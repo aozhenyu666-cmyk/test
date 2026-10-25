@@ -178,6 +178,16 @@ class PetApp : Application() {
     /** 桌宠运行时注册：设置页诊断读守护状态。没在运行时为 null。 */
     @Volatile var focusStatus: (() -> cn.companion.pet.core.focus.FocusStatus)? = null
 
+    /**
+     * 健康协议 v2 运行器（规则、锁屏出口、紧急暂停、哨兵连接）。
+     * 与专注守护并列：它不接管专注/拦截，只接运行与执行事实（报告 §3.5）。
+     */
+    val guardRuntime by lazy { cn.companion.pet.health.PetGuardRuntime(this, java.io.File(filesDir, "memory")) }
+    /** 挑战回应的执行线程要读规则版本和最近回执，走同一个运行器实例。 */
+    val policyStore: cn.companion.pet.health.PetPolicyStore get() = guardRuntime.policyStore
+    val receiptStore: cn.companion.pet.health.PetReceiptStore get() = guardRuntime.receiptStore
+    val callerPinStore: cn.companion.pet.health.CallerPinStore get() = guardRuntime.callerPinStore
+
     /** 用户自己搭的技能（固定步骤，按元素回放）。 */
     val skillStore by lazy { cn.companion.pet.core.skill.SkillStore(java.io.File(filesDir, "memory")) }
 

@@ -128,6 +128,7 @@ fun SettingsScreen(activity: cn.companion.pet.MainActivity, resumeTick: Int, gro
                     SETTINGS_MODELS -> { ModelSettings(context); ScreenDiagnosticSection(context) }
                     SETTINGS_COMPANION -> CompanionSettings(context)
                     SETTINGS_DEVICE -> DeviceSettings(context)
+                    SETTINGS_GUARD -> GuardSection()
                     else -> {
                         CrashReportSection(activity)
                         FocusDiagnostics()

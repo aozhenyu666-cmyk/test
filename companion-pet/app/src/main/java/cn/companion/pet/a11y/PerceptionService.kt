@@ -26,7 +26,10 @@ class PerceptionService : AccessibilityService() {
         ignored = (imes + listOf(packageName, "com.android.systemui", "android")).toSet()
         PerceptionHub.service = this
         PerceptionHub.reader = { readWindowText() }
-        PerceptionHub.setConnected(true)
+        // 健康协议 v2：换新实例号，并把这个 Handler（无障碍主线程）交给 Provider 投递挑战。
+        // 这个 Handler 就是“真正承担无障碍执行的那个线程”，挑战必须在这里处理（T02）。
+        PerceptionHub.markConnected()
+        PerceptionHub.bindExecutor(handler)
         // 系统会在进程被杀后重新绑定无障碍服务：借这个机会把桌宠拉回来（用户主动停止过则不拉）。
         // 任何失败都只放弃这一次拉起，不能让无障碍服务跟着出错。
         runCatching { if (!PetService.running) PetService.startIfAllowed(this) }
@@ -51,6 +54,8 @@ class PerceptionService : AccessibilityService() {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 PerceptionHub.trail.onForeground(pkg, now)
                 PerceptionHub.stuck.onPage("$pkg/${event.className}", now)
+                // 健康协议的事件进度：只记序号和时刻，不记内容（规范 §3.2 的 eventSeq/eventAtMono）。
+                PerceptionHub.noteEvent(android.os.SystemClock.elapsedRealtime())
                 // 专注守护另走一条“防抖 + 读真实活动窗口”的确认，原有轨迹/卡壳逻辑不变。
                 handler.removeCallbacks(confirmForeground)
                 handler.postDelayed(confirmForeground, CONFIRM_DELAY_MILLIS)
@@ -58,6 +63,7 @@ class PerceptionService : AccessibilityService() {
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 PerceptionHub.trail.onScroll(pkg, now)
                 if (pkg == PerceptionHub.trail.foreground) PerceptionHub.stuck.onScroll(now)
+                PerceptionHub.noteEvent(android.os.SystemClock.elapsedRealtime())
                 PerceptionHub.onScroll?.invoke(pkg)
             }
         }
@@ -92,7 +98,7 @@ class PerceptionService : AccessibilityService() {
         if (PerceptionHub.service === this) {
             PerceptionHub.service = null
             PerceptionHub.reader = null
-            PerceptionHub.setConnected(false)
+            PerceptionHub.markDisconnected()
         }
     }
 

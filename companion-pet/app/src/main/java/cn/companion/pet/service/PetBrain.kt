@@ -189,6 +189,25 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private var rephraseNext = false
     private var heartbeatWaiting = false
     private var closeRunnable: Runnable? = null
+    /** 健康协议 v2 的周期性自检 + 本地锁屏兜底；与专注守护的 ticker 分开，互不阻塞。 */
+    private var guardTickCount = 0
+    private val guardTick = object : Runnable {
+        override fun run() {
+            guardTickCount++
+            runCatching {
+                val rt = app.guardRuntime
+                // 每 15 秒自检一次真实执行线程（内部在后台线程 await，不在主线程）。
+                if (guardTickCount % 15 == 0) rt.requestSelfProbe()
+                // 每 10 秒 ping 一次哨兵：这既是“哨兵在不在”的唯一凭据，也用来判定失联。
+                if (guardTickCount % 10 == 0) {
+                    rt.link.ping()
+                    rt.registerToSentinel()
+                }
+                rt.tick()
+            }
+            handler.postDelayed(this, 1000)
+        }
+    }
     private val ticker = object : Runnable {
         override fun run() {
             tick()
@@ -213,6 +232,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         handler.postDelayed(agentTrigger, 1_200)
         PerceptionHub.onScroll = { pkg -> onScrollEvent(pkg) }
         PerceptionHub.onForegroundConfirmed = { pkg -> runCatching { focusController.onForeground(pkg) } }
+        // 健康协议 v2：注册到哨兵（尽力而为，失败不影响本地规则）+ 起自检。哨兵没装就算了。
+        runCatching {
+            val rt = app.guardRuntime
+            rt.registerToSentinel()
+            rt.syncToSentinel()
+        }
+        handler.post(guardTick)
         scope.launch {
             settings.changes.collect {
                 scheduler.config = settings.rhythm()
@@ -237,6 +263,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         PerceptionHub.onScroll = null
         PerceptionHub.onForegroundConfirmed = null
         app.focusStatus = null
+        handler.removeCallbacks(guardTick)
         runCatching { focusOverlay.hide() }
         handler.removeCallbacksAndMessages(null)
         voice.cancel()
@@ -274,6 +301,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         handler.removeCallbacks(agentTrigger)
         handler.postDelayed(agentTrigger, 1_200)
         heartbeatWaiting = Heartbeat.consumePending(context)
+        // 解锁后先给修复宽限：不立刻再锁，让用户能去修权限（报告 §8、T15）。
+        runCatching { app.guardRuntime.onUserUnlocked() }
         checkLetter()
         if (heartbeatWaiting) {
             // 心跳之后亮屏：稍等一下让桌面稳定，再问一句

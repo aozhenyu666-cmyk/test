@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  只为 force-lock 申请设备管理员能力。
+  本轮不启用防卸载（disable-camera、force-lock 之外一律不加），也不要求 Device Owner。
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <force-lock />
+    </uses-policies>
+</device-admin>

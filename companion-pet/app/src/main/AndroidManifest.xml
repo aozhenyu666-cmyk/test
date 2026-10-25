@@ -90,6 +90,35 @@
                 android:resource="@xml/perception_service" />
         </service>
 
+        <!--
+          健康协议 v2 适配器（authority 必须逐字等于 cn.companion.pet.health，见 WIRE-SPEC-v2 §3.2）。
+          exported=true 只因为哨兵要跨应用调用；鉴权在 PetHealthProvider.call() 里做：
+          调用方 UID → 唯一包名必须是哨兵，且证书 SHA-256 在白名单/首次配对钉住。
+          这里刻意不挂 readPermission/writePermission：那会把 call() 一起挡掉，
+          反而诱使后面的人为了“先接通”而删掉校验。
+        -->
+        <provider
+            android:name=".health.PetHealthProvider"
+            android:authorities="cn.companion.pet.health"
+            android:exported="true"
+            android:enabled="true"
+            android:multiprocess="false"
+            android:grantUriPermissions="false" />
+
+        <!-- 设备管理员：只申请 force-lock，用于本轮「到点锁屏一次」。不做防卸载、不做 Device Owner。 -->
+        <receiver
+            android:name=".health.PetDeviceAdmin"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:label="@string/app_name">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/pet_device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="rikka.shizuku.ShizukuProvider"
             android:authorities="${applicationId}.shizuku"
