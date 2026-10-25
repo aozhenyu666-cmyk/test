@@ -332,3 +332,16 @@ Get-ChildItem app\build\test-results\testDebugUnitTest\*.xml | ForEach-Object {
   "$($_.Name): tests=$($x.testsuite.tests) failures=$($x.testsuite.failures) errors=$($x.testsuite.errors)"
 }
 ```
+
+---
+
+## 提交记录（captain，2026-10-25 23:2x）
+
+本工作树已提交入库（仅本地，未 push）：
+
+| 分支 | 提交 | 基线 |
+| --- | --- | --- |
+| `deepseek/yishou-v2` | `59480dd` | `ba8750e` |
+
+提交后强制重跑 `--rerun-tasks`：**232 tests / 0 failures / 0 errors**。
+真机项仍全部 NOT_RUN（本机无设备）。
