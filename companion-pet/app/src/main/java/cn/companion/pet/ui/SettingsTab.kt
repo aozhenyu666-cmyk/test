@@ -449,6 +449,18 @@ private fun CompanionSettings(context: Context) {
         s.sessionAllowedApps = it
     }
 
+    Section("严格陪伴")
+    var strictOn by remember { mutableStateOf(s.strictEnabled) }
+    Toggle("开启严格陪伴", "开启后，点桌宠 → 想一想 会多一个“严格陪我想”：给你一个有时限的回合，围绕当前材料持续接话，指出缺的具体依据，到期按实际成果结算。普通聊天不受影响；随时可以说“我不会”或点 × 结束。", strictOn) {
+        strictOn = it; s.strictEnabled = it
+    }
+    var strictMinutesText by remember { mutableStateOf(s.strictMinutes.toString()) }
+    NumberField("回合时长（分钟）", strictMinutesText) {
+        strictMinutesText = it; it.toIntOrNull()?.let { v -> s.strictMinutes = v.coerceIn(3, 60) }
+    }
+    Text("到期只结束这一回合的临时约束，不会自动判你完成；也不会改你的其他设置。",
+        style = MaterialTheme.typography.bodySmall)
+
     Section("想一想")
     var skimOn by remember { mutableStateOf(s.skimEnabled) }
     Toggle("划过留痕", "滑动时把经过的段落记在内存里，点桌宠 → 想一想 → 划过了啥，就能回看。只留 10 分钟、熄屏就清空，不存文件；信息流 App、排除 App 和 AI App 里不记。", skimOn) {

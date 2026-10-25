@@ -50,6 +50,16 @@ import cn.companion.pet.core.session.EndReason
 import cn.companion.pet.core.session.ChatSession
 import cn.companion.pet.core.session.AssistantApp
 import cn.companion.pet.core.skim.SkimBuffer
+import cn.companion.pet.core.continuity.StrictEvalPrompt
+import cn.companion.pet.core.continuity.StrictEndReason
+import cn.companion.pet.core.continuity.Evaluation
+import cn.companion.pet.core.continuity.Health
+import cn.companion.pet.core.continuity.Phase
+import cn.companion.pet.core.continuity.SilenceReason
+import cn.companion.pet.core.continuity.StrictOutcome
+import cn.companion.pet.core.continuity.StrictSessionMachine
+import cn.companion.pet.core.continuity.StrictSessionState
+import cn.companion.pet.core.continuity.Verdict
 import cn.companion.pet.core.think.ThinkMode
 import cn.companion.pet.core.think.ThinkPrompt
 import cn.companion.pet.core.think.ThinkResult
@@ -296,7 +306,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // 正在“想一想”或记念头：不插嘴；放着不管 3 分钟就收起
         if (think != null || noteDraft != null) {
             val since = think?.touchedAt ?: noteDraft!!.startedAt
-            if (now - since > 3 * 60_000L) endThink()
+            // 严格陪伴回合不因界面闲置被清掉；到期由状态机自己结算。
+            if (think?.strict == null && now - since > 3 * 60_000L) endThink()
+            tickStrict(now)
             return
         }
         if (maybeAutoStartSession(now)) return
@@ -1450,6 +1462,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val qa = mutableListOf<Pair<String, String>>()
         var touchedAt = now()
         val question: String? get() = result?.questions?.getOrNull(questionIndex)
+        /** 严格陪伴：非空时本流程是受约束回合，不能被 3 分钟闲置清理掉。 */
+        var strict: StrictSessionMachine? = null
+        /** 首次结果回来后自动进入严格回合（不打断模型请求）。 */
+        var strictPending = false
+        /** 提示后等待用户回答的截止时间；0 表示未在等待。 */
+        var waitSince = 0L
+        var lastSilence = ""
     }
 
     private var think: ThinkFlow? = null
@@ -1484,6 +1503,12 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             actions += BubbleAction(m.label, highlighted = m == ThinkMode.RECAP) { runThink(m) }
         }
         actions += BubbleAction("×") { endThink() }
+        if (settings.strictEnabled) {
+            actions.add(0, BubbleAction("严格陪我想", highlighted = true) {
+                flow.strictPending = true
+                runThink(ThinkMode.SOCRATIC)
+            })
+        }
         overlay.setMood(Mood.CURIOUS)
         overlay.showBubble(BubbleSpec("想怎么想？（素材：${flow.source}）", instant = true, actions = actions))
     }
@@ -1522,6 +1547,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun showThinkResult(flow: ThinkFlow) {
         val r = flow.result ?: return
+        if (flow.strictPending) {
+            flow.strictPending = false
+            startStrict(flow)
+            return
+        }
         overlay.setMood(Mood.CURIOUS)
         val actions = mutableListOf<BubbleAction>()
         if (flow.question != null) {
@@ -1551,7 +1581,15 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         if (said.isEmpty()) { showThinkResult(flow); return }
         flow.awaitingAnswer = false
         flow.touchedAt = now()
+        flow.waitSince = now()
         flow.qa += q to said
+        // 严格回合：先进入核验，通过与否由本地状态机 + 结构化结果决定。
+        val machine = flow.strict
+        if (machine != null) {
+            machine.submit(said, now())
+            evaluateStrict(flow, machine, q, said)
+            return
+        }
         val key = apiKey()
         if (key == null || app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()) <= 0) { showThinkFollowUp(flow, "记下了。"); return }
         overlay.setMood(Mood.THINKING)
@@ -1573,6 +1611,62 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // 他自己的回答是他的想法，记进今天的流水（以后整理档案能用上）
         val line = "- ${timeText()} | 想一想·${flow.mode.label} | 问：$q | 他答：${said.replace('\n', ' ')}"
         if (!TodayLog.wantsForget(said)) scope.launch(Dispatchers.IO) { synchronized(app.memoryLock) { app.events.append(EventKind.EXCHANGE, line, source = "think") } }
+    }
+
+
+    /** 让模型只判断“够不够”，结果必须过本地校验才采纳。 */
+    private fun evaluateStrict(flow: ThinkFlow, machine: StrictSessionMachine, question: String, answer: String) {
+        val key = apiKey()
+        val sessionId = machine.state.sessionId
+        val stepId = machine.state.stepId
+        val revision = machine.state.revision
+        if (key == null || app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()) <= 0) {
+            machine.markHealth(Health.DEGRADED, now())
+            showStrictReply(flow, "记下了。模型这会儿用不了，先按你说的往下走。", "")
+            return
+        }
+        overlay.setMood(Mood.THINKING)
+        overlay.showBubble(BubbleSpec("我核对一下……", textOnly = true))
+        probeJob = scope.launch {
+            val messages = withContext(Dispatchers.IO) {
+                synchronized(app.memoryLock) {
+                    StrictEvalPrompt.build(memory.persona(), machine.state.criteria, flow.material, question, answer)
+                }
+            }
+            if (!app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
+                showStrictReply(flow, "记下了。今天的次数用完了，先按你说的往下走。", "")
+                return@launch
+            }
+            stats.add(Stats.Kind.API_CALLS)
+            val r = app.client.complete(ChatRequest(settings.endpoint, settings.model, key, messages, maxTokens = 400, timeoutMillis = StrictEvalPrompt.TIMEOUT_MILLIS))
+            // 迟到的结果、换题、结束：一律丢弃。
+            val current = think
+            if (current !== flow || current.strict !== machine || !machine.state.active) return@launch
+            val parsed = (r as? ChatResult.Success)?.let { StrictEvalPrompt.parse(it.content, sessionId, stepId, revision) }
+            if (parsed == null) {
+                machine.markHealth(Health.DEGRADED, now())
+                showStrictReply(flow, "我这边核对超时了，你说的我留着。要不你自己说下一句？", "")
+                return@launch
+            }
+            when (val out = machine.acceptEvaluation(parsed, now())) {
+                is StrictOutcome.Accepted -> showStrictReply(flow, out.text, out.nextPrompt)
+                is StrictOutcome.Support -> showStrictReply(flow, out.text, "")
+                else -> showStrictReply(flow, "记下了。", "")
+            }
+        }
+    }
+
+    private fun showStrictReply(flow: ThinkFlow, text: String, nextPrompt: String) {
+        overlay.setMood(Mood.CURIOUS)
+        flow.touchedAt = now()
+        flow.waitSince = now()
+        val body = if (nextPrompt.isNotBlank()) text + "\n\n接着问：" + nextPrompt else text
+        overlay.showBubble(BubbleSpec(body, instant = true,
+            actions = listOf(
+                BubbleAction("我不会") { strictNeedsSupport() },
+                BubbleAction("×") { endThink() },
+            ),
+        ))
     }
 
     private fun showThinkFollowUp(flow: ThinkFlow, reply: String) {
@@ -1599,6 +1693,71 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private fun thinkNotice(text: String) {
         overlay.setMood(Mood.IDLE)
         overlay.showBubble(BubbleSpec(text, textOnly = true)) { handler.postDelayed({ if (convo == null) endThink() }, 4000) }
+    }
+
+
+    // ---------- 严格陪伴（持续闭环） ----------
+
+    /** 开启严格陪伴：把当前“想一想”升级成有期限、有验收的回合。 */
+    private fun startStrict(flow: ThinkFlow) {
+        val minutes = settings.strictMinutes.coerceIn(3, 60)
+        val criteria = listOf("说清作者转折后强调的内容", "给出一句原文依据")
+        val machine = StrictSessionMachine(
+            StrictSessionState.new(now(), minutes, flow.source, flow.appName, criteria),
+        )
+        flow.strict = machine
+        flow.waitSince = now()
+        val q = flow.question ?: "先用一句话说清：这段最关键的一点是什么？"
+        machine.ask(q, criteria, now())
+        overlay.showBubble(BubbleSpec(
+            "严格陪伴 " + minutes + " 分钟。\n问题：" + q + "\n\n直接说，不用点录音。\n（随时可以说“我不会”，或点 × 结束）",
+            instant = true,
+            actions = listOf(
+                BubbleAction("我不会") { strictNeedsSupport() },
+                BubbleAction("结束", highlighted = false) { strictAbort() },
+            ),
+        ))
+    }
+
+    private fun strictNeedsSupport() {
+        val flow = think ?: return
+        val m = flow.strict ?: return
+        val out = m.needsSupport(now())
+        flow.touchedAt = now()
+        flow.waitSince = now()
+        if (out is StrictOutcome.Support) overlay.showBubble(BubbleSpec(out.text + "\n\n（答不上来也没关系，我们一起拆）", instant = true))
+    }
+
+    private fun strictAbort() {
+        val flow = think ?: return
+        val m = flow.strict ?: return
+        val out = m.abort(now())
+        if (out is StrictOutcome.Finished) {
+            overlay.showBubble(BubbleSpec("结束了。" + out.summary, textOnly = true)) { handler.postDelayed({ endThink() }, 3000) }
+        }
+        flow.strict = null
+    }
+
+    /** 每秒推进：到期结算、沉默提醒（有上限）。 */
+    private fun tickStrict(now: Long) {
+        val flow = think ?: return
+        val m = flow.strict ?: return
+        val tick = m.tick(now)
+        if (tick is StrictOutcome.Finished) {
+            overlay.showBubble(BubbleSpec("这一回合结束：" + tick.summary, textOnly = true)) { handler.postDelayed({ endThink() }, 5000) }
+            flow.strict = null
+            return
+        }
+        val st = m.state
+        if (st.phase != Phase.WAITING) return
+        val waited = now - flow.waitSince
+        if (waited >= StrictSessionMachine.REMIND_AT_MILLIS) {
+            val out = m.remind(now)
+            if (out is StrictOutcome.Ask) {
+                flow.waitSince = now
+                overlay.showBubble(BubbleSpec(out.text, instant = true))
+            }
+        }
     }
 
     private fun endThink() {

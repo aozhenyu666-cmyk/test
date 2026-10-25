@@ -30,6 +30,10 @@ class Settings(context: Context) {
     var focusApps by set("focus_apps")
     var excludeApps by set("exclude_apps")
 
+    /** 严格陪伴：默认关；开启后“想一想”进入有时限的受约束回合。 */
+    var strictEnabled by bool("strict_enabled", false)
+    var strictMinutes by int("strict_minutes", 10)
+
     var heartbeatEnabled by bool("heartbeat", false)
     var heartbeatIntervalMin by int("heartbeat_interval", 20)
 
