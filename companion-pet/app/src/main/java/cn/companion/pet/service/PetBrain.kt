@@ -102,13 +102,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
     // ---------- 专注守护（移植自 deepseek/c3-focus-guard，按审计修过）：唯一的“拉回”拥有者 ----------
     private val focusGate by lazy { cn.companion.pet.core.focus.ForegroundGate(context.packageName) }
-    private val focusOverlay by lazy {
+    private val focusOverlay: cn.companion.pet.overlay.FocusOverlay by lazy {
         cn.companion.pet.overlay.FocusOverlay(context, { PerceptionHub.service },
             onReturn = { focusController.userReturn() },
             onPause = { focusController.pause() },
             onAbort = { endFocusByUser() })
     }
-    private val focusController by lazy {
+    private val focusController: cn.companion.pet.core.focus.FocusController by lazy {
         cn.companion.pet.core.focus.FocusController(
             store = cn.companion.pet.core.focus.FocusStore(memory.root),
             device = object : cn.companion.pet.core.focus.FocusDevicePort {
@@ -116,10 +116,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 override fun activePackage(): String? = PerceptionHub.activePackage()?.takeUnless { focusGate.isTransient(it) }
             },
             ui = object : cn.companion.pet.core.focus.FocusUiPort {
-                override fun showBlock(targetLabel: String, reason: String) = focusOverlay.show(targetLabel, reason)
-                override fun hideBlock() = focusOverlay.hide()
-                override fun remind(targetLabel: String, text: String) = showFocusRemind(text)
-                override fun ended(targetLabel: String, reason: cn.companion.pet.core.focus.FocusEndReason) = onFocusEnded(targetLabel, reason)
+                override fun showBlock(targetLabel: String, reason: String): cn.companion.pet.core.focus.OverlayResult = focusOverlay.show(targetLabel, reason)
+                override fun hideBlock() { focusOverlay.hide() }
+                override fun remind(targetLabel: String, text: String) { showFocusRemind(text) }
+                override fun ended(targetLabel: String, reason: cn.companion.pet.core.focus.FocusEndReason) { onFocusEnded(targetLabel, reason) }
             },
             scheduler = object : cn.companion.pet.core.focus.FocusScheduler {
                 override fun post(delayMillis: Long, task: () -> Unit) { handler.postDelayed(task, delayMillis) }
