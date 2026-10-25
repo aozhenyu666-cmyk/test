@@ -122,3 +122,16 @@ $env:ANDROID_HOME="C:\Android\sdk"
 正确值：`B742DCD196AF01FA96428498F5297D3165F66AB8C8FF6B85DD09185DBC318AC9`（64 位，实测 apksigner）。
 已在 `CertConstantsTest` 加长度/字符集断言防回归。
 
+
+---
+
+## 提交记录（captain，2026-10-25 23:2x）
+
+本工作树已提交入库（仅本地，未 push）：
+
+| 分支 | 提交 | 基线 |
+| --- | --- | --- |
+| `deepseek/zk-client-v2` | `5893f67` | `ba8750e` |
+
+提交后强制重跑 `--rerun-tasks`：**269 tests / 0 failures / 0 errors**。
+真机项仍全部 NOT_RUN（本机无设备）。
