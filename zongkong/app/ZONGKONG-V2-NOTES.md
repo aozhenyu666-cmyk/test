@@ -212,6 +212,49 @@ java.lang.AssertionError: 第二次 lastDecision 必须包含「修复宽限」�
 另有一条 `同一事件在宽限期内也不会被重复执行` 单独覆盖「同事件」路径，只是断言「没再锁」，
 不把两层保护混为一谈。
 
+### 2.3 一次真实的验证事故（记录在案，避免重犯）
+
+这轮里出现过一次**把注入态当成修复提交**的事故，值得写进文档，因为它比任何单测都更说明「验证对象搞错」的代价。
+
+**发生了什么**
+
+- 提交 `dcb379a` 里 `GuardTickCore.kt:151` 是 `repairGraceUntilMono = 0L` —— 正是 t13 要修的 bug。
+- 真正的修复行只存在于**同一个 commit 里被误提交的备份文件** `GuardTickCore.kt.bak`。
+- 起因：做注入验证时把该行改成 `0L` 又还原，随后在**同一时间窗口**里 `git add -A` 提交，抓到了注入态。
+- 更麻烦的是：提交说明里写着「提交后强制重跑确认 0 失败」——那句当时是**错的**，因为跑的是**工作区**（正确），交付的却是 **HEAD**（bug）。
+
+**怎么发现的**
+
+- 在 `git status` 里看到 `GuardTickCore.kt` 从未跟踪变成 `M`，进而 `git show HEAD:` 发现 HEAD 是 `0L`。
+- 用**隔离的 detached worktree**（`git worktree add --detach`，不碰共享工作区）检出该 commit 跑 `--rerun-tasks`：
+  `RepairGraceWiringTest > tick 第二次应被修复宽限拦住 FAILED / 299 tests completed, 1 failed`。
+  → 证明**该 commit 自身是红的**，不是环境问题。
+
+**怎么修的（提交 `9d0d65a`）**
+
+- 接线行恢复 `= grace.untilMono`；`git rm --cached` 掉 `.bak`；
+- `zongkong/.gitignore` 加 `*.bak` / `*.orig` / `*.rej`（已实测：新建的 `.bak` 会被 git 忽略）；
+- 从**干净 checkout** 复验 `9d0d65a`：299 tests / 0 failures。
+
+**教训（三条，写给以后）**
+
+1. **注入实验期间绝不提交。** 提交前必须确认工作区不是实验态。
+2. **验证「交付物」，不是「工作区」。** `git status` 干净 ≠ 内容对；要 `git show HEAD:<path>` 看真正提交进去的东西。
+3. **疑似的「构建缓存假失败」，先排除源码本身。** 见下条。
+
+### 2.4 一条未能复现的现象（标注为「未复现，原因待定」）
+
+复查过程中曾出现「把文件还原后跑测试仍然 1 failed」，一度怀疑是 Gradle 增量编译用旧 class。
+
+**实测结论：未能复现。** 我试了 4 种还原方式 —— `Copy-Item` 覆盖、刻意保留旧 mtime、`--rerun-tasks`、`app:clean` ——
+Gradle **每次都执行了** `> Task :app:compileDebugKotlin` 并给出正确结果（299/0）。
+
+因此**不把「`--rerun-tasks` 只重跑测试、不重编译」写成已确认结论**。
+那次「还原后仍红」的真实原因**很可能就是 §2.3 里 HEAD 处于注入态**（跑的是 HEAD 的产物），但无法完全排除当时 mtime 被保留导致增量判定命中旧 class 的可能。
+
+**结论：未复现，原因待定。** 实践建议仍然成立且无争议：
+> 还原代码后若结果与预期不符，先 `git show HEAD:<path>` 确认源码状态，再用 `app:clean` 或显式 `:app:compileDebugKotlin` 排一次干净构建，别直接相信增量结果。
+
 ---
 
 ## 3. NOT_RUN（没跑，不写 PASS）
