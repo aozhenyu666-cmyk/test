@@ -45,7 +45,13 @@
 ## 阶段 3：测试与构建
 
 - JVM：**420** 个全过 = Claude C3 线 403 + ForegroundGateTest 6 + FocusIntegrationTest 11。DeepSeek 线是 387（365 基线 + 22 守护用例，其中 ForegroundGate 6 个已移植）。
-- CI / APK：见提交后的 Actions 运行与预览 Release `tongzhuo-preview-integration-tongzhuo-presence-focus-v1`（SHA-256 记在 Release 说明里）。
+- CI 四项 Gradle：
+  - run 82（f6156af）：Kotlin 编译失败——`focusOverlay` 与 `focusController` 两个 lazy 互相引用导致类型推断递归。补上显式类型。
+  - run 83（ad2060c）：**全部通过**（testDebugUnitTest / lintDebug / assembleDebug / assembleDebugAndroidTest）。https://github.com/aozhenyu666-cmyk/test/actions/runs/40165399275
+- 预览 APK（只写本分支自己的 tag，没有碰 tongzhuo-latest）：0.6.1-preview / 28，
+  SHA-256 `2721de382e3c655df8ac521e7d934685d9ec934476f41f7a474e0d10f9b8a12a`
+  https://github.com/aozhenyu666-cmyk/test/releases/download/tongzhuo-preview-integration-tongzhuo-presence-focus-v1/tongzhuo.apk
+- CI 构件：Actions 运行页里的 `companion-pet-debug-<sha>`。
 
 ## 阶段 4：真机手动测试单（全部 NOT_RUN）
 
