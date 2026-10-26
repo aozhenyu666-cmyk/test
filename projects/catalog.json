@@ -1,0 +1,2952 @@
+{
+  "schema_version": 1,
+  "repository": "aozhenyu666-cmyk/test",
+  "default_branch": "claude/super-productivity-mcp-mobile-xe4499",
+  "scope": "navigation-only",
+  "notes": [
+    "入口指向核对时存在的分支和目录，不宣称所有分支已合并或真机已验收。",
+    "分支快照不是全仓库未来状态；发布标签可能在后续更新。",
+    "哨兵是 zongkong 工程内的独立 Android 应用模块。"
+  ],
+  "projects": [
+    {
+      "id": "zongkong",
+      "folder": "01-zongkong",
+      "name": "总控",
+      "group": "核心 APP",
+      "summary": "四部门、事项与行动、日程统筹、Notion 同步和行为监管。",
+      "ref": "deepseek/zk-client-v2",
+      "path": "zongkong",
+      "package": "com.zongkong.app",
+      "readme": "zongkong/README.md",
+      "workflow": "zongkong-android.yml",
+      "release": "zongkong-latest",
+      "asset": "zongkong.apk",
+      "notes": "哨兵是独立安装的 APP，但源码仍是这个 Gradle 工程里的 `:sentinel` 模块。总控和哨兵各有独立导航入口。",
+      "extras": [
+        [
+          "电脑版源码",
+          "tree",
+          "deepseek/zk-client-v2",
+          "zongkong-pc"
+        ],
+        [
+          "电脑版说明",
+          "blob",
+          "deepseek/zk-client-v2",
+          "zongkong-pc/README.md"
+        ],
+        [
+          "训练界面开发线",
+          "tree",
+          "deepseek/zk-training-ui",
+          "zongkong"
+        ],
+        [
+          "旧版 0.9 开发线",
+          "tree",
+          "zongkong-0.9-upgrade",
+          "zongkong"
+        ]
+      ],
+      "snapshot": "e3fbbe8cbb0d01754bd7d63adb3d4e01c2b7dc16",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/deepseek/zk-client-v2/zongkong",
+      "navigation": "projects/01-zongkong/README.md"
+    },
+    {
+      "id": "yishou",
+      "folder": "02-yishou",
+      "name": "一手",
+      "group": "核心 APP",
+      "summary": "六骰子思考、分组训练、陪练窗口、语音回答和入口思考。",
+      "ref": "deepseek/yishou-v2",
+      "path": "yishou",
+      "package": "com.yishou.app",
+      "readme": "yishou/README.md",
+      "workflow": "yishou-android.yml",
+      "release": "yishou-latest",
+      "asset": "yishou.apk",
+      "notes": "`codex/companion-t1-*` 到 `t7-*`、`codex/voice-partner-*` 等早期分支实际位于 `yishou/`，属于一手的陪练开发记录，不能只凭 companion 这个名字归到同桌。",
+      "extras": [
+        [
+          "需求规格",
+          "blob",
+          "deepseek/yishou-v2",
+          "yishou/SPEC.md"
+        ],
+        [
+          "电脑版源码",
+          "tree",
+          "deepseek/yishou-v2",
+          "yishou-pc"
+        ],
+        [
+          "思维与行动预览线",
+          "tree",
+          "codex/flexible-training-preview",
+          "yishou"
+        ]
+      ],
+      "snapshot": "5ea5f519ff71ac3ac5ba2b32ffed5206ce3a1939",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/deepseek/yishou-v2/yishou",
+      "navigation": "projects/02-yishou/README.md"
+    },
+    {
+      "id": "sentinel",
+      "folder": "03-sentinel",
+      "name": "哨兵",
+      "group": "核心 APP",
+      "summary": "独立监测总控、一手、同桌的健康状态，处理失联与锁屏兜底。",
+      "ref": "deepseek/sentinel-v2",
+      "path": "zongkong/sentinel",
+      "package": "com.zongkong.sentinel",
+      "readme": "zongkong/sentinel/SENTINEL-V2-NOTES.md",
+      "workflow": "zongkong-android.yml",
+      "release": "zongkong-latest",
+      "asset": "zongkong-sentinel.apk",
+      "notes": "哨兵是独立 APP，构建模块为 `:sentinel`，但不是独立 Gradle 根工程。本地从 `zongkong/` 构建，不能直接把 `zongkong/sentinel/` 当完整工程搬走；它使用上级工程和 `../app/debug.keystore` 签名路径。现有 `zongkong-latest` 附件对应较早的发布提交，不能据此声称它已包含 sentinel-v2 的改动。v2 请以源码、实施说明和对应运行记录为准。",
+      "extras": [],
+      "snapshot": "59117afe1f3fcfefcd05f33b4adfc7a0a9fd9a75",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/deepseek/sentinel-v2/zongkong/sentinel",
+      "navigation": "projects/03-sentinel/README.md"
+    },
+    {
+      "id": "tongzhuo",
+      "folder": "04-tongzhuo",
+      "name": "同桌",
+      "group": "核心 APP",
+      "summary": "桌面伙伴、主动搭话、思维陪练、会话接续和训练监管。",
+      "ref": "deepseek/r21-proactive",
+      "path": "companion-pet",
+      "package": "cn.companion.pet",
+      "readme": "companion-pet/README.md",
+      "workflow": "companion-pet-android.yml",
+      "release": "tongzhuo-preview-deepseek-r21-proactive",
+      "asset": "tongzhuo.apk",
+      "notes": "这里列的是 R2.1 开发预览线，不表示真机验收完成。项目原 README 的版本段落较旧；本次检索到 R2.1 开发预览 0.7.5 和复核预览 0.7.6，分别列出。`tongzhuo-latest` 标签目前仍是较早的 0.5.5，不能把它当 R2.1 预览。某些 `deepseek/moling-*` 分支里实际是 `companion-pet/`，这些属于同桌，和 `moling/` 墨灵 APP 分开。",
+      "extras": [
+        [
+          "R2.1 批次二交接",
+          "blob",
+          "deepseek/r21-proactive",
+          "companion-pet/handoff/r21-batch2/STATE.md"
+        ],
+        [
+          "R2.1 主动性 S6 交接",
+          "blob",
+          "deepseek/r21-proactive",
+          "companion-pet/handoff/r21-s6/STATE.md"
+        ],
+        [
+          "0.7.6 复核预览源码",
+          "tree",
+          "ccr-f3b6cf6b-6gsh3f",
+          "companion-pet"
+        ],
+        [
+          "0.7.6 复核说明",
+          "blob",
+          "ccr-f3b6cf6b-6gsh3f",
+          "companion-pet/handoff/r21-review/REVIEW.md"
+        ],
+        [
+          "R2.1 核心基线",
+          "tree",
+          "codex/tongzhuo-r21-core",
+          "companion-pet"
+        ],
+        [
+          "双形态开发线",
+          "tree",
+          "feature/companion-dual-mode-training",
+          "companion-pet"
+        ]
+      ],
+      "snapshot": "66ce3ca2908a07bddf158e6066e3d44f7397d8a0",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/deepseek/r21-proactive/companion-pet",
+      "navigation": "projects/04-tongzhuo/README.md"
+    },
+    {
+      "id": "moling",
+      "folder": "05-moling",
+      "name": "墨灵",
+      "group": "其他 APP 与旧项目",
+      "summary": "独立的对话、今天、体系与工作空间项目，保留原有开发线。",
+      "ref": "ccr-b3c7616e-xlohkd",
+      "path": "moling",
+      "package": "com.moling.app",
+      "readme": "moling/DEVLOG.md",
+      "workflow": "moling-android.yml",
+      "release": "moling-latest",
+      "asset": "moling.apk",
+      "notes": "这个入口指向 `moling/`，不是 `companion-pet/` 同桌。源码入口与检索到的 moling-latest 发布目标一致；该快照不能代表后续所有实验线已合并。",
+      "extras": [
+        [
+          "V13 集成开发线",
+          "tree",
+          "deepseek/moling-v13-integration",
+          "moling"
+        ],
+        [
+          "原始开发线",
+          "tree",
+          "deepseek-moling",
+          "moling"
+        ]
+      ],
+      "snapshot": "d60d2c63030f321b2784dff1e7ae98650e9f41bf",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/ccr-b3c7616e-xlohkd/moling",
+      "navigation": "projects/05-moling/README.md"
+    },
+    {
+      "id": "mailuo",
+      "folder": "06-mailuo",
+      "name": "脉络",
+      "group": "其他 APP 与旧项目",
+      "summary": "知识结构、问—论—规、候选判断与复习。",
+      "ref": "ccr-153bfa69-lm85up",
+      "path": "mailuo",
+      "readme": "mailuo/README.md",
+      "workflow": "mailuo-android.yml",
+      "release": "mailuo-latest",
+      "asset": "mailuo.apk",
+      "notes": "独立 APP 位于 `mailuo/`。名称为 `mailuo-v4` 的另一条分支实际没有独立 `mailuo/` 目录，其中的相关功能和设计在总控与蓝图里，已另列入口。",
+      "extras": [
+        [
+          "mailuo-v4 分支中的总控",
+          "tree",
+          "mailuo-v4",
+          "zongkong"
+        ],
+        [
+          "mailuo-v4 方案蓝图",
+          "tree",
+          "mailuo-v4",
+          "partner-blueprint"
+        ]
+      ],
+      "snapshot": "71ccd2aadaa4f835dca488e37bb3c6acd930aec1",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/ccr-153bfa69-lm85up/mailuo",
+      "navigation": "projects/06-mailuo/README.md"
+    },
+    {
+      "id": "job-tracker",
+      "folder": "07-job-tracker",
+      "name": "求职投递看板",
+      "group": "其他 APP 与旧项目",
+      "summary": "岗位匹配分析、投递记录与跟进管理的 Android 项目。",
+      "ref": "ccr-67b6cf89-f4r501",
+      "path": "job-tracker",
+      "readme": "job-tracker/README.md",
+      "notes": "原说明仍列有未开始的跟进话术、提醒和验收项。它不等于已经实现 BOSS 自动投递。",
+      "extras": [],
+      "snapshot": "d35714e31c9b95b23cd318bae01dec5bed3090ef",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/ccr-67b6cf89-f4r501/job-tracker",
+      "navigation": "projects/07-job-tracker/README.md"
+    },
+    {
+      "id": "bansheng",
+      "folder": "08-bansheng",
+      "name": "伴生",
+      "group": "其他 APP 与旧项目",
+      "summary": "基于 N.E.K.O. 的电脑桌面 AI 伙伴与浏览器对话桥接。",
+      "ref": "ccr-ae81b34a-8ypbg6",
+      "path": "bansheng",
+      "readme": "bansheng/README.md",
+      "notes": "桌面伙伴插件与浏览器扩展项目；和 Android 的同桌、墨灵分开。运行与安装依赖见原说明。",
+      "extras": [
+        [
+          "交接与能力边界",
+          "blob",
+          "ccr-ae81b34a-8ypbg6",
+          "bansheng/HANDOFF.md"
+        ]
+      ],
+      "snapshot": "88d72029a5de0ea4589f5609207714679be508b6",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/ccr-ae81b34a-8ypbg6/bansheng",
+      "navigation": "projects/08-bansheng/README.md"
+    },
+    {
+      "id": "relation-spectrum",
+      "folder": "09-relation-spectrum",
+      "name": "关系光谱",
+      "group": "其他 APP 与旧项目",
+      "summary": "人际关系记录、冲动话术检验、潜台词分析与对话预演。",
+      "ref": "ccr-09eb4a18-8qnot9",
+      "path": "relation-spectrum",
+      "readme": "relation-spectrum/README.md",
+      "notes": "网页项目，和监管、陪练 APP 分开。源码与打包说明见项目原说明。",
+      "extras": [],
+      "snapshot": "56ce75604b4742bd0fea07c1a36c0f90450d8067",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/ccr-09eb4a18-8qnot9/relation-spectrum",
+      "navigation": "projects/09-relation-spectrum/README.md"
+    },
+    {
+      "id": "huilu",
+      "folder": "10-huilu",
+      "name": "回路",
+      "group": "其他 APP 与旧项目",
+      "summary": "围绕一个短时行动，记录偏离、检查点、干预与复查。",
+      "ref": "ccr-c76deb79-xn3l83",
+      "path": "huilu",
+      "readme": "huilu/README.md",
+      "workflow": "huilu.yml",
+      "notes": "保留原 Android 工程及其构建工作流；安装包在该分支 `huilu/dist/`，不与总控或同桌的发布混用。",
+      "extras": [],
+      "snapshot": "9017a9e5303e0340f93ab8a5d691fd82f4cf1f27",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/ccr-c76deb79-xn3l83/huilu",
+      "navigation": "projects/10-huilu/README.md"
+    },
+    {
+      "id": "behavior-app",
+      "folder": "11-behavior-app",
+      "name": "行为管理部",
+      "group": "其他 APP 与旧项目",
+      "summary": "早期的今日行动、训练、防线与复盘 Android 项目。",
+      "ref": "ccr-03064567-7z3tvu",
+      "path": "behavior-app",
+      "readme": "behavior-app/README.md",
+      "workflow": "android.yml",
+      "notes": "保留为早期独立工程入口；这里不推断它已被哪个新 APP 完整替代。",
+      "extras": [],
+      "snapshot": "da9adf520e6396ad648a02c5fceeea470704276b",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/ccr-03064567-7z3tvu/behavior-app",
+      "navigation": "projects/11-behavior-app/README.md"
+    },
+    {
+      "id": "voice-assistant",
+      "folder": "12-voice-assistant",
+      "name": "伴随语音助手",
+      "group": "工具与原型",
+      "summary": "Android 语音浮窗、明确指令导航与按需看屏原型。",
+      "ref": "claude/super-productivity-mcp-mobile-xe4499",
+      "path": "companion-voice-assistant",
+      "readme": "companion-voice-assistant/README.md",
+      "notes": "原生 Android 原型，和 `companion-pet/` 同桌是两个工程。安装包与源码包位于原目录 `releases/`。",
+      "extras": [],
+      "snapshot": "9e642a11f9bd0fbaaede52805e571ae3e8a94ace",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/claude/super-productivity-mcp-mobile-xe4499/companion-voice-assistant",
+      "navigation": "projects/12-voice-assistant/README.md"
+    },
+    {
+      "id": "agent-bridge",
+      "folder": "13-agent-bridge",
+      "name": "Agent Bridge",
+      "group": "工具与原型",
+      "summary": "Windows 多 Agent 工作台，接入本机 Codex、Claude 和 Harness。",
+      "ref": "claude/super-productivity-mcp-mobile-xe4499",
+      "path": "agent-bridge",
+      "readme": "agent-bridge/README.md",
+      "workflow": "agent-bridge-windows.yml",
+      "release": "agent-bridge-v0.2.0",
+      "asset": "AgentBridge-Setup-0.2.0-x64.exe",
+      "notes": "电脑端协作工具；源码、安装程序与便携版均有独立入口。",
+      "extras": [],
+      "snapshot": "9e642a11f9bd0fbaaede52805e571ae3e8a94ace",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/claude/super-productivity-mcp-mobile-xe4499/agent-bridge",
+      "navigation": "projects/13-agent-bridge/README.md"
+    },
+    {
+      "id": "sp-assistant",
+      "folder": "14-sp-assistant",
+      "name": "SP AI 参谋插件",
+      "group": "工具与原型",
+      "summary": "Super Productivity 内的 AI 对话、任务规划、提醒与复盘插件。",
+      "ref": "claude/super-productivity-mcp-mobile-xe4499",
+      "path": "plugin",
+      "notes": "这是此前仓库首页介绍的项目。原有完整说明已保存在本导航页旁的 DETAILS.md，源码仍在仓库根目录 `plugin/`，打包脚本仍在 `scripts/`。",
+      "extras": [],
+      "snapshot": "9e642a11f9bd0fbaaede52805e571ae3e8a94ace",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/claude/super-productivity-mcp-mobile-xe4499/plugin",
+      "navigation": "projects/14-sp-assistant/README.md"
+    },
+    {
+      "id": "operit",
+      "folder": "15-operit",
+      "name": "Operit 工作流与插件",
+      "group": "工具与原型",
+      "summary": "思考接续、精简上下文、棋钟专注等 Operit 扩展。",
+      "ref": "claude/operit-ai-github-38lrbo",
+      "path": "operit",
+      "readme": "operit/thought_relay/README.md",
+      "notes": "这是多个扩展的入口，不是一个已经统一打包的 APP。各自的安装方法和兼容版本见各自说明。",
+      "extras": [
+        [
+          "精简上下文源码",
+          "tree",
+          "ccr-f0151c00-ch7rts",
+          "operit-lean-context"
+        ],
+        [
+          "精简上下文说明",
+          "blob",
+          "ccr-f0151c00-ch7rts",
+          "operit-lean-context/README.md"
+        ],
+        [
+          "棋钟专注方案",
+          "tree",
+          "ccr-37542761-6miz8r",
+          "operit-chess-focus"
+        ]
+      ],
+      "snapshot": "1172806ec43216778422c7bbabd850f25186f250",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/claude/operit-ai-github-38lrbo/operit",
+      "navigation": "projects/15-operit/README.md"
+    },
+    {
+      "id": "focus-hub",
+      "folder": "16-focus-hub",
+      "name": "主控台与小满流程线",
+      "group": "工具与原型",
+      "summary": "Operit 的主控台、角色卡、状态采样与陪伴工作流。",
+      "ref": "claude/hello-34vzla",
+      "path": "focus_hub",
+      "readme": "focus_hub/README.md",
+      "notes": "主控台与工作流分散在两条开发线上，入口一并保留。原说明中的真机验证是历史记录，不表示本次重新验证过。",
+      "extras": [
+        [
+          "小满与整体流程线",
+          "tree",
+          "claude/operit-ai-analysis-vb197a",
+          "flow"
+        ],
+        [
+          "流程线历史状态",
+          "blob",
+          "claude/operit-ai-analysis-vb197a",
+          "flow/STATUS.md"
+        ]
+      ],
+      "snapshot": "47e65779b5d7fff39d1618dd61be1697d845dd3e",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/claude/hello-34vzla/focus_hub",
+      "navigation": "projects/16-focus-hub/README.md"
+    },
+    {
+      "id": "clock-effects",
+      "folder": "17-clock-effects",
+      "name": "时钟动效实验",
+      "group": "工具与原型",
+      "summary": "单独的时钟动效网页实验。",
+      "ref": "ccr-e7292701-ksmvcg",
+      "path": "clock-effects",
+      "notes": "入口文件是 `clock-effects/index.html`；该分支根 README 沿用了旧 SP 介绍，不能用它判断这个目录的用途。",
+      "extras": [],
+      "snapshot": "1de0d227a3caefffa5e31ebec8a9d36f378a9dea",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/ccr-e7292701-ksmvcg/clock-effects",
+      "navigation": "projects/17-clock-effects/README.md"
+    }
+  ],
+  "branches": [
+    {
+      "branch": "ccr-09eb4a18-8qnot9",
+      "commit": "56ce75604b4742bd0fea07c1a36c0f90450d8067",
+      "projects_present": [
+        "relation-spectrum",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "relation-spectrum",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "ccr-67b6cf89-f4r501",
+      "commit": "d35714e31c9b95b23cd318bae01dec5bed3090ef",
+      "projects_present": [
+        "job-tracker",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "job-tracker",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "ccr-088e4ddb-qsc6zh",
+      "commit": "ce37457f2b4fa3d6d1699b258ca8e57fd85def03",
+      "projects_present": [
+        "sp-assistant",
+        "operit"
+      ],
+      "root_directories": [
+        "dev",
+        "dist",
+        "docs",
+        "operit",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "ccr-153bfa69-lm85up",
+      "commit": "71ccd2aadaa4f835dca488e37bb3c6acd930aec1",
+      "projects_present": [
+        "mailuo",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "mailuo",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "ccr-2899d69f-xlzjh6",
+      "commit": "b1a9fcbf903654adb0315fa5b7277edf37fde318",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "ccr-6193e40d-cxxw8a",
+      "commit": "2763fe732380a13a789c76e5e3ec974135ce17f7",
+      "projects_present": [
+        "sp-assistant",
+        "operit"
+      ],
+      "root_directories": [
+        "dev",
+        "dist",
+        "docs",
+        "operit",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "ccr-03064567-7z3tvu",
+      "commit": "da9adf520e6396ad648a02c5fceeea470704276b",
+      "projects_present": [
+        "behavior-app",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "behavior-app",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "ccr-37542761-6miz8r",
+      "commit": "ef1cb1b7218ab72fa36f97542a19a2d2f9e389a6",
+      "projects_present": [
+        "sp-assistant"
+      ],
+      "root_directories": [
+        "dev",
+        "dist",
+        "operit-chess-focus",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "ccr-a5172662-j1jcik",
+      "commit": "a72a2f4b7a4326247ffe6c65b7503fc692c36ba3",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "ccr-ae81b34a-8ypbg6",
+      "commit": "88d72029a5de0ea4589f5609207714679be508b6",
+      "projects_present": [
+        "bansheng",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "bansheng",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "ccr-b3c7616e-xlohkd",
+      "commit": "d60d2c63030f321b2784dff1e7ae98650e9f41bf",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "ccr-b6e667ac-bsoz44",
+      "commit": "92d7028b5b3c04b6562b090e3521319f03c85dad",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "ccr-c76deb79-xn3l83",
+      "commit": "9017a9e5303e0340f93ab8a5d691fd82f4cf1f27",
+      "projects_present": [
+        "huilu",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "huilu",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "ccr-cec40a0e-8hi98d",
+      "commit": "ba8750e667d3c2349b2defea5e4ac1c5d943ae00",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "ccr-d35383d9-k0acmh",
+      "commit": "a9cbe7cb55e02ab44d3d64d2245b18fe0da2f24e",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "ccr-e7292701-ksmvcg",
+      "commit": "1de0d227a3caefffa5e31ebec8a9d36f378a9dea",
+      "projects_present": [
+        "sp-assistant",
+        "clock-effects"
+      ],
+      "root_directories": [
+        "clock-effects",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "ccr-f3b6cf6b-6gsh3f",
+      "commit": "962070e90da51d6d754f75f42e632e00352542c2",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "ccr-f0151c00-ch7rts",
+      "commit": "992688519b77e91b1816eab6295fc7a915657eaa",
+      "projects_present": [
+        "sp-assistant"
+      ],
+      "root_directories": [
+        "dev",
+        "dist",
+        "docs",
+        "operit-lean-context",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "claude/c3-presence-layer",
+      "commit": "166a5467005e562c309ffc5930eb955af8291f8a",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "claude/cognitive-control-system-s6yjro",
+      "commit": "6ada9bd766fc39e2749f93d5ec06c402e38de387",
+      "projects_present": [
+        "sp-assistant"
+      ],
+      "root_directories": [
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "claude/companion-unify-v1",
+      "commit": "08f4dbe22a4b5819dada9e92e1f55d5c68abf2be",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "claude/hello-34vzla",
+      "commit": "47e65779b5d7fff39d1618dd61be1697d845dd3e",
+      "projects_present": [
+        "focus-hub"
+      ],
+      "root_directories": [
+        "cards",
+        "design",
+        "focus_hub",
+        "handover",
+        "ops",
+        "types"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "claude/operit-ai-analysis-vb197a",
+      "commit": "e49dc3543734c7cb850c6cd19e88df8f55f64272",
+      "projects_present": [
+        "sp-assistant"
+      ],
+      "root_directories": [
+        "dev",
+        "dist",
+        "flow",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "claude/operit-ai-github-38lrbo",
+      "commit": "1172806ec43216778422c7bbabd850f25186f250",
+      "projects_present": [
+        "sp-assistant",
+        "operit"
+      ],
+      "root_directories": [
+        "dev",
+        "dist",
+        "operit",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "claude/super-productivity-mcp-mobile-xe4499",
+      "commit": "9e642a11f9bd0fbaaede52805e571ae3e8a94ace",
+      "projects_present": [
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "codex/companion-say-why",
+      "commit": "fcb2993252309d5d99da5d2031b33225a502e127",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/companion-t1-probe",
+      "commit": "88da9d8577ea94288a32e6500612ea806d2b27a7",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/companion-t2-core",
+      "commit": "40e2ae282695f9befd12e6c7ae91c82a480aadde",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/companion-t3-transcript",
+      "commit": "bb4433780a5517e3b454fa1802ff9d3e291d9721",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/companion-t4-coach",
+      "commit": "e590e6c72d070ddd4fdb6291f7428f342bfadd82",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/companion-t5-conductor",
+      "commit": "a11fac6eca93c69591381d2030c14d7122a68c8b",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/companion-t6-store",
+      "commit": "778c14bea9611d52201722f43781bd496c1a845e",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/companion-t7-session",
+      "commit": "8b7ab5285f0381a5b4e0286eb91a94474a85f9cb",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/companion-test-plan",
+      "commit": "41a06c6f56b4ef825fcdb85489721575d20a3582",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/flexible-training",
+      "commit": "f240811dad456ed8156b559fb27ddce64fe06289",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/flexible-training-preview",
+      "commit": "ff21d1e0852a9dc196ceeb9d8bb1b38257d33e30",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/mailuo-v2-T01",
+      "commit": "0cf051b6c4e3e1a3d92fd5a49d5563919995fb11",
+      "projects_present": [
+        "mailuo",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "mailuo",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/mailuo-v2-T02",
+      "commit": "417c31835816094494c94c24210cea7277a33ca3",
+      "projects_present": [
+        "mailuo",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "mailuo",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/mailuo-v2-T03",
+      "commit": "59f8ef3edfbd8816242907778ed36a13eb57d263",
+      "projects_present": [
+        "mailuo",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "mailuo",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/mailuo-v2-T04",
+      "commit": "f59b8c76806a723a5bc40600d16d9f606e620453",
+      "projects_present": [
+        "mailuo",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "mailuo",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/mailuo-v2-T05",
+      "commit": "8bb010a43726e6b2bb48ca2fb3c4b9b24cf447ef",
+      "projects_present": [
+        "mailuo",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "mailuo",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/mailuo-v2-T06",
+      "commit": "80b779decbdf90a39a06bee99d54152a5797eeed",
+      "projects_present": [
+        "mailuo",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "mailuo",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/moling-auth",
+      "commit": "13a2d2a5bdd132df6a3d913eb0d1f82033be2bd7",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/moling-presence",
+      "commit": "d0561cd71bc77790c59c9fdd11c5fd7efd28466e",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/tongzhuo-r21-core",
+      "commit": "c9f69701acfe23f4042ce9990634b829888bd735",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/voice-partner-api-spec",
+      "commit": "4c41acb1d8a8504bf173e47668188652d0def962",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/voice-partner-t1",
+      "commit": "ee58c2c7c81961f9d94921fc28458845a6fd906f",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/voice-partner-t2",
+      "commit": "c6e6a833c26b7870497d0c324398550796af35a5",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/voice-partner-t3",
+      "commit": "ee1f492bdfe7c854a776b86ae2eba15baa936546",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "codex/voice-partner-t4a",
+      "commit": "f181799eb0279e0c744a0acbe83bf7f54dd1a867",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/c3-focus-guard",
+      "commit": "12f7382b3c39d7b7651c24e8d3fe403097ea4764",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/companion-continuity",
+      "commit": "5f2d42388bbc318cdf815ccfd1ce28ff95dbd11a",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/companion-ui-overhaul",
+      "commit": "9d9ad272d082eb5f50e74d344a92961e3fd397dc",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/companion-wiring",
+      "commit": "6dca7123e8592e2e24ac08d32e75bed50434b534",
+      "projects_present": [
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/m2-b1-forage",
+      "commit": "c44d73330da8d70d69821d74c05d2762b40069a2",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/m2-b2-candidates",
+      "commit": "d491b1c26567a84a0bee9b31182cb142871381fd",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/m2-b3-wheel",
+      "commit": "2e0dc170e7fbf823ef8ec8ef618bda605f305c03",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/m2-b4-relay",
+      "commit": "60db3505fb61ffd238bce9dd06144f30747d7baa",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/m2-b5-system",
+      "commit": "daba28ad3867f387c1dce0bee5422c0d529ddb58",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-agent-fix-v1.5",
+      "commit": "7d3467d672bad7f1e2cd00398bef7d6cc940f91a",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-agent-loop-v1",
+      "commit": "a0677100e7ea017624af4ffb6cd6728813430c9e",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-b0-integrity",
+      "commit": "af71cc175d6f653eddd8267a4d827fbdbae6e846",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-b1-goal-agent",
+      "commit": "03f05bc6ffc90cbb32391e449e8ea5b07a750301",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-b2-confirmation",
+      "commit": "3be7d0ac5f6d11c6f156fd35c2209ed31b4953ef",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-b3-shizuku-real",
+      "commit": "c430a1fb51e896a34198f07eb1173a2e673fbd1f",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-b4-e2e-release",
+      "commit": "fcc2e61d98420ad21b8168da8db8f714f60b0fed",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-c0-audit-fixes",
+      "commit": "e0e6103ba70fe55231d4eae45c70ea4308fddc51",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-c1-diagnostics",
+      "commit": "b2c65368f5c2acfed43fde452da641f6db5bdfb7",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-c2-device-acceptance",
+      "commit": "9044507de6f144bf85b0195b30ab797a8009a510",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-c3-proactivity",
+      "commit": "68216d1c575c13be4b5fc457aba3cc881dc4a920",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-continuity-a4",
+      "commit": "1bde879d2ed567b95ffa03737270e8c5958c6a4b",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-device-a3",
+      "commit": "88eaf04054b383b2891749c73008d53558ba18b3",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-outbrain",
+      "commit": "b344167a4aef6964421bffad46b639d954041695",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-planner",
+      "commit": "005bf9af011894474cdaa4cfdeafc285ea946471",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-polish",
+      "commit": "20570e9063c8c8deaf037866c6736762105391ec",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-radio-play",
+      "commit": "9c806d6d292d3d6c197dac88d7dbd0270f3806d4",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-release-qa",
+      "commit": "158077e204bc766a16580868cedc664ace2a5b83",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-ui-redesign",
+      "commit": "ef63826f5991b1c79e698fae2fae80dcfcd8c270",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-v13-integration",
+      "commit": "46a7f9b513ebe2b1caf48fa21a8e0fb3027f8ddd",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "deepseek/moling-vision-a2",
+      "commit": "b97627ae8995aa2802be03a99cb0f12de0c4a46d",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-web-memory",
+      "commit": "a37856817e0cced52755803b31b5c398a3ea82bf",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/moling-workspace",
+      "commit": "f89fab1b97e2ed44a90cc7ceb31448cbcb58af54",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/pet-v2",
+      "commit": "30ea4e4cfecf2a78e8e07c121ce814c15c6e5605",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek/r21-proactive",
+      "commit": "66ce3ca2908a07bddf158e6066e3d44f7397d8a0",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "deepseek/sentinel-v2",
+      "commit": "59117afe1f3fcfefcd05f33b4adfc7a0a9fd9a75",
+      "projects_present": [
+        "zongkong",
+        "sentinel",
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "deepseek/yishou-v2",
+      "commit": "5ea5f519ff71ac3ac5ba2b32ffed5206ce3a1939",
+      "projects_present": [
+        "zongkong",
+        "sentinel",
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "deepseek/zk-client-v2",
+      "commit": "e3fbbe8cbb0d01754bd7d63adb3d4e01c2b7dc16",
+      "projects_present": [
+        "zongkong",
+        "sentinel",
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "deepseek/zk-training-ui",
+      "commit": "91f47655ffd0db4782d795d71ebd7c55a71a77b1",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek-autopilot",
+      "commit": "2ddbcc03a001fd04c187801eac1f0711c7c453a0",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek-autopilot-b",
+      "commit": "556572c598db6d5725dfcdc9956a9def163296c4",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek-mind",
+      "commit": "1eb514e98da96187674de99de8ef11760b22650b",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "tools",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "deepseek-moling",
+      "commit": "fc31b72a943f3ab20bd2244b641faf0bf81c3b84",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "moling",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "moling",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "deepseek-window",
+      "commit": "9c44f06cff7f5ed303e4574157ca802deb8d37a1",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "feature/companion-dual-mode-training",
+      "commit": "4185d1f781d049a23aae18ba42dfb6aa49e7b5e1",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "fix/ci-release-guard-20261024",
+      "commit": "50dd944d0a007bfcecfb60a0cb24bda9ca18c3ff",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "integration/tongzhuo-presence-focus-v1",
+      "commit": "a06ac65f91c84a835b8cab4a6e67e1fe45b16b25",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "mailuo-v4",
+      "commit": "2e390739ca233895d13bbd48cc054ab16b98b9c2",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "agent-bridge",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "partner-blueprint",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "pet-v15/codex-capabilities-v5",
+      "commit": "7124768104a423c9c1fe09e2ae4b23995eeefbbf",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": true
+    },
+    {
+      "branch": "pet-v15/codex-foundation-v3",
+      "commit": "cd49e160b1652fd10244006153f835c4a3f8acf5",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "pet-v15/codex-material-review-v4",
+      "commit": "b1e47e9fbf1824db2ab0d350f6fc37117aea25bb",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "pet-v15/deepseek-continuity-v2",
+      "commit": "9491f9b2508552bfaf50e6b5de28f1586f995503",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "pet-v15/deepseek-material-v3",
+      "commit": "7124768104a423c9c1fe09e2ae4b23995eeefbbf",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "pet-v15/execution-instructions",
+      "commit": "cbaad6b71520370079dc42dac65a77ccea41da06",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "pet-v15/harness-foundation",
+      "commit": "6bf5f58b2fd822aebc3e09390f49a274cec206bc",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "pet-v15/workbuddy-ui-copy-v3",
+      "commit": "70e72802f20da20f9c78de34082d84b863f2ab20",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "pet-v15/workbuddy-utils",
+      "commit": "fd036409202fb9ad756803bb3f17a783fdd736ce",
+      "projects_present": [
+        "tongzhuo",
+        "voice-assistant",
+        "agent-bridge",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".github",
+        "agent-bridge",
+        "companion-pet",
+        "companion-voice-assistant",
+        "design",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts"
+      ],
+      "sentinel_directory_checked": false
+    },
+    {
+      "branch": "zongkong-0.9-upgrade",
+      "commit": "10db1267bdf49104c6257225c396c4a3bce4bee4",
+      "projects_present": [
+        "zongkong",
+        "yishou",
+        "sp-assistant"
+      ],
+      "root_directories": [
+        ".claude",
+        ".github",
+        "dev",
+        "dist",
+        "docs",
+        "plugin",
+        "scripts",
+        "yishou-pc",
+        "yishou",
+        "zongkong-pc",
+        "zongkong"
+      ],
+      "sentinel_directory_checked": false
+    }
+  ]
+}
