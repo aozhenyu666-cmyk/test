@@ -367,22 +367,28 @@ object SentinelClient {
     }
 
     /**
-     * 旧调用点兼容：把「拦截状态」推给哨兵。
+     * 把心跳和现在的拦截状态写给哨兵（老口子 `com.zongkong.sentinel.link` 的 `state`）。
      *
-     * v2 里拦不拦由哨兵自己按策略判断，这里只触发一次 ping（不再传状态、不再接收
-     * `running` 之类的布尔）。[blocked] / [strict] / [freeUntil] 保留参数只为不改老调用方。
+     * 这条和健康判定无关：它是「总控掉线时哨兵替它拦哪些应用」的业务数据。
+     * v2 一度把它改成只 ping，结果哨兵拿不到拦截名单，总控掉线后娱乐应用不再被拦
+     * （模拟器冒烟 SENTINEL_LINKED / SENTINEL_TAKEOVER 失败）。这里恢复，同时顺带一次 v2 ping。
+     * [at] = 0 表示总控下线前说了一声（哨兵立刻接管）。
      */
-    fun push(
-        @Suppress("UNUSED_PARAMETER") c: Context,
-        @Suppress("UNUSED_PARAMETER") blocked: Set<String>,
-        @Suppress("UNUSED_PARAMETER") strict: Boolean,
-        @Suppress("UNUSED_PARAMETER") freeUntil: Long,
-        @Suppress("UNUSED_PARAMETER") at: Long = System.currentTimeMillis(),
-    ) {
+    fun push(c: Context, blocked: Set<String>, strict: Boolean, freeUntil: Long, at: Long = System.currentTimeMillis()) {
         val app = c.applicationContext
         exec.execute {
+            runCatching {
+                if (installed(app) && genuine(app)) {
+                    val r = app.contentResolver.call(LEGACY_URI, "state", null, Bundle().apply {
+                        putLong("at", at)
+                        putBoolean("strict", strict)
+                        putLong("freeUntil", freeUntil)
+                        putStringArray("blocked", blocked.toTypedArray())
+                    })
+                    if (r != null && !r.containsKey("error")) releasedUntilMs = r.getLong("releasedUntil", 0L)
+                }
+            }.onFailure { Log.w(TAG, "给哨兵写拦截状态失败", it) }
             runCatching { ping(app) }
-            runCatching { readLegacyRelease(app) }
         }
     }
 

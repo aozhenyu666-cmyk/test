@@ -6,7 +6,7 @@ on:
   push:
     paths:
       - "zongkong/**"
-      - "yishou/app/src/main/java/com/yishou/app/link/**"
+      - "yishou/**"
       - ".github/workflows/zongkong-android.yml"
   workflow_dispatch:
 
@@ -121,6 +121,8 @@ jobs:
   # https://github.com/aozhenyu666-cmyk/test/releases/download/zongkong-latest/zongkong-sentinel.apk
   release:
     needs: [build, smoke]
+    # 只从总控的发布分支发版；其他分支（集成、实验）测过也不覆盖手机上的下载地址
+    if: github.ref == 'refs/heads/ccr-cec40a0e-8hi98d'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -164,17 +164,15 @@ class GuardService : AccessibilityService() {
     private var lastSentinelWrite = 0L
 
     /**
-     * v2：和哨兵保持一次 v2 ping（最多 5 秒一次）。
-     *
-     * 注意这里**不再**把「总控在跑」当健康凭据推给哨兵 —— 那正是报告 §3.2 / §8 说的假在线。
-     * 健康由哨兵反过来发 `challenge`（[com.zongkong.app.healthwire.HealthWireProvider]），
-     * 只有真的在 a11y 主线程上处理完才算 ack。
+     * 给哨兵写心跳和现在的拦截状态（最多 5 秒一次），顺带一次 v2 ping。哨兵看到心跳停了就接管拦截。
+     * 健康不靠这条：健康由哨兵反过来发 `challenge`（[com.zongkong.app.healthwire.HealthWireProvider]）。
      */
-    private fun beatSentinel(now: Long) {
+    private fun beatSentinel(now: Long, status: () -> com.zongkong.core.Status) {
         if (now - lastSentinelWrite < 5_000) return
         lastSentinelWrite = now
-        // 状态已在本地生效；哨兵的拦截由它自己按策略判断，这里只做一次连通性 ping。
-        runCatching { com.zongkong.app.guard.SentinelClient.refresh(this) }
+        val c = store.config.value
+        val st = status()
+        runCatching { SentinelClient.push(this, c.blocked, st.strict, maxOf(c.pausedUntil, st.emergencyUntil ?: 0L), now) }
     }
 
     private fun onWindow(event: AccessibilityEvent?) {
@@ -182,7 +180,7 @@ class GuardService : AccessibilityService() {
         // v2：登记一个「真的处理过的窗口事件」，供哨兵判断事件通道是否失灵（T03）。
         runCatching { com.zongkong.app.healthwire.GuardHealth.noteWindowEvent() }
         val pkg = event.packageName?.toString() ?: return
-        beatSentinel(System.currentTimeMillis())
+        System.currentTimeMillis().let { t -> beatSentinel(t) { store.status(t) } }
         Log.d(TAG, "窗口切换：$pkg / ${event.className}")
         if (pkg in overlays()) return
         val now = System.currentTimeMillis()
@@ -296,7 +294,7 @@ class GuardService : AccessibilityService() {
         store.heartbeat = now
         if (interactive()) accountPlay(now) else fgSince = now
         val status = store.status(now)
-        beatSentinel(now)
+        beatSentinel(now) { status }
         // v2：本地规则兜底（哨兵失联且自己健康时，按本地规则有限锁屏一次）。
         runCatching { com.zongkong.app.healthwire.LocalGuardian.tick(this, now) }
         fgPkg?.let { if (status.strict) enforce(it, now) }

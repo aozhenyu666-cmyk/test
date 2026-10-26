@@ -225,9 +225,13 @@ object Sys {
      * 健康一律由 `:watch` 的 v2 挑战 ack 判定（见 `watch/HealthScheduler` 与 `HealthEvaluator`）。
      * 所以这里**故意返回 Unit**：调用方拿不到那个布尔，就不可能再拿它糊弄健康状态（T02）。
      *
-     * 同步调用，要在后台线程里做。
+     * 在后台线程里做（拦截页的按钮会直接调它）。
      */
     fun wakeMain(c: Context) {
+        Thread { wakeMainBlocking(c) }.start()
+    }
+
+    private fun wakeMainBlocking(c: Context) {
         try {
             c.contentResolver.call(android.net.Uri.parse(Proto.MAIN_WAKE_URI), Proto.WAKE, null, null)
         } catch (e: Throwable) {
@@ -235,12 +239,22 @@ object Sys {
         }
     }
 
-    /** 只为兼容保留的内部探测（不要用它判断健康，返回值仅表示「总控应答了这个老接口」）。 */
-    @Deprecated("不要用 running 布尔当健康凭据（规范 §8 / T02）；健康只看 v2 挑战 ack")
-    private fun oldV1GuardFlag(c: Context): Boolean = try {
-        c.contentResolver.call(android.net.Uri.parse(Proto.MAIN_WAKE_URI), Proto.WAKE, null, null)
-            ?.getBoolean("guard") == true
-    } catch (_: Throwable) {
+    /**
+     * 总控现在还在管着吗（只用来决定「哨兵要不要接管拦截」，不对外报健康）。
+     * 同步调用，要在后台线程里做。
+     *
+     * 新版总控回 v2 健康结论：无障碍关了 / 确认失联 / 没注册 → 不在；证据不足、恢复中、暂停 → 当它在
+     * （不冤枉它，心跳过期本来就是接管的前一道门）。老版总控没有 healthStatus，退回看 guard。
+     */
+    fun mainGuarding(c: Context): Boolean = try {
+        val r = c.contentResolver.call(android.net.Uri.parse(Proto.MAIN_WAKE_URI), Proto.WAKE, null, null)
+        when {
+            r == null || r.containsKey("error") -> false
+            r.containsKey("healthStatus") -> r.getString("healthStatus") !in setOf("DISABLED", "UNRESPONSIVE", "UNREGISTERED")
+            else -> r.getBoolean("guard")
+        }
+    } catch (e: Throwable) {
+        Log.w(TAG, "叫不应总控", e)
         false
     }
 
