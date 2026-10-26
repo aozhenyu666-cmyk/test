@@ -59,6 +59,12 @@ import cn.companion.pet.core.training.BreakCycleState
 import cn.companion.pet.core.training.BreakCycleStore
 import cn.companion.pet.core.training.CycleState
 import cn.companion.pet.core.training.SettleResult
+import cn.companion.pet.core.training.PlanContext
+import cn.companion.pet.core.training.PlanDecision
+import cn.companion.pet.core.training.PlanLedgerStore
+import cn.companion.pet.core.training.PlanOutcome
+import cn.companion.pet.core.training.PlanRecord
+import cn.companion.pet.core.training.TrainingPlanner
 import cn.companion.pet.core.training.MaterialQuestionBuilder
 import cn.companion.pet.core.training.MaterialQuestionPlan
 import cn.companion.pet.core.training.MaterialTraining
@@ -215,6 +221,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private val breakEngine = BreakCycleEngine()
     private val breakStore by lazy { BreakCycleStore(memory.root) }
     private var lastBreakTickAt = 0L
+    /** S1：到点主动出题。 */
+    private val planner = TrainingPlanner()
+    private val planStore by lazy { PlanLedgerStore(memory.root) }
+    private var lastPlanTickAt = 0L
     /** A13/A35：无障碍执行路径挑战（单调时钟）。 */
     private val execMonitor = cn.companion.pet.core.training.ExecutionPathMonitor()
     private var execWarned = false
@@ -307,6 +317,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         app.executionHealth = { execMonitor.snapshot(mono(), enforcingNow()).let { it.state.name + " · " + it.detail } }
         app.practiceStatus = { practiceStatusLine() }
         PerceptionHub.onHealthReceipt = { r -> runCatching { onHealthReceipt(r) } }
+        app.planStatus = { planner.describe(planStore.load(), java.time.ZoneId.systemDefault()) }
+        PlanAlarm.onFire = { runCatching { tickPlan(now(), force = true) } }
+        // 服务（重新）启动：排好下一次计划闹钟；错过的时间点由 tickPlan 补处理或记 MISSED。
+        runCatching { PlanAlarm.schedule(context, PlanAlarm.nextDue(context, now())) }
         active = isUserActive()
         if (active) onUserPresent()
         handler.post(ticker)
@@ -345,6 +359,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         app.executionHealth = null
         app.practiceStatus = null
         PerceptionHub.onHealthReceipt = null
+        app.planStatus = null
+        PlanAlarm.onFire = null
         runCatching { focusOverlay.hide() }
         handler.removeCallbacksAndMessages(null)
         voice.cancel()
@@ -380,6 +396,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     /** 解锁进入桌面（USER_PRESENT），或服务启动时已经是解锁状态。 */
     fun onUserPresent() {
         active = true
+        // 熄屏时到点只发了通知：一亮屏就真正出题。
+        handler.postDelayed({ runCatching { tickPlan(now(), force = true) } }, 1_500)
         Heartbeat.cancel(context)
         scheduler.onScreenOn(now())
         handler.removeCallbacks(agentTrigger)
@@ -410,6 +428,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // 题组换休息按日历时间推进（硬截止、休息到点），熄屏也要按时结束。
         runCatching { tickBreak(now) }
         runCatching { tickHealth(mono()) }
+        runCatching { tickPlan(now) }
         if (convo == null && life.tick(now)) overlay.setLife(life.state)
         // Gemini 会话期间：只守着会话，不主动搭话
         session?.let { handleSession(it, now); return }
@@ -2251,6 +2270,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 sessionArbiter.acquire(SessionKind.TRAINING, c.current.id)
                 training = c
                 trainingQuestion = r.question
+                // 材料题：从断点里的题目重建本机判分计划，重启后第一步仍能离线核对。
+                materialPlan = MaterialTraining.restorePlan(r.question)
                 trainingMode = r.session.interactionMode
                 trainingTimer.restore(mono(), c.current, r.question.stem.length)
                 if (c.current.state == cn.companion.pet.core.training.TrainingState.RECOVERY) {
@@ -2340,6 +2361,62 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             val i = android.content.Intent(context, cn.companion.pet.MainActivity::class.java)
             i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             context.startActivity(i)
+        }
+    }
+
+    // ---------- S1：到点主动出题 ----------
+
+    private fun tickPlan(now: Long, force: Boolean = false) {
+        if (!settings.trainingPlanEnabled) return
+        if (!force && now - lastPlanTickAt < 10_000) return
+        lastPlanTickAt = now
+        val ledger = planStore.load()
+        val slots = planner.slots(now, planner.parseTimes(settings.trainingPlanTimes), java.time.ZoneId.systemDefault())
+        val ctx = PlanContext(
+            now = now,
+            paused = settings.petPaused,
+            quiet = scheduler.isQuiet(now),
+            userActive = isUserActive(),
+            canShowOverlay = overlay.isPetShown,
+            trainingActive = training?.current?.active == true,
+            busyReason = when {
+                think?.strict != null -> "严格陪想进行中"
+                session != null -> "外部 AI 会话进行中"
+                think != null || noteDraft != null -> "你正在“想一想”"
+                convo != null -> "正在聊天"
+                skillsBusy() -> "技能在运行"
+                else -> null
+            },
+            since = settings.trainingPlanSince,
+        )
+        val prevAttempts = { id: String -> ledger.get(id)?.attempts ?: 0 }
+        when (val d = planner.decide(ledger, slots, ctx)) {
+            PlanDecision.None -> Unit
+            is PlanDecision.Record -> planStore.save(planner.record(ledger, d.record))
+            is PlanDecision.Notify -> {
+                val posted = PlanNotifier.post(context, "到点练一题了", "亮屏后同桌会接着出题。")
+                planStore.save(planner.record(ledger, PlanRecord(d.slot.slotId, d.slot.dueAt, now, d.delayMillis,
+                    if (posted) PlanOutcome.NOTIFIED else PlanOutcome.BLOCKED_BY_OS,
+                    d.reason + if (posted) "，已发通知" else "，通知也被关了", prevAttempts(d.slot.slotId) + 1)))
+            }
+            is PlanDecision.Start -> {
+                if (d.resumeExisting) resumeTraining() else openTraining()
+                // 以“题目气泡真的在屏幕上、训练真的在进行”为准，不以调用成功为准。
+                val shown = overlay.isBubbleShown && training?.current?.active == true
+                val outcome = when {
+                    !shown -> PlanOutcome.BLOCKED_BY_OS
+                    d.resumeExisting -> PlanOutcome.RESUMED
+                    else -> PlanOutcome.SHOWN
+                }
+                val reason = when {
+                    !shown -> "题目没能显示，两分钟后再试"
+                    d.delayMillis > 60_000 -> "比计划晚了 " + d.delayMillis / 1000 + " 秒（系统推迟或刚亮屏）"
+                    else -> ""
+                }
+                planStore.save(planner.record(ledger, PlanRecord(d.slot.slotId, d.slot.dueAt, now, d.delayMillis,
+                    outcome, reason, prevAttempts(d.slot.slotId) + 1)))
+                if (shown) PlanNotifier.cancel(context)
+            }
         }
     }
 

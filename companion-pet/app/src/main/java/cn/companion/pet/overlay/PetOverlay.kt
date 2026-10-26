@@ -54,6 +54,7 @@ class PetOverlay(
     private var animator: ValueAnimator? = null
 
     val isBubbleShown: Boolean get() = bubbleShown
+    val isPetShown: Boolean get() = petShown
 
     fun show() {
         if (petShown) return

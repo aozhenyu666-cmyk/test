@@ -23,7 +23,8 @@ object MaterialTraining {
     fun toQuestion(plan: MaterialQuestionPlan): TrainingQuestion = TrainingQuestion(
         id = plan.questionId,
         version = 1,
-        stem = plan.question + "\n\n材料：" + plan.span.text,
+        // 题干列出全部候选句（原文顺序），不单独贴出正确那句——否则恢复进度时等于直接给答案。
+        stem = plan.question + "\n\n材料：\n" + plan.allSpans.joinToString("\n") { "· " + it.text },
         sentences = plan.allSpans.map { it.text },
         premisePolicy = PremisePolicy.CLOSED,
         requiredSlots = listOf(SlotKind.LOCATE, SlotKind.CONNECT),
@@ -45,7 +46,9 @@ object MaterialTraining {
         val cue = plan.span.cue
         val said = transcript.trim()
         val pickedRight = selected.any { idx -> plan.allSpans.getOrNull(idx)?.index == plan.span.index }
-        val mentionedCue = said.contains(cue)
+        // 只说出线索词也算指认；但单字线索（如“都”）必须是很短的回答，避免“我都不知道”这类误判。
+        val refusing = REFUSALS.any { said.contains(it) }
+        val mentionedCue = !refusing && said.contains(cue) && (cue.length >= 2 || said.length <= 4)
         val mentionedText = said.length >= 6 && plan.span.text.contains(said)
         val pass = pickedRight || mentionedCue || mentionedText
         return EvaluationAdvice(
@@ -108,6 +111,38 @@ object MaterialTraining {
             return "这句像是没说完，能补完吗？"
         }
         return null
+    }
+
+    private val REFUSALS = listOf("不知道", "不会", "不懂", "不清楚", "没看懂")
+
+    /**
+     * 重启恢复：从断点里保存的题目重建判分计划，不依赖材料还在收件箱里。
+     *
+     * 只有能**唯一**确定正确句时才重建（新版出题保证干扰项不含线索词）；
+     * 旧版断点或被改过的题返回 null，交给模型核对，不硬猜。
+     */
+    fun restorePlan(q: TrainingQuestion): MaterialQuestionPlan? {
+        if (q.materialId.isBlank() || q.builtInSample) return null
+        val idx = Regex("-s(\\d+)$").find(q.id)?.groupValues?.get(1)?.toIntOrNull() ?: return null
+        val cue = q.rubricPoints.firstOrNull()?.let { Regex("「(.+?)」").find(it)?.groupValues?.get(1) } ?: return null
+        val candidates = q.sentences.withIndex().filter { it.value.contains(cue) }
+        if (candidates.size != 1) return null
+        val targetPos = candidates.single().index
+        val spans = q.sentences.mapIndexed { i, text ->
+            if (i == targetPos) EvidenceSpan(idx, text, cue) else EvidenceSpan(-(i + 1), text, "")
+        }
+        val question = q.stem.substringBefore("\n\n材料：")
+        if (question.isBlank() || !q.stem.contains(spans[targetPos].text)) return null
+        return MaterialQuestionPlan(
+            materialId = q.materialId,
+            materialVersion = q.materialVersion,
+            questionId = q.id,
+            question = question,
+            span = spans[targetPos],
+            allSpans = spans,
+            rubricPoints = q.rubricPoints,
+            nextStep = q.nextStep,
+        )
     }
 
     private val VAGUE = setOf(

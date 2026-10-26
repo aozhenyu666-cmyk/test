@@ -5,18 +5,44 @@ package cn.companion.pet.core.training
  *
  * 规则是确定性的，不用模型，也不假装“读懂了文章”：
  * 1. 把正文切成句子；
- * 2. 找出带范围词（任何人/所有/全部/都…）或因果词（所以/因此/因为…）的句子；
- * 3. 选第一句作为待指认的证据，其余作为干扰项；
- * 4. 让用户指出这句里的可核查特征，并给出一句依据。
+ * 2. 给每句打分：明确的全称范围词（任何人/所有/凡是…）> 强因果词（所以/因此…）> 带结论词的“都”；
+ *    单独一个“都”“说明”太常见，不算线索；
+ * 3. 选分最高的一句作为待指认的证据；
+ * 4. 干扰项只用**不含任何线索**的句子，保证“哪一句”只有一个正确答案；
+ * 5. 所有句子按原文顺序排列，正确句不总在第一个。
  *
  * 如果正文里找不到任何可核查线索，返回 null —— 宁可不问，也不编一道题。
  */
 object MaterialQuestionBuilder {
 
-    private val SCOPE_CUES = listOf("任何人", "所有人", "全部", "凡是", "都", "每一个", "一律")
-    private val CAUSE_CUES = listOf("所以", "因此", "由此", "可见", "说明", "证明了")
+    /** 明确的全称范围词：把结论推到所有人。 */
+    private val STRONG_SCOPE = listOf("任何人", "所有人", "每一个", "每个人", "人人", "凡是", "一律", "全部", "所有")
+    private val CAUSE_CUES = listOf("所以", "因此", "由此可见", "由此", "可见", "证明了")
+    /** “都”只有在下结论的句子里才算范围线索。 */
+    private const val WEAK_SCOPE = "都"
+    private val CONCLUSION_MARKERS = listOf("所以", "因此", "可见", "说明", "证明", "应该", "一定")
 
     private val SENTENCE_SPLIT = Regex("[。！？；\\n]+")
+
+    /** 句子是否带有任何线索（用来排除干扰项）。 */
+    private fun hasAnyCue(s: String): Boolean =
+        (STRONG_SCOPE + CAUSE_CUES).any { s.contains(it) } || s.contains(WEAK_SCOPE)
+
+    /** 返回 (分数, 命中的线索词)；0 分表示不能出题。 */
+    private fun score(s: String): Pair<Int, String> {
+        // 取句中最先出现的范围词；同一位置取更长的（“所有人”优先于“所有”）。
+        val strong = STRONG_SCOPE.filter { s.contains(it) }
+            .minWithOrNull(compareBy<String>({ s.indexOf(it) }, { -it.length }))
+        val concluding = CONCLUSION_MARKERS.any { s.contains(it) }
+        if (strong != null) return (if (concluding) 4 else 3) to strong
+        val cause = CAUSE_CUES.filter { s.contains(it) }
+            .minWithOrNull(compareBy<String>({ s.indexOf(it) }, { -it.length }))
+        if (cause != null) return 2 to cause
+        if (s.contains(WEAK_SCOPE) && concluding) return 1 to WEAK_SCOPE
+        return 0 to ""
+    }
+
+    fun isScopeCue(cue: String): Boolean = cue in STRONG_SCOPE || cue == WEAK_SCOPE
 
     fun build(material: BoundMaterial): MaterialQuestionPlan? {
         // 只有链接、没有正文：明确不能出理解题。
@@ -28,15 +54,19 @@ object MaterialQuestionBuilder {
             .filter { it.length in 8..120 }
         if (sentences.isEmpty()) return null
 
-        val spans = sentences.mapIndexedNotNull { idx, raw ->
-            val cue = (SCOPE_CUES + CAUSE_CUES).firstOrNull { raw.contains(it) } ?: return@mapIndexedNotNull null
-            EvidenceSpan(index = idx, text = raw, cue = cue)
-        }
-        if (spans.isEmpty()) return null
+        val scored = sentences.mapIndexed { idx, raw -> Triple(idx, raw, score(raw)) }
+        val best = scored.filter { it.third.first > 0 }.maxByOrNull { it.third.first } ?: return null
+        // 同分取最早的一句（maxBy 取第一个最大值）。
+        val target = EvidenceSpan(index = best.first, text = best.second, cue = best.third.second)
+        val isScope = isScopeCue(target.cue)
 
-        val target = spans.first()
-        val isScope = SCOPE_CUES.any { target.cue == it }
-        val others = spans.drop(1).take(2)
+        // 干扰项：不含任何线索的句子，取离目标最近的两句；按原文顺序排列。
+        val distractors = scored
+            .filter { it.first != target.index && !hasAnyCue(it.second) }
+            .sortedBy { kotlin.math.abs(it.first - target.index) }
+            .take(2)
+            .map { EvidenceSpan(index = it.first, text = it.second, cue = "") }
+        val all = (distractors + target).sortedBy { it.index }
 
         val question = if (isScope) {
             "材料里有一句把结论推到了很大的范围。请指出是哪一句，并说明它用了哪个范围词。"
@@ -69,7 +99,7 @@ object MaterialQuestionBuilder {
             questionId = "mat-" + material.bodyHash.take(8) + "-s" + target.index,
             question = question,
             span = target,
-            allSpans = listOf(target) + others,
+            allSpans = all,
             rubricPoints = rubric,
             nextStep = next,
         )

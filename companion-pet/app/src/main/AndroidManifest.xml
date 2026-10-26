@@ -119,6 +119,10 @@
         <receiver
             android:name=".service.Heartbeat$HeartbeatReceiver"
             android:exported="false" />
+
+        <receiver
+            android:name=".service.PlanAlarm$PlanReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

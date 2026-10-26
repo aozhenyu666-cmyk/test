@@ -40,6 +40,12 @@ class Settings(context: Context) {
     var focusPolicyType by str("focus_policy_type", "FIXED_FOCUS")
     /** 练习换休息时，一次兑换多少分钟。 */
     var restMinutes by int("rest_minutes", 10)
+    /** S1 训练计划：到点主动出一道题（默认关）。 */
+    var trainingPlanEnabled by bool("training_plan_enabled", false)
+    /** 计划时间点，逗号分隔，如 "08:30, 20:00"。 */
+    var trainingPlanTimes by str("training_plan_times", "20:30")
+    /** 计划开启/改动的时刻：之前的时间点不算错过。 */
+    var trainingPlanSince by long("training_plan_since", 0L)
     /** 练习换休息：攒满几道合格题换一次休息。 */
     var practiceQuestions by int("practice_questions", 5)
     /** 练习换休息：整轮的硬截止（分钟），到了就结束，不加题、不延长。 */

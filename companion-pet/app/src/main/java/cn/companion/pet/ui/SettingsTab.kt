@@ -163,7 +163,7 @@ private fun FocusDiagnostics() {
     } + listOfNotNull(
         app.executionHealth?.invoke()?.let { "拦截执行路径：" + it },
         app.practiceStatus?.invoke()?.let { "练习换休息：" + it },
-    )
+    ) + app.planStatus?.invoke().orEmpty().map { "训练计划：" + it }
     lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
     TextButton(onClick = { tick++ }) { Text("刷新") }
 }
@@ -454,6 +454,18 @@ private fun CompanionSettings(context: Context) {
 
     Section("陪练与专注策略")
     Text("开始陪练在桌宠菜单里：点桌宠 → 开始陪练。这里只设策略。", style = MaterialTheme.typography.bodySmall)
+    var planOn by remember { mutableStateOf(s.trainingPlanEnabled) }
+    Toggle("到点主动出题", "开：到下面的时间点，同桌不等你打开就出一道题；有没做完的题就接着它。熄屏时只发通知，亮屏后再出题。安静时段、暂停时不打扰。默认关。", planOn) {
+        planOn = it; s.trainingPlanEnabled = it; s.trainingPlanSince = System.currentTimeMillis()
+        cn.companion.pet.service.PlanAlarm.schedule(context, cn.companion.pet.service.PlanAlarm.nextDue(context, System.currentTimeMillis()))
+    }
+    if (planOn) {
+        var timesText by remember { mutableStateOf(s.trainingPlanTimes) }
+        OutlinedTextField(timesText, {
+            timesText = it; s.trainingPlanTimes = it; s.trainingPlanSince = System.currentTimeMillis()
+            cn.companion.pet.service.PlanAlarm.schedule(context, cn.companion.pet.service.PlanAlarm.nextDue(context, System.currentTimeMillis()))
+        }, label = { Text("时间点（逗号分隔，如 08:30, 20:00）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    }
     var materialAssist by remember { mutableStateOf(s.materialAssist) }
     Toggle("材料分享后可以主动问我", "开：你分享/导入材料后，同桌可以不等你开口，就材料里的一个具体依据主动问一句。关：只在你点“开始陪练”时才问。默认关。", materialAssist) {
         materialAssist = it; s.materialAssist = it
