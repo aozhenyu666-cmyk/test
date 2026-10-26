@@ -118,8 +118,20 @@ class MaterialOpportunityIntegrationTest {
         assertEquals(1, c.current.currentSlot)
         c.submit("样本只有十二个自由职业者，不能代表所有人", now = 4_000)
         val a2 = MaterialTraining.evaluateConnect(plan, c.current, "样本只有十二个自由职业者，不能代表所有人")!!
-        val done = c.acceptAdvice(a2, 5_000)
-        assertTrue(done is TrainingOutcome.Completed)
+        // 形式合规的本地判定带 uncertainty，因此**不会**被当作已完成：
+        // 这正是设计意图——本地只能验形式，语义正确性必须另外确认。
+        val strict = c.acceptAdvice(a2, 5_000)
+        assertTrue("形式合规不应直接完成整个回合", strict !is TrainingOutcome.Completed)
+        // 本地判定被拒后状态已回退到 WAITING_INPUT；重新提交并给出“已确认语义”的建议。
+        c.submit("样本只有十二个自由职业者，不能代表所有人", now = 5_100)
+        val fresh = a2.copy(
+            revision = c.current.revision,
+            requestId = c.current.pendingRequestId,
+            uncertainty = "",
+            evaluationSource = "MODEL_CONFIRMED",
+        )
+        val done = c.acceptAdvice(fresh, 5_500)
+        assertTrue("确认语义后才完成", done is TrainingOutcome.Completed)
         // 完成 → 用 sessionId 结算。
         c.current.opportunityId.let { id ->
             assertTrue(s.settleBySession(c.current.id, ResolutionState.VERIFIED_PROGRESS, 6_000))

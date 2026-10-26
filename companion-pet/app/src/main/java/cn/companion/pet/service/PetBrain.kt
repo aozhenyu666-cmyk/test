@@ -58,6 +58,14 @@ import cn.companion.pet.core.training.MaterialQuestionBuilder
 import cn.companion.pet.core.training.MaterialQuestionPlan
 import cn.companion.pet.core.training.MaterialTraining
 import cn.companion.pet.core.training.RecordResult
+import cn.companion.pet.core.training.ExtensionPolicy
+import cn.companion.pet.core.training.ExtensionResult
+import cn.companion.pet.core.training.ExtensionState
+import cn.companion.pet.core.training.InputDurationPolicy
+import cn.companion.pet.core.training.OutputArbiter
+import cn.companion.pet.core.training.OutputPriority
+import cn.companion.pet.core.training.SessionArbiter
+import cn.companion.pet.core.training.SessionKind
 import cn.companion.pet.core.training.DeliveryState
 import cn.companion.pet.core.training.Opportunity
 import cn.companion.pet.core.training.OpportunityArbiter
@@ -182,6 +190,19 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private val trainingStore by lazy { TrainingStore(memory.root) }
     private val opportunityStore by lazy { OpportunityStore(java.io.File(memory.root, "training/opportunity.json")) }
     private val opportunityArbiter = OpportunityArbiter()
+    /** S7：有限宽限与录音时长上限。 */
+    private val extensionPolicy = ExtensionPolicy()
+    private var extensionState = ExtensionState()
+    private val inputDuration = InputDurationPolicy()
+    /** 单一持有者仲裁：训练 / 严格陪想 / 外部 AI 同一时刻只能有一个。 */
+    private val sessionArbiter = SessionArbiter()
+    /**
+     * 输出仲裁：气泡与语音只允许一个当前所有者。
+     * 防止训练题目被闲聊盖掉、语音念一半被顶掉。
+     */
+    private val outputArbiter = OutputArbiter().apply {
+        onPreempted = { owner -> runCatching { persistTraining() } }
+    }
     /** 当前材料题的计划（引用位置、评分依据、下一步）；空表示这题不是材料题。 */
     private var materialPlan: MaterialQuestionPlan? = null
     private val restGrants by lazy { RestGrantStore(memory.root) }
@@ -965,6 +986,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     private fun present(decision: SceneDecision, reply: ProbeReply, opening: List<ChatMessage>, noEscalation: Boolean, topic: Topic? = null, inputVersion: String? = null, haptic: Boolean = true) {
+        // 温和搭话不能盖掉正在显示的题目或拦截提示。
+        if (!outputArbiter.acquire(OutputPriority.AMBIENT, "ambient-" + now())) return
         val now = now()
         scheduler.onSpoke(now)
         stats.add(Stats.Kind.SPOKE)
@@ -1355,6 +1378,12 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             if (existing.mode == mode && sessionPkg == pkg) return
             finishSession(existing.end(now).summary, announce = false)
         }
+        // 外部 AI 会话也要过仲裁：训练/严格陪想在进行时不抢。
+        val aiSessionId = "ai-" + now
+        sessionArbiter.acquire(SessionKind.EXTERNAL_AI, aiSessionId)?.let { reason ->
+            gemini.toast(reason)
+            return
+        }
         endConversation()
         endThink()
         sessionApp = target
@@ -1499,6 +1528,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     private fun finishSession(summary: SessionSummary, announce: Boolean) {
+        sessionArbiter.release(SessionKind.EXTERNAL_AI, force = true)
         session = null
         settings.sessionMode = ""
         overlay.setInSession(false)
@@ -1804,6 +1834,12 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private fun openTraining() {
         if (training?.current?.active == true) { resumeTraining(); return }
         endConversation()
+        val sessionId = java.util.UUID.randomUUID().toString()
+        // 单一持有者：训练 / 严格陪想 / 外部 AI 只能有一个。
+        sessionArbiter.acquire(SessionKind.TRAINING, sessionId)?.let { reason ->
+            overlay.showBubble(BubbleSpec(reason, textOnly = true))
+            return
+        }
         val answered = app.events.all()
             .filter { it.text.contains("训练完成") }
             .flatMap { Regex("q:([a-z0-9-]+)").findAll(it.text).map { m -> m.groupValues[1] }.toList() }
@@ -1811,7 +1847,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val q = BuiltInQuestions.pick(answered)
         trainingQuestion = q
         val c = TrainingController(TrainingSession(
-            id = java.util.UUID.randomUUID().toString(), interactionMode = trainingMode,
+            id = sessionId, interactionMode = trainingMode,
             createdAt = now(), updatedAt = now(),
         ))
         c.bind(q)
@@ -1900,10 +1936,24 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     ) {
         val now = now()
         endConversation()
+        val sessionId = java.util.UUID.randomUUID().toString()
+        // 主动机会也必须过同一把仲裁锁。
+        sessionArbiter.acquire(SessionKind.TRAINING, sessionId)?.let { reason ->
+            opportunityStore.record(key, Opportunity(
+                opportunityId = "opp-" + event.id,
+                source = OpportunitySource.MATERIAL_IMPORTED,
+                sourceEventId = event.id,
+                materialRef = material.materialId,
+                materialVersion = material.version,
+                observedAt = now,
+                delivery = DeliveryState.SUPPRESSED,
+                suppressionReason = reason,
+            ))
+            return
+        }
         val q = MaterialTraining.toQuestion(plan)
         trainingQuestion = q
         materialPlan = plan
-        val sessionId = java.util.UUID.randomUUID().toString()
         val oppId = "opp-" + event.id
         val c = TrainingController(TrainingSession(
             id = sessionId,
@@ -1987,6 +2037,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             }
         } + listOf(
             BubbleAction("打字") { overlay.openBubbleInput() },
+            BubbleAction("我在想") { requestExtension() },
             BubbleAction("我不会") { submitTrainingSupport() },
             BubbleAction("收起") { trainingTimer.pause(mono()); overlay.hideBubble(); persistTraining() },
             BubbleAction("结束本次") { endTraining() },
@@ -1995,7 +2046,45 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun showTrainingQuestion(q: cn.companion.pet.core.training.TrainingQuestion, ask: String) {
         val tag = if (q.builtInSample) "内置示例题 · " else ""
+        // 训练题目优先级高于闲聊：可以盖掉温和搭话，但盖不掉紧急与故障提示。
+        val owner = "training-" + (training?.current?.id?.take(8) ?: "none")
+        if (!outputArbiter.acquire(OutputPriority.TRAINING, owner)) return
         overlay.showBubble(BubbleSpec(tag + q.stem + "\n\n" + ask, instant = true, actions = trainingActions()))
+    }
+
+
+    /**
+     * S7：“我在想 / 还在读”请求有限宽限。
+     *
+     * 次数与累计时长由本地策略封顶；用完后给可执行提示，不无限刷新。
+     * 录音/STT/权限等真实故障走技术故障，不消耗额度。
+     */
+    private fun requestExtension() {
+        val c = training ?: return
+        val now = mono()
+        val (result, next) = extensionPolicy.request(extensionState, now, technicalBlock = false)
+        when (result) {
+            is ExtensionResult.Granted -> {
+                extensionState = next
+                // 延长：把计时基准推到新截止，不改变题目与槽位。
+                trainingTimer.restore(now, c.current)
+                persistTraining()
+                val secs = ((result.until - now) / 1000).coerceAtLeast(0)
+                val left = result.remainingTimes
+                val leftMin = (result.remainingMillis / 60_000.0)
+                overlay.showBubble(BubbleSpec(
+                    "好，再给你 " + secs + " 秒。" +
+                        (if (left > 0) "还能再延 " + left + " 次（共剩约 " + String.format("%.1f", leftMin) + " 分钟）。" else "这是最后一次延长了。"),
+                    instant = true,
+                    actions = trainingActions(),
+                ))
+            }
+            is ExtensionResult.Denied -> {
+                persistTraining()
+                overlay.showBubble(BubbleSpec(result.reason, instant = true, actions = trainingActions()))
+            }
+            ExtensionResult.Technical -> Unit
+        }
     }
 
     private fun submitTrainingSupport() {
@@ -2247,12 +2336,19 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             }
         }
         persistTraining() // 退出保留墓碑，迟到回调不能复活任务。
+        // 释放交互权，让严格陪想或外部 AI 可以开始。
+        training?.let {
+            sessionArbiter.release(SessionKind.TRAINING, it.current.id)
+            outputArbiter.release("training-" + it.current.id.take(8), force = true)
+        }
         probeJob?.cancel()
         training = null
         trainingQuestion = null
         materialPlan = null
         trainingTimer.disarm()
         enforcement.reset()
+        // 换会话/结束时清空宽限与录音计时。
+        extensionState = extensionPolicy.reset()
         overlay.hideBubble()
         overlay.setMood(Mood.IDLE)
     }
@@ -2269,6 +2365,12 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     /** 开启严格陪伴：把当前“想一想”升级成有期限、有验收的回合。 */
     private fun startStrict(flow: ThinkFlow) {
         val minutes = settings.strictMinutes.coerceIn(3, 60)
+        // 严格陪想与训练互斥：不能让旧严格回合和新训练器同时跑。
+        val strictId = "strict-" + now()
+        sessionArbiter.acquire(SessionKind.STRICT_THINK, strictId)?.let { reason ->
+            overlay.showBubble(BubbleSpec(reason, textOnly = true))
+            return
+        }
         val criteria = listOf("说清作者转折后强调的内容", "给出一句原文依据")
         val machine = StrictSessionMachine(
             StrictSessionState.new(now(), minutes, flow.source, flow.appName, criteria),
@@ -2339,6 +2441,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private fun strictAbort() {
         val flow = think ?: return
         val m = flow.strict ?: return
+        sessionArbiter.release(SessionKind.STRICT_THINK, force = true)
         val out = m.abort(now())
         if (out is StrictOutcome.Finished) {
             strictStore.save(m.state)
@@ -2376,6 +2479,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // 用户主动收起：作废这一回合，不留可在重启后复活的残留。
         think?.strict?.let { m ->
             if (m.state.active) strictStore.save(m.abort(now()).let { m.state })
+            sessionArbiter.release(SessionKind.STRICT_THINK, force = true)
         }
         think = null
         noteDraft = null
