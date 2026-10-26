@@ -4,3 +4,8 @@ local.properties
 .idea/
 *.iml
 .kotlin/
+
+# 实验/备份文件绝不入库（曾有 .bak 被误提交，把注入态当成修复）
+*.bak
+*.orig
+*.rej

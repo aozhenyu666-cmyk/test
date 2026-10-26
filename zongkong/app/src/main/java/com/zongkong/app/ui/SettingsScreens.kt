@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -94,11 +95,11 @@ fun SettingsScreen(nav: NavHostController) {
         MenuItem("线条动效", "潮汐、叶脉、矩阵、雷霆、漩涡、涟漪、年轮、流线、月相、星图、轨道", "gallery", nav)
 
         SectionLabel("运行")
-        MenuItem("权限与运行状态", if (PermissionStatus.accessibility(context)) "无障碍已开启" else "无障碍未开启——总控没在盯", "settings/perm", nav, warn = !PermissionStatus.accessibility(context))
+        MenuItem("权限与运行状态", if (PermissionStatus.accessibility(context)) "无障碍已开启 · ${PermissionStatus.healthText(context)}" else "无障碍未开启——总控没在盯", "settings/perm", nav, warn = !PermissionStatus.accessibility(context))
         MenuItem(
             "无障碍诊断",
-            if (PermissionStatus.guardRunning(context)) "服务在运行 · 失联和失效原因都记着，可导出"
-            else "服务没在运行——看看为什么，导出日志",
+            if (PermissionStatus.guardRunning(context)) "真实响应中 · 失联和失效原因都记着，可导出"
+            else "没有真实响应（${PermissionStatus.healthText(context)}）——看看为什么，导出日志",
             "settings/diag", nav, warn = !PermissionStatus.guardRunning(context),
         )
         MenuItem("今天的节律", "今日部署、收集、判断、一手训练、日终验收；严管与放行", "rhythm", nav)
@@ -316,6 +317,11 @@ fun RulesScreen(nav: NavHostController) {
             ) { Text("保存") }
 
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            // ---------- 紧急暂停（报告 §3.6）：与上面的「休假/正常提前结束监管」完全分开 ----------
+            SectionLabel("紧急暂停（立即停掉自动锁屏）")
+            EmergencyStopCard()
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
             SectionLabel("休假")
             if (config.pausedUntil > now) {
                 Text("休假到 ${java.time.Instant.ofEpochMilli(config.pausedUntil).atZone(store.zone).toLocalDateTime().toString().replace('T', ' ').take(16)}")
@@ -368,5 +374,59 @@ fun PendingScreen(nav: NavHostController) {
                 }
             }
         }
+    }
+}
+
+/**
+ * 紧急暂停卡片（报告 §3.6 / 规范 §6）。
+ *
+ * 和「正常提前结束监管」（冷静期 + 二次手写核验）**完全分开**，这是独立的一条出口：
+ *  - 本地可达：不依赖网络、不依赖模型、不等任何确认、立即生效；
+ *  - 只停「自动锁屏」，不改你的密码、不放宽拦截规则、不删你的规则；
+ *  - 上报哨兵失败时**明说**「哨兵未确认」，不谎称全部已停。
+ */
+@Composable
+private fun EmergencyStopCard() {
+    val context = LocalContext.current
+    val sig = LocalSignals.current
+    var reason by remember { mutableStateOf("") }
+    var msg by remember { mutableStateOf<String?>(null) }
+    val stopped = remember(msg) {
+        runCatching { com.zongkong.app.healthwire.LocalGuardian.store(context).emergencyStopped() }.getOrDefault(false)
+    }
+    Panel(accent = if (stopped) sig.warn else null, modifier = Modifier.testTag("emergency-stop")) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("紧急暂停", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            Tag(if (stopped) "已暂停" else "未使用", if (stopped) sig.warn else sig.muted)
+        }
+        Hint(
+            "立即停掉自己的自动锁屏。不需要写理由、不写够字数、不等冷静期、不经过模型——按下就生效。" +
+                "原因只是留个记录。",
+        )
+        OutlinedTextField(
+            value = reason,
+            onValueChange = { reason = it },
+            label = { Text("原因（可空）") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().testTag("emergency-reason"),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = {
+                    msg = com.zongkong.app.healthwire.LocalGuardian.emergencyStop(
+                        context,
+                        reason.ifBlank { "紧急暂停（未填原因）" },
+                    )
+                },
+                modifier = Modifier.testTag("emergency-go"),
+            ) { Text("立即暂停") }
+            if (stopped) {
+                OutlinedButton(onClick = {
+                    msg = com.zongkong.app.healthwire.LocalGuardian.resume(context)
+                }) { Text("恢复监管") }
+            }
+        }
+        Hint("这条和上面的「休假 / 正常提前结束监管」是两条独立通道，互不替代；休眠、断网时同样可用。")
+        msg?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = sig.muted) }
     }
 }

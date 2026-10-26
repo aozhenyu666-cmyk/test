@@ -41,10 +41,25 @@ import androidx.navigation.NavHostController
 import kotlinx.coroutines.launch
 import com.zongkong.app.guard.BlockActivity
 import com.zongkong.app.guard.GuardService
+import com.zongkong.app.guard.SentinelClient
+import com.zongkong.app.health.HealthStatus
+import com.zongkong.app.healthwire.GuardHealth
+import com.zongkong.app.healthwire.HealthLabels
+import com.zongkong.app.healthwire.LocalGuardian
+import com.zongkong.app.healthwire.LocalLockExecutor
 import com.zongkong.app.system.Notifications
 import com.zongkong.app.system.Usage
 import com.zongkong.app.zk
 
+/**
+ * 权限与运行状态的**事实读取**（报告 §6 / §10 / 规范 §7）。
+ *
+ * 一条铁律：宁可显示「未知」，也不要涂绿。
+ *   - 无障碍：系统设置里开没开 + 真实 dispatcherAck 是否新鲜（不是 `GuardService.running`）；
+ *   - 设备管理员：能不能独立 force-lock（没有就如实说「没有」并引导系统界面）；
+ *   - 安全锁屏：有没有设置（没设置时 lockNow 可能只是休眠，不得报成安全锁定）；
+ *   - 哨兵：区分「未接入 / 未知 / 无障碍未开启 / 在响应 / 失联」五种，不合并成一个绿点。
+ */
 object PermissionStatus {
     fun accessibility(context: Context): Boolean {
         val enabled = Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
@@ -53,9 +68,30 @@ object PermissionStatus {
         return enabled.split(':').any { ComponentName.unflattenFromString(it) == me }
     }
 
-    /** 无障碍开着，而且服务真的在跑（最近一分半有心跳）。 */
-    fun guardRunning(context: Context): Boolean =
-        GuardService.running || System.currentTimeMillis() - context.zk.store.heartbeat < 90_000
+    /**
+     * 无障碍「真的在干活」：只看真实 dispatcherAck + 事件进度（v2）。
+     *
+     * 以前这里是 `GuardService.running || 心跳 90 秒内` —— 那两条都会被「进程活着但执行线程
+     * 卡死」骗过（报告 §3.2）。现在统一走共享内核的 HealthEvaluator。
+     */
+    fun guardRunning(context: Context): Boolean = healthStatus(context) == HealthStatus.HEALTHY
+
+    /** 健康状态（给界面用）。读不到 → UNKNOWN，不猜。 */
+    fun healthStatus(context: Context): HealthStatus = try {
+        GuardHealth.init(context)
+        GuardHealth.verdict(GuardHealth.permissionEnabled(context)).status
+    } catch (_: Throwable) {
+        HealthStatus.UNKNOWN
+    }
+
+    /** 一句话：状态 + 原因（不涂绿）。 */
+    fun healthText(context: Context): String = try {
+        GuardHealth.init(context)
+        val v = GuardHealth.verdict(GuardHealth.permissionEnabled(context))
+        "${HealthLabels.status(v.status)}（${v.reason}）"
+    } catch (_: Throwable) {
+        "未知：读不到健康状态"
+    }
 
     fun notifications(context: Context) = Notifications.canPost(context)
 
@@ -69,13 +105,50 @@ object PermissionStatus {
     fun fullScreen(context: Context) =
         Build.VERSION.SDK_INT < 34 || context.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
 
-    /** 哨兵（独立应用）装了、开着、在跑。 */
-    fun sentinel(context: Context): Boolean = com.zongkong.app.guard.SentinelClient.healthy(context)
+    /** 哨兵（独立应用）**接口状态**：只有 RESPONDING 才算接上，其余一律不算绿。 */
+    fun sentinel(context: Context): Boolean = SentinelClient.healthy(context)
+
+    /** 哨兵的如实分类（未接入 / 未知 / DISABLED / 在响应 / 失联）。 */
+    fun sentinelLink(context: Context): SentinelClient.Link = SentinelClient.link(context)
+
+    fun sentinelText(context: Context): String = SentinelClient.describe(context)
+
+    /** 设备管理员（force-lock）——独立于无障碍的锁屏权限。 */
+    fun deviceAdmin(context: Context): LocalLockExecutor.AdminState = LocalLockExecutor.admin(context)
+
+    /** 有没有设置安全锁屏（PIN/图案/密码）。没设置时 lockNow 可能只是休眠。 */
+    fun secureLock(context: Context): Boolean = LocalLockExecutor.secureLockSet(context)
+
+    /** 本地规则有没有落盘 + 紧急暂停状态。 */
+    fun policyText(context: Context): String = try {
+        val s = LocalGuardian.store(context)
+        val now = System.currentTimeMillis()
+        val eff = s.effective(now)
+        val stopped = s.emergencyStopped()
+        when {
+            s.lastError.isNotBlank() -> "规则文件有问题：${s.lastError}"
+            stopped -> "已紧急暂停（本地立即生效）"
+            eff.isEmpty() -> "没有生效中的本地规则（版本 ${s.revision}）"
+            else -> "生效中 ${eff.size} 条（版本 ${s.revision}，最近到期 ${eff.maxOf { it.endsAtWall } - now} ms）"
+        }
+    } catch (_: Throwable) {
+        "读不到本地规则"
+    }
 
     /** 必需的权限里缺了哪些（首页顶上提示用）。 */
     fun missingCritical(context: Context): List<String> = buildList {
-        if (!accessibility(context)) add("无障碍服务") else if (!guardRunning(context)) add("无障碍服务（开着但没在运行）")
-        if (!sentinel(context)) add("哨兵（独立应用）")
+        if (!accessibility(context)) {
+            add("无障碍服务")
+        } else {
+            when (healthStatus(context)) {
+                HealthStatus.HEALTHY -> {}
+                HealthStatus.UNKNOWN -> add("无障碍（未知：还没有真实响应）")
+                HealthStatus.DISABLED -> add("无障碍（系统里被关掉了）")
+                else -> add("无障碍（开着但没有真实响应）")
+            }
+        }
+        if (!deviceAdmin(context).active) add("设备管理员（不能独立锁屏）")
+        if (!sentinel(context)) add("哨兵（${sentinelText(context)}）")
         if (!notifications(context)) add("通知")
         if (!exactAlarm(context)) add("准点闹钟")
         if (!fullScreen(context)) add("全屏通知")
@@ -90,6 +163,8 @@ private data class Perm(
     val ok: Boolean?,
     val intent: () -> Intent,
     val tag: String,
+    /** 自定义状态标签（不涂绿时用）。 */
+    val label: String? = null,
 )
 
 /**
@@ -108,29 +183,63 @@ fun PermissionsScreen(nav: NavHostController) {
 
     val required = remember(key) {
         val acc = PermissionStatus.accessibility(context)
-        val running = PermissionStatus.guardRunning(context)
+        val health = PermissionStatus.healthStatus(context)
+        val admin = PermissionStatus.deviceAdmin(context)
+        val sentinel = PermissionStatus.sentinelLink(context)
         listOf(
             Perm(
                 "无障碍服务",
                 "总控的眼睛和手：看前台是哪个应用（只读包名，不读屏幕内容和输入），严管时把娱乐应用弹回去，总控时间里锁住手机。" +
-                    (if (acc && !running) "\n开着但没在运行：系统把它停了。关掉再打开一次（下面的“自动修复”授权后就不用手动了）。" else "") +
+                    "\n现在：${PermissionStatus.healthText(context)}" +
+                    "\n“健康”只看真实执行线程有没有在响应挑战；进程活着但线程卡死，会如实显示“未知/失联”，不会涂绿。" +
                     "\n更新总控后、被清理后台后，系统有时会把它关掉——到点没进总控时间，多半是这个。",
                 "设置 → 快捷与辅助 → 无障碍 → 已安装的服务 → 总控（灰色点不开：先到 应用管理 → 总控 → 右上角 ⋮ → 允许受限制的设置）",
-                acc && running, { Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS) }, "perm-acc",
+                acc && health == HealthStatus.HEALTHY,
+                { Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS) },
+                "perm-acc",
+                label = when {
+                    !acc -> "未开启"
+                    health == HealthStatus.HEALTHY -> "已开启并真实响应"
+                    else -> HealthLabels.status(health)
+                },
+            ),
+            Perm(
+                "设备管理员（独立锁屏）",
+                "锁屏的首选通道：有它就调用系统 lockNow()，不依赖无障碍。" +
+                    "\n${admin.text}" +
+                    "\n没设置安全锁屏（PIN/图案/密码）时，lockNow 可能只是把屏幕熄灭——总控会把它记成“未验证”，不会报成安全锁定。" +
+                    "\n现在：${if (PermissionStatus.secureLock(context)) "已设置安全锁屏" else "没有设置安全锁屏（锁屏回执只能是“未验证”）"}",
+                "点下面的按钮 → 系统“设备管理员”界面 → 启用「总控」（随时可以在同一处撤销）",
+                admin.active,
+                { LocalLockExecutor.requestAdminIntent(context) },
+                "perm-admin",
+                label = if (admin.active) "已启用" else "未启用",
+            ),
+            Perm(
+                "安全锁屏（系统设置）",
+                "系统里有没有设 PIN / 图案 / 密码。没设的话，任何锁屏调用都可能是假锁；总控不会把它报成成功。",
+                "设置 → 安全 → 屏幕锁定（不同系统路径不同）",
+                PermissionStatus.secureLock(context),
+                { Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) },
+                "perm-secure",
+                label = if (PermissionStatus.secureLock(context)) "已设置" else "未设置",
             ),
             Perm(
                 "哨兵（独立应用「总控哨兵」）",
                 "总控的无障碍一被系统停掉（显示“此服务出现故障”），掉线的那段时间就什么都管不住。哨兵是另一个应用——单独安装、单独运行，" +
-                    "总控崩了、被清理、被强行停止都碰不到它：总控在跑时它什么都不做；总控掉了，它把拦截名单里的应用先关着（掉线不再等于畅玩），提醒你，并把总控叫回来。" +
-                    (com.zongkong.app.guard.SentinelClient.problem(context)?.let { "\n现在：$it。" } ?: ""),
-                if (!com.zongkong.app.guard.SentinelClient.installed(context)) "点“去开启”下载安装「总控哨兵」（和总控同一个发布页），装好后在 设置 → 快捷与辅助 → 无障碍 → 已安装的服务 → 总控哨兵 → 打开"
+                    "总控崩了、被清理、被强行停止都碰不到它。" +
+                    "\nv2 起：哨兵会反过来给总控发“挑战”，只有总控在无障碍执行线程上真处理完才算健康响应；" +
+                    "哨兵自己也会显示“未接入 / 未知 / 无障碍未开启 / 在响应 / 失联”，不会都涂绿。" +
+                    "\n现在：${PermissionStatus.sentinelText(context)}",
+                if (!SentinelClient.installed(context)) "点“去开启”下载安装「总控哨兵」（和总控同一个发布页），装好后在 设置 → 快捷与辅助 → 无障碍 → 已安装的服务 → 总控哨兵 → 打开"
                 else "设置 → 快捷与辅助 → 无障碍 → 已安装的服务 → 总控哨兵 → 打开（和「总控」是两个开关，都要开）。vivo：i管家 → 应用管理 → 总控哨兵 → 允许后台运行",
-                PermissionStatus.sentinel(context),
+                sentinel == SentinelClient.Link.RESPONDING,
                 {
-                    if (!com.zongkong.app.guard.SentinelClient.installed(context)) Intent(Intent.ACTION_VIEW, Uri.parse(com.zongkong.app.guard.SentinelClient.DOWNLOAD))
+                    if (!SentinelClient.installed(context)) Intent(Intent.ACTION_VIEW, Uri.parse(SentinelClient.DOWNLOAD))
                     else Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                 },
                 "perm-sentinel",
+                label = sentinel.label,
             ),
             Perm(
                 "通知",
@@ -188,8 +297,9 @@ fun PermissionsScreen(nav: NavHostController) {
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Panel(accent = if (missing == 0) sig.free else sig.strict, modifier = Modifier.testTag("perm-summary")) {
-                Text(if (missing == 0) "能查到的都开好了" else "还有 $missing 项没开", style = MaterialTheme.typography.titleMedium, color = if (missing == 0) sig.free else sig.strict)
+                Text(if (missing == 0) "能查到的都开好了" else "还有 $missing 项没开/没确认", style = MaterialTheme.typography.titleMedium, color = if (missing == 0) sig.free else sig.strict)
                 Hint("下面每一项都写了：干什么用、手机里在哪、点按钮直接跳过去。vivo 自己的 4 项系统查不到开没开，请照着路径确认一遍。")
+                Hint("“开着”不等于“在干活”：无障碍与哨兵都按真实响应判，证据不足会显示“未知”。")
             }
 
             SectionLabel("必需")
@@ -199,6 +309,7 @@ fun PermissionsScreen(nav: NavHostController) {
                     notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 } else safeStart(context, p.intent())
             } }
+            HealthV2Card(key)
             SelfHealCard(key) { key++ }
             SectionLabel("强烈建议")
             recommended.forEach { PermCard(it) { p -> safeStart(context, p.intent()) } }
@@ -231,8 +342,62 @@ fun PermissionsScreen(nav: NavHostController) {
 }
 
 /**
+ * v2 健康 / 规则 / 紧急暂停卡片。
+ *
+ * 三件用户真正需要知道的事：
+ *  1. 我自己的执行线程有没有在响应（真实 ack）；
+ *  2. 本地规则现在是什么状态、有没有生效；
+ *  3. 一键紧急暂停（本地立即生效，不依赖网络和模型）。
+ */
+@Composable
+private fun HealthV2Card(key: Int) {
+    val context = LocalContext.current
+    val sig = LocalSignals.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var msg by remember { mutableStateOf<String?>(null) }
+    var reason by remember { mutableStateOf("") }
+    val status = remember(key) { PermissionStatus.healthStatus(context) }
+    val green = HealthLabels.isGreen(status)
+    Panel(accent = if (green) null else sig.warn, modifier = Modifier.testTag("perm-health-v2")) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("健康协议 v2", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            Tag(HealthLabels.status(status), if (green) sig.free else sig.warn)
+        }
+        Hint("现在：${PermissionStatus.healthText(context)}")
+        Hint("本地规则：${PermissionStatus.policyText(context)}")
+        Hint(
+            "判定口径：只有哨兵的挑战被投到无障碍执行线程、在那里处理完再带回，才算一次真实响应。" +
+                "“进程还在”“provider 能回话”“以前是开着的”都不算。休眠唤醒后先重建观测，不会把漏掉的心跳全算成失败。",
+        )
+        androidx.compose.foundation.layout.Spacer(Modifier.padding(top = 2.dp))
+        Text("紧急暂停原因（可空）", style = MaterialTheme.typography.bodySmall, color = sig.muted)
+        androidx.compose.material3.OutlinedTextField(
+            value = reason,
+            onValueChange = { reason = it },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().testTag("perm-emergency-reason"),
+            placeholder = { Text("比如：现在在开车") },
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = {
+                    msg = LocalGuardian.emergencyStop(context, reason.ifBlank { "紧急暂停（未填原因）" })
+                },
+                modifier = Modifier.testTag("perm-emergency-stop"),
+            ) { Text("紧急暂停（立即生效）") }
+            OutlinedButton(onClick = { msg = LocalGuardian.resume(context) }) { Text("恢复监管") }
+            TextButton(onClick = { msg = PermissionStatus.policyText(context) }) { Text("刷新") }
+        }
+        Hint("紧急暂停只停“自动锁屏”，不需要写够字数、不等冷静期、不经过模型；和“正常提前结束监管”是两条独立通道。没收到哨兵确认时会如实写“哨兵未确认”。")
+        msg?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = sig.muted) }
+    }
+}
+
+/**
  * 无障碍“开着但没在运行”的自动修复：电脑上 adb 授权一次“写安全设置”，以后总控自己把服务重新挂上。
  * 没授权的话，常驻服务每 20 分钟大声提醒一次。
+ *
+ * v2 起口径变了：**重绑成功只等于「恢复请求已发出」**，要等新实例 + 真 ack 才算恢复。
  */
 @Composable
 private fun SelfHealCard(key: Int, refresh: () -> Unit) {
@@ -248,17 +413,18 @@ private fun SelfHealCard(key: Int, refresh: () -> Unit) {
             Tag(if (granted) "已授权" else "没授权", if (granted) sig.free else sig.warn)
         }
         Hint(
-            if (granted) "无障碍“开着但没在运行”时，总控每分钟检查一次，自己关掉再打开，不用你动手。"
+            if (granted) "无障碍不再响应时，总控会把服务从列表里拿掉再放回（写回前重新读取，保留其他已启用服务），最多两次；" +
+                "而且只记“恢复请求已发出”——要等新实例 + 真 ack 才算修好。"
             else "无障碍老是“开着但没在运行”、每次都要手动关开？在电脑上执行一次下面这条命令（手机开 USB 调试、连上电脑），以后总控自己修。" +
                 "不授权也行：总控会每 20 分钟大声提醒你一次，直到它重新跑起来。",
         )
-        // 哨兵装了：两条一起给（哨兵有了这个权限，总控掉线时它能自己把总控挂回去）
         val sentinelNeeds = remember(key) {
-            com.zongkong.app.guard.SentinelClient.installed(context) && com.zongkong.app.guard.SentinelClient.last?.canWrite != true
+            // 哨兵那边也要有这个权限，才能在同一条恢复链路上串行操作（跨进程文件锁）。
+            SentinelClient.installed(context) && !granted
         }
         val cmd = listOfNotNull(
             com.zongkong.app.system.SelfHeal.GRANT_COMMAND.takeIf { !granted },
-            com.zongkong.app.guard.SentinelClient.GRANT_COMMAND.takeIf { sentinelNeeds },
+            SentinelClient.GRANT_COMMAND.takeIf { sentinelNeeds },
         ).joinToString("\n")
         if (cmd.isNotEmpty()) {
             Text(cmd, style = MaterialTheme.typography.bodySmall.merge(Mono))
@@ -272,11 +438,12 @@ private fun SelfHealCard(key: Int, refresh: () -> Unit) {
         } else {
             OutlinedButton(onClick = {
                 scope.launch {
-                    msg = if (com.zongkong.app.system.SelfHeal.rebind(context)) "已经重新挂上，过几秒刷新看看" else "没成功"
-                    kotlinx.coroutines.delay(3_000)
+                    val sent = com.zongkong.app.system.SelfHeal.rebind(context)
+                    msg = if (sent) "恢复请求已发出。等新实例 + 真 ack 才算恢复（不是“已经修好”）" else "请求没发出去（权限或串行锁）"
+                    kotlinx.coroutines.delay(4_000)
                     refresh()
                 }
-            }) { Text("现在重新挂上无障碍服务") }
+            }) { Text("现在发一次恢复请求") }
         }
         msg?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = sig.muted) }
     }
@@ -286,9 +453,9 @@ private fun SelfHealCard(key: Int, refresh: () -> Unit) {
 private fun PermCard(p: Perm, onGo: (Perm) -> Unit) {
     val sig = LocalSignals.current
     val (label, color) = when (p.ok) {
-        true -> "已开启" to sig.free
-        false -> "未开启" to sig.strict
-        null -> "请确认" to sig.warn
+        true -> (p.label ?: "已开启") to sig.free
+        false -> (p.label ?: "未开启") to sig.strict
+        null -> (p.label ?: "请确认") to sig.warn
     }
     Panel(accent = if (p.ok == false) sig.strict else null, modifier = Modifier.testTag(p.tag)) {
         Row(verticalAlignment = Alignment.CenterVertically) {

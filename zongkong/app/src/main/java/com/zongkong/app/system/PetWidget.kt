@@ -42,7 +42,9 @@ class PetWidget : AppWidgetProvider() {
                 val cred = app.store.credibility()
                 val kind = PetView.kindOf(app.store.config.value.boss.petKind)
                 val v = RemoteViews(context.packageName, R.layout.widget_pet)
-                val online = GuardService.running
+                // v2：小部件只在「真实 ack 新鲜」时才画醒着（不再只看进程里的 running 布尔）。
+                val status = com.zongkong.app.healthwire.PermissionStatusBridge.status(context)
+                val online = status == com.zongkong.app.health.HealthStatus.HEALTHY
 
                 if (online) {
                     val last = app.chat.log.value.messages.lastOrNull { it.role == ChatMsg.ASSISTANT && it.content.isNotBlank() && !it.error && !it.hidden }?.content
@@ -57,7 +59,7 @@ class PetWidget : AppWidgetProvider() {
                     val diag = runCatching { Diag.summaryToday(context) }.getOrNull()
                     val lost = diag?.lostCount ?: 0
                     val why = buildString {
-                        append(Pet.offlineNote(context) ?: "我看不见了：无障碍没在运行。")
+                        append(Pet.offlineNote(context) ?: "我看不见了：无障碍执行线程没有响应。")
                         if (lost > 0) append("今天掉了 $lost 次。")
                         append("点我，去权限页重新打开。")
                     }
