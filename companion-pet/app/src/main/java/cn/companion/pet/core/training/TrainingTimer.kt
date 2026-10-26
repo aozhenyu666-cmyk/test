@@ -26,12 +26,15 @@ class TrainingTimer(
     private var pausedTotal = 0L
     private var stage = Stage.IDLE
     private var readBonus = 0L
+    /** “我在想”批准后的本阶段等待时长；0 表示用默认阈值。 */
+    private var extendedMillis = 0L
 
     val currentStage: Stage get() = stage
 
     /** 题目显示完成、可以开始回答时调用。[stemLength] 用于给长题加读题时间。 */
     fun arm(now: Long, stemLength: Int = 0) {
         armedAt = now
+        extendedMillis = 0
         pausedAt = null
         pausedTotal = 0
         stage = Stage.WAITING_FIRST
@@ -40,6 +43,7 @@ class TrainingTimer(
 
     fun disarm() {
         stage = Stage.IDLE
+        extendedMillis = 0
         armedAt = 0
         pausedAt = null
         pausedTotal = 0
@@ -67,7 +71,7 @@ class TrainingTimer(
         return (effectiveNow - armedAt - pausedTotal).coerceAtLeast(0)
     }
 
-    fun threshold(): Long = when (stage) {
+    fun threshold(): Long = if (extendedMillis > 0 && stage != Stage.IDLE && stage != Stage.RECOVERY) extendedMillis else when (stage) {
         Stage.WAITING_FIRST -> firstSilenceMillis + readBonus
         Stage.WAITING_AFTER_SCAFFOLD -> afterScaffoldMillis
         Stage.WAITING_AFTER_VOICE -> afterVoiceMillis
@@ -83,6 +87,7 @@ class TrainingTimer(
     /** 给出支架后进入下一阶段，重新开始计时。 */
     fun afterScaffold(now: Long) {
         armedAt = now
+        extendedMillis = 0
         pausedTotal = 0
         pausedAt = null
         readBonus = 0
@@ -92,10 +97,25 @@ class TrainingTimer(
     /** 语音提示过之后。 */
     fun afterVoice(now: Long) {
         armedAt = now
+        extendedMillis = 0
         pausedTotal = 0
         pausedAt = null
         readBonus = 0
         stage = Stage.WAITING_AFTER_VOICE
+    }
+
+    /**
+     * “我在想”获批：从现在起再等 [millis]，不换阶段、不清提示预算。
+     * 恢复中/未计时时不生效，返回 false。
+     */
+    fun extend(now: Long, millis: Long): Boolean {
+        if (stage == Stage.IDLE || stage == Stage.RECOVERY || millis <= 0) return false
+        armedAt = now
+        pausedAt = null
+        pausedTotal = 0
+        readBonus = 0
+        extendedMillis = millis
+        return true
     }
 
     /** 进入恢复：停止计时，不再催促。 */

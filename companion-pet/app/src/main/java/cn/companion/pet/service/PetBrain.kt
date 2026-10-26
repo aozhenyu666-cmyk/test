@@ -987,7 +987,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun present(decision: SceneDecision, reply: ProbeReply, opening: List<ChatMessage>, noEscalation: Boolean, topic: Topic? = null, inputVersion: String? = null, haptic: Boolean = true) {
         // 温和搭话不能盖掉正在显示的题目或拦截提示。
-        if (!outputArbiter.acquire(OutputPriority.AMBIENT, "ambient-" + now())) return
+        // 只检查不占用：占住又没人释放会让之后所有闲聊都被同级规则挡掉。
+        if (!outputArbiter.allows(OutputPriority.AMBIENT)) return
         val now = now()
         scheduler.onSpoke(now)
         stats.add(Stats.Kind.SPOKE)
@@ -1846,6 +1847,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             .toSet()
         val q = BuiltInQuestions.pick(answered)
         trainingQuestion = q
+        // 上一轮若是材料题，它的判分计划不能带进内置题。
+        materialPlan = null
         val c = TrainingController(TrainingSession(
             id = sessionId, interactionMode = trainingMode,
             createdAt = now(), updatedAt = now(),
@@ -1875,7 +1878,6 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val material = runCatching { app.materialInbox.all(now) }
             .getOrDefault(emptyList())
             .firstOrNull { it.sourceEventId == event.id }
-            ?: runCatching { app.materialInbox.all(now) }.getOrDefault(emptyList()).lastOrNull()
         val bound = material?.let { BoundMaterial.of(it) }
         // 从真实正文生成题；只有链接或没有可核查线索时返回 null，不硬造题。
         val plan = bound?.let { MaterialQuestionBuilder.build(it) }
@@ -2047,7 +2049,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private fun showTrainingQuestion(q: cn.companion.pet.core.training.TrainingQuestion, ask: String) {
         val tag = if (q.builtInSample) "内置示例题 · " else ""
         // 训练题目优先级高于闲聊：可以盖掉温和搭话，但盖不掉紧急与故障提示。
-        val owner = "training-" + (training?.current?.id?.take(8) ?: "none")
+        val owner = trainingOutputOwner(training?.current?.id ?: "none")
         if (!outputArbiter.acquire(OutputPriority.TRAINING, owner)) return
         overlay.showBubble(BubbleSpec(tag + q.stem + "\n\n" + ask, instant = true, actions = trainingActions()))
     }
@@ -2061,13 +2063,17 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
      */
     private fun requestExtension() {
         val c = training ?: return
+        if (!c.canExtend) return
         val now = mono()
-        val (result, next) = extensionPolicy.request(extensionState, now, technicalBlock = false)
+        // 额度以落盘的会话为准：重启后不能重新领。
+        val state = ExtensionState(c.current.extensionTimes, c.current.extensionMillis)
+        val (result, next) = extensionPolicy.request(state, now, technicalBlock = false)
         when (result) {
             is ExtensionResult.Granted -> {
                 extensionState = next
-                // 延长：把计时基准推到新截止，不改变题目与槽位。
-                trainingTimer.restore(now, c.current)
+                c.recordExtension(next.usedTimes, next.usedMillis, now())
+                // 延长：从现在起按批准的时长再等，不改变题目、槽位和提示预算。
+                trainingTimer.extend(now, result.until - now)
                 persistTraining()
                 val secs = ((result.until - now) / 1000).coerceAtLeast(0)
                 val left = result.remainingTimes
@@ -2120,12 +2126,19 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 SlotKind.CONNECT -> MaterialTraining.evaluateConnect(plan, snapshot, transcript)
                 else -> null
             }
-            if (advice != null) { handleTrainingAdvice(c, advice); return }
+            // 本地只能确认“形式合规”，语义必须交给模型核对；直接交给 acceptAdvice 会因
+            // uncertainty 被判技术故障，用户第二步就永远过不去。形式不合格的则本地直接退回。
+            val formOnlyPass = advice != null && advice.verdict == cn.companion.pet.core.training.Verdict.PASS &&
+                advice.evaluationSource == "LOCAL_FORM_ONLY"
+            if (advice != null && !formOnlyPass) { handleTrainingAdvice(c, advice); return }
         }
         OfflineTraining.evaluate(q, snapshot)?.let { handleTrainingAdvice(c, it); return }
         val key = apiKey()
         if (key == null || !app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
-            trainingTechnicalBlock(c, "模型这会儿用不了，回答已保存。可以重试；首道内置示例支持离线核验。")
+            val offlineText = if (plan != null && slot == SlotKind.CONNECT)
+                "形式上没问题，但这一步对不对需要联网核对，我不能自己放行。回答已保存，联网后点重试。"
+            else "模型这会儿用不了，回答已保存。可以重试；首道内置示例支持离线核验。"
+            trainingTechnicalBlock(c, offlineText)
             return
         }
         trainingTimer.pause(mono())
@@ -2170,6 +2183,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             logTrainingResult(c, completed = true)
             // 真实完成：按 sessionId 结算为“有推进”。
             resolveOpportunity(progress = true)
+            // 完成即释放交互权与输出权，否则“下一题”、严格陪想、外部 AI 都会被这把旧锁挡住。
+            releaseTrainingLocks(c)
         }
         if (!overlay.isBubbleShown) { trainingTimer.pause(mono()); return }
         when (out) {
@@ -2197,6 +2212,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             is TrainingStore.Restore.Resume -> {
                 val c = TrainingController(r.session)
                 c.bind(r.question) // 绑定材料，不重置已完成的槽位。
+                // 重启恢复也要重新占住交互权，否则严格陪想/外部 AI 能和恢复的训练并行。
+                sessionArbiter.acquire(SessionKind.TRAINING, c.current.id)
                 training = c
                 trainingQuestion = r.question
                 trainingMode = r.session.interactionMode
@@ -2326,6 +2343,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
     }
 
+    private fun trainingOutputOwner(id: String) = "training-" + id.take(8)
+
+    private fun releaseTrainingLocks(c: TrainingController) {
+        sessionArbiter.release(SessionKind.TRAINING, c.current.id)
+        outputArbiter.release(trainingOutputOwner(c.current.id))
+    }
+
     private fun endTraining() {
         training?.let {
             if (it.current.active) {
@@ -2337,10 +2361,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
         persistTraining() // 退出保留墓碑，迟到回调不能复活任务。
         // 释放交互权，让严格陪想或外部 AI 可以开始。
-        training?.let {
-            sessionArbiter.release(SessionKind.TRAINING, it.current.id)
-            outputArbiter.release("training-" + it.current.id.take(8), force = true)
-        }
+        training?.let { releaseTrainingLocks(it) }
         probeJob?.cancel()
         training = null
         trainingQuestion = null
@@ -2404,6 +2425,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             is StrictSessionStore.Restore.Resume -> {
                 val flow = ThinkFlow("", "恢复的回合", "")
                 flow.strict = StrictSessionMachine(r.state)
+                sessionArbiter.acquire(SessionKind.STRICT_THINK, "strict-restored-" + r.state.startedAt)
                 flow.waitSince = now()
                 flow.touchedAt = now()
                 think = flow
@@ -2457,6 +2479,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val tick = m.tick(now)
         if (tick is StrictOutcome.Finished) {
             strictStore.save(m.state)
+            // 自然到期/完成也要放锁：之后 endThink 看到 strict 已为空，不会再放。
+            sessionArbiter.release(SessionKind.STRICT_THINK, force = true)
             overlay.showBubble(BubbleSpec("这一回合结束：" + tick.summary, textOnly = true)) { handler.postDelayed({ endThink() }, 5000) }
             flow.strict = null
             return
@@ -2479,8 +2503,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // 用户主动收起：作废这一回合，不留可在重启后复活的残留。
         think?.strict?.let { m ->
             if (m.state.active) strictStore.save(m.abort(now()).let { m.state })
-            sessionArbiter.release(SessionKind.STRICT_THINK, force = true)
         }
+        // 只放严格陪想自己的锁（force 仍核对种类），不会误放训练/外部 AI。
+        sessionArbiter.release(SessionKind.STRICT_THINK, force = true)
         think = null
         noteDraft = null
         voice.cancel()

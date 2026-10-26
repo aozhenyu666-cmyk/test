@@ -54,15 +54,19 @@ class SessionArbiter {
     }
 
     /**
-     * 释放交互权。只有持有者（或显式强制）才能释放，避免误放别人的。
+     * 释放交互权。只有持有者才能释放，避免误放别人的。
+     * [force] 只跳过实例号核对，**仍然要求种类一致**：严格陪想收尾时 force 释放，
+     * 不能顺手把正在进行的训练或外部 AI 会话的锁也放掉。
+     * 只有 kind = NONE 且 force（恢复/诊断路径）才无条件清空。
      * 返回是否真的释放了。
      */
     @Synchronized
     fun release(kind: SessionKind, sessionId: String = "", force: Boolean = false): Boolean {
         if (holder == SessionKind.NONE) return false
-        if (!force) {
+        val wipeAll = force && kind == SessionKind.NONE
+        if (!wipeAll) {
             if (holder != kind) return false
-            if (sessionId.isNotEmpty() && holderId != sessionId) return false
+            if (!force && sessionId.isNotEmpty() && holderId != sessionId) return false
         }
         holder = SessionKind.NONE
         holderId = ""

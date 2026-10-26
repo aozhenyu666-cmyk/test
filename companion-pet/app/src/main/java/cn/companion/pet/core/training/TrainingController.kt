@@ -217,6 +217,16 @@ class TrainingController(private var session: TrainingSession) {
         return TrainingOutcome.Completed(summary())
     }
 
+    /** 记录一次已批准的“我在想”，额度随断点保存。 */
+    fun recordExtension(times: Int, millis: Long, now: Long) {
+        if (session.active) session = session.copy(extensionTimes = times, extensionMillis = millis,
+            updatedAt = now)
+    }
+
+    /** 只有题目正在等回答时才允许“我在想”；核验中、恢复中、已结束都不行。 */
+    val canExtend: Boolean get() = session.active &&
+        session.state in setOf(TrainingState.WAITING_INPUT, TrainingState.SCAFFOLDED)
+
     fun markFinalReminder(now: Long) {
         if (session.active) session = session.copy(remindersUsed = 2, updatedAt = now)
     }

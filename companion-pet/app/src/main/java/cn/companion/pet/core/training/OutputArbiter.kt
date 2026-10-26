@@ -69,6 +69,15 @@ class OutputArbiter {
         return false
     }
 
+    /**
+     * 只检查、不占用：温和搭话这类“一句话就走”的输出用它。
+     * 若用 acquire 占住又没人释放，之后所有闲聊都会被同级规则挡掉。
+     */
+    fun allows(priority: OutputPriority): Boolean {
+        val h = holder ?: return true
+        return priority.ordinal < h.ordinal
+    }
+
     /** 释放。只有持有者能释放，避免误放。 */
     @Synchronized
     fun release(ownerId: String, force: Boolean = false): Boolean {

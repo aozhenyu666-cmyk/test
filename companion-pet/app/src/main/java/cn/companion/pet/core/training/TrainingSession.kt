@@ -88,6 +88,9 @@ data class TrainingSession(
     val recoveryReason: String = "",
     val nextAction: String = "",
     val resumeTrigger: String = "",
+    /** S7 宽限额度随会话落盘：重启后不能重新领到“我在想”。 */
+    val extensionTimes: Int = 0,
+    val extensionMillis: Long = 0,
 ) {
     val active: Boolean get() = state !in TERMINAL
     val currentSlotKind: SlotKind? get() = requiredSlots.getOrNull(currentSlot)
