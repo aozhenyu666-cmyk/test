@@ -39,6 +39,12 @@ data class TrainingQuestion(
     val requiredSlots: List<SlotKind> = listOf(SlotKind.LOCATE, SlotKind.CONNECT),
     /** 是否内置示例（不是真实题库，必须在 UI 上标明）。 */
     val builtInSample: Boolean = true,
+    /** 来自绑定材料时：句子就是真实正文的原句。 */
+    val materialId: String = "",
+    val materialVersion: Int = 0,
+    /** 评分依据与下一步随题保存，恢复后仍可用。 */
+    val rubricPoints: List<String> = emptyList(),
+    val nextStep: String = "",
 )
 
 @Serializable
@@ -74,6 +80,11 @@ data class TrainingSession(
     val updatedAt: Long = 0,
     /** 有限提示预算随任务保存，恢复不能重新发一轮提示。 */
     val remindersUsed: Int = 0,
+    /** 绑定的材料与版本；空表示这题不来自材料（例如内置示例）。 */
+    val materialId: String = "",
+    val materialVersion: Int = 0,
+    /** 关联的机会 ID；结算按它对齐，不按列表顺序。 */
+    val opportunityId: String = "",
     val recoveryReason: String = "",
     val nextAction: String = "",
     val resumeTrigger: String = "",

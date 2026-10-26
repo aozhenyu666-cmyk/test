@@ -52,7 +52,12 @@ import cn.companion.pet.core.session.AssistantApp
 import cn.companion.pet.core.skim.SkimBuffer
 import cn.companion.pet.InputBridge
 import cn.companion.pet.core.training.OfflineTraining
+import cn.companion.pet.core.training.BoundMaterial
 import cn.companion.pet.core.training.BuiltInQuestions
+import cn.companion.pet.core.training.MaterialQuestionBuilder
+import cn.companion.pet.core.training.MaterialQuestionPlan
+import cn.companion.pet.core.training.MaterialTraining
+import cn.companion.pet.core.training.RecordResult
 import cn.companion.pet.core.training.DeliveryState
 import cn.companion.pet.core.training.Opportunity
 import cn.companion.pet.core.training.OpportunityArbiter
@@ -177,6 +182,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private val trainingStore by lazy { TrainingStore(memory.root) }
     private val opportunityStore by lazy { OpportunityStore(java.io.File(memory.root, "training/opportunity.json")) }
     private val opportunityArbiter = OpportunityArbiter()
+    /** 当前材料题的计划（引用位置、评分依据、下一步）；空表示这题不是材料题。 */
+    private var materialPlan: MaterialQuestionPlan? = null
     private val restGrants by lazy { RestGrantStore(memory.root) }
     private val trainingTimer = TrainingTimer()
     private val focusBridge by lazy { TrainingFocusBridge() }
@@ -1828,50 +1835,82 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val now = now()
         val key = "material:" + event.id
         if (opportunityStore.handled(key)) return
-        val materials = runCatching { app.materialInbox.all(now) }.getOrDefault(emptyList())
-        val latest = materials.lastOrNull()
+        // 严格按事件绑定的材料取，不取“最新一条”——否则连续导入两份会串题。
+        val material = runCatching { app.materialInbox.all(now) }
+            .getOrDefault(emptyList())
+            .firstOrNull { it.sourceEventId == event.id }
+            ?: runCatching { app.materialInbox.all(now) }.getOrDefault(emptyList()).lastOrNull()
+        val bound = material?.let { BoundMaterial.of(it) }
+        // 从真实正文生成题；只有链接或没有可核查线索时返回 null，不硬造题。
+        val plan = bound?.let { MaterialQuestionBuilder.build(it) }
+        val snapshot = opportunityStore.load()
         val decision = opportunityArbiter.decide(
             OpportunityContext(
                 now = now,
                 trainingActive = training?.current?.active == true,
                 focusActive = focusController.active,
                 allowInterrupt = active && !settings.petPaused && !scheduler.isQuiet(now) && isUserActive(),
-                materialFresh = latest != null,
+                materialFresh = bound != null,
                 alreadyHandled = false,
-                recentIneffective = opportunityStore.load().recentIneffective,
+                recentIneffective = snapshot.recentIneffective,
                 materialAssistAllowed = settings.materialAssist,
+                coolingDown = snapshot.cooldownUntil > now,
+                cooldownLeftMillis = (snapshot.cooldownUntil - now).coerceAtLeast(0),
+                materialHasBody = bound?.hasReadableBody == true,
             ),
         )
-        if (decision is OpportunityDecision.Suppress) {
+        val reason = when {
+            decision is OpportunityDecision.Suppress -> decision.reason
+            plan == null -> "材料里找不到可核查的句子，先不出题"
+            else -> ""
+        }
+        if (reason.isNotEmpty()) {
             // 抑制也留痕：便于之后回答“为什么没主动说话”。
-            opportunityStore.record(key, Opportunity(
+            val result = opportunityStore.record(key, Opportunity(
                 opportunityId = "opp-" + event.id,
                 source = OpportunitySource.MATERIAL_IMPORTED,
                 sourceEventId = event.id,
-                materialRef = latest?.id.orEmpty(),
+                materialRef = bound?.materialId.orEmpty(),
+                materialVersion = bound?.version ?: 0,
                 observedAt = now,
                 delivery = DeliveryState.SUPPRESSED,
-                suppressionReason = decision.reason,
+                suppressionReason = reason,
             ))
+            if (result is RecordResult.StorageFailed) {
+                // 存储失败必须可见，不能静默当成没有记录。
+                overlay.showBubble(BubbleSpec("机会记录没存下来：" + result.error + "（这次的主动提问暂停）", textOnly = true))
+            }
             return
         }
-        startMaterialTraining(latest, event, key, (decision as OpportunityDecision.Proceed).whyNow)
+        startMaterialTraining(bound!!, plan!!, event, key, (decision as OpportunityDecision.Proceed).whyNow)
     }
 
-    /** 用材料启动一次训练；问题来自本地题库，不依赖云端。 */
+    /**
+     * 用绑定的材料启动一次训练。
+     *
+     * 题目来自真实正文（[MaterialQuestionBuilder]），不是固定样例题。
+     * 展示成功才记 SHOWN；展示失败记 FAILED，并在气泡里明说。
+     */
     private fun startMaterialTraining(
-        material: cn.companion.pet.core.companion.SharedMaterial?,
+        material: BoundMaterial,
+        plan: MaterialQuestionPlan,
         event: CompanionEvent,
         key: String,
         whyNow: String,
     ) {
         val now = now()
         endConversation()
-        val q = BuiltInQuestions.SAMPLES.first()
+        val q = MaterialTraining.toQuestion(plan)
         trainingQuestion = q
+        materialPlan = plan
+        val sessionId = java.util.UUID.randomUUID().toString()
+        val oppId = "opp-" + event.id
         val c = TrainingController(TrainingSession(
-            id = java.util.UUID.randomUUID().toString(),
+            id = sessionId,
             interactionMode = InteractionMode.COACH,
+            materialId = material.materialId,
+            materialVersion = material.version,
+            opportunityId = oppId,
             createdAt = now, updatedAt = now,
         ))
         c.bind(q)
@@ -1879,37 +1918,61 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val out = c.present(now)
         persistTraining()
         trainingTimer.restore(mono(), c.current, q.stem.length)
-        val oppId = "opp-" + event.id
-        opportunityStore.record(key, Opportunity(
+        val recorded = opportunityStore.record(key, Opportunity(
             opportunityId = oppId,
             source = OpportunitySource.MATERIAL_IMPORTED,
             sourceEventId = event.id,
-            taskId = c.current.id,
-            materialRef = material?.id.orEmpty(),
+            taskId = sessionId,
+            sessionId = sessionId,
+            materialRef = material.materialId,
+            materialVersion = material.version,
             questionId = q.id,
             observedAt = now,
             whyNow = whyNow,
-            expectedOutcome = "指出材料里的一个具体依据",
-            delivery = DeliveryState.SHOWN,
+            expectedOutcome = plan.rubricPoints.firstOrNull().orEmpty(),
+            // 先记 PROPOSED；真显示了再改 SHOWN。
+            delivery = DeliveryState.PROPOSED,
         ))
-        if (out is TrainingOutcome.Present) {
-            val title = material?.title?.ifBlank { null } ?: material?.url ?: "你刚分享的材料"
+        if (recorded is RecordResult.StorageFailed) {
+            overlay.showBubble(BubbleSpec("机会记录没存下来：" + recorded.error, textOnly = true))
+        }
+        if (out !is TrainingOutcome.Present) {
+            opportunityStore.markDelivery(oppId, DeliveryState.FAILED)
+            return
+        }
+        // 材料证据等级必须在气泡里说清：摘录 ≠ 全文；只有链接不出题。
+        val title = material.title.ifBlank { material.url ?: "你刚分享的材料" }
+        val shown = runCatching {
             overlay.showBubble(BubbleSpec(
-                "你刚分享的「" + title + "」，先看这一处：\n\n" + q.stem + "\n\n" + out.ask,
+                "你刚分享的「" + title + "」（" + material.evidenceNote + "）\n\n" + plan.question + "\n\n" + out.ask,
                 instant = true,
                 actions = trainingActions(),
             ))
+        }.isSuccess
+        opportunityStore.markDelivery(oppId, if (shown) DeliveryState.SHOWN else DeliveryState.FAILED)
+        if (!shown) {
+            // 展示失败不能算成功，也不能静默。
+            opportunityStore.markResolution(oppId, ResolutionState.NO_PROGRESS)
         }
     }
 
-    /** 机会结算：训练完成/中止时更新机会结果，供降频与统计使用。 */
+    /**
+     * 机会结算：按 **sessionId → opportunityId** 对齐，不按列表顺序。
+     *
+     * 为什么不能用列表最后一条：抑制记录也会入列表，最后一条可能根本不是本次机会。
+     * 幂等：重复结算不会重复增加无效计数。
+     */
     private fun resolveOpportunity(progress: Boolean) {
-        val snap = opportunityStore.load()
-        val open = snap.opportunities.lastOrNull() ?: return
-        if (open.resolution != ResolutionState.UNANSWERED) return
-        opportunityStore.markResolution(
-            open.opportunityId,
-            if (progress) ResolutionState.VERIFIED_PROGRESS else ResolutionState.NO_PROGRESS,
+        val c = training ?: return
+        val sessionId = c.current.id
+        val oppId = c.current.opportunityId.ifBlank {
+            opportunityStore.findBySession(sessionId)?.opportunityId.orEmpty()
+        }
+        if (oppId.isBlank()) return
+        opportunityStore.settleBySession(
+            sessionId = sessionId,
+            resolution = if (progress) ResolutionState.VERIFIED_PROGRESS else ResolutionState.NO_PROGRESS,
+            now = now(),
         )
     }
 
@@ -1960,6 +2023,16 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         persistTraining() // 包括无网络时收到的答案。
         val snapshot = c.current
         val slot = snapshot.currentSlotKind ?: return
+        // 材料题优先用绑定材料的本地判分：依据真实原句，不靠模型自由发挥。
+        val plan = materialPlan
+        if (plan != null && plan.materialId == snapshot.materialId && plan.materialVersion == snapshot.materialVersion) {
+            val advice = when (slot) {
+                SlotKind.LOCATE -> MaterialTraining.evaluateLocate(plan, snapshot, selected, transcript)
+                SlotKind.CONNECT -> MaterialTraining.evaluateConnect(plan, snapshot, transcript)
+                else -> null
+            }
+            if (advice != null) { handleTrainingAdvice(c, advice); return }
+        }
         OfflineTraining.evaluate(q, snapshot)?.let { handleTrainingAdvice(c, it); return }
         val key = apiKey()
         if (key == null || !app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
@@ -2006,6 +2079,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         if (out is TrainingOutcome.Completed) {
             trainingTimer.disarm()
             logTrainingResult(c, completed = true)
+            // 真实完成：按 sessionId 结算为“有推进”。
+            resolveOpportunity(progress = true)
         }
         if (!overlay.isBubbleShown) { trainingTimer.pause(mono()); return }
         when (out) {
@@ -2164,12 +2239,18 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun endTraining() {
         training?.let {
-            if (it.current.active) { it.end(now()); logTrainingResult(it, completed = false) }
+            if (it.current.active) {
+                // 未完成就退出：按 sessionId 结算为“无推进”，不能算成功。
+                resolveOpportunity(progress = false)
+                it.end(now())
+                logTrainingResult(it, completed = false)
+            }
         }
         persistTraining() // 退出保留墓碑，迟到回调不能复活任务。
         probeJob?.cancel()
         training = null
         trainingQuestion = null
+        materialPlan = null
         trainingTimer.disarm()
         enforcement.reset()
         overlay.hideBubble()
