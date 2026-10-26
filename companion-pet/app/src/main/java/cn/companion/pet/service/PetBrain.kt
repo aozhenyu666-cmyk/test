@@ -225,6 +225,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private val planner = TrainingPlanner()
     private val planStore by lazy { PlanLedgerStore(memory.root) }
     private var lastPlanTickAt = 0L
+    /** 主动断点恢复。 */
+    private val resumePolicy = cn.companion.pet.core.training.ResumePolicy()
+    private var lastResumeTickAt = 0L
+    private var lastDeviationPkg = ""
+    private var lastDeviationAt = 0L
     /** A13/A35：无障碍执行路径挑战（单调时钟）。 */
     private val execMonitor = cn.companion.pet.core.training.ExecutionPathMonitor()
     private var execWarned = false
@@ -318,6 +323,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         app.practiceStatus = { practiceStatusLine() }
         PerceptionHub.onHealthReceipt = { r -> runCatching { onHealthReceipt(r) } }
         app.planStatus = { planner.describe(planStore.load(), java.time.ZoneId.systemDefault()) }
+        app.capabilityStatus = { capabilityLines() }
         PlanAlarm.onFire = { runCatching { tickPlan(now(), force = true) } }
         // 服务（重新）启动：排好下一次计划闹钟；错过的时间点由 tickPlan 补处理或记 MISSED。
         runCatching { PlanAlarm.schedule(context, PlanAlarm.nextDue(context, now())) }
@@ -360,6 +366,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         app.practiceStatus = null
         PerceptionHub.onHealthReceipt = null
         app.planStatus = null
+        app.capabilityStatus = null
         PlanAlarm.onFire = null
         runCatching { focusOverlay.hide() }
         handler.removeCallbacksAndMessages(null)
@@ -398,6 +405,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         active = true
         // 熄屏时到点只发了通知：一亮屏就真正出题。
         handler.postDelayed({ runCatching { tickPlan(now(), force = true) } }, 1_500)
+        // 计划没触发时，未完成的训练也会在亮屏后主动接上（有冷却和次数上限）。
+        handler.postDelayed({ runCatching { tickResume(now(), force = true) } }, 3_000)
         Heartbeat.cancel(context)
         scheduler.onScreenOn(now())
         handler.removeCallbacks(agentTrigger)
@@ -429,6 +438,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         runCatching { tickBreak(now) }
         runCatching { tickHealth(mono()) }
         runCatching { tickPlan(now) }
+        runCatching { tickResume(now) }
         if (convo == null && life.tick(now)) overlay.setLife(life.state)
         // Gemini 会话期间：只守着会话，不主动搭话
         session?.let { handleSession(it, now); return }
@@ -2098,12 +2108,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         )
     }
 
-    private fun showTrainingQuestion(q: cn.companion.pet.core.training.TrainingQuestion, ask: String) {
+    private fun showTrainingQuestion(q: cn.companion.pet.core.training.TrainingQuestion, ask: String, lead: String = "") {
         val tag = if (q.builtInSample) "内置示例题 · " else ""
         // 训练题目优先级高于闲聊：可以盖掉温和搭话，但盖不掉紧急与故障提示。
         val owner = trainingOutputOwner(training?.current?.id ?: "none")
         if (!outputArbiter.acquire(OutputPriority.TRAINING, owner)) return
-        overlay.showBubble(BubbleSpec(tag + q.stem + "\n\n" + ask, instant = true, actions = trainingActions()))
+        overlay.showBubble(BubbleSpec((if (lead.isBlank()) "" else lead + "\n\n") + tag + q.stem + "\n\n" + ask,
+            instant = true, actions = trainingActions()))
     }
 
 
@@ -2183,6 +2194,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             val formOnlyPass = advice != null && advice.verdict == cn.companion.pet.core.training.Verdict.PASS &&
                 advice.evaluationSource == "LOCAL_FORM_ONLY"
             if (advice != null && !formOnlyPass) { handleTrainingAdvice(c, advice); return }
+            // 形式合规：按本题要点让模型只做一次语义确认（来自 DeepSeek batch3 的 SemanticConfirm）。
+            if (formOnlyPass) { confirmSemantics(c, plan, snapshot, transcript); return }
         }
         OfflineTraining.evaluate(q, snapshot)?.let { handleTrainingAdvice(c, it); return }
         val key = apiKey()
@@ -2313,14 +2326,35 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
     }
 
-    private fun resumeTraining() {
+    private fun resumeTraining(lead: String = "") {
         val c = training ?: return
         if (!c.current.active) { showTrainingCompleted(c); return }
         val out = c.resume(now())
         if (out !is TrainingOutcome.Waiting) return
         persistTraining()
         trainingTimer.restore(mono(), c.current)
-        trainingQuestion?.let { showTrainingQuestion(it, out.ask) }
+        trainingQuestion?.let { showTrainingQuestion(it, out.ask, lead) }
+    }
+
+    /**
+     * 主动断点恢复：用户离开后，同桌自己回来接着原题原步骤问（有冷却和次数上限）。
+     * 每 15 秒评估一次；亮屏解锁时立即评估。
+     */
+    private fun tickResume(now: Long, force: Boolean = false) {
+        if (!force && now - lastResumeTickAt < 15_000) return
+        lastResumeTickAt = now
+        val c = training ?: return
+        if (!overlay.isPetShown) return
+        val busy = think != null || noteDraft != null || session != null || convo != null || skillsBusy() ||
+            restGrants.active(now) != null // 休息期内不追
+        val d = resumePolicy.decide(c.current, cn.companion.pet.core.training.ResumeContext(
+            now = now, userActive = isUserActive(), quiet = scheduler.isQuiet(now), paused = settings.petPaused,
+            busy = busy, bubbleShown = overlay.isBubbleShown,
+        ))
+        if (d !is cn.companion.pet.core.training.ResumeDecision.Resume) return
+        c.recordProactiveResume(now)
+        persistTraining()
+        resumeTraining(lead = d.lead)
     }
 
     private fun showTrainingCompleted(c: TrainingController) {
@@ -2348,6 +2382,14 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             allowedFocusPackages = allowedForSession(),
         )
         if (!d.shouldBlock) return
+        // 同一个应用 30 秒内反复触发：题目还在屏幕上就不重复弹、不重复朗读。
+        val t = now()
+        if (pkg == lastDeviationPkg && t - lastDeviationAt < 30_000 && overlay.isBubbleShown) return
+        lastDeviationPkg = pkg
+        lastDeviationAt = t
+        // 偏离时直接把**原题原步骤**带到当前屏幕上，可以就地作答；核验中等无法接续时才退回提示。
+        resumeTraining(lead = d.reason)
+        if (overlay.isBubbleShown && training?.current?.state == cn.companion.pet.core.training.TrainingState.WAITING_INPUT) return
         overlay.showBubble(BubbleSpec(d.reason, instant = true,
             actions = listOf(
                 BubbleAction("回到训练", highlighted = true) { resumeTraining() },
@@ -2362,6 +2404,57 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             context.startActivity(i)
         }
+    }
+
+    /**
+     * 材料题第二步的语义确认：本地只验形式，语义交给模型按本题要点确认一次。
+     * 没 Key / 没额度 / 超时 / 解析失败 → 保留答案、允许重试，不冒充通过；迟到结果按快照丢弃。
+     */
+    private fun confirmSemantics(
+        c: TrainingController,
+        plan: MaterialQuestionPlan,
+        snapshot: cn.companion.pet.core.training.TrainingSession,
+        transcript: String,
+    ) {
+        val key = apiKey()
+        if (key == null || !app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
+            trainingTechnicalBlock(c, "形式上没问题，但这一步对不对需要联网核对，我不能自己放行。回答已保存，联网后点重试。")
+            return
+        }
+        trainingTimer.pause(mono())
+        overlay.setMood(Mood.THINKING)
+        overlay.showBubble(BubbleSpec("我核对一下意思……", textOnly = true))
+        probeJob = scope.launch {
+            val messages = withContext(Dispatchers.IO) {
+                synchronized(app.memoryLock) {
+                    cn.companion.pet.core.training.SemanticConfirmPrompt.build(memory.persona(), plan, transcript)
+                }
+            }
+            stats.add(Stats.Kind.API_CALLS)
+            val r = app.client.complete(ChatRequest(settings.endpoint, settings.model, key, messages,
+                maxTokens = cn.companion.pet.core.training.SemanticConfirmPrompt.MAX_TOKENS,
+                timeoutMillis = cn.companion.pet.core.training.SemanticConfirmPrompt.TIMEOUT_MILLIS))
+            if (training !== c || c.current.revision != snapshot.revision ||
+                c.current.pendingRequestId != snapshot.pendingRequestId || !c.current.active) return@launch
+            val parsed = (r as? ChatResult.Success)?.let { cn.companion.pet.core.training.SemanticConfirmPrompt.parse(it.content) }
+            if (parsed == null) { trainingTechnicalBlock(c, "核对暂时失败，原答案和步骤已保留，可以重试。"); return@launch }
+            handleTrainingAdvice(c, cn.companion.pet.core.training.SemanticConfirmBridge.toAdvice(snapshot, plan, parsed))
+        }
+    }
+
+    /** 五层能力状态 + 能否声称“监管可靠”（诊断页显示）。 */
+    private fun capabilityLines(): List<String> {
+        val nowMono = mono()
+        val enforcing = enforcingNow()
+        val permission = runCatching { cn.companion.pet.ui.Permissions.accessibility(context) }.getOrDefault(false)
+        val connected = PerceptionHub.service != null
+        val healthy = execMonitor.healthy(nowMono, enforcing)
+        // 设备动作的“观察到效果”回执还没接（Shizuku/锁屏未做），所以这里如实是 null。
+        val lastAction: cn.companion.pet.core.training.ActionReceiptState? = null
+        val reliable = cn.companion.pet.core.training.CapabilitySummary.canClaimReliable(permission, connected, healthy, lastAction)
+        return cn.companion.pet.core.training.CapabilitySummary.summarize(permission, connected, healthy, lastAction)
+            .map { it.layer.name + " " + it.state.name + "：" + it.detail } +
+            ("能否声称监管可靠：" + if (reliable) "是" else "否（需要执行路径健康且最近一次拦截被观察确认生效）")
     }
 
     // ---------- S1：到点主动出题 ----------

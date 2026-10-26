@@ -91,6 +91,9 @@ data class TrainingSession(
     /** S7 宽限额度随会话落盘：重启后不能重新领到“我在想”。 */
     val extensionTimes: Int = 0,
     val extensionMillis: Long = 0,
+    /** 主动断点恢复：本会话已主动回来问过几次、最近一次的日历时间。随断点落盘。 */
+    val proactiveResumes: Int = 0,
+    val lastProactiveResumeAt: Long = 0,
 ) {
     val active: Boolean get() = state !in TERMINAL
     val currentSlotKind: SlotKind? get() = requiredSlots.getOrNull(currentSlot)

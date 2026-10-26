@@ -223,6 +223,12 @@ class TrainingController(private var session: TrainingSession) {
             updatedAt = now)
     }
 
+    /** 记一次主动接续（同桌自己回来问）。 */
+    fun recordProactiveResume(now: Long) {
+        if (session.active) session = session.copy(proactiveResumes = session.proactiveResumes + 1,
+            lastProactiveResumeAt = now, updatedAt = now)
+    }
+
     /** 只有题目正在等回答时才允许“我在想”；核验中、恢复中、已结束都不行。 */
     val canExtend: Boolean get() = session.active &&
         session.state in setOf(TrainingState.WAITING_INPUT, TrainingState.SCAFFOLDED)

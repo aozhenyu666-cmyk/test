@@ -163,7 +163,8 @@ private fun FocusDiagnostics() {
     } + listOfNotNull(
         app.executionHealth?.invoke()?.let { "拦截执行路径：" + it },
         app.practiceStatus?.invoke()?.let { "练习换休息：" + it },
-    ) + app.planStatus?.invoke().orEmpty().map { "训练计划：" + it }
+    ) + app.planStatus?.invoke().orEmpty().map { "训练计划：" + it } +
+        app.capabilityStatus?.invoke().orEmpty().map { "能力：" + it }
     lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
     TextButton(onClick = { tick++ }) { Text("刷新") }
 }

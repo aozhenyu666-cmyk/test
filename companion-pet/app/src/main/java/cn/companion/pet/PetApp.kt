@@ -183,6 +183,8 @@ class PetApp : Application() {
     @Volatile var practiceStatus: (() -> String)? = null
     /** 桌宠运行时注册：训练计划最近几次的真实结果。 */
     @Volatile var planStatus: (() -> List<String>)? = null
+    /** 桌宠运行时注册：五层能力状态与“能否声称监管可靠”。 */
+    @Volatile var capabilityStatus: (() -> List<String>)? = null
 
     /** 用户自己搭的技能（固定步骤，按元素回放）。 */
     val skillStore by lazy { cn.companion.pet.core.skill.SkillStore(java.io.File(filesDir, "memory")) }

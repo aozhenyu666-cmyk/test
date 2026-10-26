@@ -98,3 +98,41 @@
 
 - 真机：各 ROM 上闹钟被推迟多少、后台拉起是否被拒、通知权限被关时的表现，都只能真机测。
 - 保护情境只认本机能可靠判断的（暂停、安静时段、其他会话）；**通话、导航无法识别**，没有冒充能判断。
+
+---
+
+# 第四轮：合并 DeepSeek batch3 + 主动断点恢复 + 偏离带回原题（版本 39 / 0.7.9-r21-merged-resume-preview）
+
+## 重要：DeepSeek batch3 做在了旧分支上
+
+`deepseek/r21-proactive` 的 dd7fe60 / 1b0e0ab 接在 66ce3ca 后面，**不含本分支前三轮的任何改动**。
+所以它报告里“S1 没有”“6 道离线题”等判断，针对的是旧代码。本轮已把它合进 `ccr-f3b6cf6b-6gsh3f`：
+
+| DeepSeek batch3 的内容 | 处理 | 原因 |
+|---|---|---|
+| `SemanticConfirm`（按本题要点让模型只做一次语义确认） | **采纳**，接到材料题第二步 | 比本分支原来的“交给通用训练提示词”更贴题 |
+| 内置题加 rubricPoints / nextStep，新增 3 道模型判题 | 采纳 | 不冲突 |
+| `recordQuestionCredit` 题组结算 | 不采纳（保留 `BreakCycle`） | 进度只在内存（重启丢）、模型判的题也发凭据、选项说破不要求迁移题、发过一次后不再开新一轮 |
+| `runEquipmentChallenge` + 服务里的 `challengeResponder` | 不采纳（保留 `ExecutionPathMonitor`） | 回执不读活动窗口、永远 ok=true；每次挑战覆盖全局回调 |
+| `endConversation` 里释放 AMBIENT | 不需要 | 本分支闲聊已改为只检查不占用 |
+| `capabilityLines` / `canClaimReliable` 没进 UI | **补上** | 设置 → 诊断与诊断报告显示五层状态和“能否声称监管可靠”（设备效果回执未接，所以如实为“否”） |
+
+## 主动断点恢复（新）
+
+`core/training/ResumePolicy.kt`：用户离开后，同桌**自己回来**接着原题原步骤问。
+- 条件：亮屏解锁、非安静/暂停、没有别的会话、不在休息期、题目气泡没显示、不在核验中。
+- 两次之间至少 10 分钟；每个会话最多 3 次，第 3 次会说明“这是最后一次”，之后只在用户点开时继续（A29）。
+- 次数随会话落盘，重启不重置。亮屏 3 秒后评估一次，平时每 15 秒评估。
+
+## 偏离触发带回原题（新）
+
+训练中切到受限应用：原来只弹“先回到训练”，现在**直接把原题原步骤显示在当前屏幕上，可就地作答**；同一应用 30 秒内不重复弹、不重复朗读。
+
+## 验证
+
+- JVM：**644 tests / 0 failures**（含 DeepSeek 的 BuiltInQuestionsTest、QuestionSetSettlementTest、SemanticConfirmTest；新增 ResumePolicyTest 6）。
+- 完整 Android 构建：见 GitHub Actions。
+
+## 还没合的：`claude/companion-unify-v1`（08f4dbe）
+
+基于更老的 c5438a2，PetBrain 改了 688 行，很多点后来已用别的方式修过。逐条对照合并需要单独一轮，见给用户的说明。

@@ -73,6 +73,8 @@ object Diagnostics {
             runCatching { app.visionEvidence.last()?.label() }.getOrNull()?.let { append("上次看一眼：").append(it).append('\n') }
             runCatching { app.executionHealth?.invoke() }.getOrNull()?.let { append("拦截执行路径：").append(it).append('\n') }
             runCatching { app.practiceStatus?.invoke() }.getOrNull()?.let { append("练习换休息：").append(it).append('\n') }
+            runCatching { app.capabilityStatus?.invoke() }.getOrNull()?.forEach { append("能力：").append(it).append('\n') }
+            runCatching { app.planStatus?.invoke() }.getOrNull()?.forEach { append("训练计划：").append(it).append('\n') }
         }
         append("\n最近的进程退出（新的在前）：\n")
         val exits = recentExits(context, 8)
