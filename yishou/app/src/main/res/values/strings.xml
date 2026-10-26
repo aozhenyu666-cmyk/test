@@ -5,4 +5,5 @@
     <string name="wallpaper_label">一手局面壁纸</string>
     <string name="wallpaper_description">桌面背景是一张淡淡的棋盘，中间写着当前任务的下一问。也能让「一手」在后台更稳。</string>
     <string name="widget_description">当前任务和下一问，点一下应手</string>
+    <string name="admin_description">让「一手」在监管时段内能锁屏。只申请锁屏（force-lock）这一项能力，不读取、不设置、不重置你的锁屏密码，也不清除任何数据。随时可以在系统设置里停用。</string>
 </resources>

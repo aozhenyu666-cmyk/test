@@ -98,7 +98,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             refreshPartnerCloseNow()
             val zk = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                com.yishou.app.link.ZongkongClient.status(yishou, maxAgeMs = 0)
+                com.yishou.app.healthwire.ZongkongLink.fetchOnce(yishou)
             }
             _state.update { it.copy(loading = false, zongkong = zk) }
             if (inWindow) return@launch

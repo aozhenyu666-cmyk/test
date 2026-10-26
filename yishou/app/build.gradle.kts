@@ -13,8 +13,9 @@ android {
         applicationId = "com.yishou.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 22
-        versionName = "0.22.0"
+        // 0.23：在 0.22 上接回总控连接 + 健康协议 v2（哨兵挑战、本地规则、锁屏兜底）
+        versionCode = 23
+        versionName = "0.23.0"
     }
 
     signingConfigs {

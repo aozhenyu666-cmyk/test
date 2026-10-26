@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -43,6 +44,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yishou.app.MainActivity
+import com.yishou.app.healthwire.Facts
+import com.yishou.app.healthwire.LaunchTracker
 import com.yishou.app.round.AnswerRules
 import com.yishou.app.system.Attachment
 import com.yishou.app.ui.AnswerComposer
@@ -124,6 +127,12 @@ class GateActivity : ComponentActivity() {
         super.onResume()
         isShowing = true
         vm.refreshPartnerClose()
+        // T18：目标页自己报告「真的在前台」——这才是启动成功的证据（不是 startActivity 的返回值）。
+        LaunchTracker.claimAwaiting(
+            target = GateService.TARGET_GATE,
+            pkg = intent?.getStringExtra(EXTRA_PACKAGE).orEmpty(),
+            nowMono = SystemClock.elapsedRealtime(),
+        )?.let { Facts.onLaunch(LaunchTracker.VERIFIED_FOREGROUND, SystemClock.elapsedRealtime()) }
     }
 
     override fun onPause() {
