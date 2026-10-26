@@ -23,6 +23,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.yishou.app.link.ZongkongClient
 
 /**
  * 入口思考页的无障碍服务。
@@ -114,6 +116,8 @@ class GateService : AccessibilityService() {
             shortCheck?.cancel()
             shortPkg = null
         }
+        // 总控时间：总控在管整台手机，一手不插手
+        if (ZongkongClient.status(this)?.lockdown == true) return
         // 陪练窗口进行中：先按开局规则看这个应用能不能用（关注的应用另由下面的思考页处理）
         // 一手自己打开的相册、相机、屏幕授权：不拦（回到一手就收回许可）
         if (prefs.groupOf(pkg) == null && ExternalGrace.active(now)) return
@@ -135,6 +139,9 @@ class GateService : AccessibilityService() {
                 launchGate(pkg, group, now)
                 return@launch
             }
+            // 总控正在严管、会把这个应用弹回去：让总控处理，一手不再叠一层思考页
+            val zk = withContext(Dispatchers.IO) { ZongkongClient.status(this@GateService) }
+            if (zk?.bounces(pkg) == true) return@launch
             val pass = try {
                 app.database.dao().activePass(group, now)
             } catch (e: Exception) {

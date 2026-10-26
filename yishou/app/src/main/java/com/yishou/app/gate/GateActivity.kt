@@ -226,6 +226,22 @@ private fun GateScreen(
                 )
             }
 
+            // 总控的要求：为什么收紧、今天的主线
+            s.zongkong?.let { zk ->
+                if (!s.loading && (zk.note.isNotBlank() || zk.mainTitle.isNotBlank() || zk.passCap > 0 || zk.noOffline)) {
+                    Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)) {
+                        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            if (zk.note.isNotBlank()) Text(zk.note, style = MaterialTheme.typography.bodyMedium)
+                            if (zk.passCap > 0 || zk.noOffline) Text(
+                                (if (zk.passCap > 0) "总控限定：这一关最多放行 ${zk.passCap} 分钟" else "总控限定") + if (zk.noOffline) "，不能离线放行" else "",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            if (zk.mainTitle.isNotBlank()) Text("总控里今天的主线：${zk.mainTitle}", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+
             val passed = s.passMinutes
             val needsDelta = c.done && vm.needsDelta
             val echo = s.echo
@@ -238,6 +254,12 @@ private fun GateScreen(
                         context.startActivity(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, "partner"))
                     }, modifier = Modifier.fillMaxWidth()) { Text("回一手收线") }
                     OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("先回桌面") }
+                }
+                s.held -> {
+                    Text("这一手算数", style = MaterialTheme.typography.headlineSmall)
+                    Text("但总控的专注锁开着，现在不放行：" + (s.zongkong?.note?.takeIf { it.isNotBlank() } ?: "先回去做事"), style = MaterialTheme.typography.bodyLarge)
+                    Button(onClick = { com.yishou.app.link.ZongkongClient.open(context) }, modifier = Modifier.fillMaxWidth()) { Text("回总控") }
+                    OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("回到桌面") }
                 }
                 passed != null -> {
                     Text("放行 $passed 分钟", style = MaterialTheme.typography.headlineMedium)

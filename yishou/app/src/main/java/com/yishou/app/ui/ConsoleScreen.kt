@@ -66,6 +66,11 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import java.time.ZoneId
+import com.yishou.app.link.Partner
+import com.yishou.app.link.ZongkongClient
+import com.yishou.app.link.ZongkongStatus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 data class ConsoleState(
     val plan: TrainingPlan? = null,
@@ -143,6 +148,7 @@ fun ConsoleScreen(
                 item { TrainingCard(plan, prefs.setCards, inWindow, onOpenWindow, onOpenBoard) }
             }
             item { SkillPanel(cardHist) }
+            item { ZongkongPanel(resumeKey) }
             item {
                 Panel("开关") {
                     StatusRow("入口思考页", if (gateOn) "开着" else "没开，打开关注的应用不会拦", gateOn, onOpenPermissions)
@@ -306,6 +312,35 @@ private fun PositionCard(task: Task?, bp: Breakpoint?, onOpenBoard: () -> Unit, 
             Text("卡在：$it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         TextButton(onClick = { onEditTask(task.id) }) { Text("改任务或断点") }
+    }
+}
+
+/** 总控那边此刻的状态：严管没有、正在做哪一步。点开回总控。没装总控就不显示。 */
+@Composable
+private fun ZongkongPanel(resumeKey: Int) {
+    val context = LocalContext.current
+    val installed = remember(resumeKey) { Partner.installed(context) }
+    if (!installed) return
+    val zk by produceState<ZongkongStatus?>(null, resumeKey) {
+        value = withContext(Dispatchers.IO) { ZongkongClient.status(context, maxAgeMs = 0) }
+    }
+    val open = { ZongkongClient.open(context); Unit }
+    Panel("总控", onClick = open) {
+        val s = zk
+        if (s == null) {
+            StatusRow("连接", "连不上总控：把总控和一手都更新到最新版再试", false, open)
+        } else {
+            StatusRow("状态", if (s.strict) "严管中：${s.headline}" else "放行中", s.strict, open)
+            if (s.actionTitle.isNotBlank()) {
+                StatusRow(
+                    "当前一步",
+                    s.actionTitle + (if (s.step.isNotBlank()) "\n回来先：${s.step}" else ""),
+                    true,
+                    open,
+                )
+            }
+            if (s.gatesTotal > 0) StatusRow("今天的关卡", "交了 ${s.gatesDone} / ${s.gatesTotal}", s.gatesDone >= s.gatesTotal, open)
+        }
     }
 }
 

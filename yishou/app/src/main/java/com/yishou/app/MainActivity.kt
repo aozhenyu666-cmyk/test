@@ -46,9 +46,18 @@ import com.yishou.app.window.WindowActivity
 /** 主界面。底部两个页签：今天（时之轮和两个入口）和主控台；其余页面从这两处进入。 */
 class MainActivity : ComponentActivity() {
 
+    /** 总控打开一手时可以带 open=window：直接进陪练窗口。 */
+    private fun handleOpen(intent: Intent?) {
+        if (intent?.getStringExtra("open") == "window") {
+            intent.removeExtra("open")
+            startActivity(Intent(this, WindowActivity::class.java))
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         routeFrom(intent)
+        if (savedInstanceState == null) handleOpen(intent)
         setContent {
             YishouTheme {
                 val nav = rememberNavController()
@@ -254,6 +263,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         routeFrom(intent)
+        handleOpen(intent)
     }
 
     /** 长按图标的“急刹”、通知里的按钮：直接打开指定的那一页 */

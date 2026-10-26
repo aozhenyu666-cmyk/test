@@ -48,6 +48,10 @@ data class GateState(
     val endgame: com.yishou.app.data.Endgame? = null,
     /** 残局翻了底牌 */
     val endgameDone: Boolean = false,
+    /** 总控此刻的要求（没装总控或连不上为 null）。 */
+    val zongkong: com.yishou.app.link.ZongkongStatus? = null,
+    /** 这一手做完了，但总控专注锁开着，不放行。 */
+    val held: Boolean = false,
 ) {
     val isTest: Boolean get() = triggerPackage == null
 }
@@ -93,7 +97,10 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         lineSession.stop()
         viewModelScope.launch {
             refreshPartnerCloseNow()
-            _state.update { it.copy(loading = false) }
+            val zk = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.yishou.app.link.ZongkongClient.status(yishou, maxAgeMs = 0)
+            }
+            _state.update { it.copy(loading = false, zongkong = zk) }
             if (inWindow) return@launch
             pushEcho(pkg.orEmpty())
             // 残局：有到期的就下一局；没有就退成一张题卡（并在后台加工新的）
@@ -241,14 +248,21 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     fun passOffline() {
         val s = _state.value
         if (s.loading || s.partnerPending || s.isTest || s.inWindow || s.passMinutes != null || s.exit.isBlank()) return
+        if (s.zongkong?.noOffline == true) return
         viewModelScope.launch {
             if (offlineLeft() <= 0) return@launch
             grant(yishou.settings.app.value.offlinePassMinutes, DayStats.OFFLINE_PASS)
         }
     }
 
-    private fun grant(minutes: Int, event: String) {
+    private fun grant(base: Int, event: String) {
         val s = _state.value
+        // 总控专注锁开着：这一手算数，但不放行
+        if (s.zongkong?.hold == true) {
+            _state.update { it.copy(held = true) }
+            return
+        }
+        val minutes = s.zongkong?.capPass(base) ?: base
         viewModelScope.launch {
             yishou.engine.grantPass(s.group, minutes, null)
             yishou.stats.event(event)
@@ -260,6 +274,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun offlineLeft(): Int {
+        if (_state.value.zongkong?.noOffline == true) return 0
         val used = yishou.stats.day(java.time.LocalDate.now(AppZone.zone)).event(DayStats.OFFLINE_PASS)
         return (yishou.settings.app.value.offlineDailyLimit - used).coerceAtLeast(0)
     }
