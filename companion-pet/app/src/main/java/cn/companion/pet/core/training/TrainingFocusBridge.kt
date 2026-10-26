@@ -41,6 +41,10 @@ class TrainingFocusBridge(
         foregroundPackage: String?,
         ownPackage: String,
         allowedFocusPackages: Set<String> = emptySet(),
+        /** 开始训练时用户所在的 App；回到它不算离开（CL-T5）。 */
+        basePackage: String? = null,
+        /** 桌面：回桌面不算“逃到娱乐应用”（CL-T5）。 */
+        homePackages: Set<String> = emptySet(),
     ): FocusDecision {
         if (session == null || !session.active) {
             return FocusDecision(FocusVerdict.NOT_APPLICABLE, "没有进行中的训练", shouldBlock = false)
@@ -55,6 +59,14 @@ class TrainingFocusBridge(
         }
         if (pkg in allowedReadingPackages || pkg in allowedFocusPackages) {
             return FocusDecision(FocusVerdict.ALLOWED_READING, "允许的阅读/资料应用", shouldBlock = false)
+        }
+        // 回到开始训练时所在的应用：那是“正常回去”，不是逃到娱乐。
+        if (basePackage != null && pkg == basePackage) {
+            return FocusDecision(FocusVerdict.NOT_APPLICABLE, "回到了开始训练时的应用", shouldBlock = false)
+        }
+        // 桌面本身不算逃：用户在桌面选应用，不是刷娱乐。
+        if (pkg in homePackages) {
+            return FocusDecision(FocusVerdict.NOT_APPLICABLE, "在桌面", shouldBlock = false)
         }
         return FocusDecision(
             FocusVerdict.BLOCK_BACK_TO_TRAINING,

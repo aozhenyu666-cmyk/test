@@ -434,6 +434,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         runCatching { focusController.tick(interactive = active) }
         // 训练计时用单调时钟推进；熄屏/锁屏不催。
         runCatching { if (active) tickTraining(mono()) }
+        // 前台复核：训练未完成却在别的应用上，也要拦（不等下一次前台事件）。
+        runCatching {
+            if (training != null && active) {
+                val fg = PerceptionHub.activePackage() ?: PerceptionHub.trail.foreground
+                if (!fg.isNullOrBlank()) onTrainingForeground(fg)
+            }
+        }
         if (convo == null && life.tick(now)) overlay.setLife(life.state)
         // Gemini 会话期间：只守着会话，不主动搭话
         session?.let { handleSession(it, now); return }
@@ -1060,13 +1067,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     // ---------- 用户主动 ----------
 
     override fun onPetTapped() {
-        if (training != null) {
-            if (overlay.isBubbleShown) {
-                trainingTimer.pause(mono())
-                overlay.hideBubble()
-            } else resumeTraining()
-            return
-        }
+        // 受约束回合进行中：点桌宠给“当前回合菜单”，不是收起/作废（CL-T12）。
+        if (training != null) { showTrainingMenu(); return }
+        if (think?.strict?.state?.active == true) { showStrictPrompt(""); return }
         if (skillsBusy() && skills.onPetTapped()) return
         if (session != null) {
             if (overlay.isBubbleShown) hideSessionPrompt() else showSessionMenu()
@@ -1116,6 +1119,16 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private var listeningFromHold = false
     /** 当前录音开始的单调时刻；0 表示没在录。 */
     @Volatile private var recordingStartedAt = 0L
+    /** 上次切走时拦截层没显示的原因；有值就在训练菜单里如实说明。 */
+    @Volatile private var lastTrainingBlockError = ""
+    /** 开始训练时用户所在的应用；回到它不算离开（CL-T5）。 */
+    @Volatile private var trainingBase: String? = null
+    /** 拦截层拥有者：同一时刻只能有一个。 */
+    private enum class BlockOwner { NONE, TRAINING, FOCUS }
+    @Volatile private var blockOwner = BlockOwner.NONE
+    @Volatile private var trainingBlockPausedUntil = 0L
+    /** 休息许可到期的墙上时间；0 表示没有休息。休息期间不拦训练偏离。 */
+    @Volatile private var restUntilWall = 0L
     private var recordingCapRunnable: Runnable? = null
 
     /** 用系统语音识别：用户在设置里打开、且系统确实有识别服务和麦克风权限。默认走输入法话筒。 */
@@ -1926,6 +1939,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         ))
         c.bind(q)
         training = c
+        // 记录起点应用：回到它不算离开（CL-T5）。
+        trainingBase = (PerceptionHub.activePackage() ?: PerceptionHub.trail.foreground)
+            ?.takeUnless { it == context.packageName }
         // 每题独立：重置泄题标记与宽限额度。
         currentAnswerRevealed = false
         extensionState = extensionPolicy.reset()
@@ -2148,6 +2164,16 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         )
         if (granted == null) return
         questionSetState = questionSetState.copy(grantIssued = true, grantIssuedAt = now())
+        // 休息生效：到点前不拦训练偏离，到点把用户叫回来（U07）。
+        val mins = settings.restMinutes.coerceIn(1, 60)
+        restUntilWall = System.currentTimeMillis() + mins * 60_000L
+        handler.postDelayed({
+            restUntilWall = 0
+            if (training != null) showTrainingAsk("休息结束了，接着来一题。")
+            else if (training == null) {
+                // 训练已结束：休息也到此为止，不再打扰。
+            }
+        }, mins * 60_000L)
         // 券 ID 落盘：重启按它判重，不重复发、不重新计时。
         persistQuestionSet(grantId = snap.id + "-" + settings.restMinutes)
         overlay.showBubble(BubbleSpec(
@@ -2500,6 +2526,77 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
     }
 
+
+    // ---------- 训练回合的交互入口（移植自 Claude CL-T11/T12） ----------
+
+    /** 训练中点桌宠：给当前回合的菜单，不收起、不作废。 */
+    private fun showTrainingMenu() {
+        val c = training ?: return
+        val q = trainingQuestion ?: return
+        overlay.setMood(Mood.CURIOUS)
+        val actions = mutableListOf(
+            BubbleAction("接着答", highlighted = true) { showTrainingAsk() },
+            BubbleAction("我不会") { submitTrainingSupport() },
+        )
+        if (systemVoice) actions += BubbleAction("说一句") { trainingVoice() }
+        actions += BubbleAction("打字") { overlay.openBubbleInput() }
+        actions += BubbleAction("结束训练") { endTraining() }
+        val note = if (lastTrainingBlockError.isNotBlank())
+            "\n（上次切走时拦截层没显示出来：" + lastTrainingBlockError + "）" else ""
+        overlay.showBubble(BubbleSpec(
+            "正在陪练（" + q.id + "）。" + c.summary() + note,
+            instant = true, actions = actions,
+        ))
+    }
+
+    /**
+     * 重显当前这一步。点桌宠、亮屏、拦截后回来、出错后都走这里。
+     *
+     * 关键：不要新建会话、不要重置槽位，只把“现在该答什么”重新显示出来。
+     */
+    private fun showTrainingAsk(prefix: String = "") {
+        val c = training ?: return
+        val q = trainingQuestion ?: return
+        if (c.current.state == cn.companion.pet.core.training.TrainingState.EVALUATING) {
+            overlay.showBubble(BubbleSpec("我在核对你刚才那句……", textOnly = true))
+            return
+        }
+        val slot = c.current.currentSlotKind ?: SlotKind.LOCATE
+        val ask = OfflineTraining.ask(q, slot)
+            ?: when (slot) {
+                SlotKind.LOCATE -> "请指出材料里那句把结论推得太满的话。"
+                SlotKind.CONNECT -> "只补一件事：这一句凭什么还不能支持那个结论？"
+                SlotKind.EXAMINE -> "举一个材料没覆盖的情况。"
+            }
+        val head = if (prefix.isBlank()) "" else prefix + "\n"
+        val tag = if (q.builtInSample) "内置示例题 · " else ""
+        overlay.setMood(Mood.CURIOUS)
+        // 重显也要占输出权，避免被闲聊盖掉。
+        val owner = "training-" + c.current.id.take(8)
+        if (!outputArbiter.acquire(OutputPriority.TRAINING, owner)) return
+        overlay.showBubble(BubbleSpec(head + tag + q.stem + "\n\n" + ask, instant = true, actions = trainingActions()))
+    }
+
+    /** 训练中用语音回答：录音期间暂停计时，结果直接进训练核验。 */
+    private fun trainingVoice() {
+        val c = training ?: return
+        trainingTimer.pause(mono())
+        overlay.setListening(true)
+        overlay.updateBubbleText("在听……说完停一下就好")
+        recordingStartedAt = mono()
+        voice.start { text ->
+            overlay.setListening(false)
+            recordingStartedAt = 0
+            trainingTimer.resume(mono())
+            val said = text?.trim().orEmpty()
+            if (said.isEmpty()) {
+                showTrainingAsk("没听清。可以再说一次，或者点“打字”。")
+            } else {
+                submitTraining(said, emptyList(), "voice", AssistanceLevel.INDEPENDENT)
+            }
+        }
+    }
+
     private fun submitTrainingSupport() {
         val c = training ?: return
         // 看过支架就算获得实质提示：这一题不再能算独立掌握。
@@ -2728,26 +2825,90 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         openTraining()
     }
 
-    /** 前台确认后调用：训练未完成却去了娱乐 App → 拦截回训练。 */
+    /**
+     * 前台确认后调用：训练未完成却去了别的应用 → 用**共用的全屏拦截层**拦回（CL-T5/T6）。
+     *
+     * 与 Claude 实现的三点差异（有意保留我自己更保守的部分）：
+     * - 守护（Focus 契约）正在跑时让位：同一时刻只有一个拦截拥有者；
+     * - 训练本身不产生设备授权：只在“有未到期专注契约”或用户显式开了严格陪练时拦；
+     * - 显示失败必须如实说明，不能假装拦住了。
+     */
     private fun onTrainingForeground(pkg: String) {
         val c = training ?: return
-        // 训练进度不产生设备授权；设备限制仍由 FocusController 的有期限契约负责。
-        val focus = focusController.snapshot ?: return
-        if (!focus.active || now() >= focus.contract.expiresAt ||
-            focus.state == cn.companion.pet.core.focus.FocusState.PAUSED) return
+        // 守护在跑：拦截交给守护，训练不叠加第二层。
+        if (focusController.active) return
+        if (pkg.isBlank() || pkg == context.packageName) return
+        if (mono() < trainingBlockPausedUntil) return
+        // 休息许可生效期间不拦：这是练完换来的时间（U07）。
+        if (restUntilWall > 0 && System.currentTimeMillis() < restUntilWall) return
         val d = focusBridge.decide(
             session = c.current,
             foregroundPackage = pkg,
             ownPackage = context.packageName,
             allowedFocusPackages = allowedForSession(),
+            basePackage = trainingBase,
+            homePackages = launchers,
         )
-        if (!d.shouldBlock) return
-        overlay.showBubble(BubbleSpec(d.reason, instant = true,
-            actions = listOf(
-                BubbleAction("回到训练", highlighted = true) { resumeTraining() },
-                BubbleAction("×") { endTraining() },
-            ),
-        ))
+        if (!d.shouldBlock) {
+            // 自己回来了：撤下训练的拦截层。
+            if (blockOwner == BlockOwner.TRAINING) runCatching { focusOverlay.hide() }
+            return
+        }
+        blockOwner = BlockOwner.TRAINING
+        val slot = c.current.currentSlotKind
+        val ask = trainingQuestion?.let { q -> slot?.let { OfflineTraining.ask(q, it) } }.orEmpty()
+        val reason = "现在是「" + label(pkg) + "」。" + d.reason + if (ask.isNotBlank()) "\n\n当前这一步：" + ask else ""
+        val r = runCatching { focusOverlay.show("训练", reason) }
+            .getOrElse { cn.companion.pet.core.focus.OverlayResult(false, it.javaClass.simpleName) }
+        lastTrainingBlockError = if (r.shown) "" else r.reason
+        if (!r.shown) {
+            // 全屏层显示不了（没无障碍/悬浮窗）：退到气泡并如实说明。
+            overlay.showBubble(BubbleSpec(
+                d.reason + "\n（拦截层没显示出来：" + r.reason + "）",
+                instant = true,
+                actions = listOf(
+                    BubbleAction("回去接着练", highlighted = true) { trainingBlockReturn() },
+                    BubbleAction("歇 5 分钟") { trainingBlockPause() },
+                    BubbleAction("结束训练") { trainingBlockEnd() },
+                ),
+            ))
+        }
+    }
+
+    /** 从拦截层回训练：回到训练起点应用，再重显这一步（不是开主界面）。 */
+    private fun trainingBlockReturn() {
+        runCatching { focusOverlay.hide() }
+        blockOwner = BlockOwner.NONE
+        val base = trainingBase
+        val launched = base != null &&
+            runCatching { gemini.launch(base, adjacent = false) == GeminiLauncher.Outcome.LAUNCHED }.getOrDefault(false)
+        if (!launched) runCatching {
+            context.startActivity(
+                android.content.Intent(android.content.Intent.ACTION_MAIN)
+                    .addCategory(android.content.Intent.CATEGORY_HOME)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+        showTrainingAsk("回来了，接着这一步。")
+    }
+
+    /** 拦截层“歇 5 分钟”：暂停拦截但训练不结束。 */
+    private fun trainingBlockPause() {
+        runCatching { focusOverlay.hide() }
+        blockOwner = BlockOwner.NONE
+        trainingBlockPausedUntil = mono() + 5 * 60_000L
+        overlay.showBubble(BubbleSpec("歇 5 分钟。到点我叫你接着练。", textOnly = true)) {
+            handler.postDelayed({ overlay.hideBubble() }, 4_000)
+        }
+        handler.postDelayed({
+            if (training != null) showTrainingAsk("五分钟到了，接着这一步。")
+        }, 5 * 60_000L)
+    }
+
+    private fun trainingBlockEnd() {
+        runCatching { focusOverlay.hide() }
+        blockOwner = BlockOwner.NONE
+        endTraining()
     }
 
     private fun bringTrainingBack() {
@@ -2806,6 +2967,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         materialPlan = null
         trainingTimer.disarm()
         enforcement.reset()
+        // 训练结束：撤下训练自己的拦截层，并把拥有者让出来。
+        if (blockOwner == BlockOwner.TRAINING) {
+            runCatching { focusOverlay.hide() }
+            blockOwner = BlockOwner.NONE
+        }
+        trainingBase = null
+        trainingBlockPausedUntil = 0
         // 换会话/结束时清空宽限与录音计时。
         extensionState = extensionPolicy.reset()
         overlay.hideBubble()
@@ -2830,23 +2998,23 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             overlay.showBubble(BubbleSpec(reason, textOnly = true))
             return
         }
-        val criteria = listOf("说清作者转折后强调的内容", "给出一句原文依据")
+        val q = flow.question ?: "先用一句话说清：这段最关键的一点是什么？"
+        // 验收标准按当前问题生成，不再写死“作者转折”（CL-S2）。
+        // 屏幕原文按隐私约束不落盘：恢复后没有素材时，标准改成“说出依据或理由”。
+        val hasMaterial = flow.material.isNotBlank()
+        val criteria = if (hasMaterial) {
+            listOf("说清这一段的核心主张", "给出一句原文依据")
+        } else {
+            listOf("说清你的判断", "给出一个具体理由")
+        }
         val machine = StrictSessionMachine(
             StrictSessionState.new(now(), minutes, flow.source, flow.appName, criteria),
         )
         flow.strict = machine
         flow.waitSince = now()
-        val q = flow.question ?: "先用一句话说清：这段最关键的一点是什么？"
         machine.ask(q, criteria, now())
         persistStrict(flow)
-        overlay.showBubble(BubbleSpec(
-            "严格陪伴 " + minutes + " 分钟。\n问题：" + q + "\n\n直接说，不用点录音。\n（随时可以说“我不会”，或点 × 结束）",
-            instant = true,
-            actions = listOf(
-                BubbleAction("我不会") { strictNeedsSupport() },
-                BubbleAction("结束", highlighted = false) { strictAbort() },
-            ),
-        ))
+        showStrictPrompt("严格陪伴 " + minutes + " 分钟。")
     }
 
 
@@ -2884,6 +3052,57 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             }
             is StrictSessionStore.Restore.Finished -> strictStore.clear()
             StrictSessionStore.Restore.None -> Unit
+        }
+    }
+
+
+    /**
+     * 重显严格回合当前这一步，并**打开回答入口**（CL-S1 / CL-S6）。
+     *
+     * 之前的问题：开始气泡只有“我不会/结束”，没有打开 awaitingAnswer，
+     * 所以用户打字/说话都进不来；点桌宠还会把回合收起作废。
+     */
+    private fun showStrictPrompt(prefix: String) {
+        val flow = think ?: return
+        val m = flow.strict ?: return
+        if (!m.state.active) return
+        if (m.state.phase == Phase.EVALUATING) {
+            overlay.showBubble(BubbleSpec("我在核对你刚才那句……", textOnly = true))
+            return
+        }
+        // 关键：打开回答通道，让打字/语音都进 answerThink。
+        flow.awaitingAnswer = true
+        flow.touchedAt = now()
+        val left = ((m.state.endsAt - now()) / 60_000).coerceAtLeast(0)
+        val head = if (prefix.isBlank()) "" else prefix + "\n"
+        val actions = mutableListOf<BubbleAction>()
+        if (systemVoice) actions += BubbleAction("说一句", highlighted = true) { strictVoice() }
+        actions += BubbleAction("打字") { overlay.openBubbleInput() }
+        actions += BubbleAction("我不会") { strictNeedsSupport() }
+        actions += BubbleAction("结束") { strictAbort() }
+        overlay.setMood(Mood.CURIOUS)
+        overlay.showBubble(BubbleSpec(
+            head + "第 " + m.state.stepId + " 步（还剩约 " + left + " 分钟）：" + m.state.question,
+            instant = true, actions = actions,
+        ))
+    }
+
+    /** 严格回合里用语音回答：录音期间暂停计时，结果进严格核验，不开闲聊。 */
+    private fun strictVoice() {
+        val flow = think ?: return
+        flow.touchedAt = now()
+        overlay.setListening(true)
+        overlay.updateBubbleText("在听……说完停一下就好")
+        recordingStartedAt = mono()
+        voice.start { text ->
+            overlay.setListening(false)
+            recordingStartedAt = 0
+            val said = text?.trim().orEmpty()
+            if (said.isEmpty()) {
+                showStrictPrompt("没听清，再说一次就行。")
+            } else {
+                answerThink(said)
+            }
         }
     }
 

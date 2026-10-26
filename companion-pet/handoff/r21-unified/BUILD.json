@@ -1,14 +1,15 @@
 {
-  "sourceSha": "PENDING_PUSH",
-  "versionName": "0.7.7-r21-unified-preview",
-  "versionCode": 37,
+  "sourceSha": "PENDING",
+  "note": "提交后回填实际测试源码 SHA；文档单独提交不冒充构建 SHA。",
+  "versionName": "0.7.8-r21-wired-preview",
+  "versionCode": 38,
   "applicationId": "cn.companion.pet",
-  "buildType": "debug（仓库公开调试签名，非发行配置）",
+  "buildType": "debug（仓库公开调试签名，非发行配置；debuggable=true）",
   "minSdk": 30,
   "targetSdk": 35,
   "compileSdk": 35,
-  "apkBytes": 30242335,
-  "apkSha256": "17E0A408B34FCE81C021FE331FA005294A2C20772BA0B50B90BC3B1F72A10744",
+  "apkBytes": 30258715,
+  "apkSha256": "07A666F0639D9B82FE168B8A4E2812678F41E0BBEC2AF0E333E9601E653B3F3C",
   "tests": {
     "total": 603,
     "failures": 0
@@ -24,5 +25,5 @@
     ":app:assembleDebugAndroidTest"
   ],
   "deviceCoverage": "NOT_RUN（无设备）",
-  "note": "sourceSha 在提交后回填为实际测试 SHA；文档提交不能冒充构建源码 SHA。"
+  "previousCommit": "8fb3cc1e2bd30100a3ac0cc05c7d996634bb8bad"
 }
