@@ -451,6 +451,10 @@ private fun CompanionSettings(context: Context) {
 
     Section("陪练与专注策略")
     Text("开始陪练在桌宠菜单里：点桌宠 → 开始陪练。这里只设策略。", style = MaterialTheme.typography.bodySmall)
+    var materialAssist by remember { mutableStateOf(s.materialAssist) }
+    Toggle("材料分享后可以主动问我", "开：你分享/导入材料后，同桌可以不等你开口，就材料里的一个具体依据主动问一句。关：只在你点“开始陪练”时才问。默认关。", materialAssist) {
+        materialAssist = it; s.materialAssist = it
+    }
     var practiceBreak by remember { mutableStateOf(s.focusPolicyType == "PRACTICE_FOR_BREAK") }
     Toggle("练习换休息", "关：固定专注，做完题也不产生娱乐许可。开：完成一个微练习可换一段限定休息。默认关。", practiceBreak) {
         practiceBreak = it; s.focusPolicyType = if (it) "PRACTICE_FOR_BREAK" else "FIXED_FOCUS"

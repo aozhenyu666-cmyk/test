@@ -30,6 +30,12 @@ class Settings(context: Context) {
     var focusApps by set("focus_apps")
     var excludeApps by set("exclude_apps")
 
+    /**
+     * 允许同桌在“本次已分享的材料”上主动提问。
+     * 显式授权：保存材料本身不等于允许持续打扰；默认关。
+     */
+    var materialAssist by bool("material_assist", false)
+
     /** 专注策略：FIXED_FOCUS 不产生休息许可；PRACTICE_FOR_BREAK 练完换休息。 */
     var focusPolicyType by str("focus_policy_type", "FIXED_FOCUS")
     /** 练习换休息时，一次兑换多少分钟。 */

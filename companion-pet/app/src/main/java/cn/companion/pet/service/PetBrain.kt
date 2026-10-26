@@ -53,6 +53,14 @@ import cn.companion.pet.core.skim.SkimBuffer
 import cn.companion.pet.InputBridge
 import cn.companion.pet.core.training.OfflineTraining
 import cn.companion.pet.core.training.BuiltInQuestions
+import cn.companion.pet.core.training.DeliveryState
+import cn.companion.pet.core.training.Opportunity
+import cn.companion.pet.core.training.OpportunityArbiter
+import cn.companion.pet.core.training.OpportunityContext
+import cn.companion.pet.core.training.OpportunityDecision
+import cn.companion.pet.core.training.OpportunitySource
+import cn.companion.pet.core.training.OpportunityStore
+import cn.companion.pet.core.training.ResolutionState
 import cn.companion.pet.core.training.EnforcementAction
 import cn.companion.pet.core.training.TrainingStore
 import cn.companion.pet.core.training.TrainingTimer
@@ -167,6 +175,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private val enforcement = EnforcementRules()
     private var trainingMode = InteractionMode.WARM
     private val trainingStore by lazy { TrainingStore(memory.root) }
+    private val opportunityStore by lazy { OpportunityStore(java.io.File(memory.root, "training/opportunity.json")) }
+    private val opportunityArbiter = OpportunityArbiter()
     private val restGrants by lazy { RestGrantStore(memory.root) }
     private val trainingTimer = TrainingTimer()
     private val focusBridge by lazy { TrainingFocusBridge() }
@@ -222,8 +232,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private var lastAgentScanAt = 0L
     private val agentScanner = AgentEventScanner()
     private val agentTrigger = Runnable { maybeScanAgent(now()) }
-    private val agentListener: (CompanionEvent) -> Unit = {
+    private val agentListener: (CompanionEvent) -> Unit = { event ->
         handler.post { scheduleAgentScan() }
+        // S6：材料导入后，按授权与仲裁决定要不要主动问一句。
+        if (event.kind == EventKind.MATERIAL) handler.post { considerMaterialOpportunity(event) }
     }
     private var active = false
     private var rephraseNext = false
@@ -1801,6 +1813,104 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         persistTraining()
         trainingTimer.restore(mono(), c.current, q.stem.length)
         if (out is TrainingOutcome.Present) showTrainingQuestion(q, out.ask)
+    }
+
+
+    // ---------- S6：授权材料触发的主动推进 ----------
+
+    /**
+     * 材料导入后评估是否值得主动问一句。
+     *
+     * 本地决定：授权、材料新鲜度、去重、是否已有训练、是否允许打扰、连续无效降频。
+     * 模型不参与“要不要发”的判断。
+     */
+    private fun considerMaterialOpportunity(event: CompanionEvent) {
+        val now = now()
+        val key = "material:" + event.id
+        if (opportunityStore.handled(key)) return
+        val materials = runCatching { app.materialInbox.all(now) }.getOrDefault(emptyList())
+        val latest = materials.lastOrNull()
+        val decision = opportunityArbiter.decide(
+            OpportunityContext(
+                now = now,
+                trainingActive = training?.current?.active == true,
+                focusActive = focusController.active,
+                allowInterrupt = active && !settings.petPaused && !scheduler.isQuiet(now) && isUserActive(),
+                materialFresh = latest != null,
+                alreadyHandled = false,
+                recentIneffective = opportunityStore.load().recentIneffective,
+                materialAssistAllowed = settings.materialAssist,
+            ),
+        )
+        if (decision is OpportunityDecision.Suppress) {
+            // 抑制也留痕：便于之后回答“为什么没主动说话”。
+            opportunityStore.record(key, Opportunity(
+                opportunityId = "opp-" + event.id,
+                source = OpportunitySource.MATERIAL_IMPORTED,
+                sourceEventId = event.id,
+                materialRef = latest?.id.orEmpty(),
+                observedAt = now,
+                delivery = DeliveryState.SUPPRESSED,
+                suppressionReason = decision.reason,
+            ))
+            return
+        }
+        startMaterialTraining(latest, event, key, (decision as OpportunityDecision.Proceed).whyNow)
+    }
+
+    /** 用材料启动一次训练；问题来自本地题库，不依赖云端。 */
+    private fun startMaterialTraining(
+        material: cn.companion.pet.core.companion.SharedMaterial?,
+        event: CompanionEvent,
+        key: String,
+        whyNow: String,
+    ) {
+        val now = now()
+        endConversation()
+        val q = BuiltInQuestions.SAMPLES.first()
+        trainingQuestion = q
+        val c = TrainingController(TrainingSession(
+            id = java.util.UUID.randomUUID().toString(),
+            interactionMode = InteractionMode.COACH,
+            createdAt = now, updatedAt = now,
+        ))
+        c.bind(q)
+        training = c
+        val out = c.present(now)
+        persistTraining()
+        trainingTimer.restore(mono(), c.current, q.stem.length)
+        val oppId = "opp-" + event.id
+        opportunityStore.record(key, Opportunity(
+            opportunityId = oppId,
+            source = OpportunitySource.MATERIAL_IMPORTED,
+            sourceEventId = event.id,
+            taskId = c.current.id,
+            materialRef = material?.id.orEmpty(),
+            questionId = q.id,
+            observedAt = now,
+            whyNow = whyNow,
+            expectedOutcome = "指出材料里的一个具体依据",
+            delivery = DeliveryState.SHOWN,
+        ))
+        if (out is TrainingOutcome.Present) {
+            val title = material?.title?.ifBlank { null } ?: material?.url ?: "你刚分享的材料"
+            overlay.showBubble(BubbleSpec(
+                "你刚分享的「" + title + "」，先看这一处：\n\n" + q.stem + "\n\n" + out.ask,
+                instant = true,
+                actions = trainingActions(),
+            ))
+        }
+    }
+
+    /** 机会结算：训练完成/中止时更新机会结果，供降频与统计使用。 */
+    private fun resolveOpportunity(progress: Boolean) {
+        val snap = opportunityStore.load()
+        val open = snap.opportunities.lastOrNull() ?: return
+        if (open.resolution != ResolutionState.UNANSWERED) return
+        opportunityStore.markResolution(
+            open.opportunityId,
+            if (progress) ResolutionState.VERIFIED_PROGRESS else ResolutionState.NO_PROGRESS,
+        )
     }
 
     private fun trainingActions(): List<BubbleAction> {
