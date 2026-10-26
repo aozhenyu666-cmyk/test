@@ -40,6 +40,10 @@ class Settings(context: Context) {
     var focusPolicyType by str("focus_policy_type", "FIXED_FOCUS")
     /** 练习换休息时，一次兑换多少分钟。 */
     var restMinutes by int("rest_minutes", 10)
+    /** 练习换休息：攒满几道合格题换一次休息。 */
+    var practiceQuestions by int("practice_questions", 5)
+    /** 练习换休息：整轮的硬截止（分钟），到了就结束，不加题、不延长。 */
+    var practiceWindowMinutes by int("practice_window_minutes", 45)
 
     /** 严格陪伴：默认关；开启后“想一想”进入有时限的受约束回合。 */
     var strictEnabled by bool("strict_enabled", false)

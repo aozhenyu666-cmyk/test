@@ -80,6 +80,26 @@ class RestGrantStore(private val root: File) {
         grant
     }
 
+    /**
+     * 题组换休息用：到期时刻由调用方在落盘的轮次里定好，这里只照抄。
+     * 同一 eventId 只生效一次：重启、双击、重复回调都返回原许可，不重新计时。
+     */
+    fun grantUntil(
+        sessionId: String,
+        eventId: String,
+        allowedPackages: Set<String>,
+        expiresAt: Long,
+        now: Long,
+    ): RestGrant? = synchronized(lock) {
+        val existing = load()
+        if (existing != null && existing.eventId == eventId) return existing
+        if (expiresAt <= now) return null
+        val grant = RestGrant(sessionId, eventId, allowedPackages, grantedAt = now,
+            expiresAt = minOf(expiresAt, now + 60 * 60_000))
+        if (!write(grant)) return null
+        grant
+    }
+
     /** 到期检查：已过期则标记撤销并返回 false。 */
     fun active(now: Long): RestGrant? = synchronized(lock) {
         val g = load() ?: return null

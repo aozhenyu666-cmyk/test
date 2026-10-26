@@ -71,6 +71,8 @@ object Diagnostics {
         (context.applicationContext as? cn.companion.pet.PetApp)?.let { app ->
             runCatching { app.visionSetup().label() }.getOrNull()?.let { append("看图状态：").append(it).append('\n') }
             runCatching { app.visionEvidence.last()?.label() }.getOrNull()?.let { append("上次看一眼：").append(it).append('\n') }
+            runCatching { app.executionHealth?.invoke() }.getOrNull()?.let { append("拦截执行路径：").append(it).append('\n') }
+            runCatching { app.practiceStatus?.invoke() }.getOrNull()?.let { append("练习换休息：").append(it).append('\n') }
         }
         append("\n最近的进程退出（新的在前）：\n")
         val exits = recentExits(context, 8)

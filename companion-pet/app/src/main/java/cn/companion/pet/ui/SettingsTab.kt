@@ -160,7 +160,10 @@ private fun FocusDiagnostics() {
             add("拦截层：" + if (st.overlayShown) "显示中" else if (st.overlayError.isNotBlank()) "没能显示（" + st.overlayError + "）" else "未显示")
             if (st.storeError.isNotBlank()) add("存储：" + st.storeError)
         }
-    }
+    } + listOfNotNull(
+        app.executionHealth?.invoke()?.let { "拦截执行路径：" + it },
+        app.practiceStatus?.invoke()?.let { "练习换休息：" + it },
+    )
     lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
     TextButton(onClick = { tick++ }) { Text("刷新") }
 }
@@ -464,6 +467,16 @@ private fun CompanionSettings(context: Context) {
         NumberField("每次休息（分钟）", restText) {
             restText = it; it.toIntOrNull()?.let { v -> s.restMinutes = v.coerceIn(1, 60) }
         }
+        var countText by remember { mutableStateOf(s.practiceQuestions.toString()) }
+        NumberField("攒满几道合格题换一次休息", countText) {
+            countText = it; it.toIntOrNull()?.let { v -> s.practiceQuestions = v.coerceIn(1, 10) }
+        }
+        var windowText by remember { mutableStateOf(s.practiceWindowMinutes.toString()) }
+        NumberField("整轮最长（分钟，到点结束）", windowText) {
+            windowText = it; it.toIntOrNull()?.let { v -> s.practiceWindowMinutes = v.coerceIn(10, 180) }
+        }
+        Text("只有本机能确定判分的题才算合格；选项把答案说破的题，要再做一道同类新题才算。休息只发一次，重启不重新计时。",
+            style = MaterialTheme.typography.bodySmall)
     }
     Text("训练没做完就切到别的 App，会提示回到训练；拒绝、沉默或编造两次以上会强制切到陪练。紧急退出始终可用。",
         style = MaterialTheme.typography.bodySmall)

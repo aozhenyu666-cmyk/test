@@ -54,6 +54,11 @@ import cn.companion.pet.InputBridge
 import cn.companion.pet.core.training.OfflineTraining
 import cn.companion.pet.core.training.BoundMaterial
 import cn.companion.pet.core.training.BuiltInQuestions
+import cn.companion.pet.core.training.BreakCycleEngine
+import cn.companion.pet.core.training.BreakCycleState
+import cn.companion.pet.core.training.BreakCycleStore
+import cn.companion.pet.core.training.CycleState
+import cn.companion.pet.core.training.SettleResult
 import cn.companion.pet.core.training.MaterialQuestionBuilder
 import cn.companion.pet.core.training.MaterialQuestionPlan
 import cn.companion.pet.core.training.MaterialTraining
@@ -206,6 +211,15 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     /** 当前材料题的计划（引用位置、评分依据、下一步）；空表示这题不是材料题。 */
     private var materialPlan: MaterialQuestionPlan? = null
     private val restGrants by lazy { RestGrantStore(memory.root) }
+    /** S4：五题换休息的一整轮；状态全部落盘，重启接着算。 */
+    private val breakEngine = BreakCycleEngine()
+    private val breakStore by lazy { BreakCycleStore(memory.root) }
+    private var lastBreakTickAt = 0L
+    /** A13/A35：无障碍执行路径挑战（单调时钟）。 */
+    private val execMonitor = cn.companion.pet.core.training.ExecutionPathMonitor()
+    private var execWarned = false
+    /** 最近一次结算给用户的一句话，显示在完成气泡里后清空。 */
+    private var lastBreakNote = ""
     private val trainingTimer = TrainingTimer()
     private val focusBridge by lazy { TrainingFocusBridge() }
     private val topics by lazy { app.topics }
@@ -290,6 +304,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // 守护：杀进程/重启后恢复；已结束/过期/损坏的不复活。
         runCatching { focusController.restore() }
         app.focusStatus = { focusController.status() }
+        app.executionHealth = { execMonitor.snapshot(mono(), enforcingNow()).let { it.state.name + " · " + it.detail } }
+        app.practiceStatus = { practiceStatusLine() }
+        PerceptionHub.onHealthReceipt = { r -> runCatching { onHealthReceipt(r) } }
         active = isUserActive()
         if (active) onUserPresent()
         handler.post(ticker)
@@ -325,6 +342,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         PerceptionHub.onForegroundConfirmed = null
         InputBridge.clear()
         app.focusStatus = null
+        app.executionHealth = null
+        app.practiceStatus = null
+        PerceptionHub.onHealthReceipt = null
         runCatching { focusOverlay.hide() }
         handler.removeCallbacksAndMessages(null)
         voice.cancel()
@@ -387,6 +407,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         runCatching { focusController.tick(interactive = active) }
         // 训练计时用单调时钟推进；熄屏/锁屏不催。
         runCatching { if (active) tickTraining(mono()) }
+        // 题组换休息按日历时间推进（硬截止、休息到点），熄屏也要按时结束。
+        runCatching { tickBreak(now) }
+        runCatching { tickHealth(mono()) }
         if (convo == null && life.tick(now)) overlay.setLife(life.state)
         // Gemini 会话期间：只守着会话，不主动搭话
         session?.let { handleSession(it, now); return }
@@ -1845,7 +1868,17 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             .filter { it.text.contains("训练完成") }
             .flatMap { Regex("q:([a-z0-9-]+)").findAll(it.text).map { m -> m.groupValues[1] }.toList() }
             .toSet()
-        val q = BuiltInQuestions.pick(answered)
+        // 练习换休息：从本轮没做过的本机可判题里挑，优先补迁移题；不重复刷同一题凑数。
+        val cycle = ensureBreakCycle(now())
+        val q = if (cycle != null && cycle.state == CycleState.COLLECTING) {
+            breakEngine.nextQuestion(cycle) ?: run {
+                sessionArbiter.release(SessionKind.TRAINING, sessionId)
+                overlay.showBubble(BubbleSpec("这一轮本机能判分的题都做过了（合格 " + cycle.set.credits.size + "/" +
+                    cycle.requiredCredits + "）。本轮先到这里，不加题、不延长。", textOnly = true))
+                return
+            }
+        } else BuiltInQuestions.pick(answered)
+        if (cycle != null && cycle.state == CycleState.COLLECTING) breakStore.save(breakEngine.markSeen(cycle, q.id))
         trainingQuestion = q
         // 上一轮若是材料题，它的判分计划不能带进内置题。
         materialPlan = null
@@ -2183,6 +2216,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             logTrainingResult(c, completed = true)
             // 真实完成：按 sessionId 结算为“有推进”。
             resolveOpportunity(progress = true)
+            // 题组结算：先于 UI，气泡收起也照样记账。
+            lastBreakNote = runCatching { settleBreak(c) }.getOrElse { "题组结算出错：" + it.javaClass.simpleName }
             // 完成即释放交互权与输出权，否则“下一题”、严格陪想、外部 AI 都会被这把旧锁挡住。
             releaseTrainingLocks(c)
         }
@@ -2268,7 +2303,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     private fun showTrainingCompleted(c: TrainingController) {
-        overlay.showBubble(BubbleSpec(c.summary(), instant = true, actions = listOf(
+        val note = lastBreakNote
+        lastBreakNote = ""
+        overlay.showBubble(BubbleSpec(c.summary() + (if (note.isBlank()) "" else "\n\n" + note), instant = true, actions = listOf(
             BubbleAction("下一题") { openTraining() },
             BubbleAction("结束本次") { endTraining() },
         )))
@@ -2277,6 +2314,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     /** 前台确认后调用：训练未完成却去了娱乐 App → 拦截回训练。 */
     private fun onTrainingForeground(pkg: String) {
         val c = training ?: return
+        // 题组换来的休息期内不拦（只暂停训练拦截，不碰系统锁屏）。
+        if (restGrants.active(now()) != null) return
         // 训练进度不产生设备授权；设备限制仍由 FocusController 的有期限契约负责。
         val focus = focusController.snapshot ?: return
         if (!focus.active || now() >= focus.contract.expiresAt ||
@@ -2304,19 +2343,120 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
     }
 
-    /** 训练完成后的可选休息许可（练习换休息策略）。 */
-    private fun maybeGrantRest(now: Long) {
-        val c = training ?: return
-        val policy = if (settings.focusPolicyType == FocusPolicyType.PRACTICE_FOR_BREAK.name) FocusPolicyType.PRACTICE_FOR_BREAK else FocusPolicyType.FIXED_FOCUS
-        val g = restGrants.grant(
-            policy = policy,
-            sessionId = c.current.id,
-            eventId = "complete-" + c.current.id,
-            allowedPackages = emptySet(),
-            durationMillis = settings.restMinutes.coerceIn(1, 60) * 60_000L,
-            now = now,
-        ) ?: return
-        overlay.showBubble(BubbleSpec("练完了。给你 " + settings.restMinutes + " 分钟休息。", textOnly = true)) { handler.postDelayed({ overlay.hideBubble() }, 4000) }
+    // ---------- A13/A35：执行路径健康 ----------
+
+    private fun enforcingNow(): Boolean = focusController.active || training?.current?.active == true
+
+    private fun tickHealth(nowMono: Long) {
+        val enforcing = enforcingNow()
+        if (execMonitor.poll(nowMono) != null) onHealthVerdict(enforcing)
+        if (!execMonitor.due(nowMono, enforcing)) return
+        val c = execMonitor.issue(nowMono, java.util.UUID.randomUUID().toString())
+        if (!PerceptionHub.challenge(c.challengeId, c.nonce)) {
+            execMonitor.unavailable(nowMono)
+            onHealthVerdict(enforcing)
+        }
+    }
+
+    private fun onHealthReceipt(r: cn.companion.pet.core.training.HealthReceipt) {
+        if (execMonitor.onReceipt(r, mono()) != null) onHealthVerdict(enforcingNow())
+    }
+
+    /** 有约束在跑时执行路径坏了：如实告诉用户一次（toast，不盖题目），恢复后重置。 */
+    private fun onHealthVerdict(enforcing: Boolean) {
+        val snap = execMonitor.snapshot(mono(), enforcing)
+        val bad = snap.state == cn.companion.pet.core.training.HealthState.DEGRADED ||
+            snap.state == cn.companion.pet.core.training.HealthState.UNAVAILABLE
+        if (snap.state == cn.companion.pet.core.training.HealthState.OK) execWarned = false
+        if (bad && enforcing && !execWarned) {
+            execWarned = true
+            gemini.toast("拦截通道有问题：" + snap.detail + "。退出和答题不受影响。")
+        }
+    }
+
+    private fun practiceStatusLine(): String {
+        if (!practiceForBreak) return "没开"
+        val c = breakStore.load() ?: return "还没开始（点桌宠 → 开始陪练）"
+        val now = now()
+        return when (c.state) {
+            CycleState.COLLECTING -> "合格 " + c.set.credits.size + "/" + c.requiredCredits +
+                (if (c.pendingTransferFamilies.isNotEmpty()) "，待补迁移题 " + c.pendingTransferFamilies.size + " 道" else "") +
+                "，整轮 " + clock(c.hardDeadline) + " 结束"
+            CycleState.ON_BREAK -> "休息中，到 " + clock(c.restUntil) + (if (now >= c.restUntil) "（已到点）" else "")
+            CycleState.ENDED -> "上一轮已结束（" + c.endReason + "），合格 " + c.set.credits.size + "/" + c.requiredCredits
+        } + breakStore.lastError?.let { "；存储：" + it }.orEmpty()
+    }
+
+    private val practiceForBreak: Boolean
+        get() = settings.focusPolicyType == FocusPolicyType.PRACTICE_FOR_BREAK.name
+
+    /** 练习换休息：确保有一轮在进行（配置在开轮时固定快照）；没开这个策略返回 null。 */
+    private fun ensureBreakCycle(now: Long): BreakCycleState? {
+        if (!practiceForBreak) return null
+        val cur = breakStore.load()
+        if (cur != null && cur.state != CycleState.ENDED && now < cur.hardDeadline) return cur
+        val windowEnd = now + settings.practiceWindowMinutes.coerceIn(10, 180) * 60_000L
+        // 专注契约更早到期时，以它为准。
+        val focusEnd = focusController.snapshot?.takeIf { it.active }?.contract?.expiresAt
+        val deadline = if (focusEnd != null) minOf(focusEnd, windowEnd) else windowEnd
+        val fresh = breakEngine.start("c-" + java.util.UUID.randomUUID().toString().take(8), now,
+            settings.practiceQuestions.coerceIn(1, 10), settings.restMinutes.coerceIn(1, 60) * 60_000L, deadline)
+        return if (breakStore.save(fresh)) fresh else null
+    }
+
+    /** 结算一次完成：本地代码按规则算，模型无权发券。返回给用户看的一句话。 */
+    private fun settleBreak(c: TrainingController): String {
+        val q = trainingQuestion ?: return ""
+        val cycle = breakStore.load() ?: return ""
+        val now = now()
+        fun saved(st: BreakCycleState, text: String) =
+            if (breakStore.save(st)) text else "题组进度没存下来（" + breakStore.lastError.orEmpty() + "），这题先不算。"
+        return when (val r = breakEngine.settle(cycle, q, c.current, now)) {
+            is SettleResult.Ignored -> ""
+            is SettleResult.NotCounted -> saved(r.state, r.reason)
+            is SettleResult.NeedsTransfer -> saved(r.state, "选项把答案说破了，这题不算合格；下一题换一道同类新题，独立做对就算。（合格 " +
+                r.have + "/" + r.need + "）")
+            is SettleResult.Credited -> saved(r.state, "合格 " + r.have + "/" + r.need +
+                (if (r.kind == cn.companion.pet.core.training.PassKind.TRANSFER_PASS) "（迁移题做对了）" else "") + "。")
+            is SettleResult.GrantReady -> {
+                // 先把“已发放”落盘，再写许可：崩在中间时 tick 会按同一 eventId 补发，不会发两次。
+                if (!breakStore.save(r.state)) return "休息资格没存下来（" + breakStore.lastError.orEmpty() + "），这次先不发。"
+                val g = restGrants.grantUntil(r.state.cycleId, r.state.grantEventId, emptySet(), r.restUntil, now)
+                if (g == null) "攒满了，但休息许可没写成功（" + restGrants.lastError.orEmpty() + "），稍后自动补发。"
+                else "攒满 " + r.state.requiredCredits + " 题！休息到 " + clock(g.expiresAt) + "，这段时间不拦你。到点我叫你回来。"
+            }
+        }
+    }
+
+    private fun clock(at: Long): String =
+        java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneId.systemDefault()).toLocalTime()
+            .withNano(0).withSecond(0).toString()
+
+    /** 每 5 秒：补发崩溃中断的许可、休息到点开新一轮、硬截止到点结束。 */
+    private fun tickBreak(now: Long) {
+        if (now - lastBreakTickAt < 5_000) return
+        lastBreakTickAt = now
+        val cur = breakStore.load() ?: return
+        if (cur.state == CycleState.ENDED) return
+        if (!practiceForBreak) { breakStore.save(breakEngine.end(cur, "POLICY_OFF")); return }
+        if (cur.state == CycleState.ON_BREAK && now < cur.restUntil && restGrants.load()?.eventId != cur.grantEventId) {
+            restGrants.grantUntil(cur.cycleId, cur.grantEventId, emptySet(), cur.restUntil, now)
+        }
+        val next = breakEngine.tick(cur, now) { "c-" + java.util.UUID.randomUUID().toString().take(8) } ?: return
+        if (!breakStore.save(next)) return
+        if (training?.current?.active == true) return // 不盖当前题目
+        when {
+            next.state == CycleState.ENDED -> overlay.showBubble(BubbleSpec(
+                "这一轮练习到点结束：合格 " + cur.set.credits.size + "/" + cur.requiredCredits +
+                    (if (cur.state == CycleState.ON_BREAK) "，休息也一起结束。" else "，没攒满的就记为未完成，不延长。"),
+                textOnly = true)) { handler.postDelayed({ if (training == null) overlay.hideBubble() }, 6000) }
+            cur.state == CycleState.ON_BREAK -> overlay.showBubble(BubbleSpec(
+                "休息结束了。接着攒下一轮？（到 " + clock(next.hardDeadline) + " 整轮结束）", instant = true,
+                actions = listOf(
+                    BubbleAction("继续练", highlighted = true) { overlay.hideBubble(); endTraining(); openTraining() },
+                    BubbleAction("结束本轮") { breakStore.save(breakEngine.end(next, "USER_ENDED")); overlay.hideBubble() },
+                )))
+        }
     }
 
     /** 强制规则入口：拒绝 / 未答 / 编造 → 切严格模态，不是只提示。 */

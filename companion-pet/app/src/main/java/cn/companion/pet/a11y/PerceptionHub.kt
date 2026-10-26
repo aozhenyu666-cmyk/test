@@ -29,6 +29,16 @@ object PerceptionHub {
     /** 防抖后用真实活动窗口确认过的前台切换（专注守护用）；只传包名。 */
     var onForegroundConfirmed: ((String) -> Unit)? = null
 
+    /** 执行路径挑战的回执（在无障碍服务主线程 Handler 上回调）。 */
+    var onHealthReceipt: ((cn.companion.pet.core.training.HealthReceipt) -> Unit)? = null
+
+    /** 发一次执行路径挑战；服务没连上返回 false（发不出去本身就是结论）。 */
+    fun challenge(challengeId: String, nonce: String): Boolean {
+        val s = service ?: return false
+        s.runHealthChallenge(challengeId, nonce)
+        return true
+    }
+
     fun setConnected(value: Boolean) { _connected.value = value }
 
     /** 现读一次当前窗口的文字。服务没连上或读失败返回空列表。 */

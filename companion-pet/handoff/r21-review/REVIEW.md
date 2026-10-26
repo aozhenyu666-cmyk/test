@@ -25,3 +25,41 @@
 - 本环境无法访问 Google Maven（dl.google.com 被网络策略拒绝），**不能本地构建 APK**。
 - 把不依赖 Android 的源码和测试单独用 Kotlin/JVM 编译：**580 tests / 0 failures**（原 572 + 新 8）。
 - `PetBrain.kt` 依赖 Android，本地未编译，靠推送后 GitHub Actions 的完整构建验证。
+
+---
+
+# 第二轮：替 DeepSeek 完成的两项（版本 37 / 0.7.7-r21-break-health-preview）
+
+## 一、五题换休息端到端（S4；A05/A08/A17 的逻辑层）
+
+| 部分 | 文件 | 做了什么 |
+|---|---|---|
+| 离线题库 | `core/training/OfflineBank.kt` | 1 道 → **11 道**本机可判题，5 类缺陷（以偏概全、先后≠因果、样本太小、幸存者偏差、缺对照），每类 ≥2 道互为迁移题。每题有：认知动作、选项、正确项、可接受极简答案、判据原文、常见误解、提示、量表版本。**AI 编写，待人工核对**，UI 仍标“内置示例题”。 |
+| 本地判分 | `OfflineTraining.kt` | 改为按题库查表；原 `sample-scope-01` 判据不变。只认选项/列出的极简答案（忽略空格标点），其余要求澄清。 |
+| 一轮结算 | `core/training/BreakCycle.kt` | 开轮时固定快照：几题、休息几分钟、硬截止（取“设置的整轮时长”与“专注契约到期”中较早者）。 |
+| | | 只有**本地确定性判分**的通过产生凭据；模型判的通过算训练完成、不发券。 |
+| | | 点了选项（答案被说破）→ 这题不给凭据，下一题自动排同类没见过的迁移题，独立做对记 `TRANSFER_PASS`。 |
+| | | `FIRST_TRY_INDEPENDENT / PROMPTED_PASS / TRANSFER_PASS` 分开记；同一会话重放、同题再答都不重复计。 |
+| | | 攒满 → **先落盘“已发放”再写许可**；许可按同一 eventId 幂等，崩在中间由 tick 补发，不会发两次、重启不重新计时；休息结束不晚于硬截止。 |
+| | | 休息到点且硬截止未到 → 开新一轮（同截止、不重复出题）；硬截止到 → 结束本轮，记未完成，不加题不延长。 |
+| 接线 | `PetBrain.kt` | `openTraining` 从本轮挑题；完成时结算并在气泡里说清“合格 x/5”或为什么不算；休息期内暂停训练拦截；每 5 秒推进轮次；原来从未被调用的 `maybeGrantRest` 删除。 |
+| 设置 | `Settings.kt` / `SettingsTab.kt` | 新增“攒满几道换一次休息”（默认 5）、“整轮最长分钟数”（默认 45）。诊断页显示本轮进度。 |
+
+## 二、无障碍执行路径健康挑战（A13 / A35 的逻辑层 + 真实接线）
+
+- `PerceptionService.runHealthChallenge`：挑战投到**与前台确认同一个 Handler**，在那里做同样的 `rootInActiveWindow` 读取，**做完才回执**（stage=`a11y_handler_root_read`，带服务实例号）。
+- `PerceptionHub.challenge / onHealthReceipt`：服务没连上直接记 `UNAVAILABLE`。
+- `core/training/ExecutionPathMonitor.kt`：发起端单调时钟判 3 秒超时；超时后到的回执、ID/nonce 不符、入口回显、窗口读失败一律不算健康；结果超过 3 个周期没刷新变 `UNKNOWN`；有约束时 60 秒一次，平时 5 分钟一次，不堆积。
+- 有约束（专注守护或训练）进行时执行路径坏了 → toast 告知一次（不盖题目），恢复后重置；设置 → 诊断和诊断报告里都能看到。
+
+## 验证
+
+- JVM：**602 tests / 0 failures**（新增 BreakCycleTest 12、ExecutionPathMonitorTest 10）。
+- 完整 Android 构建：见 GitHub Actions。
+
+## 仍然没做 / 不能宣称
+
+- 真机全部 NOT_RUN：主线程真卡死时 toast 能否及时出现、各 ROM 上 `rootInActiveWindow` 行为都未验证。
+- 健康挑战只覆盖无障碍前台确认这条路径；Shizuku 与系统锁屏的动作效果回执（`OBSERVED_CONFIRMED`）仍未接。
+- 题库 11 道与判据未经人工核对；本地判分只认列出的说法，换种正确说法会被要求澄清（宁可误拒，不误发券）。
+- 休息只暂停“训练拦截”，不暂停 Gemini 专注守护（那是另一份契约）。

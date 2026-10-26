@@ -75,6 +75,32 @@ class PerceptionService : AccessibilityService() {
         }
     }
 
+    /** 每次绑定一个新实例号：回执能看出服务是否被系统重建过。 */
+    private val instanceId = java.util.UUID.randomUUID().toString().take(8)
+
+    /**
+     * 执行路径健康挑战（A13/A35）：投到与前台确认**同一个** Handler，在那里做同样的活动窗口读取，
+     * 做完才回执。主线程卡住或窗口读取失败时，回执会迟到或 ok=false——不能由入口直接回显。
+     */
+    fun runHealthChallenge(challengeId: String, nonce: String) {
+        handler.post {
+            val ok = try { rootInActiveWindow != null } catch (e: Exception) { false }
+            val receipt = cn.companion.pet.core.training.HealthReceipt(
+                challengeId = challengeId,
+                nonce = nonce,
+                stage = HEALTH_STAGE,
+                instanceId = instanceId,
+                ok = ok,
+                completedAt = android.os.SystemClock.elapsedRealtime(),
+            )
+            try {
+                PerceptionHub.onHealthReceipt?.invoke(receipt)
+            } catch (e: Exception) {
+                android.util.Log.w("PerceptionService", "health receipt dropped", e)
+            }
+        }
+    }
+
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
@@ -129,5 +155,7 @@ class PerceptionService : AccessibilityService() {
         private const val CONFIRM_DELAY_MILLIS = 300L
         private const val MAX_NODES = 600
         private const val MAX_READ_MILLIS = 150L
+        /** 回执阶段：走完了前台确认所在的 Handler 并读过活动窗口。 */
+        const val HEALTH_STAGE = "a11y_handler_root_read"
     }
 }
