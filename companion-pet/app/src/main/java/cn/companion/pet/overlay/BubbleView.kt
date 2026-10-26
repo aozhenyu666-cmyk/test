@@ -47,6 +47,7 @@ interface BubbleListener {
     fun onMicDown()
     fun onMicUp()
     fun onTypingStarted()
+    fun onTypingCancelled() {}
     fun onTextSubmitted(text: String)
     fun onGemini()
     fun onLive()

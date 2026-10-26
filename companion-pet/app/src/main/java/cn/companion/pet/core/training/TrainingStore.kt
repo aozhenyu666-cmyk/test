@@ -49,14 +49,15 @@ class TrainingStore(private val root: File) {
         data object None : Restore
     }
 
-    /** [now] 为本次启动的可信单调时间；空窗按 updatedAt 到 now 计算。 */
+    /** [now] 为日历时间，仅用于记录空窗，不承担约束或秒级计时。 */
     fun restore(now: Long): Restore = synchronized(lock) {
         val w = load() ?: return Restore.None
         if (!w.session.active) return Restore.Finished(w.session)
         val gap = (now - w.session.updatedAt).coerceAtLeast(0)
         // 重启后不知道输入通道状态；回到等待态，让用户继续同一槽位。
         val resumed = w.session.copy(
-            state = TrainingState.WAITING_INPUT,
+            state = if (w.session.state == TrainingState.RECOVERY) TrainingState.RECOVERY else TrainingState.WAITING_INPUT,
+            revision = w.session.revision + 1,
             pendingRequestId = "",
             updatedAt = now,
         )

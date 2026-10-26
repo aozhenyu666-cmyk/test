@@ -1,0 +1,57 @@
+{
+  "dateUTC": "2026-10-26",
+  "baseCommit": "4185d1f781d049a23aae18ba42dfb6aa49e7b5e1",
+  "branch": "codex/tongzhuo-r21-core",
+  "buildResult": "PASS",
+  "unitTests": {
+    "status": "PASS",
+    "tests": 504,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "newRegressionTests": 12,
+  "lint": {
+    "status": "PASS",
+    "errors": 0,
+    "warnings": 31
+  },
+  "apk": {
+    "versionCode": 32,
+    "versionName": "0.7.2-r21-core-preview",
+    "sha256": "0df6be3a0a8ce66607dd36ea54e74283f7e9104ddbb1008392edb14e494d9cc8",
+    "bytes": 30029335,
+    "signatureVerification": "PASS",
+    "signerCertificateSHA256": "9f3a524c66974aeb04045f498f83b5970589f9fba3ac3772e95c26e3524695e0",
+    "debuggable": true
+  },
+  "androidTestApk": {
+    "build": "PASS",
+    "execution": "NOT_RUN",
+    "sha256": "4bf6190626814c4b8d2a5ad07176268d53f3cebd97d1d18eb1787fc260dd5c05"
+  },
+  "deviceTests": {
+    "status": "NOT_RUN",
+    "reason": "adb devices -l returned no attached devices"
+  },
+  "humanGoldenSet": {
+    "status": "NOT_RUN",
+    "reason": "No independent human-labelled 48-answer set supplied"
+  },
+  "S6MaterialProactivity": "NOT_IMPLEMENTED",
+  "deviceEnforcementAcceptance": "NOT_RUN",
+  "sourceSHA256": {
+    "companion-pet/app/build.gradle.kts": "95739c277c37aea120c2ebebd5a475254a47ec5180594d82e089f6cebaec33a3",
+    "companion-pet/app/src/main/java/cn/companion/pet/core/training/OfflineTraining.kt": "818655c9e494b812102326da551bc18cbd5a76c3f669dffcc7e8a0e00b6de1ba",
+    "companion-pet/app/src/main/java/cn/companion/pet/core/training/TrainingCoach.kt": "d80972ec9fd98a84c4a706c82b473397bc32298e4f09d1949cbd5918bf16465e",
+    "companion-pet/app/src/main/java/cn/companion/pet/core/training/TrainingController.kt": "040b74d84ee332b263800e9a6e0ef2240472b7dd497ec3bf29c5490dfbd63682",
+    "companion-pet/app/src/main/java/cn/companion/pet/core/training/TrainingSession.kt": "6e50c090f62c3d9b55a24d99eb0955d27c4024b23a067eccce159629a72421e3",
+    "companion-pet/app/src/main/java/cn/companion/pet/core/training/TrainingStore.kt": "8a3fc58cf874714c16b59ba2b867c7414542aa0862bd54f4ff6c3aeac2734fdf",
+    "companion-pet/app/src/main/java/cn/companion/pet/core/training/TrainingTimer.kt": "fe21f162c0036ce9ad4df4594f7664f46292e344028b296f45be312526538a41",
+    "companion-pet/app/src/main/java/cn/companion/pet/overlay/BubbleView.kt": "4b0b162d52d25e09e60e4fb4a54d9d62e75f506338d57a6c9776931bec0fed10",
+    "companion-pet/app/src/main/java/cn/companion/pet/overlay/PetOverlay.kt": "f588b1eb9a4e3f63922fef9e39d286e891a13e978621889d3bcf0ee429eb9ec3",
+    "companion-pet/app/src/main/java/cn/companion/pet/service/PetBrain.kt": "f5f7bc2168a46c89fd7f38489cabf8dc465aa30d331cb0f4aaadc0506c8f6695",
+    "companion-pet/app/src/test/java/cn/companion/pet/core/training/TrainingContinuityRegressionTest.kt": "365011fc8a5c5bc3387f1d41db7ff6a73375501449bceff9913143f6d2ea402e",
+    "companion-pet/app/src/test/java/cn/companion/pet/core/training/TrainingControllerTest.kt": "ccff25dd65cbbf5fe905ac29301b27c944c0563ba4f5717cf6abe9ab735c212d"
+  }
+}

@@ -1,0 +1,502 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<issues format="6" by="lint 8.7.3">
+
+    <issue
+        id="RedundantLabel"
+        severity="Warning"
+        message="Redundant label can be removed"
+        category="Correctness"
+        priority="5"
+        summary="Redundant label on activity"
+        explanation="When an activity does not have a label attribute, it will use the one from the application tag. Since the application has already specified the same label, the label on this activity can be omitted."
+        errorLine1="            android:label=&quot;@string/app_name&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/app/src/main/AndroidManifest.xml"
+            line="54"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="RedundantLabel"
+        severity="Warning"
+        message="Redundant label can be removed"
+        category="Correctness"
+        priority="5"
+        summary="Redundant label on activity"
+        explanation="When an activity does not have a label attribute, it will use the one from the application tag. Since the application has already specified the same label, the label on this activity can be omitted."
+        errorLine1="            android:label=&quot;@string/app_name&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/app/src/main/AndroidManifest.xml"
+            line="71"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="AndroidGradlePluginVersion"
+        severity="Warning"
+        message="A newer version of com.android.application than 8.7.3 is available: 9.4.1"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Android Gradle Plugin Version"
+        explanation="This detector looks for usage of the Android Gradle Plugin where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="agp = &quot;8.7.3&quot;"
+        errorLine2="      ~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="2"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="AndroidGradlePluginVersion"
+        severity="Warning"
+        message="A newer version of com.android.application than 8.7.3 is available: 9.4.1"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Android Gradle Plugin Version"
+        explanation="This detector looks for usage of the Android Gradle Plugin where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="agp = &quot;8.7.3&quot;"
+        errorLine2="      ~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="2"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="AndroidGradlePluginVersion"
+        severity="Warning"
+        message="A newer version of com.android.application than 8.7.3 is available: 9.4.1"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Android Gradle Plugin Version"
+        explanation="This detector looks for usage of the Android Gradle Plugin where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="agp = &quot;8.7.3&quot;"
+        errorLine2="      ~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="2"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        severity="Warning"
+        message="A newer version of androidx.activity:activity-compose than 1.9.3 is available: 1.13.0"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Gradle Dependency"
+        explanation="This detector looks for usages of libraries where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="activityCompose = &quot;1.9.3&quot;"
+        errorLine2="                  ~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="4"
+            column="19"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        severity="Warning"
+        message="A newer version of androidx.activity:activity-compose than 1.9.3 is available: 1.13.0"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Gradle Dependency"
+        explanation="This detector looks for usages of libraries where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="activityCompose = &quot;1.9.3&quot;"
+        errorLine2="                  ~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="4"
+            column="19"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        severity="Warning"
+        message="A newer version of androidx.activity:activity-compose than 1.9.3 is available: 1.13.0"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Gradle Dependency"
+        explanation="This detector looks for usages of libraries where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="activityCompose = &quot;1.9.3&quot;"
+        errorLine2="                  ~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="4"
+            column="19"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        severity="Warning"
+        message="A newer version of androidx.compose:compose-bom than 2024.12.01 is available: 2026.09.00"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Gradle Dependency"
+        explanation="This detector looks for usages of libraries where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="composeBom = &quot;2024.12.01&quot;"
+        errorLine2="             ~~~~~~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="5"
+            column="14"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        severity="Warning"
+        message="A newer version of androidx.compose:compose-bom than 2024.12.01 is available: 2026.09.00"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Gradle Dependency"
+        explanation="This detector looks for usages of libraries where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="composeBom = &quot;2024.12.01&quot;"
+        errorLine2="             ~~~~~~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="5"
+            column="14"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        severity="Warning"
+        message="A newer version of androidx.compose:compose-bom than 2024.12.01 is available: 2026.09.00"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Gradle Dependency"
+        explanation="This detector looks for usages of libraries where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="composeBom = &quot;2024.12.01&quot;"
+        errorLine2="             ~~~~~~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="5"
+            column="14"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        severity="Warning"
+        message="A newer version of androidx.test:runner than 1.6.2 is available: 1.7.0"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Gradle Dependency"
+        explanation="This detector looks for usages of libraries where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="androidxTestRunner = &quot;1.6.2&quot;"
+        errorLine2="                     ~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="7"
+            column="22"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        severity="Warning"
+        message="A newer version of androidx.test:runner than 1.6.2 is available: 1.7.0"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Gradle Dependency"
+        explanation="This detector looks for usages of libraries where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="androidxTestRunner = &quot;1.6.2&quot;"
+        errorLine2="                     ~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="7"
+            column="22"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        severity="Warning"
+        message="A newer version of androidx.test:runner than 1.6.2 is available: 1.7.0"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Gradle Dependency"
+        explanation="This detector looks for usages of libraries where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="androidxTestRunner = &quot;1.6.2&quot;"
+        errorLine2="                     ~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="7"
+            column="22"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        severity="Warning"
+        message="A newer version of androidx.test.ext:junit than 1.2.1 is available: 1.3.0"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Gradle Dependency"
+        explanation="This detector looks for usages of libraries where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="androidxTestExtJunit = &quot;1.2.1&quot;"
+        errorLine2="                       ~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="8"
+            column="24"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        severity="Warning"
+        message="A newer version of androidx.test.ext:junit than 1.2.1 is available: 1.3.0"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Gradle Dependency"
+        explanation="This detector looks for usages of libraries where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="androidxTestExtJunit = &quot;1.2.1&quot;"
+        errorLine2="                       ~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="8"
+            column="24"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        severity="Warning"
+        message="A newer version of androidx.test.ext:junit than 1.2.1 is available: 1.3.0"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Gradle Dependency"
+        explanation="This detector looks for usages of libraries where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="androidxTestExtJunit = &quot;1.2.1&quot;"
+        errorLine2="                       ~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="8"
+            column="24"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        severity="Warning"
+        message="A newer version of androidx.work:work-runtime-ktx than 2.9.1 is available: 2.12.0"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Gradle Dependency"
+        explanation="This detector looks for usages of libraries where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="work = &quot;2.9.1&quot;"
+        errorLine2="       ~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="12"
+            column="8"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        severity="Warning"
+        message="A newer version of androidx.work:work-runtime-ktx than 2.9.1 is available: 2.12.0"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Gradle Dependency"
+        explanation="This detector looks for usages of libraries where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="work = &quot;2.9.1&quot;"
+        errorLine2="       ~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="12"
+            column="8"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        severity="Warning"
+        message="A newer version of androidx.work:work-runtime-ktx than 2.9.1 is available: 2.12.0"
+        category="Correctness"
+        priority="4"
+        summary="Obsolete Gradle Dependency"
+        explanation="This detector looks for usages of libraries where the version you are using is not the current stable release. Using older versions is fine, and there are cases where you deliberately want to stick with an older version. However, you may simply not be aware that a more recent version is available, and that is what this lint check helps find."
+        errorLine1="work = &quot;2.9.1&quot;"
+        errorLine2="       ~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/gradle/libs.versions.toml"
+            line="12"
+            column="8"/>
+    </issue>
+
+    <issue
+        id="SwitchIntDef"
+        severity="Warning"
+        message="Switch statement on an `int` with known associated constant missing case `AccessibilityEvent.TYPE_ANNOUNCEMENT`, `AccessibilityEvent.TYPE_ASSIST_READING_CONTEXT`, `AccessibilityEvent.TYPE_GESTURE_DETECTION_END`, `AccessibilityEvent.TYPE_GESTURE_DETECTION_START`, `AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED`, `AccessibilityEvent.TYPE_SPEECH_STATE_CHANGE`, `AccessibilityEvent.TYPE_TOUCH_EXPLORATION_GESTURE_END`, `AccessibilityEvent.TYPE_TOUCH_EXPLORATION_GESTURE_START`, `AccessibilityEvent.TYPE_TOUCH_INTERACTION_END`, `AccessibilityEvent.TYPE_TOUCH_INTERACTION_START`, `AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED`, `AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED`, `AccessibilityEvent.TYPE_VIEW_CLICKED`, `AccessibilityEvent.TYPE_VIEW_CONTEXT_CLICKED`, `AccessibilityEvent.TYPE_VIEW_FOCUSED`, `AccessibilityEvent.TYPE_VIEW_HOVER_ENTER`, `AccessibilityEvent.TYPE_VIEW_HOVER_EXIT`, `AccessibilityEvent.TYPE_VIEW_LONG_CLICKED`, `AccessibilityEvent.TYPE_VIEW_SELECTED`, `AccessibilityEvent.TYPE_VIEW_TARGETED_BY_SCROLL`, `AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED`, `AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED`, `AccessibilityEvent.TYPE_VIEW_TEXT_TRAVERSED_AT_MOVEMENT_GRANULARITY`, `AccessibilityEvent.TYPE_WINDOWS_CHANGED`, `AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED`"
+        category="Correctness"
+        priority="3"
+        summary="Missing @IntDef in Switch"
+        explanation="This check warns if a `switch` statement does not explicitly include all the values declared by the typedef `@IntDef` declaration."
+        errorLine1="        when (event.eventType) {"
+        errorLine2="        ~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/app/src/main/java/cn/companion/pet/a11y/PerceptionService.kt"
+            line="50"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ExportedContentProvider"
+        severity="Warning"
+        message="Exported content providers can provide access to potentially sensitive data"
+        category="Security"
+        priority="5"
+        summary="Content provider does not require permission"
+        explanation="Content providers are exported by default and any application on the system can potentially use them to read and write data. If the content provider provides access to sensitive data, it should be protected by specifying `export=false` in the manifest or by protecting it with a permission that can be granted to other applications."
+        url="https://goo.gle/ExportedContentProvider"
+        urls="https://goo.gle/ExportedContentProvider"
+        errorLine1="        &lt;provider"
+        errorLine2="         ~~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/app/src/main/AndroidManifest.xml"
+            line="102"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        severity="Warning"
+        message="Unnecessary; SDK_INT is never &lt; 30"
+        category="Performance"
+        priority="6"
+        summary="Obsolete SDK_INT Version Check"
+        explanation="This check flags version checks that are not necessary, because the `minSdkVersion` (or surrounding known API level) is already at least as high as the version checked for.&#xA;&#xA;Similarly, it also looks for resources in `-vNN` folders, such as `values-v14` where the version qualifier is less than or equal to the `minSdkVersion`, where the contents should be merged into the best folder."
+        errorLine1="        if (android.os.Build.VERSION.SDK_INT &lt; 30) { lookNotice(&quot;这台手机的系统版本太低，不能截图。&quot;); return }"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/app/src/main/java/cn/companion/pet/service/PetBrain.kt"
+            line="809"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        severity="Warning"
+        message="Unnecessary; SDK_INT is never &lt; 30"
+        category="Performance"
+        priority="6"
+        summary="Obsolete SDK_INT Version Check"
+        explanation="This check flags version checks that are not necessary, because the `minSdkVersion` (or surrounding known API level) is already at least as high as the version checked for.&#xA;&#xA;Similarly, it also looks for resources in `-vNN` folders, such as `values-v14` where the version qualifier is less than or equal to the `minSdkVersion`, where the contents should be merged into the best folder."
+        errorLine1="        if (Build.VERSION.SDK_INT &lt; 30) return ScreenCaptureAttempt(CapturedStatus.UNSUPPORTED, error = &quot;系统版本低于 Android 11&quot;)"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/app/src/main/java/cn/companion/pet/a11y/ScreenCaptureGateway.kt"
+            line="27"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        severity="Warning"
+        message="Unnecessary; SDK_INT is always >= 30"
+        category="Performance"
+        priority="6"
+        summary="Obsolete SDK_INT Version Check"
+        explanation="This check flags version checks that are not necessary, because the `minSdkVersion` (or surrounding known API level) is already at least as high as the version checked for.&#xA;&#xA;Similarly, it also looks for resources in `-vNN` folders, such as `values-v14` where the version qualifier is less than or equal to the `minSdkVersion`, where the contents should be merged into the best folder."
+        errorLine1="        Build.VERSION.SDK_INT >= 30 &amp;&amp; code == AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT -> CapturedStatus.COOLDOWN"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/app/src/main/java/cn/companion/pet/a11y/ScreenCaptureGateway.kt"
+            line="137"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        severity="Warning"
+        message="Unnecessary; SDK_INT is always >= 30"
+        category="Performance"
+        priority="6"
+        summary="Obsolete SDK_INT Version Check"
+        explanation="This check flags version checks that are not necessary, because the `minSdkVersion` (or surrounding known API level) is already at least as high as the version checked for.&#xA;&#xA;Similarly, it also looks for resources in `-vNN` folders, such as `values-v14` where the version qualifier is less than or equal to the `minSdkVersion`, where the contents should be merged into the best folder."
+        errorLine1="        Build.VERSION.SDK_INT >= 30 &amp;&amp; code == AccessibilityService.ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS -> CapturedStatus.NO_PERMISSION"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/app/src/main/java/cn/companion/pet/a11y/ScreenCaptureGateway.kt"
+            line="138"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        severity="Warning"
+        message="Unnecessary; SDK_INT is always >= 30"
+        category="Performance"
+        priority="6"
+        summary="Obsolete SDK_INT Version Check"
+        explanation="This check flags version checks that are not necessary, because the `minSdkVersion` (or surrounding known API level) is already at least as high as the version checked for.&#xA;&#xA;Similarly, it also looks for resources in `-vNN` folders, such as `values-v14` where the version qualifier is less than or equal to the `minSdkVersion`, where the contents should be merged into the best folder."
+        errorLine1="        Build.VERSION.SDK_INT >= 30 &amp;&amp; code == AccessibilityService.ERROR_TAKE_SCREENSHOT_INVALID_WINDOW -> CapturedStatus.NO_ACTIVE_WINDOW"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/app/src/main/java/cn/companion/pet/a11y/ScreenCaptureGateway.kt"
+            line="139"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        severity="Warning"
+        message="Unnecessary; SDK_INT is always >= 30"
+        category="Performance"
+        priority="6"
+        summary="Obsolete SDK_INT Version Check"
+        explanation="This check flags version checks that are not necessary, because the `minSdkVersion` (or surrounding known API level) is already at least as high as the version checked for.&#xA;&#xA;Similarly, it also looks for resources in `-vNN` folders, such as `values-v14` where the version qualifier is less than or equal to the `minSdkVersion`, where the contents should be merged into the best folder."
+        errorLine1="        Build.VERSION.SDK_INT >= 30 &amp;&amp; code == AccessibilityService.ERROR_TAKE_SCREENSHOT_SECURE_WINDOW -> CapturedStatus.SECURE_WINDOW"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/app/src/main/java/cn/companion/pet/a11y/ScreenCaptureGateway.kt"
+            line="140"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        severity="Warning"
+        message="Unnecessary; SDK_INT is always >= 30"
+        category="Performance"
+        priority="6"
+        summary="Obsolete SDK_INT Version Check"
+        explanation="This check flags version checks that are not necessary, because the `minSdkVersion` (or surrounding known API level) is already at least as high as the version checked for.&#xA;&#xA;Similarly, it also looks for resources in `-vNN` folders, such as `values-v14` where the version qualifier is less than or equal to the `minSdkVersion`, where the contents should be merged into the best folder."
+        errorLine1="                    versionCode = if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong(),"
+        errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/app/src/main/java/cn/companion/pet/ui/SettingsTab.kt"
+            line="1080"
+            column="39"/>
+    </issue>
+
+    <issue
+        id="UseTomlInstead"
+        severity="Warning"
+        message="Use version catalog instead"
+        category="Productivity"
+        priority="4"
+        summary="Use TOML Version Catalog Instead"
+        explanation="If your project is using a `libs.versions.toml` file, you should place all Gradle dependencies in the TOML file. This lint check looks for version declarations outside of the TOML file and suggests moving them (and in the IDE, provides a quickfix to performing the operation automatically)."
+        errorLine1="    implementation(&quot;dev.rikka.shizuku:api:13.1.5&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/app/build.gradle.kts"
+            line="72"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="UseTomlInstead"
+        severity="Warning"
+        message="Use version catalog instead"
+        category="Productivity"
+        priority="4"
+        summary="Use TOML Version Catalog Instead"
+        explanation="If your project is using a `libs.versions.toml` file, you should place all Gradle dependencies in the TOML file. This lint check looks for version declarations outside of the TOML file and suggests moving them (and in the IDE, provides a quickfix to performing the operation automatically)."
+        errorLine1="    implementation(&quot;dev.rikka.shizuku:provider:13.1.5&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="/workspace/tongzhuo/companion-pet/app/build.gradle.kts"
+            line="73"
+            column="20"/>
+    </issue>
+
+</issues>

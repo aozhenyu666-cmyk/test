@@ -15,6 +15,12 @@ class TrainingController(private var session: TrainingSession) {
     private var question: TrainingQuestion? = null
 
     fun bind(question: TrainingQuestion) {
+        if (session.questionId.isNotEmpty()) {
+            require(session.questionId == question.id && session.questionVersion == question.version &&
+                session.requiredSlots == question.requiredSlots) { "训练断点与题目不匹配" }
+            this.question = question
+            return
+        }
         this.question = question
         session = session.copy(
             questionId = question.id,
@@ -25,7 +31,7 @@ class TrainingController(private var session: TrainingSession) {
         )
     }
 
-    private fun askFor(slot: SlotKind): String = when (slot) {
+    private fun askFor(slot: SlotKind): String = question?.let { OfflineTraining.ask(it, slot) } ?: when (slot) {
         SlotKind.LOCATE -> "请点出结论里的范围词，或直接说出哪一句是关键。"
         SlotKind.CONNECT -> "只补一件事：这句话为什么还不足以支持那个结论？"
         SlotKind.EXAMINE -> "再检验一下：举一种没被这次样本覆盖的人。"
@@ -48,6 +54,8 @@ class TrainingController(private var session: TrainingSession) {
         now: Long,
     ): TrainingOutcome {
         if (!session.active) return TrainingOutcome.Rejected("会话已结束")
+        if (session.state !in setOf(TrainingState.WAITING_INPUT, TrainingState.SCAFFOLDED))
+            return TrainingOutcome.Rejected("请先继续当前步骤，或等待本次核验")
         val slot = session.currentSlotKind ?: return TrainingOutcome.Rejected("没有待完成的槽位")
         if (transcript.isBlank() && selectedSentenceIds.isEmpty()) return TrainingOutcome.None
         val requestId = "req-" + session.revision + "-" + now
@@ -57,14 +65,14 @@ class TrainingController(private var session: TrainingSession) {
             modality = modality,
             transcript = transcript.take(1000),
             selectedSentenceIds = selectedSentenceIds.take(4),
-            assistanceLevel = assistance,
+            assistanceLevel = maxOf(session.assistanceLevel, assistance),
             sourceRequestId = requestId,
         )
         session = session.copy(
             revision = session.revision + 1,
             state = TrainingState.EVALUATING,
             attempts = session.attempts + attempt,
-            assistanceLevel = assistance,
+            assistanceLevel = attempt.assistanceLevel,
             pendingRequestId = requestId,
             updatedAt = now,
         )
@@ -80,6 +88,10 @@ class TrainingController(private var session: TrainingSession) {
         if (advice.revision != session.revision) return TrainingOutcome.Rejected("版本过期")
         if (advice.slot != session.currentSlotKind) return TrainingOutcome.Rejected("槽位不匹配")
         if (session.state != TrainingState.EVALUATING) return TrainingOutcome.Rejected("当前不在核验阶段")
+        val q = question ?: return TrainingOutcome.Rejected("题目未绑定")
+        if (advice.verdict == Verdict.PASS && (advice.uncertainty.isNotBlank() ||
+                advice.evidenceRefs.isEmpty() || advice.evidenceRefs.any { it.isBlank() || !q.stem.contains(it) }))
+            return technicalBlock("评分缺少可靠的材料依据，请重新作答或换用本地选项。", now)
 
         val attempts = session.attempts.toMutableList()
         val idx = attempts.indexOfLast { it.slot == advice.slot }
@@ -87,7 +99,9 @@ class TrainingController(private var session: TrainingSession) {
             attempts[idx] = attempts[idx].copy(
                 verdict = advice.verdict,
                 missingStep = advice.missingStep.take(160),
-                assistanceLevel = advice.assistanceLevel,
+                assistanceLevel = maxOf(attempts[idx].assistanceLevel, advice.assistanceLevel),
+                evidenceRefs = advice.evidenceRefs,
+                evaluationSource = advice.evaluationSource,
             )
         }
 
@@ -108,6 +122,7 @@ class TrainingController(private var session: TrainingSession) {
                         revision = session.revision + 1,
                         state = TrainingState.NEXT_SLOT,
                         currentSlot = next,
+                        assistanceLevel = AssistanceLevel.INDEPENDENT,
                         attempts = attempts,
                         pendingRequestId = "",
                         updatedAt = now,
@@ -135,6 +150,9 @@ class TrainingController(private var session: TrainingSession) {
                 session = session.copy(
                     revision = session.revision + 1,
                     state = TrainingState.RECOVERY,
+                    recoveryReason = "QUESTION_ISSUE",
+                    nextAction = "澄清题目或继续原步骤",
+                    resumeTrigger = "USER_RETURN",
                     attempts = attempts,
                     pendingRequestId = "",
                     updatedAt = now,
@@ -149,31 +167,36 @@ class TrainingController(private var session: TrainingSession) {
         if (!session.active) return TrainingOutcome.None
         if (session.state != TrainingState.WAITING_INPUT) return TrainingOutcome.None
         val q = question ?: return TrainingOutcome.None
-        session = session.copy(state = TrainingState.SCAFFOLDED, updatedAt = now)
-        val options = when (session.currentSlotKind) {
-            SlotKind.LOCATE -> q.sentences.take(2).ifEmpty { listOf("任何人的正确率都会提高", "这 20 人") }
-            SlotKind.CONNECT -> listOf("样本是自愿参加的", "人数只有 20 个")
-            else -> listOf("举一个没参加训练的人", "举一个参加但没提高的人")
+        session = session.copy(state = TrainingState.SCAFFOLDED,
+            assistanceLevel = maxOf(session.assistanceLevel, AssistanceLevel.PROMPTED),
+            remindersUsed = maxOf(session.remindersUsed, 1), updatedAt = now)
+        OfflineTraining.options(q, session.currentSlotKind)?.let {
+            return TrainingOutcome.Scaffold("先缩小一点：选出符合当前材料的一项。", it)
         }
-        return TrainingOutcome.Scaffold("先缩小一点：下面两条里，哪一条和当前推理最相关？", options)
+        return TrainingOutcome.Scaffold("先只看题干里的这两句，再补当前问题缺的一步。", q.sentences.take(2))
     }
 
     /** 恢复：暂停计时与连续追问。专注会话按自己的截止时间走，不因这里延长。 */
     fun recover(now: Long): TrainingOutcome {
         if (!session.active) return TrainingOutcome.None
-        session = session.copy(state = TrainingState.RECOVERY, updatedAt = now)
+        session = session.copy(state = TrainingState.RECOVERY, revision = session.revision + 1,
+            pendingRequestId = "", recoveryReason = "NO_RESPONSE", nextAction = "继续同一题同一步",
+            resumeTrigger = "USER_RETURN", updatedAt = now)
         return TrainingOutcome.Recovery("先歇一会儿。现场我留着了，回来从这一步继续。")
     }
 
     fun interrupt(now: Long): TrainingOutcome {
         if (!session.active) return TrainingOutcome.None
-        session = session.copy(state = TrainingState.INTERRUPTED, updatedAt = now)
+        session = session.copy(state = TrainingState.INTERRUPTED, revision = session.revision + 1,
+            pendingRequestId = "", updatedAt = now)
         return TrainingOutcome.None
     }
 
     fun resume(now: Long): TrainingOutcome {
-        if (session.state != TrainingState.INTERRUPTED) return TrainingOutcome.None
-        session = session.copy(state = TrainingState.WAITING_INPUT, updatedAt = now)
+        if (session.state !in setOf(TrainingState.INTERRUPTED, TrainingState.RECOVERY,
+                TrainingState.WAITING_INPUT, TrainingState.SCAFFOLDED)) return TrainingOutcome.None
+        session = session.copy(state = TrainingState.WAITING_INPUT, revision = session.revision + 1,
+            pendingRequestId = "", recoveryReason = "", nextAction = "", resumeTrigger = "", updatedAt = now)
         val slot = session.currentSlotKind ?: SlotKind.LOCATE
         return TrainingOutcome.Waiting(askFor(slot))
     }
@@ -181,14 +204,29 @@ class TrainingController(private var session: TrainingSession) {
     /** 形态切换不清任务、不清专注；只改 interactionMode。 */
     fun switchMode(mode: InteractionMode, now: Long): TrainingOutcome {
         if (mode == session.interactionMode) return TrainingOutcome.None
-        session = session.copy(interactionMode = mode, revision = session.revision + 1, updatedAt = now)
+        session = session.copy(interactionMode = mode, revision = session.revision + 1,
+            state = if (session.state == TrainingState.EVALUATING) TrainingState.WAITING_INPUT else session.state,
+            pendingRequestId = "", updatedAt = now)
         return TrainingOutcome.None
     }
 
     fun end(now: Long): TrainingOutcome {
         if (!session.active) return TrainingOutcome.None
-        session = session.copy(state = TrainingState.ENDED, updatedAt = now)
+        session = session.copy(state = TrainingState.ENDED, revision = session.revision + 1,
+            pendingRequestId = "", updatedAt = now)
         return TrainingOutcome.Completed(summary())
+    }
+
+    fun markFinalReminder(now: Long) {
+        if (session.active) session = session.copy(remindersUsed = 2, updatedAt = now)
+    }
+
+    /** 模型/网络失败只释放核验锁，保留原答案及原槽位。 */
+    fun technicalBlock(message: String, now: Long): TrainingOutcome {
+        if (!session.active || session.state != TrainingState.EVALUATING) return TrainingOutcome.None
+        session = session.copy(state = TrainingState.WAITING_INPUT, revision = session.revision + 1,
+            pendingRequestId = "", recoveryReason = "TECHNICAL_BLOCK", updatedAt = now)
+        return TrainingOutcome.Waiting(message)
     }
 
     fun summary(): String {
