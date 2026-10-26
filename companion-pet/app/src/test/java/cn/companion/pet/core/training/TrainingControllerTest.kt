@@ -33,6 +33,7 @@ class TrainingControllerTest {
         slot = slot ?: c.current.currentSlotKind!!,
         requestId = requestId ?: c.current.pendingRequestId,
         verdict = verdict,
+        evidenceRefs = listOf("任何人"),
         missingStep = missing,
         nextPrompt = next,
         assistanceLevel = assistance,

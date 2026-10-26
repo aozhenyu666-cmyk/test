@@ -52,6 +52,8 @@ data class AnswerAttempt(
     val missingStep: String = "",
     val assistanceLevel: AssistanceLevel = AssistanceLevel.INDEPENDENT,
     val sourceRequestId: String = "",
+    val evidenceRefs: List<String> = emptyList(),
+    val evaluationSource: String = "",
 )
 
 @Serializable
@@ -70,6 +72,11 @@ data class TrainingSession(
     val pendingRequestId: String = "",
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
+    /** 有限提示预算随任务保存，恢复不能重新发一轮提示。 */
+    val remindersUsed: Int = 0,
+    val recoveryReason: String = "",
+    val nextAction: String = "",
+    val resumeTrigger: String = "",
 ) {
     val active: Boolean get() = state !in TERMINAL
     val currentSlotKind: SlotKind? get() = requiredSlots.getOrNull(currentSlot)
@@ -104,4 +111,5 @@ data class EvaluationAdvice(
     val nextPrompt: String = "",
     val assistanceLevel: AssistanceLevel = AssistanceLevel.INDEPENDENT,
     val uncertainty: String = "",
+    val evaluationSource: String = "MODEL",
 )

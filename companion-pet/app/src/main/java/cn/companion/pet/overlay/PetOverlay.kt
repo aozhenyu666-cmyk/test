@@ -37,7 +37,7 @@ class PetOverlay(
     private val context: Context,
     private val settings: Settings,
     private val petListener: PetListener,
-    bubbleListener: BubbleListener,
+    private val bubbleListener: BubbleListener,
 ) {
     private val wm = context.getSystemService(WindowManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
@@ -87,8 +87,14 @@ class PetOverlay(
      * 隔离的输入法实例（表现为弹出陌生键盘、无法粘贴）。改为打开 InputActivity。
      */
     fun openBubbleInput(hint: String? = null) {
+        // InputBridge 每次提交/取消都会 clear，故每次打开都必须重新接线。
+        cn.companion.pet.InputBridge.onSubmit = { bubbleListener.onTextSubmitted(it) }
+        cn.companion.pet.InputBridge.onCancel = { bubbleListener.onTypingCancelled() }
         cn.companion.pet.InputBridge.hint = hint.orEmpty()
-        runCatching { context.startActivity(cn.companion.pet.InputActivity.intent(context)) }
+        bubbleListener.onTypingStarted()
+        runCatching { context.startActivity(cn.companion.pet.InputActivity.intent(context)) }.onFailure {
+            cn.companion.pet.InputBridge.cancel()
+        }
     }
 
     /** 只换气泡文字（倒计时每秒更新），尺寸变化时重新摆位置。 */

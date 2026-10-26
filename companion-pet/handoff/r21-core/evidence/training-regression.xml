@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="cn.companion.pet.core.training.TrainingContinuityRegressionTest" tests="12" skipped="0" failures="0" errors="0" timestamp="2026-10-26T03:10:12" hostname="6fa535f61c72" time="0.065">
+  <properties/>
+  <testcase name="duplicateSubmissionAndAdviceDoNotAdvanceTwice" classname="cn.companion.pet.core.training.TrainingContinuityRegressionTest" time="0.012"/>
+  <testcase name="vagueAndLongIrrelevantAnswersDoNotPassButShortEvidenceDoes" classname="cn.companion.pet.core.training.TrainingContinuityRegressionTest" time="0.0"/>
+  <testcase name="pauseAtZeroIsRealPauseAndWallClockDoesNotEnterTimer" classname="cn.companion.pet.core.training.TrainingContinuityRegressionTest" time="0.001"/>
+  <testcase name="scaffoldedAnswerCannotBeReclassifiedIndependentByAdvice" classname="cn.companion.pet.core.training.TrainingContinuityRegressionTest" time="0.0"/>
+  <testcase name="localRubricDoesNotGradeChangedMaterialOrVersion" classname="cn.companion.pet.core.training.TrainingContinuityRegressionTest" time="0.0"/>
+  <testcase name="secondSlotSurvivesFullRestoreAndCompletesOffline" classname="cn.companion.pet.core.training.TrainingContinuityRegressionTest" time="0.004"/>
+  <testcase name="networkFailureRetainsAnswerAndAllowsRetryWhileRejectingOldCallback" classname="cn.companion.pet.core.training.TrainingContinuityRegressionTest" time="0.001"/>
+  <testcase name="malformedModelSchemaIsRejectedBeforeStateMutation" classname="cn.companion.pet.core.training.TrainingContinuityRegressionTest" time="0.001"/>
+  <testcase name="pendingRequestAfterRestoreCannotAcceptOldResult" classname="cn.companion.pet.core.training.TrainingContinuityRegressionTest" time="0.0"/>
+  <testcase name="recoverySurvivesRestartWithoutRefillingReminderBudget" classname="cn.companion.pet.core.training.TrainingContinuityRegressionTest" time="0.001"/>
+  <testcase name="evidenceMissingFabricatedOrUncertainCannotPass" classname="cn.companion.pet.core.training.TrainingContinuityRegressionTest" time="0.0"/>
+  <testcase name="exitPersistsTombstoneAndLateResultCannotReviveIt" classname="cn.companion.pet.core.training.TrainingContinuityRegressionTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

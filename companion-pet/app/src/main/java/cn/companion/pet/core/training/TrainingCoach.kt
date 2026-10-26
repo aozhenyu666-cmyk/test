@@ -92,10 +92,14 @@ object TrainingPrompt {
         val end = content.lastIndexOf('}')
         if (start < 0 || end <= start) return null
         val obj = runCatching { Json.parseToJsonElement(content.substring(start, end + 1)).jsonObject }.getOrNull() ?: return null
+        val fields = listOf("verdict", "missingStep", "nextPrompt", "assistanceLevel", "uncertainty")
+        if (fields.any { (obj[it] as? JsonPrimitive)?.isString != true }) return null
+        val refs = obj["evidenceRefs"] as? JsonArray ?: return null
+        if (refs.any { (it as? JsonPrimitive)?.isString != true }) return null
         val verdict = (obj["verdict"] as? JsonPrimitive)?.content?.trim()?.uppercase() ?: return null
         val parsed = runCatching { Verdict.valueOf(verdict) }.getOrNull() ?: return null
         val assistance = (obj["assistanceLevel"] as? JsonPrimitive)?.content?.trim()?.uppercase()
-        val level = runCatching { AssistanceLevel.valueOf(assistance ?: "INDEPENDENT") }.getOrNull() ?: AssistanceLevel.INDEPENDENT
+        val level = runCatching { AssistanceLevel.valueOf(assistance ?: "") }.getOrNull() ?: return null
         fun str(key: String) = (obj[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim().orEmpty()
         fun list(key: String) = (obj[key] as? JsonArray).orEmpty()
             .mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content?.trim() }
