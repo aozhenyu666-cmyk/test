@@ -227,6 +227,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private var lastResumeTickAt = 0L
     private var lastDeviationPkg = ""
     private var lastDeviationAt = 0L
+    /** 当前严格陪想 / 外部 AI 会话持有的锁实例号：只按它释放，旧回调放不掉新会话。 */
+    private var strictLockId = ""
+    private var aiLockId = ""
     /** 开始训练时用户所在的应用：回到它不算离开（移植自 DeepSeek 4c591de / Claude CL-T5）。 */
     private var trainingBase: String? = null
     private var recordingCapRunnable: Runnable? = null
@@ -1427,6 +1430,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             gemini.toast(reason)
             return
         }
+        aiLockId = aiSessionId
         endConversation()
         endThink()
         sessionApp = target
@@ -1571,7 +1575,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     private fun finishSession(summary: SessionSummary, announce: Boolean) {
-        sessionArbiter.release(SessionKind.EXTERNAL_AI, force = true)
+        // 按实例号释放：旧会话的迟到收尾不能放掉新会话的锁。
+        sessionArbiter.release(SessionKind.EXTERNAL_AI, aiLockId)
         session = null
         settings.sessionMode = ""
         overlay.setInSession(false)
@@ -2651,6 +2656,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             overlay.showBubble(BubbleSpec(reason, textOnly = true))
             return
         }
+        strictLockId = strictId
         // 验收标准跟着当前问题走，不再写死“作者转折”；没有素材时改成“说出依据或理由”。
         val criteria = if (flow.material.isNotBlank()) listOf("说清这一段的核心主张", "给出一句原文依据")
             else listOf("说清你的判断", "给出一个具体理由")
@@ -2779,7 +2785,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             is StrictSessionStore.Restore.Resume -> {
                 val flow = ThinkFlow("", "恢复的回合", "")
                 flow.strict = StrictSessionMachine(r.state)
-                sessionArbiter.acquire(SessionKind.STRICT_THINK, "strict-restored-" + r.state.startedAt)
+                strictLockId = "strict-restored-" + r.state.startedAt
+                sessionArbiter.acquire(SessionKind.STRICT_THINK, strictLockId)
                 flow.waitSince = now()
                 flow.touchedAt = now()
                 think = flow
@@ -2810,11 +2817,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private fun strictAbort() {
         val flow = think ?: return
         val m = flow.strict ?: return
-        sessionArbiter.release(SessionKind.STRICT_THINK, force = true)
+        sessionArbiter.release(SessionKind.STRICT_THINK, strictLockId)
         val out = m.abort(now())
         if (out is StrictOutcome.Finished) {
             strictStore.save(m.state)
-            overlay.showBubble(BubbleSpec("结束了。" + out.summary, textOnly = true)) { handler.postDelayed({ endThink() }, 3000) }
+            overlay.showBubble(BubbleSpec("结束了。" + out.summary, textOnly = true)) { handler.postDelayed({ if (think === flow) endThink() }, 3000) }
         }
         flow.strict = null
     }
@@ -2827,8 +2834,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         if (tick is StrictOutcome.Finished) {
             strictStore.save(m.state)
             // 自然到期/完成也要放锁：之后 endThink 看到 strict 已为空，不会再放。
-            sessionArbiter.release(SessionKind.STRICT_THINK, force = true)
-            overlay.showBubble(BubbleSpec("这一回合结束：" + tick.summary, textOnly = true)) { handler.postDelayed({ endThink() }, 5000) }
+            sessionArbiter.release(SessionKind.STRICT_THINK, strictLockId)
+            overlay.showBubble(BubbleSpec("这一回合结束：" + tick.summary, textOnly = true)) { handler.postDelayed({ if (think === flow) endThink() }, 5000) }
             flow.strict = null
             return
         }
@@ -2852,7 +2859,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             if (m.state.active) strictStore.save(m.abort(now()).let { m.state })
         }
         // 只放严格陪想自己的锁（force 仍核对种类），不会误放训练/外部 AI。
-        sessionArbiter.release(SessionKind.STRICT_THINK, force = true)
+        sessionArbiter.release(SessionKind.STRICT_THINK, strictLockId)
         think = null
         noteDraft = null
         voice.cancel()
