@@ -35,7 +35,8 @@ jobs:
       # 一手也打一份，模拟器上装上它测两个 App 的连接
       - name: 一手 debug APK (for the link test)
         working-directory: yishou
-        run: ./gradlew --no-daemon assembleDebug
+        # 一手 0.22 起分主线 / 岔路两个版本；联调只用主线（包名 com.yishou.app，总控和哨兵认的是它）
+        run: ./gradlew --no-daemon assembleMainlineDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -58,7 +59,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: yishou-apk-for-link-test
-          path: yishou/app/build/outputs/apk/debug/*.apk
+          path: yishou/app/build/outputs/apk/mainline/debug/*.apk
           if-no-files-found: error
 
       - name: Upload test reports
