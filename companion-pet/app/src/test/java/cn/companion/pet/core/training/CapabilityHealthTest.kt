@@ -120,8 +120,13 @@ class CapabilityHealthTest {
             executionPathHealthy = false, lastAction = null,
         )
         reports.forEach {
-            if (it.layer != HealthLayer.LAST_ACTION) {
+            // BINDER 未使用这条通道时是 UNKNOWN（不适用），不算不可用。
+            if (it.layer != HealthLayer.LAST_ACTION && it.layer != HealthLayer.BINDER) {
                 assertEquals(HealthState.UNAVAILABLE, it.state)
+            }
+            if (it.layer == HealthLayer.BINDER) {
+                assertEquals(HealthState.UNKNOWN, it.state)
+                assertTrue(it.detail.contains("不适用"))
             }
         }
     }

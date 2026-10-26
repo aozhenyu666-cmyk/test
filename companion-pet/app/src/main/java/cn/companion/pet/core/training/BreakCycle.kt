@@ -9,7 +9,7 @@ import java.io.File
  *
  * 一轮 = 启动时固定的配置快照（几题、休息几分钟、硬截止）+ 已得凭据 + 休息资格。
  * - 只有**本地确定性判分**（[OfflineBank] 题）的通过才产生凭据；模型判的通过算“训练完成”，不发券。
- * - 答案被选项说破（RECOGNIZED_WITH_CHOICES 及以上）的题不给凭据，要求同类迁移题独立做对。
+ * - 看过支架（会列出正确选项）或点了选项的题不给凭据，要求同类迁移题独立做对。
  * - 凭据按 questionId@rubricVersion 去重（[QuestionSetSettlement]）；重复回调、重启、双击都不重复计。
  * - 资格**先落盘再发放**，同一轮只发一次；休息结束时刻在发放时算定，重启不重新计时。
  * - 硬截止到了就结束本轮，未完成的记下来，不加题、不延长。
@@ -86,7 +86,8 @@ class BreakCycleEngine(private val settlement: QuestionSetSettlement = QuestionS
         if (OfflineBank.item(q) == null) return null
         val attempts = session.attempts
         val maxAssist = attempts.maxOfOrNull { it.assistanceLevel } ?: AssistanceLevel.INDEPENDENT
-        val revealed = maxAssist >= AssistanceLevel.RECOGNIZED_WITH_CHOICES
+        // 题库题的支架会把正确选项直接列出来：看过支架（PROMPTED 及以上）就算答案被说破。
+        val revealed = maxAssist >= AssistanceLevel.PROMPTED
         val retried = attempts.any { it.verdict != null && it.verdict != Verdict.PASS }
         val kind = when {
             maxAssist == AssistanceLevel.INDEPENDENT && !retried -> PassKind.FIRST_TRY_INDEPENDENT

@@ -125,6 +125,23 @@ class TrainingTimer(
 
     fun isRecovery(): Boolean = stage == Stage.RECOVERY
 
+    /**
+     * 把当前阶段的截止延伸到 [until]（单调时钟）。
+     *
+     * 用户说“我在想”时，界面承诺了 90 秒，就必须真的给到 90 秒；
+     * 只重装原阈值会让承诺与实际不一致（D05）。
+     */
+    fun extendUntil(now: Long, until: Long) {
+        if (stage == Stage.IDLE) return
+        // 把基准往前挪：让 waited(now) 距离阈值还剩 (until - now)。
+        val remaining = (until - now).coerceAtLeast(0)
+        val target = threshold()
+        armedAt = now - (target - remaining).coerceAtLeast(0)
+        pausedAt = null
+        pausedTotal = 0
+        readBonus = 0
+    }
+
     fun restore(now: Long, session: TrainingSession, stemLength: Int = 0) {
         arm(now, stemLength)
         if (session.remindersUsed >= 2) afterVoice(now)

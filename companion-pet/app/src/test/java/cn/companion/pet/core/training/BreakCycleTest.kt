@@ -117,6 +117,21 @@ class BreakCycleTest {
     }
 
     @Test
+    fun seeingScaffoldThenTypingStillNeedsTransfer() {
+        val s = cycle()
+        val q = engine.nextQuestion(s)!!
+        val item = OfflineBank.item(q)!!
+        val c = TrainingController(TrainingSession(id = "s1"))
+        c.bind(q); c.present(1)
+        c.scaffold(2) // “我不会”：支架列出了正确选项
+        c.submit(item.locateCorrect, now = 3) // 自己打字，没点选项
+        c.acceptAdvice(OfflineTraining.evaluate(q, c.current)!!, 4)
+        c.submit(item.connectCorrect, now = 5)
+        c.acceptAdvice(OfflineTraining.evaluate(q, c.current)!!, 6)
+        assertTrue(engine.settle(s, q, c.current, 7) is SettleResult.NeedsTransfer)
+    }
+
+    @Test
     fun promptedButNotRevealedCountsAsPromptedPass() {
         var s = cycle()
         val q = engine.nextQuestion(s)!!

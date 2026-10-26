@@ -19,6 +19,8 @@ interface FocusUiPort {
     fun remind(targetLabel: String, text: String)
     /** 守护结束（到期/紧急退出/打不开）。 */
     fun ended(targetLabel: String, reason: FocusEndReason) {}
+    /** 离开后**确认**回到了目标（看到目标在前台）。调用方可借此把未完成的训练原题带回来。 */
+    fun returnedToTarget(targetLabel: String) {}
 }
 
 interface FocusScheduler {
@@ -113,8 +115,20 @@ class FocusController(
 
     fun onForeground(pkg: String?) {
         val g = guard ?: return
+        val before = g.current.state
         apply(g.onForeground(now(), pkg))
+        notifyReturn(before)
     }
+
+    /** 从离开类状态变成 IN_TARGET：告诉界面“已确认回到目标”。 */
+    private fun notifyReturn(before: FocusState) {
+        val g = guard ?: return
+        val away = before in setOf(FocusState.AWAY_GRACE, FocusState.REMINDED, FocusState.BLOCKING, FocusState.RETURNING)
+        if (away && g.current.state == FocusState.IN_TARGET) runCatching { ui.returnedToTarget(g.current.contract.targetLabel) }
+    }
+
+    /** 练习换来的休息：暂停到 [until]（不超过契约到期），到点自动恢复。 */
+    fun pauseUntil(until: Long, reason: String) { guard?.let { apply(it.pauseUntil(now(), until, reason)) } }
 
     fun tick(interactive: Boolean = true) {
         val g = guard ?: return
@@ -148,7 +162,9 @@ class FocusController(
                     if (accepted) scheduler.post(VERIFY_DELAY) {
                         val cur = guard ?: return@post
                         if (cur.current.contract.sessionId != sessionId) return@post
+                        val before = cur.current.state
                         apply(cur.onVerify(now(), a.generation, device.activePackage()))
+                        notifyReturn(before)
                     }
                 }
                 is FocusAction.Ended -> {

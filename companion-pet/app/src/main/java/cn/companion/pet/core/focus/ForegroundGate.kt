@@ -71,6 +71,14 @@ class ForegroundGate(
             "com.sohu.inputmethod.sogou",
             "com.iflytek.inputmethod",
             "com.baidu.input",
+            // 通话与紧急功能：接电话、拨号、紧急呼叫不算离开，也绝不拦。
+            "com.android.incallui",
+            "com.android.dialer",
+            "com.google.android.dialer",
+            "com.android.phone",
+            "com.android.server.telecom",
+            "com.android.emergency",
+            "com.google.android.apps.safetyhub",
         )
     }
 }

@@ -248,6 +248,20 @@ class FocusGuard(snapshot: FocusSnapshot) {
         return listOf(FocusAction.HideBlock)
     }
 
+    /**
+     * 练习换来的休息（U07）：暂停到 [until]，到点按普通暂停的规则恢复。
+     * 不延长契约：[until] 超过契约到期时截到到期；已经在更长的暂停里就不缩短。
+     */
+    fun pauseUntil(now: Long, until: Long, reason: String): List<FocusAction> {
+        if (!current.active) return emptyList()
+        val end = minOf(until, c.expiresAt)
+        if (end <= now) return emptyList()
+        if (current.state == FocusState.PAUSED && current.pauseUntil >= end) return emptyList()
+        current = current.copy(state = FocusState.PAUSED, pauseUntil = end,
+            generation = current.generation + 1, lastResult = reason, updatedAt = now)
+        return listOf(FocusAction.HideBlock)
+    }
+
     /** 紧急退出：任何状态都立即结束，旧回调全部作废。 */
     fun abort(now: Long, reason: FocusEndReason = FocusEndReason.USER_ABORTED): List<FocusAction> {
         if (!current.active) return emptyList()
