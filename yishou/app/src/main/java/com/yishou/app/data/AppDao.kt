@@ -29,6 +29,9 @@ abstract class AppDao {
     @Query("SELECT * FROM task ORDER BY createdAt DESC")
     abstract fun observeAllTasks(): Flow<List<Task>>
 
+    @Query("SELECT * FROM task ORDER BY createdAt DESC")
+    abstract suspend fun allTasks(): List<Task>
+
     @Insert
     abstract suspend fun insertTask(task: Task): Long
 
@@ -141,9 +144,6 @@ abstract class AppDao {
 
     @Query("SELECT * FROM daily_summary WHERE date = :date")
     abstract suspend fun getSummary(date: String): DailySummary?
-
-    @Query("SELECT * FROM daily_summary ORDER BY date DESC LIMIT 1")
-    abstract suspend fun latestSummary(): DailySummary?
 
     @Query("SELECT * FROM daily_summary ORDER BY date DESC LIMIT 60")
     abstract fun observeSummaries(): Flow<List<DailySummary>>

@@ -1,5 +1,7 @@
 package com.yishou.app.gate
 
+import com.yishou.app.settings.AppZone
+
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
 import android.provider.MediaStore
@@ -9,6 +11,7 @@ import android.view.accessibility.AccessibilityEvent
 import com.yishou.app.YishouApp
 import com.yishou.app.stats.DayStats
 import com.yishou.app.system.Notifications
+import com.yishou.app.system.ExternalGrace
 import com.yishou.app.log.RunLog
 import com.yishou.app.window.WindowClock
 import com.yishou.app.window.WindowRules
@@ -20,8 +23,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import com.yishou.app.link.ZongkongClient
 
 /**
  * 入口思考页的无障碍服务。
@@ -88,11 +89,20 @@ class GateService : AccessibilityService() {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
         foregroundPkg = pkg
-        if (pkg == packageName) return
+        app.partner.foreground(pkg)
+        if (pkg == packageName) {
+            ExternalGrace.close()
+            return
+        }
         check(pkg)
     }
 
     private fun check(pkg: String) {
+        if (app.partner.allows(pkg)) {
+            shortCheck?.cancel()
+            shortPkg = null
+            return
+        }
         val prefs = app.settings.app.value
         val now = System.currentTimeMillis()
         val isSystem = pkg in systemAllowed() || pkg in WindowRules.STATIC_SYSTEM
@@ -104,10 +114,10 @@ class GateService : AccessibilityService() {
             shortCheck?.cancel()
             shortPkg = null
         }
-        // 总控时间：总控在管整台手机，一手不插手
-        if (ZongkongClient.status(this)?.lockdown == true) return
         // 陪练窗口进行中：先按开局规则看这个应用能不能用（关注的应用另由下面的思考页处理）
-        if (prefs.groupOf(pkg) == null && WindowClock.active(now, prefs, ZoneId.systemDefault()) != null) {
+        // 一手自己打开的相册、相机、屏幕授权：不拦（回到一手就收回许可）
+        if (prefs.groupOf(pkg) == null && ExternalGrace.active(now)) return
+        if (prefs.groupOf(pkg) == null && WindowClock.active(now, prefs, AppZone.zone) != null) {
             when (WindowRules.decide(pkg, prefs, systemAllowed(), now)) {
                 WindowRules.Decision.ALLOW -> {}
                 WindowRules.Decision.SHORT -> scheduleShortCheck(pkg, prefs.windowShortMinutes)
@@ -121,9 +131,10 @@ class GateService : AccessibilityService() {
         if (pkg == lastLaunchPkg && now - lastLaunchAt < 2_000) return
 
         scope.launch {
-            // 总控正在严管、会把这个应用弹回去：让总控处理，一手不再叠一层思考页
-            val zk = withContext(Dispatchers.IO) { ZongkongClient.status(this@GateService) }
-            if (zk?.bounces(pkg) == true) return@launch
+            if (app.partner.pendingClose() != null) {
+                launchGate(pkg, group, now)
+                return@launch
+            }
             val pass = try {
                 app.database.dao().activePass(group, now)
             } catch (e: Exception) {
@@ -159,7 +170,7 @@ class GateService : AccessibilityService() {
         shortCheck = scope.launch {
             delay(minutes * 60_000L)
             val now = System.currentTimeMillis()
-            if (lastAppPkg == pkg && WindowClock.active(now, app.settings.app.value, ZoneId.systemDefault()) != null &&
+            if (lastAppPkg == pkg && WindowClock.active(now, app.settings.app.value, AppZone.zone) != null &&
                 app.settings.app.value.windowPauseUntil <= now
             ) {
                 shortPkg = null
@@ -179,13 +190,19 @@ class GateService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onUnbind(intent: Intent?): Boolean {
-        if (running === this) running = null
+        if (running === this) {
+            running = null
+            app.partner.foreground(null)
+        }
         Notifications.cancelRunning(this)
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
-        if (running === this) running = null
+        if (running === this) {
+            running = null
+            app.partner.foreground(null)
+        }
         Notifications.cancelRunning(this)
         scope.cancel()
         super.onDestroy()
@@ -199,6 +216,13 @@ class GateService : AccessibilityService() {
 
         /** 当前前台应用的包名；服务没开时为 null */
         val foreground: String? get() = running?.foregroundPkg
+
+        /** 不算“离开”也不算“回来”的界面：输入法、通知栏、相机、拨号、系统设置（桌面不算，回桌面就是走了） */
+        fun neutral(pkg: String): Boolean {
+            if (pkg in WindowRules.STATIC_SYSTEM) return true
+            val service = running ?: return false
+            return pkg in service.systemAllowed() && pkg !in service.homes
+        }
 
         /**
          * 窗口里的“拉回”能不能把你从 pkg 拉走：窗口允许的学习应用、相机、电话、输入法不拉

@@ -54,6 +54,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -67,6 +68,7 @@ import androidx.core.content.FileProvider
 import com.yishou.app.data.Round
 import com.yishou.app.llm.CoachMessages
 import com.yishou.app.round.AnswerRules
+import com.yishou.app.system.ExternalGrace
 import com.yishou.app.system.Attachment
 import kotlinx.coroutines.delay
 import java.io.File
@@ -85,7 +87,7 @@ fun CoachBubble(text: String, footer: @Composable (() -> Unit)? = null) {
         Column(Modifier.weight(1f)) {
             Text(
                 text,
-                style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Serif, lineHeight = 28.sp),
+                style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 28.sp),
             )
             if (footer != null) {
                 Spacer(Modifier.size(8.dp))
@@ -278,6 +280,8 @@ fun AnswerComposer(
 ) {
     val context = LocalContext.current
     var voiceNote by remember { mutableStateOf<String?>(null) }
+    val fieldFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     var photoUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         if (ok) photoUri?.let(onAttach)
@@ -344,7 +348,7 @@ fun AnswerComposer(
                     minLines = 1,
                     maxLines = 6,
                     shape = RoundedCornerShape(26.dp),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).focusRequester(fieldFocus),
                 )
                 Spacer(Modifier.size(4.dp))
                 if (mic != null) {
@@ -354,6 +358,12 @@ fun AnswerComposer(
                         onText = { t -> onAnswerChange(answer.trimEnd().let { if (it.isEmpty()) t else "$it，$t" }) },
                         enabled = !submitting,
                         onNote = { voiceNote = it },
+                        onFailed = { msg ->
+                            // 一手自己的识别用不了，就把输入框交给输入法：多数输入法键盘上都有麦克风
+                            voiceNote = "$msg。可以直接点输入法键盘上的麦克风说。"
+                            runCatching { fieldFocus.requestFocus() }
+                            keyboard?.show()
+                        },
                     )
                 }
                 Spacer(Modifier.size(4.dp))
@@ -374,13 +384,17 @@ fun AnswerComposer(
                     onClick = {
                         val uri = newPhotoUri(context)
                         photoUri = uri
+                        ExternalGrace.open()
                         camera.launch(uri)
                     },
                     label = { Text("拍照") },
                     enabled = !submitting,
                 )
                 AssistChip(
-                    onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    onClick = {
+                        ExternalGrace.open()
+                        picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    },
                     label = { Text("相册") },
                     enabled = !submitting,
                 )

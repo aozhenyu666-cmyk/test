@@ -1,5 +1,7 @@
 package com.yishou.app.ui
 
+import com.yishou.app.settings.AppZone
+
 import android.app.Application
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -44,8 +46,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yishou.app.YishouApp
 import com.yishou.app.bet.Calibration
 import com.yishou.app.log.RunLog
-import com.yishou.app.recall.EchoRepo
 import com.yishou.app.data.Breakpoint
+import com.yishou.app.data.SetStatus
 import com.yishou.app.data.FaceCount
 import com.yishou.app.data.Task
 import com.yishou.app.llm.Faces
@@ -64,11 +66,6 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import java.time.ZoneId
-import com.yishou.app.link.Partner
-import com.yishou.app.link.ZongkongClient
-import com.yishou.app.link.ZongkongStatus
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 data class ConsoleState(
     val plan: TrainingPlan? = null,
@@ -82,17 +79,19 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     private val dao = yishou.database.dao()
 
     val state: StateFlow<ConsoleState> = run {
-        val zone = ZoneId.systemDefault()
+        val zone = AppZone.zone
         val today = WindowClock.today(System.currentTimeMillis(), zone)
         val since = WindowClock.startOfDay(today.minusDays(60), zone)
         val taskBp = dao.observeCurrentTask().flatMapLatest { task ->
             if (task == null) flowOf<Pair<Task?, Breakpoint?>>(null to null)
             else dao.observeBreakpoint(task.id).map { task to it }
         }
-        combine(dao.observeRoundsSince(since), taskBp, yishou.settings.app) { rounds, (task, bp), prefs ->
-            val byDay = rounds.groupBy { WindowClock.today(it.createdAt, zone) }
-                .mapValues { (_, rs) -> rs.count { it.effective } }
-            ConsoleState(Training.plan(byDay, today, prefs.setSize, prefs.baseSets), task, bp)
+        // 训练量按练完的教练组算：一组就是一组
+        combine(yishou.database.coach().observeSetsSince(since), taskBp, yishou.settings.app) { sets, (task, bp), prefs ->
+            val byDay = sets.filter { it.status == SetStatus.DONE }
+                .groupBy { WindowClock.today(it.endedAt ?: it.startedAt, zone) }
+                .mapValues { (_, ss) -> ss.size }
+            ConsoleState(Training.plan(byDay, today, 1, prefs.baseSets), task, bp)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ConsoleState())
     }
 }
@@ -121,11 +120,9 @@ fun ConsoleScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeKey++ }
     val gateOn = remember(resumeKey) { PermissionStatus.accessibility(context) }
     val wallpaperOn = remember(resumeKey) { BoardWallpaperService.isActive(context) }
-    val faces by produceState(emptyList<FaceCount>(), resumeKey, s.plan?.todayEffective) {
-        value = app.database.dao().faceCounts(0)
-    }
-    val inWindow = WindowClock.active(System.currentTimeMillis(), prefs, ZoneId.systemDefault()) != null
-    val echoDue by produceState(0, resumeKey) { value = EchoRepo(app).due().size }
+    val inWindow = WindowClock.active(System.currentTimeMillis(), prefs, AppZone.zone) != null
+    val cardHist by produceState(emptyList<com.yishou.app.data.CardAttempt>(), resumeKey) { value = app.cardEngine.history() }
+    val redoDue = remember(cardHist) { com.yishou.app.card.Progress.dueRedo(cardHist, System.currentTimeMillis()).size }
     val calibration by produceState("", resumeKey) {
         val resolved = app.database.practice().resolvedBets()
         value = Calibration.verdict(Calibration.of(resolved.map { it.confidence to (it.outcome > 0) }))
@@ -143,10 +140,9 @@ fun ConsoleScreen(
                 Text("主控台", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             }
             s.plan?.let { plan ->
-                item { TrainingCard(plan, inWindow, onOpenWindow, onOpenBoard) }
+                item { TrainingCard(plan, prefs.setCards, inWindow, onOpenWindow, onOpenBoard) }
             }
-            item { PositionCard(s.task, s.breakpoint, onOpenBoard, onEditTask) }
-            item { ZongkongPanel(resumeKey) }
+            item { SkillPanel(cardHist) }
             item {
                 Panel("开关") {
                     StatusRow("入口思考页", if (gateOn) "开着" else "没开，打开关注的应用不会拦", gateOn, onOpenPermissions)
@@ -180,35 +176,19 @@ fun ConsoleScreen(
             item {
                 Panel("练在平时") {
                     StatusRow(
-                        "回响",
-                        if (echoDue > 0) "今天 $echoDue 条：前几天的结论，凭记忆再说一遍" else "今天没有要回响的",
-                        echoDue > 0,
-                    ) { onOpen("echo") }
+                        "错题重做",
+                        if (redoDue > 0) "$redoDue 张到期了，练一组时会先出" else "没有到期的错题",
+                        redoDue > 0,
+                    ) { onOpenBoard() }
                     StatusRow("预判本", calibration.ifEmpty { "先押再看：下注和预演" }, false) { onOpen("bets") }
+                    StatusRow("练功底", "题库：导入的真题和申论", false) { onOpen("bank") }
+                    StatusRow("练思维", "素材库、抓主干、挖前提、站立场、估个数", false) { onOpen("think") }
+                    StatusRow("做事", "一步一步走完一件事", false) { onOpen("jobs") }
                     StatusRow(
                         "运行日志",
                         if (logCount > 0) "记了 $logCount 条出错，点开看" else "没出过错",
                         false,
                     ) { onOpen("log") }
-                }
-            }
-            item {
-                Panel("六面", onClick = onOpenStatus) {
-                    val byFace = faces.associateBy { it.face }
-                    Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                        Faces.ALL.forEach { f ->
-                            val c = byFace[f.number]
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                DieFace(f.number, 30.dp)
-                                Text(f.short, style = MaterialTheme.typography.labelMedium)
-                                Text(
-                                    if (c == null) "0" else "${c.effective}/${c.total}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
                 }
             }
             item {
@@ -224,7 +204,7 @@ fun ConsoleScreen(
 
 /** 今日训练：棋子摆成一组一组，连续达标的天数，最近一周。 */
 @Composable
-private fun TrainingCard(plan: TrainingPlan, inWindow: Boolean, onOpenWindow: () -> Unit, onOpenBoard: () -> Unit) {
+private fun TrainingCard(plan: TrainingPlan, setMoves: Int, inWindow: Boolean, onOpenWindow: () -> Unit, onOpenBoard: () -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(20.dp),
@@ -232,24 +212,20 @@ private fun TrainingCard(plan: TrainingPlan, inWindow: Boolean, onOpenWindow: ()
     ) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
-                if (plan.hitToday) "今天的目标完成了" else "今天练 ${plan.targetSets} 组，每组 ${plan.setSize} 手",
+                if (plan.hitToday) "今天的目标完成了" else "今天练 ${plan.targetSets} 组",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
             )
-            val groups = maxOf(plan.targetSets, plan.doneSets + if (plan.inSet > 0) 1 else 0)
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                repeat(groups) { g ->
-                    val filled = (plan.todayEffective - g * plan.setSize).coerceIn(0, plan.setSize)
-                    StoneGroup(plan.setSize, filled, extra = g >= plan.targetSets)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                repeat(maxOf(plan.targetSets, plan.doneSets)) { g ->
+                    StoneGroup(1, if (g < plan.doneSets) 1 else 0, extra = g >= plan.targetSets)
                 }
             }
-            val left = plan.setSize - plan.inSet
             Text(
                 when {
-                    plan.hitToday && plan.inSet == 0 -> "${plan.doneSets} 组都走完了。想多练就再开一组，不想就到此为止。"
-                    plan.hitToday -> "目标已经完成，这一组还差 $left 手。"
-                    plan.todayEffective == 0 -> "还没落子。先走一组 ${plan.setSize} 手，走完歇一下。"
-                    else -> "完成 ${plan.doneSets} 组，这一组还差 $left 手。"
+                    plan.hitToday -> "${plan.doneSets} 组都练完了。想多练就再开一组，不想就到此为止。"
+                    plan.doneSets == 0 -> "还没开组。一组 $setMoves 张题卡。"
+                    else -> "练完 ${plan.doneSets} 组，还差 ${plan.targetSets - plan.doneSets} 组。"
                 },
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -258,9 +234,9 @@ private fun TrainingCard(plan: TrainingPlan, inWindow: Boolean, onOpenWindow: ()
             }
             WeekStrip(plan)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = onOpenWindow) { Text(if (inWindow) "回到陪练窗口" else "开一组") }
+                Button(onClick = onOpenWindow) { Text(if (inWindow) "回到陪练窗口" else "开陪练窗口") }
                 Spacer(Modifier.width(8.dp))
-                TextButton(onClick = onOpenBoard) { Text("在对局里应一手") }
+                TextButton(onClick = onOpenBoard) { Text("开一组题卡") }
             }
         }
     }
@@ -333,35 +309,6 @@ private fun PositionCard(task: Task?, bp: Breakpoint?, onOpenBoard: () -> Unit, 
     }
 }
 
-/** 总控那边此刻的状态：严管没有、正在做哪一步。点开回总控。没装总控就不显示。 */
-@Composable
-private fun ZongkongPanel(resumeKey: Int) {
-    val context = LocalContext.current
-    val installed = remember(resumeKey) { Partner.installed(context) }
-    if (!installed) return
-    val zk by produceState<ZongkongStatus?>(null, resumeKey) {
-        value = withContext(Dispatchers.IO) { ZongkongClient.status(context, maxAgeMs = 0) }
-    }
-    val open = { ZongkongClient.open(context); Unit }
-    Panel("总控", onClick = open) {
-        val s = zk
-        if (s == null) {
-            StatusRow("连接", "连不上总控：把总控和一手都更新到最新版再试", false, open)
-        } else {
-            StatusRow("状态", if (s.strict) "严管中：${s.headline}" else "放行中", s.strict, open)
-            if (s.actionTitle.isNotBlank()) {
-                StatusRow(
-                    "当前一步",
-                    s.actionTitle + (if (s.step.isNotBlank()) "\n回来先：${s.step}" else ""),
-                    true,
-                    open,
-                )
-            }
-            if (s.gatesTotal > 0) StatusRow("今天的关卡", "交了 ${s.gatesDone} / ${s.gatesTotal}", s.gatesDone >= s.gatesTotal, open)
-        }
-    }
-}
-
 @Composable
 private fun Panel(title: String, onClick: (() -> Unit)? = null, content: @Composable () -> Unit) {
     Surface(
@@ -375,6 +322,41 @@ private fun Panel(title: String, onClick: (() -> Unit)? = null, content: @Compos
             Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             content()
         }
+    }
+}
+
+/**
+ * 小技能：七类题各自的掌握度（最近 10 张里自己做对的比例），以及几条总数。
+ * 判对错全靠题卡比对，所以这些数字说的是真做对了多少，不是说得好不好。
+ */
+@Composable
+private fun SkillPanel(hist: List<com.yishou.app.data.CardAttempt>) {
+    val P = com.yishou.app.card.Progress
+    val stats = P.stats(hist)
+    Panel("小技能（最近 30 天）") {
+        if (stats.total == 0) {
+            Text("还没做过题卡。到“对局”里练一组。", style = MaterialTheme.typography.bodySmall)
+            return@Panel
+        }
+        com.yishou.app.card.Skill.entries.forEach { sk ->
+            val m = P.mastery(hist, sk)
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row {
+                    Text(sk.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    Text(
+                        if (m == null) "没练过" else "${(m * 100).toInt()}%  难度 ${P.difficulty(hist, sk)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                ThinProgress((m ?: 0.0).toFloat())
+            }
+        }
+        Text(
+            "首答对 ${com.yishou.app.card.Progress.Stats.ratio(stats.firstCorrect, stats.total)}，查完改对 ${stats.changedRight} 次、改错 ${stats.changedWrong} 次，" +
+                "把握高的对了 ${com.yishou.app.card.Progress.Stats.ratio(stats.highConfCorrect, stats.highConf)}，关屏练到第 ${P.level(hist)} 级。",
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }
 

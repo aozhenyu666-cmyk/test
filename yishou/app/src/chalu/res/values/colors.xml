@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 岔路的图标底色换成青色，一眼和主线（金色）分开 -->
+    <color name="ic_launcher_background">#5FA8A0</color>
+</resources>

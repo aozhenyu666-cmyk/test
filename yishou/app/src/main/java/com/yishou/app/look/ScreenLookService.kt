@@ -1,5 +1,7 @@
 package com.yishou.app.look
 
+import com.yishou.app.settings.AppZone
+
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -150,7 +152,7 @@ class ScreenLookService : Service() {
                 delay(60_000)
                 val prefs = app.settings.app.value
                 val now = System.currentTimeMillis()
-                if (WindowClock.active(now, prefs, java.time.ZoneId.systemDefault()) == null) {
+                if (WindowClock.active(now, prefs, AppZone.zone) == null) {
                     stopAll()
                     break
                 }
@@ -179,34 +181,28 @@ class ScreenLookService : Service() {
                 setStatus("没有截到画面，再点一次试试")
                 return@launch
             }
-            val dao = app.database.dao()
-            val task = dao.getCurrentTask()
-            if (task == null) {
-                setStatus("还没有当前任务")
-                return@launch
-            }
-            val screen = when (val r = app.vision.describeScreen(task.title, dataUrl)) {
+            // 看一眼：把屏幕上的题完整转写下来
+            val screen = when (val r = app.vision.transcribeQuestion(dataUrl)) {
                 is LlmResult.Ok -> r.value
                 is LlmResult.Err -> {
                     setStatus("识图失败：${r.error.message}")
                     return@launch
                 }
             }
-            when (val r = app.engine.observe(task, screen)) {
-                is LlmResult.Err -> setStatus("出题失败：${r.error.message}")
+            // 屏幕上的题：整理成一张题卡，交给陪练窗口当下一张（揭晓时点官方答案才计分）
+            when (val r = app.cardEngine.import(screen)) {
+                is LlmResult.Err -> setStatus("整理题目失败：${r.error.message}")
                 is LlmResult.Ok -> {
                     app.stats.event(DayStats.LOOK)
-                    lastLookMove = r.value.coachMove
+                    app.incomingCard.value = r.value
+                    lastLookMove = r.value.card.question
                     setStatus(null)
                     Notifications.showReminder(
                         this@ScreenLookService, ID_RESULT,
-                        "陪练看了一眼",
-                        listOf(r.value.observation, r.value.coachMove).filter { it.isNotBlank() }.joinToString("\n"),
+                        "教练看了一眼，把这道题做成了下一张",
+                        r.value.card.question,
                         WindowActivity::class.java,
                     )
-                    if (app.settings.app.value.ttsEnabled && !WindowActivity.isVisible) {
-                        speaker?.speak(com.yishou.app.speech.Spoken.of(r.value.coachMove, r.value.say))
-                    }
                 }
             }
         }

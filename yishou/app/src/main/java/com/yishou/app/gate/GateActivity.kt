@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -35,6 +36,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -52,6 +54,15 @@ import com.yishou.app.ui.TypingBubble
 import com.yishou.app.ui.UserBubble
 import com.yishou.app.ui.VerdictLine
 import com.yishou.app.ui.theme.YishouTheme
+import com.yishou.app.ui.theme.StoneMark
+import com.yishou.app.ui.CardRoundView
+import com.yishou.app.ui.MatrixLoader
+import com.yishou.app.ui.VoiceTextField
+import com.yishou.app.ui.BrakeButton
+import com.yishou.app.ui.EchoCard
+import com.yishou.app.ui.EndgameBoard
+import com.yishou.app.system.Variant
+import com.yishou.app.card.SessionState
 import com.yishou.app.window.WindowActivity
 import kotlinx.coroutines.delay
 
@@ -74,31 +85,28 @@ class GateActivity : ComponentActivity() {
         setContent {
             YishouTheme {
                 val s by vm.state.collectAsStateWithLifecycle()
+                val c by vm.card.collectAsStateWithLifecycle()
+                val ln by vm.line.collectAsStateWithLifecycle()
                 LaunchedEffect(s.passMinutes) {
                     if (s.passMinutes != null) {
-                        delay(2_500)
+                        delay(1_800)
                         returnToApp()
                     }
                 }
-                val attachment by vm.attachment.state.collectAsStateWithLifecycle()
-                val startersPair by vm.starters.collectAsStateWithLifecycle()
                 GateScreen(
+                    ln = ln,
                     s = s,
-                    starters = startersPair?.takeIf { it.first == s.coachMove }?.second.orEmpty(),
-                    attachment = attachment,
-                    onAttach = vm::attach,
-                    onClearAttachment = vm.attachment::clear,
-                    onAnswerChange = vm::onAnswerChange,
-                    onSubmit = vm::submit,
-                    onSaveOffline = vm::saveOffline,
+                    c = c,
+                    vm = vm,
                     onReturn = ::returnToApp,
+                    onScroll = {
+                        val pkg = vm.state.value.triggerPackage
+                        finishAndRemoveTask()
+                        startActivity(com.yishou.app.scroll.ScrollActivity.startIntent(this, pkg))
+                    },
                     onHome = { if (s.isTest) finish() else goHome() },
                     onOpenWindow = {
                         startActivity(Intent(this, WindowActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                        finishAndRemoveTask()
-                    },
-                    onOpenApp = {
-                        startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                         finishAndRemoveTask()
                     },
                 )
@@ -115,6 +123,7 @@ class GateActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         isShowing = true
+        vm.refreshPartnerClose()
     }
 
     override fun onPause() {
@@ -182,142 +191,193 @@ class GateActivity : ComponentActivity() {
     }
 }
 
+/**
+ * 思考页：先答上次说好的事，再做一张题卡，最后说一句看完做什么。
+ * 简洁、一步一屏，不跟你聊天。
+ */
 @Composable
 private fun GateScreen(
+    ln: com.yishou.app.line.LineState,
     s: GateState,
-    starters: List<String>,
-    attachment: Attachment?,
-    onAttach: (Uri) -> Unit,
-    onClearAttachment: () -> Unit,
-    onAnswerChange: (String) -> Unit,
-    onSubmit: () -> Unit,
-    onSaveOffline: () -> Unit,
+    c: SessionState,
+    vm: GateViewModel,
     onReturn: () -> Unit,
+    onScroll: () -> Unit,
     onHome: () -> Unit,
     onOpenWindow: () -> Unit,
-    onOpenApp: () -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    Surface(Modifier.fillMaxSize()) {
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
                 .imePadding()
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text(
-                if (s.isTest) "思考页（测试，不放行）" else "打开「${s.appLabel}」之前，先应一手",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-            )
-
-            if (s.loading) {
-                CircularProgressIndicator()
-                return@Column
-            }
-
-            val task = s.task
-            if (task == null) {
-                Text("还没有当前任务。先在「一手」里填一个真实的学习任务。")
-                Button(onClick = onOpenApp, modifier = Modifier.fillMaxWidth()) { Text("打开一手") }
-                OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("回到桌面") }
-                return@Column
-            }
-
-            if (s.inWindow) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StoneMark(22.dp)
+                Spacer(Modifier.width(10.dp))
                 Text(
-                    if (s.group == GateActivity.WINDOW_GROUP) {
-                        "陪练窗口进行中，「${s.appLabel}」不在这一局允许的应用里。想歇一下就在陪练里点“先停”。"
-                    } else {
-                        "陪练窗口进行中。窗口里不放行，先回到陪练。"
-                    },
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                Button(onClick = onOpenWindow, modifier = Modifier.fillMaxWidth()) { Text("回到陪练") }
-                OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("回到桌面") }
-                return@Column
-            }
-
-            Text(task.title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-
-            // 总控的要求：为什么收紧、今天的主线
-            s.zongkong?.let { zk ->
-                if (zk.note.isNotBlank() || zk.mainTitle.isNotBlank()) {
-                    Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)) {
-                        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            if (zk.note.isNotBlank()) Text(zk.note, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                            if (zk.passCap > 0) Text("答对这一手最多放行 ${zk.passCap} 分钟" + if (zk.noOffline) "，不能离线放行" else "", style = MaterialTheme.typography.bodySmall)
-                            if (zk.mainTitle.isNotBlank()) Text("总控里今天的主线：${zk.mainTitle}", style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
-            }
-
-            s.resumeFrom?.let { last ->
-                ResumeCard(
-                    gapMinutes = (System.currentTimeMillis() - last.createdAt) / 60_000,
-                    lastAnswer = last.userAnswer,
-                    stuck = s.breakpoint?.stuck,
+                    if (s.isTest) "思考页（测试，不放行）" else "打开「${s.appLabel}」之前",
+                    style = MaterialTheme.typography.titleMedium,
                 )
             }
 
-            s.lastRound?.let { r ->
-                UserBubble(r.userAnswer)
-                VerdictLine(r)
-            }
-
-            if (s.held) {
-                Text("这一手算数。但总控的专注锁开着，现在不放行：" + (s.zongkong?.note ?: "先回去做事"), style = MaterialTheme.typography.titleMedium)
-                Button(onClick = { com.yishou.app.link.ZongkongClient.open(context) }, modifier = Modifier.fillMaxWidth()) { Text("回总控") }
-                OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("回到桌面") }
-                return@Column
-            }
-
-            val passMinutes = s.passMinutes
-            if (passMinutes != null) {
-                Text("放行 $passMinutes 分钟。马上回到「${s.appLabel}」。", style = MaterialTheme.typography.titleMedium)
-                Button(onClick = onReturn, modifier = Modifier.fillMaxWidth()) { Text("现在回去") }
-                return@Column
-            }
-
+            val passed = s.passMinutes
+            val needsDelta = c.done && vm.needsDelta
+            val echo = s.echo
             when {
-                s.moveLoading -> TypingBubble()
-                s.coachMove != null -> {
-                    s.moveError?.let {
-                        Text("陪练暂时出不了题（$it），先回答下面这个问题：", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    }
-                    if (s.moveError == null) s.breakpoint?.pendingFace?.takeIf { it > 0 }?.let { FaceChip(it) }
-                    CoachBubble(s.coachMove) { s.breakpoint?.updatedAt?.let { ElapsedClock(it) } }
+                s.loading -> MatrixLoader("准备一张题")
+                s.partnerPending -> {
+                    Text("上次伴读还没收线", style = MaterialTheme.typography.headlineSmall)
+                    Text("留一句聊出了什么，再说下一步做什么。")
+                    Button(onClick = {
+                        context.startActivity(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, "partner"))
+                    }, modifier = Modifier.fillMaxWidth()) { Text("回一手收线") }
+                    OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("先回桌面") }
                 }
-            }
-
-            if (s.coachMove != null) {
-                AnswerComposer(
-                    starters = starters,
-                    answer = s.answer,
-                    onAnswerChange = onAnswerChange,
-                    attachment = attachment,
-                    onAttach = onAttach,
-                    onClearAttachment = onClearAttachment,
-                    submitting = s.submitting,
-                    onSubmit = onSubmit,
-                    hint = s.hint,
-                    error = s.judgeError,
-                )
-                if (s.judgeError != null && !s.isTest) {
-                    if (s.offlineLeft > 0) {
-                        OutlinedButton(onClick = onSaveOffline, enabled = !s.submitting, modifier = Modifier.fillMaxWidth()) {
-                            Text("保存并通过（${s.offlineMinutes} 分钟，今天还剩 ${s.offlineLeft} 次）")
+                passed != null -> {
+                    Text("放行 $passed 分钟", style = MaterialTheme.typography.headlineMedium)
+                    Text("说好看完：${s.exit}", style = MaterialTheme.typography.bodyLarge)
+                    Text("到点会提醒你。下次打开先问你做了没有。", style = MaterialTheme.typography.bodySmall)
+                    Button(onClick = onReturn, modifier = Modifier.fillMaxWidth()) { Text("回到「${s.appLabel}」") }
+                    if (!s.isTest && !com.yishou.app.scroll.ScrollService.running.value) {
+                        OutlinedButton(onClick = onScroll, modifier = Modifier.fillMaxWidth()) { Text("边刷边练：刷的时候考我") }
+                    }
+                }
+                s.inWindow -> {
+                    Text(
+                        if (s.group == GateActivity.WINDOW_GROUP) "陪练窗口进行中，「${s.appLabel}」不在这一局允许的应用里。想歇一下就在陪练里点“先停”。"
+                        else "陪练窗口进行中。窗口里不放行，先回到陪练。",
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Button(onClick = onOpenWindow, modifier = Modifier.fillMaxWidth()) { Text("回到陪练") }
+                    OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("回到桌面") }
+                }
+                echo != null -> EchoCard(echo, onConfirm = vm::confirmEcho)
+                s.followUp != null -> {
+                    Text("上次你说看完要", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("「${s.followUp}」", style = MaterialTheme.typography.headlineSmall)
+                    Text("做了吗？", style = MaterialTheme.typography.titleMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { vm.answerFollowUp(true) }) { Text("做了") }
+                        OutlinedButton(onClick = { vm.answerFollowUp(false) }) { Text("没做") }
+                    }
+                }
+                s.endgame != null -> {
+                    EndgameBoard(s.endgame, shoot = false, onFlip = { hit, _ -> vm.endgameFlipped(hit) }, onLaw = vm::saveLaw)
+                    if (s.endgameDone) {
+                        if (s.isTest) OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
+                        else PassBlock(s, vm, needsDelta = false)
+                    }
+                    OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
+                }
+                s.useLine -> {
+                    LineGate(ln, vm)
+                    if (ln.caught > 0 || (ln.parked && !Variant.chalu)) {
+                        if (s.isTest) {
+                            OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
+                        } else {
+                            PassBlock(s, vm, needsDelta)
                         }
+                    }
+                    OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
+                }
+                !s.gateCard -> {
+                    if (s.isTest) {
+                        Text("现在是只打卡模式：不出题，写一句看完做什么就放行。", style = MaterialTheme.typography.bodyLarge)
+                        OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
                     } else {
-                        Text("今天的离线放行已经用完，只能重试或回到桌面。", style = MaterialTheme.typography.bodySmall)
+                        PassBlock(s, vm, needsDelta)
+                        OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
+                    }
+                }
+                c.error != null && c.round == null -> {
+                    Text("这次出不了题（${c.error}），只打卡。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton(onClick = { vm.retry() }) { Text("再试一次出题") }
+                    if (s.isTest) {
+                        OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
+                    } else {
+                        PassBlock(s, vm, needsDelta)
+                        OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
+                    }
+                }
+                c.round == null -> MatrixLoader("准备一张题")
+                else -> {
+                    CardRoundView(c, vm.actions)
+                    if (c.done) {
+                        if (s.isTest) {
+                            OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
+                        } else {
+                            PassBlock(s, vm, needsDelta)
+                            OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
+                        }
                     }
                 }
             }
-            TextButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text(if (s.isTest) "关闭" else "回到桌面") }
         }
+    }
+}
+
+@Composable
+private fun ExitField(s: GateState, vm: GateViewModel) {
+    VoiceTextField(s.exit, vm::onExitChange, if (Variant.chalu) "例如：回去点开资料分析第 3 题" else "例如：回去做两道资料分析", Modifier.fillMaxWidth())
+}
+
+/**
+ * 放行那一块：说好看完做什么（岔路问“回来第一步点哪儿”，放行后挂在通知栏），
+ * 岔路里答错了先写差值；放行按钮停 2 秒再落。
+ */
+@Composable
+private fun PassBlock(s: GateState, vm: GateViewModel, needsDelta: Boolean) {
+    if (needsDelta) {
+        Text("这张错了。写下差值再走：", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+        VoiceTextField(s.delta, vm::onDeltaChange, com.yishou.app.line.Echoes.DELTA_HINT, Modifier.fillMaxWidth(), minLines = 2)
+        Text("下次打开「${s.appLabel}」，开局先推这一句给你。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    Text(if (Variant.chalu) "回来第一步点哪儿？" else "看完要做的第一件事是？", style = MaterialTheme.typography.titleMedium)
+    ExitField(s, vm)
+    val ready = s.exit.isNotBlank() && (!needsDelta || com.yishou.app.line.Echoes.usable(s.delta))
+    BrakeButton(if (needsDelta && !com.yishou.app.line.Echoes.usable(s.delta)) "先写差值" else "说好了，放行", enabled = ready, modifier = Modifier.fillMaxWidth(), onClick = vm::pass)
+}
+
+
+/** 入口的主线一手：问你在下的那一局的下一问，过了本机规则才算 */
+@Composable
+private fun LineGate(ln: com.yishou.app.line.LineState, vm: GateViewModel) {
+    val line = ln.line ?: return
+    var text by androidx.compose.runtime.saveable.rememberSaveable(ln.question, ln.moves) { androidx.compose.runtime.mutableStateOf("") }
+    Text("「${line.anchor}」", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.tertiary)
+    if (ln.caught > 0) {
+        Text("接住了这一手。", style = MaterialTheme.typography.titleMedium)
+        Text("断点记好了：${ln.question}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        return
+    }
+    if (ln.parked) {
+        Text("这一手先放着，记下了。", style = MaterialTheme.typography.titleMedium)
+        if (Variant.chalu) {
+            Text("岔路里“先放着”不放行。换个小问题接着下，接住一手就走。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Button(onClick = vm::resumeLine, modifier = Modifier.fillMaxWidth()) { Text("接着下") }
+        }
+        return
+    }
+    if (ln.say.isNotBlank() && ln.say != ln.question) Text(ln.say.substringBefore(ln.question).trim(), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.tertiary)
+    Text(ln.question, style = MaterialTheme.typography.headlineSmall)
+    val normal = ln.ask == com.yishou.app.line.Ask.NORMAL || ln.ask == com.yishou.app.line.Ask.ANCHOR
+    if (Variant.chalu) Text(com.yishou.app.ui.beatLabel(ln), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    VoiceTextField(text, { text = it }, if (Variant.chalu && normal) "只有当＿＿，才＿＿" else "先说结论，再说为什么", Modifier.fillMaxWidth(), minLines = 2)
+    val rules = when {
+        !normal -> com.yishou.app.line.TalkRules.SMALL
+        Variant.chalu -> com.yishou.app.line.TalkRules.CUT
+        else -> com.yishou.app.line.TalkRules.of(ln.level)
+    }
+    if (text.isNotBlank()) com.yishou.app.ui.TalkMeter(text, rules)
+    if (ln.busy) MatrixLoader("在看这一手")
+    androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = { vm.move(text) }, enabled = text.isNotBlank() && !ln.busy, modifier = Modifier.weight(1f).height(50.dp)) { Text("下这一手") }
+        OutlinedButton(onClick = { vm.move("想不出") }, enabled = !ln.busy, modifier = Modifier.height(50.dp)) { Text("想不出") }
     }
 }

@@ -1,5 +1,7 @@
 package com.yishou.app.window
 
+import com.yishou.app.settings.AppZone
+
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -79,7 +81,7 @@ class WindowService : Service() {
         val app = application as YishouApp
         val now = System.currentTimeMillis()
         val prefs = app.settings.app.value
-        val span = WindowClock.active(now, prefs, ZoneId.systemDefault()) ?: return null
+        val span = WindowClock.active(now, prefs, AppZone.zone) ?: return null
         val min = ((span.end - now) / 60_000).coerceAtLeast(0) + 1
         return if (prefs.windowPauseUntil > now) "休息中，窗口还剩 $min 分钟" else "窗口还剩 $min 分钟"
     }

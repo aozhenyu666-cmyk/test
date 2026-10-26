@@ -13,8 +13,8 @@ android {
         applicationId = "com.yishou.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 9
-        versionName = "0.9.0"
+        versionCode = 22
+        versionName = "0.22.0"
     }
 
     signingConfigs {
@@ -43,6 +43,24 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+
+    // 两条线：主线（一手）和岔路（探索版）。岔路有自己的包名，能和主线同时装，数据完全分开。
+    flavorDimensions += "line"
+    productFlavors {
+        create("mainline") {
+            dimension = "line"
+            buildConfigField("boolean", "CHALU", "false")
+            buildConfigField("String", "CHALU_NAME", "\"\"")
+        }
+        create("chalu") {
+            dimension = "line"
+            applicationIdSuffix = ".chalu"
+            versionNameSuffix = "-chalu1"
+            buildConfigField("boolean", "CHALU", "true")
+            buildConfigField("String", "CHALU_NAME", "\"岔路 1\"")
+        }
     }
 }
 
@@ -77,4 +95,11 @@ dependencies {
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     // Android 自带的 org.json 在本地单元测试里只是空壳，换成真实实现
     testImplementation("org.json:json:20240303")
+}
+
+// 两条路共用一份数据库结构文件（schemas/）：岔路的 KSP 等主线写完再跑，免得读到写了一半的文件
+tasks.configureEach {
+    if (name.startsWith("kspChalu") && name.endsWith("Kotlin")) {
+        mustRunAfter(name.replace("kspChalu", "kspMainline"))
+    }
 }

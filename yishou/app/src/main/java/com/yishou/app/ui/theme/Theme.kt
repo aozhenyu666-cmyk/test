@@ -23,7 +23,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.yishou.app.YishouApp
@@ -51,14 +52,14 @@ private val White = lightColorScheme(
     onTertiary = Color.White,
     tertiaryContainer = Color(0xFFEFE5C4),
     onTertiaryContainer = Color(0xFF3B2E05),
-    background = Color(0xFFECEEE9),
+    background = Color(0xFFF7F7F4),
     onBackground = Color(0xFF14171C),
-    surface = Color(0xFFF4F5F1),
+    surface = Color(0xFFFFFFFF),
     onSurface = Color(0xFF14171C),
-    surfaceVariant = Color(0xFFE1E4DD),
+    surfaceVariant = Color(0xFFEEEFEA),
     onSurfaceVariant = Color(0xFF545B65),
-    surfaceContainer = Color(0xFFE6E9E2),
-    surfaceContainerHigh = Color(0xFFDFE2DA),
+    surfaceContainer = Color(0xFFF1F2EE),
+    surfaceContainerHigh = Color(0xFFE9EAE5),
     error = Color(0xFFA3362B),
     errorContainer = Color(0xFFF3DAD5),
     onErrorContainer = Color(0xFF45100A),
@@ -101,20 +102,33 @@ object ThemeMode {
     const val NIGHT = 2
 }
 
-/** 标题和陪练的话用宋体（系统衬线字体），正文用默认黑体。 */
+/**
+ * 全应用一种字体（系统黑体），层级只靠字号、字重和字距：标题稍重、字距略收，正文舒展。
+ * 数字一律等宽（tnum），倒计时、比分对齐不跳。
+ */
 private fun typography(): Typography {
     val base = Typography()
-    fun TextStyle.serif() = copy(fontFamily = FontFamily.Serif)
-    return base.copy(
-        displayLarge = base.displayLarge.serif(),
-        displayMedium = base.displayMedium.serif(),
-        displaySmall = base.displaySmall.serif(),
-        headlineLarge = base.headlineLarge.serif(),
-        headlineMedium = base.headlineMedium.serif(),
-        headlineSmall = base.headlineSmall.serif(),
-        titleLarge = base.titleLarge.serif(),
-        titleMedium = base.titleMedium.serif(),
-        titleSmall = base.titleSmall.serif(),
+    fun TextStyle.tune(weight: FontWeight? = null, tracking: Float? = null) = copy(
+        fontWeight = weight ?: fontWeight,
+        letterSpacing = tracking?.sp ?: letterSpacing,
+        fontFeatureSettings = "tnum",
+    )
+    return Typography(
+        displayLarge = base.displayLarge.tune(FontWeight.Medium, -0.5f),
+        displayMedium = base.displayMedium.tune(FontWeight.Medium, -0.4f),
+        displaySmall = base.displaySmall.tune(FontWeight.Medium, -0.3f),
+        headlineLarge = base.headlineLarge.tune(FontWeight.SemiBold, -0.3f),
+        headlineMedium = base.headlineMedium.tune(FontWeight.SemiBold, -0.2f),
+        headlineSmall = base.headlineSmall.tune(FontWeight.SemiBold, -0.1f),
+        titleLarge = base.titleLarge.tune(FontWeight.SemiBold),
+        titleMedium = base.titleMedium.tune(FontWeight.SemiBold),
+        titleSmall = base.titleSmall.tune(FontWeight.SemiBold),
+        bodyLarge = base.bodyLarge.copy(lineHeight = 26.sp).tune(),
+        bodyMedium = base.bodyMedium.copy(lineHeight = 22.sp).tune(),
+        bodySmall = base.bodySmall.tune(),
+        labelLarge = base.labelLarge.tune(),
+        labelMedium = base.labelMedium.tune(),
+        labelSmall = base.labelSmall.tune(),
     )
 }
 
