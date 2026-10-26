@@ -25,6 +25,20 @@ class PerceptionService : AccessibilityService() {
         // 输入法、系统界面和我们自己的悬浮窗不算“切换了 App”
         ignored = (imes + listOf(packageName, "com.android.systemui", "android")).toSet()
         PerceptionHub.service = this
+        // 健康挑战：在本服务主线程队列上应答，证明执行路径可响应。
+        PerceptionHub.challengeResponder = { challengeId, nonce ->
+            PerceptionHub.onHealthReceipt?.invoke(
+                cn.companion.pet.core.training.HealthReceipt(
+                    challengeId = challengeId,
+                    nonce = nonce,
+                    // stage 必须标明真的走完执行路径，不能留空或用 entry/echo。
+                    stage = "a11y_main_queue",
+                    instanceId = javaClass.simpleName + "@" + System.identityHashCode(this).toString(16),
+                    ok = true,
+                    completedAt = System.currentTimeMillis(),
+                ),
+            )
+        }
         PerceptionHub.reader = { readWindowText() }
         PerceptionHub.setConnected(true)
         // 系统会在进程被杀后重新绑定无障碍服务：借这个机会把桌宠拉回来（用户主动停止过则不拉）。
@@ -64,6 +78,9 @@ class PerceptionService : AccessibilityService() {
     }
 
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /** 供健康挑战把任务投递到本服务的主线程队列。 */
+    internal fun mainHandler(): android.os.Handler = handler
     private val confirmForeground = Runnable {
         try {
             val active = rootInActiveWindow?.packageName?.toString()
@@ -91,6 +108,7 @@ class PerceptionService : AccessibilityService() {
     private fun disconnect() {
         if (PerceptionHub.service === this) {
             PerceptionHub.service = null
+            PerceptionHub.challengeResponder = null
             PerceptionHub.reader = null
             PerceptionHub.setConnected(false)
         }

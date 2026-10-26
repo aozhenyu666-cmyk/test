@@ -90,6 +90,17 @@ import cn.companion.pet.core.training.TrainingPrompt
 import cn.companion.pet.core.training.TrainingSession
 import cn.companion.pet.core.training.TriggerReason
 import cn.companion.pet.core.training.AssistanceLevel
+import cn.companion.pet.core.training.ActionReceiptState
+import cn.companion.pet.core.training.CapabilitySummary
+import cn.companion.pet.core.training.HealthChallengeJudge
+import cn.companion.pet.core.training.HealthReceipt
+import cn.companion.pet.core.training.SemanticConfirmBridge
+import cn.companion.pet.core.training.SemanticConfirmPrompt
+import cn.companion.pet.core.training.SemanticVerdict
+import cn.companion.pet.core.training.CreditResult
+import cn.companion.pet.core.training.PassKind
+import cn.companion.pet.core.training.QuestionSetSettlement
+import cn.companion.pet.core.training.SetState
 import cn.companion.pet.core.continuity.StrictEvalPrompt
 import cn.companion.pet.core.continuity.StrictEndReason
 import cn.companion.pet.core.continuity.Evaluation
@@ -192,6 +203,15 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private val opportunityArbiter = OpportunityArbiter()
     /** S7：有限宽限与录音时长上限。 */
     private val extensionPolicy = ExtensionPolicy()
+    /** 五题换休息的题组结算（纯逻辑，凭据去重）。 */
+    private val questionSet = QuestionSetSettlement(requiredCredits = 5)
+    private var questionSetState = SetState()
+    /** 执行路径健康挑战；比 3 秒超时给出余量。 */
+    private val healthJudge = HealthChallengeJudge(timeoutMillis = 3_000)
+    @Volatile private var equipmentHealthy = false
+    /** 最近一次设备动作的结果；null 表示还没执行过。 */
+    @Volatile private var lastActionState: ActionReceiptState? = null
+    @Volatile private var lastEquipmentDetail = "还没做过健康检查"
     private var extensionState = ExtensionState()
     private val inputDuration = InputDurationPolicy()
     /** 单一持有者仲裁：训练 / 严格陪想 / 外部 AI 同一时刻只能有一个。 */
@@ -2012,6 +2032,175 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
      * 为什么不能用列表最后一条：抑制记录也会入列表，最后一条可能根本不是本次机会。
      * 幂等：重复结算不会重复增加无效计数。
      */
+    /**
+     * 记一道合格凭据，并在达到门槛时发休息。
+     *
+     * 规则：
+     * - 凭据按 questionId@rubricVersion 去重（同题反复做只算一次）；
+     * - 独立通过 / 提示后通过 分开记账；
+     * - 只有累计到 questionSet.required 道不同题才发券；
+     * - 发券走 RestGrantStore 的单次语义，重启不续时。
+     */
+    private fun recordQuestionCredit(c: TrainingController) {
+        val q = trainingQuestion ?: return
+        val snap = c.current
+        val usedHelp = snap.attempts.any { it.assistanceLevel != AssistanceLevel.INDEPENDENT }
+        val kind = if (usedHelp) PassKind.PROMPTED_PASS else PassKind.FIRST_TRY_INDEPENDENT
+        val result = questionSet.record(
+            state = questionSetState,
+            questionId = q.id,
+            rubricVersion = q.version,
+            kind = kind,
+            answerRevealed = false,
+            now = now(),
+        )
+        when (result) {
+            is CreditResult.Counted -> questionSetState = result.state
+            is CreditResult.Duplicate -> return
+            is CreditResult.NeedsTransfer -> {
+                overlay.showBubble(BubbleSpec(result.reason, textOnly = true))
+                return
+            }
+        }
+        if (!questionSet.eligible(questionSetState)) {
+            val left = (questionSet.required - questionSetState.credits.size).coerceAtLeast(0)
+            if (left > 0) {
+                handler.postDelayed({
+                    runCatching {
+                        overlay.showBubble(BubbleSpec(
+                            "这道题算数。再完成 " + left + " 道就能换一段休息。",
+                            textOnly = true,
+                        ))
+                    }
+                }, 2_500)
+            }
+            return
+        }
+        val granted = restGrants.grant(
+            policy = if (settings.focusPolicyType == FocusPolicyType.PRACTICE_FOR_BREAK.name)
+                FocusPolicyType.PRACTICE_FOR_BREAK else FocusPolicyType.FIXED_FOCUS,
+            sessionId = snap.id,
+            eventId = "set-" + snap.id,
+            allowedPackages = emptySet(),
+            durationMillis = settings.restMinutes.coerceIn(1, 60) * 60_000L,
+            now = now(),
+        )
+        if (granted == null) return
+        questionSetState = questionSetState.copy(grantIssued = true, grantIssuedAt = now())
+        overlay.showBubble(BubbleSpec(
+            "五道题都完成了。休息 " + settings.restMinutes + " 分钟，到点我叫你。",
+            textOnly = true,
+        )) { handler.postDelayed({ overlay.hideBubble() }, 6_000) }
+    }
+
+    /**
+     * 发起一次健康挑战：必须经过无障碍服务的主线程队列应答。
+     *
+     * 判定：
+     * - 超时 / 无应答 → 执行路径不可用，不能宣称监管可靠；
+     * - 回执 stage 是入口回显 → 拒绝；
+     * - 只有 a11y_main_queue 应答才算执行路径健康。
+     *
+     * 健康通过**不等于**动作成功。设备动作效果另由 ActionReceipt 记录。
+     */
+    fun runEquipmentChallenge() {
+        val now = mono()
+        val id = "hc-" + now
+        val nonce = java.util.UUID.randomUUID().toString()
+        val challenge = healthJudge.issue(id, nonce, "a11y_queue", now)
+        var receipt: HealthReceipt? = null
+        PerceptionHub.onHealthReceipt = { r -> if (r.challengeId == id) receipt = r }
+        val posted = PerceptionHub.postChallenge(id, nonce)
+        if (!posted) {
+            equipmentHealthy = false
+            lastEquipmentDetail = "无障碍服务没连接，无法核验执行路径"
+            return
+        }
+        handler.postDelayed({
+            val verdict = healthJudge.judge(challenge, receipt, mono())
+            when (verdict) {
+                is cn.companion.pet.core.training.ChallengeVerdict.Healthy -> {
+                    equipmentHealthy = true
+                    lastEquipmentDetail = "执行路径有响应（" + verdict.latencyMillis + "ms）"
+                }
+                is cn.companion.pet.core.training.ChallengeVerdict.TimedOut -> {
+                    equipmentHealthy = false
+                    lastEquipmentDetail = "执行路径超时，" + verdict.waitedMillis + "ms 没有应答"
+                }
+                is cn.companion.pet.core.training.ChallengeVerdict.Rejected -> {
+                    equipmentHealthy = false
+                    lastEquipmentDetail = "健康回执被拒：" + verdict.reason
+                }
+            }
+            PerceptionHub.onHealthReceipt = null
+        }, healthJudge.timeout + 500)
+    }
+
+    /** 是否可以对外声称“监管可靠”：必须执行路径健康且最近动作已观察到效果。 */
+    fun canClaimReliable(): Boolean = CapabilitySummary.canClaimReliable(
+        permission = Permissions.accessibility(context),
+        serviceConnected = PerceptionHub.service != null,
+        executionPathHealthy = equipmentHealthy,
+        lastAction = lastActionState,
+    )
+
+    /** 诊断用：五层能力状态的可读描述。 */
+    fun capabilityLines(): List<String> = CapabilitySummary.summarize(
+        permission = Permissions.accessibility(context),
+        serviceConnected = PerceptionHub.service != null,
+        executionPathHealthy = equipmentHealthy,
+        lastAction = lastActionState,
+    ).map { it.layer.name + "：" + it.detail }
+
+    /**
+     * 语义确认：本地只验形式，语义交给模型确认一次。
+     *
+     * - 没 Key / 没额度 / 超时 / 解析失败 → NotConfirmed：保留答案、允许重试，不冒充通过；
+     * - 迟到结果按快照核对（revision + requestId），过期丢弃。
+     */
+    private fun confirmSemantics(
+        c: TrainingController,
+        plan: MaterialQuestionPlan,
+        snapshot: TrainingSession,
+        transcript: String,
+    ) {
+        val key = apiKey()
+        if (key == null || !app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
+            val advice = SemanticConfirmBridge.toAdvice(
+                snapshot, plan,
+                SemanticVerdict.NotConfirmed("模型这会儿用不了，语义还没核对；答案已保留，可以重试。"),
+            )
+            handleTrainingAdvice(c, advice)
+            return
+        }
+        trainingTimer.pause(mono())
+        overlay.setMood(Mood.THINKING)
+        overlay.showBubble(BubbleSpec("我核对一下意思……", textOnly = true))
+        probeJob = scope.launch {
+            val messages = withContext(Dispatchers.IO) {
+                synchronized(app.memoryLock) {
+                    SemanticConfirmPrompt.build(memory.persona(), plan, transcript)
+                }
+            }
+            stats.add(Stats.Kind.API_CALLS)
+            val r = app.client.complete(
+                ChatRequest(
+                    settings.endpoint, settings.model, key, messages,
+                    maxTokens = SemanticConfirmPrompt.MAX_TOKENS,
+                    timeoutMillis = SemanticConfirmPrompt.TIMEOUT_MILLIS,
+                ),
+            )
+            trainingTimer.resume(mono())
+            // 迟到结果：会话换了、版本变了、请求号变了，一律丢弃。
+            if (training !== c || c.current.revision != snapshot.revision ||
+                c.current.pendingRequestId != snapshot.pendingRequestId || !c.current.active
+            ) return@launch
+            val parsed = (r as? ChatResult.Success)?.let { SemanticConfirmPrompt.parse(it.content) }
+            val verdict = parsed ?: SemanticVerdict.NotConfirmed("核对回包解析不了，答案已保留，可以重试。")
+            handleTrainingAdvice(c, SemanticConfirmBridge.toAdvice(snapshot, plan, verdict))
+        }
+    }
+
     private fun resolveOpportunity(progress: Boolean) {
         val c = training ?: return
         val sessionId = c.current.id
@@ -2115,12 +2304,27 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // 材料题优先用绑定材料的本地判分：依据真实原句，不靠模型自由发挥。
         val plan = materialPlan
         if (plan != null && plan.materialId == snapshot.materialId && plan.materialVersion == snapshot.materialVersion) {
-            val advice = when (slot) {
-                SlotKind.LOCATE -> MaterialTraining.evaluateLocate(plan, snapshot, selected, transcript)
-                SlotKind.CONNECT -> MaterialTraining.evaluateConnect(plan, snapshot, transcript)
-                else -> null
+            when (slot) {
+                SlotKind.LOCATE -> {
+                    // 点选是可枚举的，本地判定足够可靠。
+                    MaterialTraining.evaluateLocate(plan, snapshot, selected, transcript)
+                        ?.let { handleTrainingAdvice(c, it); return }
+                }
+                SlotKind.CONNECT -> {
+                    val local = MaterialTraining.evaluateConnect(plan, snapshot, transcript)
+                    if (local != null) {
+                        if (local.verdict != Verdict.PASS) {
+                            // 形式不合格：本地直接拒，不必问模型。
+                            handleTrainingAdvice(c, local)
+                            return
+                        }
+                        // 形式合规但语义未核验 → 交给模型确认一次再决定。
+                        confirmSemantics(c, plan, snapshot, transcript)
+                        return
+                    }
+                }
+                else -> Unit
             }
-            if (advice != null) { handleTrainingAdvice(c, advice); return }
         }
         OfflineTraining.evaluate(q, snapshot)?.let { handleTrainingAdvice(c, it); return }
         val key = apiKey()
@@ -2170,6 +2374,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             logTrainingResult(c, completed = true)
             // 真实完成：按 sessionId 结算为“有推进”。
             resolveOpportunity(progress = true)
+            // 题组结算：记一道合格凭据；累计够门槛才发休息。
+            recordQuestionCredit(c)
         }
         if (!overlay.isBubbleShown) { trainingTimer.pause(mono()); return }
         when (out) {
