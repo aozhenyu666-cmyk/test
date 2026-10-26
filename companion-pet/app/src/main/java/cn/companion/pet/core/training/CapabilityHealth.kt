@@ -155,11 +155,26 @@ object CapabilitySummary {
         serviceConnected: Boolean,
         executionPathHealthy: Boolean,
         lastAction: ActionReceiptState?,
+        /** Binder 通道（Shizuku）；null 表示这次不用这个通道。 */
+        binderAvailable: Boolean? = null,
     ): List<CapabilityReport> = listOf(
         CapabilityReport(
             HealthLayer.PERMISSION,
             if (permission) HealthState.OK else HealthState.UNAVAILABLE,
             if (permission) "权限已授予" else "权限未授予",
+        ),
+        CapabilityReport(
+            HealthLayer.BINDER,
+            when (binderAvailable) {
+                null -> HealthState.UNKNOWN
+                true -> HealthState.OK
+                false -> HealthState.UNAVAILABLE
+            },
+            when (binderAvailable) {
+                null -> "未使用这条通道（不适用）"
+                true -> "Binder 已连接"
+                false -> "Binder 不可用"
+            },
         ),
         CapabilityReport(
             HealthLayer.SERVICE,
