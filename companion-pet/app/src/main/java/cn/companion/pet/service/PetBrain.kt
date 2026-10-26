@@ -50,6 +50,7 @@ import cn.companion.pet.core.session.EndReason
 import cn.companion.pet.core.session.ChatSession
 import cn.companion.pet.core.session.AssistantApp
 import cn.companion.pet.core.skim.SkimBuffer
+import cn.companion.pet.InputBridge
 import cn.companion.pet.core.training.BuiltInQuestions
 import cn.companion.pet.core.training.EnforcementAction
 import cn.companion.pet.core.training.TrainingStore
@@ -254,7 +255,12 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         app.events.addListener(agentListener)
         handler.postDelayed(agentTrigger, 1_200)
         PerceptionHub.onScroll = { pkg -> onScrollEvent(pkg) }
-        PerceptionHub.onForegroundConfirmed = { pkg -> runCatching { focusController.onForeground(pkg) } }
+        PerceptionHub.onForegroundConfirmed = { pkg ->
+            runCatching { focusController.onForeground(pkg) }
+            runCatching { onTrainingForeground(pkg) }
+        }
+        // 文字输入走 InputActivity（有正常窗口令牌），结果从这里回传。
+        InputBridge.onSubmit = { text: String -> runCatching { onTextSubmitted(text) } }
         scope.launch {
             settings.changes.collect {
                 scheduler.config = settings.rhythm()
@@ -278,6 +284,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         app.actions.cancelAll()
         PerceptionHub.onScroll = null
         PerceptionHub.onForegroundConfirmed = null
+        InputBridge.clear()
         app.focusStatus = null
         runCatching { focusOverlay.hide() }
         handler.removeCallbacksAndMessages(null)

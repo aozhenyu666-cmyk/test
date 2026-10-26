@@ -249,3 +249,68 @@ fun EmptyState(
         }
     }
 }
+
+/**
+ * API Key 这类敏感输入框。
+ *
+ * 不用 PasswordVisualTransformation：它会让系统把输入框判定为密码框，
+ * vivo/iQOO 会切到“安全键盘”，而安全键盘默认禁止粘贴，用户无法粘 Key。
+ * 这里改为自己打码，并提供显式“粘贴”按钮（直接读剪贴板，不经过输入法）。
+ */
+private class MaskTransformation : androidx.compose.ui.text.input.VisualTransformation {
+    override fun filter(text: androidx.compose.ui.text.AnnotatedString): androidx.compose.ui.text.input.TransformedText {
+        val masked = "\u25CF".repeat(text.text.length)
+        val map = object : androidx.compose.ui.text.input.OffsetMapping {
+            override fun originalToTransformed(offset: Int): Int = offset.coerceIn(0, masked.length)
+            override fun transformedToOriginal(offset: Int): Int = offset.coerceIn(0, masked.length)
+        }
+        return androidx.compose.ui.text.input.TransformedText(androidx.compose.ui.text.AnnotatedString(masked), map)
+    }
+}
+
+@Composable
+fun SecretField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    val visibleState = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val visible = visibleState.value
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Column(modifier.fillMaxWidth()) {
+        androidx.compose.material3.OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(label) },
+            singleLine = true,
+            visualTransformation = if (visible) androidx.compose.ui.text.input.VisualTransformation.None else MaskTransformation(),
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                keyboardType = androidx.compose.ui.text.input.KeyboardType.Ascii,
+                autoCorrect = false,
+            ),
+            trailingIcon = {
+                androidx.compose.material3.TextButton(onClick = { visibleState.value = !visibleState.value }) {
+                    Text(if (visible) "隐藏" else "显示", style = MaterialTheme.typography.labelMedium)
+                }
+            },
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            androidx.compose.material3.TextButton(onClick = {
+                val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                val clip = cm?.primaryClip
+                val text = if (clip != null && clip.itemCount > 0) clip.getItemAt(0)?.text?.toString() else null
+                if (text.isNullOrBlank()) {
+                    android.widget.Toast.makeText(context, "剪贴板里没有文字", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    onValueChange(text.trim())
+                    android.widget.Toast.makeText(context, "已粘贴", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }) { Text("粘贴", style = MaterialTheme.typography.labelMedium) }
+            androidx.compose.material3.TextButton(onClick = { onValueChange("") }) {
+                Text("清空", style = MaterialTheme.typography.labelMedium)
+            }
+        }
+    }
+}

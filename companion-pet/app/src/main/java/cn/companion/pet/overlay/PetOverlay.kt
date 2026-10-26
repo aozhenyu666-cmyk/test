@@ -80,7 +80,16 @@ class PetOverlay(
     fun setInSession(v: Boolean) { pet.inSession = v }
 
     /** 气泡里打开输入框（并让窗口能弹输入法）。 */
-    fun openBubbleInput(hint: String? = null) { if (bubbleShown) bubble.openInput(hint) }
+    /**
+     * 打开文字输入。
+     *
+     * 不再用气泡里的 EditText：悬浮窗没有 Activity 窗口令牌，部分 ROM 会给它挂
+     * 隔离的输入法实例（表现为弹出陌生键盘、无法粘贴）。改为打开 InputActivity。
+     */
+    fun openBubbleInput(hint: String? = null) {
+        cn.companion.pet.InputBridge.hint = hint.orEmpty()
+        runCatching { context.startActivity(cn.companion.pet.InputActivity.intent(context)) }
+    }
 
     /** 只换气泡文字（倒计时每秒更新），尺寸变化时重新摆位置。 */
     fun updateBubbleText(text: String) {
