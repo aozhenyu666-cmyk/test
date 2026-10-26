@@ -305,6 +305,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         restoreSession()
         // 严格回合跨重启恢复；到期/已结束的不复活。
         runCatching { restoreStrict() }
+        // 启动后核验一次执行路径；不通过时 canClaimReliable() 保持 false。
+        handler.postDelayed({ runCatching { runEquipmentChallenge() } }, 3_000)
         // 训练回合跨重启恢复：回到同一题同一槽位，并如实说明空窗。
         runCatching { restoreTraining() }
         // 守护：杀进程/重启后恢复；已结束/过期/损坏的不复活。
@@ -401,7 +403,15 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     // ---------- 每秒一次 ----------
 
+    private var lastHealthCheckAt = 0L
+
     private fun tick() {
+        // 每 5 分钟复核一次执行路径；只在有服务连接时做，避免无意义调度。
+        val monoNow = mono()
+        if (PerceptionHub.service != null && monoNow - lastHealthCheckAt > 5 * 60_000L) {
+            lastHealthCheckAt = monoNow
+            runCatching { runEquipmentChallenge() }
+        }
         val now = now()
         // 守护按秒推进（到期、宽限、重试），不受下面任何提前 return 影响；熄屏/锁屏时不拉回。
         runCatching { focusController.tick(interactive = active) }
@@ -1322,6 +1332,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     // ---------- 收尾和记录 ----------
 
     private fun endConversation() {
+        // 释放 AMBIENT 输出权，避免温和搭话结束后把输出管道一直占着。
+        if (outputArbiter.current == OutputPriority.AMBIENT) outputArbiter.release("", force = true)
         val c = convo ?: run { overlay.hideBubble(); return }
         convo = null
         c.ended = true
@@ -2138,7 +2150,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     /** 是否可以对外声称“监管可靠”：必须执行路径健康且最近动作已观察到效果。 */
     fun canClaimReliable(): Boolean = CapabilitySummary.canClaimReliable(
-        permission = Permissions.accessibility(context),
+        permission = cn.companion.pet.ui.Permissions.accessibility(context),
         serviceConnected = PerceptionHub.service != null,
         executionPathHealthy = equipmentHealthy,
         lastAction = lastActionState,
@@ -2146,7 +2158,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     /** 诊断用：五层能力状态的可读描述。 */
     fun capabilityLines(): List<String> = CapabilitySummary.summarize(
-        permission = Permissions.accessibility(context),
+        permission = cn.companion.pet.ui.Permissions.accessibility(context),
         serviceConnected = PerceptionHub.service != null,
         executionPathHealthy = equipmentHealthy,
         lastAction = lastActionState,
@@ -2313,7 +2325,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 SlotKind.CONNECT -> {
                     val local = MaterialTraining.evaluateConnect(plan, snapshot, transcript)
                     if (local != null) {
-                        if (local.verdict != Verdict.PASS) {
+                        if (local.verdict != cn.companion.pet.core.training.Verdict.PASS) {
                             // 形式不合格：本地直接拒，不必问模型。
                             handleTrainingAdvice(c, local)
                             return
@@ -2494,19 +2506,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     /** 训练完成后的可选休息许可（练习换休息策略）。 */
-    private fun maybeGrantRest(now: Long) {
-        val c = training ?: return
-        val policy = if (settings.focusPolicyType == FocusPolicyType.PRACTICE_FOR_BREAK.name) FocusPolicyType.PRACTICE_FOR_BREAK else FocusPolicyType.FIXED_FOCUS
-        val g = restGrants.grant(
-            policy = policy,
-            sessionId = c.current.id,
-            eventId = "complete-" + c.current.id,
-            allowedPackages = emptySet(),
-            durationMillis = settings.restMinutes.coerceIn(1, 60) * 60_000L,
-            now = now,
-        ) ?: return
-        overlay.showBubble(BubbleSpec("练完了。给你 " + settings.restMinutes + " 分钟休息。", textOnly = true)) { handler.postDelayed({ overlay.hideBubble() }, 4000) }
-    }
+    // 休息发放已统一由 recordQuestionCredit 按题组结算处理；
 
     /** 强制规则入口：拒绝 / 未答 / 编造 → 切严格模态，不是只提示。 */
     private fun onTrainingViolation(reason: TriggerReason) {

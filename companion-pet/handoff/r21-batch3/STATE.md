@@ -1,105 +1,85 @@
-# R2.1 批次三：题库补足、题组结算接 UI、健康挑战接执行队列、语义确认闭环
+# 批次三 + 接线修复：当前到底还差什么
 
-日期：2026-10-26。基线 `deepseek/r21-proactive` @ `66ce3ca`（35 / 0.7.5-r21-batch2-preview）。
-版本 **36 / 0.7.6-r21-batch3-preview**。只改 companion-pet/。
+日期：2026-10-26。分支 `deepseek/r21-proactive`。版本 **36 / 0.7.6-r21-batch3-preview**。
 
-> **重要**：本轮按用户要求只写代码、不再重复跑构建验证。build 由 Claude 侧负责。
-> 因此下面的测试数量与构建结果是**未验证**的，不得当成已通过。
+## 一、本轮验证（这次真的跑了）
 
-## 一、本轮四项
+| 项 | 结果 |
+|---|---|
+| JVM | **603 tests / 0 failures** |
+| lint | **0 errors / 17 warnings** |
+| assembleDebug | 成功 |
+| assembleDebugAndroidTest | 成功 |
+| APK | 30,209,567 bytes |
+| SHA-256 | `BA467E45A758DD93C382B940A846C9F808AF61EDB3F85221DB20E36EAC7151FC` |
 
-### 1. 题库补足到 6 道（`BuiltInQuestions.kt`）
+上一轮我说“不验证”，这次补跑了，**发现并修掉 3 个真实编译错误**（`Permissions` 未解析 ×2、`Verdict` 跨包冲突 ×1）。说明“只写不验”会留真 bug。
 
-之前只有 3 道，其中 2 道靠模型判分，凑不出「五题换休息」。现在 6 道、题号唯一，覆盖五种可判的认知动作：
+## 二、本轮修的“写了没接线”
 
-| 题号 | 缺口类型 | 槽位 |
+| # | 问题 | 处理 |
 |---|---|---|
-| sample-scope-01 | 范围过度推广 | LOCATE + CONNECT |
-| sample-cause-01 | 因果倒置（先后当因果） | LOCATE + CONNECT |
-| sample-sample-01 | 样本偏差（三店一城推全国） | LOCATE + CONNECT |
-| sample-hasty-01 | 以偏概全（三个同事推所有用户） | LOCATE + CONNECT |
-| sample-conflict-01 | 用个例否定整体 | LOCATE + CONNECT |
-| sample-open-01 | 外推性未知（开放题） | LOCATE + CONNECT + EXAMINE |
+| 1 | `runEquipmentChallenge()` 从未被调用 → `equipmentHealthy` 永远 false → `canClaimReliable()` 永远 false，健康检查形同不存在 | 服务启动 3 秒后跑一次；tick 每 5 分钟复检（仅有服务连接时） |
+| 2 | `maybeGrantRest()` 是旧路径，与 `recordQuestionCredit()` 重复 → 会绕过题组门槛直接发券 | 删除死代码，只保留按 5 题结算 |
+| 3 | `OutputArbiter` 的 AMBIENT 权从未释放 → 一次闲聊后输出管道可能被永久占住 | `endConversation()` 里释放 AMBIENT |
 
-每题都带 `rubricPoints` 与 `nextStep`，随题存盘，恢复后仍可用。新增 `pickMany()` 供题组取题。
+## 三、对照 R2.1 的完整差距表
 
-### 2. 题组结算接进 UI 路径（`PetBrain.recordQuestionCredit`）
+### 已做（逻辑层，603 测试覆盖）
 
-之前 `maybeGrantRest` 存在但没接到按题组计数的路径，等于完成一题就发券。现在：
+| 能力 | 位置 |
+|---|---|
+| 双形态 WARM/COACH | `TrainingSession` |
+| 训练状态机、槽位推进、旧响应丢弃 | `TrainingController` |
+| 材料绑定 + 版本 + 真实正文出题 | `BoundMaterial` / `MaterialQuestionBuilder` |
+| 本地形式判分 + 语义确认闭环 | `MaterialTraining` / `SemanticConfirm` |
+| 机会去重、仲裁、抑制留痕 | `Opportunity` / `OpportunityArbiter` / `OpportunityStore` |
+| 按 sessionId 结算、幂等、冷却 | `OpportunityStore.settleBySession` |
+| 会话互斥（训练/严格/外部 AI） | `SessionArbiter` |
+| 输出互斥（气泡与语音） | `OutputArbiter` |
+| S7 有限宽限 + 录音上限 | `ExtensionPolicy` / `InputDurationPolicy` |
+| 执行路径健康挑战（5 层） | `CapabilityHealth` |
+| 题组结算（凭据去重、迁移题、单次发券） | `QuestionSetSettlement` / `RestGrant` |
+| 6 道可判离线题 | `BuiltInQuestions` |
+| 跨应用拦截判定 | `TrainingFocusBridge` |
+| 强约束（拒绝/沉默/编造 → 强制 COACH） | `EnforcementRules` |
 
-- 每完成一题 → `questionSet.record()` 记一道凭据；
-- 凭据按 `questionId@rubricVersion` 去重（同题反复做只算一次）；
-- 独立通过 / 提示后通过分开记账；
-- 未达门槛 → 提示“再完成 N 道就能换一段休息”；
-- 达 5 道 → 走 `RestGrantStore.grant()` 单次发券，重启不续时；
-- 发券后 `grantIssued = true`，不再 eligible。
+### 仍未做
 
-### 3. 健康挑战接真实执行队列（`PerceptionHub` / `PerceptionService` / `PetBrain`）
+| # | 缺口 | 影响 | 能否离线做 |
+|---|---|---|---|
+| 1 | **S1 计划触发**：到点主动发起训练 | 用户不打开 App 就不会练 | 可（WorkManager + 通知） |
+| 2 | **主动断点恢复**：不是被动接续，而是主动回来问 | 中途离开后不会自己回来 | 可 |
+| 3 | **偏离触发的主动发起**：拦截目前只弹气泡 | 不是主动把题带回 | 部分可 |
+| 4 | **`capabilityLines()` 未接诊断页** | 用户看不到五层健康状态 | 可 |
+| 5 | **`canClaimReliable()` 未在任何 UI 显示** | 用户无法知道监管是否可靠 | 可 |
+| 6 | **48 条黄金样例**仍是我标注的回归集 | 不能声称达到 §7.1 门槛 | 需人工 |
+| 7 | **六题覆盖有限**：只认含范围/因果词的句子 | 纯叙述材料出不了题 | 可扩 |
+| 8 | **语义确认强依赖模型**：没 Key 时 CONNECT 只能 RETRY | 离线无法完成训练 | 需本地兜底 |
+| 9 | **A01–A36 真机项全 NOT_RUN** | 无一真机证据 | 需设备 |
 
-之前 `HealthChallengeJudge` 只是纯逻辑判定器。现在打通：
+## 四、与 Claude 分支的合并
 
-- `PerceptionHub.challengeResponder` 由 `PerceptionService.onServiceConnected` 注册；
-- `PerceptionHub.postChallenge()` 把挑战**投递到无障碍服务自己的主线程 Handler**——与前台事件同一条队列；
-- 应答 stage 固定为 `a11y_main_queue`，**不是** entry/binder_echo，所以入口回显会被判拒；
-- `PetBrain.runEquipmentChallenge()` 发挑战、等回执、按判定更新 `equipmentHealthy`；
-- `canClaimReliable()` 仍要求：权限 + 服务 + 执行路径健康 + 最近动作**已观察确认**；
-- `capabilityLines()` 输出五层状态供诊断页显示。
+Claude `companion-unify-v1`（0.7.1/31，基于 `c5438a2`）与本分支（`dd7fe60`）已分叉：+1 / -5。
+它做了 S1–S9、T1–T12（严格回合、计时时钟、拦截接线等 UI 级修复），**正好是我这版缺的接线层**。
 
-关键点：健康通过**不等于**动作成功。`lastActionState` 单独记录，API 报成功但未观察仍是 UNKNOWN。
+合并建议：
+1. 以 `deepseek/r21-proactive` 为底；
+2. 挑 Claude 的 T1/T2（时钟）、T5/T6（前台拦截接线）、T7（休息调用点）、T8（完成不记中止）、T9（RECOVERY 可继续）、T11/T12（气泡回答入口、训练菜单）逐条合入；
+3. **不要**改回去：`acceptAdvice` 要求 PASS 无 uncertainty——这是语义确认层的支点。
 
-### 4. 语义确认闭环（`SemanticConfirm.kt`）
+## 五、回答“是不是只等测试了”
 
-这是补上此前那个真实缺口：本地只能验形式，语义没核验就不能算完成。
+**不是。** 分三层：
 
-流程：
-```
-CONNECT 槽提交
-  → MaterialTraining.evaluateConnect（只验形式）
-      形式不合格 → 直接拒，不消耗模型额度
-      形式合规   → SemanticConfirmPrompt 交给模型确认一次
-          SUPPORTS     → 产生真正 PASS（uncertainty 清空，本地可采纳）
-          NOT_SUPPORTS → 要求澄清，给出具体缺口
-          UNCLEAR      → 要求说具体
-          NotConfirmed → RETRY：保留答案、可重试，不冒充通过
-```
+- **逻辑层：基本齐了**（603 测试），但有两个**产品级功能缺口**，测试补不了：S1 到点主动发起、主动断点恢复。
+- **接线层：还差 3 处**：`capabilityLines()` / `canClaimReliable()` 未进 UI；偏离触发的主动发起未接。
+- **真机层：全部未验证**。A01–A36 一项没跑。
 
-迟到结果按 `revision + requestId` 核对，过期丢弃。模型请求期间暂停计时。
+## 六、建议顺序
 
-## 二、待 Claude 验证的事项
-
-以下**未验证**（本轮不跑构建）：
-
-1. 编译是否通过（新增 3 个文件 + PetBrain 多处改动）。
-2. `SemanticConfirmPrompt.build` 的字符串拼接是否正确（我用拼接而非模板，避免嵌套问题）。
-3. `PerceptionService.mainHandler()` 与 `challengeResponder` 的可访问性（`internal` 跨包需同模块）。
-4. `PetBrain` 新增 import 是否齐全（`ActionReceiptState`、`CapabilitySummary`、`HealthChallengeJudge`、`HealthReceipt`、`SemanticConfirm*`、`CreditResult`、`PassKind`、`QuestionSetSettlement`、`SetState`）。
-5. 新增测试：`SemanticConfirmTest`(6)、`QuestionSetSettlementTest`(6)、`BuiltInQuestionsTest`(4)。
-
-## 三、与 Claude `companion-unify-v1` 的关系
-
-Claude 的 `companion-unify-v1`（08f4dbe2，0.7.1/31）基于 `c5438a2`，做了 S1–S9 / T1–T12 修复，
-与本分支（基于 `66ce3ca`）**已分叉**：它领先 1 个提交、落后 5 个提交。
-
-两边的修复**大量重叠但不冲突**方向一致：都在做“统一会话 + 单次发券 + 不冒充通过”。
-建议合并顺序：以 `deepseek/r21-proactive` 为底（它含 S6 材料链、输出仲裁、会话互斥、S7 宽限、
-健康挑战、题组结算、语义确认），再挑 Claude 的 S1–S9/T1–T12 逐条比对合入。
-
-两处需要人工判断的冲突点：
-1. `TrainingTimer`：Claude 修了混用墙上/单调时钟（T1/T2），我这版沿用其修复，未再改。
-2. `TrainingController.acceptAdvice`：Claude 要求 PASS 无 uncertainty；我这版利用这个校验，
-   把“形式合规但语义未核验”故意判成不可采纳——语义确认通过后才清空 uncertainty。这是**有意设计**，合并时不要把它改回去。
-
-## 四、仍然不成立的完成
-
-1. **真机全部 NOT_RUN**：无设备。健康挑战、拦截层、A01–A36 真机项一项没跑。
-2. **语义确认依赖模型**：没 Key 时第二槽只能 RETRY，闭环不完整。
-3. **48 条黄金样例仍是开发者标注**，不是独立人工集。
-4. **只在材料这一个入口**：计划触发（S1）、主动断点恢复、偏离触发仍不是主动发起。
-5. **`runEquipmentChallenge` 未接入定时调度**：目前是公开方法，需要有人调用（例如进入诊断页或守护启动时）。
-
-## 五、回退
-
-- 新增文件全部独立，不侵入既有契约；
-- `questionSet` 默认需 5 道，未达门槛只提示，不阻断训练；
-- `runEquipmentChallenge` 不被调用时，`equipmentHealthy` 保持 false → `canClaimReliable()` 为 false（保守，不会误报可靠）；
-- 语义确认失败只 RETRY，不影响既有单题流程。
+1. 合并 Claude 的接线修复（T1/T2/T5/T6/T7/T8/T9/T11/T12）。
+2. 补 S1 计划触发 + 主动断点恢复（决定“它到底是不是主动的”）。
+3. 五层健康与可靠性状态进诊断页。
+4. 真机验证 A01–A36。
+5. 48 条人工黄金样例（需人）。
