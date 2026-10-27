@@ -47,7 +47,7 @@ class OverlayIntegrationTest {
     private fun vm(): WindowViewModel = ViewModelProvider(app.windowOwner, ViewModelProvider.AndroidViewModelFactory.getInstance(app))[WindowViewModel::class.java]
     private suspend fun openPanel() {
         eventually { device.hasObject(By.text("一手 ●")) || device.hasObject(By.text("回一句 / 说话")) }
-        find(By.text("一手 ●"))?.click()
+        device.findObject(By.text("一手 ●"))?.click()
         Assert.assertTrue(device.wait(Until.hasObject(By.text("回一句 / 说话")), 5_000))
     }
     @Test fun floatingReplyWorksOverTheOriginalAppAndCanBeDraggedAndStopped() = runBlocking {
@@ -100,7 +100,7 @@ class OverlayIntegrationTest {
             Assert.assertNotNull("系统看屏授权弹窗没有出现", allow)
             // 新版系统允许选单个应用：明确选整个测试屏幕。
             device.findObject(By.text("A single app"))?.let { it.click(); device.wait(Until.findObject(By.text("Entire screen")), 2_000)?.click() }
-            (find(By.res("android", "button1")) ?: allow).click()
+            (device.findObject(By.res("android", "button1")) ?: allow!!).click()
             eventually { ScreenLookService.running.value }
             RuntimeSupport.fixture()
             openPanel()
