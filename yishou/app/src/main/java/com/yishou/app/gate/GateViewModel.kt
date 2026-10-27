@@ -6,7 +6,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.yishou.app.YishouApp
 import com.yishou.app.card.*
-import com.yishou.app.data.*
+import com.yishou.app.data.CardMode
+import com.yishou.app.data.FadeRow
+import com.yishou.app.data.ReflexRow
+import com.yishou.app.data.Pass
 import com.yishou.app.judge.*
 import com.yishou.app.reflex.*
 import com.yishou.app.reflex.Main as GateMain

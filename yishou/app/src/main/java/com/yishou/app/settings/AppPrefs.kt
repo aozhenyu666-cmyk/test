@@ -194,13 +194,7 @@ data class AppPrefs(
 
         /** 读不出来（空、损坏）时返回默认设置，不让应用崩溃。 */
         fun fromJson(text: String?): AppPrefs {
-            if (text.isNullOrBlank()) return AppPrefs(
-                morningEnabled = o.optBoolean("morningEnabled", true),
-                morningFromHour = o.optInt("morningFromHour", 6).coerceIn(0, 23),
-                morningToHour = o.optInt("morningToHour", 10).coerceIn(1, 24),
-                lastWakeDay = if (o.isNull("lastWakeDay")) null else o.getLong("lastWakeDay"),
-                recallDay = o.optLong("recallDay", Long.MIN_VALUE),
-                recallIds = o.optJSONArray("recallIds")?.let { a -> (0 until a.length()).map { a.getLong(it) }.toSet() } ?: emptySet(),)
+            if (text.isNullOrBlank()) return AppPrefs()
             val o = try {
                 JSONObject(text)
             } catch (e: Exception) {
@@ -224,6 +218,12 @@ data class AppPrefs(
             } ?: d.watched
             val checks = o.stringSet("manualChecks") ?: d.manualChecks
             return AppPrefs(
+                morningEnabled = o.optBoolean("morningEnabled", true),
+                morningFromHour = o.optInt("morningFromHour", 6).coerceIn(0, 23),
+                morningToHour = o.optInt("morningToHour", 10).coerceIn(1, 24),
+                lastWakeDay = if (o.isNull("lastWakeDay")) null else o.getLong("lastWakeDay"),
+                recallDay = o.optLong("recallDay", Long.MIN_VALUE),
+                recallIds = o.optJSONArray("recallIds")?.let { a -> (0 until a.length()).map { a.getLong(it) }.toSet() } ?: emptySet(),
                 groups = groups,
                 watched = watched,
                 offlinePassMinutes = o.optInt("offlinePassMinutes", d.offlinePassMinutes).coerceIn(1, 30),
