@@ -38,6 +38,8 @@ class G2RulesTest {
         assertNotNull(Reflexes.check("只有", "认真读题", q.prompt))
         assertNull(Reflexes.check("只有", "先核对到达车站的最后时刻", q.prompt))
         assertTrue(GateCompletion.ready(yes, true))
+        // 拉回过了也不放行
+        assertFalse(GateCompletion.ready(yes, true, pullBack = true))
     }
     @Test fun `线程判过才发十五分钟 判卷不在不发也不扣次数`() = runTest {
         val issuer = PassIssuer(FakeDao()) { 100 }

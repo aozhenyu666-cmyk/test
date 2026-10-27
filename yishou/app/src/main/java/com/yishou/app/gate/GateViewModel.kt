@@ -209,7 +209,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     private fun mayGrant() = !_state.value.let { it.isTest || it.inWindow || it.partnerPending || it.passMinutes != null || it.loading }
     fun pass() = run {
         val rev = review ?: return@run
-        if (!mayGrant() || !GateCompletion.ready(rev.verdict, triggerSaved)) return@run
+        if (!mayGrant() || !GateCompletion.ready(rev.verdict, triggerSaved, rev.pullBack)) return@run
         val pass = if (_state.value.mode == GateMain.STRAND) {
             // 不让同一份复盘在下次入口再换一次通行。
             work.acknowledge()

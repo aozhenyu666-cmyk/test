@@ -227,7 +227,10 @@ private fun GateScreen(s: GateState, vm: GateViewModel, onReturn: () -> Unit, on
                     if (s.mode == com.yishou.app.reflex.Main.STRAND) vm.work.strand?.let { com.yishou.app.ui.StrandHeading(it) }
                     ProbeGateView(s, vm)
                     val rev = vm.review
-                    if (rev?.verdict?.passed == true) {
+                    if (rev?.verdict?.passed == true && rev.pullBack) {
+                        Text("连上了，接着想这件事")
+                        Button(onClick = vm::retry, enabled = !s.busy) { Text("接着来") }
+                    } else if (rev?.verdict?.passed == true) {
                         if (!vm.triggerSaved) com.yishou.app.ui.TriggerEditor(rev.q, s.busy, vm::saveTrigger)
                         else {
                             Text("触发器已存好")

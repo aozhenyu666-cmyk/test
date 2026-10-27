@@ -11,7 +11,9 @@ fun StrandTurnView(work: StrandWork, busy: Boolean, revision: Int, onChanged: ()
     if (review != null) {
         if (!review.pullBack) DiffCardView(review)
         else Text(review.verdict.note)
-        if (review.verdict.passed) {
+        if (review.verdict.passed && review.pullBack) {
+            Button(onClick = onNext, enabled = !busy) { Text("连上了，接着想这一项") }
+        } else if (review.verdict.passed) {
             if (onTrigger != null) TriggerEditor(review.q, busy, onTrigger)
             else Text("这一手过了，先存一句触发器")
         } else Button(onClick = onNext, enabled = !busy) { Text("接着想这一项") }
