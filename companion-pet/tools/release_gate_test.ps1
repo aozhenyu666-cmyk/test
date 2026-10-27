@@ -70,6 +70,29 @@ function Assert-Gate {
     }
 }
 
+# tag 触发时的来源校验：GitHub compare API 的 status 语义。
+# ahead / identical => tag 指向的提交属于该分支历史（合法）
+# behind / diverged => 不属于（从旧分支打的 tag，必须拒绝）
+# 语义已对真实仓库实测：
+#   1234c6aa(主线head) vs 主线 => identical
+#   c9f6970(主线上的旧提交) vs 主线 => ahead
+#   12f7382(旧分支 0.5.5) vs 主线 => diverged
+function Test-TagSource {
+    param([string]$CompareStatus, [string[]]$Allowed = @('deepseek/r21-proactive', 'ccr-2899d69f-xlzjh6'))
+    if ($Allowed.Count -eq 0) { return @{ Allow = $false; Reason = 'no allowed branch' } }
+    if ($CompareStatus -in @('ahead', 'identical')) {
+        return @{ Allow = $true; Reason = "compare status '$CompareStatus' means commit is on the branch" }
+    }
+    return @{ Allow = $false; Reason = "compare status '$CompareStatus' means commit is not on the branch" }
+}
+
+Write-Host '=== tag 来源校验（compare status 语义）==='
+Assert-Gate 'tag 打在主线 HEAD' $true (Test-TagSource -CompareStatus 'identical')
+Assert-Gate 'tag 打在主线上的旧提交' $true (Test-TagSource -CompareStatus 'ahead')
+Assert-Gate 'tag 打在主线之后的提交' $false (Test-TagSource -CompareStatus 'behind')
+Assert-Gate 'tag 打在旧分支（0.5.5 那类）' $false (Test-TagSource -CompareStatus 'diverged')
+
+
 Write-Host '=== 当前实现 ==='
 
 Assert-Gate '首次发布放行' $true (Test-ReleaseGate -Code 39 -ApkExists $true -ReleaseExists $false -QuerySucceeded $false)

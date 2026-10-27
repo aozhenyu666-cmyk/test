@@ -1,12 +1,25 @@
 name: Companion Pet official release
 
-# 正式版发布（只能手动触发、只能在主线跑）。写入的 tag 是 tongzhuo-stable：
+# 正式版发布。写入的 tag 是 tongzhuo-stable：
 # 旧分支里的旧工作流只认识 tongzhuo-latest，永远写不到这里，所以不会再被旧版本覆盖。
 # 建议在仓库 Settings → Environments 给 official-release 加“需要审批”，发布前由负责人点确认。
 # 迁移/回滚见 companion-pet/handoff/release-isolation/STATE.md。
+#
+# 为什么同时有 workflow_dispatch 和 push:tags —— 这是本文件最容易踩的坑：
+# GitHub 只允许触发「已在该仓库注册过」的工作流，而只有 workflow_dispatch 的工作流
+# 在它从未出现在默认分支时**根本注册不上**，手动运行会直接返回
+#   HTTP 404: workflow companion-pet-release.yml not found on the default branch
+# 本仓库默认分支是 SP 插件分支（claude/super-productivity-mcp-mobile-xe4499），
+# 本文件不在其上，于是「只能手动触发」= 永远触发不了，正式发布一次都没成功过。
+# 加一个 tag 触发后，推送 tag 即可让 GitHub 认识并运行本工作流，
+# 不再依赖改仓库默认分支这种管理员操作。
+# 用法：git tag tongzhuo-release-39 && git push origin tongzhuo-release-39
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'tongzhuo-release-*'
 
 permissions:
   contents: read
@@ -17,16 +30,17 @@ concurrency:
 
 jobs:
   release:
-    # 允许发布的分支（白名单）。必须同时满足两个条件才可能发出正式版：
-    #   1. 该分支上确实存在本文件（旧分支只有旧工作流，认识不到 tongzhuo-stable）；
-    #   2. 该分支在这个白名单里。
-    # 教训：上一版这里只写了 ccr-2899d69f-xlzjh6，而那条分支上根本没有本文件——
-    # 于是这个工作流从来没有在正确的分支上出现过，正式链接一次也没更新过。
-    # 现在把宠物主线加进来；旧分支（moling-*/c3-* 等）不在名单里，仍然写不进来。
-    # 换主线时改这一行即可，不需要动下面的发布逻辑。
+    # 允许发布的来源（白名单）。必须同时满足两个条件才可能发出正式版：
+    #   1. 该 ref 上确实存在本文件（旧分支只有旧工作流，认识不到 tongzhuo-stable）；
+    #   2. 该 ref 在这个白名单里。
+    # 分支白名单：宠物主线（当前 vc39）+ 旧的发布分支，保持原设计不变。
+    # tag 白名单：tongzhuo-release-* 只允许从主线打出来——启动时用 API 校验
+    #   tag 指向的提交必须是 mainline 的祖先，防止有人从旧分支打 tag 把低版本发出去。
+    # 换主线时只改 mainline 这一处。
     if: >-
       github.ref == 'refs/heads/ccr-2899d69f-xlzjh6' ||
-      github.ref == 'refs/heads/deepseek/r21-proactive'
+      github.ref == 'refs/heads/deepseek/r21-proactive' ||
+      startsWith(github.ref, 'refs/tags/tongzhuo-release-')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: official-release
@@ -38,6 +52,35 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # tag 触发时必须确认这个 tag 打在允许的主线上。
+      # 否则任何人从旧分支（比如还停在 0.5.5 的 moling-*）推一个
+      # tongzhuo-release-* tag，就能绕过分支白名单把低版本发成正式版。
+      - name: Verify tag comes from an allowed branch
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "Tag $GITHUB_REF points at $GITHUB_SHA"
+          ALLOWED=("deepseek/r21-proactive" "ccr-2899d69f-xlzjh6")
+          OK=no
+          for br in "${ALLOWED[@]}"; do
+            # 该分支当前 head 是否包含本 tag 指向的提交
+            if gh api "repos/${GH_REPO}/compare/${GITHUB_SHA}...${br}" \
+                 --jq '.status' 2>/dev/null | grep -qx 'ahead\|identical'; then
+              echo "OK: commit is on ${br}"
+              OK=yes
+              break
+            fi
+          done
+          if [ "$OK" != yes ]; then
+            echo "Refusing: tag $GITHUB_REF_NAME is not on any allowed branch (${ALLOWED[*]})." >&2
+            echo "A tag on an old branch must not be able to publish an official release." >&2
+            exit 1
+          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
