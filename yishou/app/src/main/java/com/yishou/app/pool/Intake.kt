@@ -37,9 +37,7 @@ object Intake {
 
     /** 和 MaterialText.clean 一样去掉分享尾巴，但不截断（长文后面切段） */
     private fun clean(text: String): String {
-        val head = MaterialText.clean(text.take(MaterialText.MAX))
-        if (text.length <= MaterialText.MAX) return head
-        return text.lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
+        return MaterialText.cleanFull(text)
     }
 
     /** 按段落切，每块不超过 [PIECE] 字；一段本身太长就按句号再切 */
