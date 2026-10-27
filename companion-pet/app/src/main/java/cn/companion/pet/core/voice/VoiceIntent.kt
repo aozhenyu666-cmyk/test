@@ -16,8 +16,14 @@ data class VoiceIntent(
     /** 支撑这句话的证据 id（活动 id、事件 id 等），用于溯源与去重，可为空。 */
     val sourceIds: List<String> = emptyList(),
     val createdAt: Long = 0L,
-    /** 过期时刻：太旧的话就不值得说了。 */
-    val expiresAt: Long = Long.MAX_VALUE,
+    /**
+     * 过期时刻：太旧的话就不值得说了。
+     *
+     * 必填、且默认值刻意设为「已过期」而不是 `Long.MAX_VALUE`：
+     * 直接构造时忘记填，宁可它立刻失效（fail-closed），也不要它永不失效（fail-open）。
+     * 正常入队都走 [VoiceIntentQueue.enqueue]，那里一定会按 TTL 算出一个真实时刻。
+     */
+    val expiresAt: Long,
     /** 说过就写时间；非 null 即不可再被挑中。 */
     val spokenAt: Long? = null,
 )

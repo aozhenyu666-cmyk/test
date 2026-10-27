@@ -343,7 +343,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             settings.changes.collect {
                 scheduler.config = settings.rhythm()
                 if (settings.presenceEnabled) {
-                    app.presencePolicy.config = app.presencePolicy.config.copy(dailyCap = settings.presenceDailyCap)
+                    app.presencePolicy.config = app.presencePolicy.config.copy(
+                        dailyCap = settings.presenceDailyCap,
+                        useAdaptiveBudget = settings.useAdaptiveBudget,
+                    )
                     if (settings.petPaused && !lastPausedSeen) app.presencePolicy.feedback(cn.companion.pet.core.presence.PresenceFeedback.PAUSED, now())
                 }
                 lastPausedSeen = settings.petPaused
@@ -515,6 +518,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private var lastPresenceEvalAt = 0L
     /** 最近一次真实交流（用户回话/主动找它）；进程重启后从 0 开始。 */
     private var lastInteractionAt = 0L
+    /** R3：最近一次真的开口的时间（毫秒）；0 表示还没说过。用来强制"说完安静三分钟"。 */
+    private var lastSpokenAt = 0L
     /** 角色表现参数的内存缓存：最多 5 分钟读一次文件，事件发生时直接用返回值更新。 */
     private var petStateCache: cn.companion.pet.core.companion.PetState? = null
     private var petStateReadAt = 0L
@@ -546,12 +551,60 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     /**
+     * R3：意图优先。手里攒着话、此刻又是个能开口的时刻，就优先说手里的那一句。
+     *
+     * 三条优先级不可重排（判定在 [cn.companion.pet.core.voice.VoiceTurnPlanner] 里，有测试钉住）：
+     * 该闭嘴（打字/全屏视频/三分钟内刚说过）→ 手里的话再留着；
+     * 攒着话 + 认得出时刻 → 说手里的，**不走规则**；
+     * 否则 → 返回 false，交回原有规则路径（本机兜底完全不变）。
+     *
+     * @return true 表示这次已经由意图接管，调用方不要再走规则。
+     */
+    private fun speakFromIntentIfAny(now: Long): Boolean {
+        if (!settings.presenceEnabled || settings.petPaused) return false
+        // 忙碌、没额度、暂停这些前置闸门与规则路径完全一致，不许绕过。
+        if (presenceBusy(now) != null) return false
+        val key = apiKey() ?: return false
+        if (app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()) <= 0) return false
+        if (!app.presencePolicy.check(now, settings.petPaused, budgetPlan(now)).allowed) return false
+
+        val signals = cn.companion.pet.core.moment.MomentSignals(
+            now = now,
+            ownThoughtReady = true,
+            sinceInteractionMillis = lastInteractionAt.takeIf { it > 0 }?.let { now - it },
+            minutesSinceLastSpoken = if (lastSpokenAt > 0) (now - lastSpokenAt) / 60_000L else Long.MAX_VALUE,
+            zone = java.time.ZoneId.systemDefault(),
+        )
+        return when (val plan = cn.companion.pet.core.voice.VoiceTurnPlanner.plan(now, signals, app.voiceQueue, app.ledger)) {
+            is cn.companion.pet.core.voice.TurnPlan.SpeakIntent -> {
+                // 说之前先划掉：哪怕后面这一步因为忙碌提前退出，也不至于下次重复同一句。
+                app.voiceQueue.markSpoken(plan.intentId, now)
+                app.ledger.record(plan.text, now)
+                lastSpokenAt = now
+                speak(stuck = false, presenceReason = "我手里攒着一件想跟他说的事（来源：" + plan.source + "）。")
+                true
+            }
+            cn.companion.pet.core.voice.TurnPlan.StaySilent -> false
+        }
+    }
+
+    /** 当前时段的活跃度预算；关掉自适应时返回 null，走固定上限。 */
+    private fun budgetPlan(now: Long): cn.companion.pet.core.rhythm.ActivityPlan? =
+        if (settings.useAdaptiveBudget) {
+            cn.companion.pet.core.rhythm.ActivityBudget.planFor(now, java.time.ZoneId.systemDefault())
+        } else {
+            null
+        }
+
+    /**
      * 每 5 秒用内存里的轨迹评估一次；不读写文件、不调模型。只有到点时才会读一次待续话题。
      * 不新增计时器：挂在原来每秒一次的 tick 上。
      */
     private fun presenceTick(now: Long) {
         if (now - lastPresenceEvalAt < 5_000L) return
         lastPresenceEvalAt = now
+        // R3：先看手里有没有攒着的话要说。有就直接说手里的，不再走规则临时想一句。
+        if (speakFromIntentIfAny(now)) return
         val trail = PerceptionHub.trail
         val lists = settings.appLists()
         val fg = trail.foreground
@@ -871,7 +924,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             val proposal = pending
             if (proposal != null && proposal.status == cn.companion.pet.core.action.PendingStatus.PENDING) {
                 showPendingConfirmation(proposal, spokenText)
-            } else if (spokenText.isNotBlank() && settings.presenceEnabled && !app.presencePolicy.check(now(), settings.petPaused).allowed) {
+            } else if (spokenText.isNotBlank() && settings.presenceEnabled && !app.presencePolicy.check(now(), settings.petPaused, budgetPlan(now())).allowed) {
                 // C3：克制策略不允许主动开口时，Agent 的普通发言只留在轨迹里，不弹气泡。
                 scheduler.onSpoke(now)
             } else if (spokenText.isNotBlank()) {
@@ -1045,6 +1098,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val now = now()
         scheduler.onSpoke(now)
         stats.add(Stats.Kind.SPOKE)
+        // R3：真正说出口才算"说过"。规则路径也进账本，否则同一句话会被规则再来一遍。
+        lastSpokenAt = now
+        if (reply.hookText.isNotBlank()) app.ledger.record(reply.hookText, now)
         if (settings.presenceEnabled) app.presencePolicy.recordShown(now)
         convo = Conversation(decision, reply, opening, now, noEscalation = noEscalation, topicId = topic?.id, inputVersion = inputVersion)
         lastProactiveAt = now

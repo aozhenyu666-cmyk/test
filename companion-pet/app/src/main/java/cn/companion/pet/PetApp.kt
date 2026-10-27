@@ -175,6 +175,33 @@ class PetApp : Application() {
         )
     }
     val presenceEngine by lazy { cn.companion.pet.core.presence.LocalPresenceEngine(presencePolicy) }
+
+    /**
+     * R3 活人感：手里攒着想说的事（内存队列，重启后从空开始）。
+     *
+     * 为什么要"攒"而不是"到点想一句"：到点再说就只能临时拼一句规则话，
+     * 攒着才能挑时机说、说完划掉、不重样。
+     */
+    val voiceQueue by lazy { cn.companion.pet.core.voice.VoiceIntentQueue() }
+
+    /** R3：说过的话账本，用来硬拦"换个标点再说一遍"。 */
+    val ledger by lazy { cn.companion.pet.core.voice.SayingLedger() }
+
+    /** R3：它自己的生活（自己的阅读进度与情绪），跟随服务进程存活。 */
+    @Volatile
+    var ownLife: cn.companion.pet.core.life.OwnLifeState = cn.companion.pet.core.life.OwnLifeState()
+
+    /**
+     * R3：按真实经过时间推进它自己的进度。
+     *
+     * 缺勤有上限（一天），所以关机三天再开也只补一天的量，不会"一口气读完"。
+     * 纯内存推进 + 返回新状态；落盘由 LifeStore 之外的地方负责（本轮不写盘）。
+     */
+    fun advanceOwnLife(now: Long = System.currentTimeMillis()): cn.companion.pet.core.life.OwnLifeState {
+        val next = cn.companion.pet.core.life.OwnLifePlanner.advance(ownLife, now)
+        ownLife = next
+        return next
+    }
     /** 桌宠运行时注册：设置页诊断读守护状态。没在运行时为 null。 */
     @Volatile var focusStatus: (() -> cn.companion.pet.core.focus.FocusStatus)? = null
 
@@ -254,6 +281,8 @@ class PetApp : Application() {
         else registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
         // 旧 today.md 只在第一次启动迁移一次；迁移有备份且幂等。
         LegacyEventImport.ensure(memory, events)
+        // R3：开机先按真实时间补一次它自己的进度（缺勤有上限，不会暴涨）。
+        runCatching { advanceOwnLife() }
         // 上次提交如果中途崩溃，先把 journal 做完。
         nightly.recover()
         NightlyWorker.schedule(this)

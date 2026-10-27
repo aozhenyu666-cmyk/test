@@ -24,6 +24,47 @@ class VoiceIntentQueueTest {
         assertNull(q.next(now = 2 * hour) { false })
     }
 
+    /**
+     * 过期只是「不再被挑中」，不是「这件事永远不许再说」。
+     *
+     * 旧实现用「历史上入过队」去做重，一条意图过期未说之后，同一内容再也进不来，
+     * 等于这件事被静默永久禁言。
+     */
+    @Test
+    fun `过期之后再次入队同一内容应当成功`() {
+        val q = VoiceIntentQueue()
+        assertNotNull(q.enqueue("own_life", "过期没说的事", listOf("e1"), now = 0L, ttlMillis = hour))
+
+        val later = 2 * hour
+        assertNull("过期了，先不能被挑中", q.next(now = later) { false })
+
+        val again = q.enqueue("own_life", "过期没说的事", listOf("e1"), now = later, ttlMillis = hour)
+        assertNotNull("过期不是永久禁言，同一件事应当能重新入队", again)
+        assertEquals("重新入队后立刻能说", "过期没说的事", q.next(now = later + 1) { false }?.summary)
+    }
+
+    /** 队列不能只增不减：过期未说的条目要被清掉。 */
+    @Test
+    fun `next 会顺手清掉过期未说的条目`() {
+        val q = VoiceIntentQueue()
+        repeat(5) { q.enqueue("own_life", "会过期的事 $it", listOf("e$it"), now = 0L, ttlMillis = hour) }
+        assertEquals(5, q.all().size)
+
+        q.next(now = 2 * hour) { false }
+        assertEquals("过期未说的条目应当被清理", 0, q.all().size)
+    }
+
+    @Test
+    fun `prune 单独调用也能清掉过期未说的条目，说过的不清`() {
+        val q = VoiceIntentQueue()
+        val spoken = q.enqueue("own_life", "说过的", listOf("e1"), now = 0L, ttlMillis = hour)!!
+        q.enqueue("own_life", "没说的", listOf("e2"), now = 0L, ttlMillis = hour)
+        q.markSpoken(spoken.id, now = 1L)
+
+        assertEquals("只清过期且没说的那条", 1, q.prune(now = 2 * hour))
+        assertEquals("说过的那条留作痕迹", listOf("说过的"), q.all().map { it.summary })
+    }
+
     @Test
     fun `说完就划掉，同一件事不会说第二遍`() {
         val q = VoiceIntentQueue()
@@ -39,6 +80,31 @@ class VoiceIntentQueueTest {
         q.enqueue("diary", "可以说的那件", listOf("e2"), now = 0L)
         val picked = q.next(now = 1L) { it == "被拦住的那件" }
         assertEquals("应当换下一件", "可以说的那件", picked?.summary)
+    }
+
+    /** 同一毫秒入队的多件事也要有确定顺序，不靠 `sortedBy` 的稳定性。 */
+    @Test
+    fun `同一时刻入队时按入队顺序挑最早的那件`() {
+        val q = VoiceIntentQueue()
+        q.enqueue("own_life", "第一件事", listOf("e1"), now = 7L)
+        q.enqueue("diary", "第二件事", listOf("e2"), now = 7L)
+        q.enqueue("rule", "第三件事", listOf("e3"), now = 7L)
+
+        assertEquals("第一件事", q.next(now = 8L) { false }?.summary)
+        // avoid 为 true 表示「这件跳过」，所以第一件被跳过时必须落到第二件。
+        assertEquals("第二件事", q.next(now = 8L) { it == "第一件事" }?.summary)
+        assertEquals("第三件事", q.next(now = 8L) { it != "第三件事" }?.summary)
+    }
+
+    /** 纯标点、纯语气词归一化后为空，没有语义，不该进队。 */
+    @Test
+    fun `归一化后为空的内容不能入队`() {
+        val q = VoiceIntentQueue()
+        assertNull("纯语气词", q.enqueue("own_life", "嗯", now = 0L))
+        assertNull("纯标点", q.enqueue("own_life", "……", now = 0L))
+        assertNull("语气词加标点", q.enqueue("own_life", "啊吧呢呀嘛？！", now = 0L))
+        assertTrue("队列里不该有东西", q.all().isEmpty())
+        assertNotNull("正常内容照常入队", q.enqueue("own_life", "嗯我今天有点累", now = 0L))
     }
 
     @Test
