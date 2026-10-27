@@ -1,6 +1,7 @@
 {
-  "sourceSha": "PENDING",
-  "note": "提交后回填实际测试源码 SHA；文档单独提交不冒充构建 SHA。",
+  "sourceSha": "1234c6aa9f9ef6c02c13119de0160811a3eb3bf0",
+  "sourceShaEvidence": "该提交的 companion-pet 全部 361 个受控文件与构建工作区逐文件 git hash-object 比对一致（361 same / 0 diff / 0 missing）。APK 构建时刻 2026-10-27T08:26 早于提交时刻 08:29 约 3 分钟，树内容一致；但这不是 CI 从该 SHA 重新构建的产物，如需 CI 背书以 Actions 运行为准。",
+  "note": "2026-10-28 R3 活人感轮次本地重跑成功：工作区路径含非 ASCII（用户名「敖震宇」）被 AGP 8.7.3 拒绝，把 companion-pet 复制到 ASCII 路径 C:\\pet-verify2 构建；构建前对 app/src 全部 278 个文件逐个 SHA-256 比对，被测源码树与仓库源码树一致（277 相同 / 0 缺失 / 1 仅注释文案差异、断言数值相同）。Gradle 8.11.1 + JDK 21 + 离线依赖缓存，任务 testDebugUnitTest + lintDebug + assembleDebug 全部通过。assembleDebugAndroidTest 本轮未跑。",
   "versionName": "0.7.9-r21-strict-multistep-preview",
   "versionCode": 39,
   "applicationId": "cn.companion.pet",
@@ -8,15 +9,26 @@
   "minSdk": 30,
   "targetSdk": 35,
   "compileSdk": 35,
-  "apkBytes": 30258715,
-  "apkSha256": "851A21204159E6EB6B24AAFFD426E475CCB01D7E5DD19F89285F205ADF64B9F9",
+  "apkBytes": 30357019,
+  "apkSha256": "C71859C1D2A40444E7D4EA39DD31CE1C99249E7A58ECE82396F71852FF14F6A1",
   "tests": {
-    "total": 611,
-    "failures": 0
+    "total": 683,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "suites": 93,
+    "verifiedThisRound": true,
+    "verifiedAt": "2026-10-28",
+    "evidence": "app/build/test-results/testDebugUnitTest/*.xml 汇总（93 个 testsuite XML）",
+    "previousTotal": 611,
+    "delta": 72
   },
   "lint": {
     "errors": 0,
-    "warnings": 17
+    "warnings": 14,
+    "verifiedThisRound": true,
+    "verifiedAt": "2026-10-28",
+    "evidence": "app/build/reports/lint-results-debug.xml 逐条统计：14 个 issue，全部 Warning 级；基线为 17 warnings，本轮无新增"
   },
   "gradleTasks": [
     ":app:testDebugUnitTest",
@@ -24,6 +36,21 @@
     ":app:assembleDebug",
     ":app:assembleDebugAndroidTest"
   ],
+  "gradleTasksVerifiedThisRound": [
+    ":app:testDebugUnitTest",
+    ":app:lintDebug",
+    ":app:assembleDebug"
+  ],
+  "testSourceCounts": {
+    "jvmTestFiles": 91,
+    "instrumentedTestFiles": 8,
+    "testAnnotations": 680,
+    "note": "testAnnotations 是对 @Test 的直接计数；与 tests.total 683 的差额来自循环/参数化生成的用例，两者口径不同，不可互相替代。"
+  },
   "deviceCoverage": "NOT_RUN（无设备）",
-  "previousCommit": "4c591dec62ce9bde043678ef47bf826398314445"
+  "previousCommit": "4c591dec62ce9bde043678ef47bf826398314445",
+  "apkSha256Note": "apkSha256 本轮是本地重建产物（C71859C1…）。APK 非可重复构建（含时间戳），字节数与上一轮 30258715 不同是因为本轮新增源码；发布仍以新产物为准。",
+  "searchApiVerification": "NOT_VERIFIED（未经用户真实密钥验证，仅验证解析与失败分类）",
+  "branch": "feature/r3-aliveness",
+  "headCommit": "84f9a64"
 }

@@ -12,7 +12,10 @@
 
 ## 安装
 
-1. 手机浏览器打开 **https://github.com/aozhenyu666-cmyk/test/releases/download/tongzhuo-latest/tongzhuo.apk**，下载后直接安装。这个链接永远指向最新一次构建成功的版本，不用登录、不用解压。
+1. 手机浏览器打开 **https://github.com/aozhenyu666-cmyk/test/releases/download/tongzhuo-stable/tongzhuo.apk**，下载后直接安装。这个链接指向正式版，不用登录、不用解压。
+   - **这个链接目前还打不开**：正式发布入口（`companion-pet-release.yml`）第一次成功运行后才会生成。在那之前，用下面的预览链接。
+   - 当前可装的最新版是预览包 **https://github.com/aozhenyu666-cmyk/test/releases/download/tongzhuo-preview-deepseek-r21-proactive/tongzhuo.apk**（0.7.9 / vc39，未做真机验收）。
+   - 旧的 `tongzhuo-latest` 链接**已废弃**，它停在 0.5.5 / vc23，比手机上的版本低、装不上；不要为了装它去卸载新版。
    - 从 0.5.2 起所有版本用同一把签名，以后**直接覆盖安装**，权限和记忆都保留。
    - 手机上如果装的是 0.5.1 或更早的版本（签名不同），这一次需要先卸载旧版再装；卸载会清掉旧版的记忆数据。之后不会再需要卸载。
    - 也可以在 GitHub Actions 的 “Companion Pet Android” 运行记录里下载 `companion-pet-debug-<commit>` 压缩包（需要登录）。

@@ -79,10 +79,18 @@ class Settings(context: Context) {
     var skimEnabled by bool("skim", true)
     /** 新连续性路径：按相关召回 + 结构化事实；默认关，关掉后走旧的整份 profile 路径。 */
     var continuityEnabled by bool("continuity", false)
-    /** C3：本机主动陪伴（实验）。默认关；关掉时完全走旧的开口逻辑。 */
-    var presenceEnabled by bool("presence_enabled", false)
-    /** C3：每天主动开口上限（本机提示 + 模型开口），可选 10/20/30/50。 */
+    /**
+     * 本机主动陪伴。**R3 起默认开启**：它现在攒着自己的话、挑时机说，不再是"到点提醒"。
+     * 关掉时完全走旧的规则开口逻辑。
+     */
+    var presenceEnabled by bool("presence_enabled", true)
+    /** 每天主动开口上限（本机提示 + 模型开口），可选 10/20/30/50。 */
     var presenceDailyCap by int("presence_daily_cap", 20)
+    /**
+     * 是否按星期与时段浮动活跃度（工作日白天 25 / 晚上 40 / 周末 60 / 凌晨 0）。
+     * 默认开；关掉后用上面那个固定上限。
+     */
+    var useAdaptiveBudget by bool("use_adaptive_budget", true)
     /** A1 自主决策：默认关；只自动执行只读工具，写入/打开/朗读只提议不执行。 */
     var agentAutonomy by bool("agent_autonomy", false)
     /** 视觉模型单独配置；默认 deepseek-flash，截图上传必须显式打开。 */

@@ -30,6 +30,10 @@ data class ProbeMoment(
     val today: List<String> = emptyList(),
     /** C3：这次为什么开口（本机协调器给出的事实原因）。关掉 C3 时为空。 */
     val presenceReason: String = "",
+    /** R3：它自己在读/在想的事，一句话（必须来自可溯源的活动，空串表示没有）。 */
+    val ownLife: String = "",
+    /** R3：它最近说过的话（最新的在后），用来硬性避免重复。 */
+    val recentSayings: List<String> = emptyList(),
 )
 
 /**
@@ -86,6 +90,20 @@ object ProbePrompt {
         if (moment.afterHeartbeat) sb.append("- 他刚亮屏，锁屏那段时间我轻轻敲过他。问一句刚才脑子里在想什么。\n")
         moment.topic?.trim()?.takeIf { it.isNotEmpty() }?.let {
             sb.append("- 我想接着聊的事（来自真实交流/笔记/日记，不是编的）：").append(it).append('\n')
+        }
+        // 它自己的生活：只有真的有内容时才出现标题，绝不留下空块。
+        val ownLife = moment.ownLife.trim()
+        if (ownLife.isNotEmpty()) {
+            sb.append("\n# 我自己的生活\n")
+            sb.append("- ").append(ownLife).append('\n')
+            sb.append("- 这是我今天自己读/想到的，可以用自己的话说出来；但我只讲这一件，不编别的。\n")
+        }
+        // 最近说过的话：回灌进来，明确要求不许重复。
+        val recentSayings = moment.recentSayings.map { it.trim() }.filter { it.isNotEmpty() }
+        if (recentSayings.isNotEmpty()) {
+            sb.append("\n# 我最近说过的话（不要重复）\n")
+            recentSayings.forEach { sb.append("- ").append(it).append('\n') }
+            sb.append("- 上面这些我已经说过了。这次必须换一个话题或换一种说法，不许重复，也不许换个标点再说一遍。\n")
         }
         val screen = if (moment.scene == Scene.LEARNING) moment.screenText?.trim().orEmpty() else ""
         if (screen.isNotEmpty()) {

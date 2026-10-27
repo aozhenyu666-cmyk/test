@@ -167,6 +167,20 @@ class PetApp : Application() {
 
     val modelLister by lazy { cn.companion.pet.net.ModelLister() }
 
+    /**
+     * R3：搜索通道。只在**已经配了 API Key** 时才可见，没配就是 null ——
+     * 「它能自己去读书」这件事必须以真的能用为前提，不能靠一个永远失败的客户端假装。
+     *
+     * 客户端本身懒加载、只构造一次（持的是取 Key 的闭包，改 Key 不用重建）；
+     * 是否可用每次现查，这样用户在设置页填完 Key 之后立刻就能用，不用重启。
+     */
+    private val searchClient by lazy {
+        cn.companion.pet.net.DeepSeekSearchClient(apiKey = { apiKey().orEmpty() })
+    }
+
+    val searchApi: cn.companion.pet.net.SearchApi?
+        get() = if (apiKey().isNullOrBlank()) null else searchClient
+
     /** C3 本机主动性：克制状态（持久化）+ 协调器（内存统计）。设置页诊断读它，桌宠大脑用它。 */
     val presencePolicy by lazy {
         cn.companion.pet.core.presence.PresencePolicy(
@@ -175,6 +189,74 @@ class PetApp : Application() {
         )
     }
     val presenceEngine by lazy { cn.companion.pet.core.presence.LocalPresenceEngine(presencePolicy) }
+
+    /**
+     * R3 活人感：手里攒着想说的事（内存队列，重启后从空开始）。
+     *
+     * 为什么要"攒"而不是"到点想一句"：到点再说就只能临时拼一句规则话，
+     * 攒着才能挑时机说、说完划掉、不重样。
+     */
+    val voiceQueue by lazy { cn.companion.pet.core.voice.VoiceIntentQueue() }
+
+    /** R3：说过的话账本，用来硬拦"换个标点再说一遍"。 */
+    val ledger by lazy { cn.companion.pet.core.voice.SayingLedger() }
+
+    /** R3：它自己的生活（自己的阅读进度与情绪）的落盘；只做 I/O，不做业务判断。 */
+    val ownLifeStore by lazy { cn.companion.pet.core.life.OwnLifeStore(java.io.File(filesDir, "memory")) }
+
+    /**
+     * R3：它自己的生活（自己的阅读进度与情绪），由 [ownLifeStore] 支撑，重启后仍在。
+     *
+     * 首次访问时才读盘（[filesDir] 在 onCreate 之前不可靠），读失败就是空状态 ——
+     * 不能因为一个坏文件让桌宠起不来。
+     */
+    @Volatile
+    private var ownLifeCache: cn.companion.pet.core.life.OwnLifeState? = null
+
+    var ownLife: cn.companion.pet.core.life.OwnLifeState
+        get() = ownLifeCache ?: synchronized(ownLifeLock) {
+            ownLifeCache ?: runCatching { ownLifeStore.read() }.getOrElse {
+                ownLifeStore.lastError = "生活状态读取失败：" + (it.javaClass.simpleName)
+                cn.companion.pet.core.life.OwnLifeState()
+            }.also { ownLifeCache = it }
+        }
+        set(value) {
+            synchronized(ownLifeLock) { ownLifeCache = value }
+        }
+
+    private val ownLifeLock = Any()
+
+    /**
+     * R3：按真实经过时间推进它自己的进度，并落盘。
+     *
+     * 缺勤有上限（一天），所以关机三天再开也只补一天的量，不会"一口气读完"。
+     * 写盘在 IO 线程（首次访问时同步读一次，之后的写入都异步），不阻塞调用方。
+     */
+    fun advanceOwnLife(now: Long = System.currentTimeMillis()): cn.companion.pet.core.life.OwnLifeState {
+        val current = ownLife
+        val next = cn.companion.pet.core.life.OwnLifePlanner.advance(current, now)
+        // 状态没变就不要写盘：每次 tick 都写会把闪存写穿。
+        if (next == current) return current
+        ownLife = next
+        writeOwnLife(next)
+        return next
+    }
+
+    /**
+     * 落盘用的单线程队列：保证写入顺序与调用顺序一致（后写的不会被先写的盖掉），
+     * 且写入永远不占用主线程 —— tick 每秒都可能推进它自己的生活。
+     */
+    private val ownLifeWriter by lazy {
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "own-life-writer").apply { isDaemon = true }
+        }
+    }
+
+    /** 把状态交给 [ownLifeStore] 落盘；失败只记在 lastError 里，不抛、不打扰用户。 */
+    fun writeOwnLife(state: cn.companion.pet.core.life.OwnLifeState) {
+        ownLife = state
+        runCatching { ownLifeWriter.execute { runCatching { ownLifeStore.write(state) } } }
+    }
     /** 桌宠运行时注册：设置页诊断读守护状态。没在运行时为 null。 */
     @Volatile var focusStatus: (() -> cn.companion.pet.core.focus.FocusStatus)? = null
     /** 桌宠运行时注册：无障碍执行路径健康的一句话结论。 */
@@ -260,6 +342,8 @@ class PetApp : Application() {
         else registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
         // 旧 today.md 只在第一次启动迁移一次；迁移有备份且幂等。
         LegacyEventImport.ensure(memory, events)
+        // R3：开机先按真实时间补一次它自己的进度（缺勤有上限，不会暴涨）。
+        runCatching { advanceOwnLife() }
         // 上次提交如果中途崩溃，先把 journal 做完。
         nightly.recover()
         NightlyWorker.schedule(this)
