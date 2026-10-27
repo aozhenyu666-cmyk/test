@@ -44,12 +44,12 @@ class StrandWork(private val app: YishouApp) {
         dao.update(StrandRow(next.id, next.toJson().put("review", rev.json()).toString(), next.done, next.updatedAt))
         strand = next; review = rev; error = null
     }
-    suspend fun next() {
+    suspend fun acknowledge() {
         val s = strand ?: return
         dao.update(StrandRow(s.id, s.toJson().toString(), s.done, s.updatedAt))
         review = null; flow = null
-        serve()
     }
+    suspend fun next() { acknowledge(); serve() }
     suspend fun returning() {
         val s = strand ?: return
         val next = StrandEngine.startReturn(s, System.currentTimeMillis())

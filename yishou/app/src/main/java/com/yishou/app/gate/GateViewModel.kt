@@ -204,7 +204,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         if (!mayGrant() || !triggerSaved || !rev.verdict.passed || rev.verdict.unavailable) return@run
         val pass = if (_state.value.mode == GateMain.STRAND) {
             // 不让同一份复盘在下次入口再换一次通行。
-            work.next()
+            work.acknowledge()
             issuer.issueVerified(_state.value.group, GatePlan.FULL_PASS_MIN, rev.verdict)
         } else issuer.issue(session.state.value, _state.value.group)
         pass?.let { finishGrant(it, DayStats.GATE_PASS) }

@@ -96,6 +96,14 @@ fun StrandScreen(onBack: () -> Unit, vm: StrandViewModel = viewModel()) {
                 StrandHeading(s)
                 if (s.done && vm.work.review == null) Text("定了：${s.answer}")
                 StrandTurnView(vm.work, vm.busy, revision, vm::changed, { vm.run { vm.work.submit() } },
+                    onTrigger = { signal, action -> vm.run {
+                        val rev = vm.work.review ?: return@run
+                        val why = com.yishou.app.reflex.Reflexes.check(signal, action, rev.q.prompt)
+                        if (why == null) {
+                            vm.yishou.database.strands().insertReflex(com.yishou.app.data.ReflexRow.from(com.yishou.app.reflex.Reflexes.create(signal, action, rev.q.id, System.currentTimeMillis())))
+                            vm.work.next()
+                        }
+                    } },
                     onNext = { vm.run { vm.work.next() } }, onSplit = {
                         vm.run { goal = vm.work.split(); done = ""; items = listOf("", ""); step = 1 }
                     })
