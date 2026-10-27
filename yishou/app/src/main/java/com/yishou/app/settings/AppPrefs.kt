@@ -15,6 +15,10 @@ data class AppGroup(
  * 以后加新设置项时旧数据也能读。
  */
 data class AppPrefs(
+    val morningEnabled: Boolean = true,
+    val morningFromHour: Int = 6,
+    val morningToHour: Int = 10,
+    val lastWakeDay: Long? = null,
     val recallDay: Long = Long.MIN_VALUE,
     val recallIds: Set<Long> = emptySet(),
     val groups: List<AppGroup> = DEFAULT_GROUPS,
@@ -108,6 +112,10 @@ data class AppPrefs(
         groups.firstOrNull { it.name == group }?.passMinutes ?: DEFAULT_PASS_MINUTES
 
     fun toJson(): String = JSONObject()
+        .put("morningEnabled", morningEnabled)
+        .put("morningFromHour", morningFromHour)
+        .put("morningToHour", morningToHour)
+        .put("lastWakeDay", lastWakeDay)
         .put("recallDay", recallDay)
         .put("recallIds", JSONArray(recallIds.toList()))
         .put("groups", JSONArray().apply { groups.forEach { put(JSONObject().put("name", it.name).put("minutes", it.passMinutes)) } })
@@ -187,6 +195,10 @@ data class AppPrefs(
         /** 读不出来（空、损坏）时返回默认设置，不让应用崩溃。 */
         fun fromJson(text: String?): AppPrefs {
             if (text.isNullOrBlank()) return AppPrefs(
+                morningEnabled = o.optBoolean("morningEnabled", true),
+                morningFromHour = o.optInt("morningFromHour", 6).coerceIn(0, 23),
+                morningToHour = o.optInt("morningToHour", 10).coerceIn(1, 24),
+                lastWakeDay = if (o.isNull("lastWakeDay")) null else o.getLong("lastWakeDay"),
                 recallDay = o.optLong("recallDay", Long.MIN_VALUE),
                 recallIds = o.optJSONArray("recallIds")?.let { a -> (0 until a.length()).map { a.getLong(it) }.toSet() } ?: emptySet(),)
             val o = try {

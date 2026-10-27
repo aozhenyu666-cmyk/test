@@ -126,7 +126,7 @@ class GateActivity : ComponentActivity() {
     private fun startFromIntent(intent: Intent) {
         val pkg = intent.getStringExtra(EXTRA_PACKAGE)
         val group = intent.getStringExtra(EXTRA_GROUP).orEmpty()
-        val label = pkg?.let { appLabel(it) } ?: "测试"
+        val label = pkg?.let { appLabel(it) } ?: if (group == "早上") "早上" else "测试"
         vm.start(pkg, group, label)
     }
 
@@ -178,6 +178,9 @@ class GateActivity : ComponentActivity() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
         /** 权限页“测试思考页”：走一遍流程，但不发放行。 */
+        fun morningIntent(context: Context): Intent = Intent(context, GateActivity::class.java)
+            .putExtra(EXTRA_GROUP, "早上").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
         fun testIntent(context: Context): Intent =
             Intent(context, GateActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }

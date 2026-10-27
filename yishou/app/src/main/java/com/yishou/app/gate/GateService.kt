@@ -53,9 +53,36 @@ class GateService : AccessibilityService() {
     private var systemAllowedAt = 0L
     private var homes: Set<String> = emptySet()
 
+    private var wakeRegistered = false
+    private val wakeReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: Intent) {
+            if (intent.action != Intent.ACTION_USER_PRESENT) return
+            val now = java.time.LocalDateTime.now(AppZone.zone)
+            val today = now.toLocalDate().toEpochDay()
+            val p = app.settings.app.value
+            val cfg = com.yishou.app.reflex.MorningConfig(p.morningEnabled, p.morningFromHour, p.morningToHour)
+            if (!com.yishou.app.reflex.Morning.shouldWake(cfg, now.hour, today, p.lastWakeDay)) return
+            // 先记今天叫过，再查库，避免两次广播一起打开两个页面。
+            app.settings.updateApp { it.copy(lastWakeDay = today) }
+            scope.launch {
+                try {
+                    val open = app.database.strands().open()
+                    val target = if (open != null) Intent(this@GateService, com.yishou.app.MainActivity::class.java)
+                        .putExtra(com.yishou.app.MainActivity.EXTRA_ROUTE, "strand").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    else GateActivity.morningIntent(this@GateService)
+                    if (!GateActivity.isShowing) startActivity(target)
+                } catch (e: Exception) { RunLog.e("早上唤起", "没能打开断点页", e) }
+            }
+        }
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         running = this
+        if (!wakeRegistered) {
+            androidx.core.content.ContextCompat.registerReceiver(this, wakeReceiver, android.content.IntentFilter(Intent.ACTION_USER_PRESENT), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+            wakeRegistered = true
+        }
         Notifications.showRunning(this)
     }
 
@@ -199,6 +226,8 @@ class GateService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        if (wakeRegistered) { unregisterReceiver(wakeReceiver); wakeRegistered = false }
+
         if (running === this) {
             running = null
             app.partner.foreground(null)
