@@ -222,6 +222,8 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
     private fun onEnded() {
         tickJob?.cancel()
         WindowService.stop(yishou)
+        // 结束窗口时立即释放投屏，不能等下一次分钟级巡检。
+        yishou.stopService(Intent(yishou, com.yishou.app.look.ScreenLookService::class.java))
         Reminders.cancelPauseEnd(yishou)
         yishou.settings.updateApp { it.copy(windowPauseUntil = 0) }
         reminderJob?.cancel()

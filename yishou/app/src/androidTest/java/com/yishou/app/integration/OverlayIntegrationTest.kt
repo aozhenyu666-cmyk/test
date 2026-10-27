@@ -76,7 +76,9 @@ class OverlayIntegrationTest {
             val bubble = device.wait(Until.findObject(By.text("一手 ●")), 3_000)!!
             val before = bubble.visibleBounds
             bubble.drag(android.graphics.Point(device.displayWidth - 80, device.displayHeight - 120), 1000)
-            val after = find(By.text("一手 ●")).visibleBounds
+            RuntimeEvidence.capture("floating-panel-after-edge-drag")
+            val after = device.wait(Until.findObject(By.text("一手 ●")), 5_000)?.visibleBounds
+                ?: throw AssertionError("拖动后小窗消失")
             Assert.assertTrue(before.left != after.left || before.top != after.top)
             find(By.text("一手 ●")).click()
             find(By.text("停止陪练")).click()

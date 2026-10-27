@@ -90,6 +90,24 @@ class GateIntegrationTest {
             eventually { !GateActivity.isShowing }
         } finally { activity.close() }
     }
+    @Test fun twentyExternalAppOpeningsProduceTwentyGatesWithoutDuplicateGrants() = runBlocking {
+        val activity = RuntimeSupport.activity()
+        try {
+            connectGate()
+            val day = java.time.LocalDate.now(com.yishou.app.settings.AppZone.zone)
+            val initial = app.stats.day(day).event(com.yishou.app.stats.DayStats.GATE_SHOWN)
+            repeat(20) { index ->
+                RuntimeSupport.fixture()
+                Assert.assertTrue("第 ${index + 1} 次打开未拦截", device.wait(Until.hasObject(By.text("打开「入口测试应用」之前")), 8_000))
+                Assert.assertEquals(initial + index + 1, app.stats.day(day).event(com.yishou.app.stats.DayStats.GATE_SHOWN))
+                Assert.assertNull(app.database.dao().activePass("联通娱乐", System.currentTimeMillis()))
+                find(By.text("先回桌面")).click()
+                eventually { !GateActivity.isShowing && GateService.foreground != RuntimeSupport.TARGET && GateService.foreground != app.packageName }
+            }
+            Assert.assertEquals(20, app.stats.day(day).event(com.yishou.app.stats.DayStats.GATE_SHOWN) - initial)
+            RuntimeEvidence.capture("twenty-external-openings-blocked")
+        } finally { activity.close() }
+    }
     @Test fun passExpiryRelocksEvenAfterTheNotificationShadeCoveredTheExternalApp() = runBlocking {
         val activity = RuntimeSupport.activity()
         try {
