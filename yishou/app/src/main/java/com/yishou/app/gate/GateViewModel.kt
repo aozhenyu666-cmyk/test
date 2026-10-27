@@ -38,6 +38,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     private val fallback = WaitFallback { SystemClock.elapsedRealtime() }
     private var waitJob: Job? = null
     private var operation: Job? = null
+    private var generation = 0
     private var startedFor: Pair<String?, String>? = null
     private val _state = MutableStateFlow(GateState())
     val state = _state.asStateFlow()
@@ -64,15 +65,16 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     private fun run(block: suspend () -> Unit) {
         if (_state.value.busy) return
         _state.update { it.copy(busy = true, error = null) }
+        val mine = generation
         operation = viewModelScope.launch {
             try { block() } catch (e: CancellationException) { throw e }
             catch (e: Exception) { com.yishou.app.log.RunLog.e("入口", "这一手操作失败", e); _state.update { it.copy(error = "这步没能完成，请重试") } }
-            finally { _state.update { it.copy(busy = false, loading = false, revision = it.revision + 1) } }
+            finally { if (mine == generation) _state.update { it.copy(busy = false, loading = false, revision = it.revision + 1) } }
         }
     }
     fun start(pkg: String?, group: String, label: String) {
         if (startedFor == (pkg to group) && _state.value.passMinutes == null) return
-        operation?.cancel(); cancelWait(); startedFor = pkg to group
+        generation++; operation?.cancel(); cancelWait(); startedFor = pkg to group
         judgeDown = false; skippedCards.clear(); echoChecked = false; recallTries = 0
         val prefs = yishou.settings.app.value
         val now = System.currentTimeMillis()
@@ -104,7 +106,8 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             GateMain.STRAND -> {
                 work.load(open!!)
                 // 外部总结在主动页面粘贴；收费站回到当前项正常出题。
-                if (work.strand?.pending?.kind == MoveKind.EXTERNAL) {
+                if (work.strand?.pending?.kind == MoveKind.EXTERNAL || work.review?.q?.allowPaste == true) {
+                    if (work.review != null) work.acknowledge()
                     val s = work.strand!!
                     work.load(StrandStore(dao).save(s.copy(pending = null)))
                 }
@@ -203,7 +206,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     private fun mayGrant() = !_state.value.let { it.isTest || it.inWindow || it.partnerPending || it.passMinutes != null || it.loading }
     fun pass() = run {
         val rev = review ?: return@run
-        if (!mayGrant() || !triggerSaved || !rev.verdict.passed || rev.verdict.unavailable) return@run
+        if (!mayGrant() || !GateCompletion.ready(rev.verdict, triggerSaved)) return@run
         val pass = if (_state.value.mode == GateMain.STRAND) {
             // 不让同一份复盘在下次入口再换一次通行。
             work.acknowledge()

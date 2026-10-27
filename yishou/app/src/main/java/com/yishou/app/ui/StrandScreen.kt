@@ -42,6 +42,7 @@ class StrandViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun cancel() { job?.cancel() }
     fun propose(goal: String) = run {
+        proposed = null
         proposed = StrandEngine.proposeItems(goal, yishou.asker("线程规划")) ?: emptyList()
     }
     fun create(goal: String, done: String, items: List<String>) = run {

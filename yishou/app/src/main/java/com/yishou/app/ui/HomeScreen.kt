@@ -104,6 +104,11 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         entries.filter { it.at >= dayStart }.map { WheelMark(it.at, MarkKind.DRILL, com.yishou.app.summary.Ledger.good(it.mark)) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    val threadMarks = yishou.database.strands().observeAll().map { rows ->
+        rows.flatMap { row -> runCatching { com.yishou.app.thread.Strand.fromJson(row.id, org.json.JSONObject(row.json)).moves }.getOrDefault(emptyList()) }
+            .filter { it.at >= dayStart }.map { WheelMark(it.at, MarkKind.DRILL, it.passed) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     val start: Long get() = dayStart
 
     /** “来一手”这次挑中的 */
@@ -181,13 +186,14 @@ fun HomeScreen(
     val lines by vm.lines.collectAsStateWithLifecycle()
     val moves by vm.moves.collectAsStateWithLifecycle()
     val elsewhere by vm.elsewhere.collectAsStateWithLifecycle()
+    val threadMarks by vm.threadMarks.collectAsStateWithLifecycle()
     val prefs by app.settings.app.collectAsStateWithLifecycle()
     val llm by app.settings.llm.collectAsStateWithLifecycle()
-    val marks = remember(cards, drills, deeds, steps, outside, moves, elsewhere) {
+    val marks = remember(cards, drills, deeds, steps, outside, moves, elsewhere, threadMarks) {
         todayMarks(cards, drills, deeds, steps.filter { st -> outside.none { it.jobId == st.jobId } }, vm.start) +
             outside.map { o -> WheelMark(o.createdAt, MarkKind.CARD, o.correct == null || o.correct * 10 >= o.questions * 6) } +
             moves.filter { it.verdict != com.yishou.app.data.LineVerdict.PARKED }.map { m -> WheelMark(m.createdAt, MarkKind.DRILL, m.verdict == com.yishou.app.data.LineVerdict.OK) } +
-            elsewhere
+            elsewhere + threadMarks
     }
     val tide = remember { TideState() }
     val tideHeight = 240.dp

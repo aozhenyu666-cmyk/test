@@ -13,8 +13,8 @@ android {
         applicationId = "com.yishou.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 23
-        versionName = "0.23.0"
+        versionCode = 24
+        versionName = "0.24.0"
     }
 
     signingConfigs {
@@ -91,6 +91,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.xerial:sqlite-jdbc:3.46.1.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     // Android 自带的 org.json 在本地单元测试里只是空壳，换成真实实现
