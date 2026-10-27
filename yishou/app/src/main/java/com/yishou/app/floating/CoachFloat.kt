@@ -9,6 +9,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityEvent
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -54,8 +55,9 @@ object CoachFloat {
             text = if (expanded) current.title + "  ▾" else "一手 ●"
             setTextColor(Color.WHITE); textSize = 15f; setPadding(dp(8), dp(8), dp(8), dp(8)); contentDescription = "拖动一手小窗，点击展开或收起"
         }
+        header.setOnClickListener { expanded = !expanded; refresh(context) }
         var downX = 0f; var downY = 0f; var oldX = 0; var oldY = 0; var moved = false
-        header.setOnTouchListener { _, e ->
+        header.setOnTouchListener { view, e ->
             val p = params ?: return@setOnTouchListener false
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> { downX = e.rawX; downY = e.rawY; oldX = p.x; oldY = p.y; moved = false }
@@ -63,7 +65,14 @@ object CoachFloat {
                     if (abs(e.rawX - downX) + abs(e.rawY - downY) > dp(6)) moved = true
                     if (moved) { p.x = (oldX + e.rawX - downX).toInt(); p.y = (oldY + e.rawY - downY).toInt(); place() }
                 }
-                MotionEvent.ACTION_UP -> if (!moved) { expanded = !expanded; refresh(context) }
+                MotionEvent.ACTION_UP -> if (!moved) view.performClick() else {
+                    // Android 10 移动 overlay 后仍可能缓存子节点的旧坐标。
+                    r.post {
+                        r.sendAccessibilityEventUnchecked(AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED).apply {
+                            contentChangeTypes = AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE
+                        })
+                    }
+                }
             }
             true
         }
