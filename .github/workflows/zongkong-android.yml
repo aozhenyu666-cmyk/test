@@ -123,7 +123,8 @@ jobs:
   release:
     needs: [build, smoke]
     # 只从总控的发布分支发版；其他分支（集成、实验）测过也不覆盖手机上的下载地址
-    if: github.ref == 'refs/heads/ccr-cec40a0e-8hi98d'
+    # ccr-ac03c24d-1jhqg8：哨兵 1.2.1 修复分支（包含发布分支全部提交），用户要求用它覆盖下载地址
+    if: github.ref == 'refs/heads/ccr-cec40a0e-8hi98d' || github.ref == 'refs/heads/ccr-ac03c24d-1jhqg8'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
