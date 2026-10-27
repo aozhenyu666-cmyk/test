@@ -6,51 +6,15 @@
 
 - 全部步骤做完再开一个 PR，中途不停。缺信息按最保守的做法继续，写进 PR 的“待确认”。
 - 基础分支：`ccr-a5172662-j1jcik`。新分支：`codex/yishou-g1-probe`。
-- 判卷器（`judge/`）由 Claude 另写（C1）。这张卡**不要写判卷逻辑**，用下面的接口和一个假实现先接通。
+- 判卷器 `judge/` 已经由 Claude 写好（C1，分支 `claude/yishou-c1-judge`），先把它合进你的分支。**不要改 `judge/` 下的文件**，有问题写进 PR。
 
-## 接口（照抄，不要改名）
+## 已有的接口（在 `judge/Api.kt`，直接用）
 
-新建 `app/src/main/java/com/yishou/app/judge/Api.kt`：
-
-```kotlin
-package com.yishou.app.judge
-
-/** 锁题：给你看题之前，要点就已经定死 */
-data class LockedQ(
-    val id: String,
-    val prompt: String,          // 给用户看的题面（不含选项）
-    val options: List<String>,   // 可以为空；只在要点过了之后才亮
-    val points: List<Point>,     // 2–4 个
-    val need: Int,               // 至少命中几个
-    val reference: String,       // 参考答案，判完才给看
-)
-data class Point(val id: String, val criterion: String)
-
-/** 时间探针记下的东西 */
-data class ProbeTrace(
-    val shownAt: Long,
-    val firstInputAt: Long?,     // 第一个字或开始说话
-    val submitAt: Long,
-    val deletes: Int,
-    val pauses: List<Pause>,     // 只记 ≥ 8 秒的
-    val pastedRanges: List<IntRange>, // 粘贴进来的字在最终答案里的位置
-    val viaVoice: Boolean,
-)
-data class Pause(val atChar: Int, val millis: Long)
-
-data class Verdict(
-    val hits: Map<String, String?>, // 要点 id → 引用的原话；没命中为 null
-    val offTopic: Boolean,
-    val passed: Boolean,
-    val note: String,               // 给用户看的一句话
-)
-
-interface Judge {
-    suspend fun judge(q: LockedQ, answer: String, trace: ProbeTrace): Verdict
-}
-```
-
-假实现 `judge/FakeJudge.kt`：答案里出现了某个要点判据中至少 4 个连续的字，就算命中这一点。仅用于开发和测试，类注释写明“会被 C1 替换”。
+- `LockedQ`：锁题。题库题用 `Locks.fromBank(...)` 转，返回 null 的题不进入口。
+- `ProbeTrace`：时间探针记下的东西，你要做的就是把它填出来。
+- `Judge.judge(q, answer, trace, seen)`：`seen` 传这一题已经给用户看过的提示（`Point.hint`），从提示里抄的话不算。
+- `Verdict`：`passed` 过没过；`block` 本机挡下的原因；`unavailable` 判卷不在（这时显示 G0 的“等一会儿”，不放水）；`note` 直接显示给用户。
+- `YishouApp.judge` 已经接好真判卷器。测试里自己写假的 `Judge`。
 
 ## 步骤
 
@@ -81,16 +45,14 @@ fun probeAction(trace: ProbeTrace, answer: String, passed: Boolean): ProbeAction
 
 1. 只显示题面，不显示选项。用 `ProbeTextField` 说要点（语音也行，走已有语音输入）。
 2. 交了 → `Judge.judge()`。
-   - 没过：按 `probeAction` 冻结 15 秒，或提示“把卡住时那个半截念头原样说出来”；标出没命中的判据（只显示判据，不显示参考答案）；同一题最多 3 次。
+   - 没过：显示 `Verdict.note`；按 `probeAction` 冻结 15 秒，或提示“把卡住时那个半截念头原样说出来”；同一题最多 3 次。
+   - **不要显示判据原文**（`Point.criterion`）和参考答案，只能显示没命中要点的 `Point.hint`，并把显示过的 hint 放进下一次的 `seen`。
+   - `unavailable` 为真：不算这次，显示“等一会儿”。
    - 过了：亮选项，选一个，本机对照锁死的答案核对。选对 → 放行 15 分钟（走 `PassIssuer`）。选错 → 不放，换一题。
-3. 题库题转 `LockedQ`：【要点】按句号、分号拆成要点；没有【要点】的题不进入口。`need = max(1, 要点数 - 1)`。
+3. 题库题转 `LockedQ`：用 `Locks.fromBank(id, passage, question, options, answer, explain, hint = card.skill.hint)`。返回 null 的题不进入口。
 4. 连着答错 2 次，或出不了题，显示 G0 的“等一会儿”。
 
 `PassIssuer.eligible()` 改成看 `Verdict.passed && 选项选对`，删掉旧的 `evidenceOk` 条件。
-
-### 4. 依赖注入
-
-`YishouApp` 里加 `val judge: Judge`，先放 `FakeJudge`。C1 合并后只换这一行。
 
 ## 测试
 
@@ -106,4 +68,4 @@ fun probeAction(trace: ProbeTrace, answer: String, passed: Boolean): ProbeAction
 
 - [ ] CI 绿，PR 里贴链接
 - [ ] 真机：入口先看不到选项；秒答乱写会冻结 15 秒
-- [ ] 换成真判卷器只需要改 `YishouApp` 里一行
+- [ ] 真机：只写“因为一手”“有道理”，或者照抄题目，过不去
