@@ -1860,15 +1860,24 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             if (current !== flow || current.strict !== machine || !machine.state.active) return@launch
             val parsed = (r as? ChatResult.Success)?.let { StrictEvalPrompt.parse(it.content, sessionId, stepId, revision) }
             if (parsed == null) {
-                machine.markHealth(Health.DEGRADED, now())
-                showStrictReply(flow, "我这边核对超时了，你说的我留着。要不你自己说下一句？", "")
+                // 技术故障：退回等待、保留答案，不判用户失败（CL-S5 等价）。
+                machine.evaluationUnavailable("核对回包解析不了", now())
+                strictStore.save(machine.state)
+                showStrictPrompt("核对暂时不可用。你说的我留着，可以再答一次。")
                 return@launch
             }
             val out = machine.acceptEvaluation(parsed, now())
             strictStore.save(machine.state)
             when (out) {
+                // 还有下一步：进入下一步，回合继续（CL-S3）。
+                is StrictOutcome.NextStep -> showStrictPrompt("这一步过了。")
                 is StrictOutcome.Accepted -> showStrictReply(flow, out.text, out.nextPrompt)
                 is StrictOutcome.Support -> showStrictReply(flow, out.text, "")
+                is StrictOutcome.Finished -> {
+                    overlay.showBubble(BubbleSpec("这一回合结束：" + out.summary, textOnly = true)) {
+                        handler.postDelayed({ endThink() }, 5_000)
+                    }
+                }
                 else -> showStrictReply(flow, "记下了。", "")
             }
         }
@@ -1876,6 +1885,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun showStrictReply(flow: ThinkFlow, text: String, nextPrompt: String) {
         overlay.setMood(Mood.CURIOUS)
+        // 回合仍在进行：保持回答通道打开，否则用户回答进不来（CL-S1）。
+        if (flow.strict?.state?.active == true) flow.awaitingAnswer = true
         flow.touchedAt = now()
         flow.waitSince = now()
         val body = if (nextPrompt.isNotBlank()) text + "\n\n接着问：" + nextPrompt else text
@@ -3029,22 +3040,24 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val r = strictStore.restore(now())
         when (r) {
             is StrictSessionStore.Restore.Resume -> {
+                // 恢复时重建会话所有权，否则训练/外部 AI 可能同时跑（CL-S8）。
+                sessionArbiter.acquire(SessionKind.STRICT_THINK, r.state.sessionId)
                 val flow = ThinkFlow("", "恢复的回合", "")
-                flow.strict = StrictSessionMachine(r.state)
+                val machine = StrictSessionMachine(r.state)
+                // 卡在 EVALUATING 的恢复：在途结果已作废，退回等待再问（CL-S8）。
+                if (machine.state.phase == Phase.EVALUATING) {
+                    machine.evaluationUnavailable("上次核对没回来", now())
+                }
+                flow.strict = machine
                 flow.waitSince = now()
                 flow.touchedAt = now()
                 think = flow
+                strictStore.save(machine.state)
                 // 明确告知中断空窗，不补造期间行为。
                 val gapMin = (r.gapMillis / 60_000).coerceAtLeast(0)
-                val note = if (gapMin > 0) "刚才我这边断开了 " + gapMin + " 分钟，那段时间看不到。\n" else ""
-                overlay.showBubble(BubbleSpec(
-                    note + "接着刚才的：" + r.state.question + "\n\n说就行，也可以说“我不会”。",
-                    instant = true,
-                    actions = listOf(
-                        BubbleAction("我不会") { strictNeedsSupport() },
-                        BubbleAction("结束") { strictAbort() },
-                    ),
-                ))
+                val note = if (gapMin > 0) "刚才我这边断开了 " + gapMin + " 分钟，那段时间看不到。" else ""
+                // 走统一入口：打开回答通道，并显示“第几步/还剩多久”（CL-S7）。
+                showStrictPrompt(if (note.isBlank()) "接着刚才的。" else note)
             }
             is StrictSessionStore.Restore.Expired -> {
                 strictStore.save(r.state)
