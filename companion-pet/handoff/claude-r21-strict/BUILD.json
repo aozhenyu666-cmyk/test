@@ -1,18 +1,27 @@
 {
-  "sourceSha": "9f3a38706b777bc2a4b04599b7aab61730d4c93b",
+  "sourceSha": "4c8433f10e15d918986078a4bb07578659e1e499",
   "branch": "claude/r21-strict-takeover",
-  "versionName": "0.8.0-r21-strict-takeover-preview",
-  "versionCode": 40,
+  "versionName": "0.8.1-r21-strict-multistep-preview",
+  "versionCode": 41,
   "applicationId": "cn.companion.pet",
   "buildType": "debug（仓库公开调试签名，debuggable=true，非发行包）",
   "minSdk": 30,
   "targetSdk": 35,
   "compileSdk": 35,
   "apkUrl": "https://github.com/aozhenyu666-cmyk/test/releases/download/tongzhuo-preview-claude-r21-strict-takeover/tongzhuo.apk",
-  "apkBytes": 30324259,
-  "apkSha256": "f23a8affc19d91496a4e40c3787de6124537ff6149ed1ca7723cc3f18c4e7d12",
-  "ciRun": "https://github.com/aozhenyu666-cmyk/test/actions/runs/40347555928",
-  "ciTasks": [":app:testDebugUnitTest", ":app:lintDebug", ":app:assembleDebug", ":app:assembleDebugAndroidTest"],
-  "localJvmTests": {"total": 640, "failures": 0, "note": "本地只能跑不依赖 Android 的部分；完整单测以 CI 为准"},
+  "apkBytes": 30340635,
+  "apkSha256": "009c6ced2cfa0d0298df1e8f84d40cf2089b0473a379fd88b374927b39d9869a",
+  "ciRun": "https://github.com/aozhenyu666-cmyk/test/actions/runs/40428123619",
+  "ciTasks": [
+    ":app:testDebugUnitTest",
+    ":app:lintDebug",
+    ":app:assembleDebug",
+    ":app:assembleDebugAndroidTest"
+  ],
+  "localJvmTests": {
+    "total": 650,
+    "failures": 0,
+    "note": "本地只能跑不依赖 Android 的部分；完整单测以 CI 为准"
+  },
   "deviceCoverage": "NOT_RUN（无设备）"
 }

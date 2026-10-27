@@ -1,11 +1,11 @@
 # 同桌 R21 严格守护接管 — 唯一验收实情表
 
 - 分支：`claude/r21-strict-takeover`（与 `ccr-f3b6cf6b-6gsh3f` 同步）
-- **构建源码提交：`9f3a38706b777bc2a4b04599b7aab61730d4c93b`**（本文件所在的文档提交不参与构建）
-- 版本：0.8.0-r21-strict-takeover-preview（versionCode 40），debug 包，仓库公开调试签名，`debuggable=true`，**不是发行包**
+- **构建源码提交：`4c8433f10e15d918986078a4bb07578659e1e499`**（本文件所在的文档提交不参与构建）
+- 版本：0.8.1-r21-strict-multistep-preview（versionCode 41），debug 包，仓库公开调试签名，`debuggable=true`，**不是发行包**
 - APK：`https://github.com/aozhenyu666-cmyk/test/releases/download/tongzhuo-preview-claude-r21-strict-takeover/tongzhuo.apk`
-  - 30,324,259 字节；SHA-256 `f23a8affc19d91496a4e40c3787de6124537ff6149ed1ca7723cc3f18c4e7d12`（已独立下载复核，与 Release 说明一致）
-  - 构建：GitHub Actions run 40347555928（`:app:testDebugUnitTest`、lint、`assembleDebug`、`assembleDebugAndroidTest` 全部成功）
+  - 30,340,635 字节；SHA-256 `009c6ced2cfa0d0298df1e8f84d40cf2089b0473a379fd88b374927b39d9869a`（已独立下载复核，与 Release 说明一致）
+  - 构建：GitHub Actions run 40428123619（`:app:testDebugUnitTest`、lint、`assembleDebug`、`assembleDebugAndroidTest` 全部成功）
 - 真机：**无设备，所有 DEVICE 项均为 NOT_RUN**
 
 图例：PASS-L = 纯逻辑单测通过；PASS-I = 集成单测（多个真实类串起来）通过；WIRED = 已接线但没有自动化测试覆盖；NOT_RUN = 未执行；FAIL = 失败。
@@ -17,6 +17,7 @@
 | `40a0d59` | 合并 DeepSeek `8fb3cc1`/`4c591de`；严格守护单一拦截拥有者 + 回到目标后带回原题；练习换来的休息真正暂停守护；通话/紧急界面不算离开；看过支架即算泄题；按要求移除 S1 计划触发 |
 | `60a46f5` | 并入本交接说明（`166528c`） |
 | `9f3a387` | 严格陪想/外部 AI 锁按实例号释放；延迟收尾只结束自己那一回合；删除未接线的 `extendUntil` |
+| `4c8433f` | 合并 DeepSeek `1234c6a`（CL-S3/S4/S7/S8）；**把多步接线**：严格回合固定三步，每步只按自己的标准核验；提示显示“第 n/总 步” |
 
 DeepSeek 两个提交的取舍：
 
@@ -28,6 +29,16 @@ DeepSeek 两个提交的取舍：
 | `QuestionSetStore` / `currentAnswerRevealed` 等题组实现 | 不采纳 | 已有 `BreakCycle`（落盘、迁移题、单次发券、硬截止） |
 | 无契约时也弹全屏拦截 | 不采纳 | 交接说明：只在有效、用户授权的守护契约内联动严格模式 |
 | `BINDER` 能力层、`TrainingFocusBridge` 起点/桌面不算离开 | 采纳 | 不冲突 |
+
+### 严格回合 CL-S3/S4/S7/S8（DeepSeek `1234c6a` + 本轮接线）
+
+| 项 | 状态 | 证据 / 说明 |
+|---|---|---|
+| CL-S3 多步接续 | PASS-L + WIRED | DeepSeek 的状态机支持多步，但合并时**没有任何地方填入后续步骤**，App 里仍是一步就结束。本轮在 `startStrict` 填入三步，并加 `upcomingCriteria`：每一步只按自己的标准核验（否则第一步会被第二步的“原文依据”卡住）。`StrictPerStepCriteriaTest`、`StrictMultiStepTest` |
+| CL-S4 按步帮助等级 | PASS-L | `StrictMultiStepTest` |
+| CL-S7 恢复后读状态机问题、打开回答通道 | WIRED | `restoreStrict → showStrictPrompt` |
+| CL-S8 恢复时卡在核验中 | PASS-L + WIRED | `evaluationUnavailable` 退回等待；恢复时按实例号重新占锁；`StrictPerStepCriteriaTest.midRoundRestartKeepsStepAndRemainingSteps` |
+| 已知限制 | — | 屏幕原文按隐私约束不落盘，所以**重启后**第二步“原文依据”只能凭用户自述核验 |
 
 ## 二、六项最小用户验收
 
@@ -57,5 +68,6 @@ DeepSeek 两个提交的取舍：
 1. 全部真机项 NOT_RUN：vivo/iQOO 后台拉起、全屏层在各 ROM 的显示、无障碍丢失后的表现。
 2. D02 动作效果回执、D07 剩余直连输出。
 3. 48 条人工核对的黄金样例（需要用户标注）。
-4. 按交接说明另案：S1 计划触发（代码在 `da75890` 及之前的提交里，可以随时恢复）、跨应用中央指挥协议、Shizuku。
-5. `companion-unify-v1` 剩余未移植项：CL-S3 多步接续、CL-S4 按步帮助等级、CL-S7、CL-S8（见 DeepSeek 的 `r21-unified/MERGE_MAP.md`）。
+4. 按交接说明另案：S1 计划触发（用户决定本轮移除；代码在 `da75890` 里，可以随时恢复）、跨应用中央指挥协议、Shizuku。
+6. **主动断点恢复已经存在**（`ResumePolicy`：亮屏/离开后自己回来问原题原步，10 分钟冷却、每会话最多 3 次、次数落盘），不要再当作缺口重做。
+5. `companion-unify-v1` 的 CL-S1–S9、CL-T1–T12 已全部处理（移植 / 等价 / 明确拒绝），不再有待移植项。
