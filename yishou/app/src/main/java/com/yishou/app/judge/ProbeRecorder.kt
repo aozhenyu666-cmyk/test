@@ -20,17 +20,19 @@ class ProbeRecorder(private val clock: () -> Long) {
     fun voiceEdit(old: String, new: String, t: Long = clock()) = update(old, new, t, true)
 
     private fun update(old: String, new: String, t: Long, fromVoice: Boolean) {
-        if (old == new) return
-        require(old == text) { "输入事件与当前文字不一致" }
+        val mismatch = old != text
+        if (!mismatch && old == new) return
+        val previous = text
+        if (mismatch) com.yishou.app.log.RunLog.e("输入探针", "输入事件对不上，按整段替换处理（原长 ${previous.length}，回填长 ${new.length}）")
         val prior = last
-        if (prior != null && t - prior >= 8_000L) pauses += Pause(old.length, t - prior)
+        if (prior != null && t - prior >= 8_000L) pauses += Pause(previous.length, t - prior)
         var start = 0
-        while (start < old.length && start < new.length && old[start] == new[start]) start++
+        if (!mismatch) while (start < previous.length && start < new.length && previous[start] == new[start]) start++
         var suffix = 0
-        while (suffix < old.length - start && suffix < new.length - start && old[old.lastIndex - suffix] == new[new.lastIndex - suffix]) suffix++
-        val removed = old.length - start - suffix
+        if (!mismatch) while (suffix < previous.length - start && suffix < new.length - start && previous[previous.lastIndex - suffix] == new[new.lastIndex - suffix]) suffix++
+        val removed = previous.length - start - suffix
         val added = new.length - start - suffix
-        if (new.length < old.length) deletes++
+        if (new.length < previous.length) deletes++
         repeat(removed) { pasted.removeAt(start) }
         val suspected = !fromVoice && added >= 8 && t - (prior ?: shownAt) in 0L until 100L
         pasted.addAll(start, List(added) { suspected })
