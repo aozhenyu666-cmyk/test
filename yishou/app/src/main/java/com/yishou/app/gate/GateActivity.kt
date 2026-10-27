@@ -128,6 +128,7 @@ class GateActivity : ComponentActivity() {
 
     override fun onPause() {
         isShowing = false
+        vm.cancelWait()
         super.onPause()
     }
 
@@ -227,7 +228,6 @@ private fun GateScreen(
             }
 
             val passed = s.passMinutes
-            val needsDelta = c.done && vm.needsDelta
             val echo = s.echo
             when {
                 s.loading -> MatrixLoader("准备一张题")
@@ -241,8 +241,7 @@ private fun GateScreen(
                 }
                 passed != null -> {
                     Text("放行 $passed 分钟", style = MaterialTheme.typography.headlineMedium)
-                    Text("说好看完：${s.exit}", style = MaterialTheme.typography.bodyLarge)
-                    Text("到点会提醒你。下次打开先问你做了没有。", style = MaterialTheme.typography.bodySmall)
+                    Text("到点后需要重新答题。", style = MaterialTheme.typography.bodySmall)
                     Button(onClick = onReturn, modifier = Modifier.fillMaxWidth()) { Text("回到「${s.appLabel}」") }
                     if (!s.isTest && !com.yishou.app.scroll.ScrollService.running.value) {
                         OutlinedButton(onClick = onScroll, modifier = Modifier.fillMaxWidth()) { Text("边刷边练：刷的时候考我") }
@@ -257,6 +256,17 @@ private fun GateScreen(
                     Button(onClick = onOpenWindow, modifier = Modifier.fillMaxWidth()) { Text("回到陪练") }
                     OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("回到桌面") }
                 }
+                s.waiting -> {
+                    val seconds = (s.waitRemainingMs + 999) / 1000
+                    Text("等一会儿", style = MaterialTheme.typography.headlineSmall)
+                    Text("还需等待 ${seconds / 60} 分 ${seconds % 60} 秒；离开页面后重新计时。")
+                    if (s.waitRemainingMs == 0L) {
+                        if (s.isTest) Text("测试结束；测试页面不发放行。")
+                        else Button(onClick = vm::passAfterWait, modifier = Modifier.fillMaxWidth()) { Text("等待完成，放行 5 分钟") }
+                    }
+                    OutlinedButton(onClick = vm::cancelWait, modifier = Modifier.fillMaxWidth()) { Text("返回题目") }
+                    OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("先回桌面") }
+                }
                 echo != null -> EchoCard(echo, onConfirm = vm::confirmEcho)
                 s.followUp != null -> {
                     Text("上次你说看完要", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -267,43 +277,11 @@ private fun GateScreen(
                         OutlinedButton(onClick = { vm.answerFollowUp(false) }) { Text("没做") }
                     }
                 }
-                s.endgame != null -> {
-                    EndgameBoard(s.endgame, shoot = false, onFlip = { hit, _ -> vm.endgameFlipped(hit) }, onLaw = vm::saveLaw)
-                    if (s.endgameDone) {
-                        if (s.isTest) OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
-                        else PassBlock(s, vm, needsDelta = false)
-                    }
-                    OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
-                }
-                s.useLine -> {
-                    LineGate(ln, vm)
-                    if (ln.caught > 0 || (ln.parked && !Variant.chalu)) {
-                        if (s.isTest) {
-                            OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
-                        } else {
-                            PassBlock(s, vm, needsDelta)
-                        }
-                    }
-                    OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
-                }
-                !s.gateCard -> {
-                    if (s.isTest) {
-                        Text("现在是只打卡模式：不出题，写一句看完做什么就放行。", style = MaterialTheme.typography.bodyLarge)
-                        OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
-                    } else {
-                        PassBlock(s, vm, needsDelta)
-                        OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
-                    }
-                }
                 c.error != null && c.round == null -> {
-                    Text("这次出不了题（${c.error}），只打卡。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    TextButton(onClick = { vm.retry() }) { Text("再试一次出题") }
-                    if (s.isTest) {
-                        OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
-                    } else {
-                        PassBlock(s, vm, needsDelta)
-                        OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
-                    }
+                    Text("这次没有可用题目：${c.error}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton(onClick = { vm.retry() }) { Text("重试") }
+                    Button(onClick = vm::startWait, modifier = Modifier.fillMaxWidth()) { Text("等 10 分钟，换 5 分钟") }
+                    OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("先回桌面") }
                 }
                 c.round == null -> MatrixLoader("准备一张题")
                 else -> {
@@ -311,39 +289,23 @@ private fun GateScreen(
                     if (c.done) {
                         if (s.isTest) {
                             OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
+                        } else if (PassIssuer.eligible(c)) {
+                            VoiceTextField(s.exit, vm::onExitChange, "看完做什么（可不填）", Modifier.fillMaxWidth())
+                            Button(onClick = vm::pass, modifier = Modifier.fillMaxWidth()) { Text("通过，放行 15 分钟") }
                         } else {
-                            PassBlock(s, vm, needsDelta)
-                            OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("不打开了") }
+                            Text("这题没有通过，请换一题。", style = MaterialTheme.typography.bodyMedium)
+                            Button(onClick = vm::retry, modifier = Modifier.fillMaxWidth()) { Text("换一题") }
                         }
+                        if (s.wrongInRow >= 2 && !PassIssuer.eligible(c)) {
+                            OutlinedButton(onClick = vm::startWait, modifier = Modifier.fillMaxWidth()) { Text("等 10 分钟，换 5 分钟") }
+                        }
+                        OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("先回桌面") }
                     }
                 }
             }
         }
     }
 }
-
-@Composable
-private fun ExitField(s: GateState, vm: GateViewModel) {
-    VoiceTextField(s.exit, vm::onExitChange, if (Variant.chalu) "例如：回去点开资料分析第 3 题" else "例如：回去做两道资料分析", Modifier.fillMaxWidth())
-}
-
-/**
- * 放行那一块：说好看完做什么（岔路问“回来第一步点哪儿”，放行后挂在通知栏），
- * 岔路里答错了先写差值；放行按钮停 2 秒再落。
- */
-@Composable
-private fun PassBlock(s: GateState, vm: GateViewModel, needsDelta: Boolean) {
-    if (needsDelta) {
-        Text("这张错了。写下差值再走：", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
-        VoiceTextField(s.delta, vm::onDeltaChange, com.yishou.app.line.Echoes.DELTA_HINT, Modifier.fillMaxWidth(), minLines = 2)
-        Text("下次打开「${s.appLabel}」，开局先推这一句给你。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-    Text(if (Variant.chalu) "回来第一步点哪儿？" else "看完要做的第一件事是？", style = MaterialTheme.typography.titleMedium)
-    ExitField(s, vm)
-    val ready = s.exit.isNotBlank() && (!needsDelta || com.yishou.app.line.Echoes.usable(s.delta))
-    BrakeButton(if (needsDelta && !com.yishou.app.line.Echoes.usable(s.delta)) "先写差值" else "说好了，放行", enabled = ready, modifier = Modifier.fillMaxWidth(), onClick = vm::pass)
-}
-
 
 /** 入口的主线一手：问你在下的那一局的下一问，过了本机规则才算 */
 @Composable

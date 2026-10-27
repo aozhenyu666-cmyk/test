@@ -81,6 +81,9 @@ data class Pass(
     val roundId: Long?,
 )
 
+/** 区分新版双重校验放行与升级前的旧放行记录。 */
+const val VERIFIED_GATE_PASS_MARKER = -1L
+
 /** 每晚总结，每天一条（M4 使用）。date 形如 2026-10-08。 */
 @Entity(tableName = "daily_summary")
 data class DailySummary(
