@@ -35,6 +35,7 @@ class OverlayIntegrationTest {
         Assert.assertTrue(Settings.canDrawOverlays(app))
         RuntimeSupport.seedCard()
         app.settings.updateApp { it.copy(manualWindowStart = System.currentTimeMillis(), windowStoppedAt = 0, warmup = false, predictFirst = false) }
+        Unit
     }
     @After fun after() {
         main {

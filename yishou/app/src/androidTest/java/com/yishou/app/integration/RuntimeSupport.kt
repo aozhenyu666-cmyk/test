@@ -37,7 +37,8 @@ object RuntimeSupport {
     const val TARGET = "com.yishou.gatefixture"
     fun main(block: () -> Unit) = InstrumentationRegistry.getInstrumentation().runOnMainSync(block)
     suspend fun eventually(timeoutMs: Long = 15_000, condition: () -> Boolean) {
-        withTimeout(timeoutMs) { while (!condition()) delay(50) }
+        try { withTimeout(timeoutMs) { while (!condition()) delay(50) } }
+        catch (e: TimeoutCancellationException) { RuntimeEvidence.capture("timeout-${System.nanoTime()}"); throw e }
     }
     suspend fun reset() {
         device.executeShellCommand("settings put secure enabled_accessibility_services ''")

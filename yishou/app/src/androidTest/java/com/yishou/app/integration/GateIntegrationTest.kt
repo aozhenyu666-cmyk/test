@@ -44,9 +44,10 @@ class GateIntegrationTest {
             main { vm.showProbe(vm.probe!!) }
             delay(150)
             val answer = "应当先证明来访者是谁再放人，因为营业时段只解决何时可来，不等于已经有了进入资格。"
-            server.enqueue(RuntimeSupport.completion("[P1] 命中 | 「应当先证明来访者是谁再放人」\n[P2] 没有\n[跑题] 否\n[一句话] 条件区分清楚了"))
+            server.enqueue(RuntimeSupport.completion("[P1] 命中 | 「应当先证明来访者是谁再放人」\n[P2] 命中 | 「营业时段只解决何时可来」\n[跑题] 否\n[一句话] 条件区分清楚了"))
             main { vm.editProbe(answer); vm.submitProbe() }
-            eventually { !vm.state.value.busy && vm.probe?.canSelect() == true }
+            eventually { !vm.state.value.busy }
+            Assert.assertTrue("判卷未通过：${vm.probe?.verdict}", vm.probe?.canSelect() == true)
             main { vm.pass() }
             eventually { !vm.state.value.busy }
             Assert.assertNull(app.database.dao().activePass("联通娱乐", System.currentTimeMillis()))
@@ -93,14 +94,17 @@ class GateIntegrationTest {
         try {
             connectGate()
             val now = System.currentTimeMillis()
-            app.database.dao().insertPass(Pass(packageGroup = "联通娱乐", startAt = now, endAt = now + 5_000, roundId = VERIFIED_GATE_PASS_MARKER))
+            app.database.dao().insertPass(Pass(packageGroup = "联通娱乐", startAt = now, endAt = now + 8_000, roundId = VERIFIED_GATE_PASS_MARKER))
             RuntimeSupport.fixture()
             eventually { GateService.foreground == RuntimeSupport.TARGET }
             Assert.assertFalse(GateActivity.isShowing)
             device.openNotification()
             delay(500)
             Assert.assertEquals(RuntimeSupport.TARGET, GateService.foreground)
-            Assert.assertTrue(device.wait(Until.hasObject(By.text("打开「入口测试应用」之前")), 12_000))
+            eventually(15_000) { GateActivity.isShowing }
+            // 系统通知栏可以覆盖应用；关掉它后应当落在收费站，而不是娱乐页。
+            if (!device.hasObject(By.text("打开「入口测试应用」之前"))) device.pressBack()
+            Assert.assertTrue(device.wait(Until.hasObject(By.text("打开「入口测试应用」之前")), 5_000))
             RuntimeEvidence.capture("gate-relocks-after-expiry")
             find(By.text("先回桌面")).click()
             eventually { !GateActivity.isShowing }

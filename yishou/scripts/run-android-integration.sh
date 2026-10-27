@@ -9,4 +9,4 @@ trap collect_evidence EXIT
 adb install -r app/build/outputs/apk/mainline/debug/app-mainline-debug.apk
 adb install -r gate-fixture/build/outputs/apk/debug/gate-fixture-debug.apk
 adb shell input keyevent 82
-./gradlew --no-daemon connectedMainlineDebugAndroidTest --stacktrace
+./gradlew --no-daemon connectedMainlineDebugAndroidTest --stacktrace -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true

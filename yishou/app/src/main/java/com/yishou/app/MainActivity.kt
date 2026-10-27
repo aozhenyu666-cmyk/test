@@ -57,10 +57,11 @@ class MainActivity : ComponentActivity() {
                 // 分享页过来的：打开它指定的那一页
                 val app = application as YishouApp
                 val pending by app.pendingRoute.collectAsState()
-                androidx.compose.runtime.LaunchedEffect(pending) {
+                androidx.compose.runtime.LaunchedEffect(pending, entry) {
                     val to = pending ?: return@LaunchedEffect
-                    app.pendingRoute.value = null
+                    if (entry == null) return@LaunchedEffect
                     nav.navigate(to) { launchSingleTop = true }
+                    app.pendingRoute.value = null
                 }
                 fun tab(to: String) = nav.navigate(to) {
                     popUpTo("board") { saveState = true }
