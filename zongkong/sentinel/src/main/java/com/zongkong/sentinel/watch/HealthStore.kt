@@ -242,6 +242,13 @@ class HealthStore(private val dir: File?) {
     fun onAckAccepted(pkg: String, rec: ClientRecordData, nowWall: Long) {
         ensureLoaded(nowWall)
         val old = clients[pkg] ?: ClientRecord(pkg = pkg)
+        // 恢复后拿到真实 ack = 这次恢复成功：记一次成功，并把恢复预算还给下一次故障
+        // （不然用过两次恢复之后，以后每次故障都直接「预算用完」，再也不会去修）。
+        val recovered = old.recoveringSinceMono > 0
+        val stats = if (recovered) old.stats.copy(
+            recoveryAttempts = old.stats.recoveryAttempts + old.recoveriesTried.coerceAtLeast(1),
+            recoverySuccesses = old.stats.recoverySuccesses + 1,
+        ) else old.stats
         clients[pkg] = old.copy(
             instanceId = rec.instanceId,
             lastAckSeq = rec.seq,
@@ -249,6 +256,9 @@ class HealthStore(private val dir: File?) {
             consecutiveFailures = 0,
             lastFailureReason = "",
             recoveringSinceMono = 0,
+            recoveriesTried = 0,
+            lastRecoveryNote = if (recovered) "上次恢复成功（试了 ${old.recoveriesTried} 次）" else old.lastRecoveryNote,
+            stats = stats,
             inFlight = (old.inFlight - 1).coerceAtLeast(0),
             wedged = false,
             ruleRevision = rec.ruleRevision,
@@ -295,6 +305,15 @@ class HealthStore(private val dir: File?) {
             recoveriesTried = old.recoveriesTried + 1,
             lastRecoveryNote = note,
         )
+        dirty(nowWall)
+    }
+
+    /** 只更新给人看的恢复说明（真正发出恢复请求后由 WatchService 调；不再重复计次数）。 */
+    @Synchronized
+    fun noteRecovery(pkg: String, note: String, nowWall: Long) {
+        ensureLoaded(nowWall)
+        val old = clients[pkg] ?: return
+        clients[pkg] = old.copy(lastRecoveryNote = note)
         dirty(nowWall)
     }
 
@@ -402,6 +421,9 @@ class HealthStore(private val dir: File?) {
     @Synchronized
     fun flush(nowWall: Long = updatedAtWall) {
         ensureLoaded(nowWall)
+        // :watch 每轮都会 flush：这一刻就是「还在推进」的心跳。界面靠 updatedAtWall 判断兜底在不在，
+        // 不刷新它的话，三个客户端都没变化时会被误报成「哨兵兜底不可用」。
+        if (nowWall > updatedAtWall) updatedAtWall = nowWall
         save()
         lastSaveWall = nowWall
     }

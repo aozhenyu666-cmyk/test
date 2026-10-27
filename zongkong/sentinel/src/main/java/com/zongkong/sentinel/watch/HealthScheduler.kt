@@ -43,6 +43,10 @@ class HealthScheduler(
 
     private val validators = HashMap<String, AckValidator>()
 
+    /** 上一轮每个客户端的状态与动作：只在「变了」时才通知上层，免得每 10 秒刷一遍记录。 */
+    private val lastStatus = HashMap<String, HealthStatus>()
+    private val lastAction = HashMap<String, HealthAction>()
+
     /** 已经记过「卡死」的探测序号：一个探测只记一次失败，不按 tick 重复膨胀计数。 */
     private val wedgedCounted = HashMap<String, Long>()
 
@@ -54,11 +58,15 @@ class HealthScheduler(
         val needLock: List<Pair<String, String>> = emptyList(),
     )
 
+    // tick 在 :watch 主循环线程、onAck 在各客户端探测线程、onNewInstance 在 provider 的 Binder 线程：
+    // validator 不是线程安全的，统一加锁。
+    @Synchronized
     fun validatorFor(pkg: String): AckValidator = validators.getOrPut(pkg) { AckValidator() }
 
     /**
      * 推进一次。返回本轮的结论；调度器只做「记录 + 决定」，不自己锁屏、不自己重绑。
      */
+    @Synchronized
     fun tick(): Tick {
         val nowMono = mono.now()
         val nowWall = wall.now()
@@ -90,28 +98,42 @@ class HealthScheduler(
             val verdict = HealthEvaluator.evaluate(nowMono, cur.observation(), cfg)
             statuses[pkg] = verdict.status
 
-            when (verdict.action) {
-                HealthAction.PROBE -> {
-                    val seq = store.beginProbe(pkg, nowWall, nowMono)
-                    if (seq > 0) {
-                        val challenge = Challenge(
-                            nonce = UUID.randomUUID().toString(),
-                            seq = seq,
-                            issuedAtMono = nowMono,
-                            expectedInstanceId = cur.instanceId,
-                        )
-                        // 非阻塞派发：真正 Binder 调用在客户端专属线程里，带 5s 预算等。
-                        sink.dispatch(pkg, challenge, cfg.challengeBudgetMs)
-                        dispatched += pkg
-                    }
+            // 什么时候发挑战：内核说 PROBE 时；另外「恢复中 / 恢复用完」也必须继续发——
+            // 内核在恢复分支只认「恢复后的真实 ack」才转绿，不发挑战就永远拿不到 ack，
+            // 客户端修好了也会被永久钉死在「失联」上。
+            val wantProbe = verdict.action == HealthAction.PROBE ||
+                (cur.recoveringSinceMono > 0 && cur.registered && cur.permissionEnabled && !cur.paused)
+            if (wantProbe) {
+                val seq = store.beginProbe(pkg, nowWall, nowMono)
+                if (seq > 0) {
+                    val challenge = Challenge(
+                        nonce = UUID.randomUUID().toString(),
+                        seq = seq,
+                        issuedAtMono = nowMono,
+                        expectedInstanceId = cur.instanceId,
+                    )
+                    // 非阻塞派发：真正 Binder 调用在客户端专属线程里，带 5s 预算等。
+                    sink.dispatch(pkg, challenge, cfg.challengeBudgetMs)
+                    dispatched += pkg
                 }
+            }
+
+            val changed = lastStatus[pkg] != verdict.status || lastAction[pkg] != verdict.action
+            if (verdict.status == HealthStatus.UNRESPONSIVE && lastStatus[pkg] != HealthStatus.UNRESPONSIVE) {
+                store.countOutage(pkg)
+            }
+            lastStatus[pkg] = verdict.status
+            lastAction[pkg] = verdict.action
+
+            when (verdict.action) {
+                HealthAction.PROBE, HealthAction.NONE -> Unit
                 HealthAction.START_RECOVERY -> {
+                    // 记账只在这里做一次（WatchService 只负责真的去发恢复请求）。
                     store.onRecoveryAttempt(pkg, "请求重新挂上无障碍（第 ${cur.recoveriesTried + 1} 次）", nowMono, nowWall)
                     onAction(pkg, verdict.action, verdict.reason)
                 }
-                HealthAction.ESCALATE -> onAction(pkg, verdict.action, verdict.reason)
-                HealthAction.NOTIFY -> onAction(pkg, verdict.action, verdict.reason)
-                HealthAction.NONE -> Unit
+                // 提醒 / 升级：状态不变就不重复通知（否则每 10 秒写一次记录文件）。
+                HealthAction.ESCALATE, HealthAction.NOTIFY -> if (changed) onAction(pkg, verdict.action, verdict.reason)
             }
 
             // 2) 只有「确认失联」+ 活跃监管 + 亮屏，才把锁屏事件交给仲裁。
@@ -139,6 +161,7 @@ class HealthScheduler(
     }
 
     /** 探测结果回来（在客户端专属线程里调用，之后要 `endProbe`）。 */
+    @Synchronized
     fun onAck(pkg: String, challenge: Challenge, ack: ChallengeAck, receivedAtMono: Long) {
         val nowWall = wall.now()
         val result = validatorFor(pkg).validate(challenge, ack, receivedAtMono)
@@ -169,6 +192,7 @@ class HealthScheduler(
     }
 
     /** 连接重建：validator 必须换新基线，否则会拿旧实例/旧序号说事（T14）。 */
+    @Synchronized
     fun onNewInstance(pkg: String, instanceId: String) {
         validatorFor(pkg).resetForNewInstance(instanceId)
     }
