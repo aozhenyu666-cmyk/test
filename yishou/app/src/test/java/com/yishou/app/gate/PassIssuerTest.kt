@@ -2,6 +2,7 @@ package com.yishou.app.gate
 
 import com.yishou.app.card.*
 import com.yishou.app.data.*
+import com.yishou.app.card.Round
 import org.junit.Assert.*
 import org.junit.Test
 import com.yishou.app.FakeDao
