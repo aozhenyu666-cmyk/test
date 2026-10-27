@@ -16,7 +16,7 @@ import com.yishou.app.gate.GateActivity
 import com.yishou.app.gate.GateService
 
 @Composable
-fun EntertainmentGateCard(onSettings: () -> Unit) {
+fun EntertainmentGateCard(onSettings: (() -> Unit)? = null) {
     val context = LocalContext.current
     val app = context.applicationContext as YishouApp
     val prefs by app.settings.app.collectAsStateWithLifecycle()
@@ -31,7 +31,7 @@ fun EntertainmentGateCard(onSettings: () -> Unit) {
             Text("打开已选应用先做题，正常通过换 15 分钟，到点重新锁。", style = MaterialTheme.typography.bodySmall)
             problem?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onSettings) { Text("选择娱乐应用") }
+                if (onSettings != null) TextButton(onClick = onSettings) { Text("选择娱乐应用") }
                 if (!connected) TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("连接服务") }
                 TextButton(onClick = { context.startActivity(GateActivity.testIntent(context)) }) { Text("试一道题") }
             }

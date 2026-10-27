@@ -90,7 +90,7 @@ fun WatchedAppsScreen(onBack: () -> Unit) {
             contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item { EntertainmentGateCard(onSettings = {}) }
+            item { EntertainmentGateCard() }
             item {
                 Column {
                     Text("应用组", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)

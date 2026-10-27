@@ -82,6 +82,7 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AssistantScreen(onBack: () -> Unit, onSettings: () -> Unit, vm: AssistantViewModel = viewModel()) {
     val chats by vm.chats.collectAsStateWithLifecycle()
@@ -91,7 +92,7 @@ fun AssistantScreen(onBack: () -> Unit, onSettings: () -> Unit, vm: AssistantVie
     LaunchedEffect(vm.lines.size, vm.draftReply.length) { if (vm.lines.isNotEmpty()) list.animateScrollToItem(vm.lines.size) }
     Scaffold(topBar = { BackTopBar("AI 助手", onBack) }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().imePadding().padding(horizontal = 16.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = vm::fresh, enabled = !vm.busy) { Text("新对话") }
                 Box {
                     TextButton(onClick = { menu = true }, enabled = !vm.busy) { Text("历史 ${chats.size}") }
