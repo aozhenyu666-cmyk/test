@@ -91,7 +91,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         }.getOrNull()
     }
     private suspend fun pick() {
-        probe = null; review = null; triggerSaved = false; recall = null; recallFeedback = null; ice = null
+        probe = null; review = null; triggerSaved = false; recall = null; recallFeedback = null; recallingEcho = false; ice = null
         session.stop()
         val open = StrandStore(dao).open()
         val bank = availableBank()
@@ -122,13 +122,13 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             GateMain.LOW_ENERGY -> recall = Reflexes.pick(todayRefs, System.currentTimeMillis())
             GateMain.WAIT -> Unit
         }
-        recallPrompt = recall?.let { sourcePrompt(it.source) }.orEmpty()
         if (!echoChecked && (mode == GateMain.STRAND || mode == GateMain.BANK)) {
             echoChecked = true
             refs.filter { it.dueAt <= System.currentTimeMillis() && it.id !in recalledToday() }.minByOrNull { it.dueAt }?.let {
                 recall = it; recallingEcho = true
             }
         }
+        recallPrompt = recall?.let { sourcePrompt(it.source) }.orEmpty()
     }
     private fun prepareBank() {
         val q = bankQuestion ?: return
