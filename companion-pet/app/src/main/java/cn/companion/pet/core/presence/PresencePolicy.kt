@@ -1,5 +1,6 @@
 package cn.companion.pet.core.presence
 
+import cn.companion.pet.core.rhythm.ActivityPlan
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -16,6 +17,13 @@ data class PresenceConfig(
     val ignoreCooldownMillis: Long = 30 * 60_000L,
     /** 明确点 × / 收起后这么久不主动开口。 */
     val dismissCooldownMillis: Long = 30 * 60_000L,
+    /**
+     * 是否按星期与时段浮动活跃度（见核心层 core.rhythm.ActivityBudget）。
+     *
+     * 默认开启。**它只会替换上限与间隔这两个数字，永远不会缩短 dismissedUntil**：
+     * 用户明确拒绝的冷却优先级最高，自适应逻辑碰不到它。
+     */
+    val useAdaptiveBudget: Boolean = true,
 ) {
     companion object {
         val CAP_CHOICES = listOf(10, 20, 30, 50)
@@ -95,13 +103,26 @@ class PresencePolicy(
     /** 今天已主动开口次数（跨午夜自动归零，只读不写盘）。 */
     fun spokenToday(now: Long): Int = if (state.day == dayOf(now)) state.spokenToday else 0
 
-    /** 这一刻能不能主动开口（本机提示或模型开口）。只读，不写盘。 */
-    fun check(now: Long, paused: Boolean = false): PresenceGate {
+    /**
+     * 这一刻能不能主动开口（本机提示或模型开口）。只读，不写盘。
+     *
+     * [plan] 是按星期与时段算出的活跃度预算；为 null 时用 [PresenceConfig] 里的固定值，
+     * 便于不关心时段的调用方与既有测试保持原样。
+     *
+     * **优先级不可重排**：paused → dismissedUntil → ignoreCooldownUntil → 上限 → 间隔。
+     * 自适应预算只替换「上限」和「间隔」两个数字，绝不会退回到缩短 dismissedUntil。
+     */
+    fun check(now: Long, paused: Boolean = false, plan: ActivityPlan? = null): PresenceGate {
         if (paused) return PresenceGate(false, "已暂停")
         if (state.dismissedUntil > now) return PresenceGate(false, "你刚关掉过，安静一会儿")
         if (state.ignoreCooldownUntil > now) return PresenceGate(false, "连续没回应，冷却中")
-        if (spokenToday(now) >= config.dailyCap) return PresenceGate(false, "今天主动开口已到上限")
-        if (state.lastProactiveAt > 0 && now - state.lastProactiveAt < config.minIntervalMillis) return PresenceGate(false, "离上次开口太近")
+        val adaptive = config.useAdaptiveBudget
+        val cap = if (adaptive && plan != null) plan.dailyCap else config.dailyCap
+        val interval = if (adaptive && plan != null) plan.minIntervalMillis else config.minIntervalMillis
+        // 时段预算为 0 表示这个点完全不主动开口（凌晨陪熬夜、不吵睡觉）。
+        if (cap <= 0) return PresenceGate(false, "这个点不开口，安静陪你")
+        if (spokenToday(now) >= cap) return PresenceGate(false, "今天主动开口已到上限")
+        if (state.lastProactiveAt > 0 && now - state.lastProactiveAt < interval) return PresenceGate(false, "离上次开口太近")
         return PresenceGate(true, "允许")
     }
 
