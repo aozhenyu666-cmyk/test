@@ -27,6 +27,12 @@ class DayLedger(private val db: AppDatabase) {
         }
         db.partners().startedBetween(from, to).forEach { out += LedgerFrom.partner(it) }
         db.lines().movesBetween(from, to).forEach { m -> LedgerFrom.move(m)?.let(out::add) }
+        db.strands().all().forEach { row ->
+            val s = runCatching { com.yishou.app.thread.Strand.fromJson(row.id, org.json.JSONObject(row.json)) }.getOrNull() ?: return@forEach
+            s.moves.filter { it.at in from until to }.forEach { m ->
+                out += LedgerEntry(m.at, LedgerKind.THREAD, if (m.passed) LedgerMark.HIT else LedgerMark.MISS, m.ask, m.answer)
+            }
+        }
         return out.sortedBy { it.at }
     }
 }

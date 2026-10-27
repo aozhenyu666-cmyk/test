@@ -135,6 +135,7 @@ class MainActivity : ComponentActivity() {
                     ) { e ->
                         LiveScreen(lineId = e.arguments?.getLong("id") ?: 0L, onBack = { nav.navigateUp() })
                     }
+                    composable("strand") { com.yishou.app.ui.StrandScreen(onBack = { nav.popBackStack() }) }
                     composable("bank") {
                         BankScreen(
                             onBack = { nav.navigateUp() },

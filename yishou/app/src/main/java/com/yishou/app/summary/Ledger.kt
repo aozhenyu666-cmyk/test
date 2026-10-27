@@ -9,6 +9,7 @@ import java.time.format.DateTimeFormatter
  * 都记成一手。首页的时之轮、每晚总结、“来一手”都看这一本账，不再各算各的。
  */
 enum class LedgerKind(val label: String) {
+    THREAD("线程"),
     CARD("刷题"),
     DRILL("练思维"),
     SOUP("海龟汤"),

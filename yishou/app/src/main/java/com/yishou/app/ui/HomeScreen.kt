@@ -220,6 +220,8 @@ fun HomeScreen(
                 IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Settings, contentDescription = "设置") }
             }
 
+            Button(onClick = { onRoute("strand") }, modifier = Modifier.fillMaxWidth().height(56.dp)) { Text("想一件事") }
+
             // 来一手：不用挑练法，从素材池里挑下一件最值得做的
             NextCard(pick, onGo = { p -> onRoute(vm.go(p)) }, onAnother = vm::another)
 
