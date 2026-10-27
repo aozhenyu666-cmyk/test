@@ -116,7 +116,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
                 bankQuestion = LockedQuestions.fromCard(d.row.id, d.card)!!
                 kind = d.card.skill.name; fade = dao.fade(kind)?.value() ?: FadeState(); fadeRecorded = false
                 prepareBank()
-                ice = bank.drop(1).randomOrNull()?.let { LockedQuestions.fromCard(it.row.id, it.card) }?.let { Icebreaker.from(it, kotlin.random.Random.nextLong()) }
+                ice = BankOpening.ice(bankQuestion!!.id, bank.mapNotNull { LockedQuestions.fromCard(it.row.id, it.card) }, kotlin.random.Random.nextLong())
             }
             GateMain.LOW_ENERGY -> recall = Reflexes.pick(todayRefs, System.currentTimeMillis())
             GateMain.WAIT -> Unit
@@ -131,8 +131,8 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     private fun prepareBank() {
         val q = bankQuestion ?: return
         askingFirst = fade.level == FadeLevel.ASK_FIRST
-        feed = if (fade.level == FadeLevel.FEED) Fade.feedHints(q) else emptyList()
-        probe = GateFlow(if (askingFirst) Fade.askFirstQ(q) else q) { SystemClock.elapsedRealtime() }
+        feed = BankOpening.hints(q, fade)
+        probe = GateFlow(BankOpening.first(q, fade)) { SystemClock.elapsedRealtime() }
     }
     fun finishIce() { ice = null; changed() }
     fun showProbe(flow: GateFlow) { if (probe === flow) { flow.shown(); changed() } }
