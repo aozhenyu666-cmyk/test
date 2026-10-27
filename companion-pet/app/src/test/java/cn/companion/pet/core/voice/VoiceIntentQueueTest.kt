@@ -29,17 +29,20 @@ class VoiceIntentQueueTest {
      *
      * 旧实现用「历史上入过队」去做重，一条意图过期未说之后，同一内容再也进不来，
      * 等于这件事被静默永久禁言。
+     *
+     * 这一条**中途不调用 [VoiceIntentQueue.next]**：`next` 会顺带 prune，
+     * 那样就测不到「去重口径本身是否只看有效条目」了——把去重改回「看全部历史」
+     * 也可能因为被 prune 擦干净而蒙过去。直接入队，去重口径才真正被钉住。
      */
     @Test
     fun `过期之后再次入队同一内容应当成功`() {
         val q = VoiceIntentQueue()
         assertNotNull(q.enqueue("own_life", "过期没说的事", listOf("e1"), now = 0L, ttlMillis = hour))
 
+        // 过期时刻之后直接再入队，不先调 next()，所以过期条目还躺在队列里。
         val later = 2 * hour
-        assertNull("过期了，先不能被挑中", q.next(now = later) { false })
-
         val again = q.enqueue("own_life", "过期没说的事", listOf("e1"), now = later, ttlMillis = hour)
-        assertNotNull("过期不是永久禁言，同一件事应当能重新入队", again)
+        assertNotNull("过期条目还占着去重名额就错了：同一件事应当能重新入队", again)
         assertEquals("重新入队后立刻能说", "过期没说的事", q.next(now = later + 1) { false }?.summary)
     }
 
