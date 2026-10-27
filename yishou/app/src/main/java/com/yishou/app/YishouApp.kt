@@ -119,12 +119,13 @@ class YishouApp : Application() {
     val scrollLook: ChatClient by lazy { ChatClient(config = { settings.vision.value }, http = ChatClient.defaultHttpClient(60), usage = stats) }
     val scrollJudge: ChatClient by lazy { ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(30), usage = stats) }
 
-    /** 判卷：只对照锁死的要点，判卷引的原话本机再核对一遍（judge/） */
-    val judge: com.yishou.app.judge.Judge by lazy {
-        com.yishou.app.judge.LlmJudge { system, user ->
-            (scrollJudge.complete(system, user, kind = "判卷", json = false) as? com.yishou.app.llm.LlmResult.Ok)?.value
-        }
+    /** 问一次文字模型，失败返回 null。判卷、线程出题、提议待定项都走它（纯逻辑那边只认这个形状） */
+    fun asker(kind: String): suspend (String, String) -> String? = { system, user ->
+        (scrollJudge.complete(system, user, kind = kind, json = false) as? com.yishou.app.llm.LlmResult.Ok)?.value
     }
+
+    /** 判卷：只对照锁死的要点，判卷引的原话本机再核对一遍（judge/） */
+    val judge: com.yishou.app.judge.Judge by lazy { com.yishou.app.judge.LlmJudge(asker("判卷")) }
 
     /** 一手自己的语音伙伴（听写 → 文字模型 → 朗读） */
     val partnerVoice: com.yishou.app.partner.PartnerVoice by lazy { com.yishou.app.partner.PartnerVoice(this) }
