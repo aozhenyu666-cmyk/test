@@ -51,6 +51,9 @@ data class GateState(
     val endgame: com.yishou.app.data.Endgame? = null,
     /** 残局翻了底牌 */
     val endgameDone: Boolean = false,
+    val probeRevision: Int = 0,
+    val probeBusy: Boolean = false,
+    val probeError: String? = null,
     val wrongInRow: Int = 0,
     val waiting: Boolean = false,
     val waitRemainingMs: Long = WAIT_MS,
@@ -75,6 +78,8 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     private val issuer = PassIssuer(dao = yishou.database.dao())
     private val fallback = WaitFallback { SystemClock.elapsedRealtime() }
     private var waitJob: Job? = null
+    var probe: GateFlow? = null
+        private set
 
     /** 每次思考页被（重新）打开时调用。同一个应用重复打开不会清掉正在做的题。 */
     fun start(pkg: String?, group: String, label: String) {
@@ -104,6 +109,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             pushEcho(pkg.orEmpty())
             _state.update { it.copy(gateCard = true, useLine = false, endgame = null) }
             session.start(CardMode.GATE, null, 1)
+            prepareProbe()
         }
     }
 
@@ -196,6 +202,51 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             session.stop()
             session.start(CardMode.GATE, null, 1)
         } else session.deal()
+        prepareProbe()
+    }
+
+    private fun prepareProbe() {
+        val d = session.state.value.dealt
+        probe = d?.let { com.yishou.app.judge.LockedQuestions.fromCard(it.row.id, it.card) }
+            ?.let { GateFlow(it) { SystemClock.elapsedRealtime() } }
+        _state.update { it.copy(probeRevision = it.probeRevision + 1, probeBusy = false, probeError = null) }
+    }
+
+    fun showProbe(flow: GateFlow) {
+        if (flow !== probe) return
+        flow.shown()
+        _state.update { it.copy(probeRevision = it.probeRevision + 1) }
+    }
+
+    fun editProbe(text: String, voice: Boolean = false) {
+        probe?.edit(text, voice)
+        _state.update { it.copy(probeRevision = it.probeRevision + 1, probeError = null) }
+    }
+
+    fun voiceProbeStart() { probe?.voiceStart() }
+
+    fun submitProbe() {
+        val flow = probe ?: return
+        if (_state.value.probeBusy || flow.busy || flow.exhausted || flow.remainingFreeze > 0) return
+        _state.update { it.copy(probeBusy = true, probeError = null) }
+        viewModelScope.launch {
+            try {
+                flow.submit(yishou.judge)
+                if (flow !== probe) return@launch
+                if (flow.canSelect()) flow.verdict?.let(session::approveGate)
+                if (flow.exhausted) _state.update { it.copy(wrongInRow = it.wrongInRow + 1) }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) {
+                if (flow === probe) _state.update { it.copy(probeError = "这次没能核对，请重试。") }
+            } finally {
+                if (flow === probe) _state.update { it.copy(probeBusy = false, probeRevision = it.probeRevision + 1) }
+            }
+        }
+    }
+
+    fun selectProbeOption(option: Int) {
+        if (probe?.canSelect() != true) return
+        act { session.bet(option, com.yishou.app.card.Conf.MID) }
     }
 
     fun onExitChange(text: String) = _state.update { it.copy(exit = text) }
