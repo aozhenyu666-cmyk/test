@@ -5,7 +5,11 @@
 ## 先读
 
 - `yishou/README.md`：功能和目录说明。
-- 做语音伙伴的任务时：`yishou/docs/voice-partner.md`，只做任务里指定的那一条。
+- 做语音伙伴的任务时：`yishou/docs/voice-partner.md`。只做任务卡里的事，但任务卡里的步骤要全部做完再开 PR；中途不停。
+
+## 任务卡在哪
+
+- `projects/02-yishou/tasks/`，位于 `ccr-1addeeab-loh4x0` 分支。
 
 ## 分支和提交
 

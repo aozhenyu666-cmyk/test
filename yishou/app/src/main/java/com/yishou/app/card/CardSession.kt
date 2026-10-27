@@ -53,6 +53,7 @@ data class SessionState(
     val drillTotal: Int = 0,
     /** 先说的那句打中了正确选项独有的字：选项一亮直接选 */
     val bullseye: Boolean = false,
+    val gateVerdict: com.yishou.app.judge.Verdict? = null,
 ) {
     val index: Int get() = results.size
 }
@@ -98,7 +99,7 @@ class CardSession(
         _state.update { it.copy(loading = true, error = null) }
         val hist = engine.history()
         val gate = s.mode == CardMode.GATE
-        when (val r = engine.deal(s.focus, allowRedo = true, needKey = !gate)) {
+        when (val r = if (gate) engine.dealGate() else engine.deal(s.focus, allowRedo = true, needKey = true)) {
             is LlmResult.Err -> _state.update { it.copy(loading = false, error = r.error.message) }
             is LlmResult.Ok -> {
                 recorded = null
@@ -108,9 +109,9 @@ class CardSession(
                     it.copy(
                         loading = false, dealt = r.value, round = Round(r.value.card, cfg),
                         hidden = false, notes = "", needsKey = false, cardStartedAt = clock(),
-                        // 入口也先说再选：入口是一天里最常见的一张，最不能让人靠蒙过去
-                        mustPredict = predictFirst || it.rushNote != null, predicted = null,
-                        drillAsk = null, drillHint = null, drillStep = 0, drillTotal = 0, bullseye = false,
+                        // 收费站只做点选；其他练习保留先说再选。
+                        mustPredict = !gate && (predictFirst || it.rushNote != null), predicted = null,
+                        drillAsk = null, drillHint = null, drillStep = 0, drillTotal = 0, bullseye = false, gateVerdict = null,
                     )
                 }
             }
@@ -125,7 +126,7 @@ class CardSession(
             it.copy(
                 dealt = d, round = Round(d.card, RoundConfig(checks, allowChange = true)), hidden = false, notes = "", needsKey = false,
                 cardStartedAt = clock(), error = null, mustPredict = predictFirst || it.rushNote != null, predicted = null,
-                drillAsk = null, drillHint = null, drillStep = 0, drillTotal = 0, bullseye = false,
+                drillAsk = null, drillHint = null, drillStep = 0, drillTotal = 0, bullseye = false, gateVerdict = null,
             )
         }
     }
@@ -170,11 +171,20 @@ class CardSession(
 
     fun note(text: String) = _state.update { it.copy(notes = text) }
 
-    suspend fun bet(option: Int, conf: Conf) = advance { it.bet(option, conf) }
+    fun approveGate(verdict: com.yishou.app.judge.Verdict) {
+        if (_state.value.mode == CardMode.GATE) _state.update { it.copy(gateVerdict = verdict) }
+    }
+
+    suspend fun bet(option: Int, conf: Conf) {
+        if (_state.value.mode == CardMode.GATE) {
+            if (_state.value.gateVerdict?.passed != true || option !in 0..3) return
+            advance { if (it.step == Step.BET) it.copy(bet = option, conf = conf, step = Step.REVEAL) else it }
+        } else advance { it.bet(option, conf) }
+    }
     suspend fun evidence(sentences: Set<Int>) = advance { it.evidence(sentences) }
     suspend fun check(option: Int, flaw: String) = advance { it.check(option, flaw) }
     suspend fun change(option: Int?) = advance { it.change(option) }
-    suspend fun hint() = advance { it.hint() }
+    suspend fun hint() = advance { if (_state.value.mode == CardMode.GATE && it.help >= 2) it else it.hint() }
 
     /** 揭晓后点的错因：补进已记的结果里 */
     suspend fun cause(c: String) {

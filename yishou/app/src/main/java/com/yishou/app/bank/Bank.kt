@@ -21,6 +21,7 @@ sealed interface BankItem {
         val number: Int? = null,
         /** 干扰项的错因（【错因】A：范围扩大；C：……），没有就空 */
         val flaws: Map<Int, String> = emptyMap(),
+        val points: List<String> = emptyList(),
     ) : BankItem
 
     data class Essay(
@@ -270,7 +271,7 @@ object BankParser {
             val ev = Regex("\\d+").findAll(d.evidenceRaw).map { it.value.toInt() }.toSet()
             return BankItem.Choice(
                 type, material.ifEmpty { shared }, question, d.options.map { it!!.trim() }, answer, ev, explain,
-                number = d.number, flaws = flawsOf(d.flawsRaw),
+                number = d.number, flaws = flawsOf(d.flawsRaw), points = d.points.filter { it.isNotBlank() && !(it.length <= 6 && Card.answerOf(it) != null) },
             )
         }
         if (d.hasOptions) return null
@@ -317,6 +318,7 @@ object BankParser {
             flaws = c.flaws.filterKeys { it != answer }.takeIf { it.size == 3 } ?: emptyMap(),
             explain = c.explain,
             type = c.type,
+            points = c.points,
         )
     }
 }

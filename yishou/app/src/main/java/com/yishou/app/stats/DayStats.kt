@@ -55,6 +55,7 @@ data class DayStats(
     companion object {
         const val GATE_SHOWN = "gate_shown"
         const val GATE_PASS = "gate_pass"
+        const val WAIT_PASS = "wait_pass"
         const val OFFLINE_PASS = "offline_pass"
         const val WINDOW_BLOCK = "window_block"
         const val LOOK = "look"
