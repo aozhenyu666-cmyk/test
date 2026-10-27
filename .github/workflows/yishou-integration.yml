@@ -1,0 +1,49 @@
+name: yishou-integration
+on:
+  push:
+    paths:
+      - "yishou/**"
+      - ".github/workflows/yishou-integration.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  android-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Build test APK
+        working-directory: yishou
+        run: ./gradlew --no-daemon assembleMainlineDebug assembleMainlineDebugAndroidTest
+      - name: Run Android integration tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          ram-size: 2048M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -camera-back none
+          working-directory: yishou
+          script: ./gradlew --no-daemon connectedMainlineDebugAndroidTest
+      - name: Upload Android test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: yishou-android-test-evidence
+          path: |
+            yishou/app/build/reports/androidTests/
+            yishou/app/build/outputs/androidTest-results/
+            yishou/app/schemas/
