@@ -122,16 +122,8 @@ abstract class AppDao {
     abstract suspend fun insertPass(pass: Pass): Long
 
     /** 该应用组还没到期的放行，到期的自然查不到 */
-    @Query("SELECT * FROM pass WHERE packageGroup = :group AND endAt > :now ORDER BY endAt DESC LIMIT 1")
+    @Query("SELECT * FROM pass WHERE packageGroup = :group AND endAt > :now AND roundId = -1 ORDER BY endAt DESC LIMIT 1")
     abstract suspend fun activePass(group: String, now: Long): Pass?
-
-    /** 离线保存：原话存成一轮（judged = false），同时发放一次放行。断点不变。 */
-    @Transaction
-    open suspend fun saveOfflineRound(round: Round, pass: Pass): Pass {
-        val roundId = insertRound(round)
-        val saved = pass.copy(roundId = roundId)
-        return saved.copy(id = insertPass(saved))
-    }
 
     // ---------- 每晚总结 ----------
 

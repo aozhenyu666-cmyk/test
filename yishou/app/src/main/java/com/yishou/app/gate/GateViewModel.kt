@@ -52,12 +52,7 @@ data class GateState(
     val isTest: Boolean get() = triggerPackage == null
 }
 
-/**
- * 入口思考页：打开关注的应用前，
- * ① 上次说好看完做的事，先答做了没有；② 做一张题卡（下注、依据、揭晓，一两分钟）；
- * ③ 说一句看完做的第一件事，放行。判对错只看题卡，答错也照样放行——这里要的是“先停下来想一步”，不是考试。
- * 题出不来（没网、接口坏了）时，写一句理由可以离线放行，每天有次数。
- */
+/** 入口只接受题卡的答案与原文依据，其他训练不签发放行。 */
 class GateViewModel(app: Application) : AndroidViewModel(app) {
 
     private val yishou = app as YishouApp
@@ -70,6 +65,8 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<GateState> = _state.asStateFlow()
 
     private var startedFor: Pair<String?, String>? = null
+    private var granting = false
+    private val issuer = PassIssuer(dao = yishou.database.dao())
 
     /** 每次思考页被（重新）打开时调用。同一个应用重复打开不会清掉正在做的题。 */
     fun start(pkg: String?, group: String, label: String) {
@@ -96,31 +93,8 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(loading = false) }
             if (inWindow) return@launch
             pushEcho(pkg.orEmpty())
-            // 残局：有到期的就下一局；没有就退成一张题卡（并在后台加工新的）
-            if (prefs.gateMode == "endgame") {
-                val now = System.currentTimeMillis()
-                val dao = yishou.database.endgames()
-                val e = com.yishou.app.endgame.Endgames.pick(dao.due(now, 60), now)
-                if (dao.countDue(now) < 4) yishou.prefetchEndgames()
-                if (e != null) {
-                    _state.update { it.copy(endgame = e, gateCard = false) }
-                    return@launch
-                }
-            }
-            // 主线下一手：有在下的局就问它的下一问；没有就退成一张题卡
-            val open = if (prefs.gateMode == "line") yishou.database.lines().latestOpen() else null
-            when {
-                open != null -> {
-                    lineSession.open(open, yishou.level)
-                    _state.update { it.copy(useLine = true, gateCard = false) }
-                }
-                prefs.gateMode == "check" -> _state.update { it.copy(gateCard = false) }
-                else -> {
-                    _state.update { it.copy(gateCard = true) }
-                    session.start(CardMode.GATE, null, 1)
-                    if (session.state.value.error != null) _state.update { it.copy(offlineLeft = offlineLeft()) }
-                }
-            }
+            _state.update { it.copy(gateCard = true, useLine = false, endgame = null) }
+            session.start(CardMode.GATE, null, 1)
         }
     }
 
@@ -202,14 +176,15 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             val s = session.state.value
             if (s.results.size > before) {
                 Haptics.play(yishou, if (s.results.last().firstCorrect) Haptics.Kind.PASS else Haptics.Kind.REDO)
-                yishou.prefetchCards()
             }
         }
     }
 
     fun retry() = viewModelScope.launch {
-        session.deal()
-        if (session.state.value.error != null) _state.update { it.copy(offlineLeft = offlineLeft()) }
+        if (session.state.value.done) {
+            session.stop()
+            session.start(CardMode.GATE, null, 1)
+        } else session.deal()
     }
 
     fun onExitChange(text: String) = _state.update { it.copy(exit = text) }
@@ -217,50 +192,18 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     /** 主线下一手 */
     fun move(text: String) = viewModelScope.launch { lineSession.answer(text) }
 
-    /** 做完题卡、说了看完做什么：放行 */
+    /** 只有当前题卡完成双重校验后才能签发。 */
     fun pass() {
         val s = _state.value
-        if (s.loading || s.partnerPending || s.isTest || s.inWindow || s.passMinutes != null || s.exit.isBlank()) return
-        // 出不了题（没网、接口出错、题库空了又生成失败）时不卡人：退成只打卡
-        val card = session.state.value
-        val cardFailed = card.error != null && card.round == null
-        if (s.gateCard && !card.done && !cardFailed) return
-        // 残局：翻了底牌才放行（点没点中都放，没中的明天再来）
-        if (s.endgame != null && !s.endgameDone) return
-        // 主线：接住一手，或者降阶到底、老实记下“先放着”，才放行（岔路：先放着不放行）
-        if (s.useLine && line.value.caught == 0 && (chalu || !line.value.parked)) return
-        // 岔路：答错了先写差值，存进回响队列，下次打开这个 App 开局就推回来
-        if (needsDelta) {
-            if (!com.yishou.app.line.Echoes.usable(s.delta)) return
-            yishou.echoLater(s.delta, com.yishou.app.data.EchoKind.DELTA, s.triggerPackage.orEmpty())
-        }
-        grant(yishou.settings.app.value.passMinutesFor(s.group), DayStats.GATE_PASS)
-    }
-
-    /** 题出不来：写一句为什么现在要用，离线放行（每天有次数） */
-    fun passOffline() {
-        val s = _state.value
-        if (s.loading || s.partnerPending || s.isTest || s.inWindow || s.passMinutes != null || s.exit.isBlank()) return
+        if (granting || s.loading || s.partnerPending || s.isTest || s.inWindow || s.passMinutes != null) return
+        if (!PassIssuer.eligible(session.state.value)) return
+        granting = true
         viewModelScope.launch {
-            if (offlineLeft() <= 0) return@launch
-            grant(yishou.settings.app.value.offlinePassMinutes, DayStats.OFFLINE_PASS)
+            try {
+                val pass = issuer.issue(session.state.value, s.group) ?: return@launch
+                yishou.stats.event(DayStats.GATE_PASS)
+                _state.update { it.copy(passMinutes = ((pass.endAt - pass.startAt) / 60_000L).toInt()) }
+            } finally { granting = false }
         }
-    }
-
-    private fun grant(minutes: Int, event: String) {
-        val s = _state.value
-        viewModelScope.launch {
-            yishou.engine.grantPass(s.group, minutes, null)
-            yishou.stats.event(event)
-            val end = System.currentTimeMillis() + minutes * 60_000L
-            yishou.settings.updateApp { it.copy(pendingExit = s.exit.trim(), pendingExitAt = end) }
-            if (chalu) com.yishou.app.system.Notifications.showCapsule(yishou, s.exit.trim())
-            _state.update { it.copy(passMinutes = minutes) }
-        }
-    }
-
-    private fun offlineLeft(): Int {
-        val used = yishou.stats.day(java.time.LocalDate.now(AppZone.zone)).event(DayStats.OFFLINE_PASS)
-        return (yishou.settings.app.value.offlineDailyLimit - used).coerceAtLeast(0)
     }
 }

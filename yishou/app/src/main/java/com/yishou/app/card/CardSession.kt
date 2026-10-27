@@ -98,7 +98,7 @@ class CardSession(
         _state.update { it.copy(loading = true, error = null) }
         val hist = engine.history()
         val gate = s.mode == CardMode.GATE
-        when (val r = engine.deal(s.focus, allowRedo = true, needKey = !gate)) {
+        when (val r = if (gate) engine.dealGate() else engine.deal(s.focus, allowRedo = true, needKey = true)) {
             is LlmResult.Err -> _state.update { it.copy(loading = false, error = r.error.message) }
             is LlmResult.Ok -> {
                 recorded = null
@@ -108,8 +108,8 @@ class CardSession(
                     it.copy(
                         loading = false, dealt = r.value, round = Round(r.value.card, cfg),
                         hidden = false, notes = "", needsKey = false, cardStartedAt = clock(),
-                        // 入口也先说再选：入口是一天里最常见的一张，最不能让人靠蒙过去
-                        mustPredict = predictFirst || it.rushNote != null, predicted = null,
+                        // 收费站只做点选；其他练习保留先说再选。
+                        mustPredict = !gate && (predictFirst || it.rushNote != null), predicted = null,
                         drillAsk = null, drillHint = null, drillStep = 0, drillTotal = 0, bullseye = false,
                     )
                 }
@@ -174,7 +174,7 @@ class CardSession(
     suspend fun evidence(sentences: Set<Int>) = advance { it.evidence(sentences) }
     suspend fun check(option: Int, flaw: String) = advance { it.check(option, flaw) }
     suspend fun change(option: Int?) = advance { it.change(option) }
-    suspend fun hint() = advance { it.hint() }
+    suspend fun hint() = advance { if (_state.value.mode == CardMode.GATE && it.help >= 2) it else it.hint() }
 
     /** 揭晓后点的错因：补进已记的结果里 */
     suspend fun cause(c: String) {
