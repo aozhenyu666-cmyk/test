@@ -38,7 +38,7 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
     init { viewModelScope.launch { val old = dao.chats().first().firstOrNull(); old?.let { load(it.id) } } }
     suspend fun load(next: Long) {
         if (busy) return
-        dao.chat(next)?.let { row -> id = row.id; lines = ChatHistory.decode(row.json); error = null }
+        dao.chat(next)?.let { row -> id = row.id; lines = ChatHistory.decode(row.json); error = lines.lastOrNull()?.takeIf { it.role == "error" }?.text }
     }
     fun choose(next: Long) { viewModelScope.launch { load(next) } }
     fun fresh() { if (!busy) { id = 0; lines = emptyList(); error = null; draftReply = "" } }

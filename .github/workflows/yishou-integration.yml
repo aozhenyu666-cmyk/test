@@ -25,7 +25,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       - name: Build test APK
         working-directory: yishou
-        run: ./gradlew --no-daemon assembleMainlineDebug assembleMainlineDebugAndroidTest
+        run: ./gradlew --no-daemon assembleMainlineDebug assembleMainlineDebugAndroidTest :gate-fixture:assembleDebug
       - name: Run Android integration tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -37,7 +37,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -camera-back none
           working-directory: yishou
-          script: ./gradlew --no-daemon connectedMainlineDebugAndroidTest
+          script: bash scripts/run-android-integration.sh
       - name: Upload Android test evidence
         if: always()
         uses: actions/upload-artifact@v4

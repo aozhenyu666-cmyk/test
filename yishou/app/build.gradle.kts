@@ -18,6 +18,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
+
     signingConfigs {
         // 固定的调试签名，提交在仓库里。每次 CI 打出的 APK 签名一致，
         // 手机上可以直接覆盖安装，不用卸载（卸载会清掉本机数据）。
@@ -114,4 +116,9 @@ tasks.configureEach {
     if (name.startsWith("kspChalu") && name.endsWith("Kotlin")) {
         mustRunAfter(name.replace("kspChalu", "kspMainline"))
     }
+}
+
+// 迁移测试要验证这一次生成的真实 Room 结构。
+tasks.matching { it.name == "mergeMainlineDebugAndroidTestAssets" }.configureEach {
+    dependsOn("kspMainlineDebugKotlin")
 }
