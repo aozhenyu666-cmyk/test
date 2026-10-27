@@ -45,9 +45,10 @@ class GateIntegrationTest {
             delay(150)
             val answer = "应当先证明来访者是谁再放人，因为营业时段只解决何时可来，不等于已经有了进入资格。"
             server.enqueue(RuntimeSupport.completion("[P1] 命中 | 「应当先证明来访者是谁再放人」\n[P2] 命中 | 「营业时段只解决何时可来」\n[跑题] 否\n[一句话] 条件区分清楚了"))
-            main { vm.editProbe(answer); vm.submitProbe() }
+            val submitted = vm.probe!!
+            main { for (n in 1..answer.length) vm.editProbe(answer.take(n)); vm.submitProbe() }
             eventually { !vm.state.value.busy }
-            Assert.assertTrue("判卷未通过：${vm.probe?.verdict}", vm.probe?.canSelect() == true)
+            Assert.assertTrue("判卷未通过：${submitted.verdict}; answer=${submitted.answer}; state=${vm.state.value}; current=${vm.probe?.question?.id}", vm.probe?.canSelect() == true)
             main { vm.pass() }
             eventually { !vm.state.value.busy }
             Assert.assertNull(app.database.dao().activePass("联通娱乐", System.currentTimeMillis()))

@@ -67,10 +67,15 @@ class VoiceIntegrationTest {
             RuntimeSupport.fixture()
             find(By.text("打字回一句")).click()
             eventually { device.hasObject(By.text("写给伙伴")) }
-            val typed = "我已经找到需要核对的先决条件。"
+            val typed = "我已经找到需要核对的先决条件"
             find(By.pkg(app.packageName).clazz("android.widget.EditText")).text = typed
             find(By.text("交这一句")).click()
             eventually { app.partnerVoice.running.value?.live?.lines?.any { it.who == "我" && it.text == typed } == true }
+            eventually {
+                val lines = app.partnerVoice.running.value?.live?.lines.orEmpty()
+                val said = lines.indexOfLast { it.who == "我" && it.text == typed }
+                said >= 0 && lines.drop(said + 1).any { it.text.contains("收到，先指出一个可以核对的条件") }
+            }
             eventually { requests.any { it.path?.contains("/audio/speech") == true } }
             val speech = requests.first { it.path?.contains("/audio/speech") == true }
             Assert.assertEquals("Bearer local-tts-key", speech.getHeader("Authorization"))

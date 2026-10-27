@@ -61,7 +61,8 @@ class OverlayIntegrationTest {
             openPanel()
             find(By.text("回一句 / 说话")).click()
             Assert.assertTrue(device.wait(Until.hasObject(By.text("回这一句")), 5_000))
-            Assert.assertTrue(device.hasObject(By.text("外部学习页面仍然可见")))
+            Assert.assertTrue(device.executeShellCommand("dumpsys activity activities").contains("com.yishou.gatefixture/.ReadingActivity"))
+            // 对话框只把底下的页面变暗；非活动窗口不会被无障碍树返回。
             val field = find(By.pkg(app.packageName).clazz("android.widget.EditText"))
             Assert.assertNotNull(field)
             field.text = "A，把握高"
@@ -92,6 +93,7 @@ class OverlayIntegrationTest {
             lateinit var model: WindowViewModel
             main { model = vm() }
             eventually { model.card.value.round != null }
+            device.findObject(By.text("陪练窗口  ▾"))?.click()
             UiScrollable(UiSelector().scrollable(true)).scrollTextIntoView("规则与看屏 ▾")
             find(By.text("规则与看屏 ▾")).click()
             UiScrollable(UiSelector().scrollable(true)).scrollTextIntoView("开启看屏")

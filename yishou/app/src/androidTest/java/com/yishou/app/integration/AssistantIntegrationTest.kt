@@ -57,10 +57,10 @@ class AssistantIntegrationTest {
             Assert.assertEquals("Bearer local-test-key", first.getHeader("Authorization"))
             server.enqueue(MockResponse().setResponseCode(503).setBody("busy"))
             main { model.send("那开放时间算不算进入资格？") }
-            eventually { !model.busy && model.error != null }
+            eventually { !model.busy && model.error != null && model.lines.lastOrNull()?.role == "error" }
             val id = model.id
             val restored = vm()
-            eventually { restored.id == id }
+            eventually { restored.id == id && restored.error != null }
             Assert.assertNotNull(restored.error)
             server.takeRequest(2, TimeUnit.SECONDS)
             server.enqueue(completion("时间和资格要分开核对。"))
@@ -72,7 +72,7 @@ class AssistantIntegrationTest {
             Assert.assertEquals("先找进入的必要条件。", messages.getJSONObject(2).getString("content"))
             Assert.assertEquals(2, restored.lines.count { it.role == "user" })
             val third = vm()
-            eventually { third.id == id && third.lines.size == 4 }
+            eventually { third.id == id && third.lines.lastOrNull()?.text == "时间和资格要分开核对。" }
             Assert.assertEquals("时间和资格要分开核对。", third.lines.last().text)
             main { third.fresh() }
             Assert.assertEquals(0, third.lines.size)

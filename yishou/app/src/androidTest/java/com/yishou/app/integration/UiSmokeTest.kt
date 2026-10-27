@@ -38,7 +38,9 @@ class UiSmokeTest {
             compose.onNodeWithText("新建", substring = false).performClick()
             see("英语 0")
             compose.onNodeWithText("英语 0").performClick()
-            compose.onNodeWithText("粘贴导入").performClick()
+            RuntimeSupport.device.pressBack() // 收起新分类名称输入的键盘
+            compose.onNodeWithText("粘贴导入").performScrollTo().performClick()
+            see("题包、汤面汤底、文章都能放")
             compose.onNode(hasSetTextAction() and hasText("题包、汤面汤底、文章都能放")).performScrollTo().performTextInput("英语阅读练习：先确认这段材料的主张，再找支持它的具体证据，别只复述结论。")
             compose.onNodeWithText("收进当前分类").performScrollTo().performClick()
             see("英语 1")
