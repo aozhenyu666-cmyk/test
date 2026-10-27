@@ -19,7 +19,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yishou.app.YishouApp
-import com.yishou.app.card.Card
+import com.yishou.app.card.Card as QuestionCard
 import com.yishou.app.data.*
 import com.yishou.app.llm.LlmResult
 import com.yishou.app.system.ExternalGrace
@@ -36,7 +36,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     val entries = combine(dao.cards(), dao.materials(), dao.assignments()) { cards, mats, tags ->
         val ids = tags.associateBy { it.kind to it.refId }
         cards.mapNotNull { row -> runCatching {
-            val c = Card.fromJson(row.json)
+            val c = QuestionCard.fromJson(row.json)
             LibraryEntry("card", row.id, c.question, (c.sentences + c.question + c.options.mapIndexed { i, s -> "${'A' + i}．$s" } + "答案：${'A' + c.answer}" + "解析：${c.explain}").joinToString("\n"), ids["card" to row.id]?.categoryId ?: 0, row.createdAt)
         }.getOrNull() } + mats.map { LibraryEntry("material", it.id, it.title, it.text, ids["material" to it.id]?.categoryId ?: 0, it.createdAt) }
     }.map { it.sortedByDescending { e -> e.at } }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
