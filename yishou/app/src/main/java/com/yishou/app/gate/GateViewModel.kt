@@ -48,6 +48,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     var recallFeedback: String? = null; private set
     var recallingEcho = false; private set
     private var echoChecked = false
+    private var recallPrompt = ""
     private var recallTries = 0
     private var judgeDown = false
     private val skippedCards = mutableSetOf<Long>()
@@ -121,6 +122,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             GateMain.LOW_ENERGY -> recall = Reflexes.pick(todayRefs, System.currentTimeMillis())
             GateMain.WAIT -> Unit
         }
+        recallPrompt = recall?.let { sourcePrompt(it.source) }.orEmpty()
         if (!echoChecked && (mode == GateMain.STRAND || mode == GateMain.BANK)) {
             echoChecked = true
             refs.filter { it.dueAt <= System.currentTimeMillis() && it.id !in recalledToday() }.minByOrNull { it.dueAt }?.let {
@@ -236,9 +238,23 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         if (prefs.recallDay == java.time.LocalDate.now(AppZone.zone).toEpochDay()) prefs.recallIds else emptySet()
     }
     private fun availableReflexes(all: List<Reflex>) = all.filter { it.id !in recalledToday() }
-    fun recallSource(): String = recall?.source.orEmpty()
+    private suspend fun sourcePrompt(id: String): String {
+        id.removePrefix("card-").toLongOrNull()?.let { cardId ->
+            yishou.database.cards().getCard(cardId)?.let { row ->
+                return runCatching { Card.fromJson(row.json).let { (it.sentences + it.question).joinToString("\n") } }.getOrDefault("")
+            }
+        }
+        val strandId = Regex("^s(\\d+)-").find(id)?.groupValues?.get(1)?.toLongOrNull()
+        strandId?.let { StrandStore(dao).get(it) }?.let { s ->
+            val at = id.substringAfterLast('-').toLongOrNull()
+            return s.moves.firstOrNull { it.at >= (at ?: Long.MAX_VALUE) }?.ask ?: s.goal
+        }
+        return ""
+    }
+    fun recallSource(): String = recallPrompt
     fun submitRecall(answer: String) = run {
         val r = recall ?: return@run
+        if (recallFeedback != null) return@run
         val ok = Reflexes.recalled(r.action, answer)
         dao.updateReflex(ReflexRow.from(Reflexes.afterRecall(r, ok, System.currentTimeMillis())))
         val day = java.time.LocalDate.now(AppZone.zone).toEpochDay()

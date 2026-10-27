@@ -15,6 +15,8 @@ data class AppGroup(
  * 以后加新设置项时旧数据也能读。
  */
 data class AppPrefs(
+    val recallDay: Long = Long.MIN_VALUE,
+    val recallIds: Set<Long> = emptySet(),
     val groups: List<AppGroup> = DEFAULT_GROUPS,
     /** 包名 → 应用组名 */
     val watched: Map<String, String> = DEFAULT_WATCHED,
@@ -106,6 +108,8 @@ data class AppPrefs(
         groups.firstOrNull { it.name == group }?.passMinutes ?: DEFAULT_PASS_MINUTES
 
     fun toJson(): String = JSONObject()
+        .put("recallDay", recallDay)
+        .put("recallIds", JSONArray(recallIds.toList()))
         .put("groups", JSONArray().apply { groups.forEach { put(JSONObject().put("name", it.name).put("minutes", it.passMinutes)) } })
         .put("watched", JSONObject().apply { watched.forEach { (k, v) -> put(k, v) } })
         .put("offlinePassMinutes", offlinePassMinutes)
@@ -182,7 +186,9 @@ data class AppPrefs(
 
         /** 读不出来（空、损坏）时返回默认设置，不让应用崩溃。 */
         fun fromJson(text: String?): AppPrefs {
-            if (text.isNullOrBlank()) return AppPrefs()
+            if (text.isNullOrBlank()) return AppPrefs(
+                recallDay = o.optLong("recallDay", Long.MIN_VALUE),
+                recallIds = o.optJSONArray("recallIds")?.let { a -> (0 until a.length()).map { a.getLong(it) }.toSet() } ?: emptySet(),)
             val o = try {
                 JSONObject(text)
             } catch (e: Exception) {
