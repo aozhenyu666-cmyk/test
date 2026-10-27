@@ -26,10 +26,10 @@ CL-T1/T2（单调时钟）、CL-T3/T4（技术降级+快照校验）、CL-T8（�
 
 | 项 | 原因 |
 |---|---|
-| CL-S3 多步接续 | 需配合 StrictSessionMachine 的 stepIndex |
-| CL-S4 按步帮助等级 | 当前按整回合 attempts 计 |
-| CL-S7 恢复读状态机问题 | answerThink 仍读 result |
-| CL-S8 恢复卡死/坏档留底 | 可能停在 EVALUATING |
+| CL-S3 多步接续 | **已移植**：`StrictSessionState.upcomingSteps` + `StrictOutcome.NextStep`；PASS 且有下一步则继续，不直接 COMPLETED |
+| CL-S4 按步帮助等级 | **已移植**：`attemptsThisStep` + `usedHelpThisStep`，按步判“提示后通过” |
+| CL-S7 恢复读状态机问题 | **已移植**：恢复走 `showStrictPrompt`，读状态机问题并打开回答通道 |
+| CL-S8 恢复卡死 | **已移植**：EVALUATING 恢复改走 `evaluationUnavailable` 退回等待；重建 SessionArbiter 所有权 |
 | CL-S9 缺原文改宽松理由 | **拒绝**：材料缺失应标证据不足 |
 
 ## 关键防回退点
