@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.provider.Settings
+import android.os.Build
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -30,6 +31,8 @@ object CoachFloat {
     private var expanded = false
     private var signature = ""
     private var hides = 0
+    private var lastX: Int? = null
+    private var lastY: Int? = null
     private fun dp(n: Int): Int = ((context?.resources?.displayMetrics?.density ?: 1f) * n).toInt()
     fun update(context: Context, owner: String, panel: FloatPanel) { this.context = context.applicationContext; panels[owner] = panel; refresh(context) }
     fun remove(owner: String) { panels.remove(owner); context?.let(::refresh) }
@@ -43,7 +46,7 @@ object CoachFloat {
             wm = c.getSystemService(WindowManager::class.java)
             val r = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), dp(6), dp(8), dp(6)); elevation = dp(10).toFloat(); background = GradientDrawable().apply { setColor(Color.rgb(30, 39, 42)); cornerRadius = dp(18).toFloat() } }
             val p = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.START; x = dp(12); y = dp(140) }
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.START; x = lastX ?: dp(12); y = lastY ?: dp(140) }
             try { wm!!.addView(r, p); root = r; params = p; signature = "" }
             catch (e: Exception) { RunLog.e("陪练小窗", "没能显示，请检查悬浮窗权限", e); return }
         }
@@ -66,11 +69,17 @@ object CoachFloat {
                     if (moved) { p.x = (oldX + e.rawX - downX).toInt(); p.y = (oldY + e.rawY - downY).toInt(); place() }
                 }
                 MotionEvent.ACTION_UP -> if (!moved) view.performClick() else {
-                    // Android 10 移动 overlay 后仍可能缓存子节点的旧坐标。
                     r.post {
-                        r.sendAccessibilityEventUnchecked(AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED).apply {
-                            contentChangeTypes = AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE
-                        })
+                        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+                            // Android 10 不会可靠刷新 overlay 子节点坐标；在原位置重挂窗口，
+                            // 让无障碍服务拿到新窗口，普通点击和读屏都能继续使用。
+                            detach()
+                            refresh(context)
+                        } else {
+                            r.sendAccessibilityEventUnchecked(AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED).apply {
+                                contentChangeTypes = AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE
+                            })
+                        }
                     }
                 }
             }
@@ -98,6 +107,7 @@ object CoachFloat {
         val r = root ?: return; val p = params ?: return; val metrics = context?.resources?.displayMetrics ?: return
         p.x = p.x.coerceIn(0, (metrics.widthPixels - if (expanded) p.width else dp(90)).coerceAtLeast(0))
         p.y = p.y.coerceIn(0, (metrics.heightPixels - if (expanded) dp(310) else dp(65)).coerceAtLeast(0))
+        lastX = p.x; lastY = p.y
         try { wm?.updateViewLayout(r, p) } catch (e: Exception) { RunLog.e("陪练小窗", "位置更新失败", e); detach() }
     }
     private fun detach() { root?.let { runCatching { wm?.removeView(it) } }; root = null; params = null; signature = "" }
