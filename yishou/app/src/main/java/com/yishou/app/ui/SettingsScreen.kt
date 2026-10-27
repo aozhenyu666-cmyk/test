@@ -112,6 +112,21 @@ fun SettingsScreen(
             }
 
             HorizontalDivider()
+            SectionTitle("早上唤起")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("第一次解锁叫我回来", modifier = Modifier.weight(1f))
+                Switch(checked = prefs.morningEnabled, onCheckedChange = { enabled -> vm.update { it.copy(morningEnabled = enabled) } })
+            }
+            Text("早上 6–10 点第一次解锁手机时，一手会直接打开。可以在这里关掉。时段按下面选择，使用一手的时区。")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    TimePickerDialog(context, { _, h, _ -> vm.update { it.copy(morningFromHour = h, morningToHour = maxOf(it.morningToHour, h + 1)) } }, prefs.morningFromHour, 0, true).show()
+                }) { Text("从 ${prefs.morningFromHour} 点") }
+                TextButton(onClick = {
+                    TimePickerDialog(context, { _, h, _ -> vm.update { it.copy(morningToHour = h.coerceAtLeast(1), morningFromHour = minOf(it.morningFromHour, h.coerceAtLeast(1) - 1)) } }, prefs.morningToHour % 24, 0, true).show()
+                }) { Text("到 ${prefs.morningToHour} 点") }
+            }
+            HorizontalDivider()
             SectionTitle("入口思考页")
             NavRow("权限与运行状态", "无障碍、通知、闹钟、电池，以及 vivo 的手动设置", onPermissions)
             NavRow(
