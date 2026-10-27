@@ -82,6 +82,36 @@ class CardTest {
     private val day = 86_400_000L
 
     @Test
+    fun gateDealsOnlyBankCardsWithAnswerAndEvidence() = runTest {
+        val dao = FakeCardDao()
+        val gen = FakeCardGen()
+        val engine = CardEngine(dao, gen, clock = { t })
+        val c = sample()
+        dao.insertCard(CardRow(skill = c.skill.name, difficulty = 1, json = c.toJson(), verified = true, source = CardSource.AI, createdAt = t))
+        dao.insertCard(CardRow(skill = c.skill.name, difficulty = 1, json = c.copy(evidence = emptySet()).toJson(), verified = true, source = CardSource.BANK, createdAt = t))
+        dao.insertCard(CardRow(skill = c.skill.name, difficulty = 1, json = c.toJson(), verified = false, source = CardSource.BANK, createdAt = t))
+        assertTrue(engine.dealGate() is LlmResult.Err)
+        assertEquals(0, gen.generated)
+        dao.insertCard(CardRow(skill = c.skill.name, difficulty = 1, json = c.toJson(), verified = true, source = CardSource.BANK, createdAt = t))
+        val dealt = (engine.dealGate() as LlmResult.Ok).value
+        assertEquals(CardSource.BANK, dealt.row.source)
+        assertTrue(dealt.card.hasEvidence)
+    }
+
+    @Test
+    fun gateHelpNeverRevealsAnswer() = runTest {
+        val dao = FakeCardDao()
+        val c = sample()
+        dao.insertCard(CardRow(skill = c.skill.name, difficulty = 1, json = c.toJson(), verified = true, source = CardSource.BANK, createdAt = t))
+        val session = CardSession(CardEngine(dao, FakeCardGen()), FakeDao(), FakeCoachDao())
+        session.start(CardMode.GATE, null, 1)
+        repeat(4) { session.hint() }
+        assertEquals(2, session.state.value.round?.help)
+        assertEquals(Step.BET, session.state.value.round?.step)
+        assertFalse(session.state.value.done)
+    }
+
+    @Test
     fun parseValidatesAndRoundTrips() {
         val c = sample()
         assertEquals(c, Card.fromJson(c.toJson()))
@@ -279,6 +309,7 @@ class CardTest {
         assertEquals("1/2 首答对", coach.sets.single().standard)
 
         // 入口思考页：一张、不多查、不改答案、不记组
+        dao.insertCard(CardRow(skill = Skill.MAIN.name, difficulty = 1, json = sample().toJson(), verified = true, source = CardSource.BANK, createdAt = t))
         val g = CardSession(CardEngine(dao, gen, clock = { t }), app, coach, clock = { t })
         g.start(CardMode.GATE, null, size = 5)
         assertEquals(1, g.state.value.size)
@@ -307,10 +338,10 @@ class CardTest {
     }
 
     @Test
-    fun gateMakesYouSayItFirstAndChasesTemplates() = runTest {
+    fun homeMakesYouSayItFirstAndChasesTemplates() = runTest {
         fun session() = CardSession(CardEngine(FakeCardDao(), FakeCardGen(), clock = { t }), FakeDao(), FakeCoachDao(), clock = { t }, predictFirst = true)
         val g = session()
-        g.start(CardMode.GATE, null, size = 1)
+        g.start(CardMode.HOME, null, size = 1)
         assertTrue(g.state.value.mustPredict)
         // 说套话：先被追问，选项不亮
         g.predict("不知道")
@@ -325,7 +356,7 @@ class CardTest {
         assertTrue(g.state.value.predicted != null)
         // 一句话说中：靶心对了
         val h = session()
-        h.start(CardMode.GATE, null, size = 1)
+        h.start(CardMode.HOME, null, size = 1)
         h.predict("城市应该多种行道树")
         assertTrue(h.state.value.bullseye)
         assertEquals(null, h.state.value.drillAsk)

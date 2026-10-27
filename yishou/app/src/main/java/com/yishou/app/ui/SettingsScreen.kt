@@ -115,16 +115,10 @@ fun SettingsScreen(
             SectionTitle("入口思考页")
             NavRow("权限与运行状态", "无障碍、通知、闹钟、电池，以及 vivo 的手动设置", onPermissions)
             NavRow(
-                "关注的应用与放行时长",
+                "关注的应用",
                 "已关注 ${prefs.watched.size} 个应用，${prefs.groups.size} 个应用组",
                 onWatchedApps,
             )
-            LabeledRow("离线放行时长") {
-                Stepper(prefs.offlinePassMinutes, 1..30, "分钟") { v -> vm.update { it.copy(offlinePassMinutes = v) } }
-            }
-            LabeledRow("离线放行每天最多") {
-                Stepper(prefs.offlineDailyLimit, 0..10, "次") { v -> vm.update { it.copy(offlineDailyLimit = v) } }
-            }
 
             HorizontalDivider()
             SectionTitle("分组训练")
@@ -246,12 +240,7 @@ fun SettingsScreen(
 
             HorizontalDivider()
             SectionTitle("打开关注的应用之前")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("card" to "题卡", "endgame" to "残局", "line" to "主线", "check" to "只打卡").forEach { (k, label) ->
-                    FilterChip(selected = prefs.gateMode == k, onClick = { vm.update { it.copy(gateMode = k, gateCard = k == "card") } }, label = { Text(label) })
-                }
-            }
-            Text("题卡（默认）：从你导入的题库里出一道，先说答案再看选项。残局：点出破绽那一句再翻底牌，静音单手。主线：问你在下的那一局的下一问。只打卡：说好看完做什么就放行。", style = MaterialTheme.typography.bodySmall)
+            Text("入口使用已导入、带答案和依据的题卡。答案和依据都正确且未使用提示，才放行 15 分钟。", style = MaterialTheme.typography.bodySmall)
 
             HorizontalDivider()
             SectionTitle("题库")
