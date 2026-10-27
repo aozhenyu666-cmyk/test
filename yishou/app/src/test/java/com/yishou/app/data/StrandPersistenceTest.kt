@@ -1,6 +1,7 @@
 package com.yishou.app.data
 
 import com.yishou.app.thread.*
+import com.yishou.app.thread.MoveKind as StrandMoveKind
 import com.yishou.app.judge.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
@@ -34,7 +35,7 @@ class StrandPersistenceTest {
         val saved = first.save(original)
         assertTrue(saved.id > 0)
         val q = LockedQ("locked-1", "几点到车站才赶得上？", points = listOf(Point("P1", "时间")), need = 1, reference = "")
-        first.save(saved.copy(pending = Pending(MoveKind.STEP, "I1", q)))
+        first.save(saved.copy(pending = Pending(StrandMoveKind.STEP, "I1", q)))
         val reopened = StrandStore(dao).open()!!
         assertEquals(saved.id, reopened.id)
         assertEquals(q, reopened.pending!!.q)

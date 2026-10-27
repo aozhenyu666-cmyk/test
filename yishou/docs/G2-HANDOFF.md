@@ -55,4 +55,4 @@
 
 ## 构建结果
 
-提交后补 CI 链接。未做真机或跨模块联通验收。
+构建结果和 APK 链接见 [PR #41](https://github.com/aozhenyu666-cmyk/test/pull/41) 的验证栏。未做真机或跨模块联通验收。
