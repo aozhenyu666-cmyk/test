@@ -30,3 +30,26 @@ PR #35 只改主线的工作流，**挡不住旧分支**（旧分支推送时跑
 - 没有运行任何会写 `tongzhuo-latest` 的工作流；没有合并主线；没有改 PR #35。
 - 当前 `tongzhuo-latest` 仍是 DeepSeek 的 0.5.5 / 23：**不要用它安装，也不要为了装它卸载 0.5.8**。
 - 本分支的预览：`tongzhuo-preview-integration-tongzhuo-presence-focus-v1`。
+
+## 后续（2026-10-27）：设计已进主线，但发布入口仍卡住，本轮修复一处
+
+上面第 12 条的设计随 `deepseek/r21-proactive` 进了主线，但**正式发布一次都没成功过**，原因有两层：
+
+1. **门禁分支上根本没有这个文件。** 第 12 条写「只在 `ccr-2899d69f-xlzjh6` 上运行」，可那条分支上不存在 `companion-pet-release.yml`——
+   GitHub 只能运行该 ref 上存在的工作流，所以这个手动触发的入口在主线**从未出现过**。
+   `gh release view tongzhuo-stable` 至今返回 `release not found`，`tongzhuo-latest` 仍停在 2026-10-25 的 0.5.5 / 23，与此吻合。
+2. **versionCode 校验是 fail-open 的。** 原写法 `gh release view ... 2>/dev/null | grep ... || true`：
+   一旦查询本身失败（网络抖动、API 限流），`OLD` 变空 → `[ -n "${OLD}" ]` 为假 → 整个判断被跳过 → 低版本照样发出去。
+   这正是当初 0.5.5 覆盖 0.5.8 的同一条失效路径，只是触发条件更隐蔽。
+
+本轮修复（`fix/r21-release-chain`）：
+
+| 项 | 改法 |
+|---|---|
+| 门禁分支 | `if` 改为白名单，加入 `deepseek/r21-proactive`（宠物主线，当前 vc39）；旧 `moling-*` / `c3-*` 分支仍不在名单内 |
+| 版本校验 | 改为 fail-closed：release 存在但解析不出版本号 → 直接拒绝；查询失败 → 拒绝，不盲发 |
+| 产物校验 | 删旧 release **之前**先确认 APK 存在且非空，避免把下载链接弄成 404 才失败 |
+
+回归证据：按新旧两版判定逻辑分别执行 6 个分支场景，旧逻辑在「查询失败 + 低版本」下确实放行（bug 复现），新逻辑拒绝。
+
+**仍未做**：没有真的触发发布（需要你决定是否把 vc39 发成正式版）；`official-release` 环境的 Required reviewers 仍需在仓库网页设置。

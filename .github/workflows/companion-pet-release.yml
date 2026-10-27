@@ -17,7 +17,16 @@ concurrency:
 
 jobs:
   release:
-    if: github.ref == 'refs/heads/ccr-2899d69f-xlzjh6'
+    # 允许发布的分支（白名单）。必须同时满足两个条件才可能发出正式版：
+    #   1. 该分支上确实存在本文件（旧分支只有旧工作流，认识不到 tongzhuo-stable）；
+    #   2. 该分支在这个白名单里。
+    # 教训：上一版这里只写了 ccr-2899d69f-xlzjh6，而那条分支上根本没有本文件——
+    # 于是这个工作流从来没有在正确的分支上出现过，正式链接一次也没更新过。
+    # 现在把宠物主线加进来；旧分支（moling-*/c3-* 等）不在名单里，仍然写不进来。
+    # 换主线时改这一行即可，不需要动下面的发布逻辑。
+    if: >-
+      github.ref == 'refs/heads/ccr-2899d69f-xlzjh6' ||
+      github.ref == 'refs/heads/deepseek/r21-proactive'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: official-release
@@ -74,12 +83,36 @@ jobs:
           TAG=tongzhuo-stable
           VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
           CODE=$(grep -oP 'versionCode = \K[0-9]+' app/build.gradle.kts)
-          OLD=$(gh release view "$TAG" --json body --jq .body 2>/dev/null | grep -oP 'versionCode \K[0-9]+' | head -1 || true)
-          if [ -n "${OLD}" ] && [ "${CODE}" -le "${OLD}" ]; then
-            echo "Refusing: versionCode ${CODE} is not greater than the published ${OLD}" >&2
+
+          # 先确认产物真的在，否则后面删掉旧 release 就会把下载链接弄 404。
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          if [ ! -s "$APK" ]; then
+            echo "Refusing: $APK is missing or empty" >&2
             exit 1
           fi
-          cp app/build/outputs/apk/debug/app-debug.apk tongzhuo.apk
+
+          # versionCode 只能升不能降。这里必须 fail-closed：
+          # 以前写成 `gh release view ... || true`，一旦查询因为网络抖动失败，
+          # OLD 变空、判断被跳过，低版本就会被当成正式版发出去——
+          # 正是当初 0.5.5 覆盖 0.5.8、手机上装不上的那个事故。
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            BODY=$(gh release view "$TAG" --json body --jq .body)
+            OLD=$(printf '%s' "$BODY" | grep -oP 'versionCode \K[0-9]+' | head -1 || true)
+            if [ -z "${OLD}" ]; then
+              echo "Refusing: release $TAG exists but no versionCode could be parsed from it." >&2
+              echo "Fix the notes or remove the release manually; not publishing blindly." >&2
+              exit 1
+            fi
+            if [ "${CODE}" -le "${OLD}" ]; then
+              echo "Refusing: versionCode ${CODE} is not greater than the published ${OLD}" >&2
+              exit 1
+            fi
+            echo "versionCode ${CODE} > published ${OLD}: ok"
+          else
+            echo "No $TAG release yet; publishing first official version."
+          fi
+
+          cp "$APK" tongzhuo.apk
           SHA256=$(sha256sum tongzhuo.apk | cut -d' ' -f1)
           NOTES=$(printf '%s\n\n%s\n%s\n%s\n\n%s' \
             "同桌 ${VERSION}（versionCode ${CODE}），正式版。" \
@@ -88,6 +121,8 @@ jobs:
             "SHA-256：${SHA256}" \
             "固定签名，可以直接覆盖安装，不用卸载。")
           # tag 一旦建好就固定在旧提交上，所以删掉重建（版本检查已在上面通过）。
+          # 删除和创建之间会有几秒 404 窗口，但绝不删掉正在使用的版本后才失败：
+          # 上面的产物与版本检查都已在删除之前完成。
           gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
           gh release create "$TAG" tongzhuo.apk --target "$GITHUB_SHA" --title "同桌 ${VERSION}（正式版）" --notes "$NOTES"
           echo "Official: https://github.com/${GH_REPO}/releases/download/${TAG}/tongzhuo.apk"

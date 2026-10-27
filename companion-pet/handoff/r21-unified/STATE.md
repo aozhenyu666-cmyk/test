@@ -1,5 +1,10 @@
 # R21 统一整合：当前状态
 
+> **本文是 vc37 那一轮的历史记录，不是最新状态。** 之后又走了两轮：
+> vc38 / `0.7.8-r21-wired-preview`（4c591de，移植 Claude 接线）→
+> **vc39 / `0.7.9-r21-strict-multistep-preview`（1234c6aa，当前 HEAD）**。
+> 最新能力盘点看 [FEATURES.md](FEATURES.md)，最新构建数字看 [BUILD.json](BUILD.json)。
+
 分支 `deepseek/r21-proactive`（按指令以 DeepSeek 线为整合基线）。版本 **37 / 0.7.7-r21-unified-preview**。
 
 ## 基线

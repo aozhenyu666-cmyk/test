@@ -1,6 +1,7 @@
 {
-  "sourceSha": "PENDING",
-  "note": "提交后回填实际测试源码 SHA；文档单独提交不冒充构建 SHA。",
+  "sourceSha": "1234c6aa9f9ef6c02c13119de0160811a3eb3bf0",
+  "sourceShaEvidence": "该提交的 companion-pet 全部 361 个受控文件与构建工作区逐文件 git hash-object 比对一致（361 same / 0 diff / 0 missing）。APK 构建时刻 2026-10-27T08:26 早于提交时刻 08:29 约 3 分钟，树内容一致；但这不是 CI 从该 SHA 重新构建的产物，如需 CI 背书以 Actions 运行为准。",
+  "note": "2026-10-27 本轮已在本地重跑并成功：因工作区路径含非 ASCII 字符（用户名『敖震宇』）被 AGP 8.7.3 拒绝，改为把 companion-pet 原样复制到 ASCII 路径 C:\\pet-verify 构建；构建前逐文件 SHA-256 比对，被测源码树与仓库源码树完全一致（IDENTICAL）。Gradle 8.10.2 + JDK 21 + 离线依赖缓存，任务 testDebugUnitTest + lintDebug + assembleDebug 全部通过。",
   "versionName": "0.7.9-r21-strict-multistep-preview",
   "versionCode": 39,
   "applicationId": "cn.companion.pet",
@@ -10,13 +11,22 @@
   "compileSdk": 35,
   "apkBytes": 30258715,
   "apkSha256": "851A21204159E6EB6B24AAFFD426E475CCB01D7E5DD19F89285F205ADF64B9F9",
+  "apkSha256Note": "apkSha256 是发布产物的哈希；本轮本地重建得到不同 SHA（APK 非可重复构建，含时间戳），但字节数同为 30258715，且被测源码树与仓库完全一致，故视为同一源码的等价构建。发布仍以 apkSha256 对应的那个包为准。",
   "tests": {
     "total": 611,
-    "failures": 0
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "suites": 84,
+    "verifiedThisRound": true,
+    "verifiedAt": "2026-10-27",
+    "evidence": "app/build/test-results/testDebugUnitTest/*.xml 汇总"
   },
   "lint": {
     "errors": 0,
-    "warnings": 17
+    "warnings": 17,
+    "verifiedThisRound": true,
+    "verifiedAt": "2026-10-27"
   },
   "gradleTasks": [
     ":app:testDebugUnitTest",
@@ -24,6 +34,17 @@
     ":app:assembleDebug",
     ":app:assembleDebugAndroidTest"
   ],
+  "gradleTasksVerifiedThisRound": [
+    ":app:testDebugUnitTest",
+    ":app:lintDebug",
+    ":app:assembleDebug"
+  ],
+  "testSourceCounts": {
+    "jvmTestFiles": 82,
+    "instrumentedTestFiles": 8,
+    "testAnnotations": 608,
+    "note": "testAnnotations 是对 @Test 的直接计数；与 tests.total 611 的差额来自循环/参数化生成的用例，两者口径不同，不可互相替代。"
+  },
   "deviceCoverage": "NOT_RUN（无设备）",
   "previousCommit": "4c591dec62ce9bde043678ef47bf826398314445"
 }
