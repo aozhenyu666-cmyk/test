@@ -29,6 +29,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -220,10 +221,12 @@ fun HomeScreen(
                 IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Settings, contentDescription = "设置") }
             }
 
-            Button(onClick = { onRoute("strand") }, modifier = Modifier.fillMaxWidth().height(56.dp)) { Text("想一件事") }
-
-            // 来一手：不用挑练法，从素材池里挑下一件最值得做的
-            NextCard(pick, onGo = { p -> onRoute(vm.go(p)) }, onAnother = vm::another)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Entry("来一手", pick?.reason ?: "从素材池接下一手", MaterialTheme.colorScheme.primary,
+                    { pick?.let { onRoute(vm.go(it)) } ?: onRoute("pool") }, Modifier.weight(1f))
+                Entry("想一件事", "把一件事接着想定", MaterialTheme.colorScheme.tertiary,
+                    { onRoute("strand") }, Modifier.weight(1f))
+            }
 
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 val fresh = materials.count { it.uses == 0 }
@@ -243,6 +246,9 @@ fun HomeScreen(
                 )
             }
 
+            var more by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
+            TextButton(onClick = { more = !more }) { Text(if (more) "收起更多" else "更多（不再更新）") }
+            if (more) {
             // 刷抖音、贴吧时也练：看这一屏问一句，通知里回
             ScrollCard()
 
@@ -264,6 +270,8 @@ fun HomeScreen(
                     onLine = onLine,
                     onLive = onLive,
                 )
+            }
+
             }
 
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
