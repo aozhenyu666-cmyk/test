@@ -54,7 +54,7 @@ class SayingLedgerTest {
      * 加尾注不能把相似度「稀释」到阈值以下。
      *
      * 记录句与探针句：探针 = 记录句原样 + 「我看到你来回切换了」。
-     * 实测 |A|=14、|B|=23、|∩|=14 → 对称 Jaccard 只有 0.59（< 0.72，旧口径会**放行**），
+     * 实测 |A|=13、|B|=22、|∩|=13 → 对称 Jaccard 只有 0.59（< 0.72，旧口径会**放行**），
      * 而「交集 / 较短者」是 1.0，取大值后判定仍是 1.0，拦得住。
      */
     @Test
@@ -102,7 +102,7 @@ class SayingLedgerTest {
         val l = SayingLedger()
         l.record(base, now = 1L)
         assertTrue("约 0.85 的重叠必须判为重复", l.isTooSimilar(highPair))
-        assertFalse("约 0.61 的重叠在 0.72 下必须放行", l.isTooSimilar(midPair))
+        assertFalse("约 0.65 的重叠在 0.72 下必须放行", l.isTooSimilar(midPair))
     }
 
     /**
