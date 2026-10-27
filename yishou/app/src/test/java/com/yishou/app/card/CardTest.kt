@@ -31,6 +31,7 @@ private fun sample(skill: Skill = Skill.MAIN, answer: Int = 1) = Card(
     evidence = setOf(4),
     flaws = (0..3).filter { it != answer }.associateWith { listOf("范围扩大", "与原文相反", "绝对化")[it % 3] },
     explain = "第④句是结论。",
+    points = listOf("城市应该多种树木", "行道树能降低噪音"),
 )
 
 class FakeCardDao : CardDao() {
@@ -82,13 +83,13 @@ class CardTest {
     private val day = 86_400_000L
 
     @Test
-    fun gateDealsOnlyBankCardsWithAnswerAndEvidence() = runTest {
+    fun gateDealsOnlyBankCardsWithAnswerAndPoints() = runTest {
         val dao = FakeCardDao()
         val gen = FakeCardGen()
         val engine = CardEngine(dao, gen, clock = { t })
         val c = sample()
         dao.insertCard(CardRow(skill = c.skill.name, difficulty = 1, json = c.toJson(), verified = true, source = CardSource.AI, createdAt = t))
-        dao.insertCard(CardRow(skill = c.skill.name, difficulty = 1, json = c.copy(evidence = emptySet()).toJson(), verified = true, source = CardSource.BANK, createdAt = t))
+        dao.insertCard(CardRow(skill = c.skill.name, difficulty = 1, json = c.copy(points = emptyList()).toJson(), verified = true, source = CardSource.BANK, createdAt = t))
         dao.insertCard(CardRow(skill = c.skill.name, difficulty = 1, json = c.toJson(), verified = false, source = CardSource.BANK, createdAt = t))
         assertTrue(engine.dealGate() is LlmResult.Err)
         assertEquals(0, gen.generated)
@@ -313,6 +314,7 @@ class CardTest {
         val g = CardSession(CardEngine(dao, gen, clock = { t }), app, coach, clock = { t })
         g.start(CardMode.GATE, null, size = 5)
         assertEquals(1, g.state.value.size)
+        g.approveGate(com.yishou.app.judge.Verdict(emptyMap(), false, true, "测试"))
         g.bet(1, Conf.MID)
         g.evidence(setOf(4))
         assertEquals(Step.REVEAL, g.state.value.round?.step)

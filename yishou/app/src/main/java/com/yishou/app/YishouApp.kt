@@ -53,6 +53,9 @@ import com.yishou.app.speech.VoiceInput
 /** 应用入口。全局只有这几个对象，手动创建，不用依赖注入框架。 */
 class YishouApp : Application() {
 
+    // 开发接线用，C1 提供真正的判卷器后替换这一行。
+    val judge: com.yishou.app.judge.Judge = com.yishou.app.judge.FakeJudge()
+
     /** 后台备几张核对过的题卡，入口思考页一打开就有题（没填接口时什么都不做） */
     fun prefetchCards() {
         if (!settings.llm.value.isComplete) return

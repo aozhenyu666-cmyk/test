@@ -71,9 +71,9 @@ class CardEngine(
         for (row in dao.unusedBank()) {
             if (!row.verified) continue
             val card = runCatching { Card.fromJson(row.json) }.getOrNull() ?: continue
-            if (card.hasEvidence) return LlmResult.Ok(Dealt(row, card, redo = false))
+            if (com.yishou.app.judge.LockedQuestions.fromCard(row.id, card) != null) return LlmResult.Ok(Dealt(row, card, redo = false))
         }
-        return LlmResult.Err(com.yishou.app.llm.LlmError.Local("没有带答案和依据的未做题，请先导入题包。"))
+        return LlmResult.Err(com.yishou.app.llm.LlmError.Local("没有带答案和【要点】的未做题，请先导入题包。"))
     }
 
     /**

@@ -30,8 +30,8 @@ class PassIssuer(private val dao: AppDao, private val clock: () -> Long = System
             val round = s.round ?: return false
             return s.active && s.mode == CardMode.GATE && s.done && !s.loading && !s.needsKey &&
                 dealt.row.id > 0 && dealt.row.source == CardSource.BANK && dealt.row.verified &&
-                round.card == dealt.card && round.card.hasEvidence && round.step == Step.REVEAL &&
-                round.help == 0 && round.finalCorrect && round.evidenceOk
+                round.card == dealt.card && s.gateVerdict?.passed == true && round.step == Step.REVEAL &&
+                round.help == 0 && round.finalCorrect
         }
     }
 }

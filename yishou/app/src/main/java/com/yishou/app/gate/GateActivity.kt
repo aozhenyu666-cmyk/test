@@ -285,7 +285,7 @@ private fun GateScreen(
                 }
                 c.round == null -> MatrixLoader("准备一张题")
                 else -> {
-                    CardRoundView(c, vm.actions)
+                    ProbeGateView(s, c, vm)
                     if (c.done) {
                         if (s.isTest) {
                             OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
