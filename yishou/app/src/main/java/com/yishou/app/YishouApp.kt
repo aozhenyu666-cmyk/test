@@ -119,6 +119,13 @@ class YishouApp : Application() {
     val scrollLook: ChatClient by lazy { ChatClient(config = { settings.vision.value }, http = ChatClient.defaultHttpClient(60), usage = stats) }
     val scrollJudge: ChatClient by lazy { ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(30), usage = stats) }
 
+    /** 判卷：只对照锁死的要点，判卷引的原话本机再核对一遍（judge/） */
+    val judge: com.yishou.app.judge.Judge by lazy {
+        com.yishou.app.judge.LlmJudge { system, user ->
+            (scrollJudge.complete(system, user, kind = "判卷", json = false) as? com.yishou.app.llm.LlmResult.Ok)?.value
+        }
+    }
+
     /** 一手自己的语音伙伴（听写 → 文字模型 → 朗读） */
     val partnerVoice: com.yishou.app.partner.PartnerVoice by lazy { com.yishou.app.partner.PartnerVoice(this) }
 
