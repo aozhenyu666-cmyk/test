@@ -139,6 +139,7 @@ class ScreenLookService : Service() {
         )
         speaker = Speaker(this)
         _running.value = true
+        com.yishou.app.window.WindowService.start(this)
         _status.value = null
         watch()
     }
@@ -176,7 +177,7 @@ class ScreenLookService : Service() {
             setStatus("正在看……")
             // 从通知栏点的“看一眼”：等通知栏收起，截到的才是底下的应用
             delay(delayMs)
-            val dataUrl = withContext(Dispatchers.Default) { captureDataUrl() }
+            val dataUrl = com.yishou.app.floating.CoachFloat.withoutPanel { captureDataUrl() }
             if (dataUrl == null) {
                 setStatus("没有截到画面，再点一次试试")
                 return@launch

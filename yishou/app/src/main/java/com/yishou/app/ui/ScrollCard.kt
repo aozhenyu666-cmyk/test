@@ -52,7 +52,7 @@ fun ScrollCard(modifier: Modifier = Modifier) {
                     Text("刷着练", fontWeight = FontWeight.Bold)
                     Text(
                         when {
-                            running -> status ?: (if (interval > 0) "开着 · 刷满 $interval 分钟问一句" else "开着 · 想练就下拉点“考我一下”")
+                            running -> status ?: (if (interval > 0) "开着 · 刷满 $interval 分钟问一句" else "开着 · 点“一手 ●”里的“考我一下”")
                             asked > 0 -> "今天问了 $asked 句 · 接住 $hit" + if (near > 0) " · 差一点 $near" else ""
                             else -> "刷抖音、贴吧时看这一屏问你一句，通知里回"
                         },

@@ -237,10 +237,10 @@ fun HomeScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 val fresh = materials.count { it.uses == 0 }
                 Entry(
-                    title = "素材池",
+                    title = "题库与素材",
                     sub = "什么都往这放：${materials.size} 段文章" + (if (fresh > 0) "（$fresh 段没练）" else "") + " · $bankLeft 道题没做",
                     accent = MaterialTheme.colorScheme.tertiary,
-                    onClick = { onRoute("pool") },
+                    onClick = { onRoute("library") },
                     modifier = Modifier.weight(1f),
                 )
                 Entry(
@@ -251,6 +251,9 @@ fun HomeScreen(
                     modifier = Modifier.weight(1f),
                 )
             }
+
+            Button(onClick = { onRoute("assistant") }, modifier = Modifier.fillMaxWidth().height(54.dp)) { Text("AI 助手 · 直接聊") }
+            EntertainmentGateCard(onSettings = { onRoute("watched") })
 
             var more by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
             TextButton(onClick = { more = !more }) { Text(if (more) "收起更多" else "更多（不再更新）") }

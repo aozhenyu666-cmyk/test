@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class, Material::class, DrillRow::class, Deed::class, MaterialKey::class, Job::class, JobStep::class, Outside::class, Line::class, Move::class, Echo::class, Endgame::class, Impulse::class, Soup::class, PartnerSession::class, ScrollQuizRow::class, StrandRow::class, ReflexRow::class, FadeRow::class],
-    version = 15,
+    entities = [Task::class, Breakpoint::class, Round::class, Pass::class, DailySummary::class, Bet::class, Recall::class, TrainSet::class, SetMove::class, ChainRecall::class, CardRow::class, CardAttempt::class, Material::class, DrillRow::class, Deed::class, MaterialKey::class, Job::class, JobStep::class, Outside::class, Line::class, Move::class, Echo::class, Endgame::class, Impulse::class, Soup::class, PartnerSession::class, ScrollQuizRow::class, StrandRow::class, ReflexRow::class, FadeRow::class, AssistantChat::class, LibraryCategory::class, LibraryItem::class],
+    version = 16,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -25,10 +25,22 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun impulses(): ImpulseDao
     abstract fun partners(): PartnerDao
     abstract fun soups(): SoupDao
+    abstract fun everyday(): EverydayDao
     abstract fun strands(): StrandDao
     abstract fun scrollQuizzes(): ScrollQuizDao
 
     companion object {
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `assistant_chat` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `json` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_assistant_chat_updatedAt` ON `assistant_chat` (`updatedAt`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `library_category` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_library_category_name` ON `library_category` (`name`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `library_item` (`kind` TEXT NOT NULL, `refId` INTEGER NOT NULL, `categoryId` INTEGER NOT NULL, `manual` INTEGER NOT NULL, PRIMARY KEY(`kind`, `refId`), FOREIGN KEY(`categoryId`) REFERENCES `library_category`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_library_item_categoryId` ON `library_item` (`categoryId`)")
+            }
+        }
+
         val MIGRATION_14_15 = object : Migration(14, 15) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `strand` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `json` TEXT NOT NULL, `done` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL)")
@@ -242,7 +254,7 @@ abstract class AppDatabase : RoomDatabase() {
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "yishou.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
                 .build()
     }
 }

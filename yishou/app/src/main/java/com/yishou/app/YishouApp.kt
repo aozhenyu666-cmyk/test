@@ -110,6 +110,8 @@ class YishouApp : Application() {
     val partner: com.yishou.app.partner.PartnerSessions by lazy { com.yishou.app.partner.PartnerSessions(this) }
 
     /** 素材池：唯一入口，所有练法从这里拿 */
+    val library by lazy { com.yishou.app.library.LibraryStore(database) }
+
     val pool: com.yishou.app.pool.Pool by lazy { com.yishou.app.pool.Pool(this) }
 
     /** 一天的账：各处练的每一手（总结、时之轮都看它） */
@@ -177,7 +179,7 @@ class YishouApp : Application() {
         com.yishou.app.think.DrillSession(drillGen, database.think(), database.practice())
 
     /** 题包导入：在本机拆题，选择题进题卡库，申论进素材库 */
-    val bankImport: com.yishou.app.bank.BankImport by lazy { com.yishou.app.bank.BankImport(cardEngine, database.think()) }
+    val bankImport: com.yishou.app.bank.BankImport by lazy { com.yishou.app.bank.BankImport(cardEngine, database.think(), classify = { kind, id, text, category -> library.assign(kind, id, text, category) }) }
 
     /** 本机拆不出题时，让模型把文字整理成题包格式 */
     val bankTidy: com.yishou.app.llm.BankTidy by lazy {
@@ -330,6 +332,7 @@ class YishouApp : Application() {
         speechApi = SpeechApi(config = { settings.speech.value })
         voice = VoiceInput(this)
 
+        appScope.launch { library.indexMissing() }
         prefetchCards()
         prefetchMaterials()
         prefetchEndgames()

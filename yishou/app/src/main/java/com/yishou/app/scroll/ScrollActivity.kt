@@ -26,7 +26,7 @@ class ScrollActivity : ComponentActivity() {
         val data = r.data
         if (r.resultCode == Activity.RESULT_OK && data != null) {
             ScrollService.start(this, r.resultCode, data)
-            Toast.makeText(this, "刷着练开了。想练就下拉通知点“考我一下”。", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "刷着练开了。点屏幕上的“一手 ●”操作；没看到就到一手里允许陪练小窗。", Toast.LENGTH_LONG).show()
         } else {
             Toast.makeText(this, "没有同意看屏，刷着练没开。", Toast.LENGTH_SHORT).show()
         }

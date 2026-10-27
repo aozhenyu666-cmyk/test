@@ -160,7 +160,7 @@ fun ConsoleScreen(
                     )
                     StatusRow(
                         "陪练看屏",
-                        if (lookOn) "开着，下拉通知栏点“看一眼”" else "在陪练窗口的“规则与看屏”里开启",
+                        if (lookOn) "开着，点屏幕上的“一手 ●”再点“看一眼”" else "在陪练窗口的“规则与看屏”里开启",
                         lookOn,
                         onOpenWindow,
                     )

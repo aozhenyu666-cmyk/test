@@ -26,24 +26,24 @@ class FileImport(private val app: YishouApp) {
 
     data class FileResult(val name: String, val line: String, val ok: Boolean)
 
-    suspend fun importAll(uris: List<Uri>, progress: (String) -> Unit): List<FileResult> = uris.map { uri ->
+    suspend fun importAll(uris: List<Uri>, categoryId: Long? = null, progress: (String) -> Unit): List<FileResult> = uris.map { uri ->
         val name = nameOf(uri)
         progress("读 $name ……")
         when (val t = read(uri, name, progress)) {
             is LlmResult.Err -> FileResult(name, t.error.message, false)
             is LlmResult.Ok -> if (com.yishou.app.pool.Intake.route(t.value) is com.yishou.app.pool.Intake.Route.Article) {
                 // 不像题的文件（文章、讲义）：切段进素材池，不硬拆成题
-                val r = app.pool.take(t.value, com.yishou.app.data.MaterialSource.FILE)
+                val r = app.pool.take(t.value, com.yishou.app.data.MaterialSource.FILE, categoryId)
                 FileResult(name, r.message, r.ok)
             } else {
                 progress("拆题：$name ……")
-                var r = app.bankImport.import(t.value)
+                var r = app.bankImport.import(t.value, categoryId)
                 // 本机拆出来的比文件里看着像题的少很多（格式太乱）：整份交给模型整理一遍，重复的会自动跳过
                 val expected = com.yishou.app.bank.BankParser.estimate(t.value)
                 if ((r.found == 0 || r.found < expected * 7 / 10) && app.settings.llm.value.isComplete) {
                     when (val tidy = app.bankTidy.tidy(t.value) { i, n -> progress("本机没拆出来，请模型整理 $name（$i/$n）……") }) {
                         is LlmResult.Ok -> {
-                            val again = app.bankImport.import(tidy.value)
+                            val again = app.bankImport.import(tidy.value, categoryId)
                             r = again.copy(choices = r.choices + again.choices, essays = r.essays + again.essays, found = maxOf(r.found, again.found))
                         }
                         is LlmResult.Err -> return@map FileResult(name, "本机没拆出题，模型整理也失败了：${tidy.error.message}", false)

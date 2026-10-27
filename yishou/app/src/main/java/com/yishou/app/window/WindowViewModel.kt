@@ -387,6 +387,18 @@ class WindowViewModel(app: Application) : AndroidViewModel(app) {
         listenJob = viewModelScope.launch { onHeard(voice.listen()) }
     }
 
+    fun overlayPrompt(): String? {
+        val c = session.state.value
+        if (c.mustPredict && c.predicted == null) return c.round?.card?.question?.let { "$it\n先说你的结论和理由，之后再选选项。" }
+        return stepPrompt(c)
+    }
+    fun overlayAnswer(text: String) {
+        if (text.isBlank() || !active) return
+        val c = session.state.value
+        if (c.mustPredict && c.predicted == null) session.predict(text)
+        else onHeard(Heard.Text(text))
+    }
+
     fun micTap() {
         val s = _state.value
         when {

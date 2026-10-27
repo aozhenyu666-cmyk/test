@@ -113,6 +113,7 @@ fun PoolScreen(onBack: () -> Unit, onRoute: (String) -> Unit, vm: PoolViewModel 
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            item { Button(onClick = { onRoute("library") }, modifier = Modifier.fillMaxWidth()) { Text("分类标签页 · 搜索与整理") } }
             item { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 val fresh = materials.count { it.uses == 0 }
                 Text(
@@ -152,7 +153,7 @@ fun PoolScreen(onBack: () -> Unit, onRoute: (String) -> Unit, vm: PoolViewModel 
                     TextButton(onClick = { onRoute("bank") }) { Text("题库详情、出题链接 →") }
                 }
             }
-            items(materials.take(60), key = { it.id }) { m ->
+            items(materials, key = { it.id }) { m ->
                 Surface(
                     color = MaterialTheme.colorScheme.surface,
                     shape = RoundedCornerShape(14.dp),

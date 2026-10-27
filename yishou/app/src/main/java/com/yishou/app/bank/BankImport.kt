@@ -18,6 +18,7 @@ class BankImport(
     private val engine: CardEngine,
     private val think: ThinkDao,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val classify: suspend (String, Long, String, Long?) -> Unit = { _, _, _, _ -> },
 ) {
     data class Result(val choices: Int, val essays: Int, val found: Int, val noKey: Int) {
         val total: Int get() = choices + essays
@@ -33,11 +34,11 @@ class BankImport(
         }
     }
 
-    suspend fun import(text: String): Result {
+    suspend fun import(text: String, categoryId: Long? = null): Result {
         val items = BankParser.parse(text)
         val choices = items.filterIsInstance<BankItem.Choice>()
         val essays = items.filterIsInstance<BankItem.Essay>()
-        val added = engine.importBank(choices)
+        val added = engine.importBank(choices) { id, card -> classify("card", id, (card.sentences + card.question).joinToString("\n"), categoryId) }
         val seen = think.recentMaterials(2000).filter { it.source == MaterialSource.BANK }.map { Words.norm(it.text) }.toMutableSet()
         var e = 0
         for (it in essays) {
@@ -56,6 +57,7 @@ class BankImport(
             val id = think.insertMaterial(Material(title = title, text = text, source = MaterialSource.BANK, createdAt = clock() + e))
             val key = DrillKey(Lens.ESSAY, it.question.trim(), it.points, value = it.limit?.toDouble(), explain = it.explain)
             think.upsertKey(MaterialKey(id, key.toJson()))
+            classify("material", id, "申论\n" + text, categoryId)
             e++
         }
         return Result(added, e, items.size, choices.count { it.answer == null })

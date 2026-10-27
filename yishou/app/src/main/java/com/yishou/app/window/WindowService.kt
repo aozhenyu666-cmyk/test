@@ -26,6 +26,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import java.time.ZoneId
 
 /**
@@ -37,6 +38,11 @@ class WindowService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var loop: Job? = null
+    private var panelJob: Job? = null
+    private val app get() = application as YishouApp
+    private val vm by lazy {
+        androidx.lifecycle.ViewModelProvider(app.windowOwner, androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.getInstance(app))[WindowViewModel::class.java]
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -58,6 +64,25 @@ class WindowService : Service() {
             Log.w(TAG, "无法进入前台", e)
             stopSelf()
             return START_NOT_STICKY
+        }
+        if (panelJob?.isActive != true) {
+            panelJob = scope.launch {
+                kotlinx.coroutines.flow.combine(vm.state, vm.card, ScreenLookService.running, ScreenLookService.status) { s, c, look, status ->
+                    val question = vm.overlayPrompt().orEmpty().ifBlank { c.round?.card?.question.orEmpty() }
+                    com.yishou.app.floating.FloatPanel(
+                        if (look) "陪练 · 可以看屏" else "陪练窗口",
+                        status ?: (s.voiceNote?.let { "$question\n$it" } ?: question).ifBlank { "还剩 ${(s.remainingMs + 59_999) / 60_000} 分钟" },
+                        listOf(
+                            com.yishou.app.floating.FloatAction(if (look) "看一眼" else "开启看屏") {
+                                if (look) ScreenLookService.look(this@WindowService)
+                                else startActivity(Intent(this@WindowService, WindowActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            },
+                            com.yishou.app.floating.FloatAction("回一句 / 说话") { com.yishou.app.floating.FloatingReplyActivity.open(this@WindowService, "window") },
+                            com.yishou.app.floating.FloatAction("回到陪练") { startActivity(Intent(this@WindowService, WindowActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) },
+                            com.yishou.app.floating.FloatAction("停止陪练") { vm.stopEarly() },
+                        ))
+                }.collect { com.yishou.app.floating.CoachFloat.update(this@WindowService, "window", it) }
+            }
         }
         if (loop?.isActive != true) {
             loop = scope.launch {
@@ -110,6 +135,7 @@ class WindowService : Service() {
     }
 
     override fun onDestroy() {
+        com.yishou.app.floating.CoachFloat.remove("window")
         scope.cancel()
         super.onDestroy()
     }

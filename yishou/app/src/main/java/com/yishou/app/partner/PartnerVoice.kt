@@ -122,6 +122,12 @@ class PartnerVoice(private val app: YishouApp) {
         }
     }
 
+    fun say(text: String) {
+        app.voice.cancel()
+        controller?.interrupt()
+        controller?.heard(text)
+    }
+
     fun interrupt() {
         app.voice.cancel()
         controller?.interrupt()

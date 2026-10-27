@@ -103,6 +103,7 @@ class WindowActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        com.yishou.app.floating.CoachFloat.refresh(this)
         isVisible = true
     }
 
@@ -141,6 +142,7 @@ private fun WindowScreen(s: WindowState, c: SessionState, vm: WindowViewModel, o
                 modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
+                com.yishou.app.ui.FloatingPermissionCard()
                 if (s.loading) {
                     MatrixLoader("准备窗口")
                     return@Column

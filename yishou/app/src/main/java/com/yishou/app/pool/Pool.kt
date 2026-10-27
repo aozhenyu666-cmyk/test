@@ -16,11 +16,11 @@ class Pool(private val app: YishouApp) {
     data class Taken(val message: String, val materialId: Long? = null, val bank: Boolean = false, val ok: Boolean = true)
 
     /** 收进一段文字（粘贴、分享、文件读出来的字都走这里） */
-    suspend fun take(text: String, source: String): Taken {
+    suspend fun take(text: String, source: String, categoryId: Long? = null): Taken {
         val taken = when (val r = Intake.route(text)) {
             is Intake.Route.TooShort -> Taken("太短了，至少要一两句完整的话。", ok = false)
             is Intake.Route.Bank -> {
-                val b = app.bankImport.import(r.text)
+                val b = app.bankImport.import(r.text, categoryId)
                 Taken(b.line(), bank = true, ok = b.total > 0)
             }
             is Intake.Route.Article -> {
@@ -28,6 +28,7 @@ class Pool(private val app: YishouApp) {
                 var first: Long? = null
                 r.pieces.forEachIndexed { i, p ->
                     val id = app.database.think().insertMaterial(Material(title = p.title.take(24), text = p.text, source = source, createdAt = now + i))
+                    app.library.assign("material", id, p.title + "\n" + p.text, categoryId)
                     if (first == null) first = id
                 }
                 Taken(if (r.pieces.size == 1) "收好了：${r.pieces[0].title}" else "收好了：切成 ${r.pieces.size} 段，「${r.pieces[0].title}」起", first)

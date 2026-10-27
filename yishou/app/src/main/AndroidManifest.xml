@@ -3,6 +3,7 @@
 
     <!-- 唯一的网络用途：把任务文本和回答发到用户自己配置的大模型接口 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- 常驻通知“一手正在运行”和“陪练窗口开始”提醒（Android 13 起需要用户同意） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 陪练窗口准点提醒；没有授权时退回普通闹钟 -->
@@ -123,6 +124,8 @@
             android:exported="false"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize" />
+
+        <activity android:name=".floating.FloatingReplyActivity" android:exported="false" android:taskAffinity="${applicationId}.reply" android:excludeFromRecents="true" android:launchMode="singleTask" android:theme="@style/Theme.Yishou.Sheet" android:windowSoftInputMode="adjustResize" />
 
         <!-- 无障碍服务：只读前台应用包名，见 res/xml/gate_service.xml -->
         <service

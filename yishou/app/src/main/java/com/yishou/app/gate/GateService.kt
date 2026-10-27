@@ -23,6 +23,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 
 /**
  * 入口思考页的无障碍服务。
@@ -37,7 +38,10 @@ class GateService : AccessibilityService() {
     private val app get() = application as YishouApp
 
     /** 最近一次切到前台的应用包名 */
-    private var foregroundPkg: String? = null
+    private val foregroundTracker = GateForeground()
+    private val foregroundPkg get() = foregroundTracker.current
+    private var watchJob: Job? = null
+    private val querying = mutableSetOf<String>()
     private var lastLaunchPkg: String? = null
     private var lastLaunchAt = 0L
     /** 放行到期时再检查一次：到期时还停留在该应用，就弹出思考页 */
@@ -79,11 +83,22 @@ class GateService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         running = this
+        _connected.value = true
+        _problem.value = null
         if (!wakeRegistered) {
             androidx.core.content.ContextCompat.registerReceiver(this, wakeReceiver, android.content.IntentFilter(Intent.ACTION_USER_PRESENT), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             wakeRegistered = true
         }
         Notifications.showRunning(this)
+        watchJob?.cancel()
+        watchJob = scope.launch {
+            while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+                delay(1_000)
+                val awake = getSystemService(android.os.PowerManager::class.java).isInteractive
+                val locked = getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
+                if (awake && !locked && !GateActivity.isShowing) foregroundPkg?.takeIf { it != packageName }?.let(::check)
+            }
+        }
     }
 
     /** 查询桌面、输入法、相机、拨号对应的应用（换了输入法或桌面也能跟上，10 分钟刷新一次）。 */
@@ -115,13 +130,16 @@ class GateService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
-        foregroundPkg = pkg
+        val systemPackages = systemAllowed()
+        val transient = pkg != packageName && pkg !in homes && (pkg in systemPackages || pkg in WindowRules.STATIC_SYSTEM)
+        foregroundTracker.update(pkg, transient)
+        _lastPackage.value = foregroundPkg
         app.partner.foreground(pkg)
         if (pkg == packageName) {
             ExternalGrace.close()
             return
         }
-        check(pkg)
+        if (!transient) check(pkg)
     }
 
     private fun check(pkg: String) {
@@ -157,7 +175,10 @@ class GateService : AccessibilityService() {
         // 同一个应用打开时会连续发出好几次切换事件，2 秒内只处理一次
         if (pkg == lastLaunchPkg && now - lastLaunchAt < 2_000) return
 
+        if (!querying.add(pkg)) return
         scope.launch {
+            try {
+            if (foregroundPkg != pkg) return@launch
             if (app.partner.pendingClose() != null) {
                 launchGate(pkg, group, now)
                 return@launch
@@ -168,11 +189,13 @@ class GateService : AccessibilityService() {
                 Log.e(TAG, "查询放行失败", e)
                 null
             }
+            if (foregroundPkg != pkg) return@launch
             if (pass != null) {
                 scheduleExpiryCheck(pass.endAt)
                 return@launch
             }
             launchGate(pkg, group, now)
+            } finally { querying.remove(pkg) }
         }
     }
 
@@ -184,7 +207,10 @@ class GateService : AccessibilityService() {
         app.stats.event(if (group == GateActivity.WINDOW_GROUP) DayStats.WINDOW_BLOCK else DayStats.GATE_SHOWN)
         try {
             startActivity(GateActivity.intent(this@GateService, pkg, group))
+            _problem.value = null
         } catch (e: Exception) {
+            _problem.value = "没能弹出收费站，请在系统设置里允许后台弹出界面"
+            RunLog.e("收费站", "无法打开思考页", e)
             Log.e(TAG, "无法打开思考页", e)
         }
     }
@@ -219,6 +245,8 @@ class GateService : AccessibilityService() {
     override fun onUnbind(intent: Intent?): Boolean {
         if (running === this) {
             running = null
+            _connected.value = false
+            watchJob?.cancel()
             app.partner.foreground(null)
         }
         Notifications.cancelRunning(this)
@@ -230,6 +258,8 @@ class GateService : AccessibilityService() {
 
         if (running === this) {
             running = null
+            _connected.value = false
+            watchJob?.cancel()
             app.partner.foreground(null)
         }
         Notifications.cancelRunning(this)
@@ -239,6 +269,12 @@ class GateService : AccessibilityService() {
 
     companion object {
         private const val TAG = "GateService"
+        private val _connected = kotlinx.coroutines.flow.MutableStateFlow(false)
+        val connected: kotlinx.coroutines.flow.StateFlow<Boolean> = _connected
+        private val _problem = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+        val problem: kotlinx.coroutines.flow.StateFlow<String?> = _problem
+        private val _lastPackage = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+        val lastPackage: kotlinx.coroutines.flow.StateFlow<String?> = _lastPackage
 
         @Volatile
         private var running: GateService? = null

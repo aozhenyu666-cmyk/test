@@ -86,7 +86,11 @@ class ScrollService : Service() {
         when (intent?.action) {
             ACTION_START -> start(intent)
             ACTION_ASK -> ask(intent.getLongExtra(EXTRA_DELAY, 0), auto = false)
-            ACTION_REPLY -> reply(RemoteInput.getResultsFromIntent(intent)?.getCharSequence(KEY_REPLY)?.toString().orEmpty())
+            ACTION_REPLY -> {
+                val expected = intent.getLongExtra("panel_quiz", -1)
+                if (expected > 0 && expected != quizId) android.widget.Toast.makeText(this, "已经换题了，请回复现在这一问", android.widget.Toast.LENGTH_SHORT).show()
+                else reply(intent.getStringExtra("panel_answer") ?: RemoteInput.getResultsFromIntent(intent)?.getCharSequence(KEY_REPLY)?.toString().orEmpty())
+            }
             ACTION_REVEAL -> reply("不知道", reveal = true)
             ACTION_SKIP -> skip()
             ACTION_INTERVAL -> {
@@ -185,7 +189,7 @@ class ScrollService : Service() {
             if (delayMs > 0) delay(delayMs)
             val pkg = GateService.foreground.orEmpty()
             setStatus("正在看这一屏……")
-            val dataUrl = withContext(Dispatchers.Default) { burst() }
+            val dataUrl = com.yishou.app.floating.CoachFloat.withoutPanel { burst() }
             if (dataUrl == null) {
                 setStatus(if (auto) null else "没截到画面，再点一次")
                 return@launch
@@ -269,6 +273,7 @@ class ScrollService : Service() {
         pace.answered()
         // 先把通知换掉，不然回复框会一直转圈
         notifyQuiz(simple(q.question, "判着……", silent = true))
+        setStatus("正在核对你的回答……")
         judgeJob = scope.launch {
             try {
                 judge(q, answer, id, chased)
@@ -291,6 +296,7 @@ class ScrollService : Service() {
         if (judged == null) {
             id?.let { dao.answer(it, answer.trim(), "", "", now) }
             notifyQuiz(result(q, answer, null))
+            setStatus("这次没能判成。参考：${q.reference}")
             return
         }
         id?.let { dao.answer(it, answer.trim(), judged.verdict.name, judged.line, now) }
@@ -302,6 +308,7 @@ class ScrollService : Service() {
             },
         )
         notifyQuiz(result(q, answer, judged))
+        setStatus(ScrollQuiz.feedback(q, judged))
         // 认真答过的这一屏，原文收进素材池，以后“来一手”也能拿来练
         if (quick == null) ScrollQuiz.material(q)?.let { app.pool.take(it, MaterialSource.SCREEN) }
     }
@@ -366,6 +373,7 @@ class ScrollService : Service() {
     }
 
     private fun stopAll() {
+        com.yishou.app.floating.CoachFloat.remove("scroll")
         watchJob?.cancel()
         askJob?.cancel()
         synchronized(lock) {
@@ -413,6 +421,12 @@ class ScrollService : Service() {
     private fun refresh() {
         if (projection == null) return
         notifyNow(ID_RUNNING, runningNotification(_status.value))
+        com.yishou.app.floating.CoachFloat.update(this, "scroll", com.yishou.app.floating.FloatPanel("刷着练", _status.value ?: quiz?.question ?: "点一下，围绕当前这一屏问一题",
+            listOf(
+                com.yishou.app.floating.FloatAction("考我一下") { ask(400, auto = false) },
+                com.yishou.app.floating.FloatAction("回一句") { quiz?.let { com.yishou.app.floating.FloatingReplyActivity.open(this, "scroll", drill?.current?.ask ?: it.question, quizId ?: -1) } },
+                com.yishou.app.floating.FloatAction("停止") { stopAll() },
+            ), priority = 10))
     }
 
     private fun runningNotification(status: String?): Notification {
@@ -448,6 +462,7 @@ class ScrollService : Service() {
     /** 追问的一刀：同一条通知原地换内容，不再响 */
     private fun showCut(q: Quiz, d: com.yishou.app.sharp.Drill) {
         val cut = d.current ?: return
+        setStatus((d.hint?.let { "$it\n" } ?: "") + cut.ask)
         val body = buildString {
             d.hint?.let { append(it).append("\n") }
             append(cut.ask)
@@ -605,6 +620,10 @@ class ScrollService : Service() {
         }
 
         /** 用户在系统弹窗里同意之后调用 */
+        fun replyFromPanel(context: Context, text: String, quiz: Long) {
+            context.startService(Intent(context, ScrollService::class.java).setAction(ACTION_REPLY).putExtra("panel_answer", text).putExtra("panel_quiz", quiz))
+        }
+
         fun start(context: Context, resultCode: Int, data: Intent) {
             context.startForegroundService(
                 Intent(context, ScrollService::class.java)

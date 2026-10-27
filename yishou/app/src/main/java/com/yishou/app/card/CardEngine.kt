@@ -146,7 +146,7 @@ class CardEngine(
      * 导入题包里的选择题。答案来自题包；没写答案的也收下，做完时请你点官方答案。
      * 和题库里已有的题目重复的跳过。返回收下了几道。
      */
-    suspend fun importBank(items: List<com.yishou.app.bank.BankItem.Choice>): Int {
+    suspend fun importBank(items: List<com.yishou.app.bank.BankItem.Choice>, onAdded: suspend (Long, Card) -> Unit = { _, _ -> }): Int {
         // 去重要看整道题：行测很多题题干一样（“这段文字意在说明：”），只比题干会把它们全当成重复
         fun keyOf(question: String, options: List<String>, material: String) =
             com.yishou.app.think.Words.norm(question + options.joinToString("") + material.take(40))
@@ -160,7 +160,8 @@ class CardEngine(
             seen += key
             val card = com.yishou.app.bank.BankParser.toCard(c, c.answer ?: 0)
             val row = CardRow(skill = card.skill.name, difficulty = card.difficulty, json = card.toJson(), verified = c.answer != null, source = CardSource.BANK, createdAt = clock() + n)
-            dao.insertCard(row)
+            val id = dao.insertCard(row)
+            onAdded(id, card)
             n++
         }
         return n
