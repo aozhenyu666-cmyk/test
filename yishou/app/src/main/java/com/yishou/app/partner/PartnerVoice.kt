@@ -42,6 +42,7 @@ class PartnerVoice(private val app: YishouApp) {
     private var plan: PartnerPlan? = null
     private var startedWall = 0L
     private var closed = false
+    private var inputEpoch = 0L
 
     val active: Boolean get() = controller != null
 
@@ -111,7 +112,10 @@ class PartnerVoice(private val app: YishouApp) {
                 delay(150)
                 continue
             }
-            when (val h = app.voice.listen()) {
+            val epoch = inputEpoch
+            val h = app.voice.listen()
+            if (epoch != inputEpoch) continue
+            when (h) {
                 is Heard.Text -> c.heard(h.text)
                 is Heard.Failed -> {
                     RunLog.e("语音伙伴", h.message)
@@ -123,12 +127,14 @@ class PartnerVoice(private val app: YishouApp) {
     }
 
     fun say(text: String) {
+        inputEpoch++
         app.voice.cancel()
         controller?.interrupt()
         controller?.heard(text)
     }
 
     fun interrupt() {
+        inputEpoch++
         app.voice.cancel()
         controller?.interrupt()
     }
@@ -140,6 +146,7 @@ class PartnerVoice(private val app: YishouApp) {
     /** 关掉这一场。没收线的留一条待收线记录，下次在伴读页或入口页补上。 */
     fun stop() {
         val c = controller ?: return
+        inputEpoch++
         controller = null
         c.stop()
         app.voice.cancel()
