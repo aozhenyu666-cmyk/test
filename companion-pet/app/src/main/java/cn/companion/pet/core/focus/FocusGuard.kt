@@ -60,7 +60,25 @@ data class FocusContract(
     val armConfirmMillis: Long = 6_000,
     /** SOFT 每次离开最多提醒几次。 */
     val maxReminders: Int = 3,
-)
+    /**
+     * 目标所在的 Android 用户 / 实例标识。
+     *
+     * 0 = 机主；非 0（例如 vivo 的 999「应用分身」）表示分身。
+     * null 表示身份不确定 —— 这种情况不能假装守护成功。
+     */
+    val targetUserId: Int? = 0,
+) {
+    /**
+     * 身份是否可靠。
+     *
+     * 为什么必须区分：同一个包名可能在机主与分身里各有一个实例（实测 com.tencent.mm
+     * 同时有 u0_a410 与 u999_a410 两个进程）。只比包名会把两个实例当成同一个，
+     * 导致「我点分身它还控制着」或「我在主实例里被判定已离开」。
+     *
+     * 拿不到 userId 时一律视为不确定：不确定就不自动拉回，宁可少管也不乱管。
+     */
+    val identityCertain: Boolean get() = targetUserId != null
+}
 
 @Serializable
 data class FocusSnapshot(
@@ -102,7 +120,18 @@ class FocusGuard(snapshot: FocusSnapshot) {
     private val c get() = current.contract
     private var screenWasOff = false
 
-    private fun isTarget(pkg: String?) = pkg != null && pkg == c.targetPackage
+    /**
+     * 前台是不是「要守护的那个实例」。
+     *
+     * 只有包名匹配且身份确定时才严格比对 userId；身份不确定时退回包名匹配，
+     * 但调用方必须同时检查 [FocusContract.identityCertain] 才允许自动拉回。
+     */
+    private fun isTarget(pkg: String?, userId: Int? = null): Boolean {
+        if (pkg == null || pkg != c.targetPackage) return false
+        val want = c.targetUserId ?: return true
+        val got = userId ?: return true
+        return want == got
+    }
     private fun isAllowed(pkg: String?) = pkg != null && pkg in c.allowedPackages
 
     /** 防抖确认过的真实前台（调用方已过滤系统窗口/输入法/自己）。 */

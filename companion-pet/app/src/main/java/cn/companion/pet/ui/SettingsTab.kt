@@ -165,6 +165,11 @@ private fun FocusDiagnostics() {
         app.practiceStatus?.invoke()?.let { "练习换休息：" + it },
     ) + app.capabilityStatus?.invoke().orEmpty().map { "能力：" + it }
     lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+    // R3：如实显示"身份是否可靠"。分身与主实例同包名时，这里必须说清楚，
+    // 不能让用户以为已经在守护分身。
+    val identity = remember(tick) { app.focusIdentityStatus?.invoke() }
+    if (identity != null) Text(identity, style = MaterialTheme.typography.bodySmall,
+        color = if (identity.startsWith("身份不确定")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
     TextButton(onClick = { tick++ }) { Text("刷新") }
 }
 

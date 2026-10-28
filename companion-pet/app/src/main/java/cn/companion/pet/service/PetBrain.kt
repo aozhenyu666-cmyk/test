@@ -398,7 +398,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         runCatching { restoreTraining() }
         // 守护：杀进程/重启后恢复；已结束/过期/损坏的不复活。
         runCatching { focusController.restore(interactive = isUserActive() && !callInProgress()) }
-        app.focusStatus = { focusController.status() }
+        app.focusStatus = { focusController.status() }        // R3：守护身份可靠性。分身与主实例同包名时如实说"不确定"，不假装锁定成功。
+        app.focusIdentityStatus = { focusIdentityLine() }
         app.executionHealth = { execMonitor.snapshot(mono(), enforcingNow()).let { it.state.name + " · " + it.detail } }
         app.practiceStatus = { practiceStatusLine() }
         PerceptionHub.onHealthReceipt = { r -> runCatching { onHealthReceipt(r) } }
@@ -974,6 +975,31 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                     .firstOrNull { it.length >= 12 }?.take(140)
                 if (quote != null) screenQuoteCache = quote to now
             }
+        }
+    }
+
+    /**
+     * R3：一句话说清"现在守护的是不是正确的那个实例"。
+     *
+     * 依据本机实测约束：vivo 应用分身跑在另一个 Android 用户（如 999）里，
+     * 而桌宠的无障碍服务只绑定机主用户，**看不到也操作不了分身**。
+     * 因此分身只能如实报告"不支持"，不能声称守护成功。
+     */
+    private fun focusIdentityLine(): String {
+        val st = runCatching { focusController.status() }.getOrNull() ?: return "身份不确定：读不到守护状态"
+        if (!st.active) return "身份确定：当前没有守护"
+        val pkg = runCatching { st.targetPackage }.getOrNull().orEmpty()
+        if (pkg.isBlank()) return "身份不确定：不知道守护的是哪个应用"
+        val uid = runCatching { app.deviceController.snapshot() }.getOrNull()
+        val probed = runCatching {
+            (app.deviceController as? cn.companion.pet.a11y.AndroidDeviceController)?.probeUserId(pkg)
+        }.getOrNull()
+        // 分身选择器本身就是离开目标：vivo 的 DoubleAppResolverActivity 是另一个包，
+        // 用户点"分身"时前台会先落到它上面，桌宠据此会误判"离开了目标"。
+        return when {
+            probed == null -> "身份不确定：探测不到 " + st.targetLabel + " 的实例，不自动拉回"
+            probed == 0 -> "身份确定：守护机主实例（" + st.targetLabel + "）"
+            else -> "身份不确定：目标在分身用户 " + probed + "，桌宠的无障碍只绑定机主，看不到也操作不了分身；这一项如实标为未支持"
         }
     }
 

@@ -40,6 +40,8 @@ data class FocusStatus(
     val active: Boolean,
     val state: FocusState? = null,
     val targetLabel: String = "",
+    /** 守护目标的包名：诊断页要据此探测「主实例 / 分身」，不能只凭 label。 */
+    val targetPackage: String = "",
     val enforcement: FocusEnforcement? = null,
     val mode: FocusMode? = null,
     val secondsLeft: Long = 0,
@@ -87,7 +89,7 @@ class FocusController(
 
     fun status(): FocusStatus {
         val s = guard?.current ?: return FocusStatus(false, storeError = store.lastError.orEmpty(), lastAction = lastAction())
-        return FocusStatus(s.active, s.state, s.contract.targetLabel, s.contract.enforcement, s.contract.mode,
+        return FocusStatus(s.active, s.state, s.contract.targetLabel, s.contract.targetPackage, s.contract.enforcement, s.contract.mode,
             ((s.contract.expiresAt - now()) / 1000).coerceAtLeast(0), s.returnAttempts, s.lastResult,
             overlayShown, overlayError, store.lastError.orEmpty(), lastAction())
     }

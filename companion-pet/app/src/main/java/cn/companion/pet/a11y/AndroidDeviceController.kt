@@ -43,6 +43,25 @@ class AndroidDeviceController(
         ownPackage = context.packageName,
     )
 
+    /**
+     * 探测某个包名**当前前台实例**的 Android userId。
+     *
+     * 为什么需要：之前只比包名，"主实例"与"应用分身"在代码里是同一个东西。
+     * 实测 com.tencent.mm 同时有 u0_a410（机主）与 u999_a410（vivo 应用分身）两个进程。
+     *
+     * 做法：从运行中的进程里找出该包名、且处于前台重要级的进程，读它的 uid，
+     * 再换算成 userId（uid / 100000）。返回 null 表示**探测不到**——不确定就如实说不确定。
+     */
+    fun probeUserId(pkg: String): Int? = runCatching {
+        val am = context.getSystemService(android.app.ActivityManager::class.java) ?: return null
+        // runningAppProcesses 只返回"本用户可见"的进程；分身进程通常不在里面，
+        // 所以拿不到就直接返回 null，绝不用 0 冒充"就是机主"。
+        val infos = am.runningAppProcesses.orEmpty()
+        val hit = infos.filter { it.processName == pkg || it.processName.startsWith(pkg + ":") }
+            .maxByOrNull { it.importance }
+        hit?.uid?.let { uid -> if (uid <= 0) null else uid / 100000 }
+    }.getOrNull()
+
     /** 真正接收操作的窗口。感知记录会忽略桌宠自己，这里不会。 */
     private fun activePackage(): String? =
         runCatching { PerceptionHub.service?.rootInActiveWindow?.packageName?.toString() }.getOrNull()

@@ -258,6 +258,13 @@ class PetApp : Application() {
         ownLife = state
         runCatching { ownLifeWriter.execute { runCatching { ownLifeStore.write(state) } } }
     }
+    /**
+     * R3：守护身份的可靠性。桌宠运行时注册；没运行为 null。
+     *
+     * 返回一句人话：身份确定时说"守护 主实例"，不确定时明确说"身份不确定"，
+     * 绝不用一个"严格"标签把做不到的能力糊过去。
+     */
+    @Volatile var focusIdentityStatus: (() -> String)? = null
     /** 桌宠运行时注册：设置页诊断读守护状态。没在运行时为 null。 */
     @Volatile var focusStatus: (() -> cn.companion.pet.core.focus.FocusStatus)? = null
     /** 桌宠运行时注册：无障碍执行路径健康的一句话结论。 */
