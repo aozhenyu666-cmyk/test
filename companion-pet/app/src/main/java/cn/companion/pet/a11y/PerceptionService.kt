@@ -33,6 +33,9 @@ class PerceptionService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event?.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
+            PerceptionHub.lastTypingAt = android.os.SystemClock.elapsedRealtime()
+        }
         event ?: return
         // 这里的异常会让系统把服务标成“此服务出现故障”，并要求用户手动关掉再打开。
         // 感知只是辅助信息，宁可丢一个事件也不能让服务崩掉。

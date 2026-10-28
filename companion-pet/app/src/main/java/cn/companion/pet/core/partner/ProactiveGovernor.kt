@@ -85,7 +85,10 @@ class ProactiveGovernor(
     /** 每小时目标开口次数（用户可调，5–40）。 */
     targetPerHour: Int = 20,
 ) {
-    val targetPerHour: Int = targetPerHour.coerceIn(5, 40)
+    var targetPerHour: Int = targetPerHour.coerceIn(5, 40)
+        private set
+
+    fun configureTarget(value: Int) { targetPerHour = value.coerceIn(5, 40) }
 
     private var lastShownAt: Long? = null
     private var awaitingSince: Long? = null

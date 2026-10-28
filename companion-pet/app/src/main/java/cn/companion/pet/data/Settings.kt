@@ -104,6 +104,8 @@ class Settings(context: Context) {
     /** A3：允许 Agent 操作的应用名单；空名单时全部拒绝。 */
     var deviceAllowedApps by set("device_apps")
     var geminiAutoSend by bool("gemini_auto_send", false)
+    var partnerVideoApps by set("partner_video_apps")
+    var partnerGameApps by set("partner_game_apps")
     var partnerRiding by bool("partner_riding", false)
     var partnerPerHour by int("partner_per_hour", 20)
     var partnerQuietUntil by long("partner_quiet_until", 0L)

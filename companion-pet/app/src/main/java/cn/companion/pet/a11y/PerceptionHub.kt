@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
  * 只有桌宠服务在需要时通过 [readScreen] 现读一次。
  */
 object PerceptionHub {
+    var lastTypingAt: Long = Long.MIN_VALUE / 2
     val trail = ActivityTrail()
     val stuck = StuckDetector()
 

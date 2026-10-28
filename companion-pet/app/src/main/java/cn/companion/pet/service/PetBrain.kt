@@ -1,5 +1,7 @@
 package cn.companion.pet.service
 
+import cn.companion.pet.core.partner.*
+import android.media.AudioManager
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
@@ -775,45 +777,6 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
      *
      * @return true 表示这次已经由意图接管，调用方不要再走规则。
      */
-    private fun speakFromIntentIfAny(now: Long): Boolean {
-        if (!settings.presenceEnabled || settings.petPaused) return false
-        // 忙碌、没额度、暂停这些前置闸门与规则路径完全一致，不许绕过。
-        if (presenceBusy(now) != null) return false
-        val key = apiKey() ?: return false
-        if (app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()) <= 0) return false
-        if (!app.presencePolicy.check(now, settings.petPaused, budgetPlan(now)).allowed) return false
-
-        // 时刻必须是**真的发生了**才算：新攒出一句话的那一刻置位一次，之后清掉。
-        // 恒 true 会让"挑时机"退化成"只要有话就立刻说"，那又回到规则触发了。
-        val freshThought = ownThoughtReadyAt > 0
-        val signals = cn.companion.pet.core.moment.MomentSignals(
-            now = now,
-            ownThoughtReady = freshThought,
-            returnedToApp = returnedToAppAt > 0,
-            taskJustFinished = false,
-            sinceInteractionMillis = lastInteractionAt.takeIf { it > 0 }?.let { now - it },
-            minutesSinceLastSpoken = if (lastSpokenAt > 0) (now - lastSpokenAt) / 60_000L else Long.MAX_VALUE,
-            // 不传打字/全屏视频在这里会被 MomentWatcher 当作"可以说话"；这两项由真实输入事件在别处维护。
-            typing = isTypingNow,
-            fullscreenVideo = isFullscreenVideoNow,
-            zone = java.time.ZoneId.systemDefault(),
-        )
-        return when (val plan = cn.companion.pet.core.voice.VoiceTurnPlanner.plan(now, signals, app.voiceQueue, app.ledger)) {
-            is cn.companion.pet.core.voice.TurnPlan.SpeakIntent -> {
-                // 说之前先划掉：哪怕后面这一步因为忙碌提前退出，也不至于下次重复同一句。
-                app.voiceQueue.markSpoken(plan.intentId, now)
-                app.ledger.record(plan.text, now)
-                lastSpokenAt = now
-                // 说过就不再是"新鲜想法 / 刚回来"；避免同一时刻被反复消费。
-                ownThoughtReadyAt = 0L
-                returnedToAppAt = 0L
-                speak(stuck = false, presenceReason = "我手里攒着一件想跟他说的事（来源：" + plan.source + "）。")
-                true
-            }
-            cn.companion.pet.core.voice.TurnPlan.StaySilent -> false
-        }
-    }
-
     /** 当前时段的活跃度预算；关掉自适应时返回 null，走固定上限。 */
     private fun budgetPlan(now: Long): cn.companion.pet.core.rhythm.ActivityPlan? =
         if (settings.useAdaptiveBudget) {
@@ -826,60 +789,72 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
      * 每 5 秒用内存里的轨迹评估一次；不读写文件、不调模型。只有到点时才会读一次待续话题。
      * 不新增计时器：挂在原来每秒一次的 tick 上。
      */
-    private fun presenceTick(now: Long) {
-        if (now - lastPresenceEvalAt < 5_000L) return
-        lastPresenceEvalAt = now
-        // R3：先看手里有没有攒着的话要说。有就直接说手里的，不再走规则临时想一句。
-        if (speakFromIntentIfAny(now)) return
-        val trail = PerceptionHub.trail
-        val lists = settings.appLists()
-        val fg = trail.foreground
-        val stuck = PerceptionHub.stuck.check(now)
-        // 卡壳时才读一次屏幕判断是不是学习页（和旧逻辑一致：名单里或屏幕有大段正文）。
-        val learning = fg != null && (fg in lists.learning || (stuck && classify(now).scene == Scene.LEARNING))
-        val focus = SceneClassifier.focusActive(now, trail, lists)
-        val state = petState(now)
-        val budgetLeft = app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()) > 0
-        val signals = cn.companion.pet.core.presence.PresenceSignals(
-            now = now,
-            foreground = fg,
-            foregroundLabel = fg?.let { label(it) } ?: "手机",
-            foregroundSince = trail.foregroundSince,
-            distinctApps60s = trail.distinctAppsWithin(now, 60_000L),
-            switches60s = trail.switchCountWithin(now, 60_000L),
-            inFeed = fg != null && fg in lists.feed,
-            inLearning = learning,
-            inFocus = fg != null && fg in lists.focus,
-            excluded = fg != null && fg in lists.exclude,
-            inLauncher = fg != null && fg in launchers,
-            stuck = stuck,
-            scheduledDue = scheduler.isDue(now, focus),
-            quiet = scheduler.isQuiet(now),
-            userActive = active,
-            paused = settings.petPaused,
-            busy = presenceBusy(now),
-            canCallModel = apiKey() != null && budgetLeft,
-            sinceInteractionMillis = lastInteractionAt.takeIf { it > 0 }?.let { now - it },
-            energy = state.energy,
-            interest = state.interest,
-        )
-        var dueTopic: Topic? = null
-        val d = app.presenceEngine.evaluate(signals) {
-            if (!settings.continuityEnabled) false
-            else topicGate.next(now = now, quiet = signals.quiet, userActive = active, lastProactiveAt = lastProactiveAt,
-                recentTexts = recentExchangeLines(20).toSet()).also { dueTopic = it } != null
+    private var partnerSampleJob: Job? = null
+    private fun partnerContext(): UsageContext {
+        if (settings.partnerRiding) return UsageContext.RIDING
+        if (partner.pageVisible) return UsageContext.IN_CHAT
+        val pkg = PerceptionHub.trail.foreground ?: return UsageContext.IDLE
+        return when {
+            pkg in settings.partnerVideoApps -> UsageContext.WATCHING_VIDEO
+            pkg in settings.partnerGameApps -> UsageContext.GAMING
+            pkg in settings.learningApps -> UsageContext.READING
+            pkg in settings.feedApps -> UsageContext.BROWSING_FEED
+            pkg in launchers -> UsageContext.IDLE
+            else -> UsageContext.UNKNOWN
         }
-        when (d.kind) {
-            cn.companion.pet.core.presence.PresenceKind.MICRO_REACTION -> { playMicro(d); app.presenceEngine.commit(d, now) }
-            cn.companion.pet.core.presence.PresenceKind.LOCAL_NUDGE -> if (showLocalNudge(d, signals)) app.presenceEngine.commit(d, now)
-            cn.companion.pet.core.presence.PresenceKind.MODEL_REASONING -> {
-                app.presenceEngine.commit(d, now)
-                val reason = d.reasoning?.prompt.orEmpty() + if (d.reason.isNotBlank()) "（" + d.reason + "）" else ""
-                speak(stuck = d.reasoning == cn.companion.pet.core.presence.ReasoningReason.STUCK,
-                    topic = if (d.reasoning == cn.companion.pet.core.presence.ReasoningReason.SCHEDULED) dueTopic else null,
-                    presenceReason = reason)
+    }
+
+    private fun partnerSignals(at: Long): GovernorSignals {
+        val minute = LocalTime.now().hour * 60 + LocalTime.now().minute
+        val start = settings.quietStartMin
+        val end = settings.quietEndMin
+        val asleep = if (start == end) false else if (start < end) minute in start until end else minute >= start || minute < end
+        val audio = context.getSystemService(AudioManager::class.java)
+        return GovernorSignals(at, partnerContext(), active,
+            typing = isTypingNow || partner.typing || android.os.SystemClock.elapsedRealtime() - PerceptionHub.lastTypingAt < 8_000,
+            capturingVoice = partner.voiceCapturing,
+            inCall = audio.mode == AudioManager.MODE_IN_CALL || audio.mode == AudioManager.MODE_IN_COMMUNICATION,
+            sleepHours = asleep, dismissedUntil = settings.partnerQuietUntil,
+            busyReason = when {
+                settings.petPaused -> "已暂停"
+                partner.busy.value -> "正在想回复"
+                partnerBusy() != null -> partnerBusy()
+                else -> presenceBusy(at)
+            })
+    }
+
+    private fun presenceTick(now: Long) {
+        if (now - lastPresenceEvalAt < 5_000 || partnerSampleJob?.isActive == true) return
+        lastPresenceEvalAt = now
+        val signals = partnerSignals(now)
+        partner.governor.configureTarget(settings.partnerPerHour)
+        val small = TopicCandidate("small-$now", TopicSource.SMALL_TALK, "", observedAt = now)
+        val readiness = partner.governor.decide(signals, listOf(small))
+        if (readiness is GovernorDecision.Silent) { partner.noteBlocked(readiness.reason); return }
+        val pkg = PerceptionHub.trail.foreground
+        partnerSampleJob = scope.launch {
+            val candidates = withContext(Dispatchers.IO) {
+                buildList {
+                    add(small)
+                    if (!settings.partnerRiding && pkg != null && pkg !in settings.excludeApps && pkg != context.packageName) {
+                        val text = ScreenTextCleaner.clean(PerceptionHub.readScreen(), 600).orEmpty()
+                        val quote = text.split(Regex("[。！？\\n]" )).map { it.trim() }.firstOrNull { it.length >= 12 }?.take(140)
+                        if (quote != null) add(TopicCandidate("screen-$now", TopicSource.SCREEN_TEXT, quote, observedAt = now,
+                            tooSimilarToRecent = app.ledger.isTooSimilar(quote)))
+                    }
+                    app.voiceQueue.next(now) { app.ledger.isTooSimilar(it) }?.let {
+                        add(TopicCandidate(it.id, TopicSource.OWN_READING, it.summary, observedAt = it.createdAt))
+                    }
+                    app.goalStore.activeSummary()?.let { add(TopicCandidate("goal", TopicSource.GOAL_CHECK, it, 2, now,
+                        tooSimilarToRecent = app.ledger.isTooSimilar(it))) }
+                }
             }
-            cn.companion.pet.core.presence.PresenceKind.SILENT -> if (d.consumeSchedule) scheduler.onSpoke(now)
+            partner.proactive(partnerSignals(now()), candidates) {
+                val current = partnerSignals(now()).copy(busyReason = partnerBusy())
+                !current.typing && !current.inCall && !current.capturingVoice && !current.sleepHours &&
+                    now() >= current.dismissedUntil && !settings.petPaused && partnerBusy() == null &&
+                    (active || settings.partnerRiding) && (pkg == PerceptionHub.trail.foreground || settings.partnerRiding)
+            }
         }
     }
 
@@ -1427,8 +1402,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         if (training != null) trainingTimer.pause(mono())
         overlay.setListening(true)
         haptics.tap()
+        partner.voiceCapturing = true
         armRecordingCap()
         voice.start { text ->
+            partner.voiceCapturing = false
             disarmRecordingCap()
             overlay.setListening(false)
             onUserInput(text, listeningFromHold)
@@ -2951,8 +2928,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         flow.touchedAt = now()
         overlay.setListening(true)
         overlay.updateBubbleText("在听……说完停一下就好")
+        partner.voiceCapturing = true
         armRecordingCap()
         voice.start { text ->
+            partner.voiceCapturing = false
             disarmRecordingCap()
             overlay.setListening(false)
             val said = text?.trim().orEmpty()
@@ -2987,8 +2966,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         trainingTimer.pause(mono())
         overlay.setListening(true)
         overlay.updateBubbleText("在听……说完停一下就好")
+        partner.voiceCapturing = true
         armRecordingCap()
         voice.start { text ->
+            partner.voiceCapturing = false
             disarmRecordingCap()
             overlay.setListening(false)
             trainingTimer.resume(mono())

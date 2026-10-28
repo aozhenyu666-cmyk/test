@@ -39,6 +39,48 @@ class PartnerConversation(private val app: PetApp) {
     var anchor = ""
     var anchorSource: TopicSource = TopicSource.SMALL_TALK
 
+    val governor = ProactiveGovernor(app.settings.partnerPerHour)
+    data class Trace(val at: Long, val source: String, val anchor: String)
+    private val mutableShown = MutableStateFlow<List<Trace>>(emptyList())
+    val shown: StateFlow<List<Trace>> = mutableShown
+    private val mutableBlocked = MutableStateFlow<List<String>>(emptyList())
+    val blockedReasons: StateFlow<List<String>> = mutableBlocked
+    var onProactiveShown: ((TopicCandidate) -> Unit)? = null
+    fun noteBlocked(reason: String) { mutableBlocked.value = (listOf(reason) + mutableBlocked.value).distinct().take(5) }
+
+    fun proactive(signals: GovernorSignals, candidates: List<TopicCandidate>, stillAllowed: () -> Boolean) {
+        governor.configureTarget(app.settings.partnerPerHour)
+        if (mutableBusy.value) return
+        val decision = governor.decide(signals, candidates)
+        if (decision is GovernorDecision.Silent) { noteBlocked(decision.reason); return }
+        val candidate = (decision as GovernorDecision.Speak).candidate
+        val expected = ++revision
+        mutableBusy.value = true
+        job = scope.launch {
+            try {
+                val version = withContext(Dispatchers.IO) { memoryVersion() }
+                val key = withContext(Dispatchers.IO) { app.apiKey() } ?: run { noteBlocked("还没配置对话模型"); return@launch }
+                val input = withContext(Dispatchers.IO) { replyInput("", true, candidate) }
+                val reply = generate(input, key) ?: run { noteBlocked("回答不符合说话规则或调用失败"); return@launch }
+                if (expected != revision || !stillAllowed() || version != withContext(Dispatchers.IO) { memoryVersion() }) return@launch
+                if (candidate.source in listOf(TopicSource.SCREEN_TEXT, TopicSource.SCREEN_IMAGE) && now() - candidate.observedAt > 120_000) return@launch
+                if (app.ledger.isTooSimilar(reply.say)) { noteBlocked("和刚说过的太像"); return@launch }
+                if (offer(reply.say, candidate.threadId, allowBusy = true)) {
+                    anchor = candidate.anchor
+                    anchorSource = candidate.source
+                    val at = now()
+                    governor.onShown(at)
+                    app.ledger.record(reply.say, at)
+                    // The candidate and final wording are separate evidence; consume only after delivery.
+                    if (candidate.id.startsWith("vi-")) app.voiceQueue.markSpoken(candidate.id, at)
+                    mutableShown.value = (listOf(Trace(at, candidate.source.name, candidate.anchor.take(100))) + mutableShown.value).take(5)
+                    onProactiveShown?.invoke(candidate)
+                    if (app.settings.ttsEnabled) app.speech.say(reply.say)
+                } else noteBlocked("输出界面未显示")
+            } finally { if (expected == revision) mutableBusy.value = false }
+        }
+    }
+
     fun open() {
         val current = mutableSession.value
         if (current == null || !rules.canResume(current, now())) update(rules.start(UUID.randomUUID().toString(), now()))
@@ -50,8 +92,8 @@ class PartnerConversation(private val app: PetApp) {
     fun cancel() { revision++; job?.cancel(); mutableBusy.value = false }
     fun close() { cancel(); mutableSession.value?.let { update(rules.close(it, "用户结束")) } }
 
-    fun offer(text: String, threadId: String = ""): Boolean {
-        if (blocked() != null || mutableBusy.value || ContentGuard.violates(text)) return false
+    fun offer(text: String, threadId: String = "", allowBusy: Boolean = false): Boolean {
+        if (blocked() != null || (mutableBusy.value && !allowBusy) || ContentGuard.violates(text)) return false
         open()
         val shown = if (pageVisible) true else display?.invoke(text) == true
         if (!shown) return false
@@ -67,6 +109,7 @@ class PartnerConversation(private val app: PetApp) {
         open()
         val s = mutableSession.value ?: return
         update(rules.add(s, DialogueTurn(Speaker.USER, clean, now(), channel, uncertain)))
+        governor.onUserReplied()
         onUserReplied?.invoke()
         val expected = ++revision
         mutableBusy.value = true
