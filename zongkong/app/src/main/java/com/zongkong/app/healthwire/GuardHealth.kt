@@ -82,6 +82,16 @@ object GuardHealth {
         }
         val id = ledger.onConnected(nowMono)
         runCatching { Diag.log(context(), "health_connected", "新的无障碍实例：${id.take(8)}") }
+        // 一被系统挂载就落盘记下「这个服务确实被运行过」。
+        //
+        // 为什么放在这里而不是等 HEALTHY：真机上最常见的坏时机是「装完新版本，系统顺手把
+        // 无障碍从列表里摘掉」，那时进程刚重启、一次 HEALTHY 都还没跑到。如果只在 HEALTHY
+        // 时记，这种摘除就会被判成「用户还没开启」而永远不修。
+        // 连接成功是这件事最早的可靠证据。
+        runCatching {
+            context().getSharedPreferences("selfheal", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("ever_ran", true).apply()
+        }
         return id
     }
 
