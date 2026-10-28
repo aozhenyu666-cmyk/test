@@ -183,16 +183,18 @@ class WatchProvider : ContentProvider() {
             return Result(true, null, actual)
         }
 
-        private fun certSha256(c: Context, pkg: String): String? = try {
-            val pm = c.packageManager
-            val info = pm.getPackageInfo(pkg, PackageManager.GET_SIGNING_CERTIFICATES)
-            val signers = info.signingInfo?.apkContentsSigners
-                ?: info.signingInfo?.signingCertificateHistory
-            val sig = signers?.firstOrNull() ?: return null
-            val md = MessageDigest.getInstance("SHA-256")
-            md.digest(sig.toByteArray()).joinToString("") { "%02X".format(it) }
-        } catch (_: Throwable) {
-            null
+        private fun certSha256(c: Context, pkg: String): String? {
+            return try {
+                val pm = c.packageManager
+                val info = pm.getPackageInfo(pkg, PackageManager.GET_SIGNING_CERTIFICATES)
+                val signers = info.signingInfo?.apkContentsSigners
+                    ?: info.signingInfo?.signingCertificateHistory
+                val sig = signers?.firstOrNull() ?: return null
+                val md = MessageDigest.getInstance("SHA-256")
+                md.digest(sig.toByteArray()).joinToString("") { "%02X".format(it) }
+            } catch (_: Throwable) {
+                null
+            }
         }
     }
 

@@ -7,6 +7,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DecideTest {
+    @Test fun confirmedFaultOverridesFreshLegacyHeartbeatButHonorsRelease() {
+        val state = Decide.State(now, setOf(tiktok), strict = true, freeUntil = 0)
+        assertTrue(Decide.shouldBlock(state, now, tiktok, true, confirmedFault = true))
+        assertFalse(Decide.shouldBlock(state, now, tiktok, true, released = true, confirmedFault = true))
+        assertFalse(Decide.shouldBlock(state.copy(freeUntil = now + 1000), now, tiktok, true, confirmedFault = true))
+        assertFalse(Decide.shouldBlock(state, now, "com.android.settings", true, confirmedFault = true))
+    }
     private val now = 1_800_000_000_000L
     private val tiktok = "com.ss.android.ugc.aweme"
 
