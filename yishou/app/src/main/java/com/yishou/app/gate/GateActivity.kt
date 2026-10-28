@@ -114,6 +114,9 @@ class GateActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         isShowing = true
+        GateTrace.init(this)
+        GateTrace.log("入口页显示出来了", intent?.getStringExtra(EXTRA_PACKAGE))
+        GateService.hideCover()
         vm.refreshPartnerClose()
     }
 

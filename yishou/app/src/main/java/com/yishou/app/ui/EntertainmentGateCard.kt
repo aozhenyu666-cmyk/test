@@ -16,7 +16,7 @@ import com.yishou.app.gate.GateActivity
 import com.yishou.app.gate.GateService
 
 @Composable
-fun EntertainmentGateCard(onSettings: (() -> Unit)? = null) {
+fun EntertainmentGateCard(onSettings: (() -> Unit)? = null, onDoctor: (() -> Unit)? = null) {
     val context = LocalContext.current
     val app = context.applicationContext as YishouApp
     val prefs by app.settings.app.collectAsStateWithLifecycle()
@@ -34,6 +34,7 @@ fun EntertainmentGateCard(onSettings: (() -> Unit)? = null) {
                 if (onSettings != null) TextButton(onClick = onSettings) { Text("选择娱乐应用") }
                 if (!connected) TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("连接服务") }
                 TextButton(onClick = { context.startActivity(GateActivity.testIntent(context)) }) { Text("试一道题") }
+                if (onDoctor != null) TextButton(onClick = onDoctor) { Text("拦不住？体检") }
             }
         }
     }

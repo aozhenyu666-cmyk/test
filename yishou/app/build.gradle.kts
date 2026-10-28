@@ -13,8 +13,8 @@ android {
         applicationId = "com.yishou.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 27
-        versionName = "0.25.2"
+        versionCode = 28
+        versionName = "0.25.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
