@@ -1024,7 +1024,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun onFocusEnded(label: String, reason: cn.companion.pet.core.focus.FocusEndReason) {
         if (reason == cn.companion.pet.core.focus.FocusEndReason.USER_ABORTED) return
-        overlay.showBubble(BubbleSpec("和 $label 的守护结束了（${reason.label}）。", textOnly = true)) {
+        showSessionBubble(BubbleSpec("和 $label 的守护结束了（${reason.label}）。", textOnly = true)) {
             overlay.afterBubble(5000) { if (convo == null && think == null) overlay.hideBubble() }
         }
     }

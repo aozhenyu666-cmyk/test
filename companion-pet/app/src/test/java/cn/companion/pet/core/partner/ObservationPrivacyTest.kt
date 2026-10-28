@@ -41,4 +41,14 @@ class ObservationPrivacyTest {
         assertNull(store.lastError)
         assertEquals("new", store.load()!!.id)
     }
+    @Test fun failedBackupCannotBeFollowedByOverwritingTheUnreadableOriginal() {
+        val file = File(tmp.root, "partner/dialogue.json")
+        file.parentFile!!.mkdirs(); file.writeText("original corrupt bytes")
+        val store = DialogueStore(tmp.root, backup = { _, _ -> throw java.io.IOException("full") })
+        assertNull(store.load())
+        assertTrue(store.lastError!!.contains("暂停覆盖"))
+        assertTrue(runCatching { store.save(DialogueRules().start("new", 1)) }.isFailure)
+        assertEquals("original corrupt bytes", file.readText())
+    }
+
 }
