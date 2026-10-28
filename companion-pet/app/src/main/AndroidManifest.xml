@@ -46,7 +46,7 @@
         android:theme="@style/Theme.CompanionPet"
         android:usesCleartextTraffic="false">
 
-        <activity android:name=".ui.ChatActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".ui.ChatActivity" android:exported="false" android:taskAffinity="cn.companion.pet.chat" android:windowSoftInputMode="adjustResize" />
 
         <activity android:name=".CapabilityActivity" android:exported="false" />
 
