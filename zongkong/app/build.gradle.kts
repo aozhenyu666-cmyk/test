@@ -13,8 +13,9 @@ android {
         applicationId = "com.zongkong.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 19
-        versionName = "0.16.0-health-v2"
+        // 修「无障碍老是挂掉、只能手点」：0.16.0 之后的自愈补丁
+        versionCode = 20
+        versionName = "0.16.1-a11y-selfheal"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

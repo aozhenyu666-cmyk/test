@@ -477,6 +477,52 @@ object SentinelClient {
      */
     fun rebind(c: Context): Boolean = RebindCoordinator.rebind(c, SERVICE)
 
+    // ---------- 进程活着吗 / 把它拉起来 ----------
+
+    /**
+     * 哨兵的**进程**还在不在。
+     *
+     * 为什么不能只看 ping：ping 走的是 Binder，哨兵的 ContentProvider 可能还在、进程也可能
+     * 只剩个空壳。真机上「无障碍显示开着、但叫不应」往往就是进程被系统清掉了，
+     * 这时候重绑系统设置没用，得先把进程拉起来让它自己重新 bind。
+     *
+     * 读 /proc 里有没有这个包名的进程。读不到（权限/格式变化）就当「不知道」，返回 true ——
+     * 宁可不去拉起，也不要因为探测本身失败而乱开 App。
+     */
+    fun processAlive(c: Context): Boolean = try {
+        val pidSelf = android.os.Process.myPid()
+        java.io.File("/proc").listFiles()
+            ?.any { f ->
+                val pid = f.name.toIntOrNull() ?: return@any false
+                if (pid == pidSelf) return@any false
+                runCatching {
+                    java.io.File(f, "cmdline").readText().trim('\u0000', ' ', '\n') == PKG
+                }.getOrDefault(false)
+            } ?: true
+    } catch (_: Throwable) {
+        true
+    }
+
+    /**
+     * 把哨兵 App 拉到前台一次，让系统重新给它建进程和无障碍连接。
+     *
+     * 用启动它主页的方式，不绕过任何系统限制：后台启动 Activity 在部分 ROM 上会被拦，
+     * 拦了也没关系——下一次自愈循环会再试，而且用户打开总控时也会自然带起来。
+     */
+    fun spawn(c: Context): Boolean = try {
+        val i = c.packageManager.getLaunchIntentForPackage(PKG)
+        if (i == null) {
+            false
+        } else {
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            c.startActivity(i)
+            true
+        }
+    } catch (e: Throwable) {
+        Log.w(TAG, "拉起哨兵失败", e)
+        false
+    }
+
     // ---------- 解除闸门（v1 兼容读取，业务状态） ----------
 
     /** 手动刷新一次解除闸门（界面进入时用）。 */

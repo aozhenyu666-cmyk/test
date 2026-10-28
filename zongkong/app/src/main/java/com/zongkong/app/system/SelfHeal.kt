@@ -91,10 +91,35 @@ object SelfHeal {
                 // 真的在响应：收尾恢复流程。
                 if (v.action == HealthAction.NONE) GuardHealth.endRecovery()
                 reminded = false
+                // 见过自己在正常运行：以后「设置里突然没有我」才有依据判断是系统摘的。
+                everRan = true
+                // 恢复正常：把「未接入」那条通道的计数一起清零。
+                // 不清的话，头三次故障就用掉了全部预算，之后真正的掉线再也修不了。
+                resetUnregBudget()
                 return
             }
             HealthStatus.DISABLED -> {
-                // 用户在设置里关的：不替你打开，只提醒。
+                // 这里要分两种「设置里没有」：
+                //   1. 你自己在设置里关掉的 → 不替你打开，只提醒（尊重你的决定）；
+                //   2. 系统把它从列表里摘掉的（崩过之后 / 被一键清理删了）→ 该修。
+                //
+                // 真机实测的教训：这两种在 `enabled_accessibility_services` 里长得一模一样
+                // （都只是「没有我这一项」），所以内核一律判 DISABLED。如果照字面「用户关的」处理，
+                // 系统摘掉的那种就永远不会被修——这正是「只能手点」的另一半原因。
+                // 判据用「我们自己的无障碍开关还在不在」：用户去设置里关，通常整个开关会变成 0；
+                // 而系统把某一项摘掉时，总开关一般还是 1。这个判据不完美，但比不区分强得多，
+                // 而且只在「本来在跑、突然没了」之后才生效（见 [wasRunningBefore]）。
+                if (systemRemovedUs(context)) {
+                    // 系统摘的：按「未接入」同样处理，允许重绑。
+                    Diag.log(context, "stale", "无障碍被系统从列表里摘掉了：按自动恢复处理")
+                    when (unregisteredStep(instanceAlive = false, canWrite = canWrite(context))) {
+                        UnregStep.REBIND -> rebindUnregistered(context)
+                        UnregStep.WAIT -> return
+                        UnregStep.WARN -> warn(context, enabled = false, verdict = v)
+                    }
+                    return
+                }
+                // 用户自己关的：不替你打开，只提醒。
                 warn(context, enabled = false, verdict = v)
                 return
             }
@@ -116,8 +141,153 @@ object SelfHeal {
                     return
                 }
             }
-            HealthStatus.UNREGISTERED -> return
+            HealthStatus.UNREGISTERED -> {
+                // 这里以前是 `return`——什么都不做。这就是「老是挂掉、只能手点」的主因。
+                //
+                // 现场证据（iQOO 12，0.16.0-health-v2）：哨兵的通道静默之后 `registered` 变成 false，
+                // 内核 `evaluate()` 在「恢复中」之前就 `if (!registered) return UNREGISTERED/NONE`，
+                // 也就是**永远进不了恢复态**；于是每 10 分钟只发一条「健康异常」通知，
+                // 诊断里零条 rebind_sent，从 15:25 一直卡到重新打开 App（实测 6 小时）。
+                //
+                // 关键：这条路不能依赖内核的恢复预算（那条路被上面的短路挡死了），
+                // 所以这里用自己的一套节流 + 计数，直接发一次重绑。
+                //   · 实例没连上（instanceId 为空）→ 典型的「崩过之后系统不再 bind」，重绑有效；
+                //   · 实例还在、只是没登记 → 重绑解决不了，别去动系统设置，等它登记，等太久才提醒。
+                if (!permissionEnabled) return
+                when (unregisteredStep(GuardHealth.instanceId != null, canWrite(context))) {
+                    UnregStep.REBIND -> rebindUnregistered(context)
+                    UnregStep.WAIT -> return
+                    UnregStep.WARN -> warnUnregistered(context)
+                }
+                return
+            }
         }
+    }
+
+    /**
+     * 这个「设置里没有我」到底是用户关的，还是系统摘的？
+     *
+     * 真机上两者在 `enabled_accessibility_services` 里无法区分（都只是少了我们这一项），
+     * 所以用两条旁证：
+     *   1. 无障碍总开关 `accessibility_enabled` 还是 1 —— 用户通常会连总开关一起关；
+     *   2. 我们这一轮之前确实见过自己在运行（[everRan]）—— 从没跑过的不算，那时是还没打开。
+     *
+     * 两条都成立才认定「是系统摘的」。判错的方向是「多修一次」，不会把用户主动关的打开，
+     * 因为用户主动关一般会把总开关一起关掉。
+     */
+    @Volatile private var everRan = false
+
+    private fun systemRemovedUs(context: Context): Boolean {
+        val masterOn = runCatching {
+            android.provider.Settings.Secure.getInt(context.contentResolver, android.provider.Settings.Secure.ACCESSIBILITY_ENABLED) == 1
+        }.getOrDefault(false)
+        return systemRemoved(everRan, masterOn)
+    }
+
+    /**
+     * 纯逻辑版：判「设置里没有我」是系统摘的还是用户关的。
+     *
+     * [everRan] 我们见过自己在正常运行；[masterOn] 无障碍总开关还开着。
+     * 两条都成立才算系统摘的。抽出来是为了能单测——这个判断错了，要么永远不修，
+     * 要么把用户主动关掉的又打开，两种都很难受。
+     */
+    fun systemRemoved(everRan: Boolean, masterOn: Boolean): Boolean = everRan && masterOn
+
+    /**
+     * 把「未接入」这条通道的重绑计数清零。
+     *
+     * 和 HEALTHY 时清零的理由一样：一轮故障用掉的预算不能带走下一轮。
+     */
+    private fun resetUnregBudget() {
+        unregTries = 0
+        unregisteredSince = 0L
+    }
+
+
+    /** UNREGISTERED 这一刻该干什么。 */
+    enum class UnregStep {
+        /** 服务实例不在、又有写安全设置权限：直接重绑。 */
+        REBIND,
+
+        /** 实例在、只是没登记：等它自己登记，别去动系统设置。 */
+        WAIT,
+
+        /** 修不了（没权限 / 等太久）：提醒人。 */
+        WARN,
+    }
+
+    /**
+     * 判定 UNREGISTERED 该走哪一步。
+     *
+     * 抽成纯函数是为了能测：这条分支以前什么都不做，正是「老是挂掉只能手点」的根因，
+     * 不能再让它悄悄退回去。三个输入就够了：
+     *   · [instanceAlive] 无障碍实例还在不在（不在 = 崩过之后系统不再 bind，重绑有效）；
+     *   · [canWrite] 有没有写安全设置的权限（没有就只剩提醒）。
+     *
+     * 规则：没有实例 + 有权限 → 重绑；没有实例 + 没权限 → 提醒；实例在 → 等（协议层的事，重绑无用）。
+     */
+    fun unregisteredStep(instanceAlive: Boolean, canWrite: Boolean): UnregStep = when {
+        instanceAlive -> UnregStep.WAIT
+        canWrite -> UnregStep.REBIND
+        else -> UnregStep.WARN
+    }
+
+    // ---------- UNREGISTERED 的重绑通道（不经内核恢复预算） ----------
+
+    /** 这条通道自己的节流：两次重绑至少隔 3 分钟。 */
+    @Volatile private var lastUnregRebind = 0L
+
+    /** 这条通道自己的预算：最多连试 3 次，然后停下来提醒人（免得把系统设置刷成抖动）。 */
+    @Volatile private var unregTries = 0
+
+    /** 什么时候开始一直 UNREGISTERED 的（用来提示人）。 */
+    @Volatile private var unregisteredSince = 0L
+
+    /**
+     * 「服务实例不在了」时的重绑。
+     *
+     * 和 [tryRecover] 分开写的理由见上面那段注释：内核那条路对 UNREGISTERED 是死路，
+     * 硬塞进去只会被短路回来。这里只做一件事——按 [RebindCoordinator] 的规矩把它挂回去。
+     */
+    private suspend fun rebindUnregistered(context: Context) {
+        val now = System.currentTimeMillis()
+        if (unregisteredSince <= 0L) unregisteredSince = now
+        if (!canWrite(context)) {
+            // 没授权就只剩提醒：说清楚「执行一次那条命令以后就不用管了」。
+            warnUnregistered(context)
+            return
+        }
+        val nowMono = SystemClock.elapsedRealtime()
+        // 第一次尝试不节流：故障刚发生时正是该立刻修的时刻。
+        // 只有「重试」之间才需要间隔，避免把系统设置刷成抖动。
+        if (unregTries > 0 && lastUnregRebind > 0 && nowMono - lastUnregRebind < 3 * 60_000L) {
+            Diag.log(context, "rebind_skip", "未接入：距上次重绑不到 3 分钟，本轮让路")
+            return
+        }
+        if (unregTries >= 3) {
+            // 试够了：大概是系统彻底不让它跑，转成提醒，不再动系统设置。
+            Diag.log(context, "rebind_fail", "未接入：本次故障已重绑 $unregTries 次都无效，转提醒")
+            warnUnregistered(context)
+            return
+        }
+        lastUnregRebind = nowMono
+        unregTries++
+        val sent = rebind(context)
+        if (sent) {
+            Diag.log(context, "rebind_sent", "未接入：已重绑（第 $unregTries 次），等系统重新 bind")
+            context.zk.store.logWake("无障碍未接入：已重绑第 $unregTries 次")
+        } else {
+            Diag.log(context, "rebind_fail", "未接入：重绑没发出去（第 $unregTries 次，可能没写安全设置权限或锁被占）")
+        }
+    }
+
+    /** UNREGISTERED 里「实例在、只是没登记」那一支：先等，等太久才提醒，不反复吵。 */
+    private fun warnUnregistered(context: Context) {
+        val now = System.currentTimeMillis()
+        if (unregisteredSince <= 0L) unregisteredSince = now
+        // 刚进入这个状态的两分钟内不提醒：很可能只是还没登记完
+        if (now - unregisteredSince < 2 * 60_000L) return
+        warn(context, enabled = true, verdict = HealthVerdict(HealthStatus.UNREGISTERED, HealthAction.NONE, "无障碍没有接入（服务实例不在）"))
     }
 
     /** 有限恢复：最多 [HealthConfig.maxRecoveries] 次，只在预算内，且与哨兵串行。 */
@@ -201,6 +371,20 @@ object SelfHeal {
             Diag.log(context, if (problem == null) "sentinel_on" else "sentinel_off", problem ?: "哨兵在岗（v2 已接入）")
         }
         if (problem == null || !SentinelClient.installed(context) || !SentinelClient.genuine(context)) return
+
+        // UNKNOWN 也要救。
+        //
+        // 以前 UNKNOWN（「还没有 v2 证据」）被归进「有问题」里，但真正被处理的是靠下面那条
+        // respawn 逻辑；而它只在 SILENT 时才拉起进程。真机上发生的是：哨兵进程被系统清掉后，
+        // 它既没有回包（SILENT 需要「调不通」这个证据），也没有新实例 → 一直停在 UNKNOWN，
+        // 于是既没重绑、也没拉起进程，诊断里就是一小时一条 sentinel_off，直到人手动打开 App。
+        // 所以：UNKNOWN 且它的进程确实不在时，按「需要拉起」处理。
+        val needsSpawn = label == SentinelClient.Link.UNKNOWN || label == SentinelClient.Link.SILENT
+        if (needsSpawn && !SentinelClient.processAlive(context)) {
+            SentinelClient.spawn(context)
+            Diag.log(context, "sentinel_wake", "哨兵没有进程：已尝试拉起（$label）")
+        }
+
         if (!canWrite(context) || now - lastSentinelHeal < 10 * 60_000L) return
         lastSentinelHeal = now
         if (SentinelClient.rebind(context)) {
