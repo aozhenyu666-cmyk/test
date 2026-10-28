@@ -39,6 +39,7 @@ jobs:
     # 换主线时只改 mainline 这一处。
     if: >-
       github.ref == 'refs/heads/ccr-2899d69f-xlzjh6' ||
+      github.ref == 'refs/heads/claude/r21-strict-takeover' ||
       github.ref == 'refs/heads/deepseek/r21-proactive' ||
       startsWith(github.ref, 'refs/tags/tongzhuo-release-')
     runs-on: ubuntu-latest
@@ -65,7 +66,8 @@ jobs:
         run: |
           set -euo pipefail
           echo "Tag $GITHUB_REF points at $GITHUB_SHA"
-          ALLOWED=("deepseek/r21-proactive" "ccr-2899d69f-xlzjh6")
+          # 现在的主线是 claude/r21-strict-takeover（用户 2026-10-28 确认加入）。
+          ALLOWED=("claude/r21-strict-takeover" "deepseek/r21-proactive" "ccr-2899d69f-xlzjh6")
           OK=no
           for br in "${ALLOWED[@]}"; do
             # 该分支当前 head 是否包含本 tag 指向的提交

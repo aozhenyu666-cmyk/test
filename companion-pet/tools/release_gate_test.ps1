@@ -78,7 +78,7 @@ function Assert-Gate {
 #   c9f6970(主线上的旧提交) vs 主线 => ahead
 #   12f7382(旧分支 0.5.5) vs 主线 => diverged
 function Test-TagSource {
-    param([string]$CompareStatus, [string[]]$Allowed = @('deepseek/r21-proactive', 'ccr-2899d69f-xlzjh6'))
+    param([string]$CompareStatus, [string[]]$Allowed = @('claude/r21-strict-takeover', 'deepseek/r21-proactive', 'ccr-2899d69f-xlzjh6'))
     if ($Allowed.Count -eq 0) { return @{ Allow = $false; Reason = 'no allowed branch' } }
     if ($CompareStatus -in @('ahead', 'identical')) {
         return @{ Allow = $true; Reason = "compare status '$CompareStatus' means commit is on the branch" }
