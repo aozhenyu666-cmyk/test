@@ -104,6 +104,9 @@ class Settings(context: Context) {
     /** A3：允许 Agent 操作的应用名单；空名单时全部拒绝。 */
     var deviceAllowedApps by set("device_apps")
     var geminiAutoSend by bool("gemini_auto_send", false)
+    var partnerRiding by bool("partner_riding", false)
+    var partnerPerHour by int("partner_per_hour", 20)
+    var partnerQuietUntil by long("partner_quiet_until", 0L)
     var ttsEnabled by bool("tts", false)
     /** 默认关：说话改为弹出输入框、用输入法自带的话筒。系统语音识别在不少国产机后台会直接失败。 */
     var systemVoice by bool("system_voice", false)

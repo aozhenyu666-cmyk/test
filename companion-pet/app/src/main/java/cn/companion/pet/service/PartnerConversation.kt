@@ -18,6 +18,7 @@ class PartnerConversation(private val app: PetApp) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val writer = Executors.newSingleThreadExecutor { Thread(it, "partner-store").apply { isDaemon = true } }
     private val rules = DialogueRules()
+    private val responder = PartnerResponder()
     private val store by lazy { DialogueStore(app.memory.root) }
     private val mutableSession = MutableStateFlow<DialogueSession?>(store.load())
     val session: StateFlow<DialogueSession?> = mutableSession
@@ -74,17 +75,26 @@ class PartnerConversation(private val app: PetApp) {
             try {
                 val inputVersion = withContext(Dispatchers.IO) { memoryVersion() }
                 val key = withContext(Dispatchers.IO) { app.apiKey() }
-                val messages = withContext(Dispatchers.IO) {
-                    listOf(ChatMessage(ChatRole.SYSTEM, app.memory.persona() + "\n你是他的伙伴，接着上下文聊，具体、简短，不要泛泛总结。"),
-                        ChatMessage(ChatRole.USER, rules.contextLines(mutableSession.value!!).joinToString("\n")))
-                }
-                val answer = if (key == null) null else request(messages, key)
+                val input = withContext(Dispatchers.IO) { replyInput(clean, false) }
+                val answer = if (key == null) null else generate(input, key)
                 if (expected != revision || inputVersion != withContext(Dispatchers.IO) { memoryVersion() } || blocked() != null) return@launch
-                val reply = answer?.takeIf { !ContentGuard.violates(it) } ?: "这次没接上你的话，可以再发一次。"
-                appendReply(reply)
+                appendReply(answer?.say ?: "这次没能可靠接上你的话，可以再说一句。")
                 compact(key)
             } finally { if (expected == revision) { mutableBusy.value = false; mutableStatus.value = "" } }
         }
+    }
+
+    private suspend fun replyInput(userText: String, proactive: Boolean, candidate: TopicCandidate? = null): ReplyInput = synchronized(app.memoryLock) {
+        val visibility = cn.companion.pet.core.companion.EventVisibility(app.events.all(), app.memory.tombstones())
+        val memories = app.facts.live().filter { visibility.allows(it) }.takeLast(12).associate { it.id to it.text }
+        ReplyInput(candidate?.anchor ?: listOf(anchor, userText).filter { it.isNotBlank() }.joinToString("\n"),
+            candidate?.source ?: if (anchor.isNotBlank()) anchorSource else TopicSource.THREAD_FOLLOW_UP,
+            memories, voiceOnly = app.settings.partnerRiding, proactive = proactive)
+    }
+
+    private suspend fun generate(input: ReplyInput, key: String): PartnerReply? {
+        val persona = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { app.memory.persona() } }
+        return responder.respond(input, persona, mutableSession.value?.let { rules.contextLines(it) }.orEmpty()) { request(it, key) }
     }
 
     private fun appendReply(text: String) {
