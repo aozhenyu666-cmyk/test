@@ -114,6 +114,7 @@ class GateActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         isShowing = true
+        PagePrompt.acknowledge()
         vm.refreshPartnerClose()
     }
 

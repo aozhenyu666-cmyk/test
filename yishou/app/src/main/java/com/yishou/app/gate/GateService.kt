@@ -44,6 +44,7 @@ class GateService : AccessibilityService() {
     private val querying = mutableSetOf<String>()
     private var lastLaunchPkg: String? = null
     private var lastLaunchAt = 0L
+    private val pagePrompt by lazy { PagePrompt(this) }
     /** 放行到期时再检查一次：到期时还停留在该应用，就弹出思考页 */
     private var expiryCheck: Job? = null
 
@@ -130,6 +131,7 @@ class GateService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
+        if (pkg == packageName && pagePrompt.showingOverlay && !GateActivity.isShowing) return
         val systemPackages = systemAllowed()
         val transient = pkg != packageName && pkg !in homes && (pkg in systemPackages || pkg in WindowRules.STATIC_SYSTEM)
         foregroundTracker.update(pkg, transient)
@@ -204,15 +206,29 @@ class GateService : AccessibilityService() {
         if (pkg == lastLaunchPkg && now - lastLaunchAt < 2_000) return
         lastLaunchPkg = pkg
         lastLaunchAt = System.currentTimeMillis()
-        app.stats.event(if (group == GateActivity.WINDOW_GROUP) DayStats.WINDOW_BLOCK else DayStats.GATE_SHOWN)
-        try {
-            startActivity(GateActivity.intent(this@GateService, pkg, group))
-            _problem.value = null
-        } catch (e: Exception) {
-            _problem.value = "没能弹出收费站，请在系统设置里允许后台弹出界面"
-            RunLog.e("收费站", "无法打开思考页", e)
-            Log.e(TAG, "无法打开思考页", e)
-        }
+        pagePrompt.open(
+            targetKey = "$pkg/$group",
+            target = GateActivity.intent(this, pkg, group),
+            title = "先回一手完成入口思考",
+            visible = { GateActivity.isShowing },
+            relevant = {
+                val awake = getSystemService(android.os.PowerManager::class.java).isInteractive
+                val unlocked = !getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
+                val current = app.settings.app.value
+                awake && unlocked && foregroundPkg == pkg && !app.partner.allows(pkg) &&
+                    (current.groupOf(pkg) == group || (group == GateActivity.WINDOW_GROUP &&
+                        WindowClock.active(System.currentTimeMillis(), current, AppZone.zone) != null &&
+                        WindowRules.decide(pkg, current, systemAllowed(), System.currentTimeMillis()) != WindowRules.Decision.ALLOW))
+            },
+            onShown = {
+                _problem.value = null
+                app.stats.event(if (group == GateActivity.WINDOW_GROUP) DayStats.WINDOW_BLOCK else DayStats.GATE_SHOWN)
+            },
+            onFallback = {
+                _problem.value = "做题页没有自动打开，已显示处理入口。请检查系统的后台弹出界面设置"
+                RunLog.e("收费站", "做题页启动后没有到前台", IllegalStateException("未收到页面显示确认"))
+            },
+        )
     }
 
     /** 微信、QQ 这类可以短暂切过去的：到时还停在这里就拉回陪练。 */
@@ -243,6 +259,7 @@ class GateService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onUnbind(intent: Intent?): Boolean {
+        pagePrompt.dismiss()
         if (running === this) {
             running = null
             _connected.value = false
@@ -254,6 +271,7 @@ class GateService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        pagePrompt.dismiss()
         if (wakeRegistered) { unregisterReceiver(wakeReceiver); wakeRegistered = false }
 
         if (running === this) {
