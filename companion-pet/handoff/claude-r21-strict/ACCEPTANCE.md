@@ -1,5 +1,7 @@
 # 同桌 R21 严格守护接管 — 唯一验收实情表
 
+> 当前伙伴版本与构建以末尾“伙伴 v1”小节为准；下面原有 vc42 记录为历史验收证据。
+
 - 分支：`claude/r21-strict-takeover`（与 `ccr-f3b6cf6b-6gsh3f` 同步）
 - **构建源码提交：`1794ed1c9e0b519a387c184852b718682afe055a`**（本文件所在的文档提交不参与构建）
 - 版本：0.8.2-r3-aliveness-preview（versionCode 42），debug 包，仓库公开调试签名，`debuggable=true`，**不是发行包**
@@ -86,3 +88,36 @@ DeepSeek 两个提交的取舍：
 4. 按交接说明另案：S1 计划触发（用户决定本轮移除；代码在 `da75890` 里，可以随时恢复）、跨应用中央指挥协议、Shizuku。
 6. **主动断点恢复已经存在**（`ResumePolicy`：亮屏/离开后自己回来问原题原步，10 分钟冷却、每会话最多 3 次、次数落盘），不要再当作缺口重做。
 5. `companion-unify-v1` 的 CL-S1–S9、CL-T1–T12 已全部处理（移植 / 等价 / 明确拒绝），不再有待移植项。
+
+
+## 五、伙伴 v1（2026-10-28）
+
+- 分支：`claude/r21-strict-takeover`；基于 Claude `dbdac74`，最终构建源码提交 **`0ffdf01b6569d1593ff877c716ca93ab2929438b`**。
+- 版本：**0.8.3-partner-v1-preview / versionCode 43**。沿用公开调试签名，仍为 `debuggable=true` 预览包。
+- GitHub Actions：[Companion Pet Android #129](https://github.com/aozhenyu666-cmyk/test/actions/runs/40641286807)。**成功**：`:app:testDebugUnitTest`、`:app:lintDebug`、`:app:assembleDebug`、`:app:assembleDebugAndroidTest` 及分支预览发布均通过。
+- 单元测试：**795 条，0 失败 / 错误 / 跳过（PASS-L）**；其中原有 781 条不变，新增加 14 条接线相关回归。没有修改或放宽 Claude 的 partner 测试、acceptAdvice、离线判分与严格守护单一拥有者规则。
+- APK：[主线预览下载](https://github.com/aozhenyu666-cmyk/test/releases/download/tongzhuo-preview-claude-r21-strict-takeover/tongzhuo.apk)。已独立下载复核：**30,783,059 字节**；SHA-256 **`158ddc395d72f853b410e7fd5e3279c608ceccacb796ed957c032ceb9cae0c41`**，与 Release 说明和资产 digest 一致。`aapt` 确认 vc43 / 版本名，`apksigner verify` 通过，证书 SHA-256 `9f3a524c66974aeb04045f498f83b5970589f9fba3ac3772e95c26e3524695e0`，与固定测试签名一致；安装包包含独立聊天 taskAffinity，仍为 debuggable。
+- 每项提交、文件、调用链、额外修复与逐步真机操作见 [伙伴交付](../partner-v1/IMPLEMENTATION.md)。
+
+| 项 | 当前接线 | 自动化证据 | 真机 |
+|---|---|---|---|
+| G1 多轮与恢复 | WIRED | DialogueRules + DialogueStore 十轮、压缩、二十分钟恢复回归 PASS-L | NOT_RUN |
+| G2 完整聊天页 | WIRED | Compose 与 Android 测试 APK 已构建；没有运行设备 UI 测试 | NOT_RUN |
+| G3 骑行语音 | WIRED | TTS onStart/onDone 与识别代数接线；不能用纯 Kotlin 测试证明系统音频和后台麦克风效果 | NOT_RUN |
+| G4 主动调度 | WIRED | Governor / PartnerDelivery 的失败不消费、重复回执、零时刻、频率更新回归 PASS-L | NOT_RUN |
+| G5 回答规则 | WIRED | 合格回复、一次修复、连续不合格拒绝、断网不额外重写、骑行字数回归 PASS-L | NOT_RUN |
+| G6 看图与追问 | WIRED | VisionTalk 原有测试；完整观察不写入会话文件回归 PASS-L；未用真实视觉 Key | NOT_RUN |
+| G7 话题线与确认记忆 | WIRED | 遗忘后关闭持久化跟进、夜间不绕过确认、提问后重启恢复等待窗口回归 PASS-L | NOT_RUN |
+| G8 记忆与话题页 | WIRED | 显示来源原话、重要度、跟进时间；暂停/关闭/删除入口已编译 | NOT_RUN |
+| G9 观点留存 | WIRED | 只在发出后留存引用句；素材失效使关联线关闭；生成的摘录不触发材料陪练 | NOT_RUN |
+| G10 设置与诊断 | WIRED | 每小时 5–40、默认 20；睡眠/安静 30 分钟；最近五条来源和拦截原因 | NOT_RUN |
+
+### 真机仍需验证
+
+1. 同一话题十轮、切走二十分钟恢复；收起后迟到回复不弹回。
+2. 一小时实际开口次数、具体锚点质量、打字/通话/录音时让出通道；目标频率不是实测次数。
+3. 耳机语音十分钟、锁屏、来电、识别失败与停止通知；系统回调不能证明人确实听见。
+4. 手动带问题看图与主动看视频/游戏；对照画面判断实际理解质量。
+5. 记忆确认/拒绝、查看来源、遗忘后不重提；六小时/一天后的真实跟进。
+
+D02 严格守护动作效果回执仍未修，全部旧 DEVICE 项仍为 NOT_RUN。Governor 小时统计和说过的话账本在进程内，重启会重新累计。新伙伴夜间批次不自动新增档案，混合批次中的其他新增档案也会保守跳过。构建通过不等于后台长期可靠。
