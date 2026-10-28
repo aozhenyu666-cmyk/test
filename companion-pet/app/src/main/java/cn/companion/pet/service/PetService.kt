@@ -69,6 +69,17 @@ class PetService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
+            ACTION_TOGGLE_RIDING -> {
+                val s = (application as PetApp).settings
+                s.partnerRiding = !s.partnerRiding
+                goForeground()
+            }
+            ACTION_QUIET -> {
+                val app = application as PetApp
+                app.settings.partnerQuietUntil = System.currentTimeMillis() + 30 * 60_000L
+                app.stopSpeech()
+                goForeground()
+            }
             ACTION_TOGGLE_PAUSE -> {
                 val s = (application as PetApp).settings
                 s.petPaused = !s.petPaused
@@ -98,14 +109,18 @@ class PetService : Service() {
         val paused = (application as PetApp).settings.petPaused
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val pause = PendingIntent.getService(this, 1, Intent(this, PetService::class.java).setAction(ACTION_TOGGLE_PAUSE), PendingIntent.FLAG_IMMUTABLE)
+        val ride = PendingIntent.getService(this, 3, Intent(this, PetService::class.java).setAction(ACTION_TOGGLE_RIDING), PendingIntent.FLAG_IMMUTABLE)
+        val quiet = PendingIntent.getService(this, 4, Intent(this, PetService::class.java).setAction(ACTION_QUIET), PendingIntent.FLAG_IMMUTABLE)
+        val riding = (application as PetApp).settings.partnerRiding
         val stop = PendingIntent.getService(this, 2, Intent(this, PetService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE)
         val notification = Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(if (paused) "桌宠在安静待着" else "桌宠在你身边")
+            .setContentTitle(if (riding) "同桌语音陪伴中" else if (paused) "桌宠在安静待着" else "桌宠在你身边")
             .setContentText(if (paused) "不会主动开口" else "点这里打开设置")
             .setContentIntent(open)
             .setOngoing(true)
-            .addAction(Notification.Action.Builder(null, if (paused) "让它说话" else "安静一会", pause).build())
+            .addAction(Notification.Action.Builder(null, if (riding) "停止语音" else "语音陪伴", ride).build())
+            .addAction(Notification.Action.Builder(null, "安静 30 分钟", quiet).build())
             .addAction(Notification.Action.Builder(null, "停止", stop).build())
             .build()
 
@@ -136,6 +151,8 @@ class PetService : Service() {
     private var foregroundFailed = false
 
     companion object {
+        const val ACTION_TOGGLE_RIDING = "cn.companion.pet.TOGGLE_RIDING"
+        const val ACTION_QUIET = "cn.companion.pet.QUIET"
         const val ACTION_STOP = "cn.companion.pet.STOP"
         const val ACTION_TOGGLE_PAUSE = "cn.companion.pet.TOGGLE_PAUSE"
         private const val CHANNEL = "pet"

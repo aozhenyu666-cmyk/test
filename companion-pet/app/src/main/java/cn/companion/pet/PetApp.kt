@@ -119,7 +119,7 @@ class PetApp : Application() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == Intent.ACTION_SCREEN_OFF) {
                 actions.cancelAll()
-                if (speechHolder.isInitialized()) speech.stopAll()
+                if (!settings.partnerRiding && speechHolder.isInitialized()) speech.stopAll()
             }
         }
     }

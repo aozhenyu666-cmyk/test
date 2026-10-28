@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import cn.companion.pet.core.action.SpeechPort
 import java.util.Locale
 import java.util.UUID
@@ -18,6 +19,27 @@ class Speech(private val context: Context) : SpeechPort {
     private var pending: Pending? = null
     private var speakingId: String? = null
     private val cancelledIds = LinkedHashSet<String>()
+    private data class Lifecycle(val started: () -> Unit, val finished: (Boolean) -> Unit)
+    private val lifecycles = mutableMapOf<String, Lifecycle>()
+    val isSpeaking: Boolean get() = speakingId != null || pending != null
+
+    fun sayWithLifecycle(text: String, id: String, onStarted: () -> Unit, onFinished: (Boolean) -> Unit) {
+        lifecycles[id] = Lifecycle(onStarted, onFinished)
+        submit(text, id) { accepted, _ -> if (!accepted) lifecycles.remove(id)?.finished?.invoke(false) }
+    }
+
+    private val progress = object : UtteranceProgressListener() {
+        override fun onStart(id: String?) { handler.post { lifecycles[id]?.started?.invoke() } }
+        override fun onDone(id: String?) { complete(id, true) }
+        @Deprecated("Legacy TTS callback")
+        override fun onError(id: String?) { complete(id, false) }
+        override fun onError(id: String?, errorCode: Int) { complete(id, false) }
+        override fun onStop(id: String?, interrupted: Boolean) { complete(id, false) }
+    }
+    private fun complete(id: String?, ok: Boolean) { handler.post {
+        if (speakingId == id) speakingId = null
+        lifecycles.remove(id)?.finished?.invoke(ok)
+    } }
 
     private fun markCancelled(id: String) {
         cancelledIds.add(id)
@@ -40,6 +62,7 @@ class Speech(private val context: Context) : SpeechPort {
                     if (generation != expected) return@initialized
                     val language = if (status == TextToSpeech.SUCCESS) runCatching { tts?.setLanguage(Locale.SIMPLIFIED_CHINESE) }.getOrNull() else null
                     ready = status == TextToSpeech.SUCCESS && language != null && language >= TextToSpeech.LANG_AVAILABLE
+                    if (ready) tts?.setOnUtteranceProgressListener(progress)
                     val waiting = pending
                     pending = null
                     if (ready && waiting != null) speakNow(waiting)
@@ -57,6 +80,7 @@ class Speech(private val context: Context) : SpeechPort {
 
     private fun speakNow(item: Pending) {
         if (item.id in cancelledIds) { item.receipt(false, "播报已取消"); return }
+        speakingId?.takeIf { it != item.id }?.let { lifecycles.remove(it)?.finished?.invoke(false) }
         val code = runCatching { tts?.speak(item.text, TextToSpeech.QUEUE_FLUSH, null, item.id) }.getOrNull()
         speakingId = if (code == TextToSpeech.SUCCESS) item.id else null
         item.receipt(code == TextToSpeech.SUCCESS,
@@ -66,6 +90,7 @@ class Speech(private val context: Context) : SpeechPort {
     override fun stop(id: String) {
         handler.post {
             markCancelled(id)
+            lifecycles.remove(id)?.finished?.invoke(false)
             if (pending?.id == id) { pending?.receipt?.invoke(false, "播报已取消"); pending = null }
             if (speakingId == id) { runCatching { tts?.stop() }; speakingId = null }
             if (!ready && pending == null) { generation++; runCatching { tts?.shutdown() }; tts = null }
@@ -74,6 +99,8 @@ class Speech(private val context: Context) : SpeechPort {
 
     fun stopAll() {
         handler.post {
+            val callbacks = lifecycles.values.toList(); lifecycles.clear()
+            callbacks.forEach { it.finished(false) }
             pending?.let { markCancelled(it.id); it.receipt(false, "播报已取消") }
             pending = null
             speakingId?.let { markCancelled(it) }
@@ -84,6 +111,8 @@ class Speech(private val context: Context) : SpeechPort {
 
     fun shutdown() {
         handler.post {
+            val callbacks = lifecycles.values.toList(); lifecycles.clear()
+            callbacks.forEach { it.finished(false) }
             generation++
             pending?.receipt?.invoke(false, "播报服务已关闭"); pending = null
             runCatching { tts?.shutdown() }

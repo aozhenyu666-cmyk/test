@@ -150,6 +150,22 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private val app = context.applicationContext as PetApp
     private val partner get() = app.partner
+    private val riding by lazy { RidingVoiceLoop(context) { ridingAllowed() } }
+    private var ridingStarted = false
+    private fun ridingAllowed(): Boolean {
+        val audio = context.getSystemService(AudioManager::class.java)
+        return settings.partnerRiding && !settings.petPaused && now() >= settings.partnerQuietUntil &&
+            audio.mode != AudioManager.MODE_IN_CALL && audio.mode != AudioManager.MODE_IN_COMMUNICATION && partnerBusy() == null &&
+            !partner.typing && !isTypingNow
+    }
+    private fun syncRiding() {
+        if (settings.partnerRiding && !ridingStarted) {
+            if (partnerBusy() != null || !riding.start()) {
+                settings.partnerRiding = false
+                partner.noteBlocked("骑行语音未启动：检查麦克风权限、系统识别服务，或先结束当前受约束回合")
+            } else { ridingStarted = true; overlay.hideBubble() }
+        } else if (!settings.partnerRiding && ridingStarted) { riding.stop(); ridingStarted = false }
+    }
     private val settings = app.settings
     private val stats = app.stats
     private val memory = app.memory
@@ -316,7 +332,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     fun start() {
         partner.blocked = { partnerBusy() }
         partner.display = { text -> showPartnerBubble(text) }
-        partner.onReply = { text -> if (settings.ttsEnabled) speech.say(text) }
+        partner.onReply = { text -> if (settings.partnerRiding) riding.reply(text) else if (settings.ttsEnabled) speech.say(text) }
+        partner.voiceDelivery = { text -> riding.say(text) }
         // 设置页“运行”技能时交给桌宠来跑：进度和结果显示在气泡上，点桌宠可以停。
         app.skillLauncher = { id -> handler.post { endConversation(); skills.runSkill(id) } }
         memory.persona() // 首次运行写入默认人设
@@ -346,6 +363,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
         scope.launch {
             settings.changes.collect {
+                syncRiding()
                 scheduler.config = settings.rhythm()
                 if (settings.presenceEnabled) {
                     app.presencePolicy.config = app.presencePolicy.config.copy(
@@ -361,6 +379,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     fun stop() {
+        if (ridingStarted) riding.stop()
+        partner.voiceDelivery = null
         partner.away()
         partner.cancel()
         partner.display = null
@@ -393,6 +413,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     // ---------- 屏幕状态 ----------
 
     fun onScreenOff() {
+        if (settings.partnerRiding && ridingStarted) { active = false; return }
         partner.away()
         partner.cancel()
         active = false
@@ -478,6 +499,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         runCatching { maybeReadOwnLife(now) }
         // Gemini 会话期间：只守着会话，不主动搭话
         session?.let { handleSession(it, now); return }
+        if (settings.partnerRiding && ridingStarted) {
+            riding.tick()
+            if (!partner.busy.value && settings.presenceEnabled) presenceTick(now)
+            return
+        }
         if (!active) return
         // 正在“想一想”或记念头：不插嘴；放着不管 3 分钟就收起
         if (think != null || noteDraft != null) {
@@ -904,6 +930,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     /** 显式入口：先建立并保存契约，再打开目标；失败不留下守护。 */
     private fun startFocusGuard() {
+        if (settings.partnerRiding) return
+
         val target = assistants.current
         val pkg = assistants.packageOf(target) ?: run { gemini.toast("没找到 ${target.label}，可以在设置里填包名"); return }
         val now = now()
@@ -1320,6 +1348,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     // ---------- 用户主动 ----------
 
     override fun onPetTapped() {
+        if (settings.partnerRiding) { settings.partnerRiding = false; return }
         // 受约束回合进行中：点桌宠给当前回合菜单，不收起、不作废（移植自 DeepSeek 4c591de / Claude CL-T12）。
         if (training?.current?.active == true) { showTrainingMenu(); return }
         if (training != null) { resumeTraining(); return } // 已完成：显示结算和“下一题”
@@ -1351,6 +1380,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     private fun showPartnerBubble(text: String, menu: Boolean = false): Boolean {
+        if (settings.partnerRiding) return false
         if (partnerBusy() != null || !active) return false
         overlay.setMood(Mood.CURIOUS)
         return overlay.showBubble(BubbleSpec(text, showMic = systemVoice, showGemini = false, instant = true,
@@ -1866,6 +1896,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     private fun openThinkMenu() {
+        if (settings.partnerRiding) return
+
         endConversation()
         val flow = thinkMaterial()
         if (flow == null) {
@@ -2093,6 +2125,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     /** 已有断点优先接续，不能因重复点击重新出题。 */
     private fun openTraining() {
+        if (settings.partnerRiding) return
+
         if (training?.current?.active == true) { resumeTraining(); return }
         endConversation()
         val sessionId = java.util.UUID.randomUUID().toString()

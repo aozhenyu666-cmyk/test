@@ -34,6 +34,7 @@ class PartnerConversation(private val app: PetApp) {
     var display: ((String) -> Boolean)? = null
     var onUserReplied: (() -> Unit)? = null
     var onReply: ((String) -> Unit)? = null
+    var voiceDelivery: (suspend (String) -> Boolean)? = null
     private var job: Job? = null
     private var revision = 0L
     var anchor = ""
@@ -150,7 +151,12 @@ class PartnerConversation(private val app: PetApp) {
                 if (expected != revision || !stillAllowed() || version != withContext(Dispatchers.IO) { memoryVersion() }) return@launch
                 if (candidate.source in listOf(TopicSource.SCREEN_TEXT, TopicSource.SCREEN_IMAGE) && now() - candidate.observedAt > 120_000) return@launch
                 if (app.ledger.isTooSimilar(reply.say)) { noteBlocked("和刚说过的太像"); return@launch }
-                if (offer(reply.say, candidate.threadId, allowBusy = true)) {
+                val delivered = if (app.settings.partnerRiding) {
+                    val spoken = voiceDelivery?.invoke(reply.say) == true
+                    if (spoken) { open(); mutableSession.value?.let { update(rules.add(it.copy(threadId = candidate.threadId), DialogueTurn(Speaker.PET, reply.say, now(), TurnChannel.PROACTIVE))) } }
+                    spoken
+                } else offer(reply.say, candidate.threadId, allowBusy = true)
+                if (delivered) {
                     anchor = candidate.anchor
                     anchorSource = candidate.source
                     val at = now()
@@ -161,7 +167,7 @@ class PartnerConversation(private val app: PetApp) {
                     mutableShown.value = (listOf(Trace(at, candidate.source.name, candidate.anchor.take(100))) + mutableShown.value).take(5)
                     followedUp(candidate)
                     onProactiveShown?.invoke(candidate)
-                    if (app.settings.ttsEnabled) app.speech.say(reply.say)
+                    if (app.settings.ttsEnabled && !app.settings.partnerRiding) app.speech.say(reply.say)
                 } else noteBlocked("输出界面未显示")
             } finally { if (expected == revision) mutableBusy.value = false }
         }
@@ -240,8 +246,8 @@ class PartnerConversation(private val app: PetApp) {
 
     private fun appendReply(text: String) {
         val s = mutableSession.value ?: return
-        update(rules.add(s, DialogueTurn(Speaker.PET, text, now(), TurnChannel.REPLY)))
-        if (!pageVisible) display?.invoke(text)
+        update(rules.add(s, DialogueTurn(Speaker.PET, text, now(), TurnChannel.REPLY)).copy(state = s.state))
+        if (!pageVisible && s.state == SessionState.ACTIVE && !app.settings.partnerRiding) display?.invoke(text)
         onReply?.invoke(text)
     }
 
