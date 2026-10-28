@@ -57,6 +57,17 @@ import kotlinx.coroutines.launch
 /** 严管时打开拦截名单里的应用，就会被弹到这里。 */
 class BlockActivity : ComponentActivity() {
 
+    override fun onResume() {
+        super.onResume()
+        isShowing = true
+        PagePrompt.acknowledge()
+    }
+
+    override fun onPause() {
+        isShowing = false
+        super.onPause()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -99,6 +110,8 @@ class BlockActivity : ComponentActivity() {
     }
 
     companion object {
+        @Volatile var isShowing = false
+            private set
         const val EXTRA_PKG = "pkg"
 
         fun intent(context: Context, pkg: String): Intent = Intent(context, BlockActivity::class.java)

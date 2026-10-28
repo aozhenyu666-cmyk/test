@@ -48,7 +48,7 @@ object SentinelClient {
     private const val HEALTH_AUTHORITY = "com.zongkong.sentinel.health"
     private val HEALTH_URI: Uri = Uri.parse("content://$HEALTH_AUTHORITY")
 
-    /** v1 老口子：只读解除闸门与「叫醒」，**不再当健康凭据**。 */
+    /** 旧业务口子：同步名单、读取解除闸门，**不当 v2 健康凭据**。 */
     private val LEGACY_URI: Uri = Uri.parse("content://com.zongkong.sentinel.link")
 
     /** 固定下载地址（和总控同一个发布）。 */
@@ -366,23 +366,46 @@ object SentinelClient {
         Thread(r, "sentinel-ping").apply { isDaemon = true }
     }
 
-    /**
-     * 旧调用点兼容：把「拦截状态」推给哨兵。
-     *
-     * v2 里拦不拦由哨兵自己按策略判断，这里只触发一次 ping（不再传状态、不再接收
-     * `running` 之类的布尔）。[blocked] / [strict] / [freeUntil] 保留参数只为不改老调用方。
-     */
+    private val legacyPending = java.util.concurrent.atomic.AtomicReference<Bundle?>()
+    private val legacyScheduled = java.util.concurrent.atomic.AtomicBoolean()
+    private val legacyExec = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "sentinel-business-state").apply { isDaemon = true }
+    }
+
+    /** 名单和暂停期限仍供哨兵拦截使用；健康继续只认 v2 挑战。 */
     fun push(
-        @Suppress("UNUSED_PARAMETER") c: Context,
-        @Suppress("UNUSED_PARAMETER") blocked: Set<String>,
-        @Suppress("UNUSED_PARAMETER") strict: Boolean,
-        @Suppress("UNUSED_PARAMETER") freeUntil: Long,
-        @Suppress("UNUSED_PARAMETER") at: Long = System.currentTimeMillis(),
+        c: Context,
+        blocked: Set<String>,
+        strict: Boolean,
+        freeUntil: Long,
+        at: Long = System.currentTimeMillis(),
     ) {
         val app = c.applicationContext
-        exec.execute {
-            runCatching { ping(app) }
-            runCatching { readLegacyRelease(app) }
+        legacyPending.set(Bundle().apply {
+            putLong("at", at)
+            putStringArray("blocked", blocked.toTypedArray())
+            putBoolean("strict", strict)
+            putLong("freeUntil", freeUntil)
+        })
+        syncLegacyAsync(app)
+        refresh(app)
+    }
+
+    /** 只保留最新一份业务状态；对方卡住不会积压任务或拖住无障碍线程。 */
+    private fun syncLegacyAsync(app: Context) {
+        if (!legacyScheduled.compareAndSet(false, true)) return
+        legacyExec.execute {
+            try {
+                while (true) {
+                    val state = legacyPending.getAndSet(null) ?: break
+                    runCatching { app.contentResolver.call(LEGACY_URI, "state", null, state) }
+                        .onFailure { Log.w(TAG, "哨兵名单同步失败", it) }
+                    readLegacyRelease(app)
+                }
+            } finally {
+                legacyScheduled.set(false)
+                if (legacyPending.get() != null) syncLegacyAsync(app)
+            }
         }
     }
 
