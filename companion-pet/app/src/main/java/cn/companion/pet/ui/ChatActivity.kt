@@ -150,14 +150,24 @@ private fun ChatPage(app: PetApp, back: () -> Unit, listen: () -> Unit) {
         }
         persistenceErrors.values.forEach { Text(it, Modifier.padding(horizontal = 20.dp), style = MaterialTheme.typography.bodySmall, color = colors.danger) }
         if (status.isNotBlank()) Text(status, Modifier.padding(horizontal = 20.dp, vertical = 8.dp), style = MaterialTheme.typography.bodySmall)
+        val actionStatus by partner.actionStatus.collectAsState()
+        if (actionStatus.isNotBlank()) Text(actionStatus, Modifier.padding(horizontal = 20.dp, vertical = 6.dp), style = MaterialTheme.typography.bodySmall, color = colors.ink2)
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { lookQuestion = true }, enabled = !busy && !app.settings.partnerRiding) { Text("带问题看一眼") }
             Text("画面只用于这次交流", style = MaterialTheme.typography.bodySmall, color = colors.ink2)
         }
+        // 「停止生成」与「发送」并存：他等得不耐烦时必须能自己收回控制权，
+        // 而不是只能退出页面。停止会取消真实的网络请求并作废旧结果，1 秒内恢复可输入。
+        if (busy) Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = { partner.cancel() }) { Text("停止生成") }
+            Spacer(Modifier.width(12.dp))
+            Text("已经等了一会儿？可以停止，再看别的。", style = MaterialTheme.typography.bodySmall, color = colors.ink2)
+        }
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = listen, enabled = !busy && !app.settings.partnerRiding) { Text("语音") }
             OutlinedTextField(text, { text = it; partner.typing = it.isNotBlank() }, modifier = Modifier.weight(1f), placeholder = { Text("接着说……") }, maxLines = 5)
-            Button(onClick = { val said = text; text = ""; partner.typing = false; partner.send(said) }, enabled = text.isNotBlank() && (!busy || partner.proactivePending)) { Text("发送") }
+            // 输入框不再因为 busy 就被禁掉：他可以直接打下一句（发送时会取消旧的再发）。
+            Button(onClick = { val said = text; text = ""; partner.typing = false; partner.send(said) }, enabled = text.isNotBlank()) { Text("发送") }
         }
     }
 }

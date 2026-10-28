@@ -1,5 +1,8 @@
 package cn.companion.pet.service
 
+import cn.companion.pet.core.device.DeviceCommand
+import cn.companion.pet.core.device.DeviceStatus
+import cn.companion.pet.core.partner.PartnerAction
 import cn.companion.pet.core.partner.*
 import android.media.AudioManager
 import android.app.KeyguardManager
@@ -354,6 +357,25 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 shown && allowed
             }
         }
+        // R1：把"返回上一页/停止朗读/取消看图"接到真实设备控制器上。
+        // 返回 true 只在**确认生效**时；拿不到证据就如实说"已请求，未确认"。
+        partner.performAction = { action ->
+            withContext(kotlinx.coroutines.Dispatchers.IO) {
+                when (action) {
+                    PartnerAction.STOP_SPEAK -> { app.stopSpeech(); true }
+                    PartnerAction.CANCEL_LOOK -> { runCatching { lookJob?.cancel() }; true }
+                    PartnerAction.BACK -> {
+                        // 先记下执行前的活动窗口，执行后再看它是否真的变了。
+                        val before = runCatching { app.deviceController.snapshot().effectivePackage }.getOrNull()
+                        val r = runCatching { app.deviceController.execute(DeviceCommand.Back) }.getOrNull()
+                        val after = runCatching { app.deviceController.snapshot().effectivePackage }.getOrNull()
+                        val accepted = r?.status == DeviceStatus.SUCCESS
+                        // 只有窗口确实变了才算"已确认"；否则按"已请求，未确认"报。
+                        accepted && before != null && after != null && before != after
+                    }
+                }
+            }
+        }
         partner.onReply = { text -> if (settings.partnerRiding) riding.reply(text, partner.proposal.value?.let { "要我记住吗：" + it.text + "？说记住或不记。" }) else if (settings.ttsEnabled) speech.say(text) }
         partner.voiceDelivery = { text -> riding.say(text) }
         partner.onMetadata = {
@@ -521,6 +543,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             })
         }
         partner.tick()
+        // R0：busy 必须有终态。超过 45 秒仍未释放就强制收尾，避免主动开口被永久关闭。
+        runCatching { tickPartnerBusyWatchdog(now) }        // R2：读屏走旁路，只往缓存里放素材，不阻塞开口。
+        runCatching { sideloadScreenQuote(now) }
         // 守护按秒推进（到期、宽限、重试），不受下面任何提前 return 影响；熄屏/锁屏时不拉回。
         runCatching { focusController.tick(interactive = active && (!focusActive || !callInProgress())) }
         // 训练计时用单调时钟推进；熄屏/锁屏不催。
@@ -554,27 +579,29 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // R3：手里没有在读的东西（或都读完了）时，它会自己去网上找一篇真的来读。不阻塞 tick。
         runCatching { maybeReadOwnLife(now) }
         // Gemini 会话期间：只守着会话，不主动搭话
-        session?.let { handleSession(it, now); return }
+        session?.let { android.util.Log.i(DIAG, "tick gate: session=" + it.mode); handleSession(it, now); return }
         if (settings.partnerRiding && ridingStarted) {
             riding.tick()
             if (!partner.busy.value && settings.presenceEnabled) presenceTick(now)
             return
         }
-        if (!active) { partner.waiting("锁屏时保持安静", now + 15_000); return }
+        if (!active) { android.util.Log.i(DIAG, "tick gate: inactive"); partner.waiting("锁屏时保持安静", now + 15_000); return }
         // 正在“想一想”或记念头：不插嘴；放着不管 3 分钟就收起
         if (think != null || noteDraft != null) {
+            android.util.Log.i(DIAG, "tick gate: thinkOrNote")
             val since = think?.touchedAt ?: noteDraft!!.startedAt
             // 严格陪伴回合不因界面闲置被清掉；到期由状态机自己结算。
             if (think?.strict == null && now - since > 3 * 60_000L) endThink()
             tickStrict(now)
             return
         }
-        if (training != null) return // 同一问题持有气泡，其他主动话题不能覆盖。
-        if (maybeAutoStartSession(now)) return
+        if (training != null) { android.util.Log.i(DIAG, "tick gate: training"); return } // 同一问题持有气泡，其他主动话题不能覆盖。
+        if (maybeAutoStartSession(now)) { android.util.Log.i(DIAG, "tick gate: autoStartSession"); return }
 
-        convo?.let { escalate(it, now); return }
+        convo?.let { android.util.Log.i(DIAG, "tick gate: convo"); escalate(it, now); return }
         if (probeJob?.isActive == true || settings.petPaused) {
             if (settings.petPaused) partner.waiting("你暂停了陪伴，点继续后恢复。", now + 15_000)
+            android.util.Log.i(DIAG, "tick gate: probeJob=" + (probeJob?.isActive == true) + " paused=" + settings.petPaused)
             return
         }
         // 忙时错过的积压事件，空闲后补扫一次；不是每 tick 都做模型请求。
@@ -872,6 +899,14 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private var lastVisionAttemptAt = 0L
     private var lastOverlayCheckAt = 0L
     private var partnerSampleJob: Job? = null
+    /** R0：伙伴会话进入 busy 的时刻；0 表示不忙。用来做终态看门狗。 */
+    private var partnerBusySince = 0L
+    /** R0：看门狗触发过几次（诊断页可读，说明"卡住并已被强制释放"真的发生过）。 */
+    private var partnerWatchdogFired = 0
+    /** R2：旁路采到的屏幕引用（引用文本, 采到的时刻）。主动路径只读它，不现场读屏。 */
+    private var screenQuoteCache: Pair<String, Long>? = null
+    /** R2：上一次旁路采屏的时刻，避免频繁跨进程读屏。 */
+    private var lastSideloadAt = 0L
     private val partnerCategories = mutableMapOf<String, Int>()
     private fun partnerContext(): UsageContext {
         if (settings.partnerRiding) return UsageContext.RIDING
@@ -910,53 +945,116 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             })
     }
 
+    /**
+     * R0：busy 终态看门狗。
+     *
+     * 为什么必须有：`presenceTick` 第一行就在 busy 时退出，而 `partner.proactive` 内部第一步
+     * 也是 busy 时退出。一旦某个异常路径让 busy 停在 true，主动开口会被**永久关闭**，
+     * 界面上却一直显示"在想"，用户无法区分"在忙"和"已经死了"。
+     *
+     * 45 秒是保守上限：正常一次生成最长 30 秒（PartnerResponder 两次 × 单次上限），
+     * 再加 IO/落盘余量。超过就强制收尾，并把原因留在界面上。
+     */
+    /**
+     * R2：视觉与读屏的**旁路**。
+     *
+     * 为什么改成旁路：它们原来是主动开口必经的一环，结果是"点开框、读图读半天、才出字"。
+     * 现在它们只负责**往缓存里放素材**，开口永远不等它们；缓存过期（2 分钟）就自然不用。
+     */
+    private fun sideloadScreenQuote(now: Long) {
+        if (!settings.presenceEnabled || settings.petPaused) return
+        if (now - lastSideloadAt < SIDELOAD_INTERVAL_MILLIS) return
+        val pkg = PerceptionHub.trail.foreground ?: return
+        if (pkg in settings.excludeApps || pkg == context.packageName) return
+        lastSideloadAt = now
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                val text = ScreenTextCleaner.clean(PerceptionHub.readScreen(), 600).orEmpty()
+                val quote = text.split(Regex("[。！？\\n]")).map { it.trim() }
+                    .firstOrNull { it.length >= 12 }?.take(140)
+                if (quote != null) screenQuoteCache = quote to now
+            }
+        }
+    }
+
+    private fun tickPartnerBusyWatchdog(now: Long) {
+        if (!partner.busy.value) { partnerBusySince = 0L; return }
+        if (partnerBusySince == 0L) { partnerBusySince = now; return }
+        if (now - partnerBusySince < PARTNER_BUSY_TIMEOUT_MILLIS) return
+        partnerWatchdogFired++
+        partnerBusySince = 0L
+        runCatching { partner.cancel() }
+        partner.waiting("上一次生成超时，已强制收尾，马上重试。", now + 5_000)
+    }
+
     private fun presenceTick(now: Long, requested: Boolean = false) {
-        if (partnerSampleJob?.isActive == true || partner.busy.value) return
+        // R0：任何一条提前退出都必须在界面上留下"为什么不说"，否则用户只会看到卡住的"在想"。
+        if (partnerSampleJob?.isActive == true) {
+            android.util.Log.i(DIAG, "proactive blocked: sampleJobActive")
+            partner.waiting("正在准备上一个话题", now + 3_000)
+            return
+        }
+        if (partner.busy.value) {
+            // busy 的终态由 PartnerConversation 自己负责释放；这里只如实报告状态，不重复释放。
+            android.util.Log.i(DIAG, "proactive blocked: partnerBusy")
+            partner.waiting("正在生成上一条话", now + 5_000)
+            return
+        }
         if (!requested && now - lastPresenceEvalAt < 5_000) return
         lastPresenceEvalAt = now
-        if (!settings.presenceEnabled) { partner.waiting("主动陪伴已关闭，可以在设置里开启。", 0); return }
-        if (!partner.readyForAttempt(now, requested)) return
+        if (!settings.presenceEnabled) {
+            android.util.Log.i(DIAG, "proactive blocked: disabled")
+            partner.waiting("主动陪伴已关闭，可以在设置里开启。", 0); return
+        }
+        if (!partner.readyForAttempt(now, requested)) {
+            android.util.Log.i(DIAG, "proactive blocked: notReady")
+            return
+        }
         val signals = partnerSignals(now)
         partner.governor.configureTarget(settings.partnerPerHour)
         val small = TopicCandidate("small-$now", TopicSource.SMALL_TALK, "", observedAt = now)
         val readiness = partner.governor.decide(signals, listOf(small.copy(importance = 3)), requested)
-        if (readiness is GovernorDecision.Silent) { partner.waiting(readiness.reason, readiness.retryAt); return }
+        if (readiness is GovernorDecision.Silent) {
+            android.util.Log.i(DIAG, "proactive blocked: " + readiness.reason + " retryIn=" + (readiness.retryAt - now))
+            partner.waiting(readiness.reason, readiness.retryAt); return
+        }
         partner.markProgress("寻找话题", "正在检查当前文字、未完话题和自己找到的内容。")
         val pkg = PerceptionHub.trail.foreground
         partnerSampleJob = scope.launch {
             try {
+                // R2：主动开口只取**不需要网络**的候选。
+                // 读屏与视觉曾挂在这条链上，导致"要等截图/视觉返回才可能出字"——
+                // 用户等的是网络，不是模型。这里把两者都移出必经路径。
                 val candidates = withContext(Dispatchers.IO) {
                     buildList {
                         add(small)
-                        if (!settings.partnerRiding && pkg != null && pkg !in settings.excludeApps && pkg != context.packageName) {
-                            val text = ScreenTextCleaner.clean(PerceptionHub.readScreen(), 600).orEmpty()
-                            val quote = text.split(Regex("[。！？\\n]" )).map { it.trim() }.firstOrNull { it.length >= 12 }?.take(140)
-                            if (quote != null) add(TopicCandidate("screen-$now", TopicSource.SCREEN_TEXT, quote, observedAt = now,
-                                tooSimilarToRecent = app.ledger.isTooSimilar(quote)))
-                        }
                         app.voiceQueue.next(now) { app.ledger.isTooSimilar(it) }?.let {
                             add(TopicCandidate(it.id, TopicSource.OWN_READING, it.summary, observedAt = it.createdAt))
                         }
                         app.goalStore.activeSummary()?.let { add(TopicCandidate("goal", TopicSource.GOAL_CHECK, it, 2, now,
                             tooSimilarToRecent = app.ledger.isTooSimilar(it))) }
+                        // 屏幕文字用**旁路缓存**（2 分钟内有效），不在这里现场读屏。
+                        screenQuoteCache?.takeIf { now - it.second <= 120_000 }?.let { (quote, at) ->
+                            add(TopicCandidate("screen-cached", TopicSource.SCREEN_TEXT, quote, observedAt = at,
+                                tooSimilarToRecent = app.ledger.isTooSimilar(quote)))
+                        }
                     }
                 }
-                val imageCandidates = if (signals.context in listOf(UsageContext.WATCHING_VIDEO, UsageContext.GAMING) &&
-                    settings.visionUploadEnabled && now - lastVisionAttemptAt >= 3_600_000L / settings.partnerPerHour.coerceIn(5, 40)) {
-                    lastVisionAttemptAt = now
-                    val read = partnerVision.capture("", pkg?.let { label(it) }.orEmpty(), changedOnly = !requested)
-                    val candidate = read.summary?.takeIf { it.confidence.lowercase() in listOf("high", "medium") }
-                        ?.let { VisionTalk.toCandidate("image-${read.at}", it, read.at) }
-                    listOfNotNull(candidate)
-                } else emptyList()
-                partner.proactive(partnerSignals(now()), candidates + imageCandidates + partner.dueThreads(now()), requested) {
+                partner.proactive(partnerSignals(now()), candidates + partner.dueThreads(now()), requested) {
                     val current = partnerSignals(now()).copy(busyReason = partnerBusy())
                     !current.typing && !current.inCall && !current.capturingVoice && !current.sleepHours &&
                         now() >= current.dismissedUntil && !settings.petPaused && partnerBusy() == null &&
                         (active || settings.partnerRiding) && (pkg == PerceptionHub.trail.foreground || settings.partnerRiding)
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
             catch (error: Exception) { partner.markProgress("话题读取失败", "稍后重试：" + error.javaClass.simpleName) }
+            finally {
+                // R0/R2：任务结束必须把引用置空。否则 isActive 会一直为 true，
+                // 后续每次 presenceTick 都在第一行被判成"正在准备上一个话题"而直接退出——
+                // 这是"它几乎不主动说话"最容易踩到的一条自锁。
+                partnerSampleJob = null
+            }
         }
     }
 
@@ -1674,6 +1772,19 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         sessionApp = AssistantApp.fromName(settings.sessionAssistant)
         sessionPkg = settings.sessionPackage.ifBlank { assistants.packageOf(sessionApp) ?: return }
         val startedAt = settings.sessionStartedAt.takeIf { it > 0 } ?: now()
+
+        // 必须自愈：持久化的 session_mode 一旦残留，每次启动都会**复活一个早已结束的会话**，
+        // 而 tick() 的第一道闸门就是「有会话就 return」——于是主动开口整条链路被永久堵死，
+        // 用户看到的现象就是"它什么都说不了"。这里按两条独立条件判定陈旧：
+        // 1) 超过最长可能时长（离开 30 分钟 / 熄屏 15 分钟 / 问询 2 分钟，取 40 分钟上限）；
+        // 2) 进程重启前就已经结束（保存的 startedAt 距现在过久）。
+        val staleMillis = STALE_SESSION_MILLIS
+        if (now() - startedAt > staleMillis) {
+            android.util.Log.i(DIAG, "restoreSession: 丢弃陈旧会话 age=" + (now() - startedAt) + "ms")
+            settings.sessionMode = ""
+            settings.sessionStartedAt = 0L
+            return
+        }
         session = ChatSession(mode, startedAt, sessionApp.sessionPackages(sessionPkg), allowedForSession(), settings.sessionConfig())
         overlay.setInSession(true)
     }
@@ -3332,6 +3443,19 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private fun now() = System.currentTimeMillis()
 
     companion object {
+        /**
+         * 陈旧会话上限：超过这个时长的持久化会话一律丢弃。
+         *
+         * 取 40 分钟 = 最长合法生命周期（离开 30 分钟才结束）再加余量。
+         * 这是防止"死会话堵死主动开口"的兜底，不是业务规则本身。
+         */
+        const val STALE_SESSION_MILLIS = 40 * 60_000L
+        /** 诊断用 tag：只记状态与原因，不记聊天内容、屏幕正文或凭据。 */
+        const val DIAG = "PetProactive"
+        /** R2：旁路采屏的最小间隔。 */
+        const val SIDELOAD_INTERVAL_MILLIS = 20_000L
+        /** R0：伙伴会话 busy 的最大合法时长；超过就强制收尾，避免主动开口被永久关闭。 */
+        const val PARTNER_BUSY_TIMEOUT_MILLIS = 45_000L
         /** 本机提示的占位开场（回话时会按当时上下文重新组装，不发给模型）。 */
         const val LOCAL_NUDGE_MARK = "local-nudge"
         /** “看一眼”成功时气泡的开头；验收脚本靠它区分看图结果和普通搭话。 */

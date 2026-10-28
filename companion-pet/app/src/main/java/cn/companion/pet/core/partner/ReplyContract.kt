@@ -40,6 +40,64 @@ enum class ReplyIntent {
     }
 }
 
+/**
+ * 用户明确要求、且可以由本机执行的**具体动作**。
+ *
+ * 为什么必须是封闭枚举而不是让模型自由发挥：动作会真的操作他的手机，
+ * 只允许这几种**可逆、无副作用**的，且必须由他亲口要求才执行（[ActionIntent]）。
+ */
+enum class PartnerAction(val label: String) {
+    /** 回到上一页（对外部应用执行一次 Back）。 */
+    BACK("返回上一页"),
+    /** 停止当前朗读。 */
+    STOP_SPEAK("停止朗读"),
+    /** 取消正在进行的看图。 */
+    CANCEL_LOOK("取消看图"),
+}
+
+/** 他这句话到底是在**要求动作**，还是只是提到（"回到刚才那个观点"不是动作）。 */
+object ActionIntent {
+    /** 明确否定：出现这些就绝不触发动作。 */
+    private val NEGATIONS = listOf("不想返回", "别返回", "不要返回", "别回去", "不用返回", "不要回去", "别退", "不要退")    /** 出现这些说明在叙述/假设，不是在命令。 */
+    private val CLAUSES = listOf("的时候", "时候", "之后", "以后", "之前", "我昨天", "上次", "如果", "要是")
+
+    /**
+     * 从原话里认出明确要求。认不出就是 null —— **宁可不做，也不误触**。
+     *
+     * 只在句子很短、且是祈使语气时才算，避免"我昨天返回的时候…"被当成命令。
+     */
+    /**
+     * 只在**整句就是在下命令**时才算，避免"我昨天返回的时候很烦"被当成命令。
+     *
+     * 白名单式匹配：去掉标点语气词后，整句必须**等于**或**以命令开头**，
+     * 而不是"句子里出现了返回"就算。误触的代价是乱动他的手机，宁可漏判。
+     */
+    fun detect(text: String): PartnerAction? {
+        val t = text.trim()
+        if (t.isEmpty() || t.length > 12) return null
+        if (NEGATIONS.any { t.contains(it) }) return null        // 从句/叙述语气不是命令："返回的时候顺便看看"是在描述，不是让他按返回。
+        if (CLAUSES.any { t.contains(it) }) return null
+        val bare = t.replace(Regex("[\\s，。！？、；：,.!?;:~～]+"), "")
+
+        fun isCommand(verb: String): Boolean {
+            if (!bare.contains(verb)) return false
+            // 整句以命令词开头，或整句就是一个短命令（≤6 字），才算真的在下命令。
+            return bare.startsWith(verb) || bare.length <= 6
+        }
+
+        if (isCommand("返回") || isCommand("回去") || isCommand("后退") || isCommand("上一页") || isCommand("退回去")) {
+            return PartnerAction.BACK
+        }
+        if (isCommand("停止朗读") || isCommand("别念了") || isCommand("别读了") || isCommand("关闭朗读") || isCommand("停一下朗读")) {
+            return PartnerAction.STOP_SPEAK
+        }
+        if (isCommand("取消看图") || isCommand("别看图了") || isCommand("不要看图")) {
+            return PartnerAction.CANCEL_LOOK
+        }
+        return null
+    }
+}
+
 data class PartnerReply(
     val say: String,
     /** 它这句话抓住的具体点，必须能在锚点或记忆里找到。 */
@@ -50,6 +108,13 @@ data class PartnerReply(
     val newThreadImportance: Int = 1,
     /** 它觉得值得长期记住、但必须先问他的一句话（不会自动写进记忆）。 */
     val memoryProposal: String = "",
+    /**
+     * 这次要执行的本机动作。
+     *
+     * **不由模型决定**，而是由 [ActionIntent] 从他原话里认出来 —— 模型只负责说话，
+     * 不许它自己发明"帮你返回了"这种没发生的事。
+     */
+    val action: PartnerAction? = null,
 )
 
 object ReplyContract {

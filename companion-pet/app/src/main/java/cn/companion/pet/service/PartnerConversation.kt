@@ -1,5 +1,6 @@
 package cn.companion.pet.service
 
+import cn.companion.pet.core.partner.PartnerAction
 import cn.companion.pet.PetApp
 import cn.companion.pet.core.partner.*
 import cn.companion.pet.core.companion.EventKind
@@ -88,7 +89,14 @@ class PartnerConversation(private val app: PetApp) {
     var display: ((String) -> Boolean)? = null
     var displayConfirmed: (suspend (String) -> Boolean)? = null
     var onUserReplied: (() -> Unit)? = null
-    var onReply: ((String) -> Unit)? = null
+    var onReply: ((String) -> Unit)? = null    /**
+     * 执行本机动作。返回 true 表示**已经确认生效**（不是"已发出"）。
+     * 由 PetBrain 接到 DeviceController 上；这里只做路由，不碰无障碍。
+     */
+    var performAction: (suspend (PartnerAction) -> Boolean)? = null
+    /** 最近一次动作的结果：聊天页显示"已返回"/"已请求，未确认"，不混说。 */
+    private val mutableActionStatus = MutableStateFlow("")
+    val actionStatus: StateFlow<String> = mutableActionStatus
     var onMetadata: (() -> Unit)? = null
     var voiceDelivery: (suspend (String) -> Boolean)? = null
     data class Presentation(val id: String, val text: String)
@@ -334,6 +342,27 @@ class PartnerConversation(private val app: PetApp) {
         }
     }
 
+    /**
+     * 执行一次动作，并把**真实结果**写回界面。
+     *
+     * 三种结果分开说，绝不混：
+     * - 执行且确认生效 → "已返回上一页"
+     * - 已请求但拿不到证据 → "已请求，未确认"
+     * - 做不了 → 具体原因
+     */
+    private fun runAction(action: PartnerAction) {
+        val perform = performAction
+        if (perform == null) { mutableActionStatus.value = "这个操作现在用不了：" + action.label; return }
+        scope.launch {
+            val ok = runCatching { perform(action) }.getOrDefault(false)
+            mutableActionStatus.value = if (ok) "已" + action.label else "已请求，未确认（" + action.label + "）"
+            mutableSession.value?.let { sess ->
+                update(rules.add(sess, DialogueTurn(Speaker.PET, mutableActionStatus.value, now(), TurnChannel.REPLY)))
+            }
+            onReply?.invoke(mutableActionStatus.value)
+        }
+    }
+
     fun open() {
         val current = mutableSession.value
         if (current == null || !rules.canResume(current, now())) {
@@ -368,6 +397,8 @@ class PartnerConversation(private val app: PetApp) {
         }
         if (clean.isBlank() || (mutableBusy.value && !proactivePending)) return
         if (proactivePending) cancel()
+        // 先看这句话是不是在要求一个具体动作。是就执行，不让模型把它"说"成已经做过了。
+        ActionIntent.detect(clean)?.let { runAction(it) }
         blocked()?.let { mutableStatus.value = it; return }
         open()
         val s = mutableSession.value ?: return
