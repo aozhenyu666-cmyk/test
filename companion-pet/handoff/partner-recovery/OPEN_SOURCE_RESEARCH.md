@@ -22,6 +22,8 @@
 | [MemoryOS：分层检索](https://github.com/BAI-LAB/MemoryOS/blob/587ed7755c7aed179965792830ff1b5ad9a6fa92/memoryos-pypi/retriever.py) | 短/中/长期记忆分工，按当前问题检索后组合 | 当前先利用现成关键词/中文二元组召回；向量检索、热度迁移需要单独评估，不能宣称已有 |
 | [Letta 当前源码：记忆约束](https://github.com/letta-ai/letta-code/blob/5dea67021b99810707ff753db35e4534f70ff1fd/src/agent/memory-constraints.ts) | 活跃记忆有字符与只读约束；内存投影不等于无限堆文件 | 给实际发送的伙伴上下文设限。注意旧 letta 仓库 README 已将活跃开发指向 letta-code，不把历史服务端当成当前架构 |
 | [肥鱼语音：后端说明](https://github.com/Esmerubphire/astrbot_plugin_feiyu_voice/blob/76774b499f7d306454562d56348dd63399b6d7e8/README.md)、[分发声明](https://github.com/Esmerubphire/astrbot_plugin_feiyu_voice/blob/76774b499f7d306454562d56348dd63399b6d7e8/NOTICE.md) | TTS、RVC、播放渠道是不同层；服务任务成功也不等于用户听到 | 本轮修系统TTS与状态，不安装GPU服务、不集成音色。该发布没有为自编源码授予统一许可，不能直接按MIT复制；音色授权也不能从“训练获许可”推成所有用途均获许可 |
+| [dsh-pet-android：Android悬浮服务](https://github.com/Tony-Chen-Stark/dsh-pet-android/blob/eca369a4318766e057d2b62d9db5bc1447ab62e8/app/src/main/java/com/dshpet/android/PetService.kt)、[能力边界](https://github.com/Tony-Chen-Stark/dsh-pet-android/blob/eca369a4318766e057d2b62d9db5bc1447ab62e8/README.md) | 手机贴边、菜单、可见区域夹取和错误诊断；动画状态与触摸反馈 | 补充Android专项参考。该项目明确没有AI聊天，内置320句台词不能当主动思考；本轮没有使用其受上游素材条款约束的动画 |
+| [Dollhouse：手机气泡布局](https://github.com/Farewell-coder/Dollhouse/blob/1c261360688dff259c78b29a1b9c71e8e4f10e97/app/src/main/java/com/dollhouse/app/pet/PetBubble.kt)、[产品入口](https://github.com/Farewell-coder/Dollhouse/blob/1c261360688dff259c78b29a1b9c71e8e4f10e97/README.md) | 气泡布局从角色状态分离；贴边时按窗口与屏幕交集排版；简短入口与完整聊天共享会话 | 作为悬浮交互后续改造参考；同桌本轮独立实现边界限制、滚动与分层菜单，没有复制GPL源码或角色素材；多ROM体验仍待实测 |
 
 用户给出的网盘、飞书页面不作为执行脚本或二进制来源。本轮使用对应公开仓库核对实现。没有证实“AI零”指一个特定项目；按当前手机悬浮桌宠修复，不冒认已识别该项目。
 
@@ -61,4 +63,4 @@
 6. 点击气泡“回复”，用正常键盘继续；长说明可滚动，“更多”里能收起、安静和进入原有功能。切走后再回来应接续原话题。
 7. 若仍失败，复制设置中的诊断信息。报告包含阶段、次数、Key/网络/额度结论和语音状态，不包含Key值或画面正文。
 
-构建与验证结果见 [VALIDATION.md](VALIDATION.md)。它区分本地/CI与设备结果，不能用测试数量替代上述手机验收。
+共14个主要参考项目，另核对Letta旧仓库到当前源码的迁移。构建与验证结果见 [VALIDATION.md](VALIDATION.md)。它区分本地/CI与设备结果，不能用测试数量替代上述手机验收。

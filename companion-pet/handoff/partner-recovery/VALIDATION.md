@@ -7,7 +7,17 @@
 - 新增13个回归用例；原823个测试保持原样，合计836个JVM测试通过。
 - `PartnerRequestRegressionTest`：实际本地HTTPS + 生产 DeepSeekClient + 生产 PartnerResponder；合法“复习计划”输出不被旧禁词拒绝；相关旧记忆进入实际请求、无关记忆不进入、删除后不返回；明确总结允许结构化长回答，骑行仍限长；施压表达仍需重写；上下文投影限制有效。
 - `ProactiveRecoveryTest`：节奏及重试真实写盘并重建；时刻0的送达不丢；过期/未来回执不重放；人工试聊不绕过通话/打字/睡眠/静音/保护会话；画面变化先于分析、轻微变化过滤、失败不消费画面；气泡位置安全边界。
-- 完整本地检查与GitHub Actions、APK校验结果在构建完成后记于下方。
+- 完整本地检查通过：`:app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest`。Lint无错误，保留既有及少量非阻断警告。没有改动工作流门禁。
+
+## 已发布构建
+
+- 构建源码提交：`7179695600459d649f9e1ef128251c51b0a2bbd5`。随后文档提交只补调研与证据，不替换构建源码。
+- GitHub Actions：[40683280203](https://github.com/aozhenyu666-cmyk/test/actions/runs/40683280203)，结论 **success**。单元测试、lint、应用与测试APK、分支预览发布均通过。
+- [APK下载](https://github.com/aozhenyu666-cmyk/test/releases/download/tongzhuo-preview-claude-r21-strict-takeover/tongzhuo.apk)，**30,914,167 字节**。
+- 已独立下载核算 SHA-256：`2f6a40d2de29cb911930a6fdb67ea868293f8c22b1c7b8b6d6062c98ae0f0c75`，与Release说明和资产digest一致。
+- `aapt dump badging` 确认包名 `cn.companion.pet`、版本 `0.8.5-partner-recovery-preview`、versionCode **45**、minSdk30、targetSdk35。
+- `apksigner verify --print-certs` 通过；证书SHA-256：`9f3a524c66974aeb04045f498f83b5970589f9fba3ac3772e95c26e3524695e0`，沿用既有签名。
+- 手机上如果已经是更高versionCode，系统会拒绝降级；不要为了降级卸载丢数据。
 
 ## 设备与真实服务
 

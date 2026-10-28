@@ -1,6 +1,6 @@
 # 同桌 R21 严格守护接管 — 唯一验收实情表
 
-> 当前版本与构建以末尾“可靠性修复”小节为准；前面的 R21 与伙伴 v1 记录保留为历史证据；下面原有 vc42 记录为历史验收证据。
+> 当前版本与构建以末尾“主动交流恢复”小节为准；前面的 R21、伙伴 v1 与可靠性修复记录保留为历史证据；下面原有 vc42 记录为历史验收证据。
 
 - 分支：`claude/r21-strict-takeover`（与 `ccr-f3b6cf6b-6gsh3f` 同步）
 - **构建源码提交：`1794ed1c9e0b519a387c184852b718682afe055a`**（本文件所在的文档提交不参与构建）
@@ -135,3 +135,14 @@ D02 严格守护动作效果回执仍未修，全部旧 DEVICE 项仍为 NOT_RUN
 - 最终 CI：[40653298790](https://github.com/aozhenyu666-cmyk/test/actions/runs/40653298790)。**成功**：`:app:testDebugUnitTest`、`:app:lintDebug`、`:app:assembleDebug`、`:app:assembleDebugAndroidTest` 与分支预览发布均通过。
 - APK：[主线预览下载](https://github.com/aozhenyu666-cmyk/test/releases/download/tongzhuo-preview-claude-r21-strict-takeover/tongzhuo.apk)。已独立下载复核：**30,848,627 字节**，SHA-256 **`d4295f9fb7f44f5a327c34bca9c65f860eed623888b894b418e4d432bb498af3`**，与 Release 说明及资产 digest 一致。`aapt` 确认 vc44 / 版本名；`apksigner verify` 通过，证书 SHA-256 `9f3a524c66974aeb04045f498f83b5970589f9fba3ac3772e95c26e3524695e0`，沿用原固定测试签名。
 - 签名仍是原固定调试签名，`debuggable=true`；没有真机，全部 DEVICE 项仍为 NOT_RUN。
+
+## 七、主动交流恢复（0.8.5，2026-10-28）
+
+- 用户实测反馈优先于过去的工程评分：主动交流与模块组合尚未被证明可用。本轮检查整条路径，并参考14个相关项目；[源码调研与修复对照](../partner-recovery/OPEN_SOURCE_RESEARCH.md)记录具体提交、采用内容和未完成部分。
+- 构建源码：`7179695600459d649f9e1ef128251c51b0a2bbd5`；版本 **0.8.5-partner-recovery-preview / versionCode 45**。
+- 主要修复：伙伴正常目标用语被旧ContentGuard误拦；HTTP/额度/格式失败原因不清楚；ticker异常可能中断后续调度；屏幕广播漏报；重新唤出没有实际重挂；主动节奏和重试重启丢失；静态屏幕重复占候选与视觉调用；相关召回与角色状态未接入新伙伴请求；解释总结与普通闲聊规则冲突；悬浮菜单、位置和长内容交互。
+- 新增13个回归用例，原823个用例保持原样；**836个，0失败/错误/跳过**。包括实际本地HTTPS+生产模型客户端+回复校验+相关记忆与送达记账的组合测试。没有真实模型调用。
+- [完整CI 40683280203](https://github.com/aozhenyu666-cmyk/test/actions/runs/40683280203) **success**；本地测试、lint、应用APK、测试APK亦通过。工作流门禁未改。
+- 已独立下载[分支APK](https://github.com/aozhenyu666-cmyk/test/releases/download/tongzhuo-preview-claude-r21-strict-takeover/tongzhuo.apk)：**30,914,167字节**；SHA-256 `2f6a40d2de29cb911930a6fdb67ea868293f8c22b1c7b8b6d6062c98ae0f0c75`；与Release与资产digest一致。`aapt`确认vc45，`apksigner`确认原固定签名 `9f3a524c66974aeb04045f498f83b5970589f9fba3ac3772e95c26e3524695e0`。
+- **DEVICE仍全部NOT_RUN**。没有已连接手机、可运行模拟器或真实Key。尚不能宣布实际主动开口、长期存活、声音与多ROM悬浮体验通过；首页新增同一路径“现在聊一句”与逐阶段状态，为设备验收定位断点。
+- 仍是公开调试签名预览包；尚未实现完整人格驱动/目标假设引擎、正文自主阅读或音色服务。[本轮验证及设备步骤](../partner-recovery/VALIDATION.md)。

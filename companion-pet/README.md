@@ -4,7 +4,7 @@
 
 手机上的 AI 伙伴：悬浮气泡负责开场，完整聊天页接着聊；默认用 DeepSeek，可按当前文字、明确允许上传的画面、没聊完的话题和目标主动交流。
 
-当前版本：**0.8.5-partner-recovery-preview（versionCode 45）**，主线为 `claude/r21-strict-takeover`。本轮修复伙伴回复被旧禁词误拦、主动节奏重启丢失、失败原因不可见与悬浮交互问题，并接上相关记忆和角色状态。[开源调研与修复对照](handoff/partner-recovery/OPEN_SOURCE_RESEARCH.md)记录12个参考项目的源码证据、已采用的机制与剩余限制；[本轮验证](handoff/partner-recovery/VALIDATION.md)区分自动化和真机结果。上一轮可靠性修复见 [修复对照表](handoff/reliability-r1/REPAIRS.md)，完整历史见 [验收表](handoff/claude-r21-strict/ACCEPTANCE.md)。这是个人测试用预览包，尚未完成真机验收。
+当前版本：**0.8.5-partner-recovery-preview（versionCode 45）**，主线为 `claude/r21-strict-takeover`。本轮修复伙伴回复被旧禁词误拦、主动节奏重启丢失、失败原因不可见与悬浮交互问题，并接上相关记忆和角色状态。[开源调研与修复对照](handoff/partner-recovery/OPEN_SOURCE_RESEARCH.md)记录14个参考项目的源码证据、已采用的机制与剩余限制；[本轮验证](handoff/partner-recovery/VALIDATION.md)区分自动化和真机结果。上一轮可靠性修复见 [修复对照表](handoff/reliability-r1/REPAIRS.md)，完整历史见 [验收表](handoff/claude-r21-strict/ACCEPTANCE.md)。这是个人测试用预览包，尚未完成真机验收。
 
 - 点气泡“展开聊天”，或首页“和同桌聊”，进入同一份会话。普通聊天没有两轮上限；收起、切走后 30 分钟内可以接着聊，闲置超过 30 分钟结束。
 - 设置 → 陪伴：每小时主动次数 5–40，默认 20。实际频率受睡眠时段、打字、通话、录音、受约束回合、未回应退避和每日模型额度影响。可以直接安静 30 分钟。
