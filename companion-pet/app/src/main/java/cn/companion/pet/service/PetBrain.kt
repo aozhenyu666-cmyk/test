@@ -119,6 +119,8 @@ import cn.companion.pet.net.CallDiagnosis
 import cn.companion.pet.net.CallStatus
 import cn.companion.pet.net.ChatMessage
 import cn.companion.pet.net.ChatRequest
+import cn.companion.pet.net.ChatRole
+import cn.companion.pet.core.life.hasTraceableSource
 import cn.companion.pet.net.ChatResult
 import cn.companion.pet.overlay.BubbleAction
 import cn.companion.pet.overlay.BubbleListener
