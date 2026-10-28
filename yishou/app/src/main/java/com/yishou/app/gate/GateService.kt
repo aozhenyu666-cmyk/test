@@ -229,7 +229,7 @@ class GateService : AccessibilityService() {
                 val awake = getSystemService(android.os.PowerManager::class.java).isInteractive
                 val unlocked = !getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
                 val current = app.settings.app.value
-                awake && unlocked && foregroundPkg == pkg && !app.partner.allows(pkg) &&
+                awake && unlocked && (foregroundPkg == pkg || foregroundPkg == packageName) && !app.partner.allows(pkg) &&
                     (current.groupOf(pkg) == group || (group == GateActivity.WINDOW_GROUP &&
                         WindowClock.active(System.currentTimeMillis(), current, AppZone.zone) != null &&
                         WindowRules.decide(pkg, current, systemAllowed(), System.currentTimeMillis()) != WindowRules.Decision.ALLOW))
