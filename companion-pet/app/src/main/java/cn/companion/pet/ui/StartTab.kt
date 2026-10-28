@@ -194,6 +194,8 @@ fun StartTab(activity: MainActivity, resumeTick: Int, openSettings: (Int) -> Uni
             }
         }
 
+        PartnerStatus(activity)
+
         // 还差的设置：一张小卡，点哪项就去设置里对应的分区。
         val gaps = buildList {
             if (!overlay) add(SetupGap("悬浮窗权限", SETTINGS_PERMISSIONS))

@@ -88,7 +88,9 @@ class PetService : Service() {
                 s.petPaused = !s.petPaused
                 goForeground()
             }
+            ACTION_TRY_PROACTIVE -> (application as PetApp).partner.requestNow()
         }
+        brain?.reveal()
         goForeground()
         return START_STICKY
     }
@@ -160,6 +162,7 @@ class PetService : Service() {
         const val ACTION_QUIET = "cn.companion.pet.QUIET"
         const val ACTION_STOP = "cn.companion.pet.STOP"
         const val ACTION_TOGGLE_PAUSE = "cn.companion.pet.TOGGLE_PAUSE"
+        const val ACTION_TRY_PROACTIVE = "cn.companion.pet.TRY_PROACTIVE"
         private const val CHANNEL = "pet"
         private const val ID = 1
 
@@ -173,6 +176,12 @@ class PetService : Service() {
             if (userAction) settings.userStopped = false
             if (settings.userStopped || !AndroidSettings.canDrawOverlays(context)) return false
             return runCatching { context.startForegroundService(Intent(context, PetService::class.java)) }.isSuccess
+        }
+
+        fun tryProactive(context: Context): Boolean {
+            if (!AndroidSettings.canDrawOverlays(context)) return false
+            (context.applicationContext as PetApp).settings.userStopped = false
+            return runCatching { context.startForegroundService(Intent(context, PetService::class.java).setAction(ACTION_TRY_PROACTIVE)) }.isSuccess
         }
     }
 }

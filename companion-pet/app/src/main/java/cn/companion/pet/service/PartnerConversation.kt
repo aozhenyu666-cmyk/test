@@ -3,7 +3,9 @@ package cn.companion.pet.service
 import cn.companion.pet.PetApp
 import cn.companion.pet.core.partner.*
 import cn.companion.pet.core.companion.EventKind
-import cn.companion.pet.core.probe.ContentGuard
+import cn.companion.pet.core.companion.MemoryRecall
+import cn.companion.pet.core.companion.PetStateStore
+import cn.companion.pet.core.companion.StateEvent
 import cn.companion.pet.data.Stats
 import cn.companion.pet.net.*
 import kotlinx.coroutines.*
@@ -19,6 +21,44 @@ class PartnerConversation(private val app: PetApp) {
     private val writer = Executors.newSingleThreadExecutor { Thread(it, "partner-store").apply { isDaemon = true } }
     private val rules = DialogueRules()
     private val responder = PartnerResponder()
+    private val contextBuilder by lazy { PartnerContext(MemoryRecall(app.events, app.facts)) }
+    private val characterState by lazy { PetStateStore(app.memory.root) }
+    private val cadenceStore by lazy { ProactiveStateStore(app.memory.root) }
+    private var cadence = cadenceStore.load()
+    private val mutableProgress = MutableStateFlow(ProactiveProgress())
+    val progress: StateFlow<ProactiveProgress> = mutableProgress
+    var requestProactive: (() -> Unit)? = null
+    fun requestNow() {
+        val request = requestProactive
+        if (request == null) markProgress("未运行", "先在首页启动桌宠，再试一次。") else request()
+    }
+    fun markProgress(stage: String, detail: String, nextAt: Long = 0) {
+        mutableProgress.value = mutableProgress.value.copy(stage = stage, detail = detail, at = now(), nextAt = nextAt)
+    }
+    fun waiting(reason: String, nextAt: Long) {
+        noteBlocked(reason)
+        if (!mutableBusy.value) markProgress("等待时机", reason, nextAt)
+    }
+    fun readyForAttempt(at: Long, requested: Boolean): Boolean {
+        if (!requested && at < cadence.nextAttemptAt) {
+            markProgress("等待重试", cadence.lastOutcome, cadence.nextAttemptAt)
+            return false
+        }
+        return true
+    }
+    private fun saveCadence() {
+        cadence = governor.snapshot().copy(nextAttemptAt = cadence.nextAttemptAt,
+            consecutiveFailures = cadence.consecutiveFailures, lastOutcome = cadence.lastOutcome,
+            recentObservations = cadence.recentObservations)
+        val snapshot = cadence
+        persist("主动节奏") { check(cadenceStore.save(snapshot)) }
+    }
+    private fun failProactive(reason: String) {
+        cadence = ProactiveRetry.failed(cadence, now(), reason)
+        markProgress("未能开口", reason, cadence.nextAttemptAt)
+        noteBlocked(reason)
+        saveCadence()
+    }
     private val store by lazy { DialogueStore(app.memory.root) }
     private val mutableSession = MutableStateFlow<DialogueSession?>(store.load())
     val session: StateFlow<DialogueSession?> = mutableSession
@@ -61,7 +101,7 @@ class PartnerConversation(private val app: PetApp) {
     fun pageHidden() { pageVisible = false; pageReceipt?.complete(false) }
 
     suspend fun deliver(text: String, threadId: String = ""): Boolean {
-        if (blocked() != null || ContentGuard.violates(text)) return false
+        if (blocked() != null || PartnerLanguage.violates(text)) return false
         if (!pageVisible) {
             open()
             val sessionId = mutableSession.value?.id
@@ -216,6 +256,7 @@ class PartnerConversation(private val app: PetApp) {
     }
 
     val governor = ProactiveGovernor(app.settings.partnerPerHour)
+    init { governor.restore(cadence, now()) }
     private val deliveries by lazy { PartnerDelivery(governor, app.voiceQueue, app.ledger) }
     data class Trace(val at: Long, val source: String, val anchor: String)
     private val mutableShown = MutableStateFlow<List<Trace>>(emptyList())
@@ -225,36 +266,54 @@ class PartnerConversation(private val app: PetApp) {
     var onProactiveShown: ((TopicCandidate) -> Unit)? = null
     fun noteBlocked(reason: String) { mutableBlocked.value = (listOf(reason) + mutableBlocked.value).distinct().take(5) }
 
-    fun proactive(signals: GovernorSignals, candidates: List<TopicCandidate>, stillAllowed: () -> Boolean) {
+    fun proactive(signals: GovernorSignals, candidates: List<TopicCandidate>, requested: Boolean = false, stillAllowed: () -> Boolean) {
         governor.configureTarget(app.settings.partnerPerHour)
         if (mutableBusy.value) return
-        if (lastAttemptAt?.let { signals.now - it < 30_000 } == true) return
-        val decision = governor.decide(signals, candidates)
-        if (decision is GovernorDecision.Silent) { noteBlocked(decision.reason); return }
+        if (!readyForAttempt(signals.now, requested)) return
+        if (!requested && lastAttemptAt?.let { signals.now - it < 30_000 } == true) return
+        val fresh = candidates.filterNot { !requested && ObservationFingerprint.screen(it) && ObservationFingerprint.of(it) in cadence.recentObservations }
+        val decision = governor.decide(signals, fresh, requested)
+        if (decision is GovernorDecision.Silent) { waiting(decision.reason, decision.retryAt); return }
         val candidate = (decision as GovernorDecision.Speak).candidate
         lastAttemptAt = signals.now
         proactivePending = true
         val expected = ++revision
         mutableBusy.value = true
+        mutableProgress.value = mutableProgress.value.copy(attempts = mutableProgress.value.attempts + 1)
+        markProgress("正在想", "已经选好" + sourceLabel(candidate.source) + "，正在生成一句话。")
+        cadence = cadence.copy(nextAttemptAt = now() + 120_000L, lastOutcome = "上次生成尚未完成，等待恢复。")
+        saveCadence()
         job = scope.launch {
             try {
                 val version = withContext(Dispatchers.IO) { memoryVersion() }
-                val key = withContext(Dispatchers.IO) { app.apiKey() } ?: run { noteBlocked("还没配置对话模型"); return@launch }
+                val key = withContext(Dispatchers.IO) { app.apiKey() } ?: run { failProactive("还没配置对话模型的 API Key"); return@launch }
                 val input = withContext(Dispatchers.IO) { replyInput("", true, candidate) }
-                val reply = generate(input, key) ?: run { noteBlocked("回答不符合说话规则或调用失败"); return@launch }
-                if (expected != revision || !stillAllowed() || version != withContext(Dispatchers.IO) { memoryVersion() }) return@launch
-                if (candidate.source in listOf(TopicSource.SCREEN_TEXT, TopicSource.SCREEN_IMAGE) && now() - candidate.observedAt > 120_000) return@launch
-                if (app.ledger.isTooSimilar(reply.say)) { noteBlocked("和刚说过的太像"); return@launch }
+                val reply = generate(input, key) ?: run { failProactive("模型两次回复都没通过说话规则；本次没有显示。"); return@launch }
+                if (expected != revision) return@launch
+                if (!stillAllowed() || version != withContext(Dispatchers.IO) { memoryVersion() }) {
+                    markProgress("等待时机", "生成期间场景或记忆变了，已取消这句话。"); return@launch
+                }
+                if (candidate.source in listOf(TopicSource.SCREEN_TEXT, TopicSource.SCREEN_IMAGE) && now() - candidate.observedAt > 120_000) {
+                    markProgress("等待时机", "画面内容已过期，等待新内容。"); return@launch
+                }
+                if (app.ledger.isTooSimilar(reply.say)) { failProactive("和刚说过的太像，稍后换个话题。"); return@launch }
+                markProgress("准备开口", "正在等待悬浮气泡或语音的实际回执。")
                 val delivered = if (app.settings.partnerRiding) {
                     val spoken = voiceDelivery?.invoke(reply.say) == true
                     if (spoken) { open(); mutableSession.value?.let { update(rules.add(it.copy(threadId = candidate.threadId), DialogueTurn(Speaker.PET, reply.say, now(), TurnChannel.PROACTIVE))) } }
                     spoken
                 } else deliver(reply.say, candidate.threadId)
-                if (delivered) {
+                if (delivered && expected == revision) {
                     anchor = candidate.anchor
                     anchorSource = candidate.source
                     val at = now()
                     deliveries.confirm(expected.toString(), candidate, reply.say, at, delivered = true)
+                    cadence = ProactiveRetry.success(cadence)
+                    if (ObservationFingerprint.screen(candidate)) cadence = cadence.copy(
+                        recentObservations = (cadence.recentObservations + ObservationFingerprint.of(candidate)).distinct().takeLast(64))
+                    saveCadence()
+                    mutableProgress.value = mutableProgress.value.copy(delivered = mutableProgress.value.delivered + 1)
+                    markProgress("已开口", "这句话已" + (if (app.settings.partnerRiding) "播出" else "显示") + "，正在等你接话。")
                     mutableShown.value = (listOf(Trace(at, candidate.source.name, candidate.anchor.take(100))) + mutableShown.value).take(5)
                     followedUp(candidate)
                     retainQuotedMaterial(candidate, reply)
@@ -267,10 +326,10 @@ class PartnerConversation(private val app: PetApp) {
                     }
                     onProactiveShown?.invoke(candidate)
                     if (app.settings.ttsEnabled && !app.settings.partnerRiding) app.speech.say(reply.say)
-                } else noteBlocked("输出界面未显示")
+                } else failProactive("输出界面未显示；请检查悬浮窗权限，或打开完整聊天后再试。")
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                if (expected == revision) noteBlocked("主动交流暂时失败：" + error.javaClass.simpleName)
+                if (expected == revision) failProactive(if (error is PartnerCallFailure) error.message.orEmpty() else "主动交流暂时失败：" + error.javaClass.simpleName)
             } finally { if (expected == revision) { proactivePending = false; mutableBusy.value = false } }
         }
     }
@@ -314,6 +373,7 @@ class PartnerConversation(private val app: PetApp) {
         val s = mutableSession.value ?: return
         update(rules.add(s, DialogueTurn(Speaker.USER, clean, now(), channel, uncertain)))
         governor.onUserReplied()
+        saveCadence()
         onUserReplied?.invoke()
         val expected = ++revision
         mutableBusy.value = true
@@ -323,6 +383,7 @@ class PartnerConversation(private val app: PetApp) {
                 val inputVersion = withContext(Dispatchers.IO) {
                     synchronized(app.memoryLock) {
                         lastUserEventId = app.events.append(EventKind.USER_INPUT, clean, source = "partner", conversationId = s.id).id
+                        characterState.apply(StateEvent.USER_REPLIED)
                         memoryVersion()
                     }
                 }
@@ -346,11 +407,13 @@ class PartnerConversation(private val app: PetApp) {
                 onMetadata?.invoke()
                 mutableBusy.value = false
                 mutableStatus.value = ""
-                compact(key)
+                try { compact(key) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { mutableStatus.value = "回复已保留；早期对话摘要稍后再整理。" }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
                 if (expected == revision) {
-                    mutableStatus.value = "这次处理没有完成，你刚才的话还在，可以重试。"
+                    mutableStatus.value = if (error is PartnerCallFailure) error.message.orEmpty() else "这次处理没有完成，你刚才的话还在，可以重试。"
                     noteBlocked("回应暂时失败：" + error.javaClass.simpleName)
                 }
             } finally { if (expected == revision) {
@@ -361,16 +424,22 @@ class PartnerConversation(private val app: PetApp) {
     }
 
     private suspend fun replyInput(userText: String, proactive: Boolean, candidate: TopicCandidate? = null): ReplyInput = synchronized(app.memoryLock) {
-        val visibility = cn.companion.pet.core.companion.EventVisibility(app.events.all(), app.memory.tombstones())
-        val memories = app.facts.live().filter { visibility.allows(it) }.takeLast(12).associate { it.id to ((if (it.confidence == cn.companion.pet.core.companion.Confidence.GUESSED) "尚未确认的推测：" else "你说过：") + it.text) }
+        val query = if (userText.isNotBlank()) userText else candidate?.anchor.orEmpty()
+        val memories = contextBuilder.memories(query, now(), app.memory.tombstones(), setOf(lastUserEventId))
         ReplyInput(candidate?.anchor ?: listOf(anchor, userText).filter { it.isNotBlank() }.joinToString("\n"),
             candidate?.source ?: if (anchor.isNotBlank()) anchorSource else TopicSource.THREAD_FOLLOW_UP,
-            memories, voiceOnly = app.settings.partnerRiding, proactive = proactive)
+            memories, voiceOnly = app.settings.partnerRiding, proactive = proactive,
+            intent = if (proactive) ReplyIntent.CHAT else ReplyIntent.from(userText))
     }
 
     private suspend fun generate(input: ReplyInput, key: String): PartnerReply? {
         val persona = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { app.memory.persona() } }
-        return responder.respond(input, persona, mutableSession.value?.let { rules.contextLines(it) }.orEmpty()) { request(it, key) }
+        val state = withContext(Dispatchers.IO) { characterState.summary(characterState.current()) }
+        val s = mutableSession.value
+        val thread = s?.threadId?.let { book.get(it) }?.takeIf { it.status != ThreadStatus.CLOSED }
+        val context = PartnerContext.project(s?.let { rules.contextLines(it) }.orEmpty(), state,
+            thread?.let { it.title + "；最近原话：" + it.lastProgress }.orEmpty())
+        return responder.respond(input, persona, context) { request(it, key, if (input.intent == ReplyIntent.CHAT) 600 else 1800) }
     }
 
     private fun appendReply(text: String) {
@@ -390,9 +459,12 @@ class PartnerConversation(private val app: PetApp) {
     }
 
     private suspend fun request(messages: List<ChatMessage>, key: String, tokens: Int = 600): String? {
-        if (!app.budget.reserve(app.settings.dailyLimit, LocalDate.now().toString())) return null
+        if (!app.budget.reserve(app.settings.dailyLimit, LocalDate.now().toString())) throw PartnerCallFailure("今天的模型调用额度已用完；可以在设置里调整每日额度。")
         app.stats.add(Stats.Kind.API_CALLS)
-        return (app.client.complete(ChatRequest(app.settings.endpoint, app.settings.model, key, messages, maxTokens = tokens, timeoutMillis = 30_000)) as? ChatResult.Success)?.content
+        return when (val result = app.client.complete(ChatRequest(app.settings.endpoint, app.settings.model, key, messages, maxTokens = tokens, timeoutMillis = 30_000))) {
+            is ChatResult.Success -> result.content
+            is ChatResult.Failure -> throw PartnerCallFailure(CallDiagnosis.describe(result))
+        }
     }
 
     private suspend fun compact(key: String?) {
@@ -415,4 +487,10 @@ class PartnerConversation(private val app: PetApp) {
         app.facts.versionHash() + app.materialInbox.versionHash() + app.memory.tombstones().sorted().joinToString("|")
     }
     private fun now() = System.currentTimeMillis()
+    private fun sourceLabel(source: TopicSource): String = when (source) {
+        TopicSource.SCREEN_TEXT -> "屏幕上的文字"; TopicSource.SCREEN_IMAGE -> "当前画面"
+        TopicSource.THREAD_FOLLOW_UP -> "之前没聊完的事"; TopicSource.GOAL_CHECK -> "你的目标"
+        TopicSource.OWN_READING -> "自己找到的内容"; TopicSource.SMALL_TALK -> "一个闲聊话题"
+    }
+    private class PartnerCallFailure(message: String) : Exception(message)
 }

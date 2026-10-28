@@ -4,6 +4,7 @@ import cn.companion.pet.PetApp
 import cn.companion.pet.a11y.PerceptionHub
 import cn.companion.pet.a11y.ScreenCaptureGateway
 import cn.companion.pet.core.partner.VisionTalk
+import cn.companion.pet.core.partner.FrameChangeGate
 import cn.companion.pet.core.vision.*
 import cn.companion.pet.data.Stats
 import kotlinx.coroutines.Dispatchers
@@ -13,8 +14,9 @@ import java.util.concurrent.Executors
 
 /** Question-aware, memory-only screenshots. Explicit upload permission applies to every call. */
 class PartnerVision(private val app: PetApp) {
+    private val changes = FrameChangeGate()
     data class Read(val summary: VisionSummary? = null, val error: String = "", val at: Long = System.currentTimeMillis(), val packageName: String = "")
-    suspend fun capture(question: String, context: String): Read = withContext(Dispatchers.IO) {
+    suspend fun capture(question: String, context: String, changedOnly: Boolean = false): Read = withContext(Dispatchers.IO) {
         if (!app.settings.visionUploadEnabled) return@withContext Read(error = "看图上传未开启，可在设置 → 模型与看图中打开。")
         val setup = app.visionSetup()
         if (!setup.ready) return@withContext Read(error = "看图还没配好：" + setup.label())
@@ -29,10 +31,24 @@ class PartnerVision(private val app: PetApp) {
             return@withContext Read(error = "没有截到画面：" + attempt.error.ifBlank { attempt.status.name })
         }
         if (attempt.packageName in app.settings.excludeApps || attempt.packageName == app.packageName || active != attempt.packageName) return@withContext Read(error = "页面已经切换，这次画面没有上传。")
+        val grid = if (changedOnly) luminance(image) else null
+        if (grid != null && !changes.changed(attempt.packageName, grid)) return@withContext Read(error = "画面没有明显变化，本次没有上传或调用模型。")
         if (!app.budget.reserve(app.settings.dailyLimit, LocalDate.now().toString())) return@withContext Read(error = "今天的模型调用次数用完了。")
         app.stats.add(Stats.Kind.API_CALLS)
         val run = app.visionAnalyzer.analyzeDetailed(image, attempt.width, attempt.height, VisionTalk.prompt(question, context))
         app.visionEvidence.record(run.evidence)
+        if (run.summary != null && grid != null) changes.analyzed(attempt.packageName, grid)
         Read(run.summary, if (run.summary == null) "看图调用没有得到可用结果：" + run.evidence.failure else "", packageName = attempt.packageName)
+    }
+
+    private fun luminance(jpeg: ByteArray): IntArray? {
+        val decoded = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return null
+        val small = android.graphics.Bitmap.createScaledBitmap(decoded, 16, 16, true)
+        return try {
+            IntArray(256) { i ->
+                val pixel = small.getPixel(i % 16, i / 16)
+                (android.graphics.Color.red(pixel) * 299 + android.graphics.Color.green(pixel) * 587 + android.graphics.Color.blue(pixel) * 114) / 1000
+            }
+        } finally { if (small !== decoded) small.recycle(); decoded.recycle() }
     }
 }

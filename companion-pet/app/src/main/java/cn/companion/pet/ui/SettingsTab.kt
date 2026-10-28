@@ -337,6 +337,7 @@ private fun CompanionSettings(context: Context) {
     val scope = rememberCoroutineScope()
     fun toast(t: String) = Toast.makeText(context, t, Toast.LENGTH_SHORT).show()
     Section("本机主动陪伴（实验）")
+    PartnerStatus(context)
     var presenceOn by remember { mutableStateOf(s.presenceEnabled) }
     Toggle("主动陪伴",
         "围绕屏幕原句、画面和没聊完的事主动找你聊。没回应时放慢，但不会因此停止；打字、通话、录音和睡眠时段保持安静。",

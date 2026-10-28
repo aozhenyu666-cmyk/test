@@ -8,6 +8,8 @@ import android.speech.tts.UtteranceProgressListener
 import cn.companion.pet.core.action.SpeechPort
 import java.util.Locale
 import java.util.UUID
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /** One lazily initialized engine; state is confined to the main looper. */
 class Speech(private val context: Context) : SpeechPort {
@@ -18,6 +20,9 @@ class Speech(private val context: Context) : SpeechPort {
     private var generation = 0
     private var pending: Pending? = null
     private var speakingId: String? = null
+    private val mutableStatus = MutableStateFlow("还没有播报")
+    val status: StateFlow<String> = mutableStatus
+    var onPlayback: ((Boolean) -> Unit)? = null
     private val cancelledIds = LinkedHashSet<String>()
     private data class Lifecycle(val started: () -> Unit, val finished: (Boolean) -> Unit)
     private val lifecycles = mutableMapOf<String, Lifecycle>()
@@ -29,7 +34,10 @@ class Speech(private val context: Context) : SpeechPort {
     }
 
     private val progress = object : UtteranceProgressListener() {
-        override fun onStart(id: String?) { handler.post { lifecycles[id]?.started?.invoke() } }
+        override fun onStart(id: String?) { handler.post {
+            if (speakingId == id) { mutableStatus.value = "正在朗读"; onPlayback?.invoke(true) }
+            lifecycles[id]?.started?.invoke()
+        } }
         override fun onDone(id: String?) { complete(id, true) }
         @Deprecated("Legacy TTS callback")
         override fun onError(id: String?) { complete(id, false) }
@@ -37,7 +45,11 @@ class Speech(private val context: Context) : SpeechPort {
         override fun onStop(id: String?, interrupted: Boolean) { complete(id, false) }
     }
     private fun complete(id: String?, ok: Boolean) { handler.post {
-        if (speakingId == id) speakingId = null
+        if (speakingId == id) {
+            speakingId = null
+            mutableStatus.value = if (ok) "系统报告朗读完成" else "朗读中断或失败，可以检查系统中文语音引擎"
+            onPlayback?.invoke(false)
+        }
         lifecycles.remove(id)?.finished?.invoke(ok)
     } }
 
@@ -46,10 +58,13 @@ class Speech(private val context: Context) : SpeechPort {
         while (cancelledIds.size > 2048) cancelledIds.remove(cancelledIds.first())
     }
 
-    fun say(text: String) = submit(text, UUID.randomUUID().toString()) { _, _ -> }
+    fun say(text: String) = submit(text, UUID.randomUUID().toString()) { accepted, reason ->
+        if (!accepted) mutableStatus.value = reason
+    }
 
     override fun submit(text: String, id: String, receipt: (Boolean, String) -> Unit) {
         handler.post {
+            mutableStatus.value = "正在准备语音"
             if (id in cancelledIds) { receipt(false, "播报已取消"); return@post }
             val next = Pending(text, id, receipt)
             if (ready) { speakNow(next); return@post }
@@ -83,6 +98,7 @@ class Speech(private val context: Context) : SpeechPort {
         speakingId?.takeIf { it != item.id }?.let { lifecycles.remove(it)?.finished?.invoke(false) }
         val code = runCatching { tts?.speak(item.text, TextToSpeech.QUEUE_FLUSH, null, item.id) }.getOrNull()
         speakingId = if (code == TextToSpeech.SUCCESS) item.id else null
+        if (code != TextToSpeech.SUCCESS) { mutableStatus.value = "系统 TTS 拒绝播报"; onPlayback?.invoke(false) }
         item.receipt(code == TextToSpeech.SUCCESS,
             if (code == TextToSpeech.SUCCESS) "系统 TTS 已接受播报（不代表已播放完成）" else "系统 TTS 拒绝了本次播报")
     }
@@ -105,6 +121,8 @@ class Speech(private val context: Context) : SpeechPort {
             pending = null
             speakingId?.let { markCancelled(it) }
             runCatching { tts?.stop() }; speakingId = null
+            mutableStatus.value = "已停止朗读"
+            onPlayback?.invoke(false)
             if (!ready) { generation++; runCatching { tts?.shutdown() }; tts = null }
         }
     }

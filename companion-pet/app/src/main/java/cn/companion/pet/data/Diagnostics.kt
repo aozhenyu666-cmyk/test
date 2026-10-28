@@ -69,6 +69,12 @@ object Diagnostics {
         }.getOrNull()
         append("电池不受限制：").append(battery?.toString() ?: "未知").append('\n')
         (context.applicationContext as? cn.companion.pet.PetApp)?.let { app ->
+            val partner = app.partner.progress.value
+            append("主动交流：").append(partner.stage).append(" · ").append(partner.detail).append('\n')
+            append("本次运行主动尝试/确认送达：").append(partner.attempts).append('/').append(partner.delivered).append('\n')
+            append("主动陪伴开启：").append(app.settings.presenceEnabled)
+                .append("；暂停：").append(app.settings.petPaused).append("；朗读：").append(app.settings.ttsEnabled).append('\n')
+            append("语音状态：").append(app.speech.status.value).append('\n')
             runCatching { app.visionSetup().label() }.getOrNull()?.let { append("看图状态：").append(it).append('\n') }
             runCatching { app.visionEvidence.last()?.label() }.getOrNull()?.let { append("上次看一眼：").append(it).append('\n') }
             runCatching { app.executionHealth?.invoke() }.getOrNull()?.let { append("拦截执行路径：").append(it).append('\n') }

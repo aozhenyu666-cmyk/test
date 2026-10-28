@@ -329,8 +329,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private var closeRunnable: Runnable? = null
     private val ticker = object : Runnable {
         override fun run() {
-            tick()
-            handler.postDelayed(this, 1000)
+            try { tick() }
+            catch (error: Exception) { partner.markProgress("调度暂时出错", "正在恢复：" + error.javaClass.simpleName) }
+            finally { handler.postDelayed(this, 1000) }
         }
     }
 
@@ -339,6 +340,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             !settings.partnerRiding && cn.companion.pet.core.training.ScopedOutputPolicy.allows(protectedOutputOwner(), owner, priority, outputArbiter)
         }
         partner.look = { question -> lookOnce(question) }
+        speech.onPlayback = { playing -> overlay.setTalking(playing) }
+        partner.requestProactive = { handler.post { presenceTick(now(), requested = true) } }
         partner.blocked = { partnerBusy() }
         partner.display = { text -> showPartnerBubble(text) }
         partner.displayConfirmed = { text ->
@@ -411,6 +414,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         partner.away()
         partner.cancel()
         partner.look = null
+        speech.onPlayback = null
+        partner.requestProactive = null
+        partner.markProgress("已停止", "桌宠已停止，启动后恢复主动交流。")
         partner.display = null
         partner.displayConfirmed = null
         partner.onReply = null
@@ -501,6 +507,19 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun tick() {
         val now = now()
+        // Broadcasts can be lost on some ROMs. Reconcile with the actual screen/lock state.
+        val actualActive = isUserActive()
+        if (actualActive != active) { if (actualActive) onUserPresent() else onScreenOff() }
+        if (now - lastOverlayCheckAt >= 5_000) {
+            lastOverlayCheckAt = now
+            overlay.show()
+            overlay.setCompanionStatus(when {
+                settings.petPaused || now < settings.partnerQuietUntil || scheduler.isQuiet(now) -> "安静"
+                partner.busy.value -> "在想"
+                partner.progress.value.stage == "未能开口" || partner.progress.value.stage == "等待重试" -> "待恢复"
+                else -> "在呢"
+            })
+        }
         partner.tick()
         // 守护按秒推进（到期、宽限、重试），不受下面任何提前 return 影响；熄屏/锁屏时不拉回。
         runCatching { focusController.tick(interactive = active && (!focusActive || !callInProgress())) }
@@ -541,7 +560,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             if (!partner.busy.value && settings.presenceEnabled) presenceTick(now)
             return
         }
-        if (!active) return
+        if (!active) { partner.waiting("锁屏时保持安静", now + 15_000); return }
         // 正在“想一想”或记念头：不插嘴；放着不管 3 分钟就收起
         if (think != null || noteDraft != null) {
             val since = think?.touchedAt ?: noteDraft!!.startedAt
@@ -554,7 +573,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         if (maybeAutoStartSession(now)) return
 
         convo?.let { escalate(it, now); return }
-        if (probeJob?.isActive == true || settings.petPaused) return
+        if (probeJob?.isActive == true || settings.petPaused) {
+            if (settings.petPaused) partner.waiting("你暂停了陪伴，点继续后恢复。", now + 15_000)
+            return
+        }
         // 忙时错过的积压事件，空闲后补扫一次；不是每 tick 都做模型请求。
         if (settings.agentAutonomy && now - lastAgentScanAt > 5_000) handler.post(agentTrigger)
 
@@ -848,6 +870,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
      */
     private val partnerVision by lazy { PartnerVision(app) }
     private var lastVisionAttemptAt = 0L
+    private var lastOverlayCheckAt = 0L
     private var partnerSampleJob: Job? = null
     private val partnerCategories = mutableMapOf<String, Int>()
     private fun partnerContext(): UsageContext {
@@ -887,48 +910,57 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             })
     }
 
-    private fun presenceTick(now: Long) {
-        if (now - lastPresenceEvalAt < 5_000 || partnerSampleJob?.isActive == true) return
+    private fun presenceTick(now: Long, requested: Boolean = false) {
+        if (partnerSampleJob?.isActive == true || partner.busy.value) return
+        if (!requested && now - lastPresenceEvalAt < 5_000) return
         lastPresenceEvalAt = now
+        if (!settings.presenceEnabled) { partner.waiting("主动陪伴已关闭，可以在设置里开启。", 0); return }
+        if (!partner.readyForAttempt(now, requested)) return
         val signals = partnerSignals(now)
         partner.governor.configureTarget(settings.partnerPerHour)
         val small = TopicCandidate("small-$now", TopicSource.SMALL_TALK, "", observedAt = now)
-        val readiness = partner.governor.decide(signals, listOf(small.copy(importance = 3)))
-        if (readiness is GovernorDecision.Silent) { partner.noteBlocked(readiness.reason); return }
+        val readiness = partner.governor.decide(signals, listOf(small.copy(importance = 3)), requested)
+        if (readiness is GovernorDecision.Silent) { partner.waiting(readiness.reason, readiness.retryAt); return }
+        partner.markProgress("寻找话题", "正在检查当前文字、未完话题和自己找到的内容。")
         val pkg = PerceptionHub.trail.foreground
         partnerSampleJob = scope.launch {
-            val candidates = withContext(Dispatchers.IO) {
-                buildList {
-                    add(small)
-                    if (!settings.partnerRiding && pkg != null && pkg !in settings.excludeApps && pkg != context.packageName) {
-                        val text = ScreenTextCleaner.clean(PerceptionHub.readScreen(), 600).orEmpty()
-                        val quote = text.split(Regex("[。！？\\n]" )).map { it.trim() }.firstOrNull { it.length >= 12 }?.take(140)
-                        if (quote != null) add(TopicCandidate("screen-$now", TopicSource.SCREEN_TEXT, quote, observedAt = now,
-                            tooSimilarToRecent = app.ledger.isTooSimilar(quote)))
+            try {
+                val candidates = withContext(Dispatchers.IO) {
+                    buildList {
+                        add(small)
+                        if (!settings.partnerRiding && pkg != null && pkg !in settings.excludeApps && pkg != context.packageName) {
+                            val text = ScreenTextCleaner.clean(PerceptionHub.readScreen(), 600).orEmpty()
+                            val quote = text.split(Regex("[。！？\\n]" )).map { it.trim() }.firstOrNull { it.length >= 12 }?.take(140)
+                            if (quote != null) add(TopicCandidate("screen-$now", TopicSource.SCREEN_TEXT, quote, observedAt = now,
+                                tooSimilarToRecent = app.ledger.isTooSimilar(quote)))
+                        }
+                        app.voiceQueue.next(now) { app.ledger.isTooSimilar(it) }?.let {
+                            add(TopicCandidate(it.id, TopicSource.OWN_READING, it.summary, observedAt = it.createdAt))
+                        }
+                        app.goalStore.activeSummary()?.let { add(TopicCandidate("goal", TopicSource.GOAL_CHECK, it, 2, now,
+                            tooSimilarToRecent = app.ledger.isTooSimilar(it))) }
                     }
-                    app.voiceQueue.next(now) { app.ledger.isTooSimilar(it) }?.let {
-                        add(TopicCandidate(it.id, TopicSource.OWN_READING, it.summary, observedAt = it.createdAt))
-                    }
-                    app.goalStore.activeSummary()?.let { add(TopicCandidate("goal", TopicSource.GOAL_CHECK, it, 2, now,
-                        tooSimilarToRecent = app.ledger.isTooSimilar(it))) }
                 }
-            }
-            val imageCandidates = if (signals.context in listOf(UsageContext.WATCHING_VIDEO, UsageContext.GAMING) &&
-                settings.visionUploadEnabled && now - lastVisionAttemptAt >= 3_600_000L / settings.partnerPerHour.coerceIn(5, 40)) {
-                lastVisionAttemptAt = now
-                val read = partnerVision.capture("", pkg?.let { label(it) }.orEmpty())
-                val candidate = read.summary?.takeIf { it.confidence.lowercase() in listOf("high", "medium") }
-                    ?.let { VisionTalk.toCandidate("image-${read.at}", it, read.at) }
-                listOfNotNull(candidate)
-            } else emptyList()
-            partner.proactive(partnerSignals(now()), candidates + imageCandidates + partner.dueThreads(now())) {
-                val current = partnerSignals(now()).copy(busyReason = partnerBusy())
-                !current.typing && !current.inCall && !current.capturingVoice && !current.sleepHours &&
-                    now() >= current.dismissedUntil && !settings.petPaused && partnerBusy() == null &&
-                    (active || settings.partnerRiding) && (pkg == PerceptionHub.trail.foreground || settings.partnerRiding)
-            }
+                val imageCandidates = if (signals.context in listOf(UsageContext.WATCHING_VIDEO, UsageContext.GAMING) &&
+                    settings.visionUploadEnabled && now - lastVisionAttemptAt >= 3_600_000L / settings.partnerPerHour.coerceIn(5, 40)) {
+                    lastVisionAttemptAt = now
+                    val read = partnerVision.capture("", pkg?.let { label(it) }.orEmpty(), changedOnly = !requested)
+                    val candidate = read.summary?.takeIf { it.confidence.lowercase() in listOf("high", "medium") }
+                        ?.let { VisionTalk.toCandidate("image-${read.at}", it, read.at) }
+                    listOfNotNull(candidate)
+                } else emptyList()
+                partner.proactive(partnerSignals(now()), candidates + imageCandidates + partner.dueThreads(now()), requested) {
+                    val current = partnerSignals(now()).copy(busyReason = partnerBusy())
+                    !current.typing && !current.inCall && !current.capturingVoice && !current.sleepHours &&
+                        now() >= current.dismissedUntil && !settings.petPaused && partnerBusy() == null &&
+                        (active || settings.partnerRiding) && (pkg == PerceptionHub.trail.foreground || settings.partnerRiding)
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (error: Exception) { partner.markProgress("话题读取失败", "稍后重试：" + error.javaClass.simpleName) }
         }
     }
+
+    fun reveal() { overlay.show(); overlay.retreat() }
 
     /** 微反应：只换表情/做一个已有的小动作，2.5 秒后回到平常；不震动、不说话。 */
     private fun playMicro(d: cn.companion.pet.core.presence.PresenceDecision) {
@@ -1327,14 +1359,23 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private fun partnerBubbleSpec(text: String, menu: Boolean): BubbleSpec {
         val proposal = partner.proposal.value
         val body = text + (proposal?.let { "\n要我记住吗：" + it.text } ?: "")
-        return BubbleSpec(body, showMic = systemVoice, showGemini = false, instant = true,
-            extra = listOf(
-                BubbleAction("展开聊天", highlighted = true) { overlay.hideBubble(); cn.companion.pet.ui.ChatActivity.open(context) },
-                BubbleAction("安静 30 分钟") { settings.partnerQuietUntil = now() + 30 * 60_000L; partner.away(); app.stopSpeech(); overlay.hideBubble() },
+        return BubbleSpec(body, showMic = false, showGemini = false, instant = true,
+            caption = "同桌 · " + if (partner.progress.value.stage == "准备开口") "主动聊起" else "接着聊",
+            actions = listOf(
+                BubbleAction("回复", highlighted = true) { overlay.openBubbleInput() },
+                BubbleAction("展开聊天") { overlay.hideBubble(); cn.companion.pet.ui.ChatActivity.open(context) },
+                BubbleAction(if (menu) "收起" else "更多") { if (menu) { partner.away(); overlay.hideBubble() } else showPartnerBubble(text, menu = true) },
             ) + (proposal?.let { listOf(
                 BubbleAction("记住") { partner.answerMemory(true); showPartnerBubble(text) },
                 BubbleAction("这次不记") { partner.answerMemory(false); showPartnerBubble(text) },
             ) } ?: emptyList()) + if (menu) listOf(
+                BubbleAction("现在聊一句") { overlay.hideBubble(); partner.requestNow() },
+                BubbleAction(if (settings.ttsEnabled) "关闭朗读" else "开启朗读") {
+                    settings.ttsEnabled = !settings.ttsEnabled
+                    if (!settings.ttsEnabled) app.stopSpeech()
+                    showPartnerBubble(text, menu = true)
+                },
+                BubbleAction("安静 30 分钟") { settings.partnerQuietUntil = now() + 30 * 60_000L; partner.away(); app.stopSpeech(); overlay.hideBubble() },
                 BubbleAction("开始陪练") { partner.away(); openTraining() },
                 BubbleAction("想一想") { partner.away(); openThinkMenu() },
                 BubbleAction("记个念头") { partner.away(); startNote() },

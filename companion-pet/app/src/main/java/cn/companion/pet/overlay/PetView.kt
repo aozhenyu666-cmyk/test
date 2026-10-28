@@ -43,6 +43,8 @@ class PetView(context: Context) : View(context) {
     /** 角色在屏幕右边时朝左看，反之朝右。 */
     var facingLeft = true
         set(value) { field = value; invalidate() }
+    var companionStatus: String = "在呢"
+        set(value) { if (field != value) { field = value; invalidate() } }
 
     private var attentionUntil = 0L
     private var running = false
@@ -152,6 +154,13 @@ class PetView(context: Context) : View(context) {
         canvas.restore()
 
         drawOverhead(canvas, cx, top, s, t)
+        if (!talking && !listening && !inSession) {
+            paper.color = Color.rgb(247, 243, 234)
+            rect.set(s * 0.23f, 0f, s * 0.77f, s * 0.19f)
+            canvas.drawRoundRect(rect, s * 0.09f, s * 0.09f, paper)
+            text.textSize = s * 0.12f
+            canvas.drawText(companionStatus, cx, s * 0.135f, text)
+        }
         if (inSession) {
             val bx = s * 0.16f
             val by = s * 0.16f

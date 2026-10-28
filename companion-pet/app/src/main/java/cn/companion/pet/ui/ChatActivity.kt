@@ -101,6 +101,8 @@ private fun ChatPage(app: PetApp, back: () -> Unit, listen: () -> Unit) {
             TextButton(onClick = { partner.close(); text = "" }) { Text("结束话题") }
         }
         HorizontalDivider(color = colors.rule)
+        val proactive by partner.progress.collectAsState()
+        Text("主动交流：${proactive.stage} · ${proactive.detail}", Modifier.padding(horizontal = 20.dp, vertical = 6.dp), style = MaterialTheme.typography.bodySmall, color = colors.ink2)
         LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             if (session?.summary?.isNotBlank() == true) item {
                 Text("前面聊过\n" + session!!.summary, style = MaterialTheme.typography.bodySmall, color = colors.ink2)

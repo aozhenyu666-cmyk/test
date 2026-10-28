@@ -97,7 +97,19 @@ class PetOverlay(
     val isPetShown: Boolean get() = petShown
 
     fun show() {
-        if (petShown) return
+        if (pet.isAttachedToWindow) {
+            petShown = true
+            val safe = safeArea()
+            val x = petParams.x.coerceIn(safe.left, (safe.right - petSize).coerceAtLeast(safe.left))
+            val y = petParams.y.coerceIn(safe.top, (safe.bottom - petSize).coerceAtLeast(safe.top))
+            if (x != petParams.x || y != petParams.y) {
+                petParams.x = x; petParams.y = y
+                runCatching { wm.updateViewLayout(pet, petParams) }
+                if (bubbleShown) { layoutBubble(); runCatching { wm.updateViewLayout(bubble, bubbleParams) } }
+            }
+            return
+        }
+        petShown = false
         val safe = safeArea()
         petParams.x = if (settings.petEdgeRight) safe.right - petSize else safe.left
         petParams.y = if (settings.petY >= 0) settings.petY.coerceIn(safe.top, safe.bottom - petSize) else safe.top + (safe.height() * 0.55f).toInt()
@@ -113,6 +125,7 @@ class PetOverlay(
     }
 
     fun setMood(mood: Mood) { pet.mood = mood }
+    fun setCompanionStatus(label: String) { pet.companionStatus = label }
     fun setLife(state: LifeState) { pet.life = state }
     fun setTalking(v: Boolean) { pet.talking = v }
     fun setListening(v: Boolean) { pet.listening = v; bubble.setMicLabel(v) }
@@ -156,6 +169,7 @@ class PetOverlay(
     }
 
     fun showBubble(spec: BubbleSpec, onFinishedTyping: (() -> Unit)? = null): Boolean {
+        if (bubbleShown && !bubble.isAttachedToWindow) bubbleShown = false
         if (!petShown || !allowOutput(spec.owner, spec.priority)) return false
         cancelInput()
         cancelDrawReceipt()
@@ -240,7 +254,8 @@ class PetOverlay(
     /** 气泡放在角色朝屏幕内侧的一边，和角色顶部对齐；宽度不超过屏幕 62%。 */
     private fun layoutBubble() {
         val safe = safeArea()
-        val maxW = (screen().width() * 0.62f).toInt()
+        val maxW = minOf((safe.width() * 0.72f).toInt(), safe.width() - petSize + dp(4f)).coerceAtLeast(1)
+        bubble.limitHeight((safe.height() * 0.65f).toInt().coerceAtLeast(1))
         bubble.measure(
             View.MeasureSpec.makeMeasureSpec(maxW, View.MeasureSpec.AT_MOST),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
@@ -248,7 +263,7 @@ class PetOverlay(
         // 纯文字气泡（收尾句、信）没有按钮撑宽度；打字机刚开始时文字为空，
         // 若直接按空文本测量，窗口会缩成一条竖线，中文变成一字一行。
         // 给一个最小宽度并按 EXACTLY 重新测量，保证正常换行。
-        val minW = dp(200f).toInt()
+        val minW = dp(200f).coerceAtMost(maxW)
         if (bubble.measuredWidth < minW) {
             bubble.measure(
                 View.MeasureSpec.makeMeasureSpec(minW, View.MeasureSpec.EXACTLY),
@@ -258,8 +273,11 @@ class PetOverlay(
         val bw = bubble.measuredWidth
         val bh = bubble.measuredHeight
         bubbleParams.width = bw
-        bubbleParams.x = if (isOnRight()) petParams.x - bw + dp(4f) else petParams.x + petSize - dp(4f)
-        bubbleParams.y = (petParams.y - dp(10f)).coerceIn(safe.top, (safe.bottom - bh).coerceAtLeast(safe.top))
+        val pos = cn.companion.pet.core.partner.OverlayPlacement.place(
+            cn.companion.pet.core.partner.OverlayBounds(safe.left, safe.top, safe.right, safe.bottom),
+            petParams.x, petParams.y - dp(10f), petSize, bw, bh, isOnRight(), dp(4f))
+        bubbleParams.x = pos.x
+        bubbleParams.y = pos.y
     }
 
     private fun dragListener() = object : View.OnTouchListener {

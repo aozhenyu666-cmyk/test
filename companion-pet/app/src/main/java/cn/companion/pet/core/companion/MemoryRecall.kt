@@ -12,6 +12,7 @@ data class RecallItem(
     val day: String,
     val occurredAt: Long,
     val score: Int,
+    val id: String = "",
 )
 
 data class RecallLimits(
@@ -54,6 +55,7 @@ class MemoryRecall(
                 day = dayOf(fact.createdAt),
                 occurredAt = fact.createdAt,
                 score = 0,
+                id = fact.id,
             )
         }
         snapshot.forEach { event ->
@@ -66,6 +68,7 @@ class MemoryRecall(
                 day = event.day,
                 occurredAt = event.occurredAt,
                 score = 0,
+                id = event.id,
             )
         }
 

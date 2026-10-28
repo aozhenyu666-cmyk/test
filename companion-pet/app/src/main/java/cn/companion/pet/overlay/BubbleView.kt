@@ -22,6 +22,7 @@ import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.ScrollView
 
 data class BubbleSpec(
     val text: String,
@@ -41,6 +42,7 @@ data class BubbleSpec(
     val geminiLabel: String = "去 Gemini",
     val owner: String = "",
     val priority: cn.companion.pet.core.training.OutputPriority = cn.companion.pet.core.training.OutputPriority.AMBIENT,
+    val caption: String = "",
 )
 
 data class BubbleAction(val label: String, val highlighted: Boolean = false, val onClick: () -> Unit)
@@ -67,6 +69,16 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
 
     private val handler = Handler(Looper.getMainLooper())
     private val textView = TextView(context)
+    private val caption = TextView(context)
+    private val content = LinearLayout(context)
+    private var viewportHeight = Int.MAX_VALUE
+    private val scroll = object : ScrollView(context) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val outer = View.MeasureSpec.getSize(heightMeasureSpec)
+            val height = if (View.MeasureSpec.getMode(heightMeasureSpec) == View.MeasureSpec.UNSPECIFIED) viewportHeight else minOf(outer, viewportHeight)
+            super.onMeasure(widthMeasureSpec, View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.AT_MOST))
+        }
+    }
     private val actions = FlowRow(context)
     private val inputRow = LinearLayout(context)
     private val input = EditText(context)
@@ -89,13 +101,20 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
         orientation = VERTICAL
         setBackground(bubbleBg)
         tailOnRight = true
+        content.orientation = VERTICAL
+        scroll.addView(content, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        addView(scroll, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        caption.setTextColor(ACCENT)
+        caption.textSize = 12f
+        caption.typeface = Typeface.DEFAULT_BOLD
+        content.addView(caption, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
 
         textView.setTextColor(INK)
         textView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
         textView.setLineSpacing(0f, 1.15f)
-        addView(textView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        content.addView(textView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
 
-        addView(actions, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10f).toInt() })
+        content.addView(actions, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10f).toInt() })
 
         inputRow.orientation = HORIZONTAL
         inputRow.visibility = GONE
@@ -109,12 +128,15 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
         input.setOnEditorActionListener { _, id, _ -> if (id == EditorInfo.IME_ACTION_SEND) { submit(); true } else false }
         inputRow.addView(input, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
         inputRow.addView(chip("发送", false) { submit() })
-        addView(inputRow, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6f).toInt() })
+        content.addView(inputRow, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6f).toInt() })
 
         setOnTouchListener { _, e -> if (e.action == MotionEvent.ACTION_DOWN) listener.onBubbleTouched(); false }
     }
 
     fun show(spec: BubbleSpec, onFinishedTyping: (() -> Unit)? = null) {
+        caption.text = spec.caption
+        caption.visibility = if (spec.caption.isBlank()) GONE else VISIBLE
+        scroll.scrollTo(0, 0)
         inputRow.visibility = GONE
         input.setText("")
         input.hint = "想说什么"
@@ -134,6 +156,7 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
     }
 
     fun cancelTyping() { handler.removeCallbacksAndMessages(null); onTyped = null }
+    fun limitHeight(height: Int) { viewportHeight = (height - paddingTop - paddingBottom).coerceAtLeast(1) }
 
     /** 立即换掉文字，不重建按钮（按钮正被按着时也不会打断）。 */
     fun setTextNow(text: String, done: (() -> Unit)? = null) {
@@ -208,6 +231,9 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
 
     private fun chip(label: String, highlighted: Boolean, onClick: () -> Unit): TextView = TextView(context).apply {
         text = label
+        minHeight = dp(44f).toInt()
+        gravity = android.view.Gravity.CENTER
+        contentDescription = if (label == "×") "收起气泡" else label
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         typeface = Typeface.DEFAULT_BOLD
         setTextColor(if (highlighted) Color.WHITE else INK)

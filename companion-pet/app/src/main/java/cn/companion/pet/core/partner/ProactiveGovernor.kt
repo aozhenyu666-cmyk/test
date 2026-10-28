@@ -154,7 +154,7 @@ class ProactiveGovernor(
         return shownTimes.size
     }
 
-    fun decide(s: GovernorSignals, candidates: List<TopicCandidate>): GovernorDecision {
+    fun decide(s: GovernorSignals, candidates: List<TopicCandidate>, requested: Boolean = false): GovernorDecision {
         val now = s.now
         fun silent(r: String, retry: Long = now + 15_000) = GovernorDecision.Silent(r, retry)
         if (now < s.dismissedUntil) return silent("你让我安静一会儿", s.dismissedUntil)
@@ -168,7 +168,8 @@ class ProactiveGovernor(
         // 刚说完还在等他接：窗口内不抢话；窗口过了还没回应，记一次“没回应”。
         awaitingSince?.let { since ->
             val window = answerWindowMillis(s.context)
-            if (now - since < window) return silent("在等你接话", since + window)
+            if (!requested && now - since < window) return silent("在等你接话", since + window)
+            if (requested) return@let
             awaitingSince = null
             consecutiveIgnored++
         }
@@ -183,7 +184,7 @@ class ProactiveGovernor(
         // 重要的事（3）间隔减半；没回应按退避拉长但不归零。
         val importanceFactor = if (best.importance >= 3) 0.5 else 1.0
         val gap = (baseGapMillis * gapMultiplier(s.context) * silencePenalty() * importanceFactor).toLong()
-        lastShownAt?.let { last -> if (now - last < gap) return silent("离上次开口不到 " + gap / 1000 + " 秒", last + gap) }
+        lastShownAt?.let { last -> if (!requested && now - last < gap) return silent("离上次开口不到 " + gap / 1000 + " 秒", last + gap) }
         // 每小时硬上限：目标的 1.5 倍，防止重要事件连发。
         if (shownLastHour(now) >= (targetPerHour * 3) / 2) return silent("这一小时说得够多了", now + 5 * 60_000)
 
@@ -205,4 +206,13 @@ class ProactiveGovernor(
     }
 
     val ignoredStreak: Int get() = consecutiveIgnored
+
+    fun snapshot(): ProactiveState = ProactiveState(shownTimes.toList(), awaitingSince, consecutiveIgnored)
+    fun restore(state: ProactiveState, now: Long) {
+        shownTimes.clear()
+        state.shownAt.filter { it <= now && now - it <= 3_600_000L }.sorted().takeLast(60).forEach { shownTimes.addLast(it) }
+        lastShownAt = shownTimes.lastOrNull()
+        awaitingSince = state.awaitingSince?.takeIf { it <= now && now - it <= 3_600_000L }
+        consecutiveIgnored = state.ignored.coerceIn(0, 100)
+    }
 }
