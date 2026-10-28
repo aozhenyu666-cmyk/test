@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">总控哨兵</string>
+    <string name="service_name">总控哨兵</string>
+    <string name="service_description">独立于总控的另一个应用。总控崩了、被系统停掉（显示“出现故障”）时，哨兵接管：拦截名单里的应用先关着，提醒你、并尽量自己把总控挂回去。平时什么都不做。只读取前台应用的包名，不读取屏幕内容和输入，不联网。</string>
+</resources>

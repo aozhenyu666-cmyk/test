@@ -445,9 +445,17 @@ object Pet {
     /**
      * 眼睛离线时的一句话（在线返回 null）：墨灵/桌面小部件用它当“活体指示”，
      * 服务没了就不装没事——直接说“我看不见了”。
+     *
+     * v2：判据是「真实挑战 ack 是否新鲜」，不是 `GuardService.running`
+     * （进程活着但执行线程卡死时，running 仍然是 true，那会骗人）。
      */
-    fun offlineNote(c: Context): String? =
-        if (com.zongkong.app.guard.GuardService.running) null else "我看不见了：无障碍没在运行。"
+    fun offlineNote(c: Context): String? = when (com.zongkong.app.healthwire.PermissionStatusBridge.status(c)) {
+        com.zongkong.app.health.HealthStatus.HEALTHY -> null
+        com.zongkong.app.health.HealthStatus.DISABLED -> "我看不见了：无障碍被关掉了。"
+        com.zongkong.app.health.HealthStatus.UNKNOWN -> "我还不确定能不能看见：还没有真实响应。"
+        com.zongkong.app.health.HealthStatus.RECOVERING -> "我正在重新连上无障碍，还没确认。"
+        else -> "我看不见了：无障碍执行线程没有响应。"
+    }
 
     private fun prefs(c: Context) = c.getSharedPreferences("pet", Context.MODE_PRIVATE)
 

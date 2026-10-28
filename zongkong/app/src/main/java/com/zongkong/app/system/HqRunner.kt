@@ -47,8 +47,11 @@ object HqRunner {
         app.actions.device.maybeSync()
 
         val due = Hq.due(cfg, store.hq.value.sessions, now, zone)
-        // 进程刚被闹钟拉起来时服务可能还没连上：一分半内有过心跳也算在
-        val eyes = com.zongkong.app.guard.GuardService.running || now - store.heartbeat < 90_000
+        // v2：眼睛在不在，看真实健康状态（真实 ack），不看进程里的 running 布尔。
+        val eyes = runCatching {
+            com.zongkong.app.healthwire.PermissionStatusBridge.status(context) ==
+                com.zongkong.app.health.HealthStatus.HEALTHY
+        }.getOrDefault(false)
         when (due) {
             Hq.Due.SOON -> if (store.firstAlert("hq-soon")) {
                 Notifications.alert(context, "10 分钟后是总控时间", "${DayClock.hhmm(cfg.at)} 开始，${cfg.minutes} 分钟。手上的事收个尾。", "hq")
@@ -320,7 +323,18 @@ object HqRunner {
         val hypo = store.vein.value.nodes.filter { it.status == com.zongkong.core.vein.VStatus.HYPO.label }
             .maxByOrNull { com.zongkong.core.vein.Veins.daysBetween(it.checks.lastOrNull()?.date ?: it.created, store.dateToday(now)) }
         val intake = com.zongkong.core.info.Intake.stats(store.work.value, store.intake.value, now, store.zone)
+        // 今天还差的那一步最要紧：早上没部署就先排今天，晚上没收尾就先收尾（0.14：一天的主线在对话里走完）
+        val gates = store.status(now).gates.filter { !it.done && it.phase != com.zongkong.core.GatePhase.NOT_OPEN }
+        val needPlan = gates.any { it.gate.id == com.zongkong.app.data.Actions.PLAN_GATE }
+        val needClose = gates.any { it.gate.id == "hq_review" } && minute >= 20 * 60
+        val focusLine = when {
+            needPlan -> "今天还没部署：先问他今天有哪些固定安排、想做哪几件，帮他排成具体时段，他说好就 confirm_plan。"
+            needClose -> "今天还没收尾：today_report 和他过一遍，问明天第一步，close_day。"
+            else -> ""
+        }
         val fallback = when {
+            needPlan -> "今天还没排：几点做什么？说一句，我帮你排上。"
+            needClose -> "今天收个尾：做完了哪些、明天第一步是什么？"
             main != null -> "「${main.title}」现在到哪一步了？回一句就行。"
             intake.backlog > 0 -> "收集箱里有 ${intake.backlog} 条还没提炼。挑一条，用一句话说它对你有什么用。"
             hypo != null -> "脉络里「${hypo.title}」还是假设。这周验证了吗？"
@@ -328,7 +342,8 @@ object HqRunner {
         }
         app.chat.proactive(
             "checkin",
-            "[定时·问候] 主动找用户说一句（这次一定要说，不能回“无事”）。先看档案、今天的主线、未结的约定、intake_status、vein_due，" +
+            "[定时·问候] 主动找用户说一句（这次一定要说，不能回“无事”）。" + focusLine +
+                "没有这类事，就先看档案、今天的主线、未结的约定、intake_status、vein_due，" +
                 "挑最该问的一件，问一个具体、马上能回答的问题；如果有约定快到点，就问那个。一两句，最后给【选项】。态度按档案里的来。",
             fallback = fallback,
         )
@@ -337,9 +352,13 @@ object HqRunner {
         return Unit
     }
 
-    /** 记录时附上现在的状况：服务在不在、通知能不能发。 */
+    /** 记录时附上现在的状况：眼睛有没有真实响应、通知能不能发。 */
     private fun diag(context: Context): String = buildString {
-        if (!com.zongkong.app.guard.GuardService.running && System.currentTimeMillis() - context.zk.store.heartbeat > 90_000) append("（无障碍服务没在运行）")
+        val healthy = runCatching {
+            com.zongkong.app.healthwire.PermissionStatusBridge.status(context) ==
+                com.zongkong.app.health.HealthStatus.HEALTHY
+        }.getOrDefault(false)
+        if (!healthy) append("（无障碍没有真实响应）")
         if (!Notifications.canPost(context)) append("（通知被关了）")
     }
 

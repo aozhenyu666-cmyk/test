@@ -90,6 +90,17 @@ class Agent(private val api: ChatApi, private val env: AgentEnv) {
         append(com.zongkong.core.info.Intake.brief(env.work(), env.intake(), env.now(), env.zone)).append('\n')
         append(com.zongkong.core.plan.Calibrate.brief(env.work(), env.zone, env.now()))
         append("\n").append(com.zongkong.core.plan.Aims.brief(env.plans(), env.work(), env.now(), env.zone))
+        com.zongkong.core.plan.QuickPlan.today(env.work(), env.now(), env.zone).let { list ->
+            append("\n## 今天的安排（几点做什么）\n")
+            if (list.isEmpty()) append("今天还没排。\n")
+            list.forEach { (a, t) ->
+                val hm = { x: Long -> java.time.Instant.ofEpochMilli(x).atZone(env.zone).let { "%02d:%02d".format(it.hour, it.minute) } }
+                append("· ${hm(t.first)}-${hm(t.second)} ${a.title}（${a[com.zongkong.core.work.F.STATUS]}）键 ${a.key}\n")
+            }
+            com.zongkong.core.plan.QuickPlan.unscheduled(env.work()).take(6).takeIf { it.isNotEmpty() }?.let { l ->
+                append("待安排（没排时间）：").append(l.joinToString("、") { "${it.title}（${it.key}）" }).append('\n')
+            }
+        }
         com.zongkong.core.plan.Playbook.today(env.plans(), env.now(), env.zone)?.let { append("\n").append(com.zongkong.core.plan.Playbook.brief(it, env.now(), env.zone)) }
         val vein = env.vein()
         if (vein.nodes.isNotEmpty() || vein.candidates.isNotEmpty()) {
@@ -220,6 +231,16 @@ class Agent(private val api: ChatApi, private val env: AgentEnv) {
             - 需要用户选的时候，回复最后一行写“【选项】A｜B｜C”（2–4 个，每个不超过 10 个字），界面会变成按钮。
             - 想让用户看到某个页面（刚开的计时页、要补的权限、档案），调 open_page。
             - 用户提到习惯、作息、偏好、反复出现的借口，用 remember 记下来。
+            - 用户主要就跟你说话（不太去别的页面，也不常去 GPT）。一天的主线在对话里走完：
+              早上：今日部署没做 → 问他今天有哪些固定安排、想做哪几件，直接 add_action 排成具体时段（留空当，别排满），列给他看；他说“好 / 就这样”再 confirm_plan。
+              白天：到点盯、过点问；他说要做什么就排上，说做不了就 reschedule_action 到具体时间；做完了收证据 complete_action。
+              晚上：today_report 和他过一遍，问明天第一步，close_day 交日终验收。别的写字关卡（比如推进一个判断）他在对话里说过了，就用他的话 submit_gate。
+              GPT 只在他想长时间深聊某件事时用（交接块导回来就行），不要把他往 GPT 推。
+            - 用户说现在要做 / 今天几点要做什么：立刻 add_action 排进具体时段（现在开始就从现在起，默认一小时），再说一句“排上了，几点我叫你”。不要只答应不记。
+            - 用户说某件事延期 / 改到下午：reschedule_action 到一个具体时间（没说就问“改到几点”），延期不是取消——到新的时间照样提醒、过点照样关娱乐。
+            - 首页“待安排”里没时间的事，不要反复追问它本身；问的是“排进今天哪个时段”，用户答了就 reschedule_action。
+            - 用户说某一步做完了：请他发一张照片或链接作证据（只要一次，一样就够）。他发了图，你看图对照完成依据，complete_action 时 photo 填“是”，把这张照片记成交付证据；
+              看得出做了、大体符合就判达到，不吹毛求疵；不够的话说一句补什么就够了，补过一次就下结论，不要反复要证据。他说没法拍（比如跑步、开会），就按他说的记，photo 不填（会标成自评）。
             - 新建的事很薄（只有标题和一步，比如“国考计划 → 去查时间”）：别让它就这么挂着，提议 start_campaign 立项，带他把为什么、完成依据、关键事实、里程碑、头几步补齐。
             - 他说在 Gemini、GPT 或者和别人讨论过什么：让他把讨论贴进“贴一段讨论”（open_page digest），你来提炼、归位、定下一步。之前没收进来的，不要反复催“去谋划”，先帮他收。
             - 账本（试验）：他说花了多少钱、发来付款截图，用 add_expense 记（截图上读清商户和金额，看不清就问）；问花了多少用 ledger_summary。不评价他怎么花钱，除非他问。

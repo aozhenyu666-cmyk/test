@@ -50,6 +50,8 @@ jobs:
           if-no-files-found: error
 
       - name: Publish to release yishou-pc-latest
+        # 集成分支（claude/…）只构建不发版，免得覆盖正式下载地址
+        if: "!startsWith(github.ref, 'refs/heads/claude/')"
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

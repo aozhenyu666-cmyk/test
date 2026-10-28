@@ -4,12 +4,14 @@ package com.yishou.app.speech
  * 语音口令：一句很短的话正好是这些意思时，当作操作而不是回答。
  * 只认短句（去掉标点后不超过 8 个字），长一点的话一律当回答，避免误触。
  */
-enum class VoiceCommand { DONT_KNOW, REPEAT, PAUSE, DEMO, ROLL, THINKING, CANCEL }
+enum class VoiceCommand { DONT_KNOW, REPEAT, PAUSE, DEMO, ROLL, THINKING, CANCEL, HINT, EXPLAIN }
 
 object VoiceCommands {
     private const val MAX_CHARS = 8
 
     private val table = listOf(
+        VoiceCommand.EXPLAIN to listOf("没看懂", "看不懂", "没读懂", "什么意思", "解释一下"),
+        VoiceCommand.HINT to listOf("提示", "给个提示", "给点提示", "线索", "推不出来"),
         VoiceCommand.DONT_KNOW to listOf("我不知道", "不知道", "不会", "想不出来", "没思路"),
         VoiceCommand.REPEAT to listOf("再说一遍", "重复一遍", "重复", "再读一遍", "没听清", "再说一次"),
         VoiceCommand.PAUSE to listOf("先停", "暂停", "休息一下", "歇一下", "我要休息"),

@@ -3,7 +3,12 @@ package com.yishou.app.speech
 import com.yishou.app.llm.LlmError
 import com.yishou.app.llm.LlmResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.Response
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -15,25 +20,6 @@ import java.io.IOException
 import java.io.InterruptedIOException
 import java.util.concurrent.TimeUnit
 
-/**
- * 语音接口（可选）：OpenAI 兼容的 /audio/transcriptions（听写）和 /audio/speech（朗读）。
- * 模型名空着就用手机自带的识别 / 朗读。代码里不写死任何服务商。
- */
-data class SpeechConfig(
-    val baseUrl: String = "",
-    val apiKey: String = "",
-    /** 听写模型，例如 whisper-1、FunAudioLLM/SenseVoiceSmall */
-    val sttModel: String = "",
-    /** 朗读模型，例如 tts-1、FunAudioLLM/CosyVoice2-0.5B */
-    val ttsModel: String = "",
-    /** 朗读音色，接口要求什么就填什么 */
-    val ttsVoice: String = "",
-) {
-    private val hasEndpoint get() = baseUrl.isNotBlank() && apiKey.isNotBlank()
-    val sttReady: Boolean get() = hasEndpoint && sttModel.isNotBlank()
-    val ttsReady: Boolean get() = hasEndpoint && ttsModel.isNotBlank()
-}
-
 class SpeechApi(
     private val config: () -> SpeechConfig,
     private val http: OkHttpClient = defaultHttpClient(),
@@ -41,38 +27,39 @@ class SpeechApi(
 
     /** 把一段 WAV 录音转成文字。 */
     suspend fun transcribe(wav: ByteArray): LlmResult<String> {
-        val cfg = config()
-        if (!cfg.sttReady) return LlmResult.Err(LlmError.NotConfigured)
+        val cfg = config().input
+        if (!cfg.ready) return LlmResult.Err(LlmError.NotConfigured)
         val url = endpoint(cfg.baseUrl, "audio/transcriptions")
             ?: return LlmResult.Err(LlmError.Network("接口地址格式不对：${cfg.baseUrl}"))
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
-            .addFormDataPart("model", cfg.sttModel.trim())
-            .addFormDataPart("language", "zh")
+            .addFormDataPart("model", cfg.model.trim())
+            .addFormDataPart("language", cfg.language.ifBlank { "zh" })
             .addFormDataPart("response_format", "json")
             .addFormDataPart("file", "answer.wav", wav.toRequestBody(WAV))
             .build()
         return call(cfg, url, body) { bytes -> parseTranscript(String(bytes)) }
     }
 
-    /** 把一句话合成为音频（mp3）。 */
+    /** 把一句话合成为可直接解码的 mp3 或 wav 音频。 */
     suspend fun synthesize(text: String): LlmResult<ByteArray> {
-        val cfg = config()
-        if (!cfg.ttsReady) return LlmResult.Err(LlmError.NotConfigured)
+        val cfg = config().output
+        if (!cfg.ready) return LlmResult.Err(LlmError.NotConfigured)
+        if (cfg.format !in setOf("mp3", "wav")) return LlmResult.Err(LlmError.Local("朗读暂时支持 mp3 或 wav 音频"))
         val url = endpoint(cfg.baseUrl, "audio/speech")
             ?: return LlmResult.Err(LlmError.Network("接口地址格式不对：${cfg.baseUrl}"))
         val json = JSONObject()
-            .put("model", cfg.ttsModel.trim())
+            .put("model", cfg.model.trim())
             .put("input", text)
-            .put("response_format", "mp3")
-        if (cfg.ttsVoice.isNotBlank()) json.put("voice", cfg.ttsVoice.trim())
+            .put("response_format", cfg.format)
+        if (cfg.voice.isNotBlank()) json.put("voice", cfg.voice.trim())
         return call(cfg, url, json.toString().toRequestBody(JSON)) { bytes ->
             if (bytes.isEmpty()) LlmResult.Err(LlmError.BadFormat("返回的音频为空")) else LlmResult.Ok(bytes)
         }
     }
 
     private suspend fun <T> call(
-        cfg: SpeechConfig,
+        cfg: SpeechEndpoint,
         url: String,
         body: okhttp3.RequestBody,
         parse: (ByteArray) -> LlmResult<T>,
@@ -83,7 +70,7 @@ class SpeechApi(
             .post(body)
             .build()
         try {
-            http.newCall(request).execute().use { resp ->
+            http.newCall(request).awaitSpeech().use { resp ->
                 val bytes = resp.body?.bytes() ?: ByteArray(0)
                 if (!resp.isSuccessful) LlmResult.Err(LlmError.Http(resp.code, String(bytes).take(200)))
                 else parse(bytes)
@@ -130,4 +117,17 @@ class SpeechApi(
             return if (text.isEmpty()) LlmResult.Err(LlmError.BadFormat("没有听写出文字")) else LlmResult.Ok(text)
         }
     }
+}
+
+@OptIn(ExperimentalCoroutinesApi::class)
+private suspend fun Call.awaitSpeech(): Response = suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { cancel() }
+    enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            if (!continuation.isCancelled) continuation.resumeWith(Result.failure(e))
+        }
+        override fun onResponse(call: Call, response: Response) {
+            continuation.resume(response) { response.close() }
+        }
+    })
 }

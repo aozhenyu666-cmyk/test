@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.Yishou" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- 分享进来时的小窗：浮在原应用上面，圆角卡片由界面自己画 -->
+    <style name="Theme.Yishou.Sheet" parent="android:Theme.Material.Light.Dialog.NoActionBar.MinWidth">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsFloating">true</item>
+    </style>
+
+    <!-- 刷着练的跳板页：透明、没有动画，做完一件事就关 -->
+    <style name="Theme.Yishou.Clear" parent="android:Theme.Translucent.NoTitleBar">
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
 </resources>

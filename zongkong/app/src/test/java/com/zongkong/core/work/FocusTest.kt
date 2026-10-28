@@ -35,7 +35,9 @@ class FocusTest {
         w = WorkOps.pause(w, evening.key, "写了一半", "数据没找到", "先查数据", at(20, 30), zone, rnd)
         assertEquals(Focus.Why.CONTINUE to evening.key, Focus.current(w, at(22), zone).let { it.why to it.action!!.key })
         w = WorkOps.complete(w, evening.key, "写完", WorkOps.Met.YES, "", at(22), zone, rnd)
-        assertEquals(Focus.Why.UNSCHEDULED to loose.key, Focus.current(w, at(22, 30), zone).let { it.why to it.action!!.key })
+        // 没排时间的不当“现在这一步”，在“待安排”里
+        assertEquals(Focus.Why.NONE, Focus.current(w, at(22, 30), zone).why)
+        assertEquals(listOf(loose.key), com.zongkong.core.plan.QuickPlan.unscheduled(w).map { it.key })
         w = WorkOps.cancel(w, loose.key, "不需要了", at(23))
         assertEquals(Focus.Why.NONE, Focus.current(w, at(23), zone).why)
     }

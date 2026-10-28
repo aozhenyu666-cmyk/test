@@ -13,9 +13,12 @@ android {
         applicationId = "com.zongkong.app"
         minSdk = 26
         targetSdk = 34
-        // 0.10.1 是另一条线上的「主动性 / 强督导」；这一版在它之上加追问体系和自愈加固
-        versionCode = 14
-        versionName = "0.11.0"
+        // 两条线在这里合并：
+        //   0.10.1 线：主动性、强督导、娱乐靠做事挣（0.11.0 是它 + 追问体系）
+        //   0.16.x 线：健康协议 v2、总控哨兵、低屏模式
+        //   + 本次：追问体系、自己补信息、无障碍自愈（0.16.1 那个补丁并进来了）
+        versionCode = 21
+        versionName = "0.17.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

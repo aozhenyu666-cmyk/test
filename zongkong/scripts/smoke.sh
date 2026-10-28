@@ -8,6 +8,10 @@ OUT="$2"
 APK="$APKDIR/debug/app-debug.apk"
 TESTAPK="$APKDIR/androidTest/debug/app-debug-androidTest.apk"
 PKG=com.zongkong.app
+# 哨兵：独立应用（0.13）
+SP=com.zongkong.sentinel
+GUARD=$PKG/$PKG.guard.GuardService
+SVC=$SP/$SP.SentinelService
 # 被拦截的“娱乐应用”：用系统设置代替（模拟器上一定有）
 TARGET=com.android.settings
 mkdir -p "$OUT"
@@ -25,7 +29,10 @@ adb install -r "$TESTAPK" || exit 1
 # 一手：端到端测试里会真的跨应用调用它（读状态、交任务）
 YISHOU_APK=$(find "$APKDIR" -path "*yishou*" -name "*.apk" | head -1)
 if [ -n "$YISHOU_APK" ]; then adb install -r "$YISHOU_APK" && echo "一手已安装"; else echo "没找到一手 APK"; fi
+SENTINEL_APK=$(find "$APKDIR" -path "*sentinel*" -name "*.apk" | head -1)
+if [ -n "$SENTINEL_APK" ]; then adb install -r "$SENTINEL_APK" && echo "哨兵已安装"; else echo "没找到哨兵 APK"; fi
 adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS || true
+adb shell pm grant $SP android.permission.POST_NOTIFICATIONS || true
 
 # ---------- 端到端闭环 ----------
 : > "$OUT/result.txt"
@@ -41,15 +48,23 @@ if grep -q "只接受总控的连接" "$OUT/link-yishou-from-shell.txt" && grep 
 else
   echo "LINK_REJECTS_OTHERS=FAIL" >> "$OUT/result.txt"
 fi
+# 哨兵和总控之间的口子也只认对方
+adb shell content call --uri content://com.zongkong.sentinel.link --method ping 2>&1 | tee "$OUT/link-sentinel-from-shell.txt"
+adb shell content call --uri content://com.zongkong.app.sentinel --method wake 2>&1 | tee "$OUT/link-wake-from-shell.txt"
+if grep -q "只接受总控的连接" "$OUT/link-sentinel-from-shell.txt" && grep -q "只接受哨兵的连接" "$OUT/link-wake-from-shell.txt"; then
+  echo "SENTINEL_REJECTS_OTHERS=OK" >> "$OUT/result.txt"
+else
+  echo "SENTINEL_REJECTS_OTHERS=FAIL" >> "$OUT/result.txt"
+fi
 # 注意：不能 force-stop 总控——系统会把被强行停止的应用从“已开启的无障碍服务”里移除，
 # 而且这一步可能比下面的开启晚执行，把刚开的又关掉。
 
 # 开无障碍，确认真的绑定上了再往下走
 for i in 1 2 3 4 5 6; do
-  adb shell settings put secure enabled_accessibility_services $PKG/$PKG.guard.GuardService
+  adb shell settings put secure enabled_accessibility_services $GUARD:$SVC
   adb shell settings put secure accessibility_enabled 1
   sleep 3
-  if adb shell dumpsys accessibility | grep -q "Bound services:{Service\[label=总控"; then echo "无障碍已绑定"; break; fi
+  if adb shell dumpsys accessibility | grep -q "label=总控,"; then echo "无障碍已绑定"; break; fi
   echo "无障碍还没绑定，重试 $i"
 done
 adb shell am start -n $PKG/.ui.MainActivity >/dev/null
@@ -125,7 +140,106 @@ route home;               shot 11-home-dark
 route gate/hq_review;     shot 12-gate-dark
 adb shell cmd uimode night no
 
-adb logcat -d | grep -E "AndroidRuntime|FATAL|SeedReceiver|GuardService|Store" | tail -200 > "$OUT/logcat.txt"
+# ---------- 哨兵：总控的无障碍掉了（这里直接把它从列表里拿掉），哨兵接管，娱乐照样拦 ----------
+adb shell am broadcast -a $PKG.SEED -p $PKG --es blocked $TARGET --es mode strict
+sleep 2
+# 先确认总控一直在给哨兵写名单（哨兵自己的文件里有拦截名单）
+adb shell run-as $SP cat files/state.json 2>&1 | tee "$OUT/sentinel-state.txt"
+if grep -q "$TARGET" "$OUT/sentinel-state.txt"; then echo "SENTINEL_LINKED=OK" >> "$OUT/result.txt"; else echo "SENTINEL_LINKED=FAIL" >> "$OUT/result.txt"; fi
+
+# ---------- 哨兵 v2 联通：独立 :watch 进程起来了，总控注册上，哨兵发的挑战真的被总控的无障碍线程回了 ----------
+WATCH_PID=$(adb shell pidof $SP:watch | tr -d '\r')
+echo ":watch 进程 pid=$WATCH_PID" | tee "$OUT/sentinel-v2.txt"
+adb shell dumpsys activity services $SP | grep -E "ServiceRecord|isForeground|app=" | head -10 | tee -a "$OUT/sentinel-v2.txt"
+if [ -n "$WATCH_PID" ]; then echo "SENTINEL_WATCH_PROCESS=OK" >> "$OUT/result.txt"; else echo "SENTINEL_WATCH_PROCESS=FAIL" >> "$OUT/result.txt"; fi
+# 读哨兵的 health.json：总控那一行要 registered=true，且有过一次被接受的真实 ack（lastAckAtMono > 0）
+V2_ACK=FAIL
+for i in $(seq 1 12); do
+  adb shell run-as $SP cat files/health.json > "$OUT/sentinel-health.json" 2>/dev/null
+  if python3 - "$OUT/sentinel-health.json" "$PKG" <<'PY'
+import json, sys
+try:
+    doc = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+rec = next((c for c in doc.get("clients", []) if c.get("pkg") == sys.argv[2]), None)
+ok = bool(rec) and rec.get("registered") is True and int(rec.get("lastAckAtMono", 0)) > 0
+print("总控记录：", {k: rec.get(k) for k in ("registered", "instanceId", "lastAckSeq", "lastAckAtMono", "consecutiveFailures", "lastFailureReason")} if rec else "无")
+sys.exit(0 if ok else 1)
+PY
+  then V2_ACK=OK; break; fi
+  sleep 5
+done
+echo "SENTINEL_V2_ACK=$V2_ACK" >> "$OUT/result.txt"
+if [ "$V2_ACK" != OK ]; then
+  cat "$OUT/sentinel-health.json"; echo
+  adb logcat -d -s SentinelWatch:V SentinelWatchProvider:V SentinelProbe:V SentinelArc:V SentinelClient:V ZkHealthWire:V | tail -40
+fi
+adb shell run-as $SP cat files/watch-log.txt >> "$OUT/sentinel-v2.txt" 2>&1 || true
+
+adb shell settings put secure enabled_accessibility_services $SVC
+sleep 5
+adb shell dumpsys accessibility | grep -iE "Bound services|Enabled services" | head -4 | tee "$OUT/accessibility-sentinel.txt"
+# 总控的心跳停了（模拟掉线 90 秒以上）
+adb shell am broadcast -a $PKG.SEED -p $PKG --es mode main-down
+sleep 1
+launch_target
+sleep 4
+shot 16-sentinel-takeover
+resumed | tee "$OUT/resumed-sentinel.txt"
+if grep -q "$SP/.BlockActivity" "$OUT/resumed-sentinel.txt"; then echo "SENTINEL_TAKEOVER=OK" >> "$OUT/result.txt"; else echo "SENTINEL_TAKEOVER=FAIL" >> "$OUT/result.txt"; adb logcat -d -s Sentinel:V SentinelSys:V SentinelStore:V SentinelClient:V | tail -30; fi
+
+# ---------- 哨兵独立：总控被“强行停止”（vivo 一键清理就是这个），哨兵不受影响，照样接管 ----------
+adb shell settings put secure enabled_accessibility_services $GUARD:$SVC
+adb shell settings put secure accessibility_enabled 1
+sleep 6
+adb shell am broadcast -a $PKG.SEED -p $PKG --es blocked $TARGET --es mode strict
+route home
+adb shell input keyevent KEYCODE_HOME; sleep 3
+SPID=$(adb shell pidof $SP | tr -d '\r')
+adb shell am force-stop $PKG
+sleep 3
+adb shell settings get secure enabled_accessibility_services | tee "$OUT/acc-after-force-stop.txt"
+adb shell dumpsys accessibility | grep -iE "Bound services" | head -2 | tee -a "$OUT/acc-after-force-stop.txt"
+echo "等总控的心跳过期（90 秒）"
+sleep 95
+launch_target
+sleep 5
+shot 17-sentinel-after-force-stop
+resumed | tee "$OUT/resumed-force-stop.txt"
+SPID2=$(adb shell pidof $SP | tr -d '\r')
+echo "哨兵进程：停总控前 $SPID，之后 $SPID2" | tee -a "$OUT/acc-after-force-stop.txt"
+if [ -n "$SPID" ] && [ "$SPID" = "$SPID2" ] && grep -q "$SP/.BlockActivity" "$OUT/resumed-force-stop.txt"; then
+  echo "SENTINEL_SURVIVES_FORCE_STOP=OK" >> "$OUT/result.txt"
+else
+  echo "SENTINEL_SURVIVES_FORCE_STOP=FAIL" >> "$OUT/result.txt"
+  adb logcat -d -s Sentinel:V SentinelSys:V SentinelStore:V | tail -30
+fi
+# 给哨兵“写安全设置”权限：它自己把总控挂回无障碍列表（两分钟试一次）
+adb shell pm grant $SP android.permission.WRITE_SECURE_SETTINGS
+HEALED=FAIL
+for i in $(seq 1 14); do
+  sleep 15
+  if adb shell settings get secure enabled_accessibility_services | grep -q "$GUARD"; then HEALED=OK; break; fi
+done
+echo "SENTINEL_HEALS_MAIN=$HEALED" >> "$OUT/result.txt"
+adb shell run-as $SP cat files/log.txt > "$OUT/sentinel-log.txt" 2>&1 || true
+
+# ---------- 解除闸门（0.15）：界面能打开、不崩（核心逻辑由单元测试覆盖） ----------
+adb logcat -c
+adb shell am start -n $SP/.MainActivity >/dev/null; sleep 2
+shot 18-sentinel-home
+adb shell am start -n $SP/.ReleaseActivity >/dev/null; sleep 2
+shot 19-release-pick
+# 点第一个「改规则」进第一关的手写页（坐标约值；点不中也没关系，下面只断言不崩）
+adb shell input tap 160 560 >/dev/null; sleep 2
+shot 20-release-stage1
+RES=$(adb shell dumpsys activity activities | grep -E "topResumedActivity" | head -1)
+if echo "$RES" | grep -q "$SP/" && ! adb logcat -d | grep -qE "AndroidRuntime.*$SP"; then echo "RELEASE_UI=OK" >> "$OUT/result.txt"; else echo "RELEASE_UI=FAIL" >> "$OUT/result.txt"; adb logcat -d | grep -A20 "AndroidRuntime" | tail -40; fi
+
+adb shell settings put secure enabled_accessibility_services $GUARD:$SVC
+
+adb logcat -d | grep -E "AndroidRuntime|FATAL|SeedReceiver|GuardService|Store|Sentinel|CrashShield" | tail -200 > "$OUT/logcat.txt"
 cat "$OUT/result.txt"
 if grep -q "FATAL EXCEPTION" "$OUT/logcat.txt"; then echo "CRASH found"; grep -A20 "FATAL EXCEPTION" "$OUT/logcat.txt" | head -60; exit 1; fi
 grep -q FAIL "$OUT/result.txt" && exit 1

@@ -277,7 +277,16 @@ class ChatRepo(private val context: Context, private val store: Store, private v
             append("- 眼睛：${com.zongkong.app.system.Eye.label(eye)}——${com.zongkong.app.system.Eye.forAi(eye)}\n")
             append("- 手机使用记录：")
             append(if (com.zongkong.app.system.Usage.granted(context)) "有系统的“使用情况访问”授权，总控没运行的时段也查得到\n" else "只有总控自己记的（没授权“使用情况访问”），总控没在运行的时段是空白\n")
-            append("- 无障碍服务：${if (com.zongkong.app.guard.GuardService.running) "运行中" else "没在运行（拦不住、记不到，提醒用户去权限页打开）"}\n")
+            // v2：告诉模型的是「真实响应状态」，不是进程里的 running 布尔；模型只解释、不宣布健康。
+            append(
+                "- 无障碍服务：" + run {
+                    val st = runCatching {
+                        com.zongkong.app.healthwire.PermissionStatusBridge.status(context)
+                    }.getOrDefault(com.zongkong.app.health.HealthStatus.UNKNOWN)
+                    if (st == com.zongkong.app.health.HealthStatus.HEALTHY) "真实响应中"
+                    else "没有真实响应（${com.zongkong.app.healthwire.HealthLabels.status(st)}；拦不住、记不到，提醒用户去权限页）"
+                } + "\n",
+            )
             append("- 截图抽查：")
             append(if (boss.shots) "开着，亮屏时每小时约 ${boss.shotsPerHour} 张，留 ${boss.keepDays} 天；连续娱乐时也会截一张\n" else "没开（用户在“总控 → 档案”里能开；你可以建议）\n")
             append("- 照片：用户发来的照片会附上拍摄时间；没有拍摄时间的多半是截图或转存的旧图\n")
@@ -295,6 +304,32 @@ class ChatRepo(private val context: Context, private val store: Store, private v
                 is com.zongkong.core.ApiResult.Err -> "看不了：${r.message}"
             }
         }
+        override suspend fun confirmPlan(): String {
+            val now = System.currentTimeMillis()
+            val gs = store.status(now).gates.firstOrNull { it.gate.id == Actions.PLAN_GATE } ?: return "今天没有“今日部署”这道关卡"
+            if (gs.done) return "今日部署今天已经过了"
+            val planned = com.zongkong.core.plan.QuickPlan.today(store.work.value, now, store.zone).size
+            if (planned == 0) return "今天还没有排了时间的事：先 add_action 排上至少一段，再确认"
+            val passed = actions.autoVerify(confirmPlan = true)
+            return if (gs.gate.title in passed) "今日部署过了（今天排了 $planned 段，用户在对话里确认）"
+            else "还没过：${gs.gate.title}要求 ${gs.gate.evidenceMin} 段以上，现在 $planned 段。再排一段"
+        }
+        override suspend fun closeDay(tomorrow: String, note: String): String = describe(actions.submitDayList(tomorrow, note), "日终验收")
+        override suspend fun submitGate(gate: String, text: String): String {
+            val g = store.config.value.gates.firstOrNull { it.id == gate || it.title == gate || it.title.contains(gate) }
+                ?: return "没有这道关卡：$gate（list_gates 看有哪些）"
+            return describe(actions.submit(g.id, text), g.title)
+        }
+        private fun describe(r: Actions.SubmitResult, title: String): String = when (r) {
+            is Actions.SubmitResult.Judged -> if (r.verdict.pass) "「$title」通过：${r.verdict.feedback}" else "「$title」没通过：${r.verdict.feedback}" +
+                (r.verdict.missing.takeIf { it.isNotEmpty() }?.let { "（还差：${it.joinToString("；")}）" } ?: "")
+            is Actions.SubmitResult.Unavailable -> "「$title」这会儿验不了：${r.reason}" + if (r.degradedLeft > 0) "（可以让用户去关卡页用降级验收）" else ""
+            is Actions.SubmitResult.Refused -> "「$title」：${r.message}"
+        }
+        override fun lastPhoto(): com.zongkong.core.work.ProofItem? =
+            _log.value.messages.lastOrNull { it.role == ChatMsg.USER && it.image.isNotBlank() }?.image?.let { Photos.fromStored(it) }
+        override fun usedPhotos(): Map<String, String> = (context.applicationContext as com.zongkong.app.ZkApp).proofs.usedPhotos()
+        override fun saveDelivery(d: com.zongkong.core.work.Delivery) = (context.applicationContext as com.zongkong.app.ZkApp).proofs.save(d)
         override fun resolveApp(name: String): String? = AppNames.resolve(context, name)
         override fun appLabel(pkg: String): String = AppNames.label(context, pkg)
     }

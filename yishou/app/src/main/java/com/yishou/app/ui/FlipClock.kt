@@ -76,7 +76,6 @@ private fun FlipDigit(ch: Char, tile: Dp) {
                 c.toString(),
                 color = ink,
                 fontSize = (tile.value * 0.62f).sp,
-                fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
             )
         }

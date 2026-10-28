@@ -1,5 +1,7 @@
 package com.yishou.app.llm
 
+import com.yishou.app.settings.AppZone
+
 import com.yishou.app.data.Breakpoint
 import com.yishou.app.data.Round
 import com.yishou.app.data.RoundSource
@@ -90,7 +92,8 @@ interface Coach {
         answer: String,
         context: CoachContext = CoachContext(),
     ): LlmResult<Judgement>
-    suspend fun summary(task: Task?, breakpoint: Breakpoint?, rounds: List<Round>): LlmResult<SummaryResult>
+    /** day：一天的账（别处练的每一手），见 summary.Ledger.digest */
+    suspend fun summary(task: Task?, breakpoint: Breakpoint?, rounds: List<Round>, day: String = ""): LlmResult<SummaryResult>
 
     /** 看了一眼屏幕（screen 是识图模型的描述）之后，针对屏幕上这一步出一手。 */
     suspend fun observe(
@@ -120,8 +123,8 @@ class LlmCoach(private val chat: ChatClient) : Coach {
     ): LlmResult<Judgement> =
         requestJson(CoachMessages.judge(task, breakpoint, coachMove, answer, context), "判定", CoachParser::parseJudgement)
 
-    override suspend fun summary(task: Task?, breakpoint: Breakpoint?, rounds: List<Round>): LlmResult<SummaryResult> =
-        requestJson(CoachMessages.summary(task, breakpoint, rounds), "总结", CoachParser::parseSummary)
+    override suspend fun summary(task: Task?, breakpoint: Breakpoint?, rounds: List<Round>, day: String): LlmResult<SummaryResult> =
+        requestJson(CoachMessages.summary(task, breakpoint, rounds, day = day), "总结", CoachParser::parseSummary)
 
     override suspend fun observe(
         task: Task,
@@ -204,14 +207,21 @@ object CoachMessages {
         task: Task?,
         breakpoint: Breakpoint?,
         rounds: List<Round>,
-        zone: ZoneId = ZoneId.systemDefault(),
+        zone: ZoneId = AppZone.zone,
+        day: String = "",
     ): String = buildString {
         appendLine("请求类型：每晚总结。")
-        appendLine("请根据用户今天全部的轮次和当前断点，总结一条规则、明天第一问和今天的实际进展。")
+        appendLine("请根据用户今天全部的练习（陪练轮次和下面这本账）和当前断点，总结一条规则、明天第一问和今天的实际进展。")
+        appendLine("规则优先从失手（没接住、差一点）里找共同点：他在哪类问题上反复漏了同一层。")
         appendLine()
         if (task != null) appendTask(task)
         if (breakpoint != null) appendBreakpoint(breakpoint)
-        appendLine("【今天的轮次】共 ${rounds.size} 轮")
+        if (day.isNotBlank()) {
+            appendLine("【今天的账】")
+            appendLine(day)
+            appendLine()
+        }
+        if (rounds.isNotEmpty()) appendLine("【今天的陪练轮次】共 ${rounds.size} 轮")
         val time = DateTimeFormatter.ofPattern("HH:mm").withZone(zone)
         rounds.forEachIndexed { i, r ->
             appendLine("第 ${i + 1} 轮（${time.format(Instant.ofEpochMilli(r.createdAt))}，${sourceName(r.source)}）")

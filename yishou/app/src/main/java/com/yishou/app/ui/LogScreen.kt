@@ -1,5 +1,7 @@
 package com.yishou.app.ui
 
+import com.yishou.app.settings.AppZone
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -28,9 +30,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yishou.app.log.RunLog
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /** 运行日志：哪里出过错。只在本机；点“复制全部”可以贴给别人帮你看。 */
 @Composable
@@ -41,7 +40,6 @@ fun LogScreen(onBack: () -> Unit) {
     val entries = remember(version) { log?.entries().orEmpty() }
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
-    val time = remember { SimpleDateFormat("M月d日 HH:mm:ss", Locale.CHINA) }
 
     Scaffold(topBar = { BackTopBar("运行日志", onBack) }) { padding ->
         LazyColumn(
@@ -80,7 +78,7 @@ fun LogScreen(onBack: () -> Unit) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row {
                             Text(e.area, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
-                            Text(time.format(Date(e.time)), style = MaterialTheme.typography.labelMedium)
+                            Text(AppZone.format("M月d日 HH:mm:ss", e.time), style = MaterialTheme.typography.labelMedium)
                         }
                         Text(e.message, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
                     }

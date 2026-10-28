@@ -104,6 +104,8 @@ class SpeechTest {
         assertEquals(VoiceCommand.PAUSE, VoiceCommands.parse("先停吧"))
         assertEquals(VoiceCommand.DEMO, VoiceCommands.parse("示范一下"))
         assertEquals(VoiceCommand.ROLL, VoiceCommands.parse("换一个"))
+        assertEquals(VoiceCommand.HINT, VoiceCommands.parse("给个提示"))
+        assertEquals(VoiceCommand.EXPLAIN, VoiceCommands.parse("没看懂"))
         assertNull(VoiceCommands.parse("我预计基期会比现期小，因为增长率是正的"))
         assertNull(VoiceCommands.parse(""))
     }

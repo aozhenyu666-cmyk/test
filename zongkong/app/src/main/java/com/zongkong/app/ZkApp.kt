@@ -29,6 +29,10 @@ class ZkApp : Application() {
 
     /** 别的页面要发给参谋的一句话（快捷按钮、“问参谋”），对话页打开时发出。 */
     var chatDraft: String = ""
+    /** 分享进来、要当作交付证据的照片（本机路径）：交付页打开时收走。 */
+    var proofInbox: List<String> = emptyList()
+    /** 交付记录（本机）。 */
+    val proofs by lazy { com.zongkong.app.data.ProofStore(this) }
 
     /**
      * 别的页面要「在整体对话里带着一个主题开聊」（全局页的每个区块）。
@@ -53,6 +57,7 @@ class ZkApp : Application() {
         super.onCreate()
         // 一律北京时间：时间显示、换日、定时都按它
         java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
+        com.zongkong.app.system.CrashShield.install(this)
         store = Store(this)
         actions = Actions(this, store)
         chat = com.zongkong.app.data.ChatRepo(this, store, actions)

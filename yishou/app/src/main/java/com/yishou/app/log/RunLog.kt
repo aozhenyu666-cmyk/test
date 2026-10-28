@@ -1,14 +1,13 @@
 package com.yishou.app.log
 
+import com.yishou.app.settings.AppZone
+
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /** 运行日志的一条：什么时候、哪一块、出了什么事。 */
 data class LogEntry(val time: Long, val area: String, val message: String) {
@@ -100,8 +99,7 @@ class RunLog(
 
         /** 复制用的纯文本，最新的在前 */
         fun format(entries: List<LogEntry>): String {
-            val f = SimpleDateFormat("MM-dd HH:mm:ss", Locale.CHINA)
-            return entries.joinToString("\n") { "${f.format(Date(it.time))} [${it.area}] ${it.message}" }
+            return entries.joinToString("\n") { "${AppZone.format("MM-dd HH:mm:ss", it.time)} [${it.area}] ${it.message}" }
         }
     }
 }

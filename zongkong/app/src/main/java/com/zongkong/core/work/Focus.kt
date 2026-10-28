@@ -43,17 +43,9 @@ object Focus {
         if (main.isNotBlank()) open.firstOrNull { it.key == main }?.let { return pack(it, Why.MAIN) }
         val endOfDay = DayClock.at(DayClock.date(now, zone), DayClock.DAY_START_MIN - 1, zone)
         timed.filter { (_, s, _) -> s in (now + 1)..endOfDay }.minByOrNull { it.second }?.let { return pack(it.first, Why.LATER_TODAY) }
-        open.filter { it.plan == null }.maxWithOrNull(compareBy<Rec>({ priority(work.rec(it.threadKey)) }, { it.updatedAt }))
-            ?.let { return pack(it, Why.UNSCHEDULED) }
+        // 没排时间的不再拿来当“现在这一步”（0.12）：它们在首页“待安排”里，点一下排进时段
         timed.filter { (_, s, _) -> s > now }.minByOrNull { it.second }?.let { return pack(it.first, Why.UPCOMING) }
         return Current(null, null, Why.NONE)
-    }
-
-    private fun priority(t: Rec?): Int = when (t?.get(F.PRIORITY)) {
-        "高" -> 3
-        "中" -> 2
-        "低" -> 0
-        else -> 1
     }
 
     /** 接下来要做的（不含当前这一步），按时间排，没时间的放最后。 */

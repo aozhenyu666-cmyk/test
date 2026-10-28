@@ -80,19 +80,54 @@ allprojects {
     if ($i -lt 0) { throw "取不到测试 classpath。原始输出：`n$($lines -join "`n")" }
     $raw = $lines[$i + 1]
 
-    # .aar 不能直接放进 java -cp；纯逻辑单测不需要 Compose 的类，用 android.jar 顶上
+    # .aar 不能直接放进 java -cp；纯逻辑单测不需要 Compose 的类，用 mockable android.jar 顶上。
+    #
+    # 为什么必须是 **mockable** 而不是 SDK 里那个 android.jar：
+    # 真实 android.jar 里所有方法体都是 `throw new RuntimeException("Stub!")`。
+    # AGP 生成的 mockable jar 把它们改成了「返回默认值」，单元测试（unitTests.isReturnDefaultValues）
+    # 就是靠这个才能直接调 android.util.Log 之类。用错 jar 会让一堆本来正常的测试报
+    # ExceptionInInitializerError / Stub!，看着像代码坏了，其实是运行器选错了。
     $cpEntries = @($raw -split ';' | Where-Object { $_ -and $_ -notlike '*.aar' })
-    $sdk = ""
-    $localProps = Join-Path $proj "local.properties"
-    if (Test-Path $localProps) {
-        $m = Select-String -Path $localProps -Pattern '^sdk\.dir=(.+)$'
-        if ($m) { $sdk = $m.Matches[0].Groups[1].Value -replace '\\:', ':'; $sdk = $sdk -replace '\\\\', '\' }
+
+    # 磁盘上会有好几个 android.jar（SDK 原版 26MB、各种 transform 产物 3–5MB），
+    # 光看大小/时间都不靠谱。唯一可靠的判据是 **Log.class 里那句错误文案**：
+    #   · 真实 jar / 未处理的 transform 产物 → 方法体抛 "not mocked"
+    #   · mockable 版 → 方法体是 `return 0`，既没有 "not mocked" 也没有 "Stub!"
+    # 实测这里 8.9 下两个 transform 产物一个是原版、一个才是 mockable，只能靠内容分辨。
+    function Test-Mockable([string]$path) {
+        try {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($path)
+            $entry = $null
+            foreach ($z in $zip.Entries) { if ($z.FullName -eq 'android/util/Log.class') { $entry = $z; break } }
+            if ($null -eq $entry) { $zip.Dispose(); return $false }
+            $ms = New-Object System.IO.MemoryStream
+            $s = $entry.Open(); $s.CopyTo($ms); $s.Close()
+            $txt = [System.Text.Encoding]::ASCII.GetString($ms.ToArray())
+            $ms.Dispose(); $zip.Dispose()
+            # 干净 = 既没有 not mocked 也没有 Stub!
+            $clean = ($txt.IndexOf('not mocked') -lt 0) -and ($txt.IndexOf('Stub!') -lt 0)
+            return $clean
+        } catch {
+            Write-Host "   (读不了 $path : $($_.Exception.Message))" -ForegroundColor DarkYellow
+            return $false
+        }
     }
-    $androidJar = if ($sdk) { Join-Path $sdk "platforms\android-34\android.jar" } else { "" }
-    if (-not (Test-Path $androidJar)) {
-        $alt34 = "C:\Android\sdk\platforms\android-34\android.jar"
-        if (Test-Path $alt34) { $androidJar = $alt34 } else { $androidJar = "" }
+
+    # 先请 AGP 把 mockable jar 生成出来（UP-TO-DATE 时很快返回）
+    & .\gradlew.bat --offline --console=plain -q :app:createMockableJar 2>$null | Out-Null
+    $gh = if ($env:GRADLE_USER_HOME) { $env:GRADLE_USER_HOME } else { Join-Path $env:USERPROFILE ".gradle" }
+    Write-Host "gradle home = $gh" -ForegroundColor DarkGray
+
+    $androidJar = ""
+    $all = @(Get-ChildItem $gh -Recurse -Filter "android.jar" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match 'transforms' } |
+        Sort-Object LastWriteTime -Descending)
+    foreach ($c in $all) {
+        if (Test-Mockable $c.FullName) { $androidJar = $c.FullName; break }
     }
+    if (-not $androidJar) { throw "找不到 mockable android.jar（在 $gh 的 transform 产物里没有一份去掉了 not mocked / Stub!）" }
+    Write-Host "android jar = $androidJar" -ForegroundColor DarkGray
 
     $classesMain = Join-Path $proj "app\build\tmp\kotlin-classes\debug"
     $classesTest = Join-Path $proj "app\build\tmp\kotlin-classes\debugUnitTest"

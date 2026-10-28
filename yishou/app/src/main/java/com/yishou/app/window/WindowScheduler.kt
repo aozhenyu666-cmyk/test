@@ -1,5 +1,7 @@
 package com.yishou.app.window
 
+import com.yishou.app.settings.AppZone
+
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -23,7 +25,7 @@ object WindowScheduler {
         val am = context.getSystemService(AlarmManager::class.java)
         val pi = pendingIntent(context)
         am.cancel(pi)
-        val next = WindowClock.nextScheduledStart(System.currentTimeMillis(), app.settings.app.value, ZoneId.systemDefault())
+        val next = WindowClock.nextScheduledStart(System.currentTimeMillis(), app.settings.app.value, AppZone.zone)
             ?: return
         try {
             if (canExact(am)) {

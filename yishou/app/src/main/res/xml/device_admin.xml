@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  设备管理员策略（规范 §5.1 第 1 条）：只声明 force-lock。
+  刻意不声明 wipe-data / reset-password / reset-password 等能力，也不激活任何防卸载代码。
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <force-lock />
+    </uses-policies>
+</device-admin>

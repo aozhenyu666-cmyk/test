@@ -1,5 +1,7 @@
 package com.yishou.app.window
 
+import com.yishou.app.system.ExternalGrace
+
 import android.app.Activity
 import android.media.projection.MediaProjectionManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -119,6 +121,7 @@ fun LookCard(prefs: AppPrefs, onChange: ((AppPrefs) -> AppPrefs) -> Unit) {
                         note = "先到 设置 → 识图模型 里填好接口，陪练才能看懂截屏。"
                     } else {
                         val mpm = context.getSystemService(MediaProjectionManager::class.java)
+                        ExternalGrace.open()
                         consent.launch(mpm.createScreenCaptureIntent())
                     }
                 }) { Text("开启看屏") }

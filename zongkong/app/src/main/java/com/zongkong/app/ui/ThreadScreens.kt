@@ -31,6 +31,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -423,6 +427,36 @@ fun ActionScreen(key: String, nav: NavHostController) {
                 FieldRow("断点", a[F.BREAK], "（做到一半离开时记在这里）") { editing = F.BREAK }
                 FieldRow("结果", a[F.RESULT], "（做完后写）") { editing = F.RESULT }
                 if (a[F.STUCK].isNotBlank()) FieldRow("卡点", a[F.STUCK])
+            }
+            // 交付的证据（0.13，照片只在手机里）
+            val delivery = remember(a.updatedAt) { app.proofs.of(key) }
+            delivery?.let { d ->
+                Panel(modifier = Modifier.testTag("action-delivery")) {
+                    Text(
+                        "交付 · " + when (d.source) { "ai" -> "总控看过"; "override" -> "本人改判"; else -> "自评" },
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    val photos = d.items.filter { it.kind == com.zongkong.core.work.ProofItem.PHOTO }
+                    if (photos.isNotEmpty()) Row(
+                        Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        photos.forEach { p ->
+                            val bmp = remember(p.value) {
+                                runCatching { android.graphics.BitmapFactory.decodeFile(p.value, android.graphics.BitmapFactory.Options().apply { inSampleSize = 4 })?.asImageBitmap() }.getOrNull()
+                            }
+                            bmp?.let {
+                                androidx.compose.foundation.Image(
+                                    it, null, contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                    modifier = Modifier.size(84.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp)),
+                                )
+                            }
+                        }
+                    }
+                    d.rounds.forEachIndexed { i, r ->
+                        Hint("第 ${i + 1} 轮：${com.zongkong.core.work.WorkOps.Met.valueOf(r.met).label}——${r.reason}" + if (r.ask.isNotBlank()) "（让补：${r.ask}）" else "")
+                    }
+                }
             }
             when (a.actionStatus) {
                 ActionStatus.DONE, ActionStatus.CANCELLED -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

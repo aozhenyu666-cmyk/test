@@ -114,6 +114,19 @@ interface AgentEnv {
     fun screenshots(from: Long, to: Long): List<com.zongkong.core.boss.Shot> = emptyList()
     /** 让识图模型看一张图，回答 [question]。 */
     suspend fun describeImage(path: String, question: String): String = "这个环境看不了图"
+    /** 对话里确认了今天的安排：算作“今日部署”（本人确认）。返回给参谋看的一句话。 */
+    suspend fun confirmPlan(): String = "这个环境确认不了部署"
+    /** 晚上收尾：交日终验收（今天的清单 + 明天第一步 + 一句话）。 */
+    suspend fun closeDay(tomorrow: String, note: String): String = "这个环境交不了日终验收"
+    /** 交一道关卡（文字）。 */
+    suspend fun submitGate(gate: String, text: String): String = "这个环境交不了关卡"
+
+    /** 对话里用户最近发的那张照片（交付证据用）。 */
+    fun lastPhoto(): com.zongkong.core.work.ProofItem? = null
+    /** 交过的照片：指纹 → 那一步的标题（同一张不能交两次）。 */
+    fun usedPhotos(): Map<String, String> = emptyMap()
+    /** 存一次交付（本机）。 */
+    fun saveDelivery(d: com.zongkong.core.work.Delivery) {}
 
     // ---------- 信息收集部的漏斗 ----------
 
@@ -210,6 +223,23 @@ class ZkTools(private val env: AgentEnv) {
             "get_thread", "看一件事的详情：为什么、当前判断、断点、下一步、完成依据、全部行动（带行动键）、最近记录。",
             listOf(Param("thread", "string", "事项编号（ZK-XXXX）或标题", required = true)),
         ),
+        ToolSpec(
+            "confirm_plan",
+            "用户在对话里确认了今天的安排后调用：算作“今日部署”（本人确认，解除早上的严管）。前提：今天至少一段排了时间（先 add_action / reschedule_action）。只有用户明确说“就这样 / 可以 / 好”时才调，不要替他确认。",
+        ),
+        ToolSpec(
+            "close_day",
+            "晚上收尾：照今天的清单交“日终验收”。先 today_report 和用户过一遍，问清明天第一步，再调这个。",
+            listOf(
+                Param("tomorrow", "string", "明天第一步（用户说的，具体到能马上开始）", required = true),
+                Param("note", "string", "用户对今天的一句话（可空，用他的原话）"),
+            ),
+        ),
+        ToolSpec(
+            "submit_gate",
+            "替用户交一道写字的关卡（比如“推进一个判断”）。text 必须是用户在对话里说的内容（可以整理，不能编）。list_gates 看有哪些、交了没有。",
+            listOf(Param("gate", "string", "关卡 id 或标题", required = true), Param("text", "string", "用户的内容", required = true)),
+        ),
         ToolSpec("today_report", "今天的清单：排了的每一步做了没有（✓ 做完 / ○ 没做 / ✗ 卡住 / → 改期）、另外做了什么、到期的约定、做事和娱乐时长、明天第一步。照着记录列，用户问今天做了什么、哪些没完成、日终时先调这个。"),
         ToolSpec(
             "set_day_script",
@@ -270,9 +300,9 @@ class ZkTools(private val env: AgentEnv) {
             ),
         ),
         ToolSpec(
-            "add_action", "在一件事下面加一步行动。时间用中文写（今晚 20:00-21:00、明天 9:00、周六 10:00），不排时间就不填。",
+            "add_action", "加一步行动、排进时间。用户说“下午 2 点到 4 点刷题”“现在要去做 X”就用它，别只是口头答应。时间用中文写（今天 14:00-16:00、今晚 20:00、明天 9:00），不说时间就不填（进待安排）。零散的事不用挑事项，thread 空着就挂在「日常安排」下。",
             listOf(
-                Param("thread", "string", "事项编号或标题", required = true),
+                Param("thread", "string", "事项编号或标题；零散的事空着"),
                 Param("title", "string", "要做的一步，动词开头，具体", required = true),
                 Param("time", "string", "计划时间"),
                 Param("criteria", "string", "做到什么算完（可检查）"),
@@ -292,12 +322,14 @@ class ZkTools(private val env: AgentEnv) {
             listOf(Param("action", "string", "行动键或标题", required = true), Param("time", "string", "新时间，中文写法", required = true)),
         ),
         ToolSpec(
-            "complete_action", "记一步行动的结果。对照完成依据：达到 → 完成；部分达到 → 待确认；没达到 → 卡住。",
+            "complete_action", "记一步行动的结果（交付）。对照完成依据：达到 → 完成；部分达到 → 待确认；没达到 → 卡住。用户在对话里发了照片作证据，photo 填“是”。",
             listOf(
                 Param("action", "string", "行动键或标题", required = true),
                 Param("result", "string", "结果，具体", required = true),
                 Param("met", "string", "对照完成依据", required = true, choices = WorkOps.Met.entries.map { it.label }),
                 Param("next", "string", "下一步"),
+                Param("photo", "string", "“是” = 把用户在对话里最近发的那张照片记成这一步的交付证据（你已经看过）"),
+                Param("link", "string", "证据链接（可选）"),
             ),
         ),
         ToolSpec(
@@ -619,6 +651,14 @@ class ZkTools(private val env: AgentEnv) {
                     ),
                     "列了今天的清单",
                 )
+                "confirm_plan" -> env.confirmPlan().let { ToolResult(it, it) }
+                "close_day" -> a.s("tomorrow").ifBlank { return ToolResult.fail("先问清明天第一步") }
+                    .let { env.closeDay(it, a.s("note")) }.let { ToolResult(it, "交日终验收") }
+                "submit_gate" -> {
+                    val g = a.s("gate").ifBlank { return ToolResult.fail("gate 不能空") }
+                    val text = a.s("text").ifBlank { return ToolResult.fail("text 不能空：用用户说的内容") }
+                    env.submitGate(g, text).let { ToolResult(it, "交关卡「$g」") }
+                }
                 "add_expense" -> addExpense(a)
                 "ledger_summary" -> ToolResult(com.zongkong.core.ledger.Ledger.brief(env.ledger(), env.now(), env.zone), "看了账本")
                 "remove_expense" -> {
@@ -1384,7 +1424,11 @@ class ZkTools(private val env: AgentEnv) {
     }
 
     private fun addAction(a: Args): ToolResult {
-        val t = findThread(a.s("thread")) ?: return noThread(a.s("thread"))
+        val t = if (a.s("thread").isBlank()) {
+            var d: Rec? = null
+            env.updateWork { w -> com.zongkong.core.plan.QuickPlan.daily(w, env.now(), env.rnd).also { d = it.second }.first }
+            d!!
+        } else findThread(a.s("thread")) ?: return noThread(a.s("thread"))
         val title = a.s("title").ifBlank { return ToolResult.fail("行动标题不能空") }
         val time = a.s("time")
         val plan = if (time.isBlank()) null else TimeParse.parse(time, env.now(), env.zone)
@@ -1432,8 +1476,22 @@ class ZkTools(private val env: AgentEnv) {
         val x = findAction(a.s("action")) ?: return noAction(a.s("action"))
         val met = WorkOps.Met.entries.firstOrNull { it.label == a.s("met") || it.name.equals(a.s("met"), true) }
             ?: return ToolResult.fail("met 只能是 达到 / 部分达到 / 没达到")
-        val result = a.s("result").ifBlank { return ToolResult.fail("结果不能空") }
-        env.updateWork { WorkOps.complete(it, x.key, result, met, a.s("next"), env.now(), env.zone, env.rnd) }
+        val note = a.s("result").ifBlank { return ToolResult.fail("结果不能空") }
+        // 证据：对话里最近那张照片 + 链接（0.13）
+        val now = env.now()
+        val items = buildList {
+            if (a.b("photo") == true || a.s("photo") in setOf("是", "yes", "true", "1")) {
+                val p = env.lastPhoto() ?: return ToolResult.fail("对话里没有照片。让用户先发一张，或者不填 photo（记成自评）")
+                env.usedPhotos()[p.hash]?.takeIf { p.hash.isNotBlank() }?.let { return ToolResult.fail("这张照片交过「$it」了，同一张照片不能交两件事。让用户另拍一张") }
+                add(p)
+            }
+            a.opt("link")?.let { add(com.zongkong.core.work.ProofItem(com.zongkong.core.work.ProofItem.LINK, it)) }
+        }
+        val source = if (items.isEmpty()) "self" else "ai"
+        val rounds = if (items.isEmpty()) emptyList() else listOf(com.zongkong.core.work.ProofRound(now, met.name, "在对话里看过证据：$note"))
+        val result = if (items.isEmpty()) note else com.zongkong.core.work.Proof.resultText(note, items, rounds, met, source, env.zone)
+        env.updateWork { WorkOps.complete(it, x.key, result, met, a.s("next"), now, env.zone, env.rnd) }
+        if (items.isNotEmpty()) env.saveDelivery(com.zongkong.core.work.Delivery(x.key, x.title, items, rounds, met.name, source, now))
         env.kick()
         if (met == WorkOps.Met.YES) {
             activePlan()?.let { p ->
@@ -1443,7 +1501,8 @@ class ZkTools(private val env: AgentEnv) {
             }
         }
         val st = env.work().rec(x.key)?.actionStatus?.label.orEmpty()
-        return ToolResult("「${x.title}」记了结果，状态：$st", "「${x.title}」→ $st")
+        val ev = if (items.isEmpty()) "（没有证据，记成自评）" else "（证据 ${items.size} 样已存）"
+        return ToolResult("「${x.title}」记了结果，状态：$st$ev", "「${x.title}」→ $st")
     }
 
     private fun cancel(a: Args): ToolResult {

@@ -42,6 +42,13 @@ object Handoff {
 
     fun contains(text: String) = text.contains("总控交接")
 
+    /** 一段回答里有几个交接块（GPT 排一天时，一件事一个块），按出现顺序切开。 */
+    fun splitBlocks(text: String): List<String> {
+        val starts = Regex("【?总控交接").findAll(text).map { it.range.first }.toList()
+        if (starts.size <= 1) return listOf(text)
+        return starts.mapIndexed { i, s -> text.substring(s, starts.getOrNull(i + 1) ?: text.length) }
+    }
+
     private val KEYS = mapOf(
         "事项" to "thread", "标题" to "thread", "主题" to "thread",
         "编号" to "code",

@@ -2,6 +2,8 @@
 
 package com.yishou.app.ui
 
+import com.yishou.app.settings.AppZone
+
 import android.app.Application
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -45,9 +47,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 class BetViewModel(app: Application) : AndroidViewModel(app) {
     private val practice = (app as YishouApp).database.practice()
@@ -135,7 +134,7 @@ private fun CalibrationCard(r: CalibrationReport) {
                     r.buckets.forEach { b ->
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("说 ${b.confidence}%", style = MaterialTheme.typography.labelMedium)
-                            Text("${b.rate}%", style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                            Text("${b.rate}%", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                             Text("${b.hits}/${b.n}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
@@ -231,17 +230,17 @@ private fun DoneBet(b: Bet) {
 
 @Composable
 private fun BetBody(b: Bet) {
-    val time = SimpleDateFormat("M月d日 HH:mm", Locale.CHINA).format(Date(b.createdAt))
+    val time = AppZone.format("M月d日 HH:mm", b.createdAt)
     if (b.kind == BetKind.REHEARSE) {
         Text(b.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Text(b.claim, style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Serif))
+        Text(b.claim, style = MaterialTheme.typography.bodyLarge)
         Text("关键量：${b.basis}", style = MaterialTheme.typography.bodyMedium)
     } else {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("${b.confidence}%", style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+            Text("${b.confidence}%", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text("  的把握", style = MaterialTheme.typography.labelMedium)
         }
-        Text(b.claim, style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Serif))
+        Text(b.claim, style = MaterialTheme.typography.bodyLarge)
         Text("依据：${b.basis}", style = MaterialTheme.typography.bodyMedium)
     }
     Text(time, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -68,10 +68,21 @@ object SelfHeal {
      *
      * 修是有上限的：连着修 [MAX_HEALS] 次都没修好，多修只会一直开关服务，反而把系统惹毛，
      * 这时候把决定权交回用户（大声提醒），比装作在修诚实。
+     *
+     * [systemRemoved] 是真机事故补上的一个口子，见 [systemRemoved] 的注释：
+     * 「设置里没有我」有两种，用户自己关的要尊重，系统摘掉的必须修。
      */
-    fun step(running: Boolean, enabled: Boolean, canWrite: Boolean, heals: Int, now: Long, lastHeal: Long): Step = when {
+    fun step(
+        running: Boolean,
+        enabled: Boolean,
+        canWrite: Boolean,
+        heals: Int,
+        now: Long,
+        lastHeal: Long,
+        systemRemoved: Boolean = false,
+    ): Step = when {
         running -> Step.NONE
-        !enabled -> Step.WARN
+        !enabled && !systemRemoved -> Step.WARN
         !canWrite -> Step.WARN
         heals >= MAX_HEALS -> Step.WARN
         now - lastHeal < HEAL_GAP_MS -> Step.WARN
@@ -122,6 +133,57 @@ object SelfHeal {
     }
 
     private fun fullClass(pkg: String, cls: String): String = if (cls.startsWith(".")) pkg + cls else cls
+
+    // ---------- 「设置里没有我」是用户关的，还是系统摘的 ----------
+
+    private const val PREF = "selfheal"
+    private const val K_EVER_RAN = "ever_ran"
+
+    /**
+     * 我们到底有没有见过这个无障碍服务被系统挂载过。
+     *
+     * **必须落盘**，而且要在「服务连上」的那一刻就写，不能等「跑出过一次健康」再写。
+     * 真机上踩到的坑：装完新版本，系统会顺手把无障碍从列表里摘掉，而那一刻进程刚重启。
+     * 如果这个标志只在内存里、或者只在健康时才写，重启后就变成 false，
+     * 于是这次摘除被判成「用户还没开启」→ 永远不修。
+     * 表现就是用户说的「更新完总控，无障碍一直显示开着但没在运行」。
+     *
+     * 写入点在 [GuardService] 连上时（见 GuardService.onServiceConnected 里的 markEverRan）。
+     */
+    fun markEverRan(context: Context) {
+        runCatching {
+            val p = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            if (!p.getBoolean(K_EVER_RAN, false)) p.edit().putBoolean(K_EVER_RAN, true).apply()
+        }
+    }
+
+    fun everRan(context: Context): Boolean =
+        runCatching { context.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean(K_EVER_RAN, false) }
+            .getOrDefault(false)
+
+    /**
+     * 这个「设置里没有我」到底是用户关的，还是系统摘的？
+     *
+     * 两者在 `enabled_accessibility_services` 里长得一模一样（都只是少了我们这一项），
+     * 所以用两条旁证：
+     *   1. 无障碍**总开关**还是 1 —— 用户通常会连总开关一起关掉；
+     *   2. 历史上我们确实被挂载过（[everRan]）—— 从没跑过的不算，那时是还没打开。
+     *
+     * 两条都成立才认定「系统摘的」。判错的方向是「多修一次」，不会把用户主动关的打开，
+     * 因为主动关一般会把总开关一起关掉。
+     */
+    fun systemRemoved(context: Context): Boolean {
+        val masterOn = runCatching {
+            android.provider.Settings.Secure.getInt(
+                context.contentResolver,
+                android.provider.Settings.Secure.ACCESSIBILITY_ENABLED,
+            ) == 1
+        }.getOrDefault(false)
+        return systemRemovedPure(everRan(context), masterOn)
+    }
+
+    /** 纯逻辑版（可单测）。 */
+    fun systemRemovedPure(everRan: Boolean, masterOn: Boolean): Boolean = everRan && masterOn
 
     // ---------- 真正的修复 ----------
 
@@ -233,14 +295,23 @@ object SelfHeal {
         }
         val now = System.currentTimeMillis()
         val enabled = PermissionStatus.accessibility(context)
-        // 诊断：只在“运行 / 开着没跑 / 被关”之间变化时记一条，否则每分钟一条会把时间线刷满
-        val nowState = if (enabled) "stale" else "disabled"
+        // 「列表里没有我」是系统摘的还是用户关的：决定后面该修还是只提醒。
+        val removed = !enabled && systemRemoved(context)
+        // 诊断：只在“运行 / 开着没跑 / 被关 / 被系统摘掉”之间变化时记一条，否则每分钟一条会把时间线刷满
+        val nowState = when {
+            enabled -> "stale"
+            removed -> "removed"
+            else -> "disabled"
+        }
         if (state != nowState) {
             state = nowState
-            if (enabled) Diag.log(context, "stale", "开着但没在运行")
-            else Diag.log(context, "disabled", "无障碍在设置里是关着的")
+            when (nowState) {
+                "stale" -> Diag.log(context, "stale", "开着但没在运行")
+                "removed" -> Diag.log(context, "stale", "无障碍被系统从列表里摘掉了：按自动恢复处理")
+                else -> Diag.log(context, "disabled", "无障碍在设置里是关着的")
+            }
         }
-        if (step(false, enabled, canWrite(context), heals, now, lastHeal) == Step.HEAL) {
+        if (step(false, enabled, canWrite(context), heals, now, lastHeal, systemRemoved = removed) == Step.HEAL) {
             lastHeal = now
             heals++
             // 走 attempt 而不是 rebindDetail：这里要带上“第几次”，而且诊断由本函数自己写

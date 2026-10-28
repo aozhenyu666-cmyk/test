@@ -7,6 +7,8 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
 import com.yishou.app.llm.LlmConfig
 import com.yishou.app.speech.SpeechConfig
+import com.yishou.app.speech.SpeechEndpoint
+import com.yishou.app.speech.SpeechSettings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,6 +19,12 @@ import kotlinx.coroutines.flow.asStateFlow
 class SettingsStore(context: Context) {
 
     private val prefs: SharedPreferences = openEncrypted(context.applicationContext)
+
+    init {
+        val current = speechValues()
+        val upgraded = SpeechSettings.migrate(current)
+        if (current != upgraded) writeSpeechValues(upgraded.filter { (key, value) -> current[key] != value })
+    }
 
     private val _llm = MutableStateFlow(readLlm())
     val llm: StateFlow<LlmConfig> = _llm.asStateFlow()
@@ -46,23 +54,31 @@ class SettingsStore(context: Context) {
     val speech: StateFlow<SpeechConfig> = _speech.asStateFlow()
 
     fun saveSpeech(config: SpeechConfig) {
-        prefs.edit()
-            .putString(KEY_S_BASE_URL, config.baseUrl.trim())
-            .putString(KEY_S_API_KEY, config.apiKey.trim())
-            .putString(KEY_S_STT, config.sttModel.trim())
-            .putString(KEY_S_TTS, config.ttsModel.trim())
-            .putString(KEY_S_VOICE, config.ttsVoice.trim())
-            .apply()
+        writeSpeechValues(SpeechSettings.inputValues(config.input) + SpeechSettings.outputValues(config.output))
         _speech.value = readSpeech()
     }
 
-    private fun readSpeech() = SpeechConfig(
-        baseUrl = prefs.getString(KEY_S_BASE_URL, "").orEmpty(),
-        apiKey = prefs.getString(KEY_S_API_KEY, "").orEmpty(),
-        sttModel = prefs.getString(KEY_S_STT, "").orEmpty(),
-        ttsModel = prefs.getString(KEY_S_TTS, "").orEmpty(),
-        ttsVoice = prefs.getString(KEY_S_VOICE, "").orEmpty(),
-    )
+    fun saveTranscriber(config: SpeechEndpoint) {
+        writeSpeechValues(SpeechSettings.inputValues(config))
+        _speech.value = readSpeech()
+    }
+
+    fun saveSynthesizer(config: SpeechEndpoint) {
+        writeSpeechValues(SpeechSettings.outputValues(config))
+        _speech.value = readSpeech()
+    }
+
+    private fun speechValues(): Map<String, String> = prefs.all.mapNotNull { (key, value) ->
+        (value as? String)?.let { key to it }
+    }.toMap()
+
+    private fun writeSpeechValues(values: Map<String, String>) {
+        val edit = prefs.edit()
+        values.forEach { (key, value) -> edit.putString(key, value) }
+        edit.apply()
+    }
+
+    private fun readSpeech() = SpeechSettings.read(speechValues())
 
     private val _prefs = MutableStateFlow(AppPrefs.fromJson(prefs.getString(KEY_APP_PREFS, null)))
     /** 除接口以外的全部设置 */
