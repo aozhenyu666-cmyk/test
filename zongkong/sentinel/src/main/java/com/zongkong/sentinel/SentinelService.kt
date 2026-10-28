@@ -170,7 +170,9 @@ class SentinelService : AccessibilityService() {
         pagePrompt.open("repair", BlockActivity.repairIntent(this, reason!!), "总控异常，需要处理",
             visible = { BlockActivity.isShowing },
             relevant = { faultReason() != null && repairAllowed() && interactive() &&
-                !getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked },
+                !getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked &&
+                lastPkg != "com.android.settings" && lastPkg != Proto.MAIN_PKG &&
+                lastPkg?.contains("permissioncontroller") != true },
             onShown = { Store.log(this, "已确认故障处理页显示") },
             onFallback = { Store.log(this, "故障页未到前台，显示可点击的处理入口") })
     }
