@@ -332,13 +332,20 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private var closeRunnable: Runnable? = null
     private val ticker = object : Runnable {
         override fun run() {
+            android.util.Log.i(DIAG, "ticker.run() fired")
             try { tick() }
-            catch (error: Exception) { partner.markProgress("调度暂时出错", "正在恢复：" + error.javaClass.simpleName) }
+            catch (error: Exception) {
+                // 这里原来只写进界面，日志里什么都看不到，等于把"每秒抛异常"彻底藏起来了。
+                // 实测就遇到过：界面停在「在想」，其实 tick 每秒都在抛，主动开口一次都跑不到。
+                android.util.Log.e(DIAG, "tick threw: " + error.javaClass.name + " " + (error.message ?: ""))
+                partner.markProgress("调度暂时出错", "正在恢复：" + error.javaClass.simpleName)
+            }
             finally { handler.postDelayed(this, 1000) }
         }
     }
 
     fun start() {
+        android.util.Log.i(DIAG, "brain.start() entered")
         overlay.allowOutput = { owner, priority ->
             !settings.partnerRiding && cn.companion.pet.core.training.ScopedOutputPolicy.allows(protectedOutputOwner(), owner, priority, outputArbiter)
         }
@@ -348,12 +355,19 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         partner.blocked = { partnerBusy() }
         partner.display = { text -> showPartnerBubble(text) }
         partner.displayConfirmed = { text ->
-            if (settings.partnerRiding || partnerBusy() != null || !active || partner.pageVisible) false
+            // 这里原来用 partnerBusy() 一票否决，而 partnerBusy() 在「守护会话进行中」时返回非 null。
+            // 结果：只要还有一个 session 对象在内存里，它生成了话也永远显示不出来——
+            // 用户看到的就是"它明明在想，但从来不说"。
+            //
+            // 正确的语义：守护限制的是「他去别的 App」，不是「它不许说话」。
+            // 所以这里只排除真正冲突的：语音伴骑模式、屏幕关着、正在打字/录音/通话、暂停/安静时段。
+            if (settings.partnerRiding || !active || partner.pageVisible) false
             else {
                 val shown = overlay.showBubbleConfirmed(partnerBubbleSpec(text, false))
                 val allowed = !settings.petPaused && now() >= settings.partnerQuietUntil && !scheduler.isQuiet(now()) &&
-                    !isTypingNow && !partner.typing && !partner.voiceCapturing && !callInProgress() && partnerBusy() == null && active && !partner.pageVisible
+                    !isTypingNow && !partner.typing && !partner.voiceCapturing && !callInProgress() && active && !partner.pageVisible
                 if (shown && !allowed) overlay.hideBubble()
+                android.util.Log.i(DIAG, "displayConfirmed shown=" + shown + " allowed=" + allowed)
                 shown && allowed
             }
         }
@@ -406,7 +420,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         app.capabilityStatus = { capabilityLines() }
         active = isUserActive()
         if (active) onUserPresent()
+        android.util.Log.i(DIAG, "brain.start() reached ticker post")
         handler.post(ticker)
+        android.util.Log.i(DIAG, "brain.start() ticker posted")
         app.events.addListener(agentListener)
         handler.postDelayed(agentTrigger, 1_200)
         PerceptionHub.onScroll = { pkg -> onScrollEvent(pkg) }

@@ -338,7 +338,11 @@ class PartnerConversation(private val app: PetApp) {
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
                 if (expected == revision) failProactive(if (error is PartnerCallFailure) error.message.orEmpty() else "主动交流暂时失败：" + error.javaClass.simpleName)
-            } finally { if (expected == revision) { proactivePending = false; mutableBusy.value = false } }
+            } finally {
+                android.util.Log.i("PartnerBusy", "proactive finally: expected=" + expected + " revision=" + revision + " match=" + (expected == revision))
+                if (expected == revision) { proactivePending = false; mutableBusy.value = false }
+                android.util.Log.i("PartnerBusy", "busy now=" + mutableBusy.value)
+            }
         }
     }
 
@@ -374,7 +378,10 @@ class PartnerConversation(private val app: PetApp) {
 
     fun away() { mutableSession.value?.let { update(rules.away(it, now())) } }
     fun tick() { mutableSession.value?.let { val next = rules.tick(it, now()); if (next != it) { cancel(); update(next) } } }
-    fun cancel() { revision++; job?.cancel(); proactivePending = false; mutableBusy.value = false }
+    fun cancel() {
+        android.util.Log.i("PartnerBusy", "cancel() called, revision " + revision + " -> " + (revision + 1) + " busyBefore=" + mutableBusy.value)
+        revision++; job?.cancel(); proactivePending = false; mutableBusy.value = false
+    }
     fun close() { cancel(); mutableSession.value?.let { update(rules.close(it, "用户结束")) } }
 
     fun observe(text: String, material: String, source: TopicSource) {
