@@ -43,8 +43,7 @@ class GateService : AccessibilityService() {
     private val foregroundPkg get() = foregroundTracker.current
     private var watchJob: Job? = null
     private val querying = mutableSetOf<String>()
-    private var lastLaunchPkg: String? = null
-    private var lastLaunchAt = 0L
+    private val launchDebounce = GateLaunchDebounce()
     private val pagePrompt by lazy { PagePrompt(this) }
     /** 放行到期时再检查一次：到期时还停留在该应用，就弹出思考页 */
     private var expiryCheck: Job? = null
@@ -142,9 +141,13 @@ class GateService : AccessibilityService() {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
         if (pkg == packageName && pagePrompt.showingOverlay && !GateActivity.isShowing) return
+        // 旧题页关闭后可能迟到一条窗口事件，不能把刚打开的目标应用覆盖成“一手在前台”。
+        if (pkg == packageName && event.className?.toString() == GateActivity::class.java.name && !GateActivity.isShowing) return
         val systemPackages = systemAllowed()
         val transient = pkg != packageName && pkg !in homes && (pkg in systemPackages || pkg in WindowRules.STATIC_SYSTEM)
         foregroundTracker.update(pkg, transient)
+        launchDebounce.onForeground(foregroundPkg)
+        Log.d(TAG, "窗口包名=$pkg，类=${event.className}，当前=$foregroundPkg，做题页=${GateActivity.isShowing}")
         _lastPackage.value = foregroundPkg
         app.partner.foreground(pkg)
         if (pkg == packageName) {
@@ -185,7 +188,7 @@ class GateService : AccessibilityService() {
         val group = prefs.groupOf(pkg) ?: return
         if (GateActivity.isShowing) return
         // 同一个应用打开时会连续发出好几次切换事件，2 秒内只处理一次
-        if (pkg == lastLaunchPkg && now - lastLaunchAt < 2_000) return
+        if (!launchDebounce.ready(pkg, android.os.SystemClock.elapsedRealtime())) return
 
         if (!querying.add(pkg)) return
         scope.launch {
@@ -213,9 +216,10 @@ class GateService : AccessibilityService() {
 
     private fun launchGate(pkg: String, group: String, now: Long) {
         if (GateActivity.isShowing) return
-        if (pkg == lastLaunchPkg && now - lastLaunchAt < 2_000) return
-        lastLaunchPkg = pkg
-        lastLaunchAt = System.currentTimeMillis()
+        val nowMono = android.os.SystemClock.elapsedRealtime()
+        if (!launchDebounce.ready(pkg, nowMono)) return
+        launchDebounce.launched(pkg, nowMono)
+        Log.i(TAG, "请求做题页：$pkg")
         pagePrompt.open(
             targetKey = "$pkg/$group",
             target = GateActivity.intent(this, pkg, group),

@@ -98,7 +98,8 @@ class GateIntegrationTest {
             val initial = app.stats.day(day).event(com.yishou.app.stats.DayStats.GATE_SHOWN)
             repeat(20) { index ->
                 RuntimeSupport.fixture()
-                Assert.assertTrue("第 ${index + 1} 次打开未拦截", device.wait(Until.hasObject(By.text("打开「入口测试应用」之前")), 8_000))
+                val shown = device.wait(Until.hasObject(By.text("打开「入口测试应用」之前")), 8_000)
+                Assert.assertTrue("第 ${index + 1} 次打开未拦截；connected=${GateService.connected.value} foreground=${GateService.foreground} showing=${GateActivity.isShowing} problem=${GateService.problem.value}", shown)
                 Assert.assertEquals(initial + index + 1, app.stats.day(day).event(com.yishou.app.stats.DayStats.GATE_SHOWN))
                 Assert.assertNull(app.database.dao().activePass("联通娱乐", System.currentTimeMillis()))
                 find(By.text("先回桌面")).click()
