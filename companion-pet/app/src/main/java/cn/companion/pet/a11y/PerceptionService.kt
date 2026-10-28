@@ -34,7 +34,12 @@ class PerceptionService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
-            PerceptionHub.lastTypingAt = android.os.SystemClock.elapsedRealtime()
+            // 只认输入框里的文字变化：游戏计分、播放器时间、聊天列表刷新也会发这个事件，
+            // 以前全当成“你在打字”，主动开口就一直闭嘴。
+            val cls = event.className?.toString().orEmpty()
+            if (cls.contains("EditText") || cls.contains("TextField") || cls.contains("AutoComplete")) {
+                PerceptionHub.lastTypingAt = android.os.SystemClock.elapsedRealtime()
+            }
         }
         event ?: return
         // 这里的异常会让系统把服务标成“此服务出现故障”，并要求用户手动关掉再打开。
@@ -48,6 +53,12 @@ class PerceptionService : AccessibilityService() {
 
     private fun handle(event: AccessibilityEvent) {
         val pkg = event.packageName?.toString() ?: return
+        if (pkg == packageName && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            // 自己的窗口：确认真的是本应用页面到了前台（不是悬浮窗），再通知（自律锁定、回到聊天）。
+            handler.removeCallbacks(confirmOwn)
+            handler.postDelayed(confirmOwn, CONFIRM_DELAY_MILLIS)
+            return
+        }
         if (pkg in ignored) return
         val now = System.currentTimeMillis()
         when (event.eventType) {
@@ -67,6 +78,13 @@ class PerceptionService : AccessibilityService() {
     }
 
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val confirmOwn = Runnable {
+        try {
+            if (foregroundApplicationPackage() == packageName) PerceptionHub.onOwnForeground?.invoke()
+        } catch (e: Exception) {
+            android.util.Log.w("PerceptionService", "own confirm dropped", e)
+        }
+    }
     private val confirmForeground = Runnable {
         try {
             val active = foregroundApplicationPackage()
@@ -117,6 +135,7 @@ class PerceptionService : AccessibilityService() {
 
     override fun onDestroy() {
         handler.removeCallbacks(confirmForeground)
+        handler.removeCallbacks(confirmOwn)
         disconnect()
         super.onDestroy()
     }

@@ -260,6 +260,8 @@ class PetApp : Application() {
     }
     /** 桌宠运行时注册：设置页诊断读守护状态。没在运行时为 null。 */
     @Volatile var focusStatus: (() -> cn.companion.pet.core.focus.FocusStatus)? = null
+    /** 桌宠运行时注册：高频陪伴现在的节奏与“为什么没说话”。 */
+    @Volatile var pulseStatus: (() -> String)? = null
     /** 桌宠运行时注册：无障碍执行路径健康的一句话结论。 */
     @Volatile var executionHealth: (() -> String)? = null
     /** 桌宠运行时注册：练习换休息本轮进度。 */

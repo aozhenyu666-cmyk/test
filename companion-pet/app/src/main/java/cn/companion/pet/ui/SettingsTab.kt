@@ -163,7 +163,7 @@ private fun FocusDiagnostics() {
     } + listOfNotNull(
         app.executionHealth?.invoke()?.let { "拦截执行路径：" + it },
         app.practiceStatus?.invoke()?.let { "练习换休息：" + it },
-    ) + app.capabilityStatus?.invoke().orEmpty().map { "能力：" + it }
+    ) + app.capabilityStatus?.invoke().orEmpty().map { "能力：" + it } + listOfNotNull(app.pulseStatus?.invoke())
     lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
     TextButton(onClick = { tick++ }) { Text("刷新") }
 }
@@ -457,6 +457,33 @@ private fun CompanionSettings(context: Context) {
     AppListRow(context, "会话中允许的 App", "切到这些 App（如笔记、词典、要复制资料的阅读器）宽限更长；学习 App 也算", s.sessionAllowedApps) {
         s.sessionAllowedApps = it
     }
+
+    Section("高频陪伴与自律锁定")
+    var pulseOn by remember { mutableStateOf(s.pulseMode) }
+    Toggle("高频陪伴", "开：到点就主动跟你说一句，你不回也会接着说（连续不回才慢慢放缓，最多慢到 3 倍）。打字、通话、录音、睡眠时段、点了安静时闭嘴。关：回到挑时机的主动陪伴。", pulseOn) {
+        pulseOn = it; s.pulseMode = it
+    }
+    if (pulseOn) {
+        var secText by remember { mutableStateOf(s.pulseSeconds.toString()) }
+        NumberField("每隔几秒说一句（30–600）", secText) { secText = it; it.toIntOrNull()?.let { v -> s.pulseSeconds = v.coerceIn(30, 600) } }
+        Text("每一句尽量用模型写；模型用不了或今天额度用完时，用本机句子（引用你屏幕上的原句或你说过的话），不会因此沉默。一分钟一句约 60 次/小时，记得把“每日调用上限”调高。",
+            style = MaterialTheme.typography.bodySmall)
+    }
+    var discMin by remember { mutableStateOf(s.disciplineMinutes.toString()) }
+    NumberField("自律锁定时长（分钟）", discMin) { discMin = it; it.toIntOrNull()?.let { v -> s.disciplineMinutes = v.coerceIn(5, 180) } }
+    var discApps by remember { mutableStateOf(s.disciplineAllowed) }
+    OutlinedTextField(discApps, { discApps = it; s.disciplineAllowed = it }, label = { Text("锁定时允许的应用（包名，逗号分隔）") },
+        modifier = Modifier.fillMaxWidth())
+    var discAuto by remember { mutableStateOf(s.disciplineAuto) }
+    Toggle("跑偏自动锁定", "开：在“刷流类应用”里连续待满下面的分钟数，自动进入自律锁定。这是你预先授权的规则；锁定中随时可以点“结束守护”。默认关。", discAuto) {
+        discAuto = it; s.disciplineAuto = it
+    }
+    if (discAuto) {
+        var driftText by remember { mutableStateOf(s.driftMinutes.toString()) }
+        NumberField("连续刷多少分钟算跑偏", driftText) { driftText = it; it.toIntOrNull()?.let { v -> s.driftMinutes = v.coerceIn(1, 120) } }
+    }
+    Text("自律锁定：点桌宠 → 更多 → 自律锁定。锁定后只能用桌宠聊天页，以及上面列的应用（默认微信、电话）；来电、紧急呼叫永远不拦。切到别的应用 5 秒后全屏拦截并带回聊天页。",
+        style = MaterialTheme.typography.bodySmall)
 
     Section("陪练与专注策略")
     Text("开始陪练在桌宠菜单里：点桌宠 → 开始陪练。这里只设策略。", style = MaterialTheme.typography.bodySmall)

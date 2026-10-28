@@ -133,6 +133,18 @@ class Settings(context: Context) {
         allowedGraceMillis = sessionAllowedGraceSec.coerceIn(3, 3600) * 1000L,
     )
 
+    /** 高频陪伴（用户 2026-10-29）：到点就主动说一句，默认开，每 60 秒。 */
+    var pulseMode by bool("pulse_mode", true)
+    var pulseSeconds by int("pulse_seconds", 60)
+    /** 自律锁定：只留桌宠聊天页 + 这些应用（逗号分隔包名）；电话/紧急界面始终可用。 */
+    var disciplineAllowed by str("discipline_allowed", "com.tencent.mm,com.android.dialer,com.google.android.dialer,com.android.contacts")
+    var disciplineMinutes by int("discipline_minutes", 30)
+    /** 跑偏自动进入自律锁定（预先授权的规则，默认关）。 */
+    var disciplineAuto by bool("discipline_auto", false)
+    /** 在“刷流类应用”里连续待这么久算跑偏。 */
+    var driftMinutes by int("drift_minutes", 10)
+    fun disciplineAllowedSet(): Set<String> = disciplineAllowed.split(',', '，', ' ', '\n').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+
     fun appLists(): AppLists = AppLists(learningApps, feedApps, focusApps, excludeApps)
 
     private fun touched() { _changes.value = _changes.value + 1 }

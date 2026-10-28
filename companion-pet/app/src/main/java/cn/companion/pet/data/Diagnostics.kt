@@ -80,6 +80,7 @@ object Diagnostics {
             runCatching { app.executionHealth?.invoke() }.getOrNull()?.let { append("拦截执行路径：").append(it).append('\n') }
             runCatching { app.practiceStatus?.invoke() }.getOrNull()?.let { append("练习换休息：").append(it).append('\n') }
             runCatching { app.capabilityStatus?.invoke() }.getOrNull()?.forEach { append("能力：").append(it).append('\n') }
+            runCatching { app.pulseStatus?.invoke() }.getOrNull()?.let { append(it).append('\n') }
         }
         append("\n最近的进程退出（新的在前）：\n")
         val exits = recentExits(context, 8)

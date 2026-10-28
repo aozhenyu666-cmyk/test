@@ -344,6 +344,12 @@ class PartnerConversation(private val app: PetApp) {
     }
 
     fun away() { mutableSession.value?.let { update(rules.away(it, now())) } }
+
+    /** 高频陪伴在气泡里说出的一句：记进同一个会话，他回话时上下文接得上。 */
+    fun notePetTurn(text: String) {
+        open()
+        mutableSession.value?.let { update(rules.add(it, DialogueTurn(Speaker.PET, text, now(), TurnChannel.PROACTIVE))) }
+    }
     fun tick() { mutableSession.value?.let { val next = rules.tick(it, now()); if (next != it) { cancel(); update(next) } } }
     fun cancel() { revision++; job?.cancel(); proactivePending = false; mutableBusy.value = false }
     fun close() { cancel(); mutableSession.value?.let { update(rules.close(it, "用户结束")) } }

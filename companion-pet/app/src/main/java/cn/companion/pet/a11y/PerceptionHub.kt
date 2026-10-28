@@ -40,6 +40,9 @@ object PerceptionHub {
         return true
     }
 
+    /** 桌宠自己的应用（聊天页等）真的回到前台：由窗口事件驱动，不轮询。 */
+    var onOwnForeground: (() -> Unit)? = null
+
     fun setConnected(value: Boolean) { _connected.value = value }
 
     /** 现读一次当前窗口的文字。服务没连上或读失败返回空列表。 */

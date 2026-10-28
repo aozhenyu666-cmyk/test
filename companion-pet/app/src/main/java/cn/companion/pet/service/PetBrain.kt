@@ -137,6 +137,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -189,8 +190,16 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         cn.companion.pet.core.focus.FocusController(
             store = cn.companion.pet.core.focus.FocusStore(memory.root),
             device = object : cn.companion.pet.core.focus.FocusDevicePort {
-                override fun launch(pkg: String): Boolean = !callInProgress() && gemini.launch(pkg, adjacent = false) == GeminiLauncher.Outcome.LAUNCHED
-                override fun activePackage(): String? = PerceptionHub.activePackage()?.takeUnless { focusGate.isTransient(it) }
+                override fun launch(pkg: String): Boolean = !callInProgress() && if (pkg == context.packageName) {
+                    // 自律锁定：“回到目标”= 回到桌宠聊天页。
+                    runCatching { cn.companion.pet.ui.ChatActivity.open(context) }.isSuccess
+                } else gemini.launch(pkg, adjacent = false) == GeminiLauncher.Outcome.LAUNCHED
+                override fun activePackage(): String? {
+                    val raw = PerceptionHub.activePackage()
+                    // 自律锁定的目标就是本应用：此时本应用页面要算“在目标里”，不能当成自己的窗口忽略掉。
+                    if (raw == context.packageName && disciplineActive()) return raw
+                    return raw?.takeUnless { focusGate.isTransient(it) }
+                }
                 override fun observeForeground(): String? = activePackage()
             },
             ui = object : cn.companion.pet.core.focus.FocusUiPort {
@@ -377,6 +386,14 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // 守护：杀进程/重启后恢复；已结束/过期/损坏的不复活。
         runCatching { focusController.restore(interactive = isUserActive() && !callInProgress()) }
         app.focusStatus = { focusController.status() }
+        PerceptionHub.onOwnForeground = {
+            handler.post {
+                returnedToAppAt = now()
+                if (disciplineActive()) runCatching { focusController.onForeground(context.packageName) }
+            }
+        }
+        partner.onUserReplied = { handler.post { pulse.onUserReplied() } }
+        app.pulseStatus = { pulseStatusLine() }
         app.executionHealth = { execMonitor.snapshot(mono(), enforcingNow()).let { it.state.name + " · " + it.detail } }
         app.practiceStatus = { practiceStatusLine() }
         PerceptionHub.onHealthReceipt = { r -> runCatching { onHealthReceipt(r) } }
@@ -433,6 +450,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         PerceptionHub.onForegroundConfirmed = null
         InputBridge.clear()
         app.focusStatus = null
+        PerceptionHub.onOwnForeground = null
+        app.pulseStatus = null
+        pulseJob?.cancel()
         app.executionHealth = null
         app.practiceStatus = null
         PerceptionHub.onHealthReceipt = null
@@ -529,18 +549,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         runCatching { tickBreak(now) }
         runCatching { tickHealth(mono()) }
         runCatching { tickResume(now) }
-        // R3：它从别的应用回到桌宠眼前（桌宠自己的应用）时，是最自然的搭话时刻。
-        // 读活动窗口是跨进程调用：只在开了主动陪伴时、每 3 秒读一次，不每秒占主线程。
-        runCatching {
-            if (!settings.presenceEnabled || now - lastForegroundProbeAt < 3_000) return@runCatching
-            lastForegroundProbeAt = now
-            val fgNow = PerceptionHub.activePackage()
-            val prev = lastForegroundPkg
-            if (fgNow != null && fgNow != prev) {
-                if (prev != null && fgNow == context.packageName) returnedToAppAt = now
-                lastForegroundPkg = fgNow
-            }
-        }
+        // “回到桌宠应用”改由窗口事件驱动（PerceptionHub.onOwnForeground），不再每 3 秒跨进程枚举窗口。
+        runCatching { pulseTick(now) }
+        runCatching { driftTick(now) }
         if (convo == null && life.tick(now)) overlay.setLife(life.state)
         // R3：它自己的生活在走时间（30 分钟一档）；没有内容变化就不写盘。放这里是为了不被下面的提前 return 跳过。
         runCatching {
@@ -643,6 +654,15 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     /** R3：上一次观察到的前台包名，用来判断"回到桌宠应用"这个跨应用跳转。 */
     private var lastForegroundPkg: String? = null
     private var lastForegroundProbeAt = 0L
+    /** 高频陪伴：唯一的主动节奏（开着时旧的 presenceTick 不再开口）。 */
+    private val pulse = cn.companion.pet.core.partner.PulseCadence()
+    private var pulseJob: kotlinx.coroutines.Job? = null
+    private val recentPulse = ArrayDeque<String>()
+    private var pulseSeed = 0
+    /** 跑偏计时：在刷流类应用里连续待了多久。 */
+    private var driftSince: Long? = null
+    private var driftPkg: String? = null
+    private var lastDriftCheckAt = 0L
     /** R3：此刻是否在打字（由输入事件维护）。 */
     private var isTypingNow = false
     /**
@@ -911,6 +931,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     private fun presenceTick(now: Long, requested: Boolean = false) {
+        // 高频陪伴开着时由 pulseTick 独占主动开口（“现在聊一句”的手动请求仍然放行）。
+        if (settings.pulseMode && !settings.partnerRiding && !requested) return
         if (partnerSampleJob?.isActive == true || partner.busy.value) return
         if (!requested && now - lastPresenceEvalAt < 5_000) return
         lastPresenceEvalAt = now
@@ -1007,6 +1029,140 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     // ---------- 专注守护：入口、提醒、结束 ----------
 
     /** 显式入口：先建立并保存契约，再打开目标；失败不留下守护。 */
+    // ---------- 高频陪伴：一分钟一句 ----------
+
+    private fun pulseTick(now: Long) {
+        if (!settings.pulseMode || settings.partnerRiding) return
+        if (pulseJob?.isActive == true) return
+        pulse.configure(settings.pulseSeconds)
+        val sig = partnerSignals(now)
+        val busy = when {
+            partner.busy.value -> "正在想回复"
+            training != null -> "陪练题在显示"
+            think != null || noteDraft != null -> "当前回合进行中"
+            focusOverlay.isShown -> "守护拦截层在显示"
+            (focusActive && !disciplineActive()) || session != null -> "守护会话进行中"
+            skillsBusy() -> "技能进行中"
+            else -> null
+        }
+        val d = pulse.decide(cn.companion.pet.core.partner.PulseSignals(
+            now = now, screenOn = active, typing = sig.typing, capturingVoice = sig.capturingVoice,
+            inCall = sig.inCall, sleepHours = sig.sleepHours, quietUntil = settings.partnerQuietUntil,
+            paused = settings.petPaused, busyReason = busy,
+        ))
+        if (d !is cn.companion.pet.core.partner.PulseDecision.Speak) return
+        val pkg = PerceptionHub.trail.foreground
+        val appLabel = pkg?.takeIf { it != context.packageName && it !in settings.excludeApps }?.let { label(it) }.orEmpty()
+        pulseJob = scope.launch {
+            val ctx = withContext(Dispatchers.IO) {
+                val quote = if (appLabel.isNotEmpty()) ScreenTextCleaner.clean(PerceptionHub.readScreen(), 600).orEmpty()
+                    .split(Regex("[。！？\\n]")).map { it.trim() }.firstOrNull { it.length in 8..60 }.orEmpty() else ""
+                val lastUser = partner.session.value?.turns
+                    ?.lastOrNull { it.speaker == cn.companion.pet.core.partner.Speaker.USER && now - it.at < 30 * 60_000L }?.text.orEmpty()
+                val thread = runCatching { partner.dueThreads(now) }.getOrDefault(emptyList()).firstOrNull()?.anchor.orEmpty()
+                val goal = runCatching { app.goalStore.activeSummary() }.getOrNull().orEmpty()
+                cn.companion.pet.core.partner.PulseContext(quote, lastUser, thread, goal, appLabel)
+            }
+            val line = withTimeoutOrNull(9_000) { pulseModelLine(ctx) }
+                ?: cn.companion.pet.core.partner.PulseLines.compose(ctx, recentPulse.toSet(), pulseSeed++)
+            val again = partnerSignals(now())
+            if (again.typing || again.inCall || again.capturingVoice || partner.busy.value) {
+                pulse.onFailed("生成期间你开始打字、来电或在说话"); return@launch
+            }
+            val shown = if (partner.pageVisible) partner.deliver(line)
+                else showPartnerBubble(line).also { if (it) partner.notePetTurn(line) }
+            if (shown) {
+                pulse.onShown(now())
+                recentPulse.addLast(line); while (recentPulse.size > 20) recentPulse.removeFirst()
+                app.ledger.record(line, now())
+                if (settings.ttsEnabled) app.speech.say(line)
+            } else pulse.onFailed(if (!overlay.isPetShown) "悬浮窗没显示（检查悬浮窗权限）" else "气泡被别的提示占着")
+        }
+    }
+
+    /** 模型写的一句；没 Key、没额度、超时、回包不合规都返回 null（由本机句子兜底，绝不因此沉默）。 */
+    private suspend fun pulseModelLine(c: cn.companion.pet.core.partner.PulseContext): String? {
+        val key = apiKey() ?: return null
+        if (!app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) return null
+        stats.add(Stats.Kind.API_CALLS)
+        val anchorLines = listOfNotNull(
+            c.lastUserSaid.takeIf { it.isNotBlank() }?.let { "他刚才说：" + it },
+            c.screenQuote.takeIf { it.isNotBlank() }?.let { "他屏幕上的一句：" + it },
+            c.threadTitle.takeIf { it.isNotBlank() }?.let { "还没聊完的事：" + it },
+            c.goal.takeIf { it.isNotBlank() }?.let { "他的目标：" + it },
+            c.appLabel.takeIf { it.isNotBlank() }?.let { "他正在用：" + it },
+        )
+        val source = when {
+            c.screenQuote.isNotBlank() -> TopicSource.SCREEN_TEXT
+            c.lastUserSaid.isNotBlank() || c.threadTitle.isNotBlank() -> TopicSource.THREAD_FOLLOW_UP
+            c.goal.isNotBlank() -> TopicSource.GOAL_CHECK
+            else -> TopicSource.SMALL_TALK
+        }
+        val input = cn.companion.pet.core.partner.ReplyInput(anchorLines.joinToString("\n"), source, proactive = true)
+        val persona = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { memory.persona() } }
+        val messages = listOf(
+            ChatMessage(ChatRole.SYSTEM, persona.trim() + "\n\n" + cn.companion.pet.core.partner.ReplyContract.systemRules(input) +
+                "\n\n现在主动跟他说一句（每分钟一句的节奏）。不要重复最近说过的：" + recentPulse.takeLast(5).joinToString(" / ")),
+            ChatMessage(ChatRole.USER, "说吧。"),
+        )
+        val r = app.client.complete(ChatRequest(settings.endpoint, settings.model, key, messages, maxTokens = 200, timeoutMillis = 8_000))
+        val reply = (r as? ChatResult.Success)?.content?.let { cn.companion.pet.core.partner.ReplyContract.parse(it) } ?: return null
+        if (!cn.companion.pet.core.partner.ReplyCheck.ok(reply, input)) return null
+        return reply.say.takeIf { it.isNotBlank() && !app.ledger.isTooSimilar(it) }
+    }
+
+    private fun pulseStatusLine(): String =
+        if (!settings.pulseMode) "高频陪伴：关" else "高频陪伴：每 " + pulse.currentInterval() / 1000 + " 秒一句；" +
+            "连续没回应 " + pulse.unanswered + " 次；现在：" + pulse.lastReason
+
+    // ---------- 自律锁定：只留桌宠聊天页 + 电话/微信 ----------
+
+    private fun disciplineActive(): Boolean =
+        focusController.snapshot?.let { it.active && it.contract.targetPackage == context.packageName } == true
+
+    /** 开始自律锁定：目标就是桌宠聊天页；离开后宽限 5 秒，全屏拦截并带回聊天页。紧急退出始终可用。 */
+    private fun startDiscipline(minutes: Int, reason: String) {
+        if (focusActive) { gemini.toast("已经有一个守护在进行，先结束它"); return }
+        if (settings.partnerRiding) { gemini.toast("骑行模式下不开自律锁定"); return }
+        val now = now()
+        val m = minutes.coerceIn(5, 180)
+        val allowed = settings.disciplineAllowedSet()
+        val contract = cn.companion.pet.core.focus.FocusContract(
+            sessionId = "discipline-" + now,
+            targetPackage = context.packageName,
+            targetLabel = "同桌聊天",
+            startedAt = now,
+            expiresAt = now + m * 60_000L,
+            mode = cn.companion.pet.core.focus.FocusMode.TEXT,
+            enforcement = cn.companion.pet.core.focus.FocusEnforcement.STRICT,
+            allowedPackages = allowed,
+            graceMillis = 5_000,
+            // 电话、微信这些允许的应用：整段时间都可以用，不催。
+            allowedGraceMillis = m * 60_000L,
+        )
+        when (val r = focusController.start(contract, PerceptionHub.activePackage() ?: PerceptionHub.trail.foreground)) {
+            cn.companion.pet.core.focus.StartResult.Started -> {
+                driftSince = null
+                gemini.toast("自律锁定 $m 分钟（$reason）：除了电话、微信，切到别的应用会被带回聊天页。")
+            }
+            is cn.companion.pet.core.focus.StartResult.Failed -> gemini.toast(r.reason)
+        }
+    }
+
+    /** 跑偏自动进入（预先授权，默认关）：在刷流类应用里连续待满设定分钟数。 */
+    private fun driftTick(now: Long) {
+        if (now - lastDriftCheckAt < 15_000) return
+        lastDriftCheckAt = now
+        if (!settings.disciplineAuto || focusActive || !active || settings.petPaused || scheduler.isQuiet(now)) { driftSince = null; return }
+        val fg = PerceptionHub.trail.foreground
+        if (fg == null || fg !in settings.feedApps) { driftSince = null; driftPkg = null; return }
+        if (fg != driftPkg) { driftPkg = fg; driftSince = now; return }
+        val since = driftSince ?: run { driftSince = now; return }
+        if (now - since >= settings.driftMinutes.coerceIn(1, 120) * 60_000L) {
+            startDiscipline(settings.disciplineMinutes, "在「" + label(fg) + "」里待了 " + settings.driftMinutes + " 分钟")
+        }
+    }
+
     private fun startFocusGuard() {
         if (settings.partnerRiding) return
         partner.cancel()
@@ -1343,7 +1499,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private fun partnerBusy(): String? = when {
         training != null -> "陪练进行中，先完成或结束这一回合。"
         think != null || noteDraft != null -> "当前回合进行中。"
-        focusActive || session != null || focusOverlay.isShown -> "守护会话进行中。"
+        (focusActive && !disciplineActive()) || session != null || focusOverlay.isShown -> "守护会话进行中。"
         skillsBusy() -> "技能进行中。"
         !outputArbiter.allows(OutputPriority.AMBIENT) -> "当前有更重要的提示。"
         else -> null
@@ -1377,6 +1533,10 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 },
                 BubbleAction("安静 30 分钟") { settings.partnerQuietUntil = now() + 30 * 60_000L; partner.away(); app.stopSpeech(); overlay.hideBubble() },
                 BubbleAction("开始陪练") { partner.away(); openTraining() },
+                BubbleAction(if (disciplineActive()) "结束自律锁定" else "自律锁定") {
+                    overlay.hideBubble()
+                    if (disciplineActive()) endFocusByUser() else startDiscipline(settings.disciplineMinutes, "你手动开启")
+                },
                 BubbleAction("想一想") { partner.away(); openThinkMenu() },
                 BubbleAction("记个念头") { partner.away(); startNote() },
                 BubbleAction("看一眼") { lookOnce() },
@@ -2818,7 +2978,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     /** 每 5 秒：补发崩溃中断的许可、休息到点开新一轮、硬截止到点结束。 */
     private fun tickBreak(now: Long) {
-        if (now - lastBreakTickAt < 5_000) return
+        // 没开“练习换休息”时 5 分钟才看一次（只为收尾旧轮次），不每 5 秒读盘。
+        if (now - lastBreakTickAt < if (practiceForBreak) 5_000 else 300_000) return
         lastBreakTickAt = now
         val cur = breakStore.load() ?: return
         if (cur.state == CycleState.ENDED) return
