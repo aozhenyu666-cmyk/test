@@ -19,6 +19,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -56,6 +57,7 @@ import java.time.LocalDate
 private data class MemorySnapshot(
     val profile: List<String> = emptyList(),
     val facts: List<Fact> = emptyList(),
+    val sourceQuotes: Map<String, String> = emptyMap(),
     val today: List<String> = emptyList(),
     val diaries: List<Pair<LocalDate, String>> = emptyList(),
     val letters: List<Pair<LocalDate, String>> = emptyList(),
@@ -84,6 +86,7 @@ fun MemoryTab(resumeTick: Int) {
                 MemorySnapshot(
                     profile = memory.profileLines(),
                     facts = app.facts.live().filter { visibility.allows(it) },
+                    sourceQuotes = eventSnapshot.filter { visibility.allows(it) }.associate { it.id to it.text.take(160) },
                     today = eventSnapshot.filter { it.day == LocalDate.now().toString() }
                         .filter { it.kind == EventKind.EXCHANGE || it.kind == EventKind.LEGACY_LINE }
                         .filter { visibility.allows(it) }
@@ -142,12 +145,15 @@ fun MemoryTab(resumeTick: Int) {
         snap.facts.forEach { fact ->
             FactRow(
                 fact = fact,
+                sourceQuote = fact.sourceEventIds.mapNotNull { snap.sourceQuotes[it] }.joinToString("；"),
                 onConfirm = { io { app.memoryEdits.confirm(fact.id) } },
                 onCorrect = { text -> io { app.memoryEdits.correct(fact.id, text) } },
                 onForget = { io { app.memoryEdits.forget(fact.id) } },
             )
         }
 
+        Rule()
+        PartnerThreads()
         Rule()
         MaterialInboxSection(resumeTick)
         Rule()
@@ -253,7 +259,7 @@ private fun Entry(date: LocalDate, text: String, onDelete: () -> Unit) {
 
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
-private fun FactRow(fact: Fact, onConfirm: () -> Unit, onCorrect: (String) -> Unit, onForget: () -> Unit) {
+private fun FactRow(fact: Fact, sourceQuote: String, onConfirm: () -> Unit, onCorrect: (String) -> Unit, onForget: () -> Unit) {
     var editing by remember(fact.id) { mutableStateOf(false) }
     var draft by remember(fact.id) { mutableStateOf(fact.text) }
     val date = java.time.Instant.ofEpochMilli(fact.createdAt)
@@ -271,6 +277,7 @@ private fun FactRow(fact: Fact, onConfirm: () -> Unit, onCorrect: (String) -> Un
             }
         } else {
             Text(fact.text, style = MaterialTheme.typography.bodyMedium)
+            if (sourceQuote.isNotBlank()) Text("来源原话：" + sourceQuote, style = MaterialTheme.typography.bodySmall, color = LocalCompanionColors.current.ink2)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 SourceTag(if (fact.confidence == Confidence.SAID) "你说过" else "尚未确认")
                 Text(date, style = MaterialTheme.typography.bodySmall, color = LocalCompanionColors.current.ink2)
@@ -290,5 +297,35 @@ private fun MetricMini(label: String, value: String, modifier: Modifier = Modifi
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(value, style = MaterialTheme.typography.titleLarge, color = colors.ink)
         Text(label, style = MaterialTheme.typography.labelSmall, color = colors.ink2)
+    }
+}
+@Composable
+private fun PartnerThreads() {
+    val partner = PetApp.instance.partner
+    val threads by partner.threads.collectAsState()
+    GroupTitle("还想接着聊的事")
+    if (threads.isEmpty()) Text("聊到目标、烦心事或一段材料后，可以在这里查看和管理。", style = MaterialTheme.typography.bodySmall)
+    threads.forEach { thread ->
+        Panel {
+            Text(thread.title, style = MaterialTheme.typography.titleMedium)
+            Text("重要度 " + thread.importance + "  " + when (thread.status) {
+                cn.companion.pet.core.partner.ThreadStatus.OPEN -> "继续跟进"
+                cn.companion.pet.core.partner.ThreadStatus.PAUSED -> "已暂停"
+                cn.companion.pet.core.partner.ThreadStatus.CLOSED -> "已结束"
+            }, style = MaterialTheme.typography.labelMedium)
+            if (thread.lastProgress.isNotBlank()) Text("上次进展：" + thread.lastProgress, style = MaterialTheme.typography.bodySmall)
+            if (thread.status != cn.companion.pet.core.partner.ThreadStatus.CLOSED) {
+                val at = java.time.Instant.ofEpochMilli(maxOf(thread.nextFollowUpAt, thread.pausedUntil))
+                    .atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"))
+                Text("下次可以聊起：" + at, style = MaterialTheme.typography.bodySmall)
+            }
+            Row {
+                if (thread.status != cn.companion.pet.core.partner.ThreadStatus.CLOSED) {
+                    TextButton(onClick = { partner.pauseThread(thread.id) }) { Text("暂停一天") }
+                    TextButton(onClick = { partner.closeThread(thread.id) }) { Text("不再跟进") }
+                }
+                TextButton(onClick = { partner.deleteThread(thread.id) }) { Text("删除") }
+            }
+        }
     }
 }

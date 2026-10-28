@@ -84,6 +84,7 @@ object ThreadRules {
 class ThreadBook(private var threads: List<PartnerThread> = emptyList()) {
 
     val all: List<PartnerThread> get() = threads
+    fun remove(id: String) { threads = threads.filterNot { it.id == id } }
 
     fun open(now: Long): List<PartnerThread> = threads.filter {
         it.status == ThreadStatus.OPEN || (it.status == ThreadStatus.PAUSED && now >= it.pausedUntil)

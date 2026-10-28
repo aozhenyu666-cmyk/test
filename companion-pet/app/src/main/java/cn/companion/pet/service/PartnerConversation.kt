@@ -59,7 +59,7 @@ class PartnerConversation(private val app: PetApp) {
     fun pauseThread(id: String) { book.pause(id, now() + 24 * 3_600_000L); saveThreads() }
     fun closeThread(id: String) { book.close(id, "用户不再聊"); saveThreads() }
     fun deleteThread(id: String) {
-        book.close(id, "用户删除")
+        book.remove(id)
         saveThreads()
         invalidateMemory()
     }
