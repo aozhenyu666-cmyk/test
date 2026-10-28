@@ -69,7 +69,7 @@ class PerceptionService : AccessibilityService() {
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private val confirmForeground = Runnable {
         try {
-            val active = rootInActiveWindow?.packageName?.toString()
+            val active = foregroundApplicationPackage()
             if (!active.isNullOrBlank() && active !in ignored && active !in cn.companion.pet.core.focus.ForegroundGate.DEFAULT_SYSTEM) {
                 PerceptionHub.onForegroundConfirmed?.invoke(active)
             }
@@ -77,6 +77,15 @@ class PerceptionService : AccessibilityService() {
             android.util.Log.w("PerceptionService", "confirm dropped", e)
         }
     }
+
+    /** Application windows exclude our accessibility blocker and the IME. Never infer from events. */
+    fun foregroundApplicationPackage(): String? = runCatching {
+        val appWindows = windows.orEmpty().filter { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }
+        val window = appWindows.sortedWith(compareByDescending<android.view.accessibility.AccessibilityWindowInfo> { it.isFocused }
+            .thenByDescending { it.isActive }.thenByDescending { it.layer }).firstOrNull()
+        if (window != null) window.root?.packageName?.toString()
+        else rootInActiveWindow?.takeUnless { it.packageName?.toString() == packageName }?.packageName?.toString()
+    }.getOrNull()
 
     /** 每次绑定一个新实例号：回执能看出服务是否被系统重建过。 */
     private val instanceId = java.util.UUID.randomUUID().toString().take(8)

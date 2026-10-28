@@ -39,6 +39,8 @@ data class BubbleSpec(
     /** 默认入口之后追加的按钮（例如“想一想”“记个念头”）。 */
     val extra: List<BubbleAction> = emptyList(),
     val geminiLabel: String = "去 Gemini",
+    val owner: String = "",
+    val priority: cn.companion.pet.core.training.OutputPriority = cn.companion.pet.core.training.OutputPriority.AMBIENT,
 )
 
 data class BubbleAction(val label: String, val highlighted: Boolean = false, val onClick: () -> Unit)
@@ -46,6 +48,7 @@ data class BubbleAction(val label: String, val highlighted: Boolean = false, val
 interface BubbleListener {
     fun onMicDown()
     fun onMicUp()
+    fun onTypeRequested() { onTypingStarted() }
     fun onTypingStarted()
     fun onTypingCancelled() {}
     fun onTextSubmitted(text: String)
@@ -130,6 +133,8 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
         if (spec.instant) setTextNow(spec.text, onFinishedTyping) else typeOut(spec.text, onFinishedTyping)
     }
 
+    fun cancelTyping() { handler.removeCallbacksAndMessages(null); onTyped = null }
+
     /** 立即换掉文字，不重建按钮（按钮正被按着时也不会打断）。 */
     fun setTextNow(text: String, done: (() -> Unit)? = null) {
         handler.removeCallbacksAndMessages(null)
@@ -168,11 +173,7 @@ class BubbleView(context: Context, private val listener: BubbleListener) : Linea
         startTyping()
     }
 
-    private fun startTyping() {
-        inputRow.visibility = VISIBLE
-        listener.onTypingStarted()
-        input.requestFocus()
-    }
+    private fun startTyping() { listener.onTypeRequested() }
 
     fun focusInput() {
         input.requestFocus()

@@ -24,12 +24,22 @@ import android.widget.TextView
 class InputActivity : androidx.activity.ComponentActivity() {
 
     companion object {
-        fun intent(context: Context): Intent = Intent(context, InputActivity::class.java)
+        fun intent(context: Context, requestId: Long): Intent = Intent(context, InputActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .putExtra("input_request_id", requestId)
+    }
+
+    private var requestId = 0L
+
+    override fun onResume() {
+        super.onResume()
+        if (!InputBridge.isActive(requestId)) finish()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestId = intent.getLongExtra("input_request_id", 0L)
+        if (!InputBridge.isActive(requestId)) { finish(); return }
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL
         root.setPadding(dp(20), dp(28), dp(20), dp(20))
@@ -42,7 +52,7 @@ class InputActivity : androidx.activity.ComponentActivity() {
         root.addView(title)
 
         val hintView = TextView(this)
-        hintView.text = InputBridge.hint.ifBlank { "想说什么" }
+        hintView.text = InputBridge.hint(requestId).ifBlank { "想说什么" }
         hintView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f)
         hintView.setTextColor(android.graphics.Color.rgb(95, 89, 78))
         hintView.setPadding(0, dp(6), 0, dp(10))
@@ -69,7 +79,7 @@ class InputActivity : androidx.activity.ComponentActivity() {
         val cancel = Button(this)
         cancel.text = "取消"
         cancel.isAllCaps = false
-        cancel.setOnClickListener { InputBridge.cancel(); finish() }
+        cancel.setOnClickListener { InputBridge.cancel(requestId); finish() }
         row.addView(cancel)
 
         val send = Button(this)
@@ -79,7 +89,7 @@ class InputActivity : androidx.activity.ComponentActivity() {
             val text = input.text?.toString()?.trim().orEmpty()
             if (text.isEmpty()) return@setOnClickListener
             hideKeyboard(input)
-            InputBridge.submit(text)
+            if (!InputBridge.submit(requestId, text)) android.widget.Toast.makeText(this, "这次输入已过期，请对当前问题重新打开输入。", android.widget.Toast.LENGTH_LONG).show()
             finish()
         }
         row.addView(send)
@@ -96,7 +106,7 @@ class InputActivity : androidx.activity.ComponentActivity() {
     }
 
     override fun onBackPressed() {
-        InputBridge.cancel()
+        InputBridge.cancel(requestId)
         super.onBackPressed()
     }
 

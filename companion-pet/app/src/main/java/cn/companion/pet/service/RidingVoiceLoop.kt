@@ -68,12 +68,13 @@ class RidingVoiceLoop(private val context: Context, private val allowed: () -> B
 
     fun tick() {
         if (!running) return
-        if (!wake.isHeld) wake.acquire(10 * 60_000L)
         if (!allowed()) {
+            if (wake.isHeld) wake.release()
             generation++; nextListen?.cancel(); voice.cancel(); app.partner.voiceCapturing = false
             utterance?.let(app.speech::stop); utterance = null; speaking = false; pendingPrompt = null
             return
         }
+        if (!wake.isHeld) wake.acquire(10 * 60_000L)
         if (app.partner.voiceCapturing && System.currentTimeMillis() - waitingSince > 60_000) {
             voice.cancel(); app.partner.voiceCapturing = false; scheduleListen(1000)
         }

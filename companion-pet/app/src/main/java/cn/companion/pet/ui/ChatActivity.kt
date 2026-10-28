@@ -75,6 +75,7 @@ private fun ChatPage(app: PetApp, back: () -> Unit, listen: () -> Unit) {
     val session by partner.session.collectAsState()
     val busy by partner.busy.collectAsState()
     val status by partner.status.collectAsState()
+    val persistenceErrors by partner.persistenceErrors.collectAsState()
     val proposal by partner.proposal.collectAsState()
     val pending by partner.presentation.collectAsState()
     val colors = LocalCompanionColors.current
@@ -145,6 +146,7 @@ private fun ChatPage(app: PetApp, back: () -> Unit, listen: () -> Unit) {
                 }
             }
         }
+        persistenceErrors.values.forEach { Text(it, Modifier.padding(horizontal = 20.dp), style = MaterialTheme.typography.bodySmall, color = colors.danger) }
         if (status.isNotBlank()) Text(status, Modifier.padding(horizontal = 20.dp, vertical = 8.dp), style = MaterialTheme.typography.bodySmall)
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { lookQuestion = true }, enabled = !busy && !app.settings.partnerRiding) { Text("带问题看一眼") }

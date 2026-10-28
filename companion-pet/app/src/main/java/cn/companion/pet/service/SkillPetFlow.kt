@@ -74,7 +74,7 @@ class SkillPetFlow(
             overlay.setMood(Mood.CURIOUS)
             val text = if (skills.isEmpty()) "还没有技能。录一个：在要用的 App 里，一步步点我选要点的地方。"
             else "运行哪个技能？点运行中的我可以随时停。"
-            overlay.showBubble(BubbleSpec(text, instant = true, actions = actions))
+            showSkillBubble(BubbleSpec(text, instant = true, actions = actions))
         }
     }
 
@@ -125,7 +125,7 @@ class SkillPetFlow(
             bubble("运行「${skill.name}」…（点我停止）", textOnly = true)
             val result = withContext(Dispatchers.IO) {
                 runner.run(skill, cancelled = { stopRequested }) { i, total, step ->
-                    handler.post { if (runJob?.isActive == true) overlay.showBubble(BubbleSpec("「${skill.name}」第 ${i + 1}/$total 步：" + step.describe(), textOnly = true, instant = true)) }
+                    handler.post { if (runJob?.isActive == true) showSkillBubble(BubbleSpec("「${skill.name}」第 ${i + 1}/$total 步：" + step.describe(), textOnly = true, instant = true)) }
                 }.also { store.recordRun(skill.id, it, System.currentTimeMillis()) }
             }
             notice(summary(skill, result))
@@ -199,7 +199,7 @@ class SkillPetFlow(
             actions += BubbleAction("完成") { finishRecording() }
             val allowed = pkg in app.settings.deviceAllowedApps
             overlay.setMood(Mood.CURIOUS)
-            overlay.showBubble(BubbleSpec(
+            showSkillBubble(BubbleSpec(
                 "选这一步（${appLabel(pkg)}）" + if (allowed) "：" else "。这个 App 不在“允许操作”名单，只记下不帮你点：",
                 instant = true, actions = actions,
             ))
@@ -242,8 +242,10 @@ class SkillPetFlow(
         onIdle()
     }
 
+    private fun showSkillBubble(spec: BubbleSpec): Boolean = overlay.showBubble(spec.copy(owner = "skill"))
+
     private fun bubble(text: String, actions: List<BubbleAction> = emptyList(), textOnly: Boolean = false) {
-        overlay.showBubble(if (textOnly || actions.isEmpty()) BubbleSpec(text, textOnly = true, instant = true)
+        showSkillBubble(if (textOnly || actions.isEmpty()) BubbleSpec(text, textOnly = true, instant = true)
         else BubbleSpec(text, instant = true, actions = actions))
     }
 
@@ -251,7 +253,7 @@ class SkillPetFlow(
         noticeUntil = System.currentTimeMillis() + 7_000
         overlay.setMood(Mood.IDLE)
         bubble(text, textOnly = true)
-        handler.postDelayed({ if (!busy) { overlay.hideBubble(); onIdle() } }, 7_200)
+        overlay.afterBubble(7_200) { if (!busy) { overlay.hideBubble(); onIdle() } }
     }
 
     private companion object {

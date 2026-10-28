@@ -64,6 +64,10 @@ class DialogueRules(
         return s.copy(turns = s.turns + clip(turn), state = SessionState.ACTIVE, lastActivityAt = turn.at)
     }
 
+    /** Full visual observations are usable for this conversation but never durable history. */
+    fun addObservation(s: DialogueSession, text: String, now: Long): DialogueSession =
+        add(s, DialogueTurn(Speaker.PET, text, now, TurnChannel.REPLY, ephemeral = true))
+
     /** 收起气泡 / 切走：标记 AWAY，不清上下文。 */
     fun away(s: DialogueSession, now: Long): DialogueSession =
         if (s.state == SessionState.ACTIVE) s.copy(state = SessionState.AWAY, lastActivityAt = now) else s
@@ -88,7 +92,7 @@ class DialogueRules(
 
     /** 需要被压进摘要的那几轮（最旧的），调用方拿去让模型写摘要。 */
     fun turnsToCompact(s: DialogueSession): List<DialogueTurn> =
-        if (!needsCompaction(s)) emptyList() else s.turns.take(s.turns.size - keepTurns)
+        if (!needsCompaction(s)) emptyList() else s.turns.take(s.turns.size - keepTurns).filterNot { it.ephemeral }
 
     /** 调用方拿到新摘要后写回：丢掉已压缩的原话，只留最近 [keepTurns] 轮。 */
     fun applyCompaction(s: DialogueSession, newSummary: String): DialogueSession =

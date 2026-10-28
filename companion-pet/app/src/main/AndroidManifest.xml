@@ -53,6 +53,7 @@
         <!-- 文字输入页：拥有正常窗口令牌，输入法才能用用户自己的键盘与剪贴板。 -->
         <activity
             android:name=".InputActivity"
+            android:taskAffinity="cn.companion.pet.input"
             android:exported="false"
             android:label="@string/app_name"
             android:excludeFromRecents="true"

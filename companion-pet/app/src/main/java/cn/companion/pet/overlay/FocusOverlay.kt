@@ -4,6 +4,9 @@ import android.accessibilityservice.AccessibilityService
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Rect
+import android.view.ViewTreeObserver
+import cn.companion.pet.core.focus.BlockObservation
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.provider.Settings
@@ -35,14 +38,24 @@ class FocusOverlay(
     private var detail: TextView? = null
     private var attachedTo: WindowManager? = null
 
-    val isShown: Boolean get() = attachedTo != null
+    private var drawn = false
+    val isShown: Boolean get() = root?.isAttachedToWindow == true
+
+    fun observe(): BlockObservation {
+        val view = root ?: return BlockObservation(false, false, false)
+        val bounds = attachedTo?.currentWindowMetrics?.bounds ?: return BlockObservation(view.isAttachedToWindow, drawn, false)
+        val visible = Rect()
+        val fills = view.getGlobalVisibleRect(visible) && visible.width() >= bounds.width() * 0.9 && visible.height() >= bounds.height() * 0.9
+        return BlockObservation(view.isAttachedToWindow && view.isShown, drawn, fills)
+    }
 
     fun show(targetLabel: String, reason: String): OverlayResult {
-        attachedTo?.let {
+        if (root?.isAttachedToWindow == true) {
             title?.text = "回到「$targetLabel」"
             detail?.text = reason
             return OverlayResult(true)
         }
+        attachedTo = null; root = null; drawn = false
         val a11y = accessibility()
         val (host, type) = when {
             a11y != null -> a11y to WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
@@ -51,6 +64,9 @@ class FocusOverlay(
         }
         val wm = host.getSystemService(WindowManager::class.java) ?: return OverlayResult(false, "拿不到 WindowManager")
         val view = build(host, targetLabel, reason)
+        view.viewTreeObserver.addOnDrawListener(object : ViewTreeObserver.OnDrawListener {
+            override fun onDraw() { if (root === view) drawn = true }
+        })
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -68,11 +84,12 @@ class FocusOverlay(
         }
     }
 
-    fun hide() {
-        val wm = attachedTo ?: return
-        root?.let { runCatching { wm.removeView(it) } }
-        attachedTo = null
-        root = null
+    fun hide(): Boolean {
+        val wm = attachedTo ?: return true
+        val view = root
+        val removed = view == null || runCatching { wm.removeViewImmediate(view) }.isSuccess || !view.isAttachedToWindow
+        if (removed) { attachedTo = null; root = null; drawn = false }
+        return removed
     }
 
     private fun build(host: Context, targetLabel: String, reason: String): LinearLayout {

@@ -24,6 +24,19 @@ class PartnerConversation(private val app: PetApp) {
     val session: StateFlow<DialogueSession?> = mutableSession
     private val mutableStatus = MutableStateFlow("")
     val status: StateFlow<String> = mutableStatus
+    private val mutablePersistenceErrors = MutableStateFlow<Map<String, String>>(store.lastError?.let { mapOf("对话" to it) }.orEmpty())
+    val persistenceErrors: StateFlow<Map<String, String>> = mutablePersistenceErrors
+
+    private fun persist(kind: String, block: () -> Unit) {
+        writer.execute {
+            val failed = runCatching(block).isFailure
+            scope.launch {
+                mutablePersistenceErrors.value = mutablePersistenceErrors.value.toMutableMap().apply {
+                    if (failed) put(kind, kind + "暂未保存，重启后可能无法恢复；请检查存储空间") else remove(kind)
+                }
+            }
+        }
+    }
     private val mutableBusy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = mutableBusy
     var pageVisible = false
@@ -33,6 +46,7 @@ class PartnerConversation(private val app: PetApp) {
     var blocked: () -> String? = { null }
     /** Return true only when a surface has actually attached and displays the message. */
     var display: ((String) -> Boolean)? = null
+    var displayConfirmed: (suspend (String) -> Boolean)? = null
     var onUserReplied: (() -> Unit)? = null
     var onReply: ((String) -> Unit)? = null
     var onMetadata: (() -> Unit)? = null
@@ -47,8 +61,15 @@ class PartnerConversation(private val app: PetApp) {
     fun pageHidden() { pageVisible = false; pageReceipt?.complete(false) }
 
     suspend fun deliver(text: String, threadId: String = ""): Boolean {
-        if (!pageVisible) return offer(text, threadId, allowBusy = true)
-        if (blocked() != null) return false
+        if (blocked() != null || ContentGuard.violates(text)) return false
+        if (!pageVisible) {
+            open()
+            val sessionId = mutableSession.value?.id
+            val shown = displayConfirmed?.invoke(text) == true
+            if (!shown || blocked() != null || pageVisible || mutableSession.value?.id != sessionId) return false
+            mutableSession.value?.let { update(rules.add(it.copy(threadId = threadId), DialogueTurn(Speaker.PET, text, now(), TurnChannel.PROACTIVE))) }
+            return true
+        }
         val receipt = CompletableDeferred<Boolean>()
         val p = Presentation(UUID.randomUUID().toString(), text)
         pageReceipt = receipt
@@ -73,6 +94,7 @@ class PartnerConversation(private val app: PetApp) {
 
     private val threadStore by lazy { ThreadBookStore(app.memory.root) }
     private val book = threadStore.load()
+    init { threadStore.lastError?.let { mutablePersistenceErrors.value = mutablePersistenceErrors.value + ("话题线" to it) } }
     private val mutableThreads = MutableStateFlow(book.all)
     val threads: StateFlow<List<PartnerThread>> = mutableThreads
     data class MemoryProposal(val text: String, val eventId: String, val threadId: String, val version: String)
@@ -84,7 +106,7 @@ class PartnerConversation(private val app: PetApp) {
     private fun saveThreads() {
         val snapshot = ThreadBook(book.all)
         mutableThreads.value = book.all
-        writer.execute { threadStore.save(snapshot) }
+        persist("话题线") { check(threadStore.save(snapshot)) }
     }
     fun pauseThread(id: String) { book.pause(id, now() + 24 * 3_600_000L); saveThreads() }
     fun closeThread(id: String) { book.close(id, "用户不再聊"); saveThreads() }
@@ -246,6 +268,9 @@ class PartnerConversation(private val app: PetApp) {
                     onProactiveShown?.invoke(candidate)
                     if (app.settings.ttsEnabled && !app.settings.partnerRiding) app.speech.say(reply.say)
                 } else noteBlocked("输出界面未显示")
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                if (expected == revision) noteBlocked("主动交流暂时失败：" + error.javaClass.simpleName)
             } finally { if (expected == revision) { proactivePending = false; mutableBusy.value = false } }
         }
     }
@@ -268,18 +293,8 @@ class PartnerConversation(private val app: PetApp) {
         open()
         anchor = material
         anchorSource = source
-        mutableSession.value?.let { update(rules.add(it, DialogueTurn(Speaker.PET, text, now(), TurnChannel.REPLY))) }
+        mutableSession.value?.let { update(rules.addObservation(it, text, now())) }
         if (!pageVisible) display?.invoke(text)
-    }
-
-    fun offer(text: String, threadId: String = "", allowBusy: Boolean = false): Boolean {
-        if (blocked() != null || (mutableBusy.value && !allowBusy) || ContentGuard.violates(text)) return false
-        open()
-        val shown = !pageVisible && display?.invoke(text) == true
-        if (!shown) return false
-        val current = mutableSession.value ?: return false
-        update(rules.add(current.copy(threadId = threadId), DialogueTurn(Speaker.PET, text, now(), TurnChannel.PROACTIVE)))
-        return true
     }
 
     fun send(text: String, channel: TurnChannel = TurnChannel.TYPED, uncertain: Boolean = false) {
@@ -332,7 +347,16 @@ class PartnerConversation(private val app: PetApp) {
                 mutableBusy.value = false
                 mutableStatus.value = ""
                 compact(key)
-            } finally { if (expected == revision) { mutableBusy.value = false; mutableStatus.value = "" } }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                if (expected == revision) {
+                    mutableStatus.value = "这次处理没有完成，你刚才的话还在，可以重试。"
+                    noteBlocked("回应暂时失败：" + error.javaClass.simpleName)
+                }
+            } finally { if (expected == revision) {
+                mutableBusy.value = false
+                if (mutableStatus.value == "在想你刚才说的……") mutableStatus.value = ""
+            } }
         }
     }
 
@@ -375,7 +399,8 @@ class PartnerConversation(private val app: PetApp) {
         val snapshot = mutableSession.value ?: return
         if (!rules.needsCompaction(snapshot)) return
         val version = withContext(Dispatchers.IO) { memoryVersion() }
-        val old = rules.turnsToCompact(snapshot).filterNot { it.ephemeral }
+        val old = rules.turnsToCompact(snapshot)
+        if (old.isEmpty()) { if (mutableSession.value == snapshot) update(rules.applyCompaction(snapshot, snapshot.summary)); return }
         val summary = (if (key == null) null else request(listOf(ChatMessage(ChatRole.SYSTEM, "把已有摘要和这些对话合并成一段短摘要，保留他的观点、未完事项和语音不确定标记。不添加事实。只输出摘要。"),
             ChatMessage(ChatRole.USER, snapshot.summary + "\n" + old.joinToString("\n") { it.speaker.name + ":" + it.text + if (it.uncertain) "（可能听错）" else "" })), key, 400)) ?: (snapshot.summary + "\n" + old.joinToString("\n") { it.speaker.name + "：" + it.text + if (it.uncertain) "（可能听错）" else "" }).takeLast(800)
         if (mutableSession.value == snapshot && version == withContext(Dispatchers.IO) { memoryVersion() }) update(rules.applyCompaction(snapshot, summary))
@@ -383,7 +408,7 @@ class PartnerConversation(private val app: PetApp) {
 
     private fun update(s: DialogueSession) {
         mutableSession.value = s
-        writer.execute { runCatching { store.save(s) } }
+        persist("对话") { store.save(s) }
     }
 
     private fun memoryVersion(): String = synchronized(app.memoryLock) {

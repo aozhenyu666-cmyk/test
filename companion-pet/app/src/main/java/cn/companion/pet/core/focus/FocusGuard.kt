@@ -205,6 +205,15 @@ class FocusGuard(snapshot: FocusSnapshot) {
         return listOf(FocusAction.Launch(gen))
     }
 
+    /** Screen off / a call invalidates in-flight return callbacks without extending the contract. */
+    fun interruptInteractive(now: Long): List<FocusAction> {
+        if (!current.active) return emptyList()
+        screenWasOff = true
+        if (current.state == FocusState.RETURNING) current = current.copy(state = FocusState.BLOCKING,
+            generation = current.generation + 1, nextActionAt = now + c.graceMillis, updatedAt = now)
+        return if (current.state in setOf(FocusState.BLOCKING, FocusState.REMINDED)) listOf(FocusAction.HideBlock) else emptyList()
+    }
+
     /** 用户点“返回目标”：不计入自动次数上限，但同样要核验。 */
     fun userReturn(now: Long): List<FocusAction> {
         if (!current.active) return emptyList()

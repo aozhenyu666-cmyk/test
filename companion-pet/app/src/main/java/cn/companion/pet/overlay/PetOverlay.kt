@@ -15,6 +15,8 @@ import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 import cn.companion.pet.core.life.LifeState
 import cn.companion.pet.core.probe.Mood
 import cn.companion.pet.data.Settings
@@ -47,6 +49,44 @@ class PetOverlay(
     private val petSize = dp(80f)
     private val petParams = overlayParams(petSize, petSize, focusable = false)
     private val bubbleParams = overlayParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, focusable = false)
+
+    var allowOutput: (String, cn.companion.pet.core.training.OutputPriority) -> Boolean = { _, _ -> true }
+    private var inputRequest: Long? = null
+    private val lifetime = cn.companion.pet.core.training.OutputLifetime()
+    private var pendingDraw: Pair<Long, CompletableDeferred<Boolean>>? = null
+    suspend fun showBubbleConfirmed(spec: BubbleSpec): Boolean {
+        if (!showBubble(spec)) return false
+        val token = lifetime.token()
+        val receipt = CompletableDeferred<Boolean>()
+        pendingDraw = token to receipt
+        val observer = bubble.viewTreeObserver
+        val listener = android.view.ViewTreeObserver.OnDrawListener {
+            handler.post {
+                receipt.complete(lifetime.owns(token) && bubbleShown && bubble.isAttachedToWindow &&
+                    bubble.isShown && bubble.width > 0 && bubble.height > 0)
+            }
+        }
+        observer.addOnDrawListener(listener)
+        bubble.invalidate()
+        var confirmed = false
+        try {
+            confirmed = withTimeoutOrNull(2000) { receipt.await() } == true && lifetime.owns(token)
+            return confirmed
+        } finally {
+            if (observer.isAlive) observer.removeOnDrawListener(listener)
+            val currentObserver = bubble.viewTreeObserver
+            if (currentObserver !== observer && currentObserver.isAlive) currentObserver.removeOnDrawListener(listener)
+            if (pendingDraw?.first == token) pendingDraw = null
+            if (!confirmed && lifetime.owns(token)) hideBubble()
+        }
+    }
+
+    private fun cancelDrawReceipt() { pendingDraw?.second?.complete(false); pendingDraw = null }
+
+    fun afterBubble(delayMillis: Long, task: () -> Unit) {
+        val token = lifetime.token()
+        handler.postDelayed({ if (bubbleShown && lifetime.owns(token)) task() }, delayMillis)
+    }
 
     private var petShown = false
     private var bubbleShown = false
@@ -88,38 +128,59 @@ class PetOverlay(
      * 隔离的输入法实例（表现为弹出陌生键盘、无法粘贴）。改为打开 InputActivity。
      */
     fun openBubbleInput(hint: String? = null) {
-        // InputBridge 每次提交/取消都会 clear，故每次打开都必须重新接线。
-        cn.companion.pet.InputBridge.onSubmit = { bubbleListener.onTextSubmitted(it) }
-        cn.companion.pet.InputBridge.onCancel = { bubbleListener.onTypingCancelled() }
-        cn.companion.pet.InputBridge.hint = hint.orEmpty()
+        val token = lifetime.token()
+        val id = cn.companion.pet.InputBridge.open(hint.orEmpty(), submit = {
+            if (lifetime.owns(token)) bubbleListener.onTextSubmitted(it) else bubbleListener.onTypingCancelled()
+        }, cancel = { bubbleListener.onTypingCancelled() })
+        inputRequest = id
         bubbleListener.onTypingStarted()
-        runCatching { context.startActivity(cn.companion.pet.InputActivity.intent(context)) }.onFailure {
-            cn.companion.pet.InputBridge.cancel()
+        runCatching { context.startActivity(cn.companion.pet.InputActivity.intent(context, id)) }.onFailure {
+            cn.companion.pet.InputBridge.cancel(id)
         }
     }
 
+    private fun cancelInput() {
+        inputRequest?.let { cn.companion.pet.InputBridge.cancel(it) }
+        inputRequest = null
+    }
+
     /** 只换气泡文字（倒计时每秒更新），尺寸变化时重新摆位置。 */
-    fun updateBubbleText(text: String) {
-        if (!bubbleShown) return
+    fun updateBubbleText(text: String, owner: String = "", priority: cn.companion.pet.core.training.OutputPriority = cn.companion.pet.core.training.OutputPriority.AMBIENT) {
+        if (!bubbleShown || !allowOutput(owner, priority)) return
+        cancelInput()
+        cancelDrawReceipt()
+        lifetime.replace()
         bubble.setTextNow(text)
         layoutBubble()
         runCatching { wm.updateViewLayout(bubble, bubbleParams) }
     }
 
     fun showBubble(spec: BubbleSpec, onFinishedTyping: (() -> Unit)? = null): Boolean {
-        if (!petShown) return false
+        if (!petShown || !allowOutput(spec.owner, spec.priority)) return false
+        cancelInput()
+        cancelDrawReceipt()
+        val token = lifetime.replace()
+        fun guarded(action: BubbleAction) = action.copy(onClick = { if (lifetime.owns(token)) action.onClick() })
         bubble.tailOnRight = isOnRight()
-        bubble.show(spec, onFinishedTyping)
+        bubble.show(spec.copy(actions = spec.actions.map(::guarded), extra = spec.extra.map(::guarded))) {
+            if (lifetime.owns(token)) onFinishedTyping?.invoke()
+        }
         layoutBubble()
         if (!bubbleShown) {
             runCatching { wm.addView(bubble, bubbleParams) }.onSuccess { bubbleShown = true }
         } else {
-            runCatching { wm.updateViewLayout(bubble, bubbleParams) }
+            val updated = runCatching { wm.updateViewLayout(bubble, bubbleParams) }.isSuccess
+            if (!updated) { hideBubble(); return false }
         }
+        if (!bubbleShown) { lifetime.invalidate(); bubble.cancelTyping() }
         return bubbleShown
     }
 
     fun hideBubble() {
+        cancelInput()
+        cancelDrawReceipt()
+        lifetime.invalidate()
+        bubble.cancelTyping()
         setBubbleFocusable(false)
         if (bubbleShown) runCatching { wm.removeView(bubble) }
         bubbleShown = false
@@ -136,7 +197,10 @@ class PetOverlay(
         bubbleParams.flags = flags
         bubbleParams.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
         if (bubbleShown) runCatching { wm.updateViewLayout(bubble, bubbleParams) }
-        if (focusable) handler.postDelayed({ bubble.focusInput() }, 120)
+        if (focusable) {
+            val token = lifetime.token()
+            handler.postDelayed({ if (bubbleShown && lifetime.owns(token)) bubble.focusInput() }, 120)
+        }
     }
 
     /** 升级第二级：往屏幕中间挪一段（仍在安全区内，高度不变）。 */

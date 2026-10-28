@@ -46,5 +46,5 @@ object PerceptionHub {
     fun readScreen(): List<TextCandidate> = runCatching { reader?.invoke() }.getOrNull().orEmpty()
 
     /** 当前真正活动窗口的包名；服务没连上或读失败返回 null。 */
-    fun activePackage(): String? = runCatching { service?.rootInActiveWindow?.packageName?.toString() }.getOrNull()
+    fun activePackage(): String? = runCatching { service?.foregroundApplicationPackage() }.getOrNull()
 }
