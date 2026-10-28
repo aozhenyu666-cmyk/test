@@ -58,6 +58,11 @@ class ForegroundGate(
     fun hasPending(): Boolean = pendingPackage != null
 
     companion object {
+        val CALL_AND_EMERGENCY_PACKAGES = setOf(
+            "com.android.incallui", "com.android.dialer", "com.google.android.dialer",
+            "com.android.phone", "com.android.server.telecom", "com.android.emergency",
+            "com.google.android.apps.safetyhub",
+        )
         val DEFAULT_SYSTEM: Set<String> = setOf(
             "android",
             "com.android.systemui",

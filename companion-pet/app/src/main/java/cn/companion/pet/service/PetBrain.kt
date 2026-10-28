@@ -155,7 +155,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private fun ridingAllowed(): Boolean {
         val audio = context.getSystemService(AudioManager::class.java)
         return settings.partnerRiding && !scheduler.isQuiet(now()) && !settings.petPaused && now() >= settings.partnerQuietUntil &&
-            audio.mode != AudioManager.MODE_IN_CALL && audio.mode != AudioManager.MODE_IN_COMMUNICATION && partnerBusy() == null &&
+            !callInProgress() && partnerBusy() == null &&
             !partner.typing && !isTypingNow
     }
     private fun syncRiding() {
@@ -189,12 +189,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         cn.companion.pet.core.focus.FocusController(
             store = cn.companion.pet.core.focus.FocusStore(memory.root),
             device = object : cn.companion.pet.core.focus.FocusDevicePort {
-                override fun launch(pkg: String): Boolean = gemini.launch(pkg, adjacent = false) == GeminiLauncher.Outcome.LAUNCHED
+                override fun launch(pkg: String): Boolean = !callInProgress() && gemini.launch(pkg, adjacent = false) == GeminiLauncher.Outcome.LAUNCHED
                 override fun activePackage(): String? = PerceptionHub.activePackage()?.takeUnless { focusGate.isTransient(it) }
                 override fun observeForeground(): String? = activePackage()
             },
             ui = object : cn.companion.pet.core.focus.FocusUiPort {
-                override fun showBlock(targetLabel: String, reason: String): cn.companion.pet.core.focus.OverlayResult = focusOverlay.show(targetLabel, reason)
+                override fun showBlock(targetLabel: String, reason: String): cn.companion.pet.core.focus.OverlayResult =
+                    if (callInProgress()) cn.companion.pet.core.focus.OverlayResult(false, "通话或紧急界面期间让出拦截层") else focusOverlay.show(targetLabel, reason)
                 override fun hideBlock() { focusOverlay.hide() }
                 override fun observeBlock() = focusOverlay.observe()
                 override fun remind(targetLabel: String, text: String) { showFocusRemind(text) }
@@ -371,7 +372,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // 训练回合跨重启恢复：回到同一题同一槽位，并如实说明空窗。
         runCatching { restoreTraining() }
         // 守护：杀进程/重启后恢复；已结束/过期/损坏的不复活。
-        runCatching { focusController.restore(interactive = isUserActive()) }
+        runCatching { focusController.restore(interactive = isUserActive() && !callInProgress()) }
         app.focusStatus = { focusController.status() }
         app.executionHealth = { execMonitor.snapshot(mono(), enforcingNow()).let { it.state.name + " · " + it.detail } }
         app.practiceStatus = { practiceStatusLine() }
@@ -489,7 +490,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun callInProgress(): Boolean {
         val audio = context.getSystemService(AudioManager::class.java)
-        return audio.mode == AudioManager.MODE_IN_CALL || audio.mode == AudioManager.MODE_IN_COMMUNICATION
+        return audio.mode == AudioManager.MODE_RINGTONE || audio.mode == AudioManager.MODE_IN_CALL ||
+            audio.mode == AudioManager.MODE_IN_COMMUNICATION ||
+            PerceptionHub.activePackage() in cn.companion.pet.core.focus.ForegroundGate.CALL_AND_EMERGENCY_PACKAGES
     }
 
     private fun isUserActive(): Boolean = power.isInteractive && !keyguard.isKeyguardLocked
@@ -500,7 +503,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val now = now()
         partner.tick()
         // 守护按秒推进（到期、宽限、重试），不受下面任何提前 return 影响；熄屏/锁屏时不拉回。
-        runCatching { focusController.tick(interactive = active && !callInProgress()) }
+        runCatching { focusController.tick(interactive = active && (!focusActive || !callInProgress())) }
         // 训练计时用单调时钟推进；熄屏/锁屏不催。
         runCatching { if (active) tickTraining(mono()) }
         // 题组换休息按日历时间推进（硬截止、休息到点），熄屏也要按时结束。
@@ -873,7 +876,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         return GovernorSignals(at, partnerContext(), active,
             typing = isTypingNow || partner.typing || android.os.SystemClock.elapsedRealtime() - PerceptionHub.lastTypingAt < 8_000,
             capturingVoice = partner.voiceCapturing,
-            inCall = audio.mode == AudioManager.MODE_IN_CALL || audio.mode == AudioManager.MODE_IN_COMMUNICATION,
+            inCall = callInProgress(),
             sleepHours = asleep, dismissedUntil = settings.partnerQuietUntil,
             busyReason = when {
                 settings.petPaused -> "已暂停"
