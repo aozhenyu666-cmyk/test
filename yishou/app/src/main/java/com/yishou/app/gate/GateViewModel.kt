@@ -102,8 +102,9 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         val bank = availableBank()
         val refs = dao.reflexes().map { it.value() }
         val todayRefs = availableReflexes(refs)
+        val llm = yishou.settings.llm.value.isComplete
         val mode = GatePlan.pick(GateInput(open != null && (open.pending != null || !judgeDown), bank.isNotEmpty(),
-            yishou.settings.llm.value.isComplete && !judgeDown, todayRefs.isNotEmpty() && recallTries < 3, _state.value.wrongInRow))
+            llm && !judgeDown, todayRefs.isNotEmpty() && recallTries < 3, _state.value.wrongInRow, freshReady = llm))
         _state.update { it.copy(mode = mode) }
         when (mode) {
             GateMain.STRAND -> {
@@ -125,10 +126,18 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
                 prepareBank()
                 ice = BankOpening.ice(bankQuestion!!.id, bank.mapNotNull { LockedQuestions.fromCard(it.row.id, it.card) }, kotlin.random.Random.nextLong())
             }
+            GateMain.FRESH -> {
+                // 题库没有能用的题：现出一道锁好的题，并在后台再备一道
+                val q = FreshQuestions.take(yishou)
+                if (q == null) { judgeDown = true; pick(); return }
+                bankQuestion = null; askingFirst = false; feed = emptyList()
+                probe = GateFlow(q) { SystemClock.elapsedRealtime() }
+                viewModelScope.launch { runCatching { FreshQuestions.prefetch(yishou) } }
+            }
             GateMain.LOW_ENERGY -> recall = Reflexes.pick(todayRefs, System.currentTimeMillis())
             GateMain.WAIT -> Unit
         }
-        if (!echoChecked && (mode == GateMain.STRAND || mode == GateMain.BANK)) {
+        if (!echoChecked && (mode == GateMain.STRAND || mode == GateMain.BANK || mode == GateMain.FRESH)) {
             echoChecked = true
             refs.filter { it.dueAt <= System.currentTimeMillis() && it.id !in recalledToday() }.minByOrNull { it.dueAt }?.let {
                 recall = it; recallingEcho = true
@@ -157,6 +166,16 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             work.submit(); review = work.review
             if (f.unavailable) { judgeDown = true; pick() }
             else if (review?.verdict?.passed == false) _state.update { it.copy(wrongInRow = it.wrongInRow + 1) }
+        } else if (_state.value.mode == GateMain.FRESH) {
+            // 现出的题没有选项：要点过了就进复盘和触发器，三次没过换路
+            f.submit(yishou.judge)
+            if (f.unavailable) { judgeDown = true; pick(); return@run }
+            val v = f.verdict ?: return@run
+            if (v.passed) review = TurnReview(f.question, f.answer, f.trace!!, v)
+            else if (f.exhausted) {
+                review = TurnReview(f.question, f.answer, f.trace!!, v)
+                _state.update { it.copy(wrongInRow = it.wrongInRow + 1) }
+            }
         } else {
             // 看过的退坡提示也交给判卷核对，不能照抄提示通关。
             val judge = object : Judge {
@@ -210,7 +229,9 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     fun pass() = run {
         val rev = review ?: return@run
         if (!mayGrant() || !GateCompletion.ready(rev.verdict, triggerSaved, rev.pullBack)) return@run
-        val pass = if (_state.value.mode == GateMain.STRAND) {
+        val pass = if (_state.value.mode == GateMain.FRESH) {
+            issuer.issueVerified(_state.value.group, GatePlan.FULL_PASS_MIN, rev.verdict)
+        } else if (_state.value.mode == GateMain.STRAND) {
             // 不让同一份复盘在下次入口再换一次通行。
             work.acknowledge()
             issuer.issueVerified(_state.value.group, GatePlan.FULL_PASS_MIN, rev.verdict)

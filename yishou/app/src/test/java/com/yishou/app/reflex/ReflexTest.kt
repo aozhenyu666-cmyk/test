@@ -101,6 +101,10 @@ class ReflexTest {
         assertEquals(Main.LOW_ENERGY, GatePlan.pick(base.copy(judgeOk = false)))
         assertEquals(Main.LOW_ENERGY, GatePlan.pick(base.copy(wrongInRow = 2)))
         assertEquals(Main.WAIT, GatePlan.pick(base.copy(judgeOk = false, hasReflex = false)))
+        // 题库没题、模型在：现出一题，不掉到默写或等待
+        assertEquals(Main.FRESH, GatePlan.pick(base.copy(strandReady = false, bankReady = false, freshReady = true)))
+        assertEquals(Main.LOW_ENERGY, GatePlan.pick(base.copy(strandReady = false, bankReady = false, freshReady = true, judgeOk = false)))
+        assertEquals(Main.LOW_ENERGY, GatePlan.pick(base.copy(strandReady = false, bankReady = false, freshReady = true, wrongInRow = 2)))
     }
 
     @Test
