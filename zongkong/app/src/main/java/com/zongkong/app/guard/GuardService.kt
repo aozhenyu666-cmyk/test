@@ -181,7 +181,8 @@ class GuardService : AccessibilityService() {
             Log.i(TAG, "失联太久，打开 $pkg 时进入总控时间")
             session = zk.actions.hq.start(com.zongkong.core.hq.HqTrigger.ESCALATION)
         }
-        if (session == null) return false
+        if (session == null || now < session.suspendedUntil) return false
+        if (session.trigger == com.zongkong.core.hq.HqTrigger.UNANSWERED && now >= session.endsAt) return false
         if (com.zongkong.core.hq.Hq.allows(pkg, packageName, cfg, overlays())) return false
         if (now - lastBounce < 1500) return true
         lastBounce = now
@@ -282,7 +283,13 @@ class GuardService : AccessibilityService() {
                 } catch (e: Exception) {
                     Log.w(TAG, "读一手总结失败", e)
                 }
-                // 看证据的关卡（排了行动、一手练够了组数……）够了就自动打勾
+                // 新装的娱乐应用自动进拦截名单
+                try {
+                    AutoBlock.apply(this@GuardService)
+                } catch (e: Exception) {
+                    Log.w(TAG, "自动识别娱乐应用失败", e)
+                }
+                // 看证据的关卡（排了行动、一手练够了组数……）够了就自动打勾（早上的部署除外：要你自己确认）
                 try {
                     val passed = zk.actions.autoVerify()
                     if (passed.isNotEmpty()) Notifications.alert(this@GuardService, "自动验收通过", passed.joinToString("、"), "rhythm")

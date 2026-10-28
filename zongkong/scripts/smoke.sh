@@ -84,6 +84,14 @@ else
   adb shell dumpsys activity activities | grep -E "Task|ActivityRecord" | head -20
 fi
 
+# 放行时打开娱乐应用：先答一题（0.10）
+adb shell am broadcast -a $PKG.SEED -p $PKG --es mode gate
+sleep 2
+launch_target
+shot 08b-open-gate
+resumed | tee "$OUT/resumed-gate.txt"
+if grep -q "$PKG/.guard.GateActivity" "$OUT/resumed-gate.txt"; then echo "OPEN_GATE=OK" >> "$OUT/result.txt"; else echo "OPEN_GATE=FAIL" >> "$OUT/result.txt"; fi
+
 adb shell am broadcast -a $PKG.SEED -p $PKG --es mode free
 sleep 2
 launch_target

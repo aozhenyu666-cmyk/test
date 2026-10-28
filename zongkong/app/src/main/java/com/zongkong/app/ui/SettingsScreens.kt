@@ -81,6 +81,7 @@ fun SettingsScreen(nav: NavHostController) {
         )
 
         SectionLabel("互动")
+        MenuItem("强督导与一次缓行", "等待与接管范围、每日一次延后、跨日补交清单", "control", nav)
         MenuItem("总控怎么运转", "收→谋→筹→行→验；今天几点主动找你、信用怎么算、行动和记录怎么用", "flow", nav)
         MenuItem("对讲、语音、桌面宠物", "${if (config.voice.apiReady) "语音接口已接" else "用手机自带的语音"} · 主动程度：${com.zongkong.core.boss.BossConfig.INITIATIVE.getOrElse(config.boss.initiative) { "?" }} · ${com.zongkong.app.system.PetView.kindOf(config.boss.petKind).label}${if (config.boss.pet) "在桌面上" else "收起了"}", "voice/settings", nav)
         MenuItem(
@@ -192,13 +193,14 @@ fun BlockListScreen(nav: NavHostController) {
     Column(Modifier.fillMaxSize()) {
         BackBar("拦截名单", { nav.popBackStack() })
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Hint("严管时，打开勾选的应用会立刻被弹回总控；放行时会累计它们的使用时长，算进每日娱乐上限。加入立即生效，移出要等 24 小时。")
+            Hint("严管时，打开勾选的应用会立刻被弹回总控；放行时打开要先答一题、每次给 10 分钟，用的时长算进今天挣到的娱乐。手机上的常见娱乐应用和游戏、视频类应用会自动勾上。加入立即生效，移出要等 24 小时。")
             OutlinedTextField(value = query, onValueChange = { query = it }, label = { Text("搜索") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Button(
                 onClick = {
                     val labels = apps.orEmpty().associate { it.pkg to it.label }
                     val out = Policy.setBlocked(config, selected, { labels[it] ?: it }, System.currentTimeMillis())
-                    store.updateConfig { out.config }
+                    // 你自己拿掉的，自动识别时不再加回去；重新勾上的从“拿掉”里删
+                    store.updateConfig { out.config.copy(unblocked = (config.unblocked + (config.blocked - selected)) - selected) }
                     message = out.message
                 },
                 modifier = Modifier.fillMaxWidth(),

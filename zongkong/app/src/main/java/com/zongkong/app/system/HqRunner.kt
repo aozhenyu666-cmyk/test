@@ -40,7 +40,7 @@ object HqRunner {
 
         // 进去了没封存、超时一小时：自动收掉，别把手机锁一整夜
         store.hq.value.active?.let { s ->
-            if (now > s.endsAt + 60 * 60_000L) app.actions.hq.exitEarly("超时一小时没封存，自动结束")
+            if (now > s.endsAt + 60 * 60_000L) app.actions.hq.exitEarly("超时一小时没封存，自动结束", systemEnding = true)
         }
 
         // 和电脑同步（总控时间开始 / 结束时马上同步，电脑跟着锁 / 解）

@@ -53,8 +53,9 @@ fun GateScreen(gateId: String, nav: NavHostController) {
     val store = context.zk.store
     val config by store.config.collectAsStateWithLifecycle()
     val day by store.today.collectAsStateWithLifecycle()
+    val control by store.control.collectAsStateWithLifecycle()
     val now = rememberNow()
-    val status = remember(config, day, now) { store.status(now) }
+    val status = remember(config, day, control, now) { store.status(now) }
     val gs = status.gates.firstOrNull { it.gate.id == gateId }
     val sig = LocalSignals.current
     val scope = rememberCoroutineScope()
@@ -106,6 +107,10 @@ fun GateScreen(gateId: String, nav: NavHostController) {
                 Tag(gs.phase.label, phaseColor(gs.phase))
             }
             Text(gate.instruction, style = MaterialTheme.typography.bodyLarge)
+            if (!gs.done) {
+                gs.deferredUntil?.let { Hint("缓行中，30 分钟到期后恢复；这项还没完成。可随时提前补交。") }
+                DeferButton(com.zongkong.core.control.DeferralKind.GATE, gateId)
+            }
 
             if (gate.dept == Dept.THINK) {
                 val m = Defaults.methodOf(date)

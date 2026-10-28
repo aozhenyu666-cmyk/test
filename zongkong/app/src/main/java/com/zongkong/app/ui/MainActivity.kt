@@ -81,6 +81,7 @@ class MainActivity : ComponentActivity() {
         if (zk.store.buzzUntil != 0L) com.zongkong.app.system.Buzz.stop(this)
         // 常驻服务；无障碍开着却没在跑、又给过写设置的权限：现在就重新挂上
         com.zongkong.app.system.KeepAliveService.start(this)
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { com.zongkong.app.guard.AutoBlock.apply(this@MainActivity) } }
         if (PermissionStatus.accessibility(this) && !PermissionStatus.guardRunning(this) && com.zongkong.app.system.SelfHeal.canWrite(this)) {
             lifecycleScope.launch { com.zongkong.app.system.SelfHeal.rebind(this@MainActivity) }
         }
@@ -269,6 +270,7 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 composable("directives/add") { DirectiveAddScreen(nav) }
                 composable("directive/{id}") { e -> DirectiveDetailScreen(e.arguments?.getString("id").orEmpty(), nav) }
                 composable("hq") { HqScreen(nav) }
+                composable("control") { ControlScreen(nav) }
                 composable("settings/hq") { HqSettingsScreen(nav) }
                 composable("dossier") { DossierScreen(nav) }
                 composable("vein") { VeinScreen(nav) }

@@ -13,8 +13,9 @@ android {
         applicationId = "com.zongkong.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 12
-        versionName = "0.10.0"
+        // 0.10.1 是另一条线上的「主动性 / 强督导」；这一版在它之上加追问体系和自愈加固
+        versionCode = 14
+        versionName = "0.11.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

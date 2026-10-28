@@ -76,8 +76,9 @@ class HqActions(private val context: Context, private val store: Store, private 
     }
 
     /** 紧急退出：要写原因（至少 6 个字），记下来。返回错误说明，成功返回 null。 */
-    fun exitEarly(reason: String): String? {
+    fun exitEarly(reason: String, systemEnding: Boolean = false): String? {
         val s = active() ?: return null
+        if (s.trigger == HqTrigger.UNANSWERED && !systemEnding) return actions.control.deferHq(reason)
         if (reason.trim().length < 6) return "写清楚为什么要现在退出（至少 6 个字）"
         store.updateHq { it.put(Hq.exitEarly(s, now(), reason.trim())) }
         Buzz.stop(context)

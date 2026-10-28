@@ -8,6 +8,7 @@ import android.content.Intent
 import com.yishou.app.MainActivity
 import com.yishou.app.YishouApp
 import com.yishou.app.data.RoundSource
+import com.yishou.app.initiative.InitiativeRunner
 import com.yishou.app.llm.CoachMessages
 import com.yishou.app.window.WindowActivity
 import com.yishou.app.window.WindowClock
@@ -30,6 +31,7 @@ object Reminders {
     private const val WINDOW_CHECK = "window_check"
     private const val PAUSE_END = "pause_end"
     private const val IDLE = "idle"
+    private const val INITIATIVE = "initiative"
     /** 只在白天叫：8 点到 23 点 */
     private const val DAY_START = 8
     private const val DAY_END = 23
@@ -59,6 +61,20 @@ object Reminders {
         val now = System.currentTimeMillis()
         val due = maxOf((lastActivity ?: now) + hours * 3_600_000L, now + 60_000L)
         am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, daytime(due, ZoneId.systemDefault()), pi)
+    }
+
+    /**
+     * 每 30 分钟叫醒一次，看要不要主动叫你走一手。
+     * 只是“睁眼”，叫不叫由 [com.yishou.app.initiative.Initiative.decide] 判断。
+     */
+    fun scheduleInitiative(context: Context) {
+        val app = context.applicationContext as YishouApp
+        val am = context.getSystemService(AlarmManager::class.java)
+        val pi = pending(context, INITIATIVE, 14)
+        am.cancel(pi)
+        if (!app.settings.app.value.proactiveEnabled) return
+        val every = 30 * 60_000L
+        am.setInexactRepeating(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + every, every, pi)
     }
 
     /** t 落在夜里时推到下一个早上 8 点 */
@@ -151,6 +167,7 @@ object Reminders {
                     MainActivity::class.java,
                 )
             }
+            INITIATIVE -> InitiativeRunner.check(context)
             PAUSE_END -> {
                 if (WindowClock.active(now, app.settings.app.value, zone) == null) return
                 Notifications.showReminder(

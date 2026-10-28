@@ -71,9 +71,13 @@ class LoopTest {
                 onboarded = true, silenceHours = 0, dailyQuotaMin = 0, notion = NotionConfig(token = "secret_test", baseUrl = sim.baseUrl),
                 // 测试期间不让每日总控时间、失联升级、参谋主动找人插进来
                 hq = com.zongkong.core.hq.HqConfig(enabled = false, escalation = false, proactive = false, vibrate = false),
+                // 老的场景不受“挣来的娱乐 / 打开就答题”影响；0.10 的测试自己打开
+                earn = com.zongkong.core.EarnConfig(enabled = false),
+                watch = com.zongkong.core.WatchConfig(openGate = false),
             )
         }
         app.store.updateHq { com.zongkong.core.hq.HqBook() }
+        app.store.updateControl { com.zongkong.core.control.ControlBook() }
         app.store.updateDossier { com.zongkong.core.boss.Dossier() }
         app.store.updateVein { com.zongkong.core.vein.Vein() }
         app.store.updateIntake { com.zongkong.core.info.IntakeBook() }
@@ -184,6 +188,8 @@ class LoopTest {
         compose.onNodeWithTag("session-done").performScrollTo().performClick()
         compose.onNodeWithTag("result-field").performTextInput("写完了，用了 STAR，数据还缺两个")
         compose.onNodeWithTag("next-field").performTextInput("找项目数据")
+        // 键盘会挡住“记下结果”，点之前先收起
+        hideKeyboard()
         compose.onNodeWithTag("complete-save").performScrollTo().performClick()
         waitText("结果已记下")
         shot("e2e-04-result-saved")
@@ -506,6 +512,59 @@ class LoopTest {
      * 总控时间：进入 → 静 → 收（清收集箱）→ 谋（没接 AI：四问自己憋）→ 筹（定明天主线）→ 行（对账）→ 封。
      * 进行中按返回键不走；封存后记一条验收记录、解锁。
      */
+    @Test
+    fun oneDeferralKeepsTheTaskAndExpiresWithoutPassingIt() {
+        val id = "grace-${System.currentTimeMillis()}"
+        val gate = com.zongkong.core.Gate(
+            id = id, dept = com.zongkong.core.Dept.HQ, title = "测试每晚总结报告", instruction = "列清未完成事项",
+            openAt = 4 * 60, deadline = 4 * 60 + 1, block = com.zongkong.core.BlockMode.FROM_OPEN,
+            verify = com.zongkong.core.VerifyMode.TEXT, minChars = 10,
+        )
+        app.store.updateConfig { it.copy(gates = listOf(gate), initiative = it.initiative.copy(enabled = false)) }
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, "gate/$id"))
+        waitText("用今日一次缓行")
+        compose.onNode(hasText("用今日一次缓行", substring = true)).performScrollTo().performClick()
+        waitText("这项先缓一缓")
+        compose.onNode(hasText("使用一次缓行")).performClick()
+        waitText("已延后 30 分钟")
+        assertEquals(1, app.store.control.value.deferrals.size)
+        assertTrue(app.store.today.value.passed(id) == null)
+        assertTrue(!app.store.status().gates.single().blocking)
+        assertTrue(app.actions.control.deferGate(id) != null)
+        val report = com.zongkong.core.plan.DayReport.text(app.actions.dayReport())
+        assertTrue(report, report.contains(gate.title) && report.contains("仍待补交"))
+        shot("e2e-38-grace-gate")
+        app.store.updateControl { b -> b.copy(deferrals = b.deferrals.map { it.copy(until = System.currentTimeMillis() - 1) }) }
+        assertTrue(app.store.status().gates.single().blocking)
+        assertTrue(app.store.today.value.passed(id) == null)
+        val result = runBlocking { app.actions.submitDeferred(app.store.control.value.deferrals.single().id, "今天的行动还未全部完成，明天先处理遗留的材料整理工作。") }
+        assertTrue(result.toString(), result is com.zongkong.app.data.Actions.SubmitResult.Judged && result.verdict.pass)
+        assertTrue(app.store.control.value.deferrals.single().resolvedAt > 0)
+        assertTrue(app.store.today.value.passed(id) != null)
+        assertTrue(app.actions.control.deferGate(id) != null)
+    }
+
+    @Test
+    fun hqGraceCanResumeWithoutSpendingAnotherPass() {
+        app.store.updateConfig { it.copy(gates = emptyList(), initiative = it.initiative.copy(enabled = false)) }
+        val session = app.actions.hq.start(com.zongkong.core.hq.HqTrigger.UNANSWERED, 20)
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, "hq"))
+        waitText("用今日一次缓行")
+        compose.onNode(hasText("用今日一次缓行", substring = true)).performClick()
+        waitText("这项先缓一缓")
+        compose.onNode(hasText("使用一次缓行")).performClick()
+        waitText("总控时间暂时缓行")
+        assertTrue(!app.store.status().strict)
+        assertTrue(app.store.hq.value.active!!.endsAt >= session.endsAt + 29 * 60_000)
+        shot("e2e-39-grace-hq")
+        compose.onNode(hasText("现在继续")).performClick()
+        waitFor(hasTestTag("hq-step"), 5_000, "恢复后的总控环节")
+        assertTrue(app.store.status().strict)
+        assertEquals(0L, app.store.hq.value.active!!.suspendedUntil)
+        assertEquals(1, app.store.control.value.deferrals.size)
+        assertTrue(app.actions.hq.exitEarly("再休息一次") != null)
+    }
+
     @Test
     fun hqSession() {
         val now = System.currentTimeMillis()
@@ -998,5 +1057,60 @@ class LoopTest {
         waitFor(hasTestTag("script-line"), 5_000, "首页预案栏")
         settle()
         shot("e2e-102-home-08")
+    }
+
+    /**
+     * 0.10：早上总控替你排好的不会自动放行，要你点确认；主线过了点没开始就欠着（严管），开始做就解开；
+     * 挣来的娱乐：底数用完就严管，做完一步再挣。
+     */
+    @Test
+    fun earnAndDebt() {
+        val now = System.currentTimeMillis()
+        val bj = app.store.zone
+        val rnd = kotlin.random.Random(10)
+        fun at(min: Long) = fmt.format(java.time.Instant.ofEpochMilli(now + min * 60_000L).atZone(bj))
+        // 只测部署、欠账与预算；晚上其他关卡超时不应遮住本场景要验证的首页提示。
+        // 宽限设为 0，30 分钟宽限由 EarnTest 验证，避免凌晨刚换日时没有足够的当天历史。
+        val planGate = com.zongkong.core.Defaults.gates().first { it.id == com.zongkong.app.data.Actions.PLAN_GATE }
+        app.store.updateConfig { it.copy(gates = listOf(planGate), earn = com.zongkong.core.EarnConfig(mainGraceMinutes = 0), dailyQuotaMin = 120) }
+        app.store.updateToday(now) { com.zongkong.core.DayLog(it.date) }
+        app.store.updatePlans { com.zongkong.core.plan.PlanBook() }
+        val dayStart = com.zongkong.core.DayClock.startOf(com.zongkong.core.DayClock.date(now, bj), bj)
+        val plannedStart = fmt.format(java.time.Instant.ofEpochMilli(maxOf(now - 50 * 60_000L, dayStart)).atZone(bj))
+        var key = ""
+        app.store.updateWork { w0 ->
+            val (w1, t) = com.zongkong.core.work.WorkOps.create(w0, com.zongkong.core.work.Kind.THREAD, mapOf(F.TITLE to "行测提分", F.WHY to "笔试", F.CRITERIA to "75 分"), now, rnd)
+            val (w2, a) = com.zongkong.core.work.WorkOps.create(w1, com.zongkong.core.work.Kind.ACTION, mapOf(F.TITLE to "资料分析 20 题", F.THREAD to t.key, F.CRITERIA to "做完对答案", F.PLAN to com.zongkong.core.work.Plan(plannedStart, at(30)).encode()), now, rnd)
+            key = a.key
+            w2
+        }
+        // 后台自动验收不再替你把早上的部署打勾
+        runBlocking { app.actions.autoVerify() }
+        assertTrue(app.store.status().gates.any { it.gate.id == "plan_morning" && !it.done })
+        val st = app.store.status()
+        assertTrue(st.reasons.toString(), st.reasons.any { it is com.zongkong.core.Reason.Debt })
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java))
+        waitFor(hasTestTag("guide-confirm-plan"), 10_000, "确认今天的部署")
+        settle()
+        shot("e2e-103-confirm-plan")
+        compose.onNodeWithTag("guide-confirm-plan").performScrollTo().performClick()
+        compose.waitUntil(5_000) { app.store.status().gates.any { it.gate.id == "plan_morning" && it.done } }
+        // 还欠着主线：首页是严管卡
+        waitText("过了点还没开始", 5_000)
+        settle()
+        shot("e2e-104-debt")
+        // 开始做就解开
+        app.store.updateWork { com.zongkong.core.work.WorkOps.start(it, key, System.currentTimeMillis(), 0) }
+        assertTrue(app.store.status().reasons.none { it is com.zongkong.core.Reason.Debt })
+        // 底数 20 分钟用完：严管；做完这一步 +20 就又能玩
+        app.store.updateWork { com.zongkong.core.work.WorkOps.complete(it, key, "做完了", com.zongkong.core.work.WorkOps.Met.YES, "", System.currentTimeMillis(), bj, rnd) }
+        app.store.updateToday(System.currentTimeMillis()) { it.copy(playSeconds = mapOf("tv.danmaku.bili" to 30 * 60L)) }
+        assertTrue(app.store.status().reasons.none { it is com.zongkong.core.Reason.Budget })
+        app.store.updateToday(System.currentTimeMillis()) { it.copy(playSeconds = mapOf("tv.danmaku.bili" to 45 * 60L)) }
+        assertTrue(app.store.status().reasons.toString(), app.store.status().reasons.any { it is com.zongkong.core.Reason.Budget })
+        go("home")
+        waitText("娱乐用完了", 5_000)
+        settle()
+        shot("e2e-105-budget")
     }
 }

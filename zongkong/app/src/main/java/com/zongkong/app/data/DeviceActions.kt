@@ -67,7 +67,7 @@ class DeviceActions(private val context: Context, private val store: Store, priv
     /** 守护服务每轮调一次：两分钟同步一次；总控时间开始 / 结束时马上同步。 */
     fun maybeSync() {
         if (!ready) return
-        val hq = store.hq.value.active?.endsAt ?: 0L
+        val hq = store.hq.value.active?.takeIf { System.currentTimeMillis() >= it.suspendedUntil }?.endsAt ?: 0L
         val since = System.currentTimeMillis() - store.device.value.lastSync
         if (since > 120_000 || hq != lastHqUntil) {
             lastHqUntil = hq
@@ -111,7 +111,7 @@ class DeviceActions(private val context: Context, private val store: Store, priv
             aims = Aims.open(book2).map { a -> a.title + (Aims.daysLeft(a, now, store.zone)?.let { "（还剩 $it 天）" } ?: "") },
             credibility = store.credibility(now),
             stance = store.stance(now).label,
-            hqUntil = store.hq.value.active?.endsAt ?: 0L,
+            hqUntil = store.hq.value.active?.takeIf { now >= it.suspendedUntil }?.endsAt ?: 0L,
             cmds = book.cmds,
             gotMsgs = book.gotMsgs.takeLast(20),
         )
