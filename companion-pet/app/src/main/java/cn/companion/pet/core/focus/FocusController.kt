@@ -40,8 +40,6 @@ data class FocusStatus(
     val active: Boolean,
     val state: FocusState? = null,
     val targetLabel: String = "",
-    /** 守护目标的包名：诊断页要据此探测「主实例 / 分身」，不能只凭 label。 */
-    val targetPackage: String = "",
     val enforcement: FocusEnforcement? = null,
     val mode: FocusMode? = null,
     val secondsLeft: Long = 0,
@@ -51,6 +49,8 @@ data class FocusStatus(
     val overlayError: String = "",
     val storeError: String = "",
     val lastAction: cn.companion.pet.core.training.ActionReceipt? = null,
+    /** 守护目标的包名：诊断页要据此探测「主实例 / 分身」，不能只凭 label。 */
+    val targetPackage: String = "",
 )
 
 /**
@@ -89,9 +89,10 @@ class FocusController(
 
     fun status(): FocusStatus {
         val s = guard?.current ?: return FocusStatus(false, storeError = store.lastError.orEmpty(), lastAction = lastAction())
-        return FocusStatus(s.active, s.state, s.contract.targetLabel, s.contract.targetPackage, s.contract.enforcement, s.contract.mode,
+        return FocusStatus(s.active, s.state, s.contract.targetLabel, enforcement = s.contract.enforcement, mode = s.contract.mode,
             ((s.contract.expiresAt - now()) / 1000).coerceAtLeast(0), s.returnAttempts, s.lastResult,
-            overlayShown, overlayError, store.lastError.orEmpty(), lastAction())
+            overlayShown = overlayShown, overlayError = overlayError, storeError = store.lastError.orEmpty(), lastAction = lastAction(),
+            targetPackage = s.contract.targetPackage)
     }
 
     /** 服务重启后恢复；已结束/已过期/损坏的不复活。被拦截/返回中的会话恢复成“等待下一次动作”。 */
@@ -226,8 +227,15 @@ class FocusController(
             val observed = runCatching { device.observeForeground() }.getOrNull()
             if (observed != null && observed != g.current.lastForeground) onForeground(observed)
         }
-        val needsActive = g.current.state == FocusState.ARMED || g.current.state == FocusState.PAUSED
-        apply(g.tick(now(), if (needsActive) device.activePackage() else null, interactive))
+        // 关键：只对 ARMED/PAUSED 读前台是不够的。
+        // AWAY_GRACE / REMINDED / BLOCKING 才是"已经离开、正要拦截"的状态，
+        // 它们原来完全依赖无障碍的 TYPE_WINDOW_STATE_CHANGED 事件推进；
+        // 只要那次事件没上报（部分 ROM 切 App 不报），状态机就永远停在离开中，
+        // 拦截层永不出现——用户看到的就是"守护形同虚设"。
+        // 现在统一每秒主动读一次真实前台，事件只是加速，不再是唯一来源。
+        val activePkg = device.activePackage()
+        android.util.Log.i("PetGuard", "tick state=" + g.current.state + " fg=" + activePkg + " interactive=" + interactive)
+        apply(g.tick(now(), activePkg, interactive))
     }
 
     fun userReturn() { guard?.let { apply(it.userReturn(now())) } }
@@ -241,8 +249,9 @@ class FocusController(
         val epoch = lifecycle
         for (a in actions) {
             when (a) {
-                is FocusAction.Remind -> ui.remind(label, a.text)
+                is FocusAction.Remind -> { android.util.Log.i("PetGuard", "REMIND " + a.text); ui.remind(label, a.text) }
                 is FocusAction.Block -> {
+                    android.util.Log.i("PetGuard", "BLOCK requested reason=" + a.reason)
                     val id = evidence.requested("focus_block_draw", now())
                     val r = runCatching { ui.showBlock(label, a.reason) }.getOrElse { OverlayResult(false, it.javaClass.simpleName) }
                     overlayShown = r.shown
@@ -300,10 +309,17 @@ class FocusController(
         persist()
     }
 
-    /** 写盘失败不再吞掉：记在 store.lastError，状态页能看到。 */
+    /**
+     * 写盘失败不再吞掉：记在 store.lastError，状态页能看到。
+     *
+     * 关键：比较时必须忽略 [FocusSnapshot.updatedAt]。
+     * 那个字段每次 tick 都会被刷新，直接比整个对象会让"没变化"永远不成立，
+     * 于是每秒写一次盘 —— 实测 120 次 tick 写 120 次（测试 FocusEvidenceIntegrationTest 抓到的就是这条）。
+     */
     private fun persist(): Boolean = guard?.let {
         val snapshot = it.current
-        if (snapshot == lastPersisted && store.lastError == null) true
+        val unchanged = lastPersisted?.let { p -> p.copy(updatedAt = 0) == snapshot.copy(updatedAt = 0) } == true
+        if (unchanged && store.lastError == null) true
         else store.save(snapshot).also { saved -> if (saved) lastPersisted = snapshot }
     } ?: true
 

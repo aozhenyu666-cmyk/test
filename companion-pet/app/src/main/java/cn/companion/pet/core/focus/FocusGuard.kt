@@ -66,7 +66,12 @@ data class FocusContract(
      * 0 = 机主；非 0（例如 vivo 的 999「应用分身」）表示分身。
      * null 表示身份不确定 —— 这种情况不能假装守护成功。
      */
-    val targetUserId: Int? = 0,
+    val targetUserId: Int? = 0,    /**
+     * 也算作「在目标里」的托管包（例如 Gemini 的界面跑在 Google App 里）。
+     *
+     * 没有这一项会出现：用户明明在 Gemini 里，却因为前台是 googlequicksearchbox 被判成"离开了然后被拉回"。
+     */
+    val targetHostPackages: Set<String> = emptySet(),
 ) {
     /**
      * 身份是否可靠。
@@ -127,7 +132,9 @@ class FocusGuard(snapshot: FocusSnapshot) {
      * 但调用方必须同时检查 [FocusContract.identityCertain] 才允许自动拉回。
      */
     private fun isTarget(pkg: String?, userId: Int? = null): Boolean {
-        if (pkg == null || pkg != c.targetPackage) return false
+        if (pkg == null) return false
+        // 目标主包或它的托管包都算"在目标里"。
+        if (pkg != c.targetPackage && pkg !in c.targetHostPackages) return false
         val want = c.targetUserId ?: return true
         val got = userId ?: return true
         return want == got

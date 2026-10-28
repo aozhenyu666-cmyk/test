@@ -55,9 +55,22 @@ class Settings(context: Context) {
     var sessionAutoStart by bool("session_auto_start", false)
     var sessionAutoStartSec by int("session_auto_start_sec", 20)
     /** 专注守护：SOFT 只提醒（默认）；STRICT 到点全屏拦截并有界自动拉回，必须用户自己打开。 */
-    var focusEnforcement by str("focus_enforcement", "SOFT")
+    /**
+     * 守护强度。默认 STRICT：用户要的是"玩别的会弹出监督界面"，SOFT 只弹气泡管不住。
+     * 遮罩上始终保留暂停 5 分钟与紧急退出，不会把人锁死。
+     */
+    var focusEnforcement by str("focus_enforcement", "STRICT")
     /** 守护时长（分钟），5–180，到期自动结束。 */
     var focusMinutes by int("focus_minutes", 25)
+    /**
+     * 打开 AI App 就自动进入守护，不用每次点桌宠。
+     *
+     * 用户要的是"维持和 Gemini 的对话"：他打开 Gemini 本身就代表想专注，
+     * 不该再要求他多点一次。默认开。
+     */
+    var focusAutoArm by bool("focus_auto_arm", true)
+    /** 一次性迁移标记：把旧版本落盘的 SOFT 提到 STRICT。设过就不再改动用户的选择。 */
+    var focusStrictMigrated by bool("focus_strict_migrated", false)
     var sessionPullBack by bool("session_pull_back", true)
     var sessionGraceSec by int("session_grace_sec", 10)
     var sessionAllowedGraceSec by int("session_allowed_grace_sec", 90)

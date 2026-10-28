@@ -352,6 +352,17 @@ class PetApp : Application() {
         else registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
         // 旧 today.md 只在第一次启动迁移一次；迁移有备份且幂等。
         LegacyEventImport.ensure(memory, events)
+        // 一次性迁移：把老用户存下来的 SOFT 提到 STRICT。
+        //
+        // 为什么必须迁移而不是改默认值：focus_enforcement 是"用户设置过就写进磁盘"的，
+        // 旧版本默认 SOFT 已经把 SOFT 落盘了；只改代码默认值，读到的还是磁盘里的 SOFT，
+        // 于是"严格守护"看起来打开了、实际只弹气泡——实测就踩到这条。
+        runCatching {
+            if (!settings.focusStrictMigrated) {
+                settings.focusEnforcement = "STRICT"
+                settings.focusStrictMigrated = true
+            }
+        }
         // R3：开机先按真实时间补一次它自己的进度（缺勤有上限，不会暴涨）。
         runCatching { advanceOwnLife() }
         // 上次提交如果中途崩溃，先把 journal 做完。

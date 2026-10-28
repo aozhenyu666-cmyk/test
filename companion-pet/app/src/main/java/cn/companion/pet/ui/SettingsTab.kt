@@ -436,7 +436,13 @@ private fun CompanionSettings(context: Context) {
     Section("专注守护")
     Text("点桌宠 →“守护着去 …”：先建立守护再打开 AI App，守护期间离开会被管。时长到了自动结束；随时可以暂停 5 分钟或结束守护（紧急退出）。", style = MaterialTheme.typography.bodySmall)
     var strict by remember { mutableStateOf(s.focusEnforcement == "STRICT") }
-    Toggle("严格守护（STRICT）", "默认关（只用气泡提醒）。打开后离开超过宽限就显示全屏拦截层，并自动尝试把你带回去（最多 3 次，每次都核验是否真的回去了）；拦截层上始终有暂停和紧急退出。", strict) {
+
+    // 用户要求：打开 AI App 就自动守护，不用每次点桌宠。
+    var autoArm by remember { mutableStateOf(s.focusAutoArm) }
+    Toggle("打开 AI App 就自动守护", "打开 Gemini 这类 App 就自动开始守护。结束守护后 10 分钟内不会自动重新拉起；遮罩上始终有暂停与紧急退出。", autoArm) {
+        autoArm = it; s.focusAutoArm = it
+    }
+    Toggle("严格守护（STRICT）", "默认开。离开超过宽限就显示全屏拦截层，并自动尝试把你带回去（最多 3 次，每次都核验是否真的回去了）；拦截层上始终有暂停和紧急退出。", strict) {
         strict = it; s.focusEnforcement = if (it) "STRICT" else "SOFT"
     }
     var focusMinutesText by remember { mutableStateOf(s.focusMinutes.toString()) }

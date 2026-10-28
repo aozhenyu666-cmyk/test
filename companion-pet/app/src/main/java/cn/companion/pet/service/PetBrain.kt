@@ -332,7 +332,6 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private var closeRunnable: Runnable? = null
     private val ticker = object : Runnable {
         override fun run() {
-            android.util.Log.i(DIAG, "ticker.run() fired")
             try { tick() }
             catch (error: Exception) {
                 // 这里原来只写进界面，日志里什么都看不到，等于把"每秒抛异常"彻底藏起来了。
@@ -345,7 +344,6 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     fun start() {
-        android.util.Log.i(DIAG, "brain.start() entered")
         overlay.allowOutput = { owner, priority ->
             !settings.partnerRiding && cn.companion.pet.core.training.ScopedOutputPolicy.allows(protectedOutputOwner(), owner, priority, outputArbiter)
         }
@@ -420,9 +418,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         app.capabilityStatus = { capabilityLines() }
         active = isUserActive()
         if (active) onUserPresent()
-        android.util.Log.i(DIAG, "brain.start() reached ticker post")
         handler.post(ticker)
-        android.util.Log.i(DIAG, "brain.start() ticker posted")
+        // 独立守护协程：不依赖 ticker 那条 postDelayed 自链。
+        // 实测切到别的 App 后 ticker 链会静默断掉（进程仍在 FGS、无异常、无日志），
+        // 守护与主动开口随之停摆。这里再起一条循环，任意一条活着功能就在。
+        runCatching { startGuardLoop() }
         app.events.addListener(agentListener)
         handler.postDelayed(agentTrigger, 1_200)
         PerceptionHub.onScroll = { pkg -> onScrollEvent(pkg) }
@@ -563,8 +563,14 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // R0：busy 必须有终态。超过 45 秒仍未释放就强制收尾，避免主动开口被永久关闭。
         runCatching { tickPartnerBusyWatchdog(now) }        // R2：读屏走旁路，只往缓存里放素材，不阻塞开口。
         runCatching { sideloadScreenQuote(now) }
-        // 守护按秒推进（到期、宽限、重试），不受下面任何提前 return 影响；熄屏/锁屏时不拉回。
-        runCatching { focusController.tick(interactive = active && (!focusActive || !callInProgress())) }
+        // 守护按秒推进（到期、宽限、重试），不受下面任何提前 return 影响。
+        //
+        // 原来的条件是 `active && (!focusActive || !callInProgress())`——写反了：
+        // 它让"守护没在生效"时反而传 interactive=true。而真正该排除的只有一种情况：
+        // 正在通话（此时拉回/遮罩会打断通话）。熄屏交给 FocusGuard 自己处理（它会走 screenWasOff 分支），
+        // 这里不能因为熄屏就停止推进，否则宽限与到期都不会走。
+        runCatching { maybeAutoArmFocus(now) }
+        runCatching { focusController.tick(interactive = !callInProgress()) }
         // 训练计时用单调时钟推进；熄屏/锁屏不催。
         runCatching { if (active) tickTraining(mono()) }
         // 题组换休息按日历时间推进（硬截止、休息到点），熄屏也要按时结束。
@@ -596,53 +602,40 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // R3：手里没有在读的东西（或都读完了）时，它会自己去网上找一篇真的来读。不阻塞 tick。
         runCatching { maybeReadOwnLife(now) }
         // Gemini 会话期间：只守着会话，不主动搭话
-        session?.let { android.util.Log.i(DIAG, "tick gate: session=" + it.mode); handleSession(it, now); return }
+        session?.let { gate("session=" + it.mode); handleSession(it, now); return }
         if (settings.partnerRiding && ridingStarted) {
             riding.tick()
             if (!partner.busy.value && settings.presenceEnabled) presenceTick(now)
             return
         }
-        if (!active) { android.util.Log.i(DIAG, "tick gate: inactive"); partner.waiting("锁屏时保持安静", now + 15_000); return }
+        if (!active) { gate("inactive"); partner.waiting("锁屏时保持安静", now + 15_000); return }
         // 正在“想一想”或记念头：不插嘴；放着不管 3 分钟就收起
         if (think != null || noteDraft != null) {
-            android.util.Log.i(DIAG, "tick gate: thinkOrNote")
+            gate("thinkOrNote")
             val since = think?.touchedAt ?: noteDraft!!.startedAt
             // 严格陪伴回合不因界面闲置被清掉；到期由状态机自己结算。
             if (think?.strict == null && now - since > 3 * 60_000L) endThink()
             tickStrict(now)
             return
         }
-        if (training != null) { android.util.Log.i(DIAG, "tick gate: training"); return } // 同一问题持有气泡，其他主动话题不能覆盖。
-        if (maybeAutoStartSession(now)) { android.util.Log.i(DIAG, "tick gate: autoStartSession"); return }
+        if (training != null) { gate("training"); return } // 同一问题持有气泡，其他主动话题不能覆盖。
+        if (maybeAutoStartSession(now)) { gate("autoStartSession"); return }
 
-        convo?.let { android.util.Log.i(DIAG, "tick gate: convo"); escalate(it, now); return }
+        convo?.let { gate("convo"); escalate(it, now); return }
         if (probeJob?.isActive == true || settings.petPaused) {
             if (settings.petPaused) partner.waiting("你暂停了陪伴，点继续后恢复。", now + 15_000)
-            android.util.Log.i(DIAG, "tick gate: probeJob=" + (probeJob?.isActive == true) + " paused=" + settings.petPaused)
+            gate("probeJob=" + (probeJob?.isActive == true) + " paused=" + settings.petPaused)
             return
         }
         // 忙时错过的积压事件，空闲后补扫一次；不是每 tick 都做模型请求。
         if (settings.agentAutonomy && now - lastAgentScanAt > 5_000) handler.post(agentTrigger)
 
-        // C3：开启本机主动陪伴后，由协调器决定“微反应 / 本机提示 / 调模型 / 安静”，替代下面的旧逻辑。
-        if (settings.presenceEnabled) { presenceTick(now); return }
-        if (PerceptionHub.stuck.check(now)) {
-            if (!scheduler.isQuiet(now)) speak(stuck = true)
-            return
-        }
-        val focus = SceneClassifier.focusActive(now, PerceptionHub.trail, settings.appLists())
-        if (scheduler.isDue(now, focus)) {
-            val topic = if (settings.continuityEnabled) {
-                topicGate.next(
-                    now = now,
-                    quiet = scheduler.isQuiet(now),
-                    userActive = active,
-                    lastProactiveAt = lastProactiveAt,
-                    recentTexts = recentExchangeLines(20).toSet(),
-                )
-            } else null
-            speak(stuck = false, topic = topic)
-        }
+        // 主动开口只有一个入口：presenceTick → PartnerConversation → ProactiveGovernor。
+        //
+        // 这里原来在它后面还留着一条旧的规则触发路径（stuck 探头 + scheduler.isDue 到点 speak）。
+        // 那条路径在 presenceEnabled 打开后永远走不到，属于纯死代码；一旦有人把开关关掉，
+        // 它又会变成第二套并行调度——正是「两套主动逻辑互相打架」的来源。这里删掉，只留一个入口。
+        if (settings.presenceEnabled) presenceTick(now)
     }
 
     private fun escalate(c: Conversation, now: Long) {
@@ -1029,6 +1022,16 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         partner.waiting("上一次生成超时，已强制收尾，马上重试。", now + 5_000)
     }
 
+    /**
+     * 记录一次「这一秒为什么没走到主动开口」。只在 debug 包里输出。
+     *
+     * 为什么要留：这条链路曾经有三个 bug 叠加，表现都是"它一句话不说"，
+     * 而界面上只显示"在想"。没有这一行，下次再出问题还是只能靠猜。
+     */
+    private inline fun gate(why: String) {
+        android.util.Log.i(DIAG, "tick gate: " + why)
+    }
+
     private fun presenceTick(now: Long, requested: Boolean = false) {
         // R0：任何一条提前退出都必须在界面上留下"为什么不说"，否则用户只会看到卡住的"在想"。
         if (partnerSampleJob?.isActive == true) {
@@ -1147,6 +1150,69 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     // ---------- 专注守护：入口、提醒、结束 ----------
 
     /** 显式入口：先建立并保存契约，再打开目标；失败不留下守护。 */
+    /** 自动建立守护时的冷却，避免关闭后立刻又被重新拉起。 */
+    private var autoArmSuppressedUntil = 0L
+    /** 上一次自动守护的目标包名，用于判断"是不是又回到同一个 App"。 */
+    private var lastAutoArmPkg = ""
+
+    /**
+     * 打开 AI App 就自动进入守护（用户要求：不用每次点桌宠）。
+     *
+     * 只在三种情况下自动建立：
+     * - 开关打开、没有活跃守护、没有会话在进行；
+     * - 前台就是设置里的 AI App（assistants.current）；
+     * - 用户没有刚刚手动结束过（[autoArmSuppressedUntil]，避免"结束守护"后立刻被拉起）。
+     *
+     * 这是**守护**，不是把 App 锁死：遮罩上始终有暂停 5 分钟与紧急退出。
+     */
+    /** 独立守护循环的协程句柄。 */
+    private var guardLoopJob: Job? = null
+
+    /**
+     * 每秒独立推进一次守护与自动建立，不依赖 ticker 的 handler 链。
+     *
+     * 为什么需要：ticker 用 handler.postDelayed(this, 1000) 自链；
+     * 一旦某次 run() 没能重新 post，整条链永久停摆，而且没有任何异常和日志。
+     * 守护必须一直在跑，不能挂在一条可能断的链上。
+     */
+    private fun startGuardLoop() {
+        if (guardLoopJob?.isActive == true) return
+        guardLoopJob = scope.launch(Dispatchers.Default) {
+            while (true) {
+                runCatching {
+                    val t = now()
+                    withContext(Dispatchers.Main) {
+                        runCatching { maybeAutoArmFocus(t) }
+                        runCatching { focusController.tick(interactive = !callInProgress()) }
+                    }
+                }
+                delay(1_000L)
+            }
+        }
+    }
+
+    private fun maybeAutoArmFocus(now: Long) {
+        if (!settings.focusAutoArm) return
+        if (settings.partnerRiding) return
+        if (focusController.active) return
+        if (now < autoArmSuppressedUntil) return
+        // 训练/想一想/深聊进行中不抢：那些回合本身有输出仲裁。
+        if (training != null || think != null || noteDraft != null) return
+        val fg = PerceptionHub.activePackage() ?: return
+        val target = assistants.current
+        val pkg = assistants.packageOf(target) ?: return
+        // 不能只比主包名：Gemini 的对话界面经常跑在 Google App（com.google.android.googlequicksearchbox）里，
+        // 实测在这台机器上从桌面点 Gemini 图标，前台就是 googlequicksearchbox。
+        // sessionPackages(target 的 launchPackage) 已经包含托管包，用它判断才不会漏。
+        val accepted = target.sessionPackages(pkg)
+        if (fg !in accepted) { lastAutoArmPkg = ""; return }
+        // 同一个 App 只在"刚切进来"时建立一次：已经在里面就不再重复触发。
+        if (lastAutoArmPkg == pkg) return
+        lastAutoArmPkg = pkg
+        android.util.Log.i("PetGuard", "auto arm for " + pkg)
+        startFocusGuard()
+    }
+
     private fun startFocusGuard() {
         if (settings.partnerRiding) return
         partner.cancel()
@@ -1168,11 +1234,15 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             enforcement = if (strict) cn.companion.pet.core.focus.FocusEnforcement.STRICT else cn.companion.pet.core.focus.FocusEnforcement.SOFT,
             allowedPackages = allowedForSession(),
             graceMillis = settings.sessionGraceSec.coerceIn(3, 600) * 1000L,
-            allowedGraceMillis = settings.sessionAllowedGraceSec.coerceIn(3, 3600) * 1000L,
+            allowedGraceMillis = settings.sessionAllowedGraceSec.coerceIn(3, 3600) * 1000L,            // 托管包（Gemini 的界面可能在 Google App 里）同样算"在目标里"。
+            targetHostPackages = target.hostPackages,
         )
         when (val r = focusController.start(contract, PerceptionHub.activePackage() ?: PerceptionHub.trail.foreground)) {
             cn.companion.pet.core.focus.StartResult.Started -> {
-                if (session == null) startSession(SessionMode.TEXT, target, pkg)
+                // 这里原来还会顺手 startSession(TEXT)，等于给守护再套一层 ChatSession。
+                // 两层管的其实是同一件事，而且 tick() 的第一道闸门就是「有 session 就 return」——
+                // 结果是：守护看着"开着"，但 active 判定、主动开口、拉回全被这层空会话搅乱，
+                // 用户感受到的就是"守护形同虚设"。守护只由 FocusController 一个状态机负责。
                 gemini.toast((if (strict) "已开始严格守护 " else "已开始守护 ") + target.label + "，$minutes 分钟")
             }
             is cn.companion.pet.core.focus.StartResult.Failed -> gemini.toast(r.reason)
@@ -1193,6 +1263,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     /** 紧急退出 / 结束守护：守护和会话一起停，不会被任何自动逻辑重启。 */
     private fun endFocusByUser() {
+        // 用户主动结束：10 分钟内不要自动重新拉起，否则等于"结束不掉"。
+        autoArmSuppressedUntil = now() + 10 * 60_000L
+        lastAutoArmPkg = ""
         if (focusActive) focusController.abort()
         if (session != null) endSessionByUser()
     }
@@ -1509,19 +1582,16 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                 BubbleAction("记住") { partner.answerMemory(true); showPartnerBubble(text) },
                 BubbleAction("这次不记") { partner.answerMemory(false); showPartnerBubble(text) },
             ) } ?: emptyList()) + if (menu) listOf(
+                // 按用户反馈精简：气泡菜单只留「现在就说」「安静 30 分钟」「朗读开关」。
+                // 陪练、想一想、记念头、看一眼、技能、守护都在完整聊天页与设置里，
+                // 不再往气泡堆按钮——用户原话是「对话框越来越臃肿」。
                 BubbleAction("现在聊一句") { overlay.hideBubble(); partner.requestNow() },
+                BubbleAction("安静 30 分钟") { settings.partnerQuietUntil = now() + 30 * 60_000L; partner.away(); app.stopSpeech(); overlay.hideBubble() },
                 BubbleAction(if (settings.ttsEnabled) "关闭朗读" else "开启朗读") {
                     settings.ttsEnabled = !settings.ttsEnabled
                     if (!settings.ttsEnabled) app.stopSpeech()
                     showPartnerBubble(text, menu = true)
                 },
-                BubbleAction("安静 30 分钟") { settings.partnerQuietUntil = now() + 30 * 60_000L; partner.away(); app.stopSpeech(); overlay.hideBubble() },
-                BubbleAction("开始陪练") { partner.away(); openTraining() },
-                BubbleAction("想一想") { partner.away(); openThinkMenu() },
-                BubbleAction("记个念头") { partner.away(); startNote() },
-                BubbleAction("看一眼") { lookOnce() },
-                BubbleAction("技能") { partner.away(); skills.openMenu() },
-                BubbleAction("守护") { partner.away(); startFocusGuard() },
             ) else emptyList())
     }
 
