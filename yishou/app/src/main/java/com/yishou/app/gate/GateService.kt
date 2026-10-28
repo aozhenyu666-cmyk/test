@@ -96,7 +96,7 @@ class GateService : AccessibilityService() {
                 delay(1_000)
                 val awake = getSystemService(android.os.PowerManager::class.java).isInteractive
                 val locked = getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
-                if (awake && !locked && !GateActivity.isShowing) foregroundPkg?.takeIf { it != packageName }?.let(::check)
+                if (awake && !locked && foregroundTracker.canEnforce && !GateActivity.isShowing) foregroundPkg?.takeIf { it != packageName }?.let(::check)
             }
         }
     }
@@ -149,6 +149,10 @@ class GateService : AccessibilityService() {
         Log.d(TAG, "窗口包名=$pkg，当前=$foregroundPkg，做题页=${GateActivity.isShowing}")
         _lastPackage.value = foregroundPkg
         app.partner.foreground(pkg)
+        if (!foregroundTracker.canEnforce) {
+            pagePrompt.dismiss()
+            return
+        }
         if (pkg == packageName) {
             ExternalGrace.close()
             return
@@ -157,6 +161,7 @@ class GateService : AccessibilityService() {
     }
 
     private fun check(pkg: String) {
+        if (!foregroundTracker.canEnforce) return
         if (app.partner.allows(pkg)) {
             shortCheck?.cancel()
             shortPkg = null
@@ -214,6 +219,7 @@ class GateService : AccessibilityService() {
     }
 
     private fun launchGate(pkg: String, group: String, now: Long) {
+        if (!foregroundTracker.canEnforce) return
         if (GateActivity.isShowing) return
         val nowMono = android.os.SystemClock.elapsedRealtime()
         if (!launchDebounce.ready(pkg, nowMono)) return
@@ -228,7 +234,8 @@ class GateService : AccessibilityService() {
                 val awake = getSystemService(android.os.PowerManager::class.java).isInteractive
                 val unlocked = !getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
                 val current = app.settings.app.value
-                awake && unlocked && (foregroundPkg == pkg || foregroundPkg == packageName) && !app.partner.allows(pkg) &&
+                awake && unlocked && foregroundTracker.canEnforce &&
+                    (foregroundPkg == pkg || foregroundPkg == packageName) && !app.partner.allows(pkg) &&
                     (current.groupOf(pkg) == group || (group == GateActivity.WINDOW_GROUP &&
                         WindowClock.active(System.currentTimeMillis(), current, AppZone.zone) != null &&
                         WindowRules.decide(pkg, current, systemAllowed(), System.currentTimeMillis()) != WindowRules.Decision.ALLOW))
