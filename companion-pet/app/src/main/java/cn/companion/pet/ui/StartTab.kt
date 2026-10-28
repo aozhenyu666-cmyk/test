@@ -125,6 +125,7 @@ fun StartTab(activity: MainActivity, resumeTick: Int, openSettings: (Int) -> Uni
             .padding(horizontal = CompanionSpacing.page, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
+        OutlinedButton(onClick = { ChatActivity.open(activity) }) { Text("和同桌聊") }
         PageHeader("今天", hint.takeIf { it != "一切就绪。" })
         HeroPanel {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {

@@ -86,6 +86,7 @@ class PetService : Service() {
                 goForeground()
             }
         }
+        goForeground()
         return START_STICKY
     }
 

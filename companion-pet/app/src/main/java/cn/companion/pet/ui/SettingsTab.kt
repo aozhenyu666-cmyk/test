@@ -178,21 +178,14 @@ private fun PresenceDiagnostics() {
         Text("没开（设置 → 陪伴 → 本机主动陪伴）。", style = MaterialTheme.typography.bodySmall)
         return
     }
-    val st = remember(tick) { app.presenceEngine.stats }
-    val policy = remember(tick) { app.presencePolicy.snapshot() }
+    val shown by app.partner.shown.collectAsState()
+    val blocked by app.partner.blockedReasons.collectAsState()
     val now = System.currentTimeMillis()
-    val lines = buildList {
-        add("本次运行评估 ${st.evaluations} 次：小动作 ${st.micro}、本机提示 ${st.nudges}、调模型 ${st.modelCalls}")
-        add("今天主动开口 ${app.presencePolicy.spokenToday(now)} / ${app.presencePolicy.config.dailyCap}；连续没回应 ${policy.consecutiveIgnores} 次")
-        if (policy.ignoreCooldownUntil > now) add("没回应冷却还剩 ${(policy.ignoreCooldownUntil - now) / 60_000 + 1} 分钟")
-        if (policy.dismissedUntil > now) add("你关掉后安静还剩 ${(policy.dismissedUntil - now) / 60_000 + 1} 分钟")
-        if (policy.lastFeedback.isNotBlank()) add("上次反馈：" + when (policy.lastFeedback) {
-            "INTERACTED" -> "回应了"; "IGNORED" -> "没理"; "DISMISSED" -> "关掉了"; "PAUSED" -> "暂停了"; else -> policy.lastFeedback
-        })
-        if (st.lastDecision.isNotBlank()) add("最近一次：" + st.lastDecision)
-        if (st.silentReasons.isNotEmpty()) add("安静的原因：" + st.silentReasons.entries.joinToString("、") { it.key + " " + it.value })
-    }
-    lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+    Text("最近一小时实际开口 ${app.partner.governor.shownLastHour(now)} 次；连续没回应 ${app.partner.governor.ignoredStreak} 次", style = MaterialTheme.typography.bodySmall)
+    Text("最近开口的来源与具体点", style = MaterialTheme.typography.titleSmall)
+    shown.forEach { Text(it.source + "：" + it.anchor.ifBlank { "普通闲聊" }, style = MaterialTheme.typography.bodySmall) }
+    Text("最近被拦的原因", style = MaterialTheme.typography.titleSmall)
+    blocked.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
     TextButton(onClick = { tick++ }) { Text("刷新") }
 }
 
@@ -345,21 +338,30 @@ private fun CompanionSettings(context: Context) {
     fun toast(t: String) = Toast.makeText(context, t, Toast.LENGTH_SHORT).show()
     Section("本机主动陪伴（实验）")
     var presenceOn by remember { mutableStateOf(s.presenceEnabled) }
-    Toggle("本机主动陪伴",
-        "打开后它一直在场：看你切换、停留、卡壳这些真实信号，先做小动作（不花额度），有依据时说一句简短提示（不调模型），复杂情境才调模型。" +
-            "连续 3 次没回应会安静 30 分钟；点 × 收起也会安静 30 分钟。关掉就完全回到原来的开口方式。",
+    Toggle("主动陪伴",
+        "围绕屏幕原句、画面和没聊完的事主动找你聊。没回应时放慢，但不会因此停止；打字、通话、录音和睡眠时段保持安静。",
         presenceOn) { presenceOn = it; s.presenceEnabled = it }
-    if (presenceOn) {
-        var cap by remember { mutableIntStateOf(s.presenceDailyCap) }
-        Text("每天主动开口最多（你主动找它、纯动画不算）：", style = MaterialTheme.typography.bodySmall)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            cn.companion.pet.core.presence.PresenceConfig.CAP_CHOICES.forEach { c ->
-                if (c == cap) Button(onClick = {}, shape = CompanionShapes.button) { Text("$c 次") }
-                else OutlinedButton(onClick = { cap = c; s.presenceDailyCap = c }, shape = CompanionShapes.button) { Text("$c 次") }
-            }
+    var perHour by remember { mutableStateOf(s.partnerPerHour.toString()) }
+    NumberField("每小时主动次数（5–40）", perHour) { perHour = it }
+    Button(onClick = { s.partnerPerHour = perHour.toIntOrNull()?.coerceIn(5, 40) ?: 20; perHour = s.partnerPerHour.toString(); toast("已保存") }) { Text("保存频率") }
+    Text("这是目标频率。安静规则、没有可聊内容、未回应退避和每日模型额度仍然有效。", style = MaterialTheme.typography.bodySmall)
+    Row {
+        OutlinedButton(onClick = { s.partnerQuietUntil = System.currentTimeMillis() + 30 * 60_000L; app.stopSpeech(); toast("安静 30 分钟") }) { Text("安静 30 分钟") }
+        TextButton(onClick = { s.partnerQuietUntil = 0; toast("恢复陪伴") }) { Text("恢复") }
+    }
+    Section("骑行 / 走路语音陪伴")
+    val settingVersion by s.changes.collectAsState()
+    val riding = remember(settingVersion) { s.partnerRiding }
+    Toggle("骑行语音模式", "戴好耳机，不用看屏幕。说完它会接话，再继续听你说；停止可点通知里的“停止语音”。先结束陪练或守护回合再开启。", riding) { enable ->
+        if (enable && !Permissions.mic(context)) (context as? cn.companion.pet.MainActivity)?.requestMic()
+        else if (enable && !cn.companion.pet.service.PetService.startIfAllowed(context, userAction = true)) toast("先授予悬浮窗权限并启动桌宠")
+        else {
+            s.partnerRiding = enable
+            if (cn.companion.pet.service.PetService.running) context.startService(android.content.Intent(context, cn.companion.pet.service.PetService::class.java))
         }
     }
-    Section("开口节奏")
+    OutlinedButton(onClick = { ChatActivity.open(context) }) { Text("打开完整聊天") }
+    Section("睡眠与旧版节奏")
     var minI by remember { mutableStateOf(s.minIntervalMin.toString()) }
     var maxI by remember { mutableStateOf(s.maxIntervalMin.toString()) }
     var qs by remember { mutableStateOf((s.quietStartMin / 60).toString()) }
@@ -392,9 +394,12 @@ private fun CompanionSettings(context: Context) {
     Section("App 名单")
     Text("名单留空也能用：游荡靠切换频率判断，学习靠屏幕上有没有大段正文。", style = MaterialTheme.typography.bodySmall)
     AppListRow(context, "学习 App", "前台是这些时按学习场景聊屏幕内容", s.learningApps) { s.learningApps = it }
-    AppListRow(context, "信息流 App", "前台是这些时只聊状态，不聊内容", s.feedApps) { s.feedApps = it }
+    AppListRow(context, "信息流 App", "优先聊当前可读的原句", s.feedApps) { s.feedApps = it }
     AppListRow(context, "专注 App", "连续用 15 分钟以上，开口间隔翻倍", s.focusApps) { s.focusApps = it }
     AppListRow(context, "排除 App", "前台是这些时不开口、不读屏", s.excludeApps) { s.excludeApps = it }
+
+    AppListRow(context, "视频 App", "允许主动陪伴结合画面聊；需另行开启看图上传", s.partnerVideoApps) { s.partnerVideoApps = it }
+    AppListRow(context, "游戏 App", "允许主动陪伴结合画面聊；不打断正在输入", s.partnerGameApps) { s.partnerGameApps = it }
 
     Section("深聊用哪个 AI")
     val assistants = remember { Assistants(context, s) }
