@@ -9,7 +9,7 @@
 | 项目 | 做什么 | 项目入口 | 源码 |
 |---|---|---|---|
 | **总控** | 四部门、事项与行动、日程统筹、Notion 同步和行为监管。 | [打开](projects/01-zongkong/README.md) | [zongkong/](https://github.com/aozhenyu666-cmyk/test/tree/deepseek/zk-client-v2/zongkong) |
-| **一手** | 六骰子思考、分组训练、陪练窗口、语音回答和入口思考。 | [打开](projects/02-yishou/README.md) | [yishou/](https://github.com/aozhenyu666-cmyk/test/tree/deepseek/yishou-v2/yishou) |
+| **一手** | 六骰子思考、分组训练、陪练窗口、语音回答和入口思考。 | [打开](projects/02-yishou/README.md) | [yishou/](https://github.com/aozhenyu666-cmyk/test/tree/ccr-a5172662-j1jcik/yishou) |
 | **哨兵** | 独立监测总控、一手、同桌的健康状态，处理失联与锁屏兜底。 | [打开](projects/03-sentinel/README.md) | [zongkong/sentinel/](https://github.com/aozhenyu666-cmyk/test/tree/deepseek/sentinel-v2/zongkong/sentinel) |
 | **同桌** | 桌面伙伴、主动搭话、思维陪练、会话接续和训练监管。 | [打开](projects/04-tongzhuo/README.md) | [companion-pet/](https://github.com/aozhenyu666-cmyk/test/tree/deepseek/r21-proactive/companion-pet) |
 

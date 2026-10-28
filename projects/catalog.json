@@ -59,7 +59,7 @@
       "name": "一手",
       "group": "核心 APP",
       "summary": "六骰子思考、分组训练、陪练窗口、语音回答和入口思考。",
-      "ref": "deepseek/yishou-v2",
+      "ref": "ccr-a5172662-j1jcik",
       "path": "yishou",
       "package": "com.yishou.app",
       "readme": "yishou/README.md",
@@ -71,13 +71,13 @@
         [
           "需求规格",
           "blob",
-          "deepseek/yishou-v2",
+          "ccr-a5172662-j1jcik",
           "yishou/SPEC.md"
         ],
         [
           "电脑版源码",
           "tree",
-          "deepseek/yishou-v2",
+          "ccr-a5172662-j1jcik",
           "yishou-pc"
         ],
         [
@@ -87,8 +87,8 @@
           "yishou"
         ]
       ],
-      "snapshot": "5ea5f519ff71ac3ac5ba2b32ffed5206ce3a1939",
-      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/deepseek/yishou-v2/yishou",
+      "snapshot": "9e2e5a185e80abe128930dea4defc84feb630ce0",
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/ccr-a5172662-j1jcik/yishou",
       "navigation": "projects/02-yishou/README.md"
     },
     {

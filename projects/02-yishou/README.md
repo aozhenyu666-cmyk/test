@@ -8,12 +8,12 @@
 
 | 内容 | 入口 |
 |---|---|
-| 源码 | [yishou/](https://github.com/aozhenyu666-cmyk/test/tree/deepseek/yishou-v2/yishou) |
-| 所在分支 | [deepseek/yishou-v2](https://github.com/aozhenyu666-cmyk/test/tree/deepseek/yishou-v2) |
-| 本次核对快照 | [5ea5f51](https://github.com/aozhenyu666-cmyk/test/tree/5ea5f519ff71ac3ac5ba2b32ffed5206ce3a1939/yishou) |
+| 源码 | [yishou/](https://github.com/aozhenyu666-cmyk/test/tree/ccr-a5172662-j1jcik/yishou) |
+| 所在分支 | [ccr-a5172662-j1jcik](https://github.com/aozhenyu666-cmyk/test/tree/ccr-a5172662-j1jcik)（正式开发线，也是唯一发布 APK 的分支） |
+| 本次核对快照 | [9e2e5a1 · 0.25.1](https://github.com/aozhenyu666-cmyk/test/tree/9e2e5a185e80abe128930dea4defc84feb630ce0/yishou) |
 | Android 包名 | `com.yishou.app` |
-| 项目原说明 | [打开说明](https://github.com/aozhenyu666-cmyk/test/blob/deepseek/yishou-v2/yishou/README.md) |
-| 构建记录 | [yishou-android.yml](https://github.com/aozhenyu666-cmyk/test/actions/workflows/yishou-android.yml?query=branch%3Adeepseek%2Fyishou-v2) |
+| 项目原说明 | [打开说明](https://github.com/aozhenyu666-cmyk/test/blob/ccr-a5172662-j1jcik/yishou/README.md) |
+| 构建记录 | [yishou-android.yml](https://github.com/aozhenyu666-cmyk/test/actions/workflows/yishou-android.yml?query=branch%3Accr-a5172662-j1jcik) |
 | 发布页 | [yishou-latest](https://github.com/aozhenyu666-cmyk/test/releases/tag/yishou-latest) |
 | 已有安装文件 | [yishou.apk](https://github.com/aozhenyu666-cmyk/test/releases/download/yishou-latest/yishou.apk) |
 
@@ -29,8 +29,8 @@
 
 | 内容 | 入口 |
 |---|---|
-| 需求规格 | [打开](https://github.com/aozhenyu666-cmyk/test/blob/deepseek/yishou-v2/yishou/SPEC.md) |
-| 电脑版源码 | [打开](https://github.com/aozhenyu666-cmyk/test/tree/deepseek/yishou-v2/yishou-pc) |
+| 需求规格 | [打开](https://github.com/aozhenyu666-cmyk/test/blob/ccr-a5172662-j1jcik/yishou/SPEC.md) |
+| 电脑版源码 | [打开](https://github.com/aozhenyu666-cmyk/test/tree/ccr-a5172662-j1jcik/yishou-pc) |
 | 思维与行动预览线 | [打开](https://github.com/aozhenyu666-cmyk/test/tree/codex/flexible-training-preview/yishou) |
 
 > 本页整理的是实际目录、分支和已有发布入口。导航分类不代表停用、删除、验收通过或所有开发分支已经合并。完整分支清单见 [分支索引](../BRANCHES.md)。
