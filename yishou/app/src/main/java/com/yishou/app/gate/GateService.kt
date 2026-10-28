@@ -9,7 +9,6 @@ import android.view.inputmethod.InputMethodManager
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import com.yishou.app.YishouApp
-import com.yishou.app.stats.DayStats
 import com.yishou.app.system.Notifications
 import com.yishou.app.system.ExternalGrace
 import com.yishou.app.log.RunLog
@@ -236,7 +235,6 @@ class GateService : AccessibilityService() {
             },
             onShown = {
                 _problem.value = null
-                app.stats.event(if (group == GateActivity.WINDOW_GROUP) DayStats.WINDOW_BLOCK else DayStats.GATE_SHOWN)
             },
             onFallback = {
                 _problem.value = "做题页没有自动打开，已显示处理入口。请检查系统的后台弹出界面设置"

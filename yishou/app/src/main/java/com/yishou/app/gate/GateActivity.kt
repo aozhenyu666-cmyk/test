@@ -73,9 +73,11 @@ import kotlinx.coroutines.delay
 class GateActivity : ComponentActivity() {
 
     private val vm: GateViewModel by viewModels()
+    private var exposureRecorded = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        exposureRecorded = savedInstanceState?.getBoolean("exposureRecorded") ?: false
         startFromIntent(intent)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -108,14 +110,27 @@ class GateActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        exposureRecorded = false
         startFromIntent(intent)
     }
 
     override fun onResume() {
         super.onResume()
+        // 实际页面负责记显示；启动请求可能因窗口过渡被取消，不能据此丢掉真实显示。
+        if (!exposureRecorded && intent.getStringExtra(EXTRA_PACKAGE) != null) {
+            val app = application as com.yishou.app.YishouApp
+            app.stats.event(if (intent.getStringExtra(EXTRA_GROUP) == WINDOW_GROUP)
+                com.yishou.app.stats.DayStats.WINDOW_BLOCK else com.yishou.app.stats.DayStats.GATE_SHOWN)
+            exposureRecorded = true
+        }
         isShowing = true
         PagePrompt.acknowledge()
         vm.refreshPartnerClose()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("exposureRecorded", exposureRecorded)
+        super.onSaveInstanceState(outState)
     }
 
     override fun onPause() {
