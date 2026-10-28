@@ -1,6 +1,6 @@
 # 同桌 R21 严格守护接管 — 唯一验收实情表
 
-> 当前伙伴版本与构建以末尾“伙伴 v1”小节为准；下面原有 vc42 记录为历史验收证据。
+> 当前版本与构建以末尾“可靠性修复”小节为准；前面的 R21 与伙伴 v1 记录保留为历史证据；下面原有 vc42 记录为历史验收证据。
 
 - 分支：`claude/r21-strict-takeover`（与 `ccr-f3b6cf6b-6gsh3f` 同步）
 - **构建源码提交：`1794ed1c9e0b519a387c184852b718682afe055a`**（本文件所在的文档提交不参与构建）
@@ -121,3 +121,17 @@ DeepSeek 两个提交的取舍：
 5. 记忆确认/拒绝、查看来源、遗忘后不重提；六小时/一天后的真实跟进。
 
 D02 严格守护动作效果回执仍未修，全部旧 DEVICE 项仍为 NOT_RUN。Governor 小时统计和说过的话账本在进程内，重启会重新累计。新伙伴夜间批次不自动新增档案，混合批次中的其他新增档案也会保守跳过。构建通过不等于后台长期可靠。
+
+
+## 六、最初审查问题的可靠性修复（2026-10-28）
+
+- 当前版本：**0.8.4-reliability-preview / versionCode 44**。
+- 构建源码：**`540fc61fe51fc53faa12df5fd23dc1d949328e14`**；主体修复 `d398a60`，坏文件补丁 `8867e7b`，响铃/紧急拨号补丁 `540fc61`。
+- 对照原始 P0/P1 与 D02/D07 的逐项证据、调用链和真机步骤见 [可靠性修复对照表](../reliability-r1/REPAIRS.md)。
+- 原有 795 条测试未变，本轮新增 28 条，共 **823 条，0 失败/错误/跳过（PASS-L）**。没有放宽 partner、acceptAdvice、离线判分或严格守护规则。
+- D02：**回执接线 WIRED + 协议/集成测试 PASS-L**。实际全屏层绘制、目标前台和遮罩移除分开记录；证据过期或读不到即 UNKNOWN。绘制成功不代表已验证触摸拦截；长期守护仍 NOT_RUN。
+- D07：**输出所有权与回调隔离 WIRED + PASS-L**。气泡入口统一检查 owner；旧收起定时器、旧按钮、旧输入票据不再作用于新回合。多模块真实组合仍 NOT_RUN。
+- 额外修复：完整看图观察实际入口标记 ephemeral，排除持久化与摘要；持久化故障提示；坏对话无法备份时禁止覆盖；恢复互斥与唤醒锁释放。
+- 最终 CI：[40653298790](https://github.com/aozhenyu666-cmyk/test/actions/runs/40653298790)。**成功**：`:app:testDebugUnitTest`、`:app:lintDebug`、`:app:assembleDebug`、`:app:assembleDebugAndroidTest` 与分支预览发布均通过。
+- APK：[主线预览下载](https://github.com/aozhenyu666-cmyk/test/releases/download/tongzhuo-preview-claude-r21-strict-takeover/tongzhuo.apk)。已独立下载复核：**30,848,627 字节**，SHA-256 **`d4295f9fb7f44f5a327c34bca9c65f860eed623888b894b418e4d432bb498af3`**，与 Release 说明及资产 digest 一致。`aapt` 确认 vc44 / 版本名；`apksigner verify` 通过，证书 SHA-256 `9f3a524c66974aeb04045f498f83b5970589f9fba3ac3772e95c26e3524695e0`，沿用原固定测试签名。
+- 签名仍是原固定调试签名，`debuggable=true`；没有真机，全部 DEVICE 项仍为 NOT_RUN。
