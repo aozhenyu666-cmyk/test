@@ -36,7 +36,8 @@ import java.time.LocalDate
  *
  * 以前只有一条无限堆下去的对话，模型每轮都被旧内容塞满；现在按段分开：
  * 一段说满就收尾，把结论压成交接摘要（carry）带进下一段。每天新开几段有上限（config.chat.threadsPerDay，
- * 默认 1 段/天，0 = 不限），逼着把旧的压完再用，而不是一直开新的把上下文铺满。
+ * 默认 3 段/天，0 = 不限，设置 →「对话段数」里改），逼着把旧的压完再用，而不是一直开新的把上下文铺满。
+ * 当前显示的是「当下」或「整体」其中一条线：段列表、额度、上限提示都跟着 mode 走，两条线互不占用。
  */
 @Composable
 fun ChatThreadsScreen(nav: NavHostController) {
@@ -44,9 +45,11 @@ fun ChatThreadsScreen(nav: NavHostController) {
     val chat = context.zk.chat
     val sig = LocalSignals.current
     val log by chat.log.collectAsStateWithLifecycle()
-    val threads = ChatThreads.recentFirst(log.threads)
+    val mode by chat.mode.collectAsStateWithLifecycle()
+    // 多段对话页只列当前这条线（当下 / 整体）的段，额度也是各算各的
+    val threads = ChatThreads.recentFirst(ChatThreads.inMode(log.threads, mode))
     val perDay = chat.threadsPerDay()
-    val opened = chat.openedToday()
+    val opened = chat.openedToday(mode)
     val remaining = ChatThreads.remaining(perDay, opened)
     val limited = remaining == 0
     var notice by remember { mutableStateOf("") }
@@ -82,15 +85,20 @@ fun ChatThreadsScreen(nav: NavHostController) {
                 Panel(accent = sig.ai, modifier = Modifier.enter(1)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text("今天", style = MaterialTheme.typography.labelLarge, color = sig.muted)
+                            // 这一页只列当前模式（当下 / 整体）的段，额度也是这一条线自己的：
+                            // 标题必须点明是哪条线，否则用户会以为两边的额度是共用的
+                            Text("今天 · ${mode.label}对话", style = MaterialTheme.typography.labelLarge, color = sig.muted)
                             Text(
-                                if (remaining < 0) "不限新建段数" else "还能新开 $remaining 段（每天最多 $perDay 段）",
+                                if (remaining < 0) "${mode.label}不限新建段数"
+                                else "${mode.label}还能新开 $remaining 段（每天最多 $perDay 段）",
                                 style = MaterialTheme.typography.titleSmall,
                             )
                         }
                         Pill(if (remaining < 0) "不限" else "剩 $remaining", if (limited) sig.warn else sig.ai)
                     }
-                    Hint(ChatThreads.limitText(perDay, opened))
+                    // 必须带 mode：不带 mode 的老重载只说“今天的额度”，切到整体后界面上分不清是哪一条线
+                    Hint(ChatThreads.limitText(perDay, opened, mode))
+                    Hint("当下和整体各算各的：在整体里开新段不占当下的额度。")
                     if (notice.isNotBlank()) {
                         Text(notice, style = MaterialTheme.typography.bodySmall, color = if (limited) sig.warn else sig.strict)
                     }
@@ -120,7 +128,7 @@ fun ChatThreadsScreen(nav: NavHostController) {
                 items(threads, key = { it.id }) { t ->
                     ThreadCard(
                         t = t,
-                        active = t.id == log.activeThread?.id,
+                        active = t.id == log.threadOf(mode)?.id,
                         onOpen = {
                             chat.openThread(t.id)
                             nav.popBackStack()
@@ -178,6 +186,7 @@ private fun ThreadCard(
                 )
                 Text(
                     buildString {
+                        append(t.chatMode.label).append(" · ")
                         append(threadClock(if (t.updatedAt > 0) t.updatedAt else t.createdAt))
                         append(" · ").append(t.count).append(" 条")
                         when {

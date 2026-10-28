@@ -345,7 +345,7 @@ object Diag {
         val battery = if (ignoringBattery) "" else "；电池优化没关，系统更容易把后台清掉"
         return when {
             !enabled -> "设置里被关了：去权限页把无障碍重新打开。更新安装后系统也会把它关掉$battery"
-            !running -> "in enabled but not running: 系统把服务停了，常见原因是省电/后台清理$battery"
+            !running -> "开着但没在运行：系统把服务停了，常见原因是省电/后台清理$battery"
             lastKind.isNotBlank() -> "上次 ${clockText(lastAt)} ${kindReason(lastKind)}；现在已经恢复$battery"
             watchdog > 0 -> "看门狗记录到服务消失过（${clockText(lastAt)}）：多半是进程被系统杀了$battery"
             else -> "今天还没记录到失效，眼睛一直在。"

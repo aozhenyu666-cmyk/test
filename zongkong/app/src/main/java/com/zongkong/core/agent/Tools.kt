@@ -142,6 +142,34 @@ interface AgentEnv {
     fun memory(): List<String>
     /** 当前这段对话的交接信息（上一段对话压缩成的摘要、今天是第几段），写进系统提示。 */
     fun threadContext(): String = ""
+
+    // ---------- 两种对话：当下 / 整体 ----------
+
+    /** 当前是哪种对话。默认「当下」，老实现不用改。 */
+    fun chatMode(): ChatMode = ChatMode.NOW
+
+    /**
+     * 「整体」模式的快照。返回空就用 [OverallSnapshot.build] 现算。
+     * App 里在用户消息开头生成一次并缓存，同一轮工具循环里反复取到的是同一份（[Agent] 每步拼系统提示都会调）。
+     */
+    fun overallSnapshot(): String = ""
+
+    // ---------- 追问：把「还缺什么」变成一句能回答的问题 ----------
+
+    /**
+     * 已经问过的缺口（[Inquiry.Gap.key] → 上次问的时刻）。App 里持久化；
+     * 默认空 = 什么都没问过，第一次开口会挑最急的那个。
+     */
+    fun askedGaps(): AskedGaps = emptyMap()
+
+    /**
+     * 「这一轮该问的那一个」的现成文本；返回空就让 [Agent] 现算。
+     *
+     * 放进 env 的理由和 [overallSnapshot] 一样：同一轮工具循环里反复拼系统提示，
+     * 必须拿到同一份——否则模型在一轮里会被指两个不同的「先问这个」。
+     */
+    fun inquiryPrompt(): String = ""
+
     fun remember(fact: String)
     fun forget(fact: String): Boolean
     /** 应用名 → 包名（拦截名单用）；认不出返回 null。 */
@@ -164,6 +192,15 @@ class ZkTools(private val env: AgentEnv) {
 
     val specs: List<ToolSpec> = listOf(
         ToolSpec("get_overview", "看此刻的完整状态：严管没有、今天各关卡、当前一步、接下来的安排、待处理、一手、同步。上下文里已有简版，需要细节时再调。"),
+        ToolSpec(
+            "gather",
+            "把手上能查的事实一次查全：某个事项的全部记录和行动、这几天的设备时间线、本周计划和长期目标、档案里的说法和约定、脉络里的相关判断。"
+                + "用户只给了一句话、你要下判断之前，先调它——查得到的不该再去问他。",
+            listOf(
+                Param("about", "string", "关于什么：事项标题 / 编号，或者一句话说你想弄清什么"),
+                Param("days", "integer", "要看最近几天的时间线（1–7，默认 3）"),
+            ),
+        ),
         ToolSpec(
             "list_threads", "列出事项（编号、标题、状态、下一步、开着的行动数）。",
             listOf(Param("status", "string", "只看某种状态；不填看全部未结束的", choices = ThreadStatus.entries.map { it.label } + "全部")),
@@ -572,6 +609,7 @@ class ZkTools(private val env: AgentEnv) {
         return try {
             when (name) {
                 "get_overview" -> ToolResult(Snapshot.full(env), "看了一眼全局")
+                "gather" -> ToolResult(gather(a), "把能查的都查了一遍")
                 "list_threads" -> listThreads(a)
                 "get_thread" -> getThread(a)
                 "today_report" -> ToolResult(
@@ -1187,6 +1225,122 @@ class ZkTools(private val env: AgentEnv) {
     private fun getThread(a: Args): ToolResult {
         val t = findThread(a.s("thread")) ?: return noThread(a.s("thread"))
         return ToolResult(Snapshot.thread(env.work(), t, env.zone), "看了「${t.title}」")
+    }
+
+    /**
+     * 把手上能查的事实一次查全。
+     *
+     * 为什么需要它：用户只给一句话的时候，模型最容易犯的错不是“猜错”，是**不去查**——
+     * 拿着那一句话就开始给建议。分开调五六个工具它懒得调；一个工具把该看的都摆出来，
+     * 它就没有理由只凭一句自述作答。
+     *
+     * 只读，不改任何东西；查不到的写“未记录”，不编。
+     */
+    private fun gather(a: Args): String {
+        val now = env.now()
+        val zone = env.zone
+        val work = env.work()
+        val about = a.s("about").trim()
+        val days = (a.i("days") ?: 3).coerceIn(1, 7)
+        return buildString {
+            append("# 能查到的事实\n")
+            append("（这一份是工具查出来的记录，可以直接当依据；里面没写的，就是记录里没有。）\n")
+
+            // ---------- 1. 他说的那件事 ----------
+            if (about.isNotBlank()) {
+                append("\n## 关于「").append(about).append("」\n")
+                val t = findThread(about)
+                if (t != null) {
+                    append(Snapshot.thread(work, t, zone)).append('\n')
+                } else {
+                    // 没匹配到事项：可能是行动，或者压根没记过——后者本身就是有用的信息
+                    val act = findAction(about)
+                    if (act != null) {
+                        append("这是行动，不是事项：").append(act.title).append("｜").append(act.actionStatus.label)
+                        act.plan?.let { p -> append("｜").append(TimeParse.label(p, now, zone)) }
+                        act[F.CRITERIA].takeIf { it.isNotBlank() }?.let { append("｜算完：").append(it) }
+                        append('\n')
+                        work.rec(act.threadKey)?.let { th ->
+                            append("所属事项：").append(th[F.CODE]).append(' ').append(th.title).append('\n')
+                        }
+                    } else {
+                        append("记录里没有这件事：既没有这个事项，也没有这个行动。")
+                        append("（所以别装作知道它的前情——这正好是该问他的地方。）\n")
+                    }
+                }
+                // 脉络里相关节点
+                val vein = env.vein()
+                if (vein.nodes.isNotEmpty()) {
+                    val hits = vein.nodes.filter { n ->
+                        n.title.contains(about) || n.claim.contains(about) || n.keywords.any { about.contains(it) }
+                    }.take(5)
+                    if (hits.isNotEmpty()) {
+                        append("\n脉络里相关的判断（这些是待验证的，不是事实）：\n")
+                        hits.forEach { n ->
+                            append("· ").append(n.title).append("｜").append(n.status)
+                            if (n.verify.isNotBlank()) append("｜验证：").append(n.verify.take(50)) else append("｜没写验证方式")
+                            append('\n')
+                        }
+                    }
+                }
+            }
+
+            // ---------- 2. 这几天的设备时间线 ----------
+            append("\n## 最近 ").append(days).append(" 天的手机使用\n")
+            val from = now - days * 86_400_000L
+            // 判断有没有真记录，不能看 summarize 的返回值：一段都没有时它也会写“没有记录 N 小时”，
+            // 那是“确实什么都没记”，不是“记到了他在干什么”。只有真的出现了应用段才算数。
+            val text = try {
+                val ev = env.deviceEvents(from, now)
+                val segs = com.zongkong.core.boss.Timeline.segments(ev, from, now)
+                // 特殊值（熄屏 / 亮屏 / 没有记录）不算“看到他在用什么”
+                val special = setOf(
+                    com.zongkong.core.boss.Timeline.OFF,
+                    com.zongkong.core.boss.Timeline.ON,
+                    com.zongkong.core.boss.Timeline.GAP,
+                )
+                val real = segs.any { it.pkg !in special }
+                if (!real) {
+                    ""
+                } else {
+                    com.zongkong.core.boss.Timeline.summarize(
+                        segs, from, now, zone,
+                        label = { pkg -> env.appLabel(pkg) },
+                        isPlay = { pkg -> env.config().blocked.contains(pkg) },
+                    )
+                }
+            } catch (e: Exception) {
+                ""
+            }
+            append(text.ifBlank { "查不到设备记录（没授权使用情况访问、无障碍也没在记）。这一段写“查不到”，不要猜。" }).append('\n')
+
+            // ---------- 3. 本周计划与长期目标 ----------
+            append("\n## 计划\n")
+            val plan = com.zongkong.core.plan.Plans.active(env.plans(), now, zone)
+            if (plan == null) {
+                append("这一周没有立项的计划。\n")
+            } else {
+                append("本周要交出：")
+                append(plan.outcomes.joinToString("；") { (if (it.done) "✓" else "○") + it.title }.ifBlank { "未记录" })
+                append('\n')
+                val pr = com.zongkong.core.plan.Plans.progress(plan, work, now, zone)
+                append("计划内 ").append(pr.planMinutes).append(" 分钟 / 计划外 ").append(pr.offMinutes).append(" 分钟\n")
+            }
+            append(com.zongkong.core.plan.Aims.brief(env.plans(), work, now, zone)).append('\n')
+            append(com.zongkong.core.plan.Calibrate.brief(work, zone, now)).append('\n')
+
+            // ---------- 4. 档案：说法、约定、信用 ----------
+            append("\n## 档案（说法和约定）\n")
+            append(com.zongkong.core.boss.Boss.brief(env.dossier(), env.hqSessions(), now, zone, work.events)).append('\n')
+
+            // ---------- 5. 今天的清单 ----------
+            append("\n## 今天的记录\n")
+            append(com.zongkong.core.plan.DayReport.text(
+                com.zongkong.core.plan.DayReport.build(work, env.plans(), env.dayLog(), env.hqSessions(), env.dossier(), env.pcSide(), now, zone, env.ledger()),
+            ))
+
+            append("\n\n用这些事实下判断。还是缺的，就明说缺哪一格、为什么它会影响结论。\n")
+        }.trimEnd()
     }
 
     // ---------- 事项、行动、记录 ----------

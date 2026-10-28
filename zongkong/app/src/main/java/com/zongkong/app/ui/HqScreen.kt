@@ -562,8 +562,11 @@ private fun OfflineThink(threadKey: String, methodName: String, how: String) {
 fun ChatPanel(since: Long, modifier: Modifier = Modifier) {
     val app = LocalContext.current.zk
     val log by app.chat.log.collectAsStateWithLifecycle()
+    val mode by app.chat.mode.collectAsStateWithLifecycle()
     val busy by app.chat.busy.collectAsStateWithLifecycle()
-    val items = remember(log.messages, since) { group(log.messages.filter { it.at >= since }) }
+    // current chat line only
+    val msgs = remember(log, mode) { log.threadOf(mode)?.messages.orEmpty() }
+    val items = remember(msgs, since) { group(msgs.filter { it.at >= since }) }
     val list = rememberLazyListState()
     var input by remember { mutableStateOf("") }
     LaunchedEffect(items.size, busy) { if (items.isNotEmpty()) list.animateScrollToItem(items.size - 1 + if (busy) 1 else 0) }
@@ -578,7 +581,7 @@ fun ChatPanel(since: Long, modifier: Modifier = Modifier) {
                             is Item.User -> UserBubble(it.m.content, it.m.image)
                             is Item.Said -> Said(it.m.content, if (it == items.last() && !busy) it.options else emptyList()) { o -> app.chat.send(o) }
                             is Item.Steps -> Steps(it.steps)
-                            is Item.Failed -> Failed(it.m.content) { log.messages.lastOrNull { m -> m.role == ChatMsg.USER && !m.hidden }?.let { u -> app.chat.send(u.content) } }
+                            is Item.Failed -> Failed(it.m.content) { msgs.lastOrNull { m -> m.role == ChatMsg.USER && !m.hidden }?.let { u -> app.chat.send(u.content) } }
                         }
                     }
                     if (busy) item { BranchThinking(LocalSignals.current.ai, Modifier.size(40.dp)) }

@@ -226,7 +226,8 @@ fun DeptScreen(name: String, nav: NavHostController) {
             when (dept) {
                 Dept.INFO -> InfoPart(work, now, nav)
                 Dept.THINK -> ThinkPart(work, now, nav)
-                Dept.PLAN -> PlanPart(work, now, nav)
+                // 统筹规划部：进来第一眼是「全局」，原来的规划卡片收在它下面的折叠区里
+                Dept.PLAN -> GlobalOverview(work, now, nav) { PlanPart(work, now, nav) }
                 Dept.ACT -> ActPart(work, now, status, nav)
                 Dept.HQ -> {}
             }

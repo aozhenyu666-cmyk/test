@@ -34,6 +34,7 @@ fun CampaignCard(c: Campaign, nav: NavHostController, askTopic: Boolean = false)
     val sig = LocalSignals.current
     val config by app.store.config.collectAsStateWithLifecycle()
     val log by app.chat.log.collectAsStateWithLifecycle()
+    val mode by app.chat.mode.collectAsStateWithLifecycle()
     var topic by remember { mutableStateOf("") }
     var msg by remember { mutableStateOf<String?>(null) }
     val color = when (c) {
@@ -53,7 +54,8 @@ fun CampaignCard(c: Campaign, nav: NavHostController, askTopic: Boolean = false)
         Hint(c.what)
         if (askTopic) OutlinedTextField(topic, { topic = it }, label = { Text(if (c == Campaign.PROJECT) "哪件事（比如：国考）" else "想透哪个问题（可空：让总控从卡着的事里挑）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            val running = log.campaign == c.name
+            // 战役挂在对话段上：这里只看当前模式这一段的，不会把另一种对话里的战役当成“正在跑”
+            val running = log.threadOf(mode)?.campaign == c.name
             Button(
                 onClick = {
                     if (running) nav.navigate("chat")
@@ -75,12 +77,15 @@ fun CampaignBanner() {
     val app = LocalContext.current.zk
     val sig = LocalSignals.current
     val log by app.chat.log.collectAsStateWithLifecycle()
-    val c = Campaign.of(log.campaign) ?: return
+    val mode by app.chat.mode.collectAsStateWithLifecycle()
+    // 横幅只报当前这条对话线自己的战役；切到另一条线时它就该消失
+    val running = log.threadOf(mode) ?: return
+    val c = Campaign.of(running.campaign) ?: return
     val now = rememberNow(60_000)
-    if (now - log.campaignAt > 3 * 3600_000L) return
+    if (now - running.campaignAt > 3 * 3600_000L) return
     Panel(accent = sig.ai, modifier = Modifier.testTag("campaign-banner")) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("${c.title}进行中 · ${(now - log.campaignAt) / 60_000} 分钟" + if (log.campaignTopic.isNotBlank()) " · ${log.campaignTopic}" else "", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            Text("${c.title}进行中 · ${(now - running.campaignAt) / 60_000} 分钟" + if (running.campaignTopic.isNotBlank()) " · ${running.campaignTopic}" else "", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
             TextButton(onClick = { app.chat.stopCampaign() }) { Text("收工", color = sig.muted) }
         }
     }

@@ -14,6 +14,9 @@ import com.zongkong.core.boss.Timeline
 /**
  * 系统的“使用情况访问”：总控没在运行的时段也查得到（系统自己记的，大约保留一周）。
  * 没授权时退回无障碍服务自己记的切换。
+ *
+ * 无障碍掉了之后这份记录就是唯一还看得见的东西（见 [Eye]）：它能说“用了多久哪些应用”，
+ * 但没有拦的动作，也没有应用内的窗口细节——降级不是等价替换。
  */
 object Usage {
     private const val TAG = "Usage"
@@ -55,9 +58,24 @@ object Usage {
         }
     }
 
-    /** [from, to] 的设备事件：有授权用系统的，否则用总控自己记的。 */
-    fun events(context: Context, from: Long, to: Long): List<DevEvent> =
-        system(context, from, to) ?: context.zk.store.switches(from, to)
+    /**
+     * [from, to] 的设备事件。
+     *
+     * 无障碍在跑：用总控自己记的（逐窗口，最细）；查不到再退系统记录。
+     * 无障碍没跑：优先系统记录（这段总控自己根本没记），没授权才退回自己那份空记录。
+     * 为什么这么分：[Eye.systemRecordFirst] 一句话说清，两处必须用同一个判断，否则界面说“只读”、
+     * 实际却在读一份空白，对账就假了。
+     */
+    fun events(context: Context, from: Long, to: Long): List<DevEvent> {
+        val running = runCatching { com.zongkong.app.guard.GuardService.running }.getOrDefault(false)
+        val granted = granted(context)
+        return if (Eye.systemRecordFirst(running, granted)) {
+            system(context, from, to) ?: context.zk.store.switches(from, to)
+        } else {
+            val own = context.zk.store.switches(from, to)
+            if (own.isNotEmpty()) own else system(context, from, to).orEmpty()
+        }
+    }
 
     // UsageEvents.Event.SCREEN_INTERACTIVE / SCREEN_NON_INTERACTIVE（API 28）
     private const val SCREEN_INTERACTIVE = 15

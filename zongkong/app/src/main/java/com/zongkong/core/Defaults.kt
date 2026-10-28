@@ -95,6 +95,8 @@ object Defaults {
     /**
      * 老配置升级：关卡存在 config.json 里，改了默认值老用户拿不到。这里把明确过时的那几道换成新的。
      * - 0.8：日终验收不再由 AI 按标准逐条审（“他又说我没完成”），改成交今天的清单。
+     * - 对话段数：默认 1 → 3（用户说“光一个对话不太行”）。老配置里的 1 分不清是旧默认还是用户自己设的，
+     *   所以只在没迁移过的配置上动手，且只动 1；其它值原样留着，只把标记置上，之后不再回头看。
      */
     fun migrate(c: Config): Config {
         val fresh = gates().associateBy { it.id }
@@ -104,7 +106,21 @@ object Defaults {
                 else -> g
             }
         }
-        return if (gates == c.gates) c else c.copy(gates = gates)
+        val chat = migrateChat(c.chat)
+        return if (gates == c.gates && chat == c.chat) c else c.copy(gates = gates, chat = chat)
+    }
+
+    /**
+     * 老配置没写过 threadsPerDay 时读出来的就是旧默认 1：升级后改成 3，并打上标记。
+     *
+     * 用户自己设过的 2 / 5 这类值一个字都不动——他的选择比新默认更可信。那种配置以后也不会被碰到，
+     * 因为这里的条件就只有“等于 1”；所以不需要为了挡住它而写标记，`migrate` 也保持
+     * “没东西要改就原对象返回”的老约定（[com.zongkong.app.data.Store] 每次读配置都调它）。
+     * 设置页写段数时会一并置标记，用户之后自己选回 1 段是算数的。
+     */
+    private fun migrateChat(chat: ChatConfig): ChatConfig {
+        if (chat.threadsMigrated || chat.threadsPerDay != 1) return chat
+        return chat.copy(threadsPerDay = 3, threadsMigrated = true)
     }
 
     /** 谋划思考部的方法卡，按天轮换。 */

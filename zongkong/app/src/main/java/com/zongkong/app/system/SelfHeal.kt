@@ -1,6 +1,7 @@
 package com.zongkong.app.system
 
 import android.Manifest
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Service
 import android.content.ComponentName
 import android.content.Context
@@ -11,6 +12,7 @@ import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
 import android.util.Log
+import android.view.accessibility.AccessibilityManager
 import com.zongkong.app.guard.Diag
 import com.zongkong.app.guard.GuardService
 import com.zongkong.app.ui.PermissionStatus
@@ -32,6 +34,13 @@ import kotlinx.coroutines.launch
 object SelfHeal {
     private const val TAG = "SelfHeal"
     const val GRANT_COMMAND = "adb shell pm grant com.zongkong.app android.permission.WRITE_SECURE_SETTINGS"
+
+    /** 连着修这么多次都不成，就别再开关了：系统彻底不让它跑时，开关只是白折腾，改成提醒。 */
+    const val MAX_HEALS = 3
+
+    /** 两次自动修复之间至少隔这么久：系统挂载要时间，贴太紧会自己打断自己。 */
+    const val HEAL_GAP_MS = 3 * 60_000L
+
     @Volatile private var lastHeal = 0L
     @Volatile private var heals = 0
     /** 上一次判定出来的状态：running / stale / disabled。只在状态变化时写诊断，免得每分钟刷一条。 */
@@ -42,23 +51,174 @@ object SelfHeal {
     fun canWrite(context: Context): Boolean =
         context.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED
 
-    /** 把总控的无障碍服务从列表里拿掉、再放回去：系统会重新挂上它。 */
-    suspend fun rebind(context: Context): Boolean {
-        if (!canWrite(context)) return false
-        return try {
-            val cr = context.contentResolver
-            val me = ComponentName(context, GuardService::class.java)
-            val others = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
-                .split(':').filter { it.isNotBlank() && ComponentName.unflattenFromString(it) != me }
-            Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, others.joinToString(":"))
-            delay(1_200)
-            Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, (others + me.flattenToString()).joinToString(":"))
+    // ---------- 纯判断（不碰 Android，单测直接喂值） ----------
+
+    /** 这一分钟该做什么。 */
+    enum class Step {
+        /** 不用动：已经在跑。 */
+        NONE,
+        /** 自己修：开着没跑、有写权限、还没修满次数。 */
+        HEAL,
+        /** 提醒：被关掉了 / 没授权 / 修了几次都不成。 */
+        WARN,
+    }
+
+    /**
+     * 该修还是该提醒。
+     *
+     * 修是有上限的：连着修 [MAX_HEALS] 次都没修好，多修只会一直开关服务，反而把系统惹毛，
+     * 这时候把决定权交回用户（大声提醒），比装作在修诚实。
+     */
+    fun step(running: Boolean, enabled: Boolean, canWrite: Boolean, heals: Int, now: Long, lastHeal: Long): Step = when {
+        running -> Step.NONE
+        !enabled -> Step.WARN
+        !canWrite -> Step.WARN
+        heals >= MAX_HEALS -> Step.WARN
+        now - lastHeal < HEAL_GAP_MS -> Step.WARN
+        else -> Step.HEAL
+    }
+
+    /**
+     * 一次自动修复的结果。
+     *
+     * 为什么不是 Boolean：`putString` 不抛异常 ≠ 系统把服务挂起来了，vivo/iQOO 上这两件事经常不一样。
+     * 把“写进去了没有”和“系统认了没有”分开记，诊断和权限页才能说清到底卡在哪一步。
+     */
+    data class Rebind(
+        /** 写入层面：安全设置里最后那份列表还包含本服务。 */
+        val ok: Boolean,
+        /** 结果层面：系统自己报告的可运行列表里真的有本服务（唯一可信的成功标准）。 */
+        val verified: Boolean,
+        /** 试了几档：1 = 只做“拿掉→放回”，2 = 还试了“清空→写回”。 */
+        val attempts: Int,
+        /** 一句中文：成在哪、败在哪。给诊断和权限页显示。 */
+        val reason: String,
+    )
+
+    /**
+     * 放回时用的列表：别的服务原样保留（顺序不动），本服务只留一份、放最后。
+     *
+     * 顺序必须保住：系统按列表顺序挂载，乱动别人的位置等于替用户改了无障碍设置。
+     */
+    fun enabledList(current: String, me: String): String = (othersOf(current, me) + me).joinToString(":")
+
+    /** 当前列表里除本服务以外的（去空、去重、保持原顺序）。 */
+    fun othersOf(current: String, me: String): List<String> {
+        val mine = normalize(me)
+        return current.split(':').map { it.trim() }.filter { it.isNotBlank() && normalize(it) != mine }.distinct()
+    }
+
+    /** 系统报告的在跑服务里有没有本服务（包名 + 类名逐项对上）。 */
+    fun inList(reported: List<Pair<String, String>>, pkg: String, cls: String): Boolean =
+        reported.any { (p, c) -> p == pkg && fullClass(p, c) == fullClass(pkg, cls) }
+
+    /** 扁平组件名归一：`包名/.类` 补全成 `包名/包名.类`，免得简写和全名对不上。 */
+    fun normalize(flat: String): String {
+        val s = flat.trim()
+        val pkg = s.substringBefore('/')
+        val cls = s.substringAfter('/', "")
+        if (pkg.isEmpty() || cls.isEmpty()) return s
+        return "$pkg/${fullClass(pkg, cls)}"
+    }
+
+    private fun fullClass(pkg: String, cls: String): String = if (cls.startsWith(".")) pkg + cls else cls
+
+    // ---------- 真正的修复 ----------
+
+    /** 简单入口：只回答“真的修好了没有”（旧调用方用的是这个语义）。 */
+    suspend fun rebind(context: Context): Boolean = rebindDetail(context).verified
+
+    /**
+     * 把总控的无障碍服务从列表里拿掉、再放回去，并**验证系统有没有真的认**。
+     * 每次结果都写诊断（自动修、权限页手动修、回到应用时补修，都走这里）。
+     */
+    suspend fun rebindDetail(context: Context): Rebind = attempt(context).also { r ->
+        Diag.log(
+            context,
+            if (r.verified) "rebind_ok" else "rebind_fail",
+            "重新挂上（试了 ${r.attempts} 档）：${r.reason}",
+        )
+    }
+
+    /**
+     * 真正动手的两档：
+     *  1. 开关置 1 → 拿掉 → 放回（多数机型到这就好了）。
+     *  2. 验证不过再来一档更硬的：先清空整个已启用列表 → 等一下 → 写回「原有的其他服务 + 本服务」。
+     *     vivo/iQOO 上只改列表经常不触发重扫，清空能让它重新走一遍。
+     */
+    private suspend fun attempt(context: Context): Rebind {
+        if (!canWrite(context)) return Rebind(false, false, 0, "没授权“写安全设置”，修不了")
+        val cr = context.contentResolver
+        val me = ComponentName(context, GuardService::class.java)
+        val meFlat = me.flattenToString()
+        val current = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
+        val list = enabledList(current, meFlat)
+
+        // 第一档：开总开关 → 拿掉 → 放回。
+        // 先置 1 是因为 vivo 上 ACCESSIBILITY_ENABLED=0 时列表怎么写都不会挂载。
+        try {
             Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
-            true
+            Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, othersOf(current, meFlat).joinToString(":"))
+            delay(1_200)
+            Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, list)
         } catch (e: Exception) {
-            Log.w(TAG, "重新挂上无障碍服务失败", e)
-            false
+            Log.w(TAG, "第一档重新挂上失败", e)
+            return Rebind(false, false, 1, "写安全设置被拒绝（${e.javaClass.simpleName}）")
         }
+        delay(1_500)
+        if (verified(context, me)) return Rebind(written(context, meFlat), true, 1, "拿掉再放回就好了，系统已认")
+
+        // 第二档：清空 → 等一下 → 写回「原有的其他服务 + 本服务」。
+        try {
+            Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, "")
+            delay(1_000)
+            Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+            Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, list)
+        } catch (e: Exception) {
+            Log.w(TAG, "第二档重新挂上失败", e)
+            return Rebind(false, false, 2, "清空写回被拒绝（${e.javaClass.simpleName}）")
+        }
+        delay(2_000)
+        return if (verified(context, me)) {
+            Rebind(written(context, meFlat), true, 2, "清空再写回才好，系统已认")
+        } else {
+            Rebind(written(context, meFlat), false, 2, "写进去了，但系统没把服务挂起来")
+        }
+    }
+
+    /**
+     * 真的读回来确认：安全设置里那份列表现在有没有本服务。
+     *
+     * 不推断、只读盘——vivo 上 `putString` 不抛异常但值没落地（或被系统改写）是见过的，
+     * 那正是“以为修好了其实没好”的来源。
+     */
+    private fun written(context: Context, meFlat: String): Boolean = try {
+        Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+            .orEmpty()
+            .split(':')
+            .any { normalize(it) == normalize(meFlat) }
+    } catch (e: Exception) {
+        Log.w(TAG, "读回无障碍列表失败", e)
+        false
+    }
+
+    /**
+     * 系统到底认没认：问无障碍管理器要“已启用的服务”列表，看本服务在不在。
+     *
+     * 这是目前能拿到的最强信号，比 putString 没抛异常可信得多；但它只说明系统收了这份配置，
+     * 不保证 onServiceConnected 已经回调——真正“在跑”还得看心跳（[PermissionStatus.guardRunning]）。
+     */
+    private fun verified(context: Context, me: ComponentName): Boolean = try {
+        val am = context.getSystemService(AccessibilityManager::class.java)
+        val reported = am?.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+            ?.mapNotNull { info ->
+                info.resolveInfo?.serviceInfo?.let { si -> si.packageName to si.name }
+            }
+            .orEmpty()
+        inList(reported, me.packageName, me.className)
+    } catch (e: Exception) {
+        Log.w(TAG, "读已启用的无障碍服务列表失败", e)
+        false
     }
 
     /** 看一眼：在跑就算了；开着没跑就修（或提醒）；整个关掉了就提醒。每次判定都记进诊断。 */
@@ -80,18 +240,20 @@ object SelfHeal {
             if (enabled) Diag.log(context, "stale", "开着但没在运行")
             else Diag.log(context, "disabled", "无障碍在设置里是关着的")
         }
-        // 连着修了三次还不行（多半是系统彻底不让它跑），改成提醒，免得一直开关
-        if (enabled && canWrite(context) && heals < 3 && now - lastHeal > 3 * 60_000L) {
+        if (step(false, enabled, canWrite(context), heals, now, lastHeal) == Step.HEAL) {
             lastHeal = now
             heals++
-            if (rebind(context)) {
-                Diag.log(context, "rebind_ok", "自动重新挂上（第 $heals 次）")
+            // 走 attempt 而不是 rebindDetail：这里要带上“第几次”，而且诊断由本函数自己写
+            val r = attempt(context)
+            val detail = "自动重新挂上（第 $heals 次，试了 ${r.attempts} 档）：${r.reason}"
+            if (r.verified) {
+                Diag.log(context, "rebind_ok", detail)
                 state = "running"
                 reminded = false
                 store.logWake("无障碍开着但没在运行：自动重新挂上（第 $heals 次）")
                 return
             }
-            Diag.log(context, "rebind_fail", "自动重新挂上没成功（第 $heals 次）")
+            Diag.log(context, "rebind_fail", detail)
         }
         warn(context, enabled, now)
     }
@@ -119,7 +281,10 @@ object SelfHeal {
 
 /**
  * 常驻前台服务：让总控所在的进程不容易被系统清掉（无障碍服务也在这个进程里），
- * 并每分钟看一眼无障碍服务还在不在跑（[SelfHeal.check]）。通知就是那条常驻状态条。
+ * 并每分钟看一眼无障碍服务还在不在跑（[SelfHeal.check]）。
+ * 通知就是那条常驻状态条。
+ *
+ * 自己被系统杀掉后没人自愈，所以 [HealAlarm] 每 15 分钟从外部叫一次（见 [HealReceiver]）。
  */
 class KeepAliveService : Service() {
     private var scope: CoroutineScope? = null
@@ -136,6 +301,9 @@ class KeepAliveService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        alive = true
+        // 每次起来都把下一次外部唤醒排上（开机流程没跑到、或上一轮被清掉时，这里是补排的地方）
+        HealAlarm.schedule(this)
         if (scope == null) {
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also { s ->
                 s.launch {
@@ -154,12 +322,18 @@ class KeepAliveService : Service() {
     }
 
     override fun onDestroy() {
+        alive = false
         scope?.cancel()
         scope = null
         super.onDestroy()
     }
 
     companion object {
+        /** 此刻是不是真的活着（不是“曾经 start 过”）：外部闹钟靠它决定要不要再拉一次，免得每次白闪一条通知。 */
+        @Volatile
+        var alive = false
+            private set
+
         /** 能开就开（后台开不了时系统会拒绝，接住就行：下次从前台或闹钟再开）。 */
         fun start(context: Context) {
             try {

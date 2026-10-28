@@ -53,6 +53,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
@@ -67,6 +68,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.zongkong.app.zk
 import com.zongkong.core.agent.Agent
+import com.zongkong.core.agent.ChatMode
 import com.zongkong.core.agent.ChatMsg
 import kotlinx.coroutines.launch
 
@@ -114,13 +116,16 @@ fun ChatScreen(nav: NavHostController) {
     val chat = app.chat
     val sig = LocalSignals.current
     val log by chat.log.collectAsStateWithLifecycle()
+    val mode by chat.mode.collectAsStateWithLifecycle()
     val busy by chat.busy.collectAsStateWithLifecycle()
     val route by chat.route.collectAsStateWithLifecycle()
     val config by app.store.config.collectAsStateWithLifecycle()
     var input by remember { mutableStateOf("") }
     var menu by remember { mutableStateOf(false) }
     var showMemory by remember { mutableStateOf(false) }
-    val items = remember(log.messages) { group(log.messages) }
+    // 只看当前模式的这一段：切换模式时消息列表跟着换，但谁都不删
+    val shown = remember(log, mode) { log.threadOf(mode)?.messages.orEmpty() }
+    val items = remember(shown) { group(shown) }
     val list = rememberLazyListState()
     val scope = rememberCoroutineScope()
     // 是不是已经滚到底：不是的话浮一个“回到底部”，找旧消息后不用手划
@@ -138,12 +143,23 @@ fun ChatScreen(nav: NavHostController) {
         val n = items.size + (if (busy) 1 else 0)
         if (n > 0) list.animateScrollToItem(n - 1)
     }
-    // 别的页面带过来的一句话（快捷按钮、“问参谋”）
+    // 别的页面带过来的一句话（快捷按钮、“问参谋”）：这一个是「直接说出去」
     LaunchedEffect(Unit) {
         val pending = app.chatDraft
         if (pending.isNotBlank()) {
             app.chatDraft = ""
             if (config.ai.ready) chat.send(pending) else input = pending
+        }
+    }
+    // 全局页区块带过来的主题：切到整体、只预填输入框，不发送、不建待办，用户可以改完再发
+    // 用 key = Unit 只跑一次；主题在页面开着的时候点标签回来也能接到
+    LaunchedEffect(Unit) {
+        snapshotFlow { app.chatTopic }.collect { req ->
+            if (req != null) {
+                app.chatTopic = null
+                chat.switchMode(ChatMode.of(req.mode))
+                input = req.prompt
+            }
         }
     }
 
@@ -185,6 +201,12 @@ fun ChatScreen(nav: NavHostController) {
             }
         }
 
+        // ---------- 当下 / 整体 ----------
+        ModeSwitch(mode, onPick = { chat.switchMode(it) })
+
+        // 它现在最想问你的一件事：一进来就看得见，点一下就把它说出来
+        AskCard(enabled = config.ai.ready && !busy) { q -> input = q }
+
         Box(Modifier.padding(horizontal = 16.dp)) { CampaignBanner() }
         if (!config.ai.ready) {
             Column(Modifier.weight(1f).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -210,7 +232,7 @@ fun ChatScreen(nav: NavHostController) {
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             if (items.isEmpty()) {
-                item { Empty { input = ""; chat.send(it) } }
+                item { Empty(mode) { input = ""; chat.send(it) } }
             }
             itemsIndexed(items, key = { i, it -> i.toString() + when (it) { is Item.User -> it.m.at; is Item.Said -> it.m.at; is Item.Steps -> it.steps.first().at; is Item.Failed -> it.m.at } }) { i, it ->
                 Box(Modifier.animateItem()) {
@@ -219,7 +241,7 @@ fun ChatScreen(nav: NavHostController) {
                         is Item.Said -> Said(it.m.content, if (i == items.lastIndex && !busy) it.options else emptyList()) { o -> chat.send(o) }
                         is Item.Steps -> Steps(it.steps)
                         is Item.Failed -> Failed(it.m.content) {
-                            log.messages.lastOrNull { m -> m.role == ChatMsg.USER }?.let { u -> chat.send(u.content) }
+                            shown.lastOrNull { m -> m.role == ChatMsg.USER }?.let { u -> chat.send(u.content) }
                         }
                     }
                 }
@@ -228,7 +250,7 @@ fun ChatScreen(nav: NavHostController) {
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(start = 2.dp, top = 4.dp)) {
                         BranchThinking(sig.ai, Modifier.size(28.dp))
-                        val last = log.messages.lastOrNull()
+                        val last = shown.lastOrNull()
                         Text(
                             if (last?.role == ChatMsg.TOOL) last.summary else "在想",
                             style = MaterialTheme.typography.bodySmall, color = sig.muted,
@@ -282,7 +304,7 @@ fun ChatScreen(nav: NavHostController) {
         ) {
             Row(Modifier.padding(start = 18.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f).padding(vertical = 10.dp)) {
-                    if (input.isEmpty()) Text("跟总控说…", style = MaterialTheme.typography.bodyLarge, color = sig.muted)
+                    if (input.isEmpty()) Text(if (mode == ChatMode.OVERALL) "跟总控聊整体：目标、这周、判断…" else "跟总控说…", style = MaterialTheme.typography.bodyLarge, color = sig.muted)
                     BasicTextField(
                         value = input,
                         onValueChange = { input = it },
@@ -354,18 +376,123 @@ fun ChatScreen(nav: NavHostController) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Empty(send: (String) -> Unit) {
+private fun Empty(mode: ChatMode, send: (String) -> Unit) {
     val sig = LocalSignals.current
+    val overall = mode == ChatMode.OVERALL
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(top = 28.dp)) {
-        Text("有什么要我推一把的？", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.enter(0))
-        Text("直接说事。它会看你的事项、节律和一手，替你建、排、改，做完告诉你做了什么。", style = MaterialTheme.typography.bodyMedium, color = sig.muted, modifier = Modifier.enter(1))
-        listOf(
+        Text(
+            if (overall) "整体这条线是新开的" else "有什么要我推一把的？",
+            style = MaterialTheme.typography.headlineMedium, modifier = Modifier.enter(0),
+        )
+        Text(
+            if (overall) "这里聊长期目标、这周要交出什么、还没验证的判断和取舍。它每次都会先读一份整体状态，缺的地方会说不知道。"
+            else "直接说事。它会看你的事项、节律和一手，替你建、排、改，做完告诉你做了什么。",
+            style = MaterialTheme.typography.bodyMedium, color = sig.muted, modifier = Modifier.enter(1),
+        )
+        val picks = if (overall) listOf(
+            "现在整体是什么局面" to "长期目标、本周交付、卡在哪、下一步",
+            "哪几个判断还没验证" to "从脉络里挑最影响决定的",
+            "这周的交付是不是在装样子" to "对着结果检查，写了的有没有证据",
+            "该放弃哪件事" to "看投入和产出，给取舍",
+        ) else listOf(
             "帮我把今天排一下" to "看看手上的事，挑一件，排进时间",
             "我卡住了，帮我拆一步" to "把当前这步拆成 5 分钟能开始的",
             "今天一手练得怎么样" to "读一手的组数，不够就安排",
             "给首页加一个“晚间复盘”按钮" to "让它帮你加功能",
-        ).forEachIndexed { i, (q, d) ->
+        )
+        picks.forEachIndexed { i, (q, d) ->
             ChoiceCard(q, d, color = sig.ai, modifier = Modifier.enter(i + 2)) { send(q) }
+        }
+    }
+}
+
+/**
+ * 当下 / 整体 切换。位置在对话页顶部、一眼能看见：两个选项都写清楚，
+ * 选中的那个有底色、有标识——免得把整体规划讨论当成今天的任务。
+ */
+/**
+ * 「它现在最想问你的一件事」。
+ *
+ * 为什么要有这个：追问如果只写在系统提示里，用户得先开口才碰得到；
+ * 而这一步的价值恰恰是**替用户开口**——他一进对话就看见那一问，点一下就把话发出去。
+ * 点它只是把问题放进输入框（还留着改的余地），不是替他作答。
+ *
+ * 没有缺口时整张卡不出现：不为了占位置而占位置。
+ */
+@Composable
+private fun AskCard(enabled: Boolean, onAsk: (String) -> Unit) {
+    val app = LocalContext.current.zk
+    val sig = LocalSignals.current
+    // 每进一次页面重算一遍：他可能刚改过事项、刚答过上一问
+    val gap = remember { runCatching { app.chat.pendingQuestion() }.getOrNull() }
+    val g = gap ?: return
+    if (!enabled) return
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp).testTag("chat-ask"),
+        shape = RoundedCornerShape(14.dp),
+        color = sig.ai.copy(alpha = 0.08f),
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+            Text(
+                "它想问你 · " + g.kind.label,
+                style = MaterialTheme.typography.labelSmall,
+                color = sig.ai,
+            )
+            Text(
+                g.ask,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            TextButton(
+                onClick = { onAsk(g.ask) },
+                contentPadding = PaddingValues(0.dp),
+                modifier = Modifier.testTag("chat-ask-send"),
+            ) { Text("就这样问它", color = sig.ai, style = MaterialTheme.typography.labelLarge) }
+        }
+    }
+}
+
+@Composable
+internal fun ModeSwitch(mode: ChatMode, onPick: (ChatMode) -> Unit) {    val sig = LocalSignals.current
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = sig.wash.copy(alpha = 0.55f),
+    ) {
+        Column(Modifier.padding(6.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                ChatMode.entries.forEach { m ->
+                    val on = m == mode
+                    val bg by animateColorAsState(
+                        if (on) MaterialTheme.colorScheme.surface else androidx.compose.ui.graphics.Color.Transparent,
+                        tween(200),
+                        label = "modeBg",
+                    )
+                    Surface(
+                        onClick = { if (!on) onPick(m) },
+                        shape = RoundedCornerShape(12.dp),
+                        color = bg,
+                        shadowElevation = if (on) 2.dp else 0.dp,
+                        modifier = Modifier.weight(1f).testTag("chat-mode-${m.key}"),
+                    ) {
+                        Column(Modifier.padding(vertical = 7.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                m.label,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = if (on) sig.ai else sig.muted,
+                                fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+                            )
+                        }
+                    }
+                }
+            }
+            Text(
+                mode.hint,
+                style = MaterialTheme.typography.labelSmall,
+                color = sig.muted,
+                modifier = Modifier.padding(start = 10.dp, top = 5.dp, bottom = 2.dp),
+            )
         }
     }
 }

@@ -256,6 +256,7 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 composable("settings/gates") { GatesScreen(nav) }
                 composable("settings/gate/{id}") { e -> GateEditScreen(e.arguments?.getString("id").orEmpty(), nav) }
                 composable("settings/rules") { RulesScreen(nav) }
+                composable("settings/chat") { ChatSettingsScreen(nav) }
                 composable("settings/ai") { AiScreen(nav) }
                 composable("settings/notion") { NotionScreen(nav) }
                 composable("settings/gptguide") { GptGuideScreen(nav) }

@@ -92,13 +92,15 @@ fun VoiceScreen(nav: NavHostController, openSettings: Boolean = false) {
     val sig = LocalSignals.current
     val config by app.store.config.collectAsStateWithLifecycle()
     val log by app.chat.log.collectAsStateWithLifecycle()
+    val mode by app.chat.mode.collectAsStateWithLifecycle()
     val busy by app.chat.busy.collectAsStateWithLifecycle()
     val vstate by Voice.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var hint by remember { mutableStateOf<String?>(null) }
     var showSettings by remember { mutableStateOf(openSettings) }
     var sentAt by remember { mutableStateOf(0L) }
-    val visible = log.messages.filter { !it.hidden && !it.error && it.content.isNotBlank() && it.role != ChatMsg.TOOL }
+    // 对讲页只念当前这条对话线的段（切到整体时不念当下的）
+    val visible = log.threadOf(mode).let { it?.messages.orEmpty() }.filter { !it.hidden && !it.error && it.content.isNotBlank() && it.role != ChatMsg.TOOL }
     val lastUser = visible.lastOrNull { it.role == ChatMsg.USER }
     val lastReply = visible.lastOrNull { it.role == ChatMsg.ASSISTANT }
     val (replyBody, options) = remember(lastReply) { lastReply?.let { Agent.options(it.content) } ?: ("" to emptyList()) }

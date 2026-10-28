@@ -84,6 +84,12 @@ fun SettingsScreen(nav: NavHostController) {
         MenuItem("总控怎么运转", "收→谋→筹→行→验；今天几点主动找你、信用怎么算、行动和记录怎么用", "flow", nav)
         MenuItem("对讲、语音、桌面宠物", "${if (config.voice.apiReady) "语音接口已接" else "用手机自带的语音"} · 主动程度：${com.zongkong.core.boss.BossConfig.INITIATIVE.getOrElse(config.boss.initiative) { "?" }} · ${com.zongkong.app.system.PetView.kindOf(config.boss.petKind).label}${if (config.boss.pet) "在桌面上" else "收起了"}", "voice/settings", nav)
         MenuItem(
+            "对话段数",
+            if (config.chat.threadsPerDay <= 0) "当下和整体各不限 · 想开就开，旧的一段压成交接再走"
+            else "当下和整体各 ${config.chat.threadsPerDay} 段/天 · 到上限就把旧的一段收尾、带交接摘要接着用",
+            "settings/chat", nav,
+        )
+        MenuItem(
             "外接谋划",
             "${config.directives.count { it.status == com.zongkong.core.plan.Directive.STATUS_ACTIVE }} 份在办 · Gemini / GPT / Notion 交进来的报告，总控只负责盯落实",
             "directives", nav,

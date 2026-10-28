@@ -45,7 +45,12 @@ class PetWidget : AppWidgetProvider() {
                 val online = GuardService.running
 
                 if (online) {
-                    val last = app.chat.log.value.messages.lastOrNull { it.role == ChatMsg.ASSISTANT && it.content.isNotBlank() && !it.error && !it.hidden }?.content
+                    // 走当前模式（当下 / 整体）的段：log.messages 取的是全局 activeId 那一段，
+                    // 用户切到整体以后小部件就会显示另一条线的最后一句话
+                    val last = app.chat.log.value.threadOf(app.chat.mode.value)
+                        ?.messages
+                        ?.lastOrNull { it.role == ChatMsg.ASSISTANT && it.content.isNotBlank() && !it.error && !it.hidden }
+                        ?.content
                     val text = last?.let { Agent.options(it).first }?.take(120) ?: "有事按住我说。"
                     v.setImageViewBitmap(R.id.widget_pet, PetView.render(192, PetView.Mood.IDLE, stance, kind))
                     v.setTextViewText(R.id.widget_title, "总控 · 信用 $cred · ${stance.label}")

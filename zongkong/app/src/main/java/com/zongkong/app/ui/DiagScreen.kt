@@ -142,6 +142,12 @@ fun DiagScreen(nav: NavHostController) {
                     if (summary.lostCount > 0) sig.warn else sig.muted,
                 )
                 KeyValue("开着没跑", "${summary.stale} 次", if (summary.stale > 0) sig.warn else sig.muted)
+                // 自动修复到底有没有在替他干活：只记次数，不评价。看这两行比看“应该能修好”可靠
+                KeyValue(
+                    "自动修复",
+                    "成功 ${summary.rebindOk} 次 · 没成 ${summary.rebindFail} 次",
+                    if (summary.rebindFail > 0) sig.warn else sig.muted,
+                )
                 KeyValue("电池优化", if (summary.ignoringBattery) "已忽略（不容易被清）" else "没忽略", if (summary.ignoringBattery) sig.free else sig.warn)
                 Hint("最近原因猜测：${summary.reasonGuess}")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

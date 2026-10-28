@@ -121,6 +121,9 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         Reminders.reschedule(context)
         Reminders.watchdog(context)
+        // 无障碍自愈的外部唤醒也要重新排：系统重启、应用更新后闹钟全丢了，
+        // 这时候常驻服务往往还没起来，光靠它自己补排会漏（vivo 上进程被清就是死循环）。
+        HealAlarm.reschedule(context)
         KeepAliveService.start(context)
     }
 }

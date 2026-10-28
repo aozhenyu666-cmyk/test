@@ -22,9 +22,45 @@ data class ChatThread(
     /** 这一段收尾后压出来的交接：结论、做到哪、下一步、没解决的。带进下一段。 */
     val carry: String = "",
     val closed: Boolean = false,
+    /**
+     * 这一段属于哪种对话：[ChatMode.NOW]（当下，一天内的事）还是 [ChatMode.OVERALL]（整体，长期与取舍）。
+     * 老版本 chat.json 里没有这个字段，读进来一律算「当下」。
+     */
+    val mode: String = ChatMode.NOW.key,
+    /** 这一段在哪种战役里开着（[Campaign] 的枚举名）：战役跟着段走，不跨模式串台。 */
+    val campaign: String = "",
+    val campaignTopic: String = "",
+    val campaignAt: Long = 0,
 ) {
     /** 这段一共多少条（界面显示用）。 */
     val count: Int get() = messages.size
+
+    val chatMode: ChatMode get() = ChatMode.of(mode)
+}
+
+/**
+ * 两种对话。
+ *
+ * - [NOW] 当下：今天做什么、执行与反馈；
+ * - [OVERALL] 整体：长期目标、本周交付、重要判断、规划取舍。
+ *
+ * 两种对话的消息历史、当前段、交接摘要、每日段数和战役上下文完全隔离，只靠提示词区分是不够的。
+ */
+@Serializable
+enum class ChatMode(val key: String, val label: String, val hint: String) {
+    NOW("now", "当下", "今天的事、正在推的一步、执行与反馈"),
+    OVERALL("overall", "整体", "长期目标、本周交付、判断与取舍、整体复盘"),
+    ;
+
+    companion object {
+        /** 冷启动 / 认不出来时的默认模式（用户拍板：每次进总控对话默认「当下」）。 */
+        val DEFAULT = NOW
+
+        fun of(key: String): ChatMode = when (key.trim().lowercase()) {
+            OVERALL.key, "overall", "全部", "整体" -> OVERALL
+            else -> NOW
+        }
+    }
 }
 
 /**
@@ -115,31 +151,79 @@ object ChatThreads {
             ?: threads.lastOrNull { !it.closed }
             ?: threads.lastOrNull()
             ?: return ""
-        val n = indexToday(threads, active, now, zone)
-        val previous = threads.asSequence()
+        // 交接摘要只在同一种对话里传递：整体的结论不会被当下当作「上一段」
+        val mine = inMode(threads, active.chatMode)
+        val n = indexToday(mine, active, now, zone)
+        val previous = mine.asSequence()
             .filter { it.id != active.id && it.carry.isNotBlank() }
             .maxByOrNull { it.updatedAt }
         return buildString {
-            append("当前是今天第 ").append(n).append(" 段对话。")
+            // 说清楚这是哪一条线（当下 / 整体），否则模型会把整体的结论当成今天的
+            append("当前是").append(active.chatMode.label).append("对话，今天第 ").append(n).append(" 段。")
             if (previous != null) append('\n').append("上一段交接：").append(previous.carry.trim().take(CARRY_MAX))
         }
     }
+
+    // ---------- 按模式隔离 ----------
+
+    /** 只看 [mode] 这一种对话的段。 */
+    fun inMode(threads: List<ChatThread>, mode: ChatMode): List<ChatThread> = threads.filter { it.chatMode == mode }
+
+    /** [mode] 上次动过的那一段，优先没收尾的（切换模式时回到这里）；没有就是 null。 */
+    fun activeOf(threads: List<ChatThread>, mode: ChatMode): ChatThread? {
+        val mine = inMode(threads, mode)
+        return mine.filterNot { it.closed }.maxByOrNull { it.updatedAt }
+            ?: mine.maxByOrNull { it.updatedAt }
+    }
+
+    /**
+     * 本次运行里该让哪一种模式出场：用户刚切过就用他选的；否则回到 [ChatMode.DEFAULT]（当下）。
+     * 冷启动取不到上次选的那个，所以一律是「当下」。
+     */
+    fun startMode(picked: ChatMode?, threads: List<ChatThread>): ChatMode = picked ?: ChatMode.DEFAULT
+
+    /** 打开某一段时该切到的模式。 */
+    fun modeOf(threads: List<ChatThread>, id: String): ChatMode? =
+        threads.firstOrNull { it.id == id }?.chatMode
 
     // ---------- 今天的段数 / 每日上限 ----------
 
     /** 逻辑日（凌晨 4 点换日）；跨天归零靠它。 */
     fun dayKey(at: Long, zone: ZoneId = DayClock.BEIJING): String = DayClock.dateKey(at, zone)
 
-    /** 今天新建了几段（按 createdAt）。 */
-    fun todayCount(threads: List<ChatThread>, now: Long, zone: ZoneId = DayClock.BEIJING): Int {
+    /**
+     * 今天新建了几段（按 createdAt）。[mode] 不为空时只数这一种对话的：
+     * 一边的新建不能把另一边的额度用掉。
+     */
+    fun todayCount(threads: List<ChatThread>, now: Long, zone: ZoneId = DayClock.BEIJING, mode: ChatMode? = null): Int {
         val key = dayKey(now, zone)
-        return threads.count { it.createdAt > 0 && dayKey(it.createdAt, zone) == key }
+        return threads.count { it.createdAt > 0 && dayKey(it.createdAt, zone) == key && (mode == null || it.chatMode == mode) }
     }
 
-    /** 当前这段是今天第几段（从 1 开始；不是今天的段也算第 1 段）。 */
+    /**
+     * 今天这一种对话用掉了几段额度。
+     *
+     * 取记账数和「今天真正有内容的段数」的较大者：删过一段也不能把额度还回来，
+     * 但刚切模式时自动建出来的**空白段**不占额度——否则切过去第一次说话就会被每日上限拦住。
+     */
+    fun openedToday(threads: List<ChatThread>, now: Long, zone: ZoneId = DayClock.BEIJING, mode: ChatMode, recorded: Int): Int =
+        maxOf(recorded, usedCount(threads, now, zone, mode))
+
+    /** 今天这一种对话里有内容的段数：有消息、有交接、或者开过战役才算。 */
+    fun usedCount(threads: List<ChatThread>, now: Long, zone: ZoneId = DayClock.BEIJING, mode: ChatMode): Int {
+        val key = dayKey(now, zone)
+        return threads.count { t ->
+            t.chatMode == mode && t.createdAt > 0 && dayKey(t.createdAt, zone) == key && material(t)
+        }
+    }
+
+    /** 这一段是不是「有内容」：空段（刚建、还没说话）不算用掉额度。 */
+    fun material(t: ChatThread): Boolean = t.messages.isNotEmpty() || t.carry.isNotBlank() || t.campaign.isNotBlank()
+
+    /** 当前这段是今天第几段（从 1 开始；不是今天的段也算第 1 段）。只算同一种对话的段。 */
     fun indexToday(threads: List<ChatThread>, thread: ChatThread, now: Long, zone: ZoneId = DayClock.BEIJING): Int {
         val key = dayKey(now, zone)
-        val today = threads.filter { it.createdAt > 0 && dayKey(it.createdAt, zone) == key }.sortedBy { it.createdAt }
+        val today = inMode(threads, thread.chatMode).filter { it.createdAt > 0 && dayKey(it.createdAt, zone) == key }.sortedBy { it.createdAt }
         val i = today.indexOfFirst { it.id == thread.id }
         return if (i >= 0) i + 1 else today.size.coerceAtLeast(1)
     }
@@ -156,6 +240,13 @@ object ChatThreads {
         perDay <= 0 -> "今天不限新建段数"
         remaining(perDay, opened) > 0 -> "今天还能新开 ${perDay - opened} 段（每天最多 $perDay 段）"
         else -> "今天已经新开 $perDay 段，到上限了；把旧的一段收尾、带着交接摘要接着用"
+    }
+
+    /** 同上，但说清楚是哪一种对话的额度（当下 / 整体各算各的）。 */
+    fun limitText(perDay: Int, opened: Int, mode: ChatMode): String = when {
+        perDay <= 0 -> "今天的${mode.label}对话不限新建段数"
+        remaining(perDay, opened) > 0 -> "今天的${mode.label}对话还能新开 ${perDay - opened} 段（每天最多 $perDay 段）"
+        else -> "今天的${mode.label}对话已经新开 $perDay 段，到上限了；把${mode.label}里旧的一段收尾、带着交接摘要接着用"
     }
 
     // ---------- 段的收尾 / 换段 ----------
@@ -199,6 +290,11 @@ object ChatThreads {
                 updatedAt = now,
                 messages = added.takeLast(max),
                 carry = carry,
+                // 新段跟旧段是同一种对话；进行中的战役也跟着段走，不会串到另一种对话里
+                mode = thread.mode,
+                campaign = thread.campaign,
+                campaignTopic = thread.campaignTopic,
+                campaignAt = thread.campaignAt,
             ),
         )
         return old to fresh

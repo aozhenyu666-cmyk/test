@@ -148,6 +148,11 @@
                 android:resource="@xml/pet_widget" />
         </receiver>
 
+        <!-- 无障碍自愈的外部唤醒：常驻服务被系统清掉后，靠这个 15 分钟的闹钟把它拉起来 -->
+        <receiver
+            android:name=".system.HealReceiver"
+            android:exported="false" />
+
         <receiver
             android:name=".system.BootReceiver"
             android:exported="true">
