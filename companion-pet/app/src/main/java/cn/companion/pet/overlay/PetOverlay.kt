@@ -106,8 +106,8 @@ class PetOverlay(
         runCatching { wm.updateViewLayout(bubble, bubbleParams) }
     }
 
-    fun showBubble(spec: BubbleSpec, onFinishedTyping: (() -> Unit)? = null) {
-        if (!petShown) return
+    fun showBubble(spec: BubbleSpec, onFinishedTyping: (() -> Unit)? = null): Boolean {
+        if (!petShown) return false
         bubble.tailOnRight = isOnRight()
         bubble.show(spec, onFinishedTyping)
         layoutBubble()
@@ -116,6 +116,7 @@ class PetOverlay(
         } else {
             runCatching { wm.updateViewLayout(bubble, bubbleParams) }
         }
+        return bubbleShown
     }
 
     fun hideBubble() {

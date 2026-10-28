@@ -78,6 +78,7 @@ class PetApp : Application() {
         private set
     lateinit var agentEventLedger: AgentEventLedger
         private set
+    val partner by lazy { cn.companion.pet.service.PartnerConversation(this) }
     val screenObservations = ScreenObservationStore()
     lateinit var goalStore: GoalStore
         private set

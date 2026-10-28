@@ -147,6 +147,7 @@ import java.util.UUID
 class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private val app = context.applicationContext as PetApp
+    private val partner get() = app.partner
     private val settings = app.settings
     private val stats = app.stats
     private val memory = app.memory
@@ -311,6 +312,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     fun start() {
+        partner.blocked = { partnerBusy() }
+        partner.display = { text -> showPartnerBubble(text) }
+        partner.onReply = { text -> if (settings.ttsEnabled) speech.say(text) }
         // 设置页“运行”技能时交给桌宠来跑：进度和结果显示在气泡上，点桌宠可以停。
         app.skillLauncher = { id -> handler.post { endConversation(); skills.runSkill(id) } }
         memory.persona() // 首次运行写入默认人设
@@ -355,6 +359,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     fun stop() {
+        partner.away()
+        partner.cancel()
+        partner.display = null
+        partner.onReply = null
+        partner.blocked = { null }
         app.skillLauncher = null
         if (skillsInitialized) skills.cancel()
         app.events.removeListener(agentListener)
@@ -382,6 +391,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     // ---------- 屏幕状态 ----------
 
     fun onScreenOff() {
+        partner.away()
+        partner.cancel()
         active = false
         trainingTimer.pause(mono())
         training?.let { it.technicalBlock("输入中断，回来继续同一步。", now()) }
@@ -430,6 +441,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun tick() {
         val now = now()
+        partner.tick()
         // 守护按秒推进（到期、宽限、重试），不受下面任何提前 return 影响；熄屏/锁屏时不拉回。
         runCatching { focusController.tick(interactive = active) }
         // 训练计时用单调时钟推进；熄屏/锁屏不催。
@@ -1313,21 +1325,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // 温和搭话不能盖掉正在显示的题目或拦截提示。
         // 只检查不占用：占住又没人释放会让之后所有闲聊都被同级规则挡掉。
         if (!outputArbiter.allows(OutputPriority.AMBIENT)) return
-        val now = now()
-        scheduler.onSpoke(now)
-        stats.add(Stats.Kind.SPOKE)
-        // R3：真正说出口才算"说过"。规则路径也进账本，否则同一句话会被规则再来一遍。
-        lastSpokenAt = now
-        if (reply.hookText.isNotBlank()) app.ledger.record(reply.hookText, now)
-        if (settings.presenceEnabled) app.presencePolicy.recordShown(now)
-        convo = Conversation(decision, reply, opening, now, noEscalation = noEscalation, topicId = topic?.id, inputVersion = inputVersion)
-        lastProactiveAt = now
-        topic?.let { topics.markShared(it.id, now) }
-        overlay.setMood(reply.mood)
-        overlay.setTalking(true)
-        if (haptic) haptics.tap()
-        if (settings.ttsEnabled) speech.say(reply.hookText)
-        overlay.showBubble(entrySpec(reply.hookText, decision.scene, reply.suggestGemini)) { overlay.setTalking(false) }
+        if (partner.offer(reply.hookText)) {
+            scheduler.onSpoke(now())
+            app.ledger.record(reply.hookText, now())
+            lastSpokenAt = now()
+            topic?.let { topics.markShared(it.id, now()) }
+            if (settings.ttsEnabled) speech.say(reply.hookText)
+        }
     }
 
     private fun entrySpec(text: String, scene: Scene, highlightGemini: Boolean) = BubbleSpec(
@@ -1352,32 +1356,37 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         }
         if (think != null || noteDraft != null) { endThink(); return }
         if (overlay.isBubbleShown) {
-            convo?.let { if (!it.userStarted) it.dismissed = true }
-            endConversation()
+            partner.away()
+            overlay.hideBubble()
             return
         }
         if (showLetterIfAny()) return
-        if (probeJob?.isActive == true) return
-        noteUserInitiated()
-        // 用户点它：开一个不需要调 API 的轻量对话入口
-        val decision = classify(now())
-        val greeting = listOf("嗯？", "叫我？", "怎么啦", "在呢").random()
-        val reply = ProbeReply(greeting, "", Mood.CURIOUS, false, false)
-        val opening = buildOpeningSync(decision)
-        convo = Conversation(decision, reply, opening, now(), userStarted = true)
+        partner.open()
+        val text = partner.session.value?.turns?.lastOrNull()?.text ?: "在呢，接着聊。"
+        showPartnerBubble(text, menu = true)
+    }
+
+    private fun partnerBusy(): String? = when {
+        training != null -> "陪练进行中，先完成或结束这一回合。"
+        think != null || noteDraft != null -> "当前回合进行中。"
+        session != null || focusOverlay.isShown -> "守护会话进行中。"
+        skillsBusy() -> "技能进行中。"
+        !outputArbiter.allows(OutputPriority.AMBIENT) -> "当前有更重要的提示。"
+        else -> null
+    }
+
+    private fun showPartnerBubble(text: String, menu: Boolean = false): Boolean {
+        if (partnerBusy() != null || !active) return false
         overlay.setMood(Mood.CURIOUS)
-        overlay.showBubble(
-            entrySpec(greeting, decision.scene, false).copy(
-                extra = listOf(
-                    BubbleAction("开始陪练") { openTraining() },
-                    BubbleAction("想一想") { openThinkMenu() },
-                    BubbleAction("记个念头") { startNote() },
-                    BubbleAction("看一眼") { lookOnce() },
-                    BubbleAction("技能") { endConversation(); skills.openMenu() },
-                    BubbleAction("守护着去 ${assistants.current.label}") { endConversation(); startFocusGuard() },
-                ),
-            ),
-        )
+        return overlay.showBubble(BubbleSpec(text, showMic = systemVoice, showGemini = false, instant = true,
+            extra = if (menu) listOf(
+                BubbleAction("开始陪练") { partner.away(); openTraining() },
+                BubbleAction("想一想") { partner.away(); openThinkMenu() },
+                BubbleAction("记个念头") { partner.away(); startNote() },
+                BubbleAction("看一眼") { lookOnce() },
+                BubbleAction("技能") { partner.away(); skills.openMenu() },
+                BubbleAction("守护") { partner.away(); startFocusGuard() },
+            ) else emptyList()))
     }
 
     override fun onHoldStart() {
@@ -1401,13 +1410,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
      * 系统 SpeechRecognizer 在不少国产机后台会立刻失败，用户只看到“没听清”。
      */
     private fun speakViaKeyboard() {
-        if (convo == null && session == null && think == null && noteDraft == null) {
-            val d = classify(now())
-            convo = Conversation(d, ProbeReply("", "", Mood.CURIOUS, false, false), buildOpeningSync(d), now(), userStarted = true)
-            overlay.setMood(Mood.CURIOUS)
-            overlay.showBubble(entrySpec("说吧，我听着。", d.scene, false).copy(instant = true))
-        }
-        convo?.interacting = true
+        if (partnerBusy() == null) { partner.open(); showPartnerBubble("说吧，我听着。") }
         overlay.openBubbleInput("点输入法上的话筒说话，或者直接打字")
     }
 
@@ -1418,7 +1421,6 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             overlay.showBubble(
                 BubbleSpec("这台手机的系统语音识别用不了。点“打字”，用输入法上的麦克风说也行。", showMic = false, showGemini = false),
             )
-            if (convo == null) convo = Conversation(classify(now()), ProbeReply("", "", Mood.IDLE, false, false), emptyList(), now(), userStarted = true)
             return
         }
         listeningFromHold = fromHold
@@ -1475,8 +1477,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             persistTraining()
             return
         }
-        convo?.let { if (!it.userStarted) it.dismissed = true }
-        endConversation()
+        partner.away()
+        overlay.hideBubble()
     }
 
     private fun onUserInput(text: String?, fromHold: Boolean) {
@@ -1493,69 +1495,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             overlay.showBubble(BubbleSpec(message, showMic = systemVoice, showGemini = false))
             return
         }
-        val c = convo ?: run {
-            // 没有对话时直接按住角色说话
-            val d = classify(now())
-            Conversation(d, ProbeReply("", "", Mood.IDLE, false, false), buildOpeningSync(d), now(), userStarted = true).also { convo = it }
-        }
-        c.interacting = true
-        c.userReplyAt = now()
-        petStateCache = stateStore.apply(StateEvent.USER_REPLIED)
-        noteUserInitiated()
-        if (c.userReply == null) stats.add(Stats.Kind.REPLIED)
-        c.userReply = said
-
-        // 学习场景按住角色说话：直接拉 Gemini 同桌
-        if (fromHold && c.decision.scene == Scene.LEARNING) {
-            bridgeText(c)
-            return
-        }
-        if (c.petReply != null) return // 已经聊满两轮
-        replyRound(c, said)
-    }
-
-    private fun replyRound(c: Conversation, said: String) {
-        val key = apiKey()
-        val canCall = key != null && c.opening.isNotEmpty() &&
-            app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()) > 0
-        overlay.setMood(Mood.THINKING)
-        overlay.showBubble(BubbleSpec("……", textOnly = true))
-        probeJob = scope.launch {
-            var text: String? = null
-            var mood = Mood.IDLE
-            if (canCall && app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
-                stats.add(Stats.Kind.API_CALLS)
-                val (messages, inputVersion) = withContext(Dispatchers.IO) {
-                    synchronized(app.memoryLock) {
-                        val changed = c.inputVersion != null && c.inputVersion != memoryVersion()
-                        val hook = c.reply.hookText.takeUnless { changed || memory.forgottenMatches(it) }.orEmpty().ifEmpty { "嗯？" }
-                        ProbePrompt.reply(buildOpeningSync(c.decision, said), hook, said) to memoryVersion()
-                    }
-                }
-                val r = app.client.complete(
-                    ChatRequest(settings.endpoint, settings.model, key!!, messages, maxTokens = ProbePrompt.REPLY_MAX_TOKENS, timeoutMillis = ProbePrompt.TIMEOUT_MILLIS),
-                )
-                val unchanged = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { inputVersion == memoryVersion() } }
-                val parsed = if (unchanged) (r as? ChatResult.Success)?.let { ProbeReplyParser.parse(it.content) } else null
-                if (unchanged && r is ChatResult.Success && parsed == null) noteBadFormat()
-                if (parsed != null && !parsed.skip && !ContentGuard.violates(parsed.hookText)) {
-                    text = parsed.hookText
-                    mood = parsed.mood
-                }
-            }
-            if (convo !== c || c.ended) return@launch
-            // 调用失败不弹错误：点点头收尾
-            val final = text ?: "嗯，我听到了。"
-            c.petReply = final
-            c.petReplyAt = now()
-            overlay.setMood(mood)
-            overlay.setTalking(true)
-            if (settings.ttsEnabled) speech.say(final)
-            overlay.showBubble(BubbleSpec(final, textOnly = true)) {
-                overlay.setTalking(false)
-                closeLater(c, 5000)
-            }
-        }
+        partner.send(said, if (listeningFromHold || fromHold) cn.companion.pet.core.partner.TurnChannel.VOICE else cn.companion.pet.core.partner.TurnChannel.TYPED)
     }
 
     private fun closeLater(c: Conversation, delayMillis: Long) {
