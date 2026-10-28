@@ -45,6 +45,8 @@
         android:theme="@style/Theme.CompanionPet"
         android:usesCleartextTraffic="false">
 
+        <activity android:name=".ui.ChatActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
+
         <activity android:name=".CapabilityActivity" android:exported="false" />
 
         <!-- 文字输入页：拥有正常窗口令牌，输入法才能用用户自己的键盘与剪贴板。 -->

@@ -17,6 +17,8 @@ import android.speech.SpeechRecognizer
 class VoiceInput(private val context: Context) {
     private var recognizer: SpeechRecognizer? = null
     private var partial = ""
+    var lastUncertain = false
+        private set
     private var callback: ((String?) -> Unit)? = null
 
     /** 上一次失败的系统错误码；成功或重新开始时清空。用于告诉用户真正的原因，而不是一律“没听清”。 */
@@ -31,6 +33,7 @@ class VoiceInput(private val context: Context) {
     fun start(onResult: (String?) -> Unit) {
         cancel()
         lastError = null
+        lastUncertain = false
         if (!available) { onResult(null); return }
         partial = ""
         callback = onResult
@@ -40,12 +43,14 @@ class VoiceInput(private val context: Context) {
         r.setRecognitionListener(object : RecognitionListener {
             override fun onResults(results: Bundle?) {
                 val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                lastUncertain = text.isNullOrBlank() || (results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)?.firstOrNull()?.let { it in 0f..0.55f } == true)
                 finish(text?.takeIf { it.isNotBlank() } ?: partial.takeIf { it.isNotBlank() })
             }
             override fun onPartialResults(partialResults: Bundle?) {
                 partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { partial = it }
             }
             override fun onError(error: Int) {
+                lastUncertain = true
                 if (partial.isBlank()) lastError = error
                 finish(partial.takeIf { it.isNotBlank() })
             }

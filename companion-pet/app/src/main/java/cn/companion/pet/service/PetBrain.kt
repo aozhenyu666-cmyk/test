@@ -1354,7 +1354,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         if (partnerBusy() != null || !active) return false
         overlay.setMood(Mood.CURIOUS)
         return overlay.showBubble(BubbleSpec(text, showMic = systemVoice, showGemini = false, instant = true,
-            extra = if (menu) listOf(
+            extra = listOf(BubbleAction("展开聊天", highlighted = true) { overlay.hideBubble(); cn.companion.pet.ui.ChatActivity.open(context) }) + if (menu) listOf(
                 BubbleAction("开始陪练") { partner.away(); openTraining() },
                 BubbleAction("想一想") { partner.away(); openThinkMenu() },
                 BubbleAction("记个念头") { partner.away(); startNote() },
