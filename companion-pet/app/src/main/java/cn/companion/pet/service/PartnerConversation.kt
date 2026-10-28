@@ -79,7 +79,18 @@ class PartnerConversation(private val app: PetApp) {
         mutableProposal.value = null
         mutableSession.value?.let { update(rules.close(it.copy(turns = emptyList(), summary = ""), "记忆已更新，重新开始")) }
     }
-    fun dueThreads(at: Long): List<TopicCandidate> {
+    suspend fun dueThreads(at: Long): List<TopicCandidate> {
+        val invalid = withContext(Dispatchers.IO) {
+            synchronized(app.memoryLock) {
+                val visibility = cn.companion.pet.core.companion.EventVisibility(app.events.all(), app.memory.tombstones(), at)
+                visibility.invalidSourceIds + app.facts.all().filter { !visibility.allows(it) }.map { it.id }
+            }
+        }
+        var changed = false
+        book.all.filter { t -> t.sourceRefs.any { it in invalid } && t.status != ThreadStatus.CLOSED }.forEach {
+            book.close(it.id, "来源已失效"); changed = true
+        }
+        if (changed) saveThreads()
         pendingFollowUp?.let { (id, shownAt) ->
             if (at - shownAt >= governor.answerWindowMillis(if (app.settings.partnerRiding) UsageContext.RIDING else UsageContext.UNKNOWN)) {
                 book.onFollowUpIgnored(id, at); pendingFollowUp = null; saveThreads()
@@ -94,6 +105,26 @@ class PartnerConversation(private val app: PetApp) {
         pendingFollowUp = candidate.threadId to now()
         saveThreads()
     }
+    private suspend fun retainQuotedMaterial(candidate: TopicCandidate, reply: PartnerReply) {
+        if (candidate.source !in listOf(TopicSource.SCREEN_TEXT, TopicSource.SCREEN_IMAGE)) return
+        val quote = reply.anchorQuote.trim().take(140)
+        // Only the exact quoted fragment survives; never the whole observation or screenshot.
+        if (quote.length < 8 || !candidate.anchor.contains(quote)) return
+        val sourceApp = cn.companion.pet.a11y.PerceptionHub.trail.foreground.orEmpty()
+        val material = withContext(Dispatchers.IO) {
+            val result = app.materialInbox.save(cn.companion.pet.core.companion.MaterialDraft(
+                title = quote.take(60), body = quote, source = "partner:$sourceApp"))
+            when (result) {
+                is cn.companion.pet.core.companion.MaterialSaveResult.Created -> result.material
+                is cn.companion.pet.core.companion.MaterialSaveResult.AlreadySaved -> result.material
+                else -> null
+            }
+        } ?: return
+        val thread = book.start("material-" + material.id, ThreadKind.MATERIAL, quote.take(60), 2, now(), listOf(material.sourceEventId))
+        book.onUserTurn(thread.id, now(), "摘录（" + sourceApp + "）：" + quote)
+        saveThreads()
+    }
+
     private fun acceptMetadata(reply: PartnerReply, userText: String, uncertain: Boolean, version: String) {
         if (uncertain || lastUserEventId.isBlank()) return
         var threadId = mutableSession.value?.threadId.orEmpty()
@@ -167,6 +198,7 @@ class PartnerConversation(private val app: PetApp) {
                     if (candidate.id.startsWith("vi-")) app.voiceQueue.markSpoken(candidate.id, at)
                     mutableShown.value = (listOf(Trace(at, candidate.source.name, candidate.anchor.take(100))) + mutableShown.value).take(5)
                     followedUp(candidate)
+                    retainQuotedMaterial(candidate, reply)
                     onProactiveShown?.invoke(candidate)
                     if (app.settings.ttsEnabled && !app.settings.partnerRiding) app.speech.say(reply.say)
                 } else noteBlocked("输出界面未显示")
@@ -281,7 +313,7 @@ class PartnerConversation(private val app: PetApp) {
     }
 
     private fun memoryVersion(): String = synchronized(app.memoryLock) {
-        app.facts.versionHash() + app.memory.tombstones().sorted().joinToString("|")
+        app.facts.versionHash() + app.materialInbox.versionHash() + app.memory.tombstones().sorted().joinToString("|")
     }
     private fun now() = System.currentTimeMillis()
 }
