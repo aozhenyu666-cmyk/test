@@ -9,7 +9,6 @@ import android.view.inputmethod.InputMethodManager
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import com.yishou.app.YishouApp
-import com.yishou.app.stats.DayStats
 import com.yishou.app.system.Notifications
 import com.yishou.app.system.ExternalGrace
 import com.yishou.app.log.RunLog
@@ -21,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
@@ -42,8 +42,8 @@ class GateService : AccessibilityService() {
     private val foregroundPkg get() = foregroundTracker.current
     private var watchJob: Job? = null
     private val querying = mutableSetOf<String>()
-    private var lastLaunchPkg: String? = null
-    private var lastLaunchAt = 0L
+    private val launchDebounce = GateLaunchDebounce()
+    private val pagePrompt by lazy { PagePrompt(this) }
     /** 放行到期时再检查一次：到期时还停留在该应用，就弹出思考页 */
     private var expiryCheck: Job? = null
 
@@ -96,7 +96,7 @@ class GateService : AccessibilityService() {
                 delay(1_000)
                 val awake = getSystemService(android.os.PowerManager::class.java).isInteractive
                 val locked = getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
-                if (awake && !locked && !GateActivity.isShowing) foregroundPkg?.takeIf { it != packageName }?.let(::check)
+                if (awake && !locked && foregroundTracker.canEnforce && !GateActivity.isShowing) foregroundPkg?.takeIf { it != packageName }?.let(::check)
             }
         }
     }
@@ -128,13 +128,31 @@ class GateService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        try {
+            onWindow(event)
+        } catch (e: Exception) {
+            _problem.value = "这次应用切换没能处理，正在等待下一次检查"
+            RunLog.e("收费站", "处理应用切换失败", e)
+        }
+    }
+
+    private fun onWindow(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
+        if (pkg == packageName && pagePrompt.showingOverlay && !GateActivity.isShowing) return
+        // 旧题页关闭后可能迟到一条窗口事件，不能把刚打开的目标应用覆盖成“一手在前台”。
+        if (pkg == packageName && event.className?.toString() == GateActivity::class.java.name && !GateActivity.isShowing) return
         val systemPackages = systemAllowed()
         val transient = pkg != packageName && pkg !in homes && (pkg in systemPackages || pkg in WindowRules.STATIC_SYSTEM)
         foregroundTracker.update(pkg, transient)
+        launchDebounce.onForeground(foregroundPkg)
+        Log.d(TAG, "窗口包名=$pkg，当前=$foregroundPkg，做题页=${GateActivity.isShowing}")
         _lastPackage.value = foregroundPkg
         app.partner.foreground(pkg)
+        if (!foregroundTracker.canEnforce) {
+            pagePrompt.dismiss()
+            return
+        }
         if (pkg == packageName) {
             ExternalGrace.close()
             return
@@ -143,6 +161,7 @@ class GateService : AccessibilityService() {
     }
 
     private fun check(pkg: String) {
+        if (!foregroundTracker.canEnforce) return
         if (app.partner.allows(pkg)) {
             shortCheck?.cancel()
             shortPkg = null
@@ -173,7 +192,7 @@ class GateService : AccessibilityService() {
         val group = prefs.groupOf(pkg) ?: return
         if (GateActivity.isShowing) return
         // 同一个应用打开时会连续发出好几次切换事件，2 秒内只处理一次
-        if (pkg == lastLaunchPkg && now - lastLaunchAt < 2_000) return
+        if (!launchDebounce.ready(pkg, android.os.SystemClock.elapsedRealtime())) return
 
         if (!querying.add(pkg)) return
         scope.launch {
@@ -200,19 +219,35 @@ class GateService : AccessibilityService() {
     }
 
     private fun launchGate(pkg: String, group: String, now: Long) {
+        if (!foregroundTracker.canEnforce) return
         if (GateActivity.isShowing) return
-        if (pkg == lastLaunchPkg && now - lastLaunchAt < 2_000) return
-        lastLaunchPkg = pkg
-        lastLaunchAt = System.currentTimeMillis()
-        app.stats.event(if (group == GateActivity.WINDOW_GROUP) DayStats.WINDOW_BLOCK else DayStats.GATE_SHOWN)
-        try {
-            startActivity(GateActivity.intent(this@GateService, pkg, group))
-            _problem.value = null
-        } catch (e: Exception) {
-            _problem.value = "没能弹出收费站，请在系统设置里允许后台弹出界面"
-            RunLog.e("收费站", "无法打开思考页", e)
-            Log.e(TAG, "无法打开思考页", e)
-        }
+        val nowMono = android.os.SystemClock.elapsedRealtime()
+        if (!launchDebounce.ready(pkg, nowMono)) return
+        launchDebounce.launched(pkg, nowMono)
+        Log.i(TAG, "请求做题页：$pkg")
+        pagePrompt.open(
+            targetKey = "$pkg/$group",
+            target = GateActivity.intent(this, pkg, group),
+            title = "先回一手完成入口思考",
+            visible = { GateActivity.isShowing },
+            relevant = {
+                val awake = getSystemService(android.os.PowerManager::class.java).isInteractive
+                val unlocked = !getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
+                val current = app.settings.app.value
+                awake && unlocked && foregroundTracker.canEnforce &&
+                    (foregroundPkg == pkg || foregroundPkg == packageName) && !app.partner.allows(pkg) &&
+                    (current.groupOf(pkg) == group || (group == GateActivity.WINDOW_GROUP &&
+                        WindowClock.active(System.currentTimeMillis(), current, AppZone.zone) != null &&
+                        WindowRules.decide(pkg, current, systemAllowed(), System.currentTimeMillis()) != WindowRules.Decision.ALLOW))
+            },
+            onShown = {
+                _problem.value = null
+            },
+            onFallback = {
+                _problem.value = "做题页没有自动打开，已显示处理入口。请检查系统的后台弹出界面设置"
+                RunLog.e("收费站", "做题页启动后没有到前台", IllegalStateException("未收到页面显示确认"))
+            },
+        )
     }
 
     /** 微信、QQ 这类可以短暂切过去的：到时还停在这里就拉回陪练。 */
@@ -243,6 +278,9 @@ class GateService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onUnbind(intent: Intent?): Boolean {
+        pagePrompt.dismiss()
+        // 解绑后不能让旧的到期检查和查询继续启动页面；重新连接会重建检查。
+        scope.coroutineContext.cancelChildren()
         if (running === this) {
             running = null
             _connected.value = false
@@ -254,6 +292,7 @@ class GateService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        pagePrompt.dismiss()
         if (wakeRegistered) { unregisterReceiver(wakeReceiver); wakeRegistered = false }
 
         if (running === this) {
