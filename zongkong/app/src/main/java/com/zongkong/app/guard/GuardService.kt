@@ -295,7 +295,7 @@ class GuardService : AccessibilityService() {
             visible = { BlockActivity.isShowing },
             relevant = {
                 interactive() && !getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked &&
-                    fgPkg == pkg && pkg in store.config.value.blocked &&
+                    (fgPkg == pkg || fgPkg == packageName) && pkg in store.config.value.blocked &&
                     store.status().strict && !SentinelClient.released()
             },
             onShown = { runCatching { Diag.log(this, "page_visible", "已确认拦截页显示：$pkg") } },
