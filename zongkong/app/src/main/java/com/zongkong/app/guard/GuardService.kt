@@ -74,6 +74,7 @@ class GuardService : AccessibilityService() {
     private var releasedLogged = false
     private var lastStatusText = ""
     private var lastSync = 0L
+    private val pagePrompt by lazy { PagePrompt(this) }
 
     /** 输入法、系统界面：它们弹出来时不算切换应用。 */
     private var overlays: Set<String> = emptySet()
@@ -164,17 +165,19 @@ class GuardService : AccessibilityService() {
     private var lastSentinelWrite = 0L
 
     /**
-     * v2：和哨兵保持一次 v2 ping（最多 5 秒一次）。
+     * 和哨兵保持业务状态同步与 v2 ping（最多 5 秒一次）。
      *
-     * 注意这里**不再**把「总控在跑」当健康凭据推给哨兵 —— 那正是报告 §3.2 / §8 说的假在线。
+     * 业务名单用于拦截，不把「总控在跑」当健康凭据。
      * 健康由哨兵反过来发 `challenge`（[com.zongkong.app.healthwire.HealthWireProvider]），
      * 只有真的在 a11y 主线程上处理完才算 ack。
      */
     private fun beatSentinel(now: Long) {
         if (now - lastSentinelWrite < 5_000) return
         lastSentinelWrite = now
-        // 状态已在本地生效；哨兵的拦截由它自己按策略判断，这里只做一次连通性 ping。
-        runCatching { com.zongkong.app.guard.SentinelClient.refresh(this) }
+        // 名单是业务数据；恢复同步它不等于拿旧心跳替代 v2 健康证据。
+        val status = store.status(now)
+        SentinelClient.push(this, store.config.value.blocked, status.strict,
+            maxOf(store.config.value.pausedUntil, status.emergencyUntil ?: 0L), at = now)
     }
 
     private fun onWindow(event: AccessibilityEvent?) {
@@ -182,6 +185,7 @@ class GuardService : AccessibilityService() {
         // v2：登记一个「真的处理过的窗口事件」，供哨兵判断事件通道是否失灵（T03）。
         runCatching { com.zongkong.app.healthwire.GuardHealth.noteWindowEvent() }
         val pkg = event.packageName?.toString() ?: return
+        if (pkg == packageName && pagePrompt.showingOverlay && !BlockActivity.isShowing) return
         beatSentinel(System.currentTimeMillis())
         Log.d(TAG, "窗口切换：$pkg / ${event.className}")
         if (pkg in overlays()) return
@@ -284,11 +288,19 @@ class GuardService : AccessibilityService() {
         lastBounce = now
         store.updateToday(now) { DayOps.bounce(it) }
         runCatching { Diag.log(this, "bounce", "严管弹回 $pkg：${status.reasons.firstOrNull()?.text.orEmpty()}") }
-        try {
-            startActivity(BlockActivity.intent(this, pkg))
-        } catch (e: Exception) {
-            Log.e(TAG, "打不开拦截页", e)
-        }
+        pagePrompt.open(
+            targetKey = pkg,
+            target = BlockActivity.intent(this, pkg),
+            title = "总控规则已触发，请打开处理页",
+            visible = { BlockActivity.isShowing },
+            relevant = {
+                interactive() && !getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked &&
+                    fgPkg == pkg && pkg in store.config.value.blocked &&
+                    store.status().strict && !SentinelClient.released()
+            },
+            onShown = { runCatching { Diag.log(this, "page_visible", "已确认拦截页显示：$pkg") } },
+            onFallback = { runCatching { Diag.log(this, "page_not_visible", "自动跳转未确认，显示处理入口：$pkg") } },
+        )
     }
 
     private fun tick() {
@@ -508,6 +520,7 @@ class GuardService : AccessibilityService() {
     }
 
     private fun offline() {
+        pagePrompt.dismiss()
         // v2：**先**把健康台账里的实例/ack 作废，再判断 running。
         // 否则出现「进程还在、线程已经卡死」时，台账里还挂着一个旧 ack，界面就会显示成健康。
         runCatching { com.zongkong.app.healthwire.GuardHealth.onA11yDisconnected() }
@@ -515,7 +528,10 @@ class GuardService : AccessibilityService() {
         running = false
         runCatching { Diag.log(this, "offline", "无障碍服务离线（拦不住、看不到）") }
         // 告诉哨兵：总控这就下线了（v2：只做一次 ping 让哨兵立刻重探；不再靠心跳布尔判活）
-        runCatching { SentinelClient.push(this, store.config.value.blocked, true, store.config.value.pausedUntil, at = 0L) }
+        runCatching {
+            SentinelClient.push(this, store.config.value.blocked, true,
+                maxOf(store.config.value.pausedUntil, store.status().emergencyUntil ?: 0L), at = 0L)
+        }
         accountPlay(System.currentTimeMillis())
         store.logSwitch(System.currentTimeMillis(), com.zongkong.core.boss.Timeline.GAP)
         Notifications.showStatus(this, "总控已离线", "无障碍服务被关闭了。离线的时间会记成“失联”，写进日终验收。")
