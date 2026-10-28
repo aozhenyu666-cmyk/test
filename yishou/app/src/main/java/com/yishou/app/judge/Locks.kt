@@ -16,6 +16,52 @@ object Locks {
 
     private val SPLIT = Regex("[。；;！!？?\\n]+")
 
+    /** 解析里专门讲干扰项的那一句：“A项：……排除”“B项：……”。拿它当判据，等于用错误选项的理由判人 */
+    private val DISTRACTOR = Regex("^\\s*[A-DＡ-Ｄ]\\s*[项、.．：:）)]")
+
+    /** 只交代答案是哪个字母的句子：“故正确答案为D”“故选B”，没有可判的内容 */
+    private val ANSWER_ONLY = Regex("^\\s*(故)?\\s*(正确答案|答案|应选|选)\\s*[是为]?\\s*[A-DＡ-Ｄ]")
+
+    /** 题库常见的来源标注：“〔原书定位：…〕”“题本PDF第16页” */
+    private val META = Regex("原书定位|题本PDF|解析PDF|本题选自|资料来源")
+
+    /** 解析常常一整段只用一个句号收尾，句内全是逗号；这时按逗号再切才能拿到几条 */
+    private val CLAUSE = Regex("[，,]+")
+
+    /** 句尾“，对应D项”“，故答案为A”这类交代：判据里带着答案字母没意义，去掉再存 */
+    private fun stripAnswerRef(s: String): String = s
+        .replace(Regex("[，,、]?\\s*对应\\s*[A-DＡ-Ｄ]\\s*项?\\s*$"), "")
+        .replace(Regex("[，,、]?\\s*(故)?\\s*(正确)?答案[是为]?\\s*[A-DＡ-Ｄ]\\s*项?\\s*$"), "")
+        .trim()
+
+    /** 把小句均匀攒成最多 max 条：按顺序分，不丢内容 */
+    private fun pack(clauses: List<String>, max: Int): List<String> {
+        val groups = minOf(max, clauses.size)
+        if (groups <= 1) return clauses
+        return (0 until groups).map { i ->
+            clauses.subList(i * clauses.size / groups, (i + 1) * clauses.size / groups).joinToString("，")
+        }
+    }
+
+    /**
+     * 把解析拆成判据。干扰项分析、答案交代、出处标注都不算判据——
+     * 剔掉它们之后还够 2 条，这道题才进得了入口。
+     */
+    fun pointsFromExplain(explain: String): List<String> {
+        val sentences = explain.split(SPLIT)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !DISTRACTOR.containsMatchIn(it) && !ANSWER_ONLY.containsMatchIn(it) && !META.containsMatchIn(it) }
+            .map(::stripAnswerRef)
+            .filter { Words.substance(it) >= 6 }
+            .distinct()
+        if (sentences.size >= 2) return sentences.take(4)
+        // 整段只有一句（主旨题解析常这样）：按逗号切成小句，再攒回 2–4 条
+        val clauses = sentences.flatMap { it.split(CLAUSE) }
+            .map { it.trim() }
+            .filter { Words.substance(it) >= 4 }
+        return if (clauses.size >= 2) pack(clauses, 4) else sentences.take(4)
+    }
+
     /**
      * 题库题转锁题。解析拆不出 2 个像样的要点（每个至少 6 个实在字）就返回 null，这道题不进入口。
      * 选项先藏着，所以题面要说清楚先说什么。
@@ -29,7 +75,7 @@ object Locks {
         explain: String,
         hint: String = "",
     ): LockedQ? {
-        val parts = explain.split(SPLIT).map { it.trim() }.filter { Words.substance(it) >= 6 }.distinct().take(4)
+        val parts = pointsFromExplain(explain)
         if (parts.size < 2) return null
         val points = parts.mapIndexed { i, c -> Point("P${i + 1}", c, hint) }
         val prompt = buildString {
