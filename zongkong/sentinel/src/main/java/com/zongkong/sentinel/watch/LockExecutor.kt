@@ -52,17 +52,19 @@ class LockExecutor(private val context: Context) {
     }
 
     /** 一次性读回可观测事实；读不到返回 null（→ UNVERIFIED，绝不是成功）。 */
-    fun facts(): KeyguardFacts? = try {
-        val km = keyguard ?: return null
-        KeyguardFacts(
-            keyguardShowing = km.isKeyguardLocked,
-            deviceLocked = km.isDeviceLocked,
-            secureLockSet = km.isDeviceSecure,
-            interactive = power?.isInteractive ?: true,
-        )
-    } catch (e: Throwable) {
-        Log.w(TAG, "读锁屏状态失败", e)
-        null
+    fun facts(): KeyguardFacts? {
+        return try {
+            val km = keyguard ?: return null
+            KeyguardFacts(
+                keyguardShowing = km.isKeyguardLocked,
+                deviceLocked = km.isDeviceLocked,
+                secureLockSet = km.isDeviceSecure,
+                interactive = power?.isInteractive ?: true,
+            )
+        } catch (e: Throwable) {
+            Log.w(TAG, "读锁屏状态失败", e)
+            null
+        }
     }
 
     data class Outcome(

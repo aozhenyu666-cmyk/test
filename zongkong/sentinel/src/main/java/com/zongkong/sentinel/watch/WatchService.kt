@@ -125,6 +125,17 @@ class WatchService : Service() {
             try {
                 refreshSystemFacts()
                 val tick = scheduler.tick()
+                // 通过同 UID 的显式广播把异常交给仍可交互的无障碍服务。
+                // 不用跨进程 static，也不把“通知已发”算成页面已显示。
+                val mainStatus = tick.statuses[HealthStore.ZONGKONG]
+                val needsRepair = mainStatus == HealthStatus.DISABLED ||
+                    mainStatus == HealthStatus.UNRESPONSIVE || mainStatus == HealthStatus.RECOVERING
+                sendBroadcast(Intent(com.zongkong.sentinel.SentinelService.ACTION_HEALTH)
+                    .setPackage(packageName)
+                    .putExtra("known", health.get(HealthStore.ZONGKONG).registered)
+                    .putExtra("fault", if (needsRepair) "总控：${label(mainStatus!!)}" else "")
+                    .putExtra("emergency", emergencyActive()),
+                    com.zongkong.sentinel.SentinelService.HEALTH_PERMISSION)
                 for ((pkg, reason) in tick.needLock) {
                     val now = clock.now()
                     val policy = policies.load().doc.policies.firstOrNull { it.effective(now) }

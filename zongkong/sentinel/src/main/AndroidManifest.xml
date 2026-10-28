@@ -2,6 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <permission
+        android:name="com.zongkong.sentinel.permission.HEALTH_PRESENTATION"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.zongkong.sentinel.permission.HEALTH_PRESENTATION" />
+
     <!-- 总控掉线时提醒你；:watch 的前台通知也要它 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 自己把总控/三个客户端的无障碍服务重新挂上：要在电脑上 adb 授权一次；不授权就只拦、只提醒 -->
