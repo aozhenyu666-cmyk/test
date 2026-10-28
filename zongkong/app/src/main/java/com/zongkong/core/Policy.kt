@@ -279,6 +279,18 @@ object Policy {
 
     // ---------- 待生效 ----------
 
+    fun setTakeover(config: Config, next: com.zongkong.core.control.TakeoverConfig, now: Long): Outcome {
+        if (!next.valid()) return Outcome(config)
+        val base = config.copy(pending = config.pending.filterNot { it.op is ChangeOp.Takeover })
+        val old = config.takeover
+        if (old == next) return Outcome(base)
+        val looser = old.enabled && (!next.enabled || next.waitMin > old.waitMin || next.waitMax > old.waitMax ||
+            next.durationMin < old.durationMin || next.durationMax < old.durationMax)
+        val summary = if (next.enabled) "强督导：等待 ${next.waitMin}–${next.waitMax} 分钟，接管 ${next.durationMin}–${next.durationMax} 分钟" else "关闭无回应强督导"
+        return if (looser) Outcome(base.queue(ChangeOp.Takeover(next), summary, now), later = listOf(summary))
+        else Outcome(base.copy(takeover = next), now = listOf(summary))
+    }
+
     fun cancel(config: Config, id: String): Config = config.copy(pending = config.pending.filterNot { it.id == id })
 
     /** 把到点的放宽改动应用上。没有到点的原样返回。 */
@@ -291,6 +303,7 @@ object Policy {
     }
 
     fun apply(c: Config, op: ChangeOp): Config = when (op) {
+        is ChangeOp.Takeover -> c.copy(takeover = op.config)
         is ChangeOp.PutGate -> c.copy(
             gates = if (c.gates.any { it.id == op.gate.id }) c.gates.map { if (it.id == op.gate.id) op.gate else it } else c.gates + op.gate,
         )

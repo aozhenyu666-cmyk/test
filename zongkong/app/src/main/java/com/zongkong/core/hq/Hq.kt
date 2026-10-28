@@ -32,6 +32,7 @@ enum class HqStep(val seal: String, val title: String, val dept: Dept?, val minM
 
 @Serializable
 enum class HqTrigger(val label: String) {
+    UNANSWERED("长期未回应，强督导"),
     SCHEDULED("每日总控时间"),
     MANUAL("自己进入"),
     ESCALATION("失联太久，强制进入"),
@@ -55,10 +56,12 @@ data class HqSession(
     /** 提前退出（紧急）。 */
     val early: Boolean = false,
     val earlyReason: String = "",
+    val suspendedUntil: Long = 0,
+    val deferredMillis: Long = 0,
 ) {
     val active: Boolean get() = endedAt == 0L
     val current: HqStep get() = HqStep.entries[step.coerceIn(0, HqStep.entries.lastIndex)]
-    val endsAt: Long get() = startedAt + minutes * 60_000L
+    val endsAt: Long get() = startedAt + minutes * 60_000L + deferredMillis
 }
 
 @Serializable
@@ -141,7 +144,10 @@ object Hq {
     fun doneToday(cfg: HqConfig, sessions: List<HqSession>, now: Long, zone: ZoneId): Boolean {
         val today = DayClock.dateKey(now, zone)
         val from = todayStart(cfg, now, zone) - 3 * 60 * 60_000L
-        return sessions.any { DayClock.dateKey(it.startedAt, zone) == today && !it.active && it.startedAt >= from }
+        return sessions.any {
+            DayClock.dateKey(it.startedAt, zone) == today && !it.active && it.startedAt >= from &&
+                !(it.trigger == HqTrigger.UNANSWERED && it.early)
+        }
     }
 
     enum class Due { NONE, SOON, NOW, OVERDUE }
@@ -171,19 +177,30 @@ object Hq {
     /** 这一环节最早什么时候能进下一环节。 */
     fun stepReadyAt(s: HqSession): Long = s.stepStartedAt + s.current.minMinutes * 60_000L
 
+    fun suspend(s: HqSession, now: Long, until: Long): HqSession {
+        if (!s.active || s.suspendedUntil > now || until <= now) return s
+        val delay = until - now
+        return s.copy(suspendedUntil = until, deferredMillis = s.deferredMillis + delay, stepStartedAt = s.stepStartedAt + delay)
+    }
+
+    fun resume(s: HqSession, now: Long): HqSession {
+        val unused = (s.suspendedUntil - now).coerceAtLeast(0)
+        return s.copy(suspendedUntil = 0, deferredMillis = s.deferredMillis - unused, stepStartedAt = s.stepStartedAt - unused)
+    }
+
     /**
      * 能不能进下一环节：时间到了，而且这一环节的事做了（[done] 由界面判断：清库清完、判断写了……）。
      * 收集箱是空的、没有要想的事，这些情况界面会传 done = true。
      */
-    fun canAdvance(s: HqSession, now: Long, done: Boolean): Boolean = now >= stepReadyAt(s) && done
+    fun canAdvance(s: HqSession, now: Long, done: Boolean): Boolean = now >= s.suspendedUntil && now >= stepReadyAt(s) && done
 
     fun advance(s: HqSession, now: Long, note: String = ""): HqSession {
         val notes = if (note.isBlank()) s.notes else s.notes + (s.current.name to note)
         return if (s.step >= HqStep.entries.lastIndex) s.copy(notes = notes) else s.copy(step = s.step + 1, stepStartedAt = now, notes = notes)
     }
 
-    /** 正常结束：要走到最后一个环节，并且整段时间到了（时间没到可以回去再修一轮）。 */
-    fun canFinish(s: HqSession, now: Long): Boolean = s.current == HqStep.SEAL && now >= finishAt(s)
+    /** 正常结束：走到最后一个环节并读完总结；缓行期间不能封存。 */
+    fun canFinish(s: HqSession, now: Long): Boolean = now >= s.suspendedUntil && s.current == HqStep.SEAL && now >= finishAt(s)
 
     /**
      * 最早什么时候能封存：在“封”这一步待满 20 秒（读一眼总结）。

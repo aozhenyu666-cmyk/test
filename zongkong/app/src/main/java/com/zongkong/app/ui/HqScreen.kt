@@ -137,14 +137,31 @@ fun HqScreen(nav: NavHostController) {
     val app = LocalContext.current.zk
     val book by app.store.hq.collectAsStateWithLifecycle()
     val session = book.active
+    val now = rememberNow(1_000)
     var finished by remember { mutableStateOf<String?>(null) }
     // 封存会移除 HqRun，验收协程必须由仍在显示的总控页持有。
     val finishScope = rememberCoroutineScope()
+    // 页面本身也兜底收掉到时的强督导，避免后台服务掉线后一直留在不可返回的页面。
+    LaunchedEffect(session?.id, session?.endsAt) {
+        if (session?.trigger == HqTrigger.UNANSWERED) {
+            kotlinx.coroutines.delay((session.endsAt - System.currentTimeMillis()).coerceAtLeast(0))
+            com.zongkong.app.system.TakeoverRunner.check(app)
+        }
+    }
     // 总控时间里按返回键不离开（做完才解锁）
-    BackHandler(enabled = session != null) {}
+    BackHandler(enabled = session != null && now >= session.suspendedUntil) {}
     NightSky(Modifier.fillMaxSize().testTag("hq-screen")) {
         when {
             finished != null -> HqDone(finished!!, nav)
+            session != null && now < session.suspendedUntil -> Column(
+                Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp),
+            ) {
+                Text("总控时间暂时缓行", color = Night.ink, style = MaterialTheme.typography.headlineSmall)
+                Text("${mmss(session.suspendedUntil - now)} 后恢复。环节进度保留，未算完成，其他任务和限制继续生效。", color = Night.dim)
+                Button(onClick = { app.actions.control.resumeHq() }) { Text("现在继续") }
+                TextButton(onClick = { nav.navigate("control") }) { Text("查看补交清单", color = Night.glow) }
+                TextButton(onClick = { nav.navigate("home") }) { Text("回到今天", color = Night.glow) }
+            }
             session != null -> HqRun(session, nav) { summary ->
                 finishScope.launch { finished = app.actions.hq.finish(summary) }
             }
@@ -305,7 +322,7 @@ private fun HqRun(s: HqSession, nav: NavHostController, onFinish: (String) -> Un
                 modifier = Modifier.fillMaxWidth().height(56.dp).testTag("hq-seal"),
                 shape = RoundedCornerShape(18.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = btnColor, contentColor = btnText, disabledContainerColor = btnColor, disabledContentColor = btnText),
-            ) { Text(if (finishing) "封存中…" else if (can) "封存，解锁" else if (s.endsAt > now) "还有 ${mmss(s.endsAt - now)}：点上面的印章回去再修一轮" else "读一眼总结，${mmss(Hq.finishAt(s) - now)} 后就能封存") }
+            ) { Text(if (finishing) "封存中…" else if (can) "封存，解锁" else "读一眼总结，${mmss(Hq.finishAt(s) - now)} 后就能封存") }
         } else {
             val timeOk = readyIn <= 0
             val btnColor by animateColorAsState(if (timeOk && stepDone) Night.glow else Night.card, tween(260), label = "hqNext")
@@ -326,7 +343,8 @@ private fun HqRun(s: HqSession, nav: NavHostController, onFinish: (String) -> Un
                 )
             }
         }
-        TextButton(onClick = { exiting = true }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("紧急退出", color = Night.dim) }
+        DeferButton(com.zongkong.core.control.DeferralKind.HQ, s.id)
+        if (s.trigger != HqTrigger.UNANSWERED) TextButton(onClick = { exiting = true }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("紧急退出", color = Night.dim) }
     }
 
     if (exiting) {

@@ -84,6 +84,10 @@ object SelfHeal {
         if (runCatching { GuardHealth.init(context) }.getOrNull() == null) return
         val permissionEnabled = GuardHealth.permissionEnabled(context)
         val v: HealthVerdict = GuardHealth.verdict(permissionEnabled)
+        // 只要此刻有无障碍实例，就算「我们确实被系统挂载过」——比「跑出过 HEALTHY」更早成立。
+        // 装完新版本、系统把服务摘掉之前，它通常先连上过一次；用这个当证据，
+        // 才不至于因为「还没跑出过 HEALTHY」就把这一次摘除当成「用户还没开启」。
+        if (GuardHealth.instanceId != null) markEverRan(context)
         logStateChange(context, v)
 
         when (v.status) {
@@ -92,7 +96,8 @@ object SelfHeal {
                 if (v.action == HealthAction.NONE) GuardHealth.endRecovery()
                 reminded = false
                 // 见过自己在正常运行：以后「设置里突然没有我」才有依据判断是系统摘的。
-                everRan = true
+                // 落盘：装完新版本系统顺手摘掉的那一刻，进程刚好是重启的，内存标志会丢。
+                markEverRan(context)
                 // 恢复正常：把「未接入」那条通道的计数一起清零。
                 // 不清的话，头三次故障就用掉了全部预算，之后真正的掉线再也修不了。
                 resetUnregBudget()
@@ -175,13 +180,34 @@ object SelfHeal {
      * 两条都成立才认定「是系统摘的」。判错的方向是「多修一次」，不会把用户主动关的打开，
      * 因为用户主动关一般会把总开关一起关掉。
      */
-    @Volatile private var everRan = false
+    /**
+     * 我们到底有没有见过自己在正常运行。
+     *
+     * **必须落盘**：真机上踩到的坑——这个标志原来只在内存里，而「装完新版本，
+     * 系统顺手把无障碍从列表里摘掉」这件事恰恰发生在进程重启的那一刻。
+     * 于是重启后 `everRan=false`，判定「从没跑过就不算被摘掉」，永远不修，
+     * 表现就是「更新完总控，无障碍就一直显示开着但没在运行」。
+     * 存进 SharedPreferences 之后，只要历史上真的跑过，重启也认得。
+     */
+    private const val PREF = "selfheal"
+    private const val K_EVER_RAN = "ever_ran"
+
+    private fun everRan(context: Context): Boolean =
+        runCatching { context.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean(K_EVER_RAN, false) }
+            .getOrDefault(false)
+
+    private fun markEverRan(context: Context) {
+        runCatching {
+            val p = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            if (!p.getBoolean(K_EVER_RAN, false)) p.edit().putBoolean(K_EVER_RAN, true).apply()
+        }
+    }
 
     private fun systemRemovedUs(context: Context): Boolean {
         val masterOn = runCatching {
             android.provider.Settings.Secure.getInt(context.contentResolver, android.provider.Settings.Secure.ACCESSIBILITY_ENABLED) == 1
         }.getOrDefault(false)
-        return systemRemoved(everRan, masterOn)
+        return systemRemoved(everRan(context), masterOn)
     }
 
     /**

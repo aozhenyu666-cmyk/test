@@ -42,6 +42,7 @@ class Actions(private val context: Context, private val store: Store) {
 
     /** 总控时间。 */
     val hq = HqActions(context, store, this)
+    val control = ControlActions(context, store, this)
 
     /** 脉络：谋划思考部的知识结构。 */
     val vein = VeinActions(context, store)
@@ -50,11 +51,14 @@ class Actions(private val context: Context, private val store: Store) {
     val device = DeviceActions(context, store, notion)
 
     /** 今天的清单（照记录列的，不评判）。 */
-    fun dayReport(now: Long = System.currentTimeMillis()): com.zongkong.core.plan.DayReport.Report =
-        com.zongkong.core.plan.DayReport.build(
+    fun dayReport(now: Long = System.currentTimeMillis()): com.zongkong.core.plan.DayReport.Report {
+        store.refresh(now)
+        return com.zongkong.core.plan.DayReport.build(
             store.work.value, store.plans.value, store.today.value, store.hq.value.sessions,
             store.dossier.value, store.device.value.pc, now, store.zone, store.ledger.value,
+            store.config.value, store.control.value,
         )
+    }
 
     /** 交日终验收：清单 + 明天第一步 + 一句话（可空）。没开放 / 交过了就只记下。 */
     suspend fun submitDayList(tomorrow: String, extra: String = ""): SubmitResult {
@@ -193,6 +197,38 @@ class Actions(private val context: Context, private val store: Store) {
         if (verdict.pass) {
             store.clearDraft(gateId)
             sync()
+        }
+    }
+
+    /** 补交保留原关卡快照和日期；不会把今天同名关卡也判为通过。 */
+    suspend fun submitDeferred(id: String, text: String): SubmitResult {
+        val d = store.control.value.deferrals.firstOrNull { it.id == id && it.resolvedAt == 0L }
+            ?: return SubmitResult.Refused("这项已经补交或不存在")
+        val gate = d.gate ?: return SubmitResult.Refused("请回到原任务完成")
+        val now = System.currentTimeMillis()
+        val original = store.day(d.date)
+        if (original.passed(gate.id) != null) {
+            store.updateControl { com.zongkong.core.control.Control.resolve(it, setOf(id), now) }
+            return SubmitResult.Refused("原日期的关卡已验收")
+        }
+        val cfg = store.config.value.copy(gates = listOf(gate))
+        val status = com.zongkong.core.Engine.evaluate(cfg, original, now, store.zone, dateOverride = d.date)
+        if (gate.verify == VerifyMode.EVIDENCE && cfg.notion.workReady) work.sync()
+        val yishou = if (gate.evidence == com.zongkong.core.work.Focus.Evidence.YISHOU_SETS.name) YishouClient.status(context) else null
+        val facts = Facts.build(status, original, store.zone) + "\n这是原日期任务的迟交；当前证据用于补交验收，不代表当日已完成。"
+        return when (val result = verifier.verify(gate, text, cfg, LocalDate.parse(d.date), store.zone, facts, evidenceOf(yishou))) {
+            is VerifyOutcome.Unavailable -> SubmitResult.Unavailable(result.reason, 0)
+            is VerifyOutcome.Done -> {
+                store.updateDay(d.date) { day ->
+                    if (day.passed(gate.id) != null) day else DayOps.submit(day, status.gates.first(), text, result.verdict, now)
+                }
+                if (result.verdict.pass) {
+                    store.updateControl { com.zongkong.core.control.Control.resolve(it, setOf(id), now) }
+                    store.touch()
+                    sync()
+                }
+                SubmitResult.Judged(result.verdict)
+            }
         }
     }
 

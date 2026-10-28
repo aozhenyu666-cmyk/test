@@ -1,0 +1,76 @@
+name: zongkong-versioned-release
+
+# 从已经通过完整 Android 验证的构建发布固定版本，防止不同分支反复覆盖 latest。
+on:
+  push:
+    branches: [zongkong-0.9-upgrade]
+    paths: [.github/workflows/zongkong-versioned-release.yml]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 已通过 zongkong-android 的 run ID（留空取本分支最近成功构建）
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: zongkong-versioned-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REQUESTED_RUN_ID: ${{ inputs.run_id }}
+    steps:
+      - name: Publish the verified Android APK with its actual version
+        shell: python
+        run: |
+          import hashlib, json, os, pathlib, re, subprocess
+
+          def gh(*args):
+              return subprocess.check_output(["gh", *args], text=True).strip()
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          branch = os.environ["GITHUB_REF_NAME"]
+          run_id = os.environ.get("REQUESTED_RUN_ID", "").strip()
+          if not run_id:
+              runs = json.loads(gh("api", f"repos/{repo}/actions/workflows/zongkong-android.yml/runs?branch={branch}&status=success&per_page=1"))
+              run_id = str(runs["workflow_runs"][0]["id"])
+          assert run_id.isdigit(), "Invalid run ID"
+          run = json.loads(gh("api", f"repos/{repo}/actions/runs/{run_id}"))
+          assert run["conclusion"] == "success", "Android verification has not passed"
+          assert run["path"] == ".github/workflows/zongkong-android.yml", "Unexpected workflow"
+          assert run["head_branch"] == branch, "Unexpected source branch"
+          assert run["head_repository"]["full_name"] == repo, "Unexpected source repository"
+          sha = run["head_sha"]
+          gh("run", "download", run_id, "--repo", repo, "--name", "zongkong-debug-apk", "--dir", "verified-apks")
+          apk = pathlib.Path("verified-apks/debug/app-debug.apk")
+          aapt = sorted((pathlib.Path(os.environ["ANDROID_HOME"]) / "build-tools").glob("*/aapt"))[-1]
+          badging = subprocess.check_output([str(aapt), "dump", "badging", str(apk)], text=True).splitlines()[0]
+          assert "name='com.zongkong.app'" in badging, "Unexpected Android package"
+          version = re.search(r"versionName='([^']+)'", badging).group(1)
+          code = re.search(r"versionCode='([0-9]+)'", badging).group(1)
+          assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version), "Invalid version"
+          tag = f"zongkong-{version}"
+          release_apk = pathlib.Path("zongkong.apk")
+          release_apk.write_bytes(apk.read_bytes())
+          digest = hashlib.sha256(release_apk.read_bytes()).hexdigest()
+          notes = pathlib.Path("release-notes.md")
+          notes.write_text(f"总控 **{version}（内部版本号 {code}）**。\n\n"
+              f"来自已通过完整验证的提交 `{sha}`，保留该提交的全部功能；沿用固定签名，可覆盖旧版。"
+              f"\n\n[单元、界面、拦截验证]({run['html_url']})。\n\nAPK SHA-256：`{digest}`。\n", encoding="utf-8")
+          existing = subprocess.run(["gh", "release", "view", tag, "--repo", repo, "--json", "targetCommitish,assets"], capture_output=True, text=True)
+          if existing.returncode == 0:
+              release = json.loads(existing.stdout)
+              assert release["targetCommitish"] == sha, "This version already refers to another commit"
+              if not any(a["name"] == "zongkong.apk" for a in release["assets"]):
+                  gh("release", "upload", tag, str(release_apk), "--repo", repo)
+          else:
+              gh("release", "create", tag, str(release_apk), "--repo", repo, "--target", sha,
+                 "--prerelease", "--title", f"总控 {version}：验证版", "--notes-file", str(notes))
+          print(f"Published {tag} / {code} from verified commit {sha}")

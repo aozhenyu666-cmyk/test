@@ -106,6 +106,7 @@ interface AgentEnv {
     fun updateLedger(f: (com.zongkong.core.ledger.LedgerBook) -> com.zongkong.core.ledger.LedgerBook): com.zongkong.core.ledger.LedgerBook = ledger()
     /** 今天的日记录（娱乐时长、被弹回、紧急放行）。 */
     fun dayLog(): com.zongkong.core.DayLog = com.zongkong.core.DayLog(today().toString())
+    fun controlBook(): com.zongkong.core.control.ControlBook = com.zongkong.core.control.ControlBook()
     /** [from, to] 的设备事件（含 from 之前最后一条）。 */
     fun deviceEvents(from: Long, to: Long): List<com.zongkong.core.boss.DevEvent> = emptyList()
     /** 现在能看到什么（使用情况授权、截图抽查开没开），写给总控看。 */
@@ -608,7 +609,7 @@ class ZkTools(private val env: AgentEnv) {
                 "get_thread" -> getThread(a)
                 "today_report" -> ToolResult(
                     com.zongkong.core.plan.DayReport.text(
-                        com.zongkong.core.plan.DayReport.build(env.work(), env.plans(), env.dayLog(), env.hqSessions(), env.dossier(), env.pcSide(), env.now(), env.zone, env.ledger()),
+                        com.zongkong.core.plan.DayReport.build(env.work(), env.plans(), env.dayLog(), env.hqSessions(), env.dossier(), env.pcSide(), env.now(), env.zone, env.ledger(), env.config(), env.controlBook()),
                     ),
                     "列了今天的清单",
                 )

@@ -82,6 +82,7 @@ fun SettingsScreen(nav: NavHostController) {
         )
 
         SectionLabel("互动")
+        MenuItem("强督导与一次缓行", "等待与接管范围、每日一次延后、跨日补交清单", "control", nav)
         MenuItem("总控怎么运转", "收→谋→筹→行→验；今天几点主动找你、信用怎么算、行动和记录怎么用", "flow", nav)
         MenuItem("对讲、语音、桌面宠物", "${if (config.voice.apiReady) "语音接口已接" else "用手机自带的语音"} · 主动程度：${com.zongkong.core.boss.BossConfig.INITIATIVE.getOrElse(config.boss.initiative) { "?" }} · ${com.zongkong.app.system.PetView.kindOf(config.boss.petKind).label}${if (config.boss.pet) "在桌面上" else "收起了"}", "voice/settings", nav)
         MenuItem(

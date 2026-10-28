@@ -113,6 +113,7 @@ fun NowScreen(nav: NavHostController) {
             .padding(horizontal = 20.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        ControlHomeCard(nav)
         // ---------- 问候 + 状态 ----------
         val d = Instant.ofEpochMilli(now).atZone(store.zone)
         // 远方：长期目标挂在最上面，一个一弯月亮

@@ -57,8 +57,11 @@ fun TodayScreen(nav: NavHostController) {
     val plans by app.store.plans.collectAsState()
     val today by app.store.today.collectAsState()
     val hq by app.store.hq.collectAsState()
-    val r = remember(work, plans, today, hq) { app.actions.dayReport() }
-    val status = remember(today) { app.store.status() }
+    val control by app.store.control.collectAsState()
+    val config by app.store.config.collectAsState()
+    val now = rememberNow()
+    val r = remember(work, plans, today, hq, control, config, now) { app.actions.dayReport(now) }
+    val status = remember(today, control, config, now) { app.store.status(now) }
     val gate = status.gates.firstOrNull { it.gate.id == "hq_review" }
     var tomorrow by remember { mutableStateOf("") }
     var line by remember { mutableStateOf("") }
@@ -74,6 +77,15 @@ fun TodayScreen(nav: NavHostController) {
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text(r.date, style = MaterialTheme.typography.labelLarge, color = sig.muted)
+            Panel {
+                Text("今天的关卡（包括日终总结）", style = MaterialTheme.typography.titleSmall)
+                r.gates.forEach { (title, state) -> Text("· $title：$state") }
+            }
+            if (r.deferred.isNotEmpty()) Panel {
+                Text("缓行与补交", style = MaterialTheme.typography.titleSmall)
+                r.deferred.forEach { (title, state) -> Text("· $title：$state") }
+                TextButton(onClick = { nav.navigate("control") }) { Text("去补交清单") }
+            }
             if (r.planned.isNotEmpty()) {
                 Text("排了的 · 做完 ${r.doneCount}/${r.planned.size}", style = MaterialTheme.typography.titleMedium)
             }
@@ -85,6 +97,7 @@ fun TodayScreen(nav: NavHostController) {
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 QuickChip("做完了", sig.free) { app.actions.work.complete(item.key, "清单上确认做完", WorkOps.Met.YES, "") }
                                 QuickChip("明天再做", sig.plan) { app.actions.work.reschedule(item.key, "明天 09:00") }
+                                DeferButton(com.zongkong.core.control.DeferralKind.ACTION, item.key)
                             }
                         }
                     }
@@ -118,6 +131,7 @@ fun TodayScreen(nav: NavHostController) {
 
             result?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = sig.hq) }
             if (gate != null && !gate.done) {
+                DeferButton(com.zongkong.core.control.DeferralKind.GATE, "hq_review")
                 BigButton(if (busy) "正在交…" else "交清单", {
                     if (busy) return@BigButton
                     busy = true

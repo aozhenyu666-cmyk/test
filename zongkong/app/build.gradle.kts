@@ -13,9 +13,12 @@ android {
         applicationId = "com.zongkong.app"
         minSdk = 26
         targetSdk = 34
-        // 修「无障碍老是挂掉、只能手点」：0.16.0 之后的自愈补丁
-        versionCode = 20
-        versionName = "0.16.1-a11y-selfheal"
+        // 两条线在这里合并：
+        //   0.10.1 线：主动性、强督导、娱乐靠做事挣
+        //   0.16.x 线：健康协议 v2、总控哨兵、低屏模式
+        //   + 本次：追问体系、自己补信息、无障碍自愈（0.16.1 那个补丁并进来了）
+        versionCode = 21
+        versionName = "0.17.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

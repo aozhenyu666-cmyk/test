@@ -67,6 +67,10 @@ data class AppPrefs(
     val pullBackMinutes: Int = 2,
     /** 白天一手停了这么多小时没人应，发通知叫回来；0 表示关 */
     val idleHours: Int = 3,
+    /** 主动叫你去走一手（按节奏判断，不是到点打卡）。 */
+    val proactiveEnabled: Boolean = true,
+    /** 今天还没走一手时，两次主动之间的基础间隔（分钟）；15–240。 */
+    val proactiveGapMinutes: Int = 60,
     /** 语音陪练：窗口里读完题自动听你说 */
     val voiceMode: Boolean = true,
     /** 听写完几秒后自动发出，0 表示不自动发、等你确认 */
@@ -140,6 +144,8 @@ data class AppPrefs(
         .put("pullBackEnabled", pullBackEnabled)
         .put("pullBackMinutes", pullBackMinutes)
         .put("idleHours", idleHours)
+        .put("proactiveEnabled", proactiveEnabled)
+        .put("proactiveGapMinutes", proactiveGapMinutes)
         .put("voiceMode", voiceMode)
         .put("voiceAutoSendSeconds", voiceAutoSendSeconds)
         .put("timeZone", timeZone)
@@ -240,6 +246,8 @@ data class AppPrefs(
                 pullBackEnabled = o.optBoolean("pullBackEnabled", d.pullBackEnabled),
                 pullBackMinutes = o.optInt("pullBackMinutes", d.pullBackMinutes).coerceIn(1, 15),
                 idleHours = o.optInt("idleHours", d.idleHours).coerceIn(0, 12),
+                proactiveEnabled = o.optBoolean("proactiveEnabled", d.proactiveEnabled),
+                proactiveGapMinutes = o.optInt("proactiveGapMinutes", d.proactiveGapMinutes).coerceIn(15, 240),
                 voiceMode = o.optBoolean("voiceMode", d.voiceMode),
                 voiceAutoSendSeconds = o.optInt("voiceAutoSendSeconds", d.voiceAutoSendSeconds).coerceIn(0, 10),
                 timeZone = o.optString("timeZone", d.timeZone).ifBlank { d.timeZone },

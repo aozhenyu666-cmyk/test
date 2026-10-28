@@ -355,6 +355,7 @@ class YishouApp : Application() {
         WindowScheduler.reschedule(this)
         Reminders.scheduleNudge(this)
         Reminders.scheduleIdle(this)
+        Reminders.scheduleInitiative(this)
         SummaryScheduler.schedule(this, replace = false)
 
         // v2：本地监管（健康事实 + 本地规则 + 有限兜底 + 哨兵连接）在自己的后台线程上跑，
