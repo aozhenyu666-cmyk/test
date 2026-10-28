@@ -12,6 +12,8 @@ class MemoryEdits(
     private val memory: MemoryStore,
     private val facts: FactStore,
     private val events: EventLog,
+    private val onForgotten: (String) -> Unit = {},
+    private val onCorrected: () -> Unit = {},
 ) {
     fun confirm(id: String): Fact? = synchronized(memory.lock) {
         val fact = facts.live().firstOrNull { it.id == id } ?: return null
@@ -31,6 +33,7 @@ class MemoryEdits(
         val corrected = facts.correct(id, clean, memory.tombstones(), listOf(correction.id)) ?: return null
         replaceProfile(facts.all().filter { it.factKey == old.factKey }.map { it.text },
             ProfileRules.SAID + " " + corrected.text)
+        onCorrected()
         corrected
     }
 
@@ -39,6 +42,7 @@ class MemoryEdits(
         val versions = facts.all().filter { it.factKey == old.factKey }
         facts.forget(id)
         versions.forEach { memory.addDeletedText(it.text) }
+        versions.forEach { onForgotten(it.id) }
         replaceProfile(versions.map { it.text }, null)
         events.append(EventKind.FORGET, old.text, source = "user",
             sourceIds = versions.flatMap { it.sourceEventIds }.distinct(), factKey = old.factKey)

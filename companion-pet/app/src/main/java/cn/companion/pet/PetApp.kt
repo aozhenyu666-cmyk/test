@@ -290,7 +290,9 @@ class PetApp : Application() {
         topics = TopicQueue(memory.root, events = events)
         materialInbox = MaterialInbox(memory.root, events, topics = topics, lock = memory.lock)
         materialInbox.purgeExpired()
-        memoryEdits = cn.companion.pet.core.memory.MemoryEdits(memory, facts, events)
+        memoryEdits = cn.companion.pet.core.memory.MemoryEdits(memory, facts, events,
+            onForgotten = { partner.forgetFact(it) },
+            onCorrected = { android.os.Handler(mainLooper).post { partner.invalidateMemory() } })
         nightly = NightlyStore(memory, events, facts = facts)
         budget = AtomicBudget(BudgetPrefs(this))
         thoughts = ThoughtNotes(File(memory.root, "notes"))

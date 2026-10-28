@@ -39,6 +39,91 @@ class PartnerConversation(private val app: PetApp) {
     var anchor = ""
     var anchorSource: TopicSource = TopicSource.SMALL_TALK
 
+    private val threadStore by lazy { ThreadBookStore(app.memory.root) }
+    private val book = threadStore.load()
+    private val mutableThreads = MutableStateFlow(book.all)
+    val threads: StateFlow<List<PartnerThread>> = mutableThreads
+    data class MemoryProposal(val text: String, val eventId: String, val threadId: String, val version: String)
+    private val mutableProposal = MutableStateFlow<MemoryProposal?>(null)
+    val proposal: StateFlow<MemoryProposal?> = mutableProposal
+    private var lastUserEventId = ""
+    private var pendingFollowUp: Pair<String, Long>? = null
+
+    private fun saveThreads() {
+        val snapshot = ThreadBook(book.all)
+        mutableThreads.value = book.all
+        writer.execute { threadStore.save(snapshot) }
+    }
+    fun pauseThread(id: String) { book.pause(id, now() + 24 * 3_600_000L); saveThreads() }
+    fun closeThread(id: String) { book.close(id, "用户不再聊"); saveThreads() }
+    fun deleteThread(id: String) {
+        book.close(id, "用户删除")
+        saveThreads()
+        invalidateMemory()
+    }
+    fun forgetFact(id: String) {
+        scope.launch {
+            book.onFactForgotten(id)
+            // A thread may still refer to the original user event rather than its confirmed fact.
+            val sourceIds = withContext(Dispatchers.IO) { app.facts.find(id)?.sourceEventIds.orEmpty() }
+            book.all.filter { t -> t.sourceRefs.any { it in sourceIds } }.forEach { book.close(it.id, "来源记忆已被删除") }
+            saveThreads()
+            invalidateMemory()
+        }
+    }
+    fun invalidateMemory() {
+        cancel()
+        anchor = ""
+        mutableProposal.value = null
+        mutableSession.value?.let { update(rules.close(it.copy(turns = emptyList(), summary = ""), "记忆已更新，重新开始")) }
+    }
+    fun dueThreads(at: Long): List<TopicCandidate> {
+        pendingFollowUp?.let { (id, shownAt) ->
+            if (at - shownAt >= governor.answerWindowMillis(if (app.settings.partnerRiding) UsageContext.RIDING else UsageContext.UNKNOWN)) {
+                book.onFollowUpIgnored(id, at); pendingFollowUp = null; saveThreads()
+            }
+        }
+        return book.due(at).map { t -> TopicCandidate(t.id, TopicSource.THREAD_FOLLOW_UP,
+            t.title + if (t.lastProgress.isNotBlank()) "\n上次原话：" + t.lastProgress else "", t.importance, t.createdAt, threadId = t.id) }
+    }
+    private fun followedUp(candidate: TopicCandidate) {
+        if (candidate.threadId.isBlank()) return
+        book.onPetFollowUpShown(candidate.threadId, now())
+        pendingFollowUp = candidate.threadId to now()
+        saveThreads()
+    }
+    private fun acceptMetadata(reply: PartnerReply, userText: String, uncertain: Boolean, version: String) {
+        if (uncertain || lastUserEventId.isBlank()) return
+        var threadId = mutableSession.value?.threadId.orEmpty()
+        if (reply.newThreadTitle.isNotBlank()) {
+            val t = book.start(UUID.randomUUID().toString(), ThreadKind.UNFINISHED_TALK, reply.newThreadTitle,
+                reply.newThreadImportance, now(), listOf(lastUserEventId))
+            book.onUserTurn(t.id, now(), userText)
+            threadId = t.id
+            mutableSession.value?.let { update(it.copy(threadId = t.id)) }
+            saveThreads()
+        }
+        if (reply.memoryProposal.isNotBlank()) mutableProposal.value = MemoryProposal(reply.memoryProposal.take(200), lastUserEventId, threadId, version)
+    }
+    fun answerMemory(remember: Boolean) {
+        val p = mutableProposal.value ?: return
+        mutableProposal.value = null
+        if (!remember) return
+        scope.launch {
+            val fact = withContext(Dispatchers.IO) {
+                synchronized(app.memoryLock) {
+                    if (p.version != memoryVersion()) return@synchronized null
+                    val event = app.events.all().firstOrNull { it.id == p.eventId } ?: return@synchronized null
+                    val visibility = cn.companion.pet.core.companion.EventVisibility(app.events.all(), app.memory.tombstones())
+                    if (!visibility.allows(event)) return@synchronized null
+                    app.facts.recordSaid(p.text, listOf(p.eventId), app.memory.tombstones())
+                }
+            }
+            if (fact != null && p.threadId.isNotBlank()) { book.replaceSources(p.threadId, listOf(fact.id)); saveThreads() }
+            mutableStatus.value = if (fact == null) "这条来源已经变化，没有保存。" else "记住了。你可以在记忆页更正或删除。"
+        }
+    }
+
     val governor = ProactiveGovernor(app.settings.partnerPerHour)
     data class Trace(val at: Long, val source: String, val anchor: String)
     private val mutableShown = MutableStateFlow<List<Trace>>(emptyList())
@@ -74,6 +159,7 @@ class PartnerConversation(private val app: PetApp) {
                     // The candidate and final wording are separate evidence; consume only after delivery.
                     if (candidate.id.startsWith("vi-")) app.voiceQueue.markSpoken(candidate.id, at)
                     mutableShown.value = (listOf(Trace(at, candidate.source.name, candidate.anchor.take(100))) + mutableShown.value).take(5)
+                    followedUp(candidate)
                     onProactiveShown?.invoke(candidate)
                     if (app.settings.ttsEnabled) app.speech.say(reply.say)
                 } else noteBlocked("输出界面未显示")
@@ -116,12 +202,24 @@ class PartnerConversation(private val app: PetApp) {
         mutableStatus.value = "在想你刚才说的……"
         job = scope.launch {
             try {
-                val inputVersion = withContext(Dispatchers.IO) { memoryVersion() }
+                val inputVersion = withContext(Dispatchers.IO) {
+                    synchronized(app.memoryLock) {
+                        lastUserEventId = app.events.append(EventKind.USER_INPUT, clean, source = "partner", conversationId = s.id).id
+                        memoryVersion()
+                    }
+                }
+                s.threadId.takeIf { it.isNotBlank() }?.let { id ->
+                    if (clean in listOf("解决了", "不聊了", "不聊这个了")) book.close(id, clean)
+                    else book.onUserTurn(id, now(), clean)
+                    pendingFollowUp = null
+                    saveThreads()
+                }
                 val key = withContext(Dispatchers.IO) { app.apiKey() }
                 val input = withContext(Dispatchers.IO) { replyInput(clean, false) }
                 val answer = if (key == null) null else generate(input, key)
                 if (expected != revision || inputVersion != withContext(Dispatchers.IO) { memoryVersion() } || blocked() != null) return@launch
                 appendReply(answer?.say ?: "这次没能可靠接上你的话，可以再说一句。")
+                if (answer != null) acceptMetadata(answer, clean, uncertain, inputVersion)
                 compact(key)
             } finally { if (expected == revision) { mutableBusy.value = false; mutableStatus.value = "" } }
         }

@@ -101,6 +101,8 @@ class ThreadBook(private var threads: List<PartnerThread> = emptyList()) {
         return th
     }
 
+    fun replaceSources(id: String, refs: List<String>) { update(id) { it.copy(sourceRefs = refs.distinct().take(12)) } }
+
     /** 他就这条线说了话：活一次，重排跟进，未回应计数清零。 */
     fun onUserTurn(id: String, now: Long, progress: String = ""): PartnerThread? = update(id) {
         it.copy(

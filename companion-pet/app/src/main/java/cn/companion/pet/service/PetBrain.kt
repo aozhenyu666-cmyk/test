@@ -849,7 +849,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                         tooSimilarToRecent = app.ledger.isTooSimilar(it))) }
                 }
             }
-            partner.proactive(partnerSignals(now()), candidates) {
+            partner.proactive(partnerSignals(now()), candidates + partner.dueThreads(now())) {
                 val current = partnerSignals(now()).copy(busyReason = partnerBusy())
                 !current.typing && !current.inCall && !current.capturingVoice && !current.sleepHours &&
                     now() >= current.dismissedUntil && !settings.petPaused && partnerBusy() == null &&
