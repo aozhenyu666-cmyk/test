@@ -146,7 +146,7 @@ class GateService : AccessibilityService() {
         val transient = pkg != packageName && pkg !in homes && (pkg in systemPackages || pkg in WindowRules.STATIC_SYSTEM)
         foregroundTracker.update(pkg, transient)
         launchDebounce.onForeground(foregroundPkg)
-        Log.d(TAG, "窗口包名=$pkg，类=${event.className}，当前=$foregroundPkg，做题页=${GateActivity.isShowing}")
+        Log.d(TAG, "窗口包名=$pkg，当前=$foregroundPkg，做题页=${GateActivity.isShowing}")
         _lastPackage.value = foregroundPkg
         app.partner.foreground(pkg)
         if (pkg == packageName) {
