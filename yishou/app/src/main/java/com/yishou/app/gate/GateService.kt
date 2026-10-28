@@ -21,6 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
@@ -129,6 +130,15 @@ class GateService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        try {
+            onWindow(event)
+        } catch (e: Exception) {
+            _problem.value = "这次应用切换没能处理，正在等待下一次检查"
+            RunLog.e("收费站", "处理应用切换失败", e)
+        }
+    }
+
+    private fun onWindow(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
         if (pkg == packageName && pagePrompt.showingOverlay && !GateActivity.isShowing) return
@@ -260,6 +270,8 @@ class GateService : AccessibilityService() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         pagePrompt.dismiss()
+        // 解绑后不能让旧的到期检查和查询继续启动页面；重新连接会重建检查。
+        scope.coroutineContext.cancelChildren()
         if (running === this) {
             running = null
             _connected.value = false
