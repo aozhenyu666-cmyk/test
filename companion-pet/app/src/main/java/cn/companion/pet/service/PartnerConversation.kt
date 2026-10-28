@@ -27,6 +27,7 @@ class PartnerConversation(private val app: PetApp) {
     private val mutableBusy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = mutableBusy
     var pageVisible = false
+    var look: ((String) -> Unit)? = null
     var typing = false
     var voiceCapturing = false
     var blocked: () -> String? = { null }
@@ -183,6 +184,14 @@ class PartnerConversation(private val app: PetApp) {
     fun tick() { mutableSession.value?.let { val next = rules.tick(it, now()); if (next != it) { cancel(); update(next) } } }
     fun cancel() { revision++; job?.cancel(); mutableBusy.value = false }
     fun close() { cancel(); mutableSession.value?.let { update(rules.close(it, "用户结束")) } }
+
+    fun observe(text: String, material: String, source: TopicSource) {
+        open()
+        anchor = material
+        anchorSource = source
+        mutableSession.value?.let { update(rules.add(it, DialogueTurn(Speaker.PET, text, now(), TurnChannel.REPLY))) }
+        if (!pageVisible) display?.invoke(text)
+    }
 
     fun offer(text: String, threadId: String = "", allowBusy: Boolean = false): Boolean {
         if (blocked() != null || (mutableBusy.value && !allowBusy) || ContentGuard.violates(text)) return false

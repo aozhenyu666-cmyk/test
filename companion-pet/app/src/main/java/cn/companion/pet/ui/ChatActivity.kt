@@ -75,6 +75,8 @@ private fun ChatPage(app: PetApp, back: () -> Unit, listen: () -> Unit) {
     val colors = LocalCompanionColors.current
     val listState = rememberLazyListState()
     var text by remember { mutableStateOf("") }
+    var lookQuestion by remember { mutableStateOf(false) }
+    var question by remember { mutableStateOf("") }
     val turns = session?.turns.orEmpty()
     LaunchedEffect(turns.size, busy) { if (turns.isNotEmpty()) listState.animateScrollToItem(turns.lastIndex + if (session?.summary?.isNotBlank() == true) 1 else 0) }
     Column(Modifier.fillMaxSize().background(colors.paper).safeDrawingPadding().imePadding()) {
@@ -111,6 +113,17 @@ private fun ChatPage(app: PetApp, back: () -> Unit, listen: () -> Unit) {
                 }
             }
         }
+        if (lookQuestion) AlertDialog(
+            onDismissRequest = { lookQuestion = false },
+            title = { Text("想一起看什么？") },
+            text = { OutlinedTextField(question, { question = it }, placeholder = { Text("例如：这句字幕的判断成立吗？") }) },
+            confirmButton = { TextButton(onClick = {
+                val q = question; lookQuestion = false
+                if (partner.look == null) android.widget.Toast.makeText(app, "先在首页启动桌宠，再切到要看的页面。", android.widget.Toast.LENGTH_LONG).show()
+                else { partner.look?.invoke(q); back() }
+            }) { Text("切回上一页看一眼") } },
+            dismissButton = { TextButton(onClick = { lookQuestion = false }) { Text("取消") } },
+        )
         if (proposal != null) Surface(color = colors.signal, modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
                 Text("要我记住吗：" + proposal!!.text, style = MaterialTheme.typography.bodyMedium)
@@ -121,6 +134,10 @@ private fun ChatPage(app: PetApp, back: () -> Unit, listen: () -> Unit) {
             }
         }
         if (status.isNotBlank()) Text(status, Modifier.padding(horizontal = 20.dp, vertical = 8.dp), style = MaterialTheme.typography.bodySmall)
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { lookQuestion = true }, enabled = !busy && !app.settings.partnerRiding) { Text("带问题看一眼") }
+            Text("画面只用于这次交流", style = MaterialTheme.typography.bodySmall, color = colors.ink2)
+        }
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = listen, enabled = !busy && !app.settings.partnerRiding) { Text("语音") }
             OutlinedTextField(text, { text = it; partner.typing = it.isNotBlank() }, modifier = Modifier.weight(1f), placeholder = { Text("接着说……") }, maxLines = 5)

@@ -330,6 +330,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     fun start() {
+        partner.look = { question -> lookOnce(question) }
         partner.blocked = { partnerBusy() }
         partner.display = { text -> showPartnerBubble(text) }
         partner.onReply = { text -> if (settings.partnerRiding) riding.reply(text) else if (settings.ttsEnabled) speech.say(text) }
@@ -383,6 +384,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         partner.voiceDelivery = null
         partner.away()
         partner.cancel()
+        partner.look = null
         partner.display = null
         partner.onReply = null
         partner.blocked = { null }
@@ -815,6 +817,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
      * 每 5 秒用内存里的轨迹评估一次；不读写文件、不调模型。只有到点时才会读一次待续话题。
      * 不新增计时器：挂在原来每秒一次的 tick 上。
      */
+    private val partnerVision by lazy { PartnerVision(app) }
+    private var lastVisionAttemptAt = 0L
     private var partnerSampleJob: Job? = null
     private fun partnerContext(): UsageContext {
         if (settings.partnerRiding) return UsageContext.RIDING
@@ -875,7 +879,15 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
                         tooSimilarToRecent = app.ledger.isTooSimilar(it))) }
                 }
             }
-            partner.proactive(partnerSignals(now()), candidates + partner.dueThreads(now())) {
+            val imageCandidates = if (signals.context in listOf(UsageContext.WATCHING_VIDEO, UsageContext.GAMING) &&
+                settings.visionUploadEnabled && now - lastVisionAttemptAt >= 3_600_000L / settings.partnerPerHour.coerceIn(5, 40)) {
+                lastVisionAttemptAt = now
+                val read = partnerVision.capture("", pkg?.let { label(it) }.orEmpty())
+                val candidate = read.summary?.takeIf { it.confidence.lowercase() in listOf("high", "medium") }
+                    ?.let { VisionTalk.toCandidate("image-${read.at}", it, read.at) }
+                listOfNotNull(candidate)
+            } else emptyList()
+            partner.proactive(partnerSignals(now()), candidates + imageCandidates + partner.dueThreads(now())) {
                 val current = partnerSignals(now()).copy(busyReason = partnerBusy())
                 !current.typing && !current.inCall && !current.capturingVoice && !current.sleepHours &&
                     now() >= current.dismissedUntil && !settings.petPaused && partnerBusy() == null &&
@@ -1183,79 +1195,16 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     /** “看一眼”进行中：这段时间不主动开口，免得搭话气泡盖掉看图结果。 */
     private var lookJob: Job? = null
 
-    private fun lookOnce() {
-        endConversation()
-        if (android.os.Build.VERSION.SDK_INT < 30) { lookNotice("这台手机的系统版本太低，不能截图。"); return }
-        if (lookJob?.isActive == true) return
-        overlay.setMood(Mood.THINKING)
+    private fun lookOnce(question: String = "") {
+        if (settings.partnerRiding || lookJob?.isActive == true || partner.busy.value) return
+        overlay.hideBubble()
         lookJob = scope.launch {
-            fun evidence(e: cn.companion.pet.core.vision.VisionEvidence) { runCatching { app.visionEvidence.record(e) } }
-            val startedAt = now()
-            delay(350) // 先让气泡收起，别把它拍进去
-            // 截图前读一次无障碍节点，给可点元素编号；同一张编号表发给视觉模型。
-            val marks = if (!settings.visionMarks) emptyList() else withContext(Dispatchers.IO) {
-                val observed = runCatching { app.deviceController.observe() }.getOrNull()
-                val obs = if (observed?.status == cn.companion.pet.core.device.DeviceStatus.SUCCESS) app.deviceController.lastObservation() else null
-                obs?.let { cn.companion.pet.core.vision.ScreenMarks.plan(it.nodes) }.orEmpty()
-            }
-            val attempt = withContext(Dispatchers.IO) {
-                val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
-                try {
-                    cn.companion.pet.a11y.ScreenCaptureGateway.captureBlocking(PerceptionHub.service, executor, 5_000, marks)
-                } finally {
-                    executor.shutdown()
-                }
-            }
-            val jpeg = attempt.jpeg
-            if (attempt.status != cn.companion.pet.core.vision.CapturedStatus.OK || jpeg == null) {
-                val why = attempt.error.ifBlank { attempt.status.name }
-                evidence(cn.companion.pet.core.vision.VisionEvidence(startedAt, cn.companion.pet.core.vision.VisionOutcome.CAPTURE_FAILED,
-                    failure = attempt.status.name))
-                lookNotice("没截到：$why"); return@launch
-            }
-            if (attempt.packageName in settings.excludeApps) { lookNotice("这个 App 在排除名单里，我不看。"); return@launch }
-            val setup = withContext(Dispatchers.IO) { app.visionSetup() }
-            if (!settings.visionUploadEnabled) {
-                evidence(cn.companion.pet.core.vision.VisionEvidence(startedAt, cn.companion.pet.core.vision.VisionOutcome.UPLOAD_OFF,
-                    setup.model, setup.host))
-                lookNotice("截到了，但还没允许把截图发给视觉模型（设置 → 模型与看图）。"); return@launch
-            }
-            if (!setup.ready) {
-                evidence(cn.companion.pet.core.vision.VisionEvidence(startedAt, cn.companion.pet.core.vision.VisionOutcome.NOT_CONFIGURED,
-                    setup.model, setup.host, failure = setup.status.name))
-                lookNotice("截到了，但看图还没配好：" + setup.label().removePrefix("未配置：")); return@launch
-            }
-            if (!app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
-                evidence(cn.companion.pet.core.vision.VisionEvidence(startedAt, cn.companion.pet.core.vision.VisionOutcome.BUDGET,
-                    setup.model, setup.host))
-                lookNotice("今天的调用次数用完了。"); return@launch
-            }
-            stats.add(Stats.Kind.API_CALLS)
-            val table = if (attempt.marksDrawn > 0) cn.companion.pet.core.vision.ScreenMarks.promptTable(marks) else ""
-            val prompt = cn.companion.pet.core.vision.VisionAnalyzer.DEFAULT_PROMPT + (if (table.isEmpty()) "" else "\n" + table)
-            val run = withContext(Dispatchers.IO) { app.visionAnalyzer.analyzeDetailed(jpeg, attempt.width, attempt.height, prompt) }
-            evidence(run.evidence.copy(marks = attempt.marksDrawn))
-            val summary = run.summary
-            if (summary == null) {
-                // 说清楚是哪一步：请求失败（Key/模型名/网络）还是模型回了但看不懂。
-                lookNotice(
-                    when (run.evidence.outcome) {
-                        cn.companion.pet.core.vision.VisionOutcome.REQUEST_FAILED -> "截图成功，但视觉模型调用失败：" + run.evidence.failure
-                        cn.companion.pet.core.vision.VisionOutcome.PARSE_FAILED -> "截图成功，模型也回了，但内容没法解析。换一个视觉模型试试（比如 qwen-vl-plus）。"
-                        else -> "截图成功，但看图没配好：" + run.evidence.failure
-                    },
-                )
-                return@launch
-            }
-            val at = now()
-            val text = (summary.subject + (if (summary.elements.isEmpty()) "" else "；" + summary.elements.take(5).joinToString("、"))).take(300)
-            app.screenObservations.publish(cn.companion.pet.core.vision.ScreenObservation(
-                id = UUID.randomUUID().toString(), capturedAt = at, packageName = attempt.packageName,
-                source = cn.companion.pet.core.vision.ObservationSource.VISION, screenshotAvailable = true,
-                nodesAvailable = false, visionAvailable = true, status = cn.companion.pet.core.vision.CapturedStatus.OK,
-                summary = text, expiresAt = at + 60_000,
-            ))
-            lookNotice(LOOK_RESULT_PREFIX + summary.subject.ifBlank { "看不太清" })
+            delay(350)
+            val read = partnerVision.capture(question, partner.session.value?.turns?.lastOrNull()?.text.orEmpty())
+            val summary = read.summary
+            if (summary == null) { lookNotice(read.error); return@launch }
+            partner.observe(LOOK_RESULT_PREFIX + VisionTalk.displayText(summary),
+                summary.elements.joinToString("\n").take(600), TopicSource.SCREEN_IMAGE)
         }
     }
 
