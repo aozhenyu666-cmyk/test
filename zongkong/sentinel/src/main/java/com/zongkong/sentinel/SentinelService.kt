@@ -136,7 +136,7 @@ class SentinelService : AccessibilityService() {
         Store.log(this, "拦下 ${label(pkg)}")
         pagePrompt.open(pkg, BlockActivity.intent(this, pkg), "总控掉线，请先处理",
             visible = { BlockActivity.isShowing },
-            relevant = { lastPkg == pkg && interactive() && !emergency &&
+            relevant = { (lastPkg == pkg || lastPkg == packageName) && interactive() && !emergency &&
                 Decide.shouldBlock(Store.state(this), System.currentTimeMillis(), pkg,
                     Sys.mainInstalled(this), released = Store.releaseGranted(this),
                     confirmedFault = !v2Fault.isNullOrBlank() || !Sys.enabled(this, Sys.mainGuard())) })
