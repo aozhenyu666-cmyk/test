@@ -166,7 +166,9 @@ class NightlyStore(
         val diaryBefore = existingHash(diaryRel)
         val letterBefore = existingHash(letterRel)
 
-        val protected = facts?.protectUserFacts(output.profileLines, deletedBefore) ?: output.profileLines
+        val batchSourceEvents = events.all().filter { it.id in stored.eventIds }
+        val consentedLines = cn.companion.pet.core.partner.PartnerConsent.nightlyProfile(output.profileLines, memory.profileLines(), batchSourceEvents)
+        val protected = facts?.protectUserFacts(consentedLines, deletedBefore) ?: consentedLines
         val profileText = ProfileRules.applyTombstones(protected, deletedBefore).joinToString("\n")
         val diaryText = output.diary.lines().filterNot { EventVisibility.containsForgotten(it, deletedBefore) }.joinToString("\n")
         val letterText = output.letter.lines().filterNot { EventVisibility.containsForgotten(it, deletedBefore) }.joinToString("\n")

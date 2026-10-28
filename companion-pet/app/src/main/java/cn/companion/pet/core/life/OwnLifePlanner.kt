@@ -30,10 +30,9 @@ object OwnLifePlanner {
         val elapsed = (now - state.lastAdvancedAt).coerceIn(0L, elapsedCapMillis.coerceAtLeast(0L))
         val steps = (elapsed / STEP_MILLIS).toInt()
 
-        // 不够一档就只记时间戳，进度和情绪都原样保留。
-        if (steps <= 0 || state.activities.isEmpty()) {
-            return state.copy(lastAdvancedAt = now)
-        }
+        // Preserve partial intervals: a one-second tick must not erase the previous second.
+        if (now < state.lastAdvancedAt) return state.copy(lastAdvancedAt = now)
+        if (state.activities.isEmpty() || steps <= 0) return state
 
         var justFinished: OwnActivity? = null
         val advanced = state.activities.map { activity ->
@@ -56,7 +55,7 @@ object OwnLifePlanner {
             mood = mood,
             moodReason = moodReason,
             moodSince = if (mood != state.mood) now else state.moodSince,
-            lastAdvancedAt = now,
+            lastAdvancedAt = now - elapsed % STEP_MILLIS,
         )
     }
 

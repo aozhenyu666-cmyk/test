@@ -154,7 +154,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private var ridingStarted = false
     private fun ridingAllowed(): Boolean {
         val audio = context.getSystemService(AudioManager::class.java)
-        return settings.partnerRiding && !settings.petPaused && now() >= settings.partnerQuietUntil &&
+        return settings.partnerRiding && !scheduler.isQuiet(now()) && !settings.petPaused && now() >= settings.partnerQuietUntil &&
             audio.mode != AudioManager.MODE_IN_CALL && audio.mode != AudioManager.MODE_IN_COMMUNICATION && partnerBusy() == null &&
             !partner.typing && !isTypingNow
     }
@@ -162,7 +162,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         if (settings.partnerRiding && !ridingStarted) {
             if (partnerBusy() != null || !riding.start()) {
                 settings.partnerRiding = false
-                partner.noteBlocked("骑行语音未启动：检查麦克风权限、系统识别服务，或先结束当前受约束回合")
+                partner.noteBlocked("骑行语音未启动：检查麦克风与识别服务、睡眠/安静时段，或先结束当前回合")
             } else { ridingStarted = true; overlay.hideBubble() }
         } else if (!settings.partnerRiding && ridingStarted) { riding.stop(); ridingStarted = false }
     }
@@ -333,8 +333,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         partner.look = { question -> lookOnce(question) }
         partner.blocked = { partnerBusy() }
         partner.display = { text -> showPartnerBubble(text) }
-        partner.onReply = { text -> if (settings.partnerRiding) riding.reply(text) else if (settings.ttsEnabled) speech.say(text) }
+        partner.onReply = { text -> if (settings.partnerRiding) riding.reply(text, partner.proposal.value?.let { "要我记住吗：" + it.text + "？说记住或不记。" }) else if (settings.ttsEnabled) speech.say(text) }
         partner.voiceDelivery = { text -> riding.say(text) }
+        partner.onMetadata = {
+            if (!settings.partnerRiding && !partner.pageVisible && partner.session.value?.state == SessionState.ACTIVE) {
+                showPartnerBubble(partner.session.value?.turns?.lastOrNull()?.text.orEmpty())
+            }
+        }
         // 设置页“运行”技能时交给桌宠来跑：进度和结果显示在气泡上，点桌宠可以停。
         app.skillLauncher = { id -> handler.post { endConversation(); skills.runSkill(id) } }
         memory.persona() // 首次运行写入默认人设
@@ -387,6 +392,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         partner.look = null
         partner.display = null
         partner.onReply = null
+        partner.onMetadata = null
         partner.blocked = { null }
         app.skillLauncher = null
         if (skillsInitialized) skills.cancel()
@@ -659,7 +665,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // 手上还有没读完的，就先读完再找新的。
         val hasUnfinished = state.activities.any { a ->
             val limit = a.totalHint
-            a.hasTraceableSource() && (limit == null || a.progress < limit)
+            a.hasTraceableSource() && ReadingEvidence.blocksNextSearch(a, now)
         }
         if (hasUnfinished) return
 
@@ -710,10 +716,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             impression = chosen.impression,
             now = now,
         )
-        val activity = (outcome as? cn.companion.pet.core.life.ReadCycleOutcome.Got)?.activity ?: return
+        val picked = (outcome as? cn.companion.pet.core.life.ReadCycleOutcome.Got)?.activity ?: return
+        val activity = picked.copy(sourceExcerpt = fresh.firstOrNull { it.url == chosen.url }?.summary.orEmpty().take(400))
         // 队列、账本、“刚攒出新话”标记都归主线程所有：回到主线程再改，避免和 tick 抢着读写。
         withContext(Dispatchers.Main) {
-            app.writeOwnLife(cn.companion.pet.core.life.OwnLifeCycle.adopt(app.ownLife, activity, now))
+            val before = app.ownLife
+            val adopted = cn.companion.pet.core.life.OwnLifeCycle.adopt(before, activity, now)
+            app.writeOwnLife(if (before.activities.isEmpty()) adopted.copy(lastAdvancedAt = now) else adopted)
             // 刚挑到一篇新的：攒一条"我想说说这个"的意图，等合适的时机再开口。
             queueOwnLifeIntent(now)
         }
@@ -728,7 +737,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
      * 与 [OwnLifeCycle.promptLine] 的分工：那边给提示词一行事实，这边决定"要不要主动开口提"。
      */
     private fun queueOwnLifeIntent(now: Long) {
-        val line = cn.companion.pet.core.life.OwnLifeCycle.promptLine(app.ownLife).trim()
+        val activity = app.ownLife.activities.filter { it.hasTraceableSource() }.maxByOrNull { it.lastTouchedAt } ?: return
+        val line = ReadingEvidence.anchor(activity)
         if (line.isEmpty()) return
         // 太像刚说过的就别攒：相似度硬拦在队里做不了（那里只有自己内部的条目），这里先挡一道。
         if (app.ledger.isTooSimilar(line)) return
@@ -795,16 +805,6 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     /** 模型挑出来的那一条：只带 url 与两句素材，最终仍要经 ReadingPicker 核对。 */
     private data class ChosenReading(val url: String, val angle: String, val impression: String)
 
-    /**
-     * R3：意图优先。手里攒着话、此刻又是个能开口的时刻，就优先说手里的那一句。
-     *
-     * 三条优先级不可重排（判定在 [cn.companion.pet.core.voice.VoiceTurnPlanner] 里，有测试钉住）：
-     * 该闭嘴（打字/全屏视频/三分钟内刚说过）→ 手里的话再留着；
-     * 攒着话 + 认得出时刻 → 说手里的，**不走规则**；
-     * 否则 → 返回 false，交回原有规则路径（本机兜底完全不变）。
-     *
-     * @return true 表示这次已经由意图接管，调用方不要再走规则。
-     */
     /** 当前时段的活跃度预算；关掉自适应时返回 null，走固定上限。 */
     private fun budgetPlan(now: Long): cn.companion.pet.core.rhythm.ActivityPlan? =
         if (settings.useAdaptiveBudget) {
@@ -820,11 +820,15 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private val partnerVision by lazy { PartnerVision(app) }
     private var lastVisionAttemptAt = 0L
     private var partnerSampleJob: Job? = null
+    private val partnerCategories = mutableMapOf<String, Int>()
     private fun partnerContext(): UsageContext {
         if (settings.partnerRiding) return UsageContext.RIDING
         if (partner.pageVisible) return UsageContext.IN_CHAT
         val pkg = PerceptionHub.trail.foreground ?: return UsageContext.IDLE
+        val category = partnerCategories.getOrPut(pkg) { runCatching { context.packageManager.getApplicationInfo(pkg, 0).category }.getOrDefault(-1) }
         return when {
+            category == android.content.pm.ApplicationInfo.CATEGORY_VIDEO -> UsageContext.WATCHING_VIDEO
+            category == android.content.pm.ApplicationInfo.CATEGORY_GAME -> UsageContext.GAMING
             pkg in settings.partnerVideoApps -> UsageContext.WATCHING_VIDEO
             pkg in settings.partnerGameApps -> UsageContext.GAMING
             pkg in settings.learningApps -> UsageContext.READING
@@ -847,6 +851,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             sleepHours = asleep, dismissedUntil = settings.partnerQuietUntil,
             busyReason = when {
                 settings.petPaused -> "已暂停"
+                PerceptionHub.trail.foreground in settings.excludeApps -> "排除应用"
                 partner.busy.value -> "正在想回复"
                 partnerBusy() != null -> partnerBusy()
                 else -> presenceBusy(at)
@@ -859,7 +864,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val signals = partnerSignals(now)
         partner.governor.configureTarget(settings.partnerPerHour)
         val small = TopicCandidate("small-$now", TopicSource.SMALL_TALK, "", observedAt = now)
-        val readiness = partner.governor.decide(signals, listOf(small))
+        val readiness = partner.governor.decide(signals, listOf(small.copy(importance = 3)))
         if (readiness is GovernorDecision.Silent) { partner.noteBlocked(readiness.reason); return }
         val pkg = PerceptionHub.trail.foreground
         partnerSampleJob = scope.launch {
@@ -943,6 +948,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     /** 显式入口：先建立并保存契约，再打开目标；失败不留下守护。 */
     private fun startFocusGuard() {
         if (settings.partnerRiding) return
+        partner.cancel()
+        partner.away()
 
         val target = assistants.current
         val pkg = assistants.packageOf(target) ?: run { gemini.toast("没找到 ${target.label}，可以在设置里填包名"); return }
@@ -998,83 +1005,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     // ---------- 开口 ----------
 
     private fun speak(stuck: Boolean, afterHeartbeat: Boolean = false, topic: Topic? = null, presenceReason: String = "") {
-        val now = now()
-        if (probeJob?.isActive == true || lookJob?.isActive == true || now() < lookNoticeUntil || skillsBusy() || convo != null || session != null || think != null || noteDraft != null) return
-        heartbeatWaiting = false
-
-        val key = apiKey()
-        if (key == null) {
-            // 没配置 Key：只做个动作，不打扰
-            overlay.attention()
-            scheduler.onSpoke(now)
-            return
-        }
-        if (app.budget.remaining(settings.dailyLimit, LocalDate.now().toString()) <= 0) {
-            // 到上限：当天只保留动画和震动
-            overlay.attention(); haptics.tap()
-            scheduler.onSpoke(now)
-            return
-        }
-
-        val decision = classify(now)
-        if (decision.scene == Scene.EXCLUDED) { scheduler.retrySoon(now); return }
-        if (stuck && decision.scene != Scene.LEARNING) return
-
-        val today = LocalDate.now().toString()
-        val isWeighty = !stuck && !afterHeartbeat && weighty.shouldUse(today, LocalTime.now().hour)
-        val moment = ProbeMoment(
-            timeText = timeText(),
-            scene = decision.scene,
-            foregroundLabel = PerceptionHub.trail.foreground?.let { label(it) } ?: "不清楚",
-            trajectory = trajectory(now),
-            screenText = decision.screenText,
-            rephrase = rephraseNext,
-            weighty = isWeighty,
-            stuck = stuck,
-            petState = life.state.label + " · " + stateStore.summary(stateStore.current()),
-            topic = topic?.summary,
-            afterHeartbeat = afterHeartbeat,
-            presenceReason = presenceReason,
-            // R3：把"它自己在读什么"和"最近说过什么"喂给提示词，让它讲自己的事、且不重样。
-            ownLife = cn.companion.pet.core.life.OwnLifeCycle.promptLine(app.ownLife),
-            recentSayings = app.ledger.recent(8),
-        )
-
-        probeJob = scope.launch {
-            overlay.setMood(Mood.THINKING)
-            val (opening, inputVersion) = withContext(Dispatchers.IO) {
-                synchronized(app.memoryLock) {
-                    app.materialInbox.purgeExpired(now())
-                    val eligible = topic == null || topics.candidates(now()).any { it.id == topic.id }
-                    val withToday = if (settings.presenceEnabled) moment.copy(today = todayDigest()) else moment
-                    openingMessages(if (eligible) withToday else withToday.copy(topic = null), decision.screenText) to memoryVersion()
-                }
-            }
-            if (!app.budget.reserve(settings.dailyLimit, LocalDate.now().toString())) {
-                overlay.setMood(Mood.IDLE)
-                scheduler.retrySoon(now())
-                return@launch
-            }
-            stats.add(Stats.Kind.API_CALLS)
-            val result = app.client.complete(
-                ChatRequest(settings.endpoint, settings.model, key, opening, maxTokens = ProbePrompt.REPLY_MAX_TOKENS, timeoutMillis = ProbePrompt.TIMEOUT_MILLIS),
-            )
-            overlay.setMood(Mood.IDLE)
-            val unchanged = withContext(Dispatchers.IO) { synchronized(app.memoryLock) { inputVersion == memoryVersion() } }
-            if (!unchanged) { scheduler.retrySoon(now()); return@launch }
-            val reply = (result as? ChatResult.Success)?.let { ProbeReplyParser.parse(it.content) }
-            if (result is ChatResult.Success && reply == null) noteBadFormat()
-            when {
-                reply == null -> scheduler.onSpoke(now()) // 失败或解析失败：静默，按正常节奏下次再来
-                reply.skip || ContentGuard.violates(reply.hookText) -> scheduler.retrySoon(now())
-                !active || convo != null || lookJob?.isActive == true || now() < lookNoticeUntil || skillsBusy() -> scheduler.retrySoon(now())
-                else -> {
-                    if (isWeighty) { weighty.markUsed(today); stats.add(Stats.Kind.WEIGHTY) }
-                    rephraseNext = false
-                    present(decision, reply, opening, noEscalation = afterHeartbeat, topic = topic, inputVersion = inputVersion)
-                }
-            }
-        }
+        if (settings.presenceEnabled && !settings.petPaused) presenceTick(now())
     }
 
     /** 短防抖：事件写入后 1.2 秒再看一次，避免一次保存连发多个事件。 */
@@ -1084,6 +1015,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     }
 
     private fun maybeScanAgent(now: Long) {
+        if (settings.partnerRiding || partner.busy.value || partner.pageVisible) return
         if (!settings.agentAutonomy || !active || settings.petPaused) return
         if (training != null) return
         if (probeJob?.isActive == true || lookJob?.isActive == true || now() < lookNoticeUntil || skillsBusy() || convo != null || session != null || think != null || noteDraft != null) return
@@ -1201,6 +1133,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         lookJob = scope.launch {
             delay(350)
             val read = partnerVision.capture(question, partner.session.value?.turns?.lastOrNull()?.text.orEmpty())
+            if (partnerBusy() != null || settings.partnerRiding || !active) return@launch
             val summary = read.summary
             if (summary == null) { lookNotice(read.error); return@launch }
             partner.observe(LOOK_RESULT_PREFIX + VisionTalk.displayText(summary),
@@ -1277,13 +1210,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // 温和搭话不能盖掉正在显示的题目或拦截提示。
         // 只检查不占用：占住又没人释放会让之后所有闲聊都被同级规则挡掉。
         if (!outputArbiter.allows(OutputPriority.AMBIENT)) return
-        if (partner.offer(reply.hookText)) {
+        scope.launch { if (partner.deliver(reply.hookText)) {
             scheduler.onSpoke(now())
             app.ledger.record(reply.hookText, now())
             lastSpokenAt = now()
             topic?.let { topics.markShared(it.id, now()) }
             if (settings.ttsEnabled) speech.say(reply.hookText)
-        }
+        } }
     }
 
     private fun entrySpec(text: String, scene: Scene, highlightGemini: Boolean) = BubbleSpec(
@@ -1322,7 +1255,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private fun partnerBusy(): String? = when {
         training != null -> "陪练进行中，先完成或结束这一回合。"
         think != null || noteDraft != null -> "当前回合进行中。"
-        session != null || focusOverlay.isShown -> "守护会话进行中。"
+        focusActive || session != null || focusOverlay.isShown -> "守护会话进行中。"
         skillsBusy() -> "技能进行中。"
         !outputArbiter.allows(OutputPriority.AMBIENT) -> "当前有更重要的提示。"
         else -> null
@@ -1332,11 +1265,16 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         if (settings.partnerRiding) return false
         if (partnerBusy() != null || !active) return false
         overlay.setMood(Mood.CURIOUS)
-        return overlay.showBubble(BubbleSpec(text, showMic = systemVoice, showGemini = false, instant = true,
+        val proposal = partner.proposal.value
+        val body = text + (proposal?.let { "\n要我记住吗：" + it.text } ?: "")
+        return overlay.showBubble(BubbleSpec(body, showMic = systemVoice, showGemini = false, instant = true,
             extra = listOf(
                 BubbleAction("展开聊天", highlighted = true) { overlay.hideBubble(); cn.companion.pet.ui.ChatActivity.open(context) },
                 BubbleAction("安静 30 分钟") { settings.partnerQuietUntil = now() + 30 * 60_000L; partner.away(); app.stopSpeech(); overlay.hideBubble() },
-            ) + if (menu) listOf(
+            ) + (proposal?.let { listOf(
+                BubbleAction("记住") { partner.answerMemory(true); showPartnerBubble(text) },
+                BubbleAction("这次不记") { partner.answerMemory(false); showPartnerBubble(text) },
+            ) } ?: emptyList()) + if (menu) listOf(
                 BubbleAction("开始陪练") { partner.away(); openTraining() },
                 BubbleAction("想一想") { partner.away(); openThinkMenu() },
                 BubbleAction("记个念头") { partner.away(); startNote() },
@@ -1390,7 +1328,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             partner.voiceCapturing = false
             disarmRecordingCap()
             overlay.setListening(false)
-            onUserInput(text, listeningFromHold)
+            onUserInput(text, listeningFromHold, fromVoice = true, uncertain = voice.lastUncertain)
         }
     }
 
@@ -1440,7 +1378,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         overlay.hideBubble()
     }
 
-    private fun onUserInput(text: String?, fromHold: Boolean) {
+    private fun onUserInput(text: String?, fromHold: Boolean, fromVoice: Boolean = false, uncertain: Boolean = false) {
         val said = text?.trim().orEmpty()
         if (training != null) {
             trainingTimer.resume(mono())
@@ -1454,7 +1392,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             overlay.showBubble(BubbleSpec(message, showMic = systemVoice, showGemini = false))
             return
         }
-        partner.send(said, if (listeningFromHold || fromHold) cn.companion.pet.core.partner.TurnChannel.VOICE else cn.companion.pet.core.partner.TurnChannel.TYPED)
+        partner.send(said, if (fromVoice) TurnChannel.VOICE else TurnChannel.TYPED, uncertain)
     }
 
     private fun closeLater(c: Conversation, delayMillis: Long) {
@@ -1849,6 +1787,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
 
     private fun openThinkMenu() {
         if (settings.partnerRiding) return
+        partner.cancel()
+        partner.away()
 
         endConversation()
         val flow = thinkMaterial()
@@ -2078,6 +2018,8 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     /** 已有断点优先接续，不能因重复点击重新出题。 */
     private fun openTraining() {
         if (settings.partnerRiding) return
+        partner.cancel()
+        partner.away()
 
         if (training?.current?.active == true) { resumeTraining(); return }
         endConversation()
@@ -2128,6 +2070,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
      * 模型不参与“要不要发”的判断。
      */
     private fun considerMaterialOpportunity(event: CompanionEvent) {
+        if (settings.partnerRiding) return
         val now = now()
         val key = "material:" + event.id
         if (opportunityStore.handled(key)) return
@@ -2135,6 +2078,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val material = runCatching { app.materialInbox.all(now) }
             .getOrDefault(emptyList())
             .firstOrNull { it.sourceEventId == event.id }
+        if (material?.source?.startsWith("partner:") == true) return
         val bound = material?.let { BoundMaterial.of(it) }
         // 从真实正文生成题；只有链接或没有可核查线索时返回 null，不硬造题。
         val plan = bound?.let { MaterialQuestionBuilder.build(it) }
@@ -2193,6 +2137,9 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         key: String,
         whyNow: String,
     ) {
+        if (settings.partnerRiding) return
+        partner.cancel()
+        partner.away()
         val now = now()
         endConversation()
         val sessionId = java.util.UUID.randomUUID().toString()
@@ -2969,6 +2916,7 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
     private fun armRecordingCap() {
         recordingCapRunnable?.let { handler.removeCallbacks(it) }
         val cap = Runnable {
+            partner.voiceCapturing = false
             runCatching { voice.stop() }
             overlay.setListening(false)
             if (training?.current?.active == true) {

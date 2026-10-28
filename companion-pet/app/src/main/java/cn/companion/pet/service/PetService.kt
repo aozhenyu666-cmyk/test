@@ -1,5 +1,6 @@
 package cn.companion.pet.service
 
+import kotlinx.coroutines.*
 import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
@@ -29,6 +30,7 @@ import cn.companion.pet.R
 class PetService : Service() {
 
     private var brain: PetBrain? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -60,6 +62,7 @@ class PetService : Service() {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(screenReceiver, filter)
         brain = PetBrain(this).also { it.start() }
+        serviceScope.launch { (application as PetApp).settings.changes.collect { goForeground() } }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -92,6 +95,7 @@ class PetService : Service() {
 
     override fun onDestroy() {
         running = false
+        serviceScope.cancel()
         brain?.stop()
         brain = null
         runCatching { unregisterReceiver(screenReceiver) }

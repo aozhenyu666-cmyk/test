@@ -26,6 +26,8 @@ data class DialogueTurn(
     val channel: TurnChannel,
     /** 语音转写可能不准时为 true：提示词里会标注“可能听错”。 */
     val uncertain: Boolean = false,
+    /** Full manual screen observations are session-local and must not be serialized. */
+    val ephemeral: Boolean = false,
 )
 
 @Serializable

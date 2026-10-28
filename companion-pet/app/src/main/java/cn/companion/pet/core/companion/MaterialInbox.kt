@@ -195,7 +195,7 @@ class MaterialInbox(
             EventKind.MATERIAL,
             "[素材] " + type.name + " | " + UnicodeText.truncate(title.ifBlank { normalizedUrl ?: "无标题" }, 120),
             occurredAt = now,
-            source = "material",
+            source = if (draft.source.startsWith("partner:")) draft.source else "material",
             expiresAt = now + TTL_MILLIS,
         )
         val material = SharedMaterial(

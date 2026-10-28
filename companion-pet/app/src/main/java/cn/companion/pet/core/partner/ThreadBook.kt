@@ -92,6 +92,11 @@ class ThreadBook(private var threads: List<PartnerThread> = emptyList()) {
 
     fun get(id: String): PartnerThread? = threads.firstOrNull { it.id == id }
 
+    /** Recover the in-flight reply window after a process restart, before applying silence backoff. */
+    fun awaitingReply(): PartnerThread? = threads.filter {
+        it.status == ThreadStatus.OPEN && it.lastPetTurnAt > it.lastUserTurnAt && it.nextFollowUpAt <= it.lastPetTurnAt
+    }.maxByOrNull { it.lastPetTurnAt }
+
     /** 新开一条线；同标题的 OPEN 线不重复开，返回已有的。 */
     fun start(id: String, kind: ThreadKind, title: String, importance: Int, now: Long, refs: List<String> = emptyList()): PartnerThread {
         val t = title.trim().take(60)

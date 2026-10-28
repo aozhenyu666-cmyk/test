@@ -35,9 +35,39 @@ class PartnerConversation(private val app: PetApp) {
     var display: ((String) -> Boolean)? = null
     var onUserReplied: (() -> Unit)? = null
     var onReply: ((String) -> Unit)? = null
+    var onMetadata: (() -> Unit)? = null
     var voiceDelivery: (suspend (String) -> Boolean)? = null
+    data class Presentation(val id: String, val text: String)
+    private val mutablePresentation = MutableStateFlow<Presentation?>(null)
+    val presentation: StateFlow<Presentation?> = mutablePresentation
+    private var pageReceipt: CompletableDeferred<Boolean>? = null
+    fun pageRendered(id: String) {
+        if (pageVisible && mutablePresentation.value?.id == id) pageReceipt?.complete(true)
+    }
+    fun pageHidden() { pageVisible = false; pageReceipt?.complete(false) }
+
+    suspend fun deliver(text: String, threadId: String = ""): Boolean {
+        if (!pageVisible) return offer(text, threadId, allowBusy = true)
+        if (blocked() != null) return false
+        val receipt = CompletableDeferred<Boolean>()
+        val p = Presentation(UUID.randomUUID().toString(), text)
+        pageReceipt = receipt
+        mutablePresentation.value = p
+        try {
+            val rendered = withTimeoutOrNull(2500) { receipt.await() } == true
+            if (!rendered || !pageVisible || blocked() != null) return false
+            open()
+            mutableSession.value?.let { update(rules.add(it.copy(threadId = threadId), DialogueTurn(Speaker.PET, text, now(), TurnChannel.PROACTIVE))) }
+            return true
+        } finally {
+            if (mutablePresentation.value?.id == p.id) { mutablePresentation.value = null; pageReceipt = null }
+        }
+    }
     private var job: Job? = null
     private var revision = 0L
+    private var lastAttemptAt: Long? = null
+    var proactivePending = false
+        private set
     var anchor = ""
     var anchorSource: TopicSource = TopicSource.SMALL_TALK
 
@@ -49,7 +79,7 @@ class PartnerConversation(private val app: PetApp) {
     private val mutableProposal = MutableStateFlow<MemoryProposal?>(null)
     val proposal: StateFlow<MemoryProposal?> = mutableProposal
     private var lastUserEventId = ""
-    private var pendingFollowUp: Pair<String, Long>? = null
+    private var pendingFollowUp: Pair<String, Long>? = book.awaitingReply()?.let { it.id to it.lastPetTurnAt }
 
     private fun saveThreads() {
         val snapshot = ThreadBook(book.all)
@@ -75,6 +105,7 @@ class PartnerConversation(private val app: PetApp) {
     }
     fun invalidateMemory() {
         cancel()
+        app.stopSpeech()
         anchor = ""
         mutableProposal.value = null
         mutableSession.value?.let { update(rules.close(it.copy(turns = emptyList(), summary = ""), "记忆已更新，重新开始")) }
@@ -96,7 +127,7 @@ class PartnerConversation(private val app: PetApp) {
                 book.onFollowUpIgnored(id, at); pendingFollowUp = null; saveThreads()
             }
         }
-        return book.due(at).map { t -> TopicCandidate(t.id, TopicSource.THREAD_FOLLOW_UP,
+        return book.due(at).filterNot { it.id == pendingFollowUp?.first }.map { t -> TopicCandidate(t.id, TopicSource.THREAD_FOLLOW_UP,
             t.title + if (t.lastProgress.isNotBlank()) "\n上次原话：" + t.lastProgress else "", t.importance, t.createdAt, threadId = t.id) }
     }
     private fun followedUp(candidate: TopicCandidate) {
@@ -129,14 +160,19 @@ class PartnerConversation(private val app: PetApp) {
         if (uncertain || lastUserEventId.isBlank()) return
         var threadId = mutableSession.value?.threadId.orEmpty()
         if (reply.newThreadTitle.isNotBlank()) {
-            val t = book.start(UUID.randomUUID().toString(), ThreadKind.UNFINISHED_TALK, reply.newThreadTitle,
+            val kind = when {
+                listOf("目标", "打算", "计划", "想要").any { userText.contains(it) } -> ThreadKind.GOAL
+                listOf("烦", "担心", "矛盾", "问题").any { userText.contains(it) } -> ThreadKind.OPEN_PROBLEM
+                else -> ThreadKind.UNFINISHED_TALK
+            }
+            val t = book.start(UUID.randomUUID().toString(), kind, reply.newThreadTitle,
                 reply.newThreadImportance, now(), listOf(lastUserEventId))
             book.onUserTurn(t.id, now(), userText)
             threadId = t.id
             mutableSession.value?.let { update(it.copy(threadId = t.id)) }
             saveThreads()
         }
-        if (reply.memoryProposal.isNotBlank()) mutableProposal.value = MemoryProposal(reply.memoryProposal.take(200), lastUserEventId, threadId, version)
+        if (reply.memoryProposal.isNotBlank()) mutableProposal.value = MemoryProposal(reply.memoryProposal.take(48), lastUserEventId, threadId, version)
     }
     fun answerMemory(remember: Boolean) {
         val p = mutableProposal.value ?: return
@@ -158,6 +194,7 @@ class PartnerConversation(private val app: PetApp) {
     }
 
     val governor = ProactiveGovernor(app.settings.partnerPerHour)
+    private val deliveries by lazy { PartnerDelivery(governor, app.voiceQueue, app.ledger) }
     data class Trace(val at: Long, val source: String, val anchor: String)
     private val mutableShown = MutableStateFlow<List<Trace>>(emptyList())
     val shown: StateFlow<List<Trace>> = mutableShown
@@ -169,9 +206,12 @@ class PartnerConversation(private val app: PetApp) {
     fun proactive(signals: GovernorSignals, candidates: List<TopicCandidate>, stillAllowed: () -> Boolean) {
         governor.configureTarget(app.settings.partnerPerHour)
         if (mutableBusy.value) return
+        if (lastAttemptAt?.let { signals.now - it < 30_000 } == true) return
         val decision = governor.decide(signals, candidates)
         if (decision is GovernorDecision.Silent) { noteBlocked(decision.reason); return }
         val candidate = (decision as GovernorDecision.Speak).candidate
+        lastAttemptAt = signals.now
+        proactivePending = true
         val expected = ++revision
         mutableBusy.value = true
         job = scope.launch {
@@ -187,34 +227,41 @@ class PartnerConversation(private val app: PetApp) {
                     val spoken = voiceDelivery?.invoke(reply.say) == true
                     if (spoken) { open(); mutableSession.value?.let { update(rules.add(it.copy(threadId = candidate.threadId), DialogueTurn(Speaker.PET, reply.say, now(), TurnChannel.PROACTIVE))) } }
                     spoken
-                } else offer(reply.say, candidate.threadId, allowBusy = true)
+                } else deliver(reply.say, candidate.threadId)
                 if (delivered) {
                     anchor = candidate.anchor
                     anchorSource = candidate.source
                     val at = now()
-                    governor.onShown(at)
-                    app.ledger.record(reply.say, at)
-                    // The candidate and final wording are separate evidence; consume only after delivery.
-                    if (candidate.id.startsWith("vi-")) app.voiceQueue.markSpoken(candidate.id, at)
+                    deliveries.confirm(expected.toString(), candidate, reply.say, at, delivered = true)
                     mutableShown.value = (listOf(Trace(at, candidate.source.name, candidate.anchor.take(100))) + mutableShown.value).take(5)
                     followedUp(candidate)
                     retainQuotedMaterial(candidate, reply)
+                    val conversationId = mutableSession.value?.id
+                    scope.launch(Dispatchers.IO) {
+                        synchronized(app.memoryLock) {
+                            val event = app.events.append(EventKind.PROACTIVE, reply.say, source = "partner", conversationId = conversationId)
+                            app.events.append(EventKind.EXCHANGE, "同桌主动聊起：" + reply.say, source = "partner", conversationId = conversationId, sourceIds = listOf(event.id))
+                        }
+                    }
                     onProactiveShown?.invoke(candidate)
                     if (app.settings.ttsEnabled && !app.settings.partnerRiding) app.speech.say(reply.say)
                 } else noteBlocked("输出界面未显示")
-            } finally { if (expected == revision) mutableBusy.value = false }
+            } finally { if (expected == revision) { proactivePending = false; mutableBusy.value = false } }
         }
     }
 
     fun open() {
         val current = mutableSession.value
-        if (current == null || !rules.canResume(current, now())) update(rules.start(UUID.randomUUID().toString(), now()))
+        if (current == null || !rules.canResume(current, now())) {
+            anchor = ""
+            update(rules.start(UUID.randomUUID().toString(), now()))
+        }
         else update(rules.resume(current, now()))
     }
 
     fun away() { mutableSession.value?.let { update(rules.away(it, now())) } }
     fun tick() { mutableSession.value?.let { val next = rules.tick(it, now()); if (next != it) { cancel(); update(next) } } }
-    fun cancel() { revision++; job?.cancel(); mutableBusy.value = false }
+    fun cancel() { revision++; job?.cancel(); proactivePending = false; mutableBusy.value = false }
     fun close() { cancel(); mutableSession.value?.let { update(rules.close(it, "用户结束")) } }
 
     fun observe(text: String, material: String, source: TopicSource) {
@@ -228,7 +275,7 @@ class PartnerConversation(private val app: PetApp) {
     fun offer(text: String, threadId: String = "", allowBusy: Boolean = false): Boolean {
         if (blocked() != null || (mutableBusy.value && !allowBusy) || ContentGuard.violates(text)) return false
         open()
-        val shown = if (pageVisible) true else display?.invoke(text) == true
+        val shown = !pageVisible && display?.invoke(text) == true
         if (!shown) return false
         val current = mutableSession.value ?: return false
         update(rules.add(current.copy(threadId = threadId), DialogueTurn(Speaker.PET, text, now(), TurnChannel.PROACTIVE)))
@@ -237,7 +284,16 @@ class PartnerConversation(private val app: PetApp) {
 
     fun send(text: String, channel: TurnChannel = TurnChannel.TYPED, uncertain: Boolean = false) {
         val clean = text.trim().take(1200)
-        if (clean.isBlank() || mutableBusy.value) return
+        if (proposal.value != null && !uncertain) {
+            if (clean in listOf("记住", "记住吧", "要", "是")) { answerMemory(true); return }
+            if (clean in listOf("不要", "不记", "这次不记")) { answerMemory(false); return }
+        }
+        if (clean in listOf("结束话题", "不聊了", "不聊这个了", "解决了")) {
+            session.value?.threadId?.takeIf { it.isNotBlank() }?.let { closeThread(it) }
+            close(); return
+        }
+        if (clean.isBlank() || (mutableBusy.value && !proactivePending)) return
+        if (proactivePending) cancel()
         blocked()?.let { mutableStatus.value = it; return }
         open()
         val s = mutableSession.value ?: return
@@ -257,7 +313,7 @@ class PartnerConversation(private val app: PetApp) {
                 }
                 s.threadId.takeIf { it.isNotBlank() }?.let { id ->
                     if (clean in listOf("解决了", "不聊了", "不聊这个了")) book.close(id, clean)
-                    else book.onUserTurn(id, now(), clean)
+                    else book.onUserTurn(id, now(), if (uncertain) "（可能听错）" + clean else clean)
                     pendingFollowUp = null
                     saveThreads()
                 }
@@ -265,8 +321,16 @@ class PartnerConversation(private val app: PetApp) {
                 val input = withContext(Dispatchers.IO) { replyInput(clean, false) }
                 val answer = if (key == null) null else generate(input, key)
                 if (expected != revision || inputVersion != withContext(Dispatchers.IO) { memoryVersion() } || blocked() != null) return@launch
-                appendReply(answer?.say ?: "这次没能可靠接上你的话，可以再说一句。")
                 if (answer != null) acceptMetadata(answer, clean, uncertain, inputVersion)
+                val say = answer?.say ?: when {
+                    key == null -> "还没配置对话模型。可以先去设置里填写接口和 Key。"
+                    app.budget.remaining(app.settings.dailyLimit, LocalDate.now().toString()) <= 0 -> "今天的模型调用次数用完了，调整设置里的每日额度后可以继续。"
+                    else -> "这次没能可靠接上你的话，可以再说一句。"
+                }
+                appendReply(say)
+                onMetadata?.invoke()
+                mutableBusy.value = false
+                mutableStatus.value = ""
                 compact(key)
             } finally { if (expected == revision) { mutableBusy.value = false; mutableStatus.value = "" } }
         }
@@ -274,7 +338,7 @@ class PartnerConversation(private val app: PetApp) {
 
     private suspend fun replyInput(userText: String, proactive: Boolean, candidate: TopicCandidate? = null): ReplyInput = synchronized(app.memoryLock) {
         val visibility = cn.companion.pet.core.companion.EventVisibility(app.events.all(), app.memory.tombstones())
-        val memories = app.facts.live().filter { visibility.allows(it) }.takeLast(12).associate { it.id to it.text }
+        val memories = app.facts.live().filter { visibility.allows(it) }.takeLast(12).associate { it.id to ((if (it.confidence == cn.companion.pet.core.companion.Confidence.GUESSED) "尚未确认的推测：" else "你说过：") + it.text) }
         ReplyInput(candidate?.anchor ?: listOf(anchor, userText).filter { it.isNotBlank() }.joinToString("\n"),
             candidate?.source ?: if (anchor.isNotBlank()) anchorSource else TopicSource.THREAD_FOLLOW_UP,
             memories, voiceOnly = app.settings.partnerRiding, proactive = proactive)
@@ -287,9 +351,18 @@ class PartnerConversation(private val app: PetApp) {
 
     private fun appendReply(text: String) {
         val s = mutableSession.value ?: return
+        val sourceId = lastUserEventId
+        val userTurn = s.turns.lastOrNull { it.speaker == Speaker.USER }
         update(rules.add(s, DialogueTurn(Speaker.PET, text, now(), TurnChannel.REPLY)).copy(state = s.state))
         if (!pageVisible && s.state == SessionState.ACTIVE && !app.settings.partnerRiding) display?.invoke(text)
-        onReply?.invoke(text)
+        if (s.state == SessionState.ACTIVE) onReply?.invoke(text)
+        scope.launch(Dispatchers.IO) {
+            synchronized(app.memoryLock) {
+                val reply = app.events.append(EventKind.PET_REPLY, text, source = "partner", conversationId = s.id, sourceIds = listOfNotNull(sourceId.takeIf { it.isNotBlank() }))
+                val line = "你：" + userTurn?.text.orEmpty().take(300) + (if (userTurn?.uncertain == true) "（可能听错）" else "") + " | 同桌：" + text
+                app.events.append(EventKind.EXCHANGE, line, source = "partner", conversationId = s.id, sourceIds = listOfNotNull(sourceId.takeIf { it.isNotBlank() }, reply.id))
+            }
+        }
     }
 
     private suspend fun request(messages: List<ChatMessage>, key: String, tokens: Int = 600): String? {
@@ -300,11 +373,12 @@ class PartnerConversation(private val app: PetApp) {
 
     private suspend fun compact(key: String?) {
         val snapshot = mutableSession.value ?: return
-        if (key == null || !rules.needsCompaction(snapshot)) return
-        val old = rules.turnsToCompact(snapshot)
-        val summary = request(listOf(ChatMessage(ChatRole.SYSTEM, "把已有摘要和这些对话合并成一段短摘要，保留他的观点、未完事项和语音不确定标记。不添加事实。只输出摘要。"),
-            ChatMessage(ChatRole.USER, snapshot.summary + "\n" + old.joinToString("\n") { it.speaker.name + ":" + it.text + if (it.uncertain) "（可能听错）" else "" })), key, 400) ?: return
-        if (mutableSession.value == snapshot) update(rules.applyCompaction(snapshot, summary))
+        if (!rules.needsCompaction(snapshot)) return
+        val version = withContext(Dispatchers.IO) { memoryVersion() }
+        val old = rules.turnsToCompact(snapshot).filterNot { it.ephemeral }
+        val summary = (if (key == null) null else request(listOf(ChatMessage(ChatRole.SYSTEM, "把已有摘要和这些对话合并成一段短摘要，保留他的观点、未完事项和语音不确定标记。不添加事实。只输出摘要。"),
+            ChatMessage(ChatRole.USER, snapshot.summary + "\n" + old.joinToString("\n") { it.speaker.name + ":" + it.text + if (it.uncertain) "（可能听错）" else "" })), key, 400)) ?: (snapshot.summary + "\n" + old.joinToString("\n") { it.speaker.name + "：" + it.text + if (it.uncertain) "（可能听错）" else "" }).takeLast(800)
+        if (mutableSession.value == snapshot && version == withContext(Dispatchers.IO) { memoryVersion() }) update(rules.applyCompaction(snapshot, summary))
     }
 
     private fun update(s: DialogueSession) {

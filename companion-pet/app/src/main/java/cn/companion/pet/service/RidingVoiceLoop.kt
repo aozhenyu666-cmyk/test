@@ -19,6 +19,7 @@ class RidingVoiceLoop(private val context: Context, private val allowed: () -> B
     private var nextListen: Job? = null
     private var utterance: String? = null
     private var speaking = false
+    private var pendingPrompt: String? = null
     private var failures = 0
     private var waitingSince = 0L
 
@@ -47,7 +48,12 @@ class RidingVoiceLoop(private val context: Context, private val allowed: () -> B
                     if (continuation.isActive) continuation.resume(false)
                     if (expected == generation && running) {
                         speaking = false; utterance = null
-                        if (ok) { failures = 0; scheduleListen(350) }
+                        if (!allowed()) { pendingPrompt = null }
+                        else if (ok) {
+                            failures = 0
+                            val prompt = pendingPrompt; pendingPrompt = null
+                            if (prompt != null) scope.launch { say(prompt) } else scheduleListen(350)
+                        }
                         else { app.partner.noteBlocked("语音播放失败，已停止骑行模式"); app.settings.partnerRiding = false; stop() }
                     }
                 })
@@ -58,12 +64,16 @@ class RidingVoiceLoop(private val context: Context, private val allowed: () -> B
         return started
     }
 
-    fun reply(text: String) { scope.launch { say(text) } }
+    fun reply(text: String, prompt: String? = null) { pendingPrompt = prompt; scope.launch { say(text) } }
 
     fun tick() {
         if (!running) return
         if (!wake.isHeld) wake.acquire(10 * 60_000L)
-        if (!allowed()) { generation++; voice.cancel(); app.partner.voiceCapturing = false; utterance?.let(app.speech::stop); speaking = false; return }
+        if (!allowed()) {
+            generation++; nextListen?.cancel(); voice.cancel(); app.partner.voiceCapturing = false
+            utterance?.let(app.speech::stop); utterance = null; speaking = false; pendingPrompt = null
+            return
+        }
         if (app.partner.voiceCapturing && System.currentTimeMillis() - waitingSince > 60_000) {
             voice.cancel(); app.partner.voiceCapturing = false; scheduleListen(1000)
         }
@@ -97,7 +107,7 @@ class RidingVoiceLoop(private val context: Context, private val allowed: () -> B
     }
 
     fun stop() {
-        running = false; generation++; nextListen?.cancel(); voice.cancel()
+        running = false; pendingPrompt = null; generation++; nextListen?.cancel(); voice.cancel()
         app.partner.voiceCapturing = false
         utterance?.let(app.speech::stop); utterance = null; speaking = false
         if (wake.isHeld) wake.release()

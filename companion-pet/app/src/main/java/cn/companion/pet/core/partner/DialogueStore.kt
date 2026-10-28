@@ -15,7 +15,7 @@ class DialogueStore(root: File) {
     fun save(session: DialogueSession) {
         file.parentFile?.mkdirs()
         val temp = File(file.parentFile, ".dialogue.tmp")
-        temp.writeText(json.encodeToString(DialogueSession.serializer(), session))
+        temp.writeText(json.encodeToString(DialogueSession.serializer(), session.copy(turns = session.turns.filterNot { it.ephemeral })))
         Files.move(temp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
     }
 }

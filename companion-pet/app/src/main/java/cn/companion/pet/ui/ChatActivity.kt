@@ -29,6 +29,7 @@ import cn.companion.pet.ui.theme.LocalCompanionColors
 /** Same application-owned session as the overlay; navigation never creates a second conversation. */
 class ChatActivity : ComponentActivity() {
     private val app get() = application as PetApp
+    private var ownsCapture = false
     private val voice by lazy { VoiceInput(this) }
     private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
         if (allowed) listen()
@@ -39,10 +40,11 @@ class ChatActivity : ComponentActivity() {
     }
     override fun onResume() { super.onResume(); app.partner.pageVisible = true; app.partner.open() }
     override fun onPause() {
-        app.partner.pageVisible = false
+        app.partner.pageHidden()
         app.partner.typing = false
         voice.cancel()
-        app.partner.voiceCapturing = false
+        if (ownsCapture) app.partner.voiceCapturing = false
+        ownsCapture = false
         app.partner.away()
         super.onPause()
     }
@@ -53,8 +55,10 @@ class ChatActivity : ComponentActivity() {
     private fun listen() {
         if (app.settings.partnerRiding || app.partner.busy.value || app.partner.voiceCapturing) return
         if (!voice.available) { android.widget.Toast.makeText(this, "系统语音识别不可用，可以用输入法话筒。", android.widget.Toast.LENGTH_LONG).show(); return }
+        ownsCapture = true
         app.partner.voiceCapturing = true
         voice.start { text ->
+            ownsCapture = false
             app.partner.voiceCapturing = false
             if (!text.isNullOrBlank()) app.partner.send(text, TurnChannel.VOICE, voice.lastUncertain)
             else android.widget.Toast.makeText(this, "没有听清，可以重试或打字。", android.widget.Toast.LENGTH_SHORT).show()
@@ -72,12 +76,19 @@ private fun ChatPage(app: PetApp, back: () -> Unit, listen: () -> Unit) {
     val busy by partner.busy.collectAsState()
     val status by partner.status.collectAsState()
     val proposal by partner.proposal.collectAsState()
+    val pending by partner.presentation.collectAsState()
     val colors = LocalCompanionColors.current
     val listState = rememberLazyListState()
     var text by remember { mutableStateOf("") }
     var lookQuestion by remember { mutableStateOf(false) }
     var question by remember { mutableStateOf("") }
     val turns = session?.turns.orEmpty()
+    LaunchedEffect(pending?.id) {
+        val id = pending?.id ?: return@LaunchedEffect
+        withFrameNanos { }
+        withFrameNanos { }
+        partner.pageRendered(id)
+    }
     LaunchedEffect(turns.size, busy) { if (turns.isNotEmpty()) listState.animateScrollToItem(turns.lastIndex + if (session?.summary?.isNotBlank() == true) 1 else 0) }
     Column(Modifier.fillMaxSize().background(colors.paper).safeDrawingPadding().imePadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -113,6 +124,7 @@ private fun ChatPage(app: PetApp, back: () -> Unit, listen: () -> Unit) {
                 }
             }
         }
+        if (pending != null) Text(pending!!.text, Modifier.fillMaxWidth().padding(20.dp), style = MaterialTheme.typography.bodyLarge)
         if (lookQuestion) AlertDialog(
             onDismissRequest = { lookQuestion = false },
             title = { Text("想一起看什么？") },
@@ -141,7 +153,7 @@ private fun ChatPage(app: PetApp, back: () -> Unit, listen: () -> Unit) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = listen, enabled = !busy && !app.settings.partnerRiding) { Text("语音") }
             OutlinedTextField(text, { text = it; partner.typing = it.isNotBlank() }, modifier = Modifier.weight(1f), placeholder = { Text("接着说……") }, maxLines = 5)
-            Button(onClick = { val said = text; text = ""; partner.typing = false; partner.send(said) }, enabled = text.isNotBlank() && !busy) { Text("发送") }
+            Button(onClick = { val said = text; text = ""; partner.typing = false; partner.send(said) }, enabled = text.isNotBlank() && (!busy || partner.proactivePending)) { Text("发送") }
         }
     }
 }

@@ -16,6 +16,7 @@ import android.speech.SpeechRecognizer
  */
 class VoiceInput(private val context: Context) {
     private var recognizer: SpeechRecognizer? = null
+    private var generation = 0
     private var partial = ""
     var lastUncertain = false
         private set
@@ -37,19 +38,23 @@ class VoiceInput(private val context: Context) {
         if (!available) { onResult(null); return }
         partial = ""
         callback = onResult
+        val expected = generation
         val r = runCatching { SpeechRecognizer.createSpeechRecognizer(context) }.getOrNull()
         if (r == null) { finish(null); return }
         recognizer = r
         r.setRecognitionListener(object : RecognitionListener {
             override fun onResults(results: Bundle?) {
+                if (expected != generation) return
                 val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
                 lastUncertain = text.isNullOrBlank() || (results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)?.firstOrNull()?.let { it in 0f..0.55f } == true)
                 finish(text?.takeIf { it.isNotBlank() } ?: partial.takeIf { it.isNotBlank() })
             }
             override fun onPartialResults(partialResults: Bundle?) {
+                if (expected != generation) return
                 partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { partial = it }
             }
             override fun onError(error: Int) {
+                if (expected != generation) return
                 lastUncertain = true
                 if (partial.isBlank()) lastError = error
                 finish(partial.takeIf { it.isNotBlank() })
@@ -78,12 +83,14 @@ class VoiceInput(private val context: Context) {
     }
 
     fun cancel() {
+        generation++
         callback = null
         runCatching { recognizer?.destroy() }
         recognizer = null
     }
 
     private fun finish(text: String?) {
+        generation++
         val cb = callback
         callback = null
         runCatching { recognizer?.destroy() }

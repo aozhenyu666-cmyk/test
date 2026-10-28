@@ -24,6 +24,7 @@ data class OwnActivity(
     val totalHint: Int? = null,
     val startedAt: Long = 0L,
     val lastTouchedAt: Long = 0L,
+    val sourceExcerpt: String = "",
 )
 
 /** 它自己此刻的心情。只影响语气，不是对模型真实情感的宣称。 */

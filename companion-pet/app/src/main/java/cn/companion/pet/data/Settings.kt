@@ -52,7 +52,7 @@ class Settings(context: Context) {
     var heartbeatEnabled by bool("heartbeat", false)
     var heartbeatIntervalMin by int("heartbeat_interval", 20)
 
-    var sessionAutoStart by bool("session_auto_start", true)
+    var sessionAutoStart by bool("session_auto_start", false)
     var sessionAutoStartSec by int("session_auto_start_sec", 20)
     /** 专注守护：SOFT 只提醒（默认）；STRICT 到点全屏拦截并有界自动拉回，必须用户自己打开。 */
     var focusEnforcement by str("focus_enforcement", "SOFT")
