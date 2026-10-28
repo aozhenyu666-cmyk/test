@@ -96,6 +96,10 @@ class GateIntegrationTest {
             connectGate()
             val day = java.time.LocalDate.now(com.yishou.app.settings.AppZone.zone)
             val initial = app.stats.day(day).event(com.yishou.app.stats.DayStats.GATE_SHOWN)
+            val homePackage = app.packageManager.resolveActivity(
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+                android.content.pm.PackageManager.MATCH_DEFAULT_ONLY,
+            )?.activityInfo?.packageName ?: error("测试设备没有默认桌面")
             repeat(20) { index ->
                 RuntimeSupport.fixture()
                 val shown = device.wait(Until.hasObject(By.text("打开「入口测试应用」之前")), 8_000)
@@ -104,7 +108,8 @@ class GateIntegrationTest {
                 Assert.assertEquals(initial + index + 1, app.stats.day(day).event(com.yishou.app.stats.DayStats.GATE_SHOWN))
                 Assert.assertNull(app.database.dao().activePass("联通娱乐", System.currentTimeMillis()))
                 find(By.text("先回桌面")).click()
-                eventually { !GateActivity.isShowing && GateService.foreground != RuntimeSupport.TARGET && GateService.foreground != app.packageName }
+                // 只订阅窗口切换的服务可能收不到桌面组件的最后一条事件；这里验证实际桌面。
+                eventually { !GateActivity.isShowing && device.currentPackageName == homePackage }
             }
             Assert.assertEquals(20, app.stats.day(day).event(com.yishou.app.stats.DayStats.GATE_SHOWN) - initial)
             RuntimeEvidence.capture("twenty-external-openings-blocked")
