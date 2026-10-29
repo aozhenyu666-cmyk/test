@@ -229,6 +229,7 @@ class GateService : AccessibilityService() {
         lastLaunchAt = System.currentTimeMillis()
         app.stats.event(if (group == GateActivity.WINDOW_GROUP) DayStats.WINDOW_BLOCK else DayStats.GATE_SHOWN)
         GateTrace.log("拦下：弹出入口页（$group）", pkg)
+        val shownBefore = GateActivity.resumes
         val opened = if (pretendBlockedForTest) {
             GateTrace.log("测试：假装系统悄悄拦下了后台弹出", pkg)
             true
@@ -244,7 +245,8 @@ class GateService : AccessibilityService() {
         // 很多国产系统不给“后台弹出界面”时不报错、只是不显示：过一会儿看页面到底出来没有
         scope.launch {
             if (opened) delay(2_500)
-            if (GateActivity.isShowing) { _problem.value = null; return@launch }
+            // 这期间入口页出来过（哪怕已经被关掉、人又回到这个应用），就不是被系统拦了
+            if (GateActivity.isShowing || GateActivity.resumes != shownBefore) { _problem.value = null; return@launch }
             if (foregroundPkg != pkg) return@launch
             _problem.value = "系统没让入口页弹出来（多半是没开“后台弹出界面”权限），已改用遮罩挡住"
             GateTrace.log("入口页没出来：系统拦了后台弹出。改用遮罩挡住", pkg)

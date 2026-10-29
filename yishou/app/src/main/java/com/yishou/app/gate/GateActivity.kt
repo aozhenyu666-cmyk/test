@@ -114,6 +114,7 @@ class GateActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         isShowing = true
+        resumes++
         GateTrace.init(this)
         GateTrace.log("入口页显示出来了", intent?.getStringExtra(EXTRA_PACKAGE))
         GateService.hideCover()
@@ -172,6 +173,11 @@ class GateActivity : ComponentActivity() {
         /** 思考页正在前台。无障碍服务据此避免重复打开。 */
         @Volatile
         var isShowing = false
+            private set
+
+        /** 入口页一共显示过几次：服务用它判断“弹出后到底出来过没有” */
+        @Volatile
+        var resumes = 0
             private set
 
         fun intent(context: Context, pkg: String, group: String): Intent =
