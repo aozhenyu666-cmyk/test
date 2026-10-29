@@ -199,6 +199,18 @@ class PetApp : Application() {
      */
     val voiceQueue by lazy { cn.companion.pet.core.voice.VoiceIntentQueue() }
 
+    /**
+     * 用户明确给了时间的约定（"十分钟后问问我进度"）。
+     *
+     * 与 [voiceQueue] 的区别：队列是"攒着想说的话"，这里是"承诺了要在某个时刻问"。
+     * 约定优先——到点的约定必须先说，不能被攒着的闲聊挤掉。
+     */
+    val appointmentBook by lazy {
+        cn.companion.pet.core.appointment.AppointmentBook(
+            cn.companion.pet.core.appointment.AppointmentStore(java.io.File(filesDir, "memory")),
+        )
+    }
+
     /** R3：说过的话账本，用来硬拦"换个标点再说一遍"。 */
     val ledger by lazy { cn.companion.pet.core.voice.SayingLedger() }
 

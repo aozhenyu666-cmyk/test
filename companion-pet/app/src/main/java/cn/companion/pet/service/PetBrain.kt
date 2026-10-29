@@ -1079,11 +1079,23 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         val pkg = PerceptionHub.trail.foreground
         partnerSampleJob = scope.launch {
             try {
+
                 // R2：主动开口只取**不需要网络**的候选。
                 // 读屏与视觉曾挂在这条链上，导致"要等截图/视觉返回才可能出字"——
                 // 用户等的是网络，不是模型。这里把两者都移出必经路径。
                 val candidates = withContext(Dispatchers.IO) {
                     buildList {
+                        // **约定优先**：用户明确约好的事到点必须先说，不能被攒着的闲聊挤掉。
+                        // 阶段 3 核心要求（3.3-1）：创建成功要可见、到期要追问。
+                        for (a in app.appointmentBook.dueNow()) {
+                            add(TopicCandidate(
+                                id = "ap-" + a.id,
+                                source = TopicSource.THREAD_FOLLOW_UP,
+                                anchor = "约好的：" + a.topic + "（他原话：" + a.basis.take(40) + "）",
+                                importance = 3,
+                                observedAt = now,
+                            ))
+                        }
                         add(small)
                         app.voiceQueue.next(now) { app.ledger.isTooSimilar(it) }?.let {
                             add(TopicCandidate(it.id, TopicSource.OWN_READING, it.summary, observedAt = it.createdAt))
