@@ -123,6 +123,23 @@
         <receiver
             android:name=".service.Heartbeat$HeartbeatReceiver"
             android:exported="false" />
-    </application>
+            <!-- 通知通道自检：验收时可 adb broadcast 直接验证通知能不能弹出来，
+             不依赖模型/网络/Key，把"通知坏了"和"生成坏了"分开。 -->
+        <receiver
+            android:name=".notify.ProactiveProbeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="cn.companion.pet.action.PROBE_NOTIFICATION" />
+            </intent-filter>
+        </receiver>
+        <!-- 仅调试构建的凭据注入（自动化验收用）。仅在 debuggable 包里生效。 -->
+        <receiver android:name=".notify.TestKeyReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="cn.companion.pet.action.SET_TEST_KEY" />
+                <action android:name="cn.companion.pet.action.CLEAR_TEST_KEY" />
+            </intent-filter>
+        </receiver>
+
+</application>
 
 </manifest>

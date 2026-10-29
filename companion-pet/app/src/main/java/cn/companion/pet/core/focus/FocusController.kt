@@ -234,13 +234,21 @@ class FocusController(
         // 拦截层永不出现——用户看到的就是"守护形同虚设"。
         // 现在统一每秒主动读一次真实前台，事件只是加速，不再是唯一来源。
         val activePkg = device.activePackage()
-        android.util.Log.i("PetGuard", "tick state=" + g.current.state + " fg=" + activePkg + " interactive=" + interactive)
         apply(g.tick(now(), activePkg, interactive))
     }
 
     fun userReturn() { guard?.let { apply(it.userReturn(now())) } }
     fun pause() { guard?.let { apply(it.pause(now())) } }
     fun abort() { guard?.let { apply(it.abort(now())) } }
+
+    /**
+     * 最近一次动作的可读描述（供调用方/诊断页读取）。
+     *
+     * 注意：这里**不能用 android.util.Log**——core/ 是纯 JVM 模块，
+     * 单测里 Log.i 会抛 "not mocked"。诊断信息通过这个字段对外暴露。
+     */
+    var lastActionNote: String = ""
+        private set
 
     private fun apply(actions: List<FocusAction>) {
         val g = guard ?: return
@@ -249,9 +257,8 @@ class FocusController(
         val epoch = lifecycle
         for (a in actions) {
             when (a) {
-                is FocusAction.Remind -> { android.util.Log.i("PetGuard", "REMIND " + a.text); ui.remind(label, a.text) }
+                is FocusAction.Remind -> { lastActionNote = "remind: " + a.text; ui.remind(label, a.text) }
                 is FocusAction.Block -> {
-                    android.util.Log.i("PetGuard", "BLOCK requested reason=" + a.reason)
                     val id = evidence.requested("focus_block_draw", now())
                     val r = runCatching { ui.showBlock(label, a.reason) }.getOrElse { OverlayResult(false, it.javaClass.simpleName) }
                     overlayShown = r.shown

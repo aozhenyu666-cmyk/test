@@ -146,7 +146,10 @@ class ProactiveGovernorTest {
             if (d is GovernorDecision.Speak) { g.onShown(now); g.onUserReplied(); spoken++ }
             now += 10_000
         }
-        assertTrue("spoken=$spoken", spoken in 15..30)
+        // 间隔改为随机引擎采样后，具体次数不再固定；这里只验证量级正确。
+        // 精确的分布正确性由 RandomTriggerEngineTest 用多种子统计钉住。
+        assertTrue("一小时只说了 $spoken 次，20 次/小时档位不该这么沉默", spoken >= 10)
+        assertTrue("一小时说了 $spoken 次，突发限流失效", spoken <= 32)
     }
 
     @Test fun silenceSlowsDownButDoesNotStop() {
@@ -213,13 +216,27 @@ class ProactiveGovernorTest {
     }
 
     @Test fun importantMattersComeSooner() {
+        // 间隔改为随机采样后，"100 秒一定说出"不再成立。
+        // 但这个测试真正要钉的意图仍然存在：**重要的事硬下限更短**。
+        // 现在直接验证这条规则本身（minGapFor），而不是依赖随机结果。
         val g = ProactiveGovernor(20)
-        g.decide(sig(0), listOf(thread(0, 3))); g.onShown(0); g.onUserReplied()
-        // 普通事要 3 分钟，重要的事 1.5 分钟后就可以
-        assertTrue(g.decide(sig(100_000), listOf(thread(100_000, 3))) is GovernorDecision.Speak)
-        val g2 = ProactiveGovernor(20)
-        g2.decide(sig(0), listOf(thread(0, 1))); g2.onShown(0); g2.onUserReplied()
-        assertTrue(g2.decide(sig(100_000), listOf(thread(100_000, 1))) is GovernorDecision.Silent)
+        val normalMin = g.minGapForForTest(1.0)
+        val importantMin = g.minGapForForTest(0.5)
+        assertTrue(
+            "重要的事应当允许更短的硬下限（normal=$normalMin, important=$importantMin）",
+            importantMin < normalMin,
+        )
+        assertTrue("硬下限不许低于 22.5 秒，否则会变成刷屏", importantMin >= 22_000L)
+
+        // 同时保证：刚说完话的瞬间，无论多重要都不许立刻再说（minGap 仍是硬约束）。
+        val g2 = ProactiveGovernor(10)
+        g2.decide(sig(0), listOf(thread(0, 3)))
+        g2.onShown(0)
+        g2.onUserReplied()
+        assertTrue(
+            "刚开口 1 秒内不该再说第二句",
+            g2.decide(sig(1_000), listOf(thread(1_000, 3))) is GovernorDecision.Silent,
+        )
     }
 }
 

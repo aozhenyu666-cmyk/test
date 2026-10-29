@@ -348,6 +348,13 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
             !settings.partnerRiding && cn.companion.pet.core.training.ScopedOutputPolicy.allows(protectedOutputOwner(), owner, priority, outputArbiter)
         }
         partner.look = { question -> lookOnce(question) }
+        // 主动消息投递器：通知优先（不依赖 UI），气泡作为可选通道。
+        // 这样即使聊天页/悬浮窗都不可用，生成的话也能真的送出去。
+        partner.dispatcher = cn.companion.pet.core.proactive.MessageDispatcher(
+            channels = listOf(
+                cn.companion.pet.notify.ProactiveNotifier(app),
+            ),
+        )
         speech.onPlayback = { playing -> overlay.setTalking(playing) }
         partner.requestProactive = { handler.post { presenceTick(now(), requested = true) } }
         partner.blocked = { partnerBusy() }

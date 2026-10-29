@@ -94,6 +94,19 @@ class PartnerConversation(private val app: PetApp) {
      * 由 PetBrain 接到 DeviceController 上；这里只做路由，不碰无障碍。
      */
     var performAction: (suspend (PartnerAction) -> Boolean)? = null
+
+    /**
+     * 主动消息的投递器（通知优先，气泡可选）。
+     *
+     * 为什么不直接调 overlay：气泡依赖 UI 存活，页面/悬浮窗一旦不可用，
+     * 生成成功也发不出去——这正是"它从来不说"的根因之一。
+     * 通知通道不依赖任何 UI，能在纯后台把消息送到。
+     */
+    var dispatcher: cn.companion.pet.core.proactive.MessageDispatcher? = null
+
+    /** 最近一次成功投递的消息 id，用于用户点通知后标记已读。 */
+    var lastDeliveryId: String = ""
+        private set
     /** 最近一次动作的结果：聊天页显示"已返回"/"已请求，未确认"，不混说。 */
     private val mutableActionStatus = MutableStateFlow("")
     val actionStatus: StateFlow<String> = mutableActionStatus
@@ -110,27 +123,50 @@ class PartnerConversation(private val app: PetApp) {
 
     suspend fun deliver(text: String, threadId: String = ""): Boolean {
         if (blocked() != null || PartnerLanguage.violates(text)) return false
-        if (!pageVisible) {
-            open()
-            val sessionId = mutableSession.value?.id
-            val shown = displayConfirmed?.invoke(text) == true
-            if (!shown || blocked() != null || pageVisible || mutableSession.value?.id != sessionId) return false
+
+        // 消息先落进会话，保证"说过了"这件事在页面上有记录，不管用哪条通道送出。
+        fun remember() {
             mutableSession.value?.let { update(rules.add(it.copy(threadId = threadId), DialogueTurn(Speaker.PET, text, now(), TurnChannel.PROACTIVE))) }
-            return true
         }
-        val receipt = CompletableDeferred<Boolean>()
-        val p = Presentation(UUID.randomUUID().toString(), text)
-        pageReceipt = receipt
-        mutablePresentation.value = p
-        try {
-            val rendered = withTimeoutOrNull(2500) { receipt.await() } == true
-            if (!rendered || !pageVisible || blocked() != null) return false
-            open()
-            mutableSession.value?.let { update(rules.add(it.copy(threadId = threadId), DialogueTurn(Speaker.PET, text, now(), TurnChannel.PROACTIVE))) }
-            return true
-        } finally {
-            if (mutablePresentation.value?.id == p.id) { mutablePresentation.value = null; pageReceipt = null }
+
+        // 1) 有投递器时走它：通知优先，气泡作为可选通道。
+        //    这样即使整个聊天 UI 没初始化，也能把话送出去。
+        val d = dispatcher
+        if (d != null) {
+            val record = d.dispatch(text, trigger = sourceLabel(anchorSource))
+            if (record.reachedUser) {
+                open()
+                remember()
+                lastDeliveryId = record.id
+                return true
+            }
+            // 投递器所有通道都失败：继续往下试页内路径（它可能此刻恰好可用）。
         }
+
+        // 2) 页内展示（用户就在聊天页）：这条路径能拿到真实渲染回执。
+        if (pageVisible) {
+            val receipt = CompletableDeferred<Boolean>()
+            val p = Presentation(UUID.randomUUID().toString(), text)
+            pageReceipt = receipt
+            mutablePresentation.value = p
+            try {
+                val rendered = withTimeoutOrNull(2500) { receipt.await() } == true
+                if (!rendered || !pageVisible || blocked() != null) return false
+                open()
+                remember()
+                return true
+            } finally {
+                if (mutablePresentation.value?.id == p.id) { mutablePresentation.value = null; pageReceipt = null }
+            }
+        }
+
+        // 3) 兜底：悬浮气泡。这条最依赖 UI，放最后。
+        open()
+        val sessionId = mutableSession.value?.id
+        val shown = displayConfirmed?.invoke(text) == true
+        if (!shown || blocked() != null || pageVisible || mutableSession.value?.id != sessionId) return false
+        remember()
+        return true
     }
     private var job: Job? = null
     private var revision = 0L

@@ -91,6 +91,14 @@ class ProactiveGovernor(
     fun configureTarget(value: Int) { targetPerHour = value.coerceIn(5, 40) }
 
     private var lastShownAt: Long? = null
+
+    /**
+     * 随机触发引擎：把"固定间隔"换成"真随机、非均匀、有突发"。
+     *
+     * 原来的实现是 baseGap × 各种倍率，完全是确定性的——20 次/小时就是死板的三分钟一次，
+     * 用户能一眼看出是定时器。现在间隔由对数正态采样，形态上更像真人。
+     */
+    private val randomEngine = cn.companion.pet.core.proactive.RandomTriggerEngine()
     private var awaitingSince: Long? = null
     private var consecutiveIgnored: Int = 0
     private val shownTimes = ArrayDeque<Long>()
@@ -183,8 +191,27 @@ class ProactiveGovernor(
 
         // 重要的事（3）间隔减半；没回应按退避拉长但不归零。
         val importanceFactor = if (best.importance >= 3) 0.5 else 1.0
-        val gap = (baseGapMillis * gapMultiplier(s.context) * silencePenalty() * importanceFactor).toLong()
-        lastShownAt?.let { last -> if (!requested && now - last < gap) return silent("离上次开口不到 " + gap / 1000 + " 秒", last + gap) }
+        // 间隔已交给 RandomTriggerEngine（对数正态采样）。
+        // 这里只把"重要的事"反映到引擎上：重要度高的临时收紧间隔。
+        randomEngine.configure(
+            cn.companion.pet.core.proactive.RandomTriggerConfig(
+                mode = modeForTarget(),
+                minGapMillis = minGapFor(importanceFactor),
+            ),
+        )
+        // 间隔判定交给随机引擎：它自己维护"上次真的开口的时刻"，
+        // 并按对数正态采样下一次，叠加突发与沉默恢复。
+        // requested=true 表示用户主动要求"现在聊一句"，跳过随机等待。
+        if (!requested) {
+            val verdict = randomEngine.evaluate(
+                nowMillis = now,
+                gateAllows = true, // 闸门已在上面逐条判过
+                lastSpeakAtMillis = lastShownAt ?: -1L,
+            )
+            if (verdict is cn.companion.pet.core.proactive.TriggerDecision.Hold) {
+                return silent("随机等待中（" + verdict.reason + "）", verdict.nextAtMillis)
+            }
+        }
         // 每小时硬上限：目标的 1.5 倍，防止重要事件连发。
         if (shownLastHour(now) >= (targetPerHour * 3) / 2) return silent("这一小时说得够多了", now + 5 * 60_000)
 
@@ -193,8 +220,25 @@ class ProactiveGovernor(
     }
 
     /** 调用方**确认真的显示了 / 念出来了**之后才调用；显示失败不调用，这句就不算说过。 */
+    /** 目标次数/小时 → 对应档位。用户设置的值优先。 */
+    private fun modeForTarget(): cn.companion.pet.core.proactive.ProactiveMode =
+        when {
+            targetPerHour >= 16 -> cn.companion.pet.core.proactive.ProactiveMode.EXPERIMENT
+            targetPerHour >= 10 -> cn.companion.pet.core.proactive.ProactiveMode.HIGH
+            else -> cn.companion.pet.core.proactive.ProactiveMode.DAILY
+        }
+
+    /** 重要的事项允许更密的开口（但仍有 45 秒硬下限）。 */
+    private fun minGapFor(importanceFactor: Double): Long =
+        (45_000L * importanceFactor.coerceIn(0.5, 1.0)).toLong()
+
+    /** 供测试验证"重要的事硬下限更短"这条规则本身（不依赖随机结果）。 */
+    internal fun minGapForForTest(importanceFactor: Double): Long = minGapFor(importanceFactor)
+
     fun onShown(now: Long) {
         lastShownAt = now
+        // 只有真的说出去了才推进随机节奏；生成失败不消耗机会。
+        randomEngine.onSpoken(now, lastShownAt ?: -1L)
         awaitingSince = now
         shownTimes.addLast(now)
     }
