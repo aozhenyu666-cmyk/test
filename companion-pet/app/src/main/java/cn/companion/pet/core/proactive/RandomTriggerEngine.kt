@@ -152,7 +152,7 @@ class RandomTriggerEngine(
      *
      * 关键：生成成功但投递失败时**不能**调用这个，否则会出现"说了但没人听见"却消耗了机会。
      */
-    fun onSpoken(nowMillis: Long, lastSpeakAtMillis: Long) {
+    fun onSpoken(nowMillis: Long, lastSpeakAtMillis: Long, ignoredStreak: Int = 0) {
         lastSpokenAt = nowMillis
         recentSpeaks.addLast(nowMillis)
         pruneWindow(nowMillis)
@@ -161,7 +161,7 @@ class RandomTriggerEngine(
         if (burstRemaining == 0 && config.burstExtraMax > 0 && random.nextDouble() < config.burstProbability) {
             burstRemaining = random.nextInt(1, config.burstExtraMax + 1)
         }
-        nextRollAt = nowMillis + nextGap(nowMillis, lastSpeakAtMillis)
+        nextRollAt = nowMillis + nextGap(nowMillis, lastSpeakAtMillis, ignoredStreak)
     }
 
     /**
@@ -177,13 +177,23 @@ class RandomTriggerEngine(
      * 中位数 = 3_600_000 / ratePerHour；sigma 控制离散度。
      * 结果会被夹到 [minGapMillis, maxGapMillis] 之间。
      */
-    internal fun nextGap(nowMillis: Long, lastSpeakAtMillis: Long): Long {
+    internal fun nextGap(nowMillis: Long, lastSpeakAtMillis: Long, ignoredStreak: Int = 0): Long {
         val median = config.medianGapMillis.toDouble().coerceAtLeast(config.minGapMillis.toDouble())
         // Box-Muller 取一个标准正态，用注入的 random 保证可复现。
         val gauss = gaussian()
         var gap = median * exp(config.sigma * gauss)
 
+        // 退避：连续被忽略时拉长间隔。
+        //
+        // 关键：这条**必须**留在随机引擎里。之前它在外层的 silencePenalty() 中，
+        // 接入随机引擎后外层不再参与间隔计算，退避就等于失效了——
+        // 实测 120 分钟不回应仍然说了 40 次，和"有回应"完全一样。
+        if (ignoredStreak > 0) {
+            gap *= (1.0 + 0.5 * ignoredStreak).coerceAtMost(MAX_SILENCE_PENALTY)
+        }
+
         // 沉默恢复：冷太久了，把间隔收紧，别让沉默自我强化。
+        // 注意顺序：先罚后退避恢复，否则"忽略退避"会和"沉默恢复"互相抵消。
         if (lastSpeakAtMillis > 0L && nowMillis - lastSpeakAtMillis > config.resumeAfterMillis) {
             gap *= config.resumeFactor
         }
@@ -212,5 +222,8 @@ class RandomTriggerEngine(
 
         /** 「从未说过」的哨兵。必须与真实时间戳区分开（0 是合法时间戳）。 */
         const val NEVER_SPOKEN = -1L
+
+        /** 退避上限：最多把间隔拉到 3 倍，不归零、不无限拉长。 */
+        const val MAX_SILENCE_PENALTY = 3.0
     }
 }

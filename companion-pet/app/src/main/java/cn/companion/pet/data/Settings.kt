@@ -122,6 +122,22 @@ class Settings(context: Context) {
     var partnerRiding by bool("partner_riding", false)
     var partnerPerHour by int("partner_per_hour", 20)
     var partnerQuietUntil by long("partner_quiet_until", 0L)
+
+    /**
+     * 黏度：它有多想反复回到同一个话题。
+     *
+     * 0 = 完全不黏（每次尽量换话题）；100 = 很黏（同一件事能连着追问）。
+     * 默认 50 对应 connect 基线 0.28。用户觉得"总说同一件"就调低，觉得"跳来跳去没深聊"就调高。
+     */
+    var partnerClinginess by int("partner_clinginess", 50)
+
+    /**
+     * 同一话题最多连续提几次（防死循环）。
+     *
+     * 即使黏度高，同一话题连续到这个次数后也会强制换话题——
+     * 这是硬上限，避免"俯视镜头"那种话题被无限追问下去。
+     */
+    var partnerSameTopicLimit by int("partner_same_topic_limit", 3)
     var ttsEnabled by bool("tts", false)
     /** 默认关：说话改为弹出输入框、用输入法自带的话筒。系统语音识别在不少国产机后台会直接失败。 */
     var systemVoice by bool("system_voice", false)

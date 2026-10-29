@@ -92,6 +92,12 @@ class ProactiveGovernor(
 
     private var lastShownAt: Long? = null
 
+    /** 最近一次判定要说的需求，用于 onShown 时满足对应动机。 */
+    private var lastNeed: cn.companion.pet.core.proactive.Need? = null
+
+    /** 最近一次说的话题锚点（前 40 字），用于同话题上限。 */
+    private var lastSpokenTopic: String = ""
+
     /**
      * 随机触发引擎：把"固定间隔"换成"真随机、非均匀、有突发"。
      *
@@ -99,6 +105,17 @@ class ProactiveGovernor(
      * 用户能一眼看出是定时器。现在间隔由对数正态采样，形态上更像真人。
      */
     private val randomEngine = cn.companion.pet.core.proactive.RandomTriggerEngine()
+
+    /**
+     * 动机引擎：回答「它此刻想不想说」。
+     *
+     * 与 [randomEngine] 的分工：随机引擎管「什么时候有机会」，动机引擎管「这个机会值不值」。
+     * 两者相乘，才既不像定时器、也不会无脑开口。
+     */
+    private val driveEngine = cn.companion.pet.core.proactive.DriveEngine()
+
+    /** 动机低到这个程度就先缓一缓。 */
+    private val lowAppetiteFloor = 0.45
     private var awaitingSince: Long? = null
     private var consecutiveIgnored: Int = 0
     private val shownTimes = ArrayDeque<Long>()
@@ -189,7 +206,22 @@ class ProactiveGovernor(
         if (usable.isEmpty()) return silent("手里没有具体可聊的")
         val best = usable.maxWith(compareBy<TopicCandidate> { score(it, s.context) }.thenBy { it.observedAt })
 
+        // 动机层：把「它此刻想不想说」折进候选选择。
+        //
+        // 关键：动机只影响**选哪个/要不要缓一缓**，不绕过任何硬规则
+        // （专注禁言、免打扰、频率上限、每日上限都已经在上面判过）。
+        val need = needForSource(best.source)
+        lastNeed = need
+        if (need != null) {
+            val appetite = driveEngine.appetiteFor(need)
+            // 动机过低时这次先缓一缓，但**不消耗**随机机会——想说的劲儿还在，下次再说。
+            if (appetite < lowAppetiteFloor) {
+                return silent("此刻不太想说（" + need.label + " " + appetite + "）", now + 2 * 60_000L)
+            }
+        }
+
         // 重要的事（3）间隔减半；没回应按退避拉长但不归零。
+        lastSpokenTopic = best.anchor.take(40)
         val importanceFactor = if (best.importance >= 3) 0.5 else 1.0
         // 间隔已交给 RandomTriggerEngine（对数正态采样）。
         // 这里只把"重要的事"反映到引擎上：重要度高的临时收紧间隔。
@@ -235,10 +267,47 @@ class ProactiveGovernor(
     /** 供测试验证"重要的事硬下限更短"这条规则本身（不依赖随机结果）。 */
     internal fun minGapForForTest(importanceFactor: Double): Long = minGapFor(importanceFactor)
 
+    /** 候选来源 → 它对应的动机需求；对不上时 null（不强行编需求）。 */
+    private fun needForSource(src: TopicSource): cn.companion.pet.core.proactive.Need? = when (src) {
+        TopicSource.THREAD_FOLLOW_UP -> cn.companion.pet.core.proactive.Need.CONNECT
+        TopicSource.GOAL_CHECK -> cn.companion.pet.core.proactive.Need.CARE
+        TopicSource.SCREEN_TEXT, TopicSource.SCREEN_IMAGE -> cn.companion.pet.core.proactive.Need.SHARE
+        TopicSource.OWN_READING -> cn.companion.pet.core.proactive.Need.LEARN
+        TopicSource.SMALL_TALK -> cn.companion.pet.core.proactive.Need.CONNECT
+    }
+
+    /**
+     * 每秒推进一次动机（衰减 + 连接累积）。
+     *
+     * 放在这里而不是 decide 里：decide 可能因为闸门提前 return，
+     * 而动机必须持续随时间变化。
+     *
+     * @param lastUserTalkAtMillis 用户最后一次说话；0 表示没有记录
+     */
+    /** 应用用户设置：黏度与同话题上限。 */
+    fun configureDrives(clinginess: Int, sameTopicLimit: Int) {
+        driveEngine.clinginess = clinginess.coerceIn(0, 100)
+        driveEngine.sameTopicLimit = sameTopicLimit.coerceIn(1, 10)
+    }
+
+    /** 这个话题还能不能继续（同话题上限保护）。 */
+    fun canContinueTopic(topicKey: String): Boolean = driveEngine.canContinueTopic(topicKey)
+
+    fun tickDrives(now: Long, lastUserTalkAtMillis: Long) {
+        driveEngine.tick(now, lastUserTalkAtMillis)
+    }
+
+    /** 当前动机快照（诊断页读它）。 */
+    fun drives(): cn.companion.pet.core.proactive.Drives = driveEngine.current()
+
     fun onShown(now: Long) {
         lastShownAt = now
         // 只有真的说出去了才推进随机节奏；生成失败不消耗机会。
-        randomEngine.onSpoken(now, lastShownAt ?: -1L)
+        randomEngine.onSpoken(now, lastShownAt ?: -1L, consecutiveIgnored)
+        // 真的说出去了：满足对应动机（说完就不那么想说了）。
+        lastNeed?.let { driveEngine.onSpoken(now, it) }
+        // 记录这个话题说过一次（用于同话题上限）。
+        driveEngine.noteTopic(lastSpokenTopic)
         awaitingSince = now
         shownTimes.addLast(now)
     }

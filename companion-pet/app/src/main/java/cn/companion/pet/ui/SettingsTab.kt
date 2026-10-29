@@ -1,5 +1,6 @@
 package cn.companion.pet.ui
 
+import androidx.compose.material3.Slider
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
@@ -351,6 +352,29 @@ private fun CompanionSettings(context: Context) {
     NumberField("每小时主动次数（5–40）", perHour) { perHour = it }
     Button(onClick = { s.partnerPerHour = perHour.toIntOrNull()?.coerceIn(5, 40) ?: 20; perHour = s.partnerPerHour.toString(); toast("已保存") }) { Text("保存频率") }
     Text("这是目标频率。安静规则、没有可聊内容、未回应退避和每日模型额度仍然有效。", style = MaterialTheme.typography.bodySmall)
+
+    // 黏度：控制它有多想反复回到同一个话题。
+    // 用户实测反馈"总在说同一件事"（俯视镜头连说五遍），所以做成可调而不是写死。
+    var clinginess by remember { mutableStateOf(s.partnerClinginess.toFloat()) }
+    Text("说话黏度：" + clinginess.toInt() + "（0 = 每次尽量换话题，100 = 愿意就同一件事多聊几句）",
+        style = MaterialTheme.typography.bodyMedium)
+    Slider(
+        value = clinginess,
+        onValueChange = { clinginess = it },
+        onValueChangeFinished = { s.partnerClinginess = clinginess.toInt(); toast("已保存黏度") },
+        valueRange = 0f..100f,
+        steps = 9,
+    )
+
+    var sameTopic by remember { mutableStateOf(s.partnerSameTopicLimit.toString()) }
+    NumberField("同一话题最多连续几次（1–10）", sameTopic) { sameTopic = it }
+    Button(onClick = {
+        s.partnerSameTopicLimit = sameTopic.toIntOrNull()?.coerceIn(1, 10) ?: 3
+        sameTopic = s.partnerSameTopicLimit.toString()
+        toast("已保存")
+    }) { Text("保存话题上限") }
+    Text("即使用高黏度，同一话题连续到这个次数后也会强制换话题，避免一直追问同一件事。",
+        style = MaterialTheme.typography.bodySmall)
     Row {
         OutlinedButton(onClick = { s.partnerQuietUntil = System.currentTimeMillis() + 30 * 60_000L; app.stopSpeech(); toast("安静 30 分钟") }) { Text("安静 30 分钟") }
         TextButton(onClick = { s.partnerQuietUntil = 0; toast("恢复陪伴") }) { Text("恢复") }

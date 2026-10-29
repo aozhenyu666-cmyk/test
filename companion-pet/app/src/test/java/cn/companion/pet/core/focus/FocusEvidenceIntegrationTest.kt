@@ -140,7 +140,20 @@ class FocusEvidenceIntegrationTest {
 
     @Test fun unchangedTicksDoNotRewriteTheContractEverySecond() {
         var writes = 0
-        val counting = FocusStore(tmp.newFolder(), replace = { from, to -> writes++; from.renameTo(to) })
+        // 注意：必须模拟生产代码的原子替换（REPLACE_EXISTING）。
+        // File.renameTo 在目标已存在时返回 false，用它统计"写盘次数"会让
+        // store.save() 误报失败 → lastPersisted 不更新 → 每次 tick 都重写。
+        // 测出来的 122 次是测试自己造成的假象，不是产品缺陷。
+        val counting = FocusStore(tmp.newFolder(), replace = { from, to ->
+            writes++
+            runCatching {
+                java.nio.file.Files.move(
+                    from.toPath(), to.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                )
+                true
+            }.getOrDefault(false)
+        })
         val c = FocusController(counting, phone, ui, scheduler) { t }
         c.start(contract(), phone.active); c.onForeground(target)
         val before = writes

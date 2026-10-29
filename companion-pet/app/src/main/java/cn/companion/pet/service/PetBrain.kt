@@ -577,6 +577,11 @@ class PetBrain(private val context: Context) : PetListener, BubbleListener {
         // 正在通话（此时拉回/遮罩会打断通话）。熄屏交给 FocusGuard 自己处理（它会走 screenWasOff 分支），
         // 这里不能因为熄屏就停止推进，否则宽限与到期都不会走。
         runCatching { maybeAutoArmFocus(now) }
+        // 动机每秒推进：衰减 + 连接累积。不受闸门影响，必须持续走。
+        runCatching {
+            partner.governor.configureDrives(settings.partnerClinginess, settings.partnerSameTopicLimit)
+            partner.governor.tickDrives(now, lastInteractionAt)
+        }
         runCatching { focusController.tick(interactive = !callInProgress()) }
         // 训练计时用单调时钟推进；熄屏/锁屏不催。
         runCatching { if (active) tickTraining(mono()) }
