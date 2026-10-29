@@ -104,6 +104,14 @@ class PartnerConversation(private val app: PetApp) {
      */
     var dispatcher: cn.companion.pet.core.proactive.MessageDispatcher? = null
 
+    /**
+     * 约定账本。由 PetBrain 注入：用户说「十分钟后问问我进度」时在这里建。
+     *
+     * 为什么放在会话层而不是界面层：约定的创建必须和"用户说了这句话"绑在一起，
+     * 界面重建/后台运行时也要能建，否则用户坐在聊天页外说一句就丢了。
+     */
+    var appointments: cn.companion.pet.core.appointment.AppointmentBook? = null
+
     /** 最近一次成功投递的消息 id，用于用户点通知后标记已读。 */
     var lastDeliveryId: String = ""
         private set
@@ -403,6 +411,45 @@ class PartnerConversation(private val app: PetApp) {
         }
     }
 
+    /**
+     * 处理「约定时间」意图。
+     *
+     * 三态严格区分（阶段 3 要求 3.3-2）：
+     * - 时间话题都清楚 → 建约定，立刻回确认（含话题和时间，可取消/改期）；
+     * - 缺时间 / 缺话题 → **只问缺的那一项**，不猜；
+     * - 不是约定 → 返回 false，继续走普通对话。
+     *
+     * @return true 表示已处理（调用方不要再走模型）
+     */
+    private fun handleAppointment(text: String): Boolean {
+        val book = appointments ?: return false
+        // 上下文话题：会话里最后一个话题线标题，用于补全"十分钟后提醒我"这种缺话题的句子。
+        val contextTopic = mutableSession.value?.threadId
+            ?.let { id -> book.all().firstOrNull { it.id == id }?.topic }
+            .orEmpty()
+        when (val r = cn.companion.pet.core.appointment.AppointmentParser.parse(text, contextTopic)) {
+            is cn.companion.pet.core.appointment.ParseResult.Ready -> {
+                val created = book.create(r.topic, r.dueInMillis, r.basis)
+                val reply = if (created != null) {
+                    "记下了：" + created.describe(now()) + "。要取消或改期就跟我说。"
+                } else {
+                    "这个约定我没能记下来，再说一次？"
+                }
+                appendReply(reply)
+                return true
+            }
+            is cn.companion.pet.core.appointment.ParseResult.NeedTime -> {
+                appendReply("好，什么时候提醒你？比如「十分钟后」。")
+                return true
+            }
+            is cn.companion.pet.core.appointment.ParseResult.NeedTopic -> {
+                appendReply("好，" + (r.dueInMillis / 60_000L) + " 分钟后提醒你。要我问你什么？")
+                return true
+            }
+            cn.companion.pet.core.appointment.ParseResult.NotAppointment -> return false
+        }
+    }
+
     fun open() {
         val current = mutableSession.value
         if (current == null || !rules.canResume(current, now())) {
@@ -442,6 +489,8 @@ class PartnerConversation(private val app: PetApp) {
         if (proactivePending) cancel()
         // 先看这句话是不是在要求一个具体动作。是就执行，不让模型把它"说"成已经做过了。
         ActionIntent.detect(clean)?.let { runAction(it) }
+        // 再看是不是在约定时间。是就建约定并立刻回一句确认——**不让模型去猜时间**。
+        if (handleAppointment(clean)) return
         blocked()?.let { mutableStatus.value = it; return }
         open()
         val s = mutableSession.value ?: return
