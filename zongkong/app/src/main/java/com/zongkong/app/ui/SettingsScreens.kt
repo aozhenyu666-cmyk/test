@@ -324,6 +324,11 @@ fun RulesScreen(nav: NavHostController) {
             ) { Text("保存") }
 
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            // ---------- 两档模式（报告 §3）：普通 / 严格，没有第三档 ----------
+            SectionLabel("模式")
+            ModeCard()
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
             // ---------- 紧急暂停（报告 §3.6）：与上面的「休假/正常提前结束监管」完全分开 ----------
             SectionLabel("紧急暂停（立即停掉自动锁屏）")
             EmergencyStopCard()
@@ -434,6 +439,109 @@ private fun EmergencyStopCard() {
             }
         }
         Hint("这条和上面的「休假 / 正常提前结束监管」是两条独立通道，互不替代；休眠、断网时同样可用。")
+        msg?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = sig.muted) }
+    }
+}
+
+/**
+ * 两档模式切换卡片（报告 §3）。
+ *
+ * 界面上必须让用户**明确看到并选择**自己在哪一档，以及严格模式还剩多久、
+ * 拦截能力是否真的到位。三件事都要如实：
+ *  1. 普通模式不强制拦截（只提醒、只记录）；
+ *  2. 严格模式只在自己开的窗口内生效，到期自动结束、不自动续期；
+ *  3. 窗口有效但拦不住时，显示**故障**，不能显示成「一切正常」。
+ */
+@Composable
+private fun ModeCard() {
+    val context = LocalContext.current
+    val store = context.zk.store
+    val sig = LocalSignals.current
+    val now = rememberNow()
+    var msg by remember { mutableStateOf<String?>(null) }
+    var minutes by remember { mutableStateOf(com.zongkong.core.Modes.DEFAULT_WINDOW_MIN.toString()) }
+
+    val mode = store.config.collectAsStateWithLifecycle().value.mode
+    // 健康：能不能真的拦住。这是「模式」之外的另一件事，必须分开显示。
+    val healthy = PermissionStatus.guardRunning(context)
+    val verdict = remember(mode, now, healthy) {
+        store.modeVerdict(now, healthy = healthy)
+    }
+
+    Panel(
+        accent = when {
+            verdict.effectiveButBroken -> sig.strict
+            verdict.enforcing -> sig.warn
+            else -> null
+        },
+        modifier = Modifier.testTag("mode-card"),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("模式", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            Tag(
+                if (mode.tier == com.zongkong.core.ModeConfig.Tier.STRICT) "严格" else "普通",
+                if (mode.tier == com.zongkong.core.ModeConfig.Tier.STRICT) sig.warn else sig.muted,
+            )
+        }
+        Text(verdict.headline(), style = MaterialTheme.typography.bodyMedium)
+        if (verdict.remainingMs > 0) {
+            val left = verdict.remainingMs / 60_000
+            Text(
+                "还剩 ${left / 60} 小时 ${left % 60} 分钟",
+                style = MaterialTheme.typography.bodySmall.merge(Mono),
+                color = sig.muted,
+            )
+        }
+        Hint("普通模式：娱乐应用正常用，只提醒和记录，不强制拦截。严格模式：你开一段时间的监管窗口，窗口内才强制拦截。")
+        // 严格窗口有效、却拦不住：必须报警，不能报「正常」。
+        if (verdict.effectiveButBroken) {
+            Text(
+                "⚠ 严格窗口还在，但实际拦不住：无障碍执行线程没有响应。去权限页修复；哨兵会接手。",
+                style = MaterialTheme.typography.bodySmall,
+                color = sig.strict,
+            )
+        }
+        if (verdict.emergencyPaused) {
+            Text("已紧急暂停：本窗口不再强制拦截，到点照样结束。", color = sig.warn, style = MaterialTheme.typography.bodySmall)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (mode.tier == com.zongkong.core.ModeConfig.Tier.STRICT) {
+                OutlinedButton(
+                    onClick = {
+                        store.toNormalMode()
+                        msg = "已切回普通模式"
+                    },
+                    modifier = Modifier.testTag("mode-normal"),
+                ) { Text("回到普通模式") }
+            } else {
+                NumberField("开多久", minutes, { minutes = it }, Modifier.weight(1f), "分钟")
+                Button(
+                    onClick = {
+                        val m = (minutes.toIntOrNull() ?: com.zongkong.core.Modes.DEFAULT_WINDOW_MIN)
+                            .coerceIn(com.zongkong.core.Modes.MIN_WINDOW_MIN, com.zongkong.core.Modes.MAX_WINDOW_MIN)
+                        store.startStrict(System.currentTimeMillis(), m)
+                        msg = "已开启严格监管 $m 分钟（到期自动结束，不会自动续期）"
+                    },
+                    modifier = Modifier.testTag("mode-strict"),
+                ) { Text("开启严格模式") }
+            }
+        }
+        // 紧急暂停：独立通道，立即生效，不需要任何门槛。
+        if (verdict.enforcing) {
+            OutlinedButton(
+                onClick = {
+                    store.emergencyModeStop(System.currentTimeMillis())
+                    msg = "已紧急暂停：立即停止强制拦截，到点照样结束"
+                },
+                modifier = Modifier.testTag("mode-emergency"),
+            ) { Text("紧急暂停（立即生效）") }
+        }
+        if (verdict.emergencyPaused) {
+            OutlinedButton(onClick = {
+                store.resumeMode()
+                msg = "已恢复本窗口监管"
+            }) { Text("恢复监管") }
+        }
         msg?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = sig.muted) }
     }
 }

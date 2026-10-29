@@ -53,6 +53,10 @@ private fun kindLabel(kind: String): String = when (kind) {
     "lockdown" -> "总控时间"
     "event_error" -> "事件出错"
     "watchdog" -> "看门狗"
+    // 拦截收据：请求 ≠ 拦住，这里说的是拦截页到底有没有到前台
+    com.zongkong.app.guard.BlockReceipt.KIND_OK -> "拦住了"
+    com.zongkong.app.guard.BlockReceipt.KIND_FAIL -> "没拦住"
+    com.zongkong.app.guard.BlockReceipt.KIND_BACK -> "又回去了"
     else -> kind
 }
 
@@ -60,9 +64,9 @@ private fun kindLabel(kind: String): String = when (kind) {
 private fun kindColor(kind: String): Color {
     val sig = LocalSignals.current
     return when (kind) {
-        "connected", "rebind_ok" -> sig.free
+        "connected", "rebind_ok", com.zongkong.app.guard.BlockReceipt.KIND_OK -> sig.free
         "unbound", "destroyed", "offline", "stale", "disabled", "rebind_fail" -> sig.strict
-        "watchdog", "event_error" -> sig.warn
+        "watchdog", "event_error", com.zongkong.app.guard.BlockReceipt.KIND_FAIL, com.zongkong.app.guard.BlockReceipt.KIND_BACK -> sig.warn
         else -> sig.muted
     }
 }
@@ -175,6 +179,38 @@ fun DiagScreen(nav: NavHostController) {
                     if (summary.lostCount > 0) sig.warn else sig.muted,
                 )
                 KeyValue("开着没跑", "${summary.stale} 次", if (summary.stale > 0) sig.warn else sig.muted)
+                // 拦截收据：只有「拦截页真的到了前台」才算拦住；失败会照实写原因，不假装成功
+                run {
+                    val receipt = remember(key) { com.zongkong.app.guard.BlockReceipt.shared.last() }
+                    val pendingPkg = remember(key) { com.zongkong.app.guard.BlockReceipt.shared.pendingAttempt()?.pkg }
+                    KeyValue(
+                        "最近一次拦截",
+                        receipt?.describe() ?: pendingPkg?.let { "刚弹过 $it，还在等拦截页到前台" } ?: "还没有弹过",
+                        when {
+                            receipt == null -> sig.muted
+                            receipt.ok -> sig.free
+                            else -> sig.strict
+                        },
+                    )
+                    KeyValue(
+                        "拦截失败",
+                        run {
+                            val bad = remember(key) {
+                                com.zongkong.app.guard.BlockReceipt.shared.recent()
+                                    .filter { !it.ok }
+                            }
+                            if (bad.isEmpty()) "最近 ${com.zongkong.app.guard.BlockReceipt.CAPACITY} 次都没有失败"
+                            else "${bad.size} 次 · 最近：${bad.last().describe()}"
+                        },
+                        run {
+                            val anyBad = remember(key) {
+                                com.zongkong.app.guard.BlockReceipt.shared.recent().any { !it.ok }
+                            }
+                            if (anyBad) sig.warn else sig.muted
+                        },
+                    )
+                    Hint("「弹回 N 次」只说明发了多少次请求；拦截页有没有真的到前台，看这两行（进程重启会清空，历史仍留在下面的事件里）。")
+                }
                 // 自动修复到底有没有在替他干活：只记次数，不评价。看这两行比看“应该能修好”可靠
                 KeyValue(
                     "自动修复",

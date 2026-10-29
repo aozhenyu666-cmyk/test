@@ -79,6 +79,23 @@ data class Status(
     val date: String,
     /** 严管：拦截名单里的应用一打开就被弹回总控。 */
     val strict: Boolean,
+    /**
+     * **真的在执行强制拦截**（报告 §3 两档模式）。
+     *
+     * 与 [strict] 的区别，是这次改造最容易被搞混的一点：
+     *  - [strict] = 「总控认为现在该管你」——由关卡没交、额度超了、沉默超时**自动推出来**。
+     *    界面上的「严管 · 娱乐 0/20」和理由列表用它，属于**建议与提醒**。
+     *  - [enforcing] = 「用户现在处在自己开启的严格窗口里」——只有这个为真才强制拦截。
+     *
+     * 为什么必须分开：报告的核心诉求是「普通模式下娱乐 APP 正常可用，
+     * 严格模式下才强制约束」。若直接拿 [strict] 去拦截，那用户在普通模式下
+     * 只要有一道关卡没过，娱乐 APP 就一律打不开——那不是两档模式，
+     * 是「永远严格 + 一个假的普通档」。
+     *
+     * 合成规则：严格窗口生效中（选了严格、在起止时间内、没按紧急暂停）
+     * **且** 不是休假、不在紧急放行中。窗口一到点自动失效，不自动延长。
+     */
+    val enforcing: Boolean,
     val reasons: List<Reason>,
     val gates: List<GateStatus>,
     val emergencyUntil: Long?,
@@ -90,15 +107,23 @@ data class Status(
     val silenceDueAt: Long?,
     val playMin: Int,
     val quotaMin: Int,
+    /** 当前是哪一档（界面显示用，不参与拦截判定）。 */
+    val tier: String = MODE_NORMAL,
 ) {
     val doneCount: Int get() = gates.count { it.done }
     val headline: String
         get() = when {
             paused -> "休假中"
             emergencyUntil != null -> "紧急放行中"
-            strict -> "严管"
+            enforcing -> "严格监管中"
+            strict -> "严管（提醒）"
             else -> "放行"
         }
+
+    companion object {
+        const val MODE_NORMAL = "NORMAL"
+        const val MODE_STRICT = "STRICT"
+    }
 }
 
 /** 根据配置、当天记录和当前时间算出总控的状态。纯函数，方便测试。 */
@@ -173,10 +198,22 @@ object Engine {
 
         val emergency = day.emergencies.lastOrNull { now < it.until }
         val paused = config.pausedUntil > now
+        // 两档模式：强制约束只认统一判定入口 [ModeGate]，不在这里另写一套条件。
+        // 注意 healthy 传 true 是有意的——[Engine.evaluate] 是纯函数，拿不到无障碍/一手的
+        // 运行健康；「能力是否到位」由调用方（GuardService / 界面）用 [ModeGate.verdict] 再判一次。
+        // 也就是说 Status.enforcing 表示「按模式该不该约束」，不表示「一定拦得住」。
+        val gate = ModeGate.verdict(
+            mode = config.mode,
+            now = now,
+            healthy = true,
+            paused = paused,
+            emergencyUntil = emergency?.until,
+        )
         return Status(
             now = now,
             date = date.toString(),
             strict = reasons.isNotEmpty() && emergency == null && !paused,
+            enforcing = gate.enforcing,
             reasons = reasons,
             gates = gates,
             emergencyUntil = emergency?.until,
@@ -187,6 +224,7 @@ object Engine {
             silenceDueAt = silenceDueAt,
             playMin = playMin,
             quotaMin = if (earned != null) allowedMinutes(config, earned) else config.dailyQuotaMin,
+            tier = if (config.mode.tier == ModeConfig.Tier.STRICT) Status.MODE_STRICT else Status.MODE_NORMAL,
         )
     }
 

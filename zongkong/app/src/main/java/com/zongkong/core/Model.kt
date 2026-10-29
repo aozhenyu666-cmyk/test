@@ -163,7 +163,67 @@ data class Config(
     val initiative: InitiativeConfig = InitiativeConfig(),
     /** 无回应后的强督导：首次使用在界面中明确开启。 */
     val takeover: com.zongkong.core.control.TakeoverConfig = com.zongkong.core.control.TakeoverConfig(),
+    /**
+     * 两档模式（报告 §3）：普通 / 严格。
+     *
+     * 为什么单列而不是复用 [gates] 的推导：`Engine` 里的 `strict` 是**自动推出来的**
+     * ——只要今天还有关卡没交、娱乐超了额度、或者沉默超时，它就会变 true。
+     * 那是「总控认为该管你」，不是「你现在选择了被管」。
+     *
+     * 报告要的是后者：**用户主动开启一个有明确起止时间的监管窗口**，
+     * 窗口内才执行强制拦截，窗口外正常使用手机。两者不是一回事，
+     * 所以这里单独存一份，由 [Engine] 合成出最终的 `strict`。
+     */
+    val mode: ModeConfig = ModeConfig(),
 )
+
+/**
+ * 两档模式：普通 / 严格。没有第三档（报告明确要求，防止模式层级膨胀）。
+ *
+ * 语义边界：
+ *  - **普通**（默认）：保留提醒、记录、自愿训练；娱乐 APP 正常可用。
+ *    原有的关卡推导仍然工作（会在界面上显示「严管」并给出理由），
+ *    但**不做强制拦截**——这是与旧行为最大的不同。
+ *  - **严格**：用户在某个时间段主动开启监管窗口。窗口内才强制拦截娱乐 APP、
+ *    才要求训练凭证；窗口结束自动恢复，不需要二次确认。
+ *
+ * 任何 AI 模型都不得修改本结构（报告 §5：AI 不拥有改核心安全规则的权限）。
+ */
+@Serializable
+data class ModeConfig(
+    /** 用户选的那一档。 */
+    val tier: Tier = Tier.NORMAL,
+    /** 严格模式窗口开始（毫秒时间戳）；0 = 未开启。 */
+    val startsAt: Long = 0,
+    /** 严格模式窗口结束（毫秒时间戳）；0 = 未开启。到点自动结束，绝不自动延长。 */
+    val endsAt: Long = 0,
+    /** 策略版本：每次用户改动 +1，随心跳一起推给哨兵，用来对齐「谁的规则算数」。 */
+    val revision: Int = 0,
+    /**
+     * 用户按下的本地紧急暂停（毫秒时间戳）；0 = 没有。
+     *
+     * 与「正常提前结束监管」是**两条独立通道**：紧急暂停不需要冷却期、
+     * 不需要写字数、不需要模型、不需要网络（报告 §3.5）。
+     */
+    val emergencyAt: Long = 0,
+) {
+    @Serializable
+    enum class Tier {
+        /** 普通模式：不强制拦截。 */
+        NORMAL,
+
+        /** 严格模式：窗口内强制拦截 + 训练门禁。 */
+        STRICT,
+    }
+
+    /** 严格窗口现在是否真的在生效（选了严格、且当前落在窗口内、且没按紧急暂停）。 */
+    fun windowActive(now: Long): Boolean =
+        tier == Tier.STRICT && startsAt > 0 && endsAt > now && emergencyAt == 0L
+
+    /** 用户的紧急暂停是否还没过期（跟当前窗口一起结束）。 */
+    fun emergencyActive(now: Long): Boolean =
+        emergencyAt > 0 && endsAt > now
+}
 
 /** 对话的设置。 */
 @Serializable

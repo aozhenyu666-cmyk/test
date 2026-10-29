@@ -66,6 +66,8 @@ object Diag {
         "connected", "unbound", "destroyed", "offline", "stale", "rebind_ok",
         "rebind_fail", "disabled", "bounce", "lockdown", "event_error", "watchdog",
         "crash", "autoblock", "sentinel_on", "sentinel_off", "sentinel_takeover", "sentinel_main_back", "sentinel_wake", "released",
+        // 拦截收据（P1-04）：拦截页/做题页到底有没有到前台。见 [BlockReceipt]。
+        BlockReceipt.KIND_OK, BlockReceipt.KIND_FAIL, BlockReceipt.KIND_BACK,
     )
 
     private val lock = Any()

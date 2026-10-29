@@ -374,7 +374,14 @@ object SentinelClient {
      * （模拟器冒烟 SENTINEL_LINKED / SENTINEL_TAKEOVER 失败）。这里恢复，同时顺带一次 v2 ping。
      * [at] = 0 表示总控下线前说了一声（哨兵立刻接管）。
      */
-    fun push(c: Context, blocked: Set<String>, strict: Boolean, freeUntil: Long, at: Long = System.currentTimeMillis()) {
+    fun push(
+        c: Context,
+        blocked: Set<String>,
+        strict: Boolean,
+        freeUntil: Long,
+        at: Long = System.currentTimeMillis(),
+        revision: Int = 0,
+    ) {
         val app = c.applicationContext
         exec.execute {
             runCatching {
@@ -384,6 +391,9 @@ object SentinelClient {
                         putBoolean("strict", strict)
                         putLong("freeUntil", freeUntil)
                         putStringArray("blocked", blocked.toTypedArray())
+                        // 策略版本（报告 §3 P0-03）：哨兵据此判断「拿到的是不是最新的规则」。
+                        // 只有 total 单调递增的 revision 才可信；旧版本绝不能覆盖新版本。
+                        putInt("revision", revision)
                     })
                     if (r != null && !r.containsKey("error")) releasedUntilMs = r.getLong("releasedUntil", 0L)
                 }

@@ -80,6 +80,25 @@ object Store {
         p.edit().putInt("takeovers", p.getInt("takeovers", 0) + 1).putLong("lastTakeover", System.currentTimeMillis()).apply()
     }
 
+    // ---------- 策略版本（报告 P0-03） ----------
+
+    /**
+     * 哨兵现在持有的策略版本；null = 还没收到过任何带版本的策略。
+     *
+     * 为什么要落盘：进程重启后如果忘了自己收到过哪一版，
+     * 一条迟到的旧推送就会被当新策略接受，用户明明已经退出监管却继续被拦。
+     */
+    fun policyRevision(c: Context): Int? =
+        c.getSharedPreferences("s", Context.MODE_PRIVATE)
+            .let { if (it.contains(PREF_REVISION)) it.getInt(PREF_REVISION, 0) else null }
+
+    /** 记下已接受的最新的策略版本（只增不减：仲裁已保证不会倒退写入）。 */
+    fun setPolicyRevision(c: Context, revision: Int) {
+        c.getSharedPreferences("s", Context.MODE_PRIVATE).edit().putInt(PREF_REVISION, revision).apply()
+    }
+
+    private const val PREF_REVISION = "policyRevision"
+
     // ---------- 解除闸门（0.15） ----------
 
     @Volatile private var releaseLoaded = false
@@ -240,22 +259,29 @@ object Sys {
     }
 
     /**
-     * 总控现在还在管着吗（只用来决定「哨兵要不要接管拦截」，不对外报健康）。
+     * 总控现在还在管着吗（只用来决定「哨兵要不要接管拦截」和「要不要续心跳」，不对外报健康）。
      * 同步调用，要在后台线程里做。
      *
-     * 新版总控回 v2 健康结论：无障碍关了 / 确认失联 / 没注册 → 不在；证据不足、恢复中、暂停 → 当它在
-     * （不冤枉它，心跳过期本来就是接管的前一道门）。老版总控没有 healthStatus，退回看 guard。
+     * **白名单**：只有正面证据算在——新版总控回 v2 的 `HEALTHY`，或者老版总控（没有 healthStatus）
+     * 明确回 `guard=true`。未知 / 可疑 / 恢复中 / 暂停 / 无障碍关了 / 确认失联 / 没注册 / 看不懂的字符串，
+     * 一律算不在：判据在 [MainGuard.interpret]（纯函数，JVM 单测覆盖）。
+     *
+     * 特别注意：说「不在」**不等于**立刻锁屏。这里只是不再替总控续心跳，让
+     * `Decide.STALE_MS`（90 秒）那道过期闸门按老规矩走；真要锁还有 `:watch` 自己的确认预算和限流。
      */
-    fun mainGuarding(c: Context): Boolean = try {
+    fun mainGuarding(c: Context): MainGuard = try {
         val r = c.contentResolver.call(android.net.Uri.parse(Proto.MAIN_WAKE_URI), Proto.WAKE, null, null)
-        when {
-            r == null || r.containsKey("error") -> false
-            r.containsKey("healthStatus") -> r.getString("healthStatus") !in setOf("DISABLED", "UNRESPONSIVE", "UNREGISTERED")
-            else -> r.getBoolean("guard")
-        }
+        // Bundle → Map 只摊这三个字段；判断全交给纯函数（那边不依赖 Android，JVM 单测覆盖）。
+        MainGuard.interpret(r?.let { b ->
+            buildMap {
+                if (b.containsKey(MainGuard.KEY_STATUS)) put(MainGuard.KEY_STATUS, b.getString(MainGuard.KEY_STATUS))
+                if (b.containsKey(MainGuard.KEY_GUARD)) put(MainGuard.KEY_GUARD, b.getBoolean(MainGuard.KEY_GUARD))
+                if (b.containsKey(MainGuard.KEY_ERROR)) put(MainGuard.KEY_ERROR, b.getString(MainGuard.KEY_ERROR))
+            }
+        })
     } catch (e: Throwable) {
         Log.w(TAG, "叫不应总控", e)
-        false
+        MainGuard.NOT_GUARDING
     }
 
     fun grantCommands(): String =

@@ -89,13 +89,33 @@ class SentinelService : AccessibilityService() {
     private var probing = false
     private val waiting = mutableListOf<(Boolean) -> Unit>()
 
+    /**
+     * 探问专用单线程：卡住的那次 Binder 调用会永久占住这条线程（Binder 不可取消），
+     * 后续探问排队并照样超时，不会因为对方卡死而不断新建线程（规范 §3.2）。
+     */
+    private val probeExec: java.util.concurrent.ExecutorService =
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "probe-bounded").apply { isDaemon = true }
+        }
+
     /** 同一时间只问一次；问的过程中别处也想问，就排在后面一起拿结果。全在主线程上调用。 */
     private fun probe(then: (alive: Boolean) -> Unit) {
         waiting += then
         if (probing) return
         probing = true
         Thread {
-            val alive = try { Sys.mainGuarding(this) } catch (_: Throwable) { false }
+            // 只有拿到「正面健康」的证据才续心跳：未知 / 可疑 / 恢复中 / 暂停都不算在，
+            // 否则一个永远回 UNKNOWN 的总控能把 Decide.STALE_MS 的过期闸门无限续期（假在线）。
+            //
+            // **必须有超时**：`ContentResolver.call` 是不可取消的同步 Binder。总控进程活着、
+            // 但执行线程被冻住时，这个调用会无限期挂着 —— 真机实测（kill -STOP 100 秒）：
+            // 探测线程卡死 → `probing` 永远 true → 排队的 takeover() 永远等不到 →
+            // 冻结期间打开 YouTube 不会被拦；恢复后心跳反而被续上，显示"一直健康"。
+            // 超时一律当作「叫不应」（NOT_GUARDING），让过期闸门正常走。
+            val guard = ProbeTimeout.await(probeExec) {
+                try { Sys.mainGuarding(this) } catch (_: Throwable) { MainGuard.NOT_GUARDING }
+            }
+            val alive = guard.guarding
             if (alive) Store.refresh(this, System.currentTimeMillis())
             main.post {
                 probing = false
@@ -228,6 +248,9 @@ class SentinelService : AccessibilityService() {
         running = false
         instanceId = null
         main.removeCallbacksAndMessages(null)
+        // 探测线程可能正卡在不可取消的 Binder 调用上：shutdownNow 打断不了它，
+        // 但它是 daemon 线程，不会拖住宿主进程退出。
+        runCatching { probeExec.shutdownNow() }
         runCatching { Store.log(this, "哨兵停了（:watch 仍在看护）") }
         super.onDestroy()
     }

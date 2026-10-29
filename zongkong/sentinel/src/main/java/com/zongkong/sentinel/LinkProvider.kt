@@ -20,6 +20,16 @@ class LinkProvider : ContentProvider() {
             when (method) {
                 Proto.STATE -> {
                     val e = extras ?: Bundle()
+                    val incomingRevision = if (e.containsKey(Proto.REVISION)) e.getInt(Proto.REVISION) else null
+                    // 策略版本仲裁（报告 P0-03）：旧消息可能后到，不能让过期规则覆盖新规则。
+                    val arb = incomingRevision?.let { rev ->
+                        PolicyArbiter.arbitrate(Store.policyRevision(c), rev)
+                    }
+                    if (arb != null && !arb.apply) {
+                        // 过期策略：拒绝写入，但如实记一笔，不静默丢掉。
+                        Store.log(c, arb.note)
+                        return@call status(c, withLog = false)
+                    }
                     val s = Decide.State(
                         e.getLong(Proto.AT), e.getStringArray(Proto.BLOCKED)?.toSet().orEmpty(),
                         e.getBoolean(Proto.STRICT), e.getLong(Proto.FREE_UNTIL),
@@ -27,7 +37,9 @@ class LinkProvider : ContentProvider() {
                     val before = Store.state(c)
                     val wasDown = before != null && !Decide.mainAlive(before, System.currentTimeMillis())
                     Store.put(c, s)
+                    incomingRevision?.let { Store.setPolicyRevision(c, it) }
                     if (s.at == 0L) { if (!wasDown) Store.log(c, "总控说自己下线了") } else if (wasDown) Store.log(c, "总控的心跳回来了")
+                    if (arb?.policyChanged == true) Store.log(c, arb.note)
                     status(c, withLog = false)
                 }
                 Proto.PING -> status(c, withLog = true)

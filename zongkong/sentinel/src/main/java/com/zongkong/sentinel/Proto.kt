@@ -26,4 +26,12 @@ object Proto {
     const val ERROR = "error"
     /** 解除闸门生效到几点（墙上时间毫秒）；0 = 没有解除。总控据此让路。 */
     const val RELEASED_UNTIL = "releasedUntil"
+
+    /**
+     * 策略版本（报告 P0-03）：随心跳一起推过来，单调递增。
+     *
+     * 用途：旧消息可能后到，哨兵必须能分辨「这条是不是过期规则」，
+     * 不能把旧策略当成最新的（见 [PolicyArbiter]）。
+     */
+    const val REVISION = "revision"
 }

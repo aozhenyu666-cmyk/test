@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.Intent
 import android.os.Handler
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.inputmethod.InputMethodManager
@@ -68,6 +69,18 @@ class GuardService : AccessibilityService() {
             } catch (e: Throwable) {
                 Log.e(TAG, "亮屏广播处理出错", e)
             }
+        }
+    }
+    /** 拦截收据：把「请求发出去了」和「拦截页真的到了前台」分开记（P1-04）。 */
+    private val guard = BlockReceipt.shared
+    private val guardHandler = Handler(android.os.Looper.getMainLooper())
+
+    /** 弹完 2.5 秒后跑一次超时检查：比 20 秒的 tick 快得多，没拦住能早点知道。 */
+    private val guardTimeout = Runnable {
+        try {
+            guardCheck()
+        } catch (e: Throwable) {
+            Log.e(TAG, "拦截收据超时检查出错", e)
         }
     }
     private var lastBounce = 0L
@@ -177,7 +190,8 @@ class GuardService : AccessibilityService() {
         lastSentinelWrite = now
         val c = store.config.value
         val st = status()
-        runCatching { SentinelClient.push(this, c.blocked, st.strict, maxOf(c.pausedUntil, st.emergencyUntil ?: 0L), now) }
+        val verdict = store.modeVerdict(now, healthy = true)
+        runCatching { SentinelClient.push(this, c.blocked, verdict.enforcing, maxOf(c.pausedUntil, st.emergencyUntil ?: 0L), now, revision = verdict.revision) }
     }
 
     private fun onWindow(event: AccessibilityEvent?) {
@@ -204,6 +218,11 @@ class GuardService : AccessibilityService() {
             return
         }
         releasedLogged = false
+        // 拦截收据：只有「窗口真的切到了我们的拦截页」才算拦住；被拦的应用又回到前台记 Regressed（P1-04）。
+        // 注意：Regressed 的「重新拦」就是下面这一行 enforce(pkg) —— 此刻 pkg 正是被拦的那个应用，
+        // 照常走 1500ms 节流，不另开一条无节流的重拦路径（否则会变成紧循环）。
+        val d = guard.onForeground(pkg, event.className?.toString().orEmpty(), SystemClock.elapsedRealtime())
+        noteReceipts(d.receipts)
         if (lockdown(pkg, now)) return
         enforce(pkg, now)
         // 低屏模式：连续用太久的应用弹回去做题（不拦全封，只限时 + 冷却 + 做题）
@@ -219,6 +238,10 @@ class GuardService : AccessibilityService() {
         if (pkg == packageName || !interactive()) return false
         val cfg = store.config.value.hq
         if (store.config.value.pausedUntil > now) return false
+        // 两档模式（报告 §3）：这是**第二条**拦截路径，原先完全不看模式——
+        // 真机上就是这么漏的：普通模式下打开 YouTube 被「总控时间」弹回。
+        // 任何强制拦截都必须走统一入口，不许这里另起一套判定。
+        if (!store.modeVerdict(now, healthy = true).enforcing) return false
         var session = store.hq.value.active
         if (session == null && store.absence(now) == com.zongkong.core.hq.Hq.Absence.FORCE && !com.zongkong.core.hq.Hq.allows(pkg, packageName, cfg, overlays())) {
             Log.i(TAG, "失联太久，打开 $pkg 时进入总控时间")
@@ -232,6 +255,9 @@ class GuardService : AccessibilityService() {
         Log.i(TAG, "总控时间，弹回 $pkg")
         store.updateToday(now) { DayOps.bounce(it) }
         runCatching { Diag.log(this, "lockdown", "总控时间弹回 $pkg") }
+        // 收据（P1-04）：这条路径也是「只发了 startActivity 就当拦住了」。
+        // 总控时间弹的是自家 MainActivity，所以用 BLOCK 槽位记请求，靠自家 Activity 到前台来结案。
+        guard.onRequest(pkg, SystemClock.elapsedRealtime())
         try {
             startActivity(
                 Intent(this, com.zongkong.app.ui.MainActivity::class.java)
@@ -240,7 +266,9 @@ class GuardService : AccessibilityService() {
             )
         } catch (e: Exception) {
             Log.e(TAG, "打不开总控时间", e)
+            noteReceipts(guard.onLaunchFailed(pkg, SystemClock.elapsedRealtime(), e.javaClass.simpleName).receipts)
         }
+        armReceiptTimeout()
         return true
     }
 
@@ -279,31 +307,83 @@ class GuardService : AccessibilityService() {
             return
         }
         val status = store.status(now)
-        if (!status.strict) {
-            Log.i(TAG, "放行 $pkg：${status.headline} ${status.reasons.map { it.text }} 紧急=${status.emergencyUntil} 休假=${status.paused}")
+        // 两档模式：走**唯一判定入口** store.modeVerdict()，不在这里自己推导。
+        // `status.strict` 是「总控认为该管你」（关卡没交 / 额度超了），那是提醒，不是强制；
+        // 强制只看模式 + 窗口 + 紧急暂停（报告 §3）。
+        val verdict = store.modeVerdict(now, healthy = true)
+        if (!verdict.enforcing) {
+            Log.i(TAG, "放行 $pkg：${verdict.headline()} 理由=${status.reasons.map { it.text }} 紧急=${status.emergencyUntil} 休假=${status.paused}")
             return
         }
-        Log.i(TAG, "严管，弹回 $pkg：${status.reasons.firstOrNull()?.text}")
+        Log.i(TAG, "严格监管，弹回 $pkg：剩余 ${verdict.remainingMs / 60_000} 分钟")
         if (now - lastBounce < 1500) return
         lastBounce = now
         store.updateToday(now) { DayOps.bounce(it) }
         runCatching { Diag.log(this, "bounce", "严管弹回 $pkg：${status.reasons.firstOrNull()?.text.orEmpty()}") }
+        // 记下「请求发出去了」——这只是请求，不等于拦住；拦住要等拦截页真的到前台的窗口事件（收据）。
+        guard.onRequest(pkg, SystemClock.elapsedRealtime())
         try {
             startActivity(BlockActivity.intent(this, pkg))
         } catch (e: Exception) {
             Log.e(TAG, "打不开拦截页", e)
+            // 连页面都没弹出来：当场结案成失败，别把它算成拦住
+            noteReceipts(guard.onLaunchFailed(pkg, SystemClock.elapsedRealtime(), e.javaClass.simpleName).receipts)
         }
+        // 2.5 秒后自己来看一眼：没看到拦截页就记失败（tick 20 秒太慢）
+        armReceiptTimeout()
+    }
+
+    /**
+     * 拦截收据的到点检查：在途请求超时 → 记失败（[BlockReceipt.Outcome.TimedOut]），
+     * 有额度就再弹一次（每个请求最多一次，有界）。做题页不自动重试：低屏模式自己有排期。
+     */
+    private fun guardCheck() {
+        val d = guard.onTick(SystemClock.elapsedRealtime())
+        noteReceipts(d.receipts)
+        val again = d.retry ?: return
+        // 重试：只重试被拦的那个应用，并且它还得在前台
+        if (fgPkg != again.pkg) {
+            noteReceipts(guard.onLaunchFailed(again.pkg, SystemClock.elapsedRealtime(), "被拦的应用已经不在前台，不重试").receipts)
+            return
+        }
+        try {
+            Log.i(TAG, "拦截页没看到，重试一次：${again.pkg}")
+            startActivity(BlockActivity.intent(this, again.pkg))
+            armReceiptTimeout()
+        } catch (e: Exception) {
+            Log.e(TAG, "重试打不开拦截页", e)
+            noteReceipts(guard.onLaunchFailed(again.pkg, SystemClock.elapsedRealtime(), e.javaClass.simpleName).receipts)
+        }
+    }
+
+    /** 排一次超时检查（2.5 秒后）：没看到拦截页/做题页就早点记失败，不必等 20 秒的 tick。 */
+    fun armReceiptTimeout() {
+        guardHandler.removeCallbacks(guardTimeout)
+        guardHandler.postDelayed(guardTimeout, BlockReceipt.TIMEOUT_MILLIS + 500)
+    }
+
+    /**
+     * 收据落盘：成功记 `block_ok`（带延迟），失败记 `block_fail` / `block_back`（带原因）。
+     * 日计数里的 bounce 也不再是「拦住了」的凭据——真要问「拦没拦住」看这条。
+     */
+    fun noteReceipts(receipts: List<BlockReceipt.Receipt>) {
+        for (r in receipts) runCatching { Diag.log(this, r.kind(), r.describe()) }
     }
 
     private fun tick() {
         val now = System.currentTimeMillis()
         store.heartbeat = now
+        // 模式到期归一：进程重启后第一次跑到这里也会执行，
+        // 所以**过期的严格窗口绝不会被当成有效窗口重新生效**（报告 §3）。
+        runCatching { store.expireMode(now) }
         if (interactive()) accountPlay(now) else fgSince = now
         val status = store.status(now)
         beatSentinel(now) { status }
         // v2：本地规则兜底（哨兵失联且自己健康时，按本地规则有限锁屏一次）。
         runCatching { com.zongkong.app.healthwire.LocalGuardian.tick(this, now) }
-        fgPkg?.let { if (status.strict) enforce(it, now) }
+        fgPkg?.let { if (status.enforcing) enforce(it, now) }
+        // 拦截收据兜底：handler 定时器万一没跑成，20 秒的 tick 也会把超时的在途请求结案
+        fgPkg?.let { if (status.enforcing) runCatching { guardCheck() } }
         // 低屏模式：没有窗口切换事件时也按秒盯着（比如一直停在一个应用里）
         fgPkg?.let { p -> runCatching { Watch.tick(this, p, now) } }
         alerts(status, now)
@@ -501,6 +581,7 @@ class GuardService : AccessibilityService() {
 
     override fun onDestroy() {
         runCatching { Diag.log(this, "destroyed", "无障碍服务被销毁") }
+        runCatching { guardHandler.removeCallbacks(guardTimeout) }
         com.zongkong.app.system.Pet.detach()
         offline()
         try {

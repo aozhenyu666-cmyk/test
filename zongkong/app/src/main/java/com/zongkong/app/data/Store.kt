@@ -6,6 +6,9 @@ import com.zongkong.core.Config
 import com.zongkong.core.DayClock
 import com.zongkong.core.DayLog
 import com.zongkong.core.Engine
+import com.zongkong.core.ModeConfig
+import com.zongkong.core.ModeGate
+import com.zongkong.core.Modes
 import com.zongkong.core.Policy
 import com.zongkong.core.Status
 import com.zongkong.core.ZkJson
@@ -391,6 +394,62 @@ class Store(private val context: Context) {
         val next = f(_config.value)
         if (next != _config.value) setConfigLocked(next)
         next
+    }
+
+    // ---------- 两档模式（报告 §3；唯一判定入口） ----------
+
+    /**
+     * 模式判定的**唯一入口**。所有拦截消费方都必须走这里。
+     *
+     * 为什么不给 [healthy] 默认值：健康是「能不能真的拦住」，
+     * 传 true 就等于替调用方撒谎。调用方必须显式算出真实结论。
+     * 拦不住时 [ModeGate.ModeVerdict.effectiveButBroken] 会为真，
+     * 界面要显示故障、哨兵要接手——但模式本身**不会**被偷偷清回普通。
+     */
+    fun modeVerdict(now: Long = System.currentTimeMillis(), healthy: Boolean, problems: List<String> = emptyList()): ModeGate.ModeVerdict {
+        refresh(now)
+        val c = _config.value
+        val emergency = _today.value.emergencies.lastOrNull { now < it.until }
+        return ModeGate.verdict(
+            mode = c.mode,
+            now = now,
+            healthy = healthy,
+            problems = problems,
+            paused = c.pausedUntil > now,
+            emergencyUntil = emergency?.until,
+        )
+    }
+
+    /** 现在这一档（界面显示用）。 */
+    fun mode(): ModeConfig = _config.value.mode
+
+    /** 用户启动严格模式。只有用户能调（报告 §5：AI 无权限改核心安全规则）。 */
+    fun startStrict(now: Long = System.currentTimeMillis(), minutes: Int = Modes.DEFAULT_WINDOW_MIN): ModeConfig =
+        updateConfig { it.copy(mode = Modes.startStrict(it.mode, now, minutes)) }.mode
+
+    /** 用户回到普通模式。 */
+    fun toNormalMode(): ModeConfig =
+        updateConfig { it.copy(mode = Modes.toNormal(it.mode)) }.mode
+
+    /** 本地紧急暂停：立即停止强制约束，无任何门槛。 */
+    fun emergencyModeStop(now: Long = System.currentTimeMillis()): ModeConfig =
+        updateConfig { it.copy(mode = Modes.emergency(it.mode, now)) }.mode
+
+    /** 解除紧急暂停，恢复本窗口监管。 */
+    fun resumeMode(): ModeConfig =
+        updateConfig { it.copy(mode = Modes.resume(it.mode)) }.mode
+
+    /**
+     * 到期归一：把过期的严格窗口落回普通。
+     *
+     * 每次 [refresh] 之外由服务 tick 调用；进程重启后第一次跑也会走这里，
+     * 所以**过期窗口不会被当成有效窗口重新生效**（指令明确要求）。
+     */
+    fun expireMode(now: Long = System.currentTimeMillis()): ModeConfig {
+        val cur = _config.value.mode
+        val next = Modes.expire(cur, now)
+        if (next != cur) updateConfig { it.copy(mode = next) }
+        return next
     }
 
     private fun setConfigLocked(c: Config) {

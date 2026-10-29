@@ -145,15 +145,26 @@ object Watch {
     // ---------- 内部 ----------
 
     /**
-     * 这个应用归谁管：自己加的低屏规则，或者拦截名单里的娱乐应用（打开就答题）。
-     * 严管时拦截名单里的应用由拦截页管（直接弹回），这里不重复弹。
+     * 这个应用归谁管：自己加的低屏规则，或者拦截名单里的娱乐应用。
+     *
+     * 三档归属（报告 §3 两档模式）：
+     *  - **严格窗口内**：拦截名单里的应用由拦截页管（直接弹回），这里不重复弹，返回 null；
+     *  - **普通模式**：拦截名单里的应用**不强制**——既不弹回也不弹答题页，返回 null。
+     *    这是真机上抓到的漏洞：`openGate=true` 会让名单里的应用在普通模式下一打开就弹答题页，
+     *    等于用另一条路径绕过了模式判定。
+     *  - **用户自己加的 [WatchRule]**（低屏模式，自愿的）：与模式无关，照常生效。
      */
     fun ruleFor(context: Context, pkg: String): WatchRule? {
         val store = context.zk.store
         val config = store.config.value
-        val rule = config.watch.ruleFor(pkg, config.blocked) ?: return null
-        if (pkg in config.blocked && store.status().strict) return null
-        return rule
+        val userRule = config.watch.rules.firstOrNull { it.pkg == pkg }?.takeIf { config.watch.enabled }
+        if (userRule != null) return userRule
+        // 走到这里只剩下「名单里的应用 + openGate 自动规则」。
+        // 它属于**强制**手段，必须受统一模式判定约束：非严格窗口一律不弹。
+        if (pkg in config.blocked && !store.modeVerdict(System.currentTimeMillis(), healthy = true).enforcing) {
+            return null
+        }
+        return config.watch.ruleFor(pkg, config.blocked)
     }
 
     /** 定时到期检查：条件和 [tick] 一样，只是不用等下一次窗口事件。 */
@@ -199,12 +210,19 @@ object Watch {
         } catch (e: Exception) {
             Log.w(TAG, "记 lastGate 失败", e)
         }
+        // 记一次拦截请求：lastGate 只说明「弹过」，做题页真到前台是另一件事（收据里才有答案）。
+        BlockReceipt.shared.onRequest(pkg, android.os.SystemClock.elapsedRealtime(), BlockReceipt.Target.GATE)
         try {
             Log.i(TAG, "低屏模式：连续用 $pkg 到时限，弹回去做题")
             service.startActivity(GateActivity.intent(service, pkg))
         } catch (e: Exception) {
             Log.e(TAG, "打不开做题页", e)
+            // 连页面都没弹出来：当场结案失败并落一条诊断，不让「弹过」冒充「拦住了」
+            service.noteReceipts(
+                BlockReceipt.shared.onLaunchFailed(pkg, android.os.SystemClock.elapsedRealtime(), e.javaClass.simpleName).receipts,
+            )
         }
+        service.armReceiptTimeout()
     }
 
     private fun schedule(delayMs: Long) {

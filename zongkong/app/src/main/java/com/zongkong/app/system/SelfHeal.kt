@@ -15,6 +15,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityManager
 import com.zongkong.app.guard.Diag
 import com.zongkong.app.guard.GuardService
+import com.zongkong.app.health.HealthStatus
 import com.zongkong.app.ui.PermissionStatus
 import com.zongkong.app.zk
 import kotlinx.coroutines.CoroutineScope
@@ -41,8 +42,18 @@ object SelfHeal {
     /** 两次自动修复之间至少隔这么久：系统挂载要时间，贴太紧会自己打断自己。 */
     const val HEAL_GAP_MS = 3 * 60_000L
 
+    /**
+     * 「确诊为没在运行」要持续这么久，才允许做破坏性重绑（次要防抖）。
+     *
+     * 主治不是靠时长，而是 [step] 里的状态语义门（[statusMeansDead]）；这里只是给
+     * 刚发现的那一秒留个余量，让系统有机会自己挂回来。
+     */
+    const val STALE_CONFIRM_MS = 60_000L
+
     @Volatile private var lastHeal = 0L
     @Volatile private var heals = 0
+    /** 从什么时候开始「确诊不健康」的（毫秒）；0 = 现在是健康的。只用来做次要防抖。 */
+    @Volatile private var staleSince = 0L
     /** 上一次判定出来的状态：running / stale / disabled。只在状态变化时写诊断，免得每分钟刷一条。 */
     @Volatile private var state = ""
     /** 这次掉线是不是已经提醒过了（诊断里只记第一次提醒）。 */
@@ -71,6 +82,8 @@ object SelfHeal {
      *
      * [systemRemoved] 是真机事故补上的一个口子，见 [systemRemoved] 的注释：
      * 「设置里没有我」有两种，用户自己关的要尊重，系统摘掉的必须修。
+     *
+     * [status] 是第二道、也是**主**门（真机事故补的）：见 [statusMeansDead]。
      */
     fun step(
         running: Boolean,
@@ -80,13 +93,59 @@ object SelfHeal {
         now: Long,
         lastHeal: Long,
         systemRemoved: Boolean = false,
+        /**
+         * v2 健康判定的**状态语义**（不是新鲜度）。null = 调用方没给，退回旧行为。
+         *
+         * 为什么不能用 `running` 一个布尔说事：`running` 只是 `status == HEALTHY`，
+         * 它把「未知 / 可疑 / 恢复中 / 暂停」和「确认失联 / 无障碍关了」压成了同一个 false。
+         * 前者只是**还没证伪**，对它做破坏性重绑等于把判据抖动变成真故障。
+         *
+         * 真机事故（Android 14，40 分钟，files/zk/diag.jsonl 114 条）：
+         * `stale` → 破坏性重绑 → `unbound`/`destroyed` → 真失联约一分钟 → 又 `rebind_ok`；
+         * 计数 connected 18 / destroyed 7 / unbound 7 / rebind_ok 5。
+         * 根因：`HealthConfig.staleAfterMs = 30_000` 对 10 秒探测周期，正常服务每几十秒
+         * 就 HEALTHY→SUSPECT 抖一下，而旧逻辑只看 false 就拆。用户看到的就是
+         * 「无障碍显示开着，却拦不住娱乐 APP」。
+         *
+         * 注意**不要**拿 `AccessibilityManager.getEnabledAccessibilityServiceList` 当这道门：
+         * 「设置里列着我们、但绑定根本没起来」正是最常见的真故障，那道门会把它一起挡掉。
+         */
+        status: HealthStatus? = null,
+        /** 「确诊没在运行」已经持续了多久（毫秒）；null = 调用方没给，跳过这层次要防抖。 */
+        staleForMs: Long? = null,
     ): Step = when {
         running -> Step.NONE
+        // 「未知 / 可疑 / 恢复中 / 暂停」只是证据不足，不是故障：继续观察，绝不动手拆。
+        status != null && !statusMeansDead(status) -> Step.NONE
+        // 刚确诊的那一秒先不动手，给系统一个自己挂回来的机会。
+        staleForMs != null && staleForMs < STALE_CONFIRM_MS -> Step.NONE
         !enabled && !systemRemoved -> Step.WARN
         !canWrite -> Step.WARN
         heals >= MAX_HEALS -> Step.WARN
         now - lastHeal < HEAL_GAP_MS -> Step.WARN
         else -> Step.HEAL
+    }
+
+    /**
+     * 这个健康状态是不是已经能确诊「服务真的没在跑」。
+     *
+     * 只有这四种算：无障碍被关 / 确认失联 / 没注册 / 还没装；
+     * [HealthStatus.UNKNOWN]（还没测出结论）、[HealthStatus.SUSPECT]（只是超时）、
+     * [HealthStatus.RECOVERING]（正在救）、[HealthStatus.PAUSED]（用户主动暂停）
+     * 都不算——对它们做破坏性重绑，是用制造故障的办法去修故障。
+     */
+    fun statusMeansDead(status: HealthStatus): Boolean = when (status) {
+        HealthStatus.DISABLED,
+        HealthStatus.UNRESPONSIVE,
+        HealthStatus.UNREGISTERED,
+        -> true
+
+        HealthStatus.HEALTHY,
+        HealthStatus.UNKNOWN,
+        HealthStatus.SUSPECT,
+        HealthStatus.RECOVERING,
+        HealthStatus.PAUSED,
+        -> false
     }
 
     /**
@@ -289,16 +348,27 @@ object SelfHeal {
         if (store.config.value.pausedUntil > System.currentTimeMillis()) return
         if (PermissionStatus.guardRunning(context)) {
             heals = 0
+            staleSince = 0L
             state = "running"
             reminded = false
             return
         }
+        // 拿状态语义（不只是 true/false）：UNKNOWN/SUSPECT/RECOVERING/PAUSED 只是证据不足，不该拆。
+        val status = PermissionStatus.healthStatus(context)
         val now = System.currentTimeMillis()
         val enabled = PermissionStatus.accessibility(context)
         // 「列表里没有我」是系统摘的还是用户关的：决定后面该修还是只提醒。
         val removed = !enabled && systemRemoved(context)
-        // 诊断：只在“运行 / 开着没跑 / 被关 / 被系统摘掉”之间变化时记一条，否则每分钟一条会把时间线刷满
+        // 确诊没在运行从什么时候开始：只做次要防抖。
+        if (statusMeansDead(status)) {
+            if (staleSince <= 0L) staleSince = now
+        } else {
+            staleSince = 0L
+        }
+        val staleFor = if (staleSince <= 0L) 0L else now - staleSince
+        // 诊断：只在「证据不足 / 确诊没跑 / 被关 / 被系统摘掉」之间变化时记一条，否则每分钟刷满。
         val nowState = when {
+            !statusMeansDead(status) -> "unproven"
             enabled -> "stale"
             removed -> "removed"
             else -> "disabled"
@@ -306,12 +376,15 @@ object SelfHeal {
         if (state != nowState) {
             state = nowState
             when (nowState) {
+                // 证据不足：既不算「没在运行」，也不给用户发警报。
+                "unproven" -> {}
                 "stale" -> Diag.log(context, "stale", "开着但没在运行")
                 "removed" -> Diag.log(context, "stale", "无障碍被系统从列表里摘掉了：按自动恢复处理")
                 else -> Diag.log(context, "disabled", "无障碍在设置里是关着的")
             }
         }
-        if (step(false, enabled, canWrite(context), heals, now, lastHeal, systemRemoved = removed) == Step.HEAL) {
+        if (step(false, enabled, canWrite(context), heals, now, lastHeal,
+                systemRemoved = removed, status = status, staleForMs = staleFor) == Step.HEAL) {
             lastHeal = now
             heals++
             // 走 attempt 而不是 rebindDetail：这里要带上“第几次”，而且诊断由本函数自己写
@@ -320,12 +393,15 @@ object SelfHeal {
             if (r.verified) {
                 Diag.log(context, "rebind_ok", detail)
                 state = "running"
+                staleSince = 0L
                 reminded = false
                 store.logWake("无障碍开着但没在运行：自动重新挂上（第 $heals 次）")
                 return
             }
             Diag.log(context, "rebind_fail", detail)
         }
+        // 证据不足（未知/可疑/恢复中/暂停）时既不修也不提醒：不该给用户发「它被系统停了」这种假警报。
+        if (!statusMeansDead(status)) return
         warn(context, enabled, now)
     }
 
