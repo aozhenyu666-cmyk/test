@@ -1,0 +1,3108 @@
+From d93c3bb192517aa56cc5adf4fbb8db1670514de8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 13:54:52 +0000
+Subject: [PATCH] =?UTF-8?q?Add=20the=20first=20event=20loop:=20test=20app?=
+ =?UTF-8?q?=20=E2=86=92=20interaction=20page=20=E2=86=92=20receipt?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Opening a test app the person picked in settings now runs one closed loop:
+the accessibility service hands window events to LoopRuntime, which waits
+350 ms, re-reads the real foreground package (package name only), and lets
+a pure-Kotlin LoopEngine decide. A new visit that passes the local rules
+(enabled, screen on, unlocked, DSH not busy, no page open, cooldown) opens
+an event and shows InteractionActivity in its own task; every way out
+(Back button, system back, leaving, timeout, not shown) closes the event
+once and the receipt is written atomically to files/loop/state.json.
+
+DSH itself, system UI, keyboards and permission/security pages never start
+or end a visit, so returning from the page or a keyboard popping up cannot
+loop. Open events left by a dead process close as ABANDONED on recovery.
+
+Existing phone control is untouched apart from three hooks in
+PhoneA11yService, a read-only PhonePrompts.busy(), the plugin registration
+and the manifest entry. Docs in docs/loop/.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUAnRqEK1Me9rrDHoEiwk9
+---
+ app/android/app/src/main/AndroidManifest.xml  |  12 +
+ .../ccch1mneyyy/dsh_app/MainActivity.kt       |   1 +
+ .../ccch1mneyyy/dsh_app/loop/EventObserver.kt | 100 +++++++
+ .../dsh_app/loop/EventScheduler.kt            |  69 +++++
+ .../dsh_app/loop/InteractionActivity.kt       | 106 ++++++++
+ .../dsh_app/loop/InteractionHub.kt            |  48 ++++
+ .../ccch1mneyyy/dsh_app/loop/LoopEngine.kt    | 184 +++++++++++++
+ .../ccch1mneyyy/dsh_app/loop/LoopEvent.kt     |  77 ++++++
+ .../ccch1mneyyy/dsh_app/loop/LoopPlugin.kt    |  98 +++++++
+ .../ccch1mneyyy/dsh_app/loop/LoopRuntime.kt   | 157 +++++++++++
+ .../ccch1mneyyy/dsh_app/loop/LoopStore.kt     |  86 ++++++
+ .../ccch1mneyyy/dsh_app/phone/PhonePrompts.kt |   3 +
+ .../dsh_app/phone/a11y/PhoneA11yService.kt    |   5 +
+ .../src/main/res/values-zh/loop_strings.xml   |   7 +
+ .../app/src/main/res/values/loop_strings.xml  |   7 +
+ .../dsh_app/loop/LoopEngineTest.kt            | 248 +++++++++++++++++
+ app/lib/l10n/app_en.arb                       |  30 +++
+ app/lib/l10n/app_zh.arb                       |  57 ++++
+ app/lib/l10n/gen/app_localizations.dart       | 180 +++++++++++++
+ app/lib/l10n/gen/app_localizations_en.dart    |  97 +++++++
+ app/lib/l10n/gen/app_localizations_zh.dart    |  96 +++++++
+ app/lib/l10n/parts/loop_en.arb                |  60 +++++
+ app/lib/l10n/parts/loop_zh.arb                |  60 +++++
+ app/lib/loop/loop_channel.dart                | 175 ++++++++++++
+ app/lib/ui/phone/loop_test_page.dart          | 250 ++++++++++++++++++
+ app/lib/ui/phone/phone_control_screen.dart    |  14 +
+ app/test/phone/loop_test_page_test.dart       | 159 +++++++++++
+ docs/loop/ARCHITECTURE.md                     | 152 +++++++++++
+ docs/loop/AUDIT.md                            |  95 +++++++
+ docs/loop/TASKS.md                            |  54 ++++
+ docs/loop/VALIDATION.md                       |  74 ++++++
+ 31 files changed, 2761 insertions(+)
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/EventObserver.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/EventScheduler.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/InteractionActivity.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/InteractionHub.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopEngine.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopEvent.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopPlugin.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopRuntime.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopStore.kt
+ create mode 100644 app/android/app/src/main/res/values-zh/loop_strings.xml
+ create mode 100644 app/android/app/src/main/res/values/loop_strings.xml
+ create mode 100644 app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopEngineTest.kt
+ create mode 100644 app/lib/l10n/parts/loop_en.arb
+ create mode 100644 app/lib/l10n/parts/loop_zh.arb
+ create mode 100644 app/lib/loop/loop_channel.dart
+ create mode 100644 app/lib/ui/phone/loop_test_page.dart
+ create mode 100644 app/test/phone/loop_test_page_test.dart
+ create mode 100644 docs/loop/ARCHITECTURE.md
+ create mode 100644 docs/loop/AUDIT.md
+ create mode 100644 docs/loop/TASKS.md
+ create mode 100644 docs/loop/VALIDATION.md
+
+diff --git a/app/android/app/src/main/AndroidManifest.xml b/app/android/app/src/main/AndroidManifest.xml
+index fa7527d..d6f69ee 100644
+--- a/app/android/app/src/main/AndroidManifest.xml
++++ b/app/android/app/src/main/AndroidManifest.xml
+@@ -246,6 +246,18 @@
+                 android:resource="@xml/phone_accessibility_service" />
+         </service>
+ 
++        <!-- 触发测试 (loop/InteractionActivity.kt): the first loop's interaction page. Its own task
++             and affinity so finishing it returns to the test app and never touches the main task. -->
++        <activity
++            android:name=".loop.InteractionActivity"
++            android:exported="false"
++            android:excludeFromRecents="true"
++            android:taskAffinity="io.github.ccch1mneyyy.dsh_app.loop"
++            android:launchMode="singleInstance"
++            android:noHistory="false"
++            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|locale|layoutDirection"
++            android:theme="@android:style/Theme.DeviceDefault.Dialog.NoActionBar" />
++
+         <!-- 不打扰模式: Shizuku binder provider (shell-uid channel). -->
+         <provider
+             android:name="rikka.shizuku.ShizukuProvider"
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/MainActivity.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/MainActivity.kt
+index 0be1f33..4b3105a 100644
+--- a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/MainActivity.kt
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/MainActivity.kt
+@@ -62,6 +62,7 @@ class MainActivity : FlutterActivity() {
+             engine.plugins.add(io.github.ccch1mneyyy.dsh_app.launch.LaunchClipPlugin())
+             engine.plugins.add(io.github.ccch1mneyyy.dsh_app.icons.PictureShortcutPlugin())
+             engine.plugins.add(io.github.ccch1mneyyy.dsh_app.usage.UsagePlugin())
++            engine.plugins.add(io.github.ccch1mneyyy.dsh_app.loop.LoopPlugin())
+             engine.dartExecutor.executeDartEntrypoint(DartExecutor.DartEntrypoint.createDefault())
+             cache.put(ENGINE_ID, engine)
+         }
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/EventObserver.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/EventObserver.kt
+new file mode 100644
+index 0000000..6955fd6
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/EventObserver.kt
+@@ -0,0 +1,100 @@
++package io.github.ccch1mneyyy.dsh_app.loop
++
++import io.github.ccch1mneyyy.dsh_app.phone.a11y.ProtectedPages
++
++// EventObserver, platform-free half: what a verified foreground package means for the loop.
++// The Android half (LoopRuntime) debounces accessibility events and re-reads the real
++// foreground; only that verified package reaches [ForegroundTracker].
++
++/** What a foreground package is to the loop. */
++enum class PackageClass {
++    /** The test app the person picked. */
++    TARGET,
++    /** DSH itself (its chat, its interaction page). Never ends a visit, never triggers. */
++    SELF,
++    /** System UI, keyboards, permission / install / security pages. Never ends a visit. */
++    NEUTRAL,
++    /** Any other app: ends a visit. */
++    OTHER,
++}
++
++class PackageFilter(
++    private val selfPackage: String,
++    /** Package names of the enabled input methods (read from the system by the caller). */
++    private val inputMethods: () -> Set<String> = { emptySet() },
++) {
++    fun classify(pkg: String, target: String?): PackageClass = when {
++        pkg == selfPackage -> PackageClass.SELF
++        pkg == target -> PackageClass.TARGET
++        isNeutral(pkg) -> PackageClass.NEUTRAL
++        else -> PackageClass.OTHER
++    }
++
++    fun isNeutral(pkg: String): Boolean =
++        pkg in NEUTRAL || pkg in ProtectedPages.packages || pkg in runCatching(inputMethods).getOrDefault(emptySet()) ||
++            pkg.contains(".inputmethod") || pkg.endsWith(".ime")
++
++    companion object {
++        /** Shades, dialogs, call screens: things that sit on top of an app rather than replace it. */
++        val NEUTRAL: Set<String> = setOf(
++            "android", "com.android.systemui", "com.android.permissioncontroller",
++            "com.google.android.permissioncontroller", "com.android.incallui", "com.android.server.telecom",
++            "com.android.internal.systemui.navbar.gestural", "com.miui.systemui", "com.coloros.systemui",
++            "com.oplus.systemui", "com.vivo.systemui", "com.huawei.systemui", "com.hihonor.systemui",
++            "com.samsung.android.systemui",
++        )
++    }
++}
++
++/**
++ * Visit tracking: entering the target from a real other app opens a visit; only another real app
++ * closes it. DSH's own page, keyboards, the shade and permission dialogs are transparent, so
++ * returning from the interaction page (or a keyboard popping up) never looks like a new entry.
++ */
++class ForegroundTracker(private val filter: PackageFilter) {
++    data class State(val insideTarget: Boolean = false, val visitId: String? = null, val target: String? = null) {
++        fun toMap(): Map<String, Any?> = linkedMapOf("insideTarget" to insideTarget, "visitId" to visitId, "target" to target)
++
++        companion object {
++            fun fromMap(m: Map<*, *>?): State = if (m == null) State() else State(
++                m["insideTarget"] == true, m["visitId"] as? String, m["target"] as? String,
++            )
++        }
++    }
++
++    sealed interface Step {
++        /** A new visit to the target began: a trigger candidate. */
++        data class Entered(val visitId: String) : Step
++        /** Still inside the same visit. */
++        data object Stayed : Step
++        /** A real other app took over: the visit ended. */
++        data object Exited : Step
++        /** Changes nothing (unknown, self, neutral, or another app while already outside). */
++        data class Ignored(val why: String) : Step
++    }
++
++    var state = State()
++        private set
++
++    fun restore(saved: State) { state = saved }
++
++    /** [verified]: the foreground package read back from the window list, or null if unreadable. */
++    fun onForeground(verified: String?, target: String?, newVisitId: () -> String): Step {
++        if (state.target != target) state = State(target = target)
++        if (target == null) return Step.Ignored("no_target")
++        if (verified.isNullOrBlank()) return Step.Ignored("unknown")
++        return when (filter.classify(verified, target)) {
++            PackageClass.SELF -> Step.Ignored("self")
++            PackageClass.NEUTRAL -> Step.Ignored("neutral")
++            PackageClass.TARGET -> if (state.insideTarget) Step.Stayed else {
++                val id = newVisitId()
++                state = state.copy(insideTarget = true, visitId = id)
++                Step.Entered(id)
++            }
++            PackageClass.OTHER -> if (!state.insideTarget) Step.Ignored("other") else {
++                state = state.copy(insideTarget = false, visitId = null)
++                Step.Exited
++            }
++        }
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/EventScheduler.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/EventScheduler.kt
+new file mode 100644
+index 0000000..68eb48b
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/EventScheduler.kt
+@@ -0,0 +1,69 @@
++package io.github.ccch1mneyyy.dsh_app.loop
++
++// EventScheduler v0: the local rules that decide whether a confirmed entry may trigger.
++// Random proactive triggers, time windows and alarms come later (see docs/loop/ARCHITECTURE.md);
++// they will feed the same [TriggerRules.decide] so every trigger passes the same gates.
++
++data class LoopConfig(
++    val enabled: Boolean = false,
++    val targetPackage: String? = null,
++    /** Minimum gap between two triggers, across restarts (wall clock). */
++    val cooldownMs: Long = DEFAULT_COOLDOWN_MS,
++    /** How long the interaction page waits for an answer. */
++    val timeoutMs: Long = DEFAULT_TIMEOUT_MS,
++) {
++    fun normalized(): LoopConfig = copy(
++        targetPackage = targetPackage?.trim()?.takeIf { it.isNotEmpty() && it.length <= 255 },
++        cooldownMs = cooldownMs.coerceIn(0, 24 * 3_600_000L),
++        timeoutMs = timeoutMs.coerceIn(5_000, 10 * 60_000L),
++    )
++
++    fun toMap(): Map<String, Any?> = linkedMapOf(
++        "enabled" to enabled, "targetPackage" to targetPackage, "cooldownMs" to cooldownMs, "timeoutMs" to timeoutMs,
++    )
++
++    companion object {
++        const val DEFAULT_COOLDOWN_MS = 60_000L
++        const val DEFAULT_TIMEOUT_MS = 60_000L
++
++        fun fromMap(m: Map<*, *>?): LoopConfig = if (m == null) LoopConfig() else LoopConfig(
++            enabled = m["enabled"] == true,
++            targetPackage = m["targetPackage"] as? String,
++            cooldownMs = (m["cooldownMs"] as? Number)?.toLong() ?: DEFAULT_COOLDOWN_MS,
++            timeoutMs = (m["timeoutMs"] as? Number)?.toLong() ?: DEFAULT_TIMEOUT_MS,
++        ).normalized()
++    }
++}
++
++/** Facts the Android side supplies at decision time. */
++data class Environment(
++    val screenInteractive: Boolean = true,
++    val keyguardLocked: Boolean = false,
++    /** A DSH phone task is running or a DSH question is on screen: never compete with it. */
++    val dshBusy: Boolean = false,
++)
++
++object TriggerRules {
++    sealed interface Decision {
++        data object Trigger : Decision
++        data class Suppress(val reason: String) : Decision
++    }
++
++    /** The order is the rule: the first failing gate names the reason. */
++    fun decide(
++        now: Long,
++        config: LoopConfig,
++        env: Environment,
++        lastTriggerAt: Long,
++        hasOpenEvent: Boolean,
++    ): Decision = when {
++        !config.enabled -> Decision.Suppress("disabled")
++        !env.screenInteractive -> Decision.Suppress("screen_off")
++        env.keyguardLocked -> Decision.Suppress("locked")
++        env.dshBusy -> Decision.Suppress("dsh_busy")
++        hasOpenEvent -> Decision.Suppress("interaction_open")
++        lastTriggerAt > now -> Decision.Suppress("clock_back")
++        lastTriggerAt != 0L && now - lastTriggerAt < config.cooldownMs -> Decision.Suppress("cooldown")
++        else -> Decision.Trigger
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/InteractionActivity.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/InteractionActivity.kt
+new file mode 100644
+index 0000000..2b5c3f2
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/InteractionActivity.kt
+@@ -0,0 +1,106 @@
++package io.github.ccch1mneyyy.dsh_app.loop
++
++import android.app.Activity
++import android.content.Intent
++import android.os.Bundle
++import android.os.Handler
++import android.os.Looper
++import android.util.TypedValue
++import android.view.Gravity
++import android.widget.Button
++import android.widget.LinearLayout
++import android.widget.TextView
++import io.github.ccch1mneyyy.dsh_app.R
++import io.github.ccch1mneyyy.dsh_app.i18n.AppStrings
++
++/**
++ * The interaction page of the first loop: says which app was opened, offers one 返回 button.
++ * Its own task (manifest: taskAffinity, excludeFromRecents), so finishing it puts the person back
++ * in the test app, and it never touches DSH's main Flutter task.
++ *
++ * Every way out closes the event once: button → RETURNED, back → BACK, leaving the screen →
++ * DISMISSED, deadline → TIMEOUT. A page whose event is already closed (stale intent) finishes
++ * at once.
++ */
++class InteractionActivity : Activity() {
++    private val main = Handler(Looper.getMainLooper())
++    private var eventId: String? = null
++    private var closed = false
++    private val timeout = Runnable { close(EventResult.TIMEOUT) }
++
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(savedInstanceState)
++        setFinishOnTouchOutside(false)
++        // Recreated after process death: recovery already closed that event.
++        if (savedInstanceState != null) { closed = true; finish(); return }
++        bind(intent)
++    }
++
++    /** singleInstance: a start while an older page is still finishing lands here. */
++    override fun onNewIntent(next: Intent) {
++        super.onNewIntent(next)
++        if (!closed) close(EventResult.DISMISSED, finish = false, reason = "replaced")
++        setIntent(next)
++        bind(next)
++    }
++
++    private fun bind(start: Intent) {
++        val id = start.getStringExtra(InteractionHub.EXTRA_EVENT)
++        // A stale start (its event already closed, e.g. by the not-shown watchdog) shows nothing.
++        if (id == null || !LoopRuntime.engine(this).shown(id)) { closed = true; finish(); return }
++        eventId = id
++        closed = false
++        val pkg = start.getStringExtra(InteractionHub.EXTRA_PACKAGE)
++        val label = pkg?.let { p -> runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(p, 0)).toString() }.getOrNull() } ?: pkg.orEmpty()
++        setContentView(content(label))
++        val ms = start.getLongExtra(InteractionHub.EXTRA_TIMEOUT, LoopConfig.DEFAULT_TIMEOUT_MS)
++        main.removeCallbacks(timeout)
++        main.postDelayed(timeout, ms.coerceIn(5_000, 10 * 60_000L))
++    }
++
++    private fun content(label: String): LinearLayout {
++        fun dp(v: Int) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
++        return LinearLayout(this).apply {
++            orientation = LinearLayout.VERTICAL
++            setPadding(dp(24), dp(20), dp(24), dp(12))
++            addView(TextView(this@InteractionActivity).apply {
++                text = AppStrings.get(this@InteractionActivity, R.string.loop_page_title)
++                setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
++            })
++            addView(TextView(this@InteractionActivity).apply {
++                text = AppStrings.get(this@InteractionActivity, R.string.loop_page_text, label)
++                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
++                setPadding(0, dp(12), 0, dp(16))
++            })
++            addView(Button(this@InteractionActivity).apply {
++                text = AppStrings.get(this@InteractionActivity, R.string.loop_page_return)
++                setOnClickListener { close(EventResult.RETURNED) }
++            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
++                gravity = Gravity.END
++            })
++        }
++    }
++
++    @Deprecated("Activity back handling; targetSdk 28")
++    override fun onBackPressed() = close(EventResult.BACK)
++
++    override fun onStop() {
++        super.onStop()
++        // Home, recents, another app or screen off took the page away without an answer.
++        if (!closed && !isChangingConfigurations) close(EventResult.DISMISSED)
++    }
++
++    override fun onDestroy() {
++        main.removeCallbacks(timeout)
++        if (!closed && !isChangingConfigurations) close(EventResult.DISMISSED, finish = false)
++        super.onDestroy()
++    }
++
++    private fun close(result: EventResult, finish: Boolean = true, reason: String? = null) {
++        if (closed) return
++        closed = true
++        main.removeCallbacks(timeout)
++        eventId?.let { LoopRuntime.engine(this).answer(it, result, reason) }
++        if (finish && !isFinishing) finish()
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/InteractionHub.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/InteractionHub.kt
+new file mode 100644
+index 0000000..b779eff
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/InteractionHub.kt
+@@ -0,0 +1,48 @@
++package io.github.ccch1mneyyy.dsh_app.loop
++
++import android.content.Context
++import android.content.Intent
++import android.os.Handler
++import android.os.Looper
++import android.util.Log
++
++/**
++ * InteractionHub v1: one surface (a small DSH page), one button. Later surfaces (overlay,
++ * notification) plug in behind [show] with the same rule: the page answers through
++ * [LoopEngine.answer], and whoever answers first wins.
++ *
++ * Started from the accessibility service, which Android lets start activities from the
++ * background. If the page is not on screen within [SHOW_DEADLINE_MS] the event closes as
++ * UNAVAILABLE (e.g. a ROM that blocks "show pop-up windows while running in the background").
++ */
++object InteractionHub {
++    private const val TAG = "DshLoop"
++    private const val SHOW_DEADLINE_MS = 3_000L
++    internal const val EXTRA_EVENT = "loop_event_id"
++    internal const val EXTRA_TIMEOUT = "loop_timeout_ms"
++    internal const val EXTRA_PACKAGE = "loop_package"
++
++    private val main = Handler(Looper.getMainLooper())
++
++    fun show(context: Context, engine: LoopEngine, show: LoopEngine.Outcome.Show) {
++        val id = show.event.eventId
++        val intent = Intent(context, InteractionActivity::class.java)
++            .putExtra(EXTRA_EVENT, id)
++            .putExtra(EXTRA_TIMEOUT, show.timeoutMs)
++            .putExtra(EXTRA_PACKAGE, show.event.packageName)
++            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or Intent.FLAG_ACTIVITY_NO_ANIMATION)
++        try {
++            context.startActivity(intent)
++        } catch (t: Throwable) {
++            Log.w(TAG, "start page", t)
++            engine.answer(id, EventResult.UNAVAILABLE, reason = "start_failed", error = t.javaClass.simpleName)
++            return
++        }
++        main.postDelayed({
++            // Still TRIGGERED (never SHOWN) after the deadline: the start was swallowed.
++            if (engine.stateOf(id) == EventState.TRIGGERED) {
++                engine.answer(id, EventResult.UNAVAILABLE, reason = "not_shown")
++            }
++        }, SHOW_DEADLINE_MS)
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopEngine.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopEngine.kt
+new file mode 100644
+index 0000000..1aff850
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopEngine.kt
+@@ -0,0 +1,184 @@
++package io.github.ccch1mneyyy.dsh_app.loop
++
++import java.util.UUID
++
++/**
++ * The first closed loop, platform-free:
++ *
++ *   verified foreground → [ForegroundTracker] (new visit?) → [TriggerRules] → open event
++ *   → InteractionHub shows the page → [answer] closes the event → receipt persisted.
++ *
++ * Every state change is written before the method returns, so a process death at any point
++ * leaves a file [recover] can close honestly (ABANDONED) instead of forgetting the event.
++ * Thread-safe: the Android side calls in from the main thread and the plugin thread.
++ */
++class LoopEngine(
++    private val store: LoopStore,
++    filter: PackageFilter,
++    private val clock: () -> Long = System::currentTimeMillis,
++    private val ids: () -> String = { UUID.randomUUID().toString() },
++) {
++    sealed interface Outcome {
++        /** Show the interaction page for this event now. */
++        data class Show(val event: LoopEvent, val timeoutMs: Long) : Outcome
++        /** A candidate was turned down by a rule; the event is already closed and stored. */
++        data class Suppressed(val event: LoopEvent) : Outcome
++        /** Not a candidate at all (same visit, neutral window, …). Nothing stored. */
++        data class Ignored(val why: String) : Outcome
++    }
++
++    private val lock = Any()
++    private val tracker = ForegroundTracker(filter)
++    private var config = LoopConfig()
++    private var lastTriggerAt = 0L
++    private val events = ArrayDeque<LoopEvent>()
++
++    /** Last storage failure, for the settings page. Null once a write succeeds again. */
++    @Volatile var storageError: String? = null
++        private set
++
++    /**
++     * Process start / service (re)connect. Loads the file; any event still open belonged to a
++     * process or page that is gone, so it closes as ABANDONED. The visit is kept: a reconnect
++     * while the person is still in the test app does not count as a new entry.
++     */
++    fun recover(): List<LoopEvent> = synchronized(lock) {
++        val closed = mutableListOf<LoopEvent>()
++        when (val r = store.read()) {
++            LoopStore.Read.Empty -> Unit
++            is LoopStore.Read.Unreadable -> {
++                events.clear()
++                closed += record(newEvent(EventSource.RECOVERY, EventState.CLOSED, EventResult.ERROR, error = "state_unreadable: ${r.error}"))
++            }
++            is LoopStore.Read.Loaded -> {
++                config = r.snapshot.config
++                tracker.restore(r.snapshot.tracker)
++                lastTriggerAt = r.snapshot.lastTriggerAt
++                events.clear()
++                events.addAll(r.snapshot.events.takeLast(LoopStore.MAX_EVENTS))
++                val now = clock()
++                for (i in events.indices) {
++                    val e = events[i]
++                    if (!e.open) continue
++                    val c = e.copy(state = EventState.CLOSED, result = EventResult.ABANDONED, reason = "process_restart", updatedAt = now)
++                    events[i] = c
++                    closed += c
++                }
++            }
++        }
++        persist()
++        closed
++    }
++
++    fun config(): LoopConfig = synchronized(lock) { config }
++
++    fun setConfig(next: LoopConfig): LoopConfig = synchronized(lock) {
++        val n = next.normalized()
++        // A different test app is a different loop: drop the visit and close what is open.
++        if (n.targetPackage != config.targetPackage || !n.enabled) closeOpenLocked(EventResult.DISMISSED, "config_changed")
++        config = n
++        persist()
++        config
++    }
++
++    /** One verified foreground reading. [env] is read by the caller just before. */
++    fun onForeground(verified: String?, env: Environment, source: EventSource = EventSource.A11Y_WINDOW): Outcome = synchronized(lock) {
++        val target = config.targetPackage.takeIf { config.enabled }
++        val before = tracker.state
++        val step = tracker.onForeground(verified, target) { ids() }
++        if (tracker.state != before) persist()
++        val visitId = when (step) {
++            is ForegroundTracker.Step.Entered -> step.visitId
++            ForegroundTracker.Step.Stayed -> return Outcome.Ignored("same_visit")
++            ForegroundTracker.Step.Exited -> return Outcome.Ignored("exited")
++            is ForegroundTracker.Step.Ignored -> return Outcome.Ignored(step.why)
++        }
++        val now = clock()
++        if (lastTriggerAt > now) lastTriggerAt = now // the clock went back: restart the cooldown from here
++        val base = newEvent(source, EventState.CONFIRMED, packageName = verified, visitId = visitId)
++        when (val d = TriggerRules.decide(now, config, env, lastTriggerAt, events.any { it.open })) {
++            is TriggerRules.Decision.Suppress -> Outcome.Suppressed(
++                record(base.copy(state = EventState.CLOSED, result = EventResult.SUPPRESSED, reason = d.reason)),
++            )
++            TriggerRules.Decision.Trigger -> {
++                lastTriggerAt = now
++                Outcome.Show(record(base.copy(state = EventState.TRIGGERED, surface = "activity")), config.timeoutMs)
++            }
++        }
++    }
++
++    /** The page is on screen. False when the event is already closed (stale page: finish it). */
++    fun shown(eventId: String): Boolean = synchronized(lock) {
++        val e = find(eventId) ?: return false
++        if (e.state == EventState.SHOWN) return true
++        if (e.state != EventState.TRIGGERED) return false
++        replace(e.copy(state = EventState.SHOWN, updatedAt = clock()))
++        true
++    }
++
++    /** Where [eventId] stands now; null when unknown (evicted or never existed). */
++    fun stateOf(eventId: String): EventState? = synchronized(lock) { find(eventId)?.state }
++
++    /**
++     * Closes the event with the person's answer (or TIMEOUT / DISMISSED / UNAVAILABLE / ERROR).
++     * Idempotent: the first answer wins, later ones (double tap, back + button) return null.
++     */
++    fun answer(eventId: String, result: EventResult, reason: String? = null, error: String? = null): LoopEvent? = synchronized(lock) {
++        val e = find(eventId)?.takeIf { it.open } ?: return null
++        replace(e.copy(state = EventState.CLOSED, result = result, reason = reason ?: e.reason, error = error, updatedAt = clock()))
++    }
++
++    /** Newest first. */
++    fun events(limit: Int = 50): List<LoopEvent> = synchronized(lock) { events.reversed().take(limit.coerceIn(0, LoopStore.MAX_EVENTS)) }
++
++    fun clearEvents() = synchronized(lock) {
++        events.removeAll { !it.open }
++        persist()
++    }
++
++    fun trackerState(): ForegroundTracker.State = synchronized(lock) { tracker.state }
++
++    private fun closeOpenLocked(result: EventResult, reason: String) {
++        val now = clock()
++        for (i in events.indices) if (events[i].open) {
++            events[i] = events[i].copy(state = EventState.CLOSED, result = result, reason = reason, updatedAt = now)
++        }
++    }
++
++    private fun newEvent(
++        source: EventSource, state: EventState, result: EventResult? = null, error: String? = null,
++        packageName: String? = null, visitId: String? = null,
++    ): LoopEvent {
++        val now = clock()
++        return LoopEvent(ids(), source, now, state, result, error, packageName = packageName, visitId = visitId, updatedAt = now)
++    }
++
++    private fun find(id: String): LoopEvent? = events.lastOrNull { it.eventId == id }
++
++    private fun record(e: LoopEvent): LoopEvent {
++        events.addLast(e)
++        while (events.size > LoopStore.MAX_EVENTS) {
++            // Never evict an open event: its page still needs to close it.
++            val idx = events.indexOfFirst { !it.open }.takeIf { it >= 0 } ?: break
++            events.removeAt(idx)
++        }
++        persist()
++        return e
++    }
++
++    private fun replace(e: LoopEvent): LoopEvent {
++        val i = events.indexOfLast { it.eventId == e.eventId }
++        if (i >= 0) events[i] = e
++        persist()
++        return e
++    }
++
++    private fun persist() {
++        storageError = try {
++            store.write(LoopSnapshot(config, tracker.state, lastTriggerAt, events.toList()))
++            null
++        } catch (t: Throwable) {
++            "${t.javaClass.simpleName}: ${t.message}".take(300)
++        }
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopEvent.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopEvent.kt
+new file mode 100644
+index 0000000..72da136
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopEvent.kt
+@@ -0,0 +1,77 @@
++package io.github.ccch1mneyyy.dsh_app.loop
++
++// The one event record shared by EventObserver, EventScheduler, InteractionHub and (later)
++// AgentBridge. Plain Kotlin so the loop runs in JVM tests.
++
++/** Where an event came from. Only [A11Y_WINDOW] and [RECOVERY] exist in v1. */
++enum class EventSource { A11Y_WINDOW, SCHEDULER, RECOVERY }
++
++/**
++ * How far an event got. Moves forward only: CONFIRMED → TRIGGERED → SHOWN → CLOSED.
++ * A suppressed or failed event goes straight to CLOSED with its [EventResult].
++ */
++enum class EventState { CONFIRMED, TRIGGERED, SHOWN, CLOSED }
++
++/** Set exactly once, when the event becomes [EventState.CLOSED]. */
++enum class EventResult {
++    /** The person tapped the page's 返回 button. */
++    RETURNED,
++    /** The person pressed the system back key / gesture on the page. */
++    BACK,
++    /** The page left the screen without an answer (home, recents, screen off). */
++    DISMISSED,
++    /** No answer before the page's deadline. */
++    TIMEOUT,
++    /** The process or service died while the event was open; closed on recovery. */
++    ABANDONED,
++    /** The page could not be shown (start refused, never resumed). */
++    UNAVAILABLE,
++    /** A local rule said no (cooldown, DSH busy, locked, …); see [LoopEvent.reason]. */
++    SUPPRESSED,
++    /** Something threw; see [LoopEvent.error]. */
++    ERROR,
++}
++
++data class LoopEvent(
++    val eventId: String,
++    val source: EventSource,
++    /** Wall clock (ms) when the event was created. */
++    val timestamp: Long,
++    val state: EventState,
++    val result: EventResult? = null,
++    val error: String? = null,
++    /** Why a rule suppressed it, or why it closed the way it did. */
++    val reason: String? = null,
++    val packageName: String? = null,
++    /** One visit = one stay in the test app; at most one trigger per visit. */
++    val visitId: String? = null,
++    /** "activity" in v1; "overlay" / "notification" later. */
++    val surface: String? = null,
++    val updatedAt: Long = timestamp,
++) {
++    val open: Boolean get() = state != EventState.CLOSED
++
++    fun toMap(): Map<String, Any?> = linkedMapOf(
++        "eventId" to eventId, "source" to source.name, "timestamp" to timestamp, "state" to state.name,
++        "result" to result?.name, "error" to error, "reason" to reason, "packageName" to packageName,
++        "visitId" to visitId, "surface" to surface, "updatedAt" to updatedAt,
++    )
++
++    companion object {
++        fun fromMap(m: Map<*, *>): LoopEvent? = runCatching {
++            LoopEvent(
++                eventId = m["eventId"] as String,
++                source = EventSource.valueOf(m["source"] as String),
++                timestamp = (m["timestamp"] as Number).toLong(),
++                state = EventState.valueOf(m["state"] as String),
++                result = (m["result"] as? String)?.let { EventResult.valueOf(it) },
++                error = m["error"] as? String,
++                reason = m["reason"] as? String,
++                packageName = m["packageName"] as? String,
++                visitId = m["visitId"] as? String,
++                surface = m["surface"] as? String,
++                updatedAt = (m["updatedAt"] as? Number)?.toLong() ?: (m["timestamp"] as Number).toLong(),
++            )
++        }.getOrNull()
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopPlugin.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopPlugin.kt
+new file mode 100644
+index 0000000..2df8022
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopPlugin.kt
+@@ -0,0 +1,98 @@
++package io.github.ccch1mneyyy.dsh_app.loop
++
++import android.content.Context
++import android.content.Intent
++import android.os.Handler
++import android.os.Looper
++import io.flutter.embedding.engine.plugins.FlutterPlugin
++import io.flutter.plugin.common.MethodCall
++import io.flutter.plugin.common.MethodChannel
++import io.github.ccch1mneyyy.dsh_app.phone.a11y.PhoneA11yService
++import java.util.concurrent.Executors
++
++/**
++ * 设置 → 手机操控 → 触发测试: MethodChannel `dsh/loop` (lib/loop/loop_channel.dart).
++ *
++ * - `status` → `{config, a11yEnabled, a11yConnected, eventsSeen, readings, lastForeground, storageError}`
++ * - `setConfig` `{enabled?, targetPackage?, cooldownMs?, timeoutMs?}` → config
++ * - `events` `{limit}` → receipts, newest first
++ * - `clearEvents` → true
++ * - `apps` → launchable apps `[{package, label}]` (DSH itself left out)
++ */
++class LoopPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
++    private var methods: MethodChannel? = null
++    private lateinit var context: Context
++    private val main = Handler(Looper.getMainLooper())
++    private val io = Executors.newSingleThreadExecutor { r -> Thread(r, "dsh-loop-plugin").apply { isDaemon = true } }
++
++    override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
++        context = binding.applicationContext
++        methods = MethodChannel(binding.binaryMessenger, "dsh/loop").also { it.setMethodCallHandler(this) }
++    }
++
++    override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
++        methods?.setMethodCallHandler(null)
++        methods = null
++    }
++
++    override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
++        when (call.method) {
++            "status" -> async(result) { status() }
++            "setConfig" -> async(result) {
++                val engine = LoopRuntime.engine(context)
++                val cur = engine.config()
++                val args = call.arguments as? Map<*, *>
++                val next = cur.copy(
++                    enabled = args?.get("enabled") as? Boolean ?: cur.enabled,
++                    targetPackage = if (args?.containsKey("targetPackage") == true) args["targetPackage"] as? String else cur.targetPackage,
++                    cooldownMs = (args?.get("cooldownMs") as? Number)?.toLong() ?: cur.cooldownMs,
++                    timeoutMs = (args?.get("timeoutMs") as? Number)?.toLong() ?: cur.timeoutMs,
++                )
++                engine.setConfig(next).toMap().also { main.post { LoopRuntime.configChanged() } }
++            }
++            "events" -> async(result) {
++                LoopRuntime.engine(context).events(call.argument<Int>("limit") ?: 50).map { it.toMap() }
++            }
++            "clearEvents" -> async(result) { LoopRuntime.engine(context).clearEvents(); true }
++            "apps" -> async(result) { apps() }
++            else -> result.notImplemented()
++        }
++    }
++
++    private fun status(): Map<String, Any?> {
++        val engine = LoopRuntime.engine(context)
++        return linkedMapOf(
++            "config" to engine.config().toMap(),
++            "a11yEnabled" to PhoneA11yService.isEnabled(context),
++            "a11yConnected" to PhoneA11yService.isConnected(),
++            "eventsSeen" to LoopRuntime.eventsSeen,
++            "readings" to LoopRuntime.readings,
++            "lastForeground" to LoopRuntime.lastForeground,
++            "storageError" to engine.storageError,
++            "insideTarget" to engine.trackerState().insideTarget,
++        )
++    }
++
++    private fun apps(): List<Map<String, Any?>> {
++        val pm = context.packageManager
++        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
++        return pm.queryIntentActivities(launcher, 0)
++            .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
++            .filter { it.first != context.packageName }
++            .distinctBy { it.first }
++            .sortedBy { it.second.lowercase() }
++            .map { (pkg, label) -> linkedMapOf("package" to pkg, "label" to label) }
++    }
++
++    private fun async(result: MethodChannel.Result, block: () -> Any?) {
++        io.execute {
++            val value = runCatching(block)
++            main.post {
++                value.fold(
++                    onSuccess = { result.success(it) },
++                    onFailure = { result.error("loop_failed", it.message ?: it.javaClass.simpleName, null) },
++                )
++            }
++        }
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopRuntime.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopRuntime.kt
+new file mode 100644
+index 0000000..4eb15f3
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopRuntime.kt
+@@ -0,0 +1,157 @@
++package io.github.ccch1mneyyy.dsh_app.loop
++
++import android.accessibilityservice.AccessibilityService
++import android.app.KeyguardManager
++import android.content.Context
++import android.graphics.Point
++import android.hardware.display.DisplayManager
++import android.os.Build
++import android.os.Handler
++import android.os.Looper
++import android.os.PowerManager
++import android.util.Log
++import android.view.Display
++import android.view.accessibility.AccessibilityEvent
++import android.view.accessibility.AccessibilityWindowInfo
++import android.view.inputmethod.InputMethodManager
++import io.github.ccch1mneyyy.dsh_app.phone.PhoneControl
++import io.github.ccch1mneyyy.dsh_app.phone.a11y.Box
++import io.github.ccch1mneyyy.dsh_app.phone.a11y.TreeCapture
++import java.io.File
++import java.lang.ref.WeakReference
++
++/**
++ * EventObserver, Android half, and the process-wide owner of the loop.
++ *
++ * [PhoneA11yService] forwards window events here. They are only hints: after a short quiet gap
++ * the real foreground is read back from the window list (package name only — never page
++ * content), and only that reading reaches [LoopEngine]. Everything runs on the main thread,
++ * where accessibility events arrive.
++ */
++object LoopRuntime {
++    private const val TAG = "DshLoop"
++    /** Quiet gap before reading the foreground: one app switch fires several window events. */
++    private const val SETTLE_MS = 350L
++
++    private val main = Handler(Looper.getMainLooper())
++    @Volatile private var engine: LoopEngine? = null
++    private var service: WeakReference<AccessibilityService>? = null
++    private val verify = Runnable { verifyNow() }
++
++    /** Counters for the settings page; reset with the process. */
++    @Volatile var eventsSeen = 0L
++        private set
++    @Volatile var readings = 0L
++        private set
++    @Volatile var lastForeground: String? = null
++        private set
++
++    /** One engine per process. The first call recovers what the last process left open. */
++    fun engine(context: Context): LoopEngine = engine ?: synchronized(this) {
++        engine ?: run {
++            val app = context.applicationContext
++            val imm = app.getSystemService(InputMethodManager::class.java)
++            val filter = PackageFilter(app.packageName) {
++                imm?.enabledInputMethodList?.map { it.packageName }?.toSet().orEmpty()
++            }
++            LoopEngine(FileLoopStore(File(File(app.filesDir, "loop"), "state.json")), filter).also {
++                val abandoned = it.recover()
++                if (abandoned.isNotEmpty()) Log.i(TAG, "recovered: closed ${abandoned.size} open event(s)")
++                engine = it
++            }
++        }
++    }
++
++    fun attach(s: AccessibilityService) {
++        engine(s)
++        service = WeakReference(s)
++        // The person may already be in the test app; a still-open visit makes this a no-op.
++        schedule()
++    }
++
++    fun detach(s: AccessibilityService) {
++        if (service?.get() === s) service = null
++        main.removeCallbacks(verify)
++    }
++
++    fun onEvent(s: AccessibilityService, event: AccessibilityEvent?) {
++        val type = event?.eventType ?: return
++        if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && type != AccessibilityEvent.TYPE_WINDOWS_CHANGED) return
++        val e = engine ?: return
++        if (!e.config().enabled) return
++        if (service?.get() !== s) service = WeakReference(s)
++        eventsSeen++
++        schedule()
++    }
++
++    /** Settings changed: read the foreground again so the new target is judged from now on. */
++    fun configChanged() = schedule()
++
++    private fun schedule() {
++        main.removeCallbacks(verify)
++        main.postDelayed(verify, SETTLE_MS)
++    }
++
++    private fun verifyNow() {
++        val s = service?.get() ?: return
++        val e = engine ?: return
++        if (!e.config().enabled) return
++        try {
++            val pkg = foreground(s)
++            readings++
++            lastForeground = pkg
++            when (val out = e.onForeground(pkg, environment(s))) {
++                is LoopEngine.Outcome.Show -> InteractionHub.show(s, e, out)
++                is LoopEngine.Outcome.Suppressed -> Log.i(TAG, "suppressed ${out.event.packageName}: ${out.event.reason}")
++                is LoopEngine.Outcome.Ignored -> Unit
++            }
++        } catch (t: Throwable) {
++            Log.w(TAG, "verify", t)
++        }
++    }
++
++    /**
++     * The app the person is looking at: the focused application window first (keyboards,
++     * DSH's own overlay pill and the status bar are other window types and never win), then
++     * DSH's general foreground reading as a fallback. Null when unreadable.
++     */
++    private fun foreground(s: AccessibilityService): String? {
++        val windows = try { s.windows } catch (_: Throwable) { null }
++        try {
++            windows?.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_APPLICATION && (it.isFocused || it.isActive) }
++                ?.let { w ->
++                    val root = w.root ?: return@let null
++                    try { root.packageName?.toString() } finally { release(root) }
++                }
++                ?.let { return it }
++        } finally {
++            @Suppress("DEPRECATION")
++            if (Build.VERSION.SDK_INT < 33) windows?.forEach { runCatching { it.recycle() } }
++        }
++        return TreeCapture.foregroundPackage(s, screenBox(s))
++    }
++
++    private fun environment(s: AccessibilityService): Environment {
++        val power = s.getSystemService(PowerManager::class.java)
++        val keyguard = s.getSystemService(KeyguardManager::class.java)
++        val core = PhoneControl.peek()
++        val busy = core != null && (core.tasks.isActive || core.tasks.callsInFlight > 0 || core.prompts.busy())
++        return Environment(
++            screenInteractive = power?.isInteractive != false,
++            keyguardLocked = keyguard?.isKeyguardLocked == true,
++            dshBusy = busy,
++        )
++    }
++
++    private fun screenBox(s: AccessibilityService): Box {
++        val p = Point()
++        @Suppress("DEPRECATION")
++        s.getSystemService(DisplayManager::class.java)?.getDisplay(Display.DEFAULT_DISPLAY)?.getRealSize(p)
++        return Box(0, 0, p.x.coerceAtLeast(1), p.y.coerceAtLeast(1))
++    }
++
++    @Suppress("DEPRECATION")
++    private fun release(node: android.view.accessibility.AccessibilityNodeInfo) {
++        if (Build.VERSION.SDK_INT < 33) runCatching { node.recycle() }
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopStore.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopStore.kt
+new file mode 100644
+index 0000000..a969614
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopStore.kt
+@@ -0,0 +1,86 @@
++package io.github.ccch1mneyyy.dsh_app.loop
++
++import io.github.ccch1mneyyy.dsh_app.phone.Json
++import java.io.File
++import java.io.FileOutputStream
++
++/** Everything the loop must remember across a process restart. */
++data class LoopSnapshot(
++    val config: LoopConfig = LoopConfig(),
++    val tracker: ForegroundTracker.State = ForegroundTracker.State(),
++    val lastTriggerAt: Long = 0L,
++    /** Oldest first, at most [LoopStore.MAX_EVENTS]. */
++    val events: List<LoopEvent> = emptyList(),
++) {
++    fun toMap(): Map<String, Any?> = linkedMapOf(
++        "version" to 1, "config" to config.toMap(), "tracker" to tracker.toMap(),
++        "lastTriggerAt" to lastTriggerAt, "events" to events.map { it.toMap() },
++    )
++
++    companion object {
++        fun fromMap(m: Map<*, *>): LoopSnapshot = LoopSnapshot(
++            config = LoopConfig.fromMap(m["config"] as? Map<*, *>),
++            tracker = ForegroundTracker.State.fromMap(m["tracker"] as? Map<*, *>),
++            lastTriggerAt = (m["lastTriggerAt"] as? Number)?.toLong() ?: 0L,
++            events = (m["events"] as? List<*>)?.mapNotNull { (it as? Map<*, *>)?.let(LoopEvent::fromMap) }.orEmpty(),
++        )
++    }
++}
++
++interface LoopStore {
++    sealed interface Read {
++        data object Empty : Read
++        data class Loaded(val snapshot: LoopSnapshot) : Read
++        /** A file was there but could not be read: never treated as "nothing saved". */
++        data class Unreadable(val error: String) : Read
++    }
++
++    fun read(): Read
++    fun write(snapshot: LoopSnapshot)
++
++    companion object {
++        const val MAX_EVENTS = 200
++    }
++}
++
++/** Temp file + fsync + rename: a power cut leaves the old file or the new one, never half. */
++class FileLoopStore(private val file: File) : LoopStore {
++    override fun read(): LoopStore.Read {
++        if (!file.exists()) return LoopStore.Read.Empty
++        return try {
++            val map = Json.parse(file.readText(Charsets.UTF_8)) as? Map<*, *> ?: error("not an object")
++            LoopStore.Read.Loaded(LoopSnapshot.fromMap(map))
++        } catch (t: Throwable) {
++            // Keep the bad file for diagnosis; the next write starts a fresh one.
++            runCatching { file.renameTo(File(file.parentFile, file.name + ".bad")) }
++            LoopStore.Read.Unreadable("${t.javaClass.simpleName}: ${t.message}".take(300))
++        }
++    }
++
++    override fun write(snapshot: LoopSnapshot) {
++        file.parentFile?.mkdirs()
++        val tmp = File(file.parentFile, file.name + ".tmp")
++        FileOutputStream(tmp).use { out ->
++            out.write(Json.write(snapshot.toMap()).toByteArray(Charsets.UTF_8))
++            out.flush()
++            out.fd.sync()
++        }
++        if (!tmp.renameTo(file)) {
++            if (file.exists() && !file.delete()) error("cannot replace ${file.name}")
++            if (!tmp.renameTo(file)) error("cannot write ${file.name}")
++        }
++    }
++}
++
++/** For tests and for running with storage unavailable. */
++class MemoryLoopStore(var saved: LoopSnapshot? = null, var failWrites: Boolean = false) : LoopStore {
++    var writes = 0
++        private set
++
++    override fun read(): LoopStore.Read = saved?.let { LoopStore.Read.Loaded(it) } ?: LoopStore.Read.Empty
++    override fun write(snapshot: LoopSnapshot) {
++        if (failWrites) error("disk full")
++        saved = snapshot
++        writes++
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/phone/PhonePrompts.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/phone/PhonePrompts.kt
+index 5877e90..7f96800 100644
+--- a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/phone/PhonePrompts.kt
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/phone/PhonePrompts.kt
+@@ -63,6 +63,9 @@ class PhonePrompts(
+     fun stopAll() = arbiter.stopAll()
+     fun check() = arbiter.check()
+ 
++    /** A DSH question is open right now (the loop never competes with one). */
++    fun busy(): Boolean = arbiter.current() != null
++
+     override fun confirm(request: ConfirmRequest): Decision {
+         if (Looper.myLooper() == Looper.getMainLooper()) return Decision.UNAVAILABLE
+         val taskOwner = tasks.activeOwner() ?: return Decision.STOP
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/phone/a11y/PhoneA11yService.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/phone/a11y/PhoneA11yService.kt
+index fe2e259..a013b7f 100644
+--- a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/phone/a11y/PhoneA11yService.kt
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/phone/a11y/PhoneA11yService.kt
+@@ -16,6 +16,7 @@ import android.os.Build
+ import android.provider.Settings
+ import android.util.Log
+ import android.view.accessibility.AccessibilityEvent
++import io.github.ccch1mneyyy.dsh_app.loop.LoopRuntime
+ import io.github.ccch1mneyyy.dsh_app.phone.PhoneRegistry
+ 
+ /**
+@@ -55,10 +56,13 @@ class PhoneA11yService : AccessibilityService() {
+         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) probe = A11yProbe(this, d, o).also { it.register() }
+         Log.i(TAG, "accessibility service connected")
+         PhoneRegistry.controlListener?.onAccessibilityChanged(true)
++        // 触发测试 (loop/): reads the foreground package only, and only while switched on.
++        runCatching { LoopRuntime.attach(this) }.onFailure { Log.w(TAG, "loop attach", it) }
+     }
+ 
+     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+         clock.tick(event?.packageName)
++        runCatching { LoopRuntime.onEvent(this, event) }
+     }
+ 
+     /**
+@@ -95,6 +99,7 @@ class PhoneA11yService : AccessibilityService() {
+     }
+ 
+     private fun teardown(reason: String) {
++        runCatching { LoopRuntime.detach(this) }
+         if (instance !== this && driver == null) return
+         val d = driver
+         val o = overlay
+diff --git a/app/android/app/src/main/res/values-zh/loop_strings.xml b/app/android/app/src/main/res/values-zh/loop_strings.xml
+new file mode 100644
+index 0000000..259d80e
+--- /dev/null
++++ b/app/android/app/src/main/res/values-zh/loop_strings.xml
+@@ -0,0 +1,7 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- 触发测试 (loop/InteractionActivity.kt). English in values/loop_strings.xml. -->
++<resources>
++    <string name="loop_page_title">DSH 触发测试</string>
++    <string name="loop_page_text">你打开了「%1$s」。这是第一条闭环的测试页面：点「返回」回去，并保存一条回执。</string>
++    <string name="loop_page_return">返回</string>
++</resources>
+diff --git a/app/android/app/src/main/res/values/loop_strings.xml b/app/android/app/src/main/res/values/loop_strings.xml
+new file mode 100644
+index 0000000..1a064f7
+--- /dev/null
++++ b/app/android/app/src/main/res/values/loop_strings.xml
+@@ -0,0 +1,7 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- 触发测试 (loop/InteractionActivity.kt). Chinese in values-zh/loop_strings.xml. -->
++<resources>
++    <string name="loop_page_title">DSH trigger test</string>
++    <string name="loop_page_text">You opened %1$s. This page is the first closed-loop test: tap Back to return and save a receipt.</string>
++    <string name="loop_page_return">Back</string>
++</resources>
+diff --git a/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopEngineTest.kt b/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopEngineTest.kt
+new file mode 100644
+index 0000000..aef9917
+--- /dev/null
++++ b/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopEngineTest.kt
+@@ -0,0 +1,248 @@
++package io.github.ccch1mneyyy.dsh_app.loop
++
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertFalse
++import org.junit.Assert.assertNotNull
++import org.junit.Assert.assertNull
++import org.junit.Assert.assertTrue
++import org.junit.Test
++import java.io.File
++import java.nio.file.Files
++
++/**
++ * The first closed loop on the JVM: these are the scenario checks from the task
++ * (20 switches, foreground/background, person leaves, reconnect, process restart, bad receipts),
++ * driven with verified foreground readings the way LoopRuntime feeds them.
++ */
++class LoopEngineTest {
++    private var now = 1_700_000_000_000L
++    private var seq = 0
++    private val self = "io.github.ccch1mneyyy.dsh_app"
++    private val target = "com.example.test"
++    private val other = "com.example.other"
++    private val launcher = "com.android.launcher3"
++    private val ime = "com.sohu.inputmethod.sogou"
++    private val idle = Environment()
++
++    private fun filter() = PackageFilter(self) { setOf(ime) }
++    private fun engine(store: LoopStore = MemoryLoopStore()) = LoopEngine(store, filter(), { now }, { "id-${++seq}" })
++    private fun LoopEngine.armed(cooldownMs: Long = 0) = apply {
++        recover()
++        setConfig(LoopConfig(enabled = true, targetPackage = target, cooldownMs = cooldownMs, timeoutMs = 30_000))
++    }
++
++    private fun LoopEngine.see(pkg: String?, env: Environment = idle) = onForeground(pkg, env)
++
++    /** Page shown and the person taps 返回. */
++    private fun LoopEngine.answerReturn(show: LoopEngine.Outcome.Show): LoopEvent {
++        assertTrue(shown(show.event.eventId))
++        return answer(show.event.eventId, EventResult.RETURNED)!!
++    }
++
++    @Test fun twentySwitchesTriggerTwentyTimesWithOneReceiptEach() {
++        val e = engine().armed()
++        repeat(20) { i ->
++            now += 5_000
++            val out = e.see(target)
++            assertTrue("switch $i: $out", out is LoopEngine.Outcome.Show)
++            // More events from the same switch and the page itself: no second trigger.
++            assertEquals(LoopEngine.Outcome.Ignored("same_visit"), e.see(target))
++            assertEquals(LoopEngine.Outcome.Ignored("self"), e.see(self))
++            e.answerReturn(out as LoopEngine.Outcome.Show)
++            assertEquals(LoopEngine.Outcome.Ignored("same_visit"), e.see(target))
++            e.see(if (i % 2 == 0) other else launcher)
++        }
++        val receipts = e.events(100)
++        assertEquals(20, receipts.size)
++        assertTrue(receipts.all { it.state == EventState.CLOSED && it.result == EventResult.RETURNED })
++        assertEquals(20, receipts.map { it.visitId }.toSet().size)
++        assertEquals(20, receipts.map { it.eventId }.toSet().size)
++    }
++
++    @Test fun keyboardsShadesAndPermissionDialogsNeverStartANewVisit() {
++        val e = engine().armed()
++        val first = e.see(target) as LoopEngine.Outcome.Show
++        e.answerReturn(first)
++        for (p in listOf(ime, "com.android.systemui", "com.android.permissioncontroller", "com.miui.securitycenter", self, "android")) {
++            assertTrue(p, e.see(p) is LoopEngine.Outcome.Ignored)
++            assertTrue(p, e.see(target) is LoopEngine.Outcome.Ignored)
++        }
++        assertEquals(1, e.events().size)
++    }
++
++    @Test fun backgroundAndBackWithinTheCooldownIsSuppressedThenTriggersAgain() {
++        val e = engine().armed(cooldownMs = 60_000)
++        e.answerReturn(e.see(target) as LoopEngine.Outcome.Show)
++        e.see(launcher)
++        now += 10_000
++        val again = e.see(target) as LoopEngine.Outcome.Suppressed
++        assertEquals("cooldown", again.event.reason)
++        assertEquals(EventResult.SUPPRESSED, again.event.result)
++        // The suppressed entry still opened the visit: staying does not re-roll.
++        now += 120_000
++        assertTrue(e.see(target) is LoopEngine.Outcome.Ignored)
++        e.see(other)
++        assertTrue(e.see(target) is LoopEngine.Outcome.Show)
++    }
++
++    @Test fun leavingThePageBackKeyAndTimeoutAreReceiptsAndTheFirstAnswerWins() {
++        val e = engine().armed()
++        val a = e.see(target) as LoopEngine.Outcome.Show
++        assertTrue(e.shown(a.event.eventId))
++        assertEquals(EventResult.DISMISSED, e.answer(a.event.eventId, EventResult.DISMISSED)!!.result)
++        assertNull("double answer", e.answer(a.event.eventId, EventResult.RETURNED))
++        assertFalse("stale page", e.shown(a.event.eventId))
++
++        e.see(other); val b = e.see(target) as LoopEngine.Outcome.Show
++        e.shown(b.event.eventId)
++        e.answer(b.event.eventId, EventResult.BACK)
++        e.see(other); val c = e.see(target) as LoopEngine.Outcome.Show
++        e.shown(c.event.eventId)
++        e.answer(c.event.eventId, EventResult.TIMEOUT)
++        assertEquals(listOf(EventResult.TIMEOUT, EventResult.BACK, EventResult.DISMISSED), e.events().map { it.result })
++    }
++
++    @Test fun anOpenPageBlocksAnotherTrigger() {
++        val e = engine().armed()
++        val a = e.see(target) as LoopEngine.Outcome.Show
++        e.see(other)
++        val b = e.see(target) as LoopEngine.Outcome.Suppressed
++        assertEquals("interaction_open", b.event.reason)
++        e.answerReturn(a)
++    }
++
++    @Test fun serviceReconnectWhileStillInTheAppDoesNotTriggerAgain() {
++        val e = engine().armed()
++        e.answerReturn(e.see(target) as LoopEngine.Outcome.Show)
++        // Service unbinds (no readings), then reconnects: LoopRuntime.attach reads once.
++        assertEquals(LoopEngine.Outcome.Ignored("unknown"), e.see(null))
++        assertEquals(LoopEngine.Outcome.Ignored("same_visit"), e.see(target))
++        assertEquals(1, e.events().size)
++    }
++
++    @Test fun processRestartClosesOpenEventsAsAbandonedAndKeepsTheVisit() {
++        val store = MemoryLoopStore()
++        val before = engine(store).armed(cooldownMs = 60_000)
++        val shown = before.see(target) as LoopEngine.Outcome.Show
++        before.shown(shown.event.eventId)
++        val triggeredOnly = run { before.answerReturn(shown); before.see(other); now += 61_000; before.see(target) as LoopEngine.Outcome.Show }
++
++        // Process dies here. A new process loads the same file.
++        now += 5_000
++        val after = engine(store)
++        val closed = after.recover()
++        assertEquals(listOf(triggeredOnly.event.eventId), closed.map { it.eventId })
++        val receipt = after.events().first()
++        assertEquals(EventResult.ABANDONED, receipt.result)
++        assertEquals("process_restart", receipt.reason)
++        assertNull("the page of the dead process cannot answer", after.answer(receipt.eventId, EventResult.RETURNED))
++        assertFalse(after.shown(receipt.eventId))
++        // Config, visit and cooldown survived.
++        assertEquals(target, after.config().targetPackage)
++        assertTrue(after.see(target) is LoopEngine.Outcome.Ignored)
++        after.see(other)
++        assertEquals("cooldown", (after.see(target) as LoopEngine.Outcome.Suppressed).event.reason)
++    }
++
++    @Test fun unreadableStateIsReportedNotTreatedAsEmpty() {
++        val dir = Files.createTempDirectory("loop").toFile()
++        val file = File(dir, "state.json").apply { writeText("{\"config\": {broken") }
++        val e = engine(FileLoopStore(file))
++        val closed = e.recover()
++        assertEquals(1, closed.size)
++        assertEquals(EventResult.ERROR, closed[0].result)
++        assertTrue(closed[0].error!!.startsWith("state_unreadable"))
++        assertTrue(File(dir, "state.json.bad").exists())
++        assertFalse("starts switched off", e.config().enabled)
++        dir.deleteRecursively()
++    }
++
++    @Test fun storageFailureIsSurfacedAndTheLoopKeepsWorking() {
++        val store = MemoryLoopStore()
++        val e = engine(store).armed()
++        store.failWrites = true
++        val out = e.see(target) as LoopEngine.Outcome.Show
++        assertNotNull(e.storageError)
++        store.failWrites = false
++        e.answerReturn(out)
++        assertNull(e.storageError)
++        assertEquals(EventResult.RETURNED, store.saved!!.events.single().result)
++    }
++
++    @Test fun fileStoreRoundTripsEverything() {
++        val dir = Files.createTempDirectory("loop").toFile()
++        val store = FileLoopStore(File(File(dir, "loop"), "state.json"))
++        val e = engine(store).armed(cooldownMs = 7_000)
++        e.answerReturn(e.see(target) as LoopEngine.Outcome.Show)
++        val loaded = (store.read() as LoopStore.Read.Loaded).snapshot
++        assertEquals(e.config(), loaded.config)
++        assertEquals(e.trackerState(), loaded.tracker)
++        assertEquals(now, loaded.lastTriggerAt)
++        assertEquals(e.events(), loaded.events.reversed())
++        assertFalse(File(File(dir, "loop"), "state.json.tmp").exists())
++        dir.deleteRecursively()
++    }
++
++    @Test fun dshBusyLockedAndScreenOffSuppress() {
++        val e = engine().armed()
++        assertEquals("dsh_busy", (e.see(target, Environment(dshBusy = true)) as LoopEngine.Outcome.Suppressed).event.reason)
++        e.see(other)
++        assertEquals("locked", (e.see(target, Environment(keyguardLocked = true)) as LoopEngine.Outcome.Suppressed).event.reason)
++        e.see(other)
++        assertEquals("screen_off", (e.see(target, Environment(screenInteractive = false)) as LoopEngine.Outcome.Suppressed).event.reason)
++    }
++
++    @Test fun clockGoingBackRestartsTheCooldownInsteadOfBlockingForever() {
++        val e = engine().armed(cooldownMs = 60_000)
++        e.answerReturn(e.see(target) as LoopEngine.Outcome.Show)
++        e.see(other)
++        now -= 3_600_000
++        assertEquals("cooldown", (e.see(target) as LoopEngine.Outcome.Suppressed).event.reason)
++        e.see(other)
++        now += 61_000
++        assertTrue(e.see(target) is LoopEngine.Outcome.Show)
++    }
++
++    @Test fun disabledOrNoTargetNeverTriggers() {
++        val e = engine()
++        e.recover()
++        assertTrue(e.see(target) is LoopEngine.Outcome.Ignored)
++        e.setConfig(LoopConfig(enabled = true, targetPackage = null))
++        assertTrue(e.see(target) is LoopEngine.Outcome.Ignored)
++        e.setConfig(LoopConfig(enabled = false, targetPackage = target))
++        assertTrue(e.see(target) is LoopEngine.Outcome.Ignored)
++        assertTrue(e.events().isEmpty())
++    }
++
++    @Test fun changingTheTargetClosesTheOpenPageAndResetsTheVisit() {
++        val e = engine().armed()
++        val a = e.see(target) as LoopEngine.Outcome.Show
++        e.setConfig(e.config().copy(targetPackage = other))
++        assertEquals(EventResult.DISMISSED, e.events().first().result)
++        assertEquals("config_changed", e.events().first().reason)
++        assertNull(e.answer(a.event.eventId, EventResult.RETURNED))
++        assertTrue(e.see(other) is LoopEngine.Outcome.Show)
++    }
++
++    @Test fun historyIsCappedButNeverDropsAnOpenEvent() {
++        val e = engine().armed()
++        val open = e.see(target) as LoopEngine.Outcome.Show
++        repeat(LoopStore.MAX_EVENTS + 20) { e.see(other); e.see(target) }
++        val all = e.events(LoopStore.MAX_EVENTS)
++        assertEquals(LoopStore.MAX_EVENTS, all.size)
++        assertTrue(all.any { it.eventId == open.event.eventId && it.open })
++    }
++
++    @Test fun configIsNormalized() {
++        val c = LoopConfig(enabled = true, targetPackage = "  ", cooldownMs = -5, timeoutMs = 1).normalized()
++        assertNull(c.targetPackage)
++        assertEquals(0, c.cooldownMs)
++        assertEquals(5_000, c.timeoutMs)
++    }
++
++    @Test fun eventMapsRoundTrip() {
++        val ev = LoopEvent("x", EventSource.A11Y_WINDOW, 5, EventState.CLOSED, EventResult.TIMEOUT, "boom", "r", target, "v", "activity", 9)
++        assertEquals(ev, LoopEvent.fromMap(ev.toMap()))
++        assertNull(LoopEvent.fromMap(mapOf("eventId" to "x")))
++    }
++}
+diff --git a/app/lib/l10n/app_en.arb b/app/lib/l10n/app_en.arb
+index 7215e1b..5237aab 100644
+--- a/app/lib/l10n/app_en.arb
++++ b/app/lib/l10n/app_en.arb
+@@ -2259,6 +2259,36 @@
+   "localEnvPhoneNeedsRuntime": "Available after installing on this phone",
+   "localEnvSignInNeedsRuntime": "Needs DSH on this phone",
+   "localEnvSignInInstallFirst": "Install it to sign in",
++  "loopEntryTitle": "Trigger test",
++  "loopEntrySubtitle": "Shows a test page when you open a chosen app (experimental)",
++  "loopPageSubtitle": "The first closed loop: open the test app → a test page appears → tap Back → a receipt is saved. Only the foreground app's package name is read, never page content.",
++  "loopEnabled": "Turn on trigger test",
++  "loopEnabledHint": "Never shows while DSH is operating the phone or a confirmation is waiting",
++  "loopTargetApp": "Test app",
++  "loopTargetNone": "None",
++  "loopPickApp": "Choose the test app",
++  "loopNoApps": "No apps found",
++  "loopCooldown": "Cooldown",
++  "loopCooldownHint": "Minimum time between two pages; tap to change",
++  "loopSeconds": "{seconds} s",
++  "loopA11yNeeded": "Turn on DSH's accessibility service in system settings first",
++  "loopA11yWaiting": "Accessibility is on, waiting for the service to connect",
++  "loopA11yReady": "Accessibility service connected",
++  "loopCounters": "{events} window events, {readings} checks · last foreground {app}",
++  "loopStorageError": "Couldn't save receipts: {error}",
++  "loopReceipts": "Receipts",
++  "loopReceiptsEmpty": "No receipts yet",
++  "loopClear": "Clear receipts",
++  "loopRefresh": "Refresh",
++  "loopResultReturned": "Tapped Back",
++  "loopResultBack": "Pressed system back",
++  "loopResultDismissed": "Left the page",
++  "loopResultTimeout": "No answer in time",
++  "loopResultAbandoned": "Closed after restart",
++  "loopResultUnavailable": "Page couldn't show",
++  "loopResultSuppressed": "Not triggered",
++  "loopResultError": "Error",
++  "loopResultOpen": "In progress",
+   "mediaGenerateTile": "Create",
+   "mediaAiGenerated": "AI-generated",
+   "mediaCostEstimate": "About {amount}",
+diff --git a/app/lib/l10n/app_zh.arb b/app/lib/l10n/app_zh.arb
+index 1dc273c..5c26228 100644
+--- a/app/lib/l10n/app_zh.arb
++++ b/app/lib/l10n/app_zh.arb
+@@ -4842,6 +4842,63 @@
+   "localEnvPhoneNeedsRuntime": "安装本机运行环境后可用",
+   "localEnvSignInNeedsRuntime": "需要本机运行环境",
+   "localEnvSignInInstallFirst": "安装后即可登录",
++  "loopEntryTitle": "触发测试",
++  "loopEntrySubtitle": "打开指定 APP 时弹出测试页（实验）",
++  "loopPageSubtitle": "第一条闭环：打开测试 APP → 弹出测试页 → 点返回 → 记一条回执。只读前台 APP 的包名，不读页面内容。",
++  "loopEnabled": "开启触发测试",
++  "loopEnabledHint": "DSH 正在操作手机或有确认在等你时不会弹出",
++  "loopTargetApp": "测试 APP",
++  "loopTargetNone": "未选择",
++  "loopPickApp": "选择测试 APP",
++  "loopNoApps": "没有找到可选的 APP",
++  "loopCooldown": "冷却时间",
++  "loopCooldownHint": "两次弹出之间至少隔这么久，点一下切换",
++  "loopSeconds": "{seconds} 秒",
++  "@loopSeconds": {
++    "placeholders": {
++      "seconds": {
++        "type": "int"
++      }
++    }
++  },
++  "loopA11yNeeded": "需要先在系统设置里开启 DSH 的无障碍服务",
++  "loopA11yWaiting": "无障碍已开启，等待服务连接",
++  "loopA11yReady": "无障碍服务已连接",
++  "loopCounters": "收到 {events} 个窗口事件，复核 {readings} 次 · 最近前台 {app}",
++  "@loopCounters": {
++    "placeholders": {
++      "events": {
++        "type": "int"
++      },
++      "readings": {
++        "type": "int"
++      },
++      "app": {
++        "type": "String"
++      }
++    }
++  },
++  "loopStorageError": "回执保存失败：{error}",
++  "@loopStorageError": {
++    "placeholders": {
++      "error": {
++        "type": "String"
++      }
++    }
++  },
++  "loopReceipts": "回执",
++  "loopReceiptsEmpty": "还没有回执",
++  "loopClear": "清空回执",
++  "loopRefresh": "刷新",
++  "loopResultReturned": "点了返回",
++  "loopResultBack": "按了系统返回",
++  "loopResultDismissed": "离开了页面",
++  "loopResultTimeout": "超时未回应",
++  "loopResultAbandoned": "重启后关闭",
++  "loopResultUnavailable": "页面没能弹出",
++  "loopResultSuppressed": "未触发",
++  "loopResultError": "出错",
++  "loopResultOpen": "进行中",
+   "mediaGenerateTile": "生成",
+   "mediaAiGenerated": "AI 生成",
+   "mediaCostEstimate": "约 {amount}",
+diff --git a/app/lib/l10n/gen/app_localizations.dart b/app/lib/l10n/gen/app_localizations.dart
+index 6d5ad7e..60de7a4 100644
+--- a/app/lib/l10n/gen/app_localizations.dart
++++ b/app/lib/l10n/gen/app_localizations.dart
+@@ -13646,6 +13646,186 @@ abstract class L10n {
+   /// **'安装后即可登录'**
+   String get localEnvSignInInstallFirst;
+ 
++  /// No description provided for @loopEntryTitle.
++  ///
++  /// In zh, this message translates to:
++  /// **'触发测试'**
++  String get loopEntryTitle;
++
++  /// No description provided for @loopEntrySubtitle.
++  ///
++  /// In zh, this message translates to:
++  /// **'打开指定 APP 时弹出测试页（实验）'**
++  String get loopEntrySubtitle;
++
++  /// No description provided for @loopPageSubtitle.
++  ///
++  /// In zh, this message translates to:
++  /// **'第一条闭环：打开测试 APP → 弹出测试页 → 点返回 → 记一条回执。只读前台 APP 的包名，不读页面内容。'**
++  String get loopPageSubtitle;
++
++  /// No description provided for @loopEnabled.
++  ///
++  /// In zh, this message translates to:
++  /// **'开启触发测试'**
++  String get loopEnabled;
++
++  /// No description provided for @loopEnabledHint.
++  ///
++  /// In zh, this message translates to:
++  /// **'DSH 正在操作手机或有确认在等你时不会弹出'**
++  String get loopEnabledHint;
++
++  /// No description provided for @loopTargetApp.
++  ///
++  /// In zh, this message translates to:
++  /// **'测试 APP'**
++  String get loopTargetApp;
++
++  /// No description provided for @loopTargetNone.
++  ///
++  /// In zh, this message translates to:
++  /// **'未选择'**
++  String get loopTargetNone;
++
++  /// No description provided for @loopPickApp.
++  ///
++  /// In zh, this message translates to:
++  /// **'选择测试 APP'**
++  String get loopPickApp;
++
++  /// No description provided for @loopNoApps.
++  ///
++  /// In zh, this message translates to:
++  /// **'没有找到可选的 APP'**
++  String get loopNoApps;
++
++  /// No description provided for @loopCooldown.
++  ///
++  /// In zh, this message translates to:
++  /// **'冷却时间'**
++  String get loopCooldown;
++
++  /// No description provided for @loopCooldownHint.
++  ///
++  /// In zh, this message translates to:
++  /// **'两次弹出之间至少隔这么久，点一下切换'**
++  String get loopCooldownHint;
++
++  /// No description provided for @loopSeconds.
++  ///
++  /// In zh, this message translates to:
++  /// **'{seconds} 秒'**
++  String loopSeconds(int seconds);
++
++  /// No description provided for @loopA11yNeeded.
++  ///
++  /// In zh, this message translates to:
++  /// **'需要先在系统设置里开启 DSH 的无障碍服务'**
++  String get loopA11yNeeded;
++
++  /// No description provided for @loopA11yWaiting.
++  ///
++  /// In zh, this message translates to:
++  /// **'无障碍已开启，等待服务连接'**
++  String get loopA11yWaiting;
++
++  /// No description provided for @loopA11yReady.
++  ///
++  /// In zh, this message translates to:
++  /// **'无障碍服务已连接'**
++  String get loopA11yReady;
++
++  /// No description provided for @loopCounters.
++  ///
++  /// In zh, this message translates to:
++  /// **'收到 {events} 个窗口事件，复核 {readings} 次 · 最近前台 {app}'**
++  String loopCounters(int events, int readings, String app);
++
++  /// No description provided for @loopStorageError.
++  ///
++  /// In zh, this message translates to:
++  /// **'回执保存失败：{error}'**
++  String loopStorageError(String error);
++
++  /// No description provided for @loopReceipts.
++  ///
++  /// In zh, this message translates to:
++  /// **'回执'**
++  String get loopReceipts;
++
++  /// No description provided for @loopReceiptsEmpty.
++  ///
++  /// In zh, this message translates to:
++  /// **'还没有回执'**
++  String get loopReceiptsEmpty;
++
++  /// No description provided for @loopClear.
++  ///
++  /// In zh, this message translates to:
++  /// **'清空回执'**
++  String get loopClear;
++
++  /// No description provided for @loopRefresh.
++  ///
++  /// In zh, this message translates to:
++  /// **'刷新'**
++  String get loopRefresh;
++
++  /// No description provided for @loopResultReturned.
++  ///
++  /// In zh, this message translates to:
++  /// **'点了返回'**
++  String get loopResultReturned;
++
++  /// No description provided for @loopResultBack.
++  ///
++  /// In zh, this message translates to:
++  /// **'按了系统返回'**
++  String get loopResultBack;
++
++  /// No description provided for @loopResultDismissed.
++  ///
++  /// In zh, this message translates to:
++  /// **'离开了页面'**
++  String get loopResultDismissed;
++
++  /// No description provided for @loopResultTimeout.
++  ///
++  /// In zh, this message translates to:
++  /// **'超时未回应'**
++  String get loopResultTimeout;
++
++  /// No description provided for @loopResultAbandoned.
++  ///
++  /// In zh, this message translates to:
++  /// **'重启后关闭'**
++  String get loopResultAbandoned;
++
++  /// No description provided for @loopResultUnavailable.
++  ///
++  /// In zh, this message translates to:
++  /// **'页面没能弹出'**
++  String get loopResultUnavailable;
++
++  /// No description provided for @loopResultSuppressed.
++  ///
++  /// In zh, this message translates to:
++  /// **'未触发'**
++  String get loopResultSuppressed;
++
++  /// No description provided for @loopResultError.
++  ///
++  /// In zh, this message translates to:
++  /// **'出错'**
++  String get loopResultError;
++
++  /// No description provided for @loopResultOpen.
++  ///
++  /// In zh, this message translates to:
++  /// **'进行中'**
++  String get loopResultOpen;
++
+   /// No description provided for @mediaGenerateTile.
+   ///
+   /// In zh, this message translates to:
+diff --git a/app/lib/l10n/gen/app_localizations_en.dart b/app/lib/l10n/gen/app_localizations_en.dart
+index 56f3eaa..7e28533 100644
+--- a/app/lib/l10n/gen/app_localizations_en.dart
++++ b/app/lib/l10n/gen/app_localizations_en.dart
+@@ -7870,6 +7870,103 @@ class L10nEn extends L10n {
+   @override
+   String get localEnvSignInInstallFirst => 'Install it to sign in';
+ 
++  @override
++  String get loopEntryTitle => 'Trigger test';
++
++  @override
++  String get loopEntrySubtitle => 'Shows a test page when you open a chosen app (experimental)';
++
++  @override
++  String get loopPageSubtitle =>
++      'The first closed loop: open the test app → a test page appears → tap Back → a receipt is saved. Only the foreground app\'s package name is read, never page content.';
++
++  @override
++  String get loopEnabled => 'Turn on trigger test';
++
++  @override
++  String get loopEnabledHint => 'Never shows while DSH is operating the phone or a confirmation is waiting';
++
++  @override
++  String get loopTargetApp => 'Test app';
++
++  @override
++  String get loopTargetNone => 'None';
++
++  @override
++  String get loopPickApp => 'Choose the test app';
++
++  @override
++  String get loopNoApps => 'No apps found';
++
++  @override
++  String get loopCooldown => 'Cooldown';
++
++  @override
++  String get loopCooldownHint => 'Minimum time between two pages; tap to change';
++
++  @override
++  String loopSeconds(int seconds) {
++    return '$seconds s';
++  }
++
++  @override
++  String get loopA11yNeeded => 'Turn on DSH\'s accessibility service in system settings first';
++
++  @override
++  String get loopA11yWaiting => 'Accessibility is on, waiting for the service to connect';
++
++  @override
++  String get loopA11yReady => 'Accessibility service connected';
++
++  @override
++  String loopCounters(int events, int readings, String app) {
++    return '$events window events, $readings checks · last foreground $app';
++  }
++
++  @override
++  String loopStorageError(String error) {
++    return 'Couldn\'t save receipts: $error';
++  }
++
++  @override
++  String get loopReceipts => 'Receipts';
++
++  @override
++  String get loopReceiptsEmpty => 'No receipts yet';
++
++  @override
++  String get loopClear => 'Clear receipts';
++
++  @override
++  String get loopRefresh => 'Refresh';
++
++  @override
++  String get loopResultReturned => 'Tapped Back';
++
++  @override
++  String get loopResultBack => 'Pressed system back';
++
++  @override
++  String get loopResultDismissed => 'Left the page';
++
++  @override
++  String get loopResultTimeout => 'No answer in time';
++
++  @override
++  String get loopResultAbandoned => 'Closed after restart';
++
++  @override
++  String get loopResultUnavailable => 'Page couldn\'t show';
++
++  @override
++  String get loopResultSuppressed => 'Not triggered';
++
++  @override
++  String get loopResultError => 'Error';
++
++  @override
++  String get loopResultOpen => 'In progress';
++
+   @override
+   String get mediaGenerateTile => 'Create';
+ 
+diff --git a/app/lib/l10n/gen/app_localizations_zh.dart b/app/lib/l10n/gen/app_localizations_zh.dart
+index ad75aa1..0229d17 100644
+--- a/app/lib/l10n/gen/app_localizations_zh.dart
++++ b/app/lib/l10n/gen/app_localizations_zh.dart
+@@ -7456,6 +7456,102 @@ class L10nZh extends L10n {
+   @override
+   String get localEnvSignInInstallFirst => '安装后即可登录';
+ 
++  @override
++  String get loopEntryTitle => '触发测试';
++
++  @override
++  String get loopEntrySubtitle => '打开指定 APP 时弹出测试页（实验）';
++
++  @override
++  String get loopPageSubtitle => '第一条闭环：打开测试 APP → 弹出测试页 → 点返回 → 记一条回执。只读前台 APP 的包名，不读页面内容。';
++
++  @override
++  String get loopEnabled => '开启触发测试';
++
++  @override
++  String get loopEnabledHint => 'DSH 正在操作手机或有确认在等你时不会弹出';
++
++  @override
++  String get loopTargetApp => '测试 APP';
++
++  @override
++  String get loopTargetNone => '未选择';
++
++  @override
++  String get loopPickApp => '选择测试 APP';
++
++  @override
++  String get loopNoApps => '没有找到可选的 APP';
++
++  @override
++  String get loopCooldown => '冷却时间';
++
++  @override
++  String get loopCooldownHint => '两次弹出之间至少隔这么久，点一下切换';
++
++  @override
++  String loopSeconds(int seconds) {
++    return '$seconds 秒';
++  }
++
++  @override
++  String get loopA11yNeeded => '需要先在系统设置里开启 DSH 的无障碍服务';
++
++  @override
++  String get loopA11yWaiting => '无障碍已开启，等待服务连接';
++
++  @override
++  String get loopA11yReady => '无障碍服务已连接';
++
++  @override
++  String loopCounters(int events, int readings, String app) {
++    return '收到 $events 个窗口事件，复核 $readings 次 · 最近前台 $app';
++  }
++
++  @override
++  String loopStorageError(String error) {
++    return '回执保存失败：$error';
++  }
++
++  @override
++  String get loopReceipts => '回执';
++
++  @override
++  String get loopReceiptsEmpty => '还没有回执';
++
++  @override
++  String get loopClear => '清空回执';
++
++  @override
++  String get loopRefresh => '刷新';
++
++  @override
++  String get loopResultReturned => '点了返回';
++
++  @override
++  String get loopResultBack => '按了系统返回';
++
++  @override
++  String get loopResultDismissed => '离开了页面';
++
++  @override
++  String get loopResultTimeout => '超时未回应';
++
++  @override
++  String get loopResultAbandoned => '重启后关闭';
++
++  @override
++  String get loopResultUnavailable => '页面没能弹出';
++
++  @override
++  String get loopResultSuppressed => '未触发';
++
++  @override
++  String get loopResultError => '出错';
++
++  @override
++  String get loopResultOpen => '进行中';
++
+   @override
+   String get mediaGenerateTile => '生成';
+ 
+diff --git a/app/lib/l10n/parts/loop_en.arb b/app/lib/l10n/parts/loop_en.arb
+new file mode 100644
+index 0000000..95f0af3
+--- /dev/null
++++ b/app/lib/l10n/parts/loop_en.arb
+@@ -0,0 +1,60 @@
++{
++  "@@locale": "en",
++  "loopEntryTitle": "Trigger test",
++  "loopEntrySubtitle": "Shows a test page when you open a chosen app (experimental)",
++  "loopPageSubtitle": "The first closed loop: open the test app → a test page appears → tap Back → a receipt is saved. Only the foreground app's package name is read, never page content.",
++  "loopEnabled": "Turn on trigger test",
++  "loopEnabledHint": "Never shows while DSH is operating the phone or a confirmation is waiting",
++  "loopTargetApp": "Test app",
++  "loopTargetNone": "None",
++  "loopPickApp": "Choose the test app",
++  "loopNoApps": "No apps found",
++  "loopCooldown": "Cooldown",
++  "loopCooldownHint": "Minimum time between two pages; tap to change",
++  "loopSeconds": "{seconds} s",
++  "@loopSeconds": {
++    "placeholders": {
++      "seconds": {
++        "type": "int"
++      }
++    }
++  },
++  "loopA11yNeeded": "Turn on DSH's accessibility service in system settings first",
++  "loopA11yWaiting": "Accessibility is on, waiting for the service to connect",
++  "loopA11yReady": "Accessibility service connected",
++  "loopCounters": "{events} window events, {readings} checks · last foreground {app}",
++  "@loopCounters": {
++    "placeholders": {
++      "events": {
++        "type": "int"
++      },
++      "readings": {
++        "type": "int"
++      },
++      "app": {
++        "type": "String"
++      }
++    }
++  },
++  "loopStorageError": "Couldn't save receipts: {error}",
++  "@loopStorageError": {
++    "placeholders": {
++      "error": {
++        "type": "String"
++      }
++    }
++  },
++  "loopReceipts": "Receipts",
++  "loopReceiptsEmpty": "No receipts yet",
++  "loopClear": "Clear receipts",
++  "loopRefresh": "Refresh",
++  "loopResultReturned": "Tapped Back",
++  "loopResultBack": "Pressed system back",
++  "loopResultDismissed": "Left the page",
++  "loopResultTimeout": "No answer in time",
++  "loopResultAbandoned": "Closed after restart",
++  "loopResultUnavailable": "Page couldn't show",
++  "loopResultSuppressed": "Not triggered",
++  "loopResultError": "Error",
++  "loopResultOpen": "In progress"
++}
+diff --git a/app/lib/l10n/parts/loop_zh.arb b/app/lib/l10n/parts/loop_zh.arb
+new file mode 100644
+index 0000000..7a4b41e
+--- /dev/null
++++ b/app/lib/l10n/parts/loop_zh.arb
+@@ -0,0 +1,60 @@
++{
++  "@@locale": "zh",
++  "loopEntryTitle": "触发测试",
++  "loopEntrySubtitle": "打开指定 APP 时弹出测试页（实验）",
++  "loopPageSubtitle": "第一条闭环：打开测试 APP → 弹出测试页 → 点返回 → 记一条回执。只读前台 APP 的包名，不读页面内容。",
++  "loopEnabled": "开启触发测试",
++  "loopEnabledHint": "DSH 正在操作手机或有确认在等你时不会弹出",
++  "loopTargetApp": "测试 APP",
++  "loopTargetNone": "未选择",
++  "loopPickApp": "选择测试 APP",
++  "loopNoApps": "没有找到可选的 APP",
++  "loopCooldown": "冷却时间",
++  "loopCooldownHint": "两次弹出之间至少隔这么久，点一下切换",
++  "loopSeconds": "{seconds} 秒",
++  "@loopSeconds": {
++    "placeholders": {
++      "seconds": {
++        "type": "int"
++      }
++    }
++  },
++  "loopA11yNeeded": "需要先在系统设置里开启 DSH 的无障碍服务",
++  "loopA11yWaiting": "无障碍已开启，等待服务连接",
++  "loopA11yReady": "无障碍服务已连接",
++  "loopCounters": "收到 {events} 个窗口事件，复核 {readings} 次 · 最近前台 {app}",
++  "@loopCounters": {
++    "placeholders": {
++      "events": {
++        "type": "int"
++      },
++      "readings": {
++        "type": "int"
++      },
++      "app": {
++        "type": "String"
++      }
++    }
++  },
++  "loopStorageError": "回执保存失败：{error}",
++  "@loopStorageError": {
++    "placeholders": {
++      "error": {
++        "type": "String"
++      }
++    }
++  },
++  "loopReceipts": "回执",
++  "loopReceiptsEmpty": "还没有回执",
++  "loopClear": "清空回执",
++  "loopRefresh": "刷新",
++  "loopResultReturned": "点了返回",
++  "loopResultBack": "按了系统返回",
++  "loopResultDismissed": "离开了页面",
++  "loopResultTimeout": "超时未回应",
++  "loopResultAbandoned": "重启后关闭",
++  "loopResultUnavailable": "页面没能弹出",
++  "loopResultSuppressed": "未触发",
++  "loopResultError": "出错",
++  "loopResultOpen": "进行中"
++}
+diff --git a/app/lib/loop/loop_channel.dart b/app/lib/loop/loop_channel.dart
+new file mode 100644
+index 0000000..e93a399
+--- /dev/null
++++ b/app/lib/loop/loop_channel.dart
+@@ -0,0 +1,175 @@
++// Dart side of the `dsh/loop` method channel (android/.../loop/LoopPlugin.kt):
++// 设置 → 手机操控 → 触发测试, the first closed loop.
++
++import 'package:flutter/services.dart';
++
++class LoopConfig {
++  const LoopConfig({this.enabled = false, this.targetPackage, this.cooldownMs = 60000, this.timeoutMs = 60000});
++
++  final bool enabled;
++  final String? targetPackage;
++  final int cooldownMs;
++  final int timeoutMs;
++
++  static LoopConfig fromWire(Object? raw) {
++    final m = raw is Map ? raw : const {};
++    return LoopConfig(
++      enabled: m['enabled'] == true,
++      targetPackage: m['targetPackage'] is String ? m['targetPackage'] as String : null,
++      cooldownMs: m['cooldownMs'] is num ? (m['cooldownMs'] as num).toInt() : 60000,
++      timeoutMs: m['timeoutMs'] is num ? (m['timeoutMs'] as num).toInt() : 60000,
++    );
++  }
++}
++
++class LoopStatus {
++  const LoopStatus({
++    this.config = const LoopConfig(),
++    this.a11yEnabled = false,
++    this.a11yConnected = false,
++    this.eventsSeen = 0,
++    this.readings = 0,
++    this.lastForeground,
++    this.storageError,
++    this.insideTarget = false,
++  });
++
++  final LoopConfig config;
++  final bool a11yEnabled;
++  final bool a11yConnected;
++  final int eventsSeen;
++  final int readings;
++  final String? lastForeground;
++  final String? storageError;
++  final bool insideTarget;
++
++  static LoopStatus fromWire(Object? raw) {
++    final m = raw is Map ? raw : const {};
++    int n(Object? v) => v is num ? v.toInt() : 0;
++    String? s(Object? v) => v is String ? v : null;
++    return LoopStatus(
++      config: LoopConfig.fromWire(m['config']),
++      a11yEnabled: m['a11yEnabled'] == true,
++      a11yConnected: m['a11yConnected'] == true,
++      eventsSeen: n(m['eventsSeen']),
++      readings: n(m['readings']),
++      lastForeground: s(m['lastForeground']),
++      storageError: s(m['storageError']),
++      insideTarget: m['insideTarget'] == true,
++    );
++  }
++}
++
++/// One receipt: the shared event record (eventId, source, timestamp, state, result, error).
++class LoopEvent {
++  const LoopEvent({
++    required this.eventId,
++    required this.source,
++    required this.timestamp,
++    required this.state,
++    this.result,
++    this.error,
++    this.reason,
++    this.packageName,
++    this.updatedAt,
++  });
++
++  final String eventId;
++  final String source;
++  final DateTime timestamp;
++
++  /// CONFIRMED / TRIGGERED / SHOWN / CLOSED.
++  final String state;
++
++  /// RETURNED / BACK / DISMISSED / TIMEOUT / ABANDONED / UNAVAILABLE / SUPPRESSED / ERROR; null while open.
++  final String? result;
++  final String? error;
++  final String? reason;
++  final String? packageName;
++  final DateTime? updatedAt;
++
++  static LoopEvent? fromWire(Object? raw) {
++    if (raw is! Map) return null;
++    final id = raw['eventId'];
++    final ts = raw['timestamp'];
++    if (id is! String || ts is! num) return null;
++    String? s(Object? v) => v is String ? v : null;
++    final up = raw['updatedAt'];
++    return LoopEvent(
++      eventId: id,
++      source: s(raw['source']) ?? '',
++      timestamp: DateTime.fromMillisecondsSinceEpoch(ts.toInt()),
++      state: s(raw['state']) ?? '',
++      result: s(raw['result']),
++      error: s(raw['error']),
++      reason: s(raw['reason']),
++      packageName: s(raw['packageName']),
++      updatedAt: up is num ? DateTime.fromMillisecondsSinceEpoch(up.toInt()) : null,
++    );
++  }
++}
++
++class LoopApp {
++  const LoopApp(this.package, this.label);
++
++  final String package;
++  final String label;
++}
++
++class LoopChannel {
++  LoopChannel({MethodChannel? methods}) : _methods = methods ?? const MethodChannel('dsh/loop');
++
++  final MethodChannel _methods;
++
++  /// Null when the native side is missing or failed.
++  Future<LoopStatus?> status() async {
++    try {
++      return LoopStatus.fromWire(await _methods.invokeMethod<Object?>('status'));
++    } on Exception {
++      return null;
++    }
++  }
++
++  /// Only the given fields change. [clearTarget] sets the test app to none.
++  Future<LoopConfig?> setConfig({bool? enabled, String? targetPackage, bool clearTarget = false, int? cooldownMs}) async {
++    try {
++      final raw = await _methods.invokeMethod<Object?>('setConfig', {
++        'enabled': ?enabled,
++        if (targetPackage != null || clearTarget) 'targetPackage': targetPackage,
++        'cooldownMs': ?cooldownMs,
++      });
++      return LoopConfig.fromWire(raw);
++    } on Exception {
++      return null;
++    }
++  }
++
++  Future<List<LoopEvent>> events({int limit = 50}) async {
++    try {
++      final raw = await _methods.invokeMethod<List<Object?>>('events', {'limit': limit});
++      return [for (final e in raw ?? const []) ?LoopEvent.fromWire(e)];
++    } on Exception {
++      return const [];
++    }
++  }
++
++  Future<bool> clearEvents() async {
++    try {
++      return await _methods.invokeMethod<bool>('clearEvents') ?? false;
++    } on Exception {
++      return false;
++    }
++  }
++
++  Future<List<LoopApp>> apps() async {
++    try {
++      final raw = await _methods.invokeMethod<List<Object?>>('apps');
++      return [
++        for (final a in raw ?? const [])
++          if (a is Map && a['package'] is String) LoopApp(a['package'] as String, (a['label'] as String?) ?? a['package'] as String),
++      ];
++    } on Exception {
++      return const [];
++    }
++  }
++}
+diff --git a/app/lib/ui/phone/loop_test_page.dart b/app/lib/ui/phone/loop_test_page.dart
+new file mode 100644
+index 0000000..2eaa455
+--- /dev/null
++++ b/app/lib/ui/phone/loop_test_page.dart
+@@ -0,0 +1,250 @@
++import 'dart:async';
++
++import 'package:flutter/material.dart';
++
++import '../../l10n/l10n.dart';
++import '../../loop/loop_channel.dart';
++import '../common/app_sheet.dart';
++import '../common/list_page_row.dart';
++import '../shell/page_frame.dart';
++import '../theme/app_icons.dart';
++import '../theme/theme.dart';
++import 'action_log_page.dart' show formatLogTime;
++
++/// 设置 → 手机操控 → 触发测试: pick a test app, switch the first closed loop on,
++/// read its receipts. Everything is stored on the native side (loop/LoopEngine.kt).
++class LoopTestPage extends StatefulWidget {
++  const LoopTestPage({super.key, this.channel});
++
++  final LoopChannel? channel;
++
++  static const cooldownSteps = [0, 10, 60, 300];
++
++  @override
++  State<LoopTestPage> createState() => _LoopTestPageState();
++}
++
++class _LoopTestPageState extends State<LoopTestPage> {
++  late final LoopChannel _channel = widget.channel ?? LoopChannel();
++  LoopStatus? _status;
++  List<LoopEvent> _events = const [];
++  Map<String, String> _labels = const {};
++  Timer? _poll;
++
++  @override
++  void initState() {
++    super.initState();
++    unawaited(_refresh());
++    // Receipts land while the person is in the test app; pick them up on return.
++    _poll = Timer.periodic(const Duration(seconds: 3), (_) => unawaited(_refresh()));
++  }
++
++  @override
++  void dispose() {
++    _poll?.cancel();
++    super.dispose();
++  }
++
++  Future<void> _refresh() async {
++    final status = await _channel.status();
++    final events = await _channel.events(limit: 100);
++    if (!mounted) return;
++    setState(() {
++      _status = status;
++      _events = events;
++    });
++  }
++
++  Future<void> _setEnabled(bool on) async {
++    await _channel.setConfig(enabled: on);
++    await _refresh();
++  }
++
++  Future<void> _cycleCooldown(int currentMs) async {
++    const steps = LoopTestPage.cooldownSteps;
++    final i = steps.indexOf(currentMs ~/ 1000);
++    await _channel.setConfig(cooldownMs: steps[(i + 1) % steps.length] * 1000);
++    await _refresh();
++  }
++
++  Future<void> _pickApp() async {
++    final apps = await _channel.apps();
++    if (!mounted) return;
++    _labels = {for (final a in apps) a.package: a.label};
++    final picked = await showAppSheet<String>(
++      context,
++      heightFactor: 0.75,
++      builder: (sheet) => _AppList(apps: apps, current: _status?.config.targetPackage),
++    );
++    if (picked == null) return;
++    await _channel.setConfig(targetPackage: picked);
++    await _refresh();
++  }
++
++  Future<void> _clear() async {
++    await _channel.clearEvents();
++    await _refresh();
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    final l10n = context.l10n;
++    final colors = DshColors.of(context);
++    final status = _status;
++    final config = status?.config ?? const LoopConfig();
++    final target = config.targetPackage;
++    final a11y = status == null
++        ? l10n.phoneControlLoading
++        : !status.a11yEnabled
++        ? l10n.loopA11yNeeded
++        : !status.a11yConnected
++        ? l10n.loopA11yWaiting
++        : l10n.loopA11yReady;
++    return AppPage.list(
++      title: l10n.loopEntryTitle,
++      subtitle: Text(l10n.loopPageSubtitle),
++      actions: [
++        GlassIconButton(icon: AppIcons.refresh, tooltip: l10n.loopRefresh, onPressed: () => unawaited(_refresh())),
++      ],
++      children: [
++        ListPageCard(
++          children: [
++            MergeSemantics(
++              child: ListPageRow(
++                icon: AppIcons.play,
++                title: l10n.loopEnabled,
++                subtitle: l10n.loopEnabledHint,
++                subtitleMaxLines: 2,
++                onTap: status == null ? null : () => unawaited(_setEnabled(!config.enabled)),
++                trailing: Switch(
++                  value: config.enabled,
++                  onChanged: status == null ? null : (v) => unawaited(_setEnabled(v)),
++                ),
++              ),
++            ),
++            ListPageRow(
++              icon: AppIcons.appRules,
++              title: l10n.loopTargetApp,
++              subtitle: target == null ? l10n.loopTargetNone : '${_labels[target] ?? target}\n$target',
++              subtitleMaxLines: 2,
++              onTap: status == null ? null : () => unawaited(_pickApp()),
++            ),
++            ListPageRow(
++              icon: AppIcons.queued,
++              title: l10n.loopCooldown,
++              subtitle: l10n.loopCooldownHint,
++              value: l10n.loopSeconds(config.cooldownMs ~/ 1000),
++              onTap: status == null ? null : () => unawaited(_cycleCooldown(config.cooldownMs)),
++            ),
++            ListPageRow(
++              icon: status?.a11yConnected ?? false ? AppIcons.allowed : AppIcons.error,
++              iconColor: status?.a11yConnected ?? false ? colors.success : colors.warning,
++              title: a11y,
++              titleMaxLines: 2,
++              subtitle: status == null
++                  ? null
++                  : l10n.loopCounters(status.eventsSeen, status.readings, status.lastForeground ?? '-'),
++              subtitleMaxLines: 2,
++            ),
++            if (status?.storageError != null)
++              ListPageRow(
++                icon: AppIcons.error,
++                iconColor: colors.danger,
++                title: l10n.loopStorageError(status!.storageError!),
++                titleMaxLines: 3,
++              ),
++          ],
++        ),
++        const SizedBox(height: 24),
++        ListPageCard(
++          title: l10n.loopReceipts,
++          children: [
++            if (_events.isEmpty)
++              ListPageRow(icon: AppIcons.history, iconColor: colors.textTertiary, title: l10n.loopReceiptsEmpty)
++            else ...[
++              for (final e in _events) _ReceiptRow(e, label: _labels[e.packageName]),
++              ListPageRow(icon: AppIcons.clearAll, title: l10n.loopClear, onTap: () => unawaited(_clear())),
++            ],
++          ],
++        ),
++        const SizedBox(height: 24),
++      ],
++    );
++  }
++}
++
++String loopResultLabel(L10n l10n, String? result) => switch (result) {
++  'RETURNED' => l10n.loopResultReturned,
++  'BACK' => l10n.loopResultBack,
++  'DISMISSED' => l10n.loopResultDismissed,
++  'TIMEOUT' => l10n.loopResultTimeout,
++  'ABANDONED' => l10n.loopResultAbandoned,
++  'UNAVAILABLE' => l10n.loopResultUnavailable,
++  'SUPPRESSED' => l10n.loopResultSuppressed,
++  'ERROR' => l10n.loopResultError,
++  null => l10n.loopResultOpen,
++  _ => result,
++};
++
++class _ReceiptRow extends StatelessWidget {
++  const _ReceiptRow(this.event, {this.label});
++
++  final LoopEvent event;
++  final String? label;
++
++  @override
++  Widget build(BuildContext context) {
++    final colors = DshColors.of(context);
++    final (icon, color) = switch (event.result) {
++      'RETURNED' || 'BACK' => (AppIcons.allowed, colors.success),
++      'DISMISSED' || 'TIMEOUT' || 'SUPPRESSED' => (AppIcons.stopped, colors.warning),
++      'ABANDONED' || 'UNAVAILABLE' || 'ERROR' => (AppIcons.error, colors.danger),
++      _ => (AppIcons.pending, colors.textTertiary),
++    };
++    final detail = [?label ?? event.packageName, ?event.reason, ?event.error].join(' · ');
++    return ListPageRow(
++      icon: icon,
++      iconColor: color,
++      title: loopResultLabel(context.l10n, event.result),
++      subtitle: detail.isEmpty ? null : detail,
++      subtitleMaxLines: 2,
++      meta: formatLogTime(event.updatedAt ?? event.timestamp),
++    );
++  }
++}
++
++class _AppList extends StatelessWidget {
++  const _AppList({required this.apps, this.current});
++
++  final List<LoopApp> apps;
++  final String? current;
++
++  @override
++  Widget build(BuildContext context) {
++    final l10n = context.l10n;
++    return Column(
++      children: [
++        Padding(
++          padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
++          child: Text(l10n.loopPickApp, style: Theme.of(context).textTheme.titleMedium),
++        ),
++        Expanded(
++          child: apps.isEmpty
++              ? Center(child: Text(l10n.loopNoApps))
++              : ListView.builder(
++                  itemCount: apps.length,
++                  itemBuilder: (context, i) {
++                    final a = apps[i];
++                    return ListTile(
++                      title: Text(a.label),
++                      subtitle: Text(a.package),
++                      trailing: a.package == current ? const Icon(AppIcons.selected) : null,
++                      onTap: () => Navigator.pop(context, a.package),
++                    );
++                  },
++                ),
++        ),
++      ],
++    );
++  }
++}
+diff --git a/app/lib/ui/phone/phone_control_screen.dart b/app/lib/ui/phone/phone_control_screen.dart
+index 54e4a06..7d7a6c4 100644
+--- a/app/lib/ui/phone/phone_control_screen.dart
++++ b/app/lib/ui/phone/phone_control_screen.dart
+@@ -29,6 +29,7 @@ import '../theme/theme.dart';
+ import 'action_log_page.dart';
+ import 'app_rules_page.dart';
+ import 'dnd_mode_page.dart';
++import 'loop_test_page.dart';
+ import 'phone_disclosure_sheet.dart';
+ import 'phone_background_guide.dart';
+ import 'phone_unlock_page.dart';
+@@ -353,6 +354,19 @@ class _PhoneControlScreenState extends ConsumerState<PhoneControlScreen> {
+               ],
+             ),
+           ],
++          gap,
++          // 触发测试: the first event loop (open a test app → page → receipt). Experimental;
++          // last on the page so nothing above it moves.
++          ListPageCard(
++            children: [
++              ListPageRow(
++                icon: AppIcons.play,
++                title: l10n.loopEntryTitle,
++                subtitle: l10n.loopEntrySubtitle,
++                onTap: () => _push(const LoopTestPage()),
++              ),
++            ],
++          ),
+           // Said only while it is true: lifted rules are named by the tag above.
+           if (state.policies?.unlocks.isEmpty ?? true) PageFootnote(l10n.phoneSensitiveActionsNote),
+         ],
+diff --git a/app/test/phone/loop_test_page_test.dart b/app/test/phone/loop_test_page_test.dart
+new file mode 100644
+index 0000000..9c15b92
+--- /dev/null
++++ b/app/test/phone/loop_test_page_test.dart
+@@ -0,0 +1,159 @@
++// 触发测试 page (lib/ui/phone/loop_test_page.dart) over a fake `dsh/loop` channel,
++// plus the wire parsing in lib/loop/loop_channel.dart.
++
++import 'package:dsh_app/loop/loop_channel.dart';
++import 'package:dsh_app/ui/phone/loop_test_page.dart';
++import 'package:dsh_app/ui/phone/phone_control_screen.dart';
++import 'package:flutter/material.dart';
++import 'package:flutter/services.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:shared_preferences/shared_preferences.dart';
++
++import 'harness.dart';
++
++class FakeLoopNative {
++  Map<String, Object?> config = {'enabled': false, 'targetPackage': null, 'cooldownMs': 60000, 'timeoutMs': 60000};
++  List<Map<String, Object?>> events = [];
++  final calls = <MethodCall>[];
++
++  void install() {
++    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
++      const MethodChannel('dsh/loop'),
++      (call) async {
++        calls.add(call);
++        switch (call.method) {
++          case 'status':
++            return {
++              'config': config,
++              'a11yEnabled': true,
++              'a11yConnected': true,
++              'eventsSeen': 12,
++              'readings': 3,
++              'lastForeground': 'com.example.test',
++              'storageError': null,
++              'insideTarget': false,
++            };
++          case 'setConfig':
++            final args = (call.arguments as Map).cast<String, Object?>();
++            config = {...config, ...args};
++            return config;
++          case 'events':
++            return events;
++          case 'clearEvents':
++            events = [];
++            return true;
++          case 'apps':
++            return [
++              {'package': 'com.example.test', 'label': '测试应用'},
++              {'package': 'com.example.other', 'label': '别的应用'},
++            ];
++        }
++        return null;
++      },
++    );
++    addTearDown(
++      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
++        const MethodChannel('dsh/loop'),
++        null,
++      ),
++    );
++  }
++
++  List<Object?> argsOf(String method) => [for (final c in calls) if (c.method == method) c.arguments];
++}
++
++Map<String, Object?> receipt(String id, String? result, {String state = 'CLOSED', String? reason}) => {
++  'eventId': id,
++  'source': 'A11Y_WINDOW',
++  'timestamp': DateTime(2026, 10, 30, 9, 15).millisecondsSinceEpoch,
++  'state': state,
++  'result': result,
++  'error': null,
++  'reason': reason,
++  'packageName': 'com.example.test',
++  'visitId': 'v-$id',
++  'surface': 'activity',
++  'updatedAt': DateTime(2026, 10, 30, 9, 16).millisecondsSinceEpoch,
++};
++
++void main() {
++  setUp(() => SharedPreferences.setMockInitialValues({}));
++
++  group('wire', () {
++    test('a receipt carries the shared event fields', () {
++      final e = LoopEvent.fromWire(receipt('a', 'RETURNED'))!;
++      expect(e.eventId, 'a');
++      expect(e.source, 'A11Y_WINDOW');
++      expect(e.state, 'CLOSED');
++      expect(e.result, 'RETURNED');
++      expect(e.timestamp, DateTime(2026, 10, 30, 9, 15));
++      expect(LoopEvent.fromWire({'eventId': 'x'}), isNull);
++      expect(LoopEvent.fromWire('nope'), isNull);
++    });
++
++    test('status survives missing and odd fields', () {
++      final s = LoopStatus.fromWire({'config': {'enabled': true, 'cooldownMs': 10000.0}, 'eventsSeen': 'x'});
++      expect(s.config.enabled, isTrue);
++      expect(s.config.cooldownMs, 10000);
++      expect(s.config.targetPackage, isNull);
++      expect(s.eventsSeen, 0);
++      expect(LoopStatus.fromWire(null).a11yConnected, isFalse);
++    });
++  });
++
++  group('page', () {
++    testWidgets('shows status and receipts, newest first', (tester) async {
++      final native = FakeLoopNative()
++        ..events = [receipt('b', null, state: 'SHOWN'), receipt('a', 'SUPPRESSED', reason: 'cooldown')]
++        ..install();
++      await pumpPhone(tester, const LoopTestPage());
++      expect(find.text('无障碍服务已连接'), findsOneWidget);
++      expect(find.text('进行中'), findsOneWidget);
++      expect(find.text('未触发'), findsOneWidget);
++      expect(find.textContaining('cooldown'), findsOneWidget);
++      expect(native.argsOf('events').single, {'limit': 100});
++    });
++
++    testWidgets('switch, app picker and cooldown write config', (tester) async {
++      final native = FakeLoopNative()..install();
++      await pumpPhone(tester, const LoopTestPage());
++
++      await tester.tap(find.byType(Switch));
++      await tester.pumpAndSettle();
++      expect(native.argsOf('setConfig').last, {'enabled': true});
++
++      await tester.tap(find.text('测试 APP'));
++      await tester.pumpAndSettle();
++      await tester.tap(find.text('测试应用'));
++      await tester.pumpAndSettle();
++      expect(native.argsOf('setConfig').last, {'targetPackage': 'com.example.test'});
++      expect(find.textContaining('com.example.test'), findsWidgets);
++
++      await tester.tap(find.text('冷却时间'));
++      await tester.pumpAndSettle();
++      expect(native.argsOf('setConfig').last, {'cooldownMs': 300000});
++      expect(find.text('300 秒'), findsOneWidget);
++    });
++
++    testWidgets('clearing receipts empties the list', (tester) async {
++      final native = FakeLoopNative()
++        ..events = [receipt('a', 'RETURNED')]
++        ..install();
++      await pumpPhone(tester, const LoopTestPage());
++      expect(find.text('点了返回'), findsOneWidget);
++      await tester.tap(find.text('清空回执'));
++      await tester.pumpAndSettle();
++      expect(native.argsOf('clearEvents'), hasLength(1));
++      expect(find.text('还没有回执'), findsOneWidget);
++    });
++
++    testWidgets('phone control links to it', (tester) async {
++      FakeLoopNative().install();
++      await pumpPhone(tester, const PhoneControlScreen());
++      await tester.scrollUntilVisible(find.text('触发测试'), 300, scrollable: find.byType(Scrollable).first);
++      await tester.tap(find.text('触发测试'));
++      await tester.pumpAndSettle();
++      expect(find.byType(LoopTestPage), findsOneWidget);
++    });
++  });
++}
+diff --git a/docs/loop/ARCHITECTURE.md b/docs/loop/ARCHITECTURE.md
+new file mode 100644
+index 0000000..b9159eb
+--- /dev/null
++++ b/docs/loop/ARCHITECTURE.md
+@@ -0,0 +1,152 @@
++# DSH Go 事件闭环架构
++
++目标：在**不改动 DSH 原有手机操控**的前提下，让手机状态变化能主动触发 DSH。
++四个独立模块，共享一个事件结构；第一版只接通 EventObserver → EventScheduler(规则) → InteractionHub，AgentBridge 只定接口。
++
++## 架构图
++
++```mermaid
++flowchart LR
++  subgraph Android系统
++    A11y[无障碍事件<br/>窗口变化]
++    Alarm[闹钟/开机广播<br/>v2]
++  end
++  subgraph EventObserver
++    RT[LoopRuntime<br/>350ms 去抖]
++    FG[复核真实前台<br/>只读包名]
++    TR[ForegroundTracker<br/>访问状态机]
++  end
++  subgraph EventScheduler
++    RULES[TriggerRules<br/>开关/亮屏/锁屏/DSH忙/冷却]
++    PLAN[随机排期 v2]
++  end
++  subgraph InteractionHub
++    PAGE[InteractionActivity<br/>独立任务栈]
++    NOTI[通知兜底 v2]
++  end
++  subgraph AgentBridge v2
++    AB[DSH 宿主插件<br/>agent.followup]
++    FB[模型失败→本地模板]
++  end
++  STORE[(loop/state.json<br/>配置+访问+回执<br/>原子写)]
++  DSH[DSH 原有手机操控<br/>PhoneTasks / PromptArbiter]
++
++  A11y --> RT --> FG --> TR --> RULES
++  Alarm -.-> PLAN -.-> RULES
++  DSH -- 忙则让路 --> RULES
++  RULES -- Trigger --> PAGE
++  RULES -.-> AB -.-> PAGE
++  AB -.-> FB
++  PAGE -- 回执 --> STORE
++  RULES -- 抑制记录 --> STORE
++  TR <--> STORE
++```
++
++纯文字版：
++
++```
++窗口事件 ─▶ LoopRuntime(去抖 350ms) ─▶ 复核前台包名 ─▶ ForegroundTracker
++                                                     │ Entered(新访问)
++                                                     ▼
++            DSH 忙/锁屏/冷却/有页面未关 ──▶ TriggerRules ──抑制──▶ 回执(SUPPRESSED)
++                                                     │ Trigger
++                                                     ▼
++                                   InteractionHub ─▶ InteractionActivity
++                                                     │ 返回/系统返回/离开/超时/没弹出
++                                                     ▼
++                                           LoopEngine.answer ─▶ state.json
++```
++
++## 统一事件结构
++
++所有模块产生、修改的都是同一个 `LoopEvent`（`loop/LoopEvent.kt`，Dart 侧 `lib/loop/loop_channel.dart`）：
++
++| 字段 | 含义 |
++|---|---|
++| `eventId` | UUID，全局唯一 |
++| `source` | `A11Y_WINDOW` / `SCHEDULER`(v2) / `RECOVERY` |
++| `timestamp` | 创建时间（墙钟 ms） |
++| `state` | `CONFIRMED → TRIGGERED → SHOWN → CLOSED`，只能前进 |
++| `result` | 关闭时写一次：`RETURNED` 点返回 / `BACK` 系统返回 / `DISMISSED` 离开页面 / `TIMEOUT` / `ABANDONED` 进程死了 / `UNAVAILABLE` 没弹出来 / `SUPPRESSED` 规则拦下 / `ERROR` |
++| `error` | 异常信息 |
++| `reason` | 抑制或关闭原因：`cooldown`、`dsh_busy`、`locked`、`process_restart`、`not_shown`… |
++| `packageName` / `visitId` / `surface` / `updatedAt` | 前台包名、所属访问、展示方式、最后更新时间 |
++
++持久化（`files/loop/state.json`，临时文件 + fsync + 改名）：配置、访问状态、上次触发时间、最近 200 条事件。**未关闭的事件永不被淘汰**。
++
++## 四个模块
++
++### 1. EventObserver（已实现 v1）
++- `LoopRuntime`（Android）：只处理 `TYPE_WINDOW_STATE_CHANGED / TYPE_WINDOWS_CHANGED`；开关关闭时第一行就返回，零开销。
++- 去抖 350 ms 后复核：先找获得焦点的应用窗口，再退回 `TreeCapture.foregroundPackage`。**只读包名，不读任何节点内容。**
++- `ForegroundTracker`（纯 Kotlin）：一次"访问" = 从别的 App 进入测试 App 到离开。
++  - DSH 自己、系统界面、输入法、权限/安装/安全页面都是**透明的**：既不结束访问，也不开始访问。
++  - 所以"弹出测试页 → 点返回回到测试 App"、"输入法弹出又收起"都不会被当成新进入 → **没有弹窗循环**。
++  - 访问状态落盘：服务重连、进程重启后仍在测试 App 里，不会重复触发。
++- `onInterrupt` 不当作断开（只有 `onUnbind/onDestroy` 才 `detach`）。
++
++### 2. EventScheduler（v1 只有规则）
++`TriggerRules.decide` —— 顺序即规则：关闭 → 灭屏 → 锁屏 → DSH 忙（有任务、有调用在跑、有问题待答）→ 已有页面未关 → 时钟回拨 → 冷却 → 触发。
++冷却用墙钟、跨重启有效；时钟回拨时从"现在"重新计冷却，不会永久卡死。
++v2：移植 focusmate `SchedulePolicy`（免打扰、每日上限、用户刚活跃），随机排期 + 闹钟 + 开机/升级重排，全部汇入同一个 `decide`。
++
++### 3. InteractionHub（v1 一个界面）
++- `InteractionActivity`：独立 `taskAffinity`、`singleInstance`、不进最近任务。关闭后自然回到测试 App，不碰 DSH 主界面任务栈。
++- 由无障碍服务启动（系统豁免后台启动限制）。3 秒内没进入 `SHOWN` → `UNAVAILABLE(not_shown)`。
++- 每条出路只关一次事件：按钮 → `RETURNED`，系统返回 → `BACK`，被切走/锁屏 → `DISMISSED`，到时 → `TIMEOUT`。第一条回答生效，其余忽略。
++- 进程被杀后系统恢复的页面（`savedInstanceState != null`）直接关闭，不会复活旧事件。
++- v2：悬浮层（`TYPE_ACCESSIBILITY_OVERLAY`）和通知兜底；DSH 任务开始时主动收起页面。
++
++### 4. AgentBridge（只定接口，v1 不调用 AI）
++```kotlin
++interface AgentBridge {
++    /** 把真实事件交给 DSH Agent；超时/失败返回 Fallback，由 InteractionHub 用本地模板展示。 */
++    fun deliver(event: LoopEvent, context: Map<String, Any?>, timeoutMs: Long): Delivery
++    sealed interface Delivery { data class Reply(val text: String) : Delivery; data class Fallback(val reason: String) : Delivery }
++}
++```
++推荐路径：参照 dsh-speak-up，用一个 DSH 宿主插件接收事件，调用 `agent.followup(message)`，让它成为 DSH 自己的回合（人格、记忆、工具照旧）。引擎没运行、模型报错、超时 → `Fallback`，回执记 `reason=agent_fallback`。
++
++## 改动文件清单
++
++新增（Android）：
++- `app/android/app/src/main/kotlin/.../loop/LoopEvent.kt` 事件结构
++- `.../loop/EventObserver.kt` 包名分类 + 访问状态机（纯 Kotlin）
++- `.../loop/EventScheduler.kt` 配置 + 触发规则（纯 Kotlin）
++- `.../loop/LoopStore.kt` 原子文件存储（纯 Kotlin）
++- `.../loop/LoopEngine.kt` 闭环编排（纯 Kotlin，线程安全）
++- `.../loop/LoopRuntime.kt` 无障碍事件去抖、复核前台、环境读取
++- `.../loop/InteractionHub.kt` 启动页面 + 3 秒看门狗
++- `.../loop/InteractionActivity.kt` 交互页面
++- `.../loop/LoopPlugin.kt` Flutter 通道 `dsh/loop`
++- `res/values{,-zh}/loop_strings.xml`
++- `src/test/.../loop/LoopEngineTest.kt`（17 个用例）
++
++修改（Android，共 +22 行）：
++- `phone/a11y/PhoneA11yService.kt`：连接时 `attach`、事件时 `onEvent`、拆除时 `detach`，全部 `runCatching` 包住，出错不影响原服务
++- `phone/PhonePrompts.kt`：加只读的 `busy()`
++- `MainActivity.kt`：注册 `LoopPlugin`
++- `AndroidManifest.xml`：注册 `InteractionActivity`（`exported=false`）
++
++新增/修改（Flutter）：
++- `lib/loop/loop_channel.dart`、`lib/ui/phone/loop_test_page.dart`
++- `lib/ui/phone/phone_control_screen.dart`：页面最底部加"触发测试"入口
++- `lib/l10n/parts/loop_{zh,en}.arb` + 由 `tool/l10n_merge.py` 生成的 arb/gen 文件
++- `test/phone/loop_test_page_test.dart`
++
++**没动的**：无障碍配置 XML、权限声明、默认输入法、`SafetyGate`/`ProtectedPages` 规则、`PromptArbiter`、`PhoneTasks`、Agent 工具。
++
++## 技术风险
++
++| # | 风险 | 影响 | 现在的处理 | 后续 |
++|---|---|---|---|---|
++| 1 | 国产 ROM「后台弹出界面」权限可能拦截无障碍服务启动 Activity | 页面弹不出来 | 3 秒看门狗记 `UNAVAILABLE(not_shown)`，不会卡住后续触发 | v2 用无障碍悬浮层或通知兜底 |
++| 2 | 窗口事件很多（`TYPE_WINDOWS_CHANGED`） | 耗电/卡顿 | 开关关闭零开销；350 ms 去抖，每次切换只复核一次 | 真机测功耗 |
++| 3 | 分屏、自由窗口、画中画时前台判断 | 误触发/漏触发 | 优先取获得焦点的应用窗口 | 真机覆盖分屏 |
++| 4 | 厂商系统界面包名不全 | 下拉通知栏被当成离开 → 回来再触发 | 已含主流厂商 systemui；冷却兜底 | 收集真机包名补表 |
++| 5 | 与 Agent 操作抢屏幕 | Agent 打开测试 App 时弹页面 | DSH 有任务/有调用/有问题时一律 `dsh_busy` 抑制 | v2：任务开始时收起已弹出的页面 |
++| 6 | 强行停止 App 后无障碍不一定自动重绑 | 闭环停止 | 设置页显示"无障碍已开启/已连接"状态 | 真机验证，必要时提示用户 |
++| 7 | 进程死掉期间离开又回到测试 App | 回来时不触发（保守） | 有意为之：宁可漏一次，不重复弹 | — |
++| 8 | 每次状态变化同步 fsync（主线程） | 极少量卡顿 | 只在进入/回执时写，低频 | 事件量增大后改后台写 |
++| 9 | 隐私与上架政策 | 无障碍用于主动监听 | 默认关闭；只存包名；不读页面内容 | 正式发布前更新无障碍披露文案 |
++| 10 | 本环境没有 Android SDK | 完整 APK 未构建 | Kotlin 对 Android API 35 + Flutter embedding 做了编译检查；纯逻辑 JVM 测试通过 | 需在有 SDK 的机器上 `./gradlew assembleDebug` |
+diff --git a/docs/loop/AUDIT.md b/docs/loop/AUDIT.md
+new file mode 100644
+index 0000000..2b42a75
+--- /dev/null
++++ b/docs/loop/AUDIT.md
+@@ -0,0 +1,95 @@
++# DSH Go 源码审计：事件闭环改造前
++
++审计对象：`ccch1mneyyy/dsh-go` @ `d38a39a`（DSH Go 1.0.2），重点是 `app/android/.../phone/` 与 Flutter 平台通信。
++历史项目只看有明确复用价值的部分，结论在文末分类表。
++
++---
++
++## 1. 事件怎么进入
++
++| 入口 | 位置 | 现状 |
++|---|---|---|
++| 无障碍事件 | `phone/a11y/PhoneA11yService.onAccessibilityEvent` | **只做一件事**：`EventClock.tick(packageName)`，给"等界面稳定"计数。没有任何监听者，服务注释写明 *"It reads nothing on its own"*。 |
++| 订阅的事件类型 | `res/xml/phone_accessibility_service.xml` | `windowStateChanged / windowContentChanged / windowsChanged / viewTextChanged / viewScrolled`，`notificationTimeout=100`，`flagRetrieveInteractiveWindows`。**新闭环不需要改这个配置。** |
++| Agent 工具调用 | `PhoneBridge`（抽象 unix socket，校验 uid + 一次性 token）→ `McpServer`（MCP JSON-RPC）→ `PhoneCore` → `PhoneDriver` | 只有 Agent 主动调用工具时才读屏/操作。 |
++| Flutter 调用 | `PhonePlugin`：MethodChannel `dsh/phone`、EventChannel `dsh/phone/events` | 设置页、审批弹窗 `presentPrompt`、`finishTask` 等。 |
++| 屏幕关闭 | `PhoneA11yService` 内部 `ACTION_SCREEN_OFF` 接收器 | 触发 `stopAll` 停止当前任务。 |
++
++结论：**DSH 现在是纯"被动执行"模型**，手机状态变化不会主动产生任何事件。EventObserver 必须新建。
++
++## 2. 如何识别前台 APP
++
++- `TreeCapture.foregroundPackage(service, screenBox)`：按 layer 从高到低遍历 `service.windows`，只看 `TYPE_APPLICATION` 和 `TYPE_SYSTEM`，系统窗口占屏 < 50% 跳过（状态栏），取窗口根节点的 `packageName`。
++- 输入法窗口（`TYPE_INPUT_METHOD`）、DSH 自己的悬浮条（`TYPE_ACCESSIBILITY_OVERLAY`）天然被排除。
++- `EventClock.lastPackage` 只是事件携带的原始包名，**不可靠**（输入法、Toast、通知栏都会带来），现有代码也只拿它做调试。
++- `ProtectedPages`：安装器、权限控制器、各厂商安全中心整包保护；设置 App 按页面标题关键词保护。驱动层"能读不能点"。
++
++风险：`TYPE_APPLICATION` 没有面积判断，画中画/自由窗口这类小应用窗口如果 layer 更高会"赢"。新闭环先找**获得焦点的应用窗口**，找不到再退回 `TreeCapture`。
++
++## 3. 如何调用 Activity / 通知
++
++`PhonePrompts`（进程唯一的提问协调器）按顺序尝试三种界面：
++
++1. **悬浮层** `ControlOverlay.showPrompt` —— `TYPE_ACCESSIBILITY_OVERLAY`，不需要悬浮窗权限，也不受后台启动限制；
++2. **通知** `NotificationGate.showPrompt` —— 高优先级通知 + 每次随机 nonce 的动态广播接收器，按钮只认本次展示；
++3. **App 内对话框** —— `reopen()` 把 `MainActivity` 拉到前台，最多等 3 秒变成 resumed，再弹 `PhonePromptUi.showDialog`。
++
++关键机制（新闭环要遵守同样的原则）：
++- `PromptArbiter` 一次只允许一个问题；`PromptTicket` 有总截止时间（≤ 600 s），每个展示有独立 nonce，旧界面的按钮回答不了新问题；
++- `PromptInputPolicy` 防点击劫持（遮挡、注入、虚拟设备）；
++- 任务结束后的返回走 `PhoneTaskReturn`：拉起 App → 3 秒内确认可见 → 否则发结果通知。
++
++## 4. 哪些调用必须依赖已有任务
++
++| 调用 | 依赖 | 没有任务时 |
++|---|---|---|
++| `PhonePrompts.present`（引擎审批/复核） | `tasks.activeOwner(taskId)` 或 `beforeTaskOwner()` | 回 `unavailable("stale")` |
++| `PhonePrompts.confirm`（原生确认） | `tasks.activeOwner()` | 回 `Decision.STOP` |
++| `PhonePrompts.handoff`（交还给人） | `tasks.activeOwner()` | 回 `HandoffResult.STOP` |
++| 票据存活检查 | `enabled() && !locked() && tasks.isCurrent(owner)` 每 250 ms 复查 | 自动 `STOPPED("stale")` |
++
++`PhoneTasks`：第一次工具调用开始任务，3 分钟无调用结束，停止后 30 秒内拒绝一切调用。
++
++**结论：现有弹窗体系整个绑在"Agent 正在执行的任务"上。** 主动事件（没有任务）走不了它；硬塞进去会破坏它的所有权校验。所以新建独立的 InteractionHub，并且在 DSH 有任务或有问题待答时**主动让路**（`dsh_busy`）。
++
++## 5. 如何记录结果
++
++- `ActionLog`：内存环形缓冲 300 条，**进程一死就没了**；
++- `PromptResult.toMap()` 回给 Dart，不落盘；
++- 持久化的只有 SharedPreferences 里的开关、App 名单策略、悬浮条偏好；
++- 没有事件 ID、没有回执、没有"打开了但用户没回应"这种中间状态。
++
++结论：统一事件结构 + 落盘回执是新建的。
++
++## 6. 后台如何恢复
++
++| 机制 | 现状 |
++|---|---|
++| Flutter 引擎 | `FlutterEngineCache` 缓存，Activity 销毁后 Dart 继续跑 |
++| `DshService` | 前台服务，`START_NOT_STICKY`（被杀不自动重启） |
++| 无障碍服务 | 系统管理：进程被杀后系统会重新绑定（强行停止例外，见风险） |
++| 开机/升级恢复 | **没有** `BOOT_COMPLETED`、`MY_PACKAGE_REPLACED` 接收器 |
++| 定时 | **没有** AlarmManager / WorkManager / JobScheduler |
++| 任务状态 | 全在内存，重启即丢 |
++| `onInterrupt` | 调用 `stopAll` 停任务 —— 对 DSH 合理；但新闭环**不能**把它当成断开（focusmate 踩过这个坑：按返回键就会触发 onInterrupt） |
++
++其他相关事实：`targetSdk = 28`（没有包可见性限制，`queryIntentActivities` 能列出所有应用）；Android 10+ 的后台启动 Activity 限制与 targetSdk 无关，但**系统绑定的无障碍服务是官方豁免项**。
++
++---
++
++## 7. 历史项目复用分类
++
++| 来源 | 内容 | 分类 | 落在哪 |
++|---|---|---|---|
++| focusmate `core/AllowPolicy` + `SystemUiClassifier` | 前台包名分类：自身/系统界面/输入法/权限框都算"中性"，不算离开 | **直接复用**（思路+名单） | `loop/EventObserver.kt` 的 `PackageFilter` |
++| focusmate `core/SessionStore` | 临时文件 + fsync + 原子改名；"读坏了"和"没有"分开报 | **直接复用** | `loop/LoopStore.kt` 的 `FileLoopStore` |
++| focusmate `core/Recovery` | 重启后的恢复决策写成纯函数 | **直接复用**（思路） | `LoopEngine.recover()` |
++| focusmate `GuardAccessibilityService` | 事件后复核真实前台；`onInterrupt ≠ 断开` | **直接复用**（原则） | `LoopRuntime` |
++| focusmate `companion/SchedulePolicy` | 关闭→免打扰→每日上限→未到点→没话题→用户刚说话；随机只出现在排期，判定保持确定性 | **需要改造** | EventScheduler v1 |
++| focusmate `alarm/ExpiryScheduler` + `BootReceiver` | 精确闹钟可降级、闹钟只是"去读盘比对"的提醒；开机/升级后重排 | **需要改造** | EventScheduler 重启恢复 |
++| focusmate `companion/DeliveryLog` | 生成/展示/播报分开记，"通知已发 ≠ 已读" | **只参考设计** | 回执语义（`SHOWN ≠ 用户已回应`） |
++| focusmate Compose UI、`kotlinx.serialization`、`OpenAiCompatibleClient` | — | **不能复用** | DSH 用 Flutter、自带 `Json`；模型调用必须走 DSH 引擎 |
++| dsh-speak-up `lib/host.js` | 必须走 `agent.followup(message)` 才是 DSH 自己的回合；先本地掷骰再花模型；`ctx.interval` 定时；followup 后 `sessions.flush` | **需要改造** | AgentBridge v1（宿主侧半边）、EventScheduler 随机触发 |
++| test `companion-voice-assistant` | 无障碍截图缩放、系统语音识别/TTS | **只参考设计** | 以后的语音/看屏；DSH 已有 `ScreenShooter` |
++| test `companion-voice-assistant` `PhoneAccessService`、`ModelClient` | 不收集事件；直连模型 | **不能复用** | — |
++| test `agent-bridge`（Windows 桌面） | — | **不能复用**（平台不同，未深入审计） | — |
+diff --git a/docs/loop/TASKS.md b/docs/loop/TASKS.md
+new file mode 100644
+index 0000000..a744377
+--- /dev/null
++++ b/docs/loop/TASKS.md
+@@ -0,0 +1,54 @@
++# 任务拆分（给 DeepSeek 执行）
++
++规则：
++- 每个任务一个分支、一个 PR，基于 `feat/event-loop-v1`，**不要直接改上游 `main`**。
++- 标了 **🔒 Claude 审核** 的任务，提交前必须让 Claude 审核；其余普通编码 DeepSeek 自己完成并补测试。
++- 不许做的事（所有任务通用）：改默认输入法；用 `settings put` 或任何方式绕过系统权限确认；读取页面节点内容（只允许包名）；改 `phone_accessibility_service.xml`、`SafetyGate`、`ProtectedPages`、`PromptArbiter` 的既有行为；删除或放宽任何测试。
++- 本地检查：纯逻辑跑 `LoopEngineTest`；Flutter 跑 `flutter analyze` 和 `flutter test test/phone`；动了文案跑 `python3 tool/l10n_merge.py`。
++- 没有真机证据的结论写 `NOT_TESTED`。
++
++---
++
++### T0 真机跑 v1 验证清单（人工/DeepSeek 协助）
++按 `docs/loop/VALIDATION.md` 第 3 节逐项跑，把 `state.json` 和 `logcat -s DshLoop` 贴进该文件对应行。
++验收：每行要么有证据，要么写明 NOT_TESTED 和原因。
++
++### T1 Gradle 接入与构建（普通）
++确认 `./gradlew :app:testDebugUnitTest` 能跑到 `loop/LoopEngineTest`，`./gradlew assembleDebug` 通过。
++验收：两条命令的输出贴到 PR。只允许修编译问题，不改逻辑。
++
++### T2 设置页补全（普通）
++- 超时时间选择（15/30/60/120 秒），走 `setConfig` 的 `timeoutMs`（原生已支持）。
++- 回执行显示 `surface`、`visitId` 前 8 位。
++- "导出回执"：把 `events` 原样 JSON 复制到剪贴板。
++验收：`test/phone/loop_test_page_test.dart` 加对应用例；中英文文案都加在 `lib/l10n/parts/loop_*.arb`。
++
++### T3 InteractionHub 通知兜底（普通，参照 `NotificationGate.showPrompt`）
++页面 `UNAVAILABLE(not_shown)` 时改发一条通知（独立渠道 `dsh-loop`），按钮"返回"→ `RETURNED`，划掉 → `DISMISSED`，`setTimeoutAfter` 到时 → `TIMEOUT`。按钮用每次随机 nonce 的动态广播，`RECEIVER_NOT_EXPORTED`。
++验收：事件 `surface="notification"`；同一事件只关一次（复用 `LoopEngine.answer` 的幂等）；JVM 测试覆盖"页面没弹出 → 通知 → 回执"的状态序列。
++
++### T4 DSH 任务开始时收起页面 🔒 Claude 审核
++监听 `PhoneControl.tasks.addListener`，任务变为 active 时关闭已打开的页面，回执 `DISMISSED(reason=dsh_task_started)`。
++原因：触及 `PhoneTasks` 生命周期和监听线程。
++
++### T5 EventScheduler v1：本地规则（普通）
++把 focusmate `SchedulePolicy` 的免打扰（跨零点）、每日上限移植进 `TriggerRules`（纯 Kotlin、时区由调用方传 `minuteOfDay`）。
++验收：新增 JVM 测试：23:00→08:00 区间、上限当天生效次日清零、时钟回拨。
++
++### T6 随机主动触发 + 重启恢复 🔒 Claude 审核
++- 排期：`planNext(now)` 才用随机（抖动），`decide` 保持确定；`nextDueAt` 落盘。
++- 闹钟：有精确闹钟权限用 `setExactAndAllowWhileIdle`，否则 `setAndAllowWhileIdle` 并在设置页如实说明会迟到；闹钟只是"去读盘比对"的提醒。
++- `BOOT_COMPLETED` / `MY_PACKAGE_REPLACED` 接收器重排；**强行停止后不会收到广播**，设置页要写明。
++- 事件 `source=SCHEDULER`，同样过 `TriggerRules`。
++原因：新增 Manifest 接收器和后台唤醒，影响耗电与上架合规。
++
++### T7 AgentBridge v0：接口 + 本地降级（普通）
++实现 `docs/loop/ARCHITECTURE.md` 里的 `AgentBridge` 接口，v0 只有 `LocalTemplateBridge`（按包名返回固定文案），页面显示返回文本。
++验收：接口与 `LoopEngine` 解耦；超时/异常一律 `Fallback`，回执 `reason=agent_fallback`。
++
++### T8 AgentBridge v1：接入 DSH Agent 🔒 Claude 审核
++参照 dsh-speak-up：DSH 宿主插件收事件 → `agent.followup(message)` → 等回合结束取回文本。只传 `eventId/source/packageName/timestamp`，不传任何屏幕内容。
++原因：跨进程协议、鉴权、隐私边界。
++
++### T9 披露文案（普通）
++`phone_disclosure_sheet.dart` 和无障碍说明里加一句："开启触发测试后，DSH 会读取当前前台 App 的名称（不读页面内容）"。
+diff --git a/docs/loop/VALIDATION.md b/docs/loop/VALIDATION.md
+new file mode 100644
+index 0000000..1ab85e6
+--- /dev/null
++++ b/docs/loop/VALIDATION.md
+@@ -0,0 +1,74 @@
++# 第一条闭环：验证记录
++
++闭环：设置里选测试 APP → 打开它 → 无障碍收到窗口事件 → 去抖后复核真实前台包名 → 本地规则确认 → 弹出交互页 → 点"返回" → 保存回执。
++
++标注规则：`PASS` = 在本文写明的环境里跑过并通过；`NOT_TESTED` = 没有真机证据。**本轮所有真机项都是 NOT_TESTED。**
++
++## 1. 自动化证据（2026-10-30，云端沙箱，无 Android SDK、无真机）
++
++| 检查 | 命令 / 方式 | 结果 |
++|---|---|---|
++| 闭环逻辑 JVM 测试 | `kotlinc` 编译 `loop/` 纯 Kotlin 文件 + `LoopEngineTest`，JUnit 4.13.2 运行 | PASS，17/17 |
++| Android 胶水编译检查 | `kotlinc` 对照 Robolectric `android-all` (API 35) + Flutter embedding jar（与仓库 Flutter 3.47.7 同引擎）编译全部 `loop/*.kt`；DSH 内部依赖（`R`、`AppStrings`、`PhoneControl`、`TreeCapture`、`PhoneA11yService`）用照抄签名的桩代替 | PASS（仅类型检查，**不等于 Gradle 构建**） |
++| Dart 静态检查 | `flutter analyze`（整个 app） | PASS，No issues |
++| 新增 Flutter 测试 | `flutter test test/phone/loop_test_page_test.dart` | PASS，6/6 |
++| 手机操控原有测试（含截图对比） | `flutter test test/phone` | PASS，208/208 |
++| 全量 Flutter 测试 | `flutter test` | 见第 4 节 |
++| 多语言 | `tool/l10n_merge.py`（合并 + gen-l10n）；`tool/l10n_scan.py` 无新增硬编码中文 | PASS |
++| Gradle `assembleDebug` / `testDebugUnitTest` | — | NOT_TESTED（沙箱无法下载 Android SDK） |
++
++## 2. 任务要求的验证项
++
++| 验证项 | 自动化覆盖（LoopEngineTest） | 真机 |
++|---|---|---|
++| 20 次应用切换 | `twentySwitchesTriggerTwentyTimesWithOneReceiptEach`：冷却 0，测试 App ↔ 其他 App/桌面 交替 20 次 → 20 次弹出、20 条 `RETURNED` 回执，eventId/visitId 各不相同；同一次进入的重复事件、页面自身都不重复触发 | NOT_TESTED |
++| 前后台切换 | `backgroundAndBackWithinTheCooldownIsSuppressedThenTriggersAgain`：回桌面再回来，冷却内记 `SUPPRESSED(cooldown)`，冷却后再触发 | NOT_TESTED |
++| 用户主动退出 | `leavingThePageBackKeyAndTimeoutAreReceiptsAndTheFirstAnswerWins`：离开页面 `DISMISSED`、系统返回 `BACK`、超时 `TIMEOUT`；重复回答被忽略 | NOT_TESTED |
++| 服务重新连接 | `serviceReconnectWhileStillInTheAppDoesNotTriggerAgain`：断开期间读不到前台不改状态，重连后仍在测试 App 不再弹 | NOT_TESTED |
++| 进程重启 | `processRestartClosesOpenEventsAsAbandonedAndKeepsTheVisit`：未关闭事件重启后记 `ABANDONED(process_restart)`，旧页面不能再回答；配置、访问、冷却都保留 | NOT_TESTED |
++| 异常回执 | `unreadableStateIsReportedNotTreatedAsEmpty`（文件损坏→`ERROR`，坏文件改名 `.bad`）、`storageFailureIsSurfacedAndTheLoopKeepsWorking`（写盘失败设置页可见、恢复后补写）；页面没弹出 `UNAVAILABLE(not_shown)` 在 `InteractionHub` 里，**无自动化测试** | NOT_TESTED |
++| 过滤自身/系统界面/输入法/权限弹窗 | `keyboardsShadesAndPermissionDialogsNeverStartANewVisit` | NOT_TESTED |
++| 不与 DSH 手机操控冲突 | `dshBusyLockedAndScreenOffSuppress` | NOT_TESTED |
++| 其他规则 | 时钟回拨、关闭/无目标不触发、换目标关闭旧页面、200 条上限不淘汰未关闭事件、配置归一化、事件序列化往返 | — |
++
++## 3. 真机验证步骤（给测试的人）
++
++准备：装本分支构建的 debug 包；在系统设置里**手动**开启 DSH 的无障碍服务；DSH → 设置 → 手机操控 → 页面最底部「触发测试」→ 选一个测试 APP（例如计算器）→ 冷却点成 `0 秒` → 打开开关。
++另开一个终端看日志：`adb logcat -s DshLoop DshA11y`。
++查看回执原文（debug 包）：`adb shell run-as io.github.ccch1mneyyy.dsh_app cat files/loop/state.json`
++
++把 `T` 换成测试 APP 的包名：
++
++1. **20 次应用切换**
++   ```sh
++   T=com.android.calculator2
++   for i in $(seq 1 20); do
++     adb shell monkey -p $T -c android.intent.category.LAUNCHER 1 >/dev/null; sleep 3
++     adb shell input keyevent KEYCODE_BACK; sleep 1      # 在测试页上按返回 → BACK
++     adb shell input keyevent KEYCODE_HOME; sleep 2
++   done
++   ```
++   期望：20 条回执，`result` 全是 `BACK`；无一条重复 visitId；屏幕上没有出现连续弹窗。
++   手点"返回"按钮做几次，期望 `RETURNED`。
++2. **前后台切换**：冷却改回 60 秒。进测试 APP（弹页）→ 返回 → 按 Home → 10 秒内再进：期望 `SUPPRESSED cooldown`；等 60 秒后再进：期望再弹。期间在测试 APP 里拉通知栏、弹输入法：期望不弹。
++3. **用户主动退出**：页面弹出时按 Home、或锁屏：期望 `DISMISSED`；放着不管 60 秒：期望 `TIMEOUT`。
++4. **服务重新连接**：停在测试 APP 里，去系统设置关闭再打开 DSH 无障碍，再回到测试 APP：期望不弹（同一次访问）；切到别的 App 再回来：期望弹。
++5. **进程重启**：页面弹出时执行 `adb shell am crash io.github.ccch1mneyyy.dsh_app`（或在开发者选项里结束进程）→ 等无障碍自动重连 → 打开设置页看回执：期望最新一条 `ABANDONED process_restart`。另测一次 `adb shell am force-stop io.github.ccch1mneyyy.dsh_app`，记录无障碍是否自动恢复（风险 #6）。
++6. **异常回执**：在「设置 → 应用 → DSH → 其他权限」里关掉「后台弹出界面」（MIUI/ColorOS 有此项）→ 进测试 APP：期望 3 秒后 `UNAVAILABLE not_shown`，之后仍能正常记录下一次。
++7. **不打扰 DSH**：让 DSH Agent 执行一个"打开测试 APP"的手机操控任务：期望记 `SUPPRESSED dsh_busy`，Agent 不受影响。
++
++每项把 `state.json` 中对应事件和 logcat 片段贴到下表。
++
++| # | 机型 / 系统 | 结果 | 证据 |
++|---|---|---|---|
++| 1 | | NOT_TESTED | |
++| 2 | | NOT_TESTED | |
++| 3 | | NOT_TESTED | |
++| 4 | | NOT_TESTED | |
++| 5 | | NOT_TESTED | |
++| 6 | | NOT_TESTED | |
++| 7 | | NOT_TESTED | |
++
++## 4. 全量 Flutter 测试
++
++PENDING
+-- 
+2.43.0
+

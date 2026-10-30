@@ -435,6 +435,20 @@
       "snapshot": "1de0d227a3caefffa5e31ebec8a9d36f378a9dea",
       "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/ccr-e7292701-ksmvcg/clock-effects",
       "navigation": "projects/17-clock-effects/README.md"
+    },
+    {
+      "id": "dsh-go-core",
+      "folder": "18-dsh-go-core",
+      "name": "DSH Go 核心改造",
+      "group": "核心 APP",
+      "summary": "以 DSH Go 为核心：源码审计、四模块架构、第一条事件闭环原型与任务拆分。",
+      "ref": "ccr-d0b87c7f-aer1ko",
+      "path": "projects/18-dsh-go-core",
+      "notes": "原型以补丁形式保存（基于 ccch1mneyyy/dsh-go@d38a39a），未推送到上游仓库；真机验证全部 NOT_TESTED。",
+      "extras": [],
+      "snapshot": null,
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/ccr-d0b87c7f-aer1ko/projects/18-dsh-go-core",
+      "navigation": "projects/18-dsh-go-core/README.md"
     }
   ],
   "branches": [
