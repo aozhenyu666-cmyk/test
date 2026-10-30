@@ -32,5 +32,5 @@ git am /path/to/0001-event-loop-v1.patch
 
 ## 当前状态
 
-- 闭环逻辑 JVM 测试 17/17 通过；Android 新代码对 API 35 做了编译检查；`flutter analyze` 无问题；手机操控原有 208 个 Flutter 测试（含截图对比）全部通过。
+- 闭环逻辑 JVM 测试 17/17 通过；Android 新代码对 API 35 做了编译检查；`flutter analyze` 无问题；手机操控 208 个 Flutter 测试（含截图对比）全部通过；全量 Flutter 测试 8220 通过，8 个截图失败在干净上游上同样失败，与本改动无关。
 - 真机：全部 NOT_TESTED，步骤见验证记录第 3 节。

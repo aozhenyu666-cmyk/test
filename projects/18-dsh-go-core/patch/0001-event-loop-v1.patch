@@ -1,4 +1,4 @@
-From d93c3bb192517aa56cc5adf4fbb8db1670514de8 Mon Sep 17 00:00:00 2001
+From 10ea99d1a5300b9094be94772a2062c2179c15f1 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Fri, 30 Oct 2026 13:54:52 +0000
 Subject: [PATCH] =?UTF-8?q?Add=20the=20first=20event=20loop:=20test=20app?=
@@ -57,8 +57,8 @@ Claude-Session: https://claude.ai/code/session_01VUAnRqEK1Me9rrDHoEiwk9
  docs/loop/ARCHITECTURE.md                     | 152 +++++++++++
  docs/loop/AUDIT.md                            |  95 +++++++
  docs/loop/TASKS.md                            |  54 ++++
- docs/loop/VALIDATION.md                       |  74 ++++++
- 31 files changed, 2761 insertions(+)
+ docs/loop/VALIDATION.md                       |  81 ++++++
+ 31 files changed, 2768 insertions(+)
  create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/EventObserver.kt
  create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/EventScheduler.kt
  create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/InteractionActivity.kt
@@ -3025,10 +3025,10 @@ index 0000000..a744377
 +`phone_disclosure_sheet.dart` 和无障碍说明里加一句："开启触发测试后，DSH 会读取当前前台 App 的名称（不读页面内容）"。
 diff --git a/docs/loop/VALIDATION.md b/docs/loop/VALIDATION.md
 new file mode 100644
-index 0000000..1ab85e6
+index 0000000..5c7c196
 --- /dev/null
 +++ b/docs/loop/VALIDATION.md
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,81 @@
 +# 第一条闭环：验证记录
 +
 +闭环：设置里选测试 APP → 打开它 → 无障碍收到窗口事件 → 去抖后复核真实前台包名 → 本地规则确认 → 弹出交互页 → 点"返回" → 保存回执。
@@ -3044,7 +3044,7 @@ index 0000000..1ab85e6
 +| Dart 静态检查 | `flutter analyze`（整个 app） | PASS，No issues |
 +| 新增 Flutter 测试 | `flutter test test/phone/loop_test_page_test.dart` | PASS，6/6 |
 +| 手机操控原有测试（含截图对比） | `flutter test test/phone` | PASS，208/208 |
-+| 全量 Flutter 测试 | `flutter test` | 见第 4 节 |
++| 全量 Flutter 测试 | `flutter test -j 4` | 8220 通过、287 跳过、8 失败；失败的 8 个在干净上游 `d38a39a` 上同样失败，与本改动无关（见第 4 节） |
 +| 多语言 | `tool/l10n_merge.py`（合并 + gen-l10n）；`tool/l10n_scan.py` 无新增硬编码中文 | PASS |
 +| Gradle `assembleDebug` / `testDebugUnitTest` | — | NOT_TESTED（沙箱无法下载 Android SDK） |
 +
@@ -3102,7 +3102,14 @@ index 0000000..1ab85e6
 +
 +## 4. 全量 Flutter 测试
 +
-+PENDING
++`flutter test -j 4`（Flutter 3.47.7，Noto Sans CJK 2.004 来自 Ubuntu 24.04 软件包）：**8220 通过、287 跳过、8 失败**。
++
++失败的 8 个都是截图对比：
++- `drawer/drawer_golden_test.dart`：drawer_g9_folder_editor（深/浅）
++- `chat/run_info_golden_test.dart`：step detail 两个场景（深/浅）
++- `chat/activity_strip_golden_test.dart`：states（深/浅）
++
++切回干净上游 `d38a39a` 单独跑这 3 个文件，**同样这 8 个失败**，所以是沙箱环境（字体版本等）造成的，不是本改动引起。本改动影响到的手机操控截图测试全部通过。
 -- 
 2.43.0
 

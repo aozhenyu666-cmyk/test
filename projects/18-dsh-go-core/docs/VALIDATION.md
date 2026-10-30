@@ -13,7 +13,7 @@
 | Dart 静态检查 | `flutter analyze`（整个 app） | PASS，No issues |
 | 新增 Flutter 测试 | `flutter test test/phone/loop_test_page_test.dart` | PASS，6/6 |
 | 手机操控原有测试（含截图对比） | `flutter test test/phone` | PASS，208/208 |
-| 全量 Flutter 测试 | `flutter test` | 见第 4 节 |
+| 全量 Flutter 测试 | `flutter test -j 4` | 8220 通过、287 跳过、8 失败；失败的 8 个在干净上游 `d38a39a` 上同样失败，与本改动无关（见第 4 节） |
 | 多语言 | `tool/l10n_merge.py`（合并 + gen-l10n）；`tool/l10n_scan.py` 无新增硬编码中文 | PASS |
 | Gradle `assembleDebug` / `testDebugUnitTest` | — | NOT_TESTED（沙箱无法下载 Android SDK） |
 
@@ -71,4 +71,11 @@
 
 ## 4. 全量 Flutter 测试
 
-本次提交时仍在运行，结果在后续提交中补上。
+`flutter test -j 4`（Flutter 3.47.7，Noto Sans CJK 2.004 来自 Ubuntu 24.04 软件包）：**8220 通过、287 跳过、8 失败**。
+
+失败的 8 个都是截图对比：
+- `drawer/drawer_golden_test.dart`：drawer_g9_folder_editor（深/浅）
+- `chat/run_info_golden_test.dart`：step detail 两个场景（深/浅）
+- `chat/activity_strip_golden_test.dart`：states（深/浅）
+
+切回干净上游 `d38a39a` 单独跑这 3 个文件，**同样这 8 个失败**，所以是沙箱环境（字体版本等）造成的，不是本改动引起。本改动影响到的手机操控截图测试全部通过。
