@@ -1,0 +1,27 @@
+PASS dsh web started and printed a launch token
+PASS logged in with the launch token
+PASS routes refuse requests without credentials (401)
+PASS status with cookie
+PASS no configured session → 409 no-session (409 no-session)
+PASS fixture created a live session session-60e84672-5b30-4e19-b076-ea8da7272b24
+PASS unknown session → 409 no-agent (never created or woken)
+PASS configured the target session
+PASS request → 202 accepted (202 accepted)
+PASS turn ended → generated (generated null)
+PASS text is the model's reply: MOCK_REPLY: 你好，我注意到你刚打开了测试应用。
+PASS claimed into turn 1
+PASS the model request carried the event facts
+PASS replaying the requestId reports the record (200), does not resend
+PASS same requestId, other eventId → 409
+PASS no extra model call from the replay
+PASS second event accepted while idle
+PASS same eventId with a new requestId while in flight → 409 event-in-flight
+PASS another event while a turn runs → 409 desk-busy
+PASS cancel while the turn runs → cancelled
+PASS the turn finished later but its text is never handed out
+PASS late text was seen and dropped (lateText=1)
+PASS fixture: the person sends a message (agent starts a turn)
+PASS agent running the person's turn → 409 agent-busy (agent-busy)
+PASS slow request accepted
+PASS deadline passed → failed/deadline (failed deadline)
+ALL PASS

@@ -1,0 +1,3380 @@
+From fb02fc4c4a0d069cd5c53ef80a242bfbee1567fb Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 16:43:51 +0000
+Subject: [PATCH] Add the proactive interaction kernel and the DSH agent plugin
+
+loop/core is a pure-Kotlin kernel for proactive interactions:
+
+- Coordinator (T4): one active event, a small priority queue with merge
+  and drop rules, and arbitration that only reads DSH's state through a
+  Gate. It never shows anything while a phone task runs, a DSH question
+  is open or a permission page is in front, and withdraws a page that is
+  already up. Every agent attempt has its own requestId and every surface
+  its own token, so late replies, old pages and expired buttons change
+  nothing. Every change is persisted atomically; recovery resumes the
+  agent poll with the same requestId and closes pages that died.
+- ProactiveScheduler (T6): randomness only when planning; the decision
+  is deterministic (quiet hours, daily cap counting deliveries, user
+  activity, backoff after confirmed-ignored messages, pause, elapsed-time
+  due checks so wall-clock changes cannot rush or delay an attempt,
+  reboot and missed-slot handling, safe degradation without alarms).
+- AgentWire (T8): decodes the plugin's answers into accepted / claimed /
+  generated / failed without overstating any of them.
+
+runtime/proactive/dsh-go-proactive is a zero-dependency DSH host plugin
+that hands one event to a live, idle session as a followup turn and
+tracks it through the session's own events. It never creates or wakes
+sessions, refuses busy agents, sends at most once per requestId and per
+eventId, and never hands out text that arrives after a cancel.
+
+Tests: 66 JVM tests (kernel, scheduler, wire, the full chain, round 1),
+10 plugin unit tests, and a 26-check live test against a real
+@deepseek-ai/dsh 0.2.1-rc.4 engine with a local mock model.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUAnRqEK1Me9rrDHoEiwk9
+---
+ .../dsh_app/loop/core/AgentWire.kt            |  75 +++
+ .../dsh_app/loop/core/Coordinator.kt          | 464 ++++++++++++++++++
+ .../dsh_app/loop/core/CoreCodec.kt            |  60 +++
+ .../dsh_app/loop/core/CoreModel.kt            | 215 ++++++++
+ .../dsh_app/loop/core/ProactiveScheduler.kt   | 372 ++++++++++++++
+ .../dsh_app/loop/core/SnapshotStore.kt        |  78 +++
+ .../dsh_app/loop/core/AgentWireTest.kt        |  52 ++
+ .../dsh_app/loop/core/CoordinatorTest.kt      | 357 ++++++++++++++
+ .../dsh_app/loop/core/KernelChainTest.kt      | 128 +++++
+ .../loop/core/ProactiveSchedulerTest.kt       | 243 +++++++++
+ docs/loop/INTEGRATION_DEEPSEEK.md             |  71 +++
+ docs/loop/ROUND2.md                           | 178 +++++++
+ runtime/proactive/dsh-go-proactive/README.md  |  94 ++++
+ .../dsh-go-proactive/cordis.patch.yml         |   5 +
+ .../proactive/dsh-go-proactive/lib/core.js    | 266 ++++++++++
+ .../proactive/dsh-go-proactive/lib/index.js   | 134 +++++
+ .../proactive/dsh-go-proactive/package.json   |  13 +
+ .../dsh-go-proactive/test/core.test.mjs       | 149 ++++++
+ .../dsh-go-proactive/test/e2e-live.mjs        | 147 ++++++
+ .../test/fixture-session/index.js             |  34 ++
+ .../dsh-go-proactive/test/mock-messages.mjs   |  36 ++
+ 21 files changed, 3171 insertions(+)
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/AgentWire.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/Coordinator.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/CoreCodec.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/CoreModel.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/ProactiveScheduler.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/SnapshotStore.kt
+ create mode 100644 app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/AgentWireTest.kt
+ create mode 100644 app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/CoordinatorTest.kt
+ create mode 100644 app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/KernelChainTest.kt
+ create mode 100644 app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/ProactiveSchedulerTest.kt
+ create mode 100644 docs/loop/INTEGRATION_DEEPSEEK.md
+ create mode 100644 docs/loop/ROUND2.md
+ create mode 100644 runtime/proactive/dsh-go-proactive/README.md
+ create mode 100644 runtime/proactive/dsh-go-proactive/cordis.patch.yml
+ create mode 100644 runtime/proactive/dsh-go-proactive/lib/core.js
+ create mode 100644 runtime/proactive/dsh-go-proactive/lib/index.js
+ create mode 100644 runtime/proactive/dsh-go-proactive/package.json
+ create mode 100644 runtime/proactive/dsh-go-proactive/test/core.test.mjs
+ create mode 100644 runtime/proactive/dsh-go-proactive/test/e2e-live.mjs
+ create mode 100644 runtime/proactive/dsh-go-proactive/test/fixture-session/index.js
+ create mode 100644 runtime/proactive/dsh-go-proactive/test/mock-messages.mjs
+
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/AgentWire.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/AgentWire.kt
+new file mode 100644
+index 0000000..3342605
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/AgentWire.kt
+@@ -0,0 +1,75 @@
++package io.github.ccch1mneyyy.dsh_app.loop.core
++
++/**
++ * T8, App side of the dsh-go-proactive protocol (runtime/proactive/dsh-go-proactive/README.md).
++ *
++ * The HTTP itself runs in Dart, which already holds the engine connection and its cookie; Dart
++ * passes (status, parsed JSON body) through unchanged and this object decides what it means.
++ * Keeping the meaning here keeps it in one place and testable on the JVM.
++ *
++ *   App                              plugin (engine)                       DSH agent
++ *   RequestAgent ── POST /request ──▶ followup(user message)  ──────────▶ inbox
++ *                ◀── 202 accepted ─┤
++ *   poll ───────── GET /result?waitMs=20000 (long poll) ─────────────────▶ turn/start, user/message
++ *                ◀── claimed ──────┤                                      assistant/message
++ *                ◀── generated {text} | failed {code} ◀──────────────── turn/end
++ *   CancelAgent ── POST /cancel ───▶ record cancelled; later text dropped (turn is not aborted)
++ */
++object AgentWire {
++    const val PREFIX = "/dsh-go-proactive/v1"
++    const val POLL_WAIT_MS = 20_000L
++
++    /** What one HTTP answer means. */
++    sealed interface Decoded {
++        /** Tell the coordinator; [terminal] means stop polling this requestId. */
++        data class Reply(val reply: AgentReply, val terminal: Boolean) : Decoded
++        /** Nothing learned; try the same call again after [afterMs] (still bounded by the event's deadline). */
++        data class Retry(val afterMs: Long, val reason: String) : Decoded
++    }
++
++    /** Body of POST /request. Replaying it with the same requestId is safe: the plugin never sends twice. */
++    fun requestBody(cmd: Command.RequestAgent, now: Long): Map<String, Any?> = linkedMapOf(
++        "v" to 1, "requestId" to cmd.requestId, "eventId" to cmd.eventId, "kind" to cmd.request.kind,
++        "payload" to cmd.request.payload, "deadlineMs" to (cmd.deadline - now).coerceIn(5_000, 120_000),
++    )
++
++    fun resultPath(requestId: String, waitMs: Long = POLL_WAIT_MS) = "$PREFIX/result?requestId=$requestId&waitMs=$waitMs"
++
++    fun cancelBody(requestId: String): Map<String, Any?> = linkedMapOf("requestId" to requestId)
++
++    /**
++     * [status] 0 means the request never got an HTTP answer (connection refused, reset, timeout).
++     * [body] is the parsed JSON (Map) or null.
++     */
++    fun decode(status: Int, body: Any?): Decoded {
++        val m = body as? Map<*, *>
++        val code = (m?.get("error") as? Map<*, *>)?.get("code") as? String
++        return when {
++            status == 0 -> Decoded.Retry(2_000, "transport")
++            status == 401 || status == 403 -> Decoded.Reply(AgentReply.Failed("auth"), true)
++            status == 404 && code == "not-found" -> Decoded.Reply(AgentReply.Failed("lost"), true)
++            status == 404 -> Decoded.Reply(AgentReply.Failed("plugin_missing"), true)
++            status == 429 || status == 503 || status >= 500 -> Decoded.Retry(3_000, "http_$status")
++            status == 409 -> Decoded.Reply(AgentReply.Failed(code ?: "conflict"), true)
++            status in 400..499 -> Decoded.Reply(AgentReply.Failed("protocol_${code ?: status}"), true)
++            status == 200 || status == 202 -> state(m)
++            else -> Decoded.Retry(3_000, "http_$status")
++        }
++    }
++
++    private fun state(m: Map<*, *>?): Decoded {
++        if (m?.get("v") != 1L && m?.get("v") != 1) return Decoded.Reply(AgentReply.Failed("protocol_version"), true)
++        return when (m["state"]) {
++            "accepted" -> Decoded.Reply(AgentReply.Accepted, false)
++            "claimed" -> Decoded.Reply(AgentReply.Claimed((m["turn"] as? Number)?.toLong()), false)
++            "generated" -> {
++                val text = (m["text"] as? String)?.trim().orEmpty()
++                if (text.isEmpty()) Decoded.Reply(AgentReply.Failed("no_text"), true)
++                else Decoded.Reply(AgentReply.Generated(text.take(2_000), (m["turn"] as? Number)?.let { "turn:$it" }), true)
++            }
++            "failed" -> Decoded.Reply(AgentReply.Failed(((m["failure"] as? Map<*, *>)?.get("code") as? String) ?: "failed"), true)
++            "cancelled" -> Decoded.Reply(AgentReply.Failed("cancelled"), true)
++            else -> Decoded.Reply(AgentReply.Failed("protocol_state"), true)
++        }
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/Coordinator.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/Coordinator.kt
+new file mode 100644
+index 0000000..650be0e
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/Coordinator.kt
+@@ -0,0 +1,464 @@
++package io.github.ccch1mneyyy.dsh_app.loop.core
++
++data class CoordinatorConfig(
++    /** Events waiting behind the active one. */
++    val maxQueue: Int = 4,
++    val agentTimeoutMs: Long = 45_000,
++    /** A started page must report Posted/Shown within this, or it counts as not shown. */
++    val presentAckMs: Long = 3_000,
++    /** How long a confirmed page waits for an answer. */
++    val interactionTimeoutMs: Long = 60_000,
++    /** How long a posted notification waits for an answer (it may never be seen). */
++    val notificationTimeoutMs: Long = 10 * 60_000,
++    /** An agent reply older than this is not shown any more. */
++    val replyFreshMs: Long = 2 * 60_000,
++    /** How often an event may give way to DSH and come back. */
++    val maxYields: Int = 2,
++    val receiptCap: Int = 200,
++    val seenIdCap: Int = 512,
++)
++
++/**
++ * T4: the one place that decides what proactive thing happens next.
++ *
++ * - One active event at a time; the rest wait in a small priority queue with merge / drop rules.
++ * - It never shows anything while DSH is operating the phone, a DSH question is open, or a
++ *   system permission page is in front; a page already up is withdrawn and the event waits.
++ *   DSH's own PhoneTasks / PromptArbiter are only read (through [Gate]), never owned.
++ * - Every agent request has its own requestId and every surface its own token; replies and
++ *   answers carrying anything else are stale and change nothing.
++ * - Every change is persisted before the call returns; [recover] rebuilds after process death.
++ *
++ * Pure and synchronous: the adapter calls in, executes the returned [Command]s, and reports back.
++ */
++class Coordinator(
++    private val store: SnapshotStore,
++    private val config: CoordinatorConfig = CoordinatorConfig(),
++    private val clock: () -> Long,
++    private val ids: () -> String,
++) {
++    private val lock = Any()
++    private val queue = mutableListOf<ProactiveEvent>()
++    private var active: ProactiveEvent? = null
++    private val receipts = ArrayDeque<ProactiveEvent>()
++    private val seen = LinkedHashSet<String>()
++    /** Tokens taken off screen, so a page that shows up late can still be told to go away. */
++    private val retired = LinkedHashMap<String, Pair<String, Surface>>()
++    private var gate = Gate()
++    private var lastNow = 0L
++
++    /** Counters for diagnostics: things that were refused because they were stale. */
++    var staleReports = 0
++        private set
++    var lateAgentReplies = 0
++        private set
++
++    @Volatile var storageError: String? = null
++        private set
++    @Volatile var recoveryIssue: String? = null
++        private set
++
++    // ---------------------------------------------------------------- public API
++
++    /** Process start. Closes what died with the old process, resumes agent requests, clears leftovers. */
++    fun recover(gateNow: Gate): Step = synchronized(lock) {
++        gate = gateNow
++        val now = clock()
++        val out = Out()
++        out.commands += Command.ClearLeftovers
++        when (val r = store.read()) {
++            SnapshotStore.Read.Empty -> Unit
++            is SnapshotStore.Read.Unreadable -> recoveryIssue = "state_unreadable: ${r.error}"
++            is SnapshotStore.Read.Loaded -> {
++                M.list(r.map, "queue").mapNotNull { (it as? Map<*, *>)?.let(CoreCodec::event) }.filter { it.stage == Stage.QUEUED }.let(queue::addAll)
++                M.list(r.map, "receipts").mapNotNull { (it as? Map<*, *>)?.let(CoreCodec::event) }.let(receipts::addAll)
++                M.list(r.map, "seen").filterIsInstance<String>().let(seen::addAll)
++                lastNow = M.long(r.map, "lastNow")
++                active = (M.map(r.map, "active"))?.let(CoreCodec::event)
++            }
++        }
++        active?.let { a ->
++            when (a.stage) {
++                Stage.AWAITING_AGENT ->
++                    if (now < a.agentDeadline) out.commands += Command.ResumeAgent(a.eventId, a.agentRequestId!!, a.agentDeadline)
++                    else agentFailed(a, "timeout_after_restart", now, out)
++                Stage.PRESENTING, Stage.DELIVERED, Stage.SHOWN -> close(a, Outcome.ABANDONED, "process_restart", now, out)
++                else -> Unit
++            }
++        }
++        reconcile(now, out)
++        out.step()
++    }
++
++    fun setGate(next: Gate): Step = synchronized(lock) {
++        gate = next
++        val out = Out()
++        reconcile(clock(), out)
++        out.step()
++    }
++
++    /** Periodic / alarm / event-driven check of deadlines. Cheap; no loop needed. */
++    fun tick(): Step = synchronized(lock) {
++        val out = Out()
++        reconcile(clock(), out)
++        out.step()
++    }
++
++    fun submit(req: EventRequest): Pair<Submit, Step> = synchronized(lock) {
++        val now = clock()
++        val out = Out()
++        val result = submitLocked(req, now, out)
++        reconcile(now, out)
++        result to out.step()
++    }
++
++    /** A reply from the agent side, matched by requestId only. */
++    fun onAgent(requestId: String, reply: AgentReply): Step = synchronized(lock) {
++        val now = clock()
++        val out = Out()
++        val a = active
++        if (a != null && a.stage == Stage.AWAITING_AGENT && a.agentRequestId == requestId) {
++            when (reply) {
++                AgentReply.Accepted -> active = a.copy(agentAcceptedAt = a.agentAcceptedAt ?: now)
++                is AgentReply.Claimed -> active = a.copy(agentAcceptedAt = a.agentAcceptedAt ?: now, agentClaimedAt = a.agentClaimedAt ?: now)
++                is AgentReply.Generated -> active = a.copy(
++                    stage = Stage.READY, generatedAt = now,
++                    content = Content(reply.text, ContentSource.AGENT, reply.turnId),
++                )
++                is AgentReply.Failed -> agentFailed(a, reply.code, now, out)
++            }
++            out.dirty = true
++        } else {
++            // A reply for an attempt that is no longer current: never shown, only counted.
++            lateAgentReplies++
++            val owner = findByRequestId(requestId)
++            if (owner != null) {
++                replaceAnywhere(owner.copy(lateResults = owner.lateResults + 1))
++                out.dirty = true
++                // The engine still thinks this request matters: tell it again to stop.
++                if (reply == AgentReply.Accepted || reply is AgentReply.Claimed) out.commands += Command.CancelAgent(owner.eventId, requestId, "stale")
++            }
++        }
++        reconcile(now, out)
++        out.step()
++    }
++
++    /** A report from a surface, matched by token only. Old pages and old buttons are refused. */
++    fun onSurface(token: String, report: SurfaceReport): Step = synchronized(lock) {
++        val now = clock()
++        val out = Out()
++        val a = active
++        val live = a != null && a.token == token && a.stage in SURFACE_STAGES
++        if (!live) {
++            staleReports++
++            // A late page from a closed or replaced presentation must not stay on screen.
++            val owner = retired[token]
++            if (owner != null && (report == SurfaceReport.Posted || report == SurfaceReport.Shown)) {
++                out.commands += Command.Withdraw(owner.first, token, owner.second, "stale")
++            }
++            return@synchronized out.step()
++        }
++        when (report) {
++            SurfaceReport.Posted -> active = when (a.surface) {
++                Surface.NOTIFICATION -> a.copy(
++                    stage = Stage.DELIVERED, presentedAt = a.presentedAt ?: now, deliveredAt = now,
++                    interactionDeadline = now + config.notificationTimeoutMs,
++                )
++                else -> a.copy(presentedAt = a.presentedAt ?: now)
++            }
++            SurfaceReport.Shown -> if (a.surface == Surface.ACTIVITY && a.stage == Stage.PRESENTING) {
++                active = a.copy(
++                    stage = Stage.SHOWN, presentedAt = a.presentedAt ?: now, deliveredAt = a.deliveredAt ?: now,
++                    shownAt = now, interactionDeadline = now + config.interactionTimeoutMs,
++                )
++            }
++            is SurfaceReport.Answered -> close(
++                a.copy(respondedAt = now, answer = report.choice.take(64), shownAt = a.shownAt ?: now, deliveredAt = a.deliveredAt ?: now),
++                Outcome.RESPONDED, null, now, out,
++            )
++            // Swiping a notification away or leaving the page is an act: the person saw it.
++            SurfaceReport.Dismissed -> close(
++                a.copy(shownAt = a.shownAt ?: now, deliveredAt = a.deliveredAt ?: now), Outcome.DISMISSED, null, now, out,
++            )
++            is SurfaceReport.Failed -> surfaceFailed(a, report.code, now, out)
++        }
++        out.dirty = true
++        reconcile(now, out)
++        out.step()
++    }
++
++    /** The producer withdrew the event (e.g. the person left the app it was about). */
++    fun cancel(eventId: String, reason: String): Step = synchronized(lock) {
++        val now = clock()
++        val out = Out()
++        queue.firstOrNull { it.eventId == eventId }?.let { queue.remove(it); close(it, Outcome.CANCELLED, reason, now, out) }
++        active?.takeIf { it.eventId == eventId }?.let { abortActive(it, Outcome.CANCELLED, reason, now, out) }
++        reconcile(now, out)
++        out.step()
++    }
++
++    /** The earliest time [tick] has something to do; null when nothing is waiting on the clock. */
++    fun nextDeadline(): Long? = synchronized(lock) {
++        val a = active
++        val times = mutableListOf<Long>()
++        queue.mapTo(times) { it.expiresAt }
++        when (a?.stage) {
++            Stage.AWAITING_AGENT -> times += a.agentDeadline
++            Stage.READY -> { times += a.expiresAt; a.generatedAt?.let { times += it + config.replyFreshMs } }
++            Stage.PRESENTING -> times += a.presentDeadline
++            Stage.DELIVERED, Stage.SHOWN -> times += a.interactionDeadline
++            else -> Unit
++        }
++        times.filter { it > 0 }.minOrNull()
++    }
++
++    fun active(): ProactiveEvent? = synchronized(lock) { active }
++    fun queued(): List<ProactiveEvent> = synchronized(lock) { queue.toList() }
++    /** Closed events, newest first. */
++    fun receipts(limit: Int = 50): List<ProactiveEvent> = synchronized(lock) { receipts.reversed().take(limit) }
++    fun find(eventId: String): ProactiveEvent? = synchronized(lock) {
++        active?.takeIf { it.eventId == eventId } ?: queue.firstOrNull { it.eventId == eventId } ?: receipts.lastOrNull { it.eventId == eventId }
++    }
++
++    // ---------------------------------------------------------------- internals
++
++    private class Out {
++        val commands = mutableListOf<Command>()
++        val closed = mutableListOf<ProactiveEvent>()
++        var dirty = false
++        fun step() = Step(commands.toList(), closed.toList())
++    }
++
++    private fun submitLocked(req: EventRequest, now: Long, out: Out): Submit {
++        if (req.eventId.isBlank() || req.eventId in seen || findAnywhere(req.eventId) != null) return Submit.Rejected("duplicate")
++        remember(req.eventId)
++        out.dirty = true
++        val e = ProactiveEvent(req)
++        if (!gate.featureEnabled) { close(e, Outcome.CANCELLED, "disabled", now, out); return Submit.Rejected("disabled") }
++        if (now >= e.expiresAt) { close(e, Outcome.EXPIRED, "ttl", now, out); return Submit.Rejected("expired") }
++        // Same intent already on its way: fold this one in, never show twice.
++        active?.takeIf { it.request.dedupeKey == req.dedupeKey }?.let { a ->
++            active = a.copy(mergedCount = a.mergedCount + 1)
++            close(e, Outcome.MERGED, "into_active", now, out, mergedInto = a.eventId)
++            return Submit.Merged(a.eventId)
++        }
++        queue.indexOfFirst { it.request.dedupeKey == req.dedupeKey }.takeIf { it >= 0 }?.let { i ->
++            val q = queue[i]
++            // The survivor keeps its id and place; it takes the newer facts and the stronger claim.
++            queue[i] = q.copy(
++                request = req.copy(eventId = q.eventId, createdAt = q.request.createdAt),
++                priority = maxOf(q.priority, req.priority, compareBy { it.rank }),
++                expiresAt = maxOf(q.expiresAt, e.expiresAt), mergedCount = q.mergedCount + 1,
++            )
++            close(e, Outcome.MERGED, "into_queued", now, out, mergedInto = q.eventId)
++            return Submit.Merged(q.eventId)
++        }
++        if (queue.size >= config.maxQueue) {
++            val weakest = queue.minWith(compareBy<ProactiveEvent> { it.priority.rank }.thenBy { it.request.createdAt })
++            if (e.priority.rank <= weakest.priority.rank) { close(e, Outcome.DROPPED, "queue_full", now, out); return Submit.Rejected("queue_full") }
++            queue.remove(weakest)
++            close(weakest, Outcome.DROPPED, "displaced", now, out)
++        }
++        queue += e
++        return Submit.Queued(e.eventId)
++    }
++
++    /** Brings everything in line with the clock and the gate. Called at the end of every call. */
++    private fun reconcile(now: Long, out: Out) {
++        rebaseIfClockWentBack(now, out)
++        if (!gate.featureEnabled) {
++            queue.toList().forEach { queue.remove(it); close(it, Outcome.CANCELLED, "disabled", now, out) }
++            active?.let { abortActive(it, Outcome.CANCELLED, "disabled", now, out) }
++        }
++        queue.toList().filter { now >= it.expiresAt }.forEach { queue.remove(it); close(it, Outcome.EXPIRED, "ttl", now, out) }
++
++        var guard = 0
++        while (guard++ < 8) {
++            val a = active
++            if (a == null) {
++                if (!activateNext(now, out)) break
++                continue
++            }
++            if (!advance(a, now, out)) break
++        }
++        if (out.dirty || out.closed.isNotEmpty() || out.commands.isNotEmpty()) persist()
++    }
++
++    /** One step for the active event. True when something changed and another pass may help. */
++    private fun advance(a: ProactiveEvent, now: Long, out: Out): Boolean {
++        when (a.stage) {
++            Stage.AWAITING_AGENT -> if (now >= a.agentDeadline) {
++                out.commands += Command.CancelAgent(a.eventId, a.agentRequestId!!, "timeout")
++                agentFailed(a, "timeout", now, out)
++                return true
++            }
++            Stage.READY -> {
++                val c = a.content
++                val stale = c?.source == ContentSource.AGENT && a.generatedAt != null && now - a.generatedAt >= config.replyFreshMs
++                when {
++                    now >= a.expiresAt -> { close(a, Outcome.EXPIRED, "ttl", now, out); return true }
++                    stale -> { close(a, Outcome.EXPIRED, "stale_reply", now, out); return true }
++                    c == null -> { close(a, Outcome.FAILED, "no_content", now, out); return true }
++                }
++                val surface = gate.surface()?.let { if (it == Surface.ACTIVITY && a.avoidActivity) notificationOrNull() else it }
++                    ?: return false
++                val token = ids()
++                active = a.copy(
++                    stage = Stage.PRESENTING, surface = surface, token = token, presentDeadline = now + config.presentAckMs,
++                )
++                out.commands += Command.Present(a.eventId, token, surface, c, minOf(a.expiresAt, now + interactionFor(surface)))
++                out.dirty = true
++                return false
++            }
++            Stage.PRESENTING, Stage.DELIVERED, Stage.SHOWN -> {
++                if (gate.dshNeedsScreen || !gate.featureEnabled) { yieldActive(a, now, out); return true }
++                if (a.stage == Stage.PRESENTING && now >= a.presentDeadline) {
++                    out.commands += Command.Withdraw(a.eventId, a.token!!, a.surface!!, "not_acknowledged")
++                    surfaceFailed(a, "not_acknowledged", now, out, withdrawn = true)
++                    return true
++                }
++                if (a.stage != Stage.PRESENTING && now >= a.interactionDeadline) {
++                    out.commands += Command.Withdraw(a.eventId, a.token!!, a.surface!!, "timeout")
++                    close(a, Outcome.TIMEOUT, null, now, out)
++                    return true
++                }
++            }
++            Stage.QUEUED, Stage.CLOSED -> { active = null; return true }
++        }
++        return false
++    }
++
++    private fun interactionFor(s: Surface) = if (s == Surface.NOTIFICATION) config.notificationTimeoutMs else config.interactionTimeoutMs
++
++    private fun notificationOrNull(): Surface? = if (gate.notificationsAllowed) Surface.NOTIFICATION else null
++
++    /** Takes the best queued event, but only when something could be shown now (no tokens spent otherwise). */
++    private fun activateNext(now: Long, out: Out): Boolean {
++        if (queue.isEmpty() || gate.surface() == null) return false
++        val next = queue.sortedWith(compareByDescending<ProactiveEvent> { it.priority.rank }.thenBy { it.request.createdAt }).first()
++        queue.remove(next)
++        out.dirty = true
++        active = if (next.request.needsAgent) {
++            val requestId = ids()
++            val deadline = minOf(next.expiresAt, now + config.agentTimeoutMs)
++            out.commands += Command.RequestAgent(next.eventId, requestId, deadline, next.request)
++            next.copy(
++                stage = Stage.AWAITING_AGENT, agentRequestId = requestId, agentAttempts = next.agentAttempts + 1,
++                agentDeadline = deadline, agentRequestedAt = now,
++            )
++        } else {
++            next.copy(stage = Stage.READY, content = next.request.fallbackText?.let { Content(it, ContentSource.LOCAL) })
++        }
++        return true
++    }
++
++    private fun agentFailed(a: ProactiveEvent, code: String, now: Long, out: Out) {
++        val fb = a.request.fallbackText
++        if (fb != null) {
++            active = a.copy(stage = Stage.READY, agentError = code, content = Content(fb, ContentSource.FALLBACK))
++            out.dirty = true
++        } else {
++            close(a.copy(agentError = code), Outcome.FAILED, "agent_$code", now, out)
++        }
++    }
++
++    /** A surface failed once: an activity falls back to a notification; otherwise the event is unavailable. */
++    private fun surfaceFailed(a: ProactiveEvent, code: String, now: Long, out: Out, withdrawn: Boolean = false) {
++        retire(a)
++        if (!withdrawn && a.token != null && a.surface != null) out.commands += Command.Withdraw(a.eventId, a.token, a.surface, code)
++        if (a.surface == Surface.ACTIVITY && !a.avoidActivity && gate.notificationsAllowed) {
++            active = a.copy(stage = Stage.READY, token = null, surface = null, avoidActivity = true, reason = code)
++            out.dirty = true
++        } else {
++            close(a, Outcome.UNAVAILABLE, code, now, out)
++        }
++    }
++
++    /** DSH needs the screen: take the surface down; come back later unless it already yielded enough. */
++    private fun yieldActive(a: ProactiveEvent, now: Long, out: Out) {
++        retire(a)
++        out.commands += Command.Withdraw(a.eventId, a.token!!, a.surface!!, gateReason())
++        val y = a.yields + 1
++        if (y > config.maxYields || now >= a.expiresAt) {
++            close(a.copy(yields = y), Outcome.YIELDED, gateReason(), now, out)
++        } else {
++            active = a.copy(stage = Stage.READY, token = null, surface = null, yields = y, reason = "yielded:${gateReason()}")
++            out.dirty = true
++        }
++    }
++
++    private fun gateReason() = gate.holdReason() ?: "dsh"
++
++    private fun abortActive(a: ProactiveEvent, outcome: Outcome, reason: String, now: Long, out: Out) {
++        if (a.stage == Stage.AWAITING_AGENT) out.commands += Command.CancelAgent(a.eventId, a.agentRequestId!!, reason)
++        if (a.stage in SURFACE_STAGES && a.token != null) out.commands += Command.Withdraw(a.eventId, a.token, a.surface!!, reason)
++        close(a, outcome, reason, now, out)
++    }
++
++    private fun close(e: ProactiveEvent, outcome: Outcome, reason: String?, now: Long, out: Out, mergedInto: String? = null) {
++        val c = e.copy(stage = Stage.CLOSED, outcome = outcome, reason = reason ?: e.reason?.takeIf { outcome != Outcome.RESPONDED },
++            closedAt = now, mergedInto = mergedInto ?: e.mergedInto)
++        if (active?.eventId == e.eventId) active = null
++        retire(e)
++        receipts.addLast(c)
++        while (receipts.size > config.receiptCap) receipts.removeFirst()
++        remember(e.eventId)
++        out.closed += c
++        out.dirty = true
++    }
++
++    /** The wall clock went back: keep every remaining duration instead of stretching it. */
++    private fun rebaseIfClockWentBack(now: Long, out: Out) {
++        if (lastNow != 0L && now < lastNow - CLOCK_SLACK_MS) {
++            val d = now - lastNow
++            fun ProactiveEvent.shift() = copy(
++                expiresAt = expiresAt + d, agentDeadline = if (agentDeadline > 0) agentDeadline + d else 0,
++                presentDeadline = if (presentDeadline > 0) presentDeadline + d else 0,
++                interactionDeadline = if (interactionDeadline > 0) interactionDeadline + d else 0,
++                generatedAt = generatedAt?.plus(d),
++            )
++            for (i in queue.indices) queue[i] = queue[i].shift()
++            active = active?.shift()
++            out.dirty = true
++        }
++        if (now > lastNow || now < lastNow - CLOCK_SLACK_MS) lastNow = now
++    }
++
++    private fun remember(id: String) {
++        seen.remove(id)
++        seen.add(id)
++        while (seen.size > config.seenIdCap) seen.remove(seen.first())
++    }
++
++    private fun findAnywhere(id: String) = active?.takeIf { it.eventId == id } ?: queue.firstOrNull { it.eventId == id }
++    private fun findByRequestId(rid: String) = (listOfNotNull(active) + receipts.reversed()).firstOrNull { it.agentRequestId == rid }
++    private fun retire(e: ProactiveEvent) {
++        val t = e.token ?: return
++        retired[t] = e.eventId to (e.surface ?: Surface.ACTIVITY)
++        while (retired.size > 64) retired.remove(retired.keys.first())
++    }
++
++    private fun replaceAnywhere(e: ProactiveEvent) {
++        if (active?.eventId == e.eventId) { active = e; return }
++        val i = receipts.indexOfLast { it.eventId == e.eventId }
++        if (i >= 0) receipts[i] = e
++    }
++
++    private fun persist() {
++        storageError = try {
++            store.write(linkedMapOf(
++                "version" to 1, "lastNow" to lastNow, "active" to active?.let(CoreCodec::event),
++                "queue" to queue.map(CoreCodec::event), "receipts" to receipts.map(CoreCodec::event), "seen" to seen.toList(),
++            ))
++            null
++        } catch (t: Throwable) {
++            "${t.javaClass.simpleName}: ${t.message}".take(300)
++        }
++    }
++
++    companion object {
++        val SURFACE_STAGES = setOf(Stage.PRESENTING, Stage.DELIVERED, Stage.SHOWN)
++        /** Small wall-clock corrections (NTP) are ignored. */
++        const val CLOCK_SLACK_MS = 5_000L
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/CoreCodec.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/CoreCodec.kt
+new file mode 100644
+index 0000000..ac25b95
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/CoreCodec.kt
+@@ -0,0 +1,60 @@
++package io.github.ccch1mneyyy.dsh_app.loop.core
++
++/** JSON maps for the kernel's records. Unknown or broken records read back as null and are skipped. */
++internal object CoreCodec {
++    fun request(r: EventRequest): Map<String, Any?> = linkedMapOf(
++        "eventId" to r.eventId, "source" to r.source, "kind" to r.kind, "dedupeKey" to r.dedupeKey,
++        "priority" to r.priority.name, "createdAt" to r.createdAt, "ttlMs" to r.ttlMs,
++        "needsAgent" to r.needsAgent, "fallbackText" to r.fallbackText, "payload" to r.payload,
++    )
++
++    fun request(m: Map<*, *>): EventRequest? = runCatching {
++        EventRequest(
++            eventId = M.str(m, "eventId")!!, source = M.str(m, "source")!!, kind = M.str(m, "kind")!!,
++            dedupeKey = M.str(m, "dedupeKey")!!, priority = M.enum<Priority>(m, "priority") ?: Priority.NORMAL,
++            createdAt = M.long(m, "createdAt"), ttlMs = M.long(m, "ttlMs"), needsAgent = M.bool(m, "needsAgent"),
++            fallbackText = M.str(m, "fallbackText"),
++            payload = (M.map(m, "payload") ?: emptyMap<String, String>()).entries
++                .mapNotNull { (k, v) -> if (k is String && v is String) k to v else null }.toMap(),
++        )
++    }.getOrNull()
++
++    fun event(e: ProactiveEvent): Map<String, Any?> = linkedMapOf(
++        "request" to request(e.request), "stage" to e.stage.name, "outcome" to e.outcome?.name, "reason" to e.reason,
++        "expiresAt" to e.expiresAt, "priority" to e.priority.name, "mergedCount" to e.mergedCount, "mergedInto" to e.mergedInto,
++        "yields" to e.yields, "agentRequestId" to e.agentRequestId, "agentAttempts" to e.agentAttempts,
++        "agentDeadline" to e.agentDeadline, "agentRequestedAt" to e.agentRequestedAt, "agentAcceptedAt" to e.agentAcceptedAt, "agentClaimedAt" to e.agentClaimedAt,
++        "generatedAt" to e.generatedAt, "agentError" to e.agentError, "lateResults" to e.lateResults,
++        "content" to e.content?.let { linkedMapOf("text" to it.text, "source" to it.source.name, "agentTurnId" to it.agentTurnId) },
++        "surface" to e.surface?.name, "token" to e.token, "presentDeadline" to e.presentDeadline,
++        "presentedAt" to e.presentedAt, "deliveredAt" to e.deliveredAt, "shownAt" to e.shownAt,
++        "interactionDeadline" to e.interactionDeadline, "respondedAt" to e.respondedAt, "answer" to e.answer,
++        "closedAt" to e.closedAt, "avoidActivity" to e.avoidActivity,
++    )
++
++    fun event(m: Map<*, *>): ProactiveEvent? = runCatching {
++        val req = request(M.map(m, "request")!!)!!
++        val c = M.map(m, "content")
++        ProactiveEvent(
++            request = req, stage = M.enum<Stage>(m, "stage")!!, outcome = M.enum<Outcome>(m, "outcome"),
++            reason = M.str(m, "reason"), expiresAt = M.long(m, "expiresAt"),
++            priority = M.enum<Priority>(m, "priority") ?: req.priority, mergedCount = M.int(m, "mergedCount"),
++            mergedInto = M.str(m, "mergedInto"), yields = M.int(m, "yields"), agentRequestId = M.str(m, "agentRequestId"),
++            agentAttempts = M.int(m, "agentAttempts"), agentDeadline = M.long(m, "agentDeadline"),
++            agentRequestedAt = M.longOrNull(m, "agentRequestedAt"), agentAcceptedAt = M.longOrNull(m, "agentAcceptedAt"),
++            agentClaimedAt = M.longOrNull(m, "agentClaimedAt"),
++            generatedAt = M.longOrNull(m, "generatedAt"), agentError = M.str(m, "agentError"), lateResults = M.int(m, "lateResults"),
++            content = c?.let { Content(M.str(it, "text")!!, M.enum<ContentSource>(it, "source")!!, M.str(it, "agentTurnId")) },
++            surface = M.enum<Surface>(m, "surface"), token = M.str(m, "token"), presentDeadline = M.long(m, "presentDeadline"),
++            presentedAt = M.longOrNull(m, "presentedAt"), deliveredAt = M.longOrNull(m, "deliveredAt"),
++            shownAt = M.longOrNull(m, "shownAt"), interactionDeadline = M.long(m, "interactionDeadline"),
++            respondedAt = M.longOrNull(m, "respondedAt"), answer = M.str(m, "answer"), closedAt = M.longOrNull(m, "closedAt"),
++            avoidActivity = M.bool(m, "avoidActivity"),
++        )
++    }.getOrNull()
++}
++
++/** Receipts as plain maps for the settings page and diagnostics. */
++object CoreCodecPublic {
++    fun event(e: ProactiveEvent): Map<String, Any?> = CoreCodec.event(e) + mapOf("engagement" to e.engagement.name)
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/CoreModel.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/CoreModel.kt
+new file mode 100644
+index 0000000..fcd5482
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/CoreModel.kt
+@@ -0,0 +1,215 @@
++package io.github.ccch1mneyyy.dsh_app.loop.core
++
++// The proactive interaction kernel's data model. Plain Kotlin: no Android types, so the whole
++// kernel (arbitration, scheduling, agent protocol) runs in JVM tests.
++//
++// One event moves through one pipeline:
++//
++//   QUEUED → AWAITING_AGENT → READY → PRESENTING → SHOWN → CLOSED
++//                (optional)              │  (notification: DELIVERED, never "seen")
++//                                        └→ withdrawn when DSH needs the screen → READY again
++//
++// Facts (timestamps) are recorded separately from the state, because "the agent accepted",
++// "the model produced text", "a surface was posted", "the person saw it" and "the person
++// answered" are different things and none of them implies the next.
++
++enum class Priority(val rank: Int) { LOW(0), NORMAL(1), HIGH(2) }
++
++enum class Stage { QUEUED, AWAITING_AGENT, READY, PRESENTING, DELIVERED, SHOWN, CLOSED }
++
++/** Where the content shown to the person came from. */
++enum class ContentSource { LOCAL, AGENT, FALLBACK }
++
++enum class Surface { ACTIVITY, NOTIFICATION }
++
++/** How an event ended. Set once. */
++enum class Outcome {
++    /** The person tapped an answer on a surface. */
++    RESPONDED,
++    /** The person closed the surface on purpose (back, swipe away, leave the page). */
++    DISMISSED,
++    /** No answer before the interaction deadline. See [ProactiveEvent.engagement]. */
++    TIMEOUT,
++    /** Turned off, cancelled by the caller, or the configuration changed. */
++    CANCELLED,
++    /** Gave way to DSH more often than allowed. */
++    YIELDED,
++    /** Its time-to-live ran out before it could be shown. */
++    EXPIRED,
++    /** Folded into an equivalent event (see [ProactiveEvent.mergedInto]). */
++    MERGED,
++    /** The queue was full and this was the least valuable event. */
++    DROPPED,
++    /** No surface could be shown (start refused, no permission, never acknowledged). */
++    UNAVAILABLE,
++    /** The agent failed and the event had no local fallback. */
++    FAILED,
++    /** The process died while the event was on screen; closed on recovery. */
++    ABANDONED,
++}
++
++/**
++ * What the person's side of an event amounted to — the only thing the scheduler learns from.
++ * A posted notification that timed out is [UNCONFIRMED]: posting is not reading.
++ */
++enum class Engagement { RESPONDED, DISMISSED, IGNORED_SEEN, UNCONFIRMED, NOT_DELIVERED }
++
++/** What a producer (window observer, scheduler, …) asks for. */
++data class EventRequest(
++    val eventId: String,
++    /** "A11Y_WINDOW", "SCHEDULER", … */
++    val source: String,
++    /** Free-form kind for the agent ("app_enter", "random_chat"). */
++    val kind: String,
++    /** Equal keys are the same intent: a second one merges instead of queueing. */
++    val dedupeKey: String,
++    val priority: Priority = Priority.NORMAL,
++    val createdAt: Long,
++    val ttlMs: Long = 10 * 60_000L,
++    /** Ask the DSH agent for the text; otherwise [fallbackText] is shown as is. */
++    val needsAgent: Boolean = false,
++    /** Shown when the agent is not asked, fails or times out. Null: no fallback (the event fails). */
++    val fallbackText: String? = null,
++    /** Small facts for the agent (package name, local time). Never screen contents. */
++    val payload: Map<String, String> = emptyMap(),
++)
++
++data class Content(val text: String, val source: ContentSource, val agentTurnId: String? = null)
++
++/**
++ * One event and everything known about it. Immutable; the coordinator replaces it on every
++ * change and persists the result before returning.
++ */
++data class ProactiveEvent(
++    val request: EventRequest,
++    val stage: Stage = Stage.QUEUED,
++    val outcome: Outcome? = null,
++    val reason: String? = null,
++    val expiresAt: Long = request.createdAt + request.ttlMs,
++    val priority: Priority = request.priority,
++    val mergedCount: Int = 0,
++    val mergedInto: String? = null,
++    val yields: Int = 0,
++    // Agent exchange
++    val agentRequestId: String? = null,
++    val agentAttempts: Int = 0,
++    val agentDeadline: Long = 0,
++    val agentRequestedAt: Long? = null,
++    val agentAcceptedAt: Long? = null,
++    /** The agent loop took the message: a turn is running on it. */
++    val agentClaimedAt: Long? = null,
++    val generatedAt: Long? = null,
++    val agentError: String? = null,
++    val lateResults: Int = 0,
++    val content: Content? = null,
++    // Presentation
++    val surface: Surface? = null,
++    val token: String? = null,
++    val presentDeadline: Long = 0,
++    val presentedAt: Long? = null,
++    val deliveredAt: Long? = null,
++    val shownAt: Long? = null,
++    val interactionDeadline: Long = 0,
++    val respondedAt: Long? = null,
++    val answer: String? = null,
++    val closedAt: Long? = null,
++    /** The page could not be shown once: the next attempt uses a notification. */
++    val avoidActivity: Boolean = false,
++) {
++    val eventId: String get() = request.eventId
++    val open: Boolean get() = stage != Stage.CLOSED
++
++    val engagement: Engagement get() = when {
++        outcome == Outcome.RESPONDED -> Engagement.RESPONDED
++        outcome == Outcome.DISMISSED -> Engagement.DISMISSED
++        shownAt != null -> Engagement.IGNORED_SEEN
++        deliveredAt != null -> Engagement.UNCONFIRMED
++        else -> Engagement.NOT_DELIVERED
++    }
++}
++
++/**
++ * The facts the coordinator arbitrates on, read by the Android adapter from DSH's own state.
++ * The kernel only reads them: it never takes or fakes a PhoneTasks owner or a PromptArbiter slot.
++ */
++data class Gate(
++    val featureEnabled: Boolean = true,
++    /** PhoneTasks: a task is active, or a tool call is in flight. */
++    val dshTaskActive: Boolean = false,
++    /** PromptArbiter has a question open (approval, review, native confirm, handoff). */
++    val dshPromptOpen: Boolean = false,
++    /** A system permission / install / security page is in front (ProtectedPages). */
++    val protectedForeground: Boolean = false,
++    val screenOn: Boolean = true,
++    val unlocked: Boolean = true,
++    /** DSH's accessibility service is bound: the only way to start a page from the background. */
++    val a11yConnected: Boolean = true,
++    val notificationsAllowed: Boolean = true,
++) {
++    /** DSH needs the screen or the person is answering DSH: proactive surfaces must give way. */
++    val dshNeedsScreen: Boolean get() = dshTaskActive || dshPromptOpen || protectedForeground
++
++    /** Nothing new may appear now. */
++    fun holdReason(): String? = when {
++        !featureEnabled -> "disabled"
++        dshTaskActive -> "dsh_task"
++        dshPromptOpen -> "dsh_prompt"
++        protectedForeground -> "protected_page"
++        !screenOn -> "screen_off"
++        !unlocked -> "locked"
++        else -> null
++    }
++
++    /** Where a page could appear now; null when none can. */
++    fun surface(): Surface? = when {
++        holdReason() != null -> null
++        a11yConnected -> Surface.ACTIVITY
++        notificationsAllowed -> Surface.NOTIFICATION
++        else -> null
++    }
++}
++
++/** What the adapter must do. Every command names its event; surface commands carry the token. */
++sealed interface Command {
++    data class RequestAgent(val eventId: String, val requestId: String, val deadline: Long, val request: EventRequest) : Command
++    /** After a restart: the request may still be running in the engine; ask for its result again. */
++    data class ResumeAgent(val eventId: String, val requestId: String, val deadline: Long) : Command
++    data class CancelAgent(val eventId: String, val requestId: String, val reason: String) : Command
++    data class Present(val eventId: String, val token: String, val surface: Surface, val content: Content, val deadline: Long) : Command
++    data class Withdraw(val eventId: String, val token: String, val surface: Surface, val reason: String) : Command
++    /** After a restart: remove any page or notification a dead process left behind. */
++    data object ClearLeftovers : Command
++}
++
++/** The result of one call into the coordinator: commands to run, events that just closed. */
++data class Step(val commands: List<Command> = emptyList(), val closed: List<ProactiveEvent> = emptyList()) {
++    operator fun plus(o: Step) = Step(commands + o.commands, closed + o.closed)
++}
++
++sealed interface Submit {
++    data class Queued(val eventId: String) : Submit
++    data class Merged(val into: String) : Submit
++    data class Rejected(val reason: String) : Submit
++}
++
++/** What the agent side said about one request. */
++sealed interface AgentReply {
++    /** The message is in the agent's inbox. Not yet a turn. */
++    data object Accepted : AgentReply
++    /** The loop claimed it: a turn is running. Still no text. */
++    data class Claimed(val turn: Long?) : AgentReply
++    data class Generated(val text: String, val turnId: String?) : AgentReply
++    data class Failed(val code: String) : AgentReply
++}
++
++/** What a surface reports, always with the token it was given. */
++sealed interface SurfaceReport {
++    /** The surface was handed to the system (activity started / notification posted). */
++    data object Posted : SurfaceReport
++    /** The surface is confirmed on screen (activity resumed). Notifications never send this. */
++    data object Shown : SurfaceReport
++    data class Answered(val choice: String) : SurfaceReport
++    data object Dismissed : SurfaceReport
++    /** The system refused it (start blocked, notifications off). */
++    data class Failed(val code: String) : SurfaceReport
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/ProactiveScheduler.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/ProactiveScheduler.kt
+new file mode 100644
+index 0000000..59ce6b8
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/ProactiveScheduler.kt
+@@ -0,0 +1,372 @@
++package io.github.ccch1mneyyy.dsh_app.loop.core
++
++import kotlin.math.pow
++import kotlin.random.Random
++
++data class SchedulerConfig(
++    val enabled: Boolean = false,
++    /** A random gap in [minIntervalMs, maxIntervalMs] between attempts. */
++    val minIntervalMs: Long = 45 * 60_000L,
++    val maxIntervalMs: Long = 3 * 3_600_000L,
++    /** Quiet hours as minutes of the local day; equal values switch them off. Crossing midnight is fine. */
++    val quietStartMinute: Int = 23 * 60,
++    val quietEndMinute: Int = 8 * 60,
++    /** Deliveries per local day (posted surfaces, seen or not). 0 = no limit. */
++    val dailyMax: Int = 6,
++    /** Right after the person used DSH or answered, wait at least this long. */
++    val userActiveDeferMs: Long = 20 * 60_000L,
++    /** Each confirmed-but-ignored message multiplies the next gap by this… */
++    val ignoredBackoff: Double = 2.0,
++    /** …up to this factor. */
++    val maxBackoffFactor: Double = 8.0,
++    /** After this many confirmed-and-ignored in a row, stop until the person shows up. 0 = never. */
++    val pauseAfterIgnored: Int = 3,
++    val priority: Priority = Priority.NORMAL,
++    /** How long a scheduled attempt may wait in the coordinator. */
++    val eventTtlMs: Long = 15 * 60_000L,
++) {
++    fun normalized(): SchedulerConfig {
++        val min = minIntervalMs.coerceIn(60_000L, 7 * 86_400_000L)
++        return copy(
++            minIntervalMs = min, maxIntervalMs = maxIntervalMs.coerceIn(min, 7 * 86_400_000L),
++            quietStartMinute = quietStartMinute.coerceIn(0, 1439), quietEndMinute = quietEndMinute.coerceIn(0, 1439),
++            dailyMax = dailyMax.coerceIn(0, 100), ignoredBackoff = ignoredBackoff.coerceIn(1.0, 10.0),
++            maxBackoffFactor = maxBackoffFactor.coerceIn(1.0, 100.0), pauseAfterIgnored = pauseAfterIgnored.coerceIn(0, 50),
++            userActiveDeferMs = userActiveDeferMs.coerceIn(0, 86_400_000L), eventTtlMs = eventTtlMs.coerceIn(60_000L, 86_400_000L),
++        )
++    }
++}
++
++/** Both clocks: wall for the person's day, elapsed (since boot) for intervals the wall cannot bend. */
++data class Clocks(val wall: Long, val elapsed: Long, val boot: Int = 0)
++
++/** What the system lets the adapter do in the background. */
++data class BackgroundCaps(
++    val alarmsAvailable: Boolean = true,
++    val exactAlarms: Boolean = true,
++    /** "Restrict background activity" / OEM battery killers: alarms may never arrive. */
++    val backgroundRestricted: Boolean = false,
++)
++
++enum class WakeMode {
++    /** One exact alarm at the next decision time. */
++    EXACT,
++    /** One inexact alarm; the attempt may come late, never early. */
++    INEXACT,
++    /** No alarms: checks happen only when DSH is opened or its accessibility service sees a window change. */
++    OPPORTUNISTIC,
++    ;
++
++    companion object {
++        fun of(caps: BackgroundCaps): WakeMode = when {
++            caps.backgroundRestricted || !caps.alarmsAvailable -> OPPORTUNISTIC
++            caps.exactAlarms -> EXACT
++            else -> INEXACT
++        }
++    }
++}
++
++data class SchedulerState(
++    val nextDueWall: Long = 0,
++    val nextDueElapsed: Long = 0,
++    val planBoot: Int = 0,
++    val planWall: Long = 0,
++    val planElapsed: Long = 0,
++    /** Local day of [countToday]; only ever moves forward. */
++    val dayKey: Long = Long.MIN_VALUE,
++    val countToday: Int = 0,
++    val ignoredStreak: Int = 0,
++    val pausedForIgnored: Boolean = false,
++    val lastUserActivityWall: Long = 0,
++    val lastUserActivityElapsed: Long = 0,
++    val lastUserActivityBoot: Int = 0,
++    /** The attempt the coordinator is working on; only its receipt is accepted. */
++    val pendingEventId: String? = null,
++    val pendingSinceWall: Long = 0,
++    val notDeliveredStreak: Int = 0,
++    val lastReason: String? = null,
++)
++
++/**
++ * T6: when to *try* a random proactive interaction. Randomness lives only in [plan]; whether an
++ * attempt actually starts is [evaluate], which is deterministic. An attempt becomes an
++ * [EventRequest] for the [Coordinator], which still applies every gate; its receipt comes back
++ * through [onOutcome] and steers the next gap.
++ *
++ * No loop: the adapter sets one alarm at the time [evaluate] returns (or none in
++ * [WakeMode.OPPORTUNISTIC]) and calls in again when it fires.
++ */
++class ProactiveScheduler(
++    private val store: SnapshotStore,
++    /** Minute of the local day (0–1439) for a wall time: the time zone stays with the caller. */
++    private val minuteOfDay: (Long) -> Int,
++    /** Local calendar day number for a wall time. */
++    private val dayOf: (Long) -> Long,
++    private val rng: Random = Random.Default,
++    private val ids: () -> String = { java.util.UUID.randomUUID().toString() },
++) {
++    sealed interface Decision {
++        data class Fire(val request: EventRequest) : Decision
++        data class Wait(val untilWall: Long, val reason: String) : Decision
++    }
++
++    private val lock = Any()
++    var config = SchedulerConfig()
++        private set
++    var state = SchedulerState()
++        private set
++    @Volatile var storageError: String? = null
++        private set
++    @Volatile var recoveryIssue: String? = null
++        private set
++
++    fun recover(now: Clocks): SchedulerState = synchronized(lock) {
++        when (val r = store.read()) {
++            SnapshotStore.Read.Empty -> Unit
++            is SnapshotStore.Read.Unreadable -> recoveryIssue = "state_unreadable: ${r.error}"
++            is SnapshotStore.Read.Loaded -> {
++                M.map(r.map, "config")?.let { config = configFrom(it) }
++                M.map(r.map, "state")?.let { state = stateFrom(it) }
++            }
++        }
++        val s = state
++        when {
++            !config.enabled -> Unit
++            s.nextDueWall == 0L -> plan(now, "first_plan")
++            now.boot != s.planBoot || now.elapsed < s.planElapsed -> {
++                // Rebooted: elapsed is gone, the wall is all we have. Sanity-check it.
++                val far = s.nextDueWall - now.wall > maxGap() + DAY
++                val missed = now.wall - s.nextDueWall > config.maxIntervalMs
++                if (far) plan(now, "clock_jump") else if (missed) plan(now, "missed_while_off")
++                else state = s.copy(nextDueElapsed = now.elapsed + (s.nextDueWall - now.wall).coerceAtLeast(0), planBoot = now.boot,
++                    planWall = now.wall, planElapsed = now.elapsed)
++            }
++        }
++        // A pending attempt whose receipt can no longer come back must not block forever.
++        if (s.pendingEventId != null && now.wall - s.pendingSinceWall > config.eventTtlMs + PENDING_GRACE_MS) {
++            state = state.copy(pendingEventId = null, lastReason = "pending_lost")
++        }
++        persist()
++        state
++    }
++
++    fun setConfig(next: SchedulerConfig, now: Clocks) = synchronized(lock) {
++        val n = next.normalized()
++        val replan = n.enabled && (!config.enabled || n.minIntervalMs != config.minIntervalMs || n.maxIntervalMs != config.maxIntervalMs)
++        config = n
++        if (!n.enabled) state = state.copy(pendingEventId = null) else if (replan) plan(now, "config")
++        persist()
++    }
++
++    /** Deterministic: the same state and clocks give the same answer. */
++    fun evaluate(now: Clocks): Decision = synchronized(lock) {
++        val s = state
++        val c = config
++        rollDay(now)
++        val d = when {
++            !c.enabled -> Decision.Wait(0, "disabled")
++            s.pausedForIgnored -> Decision.Wait(0, "paused_ignored")
++            s.pendingEventId != null -> Decision.Wait(now.wall + RECHECK_MS, "pending")
++            inQuiet(now.wall) -> Decision.Wait(quietEndAfter(now.wall), "quiet")
++            c.dailyMax > 0 && state.countToday >= c.dailyMax -> Decision.Wait(nextDayStart(now.wall), "daily_max")
++            !due(now) -> Decision.Wait(dueWall(now), "not_due")
++            userRecentlyActive(now) -> Decision.Wait(userActiveUntil(now), "user_active")
++            else -> Decision.Fire(EventRequest(
++                eventId = ids(), source = "SCHEDULER", kind = "random_chat", dedupeKey = "scheduler:random",
++                priority = c.priority, createdAt = now.wall, ttlMs = c.eventTtlMs, needsAgent = true,
++                payload = mapOf("streak" to s.ignoredStreak.toString(), "countToday" to state.countToday.toString()),
++            ))
++        }
++        if (state != s) persist()
++        d
++    }
++
++    /** The coordinator took (or merged) the attempt: wait for its receipt. */
++    fun onSubmitted(eventId: String, now: Clocks) = synchronized(lock) {
++        state = state.copy(pendingEventId = eventId, pendingSinceWall = now.wall)
++        persist()
++    }
++
++    /** The coordinator refused it outright (disabled, duplicate…): plan again without counting. */
++    fun onRejected(reason: String, now: Clocks) = synchronized(lock) {
++        state = state.copy(pendingEventId = null)
++        retrySoon(now, "rejected:$reason")
++        persist()
++    }
++
++    /** A receipt from the coordinator. Only the pending attempt's receipt counts; repeats are ignored. */
++    fun onOutcome(eventId: String, engagement: Engagement, now: Clocks): Boolean = synchronized(lock) {
++        if (eventId != state.pendingEventId) return@synchronized false
++        rollDay(now)
++        val s = state.copy(pendingEventId = null)
++        val delivered = engagement != Engagement.NOT_DELIVERED
++        state = when (engagement) {
++            Engagement.RESPONDED, Engagement.DISMISSED -> s.copy(ignoredStreak = 0, pausedForIgnored = false, notDeliveredStreak = 0)
++            Engagement.IGNORED_SEEN -> {
++                val streak = s.ignoredStreak + 1
++                s.copy(ignoredStreak = streak, notDeliveredStreak = 0,
++                    pausedForIgnored = config.pauseAfterIgnored in 1..streak)
++            }
++            // Posted but never confirmed seen: no penalty, no reward.
++            Engagement.UNCONFIRMED -> s.copy(notDeliveredStreak = 0)
++            Engagement.NOT_DELIVERED -> s.copy(notDeliveredStreak = s.notDeliveredStreak + 1)
++        }.let { if (delivered) it.copy(countToday = it.countToday + 1) else it }
++        if (engagement == Engagement.NOT_DELIVERED && state.notDeliveredStreak <= MAX_QUICK_RETRIES) retrySoon(now, "not_delivered")
++        else plan(now, "after_${engagement.name.lowercase()}")
++        persist()
++        true
++    }
++
++    /** The person used DSH (chat, an answer): reset the ignore streak and keep out of their way for a while. */
++    fun onUserActivity(now: Clocks) = synchronized(lock) {
++        state = state.copy(lastUserActivityWall = now.wall, lastUserActivityElapsed = now.elapsed, lastUserActivityBoot = now.boot,
++            ignoredStreak = 0, pausedForIgnored = false)
++        if (config.enabled && dueWall(now) < now.wall + config.userActiveDeferMs) {
++            setDue(now, config.userActiveDeferMs + (rng.nextDouble() * config.minIntervalMs / 2).toLong(), "user_active")
++        }
++        persist()
++    }
++
++    /** Where to set the single alarm; null for none (disabled, paused, or no alarms allowed). */
++    fun nextWake(now: Clocks, mode: WakeMode): Long? {
++        if (mode == WakeMode.OPPORTUNISTIC) return null
++        val d = evaluate(now)
++        return when (d) {
++            is Decision.Fire -> now.wall
++            is Decision.Wait -> d.untilWall.takeIf { it > 0 }
++        }
++    }
++
++    // ---------------------------------------------------------------- planning (the only randomness)
++
++    private fun plan(now: Clocks, reason: String) {
++        val c = config
++        val base = c.minIntervalMs + (rng.nextDouble() * (c.maxIntervalMs - c.minIntervalMs)).toLong()
++        val factor = c.ignoredBackoff.pow(state.ignoredStreak).coerceAtMost(c.maxBackoffFactor)
++        var delay = (base * factor).toLong()
++        val target = now.wall + delay
++        if (inQuiet(target)) delay = quietEndAfter(target) - now.wall + (rng.nextDouble() * QUIET_JITTER_MS).toLong()
++        setDue(now, delay, reason)
++    }
++
++    private fun retrySoon(now: Clocks, reason: String) {
++        val c = config
++        setDue(now, c.minIntervalMs / 3 + (rng.nextDouble() * c.minIntervalMs / 6).toLong(), reason)
++    }
++
++    private fun setDue(now: Clocks, delayMs: Long, reason: String) {
++        state = state.copy(nextDueWall = now.wall + delayMs, nextDueElapsed = now.elapsed + delayMs, planBoot = now.boot,
++            planWall = now.wall, planElapsed = now.elapsed, lastReason = reason)
++    }
++
++    // ---------------------------------------------------------------- deterministic helpers
++
++    private fun sameBoot(now: Clocks) = now.boot == state.planBoot && now.elapsed >= state.planElapsed && state.planElapsed > 0
++
++    /** Within one boot, elapsed decides: moving the wall clock neither delays nor rushes an attempt. */
++    private fun due(now: Clocks) = if (sameBoot(now)) now.elapsed >= state.nextDueElapsed else now.wall >= state.nextDueWall
++
++    private fun dueWall(now: Clocks) = if (sameBoot(now)) now.wall + (state.nextDueElapsed - now.elapsed) else state.nextDueWall
++
++    private fun userRecentlyActive(now: Clocks): Boolean {
++        val s = state
++        if (s.lastUserActivityWall == 0L) return false
++        val since = if (now.boot == s.lastUserActivityBoot && now.elapsed >= s.lastUserActivityElapsed) now.elapsed - s.lastUserActivityElapsed
++        else now.wall - s.lastUserActivityWall
++        return since in 0 until config.userActiveDeferMs
++    }
++
++    private fun userActiveUntil(now: Clocks): Long {
++        val s = state
++        val since = if (now.boot == s.lastUserActivityBoot && now.elapsed >= s.lastUserActivityElapsed) now.elapsed - s.lastUserActivityElapsed
++        else now.wall - s.lastUserActivityWall
++        return now.wall + (config.userActiveDeferMs - since).coerceAtLeast(60_000L)
++    }
++
++    /** The local day only moves forward: setting the clock back cannot reset the daily count. */
++    private fun rollDay(now: Clocks) {
++        val today = dayOf(now.wall)
++        if (today > state.dayKey) state = state.copy(dayKey = today, countToday = 0)
++    }
++
++    private fun inQuiet(wall: Long): Boolean {
++        val s = config.quietStartMinute
++        val e = config.quietEndMinute
++        if (s == e) return false
++        val m = minuteOfDay(wall)
++        return if (s < e) m in s until e else m >= s || m < e
++    }
++
++    private fun quietEndAfter(wall: Long): Long {
++        val m = minuteOfDay(wall)
++        val mins = ((config.quietEndMinute - m) % 1440 + 1440) % 1440
++        return wall - (wall % MINUTE) + mins * MINUTE
++    }
++
++    private fun nextDayStart(wall: Long): Long {
++        val mins = 1440 - minuteOfDay(wall)
++        val midnight = wall - (wall % MINUTE) + mins * MINUTE
++        return if (inQuiet(midnight)) quietEndAfter(midnight) else midnight
++    }
++
++    private fun maxGap(): Long = (config.maxIntervalMs * config.maxBackoffFactor).toLong()
++
++    // ---------------------------------------------------------------- persistence
++
++    private fun persist() {
++        storageError = try {
++            store.write(linkedMapOf("version" to 1, "config" to configMap(config), "state" to stateMap(state))); null
++        } catch (t: Throwable) {
++            "${t.javaClass.simpleName}: ${t.message}".take(300)
++        }
++    }
++
++    companion object {
++        const val MINUTE = 60_000L
++        const val DAY = 86_400_000L
++        const val RECHECK_MS = 5 * MINUTE
++        const val QUIET_JITTER_MS = 30 * MINUTE
++        const val PENDING_GRACE_MS = 15 * MINUTE
++        const val MAX_QUICK_RETRIES = 2
++
++        fun configMap(c: SchedulerConfig): Map<String, Any?> = linkedMapOf(
++            "enabled" to c.enabled, "minIntervalMs" to c.minIntervalMs, "maxIntervalMs" to c.maxIntervalMs,
++            "quietStartMinute" to c.quietStartMinute, "quietEndMinute" to c.quietEndMinute, "dailyMax" to c.dailyMax,
++            "userActiveDeferMs" to c.userActiveDeferMs, "ignoredBackoff" to c.ignoredBackoff, "maxBackoffFactor" to c.maxBackoffFactor,
++            "pauseAfterIgnored" to c.pauseAfterIgnored, "priority" to c.priority.name, "eventTtlMs" to c.eventTtlMs,
++        )
++
++        fun configFrom(m: Map<*, *>): SchedulerConfig {
++            val d = SchedulerConfig()
++            return SchedulerConfig(
++                enabled = M.bool(m, "enabled"), minIntervalMs = M.long(m, "minIntervalMs", d.minIntervalMs),
++                maxIntervalMs = M.long(m, "maxIntervalMs", d.maxIntervalMs), quietStartMinute = M.int(m, "quietStartMinute", d.quietStartMinute),
++                quietEndMinute = M.int(m, "quietEndMinute", d.quietEndMinute), dailyMax = M.int(m, "dailyMax", d.dailyMax),
++                userActiveDeferMs = M.long(m, "userActiveDeferMs", d.userActiveDeferMs),
++                ignoredBackoff = (m["ignoredBackoff"] as? Number)?.toDouble() ?: d.ignoredBackoff,
++                maxBackoffFactor = (m["maxBackoffFactor"] as? Number)?.toDouble() ?: d.maxBackoffFactor,
++                pauseAfterIgnored = M.int(m, "pauseAfterIgnored", d.pauseAfterIgnored),
++                priority = M.enum<Priority>(m, "priority") ?: d.priority, eventTtlMs = M.long(m, "eventTtlMs", d.eventTtlMs),
++            ).normalized()
++        }
++
++        fun stateMap(s: SchedulerState): Map<String, Any?> = linkedMapOf(
++            "nextDueWall" to s.nextDueWall, "nextDueElapsed" to s.nextDueElapsed, "planBoot" to s.planBoot, "planWall" to s.planWall,
++            "planElapsed" to s.planElapsed, "dayKey" to s.dayKey, "countToday" to s.countToday, "ignoredStreak" to s.ignoredStreak,
++            "pausedForIgnored" to s.pausedForIgnored, "lastUserActivityWall" to s.lastUserActivityWall,
++            "lastUserActivityElapsed" to s.lastUserActivityElapsed, "lastUserActivityBoot" to s.lastUserActivityBoot,
++            "pendingEventId" to s.pendingEventId, "pendingSinceWall" to s.pendingSinceWall,
++            "notDeliveredStreak" to s.notDeliveredStreak, "lastReason" to s.lastReason,
++        )
++
++        fun stateFrom(m: Map<*, *>) = SchedulerState(
++            nextDueWall = M.long(m, "nextDueWall"), nextDueElapsed = M.long(m, "nextDueElapsed"), planBoot = M.int(m, "planBoot"),
++            planWall = M.long(m, "planWall"), planElapsed = M.long(m, "planElapsed"), dayKey = M.long(m, "dayKey", Long.MIN_VALUE),
++            countToday = M.int(m, "countToday"), ignoredStreak = M.int(m, "ignoredStreak"), pausedForIgnored = M.bool(m, "pausedForIgnored"),
++            lastUserActivityWall = M.long(m, "lastUserActivityWall"), lastUserActivityElapsed = M.long(m, "lastUserActivityElapsed"),
++            lastUserActivityBoot = M.int(m, "lastUserActivityBoot"), pendingEventId = M.str(m, "pendingEventId"),
++            pendingSinceWall = M.long(m, "pendingSinceWall"), notDeliveredStreak = M.int(m, "notDeliveredStreak"),
++            lastReason = M.str(m, "lastReason"),
++        )
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/SnapshotStore.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/SnapshotStore.kt
+new file mode 100644
+index 0000000..592d335
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/SnapshotStore.kt
+@@ -0,0 +1,78 @@
++package io.github.ccch1mneyyy.dsh_app.loop.core
++
++import io.github.ccch1mneyyy.dsh_app.phone.Json
++import java.io.File
++import java.io.FileOutputStream
++
++/** Where the kernel keeps its state across process death. One JSON object per store. */
++interface SnapshotStore {
++    sealed interface Read {
++        data object Empty : Read
++        data class Loaded(val map: Map<*, *>) : Read
++        /** Something was there and could not be read: never the same as [Empty]. */
++        data class Unreadable(val error: String) : Read
++    }
++
++    fun read(): Read
++    fun write(map: Map<String, Any?>)
++}
++
++/** Temp file + fsync + rename: after a power cut the file is the old state or the new one. */
++class AtomicJsonFile(private val file: File) : SnapshotStore {
++    override fun read(): SnapshotStore.Read {
++        if (!file.exists()) return SnapshotStore.Read.Empty
++        return try {
++            SnapshotStore.Read.Loaded(Json.parse(file.readText(Charsets.UTF_8)) as? Map<*, *> ?: error("not an object"))
++        } catch (t: Throwable) {
++            runCatching { file.renameTo(File(file.parentFile, file.name + ".bad")) }
++            SnapshotStore.Read.Unreadable("${t.javaClass.simpleName}: ${t.message}".take(300))
++        }
++    }
++
++    override fun write(map: Map<String, Any?>) {
++        file.parentFile?.mkdirs()
++        val tmp = File(file.parentFile, file.name + ".tmp")
++        FileOutputStream(tmp).use { out ->
++            out.write(Json.write(map).toByteArray(Charsets.UTF_8))
++            out.flush()
++            out.fd.sync()
++        }
++        if (!tmp.renameTo(file)) {
++            if (file.exists() && !file.delete()) error("cannot replace ${file.name}")
++            if (!tmp.renameTo(file)) error("cannot write ${file.name}")
++        }
++    }
++}
++
++/** Tests, and running with storage unavailable. Round-trips through JSON like the file does. */
++class MemorySnapshotStore(var text: String? = null, var failWrites: Boolean = false) : SnapshotStore {
++    var writes = 0
++        private set
++
++    override fun read(): SnapshotStore.Read {
++        val t = text ?: return SnapshotStore.Read.Empty
++        return try {
++            SnapshotStore.Read.Loaded(Json.parse(t) as Map<*, *>)
++        } catch (e: Throwable) {
++            SnapshotStore.Read.Unreadable(e.toString())
++        }
++    }
++
++    override fun write(map: Map<String, Any?>) {
++        if (failWrites) error("disk full")
++        text = Json.write(map)
++        writes++
++    }
++}
++
++/** Small typed readers for maps parsed by [Json] (integers come back as Long). */
++internal object M {
++    fun str(m: Map<*, *>, k: String): String? = m[k] as? String
++    fun long(m: Map<*, *>, k: String, d: Long = 0): Long = (m[k] as? Number)?.toLong() ?: d
++    fun longOrNull(m: Map<*, *>, k: String): Long? = (m[k] as? Number)?.toLong()
++    fun int(m: Map<*, *>, k: String, d: Int = 0): Int = (m[k] as? Number)?.toInt() ?: d
++    fun bool(m: Map<*, *>, k: String, d: Boolean = false): Boolean = m[k] as? Boolean ?: d
++    fun map(m: Map<*, *>, k: String): Map<*, *>? = m[k] as? Map<*, *>
++    fun list(m: Map<*, *>, k: String): List<*> = m[k] as? List<*> ?: emptyList<Any?>()
++    inline fun <reified E : Enum<E>> enum(m: Map<*, *>, k: String): E? = (m[k] as? String)?.let { v -> enumValues<E>().firstOrNull { it.name == v } }
++}
+diff --git a/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/AgentWireTest.kt b/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/AgentWireTest.kt
+new file mode 100644
+index 0000000..dcf2af6
+--- /dev/null
++++ b/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/AgentWireTest.kt
+@@ -0,0 +1,52 @@
++package io.github.ccch1mneyyy.dsh_app.loop.core
++
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertTrue
++import org.junit.Test
++
++/**
++ * T8 wire decoding. The bodies are the plugin's real answers as recorded by
++ * runtime/proactive/dsh-go-proactive/test/e2e-live.mjs against DSH 0.2.1-rc.4.
++ */
++class AgentWireTest {
++    private fun ok(state: String, extra: Map<String, Any?> = emptyMap()) = mapOf("v" to 1L, "state" to state) + extra
++    private fun err(code: String) = mapOf("v" to 1L, "error" to mapOf("code" to code, "message" to code))
++    private fun reply(d: AgentWire.Decoded) = (d as AgentWire.Decoded.Reply)
++
++    @Test fun eachStateMeansOnlyWhatHappened() {
++        assertEquals(AgentWire.Decoded.Reply(AgentReply.Accepted, false), AgentWire.decode(202, ok("accepted")))
++        assertEquals(AgentWire.Decoded.Reply(AgentReply.Claimed(3), false), AgentWire.decode(200, ok("claimed", mapOf("turn" to 3L))))
++        assertEquals(
++            AgentWire.Decoded.Reply(AgentReply.Generated("你好", "turn:1"), true),
++            AgentWire.decode(200, ok("generated", mapOf("text" to " 你好 ", "turn" to 1L))),
++        )
++        assertEquals(AgentReply.Failed("no_text"), reply(AgentWire.decode(200, ok("generated", mapOf("text" to "  ")))).reply)
++        assertEquals(AgentReply.Failed("deadline"), reply(AgentWire.decode(200, ok("failed", mapOf("failure" to mapOf("code" to "deadline"))))).reply)
++        assertEquals(AgentReply.Failed("cancelled"), reply(AgentWire.decode(200, ok("cancelled"))).reply)
++        assertEquals(AgentReply.Failed("protocol_state"), reply(AgentWire.decode(200, ok("weird"))).reply)
++        assertEquals(AgentReply.Failed("protocol_version"), reply(AgentWire.decode(200, mapOf("v" to 2L, "state" to "generated", "text" to "x"))).reply)
++    }
++
++    @Test fun refusalsAreTerminalAndNamed() {
++        for (code in listOf("no-session", "no-agent", "agent-busy", "desk-busy", "event-in-flight", "archived", "followup-failed")) {
++            assertEquals(AgentWire.Decoded.Reply(AgentReply.Failed(code), true), AgentWire.decode(409, err(code)))
++        }
++        assertEquals(AgentReply.Failed("auth"), reply(AgentWire.decode(401, null)).reply)
++        assertEquals(AgentReply.Failed("auth"), reply(AgentWire.decode(403, null)).reply)
++        assertEquals(AgentReply.Failed("lost"), reply(AgentWire.decode(404, err("not-found"))).reply)
++        assertEquals(AgentReply.Failed("plugin_missing"), reply(AgentWire.decode(404, "Not Found")).reply)
++        assertEquals(AgentReply.Failed("protocol_bad-request-id"), reply(AgentWire.decode(400, err("bad-request-id"))).reply)
++    }
++
++    @Test fun transientProblemsRetryTheSameIdempotentCall() {
++        for (s in listOf(0, 429, 500, 502, 503)) assertTrue("$s", AgentWire.decode(s, null) is AgentWire.Decoded.Retry)
++    }
++
++    @Test fun requestBodyCarriesFactsOnlyAndABoundedDeadline() {
++        val req = EventRequest("evt-00000001", "SCHEDULER", "random_chat", "k", createdAt = 0, needsAgent = true, payload = mapOf("countToday" to "1"))
++        val body = AgentWire.requestBody(Command.RequestAgent("evt-00000001", "req-00000001", 1_000_000, req), 990_000)
++        assertEquals(10_000L, body["deadlineMs"])
++        assertEquals(setOf("v", "requestId", "eventId", "kind", "payload", "deadlineMs"), body.keys)
++        assertEquals(5_000L, AgentWire.requestBody(Command.RequestAgent("e", "r", 10, req), 9)["deadlineMs"])
++    }
++}
+diff --git a/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/CoordinatorTest.kt b/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/CoordinatorTest.kt
+new file mode 100644
+index 0000000..5a6585a
+--- /dev/null
++++ b/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/CoordinatorTest.kt
+@@ -0,0 +1,357 @@
++package io.github.ccch1mneyyy.dsh_app.loop.core
++
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertFalse
++import org.junit.Assert.assertNotNull
++import org.junit.Assert.assertNull
++import org.junit.Assert.assertTrue
++import org.junit.Test
++
++/** T4: arbitration, queueing, stale replies/answers, recovery. Numbers refer to the round-2 scenario list. */
++class CoordinatorTest {
++    private var now = 1_700_000_000_000L
++    private var seq = 0
++    private val store = MemorySnapshotStore()
++    private fun coordinator(s: SnapshotStore = store, cfg: CoordinatorConfig = CoordinatorConfig()) =
++        Coordinator(s, cfg, { now }, { "id${++seq}" })
++
++    private fun req(id: String, key: String = id, p: Priority = Priority.NORMAL, agent: Boolean = false, fallback: String? = "hi", ttl: Long = 600_000) =
++        EventRequest(id, "TEST", "chat", key, p, now, ttl, agent, fallback)
++
++    private inline fun <reified T : Command> Step.only(): List<T> = commands.filterIsInstance<T>()
++    private fun Step.present() = only<Command.Present>().single()
++
++    private fun ready(): Coordinator = coordinator().also { it.recover(Gate()) }
++
++    /** Present → Posted → Shown for the active activity page; returns its token. */
++    private fun Coordinator.showActive(step: Step): String {
++        val p = step.present()
++        onSurface(p.token, SurfaceReport.Posted)
++        onSurface(p.token, SurfaceReport.Shown)
++        assertEquals(Stage.SHOWN, active()!!.stage)
++        return p.token
++    }
++
++    // 1. Two events at once
++    @Test fun twoEventsAtOnceQueueByPriorityAndShowOneAtATime() {
++        val c = ready()
++        val a = c.submit(req("a", p = Priority.NORMAL))
++        val b = c.submit(req("b", p = Priority.HIGH))
++        assertEquals(Submit.Queued("a"), a.first)
++        assertEquals(Submit.Queued("b"), b.first)
++        assertEquals("a is already on screen", "a", a.second.present().eventId)
++        assertTrue("b waits", b.second.only<Command.Present>().isEmpty())
++        val t = c.active()!!.token!!
++        c.onSurface(t, SurfaceReport.Posted)
++        c.onSurface(t, SurfaceReport.Shown)
++        val next = c.onSurface(t, SurfaceReport.Answered("ok"))
++        assertEquals(Outcome.RESPONDED, next.closed.single().outcome)
++        assertEquals("b", next.present().eventId)
++    }
++
++    @Test fun waitingEventsAreOrderedByPriorityThenAge() {
++        val c = coordinator().also { it.recover(Gate(dshTaskActive = true)) }
++        c.submit(req("low", p = Priority.LOW)); now += 1
++        c.submit(req("n1")); now += 1
++        c.submit(req("high", p = Priority.HIGH)); now += 1
++        c.submit(req("n2"))
++        assertEquals("high", c.setGate(Gate()).present().eventId)
++    }
++
++    @Test fun sameIntentMergesInsteadOfShowingTwice() {
++        val c = coordinator().also { it.recover(Gate(dshTaskActive = true)) }
++        c.submit(req("a", key = "app:x"))
++        val (r, s) = c.submit(req("b", key = "app:x", p = Priority.HIGH))
++        assertEquals(Submit.Merged("a"), r)
++        assertEquals(Outcome.MERGED, s.closed.single().outcome)
++        assertEquals("a", s.closed.single().mergedInto)
++        val q = c.queued().single()
++        assertEquals(Priority.HIGH, q.priority)
++        assertEquals(1, q.mergedCount)
++        c.setGate(Gate())
++        // Merging into the event already on screen does not show it again.
++        val (r2, s2) = c.submit(req("c", key = "app:x"))
++        assertEquals(Submit.Merged("a"), r2)
++        assertTrue(s2.only<Command.Present>().isEmpty())
++    }
++
++    @Test fun fullQueueDropsTheWeakest() {
++        val c = coordinator(cfg = CoordinatorConfig(maxQueue = 2)).also { it.recover(Gate(dshTaskActive = true)) }
++        c.submit(req("n1")); now += 1
++        c.submit(req("n2")); now += 1
++        assertEquals(Submit.Rejected("queue_full"), c.submit(req("n3")).first)
++        val (r, s) = c.submit(req("h", p = Priority.HIGH))
++        assertEquals(Submit.Queued("h"), r)
++        assertEquals("n1" to "displaced", s.closed.single().let { it.eventId to it.reason })
++        assertEquals(listOf("n2", "h"), c.queued().map { it.eventId })
++    }
++
++    // 2. A DSH task is running
++    @Test fun aRunningTaskHoldsEverythingAndAPageOnScreenGivesWay() {
++        val c = coordinator().also { it.recover(Gate(dshTaskActive = true)) }
++        val held = c.submit(req("a", agent = true)).second
++        assertTrue("no tokens spent while DSH works", held.commands.isEmpty())
++        val start = c.setGate(Gate())
++        val rq = start.only<Command.RequestAgent>().single()
++        val shown = c.onAgent(rq.requestId, AgentReply.Generated("hello", "t1"))
++        val token = c.showActive(shown)
++
++        val busy = c.setGate(Gate(dshTaskActive = true))
++        assertEquals(Command.Withdraw("a", token, Surface.ACTIVITY, "dsh_task"), busy.only<Command.Withdraw>().single())
++        assertEquals(Stage.READY, c.active()!!.stage)
++        assertEquals(1, c.active()!!.yields)
++        // The old page cannot answer the event any more.
++        assertTrue(c.onSurface(token, SurfaceReport.Answered("late")).closed.isEmpty())
++        // DSH done: the same reply comes back on a fresh token, without asking the model again.
++        val again = c.setGate(Gate())
++        assertTrue(again.only<Command.RequestAgent>().isEmpty())
++        assertTrue(again.present().token != token)
++        assertEquals(ContentSource.AGENT, again.present().content.source)
++    }
++
++    @Test fun yieldingTooOftenClosesTheEvent() {
++        val c = ready()
++        c.submit(req("a"))
++        repeat(2) { c.setGate(Gate(dshTaskActive = true)); c.setGate(Gate()) }
++        val last = c.setGate(Gate(dshTaskActive = true))
++        assertEquals(Outcome.YIELDED, last.closed.single().outcome)
++        assertNull(c.active())
++    }
++
++    // 3. The person is answering a DSH approval / a permission page is in front
++    @Test fun anOpenDshQuestionOrPermissionPageBlocksAndPreempts() {
++        val c = coordinator().also { it.recover(Gate(dshPromptOpen = true)) }
++        assertTrue(c.submit(req("a")).second.only<Command.Present>().isEmpty())
++        assertEquals("a", c.setGate(Gate()).present().eventId)
++        val w = c.setGate(Gate(protectedForeground = true)).only<Command.Withdraw>().single()
++        assertEquals("protected_page", w.reason)
++        assertTrue(c.tick().only<Command.Present>().isEmpty())
++        assertEquals("a", c.setGate(Gate()).present().eventId)
++    }
++
++    // 4. The agent times out
++    @Test fun agentTimeoutCancelsTheRequestAndUsesTheFallback() {
++        val c = ready()
++        val rq = c.submit(req("a", agent = true, fallback = "local text")).second.only<Command.RequestAgent>().single()
++        c.onAgent(rq.requestId, AgentReply.Accepted)
++        assertNotNull(c.active()!!.agentAcceptedAt)
++        now = rq.deadline
++        val t = c.tick()
++        assertEquals(Command.CancelAgent("a", rq.requestId, "timeout"), t.only<Command.CancelAgent>().single())
++        assertEquals(Content("local text", ContentSource.FALLBACK), t.present().content)
++        assertEquals("timeout", c.active()!!.agentError)
++        assertNull("no model text was produced", c.active()!!.generatedAt)
++    }
++
++    @Test fun agentFailureWithoutFallbackFails() {
++        val c = ready()
++        val rq = c.submit(req("a", agent = true, fallback = null)).second.only<Command.RequestAgent>().single()
++        val s = c.onAgent(rq.requestId, AgentReply.Failed("agent_busy"))
++        assertEquals(Outcome.FAILED to "agent_agent_busy", s.closed.single().let { it.outcome to it.reason })
++    }
++
++    // 5. The model answers after the event was cancelled
++    @Test fun aReplyForACancelledEventIsNeverShown() {
++        val c = ready()
++        val rq = c.submit(req("a", agent = true)).second.only<Command.RequestAgent>().single()
++        val cancel = c.cancel("a", "left_app")
++        assertEquals(rq.requestId, cancel.only<Command.CancelAgent>().single().requestId)
++        val late = c.onAgent(rq.requestId, AgentReply.Generated("too late", "t9"))
++        assertTrue(late.commands.isEmpty())
++        val r = c.find("a")!!
++        assertEquals(Outcome.CANCELLED, r.outcome)
++        assertNull(r.content)
++        assertEquals(1, r.lateResults)
++        // A late "accepted" is answered with another cancel.
++        assertEquals(rq.requestId, c.onAgent(rq.requestId, AgentReply.Accepted).only<Command.CancelAgent>().single().requestId)
++    }
++
++    @Test fun aReplyFromAnOlderAttemptOfTheSameEventIsIgnored() {
++        val c = ready()
++        val rq = c.submit(req("a", agent = true, fallback = "fb")).second.only<Command.RequestAgent>().single()
++        now = rq.deadline
++        c.tick() // timed out → fallback shown
++        val token = c.active()!!.token!!
++        assertTrue(c.onAgent(rq.requestId, AgentReply.Generated("late", null)).commands.isEmpty())
++        assertEquals(ContentSource.FALLBACK, c.active()!!.content!!.source)
++        assertEquals(token, c.active()!!.token)
++        assertEquals(1, c.lateAgentReplies)
++    }
++
++    // 6. Process death
++    @Test fun restartResumesTheAgentRequestKeepsTheQueueAndAbandonsPagesOnScreen() {
++        val c = coordinator().also { it.recover(Gate()) }
++        val rq = c.submit(req("a", agent = true)).second.only<Command.RequestAgent>().single()
++        c.submit(req("b"))
++        now += 5_000
++
++        val c2 = coordinator()
++        val r = c2.recover(Gate())
++        assertTrue(r.commands.first() == Command.ClearLeftovers)
++        assertEquals(Command.ResumeAgent("a", rq.requestId, rq.deadline), r.only<Command.ResumeAgent>().single())
++        assertEquals(listOf("b"), c2.queued().map { it.eventId })
++        // The result is picked up by the new process with the same requestId.
++        val shown = c2.onAgent(rq.requestId, AgentReply.Generated("hi again", "t2"))
++        val token = c2.showActive(shown)
++
++        val c3 = coordinator()
++        val r3 = c3.recover(Gate())
++        val dead = r3.closed.first()
++        assertEquals("a" to Outcome.ABANDONED, dead.eventId to dead.outcome)
++        assertEquals(Engagement.IGNORED_SEEN, dead.engagement)
++        assertTrue("old page's buttons are dead", c3.onSurface(token, SurfaceReport.Answered("x")).closed.isEmpty())
++        assertEquals("b", r3.present().eventId)
++    }
++
++    @Test fun restartAfterTheAgentDeadlineFallsBack() {
++        val c = coordinator().also { it.recover(Gate()) }
++        val rq = c.submit(req("a", agent = true, fallback = "fb")).second.only<Command.RequestAgent>().single()
++        now = rq.deadline + 1
++        val r = coordinator().recover(Gate())
++        assertTrue(r.only<Command.ResumeAgent>().isEmpty())
++        assertEquals(ContentSource.FALLBACK, r.present().content.source)
++    }
++
++    @Test fun unreadableStateIsReported() {
++        val bad = MemorySnapshotStore(text = "{broken")
++        val c = coordinator(bad)
++        c.recover(Gate())
++        assertTrue(c.recoveryIssue!!.startsWith("state_unreadable"))
++        assertEquals(Submit.Queued("a"), c.submit(req("a")).first)
++    }
++
++    // 7. Clock changes
++    @Test fun clockGoingBackKeepsRemainingTimeInsteadOfStretchingDeadlines() {
++        val c = ready()
++        c.showActive(c.submit(req("a")).second)
++        now += 10_000
++        c.tick()
++        val remaining = c.active()!!.interactionDeadline - now
++        now -= 3_600_000 // set back an hour
++        c.tick()
++        // Exact up to the gap since the last call (the kernel cannot know when the jump happened).
++        assertEquals(remaining, c.active()!!.interactionDeadline - now)
++        now += remaining
++        assertEquals(Outcome.TIMEOUT, c.tick().closed.single().outcome)
++    }
++
++    // 8. Notification posted, never seen
++    @Test fun aPostedNotificationThatTimesOutIsUnconfirmedNotIgnored() {
++        val c = coordinator().also { it.recover(Gate(a11yConnected = false)) }
++        val p = c.submit(req("a")).second.present()
++        assertEquals(Surface.NOTIFICATION, p.surface)
++        c.onSurface(p.token, SurfaceReport.Posted)
++        c.onSurface(p.token, SurfaceReport.Shown) // notifications cannot claim this
++        val e = c.active()!!
++        assertEquals(Stage.DELIVERED, e.stage)
++        assertNull(e.shownAt)
++        now = e.interactionDeadline
++        val closed = c.tick().closed.single()
++        assertEquals(Outcome.TIMEOUT, closed.outcome)
++        assertEquals(Engagement.UNCONFIRMED, closed.engagement)
++    }
++
++    @Test fun tappingANotificationProvesItWasSeen() {
++        val c = coordinator().also { it.recover(Gate(a11yConnected = false)) }
++        val p = c.submit(req("a")).second.present()
++        c.onSurface(p.token, SurfaceReport.Posted)
++        val closed = c.onSurface(p.token, SurfaceReport.Answered("open")).closed.single()
++        assertEquals(Engagement.RESPONDED, closed.engagement)
++        assertNotNull(closed.shownAt)
++    }
++
++    @Test fun aPageThatNeverAcknowledgesFallsBackToANotificationOnce() {
++        val c = ready()
++        val p = c.submit(req("a")).second.present()
++        assertEquals(Surface.ACTIVITY, p.surface)
++        now += 3_000
++        val t = c.tick()
++        assertEquals("not_acknowledged", t.only<Command.Withdraw>().single().reason)
++        val n = t.present()
++        assertEquals(Surface.NOTIFICATION, n.surface)
++        now += 3_000
++        assertEquals(Outcome.UNAVAILABLE, c.tick().closed.single().outcome)
++    }
++
++    // 10. Accessibility disconnects
++    @Test fun withoutAccessibilityPagesBecomeNotificationsAndAShownPageStays() {
++        val c = ready()
++        val token = c.showActive(c.submit(req("a")).second)
++        val off = c.setGate(Gate(a11yConnected = false))
++        assertTrue("a page on screen is not withdrawn", off.commands.isEmpty())
++        c.onSurface(token, SurfaceReport.Answered("ok"))
++        assertEquals(Surface.NOTIFICATION, c.submit(req("b")).second.present().surface)
++        val none = coordinator().also { it.recover(Gate(a11yConnected = false, notificationsAllowed = false)) }
++        assertTrue(none.submit(req("c")).second.only<Command.Present>().isEmpty())
++        assertEquals(Stage.QUEUED, none.find("c")!!.stage)
++    }
++
++    // 11. The feature is switched off
++    @Test fun switchingOffCancelsEverythingAndRefusesNewEvents() {
++        val c = ready()
++        val rq = c.submit(req("a", agent = true)).second.only<Command.RequestAgent>().single()
++        c.submit(req("b"))
++        val off = c.setGate(Gate(featureEnabled = false))
++        assertEquals(rq.requestId, off.only<Command.CancelAgent>().single().requestId)
++        assertEquals(setOf("a", "b"), off.closed.map { it.eventId }.toSet())
++        assertTrue(off.closed.all { it.outcome == Outcome.CANCELLED && it.reason == "disabled" })
++        assertEquals(Submit.Rejected("disabled"), c.submit(req("c")).first)
++        assertTrue(c.onAgent(rq.requestId, AgentReply.Generated("late", null)).only<Command.Present>().isEmpty())
++    }
++
++    @Test fun switchingOffWithAPageUpWithdrawsIt() {
++        val c = ready()
++        val token = c.showActive(c.submit(req("a")).second)
++        val off = c.setGate(Gate(featureEnabled = false))
++        assertEquals(token, off.only<Command.Withdraw>().single().token)
++    }
++
++    // 12. Duplicate receipts and expired buttons
++    @Test fun anEventIdRunsOnceAndOldButtonsAreRefused() {
++        val c = ready()
++        val token = c.showActive(c.submit(req("a")).second)
++        assertEquals(Submit.Rejected("duplicate"), c.submit(req("a")).first)
++        val first = c.onSurface(token, SurfaceReport.Answered("yes"))
++        assertEquals(Outcome.RESPONDED, first.closed.single().outcome)
++        val second = c.onSurface(token, SurfaceReport.Answered("no"))
++        assertTrue(second.closed.isEmpty())
++        assertEquals("yes", c.find("a")!!.answer)
++        assertEquals(1, c.staleReports)
++        // Even after it left the receipt history, the id stays known.
++        assertEquals(Submit.Rejected("duplicate"), c.submit(req("a")).first)
++        // A page that turns up late for a closed presentation is told to go away.
++        assertEquals(token, c.onSurface(token, SurfaceReport.Shown).only<Command.Withdraw>().single().token)
++        assertTrue(c.onSurface("forged", SurfaceReport.Answered("x")).commands.isEmpty())
++    }
++
++    @Test fun expiredEventsLeaveTheQueue() {
++        val c = coordinator().also { it.recover(Gate(dshTaskActive = true)) }
++        c.submit(req("a", ttl = 60_000))
++        now += 60_000
++        assertEquals(Outcome.EXPIRED, c.tick().closed.single().outcome)
++        assertEquals(Submit.Rejected("expired"), c.submit(req("old").copy(createdAt = now - 700_000)).first)
++    }
++
++    @Test fun staleAgentReplyIsNotShownAfterWaitingTooLong() {
++        val c = coordinator().also { it.recover(Gate()) }
++        val rq = c.submit(req("a", agent = true)).second.only<Command.RequestAgent>().single()
++        c.setGate(Gate(dshTaskActive = true))
++        c.onAgent(rq.requestId, AgentReply.Generated("hi", null))
++        now += 120_000
++        val s = c.setGate(Gate())
++        assertEquals(Outcome.EXPIRED to "stale_reply", s.closed.single().let { it.outcome to it.reason })
++        assertTrue(s.only<Command.Present>().isEmpty())
++    }
++
++    @Test fun everythingIsPersistedAndReadsBackTheSame() {
++        val c = ready()
++        val rq = c.submit(req("a", agent = true, p = Priority.HIGH)).second.only<Command.RequestAgent>().single()
++        c.onAgent(rq.requestId, AgentReply.Accepted)
++        c.submit(req("b"))
++        val c2 = coordinator()
++        c2.recover(Gate(dshTaskActive = true))
++        assertEquals(c.active(), c2.active())
++        assertEquals(c.queued(), c2.queued())
++        assertFalse(store.writes == 0)
++    }
++}
+diff --git a/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/KernelChainTest.kt b/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/KernelChainTest.kt
+new file mode 100644
+index 0000000..47204e4
+--- /dev/null
++++ b/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/KernelChainTest.kt
+@@ -0,0 +1,128 @@
++package io.github.ccch1mneyyy.dsh_app.loop.core
++
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertNotNull
++import org.junit.Assert.assertNull
++import org.junit.Assert.assertTrue
++import org.junit.Test
++import kotlin.random.Random
++
++/**
++ * The whole chain the round-2 task names, in pure logic:
++ * random schedule → local rules → queue → DSH arbitration → agent (plugin answers as recorded
++ * live) → interaction → answer or timeout → persisted receipt → next schedule.
++ * The adapter's job is exactly what this test's `drive` does.
++ */
++class KernelChainTest {
++    private var wall = 1_793_340_000_000L
++    private var elapsed = 3_600_000L
++    private val clocks get() = Clocks(wall, elapsed, 1)
++    private var seq = 0
++    private val coordStore = MemorySnapshotStore()
++    private val schedStore = MemorySnapshotStore()
++    private fun minuteOfDay(w: Long) = (((w + 8 * 3_600_000L) % 86_400_000L) / 60_000L).toInt()
++    private fun dayOf(w: Long) = Math.floorDiv(w + 8 * 3_600_000L, 86_400_000L)
++    private fun advance(ms: Long) { wall += ms; elapsed += ms }
++
++    private var coordinator = Coordinator(coordStore, CoordinatorConfig(), { wall }, { "c${++seq}" })
++    private var scheduler = ProactiveScheduler(schedStore, ::minuteOfDay, ::dayOf, Random(1), { "evt-${++seq}-0000" })
++    private var gate = Gate()
++
++    /** Agent requests the "engine" has open: requestId → answers it will give. */
++    private val agentCalls = mutableListOf<Command.RequestAgent>()
++    private val presented = mutableListOf<Command.Present>()
++
++    /** What the Android adapter does with a step. */
++    private fun drive(step: Step) {
++        for (c in step.commands) when (c) {
++            is Command.RequestAgent -> agentCalls += c
++            is Command.Present -> presented += c
++            else -> Unit
++        }
++        for (closed in step.closed) scheduler.onOutcome(closed.eventId, closed.engagement, clocks)
++    }
++
++    private fun scheduleTick() {
++        when (val d = scheduler.evaluate(clocks)) {
++            is ProactiveScheduler.Decision.Fire -> {
++                val (r, step) = coordinator.submit(d.request)
++                if (r is Submit.Rejected) scheduler.onRejected(r.reason, clocks) else scheduler.onSubmitted(d.request.eventId, clocks)
++                drive(step)
++            }
++            is ProactiveScheduler.Decision.Wait -> if (d.untilWall > wall) advance(d.untilWall - wall)
++        }
++    }
++
++    /** Plugin answers as recorded against DSH 0.2.1-rc.4 by e2e-live.mjs. */
++    private fun plugin(status: Int, body: Map<String, Any?>) {
++        val rq = agentCalls.last()
++        val d = AgentWire.decode(status, body) as AgentWire.Decoded.Reply
++        drive(coordinator.onAgent(rq.requestId, d.reply))
++    }
++
++    private fun boot() {
++        drive(coordinator.recover(gate))
++        scheduler.recover(clocks)
++        scheduler.setConfig(SchedulerConfig(enabled = true, minIntervalMs = 30 * 60_000L, maxIntervalMs = 60 * 60_000L,
++            quietStartMinute = 0, quietEndMinute = 0, dailyMax = 10), clocks)
++    }
++
++    @Test fun aScheduledChatGoesThroughTheAgentToTheScreenAndShapesTheNextGap() {
++        boot()
++        scheduleTick(); scheduleTick()
++        val rq = agentCalls.single()
++        assertNull("nothing on screen before the model answers", presented.firstOrNull())
++        plugin(202, mapOf("v" to 1L, "state" to "accepted"))
++        plugin(200, mapOf("v" to 1L, "state" to "claimed", "turn" to 1L))
++        plugin(200, mapOf("v" to 1L, "state" to "generated", "text" to "MOCK_REPLY: 你好", "turn" to 1L))
++        val p = presented.single()
++        assertEquals("MOCK_REPLY: 你好", p.content.text)
++        assertEquals(ContentSource.AGENT, p.content.source)
++        drive(coordinator.onSurface(p.token, SurfaceReport.Posted))
++        drive(coordinator.onSurface(p.token, SurfaceReport.Shown))
++        drive(coordinator.onSurface(p.token, SurfaceReport.Answered("reply")))
++        val r = coordinator.find(rq.eventId)!!
++        assertEquals(Outcome.RESPONDED, r.outcome)
++        listOf(r.agentRequestedAt, r.agentAcceptedAt, r.agentClaimedAt, r.generatedAt, r.presentedAt, r.deliveredAt, r.shownAt, r.respondedAt)
++            .forEach { assertNotNull("every fact recorded separately", it) }
++        assertNull(scheduler.state.pendingEventId)
++        assertEquals(1, scheduler.state.countToday)
++        assertTrue(scheduler.state.nextDueWall > wall)
++    }
++
++    @Test fun aScheduledChatWaitsForDshThenFallsBackWhenTheAgentIsBusy() {
++        boot()
++        gate = Gate(dshTaskActive = true)
++        drive(coordinator.setGate(gate))
++        scheduleTick(); scheduleTick()
++        assertTrue("no model call while DSH operates the phone", agentCalls.isEmpty())
++        gate = Gate()
++        drive(coordinator.setGate(gate))
++        plugin(409, mapOf("v" to 1L, "error" to mapOf("code" to "agent-busy")))
++        // Scheduler attempts have no canned text: a busy agent means no message, not a fake one.
++        val r = coordinator.receipts().first()
++        assertEquals(Outcome.FAILED to "agent_agent-busy", r.outcome to r.reason)
++        assertEquals(Engagement.NOT_DELIVERED, r.engagement)
++        assertTrue(presented.isEmpty())
++        assertEquals(0, scheduler.state.countToday)
++        assertTrue("retry soon, not at the full gap", scheduler.state.nextDueWall - wall <= 15 * 60_000L)
++    }
++
++    @Test fun processDeathMidTurnResumesThePollAndKeepsOneSchedule() {
++        boot()
++        scheduleTick(); scheduleTick()
++        val rq = agentCalls.single()
++        plugin(202, mapOf("v" to 1L, "state" to "accepted"))
++        // Process dies; a new one rebuilds both from disk.
++        coordinator = Coordinator(coordStore, CoordinatorConfig(), { wall }, { "c${++seq}" })
++        scheduler = ProactiveScheduler(schedStore, ::minuteOfDay, ::dayOf, Random(2), { "evt-${++seq}-0000" })
++        advance(5_000)
++        val rec = coordinator.recover(gate)
++        scheduler.recover(clocks)
++        assertEquals(rq.requestId, rec.commands.filterIsInstance<Command.ResumeAgent>().single().requestId)
++        assertEquals(rq.eventId, scheduler.state.pendingEventId)
++        assertTrue(scheduler.evaluate(clocks) is ProactiveScheduler.Decision.Wait)
++        drive(coordinator.onAgent(rq.requestId, AgentReply.Generated("after restart", "turn:1")))
++        assertEquals("after restart", presented.single().content.text)
++    }
++}
+diff --git a/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/ProactiveSchedulerTest.kt b/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/ProactiveSchedulerTest.kt
+new file mode 100644
+index 0000000..c42dc64
+--- /dev/null
++++ b/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/ProactiveSchedulerTest.kt
+@@ -0,0 +1,243 @@
++package io.github.ccch1mneyyy.dsh_app.loop.core
++
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertFalse
++import org.junit.Assert.assertNull
++import org.junit.Assert.assertTrue
++import org.junit.Test
++import kotlin.random.Random
++
++/** T6. The local zone is UTC+8 here; the scheduler only sees it through minuteOfDay / dayOf. */
++class ProactiveSchedulerTest {
++    private val zone = 8 * 3_600_000L
++    private val min = 60_000L
++    private val hour = 60 * min
++    /** 2026-10-30 10:00 local. */
++    private var wall = 1_793_325_600_000L - zone + 10 * hour - (1_793_325_600_000L % 86_400_000L)
++    private var elapsed = 5 * hour
++    private var boot = 1
++    private val store = MemorySnapshotStore()
++    private var seq = 0
++    private fun now() = Clocks(wall, elapsed, boot)
++    private fun advance(ms: Long) { wall += ms; elapsed += ms }
++    private fun minuteOfDay(w: Long) = (((w + zone) % 86_400_000L) / min).toInt()
++    private fun dayOf(w: Long) = Math.floorDiv(w + zone, 86_400_000L)
++
++    private val cfg = SchedulerConfig(
++        enabled = true, minIntervalMs = 30 * min, maxIntervalMs = 90 * min, quietStartMinute = 23 * 60, quietEndMinute = 8 * 60,
++        dailyMax = 4, userActiveDeferMs = 20 * min, ignoredBackoff = 2.0, maxBackoffFactor = 8.0, pauseAfterIgnored = 3,
++    )
++
++    private fun scheduler(seed: Int = 7, s: SnapshotStore = store) =
++        ProactiveScheduler(s, ::minuteOfDay, ::dayOf, Random(seed), { "sched-${++seq}" })
++
++    private fun armed(seed: Int = 7): ProactiveScheduler = scheduler(seed).also { it.recover(now()); it.setConfig(cfg, now()) }
++
++    /** Advance to the due time and return the attempt. */
++    private fun ProactiveScheduler.fireNext(): EventRequest {
++        val w = evaluate(now())
++        if (w is ProactiveScheduler.Decision.Wait) advance(w.untilWall - wall)
++        val d = evaluate(now())
++        assertTrue("expected Fire, got $d", d is ProactiveScheduler.Decision.Fire)
++        return (d as ProactiveScheduler.Decision.Fire).request.also { onSubmitted(it.eventId, now()) }
++    }
++
++    private fun gap(s: ProactiveScheduler) = s.state.nextDueElapsed - elapsed
++
++    @Test fun firstGapIsRandomWithinTheConfiguredRangeAndTheDecisionIsDeterministic() {
++        val gaps = (1..20).map { seed -> scheduler(seed, MemorySnapshotStore()).also { it.recover(now()); it.setConfig(cfg, now()) }.let { gap(it) } }
++        assertTrue(gaps.all { it in 30 * min..90 * min })
++        assertTrue("random, not constant", gaps.toSet().size > 10)
++        val s = armed()
++        val a = s.evaluate(now())
++        assertEquals(a, s.evaluate(now()))
++        assertEquals("not_due", (a as ProactiveScheduler.Decision.Wait).reason)
++    }
++
++    @Test fun anAttemptIsAProactiveEventForTheCoordinator() {
++        val r = armed().fireNext()
++        assertEquals("SCHEDULER", r.source)
++        assertEquals("scheduler:random", r.dedupeKey)
++        assertTrue(r.needsAgent)
++        assertNull("no canned text: without the agent it fails rather than fakes", r.fallbackText)
++    }
++
++    @Test fun pendingAttemptBlocksAnotherAndOnlyItsReceiptCounts() {
++        val s = armed()
++        val r = s.fireNext()
++        advance(10 * hour)
++        assertEquals("pending", (s.evaluate(now()) as ProactiveScheduler.Decision.Wait).reason)
++        assertFalse("someone else's receipt", s.onOutcome("other", Engagement.RESPONDED, now()))
++        assertTrue(s.onOutcome(r.eventId, Engagement.RESPONDED, now()))
++        assertFalse("duplicate receipt", s.onOutcome(r.eventId, Engagement.RESPONDED, now()))
++        assertEquals(1, s.state.countToday)
++    }
++
++    @Test fun quietHoursPushAttemptsToTheMorning() {
++        val s = armed()
++        advance(13 * hour) // 23:00
++        assertEquals("quiet", (s.evaluate(now()) as ProactiveScheduler.Decision.Wait).reason)
++        val until = (s.evaluate(now()) as ProactiveScheduler.Decision.Wait).untilWall
++        assertEquals(8 * 60, minuteOfDay(until))
++        // A plan that would land at night is moved past the quiet end.
++        val r = s.fireNext()
++        assertTrue(minuteOfDay(wall) >= 8 * 60)
++        s.onOutcome(r.eventId, Engagement.RESPONDED, now())
++    }
++
++    @Test fun dailyMaxCountsDeliveriesNotAttempts() {
++        val s = armed()
++        repeat(2) { s.onOutcome(s.fireNext().eventId, Engagement.NOT_DELIVERED, now()) }
++        assertEquals("undelivered attempts do not count", 0, s.state.countToday)
++        var guard = 0
++        while (s.state.countToday < 4 && guard++ < 20) {
++            val w = s.evaluate(now())
++            if (w is ProactiveScheduler.Decision.Wait && w.reason == "quiet") { advance(w.untilWall - wall); continue }
++            s.onOutcome(s.fireNext().eventId, Engagement.UNCONFIRMED, now())
++        }
++        val d = s.evaluate(now())
++        if (minuteOfDay(wall) < 23 * 60 && dayOf(wall) == s.state.dayKey) {
++            assertEquals("daily_max", (d as ProactiveScheduler.Decision.Wait).reason)
++            assertEquals(8 * 60, minuteOfDay(d.untilWall))
++        }
++    }
++
++    @Test fun userActivityResetsTheStreakAndKeepsOutOfTheWay() {
++        val s = armed()
++        val r = s.fireNext()
++        s.onOutcome(r.eventId, Engagement.IGNORED_SEEN, now())
++        assertEquals(1, s.state.ignoredStreak)
++        advance(5 * hour)
++        s.onUserActivity(now())
++        assertEquals(0, s.state.ignoredStreak)
++        assertTrue(gap(s) >= 20 * min)
++        assertEquals("not_due", (s.evaluate(now()) as ProactiveScheduler.Decision.Wait).reason)
++        advance(gap(s))
++        assertTrue(s.evaluate(now()) is ProactiveScheduler.Decision.Fire)
++    }
++
++    // 9. Two confirmed deliveries in a row with no answer
++    @Test fun ignoredMessagesWidenTheGapAndThenPause() {
++        val s = armed(seed = 3)
++        s.onOutcome(s.fireNext().eventId, Engagement.IGNORED_SEEN, now())
++        s.onOutcome(s.fireNext().eventId, Engagement.IGNORED_SEEN, now())
++        assertEquals(2, s.state.ignoredStreak)
++        assertTrue("×4 after two ignored: ${gap(s) / min} min", gap(s) >= 4 * 30 * min)
++        assertTrue(gap(s) <= 4 * 90 * min + 8 * hour + 30 * min)
++        s.onOutcome(s.fireNext().eventId, Engagement.IGNORED_SEEN, now())
++        assertTrue(s.state.pausedForIgnored)
++        advance(3 * 86_400_000L)
++        assertEquals("paused_ignored", (s.evaluate(now()) as ProactiveScheduler.Decision.Wait).reason)
++        s.onUserActivity(now())
++        assertFalse(s.state.pausedForIgnored)
++    }
++
++    // 8. A notification posted but never confirmed seen
++    @Test fun unconfirmedDeliveryIsNeitherPenalisedNorRewarded() {
++        val s = armed()
++        s.onOutcome(s.fireNext().eventId, Engagement.IGNORED_SEEN, now())
++        s.onOutcome(s.fireNext().eventId, Engagement.UNCONFIRMED, now())
++        assertEquals(1, s.state.ignoredStreak)
++        assertEquals(2, s.state.countToday)
++    }
++
++    @Test fun undeliveredAttemptsRetrySoonButNotForever() {
++        val s = armed()
++        s.onOutcome(s.fireNext().eventId, Engagement.NOT_DELIVERED, now())
++        assertTrue(gap(s) in 10 * min..15 * min)
++        s.onOutcome(s.fireNext().eventId, Engagement.NOT_DELIVERED, now())
++        s.onOutcome(s.fireNext().eventId, Engagement.NOT_DELIVERED, now())
++        assertTrue("back to the normal gap after repeated failures", gap(s) >= 30 * min)
++    }
++
++    // 7. Clock changes
++    @Test fun movingTheWallClockNeitherRushesNorDelaysAnAttemptWithinOneBoot() {
++        val s = armed()
++        val g = gap(s)
++        wall += 6 * hour // set forward
++        assertEquals("not_due", (s.evaluate(now()) as ProactiveScheduler.Decision.Wait).reason)
++        wall -= 12 * hour // set back
++        elapsed += g
++        val d = s.evaluate(now())
++        assertTrue("due by elapsed time, quiet hours by the new wall time: $d",
++            d is ProactiveScheduler.Decision.Fire || (d as ProactiveScheduler.Decision.Wait).reason == "quiet")
++    }
++
++    @Test fun settingTheDateBackDoesNotResetTheDailyCount() {
++        val s = armed()
++        repeat(2) { s.onOutcome(s.fireNext().eventId, Engagement.UNCONFIRMED, now()) }
++        wall -= 2 * 86_400_000L
++        s.evaluate(now())
++        assertEquals(2, s.state.countToday)
++    }
++
++    // 6. Process restart and reboot
++    @Test fun restartKeepsThePlanAndRebootFallsBackToTheWallClock() {
++        val s = armed()
++        val due = s.state.nextDueWall
++        val restarted = scheduler()
++        restarted.recover(now())
++        assertEquals(due, restarted.state.nextDueWall)
++        assertEquals(s.state, restarted.state)
++        // Reboot: elapsed restarts near zero; the wall time still holds.
++        boot = 2; elapsed = 60_000
++        val afterBoot = scheduler()
++        afterBoot.recover(now())
++        assertEquals(due, afterBoot.state.nextDueWall)
++        advance(due - wall)
++        assertTrue(afterBoot.evaluate(now()) is ProactiveScheduler.Decision.Fire || minuteOfDay(wall) < 8 * 60 || minuteOfDay(wall) >= 23 * 60)
++    }
++
++    @Test fun rebootWithAJumpedClockOrALongOffPeriodReplans() {
++        val s = armed()
++        val due = s.state.nextDueWall
++        boot = 2; elapsed = 60_000; wall -= 30 * 86_400_000L
++        val jumped = scheduler(); jumped.recover(now())
++        assertEquals("clock_jump", jumped.state.lastReason)
++        assertTrue(jumped.state.nextDueWall < due)
++        wall += 60 * 86_400_000L; boot = 3
++        val off = scheduler(); off.recover(now())
++        assertEquals("missed_while_off", off.state.lastReason)
++        assertTrue(off.state.nextDueWall > wall)
++    }
++
++    @Test fun aLostPendingAttemptIsReleasedOnRecovery() {
++        val s = armed()
++        s.fireNext()
++        advance(2 * hour)
++        val r = scheduler(); r.recover(now())
++        assertNull(r.state.pendingEventId)
++        assertEquals("pending_lost", r.state.lastReason)
++    }
++
++    // 11. Switched off
++    @Test fun disabledSchedulerNeverFiresAndForgetsItsPendingAttempt() {
++        val s = armed()
++        s.fireNext()
++        s.setConfig(cfg.copy(enabled = false), now())
++        assertNull(s.state.pendingEventId)
++        advance(10 * hour)
++        assertEquals("disabled", (s.evaluate(now()) as ProactiveScheduler.Decision.Wait).reason)
++        assertNull(s.nextWake(now(), WakeMode.EXACT))
++    }
++
++    @Test fun wakeModesDegradeSafely() {
++        assertEquals(WakeMode.EXACT, WakeMode.of(BackgroundCaps()))
++        assertEquals(WakeMode.INEXACT, WakeMode.of(BackgroundCaps(exactAlarms = false)))
++        assertEquals(WakeMode.OPPORTUNISTIC, WakeMode.of(BackgroundCaps(backgroundRestricted = true)))
++        assertEquals(WakeMode.OPPORTUNISTIC, WakeMode.of(BackgroundCaps(alarmsAvailable = false)))
++        val s = armed()
++        assertNull("no alarm when the system forbids background work", s.nextWake(now(), WakeMode.OPPORTUNISTIC))
++        assertEquals(s.state.nextDueWall, s.nextWake(now(), WakeMode.INEXACT))
++    }
++
++    @Test fun configIsNormalizedAndPersisted() {
++        val n = SchedulerConfig(enabled = true, minIntervalMs = 1, maxIntervalMs = 0, dailyMax = -3, quietStartMinute = 5000).normalized()
++        assertEquals(60_000L, n.minIntervalMs)
++        assertEquals(60_000L, n.maxIntervalMs)
++        assertEquals(0, n.dailyMax)
++        assertEquals(1439, n.quietStartMinute)
++        armed()
++        assertEquals(cfg, scheduler().also { it.recover(now()) }.config)
++    }
++}
+diff --git a/docs/loop/INTEGRATION_DEEPSEEK.md b/docs/loop/INTEGRATION_DEEPSEEK.md
+new file mode 100644
+index 0000000..c3823b7
+--- /dev/null
++++ b/docs/loop/INTEGRATION_DEEPSEEK.md
+@@ -0,0 +1,71 @@
++# 给 DeepSeek 的集成指南（第二轮）
++
++## 0. 分工与边界
++
++- **内核归 Claude**：`app/android/.../loop/core/**`、`runtime/proactive/dsh-go-proactive/lib/**`、`loop/proactive/ProactiveRuntime.kt` 的命令语义。要改这些，先提问题给 Claude 审，不要直接改。
++- **DeepSeek 负责**：下面第 3 节的 D1–D6；普通 Android/Flutter 工程、界面、构建、P0/P1 修复。
++- 原 TASKS.md 的 **T4、T6、T8 由本轮内核取代**；**T5（把免打扰/每日上限塞进 TriggerRules）作废**——这些已在 `ProactiveScheduler` 里。T3（通知兜底）改为实现本轮的 `NotificationPort`（D2）。
++
++## 1. 合并顺序
++
++1. `0001-event-loop-v1.patch`（第一轮）
++2. `0002-proactive-kernel.patch`：只加新文件，**任何时候都能合**。
++3. `0003-proactive-android.patch`：新文件 + 共享文件小改。
++
++`0003` 改到的共享文件和可能的冲突：
++
++| 文件 | 改动 | 冲突风险 / 处理 |
++|---|---|---|
++| `phone/PhonePrompts.kt` | 加 `onBusyChanged` 字段，在 `schedule()` 开始和 `onFinished` 里各调一次 | 上游安全代码。**只能加这个回调，不许改仲裁逻辑**。冲突时保留上游版本，再手工加这 3 处 |
++| `MainActivity.kt` | 注册 `ProactivePlugin` | 插件列表同一位置若有别的新增，按行合并 |
++| `AndroidManifest.xml` | `RECEIVE_BOOT_COMPLETED`；`ProactivePageActivity`；`ProactiveWakeReceiver` | 若 DeepSeek 也加了接收器，注意 `exported` 和 intent-filter 不要合并错 |
++| `loop/LoopRuntime.kt` | 窗口事件顺带 `ProactiveRuntime.onWindowActivity()`；连接/断开刷新闸门；前台进出权限页刷新闸门 | DeepSeek 若改 `LoopRuntime`（如 T4 旧方案），以本补丁为准 |
++| `res/values{,-zh}/proactive_strings.xml` | 新文件 | 无 |
++
++## 2. 本地检查
++
++```sh
++# 内核 JVM 测试（66 项）——在 app/android 下
++./gradlew :app:testDebugUnitTest --tests 'io.github.ccch1mneyyy.dsh_app.loop.*'
++# 插件
++cd runtime/proactive/dsh-go-proactive && node --test test/core.test.mjs
++# 插件 × 真实引擎（需要按 runtime/locks/dsh-0.2.1-rc.4 装好引擎；锁文件里的 npmmirror 可换成 registry.npmjs.org，完整性哈希不变）
++node test/mock-messages.mjs &            # PORT=18901 LOG=/tmp/req.jsonl
++node test/e2e-live.mjs <dsh> 18950 18901 /tmp/req.jsonl
++```
++
++## 3. 任务
++
++### D1 Dart 侧 Agent 转发（普通）
++新建 `lib/proactive/proactive_channel.dart`：
++- 订阅 EventChannel `dsh/proactive/agent`。每条 `{op, requestId, path, body?}`：在**当前本机主机**的已认证连接上发 HTTP（`request`/`cancel` 是 POST JSON，`poll` 是 GET），**不要解释应答**，原样回 `MethodChannel('dsh/proactive').invokeMethod('agentHttp', {requestId, status, body})`；网络失败传 `status: 0`。
++- 只在本机引擎（不是远程主机）上转发；远程主机时直接回 `status: 404`。
++- 用户在任何会话里发出消息时调用 `userActivity`。
++验收：Dart 单测用假 MethodChannel 验证：三种 op 的路径/方法/请求体、失败传 0、远程主机不转发。
++
++### D2 通知界面 `NotificationPort`（普通，参照 `NotificationGate.showPrompt`）
++- 独立渠道 `dsh-proactive`；按钮"回应"→ `ProactiveRuntime.onSurface(token, Answered("reply"))`，划掉 → `Dismissed`；`setTimeoutAfter(deadline-now)`。
++- 每个令牌一个随机 action 的动态接收器、`RECEIVER_NOT_EXPORTED`；`cancel(token)` 取消通知并注销接收器；`cancelAll()` 按 tag 全清。
++- **绝不**上报 `Shown`（通知不能证明被看见）。
++- 在 `ProactivePlugin.onAttachedToEngine` 里设置 `ProactiveRuntime.notificationPort`。
++验收：手动在设置页触发一次（D3），关闭无障碍后应走通知。
++
++### D3 设置页「主动搭话」（普通）
++通道 `dsh/proactive`：`status`、`setConfig`（字段同 `ProactiveScheduler.configMap`）、`receipts`。页面放在「手机操控 → 触发测试」旁边：开关、间隔范围、免打扰、每日上限；状态行显示 `wakeMode`（OPPORTUNISTIC 时写明"系统限制了后台，只有打开 DSH 时才会尝试"）、`transport`、`gate.hold`；回执列表显示 `outcome`、`engagement` 和六个时间戳。文案进 `lib/l10n/parts/proactive_{zh,en}.arb`。另外需要一个"目标会话"选择：调插件 `GET /status` 列出活着的会话，`POST /config` 保存。
++
++### D4 打包宿主插件（普通）
++`runtime/build-runtime.sh` 把 `runtime/proactive/dsh-go-proactive/{lib,package.json}` 装到 `/opt/dsh-go/dsh-go-proactive/`，并把它加进 `/etc/dsh-app/dsh-web.patch.yml`（与 dsh-go-bridge 相同的方式）。**不要**打包 `test/`。在 `runtime/test-host.sh` 里加一段跑 `e2e-live.mjs`。
++
++### D5 第一轮事件改走内核（🔒 提交前 Claude 审）
++`LoopRuntime.verifyNow` 的 `Show` 改为 `ProactiveRuntime.submit(EventRequest(source="A11Y_WINDOW", kind="app_enter", dedupeKey="app_enter:$pkg", needsAgent=false, fallbackText=…))`，保留 `LoopEngine` 的访问状态机和第一轮回执。
++
++### D6 真机验证（人工）
++按 ROUND2.md 第 6 节 NOT_TESTED 清单逐项补证据。
++
++## 4. 不许做的事
++
++- 不许直接调用 `PromptArbiter`/`PhonePrompts.present`/`PhoneTasks.begin` 来展示主动消息，也不许伪造任务所有权。
++- 不许在 Kotlin 侧绕过 `Coordinator` 直接弹页面或发通知。
++- 不许让插件新建或唤醒会话。
++- 不许给主动消息加本地兜底文案来"假装"Agent 说了话（第一轮 app_enter 的固定测试文案除外）。
++- 不许发送任何屏幕内容给 Agent。
+diff --git a/docs/loop/ROUND2.md b/docs/loop/ROUND2.md
+new file mode 100644
+index 0000000..8e1bddc
+--- /dev/null
++++ b/docs/loop/ROUND2.md
+@@ -0,0 +1,178 @@
++# 第二轮：主动交互协调内核（T4 / T6 / T8）
++
++基线：第一轮 `feat/event-loop-v1`（基于上游 `d38a39a`）。本轮新增两个补丁：
++
++| 补丁 | 内容 | 冲突风险 |
++|---|---|---|
++| `0002-proactive-kernel` | 纯 Kotlin 内核 `loop/core/`（仲裁、调度、协议编解码、存储）+ 66 个 JVM 测试；DSH 宿主插件 `runtime/proactive/dsh-go-proactive/` + 单元测试 + 真实引擎端到端测试；本文档 | **零**：全是新文件 |
++| `0003-proactive-android` | Android 适配 `loop/proactive/`（新文件）+ 共享文件小改：`PhonePrompts`(+5 行只读回调)、`MainActivity`(+1)、`AndroidManifest`(+页面/接收器/开机权限)、`LoopRuntime`(+约 15 行钩子)、字符串 | 低：见集成指南 |
++
++## 1. 链路
++
++```
++Android 窗口事件 ─┐                         ┌─ DSH 正在操作手机 / 有确认在等 / 权限页在前 → 让路
++随机调度(闹钟) ───┼→ 本地规则 → 入队/合并/丢弃 → 仲裁 ─┤
++                  │                         └─ 可以 → 需要 Agent？
++                  │                                    ├─ 是 → 宿主插件 → followup → 回合 → 文字
++                  │                                    └─ 否 → 本地文案
++                  └──────────── 回执 ← 回应 / 超时 / 取消 ← 交互页或通知（令牌）
++                     ↓
++              调度器按"用户怎么回应的"决定下一次
++```
++
++## 2. T4 统一仲裁：`loop/core/Coordinator.kt`
++
++### 状态迁移
++
++```mermaid
++stateDiagram-v2
++  [*] --> QUEUED: submit（去重/合并/满了丢最弱）
++  QUEUED --> AWAITING_AGENT: 轮到它且此刻能展示（needsAgent）
++  QUEUED --> READY: 轮到它（本地文案）
++  QUEUED --> CLOSED: EXPIRED / CANCELLED / DROPPED / MERGED
++  AWAITING_AGENT --> READY: Generated（requestId 必须是当前这次）
++  AWAITING_AGENT --> READY: 失败或超时且有本地兜底（content=FALLBACK）
++  AWAITING_AGENT --> CLOSED: 失败且无兜底 FAILED / 取消 CANCELLED
++  READY --> PRESENTING: 闸门打开，发新令牌
++  READY --> CLOSED: EXPIRED（TTL 或回复放太久）
++  PRESENTING --> SHOWN: 页面 onResume（令牌匹配）
++  PRESENTING --> DELIVERED: 通知已发出（令牌匹配）
++  PRESENTING --> READY: 3 秒没确认：撤下，改用通知一次
++  PRESENTING --> CLOSED: 通知也失败 UNAVAILABLE
++  SHOWN --> CLOSED: 回应 RESPONDED / 关掉 DISMISSED / 超时 TIMEOUT
++  DELIVERED --> CLOSED: 点了 RESPONDED / 划掉 DISMISSED / 超时 TIMEOUT
++  PRESENTING --> READY: DSH 要用屏幕 → 撤下（yield，最多 2 次）
++  SHOWN --> READY: 同上
++  DELIVERED --> READY: 同上
++  READY --> CLOSED: 让路超过 2 次 YIELDED
++```
++
++进程重启：`AWAITING_AGENT` 保留并用**同一个 requestId** 续查（插件对重放只报告不重发）；`PRESENTING/SHOWN/DELIVERED` 关为 `ABANDONED`，并先清掉残留页面/通知；队列保留。
++
++### 八条要求怎么满足
++
++| 要求 | 做法 | 测试（CoordinatorTest） |
++|---|---|---|
++| 1 DSH 操作手机时让路 | `Gate.dshTaskActive`（PhoneTasks 活动或有调用在跑）→ 不启动新事件、不调模型；已在屏上的撤下回 READY | aRunningTaskHolds… / yieldingTooOften… |
++| 2 审批/权限时不抢占 | `dshPromptOpen`（PromptArbiter 有问题）或 `protectedForeground`（ProtectedPages 包在前台）同样让路 | anOpenDshQuestionOrPermissionPage… |
++| 3 多事件排队/合并/丢弃 | 一次只一个在办；队列按优先级再按时间；同 `dedupeKey` 合并（取更高优先级、更晚过期）；满了丢最弱，新的若最弱则直接丢 | twoEventsAtOnce… / sameIntentMerges… / fullQueueDrops… |
++| 4 同一 eventId 不执行两次 | 记住最近 512 个 id；重复提交拒绝；插件侧同 requestId 只报告不重发、同 eventId 在途拒绝 | anEventIdRunsOnce… + 插件测试 |
++| 5 旧页面/旧回调/过期通知不能回答新事件 | 每次展示一个新令牌；只认当前令牌；被撤下的令牌若再报"已显示"会收到撤下命令 | anEventIdRunsOnce… / aRunningTaskHolds… |
++| 6 等模型时被取消，旧结果不再展示 | 每次请求一个新 requestId；不是当前的回复只计数、不改状态；迟到的 Accepted 会再发一次取消 | aReplyForACancelledEvent… / aReplyFromAnOlderAttempt… |
++| 7 进程死亡/重连后恢复 | 每次变化落盘（原子写）；见上 | restartResumes… / restartAfterTheAgentDeadline… / unreadableState… |
++| 8 不破坏原有操控和安全确认 | 内核**只读** PhoneTasks / PromptArbiter（`Gate`），不拿所有权、不进 PromptArbiter、不走 PhonePrompts；唯一的共享改动是 PhonePrompts 上一个只读通知回调 | — |
++
++时钟回拨：所有截止时间按"剩余时长"平移，不会被拉长；误差最多等于两次调用之间的间隔（内核不知道回拨发生在哪一刻）。
++
++## 3. T6 调度：`loop/core/ProactiveScheduler.kt`
++
++- **随机只在排期**：`plan()` 在 [min, max] 里随机取间隔；`evaluate()` 是确定的，同样的状态和时钟永远给同样的答案。
++- 判定顺序：关闭 → 连续被忽略暂停 → 已有尝试在办 → 免打扰 → 今日上限 → 还没到 → 用户刚活跃 → 触发。
++- 触发产生的是一个 `EventRequest`（`needsAgent=true`、**没有本地兜底文案**：Agent 不可用就不说话，不伪造），照样经过仲裁所有闸门。
++- 回执决定下一次：
++
++| 回执（Engagement） | 计入今日次数 | 被忽略计数 | 下一次 |
++|---|---|---|---|
++| RESPONDED / DISMISSED | 是 | 清零、解除暂停 | 正常随机间隔 |
++| IGNORED_SEEN（页面确认显示过、没回应） | 是 | +1；到 3 次暂停到用户再出现 | 间隔 × 2^次数（上限 ×8） |
++| UNCONFIRMED（通知发了但不知道看没看） | 是 | 不变 | 正常间隔 |
++| NOT_DELIVERED（没展示出来） | 否 | 不变 | 10–15 分钟后重试，连续 2 次后恢复正常间隔 |
++
++- 用户活跃（发消息、回应）：清零并至少推后 20 分钟。
++- 时间：同一次开机内用 `elapsedRealtime` 判断"到没到"，改墙上时间既不会提前也不会推迟；免打扰和"今天"用墙上时间；日期往回调**不会**清零今日次数；重启后墙上时间离谱（远在未来）或关机错过太久都重新排期；在办尝试丢了回执会在恢复时释放。
++- 唤醒（`WakeMode`）：能用精确闹钟就设一个精确闹钟；不能就设一个不精确的（只会晚、不会早）；系统限制后台时**不设闹钟**，只在打开 DSH 或无障碍看到窗口切换时顺带检查（每分钟最多一次）。没有任何循环。
++
++测试：ProactiveSchedulerTest 17 项，覆盖随机范围、确定性、免打扰、上限只算投递、用户活跃、连续两次确认无回应（×4）和第三次暂停、通知未确认不惩罚、未送达重试、改时钟、改日期、重启、重启后时钟跳变/长时间关机、丢失的在办尝试、关闭、降级。
++
++## 4. T8 Agent 协议
++
++```mermaid
++sequenceDiagram
++  participant K as 内核(Kotlin)
++  participant D as Dart（持有引擎 cookie）
++  participant P as dsh-go-proactive（引擎内）
++  participant A as DSH agent
++  K->>D: request {requestId, body}
++  D->>P: POST /request
++  P->>A: followup(user 消息)
++  P-->>D: 202 accepted
++  D-->>K: agentHttp(202, body) → Accepted
++  K->>D: poll
++  D->>P: GET /result?waitMs=20000
++  A-->>P: turn/start, user/message(我们的 id)
++  P-->>D: claimed {turn}
++  A-->>P: assistant/message, turn/end completed
++  P-->>D: generated {text}
++  D-->>K: agentHttp → Generated → READY → Present(令牌)
++```
++
++六个环节分开记录（`ProactiveEvent` 上的独立时间戳）：
++
++| 环节 | 字段 | 由谁证明 |
++|---|---|---|
++| Agent 已接受 | `agentAcceptedAt` | 插件 202：消息在收件箱 |
++| （回合已开始） | `agentClaimedAt` | 插件 claimed：`user/message` 写入日志 |
++| 模型生成成功 | `generatedAt` | 插件 generated：回合 completed 且有可见文本 |
++| 消息成功投递 | `deliveredAt` | 页面已启动 / 通知已发出 |
++| 界面确实展示 | `shownAt` | 页面 onResume；**通知永远不能单方面声称"已展示"**，只有用户点它或划掉才算 |
++| 用户主动回应 | `respondedAt` | 页面按钮 / 通知按钮（令牌匹配） |
++| 未回应或取消 | `outcome` TIMEOUT / DISMISSED / CANCELLED | — |
++
++DSH 现有 API **不支持**的环节和最小适配：
++
++| 缺口 | 现状 | 本轮的最小方案 |
++|---|---|---|
++| followup 没有回执 | rc.4 里 `followup()` 同步、无返回值；不会告诉你何时开始、何时结束 | 插件按消息 id 监听 `user/message` 和 `turn/end` 自己推出状态 |
++| 不能撤回已认领的消息 | `agent.cancel()` 会清空整个收件箱并中止当前回合 | 取消只作废结果，**不中止**回合；文档明确写出 |
++| 不能以非 user 角色送入 | developer 角色会让回合报错 | 用 user 消息 + 文字框住"这不是用户说的" |
++| 插件不能新建/唤醒会话（设计选择） | `sessionController.create()` 可以建，但会凭空多出会话 | 只投给已配置、活着、空闲的会话；否则 409，App 不展示任何东西 |
++| 记录不持久 | 插件记录在内存 | 插件重启后查询 404 → App 记 `lost`，事件按失败处理 |
++| 模型可能仍调用工具 | 提示里要求不调用，但没法强制 | 若它真的动手机，PhoneTasks 变活跃，内核让路；列为审查问题 |
++
++真实验证（本沙箱，2026-10-30）：按 dsh-go 锁文件装了 `@deepseek-ai/dsh@0.2.1-rc.4`，`dsh web` 加载本插件，模型接本地 Messages API 假服务。`test/e2e-live.mjs` **26/26 通过**：鉴权 401、无会话、不唤醒不存在的会话、真实 followup → 认领到回合 1 → 生成的文字确实是模型返回的那句、同 requestId 重放不再调模型、requestId 冲突、同 eventId 在途、本插件忙、**用户自己正在和 agent 对话时 agent-busy**、回合进行中取消且回合结束后的文字不交出、截止时间到判失败。插件纯逻辑测试 10/10。
++
++## 5. 测试一览
++
++| 层 | 命令 | 结果 |
++|---|---|---|
++| 内核 JVM（含第一轮 17） | kotlinc + JUnit 4.13.2 | 66/66 |
++| 其中 12 个指定场景 | 见下表 | 全部覆盖 |
++| 插件纯逻辑 | `node --test test/core.test.mjs` | 10/10 |
++| 插件 × 真实 DSH 引擎 | `node test/e2e-live.mjs …` | 26/26 |
++| Android 适配编译检查 | kotlinc 对 Robolectric android-all（API 35）+ Flutter embedding；DSH 内部类用照抄签名的桩 | 通过（≠ Gradle 构建） |
++
++| # | 场景 | 测试 |
++|---|---|---|
++| 1 | 同时触发两个事件 | Coordinator: twoEventsAtOnce…, waitingEventsAreOrdered…, sameIntentMerges…, fullQueueDrops… |
++| 2 | 任务进行中收到主动事件 | aRunningTaskHolds…, yieldingTooOften…, KernelChain: …WaitsForDsh… |
++| 3 | 用户正在审批权限 | anOpenDshQuestionOrPermissionPage… |
++| 4 | Agent 请求超时 | agentTimeoutCancels…, agentFailureWithoutFallback…, 插件 deadline（真实引擎） |
++| 5 | 响应回来时事件已取消 | aReplyForACancelledEvent…, aReplyFromAnOlderAttempt…, 插件 cancel（真实引擎） |
++| 6 | 进程重启后恢复调度 | restartResumes…, Scheduler: restartKeepsThePlan…, aLostPendingAttempt…, KernelChain: processDeathMidTurn… |
++| 7 | 系统时间变化 | clockGoingBack…, movingTheWallClock…, settingTheDateBack…, rebootWithAJumpedClock… |
++| 8 | 通知已发出但没看见 | aPostedNotificationThatTimesOut…, unconfirmedDelivery… |
++| 9 | 连续两次确认投递无人回应 | ignoredMessagesWidenTheGapAndThenPause |
++| 10 | 无障碍断开 | withoutAccessibilityPagesBecomeNotifications… |
++| 11 | 用户关闭主动功能 | switchingOffCancelsEverything…, switchingOffWithAPageUp…, disabledSchedulerNeverFires… |
++| 12 | 重复回执和过期按钮 | anEventIdRunsOnce…, pendingAttemptBlocks…（重复回执被忽略）, 插件 replay |
++
++## 6. 边界
++
++**已实现并有测试**：仲裁状态机、调度纯逻辑、协议编解码、宿主插件（真实引擎验证）。
++
++**已实现、只做了编译检查**：`loop/proactive/` Android 适配（Gate 读取、命令执行、令牌页面、闹钟与开机接收器、`dsh/proactive` 通道）。
++
++**未实现（交给 DeepSeek，见集成指南）**：Dart 侧 HTTP 转发、通知界面（`NotificationPort`）、设置页、把第一轮"打开测试 APP"事件改走内核、插件随 runtime 打包。
++
++**NOT_TESTED（没有真机证据）**：所有 Android 行为——无障碍服务启动页面是否被国产 ROM 拦截、闹钟在省电策略下是否送达、开机广播、强行停止后的恢复、PhoneTasks / PromptArbiter 回调在真实任务中的时序、页面在锁屏/灭屏时的生命周期、Gradle 构建。真实 DeepSeek 模型（只用了假模型）。远程主机（SSH/中转）上的插件。
++
++## 7. 下一轮请 Claude 审查
++
++1. `PhonePrompts.onBusyChanged` 回调放在 `schedule()` 和 `onFinished` 里，是否覆盖所有提问入口（`NotificationGate.ask` 旧路径在 promptGate 为空时不经过它）。
++2. `Gate.dshTaskActive` 用 `tasks.isActive || callsInFlight > 0`：任务空闲 3 分钟才结束，期间主动交互一直被压住，是否需要更细的"Agent 正在动手机"信号。
++3. Agent 在主动回合里如果仍然调用手机工具：要不要在插件里用 `agent/pre-step` 拦截工具，或者给这类回合单独的无工具预设。
++4. 插件记录只在内存：是否值得持久化，还是接受"插件重启 = 本次失败"。
++5. 取消不中止回合：是否需要"只有本插件发起且尚未产出可见文字时才中止"的窄路径。
++6. 目标会话的选择：现在要用户指定一个；是否需要"最近活跃且空闲的根会话"自动选择，以及它的隐私含义。
++7. `ProactivePageActivity` 与第一轮 `InteractionActivity` 是否合并成一个令牌化页面。
++8. 时钟回拨误差（≤ 两次调用间隔）是否可接受，还是截止时间改用 elapsedRealtime + 重启校正。
+diff --git a/runtime/proactive/dsh-go-proactive/README.md b/runtime/proactive/dsh-go-proactive/README.md
+new file mode 100644
+index 0000000..ad18562
+--- /dev/null
++++ b/runtime/proactive/dsh-go-proactive/README.md
+@@ -0,0 +1,94 @@
++# dsh-go-proactive：Android ↔ DSH Agent 接口契约 v1
++
++DSH 宿主插件。把手机端的一条主动事件交给**一个已经活着、正空闲**的 DSH 会话，作为一次 `followup` 回合，再把这回合的结果如实报回 App。
++
++零依赖 ESM，和 `dsh-go-bridge` 一样可以按绝对路径加载：
++
++```yaml
++# --patch proactive.patch.yml
++- insert:
++    - id: dsh-go-proactive
++      name: /opt/dsh-go/dsh-go-proactive/lib/index.js
++```
++
++## 已在真实引擎上核实的前提（@deepseek-ai/dsh 0.2.1-rc.4，dsh-go 锁定版本）
++
++| 事实 | 出处 |
++|---|---|
++| `ctx.agents.get(id)` 只返回**活着的** agent；`status` 只有 `idle` / `running`（等审批、等回答也算 running） | `dsh-agent/lib/index.js` AgentRegistry.get、`dsh-agent-loop` ReactLoopAgent.status |
++| `agent.followup(msg)` 在这个版本是**同步**的：放进 `next-turn` 收件箱并唤醒；agent 正在跑时，消息排到**当前回合之后**另开一轮 | `dsh-agent-loop` send/followup/wakeDriver |
++| 收件箱消息只能是 `role: "user"`；`developer` 角色会让回合报错 | dsh-speak-up 的源码证据，`dsh-session` validateSessionEventData |
++| 会话事件：`turn/start {turn}`、`user/message`（数据就是那条消息，含我们给的 `id`）、`assistant/message {turn, step, message:{content}, interrupted?}`、`turn/end {turn, reason:{kind}}`，kind ∈ completed / blocked / aborted / error / max-tokens | `dsh-agent-loop` turn()/step() |
++| `ctx.on('session/event', (session, event))` 能收到上面所有事件 | `dsh-session` commit() |
++| 插件自注册的路由**不自动鉴权**；要自己调 `connection.requestRejection(req)` | `dsh-client-connection`、`dsh-go-bridge` rejectionOf |
++
++## 路由（前缀 `/dsh-go-proactive/v1`，全部要求 /api 同等凭据：无凭据 401、跨站 403、未就绪 503）
++
++### `POST /request`
++
++```json
++{ "v": 1, "requestId": "8–128 位 [A-Za-z0-9_-]", "eventId": "同左",
++  "kind": "app_enter", "payload": { "packageName": "com.example", "localTime": "09:15" },
++  "sessionId": "可选，缺省用 /config 设的", "deadlineMs": 45000 }
++```
++
++| 应答 | 含义 |
++|---|---|
++| `202 {state:"accepted", …}` | 消息已进 agent 收件箱。**不是**回合开始，更不是生成成功 |
++| `200 {…记录…}` | 同一个 requestId 重放：只报告，不再发第二次 |
++| `409 no-session` | 没指定、也没配置目标会话 |
++| `409 no-agent` | 会话不存在或没活着。**插件从不新建或唤醒会话** |
++| `409 archived` | 会话已归档 |
++| `409 agent-busy` | agent 正在跑（包括用户自己正在对话、等审批）或收件箱有待处理消息 |
++| `409 desk-busy` | 插件已有一个在途请求（一次只处理一个） |
++| `409 event-in-flight` | 同一个 eventId 已有在途请求 |
++| `409 request-id-conflict` | requestId 已用于另一个 eventId |
++| `409 followup-failed` | followup 当场抛错 |
++| `400 bad-*` / `413` / `415` | 参数、大小、content-type 不对 |
++
++payload 只放事实（包名、本地时间、计数），最多 16 个键、每个值 ≤ 200 字。**App 永远不发送屏幕内容。**
++
++### `GET /result?requestId=…&waitMs=0–25000`
++
++长轮询：状态变化或超时就返回。记录：
++
++```json
++{ "v": 1, "requestId": "…", "eventId": "…", "sessionId": "…", "state": "accepted|claimed|generated|failed|cancelled",
++  "acceptedAt": 0, "claimedAt": null, "turn": null, "generatedAt": null,
++  "text": "仅 generated 时有", "truncated": false, "failure": { "code": "…" }, "cancelledAt": null, "deadline": 0 }
++```
++
++| state | 证明了什么 |
++|---|---|
++| `accepted` | 消息在收件箱 |
++| `claimed` | agent 循环认领了它（`user/message` 已写入会话日志），回合 `turn` 正在跑 |
++| `generated` | 该回合以 completed / max-tokens 结束，且有可见文本。**只说明模型给出了文字，不说明用户看到了** |
++| `failed` | `no-text`、`turn-error`、`turn-aborted`、`turn-blocked`、`agent-gone`、`deadline`、`followup-rejected` |
++| `cancelled` | App 撤回；之后到达的文本永不交出（计入 `counters.lateText`） |
++
++插件重启后记录丢失（只在内存），旧 requestId 查询返回 `404 not-found`，App 侧解释为 `lost`。
++
++### `POST /cancel {requestId}`
++
++记录变为 `cancelled`。**不中止**已经开始的回合：那一轮属于会话本身，它的文字会照常留在会话历史里，只是不再交给 App 展示。
++
++### `GET /status`、`POST /config {sessionId}`
++
++当前目标会话、活着的根 agent 列表、计数器；设置目标会话（存到 `$DSH_HOME/storages/dsh-go-proactive/config.json`）。
++
++## 给模型的文字
++
++```
++（下面不是用户说的话，是 DSH Go 手机端发来的一条主动交互事件。请据此主动对用户说一两句自然、简短的话；
++不要调用任何工具，尤其不要操作手机；不要提到“事件”“系统”这些字眼。）
++kind=app_enter
++packageName=com.example
++```
++
++角色只能是 user（见上表），所以用文字框住"这不是用户说的"——dsh-speak-up 已经踩过"被当成用户在说话"的坑。
++
++## 测试
++
++- `node --test test/core.test.mjs`：纯逻辑 10 项，不需要引擎。
++- `node test/e2e-live.mjs <dsh可执行文件> <端口> <假模型端口> <假模型日志>`：起真实 `dsh web`，模型换成 `test/mock-messages.mjs`（本地 Messages API 假服务），26 项检查。结果见 `docs/loop/ROUND2.md`。
++- `test/fixture-session/` 只给端到端测试用：新建会话、模拟用户发消息。**不要随插件发布。**
+diff --git a/runtime/proactive/dsh-go-proactive/cordis.patch.yml b/runtime/proactive/dsh-go-proactive/cordis.patch.yml
+new file mode 100644
+index 0000000..1ddfc14
+--- /dev/null
++++ b/runtime/proactive/dsh-go-proactive/cordis.patch.yml
+@@ -0,0 +1,5 @@
++# Layer applied when a profile lists this bundle (`dsh plugin add dsh-go-proactive`).
++# The dsh-app runtime can instead load lib/index.js by absolute path, like dsh-go-bridge.
++- insert:
++    - id: dsh-go-proactive
++      name: dsh-go-proactive
+diff --git a/runtime/proactive/dsh-go-proactive/lib/core.js b/runtime/proactive/dsh-go-proactive/lib/core.js
+new file mode 100644
+index 0000000..da9f5d4
+--- /dev/null
++++ b/runtime/proactive/dsh-go-proactive/lib/core.js
+@@ -0,0 +1,266 @@
++// dsh-go-proactive, pure core: one record per proactive request, driven by session events.
++//
++// What each state proves (and nothing more):
++//   accepted   the message is in the agent's inbox (agent.followup returned without throwing)
++//   claimed    the loop took it: its user/message is in the session log and a turn is running
++//   generated  that turn ended `completed` (or `max-tokens`) with visible assistant text
++//   failed     the turn ended otherwise, the agent went away, or the deadline passed
++//   cancelled  the App withdrew it; any later text is never handed out
++// None of these says the person saw anything: that is the App's InteractionHub, not the engine.
++//
++// Verified against @deepseek-ai/dsh 0.2.1-rc.4 (the version dsh-go pins):
++//   - agents.get(id) returns only live agents; status is "idle" | "running"
++//   - followup(message) is synchronous there (send to the "next-turn" inbox + wake); a running
++//     agent queues it for the turn after the current one, so we refuse busy agents instead
++//   - session events: turn/start {turn}; user/message = the message itself; assistant/message
++//     {turn, step, message:{content}, interrupted?}; turn/end {turn, reason:{kind}}
++//   - only role "user" is accepted for inbox messages (dsh-speak-up's finding, see README)
++
++export const SOURCE_KIND = 'dsh-go-proactive'
++const ID_RE = /^[A-Za-z0-9_-]{8,128}$/
++const TERMINAL = new Set(['generated', 'failed', 'cancelled'])
++
++export const DEFAULT_LIMITS = Object.freeze({
++  minDeadlineMs: 5_000,
++  maxDeadlineMs: 120_000,
++  maxPayloadKeys: 16,
++  maxPayloadValue: 200,
++  maxText: 2_000,
++  keepRecords: 200,
++  keepMs: 3_600_000,
++})
++
++export const DEFAULT_INSTRUCTION =
++  '（下面不是用户说的话，是 DSH Go 手机端发来的一条主动交互事件。请据此主动对用户说一两句自然、简短的话；' +
++  '不要调用任何工具，尤其不要操作手机；不要提到“事件”“系统”这些字眼。）'
++
++/** @returns {{code: string, status: number}|null} */
++function bad(code, status = 400) { return { code, status } }
++
++export function validateRequest(body, limits = DEFAULT_LIMITS) {
++  if (body === null || typeof body !== 'object' || Array.isArray(body)) return { error: bad('bad-request') }
++  if (body.v !== undefined && body.v !== 1) return { error: bad('unsupported-version') }
++  const { requestId, eventId, kind = 'event', sessionId, payload = {}, deadlineMs = 45_000 } = body
++  if (typeof requestId !== 'string' || !ID_RE.test(requestId)) return { error: bad('bad-request-id') }
++  if (typeof eventId !== 'string' || !ID_RE.test(eventId)) return { error: bad('bad-event-id') }
++  if (typeof kind !== 'string' || kind.length === 0 || kind.length > 64) return { error: bad('bad-kind') }
++  if (sessionId !== undefined && (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 256)) return { error: bad('bad-session-id') }
++  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return { error: bad('bad-payload') }
++  const entries = Object.entries(payload)
++  if (entries.length > limits.maxPayloadKeys) return { error: bad('too-large', 413) }
++  for (const [k, v] of entries) {
++    if (typeof v !== 'string' || k.length > 64 || v.length > limits.maxPayloadValue) return { error: bad('bad-payload') }
++  }
++  if (!Number.isInteger(deadlineMs)) return { error: bad('bad-deadline') }
++  return {
++    value: {
++      requestId, eventId, kind, sessionId, payload: Object.fromEntries(entries),
++      deadlineMs: Math.min(Math.max(deadlineMs, limits.minDeadlineMs), limits.maxDeadlineMs),
++    },
++  }
++}
++
++/** The text the agent receives. Facts only; never screen contents (the App never sends any). */
++export function composeText(req, instruction = DEFAULT_INSTRUCTION) {
++  const facts = [`kind=${req.kind}`, ...Object.entries(req.payload).map(([k, v]) => `${k}=${v}`)]
++  return `${instruction}\n${facts.join('\n')}`
++}
++
++/** Visible text of an assistant/message event's message (text blocks only). */
++export function assistantText(data) {
++  const content = data?.message?.content
++  if (!Array.isArray(content)) return ''
++  return content.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('').trim()
++}
++
++/**
++ * The desk: request records and the transitions above. Everything that touches DSH is injected,
++ * so the same code runs against the real engine (lib/index.js) and in unit tests.
++ */
++export class Desk {
++  /**
++   * @param {object} deps
++   * @param {(id: string) => any} deps.findAgent  live agent or undefined
++   * @param {(id: string) => boolean} [deps.isArchived]
++   * @param {(text: string) => any} deps.makeMessage  a user message with `id`
++   * @param {() => number} [deps.now]
++   * @param {object} [deps.limits]
++   * @param {() => string|undefined} [deps.defaultSession]
++   * @param {string} [deps.instruction]
++   */
++  constructor(deps) {
++    this.deps = { now: Date.now, isArchived: () => false, defaultSession: () => undefined, limits: DEFAULT_LIMITS, ...deps }
++    /** @type {Map<string, any>} */
++    this.records = new Map()
++    /** sessionId -> current turn number seen in turn/start */
++    this.turns = new Map()
++    this.waiters = new Map()
++    this.counters = { accepted: 0, refused: 0, generated: 0, failed: 0, cancelled: 0, lateText: 0 }
++  }
++
++  now() { return this.deps.now() }
++
++  view(r) {
++    if (!r) return undefined
++    return {
++      v: 1, requestId: r.requestId, eventId: r.eventId, sessionId: r.sessionId, state: r.state,
++      acceptedAt: r.acceptedAt, claimedAt: r.claimedAt ?? null, turn: r.turn ?? null,
++      generatedAt: r.generatedAt ?? null, text: r.state === 'generated' ? r.text : null,
++      truncated: r.truncated ?? false, failure: r.failure ?? null, cancelledAt: r.cancelledAt ?? null,
++      deadline: r.deadline,
++    }
++  }
++
++  /** POST /request. Returns {status, body}. Never calls followup twice for one requestId or eventId. */
++  request(raw) {
++    const { value: req, error } = validateRequest(raw, this.deps.limits)
++    if (error) return this.refuse(error.status, error.code)
++    this.sweep()
++    const same = this.records.get(req.requestId)
++    if (same) {
++      if (same.eventId !== req.eventId) return this.refuse(409, 'request-id-conflict')
++      return { status: 200, body: this.view(same) } // replay: report, do not send again
++    }
++    for (const r of this.records.values()) {
++      if (r.eventId === req.eventId && !TERMINAL.has(r.state)) return this.refuse(409, 'event-in-flight')
++      if (!TERMINAL.has(r.state)) return this.refuse(409, 'desk-busy')
++    }
++    const sessionId = req.sessionId ?? this.deps.defaultSession()
++    if (!sessionId) return this.refuse(409, 'no-session')
++    if (this.deps.isArchived(sessionId)) return this.refuse(409, 'archived')
++    const agent = this.deps.findAgent(sessionId)
++    if (agent === undefined) return this.refuse(409, 'no-agent') // never woken or created here
++    if (agent.status !== undefined && agent.status !== 'idle') return this.refuse(409, 'agent-busy')
++    if (agent.inbox?.hasPending) return this.refuse(409, 'agent-busy')
++
++    const message = this.deps.makeMessage(composeText(req, this.deps.instruction))
++    try {
++      const ret = agent.followup(message)
++      // Newer DSH versions may return a Promise; never leave its rejection unhandled.
++      if (ret && typeof ret.then === 'function') ret.then(undefined, (e) => this.fail(req.requestId, 'followup-rejected', String(e?.message ?? e)))
++    } catch (e) {
++      return this.refuse(409, 'followup-failed', String(e?.message ?? e))
++    }
++    const now = this.now()
++    const r = {
++      ...req, sessionId: agent.id ?? sessionId, messageId: message.id, state: 'accepted',
++      acceptedAt: now, deadline: now + req.deadlineMs,
++    }
++    this.records.set(req.requestId, r)
++    this.counters.accepted++
++    return { status: 202, body: this.view(r) }
++  }
++
++  refuse(status, code, detail) {
++    this.counters.refused++
++    return { status, body: { v: 1, error: { code, message: detail ?? code } } }
++  }
++
++  /** GET /result. */
++  result(requestId) {
++    this.sweep()
++    const r = this.records.get(requestId)
++    return r ? { status: 200, body: this.view(r) } : { status: 404, body: { v: 1, error: { code: 'not-found', message: 'unknown request' } } }
++  }
++
++  /** Resolves when the record changes or after waitMs; the long poll behind GET /result?waitMs. */
++  async wait(requestId, waitMs) {
++    const r = this.records.get(requestId)
++    if (!r || TERMINAL.has(r.state) || waitMs <= 0) return this.result(requestId)
++    await new Promise((resolve) => {
++      const list = this.waiters.get(requestId) ?? []
++      const timer = setTimeout(done, Math.min(waitMs, 25_000))
++      function done() { clearTimeout(timer); resolve() }
++      list.push(done)
++      this.waiters.set(requestId, list)
++    })
++    return this.result(requestId)
++  }
++
++  /**
++   * POST /cancel. The record stops; text that arrives later is dropped. The agent's turn is not
++   * aborted: a turn already running belongs to the session, and its text stays in the history.
++   */
++  cancel(requestId) {
++    const r = this.records.get(requestId)
++    if (!r) return { status: 404, body: { v: 1, error: { code: 'not-found', message: 'unknown request' } } }
++    if (!TERMINAL.has(r.state)) {
++      r.state = 'cancelled'
++      r.cancelledAt = this.now()
++      this.counters.cancelled++
++      this.wake(requestId)
++    }
++    return { status: 200, body: this.view(r) }
++  }
++
++  /** One session/event for `sessionId`. */
++  onSessionEvent(sessionId, event) {
++    if (!event || typeof event.type !== 'string') return
++    const data = event.data
++    if (event.type === 'turn/start' && Number.isInteger(data?.turn)) { this.turns.set(sessionId, data.turn); return }
++    for (const r of this.records.values()) {
++      if (r.sessionId !== sessionId) continue
++      if (event.type === 'user/message' && data?.id === r.messageId) {
++        if (r.state === 'accepted') {
++          r.state = 'claimed'
++          r.claimedAt = this.now()
++          r.turn = this.turns.get(sessionId) ?? null
++          this.wake(r.requestId)
++        }
++      } else if (event.type === 'assistant/message' && r.turn != null && data?.turn === r.turn) {
++        const text = assistantText(data)
++        if (text) {
++          if (r.state === 'claimed') { r.lastText = text.slice(0, this.deps.limits.maxText); r.interrupted = data.interrupted === true }
++          else if (r.state === 'cancelled') this.counters.lateText++
++        }
++      } else if (event.type === 'turn/end' && r.turn != null && data?.turn === r.turn && r.state === 'claimed') {
++        const kind = data?.reason?.kind
++        if ((kind === 'completed' || kind === 'max-tokens') && r.lastText && !r.interrupted) {
++          r.state = 'generated'
++          r.text = r.lastText
++          r.truncated = kind === 'max-tokens'
++          r.generatedAt = this.now()
++          this.counters.generated++
++        } else {
++          this.fail(r.requestId, kind === 'completed' ? 'no-text' : `turn-${kind ?? 'unknown'}`, data?.reason?.error?.message)
++        }
++        this.wake(r.requestId)
++      }
++    }
++  }
++
++  /** The agent of a session went away. */
++  onAgentGone(sessionId) {
++    for (const r of this.records.values()) if (r.sessionId === sessionId && !TERMINAL.has(r.state)) this.fail(r.requestId, 'agent-gone')
++  }
++
++  fail(requestId, code, detail) {
++    const r = this.records.get(requestId)
++    if (!r || TERMINAL.has(r.state)) return
++    r.state = 'failed'
++    r.failure = { code, ...(detail ? { detail: String(detail).slice(0, 300) } : {}) }
++    this.counters.failed++
++    this.wake(requestId)
++  }
++
++  /** Deadlines and history trimming. Cheap; called on every request and by a slow timer. */
++  sweep() {
++    const now = this.now()
++    for (const r of this.records.values()) {
++      // The turn may still finish later; the App has stopped waiting, so its text is not handed out.
++      if (!TERMINAL.has(r.state) && now >= r.deadline) this.fail(r.requestId, 'deadline')
++    }
++    const { keepRecords, keepMs } = this.deps.limits
++    for (const [id, r] of this.records) {
++      if (this.records.size <= keepRecords && now - r.acceptedAt < keepMs) break
++      if (TERMINAL.has(r.state)) this.records.delete(id)
++    }
++  }
++
++  wake(requestId) {
++    const list = this.waiters.get(requestId)
++    if (!list) return
++    this.waiters.delete(requestId)
++    for (const done of list) done()
++  }
++}
+diff --git a/runtime/proactive/dsh-go-proactive/lib/index.js b/runtime/proactive/dsh-go-proactive/lib/index.js
+new file mode 100644
+index 0000000..82d8abd
+--- /dev/null
++++ b/runtime/proactive/dsh-go-proactive/lib/index.js
+@@ -0,0 +1,134 @@
++// dsh-go-proactive, host half: lets the dsh-go App hand a proactive event to a DSH agent and read
++// back what the agent said. See ../README.md for the protocol and lib/core.js for the states.
++//
++//   POST /dsh-go-proactive/v1/request   {v, requestId, eventId, kind, payload, sessionId?, deadlineMs}
++//   GET  /dsh-go-proactive/v1/result?requestId=…&waitMs=…   long poll (≤ 25 s)
++//   POST /dsh-go-proactive/v1/cancel    {requestId}
++//   GET  /dsh-go-proactive/v1/status    configured session, live agents, counters
++//   POST /dsh-go-proactive/v1/config    {sessionId}  the session proactive turns go to
++//
++// Every route requires what /api requires (Connection's Host/Origin fence plus the browser
++// cookie or an API credential), checked here even when the webserver also guards.
++// Zero dependencies, like dsh-go-bridge: it may be loaded by absolute path.
++import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
++import { homedir } from 'node:os'
++import { join } from 'node:path'
++import { randomUUID } from 'node:crypto'
++import { Desk, SOURCE_KIND } from './core.js'
++
++export const name = 'dsh-go-proactive'
++const PREFIX = '/dsh-go-proactive/v1'
++const MAX_BODY = 16 * 1024
++
++function configPath() {
++  const home = process.env.DSH_HOME || join(homedir(), '.dsh')
++  return join(home, 'storages', 'dsh-go-proactive', 'config.json')
++}
++
++function readConfig() {
++  try { return JSON.parse(readFileSync(configPath(), 'utf8')) } catch { return {} }
++}
++
++function writeConfig(cfg) {
++  const p = configPath()
++  mkdirSync(join(p, '..'), { recursive: true })
++  writeFileSync(p + '.tmp', JSON.stringify(cfg))
++  renameSync(p + '.tmp', p)
++}
++
++function send(res, status, body) {
++  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
++  res.end(JSON.stringify(body))
++}
++
++async function readJson(req) {
++  if (!String(req.headers['content-type'] ?? '').startsWith('application/json')) return { error: 415 }
++  let size = 0
++  const chunks = []
++  for await (const c of req) {
++    size += c.length
++    if (size > MAX_BODY) return { error: 413 }
++    chunks.push(c)
++  }
++  try { return { value: JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') } } catch { return { error: 400 } }
++}
++
++/** Live agent by id, accepting ids with or without the `session-` prefix (dsh-speak-up's lesson). */
++function findAgent(ctx, id) {
++  const agents = ctx.get?.('agents') ?? ctx.agents
++  if (!agents || typeof id !== 'string') return undefined
++  const ids = id.startsWith('session-') ? [id, id.slice(8)] : [id, `session-${id}`]
++  for (const x of ids) {
++    try { const a = agents.get(x); if (a !== undefined) return a } catch { /* not found */ }
++  }
++  return undefined
++}
++
++function userMessage(text) {
++  return { id: randomUUID(), role: 'user', content: [{ type: 'text', text }], source: { kind: SOURCE_KIND } }
++}
++
++export function apply(ctx) {
++  let config = readConfig()
++  const desk = new Desk({
++    findAgent: (id) => findAgent(ctx, id),
++    isArchived: (id) => {
++      try { return (ctx.get?.('workspaceRegistry') ?? ctx.workspaceRegistry)?.archivedSessionIds?.includes(id) === true } catch { return false }
++    },
++    makeMessage: userMessage,
++    defaultSession: () => config.sessionId,
++    instruction: typeof config.instruction === 'string' && config.instruction.length <= 1000 ? config.instruction : undefined,
++  })
++
++  ctx.on('session/event', (session, event) => {
++    try { desk.onSessionEvent(session?.id, event) } catch { /* never disturb the session */ }
++  })
++  ctx.on('agent/disposed', (agent) => {
++    try { if (agent?.id) desk.onAgentGone(agent.id) } catch { /* ignore */ }
++  })
++  const sweeper = setInterval(() => desk.sweep(), 5_000)
++  sweeper.unref?.()
++  ctx.effect?.(() => () => clearInterval(sweeper))
++
++  const rejection = (req) => {
++    const connection = ctx.get?.('connection')
++    return connection === undefined ? 503 : connection.requestRejection(req)
++  }
++
++  const handler = async (req, res) => {
++    const denied = rejection(req)
++    if (denied !== undefined) { res.writeHead(denied, { 'cache-control': 'no-store' }); res.end(); return }
++    const url = new URL(req.url, 'http://local')
++    const path = url.pathname.slice(PREFIX.length)
++    try {
++      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config')) {
++        const body = await readJson(req)
++        if (body.error) return send(res, body.error, { v: 1, error: { code: body.error === 415 ? 'unsupported-media-type' : body.error === 413 ? 'too-large' : 'bad-request', message: 'body' } })
++        if (path === '/request') { const r = desk.request(body.value); return send(res, r.status, r.body) }
++        if (path === '/cancel') { const r = desk.cancel(String(body.value?.requestId ?? '')); return send(res, r.status, r.body) }
++        const sid = body.value?.sessionId
++        if (sid !== null && (typeof sid !== 'string' || sid.length > 256)) return send(res, 400, { v: 1, error: { code: 'bad-session-id', message: 'sessionId' } })
++        config = { ...config, sessionId: sid ?? undefined }
++        writeConfig(config)
++        return send(res, 200, { v: 1, sessionId: config.sessionId ?? null })
++      }
++      if (req.method === 'GET' && path === '/result') {
++        const waitMs = Math.min(Math.max(Number(url.searchParams.get('waitMs') ?? 0) || 0, 0), 25_000)
++        const r = await desk.wait(String(url.searchParams.get('requestId') ?? ''), waitMs)
++        return send(res, r.status, r.body)
++      }
++      if (req.method === 'GET' && path === '/status') {
++        const agents = ctx.get?.('agents') ?? ctx.agents
++        const live = (agents?.roots?.() ?? agents?.list?.() ?? []).map((a) => ({ id: a.id, status: a.status }))
++        return send(res, 200, { v: 1, sessionId: config.sessionId ?? null, agents: live, counters: desk.counters })
++      }
++      return send(res, 404, { v: 1, error: { code: 'not-found', message: path } })
++    } catch (e) {
++      return send(res, 500, { v: 1, error: { code: 'plugin-error', message: String(e?.message ?? e) } })
++    }
++  }
++
++  ctx.inject(['webServer'], (webCtx) => {
++    webCtx.effect(() => webCtx.webServer.register({ kind: 'prefix', path: PREFIX, handler }), 'dsh-go-proactive: routes')
++  })
++}
+diff --git a/runtime/proactive/dsh-go-proactive/package.json b/runtime/proactive/dsh-go-proactive/package.json
+new file mode 100644
+index 0000000..506ca57
+--- /dev/null
++++ b/runtime/proactive/dsh-go-proactive/package.json
+@@ -0,0 +1,13 @@
++{
++  "name": "dsh-go-proactive",
++  "version": "0.1.0",
++  "description": "dsh-go host plugin: hands a proactive phone event to a live DSH agent as one followup turn and reports accepted / claimed / generated / failed / cancelled, never more than happened.",
++  "type": "module",
++  "main": "lib/index.js",
++  "exports": { ".": "./lib/index.js", "./core": "./lib/core.js", "./package.json": "./package.json" },
++  "files": ["lib/index.js", "lib/core.js", "cordis.patch.yml"],
++  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
++  "engines": { "node": ">=20" },
++  "scripts": { "test": "node --test test/core.test.mjs" },
++  "license": "AGPL-3.0-only"
++}
+diff --git a/runtime/proactive/dsh-go-proactive/test/core.test.mjs b/runtime/proactive/dsh-go-proactive/test/core.test.mjs
+new file mode 100644
+index 0000000..8033a29
+--- /dev/null
++++ b/runtime/proactive/dsh-go-proactive/test/core.test.mjs
+@@ -0,0 +1,149 @@
++// Unit tests for lib/core.js with a fake agent and hand-written session events
++// (shapes copied from @deepseek-ai/dsh-agent-loop 0.2.1-rc.4). Run: node --test test/core.test.mjs
++import { test } from 'node:test'
++import assert from 'node:assert/strict'
++import { Desk, validateRequest, assistantText, composeText } from '../lib/core.js'
++
++function setup({ status = 'idle', throws, rejects } = {}) {
++  let now = 1_000
++  let n = 0
++  const sent = []
++  const agent = {
++    id: 'session-a', status, inbox: { hasPending: false },
++    followup(m) {
++      if (throws) throw new Error('boom')
++      sent.push(m)
++      return rejects ? Promise.reject(new Error('later')) : undefined
++    },
++  }
++  const desk = new Desk({
++    findAgent: (id) => (id === 'session-a' ? agent : undefined),
++    makeMessage: (text) => ({ id: `m${++n}`, role: 'user', content: [{ type: 'text', text }], source: { kind: 'dsh-go-proactive' } }),
++    now: () => now,
++    defaultSession: () => 'session-a',
++  })
++  return { desk, agent, sent, tick: (ms) => { now += ms } }
++}
++const req = (i, extra = {}) => ({ v: 1, requestId: `request-${i}`, eventId: `event-00${i}`, kind: 'app_enter', payload: { packageName: 'com.x' }, ...extra })
++const say = (turn, text, extra = {}) => ({ type: 'assistant/message', data: { turn, step: 0, message: { content: [{ type: 'text', text }] }, ...extra } })
++function runTurn(desk, msgId, turn, events) {
++  desk.onSessionEvent('session-a', { type: 'turn/start', data: { turn } })
++  desk.onSessionEvent('session-a', { type: 'user/message', data: { id: msgId, role: 'user' } })
++  for (const e of events) desk.onSessionEvent('session-a', e)
++}
++
++test('validation', () => {
++  assert.equal(validateRequest(null).error.code, 'bad-request')
++  assert.equal(validateRequest({ requestId: 'x', eventId: 'event-001' }).error.code, 'bad-request-id')
++  assert.equal(validateRequest({ ...req(1), v: 2 }).error.code, 'unsupported-version')
++  assert.equal(validateRequest({ ...req(1), payload: { a: 1 } }).error.code, 'bad-payload')
++  assert.equal(validateRequest({ ...req(1), deadlineMs: 1 }).value.deadlineMs, 5000)
++  assert.equal(validateRequest({ ...req(1), deadlineMs: 10 ** 9 }).value.deadlineMs, 120000)
++})
++
++test('accepted → claimed → generated, with the last visible text of that turn', () => {
++  const { desk, sent } = setup()
++  const a = desk.request(req(1))
++  assert.equal(a.status, 202)
++  assert.equal(a.body.state, 'accepted')
++  assert.equal(sent.length, 1)
++  assert.ok(sent[0].content[0].text.includes('packageName=com.x'))
++  runTurn(desk, sent[0].id, 4, [
++    say(4, ''), // a tool-call step without text
++    { type: 'assistant/message', data: { turn: 3, message: { content: [{ type: 'text', text: 'other turn' }] } } },
++    say(4, '你好'),
++  ])
++  assert.equal(desk.result('request-1').body.state, 'claimed')
++  assert.equal(desk.result('request-1').body.text, null, 'no text before the turn ends')
++  desk.onSessionEvent('session-a', { type: 'turn/end', data: { turn: 4, reason: { kind: 'completed' } } })
++  const r = desk.result('request-1').body
++  assert.equal(r.state, 'generated')
++  assert.equal(r.text, '你好')
++  assert.equal(r.turn, 4)
++})
++
++test('a completed turn without text, an error, an abort, an interruption all fail', () => {
++  for (const [events, code] of [
++    [[], 'no-text'],
++    [[say(1, 'half')], 'turn-error', 'error'],
++    [[say(1, 'half')], 'turn-aborted', 'aborted'],
++    [[say(1, 'half', { interrupted: true })], 'no-text'],
++  ].map(([e, c, k]) => [[...e, { type: 'turn/end', data: { turn: 1, reason: { kind: k ?? 'completed', error: { message: 'x' } } } }], c])) {
++    const { desk, sent } = setup()
++    desk.request(req(1))
++    runTurn(desk, sent[0].id, 1, events)
++    const r = desk.result('request-1').body
++    assert.equal(r.state, 'failed')
++    assert.equal(r.failure.code, code)
++    assert.equal(r.text, null)
++  }
++})
++
++test('one followup per requestId and per eventId; one request at a time', () => {
++  const { desk, sent } = setup()
++  desk.request(req(1))
++  assert.equal(desk.request(req(1)).status, 200, 'replay reports')
++  assert.equal(desk.request({ ...req(1), eventId: 'event-009' }).body.error.code, 'request-id-conflict')
++  assert.equal(desk.request({ ...req(2), eventId: 'event-001' }).body.error.code, 'event-in-flight')
++  assert.equal(desk.request(req(3)).body.error.code, 'desk-busy')
++  assert.equal(sent.length, 1)
++})
++
++test('busy, missing, archived and throwing agents are refused without sending', () => {
++  assert.equal(setup({ status: 'running' }).desk.request(req(1)).body.error.code, 'agent-busy')
++  const pend = setup(); pend.agent.inbox.hasPending = true
++  assert.equal(pend.desk.request(req(1)).body.error.code, 'agent-busy')
++  assert.equal(setup().desk.request(req(1, { sessionId: 'session-zzz' })).body.error.code, 'no-agent')
++  const t = setup({ throws: true })
++  assert.equal(t.desk.request(req(1)).body.error.code, 'followup-failed')
++  assert.equal(t.desk.result('request-1').status, 404, 'nothing recorded')
++  const noSession = new Desk({ findAgent: () => undefined, makeMessage: () => ({ id: 'm' }) })
++  assert.equal(noSession.request(req(1)).body.error.code, 'no-session')
++  const arch = new Desk({ findAgent: () => ({ status: 'idle', followup() {} }), makeMessage: () => ({ id: 'm' }), isArchived: () => true, defaultSession: () => 's' })
++  assert.equal(arch.request(req(1)).body.error.code, 'archived')
++})
++
++test('a rejected followup promise fails the record instead of crashing the host', async () => {
++  const { desk } = setup({ rejects: true })
++  assert.equal(desk.request(req(1)).status, 202)
++  await new Promise((r) => setImmediate(r))
++  assert.equal(desk.result('request-1').body.failure.code, 'followup-rejected')
++})
++
++test('cancelled records never hand out text that arrives later', () => {
++  const { desk, sent } = setup()
++  desk.request(req(1))
++  runTurn(desk, sent[0].id, 2, [])
++  assert.equal(desk.cancel('request-1').body.state, 'cancelled')
++  desk.onSessionEvent('session-a', say(2, 'late'))
++  desk.onSessionEvent('session-a', { type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } } })
++  const r = desk.result('request-1').body
++  assert.equal(r.state, 'cancelled')
++  assert.equal(r.text, null)
++  assert.equal(desk.counters.lateText, 1)
++  assert.equal(desk.request(req(2)).status, 202, 'the desk is free again')
++})
++
++test('deadline and agent going away fail open records', () => {
++  const a = setup()
++  a.desk.request(req(1))
++  a.tick(45_000)
++  assert.equal(a.desk.result('request-1').body.failure.code, 'deadline')
++  const b = setup()
++  b.desk.request(req(1))
++  b.desk.onAgentGone('session-a')
++  assert.equal(b.desk.result('request-1').body.failure.code, 'agent-gone')
++})
++
++test('long poll wakes on change', async () => {
++  const { desk, sent } = setup()
++  desk.request(req(1))
++  const p = desk.wait('request-1', 5000)
++  runTurn(desk, sent[0].id, 1, [])
++  assert.equal((await p).body.state, 'claimed')
++})
++
++test('helpers', () => {
++  assert.equal(assistantText({ message: { content: [{ type: 'reasoning', text: 'x' }, { type: 'text', text: ' a ' }, { type: 'tool-call' }] } }), 'a')
++  assert.ok(composeText({ kind: 'k', payload: { a: 'b' } }, 'I').endsWith('kind=k\na=b'))
++})
+diff --git a/runtime/proactive/dsh-go-proactive/test/e2e-live.mjs b/runtime/proactive/dsh-go-proactive/test/e2e-live.mjs
+new file mode 100644
+index 0000000..1e09565
+--- /dev/null
++++ b/runtime/proactive/dsh-go-proactive/test/e2e-live.mjs
+@@ -0,0 +1,147 @@
++// Live end-to-end check of dsh-go-proactive against a real DSH engine (`dsh web`) whose model is
++// a local Messages-API mock (test/mock-messages.mjs). Offline: nothing leaves 127.0.0.1.
++//
++//   node test/e2e-live.mjs <dsh-bin> <port> <mock-port> <mock-log>
++//
++// Checks, in order: guard, no session, real followup turn → generated text that came from the
++// model, replay of the same requestId (no second model call), same eventId in flight, agent busy,
++// cancel while the turn runs (late text never handed out), deadline.
++import { spawn } from 'node:child_process'
++import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
++import { tmpdir } from 'node:os'
++import { join, dirname } from 'node:path'
++import { fileURLToPath } from 'node:url'
++import { request as httpRequest } from 'node:http'
++
++const [dshBin, portArg, mockPortArg, mockLog] = process.argv.slice(2)
++const port = Number(portArg)
++const here = dirname(fileURLToPath(import.meta.url))
++const pluginIndex = join(here, '..', 'lib', 'index.js')
++const fixtureIndex = join(here, 'fixture-session', 'index.js')
++const work = mkdtempSync(join(tmpdir(), 'proactive-e2e-'))
++const patch = join(work, 'proactive.patch.yml')
++writeFileSync(patch, `- insert:\n    - id: dsh-go-proactive\n      name: ${pluginIndex}\n    - id: proactive-fixture\n      name: ${fixtureIndex}\n`)
++
++let failures = 0
++const check = (ok, what) => { console.log(`${ok ? 'PASS' : 'FAIL'} ${what}`); if (!ok) failures++ }
++const mockCalls = () => { try { return readFileSync(mockLog, 'utf8').trim().split('\n').filter((l) => l.includes('/messages')).length } catch { return 0 } }
++
++const child = spawn(dshBin, ['--profile', 'web', '--patch', patch, '--no-open', '--host', '127.0.0.1', '--port', String(port)], {
++  env: { ...process.env, DSH_HOME: join(work, 'home'), DEEPSEEK_API_KEY: 'sk-mock-0000000000000000', DEEPSEEK_BASE_URL: `http://127.0.0.1:${mockPortArg}/anthropic`, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost', FIXTURE_CWD: work },
++  stdio: ['ignore', 'pipe', 'pipe'],
++})
++let out = ''
++child.stdout.on('data', (d) => { out += d })
++child.stderr.on('data', (d) => { out += d })
++
++function http(method, path, { body, cookie } = {}) {
++  return new Promise((resolve, reject) => {
++    const data = body === undefined ? undefined : Buffer.from(JSON.stringify(body))
++    const req = httpRequest({ host: '127.0.0.1', port, method, path, headers: {
++      ...(cookie ? { cookie } : {}), ...(data ? { 'content-type': 'application/json', 'content-length': data.length } : {}),
++    } }, (res) => {
++      let t = ''
++      res.on('data', (c) => { t += c })
++      res.on('end', () => { let j; try { j = JSON.parse(t) } catch { j = t } resolve({ status: res.statusCode, headers: res.headers, body: j }) })
++    })
++    req.on('error', reject)
++    if (data) req.write(data)
++    req.end()
++  })
++}
++const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
++
++try {
++  let token = ''
++  for (let i = 0; i < 240 && !token; i++) {
++    const m = out.match(/dsh web: http:\/\/127\.0\.0\.1:\d+\/\?token=([A-Za-z0-9_-]+)/)
++    if (m) token = m[1]; else await sleep(500)
++  }
++  check(!!token, 'dsh web started and printed a launch token')
++  if (!token) throw new Error(out.slice(-2000))
++  const login = await http('GET', `/?token=${token}`)
++  const cookie = [].concat(login.headers['set-cookie'] ?? []).find((c) => c.startsWith('dsh-auth-'))?.split(';')[0]
++  check(!!cookie, 'logged in with the launch token')
++  const C = { cookie }
++  const P = '/dsh-go-proactive/v1'
++
++  check((await http('GET', `${P}/status`)).status === 401, 'routes refuse requests without credentials (401)')
++  const st = await http('GET', `${P}/status`, C)
++  check(st.status === 200 && st.body.v === 1, 'status with cookie')
++
++  const noSession = await http('POST', `${P}/request`, { ...C, body: { v: 1, requestId: 'req-00000001', eventId: 'evt-00000001', kind: 'app_enter', payload: {} } })
++  check(noSession.status === 409 && noSession.body.error.code === 'no-session', `no configured session → 409 no-session (${noSession.status} ${noSession.body?.error?.code})`)
++
++  const created = await http('POST', '/fixture/create-session', C)
++  const sessionId = created.body.sessionId
++  check(created.status === 200 && typeof sessionId === 'string', `fixture created a live session ${sessionId}`)
++  const ghost = await http('POST', `${P}/request`, { ...C, body: { requestId: 'req-ghost001', eventId: 'evt-ghost001', sessionId: 'session-does-not-exist' } })
++  check(ghost.status === 409 && ghost.body.error.code === 'no-agent', 'unknown session → 409 no-agent (never created or woken)')
++  check((await http('POST', `${P}/config`, { ...C, body: { sessionId } })).status === 200, 'configured the target session')
++
++  // A real turn.
++  const before = mockCalls()
++  const req1 = { v: 1, requestId: 'req-00000002', eventId: 'evt-00000002', kind: 'app_enter', payload: { packageName: 'com.example.test', localTime: '09:15' }, deadlineMs: 60000 }
++  const a = await http('POST', `${P}/request`, { ...C, body: req1 })
++  check(a.status === 202 && a.body.state === 'accepted', `request → 202 accepted (${a.status} ${a.body.state})`)
++  let r = a
++  for (let i = 0; i < 10 && r.body.state !== 'generated' && r.body.state !== 'failed'; i++) {
++    r = await http('GET', `${P}/result?requestId=req-00000002&waitMs=10000`, C)
++  }
++  check(r.body.state === 'generated', `turn ended → generated (${r.body.state} ${JSON.stringify(r.body.failure)})`)
++  check(typeof r.body.text === 'string' && r.body.text.startsWith('MOCK_REPLY: 你好'), `text is the model's reply: ${r.body.text}`)
++  check(r.body.claimedAt !== null && Number.isInteger(r.body.turn), `claimed into turn ${r.body.turn}`)
++  const sent = readFileSync(mockLog, 'utf8').trim().split('\n').slice(before).join('\n')
++  check(sent.includes('dsh-go-proactive') || sent.includes('com.example.test'), 'the model request carried the event facts')
++
++  // Replay: same requestId → same record, no second model call.
++  const callsAfter = mockCalls()
++  const replay = await http('POST', `${P}/request`, { ...C, body: req1 })
++  check(replay.status === 200 && replay.body.state === 'generated', 'replaying the requestId reports the record (200), does not resend')
++  const conflict = await http('POST', `${P}/request`, { ...C, body: { ...req1, eventId: 'evt-other0001' } })
++  check(conflict.status === 409 && conflict.body.error.code === 'request-id-conflict', 'same requestId, other eventId → 409')
++  await sleep(500)
++  check(mockCalls() === callsAfter, 'no extra model call from the replay')
++
++  // Busy and cancel: slow the model down via the mock's control file.
++  writeFileSync(join(dirname(mockLog), 'delay'), '4000')
++  const b = await http('POST', `${P}/request`, { ...C, body: { ...req1, requestId: 'req-00000003', eventId: 'evt-00000003' } })
++  check(b.status === 202, 'second event accepted while idle')
++  const sameEvent = await http('POST', `${P}/request`, { ...C, body: { ...req1, requestId: 'req-00000004', eventId: 'evt-00000003' } })
++  check(sameEvent.status === 409 && sameEvent.body.error.code === 'event-in-flight', 'same eventId with a new requestId while in flight → 409 event-in-flight')
++  await sleep(800)
++  const busy = await http('POST', `${P}/request`, { ...C, body: { ...req1, requestId: 'req-00000005', eventId: 'evt-00000005' } })
++  check(busy.status === 409 && ['agent-busy', 'desk-busy'].includes(busy.body.error.code), `another event while a turn runs → 409 ${busy.body.error?.code}`)
++  const c = await http('POST', `${P}/cancel`, { ...C, body: { requestId: 'req-00000003' } })
++  check(c.body.state === 'cancelled', 'cancel while the turn runs → cancelled')
++  await sleep(5000)
++  const late = await http('GET', `${P}/result?requestId=req-00000003`, C)
++  check(late.body.state === 'cancelled' && late.body.text === null, 'the turn finished later but its text is never handed out')
++  const counters = (await http('GET', `${P}/status`, C)).body.counters
++  check(counters.lateText >= 1, `late text was seen and dropped (lateText=${counters.lateText})`)
++
++  // The person is talking to the agent themselves: a proactive request must not queue behind it.
++  writeFileSync(join(dirname(mockLog), 'delay'), '3000')
++  const typed = await http('POST', '/fixture/user-says', { ...C, body: { sessionId, text: 'hello from the person' } })
++  check(typed.status === 200, 'fixture: the person sends a message (agent starts a turn)')
++  await sleep(500)
++  const userBusy = await http('POST', `${P}/request`, { ...C, body: { ...req1, requestId: 'req-00000007', eventId: 'evt-00000007' } })
++  check(userBusy.status === 409 && userBusy.body.error.code === 'agent-busy', `agent running the person's turn → 409 agent-busy (${userBusy.body.error?.code})`)
++  await sleep(3500)
++
++  // Deadline: model slower than the request's deadline.
++  writeFileSync(join(dirname(mockLog), 'delay'), '9000')
++  const d = await http('POST', `${P}/request`, { ...C, body: { ...req1, requestId: 'req-00000006', eventId: 'evt-00000006', deadlineMs: 5000 } })
++  check(d.status === 202, 'slow request accepted')
++  let dr = d
++  for (let i = 0; i < 4 && !['failed', 'generated'].includes(dr.body.state); i++) dr = await http('GET', `${P}/result?requestId=req-00000006&waitMs=3000`, C)
++  check(dr.body.state === 'failed' && dr.body.failure?.code === 'deadline', `deadline passed → failed/deadline (${dr.body.state} ${dr.body.failure?.code})`)
++  writeFileSync(join(dirname(mockLog), 'delay'), '0')
++} catch (e) {
++  failures++
++  console.log('FAIL', e?.stack ?? e)
++} finally {
++  child.kill('SIGTERM')
++  console.log(failures === 0 ? 'ALL PASS' : `${failures} FAILED`)
++  setTimeout(() => process.exit(failures === 0 ? 0 : 1), 500)
++}
+diff --git a/runtime/proactive/dsh-go-proactive/test/fixture-session/index.js b/runtime/proactive/dsh-go-proactive/test/fixture-session/index.js
+new file mode 100644
+index 0000000..3e3044e
+--- /dev/null
++++ b/runtime/proactive/dsh-go-proactive/test/fixture-session/index.js
+@@ -0,0 +1,34 @@
++// TEST ONLY: creates one live session on request so the end-to-end test has an idle agent.
++// The production plugin never creates or wakes sessions.
++export const name = 'dsh-go-proactive-fixture'
++export function apply(ctx) {
++  ctx.inject(['webServer'], (webCtx) => {
++    // Simulates the person typing into the session (a plain user message, like the composer).
++    webCtx.effect(() => webCtx.webServer.register({
++      kind: 'exact', path: '/fixture/user-says',
++      handler: async (req, res) => {
++        const denied = ctx.get('connection')?.requestRejection(req)
++        if (denied !== undefined) { res.writeHead(denied); res.end(); return }
++        let t = ''; for await (const c of req) t += c
++        const { sessionId, text } = JSON.parse(t)
++        const agent = ctx.get('agents').get(sessionId)
++        agent.followup({ id: crypto.randomUUID(), role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
++        res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}')
++      },
++    }))
++    webCtx.effect(() => webCtx.webServer.register({
++      kind: 'exact', path: '/fixture/create-session',
++      handler: async (req, res) => {
++        const denied = ctx.get('connection')?.requestRejection(req)
++        if (denied !== undefined) { res.writeHead(denied); res.end(); return }
++        try {
++          const sc = ctx.get('sessionController')
++          const r = await sc.create({ cwd: process.env.FIXTURE_CWD || '/tmp' })
++          res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(r))
++        } catch (e) {
++          res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: String(e?.stack ?? e) }))
++        }
++      },
++    }))
++  })
++}
+diff --git a/runtime/proactive/dsh-go-proactive/test/mock-messages.mjs b/runtime/proactive/dsh-go-proactive/test/mock-messages.mjs
+new file mode 100644
+index 0000000..9fa7193
+--- /dev/null
++++ b/runtime/proactive/dsh-go-proactive/test/mock-messages.mjs
+@@ -0,0 +1,36 @@
++// Minimal Anthropic-Messages-compatible mock for driving a real DSH engine offline.
++// Every request is appended to requests.jsonl; replies are canned text, streamed as SSE.
++import { createServer } from 'node:http'
++import { appendFileSync } from 'node:fs'
++const port = Number(process.env.PORT || 18900)
++const log = process.env.LOG || 'requests.jsonl'
++import { readFileSync } from 'node:fs'
++import { dirname, join } from 'node:path'
++const delayFile = join(dirname(log), 'delay')
++const delayMs = () => { try { return Number(readFileSync(delayFile, 'utf8')) || 0 } catch { return 0 } }
++createServer(async (req, res) => {
++  let body = ''
++  for await (const c of req) body += c
++  appendFileSync(log, JSON.stringify({ at: Date.now(), method: req.method, url: req.url, body: body.slice(0, 20000) }) + '\n')
++  if (req.method === 'GET' && req.url.includes('/models')) {
++    res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ data: [{ id: 'deepseek-chat', type: 'model' }] })); return
++  }
++  if (!req.url.includes('/messages')) { res.writeHead(404); res.end(); return }
++  let j = {}; try { j = JSON.parse(body) } catch {}
++  const all = JSON.stringify(j.messages ?? [])
++  const text = all.includes('kind=app_enter') ? 'MOCK_REPLY: 你好，我注意到你刚打开了测试应用。' : 'MOCK_REPLY: ok'
++  const wait = delayMs(); if (wait) await new Promise(r => setTimeout(r, wait))
++  const ev = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`)
++  if (!j.stream) {
++    res.writeHead(200, { 'content-type': 'application/json' })
++    res.end(JSON.stringify({ id: 'msg_mock', type: 'message', role: 'assistant', model: j.model, content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 5 } })); return
++  }
++  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
++  ev('message_start', { message: { id: 'msg_mock', type: 'message', role: 'assistant', model: j.model || 'deepseek-chat', content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } })
++  ev('content_block_start', { index: 0, content_block: { type: 'text', text: '' } })
++  ev('content_block_delta', { index: 0, delta: { type: 'text_delta', text } })
++  ev('content_block_stop', { index: 0 })
++  ev('message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 5 } })
++  ev('message_stop', {})
++  res.end()
++}).listen(port, '127.0.0.1', () => console.log('mock on', port))
+-- 
+2.43.0
+

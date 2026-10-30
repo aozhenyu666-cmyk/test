@@ -1,0 +1,772 @@
+From c3942cae8c5d2272dc6fa16e8bc0f60af688073e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 16:43:52 +0000
+Subject: [PATCH] Wire the proactive kernel into Android
+
+loop/proactive adapts the kernel: ProactiveRuntime builds the Gate from
+PhoneTasks, PromptArbiter, ProtectedPages, screen, lock, accessibility
+and notification state (read only), runs the kernel's commands, and keeps
+one main-thread callback at the next deadline plus one alarm for the
+scheduler (none when background work is restricted). ProactivePageActivity
+is a token-bound page in its own task. ProactivePlugin exposes
+dsh/proactive and carries agent HTTP calls to Dart, which holds the
+engine cookie; Dart passes raw answers back for AgentWire to decode.
+
+Shared files: PhonePrompts gets a read-only onBusyChanged callback,
+MainActivity registers the plugin, the manifest adds the page, the wake
+receiver and RECEIVE_BOOT_COMPLETED, and LoopRuntime refreshes the gate
+on accessibility and protected-page changes and ticks the kernel on
+window changes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUAnRqEK1Me9rrDHoEiwk9
+---
+ app/android/app/src/main/AndroidManifest.xml  |  21 ++
+ .../ccch1mneyyy/dsh_app/MainActivity.kt       |   1 +
+ .../ccch1mneyyy/dsh_app/loop/LoopRuntime.kt   |  14 +
+ .../loop/proactive/ProactivePageActivity.kt   | 126 +++++++++
+ .../dsh_app/loop/proactive/ProactivePlugin.kt | 109 ++++++++
+ .../loop/proactive/ProactiveRuntime.kt        | 254 ++++++++++++++++++
+ .../dsh_app/loop/proactive/WakeAlarm.kt       |  55 ++++
+ .../ccch1mneyyy/dsh_app/phone/PhonePrompts.kt |   5 +
+ .../main/res/values-zh/proactive_strings.xml  |   6 +
+ .../src/main/res/values/proactive_strings.xml |   6 +
+ 10 files changed, 597 insertions(+)
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/ProactivePageActivity.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/ProactivePlugin.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/ProactiveRuntime.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/WakeAlarm.kt
+ create mode 100644 app/android/app/src/main/res/values-zh/proactive_strings.xml
+ create mode 100644 app/android/app/src/main/res/values/proactive_strings.xml
+
+diff --git a/app/android/app/src/main/AndroidManifest.xml b/app/android/app/src/main/AndroidManifest.xml
+index d6f69ee..0d46323 100644
+--- a/app/android/app/src/main/AndroidManifest.xml
++++ b/app/android/app/src/main/AndroidManifest.xml
+@@ -7,6 +7,8 @@
+     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+     <uses-permission android:name="android.permission.WAKE_LOCK" />
++    <!-- Proactive scheduler (loop/proactive/WakeAlarm.kt): re-plan the single alarm after reboot. -->
++    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+     <!-- Composer voice input (voice/VoicePlugin.kt), asked for on the first tap of the mic. -->
+     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+@@ -258,6 +260,25 @@
+             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|locale|layoutDirection"
+             android:theme="@android:style/Theme.DeviceDefault.Dialog.NoActionBar" />
+ 
++        <!-- Proactive page (loop/proactive/ProactivePageActivity.kt): token-bound, own task. -->
++        <activity
++            android:name=".loop.proactive.ProactivePageActivity"
++            android:exported="false"
++            android:excludeFromRecents="true"
++            android:taskAffinity="io.github.ccch1mneyyy.dsh_app.proactive"
++            android:launchMode="singleInstance"
++            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|locale|layoutDirection"
++            android:theme="@android:style/Theme.DeviceDefault.Dialog.NoActionBar" />
++        <!-- Proactive scheduler wake-ups: its own alarm (explicit intent), boot and app update. -->
++        <receiver
++            android:name=".loop.proactive.ProactiveWakeReceiver"
++            android:exported="true">
++            <intent-filter>
++                <action android:name="android.intent.action.BOOT_COMPLETED" />
++                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
++            </intent-filter>
++        </receiver>
++
+         <!-- 不打扰模式: Shizuku binder provider (shell-uid channel). -->
+         <provider
+             android:name="rikka.shizuku.ShizukuProvider"
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/MainActivity.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/MainActivity.kt
+index 4b3105a..b5f83bb 100644
+--- a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/MainActivity.kt
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/MainActivity.kt
+@@ -63,6 +63,7 @@ class MainActivity : FlutterActivity() {
+             engine.plugins.add(io.github.ccch1mneyyy.dsh_app.icons.PictureShortcutPlugin())
+             engine.plugins.add(io.github.ccch1mneyyy.dsh_app.usage.UsagePlugin())
+             engine.plugins.add(io.github.ccch1mneyyy.dsh_app.loop.LoopPlugin())
++            engine.plugins.add(io.github.ccch1mneyyy.dsh_app.loop.proactive.ProactivePlugin())
+             engine.dartExecutor.executeDartEntrypoint(DartExecutor.DartEntrypoint.createDefault())
+             cache.put(ENGINE_ID, engine)
+         }
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopRuntime.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopRuntime.kt
+index 4eb15f3..2b8482f 100644
+--- a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopRuntime.kt
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopRuntime.kt
+@@ -15,7 +15,9 @@ import android.view.accessibility.AccessibilityEvent
+ import android.view.accessibility.AccessibilityWindowInfo
+ import android.view.inputmethod.InputMethodManager
+ import io.github.ccch1mneyyy.dsh_app.phone.PhoneControl
++import io.github.ccch1mneyyy.dsh_app.loop.proactive.ProactiveRuntime
+ import io.github.ccch1mneyyy.dsh_app.phone.a11y.Box
++import io.github.ccch1mneyyy.dsh_app.phone.a11y.ProtectedPages
+ import io.github.ccch1mneyyy.dsh_app.phone.a11y.TreeCapture
+ import java.io.File
+ import java.lang.ref.WeakReference
+@@ -64,6 +66,7 @@ object LoopRuntime {
+ 
+     fun attach(s: AccessibilityService) {
+         engine(s)
++        runCatching { ProactiveRuntime.ensure(s); ProactiveRuntime.refreshGate("a11y_connected") }
+         service = WeakReference(s)
+         // The person may already be in the test app; a still-open visit makes this a no-op.
+         schedule()
+@@ -72,9 +75,12 @@ object LoopRuntime {
+     fun detach(s: AccessibilityService) {
+         if (service?.get() === s) service = null
+         main.removeCallbacks(verify)
++        // Pages can no longer start from the background: the kernel falls back to notifications.
++        main.post { runCatching { ProactiveRuntime.refreshGate("a11y_gone") } }
+     }
+ 
+     fun onEvent(s: AccessibilityService, event: AccessibilityEvent?) {
++        proactive(event)
+         val type = event?.eventType ?: return
+         if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && type != AccessibilityEvent.TYPE_WINDOWS_CHANGED) return
+         val e = engine ?: return
+@@ -84,6 +90,12 @@ object LoopRuntime {
+         schedule()
+     }
+ 
++    /** Hooks for the proactive kernel; every window event is also its opportunistic clock. */
++    private fun proactive(event: AccessibilityEvent?) {
++        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
++        runCatching { ProactiveRuntime.onWindowActivity() }
++    }
++
+     /** Settings changed: read the foreground again so the new target is judged from now on. */
+     fun configChanged() = schedule()
+ 
+@@ -99,7 +111,9 @@ object LoopRuntime {
+         try {
+             val pkg = foreground(s)
+             readings++
++            val wasProtected = lastForeground in ProtectedPages.packages
+             lastForeground = pkg
++            if ((pkg in ProtectedPages.packages) != wasProtected) runCatching { ProactiveRuntime.refreshGate("protected_page") }
+             when (val out = e.onForeground(pkg, environment(s))) {
+                 is LoopEngine.Outcome.Show -> InteractionHub.show(s, e, out)
+                 is LoopEngine.Outcome.Suppressed -> Log.i(TAG, "suppressed ${out.event.packageName}: ${out.event.reason}")
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/ProactivePageActivity.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/ProactivePageActivity.kt
+new file mode 100644
+index 0000000..4a68374
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/ProactivePageActivity.kt
+@@ -0,0 +1,126 @@
++package io.github.ccch1mneyyy.dsh_app.loop.proactive
++
++import android.app.Activity
++import android.content.Context
++import android.content.Intent
++import android.os.Bundle
++import android.os.PowerManager
++import android.util.TypedValue
++import android.view.Gravity
++import android.widget.Button
++import android.widget.LinearLayout
++import android.widget.TextView
++import io.github.ccch1mneyyy.dsh_app.R
++import io.github.ccch1mneyyy.dsh_app.i18n.AppStrings
++import io.github.ccch1mneyyy.dsh_app.loop.core.SurfaceReport
++
++/**
++ * The proactive page. It knows only its token: every report carries it, and the coordinator
++ * refuses any token that is not the current presentation, so a page left over from a withdrawn,
++ * restarted or replaced presentation can never answer a newer event.
++ *
++ * Reports: first resume → Shown; 回应 → Answered("reply"); 稍后 / back / leaving → Dismissed.
++ * Screen off is not an answer: the page stays and the coordinator's deadline decides.
++ */
++class ProactivePageActivity : Activity() {
++    private var token: String? = null
++    private var reported = false
++    private var shown = false
++
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(savedInstanceState)
++        setFinishOnTouchOutside(false)
++        if (savedInstanceState != null) { finish(); return } // restored by the system: the event is gone
++        bind(intent)
++    }
++
++    override fun onNewIntent(next: Intent) {
++        super.onNewIntent(next)
++        // singleInstance: a newer presentation replaces this one; the old token simply goes stale.
++        unregister()
++        reported = false
++        shown = false
++        setIntent(next)
++        bind(next)
++    }
++
++    private fun bind(start: Intent) {
++        val t = start.getStringExtra(EXTRA_TOKEN)
++        val text = start.getStringExtra(EXTRA_TEXT)
++        if (t == null || text == null || start.getLongExtra(EXTRA_DEADLINE, 0) <= System.currentTimeMillis()) { finish(); return }
++        token = t
++        live[t] = this
++        setContentView(content(text))
++    }
++
++    override fun onResume() {
++        super.onResume()
++        val t = token ?: return
++        if (!shown) { shown = true; ProactiveRuntime.onSurface(t, SurfaceReport.Shown) }
++    }
++
++    @Deprecated("Activity back handling; targetSdk 28")
++    override fun onBackPressed() = report(SurfaceReport.Dismissed)
++
++    override fun onStop() {
++        super.onStop()
++        val screenOn = getSystemService(PowerManager::class.java)?.isInteractive != false
++        if (!reported && !isChangingConfigurations && screenOn && !isFinishing) report(SurfaceReport.Dismissed)
++    }
++
++    override fun onDestroy() {
++        unregister()
++        super.onDestroy()
++    }
++
++    private fun report(r: SurfaceReport) {
++        val t = token ?: return
++        if (reported) return
++        reported = true
++        ProactiveRuntime.onSurface(t, r)
++        if (!isFinishing) finish()
++    }
++
++    private fun unregister() { token?.let { if (live[it] === this) live.remove(it) } }
++
++    private fun content(text: String): LinearLayout {
++        fun dp(v: Int) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
++        val ctx = this
++        return LinearLayout(ctx).apply {
++            orientation = LinearLayout.VERTICAL
++            setPadding(dp(24), dp(20), dp(24), dp(12))
++            addView(TextView(ctx).apply { this.text = text; setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f); setPadding(0, 0, 0, dp(16)) })
++            addView(LinearLayout(ctx).apply {
++                orientation = LinearLayout.HORIZONTAL
++                gravity = Gravity.END
++                addView(Button(ctx).apply {
++                    this.text = AppStrings.get(ctx, R.string.proactive_later)
++                    setOnClickListener { report(SurfaceReport.Dismissed) }
++                })
++                addView(Button(ctx).apply {
++                    this.text = AppStrings.get(ctx, R.string.proactive_reply)
++                    setOnClickListener { report(SurfaceReport.Answered("reply")) }
++                })
++            })
++        }
++    }
++
++    companion object {
++        private const val EXTRA_TOKEN = "proactive_token"
++        private const val EXTRA_TEXT = "proactive_text"
++        private const val EXTRA_DEADLINE = "proactive_deadline"
++        /** Pages on screen by token, for Withdraw. Main thread only. */
++        private val live = HashMap<String, ProactivePageActivity>()
++
++        /** Started from the accessibility service's process; false if the system refused at once. */
++        fun start(context: Context, token: String, text: String, deadline: Long): Boolean = runCatching {
++            context.startActivity(Intent(context, ProactivePageActivity::class.java)
++                .putExtra(EXTRA_TOKEN, token).putExtra(EXTRA_TEXT, text.take(2_000)).putExtra(EXTRA_DEADLINE, deadline)
++                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or Intent.FLAG_ACTIVITY_NO_ANIMATION))
++        }.isSuccess
++
++        fun withdraw(token: String) { live.remove(token)?.let { it.reported = true; it.finish() } }
++
++        fun withdrawAll() { live.values.toList().forEach { it.reported = true; it.finish() }; live.clear() }
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/ProactivePlugin.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/ProactivePlugin.kt
+new file mode 100644
+index 0000000..4825151
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/ProactivePlugin.kt
+@@ -0,0 +1,109 @@
++package io.github.ccch1mneyyy.dsh_app.loop.proactive
++
++import android.content.Context
++import android.os.Handler
++import android.os.Looper
++import io.flutter.embedding.engine.plugins.FlutterPlugin
++import io.flutter.plugin.common.EventChannel
++import io.flutter.plugin.common.MethodCall
++import io.flutter.plugin.common.MethodChannel
++import io.github.ccch1mneyyy.dsh_app.loop.core.CoreCodecPublic
++import io.github.ccch1mneyyy.dsh_app.loop.core.ProactiveScheduler
++import io.github.ccch1mneyyy.dsh_app.loop.core.SchedulerConfig
++
++/**
++ * `dsh/proactive` (methods) + `dsh/proactive/agent` (events): the App side of the agent port.
++ *
++ * Kotlin → Dart (event stream), one map per HTTP call Dart must make on the current host:
++ *   {op: "request", requestId, path: "/dsh-go-proactive/v1/request", body}
++ *   {op: "poll",    requestId, path: "/dsh-go-proactive/v1/result?requestId=…&waitMs=20000"}
++ *   {op: "cancel",  requestId, path: "/dsh-go-proactive/v1/cancel", body}
++ * Dart → Kotlin: `agentHttp {requestId, status, body}` with the raw answer (status 0 = no answer).
++ * Dart never interprets the plugin's states: AgentWire does.
++ *
++ * Methods: `status`, `setConfig` (SchedulerConfig fields), `receipts {limit}`, `agentHttp`,
++ * `userActivity` (the person sent a chat message), `tick`.
++ */
++class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel.StreamHandler, AgentPort {
++    private var methods: MethodChannel? = null
++    private var events: EventChannel? = null
++    private var sink: EventChannel.EventSink? = null
++    private lateinit var context: Context
++    private val main = Handler(Looper.getMainLooper())
++
++    override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
++        context = binding.applicationContext
++        methods = MethodChannel(binding.binaryMessenger, "dsh/proactive").also { it.setMethodCallHandler(this) }
++        events = EventChannel(binding.binaryMessenger, "dsh/proactive/agent").also { it.setStreamHandler(this) }
++        main.post { ProactiveRuntime.ensure(context) }
++    }
++
++    override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
++        if (ProactiveRuntime.agentPort === this) ProactiveRuntime.agentPort = null
++        methods?.setMethodCallHandler(null)
++        events?.setStreamHandler(null)
++        methods = null
++        events = null
++    }
++
++    // Dart listens → the port exists; requests made while nobody listens fail as no_transport.
++    override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
++        sink = events
++        ProactiveRuntime.agentPort = this
++    }
++
++    override fun onCancel(arguments: Any?) {
++        sink = null
++        if (ProactiveRuntime.agentPort === this) ProactiveRuntime.agentPort = null
++    }
++
++    override fun request(requestId: String, body: Map<String, Any?>) =
++        emit(mapOf("op" to "request", "requestId" to requestId, "path" to "${io.github.ccch1mneyyy.dsh_app.loop.core.AgentWire.PREFIX}/request", "body" to body))
++
++    override fun poll(requestId: String) =
++        emit(mapOf("op" to "poll", "requestId" to requestId, "path" to io.github.ccch1mneyyy.dsh_app.loop.core.AgentWire.resultPath(requestId)))
++
++    override fun cancel(requestId: String) =
++        emit(mapOf("op" to "cancel", "requestId" to requestId, "path" to "${io.github.ccch1mneyyy.dsh_app.loop.core.AgentWire.PREFIX}/cancel",
++            "body" to io.github.ccch1mneyyy.dsh_app.loop.core.AgentWire.cancelBody(requestId)))
++
++    private fun emit(m: Map<String, Any?>) { main.post { sink?.success(m) } }
++
++    override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
++        ProactiveRuntime.ensure(context)
++        when (call.method) {
++            "status" -> result.success(status())
++            "setConfig" -> {
++                val m = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
++                val merged = ProactiveScheduler.configMap(ProactiveRuntime.schedulerConfig()) + m.entries.associate { it.key.toString() to it.value }
++                ProactiveRuntime.setSchedulerConfig(context, ProactiveScheduler.configFrom(merged))
++                result.success(ProactiveScheduler.configMap(ProactiveRuntime.schedulerConfig()))
++            }
++            "receipts" -> result.success(ProactiveRuntime.ensure(context).receipts(call.argument<Int>("limit") ?: 50).map(CoreCodecPublic::event))
++            "agentHttp" -> {
++                val id = call.argument<String>("requestId")
++                if (id == null) { result.success(false); return }
++                ProactiveRuntime.onAgentHttp(id, call.argument<Int>("status") ?: 0, call.argument<Any?>("body"))
++                result.success(true)
++            }
++            "userActivity" -> { ProactiveRuntime.onUserActivity(); result.success(true) }
++            "tick" -> { ProactiveRuntime.tick("app"); result.success(true) }
++            else -> result.notImplemented()
++        }
++    }
++
++    private fun status(): Map<String, Any?> {
++        val c = ProactiveRuntime.ensure(context)
++        return linkedMapOf(
++            "config" to ProactiveScheduler.configMap(ProactiveRuntime.schedulerConfig()),
++            "gate" to ProactiveRuntime.gate().let { g -> linkedMapOf("hold" to g.holdReason(), "surface" to g.surface()?.name) },
++            "wakeMode" to io.github.ccch1mneyyy.dsh_app.loop.core.WakeMode.of(ProactiveRuntime.caps()).name,
++            "alarmError" to WakeAlarm.lastError,
++            "transport" to (ProactiveRuntime.agentPort != null),
++            "active" to c.active()?.let(CoreCodecPublic::event),
++            "queued" to c.queued().size,
++            "storageError" to c.storageError,
++            "recoveryIssue" to c.recoveryIssue,
++        )
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/ProactiveRuntime.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/ProactiveRuntime.kt
+new file mode 100644
+index 0000000..c73597c
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/ProactiveRuntime.kt
+@@ -0,0 +1,254 @@
++package io.github.ccch1mneyyy.dsh_app.loop.proactive
++
++import android.app.ActivityManager
++import android.app.AlarmManager
++import android.app.KeyguardManager
++import android.app.NotificationManager
++import android.content.Context
++import android.os.Build
++import android.os.Handler
++import android.os.Looper
++import android.os.PowerManager
++import android.os.SystemClock
++import android.provider.Settings
++import android.util.Log
++import io.github.ccch1mneyyy.dsh_app.loop.LoopRuntime
++import io.github.ccch1mneyyy.dsh_app.loop.core.AgentReply
++import io.github.ccch1mneyyy.dsh_app.loop.core.AgentWire
++import io.github.ccch1mneyyy.dsh_app.loop.core.AtomicJsonFile
++import io.github.ccch1mneyyy.dsh_app.loop.core.BackgroundCaps
++import io.github.ccch1mneyyy.dsh_app.loop.core.Clocks
++import io.github.ccch1mneyyy.dsh_app.loop.core.Command
++import io.github.ccch1mneyyy.dsh_app.loop.core.Coordinator
++import io.github.ccch1mneyyy.dsh_app.loop.core.EventRequest
++import io.github.ccch1mneyyy.dsh_app.loop.core.Gate
++import io.github.ccch1mneyyy.dsh_app.loop.core.ProactiveScheduler
++import io.github.ccch1mneyyy.dsh_app.loop.core.SchedulerConfig
++import io.github.ccch1mneyyy.dsh_app.loop.core.Step
++import io.github.ccch1mneyyy.dsh_app.loop.core.Submit
++import io.github.ccch1mneyyy.dsh_app.loop.core.Surface
++import io.github.ccch1mneyyy.dsh_app.loop.core.SurfaceReport
++import io.github.ccch1mneyyy.dsh_app.loop.core.WakeMode
++import io.github.ccch1mneyyy.dsh_app.phone.PhoneControl
++import io.github.ccch1mneyyy.dsh_app.phone.PhoneTasks
++import io.github.ccch1mneyyy.dsh_app.phone.a11y.PhoneA11yService
++import io.github.ccch1mneyyy.dsh_app.phone.a11y.ProtectedPages
++import java.io.File
++import java.util.Calendar
++import java.util.TimeZone
++import java.util.UUID
++
++/** Carries agent commands to the engine. Implemented over Flutter (Dart holds the engine cookie). */
++interface AgentPort {
++    /** POST /request (also used to resume: the plugin replays an existing requestId without resending). */
++    fun request(requestId: String, body: Map<String, Any?>)
++    /** GET /result long poll for [requestId]; answer through [ProactiveRuntime.onAgentHttp]. */
++    fun poll(requestId: String)
++    fun cancel(requestId: String)
++}
++
++/** A notification surface (DeepSeek T3). Must report through [ProactiveRuntime.onSurface] with the token. */
++interface NotificationPort {
++    fun post(token: String, text: String, deadline: Long): Boolean
++    fun cancel(token: String)
++    fun cancelAll()
++}
++
++/**
++ * Android adapter for the proactive kernel (loop/core). Owns one [Coordinator] and one
++ * [ProactiveScheduler] per process, builds the [Gate] from DSH's own state (read only), runs the
++ * kernel's commands, and keeps exactly one timer: a main-thread callback at the coordinator's next
++ * deadline, plus one alarm at the scheduler's next decision (none when the system forbids it).
++ *
++ * Main thread only.
++ */
++object ProactiveRuntime {
++    private const val TAG = "DshProactive"
++    private val main = Handler(Looper.getMainLooper())
++    private lateinit var app: Context
++    private var coordinator: Coordinator? = null
++    private var scheduler: ProactiveScheduler? = null
++    @Volatile var agentPort: AgentPort? = null
++    @Volatile var notificationPort: NotificationPort? = null
++    private val deadlineTick = Runnable { tick("deadline") }
++    private val taskListener: (PhoneTasks.Snapshot) -> Unit = { main.post { refreshGate("dsh_task") } }
++    private var listening: PhoneTasks? = null
++    private var lastOpportunistic = 0L
++
++    fun ensure(context: Context): Coordinator {
++        coordinator?.let { return it }
++        app = context.applicationContext
++        val dir = File(File(app.filesDir, "loop"), "proactive")
++        val c = Coordinator(AtomicJsonFile(File(dir, "coordinator.json")), clock = System::currentTimeMillis, ids = { UUID.randomUUID().toString() })
++        val s = ProactiveScheduler(AtomicJsonFile(File(dir, "scheduler.json")), ::minuteOfDay, ::dayOf)
++        coordinator = c
++        scheduler = s
++        s.recover(clocks())
++        dispatch(c.recover(gate()))
++        watchTasks()
++        arm()
++        return c
++    }
++
++    fun schedulerConfig(): SchedulerConfig = scheduler?.config ?: SchedulerConfig()
++
++    fun setSchedulerConfig(context: Context, cfg: SchedulerConfig) {
++        ensure(context)
++        scheduler!!.setConfig(cfg, clocks())
++        refreshGate("config")
++    }
++
++    /** Alarm, boot, app open: one evaluation, no loop. */
++    fun tick(reason: String) {
++        val c = coordinator ?: return
++        val s = scheduler ?: return
++        watchTasks()
++        dispatch(c.setGate(gate()))
++        when (val d = s.evaluate(clocks())) {
++            is ProactiveScheduler.Decision.Fire -> submit(d.request, fromScheduler = true)
++            is ProactiveScheduler.Decision.Wait -> Unit
++        }
++        arm()
++        Log.d(TAG, "tick $reason")
++    }
++
++    /** Window events from LoopRuntime: cheap, throttled; the only clock in OPPORTUNISTIC mode. */
++    fun onWindowActivity() {
++        val now = SystemClock.elapsedRealtime()
++        if (coordinator == null || now - lastOpportunistic < 60_000) return
++        lastOpportunistic = now
++        tick("window")
++    }
++
++    fun submit(request: EventRequest, fromScheduler: Boolean = false): Submit {
++        val c = coordinator ?: return Submit.Rejected("not_ready")
++        val (r, step) = c.submit(request)
++        if (fromScheduler) when (r) {
++            is Submit.Rejected -> scheduler?.onRejected(r.reason, clocks())
++            else -> scheduler?.onSubmitted(request.eventId, clocks())
++        }
++        dispatch(step)
++        return r
++    }
++
++    fun refreshGate(reason: String) {
++        val c = coordinator ?: return
++        watchTasks()
++        dispatch(c.setGate(gate()))
++        Log.d(TAG, "gate $reason")
++    }
++
++    fun onSurface(token: String, report: SurfaceReport) {
++        val c = coordinator ?: return
++        dispatch(c.onSurface(token, report))
++        if (report is SurfaceReport.Answered || report == SurfaceReport.Dismissed) scheduler?.onUserActivity(clocks())
++    }
++
++    /** Dart reports one HTTP answer from the plugin; status 0 = no answer. */
++    fun onAgentHttp(requestId: String, status: Int, body: Any?) {
++        val c = coordinator ?: return
++        when (val d = AgentWire.decode(status, body)) {
++            is AgentWire.Decoded.Reply -> {
++                dispatch(c.onAgent(requestId, d.reply))
++                if (!d.terminal && c.active()?.agentRequestId == requestId) agentPort?.poll(requestId)
++            }
++            is AgentWire.Decoded.Retry -> main.postDelayed({
++                if (c.active()?.agentRequestId == requestId) agentPort?.poll(requestId)
++            }, d.afterMs)
++        }
++    }
++
++    /** The person used DSH (sent a message): keep proactive attempts out of the way for a while. */
++    fun onUserActivity() { scheduler?.onUserActivity(clocks()) }
++
++    private fun dispatch(step: Step) {
++        for (cmd in step.commands) runCatching { run(cmd) }.onFailure { Log.w(TAG, "command $cmd", it) }
++        for (closed in step.closed) {
++            scheduler?.onOutcome(closed.eventId, closed.engagement, clocks())
++            Log.i(TAG, "closed ${closed.eventId} ${closed.outcome} ${closed.reason} engagement=${closed.engagement}")
++        }
++        main.removeCallbacks(deadlineTick)
++        coordinator?.nextDeadline()?.let { main.postDelayed(deadlineTick, (it - System.currentTimeMillis()).coerceIn(50, 10 * 60_000L)) }
++        if (step.closed.isNotEmpty()) arm()
++    }
++
++    private fun run(cmd: Command) {
++        val c = coordinator!!
++        when (cmd) {
++            is Command.RequestAgent -> agentPort?.request(cmd.requestId, AgentWire.requestBody(cmd, System.currentTimeMillis()))
++                ?: dispatch(c.onAgent(cmd.requestId, AgentReply.Failed("no_transport")))
++            // The plugin answers a replayed requestId with its record and never sends twice.
++            is Command.ResumeAgent -> agentPort?.poll(cmd.requestId)
++                ?: dispatch(c.onAgent(cmd.requestId, AgentReply.Failed("no_transport")))
++            is Command.CancelAgent -> agentPort?.cancel(cmd.requestId)
++            is Command.Present -> when (cmd.surface) {
++                Surface.ACTIVITY -> ProactivePageActivity.start(app, cmd.token, cmd.content.text, cmd.deadline)
++                    .let { ok -> if (ok) dispatch(c.onSurface(cmd.token, SurfaceReport.Posted)) else dispatch(c.onSurface(cmd.token, SurfaceReport.Failed("start_failed"))) }
++                Surface.NOTIFICATION -> {
++                    val ok = notificationPort?.post(cmd.token, cmd.content.text, cmd.deadline) == true
++                    dispatch(c.onSurface(cmd.token, if (ok) SurfaceReport.Posted else SurfaceReport.Failed("no_notification")))
++                }
++            }
++            is Command.Withdraw -> when (cmd.surface) {
++                Surface.ACTIVITY -> ProactivePageActivity.withdraw(cmd.token)
++                Surface.NOTIFICATION -> notificationPort?.cancel(cmd.token)
++            }
++            Command.ClearLeftovers -> { ProactivePageActivity.withdrawAll(); notificationPort?.cancelAll() }
++        }
++    }
++
++    /** DSH's own state, read only. Never takes a PhoneTasks owner or a PromptArbiter slot. */
++    fun gate(): Gate {
++        val core = PhoneControl.peek()
++        val power = app.getSystemService(PowerManager::class.java)
++        val keyguard = app.getSystemService(KeyguardManager::class.java)
++        val nm = app.getSystemService(NotificationManager::class.java)
++        val fg = LoopRuntime.lastForeground
++        return Gate(
++            featureEnabled = scheduler?.config?.enabled == true,
++            dshTaskActive = core != null && (core.tasks.isActive || core.tasks.callsInFlight > 0),
++            dshPromptOpen = core?.prompts?.busy() == true,
++            protectedForeground = fg != null && (fg in ProtectedPages.packages),
++            screenOn = power?.isInteractive != false,
++            unlocked = keyguard?.isKeyguardLocked != true,
++            a11yConnected = PhoneA11yService.isConnected(),
++            notificationsAllowed = nm?.areNotificationsEnabled() == true && notificationPort != null,
++        )
++    }
++
++    private fun watchTasks() {
++        PhoneControl.peek()?.prompts?.onBusyChanged = { refreshGate("dsh_prompt") }
++        val tasks = PhoneControl.peek()?.tasks ?: return
++        if (listening === tasks) return
++        listening?.removeListener(taskListener)
++        tasks.addListener(taskListener)
++        listening = tasks
++    }
++
++    fun caps(): BackgroundCaps {
++        val am = app.getSystemService(ActivityManager::class.java)
++        val alarms = app.getSystemService(AlarmManager::class.java)
++        return BackgroundCaps(
++            alarmsAvailable = alarms != null,
++            exactAlarms = Build.VERSION.SDK_INT < 31 || alarms?.canScheduleExactAlarms() == true,
++            backgroundRestricted = Build.VERSION.SDK_INT >= 28 && am?.isBackgroundRestricted == true,
++        )
++    }
++
++    private fun arm() {
++        val s = scheduler ?: return
++        val mode = WakeMode.of(caps())
++        WakeAlarm.set(app, s.nextWake(clocks(), mode), mode)
++    }
++
++    fun clocks() = Clocks(System.currentTimeMillis(), SystemClock.elapsedRealtime(),
++        runCatching { Settings.Global.getInt(app.contentResolver, Settings.Global.BOOT_COUNT) }.getOrDefault(0))
++
++    private fun minuteOfDay(wall: Long): Int = Calendar.getInstance(TimeZone.getDefault()).run {
++        timeInMillis = wall; get(Calendar.HOUR_OF_DAY) * 60 + get(Calendar.MINUTE)
++    }
++
++    private fun dayOf(wall: Long): Long = Calendar.getInstance(TimeZone.getDefault()).run {
++        timeInMillis = wall; get(Calendar.YEAR) * 1000L + get(Calendar.DAY_OF_YEAR)
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/WakeAlarm.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/WakeAlarm.kt
+new file mode 100644
+index 0000000..aa56a8c
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/WakeAlarm.kt
+@@ -0,0 +1,55 @@
++package io.github.ccch1mneyyy.dsh_app.loop.proactive
++
++import android.app.AlarmManager
++import android.app.PendingIntent
++import android.content.BroadcastReceiver
++import android.content.Context
++import android.content.Intent
++import android.util.Log
++import io.github.ccch1mneyyy.dsh_app.loop.core.WakeMode
++
++/**
++ * The scheduler's single alarm. An alarm is only a reminder to evaluate again; the decision is
++ * always made from the persisted state, so a late, lost or duplicate alarm cannot cause a wrong one.
++ */
++object WakeAlarm {
++    const val ACTION = "io.github.ccch1mneyyy.dsh_app.loop.PROACTIVE_WAKE"
++    @Volatile var lastError: String? = null
++        private set
++
++    fun set(context: Context, atWall: Long?, mode: WakeMode) {
++        val am = context.getSystemService(AlarmManager::class.java) ?: return
++        val pi = pending(context)
++        am.cancel(pi)
++        if (atWall == null || mode == WakeMode.OPPORTUNISTIC) return
++        lastError = try {
++            if (mode == WakeMode.EXACT) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atWall, pi)
++            else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atWall, pi)
++            null
++        } catch (t: Throwable) {
++            // e.g. SecurityException on a ROM that withdrew exact alarms: degrade, never crash.
++            runCatching { am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atWall, pi) }
++            "${t.javaClass.simpleName}: ${t.message}"
++        }
++    }
++
++    private fun pending(context: Context): PendingIntent = PendingIntent.getBroadcast(
++        context, 0, Intent(context, ProactiveWakeReceiver::class.java).setAction(ACTION),
++        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
++    )
++}
++
++/**
++ * Alarm, boot and app update. After a force stop Android delivers none of these until DSH is
++ * opened again; the settings page says so instead of promising background recovery.
++ */
++class ProactiveWakeReceiver : BroadcastReceiver() {
++    override fun onReceive(context: Context, intent: Intent?) {
++        val action = intent?.action ?: return
++        if (action != WakeAlarm.ACTION && action != Intent.ACTION_BOOT_COMPLETED && action != Intent.ACTION_MY_PACKAGE_REPLACED) return
++        runCatching {
++            ProactiveRuntime.ensure(context)
++            ProactiveRuntime.tick(action.substringAfterLast('.'))
++        }.onFailure { Log.w("DshProactive", "wake", it) }
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/phone/PhonePrompts.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/phone/PhonePrompts.kt
+index 7f96800..4efe83f 100644
+--- a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/phone/PhonePrompts.kt
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/phone/PhonePrompts.kt
+@@ -66,6 +66,9 @@ class PhonePrompts(
+     /** A DSH question is open right now (the loop never competes with one). */
+     fun busy(): Boolean = arbiter.current() != null
+ 
++    /** Told on the main thread when a question opens or closes (proactive pages give way at once). Read-only hook. */
++    @Volatile var onBusyChanged: (() -> Unit)? = null
++
+     override fun confirm(request: ConfirmRequest): Decision {
+         if (Looper.myLooper() == Looper.getMainLooper()) return Decision.UNAVAILABLE
+         val taskOwner = tasks.activeOwner() ?: return Decision.STOP
+@@ -118,10 +121,12 @@ class PhonePrompts(
+             onMain {
+                 main.removeCallbacks(tick)
+                 if (display?.first === ticket) clearDisplay()
++                runCatching { onBusyChanged?.invoke() }
+             }
+         }
+         onMain {
+             if (!ticket.live) return@onMain
++            runCatching { onBusyChanged?.invoke() }
+             tick.run()
+             val overlay = PhoneRegistry.overlayGate as? PhonePromptPresenter
+             if (overlay != null && show(ticket, PromptSurface.OVERLAY, overlay::showPrompt)) return@onMain
+diff --git a/app/android/app/src/main/res/values-zh/proactive_strings.xml b/app/android/app/src/main/res/values-zh/proactive_strings.xml
+new file mode 100644
+index 0000000..491c309
+--- /dev/null
++++ b/app/android/app/src/main/res/values-zh/proactive_strings.xml
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- 主动交互页（loop/proactive/ProactivePageActivity.kt）。英文在 values/proactive_strings.xml。 -->
++<resources>
++    <string name="proactive_reply">回应</string>
++    <string name="proactive_later">稍后</string>
++</resources>
+diff --git a/app/android/app/src/main/res/values/proactive_strings.xml b/app/android/app/src/main/res/values/proactive_strings.xml
+new file mode 100644
+index 0000000..e3d7d41
+--- /dev/null
++++ b/app/android/app/src/main/res/values/proactive_strings.xml
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Proactive page (loop/proactive/ProactivePageActivity.kt). Chinese in values-zh/proactive_strings.xml. -->
++<resources>
++    <string name="proactive_reply">Reply</string>
++    <string name="proactive_later">Later</string>
++</resources>
+-- 
+2.43.0
+
