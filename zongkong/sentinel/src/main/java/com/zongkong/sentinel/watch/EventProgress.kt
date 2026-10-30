@@ -139,17 +139,39 @@ object EventChannel {
         val sinceCompareMs: Long = 0,
         /** 允许的观察窗口：参照事件发生后，客户端有这么久来体现进度。 */
         val graceMs: Long = 20_000,
+        /**
+         * 同一次窗口切换在两端的**时间抖动容差**（P0-2）。
+         *
+         * 客户端和哨兵是两个独立的无障碍服务，同一次切换由系统分别派发，谁先谁后不确定，
+         * 两端各自 `SystemClock.elapsedRealtime()` 打点，天然会差几十到几百毫秒。
+         * 旧判据直接比 `clientEventAtMono < compareRefMono`，把这零点几秒当成「客户端落后」，
+         * 于是**用户只要静置超过 20s 就必报「事件通道异常」** —— 这是误报的主因。
+         */
+        val skewToleranceMs: Long = SKEW_TOLERANCE_MS,
+        /**
+         * 参照事件的最大可信年龄：超过这个时间，说明哨兵自己也很久没见到窗口切换了，
+         * 双方都在静置，不足以判定「谁卡住了」→ 只能给 PENDING。
+         * 不设这个上限的话，静置一小时后照样会蹦出一条「异常」。
+         */
+        val refMaxAgeMs: Long = REF_MAX_AGE_MS,
     )
 
     fun judge(ctx: Context): Pair<Verdict, String> {
         if (!ctx.registered) return Verdict.PENDING to "未接入，无事件可对"
         if (!ctx.permissionEnabled) return Verdict.PENDING to "无障碍未开启，事件不投递"
         if (ctx.suppressed) return Verdict.PENDING to "息屏/锁屏/暂停/刚唤醒，缺事件属正常"
-        if (!ctx.dispatcherHealthy) return Verdict.PENDING to "执行线程本身未确认，先不解判断事件通道"
+        if (!ctx.dispatcherHealthy) return Verdict.PENDING to "执行线程本身未确认，先不判断事件通道"
         if (ctx.compareRefMono <= 0) return Verdict.PENDING to "还没有可对照的窗口切换"
         if (!ctx.sentinelSawEventAfter) return Verdict.PENDING to "哨兵自己也没收到事件，无法区分是谁的问题"
-        if (ctx.clientEventAtMono >= ctx.compareRefMono) {
+        // 客户端进度不落后于参照事件（含时间抖动容差）→ 已体现。
+        // 容差是必须的：同一次切换两端打点差几百毫秒是常态，不是故障（P0-2）。
+        if (ctx.clientEventAtMono >= ctx.compareRefMono - ctx.skewToleranceMs) {
             return Verdict.VERIFIED to "最近一次窗口切换已体现在客户端事件进度里"
+        }
+        // 参照事件已经太旧：双方都没有新的窗口切换，静置不是故障（P0-2）。
+        if (ctx.sinceCompareMs > ctx.refMaxAgeMs) {
+            return Verdict.PENDING to
+                "参照事件距今 ${ctx.sinceCompareMs / 1000}s，两端都没有新的窗口切换，不做判定"
         }
         if (ctx.sinceCompareMs < ctx.graceMs) {
             return Verdict.PENDING to "参照事件刚发生，还在 ${ctx.graceMs / 1000}s 观察窗口内"
@@ -182,6 +204,8 @@ object EventChannel {
         dispatcherHealthy: Boolean,
         suppressed: Boolean,
         graceMs: Long = DEFAULT_GRACE_MS,
+        skewToleranceMs: Long = SKEW_TOLERANCE_MS,
+        refMaxAgeMs: Long = REF_MAX_AGE_MS,
     ): Pair<Verdict, String> {
         val hasOwnEvent = progress != null && progress.seq > 0 && progress.atMono > 0
         val refMono = if (hasOwnEvent) progress!!.atMono else 0L
@@ -196,12 +220,29 @@ object EventChannel {
                 permissionEnabled = permissionEnabled,
                 sinceCompareMs = if (refMono > 0) (nowMono - refMono).coerceAtLeast(0) else 0,
                 graceMs = graceMs,
+                skewToleranceMs = skewToleranceMs,
+                refMaxAgeMs = refMaxAgeMs,
             ),
         )
     }
 
     /** 观察窗口默认值：参照事件发生后，客户端有这么久来体现进度。 */
     const val DEFAULT_GRACE_MS = 20_000L
+
+    /**
+     * 同一次窗口切换在两端的打点抖动容差（P0-2）。
+     *
+     * 客户端与哨兵是两个无障碍服务，系统分别派发同一个事件，两端各自取
+     * `SystemClock.elapsedRealtime()`，先后顺序不确定、差值通常在几十到几百毫秒。
+     * 取 2 秒：足够吃掉抖动，又远小于观察窗口（20s），不会掩护真正的卡死。
+     */
+    const val SKEW_TOLERANCE_MS = 2_000L
+
+    /**
+     * 参照事件的最大可信年龄（P0-2）。超过它说明两端都静置，不能判「谁卡住了」。
+     * 取 120 秒：比观察窗口（20s）宽得多，够判一次真实故障，又不会被长时间静置误触。
+     */
+    const val REF_MAX_AGE_MS = 120_000L
 
     /** 首页 / 统计页用的四态判断（报告 §10）。 */
     data class Row(

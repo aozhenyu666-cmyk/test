@@ -674,9 +674,16 @@ class SentinelWatchV2Test {
     @Test
     fun `wiring produces ABNORMAL when client event progress stalls past grace`() {
         val dir = tmpDir()
-        // 哨兵自己在 mono=1_000 收到了真实窗口事件。
-        val events = writeRealEvents(dir, seq = 1, atMono = 1_000)
-        // 客户端的执行线程在回话，但它的事件进度停在 500（落后于参照点 1_000）。
+        // 哨兵自己在 mono=10_000 收到了真实窗口事件。
+        //
+        // 注意这里的数据为什么从 1_000 改成 10_000（P0-2）：
+        // 客户端与哨兵是两个独立的无障碍服务，同一次窗口切换由系统分别派发，
+        // 两端打点天然差几十到几百毫秒。旧数据用「客户端 500、参照 1_000」这种
+        // **500ms 的差**来模拟「卡死」——它和白噪声落在同一个量级，
+        // 测的其实是「抖动算不算故障」，而不是「卡死算不算故障」。
+        // 现在客户端停在 500、参照在 10_000，落后 9.5s，远超 2s 抖动容差，
+        // 才是这条用例名字真正要表达的场景。
+        val events = writeRealEvents(dir, seq = 1, atMono = 10_000)
         val hs = clientWithHealthyDispatcher(dir, HealthStore.ZONGKONG, eventAtMono = 500)
 
         // 参照事件已过 60s，远超 20s grace。
@@ -698,7 +705,8 @@ class SentinelWatchV2Test {
     fun `scheduler tick does not overwrite the wiring verdict`() {
         // 这条是 F-01 的回归测试：以前 scheduler.tick() 会在同一轮里把结论覆盖成「待验证」。
         val dir = tmpDir()
-        val events = writeRealEvents(dir, seq = 1, atMono = 1_000)
+        // 参照事件取 10_000、客户端停在 500（落后 9.5s），理由同上一条用例（P0-2 抖动容差）。
+        val events = writeRealEvents(dir, seq = 1, atMono = 10_000)
         val hs = clientWithHealthyDispatcher(dir, HealthStore.ZONGKONG, eventAtMono = 500)
         val sink = FakeSink()
         val sch = schedulerWith(hs, sink)

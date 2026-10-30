@@ -95,7 +95,18 @@ object LocalGuardian {
             stopped
         },
         selfHealthy = {
-            GuardHealth.verdict(GuardHealth.permissionEnabled()).status == HealthStatus.HEALTHY
+            // P0-1：「自己健康」不能依赖哨兵还愿不愿意发挑战。
+            //
+            // 旧判据只看 dispatcherAck，而 ack 只由哨兵发起 challenge 才产生 → 哨兵一沉默，
+            // selfHealthy 必然 false，[LocalFallback.decide] 的兜底分支永远进不去。
+            // 且 sentinelHealthy 的缓存窗口（60s）比 ack 新鲜窗口（30s）长，于是
+            // selfHealthy=true 必然蕴含 sentinelHealthy=true —— 本地兜底与回执整条链生产不可达。
+            //
+            // 现在：先看 ack（便宜、不用投递），不健康就做一次本地自检
+            // （自己往 a11y 线程投探针，测的是同一条线程，但不经过哨兵）。
+            val ackHealthy =
+                GuardHealth.verdict(GuardHealth.permissionEnabled()).status == HealthStatus.HEALTHY
+            ackHealthy || GuardHealth.localSelfProbe()
         },
         probeSentinel = { SentinelClient.probeAsync(context) },
         sentinelHealthy = { SentinelClient.linkCached(context) == SentinelClient.Link.RESPONDING },

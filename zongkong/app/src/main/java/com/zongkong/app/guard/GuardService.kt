@@ -214,6 +214,14 @@ class GuardService : AccessibilityService() {
         if (pkg == packageName || !interactive()) return false
         val cfg = store.config.value.hq
         if (store.config.value.pausedUntil > now) return false
+        // P0-4：紧急放行同样让路。
+        //
+        // 这里以前只判了 pausedUntil（休假），漏掉 emergencyUntil。后果是：
+        // 用户付了信用代价买到紧急放行，`enforce()` 那边会因为 strict=false 放行，
+        // 但 `lockdown()` 在更早的链路上照样把他弹回总控时间 ——
+        // 等于把「即时紧急暂停」在总控时间里取消了。
+        val emergencyUntil = store.status(now).emergencyUntil
+        if (emergencyUntil != null && emergencyUntil > now) return false
         var session = store.hq.value.active
         if (session == null && store.absence(now) == com.zongkong.core.hq.Hq.Absence.FORCE && !com.zongkong.core.hq.Hq.allows(pkg, packageName, cfg, overlays())) {
             Log.i(TAG, "失联太久，打开 $pkg 时进入总控时间")
