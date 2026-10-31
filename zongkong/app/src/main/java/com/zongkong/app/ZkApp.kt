@@ -42,6 +42,8 @@ class ZkApp : Application() {
         // 一律北京时间：时间显示、换日、定时都按它
         java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
         com.zongkong.app.system.CrashShield.install(this)
+        // 上次进程是怎么死的（系统记录）：写进眼睛日志，回答「为什么无障碍又无法运行了」
+        com.zongkong.app.guard.ExitLog.collectAsync(this, "进程启动")
         store = Store(this)
         actions = Actions(this, store)
         chat = com.zongkong.app.data.ChatRepo(this, store, actions)

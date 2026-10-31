@@ -59,13 +59,17 @@ object Diag {
         val reasonGuess: String = "",
         /** 今天一共记了多少条事件。 */
         val eventsToday: Int = 0,
+        /** 系统记录的真实死因结论（ApplicationExitInfo）；没有记录时为空。 */
+        val exitVerdict: String = "",
+        /** 今天系统记录到的进程死亡次数。 */
+        val exitsToday: Int = 0,
     )
 
     /** 固定的事件种类（界面和时间线按这个分好坏）。 */
     val KINDS = setOf(
         "connected", "unbound", "destroyed", "offline", "stale", "rebind_ok",
         "rebind_fail", "disabled", "bounce", "lockdown", "event_error", "watchdog",
-        "crash", "autoblock", "sentinel_on", "sentinel_off", "sentinel_takeover", "sentinel_main_back", "sentinel_wake", "released",
+        "crash", "exit", "autoblock", "sentinel_on", "sentinel_off", "sentinel_takeover", "sentinel_main_back", "sentinel_wake", "released",
     )
 
     private val lock = Any()
@@ -135,6 +139,7 @@ object Diag {
         var longest = 0L
         var lastLostAt = 0L
         var lastLostKind = ""
+        var exits = 0
 
         fun closeGap(at: Long) {
             if (offAt < 0) return
@@ -169,6 +174,7 @@ object Diag {
                 "stale" -> { stale++; online = false; lostAt(e.at); lastLostAt = e.at; lastLostKind = e.kind }
                 "disabled" -> { disabled++; online = false; lostAt(e.at); lastLostAt = e.at; lastLostKind = e.kind }
                 "rebind_fail" -> { rebindFail++; online = false; lastLostAt = e.at }
+                "exit" -> exits++
                 "watchdog" -> {
                     watchdog++
                     lostAt(e.at)
@@ -176,6 +182,7 @@ object Diag {
                 }
             }
         }
+        val verdict = ExitLog.verdict(context)
         if (offAt >= 0) {
             val gap = (now - offAt).coerceAtLeast(0)
             lostTotal += gap
@@ -201,8 +208,12 @@ object Diag {
             longestGapMs = longest,
             lastLostAt = lastLostAt,
             lastLostKind = lastLostKind,
-            reasonGuess = guessReason(enabled, running, ignoring, lastLostKind, lastLostAt, watchdog),
+            reasonGuess = verdict.takeIf { it.isNotBlank() && (lostCount > 0 || exits > 0 || !running) }
+                ?.let { "系统记录的真实死因：$it" }
+                ?: guessReason(enabled, running, ignoring, lastLostKind, lastLostAt, watchdog),
             eventsToday = today.size,
+            exitVerdict = verdict,
+            exitsToday = exits,
         )
     }
 
@@ -213,8 +224,17 @@ object Diag {
             .format(java.time.LocalDateTime.now(DayClock.BEIJING))
         val dst = File(dir, "diag-export-$stamp.txt")
         return try {
+            // 先读一遍最新的死因，再把「手机环境 + 死因结论」放在最前面，后面接完整日志
+            ExitLog.collect(context, "导出日志")
             val src = file(context)
-            if (src.exists()) src.copyTo(dst, overwrite = true) else dst.writeText("")
+            val head = runCatching { ExitLog.snapshot(context) }.getOrDefault("")
+            val traces = runCatching { ExitLog.dir(context).listFiles()?.map { it.absolutePath }.orEmpty() }.getOrDefault(emptyList())
+            dst.writeText(
+                "总控 · 眼睛日志导出\n" + head +
+                    (if (traces.isNotEmpty()) "现场文件：\n" + traces.joinToString("\n") + "\n" else "") +
+                    "\n---- 事件（时刻|种类|说明）----\n",
+            )
+            if (src.exists()) dst.appendText(src.readText())
             dst
         } catch (e: Throwable) {
             Log.w(TAG, "导出诊断日志失败", e)
@@ -335,6 +355,7 @@ object Diag {
         "offline" -> "心跳断了：进程被冻结或被清理"
         "disabled" -> "被关掉了（手动关的，或更新安装后系统把它关掉）"
         "stale" -> "开着但没在运行：系统把服务停了"
+        "exit" -> "进程死了（系统记录了死因）"
         "rebind_fail" -> "自动重新挂上没成功：系统彻底不让它跑"
         else -> "记录到一次失效"
     }
@@ -350,7 +371,7 @@ object Diag {
         val battery = if (ignoringBattery) "" else "；电池优化没关，系统更容易把后台清掉"
         return when {
             !enabled -> "设置里被关了：去权限页把无障碍重新打开。更新安装后系统也会把它关掉$battery"
-            !running -> "in enabled but not running: 系统把服务停了，常见原因是省电/后台清理$battery"
+            !running -> "开着但没在运行：系统把服务停了，常见原因是省电/后台清理（装上这一版后，下次掉线会记下系统给的真实死因）$battery"
             lastKind.isNotBlank() -> "上次 ${clockText(lastAt)} ${kindReason(lastKind)}；现在已经恢复$battery"
             watchdog > 0 -> "看门狗记录到服务消失过（${clockText(lastAt)}）：多半是进程被系统杀了$battery"
             else -> "今天还没记录到失效，眼睛一直在。"

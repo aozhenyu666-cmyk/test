@@ -51,7 +51,7 @@ object YishouClient {
         if (!Partner.installed(context)) return Result.Err("没装一手")
         if (!Partner.yishouGenuine(context)) return Result.Err("手机上的一手不是我们打包的那个（签名不对），不连接")
         return try {
-            val b = context.contentResolver.call(uri, method, null, extras)
+            val b = com.zongkong.app.system.SafeCall.call(context.contentResolver, uri, method, null, extras)
                 ?: return Result.Err("一手没有回应：把一手更新到 0.8 以上")
             b.getString(Link.ERROR)?.let { return Result.Err("一手拒绝了：$it") }
             Result.Ok(read(b))

@@ -92,6 +92,8 @@ class GuardService : AccessibilityService() {
     private fun connected() {
         running = true
         runCatching { Diag.log(this, "connected", "无障碍服务连上；SDK=${android.os.Build.VERSION.SDK_INT}") }
+        // 刚被系统重新拉起：把上次的死因读出来（后台线程，不占无障碍主线程）
+        ExitLog.collectAsync(this, "无障碍接上")
         // v2：换一个新的无障碍实例（重建必须换新），并把挑战投递口挂到这条主线程上（T02/T11）。
         runCatching {
             com.zongkong.app.healthwire.GuardHealth.init(this)

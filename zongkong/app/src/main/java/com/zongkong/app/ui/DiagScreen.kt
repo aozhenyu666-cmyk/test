@@ -53,6 +53,8 @@ private fun kindLabel(kind: String): String = when (kind) {
     "lockdown" -> "总控时间"
     "event_error" -> "事件出错"
     "watchdog" -> "看门狗"
+    "exit" -> "死因"
+    "crash" -> "崩溃"
     else -> kind
 }
 
@@ -61,7 +63,7 @@ private fun kindColor(kind: String): Color {
     val sig = LocalSignals.current
     return when (kind) {
         "connected", "rebind_ok" -> sig.free
-        "unbound", "destroyed", "offline", "stale", "disabled", "rebind_fail" -> sig.strict
+        "unbound", "destroyed", "offline", "stale", "disabled", "rebind_fail", "exit", "crash" -> sig.strict
         "watchdog", "event_error" -> sig.warn
         else -> sig.muted
     }
@@ -108,6 +110,7 @@ fun DiagScreen(nav: NavHostController) {
                         " · 开着没跑 ${summary.stale} 次",
                 )
                 appendLine("原因猜测：${summary.reasonGuess}")
+                append(runCatching { com.zongkong.app.guard.ExitLog.snapshot(context) }.getOrDefault(""))
                 appendLine("导出文件：${file.absolutePath}")
                 appendLine()
                 events.forEach { appendLine("${hms(it.at)} ${it.kind} ${it.detail}") }
@@ -175,6 +178,15 @@ fun DiagScreen(nav: NavHostController) {
                     if (summary.lostCount > 0) sig.warn else sig.muted,
                 )
                 KeyValue("开着没跑", "${summary.stale} 次", if (summary.stale > 0) sig.warn else sig.muted)
+                KeyValue(
+                    "系统记录的死因",
+                    summary.exitVerdict.ifBlank { "还没有（Android 11+ 才有；下次掉线后这里会写清楚是谁杀的）" },
+                    if (summary.exitVerdict.isNotBlank()) sig.strict else sig.muted,
+                )
+                run {
+                    val crashed = remember(key) { com.zongkong.app.guard.ExitLog.systemMarkedCrashed(context) }
+                    if (crashed == true) KeyValue("系统标记", "无法运行（进程死过，系统没重新拉起）", sig.strict)
+                }
                 KeyValue("电池优化", if (summary.ignoringBattery) "已忽略（不容易被清）" else "没忽略", if (summary.ignoringBattery) sig.free else sig.warn)
                 Hint("最近原因猜测：${summary.reasonGuess}")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

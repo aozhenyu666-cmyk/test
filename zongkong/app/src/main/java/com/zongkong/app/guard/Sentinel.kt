@@ -171,7 +171,7 @@ object SentinelClient {
         if (instanceId.isBlank()) return false
         val app = c.applicationContext
         return try {
-            val r = app.contentResolver.call(HEALTH_URI, "register", null, Bundle().apply {
+            val r = com.zongkong.app.system.SafeCall.call(app.contentResolver, HEALTH_URI, "register", null, Bundle().apply {
                 putInt("v", PROTOCOL_VERSION)
                 putString("pkg", app.packageName)
                 putString("versionName", versionName)
@@ -246,7 +246,7 @@ object SentinelClient {
         val input = Bundle().apply(args)
         val future = try {
             pingExec.submit(java.util.concurrent.Callable {
-                app.contentResolver.call(HEALTH_URI, method, null, input)
+                com.zongkong.app.system.SafeCall.call(app.contentResolver, HEALTH_URI, method, null, input)
             })
         } catch (e: Throwable) {
             Log.w(TAG, "$method 提交失败", e)
@@ -296,7 +296,7 @@ object SentinelClient {
 
     /** 真正发 Binder 的那一步（只在 [pingBounded] 的后台线程里跑）。 */
     private fun pingBlocking(app: Context): Info? = try {
-        val r = app.contentResolver.call(HEALTH_URI, "ping", null, Bundle().apply {
+        val r = com.zongkong.app.system.SafeCall.call(app.contentResolver, HEALTH_URI, "ping", null, Bundle().apply {
             putInt("v", PROTOCOL_VERSION)
             putString("pkg", app.packageName)
             putString("certSha256", certSha256(app))
@@ -389,7 +389,7 @@ object SentinelClient {
     /** v1 老口子只用来读「解除闸门」这一件事（它和健康无关，属于总控让路的业务状态）。 */
     private fun readLegacyRelease(c: Context) {
         try {
-            val r = c.contentResolver.call(LEGACY_URI, "ping", null, null) ?: return
+            val r = com.zongkong.app.system.SafeCall.call(c.contentResolver, LEGACY_URI, "ping") ?: return
             if (!r.containsKey("error")) releasedUntilMs = r.getLong("releasedUntil", 0L)
         } catch (_: Throwable) {
             // 哨兵没装 / 还没升级到 v2：静默，不影响健康判定
