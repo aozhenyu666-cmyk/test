@@ -1228,6 +1228,8 @@ class LoopTest {
         waitFor(hasText("刷 20 道资料分析", substring = true) and androidx.compose.ui.test.hasAnyAncestor(hasTestTag("chat-today")), 10_000, "顶栏显示下一段")
         settle()
         shot("e2e-121-chat-planned")
+        // 选项按钮要等这一轮彻底说完（busy 落下）才画出来：先等它出现，等不到就带着屏幕和对话失败
+        waitFor(hasText("好"), 10_000, "选项按钮「好」")
         compose.onNode(hasText("好")).performScrollTo().performClick()
         // 等这一轮说完；等不到就把对话原样带进失败信息（看清是哪一步卡住）
         try {
