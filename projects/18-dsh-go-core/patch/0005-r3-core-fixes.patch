@@ -1,0 +1,1348 @@
+From 05e87b3a0460e7efe90d57b656fd005519693910 Mon Sep 17 00:00:00 2001
+From: DeepSeek <deepseek@local>
+Date: Sat, 31 Oct 2026 08:17:56 +0800
+Subject: [PATCH 1/2] =?UTF-8?q?=EF=BB=BFD5=20(review):=20hand=20the=20firs?=
+ =?UTF-8?q?t-round=20trigger=20to=20the=20proactive=20kernel?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+LoopRuntime.verifyNow no longer starts InteractionActivity itself: a first-round Show is
+submitted to the proactive kernel as an app_enter EventRequest (needsAgent=false, the
+round-1 fixed sentence as its only fallback, payload limited to packageName and localTime).
+
+The kernel then owns the arbitration: DSH busy, prompts, quiet hours, the daily cap, the
+notification fallback and the presentation token. If the kernel refuses (queue full,
+duplicate, feature off) the round-1 event is closed as UNAVAILABLE(kernel_<reason>) instead
+of being left open with no surface that could ever appear.
+
+Waiting for Claude: this touches the seam between the first round and the kernel, which the
+integration guide marks review-before-merge. Do not merge into the candidate build yet.
+---
+ .../ccch1mneyyy/dsh_app/loop/LoopRuntime.kt   | 53 ++++++++++++++++++-
+ 1 file changed, 52 insertions(+), 1 deletion(-)
+
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopRuntime.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopRuntime.kt
+index 3393b7f..7db6795 100644
+--- a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopRuntime.kt
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopRuntime.kt
+@@ -15,6 +15,8 @@ import android.view.accessibility.AccessibilityEvent
+ import android.view.accessibility.AccessibilityWindowInfo
+ import android.view.inputmethod.InputMethodManager
+ import io.github.ccch1mneyyy.dsh_app.phone.PhoneControl
++import io.github.ccch1mneyyy.dsh_app.loop.core.EventRequest
++import io.github.ccch1mneyyy.dsh_app.loop.core.Submit
+ import io.github.ccch1mneyyy.dsh_app.loop.proactive.ProactiveRuntime
+ import io.github.ccch1mneyyy.dsh_app.phone.a11y.Box
+ import io.github.ccch1mneyyy.dsh_app.phone.a11y.ProtectedPages
+@@ -125,6 +127,52 @@ object LoopRuntime {
+         runCatching { ProactiveRuntime.onWindowActivity() }
+     }
+ 
++    /**
++     * D5 (review): hand one first-round trigger to the proactive kernel instead of starting the
++     * page directly. The kernel owns the arbitration (DSH busy, notifications, tokens), so this is
++     * the only place a page can come from — the round-1 [InteractionHub] path would bypass it.
++     *
++     * The fallback text is the round-1 fixed sentence, which the integration guide allows for
++     * `app_enter`; there is no fabricated agent text anywhere.
++     */
++    private fun submitToKernel(
++        s: AccessibilityService,
++        engine: LoopEngine,
++        show: LoopEngine.Outcome.Show,
++        pkg: String?,
++    ) {
++        val label = runCatching { appLabel(s, pkg) }.getOrDefault(pkg.orEmpty())
++        val fallback = io.github.ccch1mneyyy.dsh_app.i18n.AppStrings.get(
++            s, io.github.ccch1mneyyy.dsh_app.R.string.loop_page_text, label,
++        )
++        val request = EventRequest(
++            eventId = show.event.eventId,
++            source = "A11Y_WINDOW",
++            kind = "app_enter",
++            dedupeKey = "app_enter:$pkg",
++            createdAt = show.event.timestamp,
++            ttlMs = show.timeoutMs.coerceAtLeast(60_000L),
++            needsAgent = false,
++            fallbackText = fallback,
++            payload = linkedMapOf(
++                "packageName" to (pkg ?: ""),
++                // The person's own clock, as text; the kernel never asks for screen content.
++                "localTime" to SimpleDateFormat("HH:mm", Locale.US).format(Date()),
++            ),
++        )
++        when (val r = ProactiveRuntime.submit(request)) {
++            // Queued: it will be presented by the kernel's arbiter. Merged: the same intent was
++            // already waiting, so the kernel folded this one into it — also accepted.
++            is Submit.Queued, is Submit.Merged -> Log.i(TAG, "handed ${show.event.eventId} to the kernel: $r")
++            // Refused (queue full, duplicate, feature off): close the round-1 event honestly
++            // instead of leaving it open with no surface that will ever appear.
++            is Submit.Rejected -> {
++                Log.i(TAG, "kernel refused ${show.event.eventId}: ${r.reason}")
++                engine.answer(show.event.eventId, EventResult.UNAVAILABLE, reason = "kernel_${r.reason}")
++            }
++        }
++    }
++
+     /** Settings changed: read the foreground again so the new target is judged from now on. */
+     fun configChanged() = schedule()
+ 
+@@ -157,7 +205,10 @@ object LoopRuntime {
+                 runCatching { ProactiveRuntime.refreshGate("protected_page") }
+             }
+             when (val out = e.onForeground(pkg, environment(s))) {
+-                is LoopEngine.Outcome.Show -> InteractionHub.show(s, e, out)
++                // D5 (review): the trigger itself is handed to the proactive kernel, so one
++                // arbiter decides about every surface. The first round's fixed test sentence is
++                // the only fallback allowed here (integration guide §4: no fabricated agent text).
++                is LoopEngine.Outcome.Show -> submitToKernel(s, e, out, pkg)
+                 is LoopEngine.Outcome.Suppressed -> Log.i(TAG, "suppressed ${out.event.packageName}: ${out.event.reason}")
+                 is LoopEngine.Outcome.Ignored -> Unit
+             }
+-- 
+2.43.0
+
+
+From d07bc14cbcbf4f6b1d6e9f05bcfd6152dcfbf724 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 31 Oct 2026 01:49:28 +0000
+Subject: [PATCH 2/2] Fix the D5 seam, the feature switches and protected
+ pages; deny tools in proactive turns
+
+Review round 3 of the proactive integration.
+
+A. One owner per app-enter event. D5 handed the event to the kernel but never wrote the
+   kernel's verdict back, so LoopEngine kept it TRIGGERED and suppressed every later visit
+   with interaction_open. The kernel now owns how the event ends; LoopEngine keeps a delegated
+   twin with the same eventId that KernelMirror closes exactly once (shown, every outcome,
+   refusals and merges at submit, and reconcile after a restart in either start order).
+   LoopEngine.recover and config changes no longer close delegated twins themselves.
+
+B. Separate switches. The coordinator's gate used only the proactive-chat switch, so the
+   trigger test was refused whenever proactive chat was off. Switches defines who runs what:
+   observation and arbitration run for either feature; turning one off cancels only its own
+   events (Coordinator.cancelSource), and a new test app cancels app-enter events for the old
+   one.
+
+C. Protected pages no longer depend on the trigger test. Foreground reading runs for either
+   feature, is cleared when the accessibility service goes away, and the gate treats the whole
+   Settings app as protected (titles are never read, so its permission pages cannot be told
+   apart).
+
+E. The host plugin denies every tool call in a turn started by a proactive message, at
+   tools/pre-execute (global, prepended), until that turn ends. Verified against a real DSH
+   0.2.1-rc.4 engine with a mock model that calls a tool: denied in the proactive turn, run
+   normally in the person's own turn. Also fixes a startup race where an unloaded LoopEngine
+   read as "trigger test off" and cancelled live events with the wrong reason.
+
+D. tooling/verify_apk_runtime.py proves from an APK whether its rootfs carries the plugin,
+   its load row and no test files; runtime/tests/test_proactive_packaging.py covers the
+   rtbuild recipe.
+
+Tests: 108 JVM (12 new), plugin 12/12, live engine 32/32, verifier 5/5, packaging 4/4.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUAnRqEK1Me9rrDHoEiwk9
+---
+ .../ccch1mneyyy/dsh_app/loop/KernelMirror.kt  |  69 +++++
+ .../ccch1mneyyy/dsh_app/loop/LoopEngine.kt    |  20 +-
+ .../ccch1mneyyy/dsh_app/loop/LoopRuntime.kt   |  67 +++--
+ .../dsh_app/loop/ProtectedForeground.kt       |  16 ++
+ .../dsh_app/loop/core/Coordinator.kt          |  13 +
+ .../ccch1mneyyy/dsh_app/loop/core/Switches.kt |  38 +++
+ .../loop/proactive/ProactiveRuntime.kt        |  41 ++-
+ .../dsh_app/loop/KernelMirrorTest.kt          | 238 ++++++++++++++++++
+ .../proactive/dsh-go-proactive/lib/core.js    |  20 +-
+ .../proactive/dsh-go-proactive/lib/index.js   |   8 +
+ .../dsh-go-proactive/test/core.test.mjs       |  26 ++
+ .../dsh-go-proactive/test/e2e-live.mjs        |  24 ++
+ .../dsh-go-proactive/test/mock-messages.mjs   |  30 ++-
+ runtime/tests/test_proactive_packaging.py     |  46 ++++
+ tooling/test_verify_apk_runtime.py            |  89 +++++++
+ tooling/verify_apk_runtime.py                 | 125 +++++++++
+ 16 files changed, 844 insertions(+), 26 deletions(-)
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/KernelMirror.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/ProtectedForeground.kt
+ create mode 100644 app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/Switches.kt
+ create mode 100644 app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/KernelMirrorTest.kt
+ create mode 100644 runtime/tests/test_proactive_packaging.py
+ create mode 100644 tooling/test_verify_apk_runtime.py
+ create mode 100644 tooling/verify_apk_runtime.py
+
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/KernelMirror.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/KernelMirror.kt
+new file mode 100644
+index 0000000..116b951
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/KernelMirror.kt
+@@ -0,0 +1,69 @@
++package io.github.ccch1mneyyy.dsh_app.loop
++
++import io.github.ccch1mneyyy.dsh_app.loop.core.Outcome
++import io.github.ccch1mneyyy.dsh_app.loop.core.ProactiveEvent
++import io.github.ccch1mneyyy.dsh_app.loop.core.Stage
++import io.github.ccch1mneyyy.dsh_app.loop.core.Submit
++import io.github.ccch1mneyyy.dsh_app.loop.core.Switches
++
++/**
++ * One owner per app-enter event (review round 3, defect A).
++ *
++ * Once LoopEngine hands an event to the kernel, the kernel's [io.github.ccch1mneyyy.dsh_app.loop.core.Coordinator]
++ * is the only thing that decides how it ends. LoopEngine keeps a *delegated* twin with the same
++ * eventId (surface = [DELEGATED]) so its visit rule ("one open interaction at a time") still holds,
++ * and this object writes the kernel's verdict back onto it exactly once:
++ *
++ *   submit Queued      → twin delegated, stays open
++ *   submit Merged      → twin closes SUPPRESSED (merged into another event)
++ *   submit Rejected    → twin closes UNAVAILABLE (kernel_<reason>)
++ *   kernel SHOWN       → twin SHOWN
++ *   kernel CLOSED      → twin closes with the mapped result (first write wins; LoopEngine.answer is idempotent)
++ *   process restart    → LoopEngine.recover leaves delegated twins open; [reconcile] then copies
++ *                        the kernel's result, or closes ABANDONED(kernel_lost) if the kernel has no record.
++ *
++ * Plain Kotlin: tested on the JVM with the real LoopEngine and Coordinator.
++ */
++object KernelMirror {
++    const val DELEGATED = "kernel"
++
++    fun resultOf(o: Outcome): EventResult = when (o) {
++        Outcome.RESPONDED -> EventResult.RETURNED
++        Outcome.DISMISSED -> EventResult.DISMISSED
++        Outcome.TIMEOUT -> EventResult.TIMEOUT
++        Outcome.ABANDONED -> EventResult.ABANDONED
++        Outcome.UNAVAILABLE -> EventResult.UNAVAILABLE
++        Outcome.FAILED -> EventResult.ERROR
++        // Never reached the person: the kernel held, merged, dropped or cancelled it.
++        Outcome.CANCELLED, Outcome.YIELDED, Outcome.EXPIRED, Outcome.DROPPED, Outcome.MERGED -> EventResult.SUPPRESSED
++    }
++
++    fun onSubmit(engine: LoopEngine, eventId: String, submit: Submit): LoopEvent? = when (submit) {
++        is Submit.Queued -> engine.delegate(eventId)
++        is Submit.Merged -> engine.answer(eventId, EventResult.SUPPRESSED, reason = "kernel_merged:${submit.into}", surface = DELEGATED)
++        is Submit.Rejected -> engine.answer(eventId, EventResult.UNAVAILABLE, reason = "kernel_${submit.reason}", surface = DELEGATED)
++    }
++
++    /** A kernel event closed. Only app-enter events have a twin; anything else is ignored. */
++    fun onClosed(engine: LoopEngine, closed: ProactiveEvent): LoopEvent? {
++        if (closed.request.source != Switches.SOURCE_APP_ENTER || closed.outcome == null) return null
++        val reason = "kernel_${closed.outcome.name.lowercase()}" + (closed.reason?.let { ":$it" } ?: "")
++        return engine.answer(closed.eventId, resultOf(closed.outcome), reason = reason, surface = DELEGATED)
++    }
++
++    fun onShown(engine: LoopEngine, event: ProactiveEvent?) {
++        if (event == null || event.request.source != Switches.SOURCE_APP_ENTER || event.stage != Stage.SHOWN) return
++        engine.shown(event.eventId)
++    }
++
++    /** After both sides recovered: settle every delegated twin that is still open. */
++    fun reconcile(engine: LoopEngine, kernelFind: (String) -> ProactiveEvent?): List<LoopEvent> =
++        engine.openDelegated().mapNotNull { id ->
++            val k = kernelFind(id)
++            when {
++                k == null -> engine.answer(id, EventResult.ABANDONED, reason = "kernel_lost", surface = DELEGATED)
++                !k.open -> onClosed(engine, k)
++                else -> null
++            }
++        }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopEngine.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopEngine.kt
+index 355de5e..acf14ea 100644
+--- a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopEngine.kt
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopEngine.kt
+@@ -78,7 +78,8 @@ class LoopEngine(
+                 val now = clock()
+                 for (i in events.indices) {
+                     val e = events[i]
+-                    if (!e.open) continue
++                    // Delegated to the kernel: the kernel decides how it ended (KernelMirror.reconcile).
++                    if (!e.open || e.surface == KernelMirror.DELEGATED) continue
+                     val c = e.copy(state = EventState.CLOSED, result = EventResult.ABANDONED, reason = "process_restart", updatedAt = now)
+                     events[i] = c
+                     closed += c
+@@ -142,6 +143,20 @@ class LoopEngine(
+         true
+     }
+ 
++    /**
++     * The kernel took this event (KernelMirror): it stays open here until the kernel's verdict is
++     * written back, so the one-open-interaction rule keeps holding. Null when already closed.
++     */
++    fun delegate(eventId: String): LoopEvent? = synchronized(lock) {
++        val e = find(eventId)?.takeIf { it.open } ?: return null
++        replace(e.copy(surface = KernelMirror.DELEGATED, updatedAt = clock()))
++    }
++
++    /** Open events whose outcome belongs to the kernel. */
++    fun openDelegated(): List<String> = synchronized(lock) {
++        events.filter { it.open && it.surface == KernelMirror.DELEGATED }.map { it.eventId }
++    }
++
+     /** Where [eventId] stands now; null when unknown (evicted or never existed). */
+     fun stateOf(eventId: String): EventState? = synchronized(lock) { find(eventId)?.state }
+ 
+@@ -191,7 +206,8 @@ class LoopEngine(
+ 
+     private fun closeOpenLocked(result: EventResult, reason: String) {
+         val now = clock()
+-        for (i in events.indices) if (events[i].open) {
++        // Delegated twins are closed by the kernel's verdict only (KernelMirror), never here.
++        for (i in events.indices) if (events[i].open && events[i].surface != KernelMirror.DELEGATED) {
+             events[i] = events[i].copy(state = EventState.CLOSED, result = result, reason = reason, updatedAt = now)
+         }
+     }
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopRuntime.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopRuntime.kt
+index 7db6795..50d89cb 100644
+--- a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopRuntime.kt
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/LoopRuntime.kt
+@@ -16,7 +16,8 @@ import android.view.accessibility.AccessibilityWindowInfo
+ import android.view.inputmethod.InputMethodManager
+ import io.github.ccch1mneyyy.dsh_app.phone.PhoneControl
+ import io.github.ccch1mneyyy.dsh_app.loop.core.EventRequest
+-import io.github.ccch1mneyyy.dsh_app.loop.core.Submit
++import io.github.ccch1mneyyy.dsh_app.loop.core.ProactiveEvent
++import io.github.ccch1mneyyy.dsh_app.loop.core.Switches
+ import io.github.ccch1mneyyy.dsh_app.loop.proactive.ProactiveRuntime
+ import io.github.ccch1mneyyy.dsh_app.phone.a11y.Box
+ import io.github.ccch1mneyyy.dsh_app.phone.a11y.ProtectedPages
+@@ -44,6 +45,8 @@ object LoopRuntime {
+     private const val TAG = "DshLoop"
+     /** Quiet gap before reading the foreground: one app switch fires several window events. */
+     private const val SETTLE_MS = 350L
++    /** How long an app-enter event may wait in the kernel before it is no longer worth showing. */
++    const val APP_ENTER_TTL_MS = 120_000L
+ 
+     private val main = Handler(Looper.getMainLooper())
+     @Volatile private var engine: LoopEngine? = null
+@@ -83,6 +86,8 @@ object LoopRuntime {
+             ).also {
+                 val abandoned = it.recover()
+                 if (abandoned.isNotEmpty()) Log.i(TAG, "recovered: closed ${abandoned.size} open event(s)")
++                // Delegated twins stay open through recover(); the kernel's record settles them.
++                ProactiveRuntime.kernelOrNull()?.let { k -> KernelMirror.reconcile(it, k::find) }
+                 it.recoveredFrom?.let { b -> Log.w(TAG, "state file damaged, loaded backup $b") }
+                 localBridge = LocalTemplateBridge(
+                     labels = { p -> p?.let { pkg -> runCatching { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() }.getOrNull() } },
+@@ -105,6 +110,8 @@ object LoopRuntime {
+     fun detach(s: AccessibilityService) {
+         if (service?.get() === s) service = null
+         main.removeCallbacks(verify)
++        // No more readings: a stale "protected page in front" must not hold the kernel forever.
++        lastForeground = null
+         // Pages can no longer start from the background: the kernel falls back to notifications.
+         main.post { runCatching { ProactiveRuntime.refreshGate("a11y_gone") } }
+     }
+@@ -113,8 +120,10 @@ object LoopRuntime {
+         proactive(event)
+         val type = event?.eventType ?: return
+         if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && type != AccessibilityEvent.TYPE_WINDOWS_CHANGED) return
+-        val e = engine ?: return
+-        if (!e.config().enabled) return
++        if (engine == null) return
++        // Observation runs for either feature (review r3, C): protected-page detection must not
++        // depend on the trigger-test switch.
++        if (!switches().observeForeground) return
+         if (service?.get() !== s) service = WeakReference(s)
+         eventsSeen++
+         diagnostics.success(LoopDiagnostics.KIND_EVENT)
+@@ -151,7 +160,9 @@ object LoopRuntime {
+             kind = "app_enter",
+             dedupeKey = "app_enter:$pkg",
+             createdAt = show.event.timestamp,
+-            ttlMs = show.timeoutMs.coerceAtLeast(60_000L),
++            // "You just opened X" is stale after a couple of minutes; the round-1 timeout is how long
++            // the page waits for an answer, which the kernel's own interaction timeout governs.
++            ttlMs = APP_ENTER_TTL_MS,
+             needsAgent = false,
+             fallbackText = fallback,
+             payload = linkedMapOf(
+@@ -160,21 +171,38 @@ object LoopRuntime {
+                 "localTime" to SimpleDateFormat("HH:mm", Locale.US).format(Date()),
+             ),
+         )
+-        when (val r = ProactiveRuntime.submit(request)) {
+-            // Queued: it will be presented by the kernel's arbiter. Merged: the same intent was
+-            // already waiting, so the kernel folded this one into it — also accepted.
+-            is Submit.Queued, is Submit.Merged -> Log.i(TAG, "handed ${show.event.eventId} to the kernel: $r")
+-            // Refused (queue full, duplicate, feature off): close the round-1 event honestly
+-            // instead of leaving it open with no surface that will ever appear.
+-            is Submit.Rejected -> {
+-                Log.i(TAG, "kernel refused ${show.event.eventId}: ${r.reason}")
+-                engine.answer(show.event.eventId, EventResult.UNAVAILABLE, reason = "kernel_${r.reason}")
+-            }
+-        }
++        // Review r3, A: the kernel is the only owner of how this event ends. Queued → the twin is
++        // delegated and the kernel's verdict is written back (KernelMirror); merged / refused → the
++        // twin closes now. Either way nothing stays open without an owner.
++        val r = ProactiveRuntime.submit(request)
++        KernelMirror.onSubmit(engine, show.event.eventId, r)
++        Log.i(TAG, "handed ${show.event.eventId} to the kernel: $r")
+     }
+ 
++    /** Whether 触发测试 is on (it may be on while 主动搭话 is off, and the other way round). */
++    fun triggerEnabled(): Boolean = engine?.config()?.enabled == true
++
++    fun triggerTarget(): String? = engine?.config()?.targetPackage
++
++    private fun switches() = Switches(triggerEnabled(), ProactiveRuntime.proactiveEnabled())
++
++    /** The kernel closed an event: write its verdict onto the round-1 twin (no-op for other sources). */
++    fun onKernelClosed(closed: ProactiveEvent) { engine?.let { KernelMirror.onClosed(it, closed) } }
++
++    fun onKernelShown(event: ProactiveEvent?) { engine?.let { KernelMirror.onShown(it, event) } }
++
++    /** After the kernel recovered: settle round-1 twins it may have closed meanwhile. */
++    fun reconcileWithKernel(kernelFind: (String) -> ProactiveEvent?) { engine?.let { KernelMirror.reconcile(it, kernelFind) } }
++
++    /** Settings / system pages in front, by package name only (no page content is read). */
++    fun protectedForeground(): Boolean = ProtectedForeground.isProtected(lastForeground)
++
+     /** Settings changed: read the foreground again so the new target is judged from now on. */
+-    fun configChanged() = schedule()
++    fun configChanged() {
++        schedule()
++        // Turning 触发测试 off cancels only its own kernel events (review r3, B).
++        main.post { runCatching { ProactiveRuntime.refreshGate("trigger_config") } }
++    }
+ 
+     private fun schedule() {
+         main.removeCallbacks(verify)
+@@ -184,7 +212,8 @@ object LoopRuntime {
+     private fun verifyNow() {
+         val s = service?.get() ?: return
+         val e = engine ?: return
+-        if (!e.config().enabled) return
++        val sw = switches()
++        if (!sw.observeForeground) return
+         val previousForeground = lastForeground
+         val pkg = try {
+             foreground(s).also {
+@@ -201,9 +230,11 @@ object LoopRuntime {
+         try {
+             // The proactive gate cares whether a permission/security page took the foreground:
+             // it must yield while one is up, and reopen once it is gone.
+-            if ((pkg in ProtectedPages.packages) != (previousForeground in ProtectedPages.packages)) {
++            if (ProtectedForeground.isProtected(pkg) != ProtectedForeground.isProtected(previousForeground)) {
+                 runCatching { ProactiveRuntime.refreshGate("protected_page") }
+             }
++            // Observation may be running only for 主动搭话: then there is no app-enter trigger.
++            if (!sw.triggerTest) { diagnostics.success(LoopDiagnostics.KIND_VERIFY); return }
+             when (val out = e.onForeground(pkg, environment(s))) {
+                 // D5 (review): the trigger itself is handed to the proactive kernel, so one
+                 // arbiter decides about every surface. The first round's fixed test sentence is
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/ProtectedForeground.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/ProtectedForeground.kt
+new file mode 100644
+index 0000000..74f56ca
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/ProtectedForeground.kt
+@@ -0,0 +1,16 @@
++package io.github.ccch1mneyyy.dsh_app.loop
++
++import io.github.ccch1mneyyy.dsh_app.phone.a11y.ProtectedPages
++
++/**
++ * Pages proactive surfaces must never cover, judged from the foreground package alone.
++ *
++ * DSH's own driver protects Settings only on certain pages (accessibility, permissions…), which it
++ * recognises by reading the page title. The proactive kernel reads no page content, so it cannot
++ * tell those pages apart: it treats the whole Settings app as protected, plus every package
++ * [ProtectedPages] protects outright (installers, permission controllers, security centres).
++ */
++object ProtectedForeground {
++    fun isProtected(pkg: String?): Boolean =
++        pkg != null && (pkg in ProtectedPages.packages || pkg in ProtectedPages.settingsPackages)
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/Coordinator.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/Coordinator.kt
+index 650be0e..749ca63 100644
+--- a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/Coordinator.kt
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/Coordinator.kt
+@@ -212,6 +212,19 @@ class Coordinator(
+         times.filter { it > 0 }.minOrNull()
+     }
+ 
++    /**
++     * One producer was switched off: cancel its queued and active events, leave the others alone.
++     * Unlike [Gate.featureEnabled] (everything off), this keeps the other feature working.
++     */
++    fun cancelSource(source: String, reason: String): Step = synchronized(lock) {
++        val now = clock()
++        val out = Out()
++        queue.filter { it.request.source == source }.forEach { queue.remove(it); close(it, Outcome.CANCELLED, reason, now, out) }
++        active?.takeIf { it.request.source == source }?.let { abortActive(it, Outcome.CANCELLED, reason, now, out) }
++        if (out.closed.isNotEmpty()) reconcile(now, out)
++        out.step()
++    }
++
+     fun active(): ProactiveEvent? = synchronized(lock) { active }
+     fun queued(): List<ProactiveEvent> = synchronized(lock) { queue.toList() }
+     /** Closed events, newest first. */
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/Switches.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/Switches.kt
+new file mode 100644
+index 0000000..e5b3251
+--- /dev/null
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/core/Switches.kt
+@@ -0,0 +1,38 @@
++package io.github.ccch1mneyyy.dsh_app.loop.core
++
++/**
++ * Who each switch is for. Two switches the person sees, four jobs:
++ *
++ * | job                     | runs when                         | owner                          |
++ * |-------------------------|-----------------------------------|--------------------------------|
++ * | foreground observation  | either feature is on              | LoopRuntime (package name only)|
++ * | app-enter trigger       | 触发测试 is on                     | LoopEngine visit + TriggerRules|
++ * | random attempts         | 主动搭话 is on                     | ProactiveScheduler             |
++ * | interaction arbitration | either feature is on              | Coordinator (sole result owner)|
++ *
++ * Turning one feature off cancels only that feature's events in the coordinator; the other
++ * feature keeps working. Protected-page detection depends on observation only, never on
++ * which feature asked for it.
++ */
++data class Switches(val triggerTest: Boolean, val proactive: Boolean) {
++    val observeForeground: Boolean get() = triggerTest || proactive
++    val arbitrate: Boolean get() = triggerTest || proactive
++
++    /** Whether events from [source] may be accepted / kept. */
++    fun accepts(source: String): Boolean = when (source) {
++        SOURCE_APP_ENTER -> triggerTest
++        SOURCE_SCHEDULER -> proactive
++        else -> arbitrate
++    }
++
++    /** Sources whose events must be cancelled now. */
++    fun disabledSources(): List<Pair<String, String>> = buildList {
++        if (!triggerTest) add(SOURCE_APP_ENTER to "trigger_test_off")
++        if (!proactive) add(SOURCE_SCHEDULER to "proactive_off")
++    }
++
++    companion object {
++        const val SOURCE_APP_ENTER = "A11Y_WINDOW"
++        const val SOURCE_SCHEDULER = "SCHEDULER"
++    }
++}
+diff --git a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/ProactiveRuntime.kt b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/ProactiveRuntime.kt
+index 6634160..372827b 100644
+--- a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/ProactiveRuntime.kt
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/loop/proactive/ProactiveRuntime.kt
+@@ -27,12 +27,12 @@ import io.github.ccch1mneyyy.dsh_app.loop.core.SchedulerConfig
+ import io.github.ccch1mneyyy.dsh_app.loop.core.Step
+ import io.github.ccch1mneyyy.dsh_app.loop.core.Submit
+ import io.github.ccch1mneyyy.dsh_app.loop.core.Surface
++import io.github.ccch1mneyyy.dsh_app.loop.core.Switches
+ import io.github.ccch1mneyyy.dsh_app.loop.core.SurfaceReport
+ import io.github.ccch1mneyyy.dsh_app.loop.core.WakeMode
+ import io.github.ccch1mneyyy.dsh_app.phone.PhoneControl
+ import io.github.ccch1mneyyy.dsh_app.phone.PhoneTasks
+ import io.github.ccch1mneyyy.dsh_app.phone.a11y.PhoneA11yService
+-import io.github.ccch1mneyyy.dsh_app.phone.a11y.ProtectedPages
+ import java.io.File
+ import java.util.Calendar
+ import java.util.TimeZone
+@@ -96,6 +96,10 @@ object ProactiveRuntime {
+     fun ensure(context: Context): Coordinator {
+         coordinator?.let { return it }
+         app = context.applicationContext
++        // Load 触发测试's switch before anything reads it: if Flutter starts before the accessibility
++        // service, an unloaded LoopEngine would read as "off" and applySwitches would cancel live
++        // app-enter events with the wrong reason (review r3, startup race).
++        runCatching { LoopRuntime.engine(app) }
+         val dir = File(File(app.filesDir, "loop"), "proactive")
+         val c = Coordinator(AtomicJsonFile(File(dir, "coordinator.json")), clock = System::currentTimeMillis, ids = { UUID.randomUUID().toString() })
+         val s = ProactiveScheduler(AtomicJsonFile(File(dir, "scheduler.json")), ::minuteOfDay, ::dayOf)
+@@ -103,6 +107,9 @@ object ProactiveRuntime {
+         scheduler = s
+         s.recover(clocks())
+         dispatch(c.recover(gate()))
++        // Round-1 twins whose kernel event closed while no LoopEngine was alive (review r3, A).
++        runCatching { LoopRuntime.reconcileWithKernel(c::find) }
++        applySwitches()
+         watchTasks()
+         arm()
+         return c
+@@ -114,6 +121,27 @@ object ProactiveRuntime {
+         ensure(context)
+         scheduler!!.setConfig(cfg, clocks())
+         refreshGate("config")
++        // 主动搭话 alone still needs foreground readings for the protected-page gate (review r3, C).
++        runCatching { LoopRuntime.configChanged() }
++    }
++
++    fun proactiveEnabled(): Boolean = scheduler?.config?.enabled == true
++
++    /** The coordinator if this process created it; never creates one. */
++    fun kernelOrNull(): Coordinator? = coordinator
++
++    /** Each feature switch cancels only its own events (review r3, B). */
++    private fun applySwitches() {
++        val c = coordinator ?: return
++        val sw = Switches(LoopRuntime.triggerEnabled(), proactiveEnabled())
++        for ((source, reason) in sw.disabledSources()) dispatch(c.cancelSource(source, reason))
++        // A different test app: app-enter events about the old one are no longer wanted.
++        val target = LoopRuntime.triggerTarget()
++        if (sw.triggerTest) {
++            (c.queued() + listOfNotNull(c.active()))
++                .filter { it.request.source == Switches.SOURCE_APP_ENTER && it.request.payload["packageName"] != target }
++                .forEach { dispatch(c.cancel(it.eventId, "target_changed")) }
++        }
+     }
+ 
+     /** Alarm, boot, app open: one evaluation, no loop. */
+@@ -121,6 +149,7 @@ object ProactiveRuntime {
+         val c = coordinator ?: return
+         val s = scheduler ?: return
+         watchTasks()
++        applySwitches()
+         dispatch(c.setGate(gate()))
+         when (val d = s.evaluate(clocks())) {
+             is ProactiveScheduler.Decision.Fire -> submit(d.request, fromScheduler = true)
+@@ -152,13 +181,16 @@ object ProactiveRuntime {
+     fun refreshGate(reason: String) {
+         val c = coordinator ?: return
+         watchTasks()
++        applySwitches()
+         dispatch(c.setGate(gate()))
+         Log.d(TAG, "gate $reason")
+     }
+ 
+     fun onSurface(token: String, report: SurfaceReport) {
+         val c = coordinator ?: return
++        val before = c.active()?.takeIf { it.token == token }
+         dispatch(c.onSurface(token, report))
++        if (report == SurfaceReport.Shown && before != null) runCatching { LoopRuntime.onKernelShown(c.find(before.eventId)) }
+         if (report is SurfaceReport.Answered || report == SurfaceReport.Dismissed) scheduler?.onUserActivity(clocks())
+     }
+ 
+@@ -233,6 +265,8 @@ object ProactiveRuntime {
+         for (cmd in step.commands) runCatching { run(cmd) }.onFailure { Log.w(TAG, "command $cmd", it) }
+         for (closed in step.closed) {
+             scheduler?.onOutcome(closed.eventId, closed.engagement, clocks())
++            // The kernel owns the outcome; the round-1 twin mirrors it (review r3, A).
++            runCatching { LoopRuntime.onKernelClosed(closed) }
+             Log.i(TAG, "closed ${closed.eventId} ${closed.outcome} ${closed.reason} engagement=${closed.engagement}")
+         }
+         main.removeCallbacks(deadlineTick)
+@@ -332,10 +366,11 @@ object ProactiveRuntime {
+         val nm = app.getSystemService(NotificationManager::class.java)
+         val fg = LoopRuntime.lastForeground
+         return Gate(
+-            featureEnabled = scheduler?.config?.enabled == true,
++            // Either feature keeps arbitration on; each one's events are cancelled by applySwitches.
++            featureEnabled = Switches(LoopRuntime.triggerEnabled(), proactiveEnabled()).arbitrate,
+             dshTaskActive = core != null && (core.tasks.isActive || core.tasks.callsInFlight > 0),
+             dshPromptOpen = core?.prompts?.busy() == true,
+-            protectedForeground = fg != null && (fg in ProtectedPages.packages),
++            protectedForeground = io.github.ccch1mneyyy.dsh_app.loop.ProtectedForeground.isProtected(fg),
+             screenOn = power?.isInteractive != false,
+             unlocked = keyguard?.isKeyguardLocked != true,
+             a11yConnected = PhoneA11yService.isConnected(),
+diff --git a/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/KernelMirrorTest.kt b/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/KernelMirrorTest.kt
+new file mode 100644
+index 0000000..cc2b920
+--- /dev/null
++++ b/app/android/app/src/test/kotlin/io/github/ccch1mneyyy/dsh_app/loop/KernelMirrorTest.kt
+@@ -0,0 +1,238 @@
++package io.github.ccch1mneyyy.dsh_app.loop
++
++import io.github.ccch1mneyyy.dsh_app.loop.core.Coordinator
++import io.github.ccch1mneyyy.dsh_app.loop.core.CoordinatorConfig
++import io.github.ccch1mneyyy.dsh_app.loop.core.EventRequest
++import io.github.ccch1mneyyy.dsh_app.loop.core.Gate
++import io.github.ccch1mneyyy.dsh_app.loop.core.MemorySnapshotStore
++import io.github.ccch1mneyyy.dsh_app.loop.core.Outcome
++import io.github.ccch1mneyyy.dsh_app.loop.core.Command
++import io.github.ccch1mneyyy.dsh_app.loop.core.Step
++import io.github.ccch1mneyyy.dsh_app.loop.core.Submit
++import io.github.ccch1mneyyy.dsh_app.loop.core.SurfaceReport
++import io.github.ccch1mneyyy.dsh_app.loop.core.Switches
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertNull
++import org.junit.Assert.assertTrue
++import org.junit.Test
++
++/**
++ * Review round 3, defects A and B: one owner per app-enter event, and the two feature switches
++ * not depending on each other. Real LoopEngine + real Coordinator, wired the way
++ * LoopRuntime / ProactiveRuntime wire them.
++ */
++class KernelMirrorTest {
++    private var now = 1_700_000_000_000L
++    private var seq = 0
++    private val target = "com.example.test"
++    private val other = "com.example.other"
++    private val loopStore = MemoryLoopStore()
++    private val kernelStore = MemorySnapshotStore()
++
++    private fun engine() = LoopEngine(loopStore, PackageFilter("io.github.ccch1mneyyy.dsh_app"), { now }, { "evt-${++seq}-00000" })
++    private fun kernel() = Coordinator(kernelStore, CoordinatorConfig(), { now }, { "tok-${++seq}" })
++
++    private fun armed(e: LoopEngine) = e.apply {
++        recover()
++        setConfig(LoopConfig(enabled = true, targetPackage = target, cooldownMs = 0, timeoutMs = 30_000))
++    }
++
++    /** What D5's LoopRuntime.submitToKernel builds. */
++    private fun request(show: LoopEngine.Outcome.Show) = EventRequest(
++        eventId = show.event.eventId, source = Switches.SOURCE_APP_ENTER, kind = "app_enter",
++        dedupeKey = "app_enter:${show.event.packageName}", createdAt = show.event.timestamp, ttlMs = 120_000,
++        needsAgent = false, fallbackText = "你打开了测试应用",
++    )
++
++    /** The fixed runtime: every closed kernel event is mirrored. */
++    private fun Step.mirror(e: LoopEngine): Step = also { s -> s.closed.forEach { KernelMirror.onClosed(e, it) } }
++
++    private fun enterAndHandOff(e: LoopEngine, k: Coordinator): Pair<LoopEngine.Outcome.Show, Command.Present> {
++        val show = e.onForeground(target, Environment()) as LoopEngine.Outcome.Show
++        val (r, step) = k.submit(request(show))
++        KernelMirror.onSubmit(e, show.event.eventId, r)
++        step.mirror(e)
++        return show to step.commands.filterIsInstance<Command.Present>().single()
++    }
++
++    @Test fun defectA_withoutWriteBackTheFirstRoundEventStaysOpenAndBlocksEveryLaterVisit() {
++        // D5 as submitted: submit, no write-back.
++        val e = armed(engine())
++        val k = kernel().also { it.recover(Gate()) }
++        val show = e.onForeground(target, Environment()) as LoopEngine.Outcome.Show
++        val (_, step) = k.submit(request(show))
++        val p = step.commands.filterIsInstance<Command.Present>().single()
++        k.onSurface(p.token, SurfaceReport.Posted)
++        k.onSurface(p.token, SurfaceReport.Shown)
++        assertEquals(Outcome.RESPONDED, k.onSurface(p.token, SurfaceReport.Answered("ok")).closed.single().outcome)
++        assertEquals("the round-1 twin is still open", EventState.TRIGGERED, e.stateOf(show.event.eventId))
++        e.onForeground(other, Environment())
++        now += 3_600_000
++        val next = e.onForeground(target, Environment())
++        assertEquals("every later visit is suppressed", "interaction_open", (next as LoopEngine.Outcome.Suppressed).event.reason)
++    }
++
++    @Test fun theKernelVerdictIsWrittenBackOnceAndTheNextVisitTriggers() {
++        val e = armed(engine())
++        val k = kernel().also { it.recover(Gate()) }
++        val (show, p) = enterAndHandOff(e, k)
++        val id = show.event.eventId
++        assertEquals(KernelMirror.DELEGATED, e.events().first().surface)
++        k.onSurface(p.token, SurfaceReport.Posted)
++        k.onSurface(p.token, SurfaceReport.Shown).mirror(e)
++        KernelMirror.onShown(e, k.find(id))
++        assertEquals(EventState.SHOWN, e.stateOf(id))
++        val closed = k.onSurface(p.token, SurfaceReport.Answered("ok")).mirror(e).closed.single()
++        val twin = e.events().first()
++        assertEquals(id, twin.eventId)
++        assertEquals(EventResult.RETURNED, twin.result)
++        assertEquals("kernel_responded", twin.reason)
++        assertNull("written once", KernelMirror.onClosed(e, closed))
++        assertNull("the old round-1 page cannot answer it either", e.answer(id, EventResult.BACK))
++        e.onForeground(other, Environment())
++        assertTrue(e.onForeground(target, Environment()) is LoopEngine.Outcome.Show)
++    }
++
++    @Test fun everyKernelEndingHasOneConsistentTwinResult() {
++        val cases = listOf(
++            Outcome.DISMISSED to EventResult.DISMISSED, Outcome.TIMEOUT to EventResult.TIMEOUT,
++            Outcome.ABANDONED to EventResult.ABANDONED, Outcome.UNAVAILABLE to EventResult.UNAVAILABLE,
++            Outcome.FAILED to EventResult.ERROR, Outcome.CANCELLED to EventResult.SUPPRESSED,
++            Outcome.YIELDED to EventResult.SUPPRESSED, Outcome.EXPIRED to EventResult.SUPPRESSED,
++        )
++        for ((o, r) in cases) assertEquals(o.name, r, KernelMirror.resultOf(o))
++        // Timeout end to end.
++        val e = armed(engine())
++        val k = kernel().also { it.recover(Gate()) }
++        val (show, p) = enterAndHandOff(e, k)
++        k.onSurface(p.token, SurfaceReport.Posted)
++        k.onSurface(p.token, SurfaceReport.Shown)
++        now += 60_000
++        k.tick().mirror(e)
++        assertEquals(EventResult.TIMEOUT, e.events().first { it.eventId == show.event.eventId }.result)
++    }
++
++    @Test fun refusedAndMergedHandOffsCloseTheTwinImmediately() {
++        val e = armed(engine())
++        val k = kernel().also { it.recover(Gate(featureEnabled = false)) }
++        val show = e.onForeground(target, Environment()) as LoopEngine.Outcome.Show
++        val (r, _) = k.submit(request(show))
++        assertEquals(Submit.Rejected("disabled"), r)
++        assertEquals(EventResult.UNAVAILABLE to "kernel_disabled", KernelMirror.onSubmit(e, show.event.eventId, r)!!.let { it.result to it.reason })
++        val merged = KernelMirror.onSubmit(e, "nope", Submit.Merged("x"))
++        assertNull("unknown twin: nothing to write", merged)
++    }
++
++    @Test fun restartWhileTheKernelStillHoldsTheEventKeepsBothSidesInStep() {
++        var e = armed(engine())
++        var k = kernel().also { it.recover(Gate(dshTaskActive = true)) } // DSH busy: held in the kernel queue
++        val show = e.onForeground(target, Environment()) as LoopEngine.Outcome.Show
++        val (r, _) = k.submit(request(show))
++        KernelMirror.onSubmit(e, show.event.eventId, r)
++        // Process dies.
++        e = engine(); e.recover()
++        assertEquals("not abandoned by round 1 alone", EventState.TRIGGERED, e.stateOf(show.event.eventId))
++        k = kernel()
++        val rec = k.recover(Gate()).mirror(e)
++        assertTrue(KernelMirror.reconcile(e, k::find).isEmpty())
++        val p = rec.commands.filterIsInstance<Command.Present>().single()
++        assertEquals(show.event.eventId, p.eventId)
++        k.onSurface(p.token, SurfaceReport.Posted)
++        k.onSurface(p.token, SurfaceReport.Dismissed).mirror(e)
++        assertEquals(EventResult.DISMISSED, e.events().first { it.eventId == show.event.eventId }.result)
++    }
++
++    @Test fun restartWhileTheEventWasOnScreenAbandonsItOnBothSides() {
++        var e = armed(engine())
++        var k = kernel().also { it.recover(Gate()) }
++        val (show, p) = enterAndHandOff(e, k)
++        k.onSurface(p.token, SurfaceReport.Posted)
++        k.onSurface(p.token, SurfaceReport.Shown)
++        e = engine(); e.recover()
++        k = kernel()
++        // Round 1 recovered first, kernel second (ProactiveRuntime.ensure mirrors its recovery step).
++        k.recover(Gate()).mirror(e)
++        val twin = e.events().first { it.eventId == show.event.eventId }
++        assertEquals(EventResult.ABANDONED, twin.result)
++        assertEquals("kernel_abandoned:process_restart", twin.reason)
++        assertEquals(Outcome.ABANDONED, k.find(show.event.eventId)!!.outcome)
++    }
++
++    @Test fun kernelRecoveredFirstThenRoundOneReconciles() {
++        var e = armed(engine())
++        var k = kernel().also { it.recover(Gate()) }
++        val (show, p) = enterAndHandOff(e, k)
++        k.onSurface(p.token, SurfaceReport.Posted)
++        k = kernel(); k.recover(Gate()) // no round-1 engine yet: nothing mirrored
++        e = engine(); e.recover()
++        val settled = KernelMirror.reconcile(e, k::find)
++        assertEquals(show.event.eventId to EventResult.ABANDONED, settled.single().let { it.eventId to it.result })
++    }
++
++    @Test fun aKernelThatLostTheEventClosesTheTwinAsLost() {
++        val e = armed(engine())
++        val show = e.onForeground(target, Environment()) as LoopEngine.Outcome.Show
++        e.delegate(show.event.eventId)
++        val settled = KernelMirror.reconcile(e) { null }
++        assertEquals(EventResult.ABANDONED to "kernel_lost", settled.single().let { it.result to it.reason })
++    }
++
++    // Defect B
++    @Test fun triggerTestWorksWithProactiveChatOffAndEachSwitchCancelsOnlyItsOwnEvents() {
++        val onlyTrigger = Switches(triggerTest = true, proactive = false)
++        assertTrue(onlyTrigger.arbitrate)
++        assertTrue(onlyTrigger.observeForeground)
++        assertTrue(onlyTrigger.accepts(Switches.SOURCE_APP_ENTER))
++        val k = kernel().also { it.recover(Gate(featureEnabled = onlyTrigger.arbitrate)) }
++        val e = armed(engine())
++        val (_, p) = enterAndHandOff(e, k)
++        assertEquals("app-enter is shown while proactive chat is off", Switches.SOURCE_APP_ENTER, k.find(p.eventId)!!.request.source)
++        // A scheduler event queued behind it, then proactive turned off: only that one is cancelled.
++        k.submit(EventRequest("sched-0001", Switches.SOURCE_SCHEDULER, "random_chat", "scheduler:random", createdAt = now, needsAgent = true))
++        val off = Switches(triggerTest = true, proactive = false).disabledSources()
++        val step = off.fold(Step()) { acc, (src, why) -> acc + k.cancelSource(src, why) }.mirror(e)
++        assertEquals(listOf("sched-0001"), step.closed.map { it.eventId })
++        assertEquals(Outcome.CANCELLED to "proactive_off", step.closed.single().let { it.outcome to it.reason })
++        assertEquals(p.token, k.active()!!.token)
++        // Trigger test off: its page is withdrawn and the twin closes, consistently.
++        val t = k.cancelSource(Switches.SOURCE_APP_ENTER, "trigger_test_off").mirror(e)
++        assertEquals(p.token, t.commands.filterIsInstance<Command.Withdraw>().single().token)
++        assertEquals(EventResult.SUPPRESSED to "kernel_cancelled:trigger_test_off", e.events().first().let { it.result to it.reason })
++    }
++
++    @Test fun changingOrDisablingTheTriggerLeavesDelegatedTwinsToTheKernel() {
++        val e = armed(engine())
++        val k = kernel().also { it.recover(Gate(dshTaskActive = true)) }
++        val show = e.onForeground(target, Environment()) as LoopEngine.Outcome.Show
++        KernelMirror.onSubmit(e, show.event.eventId, k.submit(request(show)).first)
++        e.setConfig(LoopConfig(enabled = false, targetPackage = target))
++        assertEquals("not closed by LoopEngine itself", EventState.TRIGGERED, e.stateOf(show.event.eventId))
++        // ProactiveRuntime.applySwitches: trigger test off → the kernel cancels, the twin mirrors it.
++        k.cancelSource(Switches.SOURCE_APP_ENTER, "trigger_test_off").mirror(e)
++        val twin = e.events().first { it.eventId == show.event.eventId }
++        val kernelSide = k.find(show.event.eventId)!!
++        assertEquals(Outcome.CANCELLED, kernelSide.outcome)
++        assertEquals(KernelMirror.resultOf(kernelSide.outcome!!), twin.result)
++        assertEquals("kernel_cancelled:trigger_test_off", twin.reason)
++    }
++
++    @Test fun switchesTable() {
++        assertEquals(false, Switches(false, false).observeForeground)
++        assertEquals(true, Switches(false, true).observeForeground)
++        assertEquals(false, Switches(false, true).accepts(Switches.SOURCE_APP_ENTER))
++        assertEquals(true, Switches(false, true).accepts(Switches.SOURCE_SCHEDULER))
++        assertEquals(listOf(Switches.SOURCE_APP_ENTER, Switches.SOURCE_SCHEDULER), Switches(false, false).disabledSources().map { it.first })
++    }
++}
++
++/** Review round 3, defect C: what the proactive gate treats as a protected foreground. */
++class ProtectedForegroundTest {
++    @Test fun settingsAndSecurityPagesAreProtectedByPackageAlone() {
++        for (p in listOf("com.android.settings", "com.miui.securitycenter", "com.android.permissioncontroller", "com.google.android.packageinstaller")) {
++            assertTrue(p, ProtectedForeground.isProtected(p))
++        }
++        for (p in listOf(null, "com.example.test", "com.android.systemui", "io.github.ccch1mneyyy.dsh_app")) {
++            assertEquals("$p", false, ProtectedForeground.isProtected(p))
++        }
++    }
++}
+diff --git a/runtime/proactive/dsh-go-proactive/lib/core.js b/runtime/proactive/dsh-go-proactive/lib/core.js
+index da9f5d4..d076b57 100644
+--- a/runtime/proactive/dsh-go-proactive/lib/core.js
++++ b/runtime/proactive/dsh-go-proactive/lib/core.js
+@@ -95,7 +95,9 @@ export class Desk {
+     /** sessionId -> current turn number seen in turn/start */
+     this.turns = new Map()
+     this.waiters = new Map()
+-    this.counters = { accepted: 0, refused: 0, generated: 0, failed: 0, cancelled: 0, lateText: 0 }
++    /** sessionId -> the turn that is running on one of our messages (tools are denied in it). */
++    this.proactiveTurns = new Map()
++    this.counters = { accepted: 0, refused: 0, generated: 0, failed: 0, cancelled: 0, lateText: 0, toolDenied: 0 }
+   }
+ 
+   now() { return this.deps.now() }
+@@ -198,9 +200,13 @@ export class Desk {
+     if (!event || typeof event.type !== 'string') return
+     const data = event.data
+     if (event.type === 'turn/start' && Number.isInteger(data?.turn)) { this.turns.set(sessionId, data.turn); return }
++    if (event.type === 'turn/end' && this.proactiveTurns.get(sessionId) === data?.turn) this.proactiveTurns.delete(sessionId)
+     for (const r of this.records.values()) {
+       if (r.sessionId !== sessionId) continue
+       if (event.type === 'user/message' && data?.id === r.messageId) {
++        // Whatever the record's state (even cancelled), this turn runs on our message: no tools in it.
++        const turn = this.turns.get(sessionId)
++        if (turn != null) this.proactiveTurns.set(sessionId, turn)
+         if (r.state === 'accepted') {
+           r.state = 'claimed'
+           r.claimedAt = this.now()
+@@ -229,8 +235,20 @@ export class Desk {
+     }
+   }
+ 
++  /**
++   * `tools/pre-execute` guard: a turn started by a proactive event may not run any tool —
++   * enforced where tools execute, not only asked for in the prompt. Returns the deny decision,
++   * or undefined to let the call continue down the chain.
++   */
++  guardTool(sessionId) {
++    if (sessionId == null || !this.proactiveTurns.has(sessionId)) return undefined
++    this.counters.toolDenied++
++    return { kind: 'deny', reason: 'dsh-go-proactive: tools are disabled in a proactive turn (no phone control, no files, no commands)' }
++  }
++
+   /** The agent of a session went away. */
+   onAgentGone(sessionId) {
++    this.proactiveTurns.delete(sessionId)
+     for (const r of this.records.values()) if (r.sessionId === sessionId && !TERMINAL.has(r.state)) this.fail(r.requestId, 'agent-gone')
+   }
+ 
+diff --git a/runtime/proactive/dsh-go-proactive/lib/index.js b/runtime/proactive/dsh-go-proactive/lib/index.js
+index 82d8abd..84ed635 100644
+--- a/runtime/proactive/dsh-go-proactive/lib/index.js
++++ b/runtime/proactive/dsh-go-proactive/lib/index.js
+@@ -83,6 +83,14 @@ export function apply(ctx) {
+   ctx.on('session/event', (session, event) => {
+     try { desk.onSessionEvent(session?.id, event) } catch { /* never disturb the session */ }
+   })
++  // Hard limit at the tool layer (review r3, E): the prompt asks for no tools; this makes sure.
++  // global: the registry dispatches with the agent as carrier, which would otherwise filter us out.
++  // prepend: run before any other policy, so nothing can approve a call we deny.
++  ctx.on('tools/pre-execute', (exec, next) => {
++    let denied
++    try { denied = desk.guardTool(exec?.agent?.id ?? exec?.agent?.session?.id) } catch { denied = undefined }
++    return denied ?? next()
++  }, { global: true, prepend: true })
+   ctx.on('agent/disposed', (agent) => {
+     try { if (agent?.id) desk.onAgentGone(agent.id) } catch { /* ignore */ }
+   })
+diff --git a/runtime/proactive/dsh-go-proactive/test/core.test.mjs b/runtime/proactive/dsh-go-proactive/test/core.test.mjs
+index 8033a29..4522875 100644
+--- a/runtime/proactive/dsh-go-proactive/test/core.test.mjs
++++ b/runtime/proactive/dsh-go-proactive/test/core.test.mjs
+@@ -147,3 +147,29 @@ test('helpers', () => {
+   assert.equal(assistantText({ message: { content: [{ type: 'reasoning', text: 'x' }, { type: 'text', text: ' a ' }, { type: 'tool-call' }] } }), 'a')
+   assert.ok(composeText({ kind: 'k', payload: { a: 'b' } }, 'I').endsWith('kind=k\na=b'))
+ })
++
++test('review r3 E: every tool call in a turn started by our message is denied, until that turn ends', () => {
++  const { desk, sent } = setup()
++  desk.request(req(1))
++  assert.equal(desk.guardTool('session-a'), undefined, 'not before the turn takes our message')
++  desk.onSessionEvent('session-a', { type: 'turn/start', data: { turn: 7 } })
++  desk.onSessionEvent('session-a', { type: 'user/message', data: { id: sent[0].id } })
++  assert.equal(desk.guardTool('session-a').kind, 'deny')
++  assert.equal(desk.guardTool('session-b'), undefined, 'other sessions are untouched')
++  desk.cancel('request-1')
++  assert.equal(desk.guardTool('session-a').kind, 'deny', 'still our turn after a cancel or deadline')
++  desk.onSessionEvent('session-a', { type: 'turn/end', data: { turn: 7, reason: { kind: 'completed' } } })
++  assert.equal(desk.guardTool('session-a'), undefined, 'the next turn is the person\'s again')
++  assert.equal(desk.counters.toolDenied, 2)
++})
++
++test('review r3 E: a message cancelled before it was claimed still runs tool-free when claimed', () => {
++  const { desk, sent } = setup()
++  desk.request(req(1))
++  desk.cancel('request-1')
++  desk.onSessionEvent('session-a', { type: 'turn/start', data: { turn: 2 } })
++  desk.onSessionEvent('session-a', { type: 'user/message', data: { id: sent[0].id } })
++  assert.equal(desk.guardTool('session-a').kind, 'deny')
++  desk.onAgentGone('session-a')
++  assert.equal(desk.guardTool('session-a'), undefined)
++})
+diff --git a/runtime/proactive/dsh-go-proactive/test/e2e-live.mjs b/runtime/proactive/dsh-go-proactive/test/e2e-live.mjs
+index 1e09565..7725d1a 100644
+--- a/runtime/proactive/dsh-go-proactive/test/e2e-live.mjs
++++ b/runtime/proactive/dsh-go-proactive/test/e2e-live.mjs
+@@ -129,6 +129,30 @@ try {
+   check(userBusy.status === 409 && userBusy.body.error.code === 'agent-busy', `agent running the person's turn → 409 agent-busy (${userBusy.body.error?.code})`)
+   await sleep(3500)
+ 
++  // Review r3, E: the tool layer, not the prompt, stops tools in a proactive turn.
++  writeFileSync(join(dirname(mockLog), 'delay'), '0')
++  const deniedBefore = (await http('GET', `${P}/status`, C)).body.counters.toolDenied
++  const probe = await http('POST', `${P}/request`, { ...C, body: { ...req1, requestId: 'req-00000008', eventId: 'evt-00000008', kind: 'tool_probe', payload: { marker: 'TOOL_PROBE' } } })
++  check(probe.status === 202, 'tool-probe event accepted')
++  let pr = probe
++  for (let i = 0; i < 10 && !['generated', 'failed'].includes(pr.body.state); i++) pr = await http('GET', `${P}/result?requestId=req-00000008&waitMs=10000`, C)
++  const deniedAfter = (await http('GET', `${P}/status`, C)).body.counters.toolDenied
++  check(deniedAfter > deniedBefore, `the model's tool call in a proactive turn was denied at tools/pre-execute (toolDenied ${deniedBefore} → ${deniedAfter})`)
++  check(pr.body.state === 'generated' && /error=true/.test(pr.body.text) && /tools are disabled in a proactive turn/.test(pr.body.text),
++    `the model saw an error tool result naming the guard: ${pr.body.text}`)
++  // Control: the person's own turn may still use the same tool.
++  const ctl = await http('POST', '/fixture/user-says', { ...C, body: { sessionId, text: 'TOOL_PROBE from the person' } })
++  check(ctl.status === 200, 'fixture: the person asks for a tool themselves')
++  await sleep(4000)
++  const deniedCtl = (await http('GET', `${P}/status`, C)).body.counters.toolDenied
++  check(deniedCtl === deniedAfter, `the person's own turn is not restricted (toolDenied stays ${deniedCtl})`)
++  // Only the newest tool result counts: the history still holds the earlier, denied, proactive one.
++  const lastReq = JSON.parse(readFileSync(mockLog, 'utf8').trim().split('\n').filter((l) => l.includes('/messages')).at(-1) ?? '{}')
++  const lastMsg = (JSON.parse(lastReq.body ?? '{}').messages ?? []).at(-1) ?? {}
++  const lastResult = (lastMsg.content ?? []).find((b) => b.type === 'tool_result')
++  check(lastResult !== undefined && lastResult.is_error !== true && !JSON.stringify(lastResult).includes('tools are disabled in a proactive turn'),
++    `and its tool actually ran (is_error=${lastResult?.is_error})`)
++
+   // Deadline: model slower than the request's deadline.
+   writeFileSync(join(dirname(mockLog), 'delay'), '9000')
+   const d = await http('POST', `${P}/request`, { ...C, body: { ...req1, requestId: 'req-00000006', eventId: 'evt-00000006', deadlineMs: 5000 } })
+diff --git a/runtime/proactive/dsh-go-proactive/test/mock-messages.mjs b/runtime/proactive/dsh-go-proactive/test/mock-messages.mjs
+index 9fa7193..72f5189 100644
+--- a/runtime/proactive/dsh-go-proactive/test/mock-messages.mjs
++++ b/runtime/proactive/dsh-go-proactive/test/mock-messages.mjs
+@@ -11,16 +11,42 @@ const delayMs = () => { try { return Number(readFileSync(delayFile, 'utf8')) ||
+ createServer(async (req, res) => {
+   let body = ''
+   for await (const c of req) body += c
+-  appendFileSync(log, JSON.stringify({ at: Date.now(), method: req.method, url: req.url, body: body.slice(0, 20000) }) + '\n')
++  appendFileSync(log, JSON.stringify({ at: Date.now(), method: req.method, url: req.url, body: body.slice(0, 2000000) }) + '\n')
+   if (req.method === 'GET' && req.url.includes('/models')) {
+     res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ data: [{ id: 'deepseek-chat', type: 'model' }] })); return
+   }
+   if (!req.url.includes('/messages')) { res.writeHead(404); res.end(); return }
+   let j = {}; try { j = JSON.parse(body) } catch {}
+   const all = JSON.stringify(j.messages ?? [])
+-  const text = all.includes('kind=app_enter') ? 'MOCK_REPLY: 你好，我注意到你刚打开了测试应用。' : 'MOCK_REPLY: ok'
++  let text = all.includes('kind=app_enter') ? 'MOCK_REPLY: 你好，我注意到你刚打开了测试应用。' : 'MOCK_REPLY: ok'
++  // TOOL_PROBE: first answer with a tool call (to a tool that takes no required arguments), then,
++  // once the tool result comes back, report what it was. Lets the e2e check the tool-layer guard.
++  let toolUse
++  const last = j.messages?.at(-1)
++  const lastHasResult = JSON.stringify(last ?? '').includes('"tool_result"')
++  if (all.includes('TOOL_PROBE')) {
++    if (!lastHasResult) {
++      const tool = (j.tools ?? []).find((t) => !(t.input_schema?.required?.length)) ?? (j.tools ?? [])[0]
++      if (tool) toolUse = { id: `toolu_mock_${Date.now()}`, name: tool.name }
++    } else {
++      const block = (last.content ?? []).find((b) => b.type === 'tool_result') ?? {}
++      const flat = JSON.stringify(block.content ?? '')
++      text = `MOCK_REPLY: tool error=${block.is_error === true} result=${flat.slice(0, 160)}`
++    }
++  }
+   const wait = delayMs(); if (wait) await new Promise(r => setTimeout(r, wait))
+   const ev = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`)
++  if (toolUse && j.stream) {
++    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
++    ev('message_start', { message: { id: 'msg_mock', type: 'message', role: 'assistant', model: j.model || 'deepseek-chat', content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } })
++    ev('content_block_start', { index: 0, content_block: { type: 'tool_use', id: toolUse.id, name: toolUse.name, input: {} } })
++    ev('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: '{}' } })
++    ev('content_block_stop', { index: 0 })
++    ev('message_delta', { delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 5 } })
++    ev('message_stop', {})
++    res.end()
++    return
++  }
+   if (!j.stream) {
+     res.writeHead(200, { 'content-type': 'application/json' })
+     res.end(JSON.stringify({ id: 'msg_mock', type: 'message', role: 'assistant', model: j.model, content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 5 } })); return
+diff --git a/runtime/tests/test_proactive_packaging.py b/runtime/tests/test_proactive_packaging.py
+new file mode 100644
+index 0000000..ac7229d
+--- /dev/null
++++ b/runtime/tests/test_proactive_packaging.py
+@@ -0,0 +1,46 @@
++#!/usr/bin/env python3
++"""Unit tests for how rtbuild.py ships dsh-go-proactive (review round 3, D).
++
++    python3 -I runtime/tests/test_proactive_packaging.py
++
++The full rootfs build needs Linux inputs; this checks the recipe pieces that decide whether the
++plugin reaches the phone and is loaded: the dsh-web.patch.yml row, the manifest entry, and the
++drop rule that keeps test/ (mock model, fixture sessions) off the device.
++"""
++import os
++import sys
++import unittest
++
++sys.dont_write_bytecode = True   # runtime/lib/__pycache__ is tracked; do not rewrite it
++sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
++import rtbuild  # noqa: E402
++
++
++def patch_text(**kw):
++    e = rtbuild.overlay_entries("{}", **kw)["etc/dsh-app/dsh-web.patch.yml"]
++    return e.data.decode() if isinstance(e.data, bytes) else e.data
++
++
++class ProactivePackagingTest(unittest.TestCase):
++    def test_the_web_patch_loads_the_plugin_by_absolute_path_once(self):
++        text = patch_text(with_bridge=True, with_proactive=True)
++        row = "- id: dsh-go-proactive\n      name: /opt/dsh-go/dsh-go-proactive/lib/index.js\n"
++        self.assertEqual(text.count(row), 1)
++        self.assertIn("name: /opt/dsh-go/dsh-go-bridge/lib/index.js", text)
++
++    def test_without_the_flag_nothing_mentions_the_plugin(self):
++        self.assertNotIn("dsh-go-proactive", patch_text(with_bridge=True))
++
++    def test_only_code_ships(self):
++        drop = rtbuild.proactive_drop_reason
++        for rel in ("test/mock-messages.mjs", "test/fixture-session/index.js", "test/e2e-live.mjs", "test/core.test.mjs"):
++            self.assertEqual(drop(rel, "arm64-v8a", True), "test-only", rel)
++        for rel in ("lib/index.js", "lib/core.js", "package.json"):
++            self.assertIsNone(drop(rel, "arm64-v8a", True), rel)
++
++    def test_the_launch_command_passes_the_web_patch(self):
++        self.assertIn("--patch " + rtbuild.DSH_WEB_PATCH, " ".join(rtbuild.launch_template()["argv"]))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tooling/test_verify_apk_runtime.py b/tooling/test_verify_apk_runtime.py
+new file mode 100644
+index 0000000..df46e41
+--- /dev/null
++++ b/tooling/test_verify_apk_runtime.py
+@@ -0,0 +1,89 @@
++"""Tests for tooling/verify_apk_runtime.py on synthetic APKs built the way rtbuild.py lays them out.
++
++    python3 -m unittest discover -s tooling -p 'test_*.py'
++"""
++
++import hashlib
++import io
++import json
++import pathlib
++import tarfile
++import tempfile
++import unittest
++import zipfile
++
++from verify_apk_runtime import verify
++
++ROOT = pathlib.Path(__file__).resolve().parent.parent
++PLUGIN_DIR = ROOT / "runtime" / "proactive" / "dsh-go-proactive"
++ROW = "- insert:\n    - id: dsh-go-proactive\n      name: /opt/dsh-go/dsh-go-proactive/lib/index.js\n"
++
++
++def rootfs(files: dict) -> bytes:
++    buf = io.BytesIO()
++    with tarfile.open(fileobj=buf, mode="w:xz") as tar:
++        for name, data in files.items():
++            info = tarfile.TarInfo(name)
++            info.size = len(data)
++            tar.addfile(info, io.BytesIO(data))
++    return buf.getvalue()
++
++
++def apk(dirpath: pathlib.Path, files: dict | None, manifest_extra: dict | None = None, runtime: bool = True) -> pathlib.Path:
++    p = dirpath / "app.apk"
++    with zipfile.ZipFile(p, "w") as z:
++        z.writestr("classes.dex", b"dex")
++        if runtime:
++            blob = rootfs(files or {})
++            m = {"rootfs": "rootfs-arm64-v8a.tar.xz", "rootfsSha256": hashlib.sha256(blob).hexdigest(),
++                 "runtimeVersion": "test", "launch": {"argv": ["/bin/sh", "-c", "exec dsh web --patch /etc/dsh-app/dsh-web.patch.yml"]},
++                 "dshGoProactive": {"version": "0.1.0", "path": "/opt/dsh-go/dsh-go-proactive"}}
++            m.update(manifest_extra or {})
++            z.writestr("assets/runtime/manifest.json", json.dumps(m))
++            z.writestr("assets/runtime/rootfs-arm64-v8a.tar.xz", blob)
++    return p
++
++
++def plugin_files(prefix="opt/dsh-go/dsh-go-proactive/") -> dict:
++    return {prefix + rel: (PLUGIN_DIR / rel).read_bytes() for rel in ("package.json", "lib/index.js", "lib/core.js")}
++
++
++class VerifyApkRuntimeTest(unittest.TestCase):
++    def run_verify(self, files, **kw):
++        with tempfile.TemporaryDirectory() as d:
++            res = verify(apk(pathlib.Path(d), files, **kw), PLUGIN_DIR)
++        return {c["check"]: c["result"] for c in res}
++
++    def test_a_complete_runtime_passes_every_check(self):
++        r = self.run_verify({**plugin_files(), "etc/dsh-app/dsh-web.patch.yml": ROW.encode()})
++        self.assertTrue(all(v == "PASS" for v in r.values()), r)
++        self.assertEqual(r["plugin carries the tool guard"], "PASS")
++
++    def test_an_apk_built_without_runtime_out_is_not_proven(self):
++        r = self.run_verify(None, runtime=False)
++        self.assertEqual(r, {"runtime manifest in APK": "FAIL"})
++
++    def test_an_upstream_rootfs_without_the_plugin_fails(self):
++        r = self.run_verify({"etc/dsh-app/dsh-web.patch.yml": b"- insert:\n    - id: dsh-go-bridge\n"},
++                            manifest_extra={"dshGoProactive": None})
++        self.assertEqual(r["manifest names dshGoProactive"], "FAIL")
++        self.assertEqual(r["plugin files in rootfs"], "FAIL")
++        self.assertEqual(r["web patch loads the plugin"], "FAIL")
++
++    def test_shipping_test_files_or_a_stale_plugin_fails(self):
++        files = {**plugin_files(), "etc/dsh-app/dsh-web.patch.yml": ROW.encode(),
++                 "opt/dsh-go/dsh-go-proactive/test/mock-messages.mjs": b"mock"}
++        files["opt/dsh-go/dsh-go-proactive/lib/index.js"] = b"// an older plugin without the guard"
++        r = self.run_verify(files)
++        self.assertEqual(r["plugin test/ not shipped"], "FAIL")
++        self.assertEqual(r["plugin matches this repo revision"], "FAIL")
++        self.assertEqual(r["plugin carries the tool guard"], "FAIL")
++
++    def test_a_tampered_rootfs_fails_the_checksum(self):
++        r = self.run_verify({**plugin_files(), "etc/dsh-app/dsh-web.patch.yml": ROW.encode()},
++                            manifest_extra={"rootfsSha256": "0" * 64})
++        self.assertEqual(r["rootfs sha256 matches manifest"], "FAIL")
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tooling/verify_apk_runtime.py b/tooling/verify_apk_runtime.py
+new file mode 100644
+index 0000000..92ec63d
+--- /dev/null
++++ b/tooling/verify_apk_runtime.py
+@@ -0,0 +1,125 @@
++#!/usr/bin/env python3
++"""Proves from the APK itself whether it carries the dsh-go-proactive host plugin.
++
++    python3 tooling/verify_apk_runtime.py app-arm64-debug.apk [--plugin runtime/proactive/dsh-go-proactive] [--json]
++
++A green Gradle build says nothing about the runtime: the rootfs comes from runtime/out/<abi>/assets,
++which only runtime/build-runtime.sh writes (on Linux). This script opens the APK and checks:
++
++  1. assets/runtime/manifest.json exists and names dshGoProactive at /opt/dsh-go/dsh-go-proactive
++  2. the launch command passes --patch /etc/dsh-app/dsh-web.patch.yml
++  3. the rootfs archive is in the APK and its SHA-256 matches the manifest
++  4. inside the rootfs: the plugin's package.json, lib/index.js and lib/core.js
++  5. inside the rootfs: dsh-web.patch.yml inserts /opt/dsh-go/dsh-go-proactive/lib/index.js
++  6. inside the rootfs: nothing from the plugin's test/ tree (mock model, fixture sessions)
++  7. with --plugin: the shipped plugin files are byte-identical to the repo's (this revision,
++     including the tools/pre-execute guard)
++
++Exit 0 only when every check passes. Reads the APK only; never installs anything.
++"""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import pathlib
++import sys
++import tarfile
++import zipfile
++
++ASSET_DIR = "assets/runtime"
++PLUGIN = "opt/dsh-go/dsh-go-proactive"
++WEB_PATCH = "etc/dsh-app/dsh-web.patch.yml"
++SHIPPED = ("package.json", "lib/index.js", "lib/core.js")
++
++
++def sha256(data: bytes) -> str:
++    return hashlib.sha256(data).hexdigest()
++
++
++def verify(apk: pathlib.Path, plugin_dir: pathlib.Path | None = None) -> list[dict]:
++    checks: list[dict] = []
++
++    def check(name: str, ok: bool, detail: str = "") -> bool:
++        checks.append({"check": name, "result": "PASS" if ok else "FAIL", "detail": detail})
++        return ok
++
++    try:
++        z = zipfile.ZipFile(apk)
++    except (OSError, zipfile.BadZipFile) as e:
++        check("apk readable", False, str(e))
++        return checks
++    names = set(z.namelist())
++    if not check("runtime manifest in APK", f"{ASSET_DIR}/manifest.json" in names,
++                 f"{ASSET_DIR}/manifest.json" + ("" if f"{ASSET_DIR}/manifest.json" in names
++                                                  else " missing: runtime/out was empty when the APK was built")):
++        return checks
++    manifest = json.loads(z.read(f"{ASSET_DIR}/manifest.json"))
++    pro = manifest.get("dshGoProactive") or {}
++    check("manifest names dshGoProactive", pro.get("path") == "/" + PLUGIN,
++          f"dshGoProactive={json.dumps(manifest.get('dshGoProactive'))} runtimeVersion={manifest.get('runtimeVersion')}")
++    launch = json.dumps(manifest.get("launch", {}))
++    check("launch passes the web patch", f"--patch /{WEB_PATCH}" in launch)
++
++    rootfs_name = f"{ASSET_DIR}/{manifest.get('rootfs', '')}"
++    if not check("rootfs archive in APK", rootfs_name in names, rootfs_name):
++        return checks
++    blob = z.read(rootfs_name)
++    check("rootfs sha256 matches manifest", sha256(blob) == manifest.get("rootfsSha256"),
++          f"{sha256(blob)[:16]}… vs {str(manifest.get('rootfsSha256'))[:16]}…")
++
++    found: dict[str, bytes] = {}
++    patch_text = ""
++    test_entries: list[str] = []
++    mode = "r:xz" if rootfs_name.endswith(".xz") else "r:gz"
++    import io
++    with tarfile.open(fileobj=io.BytesIO(blob), mode=mode) as tar:
++        for m in tar:
++            n = m.name.lstrip("./")
++            if n.startswith(PLUGIN + "/test/") or n == PLUGIN + "/test":
++                test_entries.append(n)
++            if not m.isfile():
++                continue
++            if n == WEB_PATCH:
++                patch_text = tar.extractfile(m).read().decode("utf-8", "replace")
++            for rel in SHIPPED:
++                if n == f"{PLUGIN}/{rel}":
++                    found[rel] = tar.extractfile(m).read()
++    check("plugin files in rootfs", all(r in found for r in SHIPPED),
++          "missing: " + ", ".join(r for r in SHIPPED if r not in found) if len(found) < len(SHIPPED) else "all present")
++    check("web patch loads the plugin", f"name: /{PLUGIN}/lib/index.js" in patch_text,
++          "row present" if patch_text else f"{WEB_PATCH} not in rootfs")
++    check("plugin test/ not shipped", not test_entries, ", ".join(test_entries[:5]))
++
++    if plugin_dir is not None:
++        diffs = []
++        for rel in SHIPPED:
++            want = (plugin_dir / rel).read_bytes()
++            if found.get(rel) is None or sha256(found[rel]) != sha256(want):
++                diffs.append(rel)
++        check("plugin matches this repo revision", not diffs, "differs: " + ", ".join(diffs) if diffs else "identical")
++        check("plugin carries the tool guard", b"tools/pre-execute" in found.get("lib/index.js", b""))
++    return checks
++
++
++def main(argv: list[str]) -> int:
++    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
++    ap.add_argument("apk", type=pathlib.Path)
++    ap.add_argument("--plugin", type=pathlib.Path, help="repo plugin dir to compare against")
++    ap.add_argument("--json", action="store_true")
++    a = ap.parse_args(argv)
++    checks = verify(a.apk, a.plugin)
++    ok = all(c["result"] == "PASS" for c in checks)
++    if a.json:
++        print(json.dumps({"apk": str(a.apk), "apkSha256": sha256(a.apk.read_bytes()) if a.apk.exists() else None,
++                          "ok": ok, "checks": checks}, ensure_ascii=False, indent=2))
++    else:
++        for c in checks:
++            print(f"{c['result']}  {c['check']}" + (f"  ({c['detail']})" if c["detail"] else ""))
++        print("OK" if ok else "NOT PROVEN: this APK does not demonstrably carry the plugin")
++    return 0 if ok else 1
++
++
++if __name__ == "__main__":
++    sys.exit(main(sys.argv[1:]))
+-- 
+2.43.0
+

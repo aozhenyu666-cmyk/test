@@ -25,6 +25,9 @@
 | 内核补丁（只有新文件：Kotlin 内核 + 66 个测试 + 宿主插件 + 真实引擎测试） | [patch/0002-proactive-kernel.patch](patch/0002-proactive-kernel.patch) |
 | Android 集成补丁（适配层 + 共享文件小改） | [patch/0003-proactive-android.patch](patch/0003-proactive-android.patch) |
 | 真实引擎端到端日志（26/26） | [docs/e2e-live-2026-10-30.log](docs/e2e-live-2026-10-30.log) |
+| **第三轮**：核心接线审核（A–E 逐项 PASS/FAIL、修复、答复） | [docs/CLAUDE_R3_REVIEW.md](docs/CLAUDE_R3_REVIEW.md) |
+| 第三轮可合并补丁（基于 aozhenyu666-cmyk/dsh-Go `4ed7d5c`，含 D5 + 修复；分支 `review/r3-core-fixes`） | [patch/0005-r3-core-fixes.patch](patch/0005-r3-core-fixes.patch) |
+| 第三轮真实引擎日志（含工具守卫，32/32） | [docs/e2e-live-r3-tool-guard-2026-10-31.log](docs/e2e-live-r3-tool-guard-2026-10-31.log) |
 
 ## 把补丁放进 dsh-go 的独立分支
 
