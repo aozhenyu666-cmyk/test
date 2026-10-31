@@ -157,6 +157,19 @@ class Actions(private val context: Context, private val store: Store) {
      * 一手每晚总结出的规则，记进总控（挂到一手正在练的那件事上），这样也会同步到 Notion，GPT 能看到。
      * 每个日期只记一次。返回记下的规则，没有新的返回 null。
      */
+    /**
+     * 把一手的刷题记录拉进总控（只拉上次之后的；第一次补最近一周）。后台每 15 分钟一次，打开一手卡片时也拉。
+     * 返回新进来的条数；一手没装 / 太旧 / 连不上返回 null。
+     */
+    suspend fun importYishouLedger(): Int? {
+        if (!YishouClient.installed(context)) return null
+        val since = com.zongkong.core.YishouLedger.since(store.yishouBook.value)
+        val got = (YishouClient.ledger(context, since) as? YishouClient.Result.Ok)?.value ?: return null
+        val before = store.yishouBook.value.entries.size
+        val after = store.updateYishouBook { com.zongkong.core.YishouLedger.merge(it, got, System.currentTimeMillis()) }
+        return (after.entries.size - before).coerceAtLeast(0)
+    }
+
     suspend fun absorbYishou(): String? {
         if (!YishouClient.installed(context)) return null
         val y = (YishouClient.status(context) as? YishouClient.Result.Ok)?.value ?: return null

@@ -26,6 +26,8 @@
 
     <!-- 关注应用的选择列表只需要“桌面上能打开的应用”，不申请读取全部应用 -->
     <queries>
+        <!-- 总控：只给它读一手的账（连接口里认签名） -->
+        <package android:name="com.zongkong.app" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
@@ -230,6 +232,12 @@
         <receiver
             android:name=".system.ReminderReceiver"
             android:exported="false" />
+
+        <!-- 总控连接口：只认总控的签名，只读一手的账（刷题记录导入总控）。见 link/LinkProvider.kt -->
+        <provider
+            android:name=".link.LinkProvider"
+            android:authorities="${applicationId}.link"
+            android:exported="true" />
 
         <!-- 拍照作答：相机把照片写到本应用缓存目录里的临时文件 -->
         <provider

@@ -27,6 +27,16 @@ object YishouClient {
         }
     }
 
+    /** 一手 since 之后的每一手（刷题、刷着练、线程……）。一手 0.25 起才有；旧版一手回「不认识」。 */
+    suspend fun ledger(context: Context, since: Long): Result<List<com.zongkong.core.YishouEntry>> = withContext(Dispatchers.IO) {
+        call(context, Link.LEDGER, bundleOf("since" to since)) { b ->
+            com.zongkong.core.YishouLedger.decode(
+                b.getLongArray("at"), b.getStringArray("kind"), b.getStringArray("kindLabel"), b.getStringArray("mark"),
+                b.getStringArray("what"), b.getStringArray("said"), b.getStringArray("note"),
+            )
+        }
+    }
+
     /** 交给一手陪练：新建或更新一手的当前任务。返回一手的回话。 */
     suspend fun setTask(context: Context, order: Map<String, String>): Result<String> = withContext(Dispatchers.IO) {
         call(context, Link.SET_TASK, bundleOf(*order.toList().toTypedArray())) { b -> b.getString(Link.OK).orEmpty() }

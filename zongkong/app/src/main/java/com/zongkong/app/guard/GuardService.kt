@@ -327,6 +327,12 @@ class GuardService : AccessibilityService() {
                 } catch (e: Exception) {
                     Log.w(TAG, "读一手总结失败", e)
                 }
+                // 一手的刷题记录导入总控（参谋、四部页、关卡都看这一份）
+                try {
+                    zk.actions.importYishouLedger()
+                } catch (e: Exception) {
+                    Log.w(TAG, "导入一手刷题记录失败", e)
+                }
                 // 新装的娱乐应用自动进拦截名单
                 try {
                     AutoBlock.apply(this@GuardService)

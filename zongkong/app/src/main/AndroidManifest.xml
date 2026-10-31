@@ -24,6 +24,8 @@
         </intent>
         <!-- “去 GPT”“打开 Notion”：判断这两个 App 装了没有、能不能接收分享 -->
         <package android:name="com.openai.chatgpt" />
+        <!-- 话头：带着前情去 Gemini -->
+        <package android:name="com.google.android.apps.bard" />
         <package android:name="notion.id" />
         <!-- 行为管理部：和一手互相连接（读一手的训练、把行动交给一手陪练） -->
         <package android:name="com.yishou.app" />

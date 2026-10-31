@@ -45,19 +45,34 @@ fun GptScreen(nav: NavHostController) {
     var note by remember { mutableStateOf<String?>(null) }
     val installed = remember { Gpt.installed(context) }
     val canShare = remember { Gpt.canShareTo(context) }
+    val openers = remember { runCatching { com.zongkong.app.data.Talk.openers(app) }.getOrDefault(emptyList()) }
+    var picked by remember { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxSize()) {
-        BackBar("带着前情去 GPT", { nav.popBackStack() })
+        BackBar("带着前情去 GPT / Gemini", { nav.popBackStack() })
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (app.promptTitle.isNotBlank()) Text(app.promptTitle, style = MaterialTheme.typography.titleLarge.merge(SerifTitle))
+            // 话头：不知道说什么时，点一句，前情已经替你写好
+            if (openers.isNotEmpty()) {
+                SectionLabel("不知道说什么？点一句话头")
+                openers.forEach { o ->
+                    OutlinedButton(
+                        onClick = { text = o.text; picked = o.key; note = null },
+                        modifier = Modifier.fillMaxWidth().testTag("opener-${o.key}"),
+                    ) { Text((if (picked == o.key) "✓ " else "") + o.title) }
+                }
+            }
             Hint("下面这段话交代了前情：为什么做、当前判断、停在哪、做过什么、结果如何。可以改。GPT 讨论完会给交接块，复制它回到总控就能导入。")
             OutlinedTextField(text, { text = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 200.dp))
             Button(onClick = {
                 Gpt.copy(context, text)
                 if (installed && Gpt.openApp(context)) note = "已复制。在 ChatGPT 里长按输入框粘贴。" else note = "已复制。没找到 ChatGPT App，可以用网页版。"
             }, modifier = Modifier.fillMaxWidth()) { Text(if (installed) "复制并打开 ChatGPT" else "复制") }
+            OutlinedButton(onClick = { note = Gpt.toGemini(context, text) }, modifier = Modifier.fillMaxWidth().testTag("to-gemini")) {
+                Text("发给 Gemini")
+            }
             if (installed && canShare) {
                 OutlinedButton(onClick = { if (!Gpt.shareTo(context, text)) note = "分享失败，用上面的复制。" }, modifier = Modifier.fillMaxWidth()) {
                     Text("分享给 ChatGPT（文字直接进输入框）")

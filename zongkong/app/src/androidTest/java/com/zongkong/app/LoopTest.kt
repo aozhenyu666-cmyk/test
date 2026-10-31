@@ -392,7 +392,8 @@ class LoopTest {
     }
 
     /**
-     * 两个 App 真的连起来：总控读一手的状态、把一步行动交给一手，再读回来对上。
+     * 两个 App 真的连起来（一手 0.25 起的连接）：总控读一手今天的状态、把一手的刷题记录拉进总控，
+     * 四部页显示出来。新版一手还没接「交给一手陪练」：总控要如实收到「还没接」，而不是假装成功。
      * 一手没装（本地跑测试时）就跳过。
      */
     @Test
@@ -400,27 +401,22 @@ class LoopTest {
         org.junit.Assume.assumeTrue("一手没装", com.zongkong.app.link.YishouClient.installed(app))
         val before = com.zongkong.app.link.YishouClient.status(app)
         assertTrue(before.toString(), before is com.zongkong.app.link.YishouClient.Result.Ok)
-        // 建一步行动，交给一手
+        val st = (before as com.zongkong.app.link.YishouClient.Result.Ok).value
+        assertTrue(st.toString(), st.ledgerLine.isNotBlank())
+        // 刷题记录：新装的一手没有记录，但通道要通（回 Ok，不是错误）
+        val ledger = com.zongkong.app.link.YishouClient.ledger(app, 0L)
+        assertTrue(ledger.toString(), ledger is com.zongkong.app.link.YishouClient.Result.Ok)
+        assertEquals(0, app.actions.importYishouLedger())
+        // 交给一手陪练：新版一手明确说还没接
         val tk = app.actions.work.createThread("行测资料分析", why = "国考")
         val (ak, err) = app.actions.work.addAction(tk, "增长率 10 题", "", "正确率 70% 以上")
         assertTrue(err ?: "", ak != null)
         val order = com.zongkong.core.Link.taskOrder(app.store.work.value, ak!!)!!
         val r = com.zongkong.app.link.YishouClient.setTask(app, order)
-        assertTrue(r.toString(), r is com.zongkong.app.link.YishouClient.Result.Ok)
-        val after = (com.zongkong.app.link.YishouClient.status(app) as com.zongkong.app.link.YishouClient.Result.Ok).value
-        assertEquals("增长率 10 题", after.taskTitle)
-        assertEquals("正确率 70% 以上", after.taskGoal)
-        assertEquals(ak, after.actionKey)
-        // 总控让一手开一局陪练窗口
-        val w = com.zongkong.app.link.YishouClient.startWindow(app)
-        assertTrue(w.toString(), w is com.zongkong.app.link.YishouClient.Result.Ok)
-        assertTrue((com.zongkong.app.link.YishouClient.status(app) as com.zongkong.app.link.YishouClient.Result.Ok).value.windowActive)
-        // 再交一次：不重复新建
-        val again = com.zongkong.app.link.YishouClient.setTask(app, order)
-        assertEquals("已经是一手的当前任务", (again as com.zongkong.app.link.YishouClient.Result.Ok).value)
-        // 行为管理部页面显示一手的状态
+        assertTrue(r.toString(), r is com.zongkong.app.link.YishouClient.Result.Err && "还没接" in r.message)
+        // 行为管理部页面显示一手今天的账
         scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java).putExtra(com.zongkong.app.ui.MainActivity.EXTRA_ROUTE, "dept/ACT"))
-        waitText("在练：增长率 10 题", 10_000)
+        waitText("今天 0 手", 10_000)
         settle()
         shot("e2e-15-dept-act-linked")
     }

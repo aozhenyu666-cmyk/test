@@ -18,6 +18,8 @@ object Link {
     const val ZONGKONG_AUTHORITY = "com.zongkong.app.link"
     const val VERSION = 1
     const val STATUS = "status"
+    /** 总控 ← 一手：since 之后的每一手（一手 0.25 起的「一本账」），总控存一份。 */
+    const val LEDGER = "ledger"
     const val SET_TASK = "setTask"
     /** 总控 → 一手：现在开一局陪练窗口。 */
     const val START_WINDOW = "startWindow"
@@ -132,6 +134,8 @@ data class YishouStatus(
     val rule: String = "",
     val tomorrowQuestion: String = "",
     val summaryNote: String = "",
+    /** 一手 0.25 起：今天的一行账（刷题 12（接住 9）· 刷着练 6……） */
+    val ledgerLine: String = "",
 ) {
     val hitToday: Boolean get() = targetSets > 0 && doneSets >= targetSets
 
@@ -139,6 +143,12 @@ data class YishouStatus(
     val actionKey: String get() = ref.substringAfter('/', "")
 
     fun summary(): String = buildString {
+        if (ledgerLine.isNotBlank()) {
+            // 新版一手没有「目标组数」：直接报一行账，接住的手数折成组
+            append("今天 $roundsToday 手，接住 $effectiveToday（折 $doneSets 组）：$ledgerLine")
+            if (taskTitle.isNotBlank()) append("；在练「$taskTitle」")
+            return@buildString
+        }
         append("今天 $doneSets/$targetSets 组（有效 $effectiveToday 手，每组 $setSize 手）")
         if (streak > 1) append("，连续达标 $streak 天")
         if (taskTitle.isNotBlank()) append("；在练「$taskTitle」")
@@ -170,6 +180,7 @@ data class YishouStatus(
                 rule = s("rule"),
                 tomorrowQuestion = s("tomorrowQuestion"),
                 summaryNote = s("summaryNote"),
+                ledgerLine = s("ledgerLine"),
             )
         }
     }

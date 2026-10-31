@@ -224,6 +224,21 @@ class Store(private val context: Context) {
         next
     }
 
+    // ---------- 一手的刷题记录（从一手导入，只读副本） ----------
+
+    private val _yishou = MutableStateFlow(loadJson("yishou-ledger.json", com.zongkong.core.YishouBook.serializer()) ?: com.zongkong.core.YishouBook())
+    val yishouBook: StateFlow<com.zongkong.core.YishouBook> = _yishou.asStateFlow()
+
+    fun updateYishouBook(f: (com.zongkong.core.YishouBook) -> com.zongkong.core.YishouBook): com.zongkong.core.YishouBook = synchronized(workLock) {
+        val next = f(_yishou.value)
+        if (next != _yishou.value) {
+            _yishou.value = next
+            val text = ZkJson.encodeToString(com.zongkong.core.YishouBook.serializer(), next)
+            io.execute { writeAtomic(File(dir, "yishou-ledger.json"), text) }
+        }
+        next
+    }
+
     // ---------- 账本（试验） ----------
 
     private val _ledger = MutableStateFlow(loadJson("ledger.json", com.zongkong.core.ledger.LedgerBook.serializer()) ?: com.zongkong.core.ledger.LedgerBook())

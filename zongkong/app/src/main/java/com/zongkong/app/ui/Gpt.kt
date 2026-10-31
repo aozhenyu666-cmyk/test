@@ -58,6 +58,35 @@ object Gpt {
         safeStart(context, Intent(Intent.ACTION_VIEW, Uri.parse("https://chatgpt.com/?q=$q")))
     }
 
+    // ---------- Gemini（话头也能发过去）----------
+
+    const val GEMINI_PKG = "com.google.android.apps.bard"
+
+    fun geminiInstalled(context: Context): Boolean = context.packageManager.getLaunchIntentForPackage(GEMINI_PKG) != null
+
+    /**
+     * 去 Gemini：先试系统分享（文字直接进输入框，取决于 Gemini 版本），不行就复制 + 打开 App，再不行打开网页版。
+     * 都不会替你自动发送。返回给用户看的一句话。
+     */
+    fun toGemini(context: Context, text: String): String {
+        copy(context, text, "话头")
+        val share = sendIntent(text).setPackage(GEMINI_PKG).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (context.packageManager.queryIntentActivities(share, 0).isNotEmpty()) {
+            try {
+                context.startActivity(share); return "已发到 Gemini 的输入框（也复制了一份）。"
+            } catch (_: Exception) {
+            }
+        }
+        context.packageManager.getLaunchIntentForPackage(GEMINI_PKG)?.let { i ->
+            try {
+                context.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return "已复制。在 Gemini 里长按输入框粘贴。"
+            } catch (_: Exception) {
+            }
+        }
+        safeStart(context, Intent(Intent.ACTION_VIEW, Uri.parse("https://gemini.google.com/app")))
+        return "已复制。没找到 Gemini App，打开了网页版：粘贴进去。"
+    }
+
     fun openNotion(context: Context, url: String): Boolean {
         if (url.isBlank()) return false
         return try {

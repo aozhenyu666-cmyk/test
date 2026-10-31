@@ -631,6 +631,9 @@ private fun ActPart(work: Work, now: Long, status: com.zongkong.core.Status, nav
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeKey++ }
     val installed = remember(resumeKey) { YishouClient.installed(context) }
     val ys by produceState<YishouClient.Result<YishouStatus>?>(null, resumeKey) { value = if (installed) YishouClient.status(context) else null }
+    // 打开这一页时顺手把一手的刷题记录拉进来（后台本来每 15 分钟拉一次）
+    androidx.compose.runtime.LaunchedEffect(resumeKey) { if (installed) runCatching { app.actions.importYishouLedger() } }
+    val yBook by app.store.yishouBook.collectAsStateWithLifecycle()
     var msg by remember { mutableStateOf<String?>(null) }
     val cur = remember(work, now) { Focus.current(work, now, app.store.zone, app.store.mainKey(now)) }
 
@@ -646,7 +649,8 @@ private fun ActPart(work: Work, now: Long, status: com.zongkong.core.Status, nav
                 Text(
                     when (val r = ys) {
                         null -> if (installed) "正在读…" else "还没装一手"
-                        is YishouClient.Result.Ok -> "今天 ${r.value.doneSets}/${r.value.targetSets} 组 · 有效 ${r.value.effectiveToday} 手" + if (r.value.streak > 1) " · 连续 ${r.value.streak} 天" else ""
+                        is YishouClient.Result.Ok -> if (r.value.ledgerLine.isNotBlank()) "今天 ${r.value.roundsToday} 手 · 接住 ${r.value.effectiveToday}（折 ${r.value.doneSets} 组）"
+                        else "今天 ${r.value.doneSets}/${r.value.targetSets} 组 · 有效 ${r.value.effectiveToday} 手" + if (r.value.streak > 1) " · 连续 ${r.value.streak} 天" else ""
                         is YishouClient.Result.Err -> r.message
                     },
                     style = MaterialTheme.typography.bodySmall, color = sig.muted,
@@ -658,6 +662,7 @@ private fun ActPart(work: Work, now: Long, status: com.zongkong.core.Status, nav
                 Text("在练：${y.taskTitle}" + if (y.ref.isNotBlank()) "（总控交过去的）" else "", style = MaterialTheme.typography.bodyMedium)
                 if (y.next.isNotBlank()) Text("下一问：${y.next}", style = MaterialTheme.typography.bodySmall, color = sig.muted, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
+            if (y.ledgerLine.isNotBlank()) Text(y.ledgerLine, style = MaterialTheme.typography.bodySmall, color = sig.muted)
             if (y.windowActive) Pill("陪练窗口进行中 · 到 ${clock(y.windowEnd)}", sig.act, dot = true)
             if (!y.gateOn) Text("一手的入口思考页没开：打开娱乐应用时不会先问你一手。", style = MaterialTheme.typography.bodySmall, color = sig.warn)
             if (y.rule.isNotBlank()) {
@@ -667,6 +672,18 @@ private fun ActPart(work: Work, now: Long, status: com.zongkong.core.Status, nav
                     if (y.tomorrowQuestion.isNotBlank()) Text("第一问：${y.tomorrowQuestion}", style = MaterialTheme.typography.bodySmall, color = sig.muted)
                 }
             }
+        }
+        if (yBook.entries.isNotEmpty()) {
+            val week = remember(yBook, now) { com.zongkong.core.YishouLedger.between(yBook, now - 7 * 86_400_000L, now + 1) }
+            Text(
+                "已导入总控：近 7 天 ${week.size} 手，接住 ${week.count { it.hit }}，没接住 ${week.count { it.miss }}（参谋能看到这些记录）",
+                style = MaterialTheme.typography.bodySmall, color = sig.muted,
+            )
+            TextButton(onClick = {
+                app.prompt = ""
+                app.promptTitle = "拿一手的题去聊"
+                nav.navigate("gpt")
+            }, modifier = Modifier.testTag("yishou-to-talk")) { Text("去 GPT / Gemini 聊没接住的 →") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (installed) {

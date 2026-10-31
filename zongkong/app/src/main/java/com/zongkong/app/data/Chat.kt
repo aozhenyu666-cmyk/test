@@ -110,7 +110,17 @@ class ChatRepo(private val context: Context, private val store: Store, private v
         override fun updatePlans(f: (com.zongkong.core.plan.PlanBook) -> com.zongkong.core.plan.PlanBook) = store.updatePlans(f)
         override fun status(): Status = store.status()
         override fun kick() = actions.work.kick()
-        override suspend fun yishou(): String = when (val r = YishouClient.status(context)) {
+        override suspend fun yishou(): String = yishouStatusText() + "\n" + yishouLedgerText()
+
+        private suspend fun yishouLedgerText(): String {
+            runCatching { actions.importYishouLedger() }
+            val now = System.currentTimeMillis()
+            val from = com.zongkong.core.DayClock.startOf(com.zongkong.core.DayClock.date(now, store.zone), store.zone)
+            val today = com.zongkong.core.YishouLedger.between(store.yishouBook.value, from, now + 1)
+            return "刷题记录（已导入总控）：" + com.zongkong.core.YishouLedger.digest(today, store.zone)
+        }
+
+        private suspend fun yishouStatusText(): String = when (val r = YishouClient.status(context)) {
             is YishouClient.Result.Ok -> r.value.let { s ->
                 buildString {
                     append("一手（${s.appVersion}）：").append(s.summary()).append('\n')

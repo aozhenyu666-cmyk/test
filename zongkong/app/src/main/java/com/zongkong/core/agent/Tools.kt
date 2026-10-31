@@ -236,7 +236,7 @@ class ZkTools(private val env: AgentEnv) {
         ToolSpec("ledger_summary", "看账本：今天、本周花了多少，按分类，最近几笔（带 id）。"),
         ToolSpec("remove_expense", "删掉记错的一笔。", listOf(Param("id", "string", "那一笔的 id", required = true))),
         ToolSpec("list_gates", "列出节律关卡（id、部门、时间、验收方式、今天的状态）和待生效的放宽改动。"),
-        ToolSpec("yishou_status", "读一手（行为管理部）今天的训练：练了几组、目标几组、在练什么、陪练窗口、昨晚总结的规则。"),
+        ToolSpec("yishou_status", "读一手（行为管理部）今天的训练和刷题记录：一共几手、接住几手、哪些没接住（题目、用户怎么答、判语），在练什么、入口思考页开没开。"),
         ToolSpec(
             "create_thread", "新建一件事（事项）。",
             listOf(
