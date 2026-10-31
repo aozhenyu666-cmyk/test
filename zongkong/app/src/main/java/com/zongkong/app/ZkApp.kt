@@ -25,6 +25,7 @@ class ZkApp : Application() {
     var proofInbox: List<String> = emptyList()
     /** 交付记录（本机）。 */
     val proofs by lazy { com.zongkong.app.data.ProofStore(this) }
+    val aiFocus by lazy { com.zongkong.app.data.AiFocusStore(this) }
 
     /** 别的页面带进“脉络 → 录入”的材料。 */
     var veinDraft: String = ""

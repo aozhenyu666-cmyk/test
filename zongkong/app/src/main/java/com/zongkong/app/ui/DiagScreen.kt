@@ -51,6 +51,7 @@ private fun kindLabel(kind: String): String = when (kind) {
     "disabled" -> "被关掉"
     "bounce" -> "弹回"
     "lockdown" -> "总控时间"
+    "ai_focus_block" -> "AI 专注拦截"
     "event_error" -> "事件出错"
     "watchdog" -> "看门狗"
     else -> kind

@@ -762,6 +762,11 @@ private fun ActPart(work: Work, now: Long, status: com.zongkong.core.Status, nav
     }
     OutcomeDialog(outcome) { outcome = null }
 
+    Panel(onClick = { nav.navigate("ai-focus") }, accent = sig.think) {
+        Text("AI 专注", style = MaterialTheme.typography.titleSmall)
+        Hint("默认 20 分钟，只和 GPT / Gemini 沟通，其他应用照样弹回。")
+    }
+
     // ---------- 娱乐 ----------
     Panel(modifier = Modifier.enter(4), onClick = { nav.navigate("settings/block") }) {
         Text("今天的娱乐", style = MaterialTheme.typography.titleSmall)

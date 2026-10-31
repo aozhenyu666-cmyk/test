@@ -24,6 +24,28 @@
         </intent>
         <!-- “去 GPT”“打开 Notion”：判断这两个 App 装了没有、能不能接收分享 -->
         <package android:name="com.openai.chatgpt" />
+        <package android:name="com.google.android.apps.bard" />
+        <package android:name="com.google.android.googlequicksearchbox" />
+        <package android:name="io.nekohasekai.sagernet" />
+        <package android:name="com.tencent.mm" />
+        <!-- AI 附件：查询本机系统选择组件，不放开整个图库/文件管理器。 -->
+        <intent>
+            <action android:name="android.intent.action.OPEN_DOCUMENT" />
+            <category android:name="android.intent.category.OPENABLE" />
+            <data android:mimeType="*/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.GET_CONTENT" />
+            <category android:name="android.intent.category.OPENABLE" />
+            <data android:mimeType="*/*" />
+        </intent>
+        <intent>
+            <action android:name="android.provider.action.PICK_IMAGES" />
+            <data android:mimeType="image/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.CHOOSER" />
+        </intent>
         <package android:name="notion.id" />
         <!-- 行为管理部：和一手互相连接（读一手的训练、把行动交给一手陪练） -->
         <package android:name="com.yishou.app" />
