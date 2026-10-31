@@ -124,10 +124,11 @@ object PermissionStatus {
         val s = LocalGuardian.store(context)
         val now = System.currentTimeMillis()
         val eff = s.effective(now)
-        val stopped = s.emergencyStopped()
+        // 暂停要看**到期时刻**：以前只看有没有 STOPPED 字样，会一直显示「已暂停」（P0-6a）。
+        val emergency = s.emergencyStatus(now)
         when {
             s.lastError.isNotBlank() -> "规则文件有问题：${s.lastError}"
-            stopped -> "已紧急暂停（本地立即生效）"
+            emergency.active -> "已紧急暂停（本地立即生效；${emergency.why}）"
             eff.isEmpty() -> "没有生效中的本地规则（版本 ${s.revision}）"
             else -> "生效中 ${eff.size} 条（版本 ${s.revision}，最近到期 ${eff.maxOf { it.endsAtWall } - now} ms）"
         }

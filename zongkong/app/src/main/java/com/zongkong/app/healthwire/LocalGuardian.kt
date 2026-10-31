@@ -95,7 +95,18 @@ object LocalGuardian {
             stopped
         },
         selfHealthy = {
-            GuardHealth.verdict(GuardHealth.permissionEnabled()).status == HealthStatus.HEALTHY
+            // P0-1：「自己健康」不能依赖哨兵还愿不愿意发挑战。
+            //
+            // 旧判据只看 dispatcherAck，而 ack 只由哨兵发起 challenge 才产生 → 哨兵一沉默，
+            // selfHealthy 必然 false，[LocalFallback.decide] 的兜底分支永远进不去。
+            // 且 sentinelHealthy 的缓存窗口（60s）比 ack 新鲜窗口（30s）长，于是
+            // selfHealthy=true 必然蕴含 sentinelHealthy=true —— 本地兜底与回执整条链生产不可达。
+            //
+            // 现在：先看 ack（便宜、不用投递），不健康就做一次本地自检
+            // （自己往 a11y 线程投探针，测的是同一条线程，但不经过哨兵）。
+            val ackHealthy =
+                GuardHealth.verdict(GuardHealth.permissionEnabled()).status == HealthStatus.HEALTHY
+            ackHealthy || GuardHealth.localSelfProbe()
         },
         probeSentinel = { SentinelClient.probeAsync(context) },
         sentinelHealthy = { SentinelClient.linkCached(context) == SentinelClient.Link.RESPONDING },
@@ -157,28 +168,42 @@ object LocalGuardian {
      */
     fun emergencyStop(context: Context, reason: String, nowWall: Long = System.currentTimeMillis()): String {
         val store = GuardHealth.init(context)
-        val rev = store.markEmergencyStopped(reason, nowWall)
+        // 内存里先停（本地立即生效，不等磁盘也不等网络）。
         GuardHealth.setPaused(true)
-        GuardHealth.noteRuleRevision(rev)
-        runCatching { Diag.log(context, "emergency_stop", "本地紧急暂停：${reason.ifBlank { "未填原因" }}") }
+        val out = store.markEmergencyStopped(reason, nowWall)
+        if (out.failed) {
+            // 落盘失败就说落盘失败，不谎称「已生效、已落盘」。
+            return "紧急暂停：内存里已生效，但**没写进磁盘**（${out.error}）。重启后会丢；哨兵也未确认。"
+        }
+        GuardHealth.noteRuleRevision(out.revision)
+        val until = store.emergency?.untilWall ?: 0L
+        val tail = if (until > 0L) "；到期自动解除（约 ${(until - nowWall).coerceAtLeast(0) / 60_000} 分钟后）" else ""
+        runCatching { Diag.log(context, "emergency_stop", "本地紧急暂停：${reason.ifBlank { "未填原因" }}$tail") }
         // 上报哨兵：同步规则 + 记一次回执式通告；失败就明说「已本地生效，但哨兵未确认」。
         val (ok, accepted) = SentinelClient.syncPolicy(context, store.policyJson())
         if (ok) {
             store.markEmergencyReported()
-            return "已紧急暂停：本地立即生效；哨兵已接受（规则版本 $accepted）"
+            return "已紧急暂停：本地立即生效$tail；哨兵已接受（规则版本 $accepted）"
         }
-        return "已紧急暂停：本地立即生效；哨兵未确认（可能失联，规则仍已落盘）"
+        return "已紧急暂停：本地立即生效$tail；哨兵未确认（可能失联，规则仍已落盘）"
     }
 
     /** 解除紧急暂停。 */
     fun resume(context: Context): String {
         val store = GuardHealth.init(context)
-        val rev = store.clearEmergency()
+        val out = store.clearEmergency(why = "用户点了恢复监管")
+        if (out.failed) {
+            // 落盘失败时内存缓存仍是「暂停」（写失败不换内存），但用户明确要求恢复监管——
+            // 就让监管先恢复，同时说明磁盘还是旧值、重启会回到暂停。
+            GuardHealth.setPaused(false)
+            repairGrace.clear()
+            return "已恢复监管（内存）；但**没写进磁盘**（${out.error}），重启后会回到暂停状态。"
+        }
         GuardHealth.setPaused(false)
-        GuardHealth.noteRuleRevision(rev)
+        GuardHealth.noteRuleRevision(out.revision)
         // 用户主动恢复监管：清掉修复宽限，立刻按真实事实重新判断（一手 :284 同口径）。
         repairGrace.clear()
-        runCatching { Diag.log(context, "emergency_resume", "解除紧急暂停，恢复监管（规则版本 $rev）；清空修复宽限") }
+        runCatching { Diag.log(context, "emergency_resume", "解除紧急暂停，恢复监管（规则版本 ${out.revision}）；清空修复宽限") }
         val (ok, accepted) = SentinelClient.syncPolicy(context, store.policyJson())
         return if (ok) "已恢复监管；哨兵已接受（规则版本 $accepted）" else "已恢复监管；哨兵未确认"
     }
@@ -186,11 +211,15 @@ object LocalGuardian {
     /** 保存规则并同步哨兵（先落盘、再同步）。 */
     fun savePolicies(context: Context, list: List<LocalPolicy>): String {
         val store = GuardHealth.init(context)
-        val rev = store.save(list)
-        GuardHealth.noteRuleRevision(rev)
+        val out = store.save(list)
+        if (out.failed) {
+            // 没落盘就别说「已保存」，更不要推给哨兵一个假版本号。
+            return "规则**没保存成功**：${out.error}"
+        }
+        GuardHealth.noteRuleRevision(out.revision)
         val (ok, accepted) = SentinelClient.syncPolicy(context, store.policyJson())
-        return if (ok) "已保存并同步（本地版本 $rev，哨兵接受 $accepted）"
-        else "已保存到本机（版本 $rev）；哨兵没确认，仍以本地规则为准"
+        return if (ok) "已保存并同步（本地版本 ${out.revision}，哨兵接受 $accepted）"
+        else "已保存到本机（版本 ${out.revision}）；哨兵没确认，仍以本地规则为准"
     }
 
     fun store(context: Context): ClientPolicyStore = GuardHealth.init(context)

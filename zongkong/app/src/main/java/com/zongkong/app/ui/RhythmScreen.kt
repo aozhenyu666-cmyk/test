@@ -210,8 +210,13 @@ fun GateRow(g: GateStatus, now: Long, onClick: () -> Unit) {
         }
         val line = when (g.phase) {
             GatePhase.NOT_OPEN -> "${clock(g.openAt)} 开放"
-            GatePhase.OPEN, GatePhase.DUE_SOON -> "还有 ${span(g.deadlineAt - now)}" + if (g.blocking) " · 交了才放行" else ""
-            GatePhase.OVERDUE -> "超时 ${span(now - g.deadlineAt)} · 正在拦截"
+            // P0-5：拦到上限就不再拦了，但不能装作不欠 —— 说出来。
+            GatePhase.OPEN, GatePhase.DUE_SOON -> "还有 ${span(g.deadlineAt - now)}" + when {
+                g.blockExpired -> " · 拦截已到上限，先放行（账记着）"
+                g.blocking -> " · 交了才放行"
+                else -> ""
+            }
+            GatePhase.OVERDUE -> "超时 ${span(now - g.deadlineAt)}" + if (g.blockExpired) " · 拦截已到上限，先放行（账记着）" else " · 正在拦截"
             GatePhase.DONE, GatePhase.DONE_LATE -> g.passed?.let { "${clock(it.at)} 验收 · ${it.verdict.by}" + (it.verdict.score?.let { s -> " $s 分" } ?: "") } ?: ""
         }
         Text(line, style = MaterialTheme.typography.bodySmall.merge(Mono), color = pc)
@@ -229,7 +234,7 @@ fun EmergencyDialog(minutes: Int, left: Int, onDismiss: () -> Unit) {
         title = { Text("紧急放行 $minutes 分钟") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Hint("今天还剩 $left 次。写清楚为什么必须现在用（至少 20 字），会写进日终验收。")
+                Hint("今天还剩 $left 次。写清楚为什么必须现在用（至少 20 字；总控态度严格时要 60 字），会写进日终验收。")
                 OutlinedTextField(value = reason, onValueChange = { reason = it }, minLines = 3, modifier = Modifier.fillMaxWidth())
                 msg?.let { Text(it, color = LocalSignals.current.warn, fontWeight = FontWeight.Bold) }
             }

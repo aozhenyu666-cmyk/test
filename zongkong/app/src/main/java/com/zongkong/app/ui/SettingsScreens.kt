@@ -267,6 +267,7 @@ fun RulesScreen(nav: NavHostController) {
     var emgCount by remember { mutableStateOf(config.emergencyPerDay.toString()) }
     var emgMin by remember { mutableStateOf(config.emergencyMinutes.toString()) }
     var degraded by remember { mutableStateOf(config.degradedPerDay.toString()) }
+    var blockCap by remember { mutableStateOf(config.blockMaxHours.toString()) }
     var pauseDays by remember { mutableStateOf("1") }
     var message by remember { mutableStateOf<String?>(null) }
     val now = System.currentTimeMillis()
@@ -288,6 +289,9 @@ fun RulesScreen(nav: NavHostController) {
             }
             SectionLabel("娱乐上限：不能一直妄为")
             NumberField("每天娱乐应用总时长（0 = 不限）", quota, { quota = it }, Modifier.fillMaxWidth(), "分钟")
+            SectionLabel("关卡拦截：拦得有尽头，账记得住")
+            NumberField("单道关卡最多连续拦截几小时（0 = 不限）", blockCap, { blockCap = it }, Modifier.fillMaxWidth(), "小时")
+            Hint("拦到这个上限就不再挡手机，但关卡还欠着，日终验收照样算。没有上限的话，一道交不出来的关卡 + 紧急放行用完 + 休假要等 24 小时，会把人逼到只能卸载。")
             SectionLabel("出口")
             NumberField("紧急放行每天几次", emgCount, { emgCount = it }, Modifier.fillMaxWidth(), "次")
             NumberField("紧急放行每次多久", emgMin, { emgMin = it }, Modifier.fillMaxWidth(), "分钟")
@@ -307,6 +311,7 @@ fun RulesScreen(nav: NavHostController) {
                         emergencyPerDay = emgCount.toIntOrNull() ?: config.emergencyPerDay,
                         emergencyMinutes = (emgMin.toIntOrNull() ?: config.emergencyMinutes).coerceAtLeast(1),
                         degradedPerDay = degraded.toIntOrNull() ?: config.degradedPerDay,
+                        blockMaxHours = (blockCap.toIntOrNull() ?: config.blockMaxHours).coerceAtLeast(0),
                     )
                     val out = Policy.setRules(config, r, System.currentTimeMillis())
                     store.updateConfig { out.config }

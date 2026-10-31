@@ -118,7 +118,7 @@ fun FlowScreen(nav: NavHostController) {
                         Text(what, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                     }
                 }
-                Hint("起点 ${Boss.BASE}，只看最近 ${Boss.WINDOW_DAYS} 天。80 以上信任，60–79 正常，40–59 审慎（说什么都要证据），40 以下严格（不给紧急放行、不认口头说法）。点这里看每一笔。")
+                Hint("起点 ${Boss.BASE}，只看最近 ${Boss.WINDOW_DAYS} 天。80 以上信任，60–79 正常，40–59 审慎（说什么都要证据），40 以下严格（不认口头说法，紧急放行要写满 60 字）。点这里看每一笔。")
             }
 
             // ---------- 常见问题 ----------

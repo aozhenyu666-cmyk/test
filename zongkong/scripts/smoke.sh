@@ -146,6 +146,37 @@ sleep 2
 # 先确认总控一直在给哨兵写名单（哨兵自己的文件里有拦截名单）
 adb shell run-as $SP cat files/state.json 2>&1 | tee "$OUT/sentinel-state.txt"
 if grep -q "$TARGET" "$OUT/sentinel-state.txt"; then echo "SENTINEL_LINKED=OK" >> "$OUT/result.txt"; else echo "SENTINEL_LINKED=FAIL" >> "$OUT/result.txt"; fi
+
+# ---------- 哨兵 v2 联通：独立 :watch 进程起来了，总控注册上，哨兵发的挑战真的被总控的无障碍线程回了 ----------
+WATCH_PID=$(adb shell pidof $SP:watch | tr -d '\r')
+echo ":watch 进程 pid=$WATCH_PID" | tee "$OUT/sentinel-v2.txt"
+adb shell dumpsys activity services $SP | grep -E "ServiceRecord|isForeground|app=" | head -10 | tee -a "$OUT/sentinel-v2.txt"
+if [ -n "$WATCH_PID" ]; then echo "SENTINEL_WATCH_PROCESS=OK" >> "$OUT/result.txt"; else echo "SENTINEL_WATCH_PROCESS=FAIL" >> "$OUT/result.txt"; fi
+# 读哨兵的 health.json：总控那一行要 registered=true，且有过一次被接受的真实 ack（lastAckAtMono > 0）
+V2_ACK=FAIL
+for i in $(seq 1 12); do
+  adb shell run-as $SP cat files/health.json > "$OUT/sentinel-health.json" 2>/dev/null
+  if python3 - "$OUT/sentinel-health.json" "$PKG" <<'PY'
+import json, sys
+try:
+    doc = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+rec = next((c for c in doc.get("clients", []) if c.get("pkg") == sys.argv[2]), None)
+ok = bool(rec) and rec.get("registered") is True and int(rec.get("lastAckAtMono", 0)) > 0
+print("总控记录：", {k: rec.get(k) for k in ("registered", "instanceId", "lastAckSeq", "lastAckAtMono", "consecutiveFailures", "lastFailureReason")} if rec else "无")
+sys.exit(0 if ok else 1)
+PY
+  then V2_ACK=OK; break; fi
+  sleep 5
+done
+echo "SENTINEL_V2_ACK=$V2_ACK" >> "$OUT/result.txt"
+if [ "$V2_ACK" != OK ]; then
+  cat "$OUT/sentinel-health.json"; echo
+  adb logcat -d -s SentinelWatch:V SentinelWatchProvider:V SentinelProbe:V SentinelArc:V SentinelClient:V ZkHealthWire:V | tail -40
+fi
+adb shell run-as $SP cat files/watch-log.txt >> "$OUT/sentinel-v2.txt" 2>&1 || true
+
 adb shell settings put secure enabled_accessibility_services $SVC
 sleep 5
 adb shell dumpsys accessibility | grep -iE "Bound services|Enabled services" | head -4 | tee "$OUT/accessibility-sentinel.txt"

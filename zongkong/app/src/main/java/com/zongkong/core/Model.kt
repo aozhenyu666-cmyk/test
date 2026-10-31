@@ -124,6 +124,18 @@ data class Config(
     val dailyQuotaMin: Int = 120,
     val emergencyPerDay: Int = 1,
     val emergencyMinutes: Int = 10,
+    /**
+     * 一道关卡最多连续拦截多久（小时）。超时后**不再拦截**，只保留「已超时」的提示。
+     *
+     * 为什么必须有上限（P0-5）：
+     * 旧逻辑里 `FROM_OPEN` 从开放一直拦到当天结束，没有尽头；而每天只有
+     * [emergencyPerDay] 次（默认 1 次）紧急放行、休假还要 24 小时冷静期。
+     * 三者叠加就是一个死锁 —— 交不了（没做完/没时间）、放不了（放行被拒或已用完）、
+     * 休不了（要等一天），用户唯一出路是卸载或关无障碍。
+     *
+     * 0 = 不设上限（回到旧行为，不建议）。
+     */
+    val blockMaxHours: Int = DEFAULT_BLOCK_MAX_HOURS,
     /** AI 或 Notion 连不上时，每天可以用加倍字数降级验收几次。 */
     val degradedPerDay: Int = 2,
     /** 到这个时间之前总控休假，不拦截（毫秒时间戳）。休假也要等 24 小时才生效。 */
@@ -158,7 +170,12 @@ data class Config(
     val watch: WatchConfig = WatchConfig(),
     /** 外接的谋划单（Gemini / GPT / Notion 交进来的），总控只负责监督落实。 */
     val directives: List<com.zongkong.core.plan.Directive> = emptyList(),
-)
+) {
+    companion object {
+        /** 单道关卡最多连续拦截多久（小时）的默认值。0 = 不限。 */
+        const val DEFAULT_BLOCK_MAX_HOURS = 6
+    }
+}
 
 /** 对话的设置。 */
 @Serializable
@@ -373,6 +390,8 @@ sealed class ChangeOp {
         val emergencyPerDay: Int? = null,
         val emergencyMinutes: Int? = null,
         val degradedPerDay: Int? = null,
+        /** 关卡连续拦截上限（小时）。调长 / 常态化是收紧，立即生效；调短是放宽，24 小时后生效。 */
+        val blockMaxHours: Int? = null,
     ) : ChangeOp()
 
     @Serializable

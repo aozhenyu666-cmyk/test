@@ -249,7 +249,7 @@ private fun StrictBody(
             } else {
                 Panel {
                     Text("紧急放行", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    Hint("写清楚为什么必须现在用（至少 20 字）。会记进今天的日终验收，AI 验收时会看到。")
+                    Hint("写清楚为什么必须现在用（至少 20 字；总控态度严格时要 60 字）。会记进今天的日终验收，AI 验收时会看到。")
                     OutlinedTextField(value = reason, onValueChange = { reason = it }, modifier = Modifier.fillMaxWidth(), minLines = 2)
                     Button(
                         onClick = {

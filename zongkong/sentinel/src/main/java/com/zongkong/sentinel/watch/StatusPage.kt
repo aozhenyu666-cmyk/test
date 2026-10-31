@@ -21,7 +21,8 @@ object StatusPage {
 
     data class Config(
         val health: HealthConfig = HealthConfig(),
-        val requiredApps: Set<String> = setOf(HealthStore.ZONGKONG, HealthStore.YISHOU, HealthStore.PET),
+        /** 必须在线的应用。空 = 以生效中规则自己写的 requiredApps 为准（默认）。 */
+        val requiredApps: Set<String> = emptySet(),
     )
 
     /** 一行的全部显示字段（报告 §10 列出的七件事）。 */

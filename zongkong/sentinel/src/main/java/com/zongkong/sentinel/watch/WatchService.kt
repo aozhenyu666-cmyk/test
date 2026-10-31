@@ -93,19 +93,31 @@ class WatchService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_EMERGENCY -> emergencyStop(intent.getStringExtra(EXTRA_REASON).orEmpty())
-            ACTION_CANCEL_EMERGENCY -> cancelEmergency()
-            ACTION_LOCK_NOW -> attemptLock(
-                policyId = policies.load().doc.policies.firstOrNull()?.policyId ?: "manual",
-                incidentId = "manual-${SystemClock.elapsedRealtime()}",
-                reason = "手动测试锁屏（用户在界面上点的）",
-            )
+            // 这几件事都会跨进程调用或等锁屏观测（最多几秒），不放在服务主线程上做。
+            ACTION_EMERGENCY -> {
+                val reason = intent.getStringExtra(EXTRA_REASON).orEmpty()
+                background("emergency") { emergencyStop(reason) }
+            }
+            ACTION_CANCEL_EMERGENCY -> background("cancel-emergency") { cancelEmergency() }
+            ACTION_LOCK_NOW -> background("lock-now") {
+                attemptLock(
+                    policyId = policies.load().doc.policies.firstOrNull()?.policyId ?: "manual",
+                    incidentId = "manual-${SystemClock.elapsedRealtime()}",
+                    reason = "手动测试锁屏（用户在界面上点的）",
+                )
+            }
             else -> Unit
         }
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun background(name: String, job: () -> Unit) {
+        Thread({
+            try { job() } catch (e: Throwable) { Log.w(TAG, "$name 出错", e) }
+        }, "sentinel-$name").apply { isDaemon = true }.start()
+    }
 
     override fun onDestroy() {
         running = false
@@ -132,8 +144,10 @@ class WatchService : Service() {
                     if (emergencyActive()) continue
                     attemptLock(
                         policyId = policy?.policyId ?: NO_POLICY,
-                        // 同一分钟内的同一故障算一个事件：靠 incidentId 去重（T07）。
-                        incidentId = "$pkg-${now / 60_000}",
+                        // 一次失联 = 一个事件：在拿到下一个真实 ack 之前 incidentId 不变，
+                        // 仲裁器按它限次数（每事件最多 2 次）。以前按「分钟」编号，
+                        // 失联多久就每分钟锁一次，修都来不及修（T07/T15）。
+                        incidentId = incidentFor(pkg),
                         reason = "客户端 $pkg ${reason}",
                     )
                 }
@@ -201,10 +215,48 @@ class WatchService : Service() {
         return policies.load().doc.activeAt(now).any { it.emergencyState != PolicyStore.EMERGENCY_STOPPED }
     }
 
-    private fun emergencyActive(): Boolean = health.snapshot().emergency != null
+    /**
+     * 紧急暂停是否还在生效：只管「按下时正在生效的那些窗口」，窗口结束就自然失效（规范 §6）。
+     * 以前只看有没有记录，按过一次之后就永远不再锁屏，直到有人手动取消。
+     */
+    private fun emergencyActive(): Boolean {
+        val rec = health.snapshot().emergency ?: return false
+        val now = clock.now()
+        val stillStopped = policies.load().doc.policies.any {
+            it.emergencyState == PolicyStore.EMERGENCY_STOPPED && it.effective(now)
+        }
+        if (!stillStopped) {
+            health.setEmergency(null, now)
+            Arc.log(this, "紧急暂停所在的监管窗口已结束，暂停自然失效（${rec.reason}）")
+            // P0-6c：客户端那边也得跟着解除。只在「刚刚失效」这一下通知一次
+            // （记录已被清空，下轮直接 return）。跨进程调用最多几秒，
+            // 这里跑在巡检线程/主线程上，必须挪到后台线程（T05 同口径）。
+            background("resume-clients") { notifyClientsResume("监管窗口已结束，紧急暂停自动解除") }
+        }
+        return stillStopped
+    }
+
+    /** 通知所有在册客户端「恢复监管」。返回确认到达的包名。 */
+    private fun notifyClientsResume(reason: String): List<String> {
+        val targets = health.snapshot().clients.values.filter { it.registered }.map { it.pkg }
+            .ifEmpty { HealthStore.CLIENTS.filter { isInstalled(it) } }
+        val reached = ArrayList<String>()
+        for (pkg in targets) {
+            // 每个客户端独立 + 独立超时：一个不回不影响其他（T04/T16）。
+            if (ClientCall.notifyResume(this, pkg, reason)) reached += pkg
+        }
+        if (reached.size < targets.size) {
+            Arc.log(this, "恢复监管没送到全部客户端：${reached.size}/${targets.size}（${targets - reached.toSet()}）")
+        }
+        return reached
+    }
+
+    /** 当前这次失联的事件号：同一个「最后一次真实 ack」之后的失联都算同一个事件。 */
+    private fun incidentFor(pkg: String): String = "$pkg-after-ack-${health.get(pkg).lastAckSeq}"
 
     // ---------- 锁屏执行：仲裁 + 观测 + 回执 ----------
 
+    @Synchronized
     fun attemptLock(policyId: String, incidentId: String, reason: String) {
         if (emergencyActive()) {
             Arc.log(this, "紧急暂停中，不锁：$reason")
@@ -250,10 +302,10 @@ class WatchService : Service() {
         when (action) {
             HealthAction.START_RECOVERY -> {
                 val sent = Arc.requestRebind(this, pkg)
-                health.onRecoveryAttempt(
+                // 次数已经由调度器记过一次，这里只写说明（以前两边都 +1，一次恢复算两次，预算立刻用完）。
+                health.noteRecovery(
                     pkg,
                     if (sent) "恢复请求已发出（等待新实例 + 真 ack）" else "没有写安全设置权限，恢复请求未发出",
-                    SystemClock.elapsedRealtime(),
                     clock.now(),
                 )
                 Arc.log(this, "$pkg：$reason → ${if (sent) "已发出恢复请求" else "只能引导手动修复"}")
@@ -266,6 +318,7 @@ class WatchService : Service() {
 
     // ---------- 紧急暂停（与 Release.kt 的正常解除分开，规范 §6） ----------
 
+    @Synchronized
     fun emergencyStop(reason: String) {
         val nowWall = clock.now()
         val nowMono = SystemClock.elapsedRealtime()
@@ -273,6 +326,9 @@ class WatchService : Service() {
         if (!applied.ok) Arc.log(this, "紧急暂停没落到策略文件：${applied.error}")
         val targets = health.snapshot().clients.values.filter { it.registered }.map { it.pkg }
             .ifEmpty { HealthStore.CLIENTS.filter { isInstalled(it) } }
+        // 本地先生效、先落盘（界面马上能看到），再逐个通知客户端；通知结果回来再补上确认情况。
+        health.setEmergency(Emergency.trigger(nowWall, nowMono, reason, null, targets, emptyList()), nowWall)
+        health.flush(nowWall)
         val reached = ArrayList<String>()
         for (pkg in targets) {
             // 每个客户端独立 + 独立超时：一个不回不影响其他（T16/T04）。
@@ -285,12 +341,17 @@ class WatchService : Service() {
         notifyStatus(emptyMap())
     }
 
+    @Synchronized
     fun cancelEmergency() {
         val now = clock.now()
-        policies.setEmergency(now, null, PolicyStore.EMERGENCY_NONE)
+        val applied = policies.setEmergency(now, null, PolicyStore.EMERGENCY_NONE)
+        if (!applied.ok) Arc.log(this, "取消紧急暂停没落到策略文件：${applied.error}")
         health.setEmergency(null, now)
         health.flush(now)
-        Arc.log(this, "取消紧急暂停，按规则恢复监管")
+        // P0-6c：必须告诉客户端。以前这里只改自己的文件（SENTINEL-V2-NOTES.md:348 自认），
+        // 客户端那条 STOPPED 永远留着，本地兜底一直是停的。
+        val reached = notifyClientsResume("哨兵取消紧急暂停，恢复监管")
+        Arc.log(this, "取消紧急暂停，按规则恢复监管；已通知客户端 ${reached.size} 个")
         notifyStatus(emptyMap())
     }
 

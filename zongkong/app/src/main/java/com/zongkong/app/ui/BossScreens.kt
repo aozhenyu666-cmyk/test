@@ -147,7 +147,7 @@ fun DossierScreen(nav: NavHostController) {
                 d.escalation?.takeIf { it.until > now }?.let {
                     Text("总控自己收紧到“${it.stance.label}”，到 ${clock(it.until)}：${it.reason}", style = MaterialTheme.typography.bodySmall, color = sig.strict)
                 }
-                Hint("起点 ${Boss.BASE}，看最近 ${Boss.WINDOW_DAYS} 天：说法属实 +3、对不上 −12、说不清 −4；约定做到 +4、没做到 −10；总控时间做完 +3、提前退出 −5；不理也有代价：总控主动问了 2 小时不回 −3（一天最多 4 次），15 分钟内回 +1，到点提醒后 45 分钟没开始也没推迟 −2（一天最多 3 次）；记下做完一步 +1（一天最多 4 次）。低于 40 是“严格”：不给紧急放行、不接受口头说法。")
+                Hint("起点 ${Boss.BASE}，看最近 ${Boss.WINDOW_DAYS} 天：说法属实 +3、对不上 −12、说不清 −4；约定做到 +4、没做到 −10；总控时间做完 +3、提前退出 −5；不理也有代价：总控主动问了 2 小时不回 −3（一天最多 4 次），15 分钟内回 +1，到点提醒后 45 分钟没开始也没推迟 −2（一天最多 3 次）；记下做完一步 +1（一天最多 4 次）。低于 40 是“严格”：不接受口头说法，紧急放行不关闭但理由要写满 60 字。")
                 Text("强度：" + com.zongkong.core.boss.Intensity.describe(config.boss, stance), style = MaterialTheme.typography.labelLarge, color = stanceColor(stance), modifier = Modifier.testTag("intensity"))
                 if (cred < 60) Hint("怎么爬回来：它问你，15 分钟内回 +1；做完一步 +1（各一天最多 4 次）；说法被核实 +3；守住约定 +4；做完总控时间 +3。最快的是今天就守住一条约定、做完一次总控时间。")
             }

@@ -50,6 +50,35 @@ object GuardHealth {
     @Volatile var lastChallenge: String = ""
         private set
 
+    /**
+     * 本地自检（P0-1）：**不经过哨兵**，直接往 a11y 线程投一个探针，看它在预算内回不回来。
+     *
+     * 存在的理由见 [LocalSelfCheck] 的类注释：原先「自己健康」只看哨兵发起的 dispatcherAck，
+     * 哨兵一沉默必然 false，叠加 `sentinelHealthy` 60s 缓存窗口比 ack 30s 窗口更长，
+     * 导致 `selfHealthy = true` 必然蕴含 `sentinelHealthy = true` —— 本地兜底整条链生产不可达。
+     *
+     * 这里只做接线：判定逻辑全在 [LocalSelfCheck]（可注入时钟，纯 JVM 可测）。
+     */
+    private val selfCheck = LocalSelfCheck(nowMono = mono)
+
+    fun localSelfProbe(): Boolean {
+        val result = selfCheck.probe(a11yPost)
+        if (!result.ok) noteProbeFailure(result.atMono, result.verdict.label)
+        return result.ok
+    }
+
+    /** 本地自检最近一次是否通过（不触发新的探针）。 */
+    fun localSelfProbeFresh(nowMono: Long = mono()): Boolean = selfCheck.fresh(nowMono)
+
+    private fun noteProbeFailure(nowMono: Long, why: String) {
+        // 诊断日志也要节流：a11y 线程卡死时每 15s 一条会把眼睛日志刷满。
+        if (nowMono - localProbeFailLoggedAtMono < 60_000) return
+        localProbeFailLoggedAtMono = nowMono
+        runCatching { Diag.log(context(), "local_probe_fail", "本地自检失败：$why") }
+    }
+
+    @Volatile private var localProbeFailLoggedAtMono = 0L
+
     fun init(context: Context): ClientPolicyStore {
         val app = context.applicationContext
         ctx = app
@@ -207,5 +236,7 @@ object GuardHealth {
 
     fun resetForTest() {
         a11yPost = null
+        selfCheck.reset()
+        localProbeFailLoggedAtMono = 0L
     }
 }
