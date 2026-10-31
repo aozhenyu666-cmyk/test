@@ -108,6 +108,19 @@ class ReflexTest {
     }
 
     @Test
+    fun gateUsesLibraryChoicesBeforeWaiting() {
+        // 用户报告：题库里 165 道题，打开娱乐应用却只让等。没配模型、判卷断了、连错两次，都应该改做题库选择题
+        val noLlm = GateInput(strandReady = false, bankReady = false, judgeOk = false, hasReflex = false, wrongInRow = 0, choiceReady = true)
+        assertEquals(Main.CHOICE, GatePlan.pick(noLlm))
+        assertEquals(Main.CHOICE, GatePlan.pick(noLlm.copy(hasReflex = true)))
+        assertEquals(Main.CHOICE, GatePlan.pick(noLlm.copy(judgeOk = true, wrongInRow = 2, freshReady = true)))
+        // 模型在、题能拆出要点：仍然先走要点判卷；题库选择题排在现出一题之前
+        assertEquals(Main.BANK, GatePlan.pick(noLlm.copy(judgeOk = true, bankReady = true)))
+        assertEquals(Main.CHOICE, GatePlan.pick(noLlm.copy(judgeOk = true, freshReady = true)))
+        assertEquals(Main.WAIT, GatePlan.pick(noLlm.copy(choiceReady = false)))
+    }
+
+    @Test
     fun morningOncePerDayInWindow() {
         val c = MorningConfig()
         assertTrue(Morning.shouldWake(c, 7, 100, 99))

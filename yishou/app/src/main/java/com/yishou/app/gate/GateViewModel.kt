@@ -63,6 +63,12 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     private var fade = FadeState()
     private var kind = ""
     private var fadeRecorded = false
+    /** 本机判对错的选择题：这一道、点了哪个、这一回从什么时候算起 */
+    var choice: Dealt? = null; private set
+    var chosen: Int? = null; private set
+    var choiceRight = 0; private set
+    private var choiceShownAt = 0L
+    private var visitStartedAt = 0L
 
     fun changed() { _state.update { it.copy(revision = it.revision + 1) } }
     private fun run(block: suspend () -> Unit) {
@@ -79,6 +85,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         if (startedFor == (pkg to group) && _state.value.passMinutes == null) return
         generation++; operation?.cancel(); cancelWait(); startedFor = pkg to group
         judgeDown = false; skippedCards.clear(); echoChecked = false; recallTries = 0
+        visitStartedAt = System.currentTimeMillis(); choiceRight = 0
         val prefs = yishou.settings.app.value
         val now = System.currentTimeMillis()
         _state.value = GateState(triggerPackage = pkg, group = group, appLabel = label,
@@ -89,22 +96,35 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshPartnerClose() { viewModelScope.launch { refreshPartnerCloseNow() } }
     private suspend fun refreshPartnerCloseNow() { _state.update { it.copy(partnerPending = yishou.partner.pendingClose() != null) } }
 
-    private suspend fun availableBank(): List<Dealt> = yishou.database.cards().unusedBank().mapNotNull { row ->
-        if (!row.verified || row.id in skippedCards) null else runCatching {
-            val c = Card.fromJson(row.json)
-            if (LockedQuestions.fromCard(row.id, c) == null) null else Dealt(row, c, false)
-        }.getOrNull()
+    /** 和「题库与素材」页同一批题：没做过的先出，都做过了从最久没碰的轮 */
+    private suspend fun libraryChoices(): List<Dealt> {
+        val cards = yishou.database.cards()
+        val rows = cards.libraryKeyed()
+        val last = cards.lastDone().associate { it.cardId to it.at }
+        val byId = rows.associateBy { it.id }
+        val skip = skippedCards.toSet()
+        return withContext(Dispatchers.Default) { GateChoices.order(rows.map { ChoiceCandidate(it.id, it.verified, it.source, it.createdAt, last[it.id]) }, skip)
+            .mapNotNull { id ->
+                val row = byId.getValue(id)
+                runCatching { Card.fromJson(row.json) }.getOrNull()
+                    ?.takeIf { it.options.size == 4 && it.answer in 0..3 }
+                    ?.let { Dealt(row, it, redo = row.usedAt != null) }
+            } }
     }
     private suspend fun pick() {
         probe = null; review = null; triggerSaved = false; recall = null; recallFeedback = null; recallingEcho = false; ice = null
         session.stop()
         val open = StrandStore(dao).open()
-        val bank = availableBank()
+        choice = null; chosen = null
+        val library = libraryChoices()
         val refs = dao.reflexes().map { it.value() }
         val todayRefs = availableReflexes(refs)
         val llm = yishou.settings.llm.value.isComplete
+        // 判卷用得上时，才去挑能拆出要点的题；否则直接做选择题
+        val bank = if (llm && !judgeDown) withContext(Dispatchers.Default) { library.filter { LockedQuestions.fromCard(it.row.id, it.card) != null } } else emptyList()
         val mode = GatePlan.pick(GateInput(open != null && (open.pending != null || !judgeDown), bank.isNotEmpty(),
-            llm && !judgeDown, todayRefs.isNotEmpty() && recallTries < 3, _state.value.wrongInRow, freshReady = llm))
+            llm && !judgeDown, todayRefs.isNotEmpty() && recallTries < 3, _state.value.wrongInRow, freshReady = llm,
+            choiceReady = library.isNotEmpty()))
         _state.update { it.copy(mode = mode) }
         when (mode) {
             GateMain.STRAND -> {
@@ -126,6 +146,11 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
                 prepareBank()
                 ice = BankOpening.ice(bankQuestion!!.id, bank.mapNotNull { LockedQuestions.fromCard(it.row.id, it.card) }, kotlin.random.Random.nextLong())
             }
+            GateMain.CHOICE -> {
+                // 不用模型：题目、选项一起给，本机按题包里的答案判
+                bankQuestion = null; askingFirst = false; feed = emptyList()
+                choice = library.first(); choiceShownAt = System.currentTimeMillis()
+            }
             GateMain.FRESH -> {
                 // 题库没有能用的题：现出一道锁好的题，并在后台再备一道
                 val q = FreshQuestions.take(yishou)
@@ -137,7 +162,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             GateMain.LOW_ENERGY -> recall = Reflexes.pick(todayRefs, System.currentTimeMillis())
             GateMain.WAIT -> Unit
         }
-        if (!echoChecked && (mode == GateMain.STRAND || mode == GateMain.BANK || mode == GateMain.FRESH)) {
+        if (!echoChecked && (mode == GateMain.STRAND || mode == GateMain.BANK || mode == GateMain.CHOICE || mode == GateMain.FRESH)) {
             echoChecked = true
             refs.filter { it.dueAt <= System.currentTimeMillis() && it.id !in recalledToday() }.minByOrNull { it.dueAt }?.let {
                 recall = it; recallingEcho = true
@@ -204,6 +229,22 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         review = TurnReview(f.question, f.answer, f.trace!!, f.verdict!!.copy(passed = correct, note = if (correct) "答案和要点都过了" else "选项没对上"))
         if (!correct) _state.update { it.copy(wrongInRow = it.wrongInRow + 1) }
         session.state.value.dealt?.let { skippedCards += it.row.id }
+    }
+    /** 选择题点了一个：记一手（和题库页、总控看到的是同一份记录），答对的数从记录里重算 */
+    fun selectChoice(option: Int) = run {
+        val d = choice ?: return@run
+        if (chosen != null || option !in 0..3) return@run
+        chosen = option
+        skippedCards += d.row.id
+        val round = Round(d.card, RoundConfig(checks = 0, allowChange = false)).bet(option, Conf.MID)
+        yishou.cardEngine.record(d, round, CardMode.GATE, 1, System.currentTimeMillis() - choiceShownAt)
+        choiceRight = GateChoices.rightSince(yishou.database.cards().attemptsSince(visitStartedAt), visitStartedAt)
+        if (!round.firstCorrect) _state.update { it.copy(wrongInRow = it.wrongInRow + 1) }
+    }
+    fun passChoice() = run {
+        if (!mayGrant() || _state.value.mode != GateMain.CHOICE) return@run
+        val attempts = yishou.database.cards().attemptsSince(visitStartedAt)
+        issuer.issueChoices(_state.value.group, attempts, visitStartedAt)?.let { finishGrant(it, DayStats.GATE_PASS) }
     }
     fun retry() = run {
         if (_state.value.mode == GateMain.STRAND && work.review != null) work.next()

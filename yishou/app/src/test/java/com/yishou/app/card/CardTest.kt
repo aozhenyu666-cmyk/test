@@ -7,6 +7,7 @@ import com.yishou.app.data.CardDao
 import com.yishou.app.data.CardMode
 import com.yishou.app.data.CardRow
 import com.yishou.app.data.CardSource
+import com.yishou.app.data.LastDone
 import com.yishou.app.data.SetStatus
 import com.yishou.app.llm.CardGen
 import com.yishou.app.llm.LlmError
@@ -50,6 +51,8 @@ class FakeCardDao : CardDao() {
     override suspend fun recent(n: Int) = cards.takeLast(n).reversed()
     override suspend fun unusedBank() = cards.filter { it.usedAt == null && it.source == CardSource.BANK }
     override fun observeBank(): Flow<List<CardRow>> = emptyFlow()
+    override suspend fun libraryKeyed() = cards.filter { it.source != CardSource.AI && it.verified }.sortedBy { it.createdAt }
+    override suspend fun lastDone() = attempts.groupBy { it.cardId }.map { (id, xs) -> LastDone(id, xs.maxOf { it.createdAt }) }
     override suspend fun insertAttempt(attempt: CardAttempt): Long {
         val id = attempts.size + 1L
         attempts += attempt.copy(id = id)

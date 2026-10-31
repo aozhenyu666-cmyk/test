@@ -30,6 +30,8 @@ class PassIssuerTest {
         assertFalse(PassIssuer.eligible(s.copy(dealt = null)))
         assertFalse(PassIssuer.eligible(s.copy(dealt = s.dealt!!.copy(row = row.copy(verified = false)))))
         assertFalse(PassIssuer.eligible(s.copy(dealt = s.dealt!!.copy(row = row.copy(source = CardSource.AI)))))
+        // 题库页上拍照收的题和导入的一样能换放行
+        assertTrue(PassIssuer.eligible(s.copy(dealt = s.dealt!!.copy(row = row.copy(source = CardSource.PHOTO)))))
         assertFalse(PassIssuer.eligible(s.copy(gateVerdict = null)))
         assertFalse(PassIssuer.eligible(s.copy(round = s.round!!.copy(card = card.copy(answer = 0)))))
     }

@@ -40,6 +40,8 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
             LibraryEntry("card", row.id, c.question, (c.sentences + c.question + c.options.mapIndexed { i, s -> "${'A' + i}．$s" } + "答案：${'A' + c.answer}" + "解析：${c.explain}").joinToString("\n"), ids["card" to row.id]?.categoryId ?: 0, row.createdAt)
         }.getOrNull() } + mats.map { LibraryEntry("material", it.id, it.title, it.text, ids["material" to it.id]?.categoryId ?: 0, it.createdAt) }
     }.map { it.sortedByDescending { e -> e.at } }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    /** 收费站从这里出题：有答案的选择题才能本机判对错 */
+    val gateReady = dao.cards().map { rows -> rows.count { it.verified } }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
     var busy by mutableStateOf(false); private set
     var note by mutableStateOf<String?>(null); private set
     init { work { yishou.library.indexMissing(); "已有内容已归类，随时可以手动移动" } }
@@ -68,6 +70,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 fun LibraryScreen(onBack: () -> Unit, onRoute: (String) -> Unit, vm: LibraryViewModel = viewModel()) {
     val entries by vm.entries.collectAsStateWithLifecycle()
     val categories by vm.categories.collectAsStateWithLifecycle()
+    val gateReady by vm.gateReady.collectAsStateWithLifecycle()
     var selected by rememberSaveable { mutableStateOf<Long?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     var name by rememberSaveable { mutableStateOf("") }
@@ -84,6 +87,11 @@ fun LibraryScreen(onBack: () -> Unit, onRoute: (String) -> Unit, vm: LibraryView
         LazyColumn(Modifier.padding(padding).fillMaxSize().imePadding(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
                 Text("按分类收，按关键词找。选中某一页后导入，就收到这一页；在“全部”导入会自动分类。")
+                Text(
+                    if (gateReady > 0) "打开娱乐应用时，收费站就从这里出题：有答案的选择题 $gateReady 道。"
+                    else "收费站从这里出题，但还没有带答案的选择题：导入时写上【答案】或文末答案表。",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary,
+                )
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilterChip(selected == null, { selected = null }, label = { Text("全部 ${entries.size}") })
                     categories.forEach { tab -> FilterChip(selected == tab.id, { selected = tab.id }, label = { Text("${tab.name} ${entries.count { it.category == tab.id }}") }) }

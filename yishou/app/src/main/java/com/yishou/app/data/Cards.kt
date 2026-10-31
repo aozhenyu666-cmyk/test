@@ -68,6 +68,8 @@ data class CardAttempt(
     val createdAt: Long,
 )
 
+data class LastDone(val cardId: Long, val at: Long)
+
 @Dao
 abstract class CardDao {
     @Insert
@@ -89,6 +91,14 @@ abstract class CardDao {
 
     @Query("SELECT * FROM card WHERE source = 'bank' ORDER BY createdAt DESC")
     abstract fun observeBank(): Flow<List<CardRow>>
+
+    /** 「题库与素材」页里有答案的题卡（导入的、拍的；模型出的不算）：收费站从这里出题 */
+    @Query("SELECT * FROM card WHERE source != 'ai' AND verified = 1 ORDER BY createdAt")
+    abstract suspend fun libraryKeyed(): List<CardRow>
+
+    /** 每张题卡最近一次做的时间：收费站轮题时先出最久没碰的 */
+    @Query("SELECT cardId, MAX(createdAt) AS at FROM card_attempt GROUP BY cardId")
+    abstract suspend fun lastDone(): List<LastDone>
 
     @Query("SELECT * FROM card ORDER BY createdAt DESC LIMIT :n")
     abstract suspend fun recent(n: Int): List<CardRow>

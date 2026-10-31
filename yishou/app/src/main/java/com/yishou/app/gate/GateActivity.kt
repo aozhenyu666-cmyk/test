@@ -232,6 +232,7 @@ private fun GateScreen(s: GateState, vm: GateViewModel, onReturn: () -> Unit, on
                     Button(onClick = vm::startWait, enabled = !s.busy) { Text("等 10 分钟，换 5 分钟") }
                     OutlinedButton(onClick = vm::retryUnavailable, enabled = !s.busy) { Text("重新找题") }
                 }
+                s.mode == com.yishou.app.reflex.Main.CHOICE -> ChoiceGateView(s, vm)
                 else -> {
                     if (s.mode == com.yishou.app.reflex.Main.STRAND) vm.work.strand?.let { com.yishou.app.ui.StrandHeading(it) }
                     ProbeGateView(s, vm)

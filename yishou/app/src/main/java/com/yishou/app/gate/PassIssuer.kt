@@ -23,6 +23,12 @@ class PassIssuer(private val dao: AppDao, private val clock: () -> Long = System
         return save(group, minutes)
     }
 
+    /** 题库选择题：按数据库里记下的作答重算这一回答对几道，够数才放行 15 分钟。 */
+    suspend fun issueChoices(group: String, attempts: List<com.yishou.app.data.CardAttempt>, since: Long): Pass? {
+        if (group.isBlank() || !GateChoices.passed(attempts, since)) return null
+        return save(group, com.yishou.app.reflex.GatePlan.FULL_PASS_MIN)
+    }
+
     /** 默写也在这里重算；界面不能把一个布尔值当凭证。 */
     suspend fun issueRecall(group: String, reflex: com.yishou.app.reflex.Reflex, answer: String): Pass? {
         if (group.isBlank() || !com.yishou.app.reflex.Reflexes.recalled(reflex.action, answer)) return null
@@ -47,7 +53,7 @@ class PassIssuer(private val dao: AppDao, private val clock: () -> Long = System
             val dealt = s.dealt ?: return false
             val round = s.round ?: return false
             return s.active && s.mode == CardMode.GATE && s.done && !s.loading && !s.needsKey &&
-                dealt.row.id > 0 && dealt.row.source == CardSource.BANK && dealt.row.verified &&
+                dealt.row.id > 0 && dealt.row.source != CardSource.AI && dealt.row.verified &&
                 round.card == dealt.card && s.gateVerdict?.passed == true && s.gateVerdict.unavailable == false && round.step == Step.REVEAL &&
                 round.help == 0 && round.finalCorrect
         }
