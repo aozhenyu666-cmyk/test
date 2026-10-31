@@ -253,7 +253,7 @@ fun HomeScreen(
             }
 
             Button(onClick = { onRoute("assistant") }, modifier = Modifier.fillMaxWidth().height(54.dp)) { Text("AI 助手 · 直接聊") }
-            EntertainmentGateCard(onSettings = { onRoute("watched") })
+            EntertainmentGateCard(onSettings = { onRoute("watched") }, onDoctor = { onRoute("gatedoctor") })
 
             var more by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
             TextButton(onClick = { more = !more }) { Text(if (more) "收起更多" else "更多（不再更新）") }
