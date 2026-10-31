@@ -104,10 +104,12 @@ object Policy {
         val emergencyPerDay: Int,
         val emergencyMinutes: Int,
         val degradedPerDay: Int,
+        /** 单道关卡最多连续拦截几小时；0 = 不限。 */
+        val blockMaxHours: Int = Config.DEFAULT_BLOCK_MAX_HOURS,
     )
 
     fun rulesOf(c: Config) = Rules(
-        c.silenceHours, c.activeStart, c.activeEnd, c.dailyQuotaMin, c.emergencyPerDay, c.emergencyMinutes, c.degradedPerDay,
+        c.silenceHours, c.activeStart, c.activeEnd, c.dailyQuotaMin, c.emergencyPerDay, c.emergencyMinutes, c.degradedPerDay, c.blockMaxHours,
     )
 
     /** “0 表示不限”的上限：0 最松，其余越大越松。 */
@@ -163,6 +165,14 @@ object Policy {
             "降级验收每天 ${r.degradedPerDay} 次",
             r.degradedPerDay != old.degradedPerDay, r.degradedPerDay > old.degradedPerDay,
             { it.copy(degradedPerDay = r.degradedPerDay) }, { op = op.copy(degradedPerDay = r.degradedPerDay) },
+        )
+        // 关卡拦截上限（P0-5）。0 = 不限 = 最严。
+        // 拦得更久是收紧（立即生效）；拦得更短、或从「不限」改成有上限，是放宽（24 小时后）。
+        field(
+            "关卡最多拦 ${if (r.blockMaxHours == 0) "不限" else "${r.blockMaxHours} 小时"}",
+            r.blockMaxHours != old.blockMaxHours,
+            r.blockMaxHours != 0 && (old.blockMaxHours == 0 || r.blockMaxHours < old.blockMaxHours),
+            { it.copy(blockMaxHours = r.blockMaxHours) }, { op = op.copy(blockMaxHours = r.blockMaxHours) },
         )
 
         if (laterParts.isNotEmpty()) {
@@ -304,6 +314,7 @@ object Policy {
             emergencyPerDay = op.emergencyPerDay ?: c.emergencyPerDay,
             emergencyMinutes = op.emergencyMinutes ?: c.emergencyMinutes,
             degradedPerDay = op.degradedPerDay ?: c.degradedPerDay,
+            blockMaxHours = op.blockMaxHours ?: c.blockMaxHours,
         )
         is ChangeOp.Pause -> c.copy(pausedUntil = op.until)
         is ChangeOp.Yishou -> c.copy(yishouInfluence = op.on, yishouPassCap = op.cap)

@@ -225,14 +225,18 @@ class Actions(private val context: Context, private val store: Store) {
 
     fun emergency(reason: String): String {
         val now = System.currentTimeMillis()
-        // 总控者的态度是“严格”时不给紧急放行（信用低于 40，或者总控自己收紧了）
-        if (store.stance(now) == com.zongkong.core.boss.Stance.STRICT) {
-            return "总控现在的态度是“严格”（信用 ${store.credibility(now)}），不给紧急放行。去跟总控说清楚，或者把约定做到。"
-        }
+        // P0-5：严格态度不再「关闭」紧急放行。
+        //
+        // 这里以前是直接 return 的，后果是一套自我加固的死锁：
+        //   信用低 → 态度严格 → 不发紧急放行 → 严管解除不了 → 继续被扣分 → 信用更低。
+        // 再叠加「关卡一直拦」和「休假要等 24 小时」，用户只剩两条路：卸载、关无障碍。
+        // 现在改成：照样给，但门槛更高（理由更长）、并且明确留痕（写进日终验收）。
+        // 「严格」应该体现在要求更高，不是把人锁在门外。
+        val strict = store.stance(now) == com.zongkong.core.boss.Stance.STRICT
         var msg = ""
         store.updateToday(now) { day ->
             val status = com.zongkong.core.Engine.evaluate(store.config.value, day, now, store.zone)
-            val (next, m) = DayOps.emergency(day, store.config.value, status, reason, now)
+            val (next, m) = DayOps.emergency(day, store.config.value, status, reason, now, strict)
             msg = m
             next ?: day
         }

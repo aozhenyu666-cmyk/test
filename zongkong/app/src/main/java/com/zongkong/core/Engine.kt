@@ -20,6 +20,13 @@ data class GateStatus(
     /** 这道关卡此刻是否在拦截娱乐应用。 */
     val blocking: Boolean,
     val attempts: Int,
+    /**
+     * 拦截时长已经用尽（P0-5）：关卡仍未交，但不再拦。
+     *
+     * 界面要如实说明「还在超时，但拦截到期了」，不要假装它已经完成，
+     * 也不要让它继续无期限地挡住整台手机。
+     */
+    val blockExpired: Boolean = false,
 ) {
     val done: Boolean get() = passed != null
 }
@@ -91,11 +98,17 @@ data class Status(
     val quotaMin: Int,
 ) {
     val doneCount: Int get() = gates.count { it.done }
+
+    /** 有没有关卡「拦到上限了但还欠着」（P0-5）。界面要如实说，不许假装已完成。 */
+    val blockExpired: Boolean get() = gates.any { it.blockExpired }
+
     val headline: String
         get() = when {
             paused -> "休假中"
             emergencyUntil != null -> "紧急放行中"
             strict -> "严管"
+            // P0-5：关卡拦到上限、账还欠着 —— 不是「放行」，也不是「严管」。
+            blockExpired -> "欠账放行"
             else -> "放行"
         }
 }
@@ -130,11 +143,22 @@ object Engine {
                     deadlineAt - now <= DUE_SOON_MILLIS -> GatePhase.DUE_SOON
                     else -> GatePhase.OPEN
                 }
-                val blocking = passed == null && when (gate.block) {
-                    BlockMode.FROM_OPEN -> now >= openAt
-                    BlockMode.AFTER_DEADLINE -> now >= deadlineAt
+                // P0-5：拦截必须有尽头。
+                // 从「开始拦」的时刻起最多拦 config.blockMaxHours 小时，超时后
+                // blocking=false（只保留 OVERDUE 的提示），避免「交不了/放不了/休不了」的死锁。
+                // blockMaxHours <= 0 表示不设上限（旧行为）。
+                val blockFrom = when (gate.block) {
+                    BlockMode.FROM_OPEN -> openAt
+                    BlockMode.AFTER_DEADLINE -> deadlineAt
                 }
-                GateStatus(gate, phase, openAt, deadlineAt, passed, blocking, day.submissions.count { it.gateId == gate.id })
+                val blockUntil = if (config.blockMaxHours > 0) {
+                    blockFrom + config.blockMaxHours * 3600_000L
+                } else {
+                    Long.MAX_VALUE
+                }
+                val blocking = passed == null && now >= blockFrom && now < blockUntil
+                val blockExpired = passed == null && now >= blockUntil
+                GateStatus(gate, phase, openAt, deadlineAt, passed, blocking, day.submissions.count { it.gateId == gate.id }, blockExpired)
             }
 
         val reasons = mutableListOf<Reason>()
@@ -196,6 +220,11 @@ object Engine {
         status.paused -> "休假中，不拦截"
         status.emergencyUntil != null -> "紧急放行中：${status.reasons.firstOrNull()?.text ?: "到点后恢复检查"}"
         status.strict -> status.reasons.first().text
+        // P0-5：拦截到期了，但账没消。说清楚是「放你出去」而不是「你做到了」。
+        status.blockExpired -> {
+            val g = status.gates.first { it.blockExpired }
+            "「${g.gate.title}」还欠着，拦截已到上限 —— 今天先放行，这笔账记着"
+        }
         else -> {
             val next = status.gates.firstOrNull { !it.done && it.phase != GatePhase.NOT_OPEN }
                 ?: status.gates.firstOrNull { !it.done }
