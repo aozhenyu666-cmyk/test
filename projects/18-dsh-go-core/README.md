@@ -14,6 +14,7 @@
 
 | 内容 | 入口 |
 |---|---|
+| **从这里开始**：自用分支的维护、官方升级流程、手机部署、以后扩展放哪一层（给 GPT / DeepSeek） | [docs/MAINTENANCE.md](docs/MAINTENANCE.md) |
 | 源码审计（事件入口、前台识别、弹窗/通知、任务依赖、结果记录、后台恢复、历史项目复用分类） | [docs/AUDIT.md](docs/AUDIT.md) |
 | 架构图、四个模块、统一事件结构、改动文件清单、技术风险 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | 验证记录与真机测试步骤（真机项全部 NOT_TESTED） | [docs/VALIDATION.md](docs/VALIDATION.md) |
@@ -42,6 +43,8 @@ git am /path/to/0003-proactive-android.patch    # 第二轮，含共享文件小
 之后在有 Android SDK 的机器上 `cd app && flutter build apk --debug` 构建（本轮沙箱没有 Android SDK，完整构建是 NOT_TESTED）。
 
 ## 当前状态
+
+- **2026-10-31 起**：开发分支是 aozhenyu666-cmyk/dsh-Go 的 `proactive/on-1.0.4`，基于官方 1.0.4 的真实提交；之前基于快照的分支已冻结。下面几轮的补丁与日志作为历史记录保留。
 
 - 闭环逻辑 JVM 测试 17/17 通过；Android 新代码对 API 35 做了编译检查；`flutter analyze` 无问题；手机操控 208 个 Flutter 测试（含截图对比）全部通过；全量 Flutter 测试 8220 通过，8 个截图失败在干净上游上同样失败，与本改动无关。
 - 真机：全部 NOT_TESTED，步骤见验证记录第 3 节。
