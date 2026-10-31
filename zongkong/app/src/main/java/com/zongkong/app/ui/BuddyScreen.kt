@@ -195,6 +195,7 @@ private fun BuddySettings(nav: NavHostController) {
                 }, modifier = Modifier.fillMaxWidth()) { Text("保存") }
             }
         }
+        item { BridgePanel() }
         item {
             Panel {
                 Text("它记得你的事（${book.facts.size}）", style = MaterialTheme.typography.titleSmall)
@@ -213,5 +214,43 @@ private fun BuddySettings(nav: NavHostController) {
                 OutlinedButton(onClick = { nav.navigate("settings") }) { Text("AI 接口") }
             }
         }
+    }
+}
+
+/** 外接大脑：把「此刻发生了什么」推给电脑上 DeepSeek Harness 里的伙伴（大肥鱼那一套），它通过 QQ 找你。 */
+@Composable
+private fun BridgePanel() {
+    val context = LocalContext.current
+    val app = context.zk
+    val sig = LocalSignals.current
+    val book by app.buddy.book.collectAsStateWithLifecycle()
+    val b = book.bridge
+    var url by remember(b.url) { mutableStateOf(b.url) }
+    var token by remember(b.token) { mutableStateOf(b.token) }
+    var result by remember { mutableStateOf(app.buddy.lastBridge) }
+    Panel {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("外接大脑（DeepSeek Harness）", style = MaterialTheme.typography.titleSmall)
+                Hint("开着时，手机把「刚解锁、刚打开抖音、刷了多久、一手哪题没接住」推给电脑上的伙伴，由它在当下找你聊（通过 QQ）。")
+            }
+            Switch(checked = b.enabled, onCheckedChange = { on -> app.buddy.setBridge { it.copy(enabled = on) } }, modifier = Modifier.testTag("bridge-enabled"))
+        }
+        OutlinedTextField(url, { url = it.trim() }, label = { Text("地址（https://…/zongkong/event）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(token, { token = it.trim() }, label = { Text("口令") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("开着时手机里的${book.config.name}不再自己开口", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Switch(checked = b.muteLocal, onCheckedChange = { on -> app.buddy.setBridge { it.copy(muteLocal = on) } })
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { app.buddy.setBridge { it.copy(url = url, token = token) } }) { Text("保存") }
+            OutlinedButton(onClick = {
+                app.buddy.setBridge { it.copy(url = url, token = token) }
+                app.buddy.testBridge()
+                result = "发出去了，过几秒点「看结果」"
+            }) { Text("发一条测试") }
+            TextButton(onClick = { result = app.buddy.lastBridge.ifBlank { "还没有结果" } }) { Text("看结果") }
+        }
+        if (result.isNotBlank()) Text(result, style = MaterialTheme.typography.bodySmall, color = sig.muted)
     }
 }

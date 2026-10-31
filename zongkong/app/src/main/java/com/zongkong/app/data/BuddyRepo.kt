@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 
 /**
@@ -79,10 +81,91 @@ class BuddyRepo(private val context: Context, private val store: Store, private 
      * 自己开协程，不卡调用方。
      */
     fun maybeTick(now: Long = System.currentTimeMillis()) {
+        // 外接大脑：每次都看一眼有没有新事件（自己去重），有就推给 DSH
+        runCatching { bridgeTick(now) }.onFailure { Log.w(TAG, "外接大脑出错", it) }
+        val cfgB = _book.value.bridge
+        if (cfgB.enabled && cfgB.muteLocal) return
         val afterUnlock = Live.unlockedAt > Live.lastTick && now - Live.unlockedAt >= 30_000L
         if (now - Live.lastTick < TICK_MS && !afterUnlock) return
         Live.lastTick = now
         scope.launch { runCatching { tick(signals(now)) }.onFailure { Log.w(TAG, "伙伴检查出错", it) } }
+    }
+
+    // ---------- 外接大脑（DSH） ----------
+
+    @Volatile private var bridgeState = com.zongkong.core.buddy.BridgeState()
+    private val http by lazy { com.zongkong.core.Net.client(10) }
+
+    /** 最近一次推送的结果（界面显示）。 */
+    @Volatile var lastBridge: String = ""
+        private set
+
+    fun setBridge(f: (com.zongkong.core.buddy.BridgeConfig) -> com.zongkong.core.buddy.BridgeConfig) = update { it.copy(bridge = f(it.bridge)) }
+
+    private fun bridgeTick(now: Long) {
+        val cfg = _book.value.bridge
+        if (!cfg.enabled || cfg.url.isBlank()) return
+        val snap = snapshot(now)
+        val (events, next) = com.zongkong.core.buddy.Bridge.events(bridgeState, snap)
+        bridgeState = next
+        events.forEach { post(cfg, it, snap) }
+    }
+
+    /** 发一条测试事件，看 DSH 那边收不收得到。 */
+    fun testBridge() {
+        val cfg = _book.value.bridge
+        if (cfg.url.isBlank()) { lastBridge = "还没填地址"; return }
+        val snap = snapshot(System.currentTimeMillis())
+        post(cfg, com.zongkong.core.buddy.BridgeEvent(com.zongkong.core.buddy.Bridge.TEST, "总控发来的测试事件：连上了就随便跟他打个招呼"), snap)
+    }
+
+    private fun post(cfg: com.zongkong.core.buddy.BridgeConfig, e: com.zongkong.core.buddy.BridgeEvent, snap: com.zongkong.core.buddy.Snapshot) {
+        val url = cfg.url.trim()
+        if (!url.startsWith("https://")) {
+            // 安卓默认不让 App 走明文 http；而且手机在外面用流量时也够不着家里电脑的局域网地址
+            lastBridge = "${clock()} 地址要用 https://（用 Tailscale 或 Cloudflare Tunnel 把 DSH 暴露成 https，见部署报告）"
+            return
+        }
+        scope.launch {
+            lastBridge = try {
+                val body = com.zongkong.core.buddy.Bridge.payload(e, snap).toString()
+                    .toRequestBody("application/json; charset=utf-8".toMediaType())
+                val req = okhttp3.Request.Builder().url(cfg.url.trim()).post(body)
+                    .apply { if (cfg.token.isNotBlank()) header("Authorization", "Bearer ${cfg.token.trim()}") }
+                    .build()
+                http.newCall(req).execute().use { r -> "${clock()} ${e.kind} → ${r.code}" + if (r.isSuccessful) "" else "（${r.message}）" }
+            } catch (ex: Exception) {
+                "${clock()} ${e.kind} → 没发出去：${ex.message ?: ex.javaClass.simpleName}"
+            }
+        }
+    }
+
+    private fun clock(): String = java.time.LocalTime.now(store.zone).withNano(0).toString()
+
+    /** 外接大脑要的「此刻」。 */
+    private fun snapshot(now: Long): com.zongkong.core.buddy.Snapshot {
+        val s = signals(now)
+        val zone = store.zone
+        val work = store.work.value
+        val status = runCatching { store.status(now) }.getOrNull()
+        val from = DayClock.startOf(DayClock.date(now, zone), zone)
+        val today = YishouLedger.between(store.yishouBook.value, from, now + 1)
+        return com.zongkong.core.buddy.Snapshot(
+            now = now,
+            pkg = Live.fgPkg.orEmpty(),
+            appName = s.appName,
+            since = Live.fgSince,
+            play = s.appIsPlay,
+            unlockedAt = Live.unlockedAt,
+            strict = status?.strict == true,
+            headline = status?.let { st -> st.reasons.firstOrNull()?.text ?: st.headline }.orEmpty(),
+            mainTask = runCatching { com.zongkong.core.plan.Plans.mainAction(store.plans.value, work, now, zone)?.title }.getOrNull().orEmpty(),
+            step = runCatching { com.zongkong.core.work.Focus.current(work, now, zone, store.mainKey(now)).action?.title }.getOrNull().orEmpty(),
+            yishouLine = if (today.isEmpty()) "" else YishouLedger.line(today),
+            missAt = s.missAt,
+            miss = s.miss,
+            screenOn = s.interactive,
+        )
     }
 
     /** 不掷骰子，马上开口（界面上的「让它说一句」）。 */
