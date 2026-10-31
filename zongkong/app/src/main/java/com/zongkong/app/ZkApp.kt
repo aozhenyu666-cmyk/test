@@ -36,6 +36,9 @@ class ZkApp : Application() {
     /** 参谋（AI 对话）。 */
     lateinit var chat: com.zongkong.app.data.ChatRepo
         private set
+    /** 伙伴（会主动找你说话、但不是总控的那个）。 */
+    lateinit var buddy: com.zongkong.app.data.BuddyRepo
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -47,6 +50,7 @@ class ZkApp : Application() {
         store = Store(this)
         actions = Actions(this, store)
         chat = com.zongkong.app.data.ChatRepo(this, store, actions)
+        buddy = com.zongkong.app.data.BuddyRepo(this, store, actions)
         Notifications.ensureChannels(this)
         com.zongkong.app.system.Reminders.reschedule(this)
         com.zongkong.app.system.Reminders.watchdog(this)

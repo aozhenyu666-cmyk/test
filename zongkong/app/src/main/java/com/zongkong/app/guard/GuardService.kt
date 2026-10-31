@@ -62,6 +62,7 @@ class GuardService : AccessibilityService() {
                         // 解锁了：锁屏时攒下的截图机会，过一小会儿补上；战友模式下打个招呼
                         nextShotAt = now + kotlin.random.Random.nextLong(20_000, 180_000)
                         unlockedAt = now
+                        com.zongkong.app.data.BuddyRepo.Live.unlockedAt = now
                     }
                 }
                 fgStartedAt = now
@@ -196,6 +197,8 @@ class GuardService : AccessibilityService() {
             fgSince = now
             fgStartedAt = now
             store.logSwitch(now, pkg)
+            com.zongkong.app.data.BuddyRepo.Live.fgPkg = pkg
+            com.zongkong.app.data.BuddyRepo.Live.fgSince = now
         }
         // 哨兵的解除闸门生效中（走过冷静期 + 二次手写核验）：总控也让路，什么都不拦
         if (SentinelClient.released(now)) {
@@ -356,6 +359,8 @@ class GuardService : AccessibilityService() {
         com.zongkong.app.system.Buzz.tick(this)
         watch(now)
         com.zongkong.app.system.Partner.afterUnlock(this, unlockedAt, now)
+        // 伙伴：看看要不要主动找你说一句（自己节流、自己开协程）
+        runCatching { zk.buddy.maybeTick(now) }
     }
 
     /**

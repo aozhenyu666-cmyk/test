@@ -179,6 +179,11 @@
             android:name=".system.ReminderReceiver"
             android:exported="false" />
 
+        <!-- 通知里直接回复伙伴 -->
+        <receiver
+            android:name=".system.BuddyReplyReceiver"
+            android:exported="false" />
+
         <!-- 通知里直接回复总控 -->
         <receiver
             android:name=".system.ReplyReceiver"

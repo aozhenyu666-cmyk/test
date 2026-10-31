@@ -18,6 +18,8 @@ object Notifications {
     private const val CH_ALERT = "alert"
     private const val CH_HQ = "hq"
     private const val CH_AI = "ai"
+    private const val CH_BUDDY = "buddy"
+    private const val ID_BUDDY = 70
     private const val ID_HQ = 50
     private const val ID_AI = 60
     const val ID_STATUS = 1
@@ -44,6 +46,11 @@ object Notifications {
         nm.createNotificationChannel(
             NotificationChannel(CH_AI, "总控", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "总控主动发来的消息"
+            },
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CH_BUDDY, "伙伴", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "伙伴主动找你聊天（不是总控，不管规则）。嫌吵可以在这里改成静音"
             },
         )
     }
@@ -90,6 +97,32 @@ object Notifications {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
         post(context, ID_AI, n)
+    }
+
+    const val KEY_BUDDY_REPLY = "buddy_reply"
+
+    /** 伙伴说的一句话：像聊天软件一样，通知里直接回，回答也回到通知里。点开进伙伴页。 */
+    fun buddy(context: Context, name: String, text: String, silent: Boolean = false) {
+        ensureChannels(context)
+        val replyIntent = PendingIntent.getBroadcast(
+            context, ID_BUDDY + 5, Intent(context, BuddyReplyReceiver::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or (if (android.os.Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0),
+        )
+        val input = androidx.core.app.RemoteInput.Builder(KEY_BUDDY_REPLY).setLabel("回$name…").build()
+        val reply = NotificationCompat.Action.Builder(0, "回复", replyIntent).addRemoteInput(input).setAllowGeneratedReplies(false).build()
+        val n = NotificationCompat.Builder(context, CH_BUDDY)
+            .setSmallIcon(R.drawable.ic_stat_zongkong)
+            .setContentTitle(name)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .setContentIntent(open(context, "buddy", ID_BUDDY))
+            .addAction(reply)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setSilent(silent)
+            .build()
+        post(context, ID_BUDDY, n)
     }
 
     /** 回复发出去了：先显示“在想”。 */
@@ -181,6 +214,18 @@ object Notifications {
         } catch (e: SecurityException) {
             Log.w(TAG, "没有通知权限", e)
         }
+    }
+}
+
+/** 通知里直接回复伙伴。 */
+class BuddyReplyReceiver : android.content.BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val text = androidx.core.app.RemoteInput.getResultsFromIntent(intent)?.getCharSequence(Notifications.KEY_BUDDY_REPLY)?.toString()?.trim().orEmpty()
+        if (text.isEmpty()) return
+        val app = com.zongkong.app.zkApp(context)
+        // 先把通知换成「你：…」，免得回复框一直转圈
+        Notifications.buddy(context, app.buddy.book.value.config.name, "你：$text · 在想…", silent = true)
+        app.buddy.send(text, notify = true)
     }
 }
 

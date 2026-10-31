@@ -227,6 +227,7 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 composable("depts") { DeptsScreen(nav) }
                 composable("dept/{name}") { e -> DeptScreen(e.arguments?.getString("name").orEmpty(), nav) }
                 composable("chat") { ChatScreen(nav) }
+                composable("buddy") { BuddyScreen(nav) }
                 composable("wizard/plan") { PlanWizard(nav) }
                 composable("wizard/review") { TodayScreen(nav) }
                 composable("today") { TodayScreen(nav) }

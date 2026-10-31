@@ -13,8 +13,8 @@ android {
         applicationId = "com.zongkong.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 21
-        versionName = "0.17.0-link"
+        versionCode = 22
+        versionName = "0.18.0-buddy"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

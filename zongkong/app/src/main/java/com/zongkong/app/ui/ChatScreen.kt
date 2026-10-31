@@ -169,6 +169,7 @@ fun ChatScreen(nav: NavHostController) {
                 if (busy) MorphText("正在处理…", style = MaterialTheme.typography.labelMedium, color = sig.muted)
                 else StanceLine { nav.navigate("dossier") }
             }
+            TextButton(onClick = { nav.navigate("buddy") }, modifier = Modifier.testTag("buddy-open")) { Text("伙伴", color = sig.ai) }
             TextButton(onClick = { nav.navigate("flow") }, modifier = Modifier.testTag("flow-open")) { Text("流程", color = sig.ai) }
             TextButton(onClick = { nav.navigate("chat/threads") }, modifier = Modifier.testTag("chat-threads")) { Text("对话", color = sig.ai) }
             Box {

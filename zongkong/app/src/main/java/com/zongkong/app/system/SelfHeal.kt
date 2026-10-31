@@ -281,6 +281,12 @@ class KeepAliveService : Service() {
                         } catch (e: Throwable) {
                             Log.w("KeepAlive", "看门狗出错", e)
                         }
+                        // 伙伴：无障碍掉了也照样能主动找你（进程被闹钟拉起来时也走这里）
+                        try {
+                            this@KeepAliveService.zk.buddy.maybeTick()
+                        } catch (e: Throwable) {
+                            Log.w("KeepAlive", "伙伴出错", e)
+                        }
                         // 本地规则兜底与紧急暂停：不依赖无障碍 Handler，也不依赖网络（T05）。
                         try {
                             com.zongkong.app.healthwire.LocalGuardian.tick(this@KeepAliveService)
