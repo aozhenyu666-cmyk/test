@@ -31,6 +31,23 @@ object ClientCall {
         false
     }
 
+    /**
+     * 取消紧急暂停发出去的结果：true = 客户端回了确认。
+     *
+     * P0-6c：`WatchService.cancelEmergency` 以前只改自己的策略文件，**不通知客户端**，
+     * 客户端那条 STOPPED 就永远留着 —— 用户以为恢复了监管，本地兜底其实一直是停的。
+     */
+    fun notifyResume(c: Context, pkg: String, reason: String, timeoutMs: Long = 2_000): Boolean = try {
+        val args = Bundle().apply {
+            putInt("v", HealthStore.PROTOCOL_VERSION)
+            putString("reason", reason)
+            putString("from", "com.zongkong.sentinel")
+        }
+        call(c, pkg, "resumeEmergency", args, timeoutMs)?.getBoolean("ok", false) == true
+    } catch (_: Throwable) {
+        false
+    }
+
     /** 客户端是否可达（有 provider 就试一次 ping）。 */
     fun ping(c: Context, pkg: String, timeoutMs: Long = 1_500): Boolean = try {
         val args = Bundle().apply { putInt("v", HealthStore.PROTOCOL_VERSION) }

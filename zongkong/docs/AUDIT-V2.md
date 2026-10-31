@@ -66,18 +66,30 @@
 - `enforce()`（`:268-290`）会尊重 `strict=false`（紧急放行时），但 `lockdown()` 在同一条链上先执行（`:202`）→ 买了紧急放行，打开被拦应用**照样被弹回总控时间**。
 - 同一类问题：`guard/Watch.kt:151-157` 只用 `strict` 抑制答题页，紧急放行时答题页照样接管。
 
-### P0-5 低信誉三出口死锁（**已修**，见 §7）
+### P0-5 低信誉三出口死锁
 
 - `core/Engine.kt:133-136`：`blocking` 关卡从开放一直拦到当天结束，无上限、无自动降级。
 - `data/Actions.kt:229`：`stance == STRICT` 时**直接拒绝紧急放行**。
 - `core/Policy.kt:269-274`：休假要 24 小时冷静期才生效。
 - 三者叠加：**交不了、放不了、休不了**。用户唯一出路是卸载或关无障碍。
 
-修法见 §7 的两条：关卡拦截有上限（`Config.blockMaxHours`，默认 6 小时，到期放行但账照记）；
-严格态度下紧急放行不再关闭，改为理由门槛 60 字 + 留痕。休假 24 小时冷静期**保持不变**（它是防冲动的核心规矩），
-紧急放行成为当前可用的即时出口。
-
 ### P0-6 紧急暂停在客户端不过期 + 落盘失败伪装成"已确认"
+
+> **已修（PR #47，第三次提交）**，三条一起收口：
+> - **6a 客户端也会到期**：新增 `healthwire/EmergencyLapse.kt`（纯函数）。按下暂停的**那一刻**就把
+>   `untilWall` 算死并落盘（取「窗口结束」与「默认 2 小时上限」的较小值），之后不再漂移。
+>   `emergencyStopped()` 从「有没有 STOPPED 字样」改成「到点没有」，过期时顺手清盘。
+>   老数据（`untilWall=0`）按 `atWall + 上限` 补算，**绝不当作永久**。
+> - **6b 落盘失败不再伪装确认**：`persist()` 返回失败原因，写入统一走 `commit()`（写不进去就不换内存、
+>   revision 不前进），`save/markEmergencyStopped/clearEmergency` 一律返回 `WriteOutcome(ok, revision, error)`。
+>   `HealthWireProvider.emergencyStop` 落盘失败回 `ok=false`（内存仍立即生效，但明说「重启会丢」），
+>   哨兵因此记「未确认」而不是「已确认暂停」。
+> - **6c 取消暂停能传到客户端**：provider 新增 `resumeEmergency`，`ClientCall.notifyResume`；
+>   `WatchService.cancelEmergency` 与「窗口结束自然失效」都会通知客户端（后台线程，逐客户端独立超时）。
+> - **到期 ≠ 恢复监管**：`untilWall` 只解除暂停，规则该锁的照锁（`到期不等于放开规则 规则本身仍然生效`）。
+>
+> 测试：app **348**（329+19）/ sentinel 104 全通过。注入实验两次都红：
+> 把 `emergencyStopped` 改回「只看有没有记录」→ 3 条红；把 `commit` 改回「写失败也算成功」→ 2 条红。
 
 - `healthwire/ClientPolicyStore.kt:57` `emergencyStopped()` 只看"有没有 STOPPED 记录"，**不看窗口、不看时长** → 客户端永久暂停，只有手动 resume 能解。
 - `:82-94,124-137`：落盘失败只写 `lastError`，**仍返回新 revision**；`HealthWireProvider.kt:92-96` 照样回 `ok=true` → 哨兵记成 `confirmed`。**"落盘失败"被记成"客户端已确认停止"。**
@@ -153,7 +165,7 @@
 | 阶段 | 内容 | 验收 |
 |---|---|---|
 | S1 | P0-1、P0-2、P0-3 | 单元测试覆盖「selfHealthy 组合可达」「静置不误报/卡死必报」「线程回收与恢复预算复位」 |
-| S2 | P0-4 ✅、P0-5 ✅、P0-6 | 紧急放行下 `lockdown` 必须 return false；三出口至少留一条；紧急暂停到期自动解除 |
+| S2 | P0-4、P0-5、P0-6 | 紧急放行下 `lockdown` 必须 return false；三出口至少留一条；紧急暂停到期自动解除 |
 | S3 | P0-7 | 一手侧有效训练必须带重复性判据；总控侧不得只信 `doneSets` |
 | S4 | P1-1、P1-4 | ActionSession 持久化 + 单一裁决入口 |
 | S5 | P1-5..P1-10、P2 | 按需 |
@@ -165,55 +177,3 @@
 - 解除闸门生效时锁屏是否真的不执行
 
 单元测试通过**不替代**上述任何一项。
-
----
-
-## 7. 本轮（S1/S2 部分）修复记录
-
-分支：`fix/p0-execution-path`（基于 `349e181f`）
-
-| 编号 | 改动 | 文件 | 为什么这么改 |
-|---|---|---|---|
-| P0-1 | 新增本地自检，让「自己健康」不再依赖哨兵发起挑战 | `healthwire/LocalSelfCheck.kt`（新增）、`healthwire/GuardHealth.kt`、`healthwire/LocalGuardian.kt` | 原判据只看 dispatcherAck，哨兵沉默 → 必然 false；叠加 `sentinelHealthy` 60s 缓存 > ack 30s 窗口，`selfHealthy=true ⇒ sentinelHealthy=true`，兜底链生产不可达。自检测的是同一条线程，但发起方是自己 |
-| P0-2 | 事件通道加时间抖动容差 + 参照事件可信年龄 | `sentinel/.../watch/EventProgress.kt` | 两个无障碍服务分别派发同一次切换，两端打点天然差几百毫秒；旧判据把这个当「落后」，静置 20s 必误报。另加 120s 上限，长期静置不再判异常 |
-| P0-3 | 新实例连上时重置恢复预算 | `healthwire/HealthLedger.kt` | `resetRecoveries()` 全仓零调用，到上限后进程余生不再自愈 —— 真机表现「关开一次好一会儿，之后永久失联」 |
-| P0-4 | 总控时间对紧急放行让路 | `guard/GuardService.kt` | `lockdown()` 只判 `pausedUntil`，漏了 `emergencyUntil`，紧急放行期间仍被弹回总控时间 = 取消了即时紧急暂停 |
-| P0-5a | 关卡拦截封顶：单道关卡最多连续拦 `Config.blockMaxHours` 小时（默认 6，0 = 不限），到期后不再挡手机，但关卡仍算欠着 | `core/Model.kt`、`core/Engine.kt`、`app/ui/RhythmScreen.kt`、`app/ui/SettingsScreens.kt`、`core/Policy.kt` | 旧逻辑 `FROM_OPEN` 从开放一直拦到当天结束，**没有尽头**。交不出来的关卡 = 整天锁机 |
-| P0-5b | 严格态度不再关闭紧急放行：理由门槛 20 → 60 字，放行照给并留痕（日终验收点名） | `app/data/Actions.kt`、`core/DayOps.kt`、`core/boss/Boss.kt` | 旧逻辑直接拒绝，形成「信用低 → 严格 → 不放行 → 解不开严管 → 继续扣分」的自我加固环。严格应体现在要求更高，不是把人锁在门外 |
-
-### 测试
-
-- `app:testDebugUnitTest`：**329 passed / 0 failed**（含 P0-5 新增 15 条）
-- `sentinel:testDebugUnitTest`：**104 passed / 0 failed**
-- 新增用例：
-  - `LocalSelfCheckTest`（11 条）：投递口缺失 / 投递被拒 / 线程跑完 / **投递成功但线程不跑（超时）** / 缓存命中与过期 / fresh 语义 / 失败覆盖成功 / 不认任何外部健康断言
-  - `RecoveryBudgetResetTest`（4 条）：新实例重置预算 / 服务没起来不重置（防无限重启）/ 断开重连也重置 / 重置不影响「恢复中」
-  - `EventChannelSkewTest`（8 条）：毫秒抖动不误报 / 容差边界 / 超容差才算落后 / 落后数分钟必报 / 静置超上限不判 / 观察窗口不抢跑 / 容差可注入
-  - `BlockCapTest`（8 条）：上限内照常拦 / **到上限不再拦** / 到期不等于完成（`doneCount` 仍 0，headline「欠账放行」）/ `0` 保留旧行为 / 到期后补交能清干净 / **上限只解除关卡拦截、额度用超照样拦** / 调短上限要等 24 小时 / 调长立即生效
-  - `EmergencyUnderStrictTest`（7 条）：严格态度 60 字照给且留痕 / **20 字被拒且提示门槛是 60 而不是「不给」** / 普通态度仍是 20 字门槛 / 普通态度过短仍拒 / 每日名额是硬的 / 放行生效后立刻解除严管
-- 修正既有测试 2 条：`SentinelWatchV2Test` 里用 **500ms** 的差模拟「卡死」，与派发抖动同量级，测不出判据真正的边界 → 参照点改为 10000，落后 9.5s。
-
-### 构建环境（本机踩到的坑，供复现）
-
-1. `GRADLE_USER_HOME` 若在含中文的用户目录下，Gradle 的 test worker 会 `ClassNotFoundException: GradleWorkerMain`（classpath 里的 jar 路径被错误解码）。必须指到纯 ASCII 路径。
-2. 工程的 `local.properties` 需要 `sdk.dir`，中文路径要转义。
-3. 可用的跑法：
-
-```bash
-cd <ascii-path>/zongkong
-env -i PATH="<jdk>/bin:/usr/bin:/bin" JAVA_HOME="<jdk>" SYSTEMROOT="C:\\Windows" \
-    TEMP="D:\\Temp" TMP="D:\\Temp" ANDROID_HOME="D:\\code\\android-sdk" \
-    GRADLE_USER_HOME="D:\\Temp\\gradlehome" <ascii-path>/gradle-8.9/bin/gradle \
-    :app:testDebugUnitTest :sentinel:testDebugUnitTest
-```
-
-### 仍未做（本轮明确未覆盖）
-
-| 项 | 状态 |
-|---|---|
-| P0-5 低信誉三出口死锁 | **已修**（§7 P0-5a 关卡拦截封顶 / P0-5b 严格态度不关闭紧急放行） |
-| P0-6 客户端紧急暂停不过期 / 落盘失败伪装成已确认 | **未修** |
-| P0-7 一手「一次蒙对即有效」 | **未修**，需改一手侧判定 + 总控侧证据口径 |
-| P0-3 第二条：`ClientProbe` 每客户端 2 线程卡死不可回收 | **未修**（哨兵侧线程池策略） |
-| 真机验证全部项 | **NOT_RUN**（无设备） |
-

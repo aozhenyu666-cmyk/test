@@ -228,8 +228,27 @@ class WatchService : Service() {
         if (!stillStopped) {
             health.setEmergency(null, now)
             Arc.log(this, "紧急暂停所在的监管窗口已结束，暂停自然失效（${rec.reason}）")
+            // P0-6c：客户端那边也得跟着解除。只在「刚刚失效」这一下通知一次
+            // （记录已被清空，下轮直接 return）。跨进程调用最多几秒，
+            // 这里跑在巡检线程/主线程上，必须挪到后台线程（T05 同口径）。
+            background("resume-clients") { notifyClientsResume("监管窗口已结束，紧急暂停自动解除") }
         }
         return stillStopped
+    }
+
+    /** 通知所有在册客户端「恢复监管」。返回确认到达的包名。 */
+    private fun notifyClientsResume(reason: String): List<String> {
+        val targets = health.snapshot().clients.values.filter { it.registered }.map { it.pkg }
+            .ifEmpty { HealthStore.CLIENTS.filter { isInstalled(it) } }
+        val reached = ArrayList<String>()
+        for (pkg in targets) {
+            // 每个客户端独立 + 独立超时：一个不回不影响其他（T04/T16）。
+            if (ClientCall.notifyResume(this, pkg, reason)) reached += pkg
+        }
+        if (reached.size < targets.size) {
+            Arc.log(this, "恢复监管没送到全部客户端：${reached.size}/${targets.size}（${targets - reached.toSet()}）")
+        }
+        return reached
     }
 
     /** 当前这次失联的事件号：同一个「最后一次真实 ack」之后的失联都算同一个事件。 */
@@ -325,10 +344,14 @@ class WatchService : Service() {
     @Synchronized
     fun cancelEmergency() {
         val now = clock.now()
-        policies.setEmergency(now, null, PolicyStore.EMERGENCY_NONE)
+        val applied = policies.setEmergency(now, null, PolicyStore.EMERGENCY_NONE)
+        if (!applied.ok) Arc.log(this, "取消紧急暂停没落到策略文件：${applied.error}")
         health.setEmergency(null, now)
         health.flush(now)
-        Arc.log(this, "取消紧急暂停，按规则恢复监管")
+        // P0-6c：必须告诉客户端。以前这里只改自己的文件（SENTINEL-V2-NOTES.md:348 自认），
+        // 客户端那条 STOPPED 永远留着，本地兜底一直是停的。
+        val reached = notifyClientsResume("哨兵取消紧急暂停，恢复监管")
+        Arc.log(this, "取消紧急暂停，按规则恢复监管；已通知客户端 ${reached.size} 个")
         notifyStatus(emptyMap())
     }
 

@@ -18,6 +18,7 @@ import java.security.MessageDigest
  * method：
  *  - `challenge`：哨兵发挑战 → **投到无障碍执行线程** → 处理完带回；超时 ok=false。
  *  - `emergencyStop`：哨兵要求本客户端停掉自己的自动锁屏（必须立刻生效，不等网络/模型）。
+ *  - `resumeEmergency`：哨兵取消暂停 → 必须传到客户端（不然本地兜底一直停着）。
  *  - `ping`：只回答「这个 provider 在不在」，**绝不**当作健康凭据。
  *
  * 只接受哨兵的签名（按调用方 UID 反查包名 + 证书摘要比对）。
@@ -38,6 +39,7 @@ class HealthWireProvider : ContentProvider() {
             when (method) {
                 M_CHALLENGE -> challenge(c, e)
                 M_EMERGENCY -> emergencyStop(c, e)
+                M_RESUME -> resumeEmergency(c, e)
                 M_PING -> ping(c, e)
                 M_STATUS -> status(c, e)
                 else -> err("不认识的请求：$method")
@@ -84,15 +86,53 @@ class HealthWireProvider : ContentProvider() {
     private fun emergencyStop(c: Context, e: Bundle): Bundle {
         val reason = e.getString(K_REASON).orEmpty().ifBlank { "哨兵要求紧急暂停" }
         val store = GuardHealth.policies()
-        store.markEmergencyStopped(reason)
+        // 先让内存立刻生效（不依赖磁盘、不依赖网络）；再落盘。
         GuardHealth.setPaused(true)
+        val out = store.markEmergencyStopped(reason)
+        if (out.failed) {
+            // P0-6b：落盘失败**不能**回 ok=true。以前这里照样回 ok，哨兵就把它记成
+            // 「客户端已确认停止」，而磁盘上一个字都没写，重启即失守。
+            // 现在明确回 ok=false：内存里已生效，但不可持久化 —— 让哨兵去记「未确认」。
+            GuardHealth.init(c)
+            runCatching { com.zongkong.app.guard.Diag.log(c, "emergency_stop_unpersisted", "落盘失败：${out.error}") }
+            return err("紧急暂停没能写入磁盘（内存里已生效，重启会丢）：${out.error}").apply {
+                putBoolean("stoppedInMemory", true)
+                putBoolean("persisted", false)
+            }
+        }
         // 本地立即生效：之后的自动锁屏一律被 LocalFallback 拦住（不看网络、不看模型）。
         GuardHealth.init(c)
         runCatching { com.zongkong.app.guard.Diag.log(c, "emergency_stop", "收到哨兵的紧急暂停：$reason") }
         return ok().apply {
             putBoolean("stopped", true)
-            putInt(K_RULE_REV, store.revision)
+            putBoolean("persisted", true)
+            putInt(K_RULE_REV, out.revision)
             putString(K_REASON, reason)
+            putLong(K_UNTIL, store.emergency?.untilWall ?: 0L)
+        }
+    }
+
+    // ---------- resumeEmergency（P0-6c：取消暂停必须能传到客户端） ----------
+
+    /**
+     * 哨兵取消紧急暂停时调用。
+     *
+     * 以前 `WatchService.cancelEmergency` 只改自己的策略文件，**不通知客户端**
+     * （`SENTINEL-V2-NOTES.md:348` 自认），客户端那条 STOPPED 就永远留在那里 ——
+     * 用户以为「恢复监管了」，实际本地兜底一直是停的。
+     */
+    private fun resumeEmergency(c: Context, e: Bundle): Bundle {
+        val why = e.getString(K_REASON).orEmpty().ifBlank { "哨兵取消紧急暂停" }
+        val store = GuardHealth.policies()
+        val out = store.clearEmergency(why = why)
+        if (out.failed) {
+            return err("恢复监管没能写入磁盘（内存里已恢复）：${out.error}")
+        }
+        GuardHealth.setPaused(false)
+        runCatching { com.zongkong.app.guard.Diag.log(c, "emergency_resume", why) }
+        return ok().apply {
+            putBoolean("stopped", false)
+            putInt(K_RULE_REV, out.revision)
         }
     }
 
@@ -108,6 +148,8 @@ class HealthWireProvider : ContentProvider() {
     private fun status(c: Context, e: Bundle): Bundle {
         val store = GuardHealth.policies()
         val v = GuardHealth.verdict(GuardHealth.permissionEnabled(), HealthConfig())
+        // P0-6a：报告的是「到点后还算不算暂停」，不是「磁盘上有没有 STOPPED 字样」。
+        val emergency = store.emergencyStatus()
         return ok().apply {
             putInt(K_V, PROTOCOL_VERSION)
             putString(K_PKG, c.packageName)
@@ -118,7 +160,9 @@ class HealthWireProvider : ContentProvider() {
             putInt(K_RULE_REV, store.revision)
             putString(K_RECEIPT_STATE, GuardHealth.ledger.lastReceiptState)
             putLong(K_EVENT_SEQ, GuardHealth.ledger.lastEventSeq)
-            putBoolean("emergencyStopped", store.emergencyStopped())
+            putBoolean("emergencyStopped", emergency.active)
+            putLong(K_UNTIL, emergency.untilWall)
+            putString("emergencyWhy", emergency.why)
         }
     }
 
@@ -181,6 +225,7 @@ class HealthWireProvider : ContentProvider() {
 
         const val M_CHALLENGE = "challenge"
         const val M_EMERGENCY = "emergencyStop"
+        const val M_RESUME = "resumeEmergency"
         const val M_PING = "ping"
         const val M_STATUS = "status"
 
@@ -197,5 +242,7 @@ class HealthWireProvider : ContentProvider() {
         const val K_EVENT_SEQ = "eventSeq"
         const val K_EVENT_AT = "eventAtMono"
         const val K_REASON = "reason"
+        /** 紧急暂停的到期墙钟（P0-6a）；0 = 没有暂停。 */
+        const val K_UNTIL = "untilWall"
     }
 }
