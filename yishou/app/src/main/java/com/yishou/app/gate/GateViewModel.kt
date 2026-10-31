@@ -1,232 +1,299 @@
 package com.yishou.app.gate
 
 import android.app.Application
-import android.net.Uri
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.yishou.app.YishouApp
-import com.yishou.app.data.Breakpoint
-import com.yishou.app.data.Round
-import com.yishou.app.data.RoundSource
-import com.yishou.app.data.Task
-import com.yishou.app.llm.CoachMessages
-import com.yishou.app.round.AnswerRules
+import com.yishou.app.card.*
+import com.yishou.app.data.CardMode
+import com.yishou.app.data.FadeRow
+import com.yishou.app.data.ReflexRow
+import com.yishou.app.data.Pass
+import com.yishou.app.judge.*
+import com.yishou.app.reflex.*
+import com.yishou.app.reflex.Main as GateMain
+import com.yishou.app.settings.AppZone
 import com.yishou.app.stats.DayStats
-import com.yishou.app.system.AttachmentController
-import com.yishou.app.round.RoundEngine
+import com.yishou.app.thread.*
+import com.yishou.app.ui.StrandWork
+import com.yishou.app.ui.TurnReview
 import com.yishou.app.window.WindowClock
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
-import java.time.ZoneId
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 
-/** 思考页的界面状态。 */
 data class GateState(
-    val loading: Boolean = true,
-    /** 触发的应用包名；从权限页“测试思考页”打开时为 null */
-    val triggerPackage: String? = null,
-    val appLabel: String = "",
-    val group: String = "",
-    val task: Task? = null,
-    val breakpoint: Breakpoint? = null,
-    /** 陪练窗口进行中：不发放行 */
-    val inWindow: Boolean = false,
-    val coachMove: String? = null,
-    val moveLoading: Boolean = false,
-    /** 出题失败的原因；此时用断点里的“下一问”当题目 */
-    val moveError: String? = null,
-    val answer: String = "",
-    val submitting: Boolean = false,
-    val hint: String? = null,
-    val lastRound: Round? = null,
-    /** 判定失败的原因，此时可以“保存并通过” */
-    val judgeError: String? = null,
-    val offlineLeft: Int = 0,
-    val offlineMinutes: Int = 5,
-    /** 已放行的分钟数；非 null 表示这一手有效、可以回到原应用 */
-    val passMinutes: Int? = null,
-    /** 隔了很久才回来时的上一轮，用于“回到局面” */
-    val resumeFrom: Round? = null,
-    /** 总控此刻的要求（没装总控或连不上为 null）。 */
-    val zongkong: com.yishou.app.link.ZongkongStatus? = null,
-    /** 这一手有效，但总控专注锁开着，不放行。 */
-    val held: Boolean = false,
-) {
-    val answerChars: Int get() = AnswerRules.countChars(answer)
-    val isTest: Boolean get() = triggerPackage == null
-}
+    val loading: Boolean = true, val triggerPackage: String? = null, val appLabel: String = "", val group: String = "",
+    val inWindow: Boolean = false, val partnerPending: Boolean = false, val followUp: String? = null,
+    val exit: String = "", val passMinutes: Int? = null, val wrongInRow: Int = 0,
+    val waiting: Boolean = false, val waitRemainingMs: Long = WAIT_MS,
+    val mode: GateMain = GateMain.WAIT, val revision: Int = 0, val busy: Boolean = false, val error: String? = null,
+) { val isTest get() = triggerPackage == null && group != "早上" }
 
+/** 挑题、作答与放行分开；失败只换路，不直接发通行。 */
 class GateViewModel(app: Application) : AndroidViewModel(app) {
-
-    private val yishou = app as YishouApp
-    private val dao = yishou.database.dao()
-    private val engine = yishou.engine
-
-    val attachment = AttachmentController(yishou, viewModelScope)
-
-    /** 当前这一手配的起手式 */
-    val starters = engine.starters
-
-    private val _state = MutableStateFlow(GateState())
-    val state: StateFlow<GateState> = _state.asStateFlow()
-
+    val yishou = app as YishouApp
+    private val dao = yishou.database.strands()
+    private val session = yishou.newSession()
+    val card = session.state
+    val work = StrandWork(yishou)
+    private val issuer = PassIssuer(yishou.database.dao())
+    private val fallback = WaitFallback { SystemClock.elapsedRealtime() }
+    private var waitJob: Job? = null
+    private var operation: Job? = null
+    private var generation = 0
     private var startedFor: Pair<String?, String>? = null
+    private val _state = MutableStateFlow(GateState())
+    val state = _state.asStateFlow()
+    var probe: GateFlow? = null; private set
+    var review: TurnReview? = null; private set
+    var triggerSaved = false; private set
+    var recall: Reflex? = null; private set
+    var recallFeedback: String? = null; private set
+    var recallingEcho = false; private set
+    private var echoChecked = false
+    private var recallPrompt = ""
+    private var recallTries = 0
+    private var judgeDown = false
+    private val skippedCards = mutableSetOf<Long>()
+    private var bankQuestion: LockedQ? = null
+    var askingFirst = false; private set
+    var feed: List<String> = emptyList(); private set
+    var ice: Ice? = null; private set
+    private var fade = FadeState()
+    private var kind = ""
+    private var fadeRecorded = false
 
-    /** 每次思考页被（重新）打开时调用。同一个应用重复打开不会清掉正在写的回答。 */
+    fun changed() { _state.update { it.copy(revision = it.revision + 1) } }
+    private fun run(block: suspend () -> Unit) {
+        if (_state.value.busy) return
+        _state.update { it.copy(busy = true, error = null) }
+        val mine = generation
+        operation = viewModelScope.launch {
+            try { block() } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { com.yishou.app.log.RunLog.e("入口", "这一手操作失败", e); _state.update { it.copy(error = "这步没能完成，请重试") } }
+            finally { if (mine == generation) _state.update { it.copy(busy = false, loading = false, revision = it.revision + 1) } }
+        }
+    }
     fun start(pkg: String?, group: String, label: String) {
-        if (startedFor == pkg to group && !_state.value.loading && _state.value.passMinutes == null) return
-        startedFor = pkg to group
-        attachment.clear()
-        _state.value = GateState(loading = true, triggerPackage = pkg, appLabel = label, group = group)
-        viewModelScope.launch {
-            val prefs = yishou.settings.app.value
-            val now = System.currentTimeMillis()
-            val inWindow = pkg != null &&
-                (group == GateActivity.WINDOW_GROUP || WindowClock.active(now, prefs, ZoneId.systemDefault()) != null)
-            val task = dao.getCurrentTask()
-            val bp = task?.let { dao.getBreakpoint(it.id) }
-            val last = dao.lastRound()
-            val zk = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.yishou.app.link.ZongkongClient.status(yishou, maxAgeMs = 0) }
-            val resume = last?.takeIf { (now - it.createdAt) / 60_000 >= CoachMessages.RESUME_GAP_MINUTES }
-            _state.update {
-                it.copy(
-                    loading = false,
-                    resumeFrom = resume,
-                    task = task,
-                    breakpoint = bp,
-                    inWindow = inWindow,
-                    coachMove = bp?.pendingCoachMove?.takeIf { m -> m.isNotBlank() },
-                    offlineMinutes = prefs.offlinePassMinutes,
-                    zongkong = zk,
-                )
-            }
-            if (task != null && !inWindow) loadMove(task)
-        }
+        if (startedFor == (pkg to group) && _state.value.passMinutes == null) return
+        generation++; operation?.cancel(); cancelWait(); startedFor = pkg to group
+        judgeDown = false; skippedCards.clear(); echoChecked = false; recallTries = 0
+        val prefs = yishou.settings.app.value
+        val now = System.currentTimeMillis()
+        _state.value = GateState(triggerPackage = pkg, group = group, appLabel = label,
+            inWindow = group == GateActivity.WINDOW_GROUP || (pkg != null && WindowClock.active(now, prefs, AppZone.zone) != null),
+            followUp = prefs.pendingExit.takeIf { it.isNotBlank() && now >= prefs.pendingExitAt })
+        run { refreshPartnerCloseNow(); if (!_state.value.inWindow) pick() }
     }
+    fun refreshPartnerClose() { viewModelScope.launch { refreshPartnerCloseNow() } }
+    private suspend fun refreshPartnerCloseNow() { _state.update { it.copy(partnerPending = yishou.partner.pendingClose() != null) } }
 
-    private suspend fun loadMove(task: Task) {
-        if (_state.value.coachMove != null) return
-        _state.update { it.copy(moveLoading = true, moveError = null) }
-        val r = engine.currentMove(task)
-        val bp = dao.getBreakpoint(task.id)
-        _state.update {
-            when (r) {
-                is RoundEngine.MoveResult.Ready -> it.copy(moveLoading = false, coachMove = r.coachMove, breakpoint = bp)
-                is RoundEngine.MoveResult.Failed -> it.copy(
-                    moveLoading = false,
-                    moveError = r.error.message,
-                    // 出不了题时仍然可以作答：用断点里的“下一问”，没有就用通用的问题
-                    coachMove = bp?.nextQuestion?.takeIf { q -> q.isNotBlank() } ?: FALLBACK_QUESTION,
-                    breakpoint = bp,
-                )
-            }
-        }
+    private suspend fun availableBank(): List<Dealt> = yishou.database.cards().unusedBank().mapNotNull { row ->
+        if (!row.verified || row.id in skippedCards) null else runCatching {
+            val c = Card.fromJson(row.json)
+            if (LockedQuestions.fromCard(row.id, c) == null) null else Dealt(row, c, false)
+        }.getOrNull()
     }
-
-    fun onAnswerChange(text: String) {
-        _state.update { it.copy(answer = text, hint = null) }
-    }
-
-    fun attach(uri: Uri) {
-        val s = _state.value
-        attachment.attach(uri, s.task?.title, s.coachMove)
-    }
-
-    private fun composedAnswer(): String = AnswerRules.compose(_state.value.answer, attachment.readyText)
-
-    fun submit() {
-        val s = _state.value
-        val task = s.task ?: return
-        val move = s.coachMove ?: return
-        if (s.submitting || s.passMinutes != null || attachment.busy) return
-        val text = composedAnswer()
-        if (!AnswerRules.isLongEnough(text)) {
-            _state.update { it.copy(hint = "再多写一步：写下你得到了什么、依据是什么") }
-            return
-        }
-        _state.update { it.copy(submitting = true, hint = null, judgeError = null) }
-        viewModelScope.launch {
-            when (val r = engine.answer(task, move, text, RoundSource.GATE, s.triggerPackage)) {
-                RoundEngine.AnswerResult.TooShort -> _state.update { it.copy(submitting = false, hint = "再多写一步") }
-                is RoundEngine.AnswerResult.Failed -> {
-                    val left = offlineLeft()
-                    _state.update {
-                        it.copy(submitting = false, judgeError = "暂时无法判定：${r.error.message}", offlineLeft = left)
-                    }
+    private suspend fun pick() {
+        probe = null; review = null; triggerSaved = false; recall = null; recallFeedback = null; recallingEcho = false; ice = null
+        session.stop()
+        val open = StrandStore(dao).open()
+        val bank = availableBank()
+        val refs = dao.reflexes().map { it.value() }
+        val todayRefs = availableReflexes(refs)
+        val llm = yishou.settings.llm.value.isComplete
+        val mode = GatePlan.pick(GateInput(open != null && (open.pending != null || !judgeDown), bank.isNotEmpty(),
+            llm && !judgeDown, todayRefs.isNotEmpty() && recallTries < 3, _state.value.wrongInRow, freshReady = llm))
+        _state.update { it.copy(mode = mode) }
+        when (mode) {
+            GateMain.STRAND -> {
+                work.load(open!!)
+                // 外部总结在主动页面粘贴；收费站回到当前项正常出题。
+                if (work.strand?.pending?.kind == MoveKind.EXTERNAL || work.review?.q?.allowPaste == true) {
+                    if (work.review != null) work.acknowledge()
+                    val s = work.strand!!
+                    work.load(StrandStore(dao).save(s.copy(pending = null)))
                 }
-                is RoundEngine.AnswerResult.Judged -> {
-                    val bp = dao.getBreakpoint(task.id)
-                    if (r.round.effective && !s.isTest && !s.inWindow && s.zongkong?.hold == true) {
-                        // 总控专注锁开着：这一手算数，但不放行
-                        attachment.clear()
-                        _state.update { it.copy(submitting = false, lastRound = r.round, breakpoint = bp, held = true) }
-                    } else if (r.round.effective && !s.isTest && !s.inWindow) {
-                        val base = yishou.settings.app.value.passMinutesFor(s.group)
-                        val minutes = s.zongkong?.capPass(base) ?: base
-                        engine.grantPass(s.group, minutes, r.round.id)
-                        yishou.stats.event(DayStats.GATE_PASS)
-                        attachment.clear()
-                        _state.update { it.copy(submitting = false, lastRound = r.round, breakpoint = bp, passMinutes = minutes) }
-                    } else {
-                        // 无效：显示反馈和理由，下一手已在断点里，可以再答一次
-                        attachment.clear()
-                        _state.update {
-                            it.copy(
-                                submitting = false,
-                                lastRound = r.round,
-                                breakpoint = bp,
-                                answer = "",
-                                coachMove = bp?.pendingCoachMove ?: it.coachMove,
-                                moveError = null,
-                            )
-                        }
-                    }
-                }
+                probe = work.flow; review = work.review
+                if (probe == null && review == null) { judgeDown = true; pick(); return }
+            }
+            GateMain.BANK -> {
+                val d = bank.first()
+                session.start(CardMode.GATE, null, 1, deal = false); session.useDealt(d, 0)
+                bankQuestion = LockedQuestions.fromCard(d.row.id, d.card)!!
+                kind = d.card.skill.name; fade = dao.fade(kind)?.value() ?: FadeState(); fadeRecorded = false
+                prepareBank()
+                ice = BankOpening.ice(bankQuestion!!.id, bank.mapNotNull { LockedQuestions.fromCard(it.row.id, it.card) }, kotlin.random.Random.nextLong())
+            }
+            GateMain.FRESH -> {
+                // 题库没有能用的题：现出一道锁好的题，并在后台再备一道
+                val q = FreshQuestions.take(yishou)
+                if (q == null) { judgeDown = true; pick(); return }
+                bankQuestion = null; askingFirst = false; feed = emptyList()
+                probe = GateFlow(q) { SystemClock.elapsedRealtime() }
+                viewModelScope.launch { runCatching { FreshQuestions.prefetch(yishou) } }
+            }
+            GateMain.LOW_ENERGY -> recall = Reflexes.pick(todayRefs, System.currentTimeMillis())
+            GateMain.WAIT -> Unit
+        }
+        if (!echoChecked && (mode == GateMain.STRAND || mode == GateMain.BANK || mode == GateMain.FRESH)) {
+            echoChecked = true
+            refs.filter { it.dueAt <= System.currentTimeMillis() && it.id !in recalledToday() }.minByOrNull { it.dueAt }?.let {
+                recall = it; recallingEcho = true
+            }
+        }
+        recallPrompt = recall?.let { sourcePrompt(it.source) }.orEmpty()
+    }
+    private fun prepareBank() {
+        val q = bankQuestion ?: return
+        askingFirst = fade.level == FadeLevel.ASK_FIRST
+        feed = BankOpening.hints(q, fade)
+        probe = GateFlow(BankOpening.first(q, fade)) { SystemClock.elapsedRealtime() }
+    }
+    fun finishIce() { ice = null; changed() }
+    fun showProbe(flow: GateFlow) { if (probe === flow) { flow.shown(); changed() } }
+    fun editProbe(text: String, voice: Boolean = false) { probe?.edit(text, voice); changed() }
+    fun voiceProbeStart() { probe?.voiceStart() }
+    private suspend fun recordFade(ok: Boolean) {
+        if (fadeRecorded) return
+        fadeRecorded = true
+        val n = fade.after(ok); dao.saveFade(FadeRow(kind, n.wins, n.misses))
+    }
+    fun submitProbe() = run {
+        val f = probe ?: return@run
+        if (_state.value.mode == GateMain.STRAND) {
+            work.submit(); review = work.review
+            if (f.unavailable) { judgeDown = true; pick() }
+            else if (review?.verdict?.passed == false) _state.update { it.copy(wrongInRow = it.wrongInRow + 1) }
+        } else if (_state.value.mode == GateMain.FRESH) {
+            // 现出的题没有选项：要点过了就进复盘和触发器，三次没过换路
+            f.submit(yishou.judge)
+            if (f.unavailable) { judgeDown = true; pick(); return@run }
+            val v = f.verdict ?: return@run
+            if (v.passed) review = TurnReview(f.question, f.answer, f.trace!!, v)
+            else if (f.exhausted) {
+                review = TurnReview(f.question, f.answer, f.trace!!, v)
+                _state.update { it.copy(wrongInRow = it.wrongInRow + 1) }
+            }
+        } else {
+            // 看过的退坡提示也交给判卷核对，不能照抄提示通关。
+            val judge = object : Judge {
+                override suspend fun judge(q: LockedQ, answer: String, trace: ProbeTrace, seen: List<String>) = yishou.judge.judge(q, answer, trace, seen + feed)
+            }
+            f.submit(judge)
+            if (f.unavailable) { judgeDown = true; pick(); return@run }
+            if (f.canSelect() && askingFirst) {
+                askingFirst = false
+                probe = GateFlow(bankQuestion!!) { SystemClock.elapsedRealtime() }
+            } else if (f.canSelect()) f.verdict?.let(session::approveGate)
+            else if (f.exhausted) {
+                recordFade(false)
+                review = TurnReview(f.question, f.answer, f.trace!!, f.verdict!!)
+                _state.update { it.copy(wrongInRow = it.wrongInRow + 1) }
+                session.state.value.dealt?.let { skippedCards += it.row.id }
             }
         }
     }
-
-    /** 离线“保存并通过”。 */
-    fun saveOffline() {
+    fun selectProbeOption(option: Int) = run {
+        val f = probe ?: return@run
+        if (!f.canSelect() || askingFirst || session.state.value.done || review != null) return@run
+        session.bet(option, Conf.MID)
+        val correct = session.state.value.round?.finalCorrect == true
+        recordFade(correct)
+        review = TurnReview(f.question, f.answer, f.trace!!, f.verdict!!.copy(passed = correct, note = if (correct) "答案和要点都过了" else "选项没对上"))
+        if (!correct) _state.update { it.copy(wrongInRow = it.wrongInRow + 1) }
+        session.state.value.dealt?.let { skippedCards += it.row.id }
+    }
+    fun retry() = run {
+        if (_state.value.mode == GateMain.STRAND && work.review != null) work.next()
+        pick()
+    }
+    fun retryUnavailable() = run { judgeDown = false; pick() }
+    fun saveTrigger(signal: String, action: String) = run {
+        val rev = review ?: return@run
+        if (!rev.verdict.passed || rev.verdict.unavailable) return@run
+        Reflexes.check(signal, action, rev.q.prompt)?.let { why -> _state.update { it.copy(error = why) }; return@run }
+        if (!triggerSaved) {
+            dao.insertReflex(ReflexRow.from(Reflexes.create(signal, action, rev.q.id, System.currentTimeMillis())))
+            triggerSaved = true
+        }
+    }
+    fun onExitChange(text: String) { _state.update { it.copy(exit = text) } }
+    fun answerFollowUp(done: Boolean) {
+        yishou.stats.event(if (done) DayStats.EXIT_KEPT else DayStats.EXIT_MISSED)
+        yishou.settings.updateApp { it.copy(pendingExit = "", pendingExitAt = 0) }
+        _state.update { it.copy(followUp = null) }
+    }
+    private fun mayGrant() = !_state.value.let { it.isTest || it.inWindow || it.partnerPending || it.passMinutes != null || it.loading }
+    fun pass() = run {
+        val rev = review ?: return@run
+        if (!mayGrant() || !GateCompletion.ready(rev.verdict, triggerSaved, rev.pullBack)) return@run
+        val pass = if (_state.value.mode == GateMain.FRESH) {
+            issuer.issueVerified(_state.value.group, GatePlan.FULL_PASS_MIN, rev.verdict)
+        } else if (_state.value.mode == GateMain.STRAND) {
+            // 不让同一份复盘在下次入口再换一次通行。
+            work.acknowledge()
+            issuer.issueVerified(_state.value.group, GatePlan.FULL_PASS_MIN, rev.verdict)
+        } else issuer.issue(session.state.value, _state.value.group)
+        pass?.let { finishGrant(it, DayStats.GATE_PASS) }
+    }
+    private fun finishGrant(pass: Pass, event: String) {
+        yishou.stats.event(event)
         val s = _state.value
-        val task = s.task ?: return
-        val move = s.coachMove ?: return
-        if (s.submitting || s.isTest || s.inWindow) return
-        if (s.zongkong?.noOffline == true) {
-            _state.update { it.copy(hint = "总控现在不允许离线放行：${s.zongkong.note}") }
-            return
-        }
-        val text = composedAnswer()
-        if (!AnswerRules.isLongEnough(text)) {
-            _state.update { it.copy(hint = "再多写一步") }
-            return
-        }
-        _state.update { it.copy(submitting = true) }
-        viewModelScope.launch {
-            val left = offlineLeft()
-            if (left <= 0) {
-                _state.update { it.copy(submitting = false, offlineLeft = 0) }
-                return@launch
+        if (s.exit.isNotBlank()) yishou.settings.updateApp { it.copy(pendingExit = s.exit.trim(), pendingExitAt = pass.endAt) }
+        _state.update { it.copy(passMinutes = ((pass.endAt - pass.startAt) / 60_000L).toInt(), waiting = false) }
+    }
+    fun startWait() {
+        if (_state.value.mode != GateMain.WAIT || _state.value.waiting || _state.value.busy || _state.value.inWindow || _state.value.partnerPending) return
+        fallback.start(); _state.update { it.copy(waiting = true) }
+        waitJob = viewModelScope.launch {
+            while (_state.value.waiting) {
+                val left = fallback.remainingMs(); _state.update { it.copy(waitRemainingMs = left) }
+                if (left == 0L) break
+                delay(minOf(left, 1_000L))
             }
-            val minutes = yishou.settings.app.value.offlinePassMinutes
-            engine.saveOffline(task, move, text, s.triggerPackage, s.group, minutes)
-            yishou.stats.event(DayStats.OFFLINE_PASS)
-            attachment.clear()
-            _state.update { it.copy(submitting = false, passMinutes = minutes, offlineLeft = left - 1) }
         }
     }
-
-    private suspend fun offlineLeft(): Int {
-        val zone = ZoneId.systemDefault()
-        val since = WindowClock.startOfDay(WindowClock.today(System.currentTimeMillis(), zone), zone)
-        if (_state.value.zongkong?.noOffline == true) return 0
-        val used = engine.offlineUsedSince(since)
-        return (yishou.settings.app.value.offlineDailyLimit - used).coerceAtLeast(0)
+    fun cancelWait() { waitJob?.cancel(); fallback.leave(); _state.update { it.copy(waiting = false, waitRemainingMs = WAIT_MS) } }
+    fun passAfterWait() = run {
+        if (!mayGrant() || !_state.value.waiting) return@run
+        issuer.issueAfterWait(_state.value.group, fallback)?.let { finishGrant(it, DayStats.WAIT_PASS) }
     }
 
-    companion object {
-        const val FALLBACK_QUESTION = "陪练暂时出不了题。写下你在当前任务上的下一步：你已经确定了什么，接下来要做哪一步、为什么？"
+    private fun recalledToday(): Set<Long> = yishou.settings.app.value.let { prefs ->
+        if (prefs.recallDay == java.time.LocalDate.now(AppZone.zone).toEpochDay()) prefs.recallIds else emptySet()
+    }
+    private fun availableReflexes(all: List<Reflex>) = all.filter { it.id !in recalledToday() }
+    private suspend fun sourcePrompt(id: String): String {
+        id.removePrefix("card-").toLongOrNull()?.let { cardId ->
+            yishou.database.cards().getCard(cardId)?.let { row ->
+                return runCatching { Card.fromJson(row.json).let { (it.sentences + it.question).joinToString("\n") } }.getOrDefault("")
+            }
+        }
+        val strandId = Regex("^s(\\d+)-").find(id)?.groupValues?.get(1)?.toLongOrNull()
+        strandId?.let { StrandStore(dao).get(it) }?.let { s ->
+            val at = id.substringAfterLast('-').toLongOrNull()
+            return s.moves.firstOrNull { it.at >= (at ?: Long.MAX_VALUE) }?.ask ?: s.goal
+        }
+        return ""
+    }
+    fun recallSource(): String = recallPrompt
+    fun submitRecall(answer: String) = run {
+        val r = recall ?: return@run
+        if (recallFeedback != null) return@run
+        val ok = Reflexes.recalled(r.action, answer)
+        dao.updateReflex(ReflexRow.from(Reflexes.afterRecall(r, ok, System.currentTimeMillis())))
+        val day = java.time.LocalDate.now(AppZone.zone).toEpochDay()
+        yishou.settings.updateApp { it.copy(recallDay = day, recallIds = recalledToday() + r.id) }
+        recallFeedback = if (ok) "记起来了" else "原来的动作：${r.action}"
+        if (recallingEcho) return@run
+        recallTries++
+        if (ok && mayGrant()) issuer.issueRecall(_state.value.group, r, answer)?.let { finishGrant(it, DayStats.LOW_PASS) }
+        if (ok && _state.value.isTest) recallFeedback = "默写通过；测试页不放行"
+    }
+    fun nextRecall() = run {
+        if (recallingEcho) { recallingEcho = false; recall = null; recallFeedback = null }
+        else pick()
     }
 }

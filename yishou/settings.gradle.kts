@@ -15,3 +15,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "yishou"
 include(":app")
+include(":gate-fixture")

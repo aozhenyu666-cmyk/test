@@ -1,5 +1,7 @@
 package com.yishou.app.window
 
+import com.yishou.app.system.ExternalGrace
+
 import android.app.Activity
 import android.media.projection.MediaProjectionManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -107,10 +109,11 @@ fun LookCard(prefs: AppPrefs, onChange: ((AppPrefs) -> AppPrefs) -> Unit) {
 
     Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            com.yishou.app.ui.FloatingPermissionCard()
             Text("让陪练看屏", fontWeight = FontWeight.Bold)
             if (!running) {
                 Text(
-                    "开启后回到学习应用，下拉通知栏点“看一眼”，陪练会看你正在做的题，针对这一步提问。" +
+                    "开启后回到学习应用，点屏幕上的“一手 ●”再点“看一眼”，陪练会看你正在做的题，针对这一步提问。" +
                         "只在你点的时候截屏，图片不保存。",
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -119,11 +122,12 @@ fun LookCard(prefs: AppPrefs, onChange: ((AppPrefs) -> AppPrefs) -> Unit) {
                         note = "先到 设置 → 识图模型 里填好接口，陪练才能看懂截屏。"
                     } else {
                         val mpm = context.getSystemService(MediaProjectionManager::class.java)
+                        ExternalGrace.open()
                         consent.launch(mpm.createScreenCaptureIntent())
                     }
                 }) { Text("开启看屏") }
             } else {
-                Text(status ?: "已开启。回到学习应用，下拉通知栏点“看一眼”。", style = MaterialTheme.typography.bodySmall)
+                Text(status ?: "已开启。回到学习应用，点“一手 ●”里的“看一眼”。", style = MaterialTheme.typography.bodySmall)
                 Text("自动看一眼", style = MaterialTheme.typography.labelLarge)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf(0 to "关", 3 to "3 分钟", 5 to "5 分钟", 10 to "10 分钟").forEach { (m, label) ->

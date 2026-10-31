@@ -1,5 +1,7 @@
 package com.yishou.app.gate
 
+import com.yishou.app.settings.AppZone
+
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
 import android.provider.MediaStore
@@ -9,6 +11,7 @@ import android.view.accessibility.AccessibilityEvent
 import com.yishou.app.YishouApp
 import com.yishou.app.stats.DayStats
 import com.yishou.app.system.Notifications
+import com.yishou.app.system.ExternalGrace
 import com.yishou.app.log.RunLog
 import com.yishou.app.window.WindowClock
 import com.yishou.app.window.WindowRules
@@ -20,8 +23,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import com.yishou.app.link.ZongkongClient
+import kotlinx.coroutines.isActive
 
 /**
  * 入口思考页的无障碍服务。
@@ -36,7 +38,10 @@ class GateService : AccessibilityService() {
     private val app get() = application as YishouApp
 
     /** 最近一次切到前台的应用包名 */
-    private var foregroundPkg: String? = null
+    private val foregroundTracker = GateForeground()
+    private val foregroundPkg get() = foregroundTracker.current
+    private var watchJob: Job? = null
+    private val querying = mutableSetOf<String>()
     private var lastLaunchPkg: String? = null
     private var lastLaunchAt = 0L
     /** 放行到期时再检查一次：到期时还停留在该应用，就弹出思考页 */
@@ -52,10 +57,48 @@ class GateService : AccessibilityService() {
     private var systemAllowedAt = 0L
     private var homes: Set<String> = emptySet()
 
+    private var wakeRegistered = false
+    private val wakeReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: Intent) {
+            if (intent.action != Intent.ACTION_USER_PRESENT) return
+            val now = java.time.LocalDateTime.now(AppZone.zone)
+            val today = now.toLocalDate().toEpochDay()
+            val p = app.settings.app.value
+            val cfg = com.yishou.app.reflex.MorningConfig(p.morningEnabled, p.morningFromHour, p.morningToHour)
+            if (!com.yishou.app.reflex.Morning.shouldWake(cfg, now.hour, today, p.lastWakeDay)) return
+            // 先记今天叫过，再查库，避免两次广播一起打开两个页面。
+            app.settings.updateApp { it.copy(lastWakeDay = today) }
+            scope.launch {
+                try {
+                    val open = app.database.strands().open()
+                    val target = if (open != null) Intent(this@GateService, com.yishou.app.MainActivity::class.java)
+                        .putExtra(com.yishou.app.MainActivity.EXTRA_ROUTE, "strand").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    else GateActivity.morningIntent(this@GateService)
+                    if (!GateActivity.isShowing) startActivity(target)
+                } catch (e: Exception) { RunLog.e("早上唤起", "没能打开断点页", e) }
+            }
+        }
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         running = this
+        _connected.value = true
+        _problem.value = null
+        if (!wakeRegistered) {
+            androidx.core.content.ContextCompat.registerReceiver(this, wakeReceiver, android.content.IntentFilter(Intent.ACTION_USER_PRESENT), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+            wakeRegistered = true
+        }
         Notifications.showRunning(this)
+        watchJob?.cancel()
+        watchJob = scope.launch {
+            while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+                delay(1_000)
+                val awake = getSystemService(android.os.PowerManager::class.java).isInteractive
+                val locked = getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
+                if (awake && !locked && !GateActivity.isShowing) foregroundPkg?.takeIf { it != packageName }?.let(::check)
+            }
+        }
     }
 
     /** 查询桌面、输入法、相机、拨号对应的应用（换了输入法或桌面也能跟上，10 分钟刷新一次）。 */
@@ -87,12 +130,24 @@ class GateService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
-        foregroundPkg = pkg
-        if (pkg == packageName) return
-        check(pkg)
+        val systemPackages = systemAllowed()
+        val transient = pkg != packageName && pkg !in homes && (pkg in systemPackages || pkg in WindowRules.STATIC_SYSTEM)
+        foregroundTracker.update(pkg, transient)
+        _lastPackage.value = foregroundPkg
+        app.partner.foreground(pkg)
+        if (pkg == packageName) {
+            ExternalGrace.close()
+            return
+        }
+        if (!transient) check(pkg)
     }
 
     private fun check(pkg: String) {
+        if (app.partner.allows(pkg)) {
+            shortCheck?.cancel()
+            shortPkg = null
+            return
+        }
         val prefs = app.settings.app.value
         val now = System.currentTimeMillis()
         val isSystem = pkg in systemAllowed() || pkg in WindowRules.STATIC_SYSTEM
@@ -104,10 +159,10 @@ class GateService : AccessibilityService() {
             shortCheck?.cancel()
             shortPkg = null
         }
-        // 总控时间：总控在管整台手机，一手不插手
-        if (ZongkongClient.status(this)?.lockdown == true) return
         // 陪练窗口进行中：先按开局规则看这个应用能不能用（关注的应用另由下面的思考页处理）
-        if (prefs.groupOf(pkg) == null && WindowClock.active(now, prefs, ZoneId.systemDefault()) != null) {
+        // 一手自己打开的相册、相机、屏幕授权：不拦（回到一手就收回许可）
+        if (prefs.groupOf(pkg) == null && ExternalGrace.active(now)) return
+        if (prefs.groupOf(pkg) == null && WindowClock.active(now, prefs, AppZone.zone) != null) {
             when (WindowRules.decide(pkg, prefs, systemAllowed(), now)) {
                 WindowRules.Decision.ALLOW -> {}
                 WindowRules.Decision.SHORT -> scheduleShortCheck(pkg, prefs.windowShortMinutes)
@@ -120,21 +175,27 @@ class GateService : AccessibilityService() {
         // 同一个应用打开时会连续发出好几次切换事件，2 秒内只处理一次
         if (pkg == lastLaunchPkg && now - lastLaunchAt < 2_000) return
 
+        if (!querying.add(pkg)) return
         scope.launch {
-            // 总控正在严管、会把这个应用弹回去：让总控处理，一手不再叠一层思考页
-            val zk = withContext(Dispatchers.IO) { ZongkongClient.status(this@GateService) }
-            if (zk?.bounces(pkg) == true) return@launch
+            try {
+            if (foregroundPkg != pkg) return@launch
+            if (app.partner.pendingClose() != null) {
+                launchGate(pkg, group, now)
+                return@launch
+            }
             val pass = try {
                 app.database.dao().activePass(group, now)
             } catch (e: Exception) {
                 Log.e(TAG, "查询放行失败", e)
                 null
             }
+            if (foregroundPkg != pkg) return@launch
             if (pass != null) {
                 scheduleExpiryCheck(pass.endAt)
                 return@launch
             }
             launchGate(pkg, group, now)
+            } finally { querying.remove(pkg) }
         }
     }
 
@@ -146,7 +207,10 @@ class GateService : AccessibilityService() {
         app.stats.event(if (group == GateActivity.WINDOW_GROUP) DayStats.WINDOW_BLOCK else DayStats.GATE_SHOWN)
         try {
             startActivity(GateActivity.intent(this@GateService, pkg, group))
+            _problem.value = null
         } catch (e: Exception) {
+            _problem.value = "没能弹出收费站，请在系统设置里允许后台弹出界面"
+            RunLog.e("收费站", "无法打开思考页", e)
             Log.e(TAG, "无法打开思考页", e)
         }
     }
@@ -159,7 +223,7 @@ class GateService : AccessibilityService() {
         shortCheck = scope.launch {
             delay(minutes * 60_000L)
             val now = System.currentTimeMillis()
-            if (lastAppPkg == pkg && WindowClock.active(now, app.settings.app.value, ZoneId.systemDefault()) != null &&
+            if (lastAppPkg == pkg && WindowClock.active(now, app.settings.app.value, AppZone.zone) != null &&
                 app.settings.app.value.windowPauseUntil <= now
             ) {
                 shortPkg = null
@@ -179,13 +243,25 @@ class GateService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onUnbind(intent: Intent?): Boolean {
-        if (running === this) running = null
+        if (running === this) {
+            running = null
+            _connected.value = false
+            watchJob?.cancel()
+            app.partner.foreground(null)
+        }
         Notifications.cancelRunning(this)
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
-        if (running === this) running = null
+        if (wakeRegistered) { unregisterReceiver(wakeReceiver); wakeRegistered = false }
+
+        if (running === this) {
+            running = null
+            _connected.value = false
+            watchJob?.cancel()
+            app.partner.foreground(null)
+        }
         Notifications.cancelRunning(this)
         scope.cancel()
         super.onDestroy()
@@ -193,12 +269,25 @@ class GateService : AccessibilityService() {
 
     companion object {
         private const val TAG = "GateService"
+        private val _connected = kotlinx.coroutines.flow.MutableStateFlow(false)
+        val connected: kotlinx.coroutines.flow.StateFlow<Boolean> = _connected
+        private val _problem = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+        val problem: kotlinx.coroutines.flow.StateFlow<String?> = _problem
+        private val _lastPackage = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+        val lastPackage: kotlinx.coroutines.flow.StateFlow<String?> = _lastPackage
 
         @Volatile
         private var running: GateService? = null
 
         /** 当前前台应用的包名；服务没开时为 null */
         val foreground: String? get() = running?.foregroundPkg
+
+        /** 不算“离开”也不算“回来”的界面：输入法、通知栏、相机、拨号、系统设置（桌面不算，回桌面就是走了） */
+        fun neutral(pkg: String): Boolean {
+            if (pkg in WindowRules.STATIC_SYSTEM) return true
+            val service = running ?: return false
+            return pkg in service.systemAllowed() && pkg !in service.homes
+        }
 
         /**
          * 窗口里的“拉回”能不能把你从 pkg 拉走：窗口允许的学习应用、相机、电话、输入法不拉

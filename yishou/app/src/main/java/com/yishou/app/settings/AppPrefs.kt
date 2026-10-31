@@ -15,6 +15,12 @@ data class AppGroup(
  * 以后加新设置项时旧数据也能读。
  */
 data class AppPrefs(
+    val morningEnabled: Boolean = true,
+    val morningFromHour: Int = 6,
+    val morningToHour: Int = 10,
+    val lastWakeDay: Long? = null,
+    val recallDay: Long = Long.MIN_VALUE,
+    val recallIds: Set<Long> = emptySet(),
     val groups: List<AppGroup> = DEFAULT_GROUPS,
     /** 包名 → 应用组名 */
     val watched: Map<String, String> = DEFAULT_WATCHED,
@@ -71,6 +77,34 @@ data class AppPrefs(
     val voiceMode: Boolean = true,
     /** 听写完几秒后自动发出，0 表示不自动发、等你确认 */
     val voiceAutoSendSeconds: Int = 3,
+    /** 时区：默认固定北京时间，"system" 表示跟随手机 */
+    val timeZone: String = AppZone.BEIJING,
+    /** 震动提示：新的一手、提醒、拉回、判定结果都有各自的震法 */
+    val haptics: Boolean = true,
+    /** 一组训练几手（不含重做） */
+    val coachSetMoves: Int = 5,
+    /** 一组几张题卡 */
+    val setCards: Int = 5,
+    /** 入口思考页要不要做一张题卡；关掉就只是打卡：说好看完做什么就放行 */
+    val gateCard: Boolean = true,
+    /** 入口思考页做什么：endgame 残局、card 一张题卡、line 主线下一手、check 只打卡 */
+    val gateMode: String = "card",
+    /** 强度：LIGHT 轻 / MID 中 / HARD 强（口水规则、回主线的频率、做事要不要写判断） */
+    val talkLevel: String = "MID",
+    /** 题卡先用自己的话说答案，再看选项 */
+    val predictFirst: Boolean = true,
+    /** 出题用的 AI App，每行“名字 包名 网址” */
+    val bankLinks: String = com.yishou.app.outside.AiApps.DEFAULT,
+    /** 刷题 App（粉笔……），每行“名字 包名 网址” */
+    val drillApps: String = com.yishou.app.outside.AiApps.DEFAULT_DRILL,
+    /** 入口思考页放行时说的“看完做的第一件事”，下次打开先问做了没有 */
+    val pendingExit: String = "",
+    /** 那次放行到期的时间；过了这个时间才问 */
+    val pendingExitAt: Long = 0,
+    /** 开组前先热身 */
+    val warmup: Boolean = true,
+    /** 各骰面的帮助等级（0 示范后补一步 … 3 连续接力、自己提下一问），按组的表现自动加减 */
+    val faceLevels: Map<Int, Int> = emptyMap(),
 ) {
     fun groupOf(pkg: String): String? = watched[pkg]
 
@@ -78,6 +112,12 @@ data class AppPrefs(
         groups.firstOrNull { it.name == group }?.passMinutes ?: DEFAULT_PASS_MINUTES
 
     fun toJson(): String = JSONObject()
+        .put("morningEnabled", morningEnabled)
+        .put("morningFromHour", morningFromHour)
+        .put("morningToHour", morningToHour)
+        .put("lastWakeDay", lastWakeDay)
+        .put("recallDay", recallDay)
+        .put("recallIds", JSONArray(recallIds.toList()))
         .put("groups", JSONArray().apply { groups.forEach { put(JSONObject().put("name", it.name).put("minutes", it.passMinutes)) } })
         .put("watched", JSONObject().apply { watched.forEach { (k, v) -> put(k, v) } })
         .put("offlinePassMinutes", offlinePassMinutes)
@@ -114,6 +154,20 @@ data class AppPrefs(
         .put("idleHours", idleHours)
         .put("voiceMode", voiceMode)
         .put("voiceAutoSendSeconds", voiceAutoSendSeconds)
+        .put("timeZone", timeZone)
+        .put("haptics", haptics)
+        .put("coachSetMoves", coachSetMoves)
+        .put("setCards", setCards)
+        .put("gateCard", gateCard)
+        .put("gateMode", gateMode)
+        .put("talkLevel", talkLevel)
+        .put("predictFirst", predictFirst)
+        .put("bankLinks", bankLinks)
+        .put("drillApps", drillApps)
+        .put("pendingExit", pendingExit)
+        .put("pendingExitAt", pendingExitAt)
+        .put("warmup", warmup)
+        .put("faceLevels", JSONObject().apply { faceLevels.forEach { (k, v) -> put(k.toString(), v) } })
         .toString()
 
     companion object {
@@ -164,6 +218,12 @@ data class AppPrefs(
             } ?: d.watched
             val checks = o.stringSet("manualChecks") ?: d.manualChecks
             return AppPrefs(
+                morningEnabled = o.optBoolean("morningEnabled", true),
+                morningFromHour = o.optInt("morningFromHour", 6).coerceIn(0, 23),
+                morningToHour = o.optInt("morningToHour", 10).coerceIn(1, 24),
+                lastWakeDay = if (o.isNull("lastWakeDay")) null else o.getLong("lastWakeDay"),
+                recallDay = o.optLong("recallDay", Long.MIN_VALUE),
+                recallIds = o.optJSONArray("recallIds")?.let { a -> (0 until a.length()).map { a.getLong(it) }.toSet() } ?: emptySet(),
                 groups = groups,
                 watched = watched,
                 offlinePassMinutes = o.optInt("offlinePassMinutes", d.offlinePassMinutes).coerceIn(1, 30),
@@ -200,6 +260,23 @@ data class AppPrefs(
                 idleHours = o.optInt("idleHours", d.idleHours).coerceIn(0, 12),
                 voiceMode = o.optBoolean("voiceMode", d.voiceMode),
                 voiceAutoSendSeconds = o.optInt("voiceAutoSendSeconds", d.voiceAutoSendSeconds).coerceIn(0, 10),
+                timeZone = o.optString("timeZone", d.timeZone).ifBlank { d.timeZone },
+                haptics = o.optBoolean("haptics", d.haptics),
+                coachSetMoves = o.optInt("coachSetMoves", d.coachSetMoves).coerceIn(3, 8),
+                setCards = o.optInt("setCards", d.setCards).coerceIn(1, 10),
+                gateCard = o.optBoolean("gateCard", d.gateCard),
+                gateMode = o.optString("gateMode", if (o.has("gateCard") && !o.optBoolean("gateCard", true)) "check" else d.gateMode),
+                talkLevel = o.optString("talkLevel", d.talkLevel),
+                predictFirst = o.optBoolean("predictFirst", d.predictFirst),
+                // 旧版默认的网页链接换成新的“App + 网址”列表；改过的保留
+                bankLinks = o.optString("bankLinks", d.bankLinks).let { if (it == com.yishou.app.bank.BankPrompt.DEFAULT_LINKS) d.bankLinks else it },
+                drillApps = o.optString("drillApps", d.drillApps),
+                pendingExit = o.optString("pendingExit", ""),
+                pendingExitAt = o.optLong("pendingExitAt", 0),
+                warmup = o.optBoolean("warmup", d.warmup),
+                faceLevels = o.optJSONObject("faceLevels")?.let { f ->
+                    f.keys().asSequence().mapNotNull { k -> k.toIntOrNull()?.takeIf { it in 1..6 }?.let { it to f.optInt(k).coerceIn(0, 3) } }.toMap()
+                } ?: d.faceLevels,
             )
         }
     }

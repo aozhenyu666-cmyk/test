@@ -92,6 +92,7 @@ fun PermissionsScreen(onBack: () -> Unit) {
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refreshKey++ }
 
     val acc = remember(refreshKey) { PermissionStatus.accessibility(context) }
+    val serviceConnected by GateService.connected.collectAsStateWithLifecycle()
     val notif = remember(refreshKey) { PermissionStatus.notifications(context) }
     val exact = remember(refreshKey) { PermissionStatus.exactAlarm(context) }
     val battery = remember(refreshKey) { PermissionStatus.batteryUnrestricted(context) }
@@ -117,11 +118,13 @@ fun PermissionsScreen(onBack: () -> Unit) {
             )
 
             PermissionCard(
-                title = "无障碍服务（必需）",
+                title = if (serviceConnected) "无障碍服务（已连接）" else if (acc) "无障碍开关已开，服务未连接" else "无障碍服务（必需）",
                 detail = "用于入口思考页：只读取当前前台应用的包名，不读取屏幕内容。在列表里找到「一手」并打开。",
                 ok = acc,
                 action = "去开启",
             ) { safeStart(context, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+
+            FloatingPermissionCard()
 
             PermissionCard(
                 title = "通知",

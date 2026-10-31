@@ -63,6 +63,24 @@ class SummaryEngineTest {
     }
 
     @Test
+    fun ledgerOnlyDayIsSummarized() = runTest {
+        val at = WindowClock.at(day, 21, 5, zone)
+        val withLedger = SummaryEngine(dao, coach, { AppPrefs() }, { now }, { zone }) { from, to ->
+            listOf(
+                LedgerEntry(at, LedgerKind.SCROLL, LedgerMark.MISS, "刷到「咖啡店倒闭」问：前提是什么？", "没人喝", "少了选址这一层"),
+                LedgerEntry(at + 60_000, LedgerKind.CARD, LedgerMark.HIT, "增长率比较"),
+            ).filter { it.at in from until to }
+        }
+        coach.summaryResult = LlmResult.Ok(SummaryResult("看到结论先找前提", "你说“没人喝”，还有什么可能？", "刷着练两问"))
+        val r = withLedger.run(day) as SummaryEngine.Outcome.Saved
+        assertEquals(1, coach.summaryCalls)
+        assertTrue(coach.lastDay.contains("刷着练 · 没接住"))
+        assertTrue(coach.lastDay.contains("少了选址这一层"))
+        assertEquals(2, r.summary.roundCount)
+        assertEquals(1, r.summary.effectiveCount)
+    }
+
+    @Test
     fun failureSavesNothing() = runTest {
         dao.currentTask = task
         dao.rounds += round(9, true)

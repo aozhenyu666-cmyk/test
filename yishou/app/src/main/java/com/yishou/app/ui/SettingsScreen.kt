@@ -25,10 +25,14 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -41,7 +45,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yishou.app.llm.LlmConfig
 import com.yishou.app.settings.AppPrefs
-import com.yishou.app.speech.SpeechConfig
+import com.yishou.app.settings.AppZone
+import com.yishou.app.speech.SpeechEndpoint
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,7 +66,7 @@ fun SettingsScreen(
     val context = LocalContext.current
 
     var baseUrl by rememberSaveable { mutableStateOf(saved.baseUrl) }
-    var apiKey by rememberSaveable { mutableStateOf(saved.apiKey) }
+    var apiKey by remember { mutableStateOf(saved.apiKey) }
     var model by rememberSaveable { mutableStateOf(saved.model) }
     var jsonMode by rememberSaveable { mutableStateOf(saved.jsonMode) }
     var showKey by rememberSaveable { mutableStateOf(false) }
@@ -107,30 +112,36 @@ fun SettingsScreen(
             }
 
             HorizontalDivider()
+            SectionTitle("早上唤起")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("第一次解锁叫我回来", modifier = Modifier.weight(1f))
+                Switch(checked = prefs.morningEnabled, onCheckedChange = { enabled -> vm.update { it.copy(morningEnabled = enabled) } })
+            }
+            Text("早上 6–10 点第一次解锁手机时，一手会直接打开。可以在这里关掉。时段按下面选择，使用一手的时区。")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    TimePickerDialog(context, { _, h, _ -> vm.update { it.copy(morningFromHour = h, morningToHour = maxOf(it.morningToHour, h + 1)) } }, prefs.morningFromHour, 0, true).show()
+                }) { Text("从 ${prefs.morningFromHour} 点") }
+                TextButton(onClick = {
+                    TimePickerDialog(context, { _, h, _ -> vm.update { it.copy(morningToHour = h.coerceAtLeast(1), morningFromHour = minOf(it.morningFromHour, h.coerceAtLeast(1) - 1)) } }, prefs.morningToHour % 24, 0, true).show()
+                }) { Text("到 ${prefs.morningToHour} 点") }
+            }
+            HorizontalDivider()
             SectionTitle("入口思考页")
             NavRow("权限与运行状态", "无障碍、通知、闹钟、电池，以及 vivo 的手动设置", onPermissions)
             NavRow(
-                "关注的应用与放行时长",
+                "关注的应用",
                 "已关注 ${prefs.watched.size} 个应用，${prefs.groups.size} 个应用组",
                 onWatchedApps,
             )
-            LabeledRow("离线放行时长") {
-                Stepper(prefs.offlinePassMinutes, 1..30, "分钟") { v -> vm.update { it.copy(offlinePassMinutes = v) } }
-            }
-            LabeledRow("离线放行每天最多") {
-                Stepper(prefs.offlineDailyLimit, 0..10, "次") { v -> vm.update { it.copy(offlineDailyLimit = v) } }
-            }
 
             HorizontalDivider()
             SectionTitle("分组训练")
             Text(
-                "像练体能一样分组：一组是几手有效回答，组间歇一下。起步目标每天几组，" +
-                    "连续两天达标自动加一组，连续两天没达标自动减一组。",
+                "像练体能一样分组：一组是几张题卡（在下面“题卡”里设），组间歇一下。" +
+                    "起步目标每天几组，连续两天达标自动加一组，连续两天没达标自动减一组。",
                 style = MaterialTheme.typography.bodySmall,
             )
-            LabeledRow("一组") {
-                Stepper(prefs.setSize, 1..10, "手") { v -> vm.update { it.copy(setSize = v) } }
-            }
             LabeledRow("组间休息") {
                 Stepper(prefs.restMinutes, 1..15, "分钟") { v -> vm.update { it.copy(restMinutes = v) } }
             }
@@ -213,6 +224,77 @@ fun SettingsScreen(
             }
             Text("白局是青白纸面配黑子，夜局是靛青夜空配白子和金色星位。", style = MaterialTheme.typography.bodySmall)
             SwitchRow("摇一摇手机掷骰子", prefs.shakeToRoll) { on -> vm.update { it.copy(shakeToRoll = on) } }
+            SwitchRow("震动提示", prefs.haptics) { on -> vm.update { it.copy(haptics = on) } }
+            Text(
+                "手机揣在身上、声音关着时靠震法分清：新的一手轻点两下，提醒三下一下比一下重，拉回是长短长两遍，" +
+                    "这手过了干脆一下，再改一下短促两下。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            HorizontalDivider()
+            SectionTitle("题卡")
+            LabeledRow("一组几张") {
+                Stepper(prefs.setCards, 1..10, "张") { v -> vm.update { it.copy(setCards = v) } }
+            }
+            SwitchRow("开组前先热身", prefs.warmup) { on -> vm.update { it.copy(warmup = on) } }
+            Text("热身两分钟：一分钟呼吸，再做五步心算接龙，把“接上一步”的动作先活动开。", style = MaterialTheme.typography.bodySmall)
+            SwitchRow("题卡先用自己的话说答案，再看选项", prefs.predictFirst) { on -> vm.update { it.copy(predictFirst = on) } }
+            Text("防乱选：先想出来，再认出来。连着三张又快又错时，这一组剩下的会自动打开。", style = MaterialTheme.typography.bodySmall)
+
+            HorizontalDivider()
+            SectionTitle("思维强度")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("LIGHT" to "轻", "MID" to "中", "HARD" to "强").forEach { (k, label) ->
+                    FilterChip(selected = prefs.talkLevel == k, onClick = { vm.update { it.copy(talkLevel = k) } }, label = { Text(label) })
+                }
+            }
+            Text(
+                "轻：口水规则只提醒。中：口水不超过 25%、第一句先说结论，每 5 手回一次主线，做事每步写一句判断。强：口水不超过 15%、更短更有结构，每 3 手回一次主线，适合语音对练。连着不想答会自动降一档。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            HorizontalDivider()
+            SectionTitle("打开关注的应用之前")
+            Text("入口使用已导入、带答案和依据的题卡。答案和依据都正确且未使用提示，才放行 15 分钟。", style = MaterialTheme.typography.bodySmall)
+
+            HorizontalDivider()
+            SectionTitle("题库")
+            var links by remember(prefs.bankLinks) { mutableStateOf(prefs.bankLinks) }
+            OutlinedTextField(
+                value = links,
+                onValueChange = { links = it },
+                label = { Text("出题用的 AI（每行：名字 包名 网址）") },
+                minLines = 3,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            var drillApps by remember(prefs.drillApps) { mutableStateOf(prefs.drillApps) }
+            OutlinedTextField(
+                value = drillApps,
+                onValueChange = { drillApps = it },
+                label = { Text("刷题 App（每行：名字 包名 网址）") },
+                minLines = 1,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (links != prefs.bankLinks || drillApps != prefs.drillApps) {
+                TextButton(onClick = { vm.update { it.copy(bankLinks = links, drillApps = drillApps) } }) { Text("保存") }
+            }
+            Text("装了 App 就直接打开 App（出题要求会直接发进去）；没装就打开网址。包名不知道可以只写网址。", style = MaterialTheme.typography.bodySmall)
+
+            HorizontalDivider()
+            SectionTitle("时区")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(AppZone.BEIJING to "北京时间", AppZone.SYSTEM to "跟随手机").forEach { (z, label) ->
+                    FilterChip(
+                        selected = prefs.timeZone == z,
+                        onClick = { vm.update(reschedule = true, resummary = true, renudge = true) { it.copy(timeZone = z) } },
+                        label = { Text(label) },
+                    )
+                }
+            }
+            Text(
+                "默认固定北京时间：手机时区改来改去时，“今天”、陪练窗口、每晚总结都不跟着变。现在用的是 ${AppZone.zone.id}。",
+                style = MaterialTheme.typography.bodySmall,
+            )
 
             HorizontalDivider()
             SectionTitle("大模型接口")
@@ -261,6 +343,9 @@ fun SettingsScreen(
                 message = vm.saveLlm(LlmConfig(baseUrl, apiKey, model, jsonMode)) ?: "已保存"
             }) { Text("保存接口设置") }
             message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+            key(LlmConfig(baseUrl, apiKey, model, jsonMode)) {
+                ConnectionTest("测试文字连接") { vm.testText(LlmConfig(baseUrl, apiKey, model, jsonMode)) }
+            }
 
             HorizontalDivider()
             VisionSection(vm)
@@ -280,7 +365,7 @@ fun SettingsScreen(
 private fun VisionSection(vm: SettingsViewModel) {
     val saved by vm.vision.collectAsStateWithLifecycle()
     var baseUrl by rememberSaveable { mutableStateOf(saved.baseUrl) }
-    var apiKey by rememberSaveable { mutableStateOf(saved.apiKey) }
+    var apiKey by remember { mutableStateOf(saved.apiKey) }
     var model by rememberSaveable { mutableStateOf(saved.model) }
     var message by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -318,19 +403,15 @@ private fun VisionSection(vm: SettingsViewModel) {
         Text("保存识图设置")
     }
     message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+    key(LlmConfig(baseUrl, apiKey, model, false)) {
+        ConnectionTest("测试识图连接（发送测试图）") { vm.testVision(LlmConfig(baseUrl, apiKey, model, false)) }
+    }
 }
 
-/** 语音：陪练窗口里读完题就听你说；可选填 OpenAI 兼容的听写 / 朗读接口，空着用手机自带的。 */
+/** 听写和朗读各自保存，允许来自不同服务。 */
 @Composable
 private fun VoiceSection(vm: SettingsViewModel, prefs: AppPrefs) {
     val saved by vm.speech.collectAsStateWithLifecycle()
-    var baseUrl by rememberSaveable { mutableStateOf(saved.baseUrl) }
-    var apiKey by rememberSaveable { mutableStateOf(saved.apiKey) }
-    var stt by rememberSaveable { mutableStateOf(saved.sttModel) }
-    var tts by rememberSaveable { mutableStateOf(saved.ttsModel) }
-    var voiceName by rememberSaveable { mutableStateOf(saved.ttsVoice) }
-    var message by rememberSaveable { mutableStateOf<String?>(null) }
-
     SectionTitle("语音")
     SwitchRow("语音陪练：读完题就听我说", prefs.voiceMode) { on -> vm.update { it.copy(voiceMode = on) } }
     LabeledRow("听写好后自动发出") {
@@ -341,53 +422,61 @@ private fun VoiceSection(vm: SettingsViewModel, prefs: AppPrefs) {
             "“我不知道”“再说一遍”“先停”“示范”“换一个”“等一下”“取消”。",
         style = MaterialTheme.typography.bodySmall,
     )
-    Text(
-        "下面的接口可选，按 OpenAI 兼容格式（/audio/transcriptions 听写、/audio/speech 朗读）。" +
-            "听写模型空着就用手机自带的语音识别，朗读模型空着就用系统朗读。录音只发给这里填的接口，不保存。",
-        style = MaterialTheme.typography.bodySmall,
-    )
-    OutlinedTextField(
-        value = baseUrl,
-        onValueChange = { baseUrl = it; message = null },
-        label = { Text("语音接口地址") },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = apiKey,
-        onValueChange = { apiKey = it; message = null },
-        label = { Text("语音密钥") },
-        singleLine = true,
-        visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = stt,
-        onValueChange = { stt = it; message = null },
-        label = { Text("听写模型（例如 whisper-1）") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = tts,
-        onValueChange = { tts = it; message = null },
-        label = { Text("朗读模型（例如 tts-1）") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = voiceName,
-        onValueChange = { voiceName = it; message = null },
-        label = { Text("朗读音色（接口要求时填）") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    Button(onClick = { message = vm.saveSpeech(SpeechConfig(baseUrl, apiKey, stt, tts, voiceName)) ?: "已保存" }) {
-        Text("保存语音设置")
+    Text("听写与朗读可分开填服务，空着则使用手机自带能力。录音不保存。测试连接会发送测试内容，可能消耗接口额度。", style = MaterialTheme.typography.bodySmall)
+    SpeechEndpointEditor("听写", saved.input, input = true, save = vm::saveTranscriber, test = vm::testTranscriber)
+    HorizontalDivider()
+    SpeechEndpointEditor("朗读", saved.output, input = false, save = vm::saveSynthesizer, test = vm::testSynthesizer)
+}
+
+@Composable
+private fun SpeechEndpointEditor(
+    label: String,
+    saved: SpeechEndpoint,
+    input: Boolean,
+    save: (SpeechEndpoint) -> String?,
+    test: suspend (SpeechEndpoint) -> String,
+) {
+    var baseUrl by remember(saved) { mutableStateOf(saved.baseUrl) }
+    var apiKey by remember(saved) { mutableStateOf(saved.apiKey) }
+    var model by remember(saved) { mutableStateOf(saved.model) }
+    var voice by remember(saved) { mutableStateOf(saved.voice) }
+    var language by remember(saved) { mutableStateOf(saved.language) }
+    var format by remember(saved) { mutableStateOf(saved.format) }
+    var message by remember { mutableStateOf<String?>(null) }
+    SectionTitle("$label 接口")
+    OutlinedTextField(baseUrl, { baseUrl = it; message = null }, label = { Text("$label 接口地址") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(apiKey, { apiKey = it; message = null }, label = { Text("$label 密钥") }, singleLine = true,
+        visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(model, { model = it; message = null }, label = { Text("$label 模型名（空着用系统）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    if (input) {
+        OutlinedTextField(language, { language = it; message = null }, label = { Text("识别语言") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    } else {
+        OutlinedTextField(voice, { voice = it; message = null }, label = { Text("音色（接口要求时填）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("mp3", "wav").forEach { value ->
+                FilterChip(selected = format == value, onClick = { format = value; message = null }, label = { Text(value) })
+            }
+        }
     }
+    val current = SpeechEndpoint(baseUrl, apiKey, model, voice, language, format)
+    Button(onClick = { message = save(current) ?: "已保存$label 设置" }) { Text("保存$label 设置") }
     message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+    key(current) { ConnectionTest(if (input) "测试听写（发送静音片段）" else "测试朗读（合成不播放）") { test(current) } }
+}
+
+@Composable
+private fun ConnectionTest(label: String, test: suspend () -> String) {
+    val scope = rememberCoroutineScope()
+    var testing by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<String?>(null) }
+    OutlinedButton(enabled = !testing, onClick = {
+        testing = true
+        result = null
+        scope.launch {
+            try { result = test() } finally { testing = false }
+        }
+    }) { Text(if (testing) "正在测试……" else label) }
+    result?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
 }
 
 @Composable

@@ -30,6 +30,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
@@ -104,7 +105,14 @@ fun VoiceRings(level: Float, phase: ListenPhase, speaking: Boolean, modifier: Mo
  * 听写出的字交给 onText。第一次用时请求麦克风权限。
  */
 @Composable
-fun MicButton(onText: (String) -> Unit, enabled: Boolean = true, onNote: (String?) -> Unit = {}) {
+fun MicButton(
+    onText: (String) -> Unit,
+    enabled: Boolean = true,
+    onNote: (String?) -> Unit = {},
+    /** 识别用不了（没有系统识别、没有权限、接口失败）：通常改用输入法自带的麦克风 */
+    onFailed: (String) -> Unit = {},
+    onStart: () -> Unit = {},
+) {
     val app = LocalContext.current.applicationContext as YishouApp
     val voice = app.voice
     val phase by voice.phase.collectAsStateWithLifecycle()
@@ -114,20 +122,28 @@ fun MicButton(onText: (String) -> Unit, enabled: Boolean = true, onNote: (String
     // 听写回来时用最新的回调（期间输入框可能变了）
     val currentOnText by rememberUpdatedState(onText)
     val currentOnNote by rememberUpdatedState(onNote)
+    val currentOnFailed by rememberUpdatedState(onFailed)
     fun start() {
+        onStart()
         mine = true
         currentOnNote(null)
         scope.launch {
             when (val h = voice.listen()) {
                 is Heard.Text -> currentOnText(h.text)
                 Heard.Nothing -> currentOnNote("没听到，再点一下说")
-                is Heard.Failed -> currentOnNote(h.message)
+                is Heard.Failed -> {
+                    currentOnNote(h.message)
+                    currentOnFailed(h.message)
+                }
             }
             mine = false
         }
     }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        if (ok) start() else onNote("没有麦克风权限。可以在系统设置里给一手开麦克风。")
+        if (ok) start() else {
+            onNote("没有麦克风权限。可以在系统设置里给一手开麦克风，或者直接用输入法上的麦克风。")
+            onFailed("没有麦克风权限")
+        }
     }
     val listening = mine && phase == ListenPhase.LISTENING
     Box(contentAlignment = Alignment.Center, modifier = Modifier.size(52.dp)) {
@@ -196,6 +212,8 @@ fun VoiceTextField(
     enabled: Boolean = true,
 ) {
     var note by remember { mutableStateOf<String?>(null) }
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     androidx.compose.foundation.layout.Column(modifier) {
         androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
             androidx.compose.material3.OutlinedTextField(
@@ -205,12 +223,17 @@ fun VoiceTextField(
                 minLines = minLines,
                 enabled = enabled,
                 shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).then(Modifier.focusRequester(focus)),
             )
             MicButton(
                 onText = { t -> onValueChange(value.trimEnd().let { if (it.isEmpty()) t else "$it，$t" }) },
                 enabled = enabled,
                 onNote = { note = it },
+                onFailed = { msg ->
+                    note = "$msg。可以直接点输入法键盘上的麦克风说。"
+                    runCatching { focus.requestFocus() }
+                    keyboard?.show()
+                },
             )
         }
         VoiceNote(note)

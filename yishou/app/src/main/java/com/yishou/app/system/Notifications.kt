@@ -22,6 +22,8 @@ object Notifications {
     const val ID_WINDOW = 2
     const val ID_NUDGE = 3
     const val ID_IDLE = 4
+    const val ID_CAPSULE = 5
+    private const val CH_CAPSULE = "capsule"
 
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java)
@@ -34,6 +36,12 @@ object Notifications {
         nm.createNotificationChannel(
             NotificationChannel(CH_WINDOW, "陪练窗口", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "陪练窗口开始、还没走第一手、休息时间到"
+            },
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CH_CAPSULE, "回来第一步", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "放行时说好的“回来第一步”，切出去时挂在通知栏里"
+                setShowBadge(false)
             },
         )
         nm.createNotificationChannel(
@@ -99,6 +107,31 @@ object Notifications {
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .build()
         notify(context, id, n)
+    }
+
+    /**
+     * 岔路的出口胶囊：放行时说好的“回来第一步”挂在通知栏，切回来一眼就知道从哪接上。
+     * 下次过入口答了“做了没有”就收掉；也可以直接划掉。
+     */
+    fun showCapsule(context: Context, firstStep: String) {
+        val open = PendingIntent.getActivity(
+            context, 5, Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val n = NotificationCompat.Builder(context, CH_CAPSULE)
+            .setSmallIcon(R.drawable.ic_stat_yishou)
+            .setContentTitle("回来第一步")
+            .setContentText(firstStep)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(firstStep))
+            .setContentIntent(open)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+        notify(context, ID_CAPSULE, n)
+    }
+
+    fun cancelCapsule(context: Context) {
+        NotificationManagerCompat.from(context).cancel(ID_CAPSULE)
     }
 
     private fun notify(context: Context, id: Int, n: android.app.Notification) {

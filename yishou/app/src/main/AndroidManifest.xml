@@ -3,6 +3,7 @@
 
     <!-- 唯一的网络用途：把任务文本和回答发到用户自己配置的大模型接口 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- 常驻通知“一手正在运行”和“陪练窗口开始”提醒（Android 13 起需要用户同意） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 陪练窗口准点提醒；没有授权时退回普通闹钟 -->
@@ -16,8 +17,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <!-- 陪练窗口期间保持前台，划掉界面或清理后台时计时和朗读不中断 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 语音伙伴：用户点开始后才开麦克风，前台服务带常驻通知和“停”按钮 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- 语音陪练：只在你点麦克风、或陪练读完题等你回答时录这一段话，转成文字后丢掉 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- 震动提示：手机揣在身上、声音关着时也能分清是什么事 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- 关注应用的选择列表只需要“桌面上能打开的应用”，不申请读取全部应用 -->
     <queries>
@@ -36,6 +41,17 @@
         <intent>
             <action android:name="android.intent.action.DIAL" />
         </intent>
+        <!-- 题库“去出题”：把出题要求分享进你装的 AI App；“去刷题”：打开粉笔这类 App -->
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="text/plain" />
+        </intent>
+        <package android:name="com.openai.chatgpt" />
+        <package android:name="com.google.android.apps.bard" />
+        <package android:name="com.larus.nova" />
+        <package android:name="com.deepseek.chat" />
+        <package android:name="com.moonshot.kimichat" />
+        <package android:name="com.fenbi.android.servant" />
         <!-- 没填听写接口时用手机自带的语音识别；朗读用系统朗读引擎 -->
         <intent>
             <action android:name="android.speech.RecognitionService" />
@@ -43,12 +59,11 @@
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
-        <!-- 和总控互相连接：读总控的状态、从这里打开总控 -->
-        <package android:name="com.zongkong.app" />
     </queries>
 
     <application
         android:name=".YishouApp"
+        android:usesCleartextTraffic="true"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -65,13 +80,44 @@
             </intent-filter>
         </activity>
 
+        <!-- 分享到一手：只接收你在别的应用里主动“分享”的这一条文字或图片 -->
+        <activity
+            android:name=".share.ShareActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:label="收进一手"
+            android:taskAffinity="${applicationId}.share"
+            android:theme="@style/Theme.Yishou.Sheet">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+            <!-- 题库文件：Word、PDF、文本，可以一次分享好几个 -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+                <data android:mimeType="application/msword" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+        </activity>
+
         <!-- 入口思考页：独立任务，关闭后回到原应用，不出现在最近任务里 -->
         <activity
             android:name=".gate.GateActivity"
             android:excludeFromRecents="true"
             android:exported="false"
             android:launchMode="singleTask"
-            android:taskAffinity="com.yishou.app.gate"
+            android:taskAffinity="${applicationId}.gate"
             android:windowSoftInputMode="adjustResize" />
 
         <activity
@@ -79,6 +125,8 @@
             android:exported="false"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize" />
+
+        <activity android:name=".floating.FloatingReplyActivity" android:exported="false" android:taskAffinity="${applicationId}.reply" android:excludeFromRecents="true" android:launchMode="singleTask" android:theme="@style/Theme.Yishou.Sheet" android:windowSoftInputMode="adjustResize" />
 
         <!-- 无障碍服务：只读前台应用包名，见 res/xml/gate_service.xml -->
         <service
@@ -99,6 +147,32 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
+        <!-- 刷着练：用户同意看屏后，只在点“考我一下”或在关注的应用里刷满设定分钟时截一屏出题；截图不保存，60 分钟自动停 -->
+        <service
+            android:name=".scroll.ScrollService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!-- 刷着练的跳板：开始（看屏授权）、考我一下（收起通知栏再截）、去 AI 里接着聊 -->
+        <activity
+            android:name=".scroll.ScrollActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity="${applicationId}.scroll"
+            android:theme="@style/Theme.Yishou.Clear" />
+
+        <!-- 快捷开关“考我一下”：自己在系统快捷开关里加上才会出现 -->
+        <service
+            android:name=".scroll.ScrollTile"
+            android:exported="true"
+            android:icon="@drawable/ic_stat_yishou"
+            android:label="考我一下"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
         <service
             android:name=".window.WindowService"
             android:exported="false"
@@ -106,6 +180,20 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="用户主动开启的学习陪练计时：倒计时、朗读问题和无回应提醒，窗口结束即停止" />
+        </service>
+
+        <service
+            android:name=".partner.PartnerVoiceService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <service
+            android:name=".partner.PartnerService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="用户主动开始的外部伴读计时和离开提醒：只观察前台包名，不录音，到点停止" />
         </service>
 
         <!-- 局面壁纸：用户自己在系统壁纸设置里选用 -->
@@ -153,12 +241,6 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
-
-        <!-- 总控连接：只走 call()，只认总控的签名（见 link/Partner.kt），别的应用调用一律拒绝 -->
-        <provider
-            android:name=".link.LinkProvider"
-            android:authorities="com.yishou.app.link"
-            android:exported="true" />
 
         <receiver
             android:name=".window.RescheduleReceiver"

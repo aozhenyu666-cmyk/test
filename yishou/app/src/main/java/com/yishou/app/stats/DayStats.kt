@@ -55,11 +55,16 @@ data class DayStats(
     companion object {
         const val GATE_SHOWN = "gate_shown"
         const val GATE_PASS = "gate_pass"
+        const val LOW_PASS = "low_pass"
+        const val WAIT_PASS = "wait_pass"
         const val OFFLINE_PASS = "offline_pass"
         const val WINDOW_BLOCK = "window_block"
         const val LOOK = "look"
         /** 无回应时把窗口页拉回前台 */
         const val PULL_BACK = "pull_back"
+        /** 放行时说好“看完做什么”，下次问到时：做了 / 没做 */
+        const val EXIT_KEPT = "exit_kept"
+        const val EXIT_MISSED = "exit_missed"
 
         fun fromJson(text: String?, date: String): DayStats {
             if (text.isNullOrBlank()) return DayStats(date)

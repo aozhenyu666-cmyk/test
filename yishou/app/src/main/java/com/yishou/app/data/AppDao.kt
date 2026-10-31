@@ -29,6 +29,9 @@ abstract class AppDao {
     @Query("SELECT * FROM task ORDER BY createdAt DESC")
     abstract fun observeAllTasks(): Flow<List<Task>>
 
+    @Query("SELECT * FROM task ORDER BY createdAt DESC")
+    abstract suspend fun allTasks(): List<Task>
+
     @Insert
     abstract suspend fun insertTask(task: Task): Long
 
@@ -119,16 +122,8 @@ abstract class AppDao {
     abstract suspend fun insertPass(pass: Pass): Long
 
     /** 该应用组还没到期的放行，到期的自然查不到 */
-    @Query("SELECT * FROM pass WHERE packageGroup = :group AND endAt > :now ORDER BY endAt DESC LIMIT 1")
+    @Query("SELECT * FROM pass WHERE packageGroup = :group AND endAt > :now AND roundId = -1 ORDER BY endAt DESC LIMIT 1")
     abstract suspend fun activePass(group: String, now: Long): Pass?
-
-    /** 离线保存：原话存成一轮（judged = false），同时发放一次放行。断点不变。 */
-    @Transaction
-    open suspend fun saveOfflineRound(round: Round, pass: Pass): Pass {
-        val roundId = insertRound(round)
-        val saved = pass.copy(roundId = roundId)
-        return saved.copy(id = insertPass(saved))
-    }
 
     // ---------- 每晚总结 ----------
 
@@ -141,9 +136,6 @@ abstract class AppDao {
 
     @Query("SELECT * FROM daily_summary WHERE date = :date")
     abstract suspend fun getSummary(date: String): DailySummary?
-
-    @Query("SELECT * FROM daily_summary ORDER BY date DESC LIMIT 1")
-    abstract suspend fun latestSummary(): DailySummary?
 
     @Query("SELECT * FROM daily_summary ORDER BY date DESC LIMIT 60")
     abstract fun observeSummaries(): Flow<List<DailySummary>>

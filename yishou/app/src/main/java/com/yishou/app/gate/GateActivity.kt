@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -35,6 +36,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -52,6 +54,15 @@ import com.yishou.app.ui.TypingBubble
 import com.yishou.app.ui.UserBubble
 import com.yishou.app.ui.VerdictLine
 import com.yishou.app.ui.theme.YishouTheme
+import com.yishou.app.ui.theme.StoneMark
+import com.yishou.app.ui.CardRoundView
+import com.yishou.app.ui.MatrixLoader
+import com.yishou.app.ui.VoiceTextField
+import com.yishou.app.ui.BrakeButton
+import com.yishou.app.ui.EchoCard
+import com.yishou.app.ui.EndgameBoard
+import com.yishou.app.system.Variant
+import com.yishou.app.card.SessionState
 import com.yishou.app.window.WindowActivity
 import kotlinx.coroutines.delay
 
@@ -76,29 +87,17 @@ class GateActivity : ComponentActivity() {
                 val s by vm.state.collectAsStateWithLifecycle()
                 LaunchedEffect(s.passMinutes) {
                     if (s.passMinutes != null) {
-                        delay(2_500)
+                        delay(1_800)
                         returnToApp()
                     }
                 }
-                val attachment by vm.attachment.state.collectAsStateWithLifecycle()
-                val startersPair by vm.starters.collectAsStateWithLifecycle()
                 GateScreen(
                     s = s,
-                    starters = startersPair?.takeIf { it.first == s.coachMove }?.second.orEmpty(),
-                    attachment = attachment,
-                    onAttach = vm::attach,
-                    onClearAttachment = vm.attachment::clear,
-                    onAnswerChange = vm::onAnswerChange,
-                    onSubmit = vm::submit,
-                    onSaveOffline = vm::saveOffline,
+                    vm = vm,
                     onReturn = ::returnToApp,
                     onHome = { if (s.isTest) finish() else goHome() },
                     onOpenWindow = {
                         startActivity(Intent(this, WindowActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                        finishAndRemoveTask()
-                    },
-                    onOpenApp = {
-                        startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                         finishAndRemoveTask()
                     },
                 )
@@ -115,17 +114,19 @@ class GateActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         isShowing = true
+        vm.refreshPartnerClose()
     }
 
     override fun onPause() {
         isShowing = false
+        vm.cancelWait()
         super.onPause()
     }
 
     private fun startFromIntent(intent: Intent) {
         val pkg = intent.getStringExtra(EXTRA_PACKAGE)
         val group = intent.getStringExtra(EXTRA_GROUP).orEmpty()
-        val label = pkg?.let { appLabel(it) } ?: "测试"
+        val label = pkg?.let { appLabel(it) } ?: if (group == "早上") "早上" else "测试"
         vm.start(pkg, group, label)
     }
 
@@ -177,147 +178,79 @@ class GateActivity : ComponentActivity() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
         /** 权限页“测试思考页”：走一遍流程，但不发放行。 */
+        fun morningIntent(context: Context): Intent = Intent(context, GateActivity::class.java)
+            .putExtra(EXTRA_GROUP, "早上").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
         fun testIntent(context: Context): Intent =
             Intent(context, GateActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
 }
 
 @Composable
-private fun GateScreen(
-    s: GateState,
-    starters: List<String>,
-    attachment: Attachment?,
-    onAttach: (Uri) -> Unit,
-    onClearAttachment: () -> Unit,
-    onAnswerChange: (String) -> Unit,
-    onSubmit: () -> Unit,
-    onSaveOffline: () -> Unit,
-    onReturn: () -> Unit,
-    onHome: () -> Unit,
-    onOpenWindow: () -> Unit,
-    onOpenApp: () -> Unit,
-) {
+private fun GateScreen(s: GateState, vm: GateViewModel, onReturn: () -> Unit, onHome: () -> Unit, onOpenWindow: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     Surface(Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .imePadding()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(
-                if (s.isTest) "思考页（测试，不放行）" else "打开「${s.appLabel}」之前，先应一手",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-            )
-
-            if (s.loading) {
-                CircularProgressIndicator()
-                return@Column
-            }
-
-            val task = s.task
-            if (task == null) {
-                Text("还没有当前任务。先在「一手」里填一个真实的学习任务。")
-                Button(onClick = onOpenApp, modifier = Modifier.fillMaxWidth()) { Text("打开一手") }
-                OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("回到桌面") }
-                return@Column
-            }
-
-            if (s.inWindow) {
-                Text(
-                    if (s.group == GateActivity.WINDOW_GROUP) {
-                        "陪练窗口进行中，「${s.appLabel}」不在这一局允许的应用里。想歇一下就在陪练里点“先停”。"
-                    } else {
-                        "陪练窗口进行中。窗口里不放行，先回到陪练。"
-                    },
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                Button(onClick = onOpenWindow, modifier = Modifier.fillMaxWidth()) { Text("回到陪练") }
-                OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("回到桌面") }
-                return@Column
-            }
-
-            Text(task.title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-
-            // 总控的要求：为什么收紧、今天的主线
-            s.zongkong?.let { zk ->
-                if (zk.note.isNotBlank() || zk.mainTitle.isNotBlank()) {
-                    Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)) {
-                        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            if (zk.note.isNotBlank()) Text(zk.note, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                            if (zk.passCap > 0) Text("答对这一手最多放行 ${zk.passCap} 分钟" + if (zk.noOffline) "，不能离线放行" else "", style = MaterialTheme.typography.bodySmall)
-                            if (zk.mainTitle.isNotBlank()) Text("总控里今天的主线：${zk.mainTitle}", style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
-            }
-
-            s.resumeFrom?.let { last ->
-                ResumeCard(
-                    gapMinutes = (System.currentTimeMillis() - last.createdAt) / 60_000,
-                    lastAnswer = last.userAnswer,
-                    stuck = s.breakpoint?.stuck,
-                )
-            }
-
-            s.lastRound?.let { r ->
-                UserBubble(r.userAnswer)
-                VerdictLine(r)
-            }
-
-            if (s.held) {
-                Text("这一手算数。但总控的专注锁开着，现在不放行：" + (s.zongkong?.note ?: "先回去做事"), style = MaterialTheme.typography.titleMedium)
-                Button(onClick = { com.yishou.app.link.ZongkongClient.open(context) }, modifier = Modifier.fillMaxWidth()) { Text("回总控") }
-                OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text("回到桌面") }
-                return@Column
-            }
-
-            val passMinutes = s.passMinutes
-            if (passMinutes != null) {
-                Text("放行 $passMinutes 分钟。马上回到「${s.appLabel}」。", style = MaterialTheme.typography.titleMedium)
-                Button(onClick = onReturn, modifier = Modifier.fillMaxWidth()) { Text("现在回去") }
-                return@Column
-            }
-
+        Column(Modifier.fillMaxSize().statusBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text(if (s.isTest) "思考页（测试，不放行）" else "打开「${s.appLabel}」之前", style = MaterialTheme.typography.titleMedium)
             when {
-                s.moveLoading -> TypingBubble()
-                s.coachMove != null -> {
-                    s.moveError?.let {
-                        Text("陪练暂时出不了题（$it），先回答下面这个问题：", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    }
-                    if (s.moveError == null) s.breakpoint?.pendingFace?.takeIf { it > 0 }?.let { FaceChip(it) }
-                    CoachBubble(s.coachMove) { s.breakpoint?.updatedAt?.let { ElapsedClock(it) } }
+                s.loading -> CircularProgressIndicator()
+                s.partnerPending -> {
+                    Text("上次伴读还没收线")
+                    Button(onClick = { context.startActivity(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, "partner")) }) { Text("回一手收线") }
                 }
-            }
-
-            if (s.coachMove != null) {
-                AnswerComposer(
-                    starters = starters,
-                    answer = s.answer,
-                    onAnswerChange = onAnswerChange,
-                    attachment = attachment,
-                    onAttach = onAttach,
-                    onClearAttachment = onClearAttachment,
-                    submitting = s.submitting,
-                    onSubmit = onSubmit,
-                    hint = s.hint,
-                    error = s.judgeError,
-                )
-                if (s.judgeError != null && !s.isTest) {
-                    if (s.offlineLeft > 0) {
-                        OutlinedButton(onClick = onSaveOffline, enabled = !s.submitting, modifier = Modifier.fillMaxWidth()) {
-                            Text("保存并通过（${s.offlineMinutes} 分钟，今天还剩 ${s.offlineLeft} 次）")
+                s.passMinutes != null -> {
+                    Text("放行 ${s.passMinutes} 分钟")
+                    Button(onClick = onReturn) { Text("回到「${s.appLabel}」") }
+                }
+                s.inWindow -> {
+                    Text("陪练窗口进行中，先回到陪练")
+                    Button(onClick = onOpenWindow) { Text("回到陪练") }
+                }
+                s.followUp != null -> {
+                    Text("上次说“${s.followUp}”，做了吗？")
+                    Row { Button(onClick = { vm.answerFollowUp(true) }) { Text("做了") }; TextButton(onClick = { vm.answerFollowUp(false) }) { Text("没做") } }
+                }
+                s.waiting -> {
+                    val secs = (s.waitRemainingMs + 999) / 1000
+                    Text("还需 ${secs / 60} 分 ${secs % 60} 秒；离开页面重新计时")
+                    if (s.waitRemainingMs == 0L) Button(onClick = vm::passAfterWait, enabled = !s.isTest && !s.busy) { Text("放行 5 分钟") }
+                    OutlinedButton(onClick = vm::cancelWait) { Text("取消等待") }
+                }
+                vm.recall != null -> com.yishou.app.ui.RecallView(vm.recall!!, vm.recallSource(), s.busy, vm.recallFeedback, vm::submitRecall, vm::nextRecall, vm.recallingEcho)
+                vm.ice != null -> IceView(vm.ice!!, vm::finishIce)
+                s.mode == com.yishou.app.reflex.Main.WAIT -> {
+                    Text("暂时没有能继续的题，可以等一会儿或离开手机")
+                    Button(onClick = vm::startWait, enabled = !s.busy) { Text("等 10 分钟，换 5 分钟") }
+                    OutlinedButton(onClick = vm::retryUnavailable, enabled = !s.busy) { Text("重新找题") }
+                }
+                else -> {
+                    if (s.mode == com.yishou.app.reflex.Main.STRAND) vm.work.strand?.let { com.yishou.app.ui.StrandHeading(it) }
+                    ProbeGateView(s, vm)
+                    val rev = vm.review
+                    if (rev?.verdict?.passed == true && rev.pullBack) {
+                        Text("连上了，接着想这件事")
+                        Button(onClick = vm::retry, enabled = !s.busy) { Text("接着来") }
+                    } else if (rev?.verdict?.passed == true) {
+                        if (!vm.triggerSaved) com.yishou.app.ui.TriggerEditor(rev.q, s.busy, vm::saveTrigger)
+                        else {
+                            Text("触发器已存好")
+                            VoiceTextField(s.exit, vm::onExitChange, "看完做什么（可不填）", Modifier.fillMaxWidth())
+                            Button(onClick = vm::pass, enabled = !s.busy && !s.isTest) { Text("通过，放行 15 分钟") }
                         }
-                    } else {
-                        Text("今天的离线放行已经用完，只能重试或回到桌面。", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
-            TextButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text(if (s.isTest) "关闭" else "回到桌面") }
+            s.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text(if (s.isTest) "关闭" else "先回桌面") }
         }
     }
+}
+
+@Composable
+private fun IceView(ice: com.yishou.app.reflex.Ice, onDone: () -> Unit) {
+    var left by androidx.compose.runtime.remember(ice) { androidx.compose.runtime.mutableStateOf(5) }
+    LaunchedEffect(ice) { while (left > 0) { delay(1_000); left-- }; onDone() }
+    Text("直觉看一眼，哪个更像鬼扯？（$left 秒）")
+    Button(onClick = onDone, modifier = Modifier.fillMaxWidth().height(72.dp)) { Text(ice.left) }
+    Button(onClick = onDone, modifier = Modifier.fillMaxWidth().height(72.dp)) { Text(ice.right) }
 }

@@ -1,5 +1,7 @@
 package com.yishou.app.window
 
+import com.yishou.app.settings.AppZone
+
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -24,6 +26,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import java.time.ZoneId
 
 /**
@@ -35,6 +38,11 @@ class WindowService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var loop: Job? = null
+    private var panelJob: Job? = null
+    private val app get() = application as YishouApp
+    private val vm by lazy {
+        androidx.lifecycle.ViewModelProvider(app.windowOwner, androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.getInstance(app))[WindowViewModel::class.java]
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -56,6 +64,25 @@ class WindowService : Service() {
             Log.w(TAG, "无法进入前台", e)
             stopSelf()
             return START_NOT_STICKY
+        }
+        if (panelJob?.isActive != true) {
+            panelJob = scope.launch {
+                kotlinx.coroutines.flow.combine(vm.state, vm.card, ScreenLookService.running, ScreenLookService.status) { s, c, look, status ->
+                    val question = vm.overlayPrompt().orEmpty().ifBlank { c.round?.card?.question.orEmpty() }
+                    com.yishou.app.floating.FloatPanel(
+                        if (look) "陪练 · 可以看屏" else "陪练窗口",
+                        status ?: (s.voiceNote?.let { "$question\n$it" } ?: question).ifBlank { "还剩 ${(s.remainingMs + 59_999) / 60_000} 分钟" },
+                        listOf(
+                            com.yishou.app.floating.FloatAction(if (look) "看一眼" else "开启看屏") {
+                                if (look) ScreenLookService.look(this@WindowService)
+                                else startActivity(Intent(this@WindowService, WindowActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            },
+                            com.yishou.app.floating.FloatAction("回一句 / 说话") { com.yishou.app.floating.FloatingReplyActivity.open(this@WindowService, "window") },
+                            com.yishou.app.floating.FloatAction("回到陪练") { startActivity(Intent(this@WindowService, WindowActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) },
+                            com.yishou.app.floating.FloatAction("停止陪练") { vm.stopEarly() },
+                        ))
+                }.collect { com.yishou.app.floating.CoachFloat.update(this@WindowService, "window", it) }
+            }
         }
         if (loop?.isActive != true) {
             loop = scope.launch {
@@ -79,7 +106,7 @@ class WindowService : Service() {
         val app = application as YishouApp
         val now = System.currentTimeMillis()
         val prefs = app.settings.app.value
-        val span = WindowClock.active(now, prefs, ZoneId.systemDefault()) ?: return null
+        val span = WindowClock.active(now, prefs, AppZone.zone) ?: return null
         val min = ((span.end - now) / 60_000).coerceAtLeast(0) + 1
         return if (prefs.windowPauseUntil > now) "休息中，窗口还剩 $min 分钟" else "窗口还剩 $min 分钟"
     }
@@ -108,6 +135,7 @@ class WindowService : Service() {
     }
 
     override fun onDestroy() {
+        com.yishou.app.floating.CoachFloat.remove("window")
         scope.cancel()
         super.onDestroy()
     }

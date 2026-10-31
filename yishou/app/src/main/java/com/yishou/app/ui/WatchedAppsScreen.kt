@@ -90,10 +90,11 @@ fun WatchedAppsScreen(onBack: () -> Unit) {
             contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            item { EntertainmentGateCard() }
             item {
                 Column {
                     Text("应用组", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("同一组的应用共用一次放行。放行时长 ${AppPrefs.MIN_PASS_MINUTES}–${AppPrefs.MAX_PASS_MINUTES} 分钟。", style = MaterialTheme.typography.bodySmall)
+                    Text("同一组的应用共用一次 15 分钟放行。", style = MaterialTheme.typography.bodySmall)
                 }
             }
             items(prefs.groups, key = { "g:" + it.name }) { g ->
@@ -101,9 +102,6 @@ fun WatchedAppsScreen(onBack: () -> Unit) {
                     group = g,
                     count = prefs.watched.count { it.value == g.name },
                     canDelete = prefs.groups.size > 1,
-                    onMinutes = { m ->
-                        settings.updateApp { p -> p.copy(groups = p.groups.map { if (it.name == g.name) it.copy(passMinutes = m) else it }) }
-                    },
                     onDelete = {
                         settings.updateApp { p ->
                             val rest = p.groups.filter { it.name != g.name }
@@ -169,19 +167,13 @@ fun WatchedAppsScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun GroupRow(group: AppGroup, count: Int, canDelete: Boolean, onMinutes: (Int) -> Unit, onDelete: () -> Unit) {
+private fun GroupRow(group: AppGroup, count: Int, canDelete: Boolean, onDelete: () -> Unit) {
     Card(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(group.name, fontWeight = FontWeight.Bold)
                 Text("$count 个应用", style = MaterialTheme.typography.bodySmall)
             }
-            Stepper(
-                value = group.passMinutes,
-                range = AppPrefs.MIN_PASS_MINUTES..AppPrefs.MAX_PASS_MINUTES,
-                unit = "分钟",
-                onChange = onMinutes,
-            )
             if (canDelete) TextButton(onClick = onDelete) { Text("删除") }
         }
     }

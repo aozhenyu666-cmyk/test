@@ -1,6 +1,11 @@
 package com.yishou.app.llm
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
@@ -35,6 +40,8 @@ sealed class LlmError(val message: String) {
     class Network(detail: String) : LlmError("网络连接失败：$detail")
     class Http(val code: Int, detail: String) : LlmError(httpMessage(code, detail))
     class BadFormat(detail: String) : LlmError("模型返回的内容不是约定的 JSON：$detail")
+    /** 本机的原因（没配识图、图片读不出、内容太短），message 原样显示 */
+    class Local(detail: String) : LlmError(detail)
 
     companion object {
         private fun httpMessage(code: Int, detail: String): String {
@@ -75,12 +82,110 @@ class ChatClient(
     private val onError: ((kind: String, message: String) -> Unit)? = null,
 ) {
 
-    suspend fun complete(system: String, user: String, kind: String = "其他"): LlmResult<String> {
+    /**
+     * json 为 false 时不要求 JSON 返回（出题、写素材用带标签的纯文本，不怕格式对不上）；
+     * 为 null 时按设置里的“JSON 模式”。
+     */
+    suspend fun complete(system: String, user: String, kind: String = "其他", json: Boolean? = null): LlmResult<String> {
         val cfg = config()
         val messages = JSONArray()
             .put(JSONObject().put("role", "system").put("content", system))
             .put(JSONObject().put("role", "user").put("content", user))
-        return send(cfg, messages, cfg.jsonMode, kind, system.length + user.length)
+        return send(cfg, messages, json ?: cfg.jsonMode, kind, system.length + user.length)
+    }
+
+    /** 伙伴的上下文由本机明确传入，历史记录不能追加新的系统角色。 */
+    suspend fun completeConversation(system: String, history: List<Pair<String, String>>, user: String, kind: String = "伙伴对话"): LlmResult<String> {
+        val messages = JSONArray().put(JSONObject().put("role", "system").put("content", system))
+        val recent = history.filter { it.first == "user" || it.first == "assistant" }.takeLast(16)
+        recent.forEach { (role, text) -> messages.put(JSONObject().put("role", role).put("content", text)) }
+        messages.put(JSONObject().put("role", "user").put("content", user))
+        return send(config(), messages, false, kind, system.length + user.length + recent.sumOf { it.second.length })
+    }
+
+    /**
+     * 伙伴对话的流式版本：边生成边把文字片段交给 [onDelta]，结束时返回整段。
+     * 服务商不支持流式、直接回整段 JSON 时，照样把整段交给 [onDelta] 一次。
+     * 协程取消时连接立刻断开（不会在后台继续读完）。
+     */
+    suspend fun streamConversation(
+        system: String,
+        history: List<Pair<String, String>>,
+        user: String,
+        kind: String = "伙伴对话",
+        onDelta: suspend (String) -> Unit,
+    ): LlmResult<String> {
+        val cfg = config()
+        if (!cfg.isComplete) return LlmResult.Err(LlmError.NotConfigured)
+        val messages = JSONArray().put(JSONObject().put("role", "system").put("content", system))
+        val recent = history.filter { it.first == "user" || it.first == "assistant" }.takeLast(16)
+        recent.forEach { (role, text) -> messages.put(JSONObject().put("role", role).put("content", text)) }
+        messages.put(JSONObject().put("role", "user").put("content", user))
+        val url = chatCompletionsUrl(cfg.baseUrl) ?: return LlmResult.Err(LlmError.Network("接口地址格式不对：${cfg.baseUrl}"))
+        val body = JSONObject().put("model", cfg.model.trim()).put("messages", messages).put("stream", true)
+        val request = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer ${cfg.apiKey.trim()}")
+            .header("Accept", "text/event-stream")
+            .post(body.toString().toRequestBody(JSON_TYPE))
+            .build()
+        val started = System.currentTimeMillis()
+        val call = http.newCall(request)
+        val result: LlmResult<String> = kotlinx.coroutines.coroutineScope {
+            // 读流是阻塞的：外面一取消，这个看门的子协程就把连接断掉，读的那一行立刻抛出来
+            val watcher = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                try { kotlinx.coroutines.awaitCancellation() } finally { call.cancel() }
+            }
+            try {
+                val response = call.await()
+                try {
+                    val resp = response
+                    val type = resp.header("Content-Type").orEmpty()
+                    if (!resp.isSuccessful) {
+                        LlmResult.Err(LlmError.Http(resp.code, errorDetail(withContext(Dispatchers.IO) { resp.body?.string().orEmpty() })))
+                    } else if (type.isEmpty() || type.contains("event-stream")) {
+                        readStream(resp, onDelta)
+                    } else {
+                        // 不支持流式的服务商：整段返回
+                        when (val r = extractContent(withContext(Dispatchers.IO) { resp.body?.string().orEmpty() })) {
+                            is LlmResult.Ok -> { onDelta(r.value); r }
+                            is LlmResult.Err -> r
+                        }
+                    }
+                } finally {
+                    // 关闭尚未读完的响应也可能读 socket，不能在 UI 线程做。
+                    withContext(NonCancellable + Dispatchers.IO) { response.close() }
+                }
+            } catch (e: InterruptedIOException) {
+                kotlinx.coroutines.currentCoroutineContext().ensureActiveCompat()
+                LlmResult.Err(LlmError.Timeout)
+            } catch (e: IOException) {
+                kotlinx.coroutines.currentCoroutineContext().ensureActiveCompat()
+                LlmResult.Err(LlmError.Network(e.message ?: e.javaClass.simpleName))
+            } finally {
+                watcher.cancel()
+            }
+        }
+        usage?.record(kind, result is LlmResult.Ok, 0, 0, System.currentTimeMillis() - started, system.length + user.length + recent.sumOf { it.second.length })
+        if (result is LlmResult.Err) onError?.invoke(kind, result.error.message)
+        return result
+    }
+
+    private suspend fun readStream(resp: Response, onDelta: suspend (String) -> Unit): LlmResult<String> {
+        val source = resp.body?.source() ?: return LlmResult.Err(LlmError.BadFormat("回复为空"))
+        val parser = SseParser()
+        val all = StringBuilder()
+        while (!parser.done) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActiveCompat()
+            val line = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { source.readUtf8Line() } ?: break
+            for (d in parser.feed(line + "\n")) {
+                all.append(d)
+                onDelta(d)
+            }
+        }
+        parser.finish().forEach { all.append(it); onDelta(it) }
+        parser.error?.let { return LlmResult.Err(LlmError.Local("模型出错：$it")) }
+        return if (all.isBlank()) LlmResult.Err(LlmError.BadFormat("回复为空")) else LlmResult.Ok(all.toString())
     }
 
     /**
@@ -140,19 +245,21 @@ class ChatClient(
             return LlmResult.Err(LlmError.Network(e.message ?: e.javaClass.simpleName))
         }
 
-        return response.use { resp ->
-            val text = try {
-                resp.body?.string().orEmpty()
-            } catch (e: InterruptedIOException) {
-                return LlmResult.Err(LlmError.Timeout)
-            } catch (e: IOException) {
-                return LlmResult.Err(LlmError.Network(e.message ?: e.javaClass.simpleName))
-            }
-            if (!resp.isSuccessful) {
-                LlmResult.Err(LlmError.Http(resp.code, errorDetail(text)))
-            } else {
-                extractUsage(text).let { (p, c) -> tokens[0] = p; tokens[1] = c }
-                extractContent(text)
+        return withContext(Dispatchers.IO) {
+            response.use { resp ->
+                val text = try {
+                    resp.body?.string().orEmpty()
+                } catch (e: InterruptedIOException) {
+                    return@withContext LlmResult.Err(LlmError.Timeout)
+                } catch (e: IOException) {
+                    return@withContext LlmResult.Err(LlmError.Network(e.message ?: e.javaClass.simpleName))
+                }
+                if (!resp.isSuccessful) {
+                    LlmResult.Err(LlmError.Http(resp.code, errorDetail(text)))
+                } else {
+                    extractUsage(text).let { (p, c) -> tokens[0] = p; tokens[1] = c }
+                    extractContent(text)
+                }
             }
         }
     }
@@ -228,3 +335,5 @@ private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont 
     })
     cont.invokeOnCancellation { cancel() }
 }
+
+private fun kotlin.coroutines.CoroutineContext.ensureActiveCompat() = ensureActive()
