@@ -86,6 +86,9 @@ class LoopTest {
         app.store.updateDossier { com.zongkong.core.boss.Dossier() }
         app.store.updateVein { com.zongkong.core.vein.Vein() }
         app.store.updateIntake { com.zongkong.core.info.IntakeBook() }
+        // 伙伴也会调同一个模拟 AI：测试期间别让它插进来（和上面关掉参谋主动找人同理）
+        app.buddy.setConfig { it.copy(enabled = false) }
+        app.buddy.clear()
         app.store.touch()
         gpt = NotionClient({ "secret_gpt" }, base = sim.baseUrl)
         val msg = runBlocking { app.actions.work.setup(sim.rootPage) }
