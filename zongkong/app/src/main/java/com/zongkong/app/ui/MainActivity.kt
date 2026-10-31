@@ -143,6 +143,15 @@ private const val NAV_MS = 260
 @OptIn(ExperimentalLayoutApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtime.MutableState<String?>) {
+    val focusContext = LocalContext.current
+    val focusSession by focusContext.zk.aiFocus.session.collectAsStateWithLifecycle()
+    val focusNow = rememberNow(1_000)
+    if ((focusSession?.remaining(android.os.SystemClock.elapsedRealtime()) ?: 0L) > 0 && !com.zongkong.app.guard.SentinelClient.released(focusNow)) {
+        AiFocusScreen(onBack = {}, onPermissions = {
+            focusContext.startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        })
+        return
+    }
     val entry by nav.currentBackStackEntryAsState()
     val current = entry?.destination?.route
     val showBar = tabs.any { it.route == current }
@@ -242,6 +251,7 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 composable("capture") { CaptureScreen(nav) }
                 composable("capture/{thread}") { e -> CaptureScreen(nav, e.arguments?.getString("thread").orEmpty()) }
                 composable("settings") { SettingsScreen(nav) }
+                composable("ai-focus") { AiFocusScreen(onBack = { nav.popBackStack() }, onPermissions = { nav.navigate("settings/perm") }) }
 
                 composable("thread/{key}") { e -> ThreadScreen(e.arguments?.getString("key").orEmpty(), nav) }
                 composable("action/{key}") { e -> ActionScreen(e.arguments?.getString("key").orEmpty(), nav) }

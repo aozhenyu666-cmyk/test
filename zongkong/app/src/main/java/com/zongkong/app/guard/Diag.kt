@@ -64,7 +64,7 @@ object Diag {
     /** 固定的事件种类（界面和时间线按这个分好坏）。 */
     val KINDS = setOf(
         "connected", "unbound", "destroyed", "offline", "stale", "rebind_ok",
-        "rebind_fail", "disabled", "bounce", "lockdown", "event_error", "watchdog",
+        "rebind_fail", "disabled", "bounce", "lockdown", "ai_focus_block", "event_error", "watchdog",
         "crash", "autoblock", "sentinel_on", "sentinel_off", "sentinel_takeover", "sentinel_main_back", "sentinel_wake", "released",
     )
 

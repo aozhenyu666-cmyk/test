@@ -65,6 +65,7 @@ fun SettingsScreen(nav: NavHostController) {
         ScreenTitle("我", "连接、规则、运行状态。改规则的规矩：收紧立即生效，放宽要等 24 小时，期间可以撤回。", Modifier.enter(0))
 
         SectionLabel("总控时间")
+        MenuItem("AI 专注 · 默认 20 分钟", "只用 GPT / Gemini；保留通信、NekoBox 和系统图片 / 文件选择", "ai-focus", nav)
         MenuItem(
             "进入总控时间",
             if (config.hq.enabled) "每天 ${"%02d:%02d".format(config.hq.at / 60, config.hq.at % 60)} · ${config.hq.minutes} 分钟 · 万籁俱寂，只和总控说话" else "没开每日总控时间——现在也可以手动进",

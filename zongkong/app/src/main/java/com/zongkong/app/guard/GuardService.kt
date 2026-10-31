@@ -26,7 +26,7 @@ import kotlinx.coroutines.launch
 /**
  * 总控的眼睛：无障碍服务。
  *
- * 只订阅 TYPE_WINDOW_STATE_CHANGED，只读事件里的包名（canRetrieveWindowContent = false）。
+ * 只订阅 TYPE_WINDOW_STATE_CHANGED，只读事件里的包名和窗口类名（canRetrieveWindowContent = false）。
  * 做四件事：严管时把拦截名单里的应用弹回总控；累计娱乐应用时长；到点发提醒；每 15 分钟同步一次 Notion。
  */
 class GuardService : AccessibilityService() {
@@ -36,6 +36,11 @@ class GuardService : AccessibilityService() {
 
     /** 当前前台应用和它切到前台的时刻（fgSince 每次记娱乐时长后重置；fgStartedAt 是这一段真正开始的时刻）。 */
     @Volatile private var fgPkg: String? = null
+    private var fgClass = ""
+    private var aiPickerGrant = com.zongkong.core.AiPickerGrant()
+    private var aiSessionDeadline = 0L
+    private var lastAiSave = 0L
+    private var lastAiBounce = -1_500L
     @Volatile private var fgSince = 0L
     @Volatile private var fgStartedAt = 0L
     private var lastShot = 0L
@@ -150,6 +155,29 @@ class GuardService : AccessibilityService() {
                 delay(TICK_MILLIS)
             }
         }
+        // Keep the timed whitelist responsive without moving sync/screenshots onto a one-second loop.
+        scope.launch {
+            while (isActive) {
+                runCatching {
+                    val focus = zk.aiFocus
+                    val s = focus.session.value
+                    if (s != null) {
+                        val now = System.currentTimeMillis()
+                        if (focus.active() == null) {
+                            focus.checkpoint()
+                            Notifications.alert(this@GuardService, "AI 专注结束", "已恢复原来的总控规则。", "ai-focus")
+                        } else {
+                            if (now - lastAiSave >= 20_000 || now < lastAiSave) {
+                                focus.checkpoint()
+                                lastAiSave = now
+                            }
+                            fgPkg?.let { enforceAi(it, fgClass, now) }
+                        }
+                    }
+                }.onFailure { Log.e(TAG, "AI 专注检查失败", it) }
+                delay(1_000)
+            }
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -184,8 +212,13 @@ class GuardService : AccessibilityService() {
         val pkg = event.packageName?.toString() ?: return
         beatSentinel(System.currentTimeMillis())
         Log.d(TAG, "窗口切换：$pkg / ${event.className}")
-        if (pkg in overlays()) return
+        // During AI focus only the selected keyboard is exempt, not every enabled keyboard app.
+        if (zk.aiFocus.active() == null) {
+            if (pkg in overlays()) return
+        } else if (pkg == "com.android.systemui" || pkg == selectedIme()) return
         val now = System.currentTimeMillis()
+        val cls = event.className?.toString().orEmpty()
+        if (pkg != fgPkg || (!cls.startsWith("android.") && !cls.startsWith("androidx."))) fgClass = cls
         if (pkg != fgPkg) {
             accountPlay(now)
             // 做一步行动时离开了总控：记下离开时刻，回来时提示记断点
@@ -201,10 +234,36 @@ class GuardService : AccessibilityService() {
             return
         }
         releasedLogged = false
+        if (enforceAi(pkg, fgClass, now)) return
         if (lockdown(pkg, now)) return
         enforce(pkg, now)
         // 低屏模式：连续用太久的应用弹回去做题（不拦全封，只限时 + 冷却 + 做题）
         runCatching { Watch.tick(this, pkg, now) }
+    }
+
+    private fun selectedIme(): String = android.provider.Settings.Secure.getString(
+        contentResolver, android.provider.Settings.Secure.DEFAULT_INPUT_METHOD,
+    )?.substringBefore('/').orEmpty()
+
+    /** Returns true for the whole AI session, so ordinary passes/HQ do not override its whitelist. */
+    private fun enforceAi(pkg: String, cls: String, now: Long): Boolean {
+        val s = zk.aiFocus.active() ?: return false
+        if (SentinelClient.released(now)) return true // Preserve the existing global release gate.
+        if (s.deadlineElapsed != aiSessionDeadline) {
+            aiSessionDeadline = s.deadlineElapsed
+            aiPickerGrant = com.zongkong.core.AiPickerGrant()
+        }
+        val transient = pkg == "com.android.systemui" || pkg == selectedIme() || pkg.endsWith(".permissioncontroller")
+        val picker = aiPickerGrant.observe(s, pkg, cls, android.os.SystemClock.elapsedRealtime(), transient)
+        if (com.zongkong.core.AiFocus.allows(s, pkg, cls, packageName, selectedIme(), picker)) return true
+        val elapsed = android.os.SystemClock.elapsedRealtime()
+        if (!interactive() || elapsed - lastAiBounce < 1500) return true
+        lastAiBounce = elapsed
+        store.updateToday(now) { DayOps.bounce(it) }
+        runCatching { Diag.log(this, "ai_focus_block", "AI 专注弹回 $pkg/$cls") }
+        runCatching { startActivity(BlockActivity.intent(this, pkg)) }
+            .onFailure { Log.e(TAG, "打不开 AI 专注拦截页", it) }
+        return true
     }
 
     /**
@@ -268,6 +327,7 @@ class GuardService : AccessibilityService() {
     }
 
     private fun enforce(pkg: String, now: Long) {
+        if (zk.aiFocus.active() != null) return
         if (pkg == packageName) return
         if (pkg !in store.config.value.blocked) return
         if (!interactive()) {
@@ -301,13 +361,17 @@ class GuardService : AccessibilityService() {
         runCatching { com.zongkong.app.healthwire.LocalGuardian.tick(this, now) }
         fgPkg?.let { if (status.strict) enforce(it, now) }
         // 低屏模式：没有窗口切换事件时也按秒盯着（比如一直停在一个应用里）
-        fgPkg?.let { p -> runCatching { Watch.tick(this, p, now) } }
+        if (zk.aiFocus.active() == null) fgPkg?.let { p -> runCatching { Watch.tick(this, p, now) } }
         alerts(status, now)
         // 总控时间刚开始时你正停在别的应用里：也拉回来
-        fgPkg?.let { if (store.hq.value.active != null) lockdown(it, now) }
+        if (zk.aiFocus.active() == null) fgPkg?.let { if (store.hq.value.active != null) lockdown(it, now) }
         com.zongkong.app.system.Pet.refresh(this)
-        val text = Engine.summary(status)
-        val title = "总控 · ${status.headline}"
+        val ai = zk.aiFocus.active()
+        val text = if (ai == null) Engine.summary(status) else {
+            val minutes = (ai.remaining(android.os.SystemClock.elapsedRealtime()) + 59_999) / 60_000
+            "AI 专注剩余约 $minutes 分钟 · GPT / Gemini · 到点恢复原规则"
+        }
+        val title = if (ai == null) "总控 · ${status.headline}" else "总控 · AI 专注"
         if ("$title|$text" != lastStatusText) {
             lastStatusText = "$title|$text"
             Notifications.showStatus(this, title, text)

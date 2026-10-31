@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.zongkong.app.ui.DeptSeal
+import com.zongkong.app.ui.AiFocusScreen
 import com.zongkong.app.ui.Hint
 import com.zongkong.app.ui.LocalSignals
 import com.zongkong.app.ui.MainActivity
@@ -110,6 +111,19 @@ class BlockActivity : ComponentActivity() {
 @Composable
 private fun BlockScreen(appLabel: String, goHome: () -> Unit, openRoute: (String) -> Unit, release: () -> Unit) {
     val context = LocalContext.current
+    val focusSession by context.zk.aiFocus.session.collectAsStateWithLifecycle()
+    val openedDuringFocus = remember { context.zk.aiFocus.active() != null }
+    val focusNow = rememberNow(1_000)
+    if ((focusSession?.remaining(android.os.SystemClock.elapsedRealtime()) ?: 0L) > 0 && !SentinelClient.released(focusNow)) {
+        AiFocusScreen(onBack = {}, onPermissions = {
+            context.startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }, blockedLabel = appLabel)
+        return
+    }
+    if (openedDuringFocus) {
+        AiFocusScreen(onBack = { openRoute("ai-focus") }, onPermissions = { openRoute("settings/perm") })
+        return
+    }
     val store = context.zk.store
     val config by store.config.collectAsStateWithLifecycle()
     val day by store.today.collectAsStateWithLifecycle()
