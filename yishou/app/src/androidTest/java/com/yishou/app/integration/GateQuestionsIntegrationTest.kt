@@ -108,12 +108,14 @@ class GateQuestionsIntegrationTest {
         } finally { activity.close(); server.shutdown() }
     }
 
-    @Test fun freshQuestionStillNeedsRealAnswerAndTriggerBeforeAPass() = runBlocking {
+    @Test fun freshQuestionNeedsRealAnswerButNotATriggerToPass() = runBlocking {
         val server = server()
         val owner = ViewModelStore()
         val activity = RuntimeSupport.activity()
         try {
             app.settings.saveLlm(RuntimeSupport.config(server.url("/v1").toString()))
+            // 这个用例直接驱动 ViewModel、不走 connectGate，组要在这里自己配好（15 分钟）
+            app.settings.updateApp { it.copy(groups = listOf(AppGroup("联通娱乐", 15)), watched = mapOf(RuntimeSupport.TARGET to "联通娱乐")) }
             lateinit var vm: GateViewModel
             main { vm = GateViewModel(app); owner.put("gate", vm); vm.start(RuntimeSupport.TARGET, "联通娱乐", "入口测试应用") }
             eventually(20_000) { !vm.state.value.loading && !vm.state.value.busy && vm.probe != null }
@@ -125,18 +127,16 @@ class GateQuestionsIntegrationTest {
             eventually { !vm.state.value.busy }
             Assert.assertNull(vm.review)
             Assert.assertNull(app.database.dao().activePass("联通娱乐", System.currentTimeMillis()))
-            // 认真答：过了还要存触发器才放行
+            // 认真答：说中要点就放行，触发器只是加分项，不再是门槛
             val answer = "按最堵的一个小时算，再留四十分钟值机，八点前出门坐地铁；误机要改签几百块，比打车贵得多。"
             main { for (n in 1..answer.length) vm.editProbe(answer.take(n)); vm.submitProbe() }
             eventually(20_000) { !vm.state.value.busy && vm.review != null }
             Assert.assertTrue("${vm.review?.verdict}", vm.review!!.verdict.passed)
+            Assert.assertFalse("触发器不该再是放行门槛", vm.triggerSaved)
             main { vm.pass() }
-            eventually { !vm.state.value.busy }
-            Assert.assertNull(app.database.dao().activePass("联通娱乐", System.currentTimeMillis()))
-            main { vm.saveTrigger("常堵", "先按最堵的时候算路上用时") }
-            eventually { !vm.state.value.busy && vm.triggerSaved }
-            main { vm.pass() }
-            eventually { vm.state.value.passMinutes == 15 }
+            // 放行时长听应用组的设置（这里 15 分钟），不再写死
+            eventually(20_000) { vm.state.value.passMinutes != null }
+            Assert.assertEquals(15, vm.state.value.passMinutes)
             Assert.assertNotNull(app.database.dao().activePass("联通娱乐", System.currentTimeMillis()))
         } finally { main { owner.clear() }; activity.close(); server.shutdown() }
     }

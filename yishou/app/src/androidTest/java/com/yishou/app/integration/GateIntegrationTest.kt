@@ -38,6 +38,8 @@ class GateIntegrationTest {
             app.settings.saveLlm(RuntimeSupport.config(server.url("/v1").toString()))
             RuntimeSupport.seedCard()
             app.database.strands().saveFade(FadeRow(RuntimeSupport.card.skill.name, 6, 0))
+            // 这个用例直接驱动 ViewModel、不走 connectGate：组要在这里配好（15 分钟）
+            app.settings.updateApp { it.copy(groups = listOf(AppGroup("联通娱乐", 15)), watched = mapOf(RuntimeSupport.TARGET to "联通娱乐")) }
             lateinit var vm: GateViewModel
             main { vm = GateViewModel(app); owner.put("gate", vm); vm.start(RuntimeSupport.TARGET, "联通娱乐", "入口测试应用") }
             eventually { !vm.state.value.loading && !vm.state.value.busy && vm.probe != null }
@@ -55,19 +57,19 @@ class GateIntegrationTest {
             main { vm.selectProbeOption(0) }
             eventually { !vm.state.value.busy && vm.review != null }
             main { vm.pass() }
-            eventually { !vm.state.value.busy }
-            Assert.assertNull(app.database.dao().activePass("联通娱乐", System.currentTimeMillis()))
+            // 触发器不再是门槛：选对就放行，时长按应用组设置（15 分钟）
+            eventually(20_000) { vm.state.value.passMinutes != null }
+            Assert.assertEquals(15, vm.state.value.passMinutes)
+            val pass = app.database.dao().activePass("联通娱乐", System.currentTimeMillis())!!
+            Assert.assertEquals(900_000L, pass.endAt - pass.startAt)
+            Assert.assertEquals(VERIFIED_GATE_PASS_MARKER, pass.roundId)
+            Assert.assertNull(app.database.dao().activePass("联通娱乐", pass.endAt))
+            // 触发器仍然可以存（只是不再拦路）：套话存不进
             main { vm.saveTrigger("进入前", "认真读题") }
             eventually { !vm.state.value.busy }
             Assert.assertFalse(vm.triggerSaved)
             main { vm.saveTrigger("进入前", "先核验身份再决定能否进站") }
             eventually { !vm.state.value.busy && vm.triggerSaved }
-            main { vm.pass() }
-            eventually { vm.state.value.passMinutes == 15 }
-            val pass = app.database.dao().activePass("联通娱乐", System.currentTimeMillis())!!
-            Assert.assertEquals(900_000L, pass.endAt - pass.startAt)
-            Assert.assertEquals(VERIFIED_GATE_PASS_MARKER, pass.roundId)
-            Assert.assertNull(app.database.dao().activePass("联通娱乐", pass.endAt))
             Assert.assertEquals(1, app.database.strands().reflexes().size)
         } finally { main { owner.clear() }; activity.close(); server.shutdown() }
     }
