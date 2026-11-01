@@ -133,7 +133,7 @@ bash tooling/run-kernel-tests.sh        # 必须是 OK (258 tests) 且 wiring OK
 
 **修复**：
 1. `git checkout 7d2ef4d -- app/lib/l10n/gen/`。
-2. 用项目原本的生成方式重新生成，方法见提交 `295fd35`（"regenerate from the ARB parts"）的说明。不要另外跑 `dart format`。
+2. 用项目原本的生成方式重新生成：`cd app && python3 tool/l10n_merge.py`，然后 `flutter gen-l10n`。依据是提交 `295fd35` 的说明。不要另外跑 `dart format`。完成后 `python3 tool/l10n_merge.py --check` 必须 exit 0。
 3. `@interceptEnforcementUnavailable` 的 placeholder 元数据，en 和 zh 两边要一致。生成源是 `parts/`，顶层 arb 如果也是生成出来的，就不要手改。
 
 **验收**：`git diff 7d2ef4d -- app/lib/l10n/gen/ | grep -c '^[+-][^+-]'` 小于 40，并且只涉及 `interceptEnforcementUnavailable`。
