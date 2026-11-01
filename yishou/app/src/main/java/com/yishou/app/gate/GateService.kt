@@ -57,6 +57,12 @@ class GateService : AccessibilityService() {
     private var systemAllowedAt = 0L
     private var homes: Set<String> = emptySet()
 
+    private var cover: GateCover? = null
+    private val labels = mutableMapOf<String, String>()
+    private fun label(pkg: String): String = labels.getOrPut(pkg) {
+        runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
+    }
+
     private var wakeRegistered = false
     private val wakeReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context, intent: Intent) {
@@ -85,6 +91,10 @@ class GateService : AccessibilityService() {
         running = this
         _connected.value = true
         _problem.value = null
+        GateTrace.init(this)
+        cover = GateCover(this)
+        val watched = app.settings.app.value.watched
+        GateTrace.log("无障碍服务已连接；关注 ${watched.size} 个应用：" + watched.keys.joinToString("、") { label(it) })
         if (!wakeRegistered) {
             androidx.core.content.ContextCompat.registerReceiver(this, wakeReceiver, android.content.IntentFilter(Intent.ACTION_USER_PRESENT), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             wakeRegistered = true
@@ -96,6 +106,7 @@ class GateService : AccessibilityService() {
                 delay(1_000)
                 val awake = getSystemService(android.os.PowerManager::class.java).isInteractive
                 val locked = getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
+                if (GateActivity.isShowing) cover?.hide()
                 if (awake && !locked && !GateActivity.isShowing) foregroundPkg?.takeIf { it != packageName }?.let(::check)
             }
         }
@@ -132,6 +143,10 @@ class GateService : AccessibilityService() {
         val pkg = event.packageName?.toString() ?: return
         val systemPackages = systemAllowed()
         val transient = pkg != packageName && pkg !in homes && (pkg in systemPackages || pkg in WindowRules.STATIC_SYSTEM)
+        lastEventAt = System.currentTimeMillis()
+        if (!transient && pkg != foregroundPkg) GateTrace.log("切到前台：${label(pkg)}" + if (pkg in homes) "（桌面）" else "", pkg)
+        // 换到别的应用或桌面：遮罩收起（一手自己的界面不算换走）
+        if (!transient && pkg != packageName && cover?.showing == true && cover?.pkg != pkg) cover?.hide()
         foregroundTracker.update(pkg, transient)
         _lastPackage.value = foregroundPkg
         app.partner.foreground(pkg)
@@ -144,6 +159,7 @@ class GateService : AccessibilityService() {
 
     private fun check(pkg: String) {
         if (app.partner.allows(pkg)) {
+            GateTrace.log("不拦：伴读中，这个应用是登记的材料应用", pkg)
             shortCheck?.cancel()
             shortPkg = null
             return
@@ -170,15 +186,20 @@ class GateService : AccessibilityService() {
             }
             return
         }
-        val group = prefs.groupOf(pkg) ?: return
+        val group = prefs.groupOf(pkg)
+        if (group == null) {
+            if (!isSystem && pkg != packageName) GateTrace.log("不拦：不在关注名单（${label(pkg)}）", pkg)
+            return
+        }
         if (GateActivity.isShowing) return
+        if (cover?.showing == true && cover?.pkg == pkg) return
         // 同一个应用打开时会连续发出好几次切换事件，2 秒内只处理一次
         if (pkg == lastLaunchPkg && now - lastLaunchAt < 2_000) return
 
         if (!querying.add(pkg)) return
         scope.launch {
             try {
-            if (foregroundPkg != pkg) return@launch
+            if (foregroundPkg != pkg) { GateTrace.log("不拦：查的时候已经换走了", pkg); return@launch }
             if (app.partner.pendingClose() != null) {
                 launchGate(pkg, group, now)
                 return@launch
@@ -187,10 +208,12 @@ class GateService : AccessibilityService() {
                 app.database.dao().activePass(group, now)
             } catch (e: Exception) {
                 Log.e(TAG, "查询放行失败", e)
+                GateTrace.log("查放行出错：${e.javaClass.simpleName}，按没放行处理", pkg)
                 null
             }
             if (foregroundPkg != pkg) return@launch
             if (pass != null) {
+                GateTrace.log("不拦：「$group」有放行，到 ${GateTrace.stamp(pass.endAt)}", pkg)
                 scheduleExpiryCheck(pass.endAt)
                 return@launch
             }
@@ -205,13 +228,45 @@ class GateService : AccessibilityService() {
         lastLaunchPkg = pkg
         lastLaunchAt = System.currentTimeMillis()
         app.stats.event(if (group == GateActivity.WINDOW_GROUP) DayStats.WINDOW_BLOCK else DayStats.GATE_SHOWN)
-        try {
+        GateTrace.log("拦下：弹出入口页（$group）", pkg)
+        val shownBefore = GateActivity.resumes
+        val opened = if (pretendBlockedForTest) {
+            GateTrace.log("测试：假装系统悄悄拦下了后台弹出", pkg)
+            true
+        } else try {
             startActivity(GateActivity.intent(this@GateService, pkg, group))
-            _problem.value = null
+            true
         } catch (e: Exception) {
-            _problem.value = "没能弹出收费站，请在系统设置里允许后台弹出界面"
             RunLog.e("收费站", "无法打开思考页", e)
             Log.e(TAG, "无法打开思考页", e)
+            GateTrace.log("弹出失败：${e.javaClass.simpleName} ${e.message.orEmpty()}", pkg)
+            false
+        }
+        // 很多国产系统不给“后台弹出界面”时不报错、只是不显示：过一会儿看页面到底出来没有
+        scope.launch {
+            if (opened) delay(2_500)
+            // 这期间入口页出来过（哪怕已经被关掉、人又回到这个应用），就不是被系统拦了
+            if (GateActivity.isShowing || GateActivity.resumes != shownBefore) { _problem.value = null; return@launch }
+            if (foregroundPkg != pkg) return@launch
+            _problem.value = "系统没让入口页弹出来（多半是没开“后台弹出界面”权限），已改用遮罩挡住"
+            GateTrace.log("入口页没出来：系统拦了后台弹出。改用遮罩挡住", pkg)
+            showCover(pkg, group)
+        }
+    }
+
+    private fun showCover(pkg: String, group: String) {
+        cover?.show(pkg, label(pkg)) {
+            GateTrace.log("遮罩：点了去做题", pkg)
+            runCatching { startActivity(GateActivity.intent(this@GateService, pkg, group)) }
+                .onFailure { GateTrace.log("从遮罩打开入口失败：${it.javaClass.simpleName}", pkg) }
+            scope.launch {
+                delay(2_000)
+                if (GateActivity.isShowing) cover?.hide()
+                else {
+                    GateTrace.log("从遮罩也没能打开入口页", pkg)
+                    cover?.say("系统还是不让一手弹出来。请点下面“去开权限”，在权限里打开「后台弹出界面」（有的手机叫「后台弹出页面」「悬浮窗/显示在其他应用上层」），再回来。")
+                }
+            }
         }
     }
 
@@ -243,6 +298,8 @@ class GateService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onUnbind(intent: Intent?): Boolean {
+        GateTrace.log("无障碍服务断开（被关闭或被系统停掉）")
+        cover?.hide()
         if (running === this) {
             running = null
             _connected.value = false
@@ -254,6 +311,7 @@ class GateService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        cover?.hide()
         if (wakeRegistered) { unregisterReceiver(wakeReceiver); wakeRegistered = false }
 
         if (running === this) {
@@ -278,6 +336,18 @@ class GateService : AccessibilityService() {
 
         @Volatile
         private var running: GateService? = null
+
+        /** 最近一次收到窗口切换的时间；体检页用来判断服务是不是还活着 */
+        @Volatile
+        var lastEventAt = 0L
+            private set
+
+        /** 只给模拟器测试用：假装系统不报错地拦下了后台弹出（vivo、小米等没开“后台弹出界面”时就是这样） */
+        @Volatile
+        var pretendBlockedForTest = false
+
+        /** 入口页出来了：遮罩可以收起 */
+        fun hideCover() { running?.let { s -> s.scope.launch { s.cover?.hide() } } }
 
         /** 当前前台应用的包名；服务没开时为 null */
         val foreground: String? get() = running?.foregroundPkg

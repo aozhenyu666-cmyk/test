@@ -217,6 +217,9 @@ class MainActivity : ComponentActivity() {
                     composable("status") {
                         StatusScreen(onBack = { nav.navigateUp() })
                     }
+                    composable("gatedoctor") {
+                        com.yishou.app.ui.GateDoctorScreen(onBack = { nav.navigateUp() }, onPickApps = { nav.navigate("watched") })
+                    }
                     composable("log") {
                         LogScreen(onBack = { nav.navigateUp() })
                     }

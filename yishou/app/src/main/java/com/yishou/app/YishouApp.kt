@@ -151,6 +151,10 @@ class YishouApp : Application() {
 
     lateinit var database: AppDatabase
         private set
+
+    /** 数据库已经建好（连接口可能在 onCreate 跑完之前就被调用）。 */
+    val ready: Boolean get() = this::database.isInitialized
+
     lateinit var settings: SettingsStore
         private set
     lateinit var engine: RoundEngine

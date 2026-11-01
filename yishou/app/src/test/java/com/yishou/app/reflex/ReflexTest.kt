@@ -95,6 +95,11 @@ class ReflexTest {
         // 判卷不在、没有可默写：还能走题库；全都没有则走低能量，不设“等待”这一挡
         assertEquals(Main.BANK, GatePlan.pick(base.copy(judgeOk = false, hasReflex = false)))
         assertEquals(Main.LOW_ENERGY, GatePlan.pick(base.copy(judgeOk = false, hasReflex = false, bankReady = false)))
+        // 题库没题、模型在：现出一题，不掉到默写或等待
+        assertEquals(Main.FRESH, GatePlan.pick(base.copy(strandReady = false, bankReady = false, freshReady = true)))
+        assertEquals(Main.LOW_ENERGY, GatePlan.pick(base.copy(strandReady = false, bankReady = false, freshReady = true, judgeOk = false)))
+        // 连错也不再掉到别处：只降一档帮助
+        assertEquals(Main.FRESH, GatePlan.pick(base.copy(strandReady = false, bankReady = false, freshReady = true, wrongInRow = 2)))
     }
 
     @Test
