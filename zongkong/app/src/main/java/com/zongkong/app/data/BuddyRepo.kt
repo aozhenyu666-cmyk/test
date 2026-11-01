@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
@@ -114,28 +115,77 @@ class BuddyRepo(private val context: Context, private val store: Store, private 
     /** 发一条测试事件，看 DSH 那边收不收得到。 */
     fun testBridge() {
         val cfg = _book.value.bridge
-        if (cfg.url.isBlank()) { lastBridge = "还没填地址"; return }
+        when (val c = com.zongkong.core.buddy.BridgeNet.check(cfg.url)) {
+            is com.zongkong.core.buddy.BridgeNet.Check.Bad -> { note("test", c.why); return }
+            is com.zongkong.core.buddy.BridgeNet.Check.Ok -> {}
+        }
         val snap = snapshot(System.currentTimeMillis())
         post(cfg, com.zongkong.core.buddy.BridgeEvent(com.zongkong.core.buddy.Bridge.TEST, "总控发来的测试事件：连上了就随便跟他打个招呼"), snap)
     }
 
+    /** 最近几次推送的结果（新的在后），界面上显示。 */
+    @Volatile var bridgeLog: List<String> = emptyList()
+        private set
+
+    private fun note(kind: String, text: String) {
+        val line = "${clock()} $kind：$text"
+        lastBridge = line
+        bridgeLog = (bridgeLog + line).takeLast(20)
+    }
+
+    /**
+     * 推一条事件。地址先过校验（远程只走 https；明文只放行本机 127.0.0.1 / localhost），
+     * 再用 OkHttp 自己的解析结果核对一遍主机，两边认的主机不一致就不发。
+     * 失败按 [com.zongkong.core.buddy.BridgeNet.nextDelay] 有限次退避重试：每次发的是同一份正文（同一个时间戳），
+     * 事件过时了就丢掉，不在恢复后集中补发。不看当前是 Wi-Fi 还是流量：本机地址和网络无关。
+     */
     private fun post(cfg: com.zongkong.core.buddy.BridgeConfig, e: com.zongkong.core.buddy.BridgeEvent, snap: com.zongkong.core.buddy.Snapshot) {
-        val url = cfg.url.trim()
-        if (!url.startsWith("https://")) {
-            // 安卓默认不让 App 走明文 http；而且手机在外面用流量时也够不着家里电脑的局域网地址
-            lastBridge = "${clock()} 地址要用 https://（用 Tailscale 或 Cloudflare Tunnel 把 DSH 暴露成 https，见部署报告）"
+        val check = com.zongkong.core.buddy.BridgeNet.check(cfg.url)
+        if (check !is com.zongkong.core.buddy.BridgeNet.Check.Ok) {
+            note(e.kind, (check as com.zongkong.core.buddy.BridgeNet.Check.Bad).why)
             return
         }
+        val httpUrl = cfg.url.trim().toHttpUrlOrNull()
+        if (httpUrl == null || !httpUrl.host.equals(check.host, ignoreCase = true) || httpUrl.scheme != check.scheme) {
+            note(e.kind, "地址解析结果不一致，没有发送")
+            return
+        }
+        // 正文只生成一次：重试时内容和时间戳都不变，DSH 那边可以按 kind + at 去重
+        val json = com.zongkong.core.buddy.Bridge.payload(e, snap).toString()
+        val token = cfg.token.trim()
         scope.launch {
-            lastBridge = try {
-                val body = com.zongkong.core.buddy.Bridge.payload(e, snap).toString()
-                    .toRequestBody("application/json; charset=utf-8".toMediaType())
-                val req = okhttp3.Request.Builder().url(cfg.url.trim()).post(body)
-                    .apply { if (cfg.token.isNotBlank()) header("Authorization", "Bearer ${cfg.token.trim()}") }
-                    .build()
-                http.newCall(req).execute().use { r -> "${clock()} ${e.kind} → ${r.code}" + if (r.isSuccessful) "" else "（${r.message}）" }
-            } catch (ex: Exception) {
-                "${clock()} ${e.kind} → 没发出去：${ex.message ?: ex.javaClass.simpleName}"
+            var attempt = 0
+            while (true) {
+                var code: Int? = null
+                var error: Throwable? = null
+                var body = ""
+                try {
+                    val req = okhttp3.Request.Builder().url(httpUrl)
+                        .post(json.toRequestBody("application/json; charset=utf-8".toMediaType()))
+                        .header("X-Zongkong-Event", "${e.kind}-${snap.now}")
+                        .apply { if (token.isNotEmpty()) header("Authorization", "Bearer $token") }
+                        .build()
+                    http.newCall(req).execute().use { r ->
+                        code = r.code
+                        body = runCatching { r.body?.string().orEmpty().take(400) }.getOrDefault("")
+                    }
+                } catch (ex: Exception) {
+                    error = ex
+                }
+                val text = com.zongkong.core.buddy.BridgeNet.explain(code, error, check.local, body)
+                val c = code
+                if (c != null && c in 200..299) {
+                    note(e.kind, text)
+                    return@launch
+                }
+                val wait = com.zongkong.core.buddy.BridgeNet.nextDelay(attempt, snap.now, System.currentTimeMillis(), c)
+                if (wait == null) {
+                    note(e.kind, text + if (com.zongkong.core.buddy.BridgeNet.retryable(c)) "（已放弃：重试用完或事件已过时）" else "")
+                    return@launch
+                }
+                note(e.kind, "$text（${wait / 1000} 秒后重试）")
+                kotlinx.coroutines.delay(wait)
+                attempt++
             }
         }
     }

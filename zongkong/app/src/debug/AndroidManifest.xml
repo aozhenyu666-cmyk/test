@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
-    <application android:networkSecurityConfig="@xml/network_security_config">
+    <application>
         <!-- 只在调试版里：CI 的模拟器冒烟测试用 adb 广播预置配置 -->
         <receiver
             android:name=".debug.SeedReceiver"

@@ -31,6 +31,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonArray
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -88,6 +89,7 @@ class LoopTest {
         app.store.updateIntake { com.zongkong.core.info.IntakeBook() }
         // 伙伴也会调同一个模拟 AI：测试期间别让它插进来（和上面关掉参谋主动找人同理）
         app.buddy.setConfig { it.copy(enabled = false) }
+        app.buddy.setBridge { com.zongkong.core.buddy.BridgeConfig() }
         app.buddy.clear()
         app.store.touch()
         gpt = NotionClient({ "secret_gpt" }, base = sim.baseUrl)
@@ -392,6 +394,66 @@ class LoopTest {
             shot(name)
         }
         waitFor(hasText("今天"), 5_000, "底部标签")
+    }
+
+    /**
+     * 外接大脑：同机 DSH 用 http://127.0.0.1 直连。
+     * 1) 交付的 APK 里网络策略真的生效：本机放行明文，别的主机不放行；
+     * 2) 「发一条测试」真的发到本机服务：带 Bearer 口令、正文是约定的 JSON；
+     * 3) 服务端暂时出错（503）会用同一份正文重试；口令错（401）不重试并说清楚；
+     * 4) 伪装域名、非本机 http 一律不发。
+     */
+    @Test
+    fun bridgeLocalHttp() = runBlocking {
+        val policy = android.security.NetworkSecurityPolicy.getInstance()
+        assertTrue(policy.isCleartextTrafficPermitted("127.0.0.1"))
+        assertTrue(policy.isCleartextTrafficPermitted("localhost"))
+        assertFalse(policy.isCleartextTrafficPermitted("example.com"))
+        assertFalse(policy.isCleartextTrafficPermitted("192.168.1.5"))
+
+        val dsh = okhttp3.mockwebserver.MockWebServer()
+        dsh.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(503).setBody("model offline"))
+        dsh.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(200).setBody("{\"ok\":true}"))
+        dsh.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(401))
+        dsh.start(java.net.InetAddress.getByName("127.0.0.1"), 0)
+        val url = "http://127.0.0.1:${dsh.port}/zongkong/event"
+        // 只测「发一条测试」：不打开自动推送，免得后台事件混进来
+        app.buddy.setBridge { com.zongkong.core.buddy.BridgeConfig(enabled = false, url = url, token = "test-token-for-emulator") }
+
+        app.buddy.testBridge()
+        val first = dsh.takeRequest(10, java.util.concurrent.TimeUnit.SECONDS)!!
+        assertEquals("POST", first.method)
+        assertEquals("/zongkong/event", first.path)
+        assertEquals("Bearer test-token-for-emulator", first.getHeader("Authorization"))
+        val body1 = first.body.readUtf8()
+        assertTrue(body1, body1.contains("\"kind\":\"test\"") && body1.contains("\"source\":\"zongkong\""))
+        // 503 之后约 2 秒重试：同一份正文、同一个时间戳
+        val second = dsh.takeRequest(10, java.util.concurrent.TimeUnit.SECONDS)!!
+        assertEquals(body1, second.body.readUtf8())
+        assertEquals(first.getHeader("X-Zongkong-Event"), second.getHeader("X-Zongkong-Event"))
+        compose.waitUntil(5_000) { app.buddy.lastBridge.contains("已送达（HTTP 200）") }
+
+        // 口令错：说「口令不对」，不重试
+        app.buddy.testBridge()
+        dsh.takeRequest(10, java.util.concurrent.TimeUnit.SECONDS)!!
+        compose.waitUntil(5_000) { app.buddy.lastBridge.contains("口令不对") }
+        Thread.sleep(3_000)
+        assertEquals(3, dsh.requestCount)
+
+        // 伪装域名、非本机 http：不发
+        for (bad in listOf("http://127.0.0.1.evil.example/zongkong/event", "http://127.0.0.1@evil.example/zongkong/event", "http://192.168.1.5:7861/zongkong/event")) {
+            app.buddy.setBridge { it.copy(url = bad) }
+            app.buddy.testBridge()
+        }
+        Thread.sleep(1_000)
+        assertEquals(3, dsh.requestCount)
+        dsh.shutdown()
+
+        // 本机没有服务在听：说「本机 DSH 没在运行」，不说地址错
+        app.buddy.setBridge { it.copy(url = "http://127.0.0.1:1/zongkong/event") }
+        app.buddy.testBridge()
+        compose.waitUntil(10_000) { app.buddy.lastBridge.contains("本机 DSH 没在运行") }
+        app.buddy.setBridge { com.zongkong.core.buddy.BridgeConfig() }
     }
 
     /**

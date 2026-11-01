@@ -227,17 +227,40 @@ private fun BridgePanel() {
     val b = book.bridge
     var url by remember(b.url) { mutableStateOf(b.url) }
     var token by remember(b.token) { mutableStateOf(b.token) }
-    var result by remember { mutableStateOf(app.buddy.lastBridge) }
+    // 推送结果每秒刷新一次（重试、送达都会更新），不用再点「看结果」
+    val log by androidx.compose.runtime.produceState(app.buddy.bridgeLog) {
+        while (true) { value = app.buddy.bridgeLog; kotlinx.coroutines.delay(1_000) }
+    }
+    val check = remember(url) { com.zongkong.core.buddy.BridgeNet.check(url) }
     Panel {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("外接大脑（DeepSeek Harness）", style = MaterialTheme.typography.titleSmall)
-                Hint("开着时，手机把「刚解锁、刚打开抖音、刷了多久、一手哪题没接住」推给电脑上的伙伴，由它在当下找你聊（通过 QQ）。")
+                Hint("开着时，手机把「刚解锁、刚打开抖音、刷了多久、一手哪题没接住」推给 DSH 里的伙伴，由它在当下找你聊。")
             }
             Switch(checked = b.enabled, onCheckedChange = { on -> app.buddy.setBridge { it.copy(enabled = on) } }, modifier = Modifier.testTag("bridge-enabled"))
         }
-        OutlinedTextField(url, { url = it.trim() }, label = { Text("地址（https://…/zongkong/event）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(token, { token = it.trim() }, label = { Text("口令") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            url, { url = it.trim() },
+            label = { Text("地址") },
+            placeholder = { Text(com.zongkong.core.buddy.BridgeNet.LOCAL_DEFAULT) },
+            singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bridge-url"),
+            isError = url.isNotBlank() && check is com.zongkong.core.buddy.BridgeNet.Check.Bad,
+        )
+        Hint(
+            when {
+                url.isBlank() -> "DSH 就在这台手机上：填 ${com.zongkong.core.buddy.BridgeNet.LOCAL_DEFAULT}（127.0.0.1 就是这台手机自己，切 Wi-Fi、用流量、出门都不用改）。DSH 在别的电脑上：用 https:// 地址。"
+                check is com.zongkong.core.buddy.BridgeNet.Check.Bad -> check.why
+                (check as com.zongkong.core.buddy.BridgeNet.Check.Ok).scheme == "http" -> "同机直连：只连这台手机上的 DSH，不经过网络。"
+                else -> "远程 https 连接：需要网络，DSH 那台电脑和隧道要开着。"
+            },
+        )
+        TextButton(onClick = { url = com.zongkong.core.buddy.BridgeNet.LOCAL_DEFAULT }, modifier = Modifier.testTag("bridge-local")) { Text("填本机地址") }
+        OutlinedTextField(
+            token, { token = it.trim() }, label = { Text("口令") }, singleLine = true,
+            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("开着时手机里的${book.config.name}不再自己开口", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             Switch(checked = b.muteLocal, onCheckedChange = { on -> app.buddy.setBridge { it.copy(muteLocal = on) } })
@@ -247,10 +270,9 @@ private fun BridgePanel() {
             OutlinedButton(onClick = {
                 app.buddy.setBridge { it.copy(url = url, token = token) }
                 app.buddy.testBridge()
-                result = "发出去了，过几秒点「看结果」"
-            }) { Text("发一条测试") }
-            TextButton(onClick = { result = app.buddy.lastBridge.ifBlank { "还没有结果" } }) { Text("看结果") }
+            }, modifier = Modifier.testTag("bridge-test")) { Text("发一条测试") }
         }
-        if (result.isNotBlank()) Text(result, style = MaterialTheme.typography.bodySmall, color = sig.muted)
+        Hint("「已送达（HTTP 200）」只说明 DSH 收到了事件；伙伴有没有回、回了什么，要在 QQ 或 DSH 里看。")
+        log.takeLast(5).asReversed().forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = sig.muted) }
     }
 }

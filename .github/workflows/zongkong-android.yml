@@ -32,6 +32,22 @@ jobs:
       - name: Unit tests, debug APK and end-to-end test APK
         run: ./gradlew --no-daemon testDebugUnitTest assembleDebug :app:assembleDebugAndroidTest
 
+      # 外接大脑要连同机 DSH（http://127.0.0.1）：确认网络策略真的打进了交付的 APK，
+      # 而且只放行本机、没有全局打开明文
+      - name: Network security config is in the shipped APK (localhost only)
+        run: |
+          ./gradlew --no-daemon :app:processReleaseMainManifest
+          AAPT2="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)aapt2"
+          "$AAPT2" dump xmltree --file AndroidManifest.xml app/build/outputs/apk/debug/app-debug.apk | grep networkSecurityConfig
+          REL=$(find app/build/intermediates -path '*release*' -name AndroidManifest.xml | grep merged_manifest | head -1)
+          test -n "$REL"
+          grep 'networkSecurityConfig' "$REL"
+          ALL=$(find app/build/intermediates -path '*merged_manifest*' -name AndroidManifest.xml)
+          test -n "$ALL"
+          if grep -q 'usesCleartextTraffic="true"' $ALL; then echo "不允许全局打开明文"; exit 1; fi
+          grep -q 'base-config cleartextTrafficPermitted="false"' app/src/main/res/xml/network_security_config.xml
+          test "$(grep -c '<domain ' app/src/main/res/xml/network_security_config.xml)" = 2
+
       # 一手也打一份，模拟器上装上它测两个 App 的连接
       - name: 一手 debug APK (for the link test)
         working-directory: yishou
@@ -150,3 +166,26 @@ jobs:
             --prerelease \
             --title "总控 最新调试版" \
             --notes "由提交 ${GITHUB_SHA::7} 自动构建，已通过单元测试、模拟器上的端到端闭环测试和拦截测试。直接安装 zongkong.apk，可覆盖旧版本，数据保留。zongkong-sentinel.apk 是独立的哨兵（总控掉线时替它拦），也要装、也要在无障碍里打开。screenshots.zip 是模拟器上的自动测试截图。"
+
+  # 开发分支的安装包：只要编译和单元测试过了就发到固定地址 zongkong-dev（预发布），方便直接下载覆盖安装。
+  # 不碰 zongkong-latest；冒烟结果写在说明里（哨兵四项是已知失败）。签名和包名与正式版相同，可以覆盖安装。
+  dev-apk:
+    needs: [build, smoke]
+    if: always() && needs.build.result == 'success' && github.ref == 'refs/heads/claude/master-app-accessibility-debug-c7y3bi'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: zongkong-debug-apk
+          path: apk
+      - name: Publish to release zongkong-dev
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp apk/debug/app-debug.apk zongkong-dev.apk
+          gh release delete zongkong-dev --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" || true
+          gh release create zongkong-dev zongkong-dev.apk --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "总控 开发版（${GITHUB_REF_NAME}）" \
+            --notes "由提交 ${GITHUB_SHA::7} 构建：编译和单元测试已通过；模拟器冒烟结果：${{ needs.smoke.result }}（哨兵四项是已知失败，详情见运行页 ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}）。包名、签名与正式版相同，直接覆盖安装，数据保留。"
