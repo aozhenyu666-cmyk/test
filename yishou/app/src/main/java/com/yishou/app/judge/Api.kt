@@ -25,6 +25,11 @@ data class LockedQ(
     val reference: String,
     /** 允许粘贴（比如从外部 AI 带回来的总结）；入口题不允许 */
     val allowPaste: Boolean = false,
+    /**
+     * 允许引用题面里的词。主旨题的核心主体词本来就在材料里，
+     * 拿它当“抄题目”挡掉，等于逼人换个说法去说同一个东西。
+     */
+    val allowTerms: Boolean = false,
 )
 
 /** 时间探针记下的东西 */

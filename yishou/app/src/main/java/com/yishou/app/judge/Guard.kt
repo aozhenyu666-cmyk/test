@@ -60,6 +60,12 @@ object Guard {
     /** 整段答案（自己写的部分）至少要这么多实在字：两三个要点不可能十个字以内说完 */
     const val MIN_ANSWER = 10
 
+    /**
+     * 入口主旨题的门槛低一档：两个槽拼起来通常就一句话（“生产性服务业，要赋能制造业”）。
+     * 只对 [LockedQ.allowTerms] 的题放宽，别的路（线程、素材）照旧，不跟着变松。
+     */
+    const val MIN_ANSWER_SLOTS = 6
+
     /** 去掉照抄题目的部分后，至少要有这么多自己的字 */
     const val MIN_NOVEL = 4
 
@@ -74,9 +80,11 @@ object Guard {
         }
         if (!q.allowPaste && answer.isNotEmpty() && pastedChars.toDouble() / answer.length > MAX_PASTE_SHARE) return Block.PASTED
         val own = if (q.allowPaste) answer else own(answer, trace.pastedRanges)
-        if (Words.substance(own) < MIN_ANSWER) return Block.EMPTY
+        if (Words.substance(own) < if (q.allowTerms) MIN_ANSWER_SLOTS else MIN_ANSWER) return Block.EMPTY
         if (Sharp.hollow(own) != null) return Block.HOLLOW
-        if (novel(own, seen + q.prompt + q.options) < MIN_NOVEL) return Block.COPIED
+        // 允许引用题面术语的题（入口主旨题）：只和“看过的提示”比，不和题面比
+        val against = if (q.allowTerms) seen else seen + q.prompt + q.options
+        if (novel(own, against) < MIN_NOVEL) return Block.COPIED
         return null
     }
 

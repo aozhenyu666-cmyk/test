@@ -36,7 +36,7 @@ class PassIssuerTest {
 
     @Test fun issuerWritesOnlyEligiblePassAndUsesFifteenMinutes() = runTest {
         val dao = FakeDao()
-        val issuer = PassIssuer(dao) { 1_000L }
+        val issuer = PassIssuer(dao, { 1_000L })
         dao.insertPass(Pass(packageGroup = "游戏", startAt = 0, endAt = 2_000_000, roundId = null))
         assertNull(issuer.issue(session().copy(done = false), "游戏"))
         assertNull(dao.activePass("游戏", 1_000L))
@@ -44,6 +44,19 @@ class PassIssuerTest {
         assertEquals(901_000L, pass.endAt)
         assertNotNull(dao.activePass("游戏", 900_999L))
         assertNull(dao.activePass("游戏", 901_000L))
+    }
+
+    /** 试满两次才选对：也给放行，但只给低能量那一档；组设置改动要生效 */
+    @Test fun revealedPathGivesLowMinutesAndGroupSettingWorks() = runTest {
+        val dao = FakeDao()
+        val issuer = PassIssuer(dao, { 1_000L }, minutesFor = { g -> if (g == "游戏") 30 else 15 })
+        // 说中要点：按组设置 30 分钟
+        assertEquals(1_000L + 30 * 60_000L, issuer.issue(session(), "游戏")!!.endAt)
+        // 没说到要点、最后选对：只给低能量那一档
+        val revealed = issuer.issueRevealed("游戏", session(), revealed = true)!!
+        assertEquals(1_000L + 5 * 60_000L, revealed.endAt)
+        // 没到“试满亮选项”就不给这条路的通行
+        assertNull(issuer.issueRevealed("游戏", session(), revealed = false))
     }
 
     @Test fun optionalExitCannotMakeWrongAnswerEligible() = runTest {

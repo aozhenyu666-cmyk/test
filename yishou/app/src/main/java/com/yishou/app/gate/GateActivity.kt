@@ -15,12 +15,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -119,7 +116,6 @@ class GateActivity : ComponentActivity() {
 
     override fun onPause() {
         isShowing = false
-        vm.cancelWait()
         super.onPause()
     }
 
@@ -210,19 +206,7 @@ private fun GateScreen(s: GateState, vm: GateViewModel, onReturn: () -> Unit, on
                     Text("上次说“${s.followUp}”，做了吗？")
                     Row { Button(onClick = { vm.answerFollowUp(true) }) { Text("做了") }; TextButton(onClick = { vm.answerFollowUp(false) }) { Text("没做") } }
                 }
-                s.waiting -> {
-                    val secs = (s.waitRemainingMs + 999) / 1000
-                    Text("还需 ${secs / 60} 分 ${secs % 60} 秒；离开页面重新计时")
-                    if (s.waitRemainingMs == 0L) Button(onClick = vm::passAfterWait, enabled = !s.isTest && !s.busy) { Text("放行 5 分钟") }
-                    OutlinedButton(onClick = vm::cancelWait) { Text("取消等待") }
-                }
                 vm.recall != null -> com.yishou.app.ui.RecallView(vm.recall!!, vm.recallSource(), s.busy, vm.recallFeedback, vm::submitRecall, vm::nextRecall, vm.recallingEcho)
-                vm.ice != null -> IceView(vm.ice!!, vm::finishIce)
-                s.mode == com.yishou.app.reflex.Main.WAIT -> {
-                    Text("暂时没有能继续的题，可以等一会儿或离开手机")
-                    Button(onClick = vm::startWait, enabled = !s.busy) { Text("等 10 分钟，换 5 分钟") }
-                    OutlinedButton(onClick = vm::retryUnavailable, enabled = !s.busy) { Text("重新找题") }
-                }
                 else -> {
                     if (s.mode == com.yishou.app.reflex.Main.STRAND) vm.work.strand?.let { com.yishou.app.ui.StrandHeading(it) }
                     ProbeGateView(s, vm)
@@ -231,12 +215,13 @@ private fun GateScreen(s: GateState, vm: GateViewModel, onReturn: () -> Unit, on
                         Text("连上了，接着想这件事")
                         Button(onClick = vm::retry, enabled = !s.busy) { Text("接着来") }
                     } else if (rev?.verdict?.passed == true) {
-                        if (!vm.triggerSaved) com.yishou.app.ui.TriggerEditor(rev.q, s.busy, vm::saveTrigger)
-                        else {
-                            Text("触发器已存好")
-                            VoiceTextField(s.exit, vm::onExitChange, "看完做什么（可不填）", Modifier.fillMaxWidth())
-                            Button(onClick = vm::pass, enabled = !s.busy && !s.isTest) { Text("通过，放行 15 分钟") }
+                        // 触发器是加分项，不再是放行门槛：想存就存，不存也直接过。
+                        if (!vm.triggerSaved) {
+                            Text("过了。留一句触发器下次更快认出这类题（不填也行）")
+                            com.yishou.app.ui.TriggerEditor(rev.q, s.busy, vm::saveTrigger)
                         }
+                        VoiceTextField(s.exit, vm::onExitChange, "看完做什么（可不填）", Modifier.fillMaxWidth())
+                        Button(onClick = vm::pass, enabled = !s.busy && !s.isTest) { Text("进去") }
                     }
                 }
             }
@@ -244,13 +229,4 @@ private fun GateScreen(s: GateState, vm: GateViewModel, onReturn: () -> Unit, on
             OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text(if (s.isTest) "关闭" else "先回桌面") }
         }
     }
-}
-
-@Composable
-private fun IceView(ice: com.yishou.app.reflex.Ice, onDone: () -> Unit) {
-    var left by androidx.compose.runtime.remember(ice) { androidx.compose.runtime.mutableStateOf(5) }
-    LaunchedEffect(ice) { while (left > 0) { delay(1_000); left-- }; onDone() }
-    Text("直觉看一眼，哪个更像鬼扯？（$left 秒）")
-    Button(onClick = onDone, modifier = Modifier.fillMaxWidth().height(72.dp)) { Text(ice.left) }
-    Button(onClick = onDone, modifier = Modifier.fillMaxWidth().height(72.dp)) { Text(ice.right) }
 }

@@ -15,6 +15,7 @@ object LockedJson {
         .put("need", q.need)
         .put("reference", q.reference)
         .put("allowPaste", q.allowPaste)
+        .put("allowTerms", q.allowTerms)
 
     fun fromJson(o: JSONObject): LockedQ {
         val opts = o.optJSONArray("options") ?: JSONArray()
@@ -31,6 +32,7 @@ object LockedJson {
             need = o.getInt("need"),
             reference = o.optString("reference"),
             allowPaste = o.optBoolean("allowPaste", false),
+            allowTerms = o.optBoolean("allowTerms", false),
         )
     }
 }

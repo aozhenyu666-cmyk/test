@@ -19,7 +19,13 @@ class ProbeRecorder(private val clock: () -> Long) {
     fun edit(old: String, new: String, t: Long = clock()) = update(old, new, t, false)
     fun voiceEdit(old: String, new: String, t: Long = clock()) = update(old, new, t, true)
 
-    private fun update(old: String, new: String, t: Long, fromVoice: Boolean) {
+    /**
+     * 填槽（主体 / 方向）触发的改动：整句是程序拼出来的，拼一次可能一下多出好几个字，
+     * 不能按“一次跳八个字”当成粘贴——那是用户在两个短框里各打了几个字。
+     */
+    fun slotEdit(old: String, new: String, t: Long = clock()) = update(old, new, t, false, guessPaste = false)
+
+    private fun update(old: String, new: String, t: Long, fromVoice: Boolean, guessPaste: Boolean = true) {
         val mismatch = old != text
         if (!mismatch && old == new) return
         val previous = text
@@ -34,7 +40,7 @@ class ProbeRecorder(private val clock: () -> Long) {
         val added = new.length - start - suffix
         if (new.length < previous.length) deletes++
         repeat(removed) { pasted.removeAt(start) }
-        val suspected = !fromVoice && added >= 8 && t - (prior ?: shownAt) in 0L until 100L
+        val suspected = guessPaste && !fromVoice && added >= 8 && t - (prior ?: shownAt) in 0L until 100L
         pasted.addAll(start, List(added) { suspected })
         text = new
         if (first == null && new.isNotEmpty()) first = t

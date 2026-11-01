@@ -49,6 +49,8 @@ class FakeCardDao : CardDao() {
     override suspend fun unused() = cards.filter { it.usedAt == null && it.verified }
     override suspend fun recent(n: Int) = cards.takeLast(n).reversed()
     override suspend fun unusedBank() = cards.filter { it.usedAt == null && it.source == CardSource.BANK }
+    override suspend fun bankCycle() = cards.filter { it.source == CardSource.BANK }
+        .sortedWith(compareBy<CardRow>({ if (it.usedAt == null) 0 else 1 }, { it.usedAt ?: 0L }, { it.createdAt }))
     override fun observeBank(): Flow<List<CardRow>> = emptyFlow()
     override suspend fun insertAttempt(attempt: CardAttempt): Long {
         val id = attempts.size + 1L
@@ -371,5 +373,23 @@ class CardTest {
             return
         }
         throw AssertionError("应该抛出 BadCard")
+    }
+
+    /** 入口两次没说到要点：亮选项后仍然能选，选对算做完（由 PassIssuer 给低能量时长） */
+    @Test
+    fun gateRevealsButStillLetsYouAnswer() = runTest {
+        val dao = FakeCardDao()
+        val engine = CardEngine(dao, FakeCardGen(), clock = { t })
+        val session = CardSession(engine, FakeDao(), FakeCoachDao(), clock = { t })
+        val c = sample()
+        dao.insertCard(CardRow(skill = c.skill.name, difficulty = 1, json = c.toJson(), verified = true, source = CardSource.BANK, createdAt = t))
+        session.start(CardMode.GATE, null, 1)
+        // 没有 verdict、也没亮选项：不许选
+        session.bet(0, Conf.MID)
+        assertNull(session.state.value.round?.bet)
+        session.revealGate()
+        session.bet(c.answer, Conf.MID)
+        assertEquals(c.answer, session.state.value.round?.bet)
+        assertTrue(session.state.value.done)
     }
 }

@@ -18,16 +18,21 @@ class GateFlowTest {
         flow.submit(accept)
         assertTrue(flow.canSelect())
     }
-    @Test fun failedPointsFreezeAndStopAfterThreeAttempts() = runTest {
+    /** 第一次没中就冻 15 秒提醒慢一点；两次没中直接亮选项，不再把人锁在“说不出来”上 */
+    @Test fun failedPointsFreezeThenRevealAfterTwoAttempts() = runTest {
         var now = 0L
         val flow = GateFlow(q) { now }; flow.shown(); now = 2_900
         flow.edit("没有命中")
         flow.submit(FakeJudge())
         assertFalse(flow.canSelect()); assertEquals(15_000L, flow.remainingFreeze)
-        flow.submit(accept)
-        assertEquals(1, flow.attempts)
-        repeat(2) { now += 15_000; flow.submit(FakeJudge()) }
-        assertTrue(flow.exhausted); assertFalse(flow.canSelect())
+        assertEquals(1, flow.attempts); assertFalse(flow.revealed)
+        now += 15_000
+        flow.submit(FakeJudge())
+        assertEquals(2, flow.attempts)
+        assertTrue(flow.revealed)
+        assertTrue(flow.exhausted)
+        // 试满就亮选项：能做下去，只是不算“预判成功”
+        assertTrue(flow.canSelect())
     }
 
     @Test fun missShowsHintNotCriterionAndHintGoesToSeen() = runTest {

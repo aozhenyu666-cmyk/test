@@ -85,22 +85,16 @@ class ReflexTest {
     }
 
     @Test
-    fun icebreakerUsesRightAndWrong() {
-        val a = Icebreaker.from(q, 0)!!
-        val b = Icebreaker.from(q, 1)!!
-        assertEquals("咖啡有抗氧化物", if (a.nonsense == 0) a.left else a.right)
-        assertEquals("咖啡有抗氧化物", if (b.nonsense == 0) b.left else b.right)
-        assertNull(Icebreaker.from(q.copy(options = emptyList(), answer = -1), 0))
-    }
-
-    @Test
     fun gateOrder() {
         val base = GateInput(strandReady = true, bankReady = true, judgeOk = true, hasReflex = true, wrongInRow = 0)
         assertEquals(Main.STRAND, GatePlan.pick(base))
         assertEquals(Main.BANK, GatePlan.pick(base.copy(strandReady = false)))
         assertEquals(Main.LOW_ENERGY, GatePlan.pick(base.copy(judgeOk = false)))
-        assertEquals(Main.LOW_ENERGY, GatePlan.pick(base.copy(wrongInRow = 2)))
-        assertEquals(Main.WAIT, GatePlan.pick(base.copy(judgeOk = false, hasReflex = false)))
+        // 连错不再改路，只降一档帮助
+        assertEquals(Main.STRAND, GatePlan.pick(base.copy(wrongInRow = 2)))
+        // 判卷不在、没有可默写：还能走题库；全都没有则走低能量，不设“等待”这一挡
+        assertEquals(Main.BANK, GatePlan.pick(base.copy(judgeOk = false, hasReflex = false)))
+        assertEquals(Main.LOW_ENERGY, GatePlan.pick(base.copy(judgeOk = false, hasReflex = false, bankReady = false)))
     }
 
     @Test

@@ -54,6 +54,8 @@ data class SessionState(
     /** 先说的那句打中了正确选项独有的字：选项一亮直接选 */
     val bullseye: Boolean = false,
     val gateVerdict: com.yishou.app.judge.Verdict? = null,
+    /** 入口试满两次才亮选项：这时也让人选，只是不算“预判成功” */
+    val gateRevealed: Boolean = false,
 ) {
     val index: Int get() = results.size
 }
@@ -111,7 +113,7 @@ class CardSession(
                         hidden = false, notes = "", needsKey = false, cardStartedAt = clock(),
                         // 收费站只做点选；其他练习保留先说再选。
                         mustPredict = !gate && (predictFirst || it.rushNote != null), predicted = null,
-                        drillAsk = null, drillHint = null, drillStep = 0, drillTotal = 0, bullseye = false, gateVerdict = null,
+                        drillAsk = null, drillHint = null, drillStep = 0, drillTotal = 0, bullseye = false, gateVerdict = null, gateRevealed = false,
                     )
                 }
             }
@@ -126,7 +128,7 @@ class CardSession(
             it.copy(
                 dealt = d, round = Round(d.card, RoundConfig(checks, allowChange = true)), hidden = false, notes = "", needsKey = false,
                 cardStartedAt = clock(), error = null, mustPredict = predictFirst || it.rushNote != null, predicted = null,
-                drillAsk = null, drillHint = null, drillStep = 0, drillTotal = 0, bullseye = false, gateVerdict = null,
+                drillAsk = null, drillHint = null, drillStep = 0, drillTotal = 0, bullseye = false, gateVerdict = null, gateRevealed = false,
             )
         }
     }
@@ -175,9 +177,15 @@ class CardSession(
         if (_state.value.mode == CardMode.GATE) _state.update { it.copy(gateVerdict = verdict) }
     }
 
+    /** 两次都没说到要点：亮选项，允许作答，但不给“预判成功”的判定 */
+    fun revealGate() {
+        if (_state.value.mode == CardMode.GATE) _state.update { it.copy(gateRevealed = true) }
+    }
+
     suspend fun bet(option: Int, conf: Conf) {
         if (_state.value.mode == CardMode.GATE) {
-            if (_state.value.gateVerdict?.passed != true || option !in 0..3) return
+            val canPick = _state.value.gateVerdict?.passed == true || _state.value.gateRevealed
+            if (!canPick || option !in 0..3) return
             advance { if (it.step == Step.BET) it.copy(bet = option, conf = conf, step = Step.REVEAL) else it }
         } else advance { it.bet(option, conf) }
     }

@@ -148,6 +148,18 @@ class JudgeTest {
         assertEquals(0, s.calls)
     }
 
+    /** 入口主旨题是两个槽拼的一句话：门槛低一档，但也不能空着就过 */
+    @Test
+    fun entrySlotsQuestionAcceptsShortAnswerButNotEmptyOne() {
+        val entry = q.copy(allowTerms = true)
+        val s = Script("[P1] 命中 | 「房租贵」\n[P2] 命中 | 「有人喝」\n[跑题] 否")
+        val v = judge(s, "房租贵，有人喝", lq = entry)
+        assertNull(v.block)
+        assertEquals(1, s.calls)
+        val empty = judge(Script("[P1] 命中 | 「嗯」\n[P2] 没有\n[跑题] 否"), "嗯", lq = entry)
+        assertEquals(Block.EMPTY, empty.block)
+    }
+
     @Test
     fun offTopicFails() {
         val a = "今天天气真好，适合出去走走，下雨就不好了，路上很滑"

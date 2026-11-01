@@ -35,6 +35,7 @@ object LockedQuestions {
             points = points.mapIndexed { i, c -> Point("P${i + 1}", c, card.skill.hint) },
             need = Locks.need(points.size),
             reference = letter + card.explain.trim(),
+            allowTerms = true,
         )
     }
 }
