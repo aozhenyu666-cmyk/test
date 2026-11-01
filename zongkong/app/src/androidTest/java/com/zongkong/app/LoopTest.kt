@@ -404,7 +404,7 @@ class LoopTest {
      * 4) 伪装域名、非本机 http 一律不发。
      */
     @Test
-    fun bridgeLocalHttp() = runBlocking {
+    fun bridgeLocalHttp(): Unit = runBlocking {
         val policy = android.security.NetworkSecurityPolicy.getInstance()
         assertTrue(policy.isCleartextTrafficPermitted("127.0.0.1"))
         assertTrue(policy.isCleartextTrafficPermitted("localhost"))
