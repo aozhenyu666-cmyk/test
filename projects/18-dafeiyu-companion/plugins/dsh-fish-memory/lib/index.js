@@ -31,6 +31,8 @@ try { for (const n of (hostDeps.notes || [])) diag('hostdeps: ' + n) } catch (e)
 // ⭐ 2026-09-22（她的第十件）：「从会话生成档案」那一块单独放一个文件 ——
 //   整料 / 切批 / 拼提示词 / 出档案 都在里面，能单独测，不用全塞进这个 4300 行的文件
 import * as 生成档案 from './生成档案.js'
+// ⭐ 1.6.0（大肥鱼改造版）：每几句话自动提一次记忆，不再只靠模型自己调 remember
+import * as 自动提取 from './自动提取.js'
 
 export const name = 'memory'
 export const inject = ['systemPrompt', 'agents', 'timer', 'tools', 'webServer', 'sessions', 'sessionTitle', 'llm']
@@ -3629,151 +3631,161 @@ function makeRememberTool(ctx) {
       if (!text) return { ok: false, message: '没记住（内容是空的）' }
       if (text !== 原始) diag('remember：人称换过了 →「' + text + '」')
 
-      const data = loadStore(sid)
-      const policy = data.policy
-      const now = Date.now()
-
-      // 配额（每天最多几条，先宽松）
-      const today = dayKey(now)
-      const todayCount = data.memories.filter((m) => m.createdAt && dayKey(Date.parse(m.createdAt)) === today).length
-      if (todayCount >= policy.dailyQuota) {
-        return { ok: false, message: '今天记满了（' + policy.dailyQuota + ' 条），明天再说。' }
-      }
-
-      // 去重：内容太像的不重复记 —— 但**强化**它（照 AAAAGENT）
-      // 「她又提到这件事了」说明这件事还在她心里，该记得更牢一点 ✓
-      // （注意：只有她真的又提一次才强化；光是召回想起来**不**强化 ——
-      //   「仅浏览、搜索不会把记忆越看越重要」✓）
-      const norm = (s) => String(s || '').replace(/[\s，。、！？,.!?]/g, '')
-      const nt = norm(text)
-      for (const m of data.memories) {
-        const a = norm(m.text)
-        if (a && (a === nt || (a.length > 8 && nt.length > 8 && (a.includes(nt) || nt.includes(a))))) {
-          const I0 = typeof m.importance === 'number' ? m.importance : 0
-          const H0 = policy.baseHalfLifeDays * (1 + 2 * I0)
-          const 旧锚 = m.activationAnchor ? Date.parse(m.activationAnchor) : m.at ? Date.parse(m.at) : now
-          const 旧A0 = typeof m.activation0 === 'number' && isFinite(m.activation0) ? Math.max(0, Math.min(1, m.activation0)) : 1
-          // ⚠ 这里必须和 evaluate 用**同一套规则**，否则「涨」的起点不对：
-          //   没时间戳又还没锚的，起点是那个常数（她设 0.5 就从 0.5 往上涨）；
-          //   以前只特判了 stable_profile，对它们算出 旧A=1 → 新A 还是 1 → 记了个寂寞 ✗
-          const 没时间又没锚 = !m.at && !m.activationAnchor
-          const 旧A = m.category === 'stable_profile'
-            ? 1
-            : 没时间又没锚
-              ? clampNum(typeof policy.unknownActivation === 'number' ? policy.unknownActivation : 1, 0, 1)
-              : 旧A0 * Math.pow(2, -Math.max(0, (now - 旧锚) / DAY) / H0)
-          const 新A = 旧A + 0.2 * (1 - 旧A) // ⭐ A' = A + 0.2(1-A)
-          m.activation0 = Math.max(0, Math.min(1, 新A))
-          m.activationAnchor = new Date(now).toISOString()
-          m.reinforcedAt = new Date(now).toISOString()
-          m.lastReinforcedDay = dayKey(now)
-          m.reinforceCount = (typeof m.reinforceCount === 'number' ? m.reinforceCount : 0) + 1
-          saveStore(sid, data)
-          diag('remember：这条记过了，强化一下 → 活跃度 ' + 旧A.toFixed(2) + ' → ' + m.activation0.toFixed(2))
-          return { ok: true, message: '这条记过了，已经把它记得更牢一点（第 ' + m.reinforceCount + ' 次）。' }
-        }
-      }
-
-      const imp = typeof args.importance === 'number' ? Math.max(0, Math.min(1, args.importance)) : 0.5
-      const 新id = 'm' + now.toString(36) + Math.floor(Math.random() * 1000)
-
-      // ⭐⭐ 2026-09-23：**过期条目标作废** —— 两个来源 ✓
-      //
-      //   来源一：**本地自动** —— 新记的这条如果跟旧的「几乎一样」，旧的作废。
-      //     这就是反馈里说的「同一个 key 只留最新一条」。
-      //     ⚠ 口径用**词像度 ≥0.85 而且长短差不多** —— 跟查重的「真重复」同一档；
-      //       实测那一档 31 组逐组人眼核过，**没有一组是误合** ✓
-      //       比这更松的不敢自动标：标错了会**悄悄**让一条正经记忆不再被想起来 ✗
-      //   来源二：**AI 自己说** —— 它调 remember 时填了「取代」。
-      //     像「拼团开了」更新「拼团还没开」这种，**只有它自己知道**，本地判不出来 ✓
-      const 作废的 = []
-      try {
-        const 新词集 = 词集(text)
-        for (const m of data.memories) {
-          if (m.已被取代) continue
-          const 像 = 像度(新词集, 词集(String(m.text || '')))
-          if (像 < 真重复门槛) continue
-          const 长比 =
-            Math.min(text.length, String(m.text || '').length) / Math.max(text.length, String(m.text || '').length)
-          if (长比 < 0.8) continue
-          if (标作废(m, 新id, '跟新记的几乎一样')) 作废的.push(String(m.id))
-        }
-      } catch (error) {}
-      // 来源二：它明确说了「这条取代了那条」
-      if (args && args.取代) {
-        const 指 = String(args.取代).trim()
-        const 找 = norm(指)
-        let 最好 = null
-        let 最好像 = 0
-        for (const m of data.memories) {
-          if (m.已被取代) continue
-          if (String(m.id) === 指) {
-            最好 = m
-            最好像 = 1
-            break
-          }
-          const a = norm(m.text)
-          if (a && 找 && (a === 找 || (a.length > 6 && 找.length > 6 && (a.includes(找) || 找.includes(a))))) {
-            最好 = m
-            最好像 = 1
-            break
-          }
-          const 像 = 像度(词集(指), 词集(String(m.text || '')))
-          if (像 > 最好像) {
-            最好像 = 像
-            最好 = m
-          }
-        }
-        // ⚠ 门槛 0.5：它给的是「大意」不是原文，太严会找不到；
-        //   太低又会误伤不相干的 —— 0.5 是「同一件事」的下限（跟查重候选 0.75 同量级但更松）
-        if (最好 && 最好像 >= 0.5 && 标作废(最好, 新id, '新记的这条说它取代了它')) 作废的.push(String(最好.id))
-      }
-      // ⭐⭐ 2026-09-23（反馈第二点）：**事实键** —— 它填了就收下 ✓
-      //   收下之后**先只挂在新条上**，等它进库了再统一收敛（见下面 按键收敛）
-      const 键 = 归一键(args && args.事实键)
-
-      data.memories.push({
-        id: 新id,
-        text: text,
-        at: new Date(now).toISOString(), // ⭐ 真实时间（系统给的）
-        createdAt: new Date(now).toISOString(),
-        category: imp >= 1 ? 'stable_profile' : 'event',
-        importance: imp,
-        emotion: null,
-        tags: Array.isArray(args.tags) ? args.tags.slice(0, 6).map(String) : [],
-        source: '她自己记的',
-        reinforcedAt: null,
-        lastReinforcedDay: null,
-        // ⭐ 事实键只在真给了的时候才写字段（没给就不留空字段，老数据长什么样它长什么样）✓
-        ...(键 ? { 事实键: 键 } : {}),
-      })
-      // ⭐⭐ 同一个键只留最新那条 —— 新条**已经进库了**再收敛，
-      //   这样「最新」的比较里包含它自己，一定留的是它 ✓
-      //   （顺序很要紧：先 push 再收敛，反过来会把新条自己也算成旧的 ✗）
-      if (键) {
-        try {
-          for (const id of 按键收敛(data, 新id)) if (作废的.indexOf(id) < 0) 作废的.push(id)
-        } catch (error) {}
-      }
-      saveStore(sid, data)
-      diag('remember：' + sid + ' 记了「' + text.slice(0, 40) + '」' + (键 ? '（事实键 ' + 键 + '）' : '') + '（今天第 ' + (todayCount + 1) + ' 条）')
-      // ⭐ 自动补「检索词」：以前得她去设置页点「开始扩词」，现在记完就顺手补上
-      //    ⚠️ 不 await（模型调用要几秒，不能卡住记账）；但**必须 .catch** ——
-      //      裸的 rejected promise 会被 Node 当致命错误，整个宿主退出（今天早上刚踩过）
-      try {
-        Promise.resolve()
-          .then(() => 自动扩词(ctx, sid, 2))
-          .catch((error) => diag('自动扩词失败：' + ((error && error.message) || error)))
-      } catch (error) {}
-      if (作废的.length) diag('remember：顺手把 ' + 作废的.length + ' 条旧的标成「已被取代」：' + 作废的.join(','))
-      return {
-        ok: true,
-        message:
-          '记下了（' + relTime(now, now) + '）。' +
-          (作废的.length ? '顺手把 ' + 作废的.length + ' 条被这条取代的旧记忆标成「已被取代」（不再想起来，东西还留着）。' : ''),
-      }
+      const 结果 = 写一条记忆(ctx, sid, text, args || {}, '她自己记的')
+      return { ok: !!结果.ok, message: String(结果.message || '') }
     },
   })
+}
+
+// ⭐ 1.6.0（大肥鱼改造版）：remember 工具的「写进库」那一段抽成独立函数 ——
+//   自动提取（lib/自动提取.js）也走这一条路，去重 / 强化 / 取代 / 事实键 / 每天配额完全一致。
+//   返回 { ok, message, 种类?, id? }；remember 工具对外只交 { ok, message }（它的输出 schema 不许多字段）。
+function 写一条记忆(ctx, sid, text, args, 来源 = '她自己记的') {
+  const data = loadStore(sid)
+  const policy = data.policy
+  const now = Date.now()
+
+  // 配额（每天最多几条，先宽松）
+  const today = dayKey(now)
+  const todayCount = data.memories.filter((m) => m.createdAt && dayKey(Date.parse(m.createdAt)) === today).length
+  if (todayCount >= policy.dailyQuota) {
+    return { ok: false, 种类: '配额满', message: '今天记满了（' + policy.dailyQuota + ' 条），明天再说。' }
+  }
+
+  // 去重：内容太像的不重复记 —— 但**强化**它（照 AAAAGENT）
+  // 「她又提到这件事了」说明这件事还在她心里，该记得更牢一点 ✓
+  // （注意：只有她真的又提一次才强化；光是召回想起来**不**强化 ——
+  //   「仅浏览、搜索不会把记忆越看越重要」✓）
+  const norm = (s) => String(s || '').replace(/[\s，。、！？,.!?]/g, '')
+  const nt = norm(text)
+  for (const m of data.memories) {
+    const a = norm(m.text)
+    if (a && (a === nt || (a.length > 8 && nt.length > 8 && (a.includes(nt) || nt.includes(a))))) {
+      const I0 = typeof m.importance === 'number' ? m.importance : 0
+      const H0 = policy.baseHalfLifeDays * (1 + 2 * I0)
+      const 旧锚 = m.activationAnchor ? Date.parse(m.activationAnchor) : m.at ? Date.parse(m.at) : now
+      const 旧A0 = typeof m.activation0 === 'number' && isFinite(m.activation0) ? Math.max(0, Math.min(1, m.activation0)) : 1
+      // ⚠ 这里必须和 evaluate 用**同一套规则**，否则「涨」的起点不对：
+      //   没时间戳又还没锚的，起点是那个常数（她设 0.5 就从 0.5 往上涨）；
+      //   以前只特判了 stable_profile，对它们算出 旧A=1 → 新A 还是 1 → 记了个寂寞 ✗
+      const 没时间又没锚 = !m.at && !m.activationAnchor
+      const 旧A = m.category === 'stable_profile'
+        ? 1
+        : 没时间又没锚
+          ? clampNum(typeof policy.unknownActivation === 'number' ? policy.unknownActivation : 1, 0, 1)
+          : 旧A0 * Math.pow(2, -Math.max(0, (now - 旧锚) / DAY) / H0)
+      const 新A = 旧A + 0.2 * (1 - 旧A) // ⭐ A' = A + 0.2(1-A)
+      m.activation0 = Math.max(0, Math.min(1, 新A))
+      m.activationAnchor = new Date(now).toISOString()
+      m.reinforcedAt = new Date(now).toISOString()
+      m.lastReinforcedDay = dayKey(now)
+      m.reinforceCount = (typeof m.reinforceCount === 'number' ? m.reinforceCount : 0) + 1
+      saveStore(sid, data)
+      diag('remember：这条记过了，强化一下 → 活跃度 ' + 旧A.toFixed(2) + ' → ' + m.activation0.toFixed(2))
+      return { ok: true, 种类: '强化', id: String(m.id), message: '这条记过了，已经把它记得更牢一点（第 ' + m.reinforceCount + ' 次）。' }
+    }
+  }
+
+  const imp = typeof args.importance === 'number' ? Math.max(0, Math.min(1, args.importance)) : 0.5
+  const 新id = 'm' + now.toString(36) + Math.floor(Math.random() * 1000)
+
+  // ⭐⭐ 2026-09-23：**过期条目标作废** —— 两个来源 ✓
+  //
+  //   来源一：**本地自动** —— 新记的这条如果跟旧的「几乎一样」，旧的作废。
+  //     这就是反馈里说的「同一个 key 只留最新一条」。
+  //     ⚠ 口径用**词像度 ≥0.85 而且长短差不多** —— 跟查重的「真重复」同一档；
+  //       实测那一档 31 组逐组人眼核过，**没有一组是误合** ✓
+  //       比这更松的不敢自动标：标错了会**悄悄**让一条正经记忆不再被想起来 ✗
+  //   来源二：**AI 自己说** —— 它调 remember 时填了「取代」。
+  //     像「拼团开了」更新「拼团还没开」这种，**只有它自己知道**，本地判不出来 ✓
+  const 作废的 = []
+  try {
+    const 新词集 = 词集(text)
+    for (const m of data.memories) {
+      if (m.已被取代) continue
+      const 像 = 像度(新词集, 词集(String(m.text || '')))
+      if (像 < 真重复门槛) continue
+      const 长比 =
+        Math.min(text.length, String(m.text || '').length) / Math.max(text.length, String(m.text || '').length)
+      if (长比 < 0.8) continue
+      if (标作废(m, 新id, '跟新记的几乎一样')) 作废的.push(String(m.id))
+    }
+  } catch (error) {}
+  // 来源二：它明确说了「这条取代了那条」
+  if (args && args.取代) {
+    const 指 = String(args.取代).trim()
+    const 找 = norm(指)
+    let 最好 = null
+    let 最好像 = 0
+    for (const m of data.memories) {
+      if (m.已被取代) continue
+      if (String(m.id) === 指) {
+        最好 = m
+        最好像 = 1
+        break
+      }
+      const a = norm(m.text)
+      if (a && 找 && (a === 找 || (a.length > 6 && 找.length > 6 && (a.includes(找) || 找.includes(a))))) {
+        最好 = m
+        最好像 = 1
+        break
+      }
+      const 像 = 像度(词集(指), 词集(String(m.text || '')))
+      if (像 > 最好像) {
+        最好像 = 像
+        最好 = m
+      }
+    }
+    // ⚠ 门槛 0.5：它给的是「大意」不是原文，太严会找不到；
+    //   太低又会误伤不相干的 —— 0.5 是「同一件事」的下限（跟查重候选 0.75 同量级但更松）
+    if (最好 && 最好像 >= 0.5 && 标作废(最好, 新id, '新记的这条说它取代了它')) 作废的.push(String(最好.id))
+  }
+  // ⭐⭐ 2026-09-23（反馈第二点）：**事实键** —— 它填了就收下 ✓
+  //   收下之后**先只挂在新条上**，等它进库了再统一收敛（见下面 按键收敛）
+  const 键 = 归一键(args && args.事实键)
+
+  data.memories.push({
+    id: 新id,
+    text: text,
+    at: new Date(now).toISOString(), // ⭐ 真实时间（系统给的）
+    createdAt: new Date(now).toISOString(),
+    category: imp >= 1 ? 'stable_profile' : 'event',
+    importance: imp,
+    emotion: null,
+    tags: Array.isArray(args.tags) ? args.tags.slice(0, 6).map(String) : [],
+    source: 来源,
+    reinforcedAt: null,
+    lastReinforcedDay: null,
+    // ⭐ 事实键只在真给了的时候才写字段（没给就不留空字段，老数据长什么样它长什么样）✓
+    ...(键 ? { 事实键: 键 } : {}),
+  })
+  // ⭐⭐ 同一个键只留最新那条 —— 新条**已经进库了**再收敛，
+  //   这样「最新」的比较里包含它自己，一定留的是它 ✓
+  //   （顺序很要紧：先 push 再收敛，反过来会把新条自己也算成旧的 ✗）
+  if (键) {
+    try {
+      for (const id of 按键收敛(data, 新id)) if (作废的.indexOf(id) < 0) 作废的.push(id)
+    } catch (error) {}
+  }
+  saveStore(sid, data)
+  diag((来源 === '她自己记的' ? 'remember' : 来源) + '：' + sid + ' 记了「' + text.slice(0, 40) + '」' + (键 ? '（事实键 ' + 键 + '）' : '') + '（今天第 ' + (todayCount + 1) + ' 条）')
+  // ⭐ 自动补「检索词」：以前得她去设置页点「开始扩词」，现在记完就顺手补上
+  //    ⚠️ 不 await（模型调用要几秒，不能卡住记账）；但**必须 .catch** ——
+  //      裸的 rejected promise 会被 Node 当致命错误，整个宿主退出（今天早上刚踩过）
+  try {
+    Promise.resolve()
+      .then(() => 自动扩词(ctx, sid, 2))
+      .catch((error) => diag('自动扩词失败：' + ((error && error.message) || error)))
+  } catch (error) {}
+  if (作废的.length) diag('remember：顺手把 ' + 作废的.length + ' 条旧的标成「已被取代」：' + 作废的.join(','))
+  return {
+    ok: true,
+    种类: '新记',
+    id: 新id,
+    message:
+      '记下了（' + relTime(now, now) + '）。' +
+      (作废的.length ? '顺手把 ' + 作废的.length + ' 条被这条取代的旧记忆标成「已被取代」（不再想起来，东西还留着）。' : ''),
+  }
 }
 
 // 会话名字（DSH 给每个会话起的标题）
@@ -4143,8 +4155,203 @@ try { load() } catch (e) { document.getElementById('body').innerHTML = '<div sty
 
 // ---------- 插件 ----------
 
+
+// ---------- ⭐ 1.6.0 自动提取：接线（纯函数在 lib/自动提取.js）----------
+//
+// 什么时候提：
+//   · 每一轮结束（agent/turn-stopping）看一眼：上次提完之后她真说了几句；
+//     攒够「每几句」就马上提一次；
+//   · 不够数就挂一个「闲置分钟」的计时器：她聊完一会儿没再说话，也把这几句提了。
+// 游标（上次提到哪个时间点）存在 fish-memory/auto-extract.json，**按会话**记：
+//   重启不会重复提，没提成（模型报错）也不往前挪 —— 下次带上这几句再试。
+// 第一次见到一个会话时，游标设成「现在」：**不会**把几个月的老历史一口气全提一遍
+// （老历史要整理，用设置页里原有的「从会话生成档案」）。
+
+const 提取账路径 = join(STORE_DIR, 'auto-extract.json')
+
+function 读提取账() {
+  try {
+    const raw = JSON.parse(readFileSync(提取账路径, 'utf8'))
+    if (raw && typeof raw === 'object' && raw.会话 && typeof raw.会话 === 'object') return raw
+  } catch (error) {}
+  return { version: 1, 会话: {} }
+}
+
+function 写提取账(账) {
+  try {
+    mkdirSync(STORE_DIR, { recursive: true })
+    writeFileAtomicSync(提取账路径, JSON.stringify(账, null, 2))
+  } catch (error) {
+    diag('自动提取：账本写不进去：' + ((error && error.message) || error))
+  }
+}
+
+function 自动提取配置() {
+  try {
+    return 自动提取.规整配置(loadCfg().自动提取)
+  } catch (error) {
+    return 自动提取.规整配置(null)
+  }
+}
+
+function 造自动提取(ctx) {
+  const 计时 = new Map() // sid -> setTimeout 句柄
+  const 在跑 = new Set()
+  let 收摊了 = false
+  const 工具 = { 是机器话: 不是人说的话, 净化: 清掉注入上下文, 取文本: textOfMessage }
+
+  const 清计时 = (sid) => {
+    const h = 计时.get(sid)
+    if (h) {
+      try { clearTimeout(h) } catch (error) {}
+    }
+    计时.delete(sid)
+  }
+
+  function 记一笔(sid, 改) {
+    const 账 = 读提取账()
+    const 旧 = 账.会话[sid] && typeof 账.会话[sid] === 'object' ? 账.会话[sid] : {}
+    const 新 = { ...旧, ...改 }
+    if (改.一笔) {
+      新.最近 = [...(Array.isArray(旧.最近) ? 旧.最近 : []), 改.一笔].slice(-10)
+      delete 新.一笔
+    }
+    账.会话[sid] = 新
+    写提取账(账)
+    return 新
+  }
+
+  function 起点(sid) {
+    const 记 = 读提取账().会话[sid]
+    return 记 && Number(记.到) > 0 ? Number(记.到) : 0
+  }
+
+  /** 第一次见到这个会话：游标设成现在（老历史不自动提）。 */
+  function 认识(sid) {
+    if (起点(sid) > 0) return
+    记一笔(sid, { 到: Date.now(), 始于: new Date().toISOString() })
+    diag('自动提取：第一次见到 ' + sid + '，从现在开始算（老历史不自动提）')
+  }
+
+  /** 现在这个会话最新的那个 agent（实例可能被宿主换过）。 */
+  function 现役(sid, 兜) {
+    try {
+      const a = ctx.agents.get(sid)
+      if (a) return a
+    } catch (error) {}
+    return 兜
+  }
+
+  /**
+   * 看一眼要不要提。原因：'一轮'（一轮刚结束）/ '闲置'（计时器到点）/ '手动'（设置页按钮）。
+   * @returns { ok?, 跳过?, 结果们? }（给路由和测试看；平时没人等它）
+   */
+  async function 检查(agent, sid, 原因) {
+    清计时(sid)
+    if (收摊了) return { 跳过: '插件已卸载' }
+    const 配 = 自动提取配置()
+    if (!配.开 && 原因 !== '手动') return { 跳过: '自动提取关着' }
+    if (!globalOn() || !isEnabled(sid)) return { 跳过: '这个会话没开记忆' }
+    if (是子代理(agent)) return { 跳过: '子代理不提' }
+    if (在跑.has(sid)) return { 跳过: '上一次还没提完' }
+    const 从 = 起点(sid)
+    if (!从) {
+      认识(sid)
+      return { 跳过: '刚开始计数' }
+    }
+    let 事件们 = []
+    try {
+      const a = 现役(sid, agent)
+      事件们 = (a && a.session && typeof a.session.snapshotEvents === 'function' ? a.session.snapshotEvents() : []) || []
+    } catch (error) {
+      return { 跳过: '读不到会话：' + ((error && error.message) || error) }
+    }
+    const 收 = 自动提取.收集新对话(事件们, 从, 工具)
+    if (收.她说了几句 === 0) return { 跳过: '上次之后她还没说新的话' }
+    if (原因 === '一轮' && 收.她说了几句 < 配.每几句) {
+      if (配.闲置分钟 > 0) {
+        const h = setTimeout(() => {
+          计时.delete(sid)
+          检查(现役(sid, agent), sid, '闲置').catch((e) => diag('自动提取（闲置）出错：' + ((e && e.message) || e)))
+        }, 配.闲置分钟 * 60000)
+        try { h.unref && h.unref() } catch (error) {}
+        计时.set(sid, h)
+      }
+      return { 跳过: '攒着（' + 收.她说了几句 + '/' + 配.每几句 + ' 句）' }
+    }
+    return 提一次(现役(sid, agent), sid, 收, 原因, 配)
+  }
+
+  async function 提一次(agent, sid, 收, 原因, 配) {
+    在跑.add(sid)
+    const 开始 = Date.now()
+    try {
+      const 称呼 = ownerNameOf(sid) || userPronoun()
+      const 我叫 = selfNameOf(sid)
+      const data = loadStore(sid)
+      const 已记住 = (data.memories || []).filter((m) => m && !m.已被取代).slice(-40).map((m) => String(m.text || ''))
+      const { 系统, 用户 } = 自动提取.拼提示({
+        称呼, 我叫, 已记住, 最多: 配.每次最多,
+        对话文: 自动提取.对话成文(收.行们, 称呼, 配.对话字数上限),
+      })
+      // 预算给够：模型会先思考，思考也吃 token（见 /refine 那段的注释）
+      const r = await 问模型(ctx, agent, 系统, 用户, 6000)
+      if (!r.ok) {
+        // 游标**不挪**：下次带上这几句再试
+        记一笔(sid, { 一笔: { at: new Date().toISOString(), 原因, ok: false, 说: String(r.message || '').slice(0, 200), 句: 收.她说了几句 } })
+        diag('自动提取：' + sid + ' 问模型失败（' + r.message + '），这 ' + 收.她说了几句 + ' 句下次再试')
+        return { ok: false, message: r.message }
+      }
+      const 条们 = 自动提取.解析提取(r.text, 配.每次最多)
+      const 结果们 = []
+      for (const 条 of 条们) {
+        if (!isEnabled(sid)) break // 提的时候她把记忆关了 → 一条都别再写
+        const text = normalizeOwner(normalizePerson(条.text, 我叫), sid)
+        if (!text) continue
+        const 结 = 写一条记忆(ctx, sid, text, 条, '自动提取')
+        结果们.push({ text: text.slice(0, 80), 种类: 结.种类 || (结.ok ? '新记' : '没记'), ok: !!结.ok })
+        if (结.种类 === '配额满') break
+      }
+      const 新记 = 结果们.filter((x) => x.种类 === '新记').length
+      const 强化 = 结果们.filter((x) => x.种类 === '强化').length
+      const 旧 = 读提取账().会话[sid] || {}
+      记一笔(sid, {
+        到: 收.最后时间,
+        次数: (Number(旧.次数) || 0) + 1,
+        一笔: {
+          at: new Date().toISOString(), 原因, ok: true, 句: 收.她说了几句, 毫秒: Date.now() - 开始,
+          模型: (r.provider || '') + '/' + (r.model || ''), 新记, 强化, 条们: 结果们,
+        },
+      })
+      diag('自动提取（' + 原因 + '）：' + sid + ' 看了 ' + 收.她说了几句 + ' 句 → 新记 ' + 新记 + ' 条、强化 ' + 强化 + ' 条' +
+        (结果们.length ? '：' + 结果们.map((x) => x.text.slice(0, 30)).join(' / ') : '（模型说没有值得记的）'))
+      return { ok: true, 结果们 }
+    } finally {
+      在跑.delete(sid)
+    }
+  }
+
+  return {
+    认识,
+    检查,
+    /** 一轮刚结束（mountFor 里的 turn-stopping 调它）。不 await，也绝不漏出 rejection。 */
+    一轮完了(agent, sid) {
+      if (收摊了) return
+      Promise.resolve()
+        .then(() => 检查(agent, sid, '一轮'))
+        .catch((e) => diag('自动提取出错：' + ((e && e.message) || e)))
+    },
+    停(sid) { 清计时(sid) },
+    收摊() {
+      收摊了 = true
+      for (const sid of [...计时.keys()]) 清计时(sid)
+    },
+  }
+}
+
 export function apply(ctx) {
   const mounted = new Map() // session 对象 -> { sid, off }
+  const 提取 = 造自动提取(ctx)
 
   // 开关默认改成「关」了，先把老配置搬一次家（存过记忆的会话留开）✓
   migrateSwitch()
@@ -4212,6 +4419,17 @@ export function apply(ctx) {
       })
     } catch (error) {
       diag('  agent/turn-stopping 监听挂不上：' + (error && error.message))
+    }
+
+    // ⭐ 1.6.0：一轮结束 → 看看要不要自动提一次记忆（单独一个监听，跟上面那段互不影响）
+    let 提取off = null
+    try {
+      提取.认识(sid)
+      提取off = agent.ctx.on('agent/turn-stopping', () => {
+        try { 提取.一轮完了(agent, sid) } catch (error) {}
+      })
+    } catch (error) {
+      diag('  自动提取挂不上：' + (error && error.message))
     }
 
     // 常驻提示：告诉她「你可以自己记」，不用等「记住」✓
@@ -4406,6 +4624,8 @@ export function apply(ctx) {
     return function off() {
       卸掉效果(注入off)
       卸掉效果(提示off)
+      卸掉效果(提取off)
+      提取.停(sid) // 闲置计时器也撤掉（没提的那几句不会丢：游标没挪，下次一起提）
     }
   }
 
@@ -4615,6 +4835,7 @@ export function apply(ctx) {
     console.error('[记忆] 定时器不可用（不影响对话）：' + (error && error.message))
   }
   ctx.effect(() => () => {
+    提取.收摊()
     for (const v of mounted.values()) 卸掉挂载(v)
     mounted.clear()
     卸掉效果(工具off)
@@ -6314,6 +6535,52 @@ export function apply(ctx) {
       } catch (error) {
         回({ ok: false, message: String((error && error.message) || error) })
       }
+    })
+
+    // ⭐ 1.6.0 自动提取：看状态 / 改配置 / 手动提一次
+    //   POST { 配置?: { 开, 每几句, 闲置分钟, 每次最多 }, session?: 会话id, 立刻?: true }
+    //   → { ok, 配置, 会话们: { <sid>: { 到, 次数, 最近: [...] } }, 结果? }
+    mroute('/dsh-fish-memory/auto-extract', async (req, res) => {
+      let body = ''
+      for await (const chunk of req) body += chunk
+      let b = {}
+      try {
+        b = JSON.parse(body || '{}')
+      } catch (error) {}
+      const 回 = (o) => {
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify(o))
+      }
+      if (b && b.配置 && typeof b.配置 === 'object') {
+        const c = loadCfg()
+        c.自动提取 = 自动提取.规整配置({ ...自动提取配置(), ...b.配置 })
+        if (!saveCfg(c)) return 回({ ok: false, message: '配置写不进去：' + CFG_PATH })
+        diag('自动提取：配置改成 ' + JSON.stringify(c.自动提取))
+      }
+      let 结果
+      if (b && b.立刻 && b.session) {
+        const 原 = String(b.session)
+        const 候选 = [原, 原.startsWith('session-') ? 原.slice(8) : 'session-' + 原]
+        let agent
+        let sid = 原
+        for (const x of 候选) {
+          try {
+            agent = ctx.agents.get(x)
+          } catch (error) {
+            agent = undefined
+          }
+          if (agent) {
+            sid = sessionIdOf(agent.session) || x
+            break
+          }
+        }
+        if (!agent) {
+          结果 = { ok: false, message: '这个会话现在没有活着的 agent（先在 DSH 里打开它，或者让主动搭话叫醒它）' }
+        } else {
+          结果 = await 提取.检查(agent, sid, '手动')
+        }
+      }
+      回({ ok: true, 配置: 自动提取配置(), 会话们: 读提取账().会话, ...(结果 ? { 结果 } : {}) })
     })
 
     // 提炼：把导入进来的档案原文改写成真正的记忆 —— 一次一批，界面循环调 ✓

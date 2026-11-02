@@ -1,3 +1,9 @@
+> **本项目派生自 <https://github.com/Yuuyuko-uu/dsh-fish-memory>，原作者 Yuuyuko-uu。**
+> 这是为「大肥鱼」AI 伴侣改造的版本（`1.6.0-dafeiyu.1`，基于上游 1.5.1 @ `003716b`）。
+> 改了哪些：① 新增「自动提取」—— 每聊几句由插件自己把值得记的事写进记忆（`lib/自动提取.js`）；
+> ② remember 的写库逻辑抽成共用函数（行为不变）；③ 新增 `/dsh-fish-memory/auto-extract` 路由；④ 补了测试。详见 CHANGELOG 顶部。
+> 许可证为原作者的「Yuuyuko-uu 插件许可 1.2」，见 LICENSE（完整保留，未改动）。
+
 # 🐋 鱼的记忆
 
 **给 DSH 里的会话一份会淡忘的长期记忆 —— 每条都带时间。**
