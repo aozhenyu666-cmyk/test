@@ -122,6 +122,19 @@
             android:taskAffinity="${applicationId}.gate"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- DSH Go 从这里交接；真正的思考页不导出，只接收校验过的内部请求。 -->
+        <activity
+            android:name=".dsh.DshTrainActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="com.yishou.app.action.TRAIN_FOR_DSH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".window.WindowActivity"
             android:exported="false"

@@ -40,6 +40,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yishou.app.MainActivity
+import com.yishou.app.YishouApp
+import com.yishou.app.dsh.DshHandoff
 import com.yishou.app.round.AnswerRules
 import com.yishou.app.system.Attachment
 import com.yishou.app.ui.AnswerComposer
@@ -162,6 +164,7 @@ class GateActivity : ComponentActivity() {
         private const val TAG = "GateActivity"
         private const val EXTRA_PACKAGE = "package"
         private const val EXTRA_GROUP = "group"
+        private const val EXTRA_DSH = "dsh_request"
 
         /** 开局规则拦下的应用用这个组名打开思考页：只显示“回到陪练” */
         const val WINDOW_GROUP = "__window__"
@@ -181,6 +184,16 @@ class GateActivity : ComponentActivity() {
                 .putExtra(EXTRA_PACKAGE, pkg)
                 .putExtra(EXTRA_GROUP, group)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+        fun dshIntent(context: Context, req: DshHandoff.Request): Intent {
+            val group = (context.applicationContext as YishouApp)
+                .settings.app.value.groupOf(req.targetPackage) ?: DshHandoff.DSH_GROUP
+            return intent(context, req.targetPackage, group)
+                .putExtra(EXTRA_DSH + "_event", req.eventId)
+                .putExtra(EXTRA_DSH + "_nonce", req.nonce)
+                .putExtra(EXTRA_DSH + "_reply", req.replyPackage)
+                .putExtra(EXTRA_DSH + "_label", req.targetLabel)
+        }
 
         /** 权限页“测试思考页”：走一遍流程，但不发放行。 */
         fun morningIntent(context: Context): Intent = Intent(context, GateActivity::class.java)
