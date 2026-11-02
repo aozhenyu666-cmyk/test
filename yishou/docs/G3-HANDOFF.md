@@ -35,6 +35,23 @@
 - 第一轮单元测试和主线、岔路 APK 已通过：[构建 41376997943](https://github.com/aozhenyu666-cmyk/test/actions/runs/41376997943)。之后补了粘贴计划实机用例、末组提醒和跨场次补记测试，并同步目标分支的既有舒尔特表；最新结果和对应提交见 PR 的验收记录及[本分支 CI](https://github.com/aozhenyu666-cmyk/test/actions?query=branch%3Acodex%2Fyishou-g3-focus)。不能把“用例已写”当作“用例通过”。
 - 基础分支 `b7d798d` 的[模拟器运行 41376296178](https://github.com/aozhenyu666-cmyk/test/actions/runs/41376296178) 已核查日志：Android 14 有 `VoiceIntegrationTest` 超时；Android 10 除语音超时外，`GateQuestionsIntegrationTest.oldBankCardWithoutPointsStillGivesAQuestion` 也报“旧题库：入口弹出了但没有题”。这些原用例保留，不跳过、不修改；本次新增的失败需要另外修。
 
+## 最后一轮验收记录
+
+测试的代码提交：`cfa83691726ca45060b6ef46591841ba68dea9c6`。这一段只补结果，没有再改业务代码。
+
+| 检查 | 结果 |
+| --- | --- |
+| JVM 单元测试、主线与岔路 APK | [41379600660](https://github.com/aozhenyu666-cmyk/test/actions/runs/41379600660) 通过，APK 在该次运行的 `yishou-debug-apk` 中。 |
+| Android 10 / API 29 专注流 | 6/6 通过：粘贴计划启动、无题拦截、休息时有放行仍拦、白名单、退出等待重计、关闭主界面继续。 |
+| Android 14 / API 34 专注流 | 同样 6/6 通过。 |
+| 全套 Android 10 | 27 项中 25 项通过；旧题库出题和语音超时，与已核查的基础分支失败相同。 |
+| 全套 Android 14 | 27 项中 25 项通过；语音超时，另有素材分类界面用例在等待“英语 1”时超时（`UiSmokeTest.kt:46`），归因未确认，不能算成已知基线失败。 |
+| 连续 20 次普通收费站拦截 | 最后一轮在两个系统都通过。此前一轮有过第二次打开未拦，未将其掩盖成通过。 |
+
+模拟器完整日志和截图：[41379600658](https://github.com/aozhenyu666-cmyk/test/actions/runs/41379600658)。**全套 CI 仍是红的，没有声称全绿。** 真机条目仍未测。
+
+中间排除过的测试干扰：测试框架的 `com.yishou.app.test` 临时跳板会被专注流正常拦住；仅在测试里把它加入白名单，被测 `com.yishou.gatefixture` 仍不放行。计划和退出等待用例改从首页实际点击入口，避免直达路由和场景恢复时序；滚动选最大的内容区域，不误选输入框。没有给生产拦截增加测试包例外。
+
 ## 待确认 / 没有在这里保证的
 
 - 没有准点闹钟授权时用普通闹钟；锁屏省电下提醒可能延后，时间和拦截仍按保存的结束时间判断。界面没有暂停或缩短总时长的入口。
