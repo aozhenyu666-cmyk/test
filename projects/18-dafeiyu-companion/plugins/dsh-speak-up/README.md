@@ -1,3 +1,9 @@
+> **本项目派生自 <https://github.com/Yuuyuko-uu/dsh-speak-up>，原作者 Yuuyuko-uu。**
+> 这是为「大肥鱼」AI 伴侣改造的版本（`0.3.0-dafeiyu.1`，基于上游 0.2.9 @ `438bb63`）。
+> 改了哪些：① 冷会话用 `sessionController.resolveAgent` 叫醒后再开口；② 叫醒后等记忆/心情插件挂上；
+> ③ 读 dsh-feiyu-mood 的心情调整开口频率；④ 设置页加了对应开关；⑤ 补了测试。详见 CHANGELOG 顶部。
+> 许可证为原作者的「Yuuyuko-uu 插件许可 1.2」，见 LICENSE（完整保留，未改动）。
+
 # dsh-speak-up（主动搭话）· 让它自己先开口
 
 给 DSH 里某个会话装一颗「会自己起话头」的心：**没人在跟它说话的时候，它也有可能先开口。**

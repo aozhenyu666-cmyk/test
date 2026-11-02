@@ -13,6 +13,11 @@
 //    followup 往活着的同一个 agent 的收件箱推一条消息，loop 会认领它、
 //    开 turn、跑 step，跟用户打字发过去走的是同一条路。
 //
+// ⭐ 0.3.0（大肥鱼改造版，派生自 Yuuyuko-uu/dsh-speak-up 0.2.9）：
+//    · 冷会话（没在窗口里开着、没有活 agent）不再跳过：用宿主的 sessionController.resolveAgent()
+//      叫醒，等记忆/心情插件挂上（默认 5 秒）再 followup —— 她不开窗口，大肥鱼也能真开一轮。
+//    · 心情联动：只读 dsh-feiyu-mood 的状态文件，担心/心疼/难过/心情低落时命中线乘一个 >1 的心情因子。
+//
 // ⚠⚠⚠ 已知的硬限制（本版**改不了**，详见 README 的「做不到的地方」）：
 //    **触发消息的角色只能是 user。** 想用 developer 角色是做不到的 ——
 //    证据（都是读源码读出来的，不是猜的）：
@@ -134,6 +139,18 @@ const 默认配置 = {
   搭话冷却分钟: 20, // 0 = 不冷却
   触发文案: '好久没人跟我说话了，我该主动去打个招呼',
   角色: 'user', // 'user' = 现在唯一能跑通的；'developer' = 本插件会拒绝（详见文件头注释）
+  // ---- 0.3.0（大肥鱼改造）：冷会话也能叫醒 ----
+  // 以前只认 `agents.get()`：会话没在标签页里开着（冷的）就直接跳过 ⇒ 她不开窗口，大肥鱼永远不开口。
+  // 宿主自己有 `sessionController.resolveAgent(id)`：会话冷了就从磁盘恢复一个 agent（跟打开窗口同一条路）。
+  唤醒冷会话: true,
+  // 叫醒之后先等几秒再送那句念头：记忆 / 心情插件是靠定时扫描（0.5 秒 / 3 秒一次）挂到新 agent 上的，
+  // 不等的话，叫醒后的第一轮**没有记忆注入、也没有心情**（等于一个失忆的她在说话）。
+  唤醒后等待秒: 5,
+  // ---- 0.3.0：心情联动（读 dsh-feiyu-mood 的状态文件，只读不写）----
+  // 她担心 / 心疼 / 难过、或者心情明显低于平常时，命中线乘一个 >1 的心情因子 → 更容易主动开口。
+  // 强度 0 = 关掉；0.5 = 最多把命中线放大到 1.5 倍。
+  心情联动: true,
+  心情联动强度: 0.5,
 }
 
 // ---------- 配置读写 ----------
@@ -237,6 +254,10 @@ function 归一化(原始) {
     触发文案:
       typeof 混.触发文案 === 'string' && 混.触发文案.trim() !== '' ? 混.触发文案 : 默认配置.触发文案,
     角色: String(混.角色 || 'user').toLowerCase() === 'developer' ? 'developer' : 'user',
+    唤醒冷会话: 布(混.唤醒冷会话, 默认配置.唤醒冷会话),
+    唤醒后等待秒: 数(混.唤醒后等待秒, 默认配置.唤醒后等待秒, 0, 60),
+    心情联动: 布(混.心情联动, 默认配置.心情联动),
+    心情联动强度: 数(混.心情联动强度, 默认配置.心情联动强度, 0, 2),
   }
 }
 
@@ -424,9 +445,139 @@ export function 算命中线(基础命中线, 因子, 连没中, 没中加成, �
  * @param 距离 人能看懂的距离说明，例如 `距上次说话 74.6 分钟`
  * @param 加成 这次算进去的没中加成（0 就不写这一项）
  */
-function 命中线等式(线, 短语, 因子, 距离, 加成) {
+function 命中线等式(线, 短语, 因子, 距离, 加成, 心情段 = '') {
   const 加成段 = 加成 > 0 ? ` + 没中加成 ${加成.toFixed(1)}` : ''
-  return `${线.toFixed(1)} = ${短语} × 时机因子 ${因子}（${距离}）${加成段}`
+  return `${线.toFixed(1)} = ${短语} × 时机因子 ${因子}（${距离}）${心情段}${加成段}`
+}
+
+// ---------- 0.3.0：心情联动（只读 dsh-feiyu-mood 的文件，不 import 它、不写它）----------
+//
+// 文件坐标（照 dsh-feiyu-mood 0.8.x 的源码）：
+//   <DSH_HOME>/feiyu-mood/config.json  → slots: [{ id, sessions: [会话id…] }]、moodBase、decayHalfHours
+//   <DSH_HOME>/feiyu-mood/state.json   → { version: 2, moods: { <份id>: { mood, dims, lastDecayAt } }, lastActive }
+// 衰减规则也照它抄（心情按 decayHalfHours 回基线、单根情绪 90 分钟半衰），
+// 因为它只在「被读的时候」才算衰减 —— 文件里存的可能是几个小时前的数。
+
+const 心情目录 = join(目录, 'feiyu-mood')
+
+function 读JSON(路径) {
+  try {
+    return JSON.parse(readFileSync(路径, 'utf8').replace(/^﻿/, ''))
+  } catch (error) {
+    return null
+  }
+}
+
+/**
+ * 找到这个会话对应的那一份心情（已按时间衰减），找不到返回 null。
+ * ⚠ 纯读：不写回文件（写由 dsh-feiyu-mood 自己负责，两边同时写会打架）。
+ */
+export function 读心情(会话id, 现在毫秒 = Date.now()) {
+  const 状态 = 读JSON(join(心情目录, 'state.json'))
+  if (!状态 || typeof 状态 !== 'object' || !状态.moods || typeof 状态.moods !== 'object') return null
+  const 配置 = 读JSON(join(心情目录, 'config.json')) || {}
+  const 键 = 会话键(会话id)
+  let 份id = ''
+  for (const 份 of Array.isArray(配置.slots) ? 配置.slots : []) {
+    const 们 = Array.isArray(份 && 份.sessions) ? 份.sessions : []
+    if (份 && 份.id && 们.some((s) => 会话键(s) === 键)) {
+      份id = String(份.id)
+      break
+    }
+  }
+  if (!份id && 配置.targetSession && 会话键(配置.targetSession) === 键) 份id = 键
+  // 工作区模式 / 只有一份心情时：退回「最近活跃的那一份」
+  if (!份id || !状态.moods[份id]) 份id = String(状态.lastActive || '')
+  if (!份id || !状态.moods[份id]) {
+    const 全部 = Object.keys(状态.moods)
+    if (全部.length !== 1) return null
+    份id = 全部[0]
+  }
+  const 原 = 状态.moods[份id] || {}
+  const 基线 = Math.min(100, Math.max(30, Number(配置.moodBase) || 70))
+  const 半衰时 = Math.min(168, Math.max(1, Number(配置.decayHalfHours) || 12))
+  const 分钟 = Math.max(0, 现在毫秒 - (Number(原.lastDecayAt) || Number(原.updatedAt) || 现在毫秒)) / 60000
+  const 心情原 = Number.isFinite(Number(原.mood)) ? Number(原.mood) : 基线
+  const km = 1 - Math.exp(-(Math.LN2 * 分钟) / (半衰时 * 60))
+  const ke = 1 - Math.exp(-(Math.LN2 * 分钟) / 90)
+  const dims = {}
+  for (const k of ['happy', 'calm', 'sweet', 'heartache', 'worry', 'sad', 'jealous']) {
+    const v = Math.min(100, Math.max(0, Number(原.dims && 原.dims[k]) || 0))
+    dims[k] = v * (1 - ke)
+  }
+  return { 份id, mood: 心情原 + (基线 - 心情原) * km, 基线, dims }
+}
+
+/**
+ * 心情 → 命中线的乘数（纯函数，好测）。
+ *   挂念 = max(担心, 心疼, 难过) / 100           —— 她放心不下的时候想去看看
+ *   低落 = (基线 − 心情) / 基线（低于基线才算）   —— 心情往下走，按设计都是因为心疼/担心对方
+ *   想分享 = max(开心, 甜蜜) / 100 × 0.5          —— 高兴的时候也想说两句，但权重低一半
+ *   因子 = 1 + 强度 × max(挂念, 低落, 想分享)，强度 0 = 关
+ */
+export function 算心情因子(心情, 强度) {
+  if (!心情 || !(强度 > 0)) return { 因子: 1, 说明: '' }
+  const d = 心情.dims || {}
+  const 挂念 = Math.max(Number(d.worry) || 0, Number(d.heartache) || 0, Number(d.sad) || 0) / 100
+  const 基线 = Number(心情.基线) || 70
+  const 低落 = Math.max(0, 基线 - Number(心情.mood)) / 基线
+  const 想分享 = (Math.max(Number(d.happy) || 0, Number(d.sweet) || 0) / 100) * 0.5
+  const 量 = Math.min(1, Math.max(0, 挂念, 低落, 想分享))
+  const 因子 = Math.round((1 + 强度 * 量) * 100) / 100
+  if (因子 === 1) return { 因子: 1, 说明: '' }
+  const 主因 = 量 === 挂念 ? '放心不下' : 量 === 低落 ? '心情低于平常' : '想分享'
+  return { 因子, 说明: `${主因}，心情 ${Math.round(Number(心情.mood))}` }
+}
+
+// ---------- 0.3.0：叫醒冷会话 ----------
+
+/** 这个 DSH 能不能叫醒冷会话（有 sessionController.resolveAgent 就能）。 */
+function 能叫醒(ctx) {
+  try {
+    const 会话服务 = ctx.get('sessionController')
+    return !!(会话服务 && typeof 会话服务.resolveAgent === 'function')
+  } catch (error) {
+    return false
+  }
+}
+
+/**
+ * 把一个冷会话叫醒，拿到能 followup 的 agent。
+ *
+ * 宿主源码（@deepseek-ai/dsh-api-session-controller 0.2.1-rc.2）：
+ *   sessionController.resolveAgent(id) → 先看活着的 agent；没有就 sessionQuery.observeSession(id)
+ *   → agents.resume({ resumeSessionId }) —— 跟用户点开那个会话是同一条路（人格、历史、工具都是它自己的）。
+ *   返回 `{ agent }` 或 `{ error: RemoteError }`（不抛）。
+ * ⚠ id 两种写法都试（跟 找agent 一样），但只有「找不到」才换写法；
+ *   别的错（会话被别的进程占着写、是子代理的会话）直接停，不硬试。
+ * @returns { agent } 或 { error: 人话 }
+ */
+async function 叫醒agent(ctx, id) {
+  let 会话服务
+  try {
+    会话服务 = ctx.get('sessionController')
+  } catch (error) {
+    会话服务 = undefined
+  }
+  if (!会话服务 || typeof 会话服务.resolveAgent !== 'function') {
+    return { error: '这个 DSH 没有 sessionController.resolveAgent，叫不醒冷会话' }
+  }
+  const 原 = String(id == null ? '' : id).trim()
+  const 候选 = [原, 原.startsWith('session-') ? 原.slice('session-'.length) : 'session-' + 原]
+  let 最后错 = ''
+  for (const 一个 of 候选) {
+    try {
+      const 结果 = await 会话服务.resolveAgent(一个)
+      if (结果 && 结果.agent && typeof 结果.agent.followup === 'function') return { agent: 结果.agent }
+      if (结果 && typeof 结果.followup === 'function') return { agent: 结果 } // 直接给 agent 的实现也认
+      const e = 结果 && 结果.error
+      最后错 = e ? `${e.code ? e.code + '：' : ''}${e.message || e}` : '没拿到 agent'
+      if (!(e && e.code === 'session/not-found')) break
+    } catch (error) {
+      最后错 = String((error && error.message) || error)
+    }
+  }
+  return { error: 最后错 || '叫不醒' }
 }
 
 /** 新消息 id。跟 createMessage 一样是个普通字符串（branded 只是编译期的事）。 */
@@ -666,9 +817,20 @@ function 造执行体(ctx) {
     // 峰时还是谷时 → 挑哪一格命中线（时段写死，见 判峰时()）
     const 基础 = 算基础命中线(配置, 现在)
 
+    // ⭐ 0.3.0：心情因子（读不到心情 / 关着 = 1，算式里不出现这一项）
+    let 心情 = { 因子: 1, 说明: '' }
+    if (配置.心情联动) {
+      try {
+        心情 = 算心情因子(读心情(sid, 现在.getTime()), 配置.心情联动强度)
+      } catch (error) {
+        心情 = { 因子: 1, 说明: '' }
+      }
+    }
+    const 心情段 = 心情.因子 !== 1 ? ` × 心情因子 ${心情.因子}（${心情.说明}）` : ''
+
     // 攒下来的没中加成（先乘因子，再加这个）
-    const { 加成, 线 } = 算命中线(基础.基础命中线, 因子, 连没中, 配置.没中加成, 配置.加成上限)
-    return { 分钟, 因子, 峰: 基础.峰, 短语: 基础.短语, 基础命中线: 基础.基础命中线, 加成, 线 }
+    const { 加成, 线 } = 算命中线(基础.基础命中线, 因子 * 心情.因子, 连没中, 配置.没中加成, 配置.加成上限)
+    return { 分钟, 因子, 心情因子: 心情.因子, 心情段, 峰: 基础.峰, 短语: 基础.短语, 基础命中线: 基础.基础命中线, 加成, 线 }
   }
 
   /**
@@ -707,13 +869,19 @@ function 造执行体(ctx) {
       const 登记 = ctx.workspaceRegistry || ctx.get('workspaceRegistry')
       for (const x of (登记 && 登记.archivedSessionIds) || []) 归档名单.add(String(x))
     } catch (error) {}
+    // ⭐ 0.3.0：冷会话（没有活着的 agent）不再一律跳过 —— 能叫醒就算「可用（冷）」
+    const 可叫醒 = 配置.唤醒冷会话 && 能叫醒(ctx)
     for (const id of 配置.目标会话) {
-      if (归档名单.has(String(id))) {
+      if (归档名单.has(String(id)) || 归档名单.has(会话键(id)) || 归档名单.has('session-' + 会话键(id))) {
         不可用.push(`${短id(id)}(已归档)`)
         continue
       }
       const a = 找agent(ctx, id)
       if (a === undefined) {
+        if (可叫醒) {
+          可用.push({ id, agent: null, 冷: true })
+          continue
+        }
         不可用.push(`${短id(id)}(没活着)`)
         continue
       }
@@ -722,16 +890,19 @@ function 造执行体(ctx) {
         不可用.push(`${短id(id)}(忙)`)
         continue
       }
-      可用.push({ id, agent: a })
+      可用.push({ id, agent: a, 冷: false })
     }
     if (可用.length === 0) {
+      const 为什么不叫醒 = !配置.唤醒冷会话
+        ? '「唤醒冷会话」关着'
+        : 能叫醒(ctx) ? '' : '这个 DSH 没有 sessionController.resolveAgent，叫不醒冷会话'
       return 记账(
-        `勾的目标会话现在都不能说话（${不可用.join('、') || '（空）'}）—— 按设计**不自动唤醒**，这轮什么都不做`,
+        `勾的目标会话现在都不能说话（${不可用.join('、') || '（空）'}）${为什么不叫醒 ? '—— ' + 为什么不叫醒 : ''}，这轮什么都不做`,
       )
     }
     const 挑中 = 可用[Math.floor(Math.random() * 可用.length)]
     const 目标id = 挑中.id
-    const agent = 挑中.agent
+    let agent = 挑中.agent
     const 挑的说法 = 可用.length > 1 ? `（勾了 ${可用.length} 个可用，这次挑 ${短id(目标id)}）` : ''
 
     // 「主动搭话」之后的冷却（单独一格配置；跟"她多久没说话"那两个阈值是两回事）。
@@ -754,7 +925,7 @@ function 造执行体(ctx) {
       const 线 = 算.线
       const 线文 = 线.toFixed(1)
       const 距离 = 算.分钟 === undefined ? '距上次说话时间不明' : `距上次说话 ${算.分钟.toFixed(1)} 分钟`
-      const 等式 = 命中线等式(线, 算.短语, 算.因子, 距离, 算.加成)
+      const 等式 = 命中线等式(线, 算.短语, 算.因子, 距离, 算.加成, 算.心情段)
       const 掷值 = Math.random() * 100
 
       if (掷值 >= 线) {
@@ -791,7 +962,24 @@ function 造执行体(ctx) {
     }
 
     if (演练) {
-      return 记账(`${前缀}演练：本来要往「${目标id}」送一句「${框住内心话(配置.触发文案, 现在).split(String.fromCharCode(10)).join(' ')}」`)
+      const 冷说法 = 挑中.冷 ? `（它现在是冷的：真发时会先叫醒它、等 ${配置.唤醒后等待秒} 秒让记忆/心情挂上）` : ''
+      return 记账(`${前缀}演练：本来要往「${目标id}」${冷说法}送一句「${框住内心话(配置.触发文案, 现在).split(String.fromCharCode(10)).join(' ')}」`)
+    }
+
+    // ⭐ 0.3.0：冷会话 → 先叫醒，等别的插件挂上，再确认一遍不忙
+    let 叫醒说法 = ''
+    if (挑中.冷) {
+      const 醒 = await 叫醒agent(ctx, 目标id)
+      if (!醒.agent) return 记账(`${前缀}想叫醒冷会话「${短id(目标id)}」没成：${醒.error}（这轮不发）`)
+      agent = 醒.agent
+      叫醒说法 = `已叫醒冷会话 ${短id(目标id)}；`
+      // 记忆 / 心情插件靠定时扫描挂到新 agent 上，不等的话这一轮没有记忆和心情
+      const 等毫秒 = Math.round(配置.唤醒后等待秒 * 1000)
+      if (等毫秒 > 0) await new Promise((好) => setTimeout(好, 等毫秒))
+      // 等的这几秒里，她可能刚好自己打开窗口发了话 → 让给她
+      if (agent.status !== undefined && agent.status !== 'idle') {
+        return 记账(`${前缀}${叫醒说法}但等挂载的这几秒里它忙起来了（${agent.status}），这轮让给她`)
+      }
     }
 
     const 文案 = 框住内心话(配置.触发文案, 现在)
@@ -808,7 +996,7 @@ function 造执行体(ctx) {
       //   投递只是把一句念头塞进她的会话，她完全可以看完选择不说
       //   （真机上就发生过：投递成功、这一轮 1 秒结束、一个字没发，却照样吃掉了整个冷却）。
       //   现在改成「真的出现一条有正文的 assistant 消息」才算开口 —— 见 记她说话()。
-      记账(`${前缀}已送出一句，DSH 会照常开一轮：「${文案}」`)
+      记账(`${前缀}${叫醒说法}已送出一句，DSH 会照常开一轮：「${文案}」`)
       // 让这一条先落到磁盘上，掉电也不会丢（拿不到 sessions 服务就算了）
       try {
         if (ctx.sessions && typeof ctx.sessions.flush === 'function') await ctx.sessions.flush(agent.session)
@@ -865,7 +1053,9 @@ function 造执行体(ctx) {
         `现在命中线 ${命中线等式(基础.基础命中线, 基础.短语, 1, '刚起来，还没算过距上次说话', 0)}｜` +
         `没中加成 +${配置.没中加成}/次，最多 +${配置.加成上限}｜搭话冷却 ${配置.搭话冷却分钟} 分钟｜` +
         `安静时段 ${配置.安静起}~${配置.安静止} 点｜总开关 ${配置.总开关 ? '开' : '关'}｜` +
-        `${配置.试运行 ? '**试运行中（只记账、不真发）**' : '试运行已关（掷中会真发）'}`,
+        `${配置.试运行 ? '**试运行中（只记账、不真发）**' : '试运行已关（掷中会真发）'}｜` +
+        `冷会话：${配置.唤醒冷会话 ? (能叫醒(ctx) ? `会叫醒（叫醒后等 ${配置.唤醒后等待秒} 秒）` : '想叫醒但这个 DSH 不支持') : '不叫醒'}｜` +
+        `心情联动：${配置.心情联动 && 配置.心情联动强度 > 0 ? `开（强度 ${配置.心情联动强度}）` : '关'}`,
     )
   }
 
@@ -1182,6 +1372,7 @@ export function apply(ctx) {
         标题来源: 题.来源,
         状态: agent === undefined ? '没活着' : agent.status === undefined ? '?' : String(agent.status),
         有agent: agent !== undefined,
+        可叫醒: agent === undefined && 体.配置().唤醒冷会话 && 能叫醒(ctx),
         勾着: 已勾,
         归档: 是归档,
       })
@@ -1215,6 +1406,7 @@ export function apply(ctx) {
         标题: 题.标题,
         标题来源: 题.来源,
         活着: 找agent(ctx, id) !== undefined,
+        可叫醒: 找agent(ctx, id) === undefined && 体.配置().唤醒冷会话 && 能叫醒(ctx),
       }
     })
   }
@@ -1228,6 +1420,7 @@ export function apply(ctx) {
       版本,
       配置,
       目标活着: 目标.some((x) => x.活着),
+      目标能说话: 目标.some((x) => x.活着 || x.可叫醒),
       目标情况: 目标,
       活着的会话: 会话清单(),
       配置文件: 配置文件,

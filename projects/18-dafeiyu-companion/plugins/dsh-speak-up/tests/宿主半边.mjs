@@ -498,6 +498,116 @@ await 滴答()
 报('#8 非目标会话说话 → 不算自己开过口（冷却没被点着，这轮照常走到送信那步）',
   !日志.at(-1).includes('自己刚开过口') && 日志.at(-1).includes('本来要往'), 日志.at(-1))
 
+// ---------- 0.3.0：冷会话叫醒 ----------
+{
+  // 换一套带 resolveAgent 的 sessionController：只认带前缀的那种写法，模拟宿主的 not-found
+  const 冷 = 造agent('session-冷会话0001')
+  const 叫醒记录 = []
+  const 原get = 假ctx.get
+  let 叫醒行为 = 'ok'
+  假ctx.get = (n) => {
+    if (n === 'sessionController') {
+      return {
+        inspect: async () => ({ events: [] }),
+        create: async () => ({ sessionId: 'sess-新建的' }),
+        resolveAgent: async (id) => {
+          叫醒记录.push(id)
+          if (叫醒行为 === 'writer-held') return { error: { code: 'session/writer-held', message: '别的进程占着' } }
+          if (id === 'session-冷会话0001') return { agent: 冷 }
+          return { error: { code: 'session/not-found', message: `session "${id}" not found` } }
+        },
+      }
+    }
+    return 原get(n)
+  }
+  try {
+    // 勾的是**不带前缀**的写法 → 第一次 not-found，换成带前缀的写法才叫得醒
+    await 调('/dsh-speak-up/save', { 目标会话: ['冷会话0001'], 唤醒后等待秒: 0, 试运行: true, 搭话冷却分钟: 0, 峰时命中线: 100, 谷时命中线: 100 })
+    let s = await 调('/dsh-speak-up/state')
+    报('0.3.0 默认值：唤醒冷会话开、心情联动开（强度 0.5）', s.配置.唤醒冷会话 === true && s.配置.心情联动 === true && s.配置.心情联动强度 === 0.5)
+    报('0.3.0 状态里标出「冷的但叫得醒」', s.目标情况[0].活着 === false && s.目标情况[0].可叫醒 === true && s.目标能说话 === true, JSON.stringify(s.目标情况))
+
+    r = await 调('/dsh-speak-up/roll', { 模式: '演练' })
+    报('演练遇到冷会话：只说「会先叫醒」，绝不真叫醒', 叫醒记录.length === 0 && r.日志.at(-1).文本.includes('它现在是冷的'), r.日志.at(-1).文本)
+
+    r = await 调('/dsh-speak-up/roll', { 模式: '真发' })
+    报('真发遇到冷会话：叫醒（两种写法都试）后 followup 到叫醒出来的 agent',
+      冷.收到的.length === 1 && 叫醒记录.join(',') === '冷会话0001,session-冷会话0001' && r.日志.at(-1).文本.includes('已叫醒冷会话'),
+      叫醒记录.join(',') + ' | ' + r.日志.at(-1).文本)
+    报('叫醒后送的消息形状不变（role=user / source.kind=speak-up）', 冷.收到的[0].role === 'user' && 冷.收到的[0].source.kind === 'speak-up')
+
+    // 等挂载那几秒里她自己开始聊了 → 让给她
+    冷.收到的.length = 0
+    冷.status = 'running'
+    r = await 调('/dsh-speak-up/roll', { 模式: '真发' })
+    报('叫醒后发现它忙了 → 这轮让给她，不插话', 冷.收到的.length === 0 && r.日志.at(-1).文本.includes('忙起来了'), r.日志.at(-1).文本)
+    冷.status = 'idle'
+
+    // 叫醒失败（别的进程占着写）→ 不换写法硬试、也不发
+    叫醒记录.length = 0
+    叫醒行为 = 'writer-held'
+    r = await 调('/dsh-speak-up/roll', { 模式: '真发' })
+    报('叫醒报「被占着」→ 只试一次、不发、记清原因',
+      冷.收到的.length === 0 && 叫醒记录.length === 1 && r.日志.at(-1).文本.includes('没成') && r.日志.at(-1).文本.includes('writer-held'),
+      r.日志.at(-1).文本)
+    叫醒行为 = 'ok'
+
+    // 关掉「唤醒冷会话」→ 回到 0.2.x 的行为
+    await 调('/dsh-speak-up/save', { 唤醒冷会话: false })
+    叫醒记录.length = 0
+    r = await 调('/dsh-speak-up/roll', { 模式: '真发' })
+    报('「唤醒冷会话」关掉 → 冷会话照旧跳过，并写明原因',
+      叫醒记录.length === 0 && 冷.收到的.length === 0 && r.日志.at(-1).文本.includes('「唤醒冷会话」关着'), r.日志.at(-1).文本)
+    await 调('/dsh-speak-up/save', { 唤醒冷会话: true })
+  } finally {
+    假ctx.get = 原get
+  }
+}
+
+// ---------- 0.3.0：心情联动 ----------
+{
+  报('心情因子：没心情 → 1', 插件.算心情因子(null, 0.5).因子 === 1)
+  报('心情因子：强度 0 → 1（关掉）', 插件.算心情因子({ mood: 20, 基线: 70, dims: { worry: 90 } }, 0).因子 === 1)
+  const 平常 = 插件.算心情因子({ mood: 70, 基线: 70, dims: {} }, 0.5)
+  报('心情因子：心情在基线、情绪都是 0 → 1，算式里不出现', 平常.因子 === 1 && 平常.说明 === '')
+  const 担心 = 插件.算心情因子({ mood: 70, 基线: 70, dims: { worry: 80 } }, 0.5)
+  报('心情因子：担心 80 → 1.4（1 + 0.5 × 0.8）', 担心.因子 === 1.4 && 担心.说明.includes('放心不下'), JSON.stringify(担心))
+  const 低落 = 插件.算心情因子({ mood: 35, 基线: 70, dims: {} }, 0.5)
+  报('心情因子：心情 35（基线 70）→ 1.25', 低落.因子 === 1.25 && 低落.说明.includes('心情低于平常'), JSON.stringify(低落))
+  const 封顶 = 插件.算心情因子({ mood: 0, 基线: 70, dims: { worry: 100 } }, 2)
+  报('心情因子：最多 1 + 强度（强度 2 → 3）', 封顶.因子 === 3)
+
+  // 读状态文件：按 config.slots 找份，并按时间衰减
+  const 心目录 = join(家, 'feiyu-mood')
+  mkdirSync(心目录, { recursive: true })
+  const 刚才 = Date.now()
+  writeFileSync(join(心目录, 'config.json'), JSON.stringify({ slots: [{ id: '份A', sessions: ['session-sess-abc'] }, { id: '份B', sessions: ['xyz'] }], moodBase: 70 }), 'utf8')
+  writeFileSync(join(心目录, 'state.json'), JSON.stringify({
+    version: 2, lastActive: '份B',
+    moods: {
+      份A: { mood: 40, dims: { worry: 60 }, lastDecayAt: 刚才 },
+      份B: { mood: 90, dims: { happy: 10 }, lastDecayAt: 刚才 },
+    },
+  }), 'utf8')
+  const 读A = 插件.读心情('sess-abc', 刚才)
+  报('读心情：会话 sess-abc（配置里写成 session-sess-abc）→ 份A', 读A && 读A.份id === '份A' && Math.round(读A.mood) === 40 && Math.round(读A.dims.worry) === 60, JSON.stringify(读A))
+  const 读A晚 = 插件.读心情('sess-abc', 刚才 + 90 * 60000)
+  报('读心情：90 分钟后担心衰减一半（照 feiyu-mood 的规则）', Math.round(读A晚.dims.worry) === 30, JSON.stringify(读A晚.dims))
+  const 读别人 = 插件.读心情('没绑过的会话', 刚才)
+  报('读心情：没绑过的会话 → 退回最近活跃那份', 读别人 && 读别人.份id === '份B')
+
+  // 走一遍定时那条路：命中线算式里出现心情因子
+  await 调('/dsh-speak-up/save', { 目标会话: ['sess-abc'], 试运行: true, 搭话冷却分钟: 0, 峰时命中线: 50, 谷时命中线: 50, 没中加成: 0, 近阈值分钟: 0, 远阈值分钟: 100000 })
+  await 滴答()
+  报('定时掷骰：命中线 = 50 × 时机因子 1 × 心情因子 1.3（担心 60、心情 40）= 65.0',
+    日志.at(-1).includes('命中线 65.0') && 日志.at(-1).includes('心情因子 1.3'), 日志.at(-1))
+  await 调('/dsh-speak-up/save', { 心情联动: false })
+  await 滴答()
+  报('心情联动关掉 → 算式里没有心情因子', 日志.at(-1).includes('命中线 50.0') && !日志.at(-1).includes('心情因子'), 日志.at(-1))
+  await 调('/dsh-speak-up/save', { 心情联动: true })
+  rmSync(心目录, { recursive: true, force: true })
+}
+
 // ---------- developer 角色 ----------
 await 调('/dsh-speak-up/save', { 角色: 'developer' })
 甲.收到的.length = 0
