@@ -52,7 +52,7 @@ fun FocusScreen(onBack: () -> Unit, onPlan: () -> Unit) {
             if (s != null) {
                 val p = s.phase(now)
                 if (waiting) {
-                    val left = FocusEngine.quitRemainingMs(s, now) ?: FocusEngine.QUIT_WAIT_MS
+                    val left = (FocusEngine.quitRemainingMs(s, now) ?: FocusEngine.QUIT_WAIT_MS).coerceAtMost(FocusEngine.QUIT_WAIT_MS)
                     Text("提前结束 · 等待中", style = MaterialTheme.typography.titleLarge)
                     Text(FocusRuntime.clock(left), style = MaterialTheme.typography.displayLarge)
                     Text("等满才能结束；离开这一页重新计时")
