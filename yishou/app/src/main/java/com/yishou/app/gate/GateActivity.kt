@@ -78,23 +78,26 @@ class GateActivity : ComponentActivity() {
         startFromIntent(intent)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (vm.state.value.isTest) finish() else goHome()
+                leaveGate()
             }
         })
         setContent {
             YishouTheme {
                 val s by vm.state.collectAsStateWithLifecycle()
-                LaunchedEffect(s.passMinutes) {
-                    if (s.passMinutes != null) {
+                LaunchedEffect(s.passMinutes, s.dshMode) {
+                    if (s.passMinutes != null && !s.dshMode) {
                         delay(1_800)
                         returnToApp()
                     }
+                }
+                LaunchedEffect(s.dshSent) {
+                    if (s.dshSent) finishAndRemoveTask()
                 }
                 GateScreen(
                     s = s,
                     vm = vm,
                     onReturn = ::returnToApp,
-                    onHome = { if (s.isTest) finish() else goHome() },
+                    onHome = ::leaveGate,
                     onOpenWindow = {
                         startActivity(Intent(this, WindowActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                         finishAndRemoveTask()
@@ -128,8 +131,17 @@ class GateActivity : ComponentActivity() {
     private fun startFromIntent(intent: Intent) {
         val pkg = intent.getStringExtra(EXTRA_PACKAGE)
         val group = intent.getStringExtra(EXTRA_GROUP).orEmpty()
-        val label = pkg?.let { appLabel(it) } ?: if (group == "早上") "早上" else "测试"
-        vm.start(pkg, group, label)
+        val dsh = intent.getStringExtra(EXTRA_DSH + "_event")?.let { event ->
+            DshHandoff.Request(
+                eventId = event,
+                nonce = intent.getStringExtra(EXTRA_DSH + "_nonce").orEmpty(),
+                targetPackage = pkg.orEmpty(),
+                targetLabel = intent.getStringExtra(EXTRA_DSH + "_label").orEmpty(),
+                replyPackage = intent.getStringExtra(EXTRA_DSH + "_reply").orEmpty(),
+            )
+        }
+        val label = dsh?.targetLabel ?: pkg?.let { appLabel(it) } ?: if (group == "早上") "早上" else "测试"
+        vm.start(pkg, group, label, dsh)
     }
 
     private fun appLabel(pkg: String): String = try {
@@ -140,6 +152,10 @@ class GateActivity : ComponentActivity() {
 
     /** 回到原应用。先关掉思考页，再把原应用的任务带回前台（不会重开它）。 */
     private fun returnToApp() {
+        if (vm.state.value.dshMode) {
+            finishAndRemoveTask()
+            return
+        }
         val pkg = vm.state.value.triggerPackage
         finishAndRemoveTask()
         if (pkg != null) {
@@ -150,6 +166,14 @@ class GateActivity : ComponentActivity() {
             } catch (e: Exception) {
                 Log.w(TAG, "无法回到 $pkg", e)
             }
+        }
+    }
+
+    private fun leaveGate() {
+        when {
+            vm.state.value.dshMode -> finishAndRemoveTask()
+            vm.state.value.isTest -> finish()
+            else -> goHome()
         }
     }
 
@@ -217,8 +241,12 @@ private fun GateScreen(s: GateState, vm: GateViewModel, onReturn: () -> Unit, on
                     Button(onClick = { context.startActivity(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, "partner")) }) { Text("回一手收线") }
                 }
                 s.passMinutes != null -> {
-                    Text("放行 ${s.passMinutes} 分钟")
-                    Button(onClick = onReturn) { Text("回到「${s.appLabel}」") }
+                    if (s.dshMode) {
+                        Text(if (s.error == null) "过了，正在回到「${s.appLabel}」" else "过了，请回到拦截页")
+                    } else {
+                        Text("放行 ${s.passMinutes} 分钟")
+                        Button(onClick = onReturn) { Text("回到「${s.appLabel}」") }
+                    }
                 }
                 s.inWindow -> {
                     Text("陪练窗口进行中，先回到陪练")
@@ -248,7 +276,9 @@ private fun GateScreen(s: GateState, vm: GateViewModel, onReturn: () -> Unit, on
                 }
             }
             s.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text(if (s.isTest) "关闭" else "先回桌面") }
+            OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) {
+                Text(when { s.dshMode -> "回到拦截页"; s.isTest -> "关闭"; else -> "先回桌面" })
+            }
         }
     }
 }
