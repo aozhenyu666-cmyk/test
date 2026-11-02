@@ -105,6 +105,8 @@ data class AppPrefs(
     val warmup: Boolean = true,
     /** 各骰面的帮助等级（0 示范后补一步 … 3 连续接力、自己提下一问），按组的表现自动加减 */
     val faceLevels: Map<Int, Int> = emptyMap(),
+    /** 舒尔特表目前最好的一次用时（毫秒）；0 表示还没做完过 */
+    val schulteBestMs: Long = 0,
 ) {
     fun groupOf(pkg: String): String? = watched[pkg]
 
@@ -168,6 +170,7 @@ data class AppPrefs(
         .put("pendingExitAt", pendingExitAt)
         .put("warmup", warmup)
         .put("faceLevels", JSONObject().apply { faceLevels.forEach { (k, v) -> put(k.toString(), v) } })
+        .put("schulteBestMs", schulteBestMs)
         .toString()
 
     companion object {
@@ -277,6 +280,7 @@ data class AppPrefs(
                 faceLevels = o.optJSONObject("faceLevels")?.let { f ->
                     f.keys().asSequence().mapNotNull { k -> k.toIntOrNull()?.takeIf { it in 1..6 }?.let { it to f.optInt(k).coerceIn(0, 3) } }.toMap()
                 } ?: d.faceLevels,
+                schulteBestMs = o.optLong("schulteBestMs", d.schulteBestMs),
             )
         }
     }
