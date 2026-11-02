@@ -35,4 +35,4 @@
 | [Operit 工作流与插件](15-operit/README.md) | 思考接续、精简上下文、棋钟专注等 Operit 扩展。 |
 | [主控台与小满流程线](16-focus-hub/README.md) | Operit 的主控台、角色卡、状态采样与陪伴工作流。 |
 | [时钟动效实验](17-clock-effects/README.md) | 单独的时钟动效网页实验。 |
-| [大肥鱼 AI 伴侣插件](18-dafeiyu-companion/README.md) | DSH 主动搭话叫醒冷会话、自动提取记忆、心情联动；含安装包与验收清单。 |
+| [大肥鱼 AI 伴侣插件](18-dafeiyu-companion/README.md) | DSH 主动搭话叫醒冷会话、提醒与跟进、系统通知、自动提取记忆、心情联动；含安装包与验收清单。 |

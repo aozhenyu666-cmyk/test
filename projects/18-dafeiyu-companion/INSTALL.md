@@ -4,9 +4,9 @@
 
 ## 先说清楚：会动什么、不会动什么
 
-- **会换掉**：`dsh-speak-up`（0.2.7 → 0.3.0-dafeiyu.1）和 `dsh-fish-memory`（1.4.3 → 1.6.0-dafeiyu.1）两个插件的代码。
+- **会换掉**：`dsh-speak-up`（0.2.7 → 0.4.0-dafeiyu.1）和 `dsh-fish-memory`（1.4.3 → 1.6.0-dafeiyu.1）两个插件的代码。
 - **不会动**：记忆数据、心情数据、会话、人格和其他插件。新版读的还是同一套文件，格式没变。
-- **会新增**：`~/.dsh/fish-memory/auto-extract.json`（自动提取记到哪了）。另外 `fish-memory-config.json` 里可能多一个 `自动提取` 字段，`speak-up-config.json` 里多 4 个新设置。旧版插件会忽略这些，回滚不受影响。
+- **会新增**：`~/.dsh/fish-memory/auto-extract.json`（自动提取记到哪了）、`~/.dsh/speak-up-reminders.json`（提醒和最近的通知）。另外 `fish-memory-config.json` 里可能多一个 `自动提取` 字段，`speak-up-config.json` 里多 4 个新设置。旧版插件会忽略这些，回滚不受影响。
 - 尽管如此，**装之前还是先备份**。`install.ps1` 会自动备份；手动装就按第 1 步做。
 
 ---
@@ -15,7 +15,7 @@
 
 把 `dist/` 里的两个 `.tgz` 和这份 `INSTALL.md` 放到电脑上，比如 `D:\dafeiyu\`。然后在 DSH 里对大肥鱼（或任何一个会话）说：
 
-> 帮我装两个插件。文件在 `D:\dafeiyu\`：`dsh-speak-up-0.3.0-dafeiyu.1.tgz` 和 `dsh-fish-memory-1.6.0-dafeiyu.1.tgz`。
+> 帮我装两个插件。文件在 `D:\dafeiyu\`：`dsh-speak-up-0.4.0-dafeiyu.1.tgz` 和 `dsh-fish-memory-1.6.0-dafeiyu.1.tgz`。
 > 先按 `D:\dafeiyu\INSTALL.md` 的「1. 备份」把数据备份好，再用 `dsh plugin --profile desktop add <tgz 的完整路径>` 装这两个包。
 > 装不上就告诉我报错原文，别自己去改 profile 的 package.json。装完提醒我重启 DSH。
 
@@ -51,7 +51,7 @@ Copy-Item "$env:USERPROFILE\.dsh\profiles\desktop\package.json" -Destination $b 
 ### 2. 安装
 
 ```powershell
-dsh plugin --profile desktop add D:\dafeiyu\dsh-speak-up-0.3.0-dafeiyu.1.tgz
+dsh plugin --profile desktop add D:\dafeiyu\dsh-speak-up-0.4.0-dafeiyu.1.tgz
 dsh plugin --profile desktop add D:\dafeiyu\dsh-fish-memory-1.6.0-dafeiyu.1.tgz
 ```
 
@@ -59,10 +59,10 @@ dsh plugin --profile desktop add D:\dafeiyu\dsh-fish-memory-1.6.0-dafeiyu.1.tgz
 
 如果 `dsh plugin add` 不接受本地文件路径（这一点还没在你机器上试过），按顺序试：
 
-1. 路径前面加 `file:`：`dsh plugin --profile desktop add file:D:/dafeiyu/dsh-speak-up-0.3.0-dafeiyu.1.tgz`
+1. 路径前面加 `file:`：`dsh plugin --profile desktop add file:D:/dafeiyu/dsh-speak-up-0.4.0-dafeiyu.1.tgz`
 2. 在 DSH 的 **设置 → 插件 → 安装** 里填同样的路径；
 3. 用 GitHub 链接装（需要仓库是公开的，或者你的 DSH 能访问它）：
-   `https://github.com/aozhenyu666-cmyk/test/raw/ccr-92adf522-sstar5/projects/18-dafeiyu-companion/dist/dsh-speak-up-0.3.0-dafeiyu.1.tgz`
+   `https://github.com/aozhenyu666-cmyk/test/raw/ccr-92adf522-sstar5/projects/18-dafeiyu-companion/dist/dsh-speak-up-0.4.0-dafeiyu.1.tgz`
 4. 实在不行就按上游 README 的「手动装」：把 `.tgz` 解压后的 `package` 文件夹改名，覆盖到
    `%USERPROFILE%\.dsh\profiles\desktop\node_modules\dsh-speak-up\`（fish-memory 同理）。这两个插件之前已经装过，profile 里的登记不用改。
 
@@ -76,6 +76,8 @@ dsh plugin --profile desktop add D:\dafeiyu\dsh-fish-memory-1.6.0-dafeiyu.1.tgz
 - 「唤醒冷会话」保持打开；「叫醒后等几秒」先用 5。
 - 「试运行」**先开着**，看一两个小时的记录，确认时机合适了再关。也可以直接按「真发一次」当场验证（见 VERIFY.md）。
 - 「心情联动」默认开、强度 0.5，先不用动。
+- 「提醒与通知」那张卡片：提醒、桌面通知、搭话要有内容 都默认开。**先按一下「试一下提醒通知」**，确认右下角弹出来、而且一直停着。
+  弹不出来的话：Windows 设置 → 系统 → 通知，确认通知总开关开着、没开「专注助手 / 勿扰」，并且「Windows PowerShell」的通知没被关掉。
 
 **记忆（dsh-fish-memory）**
 - 确认大肥鱼主会话的记忆开关是**开**的（默认开，除非以前手动关过）。

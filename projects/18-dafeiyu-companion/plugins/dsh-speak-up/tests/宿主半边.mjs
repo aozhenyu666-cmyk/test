@@ -108,8 +108,8 @@ const 她开口了 = (多久以前毫秒 = 0, sid = 'sess-abc', 文本 = '嗯，
   }))
 
 // ---------- 基本 ----------
-报('注册了 6 条路由（state/save/roll/new-session/update/install）', 路由.size === 6, [...路由.keys()].join(' '))
-报('定时器挂上（30 分钟）', 停表们.length === 1 && 停表们[0].ms === 1800000)
+报('注册了 9 条路由（state/save/roll/new-session/update/install + 0.4.0 的 reminders/notify/test-notify）', 路由.size === 9, [...路由.keys()].join(' '))
+报('定时器挂上（掷骰 30 分钟 + 查提醒 30 秒）', 停表们.length === 2 && 停表们[0].ms === 1800000 && 停表们[1].ms === 30000)
 let st = await 调('/dsh-speak-up/state')
 报('默认值全对（间隔30 / 峰20 谷60 / 没中+10 上限40 / 冷却20 / 安静1~8 / 20×0.15 / 360×1.5 / 试运行开 / 总开关开 / user）',
   st.配置.间隔分钟 === 30 && st.配置.峰时命中线 === 20 && st.配置.谷时命中线 === 60 &&

@@ -209,12 +209,15 @@ const 缺 = 要有.filter((x) => !文.includes(x))
     ;(n.kids || []).forEach(走)
   }
   走(树)
-  const 文本框 = 输入框.filter((i) => i.p.type === 'text')
+  // 0.4.0 的「手动加提醒」那个内容框不算（它不是时段格子）
+  const 提醒框 = 输入框.filter((i) => i.p.type === 'text' && String(i.p.placeholder || '').startsWith('要提醒的事'))
+  const 文本框 = 输入框.filter((i) => i.p.type === 'text' && !提醒框.includes(i))
   const 数字框 = 输入框.filter((i) => i.p.type === 'number')
   const 值们 = 数字框.map((i) => Number(i.p.value))
   报('整页只剩「手填 id」那一个文本框（时段格子一个都没有）',
     文本框.length === 1 && 文本框[0].p.value === 'sess-abc',
     JSON.stringify(文本框.map((i) => i.p.value)))
+  报('0.4.0：有「手动加提醒」的内容框和时间框', 提醒框.length === 1 && 输入框.some((i) => i.p.type === 'datetime-local'))
   报('峰时/谷时命中线是两个数字框（20 / 60）', 值们.includes(20) && 值们.includes(60), JSON.stringify(值们))
   报('攒加成/冷却也是数字框（10 / 40 / 20）', 值们.includes(10) && 值们.includes(40), JSON.stringify(值们))
   报('没有留下旧的因子数字框（0.5 不在页面上）', !值们.includes(0.5), JSON.stringify(值们))

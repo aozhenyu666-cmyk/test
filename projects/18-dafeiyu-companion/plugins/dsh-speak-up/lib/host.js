@@ -44,12 +44,14 @@
 //    配置一律走自己的 json 文件 + 自己的设置页（跟 dsh-write / dsh-fish-memory 一样）。
 //    想改成原生「插件配置」页的话，README 里写了要动什么。
 
-import { readFileSync, writeFileSync, mkdirSync, statSync, readdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, statSync, readdirSync, renameSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { createSelfUpdate } from './selfupdate.mjs'
+import * as 提 from './提醒.js'
 
 /** 插件的对外名字（也是路由前缀、日志前缀、source.kind）。 */
 export const name = 'speak-up'
@@ -151,6 +153,18 @@ const 默认配置 = {
   // 强度 0 = 关掉；0.5 = 最多把命中线放大到 1.5 倍。
   心情联动: true,
   心情联动强度: 0.5,
+  // ---- 0.4.0：别再软绵无力 ----
+  // 提醒：她说「X 点提醒我…」或者她自己答应「我九点叫你」，插件会认出来、到点叫醒会话去提醒；
+  //   发出去没回 → 隔「提醒跟进分钟」再催，最多催「提醒最多跟进」次。她一回话就停。
+  提醒开关: true,
+  提醒跟进分钟: 15,
+  提醒最多跟进: 2,
+  // 她主动说的话（搭话 / 提醒）弹系统通知：Windows 用系统自带通知（提醒会一直留在屏幕上），
+  //   弹不出来就交给 DSH 网页那半边用浏览器通知弹。
+  桌面通知: true,
+  // 主动搭话时给她「话头」：记忆里她最近说过的事、快到点的提醒、上次没回 —— 不再只会打招呼
+  搭话要有内容: true,
+  搭话风格: '', // 空 = 用默认那句（见 lib/提醒.js 的 默认风格）
 }
 
 // ---------- 配置读写 ----------
@@ -258,6 +272,12 @@ function 归一化(原始) {
     唤醒后等待秒: 数(混.唤醒后等待秒, 默认配置.唤醒后等待秒, 0, 60),
     心情联动: 布(混.心情联动, 默认配置.心情联动),
     心情联动强度: 数(混.心情联动强度, 默认配置.心情联动强度, 0, 2),
+    提醒开关: 布(混.提醒开关, 默认配置.提醒开关),
+    提醒跟进分钟: Math.round(数(混.提醒跟进分钟, 默认配置.提醒跟进分钟, 1, 720)),
+    提醒最多跟进: Math.round(数(混.提醒最多跟进, 默认配置.提醒最多跟进, 0, 5)),
+    桌面通知: 布(混.桌面通知, 默认配置.桌面通知),
+    搭话要有内容: 布(混.搭话要有内容, 默认配置.搭话要有内容),
+    搭话风格: typeof 混.搭话风格 === 'string' ? 混.搭话风格.slice(0, 400) : '',
   }
 }
 
@@ -722,7 +742,7 @@ async function 拿造消息工厂() {
  * 装一个「主动搭话」的执行体。所有状态都关在这个闭包里，
  * 插件卸载（ctx.effect 的清理）时整块丢掉。
  */
-function 造执行体(ctx) {
+function 造执行体(ctx, 取联动 = () => null) {
   /** 最近几次掷骰的记录（给设置页看，也顺便写进 ctx.logger）。 */
   const 日志 = []
 
@@ -961,9 +981,22 @@ function 造执行体(ctx) {
       return 记账(`${前缀}角色填的是 developer，但当前 DSH 送不了 developer 角色（详见 README「做不到的地方」），这轮**主动不发**`)
     }
 
+    // ⭐ 0.4.0：念头后面加「话头」（演练时只看不记，免得把话头用掉）
+    const 念头 = (记下) => {
+      let t = 框住内心话(配置.触发文案, 现在)
+      const 联动 = 取联动()
+      if (配置.搭话要有内容 && 联动) {
+        try {
+          const 段 = 联动.话头段(目标id, 现在.getTime(), 记下)
+          if (段) t += String.fromCharCode(10) + 段
+        } catch (error) {}
+      }
+      return t
+    }
+
     if (演练) {
       const 冷说法 = 挑中.冷 ? `（它现在是冷的：真发时会先叫醒它、等 ${配置.唤醒后等待秒} 秒让记忆/心情挂上）` : ''
-      return 记账(`${前缀}演练：本来要往「${目标id}」${冷说法}送一句「${框住内心话(配置.触发文案, 现在).split(String.fromCharCode(10)).join(' ')}」`)
+      return 记账(`${前缀}演练：本来要往「${目标id}」${冷说法}送一句「${念头(false).split(String.fromCharCode(10)).join(' ')}」`)
     }
 
     // ⭐ 0.3.0：冷会话 → 先叫醒，等别的插件挂上，再确认一遍不忙
@@ -982,8 +1015,10 @@ function 造执行体(ctx) {
       }
     }
 
-    const 文案 = 框住内心话(配置.触发文案, 现在)
+    const 文案 = 念头(true)
     try {
+      const 联动 = 取联动()
+      if (联动) 联动.我们起头(目标id, { 种类: '搭话' })
       const 工厂 = await 拿造消息工厂()
       const 消息 = 工厂
         ? 工厂.createUserMessage({ content: [{ type: 'text', text: 文案 }], source: { kind: 源标记 } })
@@ -1233,6 +1268,480 @@ function 取标题(ctx, id, 会话) {
   return 落
 }
 
+// ---------- 0.4.0：提醒 / 跟进 / 系统通知 / 话头（「别再软绵无力」）----------
+//
+// 纯逻辑在 lib/提醒.js；这里是接线：
+//   · 听目标会话的每一轮（turn/start → user/message → assistant/message → turn/end）
+//     - 她这一轮的话 / 我的回复里有提醒相关的意思 → 问一次模型，记下 / 完成 / 取消 / 推迟提醒
+//     - 她说了话 → 已经发出去、等她回的提醒算「她回了」，不再跟进
+//     - 这一轮是我们起的头（主动搭话 / 提醒）→ 把她说的话弹成系统通知
+//   · 每 30 秒查一次提醒：到点 → 叫醒会话、送提醒念头；发出去没人回 → 隔一会儿再催（最多几次）
+//   · 主动搭话的念头里加「话头」：记忆里她最近说过的事、快到点的提醒、上次没回
+// 数据：<DSH_HOME>/speak-up-reminders.json（提醒 + 最近 50 条通知），原子写。
+
+const 提醒文件 = join(目录, 'speak-up-reminders.json')
+
+function 读提醒库() {
+  const 空 = { version: 1, 下个id: 1, 提醒们: [], 下个通知id: 1, 通知: [] }
+  const j = 读JSON(提醒文件)
+  if (!j || typeof j !== 'object') return 空
+  return {
+    version: 1,
+    下个id: Number(j.下个id) > 0 ? Number(j.下个id) : 1,
+    提醒们: Array.isArray(j.提醒们) ? j.提醒们.filter((r) => r && r.id) : [],
+    下个通知id: Number(j.下个通知id) > 0 ? Number(j.下个通知id) : 1,
+    通知: Array.isArray(j.通知) ? j.通知 : [],
+  }
+}
+
+function 写提醒库(库) {
+  try {
+    mkdirSync(目录, { recursive: true })
+    const 临时 = 提醒文件 + '.' + 新id() + '.tmp'
+    writeFileSync(临时, JSON.stringify(库, null, 2), 'utf8')
+    renameSync(临时, 提醒文件)
+    return true
+  } catch (error) {
+    return false
+  }
+}
+
+const 活着的状态 = new Set(['待发', '已发'])
+
+/** 能被「推迟 / 完成 / 取消」的：还活着的，加上她**刚回过**（30 分钟内）的 —— 她回「等会」时那条已经算回应了。 */
+function 可操作(r, 现在) {
+  if (活着的状态.has(r.状态)) return true
+  return r.状态 === '已回应' && 现在 - (Number(r.回应于) || 0) < 30 * 60000
+}
+
+/** 收拾一下：结束了的只留最近 30 条，通知只留最近 50 条。 */
+function 收拾库(库) {
+  const 活 = 库.提醒们.filter((r) => 活着的状态.has(r.状态))
+  const 完 = 库.提醒们.filter((r) => !活着的状态.has(r.状态)).slice(-30)
+  库.提醒们 = [...完, ...活]
+  库.通知 = 库.通知.slice(-50)
+  return 库
+}
+
+/** 用户的称呼：记忆插件里设过就用它，再看心情插件，都没有就叫「对方」。 */
+function 读称呼(sid) {
+  const 键 = 会话键(sid)
+  try {
+    const c = 读JSON(join(目录, 'fish-memory-config.json')) || {}
+    const 表 = c.ownerNames && typeof c.ownerNames === 'object' ? c.ownerNames : {}
+    for (const [k, v] of Object.entries(表)) {
+      if (会话键(k) === 键 && typeof v === 'string' && v.trim()) return v.trim()
+    }
+    if (typeof c.userPronoun === 'string' && c.userPronoun.trim()) return c.userPronoun.trim()
+  } catch (error) {}
+  try {
+    const m = 读JSON(join(心情目录, 'config.json')) || {}
+    if (typeof m.ownerName === 'string' && m.ownerName.trim()) return m.ownerName.trim()
+  } catch (error) {}
+  return '对方'
+}
+
+/** 记忆插件这个会话的库（只读）。工作区模式的库名算不出来时返回 null。 */
+function 读记忆库(sid) {
+  const 原 = String(sid)
+  for (const 名 of [原, 原.startsWith('session-') ? 原.slice(8) : 'session-' + 原]) {
+    const j = 读JSON(join(目录, 'fish-memory', 名.replace(/[^a-zA-Z0-9_-]/g, '_') + '.json'))
+    if (j && Array.isArray(j.memories)) return j
+  }
+  return null
+}
+
+/** 这个会话在用哪个模型（照 dsh-fish-memory 的 取模型：会话 → agent → 全局默认）。 */
+function 取模型(ctx, agent) {
+  try {
+    const h = agent && agent.session && typeof agent.session.requestHeader === 'function' ? agent.session.requestHeader() : null
+    const cfg = h && h.config
+    if (cfg && cfg.provider && cfg.model) return { provider: cfg.provider, model: cfg.model }
+  } catch (error) {}
+  try {
+    const o = agent && agent.options
+    if (o && o.provider && o.model) return { provider: o.provider, model: o.model }
+  } catch (error) {}
+  try {
+    const svc = ctx.get('agentDefaultModel')
+    const sel = svc && typeof svc.currentSelection === 'function' ? svc.currentSelection() : null
+    if (sel && sel.provider && sel.model) return { provider: sel.provider, model: sel.model }
+  } catch (error) {}
+  return null
+}
+
+/** 问一次宿主模型（不进会话、不占她的上下文），把流式输出拼成文字。 */
+async function 问模型(ctx, agent, 系统, 用户, 最多 = 3000) {
+  let llm = ctx.llm
+  if (!llm) {
+    try { llm = ctx.get('llm') } catch (error) { llm = undefined }
+  }
+  if (!llm || typeof llm.stream !== 'function') return { ok: false, message: '拿不到 llm 服务' }
+  const t = 取模型(ctx, agent)
+  if (!t) return { ok: false, message: '拿不到这个会话在用的模型' }
+  const 消息 = { id: 新id(), role: 'user', content: [{ type: 'text', text: 用户 }], source: { kind: 'plugin', plugin: 'dsh-speak-up' } }
+  let 会话号 = ''
+  try { 会话号 = String((agent && agent.session && agent.session.id) || '') } catch (error) {}
+  let 出 = ''
+  try {
+    for await (const 块 of llm.stream({
+      provider: t.provider, model: t.model, system: 系统, messages: [消息],
+      ...(会话号 ? { sessionId: 会话号 } : {}),
+      maxTokens: 最多, temperature: 0.1,
+    })) {
+      if (!块) continue
+      if (块.type === 'text-delta') 出 += 块.text
+      if (块.type === 'finish' && 块.reason && 块.reason.kind === 'error') {
+        const f = 块.reason.failure || {}
+        return { ok: false, message: '模型报错：' + (f.message || f.code || '？') }
+      }
+    }
+  } catch (error) {
+    return { ok: false, message: '调用失败：' + String((error && error.message) || error) }
+  }
+  return { ok: true, text: 出.trim() }
+}
+
+/** 弹 Windows 系统通知。返回 Promise<bool>（弹没弹出来）。非 Windows 直接 false。 */
+function 弹系统通知(标题, 文本, 是提醒) {
+  if (process.platform !== 'win32') return Promise.resolve(false)
+  return new Promise((好) => {
+    let 完 = false
+    const 结束 = (v) => { if (!完) { 完 = true; 好(v) } }
+    try {
+      const 子 = spawn('powershell.exe', [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+        '-EncodedCommand', 提.编码PowerShell(提.造通知脚本(标题, 文本, 是提醒)),
+      ], { windowsHide: true, stdio: 'ignore' })
+      子.on('error', () => 结束(false))
+      子.on('exit', (code) => 结束(code === 0))
+      setTimeout(() => 结束(false), 15000).unref?.()
+    } catch (error) {
+      结束(false)
+    }
+  })
+}
+
+/**
+ * @param ctx 插件上下文
+ * @param 记账 (文本) → 写进设置页的记录
+ */
+function 造联动(ctx, 记账) {
+  const 本轮 = new Map()      // 会话键 → { 人话: [], 回复: [], 我们起的: bool }
+  const 起头 = new Map()      // 会话键 → { 种类: '搭话'|'提醒', 提醒id }
+  const 人话时间 = new Map()  // 会话键 → 她最后一次真说话的时间
+  const 上次主动 = new Map()  // 会话键 → 我们起头的那一轮说完话的时间
+  const 用过话头 = []         // 最近用过的记忆 id（别老提同一件事）
+  let 认链 = Promise.resolve()
+  let 发提醒中 = false
+  let 收摊了 = false
+
+  const 是目标 = (sid) => 读配置().目标会话.some((id) => 会话键(id) === 会话键(sid))
+  const 找真id = (sid) => 读配置().目标会话.find((id) => 会话键(id) === 会话键(sid)) || String(sid)
+
+  // ---- 通知 ----
+  async function 通知(sid, 种类, 文本) {
+    const 配置 = 读配置()
+    if (!配置.桌面通知) return null
+    const 题 = 取标题(ctx, sid).标题 || '主动搭话'
+    const 标题 = 种类 === '提醒' ? '⏰ ' + 题 + ' · 提醒' : 题
+    const 正文 = 提.通知正文(文本)
+    if (!正文) return null
+    let 库 = 读提醒库()
+    const 条 = { id: 库.下个通知id++, sid: String(sid), 种类, 标题, 正文, at: Date.now(), 网页: false, 系统: null }
+    库.通知.push(条)
+    写提醒库(收拾库(库))
+    const 弹了 = await 弹系统通知(标题, 正文, 种类 === '提醒')
+    // 系统通知弹不出来（不是 Windows / PowerShell 被拦）→ 交给网页那半边用浏览器通知弹
+    库 = 读提醒库()
+    const 那条 = 库.通知.find((x) => x.id === 条.id)
+    if (那条) {
+      那条.系统 = 弹了
+      那条.网页 = !弹了
+      写提醒库(库)
+    }
+    记账(`通知（${种类}）：${弹了 ? '已弹系统通知' : '交给 DSH 网页弹'}「${正文.slice(0, 40)}」`)
+    return 条.id
+  }
+
+  // ---- 认提醒 ----
+  function 有等她回的(sid) {
+    const 键 = 会话键(sid)
+    return 读提醒库().提醒们.some((r) => 会话键(r.sid) === 键 && r.状态 === '已发')
+  }
+
+  function 应用动作(sid, 动作们, 现在) {
+    const 库 = 读提醒库()
+    const 键 = 会话键(sid)
+    const 说 = []
+    for (const a of 动作们) {
+      if (a.动作 === '新增') {
+        let 时 = 提.解析时间(a.时间文本)
+        if (!Number.isFinite(时)) { 说.push(`看不懂时间「${a.时间文本}」，没记`); continue }
+        if (时 < 现在 - 2 * 60000) {
+          const 下 = 提.下次时间(时, a.重复, 现在)
+          if (!Number.isFinite(下)) { 说.push(`「${a.内容}」的时间 ${提.短时间(时)} 已经过了，没记`); continue }
+          时 = 下
+        }
+        if (时 > 现在 + 366 * 86400000) { 说.push(`「${a.内容}」太远了（${提.短时间(时)}），没记`); continue }
+        const 重了 = 库.提醒们.some((r) => 活着的状态.has(r.状态) && 会话键(r.sid) === 键 &&
+          r.内容 === a.内容 && Math.abs(r.时间 - 时) < 5 * 60000)
+        if (重了) continue
+        if (库.提醒们.filter((r) => 活着的状态.has(r.状态)).length >= 30) { 说.push('提醒已经有 30 条了，没再记'); break }
+        const r = { id: 'r' + 库.下个id++, sid: String(sid), 内容: a.内容, 时间: 时, 重复: a.重复 || '', 状态: '待发', 级别: 0, 发出: [], 建于: 现在 }
+        库.提醒们.push(r)
+        说.push(`记下提醒 ${r.id}：${提.短时间(时)} ${r.内容}${r.重复 ? '（' + r.重复 + '）' : ''}`)
+      } else {
+        const r = 库.提醒们.find((x) => x.id === a.id && 会话键(x.sid) === 键)
+        if (!r || !可操作(r, 现在)) continue
+        if (a.动作 === '推迟') {
+          r.状态 = '待发'
+          r.时间 = 现在 + a.分钟 * 60000
+          r.级别 = 0
+          说.push(`提醒 ${r.id} 推迟 ${a.分钟} 分钟（${提.短时间(r.时间)}）`)
+        } else {
+          r.状态 = a.动作 === '完成' ? '完成' : '已取消'
+          r.结束于 = 现在
+          说.push(`提醒 ${r.id}「${r.内容}」${r.状态}`)
+        }
+      }
+    }
+    写提醒库(收拾库(库))
+    return 说
+  }
+
+  async function 认提醒(sid, 人话, 回复) {
+    const 现在 = Date.now()
+    const 键 = 会话键(sid)
+    const 已有 = 读提醒库().提醒们.filter((r) => 会话键(r.sid) === 键 && 可操作(r, 现在))
+    const { 系统, 用户 } = 提.拼认提醒提示({ 现在毫秒: 现在, 称呼: 读称呼(sid), 人话, 回复, 已有 })
+    let agent
+    try { agent = 找agent(ctx, sid) } catch (error) { agent = undefined }
+    const r = await 问模型(ctx, agent, 系统, 用户)
+    if (!r.ok) {
+      记账(`认提醒没成：${r.message}`)
+      return []
+    }
+    const 说 = 应用动作(sid, 提.解析动作(r.text), 现在)
+    for (const 一句 of 说) 记账(一句)
+    return 说
+  }
+
+  // ---- 听每一轮 ----
+  function 收事件(session, event) {
+    if (收摊了 || !event || !session) return
+    const sid = String(session.id || '')
+    if (!sid || !是目标(sid)) return
+    const 键 = 会话键(sid)
+    const 轮 = 本轮.get(键) || { 人话: [], 回复: [], 我们起的: false }
+    if (event.type === 'turn/start') {
+      本轮.set(键, { 人话: [], 回复: [], 我们起的: false })
+      return
+    }
+    if (event.type === 'user/message') {
+      if (提.来源种类(event) === 源标记) {
+        轮.我们起的 = true
+        本轮.set(键, 轮)
+        return
+      }
+      if (!提.是人话(event)) return
+      const 文 = 提.正文(event.data)
+      const 时 = Number(event.time) || Date.now()
+      人话时间.set(键, 时)
+      if (文) 轮.人话.push(文)
+      本轮.set(键, 轮)
+      // 她说话了 → 发出去等她回的提醒都算她回了（她要是说「等会」，认提醒那一步会把它推迟）
+      const 库 = 读提醒库()
+      let 动 = false
+      for (const r of 库.提醒们) {
+        if (会话键(r.sid) !== 键 || r.状态 !== '已发') continue
+        const 最后 = r.发出.length ? r.发出[r.发出.length - 1] : 0
+        if (时 > 最后) {
+          r.状态 = '已回应'
+          r.回应于 = 时
+          动 = true
+          记账(`提醒 ${r.id}「${r.内容}」${读称呼(sid)}回了，不再跟进`)
+        }
+      }
+      if (动) {
+        轮.刚回提醒 = true
+        本轮.set(键, 轮)
+        写提醒库(收拾库(库))
+      }
+      return
+    }
+    if (event.type === 'assistant/message') {
+      const 文 = 提.正文(event.data && event.data.message)
+      if (文) 轮.回复.push(文)
+      本轮.set(键, 轮)
+      return
+    }
+    if (event.type === 'turn/end') {
+      本轮.delete(键)
+      const 回复 = 轮.回复.join(' ')
+      const 人话 = 轮.人话.join(' ')
+      if (轮.我们起的) {
+        const 头 = 起头.get(键) || { 种类: '搭话' }
+        起头.delete(键)
+        if (回复) {
+          上次主动.set(键, Number(event.time) || Date.now())
+          void 通知(sid, 头.种类, 回复).catch(() => {})
+        }
+      }
+      const 配置 = 读配置()
+      if (!配置.提醒开关 || (!人话 && !回复)) return
+      // 我们起头的那一轮（提醒念头 / 搭话念头）里**她**没说话，只看我的回复里有没有答应提醒 —— 不重复认自己发的提醒
+      if (轮.我们起的 && !人话) return
+      if (!提.值得认(人话, 回复, 轮.刚回提醒 || 有等她回的(sid))) return
+      认链 = 认链.then(() => 认提醒(sid, 人话, 回复)).catch((e) => 记账(`认提醒出错：${String((e && e.message) || e)}`))
+    }
+  }
+
+  // ---- 到点 / 跟进 ----
+  async function 发一条(r, 级别) {
+    const 配置 = 读配置()
+    const sid = r.sid
+    let agent = 找agent(ctx, sid)
+    let 叫醒说法 = ''
+    if (agent === undefined) {
+      if (!配置.唤醒冷会话) return `会话没开着、又没开「唤醒冷会话」，提醒 ${r.id} 发不出去`
+      const 醒 = await 叫醒agent(ctx, sid)
+      if (!醒.agent) return `提醒 ${r.id} 想叫醒会话没成：${醒.error}`
+      agent = 醒.agent
+      叫醒说法 = '已叫醒会话；'
+      const 等毫秒 = Math.round(配置.唤醒后等待秒 * 1000)
+      if (等毫秒 > 0) await new Promise((好) => setTimeout(好, 等毫秒))
+    }
+    // ⚠ 她正在聊也照发：followup 会排在这一轮后面（提醒是她要的，不能因为她在聊天就吞掉）
+    const 现在 = Date.now()
+    const 文案 = 提.提醒念头(r, 级别, 现在, 配置.提醒最多跟进, 读称呼(sid))
+    try {
+      起头.set(会话键(sid), { 种类: '提醒', 提醒id: r.id })
+      const 工厂 = await 拿造消息工厂()
+      const 消息 = 工厂
+        ? 工厂.createUserMessage({ content: [{ type: 'text', text: 文案 }], source: { kind: 源标记 } })
+        : 手搓用户消息(文案)
+      await agent.followup(消息)
+    } catch (error) {
+      起头.delete(会话键(sid))
+      return `提醒 ${r.id} followup 失败：${String((error && error.message) || error)}`
+    }
+    // 落账：已发 + 第几次；重复提醒顺手排下一次
+    const 库 = 读提醒库()
+    const 那条 = 库.提醒们.find((x) => x.id === r.id)
+    if (那条) {
+      那条.状态 = '已发'
+      那条.级别 = 级别
+      那条.发出 = [...(那条.发出 || []), 现在]
+      if (级别 === 0 && 那条.重复 && !那条.已排下次) {
+        const 下 = 提.下次时间(那条.时间, 那条.重复, 现在)
+        if (Number.isFinite(下)) {
+          库.提醒们.push({ ...那条, id: 'r' + 库.下个id++, 时间: 下, 状态: '待发', 级别: 0, 发出: [], 建于: 现在, 已排下次: false })
+          那条.已排下次 = true
+        }
+      }
+      写提醒库(收拾库(库))
+    }
+    return `${叫醒说法}提醒 ${r.id}「${r.内容}」${级别 === 0 ? '到点，已送出' : '第 ' + (级别 + 1) + ' 次，已送出'}`
+  }
+
+  async function 查提醒(现在 = Date.now()) {
+    if (收摊了 || 发提醒中) return
+    const 配置 = 读配置()
+    if (!配置.提醒开关) return
+    发提醒中 = true
+    try {
+      const 库 = 读提醒库()
+      const 安静 = 在安静时段(new Date(现在).getHours(), 配置.安静起, 配置.安静止)
+      for (const r of 库.提醒们) {
+        if (r.状态 === '待发' && r.时间 <= 现在) {
+          记账(await 发一条(r, 0))
+          continue
+        }
+        if (r.状态 !== '已发') continue
+        const 最后 = r.发出.length ? r.发出[r.发出.length - 1] : 0
+        if (现在 - 最后 < 配置.提醒跟进分钟 * 60000) continue
+        if ((r.级别 || 0) >= 配置.提醒最多跟进) {
+          const 新库 = 读提醒库()
+          const 那条 = 新库.提醒们.find((x) => x.id === r.id)
+          if (那条 && 那条.状态 === '已发') {
+            那条.状态 = '没回应'
+            那条.结束于 = 现在
+            写提醒库(收拾库(新库))
+            记账(`提醒 ${r.id}「${r.内容}」催了 ${那条.发出.length} 次都没回，不再催`)
+          }
+          continue
+        }
+        if (安静) continue // 跟进不在安静时段里催（第一次到点照发：时间是她自己定的）
+        记账(await 发一条(r, (r.级别 || 0) + 1))
+      }
+    } finally {
+      发提醒中 = false
+    }
+  }
+
+  // ---- 主动搭话的话头 ----
+  function 话头段(sid, 现在, 记下 = true) {
+    const 键 = 会话键(sid)
+    const 记忆库 = 读记忆库(sid)
+    const 话头 = 记忆库 ? 提.挑记忆话头(记忆库.memories, 现在, new Set(用过话头)) : null
+    if (话头 && 记下) {
+      用过话头.push(话头.id)
+      if (用过话头.length > 5) 用过话头.shift()
+    }
+    const 快到的 = 读提醒库().提醒们
+      .filter((r) => 会话键(r.sid) === 键 && r.状态 === '待发' && r.时间 > 现在 && r.时间 - 现在 < 6 * 3600000)
+      .sort((a, b) => a.时间 - b.时间)[0]
+    const 主动 = 上次主动.get(键)
+    const 她 = 人话时间.get(键) || 0
+    const 没回 = 主动 && 她 < 主动 ? (现在 - 主动) / 60000 : null
+    return 提.话头段({
+      称呼: 读称呼(sid), 记忆话头: 话头, 下一个提醒: 快到的 || null, 上次没回分钟: 没回,
+      风格: 读配置().搭话风格 || 提.默认风格,
+    })
+  }
+
+  return {
+    收事件,
+    查提醒,
+    通知,
+    认提醒,
+    话头段,
+    我们起头(sid, 信息) { 起头.set(会话键(sid), 信息) },
+    找真id,
+    收摊() { 收摊了 = true },
+    提醒们: () => 读提醒库().提醒们,
+    取消(id) {
+      const 库 = 读提醒库()
+      const r = 库.提醒们.find((x) => x.id === String(id))
+      if (!r || !活着的状态.has(r.状态)) return false
+      r.状态 = '已取消'
+      r.结束于 = Date.now()
+      写提醒库(收拾库(库))
+      记账(`提醒 ${r.id}「${r.内容}」已取消（设置页）`)
+      return true
+    },
+    立刻(id) {
+      const 库 = 读提醒库()
+      const r = 库.提醒们.find((x) => x.id === String(id))
+      if (!r || !活着的状态.has(r.状态)) return false
+      r.状态 = '待发'
+      r.时间 = Date.now()
+      r.级别 = 0
+      写提醒库(库)
+      return true
+    },
+    手动新增(sid, 时间文本, 内容, 重复 = '') {
+      return 应用动作(sid, [{ 动作: '新增', 时间文本, 内容: String(内容 || '').trim().slice(0, 120), 重复: 提.重复们.includes(重复) ? 重复 : '' }], Date.now())
+    },
+    通知们(之后) {
+      const 库 = 读提醒库()
+      const 最新 = 库.下个通知id - 1
+      return { 最新id: 最新, 通知: 库.通知.filter((x) => x.id > Number(之后)) }
+    },
+  }
+}
+
 // ---------- 插件本体 ----------
 
 export function apply(ctx) {
@@ -1242,7 +1751,9 @@ export function apply(ctx) {
     packageRoot: join(dirname(fileURLToPath(import.meta.url)), '..'),
     diag: (m) => { try { ctx.logger.info('speak-up 查更新: ' + m) } catch (e) { /* logger 不在就算了 */ } },
   }).register(ctx, 路由前缀)
-  const 体 = 造执行体(ctx)
+  let 联动 = null
+  const 体 = 造执行体(ctx, () => 联动)
+  联动 = 造联动(ctx, 体.记账)
 
   const 读体 = async (req) => {
     let body = ''
@@ -1423,6 +1934,7 @@ export function apply(ctx) {
       目标能说话: 目标.some((x) => x.活着 || x.可叫醒),
       目标情况: 目标,
       活着的会话: 会话清单(),
+      提醒们: 联动.提醒们(),
       配置文件: 配置文件,
       日志: 体.日志,
     }
@@ -1511,6 +2023,54 @@ export function apply(ctx) {
     }
   }, 'speak-up: 记下她上次说话的时间')
 
+  // ⭐ 0.4.0：听目标会话的每一轮（认提醒 / 她回了没 / 弹通知）
+  ctx.effect(() => {
+    const 摘 = ctx.on('session/event', (session, event) => {
+      try {
+        联动.收事件(session, event)
+      } catch (error) {}
+    })
+    return () => {
+      try {
+        if (typeof 摘 === 'function') 摘()
+      } catch (error) {}
+    }
+  }, 'speak-up: 提醒 / 通知')
+
+  // 提醒列表：看 / 取消 / 现在就发 / 手动加一条
+  路线(`${路由前缀}/reminders`, async (req, res) => {
+    const 来 = await 读体(req)
+    let 说 = ''
+    if (来 && 来.动作 === '取消' && 来.id) 说 = 联动.取消(来.id) ? '已取消' : '没找到这条（或者已经结束了）'
+    if (来 && 来.动作 === '立刻' && 来.id) {
+      if (联动.立刻(来.id)) {
+        await 联动.查提醒()
+        说 = '已经发了（结果看下面的记录）'
+      } else 说 = '没找到这条（或者已经结束了）'
+    }
+    if (来 && 来.动作 === '新增') {
+      const sid = String(来.sid || 体.配置().目标会话[0] || '')
+      if (!sid) return 回(res, { ok: false, 说: '先勾一个目标会话' })
+      说 = 联动.手动新增(sid, 来.时间, 来.内容, 来.重复).join('；') || '没加上（同样的提醒已经有了？）'
+    }
+    回(res, { ok: true, 说, 提醒们: 联动.提醒们(), 日志: 体.日志 })
+  })
+
+  // 通知：网页半边轮询（只弹「系统通知弹不出来」的那些）
+  路线(`${路由前缀}/notify`, async (req, res) => {
+    const 来 = await 读体(req)
+    回(res, { ok: true, ...联动.通知们(Number(来 && 来.after) || 0) })
+  })
+
+  // 试一下通知
+  路线(`${路由前缀}/test-notify`, async (req, res) => {
+    const 来 = await 读体(req)
+    const sid = String(体.配置().目标会话[0] || '')
+    const 种类 = 来 && 来.提醒 ? '提醒' : '测试'
+    const id = await 联动.通知(sid, 种类, '这是一条测试通知：看到它，说明她主动说话时你能收到。')
+    回(res, { ok: true, 说: id ? '发了一条测试通知' : '「桌面通知」关着，没发', 日志: 体.日志 })
+  })
+
   // 目标会话那一轮要是炸了，至少在日志里留一句（角色填 developer 时就会走到这儿）
   ctx.effect(() => {
     const 摘 = ctx.on('agent/error', ({ agent, error }) => {
@@ -1531,6 +2091,18 @@ export function apply(ctx) {
     体.开表()
     return () => 体.收摊()
   }, 'speak-up: 定时掷骰')
+
+  // ⭐ 0.4.0：每 30 秒查一次提醒（到点 / 该跟进了）
+  ctx.effect(() => {
+    if (typeof ctx.interval !== 'function') return () => 联动.收摊()
+    const 停 = ctx.interval(() => {
+      void 联动.查提醒().catch((error) => 体.记账(`查提醒出错：${String((error && error.message) || error)}`))
+    }, 30 * 1000)
+    return () => {
+      联动.收摊()
+      try { if (typeof 停 === 'function') 停() } catch (error) {}
+    }
+  }, 'speak-up: 查提醒')
 
   try {
     ctx.logger.info(`speak-up: v${版本} 已加载，配置文件 ${配置文件}`)

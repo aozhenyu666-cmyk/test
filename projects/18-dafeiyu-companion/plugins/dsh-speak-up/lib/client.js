@@ -234,6 +234,8 @@ window.__ModuleLoader__.load({
       // 「改了但还没按保存」——填了不按保存等于没填，这个标志就是让这件事写在脸上
       const [脏, 设脏] = React.useState(false)
       const [同步话, 设同步话] = React.useState('')
+      // ⭐ 0.4.0：手动加提醒的草稿
+      const [新提醒, 设新提醒] = React.useState({ 时间: '', 内容: '', 重复: '' })
 
       const 拉 = React.useCallback(
         () => get('/state').then((r) => { if (r && r.ok) 设态(r); else 设说('读不到宿主那边的状态（插件加载了吗？）') }),
@@ -248,6 +250,30 @@ window.__ModuleLoader__.load({
       }
 
       const 配置 = 态.配置
+      const 提醒们 = Array.isArray(态.提醒们) ? 态.提醒们 : []
+      // ⭐ 0.4.0：提醒的操作（取消 / 现在就发 / 新增）都走 /reminders，回来的列表直接换上
+      const 提醒操作 = async (body) => {
+        设忙(true)
+        const r = await post('/reminders', body)
+        if (r && r.ok) {
+          设态((旧) => ({ ...旧, 提醒们: r.提醒们 || 旧.提醒们, 日志: r.日志 || 旧.日志 }))
+          设说(r.说 || '好了')
+        } else 设说((r && r.说) || '没成')
+        设忙(false)
+      }
+      const 测通知 = async (是提醒) => {
+        try {
+          if (typeof Notification !== 'undefined' && Notification.permission === 'default') await Notification.requestPermission()
+        } catch (e) {}
+        const r = await post('/test-notify', { 提醒: !!是提醒 })
+        设说((r && r.说) || '没发出去')
+        if (r && r.日志) 设态((旧) => ({ ...旧, 日志: r.日志 }))
+      }
+      const 两位 = (n) => String(n).padStart(2, '0')
+      const 显示时间 = (ms) => {
+        const d = new Date(Number(ms) || 0)
+        return 两位(d.getMonth() + 1) + '-' + 两位(d.getDate()) + ' ' + 两位(d.getHours()) + ':' + 两位(d.getMinutes())
+      }
       const 查更新 = async () => {
         设更新忙(true)
         const r = await get('/update?refresh=1')
@@ -465,6 +491,72 @@ window.__ModuleLoader__.load({
             '心情联动强度',
             数(配置.心情联动强度, (v) => 改('心情联动强度', v), 0.1),
             '默认 0.5 = 命中线最多放大到 1.5 倍。0 = 不联动。范围 0~2。',
+          ),
+        ),
+
+        // —— 0.4.0：提醒与通知 ——
+        h('div', { style: S.card },
+          h('div', { style: { ...S.h, margin: '0 0 8px' } }, '提醒与通知'),
+          h('div', { style: S.dim },
+            '跟她说「半小时后提醒我喝水」「每天早上八点叫我吃药」，或者她自己答应「我九点叫你」，插件都会认出来记在下面；' +
+              '到点会叫醒会话让她提醒你。没回就隔一会儿再催，一次比一次直接；你一回话就停（回「等会」会自动推迟）。'),
+          行('提醒（默认开）', 勾(配置.提醒开关, (v) => 改('提醒开关', v)), '关掉 = 不认新提醒、到点也不发。'),
+          行('没回隔几分钟再催', 数(配置.提醒跟进分钟, (v) => 改('提醒跟进分钟', v)), '默认 15。范围 1~720。安静时段里不催（第一次到点照发，时间是你自己定的）。'),
+          行('最多再催几次', 数(配置.提醒最多跟进, (v) => 改('提醒最多跟进', v)), '默认 2（一共最多 3 条）。0 = 只提醒一次、不跟进。'),
+          行(
+            '桌面通知（默认开）',
+            勾(配置.桌面通知, (v) => 改('桌面通知', v)),
+            '她主动说的话（搭话、提醒）弹 Windows 系统通知；提醒那种会一直留在屏幕右下角，直到你点掉。弹不出来时由 DSH 窗口弹浏览器通知（窗口要开着）。',
+          ),
+          h('div', { style: { ...S.row, marginTop: 2 } },
+            按钮('试一下通知', () => 测通知(false), false, 忙),
+            按钮('试一下提醒通知（会一直停在屏幕上）', () => 测通知(true), false, 忙),
+          ),
+          行(
+            '搭话要有内容（默认开）',
+            勾(配置.搭话要有内容, (v) => 改('搭话要有内容', v)),
+            '主动搭话时把「她最近说过的事」（从记忆插件里挑）、快到点的提醒、「上次没回」一起交给她，并要求开口有具体内容，别只说「在吗」。',
+          ),
+          行(
+            '搭话风格（可留空）',
+            h('textarea', {
+              style: S.ta,
+              value: 配置.搭话风格 === undefined ? '' : String(配置.搭话风格),
+              placeholder: '开口要有具体的内容，别只说「在吗」「想你了」「在干嘛」这种空话；一两句话，像发微信那样自然，结尾留一个她很容易接的问题。',
+              onChange: (e) => 改('搭话风格', e.target.value),
+            }),
+            '留空就用灰字那句。想让她更凶 / 更黏 / 更简短，改这里就行。',
+          ),
+
+          h('div', { style: { ...S.h, margin: '10px 0 6px', fontSize: 13 } }, '现在的提醒'),
+          (() => {
+            const 活 = 提醒们.filter((r) => r.状态 === '待发' || r.状态 === '已发').sort((a, b) => a.时间 - b.时间)
+            const 完 = 提醒们.filter((r) => !(r.状态 === '待发' || r.状态 === '已发')).slice(-5).reverse()
+            const 一行 = (r, 活着) =>
+              h('div', { key: r.id, style: { ...S.row, marginBottom: 4, opacity: 活着 ? 1 : 0.55 } },
+                h('div', { style: { flex: '1 1 260px' } },
+                  显示时间(r.时间) + '  ' + r.内容 + (r.重复 ? '（' + r.重复 + '）' : '') + '  ·  ' + r.状态 +
+                    (r.状态 === '已发' ? '（第 ' + ((r.级别 || 0) + 1) + ' 次，等你回）' : '')),
+                活着 ? 按钮('现在就发', () => 提醒操作({ 动作: '立刻', id: r.id }), false, 忙) : null,
+                活着 ? 按钮('取消', () => 提醒操作({ 动作: '取消', id: r.id }), false, 忙) : null,
+              )
+            return h('div', null,
+              活.length ? 活.map((r) => 一行(r, true)) : h('div', { style: S.dim }, '现在没有要提醒的事。'),
+              完.length ? h('div', { style: { ...S.dim, marginTop: 6 } }, '最近结束的：') : null,
+              完.map((r) => 一行(r, false)),
+            )
+          })(),
+          h('div', { style: { ...S.row, marginTop: 8 } },
+            h('input', { type: 'datetime-local', style: S.input, value: 新提醒.时间, onChange: (e) => 设新提醒({ ...新提醒, 时间: e.target.value }) }),
+            h('input', { type: 'text', style: S.input, placeholder: '要提醒的事（比如：吃药）', value: 新提醒.内容, onChange: (e) => 设新提醒({ ...新提醒, 内容: e.target.value }) }),
+            h('select', { style: S.input, value: 新提醒.重复, onChange: (e) => 设新提醒({ ...新提醒, 重复: e.target.value }) },
+              h('option', { value: '' }, '不重复'), h('option', { value: '每天' }, '每天'),
+              h('option', { value: '工作日' }, '工作日'), h('option', { value: '每周' }, '每周')),
+            按钮('手动加一条', async () => {
+              if (!新提醒.时间 || !新提醒.内容.trim()) return 设说('时间和内容都要填')
+              await 提醒操作({ 动作: '新增', 时间: 新提醒.时间.replace('T', ' '), 内容: 新提醒.内容, 重复: 新提醒.重复 })
+              设新提醒({ 时间: '', 内容: '', 重复: '' })
+            }, true, 忙),
           ),
         ),
 
@@ -697,7 +789,39 @@ window.__ModuleLoader__.load({
       )
     }
 
+    // ⭐ 0.4.0：通知轮询 —— 宿主那边弹不出系统通知（不是 Windows / PowerShell 被拦）时，
+    //   由 DSH 窗口用浏览器通知弹。只弹「网页: true」的那些，第一次只记位置、不补弹旧的。
+    let 轮询着 = false
+    function 开始通知轮询() {
+      // 只在真页面里跑（测试脚本只有假 window、没有 document，别让一个 15 秒的表把它挂住）
+      if (轮询着 || typeof window === 'undefined' || typeof document === 'undefined') return
+      轮询着 = true
+      let 之后 = -1
+      try { 之后 = Number(window.localStorage.getItem('dsh-speak-up:notify-after')) || -1 } catch (e) {}
+      const 一次 = async () => {
+        const r = await post('/notify', { after: 之后 < 0 ? 0 : 之后 })
+        if (!r || !r.ok) return
+        if (之后 >= 0 && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          for (const n of r.通知 || []) {
+            if (!n.网页) continue
+            try {
+              const 弹 = new Notification(n.标题 || '主动搭话', { body: n.正文 || '', tag: 'dsh-speak-up-' + n.id, requireInteraction: n.种类 === '提醒' })
+              弹.onclick = () => { try { window.focus() } catch (e) {} }
+            } catch (e) {}
+          }
+        }
+        之后 = Number(r.最新id) || 0
+        try { window.localStorage.setItem('dsh-speak-up:notify-after', String(之后)) } catch (e) {}
+      }
+      try {
+        if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission().catch(() => {})
+      } catch (e) {}
+      void 一次()
+      setInterval(() => { void 一次().catch(() => {}) }, 15000)
+    }
+
     function apply(ctx) {
+      try { 开始通知轮询() } catch (e) {}
       const slots = ctx.get('slots')
       if (slots === undefined) return
       slots.inject('settings.section', () =>
