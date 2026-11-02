@@ -4,6 +4,23 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DshHandoffTest {
+    @Test fun verifiedDshGrantCanBeSent() {
+        assertTrue(DshHandoff.shouldSend(true, true, false, "DSH Go"))
+    }
+
+    @Test fun ordinaryGateDoesNotSend() {
+        assertFalse(DshHandoff.shouldSend(false, true, false, "娱乐"))
+    }
+
+    @Test fun unverifiedGrantDoesNotSend() {
+        assertFalse(DshHandoff.shouldSend(true, false, false, "DSH Go"))
+    }
+
+    @Test fun testAndMorningGrantsDoNotSend() {
+        assertFalse(DshHandoff.shouldSend(true, true, true, "DSH Go"))
+        assertFalse(DshHandoff.shouldSend(true, true, false, "早上"))
+    }
+
     @Test fun activeWindowExplainsWhyHandoffIsBlocked() {
         assertEquals("陪练窗口进行中，这次不能在一手答题放行", DshHandoff.blockedReason(true, false, false))
     }

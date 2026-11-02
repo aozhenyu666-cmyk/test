@@ -45,6 +45,10 @@ object DshHandoff {
         else -> null
     }
 
+    /** 回传取决于放行来源，统计名称变化不应影响交接。 */
+    fun shouldSend(dshMode: Boolean, verified: Boolean, isTest: Boolean, group: String): Boolean =
+        dshMode && verified && !isTest && group != "早上"
+
     /** 只在已拿到放行记录后拼凭证；一次性密钥原样带回，不写日志。 */
     fun passExtras(req: Request, minutes: Int, ref: String): Map<String, Any> = linkedMapOf(
         EXTRA_VERSION to VERSION,

@@ -248,7 +248,12 @@ private fun GateScreen(s: GateState, vm: GateViewModel, onReturn: () -> Unit, on
                 }
                 s.passMinutes != null -> {
                     if (s.dshMode) {
-                        Text(if (s.error == null) "过了，正在回到「${s.appLabel}」" else "过了，请回到拦截页")
+                        Text(when {
+                            s.dshSent -> "过了，正在回到「${s.appLabel}」"
+                            s.error == null -> "这次放行不能交回 DSH Go，请回到拦截页"
+                            else -> "过了，请回到拦截页"
+                        })
+                        // 未发出时仍可使用底部的“回到拦截页”，不能自行打开目标应用。
                     } else {
                         Text("放行 ${s.passMinutes} 分钟")
                         Button(onClick = onReturn) { Text("回到「${s.appLabel}」") }

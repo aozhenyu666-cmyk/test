@@ -250,9 +250,9 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         // 选对了就放行：说中要点是正常时长，试满才选对是低能量时长。
         if (correct && mayGrant()) {
             // DSH 只认真正过判卷的作答，不能用低能量放行换凭证。
-            val pass = (if (!_state.value.dshMode) issuer.issueRevealed(_state.value.group, session.state.value, revealedLast) else null)
-                ?: issuer.issue(session.state.value, _state.value.group)
-            pass?.let { finishGrant(it, if (revealedLast) DayStats.LOW_PASS else DayStats.GATE_PASS) }
+            val revealedPass = if (!_state.value.dshMode) issuer.issueRevealed(_state.value.group, session.state.value, revealedLast) else null
+            val pass = revealedPass ?: issuer.issue(session.state.value, _state.value.group)
+            pass?.let { finishGrant(it, if (revealedPass != null) DayStats.LOW_PASS else DayStats.GATE_PASS, verified = revealedPass == null) }
             if (pass == null) _state.update { it.copy(error = "这一题按记录不足以放行，重来一道。") }
         }
     }
@@ -292,20 +292,19 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             work.acknowledge()
             issuer.issueVerified(_state.value.group, rev.verdict)
         } else issuer.issue(session.state.value, _state.value.group)
-        pass?.let { finishGrant(it, DayStats.GATE_PASS) }
+        pass?.let { finishGrant(it, DayStats.GATE_PASS, verified = true) }
     }
-    private fun finishGrant(pass: com.yishou.app.data.Pass, event: String) {
+    private fun finishGrant(pass: com.yishou.app.data.Pass, event: String, verified: Boolean) {
         yishou.stats.event(event)
         val s = _state.value
         if (s.exit.isNotBlank()) yishou.settings.updateApp { it.copy(pendingExit = s.exit.trim(), pendingExitAt = pass.endAt) }
         _state.update { it.copy(passMinutes = ((pass.endAt - pass.startAt) / 60_000L).toInt()) }
-        if (event == DayStats.GATE_PASS) sendDshPass(pass)
+        if (DshHandoff.shouldSend(s.dshMode, verified, s.isTest, s.group)) sendDshPass(pass)
     }
 
     /** 只有放行已存库的成功出口能把一次性凭证交回；失败后也不能自行打开目标应用。 */
     private fun sendDshPass(pass: com.yishou.app.data.Pass) {
         val req = dsh ?: return
-        if (_state.value.isTest || _state.value.group == "早上") return
         val minutes = ((pass.endAt - pass.startAt) / 60_000L).toInt()
         val extras = DshHandoff.passExtras(req, minutes, "pass:" + pass.id)
         val intent = android.content.Intent(DshHandoff.ACTION_PASS).setPackage(req.replyPackage)
@@ -348,7 +347,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         // 回响只是开题前闪一屏，不单独占一次放行
         if (recallingEcho) return@run
         recallTries++
-        if (ok && mayGrant() && !_state.value.dshMode) issuer.issueRecall(_state.value.group, r, answer)?.let { finishGrant(it, DayStats.LOW_PASS) }
+        if (ok && mayGrant() && !_state.value.dshMode) issuer.issueRecall(_state.value.group, r, answer)?.let { finishGrant(it, DayStats.LOW_PASS, verified = false) }
         if (ok && _state.value.dshMode) recallFeedback = DshHandoff.blockedReason(false, false, onlyRecall = true)
         if (ok && _state.value.isTest) recallFeedback = "默写通过；测试页不放行"
     }
