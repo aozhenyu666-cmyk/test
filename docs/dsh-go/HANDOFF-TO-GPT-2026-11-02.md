@@ -7,7 +7,7 @@
 
 ## 1. 一句话现状
 
-**P0-A「刷题闭环」的代码两边都写完、云端测试通过，手机安装包已出（一手测试版正在构建）；跨 App 联调还没在真机上做过。** 两个 PR / 分支都没有合并。
+**P0-A「刷题闭环」的代码两边都写完、云端测试通过，两个手机安装包都已发布；跨 App 联调还没在真机上做过。** 两个 PR / 分支都没有合并。
 
 P0-A 链路：打开 B站 → **DSH Go** 拦截 → 点「去一手答一道题」→ **一手**出题库题并判卷 → 判卷通过后一手交回一次性凭证 → DSH Go 核对后放行 B站。
 分权：**一手决定答没答对；DSH Go 只核对"这张凭证是不是这一次拦截的"。**
@@ -71,7 +71,7 @@ DSH Go → 一手：`com.yishou.app.action.TRAIN_FOR_DSH`，extras `dsh_protocol
 | App | 下载页 | 状态 |
 |---|---|---|
 | DSH Go R4 | https://github.com/aozhenyu666-cmyk/dsh-Go/releases/tag/r4-p4-build-4 | ✅ 已发布。SHA256 `608521ed60a2e5d303b7b2c93b91dda5c84f4f765474e825bf19c88ba6432722`。包名 `io.github.ccch1mneyyy.dsh_app.r4`，与官方版并存。PRoot 5.1.107.102 |
-| 一手交接测试版 | https://github.com/aozhenyu666-cmyk/test/releases/tag/yishou-dsh-handoff-test | ⏳ 交接时构建中（run 41425613529）。成功后页面里有 APK 和 `APK-SHA256.txt`。包名 `com.yishou.app`、与 `yishou-latest` 同签名同版本：直接覆盖，数据保留 |
+| 一手交接测试版 | https://github.com/aozhenyu666-cmyk/test/releases/tag/yishou-dsh-handoff-test | ✅ 已发布（run 41425613529）。SHA256 `06274ed6eaa13d5a4ae59609cd12f938081fc7b9ed5acfb0814e6801f34c5991`。包名 `com.yishou.app`、与 `yishou-latest` 同签名同版本：直接覆盖，数据保留 |
 
 一手测试版如果失败：只看 `.github/workflows/yishou-dsh-handoff-test.yml`（test 仓库 `test/yishou-dsh-handoff-apk` 分支），不要改 `yishou/` 代码。
 
