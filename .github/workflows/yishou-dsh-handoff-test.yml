@@ -1,0 +1,46 @@
+name: yishou-dsh-handoff-test
+
+# 一手 × DSH Go 做题交接（PR #50）的手机测试版。只在 test/yishou-dsh-handoff-apk 分支触发，
+# 发布到单独的预发布页 yishou-dsh-handoff-test，不覆盖 yishou-latest。
+# 主线包名 com.yishou.app、仓库里的调试签名，与 yishou-latest 相同：可直接覆盖安装，数据保留。
+on:
+  push:
+    branches: [test/yishou-dsh-handoff-apk]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: yishou
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Unit tests and mainline debug APK
+        run: ./gradlew --no-daemon testMainlineDebugUnitTest assembleMainlineDebug
+      - name: Check the hand-off entry is in the package
+        run: |
+          APK=app/build/outputs/apk/mainline/debug/app-mainline-debug.apk
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
+          "$AAPT" dump badging "$APK" | grep "package: name='com.yishou.app'"
+          "$AAPT" dump xmltree "$APK" AndroidManifest.xml | grep -q "com.yishou.app.action.TRAIN_FOR_DSH"
+          cp "$APK" yishou-dsh-handoff.apk
+          sha256sum yishou-dsh-handoff.apk | tee APK-SHA256.txt
+      - name: Publish phone-downloadable prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete yishou-dsh-handoff-test --cleanup-tag --yes || true
+          gh release create yishou-dsh-handoff-test yishou-dsh-handoff.apk APK-SHA256.txt \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "一手 · DSH 做题交接测试版（PR #50）" \
+            --notes "由 PR #50 内容 + 本构建配置（提交 ${GITHUB_SHA::7}）自动构建。主线包名 com.yishou.app，与 yishou-latest 同一调试签名：可直接覆盖安装，数据保留。只用于和 DSH Go R4（r4-p4-build-4）联调。"
