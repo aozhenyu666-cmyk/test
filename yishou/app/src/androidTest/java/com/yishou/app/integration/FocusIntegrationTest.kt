@@ -5,10 +5,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.Until
-import androidx.compose.ui.test.junit4.createEmptyComposeRule
-import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performClick
 import com.yishou.app.data.Pass
 import com.yishou.app.focus.*
 import com.yishou.app.gate.GateActivity
@@ -30,7 +26,6 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class FocusIntegrationTest {
     @get:Rule val evidence = RuntimeEvidence()
-    @get:Rule val compose = createEmptyComposeRule()
     @Before fun before() = runBlocking { reset() }
     @After fun after() = runBlocking { reset() }
 
@@ -44,8 +39,21 @@ class FocusIntegrationTest {
 
     private fun start(allowed: Set<String> = emptySet(), rest: Boolean = false) {
         val now = System.currentTimeMillis()
-        Assert.assertTrue(app.focus.start(FocusPlan("验证专注流", "一组", 10, 3, 1), allowed, emptySet(), if (rest) now - 181_000 else now))
+        // 测试框架会短暂显示自己的跳板；它不是下面要验证拦截的入口测试应用。
+        Assert.assertTrue(app.focus.start(FocusPlan("验证专注流", "一组", 10, 3, 1), allowed + "${app.packageName}.test", emptySet(), if (rest) now - 181_000 else now))
         main { FocusService.start(app) }
+    }
+
+    private fun scrollTo(text: String) {
+        repeat(12) {
+            if (device.findObject(By.text(text))?.visibleBounds?.height()?.let { it > 0 } == true) return
+            // 输入框也可能可滚动，只动屏幕上面积最大的内容区。
+            val container = device.findObjects(By.scrollable(true)).maxByOrNull { it.visibleBounds.height() }
+                ?: throw AssertionError("没有滚动区域：$text")
+            container.scroll(Direction.DOWN, .75f)
+        }
+        RuntimeEvidence.capture("focus-cannot-find-$text")
+        throw AssertionError("滚动后仍没找到：$text")
     }
 
     private fun assertFocusGate() {
@@ -56,9 +64,10 @@ class FocusIntegrationTest {
     }
 
     @Test fun pastedSixLinePlanCanStartFromTheActualPlanScreen() = runBlocking {
-        val activity = activity("focus-plan")
+        val activity = activity()
         try {
             connectGate()
+            find(By.text("专注流")).click()
             main {
                 app.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("计划", """
                     【任务】粘贴计划验证
@@ -72,8 +81,8 @@ class FocusIntegrationTest {
             eventually { device.findObject(By.text("粘贴计划"))?.parent?.isEnabled == true }
             find(By.text("粘贴计划")).click()
             RuntimeEvidence.capture("focus-plan-pasted")
-            // 输入框也会标成可滚动，泛找第一个滚动节点会滚错；直接滚动到开始按钮。
-            compose.onNodeWithText("开始").performScrollTo().performClick()
+            scrollTo("开始")
+            find(By.text("开始")).click()
             eventually { app.focus.state.value?.plan?.task == "粘贴计划验证" }
             Assert.assertTrue(device.wait(Until.hasObject(By.text("工作")), 5000))
             RuntimeEvidence.capture("focus-pasted-plan-started")
@@ -114,23 +123,18 @@ class FocusIntegrationTest {
     }
 
     @Test fun leavingQuitPageClearsTheWaitAndReturningStartsAgain() = runBlocking {
-        val activity = activity("focus")
+        val activity = activity()
         try {
             connectGate(); start()
-            fun requestQuit() {
-                repeat(4) {
-                    if (device.findObject(By.text("提前结束"))?.visibleBounds?.height()?.let { h -> h > 0 } != true)
-                        device.findObject(By.scrollable(true))?.scroll(Direction.DOWN, .7f)
-                }
-                find(By.text("提前结束")).click()
-            }
+            find(By.text("专注流")).click()
+            fun requestQuit() { scrollTo("提前结束"); find(By.text("提前结束")).click() }
             requestQuit()
             Assert.assertTrue(device.wait(Until.hasObject(By.text("提前结束 · 等待中")), 5000))
             eventually { app.focus.state.value?.quitAskedAt != null }
             app.focus.update { it.copy(quitAskedAt = System.currentTimeMillis() - 120_000) }
             device.pressHome()
             eventually { app.focus.state.value?.quitAskedAt == null }
-            main { app.startActivity(Intent(app, com.yishou.app.MainActivity::class.java).putExtra(com.yishou.app.MainActivity.EXTRA_ROUTE, "focus").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)) }
+            main { app.startActivity(Intent(app, com.yishou.app.MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)) }
             eventually { app.focus.state.value?.quitAskedAt != null || device.hasObject(By.text("提前结束")) }
             if (app.focus.state.value?.quitAskedAt == null) requestQuit()
             eventually { app.focus.state.value?.quitAskedAt != null }
