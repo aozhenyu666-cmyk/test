@@ -103,6 +103,7 @@ class RuntimeEvidence : TestWatcher() {
             val folder = File(RuntimeSupport.app.getExternalFilesDir(null), "integration-evidence").apply { mkdirs() }
             RuntimeSupport.device.takeScreenshot(File(folder, "$name.png"))
             RuntimeSupport.device.dumpWindowHierarchy(File(folder, "$name.xml"))
+            File(folder, "$name-gate-trace.txt").writeText(com.yishou.app.gate.GateTrace.export())
         }
     }
 }

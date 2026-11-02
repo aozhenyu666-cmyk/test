@@ -5,6 +5,10 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.Until
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performClick
 import com.yishou.app.data.Pass
 import com.yishou.app.focus.*
 import com.yishou.app.gate.GateActivity
@@ -26,6 +30,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class FocusIntegrationTest {
     @get:Rule val evidence = RuntimeEvidence()
+    @get:Rule val compose = createEmptyComposeRule()
     @Before fun before() = runBlocking { reset() }
     @After fun after() = runBlocking { reset() }
 
@@ -66,8 +71,9 @@ class FocusIntegrationTest {
             }
             eventually { device.findObject(By.text("粘贴计划"))?.parent?.isEnabled == true }
             find(By.text("粘贴计划")).click()
-            repeat(6) { device.findObject(By.scrollable(true))?.scroll(Direction.DOWN, .8f) }
-            find(By.text("开始")).click()
+            RuntimeEvidence.capture("focus-plan-pasted")
+            // 输入框也会标成可滚动，泛找第一个滚动节点会滚错；直接滚动到开始按钮。
+            compose.onNodeWithText("开始").performScrollTo().performClick()
             eventually { app.focus.state.value?.plan?.task == "粘贴计划验证" }
             Assert.assertTrue(device.wait(Until.hasObject(By.text("工作")), 5000))
             RuntimeEvidence.capture("focus-pasted-plan-started")

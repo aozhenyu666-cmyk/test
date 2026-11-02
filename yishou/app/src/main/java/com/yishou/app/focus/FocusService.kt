@@ -113,7 +113,11 @@ class FocusService : Service() {
         }
     }
     private fun cancelAlarm() { getSystemService(AlarmManager::class.java).cancel(alarmIntent()); alarmAt = 0 }
-    override fun onDestroy() { scope.cancel(); super.onDestroy() }
+    override fun onDestroy() {
+        if (app.focus.active() == null) cancelAlarm()
+        scope.cancel()
+        super.onDestroy()
+    }
 
     companion object {
         private const val CHANNEL = "focus_timer"
