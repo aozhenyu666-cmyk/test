@@ -50,6 +50,30 @@ class FocusIntegrationTest {
         Assert.assertNull(device.findObject(By.text("进去")))
     }
 
+    @Test fun pastedSixLinePlanCanStartFromTheActualPlanScreen() = runBlocking {
+        val activity = activity("focus-plan")
+        try {
+            connectGate()
+            main {
+                app.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("计划", """
+                    【任务】粘贴计划验证
+                    【目标】一组
+                    【总时长】10 分钟
+                    【每组】3 分钟
+                    【休息】1 分钟
+                    【允许的应用】
+                """.trimIndent()))
+            }
+            eventually { device.findObject(By.text("粘贴计划"))?.parent?.isEnabled == true }
+            find(By.text("粘贴计划")).click()
+            repeat(6) { device.findObject(By.scrollable(true))?.scroll(Direction.DOWN, .8f) }
+            find(By.text("开始")).click()
+            eventually { app.focus.state.value?.plan?.task == "粘贴计划验证" }
+            Assert.assertTrue(device.wait(Until.hasObject(By.text("工作")), 5000))
+            RuntimeEvidence.capture("focus-pasted-plan-started")
+        } finally { activity.close() }
+    }
+
     @Test fun focusBlocksFixtureWithoutIssuingQuestionOrPass() = runBlocking {
         val activity = activity()
         try {

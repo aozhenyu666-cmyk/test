@@ -52,4 +52,16 @@ class FocusStoreTest {
         assertEquals(200, restored.history.value.size)
         assertEquals(1, restored.history.value.last().session.doneRounds)
     }
+
+    @Test fun finalRoundCanBeNotifiedAfterTheUiHasAlreadyArchivedTheSession() {
+        var now = 1000L
+        val store = FocusStore(temp.root) { now }
+        store.start(plan, emptySet(), emptySet())
+        now += 600001
+        store.active()
+        assertEquals(listOf(1, 2, 3), store.claimRounds()!!.second)
+        assertNull(store.claimRounds())
+        assertNotNull(store.claimEnd())
+        assertNull(FocusStore(temp.root) { now }.claimEnd())
+    }
 }
