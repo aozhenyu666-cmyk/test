@@ -32,7 +32,7 @@ data class GateState(
     val loading: Boolean = true, val triggerPackage: String? = null, val appLabel: String = "", val group: String = "",
     val inWindow: Boolean = false, val partnerPending: Boolean = false, val followUp: String? = null,
     val exit: String = "", val passMinutes: Int? = null, val wrongInRow: Int = 0,
-    val dshMode: Boolean = false, val dshSent: Boolean = false,
+    val dshMode: Boolean = false, val dshSent: Boolean = false, val dshNoQuestion: Boolean = false,
     val mode: GateMain = GateMain.LOW_ENERGY, val revision: Int = 0, val busy: Boolean = false, val error: String? = null,
 ) { val isTest get() = triggerPackage == null && group != "早上" }
 
@@ -138,7 +138,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         val llm = yishou.settings.llm.value.isComplete
         val mode = GatePlan.pick(GateInput(open != null && (open.pending != null || !judgeDown), bank.isNotEmpty(),
             llm && !judgeDown, todayRefs.isNotEmpty() && recallTries < 3, _state.value.wrongInRow, freshReady = llm))
-        _state.update { it.copy(mode = mode) }
+        _state.update { it.copy(mode = mode, dshNoQuestion = it.dshMode && mode == GateMain.LOW_ENERGY) }
         when (mode) {
             GateMain.STRAND -> {
                 work.load(open!!)
@@ -349,7 +349,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         if (recallingEcho) return@run
         recallTries++
         if (ok && mayGrant() && !_state.value.dshMode) issuer.issueRecall(_state.value.group, r, answer)?.let { finishGrant(it, DayStats.LOW_PASS) }
-        if (ok && _state.value.dshMode) recallFeedback = "记起来了，继续做题后才能回到拦截页放行。"
+        if (ok && _state.value.dshMode) recallFeedback = DshHandoff.blockedReason(false, false, onlyRecall = true)
         if (ok && _state.value.isTest) recallFeedback = "默写通过；测试页不放行"
     }
     fun nextRecall() = run {

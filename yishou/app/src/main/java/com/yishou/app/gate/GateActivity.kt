@@ -231,12 +231,18 @@ class GateActivity : ComponentActivity() {
 @Composable
 private fun GateScreen(s: GateState, vm: GateViewModel, onReturn: () -> Unit, onHome: () -> Unit, onOpenWindow: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val dshBlockedReason = if (s.dshMode) DshHandoff.blockedReason(s.inWindow, s.partnerPending, s.dshNoQuestion) else null
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(if (s.isTest) "思考页（测试，不放行）" else "打开「${s.appLabel}」之前", style = MaterialTheme.typography.titleMedium)
             when {
+                dshBlockedReason != null -> {
+                    Text(dshBlockedReason)
+                    Text("回到拦截页，用那里的训练题")
+                    // 底部的“回到拦截页”只关闭本页，不把用户带进其他一手页面。
+                }
                 s.loading -> CircularProgressIndicator()
-                s.partnerPending -> {
+                !s.dshMode && s.partnerPending -> {
                     Text("上次伴读还没收线")
                     Button(onClick = { context.startActivity(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, "partner")) }) { Text("回一手收线") }
                 }
@@ -248,7 +254,7 @@ private fun GateScreen(s: GateState, vm: GateViewModel, onReturn: () -> Unit, on
                         Button(onClick = onReturn) { Text("回到「${s.appLabel}」") }
                     }
                 }
-                s.inWindow -> {
+                !s.dshMode && s.inWindow -> {
                     Text("陪练窗口进行中，先回到陪练")
                     Button(onClick = onOpenWindow) { Text("回到陪练") }
                 }

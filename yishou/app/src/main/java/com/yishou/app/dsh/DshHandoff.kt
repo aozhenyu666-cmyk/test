@@ -37,6 +37,14 @@ object DshHandoff {
         return Request(eventId, nonce, target, label, reply)
     }
 
+    /** 不能在一手拿到可回传的放行时，告诉用户为什么该回拦截页。 */
+    fun blockedReason(inWindow: Boolean, partnerPending: Boolean, onlyRecall: Boolean): String? = when {
+        inWindow -> "陪练窗口进行中，这次不能在一手答题放行"
+        partnerPending -> "上次伴读还没收线，这次不能在一手答题放行"
+        onlyRecall -> "一手现在没有可出的题（题库空、也没配模型）"
+        else -> null
+    }
+
     /** 只在已拿到放行记录后拼凭证；一次性密钥原样带回，不写日志。 */
     fun passExtras(req: Request, minutes: Int, ref: String): Map<String, Any> = linkedMapOf(
         EXTRA_VERSION to VERSION,
