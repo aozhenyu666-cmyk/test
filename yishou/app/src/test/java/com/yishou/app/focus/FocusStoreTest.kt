@@ -63,5 +63,9 @@ class FocusStoreTest {
         assertNull(store.claimRounds())
         assertNotNull(store.claimEnd())
         assertNull(FocusStore(temp.root) { now }.claimEnd())
+        store.start(plan, emptySet(), emptySet())
+        store.mark(1000L, 3, true, "下一场开始后回了上一场的通知")
+        assertEquals(1, store.history.value.last().session.doneRounds)
+        assertEquals(0, store.state.value!!.doneRounds)
     }
 }

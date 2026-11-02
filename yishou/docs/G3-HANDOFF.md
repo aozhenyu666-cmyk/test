@@ -16,7 +16,7 @@
 | 8 体检 | `GateDoctorScreen` 增加专注流当前状态，复制报告也带这一行。 |
 | 9 设置 | `FocusSettings` 和设置里的专注流一节，仅默认每组、默认休息和通讯应用；改动从下场生效。 |
 | 10 单测 | `FocusJsonTest`、`FocusStoreTest`、`FocusRuntimeTest`，包括完整往返、重启过期归档、去重、200 场上限、重启清掉退出等待、收费站放行优先级、休息拦截、零休息和换节奏。 |
-| 11 模拟器 | `FocusIntegrationTest`：拦截无题页、有放行仍拦、休息仍拦、白名单跳过收费站、退出等待离开重计、关闭主界面仍能拦截。 |
+| 11 模拟器 | `FocusIntegrationTest`：粘贴六行后从真实计划页开始、拦截无题页、有放行仍拦、休息仍拦、白名单跳过收费站、退出等待离开重计、关闭主界面仍能拦截。 |
 | 12 版本说明 | 版本号、README 顶部七条说明和本文件。 |
 
 ## 接线上的约定
@@ -32,8 +32,8 @@
 
 - 本地 `git diff --check` 通过。
 - 本地尝试 `./gradlew testMainlineDebugUnitTest`：Gradle 8.9 下载时报 `Network is unreachable`，还没进入编译；本环境也没有 Android SDK 和模拟器。
-- 单元测试、两个 APK 和模拟器结果以本分支 CI 为准，提交后补链接。不能把“用例已写”当作“用例通过”。
-- `VoiceIntegrationTest` 是任务卡已标明的主线已知失败，仍保留原用例，不跳过、不修改。
+- 第一轮单元测试和主线、岔路 APK 已通过：[构建 41376997943](https://github.com/aozhenyu666-cmyk/test/actions/runs/41376997943)。之后补了粘贴计划实机用例、末组提醒和跨场次补记测试，并同步目标分支的既有舒尔特表；最新结果和对应提交见 PR 的验收记录及[本分支 CI](https://github.com/aozhenyu666-cmyk/test/actions?query=branch%3Acodex%2Fyishou-g3-focus)。不能把“用例已写”当作“用例通过”。
+- 基础分支 `b7d798d` 的[模拟器运行 41376296178](https://github.com/aozhenyu666-cmyk/test/actions/runs/41376296178) 已核查日志：Android 14 有 `VoiceIntegrationTest` 超时；Android 10 除语音超时外，`GateQuestionsIntegrationTest.oldBankCardWithoutPointsStillGivesAQuestion` 也报“旧题库：入口弹出了但没有题”。这些原用例保留，不跳过、不修改；本次新增的失败需要另外修。
 
 ## 待确认 / 没有在这里保证的
 

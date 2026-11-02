@@ -62,7 +62,8 @@ class FocusStore(private val directory: File, private val clock: () -> Long = Sy
     }
 
     @Synchronized fun mark(startedAt: Long, round: Int, done: Boolean, note: String) {
-        val r = active() ?: _history.value.lastOrNull { it.session.startedAt == startedAt } ?: return
+        val r = active()?.takeIf { it.session.startedAt == startedAt }
+            ?: _history.value.lastOrNull { it.session.startedAt == startedAt } ?: return
         if (r.session.startedAt != startedAt || round !in FocusRuntime.completedRounds(r.session, clock())) return
         val next = r.copy(session = FocusEngine.mark(r.session, round, done, note, clock()))
         if (current != null && current!!.session.startedAt == startedAt) publish(next) else replaceHistory(next)
