@@ -40,6 +40,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yishou.app.MainActivity
+import com.yishou.app.YishouApp
+import com.yishou.app.dsh.DshHandoff
 import com.yishou.app.round.AnswerRules
 import com.yishou.app.system.Attachment
 import com.yishou.app.ui.AnswerComposer
@@ -76,23 +78,26 @@ class GateActivity : ComponentActivity() {
         startFromIntent(intent)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (vm.state.value.isTest) finish() else goHome()
+                leaveGate()
             }
         })
         setContent {
             YishouTheme {
                 val s by vm.state.collectAsStateWithLifecycle()
-                LaunchedEffect(s.passMinutes) {
-                    if (s.passMinutes != null) {
+                LaunchedEffect(s.passMinutes, s.dshMode) {
+                    if (s.passMinutes != null && !s.dshMode) {
                         delay(1_800)
                         returnToApp()
                     }
+                }
+                LaunchedEffect(s.dshSent) {
+                    if (s.dshSent) finishAndRemoveTask()
                 }
                 GateScreen(
                     s = s,
                     vm = vm,
                     onReturn = ::returnToApp,
-                    onHome = { if (s.isTest) finish() else goHome() },
+                    onHome = ::leaveGate,
                     onOpenWindow = {
                         startActivity(Intent(this, WindowActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                         finishAndRemoveTask()
@@ -126,8 +131,17 @@ class GateActivity : ComponentActivity() {
     private fun startFromIntent(intent: Intent) {
         val pkg = intent.getStringExtra(EXTRA_PACKAGE)
         val group = intent.getStringExtra(EXTRA_GROUP).orEmpty()
-        val label = pkg?.let { appLabel(it) } ?: if (group == "早上") "早上" else "测试"
-        vm.start(pkg, group, label)
+        val dsh = intent.getStringExtra(EXTRA_DSH + "_event")?.let { event ->
+            DshHandoff.Request(
+                eventId = event,
+                nonce = intent.getStringExtra(EXTRA_DSH + "_nonce").orEmpty(),
+                targetPackage = pkg.orEmpty(),
+                targetLabel = intent.getStringExtra(EXTRA_DSH + "_label").orEmpty(),
+                replyPackage = intent.getStringExtra(EXTRA_DSH + "_reply").orEmpty(),
+            )
+        }
+        val label = dsh?.targetLabel ?: pkg?.let { appLabel(it) } ?: if (group == "早上") "早上" else "测试"
+        vm.start(pkg, group, label, dsh)
     }
 
     private fun appLabel(pkg: String): String = try {
@@ -138,6 +152,10 @@ class GateActivity : ComponentActivity() {
 
     /** 回到原应用。先关掉思考页，再把原应用的任务带回前台（不会重开它）。 */
     private fun returnToApp() {
+        if (vm.state.value.dshMode) {
+            finishAndRemoveTask()
+            return
+        }
         val pkg = vm.state.value.triggerPackage
         finishAndRemoveTask()
         if (pkg != null) {
@@ -148,6 +166,14 @@ class GateActivity : ComponentActivity() {
             } catch (e: Exception) {
                 Log.w(TAG, "无法回到 $pkg", e)
             }
+        }
+    }
+
+    private fun leaveGate() {
+        when {
+            vm.state.value.dshMode -> finishAndRemoveTask()
+            vm.state.value.isTest -> finish()
+            else -> goHome()
         }
     }
 
@@ -162,6 +188,7 @@ class GateActivity : ComponentActivity() {
         private const val TAG = "GateActivity"
         private const val EXTRA_PACKAGE = "package"
         private const val EXTRA_GROUP = "group"
+        private const val EXTRA_DSH = "dsh_request"
 
         /** 开局规则拦下的应用用这个组名打开思考页：只显示“回到陪练” */
         const val WINDOW_GROUP = "__window__"
@@ -182,6 +209,16 @@ class GateActivity : ComponentActivity() {
                 .putExtra(EXTRA_GROUP, group)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
+        fun dshIntent(context: Context, req: DshHandoff.Request): Intent {
+            val group = (context.applicationContext as YishouApp)
+                .settings.app.value.groupOf(req.targetPackage) ?: DshHandoff.DSH_GROUP
+            return intent(context, req.targetPackage, group)
+                .putExtra(EXTRA_DSH + "_event", req.eventId)
+                .putExtra(EXTRA_DSH + "_nonce", req.nonce)
+                .putExtra(EXTRA_DSH + "_reply", req.replyPackage)
+                .putExtra(EXTRA_DSH + "_label", req.targetLabel)
+        }
+
         /** 权限页“测试思考页”：走一遍流程，但不发放行。 */
         fun morningIntent(context: Context): Intent = Intent(context, GateActivity::class.java)
             .putExtra(EXTRA_GROUP, "早上").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -194,20 +231,35 @@ class GateActivity : ComponentActivity() {
 @Composable
 private fun GateScreen(s: GateState, vm: GateViewModel, onReturn: () -> Unit, onHome: () -> Unit, onOpenWindow: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val dshBlockedReason = if (s.dshMode) DshHandoff.blockedReason(s.inWindow, s.partnerPending, s.dshNoQuestion) else null
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(if (s.isTest) "思考页（测试，不放行）" else "打开「${s.appLabel}」之前", style = MaterialTheme.typography.titleMedium)
             when {
+                dshBlockedReason != null -> {
+                    Text(dshBlockedReason)
+                    Text("回到拦截页，用那里的训练题")
+                    // 底部的“回到拦截页”只关闭本页，不把用户带进其他一手页面。
+                }
                 s.loading -> CircularProgressIndicator()
-                s.partnerPending -> {
+                !s.dshMode && s.partnerPending -> {
                     Text("上次伴读还没收线")
                     Button(onClick = { context.startActivity(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, "partner")) }) { Text("回一手收线") }
                 }
                 s.passMinutes != null -> {
-                    Text("放行 ${s.passMinutes} 分钟")
-                    Button(onClick = onReturn) { Text("回到「${s.appLabel}」") }
+                    if (s.dshMode) {
+                        Text(when {
+                            s.dshSent -> "过了，正在回到「${s.appLabel}」"
+                            s.error == null -> "这次放行不能交回 DSH Go，请回到拦截页"
+                            else -> "过了，请回到拦截页"
+                        })
+                        // 未发出时仍可使用底部的“回到拦截页”，不能自行打开目标应用。
+                    } else {
+                        Text("放行 ${s.passMinutes} 分钟")
+                        Button(onClick = onReturn) { Text("回到「${s.appLabel}」") }
+                    }
                 }
-                s.inWindow -> {
+                !s.dshMode && s.inWindow -> {
                     Text("陪练窗口进行中，先回到陪练")
                     Button(onClick = onOpenWindow) { Text("回到陪练") }
                 }
@@ -235,7 +287,9 @@ private fun GateScreen(s: GateState, vm: GateViewModel, onReturn: () -> Unit, on
                 }
             }
             s.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text(if (s.isTest) "关闭" else "先回桌面") }
+            OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) {
+                Text(when { s.dshMode -> "回到拦截页"; s.isTest -> "关闭"; else -> "先回桌面" })
+            }
         }
     }
 }

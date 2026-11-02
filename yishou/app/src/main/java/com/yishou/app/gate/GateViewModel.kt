@@ -9,6 +9,7 @@ import com.yishou.app.card.*
 import com.yishou.app.data.CardMode
 import com.yishou.app.data.FadeRow
 import com.yishou.app.data.ReflexRow
+import com.yishou.app.dsh.DshHandoff
 import com.yishou.app.judge.*
 import com.yishou.app.reflex.*
 import com.yishou.app.reflex.Main as GateMain
@@ -31,6 +32,7 @@ data class GateState(
     val loading: Boolean = true, val triggerPackage: String? = null, val appLabel: String = "", val group: String = "",
     val inWindow: Boolean = false, val partnerPending: Boolean = false, val followUp: String? = null,
     val exit: String = "", val passMinutes: Int? = null, val wrongInRow: Int = 0,
+    val dshMode: Boolean = false, val dshSent: Boolean = false, val dshNoQuestion: Boolean = false,
     val mode: GateMain = GateMain.LOW_ENERGY, val revision: Int = 0, val busy: Boolean = false, val error: String? = null,
 ) { val isTest get() = triggerPackage == null && group != "早上" }
 
@@ -45,6 +47,8 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
     private var operation: Job? = null
     private var generation = 0
     private var startedFor: Pair<String?, String>? = null
+    private var startedDshEventId: String? = null
+    var dsh: DshHandoff.Request? = null; private set
     private val _state = MutableStateFlow(GateState())
     val state = _state.asStateFlow()
     var probe: GateFlow? = null; private set
@@ -79,13 +83,16 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             finally { if (mine == generation) _state.update { it.copy(busy = false, loading = false, revision = it.revision + 1) } }
         }
     }
-    fun start(pkg: String?, group: String, label: String) {
-        if (startedFor == (pkg to group) && _state.value.passMinutes == null) return
+    fun start(pkg: String?, group: String, label: String, dshRequest: DshHandoff.Request? = null) {
+        // 同一事件重建页面不能重发；同一个应用的新交接必须重新开题。
+        if (startedFor == (pkg to group) && startedDshEventId == dshRequest?.eventId &&
+            (_state.value.passMinutes == null || dshRequest != null)) return
         generation++; operation?.cancel(); startedFor = pkg to group
+        startedDshEventId = dshRequest?.eventId; dsh = dshRequest
         judgeDown = false; usedThisVisit.clear(); echoChecked = false; recallTries = 0; revealedLast = false
         val prefs = yishou.settings.app.value
         val now = System.currentTimeMillis()
-        _state.value = GateState(triggerPackage = pkg, group = group, appLabel = label,
+        _state.value = GateState(triggerPackage = pkg, group = group, appLabel = label, dshMode = dshRequest != null,
             inWindow = group == GateActivity.WINDOW_GROUP || (pkg != null && WindowClock.active(now, prefs, AppZone.zone) != null),
             followUp = prefs.pendingExit.takeIf { it.isNotBlank() && now >= prefs.pendingExitAt })
         run { refreshPartnerCloseNow(); if (!_state.value.inWindow) pick() }
@@ -131,7 +138,7 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         val llm = yishou.settings.llm.value.isComplete
         val mode = GatePlan.pick(GateInput(open != null && (open.pending != null || !judgeDown), bank.isNotEmpty(),
             llm && !judgeDown, todayRefs.isNotEmpty() && recallTries < 3, _state.value.wrongInRow, freshReady = llm))
-        _state.update { it.copy(mode = mode) }
+        _state.update { it.copy(mode = mode, dshNoQuestion = it.dshMode && mode == GateMain.LOW_ENERGY) }
         when (mode) {
             GateMain.STRAND -> {
                 work.load(open!!)
@@ -241,10 +248,11 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             session.state.value.dealt?.let { usedThisVisit += it.row.id }
         }
         // 选对了就放行：说中要点是正常时长，试满才选对是低能量时长。
-        if (correct) {
-            val pass = issuer.issueRevealed(_state.value.group, session.state.value, revealedLast)
-                ?: issuer.issue(session.state.value, _state.value.group)
-            pass?.let { finishGrant(it, if (revealedLast) DayStats.LOW_PASS else DayStats.GATE_PASS) }
+        if (correct && mayGrant()) {
+            // DSH 只认真正过判卷的作答，不能用低能量放行换凭证。
+            val revealedPass = if (!_state.value.dshMode) issuer.issueRevealed(_state.value.group, session.state.value, revealedLast) else null
+            val pass = revealedPass ?: issuer.issue(session.state.value, _state.value.group)
+            pass?.let { finishGrant(it, if (revealedPass != null) DayStats.LOW_PASS else DayStats.GATE_PASS, verified = revealedPass == null) }
             if (pass == null) _state.update { it.copy(error = "这一题按记录不足以放行，重来一道。") }
         }
     }
@@ -284,13 +292,30 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
             work.acknowledge()
             issuer.issueVerified(_state.value.group, rev.verdict)
         } else issuer.issue(session.state.value, _state.value.group)
-        pass?.let { finishGrant(it, DayStats.GATE_PASS) }
+        pass?.let { finishGrant(it, DayStats.GATE_PASS, verified = true) }
     }
-    private fun finishGrant(pass: com.yishou.app.data.Pass, event: String) {
+    private fun finishGrant(pass: com.yishou.app.data.Pass, event: String, verified: Boolean) {
         yishou.stats.event(event)
         val s = _state.value
         if (s.exit.isNotBlank()) yishou.settings.updateApp { it.copy(pendingExit = s.exit.trim(), pendingExitAt = pass.endAt) }
         _state.update { it.copy(passMinutes = ((pass.endAt - pass.startAt) / 60_000L).toInt()) }
+        if (DshHandoff.shouldSend(s.dshMode, verified, s.isTest, s.group)) sendDshPass(pass)
+    }
+
+    /** 只有放行已存库的成功出口能把一次性凭证交回；失败后也不能自行打开目标应用。 */
+    private fun sendDshPass(pass: com.yishou.app.data.Pass) {
+        val req = dsh ?: return
+        val minutes = ((pass.endAt - pass.startAt) / 60_000L).toInt()
+        val extras = DshHandoff.passExtras(req, minutes, "pass:" + pass.id)
+        val intent = android.content.Intent(DshHandoff.ACTION_PASS).setPackage(req.replyPackage)
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        extras.forEach { (key, value) -> when (value) {
+            is Int -> intent.putExtra(key, value)
+            is String -> intent.putExtra(key, value)
+        } }
+        dsh = null
+        val ok = runCatching { yishou.startActivity(intent) }.isSuccess
+        _state.update { it.copy(dshSent = ok, error = if (ok) null else "没能回到 DSH Go，请回到拦截页重新开始。") }
     }
 
     private fun recalledToday(): Set<Long> = yishou.settings.app.value.let { prefs ->
@@ -322,7 +347,8 @@ class GateViewModel(app: Application) : AndroidViewModel(app) {
         // 回响只是开题前闪一屏，不单独占一次放行
         if (recallingEcho) return@run
         recallTries++
-        if (ok && mayGrant()) issuer.issueRecall(_state.value.group, r, answer)?.let { finishGrant(it, DayStats.LOW_PASS) }
+        if (ok && mayGrant() && !_state.value.dshMode) issuer.issueRecall(_state.value.group, r, answer)?.let { finishGrant(it, DayStats.LOW_PASS, verified = false) }
+        if (ok && _state.value.dshMode) recallFeedback = DshHandoff.blockedReason(false, false, onlyRecall = true)
         if (ok && _state.value.isTest) recallFeedback = "默写通过；测试页不放行"
     }
     fun nextRecall() = run {
