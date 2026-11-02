@@ -271,6 +271,8 @@ class KeepAliveService : Service() {
                     // 刚起来时无障碍服务可能还在连：先等一分钟
                     delay(60_000)
                     while (isActive) {
+                        // 心跳：醒来时发现隔了很久 → 记下是被冻结还是熄屏休眠
+                        runCatching { Pulse.beat(this@KeepAliveService) }
                         try {
                             SelfHeal.check(this@KeepAliveService)
                         } catch (e: Throwable) {

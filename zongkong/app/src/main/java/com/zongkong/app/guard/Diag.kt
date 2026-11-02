@@ -63,13 +63,15 @@ object Diag {
         val exitVerdict: String = "",
         /** 今天系统记录到的进程死亡次数。 */
         val exitsToday: Int = 0,
+        /** 今天最近一次「被冻结 / 无声被清」的说明（没有为空）。 */
+        val lastPause: String = "",
     )
 
     /** 固定的事件种类（界面和时间线按这个分好坏）。 */
     val KINDS = setOf(
         "connected", "unbound", "destroyed", "offline", "stale", "rebind_ok",
         "rebind_fail", "disabled", "bounce", "lockdown", "event_error", "watchdog",
-        "crash", "exit", "autoblock", "sentinel_on", "sentinel_off", "sentinel_takeover", "sentinel_main_back", "sentinel_wake", "released",
+        "crash", "exit", "paused", "died_silent", "autoblock", "sentinel_on", "sentinel_off", "sentinel_takeover", "sentinel_main_back", "sentinel_wake", "released",
     )
 
     private val lock = Any()
@@ -140,6 +142,7 @@ object Diag {
         var lastLostAt = 0L
         var lastLostKind = ""
         var exits = 0
+        var lastPause = ""
 
         fun closeGap(at: Long) {
             if (offAt < 0) return
@@ -175,6 +178,7 @@ object Diag {
                 "disabled" -> { disabled++; online = false; lostAt(e.at); lastLostAt = e.at; lastLostKind = e.kind }
                 "rebind_fail" -> { rebindFail++; online = false; lastLostAt = e.at }
                 "exit" -> exits++
+                "paused", "died_silent" -> { lastPause = e.detail; lostAt(e.at); closeGap(e.at) }
                 "watchdog" -> {
                     watchdog++
                     lostAt(e.at)
@@ -208,12 +212,14 @@ object Diag {
             longestGapMs = longest,
             lastLostAt = lastLostAt,
             lastLostKind = lastLostKind,
-            reasonGuess = verdict.takeIf { it.isNotBlank() && (lostCount > 0 || exits > 0 || !running) }
-                ?.let { "系统记录的真实死因：$it" }
+            reasonGuess = lastPause.takeIf { it.isNotBlank() }?.let { "今天：$it" }
+                ?: verdict.takeIf { it.isNotBlank() && (lostCount > 0 || exits > 0 || !running) }
+                    ?.let { "系统记录的真实死因：$it" }
                 ?: guessReason(enabled, running, ignoring, lastLostKind, lastLostAt, watchdog),
             eventsToday = today.size,
             exitVerdict = verdict,
             exitsToday = exits,
+            lastPause = lastPause,
         )
     }
 
@@ -241,6 +247,63 @@ object Diag {
             runCatching { dst.writeText("") }
             dst
         }
+    }
+
+    /**
+     * 打一个压缩包：日志全文（开头是手机环境和死因结论）+ ANR / 原生崩溃现场。放在缓存目录，分享或存到下载用。
+     */
+    fun exportZip(context: Context): File {
+        val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+        dir.listFiles()?.forEach { runCatching { it.delete() } }
+        val stamp = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
+            .format(java.time.LocalDateTime.now(DayClock.BEIJING))
+        val zip = File(dir, "zongkong-log-$stamp.zip")
+        val txt = export(context)
+        java.util.zip.ZipOutputStream(zip.outputStream().buffered()).use { out ->
+            fun add(name: String, f: File) {
+                if (!f.isFile) return
+                out.putNextEntry(java.util.zip.ZipEntry(name))
+                f.inputStream().use { it.copyTo(out) }
+                out.closeEntry()
+            }
+            add("眼睛日志.txt", txt)
+            ExitLog.dir(context).listFiles()?.forEach { add("现场/${it.name}", it) }
+        }
+        runCatching { txt.delete() }
+        return zip
+    }
+
+    /**
+     * 存到手机的「下载 / 总控」文件夹（文件管理里就能找到）。返回给人看的位置；存不了返回 null。
+     * Android 10 起不需要任何存储权限。
+     */
+    fun saveToDownloads(context: Context, file: File): String? {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return null
+        return try {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/zip")
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/总控")
+            }
+            val resolver = context.contentResolver
+            val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return null
+            resolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } } ?: return null
+            "下载 / 总控 / ${file.name}"
+        } catch (e: Throwable) {
+            Log.w(TAG, "存到下载失败", e)
+            null
+        }
+    }
+
+    /** 把压缩包当附件分享（微信、QQ、文件传输助手都能直接收）。 */
+    fun shareIntent(context: Context, file: File, text: String): android.content.Intent {
+        val uri = androidx.core.content.FileProvider.getUriForFile(context, "com.zongkong.app.files", file)
+        val send = android.content.Intent(android.content.Intent.ACTION_SEND)
+            .setType("application/zip")
+            .putExtra(android.content.Intent.EXTRA_STREAM, uri)
+            .putExtra(android.content.Intent.EXTRA_TEXT, text)
+            .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        return android.content.Intent.createChooser(send, "分享眼睛日志").addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
 
     /** 清空日志（文件删掉，下次写自动重建）。 */
@@ -356,6 +419,8 @@ object Diag {
         "disabled" -> "被关掉了（手动关的，或更新安装后系统把它关掉）"
         "stale" -> "开着但没在运行：系统把服务停了"
         "exit" -> "进程死了（系统记录了死因）"
+        "paused" -> "进程被冻结（没死，所以没有死因记录）"
+        "died_silent" -> "进程被清掉，系统没给死因"
         "rebind_fail" -> "自动重新挂上没成功：系统彻底不让它跑"
         else -> "记录到一次失效"
     }

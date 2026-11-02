@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <files-path name="proofs" path="proofs/" />
+    <!-- 眼睛日志导出的压缩包：分享给微信 / QQ / 文件管理时用 -->
+    <cache-path name="exports" path="exports/" />
 </paths>

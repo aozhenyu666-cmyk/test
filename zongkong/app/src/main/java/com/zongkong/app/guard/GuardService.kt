@@ -355,6 +355,7 @@ class GuardService : AccessibilityService() {
 
     /** 后台线程上的检查：到点提醒、总控者的日程、震动、眼睛。 */
     private fun background(now: Long) {
+        runCatching { com.zongkong.app.system.Pulse.beat(this, now) }
         com.zongkong.app.system.Reminders.check(this)
         com.zongkong.app.system.Buzz.tick(this)
         watch(now)

@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -54,6 +55,8 @@ private fun kindLabel(kind: String): String = when (kind) {
     "event_error" -> "事件出错"
     "watchdog" -> "看门狗"
     "exit" -> "死因"
+    "paused" -> "被冻结"
+    "died_silent" -> "无声被清"
     "crash" -> "崩溃"
     else -> kind
 }
@@ -63,7 +66,7 @@ private fun kindColor(kind: String): Color {
     val sig = LocalSignals.current
     return when (kind) {
         "connected", "rebind_ok" -> sig.free
-        "unbound", "destroyed", "offline", "stale", "disabled", "rebind_fail", "exit", "crash" -> sig.strict
+        "unbound", "destroyed", "offline", "stale", "disabled", "rebind_fail", "exit", "crash", "paused", "died_silent" -> sig.strict
         "watchdog", "event_error" -> sig.warn
         else -> sig.muted
     }
@@ -94,29 +97,32 @@ fun DiagScreen(nav: NavHostController) {
     // v2：healthy 只认「无障碍开了 + 真实 dispatcherAck 新鲜」，不看进程里的 running 布尔。
     val healthy = summary.accessibilityEnabled && summary.serviceRunning
 
+    fun brief() = buildString {
+        appendLine("总控 · 眼睛日志")
+        appendLine(
+            "无障碍设置：" + (if (summary.accessibilityEnabled) "已开启" else "关着") +
+                " · 服务：" + (if (summary.serviceRunning) "在运行" else "没在运行") +
+                " · 今天失联 ${summary.lostCount} 次，共 ${span(summary.lostTotalMs)}",
+        )
+        append("原因：${summary.reasonGuess}")
+    }
+
+    /** 存到手机的「下载 / 总控」文件夹：文件管理 → 下载 → 总控 里就能找到。 */
+    fun save() {
+        msg = try {
+            val zip = Diag.exportZip(context)
+            Diag.saveToDownloads(context, zip)?.let { "已保存到：$it（文件管理 → 下载 → 总控）" }
+                ?: "这台手机存不了下载目录，请用「分享日志文件」"
+        } catch (e: Exception) {
+            "保存失败：${e.message}"
+        }
+    }
+
+    /** 把日志压缩包当附件发出去（微信、QQ、文件传输助手）。 */
     fun share() {
         try {
-            val file = Diag.export(context)
-            val text = buildString {
-                appendLine("总控 · 眼睛日志")
-                appendLine(
-                    "无障碍设置：" + (if (summary.accessibilityEnabled) "已开启" else "关着") +
-                        " · 服务：" + (if (summary.serviceRunning) "在运行" else "没在运行") +
-                        " · 电池优化：" + (if (summary.ignoringBattery) "已忽略" else "没忽略"),
-                )
-                appendLine(
-                    "今天（${summary.date}）：接上 ${summary.connected} 次 · 失联 ${summary.lostCount} 次" +
-                        " · 共 ${span(summary.lostTotalMs)} · 最长 ${span(summary.longestGapMs)}" +
-                        " · 开着没跑 ${summary.stale} 次",
-                )
-                appendLine("原因猜测：${summary.reasonGuess}")
-                append(runCatching { com.zongkong.app.guard.ExitLog.snapshot(context) }.getOrDefault(""))
-                appendLine("导出文件：${file.absolutePath}")
-                appendLine()
-                events.forEach { appendLine("${hms(it.at)} ${it.kind} ${it.detail}") }
-            }
-            val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
-            context.startActivity(Intent.createChooser(send, "分享眼睛日志"))
+            val zip = Diag.exportZip(context)
+            context.startActivity(Diag.shareIntent(context, zip, brief()))
         } catch (e: Exception) {
             msg = "分享失败：${e.message}"
         }
@@ -192,11 +198,14 @@ fun DiagScreen(nav: NavHostController) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { nav.navigate("settings/perm") }) { Text("去权限页") }
                     OutlinedButton(onClick = { key++ }) { Text("刷新") }
-                    TextButton(onClick = { share() }) { Text("分享日志") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.material3.Button(onClick = { save() }, modifier = Modifier.testTag("diag-save")) { Text("保存到下载") }
+                    OutlinedButton(onClick = { share() }, modifier = Modifier.testTag("diag-share")) { Text("分享日志文件") }
                 }
                 TextButton(onClick = { confirmClear = true }) { Text("清空日志（确认）") }
                 msg?.let { Hint(it) }
-                Hint("日志存在手机上（filesDir/zk/diag.jsonl），只保留最近 1500 条；分享时会把文本和导出路径一起发出去。")
+                Hint("「保存到下载」会把日志打成一个压缩包，放进 文件管理 → 下载 → 总控；「分享日志文件」直接把压缩包发给微信 / QQ / DeepSeek。只保留最近 1500 条。")
             }
 
             // ---------- 事件时间线 ----------

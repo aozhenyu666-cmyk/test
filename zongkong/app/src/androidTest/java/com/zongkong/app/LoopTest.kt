@@ -396,6 +396,25 @@ class LoopTest {
         waitFor(hasText("今天"), 5_000, "底部标签")
     }
 
+    /** 眼睛日志导出：打成压缩包（里面有日志全文和手机环境），能存进「下载 / 总控」。 */
+    @Test
+    fun diagExport() {
+        com.zongkong.app.guard.Diag.log(app, "paused", "测试：进程没死，但 08:55–16:55 一动不动")
+        val zip = com.zongkong.app.guard.Diag.exportZip(app)
+        assertTrue(zip.isFile && zip.length() > 0)
+        val names = java.util.zip.ZipFile(zip).use { z -> z.entries().toList().map { it.name } }
+        assertTrue(names.toString(), "眼睛日志.txt" in names)
+        val text = java.util.zip.ZipFile(zip).use { z -> z.getInputStream(z.getEntry("眼睛日志.txt")).readBytes().decodeToString() }
+        assertTrue(text, text.contains("手机：") && text.contains("测试：进程没死"))
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            val where = com.zongkong.app.guard.Diag.saveToDownloads(app, zip)
+            assertTrue(where.toString(), where?.startsWith("下载 / 总控 / zongkong-log-") == true)
+        }
+        // 分享用的地址能生成（FileProvider 配置对）
+        val share = com.zongkong.app.guard.Diag.shareIntent(app, zip, "x")
+        assertTrue(share.toString(), share.action == Intent.ACTION_CHOOSER)
+    }
+
     /**
      * 外接大脑：同机 DSH 用 http://127.0.0.1 直连。
      * 1) 交付的 APK 里网络策略真的生效：本机放行明文，别的主机不放行；

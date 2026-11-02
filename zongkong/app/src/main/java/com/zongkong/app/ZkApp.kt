@@ -47,6 +47,9 @@ class ZkApp : Application() {
         com.zongkong.app.system.CrashShield.install(this)
         // 上次进程是怎么死的（系统记录）：写进眼睛日志，回答「为什么无障碍又无法运行了」
         com.zongkong.app.guard.ExitLog.collectAsync(this, "进程启动")
+        // 上一个进程是不是被无声清掉了（系统没给死因）：后台线程里查
+        val app = this
+        runCatching { Thread({ com.zongkong.app.system.Pulse.onProcessStart(app) }, "pulse-start").apply { isDaemon = true }.start() }
         store = Store(this)
         actions = Actions(this, store)
         chat = com.zongkong.app.data.ChatRepo(this, store, actions)
