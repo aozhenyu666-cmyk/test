@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
@@ -195,7 +196,9 @@ class GateActivity : ComponentActivity() {
 private fun GateScreen(s: GateState, vm: GateViewModel, onReturn: () -> Unit, onHome: () -> Unit, onOpenWindow: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     Surface(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().statusBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        // “先回桌面”固定在底部：题目和两个槽一长，小屏手机上它会被挤出屏幕，想走都找不到出口
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(if (s.isTest) "思考页（测试，不放行）" else "打开「${s.appLabel}」之前", style = MaterialTheme.typography.titleMedium)
             when {
                 s.loading -> CircularProgressIndicator()
@@ -235,7 +238,8 @@ private fun GateScreen(s: GateState, vm: GateViewModel, onReturn: () -> Unit, on
                 }
             }
             s.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth()) { Text(if (s.isTest) "关闭" else "先回桌面") }
+        }
+        OutlinedButton(onClick = onHome, modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) { Text(if (s.isTest) "关闭" else "先回桌面") }
         }
     }
 }
