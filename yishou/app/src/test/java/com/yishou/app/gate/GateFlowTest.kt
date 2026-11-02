@@ -61,4 +61,20 @@ class GateFlowTest {
         flow.submit(accept)
         assertTrue(flow.canSelect()); assertFalse(flow.fragment)
     }
+
+    @Test fun junkAnswersDoNotUseUpTheTwoTries() = runTest {
+        // 真判卷器：本机先挡空话，不会送到模型
+        val judge = LlmJudge { _, _ -> null }
+        var now = 0L
+        val flow = GateFlow(q) { now }; flow.shown()
+        repeat(5) {
+            now += 20_000
+            flow.edit("因为一手")
+            flow.submit(judge)
+            assertEquals(Block.EMPTY, flow.verdict?.block)
+        }
+        assertEquals(0, flow.attempts)
+        assertFalse(flow.revealed)
+        assertFalse(flow.canSelect())
+    }
 }
