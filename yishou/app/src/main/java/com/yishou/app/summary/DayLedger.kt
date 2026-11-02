@@ -4,7 +4,7 @@ import com.yishou.app.card.Card
 import com.yishou.app.data.AppDatabase
 
 /** 从各张表里把一天的账读出来（只读，不另存一份） */
-class DayLedger(private val db: AppDatabase) {
+class DayLedger(private val db: AppDatabase, private val focusHistory: () -> List<com.yishou.app.focus.FocusRun> = { emptyList() }) {
 
     suspend fun between(from: Long, to: Long): List<LedgerEntry> {
         val cardDao = db.cards()
@@ -31,6 +31,15 @@ class DayLedger(private val db: AppDatabase) {
             val s = runCatching { com.yishou.app.thread.Strand.fromJson(row.id, org.json.JSONObject(row.json)) }.getOrNull() ?: return@forEach
             s.moves.filter { it.at in from until to }.forEach { m ->
                 out += LedgerEntry(m.at, LedgerKind.THREAD, if (m.passed) LedgerMark.HIT else LedgerMark.MISS, m.ask, m.answer)
+            }
+        }
+        focusHistory().forEach { run ->
+            val s = run.session
+            val ended = s.endedAt
+            if (ended != null && ended in from until to) {
+                val minutes = (ended - s.startedAt).coerceAtLeast(0) / 60_000
+                out += LedgerEntry(ended, LedgerKind.FOCUS, LedgerMark.NONE, s.plan.task,
+                    note = "总共 $minutes 分钟 · 共 ${com.yishou.app.focus.FocusRuntime.totalRounds(s)} 组 · 做完 ${s.doneRounds} 组")
             }
         }
         return out.sortedBy { it.at }

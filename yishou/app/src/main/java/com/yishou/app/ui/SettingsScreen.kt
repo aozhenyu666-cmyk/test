@@ -112,6 +112,8 @@ fun SettingsScreen(
             }
 
             HorizontalDivider()
+            FocusSettingsSection()
+            HorizontalDivider()
             SectionTitle("早上唤起")
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("第一次解锁叫我回来", modifier = Modifier.weight(1f))

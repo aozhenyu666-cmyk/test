@@ -136,6 +136,8 @@ class MainActivity : ComponentActivity() {
                     ) { e ->
                         LiveScreen(lineId = e.arguments?.getLong("id") ?: 0L, onBack = { nav.navigateUp() })
                     }
+                    composable("focus") { com.yishou.app.ui.FocusScreen(onBack = { nav.popBackStack() }, onPlan = { nav.navigate("focus-plan") }) }
+                    composable("focus-plan") { com.yishou.app.ui.FocusPlanScreen(onBack = { nav.popBackStack() }, onStarted = { nav.navigate("focus") { popUpTo("focus-plan") { inclusive = true }; launchSingleTop = true } }) }
                     composable("assistant") { com.yishou.app.ui.AssistantScreen(onBack = { nav.popBackStack() }, onSettings = { nav.navigate("settings") }) }
                     composable("library") { com.yishou.app.ui.LibraryScreen(onBack = { nav.popBackStack() }, onRoute = { nav.navigate(it) }) }
                     composable("strand") { com.yishou.app.ui.StrandScreen(onBack = { nav.popBackStack() }) }

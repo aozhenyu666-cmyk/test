@@ -61,6 +61,14 @@
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
+        <!-- 默认通讯应用也要能确认是否安装，不读取其他应用的数据 -->
+        <package android:name="com.tencent.mm" />
+        <package android:name="com.tencent.mobileqq" />
+        <package android:name="com.android.mms" />
+        <package android:name="com.google.android.apps.messaging" />
+        <package android:name="com.android.contacts" />
+        <package android:name="com.vivo.message" />
+        <package android:name="com.android.messaging" />
     </queries>
 
     <application
@@ -174,6 +182,11 @@
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
         </service>
+
+        <service android:name=".focus.FocusService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="用户主动开始的专注计时：一组一组工作休息、切换提醒和常驻倒计时，结束即停止" />
+        </service>
+        <receiver android:name=".focus.FocusAlarmReceiver" android:exported="false" />
 
         <service
             android:name=".window.WindowService"

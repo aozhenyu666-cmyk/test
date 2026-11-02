@@ -115,7 +115,9 @@ class YishouApp : Application() {
     val pool: com.yishou.app.pool.Pool by lazy { com.yishou.app.pool.Pool(this) }
 
     /** 一天的账：各处练的每一手（总结、时之轮都看它） */
-    val dayLedger: com.yishou.app.summary.DayLedger by lazy { com.yishou.app.summary.DayLedger(database) }
+    val focus by lazy { com.yishou.app.focus.FocusStore(filesDir) }
+    val focusSettings by lazy { com.yishou.app.focus.FocusSettings(this) }
+    val dayLedger: com.yishou.app.summary.DayLedger by lazy { com.yishou.app.summary.DayLedger(database) { focus.history.value } }
 
     /** 刷着练：看屏出题用识图模型，判回答用文字模型 */
     val scrollLook: ChatClient by lazy { ChatClient(config = { settings.vision.value }, http = ChatClient.defaultHttpClient(60), usage = stats) }
@@ -363,6 +365,10 @@ class YishouApp : Application() {
         }
 
         Notifications.ensureChannels(this)
+        if (focus.active() != null || focus.history.value.any { !it.endNotified }) {
+            runCatching { com.yishou.app.focus.FocusService.start(this) }
+                .onFailure { RunLog.e("专注流", "系统暂时不允许恢复计时，请打开专注页", it) }
+        }
         partner // 恢复未收线记录，不自动启动会话或服务
         WindowScheduler.reschedule(this)
         Reminders.scheduleNudge(this)

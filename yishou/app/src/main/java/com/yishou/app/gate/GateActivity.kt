@@ -71,17 +71,24 @@ import kotlinx.coroutines.delay
 class GateActivity : ComponentActivity() {
 
     private val vm: GateViewModel by viewModels()
+    private var focusGate by androidx.compose.runtime.mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         startFromIntent(intent)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (vm.state.value.isTest) finish() else goHome()
+                if (focusGate) goHome() else if (vm.state.value.isTest) finish() else goHome()
             }
         })
         setContent {
             YishouTheme {
+                if (focusGate) {
+                    com.yishou.app.ui.FocusGate(onOpen = {
+                        startActivity(Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, "focus").addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                        finishAndRemoveTask()
+                    }, onHome = ::goHome)
+                } else {
                 val s by vm.state.collectAsStateWithLifecycle()
                 LaunchedEffect(s.passMinutes) {
                     if (s.passMinutes != null) {
@@ -99,6 +106,7 @@ class GateActivity : ComponentActivity() {
                         finishAndRemoveTask()
                     },
                 )
+                }
             }
         }
     }
@@ -116,7 +124,8 @@ class GateActivity : ComponentActivity() {
         GateTrace.init(this)
         GateTrace.log("入口页显示出来了", intent?.getStringExtra(EXTRA_PACKAGE))
         GateService.hideCover()
-        vm.refreshPartnerClose()
+        if ((application as com.yishou.app.YishouApp).focus.active() != null) focusGate = true
+        if (!focusGate) vm.refreshPartnerClose()
     }
 
     override fun onPause() {
@@ -127,6 +136,8 @@ class GateActivity : ComponentActivity() {
     private fun startFromIntent(intent: Intent) {
         val pkg = intent.getStringExtra(EXTRA_PACKAGE)
         val group = intent.getStringExtra(EXTRA_GROUP).orEmpty()
+        focusGate = group == FOCUS_GROUP || (application as com.yishou.app.YishouApp).focus.active() != null
+        if (focusGate) return
         val label = pkg?.let { appLabel(it) } ?: if (group == "早上") "早上" else "测试"
         vm.start(pkg, group, label)
     }
@@ -166,6 +177,7 @@ class GateActivity : ComponentActivity() {
 
         /** 开局规则拦下的应用用这个组名打开思考页：只显示“回到陪练” */
         const val WINDOW_GROUP = "__window__"
+        const val FOCUS_GROUP = "__focus__"
 
         /** 思考页正在前台。无障碍服务据此避免重复打开。 */
         @Volatile

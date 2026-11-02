@@ -54,7 +54,9 @@ fun GateDoctorScreen(onBack: () -> Unit, onPickApps: () -> Unit) {
     val battery = remember(tick) { PermissionStatus.batteryUnrestricted(context) }
     val overlay = remember(tick) { Settings.canDrawOverlays(context) }
     val last = GateService.lastEventAt
+    val focus = remember(tick) { app.focus.active() }
     val checks = listOf(
+        "专注流" to (focus?.let { "开着（到 ${GateTrace.stamp(it.session.endsAt)}）" } ?: "没开"),
         "关注的应用" to if (prefs.watched.isEmpty()) "✗ 一个都没选，什么都不会拦" else "✓ ${prefs.watched.size} 个",
         "无障碍开关" to if (enabled) "✓ 系统里开着" else "✗ 没开（或被系统关掉了）",
         "无障碍服务" to if (connected) "✓ 已连上" else if (enabled) "✗ 开关开着但服务没在运行：关掉再打开一次；再不行就是被系统杀了，去开自启动和后台" else "✗ 没在运行",
