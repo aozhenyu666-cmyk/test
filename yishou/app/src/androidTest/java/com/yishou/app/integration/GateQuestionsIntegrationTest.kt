@@ -65,9 +65,28 @@ class GateQuestionsIntegrationTest {
     }
 
     /** 题卡页上要看到作答按钮，而不是“没有题” */
+    /**
+     * 页面能上下滚：小屏上按钮可能在下面，要滑过去才看得见（真手机上也是滑一下）。
+     * 在限定时间里来回滑着找，找到就算有。
+     */
+    private fun onPage(sel: androidx.test.uiautomator.BySelector, timeoutMs: Long = 20_000): Boolean {
+        val end = System.currentTimeMillis() + timeoutMs
+        var down = true
+        var steps = 0
+        while (System.currentTimeMillis() < end) {
+            if (device.hasObject(sel)) return true
+            val list = device.findObject(By.scrollable(true))
+            if (list != null) {
+                val moved = list.scroll(if (down) androidx.test.uiautomator.Direction.DOWN else androidx.test.uiautomator.Direction.UP, 0.8f)
+                if (!moved || ++steps >= 6) { down = !down; steps = 0 }
+            } else Thread.sleep(300)
+        }
+        return device.hasObject(sel)
+    }
+
     private fun assertQuestionOnScreen(what: String) {
         Assert.assertTrue("$what：入口没有弹出", device.wait(Until.hasObject(By.text("打开「入口测试应用」之前")), 15_000))
-        Assert.assertTrue("$what：入口弹出了但没有题", device.wait(Until.hasObject(By.textStartsWith("交这一手")), 20_000))
+        Assert.assertTrue("$what：入口弹出了但没有题", onPage(By.textStartsWith("交这一手")))
         Assert.assertFalse("$what：显示了“没有题”", device.hasObject(By.textStartsWith("暂时没有能继续的题")))
     }
 
@@ -84,7 +103,7 @@ class GateQuestionsIntegrationTest {
             connectGate()
             RuntimeSupport.fixture()
             assertQuestionOnScreen("旧题库")
-            Assert.assertTrue(device.hasObject(By.textContains("参观者必须先完成哪项操作")))
+            Assert.assertTrue(onPage(By.textContains("参观者必须先完成哪项操作"), 10_000))
             RuntimeEvidence.capture("gate-old-bank-question")
             RuntimeSupport.find(By.text("先回桌面")).click()
             eventually { !GateActivity.isShowing }
@@ -99,7 +118,7 @@ class GateQuestionsIntegrationTest {
             connectGate()
             RuntimeSupport.fixture()
             assertQuestionOnScreen("题库是空的")
-            Assert.assertTrue(device.hasObject(By.textContains("几点出门、怎么去")))
+            Assert.assertTrue(onPage(By.textContains("几点出门、怎么去"), 10_000))
             RuntimeEvidence.capture("gate-fresh-question")
             RuntimeSupport.find(By.text("先回桌面")).click()
             eventually { !GateActivity.isShowing }
