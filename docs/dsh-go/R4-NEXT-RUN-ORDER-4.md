@@ -44,8 +44,8 @@ bash tooling/run-kernel-tests.sh                # OK (≥280 tests) + wiring OK
 
 ### H1 · 修 G2 的编译错误，并把 Android 编译变成固定步骤
 1. **先红**：新建 `tooling/compile-android.sh`，内容是
-   `cd app/android && ./gradlew --offline -Pkotlin.incremental=false :app:compileArm64DebugKotlin :app:compileX64DebugKotlin`
-   （没有 wrapper 就用本机 `gradle`，与以前 `hard-android.ps1` 的命令一致）。
+   `cd app/android && gradle --no-daemon --offline -Pkotlin.incremental=false :app:compileArm64DebugKotlin :app:compileX64DebugKotlin`
+   （仓库里没有 gradlew，用本机 `gradle`，与以前 `hard-android.ps1` 的命令一致）。
    在 `086c2e7` 上跑一次，**必须看到** `modifier 'companion' is not applicable inside 'standalone object'`，原文贴进提交说明。
 2. **再绿**：`InterceptRuntime.kt:389-392` 删掉 `private companion object { ... }`，改成在 object 体内直接写 `private const val DEBUG_FAIL_START_MARKER = "debug-fail-start"`。
 3. `run-kernel-tests.sh` 的 wiring 检查第 5 条如果依赖 companion 的写法，同步调整。
