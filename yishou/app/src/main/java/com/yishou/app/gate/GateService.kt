@@ -58,6 +58,7 @@ class GateService : AccessibilityService() {
     private var homes: Set<String> = emptySet()
 
     private var cover: GateCover? = null
+    private var focusCover = false
     private val labels = mutableMapOf<String, String>()
     private fun label(pkg: String): String = labels.getOrPut(pkg) {
         runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
@@ -158,6 +159,19 @@ class GateService : AccessibilityService() {
     }
 
     private fun check(pkg: String) {
+        val now = System.currentTimeMillis()
+        val focus = app.focus.active(now)
+        if (focus == null && focusCover) { cover?.hide(); focusCover = false }
+        when (com.yishou.app.focus.FocusRuntime.gate(focus, now, pkg, packageName, systemAllowed(), WindowRules.STATIC_SYSTEM)) {
+            com.yishou.app.focus.FocusRules.Decision.ALLOW -> { cover?.hide(); return }
+            com.yishou.app.focus.FocusRules.Decision.BLOCK -> {
+                shortCheck?.cancel(); shortPkg = null
+                GateTrace.log("专注流：不许打开", pkg)
+                launchGate(pkg, GateActivity.FOCUS_GROUP, now)
+                return
+            }
+            null -> {}
+        }
         if (app.partner.allows(pkg)) {
             GateTrace.log("不拦：伴读中，这个应用是登记的材料应用", pkg)
             shortCheck?.cancel()
@@ -165,7 +179,6 @@ class GateService : AccessibilityService() {
             return
         }
         val prefs = app.settings.app.value
-        val now = System.currentTimeMillis()
         val isSystem = pkg in systemAllowed() || pkg in WindowRules.STATIC_SYSTEM
         val isHome = pkg in homes
         if (!isSystem) lastAppPkg = pkg
@@ -212,6 +225,7 @@ class GateService : AccessibilityService() {
                 null
             }
             if (foregroundPkg != pkg) return@launch
+            if (app.focus.active() != null) { check(pkg); return@launch }
             if (pass != null) {
                 GateTrace.log("不拦：「$group」有放行，到 ${GateTrace.stamp(pass.endAt)}", pkg)
                 scheduleExpiryCheck(pass.endAt)
@@ -255,7 +269,11 @@ class GateService : AccessibilityService() {
     }
 
     private fun showCover(pkg: String, group: String) {
-        cover?.show(pkg, label(pkg)) {
+        val focus = app.focus.active()
+        if (group == GateActivity.FOCUS_GROUP && focus == null) { cover?.hide(); return }
+        focusCover = group == GateActivity.FOCUS_GROUP
+        val title = if (group == GateActivity.FOCUS_GROUP) "专注中，先回到「${focus?.session?.plan?.task.orEmpty()}」" else null
+        cover?.show(pkg, label(pkg), title = title) {
             GateTrace.log("遮罩：点了去做题", pkg)
             runCatching { startActivity(GateActivity.intent(this@GateService, pkg, group)) }
                 .onFailure { GateTrace.log("从遮罩打开入口失败：${it.javaClass.simpleName}", pkg) }
@@ -282,7 +300,7 @@ class GateService : AccessibilityService() {
                 app.settings.app.value.windowPauseUntil <= now
             ) {
                 shortPkg = null
-                launchGate(pkg, GateActivity.WINDOW_GROUP, now)
+                if (app.focus.active(now) != null) check(pkg) else launchGate(pkg, GateActivity.WINDOW_GROUP, now)
             }
         }
     }

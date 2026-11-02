@@ -54,9 +54,12 @@ class GateFlow(val question: LockedQ, private val clock: () -> Long) {
             trace = submitted
             // 判卷不在：这次不算尝试，也不放水
             if (v.unavailable) return
-            attempts++
             val action = probeAction(submitted, answer, v.passed)
             freezeUntil = if (action == ProbeAction.FREEZE_15S) clock() + 15_000L else 0
+            // 本机直接挡下的（空话、套话、照抄、粘贴）不算一次机会：
+            // 不然随手打两次“因为一手”就能把选项和标准要点换出来，再点一下拿走放行
+            if (v.block != null) return
+            attempts++
             // 探针只决定怎么问，不决定过不过
             fragment = action == ProbeAction.ASK_FRAGMENT && !v.passed
             if (v.passed) {

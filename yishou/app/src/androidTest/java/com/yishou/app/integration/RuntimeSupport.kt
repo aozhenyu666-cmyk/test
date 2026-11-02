@@ -41,6 +41,10 @@ object RuntimeSupport {
         catch (e: TimeoutCancellationException) { RuntimeEvidence.capture("timeout-${System.nanoTime()}"); throw e }
     }
     suspend fun reset() {
+        app.focus.update { s ->
+            com.yishou.app.focus.FocusEngine.quit(s.copy(quitAskedAt = System.currentTimeMillis() - com.yishou.app.focus.FocusEngine.QUIT_WAIT_MS), System.currentTimeMillis())
+        }
+        main { app.stopService(Intent(app, com.yishou.app.focus.FocusService::class.java)) }
         device.executeShellCommand("settings put secure enabled_accessibility_services ''")
         device.executeShellCommand("settings put secure accessibility_enabled 0")
         app.settings.saveLlm(LlmConfig("", "", "", false))
@@ -99,6 +103,7 @@ class RuntimeEvidence : TestWatcher() {
             val folder = File(RuntimeSupport.app.getExternalFilesDir(null), "integration-evidence").apply { mkdirs() }
             RuntimeSupport.device.takeScreenshot(File(folder, "$name.png"))
             RuntimeSupport.device.dumpWindowHierarchy(File(folder, "$name.xml"))
+            File(folder, "$name-gate-trace.txt").writeText(com.yishou.app.gate.GateTrace.export())
         }
     }
 }

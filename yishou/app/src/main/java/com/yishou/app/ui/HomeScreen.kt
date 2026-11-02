@@ -227,6 +227,8 @@ fun HomeScreen(
                 IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Settings, contentDescription = "设置") }
             }
 
+            FocusBanner { onRoute("focus") }
+
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Entry("来一手", pick?.reason ?: "从素材池接下一手", MaterialTheme.colorScheme.primary,
                     { pick?.let { onRoute(vm.go(it)) } ?: onRoute("pool") }, Modifier.weight(1f))
@@ -251,6 +253,9 @@ fun HomeScreen(
                     modifier = Modifier.weight(1f),
                 )
             }
+
+            Entry("专注流", "先排计划，再一组一组走", MaterialTheme.colorScheme.primary,
+                { onRoute(if (app.focus.active() != null) "focus" else "focus-plan") }, Modifier.fillMaxWidth())
 
             Button(onClick = { onRoute("assistant") }, modifier = Modifier.fillMaxWidth().height(54.dp)) { Text("AI 助手 · 直接聊") }
             EntertainmentGateCard(onSettings = { onRoute("watched") }, onDoctor = { onRoute("gatedoctor") })

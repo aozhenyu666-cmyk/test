@@ -28,7 +28,7 @@ class GateCover(private val service: AccessibilityService) {
 
     val showing: Boolean get() = view != null
 
-    fun show(pkg: String, label: String, onOpenGate: () -> Unit) {
+    fun show(pkg: String, label: String, title: String? = null, onOpenGate: () -> Unit) {
         if (view != null && this.pkg == pkg) return
         hide()
         this.pkg = pkg
@@ -46,8 +46,8 @@ class GateCover(private val service: AccessibilityService) {
             text = s; textSize = size; setTextColor(color); gravity = Gravity.CENTER
             setPadding(0, pad(6), 0, pad(6))
         }
-        root.addView(text("打开「$label」之前，先做一道题", 22f))
-        val st = text("一手被系统拦着弹不出来，先用这层遮罩挡住。点“去做题”。", 15f, Color.parseColor("#CCD3DA"))
+        root.addView(text(title ?: "打开「$label」之前，先做一道题", 22f))
+        val st = text(if (title != null) "先回专注页，休息也不能打开其他应用。" else "一手被系统拦着弹不出来，先用这层遮罩挡住。点“去做题”。", 15f, Color.parseColor("#CCD3DA"))
         status = st
         root.addView(st)
         fun button(s: String, onClick: () -> Unit) = Button(c).apply {
@@ -55,7 +55,7 @@ class GateCover(private val service: AccessibilityService) {
             setOnClickListener { onClick() }
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = pad(10) }
         }
-        root.addView(button("去做题") { onOpenGate() })
+        root.addView(button(if (title != null) "回到专注页" else "去做题") { onOpenGate() })
         root.addView(button("去开“后台弹出界面”权限") {
             GateTrace.log("遮罩：点了去开权限", pkg)
             hide()
