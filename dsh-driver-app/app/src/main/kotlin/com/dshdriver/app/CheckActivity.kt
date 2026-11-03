@@ -30,33 +30,22 @@ import com.dshdriver.core.Similar
  * 出题：配对了大肥鱼就请它出（8 秒内），否则用议程 / 上次结论 / 主线目标兜底（[Gate.pick]）。
  * 判卷：只认"有依据"的回答（[Gate.judge]）。
  */
-class CheckActivity : Activity() {
+abstract class QuestionActivity : Activity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var questionView: TextView
     private lateinit var feedback: TextView
     private lateinit var input: EditText
     private lateinit var submit: Button
     private var question: Gate.Question? = null
-    private var requestId: String? = null
     private var done = false
+    protected abstract fun acceptLaunch(): Boolean
+    protected abstract fun passed()
+    protected open fun giveUp() { finish() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setResult(RESULT_CANCELED)
-
-        val conditionId = intent.getStringExtra("condition_id")
-        val rid = intent.getStringExtra("request_id")
-        val caller = callingPackage
-        val curboxes = Curbox.installations(this)
-        val expected = Curbox.selected(this)
-        val valid = intent.action == Curbox.ACTION_CHECK &&
-            caller != null && caller in curboxes && (expected == null || caller == expected) &&
-            conditionId == Curbox.CONDITION_ID &&
-            rid != null && rid.isNotEmpty() && rid.length <= 100
-        log("open", mapOf("valid" to valid, "caller" to caller))
-        if (!valid) { finish(); return }
-        requestId = rid
-
+        if (!acceptLaunch()) { finish(); return }
         render()
         loadQuestion()
     }
@@ -85,7 +74,7 @@ class CheckActivity : Activity() {
         root.addView(feedback)
         submit = Button(this).apply { text = "提交"; isAllCaps = false; textSize = 18f; isEnabled = false; setOnClickListener { check() } }
         root.addView(submit)
-        root.addView(Button(this).apply { text = "不打开了"; isAllCaps = false; setOnClickListener { log("give_up"); finish() } })
+        root.addView(Button(this).apply { text = "不打开了"; isAllCaps = false; setOnClickListener { log("give_up"); giveUp() } })
         setContentView(ScrollView(this).apply { isFillViewport = true; addView(root) })
     }
 
@@ -96,11 +85,12 @@ class CheckActivity : Activity() {
             val last = store.last()
             val profile = store.profile()
             val recent = store.recentGateQuestions()
-            val fallback = Gate.pick(agenda, last?.conclusion, last?.task, profile, seed = recent.size)
+            val kind = store.nextInteractionKind()
+            val fallback = Gate.pick(agenda, last?.conclusion, last?.task, profile, seed = recent.size, kind = kind)
             var q = fallback
             store.pairing()?.let { p ->
                 val req = ComposeRequest(
-                    intent = "gate", cog = CogState(Cog.ACTIVE_FLOW, "gate"), die = null,
+                    intent = "gate", kind = kind, cog = CogState(Cog.ACTIVE_FLOW, "gate"), die = null,
                     topic = last?.topic.orEmpty(), task = last?.task.orEmpty(), minute = 1, minutes = 1,
                     breakpoint = fallback.anchor, lastQuestion = fallback.text, missing = fallback.missing,
                     recentReplies = emptyList(), asked = recent.takeLast(3),
@@ -108,13 +98,15 @@ class CheckActivity : Activity() {
                     unresolved = agenda.open().take(3).map { it.text },
                 )
                 val d = runCatching { DshLink.brain(p).compose(req) }.getOrNull()
-                if (Gate.acceptsLlm(d) && Similar.maxSimilarity(d!!.text, recent) < 0.6) {
-                    q = Gate.Question(d.text.take(80), d.anchor ?: fallback.anchor, d.missing ?: fallback.missing, fallback.agendaId, "llm")
+                if (Gate.acceptsLlm(d) && !com.dshdriver.core.Interaction.formulaic(d!!.text) && Similar.maxSimilarity(d.text, recent) < 0.6) {
+                    q = Gate.Question(com.dshdriver.core.Interaction.withMaterial(d, fallback.text.substringBefore('\n')).text.take(240), d.anchor ?: fallback.anchor, d.missing ?: fallback.missing, fallback.agendaId, "llm")
+                } else {
+                    q = Gate.pick(agenda, last?.conclusion, last?.task, profile, seed = recent.size, kind = store.nextInteractionKind())
                 }
             }
             runCatching { store.pushGateQuestion(q.text) }
             main.post {
-                if (isFinishing) return@post
+                if (isFinishing || isDestroyed) return@post
                 question = q
                 questionView.text = q.text
                 submit.isEnabled = true
@@ -142,11 +134,30 @@ class CheckActivity : Activity() {
                 Engine.store.saveAgenda(agenda)
             }
         }
-        setResult(RESULT_OK, Intent().putExtra("request_id", requestId))
-        finish()
+        passed()
     }
 
     private fun log(kind: String, data: Map<String, Any?> = emptyMap()) {
         runCatching { Engine.store.appender("gate")(mapOf("at" to System.currentTimeMillis(), "kind" to kind) + data) }
+    }
+}
+
+/** Curbox API v3 compatibility entry; all caller checks stay at this boundary. */
+class CheckActivity : QuestionActivity() {
+    private var requestId: String? = null
+    override fun acceptLaunch(): Boolean {
+        val rid = intent.getStringExtra("request_id")
+        val caller = callingPackage
+        val expected = Curbox.selected(this)
+        val valid = intent.action == Curbox.ACTION_CHECK && caller != null &&
+            caller in Curbox.installations(this) && (expected == null || caller == expected) &&
+            intent.getStringExtra("condition_id") == Curbox.CONDITION_ID &&
+            rid != null && rid.isNotEmpty() && rid.length <= 100
+        if (valid) requestId = rid
+        return valid
+    }
+    override fun passed() {
+        setResult(RESULT_OK, Intent().putExtra("request_id", requestId))
+        finish()
     }
 }

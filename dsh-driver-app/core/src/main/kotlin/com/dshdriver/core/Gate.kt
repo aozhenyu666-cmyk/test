@@ -25,20 +25,18 @@ object Gate {
 
     const val MIN_CHARS = 15
 
-    fun pick(agenda: Agenda?, lastConclusion: String?, lastTask: String?, profile: Profile, seed: Int = 0): Question {
+    fun pick(agenda: Agenda?, lastConclusion: String?, lastTask: String?, profile: Profile, seed: Int = 0, kind: String = Interaction.ALL[Math.floorMod(seed, Interaction.ALL.size)]): Question {
         agenda?.open()?.maxByOrNull { it.lastSeenAt }?.let { a ->
-            val ask = a.missing?.let { "「$it」的依据是什么？" } ?: "现在能把它讲清楚吗？说出依据。"
-            return Question("上次停在【${a.anchor}】没解决。$ask", a.anchor, a.missing, a.id, "agenda")
+            return Question("你挂着的断点：${Text.clip(a.text, 100)}\n${Interaction.question(kind)}", a.anchor, a.missing, a.id, "agenda")
         }
         if (!lastConclusion.isNullOrBlank()) {
-            val where = lastTask?.takeIf { it.isNotBlank() }?.let { "（$it）" } ?: ""
-            return Question("上次你的结论是「${Text.clip(lastConclusion, 40)}」$where。它的依据是什么？", lastTask, null, null, "conclusion")
+            return Question("你上次的结论${lastTask?.let { "（$it）" }.orEmpty()}：「${Text.clip(lastConclusion, 100)}」\n${Interaction.question(kind)}", lastTask, null, null, "conclusion")
         }
         profile.goals.takeIf { it.isNotEmpty() }?.let { goals ->
             val g = goals[Math.floorMod(seed, goals.size)]
-            return Question("离「${Text.clip(g, 30)}」最近的下一步是什么？为什么是它？", g, null, null, "goal")
+            return Question("你写下的主线：${Text.clip(g, 100)}\n${Interaction.question(kind)}", g, null, null, "goal")
         }
-        return Question("说一个你今天学到、能讲出依据的点。", null, null, null, "default")
+        return Question("你还没有保存结论、断点或主线。先选一段今天实际学过的内容。\n${Interaction.question(kind)}", null, null, null, "default")
     }
 
     fun judge(answer: String?, q: Question): Verdict {

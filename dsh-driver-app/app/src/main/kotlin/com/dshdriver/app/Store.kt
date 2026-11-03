@@ -21,6 +21,8 @@ import java.io.File
  * 写入先写 .tmp 再改名，写一半断电不会把旧文件写坏。
  */
 class Store(context: Context) {
+    private val interactionPrefs = context.getSharedPreferences("interactions", Context.MODE_PRIVATE)
+    val blocking = Blocking(context)
     private val dir = File(context.filesDir, "driver").apply { mkdirs() }
 
     data class Settings(
@@ -148,6 +150,13 @@ class Store(context: Context) {
 
     fun pushGateQuestion(q: String) = write("gate_recent.json", JSONArray((recentGateQuestions() + q).takeLast(5)).toString())
 
+    fun nextInteractionKind(): String = synchronized(INTERACTION_LOCK) {
+        val recent = interactionPrefs.getString("recent", "").orEmpty().split(',').filter(String::isNotBlank)
+        val kind = com.dshdriver.core.Interaction.pick(recent)
+        interactionPrefs.edit().putString("recent", (recent + kind).takeLast(3).joinToString(",")).apply()
+        kind
+    }
+
     // ── 推进日志 ──
     fun appender(sessionId: String): (Map<String, Any?>) -> Unit {
         val f = File(File(dir, "sessions").apply { mkdirs() }, "$sessionId.jsonl")
@@ -155,6 +164,7 @@ class Store(context: Context) {
     }
 
     companion object {
+        private val INTERACTION_LOCK = Any()
         /** Gemini（独立 App，以及 Google App 里的 Live）、ChatGPT。 */
         val DEFAULT_ANCHORS = listOf("com.google.android.apps.bard", "com.google.android.googlequicksearchbox", "com.openai.chatgpt")
     }

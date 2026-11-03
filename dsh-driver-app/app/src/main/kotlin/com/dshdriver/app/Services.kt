@@ -24,54 +24,83 @@ class DriverApp : Application() {
     override fun onCreate() {
         super.onCreate()
         Engine.init(this)
+        Protection.ensure(this)
+        Protection.schedule(this)
     }
 }
 
-/**
- * 前台记录（诊断用，0.2.0 起不再拦截）。只听"窗口换了"这一种事件；350ms 后再读一次当前活动窗口的包名复核（快速切来切去时以最后停下的为准）。
- * 只读包名和窗口类名，不读屏幕文字。
- */
+/** Window events are only acted on when the active root confirms the same package. */
 class WatchService : AccessibilityService() {
     private val main = Handler(Looper.getMainLooper())
-    private var pendingPkg: String? = null
-    private var pendingClass: String? = null
-
-    private val verify = Runnable {
-        val root = runCatching { rootInActiveWindow }.getOrNull()
-        val pkg = root?.packageName?.toString() ?: pendingPkg
-        @Suppress("DEPRECATION") runCatching { root?.recycle() }
-        // 类名只在和复核出的包一致时才可信
-        val cls = if (pkg != null && pkg == pendingPkg) pendingClass else null
-        Engine.onForeground(this, pkg, cls)
-    }
+    private val lastBlocked = mutableMapOf<String, Long>()
+    private var gatePending = false
+    private var expiry: Runnable? = null
+    private var exemptions = emptySet<String>()
 
     override fun onServiceConnected() {
         Engine.watchConnected = true
+        exemptions = Engine.store.blocking.exemptPackages()
+        Protection.startIfNeeded(this)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-        pendingPkg = event.packageName?.toString()
-        pendingClass = event.className?.toString()
-        main.removeCallbacks(verify)
-        main.postDelayed(verify, SETTLE_MS)
+        if (event == null || event.eventType !in setOf(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)) return
+        val pkg = event.packageName?.toString() ?: return
+        val root = runCatching { rootInActiveWindow }.getOrNull() ?: return
+        val active = root.packageName?.toString()
+        @Suppress("DEPRECATION") runCatching { root.recycle() }
+        if (active != pkg) return
+        Engine.onForeground(this, pkg, event.className?.toString())
+        inspect(pkg)
+    }
+
+    private fun inspect(pkg: String) {
+        expiry?.let(main::removeCallbacks)
+        expiry = null
+        val rules = Engine.store.blocking
+        val now = System.currentTimeMillis()
+        if (rules.decide(pkg, now, exemptions) == com.dshdriver.core.BlockRules.Decision.Allow) {
+            val until = rules.expiry(pkg)
+            if (rules.enabled && pkg in rules.packages && until > now) {
+                expiry = Runnable {
+                    val root = runCatching { rootInActiveWindow }.getOrNull()
+                    val active = root?.packageName?.toString()
+                    @Suppress("DEPRECATION") runCatching { root?.recycle() }
+                    if (active == pkg) inspect(pkg)
+                }.also { main.postDelayed(it, until - now) }
+            }
+            return
+        }
+        val elapsed = android.os.SystemClock.elapsedRealtime()
+        if (gatePending || elapsed - (lastBlocked[pkg] ?: -1000L) < 1000L) return
+        if (!performGlobalAction(GLOBAL_ACTION_HOME)) return
+        lastBlocked[pkg] = elapsed
+        gatePending = true
+        main.postDelayed({
+            gatePending = false
+            if (rules.decide(pkg, System.currentTimeMillis(), exemptions) == com.dshdriver.core.BlockRules.Decision.Block) {
+                runCatching { startActivity(Intent(this, GateActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                    .putExtra(GateActivity.EXTRA_PACKAGE, pkg)) }
+            }
+        }, 100L)
     }
 
     override fun onInterrupt() = Unit
-
     override fun onDestroy() {
         Engine.watchConnected = false
-        main.removeCallbacks(verify)
+        main.removeCallbacksAndMessages(null)
         super.onDestroy()
-    }
-
-    private companion object {
-        const val SETTLE_MS = 350L
     }
 }
 
 /** 陪练期间的前台服务：让系统别杀进程，并挂着音频状态监听。 */
 class LockService : Service() {
+    private val main = Handler(Looper.getMainLooper())
+    private val heartbeat = object : Runnable {
+        override fun run() { Protection.heartbeat(this@LockService); main.postDelayed(this, 30_000) }
+    }
+    override fun onCreate() { super.onCreate(); main.post(heartbeat) }
     private var signals: AudioSignals? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -91,6 +120,7 @@ class LockService : Service() {
     }
 
     override fun onDestroy() {
+        main.removeCallbacksAndMessages(null)
         signals?.stop()
         signals = null
         super.onDestroy()
