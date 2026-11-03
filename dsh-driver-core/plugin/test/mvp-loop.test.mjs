@@ -27,6 +27,7 @@ function fakeBrain() {
       return '{"kind":"one_word","text":"回到第3题：除了对称，还有哪个规律？","anchor":"第3题·第二个规律","missing":"数量"}'
     }
     if (prompt.includes('本次意图：conclude')) return null // 让结论卡走模板
+    if (prompt.includes('本次意图：open')) return '{"kind":"open","text":"第3题你现在先看的是哪个规律？","anchor":"第3题·先看哪个规律"}'
     return '{"kind":"one_word","text":"对称之外，黑点数量怎么变？","anchor":"第3题·黑点数量","missing":"递增"}'
   }
   return { brain, seen }

@@ -36,4 +36,23 @@ class DriverReflexTest {
         l.selfSpeaking = true
         assertEquals(listOf<LiveInference.Change>(LiveInference.Change.Live(true)), l.onAudio(true, true, 11_000), "自己的 TTS 不算 Gemini 在说")
     }
+
+    @Test fun nonActivityWindowsDoNotCountAsEscape() {
+        val j = { cls: String? -> DriverReflex.judge("tv.danmaku.bili", true, anchors, "io.github.ccch1mneyyy.dsh_app", emptySet(), cls) }
+        assertEquals(Verdict.Ignore, j("android.widget.Toast\$TN"), "Toast 不算切走")
+        assertEquals(Verdict.Ignore, j("android.app.Dialog"), "系统弹窗不算切走")
+        assertEquals(Verdict.Ignore, j("com.sohu.inputmethod.sogou.SogouIME"), "输入法不算切走")
+        assertEquals(Verdict.Ignore, j("androidx.appcompat.app.AlertDialog"))
+        assertEquals(Verdict.Escape("tv.danmaku.bili"), j("tv.danmaku.bili.MainActivityV2"), "真的 Activity 照样拦")
+        assertEquals(Verdict.Escape("tv.danmaku.bili"), j(null), "不给类名时只看包名")
+    }
+    @Test fun stoppedSpeakingEdgeNeedsMinimumSpeech() {
+        val l = LiveInference(liveGoneMs = 8_000, minSpeechMs = 1_500)
+        l.onAudio(true, false, 0)
+        assertEquals(listOf<LiveInference.Change>(LiveInference.Change.AssistantStartedSpeaking), l.onAudio(true, true, 1_000))
+        assertTrue(l.onAudio(true, false, 1_800).isEmpty(), "只说了 0.8 秒：不算说完一段")
+        l.onAudio(true, true, 3_000)
+        assertEquals(listOf<LiveInference.Change>(LiveInference.Change.AssistantStoppedSpeaking), l.onAudio(true, false, 6_000))
+        assertTrue(l.onAudio(true, false, 7_000).isEmpty(), "已经停了不重复报")
+    }
 }

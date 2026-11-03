@@ -23,6 +23,8 @@ export function driverPrompt(ctx, { intent = 'probe' } = {}) {
 - 缺的那个依据：${s.missing ?? '（未知，自己判断）'}
 - 他最近的回复：
 ${list(s.recentReplies)}
+- 最近已经问过（别再问一样的，换个角度或往前推一格）：
+${list(s.asked)}
 
 ## 隐秘层：他没说出口、但你必须知道的
 - 近期主线：
@@ -33,6 +35,8 @@ ${list(h.habits)}
 ${list(h.memories)}
 - 行为规律：
 ${list(h.patterns)}
+- 以前没解决、还挂着的：
+${list(h.unresolved)}
 
 ## 驾驶决策
 - 当前带宽水位：${g.state}（判据：${g.reason}）

@@ -36,20 +36,42 @@ object DriverReflex {
         "android",
     )
 
+    /**
+     * @param className 这次窗口事件的类名（`AccessibilityEvent.className`）。给了且不像一个 Activity 窗口
+     *   （弹窗、Toast、输入法、`android.widget.*` 等）就不做判断——这些短暂窗口不代表你切走了。
+     *   不给（null）时只看包名，行为和以前一样。
+     */
     fun judge(
         packageName: String?,
         locked: Boolean,
         anchors: Set<String>,
         selfPackage: String,
         inputMethods: Set<String>,
+        className: String? = null,
     ): Verdict {
         if (!locked || packageName.isNullOrBlank()) return Verdict.Ignore
+        if (className != null && !isActivityWindowClass(className)) return Verdict.Ignore
         if (packageName in anchors) return Verdict.Allow(packageName, anchor = true)
         if (packageName == selfPackage || packageName in inputMethods || packageName in ALWAYS_ALLOWED) {
             return Verdict.Allow(packageName, anchor = false)
         }
         return Verdict.Escape(packageName)
     }
+
+    /**
+     * 这个窗口类名像不像一个真正的 Activity。规则思路来自 closepaw 的 OverlayLocationPolicy（Apache-2.0），
+     * 按本项目重写：系统控件包、androidx、输入法一律不算；没有包名的类名也不算。
+     */
+    fun isActivityWindowClass(className: String?): Boolean {
+        val name = className?.substringBefore('$')?.takeIf { it.isNotBlank() } ?: return false
+        if (NON_ACTIVITY_PREFIXES.any { name.startsWith(it) }) return false
+        if (name.contains("inputmethod", ignoreCase = true)) return false
+        return name.contains('.')
+    }
+
+    private val NON_ACTIVITY_PREFIXES = listOf(
+        "android.widget.", "android.view.", "android.app.", "android.inputmethodservice.", "androidx.",
+    )
 }
 
 /**
@@ -62,16 +84,19 @@ object DriverReflex {
  *
  * 这些推断都还没有真机证据（见 docs/02 的"待真机核实"），所以插件把 liveActive=null 当"不知道"，不当逃逸。
  */
-class LiveInference(private val liveGoneMs: Long = 8_000L) {
+class LiveInference(private val liveGoneMs: Long = 8_000L, private val minSpeechMs: Long = 1_500L) {
     sealed interface Change {
         data class Live(val active: Boolean) : Change
         data object AssistantStartedSpeaking : Change
+        /** 说完一段（说了至少 minSpeechMs）。插件据此开"轮到你"窗口。 */
+        data object AssistantStoppedSpeaking : Change
     }
 
     var selfSpeaking: Boolean = false
     private var recording = false
     private var lastRecordingAt = 0L
     private var playing = false
+    private var playingSince = 0L
     private var reportedLive: Boolean? = null
 
     fun onAudio(recordingNow: Boolean, assistantPlayingNow: Boolean, now: Long): List<Change> {
@@ -79,7 +104,11 @@ class LiveInference(private val liveGoneMs: Long = 8_000L) {
         if (recordingNow) lastRecordingAt = now
         recording = recordingNow
         val speaking = assistantPlayingNow && !selfSpeaking
-        if (speaking && !playing) out += Change.AssistantStartedSpeaking
+        if (speaking && !playing) {
+            out += Change.AssistantStartedSpeaking
+            playingSince = now
+        }
+        if (!speaking && playing && now - playingSince >= minSpeechMs) out += Change.AssistantStoppedSpeaking
         playing = speaking
         out += poll(now)
         return out

@@ -71,6 +71,8 @@ const STEERING = {
  * @param {Array} s.memories fish-memory 等的记忆
  * @param {{goals?:string[], habits?:string[]}} s.profile 你自己写的主线和死穴
  * @param {object} s.history 跨会话统计
+ * @param {string[]} [s.asked] 最近真正问过的话（防重复）
+ * @param {string[]} [s.unresolved] 议程里还没解决的事
  */
 export function synthesize(s) {
   const surface = {
@@ -82,12 +84,14 @@ export function synthesize(s) {
     lastQuestion: s.lastCard ? clip(s.lastCard.text, 80) : null,
     recentReplies: (s.recentReplies ?? []).slice(-3).map((r) => clip(r.text, 40)),
     missing: s.lastCard?.missing ?? null,
+    asked: (s.asked ?? []).slice(-3).map((t) => clip(t, 40)),
   }
   const hidden = {
     goals: (s.profile?.goals ?? []).slice(0, 3),
     habits: (s.profile?.habits ?? []).slice(0, 4),
     memories: pickMemories(s.memories, s.session).map((m) => clip(m.text, 60)),
     patterns: patternsOf(s.history),
+    unresolved: (s.unresolved ?? []).slice(0, 3).map((t) => clip(t, 50)),
   }
   const st = STEERING[s.cog.state]
   const steering = { state: s.cog.state, reason: s.cog.reason, action: st.action, rule: st.rule, die: s.die ?? null }

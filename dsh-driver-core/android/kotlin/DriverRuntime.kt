@@ -78,12 +78,12 @@ object DriverRuntime {
 
     // ───────────── 反射 ─────────────
 
-    fun onForeground(context: Context, pkg: String?) {
+    fun onForeground(context: Context, pkg: String?, className: String? = null) {
         if (!::app.isInitialized) return
         val imes = runCatching {
             context.getSystemService(InputMethodManager::class.java)?.enabledInputMethodList?.map { it.packageName }?.toSet()
         }.getOrNull().orEmpty()
-        when (val v = DriverReflex.judge(pkg, locked && !paused, anchors, app.packageName, imes)) {
+        when (val v = DriverReflex.judge(pkg, locked && !paused, anchors, app.packageName, imes, className)) {
             DriverReflex.Verdict.Ignore -> Unit
             is DriverReflex.Verdict.Allow -> {
                 if (v.anchor) anchorPkg = v.packageName
@@ -114,6 +114,7 @@ object DriverRuntime {
     private fun emit(c: LiveInference.Change) = when (c) {
         is LiveInference.Change.Live -> send("live", mapOf("active" to c.active))
         LiveInference.Change.AssistantStartedSpeaking -> send("audio", mapOf("assistantSpeaking" to true))
+        LiveInference.Change.AssistantStoppedSpeaking -> send("audio", mapOf("assistantSpeaking" to false))
     }
 
     // ───────────── 指令 ─────────────

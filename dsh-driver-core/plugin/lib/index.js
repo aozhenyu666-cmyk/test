@@ -7,12 +7,15 @@
 //   GET  /dsh-driver-core/v1/status                                        配置、出题会话计数、当前主线
 //   POST /dsh-driver-core/v1/config    {brainSessionId?, memorySessionIds?, anchors?}
 //   POST /dsh-driver-core/v1/profile   {goals?, habits?}                   你的主线目标和惯性死穴
+//   GET  /dsh-driver-core/v1/agenda                                        思考议程（没解决的断点）
+//   audio 信号：{assistantSpeaking:true} = Gemini 开始说话；false = 停止（说够久就开"轮到你"窗口）
 //
 // 所有路由要求和 /api 一样的凭据（connection.requestRejection），插件自注册的路由不会自动鉴权。
 // 零依赖 ESM，可以按绝对路径加载。
 
 import { randomUUID } from 'node:crypto'
 import { AgentBrain, SOURCE_KIND } from './brain.js'
+import { Agenda } from './core/agenda.js'
 import { Driver, PHASE } from './core/driver.js'
 import { makeStore } from './store.js'
 
@@ -88,6 +91,7 @@ export function createService({ store, brain, now = () => Date.now(), newSession
       store.saveProfile(next)
       return next
     },
+    agenda() { return store.loadAgenda?.() ?? [] },
     async start(body) {
       if (active && active.driver.s.phase !== PHASE.ENDED) return { status: 409, body: { v: 1, error: { code: 'session-active', message: '已有一条进行中的主线' }, sessionId: active.id } }
       const id = newSessionId()
@@ -96,6 +100,8 @@ export function createService({ store, brain, now = () => Date.now(), newSession
         hidden: { memories: store.loadFishMemories(config.memorySessionIds), profile: store.loadProfile(), history: store.loadHistory() },
         append: store.appender(id),
         saveHistory: (h) => store.saveHistory(h),
+        agenda: new Agenda(store.loadAgenda?.() ?? []),
+        saveAgenda: (items) => store.saveAgenda?.(items),
       })
       active = { id, driver }
       sessions.set(id, driver)
@@ -116,7 +122,11 @@ export function createService({ store, brain, now = () => Date.now(), newSession
       switch (kind) {
         case 'foreground': p = driver.foreground({ at, pkg: String(body.pkg ?? ''), allowed: typeof body.allowed === 'boolean' ? body.allowed : undefined }); break
         case 'live': p = driver.live({ at, active: body.active === true ? true : body.active === false ? false : null }); break
-        case 'audio': p = driver.audio({ at, assistantSpeaking: body.assistantSpeaking === true }); break
+        case 'audio': {
+          if (typeof body.assistantSpeaking !== 'boolean') return { status: 400, body: { v: 1, error: { code: 'bad-audio', message: 'assistantSpeaking' } } }
+          p = driver.audio({ at, assistantSpeaking: body.assistantSpeaking })
+          break
+        }
         case 'surface': p = driver.surface({ at, cardId: String(body.cardId ?? ''), status: String(body.status ?? ''), via: String(body.via ?? 'page').slice(0, 20) }); break
         case 'reply': p = driver.reply({ at, cardId: String(body.cardId ?? ''), text: String(body.text ?? '').slice(0, 500), choice: body.choice === 'A' || body.choice === 'B' ? body.choice : undefined, channel: String(body.channel ?? 'tap').slice(0, 20) }); break
         case 'pause': p = driver.pause({ at, minutes: body.minutes, reason: String(body.reason ?? '').slice(0, 80) }); break
@@ -201,6 +211,7 @@ export function apply(ctx) {
           return send(res, r.status, r.body)
         }
         if (path === '/state') { const r = svc.state(sid); return send(res, r.status, r.body) }
+        if (path === '/agenda') return send(res, 200, { v: 1, agenda: svc.agenda() })
         if (path === '/status') {
           return send(res, 200, { v: 1, config: svc.config, active: svc.active ? { sessionId: svc.active.id, phase: svc.active.driver.s.phase } : null, brain: brain.counters })
         }
