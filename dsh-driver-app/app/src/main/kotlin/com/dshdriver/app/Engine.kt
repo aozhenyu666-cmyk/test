@@ -74,7 +74,9 @@ object Engine {
         val id = UUID.randomUUID().toString()
         val append = store.appender(id)
         val sink: (Map<String, Any?>) -> Unit = { row -> runCatching { append(row) } }
-        val d = Driver(profile = store.profile(), history = store.history(), agenda = store.agenda(), sink = sink)
+        // 配对了 DSH Go 就请大肥鱼出题（拿不到时驾驶员自己用模板）
+        val brain = store.pairing()?.let(DshLink::brain)
+        val d = Driver(brain = brain, profile = store.profile(), history = store.history(), agenda = store.agenda(), sink = sink)
         driver = d
         sessionId = id
         allowed = (settings.anchors + settings.extraAllowed).toSet()
@@ -164,6 +166,11 @@ object Engine {
             d.agenda?.let { store.saveAgenda(it) }
             store.saveLast(Store.Last(end.at, end.reason ?: "", end.conclusion, end.summary ?: snap.summary, snap.topic, snap.task))
         }.onFailure { Log.w(TAG, "saving session failed", it) }
+        // 配对了就把这次的结果交给大肥鱼存档（失败不影响什么）
+        val pairing = store.pairing()
+        val last = store.last()
+        val agenda = d.agenda
+        if (pairing != null && last != null && agenda != null) Thread { runCatching { DshLink.report(pairing, last, agenda) } }.start()
         reflexArmed = false
         worker.removeCallbacks(ticker)
         main.post {

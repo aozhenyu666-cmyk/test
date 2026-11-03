@@ -3,6 +3,8 @@ package com.dshdriver.app
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -21,6 +23,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import com.dshdriver.core.Phase
 import com.dshdriver.core.Profile
 
@@ -32,6 +35,10 @@ class MainActivity : Activity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var body: LinearLayout
     private val dp get() = resources.displayMetrics.density
+
+    /** 上一次检查连接的结果（后台线程查，主线程显示）。 */
+    @Volatile private var ping: DshLink.Ping? = null
+    @Volatile private var pinging = false
 
     private val refresher = object : Runnable {
         override fun run() {
@@ -57,6 +64,7 @@ class MainActivity : Activity() {
         Engine.onChange = { render(); if (Engine.locked) { main.removeCallbacks(refresher); main.post(refresher) } }
         main.removeCallbacks(refresher)
         main.post(refresher)
+        checkLink()
     }
 
     override fun onPause() {
@@ -132,6 +140,8 @@ class MainActivity : Activity() {
             main.postDelayed({ Engine.relaunchAnchor(this) }, 600)
         }
 
+        renderLink()
+
         store.last()?.let { l ->
             section("上一次")
             val how = when {
@@ -165,6 +175,67 @@ class MainActivity : Activity() {
         section("隐私")
         note("只读当前前台应用的包名和窗口类型，不读屏幕文字、不录音。数据只存在本机 APP 目录里。")
     }
+
+    // ───────────── 连接大肥鱼（DSH Go） ─────────────
+
+    private fun renderLink() {
+        val store = Engine.store
+        section("连接大肥鱼（DSH Go）")
+        val pairing = store.pairing()
+        if (pairing == null) {
+            note("连上之后，追问会由大肥鱼结合它的记忆来写；不连也能用，追问用模板。")
+            line("① 点下面按钮复制安装说明，发给大肥鱼。它会自己装好插件，告诉你一个配对码。")
+            button("复制给大肥鱼的安装说明") {
+                getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("安装说明", Install.TEXT))
+                toast("已复制。打开 DSH Go，粘贴发给大肥鱼。")
+            }
+            line("② 把大肥鱼告诉你的配对码填在这里：")
+            val code = input("配对码（例：3080:K7PQ-M3XA）")
+            button("配对") {
+                val text = code.text.toString()
+                Thread {
+                    val r = DshLink.pair(text, Build.MODEL ?: "phone")
+                    r.onSuccess { store.savePairing(it) }
+                    main.post {
+                        toast(r.fold({ "配对成功" }, { it.message ?: "配对失败" }))
+                        render()
+                        checkLink()
+                    }
+                }.start()
+            }
+            return
+        }
+        val p = ping
+        when {
+            pinging && p == null -> line("正在检查连接…")
+            p == null -> line("已配对（端口 ${pairing.port}）")
+            !p.ok -> line("⚠ ${p.error}")
+            else -> {
+                line("✓ 已连上大肥鱼｜它的记忆 ${p.memories} 条")
+                if (!p.brainConfigured) line("⚠ 还没指定出题的对话：在 DSH Go 里打开你想让它出题的那个对话，说一句「驾驶员就用这个会话」。")
+                else line("✓ 出题对话已指定")
+            }
+        }
+        button("检查连接") { checkLink() }
+        button("解除配对") {
+            AlertDialog.Builder(this).setTitle("解除和大肥鱼的配对？").setMessage("之后追问改用模板。要再连，需要让大肥鱼重新生成配对码。")
+                .setPositiveButton("解除") { _, _ -> store.clearPairing(); ping = null; render() }.setNegativeButton("取消", null).show()
+        }
+    }
+
+    private fun checkLink() {
+        val pairing = Engine.store.pairing() ?: return
+        if (pinging) return
+        pinging = true
+        Thread {
+            val r = DshLink.ping(pairing)
+            ping = r
+            pinging = false
+            main.post { if (!Engine.locked) render() }
+        }.start()
+    }
+
+    private fun toast(t: String) = Toast.makeText(this, t, Toast.LENGTH_LONG).show()
 
     // ───────────── 小部件 ─────────────
 

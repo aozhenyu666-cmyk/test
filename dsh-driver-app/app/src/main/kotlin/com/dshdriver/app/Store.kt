@@ -126,6 +126,18 @@ class Store(context: Context) {
             .put("summary", sum).put("topic", l.topic).put("task", l.task).toString(2))
     }
 
+    // ── 和 DSH Go 的配对（令牌只存在 APP 私有目录） ──
+    fun pairing(): DshLink.Pairing? {
+        val o = read("pairing.json") ?: return null
+        val token = o.optString("token")
+        val port = o.optInt("port", 0)
+        return if (token.length >= 32 && port in 1..65535) DshLink.Pairing(port, token) else null
+    }
+
+    fun savePairing(p: DshLink.Pairing) = write("pairing.json", JSONObject().put("port", p.port).put("token", p.token).toString())
+
+    fun clearPairing() { File(dir, "pairing.json").delete() }
+
     // ── 推进日志 ──
     fun appender(sessionId: String): (Map<String, Any?>) -> Unit {
         val f = File(File(dir, "sessions").apply { mkdirs() }, "$sessionId.jsonl")

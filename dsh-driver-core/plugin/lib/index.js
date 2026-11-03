@@ -10,13 +10,19 @@
 //   GET  /dsh-driver-core/v1/agenda                                        思考议程（没解决的断点）
 //   audio 信号：{assistantSpeaking:true} = Gemini 开始说话；false = 停止（说够久就开"轮到你"窗口）
 //
-// 所有路由要求和 /api 一样的凭据（connection.requestRejection），插件自注册的路由不会自动鉴权。
-// 零依赖 ESM，可以按绝对路径加载。
+// 以上路由要求和 /api 一样的凭据（connection.requestRejection），插件自注册的路由不会自动鉴权。
+//
+// 「思维驾驶员」APP 用的 /app/* 路由走配对令牌（见 lib/pairing.js、lib/app-routes.js）：
+//   POST /app/pair  GET /app/ping  POST /app/compose  POST /app/report
+// 在任意会话里说"驾驶员就用这个会话"，那个会话就成为出题会话。
+// 零依赖 ESM。
 
 import { randomUUID } from 'node:crypto'
+import { createAppService, CLAIM_PHRASE } from './app-routes.js'
 import { AgentBrain, SOURCE_KIND } from './brain.js'
 import { Agenda } from './core/agenda.js'
 import { Driver, PHASE } from './core/driver.js'
+import { appRejection, Pairing } from './pairing.js'
 import { makeStore } from './store.js'
 
 export const name = 'dsh-driver-core'
@@ -59,6 +65,14 @@ const strs = (v, max = 12, len = 120) => Array.isArray(v) ? v.filter((x) => type
 
 /** 手机和插件在同一台设备上，时钟一致；离谱的时间戳一律换成现在。 */
 const atOf = (v, now) => (Number.isFinite(v) && Math.abs(v - now) <= 60_000 ? v : now)
+
+/** 一条 user/message 的文字（我们自己发的驾驶员消息不算）。 */
+export function userText(event) {
+  if (event?.type !== 'user/message') return ''
+  const m = event.data
+  if (m?.source?.kind === SOURCE_KIND) return ''
+  return Array.isArray(m?.content) ? m.content.filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('') : ''
+}
 
 export function createService({ store, brain, now = () => Date.now(), newSessionId = () => randomUUID() }) {
   let config = { anchors: DEFAULT_ANCHORS, memorySessionIds: [], ...store.loadConfig() }
@@ -169,8 +183,16 @@ export function apply(ctx) {
     sessionId: () => svc?.config.brainSessionId,
   })
   svc = createService({ store, brain })
+  const pairing = new Pairing()
+  const app = createAppService({ store, pairing, brain, getConfig: () => svc.config })
 
-  ctx.on('session/event', (session, event) => { try { brain.onSessionEvent(session?.id, event) } catch { /* 不打扰会话 */ } })
+  ctx.on('session/event', (session, event) => {
+    try { brain.onSessionEvent(session?.id, event) } catch { /* 不打扰会话 */ }
+    // 你在某个会话里说"驾驶员就用这个会话"：记下它作为出题会话
+    try {
+      if (session?.id && CLAIM_PHRASE.test(userText(event)) && svc.config.brainSessionId !== session.id) svc.setConfig({ brainSessionId: session.id })
+    } catch { /* ignore */ }
+  })
   ctx.on('tools/pre-execute', (exec, next) => {
     let denied
     try { denied = brain.guardTool(exec?.agent?.id ?? exec?.agent?.session?.id) } catch { denied = undefined }
@@ -187,7 +209,26 @@ export function apply(ctx) {
     return connection === undefined ? 503 : connection.requestRejection(req)
   }
 
+  const appHandler = async (req, res, path) => {
+    const denied = appRejection(req, pairing, { needToken: path !== '/app/pair' })
+    if (denied !== undefined) { res.writeHead(denied, { 'cache-control': 'no-store' }); res.end(); return }
+    if (req.method === 'GET' && path === '/app/ping') { const r = app.ping(); return send(res, r.status, r.body) }
+    if (req.method !== 'POST') return send(res, 405, { v: 1, error: { code: 'method' } })
+    const body = await readJson(req)
+    if (body.error) return send(res, body.error, { v: 1, error: { code: 'bad-body' } })
+    let r
+    if (path === '/app/pair') r = app.pair(body.value)
+    else if (path === '/app/compose') r = await app.compose(body.value)
+    else if (path === '/app/report') r = app.report(body.value)
+    else r = { status: 404, body: { v: 1, error: { code: 'not-found' } } }
+    return send(res, r.status, r.body)
+  }
+
   const handler = async (req, res) => {
+    const appPath = new URL(req.url, 'http://local').pathname.slice(PREFIX.length)
+    if (appPath.startsWith('/app/')) {
+      try { return await appHandler(req, res, appPath) } catch (e) { return send(res, 500, { v: 1, error: { code: 'plugin-error', message: String(e?.message ?? e) } }) }
+    }
     const denied = rejection(req)
     if (denied !== undefined) { res.writeHead(denied, { 'cache-control': 'no-store' }); res.end(); return }
     const url = new URL(req.url, 'http://local')

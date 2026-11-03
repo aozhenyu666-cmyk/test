@@ -6,7 +6,7 @@
 //   storages/dsh-driver-core/sessions/<id>.jsonl  每次锁定的推进日志
 // fish-memory 的库只读：fish-memory/session-<sid>.json，不写、不改。
 
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -41,6 +41,16 @@ export function makeStore(h = home()) {
       const p = join(d, 'sessions', `${sessionId}.jsonl`)
       mkdirSync(join(p, '..'), { recursive: true })
       return (row) => appendFileSync(p, JSON.stringify(row) + '\n')
+    },
+    /** 本机所有 fish-memory 库对应的会话（没指定记忆来源时就全读：都是你自己的记忆）。 */
+    listFishMemorySessions: () => {
+      try { return readdirSync(join(h, 'fish-memory')).filter((f) => /^session-.+\.json$/.test(f)).map((f) => f.slice(0, -5)) } catch { return [] }
+    },
+    /** APP 每次锁定结束后的报告，一行一条，给大肥鱼回顾用。 */
+    appendReport: (row) => {
+      const p = join(d, 'reports.jsonl')
+      mkdirSync(join(p, '..'), { recursive: true })
+      appendFileSync(p, JSON.stringify(row) + '\n')
     },
     /** 读 fish-memory 1.4.x 的库（schema v2：{memories:[{text, at, tags, category, importance}]}）。 */
     loadFishMemories: (sessionIds = []) => {

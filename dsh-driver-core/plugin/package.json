@@ -1,13 +1,32 @@
 {
   "name": "dsh-driver-core",
   "version": "0.1.0",
-  "description": "DSH host plugin: cognitive driver + escape gatekeeper for a locked 15-minute thinking session alongside Gemini Live / GPT Live.",
+  "description": "DSH host plugin for the 思维驾驶员 app: pairs with the app over a local token, composes driver questions with the agent's model and fish-memory, and keeps session reports.",
   "type": "module",
   "main": "lib/index.js",
-  "exports": { ".": "./lib/index.js", "./core": "./lib/core/driver.js", "./package.json": "./package.json" },
-  "files": ["lib/", "cordis.patch.yml"],
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
-  "engines": { "node": ">=20" },
-  "scripts": { "test": "node --test test/*.test.mjs", "simulate": "node bin/simulate.mjs" },
-  "license": "AGPL-3.0-only"
+  "exports": {
+    ".": "./lib/index.js",
+    "./core": "./lib/core/driver.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/",
+    "bin/",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=20",
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "simulate": "node bin/simulate.mjs"
+  },
+  "license": "AGPL-3.0-only",
+  "private": true
 }

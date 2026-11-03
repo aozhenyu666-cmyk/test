@@ -42,7 +42,7 @@ export function patternsOf(history = {}) {
   return out
 }
 
-const STEERING = {
+export const STEERING = {
   [COG.ACTIVE_FLOW]: {
     action: 'push',
     rule: '他在推进。追问下一步或要一个依据，一句话，问题要具体到能用一句话答。',
@@ -95,5 +95,38 @@ export function synthesize(s) {
   }
   const st = STEERING[s.cog.state]
   const steering = { state: s.cog.state, reason: s.cog.reason, action: st.action, rule: st.rule, die: s.die ?? null }
+  return { surface, hidden, steering }
+}
+
+const COGS = new Set(Object.values(COG))
+const strs = (v, max, len) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, max).map((x) => clip(x, len)) : [])
+
+/**
+ * 「思维驾驶员」APP 发来的出题请求 → 三层上下文。APP 只给事实（它看不到记忆），
+ * 记忆在这里从 fish-memory 补上。字段与 APP 的 ComposeRequest 一一对应，不认识的忽略。
+ */
+export function fromAppRequest(r = {}, memories = []) {
+  const state = COGS.has(r.cog?.state) ? r.cog.state : COG.ACTIVE_FLOW
+  const session = { topic: clip(r.topic, 40), task: clip(r.task, 60) }
+  const surface = {
+    topic: session.topic,
+    task: session.task,
+    minute: Number.isFinite(r.minute) ? r.minute : 1,
+    minutes: Number.isFinite(r.minutes) ? r.minutes : 15,
+    breakpoint: r.breakpoint ? clip(r.breakpoint, 40) : null,
+    lastQuestion: r.lastQuestion ? clip(r.lastQuestion, 80) : null,
+    recentReplies: strs(r.recentReplies, 3, 40),
+    missing: r.missing ? clip(r.missing, 30) : null,
+    asked: strs(r.asked, 3, 40),
+  }
+  const hidden = {
+    goals: strs(r.goals, 3, 60),
+    habits: strs(r.habits, 4, 60),
+    memories: pickMemories(memories, session).map((m) => clip(m.text, 60)),
+    patterns: strs(r.patterns, 4, 80),
+    unresolved: strs(r.unresolved, 3, 50),
+  }
+  const st = STEERING[state]
+  const steering = { state, reason: clip(r.cog?.reason ?? '', 30), action: st.action, rule: st.rule, die: typeof r.die === 'string' ? clip(r.die, 4) : null }
   return { surface, hidden, steering }
 }
