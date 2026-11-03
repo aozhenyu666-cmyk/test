@@ -31,9 +31,10 @@ object Protection {
         startIfNeeded(c)
     }
     @Synchronized fun ensure(c: Context): Boolean {
-        if (!enabled(c) || !canWrite(c)) return false
+        if (!enabled(c)) return false
+        if (!canWrite(c)) { warn(c); return false }
         return runCatching {
-            if (isEnabled(c)) return@runCatching true
+            if (isEnabled(c)) { c.getSystemService(NotificationManager::class.java).cancel(4); return@runCatching true }
             val cr = c.contentResolver
             val me = component(c)
             val cur = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
@@ -44,7 +45,18 @@ object Protection {
             val written = isEnabled(c)
             if (written) prefs(c).edit().putLong("lastRepair", System.currentTimeMillis()).apply()
             written
-        }.getOrDefault(false)
+        }.getOrDefault(false).also { ok ->
+            if (ok) c.getSystemService(NotificationManager::class.java).cancel(4) else warn(c)
+        }
+    }
+    private fun warn(c: Context) {
+        val nm = c.getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(NotificationChannel("repair-needed", "无障碍需要修复", NotificationManager.IMPORTANCE_DEFAULT))
+        val pi = PendingIntent.getActivity(c, 4, Intent(c, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val n = Notification.Builder(c, "repair-needed").setSmallIcon(R.drawable.ic_driver)
+            .setContentTitle("无障碍自动写回未完成").setContentText("打开首页查看权限与无障碍设置；需要手动授权或修复")
+            .setOnlyAlertOnce(true).setContentIntent(pi).setAutoCancel(true).build()
+        runCatching { nm.notify(4, n) }
     }
     fun schedule(c: Context) {
         val jobs = c.getSystemService(JobScheduler::class.java)

@@ -7,6 +7,7 @@ on:
   push:
     paths:
       - "dsh-driver-app/**"
+      - "dsh-driver-core/plugin/**"
       - ".github/workflows/dsh-driver-app.yml"
   workflow_dispatch:
 
@@ -28,6 +29,13 @@ jobs:
           java-version: "17"
 
       - uses: gradle/actions/setup-gradle@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Plugin regression tests
+        run: node --test ../dsh-driver-core/plugin/test/*.test.mjs
 
       - name: Core tests and debug APK
         run: ./gradlew --no-daemon :core:test :app:assembleDebug

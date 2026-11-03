@@ -10,7 +10,7 @@ const HIDDEN_TAGS = ['习惯', '死穴', '逃避', '惯性', '目标', '主线',
  * 从 fish-memory 等记忆里挑和"这次在做的事"最相关的几条。
  * @param {Array<{text:string, at?:number|string, tags?:string[], category?:string, importance?:number}>} memories
  */
-export function pickMemories(memories, { topic = '', task = '' } = {}, limit = 5) {
+export function pickMemories(memories, { topic = '', task = '' } = {}, limit = 5, minScore = 1) {
   const words = [...new Set(`${topic} ${task}`.split(/[\s,，、/|]+/).map(normalize).filter((w) => w.length >= 2))]
   const scored = (memories ?? []).map((m) => {
     const t = normalize(m.text)
@@ -21,7 +21,7 @@ export function pickMemories(memories, { topic = '', task = '' } = {}, limit = 5
     s += words.filter((w) => t.includes(w)).length
     return { m, s }
   })
-  return scored.filter((x) => x.s >= 1).sort((a, b) => b.s - a.s).slice(0, limit).map((x) => x.m)
+  return scored.filter((x) => x.s >= minScore).sort((a, b) => b.s - a.s).slice(0, limit).map((x) => x.m)
 }
 
 /** 从跨会话统计里读出规律（只说有样本支撑的）。 */
@@ -122,7 +122,7 @@ export function fromAppRequest(r = {}, memories = []) {
   const hidden = {
     goals: strs(r.goals, 3, 60),
     habits: strs(r.habits, 4, 60),
-    memories: pickMemories(memories, session).map((m) => clip(m.text, 60)),
+    memories: pickMemories(memories, session, 12, 0).map((m) => clip(m.text, 60)),
     patterns: strs(r.patterns, 4, 80),
     unresolved: strs(r.unresolved, 3, 50),
   }

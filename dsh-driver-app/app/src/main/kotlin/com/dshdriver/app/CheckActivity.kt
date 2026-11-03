@@ -85,11 +85,12 @@ abstract class QuestionActivity : Activity() {
             val last = store.last()
             val profile = store.profile()
             val recent = store.recentGateQuestions()
-            val fallback = Gate.pick(agenda, last?.conclusion, last?.task, profile, seed = recent.size)
+            val kind = store.nextInteractionKind()
+            val fallback = Gate.pick(agenda, last?.conclusion, last?.task, profile, seed = recent.size, kind = kind)
             var q = fallback
             store.pairing()?.let { p ->
                 val req = ComposeRequest(
-                    intent = "gate", cog = CogState(Cog.ACTIVE_FLOW, "gate"), die = null,
+                    intent = "gate", kind = kind, cog = CogState(Cog.ACTIVE_FLOW, "gate"), die = null,
                     topic = last?.topic.orEmpty(), task = last?.task.orEmpty(), minute = 1, minutes = 1,
                     breakpoint = fallback.anchor, lastQuestion = fallback.text, missing = fallback.missing,
                     recentReplies = emptyList(), asked = recent.takeLast(3),
@@ -97,13 +98,15 @@ abstract class QuestionActivity : Activity() {
                     unresolved = agenda.open().take(3).map { it.text },
                 )
                 val d = runCatching { DshLink.brain(p).compose(req) }.getOrNull()
-                if (Gate.acceptsLlm(d) && Similar.maxSimilarity(d!!.text, recent) < 0.6) {
-                    q = Gate.Question(d.text.take(80), d.anchor ?: fallback.anchor, d.missing ?: fallback.missing, fallback.agendaId, "llm")
+                if (Gate.acceptsLlm(d) && !com.dshdriver.core.Interaction.formulaic(d!!.text) && Similar.maxSimilarity(d.text, recent) < 0.6) {
+                    q = Gate.Question(com.dshdriver.core.Interaction.withMaterial(d, fallback.text.substringBefore('\n')).text.take(240), d.anchor ?: fallback.anchor, d.missing ?: fallback.missing, fallback.agendaId, "llm")
+                } else {
+                    q = Gate.pick(agenda, last?.conclusion, last?.task, profile, seed = recent.size, kind = store.nextInteractionKind())
                 }
             }
             runCatching { store.pushGateQuestion(q.text) }
             main.post {
-                if (isFinishing) return@post
+                if (isFinishing || isDestroyed) return@post
                 question = q
                 questionView.text = q.text
                 submit.isEnabled = true

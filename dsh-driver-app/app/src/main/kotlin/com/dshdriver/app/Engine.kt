@@ -20,7 +20,7 @@ import java.util.UUID
 /**
  * APP 的中枢。驾驶员状态机只在专用线程（worker）上跑；界面、无障碍、音频回调都把事件投递进来。
  *
- * 0.2.0 起不再判"切走"、不再拉回：拦截娱乐 App 交给 Curbox，思维驾驶员在学习时只做不抢焦点的陪练小卡。
+ * 0.2.0 起不再判"切走"、不再拉回：拦截由 WatchService 按用户勾选名单处理；学习会话只做不抢焦点的陪练小卡。
  */
 object Engine {
     private const val TAG = "DriverEngine"
@@ -72,7 +72,7 @@ object Engine {
         val sink: (Map<String, Any?>) -> Unit = { row -> runCatching { append(row) } }
         // 配对了 DSH Go 就请大肥鱼出题（拿不到时驾驶员自己用模板）
         val brain = store.pairing()?.let(DshLink::brain)
-        val d = Driver(brain = brain, profile = store.profile(), history = store.history(), agenda = store.agenda(), sink = sink)
+        val d = Driver(brain = brain, profile = store.profile(), history = store.history(), agenda = store.agenda(), sink = sink, pickInteraction = store::nextInteractionKind)
         driver = d
         sessionId = id
         val out = d.start(System.currentTimeMillis(), topic, task, minutes, settings.anchors)
@@ -107,7 +107,7 @@ object Engine {
      *
      * 0.2.0 起**不再据此拦截或拉回**：在手机上做"只许用 Gemini"的允许名单，要预先知道 Gemini 会调起的
      * 所有系统界面（文件/相册选择器、相机、权限框……），每台手机都不同，误伤 Gemini 本身和传图片。
-     * 拦截改由 Curbox 按"拦截名单"做（只拦你指定的娱乐 App），思维驾驶员只当它的答题验证方（[CheckActivity]）。
+     * WatchService 按拦截名单处理（只拦指定 App），可选保留 Curbox 验证入口（[CheckActivity]）。
      * 这里只留诊断记录。
      */
     fun onForeground(context: Context, pkg: String?, className: String?) {

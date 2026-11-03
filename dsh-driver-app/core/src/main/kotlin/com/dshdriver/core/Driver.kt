@@ -30,6 +30,7 @@ class Driver(
     private val rng: () -> Double = { Random.nextDouble() },
     newId: (() -> String)? = null,
     sink: (Map<String, Any?>) -> Unit = {},
+    private val pickInteraction: (() -> String)? = null,
 ) {
     data class Config(
         val fastMs: Long = 3_000,
@@ -107,6 +108,7 @@ class Driver(
     private var conclusion: String? = null
     private var endReason: String? = null
     private var pushCount = 0
+    private val recentInteractions = mutableListOf<String>()
 
     val phaseNow get() = phase
     val currentCard get() = card
@@ -498,6 +500,12 @@ class Driver(
         var die = if (cog.state == Cog.THROTTLED_EMPTY && intent != "conclude") Dice.pick(diceUsed, history.dice) else null
         val last = if (intent == "resume") breakpoint else card
         var draft: Draft? = null
+        var kind = nextInteraction()
+        val material = recent.lastOrNull { it.features.evidence || it.features.chars >= Gate.MIN_CHARS }?.text?.let { "你刚才说：「${Text.clip(it, 80)}」" }
+            ?: agenda?.open()?.maxByOrNull { it.lastSeenAt }?.text?.let { "你挂着的断点：${Text.clip(it, 80)}" }
+            ?: profile.goals.firstOrNull()?.let { "你写下的主线：${Text.clip(it, 80)}" }
+            ?: task.ifBlank { topic }.takeIf { it.isNotBlank() }?.let { "你这次填写的任务：${Text.clip(it, 80)}" }
+            ?: "你还没有留下具体学习记录。先选眼前正在学的一段内容。"
         val b = brain
         if (b != null) {
             val req = ComposeRequest(
@@ -506,13 +514,23 @@ class Driver(
                 recent.map { Text.clip(it.text, 40) }, asked.takeLast(3).map { Text.clip(it.text, 40) },
                 profile.goals.take(3), profile.habits.take(4), history.patterns(),
                 agenda?.open()?.filter { it.id != agendaFocus }?.take(3)?.map { it.text } ?: emptyList(),
+                kind = kind,
             )
             val raw = runCatching { b.compose(req) }.getOrNull()
-            draft = Drafts.validate(raw, cog.state)
+            draft = Drafts.validate(raw, cog.state)?.takeUnless { Interaction.formulaic(it.text) }
             if (draft == null) telemetry.note(at, "brain_fallback", mapOf("intent" to intent, "why" to if (raw == null) "timeout_or_unavailable" else "invalid"))
         }
-        var d = draft ?: template(cog, intent, die, last)
-        dedupe(at, d, cog, intent, die, last).let { d = it.first; die = it.second }
+        if (b != null && draft == null) kind = nextInteraction()
+        var d = draft ?: if (intent !in setOf("conclude", "resume", "open") && cog.state == Cog.ACTIVE_FLOW)
+            Interaction.card(kind, material, last?.anchor) else template(cog, intent, die, last)
+        val interactionAlternatives = if (cog.state == Cog.ACTIVE_FLOW || cog.state == Cog.HIGH_SPEED_SKIMMING)
+            Interaction.questions(kind).indices.map { Interaction.card(kind, material, last?.anchor, it) } else emptyList()
+        dedupe(at, Interaction.withMaterial(d, material), cog, intent, die, last, interactionAlternatives, material).let { d = it.first; die = it.second }
+        if (Interaction.formulaic(d.text) && intent != "conclude") {
+            d = if (cog.state == Cog.THROTTLED_EMPTY || cog.state == Cog.ESCAPED) Dice.card("精简", last?.anchor)
+                else Interaction.card(kind, material, last?.anchor)
+        }
+        d = Interaction.withMaterial(d, material)
         var finalIntent = when {
             intent == "conclude" -> "conclude"
             die != null && d.kind != "say_to_live" -> { diceUsed += die!!; "dice:$die" }
@@ -521,6 +539,13 @@ class Driver(
         if (finalIntent.startsWith("dice:") && die == null) finalIntent = intent
         if (intent == "resume") breakpoint = null
         return register(at, d.copy(intent = finalIntent, anchor = d.anchor ?: last?.anchor ?: task.ifBlank { topic }.ifBlank { null }))
+    }
+
+    private fun nextInteraction(): String {
+        val kind = pickInteraction?.invoke() ?: Interaction.pick(recentInteractions, rng)
+        recentInteractions += kind
+        while (recentInteractions.size > 3) recentInteractions.removeAt(0)
+        return kind
     }
 
     private fun template(cog: CogState, intent: String, die: String?, last: Card?): Draft {
@@ -543,12 +568,18 @@ class Driver(
     }
 
     /** 和最近问过的话太像就换：先换模板，再换骰子；都换不开就保留并记一笔。 */
-    private fun dedupe(at: Long, d: Draft, cog: CogState, intent: String, die: String?, last: Card?): Pair<Draft, String?> {
+    private fun dedupe(at: Long, d: Draft, cog: CogState, intent: String, die: String?, last: Card?, extra: List<Draft>, material: String): Pair<Draft, String?> {
         if (intent in REPEAT_OK || asked.isEmpty()) return d to die
         val old = asked.map { it.text }
-        if (Similar.maxSimilarity(d.text, old) < cfg.repeatThreshold) return d to die
-        for ((alt, altDie) in alternatives(cog, intent, last)) {
-            if (Similar.maxSimilarity(alt.text, old) < cfg.repeatThreshold) {
+        val oldQuestions = old.map { it.substringAfter('\n', it) }
+        fun fresh(candidate: Draft): Boolean =
+            !Interaction.formulaic(candidate.text) &&
+            Similar.maxSimilarity(candidate.text, old) < cfg.repeatThreshold &&
+            Similar.maxSimilarity(candidate.text.substringAfter('\n', candidate.text), oldQuestions) < cfg.repeatThreshold
+        if (fresh(d)) return d to die
+        for ((raw, altDie) in extra.map { it to die } + alternatives(cog, intent, last)) {
+            val alt = Interaction.withMaterial(raw, material)
+            if (fresh(alt)) {
                 telemetry.note(at, "repeat_replaced", mapOf("intent" to intent, "from" to d.source))
                 return alt to altDie
             }

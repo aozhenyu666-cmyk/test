@@ -52,6 +52,13 @@ export function makeStore(h = home()) {
       mkdirSync(join(p, '..'), { recursive: true })
       appendFileSync(p, JSON.stringify(row) + '\n')
     },
+    loadRecentReports: (limit = 5) => {
+      try {
+        return readFileSync(join(d, 'reports.jsonl'), 'utf8').trim().split('\n').slice(-limit).flatMap((line) => {
+          try { const r = JSON.parse(line); return typeof r.conclusion === 'string' && r.conclusion.trim() ? [r] : [] } catch { return [] }
+        })
+      } catch { return [] }
+    },
     /** 读 fish-memory 1.4.x 的库（schema v2：{memories:[{text, at, tags, category, importance}]}）。 */
     loadFishMemories: (sessionIds = []) => {
       const out = []

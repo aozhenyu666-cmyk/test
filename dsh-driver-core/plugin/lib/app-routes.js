@@ -7,6 +7,7 @@
 //
 // 出题拿不到（会话不在、正忙、超时、回的不合格）就回 card:null，APP 自己用模板，不会卡住。
 
+import { INTERACTIONS, formulaic, materialsOf, citesMaterial } from './interactions.js'
 import { fromAppRequest } from './core/context.js'
 import { driverPrompt, parseCard } from './core/prompt.js'
 
@@ -36,10 +37,33 @@ export function createAppService({ store, pairing, brain, getConfig, now = () =>
     async compose(body) {
       if (!brain || !getConfig().brainSessionId) return { status: 200, body: { v: VERSION, card: null, why: 'no-brain-session' } }
       const ctx = fromAppRequest(body ?? {}, memories())
-      const raw = await brain.ask(driverPrompt(ctx, { intent: String(body?.intent ?? 'probe').slice(0, 20) }), composeTimeoutMs)
-      if (raw == null) return { status: 200, body: { v: VERSION, card: null, why: 'unavailable' } }
-      const card = parseCard(raw, { state: ctx.steering.state })
-      return { status: 200, body: { v: VERSION, card, why: card ? 'ok' : 'unparseable' } }
+      const kind = typeof body?.kind === 'string' && Object.hasOwn(INTERACTIONS, body.kind) ? body.kind : null
+      if (kind) {
+        ctx.steering.interactionKind = kind
+        ctx.steering.interactionRule = INTERACTIONS[kind]
+        const reports = store.loadRecentReports?.(5) ?? []
+        ctx.hidden.conclusions = reports.map((r) => String(r.conclusion).slice(0, 100))
+        ctx.hidden.materials = materialsOf(ctx, reports)
+        // No personal facts available: let the app state that honestly in its local fallback.
+        if (!ctx.hidden.materials.length) return { status: 200, body: { v: VERSION, card: null, why: 'no-material' } }
+      }
+      const started = performance.now()
+      let why = 'unparseable'
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const remaining = composeTimeoutMs - (performance.now() - started)
+        if (remaining <= 0) break
+        let prompt = driverPrompt(ctx, { intent: String(body?.intent ?? 'probe').slice(0, 20) })
+        if (attempt) prompt += '\n上一题公式化或未引用素材，已退回。请按同一种互动重出，逐字引用素材，换一个具体动作。'
+        const raw = await brain.ask(prompt, attempt === 0 && kind ? Math.max(1, Math.floor(remaining / 2)) : Math.floor(remaining))
+        if (raw == null) return { status: 200, body: { v: VERSION, card: null, why: 'unavailable' } }
+        const card = parseCard(raw, { state: ctx.steering.state, maxText: kind ? 240 : 80 })
+        if (!card) return { status: 200, body: { v: VERSION, card: null, why: 'unparseable' } }
+        if (formulaic(card.text)) { why = 'formulaic'; continue }
+        if (kind && !citesMaterial(card.text.split('\n')[0], ctx.hidden.materials)) { why = 'missing-material'; continue }
+        return { status: 200, body: { v: VERSION, card, why: 'ok' } }
+      }
+      // Existing card:null fallback contract: the app rolls another interaction locally.
+      return { status: 200, body: { v: VERSION, card: null, why } }
     },
 
     report(body) {

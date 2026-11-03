@@ -92,6 +92,7 @@ data class ComposeRequest(
     val habits: List<String>,
     val patterns: List<String>,
     val unresolved: List<String>,
+    val kind: String? = null, // optional interaction type; old plugins ignore it
 )
 
 /** 出题的大脑。拿不到、超时、不合规都返回 null，驾驶员就用模板。实现方负责自己的超时。 */
@@ -109,7 +110,7 @@ object Drafts {
         if ((state == Cog.THROTTLED_EMPTY || state == Cog.ESCAPED) && d.kind != "ab" && d.kind != "read_two_words") return null
         if (d.kind == "ab" && (d.options == null || d.options.a.isBlank() || d.options.b.isBlank())) return null
         return d.copy(
-            text = d.text.trim().take(80),
+            text = d.text.trim().take(240),
             expects = EXPECTS.getValue(d.kind),
             options = d.options?.let { Options(it.a.trim().take(16), it.b.trim().take(16)) },
             anchor = d.anchor?.trim()?.take(40)?.takeIf { it.isNotEmpty() },

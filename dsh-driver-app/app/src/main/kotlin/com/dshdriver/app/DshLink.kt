@@ -78,7 +78,7 @@ object DshLink {
     }
 
     private fun requestJson(r: ComposeRequest) = JSONObject()
-        .put("intent", r.intent).put("cog", JSONObject().put("state", r.cog.state.name).put("reason", r.cog.reason)).putOpt("die", r.die)
+        .put("intent", r.intent).putOpt("kind", r.kind).put("cog", JSONObject().put("state", r.cog.state.name).put("reason", r.cog.reason)).putOpt("die", r.die)
         .put("topic", r.topic).put("task", r.task).put("minute", r.minute).put("minutes", r.minutes)
         .putOpt("breakpoint", r.breakpoint).putOpt("lastQuestion", r.lastQuestion).putOpt("missing", r.missing)
         .put("recentReplies", JSONArray(r.recentReplies)).put("asked", JSONArray(r.asked))
