@@ -1,0 +1,30 @@
+<!--
+  合并到 fork 的 app/android/app/src/main/AndroidManifest.xml。
+  已有、可直接复用：SYSTEM_ALERT_WINDOW、POST_NOTIFICATIONS、FOREGROUND_SERVICE、
+  REQUEST_IGNORE_BATTERY_OPTIMIZATIONS、无障碍服务 PhoneA11yService。
+-->
+
+<!-- 新增：强提醒震动（普通权限，安装即得） -->
+<uses-permission android:name="android.permission.VIBRATE" />
+
+<!-- 新增：targetSdk ≥ 30 的包可见性。不声明就拿不到 Live 应用的启动 Intent，"回到 Live"会失效 -->
+<queries>
+    <package android:name="com.google.android.apps.bard" />
+    <package android:name="com.google.android.googlequicksearchbox" />
+    <package android:name="com.openai.chatgpt" />
+    <intent>
+        <action android:name="android.speech.tts.TTS_SERVICE" />
+    </intent>
+</queries>
+
+<application>
+    <!-- 断点卡 / 强提醒页：独立任务栈，盖在被切去的应用上；不进最近任务，划掉它等于没答 -->
+    <activity
+        android:name=".loop.driver.DriverCardActivity"
+        android:exported="false"
+        android:excludeFromRecents="true"
+        android:launchMode="singleTask"
+        android:taskAffinity=".driver"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+        android:screenOrientation="portrait" />
+</application>

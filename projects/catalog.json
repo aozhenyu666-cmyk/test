@@ -435,6 +435,20 @@
       "snapshot": "1de0d227a3caefffa5e31ebec8a9d36f378a9dea",
       "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/ccr-e7292701-ksmvcg/clock-effects",
       "navigation": "projects/17-clock-effects/README.md"
+    },
+    {
+      "id": "dsh-driver-core",
+      "folder": "18-dsh-driver-core",
+      "name": "大肥鱼主驾驶员",
+      "group": "工具与原型",
+      "summary": "DSH Go 插件：开着 Gemini Live 学习时防切屏、防发呆、防假专注。",
+      "ref": "ccr-8329c7b5-gr96ko",
+      "path": "dsh-driver-core",
+      "notes": "插件可独立测试；Android 部分需合并进 DSH Go fork（aozhenyu666-cmyk/dsh-Go）后编译，未真机验证。",
+      "extras": [],
+      "snapshot": null,
+      "source_url": "https://github.com/aozhenyu666-cmyk/test/tree/ccr-8329c7b5-gr96ko/dsh-driver-core",
+      "navigation": "projects/18-dsh-driver-core/README.md"
     }
   ],
   "branches": [

@@ -35,6 +35,7 @@
 | **Operit 工作流与插件** | 思考接续、精简上下文、棋钟专注等 Operit 扩展。 | [打开](projects/15-operit/README.md) | [operit/](https://github.com/aozhenyu666-cmyk/test/tree/claude/operit-ai-github-38lrbo/operit) |
 | **主控台与小满流程线** | Operit 的主控台、角色卡、状态采样与陪伴工作流。 | [打开](projects/16-focus-hub/README.md) | [focus_hub/](https://github.com/aozhenyu666-cmyk/test/tree/claude/hello-34vzla/focus_hub) |
 | **时钟动效实验** | 单独的时钟动效网页实验。 | [打开](projects/17-clock-effects/README.md) | [clock-effects/](https://github.com/aozhenyu666-cmyk/test/tree/ccr-e7292701-ksmvcg/clock-effects) |
+| **大肥鱼主驾驶员** | DSH Go 插件：开着 Gemini Live 学习时防切屏、防发呆、防假专注。 | [打开](projects/18-dsh-driver-core/README.md) | [dsh-driver-core/](https://github.com/aozhenyu666-cmyk/test/tree/ccr-8329c7b5-gr96ko/dsh-driver-core) |
 
 ## 为什么首页和源码不在同一分支
 

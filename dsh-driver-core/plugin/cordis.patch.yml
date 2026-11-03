@@ -1,0 +1,3 @@
+- insert:
+    - id: dsh-driver-core
+      name: /opt/dsh-go/dsh-driver-core/lib/index.js
