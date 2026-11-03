@@ -16,6 +16,7 @@
     <!-- 需要看见三个客户端（判断装没装、发挑战）和总控（叫醒它） -->
     <queries>
         <package android:name="com.zongkong.app" />
+        <package android:name="com.dshdriver.app" />
         <package android:name="com.yishou.app" />
         <package android:name="cn.companion.pet" />
     </queries>

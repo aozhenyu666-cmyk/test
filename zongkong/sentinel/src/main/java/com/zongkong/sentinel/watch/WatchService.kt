@@ -50,6 +50,7 @@ class WatchService : Service() {
 
     private val arbiter = LockArbiter()
     private var repairGraceUntilMono = 0L
+    private var lastDisabledCheckMono = -30_000L
 
     override fun onCreate() {
         super.onCreate()
@@ -123,6 +124,10 @@ class WatchService : Service() {
         while (running) {
             val startedAt = SystemClock.elapsedRealtime()
             try {
+                if (!emergencyActive() && startedAt - lastDisabledCheckMono >= 30_000L) {
+                    lastDisabledCheckMono = startedAt
+                    com.zongkong.sentinel.DisabledGuardian.tick(this)
+                }
                 refreshSystemFacts()
                 val tick = scheduler.tick()
                 for ((pkg, reason) in tick.needLock) {
