@@ -28,7 +28,7 @@ class DriverApp : Application() {
 }
 
 /**
- * 切屏检测。只听"窗口换了"这一种事件；350ms 后再读一次当前活动窗口的包名复核（快速切来切去时以最后停下的为准）。
+ * 前台记录（诊断用，0.2.0 起不再拦截）。只听"窗口换了"这一种事件；350ms 后再读一次当前活动窗口的包名复核（快速切来切去时以最后停下的为准）。
  * 只读包名和窗口类名，不读屏幕文字。
  */
 class WatchService : AccessibilityService() {
@@ -70,7 +70,7 @@ class WatchService : AccessibilityService() {
     }
 }
 
-/** 锁定期间的前台服务：让系统别杀进程，并挂着音频状态监听。 */
+/** 陪练期间的前台服务：让系统别杀进程，并挂着音频状态监听。 */
 class LockService : Service() {
     private var signals: AudioSignals? = null
 
@@ -79,10 +79,10 @@ class LockService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val label = intent?.getStringExtra(EXTRA_LABEL).orEmpty()
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CHANNEL, "锁定中", NotificationManager.IMPORTANCE_LOW))
+        nm.createNotificationChannel(NotificationChannel(CHANNEL, "陪练中", NotificationManager.IMPORTANCE_LOW))
         val pi = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val n = Notification.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_driver)
-            .setContentTitle("思维驾驶员 · 锁定中").setContentText(label.ifBlank { "切走会被拉回原断点" })
+            .setContentTitle("思维驾驶员 · 陪练中").setContentText(label.ifBlank { "顶部小卡会追问你" })
             .setOngoing(true).setContentIntent(pi).build()
         if (Build.VERSION.SDK_INT >= 34) startForeground(NOTE_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         else startForeground(NOTE_ID, n)

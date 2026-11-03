@@ -23,6 +23,13 @@
         <intent>
             <action android:name="android.speech.tts.TTS_SERVICE" />
         </intent>
+        <!-- 找到 Curbox（App 拦截器）并请求它的批准 -->
+        <intent>
+            <action android:name="neth.iecal.curbox.api.BIND" />
+        </intent>
+        <intent>
+            <action android:name="neth.iecal.curbox.api.REQUEST_PERMISSION" />
+        </intent>
     </queries>
 
     <application
@@ -52,6 +59,15 @@
             android:excludeFromRecents="true"
             android:launchMode="singleTask"
             android:taskAffinity="com.dshdriver.app.card"
+            android:theme="@style/Theme.Driver.Card"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- Curbox 拦下娱乐 App 后拉起这里答题（for result）。必须导出、不能要求权限，见 Curbox API v3。
+             入口参数在 CheckActivity 里逐项校验：action、调用方是选定的 Curbox、condition_id、request_id。 -->
+        <activity
+            android:name=".CheckActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
             android:theme="@style/Theme.Driver.Card"
             android:windowSoftInputMode="adjustResize" />
 

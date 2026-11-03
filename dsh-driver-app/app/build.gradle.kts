@@ -11,8 +11,8 @@ android {
         applicationId = "com.dshdriver.app"
         minSdk = 26 // 播放状态回调（AudioPlaybackCallback）要 Android 8.0
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
 
     signingConfigs {
@@ -32,6 +32,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    // Curbox 的 AIDL 接口（src/main/aidl/neth/iecal/curbox/api/ICurboxApi.aidl）
+    buildFeatures { aidl = true }
     lint {
         // 调试版只要能装能跑；lint 的警告不挡打包
         abortOnError = false

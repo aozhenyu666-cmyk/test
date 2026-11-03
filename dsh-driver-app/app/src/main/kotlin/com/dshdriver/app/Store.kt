@@ -138,6 +138,16 @@ class Store(context: Context) {
 
     fun clearPairing() { File(dir, "pairing.json").delete() }
 
+    // ── 用哪个 Curbox（正式版 / 调试版） ──
+    fun curboxPackage(): String? = read("curbox.json")?.optString("package")?.takeIf { it.isNotBlank() }
+
+    fun saveCurboxPackage(pkg: String) = write("curbox.json", JSONObject().put("package", pkg).toString())
+
+    /** 拦截门最近问过的题（防止每次都同一句）。 */
+    fun recentGateQuestions(): List<String> = readArray("gate_recent.json")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
+
+    fun pushGateQuestion(q: String) = write("gate_recent.json", JSONArray((recentGateQuestions() + q).takeLast(5)).toString())
+
     // ── 推进日志 ──
     fun appender(sessionId: String): (Map<String, Any?>) -> Unit {
         val f = File(File(dir, "sessions").apply { mkdirs() }, "$sessionId.jsonl")

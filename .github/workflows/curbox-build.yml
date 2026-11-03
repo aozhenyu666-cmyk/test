@@ -1,0 +1,52 @@
+name: curbox-build
+
+# 用 Curbox（GPL-3.0，https://github.com/curbox-app/curbox-android）原版源码编出带「API 3」的调试版和它自带的 API Tester。
+# 为什么要自己编：第三方解锁条件（API 3）2026-10-23 才进代码，最新正式版 6（2026-10-15）里没有。
+# 一行不改，只是编译；锁定在下面这个提交。Curbox 发了带 API 3 的正式版后，就改用官方版，这个工作流可以删掉。
+# 产物在本次运行页面底部 Artifacts：curbox-fdroid-debug（Curbox 本体）、curbox-apitester（官方测试工具）。
+on:
+  push:
+    paths:
+      - ".github/workflows/curbox-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CURBOX_REF: b06520f4dc35018c184b65341fbc4ffe31b2eb08
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: curbox-app/curbox-android
+          ref: ${{ env.CURBOX_REF }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build Curbox (fdroid debug) and API Tester
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleFdroidDebug :apitester:assembleDebug
+
+      - name: Upload Curbox
+        uses: actions/upload-artifact@v4
+        with:
+          name: curbox-fdroid-debug
+          path: app/build/outputs/apk/fdroid/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload API Tester
+        uses: actions/upload-artifact@v4
+        with:
+          name: curbox-apitester
+          path: apitester/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

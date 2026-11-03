@@ -28,7 +28,7 @@ import com.dshdriver.core.Phase
 import com.dshdriver.core.Profile
 
 /**
- * 首页：权限检查、开始锁定、锁定中的状态、我的主线与死穴、议程、上一次结果。
+ * 首页：连接 Curbox（拦截娱乐 App）、学习陪练、连接大肥鱼、诊断、我的主线与死穴、议程、上一次结果。
  * 界面全部用代码搭，不依赖任何 androidx 库。
  */
 class MainActivity : Activity() {
@@ -65,6 +65,7 @@ class MainActivity : Activity() {
         main.removeCallbacks(refresher)
         main.post(refresher)
         checkLink()
+        checkCurbox()
     }
 
     override fun onPause() {
@@ -80,60 +81,57 @@ class MainActivity : Activity() {
         if (Engine.locked) renderLocked() else renderIdle()
     }
 
-    // ───────────── 锁定中 ─────────────
+    // ───────────── 陪练中 ─────────────
 
     private fun renderLocked() {
         val s = Engine.snapshot ?: return
-        section("锁定中")
+        section("陪练中")
         val left = ((s.endsAt - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
         val phase = when (s.phase) {
             Phase.LOCKED -> "进行中"
-            Phase.INTERRUPTED_BY_SWITCH -> "切走了，等你接回断点"
+            Phase.INTERRUPTED_BY_SWITCH -> "等你接回断点"
             Phase.PAUSED -> "休息中"
             Phase.WRAPPING -> "时间到，等一句结论"
             else -> s.phase.name
         }
         line("${s.task.ifBlank { s.topic }}｜$phase｜剩 ${left / 60}:${"%02d".format(left % 60)}")
-        line("有依据的思考 ${s.summary.grounded} 次｜回应 ${s.summary.responded} 次｜切屏 ${s.summary.interruptions} 次")
+        line("有依据的思考 ${s.summary.grounded} 次｜回应 ${s.summary.responded} 次")
         s.card?.takeIf { !it.answered }?.let { line("当前这一问：${it.text}") }
         button("回到 Live") { Engine.relaunchAnchor(this) }
         button("休息…") {
             val m = intArrayOf(3, 5, 10, 20)
             AlertDialog.Builder(this).setTitle("休息多久？到点会把你拉回断点").setItems(m.map { "$it 分钟" }.toTypedArray()) { _, i -> Engine.pause(m[i]) }.show()
         }
-        button("紧急结束") {
-            AlertDialog.Builder(this).setTitle("紧急结束这次锁定？").setMessage("会记为主动结束，不算完成。")
+        button("结束陪练") {
+            AlertDialog.Builder(this).setTitle("结束这次陪练？").setMessage("会记为主动结束，不算完成。")
                 .setPositiveButton("结束") { _, _ -> Engine.stop("emergency") }.setNegativeButton("不结束", null).show()
         }
     }
 
-    // ───────────── 未锁定 ─────────────
+    // ───────────── 未在陪练 ─────────────
 
     private fun renderIdle() {
         val store = Engine.store
         val settings = store.settings()
 
-        section("准备")
-        val a11y = a11yEnabled()
-        check("切屏检测（无障碍）", a11y, "必需：没有它就发现不了你切走") {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
-        check("悬浮窗", Settings.canDrawOverlays(this), "用来在 Live 上面浮一张小卡；没有也能用，只是改成全屏卡") {
+        renderCurbox()
+
+        section("学习陪练（可选）")
+        note("开着 Gemini Live 学习时，在顶部浮小卡追问你、Gemini 说完你没接话时推你一下。不拦截、不弹全屏。")
+        check("悬浮窗", Settings.canDrawOverlays(this), "用来在 Live 上面浮一张小卡；没有也能用，只是改成普通页面") {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         }
         val pm = getSystemService(PowerManager::class.java)
-        check("不被省电杀掉", pm?.isIgnoringBatteryOptimizations(packageName) == true, "锁定期间要一直在后台；小米/华为还要手动开「自启动」「后台弹出界面」") {
+        check("不被省电杀掉", pm?.isIgnoringBatteryOptimizations(packageName) == true, "陪练期间要一直在后台；小米/华为还要手动开「自启动」「后台弹出界面」") {
             runCatching { startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))) }
         }
         val installed = settings.anchors.filter { Engine.isInstalled(this, it) }
-        line(if (installed.isEmpty()) "⚠ 没找到 Gemini / ChatGPT，锁定后无法自动回到 Live" else "允许的应用：${installed.joinToString("、") { label(it) }}")
+        line(if (installed.isEmpty()) "⚠ 没找到 Gemini / ChatGPT，「回到 Live」会失效" else "「回到 Live」打开：${label(installed.first())}")
 
-        section("开始一次锁定")
         val topic = input("主题（例：行测·图形推理）")
         val task = input("这一段只钉一件事（例：第3题）")
         val minutes = input("时长（分钟）", settings.minutes.toString(), InputType.TYPE_CLASS_NUMBER)
-        button(if (a11y) "开始锁定" else "先打开切屏检测") {
-            if (!a11yEnabled()) { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); return@button }
+        button("开始陪练") {
             val m = minutes.text.toString().toIntOrNull()?.coerceIn(1, 60) ?: settings.minutes
             store.saveSettings(settings.copy(minutes = m))
             Engine.start(topic.text.toString().trim(), task.text.toString().trim(), m)
@@ -141,6 +139,7 @@ class MainActivity : Activity() {
         }
 
         renderLink()
+        renderDiagnostics()
 
         store.last()?.let { l ->
             section("上一次")
@@ -150,7 +149,7 @@ class MainActivity : Activity() {
                 else -> "没给出结论"
             }
             line("${l.task.ifBlank { l.topic }}｜$how")
-            line("有依据的思考 ${l.summary.grounded} 次｜回应 ${l.summary.responded} 次｜切屏 ${l.summary.interruptions} 次｜接回 ${l.summary.resumed} 次")
+            line("有依据的思考 ${l.summary.grounded} 次｜回应 ${l.summary.responded} 次")
             l.conclusion?.let { line("结论：$it") }
         }
 
@@ -174,6 +173,98 @@ class MainActivity : Activity() {
 
         section("隐私")
         note("只读当前前台应用的包名和窗口类型，不读屏幕文字、不录音。数据只存在本机 APP 目录里。")
+    }
+
+    // ───────────── 拦截娱乐 App（Curbox） ─────────────
+
+    @Volatile private var curbox: Curbox.Status? = null
+    @Volatile private var curboxChecking = false
+
+    private fun renderCurbox() {
+        section("拦截娱乐 App（交给 Curbox）")
+        note("打开 B站这类 App 时，由 Curbox 拦下并弹全屏页，你在思维驾驶员里答对一道题才放行一段时间。拦截规则、放行时长都在 Curbox 里设。")
+        val all = Curbox.installations(this)
+        val pkg = Curbox.selected(this)
+        if (pkg == null) {
+            line("✗ 没装 Curbox。")
+            note("需要带「API 3」的 Curbox：正式版 6 还没有这个功能，先装我们 CI 用原版源码编出来的调试版（仓库 Actions → curbox-build → Artifacts）。")
+            return
+        }
+        line("Curbox：$pkg${if (all.size > 1) "（装了 ${all.size} 个）" else ""}")
+        if (all.size > 1) button("换一个 Curbox") {
+            val next = all[(all.indexOf(pkg) + 1) % all.size]
+            Engine.store.saveCurboxPackage(next)
+            curbox = null
+            render()
+            checkCurbox()
+        }
+        val st = curbox
+        when {
+            curboxChecking && st == null -> line("正在检查…")
+            st == null -> button("检查 Curbox") { checkCurbox() }
+            st.error != null -> line("⚠ ${st.error}")
+            st.apiVersion < 3 -> line("✗ 这个 Curbox 的 API 版本是 ${st.apiVersion}，需要 3。装我们编的调试版。")
+            !st.granted -> {
+                line("① 让 Curbox 批准思维驾驶员（它会弹一个确认页；批准后思维驾驶员只用来注册「答一道题」）")
+                button("去 Curbox 批准") {
+                    Engine.store.saveCurboxPackage(pkg)
+                    if (!Curbox.requestPermission(this, pkg)) toast("打不开 Curbox 的批准页")
+                }
+            }
+            !st.registered -> {
+                line("② 注册「${Curbox.CONDITION_LABEL}」")
+                button("注册") { registerCurbox(pkg) }
+            }
+            else -> {
+                line("✓ 已连上 Curbox，「${Curbox.CONDITION_LABEL}」已注册")
+                note("③ 在 Curbox 里：新建或编辑一个应用拦截分组 → 选要拦的 App（别选思维驾驶员）→ 警告页设置 →「Require effort to unlock」→「Require another app」→ 选「${Curbox.CONDITION_LABEL}」→ 设好放行时长 → 保存并启用。")
+                button("重新检查") { checkCurbox() }
+            }
+        }
+    }
+
+    private fun checkCurbox() {
+        val pkg = Curbox.selected(this) ?: return
+        if (curboxChecking) return
+        curboxChecking = true
+        Thread {
+            val r = Curbox.inspect(this, pkg)
+            curbox = r
+            curboxChecking = false
+            main.post { if (!Engine.locked) render() }
+        }.start()
+    }
+
+    private fun registerCurbox(pkg: String) {
+        Thread {
+            val r = Curbox.register(this, pkg)
+            main.post {
+                toast(r.getOrElse { it.message ?: "注册失败" }.let { if (it == "OK") "已注册" else it })
+                checkCurbox()
+            }
+        }.start()
+    }
+
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != Curbox.REQUEST_CODE) return
+        if (resultCode == RESULT_OK) Curbox.selected(this)?.let { registerCurbox(it) } else { toast("Curbox 没有批准"); checkCurbox() }
+    }
+
+    // ───────────── 诊断：最近读到的前台应用 ─────────────
+
+    private fun renderDiagnostics() {
+        section("诊断：最近读到的前台应用")
+        if (!a11yEnabled()) {
+            note("打开「思维驾驶员 · 前台记录」无障碍后，这里会列出最近读到的前台包名。只用来排查误判，不拦截任何东西。")
+            button("去打开无障碍") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+            return
+        }
+        val list = Engine.recentForeground()
+        if (list.isEmpty()) { note("还没有记录。切几个应用再回来看。"); return }
+        val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+        list.take(10).forEach { line("${fmt.format(java.util.Date(it.at))}  ${label(it.pkg)}  ${it.pkg}") }
     }
 
     // ───────────── 连接大肥鱼（DSH Go） ─────────────

@@ -10,11 +10,9 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.util.Log
-import android.view.inputmethod.InputMethodManager
 import com.dshdriver.core.Card
 import com.dshdriver.core.Directive
 import com.dshdriver.core.Driver
-import com.dshdriver.core.DriverReflex
 import com.dshdriver.core.LiveInference
 import com.dshdriver.core.Phase
 import java.util.UUID
@@ -22,7 +20,7 @@ import java.util.UUID
 /**
  * APP 的中枢。驾驶员状态机只在专用线程（worker）上跑；界面、无障碍、音频回调都把事件投递进来。
  *
- * 唯一不等 worker 的是**反射**：切出允许的应用时，主线程立刻用缓存的当前卡盖住，再把事件交给状态机决定升级到第几级。
+ * 0.2.0 起不再判"切走"、不再拉回：拦截娱乐 App 交给 Curbox，思维驾驶员在学习时只做不抢焦点的陪练小卡。
  */
 object Engine {
     private const val TAG = "DriverEngine"
@@ -50,8 +48,6 @@ object Engine {
         private set
     @Volatile var anchorPkg: String? = null
         private set
-    @Volatile private var reflexArmed = false
-    @Volatile private var allowed: Set<String> = emptySet()
     @Volatile var watchConnected = false
 
     /** 首页订阅：状态变了就刷新。在主线程回调。 */
@@ -79,7 +75,6 @@ object Engine {
         val d = Driver(brain = brain, profile = store.profile(), history = store.history(), agenda = store.agenda(), sink = sink)
         driver = d
         sessionId = id
-        allowed = (settings.anchors + settings.extraAllowed).toSet()
         val out = d.start(System.currentTimeMillis(), topic, task, minutes, settings.anchors)
         main.post { LockService.start(app, task.ifBlank { topic }) }
         handle(out)
@@ -100,18 +95,27 @@ object Engine {
     // ───────────────────────────── 输入 ─────────────────────────────
 
     /** 无障碍服务复核过的前台（主线程）。 */
+    /** 最近读到的前台应用（只用来诊断：误判时一眼能看到它到底读到了什么）。 */
+    data class Seen(val at: Long, val pkg: String, val className: String?)
+
+    private val seen = ArrayDeque<Seen>()
+
+    fun recentForeground(): List<Seen> = synchronized(seen) { seen.toList().asReversed() }
+
+    /**
+     * 无障碍服务复核过的前台（主线程）。
+     *
+     * 0.2.0 起**不再据此拦截或拉回**：在手机上做"只许用 Gemini"的允许名单，要预先知道 Gemini 会调起的
+     * 所有系统界面（文件/相册选择器、相机、权限框……），每台手机都不同，误伤 Gemini 本身和传图片。
+     * 拦截改由 Curbox 按"拦截名单"做（只拦你指定的娱乐 App），思维驾驶员只当它的答题验证方（[CheckActivity]）。
+     * 这里只留诊断记录。
+     */
     fun onForeground(context: Context, pkg: String?, className: String?) {
-        if (!reflexArmed) return
-        val imes = runCatching {
-            context.getSystemService(InputMethodManager::class.java)?.enabledInputMethodList?.map { it.packageName }?.toSet()
-        }.getOrNull().orEmpty()
-        when (val v = DriverReflex.judge(pkg, true, allowed, app.packageName, imes, className)) {
-            DriverReflex.Verdict.Ignore -> Unit
-            is DriverReflex.Verdict.Allow -> worker.post { driver?.let { handle(it.foreground(System.currentTimeMillis(), v.packageName, true)) } }
-            is DriverReflex.Verdict.Escape -> {
-                Presenter.reflex(app, card) // 先盖卡，再交给状态机
-                worker.post { driver?.let { handle(it.foreground(System.currentTimeMillis(), v.packageName, false)) } }
-            }
+        if (pkg.isNullOrBlank()) return
+        synchronized(seen) {
+            if (seen.lastOrNull()?.pkg == pkg && seen.lastOrNull()?.className == className) return
+            seen.addLast(Seen(System.currentTimeMillis(), pkg, className))
+            while (seen.size > 15) seen.removeFirst()
         }
     }
 
@@ -126,7 +130,8 @@ object Engine {
 
     private fun applyLive(d: Driver, c: LiveInference.Change, now: Long) = handle(
         when (c) {
-            is LiveInference.Change.Live -> d.live(now, c.active)
+            // "Live 被关了"只靠麦克风占用推断，不可靠；不再据此判你逃走、弹拉回卡
+            is LiveInference.Change.Live -> emptyList()
             LiveInference.Change.AssistantStartedSpeaking -> d.audio(now, true)
             LiveInference.Change.AssistantStoppedSpeaking -> d.audio(now, false)
         },
@@ -145,7 +150,6 @@ object Engine {
         val snap = d.state()
         snapshot = snap
         anchorPkg = d.anchorPkg
-        reflexArmed = snap.phase == Phase.LOCKED || snap.phase == Phase.INTERRUPTED_BY_SWITCH
         val current = d.currentCard
         val previous = card
         card = current
@@ -171,7 +175,6 @@ object Engine {
         val last = store.last()
         val agenda = d.agenda
         if (pairing != null && last != null && agenda != null) Thread { runCatching { DshLink.report(pairing, last, agenda) } }.start()
-        reflexArmed = false
         worker.removeCallbacks(ticker)
         main.post {
             LockService.stop(app)
@@ -196,7 +199,8 @@ object Engine {
 
     /** 回到 Live：打开锚点应用。无障碍服务被系统绑定着，系统允许从后台启动。 */
     fun relaunchAnchor(context: Context): Boolean {
-        val pkg = anchorPkg ?: store.settings().anchors.firstOrNull { isInstalled(context, it) } ?: return false
+        // 回到你设置里排第一个、而且装了的那个（默认 Gemini），不跟着"最近读到的"走
+        val pkg = (listOfNotNull(anchorPkg) + store.settings().anchors).firstOrNull { isInstalled(context, it) } ?: return false
         val intent = context.packageManager.getLaunchIntentForPackage(pkg) ?: return false
         return runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
             .onFailure { Log.w(TAG, "could not relaunch $pkg", it) }.isSuccess
