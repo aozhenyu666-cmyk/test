@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">思维驾驶员</string>
+    <string name="a11y_label">思维驾驶员 · 切屏检测</string>
+    <string name="a11y_desc">锁定期间检测你是否离开了 Gemini Live / ChatGPT。只读取当前前台应用的包名和窗口类型，不读取屏幕上的文字，不录音。</string>
+</resources>

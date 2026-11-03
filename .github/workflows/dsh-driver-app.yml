@@ -1,0 +1,49 @@
+name: dsh-driver-app
+
+# 「思维驾驶员」独立 APP：每次改动 dsh-driver-app/ 就跑 core 单元测试并打包调试版 APK。
+# 打好的 APK 在本次运行页面底部的 Artifacts 里下载（dsh-driver-debug-apk）。
+# 只打包、不发布：要不要建固定下载地址（GitHub Release）由仓库主人决定。
+on:
+  push:
+    paths:
+      - "dsh-driver-app/**"
+      - ".github/workflows/dsh-driver-app.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dsh-driver-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Core tests and debug APK
+        run: ./gradlew --no-daemon :core:test :app:assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-driver-debug-apk
+          path: dsh-driver-app/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-driver-test-reports
+          path: |
+            dsh-driver-app/core/build/reports/tests/
+            dsh-driver-app/app/build/reports/

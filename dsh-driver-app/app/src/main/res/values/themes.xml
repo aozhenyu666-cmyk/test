@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 只用 API 26 就有的系统主题；界面颜色在代码里自己定 -->
+    <style name="Theme.Driver" parent="@android:style/Theme.DeviceDefault.Light.NoActionBar" />
+    <style name="Theme.Driver.Card" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>
