@@ -18,6 +18,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.text.InputType
 import android.view.View
+import android.widget.CheckBox
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -61,6 +62,9 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        Protection.ensure(this)
+        Protection.schedule(this)
+        Protection.startIfNeeded(this)
         Engine.onChange = { render(); if (Engine.locked) { main.removeCallbacks(refresher); main.post(refresher) } }
         main.removeCallbacks(refresher)
         main.post(refresher)
@@ -77,7 +81,9 @@ class MainActivity : Activity() {
     private fun render() {
         body.removeAllViews()
         title("思维驾驶员", 24f)
-        note("开着 Gemini Live / ChatGPT 学习时：切走就把你拉回原断点，不说话就给最省力的一步。")
+        note("只拦你勾选的应用；学习时用小卡接住思考。")
+        renderBlocking()
+        renderProtection()
         if (Engine.locked) renderLocked() else renderIdle()
     }
 
@@ -133,7 +139,7 @@ class MainActivity : Activity() {
         val minutes = input("时长（分钟）", settings.minutes.toString(), InputType.TYPE_CLASS_NUMBER)
         button("开始陪练") {
             val m = minutes.text.toString().toIntOrNull()?.coerceIn(1, 60) ?: settings.minutes
-            store.saveSettings(settings.copy(minutes = m))
+            store.saveSettings(store.settings().copy(minutes = m))
             Engine.start(topic.text.toString().trim(), task.text.toString().trim(), m)
             main.postDelayed({ Engine.relaunchAnchor(this) }, 600)
         }
@@ -173,6 +179,52 @@ class MainActivity : Activity() {
 
         section("隐私")
         note("只读当前前台应用的包名和窗口类型，不读屏幕文字、不录音。数据只存在本机 APP 目录里。")
+    }
+
+    private fun renderBlocking() {
+        val rules = Engine.store.blocking
+        section("内置应用拦截")
+        note("只拦勾选的 App。先回桌面，再答题；放行期间到期会重新检查。系统界面和输入法始终放行。")
+        body.addView(CheckBox(this).apply {
+            text = "开启拦截"; isChecked = rules.enabled
+            setOnCheckedChangeListener { _, checked -> rules.enabled = checked; Protection.startIfNeeded(this@MainActivity) }
+        })
+        line("已选 ${rules.packages.size} 个 App｜放行 ${rules.minutes} 分钟")
+        button("选择要拦的 App") {
+            val exempt = rules.exemptPackages()
+            val apps = packageManager.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+                .map { it.activityInfo.packageName }.distinct().filter { it !in exempt }.sortedBy { label(it) }
+            val chosen = rules.packages.toMutableSet()
+            AlertDialog.Builder(this).setTitle("勾选要拦的 App")
+                .setMultiChoiceItems(apps.map { label(it) }.toTypedArray(), apps.map { it in chosen }.toBooleanArray()) { _, i, checked ->
+                    if (checked) chosen += apps[i] else chosen -= apps[i]
+                }.setPositiveButton("保存") { _, _ -> rules.packages = chosen; render() }.setNegativeButton("取消", null).show()
+        }
+        button("设置放行时长") {
+            val values = intArrayOf(1, 5, 10, 15, 30, 60, 120)
+            AlertDialog.Builder(this).setTitle("答题后放行多久")
+                .setItems(values.map { "$it 分钟" }.toTypedArray()) { _, i -> rules.minutes = values[i]; render() }.show()
+        }
+    }
+
+    private fun renderProtection() {
+        section("无障碍与自动修复")
+        line("无障碍设置：${if (Protection.isEnabled(this)) "已开启" else "未开启"}｜服务连接：${if (Engine.watchConnected) "已连接" else "未连接"}")
+        line("写安全设置权限：${if (Protection.canWrite(this)) "已授予" else "未授予"}")
+        val repaired = Protection.lastRepair(this)
+        val heartbeat = Protection.lastHeartbeat(this)
+        fun time(at: Long) = if (at == 0L) "无记录" else java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(at))
+        line("最近写回：${time(repaired)}｜最近心跳：${time(heartbeat)}")
+        note("写回不等于服务已连接。强制停止后需手动打开，或由哨兵尝试恢复；厂商系统效果待真机验证。要手动关无障碍，请先关闭这里的自动修复和哨兵看护。")
+        body.addView(CheckBox(this).apply {
+            text = "无障碍被关闭后自动写回"; isChecked = Protection.enabled(this@MainActivity)
+            setOnCheckedChangeListener { _, checked -> Protection.setEnabled(this@MainActivity, checked) }
+        })
+        button("打开无障碍设置") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        if (!Protection.canWrite(this)) button("复制 adb 授权命令") {
+            val cmd = "adb shell pm grant $packageName ${Protection.PERMISSION}"
+            getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("adb", cmd)); toast("已复制")
+        }
     }
 
     // ───────────── 拦截娱乐 App（Curbox） ─────────────
@@ -257,7 +309,7 @@ class MainActivity : Activity() {
     private fun renderDiagnostics() {
         section("诊断：最近读到的前台应用")
         if (!a11yEnabled()) {
-            note("打开「思维驾驶员 · 前台记录」无障碍后，这里会列出最近读到的前台包名。只用来排查误判，不拦截任何东西。")
+            note("打开「思维驾驶员 · 应用拦截」无障碍后，这里会列出前台包名，并按你选的名单拦截。")
             button("去打开无障碍") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
             return
         }
@@ -330,11 +382,7 @@ class MainActivity : Activity() {
 
     // ───────────── 小部件 ─────────────
 
-    private fun a11yEnabled(): Boolean {
-        val me = ComponentName(this, WatchService::class.java).flattenToString()
-        val on = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
-        return on.split(':').any { it.equals(me, ignoreCase = true) }
-    }
+    private fun a11yEnabled() = Protection.isEnabled(this)
 
     private fun label(pkg: String) = runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
 

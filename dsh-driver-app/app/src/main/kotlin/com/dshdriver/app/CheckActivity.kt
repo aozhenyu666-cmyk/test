@@ -30,33 +30,22 @@ import com.dshdriver.core.Similar
  * 出题：配对了大肥鱼就请它出（8 秒内），否则用议程 / 上次结论 / 主线目标兜底（[Gate.pick]）。
  * 判卷：只认"有依据"的回答（[Gate.judge]）。
  */
-class CheckActivity : Activity() {
+abstract class QuestionActivity : Activity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var questionView: TextView
     private lateinit var feedback: TextView
     private lateinit var input: EditText
     private lateinit var submit: Button
     private var question: Gate.Question? = null
-    private var requestId: String? = null
     private var done = false
+    protected abstract fun acceptLaunch(): Boolean
+    protected abstract fun passed()
+    protected open fun giveUp() { finish() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setResult(RESULT_CANCELED)
-
-        val conditionId = intent.getStringExtra("condition_id")
-        val rid = intent.getStringExtra("request_id")
-        val caller = callingPackage
-        val curboxes = Curbox.installations(this)
-        val expected = Curbox.selected(this)
-        val valid = intent.action == Curbox.ACTION_CHECK &&
-            caller != null && caller in curboxes && (expected == null || caller == expected) &&
-            conditionId == Curbox.CONDITION_ID &&
-            rid != null && rid.isNotEmpty() && rid.length <= 100
-        log("open", mapOf("valid" to valid, "caller" to caller))
-        if (!valid) { finish(); return }
-        requestId = rid
-
+        if (!acceptLaunch()) { finish(); return }
         render()
         loadQuestion()
     }
@@ -85,7 +74,7 @@ class CheckActivity : Activity() {
         root.addView(feedback)
         submit = Button(this).apply { text = "提交"; isAllCaps = false; textSize = 18f; isEnabled = false; setOnClickListener { check() } }
         root.addView(submit)
-        root.addView(Button(this).apply { text = "不打开了"; isAllCaps = false; setOnClickListener { log("give_up"); finish() } })
+        root.addView(Button(this).apply { text = "不打开了"; isAllCaps = false; setOnClickListener { log("give_up"); giveUp() } })
         setContentView(ScrollView(this).apply { isFillViewport = true; addView(root) })
     }
 
@@ -142,11 +131,30 @@ class CheckActivity : Activity() {
                 Engine.store.saveAgenda(agenda)
             }
         }
-        setResult(RESULT_OK, Intent().putExtra("request_id", requestId))
-        finish()
+        passed()
     }
 
     private fun log(kind: String, data: Map<String, Any?> = emptyMap()) {
         runCatching { Engine.store.appender("gate")(mapOf("at" to System.currentTimeMillis(), "kind" to kind) + data) }
+    }
+}
+
+/** Curbox API v3 compatibility entry; all caller checks stay at this boundary. */
+class CheckActivity : QuestionActivity() {
+    private var requestId: String? = null
+    override fun acceptLaunch(): Boolean {
+        val rid = intent.getStringExtra("request_id")
+        val caller = callingPackage
+        val expected = Curbox.selected(this)
+        val valid = intent.action == Curbox.ACTION_CHECK && caller != null &&
+            caller in Curbox.installations(this) && (expected == null || caller == expected) &&
+            intent.getStringExtra("condition_id") == Curbox.CONDITION_ID &&
+            rid != null && rid.isNotEmpty() && rid.length <= 100
+        if (valid) requestId = rid
+        return valid
+    }
+    override fun passed() {
+        setResult(RESULT_OK, Intent().putExtra("request_id", requestId))
+        finish()
     }
 }
