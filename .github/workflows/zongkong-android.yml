@@ -120,6 +120,7 @@ jobs:
   # https://github.com/aozhenyu666-cmyk/test/releases/download/zongkong-latest/zongkong.apk
   # https://github.com/aozhenyu666-cmyk/test/releases/download/zongkong-latest/zongkong-sentinel.apk
   release:
+    if: github.ref == 'refs/heads/deepseek/zk-client-v2'
     needs: [build, smoke]
     runs-on: ubuntu-latest
     steps:

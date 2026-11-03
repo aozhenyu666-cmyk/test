@@ -418,6 +418,14 @@ private fun SelfHealCard(key: Int, refresh: () -> Unit) {
             else "无障碍老是“开着但没在运行”、每次都要手动关开？在电脑上执行一次下面这条命令（手机开 USB 调试、连上电脑），以后总控自己修。" +
                 "不授权也行：总控会每 20 分钟大声提醒你一次，直到它重新跑起来。",
         )
+        val repair = com.zongkong.app.system.DisabledA11yRepair
+        val restoreDisabled = remember(key) { repair.enabled(context) }
+        OutlinedButton(onClick = { repair.setEnabled(context, !restoreDisabled); refresh() }) {
+            Text(if (restoreDisabled) "关闭被停用后的自动写回" else "开启被停用后的自动写回")
+        }
+        val lastWrite = repair.last(context)
+        Hint("被停用后的自动写回：${if (restoreDisabled) "开" else "关"}；最近写回：${if (lastWrite == 0L) "无记录" else java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(lastWrite))}。" +
+            "开启后每 30 秒检查；手动关闭无障碍前，请先关闭此功能和哨兵看护。强制停止后的恢复依赖哨兵，NOT_TESTED。")
         val sentinelNeeds = remember(key) {
             // 哨兵那边也要有这个权限，才能在同一条恢复链路上串行操作（跨进程文件锁）。
             SentinelClient.installed(context) && !granted
