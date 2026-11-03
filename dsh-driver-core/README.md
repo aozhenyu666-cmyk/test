@@ -77,6 +77,7 @@ DSH Go（大肥鱼）的插件：你开着 Gemini Live / GPT Live 学习时，�
 | [docs/01-复用接口清单.md](docs/01-复用接口清单.md) | 能直接复用的 Hook 点（DSH 引擎、speak-up、fish-memory、你 fork 里的 Android 拦截与主动内核）及冲突 |
 | [docs/02-状态机与协议.md](docs/02-状态机与协议.md) | 会话状态机、带宽水位判据、升级规则、数据结构、HTTP 协议、手机端权限与事件、真机待核实清单 |
 | [docs/03-驾驶员提示词.md](docs/03-驾驶员提示词.md) | 三层驾驶员提示词模板、一次真实渲染、兜底规则、贴给 Gemini/ChatGPT 的设置 |
+| [docs/04-能力研究.md](docs/04-能力研究.md) | 下一轮能力研究：读 Mika、Open-LLM-VTuber、closepaw、Orbit、ScreenSeek、promptfoo 源码后的可复用模式、五项能力设计、性价比前三和最小方案（未实现） |
 | `plugin/` | DSH 宿主插件（零依赖 ESM）：`lib/core/` 纯逻辑，`lib/index.js` 路由，`lib/brain.js` 借 agent 出题 |
 | `android/kotlin/` | 放进 fork `app/android/.../dsh_app/loop/driver/` 的 Kotlin：反射、音频推断、断点卡、悬浮小卡、通道 |
 | `android/dart/driver_channel.dart` | 放进 fork `app/lib/driver/` 的 Dart 中继 |
