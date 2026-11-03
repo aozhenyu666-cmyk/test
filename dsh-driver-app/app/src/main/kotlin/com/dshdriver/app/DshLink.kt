@@ -27,13 +27,15 @@ object DshLink {
 
     /** "3080:K7PQ-M3XA" 或只有 "K7PQ-M3XA"（默认端口 3080）。 */
     fun parseCode(input: String): Pair<Int, String>? {
-        val s = input.trim().replace('：', ':')
-        val parts = s.split(':')
-        return when (parts.size) {
-            1 -> 3080 to parts[0]
-            2 -> (parts[0].trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: return null) to parts[1]
-            else -> null
-        }.takeIf { it.second.count(Char::isLetterOrDigit) == 8 }
+        val parts = input.trim().replace('：', ':').split(':')
+        val port: Int
+        val code: String
+        when (parts.size) {
+            1 -> { port = 3080; code = parts[0] }
+            2 -> { port = parts[0].trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: return null; code = parts[1] }
+            else -> return null
+        }
+        return if (code.count(Char::isLetterOrDigit) == 8) port to code else null
     }
 
     /** 成功返回配对信息；失败返回给人看的原因。 */
