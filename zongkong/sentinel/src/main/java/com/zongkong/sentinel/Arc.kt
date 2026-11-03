@@ -76,6 +76,23 @@ object Arc {
         }
     }
 
+    /** null 表示设置原本已启用；true 仅表示写入回验通过，不能当健康凭据。 */
+    fun ensureEnabled(c: Context, component: ComponentName): Boolean? = synchronized(lock) {
+        if (!Sys.canWrite(c)) return@synchronized false
+        runCatching {
+            val cr = c.contentResolver
+            val key = android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            val cur = android.provider.Settings.Secure.getString(cr, key).orEmpty()
+            val present = cur.split(':').any { ComponentName.unflattenFromString(it) == component }
+            if (present && android.provider.Settings.Secure.getInt(cr, android.provider.Settings.Secure.ACCESSIBILITY_ENABLED, 0) == 1) return@runCatching null
+            val next = EnabledServiceList.append(cur, component.flattenToString())
+            if (!android.provider.Settings.Secure.putString(cr, key, next)) return@runCatching false
+            if (!android.provider.Settings.Secure.putInt(cr, android.provider.Settings.Secure.ACCESSIBILITY_ENABLED, 1)) return@runCatching false
+            android.provider.Settings.Secure.getString(cr, key).orEmpty().split(':')
+                .any { ComponentName.unflattenFromString(it) == component }
+        }.getOrDefault(false)
+    }
+
     /** 客户端也要能停自己的自动锁屏：紧急暂停时逐个通知，各自独立超时。 */
     fun notifyEmergency(c: Context, pkg: String, reason: String): Boolean =
         runCatching { com.zongkong.sentinel.watch.ClientCall.notifyEmergency(c, pkg, reason) }

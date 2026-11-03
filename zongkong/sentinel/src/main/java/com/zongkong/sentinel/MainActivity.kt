@@ -56,6 +56,22 @@ class MainActivity : Activity() {
             13f, Ui.MUTED,
         )
 
+        ui.text("\n无障碍被停用后的写回看护", 17f, bold = true)
+        ui.text("每 30 秒检查勾选对象，只补回缺失组件，保留其他无障碍服务。写回不等于重新绑定成功，强制停止后的效果 NOT_TESTED。紧急暂停期间不执行本项。", 13f, Ui.MUTED)
+        for ((pkg, name) in DisabledGuardian.targets) {
+            val on = DisabledGuardian.enabled(this, pkg)
+            ui.text("$name：${if (on) "看护开" else "看护关"}；${DisabledGuardian.last(this, pkg)}", 13f, Ui.MUTED)
+            ui.button(if (on) "停止看护$name" else "看护$name", primary = false) {
+                DisabledGuardian.setEnabled(this, pkg, !on)
+                WatchService.start(this)
+                render()
+            }
+        }
+        if (!Sys.canWrite(this)) ui.button("复制哨兵授权命令", primary = false) {
+            getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("adb", "adb shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS"))
+        }
+        ui.text("思维驾驶员只有设置写回记录，不参与下方三客户端的真实挑战健康判定。要手动关闭无障碍，请先停看护及目标应用的自动修复。", 12f, Ui.MUTED)
+
         // ---------- 首页四态 ----------
         val (stateText, stateColor) = when (page.overall) {
             OverallReadiness.ALL_READY -> page.overallText to Ui.GREEN
