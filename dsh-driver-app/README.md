@@ -53,7 +53,7 @@ gradle :core:test
 | 部分 | 状态 |
 |---|---|
 | `core` 状态机与规则 | **PASS**：24 项测试 |
-| `app` 编译与打包 | 看 CI（`.github/workflows/dsh-driver-app.yml`） |
+| `app` 编译与打包 | **PASS**：CI 首次运行 [41579870352](https://github.com/aozhenyu666-cmyk/test/actions/runs/41579870352) 编译通过、24 项测试全过、产出 APK（约 0.9 MB） |
 | 真机：无障碍读前台、断点卡后台弹出、回到 Live、音频推断 Gemini 在说/说完、Live 被关检测 | **NOT_TESTED** |
 
 ## 已知限制

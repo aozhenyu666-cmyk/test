@@ -1,5 +1,7 @@
 # dsh-driver-core · 大肥鱼主驾驶员
 
+> **2026-11-03：手机端改为独立 APP，见 [`../dsh-driver-app/`](../dsh-driver-app/README.md)。** 本目录的插件是规则的参照实现（APP 里的 Kotlin 版和它跑同一批场景），下一步精简成「配对后给 APP 出题、读大肥鱼记忆」的插件。`android/` 是早先给 DSH Go fork 写的接线草稿，已被独立 APP 取代。
+
 DSH Go（大肥鱼）的插件：你开着 Gemini Live / GPT Live 学习时，它负责两件 Live 自己做不到的事——**你切走了，把你拉回原断点；你不说话了，用最低成本的一步让你重新开口**。
 
 ## 先说清楚它能做什么、不能做什么
