@@ -45,6 +45,8 @@ class ZkApp : Application() {
         store = Store(this)
         actions = Actions(this, store)
         chat = com.zongkong.app.data.ChatRepo(this, store, actions)
+        com.zongkong.app.system.DisabledA11yRepair.ensure(this)
+        com.zongkong.app.system.DisabledA11yRepair.schedule(this)
         Notifications.ensureChannels(this)
         com.zongkong.app.system.Reminders.reschedule(this)
         com.zongkong.app.system.Reminders.watchdog(this)

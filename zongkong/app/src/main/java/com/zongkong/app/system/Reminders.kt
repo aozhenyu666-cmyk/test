@@ -110,6 +110,8 @@ class ReminderReceiver : BroadcastReceiver() {
             else -> Reminders.check(context)
         }
         PetWidget.refresh(context)
+        DisabledA11yRepair.ensure(context)
+        DisabledA11yRepair.schedule(context)
         Reminders.reschedule(context)
         // 闹钟叫醒时可以开前台服务：常驻服务被清掉了就趁这时候拉起来
         KeepAliveService.start(context)
@@ -119,6 +121,8 @@ class ReminderReceiver : BroadcastReceiver() {
 /** 开机、更新后重新定闹钟。 */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        DisabledA11yRepair.ensure(context)
+        DisabledA11yRepair.schedule(context)
         Reminders.reschedule(context)
         Reminders.watchdog(context)
         KeepAliveService.start(context)

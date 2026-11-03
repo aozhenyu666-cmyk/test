@@ -78,6 +78,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        com.zongkong.app.system.DisabledA11yRepair.ensure(this)
+        com.zongkong.app.system.DisabledA11yRepair.schedule(this)
         // 你回来了：停止连续震动
         if (zk.store.buzzUntil != 0L) com.zongkong.app.system.Buzz.stop(this)
         // 常驻服务；无障碍开着却没在跑、又给过写设置的权限：现在就重新挂上

@@ -42,7 +42,7 @@ import kotlinx.coroutines.launch
  *   - 重绑前后**重新读取**当前无障碍列表，把其他已启用服务原样保留（T12）；
  *   - 与哨兵**串行**（跨进程文件锁 + 本地锁），避免两边同时改同一份系统配置。
  *
- * 只修「开着但没在运行 / 不再响应」；你自己在设置里关掉的，不替你打开。
+ * 此处保留「开着但失联」修复；用户可另开 DisabledA11yRepair 补回被删掉的组件。
  */
 object SelfHeal {
     private const val TAG = "SelfHeal"
@@ -94,7 +94,7 @@ object SelfHeal {
                 return
             }
             HealthStatus.DISABLED -> {
-                // 用户在设置里关的：不替你打开，只提醒。
+                // 关闭后的补回由 DisabledA11yRepair 的独立开关控制；此处只提醒。
                 warn(context, enabled = false, verdict = v)
                 return
             }
@@ -267,6 +267,12 @@ class KeepAliveService : Service() {
         }
         if (scope == null) {
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also { s ->
+                s.launch {
+                    while (isActive) {
+                        DisabledA11yRepair.ensure(this@KeepAliveService)
+                        delay(30_000)
+                    }
+                }
                 s.launch {
                     // 刚起来时无障碍服务可能还在连：先等一分钟
                     delay(60_000)

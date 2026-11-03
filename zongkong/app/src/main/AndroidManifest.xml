@@ -160,6 +160,8 @@
         </receiver>
 
 
+        <service android:name=".system.DisabledA11yJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
+
         <!-- 无障碍服务：只读前台应用包名，见 res/xml/guard_service.xml -->
         <service
             android:name=".guard.GuardService"
