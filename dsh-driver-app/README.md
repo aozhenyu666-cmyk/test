@@ -51,6 +51,7 @@
 |---|---|
 | `core/` | 纯 Kotlin：状态机 `Driver`、水位判定 `Bandwidth`、六骰子 `Dice`、去重 `Similar`、议程 `Agenda`、推进日志 `Telemetry`、拦截门出题判卷 `Gate`、Live 推断 `Reflex`。规则和 `dsh-driver-core/plugin` 的 JS 参照实现一致 |
 | `core/src/test/` | 27 项测试：拦截门出题与判卷、完整闭环、两级升级、休息拉回、沉默阶梯、说完触发、冷却、随机插问、防重复、三级记录、议程续接、规则本身 |
+| `app/Ui.kt` | 界面的颜色、字号、圆角、按钮和卡片组件都在这里（Claude 风格的暖色调）。设计说明见 [docs/UI.md](docs/UI.md) |
 | `app/` | Android 外壳（不用任何 androidx 库）：`Engine` 中枢、`Curbox` 对接（AIDL）、`CheckActivity` 拦截门答题页、`WatchService` 前台记录（诊断）、`LockService` 前台服务 + 音频状态、`Overlay` 悬浮小卡、`CardActivity` 展开页、`MainActivity` 首页、`Store` 本机存储 |
 
 数据只存在本机 APP 私有目录 `files/driver/`：设置、主线与死穴、统计、议程、上一次结果、每次陪练的推进日志与拦截门记录（JSONL）。
