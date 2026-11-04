@@ -7,6 +7,7 @@ on:
   push:
     paths:
       - "dsh-driver-app/**"
+      - "dsh-driver-core/plugin/**"
       - ".github/workflows/dsh-driver-app.yml"
   workflow_dispatch:
 
@@ -29,14 +30,28 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Plugin tests
+        run: node --test ../dsh-driver-core/plugin/test/*.test.mjs
+
       - name: Core tests and debug APK
-        run: ./gradlew --no-daemon :core:test :app:assembleDebug
+        run: ./gradlew --no-daemon :core:test :app:assembleDebug :app:assembleDebugAndroidTest
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: dsh-driver-debug-apk
           path: dsh-driver-app/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload awareness test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-driver-test-apk
+          path: dsh-driver-app/app/build/outputs/apk/androidTest/debug/*.apk
           if-no-files-found: error
 
       - name: Upload test reports
@@ -47,3 +62,36 @@ jobs:
           path: |
             dsh-driver-app/core/build/reports/tests/
             dsh-driver-app/app/build/reports/
+
+  awareness-smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dsh-driver-debug-apk
+          path: apk/app
+      - uses: actions/download-artifact@v4
+        with:
+          name: dsh-driver-test-apk
+          path: apk/test
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: bash dsh-driver-app/scripts/awareness-smoke.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: awareness-smoke
+          path: awareness-smoke/

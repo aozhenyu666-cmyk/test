@@ -1,6 +1,6 @@
 {
   "name": "dsh-driver-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DSH host plugin for the 思维驾驶员 app: pairs with the app over a local token, composes driver questions with the agent's model and fish-memory, and keeps session reports.",
   "type": "module",
   "main": "lib/index.js",

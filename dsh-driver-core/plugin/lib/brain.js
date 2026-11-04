@@ -4,6 +4,8 @@
 // 不新建会话、不唤醒冷会话；拿不到就返回 null，由驾驶员退回模板。
 
 export const SOURCE_KIND = 'dsh-driver-core'
+// The host accepts both bare and session-prefixed ids (same convention as findAgent).
+const sessionKey = (id) => typeof id === 'string' ? id.replace(/^session-/, '') : id
 
 function assistantText(data) {
   const content = data?.message?.content
@@ -26,10 +28,10 @@ export class AgentBrain {
     this.counters = { asked: 0, answered: 0, unavailable: 0, failed: 0, toolDenied: 0 }
   }
 
-  ask(prompt, timeoutMs = 8_000) {
+  ask(prompt, timeoutMs = 8_000, {rememberLimit = 0} = {}) {
     const sid = this.deps.sessionId()
     const agent = sid ? this.deps.findAgent(sid) : undefined
-    if (!agent || (agent.status !== undefined && agent.status !== 'idle') || this.pending) {
+    if (!agent || (agent.status !== undefined && agent.status !== 'idle') || this.pending || this.driverTurns.has(sessionKey(sid))) {
       this.counters.unavailable++
       return Promise.resolve(null)
     }
@@ -41,7 +43,7 @@ export class AgentBrain {
         this.pending = null
         resolve(text)
       }
-      this.pending = { sid, messageId: message.id, turn: null, text: '', done, timer: setTimeout(() => { this.counters.failed++; done(null) }, timeoutMs) }
+      this.pending = { sid: sessionKey(sid), messageId: message.id, turn: null, text: '', done, rememberLimit, timer: setTimeout(() => { this.counters.failed++; done(null) }, timeoutMs) }
       this.counters.asked++
       try {
         const r = agent.followup(message)
@@ -54,15 +56,16 @@ export class AgentBrain {
   }
 
   onSessionEvent(sid, event) {
+    sid = sessionKey(sid)
     if (!event || typeof event.type !== 'string') return
     const data = event.data
     if (event.type === 'turn/start' && Number.isInteger(data?.turn)) { this.turns.set(sid, data.turn); return }
-    if (event.type === 'turn/end' && this.driverTurns.get(sid) === data?.turn) this.driverTurns.delete(sid)
+    if (event.type === 'turn/end' && this.driverTurns.get(sid)?.turn === data?.turn) this.driverTurns.delete(sid)
     const p = this.pending
     if (!p || p.sid !== sid) return
     if (event.type === 'user/message' && data?.id === p.messageId) {
       p.turn = this.turns.get(sid) ?? null
-      if (p.turn != null) this.driverTurns.set(sid, p.turn)
+      if (p.turn != null) this.driverTurns.set(sid, {turn:p.turn,rememberLeft:p.rememberLimit})
     } else if (event.type === 'assistant/message' && p.turn != null && data?.turn === p.turn) {
       const t = assistantText(data)
       if (t) p.text = t
@@ -73,13 +76,18 @@ export class AgentBrain {
   }
 
   /** 驾驶员发起的回合里不许调工具（不操作手机、不读写文件）。 */
-  guardTool(sid) {
+  guardTool(sid, tool) {
+    sid = sessionKey(sid)
     if (sid == null || !this.driverTurns.has(sid)) return undefined
+    const turn=this.driverTurns.get(sid)
+    const name=typeof tool==='string'?tool:tool?.name
+    if (name==='remember' && turn.rememberLeft>0) {turn.rememberLeft--;return undefined}
     this.counters.toolDenied++
     return { kind: 'deny', reason: 'dsh-driver-core: tools are disabled in a driver turn' }
   }
 
   onAgentGone(sid) {
+    sid = sessionKey(sid)
     this.driverTurns.delete(sid)
     if (this.pending?.sid === sid) { this.counters.failed++; this.pending.done(null) }
   }

@@ -28,7 +28,29 @@ function writeJson(p, v) {
 
 export function makeStore(h = home()) {
   const d = dir(h)
+  const observationsFile = join(d, 'observations.jsonl')
+  const observations = () => {
+    try { return readFileSync(observationsFile,'utf8').split('\n').flatMap(line=>{try{return [JSON.parse(line)]}catch{return []}}) } catch { return [] }
+  }
   return {
+    loadObservations: (limit=6) => observations().slice(-limit),
+    acceptObservations: (rows, now) => {
+      const old=observations().filter(r=>r.at>=now-14*86400000)
+      const ids=new Set(old.map(r=>r.id)), fresh=[]
+      for(const r of rows) if(!ids.has(r.id)) {ids.add(r.id);fresh.push(r)}
+      mkdirSync(d,{recursive:true})
+      writeFileSync(observationsFile+'.tmp',[...old,...fresh].map(r=>JSON.stringify(r)).join('\n')+'\n')
+      renameSync(observationsFile+'.tmp',observationsFile)
+      return {fresh}
+    },
+    loadPlan: () => readJson(join(d,'plan.json'),null),
+    savePlan: (plan) => writeJson(join(d,'plan.json'),plan),
+    queueDigest: (pending) => writeJson(join(d,'digest-pending.json'),pending),
+    loadDigestPending: () => readJson(join(d,'digest-pending.json'),null),
+    finishDigest: (id) => {
+      const pending=readJson(join(d,'digest-pending.json'),null)
+      if(pending?.id===id) writeJson(join(d,'digest-pending.json'),null)
+    },
     loadConfig: () => readJson(join(d, 'config.json'), {}),
     saveConfig: (c) => writeJson(join(d, 'config.json'), c),
     loadProfile: () => readJson(join(d, 'profile.json'), { goals: [], habits: [] }),

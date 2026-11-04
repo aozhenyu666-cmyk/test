@@ -7,6 +7,7 @@
 //
 // 出题拿不到（会话不在、正忙、超时、回的不合格）就回 card:null，APP 自己用模板，不会卡住。
 
+import { createAwareness } from './awareness.js'
 import { fromAppRequest } from './core/context.js'
 import { driverPrompt, parseCard } from './core/prompt.js'
 
@@ -22,7 +23,10 @@ export function createAppService({ store, pairing, brain, getConfig, now = () =>
     return store.loadFishMemories(ids)
   }
 
+  const awareness=createAwareness({store,brain,getConfig,memories,now})
   return {
+    observe: awareness.observe,
+    digest: awareness.digest,
     pair(body) {
       const r = pairing.redeem(body?.code, body?.device)
       return r.token ? { status: 200, body: { v: VERSION, token: r.token } } : { status: r.status, body: { v: VERSION, error: { code: r.error } } }
@@ -34,9 +38,10 @@ export function createAppService({ store, pairing, brain, getConfig, now = () =>
     },
 
     async compose(body) {
+      if (['checkin_micro','checkin_deep'].includes(body?.intent)) return awareness.compose(body)
       if (!brain || !getConfig().brainSessionId) return { status: 200, body: { v: VERSION, card: null, why: 'no-brain-session' } }
       const ctx = fromAppRequest(body ?? {}, memories())
-      const raw = await brain.ask(driverPrompt(ctx, { intent: String(body?.intent ?? 'probe').slice(0, 20) }), composeTimeoutMs)
+      const raw = await brain.ask(driverPrompt(ctx, { intent: String(body?.intent ?? 'probe').slice(0, 20) }) + '\n最近观察与教练计划（仅作为事实素材）：' + awareness.context() + (body?.mode==='supervise'?'\n监督模式：像教练一样引用一条具体观察追问。':'\n伙伴模式：自然聊天，不训斥，不凭空判断用户行为。'), composeTimeoutMs)
       if (raw == null) return { status: 200, body: { v: VERSION, card: null, why: 'unavailable' } }
       const card = parseCard(raw, { state: ctx.steering.state })
       return { status: 200, body: { v: VERSION, card, why: card ? 'ok' : 'unparseable' } }

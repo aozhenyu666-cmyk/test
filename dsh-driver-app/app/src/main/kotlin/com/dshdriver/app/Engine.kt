@@ -56,6 +56,7 @@ object Engine {
     fun init(context: Context) {
         app = context.applicationContext
         store = Store(app)
+        AwarenessRuntime.init()
         val nm = app.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "锁定与结果", NotificationManager.IMPORTANCE_DEFAULT))
     }
@@ -78,17 +79,22 @@ object Engine {
         val out = d.start(System.currentTimeMillis(), topic, task, minutes, settings.anchors)
         main.post { LockService.start(app, task.ifBlank { topic }) }
         handle(out)
-        worker.postDelayed(ticker, 1_000)
+        ensureTicker()
     }
+
+    fun background(action: ()->Unit) { worker.post(action) }
+    fun ensureTicker() { worker.post {worker.removeCallbacks(ticker);worker.postDelayed(ticker,1000)} }
 
     private val ticker = object : Runnable {
         override fun run() {
-            val d = driver ?: return
-            if (d.phaseNow == Phase.ENDED) return
-            val now = System.currentTimeMillis()
-            for (c in live.poll(now)) applyLive(d, c, now)
-            handle(d.tick(now))
-            if (d.phaseNow != Phase.ENDED) worker.postDelayed(this, 1_000)
+            val now=System.currentTimeMillis()
+            AwarenessRuntime.tick(now)
+            val d=driver
+            if(d!=null && d.phaseNow!=Phase.ENDED) {
+                for(c in live.poll(now)) applyLive(d,c,now)
+                handle(d.tick(now))
+            }
+            if(AwarenessRuntime.active || (d!=null && d.phaseNow!=Phase.ENDED)) worker.postDelayed(this,1000)
         }
     }
 
@@ -111,6 +117,8 @@ object Engine {
      * 这里只留诊断记录。
      */
     fun onForeground(context: Context, pkg: String?, className: String?) {
+        val at=System.currentTimeMillis()
+        worker.post {store.observations.foreground(at,pkg)}
         if (pkg.isNullOrBlank()) return
         synchronized(seen) {
             if (seen.lastOrNull()?.pkg == pkg && seen.lastOrNull()?.className == className) return
@@ -175,9 +183,9 @@ object Engine {
         val last = store.last()
         val agenda = d.agenda
         if (pairing != null && last != null && agenda != null) Thread { runCatching { DshLink.report(pairing, last, agenda) } }.start()
-        worker.removeCallbacks(ticker)
+        if(!AwarenessRuntime.active) worker.removeCallbacks(ticker)
         main.post {
-            LockService.stop(app)
+            if(!AwarenessRuntime.active) LockService.stop(app)
             notifyEnd(end)
             onChange?.invoke()
         }

@@ -21,6 +21,7 @@ import java.io.File
  * 写入先写 .tmp 再改名，写一半断电不会把旧文件写坏。
  */
 class Store(context: Context) {
+    val observations=ObservationStore(context)
     private val dir = File(context.filesDir, "driver").apply { mkdirs() }
 
     data class Settings(

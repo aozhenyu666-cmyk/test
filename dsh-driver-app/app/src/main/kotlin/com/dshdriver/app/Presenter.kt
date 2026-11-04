@@ -18,6 +18,7 @@ object Presenter {
         when (d.type) {
             Directive.SHOW, Directive.PULLBACK, Directive.ESCALATE -> {
                 val c = d.card ?: return
+                if(Engine.store.observations.pending()!=null) {Engine.surface(c.id,"not_shown","checkin_pending");return}
                 if (d.type != Directive.SHOW || d.level >= 1) buzz(context)
                 if (Overlay.canShow(context)) {
                     CardActivity.withdraw()
