@@ -6,6 +6,9 @@ import android.content.pm.PackageManager
 import android.provider.Settings
 import com.dshdriver.core.BlockRules
 import com.dshdriver.core.Verdict
+import java.time.LocalDate
+import java.time.LocalTime
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 拦截规则的取用与放行记录。无障碍服务只把"现在前台是什么"喂进来，判断都在这里。
@@ -14,6 +17,20 @@ import com.dshdriver.core.Verdict
  */
 object Intercept {
     private const val CACHE_MS = 3_000L
+    private const val TRIGGER_COOLDOWN_MS = 8_000L
+
+    /** 同一个包 8 秒内只拉一次门：无障碍和 UsageStats 两条路可能同时看到它。 */
+    private val lastTrigger = ConcurrentHashMap<String, Long>()
+
+    /** 原子占坑：两条线程同时命中同一个包时，只有一条能成功。 */
+    fun claimTrigger(pkg: String, now: Long): Boolean = synchronized(lastTrigger) {
+        val last = lastTrigger[pkg] ?: 0L
+        if (now - last < TRIGGER_COOLDOWN_MS) false
+        else {
+            lastTrigger[pkg] = now
+            true
+        }
+    }
 
     @Volatile private var cached: BlockRules? = null
     @Volatile private var loadedAt = 0L
@@ -42,13 +59,43 @@ object Intercept {
 
     fun enabled(context: Context): Boolean = Engine.store.blocking().enabled
 
-    /** 答对之后放行 [minutes] 分钟。 */
-    fun allow(context: Context, pkg: String, minutes: Int) {
-        val b = Engine.store.blocking()
-        val until = System.currentTimeMillis() + minutes.coerceIn(1, 120) * 60_000L
-        Engine.store.saveBlocking(b.copy(allowedUntil = (b.allowedUntil - pkg) + (pkg to until)))
+    /**
+     * 答对之后放行 [minutes] 分钟。返回 null 表示放行成功，否则是拒绝原因。
+     *
+     * 三条加严：夜间禁用、每日总额、同一 App 当天重复打开递减（每多开一次少 1 分钟，最少 1 分钟）。
+     */
+    @Synchronized
+    fun allow(context: Context, pkg: String, minutes: Int): String? {
+        if (isNight()) {
+            val b0 = Engine.store.blocking()
+            if (b0.nightBan) return "现在是夜间禁用时段（23:00–06:00），不开放。"
+        }
+        val now = System.currentTimeMillis()
+        val today = LocalDate.now().toString()
+        val b0 = Engine.store.blocking()
+        val b = if (b0.day == today) b0
+        else b0.copy(day = today, grantedToday = emptyMap(), opensToday = emptyMap())
+
+        val opens = b.opensToday[pkg] ?: 0
+        var grant = (minutes.coerceIn(1, 120) - opens).coerceAtLeast(1)
+        if (b.dailyMinutes > 0) {
+            val left = b.dailyMinutes - b.grantedToday.values.sum()
+            if (left <= 0) return "今天的放行额度用完了（每天 ${b.dailyMinutes} 分钟）。"
+            grant = minOf(grant, left)
+        }
+        val until = now + grant * 60_000L
+        Engine.store.saveBlocking(
+            b.copy(
+                allowedUntil = (b.allowedUntil - pkg) + (pkg to until),
+                grantedToday = b.grantedToday + (pkg to ((b.grantedToday[pkg] ?: 0) + grant)),
+                opensToday = b.opensToday + (pkg to (opens + 1)),
+            ),
+        )
         invalidate()
+        return null
     }
+
+    fun isNight(now: LocalTime = LocalTime.now()): Boolean = now.hour >= 23 || now.hour < 6
 
     /** 默认放行多久。 */
     fun minutes(context: Context): Int = Engine.store.blocking().minutes

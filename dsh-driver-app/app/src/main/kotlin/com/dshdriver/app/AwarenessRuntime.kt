@@ -40,7 +40,7 @@ object AwarenessRuntime {
         finishPending("superseded")
         state=Supervision.start(System.currentTimeMillis(),minutes)
         store.save(state!!)
-        main.post {LockService.start(Engine.app,"监督模式 · 每5分钟察觉，每10分钟复盘");changed()}
+        main.post {LockService.start(Engine.app,"监督模式 · 每5分钟察觉，每10分钟复盘");GuardService.sync(Engine.app);changed()}
         Engine.ensureTicker()
     }
     fun stop() = Engine.background {
@@ -48,7 +48,7 @@ object AwarenessRuntime {
         finishPending("stopped")
         sync()
         main.post {Overlay.hideCheckin();ObservationActivity.withdraw();voice?.close();voice=null
-            if(!Engine.locked) LockService.stop(Engine.app);changed()}
+            if(!Engine.locked) LockService.stop(Engine.app);GuardService.sync(Engine.app);changed()}
     }
     private fun finishPending(reason: String) {
         store.pending()?.let { row -> val answers=row.optJSONObject("answers")?:JSONObject()
@@ -104,6 +104,13 @@ object AwarenessRuntime {
     }
     private fun present(id: String, row: JSONObject) {
         if(!screenAvailable()) {ObservationActivity.notifyPending(Engine.app,id);return}
+        // 答题页在前台时不要把全屏察觉页盖上去：那会让答题页 pause、状态被系统重建，
+        // 用户正打的字和正在答的题会一起丢掉。先留通知/浮条，等门关了再答。
+        if(GateActivity.visible) {
+            ObservationActivity.notifyPending(Engine.app,id)
+            if(row.optString("kind")=="micro" && Overlay.canShow(Engine.app)) Overlay.showCheckin(Engine.app,row)
+            return
+        }
         if(row.optString("kind")=="micro" && Overlay.canShow(Engine.app)) Overlay.showCheckin(Engine.app,row)
         else {
             // Android may silently reject a background start; retain a clickable route until the page resumes.

@@ -25,6 +25,14 @@ import android.widget.TextView
  */
 enum class Tone { OK, WARN, BAD, NEUTRAL }
 
+/** 拦截门用：禁掉长按菜单里的粘贴，答案只能自己打出来。 */
+private class NoPasteEditText(context: Context) : EditText(context) {
+    override fun onTextContextMenuItem(id: Int): Boolean {
+        if (id == android.R.id.paste || id == android.R.id.pasteAsPlainText) return true
+        return super.onTextContextMenuItem(id)
+    }
+}
+
 /**
  * 一套颜色。浅色给首页，深色给盖在别的应用上的答题页和悬浮卡。
  *
@@ -432,7 +440,8 @@ class Ui(private val ctx: Context, private val p: Palette) {
         numeric: Boolean = false,
         multiline: Boolean = false,
         lines: Int = 1,
-    ): EditText = EditText(ctx).apply {
+        noPaste: Boolean = false,
+    ): EditText = (if (noPaste) NoPasteEditText(ctx) else EditText(ctx)).apply {
         this.hint = hint
         setText(value)
         textSize = 14.5f

@@ -35,6 +35,14 @@ class GateTest {
         assertTrue(Gate.judge("我觉得这一题的思路应该先看整体再看局部特征", q).pass, "够长的实在话")
     }
 
+    @Test fun stricterMinimumLength() {
+        val q = Gate.Question("说说你的依据", null, null, null, "default")
+        val plain = "这是一句刚好十五个字的普通回答内容"
+        assertTrue(Gate.judge(plain, q, 15).pass, "17 个字，15 字门槛应放行")
+        assertFalse(Gate.judge(plain, q, 30).pass, "17 个字，30 字门槛应拒绝")
+        assertTrue(Gate.judge("因为题干第二句说了数量", q, 50).pass, "有明确依据可豁免字数门槛")
+    }
+
     @Test fun llmQuestionMustAskForReasoning() {
         assertTrue(Gate.acceptsLlm(Draft("one_word", "依据是哪个词？", "evidence")))
         assertFalse(Gate.acceptsLlm(Draft("ab", "选哪个？", "choice", Options("a", "b"))))

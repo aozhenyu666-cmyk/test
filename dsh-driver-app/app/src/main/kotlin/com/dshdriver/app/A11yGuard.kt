@@ -2,6 +2,7 @@ package com.dshdriver.app
 
 import android.Manifest
 import android.app.Notification
+import android.app.admin.DevicePolicyManager
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.ComponentName
@@ -31,8 +32,12 @@ object A11yGuard {
 
     fun component(context: Context): String = ComponentName(context, WatchService::class.java).flattenToString()
 
-    /** 系统现在有没有在跑我们的无障碍服务。 */
+    /** 系统现在有没有在跑我们的无障碍服务：组件在列表里，且总开关是 1。 */
     fun isOn(context: Context): Boolean {
+        val enabled = runCatching {
+            Settings.Secure.getInt(context.contentResolver, KEY_ENABLED, 0) == 1
+        }.getOrDefault(false)
+        if (!enabled) return false
         val me = component(context)
         val on = runCatching { Settings.Secure.getString(context.contentResolver, KEY_SERVICES) }.getOrNull().orEmpty()
         return on.split(':').any { it.trim().equals(me, ignoreCase = true) }
@@ -44,7 +49,8 @@ object A11yGuard {
     }.getOrDefault(false)
 
     /** 现在能不能自己救回来（任何一种方式都行）。 */
-    fun canHeal(context: Context): Boolean = canWriteDirectly(context) || Shell.granted()
+    fun canHeal(context: Context): Boolean =
+        canWriteDirectly(context) || DriverDeviceAdmin.isOwner(context) || Shell.granted()
 
     /**
      * 开着的就别动；关着就尽量写回去。
@@ -53,6 +59,8 @@ object A11yGuard {
     fun ensure(context: Context): Boolean {
         if (isOn(context)) return true
         if (canWriteDirectly(context)) return writeDirectly(context)
+        // 设备所有者不需要 WRITE_SECURE_SETTINGS，也不依赖 Shizuku 是否活着
+        if (DriverDeviceAdmin.isOwner(context)) return writeViaOwner(context)
         if (Shell.granted()) {
             writeViaShell(context)
             return false // 异步，等它自己写完；下次心跳再复查
@@ -60,20 +68,75 @@ object A11yGuard {
         return false
     }
 
-    /** 只追加自己的组件，保留别人原有的。 */
-    private fun merged(current: String?, me: String): String {
+    /** 只追加指定组件，保留别人原有的。 */
+    private fun merged(current: String?, vararg add: String): String {
         val set = LinkedHashSet<String>()
         current.orEmpty().split(':').map(String::trim).filter { it.isNotEmpty() }.forEach { set.add(it) }
-        set.add(me)
+        add.filter { it.isNotBlank() }.forEach { set.add(it) }
         return set.joinToString(":")
     }
+
+    /** 可选互保：总控、一手的无障碍组件。只追加，不关别人；默认关，用户在首页手动开。 */
+    private val PEERS = mapOf(
+        "com.zongkong.app" to "com.zongkong.app/com.zongkong.app.guard.GuardService",
+        "com.yishou.app" to "com.yishou.app/com.yishou.app.gate.GateService",
+    )
+
+    /**
+     * 把总控/一手被系统摘掉的无障碍也补回去。需要本 APP 已经有直接写权限或设备所有者；
+     * 只写 enabled_accessibility_services，不碰 accessibility_enabled 之外的东西，也不删任何组件。
+     */
+    fun ensurePeers(context: Context): Boolean = runCatching {
+        if (!Engine.store.settings().peerGuard) return false
+        val owner = DriverDeviceAdmin.isOwner(context)
+        if (!canWriteDirectly(context) && !owner) return false
+        val current = Settings.Secure.getString(context.contentResolver, KEY_SERVICES)
+        val present = current.orEmpty().split(':').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        val missing = PEERS.filter { (pkg, comp) -> installed(context, pkg) && comp !in present }.values.toList()
+        if (missing.isEmpty()) return true
+        val value = merged(current, *missing.toTypedArray())
+        if (owner) {
+            val dpm = context.getSystemService(DevicePolicyManager::class.java) ?: return false
+            val admin = DriverDeviceAdmin.component(context)
+            dpm.setSecureSetting(admin, KEY_SERVICES, value)
+            dpm.setSecureSetting(admin, KEY_ENABLED, "1")
+        } else {
+            Settings.Secure.putString(context.contentResolver, KEY_SERVICES, value)
+            Settings.Secure.putInt(context.contentResolver, KEY_ENABLED, 1)
+        }
+        true
+    }.getOrDefault(false)
+
+    private fun installed(context: Context, pkg: String): Boolean =
+        runCatching { context.packageManager.getPackageInfo(pkg, 0); true }.getOrDefault(false)
 
     private fun writeDirectly(context: Context): Boolean = runCatching {
         val me = component(context)
         val current = Settings.Secure.getString(context.contentResolver, KEY_SERVICES)
-        if (current.orEmpty().split(':').any { it.trim().equals(me, true) }) return true
-        Settings.Secure.putString(context.contentResolver, KEY_SERVICES, merged(current, me))
+        val listed = current.orEmpty().split(':').any { it.trim().equals(me, true) }
+        val enabled = Settings.Secure.getInt(context.contentResolver, KEY_ENABLED, 0) == 1
+        if (listed && enabled) return true
+        // 组件在列表里但总开关被关掉（有些 ROM 会这样）也要把开关写回 1
+        if (!listed) Settings.Secure.putString(context.contentResolver, KEY_SERVICES, merged(current, me))
         Settings.Secure.putInt(context.contentResolver, KEY_ENABLED, 1)
+        val ok = isOn(context)
+        if (ok) context.applicationContext.let { Engine.store.saveHeal(System.currentTimeMillis()) }
+        ok
+    }.getOrDefault(false)
+
+    /**
+     * 设备所有者写回：DevicePolicyManager.setSecureSetting 不需要 WRITE_SECURE_SETTINGS，
+     * 也不会因为 Shizuku 没启动而失效。仍然只追加自己，不动别人的无障碍服务。
+     */
+    private fun writeViaOwner(context: Context): Boolean = runCatching {
+        val dpm = context.getSystemService(DevicePolicyManager::class.java) ?: return false
+        val admin = DriverDeviceAdmin.component(context)
+        val me = component(context)
+        val current = Settings.Secure.getString(context.contentResolver, KEY_SERVICES)
+        val listed = current.orEmpty().split(':').any { it.trim().equals(me, true) }
+        val enabled = Settings.Secure.getInt(context.contentResolver, KEY_ENABLED, 0) == 1
+        if (!listed) dpm.setSecureSetting(admin, KEY_SERVICES, merged(current, me))
+        if (!listed || !enabled) dpm.setSecureSetting(admin, KEY_ENABLED, "1")
         val ok = isOn(context)
         if (ok) context.applicationContext.let { Engine.store.saveHeal(System.currentTimeMillis()) }
         ok
@@ -131,11 +194,13 @@ object A11yGuard {
         runCatching { context.getSystemService(NotificationManager::class.java)?.cancel(NOTE_ID) }
     }
 
-    /** 首页要显示的三种状态，用一句话说清楚现在靠什么活着。 */
+    /** 首页要显示的几种状态，用一句话说清楚现在靠什么活着。 */
     fun describe(context: Context): String = when {
+        isOn(context) && DriverDeviceAdmin.isOwner(context) -> "已开，设备所有者会直接写回去"
         isOn(context) && canWriteDirectly(context) -> "已开，掉了我能自己写回去"
         isOn(context) && Shell.granted() -> "已开，掉了我能用 Shizuku 写回去"
         isOn(context) -> "已开，但掉了要手动重开"
+        DriverDeviceAdmin.isOwner(context) -> "被关掉了，设备所有者会写回去"
         canWriteDirectly(context) -> "被关掉了，下次启动会写回去"
         Shell.granted() -> "被关掉了，下次启动会用 Shizuku 写回去"
         else -> "没开；需要在系统设置里打开"

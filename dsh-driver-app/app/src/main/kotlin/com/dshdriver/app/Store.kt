@@ -28,6 +28,8 @@ class Store(context: Context) {
         val anchors: List<String> = DEFAULT_ANCHORS,
         val extraAllowed: List<String> = listOf("io.github.ccch1mneyyy.dsh_app"),
         val minutes: Int = 15,
+        /** 可选：顺手把总控/一手的无障碍也写回（只追加，不关别人）。默认关。 */
+        val peerGuard: Boolean = false,
     )
 
     data class Last(val endedAt: Long, val reason: String, val conclusion: String?, val summary: Telemetry.Summary, val topic: String, val task: String)
@@ -49,11 +51,13 @@ class Store(context: Context) {
             anchors = o.optJSONArray("anchors").strings().ifEmpty { DEFAULT_ANCHORS },
             extraAllowed = o.optJSONArray("extraAllowed").strings(),
             minutes = o.optInt("minutes", 15).coerceIn(1, 60),
+            peerGuard = o.optBoolean("peerGuard", false),
         )
     }
 
     fun saveSettings(s: Settings) = write("settings.json", JSONObject()
-        .put("anchors", JSONArray(s.anchors)).put("extraAllowed", JSONArray(s.extraAllowed)).put("minutes", s.minutes).toString(2))
+        .put("anchors", JSONArray(s.anchors)).put("extraAllowed", JSONArray(s.extraAllowed)).put("minutes", s.minutes)
+        .put("peerGuard", s.peerGuard).toString(2))
 
     // ── 主线与死穴 ──
     fun profile(): Profile {
@@ -141,14 +145,25 @@ class Store(context: Context) {
 
     // ── 拦截娱乐 App（内置，不依赖外部拦截器） ──
 
-    /** [allowedUntil] 是"包名 -> 放行到期"，到期由 [com.dshdriver.core.BlockRules] 判定，读的时候顺手清掉过期的。 */
+    /**
+     * [allowedUntil] 是"包名 -> 放行到期"，到期由 [com.dshdriver.core.BlockRules] 判定，读的时候顺手清掉过期的。
+     * [dailyMinutes] 是每天所有被拦 App 加起来最多放行多少分钟，0 = 不限；
+     * [grantedToday]/[opensToday] 按 [day]（本地日期）在跨天时清零。
+     */
     data class Blocking(
         val enabled: Boolean = false,
         val minutes: Int = 10,
         val blocked: List<String> = emptyList(),
         val allowedUntil: Map<String, Long> = emptyMap(),
+        val dailyMinutes: Int = 30,
+        val minChars: Int = 15,
+        val nightBan: Boolean = false,
+        val day: String = "",
+        val grantedToday: Map<String, Int> = emptyMap(),
+        val opensToday: Map<String, Int> = emptyMap(),
     )
 
+    @Synchronized
     fun blocking(): Blocking {
         val o = read("blocking.json") ?: return Blocking()
         val now = System.currentTimeMillis()
@@ -162,11 +177,20 @@ class Store(context: Context) {
             minutes = o.optInt("minutes", 10).coerceIn(1, 120),
             blocked = o.optJSONArray("blocked").strings(),
             allowedUntil = allowed,
+            dailyMinutes = o.optInt("dailyMinutes", 30).coerceIn(0, 600),
+            minChars = o.optInt("minChars", 15).coerceIn(15, 200),
+            nightBan = o.optBoolean("nightBan", false),
+            day = o.optString("day"),
+            grantedToday = o.optJSONObject("grantedToday").intMap(),
+            opensToday = o.optJSONObject("opensToday").intMap(),
         )
     }
 
+    @Synchronized
     fun saveBlocking(b: Blocking) {
         val allowed = JSONObject().apply { b.allowedUntil.forEach { (pkg, until) -> put(pkg, until) } }
+        val granted = JSONObject().apply { b.grantedToday.forEach { (pkg, min) -> put(pkg, min) } }
+        val opens = JSONObject().apply { b.opensToday.forEach { (pkg, n) -> put(pkg, n) } }
         write(
             "blocking.json",
             JSONObject()
@@ -174,6 +198,12 @@ class Store(context: Context) {
                 .put("minutes", b.minutes)
                 .put("blocked", JSONArray(b.blocked))
                 .put("allowedUntil", allowed)
+                .put("dailyMinutes", b.dailyMinutes)
+                .put("minChars", b.minChars)
+                .put("nightBan", b.nightBan)
+                .put("day", b.day)
+                .put("grantedToday", granted)
+                .put("opensToday", opens)
                 .toString(2),
         )
     }
@@ -187,6 +217,60 @@ class Store(context: Context) {
     fun recentGateQuestions(): List<String> = readArray("gate_recent.json")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
 
     fun pushGateQuestion(q: String) = write("gate_recent.json", JSONArray((recentGateQuestions() + q).takeLast(5)).toString())
+
+    /**
+     * 正在答的那道门。页面被输入法、旋转、低内存或第二次拦截重建时，靠它把题和草稿原样接回来，
+     * 而不是重新出一道题。答对或主动放弃时清掉。
+     */
+    data class GateDraft(
+        val target: String,
+        val text: String,
+        val anchor: String?,
+        val missing: String?,
+        val agendaId: String?,
+        val source: String,
+        val draft: String,
+        val at: Long,
+    )
+
+    /** 关门时刻：晚于它到达的旧草稿写入直接丢掉，避免"答完又被写回来"。 */
+    private var gateClosedAt = 0L
+
+    @Synchronized
+    fun gateDraft(): GateDraft? {
+        val o = read("gate_session.json") ?: return null
+        if (o.optLong("at") <= gateClosedAt) return null
+        val text = o.optString("text").takeIf { it.isNotBlank() } ?: return null
+        val target = o.optString("target").takeIf { it.isNotBlank() } ?: return null
+        return GateDraft(
+            target = target,
+            text = text,
+            anchor = o.optStringOrNull("anchor"),
+            missing = o.optStringOrNull("missing"),
+            agendaId = o.optStringOrNull("agendaId"),
+            source = o.optString("source", "agenda"),
+            draft = o.optString("draft"),
+            at = o.optLong("at"),
+        )
+    }
+
+    @Synchronized
+    fun saveGateDraft(d: GateDraft) {
+        if (d.at <= gateClosedAt) return
+        write(
+            "gate_session.json",
+            JSONObject()
+                .put("target", d.target).put("text", d.text).putOpt("anchor", d.anchor).putOpt("missing", d.missing)
+                .putOpt("agendaId", d.agendaId).put("source", d.source).put("draft", d.draft).put("at", d.at)
+                .toString(),
+        )
+    }
+
+    @Synchronized
+    fun clearGateDraft() {
+        gateClosedAt = System.currentTimeMillis()
+        File(dir, "gate_session.json").delete()
+    }
 
     // ── 推进日志 ──
     fun appender(sessionId: String): (Map<String, Any?>) -> Unit {
@@ -204,3 +288,7 @@ private fun JSONArray?.strings(): List<String> =
     if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).trim().takeIf(String::isNotEmpty) }
 
 private fun JSONObject.optStringOrNull(k: String): String? = if (has(k) && !isNull(k)) optString(k) else null
+
+private fun JSONObject?.intMap(): Map<String, Int> =
+    if (this == null) emptyMap()
+    else keys().asSequence().mapNotNull { k -> optInt(k, 0).takeIf { it > 0 }?.let { k to it } }.toMap()

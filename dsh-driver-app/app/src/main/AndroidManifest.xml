@@ -11,6 +11,10 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 无障碍掉线时用「使用情况访问」兜底判断前台 App；用户在系统设置里授权 -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
 
     <!-- 无障碍被系统关掉后自己写回去。只能用 adb / Shizuku 授予，APP 内申请不到。
          有了它就不必每次都走 Shizuku；没有时退回 Shizuku 执行 settings put。 -->
@@ -26,6 +30,9 @@
         <package android:name="com.google.android.googlequicksearchbox" />
         <package android:name="com.openai.chatgpt" />
         <package android:name="io.github.ccch1mneyyy.dsh_app" />
+        <!-- 可选互保：判断总控/一手装没装 -->
+        <package android:name="com.zongkong.app" />
+        <package android:name="com.yishou.app" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
@@ -78,7 +85,8 @@
             android:launchMode="singleTask"
             android:taskAffinity="com.dshdriver.app.gate"
             android:theme="@style/Theme.Driver.Card"
-            android:windowSoftInputMode="adjustResize" />
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|fontScale|locale|layoutDirection" />
 
         <service
             android:name=".LockService"
@@ -107,6 +115,37 @@
             android:name=".WatchdogJob"
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <!-- 常驻守护：拦截开着时把进程提到前台服务级别，15 秒/60 秒查一次无障碍，
+             并在无障碍掉线时立刻写回。也是 UsageStats 兜底拦截的载体。 -->
+        <service
+            android:name=".GuardService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="用户开启拦截或监督后，持续检查无障碍与前台应用，掉了立即恢复" />
+        </service>
+
+        <!-- 服务被系统清掉后的 5 分钟兜底闹钟 -->
+        <receiver
+            android:name=".GuardAlarmReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!-- 设备所有者（可选）：用 dpm set-device-owner 授予后，不依赖 Shizuku 也能写回无障碍 -->
+        <receiver
+            android:name=".DriverDeviceAdmin"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
 
         <!-- 重启、覆盖安装后把无障碍写回来 -->
         <receiver

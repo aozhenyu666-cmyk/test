@@ -41,14 +41,16 @@ object Gate {
         return Question("说一个你今天学到、能讲出依据的点。", null, null, null, "default")
     }
 
-    fun judge(answer: String?, q: Question): Verdict {
+    /** [minChars] 是"没有明确依据时"的最低字数；带因果/原文/数字的回答不受它限制。 */
+    fun judge(answer: String?, q: Question, minChars: Int = MIN_CHARS): Verdict {
+        val need = minChars.coerceAtLeast(1)
         val f = Text.features(answer, listOfNotNull(q.missing))
         return when {
             f.giveUp -> Verdict(false, "放弃不算。想一下再答，或者先去做正事。", f)
             f.filler || f.choice != null -> Verdict(false, "这样不算回答。说出依据：因为什么、题干哪句、什么规律。", f)
             f.evidence || f.anchorHit -> Verdict(true, if (f.anchorHit) "anchor_hit" else "has_basis", f)
-            f.chars >= MIN_CHARS -> Verdict(true, "substantive", f)
-            else -> Verdict(false, "太短了，还看不出你想过。至少说清一个依据。", f)
+            f.chars >= need -> Verdict(true, "substantive", f)
+            else -> Verdict(false, "太短了，还看不出你想过。至少写 $need 个字，或说清一个依据。", f)
         }
     }
 

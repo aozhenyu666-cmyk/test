@@ -55,6 +55,7 @@ class WatchService : AccessibilityService() {
     private var lastSeenPkg = ""
     private var lastActionAt = 0L
     private var lastBeatAt = 0L
+    private var lastCheckedAt = 0L
 
     override fun onServiceConnected() {
         Engine.watchConnected = true
@@ -64,6 +65,7 @@ class WatchService : AccessibilityService() {
         @Suppress("DEPRECATION") runCatching {initial?.recycle()}
         A11yGuard.clearDownNotice(this)
         WatchdogJob.schedule(this)
+        GuardService.sync(this)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -81,10 +83,13 @@ class WatchService : AccessibilityService() {
         @Suppress("DEPRECATION") runCatching { root?.recycle() }
         if (active.isNullOrBlank() || active != pkg) {Engine.onForeground(this,null,null);return}
 
-        // 同一个 App 内部的内容变化不重复判断：加了内容变化事件后这类事件很密，全判一遍没必要也费电
+        // 同一个 App 内部的内容变化不重复判断：加了内容变化事件后这类事件很密，全判一遍没必要也费电。
+        // 但每 5 秒要复查一次：放行到期后用户如果一直停在 App 里，也要重新拦，不能等他切走。
         Engine.onForeground(this,active,event.className?.toString())
-        if (active == lastSeenPkg) return
+        val now = SystemClock.uptimeMillis()
+        if (active == lastSeenPkg && now - lastCheckedAt < RECHECK_MS) return
         lastSeenPkg = active
+        lastCheckedAt = now
         if(active!=packageName) maybeBlock(active)
     }
 
@@ -93,6 +98,8 @@ class WatchService : AccessibilityService() {
         if (Intercept.decide(this, pkg, System.currentTimeMillis()) != Verdict.BLOCK) return
         val now = SystemClock.uptimeMillis()
         if (pkg == lastBlockedPkg && now - lastActionAt < COOLDOWN_MS) return
+        val wall = System.currentTimeMillis()
+        if (!Intercept.claimTrigger(pkg, wall)) return
         lastBlockedPkg = pkg
         lastActionAt = now
         // 先把 App 送走，再从桌面拉起拦截页：顺序反了会被系统的"后台启动"限制挡住，或者盖不上去
@@ -100,7 +107,10 @@ class WatchService : AccessibilityService() {
         main.postDelayed({
             val ok = runCatching { startActivity(GateActivity.intent(this, pkg)) }.isSuccess
             lastSeenPkg = "" // 拦完清掉，用户再打开时要重新判断
+            lastCheckedAt = 0L
             if (!ok) lastBlockedPkg = "" // 拉不起来就允许下一次重试
+            // 后台启动被系统静默丢弃时不会抛异常，1.2 秒后还没看到拦截页就补一条可点通知
+            main.postDelayed({ if (!GateActivity.visible) UsageMonitor.notifyBlocked(this, pkg) }, 1_200L)
         }, LAND_DELAY_MS)
     }
 
@@ -110,6 +120,7 @@ class WatchService : AccessibilityService() {
         if (now - lastBeatAt < 30_000L) return
         lastBeatAt = now
         WatchdogJob.schedule(this)
+        GuardService.sync(this)
     }
 
     override fun onInterrupt() {Engine.onForeground(this,null,null);lastSeenPkg=""}
@@ -126,6 +137,7 @@ class WatchService : AccessibilityService() {
         const val TARGET_EVENTS = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
         const val LAND_DELAY_MS = 100L
         const val COOLDOWN_MS = 1_000L
+        const val RECHECK_MS = 5_000L
     }
 }
 
@@ -147,6 +159,8 @@ class WatchdogJob : JobService() {
                     val healed = A11yGuard.ensure(ctx)
                     if (!healed && !A11yGuard.canHeal(ctx)) A11yGuard.notifyDown(ctx)
                 }
+                // 看门狗也负责把常驻守护拉回来：服务被清掉时，光写回无障碍还不够
+                GuardService.sync(ctx)
             }
             jobFinished(params, false)
         }.start()
@@ -184,6 +198,7 @@ class BootReceiver : BroadcastReceiver() {
             runCatching {
                 if (!A11yGuard.isOn(ctx)) A11yGuard.ensure(ctx)
                 WatchdogJob.schedule(ctx)
+                GuardService.sync(ctx)
             }
             pending.finish()
         }.start()

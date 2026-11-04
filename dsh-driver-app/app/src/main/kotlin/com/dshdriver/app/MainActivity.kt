@@ -92,6 +92,7 @@ class MainActivity : Activity() {
         // 否则会先闪一下"未开"，让人以为还得手点一次
         A11yGuard.ensure(this)
         WatchdogJob.schedule(this)
+        GuardService.sync(this)
         render(force = true)
         main.removeCallbacks(refresher)
         main.post(refresher)
@@ -310,6 +311,7 @@ class MainActivity : Activity() {
             ui.choice(listOf("关", "开"), if (b.enabled) 1 else 0) { i ->
                 Engine.store.saveBlocking(b.copy(enabled = i == 1))
                 Intercept.invalidate()
+                GuardService.sync(this)
                 render(force = true)
             }
             ui.divider()
@@ -321,13 +323,38 @@ class MainActivity : Activity() {
             )
             ui.secondary(if (names.isEmpty()) "选择要拦的 App" else "改一下拦哪些") { pickApps() }
             ui.divider()
-            ui.caption("答对之后放行多久")
-            val options = listOf(5, 10, 20, 30)
-            ui.choice(options.map { "$it 分钟" }, options.indexOf(b.minutes).takeIf { it >= 0 } ?: 1) { i ->
+            ui.caption("答对之后放行多久（分钟；同一个 App 当天重复打开会递减，最少 1 分钟）")
+            val options = listOf(1, 3, 5, 10, 20, 30)
+            ui.choice(options.map { "$it" }, options.indexOf(b.minutes).takeIf { it >= 0 } ?: 3) { i ->
                 Engine.store.saveBlocking(Engine.store.blocking().copy(minutes = options[i]))
                 Intercept.invalidate()
             }
-            if (b.enabled && !a11y) ui.callout("无障碍没开，现在拦不住任何东西。", Tone.BAD)
+            ui.divider()
+            val today = java.time.LocalDate.now().toString()
+            val usedToday = if (b.day == today) b.grantedToday.values.sum() else 0
+            ui.caption("每天最多放行（所有被拦 App 合计；今天已用 $usedToday 分钟）")
+            val quotas = listOf(0, 15, 30, 60)
+            ui.choice(quotas.map { if (it == 0) "不限" else "$it" }, quotas.indexOf(b.dailyMinutes).takeIf { it >= 0 } ?: 2) { i ->
+                Engine.store.saveBlocking(Engine.store.blocking().copy(dailyMinutes = quotas[i]))
+                Intercept.invalidate()
+                render(force = true)
+            }
+            ui.divider()
+            ui.caption("答案至少多少个字（带因果/原文/数字的回答可豁免）")
+            val charOptions = listOf(15, 30, 50)
+            ui.choice(charOptions.map { "$it" }, charOptions.indexOf(b.minChars).takeIf { it >= 0 } ?: 0) { i ->
+                Engine.store.saveBlocking(Engine.store.blocking().copy(minChars = charOptions[i]))
+                Intercept.invalidate()
+            }
+            ui.divider()
+            ui.caption("夜间禁用（23:00–06:00，答对也不放行）")
+            ui.choice(listOf("关", "开"), if (b.nightBan) 1 else 0) { i ->
+                Engine.store.saveBlocking(Engine.store.blocking().copy(nightBan = i == 1))
+                Intercept.invalidate()
+                render(force = true)
+            }
+            if (b.enabled && !a11y) ui.callout("无障碍没开，现在只靠使用情况兜底；去下面「要的权限」打开它。", Tone.WARN)
+            if (b.enabled && !UsageMonitor.hasPermission(this)) ui.callout("「使用情况访问」没开：无障碍掉线时就没有兜底了。", Tone.WARN)
         }
     }
 
@@ -368,12 +395,18 @@ class MainActivity : Activity() {
         val canWrite = A11yGuard.canWriteDirectly(this)
         val shOn = Shell.available()
         val shGranted = Shell.granted()
+        val owner = DriverDeviceAdmin.isOwner(this)
+        val guarding = GuardService.running
         ui.card(
             title = "别让它被系统关掉",
-            chip = if (on) "已开" else "未开",
-            tone = if (on && (canWrite || shGranted)) Tone.OK else if (on) Tone.WARN else Tone.BAD,
+            chip = when {
+                on && guarding -> "守护中"
+                on -> "已开"
+                else -> "未开"
+            },
+            tone = if (on && (canWrite || shGranted || owner || guarding)) Tone.OK else if (on) Tone.WARN else Tone.BAD,
         ) {
-            ui.caption("无障碍是绑在进程上的：被划掉或被强制停止后，系统会把它从已启用列表里删掉。下面三层决定它多久能自己回来。")
+            ui.caption("无障碍是绑在进程上的：被划掉或被强制停止后，系统会把它从已启用列表里删掉。下面几层决定它多久能自己回来。")
             ui.permission("无障碍服务", on, "拦截靠它读前台包名；关着就完全不拦。") {
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             }
@@ -399,9 +432,44 @@ class MainActivity : Activity() {
             ) {
                 if (shOn) { Shell.request(); main.postDelayed({ render(force = true) }, 1_500) } else toast("先打开 Shizuku")
             }
+            ui.divider()
+            ui.permission(
+                "设备所有者（可选）", owner,
+                if (owner) "已启用：不依赖 Shizuku 也能直接写回无障碍。"
+                else "没启用。点一下复制 adb 命令，用电脑执行一次；设置前要删掉手机里的账号。",
+            ) {
+                val cmd = DriverDeviceAdmin.adbCommand(this)
+                getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("adb", cmd))
+                toast("已复制：$cmd")
+            }
+            if (owner) {
+                val blocked = runCatching {
+                    getSystemService(android.app.admin.DevicePolicyManager::class.java)
+                        ?.isUninstallBlocked(DriverDeviceAdmin.component(this), packageName) == true
+                }.getOrDefault(false)
+                ui.secondary(if (blocked) "已禁止卸载（点一下恢复）" else "禁止卸载（设备所有者）") {
+                    val next = !blocked
+                    val ok = DriverDeviceAdmin.setUninstallBlocked(this, next)
+                    toast(if (ok) (if (next) "已禁止卸载" else "已恢复可卸载") else "系统拒绝了")
+                    render(force = true)
+                }
+            }
+            ui.divider()
+            ui.caption("同时看住总控/一手的无障碍（只追加，不关别人；需要写系统设置或设备所有者）")
+            val peer = Engine.store.settings().peerGuard
+            ui.choice(listOf("关", "开"), if (peer) 1 else 0) { i ->
+                Engine.store.saveSettings(Engine.store.settings().copy(peerGuard = i == 1))
+                GuardService.sync(this)
+                render(force = true)
+            }
             ui.spacer(6f)
-            ui.callout(A11yGuard.describe(this), if (on && (canWrite || shGranted)) Tone.OK else Tone.WARN)
-            ui.footnote("看门狗每 15 分钟查一次；开机、覆盖安装后也会自动写回。强制停止打不过，只能等下次打开 APP。")
+            ui.callout(A11yGuard.describe(this), if (on && (canWrite || shGranted || owner)) Tone.OK else Tone.WARN)
+            ui.text(
+                if (guarding) "常驻守护：运行中，亮屏每 15 秒、熄屏每 60 秒查一次。"
+                else "常驻守护：未运行。拦截开着时会自动启动。",
+                13f, Palette.light.textSecondary, top = 8f, bottom = 0f,
+            )
+            ui.footnote("另有 5 分钟闹钟和 15 分钟 JobScheduler 兜底；开机、解锁、装包、改时间后都会复查。强制停止打不过，只能等下次打开 APP。")
         }
     }
 
@@ -426,6 +494,15 @@ class MainActivity : Activity() {
                 "陪练要在后台一直跑。小米 / 华为还要在系统设置里手动开「自启动」「后台弹出界面」。",
             ) {
                 runCatching { startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))) }
+            }
+            ui.divider()
+            val usage = UsageMonitor.hasPermission(this)
+            ui.permission(
+                "使用情况访问", usage,
+                if (usage) "无障碍掉线时用它兜底判断前台 App，仍然能拦。"
+                else "去系统设置里给「思维驾驶员」打开；没有它，无障碍一掉就完全拦不住。",
+            ) {
+                runCatching { startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }
             }
             ui.divider()
             ui.text(
