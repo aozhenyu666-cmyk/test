@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">思维驾驶员</string>
-    <string name="a11y_label">思维驾驶员 · 前台记录</string>
-    <string name="a11y_desc">只用来在首页列出最近读到的前台应用，方便排查误判；不拦截任何东西。只读取包名和窗口类型，不读取屏幕上的文字，不录音。</string>
+    <string name="a11y_label">思维驾驶员 · 拦截娱乐 App</string>
+    <string name="a11y_desc">读取当前前台应用的包名：打开你选定要拦的 App 时，把你送回桌面并弹一道题，答对才放行。只读包名和窗口类型，不读屏幕上的文字，不录音。</string>
 </resources>

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- 只连本机的 DSH Go 引擎（127.0.0.1），见 res/xml/network_security.xml -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -9,6 +10,15 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- 无障碍被系统关掉后自己写回去。只能用 adb / Shizuku 授予，APP 内申请不到。
+         有了它就不必每次都走 Shizuku；没有时退回 Shizuku 执行 settings put。 -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+    <!-- 向 Shizuku 申请 shell 权限 -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
     <!-- 包可见性：不声明就拿不到 Live 应用的启动入口，"回到 Live"会失效 -->
     <queries>
@@ -22,13 +32,6 @@
         </intent>
         <intent>
             <action android:name="android.speech.tts.TTS_SERVICE" />
-        </intent>
-        <!-- 找到 Curbox（App 拦截器）并请求它的批准 -->
-        <intent>
-            <action android:name="neth.iecal.curbox.api.BIND" />
-        </intent>
-        <intent>
-            <action android:name="neth.iecal.curbox.api.REQUEST_PERMISSION" />
         </intent>
     </queries>
 
@@ -62,12 +65,14 @@
             android:theme="@style/Theme.Driver.Card"
             android:windowSoftInputMode="adjustResize" />
 
-        <!-- Curbox 拦下娱乐 App 后拉起这里答题（for result）。必须导出、不能要求权限，见 Curbox API v3。
-             入口参数在 CheckActivity 里逐项校验：action、调用方是选定的 Curbox、condition_id、request_id。 -->
+        <!-- 拦截门：拦下娱乐 App 后由无障碍服务拉起来答题。
+             不进最近任务（划不掉，这是和 Curbox 那套最大的区别）、独立任务栈、singleTask 防止叠出好几层。 -->
         <activity
-            android:name=".CheckActivity"
-            android:exported="true"
+            android:name=".GateActivity"
+            android:exported="false"
             android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.dshdriver.app.gate"
             android:theme="@style/Theme.Driver.Card"
             android:windowSoftInputMode="adjustResize" />
 
@@ -92,5 +97,22 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/watch_service" />
         </service>
+
+        <!-- 看门狗：无障碍被关掉、进程又被杀时，靠它定期把服务写回去（JobScheduler 最短 15 分钟） -->
+        <service
+            android:name=".WatchdogJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <!-- 重启、覆盖安装后把无障碍写回来 -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

@@ -5,7 +5,6 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -85,12 +84,14 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         Engine.onChange = { render(); if (Engine.locked) { main.removeCallbacks(refresher); main.post(refresher) } }
-        // 回到前台时权限可能刚在系统设置里改过，重画一次
+        // 先自愈再渲染：无障碍被关掉时，"写回去"和"显示成已开"要在同一次刷新里完成，
+        // 否则会先闪一下"未开"，让人以为还得手点一次
+        A11yGuard.ensure(this)
+        WatchdogJob.schedule(this)
         render(force = true)
         main.removeCallbacks(refresher)
         main.post(refresher)
         checkLink()
-        checkCurbox()
     }
 
     override fun onPause() {
@@ -209,14 +210,15 @@ class MainActivity : Activity() {
 
         ui.tiles(
             listOf(
-                Tile("拦截", curboxTileValue(), curboxTileTone()),
+                Tile("拦截", blockTileValue(), blockTileTone()),
                 Tile("大脑", linkTileValue(), linkTileTone()),
-                Tile("无障碍", if (a11yEnabled()) "已开" else "未开", if (a11yEnabled()) Tone.OK else Tone.WARN),
+                Tile("无障碍", if (A11yGuard.isOn(this)) "已开" else "未开", if (A11yGuard.isOn(this)) Tone.OK else Tone.BAD),
             ),
         )
 
         startCard(settings.minutes, store)
-        curboxCard()
+        blockingCard()
+        guardCard()
         permissionCard()
         linkCard()
         profileCard()
@@ -244,121 +246,137 @@ class MainActivity : Activity() {
         }
     }
 
-    // ───────────── 拦截娱乐 App（Curbox） ─────────────
+    // ───────────── 拦截娱乐 App（内置，不依赖外部拦截器） ─────────────
 
-    @Volatile private var curbox: Curbox.Status? = null
-    @Volatile private var curboxChecking = false
-
-    private fun curboxTileValue(): String {
-        if (Curbox.selected(this) == null) return "未安装"
-        val st = curbox ?: return if (curboxChecking) "检查中" else "未检查"
+    private fun blockTileValue(): String {
+        val b = Engine.store.blocking()
         return when {
-            st.error != null -> "出错"
-            st.apiVersion < 3 -> "版本太旧"
-            !st.granted -> "待批准"
-            !st.registered -> "待注册"
-            else -> "已连上"
+            !b.enabled -> "已关"
+            b.blocked.isEmpty() -> "没选 App"
+            !A11yGuard.isOn(this) -> "无障碍没开"
+            else -> "拦 ${b.blocked.size} 个"
         }
     }
 
-    private fun curboxTileTone(): Tone {
-        if (Curbox.selected(this) == null) return Tone.WARN
-        val st = curbox ?: return Tone.NEUTRAL
+    private fun blockTileTone(): Tone {
+        val b = Engine.store.blocking()
         return when {
-            st.error != null || st.apiVersion < 3 -> Tone.BAD
-            !st.granted || !st.registered -> Tone.WARN
+            !b.enabled -> Tone.NEUTRAL
+            !A11yGuard.isOn(this) -> Tone.BAD
+            b.blocked.isEmpty() -> Tone.WARN
             else -> Tone.OK
         }
     }
 
-    private fun curboxCard() {
-        val all = Curbox.installations(this)
-        val pkg = Curbox.selected(this)
-        val st = curbox
-        val ready = st != null && st.error == null && st.apiVersion >= 3 && st.granted && st.registered
+    private fun blockingCard() {
+        val b = Engine.store.blocking()
+        val a11y = A11yGuard.isOn(this)
         ui.card(
             title = "拦截娱乐 App",
-            chip = if (ready) "已连上" else if (pkg == null) "未安装" else "待处理",
-            tone = if (ready) Tone.OK else Tone.WARN,
+            chip = if (b.enabled) "开着" else "关着",
+            tone = if (b.enabled && a11y) Tone.OK else Tone.WARN,
         ) {
-            if (pkg == null) {
-                ui.callout("没找到 Curbox。它负责拦下 B站这类 App，这里只负责出题和判卷。", Tone.WARN)
-                ui.caption("需要带「API 3」的版本：正式版 6 还没有，先装仓库 Actions → curbox-build 打出的调试版。")
-                return@card
+            ui.caption("打开下面这些 App 时，我把你送回桌面、弹一道题；答对才放行一段时间。拦截和判卷都在本 APP 里，不用再装别的拦截器。")
+            ui.spacer(6f)
+            ui.choice(listOf("关", "开"), if (b.enabled) 1 else 0) { i ->
+                Engine.store.saveBlocking(b.copy(enabled = i == 1))
+                Intercept.invalidate()
+                render(force = true)
             }
-            ui.caption("打开被拦的 App 时由 Curbox 送回桌面并弹全屏页，你在这里答对一道题才放行。规则和放行时长都在 Curbox 里设。")
-            if (all.size > 1) {
-                ui.text("当前用 $pkg，机器上装了 ${all.size} 个 Curbox。", 13f, Palette.light.textSecondary, top = 10f)
-                ui.secondary("换一个 Curbox") {
-                    val next = all[(all.indexOf(pkg) + 1) % all.size]
-                    Engine.store.saveCurboxPackage(next)
-                    curbox = null
-                    render(force = true)
-                    checkCurbox()
-                }
+            ui.divider()
+            val names = b.blocked.map { label(it) }
+            ui.text(
+                if (names.isEmpty()) "还没选要拦的 App。"
+                else "拦着 ${names.size} 个：${names.take(4).joinToString("、")}${if (names.size > 4) " 等" else ""}",
+                14f, Palette.light.text, top = 2f,
+            )
+            ui.secondary(if (names.isEmpty()) "选择要拦的 App" else "改一下拦哪些") { pickApps() }
+            ui.divider()
+            ui.caption("答对之后放行多久")
+            val options = listOf(5, 10, 20, 30)
+            ui.choice(options.map { "$it 分钟" }, options.indexOf(b.minutes).takeIf { it >= 0 } ?: 1) { i ->
+                Engine.store.saveBlocking(Engine.store.blocking().copy(minutes = options[i]))
+                Intercept.invalidate()
             }
-            when {
-                curboxChecking && st == null -> ui.caption("正在检查…")
-                st == null -> ui.secondary("检查 Curbox") { checkCurbox() }
-                st.error != null -> {
-                    ui.callout(st.error.orEmpty(), Tone.BAD)
-                    ui.secondary("重新检查") { checkCurbox() }
-                }
-                st.apiVersion < 3 -> {
-                    ui.callout("这个 Curbox 的 API 是 ${st.apiVersion}，需要 3。装我们打出来的调试版。", Tone.BAD)
-                    ui.secondary("重新检查") { checkCurbox() }
-                }
-                !st.granted -> {
-                    ui.callout("第一步：让 Curbox 批准思维驾驶员。它会弹一个确认页。", Tone.WARN)
-                    ui.primary("去 Curbox 批准") {
-                        Engine.store.saveCurboxPackage(pkg)
-                        if (!Curbox.requestPermission(this, pkg)) toast("打不开 Curbox 的批准页")
-                    }
-                }
-                !st.registered -> {
-                    ui.callout("第二步：注册「${Curbox.CONDITION_LABEL}」，Curbox 才会把它当成解锁条件。", Tone.WARN)
-                    ui.primary("注册") { registerCurbox(pkg) }
-                }
-                else -> {
-                    ui.callout("已连上 Curbox，「${Curbox.CONDITION_LABEL}」已注册。", Tone.OK)
-                    ui.caption(
-                        "最后一步在 Curbox 里做：新建或编辑拦截分组 → 选要拦的 App（别选思维驾驶员）→ 警告页设置 → " +
-                            "「Require effort to unlock」→「Require another app」→ 选「${Curbox.CONDITION_LABEL}」→ 设好放行时长 → 保存并启用。",
-                    )
-                    ui.secondary("重新检查") { checkCurbox() }
-                }
-            }
+            if (b.enabled && !a11y) ui.callout("无障碍没开，现在拦不住任何东西。", Tone.BAD)
         }
     }
 
-    private fun checkCurbox() {
-        val pkg = Curbox.selected(this) ?: return
-        if (curboxChecking) return
-        curboxChecking = true
-        Thread {
-            val r = Curbox.inspect(this, pkg)
-            curbox = r
-            curboxChecking = false
-            main.post { if (!Engine.locked) render(force = true) }
-        }.start()
-    }
-
-    private fun registerCurbox(pkg: String) {
-        Thread {
-            val r = Curbox.register(this, pkg)
-            main.post {
-                toast(r.getOrElse { it.message ?: "注册失败" }.let { if (it == "OK") "已注册" else it })
-                checkCurbox()
+    private fun pickApps() {
+        val apps = launchableApps()
+        if (apps.isEmpty()) { toast("没找到可启动的 App"); return }
+        val blocked = Engine.store.blocking().blocked.toSet()
+        val checked = BooleanArray(apps.size) { apps[it].first in blocked }
+        AlertDialog.Builder(this)
+            .setTitle("选择要拦的 App")
+            .setMultiChoiceItems(apps.map { it.second }.toTypedArray(), checked) { _, i, v -> checked[i] = v }
+            .setPositiveButton("保存") { _, _ ->
+                val picked = apps.filterIndexed { i, _ -> checked[i] }.map { it.first }
+                Engine.store.saveBlocking(Engine.store.blocking().copy(blocked = picked))
+                Intercept.invalidate()
+                render(force = true)
             }
-        }.start()
+            .setNegativeButton("取消", null)
+            .show()
     }
 
-    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != Curbox.REQUEST_CODE) return
-        if (resultCode == RESULT_OK) Curbox.selected(this)?.let { registerCurbox(it) } else { toast("Curbox 没有批准"); checkCurbox() }
+    private fun launchableApps(): List<Pair<String, String>> {
+        val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        return packageManager.queryIntentActivities(i, 0)
+            .mapNotNull { ri ->
+                val pkg = ri.activityInfo?.packageName ?: return@mapNotNull null
+                if (pkg == packageName) return@mapNotNull null
+                pkg to runCatching { ri.loadLabel(packageManager).toString() }.getOrDefault(pkg)
+            }
+            .distinctBy { it.first }
+            .sortedBy { it.second }
     }
+
+    // ───────────── 别让它被系统关掉（无障碍自愈） ─────────────
+
+    private fun guardCard() {
+        val on = A11yGuard.isOn(this)
+        val canWrite = A11yGuard.canWriteDirectly(this)
+        val shOn = Shell.available()
+        val shGranted = Shell.granted()
+        ui.card(
+            title = "别让它被系统关掉",
+            chip = if (on) "已开" else "未开",
+            tone = if (on && (canWrite || shGranted)) Tone.OK else if (on) Tone.WARN else Tone.BAD,
+        ) {
+            ui.caption("无障碍是绑在进程上的：被划掉或被强制停止后，系统会把它从已启用列表里删掉。下面三层决定它多久能自己回来。")
+            ui.permission("无障碍服务", on, "拦截靠它读前台包名；关着就完全不拦。") {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+            ui.divider()
+            ui.permission(
+                "写系统设置", canWrite,
+                if (shGranted) "还没授予。下面那个按钮可以借 Shizuku 一次授予，之后就再也不麻烦它了。"
+                else "没授予，Shizuku 也没连上，所以现在只能靠手动重开。",
+            ) {
+                if (shGranted) {
+                    A11yGuard.harden(this) { ok ->
+                        main.post {
+                            toast(if (ok) "已授予，以后能自己写回无障碍" else "授权失败，看看 Shizuku 还连着没有")
+                            render(force = true)
+                        }
+                    }
+                } else toast("先打开 Shizuku 并授权")
+            }
+            ui.divider()
+            ui.permission(
+                "Shizuku", shGranted,
+                if (!shOn) "没连上：重启手机后要在 Shizuku 里重新启动一次服务。" else "已连上，还没授权给本 APP。",
+            ) {
+                if (shOn) { Shell.request(); main.postDelayed({ render(force = true) }, 1_500) } else toast("先打开 Shizuku")
+            }
+            ui.spacer(6f)
+            ui.callout(A11yGuard.describe(this), if (on && (canWrite || shGranted)) Tone.OK else Tone.WARN)
+            ui.footnote("看门狗每 15 分钟查一次；开机、覆盖安装后也会自动写回。强制停止打不过，只能等下次打开 APP。")
+        }
+    }
+
+    // ───────────── 要的权限 ─────────────
 
     // ───────────── 权限 ─────────────
 
@@ -530,7 +548,7 @@ class MainActivity : Activity() {
 
     private fun diagnosticsCard() {
         ui.card(title = "诊断", muted = true) {
-            if (!a11yEnabled()) {
+            if (!A11yGuard.isOn(this)) {
                 ui.caption("打开「思维驾驶员 · 前台记录」后，这里会列出最近读到的前台应用。只用来排查误判，不拦截任何东西。")
                 ui.quiet("去打开无障碍", Palette.light.accent) { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
                 return@card
@@ -563,12 +581,6 @@ class MainActivity : Activity() {
     }
 
     private fun toast(t: String) = Toast.makeText(this, t, Toast.LENGTH_LONG).show()
-
-    private fun a11yEnabled(): Boolean {
-        val me = ComponentName(this, WatchService::class.java).flattenToString()
-        val on = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
-        return on.split(':').any { it.equals(me, ignoreCase = true) }
-    }
 
     private fun label(pkg: String) = runCatching {
         packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()

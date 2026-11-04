@@ -138,10 +138,49 @@ class Store(context: Context) {
 
     fun clearPairing() { File(dir, "pairing.json").delete() }
 
-    // ── 用哪个 Curbox（正式版 / 调试版） ──
-    fun curboxPackage(): String? = read("curbox.json")?.optString("package")?.takeIf { it.isNotBlank() }
+    // ── 拦截娱乐 App（内置，不依赖外部拦截器） ──
 
-    fun saveCurboxPackage(pkg: String) = write("curbox.json", JSONObject().put("package", pkg).toString())
+    /** [allowedUntil] 是"包名 -> 放行到期"，到期由 [com.dshdriver.core.BlockRules] 判定，读的时候顺手清掉过期的。 */
+    data class Blocking(
+        val enabled: Boolean = false,
+        val minutes: Int = 10,
+        val blocked: List<String> = emptyList(),
+        val allowedUntil: Map<String, Long> = emptyMap(),
+    )
+
+    fun blocking(): Blocking {
+        val o = read("blocking.json") ?: return Blocking()
+        val now = System.currentTimeMillis()
+        val allowed = o.optJSONObject("allowedUntil")?.let { m ->
+            m.keys().asSequence()
+                .mapNotNull { k -> m.optLong(k, 0L).takeIf { it > now }?.let { k to it } }
+                .toMap()
+        }.orEmpty()
+        return Blocking(
+            enabled = o.optBoolean("enabled", false),
+            minutes = o.optInt("minutes", 10).coerceIn(1, 120),
+            blocked = o.optJSONArray("blocked").strings(),
+            allowedUntil = allowed,
+        )
+    }
+
+    fun saveBlocking(b: Blocking) {
+        val allowed = JSONObject().apply { b.allowedUntil.forEach { (pkg, until) -> put(pkg, until) } }
+        write(
+            "blocking.json",
+            JSONObject()
+                .put("enabled", b.enabled)
+                .put("minutes", b.minutes)
+                .put("blocked", JSONArray(b.blocked))
+                .put("allowedUntil", allowed)
+                .toString(2),
+        )
+    }
+
+    /** 最近一次自动重开无障碍的时间（首页显示，让"到底有没有生效"一眼能看到）。 */
+    fun lastHeal(): Long = read("heal.json")?.optLong("at", 0L) ?: 0L
+
+    fun saveHeal(at: Long) = write("heal.json", JSONObject().put("at", at).toString())
 
     /** 拦截门最近问过的题（防止每次都同一句）。 */
     fun recentGateQuestions(): List<String> = readArray("gate_recent.json")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()

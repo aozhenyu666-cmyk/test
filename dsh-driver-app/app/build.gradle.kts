@@ -33,7 +33,8 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     // Curbox 的 AIDL 接口（src/main/aidl/neth/iecal/curbox/api/ICurboxApi.aidl）
-    buildFeatures { aidl = true }
+    // 拦截改成内置后不再用 Curbox 的 AIDL
+    buildFeatures { aidl = false }
     lint {
         // 调试版只要能装能跑；lint 的警告不挡打包
         abortOnError = false
@@ -43,4 +44,7 @@ android {
 
 dependencies {
     implementation(project(":core"))
+    // 用 Shizuku 的 shell 身份把无障碍写回去（抄 Curbox 的同一条路：IShizukuService.newProcess）
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
 }

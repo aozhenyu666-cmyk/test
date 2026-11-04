@@ -7,6 +7,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.app.job.JobInfo
+import android.app.job.JobParameters
+import android.app.job.JobScheduler
+import android.app.job.JobService
+import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -18,7 +24,9 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
+import com.dshdriver.core.Verdict
 
 class DriverApp : Application() {
     override fun onCreate() {
@@ -28,45 +36,150 @@ class DriverApp : Application() {
 }
 
 /**
- * 前台记录（诊断用，0.2.0 起不再拦截）。只听"窗口换了"这一种事件；350ms 后再读一次当前活动窗口的包名复核（快速切来切去时以最后停下的为准）。
+ * 无障碍服务：拦下娱乐 App、记录最近前台（诊断用）、顺手给自己续命。
+ *
+ * 拦截这一段照抄 Curbox（GPL-3.0，提交 b06520f4dc35018c184b65341fbc4ffe31b2eb08）的
+ * `blockers/AppBlocker.kt` 里 `doAppBlockerCheck` / `showWarningScreen`，以及 `utils/PackageFinderTools.kt`
+ * 的 `isActivePackage`：
+ *
+ *   只看 WINDOW_STATE_CHANGED / WINDOW_CONTENT_CHANGED   → 事件包名再用 rootInActiveWindow 复核
+ *   要拦 → performGlobalAction(GLOBAL_ACTION_HOME) 把目标 App 送走 → 100ms 后再 startActivity(拦截页)
+ *   同一个包 1 秒内只处理一次（防连拦）→ 拦截页在前台时完全不拦（否则自己弹自己）
+ *
+ * 复核不一致就不拦：宁可漏拦一个，也别在别人正在用的界面上弹我们的页。
  * 只读包名和窗口类名，不读屏幕文字。
  */
 class WatchService : AccessibilityService() {
     private val main = Handler(Looper.getMainLooper())
-    private var pendingPkg: String? = null
-    private var pendingClass: String? = null
-
-    private val verify = Runnable {
-        val root = runCatching { rootInActiveWindow }.getOrNull()
-        val pkg = root?.packageName?.toString() ?: pendingPkg
-        @Suppress("DEPRECATION") runCatching { root?.recycle() }
-        // 类名只在和复核出的包一致时才可信
-        val cls = if (pkg != null && pkg == pendingPkg) pendingClass else null
-        Engine.onForeground(this, pkg, cls)
-    }
+    private var lastBlockedPkg = ""
+    private var lastSeenPkg = ""
+    private var lastActionAt = 0L
+    private var lastBeatAt = 0L
 
     override fun onServiceConnected() {
         Engine.watchConnected = true
+        A11yGuard.clearDownNotice(this)
+        WatchdogJob.schedule(this)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-        pendingPkg = event.packageName?.toString()
-        pendingClass = event.className?.toString()
-        main.removeCallbacks(verify)
-        main.postDelayed(verify, SETTLE_MS)
+        if (event == null) return
+        heartbeat()
+        if (event.eventType and TARGET_EVENTS == 0) return
+        val pkg = event.packageName?.toString() ?: return
+        // 自己弹的页（拦截页 / 断点卡）不算"打开了娱乐 App"
+        if (pkg == packageName) return
+
+        // 事件包名和当前活动窗口不一致时不当真（快速切换、输入法浮层都会产生这种事件）
+        val root = runCatching { rootInActiveWindow }.getOrNull()
+        val active = root?.packageName?.toString()
+        @Suppress("DEPRECATION") runCatching { root?.recycle() }
+        if (active.isNullOrBlank() || active != pkg) return
+
+        // 同一个 App 内部的内容变化不重复判断：加了内容变化事件后这类事件很密，全判一遍没必要也费电
+        if (active == lastSeenPkg) return
+        lastSeenPkg = active
+        Engine.onForeground(this, active, event.className?.toString())
+        maybeBlock(active)
+    }
+
+    private fun maybeBlock(pkg: String) {
+        if (GateActivity.visible) return
+        if (Intercept.decide(this, pkg, System.currentTimeMillis()) != Verdict.BLOCK) return
+        val now = SystemClock.uptimeMillis()
+        if (pkg == lastBlockedPkg && now - lastActionAt < COOLDOWN_MS) return
+        lastBlockedPkg = pkg
+        lastActionAt = now
+        // 先把 App 送走，再从桌面拉起拦截页：顺序反了会被系统的"后台启动"限制挡住，或者盖不上去
+        performGlobalAction(GLOBAL_ACTION_HOME)
+        main.postDelayed({
+            val ok = runCatching { startActivity(GateActivity.intent(this, pkg)) }.isSuccess
+            lastSeenPkg = "" // 拦完清掉，用户再打开时要重新判断
+            if (!ok) lastBlockedPkg = "" // 拉不起来就允许下一次重试
+        }, LAND_DELAY_MS)
+    }
+
+    /** 每 30 秒一次：确认看门狗还排着（用户清过调度的话会被清掉）。 */
+    private fun heartbeat() {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastBeatAt < 30_000L) return
+        lastBeatAt = now
+        WatchdogJob.schedule(this)
     }
 
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
         Engine.watchConnected = false
-        main.removeCallbacks(verify)
+        main.removeCallbacksAndMessages(null)
         super.onDestroy()
     }
 
     private companion object {
-        const val SETTLE_MS = 350L
+        const val TARGET_EVENTS = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+        const val LAND_DELAY_MS = 100L
+        const val COOLDOWN_MS = 1_000L
+    }
+}
+
+/**
+ * 看门狗：无障碍被系统关掉、进程又被杀时，靠它定期把服务写回去。
+ * JobScheduler 最短周期 15 分钟；`setPersisted` 让它在重启后还在。
+ * 抄自 Curbox 的 `services/ServiceWatchdogJob.kt`，去掉了协程和它的通知文案。
+ *
+ * 它打不过"强制停止"——那会把这个任务一起清掉，只能等用户下次打开 APP 再写回。
+ */
+class WatchdogJob : JobService() {
+    override fun onStartJob(params: JobParameters?): Boolean {
+        val ctx = applicationContext
+        Thread {
+            runCatching {
+                if (A11yGuard.isOn(ctx)) {
+                    A11yGuard.clearDownNotice(ctx)
+                } else {
+                    val healed = A11yGuard.ensure(ctx)
+                    if (!healed && !A11yGuard.canHeal(ctx)) A11yGuard.notifyDown(ctx)
+                }
+            }
+            jobFinished(params, false)
+        }.start()
+        return true
+    }
+
+    override fun onStopJob(params: JobParameters?): Boolean = true
+
+    companion object {
+        private const val JOB_ID = 7711
+        private const val PERIOD_MS = 15 * 60_000L
+
+        fun schedule(context: Context) {
+            runCatching {
+                val scheduler = context.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
+                scheduler.schedule(
+                    JobInfo.Builder(JOB_ID, ComponentName(context, WatchdogJob::class.java))
+                        .setPersisted(true)
+                        .setPeriodic(PERIOD_MS)
+                        .build(),
+                )
+            }
+        }
+    }
+}
+
+/** 开机 / 覆盖安装后把无障碍写回来，并把看门狗排上。 */
+class BootReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent?) {
+        val action = intent?.action ?: return
+        if (action != Intent.ACTION_BOOT_COMPLETED && action != Intent.ACTION_MY_PACKAGE_REPLACED) return
+        val ctx = context.applicationContext
+        val pending = goAsync()
+        Thread {
+            runCatching {
+                if (!A11yGuard.isOn(ctx)) A11yGuard.ensure(ctx)
+                WatchdogJob.schedule(ctx)
+            }
+            pending.finish()
+        }.start()
     }
 }
 
