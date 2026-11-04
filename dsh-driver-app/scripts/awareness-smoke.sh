@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 mkdir -p awareness-smoke
+trap 'adb logcat -d -s AndroidRuntime > awareness-smoke/logcat.txt || true' EXIT
 adb install -r apk/app/*.apk
 adb install -r apk/test/*.apk
 adb shell pm grant com.dshdriver.app android.permission.POST_NOTIFICATIONS
@@ -14,7 +15,11 @@ done
 current=$(adb shell settings get secure enabled_accessibility_services | tr -d '\r')
 component=com.dshdriver.app/com.dshdriver.app.WatchService
 others=$(python3 -c 'import sys; print(":".join(x for x in sys.argv[1].split(":") if x and x!="null" and x!=sys.argv[2]))' "$current" "$component")
-adb shell settings put secure enabled_accessibility_services "$others"
+if [ -z "$others" ]; then
+  adb shell settings delete secure enabled_accessibility_services
+else
+  adb shell settings put secure enabled_accessibility_services "$others"
+fi
 if [ -z "$others" ]; then restored=$component; else restored=$others:$component; fi
 adb shell settings put secure enabled_accessibility_services "$restored"
 adb shell settings put secure accessibility_enabled 1
