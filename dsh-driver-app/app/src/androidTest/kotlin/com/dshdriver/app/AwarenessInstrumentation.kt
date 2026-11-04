@@ -23,6 +23,7 @@ class AwarenessInstrumentation : Instrumentation() {
     override fun onStart() {
         try {
             check(Build.FINGERPRINT.contains("generic") || Build.MODEL.contains("sdk") || Build.HARDWARE in setOf("ranchu","goldfish")) {"Only run this test on an emulator"}
+            waitForIdleSync()
             check(Engine.store.pairing()==null) {"Use an unpaired test install"}
             val main=startActivitySync(Intent(targetContext,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             val testRoot=java.io.File(targetContext.cacheDir,"awareness-test-${UUID.randomUUID()}")

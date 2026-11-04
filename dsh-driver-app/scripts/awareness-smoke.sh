@@ -9,9 +9,10 @@ adb shell pm grant com.dshdriver.app android.permission.POST_NOTIFICATIONS
 adb shell am instrument -w com.dshdriver.app.test/com.dshdriver.app.AwarenessInstrumentation | tee awareness-smoke/result.txt &
 runner=$!
 for attempt in $(seq 1 25); do
-  if grep -q AWARENESS_READY_FOR_ACCESSIBILITY awareness-smoke/result.txt; then break; fi
+  if grep -qE 'AWARENESS_READY_FOR_ACCESSIBILITY|AWARENESS_SMOKE=FAIL' awareness-smoke/result.txt; then break; fi
   sleep 1
 done
+if ! grep -q AWARENESS_READY_FOR_ACCESSIBILITY awareness-smoke/result.txt; then wait "$runner"; exit 1; fi
 current=$(adb shell settings get secure enabled_accessibility_services | tr -d '\r')
 component=com.dshdriver.app/com.dshdriver.app.WatchService
 others=$(python3 -c 'import sys; print(":".join(x for x in sys.argv[1].split(":") if x and x!="null" and x!=sys.argv[2]))' "$current" "$component")
