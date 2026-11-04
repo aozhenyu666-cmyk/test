@@ -86,3 +86,16 @@ test('native remember is the sole exception, capped at two and restricted until 
  assert.equal(b.guardTool('brain','remember').kind,'deny')
  b.onAgentGone('brain');await normal
 })
+
+test('host session id aliases keep the same tool restriction and clean up on disposal',async()=>{
+ let message
+ const b=new AgentBrain({sessionId:()=> 'session-brain',findAgent:()=>({status:'idle',followup:m=>{message=m}}),makeMessage:text=>({id:'alias',content:[{text}]})})
+ const request=b.ask('digest',100,{rememberLimit:1})
+ b.onSessionEvent('brain',{type:'turn/start',data:{turn:1}})
+ b.onSessionEvent('session-brain',{type:'user/message',data:message})
+ assert.equal(b.guardTool('brain','shell').kind,'deny')
+ assert.equal(b.guardTool('session-brain','remember'),undefined)
+ assert.equal(b.guardTool('brain','remember').kind,'deny')
+ b.onAgentGone('brain');assert.equal(await request,null)
+ assert.equal(b.guardTool('session-brain','shell'),undefined)
+})

@@ -4,6 +4,8 @@
 // 不新建会话、不唤醒冷会话；拿不到就返回 null，由驾驶员退回模板。
 
 export const SOURCE_KIND = 'dsh-driver-core'
+// The host accepts both bare and session-prefixed ids (same convention as findAgent).
+const sessionKey = (id) => typeof id === 'string' ? id.replace(/^session-/, '') : id
 
 function assistantText(data) {
   const content = data?.message?.content
@@ -29,7 +31,7 @@ export class AgentBrain {
   ask(prompt, timeoutMs = 8_000, {rememberLimit = 0} = {}) {
     const sid = this.deps.sessionId()
     const agent = sid ? this.deps.findAgent(sid) : undefined
-    if (!agent || (agent.status !== undefined && agent.status !== 'idle') || this.pending || this.driverTurns.has(sid)) {
+    if (!agent || (agent.status !== undefined && agent.status !== 'idle') || this.pending || this.driverTurns.has(sessionKey(sid))) {
       this.counters.unavailable++
       return Promise.resolve(null)
     }
@@ -41,7 +43,7 @@ export class AgentBrain {
         this.pending = null
         resolve(text)
       }
-      this.pending = { sid, messageId: message.id, turn: null, text: '', done, rememberLimit, timer: setTimeout(() => { this.counters.failed++; done(null) }, timeoutMs) }
+      this.pending = { sid: sessionKey(sid), messageId: message.id, turn: null, text: '', done, rememberLimit, timer: setTimeout(() => { this.counters.failed++; done(null) }, timeoutMs) }
       this.counters.asked++
       try {
         const r = agent.followup(message)
@@ -54,6 +56,7 @@ export class AgentBrain {
   }
 
   onSessionEvent(sid, event) {
+    sid = sessionKey(sid)
     if (!event || typeof event.type !== 'string') return
     const data = event.data
     if (event.type === 'turn/start' && Number.isInteger(data?.turn)) { this.turns.set(sid, data.turn); return }
@@ -74,6 +77,7 @@ export class AgentBrain {
 
   /** 驾驶员发起的回合里不许调工具（不操作手机、不读写文件）。 */
   guardTool(sid, tool) {
+    sid = sessionKey(sid)
     if (sid == null || !this.driverTurns.has(sid)) return undefined
     const turn=this.driverTurns.get(sid)
     const name=typeof tool==='string'?tool:tool?.name
@@ -83,6 +87,7 @@ export class AgentBrain {
   }
 
   onAgentGone(sid) {
+    sid = sessionKey(sid)
     this.driverTurns.delete(sid)
     if (this.pending?.sid === sid) { this.counters.failed++; this.pending.done(null) }
   }
