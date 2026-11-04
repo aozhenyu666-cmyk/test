@@ -1,8 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 只用 API 26 就有的系统主题；界面颜色在代码里自己定 -->
-    <style name="Theme.Driver" parent="@android:style/Theme.DeviceDefault.Light.NoActionBar" />
-    <style name="Theme.Driver.Card" parent="@android:style/Theme.DeviceDefault.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
+    <!-- 界面颜色在代码里画（见 Ui.kt）；主题只负责窗口底色、状态栏和对话框的强调色，
+         这样冷启动不会先闪一下白底，AlertDialog 也跟着陶土橙走。 -->
+    <style name="Theme.Driver" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/driver_bg</item>
+        <item name="android:statusBarColor">@color/driver_bg</item>
+        <item name="android:navigationBarColor">@color/driver_bg</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:colorAccent">@color/driver_accent</item>
+        <item name="android:textColorPrimary">@color/driver_text</item>
+    </style>
+
+    <!-- 盖在别的应用上的答题页 / 断点卡：暖灰深色，夜里不刺眼 -->
+    <style name="Theme.Driver.Card" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/driver_bg_dark</item>
+        <item name="android:statusBarColor">@color/driver_bg_dark</item>
+        <item name="android:navigationBarColor">@color/driver_bg_dark</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:colorAccent">@color/driver_accent_dark</item>
+        <item name="android:textColorPrimary">@color/driver_text_dark</item>
     </style>
 </resources>

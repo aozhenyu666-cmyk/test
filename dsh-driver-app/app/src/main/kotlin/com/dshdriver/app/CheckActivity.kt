@@ -2,18 +2,16 @@ package com.dshdriver.app
 
 import android.app.Activity
 import android.content.Intent
-import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.view.Gravity
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import com.dshdriver.core.CogState
 import com.dshdriver.core.Cog
+import com.dshdriver.core.CogState
 import com.dshdriver.core.ComposeRequest
 import com.dshdriver.core.Gate
 import com.dshdriver.core.Similar
@@ -32,6 +30,7 @@ import com.dshdriver.core.Similar
  */
 class CheckActivity : Activity() {
     private val main = Handler(Looper.getMainLooper())
+    private lateinit var ui: Ui
     private lateinit var questionView: TextView
     private lateinit var feedback: TextView
     private lateinit var input: EditText
@@ -62,31 +61,37 @@ class CheckActivity : Activity() {
     }
 
     private fun render() {
-        val dp = resources.displayMetrics.density
-        val root = LinearLayout(this).apply {
+        val p = Palette.dark
+        ui = Ui(this, p)
+        window.statusBarColor = p.bg
+
+        val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding((24 * dp).toInt(), (48 * dp).toInt(), (24 * dp).toInt(), (32 * dp).toInt())
-            setBackgroundColor(0xFF1B2230.toInt())
+            // 靠上一点：拦截 / 提醒页是要立刻读的，居中的话上半屏会空掉
+            setPadding(ui.px(22), ui.px(88), ui.px(22), ui.px(28))
+            setBackgroundColor(p.bg)
         }
-        root.addView(TextView(this).apply { text = "要打开它，先答一道题"; setTextColor(0xFFB8C2D9.toInt()); textSize = 14f })
-        questionView = TextView(this).apply {
-            text = "大肥鱼出题中…"
-            setTextColor(0xFFFFFFFF.toInt()); textSize = 21f; setTypeface(typeface, Typeface.BOLD)
-            setPadding(0, (12 * dp).toInt(), 0, (20 * dp).toInt())
+        ui.reset(page)
+
+        ui.kicker("拦截中")
+        ui.headline("答一道题再进", 24f)
+        ui.lead("说依据就行：因为什么、题干哪一句、什么规律。")
+
+        ui.card(muted = true) {
+            ui.kicker("这一问")
+            questionView = ui.text("正在出题…", 17f, p.text, top = 2f, bottom = 0f)
         }
-        root.addView(questionView)
-        input = EditText(this).apply {
-            hint = "说出依据：因为什么、题干哪句、什么规律"
-            setTextColor(0xFFFFFFFF.toInt()); setHintTextColor(0xFF7F8AA3.toInt()); minLines = 3
+
+        ui.spacer(14f)
+        input = ui.field("写下你的依据", multiline = true, lines = 3)
+        feedback = ui.text("", 13f, p.warn, top = 6f, bottom = 0f)
+        submit = ui.primary("提交") { check() }.also {
+            it.isEnabled = false
+            it.alpha = 0.45f
         }
-        root.addView(input)
-        feedback = TextView(this).apply { setTextColor(0xFFFFC36B.toInt()); textSize = 14f; setPadding(0, (8 * dp).toInt(), 0, (8 * dp).toInt()) }
-        root.addView(feedback)
-        submit = Button(this).apply { text = "提交"; isAllCaps = false; textSize = 18f; isEnabled = false; setOnClickListener { check() } }
-        root.addView(submit)
-        root.addView(Button(this).apply { text = "不打开了"; isAllCaps = false; setOnClickListener { log("give_up"); finish() } })
-        setContentView(ScrollView(this).apply { isFillViewport = true; addView(root) })
+        ui.quiet("不打开了") { log("give_up"); finish() }
+
+        setContentView(ScrollView(this).apply { isFillViewport = true; addView(page) })
     }
 
     private fun loadQuestion() {
@@ -118,6 +123,7 @@ class CheckActivity : Activity() {
                 question = q
                 questionView.text = q.text
                 submit.isEnabled = true
+                submit.alpha = 1f
                 log("question", mapOf("source" to q.source, "text" to q.text))
             }
         }.start()
@@ -135,6 +141,7 @@ class CheckActivity : Activity() {
         }
         done = true
         submit.isEnabled = false
+        submit.alpha = 0.45f
         q.agendaId?.let { id ->
             runCatching {
                 val agenda = Engine.store.agenda()

@@ -4,19 +4,14 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
-import android.graphics.Typeface
 import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.speech.tts.TextToSpeech
-import android.view.Gravity
 import android.view.KeyEvent
 import android.view.WindowManager
-import android.widget.Button
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.TextView
 import com.dshdriver.core.Card
 import java.lang.ref.WeakReference
 import java.util.Locale
@@ -73,6 +68,7 @@ class CardActivity : Activity(), TextToSpeech.OnInitListener {
     private var shownReported = false
     private var tts: TextToSpeech? = null
     private var pendingSpeech: String? = null
+    private lateinit var ui: Ui
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -91,47 +87,57 @@ class CardActivity : Activity(), TextToSpeech.OnInitListener {
         cardId = i.getStringExtra(EXTRA_ID).orEmpty()
         level = i.getIntExtra(EXTRA_LEVEL, 1)
         shownReported = false
+        val reflex = i.getBooleanExtra(EXTRA_REFLEX, false)
         val text = i.getStringExtra(EXTRA_TEXT).orEmpty()
         val a = i.getStringExtra(EXTRA_A)
         val b = i.getStringExtra(EXTRA_B)
-        val dp = resources.displayMetrics.density
 
-        val root = LinearLayout(this).apply {
+        val p = Palette.dark
+        ui = Ui(this, p)
+        window.statusBarColor = p.bg
+
+        // 内容整体居中：全屏页上只有一句话，贴顶会显得空
+        val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding((24 * dp).toInt(), (48 * dp).toInt(), (24 * dp).toInt(), (32 * dp).toInt())
-            setBackgroundColor(if (level >= 2) 0xFF2B1B1B.toInt() else 0xFF1B2230.toInt())
+            // 靠上一点：拦截 / 提醒页是要立刻读的，居中的话上半屏会空掉
+            setPadding(ui.px(22), ui.px(88), ui.px(22), ui.px(28))
+            setBackgroundColor(p.bg)
         }
-        root.addView(TextView(this).apply {
-            this.text = when { level >= 2 -> "强提醒 · 还在锁定中"; i.getBooleanExtra(EXTRA_REFLEX, false) -> "你切走了"; else -> "驾驶员" }
-            setTextColor(0xFFB8C2D9.toInt()); textSize = 14f
-        })
-        root.addView(TextView(this).apply {
-            this.text = text
-            setTextColor(0xFFFFFFFF.toInt()); textSize = 22f; setTypeface(typeface, Typeface.BOLD)
-            setPadding(0, (12 * dp).toInt(), 0, (24 * dp).toInt())
-        })
+        ui.reset(page)
+
+        ui.kicker(
+            when {
+                level >= 2 -> "强提醒 · 还在陪练里"
+                reflex -> "你切走了"
+                else -> "驾驶员"
+            },
+            color = if (level >= 2) p.warn else p.textTertiary,
+        )
+        ui.headline(text, 24f)
+
         if (a != null && b != null) {
-            root.addView(button("A  $a", 18f) { answer(null, "A", "tap") })
-            root.addView(button("B  $b", 18f) { answer(null, "B", "tap") })
+            ui.option("A   $a") { answer(null, "A", "tap") }
+            ui.option("B   $b") { answer(null, "B", "tap") }
         }
+
         if (cardId != BARE) {
-            val input = EditText(this).apply {
-                hint = "或者打一句 / 两个词"
-                setTextColor(0xFFFFFFFF.toInt()); setHintTextColor(0xFF7F8AA3.toInt())
+            ui.spacer(12f)
+            val input = ui.field("或者打一句 / 两个词", multiline = true, lines = 2)
+            ui.primary("发送") {
+                input.text?.toString()?.takeIf { it.isNotBlank() }?.let { answer(it, null, "text") }
             }
-            root.addView(input)
-            root.addView(button("发送", 16f) { input.text?.toString()?.takeIf { it.isNotBlank() }?.let { answer(it, null, "text") } })
+        } else {
+            ui.primary("回到 Live") { Engine.relaunchAnchor(this) }
         }
-        root.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setPadding(0, (24 * dp).toInt(), 0, 0)
-            addView(button("回到 Live", 13f) { Engine.relaunchAnchor(this@CardActivity) })
-            addView(button("休息…", 13f) { askPause() })
-            addView(button("紧急结束", 13f) { confirmStop() })
-        })
-        setContentView(ScrollView(this).apply { isFillViewport = true; addView(root) })
+
+        ui.divider()
+        ui.row {
+            ui.micro("回到 Live") { Engine.relaunchAnchor(this) }
+            ui.micro("休息…") { askPause() }
+            ui.micro("紧急结束", Tone.BAD) { confirmStop() }
+        }
+
+        setContentView(ScrollView(this).apply { isFillViewport = true; addView(page) })
 
         if (level >= 2) {
             vibrate()
@@ -201,9 +207,5 @@ class CardActivity : Activity(), TextToSpeech.OnInitListener {
         Engine.selfSpeaking(false)
         if (current?.get() === this) current = null
         super.onDestroy()
-    }
-
-    private fun button(label: String, size: Float, onClick: () -> Unit) = Button(this).apply {
-        text = label; textSize = size; isAllCaps = false; setOnClickListener { onClick() }
     }
 }

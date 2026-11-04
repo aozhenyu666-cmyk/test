@@ -8,7 +8,7 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
-import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.dshdriver.core.Card
@@ -29,21 +29,43 @@ object Overlay {
         val wm = context.getSystemService(WindowManager::class.java)
         if (wm == null) { Engine.surface(card.id, "not_shown", "overlay"); return }
         hide()
-        val dp = context.resources.displayMetrics.density
-        val root = LinearLayout(context).apply {
+
+        val p = Palette.dark
+        val ui = Ui(context, p)
+
+        // 浮卡本身：圆角、细边、半透明，不遮死 Live 的画面
+        val cardView = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding((16 * dp).toInt(), (12 * dp).toInt(), (16 * dp).toInt(), (8 * dp).toInt())
-            setBackgroundColor(0xEE1B2230.toInt())
+            setPadding(ui.px(16), ui.px(13), ui.px(16), ui.px(10))
+            background = ui.round(0xF2262624.toInt(), 16f, p.border, 1f)
+            elevation = ui.px(8).toFloat()
         }
-        root.addView(TextView(context).apply { text = card.text; setTextColor(0xFFFFFFFF.toInt()); textSize = 16f })
-        val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
-        card.options?.let { o ->
-            row.addView(button(context, "A ${o.a}") { Engine.reply(card.id, null, "A", "overlay"); hide() })
-            row.addView(button(context, "B ${o.b}") { Engine.reply(card.id, null, "B", "overlay"); hide() })
+        ui.reset(cardView)
+        ui.kicker("驾驶员")
+        ui.text(card.text, 15.5f, p.text, bottom = 6f)
+        ui.row {
+            card.options?.let { o ->
+                ui.micro("A  ${o.a}") {
+                    Engine.reply(card.id, null, "A", "overlay")
+                    hide()
+                }
+                ui.micro("B  ${o.b}") {
+                    Engine.reply(card.id, null, "B", "overlay")
+                    hide()
+                }
+            }
+            ui.micro("展开") {
+                hide()
+                CardActivity.start(context, card, 0, reflex = false)
+            }
+            ui.micro("收起") { hide() }
         }
-        row.addView(button(context, "展开") { hide(); CardActivity.start(context, card, 0, reflex = false) })
-        row.addView(button(context, "收起") { hide() })
-        root.addView(row)
+
+        // 离屏幕边缘留 12dp，顶部再避开状态栏，看起来才像一张浮起来的卡
+        val holder = FrameLayout(context).apply {
+            setPadding(ui.px(12), ui.px(44), ui.px(12), 0)
+            addView(cardView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
+        }
 
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -52,17 +74,19 @@ object Overlay {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
         ).apply { gravity = Gravity.TOP }
-        root.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+
+        holder.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(v: View) {
                 main.post { if (v.isShown) Engine.surface(card.id, "displayed", "overlay") }
             }
+
             override fun onViewDetachedFromWindow(v: View) = Unit
         })
-        if (runCatching { wm.addView(root, lp) }.isFailure) {
+        if (runCatching { wm.addView(holder, lp) }.isFailure) {
             Engine.surface(card.id, "not_shown", "overlay")
             return
         }
-        view = root
+        view = holder
         cardId = card.id
     }
 
@@ -74,8 +98,4 @@ object Overlay {
     }
 
     fun hideIf(id: String) { if (cardId == id) hide() }
-
-    private fun button(context: Context, label: String, onClick: () -> Unit) = Button(context).apply {
-        text = label; isAllCaps = false; textSize = 13f; setOnClickListener { onClick() }
-    }
 }
