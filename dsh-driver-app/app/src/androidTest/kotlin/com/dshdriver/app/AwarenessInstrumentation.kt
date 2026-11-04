@@ -67,12 +67,30 @@ class AwarenessInstrumentation : Instrumentation() {
             BitmapFactory.decodeFile(file.absolutePath,bounds)
             check(bounds.outWidth in 1..720 && bounds.outHeight>0 && file.length()>0)
             file.delete()
+            // Whole-display capture may return black redaction rather than a failure for FLAG_SECURE.
+            val marker=android.graphics.Color.rgb(20,230,100)
+            runOnMainSync {main.setContentView(View(main).apply {setBackgroundColor(marker)})}
+            waitForIdleSync();SystemClock.sleep(600)
+            val visible=shot("smoke-${UUID.randomUUID()}")
+            check(visible.first!=null) {"Marker control capture failed: ${visible.second}"}
+            val visibleFile=Engine.store.observations.shot(visible.first!!)!!
+            val control=BitmapFactory.decodeFile(visibleFile.absolutePath)
+            val pixel=control.getPixel(control.width/2,control.height/2)
+            check(kotlin.math.abs(android.graphics.Color.green(pixel)-230)<25 && kotlin.math.abs(android.graphics.Color.red(pixel)-20)<25) {"Marker window was not actually visible"}
+            control.recycle();visibleFile.delete()
             runOnMainSync {main.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)}
-            SystemClock.sleep(500)
+            waitForIdleSync();SystemClock.sleep(600)
             val protected=shot("smoke-${UUID.randomUUID()}")
-            check(protected.first==null && protected.second.startsWith("system-error-")) {"Secure window was not blocked: $protected"}
+            if(protected.first==null) check(protected.second.startsWith("system-error-")) {"Unexplained secure capture failure: $protected"}
+            else {
+                val protectedFile=Engine.store.observations.shot(protected.first!!)!!
+                val bitmap=BitmapFactory.decodeFile(protectedFile.absolutePath)
+                val redacted=bitmap.getPixel(bitmap.width/2,bitmap.height/2)
+                check(android.graphics.Color.red(redacted)<30 && android.graphics.Color.green(redacted)<30 && android.graphics.Color.blue(redacted)<30) {"Secure content was visible in screenshot"}
+                bitmap.recycle();protectedFile.delete()
+            }
             runOnMainSync {main.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE);main.finish()}
-            finish(Activity.RESULT_OK,Bundle().apply {putString("stream","\nAWARENESS_SMOKE=PASS\nPersistent session + partial answers + exact ACK + screenshot720 + secure-window checks passed\n")})
+            finish(Activity.RESULT_OK,Bundle().apply {putString("stream","\nAWARENESS_SMOKE=PASS\nPersistent session + partial answers + exact ACK + screenshot720 + secure-content redaction checks passed\n")})
         } catch(t:Throwable) {
             finish(Activity.RESULT_CANCELED,Bundle().apply {putString("stream","\nAWARENESS_SMOKE=FAIL\n${t.stackTraceToString()}\n")})
         }
