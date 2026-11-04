@@ -90,6 +90,33 @@ object Overlay {
         cardId = card.id
     }
 
+    fun showCheckin(context: Context, row: org.json.JSONObject) {
+        hide()
+        val id=row.getString("id")
+        val ui=Ui(context,Palette.dark)
+        val box=LinearLayout(context).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(ui.px(18),ui.px(16),ui.px(18),ui.px(12))
+            background=ui.round(Palette.dark.surface,14f,Palette.dark.border)
+        }
+        ui.reset(box)
+        ui.kicker("5分钟 · 快速察觉")
+        ui.text(row.optJSONArray("questions")?.optString(0).orEmpty(),16f)
+        ui.caption(ObservationActivity.appsText(row))
+        ui.row {
+            ui.micro("回答") {hide();ObservationActivity.start(context,id)}
+            ui.micro("跳过") {AwarenessRuntime.complete(id,org.json.JSONObject(),true);hide()}
+        }
+        val holder=FrameLayout(context).apply {
+            setPadding(ui.px(12),ui.px(44),ui.px(12),0);addView(box)
+        }
+        val params=WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT,WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT).apply {gravity=Gravity.TOP}
+        val added=runCatching {context.getSystemService(WindowManager::class.java).addView(holder,params)}.isSuccess
+        if(added) {view=holder;cardId="observation:$id"} else ObservationActivity.notifyPending(context,id)
+    }
+    fun hideCheckin() {if(cardId?.startsWith("observation:")==true) hide()}
+
     fun hide() {
         val v = view ?: return
         runCatching { v.context.getSystemService(WindowManager::class.java)?.removeView(v) }

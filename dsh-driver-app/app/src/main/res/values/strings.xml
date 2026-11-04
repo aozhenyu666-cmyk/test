@@ -2,5 +2,5 @@
 <resources>
     <string name="app_name">思维驾驶员</string>
     <string name="a11y_label">思维驾驶员 · 拦截娱乐 App</string>
-    <string name="a11y_desc">读取当前前台应用的包名：打开你选定要拦的 App 时，把你送回桌面并弹一道题，答对才放行。只读包名和窗口类型，不读屏幕上的文字，不录音。</string>
+    <string name="a11y_desc">读取当前前台应用的包名：打开你选定要拦的 App 时，把你送回桌面并弹一道题，答对才放行。只读包名和窗口类型、不读取节点文字、不录音。监督模式按开关在察觉点截一帧，截图仅存本机7天、不上传。</string>
 </resources>

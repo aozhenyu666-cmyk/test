@@ -55,6 +55,10 @@
             </intent-filter>
         </activity>
 
+        <activity android:name=".ObservationActivity" android:exported="false"
+            android:excludeFromRecents="true" android:taskAffinity="com.dshdriver.app.observation"
+            android:theme="@style/Theme.Driver.Card" android:windowSoftInputMode="adjustResize" />
+
         <!-- 断点卡 / 强提醒页：独立任务栈，盖在被切去的应用上；不进最近任务 -->
         <activity
             android:name=".CardActivity"

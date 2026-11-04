@@ -58,6 +58,10 @@ class WatchService : AccessibilityService() {
 
     override fun onServiceConnected() {
         Engine.watchConnected = true
+        ObservationShots.connected(this)
+        val initial=runCatching {rootInActiveWindow}.getOrNull()
+        Engine.onForeground(this,initial?.packageName?.toString(),null)
+        @Suppress("DEPRECATION") runCatching {initial?.recycle()}
         A11yGuard.clearDownNotice(this)
         WatchdogJob.schedule(this)
     }
@@ -66,21 +70,22 @@ class WatchService : AccessibilityService() {
         if (event == null) return
         heartbeat()
         if (event.eventType and TARGET_EVENTS == 0) return
+        if(!AwarenessRuntime.screenAvailable()) {Engine.onForeground(this,null,null);return}
         val pkg = event.packageName?.toString() ?: return
         // 自己弹的页（拦截页 / 断点卡）不算"打开了娱乐 App"
-        if (pkg == packageName) return
+        // Own pages also occupy time; only interception ignores them.
 
         // 事件包名和当前活动窗口不一致时不当真（快速切换、输入法浮层都会产生这种事件）
         val root = runCatching { rootInActiveWindow }.getOrNull()
         val active = root?.packageName?.toString()
         @Suppress("DEPRECATION") runCatching { root?.recycle() }
-        if (active.isNullOrBlank() || active != pkg) return
+        if (active.isNullOrBlank() || active != pkg) {Engine.onForeground(this,null,null);return}
 
         // 同一个 App 内部的内容变化不重复判断：加了内容变化事件后这类事件很密，全判一遍没必要也费电
+        Engine.onForeground(this,active,event.className?.toString())
         if (active == lastSeenPkg) return
         lastSeenPkg = active
-        Engine.onForeground(this, active, event.className?.toString())
-        maybeBlock(active)
+        if(active!=packageName) maybeBlock(active)
     }
 
     private fun maybeBlock(pkg: String) {
@@ -107,10 +112,12 @@ class WatchService : AccessibilityService() {
         WatchdogJob.schedule(this)
     }
 
-    override fun onInterrupt() = Unit
+    override fun onInterrupt() {Engine.onForeground(this,null,null);lastSeenPkg=""}
 
     override fun onDestroy() {
         Engine.watchConnected = false
+        ObservationShots.connected(null)
+        Engine.onForeground(this,null,null)
         main.removeCallbacksAndMessages(null)
         super.onDestroy()
     }
@@ -185,6 +192,16 @@ class BootReceiver : BroadcastReceiver() {
 
 /** 陪练期间的前台服务：让系统别杀进程，并挂着音频状态监听。 */
 class LockService : Service() {
+    private val screen = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            Engine.onForeground(context,null,null)
+        }
+    }
+    override fun onCreate() {
+        super.onCreate()
+        val filter=android.content.IntentFilter().apply {addAction(Intent.ACTION_SCREEN_OFF);addAction(Intent.ACTION_SCREEN_ON);addAction(Intent.ACTION_USER_PRESENT)}
+        if(Build.VERSION.SDK_INT>=33) registerReceiver(screen,filter,Context.RECEIVER_NOT_EXPORTED) else registerReceiver(screen,filter)
+    }
     private var signals: AudioSignals? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -199,11 +216,13 @@ class LockService : Service() {
             .setOngoing(true).setContentIntent(pi).build()
         if (Build.VERSION.SDK_INT >= 34) startForeground(NOTE_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         else startForeground(NOTE_ID, n)
-        if (signals == null) signals = AudioSignals(this) { rec, play -> Engine.onAudio(rec, play) }.also { it.start() }
-        return START_NOT_STICKY // 进程被杀后状态机已经没了，重启服务也接不回去，不假装还在锁定
+        if (Engine.locked && signals == null) signals = AudioSignals(this) { rec, play -> Engine.onAudio(rec, play) }.also { it.start() }
+        if(AwarenessRuntime.active) Engine.ensureTicker()
+        return if(AwarenessRuntime.active) START_STICKY else START_NOT_STICKY
     }
 
     override fun onDestroy() {
+        unregisterReceiver(screen)
         signals?.stop()
         signals = null
         super.onDestroy()

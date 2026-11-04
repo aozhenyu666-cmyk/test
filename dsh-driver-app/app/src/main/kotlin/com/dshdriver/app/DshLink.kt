@@ -77,8 +77,29 @@ object DshLink {
         call(p.port, p.token, "POST", "/report", body)
     }
 
+    fun checkin(p: Pairing, observation: JSONObject): List<String>? {
+        val kind=observation.optString("kind")
+        val payload=JSONObject().put("intent","checkin_$kind").put("mode","supervise").put("observation",observationJson(observation))
+        val (status,body)=call(p.port,p.token,"POST","/compose",payload,readTimeoutMs=3400,connectTimeoutMs=400)?:return null
+        if(status!=200 || body?.optString("source")!="dsh") return null
+        val a=body.optJSONArray("questions")?:return null
+        val values=(0 until a.length()).map {a.optString(it)}
+        return values.takeIf {it.size==(if(kind=="deep") 4 else 1) && it.all {q->q.isNotBlank() && q.length<=200}}
+    }
+    fun observe(p: Pairing, rows: List<JSONObject>): Set<String>? {
+        val wire=rows.map(::observationJson)
+        val (status,body)=call(p.port,p.token,"POST","/observe",JSONObject().put("observations",JSONArray(wire)))?:return null
+        if(status!=200) return null
+        val ids=body?.optJSONArray("accepted")?:return null
+        return (0 until ids.length()).map {ids.optString(it)}.toSet()
+    }
+
+    private fun observationJson(row: JSONObject)=JSONObject(row.toString()).apply {
+        put("hasScreenshot",!row.isNull("screenshot"));remove("screenshot");remove("synced");remove("pending")
+    }
+
     private fun requestJson(r: ComposeRequest) = JSONObject()
-        .put("intent", r.intent).put("cog", JSONObject().put("state", r.cog.state.name).put("reason", r.cog.reason)).putOpt("die", r.die)
+        .put("intent", r.intent).put("mode",if(AwarenessRuntime.active) "supervise" else r.mode).put("cog", JSONObject().put("state", r.cog.state.name).put("reason", r.cog.reason)).putOpt("die", r.die)
         .put("topic", r.topic).put("task", r.task).put("minute", r.minute).put("minutes", r.minutes)
         .putOpt("breakpoint", r.breakpoint).putOpt("lastQuestion", r.lastQuestion).putOpt("missing", r.missing)
         .put("recentReplies", JSONArray(r.recentReplies)).put("asked", JSONArray(r.asked))
@@ -94,11 +115,11 @@ object DshLink {
     }
 
     /** 一次 HTTP 调用。连不上返回 null；其余返回 (状态码, JSON 或 null)。 */
-    private fun call(port: Int, token: String?, method: String, path: String, body: JSONObject?, readTimeoutMs: Int = 4_000): Pair<Int, JSONObject?>? = runCatching {
+    private fun call(port: Int, token: String?, method: String, path: String, body: JSONObject?, readTimeoutMs: Int = 4_000, connectTimeoutMs: Int = 1_500): Pair<Int, JSONObject?>? = runCatching {
         val conn = URL("http://127.0.0.1:$port$PREFIX$path").openConnection() as HttpURLConnection
         try {
             conn.requestMethod = method
-            conn.connectTimeout = 1_500
+            conn.connectTimeout = connectTimeoutMs
             conn.readTimeout = readTimeoutMs
             conn.useCaches = false
             token?.let { conn.setRequestProperty("Authorization", "Bearer $it") }

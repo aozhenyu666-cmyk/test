@@ -39,13 +39,13 @@ function send(res, status, body) {
   res.end(JSON.stringify(body))
 }
 
-async function readJson(req) {
+async function readJson(req, maxBody = MAX_BODY) {
   if (!String(req.headers['content-type'] ?? '').startsWith('application/json')) return { error: 415 }
   let size = 0
   const chunks = []
   for await (const c of req) {
     size += c.length
-    if (size > MAX_BODY) return { error: 413 }
+    if (size > maxBody) return { error: 413 }
     chunks.push(c)
   }
   try { return { value: JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') } } catch { return { error: 400 } }
@@ -195,12 +195,12 @@ export function apply(ctx) {
   })
   ctx.on('tools/pre-execute', (exec, next) => {
     let denied
-    try { denied = brain.guardTool(exec?.agent?.id ?? exec?.agent?.session?.id) } catch { denied = undefined }
+    try { denied = brain.guardTool(exec?.agent?.id ?? exec?.agent?.session?.id, exec?.name) } catch { denied = undefined }
     return denied ?? next()
   }, { global: true, prepend: true })
   ctx.on('agent/disposed', (agent) => { try { if (agent?.id) brain.onAgentGone(agent.id) } catch { /* ignore */ } })
 
-  const ticker = setInterval(() => { svc.tick().catch(() => {}) }, 1_000)
+  const ticker = setInterval(() => { svc.tick().catch(() => {}); app.digest().catch(() => {}) }, 1_000)
   ticker.unref?.()
   ctx.effect?.(() => () => clearInterval(ticker))
 
@@ -214,11 +214,12 @@ export function apply(ctx) {
     if (denied !== undefined) { res.writeHead(denied, { 'cache-control': 'no-store' }); res.end(); return }
     if (req.method === 'GET' && path === '/app/ping') { const r = app.ping(); return send(res, r.status, r.body) }
     if (req.method !== 'POST') return send(res, 405, { v: 1, error: { code: 'method' } })
-    const body = await readJson(req)
+    const body = await readJson(req, path === '/app/observe' ? 256 * 1024 : MAX_BODY)
     if (body.error) return send(res, body.error, { v: 1, error: { code: 'bad-body' } })
     let r
     if (path === '/app/pair') r = app.pair(body.value)
     else if (path === '/app/compose') r = await app.compose(body.value)
+    else if (path === '/app/observe') r = app.observe(body.value)
     else if (path === '/app/report') r = app.report(body.value)
     else r = { status: 404, body: { v: 1, error: { code: 'not-found' } } }
     return send(res, r.status, r.body)

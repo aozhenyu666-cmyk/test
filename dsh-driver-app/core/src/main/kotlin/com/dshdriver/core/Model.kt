@@ -92,6 +92,7 @@ data class ComposeRequest(
     val habits: List<String>,
     val patterns: List<String>,
     val unresolved: List<String>,
+    val mode: String = "partner",
 )
 
 /** 出题的大脑。拿不到、超时、不合规都返回 null，驾驶员就用模板。实现方负责自己的超时。 */

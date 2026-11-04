@@ -16,6 +16,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -42,6 +43,8 @@ class MainActivity : Activity() {
 
     /** 已经画出来的那一版是"陪练中"还是"待机"，只在切换时重建整页。 */
     private var builtLocked: Boolean? = null
+    private var builtAwareness=-1L
+    private var awarenessStatus: TextView?=null
 
     // 陪练中每秒会变的地方：只改文字，不重建
     private var clock: TextView? = null
@@ -55,7 +58,7 @@ class MainActivity : Activity() {
     private val refresher = object : Runnable {
         override fun run() {
             render()
-            if (Engine.locked) main.postDelayed(this, 1_000)
+            if (Engine.locked || AwarenessRuntime.active) main.postDelayed(this, 1_000)
         }
     }
 
@@ -83,7 +86,8 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        Engine.onChange = { render(); if (Engine.locked) { main.removeCallbacks(refresher); main.post(refresher) } }
+        if(AwarenessRuntime.active) {LockService.start(this,"监督模式");Engine.ensureTicker()}
+        Engine.onChange = { render(); if (Engine.locked || AwarenessRuntime.active) { main.removeCallbacks(refresher); main.post(refresher) } }
         // 先自愈再渲染：无障碍被关掉时，"写回去"和"显示成已开"要在同一次刷新里完成，
         // 否则会先闪一下"未开"，让人以为还得手点一次
         A11yGuard.ensure(this)
@@ -104,21 +108,24 @@ class MainActivity : Activity() {
 
     private fun render(force: Boolean = false) {
         val locked = Engine.locked
-        if (force || builtLocked != locked || body.childCount == 0) rebuild(locked)
+        if (force || builtLocked != locked || builtAwareness!=AwarenessRuntime.revision || body.childCount == 0) rebuild(locked)
+        awarenessStatus?.text=AwarenessRuntime.state?.takeIf {it.active}?.let { "监督中 · 剩余 ${((it.endsAt-System.currentTimeMillis())/60_000).coerceAtLeast(0)} 分钟" } ?: "伙伴模式 · 不定时察觉"
         refreshLive()
     }
 
     private fun rebuild(locked: Boolean) {
         val y = scroller.scrollY
         builtLocked = locked
+        builtAwareness=AwarenessRuntime.revision
         clock = null; phaseChip = null; meter = null
         statGrounded = null; statResponded = null; askBlock = null; askText = null
         body.removeAllViews()
         ui.reset(body)
 
         header(locked)
+        awarenessCard()
         if (locked) session() else idle()
-        ui.footnote("只读当前前台应用的包名和窗口类型，不读屏幕文字、不录音。所有数据只留在本机 files/driver/。")
+        ui.footnote("不录音。观察文本可同步给本机 DSH Go，并由你配置的模型分析；察觉截图仅保存在本机，7天清理，不上传。")
         // 重建后把滚动位置放回去，别让人以为页面跳了
         main.post { scroller.scrollTo(0, y) }
     }
@@ -243,6 +250,28 @@ class MainActivity : Activity() {
                 Engine.start(topic.text.toString().trim(), task.text.toString().trim(), m)
                 main.postDelayed({ Engine.relaunchAnchor(this) }, 600)
             }
+        }
+    }
+
+    private fun awarenessCard() {
+        val store=Engine.store.observations
+        ui.card(title="自我察觉",chip=if(AwarenessRuntime.active) "监督" else "伙伴") {
+            awarenessStatus=ui.text("")
+            ui.caption("监督模式：每5分钟一句小问、每10分钟四问复盘；断网也会提问并保存。可以跳过，或用输入法语音回答。")
+            if(AwarenessRuntime.active) ui.secondary("停止监督，回到伙伴模式") {AwarenessRuntime.stop()}
+            else {
+                val options=listOf(30,60,120,240);var selected=1
+                ui.choice(options.map {"$it 分钟"},selected) {selected=it}
+                ui.primary("开启监督模式") {AwarenessRuntime.start(options[selected])}
+            }
+            ui.caption(if(Engine.watchConnected) "无障碍已连接：可记录应用时间线。" else "无障碍未连接：应用时长可能缺失，回答仍会保存。")
+            val shot=CheckBox(this).apply {text="察觉时截一张图（Android 11+，仅本机）";isChecked=store.screenshots;setOnCheckedChangeListener {_,v->store.screenshots=v}}
+            val voice=CheckBox(this).apply {text="察觉时语音提醒（TTS，不占麦克风）";isChecked=store.voice;setOnCheckedChangeListener {_,v->store.voice=v}}
+            // A Ui card owns the parent of its last text field.
+            (awarenessStatus!!.parent as LinearLayout).apply {addView(shot);addView(voice)}
+            store.pending()?.let {row->ui.secondary("接着回答未完成的察觉") {ObservationActivity.start(this,row.getString("id"))}}
+            ui.quiet("本地记录与导出") {ObservationActivity.start(this)}
+            ui.quiet("补发待同步记录") {AwarenessRuntime.sync();toast("正在尝试同步，成功确认后才会移出队列")}
         }
     }
 
@@ -492,6 +521,7 @@ class MainActivity : Activity() {
         pinging = true
         Thread {
             val r = DshLink.ping(pairing)
+            if(r.ok) AwarenessRuntime.sync(alreadyPinged=true)
             ping = r
             pinging = false
             main.post { if (!Engine.locked) render(force = true) }
@@ -549,7 +579,7 @@ class MainActivity : Activity() {
     private fun diagnosticsCard() {
         ui.card(title = "诊断", muted = true) {
             if (!A11yGuard.isOn(this)) {
-                ui.caption("打开「思维驾驶员 · 前台记录」后，这里会列出最近读到的前台应用。只用来排查误判，不拦截任何东西。")
+                ui.caption("打开思维驾驶员无障碍后，可记录应用时间线，并按已选名单拦截应用。")
                 ui.quiet("去打开无障碍", Palette.light.accent) { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
                 return@card
             }
