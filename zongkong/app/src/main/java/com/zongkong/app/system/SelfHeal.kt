@@ -180,6 +180,9 @@ object SelfHeal {
             .distinctBy { normalize(it) }
     }
 
+    /** 有其他无障碍服务在场时，不做破坏性重绑，只追加自己。 */
+    fun shouldToggle(others: List<String>): Boolean = others.isEmpty()
+
     /**
      * 合并写回：当前列表里的其他服务 + 额外要保留的 + 本服务（只留一份、本服务在最后）。
      *
@@ -291,6 +294,21 @@ object SelfHeal {
         val meFlat = me.flattenToString()
         val current = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
         val others = othersOf(current, meFlat)
+
+        // 一手等其他无障碍服务在场：只确保自己在列表里，绝不做“拿掉→放回”或清空。
+        // 那个动作会把别人的服务一起卷进来，正是共存冲突的来源。
+        if (!shouldToggle(others)) {
+            try {
+                Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+                val fresh = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
+                Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, merge(fresh, others, meFlat))
+            } catch (e: Exception) {
+                Log.w(TAG, "追加总控到无障碍列表失败", e)
+                return Rebind(false, false, 0, "写安全设置被拒绝（${e.javaClass.simpleName}）")
+            }
+            delay(600)
+            return Rebind(written(context, meFlat), verified(context, me), 0, "有其他无障碍服务，只追加不重绑")
+        }
 
         // 第一档：开总开关 → 拿掉 → 放回。
         // 先置 1 是因为 vivo 上 ACCESSIBILITY_ENABLED=0 时列表怎么写都不会挂载。

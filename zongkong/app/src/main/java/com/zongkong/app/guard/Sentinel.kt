@@ -593,7 +593,8 @@ object RebindCoordinator {
         }
     }
 
-    private fun doRebind(c: Context, component: ComponentName): Boolean = try {
+    private fun doRebind(c: Context, component: ComponentName): Boolean {
+        return try {
         val cr = c.contentResolver
         fun current(): List<String> = (android.provider.Settings.Secure.getString(
             cr,
@@ -601,8 +602,24 @@ object RebindCoordinator {
         ) ?: "").split(':').filter { it.isNotBlank() }
 
         val flat = component.flattenToString()
-        // 1) 写回前重新读取：只拿掉自己这一项，**保留其他已启用服务**（T12）。
+        // 有其他无障碍服务在场（一手）：只追加自己，绝不“拿掉再放回”，避免把别人卷进来。
+        val mine = com.zongkong.app.system.SelfHeal.normalize(flat)
         val snapshot = current()
+        val others = snapshot.filter { com.zongkong.app.system.SelfHeal.normalize(it) != mine }
+        if (others.isNotEmpty()) {
+            val merged = (others + flat).distinctBy { com.zongkong.app.system.SelfHeal.normalize(it) }
+            android.provider.Settings.Secure.putString(
+                cr,
+                android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+                merged.joinToString(":"),
+            )
+            android.provider.Settings.Secure.putInt(cr, android.provider.Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+            runCatching {
+                Diag.log(c, "rebind_sent", "有其他无障碍服务，只追加：${component.flattenToShortString()}（保留 ${others.size} 项）")
+            }
+            return true
+        }
+        // 1) 写回前重新读取：只拿掉自己这一项，**保留其他已启用服务**（T12）。
         val without = snapshot.filter { ComponentName.unflattenFromString(it) != component }
         android.provider.Settings.Secure.putString(
             cr,
@@ -631,6 +648,7 @@ object RebindCoordinator {
         Log.w(TAG, "重新挂上无障碍失败", e)
         runCatching { Diag.log(c, "rebind_fail", "恢复请求没发出去：${e.message ?: e.javaClass.simpleName}") }
         false
+        }
     }
 }
 

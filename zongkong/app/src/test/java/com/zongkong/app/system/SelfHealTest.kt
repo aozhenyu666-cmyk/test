@@ -37,6 +37,12 @@ class SelfHealTest {
     }
 
     @Test
+    fun `only toggles when no other accessibility service is present`() {
+        assertTrue(SelfHeal.shouldToggle(emptyList()))
+        org.junit.Assert.assertFalse(SelfHeal.shouldToggle(listOf(yishou)))
+    }
+
+    @Test
     fun `merge never drops an existing third service`() {
         val merged = SelfHeal.merge("$third:$yishou", emptyList(), me)
         assertTrue(merged.contains(third))

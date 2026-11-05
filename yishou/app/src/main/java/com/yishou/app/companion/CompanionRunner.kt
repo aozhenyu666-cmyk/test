@@ -208,23 +208,31 @@ object CompanionRunner {
             return local
         }
 
-        val bitmap = screenshot(service) ?: run {
-            Log.w(TAG, "截屏失败或不可用")
-            return null
-        }
-        Log.i(TAG, "截屏成功：${bitmap.width}x${bitmap.height}")
-        val base64 = encode(bitmap)
-        bitmap.recycle()
-        if (base64.isBlank()) return null
+        val nodeText = runCatching { screenTextFromNodes(service) }.getOrDefault("")
+        if (nodeText.length >= 10) Log.i(TAG, "节点文字：${nodeText.take(80)}")
 
-        val seen = app.scrollLook.completeWithImage(
-            "把屏幕正文完整转写出来：标题、字幕、正文。去掉按钮、点赞数、时间戳、广告；看不清写（看不清）。不要总结，不要评论。",
-            "请转写这张屏幕。",
-            "data:image/jpeg;base64,$base64",
-            "伴读识屏",
-        )
-        val screenText = (seen as? LlmResult.Ok)?.value?.trim().orEmpty()
-        if (seen is LlmResult.Err) Log.w(TAG, "识屏失败：${seen.error}")
+        val screenText = if (nodeText.length >= 10) {
+            nodeText
+        } else {
+            val bitmap = screenshot(service) ?: run {
+                Log.w(TAG, "截屏失败或不可用")
+                return null
+            }
+            Log.i(TAG, "截屏成功：${bitmap.width}x${bitmap.height}")
+            val base64 = encode(bitmap)
+            bitmap.recycle()
+            if (base64.isBlank()) return null
+
+            val seen = app.scrollLook.completeWithImage(
+                "把屏幕正文完整转写出来：标题、字幕、正文。去掉按钮、点赞数、时间戳、广告；看不清写（看不清）。不要总结，不要评论。",
+                "请转写这张屏幕。",
+                "data:image/jpeg;base64,$base64",
+                "伴读识屏",
+            )
+            val text = (seen as? LlmResult.Ok)?.value?.trim().orEmpty()
+            if (seen is LlmResult.Err) Log.w(TAG, "识屏失败：${seen.error}")
+            text
+        }
         if (screenText.length < 10) return null
 
         val generated = app.scrollJudge.complete(
@@ -248,6 +256,19 @@ object CompanionRunner {
         if (question.isBlank() || QuestionLedger.isDuplicate(question, recent)) return null
         Log.i(TAG, "题目：$question")
         return question
+    }
+
+    /** 读当前窗口的无障碍节点文字；不截图、不联网，优先用它。 */
+    private fun screenTextFromNodes(service: AccessibilityService): String {
+        val root = service.rootInActiveWindow ?: return ""
+        val sb = StringBuilder()
+        fun walk(node: android.view.accessibility.AccessibilityNodeInfo?, depth: Int) {
+            if (node == null || depth > 14 || sb.length >= 1600) return
+            node.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { sb.append(it).append('\n') }
+            for (i in 0 until node.childCount) walk(node.getChild(i), depth + 1)
+        }
+        walk(root, 0)
+        return sb.toString().trim()
     }
 
     /** 读当前任务、断点、上一轮和最近的判断；任务可以没有，记忆不能因此丢掉。 */

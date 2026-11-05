@@ -334,6 +334,16 @@ class GateService : AccessibilityService() {
         GateTrace.log("无障碍服务断开（被关闭或被系统停掉）")
         cover?.hide()
         com.yishou.app.companion.CompanionHealth.notifyMissing(this)
+        // 总开关还开着、伴读也开着：更像“被系统摘掉”，有调试授权时把自己追加回去（不动别人）。
+        val master = runCatching {
+            android.provider.Settings.Secure.getInt(
+                contentResolver,
+                android.provider.Settings.Secure.ACCESSIBILITY_ENABLED,
+            ) == 1
+        }.getOrDefault(false)
+        if (master && com.yishou.app.companion.CompanionPrefs(this).load().enabled) {
+            com.yishou.app.companion.CompanionHealth.rebindIfAllowed(this)
+        }
         if (running === this) {
             running = null
             _connected.value = false
