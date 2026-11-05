@@ -32,20 +32,38 @@ yishou/app/src/test/java/com/yishou/app/core/
 
 ## 任务一：合并开发线（先做，不写新功能）
 
-### 1.1 建集成分支
+### 1.1 建集成分支（这两条历史没有共同祖先，不能直接 merge）
+
+已核实：`git merge-base feat/dual-mode-closed-loop fix/gate-loop-break` 返回空，两条线是**无关历史**。直接 `git merge` 会把整棵 `yishou/` 当成“双方各自新增”而全量冲突。
+
+正确做法是**按目录装配**，不是合并历史：
 
 ```bash
 git fetch --all --prune
-git checkout -b integration/all feat/dual-mode-closed-loop
-# 把一手 0.25.4 的树并进来（保留两边目录）
-git merge --no-commit fix/gate-loop-break
+git checkout -b integration/all feat/dual-mode-closed-loop   # 这棵树同时有 yishou 和 zongkong
+
+# 用一手 0.25.4 的整棵 yishou 替换掉旧版
+git rm -r --quiet yishou
+git checkout fix/gate-loop-break -- yishou
+
+# 确认版本
+grep versionName yishou/app/build.gradle.kts zongkong/app/build.gradle.kts
+
+git add -A yishou
+git commit -m "assembly: 一手 0.25.4 + 总控 0.17.0（无关历史，按目录装配）"
 ```
 
-冲突处理原则：
+`projects/` 目录这两条树上都没有，从本次分支取：
 
-- `yishou/` 一律以 `fix/gate-loop-break` 为准（0.25.4 更新）。
-- `zongkong/` 一律以 `feat/dual-mode-closed-loop` 为准（0.17.0 更新）。
-- 两边都改过的根文件（`README.md`、`package.json`）手工合并，不要 `-X ours/theirs` 一把梭。
+```bash
+git checkout claude/yishou-c1-core -- projects
+```
+
+原则：
+
+- **不要再 `git merge` 旧线**。旧线只用于 `git checkout <branch> -- <具体目录/文件>` 或 `cherry-pick` 单个 commit。
+- 根文件（`README.md`、`package.json`、`.gitignore`）保留 `feat/dual-mode-closed-loop` 的版本，不手工重写。
+- `yishou/` 以 `fix/gate-loop-break` 为准；`zongkong/` 以 `feat/dual-mode-closed-loop` 为准。
 
 ### 1.2 把两条旧线的独占能力搬过来
 
