@@ -9,6 +9,7 @@ import android.view.inputmethod.InputMethodManager
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import com.yishou.app.YishouApp
+import com.yishou.app.companion.CompanionRunner
 import com.yishou.app.stats.DayStats
 import com.yishou.app.system.Notifications
 import com.yishou.app.system.ExternalGrace
@@ -102,12 +103,23 @@ class GateService : AccessibilityService() {
         Notifications.showRunning(this)
         watchJob?.cancel()
         watchJob = scope.launch {
+            GateTrace.log("watch 循环启动")
+            var loggedState = false
             while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+                try {
+                    val awake = getSystemService(android.os.PowerManager::class.java).isInteractive
+                    val locked = getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
+                    if (!loggedState) {
+                        loggedState = true
+                        GateTrace.log("watch 状态 awake=$awake locked=$locked fg=$foregroundPkg")
+                    }
+                    if (GateActivity.isShowing) cover?.hide()
+                    if (awake && !locked && !GateActivity.isShowing) foregroundPkg?.takeIf { it != packageName }?.let(::check)
+                    if (awake && !locked) CompanionRunner.tick(this@GateService, foregroundPkg)
+                } catch (e: Throwable) {
+                    Log.w(TAG, "watch 循环出错", e)
+                }
                 delay(1_000)
-                val awake = getSystemService(android.os.PowerManager::class.java).isInteractive
-                val locked = getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
-                if (GateActivity.isShowing) cover?.hide()
-                if (awake && !locked && !GateActivity.isShowing) foregroundPkg?.takeIf { it != packageName }?.let(::check)
             }
         }
     }
@@ -158,6 +170,8 @@ class GateService : AccessibilityService() {
     }
 
     private fun check(pkg: String) {
+        // 伴读开着时，一手只负责“看”，不拦截；拦截交给总控，避免两个无障碍服务抢页面。
+        if (com.yishou.app.companion.CompanionPrefs(this).load().enabled) return
         if (app.partner.allows(pkg)) {
             GateTrace.log("不拦：伴读中，这个应用是登记的材料应用", pkg)
             shortCheck?.cancel()
@@ -312,6 +326,7 @@ class GateService : AccessibilityService() {
 
     override fun onDestroy() {
         cover?.hide()
+        CompanionRunner.reset()
         if (wakeRegistered) { unregisterReceiver(wakeReceiver); wakeRegistered = false }
 
         if (running === this) {

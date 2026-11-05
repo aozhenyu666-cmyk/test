@@ -187,9 +187,10 @@ data class AppPrefs(
             (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }.toSet()
         }
 
-        /** 默认关注：抖音、B站、贴吧、三角洲行动。没装的应用不影响。 */
+        /** 默认关注：抖音、B站、贴吧、YouTube、三角洲行动。没装的应用不影响。 */
         val DEFAULT_WATCHED = mapOf(
             "com.ss.android.ugc.aweme" to "短视频与社区",
+            "com.google.android.youtube" to "短视频与社区",
             "tv.danmaku.bili" to "短视频与社区",
             "com.baidu.tieba" to "短视频与社区",
             "com.tencent.tmgp.dfm" to "游戏",

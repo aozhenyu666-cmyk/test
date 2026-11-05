@@ -28,8 +28,9 @@ class FloatingReplyActivity : ComponentActivity() {
             var note by remember { mutableStateOf<String?>(null) }
             Surface {
                 Column(Modifier.widthIn(max = 420.dp).padding(20.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("回这一句", style = MaterialTheme.typography.titleLarge)
+                    Text(if (mode == "companion") "做个判断" else "回这一句", style = MaterialTheme.typography.titleLarge)
                     Text(if (mode == "window") windowVm?.overlayPrompt().orEmpty() else intent.getStringExtra("question").orEmpty())
+                    if (mode == "companion") Text("要求：先给判断，再说理由或反例。", style = MaterialTheme.typography.bodySmall)
                     if (app.partnerVoice.active) OutlinedTextField(text, { text = it }, label = { Text("写给伙伴") }, modifier = Modifier.fillMaxWidth())
                     else VoiceTextField(text, { text = it }, "可以打字，也可以点麦克风说", Modifier.fillMaxWidth(), minLines = 2)
                     note?.let { Text(it) }
@@ -39,6 +40,14 @@ class FloatingReplyActivity : ComponentActivity() {
                             when (mode) {
                                 "partner" -> if (app.partnerVoice.active) app.partnerVoice.say(text) else { note = "这场已经结束"; return@Button }
                                 "scroll" -> com.yishou.app.scroll.ScrollService.replyFromPanel(this@FloatingReplyActivity, text, intent.getLongExtra("quiz", -1))
+                                "companion" -> {
+                                    val check = com.yishou.app.companion.CompanionRunner.answer(this@FloatingReplyActivity, text)
+                                    if (!check.pass) {
+                                        note = check.hint
+                                        if (!check.reask) finish()
+                                        return@Button
+                                    }
+                                }
                                 else -> windowVm?.overlayAnswer(text)
                             }
                             finish()

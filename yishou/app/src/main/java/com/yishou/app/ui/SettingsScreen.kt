@@ -136,6 +136,51 @@ fun SettingsScreen(
             )
 
             HorizontalDivider()
+            SectionTitle("伴读（看屏出判断题）")
+            val companion = remember { com.yishou.app.companion.CompanionPrefs(context) }
+            var cc by remember { mutableStateOf(companion.load()) }
+            SwitchRow("打开伴读", cc.enabled) { on ->
+                cc = cc.copy(enabled = on).sane()
+                companion.save(cc)
+            }
+            if (cc.enabled) {
+                Text(
+                    "在关注的应用里待够时间，就截一屏问一个必须做判断的问题。截图只在内存里，不保存。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                LabeledRow("连续用多久开始") {
+                    Stepper(cc.triggerSeconds, 15..180, "秒") { v ->
+                        cc = cc.copy(triggerSeconds = v).sane(); companion.save(cc)
+                    }
+                }
+                LabeledRow("两次之间至少") {
+                    Stepper(cc.gapSeconds, 60..900, "秒") { v ->
+                        cc = cc.copy(gapSeconds = v).sane(); companion.save(cc)
+                    }
+                }
+                LabeledRow("30 分钟最多") {
+                    Stepper(cc.maxPerHalfHour, 1..12, "次") { v ->
+                        cc = cc.copy(maxPerHalfHour = v).sane(); companion.save(cc)
+                    }
+                }
+                LabeledRow("不答多久提醒") {
+                    Stepper(cc.nudgeSeconds, 30..240, "秒") { v ->
+                        cc = cc.copy(nudgeSeconds = v).sane(); companion.save(cc)
+                    }
+                }
+                LabeledRow("不答多久收回") {
+                    Stepper(cc.closeSeconds, 60..300, "秒") { v ->
+                        cc = cc.copy(closeSeconds = v).sane(); companion.save(cc)
+                    }
+                }
+                LabeledRow("一天几次没答就停") {
+                    Stepper(cc.stopAfterMisses, 1..6, "次") { v ->
+                        cc = cc.copy(stopAfterMisses = v).sane(); companion.save(cc)
+                    }
+                }
+            }
+
+            HorizontalDivider()
             SectionTitle("分组训练")
             Text(
                 "像练体能一样分组：一组是几张题卡（在下面“题卡”里设），组间歇一下。" +
