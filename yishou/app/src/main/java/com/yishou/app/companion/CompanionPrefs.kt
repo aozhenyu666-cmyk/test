@@ -47,6 +47,13 @@ class CompanionPrefs(context: Context) {
         p.edit().putLong("last_attempt", at).apply()
     }
 
+    /** 这次题目是不是本地提醒（没有配模型）。 */
+    fun localMode(): Boolean = p.getBoolean("local_mode", false)
+
+    fun setLocalMode(on: Boolean) {
+        p.edit().putBoolean("local_mode", on).apply()
+    }
+
     fun addPrompt(at: Long) {
         val recent = p.getString("prompts", "").orEmpty()
             .split(',')

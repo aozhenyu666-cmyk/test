@@ -11,6 +11,7 @@ import com.yishou.app.YishouApp
 import com.yishou.app.core.Companion
 import com.yishou.app.core.CompanionAction
 import com.yishou.app.core.CompanionContext
+import com.yishou.app.core.CompanionLocal
 import com.yishou.app.core.CompanionPrompt
 import com.yishou.app.core.CompanionState
 import com.yishou.app.core.FinalReviewRules
@@ -50,6 +51,8 @@ object CompanionRunner {
     private var nudged = false
     private var attempt = 0
     private var warnedNoAi = false
+    /** 用户正在浮窗里打字：这期间不要用提醒把输入框顶掉。 */
+    private var replyOpen = false
 
     /** GateService 每秒调一次。 */
     fun tick(service: AccessibilityService, pkg: String?) {
@@ -57,12 +60,11 @@ object CompanionRunner {
         val prefs = CompanionPrefs(service)
         val cfg = prefs.load()
         if (!cfg.enabled) return
-        if (!app.settings.vision.value.isComplete || !app.settings.llm.value.isComplete) {
-            if (!warnedNoAi) {
-                warnedNoAi = true
-                Log.i(TAG, "识图或模型没配，伴读不启动")
-            }
-            return
+
+        val hasAi = app.settings.vision.value.isComplete && app.settings.llm.value.isComplete
+        if (!hasAi && !warnedNoAi) {
+            warnedNoAi = true
+            Log.i(TAG, "识图或模型没配：走本地提醒")
         }
 
         val now = System.currentTimeMillis()
@@ -74,6 +76,7 @@ object CompanionRunner {
 
         val pending = prefs.pendingQuestion()
         if (!pending.isNullOrBlank()) {
+            if (replyOpen) return
             val seconds = ((now - prefs.pendingAt()) / 1000).toInt()
             when (Companion.onSilence(cfg, seconds)) {
                 SilenceStep.NUDGE -> if (!nudged) {
@@ -114,7 +117,7 @@ object CompanionRunner {
         }.getOrDefault(pkg)
 
         scope.launch {
-            val question = runCatching { buildQuestion(app, service, label) }
+            val question = runCatching { buildQuestion(app, service, label, state.fgSeconds / 60, hasAi) }
                 .onFailure { Log.w(TAG, "出题失败", it) }
                 .getOrNull()
             asking = false
@@ -123,6 +126,7 @@ object CompanionRunner {
             attempt = 0
             nudged = false
             val at = System.currentTimeMillis()
+            prefs.setLocalMode(!hasAi)
             prefs.addPrompt(at)
             prefs.setPending(question, at)
             prefs.addQuestion(question)
@@ -134,19 +138,25 @@ object CompanionRunner {
     fun answer(context: Context, text: String): JudgementCheck {
         val prefs = CompanionPrefs(context)
         val app = context.applicationContext as? YishouApp
-        val check = JudgementRules.check(text, attempt)
+        replyOpen = false
+        val local = prefs.localMode()
+        val check = if (local) CompanionLocal.checkAnswer(text, attempt) else JudgementRules.check(text, attempt)
         if (check.pass) {
+            val question = prefs.pendingQuestion().orEmpty()
             prefs.clearPending()
+            prefs.setLocalMode(false)
             CoachFloat.remove("companion")
             attempt = 0
             nudged = false
-            app?.echoLater(text, EchoKind.CONCLUSION, SCENE)
+            val memory = if (local && question.isNotBlank()) "$question → $text" else text
+            app?.echoLater(memory, EchoKind.CONCLUSION, SCENE)
             Log.i(TAG, "判断通过：${text.take(60)}")
         } else {
             attempt += 1
             if (!check.reask) {
                 val question = prefs.pendingQuestion().orEmpty()
                 prefs.clearPending()
+                prefs.setLocalMode(false)
                 prefs.addMiss()
                 CoachFloat.remove("companion")
                 if (question.isNotBlank()) {
@@ -170,7 +180,16 @@ object CompanionRunner {
         app: YishouApp,
         service: AccessibilityService,
         label: String,
+        minutes: Int,
+        hasAi: Boolean,
     ): String? {
+        val ctx = runCatching { readContext(app) }.getOrElse { CompanionContext() }
+        if (!hasAi) {
+            val local = CompanionLocal.nudge(ctx, label, minutes).take(80)
+            Log.i(TAG, "本地提醒：$local")
+            return local
+        }
+
         val bitmap = screenshot(service) ?: run {
             Log.w(TAG, "截屏失败或不可用")
             return null
@@ -190,7 +209,6 @@ object CompanionRunner {
         if (seen is LlmResult.Err) Log.w(TAG, "识屏失败：${seen.error}")
         if (screenText.length < 10) return null
 
-        val ctx = runCatching { readContext(app) }.getOrElse { CompanionContext() }
         val generated = app.scrollJudge.complete(
             JudgementRules.SYSTEM,
             CompanionPrompt.user(ctx, screenText, label),
@@ -242,19 +260,50 @@ object CompanionRunner {
                 detail = detail,
                 actions = listOf(
                     FloatAction("回答") {
-                        FloatingReplyActivity.open(service, "companion", question)
+                        showAnswerInput(service, question)
                     },
                     FloatAction("不想答") {
                         close(service, CompanionPrefs(service))
                     },
                 ),
                 priority = 3,
+                autoExpand = true,
+            ),
+        )
+    }
+
+    /** 回答入口：直接在浮窗里输入，不启动 Activity（后台启动会被系统拦掉）。 */
+    private fun showAnswerInput(service: AccessibilityService, question: String) {
+        replyOpen = true
+        CoachFloat.update(
+            service,
+            "companion",
+            FloatPanel(
+                title = "回一句",
+                detail = question,
+                actions = listOf(
+                    FloatAction("取消") { showQuestion(service, question, null) },
+                ),
+                priority = 4,
+                autoExpand = true,
+                reply = true,
+                replyHint = "休息 / 现在回去 / 定个时间",
+                onSubmit = { text ->
+                    val check = answer(service, text)
+                    if (check.pass) {
+                        CoachFloat.remove("companion")
+                    } else {
+                        showQuestion(service, check.hint.ifBlank { "再回一句" }, null)
+                    }
+                },
             ),
         )
     }
 
     private fun close(service: AccessibilityService, prefs: CompanionPrefs) {
+        replyOpen = false
         prefs.clearPending()
+        prefs.setLocalMode(false)
         prefs.addMiss()
         CoachFloat.remove("companion")
         runCatching { service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME) }

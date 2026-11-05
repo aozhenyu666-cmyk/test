@@ -11,7 +11,9 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.yishou.app.log.RunLog
@@ -19,7 +21,18 @@ import kotlinx.coroutines.*
 import kotlin.math.abs
 
 data class FloatAction(val label: String, val click: () -> Unit)
-data class FloatPanel(val title: String, val detail: String, val actions: List<FloatAction>, val priority: Int = 0)
+data class FloatPanel(
+    val title: String,
+    val detail: String,
+    val actions: List<FloatAction>,
+    val priority: Int = 0,
+    /** 新内容出现时自动展开一次；用户手动收起后不强行弹回。 */
+    val autoExpand: Boolean = false,
+    /** 在浮窗里直接显示输入框，避免后台 startActivity 被系统拦掉。 */
+    val reply: Boolean = false,
+    val replyHint: String = "",
+    val onSubmit: ((String) -> Unit)? = null,
+)
 
 /** 几个会话共用一个可拖动的小窗；服务结束就撤掉自己的入口，不叠三层浮窗。 */
 object CoachFloat {
@@ -29,17 +42,31 @@ object CoachFloat {
     private var wm: WindowManager? = null
     private var params: WindowManager.LayoutParams? = null
     private var expanded = false
+    private var lastAutoContentKey = ""
+    private var focusedKey = ""
     private var signature = ""
     private var hides = 0
     private var lastX: Int? = null
     private var lastY: Int? = null
     private fun dp(n: Int): Int = ((context?.resources?.displayMetrics?.density ?: 1f) * n).toInt()
     fun update(context: Context, owner: String, panel: FloatPanel) { this.context = context.applicationContext; panels[owner] = panel; refresh(context) }
-    fun remove(owner: String) { panels.remove(owner); context?.let(::refresh) }
+    fun remove(owner: String) {
+        panels.remove(owner)
+        if (panels.isEmpty()) {
+            expanded = false
+            lastAutoContentKey = ""
+        }
+        context?.let(::refresh)
+    }
     fun refresh(context: Context) {
         this.context = context.applicationContext
         if (panels.isEmpty() || !Settings.canDrawOverlays(context)) { detach(); return }
         val current = panels.values.maxByOrNull { it.priority } ?: return
+        val contentKey = current.title + "|" + current.detail + "|" + current.actions.joinToString { it.label }
+        if (current.autoExpand && contentKey != lastAutoContentKey) {
+            expanded = true
+            lastAutoContentKey = contentKey
+        }
         val key = "$expanded|${current.title}|${current.detail}|${current.actions.map { it.label }}"
         if (root == null) {
             val c = context.applicationContext
@@ -52,6 +79,20 @@ object CoachFloat {
         }
         val r = root ?: return
         r.visibility = if (hides > 0) View.INVISIBLE else View.VISIBLE
+
+        val wantFocus = expanded && current.reply && current.onSubmit != null
+        val desiredFlags = if (wantFocus) {
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+        } else {
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+        }
+        params?.let { p ->
+            if (p.flags != desiredFlags) {
+                p.flags = desiredFlags
+                runCatching { wm?.updateViewLayout(r, p) }
+            }
+        }
+
         if (key == signature) return
         signature = key; r.removeAllViews()
         val header = TextView(context.applicationContext).apply {
@@ -88,6 +129,22 @@ object CoachFloat {
         r.addView(header)
         if (expanded) {
             r.addView(TextView(context.applicationContext).apply { text = current.detail.takeLast(500); textSize = 14f; maxLines = 7; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(Color.rgb(235, 240, 239)); setPadding(dp(8), dp(6), dp(8), dp(10)) })
+
+            // 直接在浮窗里输入：Android 10+ 不允许后台 startActivity，
+            // 从悬浮窗打开回复页会被系统静默拦掉，所以回答必须留在这个窗口里。
+            val replyInput = if (current.reply && current.onSubmit != null) {
+                EditText(context.applicationContext).apply {
+                    hint = current.replyHint.ifBlank { "回一句" }
+                    setTextColor(Color.WHITE)
+                    setHintTextColor(Color.LTGRAY)
+                    textSize = 14f
+                    minLines = 2
+                    setPadding(dp(8), dp(6), dp(8), dp(6))
+                }.also { r.addView(it) }
+            } else {
+                null
+            }
+
             current.actions.chunked(2).forEachIndexed { row, actions ->
                 val line = LinearLayout(context.applicationContext)
                 actions.forEachIndexed { col, action ->
@@ -98,6 +155,29 @@ object CoachFloat {
                     }, LinearLayout.LayoutParams(0, dp(46), 1f))
                 }
                 r.addView(line)
+            }
+
+            if (replyInput != null) {
+                r.addView(Button(context.applicationContext).apply {
+                    text = "交这一句"; textSize = 13f; isAllCaps = false
+                    setOnClickListener {
+                        val text = replyInput.text.toString().trim()
+                        if (text.isNotEmpty()) {
+                            (context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                                ?.hideSoftInputFromWindow(replyInput.windowToken, 0)
+                            current.onSubmit?.invoke(text)
+                        }
+                    }
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)))
+
+                if (wantFocus && focusedKey != contentKey) {
+                    focusedKey = contentKey
+                    replyInput.requestFocus()
+                    replyInput.post {
+                        (context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                            ?.showSoftInput(replyInput, InputMethodManager.SHOW_IMPLICIT)
+                    }
+                }
             }
         }
         params?.width = if (expanded) minOf(dp(320), context.resources.displayMetrics.widthPixels - dp(16)) else WindowManager.LayoutParams.WRAP_CONTENT
