@@ -10,11 +10,15 @@ import android.view.Display
 import com.yishou.app.YishouApp
 import com.yishou.app.core.Companion
 import com.yishou.app.core.CompanionAction
+import com.yishou.app.core.CompanionContext
+import com.yishou.app.core.CompanionPrompt
 import com.yishou.app.core.CompanionState
 import com.yishou.app.core.FinalReviewRules
 import com.yishou.app.core.JudgementCheck
 import com.yishou.app.core.JudgementRules
+import com.yishou.app.core.QuestionLedger
 import com.yishou.app.core.SilenceStep
+import com.yishou.app.data.EchoKind
 import com.yishou.app.floating.CoachFloat
 import com.yishou.app.floating.FloatAction
 import com.yishou.app.floating.FloatPanel
@@ -37,6 +41,7 @@ import kotlin.coroutines.resume
  */
 object CompanionRunner {
     private const val TAG = "Companion"
+    private const val SCENE = "companion"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private var fgPkg: String? = null
@@ -120,6 +125,7 @@ object CompanionRunner {
             val at = System.currentTimeMillis()
             prefs.addPrompt(at)
             prefs.setPending(question, at)
+            prefs.addQuestion(question)
             showQuestion(service, question, null)
         }
     }
@@ -127,19 +133,25 @@ object CompanionRunner {
     /** 回答。返回判定结果，UI 据此决定是否留在页面上重答。 */
     fun answer(context: Context, text: String): JudgementCheck {
         val prefs = CompanionPrefs(context)
+        val app = context.applicationContext as? YishouApp
         val check = JudgementRules.check(text, attempt)
         if (check.pass) {
             prefs.clearPending()
             CoachFloat.remove("companion")
             attempt = 0
             nudged = false
+            app?.echoLater(text, EchoKind.CONCLUSION, SCENE)
             Log.i(TAG, "判断通过：${text.take(60)}")
         } else {
             attempt += 1
             if (!check.reask) {
+                val question = prefs.pendingQuestion().orEmpty()
                 prefs.clearPending()
                 prefs.addMiss()
                 CoachFloat.remove("companion")
+                if (question.isNotBlank()) {
+                    app?.echoLater("伴读没答上来：$question", EchoKind.DELTA, SCENE)
+                }
                 attempt = 0
             }
         }
@@ -178,19 +190,46 @@ object CompanionRunner {
         if (seen is LlmResult.Err) Log.w(TAG, "识屏失败：${seen.error}")
         if (screenText.length < 10) return null
 
+        val ctx = runCatching { readContext(app) }.getOrElse { CompanionContext() }
         val generated = app.scrollJudge.complete(
             JudgementRules.SYSTEM,
-            JudgementRules.userMessage(screenText, label),
+            CompanionPrompt.user(ctx, screenText, label),
             "伴读",
         )
         val raw = (generated as? LlmResult.Ok)?.value?.trim().orEmpty()
         val span = FinalReviewRules.quotableSpan(screenText)
-        val question = when {
-            raw.isBlank() -> Companion.fallbackQuestion(screenText)
-            span.isNotBlank() && !raw.contains(span) -> Companion.fallbackQuestion(screenText)
+        var question = when {
+            raw.isBlank() -> CompanionPrompt.fallback(ctx, screenText)
+            span.isNotBlank() && !raw.contains(span) -> CompanionPrompt.fallback(ctx, screenText)
             else -> raw
+        }.take(80).trim()
+
+        val recent = CompanionPrefs(service).recentQuestions()
+        if (QuestionLedger.isDuplicate(question, recent)) {
+            question = CompanionPrompt.fallback(ctx, screenText).take(80).trim()
         }
-        return question.take(80).ifBlank { null }
+        if (question.isBlank() || QuestionLedger.isDuplicate(question, recent)) return null
+        return question
+    }
+
+    /** 读当前任务、断点、上一轮和最近的判断；读不到就退化成纯屏幕题。 */
+    private suspend fun readContext(app: YishouApp): CompanionContext {
+        val dao = app.database.dao()
+        val task = dao.getCurrentTask() ?: return CompanionContext()
+        val bp = dao.getBreakpoint(task.id)
+        val last = dao.lastRound()?.takeIf { it.taskId == task.id }
+        val conclusions = app.database.echoes().recent()
+            .filter { it.scene == SCENE }
+            .take(3)
+            .map { it.text }
+        return CompanionContext(
+            taskTitle = task.title,
+            goal = task.goal,
+            stuck = bp?.stuck,
+            nextQuestion = bp?.nextQuestion,
+            lastAnswer = last?.userAnswer,
+            recentConclusions = conclusions,
+        )
     }
 
     private fun showQuestion(service: AccessibilityService, question: String, countdown: String?) {

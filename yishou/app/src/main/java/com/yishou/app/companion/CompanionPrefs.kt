@@ -2,12 +2,14 @@ package com.yishou.app.companion
 
 import android.content.Context
 import com.yishou.app.core.CompanionConfig
+import com.yishou.app.core.QuestionLedger
+import org.json.JSONArray
 import java.time.LocalDate
 
 /**
  * 伴读的配置和当天账。所有时间都能在设置里调。
  *
- * 只存配置、时间戳和题目文本；截图不落盘。
+ * 只存配置、时间戳、题目文本和最近问过的问题；截图不落盘。
  */
 class CompanionPrefs(context: Context) {
 
@@ -60,6 +62,21 @@ class CompanionPrefs(context: Context) {
         .split(',')
         .mapNotNull { it.trim().toLongOrNull() }
         .count { now - it <= 30 * 60_000L }
+
+    /** 最近问过的问题，用来去重。 */
+    fun recentQuestions(): List<String> {
+        val raw = p.getString("recent_q", "") ?: return emptyList()
+        if (raw.isBlank()) return emptyList()
+        return runCatching {
+            val a = JSONArray(raw)
+            (0 until a.length()).map { a.getString(it) }
+        }.getOrDefault(emptyList())
+    }
+
+    fun addQuestion(question: String) {
+        val next = QuestionLedger.remember(recentQuestions(), question)
+        p.edit().putString("recent_q", JSONArray(next).toString()).apply()
+    }
 
     fun pendingQuestion(): String? = p.getString("pending_q", null)?.takeIf { it.isNotBlank() }
 
