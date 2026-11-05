@@ -123,7 +123,7 @@ object DocText {
     fun decode(bytes: ByteArray): String {
         val utf = String(bytes, Charsets.UTF_8)
         val bad = utf.count { it == '�' }
-        if (bad == 0 || bad < utf.length / 200) return utf.removePrefix("﻿")
+        if (bad == 0 || bad < utf.length / 200) return utf.removePrefix("\uFEFF")
         return runCatching { String(bytes, charset("GBK")) }.getOrDefault(utf)
     }
 }

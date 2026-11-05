@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- 仅调试：adb pm grant 后，伴读可在服务失效时把自己追加回无障碍列表。
+         普通安装不会自动获得；没授权时只发通知。 -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
 
     <!-- 唯一的网络用途：把任务文本和回答发到用户自己配置的大模型接口 -->
     <uses-permission android:name="android.permission.INTERNET" />

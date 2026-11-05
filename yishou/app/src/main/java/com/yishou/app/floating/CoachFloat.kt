@@ -31,6 +31,8 @@ data class FloatPanel(
     /** 在浮窗里直接显示输入框，避免后台 startActivity 被系统拦掉。 */
     val reply: Boolean = false,
     val replyHint: String = "",
+    /** 点击后直接填进输入框的预设回答。 */
+    val presets: List<String> = emptyList(),
     val onSubmit: ((String) -> Unit)? = null,
 )
 
@@ -168,6 +170,17 @@ object CoachFloat {
                 }.also { r.addView(it) }
             } else {
                 null
+            }
+
+            if (replyInput != null && current.presets.isNotEmpty()) {
+                val presets = LinearLayout(context.applicationContext)
+                current.presets.forEach { preset ->
+                    presets.addView(actionView(context.applicationContext, preset, primary = false) {
+                        replyInput.setText(preset)
+                        replyInput.setSelection(preset.length)
+                    }, LinearLayout.LayoutParams(0, dp(40), 1f))
+                }
+                r.addView(presets)
             }
 
             current.actions.chunked(2).forEachIndexed { row, actions ->

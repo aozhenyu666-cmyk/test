@@ -170,9 +170,22 @@ class GateService : AccessibilityService() {
         if (!transient) check(pkg)
     }
 
+    private fun zongkongGuarding(): Boolean {
+        val installed = runCatching { packageManager.getPackageInfo("com.zongkong.app", 0) }.isSuccess
+        if (!installed) return false
+        val enabled = runCatching {
+            android.provider.Settings.Secure.getString(
+                contentResolver,
+                android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+            )
+        }.getOrNull().orEmpty()
+        return enabled.contains("com.zongkong.app")
+    }
+
     private fun check(pkg: String) {
-        // 伴读开着时，一手只负责“看”，不拦截；拦截交给总控，避免两个无障碍服务抢页面。
-        if (com.yishou.app.companion.CompanionPrefs(this).load().enabled) return
+        // 伴读开着，且总控的无障碍确实在启用列表里：一手只负责“看”，拦截交给总控。
+        // 总控没装、或它的服务没开：一手必须自己拦——否则两边都不拦（fail-safe）。
+        if (com.yishou.app.companion.CompanionPrefs(this).load().enabled && zongkongGuarding()) return
         if (app.partner.allows(pkg)) {
             GateTrace.log("不拦：伴读中，这个应用是登记的材料应用", pkg)
             shortCheck?.cancel()

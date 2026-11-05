@@ -7,6 +7,7 @@ import android.os.Build
 import android.util.Base64
 import android.util.Log
 import android.view.Display
+import androidx.annotation.RequiresApi
 import com.yishou.app.YishouApp
 import com.yishou.app.core.Companion
 import com.yishou.app.core.CompanionAction
@@ -197,7 +198,7 @@ object CompanionRunner {
         hasAi: Boolean,
     ): String? {
         val ctx = runCatching { readContext(app) }.getOrElse { CompanionContext() }
-        if (!hasAi) {
+        if (!hasAi || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             val local = CompanionLocal.nudge(ctx, label, minutes).take(80)
             Log.i(TAG, "本地提醒：$local")
             return local
@@ -302,6 +303,11 @@ object CompanionRunner {
                 autoExpand = true,
                 reply = true,
                 replyHint = "休息 / 现在回去 / 定个时间",
+                presets = if (CompanionPrefs(service).localMode()) {
+                    listOf("休息", "现在回去", "定个时间")
+                } else {
+                    emptyList()
+                },
                 onSubmit = { text ->
                     val check = answer(service, text)
                     if (check.pass) {
@@ -325,6 +331,7 @@ object CompanionRunner {
         attempt = 0
     }
 
+    @RequiresApi(Build.VERSION_CODES.R)
     private suspend fun screenshot(service: AccessibilityService): Bitmap? {
         if (Build.VERSION.SDK_INT < 30) return null
         return suspendCancellableCoroutine { cont ->

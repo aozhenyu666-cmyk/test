@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yishou.app.ui.*
 
 /**
@@ -14,8 +15,9 @@ import com.yishou.app.ui.*
 fun ProbeGateView(state: GateState, vm: GateViewModel) {
     val flow = vm.probe
     val review = vm.review
+    val card by vm.card.collectAsStateWithLifecycle()
     if (review != null) {
-        if (!review.pullBack) DiffCardView(review, reveal = review.verdict.passed || flow?.revealed == true || vm.card.value.done)
+        if (!review.pullBack) DiffCardView(review, reveal = review.verdict.passed || flow?.revealed == true || card.done)
         else Text(review.verdict.note)
         // 没过的要有出路：线程是接着想，题库是换一道。原来这里没有出口，等于卡死。
         if (!review.verdict.passed) Button(onClick = vm::retry, enabled = !state.busy) { Text("换一道") }

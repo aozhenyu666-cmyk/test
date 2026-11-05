@@ -86,7 +86,9 @@ fun CompanionScreen(
     var note by remember { mutableStateOf<String?>(null) }
     val serviceOn = remember(tick) { PermissionStatus.accessibility(context) }
     val prefs by app.settings.app.collectAsStateWithLifecycle()
-    val modelOn = app.settings.llm.value.isComplete && app.settings.vision.value.isComplete
+    val llm by app.settings.llm.collectAsStateWithLifecycle()
+    val vision by app.settings.vision.collectAsStateWithLifecycle()
+    val modelOn = llm.isComplete && vision.isComplete
 
     val fixService: () -> Unit = {
         if (!CompanionHealth.rebindIfAllowed(context)) {
@@ -272,6 +274,16 @@ private fun AskCard(
                     minLines = 2,
                     shape = RoundedCornerShape(16.dp),
                 )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("休息", "现在回去", "定个时间").forEach { preset ->
+                        FilterChip(
+                            selected = answer == preset,
+                            onClick = { onAnswer(preset) },
+                            label = { Text(preset) },
+                            shape = RoundedCornerShape(12.dp),
+                        )
+                    }
+                }
                 note?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
