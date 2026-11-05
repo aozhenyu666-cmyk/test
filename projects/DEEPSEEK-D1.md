@@ -93,10 +93,24 @@ adb logcat -d | grep -c "block"
 
 上一版说“主进程和哨兵一起掉”，但 0.13 起哨兵已经是独立应用。**先用实测确认它到底行不行，再决定要不要加第三层。**
 
+### B.0 已实测（2026-11-05，Android 14 模拟器 sdk_gphone64_x86_64，API 34）
+
+| 项 | 结果 |
+|---|---|
+| 两个无障碍服务同时绑定 | 通过（总控 + 总控哨兵） |
+| 严格窗口 + blocked=YouTube，打开 YouTube | 5.3 秒内弹出总控 `GateActivity`；日志「严格监管，弹回」 |
+| 冻结总控（`kill -STOP`） | 51 秒判定掉线；日志「心跳停了 51 秒，哨兵接管」 |
+| 收回哨兵 `WRITE_SECURE_SETTINGS` 后再冻结、打开 YouTube | `com.zongkong.sentinel/.BlockActivity` 到前台；日志「拦下 com.google.android.youtube」 |
+| `am force-stop` 总控 | 无障碍从启用列表消失，`SelfHeal` 判为用户关闭，只提醒不重开（符合设计） |
+
+结论：**独立应用哨兵方案成立，不需要 `:guard`。** 调优前是 90 秒阈值 + 30 秒轮询，实测接管约 150 秒；已改为 **45 秒阈值 + 5 秒轮询**，实测 51 秒。
+
+如果要做到 20 秒以内，正确做法是给总控加一个 5 秒一次的轻量心跳（新增 `beat` 方法，只写时间戳），哨兵阈值降到 15 秒；**不要**只把哨兵阈值降到 20 秒以下——总控本身 20 秒才写一次，会误判。
+
 ### B.1 安装与授权
 
 ```bash
-adb install -r zongkong/app/build/outputs/apk/mainline/debug/app-mainline-debug.apk
+adb install -r zongkong/app/build/outputs/apk/debug/app-debug.apk
 adb install -r zongkong/sentinel/build/outputs/apk/debug/sentinel-debug.apk
 adb shell pm grant com.zongkong.app android.permission.WRITE_SECURE_SETTINGS
 adb shell pm grant com.zongkong.sentinel android.permission.WRITE_SECURE_SETTINGS
@@ -109,15 +123,15 @@ adb shell pm grant com.zongkong.sentinel android.permission.WRITE_SECURE_SETTING
 | 场景 | 操作 | 期望 |
 |---|---|---|
 | 用户手动关掉总控无障碍 | 设置里关掉总控 | **不自愈**（这是用户的意图），哨兵接管拦截 |
-| 系统摘掉总控无障碍 | `adb shell settings put secure enabled_accessibility_services ""` | 90 秒内哨兵发现；已授权时总控自愈，记录恢复秒数 |
-| 总控进程被杀 | `adb shell am kill com.zongkong.app` | 哨兵 90 秒内接管；打开娱乐应用仍被拦 |
+| 系统摘掉总控无障碍 | `adb shell settings put secure enabled_accessibility_services ""` | 60 秒内哨兵发现；已授权时总控自愈，记录恢复秒数 |
+| 总控进程被杀 | `adb shell am kill com.zongkong.app` | 哨兵 60 秒内接管；打开娱乐应用仍被拦 |
 | 总控被强行停止 | 设置 → 应用 → 强行停止 | 哨兵不受影响；能叫回总控 |
 | 哨兵被杀 | `adb shell am kill com.zongkong.sentinel` | 总控发现并尝试拉起哨兵 |
 
 ### B.3 判定
 
-- 恢复 ≤ 90 秒、且哨兵在总控死时仍能拦 → **架构够用，不要拆 `:guard`**。
-- 恢复 > 90 秒，或哨兵也一起掉 → 先查 `incidents` 日志和电池优化，再考虑第三层。
+- 接管 ≤ 60 秒、且哨兵在总控死时仍能拦 → **架构够用，不要拆 `:guard`**（模拟器实测 51 秒，已达标）。
+- 接管 > 60 秒，或哨兵也一起掉 → 先查掉线日志和电池优化，再考虑第三层。
 - 只有确认“独立应用方案在 iQOO 12 上确实不成立”时，才动 `:guard` 进程；动手前必须保住健康协议的“新实例 + 真 ack”语义，否则会假报健康。
 
 ### B.4 掉线日志（补一个缺口）
