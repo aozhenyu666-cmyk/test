@@ -3,6 +3,7 @@ package com.zongkong.app.guard
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
@@ -47,6 +48,9 @@ import com.zongkong.app.watch.BankStore
 import com.zongkong.app.zk
 import com.zongkong.core.ApiResult
 import com.zongkong.core.WatchRule
+import com.zongkong.core.guard.IntensityLevel
+import com.zongkong.core.guard.IntensityRules
+import com.zongkong.core.guard.NoResponse
 import com.zongkong.core.agent.ChatClient
 import com.zongkong.core.agent.ChatMsg
 import com.zongkong.core.agent.ToolSpec
@@ -81,7 +85,7 @@ class GateActivity : ComponentActivity() {
                 GateScreen(
                     pkg = pkgState.value,
                     onHome = ::goHome,
-                    onPass = ::pass,
+                    onPass = { level -> pass(pkgState.value, level) },
                 )
             }
         }
@@ -106,9 +110,9 @@ class GateActivity : ComponentActivity() {
         finish()
     }
 
-    /** 判分通过：写放行（再给 maxMinutes 分钟），关掉做题页。 */
-    private fun pass(pkg: String) {
-        val minutes = zk.store.config.value.let { it.watch.ruleFor(pkg, it.blocked) }?.maxMinutes ?: 2
+    /** 判分通过：按当天强度档写放行，关掉做题页。 */
+    private fun pass(pkg: String, level: IntensityLevel) {
+        val minutes = IntensityRules.releaseMinutes(level)
         Watch.grant(this, pkg, System.currentTimeMillis() + minutes * 60_000L)
         finish()
     }
@@ -132,7 +136,7 @@ private val FALLBACK_STEMS = listOf(
 )
 
 @Composable
-private fun GateScreen(pkg: String, onHome: () -> Unit, onPass: (String) -> Unit) {
+private fun GateScreen(pkg: String, onHome: () -> Unit, onPass: (IntensityLevel) -> Unit) {
     val context = LocalContext.current
     val store = context.zk.store
     val config by store.config.collectAsStateWithLifecycle()
@@ -152,6 +156,38 @@ private fun GateScreen(pkg: String, onHome: () -> Unit, onPass: (String) -> Unit
     var passed by remember(pkg) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
+    // 当天强度：漏得越多，字数要求越高、放行越短。
+    val intensity = remember(pkg) { IntensityStore(context) }
+    val level = remember(pkg) { intensity.level() }
+    var attempt by remember(pkg) { mutableIntStateOf(0) }
+    var elapsed by remember(pkg) { mutableIntStateOf(0) }
+    var warned by remember(pkg) { mutableStateOf(false) }
+
+    // 不回应不是没有后果：45 秒提醒一次，150 秒收回桌面并记一次没做到。
+    LaunchedEffect(passed) {
+        if (passed) return@LaunchedEffect
+        while (true) {
+            delay(1_000)
+            elapsed += 1
+            when (IntensityRules.onNoResponse(elapsed)) {
+                NoResponse.NUDGE -> if (!warned) {
+                    warned = true
+                    Toast.makeText(
+                        context,
+                        "还有 ${IntensityRules.CLOSE_SECONDS - elapsed} 秒，不答就回桌面",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+                NoResponse.CLOSE_AND_MISS -> {
+                    intensity.onMiss()
+                    onHome()
+                    break
+                }
+                NoResponse.WAIT -> Unit
+            }
+        }
+    }
+
     // 每秒刷新一次冷却倒计时；冷却结束前“提交”不可用
     LaunchedEffect(cooldown) {
         if (cooldown > 0) {
@@ -163,10 +199,19 @@ private fun GateScreen(pkg: String, onHome: () -> Unit, onPass: (String) -> Unit
     fun submit() {
         if (busy || passed || cooldown > 0) return
         val text = answer.trim()
-        if (text.isBlank()) {
-            feedback = "先写一句再交。"
+
+        // 硬门槛：先过本机强度检查，不合格的回答根本不发给模型。
+        // 这样 AI 不会被“我就看看”这类话带着走，也不会替空话找理由。
+        val check = IntensityRules.check(text, level, attempt)
+        if (!check.pass) {
+            feedback = check.hint
+            attempt += 1
+            if (!check.reask) intensity.onMiss()
+            answer = ""
+            cooldown = maxOf(rule.cooldownSeconds.coerceAtLeast(1), if (check.reask) 5 else 20)
             return
         }
+
         busy = true
         feedback = null
         scope.launch {
@@ -174,13 +219,16 @@ private fun GateScreen(pkg: String, onHome: () -> Unit, onPass: (String) -> Unit
             busy = false
             if (verdict.ok) {
                 passed = true
+                intensity.onPass()
                 feedback = verdict.feedback.ifBlank { "通过。" }
                 delay(900)
-                onPass(pkg)
+                onPass(level)
             } else {
+                attempt += 1
+                if (attempt >= 2) intensity.onMiss()
                 feedback = verdict.feedback.ifBlank { "再具体一点：接下来先做什么？" }
                 answer = ""
-                cooldown = rule.cooldownSeconds.coerceAtLeast(1)
+                cooldown = maxOf(rule.cooldownSeconds.coerceAtLeast(1), 20)
             }
         }
     }
@@ -203,7 +251,7 @@ private fun GateScreen(pkg: String, onHome: () -> Unit, onPass: (String) -> Unit
             }
         }
 
-        Text("规则：做完这道题再放行 ${rule.maxMinutes} 分钟。", style = MaterialTheme.typography.bodyMedium)
+        Text("规则：答满 ${level.requireChars} 字，放行 ${IntensityRules.releaseMinutes(level)} 分钟。今天漏 2 次就升到 25 字档。", style = MaterialTheme.typography.bodyMedium)
         // 挣来的娱乐：今天还剩多少
         val status = remember(pkg) { store.status() }
         if (config.earn.enabled && status.quotaMin > 0) {
