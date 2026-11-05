@@ -226,7 +226,8 @@ class MainActivity : ComponentActivity() {
                     composable("bets") {
                         BetScreen(onBack = { nav.navigateUp() })
                     }
-                    composable("endgame") {
+                    composable("schulte") { com.yishou.app.ui.SchulteScreen(onBack = { nav.navigateUp() }) }
+                composable("endgame") {
                         com.yishou.app.ui.EndgameScreen(onBack = { nav.navigateUp() }, onBank = { nav.navigate("pool") })
                     }
                     composable(

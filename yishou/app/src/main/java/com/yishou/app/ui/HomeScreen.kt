@@ -263,6 +263,7 @@ fun HomeScreen(
 
             // 想自己挑练法时用；平时点上面的“来一手”就够了
             androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { onRoute("schulte") }) { Text("舒尔特表") }
                 TextButton(onClick = onSoup) { Text("海龟汤") }
                 TextButton(onClick = onEndgame) { Text("残局") }
                 TextButton(onClick = onThink) { Text("练思维") }
