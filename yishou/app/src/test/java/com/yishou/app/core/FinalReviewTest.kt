@@ -17,6 +17,25 @@ class FinalReviewTest {
     ) = FinalReviewInput(source = source, quote = quote, otherOption = other, reason = reason)
 
     @Test
+    fun `a model quote that trims the span still counts as quoting the source`() {
+        val long = "这个视频说：短视频让人的注意力越来越差，因为大家每天都在刷，但视频只给了一条数据。"
+        val question = "「只给了一条数据」就断言注意力变差，这个因果站得住吗？"
+        assertTrue(FinalReviewRules.quotesSource(question, long))
+    }
+
+    @Test
+    fun `a question with no overlap does not count`() {
+        val long = "这个视频说短视频让人注意力下降"
+        assertFalse(FinalReviewRules.quotesSource("你午饭吃了什么", long))
+    }
+
+    @Test
+    fun `too short an overlap does not count`() {
+        val long = "这个视频说短视频让人注意力下降"
+        assertFalse(FinalReviewRules.quotesSource("你看这个", long))
+    }
+
+    @Test
     fun `a proper final review passes`() {
         val v = FinalReviewRules.check(input())
         assertTrue(v.hint, v.ok)

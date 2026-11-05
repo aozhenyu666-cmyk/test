@@ -314,6 +314,7 @@ class YishouApp : Application() {
         installRunLog()
         database = AppDatabase.create(this)
         settings = SettingsStore(this)
+        com.yishou.app.settings.DebugAiConfig.apply(this, settings)
         chaluDefaults()
         v16Defaults()
         AppZone.id = settings.app.value.timeZone

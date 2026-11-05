@@ -154,8 +154,12 @@ object CompanionRunner {
             attempt = 0
             nudged = false
             // 记忆只存“你说了什么”，不存它自己问的问题；
-            // 下一轮要引用的是你的判断，不是它自己的话。
-            val memory = text
+            // 但“休息”这类两个字的回答太短，Echo 会按“不可用”丢掉，所以短回答补上当时的提问。
+            val memory = if (local && !com.yishou.app.line.Echoes.usable(text)) {
+                "$text（当时问：${question.take(30)}）"
+            } else {
+                text
+            }
             app?.echoLater(memory, EchoKind.CONCLUSION, SCENE)
             Log.i(TAG, "判断通过：${text.take(60)}")
         } else {
@@ -229,10 +233,11 @@ object CompanionRunner {
             "伴读",
         )
         val raw = (generated as? LlmResult.Ok)?.value?.trim().orEmpty()
-        val span = FinalReviewRules.quotableSpan(screenText)
+        if (raw.isNotBlank()) Log.i(TAG, "模型出题：$raw")
+        val quoteOk = FinalReviewRules.quotesSource(raw, screenText)
         var question = when {
             raw.isBlank() -> CompanionPrompt.fallback(ctx, screenText)
-            span.isNotBlank() && !raw.contains(span) -> CompanionPrompt.fallback(ctx, screenText)
+            !quoteOk -> CompanionPrompt.fallback(ctx, screenText)
             else -> raw
         }.take(80).trim()
 
@@ -241,6 +246,7 @@ object CompanionRunner {
             question = CompanionPrompt.fallback(ctx, screenText).take(80).trim()
         }
         if (question.isBlank() || QuestionLedger.isDuplicate(question, recent)) return null
+        Log.i(TAG, "题目：$question")
         return question
     }
 

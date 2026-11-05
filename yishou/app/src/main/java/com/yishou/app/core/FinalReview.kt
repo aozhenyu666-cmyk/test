@@ -108,6 +108,30 @@ object FinalReviewRules {
         return picked.trim()
     }
 
+    /**
+     * 这道题有没有引用原文。不要求逐字复制整段兜底片段：
+     * 模型常把「但视频只给了一条数据」写成「只给了一条数据」，
+     * 只要有 ≥[minChars] 个连续字能在原文里找到，就算引用了。
+     */
+    fun quotesSource(question: String, source: String, minChars: Int = 4): Boolean {
+        val q = normalize(question)
+        val s = normalize(source)
+        if (q.length < minChars || s.length < minChars) return false
+        var best = 0
+        for (i in q.indices) {
+            var len = best + 1
+            while (i + len <= q.length) {
+                if (s.contains(q.substring(i, i + len))) {
+                    best = len
+                    len += 1
+                } else {
+                    break
+                }
+            }
+        }
+        return best >= minChars
+    }
+
     /** 引用屏幕原词的兜底问句。挑不出词时返回空串，调用方就不要发。 */
     fun fallbackQuestion(source: String, maxChars: Int = 12): String {
         val span = quotableSpan(source, maxChars)

@@ -182,7 +182,12 @@ class GateService : AccessibilityService() {
         return enabled.contains("com.zongkong.app")
     }
 
+    /** 仅 Debug 验收用：存在 files/companion-only 时跳过一手拦截，单独测伴读。 */
+    private fun companionOnlyForTest(): Boolean =
+        com.yishou.app.BuildConfig.DEBUG && java.io.File(filesDir, "companion-only").exists()
+
     private fun check(pkg: String) {
+        if (companionOnlyForTest()) return
         // 伴读开着，且总控的无障碍确实在启用列表里：一手只负责“看”，拦截交给总控。
         // 总控没装、或它的服务没开：一手必须自己拦——否则两边都不拦（fail-safe）。
         if (com.yishou.app.companion.CompanionPrefs(this).load().enabled && zongkongGuarding()) return
