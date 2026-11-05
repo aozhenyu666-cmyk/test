@@ -47,6 +47,11 @@ class CompanionPrefs(context: Context) {
         p.edit().putLong("last_attempt", at).apply()
     }
 
+    /** 回答/收手之后重新起算间隔：避免“刚答完马上又问”。 */
+    fun markAnswered(at: Long) {
+        p.edit().putLong("last_prompt", at).putLong("last_attempt", at).apply()
+    }
+
     /** 这次题目是不是本地提醒（没有配模型）。 */
     fun localMode(): Boolean = p.getBoolean("local_mode", false)
 

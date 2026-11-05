@@ -150,6 +150,7 @@ object CompanionRunner {
         if (check.pass) {
             prefs.clearPending()
             prefs.setLocalMode(false)
+            prefs.markAnswered(System.currentTimeMillis())
             CoachFloat.remove("companion")
             attempt = 0
             nudged = false
@@ -167,6 +168,7 @@ object CompanionRunner {
             if (!check.reask) {
                 prefs.clearPending()
                 prefs.setLocalMode(false)
+                prefs.markAnswered(System.currentTimeMillis())
                 prefs.addMiss()
                 CoachFloat.remove("companion")
                 app?.echoLater("伴读没答上来：$question", EchoKind.DELTA, SCENE)
@@ -189,6 +191,7 @@ object CompanionRunner {
         val prefs = CompanionPrefs(context)
         prefs.clearPending()
         prefs.setLocalMode(false)
+        prefs.markAnswered(System.currentTimeMillis())
         prefs.addMiss()
         replyOpen = false
         CoachFloat.remove("companion")
@@ -351,6 +354,7 @@ object CompanionRunner {
         replyOpen = false
         prefs.clearPending()
         prefs.setLocalMode(false)
+        prefs.markAnswered(System.currentTimeMillis())
         prefs.addMiss()
         CoachFloat.remove("companion")
         runCatching { service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME) }
