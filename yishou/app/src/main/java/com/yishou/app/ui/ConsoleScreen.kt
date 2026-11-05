@@ -119,6 +119,7 @@ fun ConsoleScreen(
     var resumeKey by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeKey++ }
     val gateOn = remember(resumeKey) { PermissionStatus.accessibility(context) }
+    val companionOn = remember(resumeKey) { com.yishou.app.companion.CompanionPrefs(context).load().enabled }
     val wallpaperOn = remember(resumeKey) { BoardWallpaperService.isActive(context) }
     val inWindow = WindowClock.active(System.currentTimeMillis(), prefs, AppZone.zone) != null
     val cardHist by produceState(emptyList<com.yishou.app.data.CardAttempt>(), resumeKey) { value = app.cardEngine.history() }
@@ -184,6 +185,11 @@ fun ConsoleScreen(
                     StatusRow("练功底", "题库：导入的真题和申论", false) { onOpen("bank") }
                     StatusRow("练思维", "素材库、抓主干、挖前提、站立场、估个数", false) { onOpen("think") }
                     StatusRow("做事", "一步一步走完一件事", false) { onOpen("jobs") }
+                    StatusRow(
+                        "伴读",
+                        if (companionOn) "看你刷到什么，问一句、记住你的判断" else "关着：开启后会在关注的应用里主动问",
+                        companionOn,
+                    ) { onOpen("companion") }
                     StatusRow(
                         "运行日志",
                         if (logCount > 0) "记了 $logCount 条出错，点开看" else "没出过错",

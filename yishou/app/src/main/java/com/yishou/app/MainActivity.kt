@@ -182,6 +182,13 @@ class MainActivity : ComponentActivity() {
                             onOpen = { route -> nav.navigate(route) },
                         )
                     }
+                    composable("companion") {
+                        com.yishou.app.ui.CompanionScreen(
+                            onBack = { nav.navigateUp() },
+                            onOpenWatched = { nav.navigate("watched") },
+                            onOpenSettings = { nav.navigate("settings") },
+                        )
+                    }
                     composable("settings") {
                         SettingsScreen(
                             onBack = { nav.navigateUp() },

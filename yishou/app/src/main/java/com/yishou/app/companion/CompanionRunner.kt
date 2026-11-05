@@ -176,6 +176,16 @@ object CompanionRunner {
         attempt = 0
     }
 
+    /** 页面上的“不想答”：记一次没做到，清掉当前问题。 */
+    fun skip(context: Context) {
+        val prefs = CompanionPrefs(context)
+        prefs.clearPending()
+        prefs.setLocalMode(false)
+        prefs.addMiss()
+        replyOpen = false
+        CoachFloat.remove("companion")
+    }
+
     private suspend fun buildQuestion(
         app: YishouApp,
         service: AccessibilityService,
@@ -259,7 +269,7 @@ object CompanionRunner {
                 title = "看一眼，做个判断",
                 detail = detail,
                 actions = listOf(
-                    FloatAction("回答") {
+                    FloatAction("回答", primary = true) {
                         showAnswerInput(service, question)
                     },
                     FloatAction("不想答") {

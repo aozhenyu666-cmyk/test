@@ -20,7 +20,7 @@ import com.yishou.app.log.RunLog
 import kotlinx.coroutines.*
 import kotlin.math.abs
 
-data class FloatAction(val label: String, val click: () -> Unit)
+data class FloatAction(val label: String, val primary: Boolean = false, val click: () -> Unit)
 data class FloatPanel(
     val title: String,
     val detail: String,
@@ -49,6 +49,25 @@ object CoachFloat {
     private var lastX: Int? = null
     private var lastY: Int? = null
     private fun dp(n: Int): Int = ((context?.resources?.displayMetrics?.density ?: 1f) * n).toInt()
+
+    /** 统一的胶囊按钮：金色主操作，深灰次操作。 */
+    private fun actionView(context: Context, label: String, primary: Boolean, onClick: () -> Unit): TextView =
+        TextView(context).apply {
+            text = label
+            textSize = 13.5f
+            gravity = Gravity.CENTER
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(if (primary) Color.rgb(20, 23, 28) else Color.rgb(230, 228, 220))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(14).toFloat()
+                setColor(if (primary) Color.rgb(217, 180, 74) else Color.rgb(42, 52, 55))
+                if (!primary) setStroke(dp(1), Color.rgb(62, 74, 78))
+            }
+            isClickable = true
+            isFocusable = true
+            setPadding(dp(10), 0, dp(10), 0)
+            setOnClickListener { onClick() }
+        }
     fun update(context: Context, owner: String, panel: FloatPanel) { this.context = context.applicationContext; panels[owner] = panel; refresh(context) }
     fun remove(owner: String) {
         panels.remove(owner)
@@ -71,7 +90,7 @@ object CoachFloat {
         if (root == null) {
             val c = context.applicationContext
             wm = c.getSystemService(WindowManager::class.java)
-            val r = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), dp(6), dp(8), dp(6)); elevation = dp(10).toFloat(); background = GradientDrawable().apply { setColor(Color.rgb(30, 39, 42)); cornerRadius = dp(18).toFloat() } }
+            val r = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(10), dp(8), dp(10), dp(8)); elevation = dp(12).toFloat(); background = GradientDrawable().apply { setColor(Color.rgb(30, 39, 42)); cornerRadius = dp(20).toFloat(); setStroke(dp(1), Color.argb(70, 217, 180, 74)) } }
             val p = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.START; x = lastX ?: dp(12); y = lastY ?: dp(140) }
             try { wm!!.addView(r, p); root = r; params = p; signature = "" }
@@ -97,7 +116,8 @@ object CoachFloat {
         signature = key; r.removeAllViews()
         val header = TextView(context.applicationContext).apply {
             text = if (expanded) current.title + "  ▾" else "一手 ●"
-            setTextColor(Color.WHITE); textSize = 15f; setPadding(dp(8), dp(8), dp(8), dp(8)); contentDescription = "拖动一手小窗，点击展开或收起"
+            setTextColor(Color.WHITE); textSize = 15f; setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(dp(10), dp(9), dp(10), dp(9)); contentDescription = "拖动一手小窗，点击展开或收起"
         }
         header.setOnClickListener { expanded = !expanded; refresh(context) }
         var downX = 0f; var downY = 0f; var oldX = 0; var oldY = 0; var moved = false
@@ -128,7 +148,7 @@ object CoachFloat {
         }
         r.addView(header)
         if (expanded) {
-            r.addView(TextView(context.applicationContext).apply { text = current.detail.takeLast(500); textSize = 14f; maxLines = 7; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(Color.rgb(235, 240, 239)); setPadding(dp(8), dp(6), dp(8), dp(10)) })
+            r.addView(TextView(context.applicationContext).apply { text = current.detail.takeLast(500); textSize = 15f; setLineSpacing(dp(3).toFloat(), 1f); maxLines = 7; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(Color.rgb(235, 240, 239)); setPadding(dp(10), dp(4), dp(10), dp(12)) })
 
             // 直接在浮窗里输入：Android 10+ 不允许后台 startActivity，
             // 从悬浮窗打开回复页会被系统静默拦掉，所以回答必须留在这个窗口里。
@@ -136,10 +156,15 @@ object CoachFloat {
                 EditText(context.applicationContext).apply {
                     hint = current.replyHint.ifBlank { "回一句" }
                     setTextColor(Color.WHITE)
-                    setHintTextColor(Color.LTGRAY)
-                    textSize = 14f
+                    setHintTextColor(Color.rgb(150, 163, 175))
+                    textSize = 15f
                     minLines = 2
-                    setPadding(dp(8), dp(6), dp(8), dp(6))
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    background = GradientDrawable().apply {
+                        setColor(Color.rgb(19, 27, 30))
+                        cornerRadius = dp(14).toFloat()
+                        setStroke(dp(1), Color.rgb(58, 70, 74))
+                    }
                 }.also { r.addView(it) }
             } else {
                 null
@@ -149,24 +174,20 @@ object CoachFloat {
                 val line = LinearLayout(context.applicationContext)
                 actions.forEachIndexed { col, action ->
                     val index = row * 2 + col
-                    line.addView(Button(context.applicationContext).apply {
-                        text = action.label; textSize = 12f; isAllCaps = false
-                        setOnClickListener { panels.values.maxByOrNull { it.priority }?.actions?.getOrNull(index)?.click?.invoke() }
+                    line.addView(actionView(context.applicationContext, action.label, action.primary) {
+                        panels.values.maxByOrNull { it.priority }?.actions?.getOrNull(index)?.click?.invoke()
                     }, LinearLayout.LayoutParams(0, dp(46), 1f))
                 }
                 r.addView(line)
             }
 
             if (replyInput != null) {
-                r.addView(Button(context.applicationContext).apply {
-                    text = "交这一句"; textSize = 13f; isAllCaps = false
-                    setOnClickListener {
-                        val text = replyInput.text.toString().trim()
-                        if (text.isNotEmpty()) {
-                            (context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
-                                ?.hideSoftInputFromWindow(replyInput.windowToken, 0)
-                            current.onSubmit?.invoke(text)
-                        }
+                r.addView(actionView(context.applicationContext, "交这一句", primary = true) {
+                    val text = replyInput.text.toString().trim()
+                    if (text.isNotEmpty()) {
+                        (context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                            ?.hideSoftInputFromWindow(replyInput.windowToken, 0)
+                        current.onSubmit?.invoke(text)
                     }
                 }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)))
 
