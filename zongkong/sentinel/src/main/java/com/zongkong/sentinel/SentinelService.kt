@@ -35,19 +35,23 @@ class SentinelService : AccessibilityService() {
     private var eventSeq = 0L
     private val events by lazy { EventProgressFile(filesDir) }
     private var eventState = EventProgressFile.State()
+    /** 循环计数：重活（同步卸载锁）不必每 5 秒做一次。 */
+    private var tickCount = 0
 
     private val loop = object : Runnable {
         override fun run() {
             try {
+                tickCount += 1
                 Store.touch()
-                DeviceLock.sync(this@SentinelService) // 解除「准备卸载」结束后，把卸载锁重新锁上
+                // 解除「准备卸载」结束后，把卸载锁重新锁上；每 30 秒一次就够
+                if (tickCount % 6 == 1) DeviceLock.sync(this@SentinelService)
                 watch()
                 // 一直停在一个被拦的应用里（没有新的窗口事件）：也再看一眼
                 lastPkg?.let { check(it, probed = false) }
             } catch (e: Throwable) {
                 Log.w(TAG, "哨兵循环出错", e)
             }
-            main.postDelayed(this, 30_000)
+            main.postDelayed(this, 5_000)
         }
     }
 
