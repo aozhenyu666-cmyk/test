@@ -66,6 +66,16 @@ class CardEngine(
         }
     }
 
+    /** 收费站只取题包中有答案、依据的题，不联网出题。 */
+    suspend fun dealGate(): LlmResult<Dealt> {
+        for (row in dao.unusedBank()) {
+            if (!row.verified) continue
+            val card = runCatching { Card.fromJson(row.json) }.getOrNull() ?: continue
+            if (com.yishou.app.judge.LockedQuestions.fromCard(row.id, card) != null) return LlmResult.Ok(Dealt(row, card, redo = false))
+        }
+        return LlmResult.Err(com.yishou.app.llm.LlmError.Local("没有带答案和【要点】的未做题，请先导入题包。"))
+    }
+
     /**
      * 后台备题：没做过的核对过的题卡少于 min 张就补，先补掌握度最低的几个小技能。
      * 返回补了几张；出错就停下（下次再补）。
@@ -136,7 +146,7 @@ class CardEngine(
      * 导入题包里的选择题。答案来自题包；没写答案的也收下，做完时请你点官方答案。
      * 和题库里已有的题目重复的跳过。返回收下了几道。
      */
-    suspend fun importBank(items: List<com.yishou.app.bank.BankItem.Choice>): Int {
+    suspend fun importBank(items: List<com.yishou.app.bank.BankItem.Choice>, onAdded: suspend (Long, Card) -> Unit = { _, _ -> }): Int {
         // 去重要看整道题：行测很多题题干一样（“这段文字意在说明：”），只比题干会把它们全当成重复
         fun keyOf(question: String, options: List<String>, material: String) =
             com.yishou.app.think.Words.norm(question + options.joinToString("") + material.take(40))
@@ -150,7 +160,8 @@ class CardEngine(
             seen += key
             val card = com.yishou.app.bank.BankParser.toCard(c, c.answer ?: 0)
             val row = CardRow(skill = card.skill.name, difficulty = card.difficulty, json = card.toJson(), verified = c.answer != null, source = CardSource.BANK, createdAt = clock() + n)
-            dao.insertCard(row)
+            val id = dao.insertCard(row)
+            onAdded(id, card)
             n++
         }
         return n

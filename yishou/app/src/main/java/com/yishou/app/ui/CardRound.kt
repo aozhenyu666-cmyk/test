@@ -153,9 +153,12 @@ fun CardRoundView(s: SessionState, a: CardActions) {
 
         if (r.step != Step.REVEAL) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = a.hint) {
-                    Text(when (r.help) { 0 -> "卡住了：指一下该看哪"; 1 -> "还是不会：排除两项"; else -> "看解析（这张不算自己完成）" })
+                TextButton(onClick = a.hint, enabled = s.mode != com.yishou.app.data.CardMode.GATE || r.help < 2) {
+                    Text(when (r.help) { 0 -> "卡住了：指一下该看哪"; 1 -> "还是不会：排除两项"; else -> if (s.mode == com.yishou.app.data.CardMode.GATE) "已到提示上限" else "看解析（这张不算自己完成）" })
                 }
+            }
+            if (s.mode == com.yishou.app.data.CardMode.GATE && r.help > 0) {
+                Text("用了提示，这题不能用于放行；完成后可以换题。", style = MaterialTheme.typography.bodySmall)
             }
             r.hintText()?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary) }
         }

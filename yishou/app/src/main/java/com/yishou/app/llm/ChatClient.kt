@@ -1,5 +1,8 @@
 package com.yishou.app.llm
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.ensureActive
@@ -135,19 +138,23 @@ class ChatClient(
             }
             try {
                 val response = call.await()
-                response.use { resp ->
+                try {
+                    val resp = response
                     val type = resp.header("Content-Type").orEmpty()
                     if (!resp.isSuccessful) {
-                        LlmResult.Err(LlmError.Http(resp.code, errorDetail(resp.body?.string().orEmpty())))
+                        LlmResult.Err(LlmError.Http(resp.code, errorDetail(withContext(Dispatchers.IO) { resp.body?.string().orEmpty() })))
                     } else if (type.isEmpty() || type.contains("event-stream")) {
                         readStream(resp, onDelta)
                     } else {
                         // 不支持流式的服务商：整段返回
-                        when (val r = extractContent(resp.body?.string().orEmpty())) {
+                        when (val r = extractContent(withContext(Dispatchers.IO) { resp.body?.string().orEmpty() })) {
                             is LlmResult.Ok -> { onDelta(r.value); r }
                             is LlmResult.Err -> r
                         }
                     }
+                } finally {
+                    // 关闭尚未读完的响应也可能读 socket，不能在 UI 线程做。
+                    withContext(NonCancellable + Dispatchers.IO) { response.close() }
                 }
             } catch (e: InterruptedIOException) {
                 kotlinx.coroutines.currentCoroutineContext().ensureActiveCompat()
@@ -238,19 +245,21 @@ class ChatClient(
             return LlmResult.Err(LlmError.Network(e.message ?: e.javaClass.simpleName))
         }
 
-        return response.use { resp ->
-            val text = try {
-                resp.body?.string().orEmpty()
-            } catch (e: InterruptedIOException) {
-                return LlmResult.Err(LlmError.Timeout)
-            } catch (e: IOException) {
-                return LlmResult.Err(LlmError.Network(e.message ?: e.javaClass.simpleName))
-            }
-            if (!resp.isSuccessful) {
-                LlmResult.Err(LlmError.Http(resp.code, errorDetail(text)))
-            } else {
-                extractUsage(text).let { (p, c) -> tokens[0] = p; tokens[1] = c }
-                extractContent(text)
+        return withContext(Dispatchers.IO) {
+            response.use { resp ->
+                val text = try {
+                    resp.body?.string().orEmpty()
+                } catch (e: InterruptedIOException) {
+                    return@withContext LlmResult.Err(LlmError.Timeout)
+                } catch (e: IOException) {
+                    return@withContext LlmResult.Err(LlmError.Network(e.message ?: e.javaClass.simpleName))
+                }
+                if (!resp.isSuccessful) {
+                    LlmResult.Err(LlmError.Http(resp.code, errorDetail(text)))
+                } else {
+                    extractUsage(text).let { (p, c) -> tokens[0] = p; tokens[1] = c }
+                    extractContent(text)
+                }
             }
         }
     }

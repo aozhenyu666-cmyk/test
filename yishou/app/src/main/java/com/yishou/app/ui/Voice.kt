@@ -111,6 +111,7 @@ fun MicButton(
     onNote: (String?) -> Unit = {},
     /** 识别用不了（没有系统识别、没有权限、接口失败）：通常改用输入法自带的麦克风 */
     onFailed: (String) -> Unit = {},
+    onStart: () -> Unit = {},
 ) {
     val app = LocalContext.current.applicationContext as YishouApp
     val voice = app.voice
@@ -123,6 +124,7 @@ fun MicButton(
     val currentOnNote by rememberUpdatedState(onNote)
     val currentOnFailed by rememberUpdatedState(onFailed)
     fun start() {
+        onStart()
         mine = true
         currentOnNote(null)
         scope.launch {

@@ -110,6 +110,7 @@ fun PartnerScreen(onBack: () -> Unit, materialId: Long? = null) {
     Scaffold(topBar = { BackTopBar("语音伙伴", onBack) }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            FloatingPermissionCard()
             Text("外部伴读（可选）", style = MaterialTheme.typography.titleMedium)
             Text("这里只准备开场、计时和收线，不会读取外部对话，也不能判断你有没有接话。前台在场不等于参与。", style = MaterialTheme.typography.bodySmall)
             if (GateService.foreground == null) Text("无障碍服务没开：这场不能统计在场或提醒离开。可到系统设置手动开启。")

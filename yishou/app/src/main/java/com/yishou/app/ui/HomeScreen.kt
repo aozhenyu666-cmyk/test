@@ -29,6 +29,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -101,6 +102,11 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             quizzes.mapNotNull { com.yishou.app.summary.LedgerFrom.scrollRedo(it) } +
             partners.map { com.yishou.app.summary.LedgerFrom.partner(it) }
         entries.filter { it.at >= dayStart }.map { WheelMark(it.at, MarkKind.DRILL, com.yishou.app.summary.Ledger.good(it.mark)) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val threadMarks = yishou.database.strands().observeAll().map { rows ->
+        rows.flatMap { row -> runCatching { com.yishou.app.thread.Strand.fromJson(row.id, org.json.JSONObject(row.json)).moves }.getOrDefault(emptyList()) }
+            .filter { it.at >= dayStart }.map { WheelMark(it.at, MarkKind.DRILL, it.passed) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val start: Long get() = dayStart
@@ -180,13 +186,14 @@ fun HomeScreen(
     val lines by vm.lines.collectAsStateWithLifecycle()
     val moves by vm.moves.collectAsStateWithLifecycle()
     val elsewhere by vm.elsewhere.collectAsStateWithLifecycle()
+    val threadMarks by vm.threadMarks.collectAsStateWithLifecycle()
     val prefs by app.settings.app.collectAsStateWithLifecycle()
     val llm by app.settings.llm.collectAsStateWithLifecycle()
-    val marks = remember(cards, drills, deeds, steps, outside, moves, elsewhere) {
+    val marks = remember(cards, drills, deeds, steps, outside, moves, elsewhere, threadMarks) {
         todayMarks(cards, drills, deeds, steps.filter { st -> outside.none { it.jobId == st.jobId } }, vm.start) +
             outside.map { o -> WheelMark(o.createdAt, MarkKind.CARD, o.correct == null || o.correct * 10 >= o.questions * 6) } +
             moves.filter { it.verdict != com.yishou.app.data.LineVerdict.PARKED }.map { m -> WheelMark(m.createdAt, MarkKind.DRILL, m.verdict == com.yishou.app.data.LineVerdict.OK) } +
-            elsewhere
+            elsewhere + threadMarks
     }
     val tide = remember { TideState() }
     val tideHeight = 240.dp
@@ -220,16 +227,20 @@ fun HomeScreen(
                 IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Settings, contentDescription = "设置") }
             }
 
-            // 来一手：不用挑练法，从素材池里挑下一件最值得做的
-            NextCard(pick, onGo = { p -> onRoute(vm.go(p)) }, onAnother = vm::another)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Entry("来一手", pick?.reason ?: "从素材池接下一手", MaterialTheme.colorScheme.primary,
+                    { pick?.let { onRoute(vm.go(it)) } ?: onRoute("pool") }, Modifier.weight(1f))
+                Entry("想一件事", "把一件事接着想定", MaterialTheme.colorScheme.tertiary,
+                    { onRoute("strand") }, Modifier.weight(1f))
+            }
 
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 val fresh = materials.count { it.uses == 0 }
                 Entry(
-                    title = "素材池",
+                    title = "题库与素材",
                     sub = "什么都往这放：${materials.size} 段文章" + (if (fresh > 0) "（$fresh 段没练）" else "") + " · $bankLeft 道题没做",
                     accent = MaterialTheme.colorScheme.tertiary,
-                    onClick = { onRoute("pool") },
+                    onClick = { onRoute("library") },
                     modifier = Modifier.weight(1f),
                 )
                 Entry(
@@ -241,11 +252,18 @@ fun HomeScreen(
                 )
             }
 
+            Button(onClick = { onRoute("assistant") }, modifier = Modifier.fillMaxWidth().height(54.dp)) { Text("AI 助手 · 直接聊") }
+            EntertainmentGateCard(onSettings = { onRoute("watched") }, onDoctor = { onRoute("gatedoctor") })
+
+            var more by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
+            TextButton(onClick = { more = !more }) { Text(if (more) "收起更多" else "更多（不再更新）") }
+            if (more) {
             // 刷抖音、贴吧时也练：看这一屏问一句，通知里回
             ScrollCard()
 
             // 想自己挑练法时用；平时点上面的“来一手”就够了
             androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { onRoute("schulte") }) { Text("舒尔特表") }
                 TextButton(onClick = onSoup) { Text("海龟汤") }
                 TextButton(onClick = onEndgame) { Text("残局") }
                 TextButton(onClick = onThink) { Text("练思维") }
@@ -262,6 +280,8 @@ fun HomeScreen(
                     onLine = onLine,
                     onLive = onLive,
                 )
+            }
+
             }
 
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {

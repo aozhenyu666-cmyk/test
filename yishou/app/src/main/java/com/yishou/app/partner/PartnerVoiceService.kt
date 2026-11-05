@@ -58,11 +58,20 @@ class PartnerVoiceService : Service() {
             var last = ""
             voice.running.collectLatest { r ->
                 if (r == null) {
+                    com.yishou.app.floating.CoachFloat.remove("voice")
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                     return@collectLatest
                 }
                 val text = describe(r.live)
+                com.yishou.app.floating.CoachFloat.update(this@PartnerVoiceService, "voice", com.yishou.app.floating.FloatPanel(
+                    "语音伙伴 · $text", r.live.error ?: r.live.lines.takeLast(4).joinToString("\n") { "${it.who}：${it.text}" },
+                    listOf(
+                        com.yishou.app.floating.FloatAction("我来说 / 打断") { voice.interrupt() },
+                        com.yishou.app.floating.FloatAction("打字回一句") { com.yishou.app.floating.FloatingReplyActivity.open(this@PartnerVoiceService, "partner", r.live.lines.lastOrNull()?.text.orEmpty()) },
+                        com.yishou.app.floating.FloatAction("结束并收线") { voice.end() },
+                        com.yishou.app.floating.FloatAction("关闭会话") { voice.stop() },
+                    ), priority = 20))
                 if (text != last) {
                     last = text
                     try { getSystemService(NotificationManager::class.java).notify(ID, notification(text)) } catch (e: SecurityException) { }
@@ -107,6 +116,7 @@ class PartnerVoiceService : Service() {
     }
 
     override fun onDestroy() {
+        com.yishou.app.floating.CoachFloat.remove("voice")
         scope.cancel()
         // 被系统杀掉或用户关掉：这一场停下，没收线的留着下次补
         if (voice.active) voice.stop()

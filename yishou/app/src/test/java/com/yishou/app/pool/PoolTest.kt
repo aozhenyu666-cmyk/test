@@ -47,6 +47,17 @@ class IntakeTest {
         assertTrue(!pieces[0].title.contains("（"))
         assertTrue(Intake.route("太短了") is Intake.Route.TooShort)
     }
+
+    @Test
+    fun longSharedTextDoesNotTreatLinksAsArticleText() {
+        val link = "https://example.org/" + "a".repeat(4_100)
+        assertTrue(Intake.route(link) is Intake.Route.TooShort)
+        val body = "县城咖啡店近几年开得很快，新区的店大多活过了一年。".repeat(180)
+        val result = Intake.route(body + "\n" + link) as Intake.Route.Article
+        val saved = result.pieces.joinToString("") { it.text }
+        assertTrue(!saved.contains("https://"))
+        assertEquals(body, saved)
+    }
 }
 
 class NextTest {

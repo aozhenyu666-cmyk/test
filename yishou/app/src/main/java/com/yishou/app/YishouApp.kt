@@ -34,9 +34,6 @@ import com.yishou.app.log.RunLog
 import com.yishou.app.settings.AppZone
 import com.yishou.app.speech.SpeechApi
 import com.yishou.app.speech.VoiceInput
-import com.yishou.app.healthwire.Facts
-import com.yishou.app.healthwire.LocalPolicy
-import com.yishou.app.healthwire.YishouGuard
 
 /*
  * 「一手」透明原则（同样显示在应用内“关于”页）：
@@ -113,6 +110,8 @@ class YishouApp : Application() {
     val partner: com.yishou.app.partner.PartnerSessions by lazy { com.yishou.app.partner.PartnerSessions(this) }
 
     /** 素材池：唯一入口，所有练法从这里拿 */
+    val library by lazy { com.yishou.app.library.LibraryStore(database) }
+
     val pool: com.yishou.app.pool.Pool by lazy { com.yishou.app.pool.Pool(this) }
 
     /** 一天的账：各处练的每一手（总结、时之轮都看它） */
@@ -121,6 +120,14 @@ class YishouApp : Application() {
     /** 刷着练：看屏出题用识图模型，判回答用文字模型 */
     val scrollLook: ChatClient by lazy { ChatClient(config = { settings.vision.value }, http = ChatClient.defaultHttpClient(60), usage = stats) }
     val scrollJudge: ChatClient by lazy { ChatClient(config = { settings.llm.value }, http = ChatClient.defaultHttpClient(30), usage = stats) }
+
+    /** 问一次文字模型，失败返回 null。判卷、线程出题、提议待定项都走它（纯逻辑那边只认这个形状） */
+    fun asker(kind: String): suspend (String, String) -> String? = { system, user ->
+        (scrollJudge.complete(system, user, kind = kind, json = false) as? com.yishou.app.llm.LlmResult.Ok)?.value
+    }
+
+    /** 判卷：只对照锁死的要点，判卷引的原话本机再核对一遍（judge/） */
+    val judge: com.yishou.app.judge.Judge by lazy { com.yishou.app.judge.LlmJudge(asker("判卷")) }
 
     /** 一手自己的语音伙伴（听写 → 文字模型 → 朗读） */
     val partnerVoice: com.yishou.app.partner.PartnerVoice by lazy { com.yishou.app.partner.PartnerVoice(this) }
@@ -144,6 +151,10 @@ class YishouApp : Application() {
 
     lateinit var database: AppDatabase
         private set
+
+    /** 数据库已经建好（连接口可能在 onCreate 跑完之前就被调用）。 */
+    val ready: Boolean get() = this::database.isInitialized
+
     lateinit var settings: SettingsStore
         private set
     lateinit var engine: RoundEngine
@@ -172,7 +183,7 @@ class YishouApp : Application() {
         com.yishou.app.think.DrillSession(drillGen, database.think(), database.practice())
 
     /** 题包导入：在本机拆题，选择题进题卡库，申论进素材库 */
-    val bankImport: com.yishou.app.bank.BankImport by lazy { com.yishou.app.bank.BankImport(cardEngine, database.think()) }
+    val bankImport: com.yishou.app.bank.BankImport by lazy { com.yishou.app.bank.BankImport(cardEngine, database.think(), classify = { kind, id, text, category -> library.assign(kind, id, text, category) }) }
 
     /** 本机拆不出题时，让模型把文字整理成题包格式 */
     val bankTidy: com.yishou.app.llm.BankTidy by lazy {
@@ -325,6 +336,7 @@ class YishouApp : Application() {
         speechApi = SpeechApi(config = { settings.speech.value })
         voice = VoiceInput(this)
 
+        appScope.launch { library.indexMissing() }
         prefetchCards()
         prefetchMaterials()
         prefetchEndgames()
@@ -355,15 +367,6 @@ class YishouApp : Application() {
         WindowScheduler.reschedule(this)
         Reminders.scheduleNudge(this)
         Reminders.scheduleIdle(this)
-        Reminders.scheduleInitiative(this)
         SummaryScheduler.schedule(this, replace = false)
-
-        // v2：本地监管（健康事实 + 本地规则 + 有限兜底 + 哨兵连接）在自己的后台线程上跑，
-        // 不占用无障碍事件线程（规范 §2.1 / T05 的教训）。
-        YishouGuard.install(this)
-        // 上次如果按过紧急暂停，启动时把暂停状态恢复进内存事实。
-        // 两条来源任一成立都算暂停：规则上的 STOPPED、独立的暂停标记文件（窗口翻页/重启都不丢）。
-        val guardStore = YishouGuard.policies(this)
-        if (LocalPolicy.anyStopped(guardStore.load()) || guardStore.emergencyStopped()) Facts.setPaused(true)
     }
 }

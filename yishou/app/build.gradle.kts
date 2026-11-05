@@ -13,10 +13,12 @@ android {
         applicationId = "com.yishou.app"
         minSdk = 26
         targetSdk = 34
-        // 0.23：在 0.22 上接回总控连接 + 健康协议 v2（哨兵挑战、本地规则、锁屏兜底）
-        versionCode = 23
-        versionName = "0.23.0"
+        versionCode = 29
+        versionName = "0.25.4"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+
+    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
 
     signingConfigs {
         // 固定的调试签名，提交在仓库里。每次 CI 打出的 APK 签名一致，
@@ -91,7 +93,18 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    androidTestImplementation("androidx.room:room-testing:2.6.1")
+    androidTestImplementation(platform("androidx.compose:compose-bom:2024.09.03"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.xerial:sqlite-jdbc:3.46.1.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     // Android 自带的 org.json 在本地单元测试里只是空壳，换成真实实现
@@ -103,4 +116,9 @@ tasks.configureEach {
     if (name.startsWith("kspChalu") && name.endsWith("Kotlin")) {
         mustRunAfter(name.replace("kspChalu", "kspMainline"))
     }
+}
+
+// 迁移测试要验证这一次生成的真实 Room 结构。
+tasks.matching { it.name == "mergeMainlineDebugAndroidTestAssets" }.configureEach {
+    dependsOn("kspMainlineDebugKotlin")
 }

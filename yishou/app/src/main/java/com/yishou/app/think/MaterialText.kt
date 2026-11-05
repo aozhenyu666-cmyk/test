@@ -7,7 +7,10 @@ object MaterialText {
     private val URL = Regex("https?://\\S+")
     private val TAILS = listOf("复制这条信息", "打开App", "打开APP", "点击链接", "长按复制", "来自：", "分享自")
 
-    fun clean(raw: String): String {
+    fun clean(raw: String): String = cleanFull(raw).take(MAX).trim()
+
+    /** 分段导入时先清理全文，避免长分享文本把链接当作正文。 */
+    fun cleanFull(raw: String): String {
         var t = raw.replace("\r", "")
         TAILS.forEach { tail ->
             val i = t.indexOf(tail)
@@ -16,7 +19,7 @@ object MaterialText {
         }
         t = t.replace(URL, "").replace(Regex("[（(]\\s*字数[:：]?\\s*\\d+\\s*字?\\s*[)）]"), "")
             .lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
-        return t.take(MAX).trim()
+        return t.trim()
     }
 
     /** 标题：第一句（到标点为止），最多 16 个字 */

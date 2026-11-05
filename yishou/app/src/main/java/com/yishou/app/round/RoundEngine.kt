@@ -174,51 +174,6 @@ class RoundEngine(
         )
     }
 
-    /** 判定有效后发放一次放行。 */
-    suspend fun grantPass(group: String, minutes: Int, roundId: Long?): Pass {
-        val now = clock()
-        val pass = Pass(packageGroup = group, startAt = now, endAt = now + minutes * 60_000L, roundId = roundId)
-        return pass.copy(id = dao.insertPass(pass))
-    }
-
-    /** 今天（since 为当天零点）已用掉的离线放行次数。 */
-    suspend fun offlineUsedSince(since: Long): Int = dao.countUnjudgedSince(since)
-
-    /**
-     * 离线“保存并通过”：回答原样保存，judged = false，发放一次放行。断点和陪练的一手都不变。
-     * 次数限制由调用方先检查。
-     */
-    suspend fun saveOffline(
-        task: Task,
-        coachMove: String,
-        answer: String,
-        triggerPackage: String?,
-        group: String,
-        minutes: Int,
-    ): Pass {
-        val now = clock()
-        val round = Round(
-            taskId = task.id,
-            source = RoundSource.GATE,
-            triggerPackage = triggerPackage,
-            coachMove = coachMove,
-            userAnswer = answer,
-            effective = false,
-            moveType = Prompts.MOVE_NONE,
-            reason = OFFLINE_REASON,
-            feedback = "",
-            judged = false,
-            createdAt = now,
-            face = dao.getBreakpoint(task.id)?.takeIf { it.pendingCoachMove == coachMove }?.pendingFace ?: 0,
-        )
-        val pass = Pass(packageGroup = group, startAt = now, endAt = now + minutes * 60_000L, roundId = null)
-        return dao.saveOfflineRound(round, pass)
-    }
-
-    companion object {
-        const val OFFLINE_REASON = "大模型暂时无法判定，离线保存"
-    }
-
     private fun emptyBreakpoint(taskId: Long) =
         Breakpoint(taskId, known = "", stuck = "", nextQuestion = "", pendingCoachMove = null, updatedAt = clock())
 }

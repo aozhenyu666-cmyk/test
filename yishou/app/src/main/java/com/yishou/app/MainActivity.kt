@@ -40,25 +40,15 @@ import com.yishou.app.ui.WatchedAppsScreen
 import com.yishou.app.ui.SettingsScreen
 import com.yishou.app.ui.StatusScreen
 import com.yishou.app.ui.TaskEditScreen
-import com.yishou.app.ui.WatchHealthScreen
 import com.yishou.app.ui.theme.YishouTheme
 import com.yishou.app.window.WindowActivity
 
 /** 主界面。底部两个页签：今天（时之轮和两个入口）和主控台；其余页面从这两处进入。 */
 class MainActivity : ComponentActivity() {
 
-    /** 总控打开一手时可以带 open=window：直接进陪练窗口。 */
-    private fun handleOpen(intent: Intent?) {
-        if (intent?.getStringExtra("open") == "window") {
-            intent.removeExtra("open")
-            startActivity(Intent(this, WindowActivity::class.java))
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         routeFrom(intent)
-        if (savedInstanceState == null) handleOpen(intent)
         setContent {
             YishouTheme {
                 val nav = rememberNavController()
@@ -67,10 +57,11 @@ class MainActivity : ComponentActivity() {
                 // 分享页过来的：打开它指定的那一页
                 val app = application as YishouApp
                 val pending by app.pendingRoute.collectAsState()
-                androidx.compose.runtime.LaunchedEffect(pending) {
+                androidx.compose.runtime.LaunchedEffect(pending, entry) {
                     val to = pending ?: return@LaunchedEffect
-                    app.pendingRoute.value = null
+                    if (entry == null) return@LaunchedEffect
                     nav.navigate(to) { launchSingleTop = true }
+                    app.pendingRoute.value = null
                 }
                 fun tab(to: String) = nav.navigate(to) {
                     popUpTo("board") { saveState = true }
@@ -145,6 +136,9 @@ class MainActivity : ComponentActivity() {
                     ) { e ->
                         LiveScreen(lineId = e.arguments?.getLong("id") ?: 0L, onBack = { nav.navigateUp() })
                     }
+                    composable("assistant") { com.yishou.app.ui.AssistantScreen(onBack = { nav.popBackStack() }, onSettings = { nav.navigate("settings") }) }
+                    composable("library") { com.yishou.app.ui.LibraryScreen(onBack = { nav.popBackStack() }, onRoute = { nav.navigate(it) }) }
+                    composable("strand") { com.yishou.app.ui.StrandScreen(onBack = { nav.popBackStack() }) }
                     composable("bank") {
                         BankScreen(
                             onBack = { nav.navigateUp() },
@@ -212,13 +206,7 @@ class MainActivity : ComponentActivity() {
                         AboutScreen(onBack = { nav.navigateUp() })
                     }
                     composable("permissions") {
-                        PermissionsScreen(
-                            onBack = { nav.navigateUp() },
-                            onOpenHealth = { nav.navigate("health") },
-                        )
-                    }
-                    composable("health") {
-                        WatchHealthScreen(onBack = { nav.navigateUp() })
+                        PermissionsScreen(onBack = { nav.navigateUp() })
                     }
                     composable("watched") {
                         WatchedAppsScreen(onBack = { nav.navigateUp() })
@@ -229,13 +217,17 @@ class MainActivity : ComponentActivity() {
                     composable("status") {
                         StatusScreen(onBack = { nav.navigateUp() })
                     }
+                    composable("gatedoctor") {
+                        com.yishou.app.ui.GateDoctorScreen(onBack = { nav.navigateUp() }, onPickApps = { nav.navigate("watched") })
+                    }
                     composable("log") {
                         LogScreen(onBack = { nav.navigateUp() })
                     }
                     composable("bets") {
                         BetScreen(onBack = { nav.navigateUp() })
                     }
-                    composable("endgame") {
+                    composable("schulte") { com.yishou.app.ui.SchulteScreen(onBack = { nav.navigateUp() }) }
+                composable("endgame") {
                         com.yishou.app.ui.EndgameScreen(onBack = { nav.navigateUp() }, onBank = { nav.navigate("pool") })
                     }
                     composable(
@@ -270,7 +262,6 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         routeFrom(intent)
-        handleOpen(intent)
     }
 
     /** 长按图标的“急刹”、通知里的按钮：直接打开指定的那一页 */

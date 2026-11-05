@@ -51,6 +51,7 @@ data class Card(
     val explain: String,
     /** 题库里带的题型（如“言语理解·主旨概括”），模型出的题为空 */
     val type: String = "",
+    val points: List<String> = emptyList(),
 ) {
     /** 有材料、有依据句的题才走“指依据”这一步 */
     val hasEvidence: Boolean get() = sentences.isNotEmpty() && evidence.isNotEmpty()
@@ -71,6 +72,7 @@ data class Card(
         .put("flaws", JSONObject().apply { flaws.forEach { (k, v) -> put(letter(k), v) } })
         .put("explain", explain)
         .put("type", type)
+        .put("points", JSONArray(points))
         .toString()
 
     companion object {
@@ -123,6 +125,7 @@ data class Card(
                 flaws = flaws,
                 explain = json.optString("explain").trim(),
                 type = json.optString("type").trim(),
+                points = json.optJSONArray("points")?.let { a -> (0 until a.length()).map { a.optString(it).trim() }.filter { it.isNotBlank() } }.orEmpty(),
             )
         }
 

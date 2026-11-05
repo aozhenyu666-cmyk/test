@@ -87,6 +87,14 @@ abstract class CardDao {
     @Query("SELECT * FROM card WHERE usedAt IS NULL AND source = 'bank' ORDER BY createdAt")
     abstract suspend fun unusedBank(): List<CardRow>
 
+    /**
+     * 入口抽题用：做过的不报废，按“最久没做”排回来。
+     * 排在最前的是没做过的；做过的一律按 usedAt 从旧到新接在后面，
+     * 冷却哪几道由调用方按行里的 usedAt 判断——题库只有几道时也不至于没题可做。
+     */
+    @Query("SELECT * FROM card WHERE source = 'bank' ORDER BY CASE WHEN usedAt IS NULL THEN 0 ELSE 1 END, usedAt, createdAt")
+    abstract suspend fun bankCycle(): List<CardRow>
+
     @Query("SELECT * FROM card WHERE source = 'bank' ORDER BY createdAt DESC")
     abstract fun observeBank(): Flow<List<CardRow>>
 

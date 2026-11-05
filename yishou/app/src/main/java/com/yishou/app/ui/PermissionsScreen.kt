@@ -78,7 +78,7 @@ private val MANUAL_ITEMS = listOf(
 )
 
 @Composable
-fun PermissionsScreen(onBack: () -> Unit, onOpenHealth: () -> Unit = {}) {
+fun PermissionsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext as YishouApp
     val prefs by app.settings.app.collectAsStateWithLifecycle()
@@ -92,6 +92,7 @@ fun PermissionsScreen(onBack: () -> Unit, onOpenHealth: () -> Unit = {}) {
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refreshKey++ }
 
     val acc = remember(refreshKey) { PermissionStatus.accessibility(context) }
+    val serviceConnected by GateService.connected.collectAsStateWithLifecycle()
     val notif = remember(refreshKey) { PermissionStatus.notifications(context) }
     val exact = remember(refreshKey) { PermissionStatus.exactAlarm(context) }
     val battery = remember(refreshKey) { PermissionStatus.batteryUnrestricted(context) }
@@ -117,11 +118,13 @@ fun PermissionsScreen(onBack: () -> Unit, onOpenHealth: () -> Unit = {}) {
             )
 
             PermissionCard(
-                title = "无障碍服务（必需）",
+                title = if (serviceConnected) "无障碍服务（已连接）" else if (acc) "无障碍开关已开，服务未连接" else "无障碍服务（必需）",
                 detail = "用于入口思考页：只读取当前前台应用的包名，不读取屏幕内容。在列表里找到「一手」并打开。",
                 ok = acc,
                 action = "去开启",
             ) { safeStart(context, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+
+            FloatingPermissionCard()
 
             PermissionCard(
                 title = "通知",
@@ -222,15 +225,6 @@ fun PermissionsScreen(onBack: () -> Unit, onOpenHealth: () -> Unit = {}) {
                 onClick = { context.startActivity(GateActivity.testIntent(context)) },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("打开一次思考页（测试，不放行）") }
-
-            Text("监管与健康", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-            PermissionCard(
-                title = "健康与监管",
-                detail = "看一手自己的真实响应状态、锁屏权限，以及紧急暂停（本地立即生效，停掉自动锁屏）。",
-                ok = true,
-                action = "查看",
-            ) { onOpenHealth() }
-            OutlinedButton(onClick = onOpenHealth, modifier = Modifier.fillMaxWidth()) { Text("打开健康与监管") }
         }
     }
 }

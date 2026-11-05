@@ -129,36 +129,6 @@ class RoundEngineTest {
     }
 
     @Test
-    fun offlineSaveKeepsBreakpointAndGrantsPass() = runTest {
-        val bp = Breakpoint(7, "k", "s", "q", pendingCoachMove = "这一手", updatedAt = 1)
-        dao.breakpoints[7] = bp
-        val pass = engine.saveOffline(task, "这一手", goodAnswer, "com.ss.android.ugc.aweme", "短视频与社区", 5)
-
-        val round = dao.rounds.single()
-        assertFalse(round.judged)
-        assertFalse(round.effective)
-        assertEquals(goodAnswer, round.userAnswer)
-        assertEquals(RoundSource.GATE, round.source)
-        assertEquals("com.ss.android.ugc.aweme", round.triggerPackage)
-        assertEquals(bp, dao.breakpoints[7])
-
-        assertEquals(round.id, pass.roundId)
-        assertEquals(1000L + 5 * 60_000L, pass.endAt)
-        assertEquals(1, engine.offlineUsedSince(0))
-        assertEquals(pass, dao.activePass("短视频与社区", 1000L + 5 * 60_000L - 1))
-        assertNull(dao.activePass("短视频与社区", 1000L + 5 * 60_000L))
-    }
-
-    @Test
-    fun grantPassUsesMinutes() = runTest {
-        val p = engine.grantPass("游戏", 10, roundId = 3)
-        assertEquals(1000L, p.startAt)
-        assertEquals(1000L + 600_000L, p.endAt)
-        assertEquals(3L, p.roundId)
-        assertNull(dao.activePass("短视频与社区", 2000))
-    }
-
-    @Test
     fun composeAnswerWithImage() {
         assertEquals("文字", AnswerRules.compose("文字", null))
         assertEquals("文字\n【图片内容】算式", AnswerRules.compose(" 文字 ", "算式"))

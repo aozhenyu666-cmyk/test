@@ -3,9 +3,6 @@ package com.yishou.app.window
 import android.Manifest
 import android.content.Intent
 import android.os.Bundle
-import android.os.SystemClock
-import com.yishou.app.healthwire.Facts
-import com.yishou.app.healthwire.LaunchTracker
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -106,13 +103,8 @@ class WindowActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        com.yishou.app.floating.CoachFloat.refresh(this)
         isVisible = true
-        // T18：页面自己报告「真的到前台了」，这是「拉回」成功的唯一证据。
-        LaunchTracker.claimAwaiting(
-            target = TARGET_WINDOW,
-            pkg = "",
-            nowMono = SystemClock.elapsedRealtime(),
-        )?.let { Facts.onLaunch(LaunchTracker.VERIFIED_FOREGROUND, SystemClock.elapsedRealtime()) }
     }
 
     override fun onPause() {
@@ -126,9 +118,6 @@ class WindowActivity : ComponentActivity() {
         @Volatile
         var isVisible = false
             private set
-
-        /** T18：启动回执里的目标页名。 */
-        const val TARGET_WINDOW = "WindowActivity"
     }
 }
 
@@ -153,6 +142,7 @@ private fun WindowScreen(s: WindowState, c: SessionState, vm: WindowViewModel, o
                 modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
+                com.yishou.app.ui.FloatingPermissionCard()
                 if (s.loading) {
                     MatrixLoader("准备窗口")
                     return@Column

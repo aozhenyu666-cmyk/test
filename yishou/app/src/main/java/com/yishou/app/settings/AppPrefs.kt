@@ -15,6 +15,12 @@ data class AppGroup(
  * 以后加新设置项时旧数据也能读。
  */
 data class AppPrefs(
+    val morningEnabled: Boolean = true,
+    val morningFromHour: Int = 6,
+    val morningToHour: Int = 10,
+    val lastWakeDay: Long? = null,
+    val recallDay: Long = Long.MIN_VALUE,
+    val recallIds: Set<Long> = emptySet(),
     val groups: List<AppGroup> = DEFAULT_GROUPS,
     /** 包名 → 应用组名 */
     val watched: Map<String, String> = DEFAULT_WATCHED,
@@ -67,10 +73,6 @@ data class AppPrefs(
     val pullBackMinutes: Int = 2,
     /** 白天一手停了这么多小时没人应，发通知叫回来；0 表示关 */
     val idleHours: Int = 3,
-    /** 主动叫你去走一手（按节奏判断，不是到点打卡）。 */
-    val proactiveEnabled: Boolean = true,
-    /** 今天还没走一手时，两次主动之间的基础间隔（分钟）；15–240。 */
-    val proactiveGapMinutes: Int = 60,
     /** 语音陪练：窗口里读完题自动听你说 */
     val voiceMode: Boolean = true,
     /** 听写完几秒后自动发出，0 表示不自动发、等你确认 */
@@ -103,6 +105,8 @@ data class AppPrefs(
     val warmup: Boolean = true,
     /** 各骰面的帮助等级（0 示范后补一步 … 3 连续接力、自己提下一问），按组的表现自动加减 */
     val faceLevels: Map<Int, Int> = emptyMap(),
+    /** 舒尔特表目前最好的一次用时（毫秒）；0 表示还没做完过 */
+    val schulteBestMs: Long = 0,
 ) {
     fun groupOf(pkg: String): String? = watched[pkg]
 
@@ -110,6 +114,12 @@ data class AppPrefs(
         groups.firstOrNull { it.name == group }?.passMinutes ?: DEFAULT_PASS_MINUTES
 
     fun toJson(): String = JSONObject()
+        .put("morningEnabled", morningEnabled)
+        .put("morningFromHour", morningFromHour)
+        .put("morningToHour", morningToHour)
+        .put("lastWakeDay", lastWakeDay)
+        .put("recallDay", recallDay)
+        .put("recallIds", JSONArray(recallIds.toList()))
         .put("groups", JSONArray().apply { groups.forEach { put(JSONObject().put("name", it.name).put("minutes", it.passMinutes)) } })
         .put("watched", JSONObject().apply { watched.forEach { (k, v) -> put(k, v) } })
         .put("offlinePassMinutes", offlinePassMinutes)
@@ -144,8 +154,6 @@ data class AppPrefs(
         .put("pullBackEnabled", pullBackEnabled)
         .put("pullBackMinutes", pullBackMinutes)
         .put("idleHours", idleHours)
-        .put("proactiveEnabled", proactiveEnabled)
-        .put("proactiveGapMinutes", proactiveGapMinutes)
         .put("voiceMode", voiceMode)
         .put("voiceAutoSendSeconds", voiceAutoSendSeconds)
         .put("timeZone", timeZone)
@@ -162,6 +170,7 @@ data class AppPrefs(
         .put("pendingExitAt", pendingExitAt)
         .put("warmup", warmup)
         .put("faceLevels", JSONObject().apply { faceLevels.forEach { (k, v) -> put(k.toString(), v) } })
+        .put("schulteBestMs", schulteBestMs)
         .toString()
 
     companion object {
@@ -212,6 +221,12 @@ data class AppPrefs(
             } ?: d.watched
             val checks = o.stringSet("manualChecks") ?: d.manualChecks
             return AppPrefs(
+                morningEnabled = o.optBoolean("morningEnabled", true),
+                morningFromHour = o.optInt("morningFromHour", 6).coerceIn(0, 23),
+                morningToHour = o.optInt("morningToHour", 10).coerceIn(1, 24),
+                lastWakeDay = if (o.isNull("lastWakeDay")) null else o.getLong("lastWakeDay"),
+                recallDay = o.optLong("recallDay", Long.MIN_VALUE),
+                recallIds = o.optJSONArray("recallIds")?.let { a -> (0 until a.length()).map { a.getLong(it) }.toSet() } ?: emptySet(),
                 groups = groups,
                 watched = watched,
                 offlinePassMinutes = o.optInt("offlinePassMinutes", d.offlinePassMinutes).coerceIn(1, 30),
@@ -246,8 +261,6 @@ data class AppPrefs(
                 pullBackEnabled = o.optBoolean("pullBackEnabled", d.pullBackEnabled),
                 pullBackMinutes = o.optInt("pullBackMinutes", d.pullBackMinutes).coerceIn(1, 15),
                 idleHours = o.optInt("idleHours", d.idleHours).coerceIn(0, 12),
-                proactiveEnabled = o.optBoolean("proactiveEnabled", d.proactiveEnabled),
-                proactiveGapMinutes = o.optInt("proactiveGapMinutes", d.proactiveGapMinutes).coerceIn(15, 240),
                 voiceMode = o.optBoolean("voiceMode", d.voiceMode),
                 voiceAutoSendSeconds = o.optInt("voiceAutoSendSeconds", d.voiceAutoSendSeconds).coerceIn(0, 10),
                 timeZone = o.optString("timeZone", d.timeZone).ifBlank { d.timeZone },
@@ -267,6 +280,7 @@ data class AppPrefs(
                 faceLevels = o.optJSONObject("faceLevels")?.let { f ->
                     f.keys().asSequence().mapNotNull { k -> k.toIntOrNull()?.takeIf { it in 1..6 }?.let { it to f.optInt(k).coerceIn(0, 3) } }.toMap()
                 } ?: d.faceLevels,
+                schulteBestMs = o.optLong("schulteBestMs", d.schulteBestMs),
             )
         }
     }

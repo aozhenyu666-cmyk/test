@@ -107,12 +107,11 @@ class FakeDao : AppDao() {
         return passes.size.toLong()
     }
     override suspend fun activePass(group: String, now: Long) =
-        passes.filter { it.packageGroup == group && it.endAt > now }.maxByOrNull { it.endAt }
+        passes.filter { it.packageGroup == group && it.endAt > now && it.roundId == com.yishou.app.data.VERIFIED_GATE_PASS_MARKER }.maxByOrNull { it.endAt }
     override suspend fun upsertSummary(summary: DailySummary) {
         summaries[summary.date] = summary
     }
     override suspend fun getSummary(date: String) = summaries[date]
-    override suspend fun latestSummary(): DailySummary? = summaries.values.maxByOrNull { it.date }
     override fun observeSummaries(): Flow<List<DailySummary>> = emptyFlow()
 
     override fun observeCurrentTask(): Flow<Task?> = emptyFlow()
