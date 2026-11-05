@@ -137,31 +137,34 @@ object CompanionRunner {
     /** 回答。返回判定结果，UI 据此决定是否留在页面上重答。 */
     fun answer(context: Context, text: String): JudgementCheck {
         val prefs = CompanionPrefs(context)
+        val question = prefs.pendingQuestion()
+        if (question.isNullOrBlank()) {
+            // 已经交过一次（或页面被关掉后重复点）：不重复写记忆。
+            return JudgementCheck(pass = true, hint = "")
+        }
         val app = context.applicationContext as? YishouApp
         replyOpen = false
         val local = prefs.localMode()
         val check = if (local) CompanionLocal.checkAnswer(text, attempt) else JudgementRules.check(text, attempt)
         if (check.pass) {
-            val question = prefs.pendingQuestion().orEmpty()
             prefs.clearPending()
             prefs.setLocalMode(false)
             CoachFloat.remove("companion")
             attempt = 0
             nudged = false
-            val memory = if (local && question.isNotBlank()) "$question → $text" else text
+            // 记忆只存“你说了什么”，不存它自己问的问题；
+            // 下一轮要引用的是你的判断，不是它自己的话。
+            val memory = text
             app?.echoLater(memory, EchoKind.CONCLUSION, SCENE)
             Log.i(TAG, "判断通过：${text.take(60)}")
         } else {
             attempt += 1
             if (!check.reask) {
-                val question = prefs.pendingQuestion().orEmpty()
                 prefs.clearPending()
                 prefs.setLocalMode(false)
                 prefs.addMiss()
                 CoachFloat.remove("companion")
-                if (question.isNotBlank()) {
-                    app?.echoLater("伴读没答上来：$question", EchoKind.DELTA, SCENE)
-                }
+                app?.echoLater("伴读没答上来：$question", EchoKind.DELTA, SCENE)
                 attempt = 0
             }
         }
@@ -240,19 +243,19 @@ object CompanionRunner {
         return question
     }
 
-    /** 读当前任务、断点、上一轮和最近的判断；读不到就退化成纯屏幕题。 */
+    /** 读当前任务、断点、上一轮和最近的判断；任务可以没有，记忆不能因此丢掉。 */
     private suspend fun readContext(app: YishouApp): CompanionContext {
         val dao = app.database.dao()
-        val task = dao.getCurrentTask() ?: return CompanionContext()
-        val bp = dao.getBreakpoint(task.id)
-        val last = dao.lastRound()?.takeIf { it.taskId == task.id }
+        val task = dao.getCurrentTask()
+        val bp = task?.let { dao.getBreakpoint(it.id) }
+        val last = dao.lastRound()?.takeIf { task == null || it.taskId == task.id }
         val conclusions = app.database.echoes().recent()
             .filter { it.scene == SCENE }
             .take(3)
             .map { it.text }
         return CompanionContext(
-            taskTitle = task.title,
-            goal = task.goal,
+            taskTitle = task?.title,
+            goal = task?.goal,
             stuck = bp?.stuck,
             nextQuestion = bp?.nextQuestion,
             lastAnswer = last?.userAnswer,
@@ -261,6 +264,7 @@ object CompanionRunner {
     }
 
     private fun showQuestion(service: AccessibilityService, question: String, countdown: String?) {
+        replyOpen = false
         val detail = if (countdown.isNullOrBlank()) question else "$question\n$countdown"
         CoachFloat.update(
             service,

@@ -1,5 +1,7 @@
 package com.yishou.app.ui
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -45,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yishou.app.YishouApp
+import com.yishou.app.companion.CompanionHealth
 import com.yishou.app.companion.CompanionPrefs
 import com.yishou.app.companion.CompanionRunner
 import com.yishou.app.core.CompanionConfig
@@ -85,6 +88,18 @@ fun CompanionScreen(
     val prefs by app.settings.app.collectAsStateWithLifecycle()
     val modelOn = app.settings.llm.value.isComplete && app.settings.vision.value.isComplete
 
+    val fixService: () -> Unit = {
+        if (!CompanionHealth.rebindIfAllowed(context)) {
+            runCatching {
+                context.startActivity(
+                    Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+        }
+        tick += 1
+    }
+
     LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { tick++ }
 
     LaunchedEffect(tick) {
@@ -96,6 +111,7 @@ fun CompanionScreen(
         misses = store.misses()
         asked = store.promptsInHalfHour(System.currentTimeMillis())
         lastAt = store.lastPromptAt()
+        CompanionHealth.check(context, serviceOn)
     }
 
     fun persist(next: CompanionConfig) {
@@ -122,6 +138,7 @@ fun CompanionScreen(
                 misses = misses,
                 lastAt = lastAt,
                 onToggle = { on -> persist(cfg.copy(enabled = on)) },
+                onFixService = fixService,
             )
 
             AskCard(
@@ -186,6 +203,7 @@ private fun HeroCard(
     misses: Int,
     lastAt: Long,
     onToggle: (Boolean) -> Unit,
+    onFixService: () -> Unit,
 ) {
     Card(
         shape = RoundedCornerShape(24.dp),
@@ -208,6 +226,9 @@ private fun HeroCard(
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 StatusDot(serviceOn, if (serviceOn) "无障碍在跑" else "无障碍没开", MaterialTheme.colorScheme.error)
                 StatusDot(modelOn, if (modelOn) "模型已配" else "本地模式", MaterialTheme.colorScheme.tertiary)
+            }
+            if (!serviceOn) {
+                TextButton(onClick = onFixService) { Text("去开启无障碍") }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Stat("近 30 分钟", "$asked 次")

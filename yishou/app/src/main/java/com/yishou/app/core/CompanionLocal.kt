@@ -16,10 +16,16 @@ object CompanionLocal {
         "走", "开始", "做完", "时间", "离开", "放下", "关掉", "收",
     )
 
-    /** 本地提醒：优先贴卡点，其次贴任务，最后才泛泛问。 */
+    /** 本地提醒：优先贴上次回答，其次卡点，其次任务，最后才泛泛问。 */
     fun nudge(ctx: CompanionContext, appLabel: String, minutes: Int): String {
         val m = minutes.coerceAtLeast(1)
         val app = appLabel.ifBlank { "这个应用" }
+
+        // 上一次真的回答过什么：下一轮先把它接回来，而不是每次从零问。
+        val last = ctx.recentConclusions.firstOrNull()?.trim().orEmpty()
+        if (last.isNotBlank()) {
+            return "上次你说「${last.take(24)}」。现在又在$app 待了 $m 分钟——这次还是休息，还是回去？"
+        }
 
         val stuck = ctx.stuck?.trim().orEmpty()
         if (stuck.length >= 4) {

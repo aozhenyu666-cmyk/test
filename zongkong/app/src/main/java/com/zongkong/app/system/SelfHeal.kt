@@ -172,10 +172,27 @@ object SelfHeal {
      */
     fun enabledList(current: String, me: String): String = (othersOf(current, me) + me).joinToString(":")
 
-    /** 当前列表里除本服务以外的（去空、去重、保持原顺序）。 */
+    /** 当前列表里除本服务以外的（去空、按归一化组件名去重、保持原顺序）。 */
     fun othersOf(current: String, me: String): List<String> {
         val mine = normalize(me)
-        return current.split(':').map { it.trim() }.filter { it.isNotBlank() && normalize(it) != mine }.distinct()
+        return current.split(':').map { it.trim() }
+            .filter { it.isNotBlank() && normalize(it) != mine }
+            .distinctBy { normalize(it) }
+    }
+
+    /**
+     * 合并写回：当前列表里的其他服务 + 额外要保留的 + 本服务（只留一份、本服务在最后）。
+     *
+     * 为什么不是直接用开头读到的 `list`：从“拿掉本服务”到“放回”之间有 1–2 秒，
+     * 这期间别的 App 可能刚把它自己的服务写进来（一手就是这样被挤掉的）。
+     * 放回前必须重新读一遍当前列表，再把两边并起来。
+     */
+    fun merge(current: String, extra: List<String>, me: String): String {
+        val mine = normalize(me)
+        val kept = (othersOf(current, me) + extra.map { it.trim() })
+            .filter { it.isNotBlank() && normalize(it) != mine }
+            .distinctBy { normalize(it) }
+        return (kept + me).joinToString(":")
     }
 
     /** 系统报告的在跑服务里有没有本服务（包名 + 类名逐项对上）。 */
@@ -273,15 +290,17 @@ object SelfHeal {
         val me = ComponentName(context, GuardService::class.java)
         val meFlat = me.flattenToString()
         val current = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
-        val list = enabledList(current, meFlat)
+        val others = othersOf(current, meFlat)
 
         // 第一档：开总开关 → 拿掉 → 放回。
         // 先置 1 是因为 vivo 上 ACCESSIBILITY_ENABLED=0 时列表怎么写都不会挂载。
         try {
             Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
-            Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, othersOf(current, meFlat).joinToString(":"))
+            Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, others.joinToString(":"))
             delay(1_200)
-            Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, list)
+            // 放回前重新读：这 1.2 秒里别的 App 可能刚写进它的服务，不能拿旧列表覆盖它。
+            val fresh = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
+            Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, merge(fresh, others, meFlat))
         } catch (e: Exception) {
             Log.w(TAG, "第一档重新挂上失败", e)
             return Rebind(false, false, 1, "写安全设置被拒绝（${e.javaClass.simpleName}）")
@@ -290,11 +309,23 @@ object SelfHeal {
         if (verified(context, me)) return Rebind(written(context, meFlat), true, 1, "拿掉再放回就好了，系统已认")
 
         // 第二档：清空 → 等一下 → 写回「原有的其他服务 + 本服务」。
+        // **有其他服务时不整表清空**：清空会把一手一起摘掉，正是要避免的冲突。
+        // 只做更长的“拿掉→放回”，放回前同样重新读、合并。
         try {
-            Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, "")
-            delay(1_000)
-            Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
-            Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, list)
+            val before = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
+            val othersBefore = othersOf(before, meFlat)
+            if (othersBefore.isEmpty()) {
+                Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, "")
+                delay(1_000)
+                Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+                val afterClear = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
+                Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, merge(afterClear, othersBefore, meFlat))
+            } else {
+                Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, othersBefore.joinToString(":"))
+                delay(2_000)
+                val after = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
+                Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, merge(after, othersBefore, meFlat))
+            }
         } catch (e: Exception) {
             Log.w(TAG, "第二档重新挂上失败", e)
             return Rebind(false, false, 2, "清空写回被拒绝（${e.javaClass.simpleName}）")

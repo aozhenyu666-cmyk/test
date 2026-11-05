@@ -8,7 +8,23 @@ import org.junit.Test
 class CompanionLocalTest {
 
     @Test
-    fun `nudge quotes the stuck point first`() {
+    fun `nudge recalls the last judgement before anything else`() {
+        val q = CompanionLocal.nudge(
+            CompanionContext(
+                taskTitle = "行测",
+                stuck = "总在两个都像的选项里选错",
+                recentConclusions = listOf("休息", "排除 A 要先回原文"),
+            ),
+            "哔哩哔哩",
+            20,
+        )
+        assertTrue(q.contains("上次你说"))
+        assertTrue(q.contains("休息"))
+        assertTrue(q.contains("20 分钟"))
+    }
+
+    @Test
+    fun `nudge quotes the stuck point when there is no memory`() {
         val q = CompanionLocal.nudge(
             CompanionContext(taskTitle = "行测", stuck = "总在两个都像的选项里选错"),
             "哔哩哔哩",

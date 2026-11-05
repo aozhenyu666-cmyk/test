@@ -90,6 +90,7 @@ class GateService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         running = this
+        com.yishou.app.companion.CompanionHealth.cancel(this)
         _connected.value = true
         _problem.value = null
         GateTrace.init(this)
@@ -314,6 +315,7 @@ class GateService : AccessibilityService() {
     override fun onUnbind(intent: Intent?): Boolean {
         GateTrace.log("无障碍服务断开（被关闭或被系统停掉）")
         cover?.hide()
+        com.yishou.app.companion.CompanionHealth.notifyMissing(this)
         if (running === this) {
             running = null
             _connected.value = false
@@ -330,6 +332,7 @@ class GateService : AccessibilityService() {
         if (wakeRegistered) { unregisterReceiver(wakeReceiver); wakeRegistered = false }
 
         if (running === this) {
+            com.yishou.app.companion.CompanionHealth.notifyMissing(this)
             running = null
             _connected.value = false
             watchJob?.cancel()
