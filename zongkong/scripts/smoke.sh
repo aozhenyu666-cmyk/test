@@ -180,14 +180,21 @@ adb shell run-as $SP cat files/watch-log.txt >> "$OUT/sentinel-v2.txt" 2>&1 || t
 adb shell settings put secure enabled_accessibility_services $SVC
 sleep 5
 adb shell dumpsys accessibility | grep -iE "Bound services|Enabled services" | head -4 | tee "$OUT/accessibility-sentinel.txt"
-# 总控的心跳停了（模拟掉线 90 秒以上）
+# 总控的心跳停了（模拟掉线）
 adb shell am broadcast -a $PKG.SEED -p $PKG --es mode main-down
 sleep 1
-launch_target
-sleep 4
+# 哨兵自己的 :watch 有确认预算和限流，接管不是瞬时的；最多等 60 秒，
+# 每 5 秒重新把目标应用拉到前台，避免它停在桌面又把 Activity 换走。
+TAKEOVER=FAIL
+for i in $(seq 1 12); do
+  adb shell am start -a android.settings.SETTINGS >/dev/null 2>&1
+  sleep 5
+  resumed > "$OUT/resumed-sentinel.txt"
+  if grep -q "$SP/.BlockActivity" "$OUT/resumed-sentinel.txt"; then TAKEOVER=OK; break; fi
+done
 shot 16-sentinel-takeover
-resumed | tee "$OUT/resumed-sentinel.txt"
-if grep -q "$SP/.BlockActivity" "$OUT/resumed-sentinel.txt"; then echo "SENTINEL_TAKEOVER=OK" >> "$OUT/result.txt"; else echo "SENTINEL_TAKEOVER=FAIL" >> "$OUT/result.txt"; adb logcat -d -s Sentinel:V SentinelSys:V SentinelStore:V SentinelClient:V | tail -30; fi
+echo "SENTINEL_TAKEOVER=$TAKEOVER" >> "$OUT/result.txt"
+if [ "$TAKEOVER" != OK ]; then adb logcat -d -s Sentinel:V SentinelSys:V SentinelStore:V SentinelClient:V | tail -30; fi
 
 # ---------- 哨兵独立：总控被“强行停止”（vivo 一键清理就是这个），哨兵不受影响，照样接管 ----------
 adb shell settings put secure enabled_accessibility_services $GUARD:$SVC
