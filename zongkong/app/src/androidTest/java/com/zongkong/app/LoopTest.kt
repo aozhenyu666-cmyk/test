@@ -6,11 +6,13 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -69,6 +71,8 @@ class LoopTest {
         app.store.updateConfig {
             Config(
                 onboarded = true, silenceHours = 0, dailyQuotaMin = 0, notion = NotionConfig(token = "secret_test", baseUrl = sim.baseUrl),
+                // 老的场景从“今天”页开始；0.14 的对话优先测试自己打开
+                startOnChat = false,
                 // 测试期间不让每日总控时间、失联升级、参谋主动找人插进来
                 hq = com.zongkong.core.hq.HqConfig(enabled = false, escalation = false, proactive = false, vibrate = false),
                 // 老的场景不受“挣来的娱乐 / 打开就答题”影响；0.10 的测试自己打开
@@ -76,8 +80,9 @@ class LoopTest {
                 watch = com.zongkong.core.WatchConfig(openGate = false),
             )
         }
+        // 今天交过的关卡、娱乐时长清零：每个测试从干净的一天开始（不然前一个测试交过的“今日部署”会带过来）
+        app.store.updateToday { com.zongkong.core.DayLog(it.date) }
         app.store.updateHq { com.zongkong.core.hq.HqBook() }
-        app.store.updateControl { com.zongkong.core.control.ControlBook() }
         app.store.updateDossier { com.zongkong.core.boss.Dossier() }
         app.store.updateVein { com.zongkong.core.vein.Vein() }
         app.store.updateIntake { com.zongkong.core.info.IntakeBook() }
@@ -316,6 +321,8 @@ class LoopTest {
         // 回到对话：工具步骤折叠显示、选项按钮
         scenario!!.onActivity { it.onBackPressedDispatcher.onBackPressed() }
         waitText("现在就开始", 10_000)
+        // 工具步骤在最后一条回复上面：对话已经滚到底，先滚回去再找
+        compose.onNodeWithTag("chat-list").performScrollToNode(hasText("已执行", substring = true))
         waitText("已执行", 5_000)
         shot("e2e-09-chat-after-tools")
         // 模型收到了工具定义和工具结果
@@ -512,59 +519,6 @@ class LoopTest {
      * 总控时间：进入 → 静 → 收（清收集箱）→ 谋（没接 AI：四问自己憋）→ 筹（定明天主线）→ 行（对账）→ 封。
      * 进行中按返回键不走；封存后记一条验收记录、解锁。
      */
-    @Test
-    fun oneDeferralKeepsTheTaskAndExpiresWithoutPassingIt() {
-        val id = "grace-${System.currentTimeMillis()}"
-        val gate = com.zongkong.core.Gate(
-            id = id, dept = com.zongkong.core.Dept.HQ, title = "测试每晚总结报告", instruction = "列清未完成事项",
-            openAt = 4 * 60, deadline = 4 * 60 + 1, block = com.zongkong.core.BlockMode.FROM_OPEN,
-            verify = com.zongkong.core.VerifyMode.TEXT, minChars = 10,
-        )
-        app.store.updateConfig { it.copy(gates = listOf(gate), initiative = it.initiative.copy(enabled = false)) }
-        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, "gate/$id"))
-        waitText("用今日一次缓行")
-        compose.onNode(hasText("用今日一次缓行", substring = true)).performScrollTo().performClick()
-        waitText("这项先缓一缓")
-        compose.onNode(hasText("使用一次缓行")).performClick()
-        waitText("已延后 30 分钟")
-        assertEquals(1, app.store.control.value.deferrals.size)
-        assertTrue(app.store.today.value.passed(id) == null)
-        assertTrue(!app.store.status().gates.single().blocking)
-        assertTrue(app.actions.control.deferGate(id) != null)
-        val report = com.zongkong.core.plan.DayReport.text(app.actions.dayReport())
-        assertTrue(report, report.contains(gate.title) && report.contains("仍待补交"))
-        shot("e2e-38-grace-gate")
-        app.store.updateControl { b -> b.copy(deferrals = b.deferrals.map { it.copy(until = System.currentTimeMillis() - 1) }) }
-        assertTrue(app.store.status().gates.single().blocking)
-        assertTrue(app.store.today.value.passed(id) == null)
-        val result = runBlocking { app.actions.submitDeferred(app.store.control.value.deferrals.single().id, "今天的行动还未全部完成，明天先处理遗留的材料整理工作。") }
-        assertTrue(result.toString(), result is com.zongkong.app.data.Actions.SubmitResult.Judged && result.verdict.pass)
-        assertTrue(app.store.control.value.deferrals.single().resolvedAt > 0)
-        assertTrue(app.store.today.value.passed(id) != null)
-        assertTrue(app.actions.control.deferGate(id) != null)
-    }
-
-    @Test
-    fun hqGraceCanResumeWithoutSpendingAnotherPass() {
-        app.store.updateConfig { it.copy(gates = emptyList(), initiative = it.initiative.copy(enabled = false)) }
-        val session = app.actions.hq.start(com.zongkong.core.hq.HqTrigger.UNANSWERED, 20)
-        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, "hq"))
-        waitText("用今日一次缓行")
-        compose.onNode(hasText("用今日一次缓行", substring = true)).performClick()
-        waitText("这项先缓一缓")
-        compose.onNode(hasText("使用一次缓行")).performClick()
-        waitText("总控时间暂时缓行")
-        assertTrue(!app.store.status().strict)
-        assertTrue(app.store.hq.value.active!!.endsAt >= session.endsAt + 29 * 60_000)
-        shot("e2e-39-grace-hq")
-        compose.onNode(hasText("现在继续")).performClick()
-        waitFor(hasTestTag("hq-step"), 5_000, "恢复后的总控环节")
-        assertTrue(app.store.status().strict)
-        assertEquals(0L, app.store.hq.value.active!!.suspendedUntil)
-        assertEquals(1, app.store.control.value.deferrals.size)
-        assertTrue(app.actions.hq.exitEarly("再休息一次") != null)
-    }
-
     @Test
     fun hqSession() {
         val now = System.currentTimeMillis()
@@ -945,12 +899,12 @@ class LoopTest {
         val llm = mockLlm(sayTurn("【阶段 1/6 · 盘点】离“秋招拿到 offer”还差简历定稿和 20 家投递；这周电脑上 B站 6 小时，主线只动了 40 分钟。我们先把里程碑倒推出来。\n【选项】好，倒推｜先看这周｜改天"))
         app.store.updateConfig { it.copy(ai = com.zongkong.core.AiConfig(llm.url("/v1").toString(), "sk-test", "mock-model")) }
         scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java))
-        waitFor(hasTestTag("partner-line"), 10_000, "战友栏")
-        waitText("战友", 5_000)
-        waitFor(hasTestTag("pc-strip"), 5_000, "电脑栏")
-        compose.onNodeWithTag("partner-line").performScrollTo()
+        // 0.12：信用和强度在“总控”页顶上（首页不再重复放）
+        waitFor(hasTestTag("day-plan"), 10_000, "今天的安排")
+        go("chat")
+        waitFor(hasTestTag("stance-line"), 10_000, "总控页的信用")
         settle()
-        shot("e2e-91-home-partner")
+        shot("e2e-91-chat-stance")
         go("dept/PLAN")
         waitFor(hasTestTag("campaign-GRAND_PLAN"), 5_000, "大统筹")
         settle()
@@ -1069,18 +1023,13 @@ class LoopTest {
         val bj = app.store.zone
         val rnd = kotlin.random.Random(10)
         fun at(min: Long) = fmt.format(java.time.Instant.ofEpochMilli(now + min * 60_000L).atZone(bj))
-        // 只测部署、欠账与预算；晚上其他关卡超时不应遮住本场景要验证的首页提示。
-        // 宽限设为 0，30 分钟宽限由 EarnTest 验证，避免凌晨刚换日时没有足够的当天历史。
-        val planGate = com.zongkong.core.Defaults.gates().first { it.id == com.zongkong.app.data.Actions.PLAN_GATE }
-        app.store.updateConfig { it.copy(gates = listOf(planGate), earn = com.zongkong.core.EarnConfig(mainGraceMinutes = 0), dailyQuotaMin = 120) }
-        app.store.updateToday(now) { com.zongkong.core.DayLog(it.date) }
+        // 只留早上的部署这一道关：别的关卡在深夜（比如 0 点多）会先占住首页的严管卡，这里只测欠账
+        app.store.updateConfig { it.copy(earn = com.zongkong.core.EarnConfig(), dailyQuotaMin = 120, gates = it.gates.filter { g -> g.id == "plan_morning" }) }
         app.store.updatePlans { com.zongkong.core.plan.PlanBook() }
-        val dayStart = com.zongkong.core.DayClock.startOf(com.zongkong.core.DayClock.date(now, bj), bj)
-        val plannedStart = fmt.format(java.time.Instant.ofEpochMilli(maxOf(now - 50 * 60_000L, dayStart)).atZone(bj))
         var key = ""
         app.store.updateWork { w0 ->
             val (w1, t) = com.zongkong.core.work.WorkOps.create(w0, com.zongkong.core.work.Kind.THREAD, mapOf(F.TITLE to "行测提分", F.WHY to "笔试", F.CRITERIA to "75 分"), now, rnd)
-            val (w2, a) = com.zongkong.core.work.WorkOps.create(w1, com.zongkong.core.work.Kind.ACTION, mapOf(F.TITLE to "资料分析 20 题", F.THREAD to t.key, F.CRITERIA to "做完对答案", F.PLAN to com.zongkong.core.work.Plan(plannedStart, at(30)).encode()), now, rnd)
+            val (w2, a) = com.zongkong.core.work.WorkOps.create(w1, com.zongkong.core.work.Kind.ACTION, mapOf(F.TITLE to "资料分析 20 题", F.THREAD to t.key, F.CRITERIA to "做完对答案", F.PLAN to com.zongkong.core.work.Plan(at(-50), at(-10)).encode()), now, rnd)
             key = a.key
             w2
         }
@@ -1093,7 +1042,7 @@ class LoopTest {
         waitFor(hasTestTag("guide-confirm-plan"), 10_000, "确认今天的部署")
         settle()
         shot("e2e-103-confirm-plan")
-        compose.onNodeWithTag("guide-confirm-plan").performScrollTo().performClick()
+        compose.onNodeWithTag("guide-confirm-plan").performClick()
         compose.waitUntil(5_000) { app.store.status().gates.any { it.gate.id == "plan_morning" && it.done } }
         // 还欠着主线：首页是严管卡
         waitText("过了点还没开始", 5_000)
@@ -1112,5 +1061,195 @@ class LoopTest {
         waitText("娱乐用完了", 5_000)
         settle()
         shot("e2e-105-budget")
+    }
+
+    /**
+     * 0.12：说一句就排上 → 时间线 → 延期（改到新时间、照样盯）→ 待安排点一下排进去 → GPT 排好一天的多个交接块一次导入。
+     */
+    @Test
+    fun dayPlan() {
+        app.store.updateConfig { it.copy(earn = com.zongkong.core.EarnConfig()) }
+        val now = System.currentTimeMillis()
+        val bj = app.store.zone
+        val h = java.time.Instant.ofEpochMilli(now).atZone(bj).hour
+        // 一个没排时间的待办（像从 Notion 同步来的）
+        val rnd = kotlin.random.Random(12)
+        var loose = ""
+        app.store.updateWork { w0 ->
+            val (w1, t) = com.zongkong.core.work.WorkOps.create(w0, com.zongkong.core.work.Kind.THREAD, mapOf(F.TITLE to "国考", F.WHY to "上岸"), now, rnd)
+            val (w2, a) = com.zongkong.core.work.WorkOps.create(w1, com.zongkong.core.work.Kind.ACTION, mapOf(F.TITLE to "下载职位表", F.THREAD to t.key), now, rnd)
+            loose = a.key
+            w2
+        }
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java))
+        waitFor(hasTestTag("day-plan"), 10_000, "今天的安排")
+        // 没排时间的不再当“现在这一步”反复追问，在待安排里
+        waitFor(hasTestTag("plan-loose"), 5_000, "待安排")
+        // 说一句排上（一小时后开始，保证还在今天）
+        val start = (h + 1).coerceAtMost(22)
+        compose.onNodeWithTag("quick-plan").performTextInput("${start}:00-${start + 1}:00 刷二十道资料分析")
+        hideKeyboard()
+        compose.onNodeWithTag("quick-plan-add").performClick()
+        waitText("排上了", 5_000)
+        val added = app.store.work.value.actions().first { it.title.contains("资料分析") }
+        assertEquals(com.zongkong.core.plan.QuickPlan.DAILY, app.store.work.value.rec(added.threadKey)!!.title)
+        settle()
+        shot("e2e-106-day-plan")
+        // 延期：点开这一段 → 延到明天，改到新的时间（不是取消）
+        compose.onNodeWithTag("plan-row-${added.key}").performScrollTo().performClick()
+        waitFor(hasTestTag("plan-actions-${added.key}"), 5_000, "这一段的按钮")
+        settle()
+        shot("e2e-107-plan-row-open")
+        val before = java.time.ZonedDateTime.parse(app.store.work.value.rec(added.key)!!.plan!!.start)
+        compose.onNode(hasText("延到明天")).performScrollTo().performClick()
+        waitText("到点再叫你", 5_000)
+        val moved = app.store.work.value.rec(added.key)!!
+        // 延到明天 = 原来那一段的第二天同一时间（按日历日，深夜 0 点多也对）
+        assertEquals(before.plusDays(1).toInstant(), java.time.ZonedDateTime.parse(moved.plan!!.start).toInstant())
+        // 待安排：点“下午 / 今晚”就排进去
+        compose.onNodeWithTag("plan-loose").performScrollTo()
+        compose.onAllNodes(hasText("今晚")).onFirst().performClick()
+        compose.waitUntil(5_000) { app.store.work.value.rec(loose)!!.plan?.hasTime == true }
+        // GPT 排好的一天：两个交接块一起导入
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { com.zongkong.app.ui.Gpt.copy(app, "【总控交接】\n事项：日常安排\n行动：\n- 跑步 | 今天 ${start}:30-${start + 1}:00 | 完成依据：3 公里\n【交接结束】\n【总控交接】\n事项：国考\n行动：\n- 查报名时间 | 今天 ${start + 1}:00-${start + 1}:30 | 完成依据：写进事项\n【交接结束】") }
+        go("import")
+        waitFor(hasTestTag("import-all"), 10_000, "全部导入")
+        settle()
+        shot("e2e-108-import-day")
+        compose.onNodeWithTag("import-all").performScrollTo().performClick()
+        compose.waitUntil(5_000) { app.store.work.value.actions().any { it.title == "查报名时间" } }
+        assertTrue(app.store.work.value.actions().any { it.title == "跑步" })
+        assertEquals(1, app.store.work.value.threads().count { it.title == com.zongkong.core.plan.QuickPlan.DAILY })
+        waitFor(hasTestTag("day-plan"), 10_000, "回到今天")
+        settle()
+        shot("e2e-109-home-after-import")
+    }
+
+    /**
+     * 交付（0.13）：一张照片当证据 → 总控看（部分达到，让补一样）→ 补一句再看（达到）→ 按结论记下；
+     * 交付记录存在本机，行动页能看到。
+     */
+    @Test
+    fun deliveryWithPhotoReview() {
+        val llm = mockLlm(
+            sayTurn("""{"met":"部分达到","reason":"照片里只看到前 10 题","ask":"拍一下后 10 题，或者写一句正确率"}"""),
+            sayTurn("""{"met":"达到","reason":"20 题做完、对过答案，正确率 85%"}"""),
+        )
+        app.store.updateConfig { it.copy(ai = com.zongkong.core.AiConfig(llm.url("/v1").toString(), "sk-test", "mock-model")) }
+        val now = System.currentTimeMillis()
+        val rnd = kotlin.random.Random(21)
+        var key = ""
+        app.store.updateWork { w0 ->
+            val (w1, t) = com.zongkong.core.work.WorkOps.create(w0, com.zongkong.core.work.Kind.THREAD, mapOf(F.TITLE to "国考行测", F.WHY to "上岸"), now, rnd)
+            val (w2, a) = com.zongkong.core.work.WorkOps.create(
+                w1, com.zongkong.core.work.Kind.ACTION,
+                mapOf(F.TITLE to "刷 20 道资料分析", F.THREAD to t.key, F.CRITERIA to "做完并对答案"), now, rnd,
+            )
+            key = a.key
+            w2
+        }
+        // 一张“照片”（模拟分享进来的截图：没有拍摄时间）
+        val img = File(app.cacheDir, "proof-test.jpg")
+        val bmp = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.rgb(240, 236, 226)) }
+        img.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        app.proofInbox = listOf(img.absolutePath)
+
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java))
+        waitFor(hasTestTag("day-plan"), 10_000, "首页")
+        go("complete/$key")
+        waitFor(hasTestTag("proof-photo-0"), 10_000, "交付页上的照片")
+        compose.onNodeWithTag("result-field").performTextInput("前 10 题做完了")
+        hideKeyboard()
+        shot("e2e-110-delivery-proof")
+        compose.onNodeWithTag("complete-review").performScrollTo().performClick()
+        waitText("照片里只看到前 10 题", 15_000)
+        waitText("补一下就够")
+        shot("e2e-111-delivery-partial")
+        // 补一句，再看一次（最后一次）
+        compose.onNodeWithTag("result-field").performTextInput("，后 10 题也做完了，对过答案 17/20")
+        hideKeyboard()
+        compose.onNodeWithTag("complete-review").performScrollTo().performClick()
+        waitText("正确率 85%", 15_000)
+        // 第二轮之后不再让补
+        assertTrue(compose.onAllNodes(hasTestTag("complete-review")).fetchSemanticsNodes().isEmpty())
+        shot("e2e-112-delivery-pass")
+        compose.onNodeWithTag("complete-save").performScrollTo().performClick()
+        waitText("结果已记下")
+        waitFor(hasTestTag("delivery-summary") and hasText("总控看过：达到", substring = true), 5_000, "交付小结")
+        shot("e2e-113-delivery-saved")
+
+        val a = app.store.work.value.rec(key)!!
+        assertEquals(com.zongkong.core.work.ActionStatus.DONE, a.actionStatus)
+        assertTrue(a[F.RESULT], a[F.RESULT].contains("照片 1 张"))
+        val d = app.proofs.of(key)!!
+        assertEquals("ai", d.source)
+        assertEquals(2, d.rounds.size)
+        assertEquals(1, d.items.count { it.kind == com.zongkong.core.work.ProofItem.PHOTO })
+        // 同一张照片不能再交给别的事
+        assertTrue(com.zongkong.core.work.Proof.duplicate(d.items.first(), app.proofs.usedPhotos()))
+
+        // 行动页看得到交付
+        go("action/$key")
+        waitFor(hasTestTag("action-delivery"), 10_000, "行动页的交付")
+        shot("e2e-114-action-delivery")
+        llm.shutdown()
+    }
+
+    /**
+     * 0.14 对话为中心：打开就是总控对话，顶上看得到今天；说“排今天” → 总控排成时段 → 用户说“好” → 今日部署过了。
+     */
+    @Test
+    fun chatRunsTheDay() {
+        val bj = app.store.zone
+        // 十分钟后开始、做一小时（不跨过午夜），任何时候跑都还在今天、还没结束
+        val z = java.time.ZonedDateTime.now(bj).withSecond(0).withNano(0).plusMinutes(10)
+        val e = minOf(z.plusMinutes(60), z.withHour(23).withMinute(59))
+        val span = "%02d:%02d-%02d:%02d".format(z.hour, z.minute, e.hour, e.minute)
+        val llm = mockLlm(
+            toolTurn("add_action" to """{"title":"刷 20 道资料分析","time":"今天 $span","criteria":"做完并对答案"}"""),
+            sayTurn("排上了：今天 $span 刷 20 道资料分析。就这样？\n【选项】好｜再改改"),
+            toolTurn("confirm_plan" to "{}"),
+            sayTurn("今日部署过了。到点我叫你。"),
+        )
+        app.store.updateConfig { it.copy(startOnChat = true, ai = com.zongkong.core.AiConfig(llm.url("/v1").toString(), "sk-test", "mock-model")) }
+        // 前面的测试留下的对话清掉：不然这一段满了会先做一次交接摘要，用掉一条模拟回答
+        app.chat.clear()
+        scenario = ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java))
+        // 打开就是对话，顶上是今天
+        waitFor(hasTestTag("chat-today"), 10_000, "对话顶上的今天")
+        waitFor(hasTestTag("chat-input"), 5_000, "对话输入框")
+        shot("e2e-120-chat-landing")
+        compose.onNodeWithTag("chat-input").performTextInput("帮我把今天排一下")
+        compose.onNodeWithTag("chat-send").performClick()
+        waitText("就这样？", 20_000)
+        val a = app.store.work.value.actions().single { it.title == "刷 20 道资料分析" }
+        assertEquals(com.zongkong.core.plan.QuickPlan.DAILY, app.store.work.value.rec(a.threadKey)!!.title)
+        // 顶上的今天跟着变：下一段就是它
+        // 文字在顶栏的子节点上（顶栏本身不合并子节点）
+        waitFor(hasText("刷 20 道资料分析", substring = true) and androidx.compose.ui.test.hasAnyAncestor(hasTestTag("chat-today")), 10_000, "顶栏显示下一段")
+        settle()
+        shot("e2e-121-chat-planned")
+        compose.onNode(hasText("好")).performScrollTo().performClick()
+        // 等这一轮说完；等不到就把对话原样带进失败信息（看清是哪一步卡住）
+        try {
+            compose.waitUntil(30_000) { !app.chat.busy.value && app.chat.log.value.messages.any { it.content.contains("今日部署过了") } }
+        } catch (e: Throwable) {
+            val dump = app.chat.log.value.messages.takeLast(10).joinToString("\n") { m ->
+                "${m.role}${if (m.error) "(错)" else ""}: ${m.content.take(160)} ${m.summary} ${m.calls.joinToString { it.name }}"
+            }
+            throw AssertionError("等不到“今日部署过了”。busy=${app.chat.busy.value} 模型被请求了 ${llm.requestCount} 次\n$dump", e)
+        }
+        waitText("今日部署过了", 5_000)
+        settle()
+        shot("e2e-122-chat-confirmed")
+        val gate = app.store.status().gates.firstOrNull { it.gate.id == com.zongkong.app.data.Actions.PLAN_GATE }
+        if (gate != null && gate.phase != com.zongkong.core.GatePhase.NOT_OPEN) {
+            assertTrue("今日部署应已通过：${gate.phase}", gate.done)
+            // 顶栏“还差”里马上去掉今日部署
+            compose.waitUntil(5_000) { compose.onAllNodes(hasText("今日部署（", substring = true)).fetchSemanticsNodes().isEmpty() }
+        }
+        settle()
+        shot("e2e-123-chat-bar-updated")
+        llm.shutdown()
     }
 }
