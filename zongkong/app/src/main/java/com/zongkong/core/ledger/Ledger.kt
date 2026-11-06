@@ -97,7 +97,7 @@ object Ledger {
      * 只收“支出”；退款、关闭的跳过。
      */
     fun parseBill(text: String, zone: ZoneId): Import {
-        val lines = text.replace("﻿", "").lines()
+        val lines = text.replace("\uFEFF", "").lines()
         val hi = lines.indexOfFirst { it.contains("交易时间") && it.contains("收/支") }
         if (hi < 0) return Import(emptyList(), 0, "", "没找到账单的表头（要有“交易时间”“收/支”两列）。微信导出的是 xlsx 的话，先用 WPS / Excel 另存为 CSV。")
         val head = csvLine(lines[hi]).map { it.trim() }

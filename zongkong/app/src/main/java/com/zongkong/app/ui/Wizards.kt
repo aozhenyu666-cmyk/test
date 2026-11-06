@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.zongkong.app.data.Actions
 import com.zongkong.app.zk
@@ -146,7 +147,7 @@ fun PlanWizard(nav: NavHostController) {
     val app = context.zk
     val sig = LocalSignals.current
     val scope = rememberCoroutineScope()
-    val work = app.store.work.value
+    val work by app.store.work.collectAsStateWithLifecycle()
     val zone = app.store.zone
     val kb = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     var step by remember { mutableIntStateOf(0) }
@@ -302,7 +303,7 @@ private fun ChoicePill(label: String, selected: Boolean, color: Color, onClick: 
 fun StuckPick(nav: NavHostController) {
     val app = LocalContext.current.zk
     val sig = LocalSignals.current
-    val work = app.store.work.value
+    val work by app.store.work.collectAsStateWithLifecycle()
     val cur = remember { com.zongkong.core.work.Focus.current(work, System.currentTimeMillis(), app.store.zone, app.store.mainKey()) }
     val open = remember { work.actions().filter { it.actionStatus.open }.sortedByDescending { it.updatedAt }.take(6) }
     Column(Modifier.fillMaxSize()) {

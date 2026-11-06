@@ -153,9 +153,16 @@ object SentinelClient {
     /** 自己的证书摘要（register 时自报；哨兵那边还会自己校验一遍）。 */
     fun certSha256(c: Context): String = try {
         val pm = c.packageManager
-        val info = pm.getPackageInfo(c.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
-        val sig = info.signingInfo?.apkContentsSigners?.firstOrNull()
-            ?: info.signingInfo?.signingCertificateHistory?.firstOrNull()
+        // signingInfo 要到 API 28 才有；26/27 读下面的 signatures，否则这事会静默返回空、等于不校验
+        val sig = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            val info = pm.getPackageInfo(c.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+            info.signingInfo?.apkContentsSigners?.firstOrNull()
+                ?: info.signingInfo?.signingCertificateHistory?.firstOrNull()
+        } else {
+            @Suppress("DEPRECATION")
+            val legacy = pm.getPackageInfo(c.packageName, 0).signatures
+            legacy?.firstOrNull()
+        }
         sig?.let { MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).joinToString("") { b -> "%02X".format(b) } }.orEmpty()
     } catch (_: Throwable) {
         ""

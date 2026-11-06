@@ -202,6 +202,7 @@ private fun VoiceSettings(v: VoiceConfig, boss: BossConfig) {
     val app = context.zk
     val sig = LocalSignals.current
     val scope = rememberCoroutineScope()
+    val config by app.store.config.collectAsStateWithLifecycle()
     var url by remember { mutableStateOf(v.baseUrl) }
     var key by remember { mutableStateOf(v.apiKey) }
     var tts by remember { mutableStateOf(v.ttsModel) }
@@ -234,7 +235,7 @@ private fun VoiceSettings(v: VoiceConfig, boss: BossConfig) {
             VOICE_PRESETS.forEach { p ->
                 QuickChip(p.name, sig.ai) { url = p.url; tts = p.tts; voice = p.voice; stt = p.stt; result = p.note }
             }
-            val ai = app.store.config.value.ai
+            val ai = config.ai
             if (ai.baseUrl.isNotBlank()) QuickChip("和 AI 接口同一家", sig.ai) {
                 url = ai.baseUrl; key = ai.apiKey
                 VOICE_PRESETS.firstOrNull { ai.baseUrl.contains(it.url.substringAfter("://").substringBefore('/')) }?.let { tts = it.tts; voice = it.voice; stt = it.stt }

@@ -481,42 +481,44 @@ class GuardService : AccessibilityService() {
 
     /** 截一张屏（Android 11 起，无障碍服务可以截图）。只存在手机上；电话、总控自己不截。 */
     private fun snap(pkg: String, now: Long, force: Boolean = false, banked: Boolean = false) {
-        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return
         if (!store.config.value.boss.shots) return
         if (pkg in com.zongkong.core.hq.ALWAYS_ALLOWED || pkg == packageName) return
         if (!force && now - lastShot < 3 * 60_000) return
         if (now - lastShot < 2_000) return
         lastShot = now
-        try {
-            takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor, object : AccessibilityService.TakeScreenshotCallback {
-                override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
-                    val hb = result.hardwareBuffer
-                    val bmp = try {
-                        android.graphics.Bitmap.wrapHardwareBuffer(hb, result.colorSpace)?.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
-                    } catch (e: Exception) {
-                        null
-                    } finally {
-                        hb.close()
-                    }
-                    bmp ?: return
-                    if (banked) shotDebt = (shotDebt - 1.0).coerceAtLeast(0.0)
-                    scope.launch(Dispatchers.IO) {
-                        try {
-                            val w = 720
-                            val small = if (bmp.width > w) android.graphics.Bitmap.createScaledBitmap(bmp, w, bmp.height * w / bmp.width, true) else bmp
-                            java.io.File(store.shotsDir, "${now}_$pkg.jpg").outputStream().use { small.compress(android.graphics.Bitmap.CompressFormat.JPEG, 60, it) }
+        // 正向闸门：负向提前返回挡不住 lint 对回调里 API 30 类型的检查
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            try {
+                takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor, object : AccessibilityService.TakeScreenshotCallback {
+                    override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
+                        val hb = result.hardwareBuffer
+                        val bmp = try {
+                            android.graphics.Bitmap.wrapHardwareBuffer(hb, result.colorSpace)?.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
                         } catch (e: Exception) {
-                            Log.w(TAG, "存截图失败", e)
+                            null
+                        } finally {
+                            hb.close()
+                        }
+                        bmp ?: return
+                        if (banked) shotDebt = (shotDebt - 1.0).coerceAtLeast(0.0)
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                val w = 720
+                                val small = if (bmp.width > w) android.graphics.Bitmap.createScaledBitmap(bmp, w, bmp.height * w / bmp.width, true) else bmp
+                                java.io.File(store.shotsDir, "${now}_$pkg.jpg").outputStream().use { small.compress(android.graphics.Bitmap.CompressFormat.JPEG, 60, it) }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "存截图失败", e)
+                            }
                         }
                     }
-                }
 
-                override fun onFailure(errorCode: Int) {
-                    Log.w(TAG, "截图失败：$errorCode")
-                }
-            })
-        } catch (e: Exception) {
-            Log.w(TAG, "截图失败", e)
+                    override fun onFailure(errorCode: Int) {
+                        Log.w(TAG, "截图失败：$errorCode")
+                    }
+                })
+            } catch (e: Exception) {
+                Log.w(TAG, "截图失败", e)
+            }
         }
     }
 

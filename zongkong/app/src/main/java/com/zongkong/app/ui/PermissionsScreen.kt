@@ -37,6 +37,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import kotlinx.coroutines.launch
 import com.zongkong.app.guard.BlockActivity
@@ -188,6 +189,7 @@ private data class Perm(
 fun PermissionsScreen(nav: NavHostController) {
     val context = LocalContext.current
     val sig = LocalSignals.current
+    val config by context.zk.store.config.collectAsStateWithLifecycle()
     var key by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { key++ }
     var asked by remember { mutableStateOf(false) }
@@ -329,7 +331,7 @@ fun PermissionsScreen(nav: NavHostController) {
             SectionLabel("vivo / iQOO 还要手动开（系统查不到）")
             vivo.forEach { PermCard(it) { p -> safeStart(context, p.intent()) } }
             SectionLabel("可选")
-            val boss = context.zk.store.config.value.boss
+            val boss = config.boss
             Panel(onClick = { nav.navigate("dossier") }) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("截图抽查", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))

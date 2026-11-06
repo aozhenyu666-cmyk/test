@@ -711,6 +711,7 @@ private fun ActPart(work: Work, now: Long, status: com.zongkong.core.Status, nav
 
     // ---------- 总控对一手的要求 ----------
     val config by app.store.config.collectAsStateWithLifecycle()
+    val today by app.store.today.collectAsStateWithLifecycle()
     val book by app.store.plans.collectAsStateWithLifecycle()
     val inf = remember(status, config, work, book) { Link.influence(status, config, work, book, app.store.zone) }
     var outcome by remember { mutableStateOf<String?>(null) }
@@ -778,7 +779,7 @@ private fun ActPart(work: Work, now: Long, status: com.zongkong.core.Status, nav
                 Box(Modifier.fillMaxWidth(p).height(8.dp).background(if (p >= 1f) sig.strict else if (p > 0.7f) sig.warn else sig.free, RoundedCornerShape(50)))
             }
         }
-        Hint("被弹回 ${app.store.today.value.bounces} 次 · 拦截名单 ${app.store.config.value.blocked.size} 个应用（点开管理、紧急放行）")
+        Hint("被弹回 ${today.bounces} 次 · 拦截名单 ${config.blocked.size} 个应用（点开管理、紧急放行）")
     }
     Spacer(Modifier.height(2.dp))
 }

@@ -117,7 +117,7 @@ object VeinMd {
 
     /** 拆出 YAML 头和正文。没有头返回 null。 */
     fun frontmatter(text: String): Pair<Map<String, Any?>, String>? {
-        val m = Regex("""^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$""").find(text.removePrefix("﻿")) ?: return null
+        val m = Regex("""^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$""").find(text.removePrefix("\uFEFF")) ?: return null
         return yaml(m.groupValues[1]) to m.groupValues[2]
     }
 

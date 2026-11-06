@@ -353,8 +353,8 @@ fun PlanModeWizard(nav: NavHostController) {
     val sig = LocalSignals.current
     val zone = app.store.zone
     val now0 = remember { System.currentTimeMillis() }
-    val work = app.store.work.value
-    val book = app.store.plans.value
+    val work by app.store.work.collectAsStateWithLifecycle()
+    val book by app.store.plans.collectAsStateWithLifecycle()
     // 周日定的是下周；其他日子定本周
     val sunday = DayClock.weekday(now0, zone) == 7
     val ws = remember { Plans.weekStart(now0, zone).let { if (sunday) it.plusWeeks(1) else it }.toString() }

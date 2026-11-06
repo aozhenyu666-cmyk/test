@@ -418,38 +418,38 @@ private fun TriageStep(s: HqSession, onDone: (Boolean) -> Unit, onNote: (String)
         Text(if (pool.isEmpty()) "收集箱清空了。" else "还剩 ${pool.size} 条 · 已处理 ${handled.size}", color = Night.glow, style = MaterialTheme.typography.titleSmall)
         val n = pool.firstOrNull()
         if (n != null) {
-            AnimatedContent(targetState = n.key, transitionSpec = { (fadeIn() + slideInVertically { it / 4 }) togetherWith fadeOut() }, label = "card") { _ ->
+            AnimatedContent(targetState = n, transitionSpec = { (fadeIn() + slideInVertically { it / 4 }) togetherWith fadeOut() }, label = "card") { note ->
                 Paper(Modifier.testTag("triage-card")) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Tag(n.noteType.label, LocalSignals.current.info)
-                        Text(clock(n.createdAt), style = MaterialTheme.typography.labelSmall, color = LocalSignals.current.muted)
+                        Tag(note.noteType.label, LocalSignals.current.info)
+                        Text(clock(note.createdAt), style = MaterialTheme.typography.labelSmall, color = LocalSignals.current.muted)
                     }
-                    Text(n.title, style = MaterialTheme.typography.titleMedium)
-                    if (n[F.RAW].isNotBlank() && n[F.RAW] != n.title) Text(n[F.RAW], style = MaterialTheme.typography.bodySmall, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                    Text(note.title, style = MaterialTheme.typography.titleMedium)
+                    if (note[F.RAW].isNotBlank() && note[F.RAW] != note.title) Text(note[F.RAW], style = MaterialTheme.typography.bodySmall, maxLines = 4, overflow = TextOverflow.Ellipsis)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         QuickChip(if (asAction) "变成行动 ✓" else "变成行动", LocalSignals.current.plan) { asAction = !asAction }
                         QuickChip("转成问题 → 谋", LocalSignals.current.think) {
-                            app.actions.work.update(n.key, mapOf(F.TYPE to NoteType.QUESTION.label))
-                            done(n)
+                            app.actions.work.update(note.key, mapOf(F.TYPE to NoteType.QUESTION.label))
+                            done(note)
                         }
                     }
                     Text(if (asAction) "变成哪件事下的一步：" else "挂到哪件事：", style = MaterialTheme.typography.labelLarge, color = LocalSignals.current.muted)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         threads.forEachIndexed { i, t ->
                             QuickChip(t.title.take(12), LocalSignals.current.info, ) {
-                                app.actions.work.update(n.key, mapOf(F.THREAD to t.key))
-                                if (asAction) app.actions.work.addAction(t.key, n.title.take(40), "", "")
-                                done(n)
+                                app.actions.work.update(note.key, mapOf(F.THREAD to t.key))
+                                if (asAction) app.actions.work.addAction(t.key, note.title.take(40), "", "")
+                                done(note)
                             }
                         }
                         QuickChip("新的一件事", LocalSignals.current.info) {
-                            val k = app.actions.work.createThread(n.title.take(30))
-                            app.actions.work.update(n.key, mapOf(F.THREAD to k))
-                            if (asAction) app.actions.work.addAction(k, n.title.take(40), "", "")
-                            done(n)
+                            val k = app.actions.work.createThread(note.title.take(30))
+                            app.actions.work.update(note.key, mapOf(F.THREAD to k))
+                            if (asAction) app.actions.work.addAction(k, note.title.take(40), "", "")
+                            done(note)
                         }
                     }
-                    TextButton(onClick = { skipped += n.key }, modifier = Modifier.testTag("triage-skip")) { Text("先放着") }
+                    TextButton(onClick = { skipped += note.key }, modifier = Modifier.testTag("triage-skip")) { Text("先放着") }
                 }
             }
         }
@@ -545,7 +545,8 @@ private fun ThinkStep(s: HqSession, onDone: (Boolean) -> Unit, onNote: (String) 
 @Composable
 private fun OfflineThink(threadKey: String, methodName: String, how: String) {
     val app = LocalContext.current.zk
-    val th = app.store.work.value.rec(threadKey)
+    val work by app.store.work.collectAsStateWithLifecycle()
+    val th = work.rec(threadKey)
     var first by remember { mutableStateOf("") }
     var against by remember { mutableStateOf("") }
     var fixed by remember { mutableStateOf("") }

@@ -531,6 +531,7 @@ fun VeinNodeScreen(id: String, nav: NavHostController) {
 private fun NodeEditor(n: VNode?, system: String, onDismiss: () -> Unit, onSaved: (String) -> Unit) {
     val app = LocalContext.current.zk
     val sig = LocalSignals.current
+    val vein by app.store.vein.collectAsStateWithLifecycle()
     val today = remember { app.store.dateToday().toString() }
     var title by remember { mutableStateOf(n?.title ?: "") }
     var claim by remember { mutableStateOf(n?.claim ?: "") }
@@ -542,7 +543,7 @@ private fun NodeEditor(n: VNode?, system: String, onDismiss: () -> Unit, onSaved
     var verify by remember { mutableStateOf(n?.verify ?: "") }
     var parent by remember { mutableStateOf(n?.parent ?: "") }
     var sys by remember { mutableStateOf(n?.system ?: system) }
-    val levels = app.store.vein.value.system(sys)?.levels.orEmpty()
+    val levels = vein.system(sys)?.levels.orEmpty()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (n == null) "新建节点" else "编辑节点") },

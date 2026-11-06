@@ -86,6 +86,8 @@ fun ImportScreen(nav: NavHostController) {
     val sig = LocalSignals.current
     val scope = rememberCoroutineScope()
     val shared by app.shared.collectAsStateWithLifecycle()
+    val work by app.store.work.collectAsStateWithLifecycle()
+    val config by app.store.config.collectAsStateWithLifecycle()
     var text by remember { mutableStateOf("") }
     var msg by remember { mutableStateOf<String?>(null) }
 
@@ -98,7 +100,7 @@ fun ImportScreen(nav: NavHostController) {
             Gpt.readClipboard(context).takeIf { Handoff.contains(it) }?.let { text = it }
         }
     }
-    val plan = remember(text, app.store.work.value) { if (text.isBlank()) null else app.actions.work.planImport(text) }
+    val plan = remember(text, work) { if (text.isBlank()) null else app.actions.work.planImport(text) }
     val segments = remember(text) { Handoff.splitBlocks(text) }
     val block = remember(text) { Handoff.parse(text) }
 
@@ -155,7 +157,7 @@ fun ImportScreen(nav: NavHostController) {
                         Gpt.copy(context, "")
                         nav.navigate("thread/$key") { popUpTo("home") }
                     }, modifier = Modifier.fillMaxWidth().testTag("import-confirm")) { Text("确认导入") }
-                    Hint(if (app.store.config.value.notion.workReady) "导入后会同步到 Notion，GPT 下次读这件事能看到。" else "Notion 还没连接：先存在手机上，连上后自动补同步。")
+                    Hint(if (config.notion.workReady) "导入后会同步到 Notion，GPT 下次读这件事能看到。" else "Notion 还没连接：先存在手机上，连上后自动补同步。")
                 }
             }
             msg?.let { Hint(it) }

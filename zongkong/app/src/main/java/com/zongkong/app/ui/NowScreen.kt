@@ -456,11 +456,12 @@ private fun Guidance(status: Status, date: String, now: Long, nav: NavHostContro
     val sig = LocalSignals.current
     val app = LocalContext.current.zk
     val scope = rememberCoroutineScope()
+    val work by app.store.work.collectAsStateWithLifecycle()
     val hour = Instant.ofEpochMilli(now).atZone(com.zongkong.core.DayClock.BEIJING).hour
     val reason = status.reasons.firstOrNull()
     val planOpen = status.gates.firstOrNull { it.gate.id == com.zongkong.app.data.Actions.PLAN_GATE && !it.done && it.phase != GatePhase.NOT_OPEN }
     // 今天已经排了（你自己排的，或者总控早上替你排的）：看一眼、点一下确认就算部署
-    val planned = remember(status, app.store.work.value) { Focus.evidence(app.store.work.value, Focus.Evidence.PLANNED_TODAY, now, com.zongkong.core.DayClock.BEIJING) }
+    val planned = remember(status, work) { Focus.evidence(work, Focus.Evidence.PLANNED_TODAY, now, com.zongkong.core.DayClock.BEIJING) }
     when {
         planOpen != null && planned.first > 0 -> {
             Panel(accent = sig.plan, onClick = { scope.launch { app.actions.autoVerify(confirmPlan = true) } }, modifier = Modifier.enter(1).testTag("guide-confirm-plan")) {

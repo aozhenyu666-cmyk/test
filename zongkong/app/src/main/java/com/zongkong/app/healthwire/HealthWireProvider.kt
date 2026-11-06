@@ -161,9 +161,16 @@ class HealthWireProvider : ContentProvider() {
         }
 
         fun sha256(pm: PackageManager, pkg: String): String? = try {
-            val info = pm.getPackageInfo(pkg, PackageManager.GET_SIGNING_CERTIFICATES)
-            val sig = info.signingInfo?.apkContentsSigners?.firstOrNull()
-                ?: info.signingInfo?.signingCertificateHistory?.firstOrNull()
+            // signingInfo 要到 API 28 才有；26/27 读下面的 signatures，否则鉴权会静默失败
+            val sig = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                val info = pm.getPackageInfo(pkg, PackageManager.GET_SIGNING_CERTIFICATES)
+                info.signingInfo?.apkContentsSigners?.firstOrNull()
+                    ?: info.signingInfo?.signingCertificateHistory?.firstOrNull()
+            } else {
+                @Suppress("DEPRECATION")
+                val legacy = pm.getPackageInfo(pkg, 0).signatures
+                legacy?.firstOrNull()
+            }
             sig?.let { MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).joinToString("") { b -> "%02X".format(b) } }
         } catch (t: Throwable) {
             null
