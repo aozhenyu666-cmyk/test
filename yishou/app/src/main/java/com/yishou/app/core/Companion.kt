@@ -25,6 +25,19 @@ data class CompanionConfig(
     val closeSeconds: Int = 150,
     /** 当天连续几次没答就停手。 */
     val stopAfterMisses: Int = 3,
+    /** 主动交流只在白天。 */
+    val activeStartHour: Int = 8,
+    val activeEndHour: Int = 23,
+    /** 每天最多几次。 */
+    val maxPerDay: Int = 24,
+    /** 用户说“休息”后安静多久。 */
+    val restMinutes: Int = 30,
+    /** 用户说“定个时间”后安静多久。 */
+    val deferMinutes: Int = 30,
+    /** 同一话题至少隔多久再跟进。 */
+    val topicCooldownMinutes: Int = 180,
+    /** 有机会时真正开口的百分比。 */
+    val opportunityPercent: Int = 70,
 ) {
     /** UI 上可能把时间调反，读出来先夹一遍。 */
     fun sane(): CompanionConfig {
@@ -36,6 +49,13 @@ data class CompanionConfig(
             nudgeSeconds = nudge,
             closeSeconds = closeSeconds.coerceIn(nudge + 10, 600),
             stopAfterMisses = stopAfterMisses.coerceIn(1, 10),
+            activeStartHour = activeStartHour.coerceIn(0, 23),
+            activeEndHour = activeEndHour.coerceIn(1, 24),
+            maxPerDay = maxPerDay.coerceIn(1, 48),
+            restMinutes = restMinutes.coerceIn(5, 240),
+            deferMinutes = deferMinutes.coerceIn(5, 240),
+            topicCooldownMinutes = topicCooldownMinutes.coerceIn(30, 1440),
+            opportunityPercent = opportunityPercent.coerceIn(1, 100),
         )
     }
 }

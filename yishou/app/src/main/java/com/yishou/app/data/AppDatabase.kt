@@ -29,6 +29,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun strands(): StrandDao
     abstract fun scrollQuizzes(): ScrollQuizDao
 
+    /** 关系记忆：扩展在同一个数据库文件里，不另起一套。 */
+    fun relation(): RelationStore = RelationStore(openHelper.writableDatabase)
+
     companion object {
         val MIGRATION_15_16 = object : Migration(15, 16) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -255,6 +258,15 @@ abstract class AppDatabase : RoomDatabase() {
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "yishou.db")
                 .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
+                .addCallback(object : RoomDatabase.Callback() {
+                    override fun onCreate(db: SupportSQLiteDatabase) {
+                        createRelationTables(db)
+                    }
+
+                    override fun onOpen(db: SupportSQLiteDatabase) {
+                        createRelationTables(db)
+                    }
+                })
                 .build()
     }
 }

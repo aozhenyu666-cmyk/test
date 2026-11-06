@@ -20,6 +20,22 @@ import com.yishou.app.core.JudgementCheck
 import com.yishou.app.core.JudgementRules
 import com.yishou.app.core.QuestionLedger
 import com.yishou.app.core.SilenceStep
+import com.yishou.app.core.proactive.AnswerAction
+import com.yishou.app.core.proactive.AskKind
+import com.yishou.app.core.proactive.MemoryType
+import com.yishou.app.core.proactive.ProactiveAnswer
+import com.yishou.app.core.proactive.ProactiveContext
+import com.yishou.app.core.proactive.ProactiveDecision
+import com.yishou.app.core.proactive.ProactiveEngine
+import com.yishou.app.core.proactive.ProactiveMode
+import com.yishou.app.core.proactive.ProactivePolicy
+import com.yishou.app.core.proactive.RelationMemory
+import com.yishou.app.core.proactive.RelationRules
+import com.yishou.app.core.proactive.Topic
+import com.yishou.app.core.proactive.TopicBrief
+import com.yishou.app.core.proactive.TopicState
+import com.yishou.app.core.proactive.toProactive
+import kotlin.random.Random
 import com.yishou.app.data.EchoKind
 import com.yishou.app.floating.CoachFloat
 import com.yishou.app.floating.FloatAction
@@ -95,20 +111,6 @@ object CompanionRunner {
 
         if (asking) return
         if (pkg == null || pkg == service.packageName) return
-        if (!app.settings.app.value.watched.containsKey(pkg)) return
-
-        val state = CompanionState(
-            fgSeconds = ((now - fgSince) / 1000).toInt(),
-            sinceLastPromptSeconds = maxOf(prefs.lastPromptAt(), prefs.lastAttemptAt()).let {
-                if (it == 0L) Int.MAX_VALUE else ((now - it) / 1000).toInt()
-            },
-            promptsInHalfHour = prefs.promptsInHalfHour(now),
-            misses = prefs.misses(),
-            speaking = false,
-            ownUiOpen = GateActivity.isShowing,
-            hasPending = false,
-        )
-        if (Companion.decide(cfg, state) != CompanionAction.ASK) return
 
         asking = true
         val label = runCatching {
@@ -116,23 +118,82 @@ object CompanionRunner {
                 service.packageManager.getApplicationInfo(pkg, 0),
             ).toString()
         }.getOrDefault(pkg)
+        val since = fgSince
 
         scope.launch {
-            val question = runCatching { buildQuestion(app, service, label, state.fgSeconds / 60, hasAi) }
-                .onFailure { Log.w(TAG, "出题失败", it) }
-                .getOrNull()
-            asking = false
-            prefs.markAttempt(System.currentTimeMillis())
-            if (question.isNullOrBlank()) return@launch
-            attempt = 0
-            nudged = false
-            val at = System.currentTimeMillis()
-            prefs.setLocalMode(!hasAi)
-            prefs.addPrompt(at)
-            prefs.setPending(question, at)
-            prefs.addQuestion(question)
-            showQuestion(service, question, null)
+            try {
+                val at = System.currentTimeMillis()
+                val state = prefs.loadState(at)
+                val ctx = buildProactiveContext(app, pkg, since, at, prefs)
+                val decision = ProactiveEngine.decide(cfg.toProactive(), state, ctx, Random.nextInt(100))
+                if (decision !is ProactiveDecision.Ask) {
+                    asking = false
+                    return@launch
+                }
+                val kind = decision.kind
+                val topicTitle = decision.topicId?.let { id ->
+                    ctx.openTopics.firstOrNull { it.id == id }?.title
+                }
+                val question = runCatching {
+                    buildQuestion(app, service, label, ctx.foregroundMinutes, hasAi, kind, topicTitle)
+                }.onFailure { Log.w(TAG, "出题失败", it) }.getOrNull()
+                asking = false
+                prefs.markAttempt(System.currentTimeMillis())
+                if (question.isNullOrBlank()) return@launch
+                attempt = 0
+                nudged = false
+                val nowAt = System.currentTimeMillis()
+                val latest = prefs.loadState(nowAt)
+                prefs.saveState(
+                    latest.copy(
+                        mode = ProactiveMode.ASKING,
+                        lastAskAt = nowAt,
+                        promptsThisHour = latest.promptsThisHour + 1,
+                        promptsToday = latest.promptsToday + 1,
+                        lastTopicId = decision.topicId ?: latest.lastTopicId,
+                    ),
+                )
+                prefs.setPendingKind(kind.name)
+                prefs.setPendingTopicId(decision.topicId ?: 0L)
+                prefs.setLocalMode(!hasAi || kind == AskKind.TOPIC_FOLLOW_UP)
+                prefs.addPrompt(nowAt)
+                prefs.setPending(question, nowAt)
+                prefs.addQuestion(question)
+                showQuestion(service, question, null)
+            } catch (e: Throwable) {
+                asking = false
+                Log.w(TAG, "主动调度失败", e)
+            }
         }
+    }
+
+    /** 一手唯一的上下文入口：任务、卡点、未解决话题、上次回答。 */
+    private suspend fun buildProactiveContext(
+        app: YishouApp,
+        pkg: String,
+        since: Long,
+        now: Long,
+        prefs: CompanionPrefs,
+    ): ProactiveContext {
+        val dao = app.database.dao()
+        val task = dao.getCurrentTask()
+        val bp = task?.let { dao.getBreakpoint(it.id) }
+        val topics = runCatching { app.database.relation().openTopics(6) }.getOrDefault(emptyList())
+        return ProactiveContext(
+            now = now,
+            hour = java.time.LocalDateTime.now(com.yishou.app.settings.AppZone.zone).hour,
+            foregroundPkg = pkg,
+            watched = app.settings.app.value.watched.containsKey(pkg),
+            foregroundMinutes = ((now - since) / 60_000L).toInt(),
+            taskTitle = task?.title,
+            stuck = bp?.stuck,
+            openTopics = topics.map {
+                TopicBrief(it.id, it.title, it.state.name, it.lastMentionedAt, it.followUpAt)
+            },
+            lastAnswer = prefs.lastAnswerText(),
+            ownUiOpen = GateActivity.isShowing,
+            hasPending = false,
+        )
     }
 
     /** 回答。返回判定结果，UI 据此决定是否留在页面上重答。 */
@@ -144,13 +205,24 @@ object CompanionRunner {
             return JudgementCheck(pass = true, hint = "")
         }
         val app = context.applicationContext as? YishouApp
+        val kind = runCatching { AskKind.valueOf(prefs.pendingKind()) }.getOrNull()
+        val local = prefs.localMode() || kind == AskKind.TOPIC_FOLLOW_UP
         replyOpen = false
-        val local = prefs.localMode()
-        val check = if (local) CompanionLocal.checkAnswer(text, attempt) else JudgementRules.check(text, attempt)
+        val check = when {
+            kind == AskKind.TOPIC_FOLLOW_UP -> ProactiveAnswer.checkTopic(text, attempt)
+            local -> CompanionLocal.checkAnswer(text, attempt)
+            else -> JudgementRules.check(text, attempt)
+        }
+        val now = System.currentTimeMillis()
+        val cfg = prefs.load()
         if (check.pass) {
+            val topicId = prefs.pendingTopicId()
+            val result = ProactivePolicy.onAnswer(cfg.toProactive(), prefs.loadState(now), text, now)
+            prefs.saveState(result.state)
+            prefs.setLastAnswerText(text)
             prefs.clearPending()
             prefs.setLocalMode(false)
-            prefs.markAnswered(System.currentTimeMillis())
+            prefs.markAnswered(now)
             CoachFloat.remove("companion")
             attempt = 0
             nudged = false
@@ -162,13 +234,52 @@ object CompanionRunner {
                 text
             }
             app?.echoLater(memory, EchoKind.CONCLUSION, SCENE)
+            if (app != null) {
+                app.appScopeLaunch {
+                    val store = app.database.relation()
+                    if (topicId > 0) {
+                        val topic = store.openTopics(20).firstOrNull { it.id == topicId }
+                        if (topic != null) {
+                            val resolved = result.action == AnswerAction.DONE || RelationRules.isResolved(text)
+                            store.updateTopic(RelationRules.updateTopicAfterAnswer(topic, text, now, resolved))
+                        }
+                    } else if (result.action == AnswerAction.DEFER || result.action == AnswerAction.BACK) {
+                        store.addTopic(
+                            Topic(
+                                title = "约定：${text.take(30)}",
+                                state = TopicState.OPEN,
+                                createdAt = now,
+                                lastMentionedAt = now,
+                                followUpAt = if (result.action == AnswerAction.DEFER) {
+                                    result.state.deferUntil
+                                } else {
+                                    now + 30 * 60_000L
+                                },
+                                summary = text.take(80),
+                            ),
+                        )
+                    }
+                    RelationRules.extract(text, now).forEach { store.addMemory(it) }
+                    if (result.action == AnswerAction.REST) {
+                        store.addMemory(
+                            RelationMemory(type = MemoryType.EVENT, text = "休息：$text", observedAt = now),
+                        )
+                    }
+                    if (result.action == AnswerAction.DONE) {
+                        store.addMemory(
+                            RelationMemory(type = MemoryType.EVENT, text = "完成了：$text", observedAt = now),
+                        )
+                    }
+                }
+            }
             Log.i(TAG, "判断通过：${text.take(60)}")
         } else {
             attempt += 1
             if (!check.reask) {
+                prefs.saveState(ProactivePolicy.onMiss(cfg.toProactive(), prefs.loadState(now), now))
                 prefs.clearPending()
                 prefs.setLocalMode(false)
-                prefs.markAnswered(System.currentTimeMillis())
+                prefs.markAnswered(now)
                 prefs.addMiss()
                 CoachFloat.remove("companion")
                 app?.echoLater("伴读没答上来：$question", EchoKind.DELTA, SCENE)
@@ -189,9 +300,11 @@ object CompanionRunner {
     /** 页面上的“不想答”：记一次没做到，清掉当前问题。 */
     fun skip(context: Context) {
         val prefs = CompanionPrefs(context)
+        val now = System.currentTimeMillis()
+        prefs.saveState(ProactivePolicy.onMiss(prefs.load().toProactive(), prefs.loadState(now), now))
         prefs.clearPending()
         prefs.setLocalMode(false)
-        prefs.markAnswered(System.currentTimeMillis())
+        prefs.markAnswered(now)
         prefs.addMiss()
         replyOpen = false
         CoachFloat.remove("companion")
@@ -203,7 +316,14 @@ object CompanionRunner {
         label: String,
         minutes: Int,
         hasAi: Boolean,
+        kind: AskKind,
+        topicTitle: String?,
     ): String? {
+        if (kind == AskKind.TOPIC_FOLLOW_UP) {
+            val followUp = RelationRules.topicQuestion(topicTitle ?: "上次那件事").take(80)
+            Log.i(TAG, "话题跟进：$followUp")
+            return followUp
+        }
         val ctx = runCatching { readContext(app) }.getOrElse { CompanionContext() }
         if (!hasAi || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             val local = CompanionLocal.nudge(ctx, label, minutes).take(80)
@@ -352,9 +472,11 @@ object CompanionRunner {
 
     private fun close(service: AccessibilityService, prefs: CompanionPrefs) {
         replyOpen = false
+        val now = System.currentTimeMillis()
+        prefs.saveState(ProactivePolicy.onMiss(prefs.load().toProactive(), prefs.loadState(now), now))
         prefs.clearPending()
         prefs.setLocalMode(false)
-        prefs.markAnswered(System.currentTimeMillis())
+        prefs.markAnswered(now)
         prefs.addMiss()
         CoachFloat.remove("companion")
         runCatching { service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME) }

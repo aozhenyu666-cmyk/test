@@ -401,6 +401,45 @@ AI 模式抓到的两个真实 Bug：
 
 仍未设备验证：空回答、重复提交只写一次、手动收起后不强制展开（均为代码路径 + 单测覆盖）。
 
+### 5.15 P1：唯一主动调度器 + 关系记忆（2026-11-06）
+
+**调度器**：新增 `core/proactive/Proactive.kt`，`CompanionRunner.tick` 只调用 `ProactiveEngine.decide` 一个入口，不再由多个模块各自判断。
+
+- 配置可调：活跃时段、最小间隔、每小时/每天上限、连续停留门槛、休息时长、推迟时长、话题冷却、开口概率、退避次数。
+- 状态机：IDLE / ASKING / ANSWERED / DEFERRED / RESTING / BACKOFF；小时/日计数自动重置。
+- 上下文：前台应用、是否关注、连续时长、当前任务、断点卡点、未解决话题、上次回答、一手页面是否开着、是否已有待答。
+- 决策：休息/推迟期间沉默；回答后按回答时刻重新起算间隔；到期话题优先；关注应用内有任务才问任务；没有有价值上下文就不开口；退避后只有到期话题能再开口。
+- 随机性：`decide(..., roll)` 接收 0–99 的随机数，测试可固定，运行时可验证冷却约束。
+
+**关系记忆**：新增 `core/proactive/Relation.kt` 与 `data/RelationStore.kt`。
+
+- 七类：事实、偏好、承诺、事件、共同经历、纠正、话题；话题有 OPEN/RESOLVED/PAUSED/CLOSED。
+- 存在现有 `yishou.db` 的 `relation_memory` / `relation_topic` 两张表里（Room 版本不变，`CREATE TABLE IF NOT EXISTS`），所有查询参数绑定。
+- 纠正：旧记忆写 `validTo`，新记忆带 `correctsId`；不删除历史。
+- 召回：`selectForPrompt` 只挑当前用得上的几条，承诺优先，未解决话题补入；不把全部记忆塞进提示词。
+- 话题延续：`topicQuestion` 本地生成“上次你说「…」——现在到哪一步了？”；回答后更新 summary / followUpAt；说“解决了”关闭话题；说“定个时间”新建约定话题。
+
+**交流策略**：`ProactivePolicy` 区分 休息 / 推迟 / 现在回去 / 已完成 / 普通回答；休息写入 `RESTING + restUntil`，推迟写入 `DEFERRED + deferUntil`，并写关系记忆。`ProactiveAnswer` 对话题跟进放宽为“说出进展即可”，任务型仍走原判断。
+
+**UI**：伴读页新增活跃开始/结束、每天最多、休息分钟、推迟分钟、话题冷却、开口机会七项。
+
+**测试**：一手 **527 通过 / 0 失败**（新增 ProactiveEngine 15、Policy 6、Relation 13）；总控 528 通过；一手 lint 通过；两端构建成功。
+
+**设备实测**：
+
+```
+Companion: 话题跟进：上次你说「登录接口还没搞定」——现在到哪一步了？
+Companion: 判断通过：休息一下
+p_mode=RESTING, p_rest_until=回答时刻+2 分钟
+relation_memory: EVENT | 休息：休息一下
+relation_topic: OPEN | summary=休息一下 | followUpAt=回答+2 小时
+休息窗口内 25 秒无新提醒
+```
+
+P0 遗留仍未关闭：空回答、重复提交、手动收起未设备复验；通知入口未实际点击；干净内容页的节点读屏未验证；Instrumentation 仍有 1 个遮罩失败。回答后重新计时已由 `ProactiveEngine` 的 answer-gap 单测覆盖，设备级未单独复验。
+
+
+
 ---
 
 ## 6. 指标与判据

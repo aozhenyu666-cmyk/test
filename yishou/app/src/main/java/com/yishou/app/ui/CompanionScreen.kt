@@ -376,6 +376,27 @@ private fun RhythmCard(cfg: CompanionConfig, onChange: (CompanionConfig) -> Unit
             SettingRow("一天几次没答就停", cfg.stopAfterMisses, 1..6, "次") { v ->
                 onChange(cfg.copy(stopAfterMisses = v))
             }
+            SettingRow("活跃开始", cfg.activeStartHour, 0..23, "点") { v ->
+                onChange(cfg.copy(activeStartHour = v))
+            }
+            SettingRow("活跃结束", cfg.activeEndHour, 1..24, "点") { v ->
+                onChange(cfg.copy(activeEndHour = v))
+            }
+            SettingRow("每天最多", cfg.maxPerDay, 1..48, "次") { v ->
+                onChange(cfg.copy(maxPerDay = v))
+            }
+            SettingRow("休息多久", cfg.restMinutes, 5..240, "分钟") { v ->
+                onChange(cfg.copy(restMinutes = v))
+            }
+            SettingRow("推迟多久", cfg.deferMinutes, 5..240, "分钟") { v ->
+                onChange(cfg.copy(deferMinutes = v))
+            }
+            SettingRow("话题冷却", cfg.topicCooldownMinutes, 30..1440, "分钟") { v ->
+                onChange(cfg.copy(topicCooldownMinutes = v))
+            }
+            SettingRow("开口机会", cfg.opportunityPercent, 1..100, "%") { v ->
+                onChange(cfg.copy(opportunityPercent = v))
+            }
         }
     }
 }
