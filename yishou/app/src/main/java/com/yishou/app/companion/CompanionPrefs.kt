@@ -125,6 +125,45 @@ class CompanionPrefs(context: Context) {
             .apply()
     }
 
+    // ---------- 高频陪练 ----------
+
+    /** 这一场的节拍记录。开始时间来自设置（AppPrefs.hfStartedAt），这里只存「看了几次、说了几次」。 */
+    fun loadHighFreq(startedAt: Long, minutes: Int): com.yishou.app.core.proactive.HighFreqSession =
+        com.yishou.app.core.proactive.HighFreqSession(
+            startedAt = startedAt,
+            endsAt = if (startedAt > 0) startedAt + minutes.coerceIn(5, 180) * 60_000L else 0,
+            lastLookAt = p.getLong("hf_last_look", 0),
+            lastSpeakAt = p.getLong("hf_last_speak", 0),
+            looks = p.getInt("hf_looks", 0),
+            speaks = p.getInt("hf_speaks", 0),
+        )
+
+    fun saveHighFreq(s: com.yishou.app.core.proactive.HighFreqSession) {
+        p.edit()
+            .putLong("hf_last_look", s.lastLookAt)
+            .putLong("hf_last_speak", s.lastSpeakAt)
+            .putInt("hf_looks", s.looks)
+            .putInt("hf_speaks", s.speaks)
+            .apply()
+    }
+
+    /** 上一拍读到的界面文字：用来判断画面有没有变，变了才值得识图。 */
+    fun lastScreenText(): String = p.getString("hf_screen", "").orEmpty()
+
+    fun setLastScreenText(text: String) {
+        p.edit().putString("hf_screen", text.take(2_000)).apply()
+    }
+
+    fun resetHighFreq() {
+        p.edit()
+            .remove("hf_last_look")
+            .remove("hf_last_speak")
+            .putInt("hf_looks", 0)
+            .putInt("hf_speaks", 0)
+            .remove("hf_screen")
+            .apply()
+    }
+
     private fun today(): String = LocalDate.now().toString()
 
     fun loadState(now: Long): ProactiveState {

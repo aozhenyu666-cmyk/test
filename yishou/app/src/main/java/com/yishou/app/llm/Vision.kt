@@ -37,6 +37,16 @@ class Vision(private val chat: ChatClient) {
         }
     }
 
+    /** 高频看屏：只要一句「他在做什么」，不写长描述。短提示词、短输出，省时省钱。 */
+    suspend fun describeShort(imageDataUrl: String): LlmResult<String> {
+        val system = "用一句不超过 30 字的话说明：这个人此刻在手机上做什么（在看什么内容、做到哪一步）。" +
+            "只描述，不评价，不建议，不加开场白。"
+        return when (val r = chat.completeWithImage(system, "屏幕：", imageDataUrl, "高频看屏")) {
+            is LlmResult.Err -> r
+            is LlmResult.Ok -> LlmResult.Ok(r.value.trim().take(60))
+        }
+    }
+
     /** 素材：把截图、照片里的正文转写出来（文章、帖子、书页），去掉界面上的按钮和广告。 */
     suspend fun transcribeText(imageDataUrl: String): LlmResult<String> {
         val system = "你负责把图片里的正文完整转写成文字：文章、帖子、书页、聊天里的长段落。" +

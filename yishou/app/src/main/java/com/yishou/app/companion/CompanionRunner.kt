@@ -20,6 +20,9 @@ import com.yishou.app.core.JudgementCheck
 import com.yishou.app.core.JudgementRules
 import com.yishou.app.core.QuestionLedger
 import com.yishou.app.core.SilenceStep
+import com.yishou.app.core.proactive.HighFreq
+import com.yishou.app.core.proactive.HighFreqConfig
+import com.yishou.app.core.proactive.ScreenDelta
 import com.yishou.app.core.proactive.AnswerAction
 import com.yishou.app.core.proactive.AskKind
 import com.yishou.app.core.proactive.MemoryType
@@ -76,7 +79,21 @@ object CompanionRunner {
         val app = service.application as? YishouApp ?: return
         val prefs = CompanionPrefs(service)
         val cfg = prefs.load()
-        if (!cfg.enabled) return
+        // 高频陪练是一场显式会话：参数在设置里调，开始/结束由用户按；到点自动收线。
+        val ap = app.settings.app.value
+        val hfCfg = HighFreqConfig(
+            enabled = ap.hfStartedAt > 0,
+            lookEverySec = ap.hfLookSec,
+            minGapSec = ap.hfGapSec,
+            sessionMinutes = ap.hfMinutes,
+        ).sane()
+        var hf = prefs.loadHighFreq(ap.hfStartedAt, hfCfg.sessionMinutes)
+        val hfRunning = HighFreq.running(hfCfg, hf, System.currentTimeMillis())
+        if (ap.hfStartedAt > 0 && !hfRunning) {
+            app.settings.updateApp { it.copy(hfStartedAt = 0) }
+            prefs.resetHighFreq()
+        }
+        if (!cfg.enabled && !hfRunning) return
 
         val hasAi = app.settings.vision.value.isComplete && app.settings.llm.value.isComplete
         if (!hasAi && !warnedNoAi) {
@@ -112,6 +129,16 @@ object CompanionRunner {
         if (asking) return
         if (pkg == null || pkg == service.packageName) return
 
+        // 高频会话：看和说是两条节拍。到点先看一次；画面没变就不进决策，也不打扰用户。
+        if (hfRunning && HighFreq.dueLook(hfCfg, hf, now)) {
+            val text = runCatching { screenTextFromNodes(service) }.getOrDefault("")
+            val moved = ScreenDelta.changed(prefs.lastScreenText(), text)
+            hf = HighFreq.onLook(hf, now)
+            prefs.saveHighFreq(hf)
+            if (!moved) return
+            prefs.setLastScreenText(text)
+        }
+
         asking = true
         val label = runCatching {
             service.packageManager.getApplicationLabel(
@@ -125,7 +152,11 @@ object CompanionRunner {
                 val at = System.currentTimeMillis()
                 val state = prefs.loadState(at)
                 val ctx = buildProactiveContext(app, pkg, since, at, prefs)
-                val decision = ProactiveEngine.decide(cfg.toProactive(), state, ctx, Random.nextInt(100))
+                // 仍然只有 ProactiveEngine 决定开不开口；高频会话只把间隔换成秒级。
+                val decision = ProactiveEngine.decide(
+                    if (hfRunning) HighFreq.toProactive(hfCfg, cfg.toProactive()) else cfg.toProactive(),
+                    state, ctx, Random.nextInt(100),
+                )
                 if (decision !is ProactiveDecision.Ask) {
                     asking = false
                     return@launch
@@ -143,6 +174,10 @@ object CompanionRunner {
                 attempt = 0
                 nudged = false
                 val nowAt = System.currentTimeMillis()
+                if (hfRunning) {
+                    hf = HighFreq.onSpeak(hf, nowAt)
+                    prefs.saveHighFreq(hf)
+                }
                 val latest = prefs.loadState(nowAt)
                 prefs.saveState(
                     latest.copy(

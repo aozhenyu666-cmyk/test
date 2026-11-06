@@ -36,6 +36,11 @@ data class ProactiveConfig(
     val activeEndHour: Int = 23,
     /** 两次开口之间至少隔多少分钟（提问、回答都算起算点）。 */
     val minGapMinutes: Int = 12,
+    /**
+     * 秒级间隔：高频陪练会话用（默认 90 秒）。大于 0 时优先于 [minGapMinutes]。
+     * 平时为 0，仍按分钟走；会话结束回到 0，不会把日常节奏带快。
+     */
+    val minGapSeconds: Int = 0,
     /** 每小时最多几次。 */
     val maxPerHour: Int = 4,
     /** 每天最多几次。 */
@@ -57,7 +62,9 @@ data class ProactiveConfig(
         activeStartHour = activeStartHour.coerceIn(0, 23),
         activeEndHour = activeEndHour.coerceIn(1, 24),
         minGapMinutes = minGapMinutes.coerceIn(1, 240),
-        maxPerHour = maxPerHour.coerceIn(1, 12),
+        minGapSeconds = minGapSeconds.coerceIn(0, 7_200),
+        // 高频会话最短 30 秒一次，一小时理论最多 120 次；上限放到 60 留余量
+        maxPerHour = maxPerHour.coerceIn(1, 60),
         maxPerDay = maxPerDay.coerceIn(1, 48),
         presenceMinutes = presenceMinutes.coerceIn(1, 60),
         restMinutes = restMinutes.coerceIn(5, 240),
@@ -151,7 +158,7 @@ object ProactiveEngine {
             else ProactiveDecision.Silent
         }
 
-        val gapMs = cfg.minGapMinutes * 60_000L
+        val gapMs = if (cfg.minGapSeconds > 0) cfg.minGapSeconds * 1_000L else cfg.minGapMinutes * 60_000L
         if (state.lastAskAt > 0 && now - state.lastAskAt < gapMs) return ProactiveDecision.Silent
         if (state.lastAnswerAt > 0 && now - state.lastAnswerAt < gapMs) return ProactiveDecision.Silent
         if (state.promptsThisHour >= cfg.maxPerHour) return ProactiveDecision.Silent

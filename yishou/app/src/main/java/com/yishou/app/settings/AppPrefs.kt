@@ -63,6 +63,14 @@ data class AppPrefs(
     val shakeToRoll: Boolean = true,
     /** 手动开始的陪练窗口的开始时间，0 表示没有 */
     val manualWindowStart: Long = 0,
+    /** 高频陪练：每隔几秒看一次屏（只在会话期间生效） */
+    val hfLookSec: Int = 30,
+    /** 高频陪练：两次开口至少隔几秒 */
+    val hfGapSec: Int = 90,
+    /** 一场高频陪练多少分钟 */
+    val hfMinutes: Int = 30,
+    /** 这一场高频陪练开始的时刻；0 表示没在跑 */
+    val hfStartedAt: Long = 0,
     /** 最近一次“提前结束窗口”的时间，0 表示没有 */
     val windowStoppedAt: Long = 0,
     /** 权限页里手动勾选“已设置好”的厂商项 */
@@ -149,6 +157,10 @@ data class AppPrefs(
         .put("themeMode", themeMode)
         .put("shakeToRoll", shakeToRoll)
         .put("manualWindowStart", manualWindowStart)
+        .put("hfLookSec", hfLookSec)
+        .put("hfGapSec", hfGapSec)
+        .put("hfMinutes", hfMinutes)
+        .put("hfStartedAt", hfStartedAt)
         .put("windowStoppedAt", windowStoppedAt)
         .put("manualChecks", JSONArray().apply { manualChecks.forEach { put(it) } })
         .put("pullBackEnabled", pullBackEnabled)
@@ -257,6 +269,10 @@ data class AppPrefs(
                 themeMode = o.optInt("themeMode", d.themeMode).coerceIn(0, 2),
                 shakeToRoll = o.optBoolean("shakeToRoll", d.shakeToRoll),
                 manualWindowStart = o.optLong("manualWindowStart", 0),
+                hfLookSec = o.optInt("hfLookSec", d.hfLookSec).coerceIn(10, 300),
+                hfGapSec = o.optInt("hfGapSec", d.hfGapSec).coerceIn(30, 1_800),
+                hfMinutes = o.optInt("hfMinutes", d.hfMinutes).coerceIn(5, 180),
+                hfStartedAt = o.optLong("hfStartedAt", 0),
                 windowStoppedAt = o.optLong("windowStoppedAt", 0),
                 manualChecks = checks,
                 pullBackEnabled = o.optBoolean("pullBackEnabled", d.pullBackEnabled),

@@ -227,6 +227,30 @@ fun SettingsScreen(
             }
 
             HorizontalDivider()
+            SectionTitle("高频陪练")
+            Text(
+                "一场显式会话：每 ${prefs.hfLookSec} 秒看一次屏，画面没变就不打扰；" +
+                    "开不开口仍由一手的唯一调度器决定，两次至少隔 ${prefs.hfGapSec} 秒。到点或手动结束，回到平时的节奏。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            LabeledRow("看屏间隔") {
+                Stepper(prefs.hfLookSec, 10..180, "秒") { v -> vm.update { it.copy(hfLookSec = v) } }
+            }
+            LabeledRow("开口最短间隔") {
+                Stepper(prefs.hfGapSec, 30..600, "秒") { v -> vm.update { it.copy(hfGapSec = v) } }
+            }
+            LabeledRow("这一场时长") {
+                Stepper(prefs.hfMinutes, 5..180, "分钟") { v -> vm.update { it.copy(hfMinutes = v) } }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val running = prefs.hfStartedAt > 0
+                Button(onClick = {
+                    vm.update { it.copy(hfStartedAt = if (running) 0 else System.currentTimeMillis()) }
+                }) { Text(if (running) "结束这一场" else "开始一场高频陪练") }
+                if (running) Text("　进行中", style = MaterialTheme.typography.bodySmall)
+            }
+
+            HorizontalDivider()
             SectionTitle("每晚总结")
             SwitchRow("每天自动总结", prefs.summaryEnabled) { on -> vm.update(resummary = true) { it.copy(summaryEnabled = on) } }
             LabeledRow("总结时间") {
