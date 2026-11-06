@@ -307,7 +307,10 @@ class LoopTest {
         shot("e2e-08-chat-empty")
         compose.onNodeWithTag("chat-input").performTextInput("周五一面，帮我把准备排到明晚八点")
         compose.onNodeWithTag("chat-send").performClick()
-        // 说完以后自动跳到统筹规划部
+        // 说完以后自动跳到统筹规划部。0.17.0 起它第一眼是「整体状态」，
+        // 本周计划/时间线/快捷键收在默认收起的折叠区里（GlobalOverview.kt，open 默认 false）。
+        waitFor(hasTestTag("global-overview"), 20_000, "统筹规划部")
+        compose.onNodeWithTag("global-tools-toggle").performScrollTo().performClick()
         waitText("今天的时间线", 20_000)
         waitText("面试复盘", 5_000)
         settle()
@@ -733,7 +736,10 @@ class LoopTest {
         assertEquals("资料分析先看讲解里的速算口诀", app.store.intake.value.metas[key]!!.gist)
         assertTrue(app.store.work.value.rec(key)!!.threadKey.isNotBlank())
         go("dept/PLAN")
-        waitFor(hasTestTag("plan-instruments"), 5_000, "估时和精力地图")
+        // 统筹规划部 0.17.0 起先显示 GlobalOverview，计划与工具在默认收起的折叠区里
+        waitFor(hasTestTag("global-overview"), 10_000, "统筹规划部整体状态")
+        compose.onNodeWithTag("global-tools-toggle").performScrollTo().performClick()
+        waitFor(hasTestTag("plan-instruments"), 10_000, "估时和精力地图")
         settle()
         Thread.sleep(1_200)
         shot("e2e-71-dept-plan")
@@ -915,7 +921,9 @@ class LoopTest {
         waitText("阶段 1/6", 15_000)
         settle()
         shot("e2e-93-grand-plan-chat")
-        assertEquals("GRAND_PLAN", app.chat.log.value.campaign)
+        // 0.17.0 起战役挂在对话段上：log.campaign 这个扁平字段还在但没有写入方，
+        // 真值在 threadOf(当前对话模式).campaign（Chat.kt:57 与 ChatScreen/Campaigns 的读法）。
+        assertEquals("GRAND_PLAN", app.chat.log.value.threadOf(app.chat.mode.value)?.campaign)
         val sent = llm.takeRequest().body.readUtf8()
         assertTrue(sent, sent.contains("正在进行的战役：大统筹") && sent.contains("战友"))
         go("dossier")

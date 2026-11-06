@@ -36,6 +36,9 @@ class SeedReceiver : BroadcastReceiver() {
                         silenceHours = 0, dailyQuotaMin = 0, pausedUntil = 0,
                     )
                 }
+                // 「严管」= 严格档位。拦截判定自 cf7956d 起走 ModeGate，
+                // 只看档位 + 窗口，不再由关卡推导；默认档位是普通模式，不设就一条都拦不住。
+                store.startStrict(now)
             }
             "hq" -> context.zk.actions.hq.start(com.zongkong.core.hq.HqTrigger.MANUAL)
             // 模拟总控掉线：给哨兵的心跳写成很久以前
@@ -44,6 +47,10 @@ class SeedReceiver : BroadcastReceiver() {
             // 放行，但打开娱乐应用先答一题（0.10 默认）
             "gate", "free" -> {
                 val now = System.currentTimeMillis()
+                // 答题页同样是强制手段：Watch.ruleFor 对拦截名单里的应用只在严格窗口内生效（cf7956d）。
+                // free 相反，是纯放行，必须回普通模式，否则名单里的应用照样弹回。
+                val gate = intent.getStringExtra("mode") == "gate"
+                if (gate) store.startStrict(now) else store.toNormalMode()
                 store.updateToday(now) { day ->
                     var d = DayOps.checkin(day, "冒烟测试：报到一次", now)
                     store.status(now).gates.filter { !it.done }.forEach { g ->
@@ -52,11 +59,11 @@ class SeedReceiver : BroadcastReceiver() {
                     d
                 }
                 // free：纯放行（不答题、不算挣来的时长），看拦截名单本身放不放
-                val gate = intent.getStringExtra("mode") == "gate"
                 store.updateConfig { it.copy(silenceHours = 0, dailyQuotaMin = 0, earn = it.earn.copy(enabled = gate), watch = it.watch.copy(openGate = gate)) }
                 if (gate) context.getSharedPreferences("watch", Context.MODE_PRIVATE).edit().clear().apply()
             }
         }
-        Log.i("SeedReceiver", "seeded: strict=${store.status().strict} hq=${store.hq.value.active != null} blocked=${store.config.value.blocked}")
+        val v = store.modeVerdict(healthy = true)
+        Log.i("SeedReceiver", "seeded: strict=${store.status().strict} 档位=${v.tier} ${v.headline()} enforcing=${v.enforcing} hq=${store.hq.value.active != null} blocked=${store.config.value.blocked}")
     }
 }

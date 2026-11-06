@@ -238,10 +238,11 @@ class GuardService : AccessibilityService() {
         if (pkg == packageName || !interactive()) return false
         val cfg = store.config.value.hq
         if (store.config.value.pausedUntil > now) return false
-        // 两档模式（报告 §3）：这是**第二条**拦截路径，原先完全不看模式——
-        // 真机上就是这么漏的：普通模式下打开 YouTube 被「总控时间」弹回。
-        // 任何强制拦截都必须走统一入口，不许这里另起一套判定。
-        if (!store.modeVerdict(now, healthy = true).enforcing) return false
+        // 总控时间**独立于档位**：它是用户自己起的强制时段，会话在跑就该锁。
+        // 5 条启动路径（手动按钮、定时、AI、未回应升级、失联强制升级）都不经过模式，
+        // 把 lockdown 卡在严格档位后面会让「失联太久强制升级」变成一条拦不住的死路。
+        // 但紧急暂停仍然算数：那是用户按下的无条件退出。
+        if (store.modeVerdict(now, healthy = true).emergencyPaused) return false
         var session = store.hq.value.active
         if (session == null && store.absence(now) == com.zongkong.core.hq.Hq.Absence.FORCE && !com.zongkong.core.hq.Hq.allows(pkg, packageName, cfg, overlays())) {
             Log.i(TAG, "失联太久，打开 $pkg 时进入总控时间")
