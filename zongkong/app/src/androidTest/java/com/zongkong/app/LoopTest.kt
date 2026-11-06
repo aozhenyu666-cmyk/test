@@ -264,6 +264,15 @@ class LoopTest {
         assertTrue(sim.pagesIn(dbs.notesDb).any { sim.text(it.id, F.TYPE) == "结论" })
     }
 
+    /**
+     * 取一条模型请求；没来就失败，不能无限等。
+     * MockWebServer.takeRequest() 默认无限阻塞，一个场景没发出请求就会挂死整轮 CI，
+     * 后面的拦截冒烟一条都跑不到。
+     */
+    private fun okhttp3.mockwebserver.MockWebServer.takeRequestOrFail(): okhttp3.mockwebserver.RecordedRequest =
+        takeRequest(15, java.util.concurrent.TimeUnit.SECONDS)
+            ?: throw AssertionError("等了 15 秒没收到模型请求")
+
     /** 模拟 AI 接口：按顺序回放工具调用，最后一句话。 */
     private fun mockLlm(vararg bodies: String): okhttp3.mockwebserver.MockWebServer {
         val server = okhttp3.mockwebserver.MockWebServer()
@@ -329,10 +338,10 @@ class LoopTest {
         waitText("已执行", 5_000)
         shot("e2e-09-chat-after-tools")
         // 模型收到了工具定义和工具结果
-        val first = llm.takeRequest().body.readUtf8()
+        val first = llm.takeRequestOrFail().body.readUtf8()
         assertTrue(first.contains("\"create_thread\""))
-        llm.takeRequest()
-        val third = llm.takeRequest().body.readUtf8()
+        llm.takeRequestOrFail()
+        val third = llm.takeRequestOrFail().body.readUtf8()
         assertTrue(third, third.contains("\"tool_call_id\""))
         llm.shutdown()
     }
@@ -628,8 +637,8 @@ class LoopTest {
         settle()
         shot("e2e-50-boss-chat")
         // 时间线真的发给了模型：抖音 2 小时
-        llm.takeRequest()
-        val second = llm.takeRequest().body.readUtf8()
+        llm.takeRequestOrFail()
+        val second = llm.takeRequestOrFail().body.readUtf8()
         assertTrue(second, second.contains("娱乐合计 2 小时"))
         val d = app.store.dossier.value
         assertEquals(com.zongkong.core.boss.ClaimVerdict.CONTRADICTED, d.claims.single().verdict)
@@ -685,7 +694,7 @@ class LoopTest {
         compose.onNodeWithTag("ask-suggest").performScrollTo().performClick()
         settle()
         assertEquals("睡眠不足", app.store.vein.value.candidates.single().title)
-        val sent = llm.takeRequest().body.readUtf8()
+        val sent = llm.takeRequestOrFail().body.readUtf8()
         assertTrue(sent, sent.contains("【节点】下一问没有产生") && sent.contains("对立·竞争解释"))
         // 录入：贴材料 → AI 拆 → 候选
         go("vein/capture")
@@ -924,7 +933,7 @@ class LoopTest {
         // 0.17.0 起战役挂在对话段上：log.campaign 这个扁平字段还在但没有写入方，
         // 真值在 threadOf(当前对话模式).campaign（Chat.kt:57 与 ChatScreen/Campaigns 的读法）。
         assertEquals("GRAND_PLAN", app.chat.log.value.threadOf(app.chat.mode.value)?.campaign)
-        val sent = llm.takeRequest().body.readUtf8()
+        val sent = llm.takeRequestOrFail().body.readUtf8()
         assertTrue(sent, sent.contains("正在进行的战役：大统筹") && sent.contains("战友"))
         go("dossier")
         waitFor(hasTestTag("intensity"), 5_000, "强度")

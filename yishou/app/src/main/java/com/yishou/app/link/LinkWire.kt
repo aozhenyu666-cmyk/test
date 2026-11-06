@@ -62,4 +62,49 @@ object LinkWire {
             "truncated" to (entries.size > list.size),
         )
     }
+
+    /**
+     * 总控派下来的一步行动。字段名和总控 `Link.taskOrder` 一一对应。
+     * 只在本机拼装，不碰 Android：调用方把 Bundle 摊成 Map 再传进来。
+     */
+    data class Order(
+        val title: String = "",
+        val goal: String = "",
+        val material: String = "",
+        val known: String = "",
+        val stuck: String = "",
+        val next: String = "",
+        val ref: String = "",
+    ) {
+        val valid: Boolean get() = title.isNotBlank()
+    }
+
+    fun order(m: Map<String, Any?>): Order {
+        fun s(k: String) = (m[k] as? String).orEmpty().trim()
+        return Order(
+            title = s("title"),
+            goal = s("goal"),
+            material = s("material"),
+            known = s("known"),
+            stuck = s("stuck"),
+            next = s("next"),
+            ref = s("ref"),
+        )
+    }
+
+    /** 当前任务与断点（总控 `YishouStatus` 认这些名字）。 */
+    fun taskFields(title: String, goal: String, known: String, stuck: String, next: String, ref: String): Map<String, Any> = mapOf(
+        "taskTitle" to title,
+        "taskGoal" to goal,
+        "known" to known,
+        "stuck" to stuck,
+        "next" to next,
+        "ref" to ref,
+    )
+
+    /** 陪练窗口是否正在进行、什么时候结束。 */
+    fun windowFields(active: Boolean, end: Long): Map<String, Any> = mapOf(
+        "windowActive" to active,
+        "windowEnd" to end,
+    )
 }

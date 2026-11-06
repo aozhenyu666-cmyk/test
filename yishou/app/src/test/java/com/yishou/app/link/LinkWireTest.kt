@@ -48,4 +48,35 @@ class LinkWireTest {
         assertEquals(true, m["truncated"])
         assertEquals(LinkWire.MAX_TEXT + 1, ((m["what"] as Array<*>)[0] as String).length)
     }
+
+    @Test fun orderReadsWhatZongkongSends() {
+        val o = LinkWire.order(
+            mapOf(
+                "title" to "增长率 10 题", "goal" to "正确率 70% 以上", "material" to "事项：国考",
+                "known" to "会算基期", "stuck" to "比重题慢", "next" to "", "ref" to "T1/ak9",
+            ),
+        )
+        assertTrue(o.valid)
+        assertEquals("增长率 10 题", o.title)
+        assertEquals("正确率 70% 以上", o.goal)
+        assertEquals("T1/ak9", o.ref)
+        assertEquals("T1/ak9".substringAfter('/'), "ak9")
+    }
+
+    @Test fun orderWithoutTitleIsNotValid() {
+        assertTrue(!LinkWire.order(mapOf("goal" to "随便", "ref" to "T1/ak9")).valid)
+    }
+
+    @Test fun taskAndWindowFieldsUseTheNamesZongkongReads() {
+        val t = LinkWire.taskFields("题", "目标", "已知", "卡点", "下一问", "T1/a1")
+        assertEquals("题", t["taskTitle"])
+        assertEquals("目标", t["taskGoal"])
+        assertEquals("已知", t["known"])
+        assertEquals("卡点", t["stuck"])
+        assertEquals("下一问", t["next"])
+        assertEquals("T1/a1", t["ref"])
+        val w = LinkWire.windowFields(true, 123L)
+        assertEquals(true, w["windowActive"])
+        assertEquals(123L, w["windowEnd"])
+    }
 }
