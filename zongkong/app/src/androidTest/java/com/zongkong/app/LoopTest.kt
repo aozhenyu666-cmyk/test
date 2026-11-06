@@ -1060,7 +1060,8 @@ class LoopTest {
         settle()
         shot("e2e-103-confirm-plan")
         compose.onNodeWithTag("guide-confirm-plan").performClick()
-        compose.waitUntil(5_000) { app.store.status().gates.any { it.gate.id == "plan_morning" && it.done } }
+        // CI 的模拟器比本机慢，部署写盘和状态刷新一起走完要更久
+        compose.waitUntil(15_000) { app.store.status().gates.any { it.gate.id == "plan_morning" && it.done } }
         // 还欠着主线：首页是严管卡
         waitText("过了点还没开始", 5_000)
         settle()
@@ -1246,7 +1247,9 @@ class LoopTest {
         waitFor(hasText("刷 20 道资料分析", substring = true) and androidx.compose.ui.test.hasAnyAncestor(hasTestTag("chat-today")), 10_000, "顶栏显示下一段")
         settle()
         shot("e2e-121-chat-planned")
-        compose.onNode(hasText("好")).performScrollTo().performClick()
+        // CI 上对话重排会让节点短暂离开树：先等它出来，再滚过去点。
+        waitFor(hasText("好"), 10_000, "选项按钮")
+        compose.onAllNodes(hasText("好")).onFirst().performScrollTo().performClick()
         // 等这一轮说完；等不到就把对话原样带进失败信息（看清是哪一步卡住）
         try {
             compose.waitUntil(30_000) { !app.chat.busy.value && app.chat.log.value.messages.any { it.content.contains("今日部署过了") } }
