@@ -1,6 +1,9 @@
 package com.yishou.app.ui
 
+import android.app.Activity
 import android.app.TimePickerDialog
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -64,6 +67,16 @@ fun SettingsScreen(
     val tasks by vm.tasks.collectAsStateWithLifecycle()
     val prefs by vm.prefs.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val lookRunning by com.yishou.app.look.ScreenLookService.running.collectAsStateWithLifecycle()
+
+    // 高频陪练要真看屏：开始前弹一次系统录屏授权（Android 14 起每场都需重新同意）。
+    val hfConsent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val data = r.data
+        if (r.resultCode == Activity.RESULT_OK && data != null) {
+            com.yishou.app.look.ScreenLookService.start(context, r.resultCode, data)
+            vm.update { it.copy(hfStartedAt = System.currentTimeMillis()) }
+        }
+    }
 
     var baseUrl by rememberSaveable { mutableStateOf(saved.baseUrl) }
     var apiKey by remember { mutableStateOf(saved.apiKey) }
@@ -245,10 +258,25 @@ fun SettingsScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val running = prefs.hfStartedAt > 0
                 Button(onClick = {
-                    vm.update { it.copy(hfStartedAt = if (running) 0 else System.currentTimeMillis()) }
+                    if (running) {
+                        vm.update { it.copy(hfStartedAt = 0) }
+                        com.yishou.app.companion.CompanionPrefs(context).resetHighFreq()
+                        com.yishou.app.look.ScreenLookService.stop(context)
+                    } else if (lookRunning) {
+                        // 录屏已经在跑（比如陪练窗口里开过），不用再弹一次授权
+                        vm.update { it.copy(hfStartedAt = System.currentTimeMillis()) }
+                    } else {
+                        val mpm = context.getSystemService(android.media.projection.MediaProjectionManager::class.java)
+                        hfConsent.launch(mpm.createScreenCaptureIntent())
+                    }
                 }) { Text(if (running) "结束这一场" else "开始一场高频陪练") }
                 if (running) Text("　进行中", style = MaterialTheme.typography.bodySmall)
             }
+            Text(
+                "开始时会弹一次系统录屏授权。画面每 ${prefs.hfLookSec} 秒在本机比一次，没变就不识图、也不说话；" +
+                    "截图不保存，结束这一场就释放录屏。",
+                style = MaterialTheme.typography.bodySmall,
+            )
 
             HorizontalDivider()
             SectionTitle("每晚总结")

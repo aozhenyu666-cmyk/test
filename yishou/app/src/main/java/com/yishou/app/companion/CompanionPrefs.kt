@@ -154,6 +154,16 @@ class CompanionPrefs(context: Context) {
         p.edit().putString("hf_screen", text.take(2_000)).apply()
     }
 
+    /**
+     * 录屏那边确认「画面真的变了」的时刻。CompanionRunner 只消费这个信号：
+     * 比上次消费新，才进入开口判断；否则这一拍什么都不做。
+     */
+    fun markHighFreqFrame(at: Long) {
+        p.edit().putLong("hf_frame_at", at).apply()
+    }
+
+    fun highFreqFrameAt(): Long = p.getLong("hf_frame_at", 0L)
+
     fun resetHighFreq() {
         p.edit()
             .remove("hf_last_look")
@@ -161,6 +171,7 @@ class CompanionPrefs(context: Context) {
             .putInt("hf_looks", 0)
             .putInt("hf_speaks", 0)
             .remove("hf_screen")
+            .remove("hf_frame_at")
             .apply()
     }
 

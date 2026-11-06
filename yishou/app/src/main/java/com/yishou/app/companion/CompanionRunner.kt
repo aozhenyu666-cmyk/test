@@ -73,6 +73,8 @@ object CompanionRunner {
     private var warnedNoAi = false
     /** 用户正在浮窗里打字：这期间不要用提醒把输入框顶掉。 */
     private var replyOpen = false
+    /** 高频会话里已经消费到的那个「新画面」时刻；会话结束时归零。 */
+    private var lastFrameSeenAt = 0L
 
     /** GateService 每秒调一次。 */
     fun tick(service: AccessibilityService, pkg: String?) {
@@ -92,6 +94,7 @@ object CompanionRunner {
         if (ap.hfStartedAt > 0 && !hfRunning) {
             app.settings.updateApp { it.copy(hfStartedAt = 0) }
             prefs.resetHighFreq()
+            lastFrameSeenAt = 0L
         }
         if (!cfg.enabled && !hfRunning) return
 
@@ -129,14 +132,24 @@ object CompanionRunner {
         if (asking) return
         if (pkg == null || pkg == service.packageName) return
 
-        // 高频会话：看和说是两条节拍。到点先看一次；画面没变就不进决策，也不打扰用户。
-        if (hfRunning && HighFreq.dueLook(hfCfg, hf, now)) {
-            val text = runCatching { screenTextFromNodes(service) }.getOrDefault("")
-            val moved = ScreenDelta.changed(prefs.lastScreenText(), text)
-            hf = HighFreq.onLook(hf, now)
-            prefs.saveHighFreq(hf)
-            if (!moved) return
-            prefs.setLastScreenText(text)
+        // 高频会话：看和说是两条节拍，「说」必须建立在「刚看过、而且画面变了」之上。
+        // 录屏在跑时由 ScreenLookService 比像素、识图，这里只消费「有新画面」这一信号；
+        // 没开录屏才退回无障碍读屏文字比较（省钱，也够用）。
+        if (hfRunning) {
+            if (com.yishou.app.look.ScreenLookService.running.value) {
+                val frameAt = prefs.highFreqFrameAt()
+                if (frameAt <= lastFrameSeenAt) return
+                lastFrameSeenAt = frameAt
+            } else if (HighFreq.dueLook(hfCfg, hf, now)) {
+                val text = runCatching { screenTextFromNodes(service) }.getOrDefault("")
+                val moved = ScreenDelta.changed(prefs.lastScreenText(), text)
+                hf = HighFreq.onLook(hf, now)
+                prefs.saveHighFreq(hf)
+                if (!moved) return
+                prefs.setLastScreenText(text)
+            } else {
+                return
+            }
         }
 
         asking = true

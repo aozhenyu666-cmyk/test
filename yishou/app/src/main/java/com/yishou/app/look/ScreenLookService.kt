@@ -28,6 +28,10 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.yishou.app.R
 import com.yishou.app.YishouApp
+import com.yishou.app.companion.CompanionPrefs
+import com.yishou.app.core.proactive.HighFreq
+import com.yishou.app.core.proactive.HighFreqConfig
+import com.yishou.app.core.proactive.HighFreqSession
 import com.yishou.app.llm.LlmResult
 import com.yishou.app.stats.DayStats
 import com.yishou.app.system.Notifications
@@ -139,24 +143,46 @@ class ScreenLookService : Service() {
         )
         speaker = Speaker(this)
         _running.value = true
-        com.yishou.app.window.WindowService.start(this)
+        // 只有陪练窗口真的开着才挂窗口的前台服务：高频会话是独立的一场，
+        // 没必要多一条「陪练窗口进行中」的通知。看屏自己的前台服务已经够保活。
+        if (WindowClock.active(System.currentTimeMillis(), app.settings.app.value, AppZone.zone) != null) {
+            com.yishou.app.window.WindowService.start(this)
+        }
         _status.value = null
         watch()
     }
 
-    /** 每分钟检查一次：窗口结束就停；设了自动间隔就按时看一眼。 */
+    /**
+     * 平时每分钟检查一次窗口和自动间隔；高频会话里按秒看帧。
+     * 高频会话不要求陪练窗口开着——它是一场独立的显式会话。
+     */
     private fun watch() {
         watchJob?.cancel()
         watchJob = scope.launch {
+            var seconds = 0
             var sinceLook = 0
             while (isActive) {
-                delay(60_000)
+                delay(1_000)
                 val prefs = app.settings.app.value
                 val now = System.currentTimeMillis()
+                val hfCfg = HighFreqConfig(
+                    enabled = prefs.hfStartedAt > 0,
+                    lookEverySec = prefs.hfLookSec,
+                    minGapSec = prefs.hfGapSec,
+                    sessionMinutes = prefs.hfMinutes,
+                ).sane()
+                val hf = CompanionPrefs(this@ScreenLookService).loadHighFreq(prefs.hfStartedAt, hfCfg.sessionMinutes)
+                if (HighFreq.running(hfCfg, hf, now)) {
+                    seconds = 0
+                    if (HighFreq.dueLook(hfCfg, hf, now)) highFreqLook(hfCfg, hf, now)
+                    continue
+                }
                 if (WindowClock.active(now, prefs, AppZone.zone) == null) {
                     stopAll()
                     break
                 }
+                if (++seconds < 60) continue
+                seconds = 0
                 sinceLook++
                 val interval = prefs.lookIntervalMinutes
                 if (interval > 0 && sinceLook >= interval && prefs.windowPauseUntil <= now) {
@@ -164,6 +190,48 @@ class ScreenLookService : Service() {
                     look(delayMs = 0)
                 }
             }
+        }
+    }
+
+    /** 上一帧的采样签名：只在内存里，用来判断这一拍画面变没变。 */
+    private var frameSig: IntArray? = null
+    private var frameW = 0
+    private var frameH = 0
+
+    /**
+     * 高频会话的一拍：先在本机比像素，画面没变就到此为止——不识图、不打扰。
+     * 变了才用短提示词看一眼，把「他在做什么」写进上下文；开不开口仍由唯一调度器决定。
+     */
+    private fun highFreqLook(cfg: HighFreqConfig, session: HighFreqSession, now: Long) {
+        if (lookJob?.isActive == true) return
+        lookJob = scope.launch(Dispatchers.Default) {
+            val prefs = CompanionPrefs(this@ScreenLookService)
+            val bitmap = captureBitmap() ?: return@launch
+            val pixels = IntArray(bitmap.width * bitmap.height)
+            bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+            val sig = FrameDelta.signature(pixels, bitmap.width, bitmap.height)
+            val resized = bitmap.width != frameW || bitmap.height != frameH
+            val moved = resized || FrameDelta.changed(frameSig, sig)
+            frameW = bitmap.width
+            frameH = bitmap.height
+            frameSig = sig
+            prefs.saveHighFreq(HighFreq.onLook(session, now))
+            if (!moved) {
+                bitmap.recycle()
+                return@launch
+            }
+            val dataUrl = encode(bitmap)
+            bitmap.recycle()
+            // 没配识图模型时不硬调接口：把这一帧的变化交给无障碍读屏那条路。
+            val desc = if (app.settings.vision.value.isComplete) {
+                when (val r = app.vision.describeShort(dataUrl)) {
+                    is LlmResult.Ok -> r.value
+                    is LlmResult.Err -> null
+                }
+            } else null
+            if (!desc.isNullOrBlank()) prefs.setLastScreenText(desc)
+            prefs.markHighFreqFrame(now)
+            _status.value = desc?.let { "看到：$it" }
         }
     }
 
@@ -214,29 +282,40 @@ class ScreenLookService : Service() {
         getSystemService(NotificationManager::class.java).notify(ID_FOREGROUND, foregroundNotification(text))
     }
 
-    /** 把最新一帧转成 JPEG data URL；还没有帧时返回 null。 */
-    private fun captureDataUrl(): String? {
-        val bitmap = synchronized(lock) {
-            val img = latest ?: return null
-            val plane = img.planes[0]
-            val pixelStride = plane.pixelStride
-            val rowPadding = plane.rowStride - pixelStride * img.width
-            val padded = Bitmap.createBitmap(img.width + rowPadding / pixelStride, img.height, Bitmap.Config.ARGB_8888)
-            plane.buffer.rewind()
-            padded.copyPixelsFromBuffer(plane.buffer)
-            val cropped = Bitmap.createBitmap(padded, 0, 0, img.width, img.height)
-            if (cropped !== padded) padded.recycle()
-            cropped
-        }
+    /** 复制最新一帧成位图（调用方负责 recycle）；还没有帧时返回 null。 */
+    private fun captureBitmap(): Bitmap? = synchronized(lock) {
+        val img = latest ?: return null
+        val plane = img.planes[0]
+        val pixelStride = plane.pixelStride
+        val rowPadding = plane.rowStride - pixelStride * img.width
+        val padded = Bitmap.createBitmap(img.width + rowPadding / pixelStride, img.height, Bitmap.Config.ARGB_8888)
+        plane.buffer.rewind()
+        padded.copyPixelsFromBuffer(plane.buffer)
+        val cropped = Bitmap.createBitmap(padded, 0, 0, img.width, img.height)
+        if (cropped !== padded) padded.recycle()
+        cropped
+    }
+
+    private fun encode(bitmap: Bitmap): String {
         val out = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
-        bitmap.recycle()
         return "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+    }
+
+    /** 把最新一帧转成 JPEG data URL；还没有帧时返回 null。 */
+    private fun captureDataUrl(): String? {
+        val bitmap = captureBitmap() ?: return null
+        val url = encode(bitmap)
+        bitmap.recycle()
+        return url
     }
 
     private fun stopAll() {
         watchJob?.cancel()
         lookJob?.cancel()
+        frameSig = null
+        frameW = 0
+        frameH = 0
         synchronized(lock) {
             latest?.close()
             latest = null
