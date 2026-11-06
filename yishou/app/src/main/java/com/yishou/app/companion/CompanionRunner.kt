@@ -320,13 +320,15 @@ object CompanionRunner {
         topicTitle: String?,
     ): String? {
         if (kind == AskKind.TOPIC_FOLLOW_UP) {
-            val followUp = RelationRules.topicQuestion(topicTitle ?: "上次那件事").take(80)
+            val followUp = com.yishou.app.core.Persona
+                .topic(topicTitle ?: "上次那件事", CompanionPrefs(service).persona())
+                .take(80)
             Log.i(TAG, "话题跟进：$followUp")
             return followUp
         }
         val ctx = runCatching { readContext(app) }.getOrElse { CompanionContext() }
         if (!hasAi || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            val local = CompanionLocal.nudge(ctx, label, minutes).take(80)
+            val local = CompanionLocal.nudge(ctx, label, minutes, CompanionPrefs(service).persona()).take(80)
             Log.i(TAG, "本地提醒：$local")
             return local
         }

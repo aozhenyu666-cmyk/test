@@ -51,6 +51,7 @@ import com.yishou.app.companion.CompanionHealth
 import com.yishou.app.companion.CompanionPrefs
 import com.yishou.app.companion.CompanionRunner
 import com.yishou.app.core.CompanionConfig
+import com.yishou.app.core.PersonaConfig
 import com.yishou.app.data.Breakpoint
 import com.yishou.app.data.Echo
 import com.yishou.app.data.EchoKind
@@ -74,6 +75,7 @@ fun CompanionScreen(
     val app = context.applicationContext as YishouApp
     val store = remember { CompanionPrefs(context) }
     var cfg by remember { mutableStateOf(store.load()) }
+    var persona by remember { mutableStateOf(store.persona()) }
     var tick by remember { mutableIntStateOf(0) }
     var task by remember { mutableStateOf<Task?>(null) }
     var bp by remember { mutableStateOf<Breakpoint?>(null) }
@@ -180,6 +182,12 @@ fun CompanionScreen(
                 onOpenWatched = onOpenWatched,
                 modelOn = modelOn,
             )
+
+            PersonaCard(persona) { p ->
+                persona = p.sane()
+                store.savePersona(persona)
+                tick += 1
+            }
 
             RhythmCard(cfg = cfg, onChange = ::persist)
 
@@ -342,6 +350,44 @@ private fun ContextCard(
             }
         }
     }
+}
+
+@Composable
+private fun PersonaCard(persona: PersonaConfig, onChange: (PersonaConfig) -> Unit) {
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("人格", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
+            Text(
+                "同样的提醒，换一种说法。不奉承，不总结你的话。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PersonaConfig.Tone.values().forEach { tone ->
+                    FilterChip(
+                        selected = persona.tone == tone,
+                        onClick = { onChange(persona.copy(tone = tone)) },
+                        label = { Text(toneLabel(tone)) },
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                }
+            }
+            SettingRow("同一话题最多追问", persona.maxFollowUps, 0..3, "次") { v ->
+                onChange(persona.copy(maxFollowUps = v))
+            }
+        }
+    }
+}
+
+private fun toneLabel(tone: PersonaConfig.Tone): String = when (tone) {
+    PersonaConfig.Tone.BALANCED -> "平衡"
+    PersonaConfig.Tone.DIRECT -> "直接"
+    PersonaConfig.Tone.GENTLE -> "温和"
+    PersonaConfig.Tone.BRIEF -> "简短"
 }
 
 @Composable

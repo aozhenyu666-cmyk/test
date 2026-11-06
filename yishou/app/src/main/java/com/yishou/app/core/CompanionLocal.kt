@@ -16,29 +16,13 @@ object CompanionLocal {
         "走", "开始", "做完", "时间", "离开", "放下", "关掉", "收",
     )
 
-    /** 本地提醒：优先贴上次回答，其次卡点，其次任务，最后才泛泛问。 */
-    fun nudge(ctx: CompanionContext, appLabel: String, minutes: Int): String {
-        val m = minutes.coerceAtLeast(1)
-        val app = appLabel.ifBlank { "这个应用" }
-
-        // 上一次真的回答过什么：下一轮先把它接回来，而不是每次从零问。
-        val last = ctx.recentConclusions.firstOrNull()?.trim().orEmpty()
-        if (last.isNotBlank()) {
-            return "上次你说「${last.take(24)}」。现在又在$app 待了 $m 分钟——这次还是休息，还是回去？"
-        }
-
-        val stuck = ctx.stuck?.trim().orEmpty()
-        if (stuck.length >= 4) {
-            return "你说卡在「${stuck.take(24)}」。已经在$app 待了 $m 分钟——休息，还是回去做 15 分钟？"
-        }
-
-        val task = ctx.taskTitle?.trim().orEmpty()
-        if (task.isNotBlank()) {
-            return "「${task.take(20)}」还没推进。你在$app 待了 $m 分钟——现在回去，还是定个时间？"
-        }
-
-        return "你在$app 待了 $m 分钟。这一趟是休息，还是该回去了？"
-    }
+    /** 本地提醒：语气交给 [Persona]，这里只保留兼容入口。 */
+    fun nudge(
+        ctx: CompanionContext,
+        appLabel: String,
+        minutes: Int,
+        persona: PersonaConfig = PersonaConfig(),
+    ): String = Persona.nudge(ctx, appLabel, minutes, persona)
 
     /**
      * 本地回答的判定：比模型模式宽，但仍然是“做一个选择”。

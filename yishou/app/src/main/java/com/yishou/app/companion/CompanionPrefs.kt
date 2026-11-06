@@ -2,6 +2,7 @@ package com.yishou.app.companion
 
 import android.content.Context
 import com.yishou.app.core.CompanionConfig
+import com.yishou.app.core.PersonaConfig
 import com.yishou.app.core.QuestionLedger
 import com.yishou.app.core.proactive.ProactiveMode
 import com.yishou.app.core.proactive.ProactivePolicy
@@ -186,6 +187,21 @@ class CompanionPrefs(context: Context) {
 
     fun setLastAnswerText(text: String) {
         p.edit().putString("last_answer_text", text.take(120)).apply()
+    }
+
+    fun persona(): PersonaConfig = PersonaConfig(
+        tone = runCatching {
+            PersonaConfig.Tone.valueOf(p.getString("persona_tone", "BALANCED") ?: "BALANCED")
+        }.getOrDefault(PersonaConfig.Tone.BALANCED),
+        maxFollowUps = p.getInt("persona_follow", 2),
+    ).sane()
+
+    fun savePersona(persona: PersonaConfig) {
+        val s = persona.sane()
+        p.edit()
+            .putString("persona_tone", s.tone.name)
+            .putInt("persona_follow", s.maxFollowUps)
+            .apply()
     }
 
     fun misses(): Int =
