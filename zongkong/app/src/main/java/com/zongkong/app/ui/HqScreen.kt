@@ -802,6 +802,28 @@ fun HqSettingsScreen(nav: NavHostController) {
                 Text("多长", style = MaterialTheme.typography.labelLarge, color = sig.muted)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf(15, 20, 30, 45, 60).forEach { m -> QuickChip("$m 分钟" + if (h.minutes == m) " ✓" else "", sig.plan) { h = h.copy(minutes = m) } } }
                 SwitchRow("到点 5 分钟没进来就自动进入", h.autoLock) { h = h.copy(autoLock = it) }
+                SwitchRow("打开被盯的应用就自动进入", h.autoOnOpen) { h = h.copy(autoOnOpen = it) }
+                if (h.autoOnOpen) {
+                    Text("自动进入的时长", style = MaterialTheme.typography.labelLarge, color = sig.muted)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(15, 20, 25, 30, 45).forEach { m ->
+                            QuickChip("$m 分钟" + if (h.autoOnOpenMinutes == m) " ✓" else "", sig.plan) { h = h.copy(autoOnOpenMinutes = m) }
+                        }
+                    }
+                    Text("两次之间至少隔", style = MaterialTheme.typography.labelLarge, color = sig.muted)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(15, 30, 60, 120).forEach { m ->
+                            QuickChip("$m 分钟" + if (h.autoOnOpenCooldownMin == m) " ✓" else "", sig.plan) { h = h.copy(autoOnOpenCooldownMin = m) }
+                        }
+                    }
+                    Text("每天最多自动进", style = MaterialTheme.typography.labelLarge, color = sig.muted)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(1, 2, 3, 5).forEach { n ->
+                            QuickChip("$n 次" + if (h.autoOnOpenMaxPerDay == n) " ✓" else "", sig.plan) { h = h.copy(autoOnOpenMaxPerDay = n) }
+                        }
+                    }
+                    Hint("只对拦截名单里的应用生效。已经在总控时间里、休假、紧急暂停，或者刚结束一场还没到间隔，都不会自动开。")
+                }
             }
             Panel {
                 Text("总控时间里还能用的应用", style = MaterialTheme.typography.titleSmall)

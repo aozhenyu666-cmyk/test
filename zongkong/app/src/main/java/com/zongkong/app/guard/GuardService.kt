@@ -249,6 +249,18 @@ class GuardService : AccessibilityService() {
             Log.i(TAG, "失联太久，打开 $pkg 时进入总控时间")
             session = zk.actions.hq.start(com.zongkong.core.hq.HqTrigger.ESCALATION)
         }
+        // 第 6 条启动路径：打开拦截名单里的应用，按设置自动开一场总控时间（默认关）。
+        // 冷却、每天次数、休假/暂停的判断都在 Hq.shouldAutoStart 里，纯逻辑可单测。
+        if (session == null && cfg.autoOnOpen && pkg in store.config.value.blocked &&
+            com.zongkong.core.hq.Hq.shouldAutoStart(
+                cfg, store.hq.value.sessions, true, now, store.zone,
+                store.config.value.pausedUntil, store.status(now).emergencyUntil ?: 0L,
+            )
+        ) {
+            session = zk.actions.hq.start(com.zongkong.core.hq.HqTrigger.AUTO, cfg.autoOnOpenMinutes)
+            Log.i(TAG, "打开 $pkg：自动开一场总控时间 ${cfg.autoOnOpenMinutes} 分钟")
+            runCatching { Diag.log(this, "hq_auto", "打开 $pkg 自动进入总控时间 ${cfg.autoOnOpenMinutes} 分钟") }
+        }
         if (session == null || now < session.suspendedUntil) return false
         if (session.trigger == com.zongkong.core.hq.HqTrigger.UNANSWERED && now >= session.endsAt) return false
         if (com.zongkong.core.hq.Hq.allows(pkg, packageName, cfg, overlays())) return false

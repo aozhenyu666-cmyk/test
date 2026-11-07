@@ -37,6 +37,8 @@ enum class HqTrigger(val label: String) {
     MANUAL("自己进入"),
     ESCALATION("失联太久，强制进入"),
     AGENT("总控发起"),
+    /** 打开拦截名单里的应用时自动开始（设置里可关）。 */
+    AUTO("打开被盯的应用，自动进入"),
 }
 
 @Serializable
@@ -78,6 +80,14 @@ data class HqConfig(
     val minutes: Int = 30,
     /** 到点 5 分钟还没进来，自动进入（锁住其他应用）。 */
     val autoLock: Boolean = true,
+    /** 打开拦截名单里的应用时，自动开一场总控时间（默认关）。 */
+    val autoOnOpen: Boolean = false,
+    /** 自动开的那一场多长。 */
+    val autoOnOpenMinutes: Int = 25,
+    /** 两次自动开场至少隔多久（分钟）。 */
+    val autoOnOpenCooldownMin: Int = 30,
+    /** 一天最多自动开几次。 */
+    val autoOnOpenMaxPerDay: Int = 3,
     /** 总控时间里还能用的应用（总控自己、电话、系统界面总是能用）。 */
     val allowed: Set<String> = DEFAULT_ALLOWED,
     /** 震动催你。 */
@@ -131,6 +141,38 @@ object Hq {
     /** 总控时间里这个应用能不能用。 */
     fun allows(pkg: String, own: String, cfg: HqConfig, extra: Set<String> = emptySet()): Boolean =
         pkg == own || pkg in ALWAYS_ALLOWED || pkg in cfg.allowed || pkg in extra
+
+    /**
+     * 打开被盯的应用时，要不要自动开一场总控时间。
+     *
+     * 规则（都可在设置里调）：
+     *  - [HqConfig.autoOnOpen] 默认关，只对拦截名单里的应用生效；
+     *  - 已经在总控时间里、休假、紧急暂停中，都不再开；
+     *  - 刚结束一场先等 [HqConfig.autoOnOpenCooldownMin] 分钟，避免关掉又立刻被拉回；
+     *  - 当天自动开满 [HqConfig.autoOnOpenMaxPerDay] 次就停手。
+     *
+     * 纯逻辑，可单测。
+     */
+    fun shouldAutoStart(
+        cfg: HqConfig,
+        sessions: List<HqSession>,
+        isBlocked: Boolean,
+        now: Long,
+        zone: ZoneId,
+        pausedUntil: Long,
+        emergencyUntil: Long,
+    ): Boolean {
+        if (!cfg.autoOnOpen || !isBlocked) return false
+        if (pausedUntil > now || emergencyUntil > now) return false
+        if (sessions.any { it.active }) return false
+        val lastEnd = sessions.maxOfOrNull { it.endedAt } ?: 0L
+        if (lastEnd > 0 && now - lastEnd < cfg.autoOnOpenCooldownMin * 60_000L) return false
+        val today = DayClock.dateKey(now, zone)
+        val used = sessions.count {
+            it.trigger == HqTrigger.AUTO && DayClock.dateKey(it.startedAt, zone) == today
+        }
+        return used < cfg.autoOnOpenMaxPerDay
+    }
 
     fun minutesOf(time: Int) = time.mod(24 * 60)
 

@@ -201,6 +201,10 @@ object Policy {
         if (old.escalation && !new.escalation) add("关掉失联阶梯")
         if (old.proactive && !new.proactive) add("总控不再主动找你")
         if (DayClock.rank(new.at) > DayClock.rank(old.at)) add("总控时间推迟到 ${DayClock.hhmm(new.at)}")
+        if (old.autoOnOpen && !new.autoOnOpen) add("关掉「打开被盯的应用就自动进入」")
+        if (new.autoOnOpenMinutes < old.autoOnOpenMinutes) add("自动进入缩短到 ${new.autoOnOpenMinutes} 分钟")
+        if (new.autoOnOpenCooldownMin > old.autoOnOpenCooldownMin) add("自动进入的间隔放宽到 ${new.autoOnOpenCooldownMin} 分钟")
+        if (new.autoOnOpenMaxPerDay < old.autoOnOpenMaxPerDay) add("自动进入每天最多 ${new.autoOnOpenMaxPerDay} 次")
     }
 
     /** 两份设置取更严的那份（放宽的部分保持原样）。 */
@@ -213,6 +217,11 @@ object Policy {
         escalation = old.escalation || new.escalation,
         proactive = old.proactive || new.proactive,
         at = if (DayClock.rank(new.at) > DayClock.rank(old.at)) old.at else new.at,
+        autoOnOpen = old.autoOnOpen || new.autoOnOpen,
+        autoOnOpenMinutes = maxOf(old.autoOnOpenMinutes, new.autoOnOpenMinutes),
+        // 间隔更短、每天次数更多，都是更严
+        autoOnOpenCooldownMin = minOf(old.autoOnOpenCooldownMin, new.autoOnOpenCooldownMin),
+        autoOnOpenMaxPerDay = maxOf(old.autoOnOpenMaxPerDay, new.autoOnOpenMaxPerDay),
     )
 
     /** 排队中的总控时间设置（24 小时后会变成这样）；没有就是现在的。设置页从这里开始改，免得把排队的改动冲掉。 */

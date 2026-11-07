@@ -152,4 +152,42 @@ class HqTest {
         assertTrue(Hq.quiet(cfg, at(14, 23, 45), zone))
         assertFalse(Hq.quiet(cfg, at(14, 21, 30), zone))
     }
+
+    @Test
+    fun autoOnOpenRespectsSwitchListCooldownAndPause() {
+        val on = cfg.copy(autoOnOpen = true, autoOnOpenMinutes = 25)
+        val now = at(14, 12, 0)
+        // 默认关
+        assertFalse(Hq.shouldAutoStart(cfg, emptyList(), isBlocked = true, now = now, zone = zone, pausedUntil = 0, emergencyUntil = 0))
+        // 开着、名单内、没有会话 → 开
+        assertTrue(Hq.shouldAutoStart(on, emptyList(), isBlocked = true, now = now, zone = zone, pausedUntil = 0, emergencyUntil = 0))
+        // 名单外 → 不开
+        assertFalse(Hq.shouldAutoStart(on, emptyList(), isBlocked = false, now = now, zone = zone, pausedUntil = 0, emergencyUntil = 0))
+        // 已经在总控时间里 → 不开
+        val running = listOf(Hq.start("r", HqTrigger.MANUAL, cfg, now - 60_000))
+        assertFalse(Hq.shouldAutoStart(on, running, isBlocked = true, now = now, zone = zone, pausedUntil = 0, emergencyUntil = 0))
+        // 刚结束 10 分钟，冷却 30 分钟 → 不开
+        val justEnded = listOf(Hq.finish(Hq.start("e", HqTrigger.MANUAL, cfg, now - 20 * 60_000), now - 10 * 60_000))
+        assertFalse(Hq.shouldAutoStart(on, justEnded, isBlocked = true, now = now, zone = zone, pausedUntil = 0, emergencyUntil = 0))
+        // 冷却过了 → 开
+        assertTrue(Hq.shouldAutoStart(on, justEnded, isBlocked = true, now = now + 21 * 60_000, zone = zone, pausedUntil = 0, emergencyUntil = 0))
+        // 休假 / 紧急暂停 → 不开
+        assertFalse(Hq.shouldAutoStart(on, emptyList(), isBlocked = true, now = now, zone = zone, pausedUntil = now + 60_000, emergencyUntil = 0))
+        assertFalse(Hq.shouldAutoStart(on, emptyList(), isBlocked = true, now = now, zone = zone, pausedUntil = 0, emergencyUntil = now + 60_000))
+    }
+
+    @Test
+    fun autoOnOpenStopsAfterDailyCap() {
+        val on = cfg.copy(autoOnOpen = true, autoOnOpenMaxPerDay = 2, autoOnOpenCooldownMin = 1)
+        val now = at(14, 20, 0)
+        val today = listOf(
+            Hq.finish(Hq.start("a1", HqTrigger.AUTO, cfg, at(14, 9, 0)), at(14, 9, 25)),
+            Hq.finish(Hq.start("a2", HqTrigger.AUTO, cfg, at(14, 11, 0)), at(14, 11, 25)),
+        )
+        // 今天已经自动进过 2 次，第 3 次不再触发
+        assertFalse(Hq.shouldAutoStart(on, today, isBlocked = true, now = now, zone = zone, pausedUntil = 0, emergencyUntil = 0))
+        // 昨天的不算今天
+        val yesterday = listOf(Hq.finish(Hq.start("y", HqTrigger.AUTO, cfg, at(13, 9, 0)), at(13, 9, 25)))
+        assertTrue(Hq.shouldAutoStart(on, yesterday, isBlocked = true, now = now, zone = zone, pausedUntil = 0, emergencyUntil = 0))
+    }
 }
