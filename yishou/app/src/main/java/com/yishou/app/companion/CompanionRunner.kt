@@ -75,6 +75,8 @@ object CompanionRunner {
     private var replyOpen = false
     /** 高频会话里已经消费到的那个「新画面」时刻；会话结束时归零。 */
     private var lastFrameSeenAt = 0L
+    /** 这一场是哪一次开始的；用来只执行一次「记下当天起点」。 */
+    private var hfSessionSeen = 0L
 
     /** GateService 每秒调一次。 */
     fun tick(service: AccessibilityService, pkg: String?) {
@@ -93,8 +95,15 @@ object CompanionRunner {
         val hfRunning = HighFreq.running(hfCfg, hf, System.currentTimeMillis())
         if (ap.hfStartedAt > 0 && !hfRunning) {
             app.settings.updateApp { it.copy(hfStartedAt = 0) }
+            // 会话结束：把当天计数还原成开始前的值，这一场不占日常额度
+            prefs.endHighFreq()
             prefs.resetHighFreq()
             lastFrameSeenAt = 0L
+            hfSessionSeen = 0L
+        }
+        if (hfRunning && hfSessionSeen != ap.hfStartedAt) {
+            hfSessionSeen = ap.hfStartedAt
+            prefs.beginHighFreq()
         }
         if (!cfg.enabled && !hfRunning) return
 
@@ -179,7 +188,10 @@ object CompanionRunner {
                     ctx.openTopics.firstOrNull { it.id == id }?.title
                 }
                 val question = runCatching {
-                    buildQuestion(app, service, label, ctx.foregroundMinutes, hasAi, kind, topicTitle)
+                    // 高频会话里录屏刚看过这一帧：把它那句短描述当屏幕内容，别再截一次、转写一遍。
+                    // 游戏画面读不到界面文字，靠的就是这一句。
+                    val hint = if (hfRunning) prefs.lastScreenText().takeIf { it.isNotBlank() } else null
+                    buildQuestion(app, service, label, ctx.foregroundMinutes, hasAi, kind, topicTitle, hint)
                 }.onFailure { Log.w(TAG, "出题失败", it) }.getOrNull()
                 asking = false
                 prefs.markAttempt(System.currentTimeMillis())
@@ -366,6 +378,8 @@ object CompanionRunner {
         hasAi: Boolean,
         kind: AskKind,
         topicTitle: String?,
+        /** 高频会话里录屏给出的「此刻在做什么」；有它就不必再截图转写。 */
+        screenHint: String? = null,
     ): String? {
         if (kind == AskKind.TOPIC_FOLLOW_UP) {
             val followUp = com.yishou.app.core.Persona
@@ -384,27 +398,29 @@ object CompanionRunner {
         val nodeText = runCatching { screenTextFromNodes(service) }.getOrDefault("")
         if (nodeText.length >= 10) Log.i(TAG, "节点文字：${nodeText.take(80)}")
 
-        val screenText = if (nodeText.length >= 10) {
-            nodeText
-        } else {
-            val bitmap = screenshot(service) ?: run {
-                Log.w(TAG, "截屏失败或不可用")
-                return null
-            }
-            Log.i(TAG, "截屏成功：${bitmap.width}x${bitmap.height}")
-            val base64 = encode(bitmap)
-            bitmap.recycle()
-            if (base64.isBlank()) return null
+        val screenText = when {
+            !screenHint.isNullOrBlank() -> screenHint
+            nodeText.length >= 10 -> nodeText
+            else -> {
+                val bitmap = screenshot(service) ?: run {
+                    Log.w(TAG, "截屏失败或不可用")
+                    return null
+                }
+                Log.i(TAG, "截屏成功：${bitmap.width}x${bitmap.height}")
+                val base64 = encode(bitmap)
+                bitmap.recycle()
+                if (base64.isBlank()) return null
 
-            val seen = app.scrollLook.completeWithImage(
-                "把屏幕正文完整转写出来：标题、字幕、正文。去掉按钮、点赞数、时间戳、广告；看不清写（看不清）。不要总结，不要评论。",
-                "请转写这张屏幕。",
-                "data:image/jpeg;base64,$base64",
-                "伴读识屏",
-            )
-            val text = (seen as? LlmResult.Ok)?.value?.trim().orEmpty()
-            if (seen is LlmResult.Err) Log.w(TAG, "识屏失败：${seen.error}")
-            text
+                val seen = app.scrollLook.completeWithImage(
+                    "把屏幕正文完整转写出来：标题、字幕、正文。去掉按钮、点赞数、时间戳、广告；看不清写（看不清）。不要总结，不要评论。",
+                    "请转写这张屏幕。",
+                    "data:image/jpeg;base64,$base64",
+                    "伴读识屏",
+                )
+                val text = (seen as? LlmResult.Ok)?.value?.trim().orEmpty()
+                if (seen is LlmResult.Err) Log.w(TAG, "识屏失败：${seen.error}")
+                text
+            }
         }
         if (screenText.length < 10) return null
 

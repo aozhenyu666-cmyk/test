@@ -63,28 +63,44 @@ object HighFreq {
     /** 记一次开口。 */
     fun onSpeak(s: HighFreqSession, now: Long): HighFreqSession = s.copy(lastSpeakAt = now, speaks = s.speaks + 1)
 
+    /** 这一场最多可能开口几次（按最短间隔算的上界）。 */
+    fun sessionBudget(cfg: HighFreqConfig): Int {
+        val c = cfg.sane()
+        return (c.sessionMinutes * 60 / c.minGapSec).coerceAtLeast(1)
+    }
+
     /**
-     * 高频会话里交给唯一调度器的配置：只改开口间隔和每小时上限，其余沿用用户平时的设置。
-     * 会话结束后调用方回到原来的配置，不需要另存一份。
+     * 高频会话里交给唯一调度器的配置：改开口间隔、每小时上限，并给当天额度留出这一场的预算。
+     *
+     * 每天上限必须一起抬：默认 24 次，按 90 秒一开口，半小时就会把当天额度用光，
+     * 之后连平时的低频提醒也不会再出现。会话结束后调用方把当天计数恢复成开始前的值
+     * （[ProactiveState.promptsToday] 由 CompanionPrefs 负责还原），所以这一场不会吃掉日常额度。
      */
     fun toProactive(cfg: HighFreqConfig, base: ProactiveConfig): ProactiveConfig {
         val c = cfg.sane()
         val perHour = (3_600 / c.minGapSec).coerceAtLeast(2)
         // 会话里已经手动确认过「就在这一场」，不用再等满平时的 5 分钟在场时间。
-        return base.copy(minGapSeconds = c.minGapSec, maxPerHour = perHour, presenceMinutes = 1).sane()
+        return base.copy(
+            minGapSeconds = c.minGapSec,
+            maxPerHour = perHour,
+            maxPerDay = base.maxPerDay + sessionBudget(c),
+            presenceMinutes = 1,
+        ).sane()
     }
 }
 
 /**
- * 画面变没变：只比读屏文字，不在这里碰像素。
+ * 画面变没变：没开录屏时只比读屏文字（开了录屏用 [com.yishou.app.look.FrameDelta] 比像素）。
  *
- * 读不到文字（空串）时视为「可能变了」——宁可多看一眼，也不因为读不到而漏掉。
+ * 读不到文字时**不再**每拍都当成「变了」：游戏、视频这类画面本来就没有界面文字，
+ * 那样会每 30 秒都触发一次识图。只在「从有字变成读不到」时算一次变化；一直读不到就安静，
+ * 真正的画面变化交给录屏那条路。
  */
 object ScreenDelta {
     fun changed(before: String?, after: String?): Boolean {
         val a = before?.trim().orEmpty()
         val b = after?.trim().orEmpty()
-        if (b.isEmpty()) return true
+        if (b.isEmpty()) return a.isNotEmpty()
         return a != b
     }
 }

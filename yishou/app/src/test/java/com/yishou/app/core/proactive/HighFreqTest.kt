@@ -40,6 +40,7 @@ class HighFreqTest {
         assertEquals(90, p.minGapSeconds)
         assertEquals(40, p.maxPerHour) // 3600 / 90
         assertEquals(1, p.presenceMinutes) // 会话里不用再等满平时的 5 分钟
+        assertEquals(44, p.maxPerDay) // 日常 24 + 这一场预算 20
         // 90 秒内不开口，90 秒后才可以
         val base = ProactiveState(lastAskAt = t0, promptsThisHour = 0)
         val ctx = ProactiveContext(
@@ -49,6 +50,20 @@ class HighFreqTest {
         assertEquals(ProactiveDecision.Silent, ProactiveEngine.decide(p, base, ctx, 0))
         val later = ctx.copy(now = t0 + 90_000)
         assertTrue(ProactiveEngine.decide(p, base, later, 0) is ProactiveDecision.Ask)
+    }
+
+    @Test fun `session budget raises the daily cap instead of eating it`() {
+        assertEquals(20, HighFreq.sessionBudget(cfg)) // 30 分钟 / 90 秒
+        val p = HighFreq.toProactive(cfg, ProactiveConfig())
+        val ctx = ProactiveContext(
+            now = t0, hour = 14, foregroundPkg = "com.tencent.mm",
+            watched = true, foregroundMinutes = 10, taskTitle = "行测", stuck = "",
+        )
+        // 平时 24 次当天就用光了；会话里 30 次还可以开口
+        val used = ProactiveState(promptsToday = 30)
+        assertTrue(ProactiveEngine.decide(p, used, ctx, 0) is ProactiveDecision.Ask)
+        // 会话外的同一份计数会被日常上限挡住
+        assertEquals(ProactiveDecision.Silent, ProactiveEngine.decide(ProactiveConfig(), used, ctx, 0))
     }
 
     @Test fun `bad numbers are clamped`() {
@@ -61,7 +76,10 @@ class HighFreqTest {
     @Test fun `screen text change decides whether to look at pixels`() {
         assertFalse(ScreenDelta.changed("第一题 3+2=?", "第一题 3+2=?"))
         assertTrue(ScreenDelta.changed("第一题 3+2=?", "第二题 7×8=?"))
-        assertTrue("读不到文字时宁可多看一眼", ScreenDelta.changed("第一题", "  "))
+        assertTrue("从有字变成读不到：算一次变化", ScreenDelta.changed("第一题", "  "))
         assertTrue(ScreenDelta.changed(null, "有字"))
+        // 游戏、视频本来就读不到字：不能每拍都算变化，否则每 30 秒都要识图一次
+        assertFalse(ScreenDelta.changed("", "  "))
+        assertFalse(ScreenDelta.changed(null, ""))
     }
 }

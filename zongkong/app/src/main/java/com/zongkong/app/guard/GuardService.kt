@@ -242,6 +242,7 @@ class GuardService : AccessibilityService() {
         // 5 条启动路径（手动按钮、定时、AI、未回应升级、失联强制升级）都不经过模式，
         // 把 lockdown 卡在严格档位后面会让「失联太久强制升级」变成一条拦不住的死路。
         // 但紧急暂停仍然算数：那是用户按下的无条件退出。
+        // 2026-11-06 用户拍板：保持这个版本（普通模式下开总控时间也锁），不按「只有失联强制升级不看档位」的折中改。
         if (store.modeVerdict(now, healthy = true).emergencyPaused) return false
         var session = store.hq.value.active
         if (session == null && store.absence(now) == com.zongkong.core.hq.Hq.Absence.FORCE && !com.zongkong.core.hq.Hq.allows(pkg, packageName, cfg, overlays())) {

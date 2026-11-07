@@ -65,7 +65,8 @@ data class ProactiveConfig(
         minGapSeconds = minGapSeconds.coerceIn(0, 7_200),
         // 高频会话最短 30 秒一次，一小时理论最多 120 次；上限放到 60 留余量
         maxPerHour = maxPerHour.coerceIn(1, 60),
-        maxPerDay = maxPerDay.coerceIn(1, 48),
+        // 高频会话会临时把当天额度抬高（日常 24 + 这一场预算），上限放到 200
+        maxPerDay = maxPerDay.coerceIn(1, 200),
         presenceMinutes = presenceMinutes.coerceIn(1, 60),
         restMinutes = restMinutes.coerceIn(5, 240),
         deferMinutes = deferMinutes.coerceIn(5, 240),

@@ -155,6 +155,28 @@ class CompanionPrefs(context: Context) {
     }
 
     /**
+     * 高频会话开始时记下「今天已经开口几次」。会话期间额度临时抬高（见 HighFreq.toProactive），
+     * 结束时再恢复成这个值——这一场不占日常额度，也不会把当天的提醒提前用光。
+     */
+    fun beginHighFreq() {
+        // 已经记过就别覆盖：应用重启后 CompanionRunner 会再调一次，覆盖会把会话中途的计数当成起点。
+        if (p.contains("hf_base_day")) return
+        p.edit()
+            .putInt("hf_base_today", p.getInt("p_prompts_today", 0))
+            .putString("hf_base_day", today())
+            .apply()
+    }
+
+    /** 会话结束：同一天就把当天计数还原；跨天时新的一天本来就该从零开始，不还原。 */
+    fun endHighFreq() {
+        val day = p.getString("hf_base_day", "") ?: ""
+        if (day == today()) {
+            p.edit().putInt("p_prompts_today", p.getInt("hf_base_today", 0)).apply()
+        }
+        p.edit().remove("hf_base_today").remove("hf_base_day").apply()
+    }
+
+    /**
      * 录屏那边确认「画面真的变了」的时刻。CompanionRunner 只消费这个信号：
      * 比上次消费新，才进入开口判断；否则这一拍什么都不做。
      */
