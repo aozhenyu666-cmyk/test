@@ -72,6 +72,9 @@ function normalizeAt(raw) {
  * Per-day counts from the ledger.
  * A generated request is counted on the day it was generated; its answer counts toward that
  * same day even when he replies after midnight, so a late-night ball does not look unanswered.
+ * Rows are ordered by `at` before pairing, so a ledger whose lines arrived out of order still
+ * matches. A generated row without a requestId is skipped: the plugin always writes one, and
+ * without it there is nothing to match a reply to.
  */
 export function summarizeLedger(rows, tz = DEFAULT_TZ) {
   const days = new Map()
@@ -81,7 +84,8 @@ export function summarizeLedger(rows, tz = DEFAULT_TZ) {
   }
   const shots = new Map()
   const answered = new Set()
-  for (const row of rows) {
+  const ordered = rows.slice().sort((a, b) => normalizeAt(a?.at) - normalizeAt(b?.at))
+  for (const row of ordered) {
     const state = row?.state
     const at = normalizeAt(row?.at)
     if (!state || !at) continue

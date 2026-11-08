@@ -59,6 +59,17 @@ test('账本：主动消息数、回复率、平均回复间隔、违抗、破�
   assert.deepEqual(d2.intervals, [3 * 60_000])
 })
 
+test('账本行顺序乱了也能把回复配到原来那一球', () => {
+  const days = summarizeLedger([
+    { requestId: 'x', state: 'replied', at: at('2026-11-07T10:05:00+08:00') },
+    { requestId: 'x', state: 'generated', at: at('2026-11-07T10:00:00+08:00') },
+  ], TZ)
+  const d = days.get('2026-11-07')
+  assert.equal(d.generated, 1)
+  assert.equal(d.answered, 1)
+  assert.deepEqual(d.intervals, [5 * 60_000])
+})
+
 test('前台日志：娱乐类才计时，超过 30 分钟的间隔当灭屏丢掉', () => {
   const minutes = summarizeForeground([
     { at: at('2026-11-07T10:00:00+08:00'), app: 'tv.danmaku.bili' },
