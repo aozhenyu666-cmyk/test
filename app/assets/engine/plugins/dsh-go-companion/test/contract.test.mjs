@@ -259,3 +259,22 @@ test('待命计时器：刚进待命只是开始计时，不马上开锁', async
     assert.ok(Number(r.body.nextCheckAt) <= Date.now() + 10 * 60_000)
   })
 })
+
+test('待命计时器：到点前会把手机叫回来', async () => {
+  await withHome(async (home) => {
+    const t = setup(home, { standbySince: Date.now() - 5 * 60_000 })
+    const r = await t.plan(game)
+    assert.equal(r.body.followup.active, false)
+    assert.ok(Number(r.body.nextCheckAt) <= Date.now() + 6 * 60_000, String(r.body.nextCheckAt))
+  })
+})
+
+test('待命计时器：他说了别烦我，就不抢安静时段', async () => {
+  await withHome(async (home) => {
+    // 安静一小时：plan 自己把闹钟定在 muteUntil；计时器不能提前把他叫回来。
+    const t = setup(home, { standbySince: Date.now() - 5 * 60_000, muteUntil: Date.now() + 3_600_000 })
+    const r = await t.plan(game)
+    assert.equal(r.body.reason, 'muted')
+    assert.ok(Number(r.body.nextCheckAt) > Date.now() + 10 * 60_000, String(r.body.nextCheckAt))
+  })
+})
