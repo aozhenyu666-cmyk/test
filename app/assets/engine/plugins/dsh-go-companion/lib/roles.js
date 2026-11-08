@@ -188,6 +188,14 @@ export function strategistBallFrame(owner, names, { reason, note, allowTools = f
     lines.push('不回你不会停：十分钟后还会再来。这一次不要上网查资料。')
     return lines
   }
+  if (reason === 'apply-window') {
+    const w = note?.applyWindow || {}
+    lines.push('对账刚完，修改申请窗口开了（你是主持窗口的人）。告诉他：现在这一小会儿（15 分钟）可以提明天的调整——'
+      + '想明天多玩一段就说，你用 request_relax 帮他记（只管明天、要理由）；想明天更严就 tighten_today。'
+      + '本周还剩 ' + (Number(w.remaining) ?? '几') + ' 天放松额度。')
+    lines.push('口气照你平时的样子，别像在念通知。今天的规则不动——放松只能提前一天。过了这一会儿就得等明天。')
+    return lines
+  }
   if (reason === 'patrol') {
     const p = note || {}
     lines.push('这是你的一次巡逻：' + (p.why || '到点看一眼他在干嘛') + '。')
@@ -252,7 +260,7 @@ export function capabilityLines(role, { notesDir = '', allowTools = true } = {})
     '- 管他：dafeiyu_control 一键切"忙时 X 分钟"（不闲聊、定时报到、娱乐一开就锁）/ "闲时" / 拒绝模式 / 安静 X 分钟 / 严格温和。他说"帮我盯着""接下来一小时别让我玩""我要去做饭"这类话，就直接用它，别只嘴上答应。',
     '- 知识库：kb_write 写 大肥鱼/判断.md（你对他的判断和证据）；大肥鱼/我.md 是他写的规则，只有还没有时才能起草。',
     '- 封禁名单：block_apps 把某些 App 临时算进娱乐清单（明天封什么、他最近沉迷什么），到期自动失效；电话、短信、地图、支付永远不封。',
-    '- 放风：grant_break 给他一段休息（≤30 分钟，娱乐临时解锁，到点自动恢复）；只有信用分够（≥60）才放得出来，低分别想。',
+    '- 放松/收紧：娱乐锁不锁由墙按他清醒时定的规则执行，你当场改不了（这是底线）。他想明天多玩一段，用 request_relax——但只有晚上对账后的申请窗口开着、而且本周还有额度时才批得下来，只管明天；他想今天更严就 tighten_today（任何时候立即锁到零点）。聊天里没有别的按钮能当场解锁。',
     '- 立任务：start_task_mode 不用他同意就能立（目标、时长、理由），娱乐当场锁死，他自己说"忙完了"也解不开；只有验收合格调用 end_task_mode 才解锁。',
     '- Gemini 连麦：他有 Gemini App（Pro），开 Live 能实时语音、看他屏幕——比你们打字快得多。要高频盯他、陪他练、审他摸鱼、帮他想事时，用 gemini_live 生成给 Gemini 的背景（他是谁、这次干嘛、怎么盯他），照它返回的步骤写进剪贴板、打开 Gemini。连麦一开始就是"Gemini 互动舱"：手机只许 Gemini，别的 App 一开就锁（电话、短信、地图、支付除外），他跑出去你们叫他回去。要提前收工用 gemini_end。连完之后用后台屏把那段对话读回来，gemini_log 存进笔记库。他说"读一下 Gemini""刚才跟 Gemini 聊了啥"也这样做。',
   ]

@@ -2410,7 +2410,7 @@ export function apply(ctx) {
       else if (lastRhythm?.reviewGate && !lastRhythm.state.reviewBall && !reviewedToday) nextSpeaker = { role: 'strategist', reason: 'review', at: now }
       // 申请窗口刚开：鲸澜来一句，告诉他现在能提明天的放松/收紧（主持修改申请窗口是鲸澜的事）。
       else if (lastApplyWindow?.justOpened) {
-        nextSpeaker = { role: 'strategist', reason: 'apply-window', at: now, applyWindow: { remaining: relaxRemaining(config, now, tz), closeAt: Number(lastApplyWindow.state?.closeAt) || 0 } }
+        nextSpeaker = { role: 'strategist', reason: 'apply-window', at: now, note: { applyWindow: { remaining: relaxRemaining(config, now, tz), closeAt: Number(lastApplyWindow.state?.closeAt) || 0 } } }
       }
       if (nextSpeaker) Object.assign(out, { speak: true, reason: 'strategist-' + nextSpeaker.reason, nextCheckAt: now })
     }
