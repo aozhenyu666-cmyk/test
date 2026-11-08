@@ -539,6 +539,32 @@ class InterceptGuard(
     }
 
     /**
+     * The page closed some other way than release / exit / pause: 急事直达, 回 Gemini, 破窗, the
+     * companion withdrawing it, or the system destroying it. The lock record must end here too —
+     * before P0 these paths finished the page and left [InterceptState.openEventId] set, and every
+     * later lock answered "already open" until the process restarted (只能锁一次).
+     */
+    fun onDismissed(eventId: String, reason: String, now: Long): Boolean = synchronized(lock) {
+        if (state.openEventId != eventId) return@synchronized false
+        endOpen(now, InterceptOutcome.EXITED, reason.take(40))
+        persist()
+        true
+    }
+
+    /**
+     * A lock that has been open longer than [maxOpenMs] without any ending is stale (its page is
+     * long gone): close it so it cannot pin "one interception at a time" forever. Returns the
+     * eventId it closed, or null.
+     */
+    fun expireStale(now: Long, maxOpenMs: Long): String? = synchronized(lock) {
+        val id = state.openEventId ?: return@synchronized null
+        if (state.openSinceWall <= 0 || now - state.openSinceWall < maxOpenMs) return@synchronized null
+        endOpen(now, InterceptOutcome.EXITED, "stale")
+        persist()
+        id
+    }
+
+    /**
      * 暂停: stop intercepting everything for [pauseMs]. [eventId] null pauses from the settings
      * page; a page's own pause button must name the interception it belongs to, so a stale page
      * cannot grab the setting.

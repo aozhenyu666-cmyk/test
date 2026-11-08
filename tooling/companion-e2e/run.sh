@@ -23,7 +23,7 @@ if [ ! -x "$ENG/node_modules/.bin/dsh" ]; then
 fi
 rm -rf "$WORK"; mkdir -p "$WORK/home"; : > "$WORK/llm.log"; : > "$WORK/prompts.jsonl"
 P="$(win "$ROOT/app/assets/engine/plugins")"
-{ echo "- insert:"; for id in dsh-feiyu-mood dsh-fish-strict dsh-go-memory dsh-go-relationship dsh-go-companion; do
+{ echo "- insert:"; for id in dsh-feiyu-mood dsh-go-memory dsh-go-relationship dsh-go-companion; do
   echo "    - id: $id"; echo "      name: $P/$id/lib/index.js"; done; } > "$WORK/patch.yml"
 cleanup() { pkill -f "$HERE_W/fake-llm.mjs" 2>/dev/null; pkill -f "dsh/lib/bin.js web --patch $WORK_W" 2>/dev/null; }
 trap cleanup EXIT

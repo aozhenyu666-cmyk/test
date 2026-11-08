@@ -151,7 +151,13 @@ class InterceptPageActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        onScreenId = eventId
         if (!reported && !shown) awaitVisible()
+    }
+
+    override fun onPause() {
+        if (onScreenId == eventId) onScreenId = null
+        super.onPause()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -188,12 +194,18 @@ class InterceptPageActivity : Activity() {
 
     override fun onStop() {
         super.onStop()
+        // 灭屏不清锁: with the screen off the page is only stopped and the lock stays open in the
+        // guard; when the locked app comes back (亮屏、解锁、切回游戏) InterceptRuntime shows this same
+        // lock again. With the screen on, being pushed away (home key, recents) is leaving by the exit.
         val screenOn = getSystemService(PowerManager::class.java)?.isInteractive != false
         if (!reported && !isChangingConfigurations && screenOn && !isFinishing) exit()
     }
 
     override fun onDestroy() {
         main.removeCallbacks(proof)
+        if (onScreenId == eventId) onScreenId = null
+        // Destroyed without a report (the system reclaimed it, or it was restored and finished): the
+        // lock is not over - it resurfaces with the app. Only the screen slot is given back.
         // Free the shared visible-surface slot before unregistering: whichever way this page ended
         // (released, exited, paused, back-press, destroyed by the system), the screen is free again.
         InterceptRuntime.onPageGone(eventId)
@@ -365,8 +377,9 @@ class InterceptPageActivity : Activity() {
                 return@breakglass
             }
             breakDialog?.dismiss()
-            // 破窗是允许的离开：不报 exit，也不触发违抗复查。
+            // 破窗是允许的离开：不算紧急退出，但锁要正式结束（否则下次锁不上），复查在放风期间不算违抗。
             reported = true
+            eventId?.let { InterceptRuntime.onDismissed(it, "breakglass") }
             val pkg = packageName
             if (!isFinishing) finish()
             if (pkg != null) InterceptRuntime.openTarget(this, pkg)
@@ -456,6 +469,7 @@ class InterceptPageActivity : Activity() {
             available.forEach { (label, pkg) ->
                 addView(pillButton(AppStrings.get(ctx, label), secondary = true, weight = 1f, onTap = {
                     reported = true
+                    eventId?.let { InterceptRuntime.onDismissed(it, "quick:" + pkg) }
                     if (!isFinishing) finish()
                     InterceptRuntime.openTarget(ctx, pkg)
                 }), LinearLayout.LayoutParams(0, dp(44), 1f).apply {
@@ -655,6 +669,7 @@ class InterceptPageActivity : Activity() {
                 ProactiveRuntime.sessionApp()?.let { gem ->
                     addView(pillButton(AppStrings.get(ctx, R.string.intercept_return_gemini), primary = true, onTap = {
                         reported = true
+                        eventId?.let { InterceptRuntime.onDismissed(it, "gemini") }
                         if (!isFinishing) finish()
                         InterceptRuntime.openTarget(ctx, gem)
                     }))
@@ -737,6 +752,12 @@ class InterceptPageActivity : Activity() {
         /** Pages on screen by eventId, so a withdrawal can close them. Main thread only. */
         private val live = HashMap<String, InterceptPageActivity>()
 
+        /** The eventId whose page is resumed right now (between onResume and onPause); null otherwise. */
+        @Volatile private var onScreenId: String? = null
+
+        /** True while the page for [eventId] is in front of the person (not stopped by 灭屏, not behind). */
+        fun isOnScreen(eventId: String): Boolean = onScreenId == eventId && live[eventId] != null
+
         /** Started from DSH's own process; false if the system refused at once. */
         fun start(context: Context, eventId: String, pkg: String, label: String, trainingMs: Long, deadline: Long, why: String? = null): Boolean = runCatching {
             context.startActivity(
@@ -751,7 +772,12 @@ class InterceptPageActivity : Activity() {
         fun withdraw(eventId: String) { live.remove(eventId)?.let { it.reported = true; it.finish() } }
 
         fun withdrawAll() {
-            live.values.toList().forEach { it.reported = true; it.finish() }
+            live.values.toList().forEach { page ->
+                // Withdrawn by the runtime: the lock record ends too, or the next lock would find it "open".
+                if (!page.reported) page.eventId?.let { InterceptRuntime.onDismissed(it, "withdrawn") }
+                page.reported = true
+                page.finish()
+            }
             live.clear()
             InterceptRuntime.onPageGone(null)
         }

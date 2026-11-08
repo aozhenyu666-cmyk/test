@@ -111,6 +111,16 @@ object ProactiveOverlay {
 
     fun isShowing(token: String) = live.containsKey(token)
 
+    /**
+     * 执法优先（C1）: a lock page is about to take the screen. Every open card folds into its bubble,
+     * which never takes focus, so the lock page can prove it is on screen. Nothing is lost: the
+     * conversation stays and the bubble reopens it. Also used when the card had not been answered
+     * yet - folding is not closing, the event is still waiting for his reply.
+     */
+    fun yieldForLock() {
+        live.values.toList().forEach { it.foldForLock() }
+    }
+
     /** The accessibility service's own window context when it is on; else the overlay permission. */
     private fun host(context: Context): Pair<Context, Int>? {
         val service = PhoneA11yService.instance
@@ -313,13 +323,11 @@ object ProactiveOverlay {
                 gravity = Gravity.END
                 setPadding(0, context.dp(4f), 0, 0)
             }
-            // 在开会 / 上课：一键回"在忙，晚点回你"——算回过，窗口收起，45 分钟内不再主动找（关了还去玩照样算违抗）。
+            // 在开会 / 上课：一键「在忙，晚点回」（C4）。窗口收起，但**不算回过话、不开安静期**：
+            // 插件只记一笔 busy；关窗后照常复查，5 分钟里在娱乐 App 累计 15 秒就算违抗。
             actions.addView(textAction("在忙，晚点回") { // l10n:keep companion overlay quick reply
                 if (waiting) return@textAction
-                input?.setText("我在忙（开会/上课），晚点回你")
-                sendNow()
-                ProactiveRuntime.muteFor(45 * 60_000L)
-                close(SurfaceReport.Dismissed, muted = true)
+                close(SurfaceReport.Dismissed, busy = true)
             })
             // 不许装看不见：没回过一句，「别烦我」「收起」都不放他走（他要的：总得说几句）。
             actions.addView(textAction(AppStrings.get(app, R.string.proactive_overlay_mute)) {
@@ -496,11 +504,17 @@ object ProactiveOverlay {
 
         // ---- collapse / close ------------------------------------------------------------------
 
+        /** A lock page is coming: fold to the bubble now, answered or not. */
+        fun foldForLock() {
+            main.removeCallbacks(shrink)
+            collapse(force = true)
+        }
+
         /** Reply window ran out: keep the ball, as a bubble he can reopen. */
-        private fun collapse() {
+        private fun collapse(force: Boolean = false) {
             if (collapsed || root == null) return
             // Not answered yet: it stays open (no quiet fold-away into a bubble).
-            if (!talked) {
+            if (!talked && !force) {
                 main.postDelayed(shrink, COLLAPSE_AFTER_MS)
                 return
             }
@@ -557,12 +571,12 @@ object ProactiveOverlay {
         }
 
         /** 收起 / 别烦我: the person closed it on purpose. */
-        private fun close(what: SurfaceReport, muted: Boolean = false) {
+        private fun close(what: SurfaceReport, muted: Boolean = false, busy: Boolean = false) {
             report(what)
             destroy()
-            // Tell the companion he closed it (and whether he had talked), then check 30 s later
-            // whether he went straight back into a game: that is defiance, not "didn't see it".
-            ProactiveRuntime.onOverlayClosed(chatted = talked, muted = muted)
+            // Tell the companion he closed it (and whether he had talked), then watch the next
+            // 5 minutes: back in a game for 15 s in total is defiance, not "didn't see it".
+            ProactiveRuntime.onOverlayClosed(chatted = talked, muted = muted, busy = busy)
         }
 
         private fun report(what: SurfaceReport) {

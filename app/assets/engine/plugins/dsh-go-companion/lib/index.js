@@ -59,7 +59,7 @@ import { BUSY_CHECK_MS, aiTask, applyGear, effectiveGear, gearLines, gearSwitch 
 import { trustGap, trustLines, trustScore } from './trust.js'
 import { buildSnapshot, sistersView } from './panel.js'
 import { kbDir, kbWrite, knowledgeLines, scanUnfinished } from './notes.js'
-import { NIGHT_LOCK_TO, ROLL_MS, closeGates, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
+import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, closeGates, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import { GEMINI_PACKAGES, geminiBrief, geminiLines, geminiMode, geminiSteps, recapMarkdown, trackGemini } from './gemini.js'
 
 export const name = 'dsh-go-companion'
@@ -794,6 +794,8 @@ export function apply(ctx) {
           saveRhythm(gates.state)
           if (lastRhythm) lastRhythm = { ...lastRhythm, state: gates.state, morningGate: lastRhythm.morningGate && !gates.closed.includes('morning'), reviewGate: lastRhythm.reviewGate && !gates.closed.includes('review') }
           record({ state: 'gate-closed', at: Date.now(), gates: gates.closed })
+          // C5：晚上对账一并清算她们立的、还没验收的任务，不出现"解完一层还有一层"。
+          if (gates.closed.includes('review')) settleTasksAtReview(Date.now())
         }
         // 他说"安静一小时""今天别找我"就照做：这是一句话就说清的事，不必占一次模型调用。
         const muteUntilAt = mutedUntil(text, Date.now(), { tz: config.timeZone })
@@ -1199,6 +1201,63 @@ export function apply(ctx) {
     const night = rh && rh.night === 'lock' && Number(rh.nightUntil) > now ? Number(rh.nightUntil) : 0
     return Math.max(r, session, pending, gate, night)
   }
+  /**
+   * 本地规则快照（P0 C2）：现在生效的每一条锁，各带自己的到期时间，一起下发给手机。
+   * 手机把它存在本地；引擎死了就只按这份执行，到点按手机本地时间解除，绝不自己加新规则。
+   * 和 refuseUntilAt 是同一套规则，只是不合成一个数：早晚两道门这里给的是门本身的封顶时间
+   * （而不是 3 分钟滚动），这样引擎挂了门也按时关、不会锁死。
+   * kind 的先后由手机端 LockPriority 仲裁（晚间对账 > 任务 > 早上 > 深夜 > 拒绝）。
+   */
+  /** 晚上对账通过：她们立的任务（任务模式、她们开的拒绝模式）记一笔"对账时清算"，一起解锁。 */
+  function settleTasksAtReview(now) {
+    const task = aiTask(config, now)
+    const aiRefuse = config.refuseBy === 'ai' && Number(config.refuseUntil) > now
+    if (!task && !aiRefuse) return false
+    const goal = config.taskGoal
+    if (task) {
+      setGear({ gear: 'free' }, 'review')
+      saveGearState({ ...loadGearState(), doneFor: Number(config.gearUntil) })
+    }
+    if (config.refuseBy === 'ai' || (config.refuseBy === 'gear' && task)) {
+      config = { ...config, refuseUntil: 0, refuseBy: undefined }
+      try {
+        writeConfig(config)
+      } catch {
+        // 这一轮照样生效
+      }
+    }
+    record({ state: 'task-settled', at: now, by: 'review', goal })
+    return true
+  }
+  function rulesSnapshot(now) {
+    const rules = []
+    const block = {}
+    if (onBreak(now)) return { v: 1, at: now, rules, block }
+    const push = (kind, until, why) => {
+      const u = Math.round(Number(until) || 0)
+      if (u > now) rules.push({ kind, until: u, why })
+    }
+    const rh = lastRhythm
+    const st = rh?.state || {}
+    if (rh?.reviewGate) push('review', Number(st.reviewSince) + REVIEW_CAP_MS, '晚上对账：和鲸澜对完今天的账才解锁')
+    const task = aiTask(config, now)
+    if (task) {
+      const goal = config.taskGoal ? '（' + String(config.taskGoal).slice(0, 40) + '）' : ''
+      // 没到点：锁到任务结束；到点还没验收：往后顺 10 分钟（引擎在就一直顺，引擎死了 10 分钟后自己解）。
+      push('task', Number(config.gearUntil) > now ? Number(config.gearUntil) : now + 10 * 60_000, '任务模式' + goal + '：验收合格才解锁')
+    }
+    if (rh?.morningGate) push('morning', Number(st.morningSince) + MORNING_CAP_MS, '早上对线：先说出今天最重要的 3 件事')
+    if (rh?.night === 'lock') push('night', rh.nightUntil, '深夜锁：娱乐锁到早上 7 点')
+    if (Number(config.refuseUntil) > now) {
+      const by = config.refuseBy
+      if (by === 'ai' || (by === 'gear' && task)) push('task', config.refuseUntil, '她们立的任务：验收合格才解锁')
+      else push('refuse', config.refuseUntil, by === 'gear' ? '忙时：到点自动解锁' : '拒绝模式：到点自动解锁')
+    }
+    for (const b of Array.isArray(config.blockExtra) ? config.blockExtra : []) {
+      if (b && typeof b.app === 'string' && Number(b.until) > now && !NEVER_BLOCK.includes(b.app)) block[b.app] = Math.round(Number(b.until))
+    }
+    return { v: 1, at: now, rules, block }
+  }
   const toolOutput = {
     schema: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, text: { type: 'string' } } },
     render: (_a, v) => [{ type: 'text', text: String((v && v.text) || '') }],
@@ -1467,7 +1526,8 @@ export function apply(ctx) {
     const now = Date.now()
     const type = String(body?.type || '')
     if (type === 'overlay-closed') {
-      record({ state: 'overlay-closed', at: now, chatted: body?.chatted === true, muted: body?.muted === true, app: typeof body?.app === 'string' ? body.app.slice(0, 120) : undefined })
+      // busy = 点了「在忙，晚点回」（C4）：不算回过话、不开安静期，只记一笔。
+      record({ state: 'overlay-closed', at: now, chatted: body?.chatted === true, muted: body?.muted === true, busy: body?.busy === true || undefined, app: typeof body?.app === 'string' ? body.app.slice(0, 120) : undefined })
       return { v: 1, ok: true }
     }
     if (type === 'defied') {
@@ -2158,7 +2218,8 @@ export function apply(ctx) {
         if (now - last >= BUSY_CHECK_MS) nextSpeaker = { role: thinker, reason: 'checkin', at: now, busy: { what: config.gearWhat, until: Number(config.gearUntil) } }
         else hold = last + BUSY_CHECK_MS
       } else if (config.gear === 'busy' && Number(config.gearUntil) <= now && now - Number(config.gearUntil) < 2 * 3_600_000 &&
-        Number(gs.doneFor) !== Number(config.gearUntil)) {
+        Number(gs.doneFor) !== Number(config.gearUntil) && !lastRhythm?.reviewGate) {
+        // 对账门开着时不单独来验收任务：对账会一并清算（C5）。
         // 她们立的任务到点：姐姐来验收（不自动算完成）；他自己定的忙时到点：妹妹来迎接。
         nextSpeaker = config.taskBy
           ? { role: thinker, reason: 'task-due', at: now, busy: { goal: config.taskGoal, what: config.gearWhat }, digest: true }
@@ -2219,6 +2280,8 @@ export function apply(ctx) {
       gear: effectiveGear(config, now),
       // Gemini 互动舱：这段时间只许 Gemini（allow 里的包名），其余 App 由手机直接锁。
       session: geminiSessionView(now),
+      // 本地规则快照（C2）：手机存下来，引擎不可达时照这份执法。
+      rules: rulesSnapshot(now),
     }
   }
 

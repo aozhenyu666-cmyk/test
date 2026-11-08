@@ -1,7 +1,7 @@
 name: Build 大肥鱼 Android APK (phone test)
 on:
   push:
-    branches: [dafeiyu-apk]
+    branches: [dafeiyu-apk, ccr-5d2829ec-e6vr54]
     paths:
       - ".github/workflows/build-dafeiyu-apk.yml"
       - "app/**"

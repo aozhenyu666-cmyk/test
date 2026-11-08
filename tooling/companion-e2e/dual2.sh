@@ -6,7 +6,7 @@ export E2E_WORK="$WORK" E2E_BASE="http://127.0.0.1:$PORT"
 [ -x "$ENG/node_modules/.bin/dsh" ] || { echo "先跑一次 run.sh 装引擎"; exit 2; }
 rm -rf "$WORK"; mkdir -p "$WORK/home"
 P="$ROOT/app/assets/engine/plugins"
-{ echo "- insert:"; for id in dsh-feiyu-mood dsh-fish-strict dsh-go-memory dsh-go-relationship dsh-go-companion; do
+{ echo "- insert:"; for id in dsh-feiyu-mood dsh-go-memory dsh-go-relationship dsh-go-companion; do
   echo "    - id: $id"; echo "      name: $P/$id/lib/index.js"; done; } > "$WORK/patch.yml"
 pkill -f "dsh/lib/bin.js web" 2>/dev/null; while pgrep -f "dsh/lib/bin.js web" >/dev/null; do :; done
 (cd "$WORK" && DSH_HOME="$WORK/home" HOME="$WORK/home" DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-proxy-injected}" TZ=GMT \

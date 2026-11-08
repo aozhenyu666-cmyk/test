@@ -31,6 +31,10 @@ import io.github.ccch1mneyyy.dsh_app.loop.core.SchedulerConfig
 import io.github.ccch1mneyyy.dsh_app.loop.core.Step
 import io.github.ccch1mneyyy.dsh_app.loop.core.Submit
 import io.github.ccch1mneyyy.dsh_app.loop.core.VisibleSurface
+import io.github.ccch1mneyyy.dsh_app.loop.core.DefianceWindow
+import io.github.ccch1mneyyy.dsh_app.loop.core.LockPriority
+import io.github.ccch1mneyyy.dsh_app.loop.core.LockRule
+import io.github.ccch1mneyyy.dsh_app.loop.core.RuleBook
 import io.github.ccch1mneyyy.dsh_app.loop.core.Surface
 import io.github.ccch1mneyyy.dsh_app.loop.core.Switches
 import io.github.ccch1mneyyy.dsh_app.loop.core.SurfaceReport
@@ -434,11 +438,58 @@ object ProactiveRuntime {
         runCatching { app.getSharedPreferences(REFUSE_PREFS, Context.MODE_PRIVATE).edit().putLong("until", at).apply() }
         Log.i(TAG, "refuse mode " + if (at > System.currentTimeMillis()) "on until $at" else "off")
     }
+
+    /**
+     * C2 本地规则缓存: the plugin's last rule snapshot (拒绝 / 任务 / 早上对线 / 晚上对账 / 深夜锁 /
+     * 封禁名单), each with its own expiry, on disk. With the engine gone the phone keeps enforcing
+     * exactly these until they run out on the local clock; it never adds a rule of its own.
+     */
+    private var rules: RuleBook? = null
+    private fun ruleBook(): RuleBook? {
+        rules?.let { return it }
+        if (!::app.isInitialized) return null
+        val book = RuleBook(AtomicJsonFile(File(File(File(app.filesDir, "loop"), "proactive"), "rules.json")))
+        runCatching { book.recover() }.onFailure { Log.w(TAG, "rules recover", it) }
+        rules = book
+        return book
+    }
+
+    /** Until when some lock is in force: the cached refuse time or any cached rule (0 = none). */
+    private fun lockUntil(now: Long = System.currentTimeMillis()): Long =
+        maxOf(refuseUntil(), ruleBook()?.lockedUntil(now) ?: 0L)
+
+    /**
+     * C5 仲裁: of every lock in force, the one whose unlock requirement the lock page shows
+     * ([LockPriority.ORDER] is the table). Null when nothing is in force.
+     */
+    fun primaryLock(now: Long = System.currentTimeMillis()): LockRule? {
+        if (!::app.isInitialized || breaking()) return null
+        val list = ArrayList(ruleBook()?.active(now).orEmpty())
+        val r = refuseUntil()
+        if (r > now && list.none { it.until >= r }) list.add(LockRule(LockPriority.KIND_REFUSE, r))
+        if (sessionActive()) list.add(LockRule(LockPriority.KIND_SESSION, sessionUntil, null))
+        return LockPriority.primary(list)
+    }
+
+    /** The one line the lock page shows for the primary lock. */
+    private fun lockWhy(now: Long = System.currentTimeMillis()): String? =
+        primaryLock(now)?.let { it.why ?: LockPriority.defaultWhy(it.kind) }
+
+    /** Temporary block list: the last /plan answer plus the cached snapshot (survives restarts). */
+    private fun blockedNow(): Set<String> = blocked + (ruleBook()?.blocked(System.currentTimeMillis()) ?: emptySet())
+
+    /** Whether a lock in force right now would lock [pkg] (the lock page asks before superseding). */
+    fun wouldLock(pkg: String): Boolean {
+        if (!::app.isInitialized || breaking() || !listed(pkg)) return false
+        val now = System.currentTimeMillis()
+        return now < lockUntil(now) || sessionActive() || (force?.app == pkg && now < (force?.until ?: 0L))
+    }
+
     private fun listed(pkg: String): Boolean {
         if (pkg in NEVER_LOCK) return false
         // Gemini 互动舱：只许白名单里的 Gemini，其他 App 一律算"要拦的"。
         if (sessionActive()) return !sessionAllows(pkg)
-        if (pkg in blocked) return true
+        if (pkg in blockedNow()) return true
         return runCatching { InterceptRuntime.config().targets.any { it.packageName == pkg } }.getOrDefault(false)
     }
 
@@ -532,7 +583,7 @@ object ProactiveRuntime {
     /** 管控期间：设置页自卫和破窗只在此时生效（拒绝模式、锁 / 赶、任务模式、防波堤）。 */
     fun controlActive(): Boolean {
         if (!::app.isInitialized) return false
-        return System.currentTimeMillis() < refuseUntil() || force != null || shieldActive()
+        return System.currentTimeMillis() < lockUntil() || force != null || shieldActive()
     }
 
     /** NotificationShield 拦下一条：报给插件攒着（不带正文）。 */
@@ -569,8 +620,9 @@ object ProactiveRuntime {
         if (restless) consultPlanSoon(minGapMs = 5_000L)
         val now = System.currentTimeMillis()
         // 拒绝模式: lock now, at the door; the /plan answer would come a second later.
-        if (now < refuseUntil() && listed(packageName)) {
-            val f = Force(4, packageName, "拒绝模式", now + FORCE_HOLD_MS, refuse = true)
+        // C2: also with the engine dead — this reads only the cached rules and the local clock.
+        if (now < lockUntil(now) && listed(packageName)) {
+            val f = Force(4, packageName, lockWhy(now) ?: "拒绝模式", now + FORCE_HOLD_MS, refuse = true)
             force = f
             enforce(f, fresh = true)
         }
@@ -579,19 +631,22 @@ object ProactiveRuntime {
         if (f.app == packageName && now < f.until && !f.refuse) enforce(f)
     }
 
-    /** How long after a closed reminder we look again (still in the game = defiance). */
-    private const val DEFIANCE_CHECK_MS = 30_000L
-    private val defianceCheck = Runnable { checkDefiance() }
-    private var defianceSource = "overlay"
+    /**
+     * C4 违抗复查: after a reminder or a lock page closes, watch 5 minutes; 15 s in an entertainment
+     * app in total (going back to the launcher in between does not reset it) is defiance.
+     */
+    private val defiance = DefianceWindow()
+    private val defianceTick = Runnable { sampleDefiance() }
+    private const val DEFIANCE_SAMPLE_MS = 1_000L
 
-    /** The chat overlay was closed by him (收起 / 别烦我). */
-    fun onOverlayClosed(chatted: Boolean, muted: Boolean) {
+    /** The chat overlay was closed by him (收起 / 别烦我 / 在忙). */
+    fun onOverlayClosed(chatted: Boolean, muted: Boolean, busy: Boolean = false) {
         if (!::app.isInitialized) return
         val front = NowFeed.snapshot(SystemClock.elapsedRealtime()).app
         fetchPluginRoute(routeCallback { }, "POST", "/event", linkedMapOf(
-            "type" to "overlay-closed", "chatted" to chatted, "muted" to muted, "app" to front,
+            "type" to "overlay-closed", "chatted" to chatted, "muted" to muted, "busy" to busy, "app" to front,
         ))
-        watchDefiance("overlay")
+        watchDefiance(if (busy) "busy" else "overlay")
     }
 
     /**
@@ -646,7 +701,7 @@ object ProactiveRuntime {
         if (!sessionActive()) return
         if (pkg == null || !listed(pkg)) return
         if (breaking()) return
-        val f = Force(4, pkg, "Gemini 互动中，只许 Gemini", System.currentTimeMillis() + FORCE_HOLD_MS, refuse = true)
+        val f = Force(4, pkg, lockWhy() ?: "Gemini 互动中，只许 Gemini", System.currentTimeMillis() + FORCE_HOLD_MS, refuse = true)
         force = f
         enforce(f, fresh = true)
     }
@@ -673,35 +728,52 @@ object ProactiveRuntime {
     }
 
     /**
-     * Look again in 30 s: if he is in a listed (entertainment) app by then, he closed the reminder
-     * and went on playing. Also called when he leaves the lock page by its exit.
+     * Open (or reopen) the defiance window. Called whenever a reminder or a lock page closes, by
+     * whichever way (收起、在忙、紧急退出、急事直达、回 Gemini、破窗、放行).
      */
     fun watchDefiance(source: String) {
         if (!::app.isInitialized) return
-        defianceSource = source
-        main.removeCallbacks(defianceCheck)
-        main.postDelayed(defianceCheck, DEFIANCE_CHECK_MS)
+        defiance.open(SystemClock.elapsedRealtime(), source)
+        main.removeCallbacks(defianceTick)
+        main.postDelayed(defianceTick, DEFIANCE_SAMPLE_MS)
     }
 
-    private fun checkDefiance() {
+    /** In front and it counts: listed, screen on, and no pass (破窗放风 / 训练放行 / 白名单 / 互动舱) allows it. */
+    private fun defiantIn(pkg: String?, screenOn: Boolean): Boolean {
+        if (pkg == null || !screenOn) return false
+        if (!listed(pkg) || breaking()) return false
+        return runCatching { !InterceptRuntime.hasPass(pkg) }.getOrDefault(true)
+    }
+
+    private fun sampleDefiance() {
+        if (!defiance.isOpen) return
+        val t = SystemClock.elapsedRealtime()
+        val snap = NowFeed.snapshot(t)
+        val source = defiance.source
+        if (defiance.sample(t, defiantIn(snap.app, snap.screenOn))) {
+            snap.app?.let { reportDefiance(it, source) }
+            return
+        }
+        if (defiance.isOpen) main.postDelayed(defianceTick, DEFIANCE_SAMPLE_MS)
+    }
+
+    private fun reportDefiance(front: String, source: String) {
         if (!proactiveEnabled()) return
-        val front = NowFeed.snapshot(SystemClock.elapsedRealtime()).app ?: return
-        if (!listed(front)) return
         val label = runCatching { InterceptRuntime.config().targets.firstOrNull { it.packageName == front }?.label }.getOrNull() ?: front
-        Log.i(TAG, "defiance: still in $front ${DEFIANCE_CHECK_MS / 1000}s after the reminder was closed ($defianceSource)")
+        Log.i(TAG, "defiance: ${defiance.limitMs / 1000}s in $front within ${defiance.windowMs / 60_000} min after a close ($source)")
         fetchPluginRoute(routeCallback { m ->
             // The plugin escalates by rule (拒绝模式 on) and answers with it: lock now, don't wait for /plan.
             ((m["refuse"] as? Map<*, *>)?.get("until") as? Number)?.toLong()?.let { setRefuseUntil(it) }
             val f = m["force"] as? Map<*, *>
             val level = (f?.get("level") as? Number)?.toInt() ?: 0
             if (level >= 3) {
-                val fx = Force(level, front, f?.get("why") as? String, System.currentTimeMillis() + FORCE_HOLD_MS, refuse = true)
+                val fx = Force(level, front, lockWhy() ?: f?.get("why") as? String, System.currentTimeMillis() + FORCE_HOLD_MS, refuse = true)
                 force = fx
                 enforce(fx)
             }
             // 鲸澜 comes in right away (the plugin queued her).
             consultPlanSoon(minGapMs = 0L)
-        }, "POST", "/event", linkedMapOf("type" to "defied", "app" to front, "label" to label, "source" to defianceSource))
+        }, "POST", "/event", linkedMapOf("type" to "defied", "app" to front, "label" to label, "source" to source))
     }
 
     /** 说到做到: 赶 = back to the launcher first; then 锁 the app behind a drill. */
@@ -738,6 +810,9 @@ object ProactiveRuntime {
     private fun applyPlan(raw: Any?) {
         val map = raw as? Map<*, *> ?: return
         lastPlanError = (map["error"] as? Map<*, *>)?.get("code") as? String
+        // C2: only a real plan answer (v = 1) may change the rules. Anything else - a gateway error
+        // page, an engine that is half up - used to read as "no refuse" and wiped the cached lock.
+        if (lastPlanError == null && (map["v"] as? Number)?.toInt() != 1) lastPlanError = "bad-answer"
         if (lastPlanError != null) { companionPlan = null; arm(); return }
         // 力度：插件说"锁 / 赶"就执行（插件只决定，手机执行）；低于 3 就撤掉记着的那一次。
         val f = map["force"] as? Map<*, *>
@@ -745,6 +820,8 @@ object ProactiveRuntime {
         val target = f?.get("app") as? String
         val why = f?.get("why") as? String
         setRefuseUntil(((map["refuse"] as? Map<*, *>)?.get("until") as? Number)?.toLong() ?: 0L)
+        // The full snapshot, each rule with its own expiry, for when the engine is gone (C2).
+        ruleBook()?.replace(map["rules"] as? Map<*, *>, System.currentTimeMillis())
         setShieldUntil(((map["shield"] as? Map<*, *>)?.get("until") as? Number)?.toLong() ?: 0L)
         blocked = (map["block"] as? List<*>)?.mapNotNull { it as? String }?.filter { it !in NEVER_LOCK }?.toSet() ?: emptySet()
         // Gemini 互动舱：插件给 allow 就进入"只许 Gemini"，null 就退出。
@@ -755,9 +832,10 @@ object ProactiveRuntime {
             val allow = (s["allow"] as? List<*>)?.mapNotNull { it as? String }?.toSet() ?: emptySet()
             setSession(until, allow, s["app"] as? String)
         }
-        val refusing = System.currentTimeMillis() < refuseUntil()
+        val refusing = System.currentTimeMillis() < lockUntil()
         force = if (level >= 3 && !target.isNullOrBlank()) {
-            Force(level, target, why, System.currentTimeMillis() + FORCE_HOLD_MS, refuse = refusing)
+            // C5: while a rule lock is in force the page names only the primary lock's requirement.
+            Force(level, target, (if (refusing) lockWhy() else null) ?: why, System.currentTimeMillis() + FORCE_HOLD_MS, refuse = refusing)
         } else null
         // 只在插件明说"讲通了，放行"时解锁。力度低于 3 不算：锁屏页弹出后前台是 DSH 自己、
         // 赶回桌面后前台是桌面，插件看到的力度本来就是 0——那时解锁等于锁几秒就自己打开游戏。
@@ -767,7 +845,7 @@ object ProactiveRuntime {
         if (sessionActive()) {
             val front = NowFeed.snapshot(SystemClock.elapsedRealtime()).app
             if (front != null && listed(front)) {
-                val sf = Force(4, front, "Gemini 互动中，只许 Gemini", System.currentTimeMillis() + FORCE_HOLD_MS, refuse = true)
+                val sf = Force(4, front, lockWhy() ?: "Gemini 互动中，只许 Gemini", System.currentTimeMillis() + FORCE_HOLD_MS, refuse = true)
                 force = sf
                 enforce(sf, fresh = true)
             }
@@ -1076,7 +1154,7 @@ object ProactiveRuntime {
             ?: runCatching { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() }.getOrNull()
         val opens = usageOpens(wall)
         val today = NowFeed.today(now, dayOf(wall)).map { (pkg, minutes) ->
-            linkedMapOf<String, Any?>("app" to pkg, "label" to label(pkg), "minutes" to minutes, "fun" to (pkg in funApps || pkg in blocked),
+            linkedMapOf<String, Any?>("app" to pkg, "label" to label(pkg), "minutes" to minutes, "fun" to (pkg in funApps || pkg in blockedNow()),
                 "opens" to opens?.get(pkg))
         }
         val front = s.app
@@ -1084,7 +1162,7 @@ object ProactiveRuntime {
             "app" to front,
             "label" to front?.let { label(it) },
             "minutes" to s.appMinutes,
-            "fun" to (front != null && (front in funApps || front in blocked)),
+            "fun" to (front != null && (front in funApps || front in blockedNow())),
             "screenOn" to s.screenOn,
             "charging" to s.charging,
             "local" to String.format(java.util.Locale.US, "%02d:%02d", minuteOfDay(wall) / 60, minuteOfDay(wall) % 60),

@@ -74,13 +74,9 @@ object BuiltinPluginGuest {
                 "lib/selfupdate.mjs",
             ),
         ),
-        // Deterministic strict check-ins. Questions themselves use the
-        // built-in ask_user_question so the pet bubble / notification owns UI.
-        Plugin(
-            id = "dsh-fish-strict",
-            entry = "lib/index.js",
-            files = listOf("package.json", "cordis.patch.yml", "lib/index.js"),
-        ),
+        // dsh-fish-strict (strict check-ins) and dsh-speak-up (dice-driven openers) are retired
+        // (P0, 2026-11-08): dsh-go-companion does both now, and running them next to it meant two
+        // voices / two state machines. Their sources stay under assets for reference only.
         // Phone-local memory authority: SQLite (JSON fallback) under DSH_HOME.
         // Also contributes the native memory panel and a composer action.
         Plugin(
