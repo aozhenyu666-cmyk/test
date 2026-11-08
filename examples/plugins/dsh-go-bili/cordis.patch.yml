@@ -1,0 +1,5 @@
+# 挂在 profile 上的加载器补丁：把本插件作为 bundle 插进去。
+# 形状照抄 examples/plugins/dsh-go-example-weather 与 dsh-go-partner（同一套宿主，已跑通）。
+- insert:
+    - id: bili
+      name: dsh-go-bili

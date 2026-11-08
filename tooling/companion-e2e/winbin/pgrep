@@ -1,0 +1,7 @@
+#!/bin/bash
+# Minimal pgrep for Git Bash on Windows: exit 0 when a matching node.exe command line exists.
+pat="$*"
+pat="${pat#-f }"
+out=$(powershell -NoProfile -Command "\$p='$pat'; @(Get-CimInstance Win32_Process | Where-Object { \$_.Name -eq 'node.exe' -and \$_.CommandLine -and \$_.CommandLine.Contains(\$p) }).Count" 2>/dev/null | tr -d '\r')
+[ "${out:-0}" -gt 0 ] && { echo "$out"; exit 0; }
+exit 1

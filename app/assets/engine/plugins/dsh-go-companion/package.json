@@ -1,0 +1,65 @@
+{
+  "name": "dsh-go-companion",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "大肥鱼主动互动中心：本地话题选择、冷会话回合、送达/回应账本；复用 fish-memory 与原生调度。",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "cordis.patch.yml",
+    "lib"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=22.13",
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  },
+  "license": "MIT",
+  "dshGo": {
+    "v": 1,
+    "title": {
+      "zh": "鱼丸 · 鲸澜",
+      "en": "Yuwan & Jinglan"
+    },
+    "icon": "heart",
+    "contributes": {
+      "composer.actions": [
+        {
+          "id": "sisters-open",
+          "label": {
+            "zh": "姐妹",
+            "en": "Sisters"
+          },
+          "icon": "heart"
+        }
+      ],
+      "panels": [
+        {
+          "id": "sisters",
+          "title": {
+            "zh": "鱼丸 · 鲸澜",
+            "en": "Yuwan & Jinglan"
+          },
+          "icon": "heart",
+          "placement": [
+            "session.tab",
+            "features",
+            "chat.panel"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,5 @@
+# 挂在 profile 上的加载器补丁：把本插件作为 bundle 插进去。
+# 形状照抄 examples/plugins/dsh-go-partner / dsh-go-example-usage。
+- insert:
+    - id: cap-ledger
+      name: dsh-go-cap-ledger

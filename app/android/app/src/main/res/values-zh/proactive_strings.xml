@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 主动交互页（loop/proactive/ProactivePageActivity.kt）。英文在 values/proactive_strings.xml。 -->
+<resources>
+    <string name="proactive_reply">回应</string>
+    <string name="proactive_later">稍后</string>
+    <string name="proactive_ack">我看到了</string>
+    <string name="proactive_channel">主动搭话</string>
+    <string name="proactive_channel_description">页面弹不出来时，DSH 用通知问你一句</string>
+    <!-- 主动发球悬浮窗（loop/proactive/ProactiveOverlay.kt）。 -->
+    <string name="proactive_overlay_title">大肥鱼</string>
+    <string name="proactive_overlay_from">大肥鱼</string>
+    <string name="proactive_overlay_hint">跟大肥鱼说…</string>
+    <string name="proactive_overlay_mute">别烦我 1 小时</string>
+    <string name="proactive_overlay_collapse">收起</string>
+    <string name="proactive_overlay_you">你：%1$s</string>
+    <string name="proactive_overlay_reply">大肥鱼：%1$s</string>
+    <string name="proactive_overlay_thinking">大肥鱼在想…</string>
+    <string name="proactive_overlay_slow_model">模型有点慢，还在等它说完…</string>
+    <string name="proactive_overlay_busy">（大肥鱼还在说上一句，等一下再发）</string>
+    <string name="proactive_overlay_queued">（你们正在聊，这句排在后面了）</string>
+    <string name="proactive_overlay_failed">（没发出去：%1$s）</string>
+    <string name="proactive_overlay_bubble">🐟 大肥鱼还有一球</string>
+</resources>

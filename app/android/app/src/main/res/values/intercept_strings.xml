@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Entertainment-app intercept page (loop/intercept/InterceptPageActivity.kt). Chinese in values-zh/intercept_strings.xml. -->
+<resources>
+    <string name="intercept_title">%1$s is off-limits for now</string>
+    <string name="intercept_body">You opened %1$s. Take a breath: the app stays closed unless you choose a way through below.</string>
+    <string name="intercept_drill_prompt">Tap these numbers %1$s</string>
+    <string name="intercept_drill_ascending">from smallest to largest</string>
+    <string name="intercept_drill_descending">from largest to smallest</string>
+    <string name="intercept_drill_progress">%1$d of %2$d done</string>
+    <string name="intercept_drill_wrong">Not that one. Start again.</string>
+    <string name="intercept_training">Training passed: open it</string>
+    <string name="intercept_training_locked">Finish the drill first</string>
+    <string name="intercept_rule">Authorization rule: open it for %1$d min</string>
+    <string name="intercept_whitelist">Add to whitelist</string>
+    <string name="intercept_pause">Pause interception</string>
+    <string name="intercept_exit">Emergency exit</string>
+    <string name="intercept_break">Break glass: walk 150 steps</string>
+    <string name="intercept_break_title">Break glass: 10 minutes out</string>
+    <string name="intercept_break_body">Walk 150 steps and write at least 100 characters: what you are breaking, and why. Da Fei Yu will remember it tonight.</string>
+    <string name="intercept_break_steps">Steps: %1$d / 150</string>
+    <string name="intercept_break_note">Explanation: %1$d / 100 characters</string>
+    <string name="intercept_break_hint">Why are you breaking the plan? What will you do in these 10 minutes? Be specific.</string>
+    <string name="intercept_break_submit">Break the glass for 10 min</string>
+    <string name="intercept_break_cancel">Not yet</string>
+    <string name="intercept_break_sending">Telling Da Fei Yu…</string>
+    <string name="intercept_break_failed">Couldn\'t reach the plugin. Try again.</string>
+    <string name="intercept_break_no_sensor">This phone has no step sensor.</string>
+    <string name="intercept_break_denied">Step permission is off, so the step count can\'t work.</string>
+    <string name="intercept_break_wait">Not yet: keep walking and keep writing.</string>
+    <string name="intercept_quick_call">Call</string>
+    <string name="intercept_quick_sms">Messages</string>
+    <string name="intercept_quick_maps">Maps</string>
+    <string name="intercept_quick_pay">Pay</string>
+    <string name="intercept_return_gemini">Back to Gemini</string>
+    <string name="intercept_channel">Interception</string>
+</resources>

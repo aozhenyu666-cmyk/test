@@ -1,0 +1,6 @@
+# 挂在 profile 上的加载器补丁：把本插件作为 bundle 插进去。
+# 形状照抄 dsh-fish-memory / dsh-feiyu-mood 的 cordis.patch.yml —— 那两个是同一套宿主，
+# 已经在 DSH 0.2.1-rc.x 上跑通，所以这里不做任何「聪明的」变体。
+- insert:
+    - id: partner
+      name: dsh-go-partner

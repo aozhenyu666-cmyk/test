@@ -1,0 +1,314 @@
+// 大肥鱼本地记忆 · 落盘层
+//
+// 权威数据放在手机上：优先 SQLite（node:sqlite，Node 22.13+ 自带），
+// 老旧运行时拿不到 node:sqlite 时自动退到同目录的 JSON（原子写），
+// 两条路的 doc 形状完全一样，上层逻辑不用分支。
+//
+// 为什么整份快照写：一个人的长期记忆通常几千条以内，写一次几十毫秒；
+// 换来的是「不会有一半写入」的强一致，比零碎的增量 SQL 更好维护。
+
+import { createRequire } from 'node:module'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { emptyDoc, SCHEMA_VERSION } from './model.js'
+
+const require = createRequire(import.meta.url)
+let DatabaseSync = null
+try {
+  ;({ DatabaseSync } = require('node:sqlite'))
+} catch {
+  DatabaseSync = null
+}
+
+// 全部是固定 SQL，不接受任何拼接；参数一律走 prepared statement 的占位符。
+const DDL = [
+  'CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+  'CREATE TABLE IF NOT EXISTS facts (id TEXT PRIMARY KEY, scope TEXT NOT NULL, text TEXT NOT NULL, kind TEXT, ' +
+    'importance INTEGER, pinned INTEGER, key TEXT, tags TEXT, created_at INTEGER, updated_at INTEGER, ' +
+    'last_hit_at INTEGER, hits INTEGER, hit_bonus REAL, expires_at INTEGER, source TEXT, status TEXT, ' +
+    'superseded_by TEXT, superseded_reason TEXT, corrected_from TEXT, forget_reason TEXT)',
+  'CREATE TABLE IF NOT EXISTS topics (id TEXT PRIMARY KEY, scope TEXT NOT NULL, title TEXT NOT NULL, detail TEXT, ' +
+    'status TEXT, priority INTEGER, opened_at INTEGER, updated_at INTEGER, last_touch_at INTEGER, ' +
+    'next_ask_at INTEGER, attempts INTEGER, due_at INTEGER, closed_at INTEGER, reason TEXT)',
+  'CREATE TABLE IF NOT EXISTS episodes (id TEXT PRIMARY KEY, scope TEXT NOT NULL, text TEXT NOT NULL, tags TEXT, at INTEGER)',
+  'CREATE TABLE IF NOT EXISTS tombstones (id TEXT PRIMARY KEY, scope TEXT NOT NULL, kind TEXT, ref_id TEXT, ' +
+    'text_hash TEXT, reason TEXT, at INTEGER)',
+  'CREATE TABLE IF NOT EXISTS hits (id TEXT PRIMARY KEY, fact_id TEXT NOT NULL, at INTEGER, query TEXT)',
+  'CREATE INDEX IF NOT EXISTS facts_scope ON facts(scope, status)',
+  'CREATE INDEX IF NOT EXISTS topics_scope ON topics(scope, status)',
+  'CREATE INDEX IF NOT EXISTS episodes_scope ON episodes(scope, at)',
+]
+
+const INSERT_FACT = 'INSERT INTO facts (id, scope, text, kind, importance, pinned, key, tags, created_at, updated_at, ' +
+  'last_hit_at, hits, hit_bonus, expires_at, source, status, superseded_by, superseded_reason, corrected_from, forget_reason) ' +
+  'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+
+const INSERT_TOPIC = 'INSERT INTO topics (id, scope, title, detail, status, priority, opened_at, updated_at, ' +
+  'last_touch_at, next_ask_at, attempts, due_at, closed_at, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+
+const CLEAR_ALL = ['DELETE FROM facts', 'DELETE FROM topics', 'DELETE FROM episodes', 'DELETE FROM tombstones', 'DELETE FROM hits']
+
+function factRow(f) {
+  return [f.id, f.scope, f.text, f.kind || 'fact', num(f.importance, 1), f.pinned ? 1 : 0, f.key || '',
+    JSON.stringify(f.tags || []), num(f.createdAt), num(f.updatedAt), num(f.lastHitAt), num(f.hits),
+    Number(f.hitBonus) || 0, num(f.expiresAt), f.source || '', f.status || 'active', f.supersededBy || '',
+    f.supersededReason || '', f.correctedFrom || '', f.forgetReason || '']
+}
+
+function topicRow(t) {
+  return [t.id, t.scope, t.title, t.detail || '', t.status || 'open', num(t.priority, 1), num(t.openedAt),
+    num(t.updatedAt), num(t.lastTouchAt), num(t.nextAskAt), num(t.attempts), num(t.dueAt), num(t.closedAt), t.reason || '']
+}
+
+function fromFactRow(r) {
+  return {
+    id: r.id, scope: r.scope, text: r.text, kind: r.kind || 'fact', importance: Number(r.importance) || 0,
+    pinned: Number(r.pinned) === 1, key: r.key || '', tags: parseTags(r.tags),
+    createdAt: Number(r.created_at) || 0, updatedAt: Number(r.updated_at) || 0,
+    lastHitAt: Number(r.last_hit_at) || 0, hits: Number(r.hits) || 0, hitBonus: Number(r.hit_bonus) || 0,
+    expiresAt: Number(r.expires_at) || 0, source: r.source || '', status: r.status || 'active',
+    supersededBy: r.superseded_by || '', supersededReason: r.superseded_reason || '',
+    correctedFrom: r.corrected_from || '', forgetReason: r.forget_reason || '',
+  }
+}
+
+function fromTopicRow(r) {
+  return {
+    id: r.id, scope: r.scope, title: r.title, detail: r.detail || '', status: r.status || 'open',
+    priority: Number(r.priority) || 0, openedAt: Number(r.opened_at) || 0, updatedAt: Number(r.updated_at) || 0,
+    lastTouchAt: Number(r.last_touch_at) || 0, nextAskAt: Number(r.next_ask_at) || 0,
+    attempts: Number(r.attempts) || 0, dueAt: Number(r.due_at) || 0, closedAt: Number(r.closed_at) || 0,
+    reason: r.reason || '',
+  }
+}
+
+function num(v, fallback = 0) {
+  const n = Number(v)
+  return Number.isFinite(n) ? Math.round(n) : fallback
+}
+
+function parseTags(raw) {
+  try {
+    const v = JSON.parse(raw || '[]')
+    return Array.isArray(v) ? v.map(String) : []
+  } catch {
+    return []
+  }
+}
+
+function ensureDir(file) {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+}
+
+/** 原子写：先写临时文件、fsync、再 rename；权限 0600。 */
+export function writeJsonAtomic(file, value) {
+  ensureDir(file)
+  const tmp = file + '.' + String(process.pid) + '.tmp'
+  const body = JSON.stringify(value)
+  const fd = openSync(tmp, 'w', 0o600)
+  try {
+    writeSync(fd, body, null, 'utf8')
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+  renameSync(tmp, file)
+}
+
+function readJson(file) {
+  if (!existsSync(file)) return null
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf8'))
+    if (!raw || typeof raw !== 'object') return null
+    return raw
+  } catch {
+    return null
+  }
+}
+
+function normalizeDoc(raw) {
+  const doc = emptyDoc()
+  if (!raw || typeof raw !== 'object') return doc
+  if (Array.isArray(raw.facts)) doc.facts = raw.facts.filter((f) => f && f.id && f.text).map((f) => ({ ...f }))
+  if (Array.isArray(raw.topics)) doc.topics = raw.topics.filter((t) => t && t.id && t.title)
+  if (Array.isArray(raw.episodes)) doc.episodes = raw.episodes.filter((e) => e && e.id)
+  if (Array.isArray(raw.tombstones)) doc.tombstones = raw.tombstones.filter((t) => t && t.id)
+  if (Array.isArray(raw.hits)) doc.hits = raw.hits.filter((h) => h && h.id)
+  if (Number(raw.v) !== SCHEMA_VERSION) doc.v = SCHEMA_VERSION
+  return doc
+}
+
+class SqliteBackend {
+  constructor(file) {
+    ensureDir(file)
+    this.file = file
+    this.kind = 'sqlite'
+    try {
+      const db = this.open()
+      db.close()
+    } catch (error) {
+      // 不是数据库 / 没有权限：不留下任何打开的文件句柄，调用方会降级到 JSON。
+      throw error
+    }
+  }
+
+  /**
+   * 每次操作开一次、用完就关。
+   * 手机上一份记忆的写入频率很低（一轮最多几次），换来的是：进程被杀、
+   * 面板刷新、外部工具读文件时都不会撞上长连接锁；测试和打包脚本也能直接删目录。
+   */
+  open() {
+    const db = new DatabaseSync(this.file)
+    try {
+      db.prepare('PRAGMA journal_mode = WAL').run()
+      db.prepare('PRAGMA synchronous = NORMAL').run()
+      for (const sql of DDL) db.prepare(sql).run()
+      db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)').run('schema', String(SCHEMA_VERSION))
+      return db
+    } catch (error) {
+      try { db.close() } catch {}
+      throw error
+    }
+  }
+
+  load() {
+    const doc = emptyDoc()
+    const db = this.open()
+    try {
+      doc.facts = db.prepare('SELECT * FROM facts').all().map(fromFactRow)
+      doc.topics = db.prepare('SELECT * FROM topics').all().map(fromTopicRow)
+      doc.episodes = db.prepare('SELECT * FROM episodes').all().map((r) => ({
+        id: r.id, scope: r.scope, text: r.text, tags: parseTags(r.tags), at: Number(r.at) || 0,
+      }))
+      doc.tombstones = db.prepare('SELECT * FROM tombstones').all().map((r) => ({
+        id: r.id, scope: r.scope, kind: r.kind || 'fact', refId: r.ref_id || '',
+        textHash: r.text_hash || '', reason: r.reason || '', at: Number(r.at) || 0,
+      }))
+      doc.hits = db.prepare('SELECT * FROM hits ORDER BY at DESC LIMIT 2000').all().map((r) => ({
+        id: r.id, factId: r.fact_id, at: Number(r.at) || 0, query: r.query || '',
+      }))
+    } finally {
+      db.close()
+    }
+    return doc
+  }
+
+  save(doc) {
+    const db = this.open()
+    try {
+      db.prepare('BEGIN IMMEDIATE').run()
+      try {
+        for (const sql of CLEAR_ALL) db.prepare(sql).run()
+        const factStmt = db.prepare(INSERT_FACT)
+        for (const f of doc.facts) factStmt.run(...factRow(f))
+        const topicStmt = db.prepare(INSERT_TOPIC)
+        for (const t of doc.topics) topicStmt.run(...topicRow(t))
+        const epStmt = db.prepare('INSERT INTO episodes (id, scope, text, tags, at) VALUES (?, ?, ?, ?, ?)')
+        for (const e of doc.episodes) epStmt.run(e.id, e.scope, e.text, JSON.stringify(e.tags || []), num(e.at))
+        const tombStmt = db.prepare('INSERT INTO tombstones (id, scope, kind, ref_id, text_hash, reason, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        for (const t of doc.tombstones) tombStmt.run(t.id, t.scope, t.kind || 'fact', t.refId || '', t.textHash || '', t.reason || '', num(t.at))
+        const hitStmt = db.prepare('INSERT INTO hits (id, fact_id, at, query) VALUES (?, ?, ?, ?)')
+        for (const h of doc.hits) hitStmt.run(h.id, h.factId, num(h.at), h.query || '')
+        db.prepare('COMMIT').run()
+      } catch (error) {
+        try { db.prepare('ROLLBACK').run() } catch {}
+        throw error
+      }
+    } finally {
+      db.close()
+    }
+  }
+
+  close() {}
+}
+
+class JsonBackend {
+  constructor(file) {
+    this.kind = 'json'
+    this.file = file
+  }
+
+  load() {
+    return normalizeDoc(readJson(this.file))
+  }
+
+  save(doc) {
+    writeJsonAtomic(this.file, doc)
+  }
+
+  close() {}
+}
+
+/**
+ * 打开记忆库。永远返回一个可用的 store（最坏情况退到 JSON），
+ * `store.kind` 会告诉面板现在用的是哪条路。
+ */
+export function openStore(options = {}) {
+  const home = String(options.home || '').trim()
+  const dir = join(home, 'fish-memory')
+  const sqliteFile = join(dir, 'fish-memory.sqlite')
+  const jsonFile = join(dir, 'memory.json')
+  let backend = null
+  let note = ''
+  if (options.json === true) {
+    note = '按调用方要求使用 JSON'
+  } else if (DatabaseSync) {
+    try {
+      backend = new SqliteBackend(sqliteFile)
+    } catch (error) {
+      note = 'SQLite 打不开，改用 JSON：' + String((error && error.message) || error)
+    }
+  } else {
+    note = '这个 Node 没有 node:sqlite，改用 JSON'
+  }
+  if (!backend) backend = new JsonBackend(jsonFile)
+  let doc = null
+  try {
+    doc = backend.load()
+  } catch (error) {
+    // 库坏了：留一份坏文件，别让整个插件挂掉。
+    try { renameSync(backend.file, backend.file + '.broken-' + String(Date.now())) } catch {}
+    if (backend.kind === 'sqlite') {
+      backend.close()
+      backend = new JsonBackend(jsonFile)
+      doc = backend.load()
+      note = 'SQLite 读坏了，已改用 JSON：' + String((error && error.message) || error)
+    } else {
+      doc = emptyDoc()
+      note = 'JSON 读坏了，已新建：' + String((error && error.message) || error)
+    }
+  }
+  return new MemoryStore(backend, doc, { note, dir, sqliteFile, jsonFile })
+}
+
+export class MemoryStore {
+  constructor(backend, doc, info) {
+    this.backend = backend
+    this.doc = normalizeDoc(doc)
+    this.kind = backend.kind
+    this.note = info.note || ''
+    this.dir = info.dir
+    this.file = backend.file
+    this.saves = 0
+    this.lastSaveAt = 0
+    this.lastError = ''
+  }
+
+  /** 改完 doc 调一次。整份快照写，失败不吞（调用方决定要不要提示）。 */
+  save() {
+    try {
+      this.backend.save(this.doc)
+      this.saves += 1
+      this.lastSaveAt = Date.now()
+      this.lastError = ''
+      return true
+    } catch (error) {
+      this.lastError = String((error && error.message) || error)
+      return false
+    }
+  }
+
+  close() {
+    try { this.backend.close() } catch {}
+  }
+}

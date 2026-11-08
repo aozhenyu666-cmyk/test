@@ -1,0 +1,74 @@
+{
+  "interceptTitle": "Entertainment block",
+  "interceptSubtitle": "When you open an app you marked as entertainment, DSH stops you once: solve a short drill or choose an authorization rule. The block and the check-ins keep separate books.",
+  "interceptEnabled": "Turn on entertainment block",
+  "interceptEnabledHint": "Off by default. When on, opening one of the apps below is blocked once; the cooldown stops it from nagging.",
+  "interceptTargets": "Apps to block",
+  "interceptTargetsHint": "These package names are yours, not built in. Removing one stops blocking it at once.",
+  "interceptNoTargets": "No target app yet",
+  "interceptAddTarget": "Add a package name",
+  "interceptAddTargetHint": "An Android package name, e.g. tv.danmaku.bili",
+  "interceptAddTargetInvalid": "A package name cannot be empty or contain spaces",
+  "interceptRemoveTarget": "Remove",
+  "interceptWhitelist": "Whitelist",
+  "interceptWhitelistHint": "A whitelisted package is never blocked, even if it is a target.",
+  "interceptWhitelistEmpty": "The whitelist is empty",
+  "interceptMode": "Parameters",
+  "interceptRelease": "Pass duration (minutes)",
+  "interceptTraining": "Drill length (seconds)",
+  "interceptCooldown": "Cooldown (minutes)",
+  "interceptDailyMax": "Daily limit",
+  "interceptDailyMaxOff": "No limit",
+  "interceptPause": "Pause and resume",
+  "interceptPauseHint": "Nothing is blocked while paused; it resumes on its own.",
+  "interceptPauseNow": "Pause for 30 minutes",
+  "interceptResume": "Resume blocking",
+  "interceptPausedUntil": "Paused until {time}",
+  "@interceptPausedUntil": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "interceptLedger": "Block ledger",
+  "interceptLedgerTriggers": "Triggered",
+  "interceptLedgerBlocked": "Actually blocked",
+  "interceptLedgerReleased": "Let through",
+  "interceptLedgerExited": "Left",
+  "interceptLedgerPaused": "Paused",
+  "interceptReceipts": "Recent receipts",
+  "interceptReceiptsEmpty": "No receipts yet",
+  "interceptActive": "Blocking now: {package}",
+  "@interceptActive": {
+    "placeholders": {
+      "package": {
+        "type": "String"
+      }
+    }
+  },
+  "interceptStorageError": "Could not write state: {error}",
+  "@interceptStorageError": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "interceptRecoveryIssue": "Unreadable state at start-up: {error}",
+  "@interceptRecoveryIssue": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "interceptUnavailable": "This build has no block kernel",
+  "interceptUnavailableHint": "Only the full phone build has it. Desktop and this build have no dsh/intercept channel.",
+  "interceptRefresh": "Refresh",
+  "interceptOutcomeBlocked": "Blocked, no ending yet",
+  "interceptOutcomeReleased": "Let through",
+  "interceptOutcomeExited": "Emergency exit",
+  "interceptOutcomePaused": "Paused",
+  "interceptOutcomeNotShown": "Never shown"
+}

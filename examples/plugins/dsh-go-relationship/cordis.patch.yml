@@ -1,0 +1,6 @@
+# Installed into a profile (`dsh plugin --profile web add <path>`): the bundle
+# row is what makes DSH load it. A prebuilt copy inside the app is loaded by
+# absolute path instead and does not use this file.
+- insert:
+    - id: dsh-go-relationship
+      name: dsh-go-relationship

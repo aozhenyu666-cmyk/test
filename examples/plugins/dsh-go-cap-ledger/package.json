@@ -1,0 +1,68 @@
+{
+  "name": "dsh-go-cap-ledger",
+  "version": "0.1.0",
+  "private": true,
+  "description": "cap-ledger —— 插件能力台账：分清 installed / loaded / toolRegistered / lastRunOk 四个状态（含最近一次失败原因），并在 dsh-go 里画成面板与状态条。纯 JS、零第三方依赖、可 node --test 单测。",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./views": "./lib/views.mjs",
+    "./ledger": "./lib/ledger.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "node ../../../sdk/plugin-kit/bin/check.mjs ."
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dshGo": {
+    "v": 1,
+    "title": {
+      "zh": "能力台账",
+      "en": "Cap ledger"
+    },
+    "icon": "list",
+    "contributes": {
+      "composer.strip": [
+        {
+          "id": "ledger.strip",
+          "icon": "list",
+          "panel": "ledger"
+        }
+      ],
+      "panels": [
+        {
+          "id": "ledger",
+          "title": {
+            "zh": "能力台账",
+            "en": "Cap ledger"
+          },
+          "icon": "list",
+          "placement": [
+            "session.tab",
+            "features"
+          ]
+        }
+      ]
+    }
+  },
+  "engines": {
+    "node": ">=22.19",
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  },
+  "dependencies": {},
+  "peerDependencies": {},
+  "peerDependenciesMeta": {}
+}

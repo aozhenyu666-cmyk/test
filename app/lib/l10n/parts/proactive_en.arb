@@ -1,0 +1,142 @@
+{
+  "@@locale": "en",
+  "proactiveTitle": "Proactive messages",
+  "proactiveSubtitle": "DSH says something on its own every so often, or after you open a chosen app. Every rule runs on this phone; when the model is not available it says nothing at all.",
+  "proactiveEnabled": "Turn on proactive messages",
+  "proactiveEnabledHint": "Off by default. When on, it finds you at random intervals; it steps back while DSH is operating the phone, while a confirmation is waiting, when the screen is locked, and during quiet hours.",
+  "proactiveGap": "Shortest gap",
+  "proactiveGapHint": "At least this long between two messages; the real gap is random between this and the longest gap",
+  "proactiveGapValue": "{min}–{max} min",
+  "@proactiveGapValue": {
+    "placeholders": {
+      "min": {
+        "type": "int"
+      },
+      "max": {
+        "type": "int"
+      }
+    }
+  },
+  "proactiveGapMax": "Longest gap",
+  "proactiveGapMaxHint": "Upper bound of the random gap; tap to change",
+  "proactiveMinutes": "{minutes} min",
+  "@proactiveMinutes": {
+    "placeholders": {
+      "minutes": {
+        "type": "int"
+      }
+    }
+  },
+  "proactiveQuiet": "Quiet hours",
+  "proactiveQuietHint": "No proactive message during this window; may cross midnight. Tap to change.",
+  "proactiveQuietValue": "{start}–{end}",
+  "@proactiveQuietValue": {
+    "placeholders": {
+      "start": {
+        "type": "String"
+      },
+      "end": {
+        "type": "String"
+      }
+    }
+  },
+  "proactiveDaily": "Daily limit",
+  "proactiveDailyHint": "At most this many a day, recounted after midnight; undelivered ones do not count",
+  "proactiveDailyValue": "{count} times",
+  "@proactiveDailyValue": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "proactiveState": "Right now",
+  "proactiveSession": "Target session",
+  "proactiveSessionHint": "Not chosen yet: nothing is sent. Tap to pick a live session.",
+  "proactiveSessionNone": "None",
+  "proactiveSessionNoneHint": "With no target session, no proactive message is sent",
+  "proactiveSessionChosen": "Sent to {id}",
+  "@proactiveSessionChosen": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
+  },
+  "proactiveSessionUnavailable": "Couldn't read the session list ({error}); check that the local engine is connected and the plugin is loaded",
+  "@proactiveSessionUnavailable": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "proactivePickSession": "Pick a session",
+  "proactiveSessionIdle": "Idle, ready to receive",
+  "proactiveSessionRunning": "Busy; it will be refused, not interrupted",
+  "proactiveSessionEmpty": "No live session. Open a chat in DSH first, then come back.",
+  "proactiveGateFree": "Clear: no DSH task running and no protected page in front",
+  "proactiveGateHold": "Holding back: {reason}",
+  "@proactiveGateHold": {
+    "placeholders": {
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "proactiveHoldDshTask": "DSH is operating the phone",
+  "proactiveHoldDshPrompt": "A confirmation is waiting for you",
+  "proactiveHoldLocked": "the screen is locked",
+  "proactiveHoldScreenOff": "the screen is off",
+  "proactiveHoldProtected": "a permission or security page is in front",
+  "proactiveHoldA11y": "accessibility is not connected",
+  "proactiveActiveStage": "Working on: {stage}",
+  "@proactiveActiveStage": {
+    "placeholders": {
+      "stage": {
+        "type": "String"
+      }
+    }
+  },
+  "proactiveWakeRestricted": "This phone restricts background wakeups, so a proactive message is only attempted while DSH is open or the screen changes. For more reliable timing, allow DSH to run in the background and to autostart in system settings.",
+  "proactiveWakeMode": "Wake mode: {mode}",
+  "@proactiveWakeMode": {
+    "placeholders": {
+      "mode": {
+        "type": "String"
+      }
+    }
+  },
+  "proactiveTransportReady": "Connected to the engine on this machine, so it can really ask the model",
+  "proactiveTransportMissing": "Not connected to the engine yet: local text only, the model is not called",
+  "proactiveQueued": "Queued: {count}",
+  "@proactiveQueued": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "proactiveRecoveryIssue": "The last state could not be read: {issue}",
+  "@proactiveRecoveryIssue": {
+    "placeholders": {
+      "issue": {
+        "type": "String"
+      }
+    }
+  },
+  "proactiveReceipts": "Receipts",
+  "proactiveReceiptsEmpty": "Nothing yet",
+  "proactiveOutcomeResponded": "You responded",
+  "proactiveOutcomeDismissed": "You dismissed it",
+  "proactiveOutcomeIgnoredSeen": "Shown, not answered",
+  "proactiveOutcomeAcked": "You said you saw it",
+  "proactiveOutcomeUnconfirmed": "Notification sent; whether you saw it is unknown",
+  "proactiveOutcomeNotDelivered": "Never delivered",
+  "proactiveOutcomeOpen": "In progress",
+  "proactiveMarkAccepted": "handed to the agent",
+  "proactiveMarkGenerated": "model answered",
+  "proactiveMarkDelivered": "sent out",
+  "proactiveMarkShown": "shown on screen",
+  "proactiveMarkResponded": "you responded"
+}

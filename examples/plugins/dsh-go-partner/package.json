@@ -1,0 +1,93 @@
+{
+  "name": "dsh-go-partner",
+  "version": "0.2.0",
+  "private": true,
+  "description": "R4 人格/记忆/情绪层：真实读取 persona.md 与 dsh-fish-memory / dsh-feiyu-mood 的数据，注册记忆/情绪工具，并把人格与心情作为上下文交给 Agent；四个原生面板（人格/记忆/情绪/目的）都接实际 provider。零第三方依赖。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./views": "./lib/views.mjs",
+    "./config": "./lib/config.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20",
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  },
+  "dshGo": {
+    "v": 1,
+    "title": {
+      "zh": "伙伴",
+      "en": "Partner"
+    },
+    "icon": "pet",
+    "contributes": {
+      "composer.strip": [
+        {
+          "id": "persona.strip",
+          "icon": "pet",
+          "panel": "persona"
+        }
+      ],
+      "panels": [
+        {
+          "id": "persona",
+          "title": "人格",
+          "icon": "pet",
+          "placement": [
+            "chat.panel",
+            "session.tab",
+            "features"
+          ]
+        },
+        {
+          "id": "memory",
+          "title": "记忆",
+          "icon": "note",
+          "placement": [
+            "chat.panel",
+            "session.tab",
+            "features"
+          ]
+        },
+        {
+          "id": "mood",
+          "title": "心情",
+          "icon": "heart",
+          "placement": [
+            "chat.panel",
+            "session.tab",
+            "features"
+          ]
+        },
+        {
+          "id": "purpose",
+          "title": "目的",
+          "icon": "goal",
+          "placement": [
+            "session.tab",
+            "features"
+          ]
+        }
+      ]
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT",
+  "dependencies": {},
+  "peerDependencies": {},
+  "peerDependenciesMeta": {},
+  "scripts": {
+    "test": "node --test",
+    "selftest": "node lib/views.mjs --selftest"
+  }
+}

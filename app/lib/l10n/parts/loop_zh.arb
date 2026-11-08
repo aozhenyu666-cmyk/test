@@ -1,0 +1,145 @@
+{
+  "@@locale": "zh",
+  "loopEntryTitle": "触发测试",
+  "loopEntrySubtitle": "打开指定 APP 时弹出测试页（实验）",
+  "loopPageSubtitle": "第一条闭环：打开测试 APP → 弹出测试页 → 点返回 → 记一条回执。只读前台 APP 的包名，不读页面内容。",
+  "loopEnabled": "开启触发测试",
+  "loopEnabledHint": "DSH 正在操作手机或有确认在等你时不会弹出",
+  "loopTargetApp": "测试 APP",
+  "loopTargetNone": "未选择",
+  "loopPickApp": "选择测试 APP",
+  "loopNoApps": "没有找到可选的 APP",
+  "loopCooldown": "冷却时间",
+  "loopCooldownHint": "两次弹出之间至少隔这么久，点一下切换",
+  "loopSeconds": "{seconds} 秒",
+  "@loopSeconds": {
+    "placeholders": {
+      "seconds": {
+        "type": "int"
+      }
+    }
+  },
+  "loopTimeout": "等你回应的时间",
+  "loopTimeoutHint": "超时就记成「超时未回应」，点一下切换",
+  "loopVisitShort": "访问 {id}",
+  "@loopVisitShort": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
+  },
+  "loopExport": "导出回执（JSON 复制到剪贴板）",
+  "loopExportDone": "已把 {count} 条回执复制到剪贴板",
+  "@loopExportDone": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "loopQuietHours": "免打扰时段",
+  "loopQuietHoursHint": "这段时间里不弹测试页，可以跨零点。点一下切换。",
+  "loopQuietHoursOff": "不限",
+  "loopQuietHoursValue": "{start}–{end}",
+  "@loopQuietHoursValue": {
+    "placeholders": {
+      "start": {
+        "type": "String"
+      },
+      "end": {
+        "type": "String"
+      }
+    }
+  },
+  "loopDailyCap": "每天上限",
+  "loopDailyCapHint": "一天最多弹几次，过零点重新算",
+  "loopDailyCapOff": "不限次数",
+  "loopDailyCapValue": "今天 {used}/{cap} 次",
+  "@loopDailyCapValue": {
+    "placeholders": {
+      "used": {
+        "type": "int"
+      },
+      "cap": {
+        "type": "int"
+      }
+    }
+  },
+  "loopA11yNeeded": "需要先在系统设置里开启 DSH 的无障碍服务",
+  "loopA11yWaiting": "无障碍已开启，等待服务连接",
+  "loopA11yReady": "无障碍服务已连接",
+  "loopCounters": "收到 {events} 个窗口事件，复核 {readings} 次 · 最近前台 {app}",
+  "@loopCounters": {
+    "placeholders": {
+      "events": {
+        "type": "int"
+      },
+      "readings": {
+        "type": "int"
+      },
+      "app": {
+        "type": "String"
+      }
+    }
+  },
+  "loopStorageError": "回执保存失败：{error}",
+  "@loopStorageError": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "loopRecoveredFromBackup": "回执文件损坏，已从备份（{file}）恢复",
+  "@loopRecoveredFromBackup": {
+    "placeholders": {
+      "file": {
+        "type": "String"
+      }
+    }
+  },
+  "loopDiagnostics": "无障碍诊断",
+  "loopDiagnosticsSummary": "{events} 个窗口事件、{readings} 次前台复核、{faults} 次失败",
+  "@loopDiagnosticsSummary": {
+    "placeholders": {
+      "events": {
+        "type": "int"
+      },
+      "readings": {
+        "type": "int"
+      },
+      "faults": {
+        "type": "int"
+      }
+    }
+  },
+  "loopDiagnosticsLastRead": "上次成功读到前台：{time}",
+  "@loopDiagnosticsLastRead": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "loopDiagnosticsClear": "清空诊断",
+  "loopFaultEvent": "窗口事件出错",
+  "loopFaultRead": "读前台失败",
+  "loopFaultVerify": "触发判定出错",
+  "loopFaultAttach": "连接失败",
+  "loopFaultSurface": "弹出问题失败",
+  "loopSurfaceNotification": "通过通知",
+  "loopReceipts": "回执",
+  "loopReceiptsEmpty": "还没有回执",
+  "loopClear": "清空回执",
+  "loopRefresh": "刷新",
+  "loopResultReturned": "点了返回",
+  "loopResultBack": "按了系统返回",
+  "loopResultDismissed": "离开了页面",
+  "loopResultTimeout": "超时未回应",
+  "loopResultAbandoned": "重启后关闭",
+  "loopResultUnavailable": "页面没能弹出",
+  "loopResultSuppressed": "未触发",
+  "loopResultError": "出错",
+  "loopResultOpen": "进行中"
+}

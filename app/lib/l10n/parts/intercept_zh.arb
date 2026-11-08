@@ -1,0 +1,74 @@
+{
+  "interceptTitle": "娱乐拦截",
+  "interceptSubtitle": "你打开自己标记的娱乐 APP 时，DSH 会先拦一下：做完一道小题，或者选一条授权规则，才能进去。拦截和主动搭话各记一本账。",
+  "interceptEnabled": "开启娱乐拦截",
+  "interceptEnabledHint": "默认关闭。开启后每次打开下面这些 APP 都会被拦一次；冷却期内不会连着拦。",
+  "interceptTargets": "要拦的 APP",
+  "interceptTargetsHint": "这些包名是你自己选的，不是内置的。删掉一个就立刻不拦。",
+  "interceptNoTargets": "还没设任何目标 APP",
+  "interceptAddTarget": "加一个包名",
+  "interceptAddTargetHint": "填 Android 包名，例如 tv.danmaku.bili",
+  "interceptAddTargetInvalid": "包名不能为空，也不能有空格",
+  "interceptRemoveTarget": "移除",
+  "interceptWhitelist": "白名单",
+  "interceptWhitelistHint": "白名单里的包名永远不拦，哪怕在目标清单里。",
+  "interceptWhitelistEmpty": "白名单是空的",
+  "interceptMode": "拦截参数",
+  "interceptRelease": "放行时长（分钟）",
+  "interceptTraining": "训练题长度（秒）",
+  "interceptCooldown": "冷却（分钟）",
+  "interceptDailyMax": "每日上限",
+  "interceptDailyMaxOff": "不限次数",
+  "interceptPause": "暂停与恢复",
+  "interceptPauseHint": "暂停期间什么都不拦，到点自动恢复。",
+  "interceptPauseNow": "立刻暂停 30 分钟",
+  "interceptResume": "恢复拦截",
+  "interceptPausedUntil": "已暂停，到 {time} 恢复",
+  "@interceptPausedUntil": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "interceptLedger": "行为拦截账",
+  "interceptLedgerTriggers": "触发",
+  "interceptLedgerBlocked": "真的拦住",
+  "interceptLedgerReleased": "用户放行",
+  "interceptLedgerExited": "用户退出",
+  "interceptLedgerPaused": "暂停",
+  "interceptReceipts": "最近回执",
+  "interceptReceiptsEmpty": "还没有回执",
+  "interceptActive": "正在拦：{package}",
+  "@interceptActive": {
+    "placeholders": {
+      "package": {
+        "type": "String"
+      }
+    }
+  },
+  "interceptStorageError": "存档写入失败：{error}",
+  "@interceptStorageError": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "interceptRecoveryIssue": "启动时读到坏存档：{error}",
+  "@interceptRecoveryIssue": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "interceptUnavailable": "这个版本没有接入拦截内核",
+  "interceptUnavailableHint": "只有手机端完整版本才有。桌面版和当前构建里没有 dsh/intercept 通道。",
+  "interceptRefresh": "刷新",
+  "interceptOutcomeBlocked": "拦住了，还没有结局",
+  "interceptOutcomeReleased": "放行",
+  "interceptOutcomeExited": "紧急退出",
+  "interceptOutcomePaused": "暂停",
+  "interceptOutcomeNotShown": "没显示出来"
+}

@@ -1,0 +1,116 @@
+name: Build 大肥鱼 Android APK (phone test)
+on:
+  push:
+    branches: [dafeiyu-apk]
+    paths:
+      - ".github/workflows/build-dafeiyu-apk.yml"
+      - "app/**"
+      - "runtime/**"
+      - "tooling/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  android-arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 115
+    env:
+      # Termux dropped 5.1.107.101 from its index; .102 only changes how /proc/<pid>/fd names are
+      # reported (termux/proot 7471c71), not the link2symlink store layout L2sMigration reads.
+      # The deb hash comes from the Termux index (index -> deb chain in termux_deb).
+      PROOT_VERSION: 5.1.107.102
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Companion plugin tests (fail fast, before the long build)
+        run: |
+          cd app/assets/engine/plugins/dsh-go-companion && node --test test/*.test.mjs
+          cd ../dsh-go-memory && node --test test/*.test.mjs
+      - name: End-to-end on the real DSH engine (warm, cold, 40 feature checks)
+        run: bash tooling/companion-e2e/run.sh
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.7'
+          channel: stable
+          cache: true
+      - name: Install required Linux packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gpgv zstd xz-utils unzip file
+      - name: Build arm64 Linux runtime (proot 5.1.107.102)
+        run: |
+          bash runtime/build-runtime.sh arm64-v8a
+          test -f runtime/out/arm64-v8a/assets/runtime/manifest.json
+          test -f runtime/out/arm64-v8a/assets/runtime/rootfs-arm64-v8a.tar.xz
+          strings "$(find runtime/out/arm64-v8a -name libproot.so | head -1)" | grep -m1 '5\.1\.107' | tee PROOT-VERSION.txt
+      - name: Separate app ID and name so it installs next to other builds
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          gradle = Path("app/android/app/build.gradle.kts")
+          data = gradle.read_text(encoding="utf-8")
+          original = 'applicationId = "io.github.ccch1mneyyy.dsh_app"'
+          assert data.count(original) == 1, "Unexpected Gradle applicationId layout"
+          gradle.write_text(data.replace(original, 'applicationId = "io.github.ccch1mneyyy.dsh_app.fish"'), encoding="utf-8")
+          manifest = Path("app/android/app/src/main/AndroidManifest.xml")
+          data = manifest.read_text(encoding="utf-8")
+          original = 'android:label="DSH Go"'
+          assert data.count(original) == 1, "Unexpected AndroidManifest label"
+          manifest.write_text(data.replace(original, 'android:label="DSH Go 大肥鱼"'), encoding="utf-8")
+          # This job builds arm64 only, but run 2 shipped lib/armeabi-v7a and lib/x86_64 from a
+          # dependency, which verify_apk_runtime.py rightly refuses (the runtime is arm64-only).
+          # Drop the other ABIs at packaging time instead of loosening the verifier.
+          gradle.write_text(gradle.read_text(encoding="utf-8") + '''
+          android {
+              packaging {
+                  jniLibs {
+                      excludes += setOf("lib/armeabi-v7a/**", "lib/armeabi/**", "lib/x86/**", "lib/x86_64/**")
+                  }
+              }
+          }
+          ''', encoding="utf-8")
+          PY
+      - name: Build arm64 release APK
+        run: |
+          cd app
+          flutter pub get
+          # The merged app_*.arb drive gen-l10n during the build; merge the parts first so a key
+          # that only exists in lib/l10n/parts cannot go missing again (run 1 failed on that).
+          python3 tool/l10n_merge.py
+          flutter build apk --release --flavor arm64 --target-platform android-arm64 --build-name 1.0.4 --build-number ${{ github.run_number }}0 --dart-define=DSH_UPDATE_REPO=aozhenyu666-cmyk/dsh-Go
+      - name: Verify bundled runtime and package
+        run: |
+          APK=app/build/app/outputs/flutter-apk/app-arm64-release.apk
+          test -s "$APK"
+          unzip -l "$APK" | awk '{print $4}' | grep '^lib/' | cut -d/ -f2 | sort | uniq -c
+          python3 tooling/verify_apk_runtime.py "$APK" --plugin runtime/proactive/dsh-go-proactive
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
+          "$AAPT" dump badging "$APK" | grep 'io.github.ccch1mneyyy.dsh_app.fish'
+          cp "$APK" dsh-go-fish-arm64.apk
+          sha256sum dsh-go-fish-arm64.apk | tee APK-SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-go-fish-arm64-apk
+          path: |
+            dsh-go-fish-arm64.apk
+            APK-SHA256.txt
+            PROOT-VERSION.txt
+          retention-days: 14
+      - name: Publish phone-downloadable prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "fish-build-${{ github.run_number }}" \
+            dsh-go-fish-arm64.apk APK-SHA256.txt PROOT-VERSION.txt \
+            --target "${{ github.sha }}" \
+            --title "DSH Go 大肥鱼 · arm64 测试版 #${{ github.run_number }}" \
+            --notes "大肥鱼：闲时/忙时档位（整体高频）、聊天里直接管控、Gemini 连麦搭桥（背景+读回复盘）、姐妹双人格（鱼丸/鲸澜）、引擎被杀自动重启+退出日志、浮层聊天不再被顶掉、拒绝模式、姐妹会用手机/相册/笔记库。不含本地未推送的 P4 语音。独立包名 .fish，可与其他版本并存（数据不共享）。云端临时调试签名。请核对 SHA256 后安装。" \
+            --prerelease

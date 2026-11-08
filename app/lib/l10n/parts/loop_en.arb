@@ -1,0 +1,145 @@
+{
+  "@@locale": "en",
+  "loopEntryTitle": "Trigger test",
+  "loopEntrySubtitle": "Shows a test page when you open a chosen app (experimental)",
+  "loopPageSubtitle": "The first closed loop: open the test app → a test page appears → tap Back → a receipt is saved. Only the foreground app's package name is read, never page content.",
+  "loopEnabled": "Turn on trigger test",
+  "loopEnabledHint": "Never shows while DSH is operating the phone or a confirmation is waiting",
+  "loopTargetApp": "Test app",
+  "loopTargetNone": "None",
+  "loopPickApp": "Choose the test app",
+  "loopNoApps": "No apps found",
+  "loopCooldown": "Cooldown",
+  "loopCooldownHint": "Minimum time between two pages; tap to change",
+  "loopSeconds": "{seconds} s",
+  "@loopSeconds": {
+    "placeholders": {
+      "seconds": {
+        "type": "int"
+      }
+    }
+  },
+  "loopTimeout": "Time to answer",
+  "loopTimeoutHint": "After this it counts as \"no answer in time\"; tap to change",
+  "loopVisitShort": "visit {id}",
+  "@loopVisitShort": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
+  },
+  "loopExport": "Export receipts (JSON to clipboard)",
+  "loopExportDone": "Copied {count} receipts to the clipboard",
+  "@loopExportDone": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "loopQuietHours": "Quiet hours",
+  "loopQuietHoursHint": "No test page during this window; may cross midnight. Tap to change.",
+  "loopQuietHoursOff": "Off",
+  "loopQuietHoursValue": "{start}–{end}",
+  "@loopQuietHoursValue": {
+    "placeholders": {
+      "start": {
+        "type": "String"
+      },
+      "end": {
+        "type": "String"
+      }
+    }
+  },
+  "loopDailyCap": "Daily limit",
+  "loopDailyCapHint": "At most this many test pages a day; resets after midnight",
+  "loopDailyCapOff": "No limit",
+  "loopDailyCapValue": "{used}/{cap} today",
+  "@loopDailyCapValue": {
+    "placeholders": {
+      "used": {
+        "type": "int"
+      },
+      "cap": {
+        "type": "int"
+      }
+    }
+  },
+  "loopA11yNeeded": "Turn on DSH's accessibility service in system settings first",
+  "loopA11yWaiting": "Accessibility is on, waiting for the service to connect",
+  "loopA11yReady": "Accessibility service connected",
+  "loopCounters": "{events} window events, {readings} checks · last foreground {app}",
+  "@loopCounters": {
+    "placeholders": {
+      "events": {
+        "type": "int"
+      },
+      "readings": {
+        "type": "int"
+      },
+      "app": {
+        "type": "String"
+      }
+    }
+  },
+  "loopStorageError": "Couldn't save receipts: {error}",
+  "@loopStorageError": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "loopRecoveredFromBackup": "The receipt file was damaged; loaded the backup ({file})",
+  "@loopRecoveredFromBackup": {
+    "placeholders": {
+      "file": {
+        "type": "String"
+      }
+    }
+  },
+  "loopDiagnostics": "Accessibility diagnostics",
+  "loopDiagnosticsSummary": "{events} window events, {readings} foreground checks, {faults} failures",
+  "@loopDiagnosticsSummary": {
+    "placeholders": {
+      "events": {
+        "type": "int"
+      },
+      "readings": {
+        "type": "int"
+      },
+      "faults": {
+        "type": "int"
+      }
+    }
+  },
+  "loopDiagnosticsLastRead": "Last successful foreground read: {time}",
+  "@loopDiagnosticsLastRead": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "loopDiagnosticsClear": "Clear diagnostics",
+  "loopFaultEvent": "Window event failed",
+  "loopFaultRead": "Foreground read failed",
+  "loopFaultVerify": "Trigger check failed",
+  "loopFaultAttach": "Connect failed",
+  "loopFaultSurface": "Showing the question failed",
+  "loopSurfaceNotification": "via notification",
+  "loopReceipts": "Receipts",
+  "loopReceiptsEmpty": "No receipts yet",
+  "loopClear": "Clear receipts",
+  "loopRefresh": "Refresh",
+  "loopResultReturned": "Tapped Back",
+  "loopResultBack": "Pressed system back",
+  "loopResultDismissed": "Left the page",
+  "loopResultTimeout": "No answer in time",
+  "loopResultAbandoned": "Closed after restart",
+  "loopResultUnavailable": "Page couldn't show",
+  "loopResultSuppressed": "Not triggered",
+  "loopResultError": "Error",
+  "loopResultOpen": "In progress"
+}

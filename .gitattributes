@@ -1,0 +1,9 @@
+# Our fork (projects/18-dsh-go-core/MAINTENANCE.md §9): LF in the repository everywhere, so a
+# Windows checkout cannot rewrite whole files to CRLF (that once turned two .arb files into
+# 16,000-line diffs that conflict with every upstream release).
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+# Stored with CRLF upstream; leave it byte for byte.
+app/tool/icons/phosphor/LICENSE -text

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 娱乐 APP 拦截页（loop/intercept/InterceptPageActivity.kt）。英文在 values/intercept_strings.xml。 -->
+<resources>
+    <string name="intercept_title">「%1$s」现在不能开</string>
+    <string name="intercept_body">你打开了「%1$s」。先停一下：不选下面任何一条放行方式，它会一直拦在这里。</string>
+    <string name="intercept_drill_prompt">请按%1$s依次点这些数字</string>
+    <string name="intercept_drill_ascending">从小到大</string>
+    <string name="intercept_drill_descending">从大到小</string>
+    <string name="intercept_drill_progress">已完成 %1$d / %2$d</string>
+    <string name="intercept_drill_wrong">点错了，重新来一遍。</string>
+    <string name="intercept_training">训练通过，放行</string>
+    <string name="intercept_training_locked">先把上面的题做完</string>
+    <string name="intercept_rule">授权规则：放行 %1$d 分钟</string>
+    <string name="intercept_whitelist">加入白名单</string>
+    <string name="intercept_pause">暂停拦截</string>
+    <string name="intercept_exit">紧急退出</string>
+    <string name="intercept_break">破窗：走够 150 步</string>
+    <string name="intercept_break_title">破窗：放风 10 分钟</string>
+    <string name="intercept_break_body">走够 150 步，再手打至少 100 字：破的是什么窗、为什么。晚上对账会问。</string>
+    <string name="intercept_break_steps">已走 %1$d / 150 步</string>
+    <string name="intercept_break_note">已写 %1$d / 100 字</string>
+    <string name="intercept_break_hint">为什么破窗？这 10 分钟要做什么？写具体。</string>
+    <string name="intercept_break_submit">破窗，放风 10 分钟</string>
+    <string name="intercept_break_cancel">算了</string>
+    <string name="intercept_break_sending">正在告诉大肥鱼…</string>
+    <string name="intercept_break_failed">没接上插件，再试一次。</string>
+    <string name="intercept_break_no_sensor">这台手机没有计步传感器。</string>
+    <string name="intercept_break_denied">没给计步权限，步数读不到。</string>
+    <string name="intercept_break_wait">还不够：继续走，也继续写。</string>
+    <string name="intercept_quick_call">电话</string>
+    <string name="intercept_quick_sms">短信</string>
+    <string name="intercept_quick_maps">地图</string>
+    <string name="intercept_quick_pay">支付</string>
+    <string name="intercept_return_gemini">回 Gemini 继续</string>
+    <string name="intercept_channel">拦截</string>
+</resources>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 触发测试 (loop/InteractionActivity.kt, loop/InteractionHub.kt). Chinese in values-zh/loop_strings.xml. -->
+<resources>
+    <string name="loop_page_title">DSH trigger test</string>
+    <string name="loop_page_text">You opened %1$s. This page is the first closed-loop test: tap Back to return and save a receipt.</string>
+    <string name="loop_page_return">Back</string>
+    <string name="loop_channel">DSH trigger test</string>
+    <string name="loop_channel_description">Asks about the test app when its page could not be shown</string>
+</resources>

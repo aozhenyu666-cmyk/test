@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Proactive page (loop/proactive/ProactivePageActivity.kt). Chinese in values-zh/proactive_strings.xml. -->
+<resources>
+    <string name="proactive_reply">Reply</string>
+    <string name="proactive_later">Later</string>
+    <string name="proactive_ack">Seen it</string>
+    <string name="proactive_channel">Proactive messages</string>
+    <string name="proactive_channel_description">When the page cannot be shown, DSH asks you in a notification</string>
+    <!-- The floating ball window (loop/proactive/ProactiveOverlay.kt). -->
+    <string name="proactive_overlay_title">大肥鱼</string>
+    <string name="proactive_overlay_from">大肥鱼</string>
+    <string name="proactive_overlay_hint">Say something to 大肥鱼…</string>
+    <string name="proactive_overlay_mute">Leave me alone for 1 hour</string>
+    <string name="proactive_overlay_collapse">Collapse</string>
+    <string name="proactive_overlay_you">You: %1$s</string>
+    <string name="proactive_overlay_reply">大肥鱼: %1$s</string>
+    <string name="proactive_overlay_thinking">大肥鱼 is thinking…</string>
+    <string name="proactive_overlay_slow_model">The model is slow; still waiting for it to finish…</string>
+    <string name="proactive_overlay_busy">(大肥鱼 is still saying the last line — send again in a moment)</string>
+    <string name="proactive_overlay_queued">(You are already talking — this line is queued)</string>
+    <string name="proactive_overlay_failed">(Not sent: %1$s)</string>
+    <string name="proactive_overlay_bubble">🐟 大肥鱼 still has a ball</string>
+</resources>

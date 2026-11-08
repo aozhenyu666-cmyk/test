@@ -1,0 +1,142 @@
+{
+  "@@locale": "zh",
+  "proactiveTitle": "主动搭话",
+  "proactiveSubtitle": "DSH 每隔一段随机时间，或者在你打开某个 APP 之后，主动跟你说一句话。全部规则在本机执行，模型不可用时就不说话。",
+  "proactiveEnabled": "开启主动搭话",
+  "proactiveEnabledHint": "默认关闭。开启后会按下面的间隔随机找你；DSH 正在操作手机、有确认在等你、锁屏或免打扰时一律让路。",
+  "proactiveGap": "最短间隔",
+  "proactiveGapHint": "两次主动搭话之间至少隔这么久，实际间隔在这个范围和「最长间隔」之间随机",
+  "proactiveGapValue": "{min}–{max} 分钟",
+  "@proactiveGapValue": {
+    "placeholders": {
+      "min": {
+        "type": "int"
+      },
+      "max": {
+        "type": "int"
+      }
+    }
+  },
+  "proactiveGapMax": "最长间隔",
+  "proactiveGapMaxHint": "随机间隔的上限，点一下切换",
+  "proactiveMinutes": "{minutes} 分钟",
+  "@proactiveMinutes": {
+    "placeholders": {
+      "minutes": {
+        "type": "int"
+      }
+    }
+  },
+  "proactiveQuiet": "免打扰时段",
+  "proactiveQuietHint": "这段时间里不主动搭话，可以跨零点，点一下切换",
+  "proactiveQuietValue": "{start}–{end}",
+  "@proactiveQuietValue": {
+    "placeholders": {
+      "start": {
+        "type": "String"
+      },
+      "end": {
+        "type": "String"
+      }
+    }
+  },
+  "proactiveDaily": "每天上限",
+  "proactiveDailyHint": "一天最多几次，过零点重新算；没送达的不算",
+  "proactiveDailyValue": "{count} 次",
+  "@proactiveDailyValue": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "proactiveState": "现在的状态",
+  "proactiveSession": "目标会话",
+  "proactiveSessionHint": "还没选：主动搭话不会发出去。点一下选一个活着的会话。",
+  "proactiveSessionNone": "不指定",
+  "proactiveSessionNoneHint": "不指定目标会话，主动搭话就不会发出",
+  "proactiveSessionChosen": "发到 {id}",
+  "@proactiveSessionChosen": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
+  },
+  "proactiveSessionUnavailable": "读不到会话列表（{error}），先确认本机引擎已连上、插件已加载",
+  "@proactiveSessionUnavailable": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "proactivePickSession": "选一个会话",
+  "proactiveSessionIdle": "空闲，可以发",
+  "proactiveSessionRunning": "正在忙，发了会被拒（不会打断它）",
+  "proactiveSessionEmpty": "没有活着的会话。先在 DSH 里开一个对话，再回来选。",
+  "proactiveGateFree": "现在可以让路了：没有 DSH 任务，也不在黑名单页面上",
+  "proactiveGateHold": "正在让路：{reason}",
+  "@proactiveGateHold": {
+    "placeholders": {
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "proactiveHoldDshTask": "DSH 正在操作手机",
+  "proactiveHoldDshPrompt": "有确认在等你回应",
+  "proactiveHoldLocked": "锁屏了",
+  "proactiveHoldScreenOff": "屏幕关着",
+  "proactiveHoldProtected": "前台是权限/安全页面",
+  "proactiveHoldA11y": "无障碍没连上",
+  "proactiveActiveStage": "正在处理：{stage}",
+  "@proactiveActiveStage": {
+    "placeholders": {
+      "stage": {
+        "type": "String"
+      }
+    }
+  },
+  "proactiveWakeRestricted": "这台手机限制了后台唤醒，所以只在你打开 DSH、或者屏幕有变化的时候才会尝试主动搭话。想更准时，可以在系统设置里允许 DSH 后台运行和自启动。",
+  "proactiveWakeMode": "唤醒方式：{mode}",
+  "@proactiveWakeMode": {
+    "placeholders": {
+      "mode": {
+        "type": "String"
+      }
+    }
+  },
+  "proactiveTransportReady": "已经连上本机引擎，可以真的问模型",
+  "proactiveTransportMissing": "还没连上引擎，现在只会用本地文案，不会调用模型",
+  "proactiveQueued": "排队中：{count} 条",
+  "@proactiveQueued": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "proactiveRecoveryIssue": "上次的状态读不出来：{issue}",
+  "@proactiveRecoveryIssue": {
+    "placeholders": {
+      "issue": {
+        "type": "String"
+      }
+    }
+  },
+  "proactiveReceipts": "回执",
+  "proactiveReceiptsEmpty": "还没有记录",
+  "proactiveOutcomeResponded": "你回应了",
+  "proactiveOutcomeDismissed": "你划掉了",
+  "proactiveOutcomeIgnoredSeen": "显示了但没回应",
+  "proactiveOutcomeAcked": "你点了「我看到了」",
+  "proactiveOutcomeUnconfirmed": "通知发了，不知道你看没看",
+  "proactiveOutcomeNotDelivered": "没能送到",
+  "proactiveOutcomeOpen": "进行中",
+  "proactiveMarkAccepted": "已交给 Agent",
+  "proactiveMarkGenerated": "模型已生成",
+  "proactiveMarkDelivered": "已送出",
+  "proactiveMarkShown": "界面显示了",
+  "proactiveMarkResponded": "你回应了"
+}

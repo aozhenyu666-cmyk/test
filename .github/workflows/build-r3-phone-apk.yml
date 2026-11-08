@@ -1,0 +1,89 @@
+name: Build R3 Android APK
+on:
+  push:
+    branches: [fix/r3-minute-input-on-1.0.4]
+    paths:
+      - ".github/workflows/build-r3-phone-apk.yml"
+      - "app/**"
+      - "runtime/**"
+      - "tooling/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  android-arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 115
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.7'
+          channel: stable
+          cache: true
+      - name: Install required Linux packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gpgv zstd xz-utils unzip file
+      - name: Build full arm64 Linux runtime including proactive plugin
+        run: |
+          # Termux no longer indexes the old proot deb; source archive stays pinned.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("runtime/build-runtime.sh")
+          s = p.read_text()
+          old = 'termux_deb proot "$PROOT_VERSION" "$termux_arch"'
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, 'termux_deb proot "5.1.107.101" "$termux_arch"'))
+          PY
+          bash runtime/build-runtime.sh arm64-v8a
+          test -f runtime/out/arm64-v8a/assets/runtime/manifest.json
+          test -f runtime/out/arm64-v8a/assets/runtime/rootfs-arm64-v8a.tar.xz
+      - name: Prepare isolated app ID and name for standalone install
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          gradle = Path("app/android/app/build.gradle.kts")
+          data = gradle.read_text(encoding="utf-8")
+          original = 'applicationId = "io.github.ccch1mneyyy.dsh_app"'
+          assert data.count(original) == 1, "Unexpected Gradle applicationId layout"
+          gradle.write_text(data.replace(original, 'applicationId = "io.github.ccch1mneyyy.dsh_app.mine"'), encoding="utf-8")
+          manifest = Path("app/android/app/src/main/AndroidManifest.xml")
+          data = manifest.read_text(encoding="utf-8")
+          original = 'android:label="DSH Go"'
+          assert data.count(original) == 1, "Unexpected AndroidManifest label"
+          manifest.write_text(data.replace(original, 'android:label="DSH Go R3"'), encoding="utf-8")
+          PY
+      - name: Build full Android arm64 release APK
+        run: |
+          cd app
+          flutter pub get
+          flutter build apk --release --flavor arm64 --target-platform android-arm64 --build-name 1.0.4 --build-number 10311445 --dart-define=DSH_UPDATE_REPO=aozhenyu666-cmyk/dsh-Go
+      - name: Verify bundled runtime and package
+        run: |
+          APK=app/build/app/outputs/flutter-apk/app-arm64-release.apk
+          test -s "$APK"
+          python3 tooling/verify_apk_runtime.py "$APK" --plugin runtime/proactive/dsh-go-proactive
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
+          test -x "$AAPT"
+          "$AAPT" dump badging "$APK" | grep 'io.github.ccch1mneyyy.dsh_app.mine'
+          sha256sum "$APK" | tee APK-SHA256.txt
+          cp "$APK" dsh-go-r3-1.0.4-mine-arm64.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-go-r3-1.0.4-arm64-apk
+          path: |
+            dsh-go-r3-1.0.4-mine-arm64.apk
+            APK-SHA256.txt
+          retention-days: 14
+      - name: Publish phone-downloadable prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "r3-1.0.4-build-${{ github.run_number }}"             dsh-go-r3-1.0.4-mine-arm64.apk APK-SHA256.txt             --target "${{ github.sha }}"             --title "DSH Go R3 1.0.4 · arm64 自用测试版"             --notes "基于官方1.0.4，带R3主动搭话和自由输入间隔；独立包名 .mine，与官方版及旧 .test 版并存。云端临时调试签名，后续需固定密钥才能覆盖升级。请核对 SHA256 后安装。"             --prerelease

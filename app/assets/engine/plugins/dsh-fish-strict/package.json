@@ -1,0 +1,44 @@
+{
+  "name": "dsh-fish-strict",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "大肥鱼严格沟通：确定性监督事件、状态机、额度与暂停；提问交给 DSH 的 ask_user_question。",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  },
+  "dshGo": {
+    "v": 1,
+    "title": { "zh": "严格沟通", "en": "Strict check-in" },
+    "icon": "clock",
+    "contributes": {
+      "composer.actions": [
+        { "id": "strict-panel", "label": { "zh": "严格", "en": "Strict" }, "icon": "clock" }
+      ],
+      "composer.strip": [
+        { "id": "strict-strip", "icon": "clock", "panel": "strict" }
+      ],
+      "panels": [
+        {
+          "id": "strict",
+          "title": { "zh": "严格沟通", "en": "Strict check-in" },
+          "icon": "clock",
+          "placement": ["session.tab", "features", "chat.panel"]
+        }
+      ]
+    }
+  },
+  "license": "MIT"
+}
