@@ -7,7 +7,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { apply } from '../lib/index.js'
-import { startOfDay } from '../lib/tz.js'
 import { buildPrompt } from '../lib/prompt.js'
 import { companionChatText, strategistChatText, roleNames } from '../lib/roles.js'
 
@@ -65,14 +64,6 @@ function call(handler, method, path, body) {
 
 async function withHome(fn) {
   const home = mkdtempSync(join(tmpdir(), 'companion-dual-'))
-  // 这些用例测双人格/对账，不测晨间对线：把今天那次标成已完成，避免全天有效的
-  // morning-gate 抢在姐姐对账前面。
-  mkdirSync(join(home, 'companion'), { recursive: true })
-  writeFileSync(join(home, 'companion', 'rhythm.json'), JSON.stringify({
-    morningDay: startOfDay(Date.now(), 'Asia/Shanghai'),
-    morningDone: true,
-    morningSince: Date.now() - 3_600_000,
-  }))
   const old = process.env.DSH_HOME
   process.env.DSH_HOME = home
   try { return await fn(home) } finally {

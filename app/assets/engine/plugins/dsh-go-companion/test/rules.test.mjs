@@ -8,7 +8,6 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { apply } from '../lib/index.js'
 import { existsSync, readFileSync } from 'node:fs'
-import { startOfDay } from '../lib/tz.js'
 
 function agentOf(id) {
   const contexts = []
@@ -79,12 +78,6 @@ const BIG = 'session-big'
 function setup(home, extra = {}) {
   mkdirSync(join(home, 'companion'), { recursive: true })
   writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ sessionId: SIS, strategistSessionId: BIG, quietStart: 12, quietEnd: 12, ...extra }))
-  // 规则快照用例不测晨间对线：把今天那次标成已完成，避免 morning 规则混进 review/task 断言。
-  writeFileSync(join(home, 'companion', 'rhythm.json'), JSON.stringify({
-    morningDay: startOfDay(Date.now(), 'Asia/Shanghai'),
-    morningDone: true,
-    morningSince: Date.now() - 3_600_000,
-  }))
   const sis = agentOf(SIS)
   const big = agentOf(BIG)
   const h = host({ [SIS]: sis, [BIG]: big })

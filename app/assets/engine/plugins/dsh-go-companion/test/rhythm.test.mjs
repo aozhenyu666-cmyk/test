@@ -10,9 +10,13 @@ test('早上对线：5 点后第一次亮屏就开门，不再卡 10 点', () =>
   assert.equal(tick(4 * 60 + 59).openMorning, false, '5 点前不算')
   assert.equal(tick(5 * 60).openMorning, true)
   assert.equal(tick(10 * 60).openMorning, true, '10 点以后也算')
-  assert.equal(tick(11 * 60).openMorning, true)
-  assert.equal(tick(15 * 60).openMorning, true, '睡到下午，第一屏也算')
-  assert.equal(tick(20 * 60).openMorning, true)
+  assert.equal(tick(11 * 60 + 59).openMorning, true)
+})
+
+test('中午以后不再开早上那扇门，交给忙时/对账', () => {
+  assert.equal(tick(12 * 60).openMorning, false)
+  assert.equal(tick(15 * 60).openMorning, false)
+  assert.equal(tick(21 * 60).openMorning, false)
 })
 
 test('早上对线：亮屏才开，同一天只开一次', () => {

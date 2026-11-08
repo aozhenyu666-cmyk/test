@@ -10,7 +10,6 @@ import { apply } from '../lib/index.js'
 import { existsSync, readFileSync } from 'node:fs'
 import { gearSwitch } from '../lib/gear.js'
 import { trustScore } from '../lib/trust.js'
-import { startOfDay } from '../lib/tz.js'
 import { trackGemini } from '../lib/gemini.js'
 
 function agentOf(id) {
@@ -82,13 +81,6 @@ const BIG = 'session-big'
 function setup(home, extra = {}) {
   mkdirSync(join(home, 'companion'), { recursive: true })
   writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ sessionId: SIS, strategistSessionId: BIG, quietStart: 12, quietEnd: 12, ...extra }))
-  // 这些用例测的是档位/连麦/破窗，不是晨间对线：把今天那次对线标记成已完成，
-  // 免得全天有效的 morning-gate 抢在忙时/连麦前面。
-  writeFileSync(join(home, 'companion', 'rhythm.json'), JSON.stringify({
-    morningDay: startOfDay(Date.now(), 'Asia/Shanghai'),
-    morningDone: true,
-    morningSince: Date.now() - 3_600_000,
-  }))
   const sis = agentOf(SIS)
   const big = agentOf(BIG)
   const h = host({ [SIS]: sis, [BIG]: big })
