@@ -61,7 +61,7 @@ jobs:
         run: |
           flutter --version
           python3 --version
-          bash tooling/build-apk.sh --dry -f ${{ env.FLAVOR }} --${{ env.MODE }}
+          bash tooling/build-apk.sh --dry-run -f ${{ env.FLAVOR }} --${{ env.MODE }}
 
       - name: Build APK
         run: bash tooling/build-apk.sh -f ${{ env.FLAVOR }} --${{ env.MODE }}
