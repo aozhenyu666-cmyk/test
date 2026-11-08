@@ -9,6 +9,8 @@ import { Readable } from 'node:stream'
 import { apply } from '../lib/index.js'
 import { existsSync, readFileSync } from 'node:fs'
 import { gearSwitch } from '../lib/gear.js'
+import { trustScore } from '../lib/trust.js'
+import { startOfDay } from '../lib/tz.js'
 import { trackGemini } from '../lib/gemini.js'
 
 function agentOf(id) {
@@ -80,6 +82,13 @@ const BIG = 'session-big'
 function setup(home, extra = {}) {
   mkdirSync(join(home, 'companion'), { recursive: true })
   writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ sessionId: SIS, strategistSessionId: BIG, quietStart: 12, quietEnd: 12, ...extra }))
+  // 这些用例测的是档位/连麦/破窗，不是晨间对线：把今天那次对线标记成已完成，
+  // 免得全天有效的 morning-gate 抢在忙时/连麦前面。
+  writeFileSync(join(home, 'companion', 'rhythm.json'), JSON.stringify({
+    morningDay: startOfDay(Date.now(), 'Asia/Shanghai'),
+    morningDone: true,
+    morningSince: Date.now() - 3_600_000,
+  }))
   const sis = agentOf(SIS)
   const big = agentOf(BIG)
   const h = host({ [SIS]: sis, [BIG]: big })
@@ -95,11 +104,15 @@ const text = (agent) => agent.sent[agent.sent.length - 1].content[0].text
 
 test('一句话切档：只认明确说法', () => {
   const now = 1_000_000
-  assert.deepEqual(gearSwitch('忙时 90 分钟', now), { gear: 'busy', until: now + 90 * 60_000, what: '正事' })
+  // D5：忙时默认 40 分钟、最长 60 分钟；说 90 分钟也压到 60。
+  assert.deepEqual(gearSwitch('忙时 90 分钟', now), { gear: 'busy', until: now + 60 * 60_000, what: '正事' })
+  assert.equal(gearSwitch('忙时', now).until, now + 40 * 60_000, '没说时长默认 40 分钟')
+  assert.equal(gearSwitch('忙时 5 分钟', now).until, now + 10 * 60_000, '最短 10 分钟')
   assert.equal(gearSwitch('我去做饭了', now).until, now + 40 * 60_000, '做饭这类默认 40 分钟')
   assert.equal(gearSwitch('我去做饭了', now).what, '做饭')
-  assert.equal(gearSwitch('开始学习 2 小时', now).until, now + 2 * 3_600_000)
-  assert.equal(gearSwitch('开始学习', now).until, now + 60 * 60_000)
+  assert.equal(gearSwitch('开始学习 2 小时', now).until, now + 60 * 60_000, '两小时压到 60 分钟')
+  assert.equal(gearSwitch('开始学习', now).until, now + 40 * 60_000)
+  assert.equal(gearSwitch('开始学习半小时', now).until, now + 30 * 60_000)
   assert.deepEqual(gearSwitch('忙完了', now), { gear: 'free' })
   assert.deepEqual(gearSwitch('闲时', now), { gear: 'free' })
   assert.equal(gearSwitch('今天上课好无聊', now), null)
@@ -146,6 +159,8 @@ test('忙完：妹妹来迎接一次；"忙完了"提前收工也关掉拒绝模
     assert.equal(p.body.speaker, 'companion')
     await t.request('req-done-001')
     assert.match(text(t.sis), /刚忙完「做饭」（忙了 40 分钟）/)
+    assert.match(text(t.sis), /报到/)
+    assert.match(text(t.sis), /不评分、不扣分/)
     await finishTurn(t.h, t.sis, 2, '饭做好了没，香不香')
     const again = await t.plan(wechat)
     assert.notEqual(again.body.reason, 'busy-done', '只迎一次')
@@ -179,6 +194,22 @@ test('聊天里直接管他：dafeiyu_control', async () => {
     assert.equal(tool.execute({ action: 'mute', minutes: 20 }).ok, true)
     assert.equal((await t.plan(wechat)).body.reason, 'muted')
     assert.match(t.big.contexts[0].text(), /dafeiyu_control/, '人设里说了有这个')
+  })
+})
+
+test('忙时必须带时长：工具不给就是 40，给多了压到 60', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const tool = t.sis.tools.dafeiyu_control
+    tool.execute({ action: 'busy', what: '复习' })
+    const def = (await t.plan(game)).body.refuse
+    const left = def.until - Date.now()
+    assert.ok(left > 39 * 60_000 && left <= 40 * 60_000 + 5_000, String(left))
+    tool.execute({ action: 'free' })
+    tool.execute({ action: 'busy', minutes: 300, what: '复习' })
+    const capped = (await t.plan(game)).body.refuse
+    const left2 = capped.until - Date.now()
+    assert.ok(left2 > 59 * 60_000 && left2 <= 60 * 60_000 + 5_000, String(left2))
   })
 })
 
@@ -302,6 +333,48 @@ test('手机报 breakglass：放风 10 分钟，期间娱乐不再锁', async ()
     const p = await t.plan(game)
     assert.equal(p.body.force.level, 0, '放风期间不锁')
     assert.equal(p.body.refuse, null, '放风盖过拒绝模式')
+  })
+})
+
+test('破窗每天最多 1 次：第二次被拒，第二天恢复', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const body = { type: 'breakglass', minutes: 10, steps: 160, note: '第一次' }
+    assert.equal((await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/event', body)).body.ok, true)
+    const again = await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/event', { ...body, note: '第二次' })
+    assert.equal(again.body.ok, false)
+    assert.equal(again.body.error.code, 'breakglass-used')
+  })
+  await withHome(async (home) => {
+    const t = setup(home)
+    // 账本里只有前天的破窗：今天还没用过。
+    writeFileSync(
+      join(home, 'companion', 'ledger.jsonl'),
+      JSON.stringify({ v: 1, state: 'breakglass', at: Date.now() - 2 * 86_400_000, minutes: 10 }) + '\n',
+    )
+    const res = await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/event', { type: 'breakglass', minutes: 10, steps: 160, note: '今天第一次' })
+    assert.equal(res.body.ok, true)
+  })
+})
+
+test('破窗扣分：默认 15、可按配置改，账本记下这次扣了多少', async () => {
+  const now = Date.now()
+  const rows = [{ state: 'breakglass', at: now - 1_000 }]
+  assert.equal(trustScore(rows, now).score, 45, '默认扣 15')
+  assert.equal(trustScore(rows, now, { weights: { breakglass: -25 } }).score, 35, '可覆盖')
+  await withHome(async (home) => {
+    const t = setup(home)
+    const res = await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/event', { type: 'breakglass', minutes: 10, steps: 160, note: '配置' })
+    assert.equal(res.body.penalty, 15)
+    const row = JSON.parse(readFileSync(join(home, 'companion', 'ledger.jsonl'), 'utf8').trim().split('\n').pop())
+    assert.equal(row.state, 'breakglass')
+    assert.equal(row.penalty, 15)
+    const cfg = await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/config', { breakglassPenalty: 25 })
+    assert.equal(cfg.body.config.breakglassPenalty, 25)
+    // 配置落盘；信用分按落盘的数值覆盖（statusBody 不带 trust，直接验 trustScore 的入参）。
+    const saved = JSON.parse(readFileSync(join(home, 'companion', 'config.json'), 'utf8'))
+    assert.equal(saved.breakglassPenalty, 25)
+    assert.equal(trustScore(rows, Date.now(), { weights: { breakglass: -saved.breakglassPenalty } }).score, 35)
   })
 })
 

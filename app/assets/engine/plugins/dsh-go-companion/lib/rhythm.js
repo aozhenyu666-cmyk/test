@@ -1,13 +1,12 @@
 // dsh-go-companion · 作息（早上对线、深夜管控、晚上对账）
 //
-// 早上：10 点前第一次亮屏，娱乐先锁着（社交不锁），鲸澜要他说出今天最重要的 3 件事和各自几点前做完；
-//       他认真回一句就"通电"。最多锁 30 分钟（兜底）。
+// 早上：5 点以后第一次亮屏（哪怕睡到下午，第一屏也算），娱乐先锁着（社交不锁），鲸澜要他说出今天最重要的 3 件事和各自几点前做完；
+//       他认真回一句就"通电"。最多锁 30 分钟（兜底）。10 点不再是上限。
 // 深夜：23:30 起她们更勤地催他睡；0:30 以后娱乐锁到早上 7 点（安静时段她们不说话，但锁照样在）。
 // 晚上：21:30 鲸澜对账（今天做了什么、手机花在哪、明天封什么），没对完娱乐锁着，最多 60 分钟。
 // 时间都按他手机的当地时间。
 
 export const MORNING_FROM = 5 * 60
-export const MORNING_TO = 10 * 60
 export const MORNING_CAP_MS = 30 * 60_000
 export const LATE_FROM = 23 * 60 + 30
 export const NIGHT_LOCK_FROM = 30
@@ -38,7 +37,8 @@ export function trackRhythm(state, { min, day, now, screenOn, reviewedToday }) {
   const s = { ...(state || {}) }
   let openMorning = false
   let openReview = false
-  if (min >= MORNING_FROM && min < MORNING_TO && screenOn && s.morningDay !== day) {
+  // 5 点以后的第一次亮屏都算（不再卡 10 点，也不管几点睡醒）；一天只开一次。
+  if (min >= MORNING_FROM && screenOn && s.morningDay !== day) {
     Object.assign(s, { morningDay: day, morningSince: now, morningDone: false, morningBall: false })
     openMorning = true
   }

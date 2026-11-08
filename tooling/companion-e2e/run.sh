@@ -21,7 +21,8 @@ if [ ! -x "$ENG/node_modules/.bin/dsh" ]; then
   sed -i 's#https://registry.npmmirror.com#https://registry.npmjs.org#g' "$ENG/package-lock.json"
   (cd "$ENG" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error --registry=https://registry.npmjs.org) || exit 2
 fi
-rm -rf "$WORK"; mkdir -p "$WORK/home"; : > "$WORK/llm.log"; : > "$WORK/prompts.jsonl"
+rm -rf "$WORK"; mkdir -p "$WORK/home/companion"; : > "$WORK/llm.log"; : > "$WORK/prompts.jsonl"
+node "$HERE_W/seed-rhythm.mjs" "$WORK_W/home/companion/rhythm.json"
 P="$(win "$ROOT/app/assets/engine/plugins")"
 { echo "- insert:"; for id in dsh-feiyu-mood dsh-go-memory dsh-go-relationship dsh-go-companion; do
   echo "    - id: $id"; echo "      name: $P/$id/lib/index.js"; done; } > "$WORK/patch.yml"

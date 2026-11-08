@@ -288,7 +288,7 @@ class InterceptPageActivity : Activity() {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setTextColor(palette.ink)
         })
-        column.addView(EditText(ctx).apply {
+        column.addView(NoPasteEditText(ctx).apply {
             breakNoteView = this
             hint = AppStrings.get(ctx, R.string.intercept_break_hint)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
