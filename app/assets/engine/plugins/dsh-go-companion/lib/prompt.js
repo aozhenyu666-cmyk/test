@@ -42,6 +42,22 @@ const SERVE_RULES = {
   review: '复盘：拿今天或昨天的回合记录说话，指出一个具体的模式。',
 }
 
+/** D3：知识库上下文（最近笔记 / 长期规划 / 当天任务）。只读，不逐条复述。 */
+function vaultLines(v) {
+  if (!v || typeof v !== 'object') return []
+  const lines = []
+  if (v.longPlan) lines.push('他的长期规划（大肥鱼/长期规划.md，只读）：\n' + String(v.longPlan).slice(0, 1200))
+  if (Array.isArray(v.tasks) && v.tasks.length) {
+    lines.push('今天定的事（晚上按完成物对账）：')
+    for (const t of v.tasks.slice(0, 6)) lines.push('- ' + String(t.task || '').slice(0, 120) + (t.evidence ? '（完成物：' + String(t.evidence).slice(0, 160) + '）' : ''))
+  }
+  if (Array.isArray(v.recent) && v.recent.length) {
+    lines.push('笔记库最近改过的（只读；拿具体内容说事，不要逐条复述）：')
+    for (const n of v.recent.slice(0, 3)) lines.push('- ' + String(n.rel || '').slice(0, 80) + '：' + String(n.summary || '').slice(0, 220))
+  }
+  return lines
+}
+
 export function buildPrompt(input) {
   const owner = String(input.owner || '主人').slice(0, 40)
   const self = String(input.self || '大肥鱼').slice(0, 40)
@@ -70,6 +86,7 @@ export function buildPrompt(input) {
       lines.push('你记得的事（别逐条复述）：')
       for (const f of facts) lines.push('- ' + String(f).slice(0, 200))
     }
+    for (const l of vaultLines(input.vault)) lines.push(l)
     return lines.join('\n')
   }
   if (companion) {
@@ -94,6 +111,7 @@ export function buildPrompt(input) {
   }
   // 互动时间线：他多久前说过话、是不是刚关了窗口——别再说"你一小时没理我"。
   for (const l of Array.isArray(input.contact) ? input.contact : []) lines.push(l)
+  for (const l of vaultLines(input.vault)) lines.push(l)
   // /plan 定的特殊开场（忙完了 / 连麦中途跑了 / 单人格时的报到和连麦复盘）。
   for (const l of companionSpecialLines(input.special, names, input.allowTools === true)) lines.push(l)
   if (input.stockHit) {

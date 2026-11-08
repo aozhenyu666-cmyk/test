@@ -7,12 +7,15 @@
 // 写权限：她们只能写 大肥鱼/ 和 Gemini/；别的目录只读。日记 / 私密目录连读都不读。
 // 冲突时：他写的 > 他最近亲口说的 > 记忆库 > 她们的推断。
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import { dayString } from './daily.js'
 
 export const SELF_FILE = '我.md'
 export const JUDGE_FILE = '判断.md'
 export const KB_DIR = '大肥鱼'
+/** 单行化 + 截断；裁决/任务文本统一走这里。 */
+const clean = (s, max) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, max)
 /** 不读的目录（名字里含这些就跳过）。 */
 export const PRIVATE_DIRS = ['日记', 'Diary', 'diary', 'Journal', 'journal', '私密', 'Private', 'private', '.obsidian', '.trash']
 
@@ -149,4 +152,190 @@ export function scanUnfinished(notesDir, { now = Date.now(), asked = [], limit =
   // 带标记的优先，其次越久没动越先追。
   out.sort((a, b) => (MARK.test(b.excerpt) - MARK.test(a.excerpt)) || a.mtime - b.mtime)
   return out.slice(0, 5)
+}
+
+// ---------------------------------------------------------------- D3 全库只读检索 / 裁决同步
+//
+// 第三轮：知识库不只是 大肥鱼/，而是他整个 Obsidian 库（只读）。发球前取最近改过的笔记、
+// 长期规划和当天任务；裁决按账本增量写回 大肥鱼/每日/。日记、私密目录仍然不读。
+
+const VAULT_MAX_DEPTH = 6
+const VAULT_MAX_FILES = 800
+const VAULT_READ_BYTES = 60_000
+
+function isPrivateName(name) {
+  return name.startsWith('.') || PRIVATE_DIRS.some((p) => name.includes(p))
+}
+
+/** 走一遍笔记库，只收 .md；跳过私密目录、隐藏文件、符号链接。 */
+function walkVault(root, { maxDepth = VAULT_MAX_DEPTH, maxFiles = VAULT_MAX_FILES } = {}) {
+  const out = []
+  let seen = 0
+  const walk = (dir, depth) => {
+    if (depth > maxDepth || seen >= maxFiles) return
+    let entries = []
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const e of entries) {
+      if (seen >= maxFiles) return
+      if (isPrivateName(e.name)) continue
+      const abs = join(dir, e.name)
+      if (e.isDirectory()) {
+        walk(abs, depth + 1)
+        continue
+      }
+      if (e.isSymbolicLink() || !e.isFile() || !e.name.endsWith('.md')) continue
+      let st
+      try {
+        st = statSync(abs)
+      } catch {
+        continue
+      }
+      seen += 1
+      out.push({ path: abs, rel: relative(root, abs).split('\\').join('/'), mtime: st.mtimeMs })
+    }
+  }
+  walk(root, 0)
+  return out
+}
+
+function stripMarkdown(text, max) {
+  const body = String(text || '')
+    .replace(/^---[\s\S]*?---\s*/, '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[#>*`_~]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return body.slice(0, max)
+}
+
+/** 最近改过的笔记（摘要只读，不含日记/私密）。 */
+export function vaultRecentNotes(notesDir, { limit = 3, now = Date.now(), exclude = [] } = {}) {
+  if (!notesDir) return []
+  const skip = new Set(exclude)
+  return walkVault(notesDir)
+    .filter((f) => !f.rel.startsWith(KB_DIR + '/每日/') && f.rel !== KB_DIR + '/记忆.md' && f.rel !== KB_DIR + '/长期规划.md' && !skip.has(f.rel))
+    .sort((a, b) => b.mtime - a.mtime)
+    .slice(0, Math.max(1, Math.min(8, limit)))
+    .map((f) => ({ rel: f.rel, mtime: f.mtime, summary: stripMarkdown(readText(f.path, VAULT_READ_BYTES), 220) }))
+}
+
+/** 全库只读搜索：文件名/路径命中优先，其次正文命中。 */
+export function vaultSearch(notesDir, query, { limit = 8 } = {}) {
+  const q = String(query || '').replace(/\s+/g, ' ').trim().slice(0, 80)
+  if (!notesDir || !q) return []
+  const needle = q.toLowerCase()
+  const tokens = needle.split(' ').filter((t) => t.length >= 2)
+  const out = []
+  for (const f of walkVault(notesDir)) {
+    const text = readText(f.path, VAULT_READ_BYTES)
+    const lower = text.toLowerCase()
+    const relLower = f.rel.toLowerCase()
+    const pathHit = relLower.includes(needle)
+    const bodyHit = lower.includes(needle)
+    const tokenHit = tokens.length > 0 && tokens.every((t) => lower.includes(t))
+    if (!pathHit && !bodyHit && !tokenHit) continue
+    const at = bodyHit ? lower.indexOf(needle) : tokenHit ? Math.max(0, lower.indexOf(tokens[0])) : -1
+    const snippet = at >= 0 ? stripMarkdown(text.slice(Math.max(0, at - 100), at + 220), 220) : stripMarkdown(text, 180)
+    const count = bodyHit ? lower.split(needle).length - 1 : 1
+    out.push({ rel: f.rel, mtime: f.mtime, snippet, score: (pathHit ? 5 : 0) + Math.min(10, count * 2) + (tokenHit ? 1 : 0) })
+  }
+  return out.sort((a, b) => b.score - a.score || b.mtime - a.mtime).slice(0, Math.max(1, Math.min(20, limit)))
+}
+
+/** 大肥鱼/长期规划.md 的摘要（没有就是空）。 */
+export function longPlanDigest(notesDir, max = 1200) {
+  if (!notesDir) return ''
+  const file = join(notesDir, KB_DIR, '长期规划.md')
+  if (!existsSync(file)) return ''
+  return stripMarkdown(readText(file, 20_000), max)
+}
+
+function clockIn(now, tz) {
+  try {
+    return new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(now))
+  } catch {
+    return new Date(now).toISOString().slice(11, 16)
+  }
+}
+
+function verdictTasks(v) {
+  return (Array.isArray(v?.tasks) ? v.tasks : [])
+    .map((t) => (typeof t === 'string' ? { task: t, evidence: '' } : { task: clean(t?.task, 120), evidence: clean(t?.evidence, 160), longTerm: t?.longTerm === true }))
+    .filter((t) => t.task)
+    .slice(0, 6)
+}
+
+/** 一次裁决追加进 大肥鱼/每日/日期.md（不覆盖早上写的任务和对账）。 */
+export function appendVerdictDaily(kb, now, tz, v) {
+  const day = dayString(now, tz)
+  const file = join(kb, '每日', day + '.md')
+  const satisfied = v?.satisfied === true
+  const kind = String(v?.kind || 'verdict').slice(0, 30)
+  const lines = ['', '## 裁决 ' + clockIn(now, tz) + ' · ' + kind, '', '- ' + (satisfied ? '满意' : '不满意')]
+  const summary = clean(v?.summary, 600)
+  const next = clean(v?.nextStep ?? v?.next_step, 300)
+  if (summary) lines.push('- 结论：' + summary)
+  if (next) lines.push('- 下一步：' + next)
+  const tasks = verdictTasks(v)
+  if (tasks.length) {
+    lines.push('- 任务：')
+    for (const t of tasks) lines.push('  - ' + t.task + (t.evidence ? '（完成物：' + t.evidence + '）' : ''))
+  }
+  try {
+    mkdirSync(join(kb, '每日'), { recursive: true })
+    if (!existsSync(file)) writeFileSync(file, '# ' + day + ' · 今日\n\n> 早上的事和完成物、晚上的对账、两姐妹的裁决，都写在这里。\n', 'utf8')
+    appendFileSync(file, lines.join('\n') + '\n', 'utf8')
+    return file
+  } catch {
+    return ''
+  }
+}
+
+/** 涉及长期目标的裁决追加到 大肥鱼/长期规划.md。 */
+export function appendLongTerm(kb, now, tz, v) {
+  const file = join(kb, '长期规划.md')
+  const day = dayString(now, tz)
+  const summary = clean(v?.summary, 600)
+  const next = clean(v?.nextStep ?? v?.next_step, 300)
+  const tasks = verdictTasks(v)
+  const lines = ['', '## ' + day + ' · ' + String(v?.kind || '裁决'), '']
+  if (summary) lines.push('- 结论：' + summary)
+  if (next) lines.push('- 下一步：' + next)
+  // 整条裁决标了长期：里面的事都算长期目标，不只逐条的 longTerm。
+  const longAll = v?.longTerm === true
+  for (const t of tasks) if (longAll || t.longTerm) lines.push('- 长期：' + t.task + (t.evidence ? '（完成物：' + t.evidence + '）' : ''))
+  try {
+    mkdirSync(kb, { recursive: true })
+    if (!existsSync(file)) writeFileSync(file, '# 长期规划\n\n> 鲸澜把涉及长期目标的裁决追加在这里；用户可以随时改。\n', 'utf8')
+    appendFileSync(file, lines.join('\n') + '\n', 'utf8')
+    return file
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 账本增量同步：只处理 state=verdict 且 at 比上次新的条目。
+ * @returns {{state:{lastVerdictAt:number}, count:number}}
+ */
+export function syncVerdicts({ kb, entries, now = Date.now(), tz = 'Asia/Shanghai', state = {} } = {}) {
+  const next = { ...(state || {}) }
+  const last = Number(next.lastVerdictAt) || 0
+  const rows = (Array.isArray(entries) ? entries : [])
+    .filter((e) => e && e.state === 'verdict' && Number(e.at) > last)
+    .sort((a, b) => Number(a.at) - Number(b.at))
+  if (!kb || !rows.length) return { state: next, count: 0 }
+  for (const v of rows) {
+    appendVerdictDaily(kb, Number(v.at) || now, tz, v)
+    const long = v.longTerm === true || verdictTasks(v).some((t) => t.longTerm)
+    if (long) appendLongTerm(kb, Number(v.at) || now, tz, v)
+  }
+  next.lastVerdictAt = Number(rows[rows.length - 1].at) || last
+  return { state: next, count: rows.length }
 }

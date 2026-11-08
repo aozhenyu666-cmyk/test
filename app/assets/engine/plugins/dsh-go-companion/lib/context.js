@@ -3,7 +3,7 @@
 // 心情、关系承诺、最近的回应方式都从现有文件/库读取；缺了就跳过，
 // 不因为某个插件没装就让主动回合失败。
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 
@@ -119,5 +119,46 @@ export function readCorePersona(home) {
     } catch {
       // ignore
     }
+  }
+}
+
+/**
+ * D3：把 SQLite 里的重要记忆单向导出到 大肥鱼/记忆.md（只写不读回，不参与决策）。
+ * 重要 = 钉住或 importance >= 4；最多 40 条。失败不影响主流程。
+ * @returns {boolean} 是否写了文件
+ */
+export function exportImportantMemories(db, kbDir, now = Date.now()) {
+  if (!db || !kbDir) return false
+  let rows = []
+  try {
+    rows = db.prepare(
+      "SELECT text, importance, pinned FROM facts WHERE status = 'active' AND (pinned = 1 OR importance >= 4) ORDER BY pinned DESC, importance DESC, updated_at DESC LIMIT 40",
+    ).all()
+  } catch {
+    return false
+  }
+  const seen = new Set()
+  const items = []
+  for (const r of rows) {
+    const text = String(r?.text || '').replace(/\s+/g, ' ').trim().slice(0, 240)
+    if (!text || seen.has(text)) continue
+    seen.add(text)
+    items.push({ text, pinned: Number(r.pinned) === 1 })
+  }
+  if (!items.length) return false
+  const day = new Date(now).toISOString().slice(0, 10)
+  const lines = [
+    '# 记忆（自动导出）',
+    '',
+    '> 从手机本地记忆库单向导出，只收钉住和重要的记忆；' + day + ' 更新。可以直接改，下一次导出会覆盖这一份。',
+    '',
+  ]
+  for (const it of items) lines.push('- ' + (it.pinned ? '📌 ' : '') + it.text)
+  try {
+    mkdirSync(kbDir, { recursive: true })
+    writeFileSync(join(kbDir, '记忆.md'), lines.join('\n') + '\n', 'utf8')
+    return true
+  } catch {
+    return false
   }
 }

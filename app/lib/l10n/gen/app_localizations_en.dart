@@ -10139,6 +10139,80 @@ class L10nEn extends L10n {
   }
 
   @override
+  String get phoneGeminiTitle => 'Gemini session';
+
+  @override
+  String get phoneGeminiHint =>
+      'Only Gemini stays open; other apps lock the moment they open. Calls, messages, maps and payment stay available.';
+
+  @override
+  String phoneGeminiRunning(String topic, int minutes) {
+    return 'Running: $topic · $minutes min left · Gemini only';
+  }
+
+  @override
+  String get phoneGeminiEmptyTopic => 'Session (no topic)';
+
+  @override
+  String get phoneGeminiStart => 'Start a session';
+
+  @override
+  String get phoneGeminiEnd => 'End the session';
+
+  @override
+  String get phoneGeminiTopic => 'What is this session for? (chapter 3, the report…)';
+
+  @override
+  String get phoneGeminiMinutes => 'Length';
+
+  @override
+  String get phoneGeminiMode => 'How to help';
+
+  @override
+  String get phoneGeminiStudy => 'Study coach';
+
+  @override
+  String get phoneGeminiThink => 'Think together';
+
+  @override
+  String get phoneGeminiInterrogate => 'Interrogate slacking';
+
+  @override
+  String get phoneGeminiFailed => 'No answer from Da Fei Yu. Try again.';
+
+  @override
+  String get phoneGeminiStarted => 'Session started: Gemini only';
+
+  @override
+  String get phoneGeminiEnded => 'Session over; locks are back';
+
+  @override
+  String get phoneWallTitle => 'The wall (rules)';
+
+  @override
+  String get phoneWallHint =>
+      'Locks and breaks follow the rules he set while clear-headed; chat cannot change them. For more time, ask Jinglan in the window after the evening review.';
+
+  @override
+  String phoneWallLocked(String why) {
+    return 'Locked now: $why';
+  }
+
+  @override
+  String get phoneWallUnlocked => 'Nothing locked now';
+
+  @override
+  String phoneWallQuota(int days) {
+    return '$days relaxed days left this week';
+  }
+
+  @override
+  String get phoneWallTodaySame => 'No rule changes today';
+
+  @override
+  String get phoneWallTodayChanged => 'Rules changed today';
+
+  @override
   String get phoneTaskResultReady => 'Task complete · View result';
 
   @override

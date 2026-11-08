@@ -140,12 +140,18 @@ test('/wall tighten：立即锁今天，status 显示收紧', async () => {
   })
 })
 
-test('工具 request_relax / tighten_today 挂在会话上', async () => {
+test('第三轮 C4：聊天里没有任何管控工具，@放松只走手机端的墙路由', async () => {
   await withHome(async (home) => {
     const t = setup(home)
     await t.plan({ app: 'com.game', fun: true, screenOn: true, local: '15:00' })
-    assert.ok(t.big.tools.request_relax, '鲸澜有 request_relax')
-    assert.ok(t.big.tools.tighten_today, '鲸澜有 tighten_today')
-    assert.ok(!t.big.tools.grant_break, 'grant_break 已撤')
+    // 放松/收紧是墙的接口，手机端走 /wall；姐妹手里不再有工具。
+    for (const name of ['request_relax', 'tighten_today', 'grant_break']) {
+      assert.equal(t.big.tools[name], undefined, name + ' 已撤')
+      assert.equal(t.sis.tools[name], undefined, name + ' 已撤（妹妹也没有）')
+    }
+    // 手机端还是能申请放松：窗口没开就拒绝，说明这条路还在。
+    const r = await t.wall({ action: 'relax', atHour: 20, minutes: 60, reason: '周末想放松一下' })
+    assert.equal(r.body.ok, false)
+    assert.equal(r.body.error.code, 'no-window')
   })
 })

@@ -47,9 +47,9 @@ import {
   seedFromCommitments,
   seedFromMemory,
 } from './garden.js'
-import { lastReplyClass, readCommitments, readCorePersona, readMood } from './context.js'
+import { lastReplyClass, exportImportantMemories, readCommitments, readCorePersona, readMood } from './context.js'
 import { cleanPhone, funToday, worthObserving } from './phone.js'
-import { NOTES_CANDIDATES, capabilityLines, companionChatText, roleNames, strategistChatText } from './roles.js'
+import { NOTES_CANDIDATES, agendaLines, capabilityLines, companionChatText, roleNames, strategistChatText } from './roles.js'
 import { tide as tideOf, tideGap, tideHourly, vagueStreak } from './tide.js'
 import { FACES, stepTemper, temperLine } from './temper.js'
 import { drillLines, drillOf, pickDrill, scoldLines } from './drills.js'
@@ -58,8 +58,13 @@ import { decideForce, forceLines, refuseSwitch } from './force.js'
 import { BUSY_CHECK_MS, BUSY_DEFAULT_MIN, BUSY_MAX_MIN, aiTask, applyGear, effectiveGear, gearLines, gearSwitch } from './gear.js'
 import { trustGap, trustLines, trustScore } from './trust.js'
 import { buildSnapshot, sistersView } from './panel.js'
-import { kbDir, kbWrite, knowledgeLines, scanUnfinished } from './notes.js'
-import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, closeGates, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
+import { kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
+import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
+import {
+  FOLLOWUP_CAP_MS, FOLLOWUP_PENALTY, VERDICT_KINDS, addObligation, checkVerdict, clearObligation, closeLock, followupView,
+  funBlockedBy, lockActive, lockExpired, obligationOf, obligationsView, openLock, takeReask,
+} from './followup.js'
+import { BRAIN_MIN_MS, SPRINT_LONG_MIN, SPRINT_MIN, resolveState } from './machine.js'
 import {
   DEFAULT_WALL, wallConfig, wallDecision, activeRelax, tightenActive, relaxRemaining, relaxUsedThisWeek, relaxBonus,
   trackApplyWindow, applyWindowOpen, dayKey, weekKey, WALL_KIND_DEFAULT, wallDefianceText,
@@ -133,6 +138,21 @@ const DEFAULTS = Object.freeze({
   relaxWeek: null,
   // 申请窗口状态机：{ day, openAt, closeAt, notified, used }。对账完成后随机打开 15 分钟。
   applyWindow: null,
+  // 第三轮·追问锁：{ reason, question, since, until }。同一时刻只有一把，最长 followupCapMin 分钟。
+  followup: null,
+  // 追问锁单次上限（分钟）与超时扣的信用分。
+  followupCapMin: 30,
+  followupPenalty: FOLLOWUP_PENALTY,
+  // 待命多久没动就开追问锁（分钟）。
+  standbyMin: 10,
+  // 冲刺两档时长（分钟）：用户点「开始」时选。放风时长见 wall.relaxSegmentMin / breakMin。
+  sprintMin: SPRINT_MIN,
+  sprintLongMin: SPRINT_LONG_MIN,
+  // 验收通过后放风多久（分钟）；连麦满多久才算完成（分钟）。
+  breakMin: 20,
+  brainMinMin: 3,
+  // 待办义务：超时没过关的事挂在这里，只由用户的动作触发再问。
+  obligations: [],
 })
 
 function home() {
@@ -551,6 +571,7 @@ export function apply(ctx) {
         const why = strategistBallReason.get(String(req?.requestId || '')) || { reason: pendingHandoff(now) ? 'handoff' : 'review' }
         const note = why.reason === 'handoff' ? why.note || pendingHandoff(now) : null
         const candidates = loadCandidates(db, { sessionId, now })
+        const vault = vaultContext(now)
         const prompt = buildPrompt({
           role: 'strategist',
           reason: why.reason,
@@ -561,6 +582,7 @@ export function apply(ctx) {
           phone: cleanPhone(req?.phone),
           commitments: readCommitments(home(), now, 3),
           facts: backgroundFacts(candidates, BACKGROUND_LIMIT),
+          vault,
           names: roleNames(config),
           owner: config.owner,
           allowTools: config.proactiveTools !== false,
@@ -646,6 +668,7 @@ export function apply(ctx) {
       saveBrain(brain)
       // 回合与拍数都从账本重建：进程重启不会丢，也不多存一份状态。
       const rally = nextShot(entries, { sessionId, now })
+      const vault = vaultContext(now)
       const prompt = buildPrompt({
         topic,
         facts: backgroundFacts(candidates, BACKGROUND_LIMIT),
@@ -660,6 +683,7 @@ export function apply(ctx) {
         persona: mergePersona(readCorePersona(home()), config.persona),
         mode,
         phone,
+        vault,
         role: config.dual === false ? undefined : 'companion',
         names: roleNames(config),
         allowTools: config.proactiveTools !== false,
@@ -807,15 +831,8 @@ export function apply(ctx) {
         lastHumanAt.set(String(session?.id || ''), Date.now())
         // 落进账本：引擎重启也知道他刚说过话（阶梯不会把聊过的球当成没接，发球也知道他多久前说的话）。
         record({ state: 'human', at: Date.now(), sessionId: String(session?.id || '') })
-        // 早上说了今天的 3 件事 / 晚上对了账：门关上，娱乐解锁（下一次 /plan 起）。
-        const gates = closeGates(loadRhythm(), text, Date.now())
-        if (gates.closed.length) {
-          saveRhythm(gates.state)
-          if (lastRhythm) lastRhythm = { ...lastRhythm, state: gates.state, morningGate: lastRhythm.morningGate && !gates.closed.includes('morning'), reviewGate: lastRhythm.reviewGate && !gates.closed.includes('review') }
-          record({ state: 'gate-closed', at: Date.now(), gates: gates.closed })
-          // C5：晚上对账一并清算她们立的、还没验收的任务，不出现"解完一层还有一层"。
-          if (gates.closed.includes('review')) settleTasksAtReview(Date.now())
-        }
+        // 第三轮：早上/晚上的门不再靠"他认真回了一句"关——过关要姐妹裁决（submit_verdict），
+        // 敷衍的话不会让窗口消失。这里只记"他在聊"。
         // 他说"安静一小时""今天别找我"就照做：这是一句话就说清的事，不必占一次模型调用。
         const muteUntilAt = mutedUntil(text, Date.now(), { tz: config.timeZone })
         if (muteUntilAt) {
@@ -1114,6 +1131,19 @@ export function apply(ctx) {
     notesCache = { at: now, dir }
     return dir
   }
+  /** 进 prompt 的知识库摘要：长期规划、今天的事、最近改过的笔记（摘要就够了，别把整库灌进去）。 */
+  function vaultContext(now) {
+    const dir = notesDir()
+    if (!dir) return null
+    const kb = kbDir(dir, home())
+    const tz = zoneOr(config.timeZone)
+    const daily = loadDaily(loadDailyState(), now, tz)
+    return {
+      longPlan: longPlanDigest(kb, 1200) || undefined,
+      tasks: daily.tasks.length ? daily.tasks : undefined,
+      recent: vaultRecentNotes(dir, { limit: 3, now }) || undefined,
+    }
+  }
   /** 他说"我的笔记在 xxx"：她们自己记下笔记库在哪，不用他去翻设置。 */
   function notesTool() {
     return {
@@ -1161,6 +1191,42 @@ export function apply(ctx) {
     .filter((b) => b && Number(b.until) > now && !NEVER_BLOCK.includes(b.app)).map((b) => b.app)
   const loadGemini = () => readState(stateFile('gemini.json'), {}) || {}
   const saveGemini = (g) => writeJson(stateFile('gemini.json'), g)
+  // D4：预约的下一场 Gemini 连麦（一次性，发过就 fired）。
+  const loadGeminiSchedule = () => readState(stateFile('gemini-schedule.json'), {}) || {}
+  const saveGeminiSchedule = (s) => writeJson(stateFile('gemini-schedule.json'), s)
+  /**
+   * "HH:MM" 解析成当地时间的下一个时刻：今天还没到就是今天，过了就是明天。
+   * 认不出来返回 0，调用方再试 ISO。
+   */
+  function nextLocalAt(text, now, tz) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(text || '').trim())
+    if (!m) return 0
+    const hour = Number(m[1])
+    const minute = Number(m[2])
+    if (!(hour >= 0 && hour < 24 && minute >= 0 && minute < 60)) return 0
+    const day = startOfDay(now, tz)
+    // 当地零点 + 时分就是当地那一刻。
+    const target = day + (hour * 60 + minute) * 60_000
+    return target > now ? target : target + 86_400_000
+  }
+  /** 到点了就把预约换成一次 launch（背景简报 + 进共舱），只发一次。 */
+  function dueGeminiLaunch(now = Date.now()) {
+    const s = loadGeminiSchedule()
+    const at = Number(s.at) || 0
+    if (!at || s.fired === true || at > now) return null
+    const topic = String(s.topic || '')
+    const minutes = Math.max(5, Math.min(180, Math.round(Number(s.minutes) || 30)))
+    const mode = geminiMode(s.mode)
+    const brief = geminiBrief({
+      owner: String(config.owner || '他'), topic, minutes, mode,
+      about: personaLines(mergePersona(readCorePersona(home()), config.persona), effectiveMode(config, now)).slice(0, 5),
+      commitments: readCommitments(home(), now, 3).map((c) => c.statement),
+    })
+    saveGeminiSchedule({ ...s, fired: true, firedAt: now })
+    saveGemini({ ...loadGemini(), session: { topic, mode, minutes, startedAt: now, until: now + minutes * 60_000, by: s.by || 'schedule' } })
+    record({ state: 'gemini-schedule-fired', at: now, topic, minutes, mode })
+    return { topic, minutes, mode, brief }
+  }
   const loadGearState = () => readState(stateFile('gear.json'), {}) || {}
   const saveGearState = (g) => writeJson(stateFile('gear.json'), g)
   // 第二轮·每日文件：今天的事 + 完成物 + 晚上对账的结论（渲染成 大肥鱼/每日/日期.md）。
@@ -1209,7 +1275,10 @@ export function apply(ctx) {
     if (why.mark) saveGemini({ ...loadGemini(), ...why.mark })
   }
   /** 两姐妹共用的信用分（从账本算，见 trust.js）。 */
-  const trustWeights = () => ({ breakglass: -(Number(config.breakglassPenalty) || 15) })
+  const trustWeights = () => ({
+    breakglass: -(Number(config.breakglassPenalty) || 15),
+    'followup-timeout': -(Number(config.followupPenalty) || 5),
+  })
   const trustNow = (now = Date.now()) => trustScore(readLedger(home(), 800), now, { weights: trustWeights() })
   /** 放风中：娱乐临时解锁（盖过拒绝模式和任务模式），到点自动恢复。 */
   const onBreak = (now) => Number(config.breakUntil) > now
@@ -1237,14 +1306,16 @@ export function apply(ctx) {
   /** 晚上对账通过：她们立的任务（任务模式、她们开的拒绝模式）记一笔"对账时清算"，一起解锁。 */
   function settleTasksAtReview(now) {
     const task = aiTask(config, now)
+    // 第三轮：他点「开始」的冲刺也算，验收/对账过了就一起收。
+    const sprint = Number(config.sprintUntil) > 0
     const aiRefuse = config.refuseBy === 'ai' && Number(config.refuseUntil) > now
-    if (!task && !aiRefuse) return false
+    if (!task && !sprint && !aiRefuse) return false
     const goal = config.taskGoal
-    if (task) {
+    if (task || sprint) {
       setGear({ gear: 'free' }, 'review')
       saveGearState({ ...loadGearState(), doneFor: Number(config.gearUntil) })
     }
-    if (config.refuseBy === 'ai' || (config.refuseBy === 'gear' && task)) {
+    if (config.refuseBy === 'ai' || (config.refuseBy === 'gear' && (task || sprint))) {
       config = { ...config, refuseUntil: 0, refuseBy: undefined }
       try {
         writeConfig(config)
@@ -1255,6 +1326,126 @@ export function apply(ctx) {
     record({ state: 'task-settled', at: now, by: 'review', goal })
     return true
   }
+  // ---- 第三轮：追问锁 / 裁决 / 全天状态 ---------------------------------------------------------
+  //
+  // 门不再按字数关：节奏只负责"该不该开门"，关不关由姐妹的裁决（满意）或超时决定。
+  // 墙按状态机执行，她们唯一的把手是 submit_verdict。
+
+  /** 改配置并落盘；落盘失败也照样在内存里生效（这一轮不能因为写失败就反悔）。 */
+  function commit(patch) {
+    config = { ...config, ...patch }
+    try {
+      writeConfig(config)
+    } catch {
+      // 这一轮照样生效
+    }
+    return config
+  }
+
+  /** 开追问锁。同一时刻只有一把；同原因重复开不续命（30 分钟上限绕不过去）。 */
+  function openFollowup(reason, question, now = Date.now()) {
+    const lock = openLock(config.followup, {
+      reason,
+      question,
+      now,
+      capMs: Math.max(60_000, Math.round(Number(config.followupCapMin) || 30) * 60_000),
+    })
+    commit({ followup: lock })
+    record({ state: 'followup-open', at: now, reason: lock.reason, question: lock.question, until: lock.until })
+    return lock
+  }
+
+  /**
+   * 追问锁到点还没裁决：结束拦截、记账扣分、把没过关的事挂成义务（义务只由用户的动作触发再问）。
+   * 手机报 followup-timeout 和每次 /plan 都会兜一次，谁先到都算；第二次是空的。
+   */
+  function expireFollowup(now) {
+    const lock = config.followup
+    if (!lockExpired(lock, now)) return false
+    const ob = obligationOf(lock.reason, now)
+    commit({
+      followup: closeLock(lock, { now, by: 'timeout' }),
+      obligations: addObligation(config.obligations, ob),
+      // 晚间对账没过：今晚的申请窗口直接作废（任务书那张表）。
+      ...(ob.kind === 'evening' ? { applyWindow: { ...(config.applyWindow || {}), used: true, closeAt: now } } : {}),
+    })
+    record({ state: 'followup-timeout', at: now, reason: lock.reason, question: lock.question, obligation: ob.kind })
+    return true
+  }
+
+  /** 这一刻的全天状态（C2）：主状态只有一项，追问锁是叠在上面的临时层。 */
+  function stateView(now, tz, phone) {
+    return resolveState({
+      now,
+      tz,
+      min: localMinute(phone, zoneMinuteOfDay(now, tz)),
+      config,
+      rhythm: lastRhythm || {},
+      followup: followupView(config.followup, now),
+      session: geminiSessionView(now),
+    })
+  }
+
+  /**
+   * 一次裁决落地（C3）。满意才收；不满意只记账、锁继续挂着，到点按超时处理。
+   * 记账形状对齐 DeepSeek 的 D3：{state:'verdict', kind, satisfied, summary, nextStep, tasks, longTerm}。
+   */
+  function applyVerdict(v, now, by) {
+    record({
+      state: 'verdict', at: now, by, kind: v.kind, satisfied: v.satisfied,
+      summary: v.summary || undefined, nextStep: v.nextStep || undefined,
+      tasks: v.tasks, longTerm: v.longTerm,
+    })
+    // 过关了这条义务就消掉；没过得留着（超时会重新挂）。
+    if (v.satisfied) commit({ obligations: clearObligation(config.obligations, v.kind) })
+    if (!v.satisfied) return { ok: true, text: '记下了：这轮不算过。锁还在，说清它什么时候解决。' }
+    const patch = { followup: closeLock(config.followup, { now, by: 'verdict' }) }
+    if (v.kind === 'morning' && v.tasks) {
+      // 晨间立项的任务进当日文件（晚上对账按完成物逐项找证据）。
+      const tz = zoneOr(config.timeZone)
+      const state = loadDaily(loadDailyState(), now, tz)
+      const next = { ...state, tasks: v.tasks, review: state.review }
+      const wrote = writeDaily(kbDir(notesDir(), home()), next)
+      if (wrote.ok) patch.daily = { day: state.day, tasks: v.tasks.length, at: now }
+      saveDailyState(next)
+    }
+    if (v.kind === 'review' || v.kind === 'morning') {
+      // 验收/立项过了：放风（复用第二轮那段 breakUntil 语义，放风期间不下发任何锁）。
+      const mins = Math.max(5, Math.round(Number(config.breakMin) || 20))
+      Object.assign(patch, { breakUntil: now + mins * 60_000, breakSince: now, breakChecked: false })
+      settleTasksAtReview(now)
+    }
+    if (v.kind === 'evening') {
+      // 晚间对账过了：按当日文件对账，产出明天的放风额度；任务和冲刺一并清算（C5：对完账一起解除）。
+      settleTasksAtReview(now)
+      if (Number(config.sprintUntil) > 0) Object.assign(patch, { sprintUntil: 0 })
+      const tz = zoneOr(config.timeZone)
+      const state = loadDaily(loadDailyState(), now, tz)
+      if (state.tasks.length) {
+        const out = reconcile(state, {
+          now, tz, notesDir: notesDir(), ledger: readLedger(home(), 800),
+          usage: Array.isArray(lastPhone?.today) ? lastPhone.today : [],
+        })
+        const next = { ...state, review: { at: now, ...out } }
+        writeDaily(kbDir(notesDir(), home()), next)
+        saveDailyState(next)
+        Object.assign(patch, {
+          daily: { day: state.day, done: out.done, partial: out.partial, miss: out.miss, total: out.total, at: now },
+          dailyQuota: { for: startOfDay(now, tz) + 86_400_000, delta: out.quotaDelta, done: out.done, total: out.total, at: now },
+        })
+      }
+    }
+    if (v.kind === 'review' || v.kind === 'morning') {
+      if (Number(config.sprintUntil) > 0) Object.assign(patch, { sprintUntil: 0 })
+    }
+    commit(patch)
+    // 门由裁决关：writeConfig 之后写节奏状态（closeGate 回的是 {state, closed}）。
+    const rh = lastRhythm
+    if (rh?.morningGate && v.kind === 'morning') saveRhythm(closeGate(rh.state, 'morning').state)
+    if (rh?.reviewGate && (v.kind === 'review' || v.kind === 'evening')) saveRhythm(closeGate(rh.state, 'review').state)
+    return { ok: true, text: '过了。' + (patch.breakUntil ? '放风到 ' + new Date(patch.breakUntil).toTimeString().slice(0, 5) + '，到点回来。' : '') }
+  }
+
   function rulesSnapshot(now, tz = zoneOr(config.timeZone)) {
     const rules = []
     const block = {}
@@ -1267,12 +1458,16 @@ export function apply(ctx) {
     // 只推白天的默认锁；手机端 LockPriority 里 default 排在普通之上、拒绝之下。
     const wd = wallDecision(config, now, tz)
     if (wd.locked && wd.kind === WALL_KIND_DEFAULT) push(WALL_KIND_DEFAULT, wd.until, wd.why)
+    // 追问锁：门开着就不放——回复敷衍时窗口不消失，到点由插件自己结束。
+    if (lockActive(config.followup, now)) push('followup', Number(config.followup.until), '追问锁：把这一个问题说清楚')
     const rh = lastRhythm
     const st = rh?.state || {}
     if (rh?.reviewGate) push('review', Number(st.reviewSince) + REVIEW_CAP_MS, '晚上对账：和鲸澜对完今天的账才解锁')
-    const task = aiTask(config, now)
+    // 冲刺（用户点「开始」）和她们立的任务都按 task 下发：到点就是结束。
+    const sprinting = Number(config.sprintUntil) > now
+    const task = aiTask(config, now) || sprinting
     if (task) {
-      const goal = config.taskGoal ? '（' + String(config.taskGoal).slice(0, 40) + '）' : ''
+      const goal = config.taskGoal ? '（' + String(config.taskGoal).slice(0, 40) + '）' : config.gearWhat ? '（' + String(config.gearWhat).slice(0, 40) + '）' : ''
       // 没到点：锁到任务结束；到点还没验收：往后顺 10 分钟（引擎在就一直顺，引擎死了 10 分钟后自己解）。
       push('task', Number(config.gearUntil) > now ? Number(config.gearUntil) : now + 10 * 60_000, '任务模式' + goal + '：验收合格才解锁')
     }
@@ -1314,6 +1509,9 @@ export function apply(ctx) {
     }
     if (config.applyWindow && config.applyWindow.used) {
       return { ok: false, code: 'window-used', text: '这个窗口已经提过一次申请了，明天再说。' }
+    }
+    if (funBlockedBy(config.obligations)) {
+      return { ok: false, code: 'obligation', text: '今天还压着一件没补完的立项：先把完成物拿出来，再说放松。' }
     }
     const targetDay = dayKey(now, tz) + 86_400_000 // 明天
     const q = relaxQuotaLeft(targetDay, now, tz)
@@ -1483,6 +1681,96 @@ export function apply(ctx) {
         const r = kbWrite(kbDir(notesDir(), home()), args.file, args.markdown, Date.now())
         if (r.ok) record({ state: 'kb-write', at: Date.now(), by: role, file: args.file })
         return { ok: r.ok, text: r.text }
+      },
+    }
+  }
+  /**
+   * 第三轮唯一影响墙的把手（C4）：姐妹对此刻挂着的追问锁交一个裁决。
+   * 墙只校验格式，满意不满意由她们定；不合格按"不满意"处理并把原因回给她们。
+   */
+  function submitVerdictTool(role) {
+    return {
+      name: 'submit_verdict',
+      description: '对挂着的追问锁交裁决。满意 → 关闭拦截、按状态继续（验收/立项过后放风，晚间对账过后算明天的额度）；' +
+        '不满意 → 锁不消失，只记账。格式：kind 六种之一（morning 晨间立项 / review 验收 / defiance 违抗 / standby 待命超时 / gemini 连麦回流 / evening 晚间对账）；' +
+        'satisfied 布尔；满意时必须写 summary（为什么算过关）和 nextStep（下一步）；晨间立项还要带 1–3 项 tasks，每项有 task 和 evidence。',
+      parameters: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', enum: VERDICT_KINDS },
+          satisfied: { type: 'boolean' },
+          summary: { type: 'string', description: '为什么算过关（满意时必填）' },
+          nextStep: { type: 'string', description: '下一步做什么（满意时必填）' },
+          tasks: {
+            type: 'array',
+            maxItems: 3,
+            items: {
+              type: 'object',
+              properties: {
+                task: { type: 'string', description: '今天要做的事' },
+                evidence: { type: 'string', description: '完成物：晚上能去查的东西' },
+              },
+              required: ['task', 'evidence'],
+              additionalProperties: false,
+            },
+          },
+          longTerm: { type: 'boolean', description: '这件事要跟进到以后（写进长期规划）' },
+        },
+        required: ['kind', 'satisfied'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const v = checkVerdict(args)
+        if (!v.ok) {
+          // 格式不合格：按"不满意"处理，但账本上单独记，别污染 D3 按 state:'verdict' 扫出来的笔记。
+          record({ state: 'verdict-invalid', at: now, by: role, kind: v.kind || undefined, code: v.code })
+          return { ok: false, text: v.text }
+        }
+        return applyVerdict(v, now, role)
+      },
+    }
+  }
+  /** 知识库只读检索：找证据、翻旧结论。姐妹共用（C4：两人工具一致）。 */
+  function vaultSearchTool() {
+    return {
+      name: 'vault_search',
+      description: '在笔记库里只读搜索（文件名和正文都搜），用来找完成物、翻以前定过的事。日记和私密目录不读。',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '要找的词（一两个关键词最准）' },
+          limit: { type: 'integer', minimum: 1, maximum: 20 },
+        },
+        required: ['query'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const hits = vaultSearch(notesDir(), args.query, { limit: Math.max(1, Math.min(20, Number(args.limit) || 8)) })
+        if (!hits.length) return { ok: true, text: '笔记库里没有搜到「' + String(args.query || '').slice(0, 40) + '」。' }
+        return { ok: true, text: hits.map((h) => h.rel + '：' + h.snippet).join('\n') }
+      },
+    }
+  }
+  /** 最近动过的笔记（摘要只读）：接着他昨天写到的地方说。 */
+  function vaultRecentTool() {
+    return {
+      name: 'vault_recent_notes',
+      description: '看他最近改过的笔记（只读摘要，不含日记和私密目录）。想接着昨天写到的地方说的时候用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit: { type: 'integer', minimum: 1, maximum: 8 },
+        },
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const list = vaultRecentNotes(notesDir(), { limit: Math.max(1, Math.min(8, Number(args.limit) || 3)) })
+        if (!list.length) return { ok: true, text: '笔记库里最近没有改动。' }
+        return { ok: true, text: list.map((n) => n.rel + '：' + n.summary).join('\n') }
       },
     }
   }
@@ -1776,6 +2064,10 @@ export function apply(ctx) {
       }
       pendingDefiance = { app, label, at: now, until, source: String(body?.source || 'overlay').slice(0, 20) }
       record({ state: 'defied', at: now, app, label, until, source: pendingDefiance.source })
+      // 违抗打开追问锁（原因：违抗）。挂着没问过的义务趁这次一并问掉（下次违抗时再问）。
+      const re = takeReask(config.obligations, 'defiance', now)
+      if (re.ask) commit({ obligations: re.obligations })
+      openFollowup(re.ask ? re.ask.kind : 'defiance', re.ask ? re.ask.text : '刚关掉提醒又打开了' + label + '，为什么？接下来怎么办？', now)
       // 收尾的话由墙说（代码模板），不经模型、不由姐姐出面。
       return { v: 1, ok: true, refuse: { until }, force: { level: 4, app, why: wallDefianceText(label, until) } }
     }
@@ -1827,6 +2119,61 @@ export function apply(ctx) {
       apps[label] = cur
       saveNotifs({ since: n.since || now, apps })
       return { v: 1, ok: true }
+    }
+    if (type === 'start') {
+      // 用户点「开始」（带任务和时长）：进冲刺。娱乐锁上，通知收进防波堤。
+      const long = body?.long === true
+      const dflt = long ? Number(config.sprintLongMin) || SPRINT_LONG_MIN : Number(config.sprintMin) || SPRINT_MIN
+      const minutes = Math.max(5, Math.min(120, Math.round(Number(body?.minutes) || dflt)))
+      const task = String(body?.task || '').trim().slice(0, 120)
+      const until = now + minutes * 60_000
+      setGear({ gear: 'busy', until, what: task || '冲刺', task: task ? { goal: task, by: 'user' } : undefined }, 'sprint')
+      commit({ sprintUntil: until })
+      record({ state: 'sprint-start', at: now, minutes, task: task || undefined, until })
+      return { v: 1, ok: true, sprint: { until, minutes, task: task || null } }
+    }
+    if (type === 'request-review') {
+      // 用户点「申请验收」：进验收（追问锁，原因验收）。
+      const lock = openFollowup('review', '这一轮做完了吗？拿完成物说话。', now)
+      return { v: 1, ok: true, followup: followupView(lock, now) }
+    }
+    if (type === 'screen-on') {
+      // 亮屏：只记账。晨间门的开关仍由 /plan 的作息判定，不在这儿抢。
+      record({ state: 'screen-on', at: now })
+      return { v: 1, ok: true }
+    }
+    if (type === 'gemini-end') {
+      // 连麦结束（带时长）：满 3 分钟才算完成，接着出追问（连麦回流）；不足回待命。
+      const minutes = Math.max(0, Math.round(Number(body?.minutes) || 0))
+      const min = Math.max(1, Math.round(Number(config.brainMinMin) || 3))
+      saveGemini({ ...loadGemini(), session: null })
+      record({ state: 'gemini-end', at: now, minutes, by: String(body?.by || 'phone').slice(0, 20) })
+      if (minutes >= min) {
+        const lock = openFollowup('gemini', '刚才连麦说到哪、结论是什么？', now)
+        return { v: 1, ok: true, counted: true, followup: followupView(lock, now) }
+      }
+      return { v: 1, ok: true, counted: false, followup: followupView(config.followup, now) }
+    }
+    if (type === 'followup-timeout') {
+      // 手机本地到点，告诉插件一声（插件每次 /plan 也会兜一次，谁先到都算）。
+      const l = config.followup
+      if (!l || !lockExpired(l, now)) return { v: 1, ok: true, expired: false }
+      expireFollowup(now)
+      return { v: 1, ok: true, expired: true, followup: followupView(config.followup, now), obligations: obligationsView(config.obligations, now) }
+    }
+    if (type === 'wechat-hit') {
+      // 微信里误入视频号：手机连续停留 3 秒、先返回聊天页才上报。插件只记账，不升级成违抗。
+      record({ state: 'wechat-hit', at: now, page: String(body?.page || '').slice(0, 60), dwellMs: Math.max(0, Math.round(Number(body?.dwellMs) || 0)) })
+      return { v: 1, ok: true }
+    }
+    if (type === 'blocked-open') {
+      // 他打开被拦的 App：挂着的义务按用户的动作再问一次（不定时自动弹）。
+      const r = takeReask(config.obligations, 'locked-app', now)
+      if (!r.ask) return { v: 1, ok: true, ask: false }
+      commit({ obligations: r.obligations })
+      const lock = openFollowup(r.ask.kind, r.ask.text, now)
+      record({ state: 'obligation-reask', at: now, kind: r.ask.kind, app: String(body?.app || '').slice(0, 120) })
+      return { v: 1, ok: true, ask: true, followup: followupView(lock, now) }
     }
     return { v: 1, ok: false, error: { code: 'unknown-event' } }
   }
@@ -1964,6 +2311,46 @@ export function apply(ctx) {
       },
     }
   }
+  /** D4：预约一次 Gemini Live。到点由手机取 /gemini/due 的 launch（背景简报），打开 Gemini 进共舱。 */
+  function scheduleGeminiLiveTool(role) {
+    return {
+      name: 'schedule_gemini_live',
+      description: '预约一次 Gemini Live 连麦：到点自动生成背景简报、打开 Gemini、进入共舱。' +
+        '用 delayMinutes（几分钟后）或 at（"HH:MM" 当地时间 / ISO 时间）指定时间；topic 写清这次要做什么。',
+      parameters: {
+        type: 'object',
+        properties: {
+          delayMinutes: { type: 'integer', minimum: 1, maximum: 1440, description: '多少分钟后开始' },
+          at: { type: 'string', description: '开始时间：HH:MM（当地时间，下一次）或 ISO 时间' },
+          topic: { type: 'string', description: '这次连麦要做什么（越具体越好）' },
+          minutes: { type: 'integer', minimum: 5, maximum: 180, description: '连多久，默认 30' },
+          mode: { type: 'string', enum: ['study', 'think', 'interrogate'] },
+        },
+        required: ['topic'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const tz = zoneOr(config.timeZone)
+        const topic = String(args.topic || '').trim().slice(0, 120)
+        if (!topic) return { ok: false, text: '要说清这次连麦做什么。' }
+        let at = 0
+        if (Number.isFinite(Number(args.delayMinutes)) && Number(args.delayMinutes) > 0) {
+          at = now + Math.max(1, Math.min(1440, Math.round(Number(args.delayMinutes)))) * 60_000
+        } else if (typeof args.at === 'string' && args.at.trim()) {
+          at = nextLocalAt(args.at, now, tz) || (Number.isFinite(Date.parse(args.at)) ? Date.parse(args.at) : 0)
+        }
+        if (!at || at <= now) return { ok: false, text: '时间要往以后：delayMinutes 或 at="HH:MM"。' }
+        const minutes = Math.max(5, Math.min(180, Math.round(Number(args.minutes) || 30)))
+        const mode = geminiMode(args.mode)
+        saveGeminiSchedule({ at, topic, minutes, mode, by: role, createdAt: now, fired: false })
+        record({ state: 'gemini-schedule', at: now, fireAt: at, topic, minutes, mode, by: role })
+        const hm = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at))
+        return { ok: true, text: '约好了：' + hm + ' 开始，' + minutes + ' 分钟，主题「' + topic + '」。到点手机会自动把背景放进剪贴板并打开 Gemini。' }
+      },
+    }
+  }
   /** 回：连麦读回来之后存进笔记库，两姐妹都看得到。 */
   function geminiLogTool(role) {
     return {
@@ -1987,8 +2374,9 @@ export function apply(ctx) {
         const summary = String(args.summary || '').trim().slice(0, 400)
         if (!summary) return { ok: false, text: '复盘是空的。' }
         const g = loadGemini()
+        const minutes = g.session?.startedAt ? Math.max(0, Math.round((now - Number(g.session.startedAt)) / 60_000)) : undefined
         const r = {
-          at: now, by: role, summary,
+          at: now, by: role, summary, minutes,
           stuck: String(args.stuck || '').trim().slice(0, 200) || undefined,
           next: String(args.next || '').trim().slice(0, 200) || undefined,
           quotes: (Array.isArray(args.quotes) ? args.quotes : []).map((q) => String(q).slice(0, 200)).slice(0, 3),
@@ -2008,7 +2396,7 @@ export function apply(ctx) {
         }
         const recaps = [...(Array.isArray(g.recaps) ? g.recaps : []), { ...r, file: wrote || undefined }].slice(-5)
         saveGemini({ ...g, recaps, session: null, recappedFor: Number(g.inSince) || g.recappedFor })
-        record({ state: 'gemini-recap', at: now, by: role, file: wrote || undefined })
+        record({ state: 'gemini-recap', at: now, by: role, file: wrote || undefined, minutes })
         return { ok: true, text: wrote ? '存好了：' + wrote : '记下了（笔记文件没写进去，复盘还在，两姐妹都看得到）。' }
       },
     }
@@ -2028,9 +2416,10 @@ export function apply(ctx) {
         const g = loadGemini()
         if (!g.session) return { ok: false, text: '现在没有进行中的 Gemini 连麦。' }
         const topic = String(g.session.topic || '')
+        const minutes = g.session.startedAt ? Math.max(0, Math.round((Date.now() - Number(g.session.startedAt)) / 60_000)) : undefined
         saveGemini({ ...g, session: null })
-        record({ state: 'gemini-end', at: Date.now(), by: role, reason: String(args.reason || '').slice(0, 80) || undefined })
-        return { ok: true, text: '连麦结束了' + (topic ? '（' + topic + '）' : '') + '，手机不再只许 Gemini。' }
+        record({ state: 'gemini-end', at: Date.now(), by: role, minutes, reason: String(args.reason || '').slice(0, 80) || undefined })
+        return { ok: true, text: '连麦结束了' + (topic ? '（' + topic + '）' : '') + (minutes ? '，约 ' + minutes + ' 分钟' : '') + '，手机不再只许 Gemini。' }
       },
     }
   }
@@ -2072,8 +2461,18 @@ export function apply(ctx) {
     const refuseLines = refuseAt > Date.now()
       ? ['拒绝模式开着（到 ' + new Date(refuseAt).toISOString().slice(11, 16) + ' UTC）：他一打开娱乐 App 手机就会把他赶回桌面锁住。他求你放行，不松；要关只能他自己说"关掉拒绝模式"。']
       : []
+    // D6：议程跟当前主状态走（状态机在 machine.js，追问锁是叠在上面的临时层）。
+    // 锁的对外形状统一走 followupView（{active,reason,currentQuestion,since,until}），别再自己拼。
+    const mainState = resolveState({
+      now: Date.now(),
+      tz: zoneOr(config.timeZone),
+      config,
+      rhythm: lastRhythm || {},
+      followup: followupView(config.followup, Date.now()),
+      session: loadGemini().session,
+    }).state
     const stateLines = [...trustLines(trustNow()), ...rhythmLines(lastRhythm), ...gearLines(config, Date.now()), ...geminiLines(loadGemini(), Date.now()),
-      ...knowledgeLines(kbDir(notesDir(), home()), role)]
+      ...agendaLines(mainState), ...knowledgeLines(kbDir(notesDir(), home()), role)]
     const notes = notesFor(role).map((n) => (n.from === 'companion' ? names.companion : names.strategist) + '刚跟你递话（' +
       new Date(Number(n.at)).toISOString().slice(11, 16) + ' UTC）："' + n.text + '"')
     const noteLines = notes.length ? ['姐妹之间的悄悄话（他看不到，自然地用上就行）：', ...notes.map((t) => '- ' + t)] : []
@@ -2106,15 +2505,13 @@ export function apply(ctx) {
     // 传话工具按会话注册：这样工具知道是谁递给谁。
     if (agent?.ctx?.tools && typeof agent.ctx.tools.register === 'function') {
       const offs = []
-      // 第二轮分工：鱼丸是陪聊搭子，手里没有任何管控工具（不能锁、不能放、不能立任务、不能封 App）；
-      // 鲸澜是管家，收紧类 + 每日文件 + 对账 + 窗口在她这里；验收也归她。两个人一起说话（sister_note）不受限。
-      const shared = [notesTool(), sisterToolIfDual(role), geminiLogTool(role)]
-      const strategistOnly = [
-        controlTool(), startTaskTool(role), endTaskTool(role), relaxTool(role), tightenTool(role),
-        kbTool(role), blockTool(role), dailyPlanTool(role), dailyReviewTool(role),
-        geminiLiveTool(role), geminiEndTool(role),
+      // 第三轮（C4）：两姐妹**工具完全一致**，谁都没有管控工具——不能锁、不能放、不能立任务、不能封 App、
+      // 不能改规则。墙按状态机执行；她们唯一影响墙的方式是 submit_verdict。
+      const list = [
+        notesTool(), sisterToolIfDual(role), vaultSearchTool(), vaultRecentTool(), kbTool(role),
+        geminiLiveTool(role), geminiEndTool(role), geminiLogTool(role), scheduleGeminiLiveTool(role),
+        submitVerdictTool(role),
       ].filter(Boolean)
-      const list = (role === 'strategist' ? [...shared, ...strategistOnly] : shared).filter(Boolean)
       for (const tool of list) {
         try {
           const off = agent.ctx.tools.register(tool)
@@ -2196,7 +2593,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/gemini/due')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -2253,6 +2650,7 @@ export function apply(ctx) {
           return send(res, r.status, r.body)
         }
         if (path === '/outcome') return send(res, 200, outcomeRoute(body.value))
+        if (path === '/gemini/due') return send(res, 200, { v: 1, launch: dueGeminiLaunch(Date.now()) })
         if (path === '/event') return send(res, 200, eventRoute(body.value))
         if (path === '/session') return send(res, 200, sessionRoute(body.value))
         if (path === '/wall') return send(res, 200, wallRoute(body.value))
@@ -2388,6 +2786,13 @@ export function apply(ctx) {
       }
       if (aw.justOpened) record({ state: 'apply-window-open', at: now, closeAt: Number(aw.state.closeAt) })
       lastApplyWindow = aw
+    }
+    // 追问锁到点没裁决：结束拦截、记账扣分、挂义务（手机也会报 followup-timeout，谁先到都算）。
+    expireFollowup(now)
+    // 冲刺到点 → 验收（追问锁，原因验收）。用户点的「开始」，到点由墙推进，不靠模型。
+    if (Number(config.sprintUntil) > 0 && Number(config.sprintUntil) <= now) {
+      commit({ sprintUntil: 0 })
+      if (!config.followup || Number(config.followup.until) <= now) openFollowup('review', '这一轮到点了：做完了吗？拿完成物说话。', now)
     }
     const trust = trustScore(readLedger(home(), 800), now, { weights: trustWeights() })
     // 放风结束：看他回没回来（不在娱乐 App 里就算守约），记进信用分。
@@ -2544,8 +2949,17 @@ export function apply(ctx) {
       gear: effectiveGear(config, now),
       // Gemini 互动舱：这段时间只许 Gemini（allow 里的包名），其余 App 由手机直接锁。
       session: geminiSessionView(now),
+      // D4：预约的下一场连麦（手机据此 arm 闹钟；到点调 /gemini/due 取 launch）。
+      geminiSchedule: (() => {
+        const s = loadGeminiSchedule()
+        return s.at && !s.fired && Number(s.at) > now ? { at: Number(s.at), topic: String(s.topic || ''), minutes: Number(s.minutes) || 30 } : null
+      })(),
       // 本地规则快照（C2）：手机存下来，引擎不可达时照这份执法。
       rules: rulesSnapshot(now, tz),
+      // 全天状态机（C2/C3）：这一刻只有一个主状态，追问锁是叠在上面的临时层。
+      state: stateView(now, tz, phone),
+      followup: followupView(config.followup, now),
+      obligations: obligationsView(config.obligations, now),
       // 第二轮·墙：此刻娱乐锁/开、申请窗口开没开、本周还剩几天放松额度（面板和手机据此显示）。
       wall: (() => {
         const wd = wallDecision(config, now, tz)

@@ -17774,6 +17774,138 @@ abstract class L10n {
   /// **'退出码 {code}'**
   String phoneLaunchExited(String code);
 
+  /// No description provided for @phoneGeminiTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'Gemini 互动'**
+  String get phoneGeminiTitle;
+
+  /// No description provided for @phoneGeminiHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'连麦时只许 Gemini，别的 App 一开就锁；电话、短信、地图、支付不受限。'**
+  String get phoneGeminiHint;
+
+  /// No description provided for @phoneGeminiRunning.
+  ///
+  /// In zh, this message translates to:
+  /// **'进行中：{topic} · 还剩 {minutes} 分钟 · 只许 Gemini'**
+  String phoneGeminiRunning(String topic, int minutes);
+
+  /// No description provided for @phoneGeminiEmptyTopic.
+  ///
+  /// In zh, this message translates to:
+  /// **'连麦（没说主题）'**
+  String get phoneGeminiEmptyTopic;
+
+  /// No description provided for @phoneGeminiStart.
+  ///
+  /// In zh, this message translates to:
+  /// **'开一场连麦'**
+  String get phoneGeminiStart;
+
+  /// No description provided for @phoneGeminiEnd.
+  ///
+  /// In zh, this message translates to:
+  /// **'结束连麦'**
+  String get phoneGeminiEnd;
+
+  /// No description provided for @phoneGeminiTopic.
+  ///
+  /// In zh, this message translates to:
+  /// **'这次要做什么（线代第三章、周报…）'**
+  String get phoneGeminiTopic;
+
+  /// No description provided for @phoneGeminiMinutes.
+  ///
+  /// In zh, this message translates to:
+  /// **'时长'**
+  String get phoneGeminiMinutes;
+
+  /// No description provided for @phoneGeminiMode.
+  ///
+  /// In zh, this message translates to:
+  /// **'怎么陪'**
+  String get phoneGeminiMode;
+
+  /// No description provided for @phoneGeminiStudy.
+  ///
+  /// In zh, this message translates to:
+  /// **'学习陪练'**
+  String get phoneGeminiStudy;
+
+  /// No description provided for @phoneGeminiThink.
+  ///
+  /// In zh, this message translates to:
+  /// **'共脑想事'**
+  String get phoneGeminiThink;
+
+  /// No description provided for @phoneGeminiInterrogate.
+  ///
+  /// In zh, this message translates to:
+  /// **'审讯摸鱼'**
+  String get phoneGeminiInterrogate;
+
+  /// No description provided for @phoneGeminiFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'没接上大肥鱼，稍后再试'**
+  String get phoneGeminiFailed;
+
+  /// No description provided for @phoneGeminiStarted.
+  ///
+  /// In zh, this message translates to:
+  /// **'连麦开始了：只许 Gemini'**
+  String get phoneGeminiStarted;
+
+  /// No description provided for @phoneGeminiEnded.
+  ///
+  /// In zh, this message translates to:
+  /// **'连麦结束，锁已恢复'**
+  String get phoneGeminiEnded;
+
+  /// No description provided for @phoneWallTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'墙（规则执行）'**
+  String get phoneWallTitle;
+
+  /// No description provided for @phoneWallHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'锁和放按他清醒时定下的规则执行，聊天里改不了；想多玩一段，等晚上对账后的申请窗口找鲸澜。'**
+  String get phoneWallHint;
+
+  /// No description provided for @phoneWallLocked.
+  ///
+  /// In zh, this message translates to:
+  /// **'现在锁着：{why}'**
+  String phoneWallLocked(String why);
+
+  /// No description provided for @phoneWallUnlocked.
+  ///
+  /// In zh, this message translates to:
+  /// **'现在没锁'**
+  String get phoneWallUnlocked;
+
+  /// No description provided for @phoneWallQuota.
+  ///
+  /// In zh, this message translates to:
+  /// **'本周还能放松 {days} 天'**
+  String phoneWallQuota(int days);
+
+  /// No description provided for @phoneWallTodaySame.
+  ///
+  /// In zh, this message translates to:
+  /// **'今天没有修改'**
+  String get phoneWallTodaySame;
+
+  /// No description provided for @phoneWallTodayChanged.
+  ///
+  /// In zh, this message translates to:
+  /// **'今天改过规则'**
+  String get phoneWallTodayChanged;
+
   /// No description provided for @phoneTaskResultReady.
   ///
   /// In zh, this message translates to:

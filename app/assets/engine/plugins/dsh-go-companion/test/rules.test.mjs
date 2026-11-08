@@ -102,16 +102,19 @@ test('快照：忙时下发 refuse 规则，带到期时间和解锁要求', asy
   })
 })
 
-test('快照：她们立的任务下发 task 规则，到期就是任务结束；临时封禁名单带到期时间', async () => {
+test('快照：他点「开始」进冲刺后下发 task 规则，到期就是冲刺结束；临时封禁名单带到期时间', async () => {
   await withHome(async (home) => {
     const t = setup(home, { blockExtra: [{ app: 'com.ss.android.ugc.aweme', until: Date.now() + 20 * 60_000 }, { app: 'com.android.dialer', until: Date.now() + 20 * 60_000 }] })
     await t.plan(at('15:00'))
-    const res = t.big.tools.start_task_mode.execute({ mode: 'task', goal: '写完周报', minutes: 30, reason: '测试' })
-    assert.equal(res.ok, true, JSON.stringify(res))
+    // 第三轮：没有 start_task_mode 了，冲刺由手机点「开始」报 /event 进来。
+    const res = await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/event', {
+      type: 'start', task: '写完周报', minutes: 30,
+    })
+    assert.equal(res.body.ok, true, JSON.stringify(res.body))
     const r = await t.plan(at('15:01'))
     const task = r.body.rules.rules.filter((x) => x.kind === 'task')
     assert.ok(task.length >= 1, JSON.stringify(r.body.rules))
-    assert.ok(task.every((x) => x.until <= Date.now() + 31 * 60_000), '任务到点就到期，不会拖两小时')
+    assert.ok(task.every((x) => x.until <= Date.now() + 31 * 60_000), '冲刺到点就到期，不会拖两小时')
     assert.match(task[0].why, /验收合格/)
     assert.ok(r.body.rules.block['com.ss.android.ugc.aweme'] > Date.now())
     assert.equal(r.body.rules.block['com.android.dialer'], undefined, '电话永不进封禁名单')
@@ -126,20 +129,23 @@ test('快照：放风期间不下发任何锁', async () => {
   })
 })
 
-test('晚间对账：任务没验收时 21:30 两层锁都在；对完账一起解除（C5）', async () => {
+test('晚间对账：任务没验收时 21:30 两层锁都在；裁决满意后一起解除（C5）', async () => {
   await withHome(async (home) => {
     // 关掉墙的默认锁，专测 review/task 两层（墙的默认锁另有 wall.test.mjs）。
     const t = setup(home, { wall: { enabled: false } })
     await t.plan(at('21:00'))
-    assert.equal(t.big.tools.start_task_mode.execute({ mode: 'task', goal: '写完周报', minutes: 120, reason: '测试' }).ok, true)
+    await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/event', { type: 'start', task: '写完周报', minutes: 120 })
     const both = await t.plan(at('21:40'))
     assert.deepEqual([...new Set(kinds(both.body))], ['review', 'task'], JSON.stringify(both.body.rules))
     const review = both.body.rules.rules.find((x) => x.kind === 'review')
     assert.ok(review.until <= Date.now() + 61 * 60_000, '对账门有封顶时间，引擎死了也会按时关')
-    // 鲸澜来对过账（reviewBall），他认真回了一句：门关上，任务一并清算。
+    // 第三轮：鲸澜来对过账（reviewBall）后，门由裁决关，不再看他回了多少字。
     const file = join(home, 'companion', 'rhythm.json')
     writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), reviewBall: true }))
-    await t.say(BIG, '今天周报写了一半，手机刷了一个小时抖音')
+    const verdict = t.big.tools.submit_verdict.execute({
+      kind: 'evening', satisfied: true, summary: '周报写了一半，抖音刷了一小时', nextStep: '明天先补完周报',
+    })
+    assert.equal(verdict.ok, true, verdict.text)
     const after = await t.plan(at('21:45'))
     assert.deepEqual(kinds(after.body), [], JSON.stringify(after.body.rules))
     assert.equal(after.body.refuse, null)

@@ -9650,6 +9650,78 @@ class L10nZh extends L10n {
   }
 
   @override
+  String get phoneGeminiTitle => 'Gemini 互动';
+
+  @override
+  String get phoneGeminiHint => '连麦时只许 Gemini，别的 App 一开就锁；电话、短信、地图、支付不受限。';
+
+  @override
+  String phoneGeminiRunning(String topic, int minutes) {
+    return '进行中：$topic · 还剩 $minutes 分钟 · 只许 Gemini';
+  }
+
+  @override
+  String get phoneGeminiEmptyTopic => '连麦（没说主题）';
+
+  @override
+  String get phoneGeminiStart => '开一场连麦';
+
+  @override
+  String get phoneGeminiEnd => '结束连麦';
+
+  @override
+  String get phoneGeminiTopic => '这次要做什么（线代第三章、周报…）';
+
+  @override
+  String get phoneGeminiMinutes => '时长';
+
+  @override
+  String get phoneGeminiMode => '怎么陪';
+
+  @override
+  String get phoneGeminiStudy => '学习陪练';
+
+  @override
+  String get phoneGeminiThink => '共脑想事';
+
+  @override
+  String get phoneGeminiInterrogate => '审讯摸鱼';
+
+  @override
+  String get phoneGeminiFailed => '没接上大肥鱼，稍后再试';
+
+  @override
+  String get phoneGeminiStarted => '连麦开始了：只许 Gemini';
+
+  @override
+  String get phoneGeminiEnded => '连麦结束，锁已恢复';
+
+  @override
+  String get phoneWallTitle => '墙（规则执行）';
+
+  @override
+  String get phoneWallHint => '锁和放按他清醒时定下的规则执行，聊天里改不了；想多玩一段，等晚上对账后的申请窗口找鲸澜。';
+
+  @override
+  String phoneWallLocked(String why) {
+    return '现在锁着：$why';
+  }
+
+  @override
+  String get phoneWallUnlocked => '现在没锁';
+
+  @override
+  String phoneWallQuota(int days) {
+    return '本周还能放松 $days 天';
+  }
+
+  @override
+  String get phoneWallTodaySame => '今天没有修改';
+
+  @override
+  String get phoneWallTodayChanged => '今天改过规则';
+
+  @override
   String get phoneTaskResultReady => '任务完成 · 查看结果';
 
   @override

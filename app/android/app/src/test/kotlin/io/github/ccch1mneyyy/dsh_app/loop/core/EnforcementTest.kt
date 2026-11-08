@@ -86,6 +86,15 @@ class EnforcementTest {
         assertNull(LockPriority.primary(emptyList()))
     }
 
+    @Test
+    fun third_round_kinds_outrank_default_lock() {
+        // 第三轮：状态机下发的 evening(90) / followup(80) 必须压在默认锁之上，否则锁屏页会念"默认严格"
+        // 而不是"把这一个问题说清楚"。未知 kind 仍排在默认锁之下（上面那条断言）。
+        assertEquals("followup", LockPriority.primary(listOf(LockRule("default", 900), LockRule("followup", 10)))?.kind)
+        assertEquals("evening", LockPriority.primary(listOf(LockRule("followup", 900), LockRule("evening", 10)))?.kind)
+        assertEquals("followup", LockPriority.primary(listOf(LockRule("task", 900), LockRule("followup", 10)))?.kind)
+    }
+
     // ---------------------------------------------------------------- C4 DefianceWindow
 
     @Test

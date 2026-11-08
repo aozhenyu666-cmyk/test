@@ -53,21 +53,21 @@ export function trackRhythm(state, { min, day, now, screenOn, reviewedToday }) {
   return { state: s, morningGate, reviewGate, night: nightPhase(min), openMorning, openReview }
 }
 
-/** 他说了一句像样的话：开着的门关上（早上说了目标 / 晚上对了账）。 */
-export function closeGates(state, text, now) {
+/**
+ * 关掉某道门。第三轮由裁决（submit_verdict）或超时调用，不再按他说了多少字。
+ * @returns {{state:object, closed:boolean}}
+ */
+export function closeGate(state, gate) {
   const s = { ...(state || {}) }
-  const real = String(text || '').replace(/\s+/g, '').length >= 6
-  if (!real) return { state: s, closed: [] }
-  const closed = []
-  if (s.morningSince && !s.morningDone && now > Number(s.morningSince) && now - Number(s.morningSince) < MORNING_CAP_MS) {
+  if (gate === 'morning' && s.morningDay && !s.morningDone) {
     s.morningDone = true
-    closed.push('morning')
+    return { state: s, closed: true }
   }
-  if (s.reviewSince && !s.reviewDone && s.reviewBall && now > Number(s.reviewSince) && now - Number(s.reviewSince) < REVIEW_CAP_MS) {
+  if (gate === 'review' && s.reviewDay && !s.reviewDone) {
     s.reviewDone = true
-    closed.push('review')
+    return { state: s, closed: true }
   }
-  return { state: s, closed }
+  return { state: s, closed: false }
 }
 
 /** 拼进两人的聊天人设。 */

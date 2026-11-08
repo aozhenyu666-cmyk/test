@@ -24,6 +24,8 @@ export const TRUST_WEIGHTS = {
   // 默认扣 15；配置 breakglassPenalty 可改（D5），trustScore 的 options.weights 覆盖它。
   breakglass: -15,
   tamper: -100,
+  // 追问锁到点没裁决（超时）：默认扣 5，配置 followupPenalty 可改（第三轮 C3）。
+  'followup-timeout': -5,
 }
 
 const DAY = 86_400_000
@@ -51,6 +53,7 @@ function kindOf(e, answered) {
     case 'break-end': return e.kept ? 'break-kept' : null
     case 'breakglass': return 'breakglass'
     case 'tamper': return 'tamper'
+    case 'followup-timeout': return 'followup-timeout'
     case 'generated': return answered.has(e.requestId) ? null : 'ignored'
     default: return null
   }
@@ -96,7 +99,7 @@ export function trustScore(entries, now = Date.now(), options = {}) {
 const LABEL = {
   replied: '接了球', substantive: '认真回', ignored: '没接球', 'overlay-closed-silent': '没回就关窗', defied: '关了提醒接着玩',
   'task-done': '任务验收通过', 'task-check-failed': '任务没通过', 'task-claim': '没做完就喊收工', 'gear-self': '自己开忙时',
-  'gemini-start': '去 Gemini 连麦', 'gemini-recap': '连麦复盘', 'break-kept': '休息按时回来', breakglass: '破窗', tamper: '想拆管控',
+  'gemini-start': '去 Gemini 连麦', 'gemini-recap': '连麦复盘', 'break-kept': '休息按时回来', breakglass: '破窗', tamper: '想拆管控', 'followup-timeout': '追问锁超时',
 }
 
 export function trustLabel(kind) {

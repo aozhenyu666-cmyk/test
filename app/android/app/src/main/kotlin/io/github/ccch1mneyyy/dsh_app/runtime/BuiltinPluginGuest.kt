@@ -131,6 +131,8 @@ object BuiltinPluginGuest {
                 "lib/rhythm.js",
                 "lib/wall.js",
                 "lib/daily.js",
+                "lib/followup.js",
+                "lib/machine.js",
             ),
         ),
     )

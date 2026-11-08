@@ -279,6 +279,36 @@ export function capabilityLines(role, { notesDir = '', allowTools = true } = {})
   return lines.join('\n')
 }
 
+/** 晨间立项 / 验收 / 晚间对账共用的议程：拿具体的东西追问，聊透了按格式交裁决。 */
+const JUDGE_AGENDA =
+  '拿笔记库里具体的东西追问（今天的任务、完成物、他写过的原话），一次问一件，别一口气全抛；' +
+  '聊透了再按格式提交裁决：kind、satisfied、summary、next_step（满意时 summary 和 next_step 都不能空）。' +
+  'kind 是晨间立项时还要带 1–3 项 tasks，每项都有名称和完成物。格式不对墙会按"不满意"打回，并把原因告诉你。'
+
+/**
+ * D6：按主状态切换议程。state 来自 machine.js 的 resolveState（C2 状态机的 id）；
+ * 两个人格共用这一套议程，性格差异在各自的人设卡里。
+ */
+export function agendaLines(state) {
+  const id = String(state || '')
+  const lines = [
+    '规则由墙执行：你不能锁、不能放、不能封 App，也不能立任务。你对墙唯一的影响是提交裁决（submit_verdict）；' +
+      '这个工具调不通就如实说调不通，别编，也别假装已经提交了。',
+  ]
+  if (id === 'morning') lines.push('现在在晨间立项：' + JUDGE_AGENDA + '今天 1–3 件事，每件都要有一个晚上查得到的完成物。')
+  else if (id === 'review') lines.push('现在在验收：' + JUDGE_AGENDA + '对照他冲刺时说的完成物，够就满意，不够就说清差什么。')
+  else if (id === 'evening') lines.push('现在在晚间对账：' + JUDGE_AGENDA + '按完成物一件一件核，他说"做完了"不算数，要有证据。')
+  else if (id === 'followup') lines.push(
+    '现在在追问锁里，他要过关才算完：' + JUDGE_AGENDA +
+      '他扯开话题就简短接一句，然后拉回当前那个问题，别跟着他跑。',
+  )
+  else if (id === 'standby') lines.push('现在在待命：帮他从今天的事里挑出下一件、拆出第一步（做完是什么样说清楚），提醒他面板上有「开始」，可以选 25 或 45 分钟。一次只给一件事。')
+  else if (id === 'sprint' || id === 'brain') lines.push('现在他在冲刺 / 连麦：少打扰。除非他先找你，一两句就够，别拉他聊别的。')
+  else if (id === 'break' || id === 'meal') lines.push('现在是放风 / 吃饭：纯陪聊，不谈任务、不验收、不催。他主动提正事你再接。')
+  else if (id === 'night') lines.push('现在是深夜：让他放下手机去睡，短、硬，不聊别的。')
+  return lines
+}
+
 /** 常见的笔记库位置（Obsidian 默认、手动放的）。 */
 export const NOTES_CANDIDATES = [
   '/sdcard/Documents/Obsidian', '/sdcard/Obsidian', '/sdcard/Documents/obsidian',
