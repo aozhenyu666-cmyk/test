@@ -9,6 +9,7 @@ import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.github.ccch1mneyyy.dsh_app.voice.VoiceDiagnostics
+import io.github.ccch1mneyyy.dsh_app.phone.a11y.ForegroundRecorder
 import io.github.ccch1mneyyy.dsh_app.runtime.RuntimeManifest
 import io.github.ccch1mneyyy.dsh_app.update.ApkInstaller
 import org.json.JSONObject
@@ -28,6 +29,7 @@ import kotlin.concurrent.thread
  *   masked when written (`CrashClassifier.redact`); Dart masks them again.
  * - `engineFiles` → the allowlisted engine and phone files a support bundle needs
  *   (`EngineDiagnosticsFiles`), keyed by their path inside the archive.
+ * - `foregroundDebug` / `setForegroundDebug` → the D2 foreground package recorder switch.
  *
  * Nothing here reads user content, keys or tokens.
  */
@@ -55,6 +57,12 @@ class DiagnosticsPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                 background(result) { engineLog(maxBytes) }
             }
             "engineFiles" -> background(result) { EngineDiagnosticsFiles.collect(context) }
+            "foregroundDebug" -> result.success(ForegroundRecorder.enabled(context))
+            "setForegroundDebug" -> {
+                val enabled = call.argument<Boolean>("enabled") == true
+                ForegroundRecorder.setEnabled(context, enabled)
+                result.success(enabled)
+            }
             else -> result.notImplemented()
         }
     }

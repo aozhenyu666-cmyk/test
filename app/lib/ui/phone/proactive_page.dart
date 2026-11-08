@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../diagnostics/diagnostics_channel.dart';
 import '../../diagnostics/diagnostics_export.dart';
 import '../../l10n/l10n.dart';
 import '../../proactive/proactive_state.dart';
@@ -49,12 +50,31 @@ class _ProactivePageState extends State<ProactivePage> {
   ProactiveAgentSessions _sessions = const ProactiveAgentSessions();
   Timer? _poll;
   bool _exporting = false;
+  bool _foregroundDebug = false;
+  bool _foregroundBusy = false;
 
   @override
   void initState() {
     super.initState();
     unawaited(_refresh());
+    unawaited(_loadForegroundDebug());
     _poll = Timer.periodic(const Duration(seconds: 4), (_) => unawaited(_refresh()));
+  }
+
+  Future<void> _loadForegroundDebug() async {
+    final enabled = await const DiagnosticsChannel().foregroundDebug();
+    if (mounted) setState(() => _foregroundDebug = enabled);
+  }
+
+  Future<void> _setForegroundDebug(bool enabled) async {
+    if (_foregroundBusy) return;
+    setState(() => _foregroundBusy = true);
+    try {
+      final stored = await const DiagnosticsChannel().setForegroundDebug(enabled);
+      if (mounted) setState(() => _foregroundDebug = stored);
+    } finally {
+      if (mounted) setState(() => _foregroundBusy = false);
+    }
   }
 
   @override
@@ -583,6 +603,19 @@ class _ProactivePageState extends State<ProactivePage> {
                   ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2))
                   : null,
               onTap: _exporting ? null : () => unawaited(_exportDiagnostics()),
+            ),
+            ListPageRow(
+              icon: AppIcons.bug,
+              title: '前台包名记录（调试）',
+              subtitle: _foregroundDebug
+                  ? '正在记录每次前台变化（包名、Activity、时间），只记录不拦截；会进「导出诊断」'
+                  : '打开后记录每次前台变化（包名、Activity、时间），只记录不拦截；用来定 Gemini 互动舱白名单和微信停留',
+              subtitleMaxLines: 3,
+              trailing: Switch(
+                value: _foregroundDebug,
+                onChanged: _foregroundBusy ? null : (v) => unawaited(_setForegroundDebug(v)),
+              ),
+              onTap: _foregroundBusy ? null : () => unawaited(_setForegroundDebug(!_foregroundDebug)),
             ),
           ],
         ),
