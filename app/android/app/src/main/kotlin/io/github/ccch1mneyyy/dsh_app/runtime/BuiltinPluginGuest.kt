@@ -129,6 +129,7 @@ object BuiltinPluginGuest {
                 "lib/panel.js",
                 "lib/notes.js",
                 "lib/rhythm.js",
+                "lib/wall.js",
             ),
         ),
     )

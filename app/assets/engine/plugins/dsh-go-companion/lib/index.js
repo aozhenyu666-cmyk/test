@@ -60,6 +60,10 @@ import { trustGap, trustLines, trustScore } from './trust.js'
 import { buildSnapshot, sistersView } from './panel.js'
 import { kbDir, kbWrite, knowledgeLines, scanUnfinished } from './notes.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, closeGates, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
+import {
+  DEFAULT_WALL, wallConfig, wallDecision, activeRelax, tightenActive, relaxRemaining, relaxUsedThisWeek,
+  trackApplyWindow, applyWindowOpen, dayKey, weekKey, WALL_KIND_DEFAULT,
+} from './wall.js'
 import { GEMINI_PACKAGES, geminiBrief, geminiLines, geminiMode, geminiSteps, recapMarkdown, trackGemini } from './gemini.js'
 
 export const name = 'dsh-go-companion'
@@ -118,6 +122,16 @@ const DEFAULTS = Object.freeze({
   breakglassPenalty: 15,
   // 那一天（当地零点，ms）已经破过窗：账本被压缩/清理也不会把同一天放开第二次。
   breakglassDay: 0,
+  // 第二轮·墙：默认严格的娱乐锁时间表（吃饭开放、夜里深夜锁），由这张内部表驱动，改表不必动代码。
+  wall: DEFAULT_WALL,
+  // 今天生效的放松（对账后申请窗口里批的，只管一天）：{ for:<当地零点ms>, segments:[{from,to}], reason }。
+  relax: null,
+  // 今天的收紧（任何时候可提，立即生效，当天有效）：{ for:<当地零点ms>, at }。
+  tighten: null,
+  // 本周放松用量：{ week:<自然周号>, used }。额度见 wall.weeklyQuota。
+  relaxWeek: null,
+  // 申请窗口状态机：{ day, openAt, closeAt, notified, used }。对账完成后随机打开 15 分钟。
+  applyWindow: null,
 })
 
 function home() {
@@ -1132,6 +1146,7 @@ export function apply(ctx) {
   const saveRhythm = (r) => writeJson(stateFile('rhythm.json'), r)
   /** 最近一次 /plan 算出的作息（早上门 / 晚上门 / 深夜阶段 / 深夜锁到几点）。 */
   let lastRhythm = null
+  let lastApplyWindow = null
   const loadNotifs = () => readState(stateFile('notifs.json'), {}) || {}
   const saveNotifs = (n) => writeJson(stateFile('notifs.json'), n)
   /** 永远不封的：电话、短信、地图、支付、DSH 自己。 */
@@ -1234,7 +1249,7 @@ export function apply(ctx) {
     record({ state: 'task-settled', at: now, by: 'review', goal })
     return true
   }
-  function rulesSnapshot(now) {
+  function rulesSnapshot(now, tz = zoneOr(config.timeZone)) {
     const rules = []
     const block = {}
     if (onBreak(now)) return { v: 1, at: now, rules, block }
@@ -1242,6 +1257,10 @@ export function apply(ctx) {
       const u = Math.round(Number(until) || 0)
       if (u > now) rules.push({ kind, until: u, why })
     }
+    // 墙：默认严格的时间表锁（白天非吃饭时段 default，夜里 night）。深夜锁这里不重复推（下面 rhythm 的 night 管），
+    // 只推白天的默认锁；手机端 LockPriority 里 default 排在普通之上、拒绝之下。
+    const wd = wallDecision(config, now, tz)
+    if (wd.locked && wd.kind === WALL_KIND_DEFAULT) push(WALL_KIND_DEFAULT, wd.until, wd.why)
     const rh = lastRhythm
     const st = rh?.state || {}
     if (rh?.reviewGate) push('review', Number(st.reviewSince) + REVIEW_CAP_MS, '晚上对账：和鲸澜对完今天的账才解锁')
@@ -1262,6 +1281,71 @@ export function apply(ctx) {
       if (b && typeof b.app === 'string' && Number(b.until) > now && !NEVER_BLOCK.includes(b.app)) block[b.app] = Math.round(Number(b.until))
     }
     return { v: 1, at: now, rules, block }
+  }
+
+  // ---- 第二轮·墙：放松申请 / 收紧 / 本周额度 ---------------------------------------------------
+  //
+  // 底线 1：任何对话都不能当场放松规则。放松只能在对账后的申请窗口里提，而且只管明天一天。
+  // 收紧任何时候都能提，立即生效、当天有效。两者都记进账本；额度按自然周算。
+
+  /** 本周放松是否还有额度（按目标日所在的自然周）。 */
+  function relaxQuotaLeft(targetDay, now, tz) {
+    const w = wallConfig(config)
+    const week = weekKey(targetDay, tz)
+    const used = config.relaxWeek && Number(config.relaxWeek.week) === week ? Math.max(0, Math.round(Number(config.relaxWeek.used) || 0)) : 0
+    return { left: Math.max(0, w.weeklyQuota - used), week, used }
+  }
+
+  /**
+   * 申请放松：只在申请窗口开着时能提，只能给明天开一段（默认 wall.relaxSegmentMin 分钟），每周额度内。
+   * 这是替代第一轮 grant_break 的唯一放松通道——聊天里没有别的按钮能解锁（底线 1）。
+   */
+  function requestRelax(now, tz, { atHour, minutes, reason, by } = {}) {
+    if (!applyWindowOpen(config.applyWindow, now)) {
+      return { ok: false, code: 'no-window', text: '现在不是申请窗口。放松只能在今晚对账后、窗口开着的 15 分钟里提，而且只管明天。' }
+    }
+    if (config.applyWindow && config.applyWindow.used) {
+      return { ok: false, code: 'window-used', text: '这个窗口已经提过一次申请了，明天再说。' }
+    }
+    const targetDay = dayKey(now, tz) + 86_400_000 // 明天
+    const q = relaxQuotaLeft(targetDay, now, tz)
+    if (q.left <= 0) {
+      return { ok: false, code: 'quota', text: '这周的放松额度用完了（每周最多 ' + wallConfig(config).weeklyQuota + ' 天）。窗口还能用来收紧，但不能再放松。' }
+    }
+    const text = String(reason || '').trim().slice(0, 200)
+    if (!text) return { ok: false, code: 'no-reason', text: '放松要写清理由（为什么明天想多玩一段）。' }
+    const w = wallConfig(config)
+    const span = Math.max(15, Math.min(240, Math.round(Number(minutes) || w.relaxSegmentMin)))
+    const startHour = Math.max(0, Math.min(23, Math.round(Number(atHour))))
+    const from = Number.isFinite(startHour) ? startHour * 60 : 20 * 60 // 默认晚上 20:00 那一段
+    const to = Math.min(1440, from + span)
+    config = {
+      ...config,
+      relax: { for: targetDay, segments: [{ from, to }], reason: text },
+      relaxWeek: { week: q.week, used: q.used + 1 },
+      applyWindow: { ...(config.applyWindow || {}), used: true },
+    }
+    try {
+      writeConfig(config)
+    } catch {
+      // 这一轮照样生效
+    }
+    const hm = (m) => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0')
+    record({ state: 'relax-grant', at: now, for: targetDay, from, to, minutes: span, reason: text, by: String(by || 'ai').slice(0, 20) })
+    return { ok: true, text: '批了：明天 ' + hm(from) + '–' + hm(to) + ' 开放娱乐一段。本周还剩 ' + (q.left - 1) + ' 天额度。今天的规则照旧。' }
+  }
+
+  /** 收紧：任何时候可提，立即生效、当天有效，次日复归。 */
+  function tightenNow(now, tz, { reason, by } = {}) {
+    const today = dayKey(now, tz)
+    config = { ...config, tighten: { for: today, at: now }, relax: config.relax && Number(config.relax.for) === today ? null : config.relax }
+    try {
+      writeConfig(config)
+    } catch {
+      // 这一轮照样生效
+    }
+    record({ state: 'tighten', at: now, for: today, reason: String(reason || '').slice(0, 200), by: String(by || 'ai').slice(0, 20) })
+    return { ok: true, text: '收紧了：今天娱乐锁到零点，明天恢复默认。' }
   }
   const toolOutput = {
     schema: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, text: { type: 'string' } } },
@@ -2141,6 +2225,24 @@ export function apply(ctx) {
       lastRhythm = { ...rh, nightUntil: rh.night === 'lock' ? now + Math.max(1, NIGHT_LOCK_TO - min) * 60_000 : 0 }
       if (rh.openMorning) record({ state: 'gate-open', at: now, gate: 'morning' })
       if (rh.openReview) record({ state: 'gate-open', at: now, gate: 'review' })
+      // 申请窗口：对账完成后随机开 15 分钟。先找今天对账是什么时候关门的（gate-closed 含 review）。
+      let reviewDoneAt = 0
+      for (const e of ledger) {
+        if (e?.state === 'gate-closed' && Array.isArray(e.gates) && e.gates.includes('review') && Number(e.at) >= dayKey) {
+          reviewDoneAt = Math.max(reviewDoneAt, Number(e.at))
+        }
+      }
+      const aw = trackApplyWindow(config.applyWindow, { reviewDoneAt, now, tz })
+      if (JSON.stringify(aw.state) !== JSON.stringify(config.applyWindow)) {
+        config = { ...config, applyWindow: aw.state }
+        try {
+          writeConfig(config)
+        } catch {
+          // 下一轮再存
+        }
+      }
+      if (aw.justOpened) record({ state: 'apply-window-open', at: now, closeAt: Number(aw.state.closeAt) })
+      lastApplyWindow = aw
     }
     const trust = trustScore(readLedger(home(), 800), now, { weights: trustWeights() })
     // 放风结束：看他回没回来（不在娱乐 App 里就算守约），记进信用分。
@@ -2257,6 +2359,10 @@ export function apply(ctx) {
       if (handoff) nextSpeaker = { role: 'strategist', reason: 'handoff', note: handoff, at: now }
       // 晚上对账：21:30 开门（rhythm.js），门开着、还没来过就来。
       else if (lastRhythm?.reviewGate && !lastRhythm.state.reviewBall && !reviewedToday) nextSpeaker = { role: 'strategist', reason: 'review', at: now }
+      // 申请窗口刚开：鲸澜来一句，告诉他现在能提明天的放松/收紧（主持修改申请窗口是鲸澜的事）。
+      else if (lastApplyWindow?.justOpened) {
+        nextSpeaker = { role: 'strategist', reason: 'apply-window', at: now, applyWindow: { remaining: relaxRemaining(config, now, tz), closeAt: Number(lastApplyWindow.state?.closeAt) || 0 } }
+      }
       if (nextSpeaker) Object.assign(out, { speak: true, reason: 'strategist-' + nextSpeaker.reason, nextCheckAt: now })
     }
     // 他在 Gemini 里连麦：谁都不插嘴；两分钟看一次，好知道他什么时候出来（出来了要读回那段对话）。
@@ -2297,7 +2403,19 @@ export function apply(ctx) {
       // Gemini 互动舱：这段时间只许 Gemini（allow 里的包名），其余 App 由手机直接锁。
       session: geminiSessionView(now),
       // 本地规则快照（C2）：手机存下来，引擎不可达时照这份执法。
-      rules: rulesSnapshot(now),
+      rules: rulesSnapshot(now, tz),
+      // 第二轮·墙：此刻娱乐锁/开、申请窗口开没开、本周还剩几天放松额度（面板和手机据此显示）。
+      wall: (() => {
+        const wd = wallDecision(config, now, tz)
+        return {
+          locked: wd.locked, kind: wd.kind || null, openUntil: wd.openUntil || 0,
+          applyWindowOpen: applyWindowOpen(config.applyWindow, now),
+          applyWindowCloseAt: Number(config.applyWindow?.closeAt) || 0,
+          relaxRemaining: relaxRemaining(config, now, tz),
+          relaxToday: Boolean(activeRelax(config, now, tz)),
+          tightenToday: tightenActive(config, now, tz),
+        }
+      })(),
     }
   }
 

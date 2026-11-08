@@ -128,7 +128,8 @@ test('快照：放风期间不下发任何锁', async () => {
 
 test('晚间对账：任务没验收时 21:30 两层锁都在；对完账一起解除（C5）', async () => {
   await withHome(async (home) => {
-    const t = setup(home)
+    // 关掉墙的默认锁，专测 review/task 两层（墙的默认锁另有 wall.test.mjs）。
+    const t = setup(home, { wall: { enabled: false } })
     await t.plan(at('21:00'))
     assert.equal(t.big.tools.start_task_mode.execute({ mode: 'task', goal: '写完周报', minutes: 120, reason: '测试' }).ok, true)
     const both = await t.plan(at('21:40'))
