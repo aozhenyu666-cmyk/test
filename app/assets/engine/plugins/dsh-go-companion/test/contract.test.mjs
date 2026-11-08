@@ -236,3 +236,26 @@ test('C1 未定义的事件照旧报 unknown-event，不抛', async () => {
     assert.equal(r.body.error.code, 'unknown-event')
   })
 })
+
+test('待命 10 分钟计时器：一直待命到点就开追问锁', async () => {
+  await withHome(async (home) => {
+    // 15:00 不在任何吃饭/对账/深夜段里，主状态是待命。
+    const t = setup(home, { standbySince: Date.now() - 11 * 60_000 })
+    const r = await t.plan(game)
+    assert.equal(r.body.followup.active, true, JSON.stringify(r.body.followup))
+    assert.equal(r.body.followup.reason, 'standby')
+    assert.equal(r.body.state.state, 'followup')
+    assert.equal(r.body.state.backTo, 'standby')
+  })
+})
+
+test('待命计时器：刚进待命只是开始计时，不马上开锁', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const r = await t.plan(game)
+    assert.equal(r.body.state.state, 'standby')
+    assert.equal(r.body.followup.active, false)
+    // 到点前要把手机叫回来，别等下一次定期检查。
+    assert.ok(Number(r.body.nextCheckAt) <= Date.now() + 10 * 60_000)
+  })
+})

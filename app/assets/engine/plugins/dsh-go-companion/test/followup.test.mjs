@@ -4,12 +4,19 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  FOLLOWUP_CAP_MS, FOLLOWUP_PENALTY, OBLIGATION_TABLE, VERDICT_KINDS,
+  FOLLOWUP_CAP_MS, FOLLOWUP_PENALTY, OBLIGATION_TABLE, STANDBY_LOCK_MS, VERDICT_KINDS,
   addObligation, checkVerdict, clearObligation, closeLock, followupView, funBlockedBy,
-  lockActive, lockExpired, normalizeKind, obligationOf, obligationsView, openLock, takeReask,
+  lockActive, lockExpired, normalizeKind, obligationOf, obligationsView, openLock, standbyDue, takeReask,
 } from '../lib/followup.js'
 
 const T0 = Date.parse('2026-03-10T10:00:00Z')
+
+test('待命计时：满 10 分钟才算，没开始计就不算', () => {
+  assert.equal(STANDBY_LOCK_MS, 10 * 60_000)
+  assert.equal(standbyDue(0, T0), false, '还没开计')
+  assert.equal(standbyDue(T0, T0 + 10 * 60_000 - 1), false)
+  assert.equal(standbyDue(T0, T0 + 10 * 60_000), true)
+})
 
 test('C3 裁决只认六种 kind，中英文都收', () => {
   assert.deepEqual(VERDICT_KINDS, ['morning', 'review', 'defiance', 'standby', 'gemini', 'evening'])

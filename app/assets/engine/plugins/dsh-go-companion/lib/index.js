@@ -61,8 +61,8 @@ import { buildSnapshot, sistersView } from './panel.js'
 import { kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import {
-  FOLLOWUP_CAP_MS, FOLLOWUP_PENALTY, VERDICT_KINDS, addObligation, checkVerdict, clearObligation, closeLock, followupView,
-  funBlockedBy, lockActive, lockExpired, obligationOf, obligationsView, openLock, takeReask,
+  FOLLOWUP_CAP_MS, FOLLOWUP_PENALTY, STANDBY_LOCK_MS, VERDICT_KINDS, addObligation, checkVerdict, clearObligation, closeLock, followupView,
+  funBlockedBy, lockActive, lockExpired, obligationOf, obligationsView, openLock, standbyDue, takeReask,
 } from './followup.js'
 import { BRAIN_MIN_MS, SPRINT_LONG_MIN, SPRINT_MIN, resolveState } from './machine.js'
 import {
@@ -2789,6 +2789,16 @@ export function apply(ctx) {
     }
     // 追问锁到点没裁决：结束拦截、记账扣分、挂义务（手机也会报 followup-timeout，谁先到都算）。
     expireFollowup(now)
+    // 待命 10 分钟计时器：只有换出待命才重置——聊天不算动。已经欠着一笔就不再追问，只留着账。
+    if (stateView(now, tz, phone).state !== 'standby') {
+      if (Number(config.standbySince)) commit({ standbySince: 0 })
+    } else if (standbyDue(config.standbySince, now)) {
+      const owed = (config.obligations || []).some((o) => o.kind === 'standby')
+      commit({ standbySince: 0 })
+      if (!owed) openFollowup('standby', '这半天什么也没干。现在做哪一件？说一件，动手。', now)
+    } else if (!Number(config.standbySince)) {
+      commit({ standbySince: now })
+    }
     // 冲刺到点 → 验收（追问锁，原因验收）。用户点的「开始」，到点由墙推进，不靠模型。
     if (Number(config.sprintUntil) > 0 && Number(config.sprintUntil) <= now) {
       commit({ sprintUntil: 0 })
@@ -2929,6 +2939,9 @@ export function apply(ctx) {
     if (!out.speak && (out.reason === 'dice' || out.reason === 'cooldown') && recent.counts.generated === 0 && phone?.screenOn && !inConversation(sessionId, now) && gearNow !== 'busy') {
       Object.assign(out, { speak: true, reason: 'morning', nextCheckAt: now })
     }
+    // 待命计时器在走：到 10 分钟要回来开锁，别等下一次定期检查。他喊了安静、或者已经三球没接要退避 3 小时，都不抢。
+    const backoff = out.reason === 'muted' || out.reason === 'quiet' || out.reason === 'disabled' || out.reason === 'no-take'
+    if (Number(config.standbySince) && !backoff) out.nextCheckAt = Math.min(Number(out.nextCheckAt) || Infinity, Number(config.standbySince) + STANDBY_LOCK_MS)
     // 力度到了"锁 / 赶"：不管这一球说不说，手机都要执行（说到做到）。
     if (force.level >= 3) out.nextCheckAt = Math.min(Number(out.nextCheckAt) || now, now + 60_000)
     if (!out.speak) nextSpeaker = null

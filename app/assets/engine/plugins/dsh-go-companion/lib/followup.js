@@ -17,6 +17,12 @@ export const FOLLOWUP_PENALTY = 5
 /** 待命默认锁的计时：10 分钟，聊天不重置。 */
 export const STANDBY_LOCK_MS = 10 * 60_000
 
+/** 待命一直没动：到点了，该开追问锁了（只有换出待命才重置，聊天不算动）。 */
+export function standbyDue(since, now) {
+  const s = Number(since) || 0
+  return s > 0 && now - s >= STANDBY_LOCK_MS
+}
+
 /** 裁决 kind：和账本、笔记库同步用的字符串。DeepSeek 的 D3 按 state:'verdict' 扫。 */
 export const VERDICT_KINDS = ['morning', 'review', 'defiance', 'standby', 'gemini', 'evening']
 
