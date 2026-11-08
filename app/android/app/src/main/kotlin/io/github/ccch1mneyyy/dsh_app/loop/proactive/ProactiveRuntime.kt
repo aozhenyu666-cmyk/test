@@ -823,7 +823,9 @@ object ProactiveRuntime {
         val why = f?.get("why") as? String
         setRefuseUntil(((map["refuse"] as? Map<*, *>)?.get("until") as? Number)?.toLong() ?: 0L)
         // The full snapshot, each rule with its own expiry, for when the engine is gone (C2).
-        ruleBook()?.replace(map["rules"] as? Map<*, *>, System.currentTimeMillis())
+        // D2: 新引擎只认 state.layers，rules 只为老引擎兜底（见 planSnapshot）。
+        val stamp = System.currentTimeMillis()
+        ruleBook()?.replace(planSnapshot(map, stamp), stamp)
         setShieldUntil(((map["shield"] as? Map<*, *>)?.get("until") as? Number)?.toLong() ?: 0L)
         blocked = (map["block"] as? List<*>)?.mapNotNull { it as? String }?.filter { it !in NEVER_LOCK }?.toSet() ?: emptySet()
         // Gemini 互动舱：插件给 allow 就进入"只许 Gemini"，null 就退出。

@@ -196,6 +196,20 @@ class RuleBook(private val store: SnapshotStore) {
 }
 
 /**
+ * D2 按快照执行: turn one `/plan` answer into the map [RuleBook.replace] takes.
+ *
+ * 第三轮起 `state.layers` 是唯一权威（接口约定 §2 第 1 条）；`rules` 只为没有 `state` 的老引擎兜底，
+ * 两者冲突时以 `state` 为准。层和规则同形（`kind`/`until`/`why`），封禁名单仍取老快照里那一份。
+ * 返回 null = 这次没有可用的快照，缓存保持不动。
+ */
+fun planSnapshot(plan: Map<*, *>, now: Long): Map<*, *>? {
+    val layers = (plan["state"] as? Map<*, *>)?.get("layers") as? List<*>
+        ?: return plan["rules"] as? Map<*, *>
+    val block = (plan["rules"] as? Map<*, *>)?.get("block") ?: emptyMap<String, Any?>()
+    return linkedMapOf<Any?, Any?>("v" to 1, "at" to now, "rules" to layers, "block" to block)
+}
+
+/**
  * 违抗复查（C4）. Opened when a reminder or a lock page closes. Within [windowMs] the person may be in
  * an entertainment app for less than [limitMs] in total; going back to the launcher in between does
  * **not** reset the count. Reaching the limit fires once, then the window is closed.

@@ -45,6 +45,12 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq gpgv zstd xz-utils unzip file
+      - name: Kotlin unit tests (lock arbitration, D2 snapshot)
+        run: |
+          cd app
+          flutter pub get
+          cd android
+          ./gradlew :app:testDebugUnitTest --console=plain
       - name: Build arm64 Linux runtime (proot 5.1.107.102)
         run: |
           bash runtime/build-runtime.sh arm64-v8a

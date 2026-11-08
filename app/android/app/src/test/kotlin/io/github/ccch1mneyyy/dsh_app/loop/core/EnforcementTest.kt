@@ -181,4 +181,45 @@ class EnforcementTest {
         assertNull(g.openEventId())
         assertTrue(g.force("com.game", "王者", env, 1_000L + 32 * min, strict = true) is InterceptDecision.Block)
     }
+
+    // ---------------------------------------------------------------- D2 按快照执行
+
+    private fun plan(layers: List<Any?>?, rules: Map<String, Any?>? = null): Map<String, Any?> =
+        linkedMapOf("v" to 1, "state" to layers?.let { linkedMapOf("layers" to it) }, "rules" to rules)
+
+    @Test
+    fun d2_the_state_layers_are_the_only_locks_and_they_beat_the_old_rules() {
+        val now = 1_000_000L
+        // 老客户端口径的 rules 说锁到 30 分钟；状态机说只剩夜锁到 7 点。冲突时以 state 为准。
+        val old = snapshot("task" to now + 30 * min)
+        val answer = plan(
+            listOf(
+                linkedMapOf("kind" to "night", "priority" to 100, "funLocked" to true, "until" to now + 60 * min, "why" to "深夜锁"),
+                linkedMapOf("kind" to "followup", "priority" to 80, "funLocked" to true, "until" to now + 5 * min, "why" to "追问锁", "reason" to "standby"),
+            ),
+            old,
+        )
+        val book = RuleBook(MemorySnapshotStore())
+        book.replace(planSnapshot(answer, now), now)
+
+        assertEquals(listOf("night", "followup"), book.active(now).map { it.kind })
+        assertEquals("night", book.primary(now)?.kind)
+        assertEquals("深夜锁", book.primary(now)?.why)
+        // 老 rules 里那条 task 不该被混进来。
+        assertNull(book.active(now).firstOrNull { it.kind == "task" })
+    }
+
+    @Test
+    fun d2_no_state_yet_falls_back_to_the_old_rules_and_an_empty_layer_list_unlocks() {
+        val now = 1_000_000L
+        val fallback = RuleBook(MemorySnapshotStore())
+        fallback.replace(planSnapshot(plan(null, snapshot("task" to now + 30 * min)), now), now)
+        assertEquals("task", fallback.primary(now)?.kind, "老引擎只有 rules，照旧用")
+
+        // 吃饭时段：状态机给空 layers = 此刻没有锁。
+        val open = RuleBook(MemorySnapshotStore())
+        open.replace(planSnapshot(plan(emptyList<Any?>()), now), now)
+        assertNull(open.primary(now))
+        assertEquals(0L, open.lockedUntil(now))
+    }
 }
