@@ -1,0 +1,80 @@
+name: build-apk
+
+on:
+  workflow_dispatch:
+    inputs:
+      flavor:
+        description: "arm64 (phone) or x64 (emulator)"
+        default: arm64
+      mode:
+        description: "release or debug"
+        default: release
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # build_number.py derives versionCode from history
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.7
+          channel: stable
+          cache: true
+
+      # The native PRoot rootfs is gitignored and only buildable on x86_64 Linux.
+      # It is published once as a release asset so CI never has to rebuild it.
+      - name: Fetch runtime
+        run: |
+          mkdir -p runtime/out
+          gh release download runtime-r14 \
+            --pattern "runtime-arm64-v8a-r14.tar.gz" --dir /tmp/runtime --clobber
+          tar -xzf /tmp/runtime/runtime-arm64-v8a-r14.tar.gz -C runtime/out
+          test -f runtime/out/arm64-v8a/assets/runtime/manifest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Toolchain info
+        run: |
+          flutter --version
+          python3 --version
+          bash tooling/build-apk.sh --dry -f ${{ inputs.flavor }} --${{ inputs.mode }}
+
+      - name: Build APK
+        run: bash tooling/build-apk.sh -f ${{ inputs.flavor }} --${{ inputs.mode }}
+
+      - name: Collect APK
+        run: |
+          find app/build/app/outputs/flutter-apk -name '*.apk' -print
+          mkdir -p out
+          cp app/build/app/outputs/flutter-apk/*.apk out/
+          ls -lh out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-go-${{ inputs.flavor }}-${{ inputs.mode }}
+          path: out/*.apk
+          if-no-files-found: error
+
+      # A public release gives a direct download URL; artifacts need a login.
+      - name: Publish release
+        if: success()
+        run: |
+          apk=$(ls out/*.apk | head -1)
+          tag="apk-${{ inputs.flavor }}-$(date +%Y%m%d-%H%M%S)"
+          gh release create "$tag" "$apk" \
+            --title "APK ${{ inputs.flavor }} ${{ inputs.mode }} $tag" \
+            --notes "Built from ${GITHUB_SHA} by GitHub Actions."
+          echo "### Download: $(gh release view "$tag" --json assets -q '.assets[0].browser_download_url')" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
