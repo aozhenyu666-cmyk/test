@@ -1,6 +1,15 @@
 name: build-apk
 
 on:
+  # push 触发：workflow_dispatch 要求文件先存在于默认分支，本文件只在这条线上，所以用 push 事件跑。
+  # push 事件读的是被推提交里的这个文件，不需要预先注册。
+  push:
+    branches: [deepseek/round3-d3-d4-d6]
+    paths:
+      - ".github/workflows/build-apk.yml"
+      - "app/**"
+      - "runtime/**"
+      - "tooling/**"
   workflow_dispatch:
     inputs:
       flavor:
@@ -16,6 +25,10 @@ permissions:
 jobs:
   apk:
     runs-on: ubuntu-latest
+    # push 触发时 inputs 为空，这里兜默认值。
+    env:
+      FLAVOR: ${{ inputs.flavor || 'arm64' }}
+      MODE: ${{ inputs.mode || 'release' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,10 +61,10 @@ jobs:
         run: |
           flutter --version
           python3 --version
-          bash tooling/build-apk.sh --dry -f ${{ inputs.flavor }} --${{ inputs.mode }}
+          bash tooling/build-apk.sh --dry -f ${{ env.FLAVOR }} --${{ env.MODE }}
 
       - name: Build APK
-        run: bash tooling/build-apk.sh -f ${{ inputs.flavor }} --${{ inputs.mode }}
+        run: bash tooling/build-apk.sh -f ${{ env.FLAVOR }} --${{ env.MODE }}
 
       - name: Collect APK
         run: |
@@ -62,7 +75,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dsh-go-${{ inputs.flavor }}-${{ inputs.mode }}
+          name: dsh-go-${{ env.FLAVOR }}-${{ env.MODE }}
           path: out/*.apk
           if-no-files-found: error
 
@@ -71,9 +84,9 @@ jobs:
         if: success()
         run: |
           apk=$(ls out/*.apk | head -1)
-          tag="apk-${{ inputs.flavor }}-$(date +%Y%m%d-%H%M%S)"
+          tag="apk-${{ env.FLAVOR }}-$(date +%Y%m%d-%H%M%S)"
           gh release create "$tag" "$apk" \
-            --title "APK ${{ inputs.flavor }} ${{ inputs.mode }} $tag" \
+            --title "APK ${{ env.FLAVOR }} ${{ env.MODE }} $tag" \
             --notes "Built from ${GITHUB_SHA} by GitHub Actions."
           echo "### Download: $(gh release view "$tag" --json assets -q '.assets[0].browser_download_url')" >> "$GITHUB_STEP_SUMMARY"
         env:
