@@ -1511,35 +1511,49 @@ export function apply(ctx) {
       },
     }
   }
-  /** 放风：信用分够才放得出来；到点自动恢复，回没回来记进信用分。 */
-  function breakTool(role) {
+  /**
+   * 第二轮·放松申请（替代 grant_break）：只能在对账后的申请窗口里提，只给明天开一段，每周额度内。
+   * 底线 1——聊天里没有别的通道能当场放松；窗口外调用直接拒。
+   */
+  function relaxTool(role) {
     return {
-      name: 'grant_break',
-      description: '给他放一段风（休息，娱乐临时解锁，≤30 分钟），到点自动恢复拒绝/任务。只有信用分 ≥60 才放得出来。放了就用 schedule 帮他定好到点的收心提醒。',
+      name: 'request_relax',
+      description: '替他向墙申请明天放松一段娱乐时间。只有对账后的申请窗口开着时才有用（窗口外会被拒）；只管明天一天，每周最多几天由额度定。' +
+        '他清醒地想放松、给了理由时才用；atHour 是明天开始的整点（默认 20），minutes 默认 60。',
       parameters: {
         type: 'object',
         properties: {
-          minutes: { type: 'integer', minimum: 5, maximum: 30 },
-          reason: { type: 'string', description: '为什么放（他做了什么值得放）' },
+          atHour: { type: 'integer', minimum: 0, maximum: 23, description: '明天从几点开始放松（整点）' },
+          minutes: { type: 'integer', minimum: 15, maximum: 240, description: '放松多长，默认 60' },
+          reason: { type: 'string', description: '他为什么想明天放松（必填）' },
         },
-        required: ['minutes', 'reason'],
+        required: ['reason'],
         additionalProperties: false,
       },
       output: toolOutput,
       execute: (args = {}) => {
         const now = Date.now()
-        const t = trustNow(now)
-        if (t.score < 60) return { ok: false, text: '信用分 ' + t.score + '，不够放风（要 60）。' }
-        if (now - (Number(config.breakSince) || 0) < 2 * 3_600_000) return { ok: false, text: '两小时内放过一次了。' }
-        const minutes = Math.max(5, Math.min(30, Math.round(Number(args.minutes) || 15)))
-        config = { ...config, breakUntil: now + minutes * 60_000, breakSince: now, breakChecked: false }
-        try {
-          writeConfig(config)
-        } catch {
-          // 这一轮照样生效
-        }
-        record({ state: 'break-start', at: now, minutes, by: role, reason: String(args.reason || '').slice(0, 120) })
-        return { ok: true, text: '放风 ' + minutes + ' 分钟，到 ' + new Date(config.breakUntil).toISOString().slice(11, 16) + ' UTC，之后自动恢复。记得帮他定收心提醒。' }
+        const r = requestRelax(now, zoneOr(config.timeZone), { atHour: args.atHour, minutes: args.minutes, reason: args.reason, by: role })
+        return { ok: r.ok, text: r.text }
+      },
+    }
+  }
+  /** 第二轮·收紧：任何时候可提，立即生效、当天有效。收紧不受窗口限制（底线只拦放松）。 */
+  function tightenTool(role) {
+    return {
+      name: 'tighten_today',
+      description: '他主动要求今天更严（或你判断该收紧）：立即把今天的娱乐锁到零点，明天恢复默认。任何时候都能用，不需要窗口。',
+      parameters: {
+        type: 'object',
+        properties: { reason: { type: 'string', description: '为什么收紧' } },
+        required: [],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const r = tightenNow(now, zoneOr(config.timeZone), { reason: args.reason, by: role })
+        return { ok: r.ok, text: r.text }
       },
     }
   }
@@ -1612,6 +1626,40 @@ export function apply(ctx) {
     saveGemini({ ...g, session })
     record({ state: 'gemini-start', at: now, topic, mode, minutes, by: session.by })
     return { v: 1, ok: true, session: geminiSessionView(now) }
+  }
+  /**
+   * 第二轮·墙的手机入口（应用管理页 / 面板）：
+   *   status  → 读墙的现状（锁/开、窗口、本周剩余额度、今天有没有修改）。
+   *   relax   → 申请明天放松一段（只在窗口+额度内；替代聊天里的放风）。
+   *   tighten → 立即收紧到今天零点（任何时候）。
+   */
+  function wallRoute(body) {
+    const now = Date.now()
+    const tz = zoneOr(body?.timeZone || config.timeZone)
+    const action = String(body?.action || 'status')
+    const status = () => {
+      const wd = wallDecision(config, now, tz)
+      return {
+        v: 1, ok: true, wall: {
+          locked: wd.locked, kind: wd.kind || null, openUntil: wd.openUntil || 0, why: wd.why || null,
+          applyWindowOpen: applyWindowOpen(config.applyWindow, now),
+          applyWindowCloseAt: Number(config.applyWindow?.closeAt) || 0,
+          relaxRemaining: relaxRemaining(config, now, tz),
+          relaxToday: Boolean(activeRelax(config, now, tz)),
+          tightenToday: tightenActive(config, now, tz),
+          meals: wallConfig(config).meals,
+        },
+      }
+    }
+    if (action === 'relax') {
+      const r = requestRelax(now, tz, { atHour: body?.atHour, minutes: body?.minutes, reason: body?.reason, by: 'ui' })
+      return { ...status(), ok: r.ok, error: r.ok ? undefined : { code: r.code, message: r.text }, text: r.text }
+    }
+    if (action === 'tighten') {
+      const r = tightenNow(now, tz, { reason: body?.reason, by: 'ui' })
+      return { ...status(), ok: r.ok, text: r.text }
+    }
+    return status()
   }
   function eventRoute(body) {
     const now = Date.now()
@@ -1970,7 +2018,7 @@ export function apply(ctx) {
     // 传话工具按会话注册：这样工具知道是谁递给谁。
     if (agent?.ctx?.tools && typeof agent.ctx.tools.register === 'function') {
       const offs = []
-      const common = [notesTool(), controlTool(), startTaskTool(role), endTaskTool(role), breakTool(role), kbTool(role), blockTool(role), geminiLiveTool(role), geminiEndTool(role), geminiLogTool(role)]
+      const common = [notesTool(), controlTool(), startTaskTool(role), endTaskTool(role), relaxTool(role), tightenTool(role), kbTool(role), blockTool(role), geminiLiveTool(role), geminiEndTool(role), geminiLogTool(role)]
       for (const tool of config.dual !== false ? [sisterTool(role), ...common] : common) {
         try {
           const off = agent.ctx.tools.register(tool)
@@ -2052,7 +2100,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -2111,6 +2159,7 @@ export function apply(ctx) {
         if (path === '/outcome') return send(res, 200, outcomeRoute(body.value))
         if (path === '/event') return send(res, 200, eventRoute(body.value))
         if (path === '/session') return send(res, 200, sessionRoute(body.value))
+        if (path === '/wall') return send(res, 200, wallRoute(body.value))
         config = mergeConfig(config, body.value)
         writeConfig(config)
         // 换了会话 / 名字 / 人设：马上重挂，不等下一次定时检查。
