@@ -674,8 +674,8 @@ object ProactiveRuntime {
      * 计步破窗：走够步数 + 手打违约说明后换 10 分钟放风。插件把 breakUntil 写进配置，
      * 之后的 /plan 不会再给 force / refuse；手机本地也记一份，到点自动恢复。
      */
-    fun breakglass(steps: Int, note: String, done: (Boolean) -> Unit) {
-        if (!::app.isInitialized) { done(false); return }
+    fun breakglass(steps: Int, note: String, done: (ok: Boolean, used: Boolean) -> Unit) {
+        if (!::app.isInitialized) { done(false, false); return }
         main.post {
             fetchPluginRoute(routeCallback { m ->
                 val until = (m["breakUntil"] as? Number)?.toLong() ?: 0L
@@ -686,7 +686,9 @@ object ProactiveRuntime {
                     releaseCompanionLock()
                     consultPlanSoon(minGapMs = 0L)
                 }
-                done(ok)
+                // D5：每天只能破窗一次，第二次插件回 breakglass-used——要跟"没接上插件"分开说。
+                val used = ((m["error"] as? Map<*, *>)?.get("code") as? String) == "breakglass-used"
+                done(ok, used)
             }, "POST", "/event", linkedMapOf(
                 "type" to "breakglass", "minutes" to 10, "steps" to steps, "note" to note.take(300),
             ))

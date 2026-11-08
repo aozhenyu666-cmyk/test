@@ -24,6 +24,7 @@
     <string name="intercept_break_cancel">Not yet</string>
     <string name="intercept_break_sending">Telling Da Fei Yu…</string>
     <string name="intercept_break_failed">Couldn\'t reach the plugin. Try again.</string>
+    <string name="intercept_break_used">You already broke the glass once today.</string>
     <string name="intercept_break_no_sensor">This phone has no step sensor.</string>
     <string name="intercept_break_denied">Step permission is off, so the step count can\'t work.</string>
     <string name="intercept_break_wait">Not yet: keep walking and keep writing.</string>

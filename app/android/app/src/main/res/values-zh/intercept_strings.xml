@@ -24,6 +24,7 @@
     <string name="intercept_break_cancel">算了</string>
     <string name="intercept_break_sending">正在告诉大肥鱼…</string>
     <string name="intercept_break_failed">没接上插件，再试一次。</string>
+    <string name="intercept_break_used">今天已经破过一次窗了，明天再说。</string>
     <string name="intercept_break_no_sensor">这台手机没有计步传感器。</string>
     <string name="intercept_break_denied">没给计步权限，步数读不到。</string>
     <string name="intercept_break_wait">还不够：继续走，也继续写。</string>

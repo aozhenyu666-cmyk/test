@@ -368,12 +368,13 @@ class InterceptPageActivity : Activity() {
         val button = breakSubmit ?: return
         button.isEnabled = false
         button.text = AppStrings.get(this, R.string.intercept_break_sending)
-        ProactiveRuntime.breakglass(steps, note) { ok ->
+        ProactiveRuntime.breakglass(steps, note) { ok, used ->
             if (isFinishing || isDestroyed) return@breakglass
             if (!ok) {
                 button.text = AppStrings.get(this, R.string.intercept_break_submit)
                 refreshBreak()
-                android.widget.Toast.makeText(this, R.string.intercept_break_failed, android.widget.Toast.LENGTH_SHORT).show()
+                val msg = if (used) R.string.intercept_break_used else R.string.intercept_break_failed
+                android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
                 return@breakglass
             }
             breakDialog?.dismiss()
