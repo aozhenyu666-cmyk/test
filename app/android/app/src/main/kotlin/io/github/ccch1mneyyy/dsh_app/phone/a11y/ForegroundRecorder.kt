@@ -3,6 +3,7 @@ package io.github.ccch1mneyyy.dsh_app.phone.a11y
 import android.content.Context
 import android.view.accessibility.AccessibilityEvent
 import java.io.File
+import java.util.concurrent.Executors
 
 /**
  * D2: an opt-in recorder for every foreground change (package, activity class, time).
@@ -24,20 +25,31 @@ object ForegroundRecorder {
     /** What the last written line said, so a burst of events for one screen is one line. */
     @Volatile private var last = ""
 
+    /** Appends happen off the accessibility thread: a slow disk must not hold up event handling. */
+    private val writer = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "dsh-foreground-log").apply { isDaemon = true }
+    }
+
     fun file(context: Context): File = File(File(context.filesDir, DIR), NAME)
 
     fun enabled(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY, false)
 
     fun setEnabled(context: Context, enabled: Boolean) {
+        // Switching off and on again starts a new record: the first line after it must not be
+        // swallowed by a stale "same screen" from before.
+        last = ""
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY, enabled).apply()
     }
 
+    /** The pure gate: recording only while switched on, and only for a foreground change. */
+    fun shouldRecord(enabled: Boolean, eventType: Int?): Boolean =
+        enabled && eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+
     /** Called from the accessibility service for every event; cheap when the switch is off. */
     fun onEvent(context: Context, event: AccessibilityEvent?) {
-        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-        if (!enabled(context)) return
-        record(context, event.packageName?.toString(), event.className?.toString(), System.currentTimeMillis())
+        if (!shouldRecord(enabled(context), event?.eventType)) return
+        record(context, event?.packageName?.toString(), event?.className?.toString(), System.currentTimeMillis())
     }
 
     @Synchronized
@@ -46,7 +58,9 @@ object ForegroundRecorder {
         val next = "$packageName|${activity.orEmpty()}"
         if (next == last) return
         last = next
-        append(file(context), line(packageName, activity, at))
+        val target = file(context)
+        val body = line(packageName, activity, at)
+        writer.execute { append(target, body) }
     }
 
     /** One JSON line. Hand-escaped: the unit tests run without Android's org.json. */

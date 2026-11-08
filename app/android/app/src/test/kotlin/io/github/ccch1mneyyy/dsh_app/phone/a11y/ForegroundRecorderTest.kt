@@ -1,9 +1,20 @@
 package io.github.ccch1mneyyy.dsh_app.phone.a11y
 
+import android.view.accessibility.AccessibilityEvent
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ForegroundRecorderTest {
+    @Test
+    fun onlyAWindowStateChangeIsRecordedAndOnlyWhileSwitchedOn() {
+        assertTrue(ForegroundRecorder.shouldRecord(true, AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED))
+        assertFalse(ForegroundRecorder.shouldRecord(false, AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED))
+        assertFalse(ForegroundRecorder.shouldRecord(true, AccessibilityEvent.TYPE_VIEW_SCROLLED))
+        assertFalse(ForegroundRecorder.shouldRecord(true, null))
+    }
+
     @Test
     fun lineIsCompactJsonWithTheThreeFields() {
         assertEquals(
