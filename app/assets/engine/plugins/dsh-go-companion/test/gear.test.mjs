@@ -169,22 +169,26 @@ test('忙完：妹妹来迎接一次；"忙完了"提前收工也关掉拒绝模
   })
 })
 
-test('聊天里直接管他：dafeiyu_control', async () => {
+test('聊天里直接管他：dafeiyu_control 只能收紧（放松的口子已撤）', async () => {
   await withHome(async (home) => {
     const t = setup(home)
-    const tool = t.sis.tools.dafeiyu_control
-    assert.ok(tool && t.big.tools.dafeiyu_control)
+    const tool = t.big.tools.dafeiyu_control
+    // 第二轮分工：鱼丸是陪聊搭子，手里没有任何管控工具。
+    assert.equal(t.sis.tools.dafeiyu_control, undefined, '妹妹不该有管控工具')
+    assert.ok(tool, '姐姐有')
+    assert.deepEqual(tool.parameters.properties.action.enum, ['busy', 'refuse', 'mute', 'strict'])
     assert.equal(tool.execute({ action: 'busy', minutes: 45, what: '复习' }).ok, true)
     const p = await t.plan(game)
     assert.equal(p.body.gear, 'busy')
     assert.equal(p.body.force.level, 4)
-    tool.execute({ action: 'free' })
     tool.execute({ action: 'refuse', minutes: 30 })
     assert.equal((await t.plan(game)).body.force.level, 4)
-    tool.execute({ action: 'refuse_off' })
-    assert.ok((await t.plan(game)).body.force.level < 3)
     assert.equal(tool.execute({ action: 'mute', minutes: 20 }).ok, true)
     assert.equal((await t.plan(wechat)).body.reason, 'muted')
+    // 聊天里没有"放松"的动作：free / refuse_off / gentle 都撤了。
+    for (const action of ['free', 'refuse_off', 'gentle']) {
+      assert.equal(tool.execute({ action }).ok, false, action + ' 不该还能用')
+    }
     assert.match(t.big.contexts[0].text(), /dafeiyu_control/, '人设里说了有这个')
   })
 })
@@ -192,12 +196,11 @@ test('聊天里直接管他：dafeiyu_control', async () => {
 test('忙时必须带时长：工具不给就是 40，给多了压到 60', async () => {
   await withHome(async (home) => {
     const t = setup(home)
-    const tool = t.sis.tools.dafeiyu_control
+    const tool = t.big.tools.dafeiyu_control
     tool.execute({ action: 'busy', what: '复习' })
     const def = (await t.plan(game)).body.refuse
     const left = def.until - Date.now()
     assert.ok(left > 39 * 60_000 && left <= 40 * 60_000 + 5_000, String(left))
-    tool.execute({ action: 'free' })
     tool.execute({ action: 'busy', minutes: 300, what: '复习' })
     const capped = (await t.plan(game)).body.refuse
     const left2 = capped.until - Date.now()
@@ -373,7 +376,8 @@ test('破窗扣分：默认 15、可按配置改，账本记下这次扣了多�
 test('Gemini 互动舱：/plan 带 session 白名单，两个人格都能开、都能收工', async () => {
   await withHome(async (home) => {
     const t = setup(home)
-    assert.ok(t.sis.tools.gemini_live && t.sis.tools.gemini_end, '妹妹两个工具都有')
+    assert.ok(!t.sis.tools.gemini_live && !t.sis.tools.gemini_end, '妹妹不开舱（连麦会锁手机，属管控）')
+    assert.ok(t.sis.tools.gemini_log, '妹妹还能存复盘')
     assert.ok(t.big.tools.gemini_live && t.big.tools.gemini_end, '姐姐两个工具都有')
     const started = await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/session', {
       action: 'start', topic: '线代第三章', minutes: 30, mode: 'study',
@@ -390,6 +394,6 @@ test('Gemini 互动舱：/plan 带 session 白名单，两个人格都能开、�
     assert.equal(ended.ok, true, ended.text)
     const after = await t.plan(wechat)
     assert.equal(after.body.session, null)
-    assert.equal(t.sis.tools.gemini_end.execute({}).ok, false, '没开的时候收工要拒绝')
+    assert.equal(t.big.tools.gemini_end.execute({}).ok, false, '没开的时候收工要拒绝')
   })
 })

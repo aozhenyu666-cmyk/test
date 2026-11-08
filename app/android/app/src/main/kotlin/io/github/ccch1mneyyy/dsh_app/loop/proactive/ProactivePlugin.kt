@@ -169,6 +169,12 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                     call.argument<String>("mode"),
                 ) { m -> result.success(m) }
             }
+            // 应用管理页的「墙」：只读地看一眼规则现在的执行状态（锁没锁、为什么、本周还剩几天放松额度）。
+            // 墙不谈判：这里没有「放松」按钮，放松只能走晚上对账后的申请窗口。
+            "wallStatus" -> ProactiveRuntime.fetchPluginRoute(
+                result, "POST", "/wall",
+                linkedMapOf("action" to "status", "timeZone" to java.util.TimeZone.getDefault().id),
+            )
             else -> result.notImplemented()
         }
     }

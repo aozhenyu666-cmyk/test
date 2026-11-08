@@ -635,5 +635,22 @@
   "phoneGeminiInterrogate": "审讯摸鱼",
   "phoneGeminiFailed": "没接上大肥鱼，稍后再试",
   "phoneGeminiStarted": "连麦开始了：只许 Gemini",
-  "phoneGeminiEnded": "连麦结束，锁已恢复"
+  "phoneGeminiEnded": "连麦结束，锁已恢复",
+  "phoneWallTitle": "墙（规则执行）",
+  "phoneWallHint": "锁和放按他清醒时定下的规则执行，聊天里改不了；想多玩一段，等晚上对账后的申请窗口找鲸澜。",
+  "phoneWallLocked": "现在锁着：{why}",
+  "@phoneWallLocked": {
+    "placeholders": {
+      "why": { "type": "String" }
+    }
+  },
+  "phoneWallUnlocked": "现在没锁",
+  "phoneWallQuota": "本周还能放松 {days} 天",
+  "@phoneWallQuota": {
+    "placeholders": {
+      "days": { "type": "int" }
+    }
+  },
+  "phoneWallTodaySame": "今天没有修改",
+  "phoneWallTodayChanged": "今天改过规则"
 }

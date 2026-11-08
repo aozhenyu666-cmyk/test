@@ -36,3 +36,4 @@ __pycache__/
 
 # Flutter tool scratch file (created by flutter test/analyze on Windows).
 app/.flutter_tool_state
+.mimosa/

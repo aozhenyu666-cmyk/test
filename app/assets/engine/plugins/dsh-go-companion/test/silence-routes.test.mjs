@@ -155,9 +155,9 @@ test('5 分钟没回：下一球换更轻的，prompt 里认这件事', async ()
   })
 })
 
-test('连续三次没接（阶梯走完）：noIgnore:false 时回到旧行为，不再发球', async () => {
+test('连续三次没接（阶梯走完）：停下，不再追着他跑', async () => {
   await withHome(async (home) => {
-    seed(home, { noIgnore: false })
+    seed(home)
     writeFileSync(
       join(home, 'companion', 'ledger.jsonl'),
       [
@@ -176,24 +176,6 @@ test('连续三次没接（阶梯走完）：noIgnore:false 时回到旧行为�
     // 安静时段可能先拦（配置里 quietStart/quietEnd 是 12/12，即不静音）。
     assert.equal(out.body.reason, 'no-take', '安静/额度都不是这次的拦路人：' + JSON.stringify(out.body))
     assert.equal(out.body.silence.stage, 'stop')
-  })
-})
-
-test('连续没接：默认不许装看不见——十分钟一次接着找他（双人格时由鲸澜接手）', async () => {
-  await withHome(async (home) => {
-    seed(home)
-    writeFileSync(
-      join(home, 'companion', 'ledger.jsonl'),
-      [
-        { v: 1, requestId: 'old-1', sessionId: 'session-abc', state: 'generated', at: Date.now() - 40 * 60_000, serveType: 'observe' },
-        { v: 1, requestId: 'old-2', sessionId: 'session-abc', state: 'generated', at: Date.now() - 35 * 60_000, serveType: 'chat', silence: 'lighter' },
-        { v: 1, requestId: 'old-3', sessionId: 'session-abc', state: 'generated', at: Date.now() - 25 * 60_000, serveType: 'chat', silence: 'channel' },
-      ].map((e) => JSON.stringify(e)).join('\n') + '\n',
-    )
-    const host = makeHost({ agent: makeAgent() })
-    const out = await call(host.handler, 'POST', '/dsh-go-companion/v1/plan', { v: 1, timeZone: 'Asia/Shanghai' })
-    assert.equal(out.body.speak, true, JSON.stringify(out.body))
-    assert.equal(out.body.reason, 'ignored')
   })
 })
 
