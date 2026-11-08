@@ -16,6 +16,11 @@ import java.io.RandomAccessFile
  *
  * Only an allowlist is read, each file is capped, and total size is capped. Nothing here scans
  * directories: a new file must be listed on purpose.
+ *
+ * Deliberately not included: the memory/relationship SQLite databases
+ * (`fish-memory.sqlite`, `relationship.db`). They are chat-derived personal data, can be large,
+ * and file-level redaction cannot be applied inside SQLite; the small JSON state files above
+ * carry what a bug report needs.
  */
 object EngineDiagnosticsFiles {
     private const val MAX_FILE_BYTES = 512 * 1024
@@ -39,11 +44,15 @@ object EngineDiagnosticsFiles {
         "feiyu-mood/diag.log",
     )
 
-    /** `zip path` → file under `filesDir`. */
+    /** `zip path` → file under `filesDir`. Rotated `.1` logs ride along: a long session can age
+     * the beginning of the record out of the current file. */
     private val APP_FILES = listOf(
         "engine/engine-exits.jsonl" to "runtime/logs/engine-exits.jsonl",
+        "engine/engine-exits.jsonl.1" to "runtime/logs/engine-exits.jsonl.1",
         "phone/foreground.jsonl" to "phone/foreground.jsonl",
+        "phone/foreground.jsonl.1" to "phone/foreground.jsonl.1",
         "phone/a11y-watchdog.jsonl" to "phone/a11y-watchdog.jsonl",
+        "phone/a11y-watchdog.jsonl.1" to "phone/a11y-watchdog.jsonl.1",
         "phone/a11y-health.json" to "phone/a11y-health.json",
     )
 

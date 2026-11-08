@@ -234,6 +234,16 @@ void main() {
       expect((sent['minIntervalMs'] as int) <= (sent['maxIntervalMs'] as int), isTrue);
     });
 
+    testWidgets('诊断卡：导出诊断和前台包名记录开关都在', (tester) async {
+      FakeProactiveNative()..install();
+      await pumpPhone(tester, const ProactivePage());
+      final export = find.text('导出诊断');
+      await tester.scrollUntilVisible(export, 300, scrollable: find.byType(Scrollable).first);
+      expect(export, findsOneWidget);
+      expect(find.text('前台包名记录（调试）'), findsOneWidget);
+      expect(find.textContaining('打成一个 zip 存到「下载」'), findsOneWidget);
+    });
+
     testWidgets('a missing transport is stated instead of pretending', (tester) async {
       FakeProactiveNative()
         ..transport = false

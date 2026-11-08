@@ -186,7 +186,7 @@ Future<DiagnosticsSnapshot> collectDiagnostics(Ref ref, DateTime at) async {
   final channel = ref.read(diagnosticsChannelProvider);
   const wait = Duration(seconds: 5);
 
-  Future<T> attempt<T>(Future<T> Function() read, T fallback) async {
+  Future<T> attempt<T>(Future<T> Function() read, T fallback, {Duration wait = const Duration(seconds: 5)}) async {
     try {
       return await read().timeout(wait);
     } catch (_) {
@@ -218,6 +218,6 @@ Future<DiagnosticsSnapshot> collectDiagnostics(Ref ref, DateTime at) async {
     engineLog: engineLog,
     failureLog: failureLog,
     appErrors: appErrorLog.snapshot(),
-    engineFiles: await attempt(channel.engineFiles, const {}),
+    engineFiles: await attempt(channel.engineFiles, const {}, wait: const Duration(seconds: 15)),
   );
 }

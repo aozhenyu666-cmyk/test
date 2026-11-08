@@ -184,6 +184,7 @@ void main() {
       at: _at,
       status: _status(crashed: false),
       settings: const AppSettings(loaded: true),
+      engineLog: const ['[engine] started'],
       engineFiles: const {
         'engine/companion/ledger.jsonl': '{"state":"generated"}\n{"state":"replied","apiKey":"sk-4c1f0e7b9a2d4e6f8a1b3c5d7e9fa3f9"}',
         'engine/companion/config.json': '{"enabled":true}',
