@@ -1,5 +1,8 @@
 # 档位、聊天即管控、Gemini Live 搭桥
 
+> **已作废，以第三轮两份新文档为准**（`docs/dafeiyu/第三轮进度.md`、`docs/dafeiyu/接口约定.md`）。
+> 文中 `start_task_mode` / `grant_break` / `dafeiyu_control` 都已不存在，Gemini 五段背景文本也已被 `gemini_live` 的新形状取代。
+
 > 2026-11-07。接《姐妹双人格.md》第三版之后。锁机界面（锁聊合一、全屏、防卸甲）交给 DeepSeek，这里不涉及；文末列了它能用的接口。
 
 ## 1. 为什么这样做
