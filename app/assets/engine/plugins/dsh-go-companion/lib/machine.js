@@ -16,8 +16,6 @@ import { NIGHT_LOCK_FROM, NIGHT_LOCK_TO, REVIEW_FROM } from './rhythm.js'
 /** 冲刺默认两档（用户点「开始」时选的时长）：25 / 45 分钟。 */
 export const SPRINT_MIN = 25
 export const SPRINT_LONG_MIN = 45
-/** 待命默认锁的计时：10 分钟，聊天不重置（超时开追问锁）。 */
-export const STANDBY_LOCK_MS = 10 * 60_000
 /** 共脑满这么久才算完成；不足回待命，不算过关。 */
 export const BRAIN_MIN_MS = 3 * 60_000
 
