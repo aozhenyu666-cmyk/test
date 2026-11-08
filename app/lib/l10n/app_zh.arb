@@ -6014,6 +6014,52 @@
       }
     }
   },
+  "phoneGeminiTitle": "Gemini 互动",
+  "phoneGeminiHint": "连麦时只许 Gemini，别的 App 一开就锁；电话、短信、地图、支付不受限。",
+  "phoneGeminiRunning": "进行中：{topic} · 还剩 {minutes} 分钟 · 只许 Gemini",
+  "@phoneGeminiRunning": {
+    "placeholders": {
+      "topic": {
+        "type": "String"
+      },
+      "minutes": {
+        "type": "int"
+      }
+    }
+  },
+  "phoneGeminiEmptyTopic": "连麦（没说主题）",
+  "phoneGeminiStart": "开一场连麦",
+  "phoneGeminiEnd": "结束连麦",
+  "phoneGeminiTopic": "这次要做什么（线代第三章、周报…）",
+  "phoneGeminiMinutes": "时长",
+  "phoneGeminiMode": "怎么陪",
+  "phoneGeminiStudy": "学习陪练",
+  "phoneGeminiThink": "共脑想事",
+  "phoneGeminiInterrogate": "审讯摸鱼",
+  "phoneGeminiFailed": "没接上大肥鱼，稍后再试",
+  "phoneGeminiStarted": "连麦开始了：只许 Gemini",
+  "phoneGeminiEnded": "连麦结束，锁已恢复",
+  "phoneWallTitle": "墙（规则执行）",
+  "phoneWallHint": "锁和放按他清醒时定下的规则执行，聊天里改不了；想多玩一段，等晚上对账后的申请窗口找鲸澜。",
+  "phoneWallLocked": "现在锁着：{why}",
+  "@phoneWallLocked": {
+    "placeholders": {
+      "why": {
+        "type": "String"
+      }
+    }
+  },
+  "phoneWallUnlocked": "现在没锁",
+  "phoneWallQuota": "本周还能放松 {days} 天",
+  "@phoneWallQuota": {
+    "placeholders": {
+      "days": {
+        "type": "int"
+      }
+    }
+  },
+  "phoneWallTodaySame": "今天没有修改",
+  "phoneWallTodayChanged": "今天改过规则",
   "phoneTaskResultReady": "任务完成 · 查看结果",
   "phoneTaskEndedResult": "任务已结束 · 查看结果",
   "phoneBackgroundGuideTitle": "后台确认与返回",

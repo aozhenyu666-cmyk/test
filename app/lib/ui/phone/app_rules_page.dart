@@ -83,6 +83,8 @@ class PhoneAppRulesPage extends ConsumerWidget {
             padding: const EdgeInsets.fromLTRB(32, 40, 32, 24),
           )
         else ...[
+          const _WallCard(),
+          const SizedBox(height: 24),
           const _GeminiSessionCard(),
           const SizedBox(height: 24),
           for (final (i, (rule, list)) in groups.indexed) ...[
@@ -268,6 +270,61 @@ extension on String {
 
 /// 应用管理里的「Gemini 互动」：开一场连麦，期间只许 Gemini（电话/短信/地图/支付除外）。
 /// 两个人格也能在聊天里用 gemini_live / gemini_end 开、关同一场；这里只是手机上的一处入口。
+/// 墙（规则执行层）：只读地显示规则现在的状态。
+///
+/// 刻意没有「放松」按钮——放松只能走晚上对账后的申请窗口；设置页不该再开一个当场解锁的口子。
+class _WallCard extends StatefulWidget {
+  const _WallCard();
+
+  @override
+  State<_WallCard> createState() => _WallCardState();
+}
+
+class _WallCardState extends State<_WallCard> {
+  final ProactiveChannel _channel = ProactiveChannel();
+  Map<String, Object?>? _wall;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final wall = await _channel.wallStatus();
+    if (!mounted) return;
+    setState(() => _wall = wall);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final w = _wall;
+    // 读不到就整张卡不出现：设置页不该为墙的离线多一行噪音。
+    if (w == null) return const SizedBox.shrink();
+    final locked = w['locked'] == true;
+    final why = (w['why'] as String?)?.trim() ?? '';
+    final days = (w['relaxRemaining'] as num?)?.toInt() ?? 0;
+    final changed = w['relaxToday'] == true || w['tightenToday'] == true;
+    return ListPageCard(
+      children: [
+        ListPageRow(
+          icon: AppIcons.taskBlocked,
+          iconColor: Theme.of(context).colorScheme.primary,
+          title: l10n.phoneWallTitle,
+          subtitle: locked && why.isNotEmpty ? l10n.phoneWallLocked(why) : l10n.phoneWallUnlocked,
+          subtitleMaxLines: 3,
+        ),
+        ListPageRow(
+          icon: AppIcons.queued,
+          title: l10n.phoneWallQuota(days),
+          subtitle: changed ? l10n.phoneWallTodayChanged : l10n.phoneWallTodaySame,
+        ),
+      ],
+    );
+  }
+}
+
 class _GeminiSessionCard extends StatefulWidget {
   const _GeminiSessionCard();
 

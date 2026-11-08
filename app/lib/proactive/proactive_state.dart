@@ -335,6 +335,23 @@ class ProactiveChannel {
     }
   }
 
+  /// 应用管理页的「墙」：只读地读一眼规则现在的执行状态（插件 `POST /wall`）。
+  ///
+  /// 返回 `locked` / `kind` / `openUntil` / `why` / `relaxRemaining` / `relaxToday` /
+  /// `tightenToday` / `applyWindowOpen` 等；失败返回 null。这里只显示，不提供任何放松入口。
+  Future<Map<String, Object?>?> wallStatus() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('wallStatus');
+      if (raw is! Map) return null;
+      if (raw['error'] is Map) return null;
+      final wall = raw['wall'];
+      if (wall is! Map) return null;
+      return {for (final e in wall.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
   /// Chooses the target session (`POST /dsh-go-proactive/v1/config`). Null clears it.
   Future<ProactiveAgentSessions> setAgentSession(String? sessionId) async {
     try {

@@ -444,5 +444,22 @@
   "phoneGeminiInterrogate": "Interrogate slacking",
   "phoneGeminiFailed": "No answer from Da Fei Yu. Try again.",
   "phoneGeminiStarted": "Session started: Gemini only",
-  "phoneGeminiEnded": "Session over; locks are back"
+  "phoneGeminiEnded": "Session over; locks are back",
+  "phoneWallTitle": "The wall (rules)",
+  "phoneWallHint": "Locks and breaks follow the rules he set while clear-headed; chat cannot change them. For more time, ask Jinglan in the window after the evening review.",
+  "phoneWallLocked": "Locked now: {why}",
+  "@phoneWallLocked": {
+    "placeholders": {
+      "why": { "type": "String" }
+    }
+  },
+  "phoneWallUnlocked": "Nothing locked now",
+  "phoneWallQuota": "{days} relaxed days left this week",
+  "@phoneWallQuota": {
+    "placeholders": {
+      "days": { "type": "int" }
+    }
+  },
+  "phoneWallTodaySame": "No rule changes today",
+  "phoneWallTodayChanged": "Rules changed today"
 }
