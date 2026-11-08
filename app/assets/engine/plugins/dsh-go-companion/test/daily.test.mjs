@@ -5,7 +5,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, utimesSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -65,6 +65,8 @@ test('证据一：今天没动过的文件不算证据', () => {
   withDir((dir) => {
     const f = join(dir, '旧.md')
     writeFileSync(f, '# 旧\n')
+    // mtime 得钉死：它来自真实时钟，跑测试跨过零点这条断言就会飘。
+    utimesSync(f, new Date(NOW - 86_400_000), new Date(NOW - 86_400_000))
     // 一天以后再对账：文件不是今天改的
     const r = checkEvidence({ task: '写笔记', evidence: f }, { now: NOW + 86_400_000, tz: TZ, notes: [] })
     assert.equal(r.verdict, 'miss', r.why)

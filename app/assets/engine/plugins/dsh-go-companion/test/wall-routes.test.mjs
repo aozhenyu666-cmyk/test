@@ -2,12 +2,11 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { apply } from '../lib/index.js'
-import { existsSync, readFileSync } from 'node:fs'
 
 function agentOf(id) {
   const contexts = []
@@ -113,8 +112,10 @@ test('/wall relax：窗口内批给明天，额度减一，同窗口第二次被
     const t = setup(home, { applyWindow: openWindow() })
     const r = await t.wall({ action: 'relax', atHour: 20, minutes: 60, reason: '明天周末想玩一小时' })
     assert.equal(r.body.ok, true, JSON.stringify(r.body))
-    assert.equal(r.body.wall.relaxRemaining, 2)
     assert.equal(r.body.wall.applyWindowOpen, true)
+    // 额度按「目标那一天」所在周扣：周日夜跨零点申请明天会落到下一周，所以看落盘的周用量，别依赖真实日期。
+    const cfg = JSON.parse(readFileSync(join(home, 'companion', 'config.json'), 'utf8'))
+    assert.equal(cfg.relaxWeek.used, 1)
     const again = await t.wall({ action: 'relax', reason: '再来一段' })
     assert.equal(again.body.ok, false)
     assert.equal(again.body.error.code, 'window-used')
