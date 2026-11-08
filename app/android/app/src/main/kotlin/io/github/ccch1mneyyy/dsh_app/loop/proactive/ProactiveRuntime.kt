@@ -497,7 +497,7 @@ object ProactiveRuntime {
         sessionUntil = runCatching { p.getLong("sessionUntil", 0L) }.getOrDefault(0L)
         sessionAllow = runCatching { p.getString("sessionAllow", "").orEmpty() }.getOrDefault("")
             .split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
-        sessionPkg = runCatching { p.getString("sessionApp", "") }.getOrDefault("").ifBlank { null }
+        sessionPkg = runCatching { p.getString("sessionApp", "").orEmpty() }.getOrDefault("").ifBlank { null }
     }
     fun sessionActive(): Boolean {
         if (!::app.isInitialized) return false
