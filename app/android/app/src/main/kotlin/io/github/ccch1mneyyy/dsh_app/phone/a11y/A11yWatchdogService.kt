@@ -90,6 +90,7 @@ class A11yWatchdogService : Service() {
                 val listed = PhoneA11yService.isEnabled(this)
                 val age = A11yHealthFile.ageMs(this)
                 if (policy.decide(true, listed, age) == WatchdogPolicy.Action.NONE) {
+                    A11yWatchdogLog.note(this, listed, age, null, null, "ok")
                     updateNotification(getString(R.string.watchdog_ok))
                     return@execute
                 }
@@ -102,6 +103,7 @@ class A11yWatchdogService : Service() {
                     granted -> getString(R.string.watchdog_needs_manual)
                     else -> getString(R.string.watchdog_needs_grant)
                 }
+                A11yWatchdogLog.note(this, listed, age, granted, nowListed, "check")
                 updateNotification(text)
                 Log.i(TAG, "check listed=$listed age=$age granted=$granted nowListed=$nowListed")
             } catch (e: Exception) {

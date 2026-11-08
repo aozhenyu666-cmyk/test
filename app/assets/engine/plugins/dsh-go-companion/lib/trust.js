@@ -21,7 +21,8 @@ export const TRUST_WEIGHTS = {
   'gemini-start': 1,
   'gemini-recap': 3,
   'break-kept': 2,
-  breakglass: -5,
+  // 默认扣 15；配置 breakglassPenalty 可改（D5），trustScore 的 options.weights 覆盖它。
+  breakglass: -15,
   tamper: -100,
 }
 
@@ -56,9 +57,12 @@ function kindOf(e, answered) {
 }
 
 /**
+ * @param {{weights?: Record<string, number>}} [options] `weights` overrides single kinds
+ *   (the companion passes `{breakglass: -config.breakglassPenalty}`).
  * @returns {{score:number, band:'low'|'mid'|'high', recent:{kind:string, delta:number, at:number}[], counts:Object<string,number>}}
  */
-export function trustScore(entries, now = Date.now()) {
+export function trustScore(entries, now = Date.now(), options = {}) {
+  const weights = { ...TRUST_WEIGHTS, ...(options && typeof options.weights === 'object' ? options.weights : {}) }
   const all = Array.isArray(entries) ? entries : []
   // 球有没有被接：判球配上的 replied，或者之后他说过话（跟阶梯同一个口径）。
   const answered = new Set()
@@ -79,7 +83,7 @@ export function trustScore(entries, now = Date.now()) {
     if (!kind) continue
     const w = decay(now - at)
     if (!w) continue
-    const delta = TRUST_WEIGHTS[kind] * w
+    const delta = (weights[kind] || 0) * w
     score += delta
     if (now - at < DAY) counts[kind] = (counts[kind] || 0) + 1
     recent.push({ kind, delta, at })

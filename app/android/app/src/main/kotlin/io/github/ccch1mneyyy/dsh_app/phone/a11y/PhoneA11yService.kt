@@ -167,6 +167,8 @@ class PhoneA11yService : AccessibilityService() {
         clock.tick(event?.packageName)
         A11yHealth.onEvent(now, event?.packageName)
         NowFeed.onApp(event?.packageName?.toString(), now)
+        // D2: opt-in foreground package/activity log; it reads nothing and changes no decision.
+        runCatching { ForegroundRecorder.onEvent(this, event) }
         runCatching { LoopRuntime.onEvent(this, event) }
     }
 

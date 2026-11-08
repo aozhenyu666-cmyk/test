@@ -8,7 +8,7 @@ function check(name, ok, detail) {
   console.log((ok ? '  ✓ ' : '  ✗ ') + name + (ok ? '' : '  ← ' + JSON.stringify(detail).slice(0, 300)))
   if (!ok) failed += 1
 }
-// 15:00：避开第 8 节作息的早上门（5–10 点）、晚上对账（21:30 起）和深夜锁（0:30–7 点）。
+// 15:00：避开第 8 节作息的早上门（5–12 点）、晚上对账（21:30 起）和深夜锁（0:30–7 点）。
 const game = (minutes) => ({ app: 'com.tencent.tmgp.sgame', label: '王者荣耀', minutes, fun: true, screenOn: true, local: '15:00',
   today: [{ app: 'com.tencent.tmgp.sgame', label: '王者荣耀', minutes, fun: true }] })
 const phase = process.argv[2]

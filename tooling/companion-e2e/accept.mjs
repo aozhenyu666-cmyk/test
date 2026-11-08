@@ -36,7 +36,7 @@ async function say(sid, text) {
 function reset() {
   for (const f of ['ledger.jsonl', 'brain.json', 'temper.json']) rmSync(H + '/companion/' + f, { force: true })
 }
-// 15:00：避开第 8 节作息的早上门（5–10 点）、晚上对账（21:30 起）和深夜锁（0:30–7 点）。
+// 15:00：避开第 8 节作息的早上门（5–12 点）、晚上对账（21:30 起）和深夜锁（0:30–7 点）。
 const app = (pkg, label, minutes, fun, extra = {}) => ({ app: pkg, label, minutes, fun, screenOn: true, local: '15:00', today: fun ? [{ app: pkg, label, minutes, fun }] : [], ...extra })
 const bili = (m) => app('tv.danmaku.bili', '哔哩哔哩', m, true)
 const game = (m) => app('com.tencent.tmgp.sgame', '王者荣耀', m, true)

@@ -55,7 +55,7 @@ import { FACES, stepTemper, temperLine } from './temper.js'
 import { drillLines, drillOf, pickDrill, scoldLines } from './drills.js'
 import { brainLines, chooseFace, cleanBrain, drillScorer, observe, onReply, onServe, onSilent, revise } from './brain.js'
 import { decideForce, forceLines, refuseSwitch } from './force.js'
-import { BUSY_CHECK_MS, aiTask, applyGear, effectiveGear, gearLines, gearSwitch } from './gear.js'
+import { BUSY_CHECK_MS, BUSY_DEFAULT_MIN, BUSY_MAX_MIN, aiTask, applyGear, effectiveGear, gearLines, gearSwitch } from './gear.js'
 import { trustGap, trustLines, trustScore } from './trust.js'
 import { buildSnapshot, sistersView } from './panel.js'
 import { kbDir, kbWrite, knowledgeLines, scanUnfinished } from './notes.js'
@@ -114,6 +114,10 @@ const DEFAULTS = Object.freeze({
   // 判球可以单独配一个更快的模型；没配就沿用会话自己的 provider/model。
   judgeProvider: undefined,
   judgeModel: undefined,
+  // D5：破窗一次扣多少信用分（默认 15）；每天最多破窗 1 次是硬规则，不做配置。
+  breakglassPenalty: 15,
+  // 那一天（当地零点，ms）已经破过窗：账本被压缩/清理也不会把同一天放开第二次。
+  breakglassDay: 0,
 })
 
 function home() {
@@ -1184,7 +1188,8 @@ export function apply(ctx) {
     if (why.mark) saveGemini({ ...loadGemini(), ...why.mark })
   }
   /** 两姐妹共用的信用分（从账本算，见 trust.js）。 */
-  const trustNow = (now = Date.now()) => trustScore(readLedger(home(), 800), now)
+  const trustWeights = () => ({ breakglass: -(Number(config.breakglassPenalty) || 15) })
+  const trustNow = (now = Date.now()) => trustScore(readLedger(home(), 800), now, { weights: trustWeights() })
   /** 放风中：娱乐临时解锁（盖过拒绝模式和任务模式），到点自动恢复。 */
   const onBreak = (now) => Number(config.breakUntil) > now
   /** 拒绝到什么时候：拒绝模式（含忙时）和正在进行的 Gemini 连麦取更晚的。 */
@@ -1266,7 +1271,7 @@ export function apply(ctx) {
   function controlTool() {
     return {
       name: 'dafeiyu_control',
-      description: '切换对他的管法：busy=忙时（不闲聊、每 25 分钟报到、娱乐 App 一开就锁，minutes 后自动回闲时）；free=回到闲时（高频陪聊）；' +
+      description: '切换对他的管法：busy=忙时（不闲聊、每 25 分钟报到、娱乐 App 一开就锁；时长默认 40 分钟、最长 60，到点只让他报到，不评分不扣分）；free=回到闲时（高频陪聊）；' +
         'refuse=拒绝模式 minutes 分钟（娱乐 App 一开就锁）；refuse_off=关拒绝模式；mute=安静 minutes 分钟；strict / gentle=严格 / 温和。他亲口要求或明确同意时才用。',
       parameters: {
         type: 'object',
@@ -1285,9 +1290,11 @@ export function apply(ctx) {
         const hm = (at) => new Date(at).toISOString().slice(11, 16) + ' UTC'
         let text = ''
         if (args.action === 'busy') {
-          const until = now + (Number(args.minutes) ? mins : 60) * 60_000
+          // 进入忙时必须有时长：默认 40 分钟，最长 60 分钟（10 分钟起步）。
+          const busyMinutes = Math.max(10, Math.min(BUSY_MAX_MIN, Math.round(Number(args.minutes) || BUSY_DEFAULT_MIN)))
+          const until = now + busyMinutes * 60_000
           setGear({ gear: 'busy', until, what: String(args.what || '正事').slice(0, 20) }, 'tool')
-          text = '已切到忙时（' + (args.what || '正事') + '），到 ' + hm(until) + '：不闲聊、定时报到、娱乐 App 一开就锁。'
+          text = '已切到忙时（' + (args.what || '正事') + '）' + busyMinutes + ' 分钟，到 ' + hm(until) + '：不闲聊、定时报到、娱乐 App 一开就锁。'
         } else if (args.action === 'free') {
           if (aiTask(config, now)) return { ok: false, text: '现在是任务模式（' + (config.taskGoal || '') + '），要验收合格后用 end_task_mode 结束。' }
           setGear({ gear: 'free' }, 'tool')
@@ -1563,16 +1570,23 @@ export function apply(ctx) {
       return { v: 1, ok: true, refuse: { until }, force: { level: 4, app: String(body?.app || ''), why: '想去设置里拆掉管控' } }
     }
     if (type === 'breakglass') {
+      // D5：每天最多 1 次。按手机时区算“今天”，跨零点就是新的一天。
+      const today = startOfDay(now, config.timeZone)
+      const usedToday = Number(config.breakglassDay) === today ||
+        readLedger(home(), 800).some((e) => e?.state === 'breakglass' && Number(e.at) >= today)
+      if (usedToday) return { v: 1, ok: false, error: { code: 'breakglass-used', message: '今天已经破窗过一次' } }
       const minutes = Math.max(5, Math.min(15, Math.round(Number(body?.minutes) || 10)))
+      const penalty = Math.max(0, Math.min(100, Math.round(Number(config.breakglassPenalty) || 15)))
       const until = now + minutes * 60_000
-      config = { ...config, breakUntil: until, breakSince: now, breakChecked: false }
+      config = { ...config, breakUntil: until, breakSince: now, breakChecked: false, breakglassDay: today }
       try {
         writeConfig(config)
       } catch {
         // 这一轮照样生效
       }
-      record({ state: 'breakglass', at: now, minutes, steps: Number(body?.steps) || undefined, note: typeof body?.note === 'string' ? body.note.slice(0, 300) : undefined })
-      return { v: 1, ok: true, breakUntil: until }
+      // penalty 一起记账：晚上对账和信用分都看得到这次扣了多少。
+      record({ state: 'breakglass', at: now, minutes, penalty, steps: Number(body?.steps) || undefined, note: typeof body?.note === 'string' ? body.note.slice(0, 300) : undefined })
+      return { v: 1, ok: true, breakUntil: until, penalty }
     }
     if (type === 'notif') {
       const n = loadNotifs()
@@ -2070,6 +2084,8 @@ export function apply(ctx) {
       // 判球模型（没配就是 null，表示沿用会话）。
       judgeProvider: config.judgeProvider || null,
       judgeModel: config.judgeModel || null,
+      // D5：破窗扣多少分（默认 15）。
+      breakglassPenalty: Number(config.breakglassPenalty) || 15,
       // 最近 10 次的实测耗时：发球 / 判球 / 聊天。设置页显示中位数，一眼看出是不是模型慢。
       timings: readTimings(),
       control: config.control !== false,
@@ -2126,7 +2142,7 @@ export function apply(ctx) {
       if (rh.openMorning) record({ state: 'gate-open', at: now, gate: 'morning' })
       if (rh.openReview) record({ state: 'gate-open', at: now, gate: 'review' })
     }
-    const trust = trustScore(readLedger(home(), 800), now)
+    const trust = trustScore(readLedger(home(), 800), now, { weights: trustWeights() })
     // 放风结束：看他回没回来（不在娱乐 App 里就算守约），记进信用分。
     if (Number(config.breakUntil) > 0 && Number(config.breakUntil) <= now && config.breakChecked === false) {
       config = { ...config, breakChecked: true }
@@ -2314,6 +2330,8 @@ export function apply(ctx) {
       // 首页直接读这两项（不必再拆 config）：判球模型和最近 10 次的实测耗时。
       judgeProvider: config.judgeProvider || null,
       judgeModel: config.judgeModel || null,
+      // D5：破窗扣多少分（默认 15）。
+      breakglassPenalty: Number(config.breakglassPenalty) || 15,
       timings: readTimings(),
       sessionId: config.sessionId ?? null,
       agents: live,
@@ -2372,7 +2390,7 @@ export function apply(ctx) {
     return buildSnapshot({
       entries,
       todayEntries: entries.filter((e) => Number(e?.at) >= todayStart),
-      trust: trustScore(entries, now),
+      trust: trustScore(entries, now, { weights: trustWeights() }),
       phone: lastPhone,
       names: roleNames(config),
       speakerOf,
@@ -2459,9 +2477,9 @@ export function apply(ctx) {
             },
             // 面板只能收紧，不能放松：没有"关拒绝模式""结束任务"的按钮。
             'sisters.busy': (scope) => {
-              setGear({ gear: 'busy', until: Date.now() + 45 * 60_000, what: '正事' }, 'panel')
+              setGear({ gear: 'busy', until: Date.now() + BUSY_DEFAULT_MIN * 60_000, what: '正事' }, 'panel')
               d.refresh('sisters', scope)
-              return { toast: '忙时 45 分钟：不闲聊、定时报到、娱乐一开就锁。' }
+              return { toast: '忙时 ' + BUSY_DEFAULT_MIN + ' 分钟：不闲聊、定时报到、娱乐一开就锁。' }
             },
             'sisters.refuse': (scope) => {
               const until = Math.max(Date.now() + 30 * 60_000, Number(config.refuseUntil) || 0)
@@ -2531,6 +2549,7 @@ function mergeConfig(current, body) {
     // 判球模型：空字符串 = 清掉，回到沿用会话。
     if (typeof body.judgeProvider === 'string') next.judgeProvider = body.judgeProvider.trim().slice(0, 80) || undefined
     if (typeof body.judgeModel === 'string') next.judgeModel = body.judgeModel.trim().slice(0, 120) || undefined
+    if (Number.isFinite(Number(body.breakglassPenalty))) next.breakglassPenalty = Math.max(0, Math.min(100, Math.round(Number(body.breakglassPenalty))))
   }
   return next
 }

@@ -296,7 +296,8 @@ export function companionSpecialLines(special, names, allowTools = false) {
       '别讲道理、别说"你该去做事了"。']
   }
   if (special.reason === 'busy-done') {
-    return ['他刚忙完「' + (special.what || '正事') + '」' + (special.minutes ? '（忙了 ' + special.minutes + ' 分钟）' : '') + '。像朋友那样迎他：问一句搞定没、累不累，可以邀功（你一直憋着没吵他），然后正常闹他。' +
+    return ['他刚忙完「' + (special.what || '正事') + '」' + (special.minutes ? '（忙了 ' + special.minutes + ' 分钟）' : '') + '。到点了，先让他报到：这 ' + (special.minutes || 40) + ' 分钟做到哪、下一步是什么；只听他说，不评分、不扣分、不说验收。' +
+      '然后像朋友那样迎他：问一句搞定没、累不累，可以邀功（你一直憋着没吵他），再正常闹他。' +
       (special.digestText ? special.digestText + '顺带用你的方式交代一句（"群里聊了三十条废话，我都帮你挡了"）。' : '')]
   }
   if (special.reason === 'gemini-left') {

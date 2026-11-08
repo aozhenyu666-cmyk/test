@@ -179,6 +179,35 @@ void main() {
     expect(files.keys, ['summary.json', 'settings.json', 'engine.log']);
   });
 
+  test('engine files keep their archive path, are masked, and skip empty ones', () {
+    final snapshot = DiagnosticsSnapshot(
+      at: _at,
+      status: _status(crashed: false),
+      settings: const AppSettings(loaded: true),
+      engineLog: const ['[engine] started'],
+      engineFiles: const {
+        'engine/companion/ledger.jsonl': '{"state":"generated"}\n{"state":"replied","apiKey":"sk-4c1f0e7b9a2d4e6f8a1b3c5d7e9fa3f9"}',
+        'engine/companion/config.json': '{"enabled":true}',
+        'phone/foreground.jsonl': '{"at":1762570000000,"app":"com.tencent.mm","activity":"com.tencent.mm.ui.LauncherUI"}',
+        'phone/a11y-watchdog.jsonl': '',
+      },
+    );
+
+    final files = _unzip(DiagnosticsBundle.build(snapshot));
+
+    expect(files.keys, [
+      'summary.json',
+      'settings.json',
+      'engine.log',
+      'engine/companion/ledger.jsonl',
+      'engine/companion/config.json',
+      'phone/foreground.jsonl',
+    ]);
+    expect(files['engine/companion/ledger.jsonl'], '{"state":"generated"}\n{"state":"replied","apiKey":"sk-•••"}\n');
+    expect(files['phone/foreground.jsonl'], contains('com.tencent.mm'));
+    expect(files['phone/foreground.jsonl'], isNot(contains('4c1f0e7b')));
+  });
+
   test('the log keeps the newest lines only', () {
     final snapshot = DiagnosticsSnapshot(
       at: _at,

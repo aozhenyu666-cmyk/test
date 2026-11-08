@@ -60,7 +60,12 @@ function minutesOf(raw) {
 }
 
 function funOf(pkg, raw) {
-  return raw === true || FUN.has(pkg)
+  return raw === true || isFun(pkg)
+}
+
+/** 纯按包名判娱乐类；周报脚本用它算每天娱乐 App 分钟数。 */
+export function isFun(pkg) {
+  return FUN.has(pkgOf(pkg))
 }
 
 /**
