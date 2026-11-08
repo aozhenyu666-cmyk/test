@@ -65,19 +65,24 @@ object LockPriority {
     const val KIND_NIGHT = "night"       // 深夜锁
     const val KIND_REFUSE = "refuse"     // 拒绝模式（他要的、违抗后开的、拆管控后开的）
     const val KIND_SESSION = "session"   // Gemini 互动舱
+    const val KIND_DEFAULT = "default"   // 墙的默认锁（第二轮）：白天非吃饭时段
 
-    /** 晚间对账 > 任务模式 > 早上对线 > 深夜锁 > 拒绝模式 > 互动舱 > 普通提醒（不在表里的）。 */
-    val ORDER: List<String> = listOf(KIND_REVIEW, KIND_TASK, KIND_MORNING, KIND_NIGHT, KIND_REFUSE, KIND_SESSION)
+    /**
+     * 第二轮定的顺序：深夜锁 > 晚间对账 > 晨间对线 > 任务模式 > 拒绝模式 > Gemini 互动舱 > 默认锁 > 普通提醒。
+     * 默认锁排在普通提醒之上、拒绝模式之下（互动舱之后）。改顺序只改这一行。
+     */
+    val ORDER: List<String> = listOf(KIND_NIGHT, KIND_REVIEW, KIND_MORNING, KIND_TASK, KIND_REFUSE, KIND_SESSION, KIND_DEFAULT)
 
     fun rank(kind: String): Int = ORDER.indexOf(kind).let { if (it < 0) ORDER.size else it }
 
     /** The default unlock line for a kind, used when the plugin sent no [LockRule.why]. */
     fun defaultWhy(kind: String): String = when (kind) {
-        KIND_REVIEW -> "晚上对账：和鲸澜对完今天的账才解锁"
-        KIND_TASK -> "任务模式：任务验收合格才解锁"
-        KIND_MORNING -> "早上对线：先说出今天最重要的 3 件事"
         KIND_NIGHT -> "深夜锁：娱乐锁到早上 7 点"
+        KIND_REVIEW -> "晚上对账：和鲸澜对完今天的账才解锁"
+        KIND_MORNING -> "早上对线：先说出今天最重要的 3 件事"
+        KIND_TASK -> "任务模式：任务验收合格才解锁"
         KIND_SESSION -> "Gemini 互动中，只许 Gemini"
+        KIND_DEFAULT -> "默认严格：现在不是吃饭/放风时段，娱乐锁着；到点自动开放"
         else -> "拒绝模式：到点自动解锁"
     }
 

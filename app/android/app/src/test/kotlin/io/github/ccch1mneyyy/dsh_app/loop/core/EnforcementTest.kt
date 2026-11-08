@@ -73,13 +73,16 @@ class EnforcementTest {
     // ---------------------------------------------------------------- C5 LockPriority
 
     @Test
-    fun review_wins_over_task_and_task_over_refuse() {
-        val p = LockPriority.primary(
-            listOf(LockRule("refuse", 900), LockRule("task", 500), LockRule("review", 100), LockRule("session", 999)),
-        )
-        assertEquals("review", p?.kind)
+    fun night_wins_over_everything_and_default_sits_above_only_unknown() {
+        // 第二轮顺序：深夜锁 > 晚间对账 > 晨间 > 任务 > 拒绝 > 互动舱 > 默认锁 > 普通(未知)。
+        assertEquals("night", LockPriority.primary(
+            listOf(LockRule("refuse", 900), LockRule("task", 500), LockRule("review", 100), LockRule("night", 50)),
+        )?.kind)
+        assertEquals("review", LockPriority.primary(listOf(LockRule("refuse", 900), LockRule("review", 100), LockRule("session", 999)))?.kind)
         assertEquals("task", LockPriority.primary(listOf(LockRule("refuse", 900), LockRule("task", 500)))?.kind)
-        assertEquals("refuse", LockPriority.primary(listOf(LockRule("weird", 900), LockRule("refuse", 1)))?.kind)
+        // 默认锁排在普通提醒之上、拒绝之下。
+        assertEquals("refuse", LockPriority.primary(listOf(LockRule("default", 900), LockRule("refuse", 1)))?.kind)
+        assertEquals("default", LockPriority.primary(listOf(LockRule("default", 10), LockRule("weird", 900)))?.kind)
         assertNull(LockPriority.primary(emptyList()))
     }
 
