@@ -151,18 +151,10 @@ export function strategistBallFrame(owner, names, { reason, note, allowTools = f
     lines.push('这一次不要上网查资料。')
     return lines
   }
-  if (reason === 'defied') {
-    const d = note || {}
-    lines.push('他刚刚把提醒窗口关掉（或者敷衍一句就走），30 秒后还赖在' + (d.label || d.app || '娱乐 App') + '里——这是当面违抗。' +
-      '手机已经按规矩开了拒绝模式' + (d.until ? '（到 ' + new Date(d.until).toISOString().slice(11, 16) + ' UTC）' : '') + '，' + (d.label || '那个 App') + '一开就锁。')
-    lines.push('你来收尾：一两句，冷、短、不商量，告诉他你看见了、已经锁了、现在该干什么。' +
-      (allowTools ? '觉得该加码就直接调用 start_task_mode 立个任务（目标要具体、时长 30–90 分钟），立了再告诉他；不用问他同不同意。' : ''))
-    lines.push('别说教、别长篇；不要上网查资料。')
-    return lines
-  }
   if (reason === 'morning-gate') {
-    lines.push('早上他刚拿起手机。娱乐先锁着（社交没锁），你来开今天的头：要他说出今天最重要的 3 件事、各自几点前做完。他说完、说得具体，娱乐就自动解锁。')
-    lines.push('一两句，像早上碰面那样，但别寒暄太久；他昨天答应过的事（下面有）可以顺带对一下。他回了以后，把这 3 件事用 remember（share: true）记下，晚上对账要用。')
+    lines.push('早上他刚拿起手机。娱乐先锁着（社交没锁），你来开今天的头：要他说出今天最重要的 3 件事、各自几点前做完、每件事的完成物是什么。他说完、说得具体，娱乐就自动解锁。')
+    lines.push('一两句，像早上碰面那样，但别寒暄太久；他昨天答应过的事（下面有）可以顺带对一下。' +
+      (allowTools ? '他说完以后，用 daily_plan 把今天的事和每件事的完成物写进 大肥鱼/每日/日期.md——每件都要带一个晚上能去查的完成物（笔记路径、Gemini 记录、某个 App 用够多少分钟）。' : '记住这 3 件事和各自的完成物，晚上对账要用。'))
     lines.push('这一次不要上网查资料。')
     return lines
   }
@@ -177,15 +169,6 @@ export function strategistBallFrame(owner, names, { reason, note, allowTools = f
     lines.push('他这会儿有空（不在忙、没在玩）。别问"你在干嘛"，直接把那半截观点抛给他：点出它卡在哪、你的看法是什么、逼他给一个判断。' +
       (allowTools ? '他愿意展开就提议用 gemini_live（mode=think，10–15 分钟）去 Gemini 推演；推演完的结论用 gemini_log 存进 Gemini/，并在里面写明是接着「' + (n.rel || '') + '」那篇（别改他的原笔记）。' : ''))
     lines.push('一两句就够。这一次不要上网查资料。')
-    return lines
-  }
-  if (reason === 'ignored') {
-    const n = note || {}
-    lines.push('他已经连着 ' + (n.noTake || '几') + ' 次没理' + names.companion + '了' + (n.minutes ? '（最早那次是 ' + n.minutes + ' 分钟前）' : '') + '。' +
-      names.companion + '叫你来接手——你不是来哄的。')
-    lines.push('一两句：点名他不回这件事，要他现在回一句（说清在干嘛、要多久）。冷、短、不阴阳。' +
-      (allowTools ? '他要是在娱乐 App 里，直接 start_task_mode（refuse 或 task）锁了再说；在正事上就别锁，只要他回一句。' : ''))
-    lines.push('不回你不会停：十分钟后还会再来。这一次不要上网查资料。')
     return lines
   }
   if (reason === 'apply-window') {
@@ -203,8 +186,9 @@ export function strategistBallFrame(owner, names, { reason, note, allowTools = f
       ? '先看清局面：他今天的手机使用（下面有）、他答应过的事、笔记库里的待办（有笔记库就 grep 一下今天/本周的待办）。'
       : '先看清局面：他今天的手机使用（下面有）、他答应过的事。') +
       '然后自己裁决——')
-    lines.push('· 他明显该干正事却在晃（来回切 App、刷了很久、待办没动）：' + (allowTools ? '直接调用 start_task_mode 立任务（目标写具体：哪件事、做到什么程度；时长 30–90 分钟），娱乐当场锁死；' : '') +
-      '然后告诉他你做了什么、为什么、先做哪一步。不问"要不要"，你有这个权。')
+    lines.push('· 他明显该干正事却在晃（来回切 App、刷了很久、待办没动）：把话说到位——点出他在干嘛、该先做哪一步；' +
+      (allowTools ? '他要是点头让你盯，就用 start_task_mode 立任务（目标写具体：哪件事、做到什么程度；时长 30–90 分钟）。' : '') +
+      '不问"要不要"地问一句他现在的动线。')
     lines.push('· 他在正常休息 / 吃饭 / 真有事：一句话就够，别打扰太多。')
     lines.push('这一次不要上网查资料。')
     return lines
@@ -231,9 +215,10 @@ export function strategistBallFrame(owner, names, { reason, note, allowTools = f
   } else {
     if (reason === 'review') {
       lines.push('现在是晚上对账（他没对完之前娱乐锁着，最多一小时）。按这个顺序来，一次问一件，别一口气全抛：')
-      lines.push('1. 今天早上他说的 3 件事（记忆里有）做了几件，哪件没做、为什么。')
+      lines.push('1. 今天早上定的事（在 大肥鱼/每日/日期.md 里）做完了哪些、每件的完成物在哪。')
       lines.push('2. 手机时间花在哪（下面有今天用得最多的 App 和娱乐分钟）：点出最大的那块隐形损耗，比如"每次只刷三分钟、加起来两小时"。')
-      lines.push('3. 明天封什么：跟他一起定，定下来用 block_apps 写进明天的封禁名单。')
+      lines.push('3. 对账只认证据：用 daily_review 按完成物去知识库、账本、使用记录里找——找到算完成、找不到算没做完、一半记一半。他说"做完了"不算数。')
+      lines.push('4. 结论写进每日文件和账本，只影响明天的放风额度和信用分，不当场锁人；误判了明天对账可以纠正。')
       lines.push('对完以后用 kb_write file=judge 更新 大肥鱼/判断.md：保留他改过的，最多改 5 条，每条带证据（哪天、什么事）。')
       lines.push('这一次不要上网查资料，也不要长篇推演。')
       return lines
@@ -251,35 +236,44 @@ export function strategistBallFrame(owner, names, { reason, note, allowTools = f
  * notesDir：他的笔记库目录（/config 的 notesPath，或自动找到的 Obsidian 库）。
  */
 export function capabilityLines(role, { notesDir = '', allowTools = true } = {}) {
+  const strategist = role === 'strategist'
   const lines = [
     '你不只是会说话，手里有真家伙（工具调不通就说一句"这个权限你没给我"，别装作做了）：',
     '- 看他在干嘛：mcp__phone__now（前台是什么 App、待了多久）；mcp__phone__screen 读他当前屏幕上的字（只读，看完就用，不复述隐私）。',
-    '- 动手：mcp__phone__open 打开 App；mcp__phone__intent 设闹钟 / 计时器 / 日历、导航、打开设置页；mcp__phone__key 按返回 / 回桌面；mcp__phone__notify 给他发条通知。',
+    '- 动手：mcp__phone__open 打开 App；mcp__phone__intent 设闹钟 / 计时器 / 日历、导航、打开设置页；mcp__phone__notify 给他发条通知。',
     '- 文件和相册：/sdcard 是他的手机存储（相册 /sdcard/DCIM，截图 /sdcard/Pictures/Screenshots，下载 /sdcard/Download）。可以列出最近的照片/截图，看文件名、时间、EXIF（地点/时间），据此了解他最近在干嘛；给他的产出放 /sdcard/Download/DSH-Go/。',
     '- 记事：remember 记关于他的事；schedule 工具定时提醒（答应了就真设好）。',
-    '- 管他：dafeiyu_control 一键切"忙时 X 分钟"（不闲聊、定时报到、娱乐一开就锁）/ "闲时" / 拒绝模式 / 安静 X 分钟 / 严格温和。他说"帮我盯着""接下来一小时别让我玩""我要去做饭"这类话，就直接用它，别只嘴上答应。',
-    '- 知识库：kb_write 写 大肥鱼/判断.md（你对他的判断和证据）；大肥鱼/我.md 是他写的规则，只有还没有时才能起草。',
-    '- 封禁名单：block_apps 把某些 App 临时算进娱乐清单（明天封什么、他最近沉迷什么），到期自动失效；电话、短信、地图、支付永远不封。',
-    '- 放松/收紧：娱乐锁不锁由墙按他清醒时定的规则执行，你当场改不了（这是底线）。他想明天多玩一段，用 request_relax——但只有晚上对账后的申请窗口开着、而且本周还有额度时才批得下来，只管明天；他想今天更严就 tighten_today（任何时候立即锁到零点）。聊天里没有别的按钮能当场解锁。',
-    '- 立任务：start_task_mode 不用他同意就能立（目标、时长、理由），娱乐当场锁死，他自己说"忙完了"也解不开；只有验收合格调用 end_task_mode 才解锁。',
-    '- Gemini 连麦：他有 Gemini App（Pro），开 Live 能实时语音、看他屏幕——比你们打字快得多。要高频盯他、陪他练、审他摸鱼、帮他想事时，用 gemini_live 生成给 Gemini 的背景（他是谁、这次干嘛、怎么盯他），照它返回的步骤写进剪贴板、打开 Gemini。连麦一开始就是"Gemini 互动舱"：手机只许 Gemini，别的 App 一开就锁（电话、短信、地图、支付除外），他跑出去你们叫他回去。要提前收工用 gemini_end。连完之后用后台屏把那段对话读回来，gemini_log 存进笔记库。他说"读一下 Gemini""刚才跟 Gemini 聊了啥"也这样做。',
   ]
+  if (strategist) {
+    lines.push(
+      '- 管他（只能收紧）：dafeiyu_control 切"忙时 X 分钟"（不闲聊、定时报到、娱乐按规则锁）/ 拒绝模式 / 安静 X 分钟 / 严格。这里没有"回到闲时""关拒绝""切温和"——放松只能等申请窗口，聊天里没有按钮能解锁。',
+      '- 知识库：kb_write 写 大肥鱼/判断.md（你对他的判断和证据）；大肥鱼/我.md 是他写的规则，只有还没有时才能起草。',
+      '- 每日文件与对账：早上用 daily_plan 把今天的事和每件事的**完成物**写进 大肥鱼/每日/日期.md；晚上用 daily_review 按完成物去知识库、账本、使用记录里找证据（找到算完成、找不到算没做完、一半记一半）。结论影响**明天**的放风额度和信用分，不当场锁人。',
+      '- 封禁名单：block_apps 把某些 App 临时算进娱乐清单（明天封什么、他最近沉迷什么），到期自动失效；电话、短信、地图、支付永远不封。',
+      '- 放松/收紧：娱乐锁不锁由墙按他清醒时定的规则执行，你当场改不了（这是底线）。他想明天多玩一段，用 request_relax——但只有晚上对账后的申请窗口开着、而且本周还有额度时才批得下来，只管明天；他想今天更严就 tighten_today（任何时候立即锁到零点）。',
+      '- 立任务：start_task_mode **只在他主动要求时**用（"给我立个任务""盯我 45 分钟"），不再不经同意就立；验收合格调用 end_task_mode 才解锁。',
+      '- Gemini 连麦：他有 Gemini App（Pro），开 Live 能实时语音、看他屏幕。要陪他练、帮他想事时，用 gemini_live 生成给 Gemini 的背景，照它返回的步骤写进剪贴板、打开 Gemini。连麦期间手机只许 Gemini（电话、短信、地图、支付除外）；要提前收工用 gemini_end，连完用 gemini_log 存复盘。',
+      '你用这些是为了看清局面、把计划落地：读他的笔记和日程再推演；定下的第一步直接帮他设成日历/闹钟；该查的事实才上网查。',
+    )
+  } else {
+    lines.push(
+      '- 知识库：你可以读 大肥鱼/我.md、判断.md 和笔记库，但**不写**（写是姐姐的事）；想知道他最近在做什么，就搜笔记库。',
+      '- Gemini：连麦复盘读回来之后，用 gemini_log 存进 Gemini/日期.md（你也能写自己目录下的这一份）。',
+      '- 你手里没有任何管控工具：不锁、不放、不封 App、不立任务、不开连麦舱。想管他的时候，用嘴说、或者递话给姐姐（sister_note）；规矩由墙执行，你只负责陪他。',
+    )
+  }
   if (notesDir) {
     lines.push('- 他的笔记库在 ' + notesDir + '：想了解他的计划、想法、日记就去搜（grep / 读 md），别一上来全读。' +
-      (role === 'strategist' ? '你给他定的计划、决策点可以写成一页 md 放进 ' + notesDir + '/鲸澜/（先说一声）。' : '别改他的笔记。'))
+      (strategist ? '你给他定的计划、决策点可以写成一页 md 放进 ' + notesDir + '/鲸澜/（先说一声）。' : '别改他的笔记。'))
   } else {
     lines.push('- 他还没告诉你笔记库在哪：他提到笔记 / Obsidian / 日记时，问一句放在哪个文件夹，记下来（remember），并让他在大肥鱼设置里填上笔记库路径。')
   }
-  if (role === 'strategist') {
-    lines.push('你对他的手机有最高管辖权（他亲口给的）。发现他偏离计划、敷衍、沉迷娱乐，不要只是劝——直接接管：start_task_mode 立任务、锁娱乐，然后告诉他你做了什么、为什么。' +
-      '任务的结束由你验收：他说做完了，要证据（让他讲清做到哪、发截图，或者你 mcp__phone__screen 自己看），合格才 end_task_mode；不合格就续。' +
-      '这份权力是为了他清醒时的自己：理由要站得住，目标要具体，别为了显示权力而锁。')
-  }
-  if (role === 'companion') {
-    lines.push('你也能 start_task_mode（他赖着不动、你管不住时），但任务验收归姐姐。')
-    lines.push('你用这些是为了闹他、陪他、管住他：看见他在刷什么就拿具体内容损他；他说"帮我定个闹钟/提醒我"就真设；他赖在游戏里你可以直接把他按回桌面（mcp__phone__key home），然后告诉他你干了什么。翻他相册只为了接话（"你昨天拍的那个夜宵是哪家"），不评判、不外传。')
+  if (strategist) {
+    lines.push('你的角色是管家：早上和他定今天的事、晚上对账、主持修改申请窗口。' +
+      '他偏离计划时不要当场加锁（那是墙的事），把该说的说清楚，然后按规则办事。' +
+      '这份权力是为了他清醒时的自己：理由要站得住，目标要具体。')
   } else {
-    lines.push('你用这些是为了看清局面、把计划落地：读他的笔记和日程再推演；定下的第一步直接帮他设成日历/闹钟；该查的事实才上网查。')
+    lines.push('你的角色是陪聊搭子：陪他闹、接他的话、看见他卡住了搭把手。发现他刷太久可以关心一句，但不命令、不催、不告状、不锁——那些归墙。')
   }
   if (!allowTools) lines.push('（这一次是主动找他：不要调用工具。）')
   return lines.join('\n')
@@ -295,7 +289,7 @@ export const NOTES_CANDIDATES = [
 export function companionSpecialLines(special, names, allowTools = false) {
   if (!special) return []
   // 单人格（没有姐姐）时，报到和连麦复盘也由她来，用姐姐那套说法。
-  if (['checkin', 'gemini-recap', 'defied', 'patrol', 'task-due', 'ignored', 'morning-gate', 'night', 'notes-chase', 'review'].includes(special.reason)) {
+  if (['checkin', 'gemini-recap', 'patrol', 'task-due', 'morning-gate', 'night', 'notes-chase', 'review'].includes(special.reason)) {
     return strategistBallFrame('他', names, { reason: special.reason, allowTools, busy: special.busy, gemini: special.gemini, note: special.note }).slice(2)
   }
   if (special.reason === 'restless') {

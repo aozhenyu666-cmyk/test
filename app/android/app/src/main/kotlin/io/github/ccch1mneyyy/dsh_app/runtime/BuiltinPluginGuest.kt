@@ -130,6 +130,7 @@ object BuiltinPluginGuest {
                 "lib/notes.js",
                 "lib/rhythm.js",
                 "lib/wall.js",
+                "lib/daily.js",
             ),
         ),
     )

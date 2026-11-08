@@ -61,9 +61,10 @@ import { buildSnapshot, sistersView } from './panel.js'
 import { kbDir, kbWrite, knowledgeLines, scanUnfinished } from './notes.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, closeGates, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import {
-  DEFAULT_WALL, wallConfig, wallDecision, activeRelax, tightenActive, relaxRemaining, relaxUsedThisWeek,
-  trackApplyWindow, applyWindowOpen, dayKey, weekKey, WALL_KIND_DEFAULT,
+  DEFAULT_WALL, wallConfig, wallDecision, activeRelax, tightenActive, relaxRemaining, relaxUsedThisWeek, relaxBonus,
+  trackApplyWindow, applyWindowOpen, dayKey, weekKey, WALL_KIND_DEFAULT, wallDefianceText,
 } from './wall.js'
+import { dailyPath, keywordsOf, loadDaily, normalizeTasks, reconcile, reviewText, writeDaily } from './daily.js'
 import { GEMINI_PACKAGES, geminiBrief, geminiLines, geminiMode, geminiSteps, recapMarkdown, trackGemini } from './gemini.js'
 
 export const name = 'dsh-go-companion'
@@ -1094,6 +1095,8 @@ export function apply(ctx) {
       },
     }
   }
+  /** 双人格才挂传话工具（单人格时没人可递）。 */
+  const sisterToolIfDual = (role) => (config.dual !== false ? sisterTool(role) : null)
   /** 他的笔记库：设置里填的优先，否则找常见的 Obsidian / 笔记目录（10 分钟查一次）。 */
   let notesCache = { at: 0, dir: '' }
   const isDir = (p) => {
@@ -1160,6 +1163,9 @@ export function apply(ctx) {
   const saveGemini = (g) => writeJson(stateFile('gemini.json'), g)
   const loadGearState = () => readState(stateFile('gear.json'), {}) || {}
   const saveGearState = (g) => writeJson(stateFile('gear.json'), g)
+  // 第二轮·每日文件：今天的事 + 完成物 + 晚上对账的结论（渲染成 大肥鱼/每日/日期.md）。
+  const loadDailyState = () => readState(stateFile('daily.json'), {}) || {}
+  const saveDailyState = (s) => writeJson(stateFile('daily.json'), s)
   const geminiPackages = () => (Array.isArray(config.geminiPackages) && config.geminiPackages.length ? config.geminiPackages.map(String) : GEMINI_PACKAGES)
   /** 正在进行的 Gemini 互动舱：手机据此只许 Gemini（急事底线 App 除外）。 */
   const geminiSessionView = (now = Date.now()) => {
@@ -1288,12 +1294,14 @@ export function apply(ctx) {
   // 底线 1：任何对话都不能当场放松规则。放松只能在对账后的申请窗口里提，而且只管明天一天。
   // 收紧任何时候都能提，立即生效、当天有效。两者都记进账本；额度按自然周算。
 
-  /** 本周放松是否还有额度（按目标日所在的自然周）。 */
+  /** 本周放松是否还有额度（按目标日所在的自然周；含昨晚对账挣到 / 扣掉的）。 */
   function relaxQuotaLeft(targetDay, now, tz) {
-    const w = wallConfig(config)
     const week = weekKey(targetDay, tz)
     const used = config.relaxWeek && Number(config.relaxWeek.week) === week ? Math.max(0, Math.round(Number(config.relaxWeek.used) || 0)) : 0
-    return { left: Math.max(0, w.weeklyQuota - used), week, used }
+    // 对账的额度增减只作用于被裁定的那一天，所以按目标日算，而不是按 now。
+    const bonus = relaxBonus(config, targetDay, tz)
+    const left = Math.max(0, wallConfig(config).weeklyQuota + bonus - used)
+    return { left, week, used }
   }
 
   /**
@@ -1351,16 +1359,20 @@ export function apply(ctx) {
     schema: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, text: { type: 'string' } } },
     render: (_a, v) => [{ type: 'text', text: String((v && v.text) || '') }],
   }
-  /** 聊天和控制不再分开：他在聊天里说"帮我盯着""一小时别让我玩"，她们直接切。 */
+  /**
+   * 管他（第二轮：只留收紧类）。在聊天里只能收紧，不能放松——放松只走申请窗口（底线 1）。
+   *   busy / refuse / mute / strict 保留；free、refuse_off、gentle 已撤（那是聊天里切回宽松状态的口子）。
+   */
   function controlTool() {
     return {
       name: 'dafeiyu_control',
-      description: '切换对他的管法：busy=忙时（不闲聊、每 25 分钟报到、娱乐 App 一开就锁；时长默认 40 分钟、最长 60，到点只让他报到，不评分不扣分）；free=回到闲时（高频陪聊）；' +
-        'refuse=拒绝模式 minutes 分钟（娱乐 App 一开就锁）；refuse_off=关拒绝模式；mute=安静 minutes 分钟；strict / gentle=严格 / 温和。他亲口要求或明确同意时才用。',
+      description: '切换对他的管法（只能收紧，不能放松）：busy=忙时（不闲聊、每 25 分钟报到、娱乐 App 一开就锁；时长默认 40 分钟、最长 60，到点只让他报到，不评分不扣分）；' +
+        'refuse=拒绝模式 minutes 分钟（娱乐 App 一开就锁）；mute=安静 minutes 分钟；strict=严格。他亲口要求或明确同意时才用。' +
+        '放松（回到闲时、关拒绝、切回温和）这里不做：他想放松只能等对账后的申请窗口。',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['busy', 'free', 'refuse', 'refuse_off', 'mute', 'strict', 'gentle'] },
+          action: { type: 'string', enum: ['busy', 'refuse', 'mute', 'strict'] },
           minutes: { type: 'integer', minimum: 5, maximum: 480, description: 'busy / refuse / mute 的时长（分钟）' },
           what: { type: 'string', description: 'busy：他在忙什么（学习、做饭、写报告…）' },
         },
@@ -1379,24 +1391,19 @@ export function apply(ctx) {
           const until = now + busyMinutes * 60_000
           setGear({ gear: 'busy', until, what: String(args.what || '正事').slice(0, 20) }, 'tool')
           text = '已切到忙时（' + (args.what || '正事') + '）' + busyMinutes + ' 分钟，到 ' + hm(until) + '：不闲聊、定时报到、娱乐 App 一开就锁。'
-        } else if (args.action === 'free') {
-          if (aiTask(config, now)) return { ok: false, text: '现在是任务模式（' + (config.taskGoal || '') + '），要验收合格后用 end_task_mode 结束。' }
-          setGear({ gear: 'free' }, 'tool')
-          text = '回到闲时了。'
-        } else if (args.action === 'refuse' || args.action === 'refuse_off') {
-          if (args.action === 'refuse_off' && aiTask(config, now)) return { ok: false, text: '任务模式里关不了拒绝模式，验收合格用 end_task_mode。' }
-          const until = args.action === 'refuse' ? now + (Number(args.minutes) ? mins : 120) * 60_000 : 0
-          config = { ...config, refuseUntil: until, refuseBy: until ? 'tool' : undefined }
-          text = until ? '拒绝模式开到 ' + hm(until) + '。' : '拒绝模式关了。'
+        } else if (args.action === 'refuse') {
+          const until = now + (Number(args.minutes) ? mins : 120) * 60_000
+          config = { ...config, refuseUntil: until, refuseBy: 'tool' }
+          text = '拒绝模式开到 ' + hm(until) + '。'
         } else if (args.action === 'mute') {
           const until = now + (Number(args.minutes) ? mins : 60) * 60_000
           config = { ...config, muteUntil: until }
           text = '安静到 ' + hm(until) + '。'
-        } else if (args.action === 'strict' || args.action === 'gentle') {
-          config = { ...config, mode: args.action === 'strict' ? 'coach' : 'partner', modeUntil: 0 }
-          text = args.action === 'strict' ? '切到严格了。' : '切到温和了。'
+        } else if (args.action === 'strict') {
+          config = { ...config, mode: 'coach', modeUntil: 0 }
+          text = '切到严格了。'
         } else {
-          return { ok: false, text: '不认识的动作。' }
+          return { ok: false, text: '不认识的动作（这里只能收紧）。' }
         }
         if (args.action !== 'busy' && args.action !== 'free') {
           try {
@@ -1410,12 +1417,16 @@ export function apply(ctx) {
       },
     }
   }
-  /** 立任务：不用他同意。娱乐当场锁死，他自己解不开，验收合格才结束。 */
+  /**
+   * 立任务（第二轮：只在用户主动要求时）。不再"不经同意就立"——那等于聊天里当场加锁，违反底线。
+   * 娱乐照样按规则锁，任务模式只在他说"帮我立个任务/盯我 45 分钟"时开。
+   */
   function startTaskTool(role) {
     return {
       name: 'start_task_mode',
-      description: '主动给他立一个任务（不需要他同意）：mode=task 任务模式（有目标，定时报到，娱乐全锁，验收合格才结束）；mode=refuse 只锁娱乐不立目标。' +
-        '他偏离计划、敷衍、沉迷娱乐、来回刷手机时用。立完告诉他做了什么、为什么、第一步是什么。',
+      description: '给他立一个任务（**只在他主动要求时**：他说"给我立个任务""盯我 45 分钟""这一个小时别让我玩"）。' +
+        'mode=task 任务模式（有目标，定时报到，娱乐按规则锁，验收合格才结束）；mode=refuse 只锁娱乐不立目标。' +
+        '他没要求时不要调用——规矩由墙执行，你只在他点名要的时候帮他立。立完告诉他做了什么、为什么、第一步是什么。',
       parameters: {
         type: 'object',
         properties: {
@@ -1557,6 +1568,89 @@ export function apply(ctx) {
       },
     }
   }
+  /**
+   * 第二轮·每日文件与按完成物对账（只有鲸澜有）。
+   *   daily_plan  ：晨间对线时把今天的事和完成物写进 大肥鱼/每日/日期.md。
+   *   daily_review：晚上对账，按完成物去知识库 / 账本 / 使用记录里找证据，结论作用于明天。
+   */
+  function dailyPlanTool(role) {
+    return {
+      name: 'daily_plan',
+      description: '早上定事：把今天的事和每件事的完成物写进知识库的每日文件（大肥鱼/每日/日期.md）。' +
+        '每件事必须带一个看得见的完成物（笔记路径、Gemini 记录、某个学习 App 今天要用够多少分钟），光写"做完 XX"不算。最多 6 件。',
+      parameters: {
+        type: 'object',
+        properties: {
+          tasks: {
+            type: 'array',
+            maxItems: 6,
+            items: {
+              type: 'object',
+              properties: {
+                task: { type: 'string', description: '今天要做的事（一句话）' },
+                evidence: { type: 'string', description: '完成物：晚上能去查的东西（笔记路径 / Gemini 记录 / App 用够多少分钟）' },
+              },
+              required: ['task', 'evidence'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['tasks'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const tz = zoneOr(config.timeZone)
+        const norm = normalizeTasks(args.tasks)
+        if (!norm.ok) return { ok: false, text: norm.text }
+        const dir = kbDir(notesDir(), home())
+        const state = loadDaily(loadDailyState(), now, tz)
+        const next = { ...state, tasks: norm.tasks, review: state.review }
+        const wrote = writeDaily(dir, next)
+        saveDailyState(next)
+        record({ state: 'daily-plan', at: now, by: role, count: norm.tasks.length, file: wrote.file || undefined })
+        return { ok: true, text: norm.text + ' ' + wrote.text }
+      },
+    }
+  }
+  function dailyReviewTool(role) {
+    return {
+      name: 'daily_review',
+      description: '晚上对账：按早上写下的完成物逐项去知识库、账本、使用记录里找证据——找到算完成，找不到算没做完，找到一半记一半。' +
+        '不看他说了什么。结论写进每日文件和账本，只影响明天的放风额度和信用分，不当场锁人。',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      output: toolOutput,
+      execute: () => {
+        const now = Date.now()
+        const tz = zoneOr(config.timeZone)
+        const dir = kbDir(notesDir(), home())
+        const state = loadDaily(loadDailyState(), now, tz)
+        if (!state.tasks.length) return { ok: false, text: '今天早上没定事，没有可对的账。先跟他说清今天该做什么、各自的完成物是什么。' }
+        const out = reconcile(state, {
+          now, tz, notesDir: notesDir(), ledger: readLedger(home(), 800),
+          usage: Array.isArray(lastPhone?.today) ? lastPhone.today : [],
+        })
+        const next = { ...state, review: { at: now, ...out } }
+        const wrote = writeDaily(dir, next)
+        saveDailyState(next)
+        config = {
+          ...config,
+          daily: { day: state.day, done: out.done, partial: out.partial, miss: out.miss, total: out.total, at: now },
+          // 作用于明天：明天那天的额度增减，过了那天自动失效。
+          dailyQuota: { for: startOfDay(now, tz) + 86_400_000, delta: out.quotaDelta, done: out.done, total: out.total, at: now },
+        }
+        try {
+          writeConfig(config)
+        } catch {
+          // 这一轮照样生效
+        }
+        record({ state: 'daily-review', at: now, by: role, done: out.done, partial: out.partial, miss: out.miss, total: out.total, quotaDelta: out.quotaDelta })
+        const detail = out.results.map((r) => (r.verdict === 'done' ? '✅ ' : r.verdict === 'partial' ? '◐ ' : '✗ ') + r.task + '——' + r.why).join('\n')
+        return { ok: true, text: reviewText(out) + '\n' + detail + '\n' + wrote.text }
+      },
+    }
+  }
   function endTaskTool(role) {
     return {
       name: 'end_task_mode',
@@ -1682,7 +1776,8 @@ export function apply(ctx) {
       }
       pendingDefiance = { app, label, at: now, until, source: String(body?.source || 'overlay').slice(0, 20) }
       record({ state: 'defied', at: now, app, label, until, source: pendingDefiance.source })
-      return { v: 1, ok: true, refuse: { until }, force: { level: 4, app, why: '关掉提醒还在玩' + label + '，拒绝模式开了' } }
+      // 收尾的话由墙说（代码模板），不经模型、不由姐姐出面。
+      return { v: 1, ok: true, refuse: { until }, force: { level: 4, app, why: wallDefianceText(label, until) } }
     }
     // 锁屏页 / 无障碍报来的（DeepSeek 那边接）：
     //   tamper     —— 管控期间他去设置里找"强行停止 / 卸载 / 关无障碍"：信用分清零，拒绝模式 60 分钟，鲸澜收尾。
@@ -1745,8 +1840,8 @@ export function apply(ctx) {
       .map(([label, v]) => label + ' ' + v.count + ' 条' + (v.group ? '（群聊 ' + v.group + '）' : '') + (v.titles.length ? '：' + v.titles.slice(0, 3).join('、') : '')).join('；') + '。'
   }
   /**
-   * 不许装看不见：鱼丸连着两球没人接，鲸澜接手；之后每 10 分钟来一次，直到他回一句（以前三球不接就歇 3 小时）。
-   * noIgnore:false 回到旧的"歇着"。
+   * 第二轮撤掉了「没人接就每 10 分钟追到回话」的追人阶梯：压力归墙，姐妹不催。
+   * 她们照常关心（注意到他刷太久会说一句），只是不会为了等他回话而反复来。
    */
   /** 未完成笔记追杀：他有空（闲时、不在玩、亮屏、9–22 点），三小时最多一次，挑一篇没想完的。 */
   function chaseSignal(phone, now, tz) {
@@ -1760,14 +1855,7 @@ export function apply(ctx) {
     const found = scanUnfinished(dir, { now, asked })
     return found[0] || null
   }
-  const PRESS_MS = 10 * 60_000
-  function pressIgnored(silence, now) {
-    if (config.noIgnore === false || !silence || silence.noTake < 2) return null
-    let last = 0
-    for (const e of readLedger(home(), 200)) if (e?.state === 'generated' && Number(e.at) > last) last = Number(e.at)
-    if (now - last < PRESS_MS) return null
-    return { noTake: silence.noTake, minutes: Math.round((Number(silence.sinceMs) || 0) / 60_000) }
-  }
+  /** 第二轮撤掉了追人阶梯（没人接不再每 10 分钟来一次）；姐妹正常的关心走 restless / patrol / busy-done。 */
   /**
    * 心猿意马：90 秒里切了 5 次以上、至少 4 个不同的 App，人还不在娱乐 App 里（在里面的话力度会管）。
    * 鱼丸在他点开游戏之前截胡。20 分钟最多一次。
@@ -2018,8 +2106,16 @@ export function apply(ctx) {
     // 传话工具按会话注册：这样工具知道是谁递给谁。
     if (agent?.ctx?.tools && typeof agent.ctx.tools.register === 'function') {
       const offs = []
-      const common = [notesTool(), controlTool(), startTaskTool(role), endTaskTool(role), relaxTool(role), tightenTool(role), kbTool(role), blockTool(role), geminiLiveTool(role), geminiEndTool(role), geminiLogTool(role)]
-      for (const tool of config.dual !== false ? [sisterTool(role), ...common] : common) {
+      // 第二轮分工：鱼丸是陪聊搭子，手里没有任何管控工具（不能锁、不能放、不能立任务、不能封 App）；
+      // 鲸澜是管家，收紧类 + 每日文件 + 对账 + 窗口在她这里；验收也归她。两个人一起说话（sister_note）不受限。
+      const shared = [notesTool(), sisterToolIfDual(role), geminiLogTool(role)]
+      const strategistOnly = [
+        controlTool(), startTaskTool(role), endTaskTool(role), relaxTool(role), tightenTool(role),
+        kbTool(role), blockTool(role), dailyPlanTool(role), dailyReviewTool(role),
+        geminiLiveTool(role), geminiEndTool(role),
+      ].filter(Boolean)
+      const list = (role === 'strategist' ? [...shared, ...strategistOnly] : shared).filter(Boolean)
+      for (const tool of list) {
         try {
           const off = agent.ctx.tools.register(tool)
           if (typeof off === 'function') offs.push(off)
@@ -2360,10 +2456,9 @@ export function apply(ctx) {
     const thinker = config.dual !== false && config.strategistSessionId ? 'strategist' : 'companion'
     let hold = null
     noteFront(phone, now)
-    // 违抗：不管安静时段和"别烦我"（他刚点了别烦我还接着玩，就是违抗）。
-    if (pendingDefiance && now - pendingDefiance.at < 10 * 60_000) {
-      nextSpeaker = { role: thinker, reason: 'defied', at: now, note: pendingDefiance, mark: null }
-    } else if (canTalk && !gem.inside && lastRhythm?.morningGate && !lastRhythm.state.morningBall) {
+    // 违抗（第二轮）：保留闭环——当场升拒绝模式，但收尾的话由**墙**按模板说（锁屏页的 why），
+    // 不再由鲸澜出面；姐妹照常陪聊，只是不当监工。
+    if (canTalk && !gem.inside && lastRhythm?.morningGate && !lastRhythm.state.morningBall) {
       nextSpeaker = { role: thinker, reason: 'morning-gate', at: now }
     } else if (canTalk && !gem.inside && lastRhythm?.night === 'lock' && phone?.screenOn && now - (Number(lastRhythm.state.nightBallAt) || 0) >= 30 * 60_000) {
       nextSpeaker = { role: thinker, reason: 'night', at: now }
@@ -2378,8 +2473,6 @@ export function apply(ctx) {
           topic: gem.session.topic, left: Math.max(1, Math.round((gem.session.until - now) / 60_000)), app: phone?.label || phone?.app }
       } else if (gearNow === 'free' && restlessSignal(phone, now)) {
         nextSpeaker = { role: 'companion', reason: 'restless', at: now, ...restlessSignal(phone, now) }
-      } else if (pressIgnored(silence, now)) {
-        nextSpeaker = { role: thinker, reason: 'ignored', at: now, note: pressIgnored(silence, now) }
       } else if (gearNow === 'busy') {
         const last = Math.max(Number(config.gearSince) || 0, Number(gs.lastCheckAt) || 0)
         if (now - last >= BUSY_CHECK_MS) nextSpeaker = { role: thinker, reason: 'checkin', at: now, busy: { what: config.gearWhat, until: Number(config.gearUntil) } }
@@ -2560,6 +2653,19 @@ export function apply(ctx) {
       trust: trustScore(entries, now, { weights: trustWeights() }),
       phone: lastPhone,
       names: roleNames(config),
+      // 面板上的墙：此刻锁/开、本周剩余额度、今天有没有修改。
+      wall: (() => {
+        const tz = zoneOr(config.timeZone)
+        const wd = wallDecision(config, now, tz)
+        return {
+          locked: wd.locked, kind: wd.kind || null, openUntil: wd.openUntil || 0,
+          applyWindowOpen: applyWindowOpen(config.applyWindow, now),
+          relaxRemaining: relaxRemaining(config, now, tz),
+          relaxToday: Boolean(activeRelax(config, now, tz)),
+          tightenToday: tightenActive(config, now, tz),
+          weeklyQuota: wallConfig(config).weeklyQuota,
+        }
+      })(),
       speakerOf,
       config,
       facts,

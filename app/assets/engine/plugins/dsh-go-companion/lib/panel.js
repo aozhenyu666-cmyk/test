@@ -25,6 +25,12 @@ export function sistersView(_scope, caps = {}) {
       ],
     },
     { type: 'callout', text: b('state.text'), tone: b('state.tone') },
+    { type: 'text', text: '**墙（规则执行层）**', tone: 'muted' },
+    { type: 'callout', text: b('wall.text'), tone: b('wall.tone') },
+    { type: 'row', children: [
+      { type: 'metric', label: '本周放松额度', value: b('wall.quota'), tone: b('wall.quotaTone'), caption: b('wall.quotaCaption') },
+      { type: 'metric', label: '今天有没有修改', value: b('wall.today'), tone: b('wall.todayTone'), caption: b('wall.todayCaption') },
+    ] },
     { type: 'text', text: '**今日评分**' },
     { type: 'progress', label: '回应', value: b('scores.reply.value'), caption: b('scores.reply.caption'), tone: b('scores.reply.tone') },
     { type: 'progress', label: '守约', value: b('scores.keep.value'), caption: b('scores.keep.caption'), tone: b('scores.keep.tone') },
@@ -145,12 +151,17 @@ function timelineRow(e, names, speakerOf) {
     case 'block': return { title: '封禁：' + (e.apps || []).join('、'), subtitle: time + ' · 到 ' + hm(e.until) + (e.reason ? ' · ' + cut(e.reason, 40) : ''), icon: 'flag', tone: 'warn' }
     case 'kb-write': return { title: e.file === 'self' ? '鲸澜起草了 我.md（等你改）' : '鲸澜更新了 判断.md', subtitle: time, icon: 'note' }
     case 'gate-closed': return { title: (e.gates || []).includes('morning') ? '早上的 3 件事说完了，解锁' : '晚上对完账了，解锁', subtitle: time, icon: 'star', tone: 'good' }
+    case 'daily-plan': return { title: '早上定了 ' + (e.count || 0) + ' 件事（带完成物）', subtitle: time + (e.file ? ' · ' + String(e.file).split('/').slice(-2).join('/') : ''), icon: 'note' }
+    case 'daily-review': return { title: '对账：做完 ' + (e.done || 0) + ' / 一半 ' + (e.partial || 0) + ' / 没做 ' + (e.miss || 0) + '（共 ' + (e.total || 0) + '）', subtitle: time + (e.quotaDelta ? ' · 明天额度 ' + (e.quotaDelta > 0 ? '+' + e.quotaDelta : e.quotaDelta) + ' 天' : ''), icon: 'star', tone: e.quotaDelta > 0 ? 'good' : e.quotaDelta < 0 ? 'bad' : 'info' }
+    case 'relax-grant': return { title: '批了明天放松一段（' + (e.minutes || 0) + ' 分钟）', subtitle: time + (e.reason ? ' · ' + cut(e.reason, 50) : ''), icon: 'play', tone: 'good' }
+    case 'tighten': return { title: '收紧了：今天娱乐锁到零点', subtitle: time + (e.reason ? ' · ' + cut(e.reason, 50) : ''), icon: 'flag', tone: 'warn' }
+    case 'apply-window-open': return { title: '申请窗口开了（15 分钟）', subtitle: time + ' · 只能提明天的调整', icon: 'bell', tone: 'info' }
     default: return null
   }
 }
 
 /** 面板数据（纯函数，index.js 把读好的东西交进来）。 */
-export function buildSnapshot({ entries = [], todayEntries = [], trust, phone, names, speakerOf, config = {}, facts = [], commitments = [], gemini = {}, notesDir = '', now = Date.now() }) {
+export function buildSnapshot({ entries = [], todayEntries = [], trust, phone, names, speakerOf, config = {}, facts = [], commitments = [], gemini = {}, notesDir = '', wall = null, now = Date.now() }) {
   const scores = dayScores(todayEntries, phone, now)
   const state = []
   let tone = 'info'
@@ -184,8 +195,25 @@ export function buildSnapshot({ entries = [], todayEntries = [], trust, phone, n
   if (r) memory.push({ title: 'Gemini：' + String(r.summary).slice(0, 70), subtitle: (r.next ? '下一步：' + String(r.next).slice(0, 40) + ' · ' : '') + hm(r.at), icon: 'mic' })
   memory.push({ title: notesDir ? '笔记库：' + notesDir : '笔记库：还没找到（跟她们说一声在哪）', subtitle: notesDir ? 'Gemini 复盘写在 Gemini/ 下' : '', icon: 'folder' })
   if (!memory.length) memory.push({ title: '她们还没记住关于你的事', subtitle: '多聊几句', icon: 'book' })
+  // 墙（第二轮）：此刻锁/开、本周剩余放松额度、今天有没有修改（放松 / 收紧）。
+  const quota = Math.max(0, Math.round(Number(wall?.relaxRemaining) || 0))
+  const wallToday = wall?.tightenToday ? '收紧了' : wall?.relaxToday ? '放松中' : '没有'
+  const wallLine = !wall ? '墙还没上报（等下一次 /plan）'
+    : wall.locked
+      ? '现在锁着：' + (wall.kind === 'night' ? '深夜锁' : '默认严格') + (wall.applyWindowOpen ? ' · 申请窗口开着' : '')
+      : '现在开放' + (wall.openUntil ? '到 ' + hm(wall.openUntil) + ' UTC' : '') + (wall.applyWindowOpen ? ' · 申请窗口开着' : '')
   return {
-    summary: names.companion + '负责陪你闹、管住你，' + names.strategist + '负责看清局面、立任务、验收。两人共用一个信用分。',
+    wall: {
+      text: wallLine,
+      tone: !wall ? 'info' : wall.locked ? 'warn' : 'good',
+      quota: String(quota),
+      quotaTone: quota > 0 ? 'good' : 'warn',
+      quotaCaption: '本周最多 ' + (Number(wall?.weeklyQuota) || 3) + ' 天',
+      today: wallToday,
+      todayTone: wallToday === '没有' ? 'info' : 'warn',
+      todayCaption: wall?.applyWindowOpen ? '窗口开着：只能提明天' : '放松要等申请窗口',
+    },
+    summary: names.companion + '陪你聊、跟你闹；' + names.strategist + '早上定事、晚上对账。锁和放由墙按规则执行，两人共用一个信用分。',
     names,
     trust: { score: trust ? String(trust.score) : '—', tone: trust ? toneOf(trust.score) : 'info', caption: trust ? (trust.band === 'low' ? '低：她们不给豁免' : trust.band === 'high' ? '高：可以放风' : '中') : '' },
     grade: scores.grade,

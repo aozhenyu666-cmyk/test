@@ -119,10 +119,21 @@ export function relaxUsedThisWeek(config, now, tz) {
   return Math.max(0, Math.round(Number(q.used) || 0))
 }
 
-/** 本周还剩几天放松额度。 */
+/**
+ * 对账结果带来的当天额度增减（昨日对账 → 今天的额度）：全做完 +1、一件没做完 -1、一半 0。
+ * 只在 dailyQuota.for === 今天 时算数，过期自动失效（不累计）。
+ */
+export function relaxBonus(config, now, tz) {
+  const q = config && config.dailyQuota
+  if (!q || Number(q.for) !== dayKey(now, tz)) return 0
+  const d = Math.round(Number(q.delta) || 0)
+  return Math.max(-2, Math.min(2, d))
+}
+
+/** 本周还剩几天放松额度（含昨晚上对账挣到 / 扣掉的）。 */
 export function relaxRemaining(config, now, tz) {
   const w = wallConfig(config)
-  return Math.max(0, w.weeklyQuota - relaxUsedThisWeek(config, now, tz))
+  return Math.max(0, w.weeklyQuota + relaxBonus(config, now, tz) - relaxUsedThisWeek(config, now, tz))
 }
 
 /**
@@ -198,6 +209,16 @@ export function wallWhy(kind, { until, tz, tightened } = {}) {
     return '今天收紧了：娱乐锁到明天零点。收紧当天不放松；明天恢复默认规则。'
   }
   return '默认严格：现在不是吃饭/放风时段，娱乐锁着。到点自动开放；想多开一段，等今晚对账后的申请窗口找鲸澜（只能提前一天申请）。'
+}
+
+/**
+ * 违抗的收尾话：由墙按模板说，不经模型、不由姐姐出面（第二轮）。
+ * 只说他做了什么、现在是什么规则、到什么时候结束。
+ */
+export function wallDefianceText(label, until) {
+  const who = String(label || '').slice(0, 40) || '娱乐 App'
+  const at = Number(until) > 0 ? new Date(Number(until)).toISOString().slice(11, 16) + ' UTC' : '到点'
+  return '关掉提醒还在用' + who + '：墙按规则当场升级，娱乐锁到 ' + at + '。这是你清醒时定下的规则，聊天里改不了。'
 }
 
 /**
