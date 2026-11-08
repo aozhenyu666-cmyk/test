@@ -102,6 +102,17 @@ class DiagnosticsChannel {
       return const [];
     }
   }
+
+  /// The allowlisted engine and phone files (`engine/…`, `phone/…`), keyed by
+  /// their path inside the bundle. Capped natively; every string is redacted
+  /// again before it is written.
+  Future<Map<String, String>> engineFiles() async {
+    try {
+      return await channel.invokeMapMethod<String, String>('engineFiles') ?? const {};
+    } on MissingPluginException {
+      return const {};
+    }
+  }
 }
 
 final diagnosticsChannelProvider = Provider<DiagnosticsChannel>((ref) => const DiagnosticsChannel());

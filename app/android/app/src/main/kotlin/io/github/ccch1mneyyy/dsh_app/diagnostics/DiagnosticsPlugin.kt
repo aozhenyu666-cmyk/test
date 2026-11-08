@@ -26,6 +26,8 @@ import kotlin.concurrent.thread
  * - `engineLog {maxBytes}` → the last lines of the engine's log file (`dsh.log`, and the
  *   rotated `dsh.log.1` before it), which outlives the app process. Lines were already
  *   masked when written (`CrashClassifier.redact`); Dart masks them again.
+ * - `engineFiles` → the allowlisted engine and phone files a support bundle needs
+ *   (`EngineDiagnosticsFiles`), keyed by their path inside the archive.
  *
  * Nothing here reads user content, keys or tokens.
  */
@@ -52,6 +54,7 @@ class DiagnosticsPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                 val maxBytes = (call.argument<Int>("maxBytes") ?: DEFAULT_LOG_BYTES).coerceIn(1024, MAX_LOG_BYTES)
                 background(result) { engineLog(maxBytes) }
             }
+            "engineFiles" -> background(result) { EngineDiagnosticsFiles.collect(context) }
             else -> result.notImplemented()
         }
     }

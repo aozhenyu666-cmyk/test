@@ -1,10 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../diagnostics/diagnostics_export.dart';
 import '../../l10n/l10n.dart';
 import '../../proactive/proactive_state.dart';
 import '../common/app_sheet.dart';
+import '../common/brief_notice.dart';
 import '../common/list_page_row.dart';
 import '../shell/page_frame.dart';
 import '../theme/app_icons.dart';
@@ -45,6 +48,7 @@ class _ProactivePageState extends State<ProactivePage> {
   List<ProactiveReceipt> _receipts = const [];
   ProactiveAgentSessions _sessions = const ProactiveAgentSessions();
   Timer? _poll;
+  bool _exporting = false;
 
   @override
   void initState() {
@@ -69,6 +73,25 @@ class _ProactivePageState extends State<ProactivePage> {
       _receipts = receipts;
       _sessions = sessions;
     });
+  }
+
+  /// D1: one zip in Downloads with what a bug report needs (engine exits, the interaction ledger,
+  /// the companion config and module state, the accessibility watchdog log). No screen text.
+  Future<void> _exportDiagnostics() async {
+    if (_exporting) return;
+    setState(() => _exporting = true);
+    try {
+      final exporter = ProviderScope.containerOf(context, listen: false).read(diagnosticsExporterProvider);
+      final where = await exporter.saveToDownloads();
+      if (mounted) showBriefNotice(context, diagnosticsSavedText(where));
+    } catch (error) {
+      debugPrint('Diagnostics export failed: $error');
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(diagnosticsErrorText(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
   }
 
   /// Picks the session proactive turns go to. Only live sessions are offered; the plugin refuses a
@@ -547,6 +570,22 @@ class _ProactivePageState extends State<ProactivePage> {
             ],
           ),
         ],
+        const SizedBox(height: 24),
+        ListPageCard(
+          title: '诊断',
+          children: [
+            ListPageRow(
+              icon: AppIcons.download,
+              title: '导出诊断',
+              subtitle: _exporting ? '正在打包…' : '引擎退出、互动账本、配置、各模块状态和无障碍看门狗日志，打成一个 zip 存到「下载」',
+              subtitleMaxLines: 3,
+              trailing: _exporting
+                  ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : null,
+              onTap: _exporting ? null : () => unawaited(_exportDiagnostics()),
+            ),
+          ],
+        ),
         const SizedBox(height: 24),
         ListPageCard(
           title: l10n.proactiveReceipts,

@@ -45,6 +45,7 @@ class DiagnosticsSnapshot {
     this.engineLog = const [],
     this.failureLog = const [],
     this.appErrors = const [],
+    this.engineFiles = const {},
   });
 
   final DateTime at;
@@ -60,6 +61,11 @@ class DiagnosticsSnapshot {
   final List<String> engineLog;
   final List<String> failureLog;
   final List<AppErrorRecord> appErrors;
+
+  /// Engine and phone files, keyed by their path inside the bundle (`engine/…`,
+  /// `phone/…`): the ledger, the companion config, module state files, the
+  /// engine-exit log and the accessibility watchdog log.
+  final Map<String, String> engineFiles;
 }
 
 abstract final class DiagnosticsBundle {
@@ -163,6 +169,8 @@ abstract final class DiagnosticsBundle {
       if (s.engineLog.isNotEmpty) text('engine.log', log(s.engineLog)),
       if (s.failureLog.isNotEmpty) text('failure.log', log(s.failureLog)),
       if (s.appErrors.isNotEmpty) jsonFile('app-errors.json', s.appErrors.map((error) => error.toJson()).toList()),
+      for (final file in s.engineFiles.entries)
+        if (file.value.isNotEmpty) text(file.key, log(file.value.split('\n'))),
     ];
   }
 
@@ -210,5 +218,6 @@ Future<DiagnosticsSnapshot> collectDiagnostics(Ref ref, DateTime at) async {
     engineLog: engineLog,
     failureLog: failureLog,
     appErrors: appErrorLog.snapshot(),
+    engineFiles: await attempt(channel.engineFiles, const {}),
   );
 }
