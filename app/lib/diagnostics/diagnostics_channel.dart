@@ -113,6 +113,24 @@ class DiagnosticsChannel {
       return const {};
     }
   }
+
+  /// D2: whether every foreground change (package, activity, time) is being recorded.
+  Future<bool> foregroundDebug() async {
+    try {
+      return await channel.invokeMethod<bool>('foregroundDebug') ?? false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  /// Turns the foreground recorder on or off; returns the stored value.
+  Future<bool> setForegroundDebug(bool enabled) async {
+    try {
+      return await channel.invokeMethod<bool>('setForegroundDebug', {'enabled': enabled}) ?? enabled;
+    } on MissingPluginException {
+      return enabled;
+    }
+  }
 }
 
 final diagnosticsChannelProvider = Provider<DiagnosticsChannel>((ref) => const DiagnosticsChannel());
