@@ -5,10 +5,10 @@ import { MORNING_CAP_MS, MORNING_FROM, trackRhythm } from '../lib/rhythm.js'
 const NOW = Date.parse('2026-11-08T08:00:00+08:00')
 const tick = (min, extra = {}) => trackRhythm({}, { min, day: 1, now: NOW, screenOn: true, reviewedToday: false, ...extra })
 
-test('早上对线：5 点后第一次亮屏就开门，不再卡 10 点', () => {
-  assert.equal(MORNING_FROM, 5 * 60)
-  assert.equal(tick(4 * 60 + 59).openMorning, false, '5 点前不算')
-  assert.equal(tick(5 * 60).openMorning, true)
+test('早上对线：深夜锁结束（7 点）后第一次亮屏才开门', () => {
+  assert.equal(MORNING_FROM, 7 * 60)
+  assert.equal(tick(6 * 60 + 59).openMorning, false, '7 点前还在深夜锁里，不算')
+  assert.equal(tick(7 * 60 + 1).openMorning, true, '7:01 第一次亮屏开')
   assert.equal(tick(10 * 60).openMorning, true, '10 点以后也算')
   assert.equal(tick(11 * 60 + 59).openMorning, true)
 })

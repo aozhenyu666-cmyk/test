@@ -6,7 +6,8 @@
 // 晚上：21:30 鲸澜对账（今天做了什么、手机花在哪、明天封什么），没对完娱乐锁着，最多 60 分钟。
 // 时间都按他手机的当地时间。
 
-export const MORNING_FROM = 5 * 60
+// 早上：深夜锁一结束（7:00）后的第一次亮屏才开门；整夜锁着，早上不另开一扇窗。
+export const MORNING_FROM = 7 * 60
 export const MORNING_TO = 12 * 60
 export const MORNING_CAP_MS = 30 * 60_000
 export const LATE_FROM = 23 * 60 + 30
