@@ -73,9 +73,17 @@ jobs:
               addFirst(repo)
           }
           beforeSettings { pluginManagement.repositories.preferCiMirror() }
+          // Flutter 自带的 Gradle 工程要求下载源只在 settings 里统一配置（往子工程加会报错，run 42572727168），
+          // 那种工程就加到 settings 里，不碰子工程。
+          settingsEvaluated {
+              val central = dependencyResolutionManagement.repositoriesMode.get() != RepositoriesMode.PREFER_PROJECT
+              gradle.extensions.extraProperties.set("ciMirrorCentral", central)
+              if (central) dependencyResolutionManagement.repositories.preferCiMirror()
+          }
           allprojects {
               buildscript.repositories.preferCiMirror()
-              repositories.preferCiMirror()
+              val central = gradle.extensions.extraProperties.let { it.has("ciMirrorCentral") && it.get("ciMirrorCentral") == true }
+              if (!central) repositories.preferCiMirror()
           }
           EOF
           # 先把 wrapper 本体下好，下载失败就等一会儿重来，最多 4 次。
