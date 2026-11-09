@@ -169,20 +169,21 @@ test('忙完：妹妹来迎接一次；"忙完了"提前收工也关掉拒绝模
   })
 })
 
-test('第四轮 R4-2：两姐妹工具完全一致，帮忙和收紧的全有，当场放松的一个没有，过关交给墙', async () => {
+test('第四轮 R4-2：两姐妹工具完全一致，帮忙和收紧的全有，过关交给墙', async () => {
   await withHome(async (home) => {
     const t = setup(home)
-    // 当场放松、自己判过关的工具不给：grant_break / end_task_mode / submit_verdict / daily_*。
+    // 第四轮补：用户决定把这五个也放开——裁决、当场放风、验收任务、定事、对账。
+    // 墙的权限不低于这些：submit_to_wall 仍然只认物理证据。
     for (const name of ['grant_break', 'end_task_mode', 'submit_verdict', 'daily_plan', 'daily_review']) {
-      assert.equal(t.sis.tools[name], undefined, '妹妹不该有 ' + name)
-      assert.equal(t.big.tools[name], undefined, '姐姐不该有 ' + name)
+      assert.ok(t.sis.tools[name], '妹妹该有 ' + name)
+      assert.ok(t.big.tools[name], '姐姐该有 ' + name)
     }
     assert.deepEqual(Object.keys(t.sis.tools).sort(), Object.keys(t.big.tools).sort())
     for (const name of ['submit_to_wall', 'dafeiyu_control', 'start_task_mode', 'block_apps', 'tighten_today', 'request_relax',
       'notes_vault', 'vault_search', 'vault_recent_notes', 'gemini_live', 'gemini_end', 'gemini_log', 'schedule_gemini_live']) {
       assert.ok(t.sis.tools[name] && t.big.tools[name], '两边都有 ' + name)
     }
-    // dafeiyu_control 只能收紧：没有回到闲时、关拒绝、切温和。
+    // dafeiyu_control 还是只管收紧那一组：放松走 grant_break / request_relax，不在这个开关里。
     assert.deepEqual(t.big.tools.dafeiyu_control.parameters.properties.action.enum.sort(), ['busy', 'mute', 'refuse', 'strict'])
   })
 })

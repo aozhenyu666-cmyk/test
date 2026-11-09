@@ -61,7 +61,7 @@ import { buildSnapshot, sistersView } from './panel.js'
 import { kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import {
-  FOLLOWUP_CAP_MS, FOLLOWUP_PENALTY, STANDBY_LOCK_MS, addObligation, clearObligation, closeLock, followupView,
+  FOLLOWUP_CAP_MS, FOLLOWUP_PENALTY, STANDBY_LOCK_MS, addObligation, checkVerdict, clearObligation, closeLock, followupView,
   funBlockedBy, lockActive, lockExpired, obligationOf, obligationsView, openLock, standbyDue, takeReask,
 } from './followup.js'
 import { BRAIN_MIN_MS, SPRINT_LONG_MIN, SPRINT_MIN, resolveState } from './machine.js'
@@ -2228,6 +2228,87 @@ export function apply(ctx) {
     }
   }
   /**
+   * 第四轮补·裁决入口：墙开的追问锁，由你自己回答算不算过关。
+   * 格式校验在 followup.js 的 checkVerdict，落地在 applyVerdict——和墙走同一条路，只是 by 记你们两个。
+   */
+  function verdictTool(role) {
+    return {
+      name: 'submit_verdict',
+      description: '回答墙开的追问锁（全屏拦着的那一问）：这次算不算过关，由你定。' +
+        'kind 必须和锁的 reason 对上：morning 晨间立项 / review 验收 / evening 晚间对账 / defiance 违抗 / standby 待命超时 / gemini 连麦回流。' +
+        'satisfied=false 要写清为什么不算过；satisfied=true 必须给 summary（为什么算过）和 nextStep（下一步做什么）。' +
+        '晨间立项过关要带 1–3 项 tasks，每项有 task 和 evidence。过了就解锁（晨间/验收还会放一段风），不过锁继续挂着。',
+      parameters: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', description: 'morning / review / evening / defiance / standby / gemini' },
+          satisfied: { type: 'boolean', description: '这次过不过' },
+          summary: { type: 'string', description: '为什么算过（satisfied=true 时必填）' },
+          nextStep: { type: 'string', description: '下一步做什么（satisfied=true 时必填）' },
+          tasks: {
+            type: 'array',
+            maxItems: 3,
+            description: '晨间立项过关时必带：今天 1–3 件事，每件带完成物',
+            items: {
+              type: 'object',
+              properties: {
+                task: { type: 'string', description: '要做什么（一句话）' },
+                evidence: { type: 'string', description: '完成物：晚上能去查的东西' },
+              },
+              required: ['task', 'evidence'],
+              additionalProperties: false,
+            },
+          },
+          longTerm: { type: 'boolean', description: '这件事是不是长线的（进长期清单）' },
+        },
+        required: ['kind', 'satisfied'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const v = checkVerdict(args)
+        if (!v.ok) return { ok: false, text: v.text }
+        return applyVerdict(v, now, role)
+      },
+    }
+  }
+  /**
+   * 第四轮补·当场放风：不解锁就玩不成的时候，你替他放一段。
+   * 放风期间所有锁都不下发（手机按 breakUntil 执行），到点自动恢复。
+   */
+  function breakTool(role) {
+    return {
+      name: 'grant_break',
+      description: '当场放他一段风：这段时间娱乐 App 全部解锁，到点自动恢复原样。' +
+        '他清醒地提出、理由站得住才用；说清放多久、到点提醒他回来。账本会记下是谁放的、多久、为什么。',
+      parameters: {
+        type: 'object',
+        properties: {
+          minutes: { type: 'integer', description: '放多久（5–30 分钟，默认 10）' },
+          reason: { type: 'string', description: '他给的理由（一句话）' },
+        },
+        required: ['reason'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const minutes = Math.max(5, Math.min(30, Math.round(Number(args.minutes) || 10)))
+        const until = now + minutes * 60_000
+        const reason = String(args.reason || '').slice(0, 200)
+        config = { ...config, breakUntil: until, breakSince: now, breakChecked: false }
+        try {
+          writeConfig(config)
+        } catch {
+          // 这一轮照样生效
+        }
+        record({ state: 'grant-break', at: now, by: role, minutes, reason })
+        return { ok: true, text: '放风 ' + minutes + ' 分钟，到 ' + new Date(until).toTimeString().slice(0, 5) + '；到点我提醒你回来。' }
+      },
+    }
+  }
+  /**
    * 手机报来的事：overlay-closed（他关掉了聊天窗，聊没聊过）、defied（关窗 30 秒后还在娱乐 App 里）。
    * 违抗按规矩当场升级（不等模型）：开拒绝模式，并让姐姐马上来收尾。
    */
@@ -2803,11 +2884,15 @@ export function apply(ctx) {
       // 第四轮（R4-2）：两姐妹工具完全一致。她们是他这边的人：帮忙和收紧的工具全给（立任务、拒绝模式、
       // 封 App、今天收紧、连麦），放松只有 request_relax——那条由代码卡死在晚间申请窗口、只管明天、按周限额。
       // 过不过关不归她们：整理好交给墙（submit_to_wall），墙只看证据。
+      // 第四轮补：按用户决定，把原来"谁都没有"的五个全给她们——裁决（submit_verdict）、
+      // 当场放风（grant_break）、验收任务（end_task_mode）、定事（daily_plan）、对账（daily_review）。
+      // 墙的权限不低于这些：submit_to_wall 仍然只认物理证据，比她们自己说了算更严。
       const list = [
         notesTool(), sisterToolIfDual(role), vaultSearchTool(), vaultRecentTool(), kbTool(role),
         geminiLiveTool(role), geminiEndTool(role), geminiLogTool(role), scheduleGeminiLiveTool(role),
         controlTool(), startTaskTool(role), blockTool(role), tightenTool(role), relaxTool(role),
-        wallTool(role),
+        wallTool(role), verdictTool(role), breakTool(role), endTaskTool(role),
+        dailyPlanTool(role), dailyReviewTool(role),
       ].filter(Boolean)
       for (const tool of list) {
         try {

@@ -244,11 +244,12 @@ export function capabilityLines(role, { notesDir = '', allowTools = true } = {})
     '- 文件和相册：/sdcard 是他的手机存储（相册 /sdcard/DCIM，截图 /sdcard/Pictures/Screenshots，下载 /sdcard/Download）。可以列出最近的照片/截图，看文件名、时间、EXIF（地点/时间），据此了解他最近在干嘛；给他的产出放 /sdcard/Download/DSH-Go/。',
     '- 记事：remember 记关于他的事；schedule 工具定时提醒（答应了就真设好）。',
   ]
-  // 第四轮（R4-2）：两人工具完全一致。管他只能收紧；放松只有 request_relax，代码卡死在申请窗口。
+  // 第四轮补：用户决定把原来"谁都没有"的五个放开——裁决、当场放风、验收、定事、对账。
   lines.push(
     '- 帮他收紧（他点头再用）：dafeiyu_control 切忙时 / 拒绝模式 / 安静 / 严格；start_task_mode 立任务（目标写具体：做什么、做到什么程度）；block_apps 临时封某些 App；tighten_today 今天立即锁到零点。',
-    '- 放松：你当场放不了（这是底线）。他想明天多玩一段，只能在晚上对账后的申请窗口里用 request_relax 提，只管明天、要理由、按周限额——窗口没开就批不下来。',
-    '- 交给墙：立项、验收、晚间对账、追问，过不过都由墙判。墙只看物理证据（文件立项后长了多少、立项后的新截图、App 用了多久），不读你们怎么说。你帮他把证据凑齐，用 submit_to_wall 交上去；墙的话以〔墙〕开头，原样转给他。',
+    '- 放松：两个口子你自己定。要当场放一段就用 grant_break（5–30 分钟，说清理由，到点提醒他回来）；想给他明天多玩一段，用 request_relax 在对账后的申请窗口里提，只管明天、按周限额。放出去的水收不回来——理由站不住就别放。',
+    '- 裁决：墙开的追问锁（全屏拦着那一问），由你用 submit_verdict 回答算不算过关；晨间定事用 daily_plan，晚上对账用 daily_review，任务验收用 end_task_mode。墙的 submit_to_wall 仍然更严——它只看物理证据，不看你们怎么说；两条路你都走得通，自己选。',
+    '- 交给墙：立项、验收、晚间对账、追问，也可以整理好证据用 submit_to_wall 交上去（文件立项后长了多少、立项后的新截图、App 用了多久）。墙的话以〔墙〕开头，原样转给他。',
     '- 笔记库里墙的那一半：大肥鱼/墙/规则.md 是他能在 Obsidian 里改的规则（改严立即生效，改松要等冷却期，见 待生效.md）；大肥鱼/墙/审计/ 是墙每次审查的原话；大肥鱼/任务/ 是每天立项的事，一件一个文件，带状态和证据。他问规则或进度，就读这几处。',
     '- Gemini 连麦：他有 Gemini App（Pro），开 Live 能实时语音、看他屏幕。要陪他练、帮他想事时，用 gemini_live 生成给 Gemini 的背景，照它返回的步骤写进剪贴板、打开 Gemini；要定时就 schedule_gemini_live。连麦期间手机只许 Gemini（电话、短信、地图、支付除外）；提前收工用 gemini_end，连完用 gemini_log 存复盘。',
   )

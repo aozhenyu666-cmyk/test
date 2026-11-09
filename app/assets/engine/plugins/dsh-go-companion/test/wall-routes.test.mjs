@@ -155,17 +155,31 @@ test('/wall tighten：立即锁今天，status 显示收紧', async () => {
   })
 })
 
-test('第四轮 R4-2：聊天里放不了——request_relax 和手机端 /wall 一样卡在申请窗口，grant_break 不存在', async () => {
+test('第四轮补：request_relax 仍卡在申请窗口；grant_break 现在给了，当场放得开', async () => {
   await withHome(async (home) => {
     const t = setup(home)
     await t.plan({ app: 'com.game', fun: true, screenOn: true, local: '15:00' })
-    for (const role of [t.big, t.sis]) assert.equal(role.tools.grant_break, undefined, 'grant_break 不给')
-    // 下午窗口没开：姐妹替他提也批不下来，和手机端同一个口子。
+    // 明天那段还是只能走窗口：下午窗口没开，姐妹替他提也批不下来。
     const viaTool = t.big.tools.request_relax.execute({ atHour: 20, minutes: 60, reason: '周末想放松一下' })
     assert.equal(viaTool.ok, false, viaTool.text)
     const r = await t.wall({ action: 'relax', atHour: 20, minutes: 60, reason: '周末想放松一下' })
     assert.equal(r.body.ok, false)
     assert.equal(r.body.error.code, 'no-window')
+    // 当场那段：grant_break 给了，两边都能放，放完 config 里 breakUntil 在、锁不下发。
+    for (const role of [t.big, t.sis]) assert.ok(role.tools.grant_break, 'grant_break 给两姐妹')
+    const broke = t.sis.tools.grant_break.execute({ minutes: 10, reason: '刚考完试想歇一会儿' })
+    assert.equal(broke.ok, true, broke.text)
+    const saved = JSON.parse(readFileSync(join(home, 'companion', 'config.json'), 'utf8'))
+    assert.ok(saved.breakUntil > Date.now() + 9 * 60_000, JSON.stringify(saved.breakUntil))
+    // 放风期间再刷游戏：不锁。
+    const p = await t.plan({ app: 'com.game', fun: true, screenOn: true, local: '15:00' })
+    assert.equal(p.body.refuse, null, '放风盖过拒绝模式')
+    assert.ok(p.body.force.level < 3, '放风期间不锁')
+    // 上限 30 分钟，超了压回来。
+    const long = t.sis.tools.grant_break.execute({ minutes: 999, reason: '再玩一会儿' })
+    const saved2 = JSON.parse(readFileSync(join(home, 'companion', 'config.json'), 'utf8'))
+    assert.ok(saved2.breakUntil <= Date.now() + 30 * 60_000 + 5_000, '单次最多 30 分钟')
+    assert.equal(long.ok, true)
   })
 })
 
