@@ -93,6 +93,8 @@ interface AgentEnv {
     suspend fun sendToYishou(actionKey: String): String
     /** 总控时间进行中时：当前环节和要求（空 = 没在总控时间里）。 */
     fun sessionContext(): String = ""
+    /** 公审底牌：《全局战略底线表》、熔断、没查账的执行令、行测五步进度。 */
+    fun court(): String = ""
 
     /** 进入总控时间（参谋觉得你该停下来修一修了）。 */
     fun startHq(minutes: Int): String = "这个环境进不了总控时间"

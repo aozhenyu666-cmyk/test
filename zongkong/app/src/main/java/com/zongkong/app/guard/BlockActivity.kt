@@ -229,6 +229,11 @@ private fun StrictBody(
                     Button(onClick = { openRoute("start/${r.actionKey}") }, colors = ButtonDefaults.buttonColors(containerColor = sig.strict), modifier = Modifier.fillMaxWidth()) { Text("现在开始") }
                     OutlinedButton(onClick = { openRoute("action/${r.actionKey}") }, modifier = Modifier.fillMaxWidth()) { Text("改时间 / 标卡住") }
                 }
+                is Reason.Fuse -> Panel(accent = sig.strict, onClick = { openRoute("drill") }) {
+                    Text("熔断：行测五步连续 ${r.zeroDays} 天挂零", style = MaterialTheme.typography.titleMedium)
+                    Hint("统筹规划部的熔断：核心训练挂零两天，娱乐先关。今天再做 ${r.needToday} 道行测五步（精简、预判、联想、提问、回想）就解开。")
+                    Button(onClick = { openRoute("drill") }, colors = ButtonDefaults.buttonColors(containerColor = sig.strict), modifier = Modifier.fillMaxWidth()) { Text("去做行测五步") }
+                }
                 is Reason.Quota -> Panel(accent = sig.strict) {
                     Text("今天的娱乐额度用完了", style = MaterialTheme.typography.titleMedium)
                     Text("已用 ${r.usedMin} 分钟，上限 ${r.limitMin} 分钟。明天凌晨 4 点重置。", style = MaterialTheme.typography.bodyMedium.merge(Mono))

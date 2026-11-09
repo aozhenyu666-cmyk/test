@@ -275,6 +275,8 @@ private fun AppNav(nav: NavHostController, pendingRoute: androidx.compose.runtim
                 composable("directive/{id}") { e -> DirectiveDetailScreen(e.arguments?.getString("id").orEmpty(), nav) }
                 composable("hq") { HqScreen(nav) }
                 composable("settings/hq") { HqSettingsScreen(nav) }
+                composable("court") { CourtScreen(nav) }
+                composable("drill") { DrillScreen(nav) }
                 composable("dossier") { DossierScreen(nav) }
                 composable("vein") { VeinScreen(nav) }
                 composable("vein/capture") { VeinCaptureScreen(nav) }

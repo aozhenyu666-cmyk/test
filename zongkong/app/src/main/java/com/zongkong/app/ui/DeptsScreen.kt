@@ -95,7 +95,8 @@ fun DeptsScreen(nav: NavHostController) {
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        ScreenTitle("四个部门", "一件事从收到做完，依次经过四个部门。每个部门一页，只放它自己的事。", Modifier.enter(0))
+        ScreenTitle("四个部门", "一条流水线：收 → 谋 → 筹 → 行，上一环没过，下一环不放行。每天的总控时间就是一次公审。", Modifier.enter(0))
+        CourtCard(nav)
         FOUR.chunked(2).forEachIndexed { row, pair ->
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 pair.forEachIndexed { i, d ->
@@ -780,4 +781,30 @@ private fun ActPart(work: Work, now: Long, status: com.zongkong.core.Status, nav
         Hint("被弹回 ${app.store.today.value.bounces} 次 · 拦截名单 ${app.store.config.value.blocked.size} 个应用（点开管理、紧急放行）")
     }
     Spacer(Modifier.height(2.dp))
+}
+
+/** 四部页最上面：公审的底牌（底线表倒计时、熔断、今天的行测五步、待查的执行令）。 */
+@Composable
+private fun CourtCard(nav: NavHostController) {
+    val app = LocalContext.current.zk
+    val sig = LocalSignals.current
+    val now = rememberNow(60_000)
+    val b by app.store.court.collectAsStateWithLifecycle()
+    val today = DayClock.dateKey(now, app.store.zone)
+    val fuse = remember(b, today) { app.store.fuse(now) }
+    val left = com.zongkong.core.court.Court.daysLeft(b, today)
+    Panel(accent = if (fuse != null) sig.strict else sig.hq, pulse = fuse != null, onClick = { nav.navigate("court") }, modifier = Modifier.enter(1).testTag("court-card")) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("公审档案", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            left?.takeIf { it >= 0 }?.let { Text("笔试还剩 $it 天", style = MaterialTheme.typography.labelLarge, color = sig.strict) }
+        }
+        if (!b.baseline.ready) Text("《全局战略底线表》还没填：前线死令 + 退路底牌", style = MaterialTheme.typography.bodyMedium, color = sig.warn)
+        else Text("前线死令：${b.baseline.frontline}", style = MaterialTheme.typography.bodyMedium)
+        fuse?.let { Text(it.text, style = MaterialTheme.typography.bodySmall, color = sig.strict) }
+        com.zongkong.core.court.Court.openOrder(b)?.let { Hint("待查执行令：${it.text}") }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            BigButton("行测五步 ${com.zongkong.core.court.Court.drillsOn(b, today)}/${com.zongkong.core.court.Court.DAILY_DRILLS}", { nav.navigate("drill") }, Modifier.weight(1f), color = sig.act)
+            BigButton("总控时间", { nav.navigate("hq") }, Modifier.weight(1f), color = sig.hq)
+        }
+    }
 }

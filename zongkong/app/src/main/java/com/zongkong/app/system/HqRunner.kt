@@ -98,6 +98,7 @@ object HqRunner {
 
         boss(context, now, minute)
         playbook(context, now)
+        court(context, now, minute)
 
         if (!cfg.proactive) return
 
@@ -125,6 +126,48 @@ object HqRunner {
                 fallback = "下午了，「${main.title}」还没开始。现在开始，还是拆一步？",
             )
             Buzz.once(context, Buzz.Level.FIRM)
+        }
+    }
+
+    /**
+     * 公审（行为管理部 · 统筹规划部）：
+     *  - 微习惯点名：早上第一条消息后、总控时间前一小时，各点一次名（通知 + 念出来）；
+     *  - 执行令到点：问一句做了没有；
+     *  - 熔断：上午告诉你娱乐为什么关着。
+     */
+    private fun court(context: Context, now: Long, minute: Int) {
+        val app = context.zk
+        val store = app.store
+        val config = store.config.value
+        val b = store.court.value
+        val today = DayClock.dateKey(now, store.zone)
+        val loud = !Hq.quiet(config.hq, now, store.zone)
+        val roll = "现在停下看一眼：" + b.habits.joinToString("？") { it.label.removeSuffix("吗").removeSuffix("？") } + "？看完点开确认。"
+        val am = config.hq.morningAt
+        val pm = config.hq.at - 60
+        if (!com.zongkong.core.court.Court.habitsDone(b, today)) {
+            val slot = when {
+                minute in am until am + 120 -> "habit-am"
+                minute in pm until pm + 50 -> "habit-pm"
+                else -> null
+            }
+            if (slot != null && store.firstAlert(slot)) {
+                Notifications.alert(context, "30 秒点名", roll, "court")
+                Buzz.once(context, Buzz.Level.FIRM)
+                if (loud) Voice.speak(context, roll)
+            }
+        }
+        com.zongkong.core.court.Court.openOrder(b)?.let { o ->
+            if (now >= o.dueAt && store.firstAlert("order-due:${o.id}")) {
+                Notifications.alert(context, "执行令到点了", "「${o.text}」做了没有？晚上总控时间一开场查账。", "court")
+                Buzz.once(context, Buzz.Level.FIRM)
+            }
+        }
+        store.fuse(now)?.let { f ->
+            if (minute >= 9 * 60 && store.firstAlert("fuse")) {
+                Notifications.alert(context, "熔断：行测连续 ${f.zeroDays} 天挂零", "娱乐先关着。今天做 ${f.needToday} 道行测五步就解开。", "drill")
+                Buzz.once(context, Buzz.Level.FIRM)
+            }
         }
     }
 

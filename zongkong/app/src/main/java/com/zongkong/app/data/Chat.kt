@@ -168,6 +168,14 @@ class ChatRepo(private val context: Context, private val store: Store, private v
             update { it.copy(campaign = "", campaignTopic = "", campaignAt = 0, campaignLog = (it.campaignLog + line).takeLast(10)) }
             return "「${c.title}」收尾了。"
         }
+        override fun court(): String {
+            val b = store.court.value
+            val now = System.currentTimeMillis()
+            val since = if (b.since > 0) com.zongkong.core.DayClock.dateKey(b.since, store.zone) else null
+            return com.zongkong.core.court.Court.brief(b, com.zongkong.core.DayClock.dateKey(now, store.zone), since) { t ->
+                java.time.Instant.ofEpochMilli(t).atZone(store.zone).let { "%d月%d日 %02d:%02d".format(it.monthValue, it.dayOfMonth, it.hour, it.minute) }
+            }
+        }
         override fun sessionContext(): String {
             val h = store.hq.value.active ?: return ""
             val st = h.current

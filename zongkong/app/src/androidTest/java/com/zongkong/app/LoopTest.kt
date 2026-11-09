@@ -86,6 +86,7 @@ class LoopTest {
         app.store.updateDossier { com.zongkong.core.boss.Dossier() }
         app.store.updateVein { com.zongkong.core.vein.Vein() }
         app.store.updateIntake { com.zongkong.core.info.IntakeBook() }
+        app.store.updateCourt { com.zongkong.core.court.CourtBook(since = System.currentTimeMillis()) }
         app.store.touch()
         gpt = NotionClient({ "secret_gpt" }, base = sim.baseUrl)
         val msg = runBlocking { app.actions.work.setup(sim.rootPage) }
@@ -516,8 +517,9 @@ class LoopTest {
     }
 
     /**
-     * 总控时间：进入 → 静 → 收（清收集箱）→ 谋（没接 AI：四问自己憋）→ 筹（定明天主线）→ 行（对账）→ 封。
-     * 进行中按返回键不走；封存后记一条验收记录、解锁。
+     * 总控时间（公审）：进入 → 静·查账 → 收·分流（清收集箱 + 精简一句）→ 谋·对底线（底线表、临时起意、四问）
+     * → 筹（定明天主线）→ 行·三层矫正（微习惯点名、踩坑交代）→ 封·签执行令。
+     * 进行中按返回键不走、没有退出按钮；封存后记一条验收记录、签下执行令、解锁。
      */
     @Test
     fun hqSession() {
@@ -545,11 +547,30 @@ class LoopTest {
         next("收")
         waitFor(hasTestTag("triage-card"), 5_000, "收集箱卡片")
         shot("e2e-42-hq-triage")
+        // 没有退出按钮
+        assertTrue(compose.onAllNodes(hasText("紧急退出")).fetchSemanticsNodes().isEmpty())
         compose.onAllNodes(hasText("国考行测"))[0].performScrollTo().performClick()
         waitText("收集箱清空了", 5_000)
         assertEquals(thread, app.store.work.value.notes().first { it.title == "资料分析速算文章" }.threadKey)
+        // 清空了还不够：要把脑子里最占地方的事精简成一句话、分进槽位
+        fastForward()
+        assertTrue(compose.onAllNodes(hasTestTag("hq-next") and androidx.compose.ui.test.isEnabled()).fetchSemanticsNodes().isEmpty())
+        compose.onNodeWithTag("triage-line").performScrollTo().performTextInput("想重写长流的界面")
+        hideKeyboard()
+        compose.onNodeWithTag("line-slot-ESCAPE").performScrollTo().performClick()
+        compose.onNodeWithTag("line-save").performScrollTo().performClick()
+        waitText("已分流", 5_000)
+        assertTrue(app.store.court.value.sorted.any { it.slot == com.zongkong.core.court.Slot.ESCAPE && it.line == "想重写长流的界面" })
 
         next("谋")
+        // 先写死底线表，再审今天的临时起意，才轮到挑一件来想
+        waitFor(hasTestTag("baseline-front"), 5_000, "底线表")
+        compose.onNodeWithTag("baseline-front").performScrollTo().performTextInput("每天 5 道行测五步")
+        compose.onNodeWithTag("baseline-f1").performScrollTo().performTextInput("国企文员")
+        hideKeyboard()
+        compose.onNodeWithTag("baseline-save").performScrollTo().performClick()
+        waitFor(hasTestTag("impulse-none"), 5_000, "临时起意审查")
+        compose.onNodeWithTag("impulse-none").performScrollTo().performClick()
         waitFor(hasTestTag("think-topic-0"), 5_000, "挑一件来想")
         shot("e2e-43-hq-think-pick")
         compose.onNodeWithTag("think-topic-0").performScrollTo().performClick()
@@ -573,6 +594,9 @@ class LoopTest {
         assertTrue(com.zongkong.core.plan.Plans.day(app.store.plans.value, tomorrow)?.mainActionKey?.isNotBlank() == true)
 
         next("行")
+        // ① 微习惯点名（三条都要确认）② 今天的坑交代清楚
+        repeat(3) { i -> compose.onNodeWithTag("habit-$i").performScrollTo().performClick() }
+        compose.onNodeWithTag("slip-none").performScrollTo().performClick()
         compose.onNodeWithTag("ledger-none").performScrollTo().performClick()
         settle()
         shot("e2e-46-hq-ledger")
@@ -581,6 +605,11 @@ class LoopTest {
         settle()
         shot("e2e-47-hq-seal-early")
         fastForward(whole = true)
+        // 没签执行令封不了
+        assertTrue(compose.onAllNodes(hasTestTag("hq-seal") and androidx.compose.ui.test.isEnabled()).fetchSemanticsNodes().isEmpty())
+        compose.onNodeWithTag("order-text").performScrollTo().performTextInput("打开行测言语理解做 5 道题")
+        hideKeyboard()
+        compose.onNodeWithTag("order-due-1").performScrollTo().performClick()
         waitFor(hasTestTag("hq-seal") and androidx.compose.ui.test.isEnabled(), 5_000, "可以封存")
         compose.onNodeWithTag("hq-seal").performClick()
         waitText("手机解锁了", 15_000)
@@ -590,6 +619,7 @@ class LoopTest {
         val s = app.store.hq.value.sessions.last()
         assertTrue(!s.early && s.endedAt > 0)
         assertTrue(s.notes["INFO"].orEmpty().contains("处理 1 条"))
+        assertEquals("打开行测言语理解做 5 道题", com.zongkong.core.court.Court.openOrder(app.store.court.value)?.text)
         assertTrue(app.store.work.value.notes().any { it.noteType == com.zongkong.core.work.NoteType.REVIEW && it[F.RAW].contains("总控时间") })
     }
 

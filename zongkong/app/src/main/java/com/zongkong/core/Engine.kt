@@ -64,6 +64,11 @@ sealed class Reason {
         override val text: String get() = "「$title」过了点还没开始：开始做，或者改个时间"
     }
 
+    /** 熔断：行测五步训练连续两天挂零，今天做够才解开。 */
+    data class Fuse(val zeroDays: Int, val needToday: Int) : Reason() {
+        override val text: String get() = "行测五步训练连续 $zeroDays 天挂零：熔断中，今天再做 $needToday 道才解开"
+    }
+
     /** 正在做一步行动，开了专注锁。 */
     data class Focus(val title: String, val until: Long) : Reason() {
         override val text: String get() = "正在做「$title」，专注锁开着"
@@ -112,6 +117,8 @@ object Engine {
         earned: Int? = null,
         /** 过了点还没开始的那一步（行动键 to 标题）；null = 没欠。 */
         debt: Pair<String, String>? = null,
+        /** 公审的熔断；null = 没熔断。 */
+        fuse: com.zongkong.core.court.Court.Fuse? = null,
     ): Status {
         val date = DayClock.date(now, zone)
         val weekday = date.dayOfWeek.value
@@ -163,6 +170,7 @@ object Engine {
             if (playMin >= allowed) reasons += Reason.Budget(playMin, allowed)
         }
         if (debt != null) reasons += Reason.Debt(debt.first, debt.second)
+        if (fuse != null) reasons += Reason.Fuse(fuse.zeroDays, fuse.needToday)
 
         if (lock != null && lock.until > now) reasons += Reason.Focus(lock.title, lock.until)
 

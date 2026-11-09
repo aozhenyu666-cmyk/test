@@ -14,7 +14,7 @@ import com.zongkong.core.work.WorkOps
 import java.time.Instant
 import kotlin.random.Random
 
-/** 总控时间的操作：进入、下一环节、回去再修、结束、紧急退出。 */
+/** 总控时间的操作：进入、下一环节、回去再修、结束。（界面上没有退出；exitEarly 只给超时兜底和调试用。） */
 class HqActions(private val context: Context, private val store: Store, private val actions: Actions) {
     private fun now() = System.currentTimeMillis()
 
@@ -75,7 +75,7 @@ class HqActions(private val context: Context, private val store: Store, private 
         }
     }
 
-    /** 紧急退出：要写原因（至少 6 个字），记下来。返回错误说明，成功返回 null。 */
+    /** 提前结束：只给守护服务的超时兜底和调试广播用，界面上没有入口。要写原因（至少 6 个字）。返回错误说明，成功返回 null。 */
     fun exitEarly(reason: String): String? {
         val s = active() ?: return null
         if (reason.trim().length < 6) return "写清楚为什么要现在退出（至少 6 个字）"

@@ -239,6 +239,30 @@ class Store(private val context: Context) {
         next
     }
 
+    // ---------- 公审（四部门流水线：底线表、执行令、微习惯、防错规避库、行测五步） ----------
+
+    private val _court = MutableStateFlow(
+        loadJson("court.json", com.zongkong.core.court.CourtBook.serializer()) ?: com.zongkong.core.court.CourtBook(since = System.currentTimeMillis()),
+    )
+    val court: StateFlow<com.zongkong.core.court.CourtBook> = _court.asStateFlow()
+
+    fun updateCourt(f: (com.zongkong.core.court.CourtBook) -> com.zongkong.core.court.CourtBook): com.zongkong.core.court.CourtBook = synchronized(workLock) {
+        val next = f(_court.value).let { if (it.since == 0L) it.copy(since = System.currentTimeMillis()) else it }
+        if (next != _court.value) {
+            _court.value = next
+            val text = ZkJson.encodeToString(com.zongkong.core.court.CourtBook.serializer(), next)
+            io.execute { writeAtomic(File(dir, "court.json"), text) }
+        }
+        next
+    }
+
+    /** 公审的熔断（行测五步连续两天挂零）。 */
+    fun fuse(now: Long = System.currentTimeMillis()): com.zongkong.core.court.Court.Fuse? {
+        val b = _court.value
+        val since = if (b.since > 0) DayClock.dateKey(b.since, zone) else null
+        return com.zongkong.core.court.Court.fuse(b, DayClock.dateKey(now, zone), since)
+    }
+
     private fun <T> loadJson(name: String, ser: kotlinx.serialization.KSerializer<T>): T? {
         val f = File(dir, name)
         if (!f.exists()) return null
@@ -369,7 +393,7 @@ class Store(private val context: Context) {
         val c = _config.value
         val earned = if (c.earn.enabled) com.zongkong.core.plan.Earn.earned(_work.value, now, zone, c.earn) else null
         val debt = if (c.earn.enabled) com.zongkong.core.plan.Earn.debt(_work.value, _plans.value, now, zone, c.earn)?.let { it.key to it.title } else null
-        return Engine.evaluate(c, _today.value, now, zone, focusLock(now), _hq.value.active, absence(now), earned, debt)
+        return Engine.evaluate(c, _today.value, now, zone, focusLock(now), _hq.value.active, absence(now), earned, debt, fuse(now))
     }
 
     fun updateConfig(f: (Config) -> Config): Config = synchronized(lock) {
