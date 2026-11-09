@@ -76,7 +76,7 @@ import {
 } from './wall_auditor.js'
 import {
   PENDING_FILE, RULES_COOLDOWN_DAYS, RULES_FILE, WALL_DIR, appendAudit, classifyRules, parseRules, readText as readVaultText,
-  renderPending, renderRules, renderTaskNote, taskNotePath, updatePending, writeText as writeVaultText,
+  findObsidianVault, renderPending, renderRules, renderTaskNote, taskNotePath, updatePending, writeText as writeVaultText,
 } from './vault_wall.js'
 import { GEMINI_PACKAGES, geminiBrief, geminiLines, geminiMode, geminiSteps, recapMarkdown, trackGemini } from './gemini.js'
 
@@ -1135,7 +1135,8 @@ export function apply(ctx) {
     const now = Date.now()
     if (now - notesCache.at < 10 * 60_000) return notesCache.dir
     const set = typeof config.notesPath === 'string' ? config.notesPath.trim() : ''
-    const dir = set && isDir(set) ? set : NOTES_CANDIDATES.find(isDir) || ''
+    // 第四轮：先找带 .obsidian 的真库，再退回几个常见文件夹名。
+    const dir = set && isDir(set) ? set : findObsidianVault() || NOTES_CANDIDATES.find(isDir) || ''
     notesCache = { at: now, dir }
     return dir
   }

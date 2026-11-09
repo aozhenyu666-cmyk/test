@@ -10,7 +10,7 @@
 // 改规则的规矩：改严立即生效；改松要等冷却期（默认 7 天，config.rulesCooldownDays）。
 // 否则松懈时打开 Obsidian 改一行就绕开了墙——这条和"今天的规则今天不放松"是一回事。
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 export const WALL_DIR = '墙'
@@ -242,4 +242,48 @@ export function appendAudit(kb, day, when, text) {
   const head = existsSync(path) ? '' : '# 墙的审计 · ' + day + '\n'
   appendFileSync(path, head + '\n## ' + when + '\n\n' + String(text).trim() + '\n')
   return path
+}
+
+// ---------------------------------------------------------------- 找笔记库
+
+/** Obsidian 库常在的上一级目录。 */
+export const VAULT_ROOTS = ['/sdcard/Documents', '/sdcard/Documents/Obsidian', '/sdcard/Obsidian', '/sdcard']
+
+function isDirAt(p) {
+  try {
+    return statSync(p).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 找一个真正的 Obsidian 库：目录里有 .obsidian 文件夹的那个。先看根目录本身，再看它下一层。
+ * 找到多个时取最近改过的（他正在用的那个）。
+ */
+export function findObsidianVault(roots = VAULT_ROOTS) {
+  const hits = []
+  for (const root of roots) {
+    if (isDirAt(join(root, '.obsidian'))) hits.push(root)
+    let names = []
+    try {
+      names = readdirSync(root)
+    } catch {
+      continue
+    }
+    for (const name of names) {
+      if (name.startsWith('.')) continue
+      const dir = join(root, name)
+      if (isDirAt(join(dir, '.obsidian'))) hits.push(dir)
+    }
+  }
+  if (!hits.length) return ''
+  const mtime = (d) => {
+    try {
+      return statSync(join(d, '.obsidian')).mtimeMs
+    } catch {
+      return 0
+    }
+  }
+  return [...new Set(hits)].sort((a, b) => mtime(b) - mtime(a))[0]
 }

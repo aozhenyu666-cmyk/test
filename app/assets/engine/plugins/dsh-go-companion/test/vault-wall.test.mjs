@@ -8,8 +8,8 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { apply } from '../lib/index.js'
 import { existsSync, readFileSync } from 'node:fs'
-import { readdirSync } from 'node:fs'
-import { classifyRules, mealOf, parseRules, renderRules, renderTaskNote, updatePending } from '../lib/vault_wall.js'
+import { readdirSync, utimesSync } from 'node:fs'
+import { classifyRules, findObsidianVault, mealOf, parseRules, renderRules, renderTaskNote, updatePending } from '../lib/vault_wall.js'
 import { wallConfig } from '../lib/wall.js'
 
 function agentOf(id) {
@@ -203,4 +203,20 @@ test('墙的每次审查都写进 大肥鱼/墙/审计/日期.md', async () => {
     assert.match(text, /^# 墙的审计 · \d{4}-\d{2}-\d{2}/)
     assert.match(text, /## \d{2}:\d{2}\n\n〔墙〕 连麦回流/)
   })
+})
+
+test('找笔记库：认带 .obsidian 的目录，多个时取最近用过的', () => {
+  const root = mkdtempSync(join(tmpdir(), 'vault-find-'))
+  try {
+    assert.equal(findObsidianVault([root]), '', '没有库就是空')
+    mkdirSync(join(root, '随便的文件夹'))
+    mkdirSync(join(root, '旧库', '.obsidian'), { recursive: true })
+    assert.equal(findObsidianVault([root]), join(root, '旧库'))
+    mkdirSync(join(root, '我的库', '.obsidian'), { recursive: true })
+    const old = new Date(Date.now() - 86_400_000)
+    utimesSync(join(root, '旧库', '.obsidian'), old, old)
+    assert.equal(findObsidianVault([root]), join(root, '我的库'))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
