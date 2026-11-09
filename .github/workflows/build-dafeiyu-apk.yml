@@ -45,12 +45,6 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq gpgv zstd xz-utils unzip file
-      - name: Kotlin unit tests (lock arbitration, D2 snapshot)
-        run: |
-          cd app
-          flutter pub get
-          cd android
-          ./gradlew :app:testDebugUnitTest --console=plain
       - name: Build arm64 Linux runtime (proot 5.1.107.102)
         run: |
           bash runtime/build-runtime.sh arm64-v8a
@@ -92,6 +86,12 @@ jobs:
           # that only exists in lib/l10n/parts cannot go missing again (run 1 failed on that).
           python3 tool/l10n_merge.py
           flutter build apk --release --flavor arm64 --target-platform android-arm64 --build-name 1.0.4 --build-number ${{ github.run_number }}0 --dart-define=DSH_UPDATE_REPO=aozhenyu666-cmyk/dsh-Go
+      # 必须排在上面之后：app/android/gradlew 被 app/android/.gitignore 忽略、从不入库，
+      # 只有 `flutter build` 会从模板注入。放在构建前会报 ./gradlew: No such file (exit 127)。
+      - name: Kotlin unit tests (lock arbitration, D2 snapshot)
+        run: |
+          cd app/android
+          ./gradlew :app:testDebugUnitTest --console=plain
       - name: Verify bundled runtime and package
         run: |
           APK=app/build/app/outputs/flutter-apk/app-arm64-release.apk
