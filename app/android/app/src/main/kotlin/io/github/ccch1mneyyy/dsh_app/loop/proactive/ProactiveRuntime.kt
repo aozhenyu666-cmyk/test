@@ -122,9 +122,13 @@ object ProactiveRuntime {
     private const val SAY_POLL_WAIT_MS = 8_000L
     /** How long a 锁 / 赶 holds without a fresh /plan saying so again. */
     private const val FORCE_HOLD_MS = 3 * 60_000L
-    /** R4-0 去抖：上一次连麦舱当场锁的包与时刻；离开那个 App 就清掉。 */
+    /**
+     * R4-0 去抖：上一次连麦舱当场锁的包与时刻。只滤掉同一个 App 启动时连发的几个窗口事件，
+     * 窗口很短：他从锁页经最近任务切回同一个 App，过了这几秒照样再锁。
+     */
     @Volatile private var forcedApp: String? = null
     @Volatile private var forcedAt: Long = 0L
+    private const val SESSION_LOCK_DEBOUNCE_MS = 2_000L
     private const val REFUSE_PREFS = "dsh_companion_refuse"
     /** A plan older than its own next-check time by this much is stale; fall back to the local scheduler. */
     private const val PLAN_STALE_MS = 15 * 60_000L
@@ -814,8 +818,8 @@ object ProactiveRuntime {
         }
         if (breaking()) return
         val now = System.currentTimeMillis()
-        // 去抖：同一个包在持锁期内只锁一次，否则输入法反复弹出收起会把锁页刷个不停。
-        if (forcedApp == pkg && now - forcedAt < FORCE_HOLD_MS) return
+        // 去抖：同一个 App 启动时连发的窗口事件只锁一次（输入法已由 FrontChange 排除）。
+        if (forcedApp == pkg && now - forcedAt < SESSION_LOCK_DEBOUNCE_MS) return
         forcedApp = pkg
         forcedAt = now
         val f = Force(4, pkg, lockWhy() ?: "Gemini 互动中，只许 Gemini", now + FORCE_HOLD_MS, refuse = true)
@@ -967,7 +971,7 @@ object ProactiveRuntime {
             val front = NowFeed.snapshot(SystemClock.elapsedRealtime()).app
             if (front != null && FrontChange.switched(front) && listed(front)) {
                 val now = System.currentTimeMillis()
-                if (forcedApp != front || now - forcedAt >= FORCE_HOLD_MS) {
+                if (forcedApp != front || now - forcedAt >= SESSION_LOCK_DEBOUNCE_MS) {
                     forcedApp = front
                     forcedAt = now
                     val sf = Force(4, front, lockWhy() ?: "Gemini 互动中，只许 Gemini", now + FORCE_HOLD_MS, refuse = true)

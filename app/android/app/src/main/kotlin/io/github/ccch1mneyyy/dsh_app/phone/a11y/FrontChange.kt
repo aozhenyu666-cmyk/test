@@ -46,6 +46,15 @@ object FrontChange {
     /** Same question against the lists the phone has already registered. */
     fun isLayer(pkg: String): Boolean = isLayer(pkg, imePkgs, selfPkgs)
 
+    /**
+     * For time accounting (NowFeed): the IME and system dialogs are layers, but DSH itself is a real
+     * place he went. Counting the lock page or a DSH chat as "still in the game" would book that
+     * time as entertainment and could read as defiance.
+     */
+    fun isOverlay(pkg: String, ime: Collection<String>): Boolean = isLayer(pkg, ime, emptySet())
+
+    fun isOverlay(pkg: String): Boolean = isOverlay(pkg, imePkgs)
+
     /** True only for a real app switch. null / blank / a layer on top are all "no switch". */
     fun switched(pkg: String?, ime: Collection<String>, self: Collection<String>): Boolean =
         !pkg.isNullOrBlank() && !isLayer(pkg, ime, self)

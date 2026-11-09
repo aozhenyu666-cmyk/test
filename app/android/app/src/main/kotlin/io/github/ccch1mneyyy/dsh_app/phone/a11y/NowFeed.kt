@@ -51,8 +51,12 @@ object NowFeed {
         lastEventAt = now
     }
 
-    /** One rule for "a layer over the app, not a new app" — shared with the 连麦舱 lock (R4-0). */
-    private fun isNoise(packageName: String): Boolean = FrontChange.isLayer(packageName)
+    /**
+     * IME / system UI / permission dialogs are layers over the app, not a new app (same list as the
+     * 连麦舱 lock, R4-0). DSH itself is NOT a layer here: time on the lock page or in a DSH chat is
+     * not time in the app he was stopped from.
+     */
+    private fun isNoise(packageName: String): Boolean = FrontChange.isOverlay(packageName)
 
     @Synchronized
     fun onScreen(on: Boolean, now: Long) {

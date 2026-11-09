@@ -66,4 +66,13 @@ class FrontChangeTest {
             FrontChange.setSelf(emptySet())
         }
     }
+
+    @Test
+    fun forTimeAccountingDshIsARealPlaceButTheKeyboardIsNot() {
+        // NowFeed 记账：锁页 / DSH 聊天不能记成"还在 B 站"，否则会被当成娱乐时长和违抗。
+        assertFalse(FrontChange.isOverlay("io.github.ccch1mneyyy.dsh_app.fish", ime))
+        assertTrue(FrontChange.isOverlay("com.sohu.inputmethod.sogou", ime))
+        assertTrue(FrontChange.isOverlay("com.android.systemui", ime))
+        assertFalse(FrontChange.isOverlay("tv.danmaku.bili", ime))
+    }
 }
