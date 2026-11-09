@@ -299,3 +299,21 @@ test('第五轮 /status 带四部门提交摘要，界面一眼看到缺哪几�
     assert.ok(s.body.deposit.missingText.includes('信息收集'))
   })
 })
+
+test('第五轮 墙的界面：额度为 0 时要说清是四段没交齐，交齐后这句消失', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const before = await t.wall({ action: 'status' })
+    assert.equal(before.body.wall.relaxRemaining, 0)
+    assert.equal(before.body.wall.depositDone, 0)
+    assert.equal(before.body.wall.depositTotal, 4)
+    // 界面直接把这几段摆出来，不让他只看到一个 0。
+    assert.ok(before.body.wall.depositMissing.includes('信息收集'), JSON.stringify(before.body.wall))
+    assert.ok(before.body.wall.depositMissing.includes('统筹规划'), JSON.stringify(before.body.wall))
+    await t.fillAll()
+    const after = await t.wall({ action: 'status' })
+    assert.equal(after.body.wall.relaxRemaining, 3)
+    assert.equal(after.body.wall.depositDone, 4)
+    assert.equal(after.body.wall.depositMissing, '')
+  })
+})

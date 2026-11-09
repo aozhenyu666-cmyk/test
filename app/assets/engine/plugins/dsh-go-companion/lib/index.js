@@ -2247,12 +2247,17 @@ export function apply(ctx) {
     const action = String(body?.action || 'status')
     const status = () => {
       const wd = wallDecision(config, now, tz)
+      // 额度为什么可能是 0：四段没交齐。界面得能把这句话说出来，不然只看到 0 不知道原因。
+      const dep = statusOf(depositToday(now))
       return {
         v: 1, ok: true, wall: {
           locked: wd.locked, kind: wd.kind || null, openUntil: wd.openUntil || 0, why: wd.why || null,
           applyWindowOpen: applyWindowOpen(config.applyWindow, now),
           applyWindowCloseAt: Number(config.applyWindow?.closeAt) || 0,
           relaxRemaining: relaxRemainingNow(now, tz),
+          depositDone: dep.done,
+          depositTotal: dep.total,
+          depositMissing: dep.missing.join('、'),
           relaxToday: Boolean(activeRelax(config, now, tz)),
           tightenToday: tightenActive(config, now, tz),
           meals: wallConfig(config).meals,
@@ -3262,6 +3267,7 @@ export function apply(ctx) {
           applyWindowOpen: applyWindowOpen(config.applyWindow, now),
           applyWindowCloseAt: Number(config.applyWindow?.closeAt) || 0,
           relaxRemaining: relaxRemainingNow(now, tz),
+          depositMissing: statusOf(depositToday(now)).missing.join('、'),
           relaxToday: Boolean(activeRelax(config, now, tz)),
           tightenToday: tightenActive(config, now, tz),
         }
@@ -3407,6 +3413,7 @@ export function apply(ctx) {
           locked: wd.locked, kind: wd.kind || null, openUntil: wd.openUntil || 0,
           applyWindowOpen: applyWindowOpen(config.applyWindow, now),
           relaxRemaining: relaxRemainingNow(now, tz),
+          depositMissing: statusOf(depositToday(now)).missing.join('、'),
           relaxToday: Boolean(activeRelax(config, now, tz)),
           tightenToday: tightenActive(config, now, tz),
           weeklyQuota: wallConfig(config).weeklyQuota,

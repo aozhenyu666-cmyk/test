@@ -15,6 +15,7 @@ import '../features/feature_kit.dart';
 import '../shell/page_frame.dart';
 import '../theme/app_icons.dart';
 import '../theme/theme.dart';
+import 'deposit_page.dart';
 import 'phone_widgets.dart';
 
 extension AppRuleText on AppRule {
@@ -387,6 +388,11 @@ class _WallCardState extends State<_WallCard> {
     final why = (w['why'] as String?)?.trim() ?? '';
     final days = (w['relaxRemaining'] as num?)?.toInt() ?? 0;
     final changed = w['relaxToday'] == true || w['tightenToday'] == true;
+    // 第五轮：额度可能是 0，而原因是四段没交齐。界面必须把这句话说出来，
+    // 否则他只看到「还剩 0 天」——那是个没有解释的数字。
+    final missing = (w['depositMissing'] as String?)?.trim() ?? '';
+    final done = (w['depositDone'] as num?)?.toInt() ?? 0;
+    final total = (w['depositTotal'] as num?)?.toInt() ?? 4;
     return ListPageCard(
       children: [
         ListPageRow(
@@ -399,10 +405,21 @@ class _WallCardState extends State<_WallCard> {
         ListPageRow(
           icon: AppIcons.queued,
           title: l10n.phoneWallQuota(days),
-          subtitle: changed ? l10n.phoneWallTodayChanged : l10n.phoneWallTodaySame,
+          subtitle: missing.isNotEmpty
+              ? '先记 0：今天四段还没交齐（$done/$total），还缺$missing。点这里去交'
+              : changed ? l10n.phoneWallTodayChanged : l10n.phoneWallTodaySame,
+          subtitleMaxLines: 3,
+          chevron: missing.isNotEmpty,
+          onTap: missing.isEmpty ? null : () => _pushDeposit(),
         ),
       ],
     );
+  }
+
+  /// 额度被卡住时，从这里直接进四段提交页——不然「为什么是 0」只能靠猜。
+  Future<void> _pushDeposit() async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const DepositPage()));
+    if (mounted) await _load();
   }
 }
 

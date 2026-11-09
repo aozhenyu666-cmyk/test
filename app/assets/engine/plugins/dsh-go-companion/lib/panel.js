@@ -211,7 +211,9 @@ export function buildSnapshot({ entries = [], todayEntries = [], trust, phone, n
       quotaCaption: '本周最多 ' + (Number(wall?.weeklyQuota) || 3) + ' 天',
       today: wallToday,
       todayTone: wallToday === '没有' ? 'info' : 'warn',
-      todayCaption: wall?.applyWindowOpen ? '窗口开着：只能提明天' : '放松要等申请窗口',
+      todayCaption: wall?.depositMissing
+        ? '额度先记 0：今天四段还没交齐（' + String(wall.depositMissing) + '）'
+        : wall?.applyWindowOpen ? '窗口开着：只能提明天' : '放松要等申请窗口',
     },
     summary: names.companion + '陪你聊、跟你闹；' + names.strategist + '早上定事、晚上对账。锁和放由墙按规则执行，两人共用一个信用分。',
     names,
