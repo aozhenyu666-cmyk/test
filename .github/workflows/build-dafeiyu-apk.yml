@@ -72,7 +72,12 @@ jobs:
               remove(repo)
               addFirst(repo)
           }
-          beforeSettings { pluginManagement.repositories.preferCiMirror() }
+          // 没写插件仓库的工程（flutter_tools/gradle）默认用 Gradle 插件门户；加了镜像列表就不再为空，
+          // 那个默认会丢（run 42573627125 找不到 kotlin-dsl），所以把插件门户一起补上。
+          beforeSettings {
+              pluginManagement.repositories.preferCiMirror()
+              pluginManagement.repositories.gradlePluginPortal()
+          }
           // Flutter 自带的 Gradle 工程要求下载源只在 settings 里统一配置（往子工程加会报错，run 42572727168），
           // 那种工程就加到 settings 里，不碰子工程。
           settingsEvaluated {
