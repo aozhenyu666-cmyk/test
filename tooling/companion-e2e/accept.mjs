@@ -57,13 +57,9 @@ function dayZone() {
 // ---------------------------------------------------------------- A. 一球里到底带了什么
 console.log('【A. 发球内容（单人格）】')
 reset()
-// D3 的笔记库：路径要在一开始就定下来（插件按 10 分钟缓存解析路径），所以先建库再开会话。
-const VAULT = W + '/vault-e2e'
-mkdirSync(VAULT + '/工作', { recursive: true })
-mkdirSync(VAULT + '/私密', { recursive: true })
-writeFileSync(VAULT + '/工作/周报.md', '# 周报\n这周的结论：把第三轮的引擎接线收尾，别再开新坑。\n')
-writeFileSync(VAULT + '/私密/别读我.md', '私密内容不该出现在这一球里。\n')
-let sid = await newSession({ dual: false, notesPath: VAULT })
+// 第三轮 D3 的笔记库夹具（$WORK/home/vault-e2e，notesPath 由 run.sh 在引擎启动前写好）——
+// 插件的笔记库路径缓存 10 分钟，这里再改设置读不到。
+let sid = await newSession({ dual: false })
 {
   // 记忆：往记忆库钉一条事实（用记忆插件自己的表结构）
   const db = new DatabaseSync(H + '/fish-memory/fish-memory.sqlite')
@@ -326,13 +322,12 @@ sid = await newSession({ mode: 'partner' })
   const fu = pl3.body.followup
   // 不清「主状态一定是 followup」：CI 可能正好跑在深夜/饭点，那时追问锁只是叠在上面的一层。
   check('I3.7 追问锁进了 /plan 且未到点（窗口不可划走）', fu?.active === true && fu.until > Date.now(), fu)
-  // 到点没裁决（§5）：把锁拨到过期，再看 followup-timeout 的回执
-  await route('POST', '/config', {
-    followup: { reason: 'review', question: '这一轮做完了吗？', since: Date.now() - 31 * 60_000, until: Date.now() - 60_000 },
-  })
-  const timeout = await ev('followup-timeout')
-  check('I3.8 followup-timeout 到点就结束拦截并挂义务（R3-3）',
-    timeout.ok === true && timeout.expired === true && Array.isArray(timeout.obligations) && timeout.followup?.active === false, timeout)
+  // 未到点就报 followup-timeout（手机时钟快了、提前触发）：门不能因此关掉（§7.2 第 4 条）。
+  // 到点后那一支（expired:true + 挂义务）要等真到期，插件单测里覆盖，这里只钉"提前报不算数"。
+  const early = await ev('followup-timeout')
+  check('I3.8 未到点报超时不会提前关门（§7.2 第 4 条）', early.ok === true && early.expired === false, early)
+  const pl4 = await route('POST', '/plan', { roll: 0, timeZone: 'Asia/Shanghai', phone: game(45) })
+  check('I3.9 这一声没把追问锁报掉，窗口还在', pl4.body.followup?.active === true && pl4.body.followup.until > Date.now(), pl4.body.followup)
 }
 
 console.log(failed ? '✗ ' + failed + ' 项失败' : '✓ 全部通过')

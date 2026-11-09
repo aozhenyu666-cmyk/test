@@ -22,6 +22,12 @@ if [ ! -x "$ENG/node_modules/.bin/dsh" ]; then
   (cd "$ENG" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error --registry=https://registry.npmjs.org) || exit 2
 fi
 rm -rf "$WORK"; mkdir -p "$WORK/home"; : > "$WORK/llm.log"; : > "$WORK/prompts.jsonl"
+# 第三轮 D3：笔记库要在引擎起来之前就位——插件把笔记库路径缓存 10 分钟（notesDir()），
+# 引擎起来之后再改设置读不到。私密目录也建一份，验"私密不会被读出来"。
+mkdir -p "$WORK/home/vault-e2e/工作" "$WORK/home/vault-e2e/私密" "$WORK/home/companion"
+printf '# 周报\n这周的结论：把第三轮的引擎接线收尾，别再开新坑。\n' > "$WORK/home/vault-e2e/工作/周报.md"
+printf '私密内容不该出现在这一球里。\n' > "$WORK/home/vault-e2e/私密/别读我.md"
+printf '{"notesPath":"%s"}\n' "$WORK_W/home/vault-e2e" > "$WORK/home/companion/config.json"
 P="$(win "$ROOT/app/assets/engine/plugins")"
 { echo "- insert:"; for id in dsh-feiyu-mood dsh-go-memory dsh-go-relationship dsh-go-companion; do
   echo "    - id: $id"; echo "      name: $P/$id/lib/index.js"; done; } > "$WORK/patch.yml"
