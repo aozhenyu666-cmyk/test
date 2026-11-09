@@ -2162,7 +2162,7 @@ export function apply(ctx) {
       return { v: 1, ok: true, expired: true, followup: followupView(config.followup, now), obligations: obligationsView(config.obligations, now) }
     }
     if (type === 'wechat-hit') {
-      // 微信里误入视频号：手机连续停留 3 秒、先返回聊天页才上报。插件只记账，不升级成违抗。
+      // 微信里误入视频号：手机连续停留 3 秒、离开那一页时（去哪都算，灭屏也算）上报。插件只记账，不升级成违抗。
       record({ state: 'wechat-hit', at: now, page: String(body?.page || '').slice(0, 60), dwellMs: Math.max(0, Math.round(Number(body?.dwellMs) || 0)) })
       return { v: 1, ok: true }
     }

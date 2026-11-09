@@ -11,6 +11,9 @@ object WechatPages {
     /** 连续停留多久才算误入（契约：3 秒）。 */
     const val DWELL_MS = 3_000L
 
+    /** 下拉通知栏这类系统层窗口不算离开当前页面。 */
+    private val OVERLAYS = setOf("com.android.systemui")
+
     /** 上报用的页面名，和契约里的 `page` 对齐。 */
     fun page(className: String?): String? {
         val c = className?.lowercase() ?: return null
@@ -22,9 +25,44 @@ object WechatPages {
         }
     }
 
-    /** 微信自己的聊天页：契约要求「先返回聊天页才上报」，别的页面不收尾。 */
-    fun isChat(className: String?): Boolean {
-        val c = className?.lowercase() ?: return false
-        return c.contains("launcherui") || c.contains("chattingui") || c.contains("mainui")
+    fun isOverlay(pkg: String?): Boolean = pkg != null && pkg in OVERLAYS
+}
+
+/** 一次误入：哪个页面、停了多久。 */
+data class WechatHit(val page: String, val dwellMs: Long)
+
+/**
+ * 跟踪「此刻停在哪个误入页面」。离开那个页面时结算一次，去哪都算：微信别的页面、
+ * 回聊天、切到别的 App、灭屏。停满 [WechatPages.DWELL_MS] 才返回一次 [WechatHit]。
+ *
+ * 纯逻辑，不碰 Android，时间由调用方给（单调时钟）。
+ */
+class WechatStay {
+    private var page: String? = null
+    private var since = 0L
+
+    /** 窗口切换。返回值非空 = 刚离开的那一页停够了，要上报。 */
+    fun onWindow(pkg: String?, className: String?, now: Long): WechatHit? {
+        if (WechatPages.isOverlay(pkg)) return null
+        val next = if (pkg == WechatPages.PKG) WechatPages.page(className) else null
+        if (next != null && next == page) return null
+        val hit = settle(now)
+        page = next
+        since = if (next != null) now else 0L
+        return hit
+    }
+
+    /** 灭屏：人已经不在看了，按灭屏那一刻结算。 */
+    fun onScreenOff(now: Long): WechatHit? {
+        val hit = settle(now)
+        page = null
+        since = 0L
+        return hit
+    }
+
+    private fun settle(now: Long): WechatHit? {
+        val open = page ?: return null
+        val dwell = now - since
+        return if (dwell >= WechatPages.DWELL_MS) WechatHit(open, dwell) else null
     }
 }

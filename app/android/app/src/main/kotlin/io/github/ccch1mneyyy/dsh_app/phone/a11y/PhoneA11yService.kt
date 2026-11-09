@@ -105,6 +105,7 @@ class PhoneA11yService : AccessibilityService() {
                 // l10n:keep agent stop reason
                 Intent.ACTION_SCREEN_OFF -> {
                     NowFeed.onScreen(false, now)
+                    wechat.onScreenOff(now)?.let { hit -> runCatching { ProactiveRuntime.onWechatHit(hit.page, hit.dwellMs) } }
                     stopAll("屏幕关闭了")
                 }
                 Intent.ACTION_SCREEN_ON -> {
@@ -178,35 +179,17 @@ class PhoneA11yService : AccessibilityService() {
         runCatching { LoopRuntime.onEvent(this, event) }
     }
 
-    /** 微信里正在停留的那个页面，和它开始的时间（D5）。 */
-    private var wechatPage: String? = null
-    private var wechatSince = 0L
+    /** 微信误入识别（D5）：停在哪个页面、停了多久，纯逻辑在 [WechatStay]。 */
+    private val wechat = WechatStay()
 
     /**
-     * 微信误入识别（接口约定 §3 `wechat-hit`）：视频号 / 朋友圈 / 小说页连续停留 3 秒，
-     * **先回到聊天页**才上报，只记账。判不出来就什么都不做——这一条不许升级成违抗。
+     * 接口约定 §3 `wechat-hit`：视频号 / 朋友圈 / 小说页连续停留 3 秒，离开时（去哪都算）上报一次，
+     * 只记账。判不出来就什么都不做——这一条不许升级成违抗。
      */
     private fun watchWechat(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-        if (event.packageName?.toString() != WechatPages.PKG) {
-            wechatPage = null
-            return
-        }
-        val now = SystemClock.elapsedRealtime()
-        val cls = event.className?.toString()
-        val page = WechatPages.page(cls)
-        if (page != null) {
-            if (page != wechatPage) {
-                wechatPage = page
-                wechatSince = now
-            }
-            return
-        }
-        val open = wechatPage ?: return
-        if (!WechatPages.isChat(cls)) return
-        val dwell = now - wechatSince
-        wechatPage = null
-        if (dwell >= WechatPages.DWELL_MS) runCatching { ProactiveRuntime.onWechatHit(open, dwell) }
+        val hit = wechat.onWindow(event.packageName?.toString(), event.className?.toString(), SystemClock.elapsedRealtime())
+        if (hit != null) runCatching { ProactiveRuntime.onWechatHit(hit.page, hit.dwellMs) }
     }
 
     /**
