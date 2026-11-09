@@ -142,10 +142,10 @@ test('晚间对账：任务没验收时 21:30 两层锁都在；裁决满意后�
     // 第三轮：鲸澜来对过账（reviewBall）后，门由裁决关，不再看他回了多少字。
     const file = join(home, 'companion', 'rhythm.json')
     writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), reviewBall: true }))
-    const verdict = t.big.tools.submit_verdict.execute({
-      kind: 'evening', satisfied: true, summary: '周报写了一半，抖音刷了一小时', nextStep: '明天先补完周报',
-    })
-    assert.equal(verdict.ok, true, verdict.text)
+    // 第四轮：对账交给墙，墙逐件核（今天没立项就直接收），结果作用于明天。
+    const verdict = t.big.tools.submit_to_wall.execute({ kind: 'evening' })
+    assert.equal(verdict.pass, true, verdict.text)
+    assert.match(verdict.text, /^〔墙〕 晚间对账/)
     const after = await t.plan(at('21:45'))
     assert.deepEqual(kinds(after.body), [], JSON.stringify(after.body.rules))
     assert.equal(after.body.refuse, null)

@@ -163,14 +163,14 @@ test('D3 记忆导出：只收钉住和重要的，单向覆盖写', () => {
 
 test('D6 议程：每个主状态都有对应议程，裁决格式在每个过关状态里', () => {
   const start = agendaLines('standby').join('\n')
-  assert.match(start, /提交裁决/)
-  assert.match(start, /不能锁、不能放/)
-  assert.match(start, /「开始」/)
+  assert.match(start, /submit_to_wall/)
+  assert.match(start, /不能放/)
+  assert.match(start, /「冲刺」/)
 
   for (const state of ['morning', 'review', 'evening', 'followup']) {
     const text = agendaLines(state).join('\n')
-    assert.match(text, /submit_verdict/, state + ' 要提裁决工具')
-    assert.match(text, /summary/, state + ' 要写清格式')
+    assert.match(text, /submit_to_wall/, state + ' 要提交墙的工具')
+    assert.match(text, /墙只看证据/, state + ' 要说清墙的口径')
     assert.match(text, /tasks/, state + ' 要写清 tasks')
   }
   assert.match(agendaLines('morning').join('\n'), /完成物/)
@@ -322,8 +322,8 @@ test('D6 人设：两个角色都带上当前议程，且不越权动墙', async
       assert.ok(def, '人设挂上了')
       const text = def.text()
       assert.match(text, /规则由墙执行/)
-      assert.match(text, /submit_verdict/)
-      assert.match(text, /不能锁、不能放/)
+      assert.match(text, /submit_to_wall/)
+      assert.match(text, /不能放/)
     }
   })
 })

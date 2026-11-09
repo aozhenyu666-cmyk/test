@@ -122,9 +122,13 @@ object ProactiveRuntime {
     private const val SAY_POLL_WAIT_MS = 8_000L
     /** How long a 锁 / 赶 holds without a fresh /plan saying so again. */
     private const val FORCE_HOLD_MS = 3 * 60_000L
-    /** R4-0 去抖：上一次连麦舱当场锁的包与时刻；离开那个 App 就清掉。 */
+    /**
+     * R4-0 去抖：上一次连麦舱当场锁的包与时刻。只滤掉同一个 App 启动时连发的几个窗口事件，
+     * 窗口很短：他从锁页经最近任务切回同一个 App，过了这几秒照样再锁。
+     */
     @Volatile private var forcedApp: String? = null
     @Volatile private var forcedAt: Long = 0L
+    private const val SESSION_LOCK_DEBOUNCE_MS = 2_000L
     private const val REFUSE_PREFS = "dsh_companion_refuse"
     /** A plan older than its own next-check time by this much is stale; fall back to the local scheduler. */
     private const val PLAN_STALE_MS = 15 * 60_000L
@@ -660,6 +664,48 @@ object ProactiveRuntime {
     fun onGeminiEnd(minutes: Int, by: String = "phone") =
         postEvent("gemini-end", "minutes" to minutes, "by" to by) { consultPlanSoon(minGapMs = 0L) }
 
+    // ---------------------------------------------------------------- R4-4 定时连麦（接口约定 D4）
+
+    /** 下一场预约连麦的时刻（插件给的绝对毫秒）；0 = 没有预约。 */
+    @Volatile private var geminiDueAt: Long = 0L
+
+    /**
+     * 到点：取 launch → 简报进剪贴板 → 提示一句 → 拉起 Gemini → 马上问一次 /plan，拿连麦舱
+     * （插件取 launch 时已经把舱开好了，手机按 /plan 的 session 上"只许 Gemini"）。
+     */
+    private fun fireGeminiDue() {
+        if (!::app.isInitialized || !proactiveEnabled()) return
+        main.post {
+            fetchPluginRoute(routeCallback { m ->
+                val launch = m["launch"] as? Map<*, *> ?: return@routeCallback
+                val brief = (launch["brief"] as? String).orEmpty()
+                val topic = (launch["topic"] as? String).orEmpty()
+                if (brief.isNotBlank()) runCatching {
+                    val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("大肥鱼 · 连麦背景", brief))
+                }
+                runCatching {
+                    val hint = if (topic.isBlank()) "约好的连麦到点了：背景已复制，进 Gemini 粘贴" else "连麦到点：$topic（背景已复制，进 Gemini 粘贴）"
+                    android.widget.Toast.makeText(app, hint, android.widget.Toast.LENGTH_LONG).show()
+                }
+                val opened = openGemini()
+                Log.i("DshProactive", "gemini due: topic=$topic opened=$opened")
+                consultPlanSoon(minGapMs = 0L)
+            }, "POST", "/gemini/due", linkedMapOf<String, Any?>())
+        }
+    }
+
+    /** 先开 Gemini App，没有就开 Google App（不少手机上 Gemini Live 跑在里面）。 */
+    private fun openGemini(): Boolean {
+        val pm = app.packageManager
+        for (pkg in listOf("com.google.android.apps.bard", "com.google.android.googlequicksearchbox")) {
+            val intent = pm.getLaunchIntentForPackage(pkg) ?: continue
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (runCatching { app.startActivity(intent) }.isSuccess) return true
+        }
+        return false
+    }
+
     // ---------------------------------------------------------------- 追问锁（接口约定 §2、§5）
 
     /**
@@ -814,8 +860,8 @@ object ProactiveRuntime {
         }
         if (breaking()) return
         val now = System.currentTimeMillis()
-        // 去抖：同一个包在持锁期内只锁一次，否则输入法反复弹出收起会把锁页刷个不停。
-        if (forcedApp == pkg && now - forcedAt < FORCE_HOLD_MS) return
+        // 去抖：同一个 App 启动时连发的窗口事件只锁一次（输入法已由 FrontChange 排除）。
+        if (forcedApp == pkg && now - forcedAt < SESSION_LOCK_DEBOUNCE_MS) return
         forcedApp = pkg
         forcedAt = now
         val f = Force(4, pkg, lockWhy() ?: "Gemini 互动中，只许 Gemini", now + FORCE_HOLD_MS, refuse = true)
@@ -967,7 +1013,7 @@ object ProactiveRuntime {
             val front = NowFeed.snapshot(SystemClock.elapsedRealtime()).app
             if (front != null && FrontChange.switched(front) && listed(front)) {
                 val now = System.currentTimeMillis()
-                if (forcedApp != front || now - forcedAt >= FORCE_HOLD_MS) {
+                if (forcedApp != front || now - forcedAt >= SESSION_LOCK_DEBOUNCE_MS) {
                     forcedApp = front
                     forcedAt = now
                     val sf = Force(4, front, lockWhy() ?: "Gemini 互动中，只许 Gemini", now + FORCE_HOLD_MS, refuse = true)
@@ -1002,7 +1048,15 @@ object ProactiveRuntime {
             followupTimeoutReported = expiredFollowup
             postEvent("followup-timeout") { consultPlanSoon(minGapMs = 0L) }
         }
-        val wakeAt = listOf(at, change, followupUntilAt).filter { it > 0 }.minOrNull() ?: 0L
+        // R4-4 定时连麦：插件只在预约还没到点时下发 geminiSchedule，所以记住最后一次看到的时间，
+        // 到点被唤醒时自己去取 launch（/gemini/due 取完即置已发，重复调用拿到 null）。
+        val geminiAt = ((map["geminiSchedule"] as? Map<*, *>)?.get("at") as? Number)?.toLong() ?: 0L
+        if (geminiAt > stamp) geminiDueAt = geminiAt
+        if (geminiDueAt in 1..stamp) {
+            geminiDueAt = 0L
+            fireGeminiDue()
+        }
+        val wakeAt = listOf(at, change, followupUntilAt, geminiDueAt).filter { it > 0 }.minOrNull() ?: 0L
         val speak = map["speak"] == true
         val reason = map["reason"] as? String ?: ""
         if (wakeAt <= 0) return

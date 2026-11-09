@@ -169,44 +169,38 @@ test('忙完：妹妹来迎接一次；"忙完了"提前收工也关掉拒绝模
   })
 })
 
-test('第三轮 C4：两姐妹工具完全一致，谁都没有管控工具', async () => {
+test('第四轮 R4-2：两姐妹工具完全一致，帮忙和收紧的全有，当场放松的一个没有，过关交给墙', async () => {
   await withHome(async (home) => {
     const t = setup(home)
-    const banned = ['dafeiyu_control', 'start_task_mode', 'end_task_mode', 'block_apps', 'grant_break',
-      'request_relax', 'tighten_today', 'daily_plan', 'daily_review']
-    for (const name of banned) {
+    // 当场放松、自己判过关的工具不给：grant_break / end_task_mode / submit_verdict / daily_*。
+    for (const name of ['grant_break', 'end_task_mode', 'submit_verdict', 'daily_plan', 'daily_review']) {
       assert.equal(t.sis.tools[name], undefined, '妹妹不该有 ' + name)
       assert.equal(t.big.tools[name], undefined, '姐姐不该有 ' + name)
     }
-    // 两人拿到的是同一份清单：聊天、笔记、连麦、检索，以及唯一影响墙的 submit_verdict。
     assert.deepEqual(Object.keys(t.sis.tools).sort(), Object.keys(t.big.tools).sort())
-    for (const name of ['submit_verdict', 'notes_vault', 'vault_search', 'vault_recent_notes', 'gemini_live', 'gemini_end', 'gemini_log', 'schedule_gemini_live']) {
+    for (const name of ['submit_to_wall', 'dafeiyu_control', 'start_task_mode', 'block_apps', 'tighten_today', 'request_relax',
+      'notes_vault', 'vault_search', 'vault_recent_notes', 'gemini_live', 'gemini_end', 'gemini_log', 'schedule_gemini_live']) {
       assert.ok(t.sis.tools[name] && t.big.tools[name], '两边都有 ' + name)
     }
+    // dafeiyu_control 只能收紧：没有回到闲时、关拒绝、切温和。
+    assert.deepEqual(t.big.tools.dafeiyu_control.parameters.properties.action.enum.sort(), ['busy', 'mute', 'refuse', 'strict'])
   })
 })
 
-test('第三轮 C3：submit_verdict 格式不合格按不满意处理，不进 deepseek 的裁决账本', async () => {
+test('第四轮 R4-1：没挂着的东西交不了墙；墙的话以〔墙〕开头，审查进账本', async () => {
   await withHome(async (home) => {
     const t = setup(home)
-    const tool = t.big.tools.submit_verdict
-    // 满意但没写 summary / nextStep：格式不合格。
-    const bad = tool.execute({ kind: 'review', satisfied: true })
-    assert.equal(bad.ok, false)
-    assert.match(bad.text, /summary/)
-    // 晨间立项要带 1–3 项任务，每项都有完成物。
-    const noTasks = tool.execute({ kind: 'morning', satisfied: true, summary: '定了', nextStep: '做' })
-    assert.equal(noTasks.ok, false)
-    assert.match(noTasks.text, /tasks/)
-    // 合格的格式：落账本、关锁。
-    const ok = tool.execute({
-      kind: 'morning', satisfied: true, summary: '定下两件事', nextStep: '按计划走',
-      tasks: [{ task: '改简历', evidence: '简历.pdf' }],
-    })
-    assert.equal(ok.ok, true, ok.text)
+    const tool = t.big.tools.submit_to_wall
+    // 下午没有晨间门，也没有追问锁：交立项、交连麦回流都被打回，说得再好也没用。
+    const morning = tool.execute({ kind: 'morning', tasks: [{ task: '改简历', evidence: '大肥鱼/简历.md' }] })
+    assert.equal(morning.pass, false)
+    assert.match(morning.text, /^〔墙〕/)
+    assert.match(morning.text, /现在没有挂着的「晨间立项」/)
+    const gemini = tool.execute({ kind: 'gemini', next_step: '我觉得我们应该先优化一下底层方法论' })
+    assert.equal(gemini.pass, false)
     const rows = readFileSync(join(home, 'companion', 'ledger.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
-    assert.ok(rows.some((r) => r.state === 'verdict' && r.kind === 'morning' && r.satisfied === true))
-    assert.ok(rows.some((r) => r.state === 'verdict-invalid' && r.code === 'bad-tasks'))
+    assert.equal(rows.filter((r) => r.state === 'wall-audit' && r.pass === false).length, 2)
+    assert.ok(!rows.some((r) => r.state === 'verdict'), '没过关就不落裁决')
   })
 })
 
