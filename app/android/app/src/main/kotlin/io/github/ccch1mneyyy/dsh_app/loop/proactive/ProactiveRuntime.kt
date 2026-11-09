@@ -951,7 +951,8 @@ object ProactiveRuntime {
         // followup-timeout（插件每次 /plan 也兜一次，谁先到都算）。
         val st = map["state"] as? Map<*, *>
         val stateName = st?.get("state") as? String
-        val fu = st?.get("followup") as? Map<*, *>
+        // 契约两处都给了 followup：§1 顶层一份、§2 塞在 state 里。哪份在就用哪份。
+        val fu = (st?.get("followup") as? Map<*, *>) ?: (map["followup"] as? Map<*, *>)
         val followupOn = fu?.get("active") == true || stateName == "followup"
         val expiry = if (!followupOn) 0L else maxOf(
             (fu?.get("until") as? Number)?.toLong() ?: 0L,
