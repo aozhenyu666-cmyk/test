@@ -108,3 +108,20 @@ test('申请窗口：对账没完成就不排期', () => {
   const r = trackApplyWindow(undefined, { reviewDoneAt: 0, now: at('21:50'), tz: TZ })
   assert.equal(r.open, false)
 })
+
+test('自然周从周一开始：UTC+8 不能把周一算到上一周', () => {
+  // 2026-11-02 是周一，11-08 是周日，11-09 又是周一。
+  // 本地时间同一周内必须同号，跨到下一个周一才算换周；原先用 startOfDay()/86400000 会整体错一天，
+  // 周一落到上一周、周界实际变成周二零点，每周额度就会在周一算错。
+  const week = (y, mo, d, hhmm = '12:00') => {
+    const [h, m] = hhmm.split(':').map(Number)
+    return weekKey(Date.UTC(y, mo - 1, d, h - 8, m), TZ)
+  }
+  assert.equal(week(2026, 11, 2), week(2026, 11, 8), '周一到周日必须同一周')
+  assert.equal(week(2026, 11, 9), week(2026, 11, 15), '下一个周一到周日也必须同一周')
+  assert.equal(week(2026, 11, 9), week(2026, 11, 2) + 1, '跨过周日零点才换周')
+  // 零点前后一分种也不能翻错
+  assert.equal(week(2026, 11, 8, '23:59'), week(2026, 11, 8, '12:00'))
+  assert.equal(week(2026, 11, 9, '00:01'), week(2026, 11, 9, '23:59'))
+  assert.notEqual(week(2026, 11, 9, '00:01'), week(2026, 11, 8, '23:59'))
+})

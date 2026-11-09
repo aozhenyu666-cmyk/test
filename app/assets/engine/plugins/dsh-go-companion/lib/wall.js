@@ -11,7 +11,7 @@
 // 墙只认两样东西：config 里的规则表，和「生效中的修改记录」（relax / tighten，都带当天 daykey）。
 // 聊天里的任何话都改不动墙——这是底线 1。
 
-import { minuteOfDay, startOfDay } from './tz.js'
+import { dayNumber, minuteOfDay, startOfDay } from './tz.js'
 import { NIGHT_LOCK_FROM, NIGHT_LOCK_TO } from './rhythm.js'
 
 /** 墙规则的锁类型（和 index.js 下发给手机的 kind、手机端 LockPriority 对齐）。 */
@@ -54,7 +54,7 @@ export function dayKey(now, tz) {
 
 /** 自然周号（周一为界）。1970-01-01 是周四，+3 把周一对齐成一周的开头。 */
 export function weekKey(now, tz) {
-  const days = Math.floor(startOfDay(now, tz) / 86_400_000)
+  const days = dayNumber(now, tz)
   return Math.floor((days + 3) / 7)
 }
 

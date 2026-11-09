@@ -70,6 +70,16 @@ export function startOfDay(now, tz) {
   return Date.UTC(p.y, p.mo - 1, p.d) - offsetAt(now, tz)
 }
 
+/**
+ * 目标时区下的「日号」：1970-01-01 起的天数，按日历年月日算。
+ * 不能用 startOfDay()/86400000 —— 那是「当地零点的瞬时」，UTC+8 会落到前一天的 UTC 日号上，
+ * 拿它算周界会整体错一天（周一只好算作上一周）。
+ */
+export function dayNumber(now, tz) {
+  const p = parts(now, tz)
+  return Math.floor(Date.UTC(p.y, p.mo - 1, p.d) / 86_400_000)
+}
+
 /** 目标时区下「下一个（或今天还没到的）hour 点整」。 */
 export function atLocalHour(now, hour, tz) {
   const h = Math.min(23, Math.max(0, Math.round(Number(hour) || 0)))
