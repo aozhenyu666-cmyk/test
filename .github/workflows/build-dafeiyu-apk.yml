@@ -45,8 +45,16 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq gpgv zstd xz-utils unzip file
-      # 排在「改 app 名」之前：那一步会把 AndroidManifest 的 label 改成「DSH Go 大肥鱼」，
-      # LauncherManifestTest 断言的正是原值。gradlew 已入库，不再依赖 flutter build 注入。
+      - name: Build arm64 Linux runtime (proot 5.1.107.102)
+        run: |
+          bash runtime/build-runtime.sh arm64-v8a
+          test -f runtime/out/arm64-v8a/assets/runtime/manifest.json
+          test -f runtime/out/arm64-v8a/assets/runtime/rootfs-arm64-v8a.tar.xz
+          strings "$(find runtime/out/arm64-v8a -name libproot.so | head -1)" | grep -m1 '5\.1\.107' | tee PROOT-VERSION.txt
+      # 必须排在 runtime 构建之后：testArm64DebugUnitTest 依赖 :app:checkRuntimeArm64，那个任务要求
+      # runtime/out/arm64-v8a 已生成（它就是为了防止「没 rootfs 却 BUILD SUCCESSFUL」才存在的，
+      # 不能用 -x 跳过）。同时仍排在「改 app 名」之前，LauncherManifestTest 断言的才是原值。
+      # gradlew 已入库，不再依赖 flutter build 注入。
       # 只跑这一步名义上的两个范围（锁仲裁 + D2 快照）：整套 855 项里还有 2 项是 P0 遗留的陈旧断言
       # （BuiltinPluginGuestTest 断言 5 个内置插件而实际 4 个、KernelChainTest 解码处 ClassCast），
       # 记在 docs/dafeiyu/第三轮进度.md §7.7，不在本轮硬改，免得把真缺陷一起抹平。
@@ -76,12 +84,6 @@ jobs:
           print(f"Kotlin unit tests: {total} run, {fail} failed, {skip} skipped")
           assert total > 0 and fail == 0 and skip < total, "Kotlin 单测未真正执行或有失败"
           PY
-      - name: Build arm64 Linux runtime (proot 5.1.107.102)
-        run: |
-          bash runtime/build-runtime.sh arm64-v8a
-          test -f runtime/out/arm64-v8a/assets/runtime/manifest.json
-          test -f runtime/out/arm64-v8a/assets/runtime/rootfs-arm64-v8a.tar.xz
-          strings "$(find runtime/out/arm64-v8a -name libproot.so | head -1)" | grep -m1 '5\.1\.107' | tee PROOT-VERSION.txt
       - name: Separate app ID and name so it installs next to other builds
         run: |
           python3 - <<'PY'
