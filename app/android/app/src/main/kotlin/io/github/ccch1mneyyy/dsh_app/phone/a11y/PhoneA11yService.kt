@@ -174,7 +174,39 @@ class PhoneA11yService : AccessibilityService() {
         NowFeed.onApp(event?.packageName?.toString(), now)
         // D2: opt-in foreground package/activity log; it reads nothing and changes no decision.
         runCatching { ForegroundRecorder.onEvent(this, event) }
+        runCatching { watchWechat(event) }
         runCatching { LoopRuntime.onEvent(this, event) }
+    }
+
+    /** 微信里正在停留的那个页面，和它开始的时间（D5）。 */
+    private var wechatPage: String? = null
+    private var wechatSince = 0L
+
+    /**
+     * 微信误入识别（接口约定 §3 `wechat-hit`）：视频号 / 朋友圈 / 小说页连续停留 3 秒，
+     * **先回到聊天页**才上报，只记账。判不出来就什么都不做——这一条不许升级成违抗。
+     */
+    private fun watchWechat(event: AccessibilityEvent?) {
+        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        if (event.packageName?.toString() != WechatPages.PKG) {
+            wechatPage = null
+            return
+        }
+        val now = SystemClock.elapsedRealtime()
+        val cls = event.className?.toString()
+        val page = WechatPages.page(cls)
+        if (page != null) {
+            if (page != wechatPage) {
+                wechatPage = page
+                wechatSince = now
+            }
+            return
+        }
+        val open = wechatPage ?: return
+        if (!WechatPages.isChat(cls)) return
+        val dwell = now - wechatSince
+        wechatPage = null
+        if (dwell >= WechatPages.DWELL_MS) runCatching { ProactiveRuntime.onWechatHit(open, dwell) }
     }
 
     /**
