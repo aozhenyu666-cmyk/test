@@ -158,8 +158,9 @@ class _DepositDialogState extends State<_DepositDialog> {
   }
 
   void _submit() {
+    // 防连点：pop 两次会把这一页也关掉。
     if (_busy) return;
-    setState(() => _busy = true);
+    _busy = true;
     Navigator.pop(context, (_report.text.trim(), _thought.text.trim()));
   }
 
@@ -168,36 +169,39 @@ class _DepositDialogState extends State<_DepositDialog> {
     final item = widget.item;
     return AlertDialog(
       title: Text(item.label),
-      content: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _report,
-              autofocus: true,
-              maxLines: 6,
-              minLines: 4,
-              onChanged: (_) => setState(() {}),
-              decoration: InputDecoration(
-                labelText: '汇报内容',
-                hintText: item.hint,
-                helperText: '${_chars(_report.text)} / ${item.minReport} 字',
+      content: SizedBox(
+        width: 360,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _report,
+                autofocus: true,
+                maxLines: 6,
+                minLines: 4,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  labelText: '汇报内容',
+                  hintText: item.hint,
+                  helperText: '${_chars(_report.text)} / ${item.minReport} 字',
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _thought,
-              maxLines: 4,
-              minLines: 3,
-              onChanged: (_) => setState(() {}),
-              decoration: InputDecoration(
-                labelText: '我的想法',
-                hintText: '不只是复述：你想清楚了什么、打算怎么走。',
-                helperText: '${_chars(_thought.text)} / ${item.minThought} 字',
+              const SizedBox(height: 12),
+              TextField(
+                controller: _thought,
+                maxLines: 4,
+                minLines: 3,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  labelText: '我的想法',
+                  hintText: '不只是复述：你想清楚了什么、打算怎么走。',
+                  helperText: '${_chars(_thought.text)} / ${item.minThought} 字',
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
       actions: [
