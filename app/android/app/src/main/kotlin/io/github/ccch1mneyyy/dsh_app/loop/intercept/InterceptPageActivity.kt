@@ -88,17 +88,19 @@ class InterceptPageActivity : Activity() {
     private var followupBackTo: String? = null
     private var followupQuestion: String? = null
     private var followupLabel: TextView? = null
-    private val followupTick = object : Runnable {
+
+    /** D7 只读面板：主状态 / 义务 / 额度，全部取插件最后一次 `/plan` 的快照。 */
+    private var panelLabel: TextView? = null
+
+    /** 一秒一格：面板重读快照，追问锁那行自己倒数；页面还在就一直排下一格。 */
+    private val tick = object : Runnable {
         override fun run() {
+            panelLabel?.text = ProactiveRuntime.panelText()
             val until = followupUntil
-            if (until <= 0) return
-            if (until - System.currentTimeMillis() <= 0) {
-                // 到点：追问锁结束，页面交还普通拦截逻辑（门由插件按 until 判定，手机不擅自收回拦击记录）。
-                followupUntil = 0L
-                followupLabel?.visibility = android.view.View.GONE
-                return
-            }
-            followupLabel?.text = followupCopy(until)
+            // 到点：追问锁结束，页面交还普通拦截逻辑（门由插件按 until 判定，手机不擅自收回拦击记录）。
+            if (until > 0 && until - System.currentTimeMillis() <= 0) followupUntil = 0L
+            if (followupUntil <= 0) followupLabel?.visibility = android.view.View.GONE
+            else followupLabel?.text = followupCopy(followupUntil)
             main.postDelayed(this, 1_000L)
         }
     }
@@ -231,7 +233,7 @@ class InterceptPageActivity : Activity() {
 
     override fun onDestroy() {
         main.removeCallbacks(proof)
-        main.removeCallbacks(followupTick)
+        main.removeCallbacks(tick)
         if (onScreenId == eventId) onScreenId = null
         // Destroyed without a report (the system reclaimed it, or it was restored and finished): the
         // lock is not over - it resurfaces with the app. Only the screen slot is given back.
@@ -457,16 +459,7 @@ class InterceptPageActivity : Activity() {
     private fun followupCopy(until: Long): String {
         val total = ((until - System.currentTimeMillis()) / 1_000L).coerceAtLeast(0L)
         val left = if (total >= 60) "${total / 60} 分 ${total % 60} 秒" else "${total} 秒"
-        val back = when (followupBackTo) {
-            "night" -> "深夜锁"
-            "evening" -> "晚间对账"
-            "morning" -> "晨间立项"
-            "review" -> "验收"
-            "sprint" -> "冲刺"
-            "brain" -> "共脑"
-            "standby" -> "待命"
-            else -> null
-        }
+        val back = ProactiveRuntime.stateLabel(followupBackTo)
         return if (back != null) "追问锁：还剩 $left，问完回到$back" else "追问锁：还剩 $left"
     }
 
@@ -646,9 +639,39 @@ class InterceptPageActivity : Activity() {
                 }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                     bottomMargin = dp(12)
                 })
-                main.removeCallbacks(followupTick)
-                main.postDelayed(followupTick, 1_000L)
             }
+            // D7 只读面板（接口约定 §2 `state` / §5 `obligations`）：主状态、义务、额度各一行；
+            // 追问锁剩余在上一行跟着倒计时。手机只显示插件算好的快照，不在这里判断锁不锁。
+            ProactiveRuntime.panelText()?.let { panel ->
+                addView(TextView(ctx).apply {
+                    panelLabel = this
+                    text = panel
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    setTextColor(palette.muted)
+                    setLineSpacing(0f, 1.3f)
+                    setPadding(0, dp(2), 0, dp(10))
+                })
+            }
+            // 他主动的两件事（接口约定 §3）：不必等插件的球，锁页上就能按。冲刺两档由插件定分钟数。
+            addView(LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(pillButton("冲刺", secondary = true, weight = 1f, onTap = {
+                    ProactiveRuntime.startSprint(null, 0, false)
+                    android.widget.Toast.makeText(ctx, "已开始冲刺", android.widget.Toast.LENGTH_SHORT).show()
+                }), LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(6) })
+                addView(pillButton("长冲刺", secondary = true, weight = 1f, onTap = {
+                    ProactiveRuntime.startSprint(null, 0, true)
+                    android.widget.Toast.makeText(ctx, "已开始长冲刺", android.widget.Toast.LENGTH_SHORT).show()
+                }), LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(6) })
+                addView(pillButton("申请验收", secondary = true, weight = 1f, onTap = {
+                    ProactiveRuntime.requestReview()
+                    android.widget.Toast.makeText(ctx, "验收申请已发出", android.widget.Toast.LENGTH_SHORT).show()
+                }), LinearLayout.LayoutParams(0, dp(44), 1f))
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(8)
+            })
+            main.removeCallbacks(tick)
+            main.postDelayed(tick, 1_000L)
             // P3: 直接讲道理。判球是真反驳时，插件会把力度降到 1，本页由手机侧关闭。
             val log = TextView(ctx).apply {
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)

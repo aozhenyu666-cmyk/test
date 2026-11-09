@@ -679,6 +679,19 @@ object ProactiveRuntime {
     /** 问完回到哪个主状态（`state.backTo`）；锁页用它说「问完回到哪里」。 */
     fun followupBackTo(): String? = followupBackToState
 
+    // ---------------------------------------------------------------- D7 只读面板
+
+    /**
+     * 面板正文（最多三行），每次 `/plan` 重新算一次（见 `Panel.kt`）。
+     * 一次 `/plan` 都没拿到时是 null，界面就不画这块。
+     */
+    @Volatile private var panelTextCache: String? = null
+
+    fun panelText(): String? = panelTextCache
+
+    /** `state`/`layers.kind` 的中文名；锁页的 `backTo` 也用它，免得两处各写一套。 */
+    fun stateLabel(kind: String?): String? = stateLabelOf(kind)
+
     private var lastFront: String? = null
 
     /**
@@ -962,6 +975,7 @@ object ProactiveRuntime {
         followupUntilAt = if (followupOn) expiry else 0L
         followupQuestionText = if (followupOn) fu?.get("currentQuestion") as? String ?: why else null
         followupBackToState = if (followupOn) st?.get("backTo") as? String else null
+        panelTextCache = panelTextOf(map)
         if (expiredFollowup > 0 && stamp >= expiredFollowup && followupTimeoutReported != expiredFollowup) {
             // 到点没裁决：手机本地先报一次；插件的答案可能带来新的追问锁，所以报完再问 /plan。
             followupTimeoutReported = expiredFollowup
