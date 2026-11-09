@@ -279,8 +279,11 @@ test('能力：两姐妹都知道自己能看屏幕、动手机、翻相册、�
     assert.match(t, /mcp__phone__screen/)
     assert.match(t, /mcp__phone__intent/)
     assert.match(t, /\/sdcard\/DCIM/)
-    assert.doesNotMatch(t, /按回桌面/, '妹妹手里没有任何管控工具')
-    assert.match(t, /你手里没有任何管控工具/, '妹妹知道自己只管陪')
+    assert.doesNotMatch(t, /按回桌面/)
+    // 第四轮：两人工具一致，站他这边；过关交给墙。
+    assert.match(t, /submit_to_wall/, '妹妹知道怎么交给墙')
+    assert.match(t, /站他这边/, '妹妹是盟友，不是监工')
+    assert.match(t, /你当场放不了/, '妹妹知道自己不能放')
     assert.match(big.contexts[0].text(), /读他的笔记和日程再推演/)
     assert.ok(sis.tools.notes_vault && big.tools.notes_vault)
     assert.equal(sis.tools.notes_vault.execute({ path: 'Documents/x' }).ok, false, '要绝对路径')

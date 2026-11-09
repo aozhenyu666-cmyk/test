@@ -51,7 +51,7 @@ export const STATE_TABLE = [
   { id: 'review', priority: 80, enter: ['review-lock'], lock: 'followup', back: null,
     agenda: '验收：对照完成物和笔记库追问，满意才放风。' },
   { id: 'followup', priority: 80, enter: ['followup-other'], lock: 'followup',
-    agenda: '追问锁：把当前问题问完，给出裁决（submit_verdict）。' },
+    agenda: '追问锁：把当前问题问完，证据凑齐交墙（submit_to_wall）。' },
   { id: 'sprint', priority: 70, enter: ['sprint'], lock: 'sprint', back: null,
     agenda: '冲刺：少打扰，最多 20 分钟看一眼进展；到点或他点「申请验收」进验收。' },
   { id: 'brain', priority: 70, enter: ['brain'], lock: 'brain', back: null,

@@ -238,9 +238,11 @@ export function checkEvidence(item, ctx) {
  */
 export function reconcile(state, ctx) {
   const tasks = Array.isArray(state?.tasks) ? state.tasks : []
-  const notes = ctx.notes || todaysNotes(ctx.notesDir, todayStart(ctx.now, ctx.tz))
+  // ctx.check：第四轮起由墙按物理证据判（wall_auditor.js）；没给就用原来的核对。
+  const check = typeof ctx.check === 'function' ? ctx.check : null
+  const notes = check ? [] : ctx.notes || todaysNotes(ctx.notesDir, todayStart(ctx.now, ctx.tz))
   const results = tasks.map((t) => {
-    const r = checkEvidence(t, { ...ctx, notes })
+    const r = check ? check(t) : checkEvidence(t, { ...ctx, notes })
     return { task: t.task, evidence: t.evidence, verdict: r.verdict, why: r.why }
   })
   const done = results.filter((r) => r.verdict === 'done').length

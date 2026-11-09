@@ -61,7 +61,7 @@ import { buildSnapshot, sistersView } from './panel.js'
 import { kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import {
-  FOLLOWUP_CAP_MS, FOLLOWUP_PENALTY, STANDBY_LOCK_MS, VERDICT_KINDS, addObligation, checkVerdict, clearObligation, closeLock, followupView,
+  FOLLOWUP_CAP_MS, FOLLOWUP_PENALTY, STANDBY_LOCK_MS, addObligation, clearObligation, closeLock, followupView,
   funBlockedBy, lockActive, lockExpired, obligationOf, obligationsView, openLock, standbyDue, takeReask,
 } from './followup.js'
 import { BRAIN_MIN_MS, SPRINT_LONG_MIN, SPRINT_MIN, resolveState } from './machine.js'
@@ -69,7 +69,11 @@ import {
   DEFAULT_WALL, wallConfig, wallDecision, activeRelax, tightenActive, relaxRemaining, relaxUsedThisWeek, relaxBonus,
   trackApplyWindow, applyWindowOpen, dayKey, weekKey, WALL_KIND_DEFAULT, wallDefianceText,
 } from './wall.js'
-import { dailyPath, keywordsOf, loadDaily, normalizeTasks, reconcile, reviewText, writeDaily } from './daily.js'
+import { dailyPath, dayString, keywordsOf, loadDaily, normalizeTasks, reconcile, reviewText, writeDaily } from './daily.js'
+import {
+  SCREENSHOT_DIRS, auditTask, baselineFor, checkMorningTasks, evidenceType, listScreenshots, loadWallMemory,
+  noteDone, notePromised, pruneMemory, recentRate, statOf, wallText,
+} from './wall_auditor.js'
 import { GEMINI_PACKAGES, geminiBrief, geminiLines, geminiMode, geminiSteps, recapMarkdown, trackGemini } from './gemini.js'
 
 export const name = 'dsh-go-companion'
@@ -831,7 +835,7 @@ export function apply(ctx) {
         lastHumanAt.set(String(session?.id || ''), Date.now())
         // 落进账本：引擎重启也知道他刚说过话（阶梯不会把聊过的球当成没接，发球也知道他多久前说的话）。
         record({ state: 'human', at: Date.now(), sessionId: String(session?.id || '') })
-        // 第三轮：早上/晚上的门不再靠"他认真回了一句"关——过关要姐妹裁决（submit_verdict），
+        // 第三轮：早上/晚上的门不再靠"他认真回了一句"关——过关要交墙按证据判（submit_to_wall），
         // 敷衍的话不会让窗口消失。这里只记"他在聊"。
         // 他说"安静一小时""今天别找我"就照做：这是一句话就说清的事，不必占一次模型调用。
         const muteUntilAt = mutedUntil(text, Date.now(), { tz: config.timeZone })
@@ -1287,7 +1291,7 @@ export function apply(ctx) {
     const g = loadGemini()
     const session = g.session && Number(g.session.until) > now ? Number(g.session.until) : 0
     const r = Number(config.refuseUntil) > now ? Number(config.refuseUntil) : 0
-    // 任务到点还没验收：继续锁（每次往后顺 10 分钟），直到姐姐 end_task_mode 或者兜底两小时。
+    // 任务到点还没验收：继续锁（每次往后顺 10 分钟），直到交墙验收通过（submit_to_wall review）或者兜底两小时。
     const pending = aiTask(config, now) ? Math.max(Number(config.gearUntil) || 0, now + 10 * 60_000) : 0
     if (onBreak(now)) return 0
     // 作息：早上没说今天的 3 件事、晚上没对完账——滚动锁；深夜锁到早上 7 点。
@@ -1329,7 +1333,7 @@ export function apply(ctx) {
   // ---- 第三轮：追问锁 / 裁决 / 全天状态 ---------------------------------------------------------
   //
   // 门不再按字数关：节奏只负责"该不该开门"，关不关由姐妹的裁决（满意）或超时决定。
-  // 墙按状态机执行，她们唯一的把手是 submit_verdict。
+  // 墙按状态机执行；过关由墙按证据判（submit_to_wall，见 wall_auditor.js）。
 
   /** 改配置并落盘；落盘失败也照样在内存里生效（这一轮不能因为写失败就反悔）。 */
   function commit(patch) {
@@ -1425,6 +1429,7 @@ export function apply(ctx) {
         const out = reconcile(state, {
           now, tz, notesDir: notesDir(), ledger: readLedger(home(), 800),
           usage: Array.isArray(lastPhone?.today) ? lastPhone.today : [],
+          check: wallCheck(now),
         })
         const next = { ...state, review: { at: now, ...out } }
         writeDaily(kbDir(notesDir(), home()), next)
@@ -1657,7 +1662,8 @@ export function apply(ctx) {
         if (!goal) return { ok: false, text: '任务要有具体目标（做什么、做到什么程度）。' }
         setGear({ gear: 'busy', until, what: goal.slice(0, 20), task: { goal, by: role, reason } }, 'ai-' + role)
         record({ state: 'task-start', at: now, mode: 'task', minutes, by: role, goal, reason })
-        return { ok: true, text: '任务模式立好了：' + goal + '，到 ' + hm + '。娱乐全锁，到点验收。' }
+        wallCloseOnStart(now)
+        return { ok: true, text: '任务模式立好了：' + goal + '，到 ' + hm + '。娱乐全锁，到点交墙验收（submit_to_wall kind=review）。' }
       },
     }
   }
@@ -1684,23 +1690,154 @@ export function apply(ctx) {
       },
     }
   }
-  /**
-   * 第三轮唯一影响墙的把手（C4）：姐妹对此刻挂着的追问锁交一个裁决。
-   * 墙只校验格式，满意不满意由她们定；不合格按"不满意"处理并把原因回给她们。
-   */
-  function submitVerdictTool(role) {
+  // ---------------------------------------------------------------- 第四轮 R4-1：墙的审查
+  //
+  // 墙只看物理证据，判定全在 wall_auditor.js 的代码里，不读任何人的说法。姐妹是他这边的人：
+  // 帮他把任务和证据整理好，用 submit_to_wall 交上来；过不过由这里决定。
+  const loadWallMem = () => loadWallMemory(readState(stateFile('wall_memory.json'), {}))
+  const saveWallMem = (m) => writeJson(stateFile('wall_memory.json'), m)
+  const loadBaseline = () => readState(stateFile('wall-baseline.json'), {}) || {}
+  const saveBaseline = (b) => writeJson(stateFile('wall-baseline.json'), b)
+  const WALL_KIND_LABEL = { morning: '晨间立项', review: '验收', evening: '晚间对账', standby: '待命追问', defiance: '违抗追问', gemini: '连麦回流' }
+
+  function wallRate(now) {
+    return recentRate(loadWallMem(), dayString(now, zoneOr(config.timeZone)))
+  }
+  /** 审查要用的现场：立项时间、各文件立项时的大小、立项后的截图、今天的使用记录。 */
+  function wallCtx(now) {
+    const tz = zoneOr(config.timeZone)
+    const day = dayString(now, tz)
+    const base = loadBaseline()
+    const today = base.day === day
+    const since = today && Number(base.at) > 0 ? Number(base.at) : startOfDay(now, tz)
     return {
-      name: 'submit_verdict',
-      description: '对挂着的追问锁交裁决。满意 → 关闭拦截、按状态继续（验收/立项过后放风，晚间对账过后算明天的额度）；' +
-        '不满意 → 锁不消失，只记账。格式：kind 六种之一（morning 晨间立项 / review 验收 / defiance 违抗 / standby 待命超时 / gemini 连麦回流 / evening 晚间对账）；' +
-        'satisfied 布尔；满意时必须写 summary（为什么算过关）和 nextStep（下一步）；晨间立项还要带 1–3 项 tasks，每项有 task 和 evidence。',
+      now, since, notesDir: notesDir(), stat: statOf,
+      screenshots: listScreenshots(SCREENSHOT_DIRS, since),
+      usage: Array.isArray(lastPhone?.today) ? lastPhone.today : [],
+      files: today && base.files && typeof base.files === 'object' ? base.files : {},
+    }
+  }
+  function auditOne(task, ctx) {
+    return auditTask(task, { ...ctx, baseline: ctx.files[task.task] })
+  }
+  /** 晚间对账也用墙的口径（原来的关键词匹配能被"在笔记里写上那几个词"糊弄过去）。 */
+  function wallCheck(now) {
+    const ctx = wallCtx(now)
+    return (task) => {
+      const r = auditOne(task, ctx)
+      return { verdict: r.verdict, why: r.data + (r.missing ? '；还缺：' + r.missing : '') }
+    }
+  }
+  function sprintOrTask(now) {
+    return Number(config.sprintUntil) > now || Boolean(aiTask(config, now))
+  }
+  /** 他点「开始」或立了任务：挂着的待命 / 违抗追问由墙当场关掉——动手了就是交代。 */
+  function wallCloseOnStart(now) {
+    const l = config.followup
+    if (!lockActive(l, now) || !['standby', 'defiance'].includes(l.reason)) return null
+    record({ state: 'wall-audit', at: now, kind: l.reason, pass: true, by: 'start' })
+    return applyVerdict({ ok: true, kind: l.reason, satisfied: true, summary: '开始干活了', nextStep: String(config.taskGoal || '冲刺') }, now, 'wall')
+  }
+
+  /**
+   * 交给墙：先看现在有没有这一种可以交（挂着的锁 / 门对得上），再按证据判。
+   * @returns {{ok:boolean, pass:boolean, text:string}}
+   */
+  function wallAudit(kind, args, now, by) {
+    const label = WALL_KIND_LABEL[kind]
+    if (!label) return { ok: false, pass: false, text: 'kind 只能是 ' + Object.keys(WALL_KIND_LABEL).join(' / ') + '。' }
+    const l = config.followup
+    const held = lockActive(l, now) ? l.reason : ''
+    const rh = lastRhythm
+    const open = {
+      morning: held === 'morning' || Boolean(rh?.morningGate),
+      evening: held === 'evening' || Boolean(rh?.reviewGate),
+      review: held === 'review' || sprintOrTask(now),
+      standby: held === 'standby',
+      defiance: held === 'defiance',
+      gemini: held === 'gemini',
+    }[kind]
+    const rate = wallRate(now)
+    const done = (pass, data, missing = []) => {
+      record({ state: 'wall-audit', at: now, kind, pass, by })
+      return { ok: true, pass, text: wallText({ title: label, data, pass, missing, rate }) }
+    }
+    if (!open) return done(false, ['现在没有挂着的「' + label + '」'], ['等到该交的时候再交'])
+
+    if (kind === 'morning') {
+      const c = checkMorningTasks(args.tasks)
+      if (!c.ok) return done(false, [], c.problems)
+      const tasks = c.tasks.map(({ task, evidence }) => ({ task, evidence }))
+      const tz = zoneOr(config.timeZone)
+      const day = dayString(now, tz)
+      saveBaseline({ day, at: now, files: baselineFor(tasks, { notesDir: notesDir(), stat: statOf }) })
+      saveWallMem(pruneMemory(notePromised(loadWallMem(), day, tasks.length), day))
+      applyVerdict({ ok: true, kind, satisfied: true, summary: '立项 ' + tasks.length + ' 件', nextStep: tasks[0].task, tasks }, now, 'wall')
+      return done(true, tasks.map((t, i) => (i + 1) + '. ' + t.task + ' → ' + t.evidence))
+    }
+
+    if (kind === 'review') {
+      const ctx = wallCtx(now)
+      const state = loadDaily(loadDailyState(), now, zoneOr(config.timeZone))
+      const pick = String(args.task ?? '').trim()
+      const idx = /^\d+$/.test(pick) ? Number(pick) - 1 : state.tasks.findIndex((t) => pick && (t.task.includes(pick) || pick.includes(t.task)))
+      let task = idx >= 0 ? state.tasks[idx] : state.tasks.length === 1 ? state.tasks[0] : null
+      const extra = String(args.evidence ?? '').trim()
+      if (!task && extra) {
+        // 临时交的完成物：文件类没有立项时的底数，量不出长了多少，所以只收截图和 App 时长。
+        const type = evidenceType(extra)
+        if (type === 'file' || !type) return done(false, ['临时完成物「' + extra + '」'], ['临时交的只收"截图"或"某 App N 分钟"；文件类要在早上立项时登记'])
+        task = { task: String(config.taskGoal || '这一轮'), evidence: extra }
+      }
+      if (!task) return done(false, ['今天立项的事：' + (state.tasks.map((t, i) => (i + 1) + '. ' + t.task).join('；') || '无')], ['说清交的是第几件（task），或者交截图 / App 时长（evidence）'])
+      const r = auditOne(task, ctx)
+      if (!r.pass) {
+        applyVerdict({ ok: true, kind, satisfied: false }, now, 'wall')
+        return done(false, [task.task + '：' + r.data], [r.missing])
+      }
+      applyVerdict({ ok: true, kind, satisfied: true, summary: task.task + '：' + r.data, nextStep: '放风，回来接着下一件' }, now, 'wall')
+      return done(true, [task.task + '：' + r.data])
+    }
+
+    if (kind === 'evening') {
+      const tz = zoneOr(config.timeZone)
+      const state = loadDaily(loadDailyState(), now, tz)
+      const check = wallCheck(now)
+      const rows = state.tasks.map((t) => ({ t, r: check(t) }))
+      const ok = rows.filter((x) => x.r.verdict === 'done').length
+      saveWallMem(pruneMemory(noteDone(loadWallMem(), state.day, ok), state.day))
+      applyVerdict({ ok: true, kind, satisfied: true, summary: '对账：' + ok + '/' + rows.length, nextStep: '明天按对账结果' }, now, 'wall')
+      const data = rows.length
+        ? rows.map((x, i) => (i + 1) + '. ' + x.t.task + '：' + (x.r.verdict === 'done' ? '有证据' : x.r.verdict === 'partial' ? '一半' : '没证据') + '（' + x.r.why + '）')
+        : ['今天没有立项的事']
+      return { ok: true, pass: true, text: wallText({ title: label + '：有证据完成 ' + ok + '/' + rows.length + '，结果作用于明天', data, pass: true, rate: wallRate(now) }) }
+    }
+
+    if (kind === 'standby' || kind === 'defiance') {
+      if (!sprintOrTask(now)) return done(false, ['现在没有在跑的冲刺或任务'], ['点「开始」，或者让姐妹帮他立一个任务（start_task_mode）'])
+      wallCloseOnStart(now)
+      return done(true, ['在做：' + String(config.taskGoal || '冲刺')])
+    }
+
+    // gemini：连麦回流只要一条能马上做的下一步。
+    const next = String(args.next_step ?? args.nextStep ?? '').trim().slice(0, 200)
+    if (next.length < 6) return done(false, ['下一步：' + (next || '空')], ['写一条能马上做的下一步（至少 6 个字）'])
+    applyVerdict({ ok: true, kind, satisfied: true, summary: '连麦回流', nextStep: next }, now, 'wall')
+    return done(true, ['下一步：' + next])
+  }
+
+  function wallTool(role) {
+    return {
+      name: 'submit_to_wall',
+      description: '把他的东西交给墙审查。墙只看物理证据——文件立项后长了多少、立项后有没有新截图、App 今天用了多久——不读你们怎么说。' +
+        'kind=morning：交今天 1–3 件事（tasks），每件的完成物写成墙查得到的样子：笔记文件路径（大肥鱼/周报.md）、"截图"、或"某 App N 分钟"。' +
+        'kind=review：交验收，task 写第几件（从 1 数）或名字；临时的事可以用 evidence 交"截图"或"某 App N 分钟"。' +
+        'kind=evening：交晚间对账（墙逐件核，结果作用于明天）。kind=standby / defiance：他已经点了「开始」或立了任务时交，关掉追问。' +
+        'kind=gemini：交连麦得出的下一步（next_step）。墙的回复以〔墙〕开头，原样转给他，别改，也别替墙求情。',
       parameters: {
         type: 'object',
         properties: {
-          kind: { type: 'string', enum: VERDICT_KINDS },
-          satisfied: { type: 'boolean' },
-          summary: { type: 'string', description: '为什么算过关（满意时必填）' },
-          nextStep: { type: 'string', description: '下一步做什么（满意时必填）' },
+          kind: { type: 'string', enum: Object.keys(WALL_KIND_LABEL) },
           tasks: {
             type: 'array',
             maxItems: 3,
@@ -1708,28 +1845,21 @@ export function apply(ctx) {
               type: 'object',
               properties: {
                 task: { type: 'string', description: '今天要做的事' },
-                evidence: { type: 'string', description: '完成物：晚上能去查的东西' },
+                evidence: { type: 'string', description: '完成物：笔记文件路径 / "截图" / "某 App N 分钟"' },
               },
               required: ['task', 'evidence'],
               additionalProperties: false,
             },
           },
-          longTerm: { type: 'boolean', description: '这件事要跟进到以后（写进长期规划）' },
+          task: { type: 'string', description: 'review：第几件（从 1 数）或任务名' },
+          evidence: { type: 'string', description: 'review：临时的事交"截图"或"某 App N 分钟"' },
+          next_step: { type: 'string', description: 'gemini：连麦得出的、能马上做的下一步' },
         },
-        required: ['kind', 'satisfied'],
+        required: ['kind'],
         additionalProperties: false,
       },
       output: toolOutput,
-      execute: (args = {}) => {
-        const now = Date.now()
-        const v = checkVerdict(args)
-        if (!v.ok) {
-          // 格式不合格：按"不满意"处理，但账本上单独记，别污染 D3 按 state:'verdict' 扫出来的笔记。
-          record({ state: 'verdict-invalid', at: now, by: role, kind: v.kind || undefined, code: v.code })
-          return { ok: false, text: v.text }
-        }
-        return applyVerdict(v, now, role)
-      },
+      execute: (args = {}) => wallAudit(String(args.kind || ''), args, Date.now(), role),
     }
   }
   /** 知识库只读检索：找证据、翻旧结论。姐妹共用（C4：两人工具一致）。 */
@@ -1918,6 +2048,7 @@ export function apply(ctx) {
         const out = reconcile(state, {
           now, tz, notesDir: notesDir(), ledger: readLedger(home(), 800),
           usage: Array.isArray(lastPhone?.today) ? lastPhone.today : [],
+          check: wallCheck(now),
         })
         const next = { ...state, review: { at: now, ...out } }
         const wrote = writeDaily(dir, next)
@@ -2130,6 +2261,7 @@ export function apply(ctx) {
       setGear({ gear: 'busy', until, what: task || '冲刺', task: task ? { goal: task, by: 'user' } : undefined }, 'sprint')
       commit({ sprintUntil: until })
       record({ state: 'sprint-start', at: now, minutes, task: task || undefined, until })
+      wallCloseOnStart(now)
       return { v: 1, ok: true, sprint: { until, minutes, task: task || null } }
     }
     if (type === 'request-review') {
@@ -2505,12 +2637,14 @@ export function apply(ctx) {
     // 传话工具按会话注册：这样工具知道是谁递给谁。
     if (agent?.ctx?.tools && typeof agent.ctx.tools.register === 'function') {
       const offs = []
-      // 第三轮（C4）：两姐妹**工具完全一致**，谁都没有管控工具——不能锁、不能放、不能立任务、不能封 App、
-      // 不能改规则。墙按状态机执行；她们唯一影响墙的方式是 submit_verdict。
+      // 第四轮（R4-2）：两姐妹工具完全一致。她们是他这边的人：帮忙和收紧的工具全给（立任务、拒绝模式、
+      // 封 App、今天收紧、连麦），放松只有 request_relax——那条由代码卡死在晚间申请窗口、只管明天、按周限额。
+      // 过不过关不归她们：整理好交给墙（submit_to_wall），墙只看证据。
       const list = [
         notesTool(), sisterToolIfDual(role), vaultSearchTool(), vaultRecentTool(), kbTool(role),
         geminiLiveTool(role), geminiEndTool(role), geminiLogTool(role), scheduleGeminiLiveTool(role),
-        submitVerdictTool(role),
+        controlTool(), startTaskTool(role), blockTool(role), tightenTool(role), relaxTool(role),
+        wallTool(role),
       ].filter(Boolean)
       for (const tool of list) {
         try {

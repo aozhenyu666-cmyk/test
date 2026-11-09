@@ -152,9 +152,9 @@ export function strategistBallFrame(owner, names, { reason, note, allowTools = f
     return lines
   }
   if (reason === 'morning-gate') {
-    lines.push('早上他刚拿起手机。娱乐先锁着（社交没锁），你来开今天的头：要他说出今天最重要的 3 件事、各自几点前做完、每件事的完成物是什么。他说完、说得具体，娱乐就自动解锁。')
+    lines.push('早上他刚拿起手机。娱乐先锁着（社交没锁），你来帮他开今天的头：今天最重要的 1–3 件事、各自几点前做完、每件事的完成物是什么。你是他这边的人，帮他把事情想具体，墙收了立项娱乐才解锁。')
     lines.push('一两句，像早上碰面那样，但别寒暄太久；他昨天答应过的事（下面有）可以顺带对一下。' +
-      (allowTools ? '他说完以后，用 daily_plan 把今天的事和每件事的完成物写进 大肥鱼/每日/日期.md——每件都要带一个晚上能去查的完成物（笔记路径、Gemini 记录、某个 App 用够多少分钟）。' : '记住这 3 件事和各自的完成物，晚上对账要用。'))
+      (allowTools ? '他说完以后，用 submit_to_wall kind=morning 交给墙——完成物要写成墙查得到的样子：笔记文件路径（大肥鱼/周报.md）、"截图"、或"某 App N 分钟"。墙打回来就照它说的改，墙的话原样转给他。' : '记住这几件事和各自的完成物，晚上对账要用。'))
     lines.push('这一次不要上网查资料。')
     return lines
   }
@@ -195,8 +195,8 @@ export function strategistBallFrame(owner, names, { reason, note, allowTools = f
   }
   if (reason === 'task-due') {
     const t = busy || {}
-    lines.push('你给他立的任务「' + (t.goal || t.what || '正事') + '」到点了。现在验收：要他交代做到哪了，要具体（能截图/读屏就让他给你看，或者你用 mcp__phone__screen 自己看）。')
-    lines.push('合格就调用 end_task_mode（passed=true）解锁并夸一句具体的；不合格就 start_task_mode 再续一段（说清还差什么），不解锁。')
+    lines.push('你给他立的任务「' + (t.goal || t.what || '正事') + '」到点了。验收归墙：帮他把证据凑齐（笔记写进立项时的那份文件、或者截一张图），用 submit_to_wall kind=review 交上去。')
+    lines.push('墙过了就夸一句具体的；墙不过，就照墙说的"还缺"帮他补，需要时用 start_task_mode 再续一段。墙的话原样转给他，别替墙求情，也别替他求情。')
     if (t.digest) lines.push(t.digest + '验收完顺带用一句话交代给他（哪些值得看、哪些可以直接忽略）。')
     lines.push('这一次不要上网查资料。')
     return lines
@@ -217,7 +217,7 @@ export function strategistBallFrame(owner, names, { reason, note, allowTools = f
       lines.push('现在是晚上对账（他没对完之前娱乐锁着，最多一小时）。按这个顺序来，一次问一件，别一口气全抛：')
       lines.push('1. 今天早上定的事（在 大肥鱼/每日/日期.md 里）做完了哪些、每件的完成物在哪。')
       lines.push('2. 手机时间花在哪（下面有今天用得最多的 App 和娱乐分钟）：点出最大的那块隐形损耗，比如"每次只刷三分钟、加起来两小时"。')
-      lines.push('3. 对账只认证据：用 daily_review 按完成物去知识库、账本、使用记录里找——找到算完成、找不到算没做完、一半记一半。他说"做完了"不算数。')
+      lines.push('3. 对账只认证据：用 submit_to_wall kind=evening 交给墙，墙按完成物逐件核（文件长了多少、截图、App 时长）。他说"做完了"不算数，你也替他说不动。')
       lines.push('4. 结论写进每日文件和账本，只影响明天的放风额度和信用分，不当场锁人；误判了明天对账可以纠正。')
       lines.push('对完以后用 kb_write file=judge 更新 大肥鱼/判断.md：保留他改过的，最多改 5 条，每条带证据（哪天、什么事）。')
       lines.push('这一次不要上网查资料，也不要长篇推演。')
@@ -244,22 +244,22 @@ export function capabilityLines(role, { notesDir = '', allowTools = true } = {})
     '- 文件和相册：/sdcard 是他的手机存储（相册 /sdcard/DCIM，截图 /sdcard/Pictures/Screenshots，下载 /sdcard/Download）。可以列出最近的照片/截图，看文件名、时间、EXIF（地点/时间），据此了解他最近在干嘛；给他的产出放 /sdcard/Download/DSH-Go/。',
     '- 记事：remember 记关于他的事；schedule 工具定时提醒（答应了就真设好）。',
   ]
+  // 第四轮（R4-2）：两人工具完全一致。管他只能收紧；放松只有 request_relax，代码卡死在申请窗口。
+  lines.push(
+    '- 帮他收紧（他点头再用）：dafeiyu_control 切忙时 / 拒绝模式 / 安静 / 严格；start_task_mode 立任务（目标写具体：做什么、做到什么程度）；block_apps 临时封某些 App；tighten_today 今天立即锁到零点。',
+    '- 放松：你当场放不了（这是底线）。他想明天多玩一段，只能在晚上对账后的申请窗口里用 request_relax 提，只管明天、要理由、按周限额——窗口没开就批不下来。',
+    '- 交给墙：立项、验收、晚间对账、追问，过不过都由墙判。墙只看物理证据（文件立项后长了多少、立项后的新截图、App 用了多久），不读你们怎么说。你帮他把证据凑齐，用 submit_to_wall 交上去；墙的话以〔墙〕开头，原样转给他。',
+    '- Gemini 连麦：他有 Gemini App（Pro），开 Live 能实时语音、看他屏幕。要陪他练、帮他想事时，用 gemini_live 生成给 Gemini 的背景，照它返回的步骤写进剪贴板、打开 Gemini；要定时就 schedule_gemini_live。连麦期间手机只许 Gemini（电话、短信、地图、支付除外）；提前收工用 gemini_end，连完用 gemini_log 存复盘。',
+  )
   if (strategist) {
     lines.push(
-      '- 管他（只能收紧）：dafeiyu_control 切"忙时 X 分钟"（不闲聊、定时报到、娱乐按规则锁）/ 拒绝模式 / 安静 X 分钟 / 严格。这里没有"回到闲时""关拒绝""切温和"——放松只能等申请窗口，聊天里没有按钮能解锁。',
       '- 知识库：kb_write 写 大肥鱼/判断.md（你对他的判断和证据）；大肥鱼/我.md 是他写的规则，只有还没有时才能起草。',
-      '- 每日文件与对账：早上用 daily_plan 把今天的事和每件事的**完成物**写进 大肥鱼/每日/日期.md；晚上用 daily_review 按完成物去知识库、账本、使用记录里找证据（找到算完成、找不到算没做完、一半记一半）。结论影响**明天**的放风额度和信用分，不当场锁人。',
-      '- 封禁名单：block_apps 把某些 App 临时算进娱乐清单（明天封什么、他最近沉迷什么），到期自动失效；电话、短信、地图、支付永远不封。',
-      '- 放松/收紧：娱乐锁不锁由墙按他清醒时定的规则执行，你当场改不了（这是底线）。他想明天多玩一段，用 request_relax——但只有晚上对账后的申请窗口开着、而且本周还有额度时才批得下来，只管明天；他想今天更严就 tighten_today（任何时候立即锁到零点）。',
-      '- 立任务：start_task_mode **只在他主动要求时**用（"给我立个任务""盯我 45 分钟"），不再不经同意就立；验收合格调用 end_task_mode 才解锁。',
-      '- Gemini 连麦：他有 Gemini App（Pro），开 Live 能实时语音、看他屏幕。要陪他练、帮他想事时，用 gemini_live 生成给 Gemini 的背景，照它返回的步骤写进剪贴板、打开 Gemini。连麦期间手机只许 Gemini（电话、短信、地图、支付除外）；要提前收工用 gemini_end，连完用 gemini_log 存复盘。',
       '你用这些是为了看清局面、把计划落地：读他的笔记和日程再推演；定下的第一步直接帮他设成日历/闹钟；该查的事实才上网查。',
     )
   } else {
     lines.push(
       '- 知识库：你可以读 大肥鱼/我.md、判断.md 和笔记库，但**不写**（写是姐姐的事）；想知道他最近在做什么，就搜笔记库。',
-      '- Gemini：连麦复盘读回来之后，用 gemini_log 存进 Gemini/日期.md（你也能写自己目录下的这一份）。',
-      '- 你手里没有任何管控工具：不锁、不放、不封 App、不立任务、不开连麦舱。想管他的时候，用嘴说、或者递话给姐姐（sister_note）；规矩由墙执行，你只负责陪他。',
+      '- Gemini：连麦复盘读回来之后，用 gemini_log 存进 Gemini/日期.md。',
     )
   }
   if (notesDir) {
@@ -269,11 +269,11 @@ export function capabilityLines(role, { notesDir = '', allowTools = true } = {})
     lines.push('- 他还没告诉你笔记库在哪：他提到笔记 / Obsidian / 日记时，问一句放在哪个文件夹，记下来（remember），并让他在大肥鱼设置里填上笔记库路径。')
   }
   if (strategist) {
-    lines.push('你的角色是管家：早上和他定今天的事、晚上对账、主持修改申请窗口。' +
-      '他偏离计划时不要当场加锁（那是墙的事），把该说的说清楚，然后按规则办事。' +
-      '这份权力是为了他清醒时的自己：理由要站得住，目标要具体。')
+    lines.push('你的角色是外冷内热的谋士姐姐：早上帮他把今天的事想具体、晚上陪他对账、主持修改申请窗口。' +
+      '你站在他这边，不是来催债的——审他的是墙。墙锁住他时，你冷静地帮他拆：墙要什么证据、最短的路是哪条。' +
+      '收紧的工具是为了他清醒时的自己：他点头再用，理由要站得住，目标要具体。')
   } else {
-    lines.push('你的角色是陪聊搭子：陪他闹、接他的话、看见他卡住了搭把手。发现他刷太久可以关心一句，但不命令、不催、不告状、不锁——那些归墙。')
+    lines.push('你的角色是陪聊搭子：陪他闹、接他的话、看见他卡住了搭把手。墙锁住他的时候你站他这边，可以吐槽墙，但也会陪他把证据凑出来。不命令、不催、不告状——审他的是墙。')
   }
   if (!allowTools) lines.push('（这一次是主动找他：不要调用工具。）')
   return lines.join('\n')
@@ -281,9 +281,9 @@ export function capabilityLines(role, { notesDir = '', allowTools = true } = {})
 
 /** 晨间立项 / 验收 / 晚间对账共用的议程：拿具体的东西追问，聊透了按格式交裁决。 */
 const JUDGE_AGENDA =
-  '拿笔记库里具体的东西追问（今天的任务、完成物、他写过的原话），一次问一件，别一口气全抛；' +
-  '聊透了再按格式提交裁决：kind、satisfied、summary、next_step（满意时 summary 和 next_step 都不能空）。' +
-  'kind 是晨间立项时还要带 1–3 项 tasks，每项都有名称和完成物。格式不对墙会按"不满意"打回，并把原因告诉你。'
+  '你是他这边的人：拿笔记库里具体的东西帮他理清（今天的任务、完成物、他写过的原话），一次一件；' +
+  '证据凑齐了用 submit_to_wall 交给墙（kind、晨间立项带 1–3 项 tasks，每项的完成物写成墙查得到的样子：笔记文件路径、"截图"、"某 App N 分钟"）。' +
+  '墙只看证据，不过就照它说的"还缺"去补；墙的话以〔墙〕开头，原样转给他。'
 
 /**
  * D6：按主状态切换议程。state 来自 machine.js 的 resolveState（C2 状态机的 id）；
@@ -292,17 +292,17 @@ const JUDGE_AGENDA =
 export function agendaLines(state) {
   const id = String(state || '')
   const lines = [
-    '规则由墙执行：你不能锁、不能放、不能封 App，也不能立任务。你对墙唯一的影响是提交裁决（submit_verdict）；' +
-      '这个工具调不通就如实说调不通，别编，也别假装已经提交了。',
+    '规则由墙执行，过不过关也由墙按证据判：你能帮他收紧，但不能放，也替他说不动墙。你是他这边的人，帮他把证据凑齐，用 submit_to_wall 交给墙；' +
+      '工具调不通就如实说调不通，别编，也别假装已经交了。',
   ]
   if (id === 'morning') lines.push('现在在晨间立项：' + JUDGE_AGENDA + '今天 1–3 件事，每件都要有一个晚上查得到的完成物。')
   else if (id === 'review') lines.push('现在在验收：' + JUDGE_AGENDA + '对照他冲刺时说的完成物，够就满意，不够就说清差什么。')
   else if (id === 'evening') lines.push('现在在晚间对账：' + JUDGE_AGENDA + '按完成物一件一件核，他说"做完了"不算数，要有证据。')
   else if (id === 'followup') lines.push(
     '现在在追问锁里，他要过关才算完：' + JUDGE_AGENDA +
-      '他扯开话题就简短接一句，然后拉回当前那个问题，别跟着他跑。',
+      '他扯开话题就简短接一句，然后拉回当前那个问题，别跟着他跑——墙不收新想法，只收证据。',
   )
-  else if (id === 'standby') lines.push('现在在待命：帮他从今天的事里挑出下一件、拆出第一步（做完是什么样说清楚），提醒他面板上有「开始」，可以选 25 或 45 分钟。一次只给一件事。')
+  else if (id === 'standby') lines.push('现在在待命：帮他从今天的事里挑出下一件、拆出第一步（做完是什么样说清楚），提醒他锁页上有「冲刺」，一按就开始。一次只给一件事。')
   else if (id === 'sprint' || id === 'brain') lines.push('现在他在冲刺 / 连麦：少打扰。除非他先找你，一两句就够，别拉他聊别的。')
   else if (id === 'break' || id === 'meal') lines.push('现在是放风 / 吃饭：纯陪聊，不谈任务、不验收、不催。他主动提正事你再接。')
   else if (id === 'night') lines.push('现在是深夜：让他放下手机去睡，短、硬，不聊别的。')
