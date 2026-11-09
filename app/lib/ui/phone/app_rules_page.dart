@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../l10n/l10n.dart';
+import '../../loop/loop_channel.dart';
 import '../../proactive/proactive_state.dart';
 import '../../state/phone_state.dart';
 import '../common/app_sheet.dart';
@@ -205,60 +208,138 @@ class _AddAppDialog extends StatefulWidget {
 
 class _AddAppDialogState extends State<_AddAppDialog> {
   final _package = TextEditingController();
+  final _search = TextEditingController();
   AppRule _rule = AppRule.deny;
+
+  /// 已安装的桌面应用。`dsh/loop` 的 `apps` 早就有这个能力（触发测试页在用），
+  /// 这里只是把它接到「加一条规则」上——以前要用户自己背包名。
+  List<LoopApp>? _apps;
+  bool _manual = false;
 
   static final _pattern = RegExp(r'^[A-Za-z][\w]*(\.[A-Za-z][\w]*)+$');
 
   @override
+  void initState() {
+    super.initState();
+    unawaited(_loadApps());
+  }
+
+  Future<void> _loadApps() async {
+    final apps = await LoopChannel().apps();
+    if (!mounted) return;
+    setState(() {
+      _apps = apps;
+      // 列不出来（原生通道缺失）就直接进手输，别给一个永远转圈的空列表。
+      if (apps.isEmpty) _manual = true;
+    });
+  }
+
+  @override
   void dispose() {
     _package.dispose();
+    _search.dispose();
     super.dispose();
   }
 
   bool get _valid => _pattern.hasMatch(_package.text.trim());
 
+  void _pick(LoopApp app) => Navigator.pop(context, (app.package, _rule));
+
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
+    final apps = _apps;
+    final query = _search.text.trim().toLowerCase();
+    final shown = apps == null
+        ? const <LoopApp>[]
+        : (query.isEmpty
+              ? apps
+              : apps
+                    .where((a) => a.label.toLowerCase().contains(query) || a.package.toLowerCase().contains(query))
+                    .toList());
     return AlertDialog(
       title: Text(l10n.phoneAppRulesAdd),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TextField(
-            controller: _package,
-            autofocus: true,
-            autocorrect: false,
-            decoration: InputDecoration(
-              labelText: l10n.phoneAppRulesPackage,
-              hintText: 'com.taobao.taobao',
-              helperText: l10n.phoneAppRulesPackageHint,
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // 规则先选：挑完应用就直接生效，不会再问一遍。
+            Center(
+              child: SegmentedPill<AppRule>(
+                expand: false,
+                segments: [
+                  PillSegment(AppRule.deny, l10n.phoneAppRuleDeny),
+                  PillSegment(AppRule.confirmEachStep, l10n.phoneAppRuleConfirm),
+                ],
+                selected: _rule,
+                onChanged: (rule) => setState(() => _rule = rule),
+              ),
             ),
-            onChanged: (_) => setState(() {}),
-          ),
-          const SizedBox(height: 16),
-          // Natural width: the dialog sizes itself by intrinsics, which a
-          // full-width (LayoutBuilder) pill can't report.
-          Center(
-            child: SegmentedPill<AppRule>(
-              expand: false,
-              segments: [
-                PillSegment(AppRule.deny, l10n.phoneAppRuleDeny),
-                PillSegment(AppRule.confirmEachStep, l10n.phoneAppRuleConfirm),
-              ],
-              selected: _rule,
-              onChanged: (rule) => setState(() => _rule = rule),
-            ),
-          ),
-        ],
+            const SizedBox(height: 16),
+            if (apps == null)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (!_manual) ...[
+              TextField(
+                controller: _search,
+                autocorrect: false,
+                decoration: const InputDecoration(labelText: '搜应用', hintText: '微信、抖音……'),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 232,
+                child: shown.isEmpty
+                    ? const Center(child: Text('没找到，试试手动输入包名'))
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: shown.length,
+                        itemBuilder: (context, i) {
+                          final app = shown[i];
+                          return ListTile(
+                            dense: true,
+                            title: Text(app.label, maxLines: 1, overflow: TextOverflow.ellipsis),
+                            subtitle: Text(app.package, maxLines: 1, overflow: TextOverflow.ellipsis),
+                            onTap: () => _pick(app),
+                          );
+                        },
+                      ),
+              ),
+            ] else ...[
+              TextField(
+                controller: _package,
+                autofocus: true,
+                autocorrect: false,
+                decoration: InputDecoration(
+                  labelText: l10n.phoneAppRulesPackage,
+                  hintText: 'com.taobao.taobao',
+                  helperText: l10n.phoneAppRulesPackageHint,
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+            ],
+          ],
+        ),
       ),
       actions: [
+        if (apps != null)
+          TextButton(
+            onPressed: () => setState(() {
+              _manual = !_manual;
+              _package.clear();
+            }),
+            child: Text(_manual ? '从已安装里选' : '手动输入包名'),
+          ),
         TextButton(onPressed: () => Navigator.pop(context), child: Text(l10n.commonCancel)),
-        FilledButton(
-          onPressed: _valid ? () => Navigator.pop(context, (_package.text.trim(), _rule)) : null,
-          child: Text(l10n.commonAdd),
-        ),
+        if (_manual)
+          FilledButton(
+            onPressed: _valid ? () => Navigator.pop(context, (_package.text.trim(), _rule)) : null,
+            child: Text(l10n.commonAdd),
+          ),
       ],
     );
   }

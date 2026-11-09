@@ -33,6 +33,7 @@ import 'app_rules_page.dart';
 import 'dnd_mode_page.dart';
 import 'loop_test_page.dart';
 import 'proactive_page.dart';
+import 'sisters_page.dart';
 import 'intercept_page.dart';
 import 'phone_disclosure_sheet.dart';
 import 'phone_background_guide.dart';
@@ -375,6 +376,14 @@ class _PhoneControlScreenState extends ConsumerState<PhoneControlScreen> {
                 subtitle: l10n.proactiveSubtitle,
                 subtitleMaxLines: 2,
                 onTap: () => _push(const ProactivePage()),
+              ),
+              // 姐妹（R4-5）：两张角色卡，加一块墙的今日审计。只读——放松规则的入口不在这里。
+              ListPageRow(
+                icon: AppIcons.chat,
+                title: '姐妹',
+                subtitle: '鱼丸和鲸澜各一张卡：她们记得的你、最近说过的话，还有墙今天的审计',
+                subtitleMaxLines: 2,
+                onTap: () => _push(const SistersPage()),
               ),
               // 专注监督: the native 5-second pull-back. It is a separate screen because it
               // must work while the engine is dead; the row is here so it is discoverable.

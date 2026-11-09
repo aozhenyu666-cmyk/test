@@ -361,6 +361,19 @@ class ProactiveChannel {
       return ProactiveAgentSessions(error: e.runtimeType.toString());
     }
   }
+
+  /// 姐妹界面（插件 `POST /sisters`）：两张角色卡、她们记得的你、最近说过的话、今日审计面板。
+  ///
+  /// 只读。这一页没有任何能放松规则的入口——放松只能走晚上对账后的申请窗口。
+  /// 连不上返回 null，页面说「连不上」，不猜也不缓存上一次的数。
+  Future<SistersView?> sisters() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('sisters');
+      return SistersView.fromWire(raw);
+    } on Exception {
+      return null;
+    }
+  }
 }
 
 /// The host plugin's own view: which session proactive turns go to, and which agents are alive.
@@ -479,4 +492,158 @@ class ProactiveAgentRef {
   final String status;
 
   bool get idle => status == 'idle';
+}
+
+/// 一张角色卡：妹妹（`companion`）或姐姐（`strategist`）。墙不是角色卡。
+class SistersCard {
+  const SistersCard({required this.role, required this.name, required this.line, required this.persona});
+
+  final String role;
+  final String name;
+
+  /// 一句话定位，卡面正面就显示这一句。
+  final String line;
+
+  /// 固定个人设定，展开后显示。
+  final String persona;
+
+  static SistersCard? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    final role = raw['role'];
+    if (role is! String || role.isEmpty) return null;
+    String str(Object? v) => v is String ? v : '';
+    final name = str(raw['name']);
+    return SistersCard(
+      role: role,
+      name: name.isEmpty ? role : name,
+      line: str(raw['line']),
+      persona: str(raw['persona']),
+    );
+  }
+}
+
+/// 面板上的一行：「她们记得的你」或「最近说过的话」。文本由插件拼好，这里只显示。
+class SistersNote {
+  const SistersNote({required this.title, this.subtitle = '', this.tone = ''});
+
+  final String title;
+  final String subtitle;
+
+  /// `good` / `warn` / `bad` / `info`；空字符串表示不染色。
+  final String tone;
+
+  static SistersNote? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    final title = raw['title'];
+    if (title is! String || title.trim().isEmpty) return null;
+    String str(Object? v) => v is String ? v : '';
+    return SistersNote(title: title, subtitle: str(raw['subtitle']), tone: str(raw['tone']));
+  }
+}
+
+/// 墙的今日审计：今天立了几件、有证据完成几件，以及近 14 天完成率。
+///
+/// 墙只占一块灰色的面板，不做成角色卡，也不带表情。
+class SistersAudit {
+  const SistersAudit({
+    this.day = '',
+    this.promised = 0,
+    this.done = 0,
+    this.rateDone = 0,
+    this.rateTotal = 0,
+    this.ratePct = 0,
+    this.rateDays = 14,
+    this.text = '',
+  });
+
+  final String day;
+  final int promised;
+  final int done;
+
+  /// 近 [rateDays] 天：立了多少、有证据完成多少。和墙自己报的是同一个数。
+  final int rateDone;
+  final int rateTotal;
+  final int ratePct;
+  final int rateDays;
+
+  /// 墙今天的原话（`大肥鱼/墙/审计/<日期>.md`）；还没审过就是空。
+  final String text;
+
+  static const empty = SistersAudit();
+
+  bool get hasToday => promised > 0 || text.isNotEmpty;
+  bool get hasRate => rateTotal > 0;
+
+  static SistersAudit fromWire(Object? raw) {
+    if (raw is! Map) return empty;
+    int num_(Object? v, [int fallback = 0]) => v is num ? v.round() : fallback;
+    String str(Object? v) => v is String ? v : '';
+    return SistersAudit(
+      day: str(raw['day']),
+      promised: num_(raw['promised']),
+      done: num_(raw['done']),
+      rateDone: num_(raw['rateDone']),
+      rateTotal: num_(raw['rateTotal']),
+      ratePct: num_(raw['ratePct']),
+      rateDays: num_(raw['rateDays'], 14),
+      text: str(raw['text']),
+    );
+  }
+}
+
+/// 姐妹页的全部数据（插件 `POST /sisters`）。
+class SistersView {
+  const SistersView({
+    this.cards = const [],
+    this.memory = const [],
+    this.timeline = const [],
+    this.audit = SistersAudit.empty,
+    this.error,
+  });
+
+  final List<SistersCard> cards;
+
+  /// 她们记得的你（共用一份记忆）。
+  final List<SistersNote> memory;
+
+  /// 最近说过的话，最新的在下。
+  final List<SistersNote> timeline;
+
+  final SistersAudit audit;
+
+  /// 插件那边的错误码（`no_transport` / `no_answer` / `timeout` …）；null 表示正常。
+  final String? error;
+
+  bool get ok => error == null;
+
+  static SistersView? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    final err = raw['error'];
+    if (err is Map) {
+      final code = err['code'];
+      return SistersView(error: code is String && code.isNotEmpty ? code : 'error');
+    }
+    final cards = <SistersCard>[];
+    for (final item in _list(raw['cards'])) {
+      final card = SistersCard.fromWire(item);
+      if (card != null) cards.add(card);
+    }
+    return SistersView(
+      cards: cards,
+      memory: _notes(raw['memory']),
+      timeline: _notes(raw['timeline']),
+      audit: SistersAudit.fromWire(raw['audit']),
+    );
+  }
+
+  static List<Object?> _list(Object? value) => value is List ? value : const [];
+
+  static List<SistersNote> _notes(Object? value) {
+    final out = <SistersNote>[];
+    for (final item in _list(value)) {
+      final note = SistersNote.fromWire(item);
+      if (note != null) out.add(note);
+    }
+    return out;
+  }
 }

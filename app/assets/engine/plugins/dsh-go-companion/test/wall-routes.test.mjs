@@ -1,4 +1,5 @@
 // 第二轮·墙的工具与 /wall 路由：放松申请（窗口+额度）、收紧、status。
+// 第四轮 R4-5 的 /sisters 也用同一套 harness：姐妹页只读，且不能有放松入口。
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -83,7 +84,8 @@ function setup(home, extra = {}) {
   const plan = (phone) => call(h.handler(), 'POST', '/dsh-go-companion/v1/plan', { roll: 100, timeZone: 'Asia/Shanghai', phone })
   const say = (sid, text) => h.emit(sid, 'user/message', { id: 'u-' + Math.random(), content: [{ type: 'text', text }], source: { kind: 'user' } })
   const wall = (body) => call(h.handler(), 'POST', '/dsh-go-companion/v1/wall', { timeZone: 'Asia/Shanghai', ...body })
-  return { sis, big, h, plan, say, wall }
+  const sisters = () => call(h.handler(), 'POST', '/dsh-go-companion/v1/sisters', { timeZone: 'Asia/Shanghai' })
+  return { sis, big, h, plan, say, wall, sisters }
 }
 
 const openWindow = () => ({ day: 1, openAt: Date.now() - 60_000, closeAt: Date.now() + 10 * 60_000, notified: true, used: false })
@@ -152,5 +154,45 @@ test('第四轮 R4-2：聊天里放不了——request_relax 和手机端 /wall 
     const r = await t.wall({ action: 'relax', atHour: 20, minutes: 60, reason: '周末想放松一下' })
     assert.equal(r.body.ok, false)
     assert.equal(r.body.error.code, 'no-window')
+  })
+})
+
+test('第四轮 R4-5：/sisters 给两张角色卡、记忆、最近对话和今日审计', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    await t.plan({ app: 'com.game', fun: true, screenOn: true, local: '15:00' })
+    const r = await t.sisters()
+    assert.equal(r.status, 200)
+    assert.equal(r.body.ok, true, JSON.stringify(r.body))
+    // 两张卡，妹妹在前姐姐在后，名字跟着 config 走
+    assert.deepEqual(r.body.cards.map((c) => c.role), ['companion', 'strategist'])
+    assert.equal(r.body.cards[0].name, '鱼丸')
+    assert.equal(r.body.cards[1].name, '鲸澜')
+    // 每张卡都有人设，且是给用户看的那一句（不带写给模型的抬头）
+    for (const c of r.body.cards) {
+      assert.ok(c.persona.length > 0, c.role + ' 缺人设')
+      assert.ok(!c.persona.includes('你的设定'))
+    }
+    // 审计面板：字段齐全，没审过时计数为 0 而不是缺失
+    assert.equal(typeof r.body.audit.promised, 'number')
+    assert.equal(typeof r.body.audit.ratePct, 'number')
+    assert.equal(r.body.audit.rateDays, 14)
+    // 记忆和最近对话是数组（今天还没聊过就是空的）
+    assert.ok(Array.isArray(r.body.memory))
+    assert.ok(Array.isArray(r.body.timeline))
+  })
+})
+
+test('第四轮 R4-5：/sisters 只读——返回体里没有任何放松/解锁入口', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const r = await t.sisters()
+    const flat = JSON.stringify(r.body)
+    // 页面上不该出现能松开规则的字段或动作名。
+    for (const bad of ['relax', 'tighten', 'unlock', 'grant_break', 'openUntil']) {
+      assert.equal(flat.includes('"' + bad + '"'), false, '/sisters 不该带 ' + bad)
+    }
+    // 墙只以审计面板的形式出现，不是角色卡。
+    assert.equal(r.body.cards.some((c) => c.role === 'wall'), false)
   })
 })

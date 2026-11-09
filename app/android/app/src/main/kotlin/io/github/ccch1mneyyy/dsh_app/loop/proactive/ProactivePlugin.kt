@@ -175,6 +175,11 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 result, "POST", "/wall",
                 linkedMapOf("action" to "status", "timeZone" to java.util.TimeZone.getDefault().id),
             )
+            // 姐妹界面（R4-5）：两张角色卡 + 今日审计面板。只读，放松规则的入口不在这里。
+            "sisters" -> ProactiveRuntime.fetchPluginRoute(
+                result, "POST", "/sisters",
+                linkedMapOf("timeZone" to java.util.TimeZone.getDefault().id),
+            )
             else -> result.notImplemented()
         }
     }

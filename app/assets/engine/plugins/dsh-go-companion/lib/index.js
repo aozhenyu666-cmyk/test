@@ -75,10 +75,11 @@ import {
   noteDone, notePromised, pruneMemory, recentRate, statOf, wallText,
 } from './wall_auditor.js'
 import {
-  PENDING_FILE, RULES_COOLDOWN_DAYS, RULES_FILE, WALL_DIR, appendAudit, classifyRules, parseRules, readText as readVaultText,
+  AUDIT_DIR, PENDING_FILE, RULES_COOLDOWN_DAYS, RULES_FILE, WALL_DIR, appendAudit, classifyRules, parseRules, readText as readVaultText,
   findObsidianVault, renderPending, renderRules, renderTaskNote, taskNotePath, updatePending, writeText as writeVaultText,
 } from './vault_wall.js'
 import { GEMINI_PACKAGES, geminiBrief, geminiLines, geminiMode, geminiSteps, recapMarkdown, trackGemini } from './gemini.js'
+import { auditOf, cardsOf } from './sisters.js'
 
 export const name = 'dsh-go-companion'
 // Without this, `ctx.tools` below throws "cannot get property tools without inject"
@@ -2810,7 +2811,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/gemini/due')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/sisters' || path === '/gemini/due')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -2871,6 +2872,7 @@ export function apply(ctx) {
         if (path === '/event') return send(res, 200, eventRoute(body.value))
         if (path === '/session') return send(res, 200, sessionRoute(body.value))
         if (path === '/wall') return send(res, 200, wallRoute(body.value))
+        if (path === '/sisters') return send(res, 200, sistersRoute(body.value))
         config = mergeConfig(config, body.value)
         writeConfig(config)
         // 换了会话 / 名字 / 人设：马上重挂，不等下一次定时检查。
@@ -3280,6 +3282,39 @@ export function apply(ctx) {
   }
   /** 最近一次手机现状（/plan 带来的）：面板的"专注"分要用。 */
   let lastPhone = null
+  /**
+   * R4-5 姐妹界面：手机上的原生页（两张角色卡 + 一块灰色的今日审计面板）。
+   *
+   * 只读。这一页刻意没有任何能放松规则的入口——放松只能走晚上对账后的申请窗口。
+   * 数据不重算：记得的事、最近对话、墙此刻锁没锁都来自 panelSnapshot()，
+   * 这里只补它没有的两块（角色卡头部、今日审计 + 近 14 天完成率）。
+   */
+  function sistersRoute(body) {
+    const now = Date.now()
+    const tz = zoneOr(body?.timeZone || config.timeZone)
+    const today = dayString(now, tz)
+    const snap = panelSnapshot()
+    const dir = notesDir()
+    let auditText = ''
+    if (dir) {
+      try {
+        auditText = readVaultText(join(dir, WALL_DIR, AUDIT_DIR, today + '.md')) || ''
+      } catch {
+        // 今天还没审过：没有原话，面板只说计数
+      }
+    }
+    return {
+      v: 1,
+      ok: true,
+      today,
+      names: snap.names,
+      cards: cardsOf(snap.names),
+      memory: Array.isArray(snap.memory) ? snap.memory : [],
+      timeline: Array.isArray(snap.timeline) ? snap.timeline : [],
+      wall: snap.wall || null,
+      audit: auditOf({ memory: loadWallMem(), auditText, today }),
+    }
+  }
   function panelSnapshot() {
     const now = Date.now()
     const entries = readLedger(home(), 600)
