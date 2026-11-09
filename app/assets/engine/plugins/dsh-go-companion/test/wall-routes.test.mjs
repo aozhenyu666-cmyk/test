@@ -87,7 +87,13 @@ function setup(home, extra = {}) {
   const sisters = () => call(h.handler(), 'POST', '/dsh-go-companion/v1/sisters', { timeZone: 'Asia/Shanghai' })
   const deposit = (body) => call(h.handler(), 'POST', '/dsh-go-companion/v1/deposit', { timeZone: 'Asia/Shanghai', ...body })
   const status = () => call(h.handler(), 'GET', '/dsh-go-companion/v1/status')
-  return { sis, big, h, plan, say, wall, sisters, deposit, status }
+  // 四段交齐（硬约束：交齐才有放风额度）。每段正文故意不一样，免得被判成「复读」。
+  const fillAll = async () => {
+    for (const key of ['intel', 'thinking', 'behavior', 'coord']) {
+      await deposit({ action: 'submit', department: key, report: '字'.repeat(200) + key, thought: '想'.repeat(80) + key })
+    }
+  }
+  return { sis, big, h, plan, say, wall, sisters, deposit, status, fillAll }
 }
 
 const openWindow = () => ({ day: 1, openAt: Date.now() - 60_000, closeAt: Date.now() + 10 * 60_000, notified: true, used: false })
@@ -115,6 +121,8 @@ test('/wall relax：窗口外拒绝', async () => {
 test('/wall relax：窗口内批给明天，额度减一，同窗口第二次被拒', async () => {
   await withHome(async (home) => {
     const t = setup(home, { applyWindow: openWindow() })
+    // 第五轮硬约束：四段交齐才批放松。
+    await t.fillAll()
     const r = await t.wall({ action: 'relax', atHour: 20, minutes: 60, reason: '明天周末想玩一小时' })
     assert.equal(r.body.ok, true, JSON.stringify(r.body))
     assert.equal(r.body.wall.applyWindowOpen, true)
@@ -130,6 +138,7 @@ test('/wall relax：窗口内批给明天，额度减一，同窗口第二次被
 test('/wall relax：没理由不批', async () => {
   await withHome(async (home) => {
     const t = setup(home, { applyWindow: openWindow() })
+    await t.fillAll()
     const r = await t.wall({ action: 'relax', reason: '' })
     assert.equal(r.body.ok, false)
     assert.equal(r.body.error.code, 'no-reason')
@@ -259,10 +268,23 @@ test('第五轮 硬约束：四段没交齐，当天没有放风额度；交齐�
     assert.equal(before.body.wall.relaxRemaining, 0, '没交齐就该是 0')
     for (const key of ['intel', 'thinking', 'behavior', 'coord']) {
       const r = await t.deposit({ action: 'submit', department: key, report: report(), thought: '想'.repeat(80) + key })
-      assert.equal(r.body.done === undefined || true, true)
+      assert.equal(r.body.ok, true, JSON.stringify(r.body))
     }
     const after = await t.wall({ action: 'status' })
     assert.equal(after.body.wall.relaxRemaining, 3, JSON.stringify(after.body.wall))
+  })
+})
+
+test('第五轮 硬约束：窗口开着也没用——四段没交齐，放松申请被挡', async () => {
+  await withHome(async (home) => {
+    const t = setup(home, { applyWindow: openWindow() })
+    const blocked = await t.wall({ action: 'relax', atHour: 20, minutes: 60, reason: '明天想玩一小时' })
+    assert.equal(blocked.body.ok, false, JSON.stringify(blocked.body))
+    assert.equal(blocked.body.error.code, 'deposit')
+    // 同一轮里交齐了就能批，说明挡的是「没交」，不是别的。
+    await t.fillAll()
+    const ok = await t.wall({ action: 'relax', atHour: 20, minutes: 60, reason: '明天想玩一小时' })
+    assert.equal(ok.body.ok, true, JSON.stringify(ok.body))
   })
 })
 

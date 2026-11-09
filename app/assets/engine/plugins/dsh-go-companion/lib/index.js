@@ -1527,6 +1527,11 @@ export function apply(ctx) {
     if (config.applyWindow && config.applyWindow.used) {
       return { ok: false, code: 'window-used', text: '这个窗口已经提过一次申请了，明天再说。' }
     }
+    // 第五轮·硬约束：四部门当天没交齐就没有放风额度。这里是唯一的批放松口子，
+    // 所以挡在这里，而不是只把界面上的数字改成 0（那只是好看）。
+    if (!completeOf(depositToday(now))) {
+      return { ok: false, code: 'deposit', text: '今天四段部门汇报还没交齐（信息收集、谋划思考、行为管理、统筹规划），交齐之前没有放风额度。' }
+    }
     if (funBlockedBy(config.obligations)) {
       return { ok: false, code: 'obligation', text: '今天还压着一件没补完的立项：先把完成物拿出来，再说放松。' }
     }
