@@ -7,3 +7,5 @@
 *.ps1 text eol=crlf
 # Stored with CRLF upstream; leave it byte for byte.
 app/tool/icons/phosphor/LICENSE -text
+# The Gradle wrapper jar is committed on purpose (see app/android/.gitignore); never touch its bytes.
+app/android/gradle/wrapper/gradle-wrapper.jar binary

@@ -214,7 +214,7 @@ class EnforcementTest {
         val now = 1_000_000L
         val fallback = RuleBook(MemorySnapshotStore())
         fallback.replace(planSnapshot(plan(null, snapshot("task" to now + 30 * min)), now), now)
-        assertEquals("task", fallback.primary(now)?.kind, "老引擎只有 rules，照旧用")
+        assertEquals("老引擎只有 rules，照旧用", "task", fallback.primary(now)?.kind)
 
         // 吃饭时段：状态机给空 layers = 此刻没有锁。
         val open = RuleBook(MemorySnapshotStore())

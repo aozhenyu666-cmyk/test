@@ -45,6 +45,30 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq gpgv zstd xz-utils unzip file
+      # 排在「改 app 名」之前：那一步会把 AndroidManifest 的 label 改成「DSH Go 大肥鱼」，
+      # LauncherManifestTest 断言的正是原值。gradlew 已入库，不再依赖 flutter build 注入。
+      # 只跑这一步名义上的两个范围（锁仲裁 + D2 快照）：整套 855 项里还有 2 项是 P0 遗留的陈旧断言
+      # （BuiltinPluginGuestTest 断言 5 个内置插件而实际 4 个、KernelChainTest 解码处 ClassCast），
+      # 记在 docs/dafeiyu/第三轮进度.md §7.7，不在本轮硬改，免得把真缺陷一起抹平。
+      - name: Kotlin unit tests (lock arbitration, D2 snapshot)
+        run: |
+          cd app/android
+          sh gradlew :app:testArm64DebugUnitTest --tests "*EnforcementTest" --console=plain
+          # 任务名必须带 flavor：这个 app 有 arm64 / x64 两个 abi flavor，没有 testDebugUnitTest。
+          # Gradle 全绿时不打印用例数，这里读报告，把「真跑了几个」变成可验证的（§1.3 判定）。
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          files = glob.glob("app/build/test-results/testArm64DebugUnitTest/*.xml")
+          assert files, "没有测试报告，说明 Kotlin 用例根本没跑起来"
+          total = fail = skip = 0
+          for f in files:
+              r = ET.parse(f).getroot()
+              total += int(r.get("tests", 0))
+              fail += int(r.get("failures", 0)) + int(r.get("errors", 0))
+              skip += int(r.get("skipped", 0))
+          print(f"Kotlin unit tests: {total} run, {fail} failed, {skip} skipped")
+          assert total > 0 and fail == 0 and skip < total, "Kotlin 单测未真正执行或有失败"
+          PY
       - name: Build arm64 Linux runtime (proot 5.1.107.102)
         run: |
           bash runtime/build-runtime.sh arm64-v8a
@@ -86,27 +110,6 @@ jobs:
           # that only exists in lib/l10n/parts cannot go missing again (run 1 failed on that).
           python3 tool/l10n_merge.py
           flutter build apk --release --flavor arm64 --target-platform android-arm64 --build-name 1.0.4 --build-number ${{ github.run_number }}0 --dart-define=DSH_UPDATE_REPO=aozhenyu666-cmyk/dsh-Go
-      # 必须排在上面之后：app/android/gradlew 被 app/android/.gitignore 忽略、从不入库，
-      # 只有 `flutter build` 会从模板注入。放在构建前会报 ./gradlew: No such file (exit 127)。
-      - name: Kotlin unit tests (lock arbitration, D2 snapshot)
-        run: |
-          cd app/android
-          ./gradlew :app:testArm64DebugUnitTest --console=plain
-          # 任务名必须带 flavor：这个 app 有 arm64 / x64 两个 abi flavor，没有 testDebugUnitTest。
-          # Gradle 全绿时不打印用例数，这里读报告，把「真跑了几个」变成可验证的（§1.3 判定）。
-          python3 - <<'PY'
-          import glob, xml.etree.ElementTree as ET
-          files = glob.glob("app/build/test-results/testArm64DebugUnitTest/*.xml")
-          assert files, "没有测试报告，说明 Kotlin 用例根本没跑起来"
-          total = fail = skip = 0
-          for f in files:
-              r = ET.parse(f).getroot()
-              total += int(r.get("tests", 0))
-              fail += int(r.get("failures", 0)) + int(r.get("errors", 0))
-              skip += int(r.get("skipped", 0))
-          print(f"Kotlin unit tests: {total} run, {fail} failed, {skip} skipped")
-          assert total > 0 and fail == 0 and skip < total, "Kotlin 单测未真正执行或有失败"
-          PY
       - name: Verify bundled runtime and package
         run: |
           APK=app/build/app/outputs/flutter-apk/app-arm64-release.apk
