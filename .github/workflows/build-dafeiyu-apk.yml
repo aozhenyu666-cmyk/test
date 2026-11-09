@@ -41,6 +41,14 @@ jobs:
           flutter-version: '3.47.7'
           channel: stable
           cache: true
+      # 仓库里的 wrapper 指向腾讯镜像，给国内本机构建用；GitHub 的机器连它会被重置
+      # （run 42559442524 下了 12 分钟后 Connection reset）。CI 里换回 Gradle 官方源，同一个版本。
+      - name: Use the official Gradle distribution on CI
+        run: |
+          f=app/android/gradle/wrapper/gradle-wrapper.properties
+          sed -i 's#^distributionUrl=.*/\(gradle-[0-9.]*-all\.zip\)$#distributionUrl=https\\://services.gradle.org/distributions/\1#' "$f"
+          grep -q '^distributionUrl=https\\://services.gradle.org/distributions/gradle-' "$f"
+          cat "$f"
       - name: Install required Linux packages
         run: |
           sudo apt-get update -qq
