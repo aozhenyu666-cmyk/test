@@ -73,8 +73,11 @@ jobs:
           # Gradle 全绿时不打印用例数，这里读报告，把「真跑了几个」变成可验证的（§1.3 判定）。
           python3 - <<'PY'
           import glob, xml.etree.ElementTree as ET
-          files = glob.glob("app/build/test-results/testArm64DebugUnitTest/*.xml")
+          # build 目录被 build.gradle.kts 重定向（rootProject 的 ../../build = app/build），
+          # 而 cwd 是 app/android，写死相对路径会找不到；递归匹配，把路径猜错这个坑一次消掉。
+          files = glob.glob("**/test-results/**/*.xml", recursive=True)
           assert files, "没有测试报告，说明 Kotlin 用例根本没跑起来"
+          print("reports:", files)
           total = fail = skip = 0
           for f in files:
               r = ET.parse(f).getroot()
