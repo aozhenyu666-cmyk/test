@@ -57,7 +57,13 @@ function dayZone() {
 // ---------------------------------------------------------------- A. 一球里到底带了什么
 console.log('【A. 发球内容（单人格）】')
 reset()
-let sid = await newSession({ dual: false })
+// D3 的笔记库：路径要在一开始就定下来（插件按 10 分钟缓存解析路径），所以先建库再开会话。
+const VAULT = W + '/vault-e2e'
+mkdirSync(VAULT + '/工作', { recursive: true })
+mkdirSync(VAULT + '/私密', { recursive: true })
+writeFileSync(VAULT + '/工作/周报.md', '# 周报\n这周的结论：把第三轮的引擎接线收尾，别再开新坑。\n')
+writeFileSync(VAULT + '/私密/别读我.md', '私密内容不该出现在这一球里。\n')
+let sid = await newSession({ dual: false, notesPath: VAULT })
 {
   // 记忆：往记忆库钉一条事实（用记忆插件自己的表结构）
   const db = new DatabaseSync(H + '/fish-memory/fish-memory.sqlite')
@@ -250,6 +256,84 @@ await serve(wechat(), 'status')
 st = await route('GET', '/status')
 check('/status 有脾气底色（发过一球之后）', Number.isFinite(st.body.config?.temper?.edge), st.body.config?.temper)
 check('/status 有大脑判断列表', Array.isArray(st.body.config?.beliefs), st.body.config?.beliefs)
+
+// ---------------------------------------------------------------- I. 第三轮（状态机 / 七种事件 / D4 取货 / D3 笔记）
+console.log('【I. 第三轮】')
+reset()
+await route('POST', '/config', { mode: 'partner', control: true })
+sid = await newSession({ mode: 'partner' })
+
+// I1. R3-5：笔记库里的具体内容进这一球，日记/私密目录不读
+{
+  await serve(bili(22), 'vault')
+  const vp = lastServePrompt()
+  check('I1.1 这一球提到那篇笔记的具体内容（R3-5）', /第三轮的引擎接线收尾/.test(vp), vp.slice(0, 400))
+  check('I1.2 私密目录不会被读出来（R3-5）', !/私密内容不该出现/.test(vp), '')
+}
+
+// I1b. R3-2 的前半段：预约只给"下一场 + 绝对时间"，手机直接 arm 闹钟
+{
+  writeFileSync(
+    H + '/companion/gemini-schedule.json',
+    JSON.stringify({ at: Date.now() + 5 * 60_000, topic: '为什么这周进度卡住', minutes: 20, mode: 'thinking', fired: false }),
+  )
+  const pl2 = await route('POST', '/plan', { roll: 0, timeZone: 'Asia/Shanghai', phone: wechat() })
+  const gs = pl2.body.geminiSchedule
+  check('I1b.1 /plan 给下一场的绝对时间（不是 HH:MM）', !!gs && Number.isFinite(gs.at) && gs.at > Date.now() && gs.topic === '为什么这周进度卡住', gs)
+  // 到点：手机会调 /gemini/due 取货，同一场只能发一次
+  writeFileSync(
+    H + '/companion/gemini-schedule.json',
+    JSON.stringify({ at: Date.now() - 1_000, topic: '为什么这周进度卡住', minutes: 20, mode: 'thinking', fired: false }),
+  )
+  const d1 = await route('POST', '/gemini/due', {})
+  check('I1b.2 到点取货拿到 launch（简报 + 分钟数，R3-2）', !!d1.body.launch && d1.body.launch.minutes === 20 && /卡住/.test(String(d1.body.launch.brief)), d1.body)
+  const d2 = await route('POST', '/gemini/due', {})
+  check('I1b.3 同一场重复调用返回 null（§7.2 第 9 条）', d2.body.launch === null, d2.body)
+  await route('POST', '/session', { action: 'end' })
+}
+
+// I2. /plan 带的四块就是手机原生层读的形状（接口约定 §1/§2）
+{
+  const r = await route('POST', '/plan', { roll: 100, timeZone: 'Asia/Shanghai', phone: game(45) })
+  const b = r.body
+  const layers = b.state?.layers
+  check('I2.1 /plan 有 state（主状态 + layers + nextChangeAt）',
+    typeof b.state?.state === 'string' && Array.isArray(layers) && layers.length > 0 && Number.isFinite(b.state?.nextChangeAt), b.state)
+  check('I2.2 裁判层 layers[0] 带 kind/until（§7.2 第 1 条）',
+    typeof layers?.[0]?.kind === 'string' && Number.isFinite(layers?.[0]?.until), layers?.[0])
+  check('I2.3 有 followup 块（active 形状固定，§2）',
+    !!b.followup && typeof b.followup.active === 'boolean', b.followup)
+  check('I2.4 有 obligations 数组（§5）', Array.isArray(b.obligations), b.obligations)
+  check('I2.5 wall 带本周放松额度（面板的"额度"那行）',
+    !!b.wall && Number.isFinite(b.wall.relaxRemaining) && typeof b.wall.locked === 'boolean', b.wall)
+}
+
+// I3. 七种新事件都有回执，形状按 §3（手机只按回执里的 until/followup 动）
+{
+  const ev = async (type, extra = {}) => (await route('POST', '/event', { type, ...extra })).body
+  check('I3.1 screen-on 只记账', (await ev('screen-on')).ok === true)
+  const sprint = await ev('start', { task: '写周报', minutes: 25 })
+  check('I3.2 start 进冲刺且给绝对 until', !!sprint.sprint && Number.isFinite(sprint.sprint.until) && sprint.sprint.minutes === 25, sprint)
+  const hit = await ev('wechat-hit', { page: 'finder', dwellMs: 4_200 })
+  check('I3.3 wechat-hit 只记账，不升级成违抗', hit.ok === true && !hit.refuse, hit)
+  const blocked = await ev('blocked-open', { app: 'com.tencent.tmgp.sgame' })
+  check('I3.4 blocked-open 只按这次动作问（ask 是布尔）', blocked.ok === true && typeof blocked.ask === 'boolean', blocked)
+  const gem = await ev('gemini-end', { minutes: 5, by: 'phone' })
+  check('I3.5 gemini-end 满 3 分钟开追问锁', gem.counted === true && !!gem.followup, gem)
+  const reviewAsk = await ev('request-review')
+  check('I3.6 request-review 开追问锁，不是当场放行', reviewAsk.ok === true && !!reviewAsk.followup, reviewAsk)
+  const pl3 = await route('POST', '/plan', { roll: 0, timeZone: 'Asia/Shanghai', phone: game(45) })
+  const fu = pl3.body.followup
+  // 不清「主状态一定是 followup」：CI 可能正好跑在深夜/饭点，那时追问锁只是叠在上面的一层。
+  check('I3.7 追问锁进了 /plan 且未到点（窗口不可划走）', fu?.active === true && fu.until > Date.now(), fu)
+  // 到点没裁决（§5）：把锁拨到过期，再看 followup-timeout 的回执
+  await route('POST', '/config', {
+    followup: { reason: 'review', question: '这一轮做完了吗？', since: Date.now() - 31 * 60_000, until: Date.now() - 60_000 },
+  })
+  const timeout = await ev('followup-timeout')
+  check('I3.8 followup-timeout 到点就结束拦截并挂义务（R3-3）',
+    timeout.ok === true && timeout.expired === true && Array.isArray(timeout.obligations) && timeout.followup?.active === false, timeout)
+}
 
 console.log(failed ? '✗ ' + failed + ' 项失败' : '✓ 全部通过')
 process.exit(failed ? 1 : 0)
