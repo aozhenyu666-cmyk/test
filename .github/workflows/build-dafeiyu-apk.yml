@@ -27,6 +27,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          # 缓存 ~/.gradle（wrapper 本体 + 依赖）。下载走 GitHub releases，时不时 504；
+          # 有缓存的那一轮根本不用下载（run 42568326461 连续三次都死在下载上）。
+          cache: gradle
+          cache-dependency-path: |
+            app/android/**/*.gradle.kts
+            app/android/gradle/wrapper/gradle-wrapper.properties
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -49,6 +55,36 @@ jobs:
           sed -i 's#^distributionUrl=.*/\(gradle-[0-9.]*-all\.zip\)$#distributionUrl=https\\://services.gradle.org/distributions/\1#' "$f"
           grep -q '^distributionUrl=https\\://services.gradle.org/distributions/gradle-' "$f"
           cat "$f"
+          # 全局下载重试：单测和打包两次 Gradle 都吃这份（不动仓库里的 gradle.properties）。
+          mkdir -p ~/.gradle
+          printf '%s\n' \
+            'systemProp.org.gradle.internal.repository.max.retries=10' \
+            'systemProp.org.gradle.internal.repository.initial.backoff=2000' >> ~/.gradle/gradle.properties
+          # 从 GitHub 的机器访问 repo.maven.apache.org，大 jar（kotlin-compiler-embeddable）会被转到
+          # github.com/JetBrains/kotlin/releases，那边时不时 504（run 42571251328）。Google 的
+          # Maven Central 镜像直接给文件，CI 里把它排在所有仓库最前面。只在 CI 生效，本机不受影响。
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/ci-mirror.init.gradle.kts <<'EOF'
+          val ciMirror = "https://maven-central.storage-download.googleapis.com/maven2/"
+          fun RepositoryHandler.preferCiMirror() {
+              if (any { it is MavenArtifactRepository && it.url.toString() == ciMirror }) return
+              val repo = maven { url = uri(ciMirror); name = "ciMavenCentralMirror" }
+              remove(repo)
+              addFirst(repo)
+          }
+          beforeSettings { pluginManagement.repositories.preferCiMirror() }
+          allprojects {
+              buildscript.repositories.preferCiMirror()
+              repositories.preferCiMirror()
+          }
+          EOF
+          # 先把 wrapper 本体下好，下载失败就等一会儿重来，最多 4 次。
+          cd app/android
+          for i in 1 2 3 4; do
+            bash gradlew --version --console=plain && break
+            [ "$i" = 4 ] && exit 1
+            echo "wrapper 下载失败，第 $i 次，$((i * 30)) 秒后重试"; sleep $((i * 30))
+          done
       - name: Install required Linux packages
         run: |
           sudo apt-get update -qq
