@@ -52,7 +52,10 @@ jobs:
       # 记在 docs/dafeiyu/第三轮进度.md §7.7，不在本轮硬改，免得把真缺陷一起抹平。
       - name: Kotlin unit tests (lock arbitration, D2 snapshot)
         run: |
-          cd app/android
+          cd app
+          # :app:compileFlutterBuildArm64Debug 需要 .dart_tool/package_config.json。
+          flutter pub get
+          cd android
           # settings.gradle.kts 第 5 行硬读 local.properties 且要求 flutter.sdk 存在；这文件被
           # gitignore 忽略（里面是本机 SDK 路径），平时由 flutter build 自动生成。单测要排在
           # 「改 app 名」之前，就得自己写一份，值取 runner 上的 FLUTTER_ROOT 与 ANDROID_HOME。
