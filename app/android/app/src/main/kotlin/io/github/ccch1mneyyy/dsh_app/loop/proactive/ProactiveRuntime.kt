@@ -550,6 +550,7 @@ object ProactiveRuntime {
         sessionAllow = runCatching { p.getString("sessionAllow", "").orEmpty() }.getOrDefault("")
             .split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
         sessionPkg = runCatching { p.getString("sessionApp", "").orEmpty() }.getOrDefault("").ifBlank { null }
+        sessionSince = runCatching { p.getLong("sessionSince", 0L) }.getOrDefault(0L)
     }
     fun sessionActive(): Boolean {
         if (!::app.isInitialized) return false
@@ -569,16 +570,30 @@ object ProactiveRuntime {
         return pkg == app.packageName || pkg == app.packageName + ".fish"
     }
     private fun setSession(until: Long, allow: Set<String>, pkg: String?) {
+        // 连麦开始时间：手机要在结束时报 gemini-end 的 minutes，而插件的 until 是我们唯一的时间来源。
+        if (until > 0 && sessionUntil <= 0) sessionSince = System.currentTimeMillis()
+        if (until <= 0) sessionSince = 0L
         sessionUntil = until
         sessionAllow = allow
         sessionPkg = pkg
         runCatching {
             app.getSharedPreferences(REFUSE_PREFS, Context.MODE_PRIVATE).edit()
                 .putLong("sessionUntil", until)
+                .putLong("sessionSince", sessionSince)
                 .putString("sessionAllow", allow.joinToString(","))
                 .putString("sessionApp", pkg.orEmpty())
                 .apply()
         }
+    }
+
+    @Volatile private var sessionSince: Long = 0L
+
+    /** 这一场连麦已经过了多少分钟（结束时报给插件；不知道就 0，插件按"不足 3 分钟"处理）。 */
+    private fun sessionMinutes(): Int {
+        if (::app.isInitialized) loadSession()
+        val since = sessionSince
+        if (since <= 0) return 0
+        return ((System.currentTimeMillis() - since) / 60_000L).toInt().coerceAtLeast(0)
     }
 
     /** 管控期间：设置页自卫和破窗只在此时生效（拒绝模式、锁 / 赶、任务模式、防波堤）。 */
@@ -596,6 +611,74 @@ object ProactiveRuntime {
             ))
         }
     }
+    // ---------------------------------------------------------------- 第三轮 7 种事件（接口约定 §3）
+
+    /**
+     * One `/event` post for the seven round-3 events. The answer decides nothing here: each caller
+     * says what to do with it (a lock opened/closed is followed by a fresh `/plan`), so this stays a
+     * transport, not a decision point.
+     */
+    private fun postEvent(type: String, vararg fields: Pair<String, Any?>, then: ((Map<*, *>) -> Unit)? = null) {
+        if (!::app.isInitialized || !proactiveEnabled()) return
+        val body = linkedMapOf<String, Any?>("type" to type)
+        for ((key, value) in fields) if (value != null) body[key] = value
+        // onForeground comes off the accessibility thread; routeAnswers is main-thread only.
+        main.post { fetchPluginRoute(routeCallback { m -> then?.invoke(m) }, "POST", "/event", body) }
+    }
+
+    /** 亮屏：只记账。晨间门开不开由插件按作息判定，所以顺手问一次 `/plan`。 */
+    fun onScreenOn() = postEvent("screen-on") { consultPlanSoon(minGapMs = 0L) }
+
+    /**
+     * 他打开了被拦的 App：挂着的义务按这次动作再问一次（插件只问一次，做过 `askedAt`）。
+     * `followup` 非空说明插件开了追问锁，界面要靠下一次 `/plan` 才拿到，所以立刻问。
+     */
+    fun onBlockedOpen(pkg: String) = postEvent("blocked-open", "app" to pkg) { m ->
+        if (m["followup"] != null) consultPlanSoon(minGapMs = 0L)
+    }
+
+    /** 微信里误入视频号 / 朋友圈 / 小说页：只记账，**不升级成违抗**。 */
+    fun onWechatHit(page: String, dwellMs: Long) =
+        postEvent("wechat-hit", "page" to page, "dwellMs" to dwellMs)
+
+    /** 他点「申请验收」：插件开一把 review 追问锁，回来问 `/plan` 拿新状态。 */
+    fun requestReview() = postEvent("request-review") { consultPlanSoon(minGapMs = 0L) }
+
+    /** 他点「开始」：进冲刺，娱乐锁上、通知进防波堤。 */
+    fun startSprint(task: String?, minutes: Int, long: Boolean) =
+        postEvent("start", "task" to (task ?: ""), "minutes" to minutes, "long" to long) {
+            consultPlanSoon(minGapMs = 0L)
+        }
+
+    /** 连麦结束：满 `brainMinMin` 分钟插件会开一把 `gemini` 追问锁。 */
+    fun onGeminiEnd(minutes: Int, by: String = "phone") =
+        postEvent("gemini-end", "minutes" to minutes, "by" to by) { consultPlanSoon(minGapMs = 0L) }
+
+    // ---------------------------------------------------------------- 追问锁（接口约定 §2、§5）
+
+    /**
+     * 追问锁到点前，界面靠这三个值决定「窗口不许划走」和「问完回到哪」。
+     * 到期时间取 `state.followup.until` 与 `state.until` 里更晚的那个：契约示例里 `followup.until`
+     * 可能是 0，那时真正的到期时间在主状态上。
+     */
+    @Volatile private var followupUntilAt: Long = 0L
+    @Volatile private var followupQuestionText: String? = null
+    @Volatile private var followupBackToState: String? = null
+
+    /** 已经报过 followup-timeout 的那个 `until`：同一把追问锁只报到点一次。 */
+    @Volatile private var followupTimeoutReported: Long = 0L
+
+    /** 追问锁还剩多少（0 = 此刻没有追问锁）。 */
+    fun followupUntil(): Long {
+        val until = followupUntilAt
+        return if (until > System.currentTimeMillis()) until else 0L
+    }
+
+    fun followupQuestion(): String? = followupQuestionText
+
+    /** 问完回到哪个主状态（`state.backTo`）；锁页用它说「问完回到哪里」。 */
+    fun followupBackTo(): String? = followupBackToState
+
     private var lastFront: String? = null
 
     /**
@@ -626,6 +709,8 @@ object ProactiveRuntime {
             val f = Force(4, packageName, lockWhy(now) ?: "拒绝模式", now + FORCE_HOLD_MS, refuse = true)
             force = f
             enforce(f, fresh = true)
+            // 打开被拦的 App = 插件再问义务那一次机会（只问一次；重复开关不会每次都堵）。
+            onBlockedOpen(packageName)
         }
         consultPlanSoon(minGapMs = 15_000L)
         val f = force ?: return
@@ -712,6 +797,8 @@ object ProactiveRuntime {
     /** 应用管理页的「Gemini 互动」：开 / 关一场连麦舱（POST /session）。 */
     fun geminiSession(action: String, topic: String?, minutes: Int, mode: String?, done: (Map<*, *>?) -> Unit) {
         if (!::app.isInitialized) { done(null); return }
+        // 连麦结束：先按第三轮契约报 gemini-end（满 3 分钟插件会开追问锁），再收本地舱。
+        if (action == "end") onGeminiEnd(sessionMinutes())
         main.post {
             fetchPluginRoute(routeCallback { m ->
                 val s = m["session"] as? Map<*, *>
@@ -860,7 +947,26 @@ object ProactiveRuntime {
         // one holding that cache. Wake at the earlier of the two and ask again, instead of polling or
         // sleeping through the change until nextCheckAt.
         val change = ((map["state"] as? Map<*, *>)?.get("nextChangeAt") as? Number)?.toLong() ?: 0L
-        val wakeAt = listOf(at, change).filter { it > 0 }.minOrNull() ?: 0L
+        // 追问锁（§2 `state.followup` / §5）：界面要 know 到点时间，手机也要在到点时报一次
+        // followup-timeout（插件每次 /plan 也兜一次，谁先到都算）。
+        val st = map["state"] as? Map<*, *>
+        val stateName = st?.get("state") as? String
+        val fu = st?.get("followup") as? Map<*, *>
+        val followupOn = fu?.get("active") == true || stateName == "followup"
+        val expiry = if (!followupOn) 0L else maxOf(
+            (fu?.get("until") as? Number)?.toLong() ?: 0L,
+            if (stateName == "followup") (st?.get("until") as? Number)?.toLong() ?: 0L else 0L,
+        )
+        val expiredFollowup = followupUntilAt
+        followupUntilAt = if (followupOn) expiry else 0L
+        followupQuestionText = if (followupOn) fu?.get("currentQuestion") as? String ?: why else null
+        followupBackToState = if (followupOn) st?.get("backTo") as? String else null
+        if (expiredFollowup > 0 && stamp >= expiredFollowup && followupTimeoutReported != expiredFollowup) {
+            // 到点没裁决：手机本地先报一次；插件的答案可能带来新的追问锁，所以报完再问 /plan。
+            followupTimeoutReported = expiredFollowup
+            postEvent("followup-timeout") { consultPlanSoon(minGapMs = 0L) }
+        }
+        val wakeAt = listOf(at, change, followupUntilAt).filter { it > 0 }.minOrNull() ?: 0L
         val speak = map["speak"] == true
         val reason = map["reason"] as? String ?: ""
         if (wakeAt <= 0) return

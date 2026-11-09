@@ -83,6 +83,26 @@ class InterceptPageActivity : Activity() {
     private var chatStatus: TextView? = null
     private var chatting = false
 
+    /** 追问锁：0 = 这一刻没有追问锁，页面照旧能被划走。 */
+    private var followupUntil = 0L
+    private var followupBackTo: String? = null
+    private var followupQuestion: String? = null
+    private var followupLabel: TextView? = null
+    private val followupTick = object : Runnable {
+        override fun run() {
+            val until = followupUntil
+            if (until <= 0) return
+            if (until - System.currentTimeMillis() <= 0) {
+                // 到点：追问锁结束，页面交还普通拦截逻辑（门由插件按 until 判定，手机不擅自收回拦击记录）。
+                followupUntil = 0L
+                followupLabel?.visibility = android.view.View.GONE
+                return
+            }
+            followupLabel?.text = followupCopy(until)
+            main.postDelayed(this, 1_000L)
+        }
+    }
+
     /** 计步破窗（第 8 节）：走够 150 步 + 手打 100 字违约说明，换 10 分钟放风。 */
     private var breakDialog: android.app.Dialog? = null
     private var breakStepsView: TextView? = null
@@ -143,6 +163,10 @@ class InterceptPageActivity : Activity() {
         eventId = id
         packageName = start.getStringExtra(EXTRA_PACKAGE)
         why = start.getStringExtra(EXTRA_WHY)
+        // 追问锁（接口约定 §5）：active 期间窗口不可划走，到 `until` 自己结束，问完按 `backTo` 回主状态。
+        followupUntil = ProactiveRuntime.followupUntil()
+        followupBackTo = ProactiveRuntime.followupBackTo()
+        followupQuestion = ProactiveRuntime.followupQuestion()
         drill = InterceptRuntime.drill(id)
         live[id] = this
         setContentView(content(label))
@@ -190,7 +214,11 @@ class InterceptPageActivity : Activity() {
 
     /** Leaving the page without choosing anything is an exit: the person went away from the app. */
     @Deprecated("Activity back handling; targetSdk 28")
-    override fun onBackPressed() = exit()
+    override fun onBackPressed() {
+        // 追问锁期间窗口不可划走：只能回答问题，或等 followup.until 到点。
+        if (followupUntil > System.currentTimeMillis()) return
+        exit()
+    }
 
     override fun onStop() {
         super.onStop()
@@ -203,6 +231,7 @@ class InterceptPageActivity : Activity() {
 
     override fun onDestroy() {
         main.removeCallbacks(proof)
+        main.removeCallbacks(followupTick)
         if (onScreenId == eventId) onScreenId = null
         // Destroyed without a report (the system reclaimed it, or it was restored and finished): the
         // lock is not over - it resurfaces with the app. Only the screen slot is given back.
@@ -424,6 +453,23 @@ class InterceptPageActivity : Activity() {
         }
     }
 
+    /** 追问锁剩余时间 + 问完回到哪个主状态（接口约定 §2 `backTo`）。 */
+    private fun followupCopy(until: Long): String {
+        val total = ((until - System.currentTimeMillis()) / 1_000L).coerceAtLeast(0L)
+        val left = if (total >= 60) "${total / 60} 分 ${total % 60} 秒" else "${total} 秒"
+        val back = when (followupBackTo) {
+            "night" -> "深夜锁"
+            "evening" -> "晚间对账"
+            "morning" -> "晨间立项"
+            "review" -> "验收"
+            "sprint" -> "冲刺"
+            "brain" -> "共脑"
+            "standby" -> "待命"
+            else -> null
+        }
+        return if (back != null) "追问锁：还剩 $left，问完回到$back" else "追问锁：还剩 $left"
+    }
+
     private fun setChatStatus(text: String?) {
         chatStatus?.text = text ?: ""
         chatStatus?.visibility = if (text.isNullOrBlank()) android.view.View.GONE else android.view.View.VISIBLE
@@ -583,6 +629,25 @@ class InterceptPageActivity : Activity() {
                 }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                     bottomMargin = dp(12)
                 })
+            }
+            // 追问锁（接口约定 §5）：窗口不可划走，这里说清楚问的是什么、还剩多久、问完回到哪。
+            if (followupUntil > System.currentTimeMillis()) {
+                addView(TextView(ctx).apply {
+                    followupLabel = this
+                    val q = followupQuestion?.trim().orEmpty()
+                    text = if (q.isEmpty()) followupCopy(followupUntil) else "$q\n" + followupCopy(followupUntil)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    setTextColor(palette.onTonal)
+                    setPadding(dp(12), dp(9), dp(12), dp(9))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(12).toFloat()
+                        setColor(palette.tonal)
+                    }
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = dp(12)
+                })
+                main.removeCallbacks(followupTick)
+                main.postDelayed(followupTick, 1_000L)
             }
             // P3: 直接讲道理。判球是真反驳时，插件会把力度降到 1，本页由手机侧关闭。
             val log = TextView(ctx).apply {

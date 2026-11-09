@@ -26,6 +26,7 @@ import android.view.Display
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import io.github.ccch1mneyyy.dsh_app.loop.LoopRuntime
+import io.github.ccch1mneyyy.dsh_app.loop.proactive.ProactiveRuntime
 import io.github.ccch1mneyyy.dsh_app.phone.PhoneControl
 import io.github.ccch1mneyyy.dsh_app.phone.PhoneRegistry
 
@@ -106,7 +107,11 @@ class PhoneA11yService : AccessibilityService() {
                     NowFeed.onScreen(false, now)
                     stopAll("屏幕关闭了")
                 }
-                Intent.ACTION_SCREEN_ON -> NowFeed.onScreen(true, now)
+                Intent.ACTION_SCREEN_ON -> {
+                    NowFeed.onScreen(true, now)
+                    // 第三轮 screen-on：只记账；晨间门开不开仍由插件按 /plan 的作息判定。
+                    runCatching { ProactiveRuntime.onScreenOn() }
+                }
                 Intent.ACTION_POWER_CONNECTED -> NowFeed.onCharging(true, now)
                 Intent.ACTION_POWER_DISCONNECTED -> NowFeed.onCharging(false, now)
             }
