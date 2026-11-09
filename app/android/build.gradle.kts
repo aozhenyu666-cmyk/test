@@ -1,9 +1,11 @@
 allprojects {
     repositories {
-        maven { url = uri("https://maven.aliyun.com/repository/google") }
-        maven { url = uri("https://maven.aliyun.com/repository/central") }
+        // Official repositories first; Aliyun mirrors are a China-only fallback
+        // (they answer 502 from GitHub runners, which fails resolution outright).
         google()
         mavenCentral()
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        maven { url = uri("https://maven.aliyun.com/repository/central") }
         // libadb-android (不打扰模式 self-ADB path) is published on JitPack only.
         maven { url = uri("https://jitpack.io") }
     }
