@@ -51,6 +51,44 @@ export function geminiBrief({ owner = '他', topic = '', minutes = 30, mode = 't
   return lines.join('\n').slice(0, 1800)
 }
 
+/** 走神：同一个娱乐 App 坐够这么久，才值得把他从里面拉出来。 */
+export const DRIFT_DWELL_MIN = 10
+/** 一天最多拉几次（第四轮 R4-6 定的边界，不跟着节奏配置走）。 */
+export const DRIFT_MAX_PER_DAY = 2
+/** 拉进去审多久。 */
+export const DRIFT_MINUTES = 15
+
+/**
+ * 走神强拉（第四轮 R4-6）：他标着忙时，人却在娱乐 App 里坐着——直接开一场审讯式 Gemini Live。
+ * 边界（文档 L137-139）：只在白天、忙时（= 在做正事）、同一个娱乐 App 坐够 dwellMin 分钟；
+ * 深夜、吃饭、放风、已经开着连麦、今天拉够两次、管控关掉，一律不拉。
+ * @returns {{app, label, dwell, topic, minutes, mode}|null}
+ */
+export function driftPull({ phone, now = Date.now(), day = 0, gear, busyWhat = '', night = null, meal = null,
+  onBreak = false, session = null, pulls = [], dwellMin = DRIFT_DWELL_MIN } = {}) {
+  if (!phone?.app || !phone.fun) return null
+  if (gear !== 'busy') return null
+  if (night) return null
+  if (meal) return null
+  if (onBreak) return null
+  if (session) return null
+  const dwell = Math.max(0, Math.round(Number(phone.minutes) || 0))
+  if (dwell < Math.max(5, Math.round(Number(dwellMin) || DRIFT_DWELL_MIN))) return null
+  const today = (Array.isArray(pulls) ? pulls : []).filter((p) => Number(p?.at) >= Number(day) && Number(p?.at) <= Number(now))
+  if (today.length >= DRIFT_MAX_PER_DAY) return null
+  const label = String(phone.label || phone.app)
+  const what = String(busyWhat || '该做的事').slice(0, 20)
+  return {
+    app: phone.app,
+    label,
+    dwell,
+    // 审讯的靶子就是他刚才干的事，别让他含糊过去。
+    topic: '先解释刚才为什么刷' + label + ' ' + dwell + ' 分钟，再回去接着' + what,
+    minutes: DRIFT_MINUTES,
+    mode: 'interrogate',
+  }
+}
+
 /** 交给模型的下一步（tool 结果里）。 */
 export function geminiSteps() {
   return [

@@ -66,7 +66,7 @@ import {
 } from './followup.js'
 import { BRAIN_MIN_MS, SPRINT_LONG_MIN, SPRINT_MIN, resolveState } from './machine.js'
 import {
-  DEFAULT_WALL, wallConfig, wallDecision, activeRelax, tightenActive, relaxRemaining, relaxUsedThisWeek, relaxBonus,
+  DEFAULT_WALL, wallConfig, wallDecision, mealNow, activeRelax, tightenActive, relaxRemaining, relaxUsedThisWeek, relaxBonus,
   trackApplyWindow, applyWindowOpen, dayKey, weekKey, WALL_KIND_DEFAULT, wallDefianceText,
 } from './wall.js'
 import { dailyPath, dayString, keywordsOf, loadDaily, normalizeTasks, reconcile, reviewText, writeDaily } from './daily.js'
@@ -79,7 +79,7 @@ import {
   AUDIT_DIR, PENDING_FILE, RULES_COOLDOWN_DAYS, RULES_FILE, WALL_DIR, appendAudit, classifyRules, parseRules, readText as readVaultText,
   findObsidianVault, renderPending, renderRules, renderTaskNote, taskNotePath, updatePending, writeText as writeVaultText,
 } from './vault_wall.js'
-import { GEMINI_PACKAGES, geminiBrief, geminiLines, geminiMode, geminiSteps, recapMarkdown, trackGemini } from './gemini.js'
+import { GEMINI_PACKAGES, driftPull, geminiBrief, geminiLines, geminiMode, geminiSteps, recapMarkdown, trackGemini } from './gemini.js'
 import { auditOf, cardsOf } from './sisters.js'
 
 export const name = 'dsh-go-companion'
@@ -1237,6 +1237,29 @@ export function apply(ctx) {
     saveGemini({ ...loadGemini(), session: { topic, mode, minutes, startedAt: now, until: now + minutes * 60_000, by: s.by || 'schedule' } })
     record({ state: 'gemini-schedule-fired', at: now, topic, minutes, mode })
     return { topic, minutes, mode, brief }
+  }
+  /**
+   * R4-6 走神强拉：忙时他在娱乐 App 里坐着，就开一场审讯式连麦。
+   * 判据在 gemini.js 的 driftPull（白天 / 忙时 / 坐够分钟数 / 深夜吃饭放风不拉 / 一天两次）。
+   * 拉起来的办法不另造一条通知：写进 R4-4 的预约文件，手机到点自己调 /gemini/due 取简报、
+   * 复制进剪贴板、打开 Gemini。`at` 放半秒后是为了让这次 /plan 就把它当"下一场"下发。
+   */
+  function driftPullNow(now, phone, tz) {
+    const sch = loadGeminiSchedule()
+    if (!sch.fired && Number(sch.at) > now) return null
+    const r = driftPull({
+      phone, now, day: startOfDay(now, tz), gear: effectiveGear(config, now), busyWhat: config.gearWhat,
+      night: lastRhythm?.night, meal: mealNow(wallConfig(config).meals, localMinute(phone, zoneMinuteOfDay(now, tz))),
+      onBreak: onBreak(now), session: geminiSessionView(now),
+      pulls: loadGemini().pulls, dwellMin: config.driftMin,
+    })
+    if (!r) return null
+    const at = now + 500
+    saveGeminiSchedule({ at, topic: r.topic, minutes: r.minutes, mode: r.mode, by: 'drift' })
+    const g = loadGemini()
+    saveGemini({ ...g, pulls: [...(Array.isArray(g.pulls) ? g.pulls : []), { at: now, app: r.app, minutes: r.dwell }].slice(-30) })
+    record({ state: 'gemini-drift', at: now, app: r.app, minutes: r.dwell })
+    return r
   }
   const loadGearState = () => readState(stateFile('gear.json'), {}) || {}
   const saveGearState = (g) => writeJson(stateFile('gear.json'), g)
@@ -3230,6 +3253,10 @@ export function apply(ctx) {
     if (Number(config.standbySince) && !backoff) out.nextCheckAt = Math.min(Number(out.nextCheckAt) || Infinity, Number(config.standbySince) + STANDBY_LOCK_MS)
     // 力度到了"锁 / 赶"：不管这一球说不说，手机都要执行（说到做到）。
     if (force.level >= 3) out.nextCheckAt = Math.min(Number(out.nextCheckAt) || now, now + 60_000)
+    // R4-6 走神强拉：忙时他在娱乐 App 里坐着，直接约一场审讯式连麦（走 R4-4 那条路，手机到点自己拉起）。
+    // 这一条比场面上的球要紧：拉起了就不说话，等他在 Gemini 里交代。
+    const drift = config.control !== false && canTalk && !gem.inside ? driftPullNow(now, phone, tz) : null
+    if (drift) Object.assign(out, { speak: false, reason: 'gemini-drift' })
     if (!out.speak) nextSpeaker = null
     return {
       v: 1, ...out, silence, sessionId, speaker: nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion',
@@ -3559,6 +3586,8 @@ function mergeConfig(current, body) {
     if (Number.isFinite(Number(body.coachDailyMax))) next.coachDailyMax = Math.max(0, Math.min(120, Math.round(Number(body.coachDailyMax))))
     if (Number.isFinite(Number(body.minGapMs))) next.minGapMs = Math.max(60_000, Math.min(24 * 3_600_000, Number(body.minGapMs)))
     if (Number.isFinite(Number(body.diceThreshold))) next.diceThreshold = Math.max(0, Math.min(100, Number(body.diceThreshold)))
+    // R4-6 走神阈值：同一个娱乐 App 坐够这么多分钟才算走神。
+    if (Number.isFinite(Number(body.driftMin))) next.driftMin = Math.max(5, Math.min(60, Math.round(Number(body.driftMin))))
     if (typeof body.allowColdSession === 'boolean') next.allowColdSession = body.allowColdSession
     if (typeof body.control === 'boolean') next.control = body.control
     if (typeof body.drills === 'boolean') next.drills = body.drills
