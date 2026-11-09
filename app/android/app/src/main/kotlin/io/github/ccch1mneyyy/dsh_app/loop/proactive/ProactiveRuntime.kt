@@ -42,6 +42,7 @@ import io.github.ccch1mneyyy.dsh_app.loop.core.SurfaceReport
 import io.github.ccch1mneyyy.dsh_app.loop.core.WakeMode
 import io.github.ccch1mneyyy.dsh_app.phone.PhoneControl
 import io.github.ccch1mneyyy.dsh_app.phone.PhoneTasks
+import io.github.ccch1mneyyy.dsh_app.phone.a11y.FrontChange
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.NowFeed
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.PhoneA11yService
 import io.github.ccch1mneyyy.dsh_app.loop.intercept.InterceptRuntime
@@ -121,6 +122,9 @@ object ProactiveRuntime {
     private const val SAY_POLL_WAIT_MS = 8_000L
     /** How long a 锁 / 赶 holds without a fresh /plan saying so again. */
     private const val FORCE_HOLD_MS = 3 * 60_000L
+    /** R4-0 去抖：上一次连麦舱当场锁的包与时刻；离开那个 App 就清掉。 */
+    @Volatile private var forcedApp: String? = null
+    @Volatile private var forcedAt: Long = 0L
     private const val REFUSE_PREFS = "dsh_companion_refuse"
     /** A plan older than its own next-check time by this much is stale; fall back to the local scheduler. */
     private const val PLAN_STALE_MS = 15 * 60_000L
@@ -567,6 +571,8 @@ object ProactiveRuntime {
         if (pkg in sessionAllow) return true
         // 桌面 / 系统界面 / DSH 自己不算"别的 App"，不然他连"回 Gemini"都点不到。
         if (pkg in NEUTRAL) return true
+        // R4-0: 用户自己的放行名单在连麦舱期间同样作数（原来只读插件白名单，所以"放行都不行"）。
+        if (runCatching { pkg in InterceptRuntime.config().whitelist }.getOrDefault(false)) return true
         return pkg == app.packageName || pkg == app.packageName + ".fish"
     }
     private fun setSession(until: Long, allow: Set<String>, pkg: String?) {
@@ -799,10 +805,20 @@ object ProactiveRuntime {
      */
     fun onFrontChanged(pkg: String?) {
         if (!::app.isInitialized) return
+        if (pkg == null || !FrontChange.switched(pkg)) return
         if (!sessionActive()) return
-        if (pkg == null || !listed(pkg)) return
+        if (!listed(pkg)) {
+            // 离开被拦的 App（回桌面、进 DSH）：去抖清掉，下次再进来要重新锁。
+            forcedApp = null
+            return
+        }
         if (breaking()) return
-        val f = Force(4, pkg, lockWhy() ?: "Gemini 互动中，只许 Gemini", System.currentTimeMillis() + FORCE_HOLD_MS, refuse = true)
+        val now = System.currentTimeMillis()
+        // 去抖：同一个包在持锁期内只锁一次，否则输入法反复弹出收起会把锁页刷个不停。
+        if (forcedApp == pkg && now - forcedAt < FORCE_HOLD_MS) return
+        forcedApp = pkg
+        forcedAt = now
+        val f = Force(4, pkg, lockWhy() ?: "Gemini 互动中，只许 Gemini", now + FORCE_HOLD_MS, refuse = true)
         force = f
         enforce(f, fresh = true)
     }
@@ -949,10 +965,15 @@ object ProactiveRuntime {
         // 连麦舱：插件判的 force 只管娱乐 App；这里把"非 Gemini"的其他 App 一并锁掉。
         if (sessionActive()) {
             val front = NowFeed.snapshot(SystemClock.elapsedRealtime()).app
-            if (front != null && listed(front)) {
-                val sf = Force(4, front, lockWhy() ?: "Gemini 互动中，只许 Gemini", System.currentTimeMillis() + FORCE_HOLD_MS, refuse = true)
-                force = sf
-                enforce(sf, fresh = true)
+            if (front != null && FrontChange.switched(front) && listed(front)) {
+                val now = System.currentTimeMillis()
+                if (forcedApp != front || now - forcedAt >= FORCE_HOLD_MS) {
+                    forcedApp = front
+                    forcedAt = now
+                    val sf = Force(4, front, lockWhy() ?: "Gemini 互动中，只许 Gemini", now + FORCE_HOLD_MS, refuse = true)
+                    force = sf
+                    enforce(sf, fresh = true)
+                }
             }
         }
         val at = (map["nextCheckAt"] as? Number)?.toLong() ?: 0L

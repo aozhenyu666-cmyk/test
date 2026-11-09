@@ -128,6 +128,12 @@ class PhoneA11yService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         invalidateOverlayWindowContext()
+        // R4-0: 输入法和 DSH 自己不算"换了前台 App"。输入法列表以系统为准，名字规则只作兜底。
+        runCatching {
+            val imm = getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+            FrontChange.setIme(imm?.enabledInputMethodList?.map { it.packageName }?.toSet() ?: emptySet())
+        }
+        FrontChange.setSelf(setOf(packageName, "$packageName.fish"))
         val o = ControlOverlay(this)
         val d = MainScreenDriver(this, o)
         overlay = o

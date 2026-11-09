@@ -51,14 +51,8 @@ object NowFeed {
         lastEventAt = now
     }
 
-    /** System UI, the IME and permission dialogs are layers over the app, not a new app. */
-    private fun isNoise(packageName: String): Boolean {
-        if (packageName == "android" || packageName == "com.android.systemui") return true
-        val lower = packageName.lowercase()
-        return lower.contains("inputmethod") ||
-            lower.endsWith(".ime") ||
-            lower.contains("permissioncontroller")
-    }
+    /** One rule for "a layer over the app, not a new app" — shared with the 连麦舱 lock (R4-0). */
+    private fun isNoise(packageName: String): Boolean = FrontChange.isLayer(packageName)
 
     @Synchronized
     fun onScreen(on: Boolean, now: Long) {
