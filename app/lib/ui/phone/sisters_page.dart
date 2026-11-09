@@ -7,6 +7,7 @@ import '../common/list_page_row.dart';
 import '../shell/page_frame.dart';
 import '../theme/app_icons.dart';
 import '../theme/theme.dart';
+import 'deposit_page.dart';
 
 /// 设置 → 手机操控 → 姐妹（R4-5）。
 ///
@@ -29,6 +30,7 @@ class _SistersPageState extends State<SistersPage> {
   late final ProactiveChannel _channel = widget.channel ?? ProactiveChannel();
   final _pages = PageController();
   SistersView? _view;
+  DepositView? _deposit;
   int _index = 0;
   bool _expanded = false;
 
@@ -46,9 +48,11 @@ class _SistersPageState extends State<SistersPage> {
 
   Future<void> _refresh() async {
     final view = await _channel.sisters();
+    final deposit = await _channel.deposit();
     if (!mounted) return;
     setState(() {
       _view = view;
+      _deposit = deposit;
       // 刷新后当前页可能已经不存在（比如双人格被关掉），回到第一张。
       if (_index >= (view?.cards.length ?? 0)) _index = 0;
     });
@@ -59,7 +63,7 @@ class _SistersPageState extends State<SistersPage> {
     final view = _view;
     return AppPage.list(
       title: '姐妹',
-      subtitle: const Text('她们记得的你、最近说过的话，还有墙今天的审计'),
+      subtitle: const Text('她们记得的你、最近说过的话，还有墙今天的审计和该交的四段'),
       actions: [
         GlassIconButton(
           icon: AppIcons.refresh,
@@ -94,12 +98,47 @@ class _SistersPageState extends State<SistersPage> {
           ),
           const SizedBox(height: 24),
           _auditPanel(view.audit),
+          const SizedBox(height: 12),
+          _depositCard(),
         ],
       ],
     );
   }
 
   int _indexSafe(SistersView view) => _index < view.cards.length ? _index : 0;
+
+  /// 三个对象里的第三个：墙。它不聊天、不谈判，所以这里只有一条通往「今天该交什么」的路。
+  ///
+  /// 四段没交齐 = 当天没有放风额度，这个判断在插件里做，这里只把「还缺几段」说清楚。
+  Widget _depositCard() {
+    final d = _deposit;
+    final colors = DshColors.of(context);
+    final complete = d?.complete == true;
+    return ListPageCard(
+      children: [
+        ListPageRow(
+          icon: complete ? AppIcons.allowed : AppIcons.today,
+          iconColor: d == null ? null : (complete ? colors.success : colors.warning),
+          title: '每日四部门',
+          subtitle: d == null
+              ? '连不上大肥鱼，读不到今天交了几段'
+              : complete
+                  ? '今天四段都交了：信息收集、谋划思考、行为管理、统筹规划'
+                  : '今天交了 ${d.done} / ${d.total} 段，交齐之前不放额度${d.missingText.isEmpty ? '' : '：${d.missingText}'}',
+          subtitleMaxLines: 3,
+          value: d == null ? null : '${d.done}/${d.total}',
+          chevron: d != null,
+          onTap: d == null ? null : () => _pushDeposit(),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _pushDeposit() async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const DepositPage()));
+    // 回来把四段的状态和墙的审计一起刷新，免得面板还停在旧数字。
+    if (mounted) await _refresh();
+  }
 
   /// 两张卡左右滑。
   Widget _cardPager(SistersView view) {

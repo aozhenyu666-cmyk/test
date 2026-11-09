@@ -133,6 +133,7 @@ object BuiltinPluginGuest {
                 "lib/wall_auditor.js",
                 "lib/vault_wall.js",
                 "lib/sisters.js",
+                "lib/deposit.js",
                 "lib/daily.js",
                 "lib/followup.js",
                 "lib/machine.js",

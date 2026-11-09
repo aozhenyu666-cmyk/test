@@ -374,6 +374,24 @@ class ProactiveChannel {
       return null;
     }
   }
+
+  /// 每日四部门提交（插件 `POST /deposit`）。
+  ///
+  /// [department] 为空就是读状态；给了就是交那一段，[report] / [thought] 一起传。
+  /// 字数不够插件会退回并带上错误码，界面照着说，不在这里自己判。
+  Future<DepositView?> deposit({String? department, String? report, String? thought}) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('deposit', {
+        if (department != null) 'action': 'submit',
+        if (department != null) 'department': department,
+        if (report != null) 'report': report,
+        if (thought != null) 'thought': thought,
+      });
+      return DepositView.fromWire(raw);
+    } on Exception {
+      return null;
+    }
+  }
 }
 
 /// The host plugin's own view: which session proactive turns go to, and which agents are alive.
@@ -646,4 +664,119 @@ class SistersView {
     }
     return out;
   }
+}
+
+/// 每日四部门里的一段：信息收集 / 谋划思考 / 行为管理 / 统筹规划。
+///
+/// 字数下限由插件给（[minReport] / [minThought]），界面只照着显示，不自己定一套。
+class DepositItem {
+  const DepositItem({
+    required this.key,
+    required this.label,
+    this.hint = '',
+    this.done = false,
+    this.at = 0,
+    this.reportChars = 0,
+    this.thoughtChars = 0,
+    this.minReport = 200,
+    this.minThought = 80,
+  });
+
+  final String key;
+  final String label;
+
+  /// 这一段该写什么（插件里和部门一起定义，界面不另写一份）。
+  final String hint;
+  final bool done;
+
+  /// 提交时间；0 表示还没交。
+  final int at;
+  final int reportChars;
+  final int thoughtChars;
+  final int minReport;
+  final int minThought;
+
+  static DepositItem? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    final key = raw['key'];
+    final label = raw['label'];
+    if (key is! String || key.isEmpty || label is! String) return null;
+    int num_(Object? v) => v is num ? v.round() : 0;
+    String str(Object? v) => v is String ? v : '';
+    return DepositItem(
+      key: key,
+      label: label,
+      hint: str(raw['hint']),
+      done: raw['done'] == true,
+      at: num_(raw['at']),
+      reportChars: num_(raw['reportChars']),
+      thoughtChars: num_(raw['thoughtChars']),
+      minReport: num_(raw['minReport']) == 0 ? 200 : num_(raw['minReport']),
+      minThought: num_(raw['minThought']) == 0 ? 80 : num_(raw['minThought']),
+    );
+  }
+}
+
+/// 今天的四部门提交状态（插件 `POST /deposit`）。
+///
+/// 交不齐的当天没有放风额度——这条在插件里判，界面只负责把「还缺哪几段」说清楚。
+class DepositView {
+  const DepositView({
+    this.items = const [],
+    this.done = 0,
+    this.total = 4,
+    this.missing = const [],
+    this.missingText = '',
+    this.error,
+  });
+
+  final List<DepositItem> items;
+  final int done;
+  final int total;
+  final List<String> missing;
+  final String missingText;
+
+  /// 插件那边的错误码（`too-thin` / `bad-department` / `no_answer` …）；null 表示正常。
+  final String? error;
+
+  bool get ok => error == null;
+  bool get complete => total > 0 && done >= total;
+
+  static DepositView? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    final err = raw['error'];
+    final d = raw['deposit'];
+    final items = <DepositItem>[];
+    if (d is Map) {
+      for (final item in _list(d['items'])) {
+        final it = DepositItem.fromWire(item);
+        if (it != null) items.add(it);
+      }
+    }
+    final view = DepositView(
+      items: items,
+      done: d is Map && d['done'] is num ? (d['done'] as num).round() : items.where((i) => i.done).length,
+      total: d is Map && d['total'] is num ? (d['total'] as num).round() : items.length,
+      missing: [
+        if (d is Map)
+          for (final m in _list(d['missing']))
+            if (m is String) m,
+      ],
+      missingText: d is Map && d['missingText'] is String ? d['missingText'] as String : '',
+    );
+    if (err is Map) {
+      final code = err['code'];
+      return DepositView(
+        items: view.items,
+        done: view.done,
+        total: view.total,
+        missing: view.missing,
+        missingText: view.missingText,
+        error: code is String && code.isNotEmpty ? code : 'error',
+      );
+    }
+    return view;
+  }
+
+  static List<Object?> _list(Object? value) => value is List ? value : const [];
 }

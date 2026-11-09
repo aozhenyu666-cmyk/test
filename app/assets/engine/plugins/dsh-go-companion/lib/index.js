@@ -70,6 +70,7 @@ import {
   trackApplyWindow, applyWindowOpen, dayKey, weekKey, WALL_KIND_DEFAULT, wallDefianceText,
 } from './wall.js'
 import { dailyPath, dayString, keywordsOf, loadDaily, normalizeTasks, reconcile, reviewText, writeDaily } from './daily.js'
+import { DEPARTMENTS, completeOf, depositLines, depositOf, missingText, normalizeEntry, statusOf, withEntry } from './deposit.js'
 import {
   SCREENSHOT_DIRS, auditTask, baselineFor, checkMorningTasks, evidenceType, listScreenshots, loadWallMemory,
   noteDone, notePromised, pruneMemory, recentRate, statOf, wallText,
@@ -1242,6 +1243,11 @@ export function apply(ctx) {
   // 第二轮·每日文件：今天的事 + 完成物 + 晚上对账的结论（渲染成 大肥鱼/每日/日期.md）。
   const loadDailyState = () => readState(stateFile('daily.json'), {}) || {}
   const saveDailyState = (s) => writeJson(stateFile('daily.json'), s)
+  // 第五轮·每日四部门提交：信息收集 / 谋划思考 / 行为管理 / 统筹规划，一天一份，零点复归。
+  const loadDepositState = () => readState(stateFile('deposit.json'), {}) || {}
+  const saveDepositState = (s) => writeJson(stateFile('deposit.json'), s)
+  /** 今天这份提交。没交过就是空的四项。 */
+  const depositToday = (now) => depositOf(loadDepositState(), dayString(now, zoneOr(config.timeZone)))
   const geminiPackages = () => (Array.isArray(config.geminiPackages) && config.geminiPackages.length ? config.geminiPackages.map(String) : GEMINI_PACKAGES)
   /** 正在进行的 Gemini 互动舱：手机据此只许 Gemini（急事底线 App 除外）。 */
   const geminiSessionView = (now = Date.now()) => {
@@ -2241,7 +2247,7 @@ export function apply(ctx) {
           locked: wd.locked, kind: wd.kind || null, openUntil: wd.openUntil || 0, why: wd.why || null,
           applyWindowOpen: applyWindowOpen(config.applyWindow, now),
           applyWindowCloseAt: Number(config.applyWindow?.closeAt) || 0,
-          relaxRemaining: relaxRemaining(config, now, tz),
+          relaxRemaining: relaxRemainingNow(now, tz),
           relaxToday: Boolean(activeRelax(config, now, tz)),
           tightenToday: tightenActive(config, now, tz),
           meals: wallConfig(config).meals,
@@ -2258,6 +2264,45 @@ export function apply(ctx) {
     }
     return status()
   }
+  /**
+   * 本周还剩几天放风额度——四部门没交齐的当天归零。
+   *
+   * 这是「每天必须交」的硬约束落点：不看聊天、不看模型，只看 deposit.json 里今天齐不齐。
+   * 所有报额度的地方都走这一个，免得界面说还剩 2 天、实际却放不出来。
+   */
+  function relaxRemainingNow(now, tz) {
+    if (!completeOf(depositToday(now))) return 0
+    return relaxRemaining(config, now, tz)
+  }
+
+  /**
+   * 每日四部门提交（第五轮 `POST /deposit`）。
+   *
+   * action=status：今天交了几段、还缺哪几段（界面和墙都用这一个）。
+   * action=submit：交一段，body 里带 department + report + thought。字数不到当场退回。
+   *
+   * 只收自己的内容，只回自己的状态：这里不放宽任何规则，也不影响墙的锁。
+   */
+  function depositRoute(body) {
+    const now = Date.now()
+    const tz = zoneOr(body?.timeZone || config.timeZone)
+    const action = String(body?.action || 'status')
+    const view = () => {
+      const s = statusOf(depositToday(now))
+      return { v: 1, ok: true, deposit: { ...s, missingText: missingText(depositToday(now)), departments: DEPARTMENTS } }
+    }
+    if (action !== 'submit') return view()
+    const key = String(body?.department || '').trim()
+    if (!DEPARTMENTS.some((d) => d.key === key)) {
+      return { ...view(), ok: false, error: { code: 'bad-department', message: '没有这个部门：' + key } }
+    }
+    const norm = normalizeEntry({ report: body?.report, thought: body?.thought }, now)
+    if (!norm.ok) return { ...view(), ok: false, error: { code: 'too-thin', message: norm.text } }
+    const next = withEntry(depositToday(now), key, norm.entry)
+    saveDepositState(next)
+    return { ...view(), ok: true, text: '交了「' + (DEPARTMENTS.find((d) => d.key === key) || {}).label + '」。' }
+  }
+
   function eventRoute(body) {
     const now = Date.now()
     const type = String(body?.type || '')
@@ -2688,6 +2733,7 @@ export function apply(ctx) {
       session: loadGemini().session,
     }).state
     const stateLines = [...trustLines(trustNow()), ...rhythmLines(lastRhythm), ...gearLines(config, Date.now()), ...geminiLines(loadGemini(), Date.now()),
+      ...depositLines(depositToday(Date.now()), Boolean(lastRhythm?.reviewGate)),
       ...agendaLines(mainState), ...knowledgeLines(kbDir(notesDir(), home()), role)]
     const notes = notesFor(role).map((n) => (n.from === 'companion' ? names.companion : names.strategist) + '刚跟你递话（' +
       new Date(Number(n.at)).toISOString().slice(11, 16) + ' UTC）："' + n.text + '"')
@@ -2811,7 +2857,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/sisters' || path === '/gemini/due')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/sisters' || path === '/deposit' || path === '/gemini/due')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -2873,6 +2919,7 @@ export function apply(ctx) {
         if (path === '/session') return send(res, 200, sessionRoute(body.value))
         if (path === '/wall') return send(res, 200, wallRoute(body.value))
         if (path === '/sisters') return send(res, 200, sistersRoute(body.value))
+        if (path === '/deposit') return send(res, 200, depositRoute(body.value))
         config = mergeConfig(config, body.value)
         writeConfig(config)
         // 换了会话 / 名字 / 人设：马上重挂，不等下一次定时检查。
@@ -3147,7 +3194,7 @@ export function apply(ctx) {
       else if (lastRhythm?.reviewGate && !lastRhythm.state.reviewBall && !reviewedToday) nextSpeaker = { role: 'strategist', reason: 'review', at: now }
       // 申请窗口刚开：鲸澜来一句，告诉他现在能提明天的放松/收紧（主持修改申请窗口是鲸澜的事）。
       else if (lastApplyWindow?.justOpened) {
-        nextSpeaker = { role: 'strategist', reason: 'apply-window', at: now, note: { applyWindow: { remaining: relaxRemaining(config, now, tz), closeAt: Number(lastApplyWindow.state?.closeAt) || 0 } } }
+        nextSpeaker = { role: 'strategist', reason: 'apply-window', at: now, note: { applyWindow: { remaining: relaxRemainingNow(now, tz), closeAt: Number(lastApplyWindow.state?.closeAt) || 0 } } }
       }
       if (nextSpeaker) Object.assign(out, { speak: true, reason: 'strategist-' + nextSpeaker.reason, nextCheckAt: now })
     }
@@ -3209,7 +3256,7 @@ export function apply(ctx) {
           locked: wd.locked, kind: wd.kind || null, openUntil: wd.openUntil || 0,
           applyWindowOpen: applyWindowOpen(config.applyWindow, now),
           applyWindowCloseAt: Number(config.applyWindow?.closeAt) || 0,
-          relaxRemaining: relaxRemaining(config, now, tz),
+          relaxRemaining: relaxRemainingNow(now, tz),
           relaxToday: Boolean(activeRelax(config, now, tz)),
           tightenToday: tightenActive(config, now, tz),
         }
@@ -3259,6 +3306,11 @@ export function apply(ctx) {
       silence: silenceState(entries, { sessionId: config.sessionId, now }),
       lastTopicId: today.lastTopicId || null,
       memory: { path: memoryPath(), exists: existsSync(memoryPath()) },
+      // 第五轮·每日四部门提交：今天交了几段、还缺哪几段（缺了就当天没有放风额度）。
+      deposit: (() => {
+        const d = depositToday(now)
+        return { ...statusOf(d), missingText: missingText(d) }
+      })(),
       // 应用管理页的「Gemini 互动」：进行中的连麦舱（null = 没开）。
       gemini: { session: geminiSessionView(now) },
       garden: gardenStats(garden, now),
@@ -3349,7 +3401,7 @@ export function apply(ctx) {
         return {
           locked: wd.locked, kind: wd.kind || null, openUntil: wd.openUntil || 0,
           applyWindowOpen: applyWindowOpen(config.applyWindow, now),
-          relaxRemaining: relaxRemaining(config, now, tz),
+          relaxRemaining: relaxRemainingNow(now, tz),
           relaxToday: Boolean(activeRelax(config, now, tz)),
           tightenToday: tightenActive(config, now, tz),
           weeklyQuota: wallConfig(config).weeklyQuota,

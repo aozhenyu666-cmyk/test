@@ -85,7 +85,9 @@ function setup(home, extra = {}) {
   const say = (sid, text) => h.emit(sid, 'user/message', { id: 'u-' + Math.random(), content: [{ type: 'text', text }], source: { kind: 'user' } })
   const wall = (body) => call(h.handler(), 'POST', '/dsh-go-companion/v1/wall', { timeZone: 'Asia/Shanghai', ...body })
   const sisters = () => call(h.handler(), 'POST', '/dsh-go-companion/v1/sisters', { timeZone: 'Asia/Shanghai' })
-  return { sis, big, h, plan, say, wall, sisters }
+  const deposit = (body) => call(h.handler(), 'POST', '/dsh-go-companion/v1/deposit', { timeZone: 'Asia/Shanghai', ...body })
+  const status = () => call(h.handler(), 'GET', '/dsh-go-companion/v1/status')
+  return { sis, big, h, plan, say, wall, sisters, deposit, status }
 }
 
 const openWindow = () => ({ day: 1, openAt: Date.now() - 60_000, closeAt: Date.now() + 10 * 60_000, notified: true, used: false })
@@ -96,7 +98,8 @@ test('/wall status：默认白天锁着，带本周额度', async () => {
     const r = await t.wall({ action: 'status' })
     assert.equal(r.body.ok, true)
     assert.equal(typeof r.body.wall.locked, 'boolean')
-    assert.equal(r.body.wall.relaxRemaining, 3)
+    // 第五轮起：四部门当天没交齐，放风额度就是 0（默认每周 3 天，交齐才恢复，见下面那条硬约束用例）。
+    assert.equal(r.body.wall.relaxRemaining, 0)
   })
 })
 
@@ -213,5 +216,64 @@ test('第四轮 R4-3：设置页的「笔记库位置」读得到也写得进', 
     // 清掉 = 交回自动查找，不是记住一个空目录。
     const cleared = await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/config', { notesPath: '' })
     assert.equal(cleared.body.config.notesPath, '')
+  })
+})
+
+const report = (n = 200) => '字'.repeat(n)
+
+test('第五轮 /deposit：一开始四段全缺，交一段就少一段', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const first = await t.deposit({})
+    assert.equal(first.body.ok, true)
+    assert.equal(first.body.deposit.done, 0)
+    assert.equal(first.body.deposit.total, 4)
+    assert.deepEqual(first.body.deposit.missing, ['信息收集', '谋划思考', '行为管理', '统筹规划'])
+    // 只传一段，别的照旧
+    const one = await t.deposit({ action: 'submit', department: 'intel', report: report(), thought: '想'.repeat(80) })
+    assert.equal(one.body.ok, true, JSON.stringify(one.body))
+    assert.equal(one.body.deposit.done, 1)
+    assert.deepEqual(one.body.deposit.missing, ['谋划思考', '行为管理', '统筹规划'])
+  })
+})
+
+test('第五轮 /deposit：字数不够当场退回，不落盘', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const thin = await t.deposit({ action: 'submit', department: 'intel', report: '太短', thought: '短' })
+    assert.equal(thin.body.ok, false)
+    assert.equal(thin.body.error.code, 'too-thin')
+    assert.equal(thin.body.deposit.done, 0)
+    // 没有这个部门也退回
+    const bad = await t.deposit({ action: 'submit', department: 'nope', report: report(), thought: '想'.repeat(80) })
+    assert.equal(bad.body.ok, false)
+    assert.equal(bad.body.error.code, 'bad-department')
+  })
+})
+
+test('第五轮 硬约束：四段没交齐，当天没有放风额度；交齐后恢复', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    // 默认每周 3 天，第一天没用过 → 没这条约束时是 3
+    const before = await t.wall({ action: 'status' })
+    assert.equal(before.body.wall.relaxRemaining, 0, '没交齐就该是 0')
+    for (const key of ['intel', 'thinking', 'behavior', 'coord']) {
+      const r = await t.deposit({ action: 'submit', department: key, report: report(), thought: '想'.repeat(80) + key })
+      assert.equal(r.body.done === undefined || true, true)
+    }
+    const after = await t.wall({ action: 'status' })
+    assert.equal(after.body.wall.relaxRemaining, 3, JSON.stringify(after.body.wall))
+  })
+})
+
+test('第五轮 /status 带四部门提交摘要，界面一眼看到缺哪几段', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const s = await t.status()
+    assert.equal(s.status, 200)
+    assert.equal(s.body.deposit.total, 4)
+    assert.equal(s.body.deposit.done, 0)
+    assert.equal(s.body.deposit.items.length, 4)
+    assert.ok(s.body.deposit.missingText.includes('信息收集'))
   })
 })
