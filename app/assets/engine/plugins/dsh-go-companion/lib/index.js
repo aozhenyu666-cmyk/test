@@ -2925,6 +2925,10 @@ export function apply(ctx) {
       muteUntil: Number(config.muteUntil) || 0,
       // 人格卡与模式：首页可以编辑，引擎只管用。
       persona: cleanPersona(config.persona),
+      // 笔记库位置：设置页那一栏显示的就是它（留空 = 自动找带 .obsidian 的库）。
+      notesPath: typeof config.notesPath === 'string' ? config.notesPath : '',
+      // 实际在用的目录（可能来自自动查找）：设置页靠它说清"现在用的是哪个"。
+      notesDir: notesDir(),
       // 实际进 prompt 的那张：关系库人物卡 + 上面的覆盖。
       personaEffective: mergePersona(readCorePersona(home()), config.persona),
       // 判球模型（没配就是 null，表示沿用会话）。

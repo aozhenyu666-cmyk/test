@@ -318,6 +318,40 @@ class _ProactivePageState extends State<ProactivePage> {
     ];
   }
 
+  /// R4-3 留下的口子：笔记库位置以前只能靠她调用 notes_vault 工具，或者手改 config.json。
+  ///
+  /// 留空 = 插件自己找带 .obsidian 的库（`notesDir()`）；填了但不是目录就只是不生效，
+  /// 所以这里把「现在在用哪个」也显出来，填错一眼能看见。
+  Widget _vaultCard() {
+    final configured = _sessions.config['notesPath'];
+    final found = _sessions.config['notesDir'];
+    final path = configured is String ? configured.trim() : '';
+    final dir = found is String ? found : '';
+    return ListPageCard(
+      title: '笔记库（Obsidian）',
+      children: [
+        ListPageRow(
+          icon: AppIcons.folder,
+          title: '笔记库位置',
+          subtitle: dir.isNotEmpty
+              ? '现在用的是 $dir'
+              : path.isEmpty
+                  ? '还没找到：留空时自动找带 .obsidian 的库，也可以自己填'
+                  : '这个路径看不到：检查路径，或在 DSH 里打开「访问手机文件」',
+          subtitleMaxLines: 3,
+          value: path.isEmpty ? '自动' : '已填',
+          onTap: () => unawaited(_editNotesPath(path)),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _editNotesPath(String current) async {
+    final path = await showDialog<String>(context: context, builder: (_) => _PathDialog(initial: current));
+    if (path == null || !mounted) return;
+    await _companion({'notesPath': path});
+  }
+
   /// P7: "能不能主动开口" — every row is one thing a new install must turn on, and its tap opens
   /// exactly that system page. Green rows are already done; nothing here decides anything.
   Widget _readinessCard(ProactiveStatus status, bool pluginOnline) {
@@ -480,6 +514,10 @@ class _ProactivePageState extends State<ProactivePage> {
             ),
           ],
         ),
+        if (pluginOnline) ...[
+          const SizedBox(height: 24),
+          _vaultCard(),
+        ],
         const SizedBox(height: 24),
         ListPageCard(
           title: '伙伴今日',
@@ -697,6 +735,61 @@ class _MinutesDialogState extends State<_MinutesDialog> {
         autofocus: true,
         decoration: InputDecoration(
           helperText: '1–${context.l10n.proactiveMinutes(10080)}',
+          errorText: _error,
+        ),
+        onSubmitted: (_) => _submit(),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(context.l10n.commonCancel)),
+        FilledButton(onPressed: _submit, child: Text(context.l10n.commonSave)),
+      ],
+    );
+  }
+}
+
+/// Asks for a phone-absolute path, or for an empty string meaning "clear it, find the vault yourself".
+///
+/// Stateful for the same reason as [_MinutesDialog]: it owns the controller, so the controller
+/// outlives the exit animation.
+class _PathDialog extends StatefulWidget {
+  const _PathDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  State<_PathDialog> createState() => _PathDialogState();
+}
+
+class _PathDialogState extends State<_PathDialog> {
+  late final TextEditingController _controller = TextEditingController(text: widget.initial);
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final raw = _controller.text.trim();
+    // 空 = 清掉，交给自动查找；非空必须是绝对路径，相对路径插件那边一定不是目录。
+    if (raw.isNotEmpty && !raw.startsWith('/')) {
+      setState(() => _error = '要手机里的绝对路径，比如 /sdcard/Documents/Obsidian/我的库');
+      return;
+    }
+    Navigator.pop(context, raw);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('笔记库位置'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        decoration: InputDecoration(
+          hintText: '/sdcard/Documents/Obsidian/我的库',
+          helperText: '留空 = 自动找带 .obsidian 的库',
           errorText: _error,
         ),
         onSubmitted: (_) => _submit(),

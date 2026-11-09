@@ -107,16 +107,20 @@ class _SistersPageState extends State<SistersPage> {
       children: [
         SizedBox(
           height: _expanded ? 92 : 150,
-          child: PageView.builder(
-            controller: _pages,
-            itemCount: view.cards.length,
-            onPageChanged: (i) => setState(() {
-              _index = i;
-              _expanded = false;
-            }),
-            itemBuilder: (context, i) => Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 2),
-              child: _card(view.cards[i], active: i == _index),
+          // PageView 自己铺满全宽，14 + 每页 2 = 16，和 ListPageCard 的默认边距对齐。
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: PageView.builder(
+              controller: _pages,
+              itemCount: view.cards.length,
+              onPageChanged: (i) => setState(() {
+                _index = i;
+                _expanded = false;
+              }),
+              itemBuilder: (context, i) => Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: _card(view.cards[i], active: i == _index),
+              ),
             ),
           ),
         ),
@@ -193,7 +197,7 @@ class _SistersPageState extends State<SistersPage> {
             ),
             if (!_expanded) ...[
               const Spacer(),
-              Text(card.line, style: theme.textTheme.bodySmall),
+              Text(card.line, maxLines: 2, overflow: TextOverflow.ellipsis, style: theme.textTheme.bodySmall),
             ],
           ],
         ),

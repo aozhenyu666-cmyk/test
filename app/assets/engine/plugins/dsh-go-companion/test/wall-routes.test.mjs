@@ -196,3 +196,22 @@ test('第四轮 R4-5：/sisters 只读——返回体里没有任何放松/解�
     assert.equal(r.body.cards.some((c) => c.role === 'wall'), false)
   })
 })
+
+test('第四轮 R4-3：设置页的「笔记库位置」读得到也写得进', async () => {
+  await withHome(async (home) => {
+    const vault = join(home, 'vault')
+    mkdirSync(vault, { recursive: true })
+    const t = setup(home, { notesPath: vault })
+    // 读：/status 的 config 里要带上填的和实际在用的目录，设置页才知道现在指到哪。
+    const got = await call(t.h.handler(), 'GET', '/dsh-go-companion/v1/status')
+    assert.equal(got.status, 200, JSON.stringify(got.body))
+    assert.equal(got.body.config.notesPath, vault)
+    assert.equal(got.body.config.notesDir, vault)
+    // 写：设置页那一栏走的就是 POST /config。
+    const set = await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/config', { notesPath: vault })
+    assert.equal(set.body.config.notesPath, vault)
+    // 清掉 = 交回自动查找，不是记住一个空目录。
+    const cleared = await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/config', { notesPath: '' })
+    assert.equal(cleared.body.config.notesPath, '')
+  })
+})
