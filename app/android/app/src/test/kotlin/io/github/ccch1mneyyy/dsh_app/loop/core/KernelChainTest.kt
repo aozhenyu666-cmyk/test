@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import kotlin.random.Random
 
@@ -39,7 +40,12 @@ class KernelChainTest {
             is Command.Present -> presented += c
             else -> Unit
         }
-        for (closed in step.closed) scheduler.onOutcome(closed.eventId, closed.engagement, clocks)
+        // Mirrors ProactiveRuntime.dispatch: a "skip:" close is a decision, not a delivery failure.
+        for (closed in step.closed) {
+            val skip = closed.reason?.takeIf { it.startsWith("skip:") }?.substringAfter("skip:")
+            if (skip != null) scheduler.onSkipped(closed.eventId, skip, clocks)
+            else scheduler.onOutcome(closed.eventId, closed.engagement, clocks)
+        }
     }
 
     private fun scheduleTick() {
@@ -56,8 +62,13 @@ class KernelChainTest {
     /** Plugin answers as recorded against DSH 0.2.1-rc.4 by e2e-live.mjs. */
     private fun plugin(status: Int, body: Map<String, Any?>) {
         val rq = agentCalls.last()
-        val d = AgentWire.decode(status, body) as AgentWire.Decoded.Reply
-        drive(coordinator.onAgent(rq.requestId, d.reply))
+        // Same three-way split ProactiveRuntime.onAgentHttp makes: 409 "not this time" codes are a
+        // Skip (close quietly, no not-delivered streak), not a Reply the coordinator should see.
+        when (val d = AgentWire.decode(status, body)) {
+            is AgentWire.Decoded.Reply -> drive(coordinator.onAgent(rq.requestId, d.reply))
+            is AgentWire.Decoded.Skip -> drive(coordinator.cancel(rq.eventId, "skip:" + d.code))
+            is AgentWire.Decoded.Retry -> fail("recorded sample should not be a Retry: " + d.reason)
+        }
     }
 
     private fun boot() {
@@ -98,14 +109,19 @@ class KernelChainTest {
         assertTrue("no model call while DSH operates the phone", agentCalls.isEmpty())
         gate = Gate()
         drive(coordinator.setGate(gate))
+        val dueBefore = scheduler.state.nextDueWall
         plugin(409, mapOf("v" to 1L, "error" to mapOf("code" to "agent-busy")))
-        // Scheduler attempts have no canned text: a busy agent means no message, not a fake one.
+        // "Not this time" is a decision, not a failure: the attempt closes cancelled, nothing is
+        // counted, and no quick retry is armed -- the companion's next /plan moves the alarm.
         val r = coordinator.receipts().first()
-        assertEquals(Outcome.FAILED to "agent_agent-busy", r.outcome to r.reason)
+        assertEquals(Outcome.CANCELLED to "skip:agent-busy", r.outcome to r.reason)
         assertEquals(Engagement.NOT_DELIVERED, r.engagement)
         assertTrue(presented.isEmpty())
         assertEquals(0, scheduler.state.countToday)
-        assertTrue("retry soon, not at the full gap", scheduler.state.nextDueWall - wall <= 15 * 60_000L)
+        assertNull(scheduler.state.pendingEventId)
+        assertEquals(0, scheduler.state.notDeliveredStreak)
+        assertEquals("skipped:agent-busy", scheduler.state.lastReason)
+        assertEquals("no quick retry", dueBefore, scheduler.state.nextDueWall)
     }
 
     @Test fun processDeathMidTurnResumesThePollAndKeepsOneSchedule() {

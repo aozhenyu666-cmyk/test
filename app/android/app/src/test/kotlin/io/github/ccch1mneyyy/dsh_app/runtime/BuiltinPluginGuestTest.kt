@@ -47,7 +47,9 @@ class BuiltinPluginGuestTest {
         assertTrue(yaml.contains("      name: /opt/dsh-app/plugins/dsh-go-companion/lib/index.js\n"))
         // package.json is what makes the copied .js files ESM on the guest.
         assertTrue(BuiltinPluginGuest.PLUGINS.all { it.files.contains("package.json") })
-        assertEquals(5, BuiltinPluginGuest.PLUGINS.size)
+        // Four: relationship, feiyu-mood, memory, companion. dsh-fish-strict and dsh-speak-up are
+        // retired (see PLUGINS comments) and the asserts above pin that they stay out.
+        assertEquals(4, BuiltinPluginGuest.PLUGINS.size)
     }
 
     /**
