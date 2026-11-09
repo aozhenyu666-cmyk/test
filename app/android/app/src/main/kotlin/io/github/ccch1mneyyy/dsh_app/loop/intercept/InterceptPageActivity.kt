@@ -31,6 +31,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import io.github.ccch1mneyyy.dsh_app.R
 import io.github.ccch1mneyyy.dsh_app.loop.core.InterceptDrill
+import io.github.ccch1mneyyy.dsh_app.loop.proactive.ProactiveOverlay
 import io.github.ccch1mneyyy.dsh_app.loop.proactive.ProactiveRuntime
 import io.github.ccch1mneyyy.dsh_app.i18n.AppStrings
 import io.github.ccch1mneyyy.dsh_app.pet.OverlayPalette
@@ -446,7 +447,10 @@ class InterceptPageActivity : Activity() {
             setChatStatus(null)
             appendChat(
                 when {
-                    !reply.isNullOrBlank() -> AppStrings.get(this, R.string.proactive_overlay_reply, reply)
+                    // 双人格：插件在每句话前标〔鱼丸〕/〔鲸澜〕；墙的话以〔墙〕开头，姐妹原样转述。拆出说话人再显示。
+                    !reply.isNullOrBlank() -> ProactiveOverlay.splitSpeaker(reply).let { (who, body) ->
+                        if (who != null) "$who：$body" else AppStrings.get(this, R.string.proactive_overlay_reply, reply)
+                    }
                     error == "agent-busy" || error == "desk-busy" -> AppStrings.get(this, R.string.proactive_overlay_busy)
                     error == "timeout" -> AppStrings.get(this, R.string.proactive_overlay_slow_model)
                     else -> AppStrings.get(this, R.string.proactive_overlay_failed, error ?: "unknown")

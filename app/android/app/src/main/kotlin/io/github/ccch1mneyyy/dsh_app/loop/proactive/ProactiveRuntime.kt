@@ -664,6 +664,48 @@ object ProactiveRuntime {
     fun onGeminiEnd(minutes: Int, by: String = "phone") =
         postEvent("gemini-end", "minutes" to minutes, "by" to by) { consultPlanSoon(minGapMs = 0L) }
 
+    // ---------------------------------------------------------------- R4-4 定时连麦（接口约定 D4）
+
+    /** 下一场预约连麦的时刻（插件给的绝对毫秒）；0 = 没有预约。 */
+    @Volatile private var geminiDueAt: Long = 0L
+
+    /**
+     * 到点：取 launch → 简报进剪贴板 → 提示一句 → 拉起 Gemini → 马上问一次 /plan，拿连麦舱
+     * （插件取 launch 时已经把舱开好了，手机按 /plan 的 session 上"只许 Gemini"）。
+     */
+    private fun fireGeminiDue() {
+        if (!::app.isInitialized || !proactiveEnabled()) return
+        main.post {
+            fetchPluginRoute(routeCallback { m ->
+                val launch = m["launch"] as? Map<*, *> ?: return@routeCallback
+                val brief = (launch["brief"] as? String).orEmpty()
+                val topic = (launch["topic"] as? String).orEmpty()
+                if (brief.isNotBlank()) runCatching {
+                    val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("大肥鱼 · 连麦背景", brief))
+                }
+                runCatching {
+                    val hint = if (topic.isBlank()) "约好的连麦到点了：背景已复制，进 Gemini 粘贴" else "连麦到点：$topic（背景已复制，进 Gemini 粘贴）"
+                    android.widget.Toast.makeText(app, hint, android.widget.Toast.LENGTH_LONG).show()
+                }
+                val opened = openGemini()
+                Log.i("DshProactive", "gemini due: topic=$topic opened=$opened")
+                consultPlanSoon(minGapMs = 0L)
+            }, "POST", "/gemini/due", linkedMapOf<String, Any?>())
+        }
+    }
+
+    /** 先开 Gemini App，没有就开 Google App（不少手机上 Gemini Live 跑在里面）。 */
+    private fun openGemini(): Boolean {
+        val pm = app.packageManager
+        for (pkg in listOf("com.google.android.apps.bard", "com.google.android.googlequicksearchbox")) {
+            val intent = pm.getLaunchIntentForPackage(pkg) ?: continue
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (runCatching { app.startActivity(intent) }.isSuccess) return true
+        }
+        return false
+    }
+
     // ---------------------------------------------------------------- 追问锁（接口约定 §2、§5）
 
     /**
@@ -1006,7 +1048,15 @@ object ProactiveRuntime {
             followupTimeoutReported = expiredFollowup
             postEvent("followup-timeout") { consultPlanSoon(minGapMs = 0L) }
         }
-        val wakeAt = listOf(at, change, followupUntilAt).filter { it > 0 }.minOrNull() ?: 0L
+        // R4-4 定时连麦：插件只在预约还没到点时下发 geminiSchedule，所以记住最后一次看到的时间，
+        // 到点被唤醒时自己去取 launch（/gemini/due 取完即置已发，重复调用拿到 null）。
+        val geminiAt = ((map["geminiSchedule"] as? Map<*, *>)?.get("at") as? Number)?.toLong() ?: 0L
+        if (geminiAt > stamp) geminiDueAt = geminiAt
+        if (geminiDueAt in 1..stamp) {
+            geminiDueAt = 0L
+            fireGeminiDue()
+        }
+        val wakeAt = listOf(at, change, followupUntilAt, geminiDueAt).filter { it > 0 }.minOrNull() ?: 0L
         val speak = map["speak"] == true
         val reason = map["reason"] as? String ?: ""
         if (wakeAt <= 0) return
