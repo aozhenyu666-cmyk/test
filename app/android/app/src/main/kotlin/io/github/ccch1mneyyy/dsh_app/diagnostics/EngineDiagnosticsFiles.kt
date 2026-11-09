@@ -31,6 +31,8 @@ object EngineDiagnosticsFiles {
         "companion/ledger.jsonl",
         "companion/config.json",
         "companion/brain.json",
+        "companion/predict.json",
+        "companion/vibe.json",
         "companion/temper.json",
         "companion/rhythm.json",
         "companion/gear.json",

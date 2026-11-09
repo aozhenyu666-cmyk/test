@@ -121,6 +121,8 @@ object BuiltinPluginGuest {
                 "lib/temper.js",
                 "lib/drills.js",
                 "lib/brain.js",
+                "lib/predict.js",
+                "lib/vibe.js",
                 "lib/force.js",
                 "lib/roles.js",
                 "lib/gear.js",

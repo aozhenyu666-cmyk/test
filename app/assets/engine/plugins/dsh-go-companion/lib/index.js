@@ -53,7 +53,9 @@ import { NOTES_CANDIDATES, agendaLines, capabilityLines, companionChatText, role
 import { tide as tideOf, tideGap, tideHourly, vagueStreak } from './tide.js'
 import { FACES, stepTemper, temperLine } from './temper.js'
 import { drillLines, drillOf, pickDrill, scoldLines } from './drills.js'
-import { brainLines, chooseFace, cleanBrain, drillScorer, observe, onReply, onServe, onSilent, revise } from './brain.js'
+import { brainLines, chooseFace, cleanBrain, drillScorer, observe, onReply, onServe, onSilent, revise, updateArm } from './brain.js'
+import { appendPrediction, checkClaim, cleanLedger, dueCount, emptyLedger, predictionLines, settle } from './predict.js'
+import { buildVibe, pickedArms, renderVibe } from './vibe.js'
 import { decideForce, forceLines, refuseSwitch } from './force.js'
 import { BUSY_CHECK_MS, BUSY_DEFAULT_MIN, BUSY_MAX_MIN, aiTask, applyGear, effectiveGear, gearLines, gearSwitch } from './gear.js'
 import { trustGap, trustLines, trustScore } from './trust.js'
@@ -474,6 +476,12 @@ export function apply(ctx) {
   const GRACE_MS = 20 * 60_000
   const loadBrain = () => cleanBrain(readState(stateFile('brain.json'), null))
   const saveBrain = (b) => writeJson(stateFile('brain.json'), b)
+  // 预判账本：模型只写 claim，verdict 由墙的遥测填（predict.js 里 settle 是唯一出口）。
+  const loadPredict = () => cleanLedger(readState(stateFile('predict.json'), null))
+  const savePredict = (p) => writeJson(stateFile('predict.json'), p)
+  // 上轮注入了哪几个 arm：这一球被拉回来时按它们各自记账（§13.1）。进程重启就丢，可接受。
+  let lastVibePicks = []
+  let lastVibe = { face: '', turn: 0 }
   /** requestId -> 发球时的现状（generated 时交给大脑开始计"有没有拉回来"）。 */
   const servedContext = new Map()
   /** requestId -> first seen moment, for the median latencies in /status (P6). */
@@ -489,8 +497,11 @@ export function apply(ctx) {
     const brain = loadBrain()
     const pulled = observe(brain, { phone, now })
     if (pulled) {
+      // §13.1 multiple-play bandit：只给上一轮真被抽中的 arm 各记一次，没抽中的不动。
+      // 按组合记账会摊薄到永远攒不够，所以这里绝不能写成记一个组合 key。
+      for (const arm of lastVibePicks) updateArm(brain, arm, pulled.pulled)
       revise(brain, now)
-      record({ state: 'pulled', at: now, pulled: pulled.pulled, face: pulled.face, band: pulled.band })
+      record({ state: 'pulled', at: now, pulled: pulled.pulled, face: pulled.face, band: pulled.band, arms: lastVibePicks })
     }
     const silence = silenceState(entries, { sessionId, now })
     const vague = vagueStreak(entries)
@@ -650,7 +661,8 @@ export function apply(ctx) {
       const temper = stepTemper(readState(stateFile('temper.json'), null), {
         mode, tide: water.level, noTake: silence.noTake, mood: mood ? mood.mood : undefined, now,
       })
-      writeJson(stateFile('temper.json'), { edge: temper.edge, at: temper.at })
+      // 整份存：face/label/rule/surprise 原先被丢掉，导致 temperLine 永远拼不出内容（这条脸色从没进过 prompt）。
+      writeJson(stateFile('temper.json'), temper)
       const faceId = chooseFace(brain, { band: water.band, face: temper.face, surprise: temper.surprise })
       const face = { ...temper, ...(FACES.find((f) => f.face === faceId) || {}), face: faceId }
       const force = decideForce({
@@ -1768,6 +1780,61 @@ export function apply(ctx) {
       return { verdict: r.verdict, why: r.data + (r.missing ? '；还缺：' + r.missing : '') }
     }
   }
+
+  // ---------------------------------------------------------------- 预判闭环（B 层 T1）
+  /** 今天任务完成的比例。没有任务就是 null——不拿 0 顶，免得把"没定事"判成"没做"。 */
+  function tasksRatio(now) {
+    const tz = zoneOr(config.timeZone)
+    const state = loadDaily(loadDailyState(), now, tz)
+    if (!state.tasks?.length) return null
+    const out = reconcile(state, { now, tz, notesDir: notesDir(), stat: statOf, check: wallCheck(now) })
+    return out.total ? out.done / out.total : null
+  }
+  /** 结算要用的实测值。量不到就留空，settle 会记 unknown，不冤枉他。 */
+  function predictReadings(now, cur) {
+    const ctx = wallCtx(now)
+    const fileSize = {}
+    for (const r of cur.list || []) {
+      if (r.verdict) continue
+      for (const m of r.metrics || []) {
+        if (m.metric !== 'file_growth' || !m.path) continue
+        const st = statOf(m.path)
+        if (st) fileSize[m.path] = Number(st.size) || 0
+      }
+    }
+    const appMinutes = {}
+    for (const u of ctx.usage || []) {
+      const label = String(u?.label || u?.app || '')
+      if (label) appMinutes[label] = Math.round(Number(u.minutes) || 0)
+    }
+    return {
+      fileSize,
+      screenshots: (ctx.screenshots || []).length,
+      appMinutes,
+      funMinutes: funToday(lastPhone),
+      tasksRatio: tasksRatio(now),
+    }
+  }
+  /**
+   * 把到期的预判交给墙的遥测撞一遍。verdict / verdictSource 只有 predict.js 的 settle 能写，
+   * 模型写不进这个字段——这就是 §13.3 那条后门的堵法。
+   */
+  function settlePredictions(now) {
+    const cur = loadPredict()
+    if (!dueCount(cur, now)) return cur
+    const out = settle(cur, predictReadings(now, cur), now)
+    if (out.settled.length) {
+      savePredict(out.ledger)
+      record({ state: 'predict', at: now, settled: out.settled.map((r) => ({ id: r.id, verdict: r.verdict })) })
+      // 押错的那条写进墙的审计，他自己的账上留痕。
+      for (const r of out.settled) {
+        if (r.verdict !== 'miss') continue
+        vaultAudit(now, '预判没说中：' + r.claim + '（判据 ' + r.verdictSource + '，实测 ' +
+          (r.readings || []).map((x) => x.metric + '=' + (x.value === null ? '量不到' : x.value)).join('、') + '）')
+      }
+    }
+    return out.ledger
+  }
   function sprintOrTask(now) {
     return Number(config.sprintUntil) > now || Boolean(aiTask(config, now))
   }
@@ -2309,6 +2376,72 @@ export function apply(ctx) {
     }
   }
   /**
+   * B 层 T1：押一条预判。
+   * 你能写 claim、能写拿什么撞（evidenceRefs）、能定怎么算说中（metrics）；
+   * **不能写 verdict**——那两个字由墙的遥测在到期时填，你说了不算（predict.js settle）。
+   */
+  function predictTool(role) {
+    return {
+      name: 'submit_prediction',
+      description: '押一条明天（或几小时后）会被证伪的预判，到期由墙的遥测判对错，不是你自己说了算。' +
+        'claim 写一句具体的、能被打脸的话。' +
+        'metrics 是判据，只能用这五个：file_growth（要给 path，量立项后字节增量）/ screenshot_count（新截图张数）/ ' +
+        'app_minutes（要给 app 名，今天的分钟数）/ fun_minutes（娱乐合计分钟数）/ tasks_ratio（今天任务完成比例 0–1）。' +
+        '每条 metric 给 op（> >= < <=）和 threshold；给几条就是几条全部成立才算说中。' +
+        'evidenceRefs 写到时候拿什么撞它（例如 审计/2026-11-10.md、app:刷题、file:大肥鱼/周报.md），没有就交不上去。' +
+        'dueInHours 默认 20 小时。说错了会被记进墙的审计，别急着找理由。',
+      parameters: {
+        type: 'object',
+        properties: {
+          claim: { type: 'string', description: '一句能被证伪的话' },
+          dueInHours: { type: 'integer', description: '几小时后判（1–168，默认 20）' },
+          evidenceRefs: {
+            type: 'array',
+            maxItems: 5,
+            description: '到时候拿什么撞这条预判',
+            items: { type: 'string' },
+          },
+          metrics: {
+            type: 'array',
+            maxItems: 3,
+            description: '怎么算说中；给几条就是全部要成立',
+            items: {
+              type: 'object',
+              properties: {
+                metric: { type: 'string', description: 'file_growth / screenshot_count / app_minutes / fun_minutes / tasks_ratio' },
+                op: { type: 'string', description: '> >= < <=' },
+                threshold: { type: 'number', description: '门槛' },
+                path: { type: 'string', description: 'file_growth 必填：文件路径' },
+                app: { type: 'string', description: 'app_minutes 必填：App 名字' },
+              },
+              required: ['metric', 'op', 'threshold'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['claim', 'evidenceRefs', 'metrics'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const cur = loadPredict()
+        const v = checkClaim(args, { now, day: dayString(now, zoneOr(config.timeZone)), notesDir: notesDir() })
+        if (!v.ok) return { ok: false, text: '这条押不上去：\n- ' + v.problems.join('\n- ') }
+        const { ledger, record: rec } = appendPrediction(cur, v.value)
+        savePredict(ledger)
+        record({ state: 'predict-new', at: now, by: role, id: rec.id, claim: rec.claim })
+        const when = new Date(rec.dueAt).toISOString().slice(5, 16).replace('T', ' ') + ' UTC'
+        return {
+          ok: true,
+          text: '押上了（' + rec.id + '），' + when + ' 由墙的遥测判。判据：' +
+            rec.metrics.map((m) => m.metric + (m.path ? '(' + m.path + ')' : m.app ? '(' + m.app + ')' : '') +
+              m.op + m.threshold).join('，且') + '。到点不由你说了算。',
+        }
+      },
+    }
+  }
+  /**
    * 手机报来的事：overlay-closed（他关掉了聊天窗，聊没聊过）、defied（关窗 30 秒后还在娱乐 App 里）。
    * 违抗按规矩当场升级（不等模型）：开拒绝模式，并让姐姐马上来收尾。
    */
@@ -2827,6 +2960,47 @@ export function apply(ctx) {
     lines.push('答应他的事要真的做到：要定时提醒就用提醒工具真的设好，并说清楚到点是怎么提醒的；做不到的（比如替他数着打了几把）就别答应。不要假装记得没发生过的事；不知道就说不知道。')
     return lines.join('\n')
   }
+  // ---------------------------------------------------------------- B 层 T3：内容层随机
+  const loadVibeState = () => readState(stateFile('vibe.json'), {}) || {}
+  const saveVibeState = (s) => writeJson(stateFile('vibe.json'), s)
+  // 同一次组装里 chatPersonaText 可能被调不止一次：这段窗口内复用同一批素材，
+  // 免得同一轮里两句人设互相打架（ST 的 Sticky 就是干这个的）。
+  const VIBE_HOLD_MS = 20_000
+  let vibeCache = { at: 0, role: '', lines: [] }
+
+  /**
+   * 抽这一轮给哪几张素材。常驻层（铁律/人设卡/议程/判断）在上面已经全量进了 stateLines，
+   * 这里只往上加，永远删不掉任何一条；被抽中的 arm 记进 lastVibePicks，下一球按结果各自记账。
+   */
+  function takeVibe(role, stateLines, now) {
+    if (vibeCache.role === role && now - vibeCache.at < VIBE_HOLD_MS) return vibeCache.lines
+    const st = loadVibeState()
+    const turn = Number(st.turn) || 0
+    const tz = zoneOr(config.timeZone)
+    const temper = readState(stateFile('temper.json'), null)
+    const daily = loadDaily(loadDailyState(), now, tz)
+    const built = buildVibe({
+      date: dayString(now, tz),
+      turn,
+      arms: loadBrain().arms,
+      state: { last: st.last || {}, streak: st.streak || {} },
+    })
+    const lines = renderVibe(built.picks, {
+      temperLine: temperLine(temper),
+      predictions: predictionLines(loadPredict(), now),
+      keywords: (daily.tasks || []).map((t) => (keywordsOf(t.evidence) || [])[0]).filter(Boolean),
+      stateLines,
+      face: temper?.face || '',
+      roll: built.rng(),
+    })
+    saveVibeState({ v: 1, turn: turn + 1, last: built.state.last, streak: built.state.streak })
+    lastVibePicks = pickedArms(built.picks)
+    lastVibe = { face: temper?.face || '', turn: built.snapshot.turn }
+    // §13.2：每轮落注入快照，真机"前后不一致"时翻快照定位，不靠猜。
+    record({ state: 'vibe', at: now, role, ...built.snapshot })
+    vibeCache = { at: now, role, lines }
+    return lines
+  }
   function chatPersonaText(role) {
     if (config.personaInChat === false) return ''
     const mode = effectiveMode(config, Date.now())
@@ -2852,13 +3026,21 @@ export function apply(ctx) {
     const notes = notesFor(role).map((n) => (n.from === 'companion' ? names.companion : names.strategist) + '刚跟你递话（' +
       new Date(Number(n.at)).toISOString().slice(11, 16) + ' UTC）："' + n.text + '"')
     const noteLines = notes.length ? ['姐妹之间的悄悄话（他看不到，自然地用上就行）：', ...notes.map((t) => '- ' + t)] : []
+    // 内容层随机：只加不减，常驻层已经全在 stateLines 里。
+    const vibeLines = (() => {
+      try {
+        return takeVibe(role, stateLines, Date.now())
+      } catch {
+        return [] // 随机器坏了不能拖垮人设
+      }
+    })()
     if (role === 'strategist') {
       // 关系库人物卡（价值观/底线/边界）是姐姐的底子。
       const core = personaLines(mergePersona(readCorePersona(home()), {}), mode).filter((l) => !/^现在是(伙伴|教练)模式/.test(l))
-      return strategistChatText(config, core, [...refuseLines, ...stateLines, capabilityLines('strategist', { notesDir: notesDir() }), ...noteLines])
+      return strategistChatText(config, core, [...refuseLines, ...stateLines, ...vibeLines, capabilityLines('strategist', { notesDir: notesDir() }), ...noteLines])
     }
     const extra = mode === 'coach' ? ['他现在开了严格模式：你可以更凶、更不依不饶，但还是你自己的样子。'] : []
-    return companionChatText(config, [...extra, ...refuseLines, ...stateLines, capabilityLines('companion', { notesDir: notesDir() }), ...noteLines])
+    return companionChatText(config, [...extra, ...refuseLines, ...stateLines, ...vibeLines, capabilityLines('companion', { notesDir: notesDir() }), ...noteLines])
   }
   /** role -> {sid, agent, off}：两个会话各挂各的人设。 */
   const personaMounts = new Map()
@@ -2892,7 +3074,7 @@ export function apply(ctx) {
         geminiLiveTool(role), geminiEndTool(role), geminiLogTool(role), scheduleGeminiLiveTool(role),
         controlTool(), startTaskTool(role), blockTool(role), tightenTool(role), relaxTool(role),
         wallTool(role), verdictTool(role), breakTool(role), endTaskTool(role),
-        dailyPlanTool(role), dailyReviewTool(role),
+        dailyPlanTool(role), dailyReviewTool(role), predictTool(role),
       ].filter(Boolean)
       for (const tool of list) {
         try {
@@ -3129,6 +3311,12 @@ export function apply(ctx) {
     } catch (error) {
       // 规则.md 读坏了不影响执法：照当前规则走
       console.error('[companion] 规则.md 同步失败：' + String((error && error.message) || error))
+    }
+    // B 层 T1：到期的预判在这里被墙的遥测撞一遍（verdict 只有这一步能写）。
+    try {
+      settlePredictions(now)
+    } catch (error) {
+      console.error('[companion] 预判结算失败：' + String((error && error.message) || error))
     }
     const sessionId = typeof body?.sessionId === 'string' && body.sessionId ? body.sessionId : config.sessionId
     if (!sessionId) return { v: 1, speak: false, reason: 'no-session', topic: null, nextCheckAt: now + 6 * 3_600_000 }

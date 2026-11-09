@@ -23,13 +23,13 @@ const ENGAGED = new Set(['engaged', 'pushback'])
 const VAGUE = new Set(['brief', 'evasive', 'stock'])
 
 export function emptyBrain() {
-  return { v: 1, faces: {}, drills: {}, hours: {}, pending: null, served: {}, beliefs: {}, revision: null }
+  return { v: 1, faces: {}, drills: {}, hours: {}, arms: {}, pending: null, served: {}, beliefs: {}, revision: null }
 }
 
 export function cleanBrain(raw) {
   const b = emptyBrain()
   if (!raw || typeof raw !== 'object') return b
-  for (const k of ['faces', 'drills', 'hours', 'served', 'beliefs']) {
+  for (const k of ['faces', 'drills', 'hours', 'arms', 'served', 'beliefs']) {
     if (raw[k] && typeof raw[k] === 'object' && !Array.isArray(raw[k])) b[k] = raw[k]
   }
   if (raw.pending && typeof raw.pending === 'object') b.pending = raw.pending
@@ -114,6 +114,18 @@ export function drillScorer(brain, rng = Math.random) {
 }
 
 // ---------------------------------------------------------------- 记账
+
+/**
+ * 记一个 arm 的账（§13.1 multiple-play bandit）：一轮抽 2~3 个 arm，只给被抽中的各记一次，
+ * 没抽中的不动。这样 7 个 arm 各自攒自己的样本，不会像按组合记账那样摊薄到永远攒不够。
+ * 能用哪些 arm 由 vibe.js 的 ARMS 决定；这里不 import 它，免得循环依赖。
+ */
+export function updateArm(brain, arm, win) {
+  const id = String(arm || '')
+  if (!id) return brain
+  bump(brain.arms, id, win)
+  return brain
+}
 
 /** 这一球发出去了：记下当时在哪个 App、水位、用了哪张脸、哪道题。 */
 export function onServe(brain, { requestId, phone, band, face, drill, at }) {
