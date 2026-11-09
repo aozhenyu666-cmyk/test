@@ -74,6 +74,10 @@ import {
   SCREENSHOT_DIRS, auditTask, baselineFor, checkMorningTasks, evidenceType, listScreenshots, loadWallMemory,
   noteDone, notePromised, pruneMemory, recentRate, statOf, wallText,
 } from './wall_auditor.js'
+import {
+  PENDING_FILE, RULES_COOLDOWN_DAYS, RULES_FILE, WALL_DIR, appendAudit, classifyRules, parseRules, readText as readVaultText,
+  renderPending, renderRules, renderTaskNote, taskNotePath, updatePending, writeText as writeVaultText,
+} from './vault_wall.js'
 import { GEMINI_PACKAGES, geminiBrief, geminiLines, geminiMode, geminiSteps, recapMarkdown, trackGemini } from './gemini.js'
 
 export const name = 'dsh-go-companion'
@@ -1739,6 +1743,76 @@ export function apply(ctx) {
     return applyVerdict({ ok: true, kind: l.reason, satisfied: true, summary: '开始干活了', nextStep: String(config.taskGoal || '冲刺') }, now, 'wall')
   }
 
+  // ---------------------------------------------------------------- 第四轮 R4-3：墙在 Obsidian 里的那一半
+  const localHm = (now) => {
+    const m = zoneMinuteOfDay(now, zoneOr(config.timeZone))
+    return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0')
+  }
+  const vaultKb = () => {
+    const dir = notesDir()
+    return dir ? kbDir(dir, home()) : ''
+  }
+  /** 墙的原话写进 大肥鱼/墙/审计/日期.md（没有笔记库就不写）。 */
+  function vaultAudit(now, text) {
+    const kb = vaultKb()
+    if (!kb) return
+    try {
+      appendAudit(kb, dayString(now, zoneOr(config.timeZone)), localHm(now), text)
+    } catch {
+      // 写不进笔记库不影响审查本身
+    }
+  }
+  /** 大肥鱼/任务/日期-序号-名称.md：一件事一个文件，frontmatter 给 Obsidian Bases 用。 */
+  function vaultTask(now, index, task, status, proof = '') {
+    const kb = vaultKb()
+    if (!kb) return
+    const day = dayString(now, zoneOr(config.timeZone))
+    try {
+      writeVaultText(taskNotePath(kb, day, index, task.task), renderTaskNote({ day, task: task.task, evidence: task.evidence, status, proof }))
+    } catch {
+      // 同上
+    }
+  }
+  const loadRulesPending = () => readState(stateFile('wall-rules-pending.json'), {}) || {}
+  const saveRulesPending = (p) => writeJson(stateFile('wall-rules-pending.json'), p)
+  let rulesSeen = { key: '', at: 0 }
+  /**
+   * 读 大肥鱼/墙/规则.md：改严的立即生效，改松的进待生效表，冷却期（默认 7 天）过了才生效。
+   * 文件不存在就按当前规则写一份模板。文件一变就读；没变就每分钟兜底一次（待生效的到点要生效）。
+   */
+  function syncVaultRules(now) {
+    const kb = vaultKb()
+    if (!kb) return
+    const base = join(kb, WALL_DIR)
+    const st = statOf(join(base, RULES_FILE))
+    const key = st ? st.mtimeMs + ':' + st.size : 'none'
+    if (key === rulesSeen.key && now - rulesSeen.at < 60_000) return
+    rulesSeen = { key, at: now }
+    const cooldown = Math.max(0, Number(config.rulesCooldownDays ?? RULES_COOLDOWN_DAYS)) * 86_400_000
+    const fmtDay = (at) => dayString(at, zoneOr(config.timeZone))
+    const cur = wallConfig(config)
+    const text = readVaultText(join(base, RULES_FILE))
+    if (text === null) {
+      writeVaultText(join(base, RULES_FILE), renderRules(cur))
+      writeVaultText(join(base, PENDING_FILE), renderPending({}, cooldown, fmtDay))
+      return
+    }
+    const parsed = parseRules(text)
+    if (!parsed.ok) return
+    const { tighten, loosen } = classifyRules(cur, parsed.wall)
+    const prev = loadRulesPending()
+    const { pending, due } = updatePending(prev, loosen, now, cooldown)
+    const patch = { ...tighten, ...due }
+    if (Object.keys(patch).length) {
+      commit({ wall: { ...(config.wall || {}), ...patch } })
+      record({ state: 'wall-rules', at: now, tighten: Object.keys(tighten), loosen: Object.keys(due) })
+    }
+    if (JSON.stringify(prev) !== JSON.stringify(pending) || text === null) {
+      saveRulesPending(pending)
+      writeVaultText(join(base, PENDING_FILE), renderPending(pending, cooldown, fmtDay))
+    }
+  }
+
   /**
    * 交给墙：先看现在有没有这一种可以交（挂着的锁 / 门对得上），再按证据判。
    * @returns {{ok:boolean, pass:boolean, text:string}}
@@ -1760,7 +1834,9 @@ export function apply(ctx) {
     const rate = wallRate(now)
     const done = (pass, data, missing = []) => {
       record({ state: 'wall-audit', at: now, kind, pass, by })
-      return { ok: true, pass, text: wallText({ title: label, data, pass, missing, rate }) }
+      const text = wallText({ title: label, data, pass, missing, rate })
+      vaultAudit(now, text)
+      return { ok: true, pass, text }
     }
     if (!open) return done(false, ['现在没有挂着的「' + label + '」'], ['等到该交的时候再交'])
 
@@ -1773,6 +1849,7 @@ export function apply(ctx) {
       saveBaseline({ day, at: now, files: baselineFor(tasks, { notesDir: notesDir(), stat: statOf }) })
       saveWallMem(pruneMemory(notePromised(loadWallMem(), day, tasks.length), day))
       applyVerdict({ ok: true, kind, satisfied: true, summary: '立项 ' + tasks.length + ' 件', nextStep: tasks[0].task, tasks }, now, 'wall')
+      tasks.forEach((t, i) => vaultTask(now, i, t, '进行中'))
       return done(true, tasks.map((t, i) => (i + 1) + '. ' + t.task + ' → ' + t.evidence))
     }
 
@@ -1796,6 +1873,7 @@ export function apply(ctx) {
         return done(false, [task.task + '：' + r.data], [r.missing])
       }
       applyVerdict({ ok: true, kind, satisfied: true, summary: task.task + '：' + r.data, nextStep: '放风，回来接着下一件' }, now, 'wall')
+      if (idx >= 0 || state.tasks.length === 1) vaultTask(now, Math.max(0, idx), task, '完成', r.data)
       return done(true, [task.task + '：' + r.data])
     }
 
@@ -1810,7 +1888,11 @@ export function apply(ctx) {
       const data = rows.length
         ? rows.map((x, i) => (i + 1) + '. ' + x.t.task + '：' + (x.r.verdict === 'done' ? '有证据' : x.r.verdict === 'partial' ? '一半' : '没证据') + '（' + x.r.why + '）')
         : ['今天没有立项的事']
-      return { ok: true, pass: true, text: wallText({ title: label + '：有证据完成 ' + ok + '/' + rows.length + '，结果作用于明天', data, pass: true, rate: wallRate(now) }) }
+      rows.forEach((x, i) => vaultTask(now, i, x.t, x.r.verdict === 'done' ? '完成' : x.r.verdict === 'partial' ? '一半' : '未完成', x.r.why))
+      const text = wallText({ title: label + '：有证据完成 ' + ok + '/' + rows.length + '，结果作用于明天', data, pass: true, rate: wallRate(now) })
+      record({ state: 'wall-audit', at: now, kind, pass: true, by })
+      vaultAudit(now, text)
+      return { ok: true, pass: true, text }
     }
 
     if (kind === 'standby' || kind === 'defiance') {
@@ -2870,6 +2952,12 @@ export function apply(ctx) {
   function planRoute(body) {
     const now = Date.now()
     const tz = zoneOr(body?.timeZone || config.timeZone)
+    try {
+      syncVaultRules(now)
+    } catch (error) {
+      // 规则.md 读坏了不影响执法：照当前规则走
+      console.error('[companion] 规则.md 同步失败：' + String((error && error.message) || error))
+    }
     const sessionId = typeof body?.sessionId === 'string' && body.sessionId ? body.sessionId : config.sessionId
     if (!sessionId) return { v: 1, speak: false, reason: 'no-session', topic: null, nextCheckAt: now + 6 * 3_600_000 }
     const db = openMemoryDb(memoryPath())
