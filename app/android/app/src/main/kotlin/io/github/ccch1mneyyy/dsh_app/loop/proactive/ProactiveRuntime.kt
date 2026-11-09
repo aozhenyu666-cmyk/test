@@ -856,9 +856,14 @@ object ProactiveRuntime {
             }
         }
         val at = (map["nextCheckAt"] as? Number)?.toLong() ?: 0L
+        // 接口约定 §2: a layer's `until` running out changes the lock by itself, and the phone is the
+        // one holding that cache. Wake at the earlier of the two and ask again, instead of polling or
+        // sleeping through the change until nextCheckAt.
+        val change = ((map["state"] as? Map<*, *>)?.get("nextChangeAt") as? Number)?.toLong() ?: 0L
+        val wakeAt = listOf(at, change).filter { it > 0 }.minOrNull() ?: 0L
         val speak = map["speak"] == true
         val reason = map["reason"] as? String ?: ""
-        if (at <= 0) return
+        if (wakeAt <= 0) return
         // P2: the plugin decides, the phone executes. speak=true means this ball now; nextCheckAt is
         // when to look again afterwards. speak=false means only move the single alarm.
         if (speak && !ballInFlight()) {
@@ -872,9 +877,10 @@ object ProactiveRuntime {
             submit(request, fromScheduler = true)
         }
         // Keep the plugin's next-check time authoritative even after this ball: no local vote until
-        // the next /plan or until the plugin goes away.
-        companionPlan = CompanionPlan(false, at, reason, System.currentTimeMillis())
-        scheduler?.setNextDueAt(at, clocks())
+        // the next /plan or until the plugin goes away. speak=false on a nextChangeAt wake, so the
+        // tick asks again instead of speaking.
+        companionPlan = CompanionPlan(false, wakeAt, reason, System.currentTimeMillis())
+        scheduler?.setNextDueAt(wakeAt, clocks())
         arm()
     }
 

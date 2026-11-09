@@ -222,4 +222,73 @@ class EnforcementTest {
         assertNull(open.primary(now))
         assertEquals(0L, open.lockedUntil(now))
     }
+
+    @Test
+    fun d2_a_layer_unlocks_itself_when_its_own_until_passes() {
+        val now = 1_000_000L
+        val book = RuleBook(MemorySnapshotStore())
+        book.replace(
+            planSnapshot(
+                plan(
+                    listOf(
+                        linkedMapOf("kind" to "followup", "priority" to 80, "funLocked" to true, "until" to now + 5 * min, "why" to "追问锁"),
+                        linkedMapOf("kind" to "task", "priority" to 70, "funLocked" to true, "until" to now + 60 * min, "why" to "任务模式"),
+                    ),
+                ),
+                now,
+            ),
+            now,
+        )
+        // 追问锁 5 分钟到点自己就没了，任务锁还在，页面要换一个主锁来说。
+        assertEquals("followup", book.primary(now)?.kind)
+        assertEquals("followup", book.primary(now + 5 * min - 1)?.kind)
+        assertNull(book.active(now + 5 * min).firstOrNull { it.kind == "followup" })
+        assertEquals("task", book.primary(now + 5 * min)?.kind)
+        // 全到点之后不再有锁：不需要插件再发一次就能解开。
+        assertNull(book.primary(now + 60 * min))
+        assertEquals(0L, book.lockedUntil(now + 60 * min))
+    }
+
+    @Test
+    fun d2_the_snapshot_survives_a_restart_and_keeps_its_own_expiry() {
+        val now = 1_000_000L
+        val store = MemorySnapshotStore()
+        RuleBook(store).replace(
+            planSnapshot(
+                plan(listOf(linkedMapOf("kind" to "task", "priority" to 70, "funLocked" to true, "until" to now + 20 * min))),
+                now,
+            ),
+            now,
+        )
+        // 新进程：同一个 store 重新建一个 RuleBook，必须先 recover 回来。
+        val afterRestart = RuleBook(store)
+        assertNull("没有 recover 之前是空的", afterRestart.primary(now))
+        afterRestart.recover()
+        assertEquals("task", afterRestart.primary(now)?.kind)
+        // 到期时间还是原来那个绝对毫秒，重启不会把它顺延。
+        assertEquals(now + 20 * min, afterRestart.lockedUntil(now))
+        assertNull(afterRestart.primary(now + 20 * min))
+    }
+
+    @Test
+    fun d2_the_phone_keeps_enforcing_the_cached_layers_with_the_engine_gone() {
+        val now = 1_000_000L
+        val book = RuleBook(MemorySnapshotStore())
+        book.replace(
+            planSnapshot(
+                plan(
+                    listOf(
+                        linkedMapOf("kind" to "evening", "priority" to 90, "funLocked" to true, "until" to now + 30 * min, "why" to "晚上对账"),
+                    ),
+                ),
+                now,
+            ),
+            now,
+        )
+        // 引擎不可达 = 之后没有任何 replace；缓存照旧生效，且只到它自己的 until。
+        assertEquals("evening", book.primary(now + 10 * min)?.kind)
+        assertEquals("晚上对账", book.primary(now + 10 * min)?.why)
+        assertEquals(now + 30 * min, book.lockedUntil(now + 10 * min))
+        assertNull(book.primary(now + 30 * min))
+    }
 }
