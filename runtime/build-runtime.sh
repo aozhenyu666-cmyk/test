@@ -66,7 +66,10 @@ SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1767225600}"  # 2026-01-01T00:00:00Z, fi
 
 UBUNTU_MIRROR="https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/24.04/release"
 NODE_MIRROR="https://npmmirror.com/mirrors/node"
-NPM_REGISTRY="https://registry.npmmirror.com"
+# 构建期的 npm 注册表。默认 npmmirror（他本机在国内）；CI 跑在 GitHub 的海外机器上，
+# 用国内镜像纯吃亏——2026-11-09 npmmirror 的库表挂了，整个构建挂在 npm ci 上。
+# 想直连就设 NPM_REGISTRY=https://registry.npmjs.org（锁文件的 integrity 与注册表无关）。
+NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 TERMUX_REPO="https://packages.termux.dev/apt/termux-main"
 UBUNTU_ARCHIVE_AMD64="https://mirrors.tuna.tsinghua.edu.cn/ubuntu"        # InRelease verified with gpgv
 UBUNTU_ARCHIVE_ARM64="https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports"
@@ -293,6 +296,13 @@ npm_prefix_flags() {  # $1 = npm cpu, $2 = prefix dir; sets the caller's npm_fla
   )
 }
 
+# npm ci 只认锁文件里的 resolved 地址，--registry 不会改写它（dsh 的锁里有 628 处 npmmirror）。
+# integrity 是 tarball 的 sha512，跟从哪个注册表取无关，所以换主机是安全的。
+retarget_lock() {  # $1 = package-lock.json
+  [[ "$NPM_REGISTRY" == "https://registry.npmmirror.com" ]] && return 0
+  sed -i "s#https://registry.npmmirror.com#${NPM_REGISTRY}#g" "$1"
+}
+
 install_dsh() {  # $1 = npm cpu, $2 = prefix dir
   local cpu="$1" prefix="$2" bin; bin="$(host_npm)"
   local lockdir="$LOCKS/dsh-$DSH_VERSION"
@@ -301,6 +311,7 @@ install_dsh() {  # $1 = npm cpu, $2 = prefix dir
   if [[ -f "$lockdir/package-lock.json" ]]; then
     log "npm ci @deepseek-ai/dsh@$DSH_VERSION (cpu=$cpu, pinned lock)"
     cp "$lockdir/package.json" "$lockdir/package-lock.json" "$prefix/"
+    retarget_lock "$prefix/package-lock.json"
     PATH="$bin:$PATH" npm ci "${npm_flags[@]}"
   else
     log "npm install @deepseek-ai/dsh@$DSH_VERSION (cpu=$cpu) — first run, will pin the lock"
@@ -331,6 +342,7 @@ install_pnpm() {  # $1 = npm cpu, $2 = prefix dir
   if [[ -f "$lockdir/package-lock.json" ]]; then
     log "npm ci pnpm@$PNPM_VERSION (pinned lock)"
     cp "$lockdir/package.json" "$lockdir/package-lock.json" "$prefix/"
+    retarget_lock "$prefix/package-lock.json"
     PATH="$bin:$PATH" npm ci "${npm_flags[@]}"
   else
     log "npm install pnpm@$PNPM_VERSION — first run, will pin the lock"
