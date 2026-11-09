@@ -91,7 +91,22 @@ jobs:
       - name: Kotlin unit tests (lock arbitration, D2 snapshot)
         run: |
           cd app/android
-          ./gradlew :app:testDebugUnitTest --console=plain
+          ./gradlew :app:testArm64DebugUnitTest --console=plain
+          # 任务名必须带 flavor：这个 app 有 arm64 / x64 两个 abi flavor，没有 testDebugUnitTest。
+          # Gradle 全绿时不打印用例数，这里读报告，把「真跑了几个」变成可验证的（§1.3 判定）。
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          files = glob.glob("app/build/test-results/testArm64DebugUnitTest/*.xml")
+          assert files, "没有测试报告，说明 Kotlin 用例根本没跑起来"
+          total = fail = skip = 0
+          for f in files:
+              r = ET.parse(f).getroot()
+              total += int(r.get("tests", 0))
+              fail += int(r.get("failures", 0)) + int(r.get("errors", 0))
+              skip += int(r.get("skipped", 0))
+          print(f"Kotlin unit tests: {total} run, {fail} failed, {skip} skipped")
+          assert total > 0 and fail == 0 and skip < total, "Kotlin 单测未真正执行或有失败"
+          PY
       - name: Verify bundled runtime and package
         run: |
           APK=app/build/app/outputs/flutter-apk/app-arm64-release.apk
