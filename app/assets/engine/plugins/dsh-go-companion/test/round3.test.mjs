@@ -70,6 +70,16 @@ test('D3 vault_recent_notes：按修改时间取最近的，跳过每日文件�
     assert.ok(!rels.includes('大肥鱼/每日/2026-11-08.md'), '每日文件不进最近笔记')
     assert.ok(!rels.includes('大肥鱼/记忆.md'), '自动导出的记忆不进最近笔记')
     assert.ok(!rels.some((r) => r.startsWith('日记/')), '日记不读')
+
+    // 墙自己的审计日志也是系统产出：设成最新也不能把真笔记挤出前三，
+    // 否则球会拿一条审计记录当话题素材（e2e I1.1 就是这么红的）。
+    const auditAt = new Date(newer.getTime() + 60_000)
+    mkdirSync(join(root, '大肥鱼', '墙', '审计'), { recursive: true })
+    writeFileSync(join(root, '大肥鱼', '墙', '审计', '2026-11-08.md'), '〔墙〕晨间立项：缺席——今天没有立项\n')
+    utimesSync(join(root, '大肥鱼', '墙', '审计', '2026-11-08.md'), auditAt, auditAt)
+    const after = vaultRecentNotes(root, { limit: 3 })
+    assert.ok(!after.some((r) => r.rel.startsWith('大肥鱼/墙/审计/')), '墙的审计日志不进最近笔记')
+    assert.equal(after[0].rel, '项目/作息.md', '审计日志再新也不顶掉真笔记')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

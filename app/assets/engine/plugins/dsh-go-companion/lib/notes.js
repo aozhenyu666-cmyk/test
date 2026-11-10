@@ -10,6 +10,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { dayString } from './daily.js'
+import { AUDIT_DIR, WALL_DIR } from './vault_wall.js'
 
 export const SELF_FILE = '我.md'
 export const JUDGE_FILE = '判断.md'
@@ -218,8 +219,11 @@ function stripMarkdown(text, max) {
 export function vaultRecentNotes(notesDir, { limit = 3, now = Date.now(), exclude = [] } = {}) {
   if (!notesDir) return []
   const skip = new Set(exclude)
+  // 墙自己的审计日志也在这里写（vaultAudit）。它是系统产出，不是他写的话，
+  // 混进"最近改过的"会把真笔记挤下去 —— 球就会拿一条审计记录当话题素材。
+  const auditPrefix = KB_DIR + '/' + WALL_DIR + '/' + AUDIT_DIR + '/'
   return walkVault(notesDir)
-    .filter((f) => !f.rel.startsWith(KB_DIR + '/每日/') && f.rel !== KB_DIR + '/记忆.md' && f.rel !== KB_DIR + '/长期规划.md' && !skip.has(f.rel))
+    .filter((f) => !f.rel.startsWith(KB_DIR + '/每日/') && !f.rel.startsWith(auditPrefix) && f.rel !== KB_DIR + '/记忆.md' && f.rel !== KB_DIR + '/长期规划.md' && !skip.has(f.rel))
     .sort((a, b) => b.mtime - a.mtime)
     .slice(0, Math.max(1, Math.min(8, limit)))
     .map((f) => ({ rel: f.rel, mtime: f.mtime, summary: stripMarkdown(readText(f.path, VAULT_READ_BYTES), 220) }))
