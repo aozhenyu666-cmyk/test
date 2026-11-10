@@ -129,10 +129,12 @@ jobs:
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
           disable-animations: true
           script: |
-            set -o pipefail
+            # 这个 action 用 /usr/bin/sh（dash）执行脚本：不要 pipefail / [[ ]] / 数组。
             ADB="$ANDROID_HOME/platform-tools/adb"
             "$ADB" root || true
-            sleep 2
+            # adb root 会重启 daemon，不等它回来直接 install 会撞上 device offline。
+            "$ADB" wait-for-device
+            sleep 3
             "$ADB" install -r app/build/app/outputs/flutter-apk/app-x64-debug.apk
 
             # 探针见到这个文件才会跑一次真实回合（假模型回话），跑完自己删掉。
@@ -165,7 +167,12 @@ jobs:
               exit 1
             fi
             # 计划层与提交层必须一致：这次修复的核心不变量。
-            grep -q 'COMPANION OK' full-logcat.txt || { echo "::error::插件路由检查没通过"; exit 1; }
+            # 没发球时先把 plan 的真实 reason 打出来，别让它伪装成路由坏了。
+            grep -q 'COMPANION OK' full-logcat.txt || {
+              grep -E 'COMPANION plan|COMPANION request' full-logcat.txt || true
+              echo "::error::插件没有真正发球（看上面的 plan speak/reason）"
+              exit 1
+            }
 
       - name: 上传现场（总是上传）
         if: always()
