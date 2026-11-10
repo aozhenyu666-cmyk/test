@@ -122,6 +122,7 @@ object BuiltinPluginGuest {
                 "lib/drills.js",
                 "lib/tracks.js",
                 "lib/muse.js",
+                "lib/workflows.js",
                 "lib/brain.js",
                 "lib/predict.js",
                 "lib/vibe.js",

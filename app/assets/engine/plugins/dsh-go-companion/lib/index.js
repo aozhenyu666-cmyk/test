@@ -56,6 +56,9 @@ import { drillLines, drillOf, pickDrill, scoldLines } from './drills.js'
 import { normalizeTracks, pickTrack, recentTracks, trackStatus } from './tracks.js'
 // 第六轮 C：暗思考（后台自己整理，不开口）。
 import { museSweep, museStatus } from './muse.js'
+// 第六轮 D：姐妹自建工作流的护栏（配额 + 试启用 + 到期自动停 + 能力层拦墙）。
+import { workflowAct, workflowPropose, workflowStatus, workflowSweep } from './workflows.js'
+import { REQUIRED_FIELDS, WORKFLOW_ALLOW } from './workflows.js'
 import { brainLines, chooseFace, cleanBrain, drillScorer, observe, onReply, onServe, onSilent, revise, updateArm } from './brain.js'
 import { appendPrediction, checkClaim, cleanLedger, dueCount, emptyLedger, predictionLines, settle } from './predict.js'
 import { buildVibe, pickedArms, renderVibe } from './vibe.js'
@@ -135,6 +138,9 @@ const DEFAULTS = Object.freeze({
   // 支线（第六轮 A）：一页配置就是这四项。代码只认抽题/判断/漏项/标签四个槽位，
   // 具体是什么方向全写在这里。空数组 = 全部支线关掉，主干照跑。
   tracks: [],
+  // 自建工作流（第六轮 D）：她提的、用户点「试」才跑的附加流程。
+  // 护栏在 lib/workflows.js：每周最多 1 条、同时在跑 ≤3 条、7 天没可数效果自动停。
+  workflows: [],
   // 档位：free（闲时，默认高频）/ busy（忙时，gearUntil 到点回闲时）。
   gear: 'free',
   // Gemini 的包名（Gemini App / Google App 里的 Gemini）。
@@ -2447,6 +2453,67 @@ export function apply(ctx) {
    * 你能写 claim、能写拿什么撞（evidenceRefs）、能定怎么算说中（metrics）；
    * **不能写 verdict**——那两个字由墙的遥测在到期时填，你说了不算（predict.js settle）。
    */
+  function workflowTool(role) {
+    return {
+      name: 'workflow_propose',
+      description: '提一条你自己想加的工作流。这是提议，不是启用——他不点「试」，它不会跑。' +
+        '六项必须写全，缺一项交不上去：problem（解决什么问题）/ evidence（引账本哪条证据、哪个数）/ ' +
+        'trigger（什么时候触发）/ ask（对他的要求，必须是他不用动手的那种）/ metric（可数的成功指标）/ ' +
+        'judge（7 天后怎么判）。uses 是这条流程要用到的能力，只能用：' + WORKFLOW_ALLOW.join('、') + '。' +
+        '每周最多提 1 条，同时在跑最多 3 条，满了先停再加。7 天没有可数效果会自动停，转正后每 30 天复核。',
+      parameters: {
+        type: 'object',
+        properties: {
+          problem: { type: 'string', description: '解决什么问题' },
+          evidence: { type: 'string', description: '引哪条账本证据、哪个数' },
+          trigger: { type: 'string', description: '什么时候触发' },
+          ask: { type: 'string', description: '对用户的要求（不许是要他手动做的事）' },
+          metric: { type: 'string', description: '可数的成功指标' },
+          judge: { type: 'string', description: '7 天后怎么判' },
+          uses: { type: 'array', maxItems: 8, description: '要用到的能力名', items: { type: 'string' } },
+        },
+        required: REQUIRED_FIELDS,
+        additionalProperties: false,
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, text: { type: 'string' } } },
+        render: (_a, v) => [{ type: 'text', text: String((v && v.text) || '') }],
+      },
+      execute: (args = {}) => {
+        const now = Date.now()
+        const entries = readLedger(home(), 300)
+        const r = workflowPropose(config.workflows, entries, args, now, config.timeZone)
+        if (!r.ok) {
+          // 被拒的当场留痕：验收要查得到"墙的能力被拒"这件事发生过。
+          record({ state: 'workflow-refused', at: now, by: role, code: r.code, missing: r.missing, rejected: r.rejected })
+          const why =
+            r.code === 'capability-refused'
+              ? '这几种能力你碰不到：' + (r.rejected || []).map((x) => x.capability + '（' + x.code + '）').join('、')
+              : r.code === 'field-missing'
+                ? '缺这几项：' + (r.missing || []).join('、')
+                : r.code === 'manual-action'
+                  ? '这条要他自己动手，不算。'
+                  : r.code === 'week-quota'
+                    ? '这周已经提过一条了，下周再说。'
+                    : r.code === 'running-quota'
+                      ? '同时在跑的有 3 条了，先停一条再加。'
+                      : r.code === 'duplicate'
+                        ? '这个问题已经在跑了，不重复提。'
+                        : '交不上去：' + r.code
+          return { ok: false, text: why }
+        }
+        config = { ...config, workflows: [...(config.workflows || []), r.workflow] }
+        try {
+          writeConfig(config)
+        } catch {
+          return { ok: false, text: '存不下来，这条先不算。' }
+        }
+        record({ state: 'workflow-proposed', at: now, by: role, workflowId: r.workflow.id, problem: r.workflow.problem, metric: r.workflow.metric })
+        return { ok: true, text: '提上去了。他不点「试」它不会跑；7 天没有可数效果自动停。' }
+      },
+    }
+  }
+
   function predictTool(role) {
     return {
       name: 'submit_prediction',
@@ -3141,7 +3208,7 @@ export function apply(ctx) {
         geminiLiveTool(role), geminiEndTool(role), geminiLogTool(role), scheduleGeminiLiveTool(role),
         controlTool(), startTaskTool(role), blockTool(role), tightenTool(role), relaxTool(role),
         wallTool(role), verdictTool(role), breakTool(role), endTaskTool(role),
-        dailyPlanTool(role), dailyReviewTool(role), predictTool(role),
+        dailyPlanTool(role), dailyReviewTool(role), predictTool(role), workflowTool(role),
       ].filter(Boolean)
       for (const tool of list) {
         try {
@@ -3224,7 +3291,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/sisters' || path === '/deposit' || path === '/gemini/due')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/sisters' || path === '/deposit' || path === '/workflows' || path === '/gemini/due')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -3287,6 +3354,7 @@ export function apply(ctx) {
         if (path === '/wall') return send(res, 200, wallRoute(body.value))
         if (path === '/sisters') return send(res, 200, sistersRoute(body.value))
         if (path === '/tracks') return send(res, 200, tracksRoute(body.value))
+      if (path === '/workflows') return send(res, 200, workflowsRoute(body.value))
         if (path === '/deposit') return send(res, 200, depositRoute(body.value))
         config = mergeConfig(config, body.value)
         writeConfig(config)
@@ -3419,6 +3487,24 @@ export function apply(ctx) {
       if (mused) record(mused)
     } catch (error) {
       console.error('[companion] 暗思考失败：' + String((error && error.message) || error))
+    }
+    // 第六轮 D：自建工作流到期处理。试启用 7 天没可数效果就停；转正的 30 天复核对不上同样停。
+    // 和暗思考一样挂在 /plan 上——引擎里没有第二个"后台"面，不自建调度器。
+    try {
+      const wf = workflowSweep(config.workflows, ledger, now)
+      if (wf.events.length) {
+        config = { ...config, workflows: wf.next }
+        try {
+          writeConfig(config)
+        } catch {
+          // 下一轮再存：停用这件事比存盘重要，先按新状态跑
+        }
+        for (const ev of wf.events) {
+          record({ state: 'workflow-' + ev.kind, at: ev.at, workflowId: ev.id, reason: ev.reason })
+        }
+      }
+    } catch (error) {
+      console.error('[companion] 自建工作流到期处理失败：' + String((error && error.message) || error))
     }
     const mind = sense(phone, ledger, sessionId, now)
     if (phone) lastPhone = phone
@@ -3700,6 +3786,8 @@ export function apply(ctx) {
       tracks: trackStatus(config.tracks, recentTracks(entries)),
       // 第六轮 C：今天暗思考跑了几次、最近一条整理了什么（只记账，没有要发出去的话）。
       muse: museStatus(entries, now),
+      // 第六轮 D：自建工作流的配额与到期时间（几条在跑、还能提几条）。
+      workflows: workflowStatus(config.workflows, entries, now, config.timeZone),
       // 好坏只看回合：有效回合 = 至少两拍且有一拍接住了（见 rally.js）。
       rallies: rallyStats(entries, startOfDay(now, config.timeZone)),
       // 「现在」这一层要能说清：上一球被漠视到哪一级、静音到什么时候。
@@ -3750,6 +3838,60 @@ export function apply(ctx) {
    * GET 形态（不带 tracks）只看状态；带了 tracks 数组就是整页替换。
    * 校验不过的条目不会静默丢掉——原样报回去，哪一项缺哪个槽位说清楚。
    */
+  function workflowsRoute(body) {
+    const now = Date.now()
+    const tz = zoneOr(body?.timeZone || config.timeZone)
+    const entries = readLedger(home(), 300)
+    const read = () => ({ v: 1, ok: true, workflows: workflowStatus(config.workflows, entries, now, tz) })
+    const save = () => {
+      try {
+        writeConfig(config)
+      } catch {
+        return false
+      }
+      return true
+    }
+    const action = typeof body?.action === 'string' ? body.action : ''
+    // 不带 action = 只读（面板用）。
+    if (!action) return read()
+
+    if (action === 'propose') {
+      const r = workflowPropose(config.workflows, entries, body?.workflow || body, now, tz)
+      if (!r.ok) {
+        // 被拒的提议也留痕：拒了几次、拒的是什么原因，验收要查得到。
+        record({ state: 'workflow-refused', at: now, code: r.code, missing: r.missing, rejected: r.rejected })
+        return { v: 1, ok: false, error: { code: r.code, missing: r.missing, rejected: r.rejected, quota: r.quota } }
+      }
+      config = { ...config, workflows: [...(config.workflows || []), r.workflow] }
+      if (!save()) return { v: 1, ok: false, error: { code: 'save-failed' } }
+      record({ state: 'workflow-proposed', at: now, workflowId: r.workflow.id, problem: r.workflow.problem, metric: r.workflow.metric })
+      return { ...read(), ok: true, workflow: r.workflow }
+    }
+
+    if (action === 'trial' || action === 'stop') {
+      const id = typeof body?.id === 'string' ? body.id : ''
+      const r = workflowAct(config.workflows, id, action, now)
+      if (!r.ok) return { v: 1, ok: false, error: { code: r.code, state: r.state } }
+      config = { ...config, workflows: r.workflows }
+      if (!save()) return { v: 1, ok: false, error: { code: 'save-failed' } }
+      record({ state: 'workflow-' + action, at: now, workflowId: id })
+      return { ...read(), ok: true, workflow: r.workflow }
+    }
+
+    if (action === 'effect') {
+      // 可数效果只由账本记：count 必须 > 0，空转不算。
+      const id = typeof body?.id === 'string' ? body.id : ''
+      const count = Math.round(Number(body?.count) || 0)
+      const known = (config.workflows || []).some((w) => w?.id === id)
+      if (!known) return { v: 1, ok: false, error: { code: 'not-found' } }
+      if (count <= 0) return { v: 1, ok: false, error: { code: 'no-count' } }
+      record({ state: 'workflow-effect', at: now, workflowId: id, count })
+      return { ...read(), ok: true }
+    }
+
+    return { v: 1, ok: false, error: { code: 'bad-action', action: action.slice(0, 40) } }
+  }
+
   function tracksRoute(body) {
     const now = Date.now()
     const entries = readLedger(home(), 200)
