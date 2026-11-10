@@ -8,6 +8,7 @@ import { modeOr, personaLines } from './persona.js'
 import { phoneLines } from './phone.js'
 import { temperLine } from './temper.js'
 import { drillLines } from './drills.js'
+import { trackLines } from './tracks.js'
 import { COMPANION_REPLY_LINE, COMPANION_SERVE_RULES, companionBallFrame, companionSpecialLines, strategistBallFrame } from './roles.js'
 
 const KIND_RULES = {
@@ -147,6 +148,8 @@ export function buildPrompt(input) {
   } else if (serveType) {
     lines.push('这一球的类型：' + (companion ? COMPANION_SERVE_RULES[serveType] || SERVE_RULES[serveType] : SERVE_RULES[serveType]))
   }
+  // 支线：这一球按某个练习方向的四个槽位说话。没有支线就什么都不加（主干照跑）。
+  for (const line of trackLines(input.track)) lines.push(line)
   // 脸色：脾气 + 大脑挑的那张。阴晴不定是故意的。
   const face = temperLine(input.temper)
   if (face) lines.push(face)

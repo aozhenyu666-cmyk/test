@@ -120,6 +120,7 @@ object BuiltinPluginGuest {
                 "lib/tide.js",
                 "lib/temper.js",
                 "lib/drills.js",
+                "lib/tracks.js",
                 "lib/brain.js",
                 "lib/predict.js",
                 "lib/vibe.js",

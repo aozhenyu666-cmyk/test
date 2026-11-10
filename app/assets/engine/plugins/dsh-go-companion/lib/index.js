@@ -53,6 +53,7 @@ import { NOTES_CANDIDATES, agendaLines, capabilityLines, companionChatText, role
 import { tide as tideOf, tideGap, tideHourly, vagueStreak } from './tide.js'
 import { FACES, stepTemper, temperLine } from './temper.js'
 import { drillLines, drillOf, pickDrill, scoldLines } from './drills.js'
+import { normalizeTracks, pickTrack, recentTracks, trackStatus } from './tracks.js'
 import { brainLines, chooseFace, cleanBrain, drillScorer, observe, onReply, onServe, onSilent, revise, updateArm } from './brain.js'
 import { appendPrediction, checkClaim, cleanLedger, dueCount, emptyLedger, predictionLines, settle } from './predict.js'
 import { buildVibe, pickedArms, renderVibe } from './vibe.js'
@@ -129,6 +130,9 @@ const DEFAULTS = Object.freeze({
   strategistCard: '',
   // 做题模式：默认关，主线是聊天。说"开始做题 / 做题模式"打开，"别出题了"关掉。
   drills: false,
+  // 支线（第六轮 A）：一页配置就是这四项。代码只认抽题/判断/漏项/标签四个槽位，
+  // 具体是什么方向全写在这里。空数组 = 全部支线关掉，主干照跑。
+  tracks: [],
   // 档位：free（闲时，默认高频）/ busy（忙时，gearUntil 到点回闲时）。
   gear: 'free',
   // Gemini 的包名（Gemini App / Google App 里的 Gemini）。
@@ -686,6 +690,8 @@ export function apply(ctx) {
         ? (scold.length ? drillOf(owed.drill) : pickDrill(entries, drillScorer(brain)))
         : null
       if (drill) serveType = 'drill'
+      // 支线（第六轮 A）：配置里有几条就按"最近三条避开"挑一条。一条都没有 → null，主干不受影响。
+      const track = pickTrack(normalizeTracks(config.tracks).tracks, recentTracks(entries))
       const firstToday = recent.counts.generated === 0
       saveBrain(brain)
       // 回合与拍数都从账本重建：进程重启不会丢，也不多存一份状态。
@@ -711,6 +717,7 @@ export function apply(ctx) {
         allowTools: config.proactiveTools !== false,
         temper: face,
         drill,
+        track,
         scold,
         beliefs: brainLines(brain),
         force: forceLines(force, phone, { drill: Boolean(drill), gemini: config.proactiveTools !== false }),
@@ -724,7 +731,7 @@ export function apply(ctx) {
       servedContext.set(String(req?.requestId || ''), { phone, band: water.band, face: faceId, drill: drill?.id })
       const extra = {
         tide: water.level, band: water.band, face: faceId, surprise: temper.surprise || undefined,
-        drill: drill?.id, force: force.level || undefined,
+        drill: drill?.id, force: force.level || undefined, track: track?.id,
       }
       return { text: prompt, prompt, topic, serveType, rallyId: rally.rallyId, shot: rally.shot, silence, extra }
     } finally {
@@ -3277,6 +3284,7 @@ export function apply(ctx) {
         if (path === '/session') return send(res, 200, sessionRoute(body.value))
         if (path === '/wall') return send(res, 200, wallRoute(body.value))
         if (path === '/sisters') return send(res, 200, sistersRoute(body.value))
+        if (path === '/tracks') return send(res, 200, tracksRoute(body.value))
         if (path === '/deposit') return send(res, 200, depositRoute(body.value))
         config = mergeConfig(config, body.value)
         writeConfig(config)
@@ -3678,6 +3686,8 @@ export function apply(ctx) {
       today: today.counts,
       // 第六轮 B：今天三次审查各自的最后一条结论（null = 还没审，也不会有"审过了却查不到"）。
       anchors: anchorStatus(now, entries),
+      // 第六轮 A：支线底座的状态（几条在跑、最近用过哪几条、哪几条配置不合格被丢掉了）。
+      tracks: trackStatus(config.tracks, recentTracks(entries)),
       // 好坏只看回合：有效回合 = 至少两拍且有一拍接住了（见 rally.js）。
       rallies: rallyStats(entries, startOfDay(now, config.timeZone)),
       // 「现在」这一层要能说清：上一球被漠视到哪一级、静音到什么时候。
@@ -3723,6 +3733,33 @@ export function apply(ctx) {
    * 数据不重算：记得的事、最近对话、墙此刻锁没锁都来自 panelSnapshot()，
    * 这里只补它没有的两块（角色卡头部、今日审计 + 近 14 天完成率）。
    */
+  /**
+   * 第六轮 A：支线的一页配置。
+   * GET 形态（不带 tracks）只看状态；带了 tracks 数组就是整页替换。
+   * 校验不过的条目不会静默丢掉——原样报回去，哪一项缺哪个槽位说清楚。
+   */
+  function tracksRoute(body) {
+    const now = Date.now()
+    const entries = readLedger(home(), 200)
+    if (Array.isArray(body?.tracks)) {
+      const before = normalizeTracks(config.tracks)
+      const after = normalizeTracks(body.tracks)
+      // 一条都没合格又确实给了东西：十成是写错了，别把现有配置清空。
+      if (!after.tracks.length && Array.isArray(body.tracks) && body.tracks.length > 0) {
+        return { v: 1, ok: false, error: { code: 'no-valid-track', message: '四条槽位缺一条就整条不生效', dropped: after.dropped } }
+      }
+      config = { ...config, tracks: body.tracks }
+      try {
+        writeConfig(config)
+      } catch {
+        // 这一轮照样生效
+      }
+      record({ state: 'tracks-set', at: now, from: before.tracks.length, to: after.tracks.length })
+      return { v: 1, ok: true, ...trackStatus(config.tracks, recentTracks(entries)) }
+    }
+    return { v: 1, ok: true, ...trackStatus(config.tracks, recentTracks(entries)) }
+  }
+
   function sistersRoute(body) {
     const now = Date.now()
     const tz = zoneOr(body?.timeZone || config.timeZone)
