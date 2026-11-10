@@ -175,6 +175,26 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 result, "POST", "/wall",
                 linkedMapOf("action" to "status", "timeZone" to java.util.TimeZone.getDefault().id),
             )
+            // 第五轮「面对墙」：顶部数据条（昨天、近 14 天、预测准度、本周主动开口次数、今天的事、案卷）。
+            "wallBrief" -> ProactiveRuntime.fetchPluginRoute(
+                result, "POST", "/wall",
+                linkedMapOf("action" to "brief", "timeZone" to java.util.TimeZone.getDefault().id),
+            )
+            // 第五轮「面对墙」：他说一句，墙回一句。墙要读数据、会调工具，给它三分钟。
+            "wallSay" -> {
+                val text = call.argument<String>("text")?.trim().orEmpty()
+                if (text.isEmpty()) {
+                    result.success(linkedMapOf("reply" to null, "error" to "empty"))
+                } else {
+                    ProactiveRuntime.say(
+                        text,
+                        role = "wall",
+                        meeting = call.argument<String>("meeting"),
+                        opener = call.argument<Boolean>("opener") == true,
+                        deadlineMs = 180_000L,
+                    ) { reply, error -> result.success(linkedMapOf("reply" to reply, "error" to error)) }
+                }
+            }
             else -> result.notImplemented()
         }
     }

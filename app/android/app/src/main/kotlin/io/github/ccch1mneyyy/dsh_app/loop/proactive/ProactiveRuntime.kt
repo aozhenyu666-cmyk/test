@@ -357,13 +357,28 @@ object ProactiveRuntime {
      * own words), then long-poll /result until 大肥鱼 has answered. [done] runs on the main thread
      * with the reply, or with an error code (agent-busy, timeout, no_transport…).
      */
-    fun say(text: String, done: (reply: String?, error: String?) -> Unit) {
+    /**
+     * 他打的一句话交给插件，等回话。role=null 照旧（妹妹 / 刚找过他的那位）；role="wall" 是面对墙页面：
+     * meeting 选会谈（morning / evening / general），opener=true 表示这是他主动开的头（墙从不先开口）。
+     */
+    fun say(
+        text: String,
+        role: String? = null,
+        meeting: String? = null,
+        opener: Boolean = false,
+        deadlineMs: Long = SAY_DEADLINE_MS,
+        done: (reply: String?, error: String?) -> Unit,
+    ) {
         val id = "say-" + UUID.randomUUID().toString().replace("-", "").take(16)
-        val deadline = System.currentTimeMillis() + SAY_DEADLINE_MS
+        val deadline = System.currentTimeMillis() + deadlineMs
+        val body = linkedMapOf<String, Any?>("v" to 1, "requestId" to id, "text" to text, "timeZone" to TimeZone.getDefault().id)
+        if (role != null) body["role"] = role
+        if (meeting != null) body["meeting"] = meeting
+        if (opener) body["opener"] = true
         fetchPluginRoute(routeCallback { m ->
             val error = ((m["error"] as? Map<*, *>)?.get("code") as? String)
             if (error != null) done(null, error) else pollSay(id, deadline, done)
-        }, "POST", "/say", linkedMapOf("v" to 1, "requestId" to id, "text" to text, "timeZone" to TimeZone.getDefault().id))
+        }, "POST", "/say", body)
     }
 
     private fun pollSay(id: String, deadline: Long, done: (String?, String?) -> Unit) {

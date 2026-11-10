@@ -15,6 +15,7 @@ import '../theme/app_icons.dart';
 import '../theme/theme.dart';
 import 'action_log_page.dart' show formatLogTime;
 import 'loop_test_page.dart' show loopClock;
+import 'wall_page.dart';
 
 /// 璁剧疆 鈫?鎵嬫満鎿嶆帶 鈫?涓诲姩鎼瘽: the proactive kernel's own page.
 ///
@@ -153,6 +154,30 @@ class _ProactivePageState extends State<ProactivePage> {
       return;
     }
     await _companion({'strategistSessionId': picked.isEmpty ? null : picked});
+  }
+
+  /// 第五轮：选墙（经理）的会话。必须是第三个会话：和姐妹共用会让模型同时拿到两套人设。
+  Future<void> _pickWall() async {
+    final sessions = await _channel.agentSessions();
+    if (!mounted) return;
+    setState(() => _sessions = sessions);
+    if (!sessions.ready) return;
+    final picked = await showAppSheet<String>(
+      context,
+      heightFactor: 0.6,
+      builder: (sheet) => _SessionList(sessions: sessions),
+    );
+    if (picked == null) return;
+    final sisters = {sessions.sessionId, sessions.config['strategistSessionId']};
+    if (picked.isNotEmpty && sisters.contains(picked)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('墙要用单独的会话：先在 DSH 里新建一个对话，再回来选')),
+        );
+      }
+      return;
+    }
+    await _companion({'wallSessionId': picked.isEmpty ? null : picked});
   }
 
   Future<void> _save(ProactiveConfig next) async {
@@ -470,6 +495,24 @@ class _ProactivePageState extends State<ProactivePage> {
                 subtitleMaxLines: 3,
                 value: _sessions.config['strategistSessionId'] is String ? '已选' : '未选',
                 onTap: () => unawaited(_pickStrategist()),
+              ),
+            // 第五轮：墙（经理）。不主动找你，只在你先开口时说话；开门只认证据。
+            if (pluginOnline)
+              ListPageRow(
+                icon: AppIcons.chat,
+                title: '墙的会话',
+                subtitle: '墙是你的经理：定计划、对账、谈大事。要单独一个会话，不能和姐妹共用',
+                subtitleMaxLines: 3,
+                value: _sessions.config['wallSessionId'] is String ? '已选' : '未选',
+                onTap: () => unawaited(_pickWall()),
+              ),
+            if (pluginOnline)
+              ListPageRow(
+                icon: AppIcons.plan,
+                title: '面对墙',
+                subtitle: '晨间计划、晚间回顾、每周总谈。墙不先开口，你先说',
+                subtitleMaxLines: 2,
+                onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const WallPage())),
               ),
             ListPageRow(
               icon: AppIcons.send,

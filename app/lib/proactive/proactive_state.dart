@@ -352,6 +352,37 @@ class ProactiveChannel {
     }
   }
 
+  /// 第五轮「面对墙」：顶部数据条（插件 `POST /wall` action=brief 的 `brief`）。失败返回 null。
+  Future<Map<String, Object?>?> wallBrief() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('wallBrief');
+      if (raw is! Map || raw['error'] is Map) return null;
+      final brief = raw['brief'];
+      if (brief is! Map) return null;
+      return {for (final e in brief.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 第五轮「面对墙」：他说一句，墙回一句。[meeting] 是 morning / evening / general；
+  /// [opener] 为 true 表示这是他主动开的头（墙从不先开口）。返回 (回话, 错误码)。
+  Future<(String?, String?)> wallSay(String text, {String? meeting, bool opener = false}) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('wallSay', {
+        'text': text,
+        if (meeting != null) 'meeting': meeting,
+        'opener': opener,
+      });
+      if (raw is! Map) return (null, 'no_answer');
+      final reply = raw['reply'];
+      final error = raw['error'];
+      return (reply is String ? reply : null, error is String ? error : null);
+    } on Exception {
+      return (null, 'channel');
+    }
+  }
+
   /// Chooses the target session (`POST /dsh-go-proactive/v1/config`). Null clears it.
   Future<ProactiveAgentSessions> setAgentSession(String? sessionId) async {
     try {
