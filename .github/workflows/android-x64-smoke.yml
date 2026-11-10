@@ -12,6 +12,7 @@ on:
     branches: [deepseek/round4]
     paths:
       - ".github/workflows/android-x64-smoke.yml"
+      - ".github/scripts/**"
       - "app/lib/dev/**"
       - "app/android/**"
       - "runtime/**"
@@ -128,51 +129,8 @@ jobs:
           # 冷启动一次就够；快照会在同一 job 内复用不到，直接关掉更省事。
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
           disable-animations: true
-          script: |
-            # 这个 action 用 /usr/bin/sh（dash）执行脚本：不要 pipefail / [[ ]] / 数组。
-            ADB="$ANDROID_HOME/platform-tools/adb"
-            "$ADB" root || true
-            # adb root 会重启 daemon，不等它回来直接 install 会撞上 device offline。
-            "$ADB" wait-for-device
-            sleep 3
-            "$ADB" install -r app/build/app/outputs/flutter-apk/app-x64-debug.apk
-
-            # 探针见到这个文件才会跑一次真实回合（假模型回话），跑完自己删掉。
-            # adb root 在这类 google_apis 镜像上可用；拿不到就退回 run-as（debug 包可调试）。
-            printf 'sk-mock-not-a-real-key' > probe-key
-            "$ADB" push probe-key /data/local/tmp/probe-key
-            "$ADB" shell "mkdir -p /data/user/0/io.github.ccch1mneyyy.dsh_app/files"
-            if ! "$ADB" shell "cp /data/local/tmp/probe-key /data/user/0/io.github.ccch1mneyyy.dsh_app/files/probe-key"; then
-              "$ADB" shell "run-as io.github.ccch1mneyyy.dsh_app sh -c 'mkdir -p files && cp /data/local/tmp/probe-key files/probe-key'"
-            fi
-
-            "$ADB" logcat -c || true
-            "$ADB" shell monkey -p io.github.ccch1mneyyy.dsh_app -c android.intent.category.LAUNCHER 1
-
-            # 首启要解压 rootfs（几百 MB），给它足够时间。
-            ok=0
-            for i in $(seq 1 180); do
-              if "$ADB" logcat -d | grep -q 'PROBE OK'; then ok=1; break; fi
-              if "$ADB" logcat -d | grep -q 'PROBE FAILED'; then ok=2; break; fi
-              sleep 5
-            done
-            "$ADB" logcat -d > full-logcat.txt || true
-            grep -E '\[probe\]|PROBE|COMPANION' full-logcat.txt | tail -80 || true
-            "$ADB" shell screencap -p /sdcard/smoke.png || true
-            "$ADB" pull /sdcard/smoke.png smoke.png || true
-            "$ADB" shell "run-as io.github.ccch1mneyyy.dsh_app cat files/loop/proactive/ledger.json" > proactive-ledger.json 2>/dev/null || true
-
-            if [ "$ok" != 1 ]; then
-              echo "::error::探针没有走到 PROBE OK（ok=$ok），看下面上传的 logcat"
-              exit 1
-            fi
-            # 计划层与提交层必须一致：这次修复的核心不变量。
-            # 没发球时先把 plan 的真实 reason 打出来，别让它伪装成路由坏了。
-            grep -q 'COMPANION OK' full-logcat.txt || {
-              grep -E 'COMPANION plan|COMPANION request' full-logcat.txt || true
-              echo "::error::插件没有真正发球（看上面的 plan speak/reason）"
-              exit 1
-            }
+          # 每一行都会被当成独立的 sh -c 执行，所以真正的脚本落在 .github/scripts/x64-smoke.sh。
+          script: sh .github/scripts/x64-smoke.sh
 
       - name: 上传现场（总是上传）
         if: always()
