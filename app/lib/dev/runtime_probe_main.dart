@@ -95,9 +95,16 @@ class _ProbeState extends State<_Probe> {
         final token = status.token;
         if (token == null) throw StateError('runtime is running without a token');
         await conn.login(token);
+        // 骰子和安静时段会让同一次探针随机通过或随机失败。接口本来就收 roll 和 timeZone
+        // （手机每次 /plan 都带时区），这里钉死这两个输入：要测的是"计划层与提交层一致"，
+        // 不是运气。换算出的当地整点恒为 12 点，避开默认安静时段（1–8 点）。
+        final off = 12 - DateTime.now().toUtc().hour;
+        final tz = off == 0 ? 'Etc/GMT' : 'Etc/GMT${off > 0 ? '-' : '+'}${off.abs()}';
         final plan = await conn.postJson('/dsh-go-companion/v1/plan', {
           'v': 1,
           'sessionId': created.sessionId,
+          'timeZone': tz,
+          'roll': 0,
           'phone': {'screenOn': true, 'local': '10:00'},
         });
         final planBody = _json(plan.text);
