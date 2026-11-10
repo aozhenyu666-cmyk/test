@@ -2,6 +2,7 @@
 //   flutter build apk --debug --flavor x64 --target-platform android-x64 -t lib/dev/runtime_probe_main.dart
 // Progress is printed to logcat (tag "flutter") and shown on screen.
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dsh_client/dsh_client.dart';
@@ -10,6 +11,16 @@ import 'package:flutter/material.dart';
 import '../runtime/runtime_bridge.dart';
 
 void main() => runApp(const MaterialApp(home: _Probe()));
+
+/// 插件的回包：解析失败就当成空对象，让断言自己说话，而不是在这里抛。
+Map<String, dynamic> _json(String raw) {
+  try {
+    final v = jsonDecode(raw);
+    return v is Map<String, dynamic> ? v : <String, dynamic>{};
+  } catch (_) {
+    return <String, dynamic>{};
+  }
+}
 
 class _Probe extends StatefulWidget {
   const _Probe();
@@ -75,6 +86,45 @@ class _ProbeState extends State<_Probe> {
       _log('created session ${created.sessionId}');
       final models = await client.listModels();
       _log('models: ${models.groups.map((g) => '${g.id}(${g.models.length})').join(', ')}');
+
+      // 主动搭话：计划层说"可以说话"时，提交就必须被接下。曾经这两层不一致——
+      // /plan 看不到收件箱里排着的消息，提交却一律 409 agent-busy，于是每问一次就被挡一次，
+      // 一句都说不出还每分钟留一张回执。这一步在设备上守的就是这条不变量。
+      final conn = DshConnection(Uri.parse(status.baseUrl!));
+      try {
+        final token = status.token;
+        if (token == null) throw StateError('runtime is running without a token');
+        await conn.login(token);
+        final plan = await conn.postJson('/dsh-go-companion/v1/plan', {
+          'v': 1,
+          'sessionId': created.sessionId,
+          'phone': {'screenOn': true, 'local': '10:00'},
+        });
+        final planBody = _json(plan.text);
+        final speak = planBody['speak'] == true;
+        final reason = '${planBody['reason']}';
+        _log('COMPANION plan status=${plan.statusCode} speak=$speak reason=$reason');
+        if (speak) {
+          final req = await conn.postJson('/dsh-go-companion/v1/request', {
+            'v': 1,
+            'requestId': 'probe-${DateTime.now().millisecondsSinceEpoch}',
+            'eventId': 'probe-evt-${DateTime.now().millisecondsSinceEpoch}',
+            'kind': 'scheduler',
+            'sessionId': created.sessionId,
+            'payload': {},
+            'deadlineMs': 30000,
+          });
+          final err = _json(req.text)['error'];
+          final code = err is Map ? '${err['code']}' : null;
+          _log('COMPANION request status=${req.statusCode} code=$code');
+          if (req.statusCode != 202 && (code == null || code.startsWith('skip') || code == 'agent-busy')) {
+            throw StateError('plan said speak but the submit was refused: $code');
+          }
+        }
+        _log('COMPANION OK');
+      } finally {
+        conn.close();
+      }
 
       // Optional real turn: a key pushed with `run-as … files/probe-key` (deleted after reading).
       final keyFile = File('/data/user/0/io.github.ccch1mneyyy.dsh_app/files/probe-key');

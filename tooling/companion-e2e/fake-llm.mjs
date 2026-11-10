@@ -71,4 +71,4 @@ http.createServer((req, res) => {
       res.end('data: [DONE]\n\n')
     }, DELAY)
   })
-}).listen(Number(process.env.PORT || 18900), '127.0.0.1')
+}).listen(Number(process.env.PORT || 18900), process.env.HOST || '127.0.0.1')
