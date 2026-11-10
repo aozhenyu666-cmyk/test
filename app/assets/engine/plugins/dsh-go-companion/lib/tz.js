@@ -86,3 +86,8 @@ export function atLocalHour(now, hour, tz) {
   const t = startOfDay(now, tz) + h * 3_600_000
   return t <= now ? t + 86_400_000 : t
 }
+
+/** 目标时区下的星期：0=周日 … 6=周六（dayNumber 的 0 是 1970-01-01，周四）。 */
+export function weekdayOf(now, tz) {
+  return ((dayNumber(now, tz) + 4) % 7 + 7) % 7
+}

@@ -21,7 +21,7 @@ import { BACKGROUND_LIMIT, backgroundFacts, loadCandidates, openMemoryDb } from 
 import { buildPrompt } from './prompt.js'
 import { appendLedger, readLedger, summarize } from './ledger.js'
 import { plan as decide } from './plan.js'
-import { DEFAULT_TZ, minuteOfDay as zoneMinuteOfDay, startOfDay as zoneStartOfDay, zoneOr } from './tz.js'
+import { DEFAULT_TZ, minuteOfDay as zoneMinuteOfDay, startOfDay as zoneStartOfDay, weekdayOf, zoneOr } from './tz.js'
 import { classifyReply } from './classify.js'
 import { gardenClass, judgeReply } from './judge.js'
 import { isStock } from './stock.js'
@@ -61,7 +61,7 @@ import { BUSY_CHECK_MS, BUSY_DEFAULT_MIN, BUSY_MAX_MIN, aiTask, applyGear, effec
 import { trustGap, trustLines, trustScore } from './trust.js'
 import { buildSnapshot, sistersView } from './panel.js'
 import { kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
-import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
+import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, absentAnchors, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import {
   FOLLOWUP_CAP_MS, FOLLOWUP_PENALTY, STANDBY_LOCK_MS, addObligation, checkVerdict, clearObligation, closeLock, followupView,
   funBlockedBy, lockActive, lockExpired, obligationOf, obligationsView, openLock, standbyDue, takeReask,
@@ -1750,7 +1750,7 @@ export function apply(ctx) {
   const saveWallMem = (m) => writeJson(stateFile('wall_memory.json'), m)
   const loadBaseline = () => readState(stateFile('wall-baseline.json'), {}) || {}
   const saveBaseline = (b) => writeJson(stateFile('wall-baseline.json'), b)
-  const WALL_KIND_LABEL = { morning: '晨间立项', review: '验收', evening: '晚间对账', standby: '待命追问', defiance: '违抗追问', gemini: '连麦回流' }
+  const WALL_KIND_LABEL = { morning: '晨间立项', review: '验收', evening: '晚间对账', week: '周度审查', standby: '待命追问', defiance: '违抗追问', gemini: '连麦回流' }
 
   function wallRate(now) {
     return recentRate(loadWallMem(), dayString(now, zoneOr(config.timeZone)))
@@ -1779,6 +1779,54 @@ export function apply(ctx) {
       const r = auditOne(task, ctx)
       return { verdict: r.verdict, why: r.data + (r.missing ? '；还缺：' + r.missing : '') }
     }
+  }
+
+  // ---------------------------------------------------------------- 第六轮 B：三个审查锚点
+  //
+  // 早 / 晚 / 周末各一次，全部由墙主持。审不审由时刻决定，不看他说了什么；
+  // 他没来就不审内容，只记一条缺席——"没发生"本身必须留痕，否则静默失效查不出来。
+  /** 这一周的客观数字：墙审了几次、过了几次、缺席几回。只读账本。 */
+  function weekSummary(now) {
+    const since = startOfDay(now, zoneOr(config.timeZone)) - 6 * 86_400_000
+    const rows = readLedger(home(), 800).filter((e) => e?.state === 'wall-audit' && Number(e.at) >= since)
+    const line = (kind, name) => {
+      const g = rows.filter((r) => r.kind === kind)
+      if (!g.length) return name + '：0 次'
+      const pass = g.filter((r) => r.pass).length
+      const absent = g.filter((r) => r.absent).length
+      return name + '：' + g.length + ' 次（过 ' + pass + (absent ? '，缺席 ' + absent : '') + '）'
+    }
+    return [line('morning', '早上立标准'), line('evening', '晚上撞证据'), line('week', '周末看一周')]
+  }
+  /**
+   * 到点还没有结论，就由墙按账本记一条缺席。
+   * 只 record()，绝不 applyVerdict——不加锁、不罚、不扣额度。
+   */
+  function anchorSweep(now, tzIn) {
+    const tz = zoneOr(tzIn || config.timeZone)
+    const day = startOfDay(now, tz)
+    const seen = readLedger(home(), 400).filter((e) => e?.state === 'wall-audit' && Number(e.at) >= day).map((e) => e.kind)
+    for (const a of absentAnchors(zoneMinuteOfDay(now, tz), weekdayOf(now, tz), seen)) {
+      record({ state: 'wall-audit', at: now, kind: a.kind, pass: false, absent: true, by: 'wall', missing: [a.why] })
+      try {
+        vaultAudit(now, '〔墙〕' + WALL_KIND_LABEL[a.kind] + '：缺席——' + a.why)
+      } catch {
+        // 没有笔记库就不写盘外的副本，账本那条已经落了
+      }
+    }
+  }
+  /** 今天三次审查各自的最后一条结论（面板据此看出哪一次漏了）。 */
+  function anchorStatus(now, entries) {
+    const day = startOfDay(now, zoneOr(config.timeZone))
+    const last = (kind) => {
+      let hit = null
+      for (const e of entries) {
+        if (e?.state !== 'wall-audit' || e.kind !== kind || Number(e.at) < day) continue
+        if (!hit || Number(e.at) >= Number(hit.at)) hit = e
+      }
+      return hit ? { at: Number(hit.at), pass: Boolean(hit.pass), absent: Boolean(hit.absent) } : null
+    }
+    return { morning: last('morning'), evening: last('evening'), week: last('week') }
   }
 
   // ---------------------------------------------------------------- 预判闭环（B 层 T1）
@@ -1929,6 +1977,7 @@ export function apply(ctx) {
     const open = {
       morning: held === 'morning' || Boolean(rh?.morningGate),
       evening: held === 'evening' || Boolean(rh?.reviewGate),
+      week: Boolean(rh?.weekReviewGate),
       review: held === 'review' || sprintOrTask(now),
       standby: held === 'standby',
       defiance: held === 'defiance',
@@ -1998,6 +2047,14 @@ export function apply(ctx) {
       return { ok: true, pass: true, text }
     }
 
+    // 周末审这一周：只看账本里的客观数字，不问人，也不下发锁（§3.3）。
+    if (kind === 'week') {
+      const data = weekSummary(now)
+      // 当周只开一次：交过就把门关上，同一晚不会重复交。
+      saveRhythm(closeGate(loadRhythm(), 'week').state)
+      return done(true, data)
+    }
+
     if (kind === 'standby' || kind === 'defiance') {
       if (!sprintOrTask(now)) return done(false, ['现在没有在跑的冲刺或任务'], ['点「开始」，或者让姐妹帮他立一个任务（start_task_mode）'])
       wallCloseOnStart(now)
@@ -2017,7 +2074,8 @@ export function apply(ctx) {
       description: '把他的东西交给墙审查。墙只看物理证据——文件立项后长了多少、立项后有没有新截图、App 今天用了多久——不读你们怎么说。' +
         'kind=morning：交今天 1–3 件事（tasks），每件的完成物写成墙查得到的样子：笔记文件路径（大肥鱼/周报.md）、"截图"、或"某 App N 分钟"。' +
         'kind=review：交验收，task 写第几件（从 1 数）或名字；临时的事可以用 evidence 交"截图"或"某 App N 分钟"。' +
-        'kind=evening：交晚间对账（墙逐件核，结果作用于明天）。kind=standby / defiance：他已经点了「开始」或立了任务时交，关掉追问。' +
+        'kind=evening：交晚间对账（墙逐件核，结果作用于明天）。kind=week：周末交这一周的审查，只摆事实和下周重心两条让他拍板，不下发锁。' +
+        'kind=standby / defiance：他已经点了「开始」或立了任务时交，关掉追问。' +
         'kind=gemini：交连麦得出的下一步（next_step）。墙的回复以〔墙〕开头，原样转给他，别改，也别替墙求情。',
       parameters: {
         type: 'object',
@@ -3318,6 +3376,12 @@ export function apply(ctx) {
     } catch (error) {
       console.error('[companion] 预判结算失败：' + String((error && error.message) || error))
     }
+    // 第六轮 B：早/晚/周末到点没结论，由墙补一条缺席记录（只记账，不加锁）。
+    try {
+      anchorSweep(now, tz)
+    } catch (error) {
+      console.error('[companion] 审查锚点补记失败：' + String((error && error.message) || error))
+    }
     const sessionId = typeof body?.sessionId === 'string' && body.sessionId ? body.sessionId : config.sessionId
     if (!sessionId) return { v: 1, speak: false, reason: 'no-session', topic: null, nextCheckAt: now + 6 * 3_600_000 }
     const db = openMemoryDb(memoryPath())
@@ -3345,11 +3409,12 @@ export function apply(ctx) {
       const min = localMinute(phone, zoneMinuteOfDay(now, tz))
       const dayKey = startOfDay(now, tz)
       const reviewedToday = ledger.some((e) => e?.state === 'generated' && e.sessionId === config.strategistSessionId && e.reason === 'review' && Number(e.at) >= dayKey)
-      const rh = trackRhythm(loadRhythm(), { min, day: dayKey, now, screenOn: phone?.screenOn !== false && Boolean(phone), reviewedToday })
+      const rh = trackRhythm(loadRhythm(), { min, day: dayKey, now, screenOn: phone?.screenOn !== false && Boolean(phone), reviewedToday, weekday: weekdayOf(now, tz) })
       saveRhythm(rh.state)
       lastRhythm = { ...rh, nightUntil: rh.night === 'lock' ? now + Math.max(1, NIGHT_LOCK_TO - min) * 60_000 : 0 }
       if (rh.openMorning) record({ state: 'gate-open', at: now, gate: 'morning' })
       if (rh.openReview) record({ state: 'gate-open', at: now, gate: 'review' })
+      if (rh.openWeek) record({ state: 'gate-open', at: now, gate: 'week' })
       // 申请窗口：对账完成后随机开 15 分钟。先找今天对账是什么时候关门的（gate-closed 含 review）。
       let reviewDoneAt = 0
       for (const e of ledger) {
@@ -3611,6 +3676,8 @@ export function apply(ctx) {
       agents: live,
       counters: desk.counters,
       today: today.counts,
+      // 第六轮 B：今天三次审查各自的最后一条结论（null = 还没审，也不会有"审过了却查不到"）。
+      anchors: anchorStatus(now, entries),
       // 好坏只看回合：有效回合 = 至少两拍且有一拍接住了（见 rally.js）。
       rallies: rallyStats(entries, startOfDay(now, config.timeZone)),
       // 「现在」这一层要能说清：上一球被漠视到哪一级、静音到什么时候。
