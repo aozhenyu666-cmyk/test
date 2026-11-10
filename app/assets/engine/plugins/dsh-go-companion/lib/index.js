@@ -12,7 +12,7 @@
 // 复用：fish-memory.sqlite（只读话题/事实/经历）、relation 存在性、原生展示层。
 // 不新建记忆库；不读屏幕内容；所有 SQL 参数绑定。
 
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, statSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, statSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -78,6 +78,10 @@ import {
   PENDING_FILE, RULES_COOLDOWN_DAYS, RULES_FILE, WALL_DIR, appendAudit, classifyRules, parseRules, readText as readVaultText,
   findObsidianVault, renderPending, renderRules, renderTaskNote, taskNotePath, updatePending, writeText as writeVaultText,
 } from './vault_wall.js'
+import {
+  CASE_DIR, GENERAL_EVERY_MS, MEETINGS, caseDue, caseFileName, markReviewed, meetingOf, notePrediction, parseCase, predictionScore,
+  renderCase, updateCase, wallPersonaText,
+} from './wall_desk.js'
 import { GEMINI_PACKAGES, geminiBrief, geminiLines, geminiMode, geminiSteps, recapMarkdown, trackGemini } from './gemini.js'
 
 export const name = 'dsh-go-companion'
@@ -117,6 +121,8 @@ const DEFAULTS = Object.freeze({
   // 姐妹双人格：陪伴（妹妹，sessionId）+ 谋士（姐姐，strategistSessionId）。关掉就回到单人格大肥鱼。
   dual: true,
   strategistSessionId: undefined,
+  // 第五轮：墙本人（经理）的会话。不收主动发球，只在他先开口时说话。
+  wallSessionId: undefined,
   companionName: '鱼丸',
   strategistName: '鲸澜',
   // 他给了高权限：主动找他的那一轮也能动手（设提醒、退出 App、调手机）。DSH 自己的审批照常生效。
@@ -839,6 +845,8 @@ export function apply(ctx) {
         lastHumanAt.set(String(session?.id || ''), Date.now())
         // 落进账本：引擎重启也知道他刚说过话（阶梯不会把聊过的球当成没接，发球也知道他多久前说的话）。
         record({ state: 'human', at: Date.now(), sessionId: String(session?.id || '') })
+        // 第五轮：墙的会话不吃姐妹那套口令（"忙完了""关掉拒绝模式"之类），也不判发球的回复。
+        if (isWallSession(session?.id)) return
         // 第三轮：早上/晚上的门不再靠"他认真回了一句"关——过关要交墙按证据判（submit_to_wall），
         // 敷衍的话不会让窗口消失。这里只记"他在聊"。
         // 他说"安静一小时""今天别找我"就照做：这是一句话就说清的事，不必占一次模型调用。
@@ -1744,6 +1752,130 @@ export function apply(ctx) {
     return applyVerdict({ ok: true, kind: l.reason, satisfied: true, summary: '开始干活了', nextStep: String(config.taskGoal || '冲刺') }, now, 'wall')
   }
 
+  // ---------------------------------------------------------------- 第五轮 W1：墙本人（经理）
+  /** 最近一次他在墙的页面上选的会谈（晨间计划 / 晚间回顾 / 总谈），三小时内有效。 */
+  let wallMeeting = null
+
+  /** 案卷都在 大肥鱼/墙/案卷/ 下面；没有笔记库就放在 companion 里，照样能用。 */
+  const caseDir = () => join(kbDir(notesDir(), home()), WALL_DIR, CASE_DIR)
+  function listCases(today) {
+    let names = []
+    try {
+      names = readdirSync(caseDir()).filter((n) => n.endsWith('.md'))
+    } catch {
+      return []
+    }
+    return names.slice(0, 40).map((n) => {
+      const c = parseCase(readVaultText(join(caseDir(), n)) || '')
+      return { name: c.name || n.replace(/\.md$/, ''), status: c.status, next: c.next, due: caseDue(c, today) }
+    })
+  }
+
+  /** 面对墙的数据条，也是墙开口前看的那几行。 */
+  function wallBrief(now) {
+    const tz = zoneOr(config.timeZone)
+    const today = dayString(now, tz)
+    const yday = dayString(now - 86_400_000, tz)
+    const mem = loadWallMem()
+    const y = mem.days[yday]
+    const ledger = readLedger(home(), 3000)
+    const weekAgo = now - 7 * 86_400_000
+    const lastGeneral = ledger.filter((e) => e?.state === 'wall-meeting' && e.kind === 'general').reduce((m, e) => Math.max(m, Number(e.at) || 0), 0)
+    const daily = loadDaily(loadDailyState(), now, tz)
+    const eveningDone = ledger.some((e) => e?.state === 'wall-audit' && e.kind === 'evening' && e.pass === true && Number(e.at) >= startOfDay(now, tz))
+    return {
+      wallSession: Boolean(config.wallSessionId),
+      yesterday: y ? { done: Number(y.done) || 0, total: Number(y.promised) || 0 } : null,
+      rate: wallRate(now),
+      prediction: predictionScore(mem, today),
+      selfInstructions: { week: ledger.filter((e) => e?.state === 'self-instruction' && Number(e.at) >= weekAgo).length },
+      today: {
+        tasks: daily.tasks.map((t) => ({ task: t.task, evidence: t.evidence })),
+        prediction: mem.days[today]?.prediction || null,
+        morningDone: loadBaseline().day === today,
+        eveningDone,
+      },
+      cases: listCases(today),
+      generalDue: !lastGeneral || now - lastGeneral > GENERAL_EVERY_MS,
+      lastGeneralAt: lastGeneral || 0,
+    }
+  }
+
+  /** 早上的预测：他估能完成几件、墙估几件、他估会卡在哪。晚上门对完账就能打分。 */
+  function predictTool() {
+    return {
+      name: 'predict',
+      description: '晨间计划定完后记下预测：mine=他自己估今天能有证据完成几件，wall=你估几件，stuck=他估会卡在哪。晚上对账后自动打分，数据条上会显示谁估得准。一天记一次，再记会覆盖。',
+      parameters: {
+        type: 'object',
+        properties: {
+          mine: { type: 'integer', minimum: 0, maximum: 6 },
+          wall: { type: 'integer', minimum: 0, maximum: 6 },
+          stuck: { type: 'string', description: '他估会卡在哪（一句话）' },
+        },
+        required: ['mine', 'wall'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const day = dayString(now, zoneOr(config.timeZone))
+        saveWallMem(pruneMemory(notePrediction(loadWallMem(), day, args), day))
+        record({ state: 'wall-predict', at: now, mine: args.mine, wall: args.wall })
+        return { ok: true, text: '记下了：他估 ' + args.mine + ' 件，你估 ' + args.wall + ' 件。晚上对账后对答案。' }
+      },
+    }
+  }
+
+  /** 案卷：每件大事（就业、当前项目）一份长期文件。每次总谈接着上次谈。 */
+  function caseFileTool() {
+    return {
+      name: 'case_file',
+      description: '读或更新一份案卷（大肥鱼/墙/案卷/名字.md）。action=read 读出现状和决定日志；action=update 覆盖现状、追加一条决定（自动带日期）、设下次检查日期（YYYY-MM-DD）、改状态（进行中 / 搁置 / 结案）。' +
+        '晚间回顾的"哪里估错了"、总谈的决定都写进来。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['read', 'update', 'list'] },
+          name: { type: 'string', description: '案卷名，如 就业方向、大肥鱼项目' },
+          summary: { type: 'string', description: 'update：现在的状况（覆盖）' },
+          decision: { type: 'string', description: 'update：这次定下的事和理由（追加）' },
+          next: { type: 'string', description: 'update：下次检查日期 YYYY-MM-DD' },
+          status: { type: 'string', description: 'update：进行中 / 搁置 / 结案' },
+        },
+        required: ['action'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const today = dayString(now, zoneOr(config.timeZone))
+        if (args.action === 'list') {
+          const cases = listCases(today)
+          if (!cases.length) return { ok: true, text: '还没有案卷。' }
+          return { ok: true, text: cases.map((c) => c.name + '（' + (c.status || '进行中') + (c.next ? '，下次检查 ' + c.next : '') + (c.due ? '，已到期' : '') + '）').join('\n') }
+        }
+        const file = caseFileName(args.name)
+        if (!file) return { ok: false, text: '要给案卷起个名字。' }
+        const path = join(caseDir(), file)
+        const prevText = readVaultText(path)
+        const prev = prevText === null ? null : parseCase(prevText)
+        if (args.action === 'read') {
+          if (!prev) return { ok: true, text: '没有「' + args.name + '」这份案卷。' }
+          return { ok: true, text: prevText.slice(0, 6000) }
+        }
+        const next = updateCase(prev, { name: String(args.name).trim().slice(0, 40), ...args }, today)
+        try {
+          writeVaultText(path, renderCase(next))
+        } catch (error) {
+          return { ok: false, text: '写不进去：' + String((error && error.message) || error) }
+        }
+        record({ state: 'wall-case', at: now, name: next.name, next: next.next || undefined, status: next.status })
+        return { ok: true, text: '案卷「' + next.name + '」已更新' + (next.next ? '，下次检查 ' + next.next : '') + '。' }
+      },
+    }
+  }
+
   // ---------------------------------------------------------------- 第四轮 R4-3：墙在 Obsidian 里的那一半
   const localHm = (now) => {
     const m = zoneMinuteOfDay(now, zoneOr(config.timeZone))
@@ -1884,7 +2016,7 @@ export function apply(ctx) {
       const check = wallCheck(now)
       const rows = state.tasks.map((t) => ({ t, r: check(t) }))
       const ok = rows.filter((x) => x.r.verdict === 'done').length
-      saveWallMem(pruneMemory(noteDone(loadWallMem(), state.day, ok), state.day))
+      saveWallMem(pruneMemory(markReviewed(noteDone(loadWallMem(), state.day, ok), state.day), state.day))
       applyVerdict({ ok: true, kind, satisfied: true, summary: '对账：' + ok + '/' + rows.length, nextStep: '明天按对账结果' }, now, 'wall')
       const data = rows.length
         ? rows.map((x, i) => (i + 1) + '. ' + x.t.task + '：' + (x.r.verdict === 'done' ? '有证据' : x.r.verdict === 'partial' ? '一半' : '没证据') + '（' + x.r.why + '）')
@@ -2255,6 +2387,8 @@ export function apply(ctx) {
       const r = tightenNow(now, tz, { reason: body?.reason, by: 'ui' })
       return { ...status(), ok: r.ok, text: r.text }
     }
+    // 第五轮：面对墙页面顶部的数据条。
+    if (action === 'brief') return { ...status(), brief: wallBrief(now) }
     return status()
   }
   function eventRoute(body) {
@@ -2654,7 +2788,8 @@ export function apply(ctx) {
   const strategistBallReason = new Map()
   /** 最近一球是谁说的：浮层里回话默认回给她（30 分钟内）。 */
   let lastBall = { role: 'companion', at: 0 }
-  const speakerOf = (sid) => (config.dual !== false && sid && sid === config.strategistSessionId ? 'strategist' : 'companion')
+  const speakerOf = (sid) => (sid && sid === config.wallSessionId ? 'wall' : config.dual !== false && sid && sid === config.strategistSessionId ? 'strategist' : 'companion')
+  const isWallSession = (sid) => Boolean(sid && config.wallSessionId && String(sid) === String(config.wallSessionId))
 
   /** 单人格时代的说法（dual 关掉时用）。 */
   function singlePersonaText(mode) {
@@ -2668,6 +2803,11 @@ export function apply(ctx) {
     return lines.join('\n')
   }
   function chatPersonaText(role) {
+    if (role === 'wall') {
+      const now = Date.now()
+      const meeting = wallMeeting && now - wallMeeting.at < 3 * 3_600_000 ? wallMeeting.kind : null
+      return wallPersonaText({ owner: config.owner || '他', brief: wallBrief(now), meeting })
+    }
     if (config.personaInChat === false) return ''
     const mode = effectiveMode(config, Date.now())
     if (config.dual === false) return singlePersonaText(mode)
@@ -2723,12 +2863,15 @@ export function apply(ctx) {
       // 第四轮（R4-2）：两姐妹工具完全一致。她们是他这边的人：帮忙和收紧的工具全给（立任务、拒绝模式、
       // 封 App、今天收紧、连麦），放松只有 request_relax——那条由代码卡死在晚间申请窗口、只管明天、按周限额。
       // 过不过关不归她们：整理好交给墙（submit_to_wall），墙只看证据。
-      const list = [
-        notesTool(), sisterToolIfDual(role), vaultSearchTool(), vaultRecentTool(), kbTool(role),
-        geminiLiveTool(role), geminiEndTool(role), geminiLogTool(role), scheduleGeminiLiveTool(role),
-        controlTool(), startTaskTool(role), blockTool(role), tightenTool(role), relaxTool(role),
-        wallTool(role),
-      ].filter(Boolean)
+      const list = role === 'wall'
+        // 墙：定计划、记预测、管案卷、把东西交给门。没有任何放松或收紧的开关——它靠标准和证据管人。
+        ? [vaultSearchTool(), vaultRecentTool(), wallTool('wall'), predictTool(), caseFileTool()]
+        : [
+          notesTool(), sisterToolIfDual(role), vaultSearchTool(), vaultRecentTool(), kbTool(role),
+          geminiLiveTool(role), geminiEndTool(role), geminiLogTool(role), scheduleGeminiLiveTool(role),
+          controlTool(), startTaskTool(role), blockTool(role), tightenTool(role), relaxTool(role),
+          wallTool(role),
+        ].filter(Boolean)
       for (const tool of list) {
         try {
           const off = agent.ctx.tools.register(tool)
@@ -2742,7 +2885,7 @@ export function apply(ctx) {
     if (!agent?.ctx?.systemPrompt?.context) return
     try {
       const off = agent.ctx.systemPrompt.context({
-        name: role === 'strategist' ? 'dafeiyu-strategist' : 'dafeiyu-persona',
+        name: role === 'wall' ? 'dafeiyu-wall' : role === 'strategist' ? 'dafeiyu-strategist' : 'dafeiyu-persona',
         order: 850,
         interpolate: false,
         text: () => chatPersonaText(role),
@@ -2757,6 +2900,9 @@ export function apply(ctx) {
     const strat = config.dual === false ? '' : config.strategistSessionId || ''
     // 两个角色指向同一个会话时，只挂陪伴那一份，别让模型同时拿到两套人设。
     mountOne('strategist', strat && strat !== config.sessionId ? strat : '')
+    // 第五轮：墙本人。必须是第三个会话，和姐妹共用会让模型同时拿到两套人设。
+    const wall = config.wallSessionId || ''
+    mountOne('wall', wall && wall !== config.sessionId && wall !== strat ? wall : '')
   }
   try {
     mountPersona()
@@ -2854,6 +3000,23 @@ export function apply(ctx) {
           // role=strategist：这句话给姐姐（谋士会话）；默认给妹妹（陪伴会话）。
           // 没指定就回给刚才主动找他的那位（30 分钟内）：姐姐来找他，他在浮层里回的就是姐姐。
           const wanted = body.value?.role || (lastBall.role === 'strategist' && Date.now() - lastBall.at < 30 * 60_000 ? 'strategist' : 'companion')
+          if (wanted === 'wall') {
+            // 第五轮：面对墙。墙只在他先开口时说话；他每次主动开一场会谈记一笔（核心指标）。
+            if (!config.wallSessionId) return send(res, 409, { v: 1, error: { code: 'no-wall-session', message: '还没选墙的会话' } })
+            const meeting = meetingOf(body.value?.meeting)
+            if (meeting) wallMeeting = { kind: meeting, at: Date.now() }
+            if (body.value?.opener === true) {
+              record({ state: 'self-instruction', at: Date.now(), meeting: meeting || undefined, text: said.slice(0, 200) })
+              if (meeting) record({ state: 'wall-meeting', at: Date.now(), kind: meeting })
+            }
+            lastHumanAt.set(String(config.wallSessionId), Date.now())
+            record({ state: 'say-text', at: Date.now(), to: 'wall', text: said.slice(0, 300), via: 'wall-page' })
+            const r = await chat.request({
+              v: 1, requestId: id, eventId: id, kind: 'say', payload: { text: said.slice(0, 4_000) }, deadlineMs: 180_000,
+              sessionId: config.wallSessionId,
+            })
+            return send(res, r.status, r.body)
+          }
           const toStrategist = wanted === 'strategist' && config.dual !== false && config.strategistSessionId
           // 先记"他在聊"，再进会话：手机在他发第一句时会马上问一次 /plan，那一问可能比这句话的
           // user/message 事件先到；不先记上就会再发一球，把浮层里正在聊的窗口顶掉。
@@ -2886,9 +3049,13 @@ export function apply(ctx) {
         const id = String(url.searchParams.get('requestId') ?? '')
         const r = await (chat.records.has(id) ? chat : desk).wait(id, waitMs)
         // 双人格：话前面标上是谁说的（〔鱼丸〕/〔鲸澜〕），浮层据此显示名字。
-        if (config.dual !== false && r?.body?.state === 'generated' && typeof r.body.text === 'string') {
+        if (r?.body?.state === 'generated' && typeof r.body.text === 'string' && (config.dual !== false || isWallSession(r.body.sessionId))) {
           const n = roleNames(config)
-          r.body = { ...r.body, speaker: speakerOf(r.body.sessionId), text: '〔' + (speakerOf(r.body.sessionId) === 'strategist' ? n.strategist : n.companion) + '〕' + r.body.text }
+          const who = speakerOf(r.body.sessionId)
+          // 墙的话自己就以〔墙〕开头（门的回复原样带着），别再叠一层。
+          const label = who === 'wall' ? '墙' : who === 'strategist' ? n.strategist : n.companion
+          const text = who === 'wall' && r.body.text.startsWith('〔墙〕') ? r.body.text : '〔' + label + '〕' + r.body.text
+          r.body = { ...r.body, speaker: who, text }
         }
         return send(res, r.status, r.body)
       }
@@ -2938,6 +3105,7 @@ export function apply(ctx) {
       dual: config.dual !== false,
       proactiveTools: config.proactiveTools !== false,
       strategistSessionId: config.strategistSessionId ?? null,
+      wallSessionId: config.wallSessionId ?? null,
       companionName: roleNames(config).companion,
       strategistName: roleNames(config).strategist,
       companionCard: config.companionCard || '',
@@ -3464,6 +3632,8 @@ function mergeConfig(current, body) {
     if (typeof body.proactiveTools === 'boolean') next.proactiveTools = body.proactiveTools
     if (body.strategistSessionId === null) next.strategistSessionId = undefined
     else if (typeof body.strategistSessionId === 'string' && body.strategistSessionId.length <= 256) next.strategistSessionId = body.strategistSessionId || undefined
+    if (body.wallSessionId === null) next.wallSessionId = undefined
+    else if (typeof body.wallSessionId === 'string' && body.wallSessionId.length <= 256) next.wallSessionId = body.wallSessionId || undefined
     for (const k of ['companionName', 'strategistName']) if (typeof body[k] === 'string' && body[k].trim()) next[k] = body[k].trim().slice(0, 20)
     for (const k of ['companionCard', 'strategistCard']) if (typeof body[k] === 'string') next[k] = body[k].slice(0, 4000)
     if (typeof body.owner === 'string' && body.owner.trim()) next.owner = body.owner.trim().slice(0, 40)
