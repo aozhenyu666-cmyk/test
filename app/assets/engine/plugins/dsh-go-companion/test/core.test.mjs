@@ -85,6 +85,15 @@ test('回合：agent 忙时拒绝', async () => {
   assert.equal(r.body.error.code, 'agent-busy')
 })
 
+// 收件箱里排着话、但这一轮没在跑：不算忙。DSH 的 status 只有 idle/running，
+// 排着的消息往后追加、他先排的先跑；"排着"又没有超时，一旦算忙就再也开不了口。
+test('回合：收件箱排着话但没在跑，照样发言', async () => {
+  const { desk, agent } = makeDesk({ agent: fakeAgent({ inbox: { hasPending: true } }) })
+  const r = await desk.request(req)
+  assert.equal(r.status, 202)
+  assert.equal(agent.sent.length, 1)
+})
+
 test('回合：同一个 requestId 重放不重复发送', async () => {
   const { desk, agent } = makeDesk()
   await desk.request(req)

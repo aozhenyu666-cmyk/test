@@ -858,7 +858,11 @@ String? proactiveReasonLabel(String? reason) {
   final code = reason.startsWith('skip:') ? reason.substring(5) : reason.replaceFirst(RegExp(r'^agent_'), '');
   return switch (code) {
     'no-topic' => '没话可说（旧版本才会有）',
-    'agent-busy' || 'in-conversation' || 'desk-busy' => '你们正在聊，这次不插嘴',
+    // 三种"没插嘴"不是一回事。合并成一句时，卡在收件箱的那次被当成"你在跟它聊天"，
+    // 于是它一句都没说过、回执却一直在说"你们正在聊"，看不出是真原因。
+    'in-conversation' => '你们正在聊，这次不插嘴',
+    'agent-busy' => '它上一轮还没跑完，这次没说',
+    'desk-busy' => '上一句还在路上，这句让了',
     'no-session' => '还没选大肥鱼的会话',
     'no-agent' => '会话没加载起来',
     'deadline' || 'timeout' => '模型太慢，超时了',

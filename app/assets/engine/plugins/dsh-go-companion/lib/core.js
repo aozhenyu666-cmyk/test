@@ -168,10 +168,12 @@ export class Desk {
       return this.refuse(409, 'agent-resolve-failed', String(e?.message ?? e))
     }
     if (agent === undefined) return this.refuse(409, 'no-agent')
-    // 主动发球：他和大肥鱼正在说话就不插嘴。直接聊（allowBusy）：排进下一轮，等它说完这句再接。
-    if (!this.deps.allowBusy) {
-      if (agent.status !== undefined && agent.status !== 'idle') return this.refuse(409, 'agent-busy')
-      if (agent.inbox?.hasPending) return this.refuse(409, 'agent-busy')
+    // 主动发球：大肥鱼这一轮还在跑就不插嘴。直接聊（allowBusy）：排进下一轮，等它说完这句再接。
+    // 收件箱里还有话没被取走，不算"正在聊"：DSH 的 status 只有 idle/running 两种（dsh-agent-loop 的
+    // get status），排着的消息本来就往后追加、他先排的先跑；而"排着"没有超时，一旦卡住就再也开不了口，
+    // 手机每分钟都来问一次、每次都被挡，看起来就像一直在聊天——实际一句都没说过。
+    if (!this.deps.allowBusy && agent.status !== undefined && agent.status !== 'idle') {
+      return this.refuse(409, 'agent-busy')
     }
 
     let built
