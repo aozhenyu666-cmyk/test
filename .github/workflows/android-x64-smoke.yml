@@ -33,12 +33,16 @@ jobs:
       - uses: actions/checkout@v4
 
       # KVM 是硬前提：没有它模拟器退化成纯软件模拟，光开机就要半小时。
+      # runner 上 /dev/kvm 是 root:kvm 660，当前用户还不在 kvm 组里，直接读会被拒。
       - name: KVM 可用性
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq gpgv zstd xz-utils unzip file
           ls -l /dev/kvm
+          sudo usermod -aG kvm "$USER"
+          sudo chmod 666 /dev/kvm
           test -r /dev/kvm && test -w /dev/kvm
+          sg kvm -c 'test -r /dev/kvm' || true
 
       - uses: actions/setup-java@v4
         with:
