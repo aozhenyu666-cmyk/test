@@ -88,7 +88,7 @@ import {
   findObsidianVault, renderPending, renderRules, renderTaskNote, taskNotePath, updatePending, writeText as writeVaultText,
 } from './vault_wall.js'
 import { GEMINI_PACKAGES, driftPull, geminiBrief, geminiLines, geminiMode, geminiSteps, recapMarkdown, trackGemini } from './gemini.js'
-import { auditOf, cardsOf } from './sisters.js'
+import { auditOf, cardsOf, groupPrompts } from './sisters.js'
 
 export const name = 'dsh-go-companion'
 // Without this, `ctx.tools` below throws "cannot get property tools without inject"
@@ -4022,9 +4022,9 @@ export function apply(ctx) {
       return '发给' + names.strategist + '了。'
     }
     ;(async () => {
-      const first = await sayTo(sis, '（家庭群：他同时发给了你和' + names.strategist + '）' + said)
-      const tail = first ? names.companion + '刚回了「' + first.replace(/^〔[^〕]{1,20}〕/, '').slice(0, 300) + '」。你接着说：可以接她的话，也可以反驳她，别重复她。' : names.companion + '这次没回上，你直接回他。'
-      await sayTo(big, '（家庭群：他同时发给了你和' + names.companion + '）' + said + '\n（' + tail + '）')
+      // 只配了一个会话时，缺的那个不往空 sessionId 发请求。
+      const first = sis ? await sayTo(sis, groupPrompts({ names, said })) : null
+      await sayTo(big, groupPrompts({ names, said, first, firstName: names.companion }))
       refreshPanels()
     })().catch(() => {})
     return '发到群里了：' + names.companion + '先回，' + names.strategist + '接着说。'

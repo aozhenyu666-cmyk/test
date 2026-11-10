@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { COMPANION_LIFE, DEFAULT_NAMES, STRATEGIST_LIFE } from '../lib/roles.js'
-import { SISTERS, auditOf, cardsOf, personaOf, sisterLine } from '../lib/sisters.js'
+import { SISTERS, auditOf, cardsOf, groupPrompts, personaOf, sisterLine } from '../lib/sisters.js'
 
 test('卡片：两张，妹妹在前姐姐在后，名字默认取组合里的默认名', () => {
   const cards = cardsOf()
@@ -47,6 +47,43 @@ test('人设：去掉写给模型看的抬头，两人取各自那一份', () =>
   assert.ok(COMPANION_LIFE.includes(yuwan.slice(0, 8)))
   assert.ok(STRATEGIST_LIFE.includes(jinglan.slice(0, 8)))
   assert.equal(personaOf('wall'), personaOf('companion'))
+})
+
+test('群聊：两个人拿到的是同一句开场，谁都没被告知「该谁先说」', () => {
+  const p = groupPrompts({ said: '今晚吃啥' })
+  assert.ok(p.startsWith('（家庭群，他、'))
+  assert.ok(p.includes(DEFAULT_NAMES.companion))
+  assert.ok(p.includes(DEFAULT_NAMES.strategist))
+  assert.ok(p.endsWith('今晚吃啥'))
+  // 还没人说话，就该只有这一条
+  assert.equal(groupPrompts({ said: '今晚吃啥', first: '' }), p)
+  assert.equal(groupPrompts({ said: '今晚吃啥', first: '   ' }), p)
+})
+
+test('群聊：后说的那个只多一条聊天记录，不该收到导演提示', () => {
+  const p = groupPrompts({ said: '今晚吃啥', first: '别问，问就是泡面', firstName: '鱼丸' })
+  assert.ok(p.endsWith('鱼丸：别问，问就是泡面'))
+  // 以前那句「你接着说：可以接她的话，也可以反驳她，别重复她」就是「太刻意」的来源
+  for (const word of ['你接着说', '可以接', '也可以反驳', '别重复']) {
+    assert.ok(!p.includes(word), '不该再出现导演词：' + word)
+  }
+})
+
+test('群聊：先说的那句把引擎的〔标签〕摘掉，超长截到 300', () => {
+  assert.equal(
+    groupPrompts({ said: 'a', first: '〔鱼丸〕我回来了', firstName: '鱼丸' }),
+    groupPrompts({ said: 'a', first: '我回来了', firstName: '鱼丸' }),
+  )
+  const long = groupPrompts({ said: 'a', first: 'x'.repeat(5000), firstName: '鱼丸' })
+  assert.equal(long.split('\n\n')[1].length, 3 + 300)
+  // 先说的那个没名字时不拼一个空的冒号出来
+  assert.ok(groupPrompts({ said: 'a', first: '嗯' }).endsWith('\n\n嗯'))
+})
+
+test('群聊：名字走 /config 覆盖，缺一个只回落那一个', () => {
+  const p = groupPrompts({ names: { companion: '小鱼丸' }, said: 'x' })
+  assert.ok(p.includes('小鱼丸'))
+  assert.ok(p.includes(DEFAULT_NAMES.strategist))
 })
 
 test('审计：今天立了几件、有证据完成几件', () => {
