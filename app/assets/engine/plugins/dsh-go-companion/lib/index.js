@@ -54,6 +54,8 @@ import { tide as tideOf, tideGap, tideHourly, vagueStreak } from './tide.js'
 import { FACES, stepTemper, temperLine } from './temper.js'
 import { drillLines, drillOf, pickDrill, scoldLines } from './drills.js'
 import { normalizeTracks, pickTrack, recentTracks, trackStatus } from './tracks.js'
+// 第六轮 C：暗思考（后台自己整理，不开口）。
+import { museSweep, museStatus } from './muse.js'
 import { brainLines, chooseFace, cleanBrain, drillScorer, observe, onReply, onServe, onSilent, revise, updateArm } from './brain.js'
 import { appendPrediction, checkClaim, cleanLedger, dueCount, emptyLedger, predictionLines, settle } from './predict.js'
 import { buildVibe, pickedArms, renderVibe } from './vibe.js'
@@ -3410,6 +3412,14 @@ export function apply(ctx) {
     const phone = cleanPhone(body?.phone)
     // 临时封禁名单里的 App 也算娱乐。
     if (phone?.app && blockedNow(now).includes(phone.app)) phone.fun = true
+    // 第六轮 C：暗思考。他不在、没发消息也照样按客观变化整理一次；只写账本，不产生任何要发出去的话。
+    // 挂在这里是因为手机闹钟问 /plan 是唯一的“后台”触发面（见 features_api.dart）：不问就不跑，和 anchorSweep 同一限制。
+    try {
+      const mused = museSweep(ledger, phone, now, tz)
+      if (mused) record(mused)
+    } catch (error) {
+      console.error('[companion] 暗思考失败：' + String((error && error.message) || error))
+    }
     const mind = sense(phone, ledger, sessionId, now)
     if (phone) lastPhone = phone
     // 作息：早上门、晚上门、深夜阶段（先算，力度和拒绝要用）。
@@ -3688,6 +3698,8 @@ export function apply(ctx) {
       anchors: anchorStatus(now, entries),
       // 第六轮 A：支线底座的状态（几条在跑、最近用过哪几条、哪几条配置不合格被丢掉了）。
       tracks: trackStatus(config.tracks, recentTracks(entries)),
+      // 第六轮 C：今天暗思考跑了几次、最近一条整理了什么（只记账，没有要发出去的话）。
+      muse: museStatus(entries, now),
       // 好坏只看回合：有效回合 = 至少两拍且有一拍接住了（见 rally.js）。
       rallies: rallyStats(entries, startOfDay(now, config.timeZone)),
       // 「现在」这一层要能说清：上一球被漠视到哪一级、静音到什么时候。
