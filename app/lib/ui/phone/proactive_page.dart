@@ -924,12 +924,16 @@ class _ReceiptRow extends StatelessWidget {
       _ => null,
     };
     final detail = [?surface, if (marks.isNotEmpty) marks.join('  → '), ?reason].join(' · ');
+    // 回执原来只说「发没发」，不说「它当时说了什么」，所以这页看着像日志而不是对话。
+    // 原话直接放进副标题，截断交给 widget（maxLines），不在这里算长度。
+    final said = (receipt.text ?? '').trim();
+    final subtitle = [if (said.isNotEmpty) '「$said」', if (detail.isNotEmpty) detail].join('\n');
     return ListPageRow(
       icon: icon,
       iconColor: color,
       title: skipped ? '这次不说' : proactiveOutcomeLabel(l10n, receipt.outcome),
-      subtitle: detail.isEmpty ? null : detail,
-      subtitleMaxLines: 3,
+      subtitle: subtitle.isEmpty ? null : subtitle,
+      subtitleMaxLines: 4,
       meta: formatLogTime(receipt.closedAt ?? receipt.deliveredAt ?? receipt.createdAt),
     );
   }
