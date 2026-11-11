@@ -68,7 +68,7 @@ import { decideForce, forceLines, refuseSwitch } from './force.js'
 import { BUSY_CHECK_MS, BUSY_DEFAULT_MIN, BUSY_MAX_MIN, aiTask, applyGear, effectiveGear, gearLines, gearSwitch } from './gear.js'
 import { trustGap, trustLines, trustScore } from './trust.js'
 import { buildSnapshot, sistersView } from './panel.js'
-import { JUDGE_FILE, appendVerdictDaily, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
+import { JUDGE_FILE, SELF_FILE, appendVerdictDaily, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, absentAnchors, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import {
   FOLLOWUP_CAP_MS, FOLLOWUP_PENALTY, STANDBY_LOCK_MS, addObligation, checkVerdict, clearObligation, closeLock, followupView,
@@ -80,6 +80,8 @@ import {
   trackApplyWindow, applyWindowOpen, dayKey, weekKey, WALL_KIND_DEFAULT, wallDefianceText,
 } from './wall.js'
 import { dailyPath, dayString, keywordsOf, loadDaily, normalizeTasks, reconcile, reviewText, writeDaily } from './daily.js'
+// A2：白天的时间表（纯函数在 daily.js 里；这里只接线和落账）。
+import { DEPTS, blockLine, fixedBlocksOf, lateLine, markBlockDone, planSweep, reschedule as reschedulePlan, schedule, scheduleText } from './daily.js'
 import { DEPARTMENTS, completeOf, depositLines, depositOf, missingText, normalizeEntry, statusOf, withEntry } from './deposit.js'
 import {
   SCREENSHOT_DIRS, auditTask, baselineFor, checkMorningTasks, evidenceType, listScreenshots, loadWallMemory,
@@ -1366,6 +1368,71 @@ export function apply(ctx) {
   // 第二轮·每日文件：今天的事 + 完成物 + 晚上对账的结论（渲染成 大肥鱼/每日/日期.md）。
   const loadDailyState = () => readState(stateFile('daily.json'), {}) || {}
   const saveDailyState = (s) => writeJson(stateFile('daily.json'), s)
+  // A2：我.md 原文——硬安排（「08:00-09:00 上课」）从里面抠，排时间表时要避开。
+  const selfRaw = () => {
+    try {
+      return readFileSync(join(kbDir(notesDir(), home()), SELF_FILE), 'utf8')
+    } catch {
+      return ''
+    }
+  }
+  /** 今天的时间表参数：吃饭时段 + 我.md 里的硬安排，一处算清，别各拼一套。 */
+  const planArgs = (now, tz) => ({ now, tz, meals: wallConfig(config).meals, fixedBlocks: fixedBlocksOf(selfRaw()) })
+  const savePlan = (state) => {
+    saveDailyState(state)
+    writeDaily(kbDir(notesDir(), home()), state)
+  }
+  /**
+   * A2：走一遍今天的时间表。块开始就把这一块立成任务模式（娱乐照规则锁），块结束继续点他交墙。
+   * 挂在 planRoute 上——引擎里没有第二个"后台"面，和不说话就不跑的那几个 sweep 同一限制。
+   */
+  function planSweepNow(now, tz) {
+    const state = loadDaily(loadDailyState(), now, tz)
+    if (!state.tasks.length) return
+    const out = planSweep(state, planArgs(now, tz))
+    if (out.plan && (!state.plan || out.events.length)) savePlan(out.state)
+    for (const ev of out.events) {
+      record({ state: 'plan-' + ev.kind.replace('plan-', ''), at: now, taskId: ev.taskId, task: ev.task, start: ev.start, end: ev.end })
+      if (ev.kind !== 'block-start') continue
+      // 块开始＝自动立任务（目标就是这一块），到点由 gear 那套继续锁着等交墙。
+      const until = zoneStartOfDay(now, tz) + ev.end * 60_000
+      setGear({ gear: 'busy', until, what: ev.task, task: { goal: ev.task, by: 'strategist', reason: '今天排的时间块' } }, 'plan')
+    }
+    // 到点没交＝一个看得见的动作：把剩下的往后挪一次（额度用完就不再挪）。
+    if (out.events.some((e) => e.kind === 'block-end')) {
+      const r = reschedulePlan(loadDaily(loadDailyState(), now, tz), { ...planArgs(now, tz), trigger: 'overdue' })
+      if (r.ok) {
+        savePlan(r.state)
+        record({ state: 'plan-reschedule', at: now, trigger: 'overdue' })
+      }
+    }
+  }
+  /** 约束层里的「此刻」一行：当前时间块，或者到点了还没交墙的那一块。 */
+  function planText() {
+    const now = Date.now()
+    const tz = zoneOr(config.timeZone)
+    const state = loadDaily(loadDailyState(), now, tz)
+    if (!state.plan) return ''
+    const min = zoneMinuteOfDay(now, tz)
+    const cur = state.plan.blocks.find((b) => min >= b.start && min < b.end)
+    if (cur) return blockLine(cur, min)
+    const late = state.plan.blocks
+      .filter((b) => min >= b.end && !state.plan.submitted?.[b.taskId])
+      .sort((a, b) => b.end - a.end)[0]
+    return late && min < late.end + 10 ? lateLine(late) : ''
+  }
+  /** A2：一件交墙通过了 → 那块收工，剩下的重排一次（额度由 daily.reschedule 管）。 */
+  function planAdvance(now, taskId) {
+    if (!taskId) return null
+    const tz = zoneOr(config.timeZone)
+    const marked = markBlockDone(loadDaily(loadDailyState(), now, tz), taskId, zoneMinuteOfDay(now, tz))
+    if (!marked.plan) return null
+    const r = reschedulePlan(marked, { ...planArgs(now, tz), trigger: 'submitted-early' })
+    const next = r.ok ? r.state : marked
+    savePlan(next)
+    if (r.ok) record({ state: 'plan-reschedule', at: now, trigger: 'submitted-early' })
+    return r.ok ? r.text : null
+  }
   // 第五轮·每日四部门提交：信息收集 / 谋划思考 / 行为管理 / 统筹规划，一天一份，零点复归。
   const loadDepositState = () => readState(stateFile('deposit.json'), {}) || {}
   const saveDepositState = (s) => writeJson(stateFile('deposit.json'), s)
@@ -2183,6 +2250,12 @@ export function apply(ctx) {
         return done(false, [task.task + '：' + r.data], [r.missing])
       }
       applyVerdict({ ok: true, kind, satisfied: true, summary: task.task + '：' + r.data, nextStep: '放风，回来接着下一件' }, now, 'wall')
+      // A2：这一件提前交了墙 → 时间表里那块收工，剩下的重排一次（每天 2 次额度）。
+      try {
+        planAdvance(now, idx >= 0 ? state.tasks[idx]?.id : undefined)
+      } catch (error) {
+        console.error('[companion] 交墙后重排失败：' + String((error && error.message) || error))
+      }
       if (idx >= 0 || state.tasks.length === 1) vaultTask(now, Math.max(0, idx), task, '完成', r.data)
       return done(true, [task.task + '：' + r.data])
     }
@@ -2395,8 +2468,9 @@ export function apply(ctx) {
   function dailyPlanTool(role) {
     return {
       name: 'daily_plan',
-      description: '早上定事：把今天的事和每件事的完成物写进知识库的每日文件（大肥鱼/每日/日期.md）。' +
-        '每件事必须带一个看得见的完成物（笔记路径、Gemini 记录、某个学习 App 今天要用够多少分钟），光写"做完 XX"不算。最多 6 件。',
+      description: '早上定事：把今天的事和每件事的完成物写进知识库的每日文件（大肥鱼/每日/日期.md），并排进当天的时表。' +
+        '每件事必须带：完成物（笔记路径、Gemini 记录、某个学习 App 今天要用够多少分钟）、截止时刻（HH:MM）、预估分钟数、归哪个部' +
+        '（信息收集 / 谋划思考 / 统筹规划 / 行为管理）。墙会避开吃饭时段和你 我.md 里的硬安排排块，排不下的会当场说清是哪一件。最多 6 件。',
       parameters: {
         type: 'object',
         properties: {
@@ -2408,8 +2482,11 @@ export function apply(ctx) {
               properties: {
                 task: { type: 'string', description: '今天要做的事（一句话）' },
                 evidence: { type: 'string', description: '完成物：晚上能去查的东西（笔记路径 / Gemini 记录 / App 用够多少分钟）' },
+                due: { type: 'string', description: '截止时刻 HH:MM（他说的"几点前做完"）' },
+                minutes: { type: 'integer', minimum: 10, maximum: 480, description: '预估要花多少分钟' },
+                dept: { type: 'string', enum: DEPTS, description: '归哪个部（给晚上四段对账用）' },
               },
-              required: ['task', 'evidence'],
+              required: ['task', 'evidence', 'due', 'minutes', 'dept'],
               additionalProperties: false,
             },
           },
@@ -2425,11 +2502,12 @@ export function apply(ctx) {
         if (!norm.ok) return { ok: false, text: norm.text }
         const dir = kbDir(notesDir(), home())
         const state = loadDaily(loadDailyState(), now, tz)
-        const next = { ...state, tasks: norm.tasks, review: state.review }
-        const wrote = writeDaily(dir, next)
-        saveDailyState(next)
-        record({ state: 'daily-plan', at: now, by: role, count: norm.tasks.length, file: wrote.file || undefined })
-        return { ok: true, text: norm.text + ' ' + wrote.text }
+        // 重新定事＝重新排：重排记录归零，昨天的表不带过来。
+        const out = schedule(norm.tasks, { ...planArgs(now, tz) })
+        const next = { ...state, tasks: norm.tasks, plan: { at: now, blocks: out.blocks, overflow: out.overflow, reschedules: [], fired: { start: {}, end: {} }, submitted: {} } }
+        savePlan(next)
+        record({ state: 'daily-plan', at: now, by: role, count: norm.tasks.length, file: dailyPath(dir, now, tz), blocks: out.blocks.length, overflow: out.overflow.length })
+        return { ok: true, text: norm.text + '\n' + scheduleText(out) }
       },
     }
   }
@@ -3420,6 +3498,7 @@ export function apply(ctx) {
       { id: 'capability', layer: 'constraint', priority: 90, text: capabilityLines(role, { notesDir: notesDir() }) },
       { id: 'agenda', layer: 'constraint', priority: 85, text: agendaLines(mainState).join('\n') },
       { id: 'stance', layer: 'constraint', priority: 87, text: stanceText() },
+      { id: 'plan', layer: 'constraint', priority: 86, text: planText() },
       { id: 'trust', layer: 'state', priority: 60, text: trustLines(trustNow()).join('\n') },
       { id: 'rhythm', layer: 'state', priority: 55, text: rhythmLines(lastRhythm).join('\n') },
       { id: 'gear', layer: 'state', priority: 50, text: gearLines(config, Date.now()).join('\n') },
@@ -3730,6 +3809,12 @@ export function apply(ctx) {
       settleStanceNow(now)
     } catch (error) {
       console.error('[companion] 立场结算失败：' + String((error && error.message) || error))
+    }
+    // A2：今天的时间表在这一步往前走——块开始自动立任务、块结束要求交墙，不靠她"想起来"。
+    try {
+      planSweepNow(now, tz)
+    } catch (error) {
+      console.error('[companion] 时间表推进失败：' + String((error && error.message) || error))
     }
     // 第六轮 B：早/晚/周末到点没结论，由墙补一条缺席记录（只记账，不加锁）。
     try {

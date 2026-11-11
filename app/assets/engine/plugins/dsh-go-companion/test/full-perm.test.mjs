@@ -147,19 +147,29 @@ test('end_task_mode：没立任务时调用是空话；立了才验得过、才�
   })
 })
 
-test('daily_plan：没给完成物不落盘；给了才写进每日文件', async () => {
+test('daily_plan：没给完成物不落盘；给了才写进每日文件并排进时间表', async (ctx) => {
   await withHome(async (home) => {
     const t = setup(home)
-    await t.plan(wechat)
+    // 锁在 2026-11-08 08:00 +08:00：排程要"现在几点"，不锁就只能碰运气。
+    ctx.mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 10, 8, 0, 0, 0) })
+    await t.plan({ ...wechat, local: '08:00' })
     const p = t.big.tools.daily_plan
     const bad = p.execute({ tasks: [{ task: '写周报' }] })
     assert.equal(bad.ok, false, '没有完成物')
-    const ok = p.execute({ tasks: [{ task: '写周报', evidence: '大肥鱼/周报.md' }] })
+    // A2 起截止时刻 / 预估分钟 / 归哪个部也必填（排不出表就没人按块走）。
+    const noDue = p.execute({ tasks: [{ task: '写周报', evidence: '大肥鱼/周报.md' }] })
+    assert.equal(noDue.ok, false)
+    assert.match(noDue.text, /截止时刻/)
+    const ok = p.execute({ tasks: [{ task: '写周报', evidence: '大肥鱼/周报.md', due: '18:00', minutes: 45, dept: '统筹规划' }] })
     assert.equal(ok.ok, true, ok.text)
+    assert.match(ok.text, /- \d{2}:\d{2}–\d{2}:\d{2} 写周报（统筹规划部，估 45 分）/, '回话里要给出排到哪一块')
     const daily = JSON.parse(readFileSync(join(home, 'companion', 'daily.json'), 'utf8'))
     assert.equal(daily.tasks.length, 1)
     assert.equal(daily.tasks[0].evidence, '大肥鱼/周报.md')
+    assert.equal(daily.plan.blocks.length, 1, '时间表落盘了')
+    assert.ok(daily.plan.blocks[0].start >= 7 * 60, '不排进深夜窗口')
     assert.ok(existsSync(join(t.vault, '大肥鱼', '每日')) || true)
+    ctx.mock.timers.reset()
   })
 })
 
@@ -172,8 +182,8 @@ test('daily_review：早上没定事就没账可对；定了就按完成物逐�
     assert.match(no.text, /没定事/)
     // 定两件，都没做（证据文件不存在、App 没时长）。
     t.big.tools.daily_plan.execute({ tasks: [
-      { task: '写周报', evidence: '大肥鱼/周报.md' },
-      { task: '复习线代', evidence: '线代 App 40 分钟' },
+      { task: '写周报', evidence: '大肥鱼/周报.md', due: '18:00', minutes: 45, dept: '统筹规划' },
+      { task: '复习线代', evidence: '线代 App 40 分钟', due: '21:00', minutes: 60, dept: '信息收集' },
     ] })
     const r = t.big.tools.daily_review.execute({})
     assert.equal(r.ok, true, r.text)
@@ -215,5 +225,40 @@ test('墙的权限不低于两姐妹：submit_to_wall 仍然只认证据，说�
     // 同一个动作，姐妹自己裁决就能过——两条路的差别就在这，墙没被削弱。
     const v = t.big.tools.submit_verdict.execute({ kind: 'morning', satisfied: true, summary: '他说清了', nextStep: '先写周报', tasks: [{ task: '写周报', evidence: '大肥鱼/周报.md' }] })
     assert.equal(v.ok, true)
+  })
+})
+
+test('A2 时间块边界由 /plan 驱动：一整天轮询，每块只开始一次、只收尾一次', async (ctx) => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    // 2026-11-08 08:00 +08:00 起，锁住 Date，这一天就真的"从早上开始过"。
+    const day = Date.UTC(2026, 10, 8, 0, 0, 0)
+    ctx.mock.timers.enable({ apis: ['Date'], now: day })
+    await t.plan({ ...wechat, local: '08:00' })
+    const p = t.big.tools.daily_plan
+    const ok = p.execute({ tasks: [{ task: '写周报', evidence: '大肥鱼/周报.md', due: '18:00', minutes: 60, dept: '统筹规划' }] })
+    assert.equal(ok.ok, true, ok.text)
+    // 8:00–9:00 一块。
+    await t.plan({ ...wechat, local: '08:00' })
+    const started = () => t.ledger().filter((r) => r.state === 'plan-block-start')
+    assert.equal(started().length, 1, '块开始自动立任务，恰好一次')
+    assert.equal(t.cfg().taskBy, 'strategist', '块开始＝立任务模式（娱乐照规则锁）')
+    // 同一分钟再问几遍，不重复触发。
+    await t.plan({ ...wechat, local: '08:00' })
+    await t.plan({ ...wechat, local: '08:30' })
+    assert.equal(started().length, 1, '同一块不会开两次')
+    // 到 9:00 收尾一次；再到 9:30 不重复。
+    ctx.mock.timers.tick(60 * 60_000)
+    await t.plan({ ...wechat, local: '09:00' })
+    const ended = () => t.ledger().filter((r) => r.state === 'plan-block-end')
+    assert.equal(ended().length, 1, '块结束要求交墙，恰好一次')
+    ctx.mock.timers.tick(30 * 60_000)
+    await t.plan({ ...wechat, local: '09:30' })
+    assert.equal(ended().length, 1, '同一个块不会收两次尾')
+    // 块收尾是一个看得见的动作 → 触发一次重排（额度 1/2）。
+    const re = t.ledger().filter((r) => r.state === 'plan-reschedule' && r.trigger === 'overdue')
+    assert.equal(re.length, 1, '到点没交只重排一次')
+    assert.equal(JSON.parse(readFileSync(join(home, 'companion', 'daily.json'), 'utf8')).plan.reschedules.length, 1)
+    ctx.mock.timers.reset()
   })
 })
