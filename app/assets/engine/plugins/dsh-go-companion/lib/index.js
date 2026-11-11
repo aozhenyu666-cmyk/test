@@ -81,8 +81,8 @@ import {
 } from './wall.js'
 import { dailyPath, dayString, keywordsOf, loadDaily, normalizeTasks, reconcile, reviewText, writeDaily } from './daily.js'
 // A2：白天的时间表（纯函数在 daily.js 里；这里只接线和落账）。
-import { DEPTS, blockLine, fixedBlocksOf, lateLine, markBlockDone, planSweep, reschedule as reschedulePlan, schedule, scheduleText } from './daily.js'
-import { DEPARTMENTS, completeOf, depositLines, depositOf, missingText, normalizeEntry, statusOf, withEntry } from './deposit.js'
+import { DEPTS, TRIGGER_TEXT, blockLine, fixedBlocksOf, lateLine, markBlockDone, planSweep, reschedule as reschedulePlan, schedule, scheduleText } from './daily.js'
+import { DEPARTMENTS, DEPT_DUTY, appendSlot, behaviorReport, completeOf, depositLines, depositOf, missingText, normalizeEntry, reconcileEntry, slotAsk, statusOf, withEntry } from './deposit.js'
 import {
   SCREENSHOT_DIRS, auditTask, baselineFor, checkMorningTasks, evidenceType, listScreenshots, loadWallMemory,
   noteDone, notePromised, pruneMemory, recentRate, statOf, wallText,
@@ -1293,6 +1293,8 @@ export function apply(ctx) {
   /** 最近一次 /plan 算出的作息（早上门 / 晚上门 / 深夜阶段 / 深夜锁到几点）。 */
   let lastRhythm = null
   let lastApplyWindow = null
+  /** A4：块结束时该问的那句「这一块记到哪个部」——内容层，30 分钟内有效。 */
+  let slotAskNext = null
   const loadNotifs = () => readState(stateFile('notifs.json'), {}) || {}
   const saveNotifs = (n) => writeJson(stateFile('notifs.json'), n)
   /** 永远不封的：电话、短信、地图、支付、DSH 自己。 */
@@ -1378,6 +1380,8 @@ export function apply(ctx) {
   }
   /** 今天的时间表参数：吃饭时段 + 我.md 里的硬安排，一处算清，别各拼一套。 */
   const planArgs = (now, tz) => ({ now, tz, meals: wallConfig(config).meals, fixedBlocks: fixedBlocksOf(selfRaw()) })
+  /** 今天的事（A4 要用「某部有任务却没记录」这个对照）。 */
+  const dailyToday = (now = Date.now()) => loadDaily(loadDailyState(), now, zoneOr(config.timeZone))
   const savePlan = (state) => {
     saveDailyState(state)
     writeDaily(kbDir(notesDir(), home()), state)
@@ -1400,6 +1404,9 @@ export function apply(ctx) {
     }
     // 到点没交＝一个看得见的动作：把剩下的往后挪一次（额度用完就不再挪）。
     if (out.events.some((e) => e.kind === 'block-end')) {
+      const ended = out.events.filter((e) => e.kind === 'block-end')
+      // A4：块结束时问一句「这一块记到哪个部」——内容层的话，所以按「哪天 + 第几块」挑一种说法。
+      slotAskNext = { text: slotAsk(state.day, ended[ended.length - 1].start), at: now }
       const r = reschedulePlan(loadDaily(loadDailyState(), now, tz), { ...planArgs(now, tz), trigger: 'overdue' })
       if (r.ok) {
         savePlan(r.state)
@@ -2969,16 +2976,39 @@ export function apply(ctx) {
       const s = statusOf(depositToday(now))
       return { v: 1, ok: true, deposit: { ...s, missingText: missingText(depositToday(now)), departments: DEPARTMENTS } }
     }
+    // A4：白天的记录槽。一条 ≤200 字，带时间戳和关联任务；按部累加。
+    if (action === 'slot') {
+      const r = appendSlot(depositToday(now), { key: String(body?.department || '').trim(), text: body?.text, at: now, taskId: body?.taskId })
+      if (!r.ok) return { ...view(), ok: false, error: { code: 'bad-slot', message: r.text } }
+      saveDepositState(r.state)
+      record({ state: 'deposit-slot', at: now, department: String(body?.department || '').trim(), chars: String(body?.text || '').trim().length })
+      return { ...view(), ok: true, text: r.text }
+    }
     if (action !== 'submit') return view()
     const key = String(body?.department || '').trim()
     if (!DEPARTMENTS.some((d) => d.key === key)) {
       return { ...view(), ok: false, error: { code: 'bad-department', message: '没有这个部门：' + key } }
     }
-    const norm = normalizeEntry({ report: body?.report, thought: body?.thought }, now)
+    const today = depositToday(now)
+    // A4：行为管理部的汇报栏由墙生成——用户交的 report 整个不看，只用遥测那一份。
+    const auto = DEPT_DUTY[key].auto ? behaviorReport({ usage: Array.isArray(lastPhone?.today) ? lastPhone.today : [], verdicts: readLedger(home(), 200).filter((e) => e?.state === 'verdict' && Number(e.at) >= zoneStartOfDay(now, tz)) }) : null
+    const norm = normalizeEntry({ report: body?.report, thought: body?.thought }, now, { auto })
     if (!norm.ok) return { ...view(), ok: false, error: { code: 'too-thin', message: norm.text } }
-    const next = withEntry(depositToday(now), key, norm.entry)
+    // A4 晚间对照：汇报里提到的事得在今天的记录槽或证据来源里找到对应，找不到就标「无据」退回。
+    // 证据来源按部取，只摆今天真有的东西：信息收集/谋划思考看今天动过的笔记，统筹规划看当天的时间表。
+    const evidence = (() => {
+      if (key === 'coord') {
+        const p = dailyToday(now).plan || {}
+        return [...(Array.isArray(p.blocks) ? p.blocks : []).map((b) => String(b.task || '')), ...(Array.isArray(p.reschedules) ? p.reschedules : []).map((r) => String(TRIGGER_TEXT[r.trigger] || r.trigger || ''))]
+      }
+      return vaultRecentNotes(notesDir(), { limit: 8, now }).filter((n) => Number(n.mtime) >= zoneStartOfDay(now, tz)).map((n) => String(n.summary || n.rel || ''))
+    })()
+    const rec = reconcileEntry(today, key, norm.entry.report, { evidence })
+    if (rec.unsupported) return { ...view(), ok: false, error: { code: 'unsupported', message: '这一段无据，退回了：' + rec.why } }
+    const next = withEntry(today, key, norm.entry)
     saveDepositState(next)
-    return { ...view(), ok: true, text: '交了「' + (DEPARTMENTS.find((d) => d.key === key) || {}).label + '」。' }
+    record({ state: 'deposit-submit', at: now, department: key, auto: Boolean(auto), reconciled: rec.ok })
+    return { ...view(), ok: true, text: '交了「' + (DEPARTMENTS.find((d) => d.key === key) || {}).label + '」' + (rec.ok ? '，和今天的记录对上了（' + rec.why + '）' : '。') }
   }
 
   function eventRoute(body) {
@@ -3467,7 +3497,7 @@ export function apply(ctx) {
     // 锁的对外形状统一走 followupView（{active,reason,currentQuestion,since,until}），别再自己拼。
     const mainState = mainStateNow()
     const stateLines = [...trustLines(trustNow()), ...rhythmLines(lastRhythm), ...gearLines(config, Date.now()), ...geminiLines(loadGemini(), Date.now()),
-      ...depositLines(depositToday(Date.now()), Boolean(lastRhythm?.reviewGate)),
+      ...depositLines(depositToday(Date.now()), Boolean(lastRhythm?.reviewGate), { tasks: dailyToday().tasks }),
       ...agendaLines(mainState), ...knowledgeLines(kbDir(notesDir(), home()), role)]
     const notes = notesFor(role).map((n) => (n.from === 'companion' ? names.companion : names.strategist) + '刚跟你递话（' +
       zoneHm(Number(n.at), zoneOr(config.timeZone)) + '）："' + n.text + '"')
@@ -3503,9 +3533,11 @@ export function apply(ctx) {
       { id: 'rhythm', layer: 'state', priority: 55, text: rhythmLines(lastRhythm).join('\n') },
       { id: 'gear', layer: 'state', priority: 50, text: gearLines(config, Date.now()).join('\n') },
       { id: 'gemini', layer: 'state', priority: 45, text: geminiLines(loadGemini(), Date.now()).join('\n') },
-      { id: 'deposit', layer: 'state', priority: 40, text: depositLines(depositToday(Date.now()), Boolean(lastRhythm?.reviewGate)).join('\n') },
+      { id: 'deposit', layer: 'state', priority: 40, text: depositLines(depositToday(Date.now()), Boolean(lastRhythm?.reviewGate), { tasks: dailyToday().tasks }).join('\n') },
       { id: 'knowledge', layer: 'state', priority: 35, text: knowledgeLines(kbDir(notesDir(), home()), role).join('\n') },
       { id: 'vibe', layer: 'content', priority: 20, text: vibeLines.join('\n') },
+      // A4：块刚结束的这一句进内容层（可裁），不进约束层——它是随机的一句话，不是规矩。
+      { id: 'slot-ask', layer: 'content', priority: 18, text: slotAskNext && Date.now() - slotAskNext.at < 30 * 60_000 ? slotAskNext.text : '' },
       { id: 'notes', layer: 'content', priority: 10, text: noteLines.join('\n') },
     ]
     const fitted = fitBudget(blocks, config.ctxBudget)

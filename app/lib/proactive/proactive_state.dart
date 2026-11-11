@@ -379,13 +379,20 @@ class ProactiveChannel {
   ///
   /// [department] 为空就是读状态；给了就是交那一段，[report] / [thought] 一起传。
   /// 字数不够插件会退回并带上错误码，界面照着说，不在这里自己判。
-  Future<DepositView?> deposit({String? department, String? report, String? thought}) async {
+  ///
+  /// A4：白天先记一条短记录用 [text]（action=slot，一条 ≤200 字）。行为管理那一部的汇报栏
+  /// 由墙按遥测生成，页面不送 `report`（送了插件也不看）。
+  Future<DepositView?> deposit({String? department, String? report, String? thought, String? text, String? taskId}) async {
     try {
+      final slot = text != null;
       final raw = await _methods.invokeMethod<Object?>('deposit', {
-        if (department != null) 'action': 'submit',
+        if (slot) 'action': 'slot',
+        if (!slot && department != null) 'action': 'submit',
         if (department != null) 'department': department,
         if (report != null) 'report': report,
         if (thought != null) 'thought': thought,
+        if (text != null) 'text': text,
+        if (taskId != null) 'taskId': taskId,
       });
       return DepositView.fromWire(raw);
     } on Exception {
@@ -680,6 +687,10 @@ class DepositItem {
     this.thoughtChars = 0,
     this.minReport = 200,
     this.minThought = 80,
+    this.slots = 0,
+    this.duty = '',
+    this.evidence = '',
+    this.autoReport = false,
   });
 
   final String key;
@@ -695,6 +706,16 @@ class DepositItem {
   final int thoughtChars;
   final int minReport;
   final int minThought;
+
+  /// A4：今天这个部记了几条日间记录（白天的短记录，晚上写汇报时对着它写）。
+  final int slots;
+
+  /// A4：这一部该记什么、证据从哪来（插件 `DEPT_DUTY` 那一张表）。
+  final String duty;
+  final String evidence;
+
+  /// A4：汇报栏是不是墙自动填的（行为管理）。是的话页面不给他编辑汇报内容。
+  final bool autoReport;
 
   static DepositItem? fromWire(Object? raw) {
     if (raw is! Map) return null;
@@ -713,6 +734,10 @@ class DepositItem {
       thoughtChars: num_(raw['thoughtChars']),
       minReport: num_(raw['minReport']) == 0 ? 200 : num_(raw['minReport']),
       minThought: num_(raw['minThought']) == 0 ? 80 : num_(raw['minThought']),
+      slots: num_(raw['slots']),
+      duty: str(raw['duty']),
+      evidence: str(raw['evidence']),
+      autoReport: raw['autoReport'] == true,
     );
   }
 }

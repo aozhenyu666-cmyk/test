@@ -87,13 +87,17 @@ function setup(home, extra = {}) {
   const sisters = () => call(h.handler(), 'POST', '/dsh-go-companion/v1/sisters', { timeZone: 'Asia/Shanghai' })
   const deposit = (body) => call(h.handler(), 'POST', '/dsh-go-companion/v1/deposit', { timeZone: 'Asia/Shanghai', ...body })
   const status = () => call(h.handler(), 'GET', '/dsh-go-companion/v1/status')
-  // 四段交齐（硬约束：交齐才有放风额度）。每段正文故意不一样，免得被判成「复读」。
+  // A4：白天的记录槽。晚间的汇报要能对得上今天记的东西，所以这里先记再交。
+  const note = (department, text) => deposit({ action: 'slot', department, text })
+  // 四段交齐（硬约束：交齐才有放风额度）。每段正文故意不一样，免得被判成「复读」；
+  // A4 起正文还要和当天的一条记录对得上，否则会被「无据」退回——所以每段先记一条。
   const fillAll = async () => {
     for (const key of ['intel', 'thinking', 'behavior', 'coord']) {
-      await deposit({ action: 'submit', department: key, report: '字'.repeat(200) + key, thought: '想'.repeat(80) + key })
+      await note(key, '关于 ' + key + ' 的一条日间记录')
+      await deposit({ action: 'submit', department: key, report: '字'.repeat(200) + '，关于 ' + key, thought: '想'.repeat(80) + key })
     }
   }
-  return { sis, big, h, plan, say, wall, sisters, deposit, status, fillAll }
+  return { sis, big, h, plan, say, wall, sisters, deposit, note, status, fillAll }
 }
 
 const openWindow = () => ({ day: 1, openAt: Date.now() - 60_000, closeAt: Date.now() + 10 * 60_000, notified: true, used: false })
@@ -252,8 +256,9 @@ test('第五轮 /deposit：一开始四段全缺，交一段就少一段', async
     assert.equal(first.body.deposit.done, 0)
     assert.equal(first.body.deposit.total, 4)
     assert.deepEqual(first.body.deposit.missing, ['信息收集', '谋划思考', '行为管理', '统筹规划'])
-    // 只传一段，别的照旧
-    const one = await t.deposit({ action: 'submit', department: 'intel', report: report(), thought: '想'.repeat(80) })
+    // 只传一段，别的照旧。A4 起先记一条记录，不然会被「无据」退回。
+    await t.note('intel', '关于 intel 的一条日间记录')
+    const one = await t.deposit({ action: 'submit', department: 'intel', report: report() + '，关于 intel', thought: '想'.repeat(80) })
     assert.equal(one.body.ok, true, JSON.stringify(one.body))
     assert.equal(one.body.deposit.done, 1)
     assert.deepEqual(one.body.deposit.missing, ['谋划思考', '行为管理', '统筹规划'])
@@ -281,7 +286,9 @@ test('第五轮 硬约束：四段没交齐，当天没有放风额度；交齐�
     const before = await t.wall({ action: 'status' })
     assert.equal(before.body.wall.relaxRemaining, 0, '没交齐就该是 0')
     for (const key of ['intel', 'thinking', 'behavior', 'coord']) {
-      const r = await t.deposit({ action: 'submit', department: key, report: report(), thought: '想'.repeat(80) + key })
+      // A4：每段正文要先有一条当天记录对得上（见「晚间对照」）。
+      await t.note(key, '关于 ' + key + ' 的一条日间记录')
+      const r = await t.deposit({ action: 'submit', department: key, report: report() + '，关于 ' + key, thought: '想'.repeat(80) + key })
       assert.equal(r.body.ok, true, JSON.stringify(r.body))
     }
     const after = await t.wall({ action: 'status' })

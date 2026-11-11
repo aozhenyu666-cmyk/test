@@ -46,12 +46,33 @@ class _DepositPageState extends State<DepositPage> {
       builder: (_) => _DepositDialog(item: item),
     );
     if (out == null || !mounted) return;
-    final view = await _channel.deposit(department: item.key, report: out.$1, thought: out.$2);
+    // A4：行为管理部的汇报栏由墙按遥测生成，页面不送 report（送了插件也不看，只用想法栏）。
+    final view = await _channel.deposit(
+      department: item.key,
+      report: item.autoReport ? null : out.$1,
+      thought: out.$2,
+    );
     if (!mounted) return;
     setState(() => _view = view);
     final err = view?.error;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(err == null ? '交了「${item.label}」' : _errorText(err))),
+    );
+  }
+
+  /// A4：白天记一条（≤200 字）。晚上写那一段时对着这些记录写，不是凭空回忆。
+  Future<void> _note(DepositItem item) async {
+    final text = await showDialog<String>(
+      context: context,
+      builder: (_) => _SlotDialog(item: item),
+    );
+    if (text == null || !mounted) return;
+    final view = await _channel.deposit(department: item.key, text: text);
+    if (!mounted) return;
+    setState(() => _view = view);
+    final err = view?.error;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(err == null ? '记进「${item.label}」了' : _errorText(err))),
     );
   }
 
@@ -86,6 +107,18 @@ class _DepositPageState extends State<DepositPage> {
                   subtitleMaxLines: 3,
                   value: item.done ? '已交' : '去写',
                   onTap: () => unawaited(_write(item)),
+                  // A4：白天随手记一条；条数直接显示在这一行（晚上写汇报时对着它写）。
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('今天 ${item.slots} 条', style: Theme.of(context).textTheme.labelMedium),
+                      IconButton(
+                        tooltip: '记一条（${item.duty}）',
+                        icon: const Icon(AppIcons.edit, size: 18),
+                        onPressed: () => unawaited(_note(item)),
+                      ),
+                    ],
+                  ),
                 ),
             ],
           ),
@@ -122,11 +155,77 @@ class _DepositPageState extends State<DepositPage> {
   String _errorText(String code) => switch (code) {
     'too-thin' => '字不够或者像套话，插件退回了。再补几句具体的。',
     'bad-department' => '没有这个部门，刷新一下再试。',
+    'bad-slot' => '这条记录没记上：要么是空的，要么超过 200 字了。',
+    'unsupported' => '这一段没过：今天这个部没有一条记录能对上它。先去记一条，再写。',
     'no_transport' => '连不上大肥鱼：引擎还没连上',
     'no_answer' => '大肥鱼没回应，稍后再试',
     'timeout' => '大肥鱼超时了，稍后再试',
     _ => '没交上（$code）',
   };
+}
+
+/// A4：白天记一条（≤200 字）。晚上写那一段时对着这些记录写，不是凭空回忆。
+class _SlotDialog extends StatefulWidget {
+  const _SlotDialog({required this.item});
+
+  final DepositItem item;
+
+  @override
+  State<_SlotDialog> createState() => _SlotDialogState();
+}
+
+class _SlotDialogState extends State<_SlotDialog> {
+  final _text = TextEditingController();
+  static const int _max = 200;
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final item = widget.item;
+    final n = _text.text.trim().length;
+    return AlertDialog(
+      title: Text('记一条 · ${item.label}'),
+      content: SizedBox(
+        width: 360,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (item.duty.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text('这个部记：${item.duty}', style: Theme.of(context).textTheme.bodySmall),
+                ),
+              TextField(
+                controller: _text,
+                autofocus: true,
+                maxLines: 4,
+                minLines: 2,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  labelText: '刚才这一块做了什么',
+                  helperText: '$n / $_max 字（超了插件会退回）',
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(context.l10n.commonCancel)),
+        FilledButton(
+          onPressed: n == 0 || n > _max ? null : () => Navigator.pop(context, _text.text.trim()),
+          child: Text(context.l10n.commonSave),
+        ),
+      ],
+    );
+  }
 }
 
 /// 写一段：汇报内容 + 自己的想法，两边都实时显示够不够字。
@@ -178,14 +277,18 @@ class _DepositDialogState extends State<_DepositDialog> {
             children: [
               TextField(
                 controller: _report,
-                autofocus: true,
+                autofocus: !item.autoReport,
+                readOnly: item.autoReport,
+                enabled: !item.autoReport,
                 maxLines: 6,
                 minLines: 4,
                 onChanged: (_) => setState(() {}),
                 decoration: InputDecoration(
                   labelText: '汇报内容',
-                  hintText: item.hint,
-                  helperText: '${_chars(_report.text)} / ${item.minReport} 字',
+                  hintText: item.autoReport ? '这一栏由墙按今天的遥测自动生成，你不能改。' : item.hint,
+                  helperText: item.autoReport
+                      ? '墙生成，只读：${item.evidence}'
+                      : '${_chars(_report.text)} / ${item.minReport} 字',
                 ),
               ),
               const SizedBox(height: 12),
