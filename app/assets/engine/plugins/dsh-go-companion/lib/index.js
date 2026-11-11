@@ -21,7 +21,7 @@ import { BACKGROUND_LIMIT, backgroundFacts, loadCandidates, openMemoryDb } from 
 import { buildPrompt } from './prompt.js'
 import { appendLedger, readLedger, summarize } from './ledger.js'
 import { plan as decide } from './plan.js'
-import { DEFAULT_TZ, minuteOfDay as zoneMinuteOfDay, startOfDay as zoneStartOfDay, weekdayOf, zoneOr } from './tz.js'
+import { DEFAULT_TZ, hm as zoneHm, md as zoneMd, minuteOfDay as zoneMinuteOfDay, startOfDay as zoneStartOfDay, weekdayOf, zoneOr } from './tz.js'
 import { classifyReply } from './classify.js'
 import { gardenClass, judgeReply } from './judge.js'
 import { isStock } from './stock.js'
@@ -115,6 +115,9 @@ const DEFAULTS = Object.freeze({
   owner: '主人',
   self: '大肥鱼',
   timeZone: DEFAULT_TZ,
+  // R7 P0-2：时间基准固定北京时间。为真时忽略手机请求里的 timeZone（他出国 / 模拟器设成纽约都不带偏），
+  // 一律按 DEFAULT_TZ 算。关掉才会跟着手机时区走。
+  lockTimeZone: true,
   // 人格卡（口吻、口头禅、兴趣、关系、能说多狠、不碰的话题）和两种模式。
   persona: {},
   mode: 'partner',
@@ -218,6 +221,9 @@ function readConfig() {
       // no legacy config
     }
   }
+  // R7 P0-2：锁定时区就无视存下来的 timeZone——老配置里可能已经写进了手机时区（比如模拟器的 UTC）。
+  // 这一行兜住所有 `zoneOr(config.timeZone)` 的调用点，不用逐个改。
+  if (merged.lockTimeZone !== false) merged.timeZone = DEFAULT_TZ
   return merged
 }
 
@@ -299,6 +305,12 @@ function writeJson(file, value) {
 
 // 引擎跑在 TZ=GMT，凡是「今天」「零点」都必须按手机时区算，所以这里显式要 tz。
 // /plan 允许每次请求带上 timeZone（APP 那边知道手机时区），其余入口用配置里的。
+// R7 P0-2：`lockTimeZone` 为真（默认）时请求体里的时区一概不认，固定北京时间。
+function requestZone(tzIn, config) {
+  if (config.lockTimeZone !== false) return DEFAULT_TZ
+  return zoneOr(tzIn || config.timeZone)
+}
+
 function startOfDay(now, tz) {
   return zoneStartOfDay(now, zoneOr(tz))
 }
@@ -769,7 +781,7 @@ export function apply(ctx) {
     // 大肥鱼会在中午说"四点了快去睡"（人格测试测出来的）。
     makeMessage: (text) => ({
       id: randomUUID(), role: 'user', content: [{ type: 'text', text }],
-      source: { kind: 'user', rpcId: 'dsh-go-companion-say-' + randomUUID(), clientTimeZone: zoneOr(sayZone || config.timeZone) },
+      source: { kind: 'user', rpcId: 'dsh-go-companion-say-' + randomUUID(), clientTimeZone: requestZone(sayZone, config) },
     }),
     isArchived: (id) => isArchived(ctx, id),
     defaultSession: () => config.sessionId,
@@ -1658,7 +1670,7 @@ export function apply(ctx) {
       execute: (args = {}) => {
         const now = Date.now()
         const mins = Math.max(5, Math.min(480, Math.round(Number(args.minutes) || 0)))
-        const hm = (at) => new Date(at).toISOString().slice(11, 16) + ' UTC'
+        const hm = (at) => zoneHm(Number(at), zoneOr(config.timeZone))
         let text = ''
         if (args.action === 'busy') {
           // 进入忙时必须有时长：默认 40 分钟，最长 60 分钟（10 分钟起步）。
@@ -1719,7 +1731,7 @@ export function apply(ctx) {
         const minutes = Math.max(10, Math.min(180, Math.round(Number(args.minutes) || 45)))
         const until = now + minutes * 60_000
         const reason = String(args.reason || '').trim().slice(0, 160)
-        const hm = new Date(until).toISOString().slice(11, 16) + ' UTC'
+        const hm = zoneHm(until, zoneOr(config.timeZone))
         if (args.mode === 'refuse') {
           config = { ...config, refuseUntil: Math.max(until, Number(config.refuseUntil) || 0), refuseBy: 'ai' }
           try {
@@ -1823,7 +1835,7 @@ export function apply(ctx) {
    * 只 record()，绝不 applyVerdict——不加锁、不罚、不扣额度。
    */
   function anchorSweep(now, tzIn) {
-    const tz = zoneOr(tzIn || config.timeZone)
+    const tz = requestZone(tzIn, config)
     const day = startOfDay(now, tz)
     const seen = readLedger(home(), 400).filter((e) => e?.state === 'wall-audit' && Number(e.at) >= day).map((e) => e.kind)
     for (const a of absentAnchors(zoneMinuteOfDay(now, tz), weekdayOf(now, tz), seen)) {
@@ -2199,7 +2211,7 @@ export function apply(ctx) {
           // 这一轮照样生效
         }
         record({ state: 'block', at: now, apps, until, by: role, reason: String(args.reason || '').slice(0, 120) })
-        return { ok: true, text: '封了 ' + apps.join('、') + '，到 ' + new Date(until).toISOString().slice(5, 16).replace('T', ' ') + ' UTC。' + (skipped.length ? '（' + skipped.join('、') + ' 永远不封）' : '') }
+        return { ok: true, text: '封了 ' + apps.join('、') + '，到 ' + zoneMd(until, zoneOr(config.timeZone)) + ' ' + zoneHm(until, zoneOr(config.timeZone)) + '。' + (skipped.length ? '（' + skipped.join('、') + ' 永远不封）' : '') }
       },
     }
   }
@@ -2570,7 +2582,7 @@ export function apply(ctx) {
         const { ledger, record: rec } = appendPrediction(cur, v.value)
         savePredict(ledger)
         record({ state: 'predict-new', at: now, by: role, id: rec.id, claim: rec.claim })
-        const when = new Date(rec.dueAt).toISOString().slice(5, 16).replace('T', ' ') + ' UTC'
+        const when = zoneMd(rec.dueAt, zoneOr(config.timeZone)) + ' ' + zoneHm(rec.dueAt, zoneOr(config.timeZone))
         return {
           ok: true,
           text: '押上了（' + rec.id + '），' + when + ' 由墙的遥测判。判据：' +
@@ -2619,7 +2631,7 @@ export function apply(ctx) {
    */
   function wallRoute(body) {
     const now = Date.now()
-    const tz = zoneOr(body?.timeZone || config.timeZone)
+    const tz = requestZone(body?.timeZone, config)
     const action = String(body?.action || 'status')
     const status = () => {
       const wd = wallDecision(config, now, tz)
@@ -2671,7 +2683,7 @@ export function apply(ctx) {
    */
   function depositRoute(body) {
     const now = Date.now()
-    const tz = zoneOr(body?.timeZone || config.timeZone)
+    const tz = requestZone(body?.timeZone, config)
     const action = String(body?.action || 'status')
     const view = () => {
       const s = statusOf(depositToday(now))
@@ -3147,7 +3159,7 @@ export function apply(ctx) {
     const names = roleNames(config)
     const refuseAt = Number(config.refuseUntil) || 0
     const refuseLines = refuseAt > Date.now()
-      ? ['拒绝模式开着（到 ' + new Date(refuseAt).toISOString().slice(11, 16) + ' UTC）：他一打开娱乐 App 手机就会把他赶回桌面锁住。他求你放行，不松；要关只能他自己说"关掉拒绝模式"。']
+      ? ['拒绝模式开着（到 ' + zoneHm(refuseAt, zoneOr(config.timeZone)) + '）：他一打开娱乐 App 手机就会把他赶回桌面锁住。他求你放行，不松；要关只能他自己说"关掉拒绝模式"。']
       : []
     // D6：议程跟当前主状态走（状态机在 machine.js，追问锁是叠在上面的临时层）。
     // 锁的对外形状统一走 followupView（{active,reason,currentQuestion,since,until}），别再自己拼。
@@ -3163,7 +3175,7 @@ export function apply(ctx) {
       ...depositLines(depositToday(Date.now()), Boolean(lastRhythm?.reviewGate)),
       ...agendaLines(mainState), ...knowledgeLines(kbDir(notesDir(), home()), role)]
     const notes = notesFor(role).map((n) => (n.from === 'companion' ? names.companion : names.strategist) + '刚跟你递话（' +
-      new Date(Number(n.at)).toISOString().slice(11, 16) + ' UTC）："' + n.text + '"')
+      zoneHm(Number(n.at), zoneOr(config.timeZone)) + '）："' + n.text + '"')
     const noteLines = notes.length ? ['姐妹之间的悄悄话（他看不到，自然地用上就行）：', ...notes.map((t) => '- ' + t)] : []
     // 内容层随机：只加不减，常驻层已经全在 stateLines 里。
     const vibeLines = (() => {
@@ -3446,7 +3458,7 @@ export function apply(ctx) {
 
   function planRoute(body) {
     const now = Date.now()
-    const tz = zoneOr(body?.timeZone || config.timeZone)
+    const tz = requestZone(body?.timeZone, config)
     try {
       syncVaultRules(now)
     } catch (error) {
@@ -3845,7 +3857,7 @@ export function apply(ctx) {
    */
   function workflowsRoute(body) {
     const now = Date.now()
-    const tz = zoneOr(body?.timeZone || config.timeZone)
+    const tz = requestZone(body?.timeZone, config)
     const entries = readLedger(home(), 300)
     const read = () => ({ v: 1, ok: true, workflows: workflowStatus(config.workflows, entries, now, tz) })
     const save = () => {
@@ -3921,7 +3933,7 @@ export function apply(ctx) {
 
   function sistersRoute(body) {
     const now = Date.now()
-    const tz = zoneOr(body?.timeZone || config.timeZone)
+    const tz = requestZone(body?.timeZone, config)
     const today = dayString(now, tz)
     const snap = panelSnapshot()
     const dir = notesDir()
@@ -4137,7 +4149,8 @@ function mergeConfig(current, body) {
     for (const k of ['companionCard', 'strategistCard']) if (typeof body[k] === 'string') next[k] = body[k].slice(0, 4000)
     if (typeof body.owner === 'string' && body.owner.trim()) next.owner = body.owner.trim().slice(0, 40)
     if (typeof body.self === 'string' && body.self.trim()) next.self = body.self.trim().slice(0, 40)
-    if (typeof body.timeZone === 'string' && body.timeZone.trim()) next.timeZone = zoneOr(body.timeZone)
+    if (typeof body.lockTimeZone === 'boolean') next.lockTimeZone = body.lockTimeZone
+    if (typeof body.timeZone === 'string' && body.timeZone.trim() && next.lockTimeZone === false) next.timeZone = zoneOr(body.timeZone)
     // 判球模型：空字符串 = 清掉，回到沿用会话。
     if (typeof body.judgeProvider === 'string') next.judgeProvider = body.judgeProvider.trim().slice(0, 80) || undefined
     if (typeof body.judgeModel === 'string') next.judgeModel = body.judgeModel.trim().slice(0, 120) || undefined

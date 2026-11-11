@@ -19,6 +19,7 @@ import io.github.ccch1mneyyy.dsh_app.loop.core.AgentReply
 import io.github.ccch1mneyyy.dsh_app.loop.core.AgentWire
 import io.github.ccch1mneyyy.dsh_app.loop.core.AtomicJsonFile
 import io.github.ccch1mneyyy.dsh_app.loop.core.BackgroundCaps
+import io.github.ccch1mneyyy.dsh_app.loop.core.BeijingClock
 import io.github.ccch1mneyyy.dsh_app.loop.core.Clocks
 import io.github.ccch1mneyyy.dsh_app.loop.core.Command
 import io.github.ccch1mneyyy.dsh_app.loop.core.Coordinator
@@ -51,8 +52,6 @@ import io.github.ccch1mneyyy.dsh_app.phone.a11y.SessionPolicy
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.SessionVerdict
 import io.github.ccch1mneyyy.dsh_app.loop.intercept.InterceptRuntime
 import java.io.File
-import java.util.Calendar
-import java.util.TimeZone
 import java.util.UUID
 
 /** Carries agent commands to the engine. Implemented over Flutter (Dart holds the engine cookie). */
@@ -367,7 +366,7 @@ object ProactiveRuntime {
         fetchPluginRoute(routeCallback { m ->
             val error = ((m["error"] as? Map<*, *>)?.get("code") as? String)
             if (error != null) done(null, error) else pollSay(id, deadline, done)
-        }, "POST", "/say", linkedMapOf("v" to 1, "requestId" to id, "text" to text, "timeZone" to TimeZone.getDefault().id))
+        }, "POST", "/say", linkedMapOf("v" to 1, "requestId" to id, "text" to text, "timeZone" to BeijingClock.ZONE.id))
     }
 
     private fun pollSay(id: String, deadline: Long, done: (String?, String?) -> Unit) {
@@ -426,7 +425,7 @@ object ProactiveRuntime {
             "/plan",
             // 不带 roll：骰子由插件自己掷。以前带 roll=100（只拿 /plan 定时间时的写法），
             // 在"插件说开口才开口"之后等于永远掷不中，大肥鱼就不主动说话了。
-            linkedMapOf<String, Any?>("timeZone" to TimeZone.getDefault().id)
+            linkedMapOf<String, Any?>("timeZone" to BeijingClock.ZONE.id)
                 .also { body -> phoneContext()?.let { body["phone"] = it } },
         )
     }
@@ -1452,9 +1451,7 @@ object ProactiveRuntime {
         val mode = ops.checkOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), app.packageName)
         if (mode != android.app.AppOpsManager.MODE_ALLOWED) return@runCatching null
         val usm = app.getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
-        val start = Calendar.getInstance(TimeZone.getDefault()).run {
-            timeInMillis = wall; set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0); timeInMillis
-        }
+        val start = BeijingClock.startOfDay(wall)
         val events = usm.queryEvents(start, wall)
         val e = android.app.usage.UsageEvents.Event()
         val counts = HashMap<String, Int>()
@@ -1471,11 +1468,7 @@ object ProactiveRuntime {
         counts
     }.getOrNull()
 
-    private fun minuteOfDay(wall: Long): Int = Calendar.getInstance(TimeZone.getDefault()).run {
-        timeInMillis = wall; get(Calendar.HOUR_OF_DAY) * 60 + get(Calendar.MINUTE)
-    }
+    private fun minuteOfDay(wall: Long): Int = BeijingClock.minuteOfDay(wall)
 
-    private fun dayOf(wall: Long): Long = Calendar.getInstance(TimeZone.getDefault()).run {
-        timeInMillis = wall; get(Calendar.YEAR) * 1000L + get(Calendar.DAY_OF_YEAR)
-    }
+    private fun dayOf(wall: Long): Long = BeijingClock.dayOf(wall)
 }

@@ -13,6 +13,7 @@ import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import io.github.ccch1mneyyy.dsh_app.loop.core.BeijingClock
 import io.github.ccch1mneyyy.dsh_app.loop.core.CoreCodecPublic
 import io.github.ccch1mneyyy.dsh_app.loop.core.ProactiveScheduler
 import io.github.ccch1mneyyy.dsh_app.loop.core.SchedulerConfig
@@ -173,18 +174,18 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
             // 墙不谈判：这里没有「放松」按钮，放松只能走晚上对账后的申请窗口。
             "wallStatus" -> ProactiveRuntime.fetchPluginRoute(
                 result, "POST", "/wall",
-                linkedMapOf("action" to "status", "timeZone" to java.util.TimeZone.getDefault().id),
+                linkedMapOf("action" to "status", "timeZone" to BeijingClock.ZONE.id),
             )
             // 姐妹界面（R4-5）：两张角色卡 + 今日审计面板。只读，放松规则的入口不在这里。
             "sisters" -> ProactiveRuntime.fetchPluginRoute(
                 result, "POST", "/sisters",
-                linkedMapOf("timeZone" to java.util.TimeZone.getDefault().id),
+                linkedMapOf("timeZone" to BeijingClock.ZONE.id),
             )
             // 每日四部门提交（第五轮）：信息收集 / 谋划思考 / 行为管理 / 统筹规划。
             // action=status 只读，action=submit 交一段（字数不到插件当场退回）。
             "deposit" -> {
                 val body = LinkedHashMap<String, Any?>()
-                body["timeZone"] = java.util.TimeZone.getDefault().id
+                body["timeZone"] = BeijingClock.ZONE.id
                 (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String && k != "timeZone") body[k] = v }
                 ProactiveRuntime.fetchPluginRoute(result, "POST", "/deposit", body)
             }

@@ -10,6 +10,7 @@ import { temperLine } from './temper.js'
 import { drillLines } from './drills.js'
 import { trackLines } from './tracks.js'
 import { COMPANION_REPLY_LINE, COMPANION_SERVE_RULES, companionBallFrame, companionSpecialLines, strategistBallFrame } from './roles.js'
+import { hm } from './tz.js'
 
 const KIND_RULES = {
   continue:
@@ -125,7 +126,7 @@ export function buildPrompt(input) {
   // 5.2 阶梯：上一球被漠视了。不重发、不追责，换个更轻的球，或者干脆拿这件事当话头。
   if (input.ignored) {
     const g = input.ignored
-    const when = g.at ? new Date(Number(g.at)).toISOString().slice(11, 16) + ' UTC' : '刚才'
+    const when = g.at ? hm(Number(g.at)) : '刚才'
     const kind = SERVE_LABEL[String(g.serveType || '')] || '那句'
     lines.push(
       '你上一球（' + kind + '，' + when + ' 发的）没有回音。别重复那句，也别追问为什么不回。' +
