@@ -197,7 +197,10 @@ check('三球都没接 → 停下，3 小时后再看', pl.body.reason === 'no-t
 console.log('【F. 水位与力度】')
 reset()
 const tzF = dayZone()
-sid = await newSession({ mode: 'coach', minGapMs: 30 * 60_000 })
+// R7 P0-2 之后时间基准默认锁北京，这条「挑一个正好 11–20 点的时区」的逃生口就失效了——
+// CI 跑到北京凌晨时会撞上作息表的深夜锁。这一段测的是力度和水位，不是时区，所以这里显式
+// 关掉 lockTimeZone 并用 tzF，让它跟墙上时钟无关。G 段再显式锁回去，两段各自自洽。
+sid = await newSession({ mode: 'coach', minGapMs: 30 * 60_000, lockTimeZone: false, timeZone: tzF })
 const pClear = await route('POST', '/plan', { roll: 100, timeZone: tzF, phone: wechat() })
 const pTrap = await route('POST', '/plan', { roll: 100, timeZone: tzF, phone: game(70) })
 check('打游戏 70 分钟（严格）→ 赶出去', pTrap.body.force?.name === 'home', pTrap.body.force)
@@ -217,11 +220,26 @@ await route('POST', '/config', { control: true })
 // ---------------------------------------------------------------- G. 时区与安静时段
 console.log('【G. 时区】')
 const shHour = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', hour: 'numeric', hourCycle: 'h23' }).format(new Date()))
-sid = await newSession({ quietStart: shHour, quietEnd: (shHour + 1) % 24 })
+sid = await newSession({ quietStart: shHour, quietEnd: (shHour + 1) % 24, lockTimeZone: true })
 pl = await route('POST', '/plan', { roll: 0, timeZone: 'Asia/Shanghai', phone: wechat() })
 check('按手机时区（上海 ' + shHour + ' 点）算安静时段', pl.body.reason === 'quiet', pl.body)
+// R7 P0-2：时间基准固定北京时间，请求体里的时区不再影响判定。
+// 这条以前断言「换个时区就不在安静时段」，现在反过来断言「换哪个时区判定都一样」——
+// 契约变了，断言跟着变严：不只看纽约，还要看三家（含 UTC+14）全都和北京完全一致。
+const zones = ['America/New_York', 'Pacific/Kiritimati', 'UTC', 'Asia/Tokyo']
+const reasons = []
+for (const tz of zones) {
+  const r = await route('POST', '/plan', { roll: 0, timeZone: tz, phone: wechat() })
+  reasons.push(r.body.reason)
+}
+check('换任何时区请求体都不影响安静时段（都是北京 ' + shHour + ' 点）', reasons.every((x) => x === 'quiet'), reasons)
+// 开关不是死代码：显式关掉 lockTimeZone 之后，请求体时区恢复生效（纽约差 12 小时，不可能落进这一小时）
+await route('POST', '/config', { lockTimeZone: false, timeZone: 'America/New_York' })
 pl = await route('POST', '/plan', { roll: 0, timeZone: 'America/New_York', phone: wechat() })
-check('换个时区就不在安静时段', pl.body.reason !== 'quiet', pl.body)
+check('关掉 lockTimeZone 后请求体时区恢复生效', pl.body.reason !== 'quiet', pl.body)
+pl = await route('POST', '/plan', { roll: 0, timeZone: 'Asia/Shanghai', phone: wechat() })
+check('关掉 lockTimeZone 后上海时区仍算安静时段', pl.body.reason === 'quiet', pl.body)
+await route('POST', '/config', { lockTimeZone: true })
 
 // ---------------------------------------------------------------- G2. 手机真实的请求体
 console.log('【G2. 手机真实请求体】')
