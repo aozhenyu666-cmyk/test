@@ -50,6 +50,7 @@ import {
 import { lastReplyClass, exportImportantMemories, readCommitments, readCorePersona, readMood } from './context.js'
 import { cleanPhone, funToday, worthObserving } from './phone.js'
 import { NOTES_CANDIDATES, agendaLines, capabilityLines, companionChatText, roleNames, strategistChatText } from './roles.js'
+import { fitBudget, stripInjection } from './budget.js'
 import { tide as tideOf, tideGap, tideHourly, vagueStreak } from './tide.js'
 import { FACES, stepTemper, temperLine } from './temper.js'
 import { drillLines, drillOf, pickDrill, scoldLines } from './drills.js'
@@ -72,7 +73,7 @@ import {
   FOLLOWUP_CAP_MS, FOLLOWUP_PENALTY, STANDBY_LOCK_MS, addObligation, checkVerdict, clearObligation, closeLock, followupView,
   funBlockedBy, lockActive, lockExpired, obligationOf, obligationsView, openLock, standbyDue, takeReask,
 } from './followup.js'
-import { BRAIN_MIN_MS, SPRINT_LONG_MIN, SPRINT_MIN, resolveState } from './machine.js'
+import { BRAIN_MIN_MS, SPRINT_LONG_MIN, SPRINT_MIN, resolveState, toolsElsewhere, toolsFor } from './machine.js'
 import {
   DEFAULT_WALL, wallConfig, wallDecision, mealNow, activeRelax, tightenActive, relaxRemaining, relaxUsedThisWeek, relaxBonus,
   trackApplyWindow, applyWindowOpen, dayKey, weekKey, WALL_KIND_DEFAULT, wallDefianceText,
@@ -1228,6 +1229,38 @@ export function apply(ctx) {
     }
   }
   // ---------------------------------------------------------------- 档位 / Gemini / 控制
+  /**
+   * R7 P0-3：一次返回「有哪些东西可查」，不返回正文（借 dsh-xingxi 的做法）。
+   * 上下文预算之后能常驻的东西有限，细节靠这个目录 + 各自的工具按需去取。
+   */
+  function fishIndexTool() {
+    return {
+      name: 'fish_index',
+      description: '看一眼现在手里有什么：今天定了几件事、四段汇报还缺几段、笔记库最近动过什么、当前状态下哪些能力被收起。不带参数；要正文再用对应的工具去取。',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      output: toolOutput,
+      execute: () => {
+        const now = Date.now()
+        const tz = zoneOr(config.timeZone)
+        const state = mainStateNow()
+        const daily = loadDaily(loadDailyState(), now, tz)
+        const dep = statusOf(depositToday(now))
+        const lines = [
+          '现在的主状态：' + state + '（这个状态挂着 ' + toolsFor(state).length + ' 个工具）',
+          '今天定了 ' + (daily.tasks || []).length + ' 件事' + ((daily.tasks || []).length ? '：' + daily.tasks.map((t) => t.task).join('、').slice(0, 120) : ''),
+          '四段汇报：交了 ' + (DEPARTMENTS.length - dep.missing.length) + '/' + DEPARTMENTS.length + (dep.missing.length ? '，还缺 ' + dep.missing.join('、') : ''),
+        ]
+        const recent = vaultRecentNotes(notesDir(), { limit: 3, now })
+        lines.push('笔记库最近动过 ' + recent.length + ' 个文件' + (recent.length ? '：' + recent.map((n) => n.rel).join('、') : '（没配笔记库或没改动）'))
+        lines.push('立场记录、暗思考产物：这两个仓还没建（后面的工单才有），现在没有东西可查。')
+        const gone = toolsElsewhere(state)
+        lines.push(gone.length
+          ? '当前状态收起的能力（能做，但要等对应状态）：' + gone.map((g) => g.name + '@' + g.when.join('/')).join('、')
+          : '当前状态没有收起任何能力。')
+        return { ok: true, text: lines.join('\n').slice(0, 600) }
+      },
+    }
+  }
   const loadRhythm = () => readState(stateFile('rhythm.json'), {}) || {}
   const saveRhythm = (r) => writeJson(stateFile('rhythm.json'), r)
   /** 最近一次 /plan 算出的作息（早上门 / 晚上门 / 深夜阶段 / 深夜锁到几点）。 */
@@ -3152,6 +3185,18 @@ export function apply(ctx) {
     vibeCache = { at: now, role, lines }
     return lines
   }
+  /** 当前主状态（人设、fish_index、工具子集都用这一个口径，别各算一套）。 */
+  function mainStateNow() {
+    const now = Date.now()
+    return resolveState({
+      now,
+      tz: zoneOr(config.timeZone),
+      config,
+      rhythm: lastRhythm || {},
+      followup: followupView(config.followup, now),
+      session: loadGemini().session,
+    }).state
+  }
   function chatPersonaText(role) {
     if (config.personaInChat === false) return ''
     const mode = effectiveMode(config, Date.now())
@@ -3163,14 +3208,7 @@ export function apply(ctx) {
       : []
     // D6：议程跟当前主状态走（状态机在 machine.js，追问锁是叠在上面的临时层）。
     // 锁的对外形状统一走 followupView（{active,reason,currentQuestion,since,until}），别再自己拼。
-    const mainState = resolveState({
-      now: Date.now(),
-      tz: zoneOr(config.timeZone),
-      config,
-      rhythm: lastRhythm || {},
-      followup: followupView(config.followup, Date.now()),
-      session: loadGemini().session,
-    }).state
+    const mainState = mainStateNow()
     const stateLines = [...trustLines(trustNow()), ...rhythmLines(lastRhythm), ...gearLines(config, Date.now()), ...geminiLines(loadGemini(), Date.now()),
       ...depositLines(depositToday(Date.now()), Boolean(lastRhythm?.reviewGate)),
       ...agendaLines(mainState), ...knowledgeLines(kbDir(notesDir(), home()), role)]
@@ -3185,15 +3223,44 @@ export function apply(ctx) {
         return [] // 随机器坏了不能拖垮人设
       }
     })()
-    if (role === 'strategist') {
-      // 关系库人物卡（价值观/底线/边界）是姐姐的底子。
-      const core = personaLines(mergePersona(readCorePersona(home()), {}), mode).filter((l) => !/^现在是(伙伴|教练)模式/.test(l))
-      return strategistChatText(config, core, [...refuseLines, ...stateLines, ...vibeLines, capabilityLines('strategist', { notesDir: notesDir() }), ...noteLines])
+    // R7 P0-3：不再直接拼字符串——每一块带 layer/priority 进预算，超了按优先级整块裁。
+    // 约束层（人设底稿 + 关系库卡 + 拒绝模式 + 能力说明 + 议程）永不裁，它超了 fitBudget 会抛错；
+    // 状态层（信用分/作息/档位/连麦/四段/知识库）按 priority 装；内容层（随机块/悄悄话）最后装。
+    const core = role === 'strategist'
+      ? personaLines(mergePersona(readCorePersona(home()), {}), mode).filter((l) => !/^现在是(伙伴|教练)模式/.test(l))
+      : []
+    const modeLines = mode === 'coach' ? ['他现在开了严格模式：你可以更凶、更不依不饶，但还是你自己的样子。'] : []
+    const blocks = [
+      {
+        id: 'persona',
+        layer: 'constraint',
+        priority: 100,
+        text: role === 'strategist' ? strategistChatText(config, core, []) : companionChatText(config, modeLines),
+      },
+      { id: 'refuse', layer: 'constraint', priority: 95, text: refuseLines.join('\n') },
+      { id: 'capability', layer: 'constraint', priority: 90, text: capabilityLines(role, { notesDir: notesDir() }) },
+      { id: 'agenda', layer: 'constraint', priority: 85, text: agendaLines(mainState).join('\n') },
+      { id: 'trust', layer: 'state', priority: 60, text: trustLines(trustNow()).join('\n') },
+      { id: 'rhythm', layer: 'state', priority: 55, text: rhythmLines(lastRhythm).join('\n') },
+      { id: 'gear', layer: 'state', priority: 50, text: gearLines(config, Date.now()).join('\n') },
+      { id: 'gemini', layer: 'state', priority: 45, text: geminiLines(loadGemini(), Date.now()).join('\n') },
+      { id: 'deposit', layer: 'state', priority: 40, text: depositLines(depositToday(Date.now()), Boolean(lastRhythm?.reviewGate)).join('\n') },
+      { id: 'knowledge', layer: 'state', priority: 35, text: knowledgeLines(kbDir(notesDir(), home()), role).join('\n') },
+      { id: 'vibe', layer: 'content', priority: 20, text: vibeLines.join('\n') },
+      { id: 'notes', layer: 'content', priority: 10, text: noteLines.join('\n') },
+    ]
+    const fitted = fitBudget(blocks, config.ctxBudget)
+    // 超预算的块要能被看见（规格第 4 条）。落自己的 ctx-budget.jsonl，不塞 ledger.jsonl：
+    // 账本那边有按行位置断言的既有用例，不能被每轮一条的注入记录挤动。
+    try {
+      appendFileSync(stateFile('ctx-budget.jsonl'), JSON.stringify({
+        at: Date.now(), role, chars: fitted.chars, kept: fitted.kept, dropped: fitted.dropped,
+      }) + '\n', 'utf8')
+    } catch {
+      // 记不上不能拖垮人设
     }
-    const extra = mode === 'coach' ? ['他现在开了严格模式：你可以更凶、更不依不饶，但还是你自己的样子。'] : []
-    return companionChatText(config, [...extra, ...refuseLines, ...stateLines, ...vibeLines, capabilityLines('companion', { notesDir: notesDir() }), ...noteLines])
-  }
-  /** role -> {sid, agent, off}：两个会话各挂各的人设。 */
+    return fitted.text
+  }  /** role -> {sid, agent, off}：两个会话各挂各的人设。 */
   const personaMounts = new Map()
   function mountOne(role, sid) {
     const cur = personaMounts.get(role) || { sid: '', agent: null, off: null }
@@ -3226,7 +3293,13 @@ export function apply(ctx) {
         controlTool(), startTaskTool(role), blockTool(role), tightenTool(role), relaxTool(role),
         wallTool(role), verdictTool(role), breakTool(role), endTaskTool(role),
         dailyPlanTool(role), dailyReviewTool(role), predictTool(role), workflowTool(role),
+        fishIndexTool(),
       ].filter(Boolean)
+      // R7 P0-3：STATE_TABLE 里每个主状态都写了 tools 子集（≤8），toolsFor() 拿得到，
+      // fish_index 也按它告诉模型「哪些能力什么时候能用」。但这里仍然挂全集——
+      // 实测按子集挂会让 18 条既有用例红（测试直接拿 t.sis.tools.xxx 调用，
+      // 且挂载时刻的主状态由墙上时钟决定，测试无法预定）。冲突与实测数据写在
+      // docs/dafeiyu/第七轮进度.md 的 P0-3 一节「没做到的」里，不在这里偷偷改断言。
       for (const tool of list) {
         try {
           const off = agent.ctx.tools.register(tool)
@@ -3357,7 +3430,7 @@ export function apply(ctx) {
           // user/message 事件先到；不先记上就会再发一球，把浮层里正在聊的窗口顶掉。
           const target = toStrategist ? config.strategistSessionId : config.sessionId
           if (target) lastHumanAt.set(String(target), Date.now())
-          record({ state: 'say-text', at: Date.now(), to: toStrategist ? 'strategist' : 'companion', text: said.slice(0, 300), via: 'overlay' })
+          record({ state: 'say-text', at: Date.now(), to: toStrategist ? 'strategist' : 'companion', text: stripInjection(said).slice(0, 300), via: 'overlay' })
           const r = await chat.request({
             v: 1, requestId: id, eventId: id, kind: 'say', payload: { text: said.slice(0, 2_000) }, deadlineMs: 120_000,
             ...(toStrategist ? { sessionId: config.strategistSessionId } : {}),
@@ -4028,7 +4101,7 @@ export function apply(ctx) {
     if (!said) return '说点什么再发。'
     const sis = config.sessionId
     const big = config.dual !== false ? config.strategistSessionId : ''
-    record({ state: 'say-text', at: Date.now(), to, text: said.slice(0, 300), via: 'panel' })
+    record({ state: 'say-text', at: Date.now(), to, text: stripInjection(said).slice(0, 300), via: 'panel' })
     if (to === 'strategist' && !big) return '还没设谋士会话。'
     if (to === 'companion' || (to === 'both' && !big)) {
       if (!sis) return '还没设陪伴会话。'

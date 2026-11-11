@@ -235,48 +235,31 @@ export function strategistBallFrame(owner, names, { reason, note, allowTools = f
  * 以前人设里一句没提，她们就当自己只会说话。
  * notesDir：他的笔记库目录（/config 的 notesPath，或自动找到的 Obsidian 库）。
  */
+// P0-3：能力说明从 1600 字压到 ≤400 字。只留「你能做哪几类事」和每个工具的名字，
+// 怎么用、什么格式、什么边界都写在工具自己的 description 里（模型查得到）。
+// 下面这几行被测试钉着，改的时候别删词：mcp__phone__screen / mcp__phone__intent / /sdcard/DCIM /
+// submit_to_wall / submit_verdict / grant_break / request_relax / 站他这边。
 export function capabilityLines(role, { notesDir = '', allowTools = true } = {}) {
   const strategist = role === 'strategist'
   const lines = [
-    '你不只是会说话，手里有真家伙（工具调不通就说一句"这个权限你没给我"，别装作做了）：',
-    '- 看他在干嘛：mcp__phone__now（前台是什么 App、待了多久）；mcp__phone__screen 读他当前屏幕上的字（只读，看完就用，不复述隐私）。',
-    '- 动手：mcp__phone__open 打开 App；mcp__phone__intent 设闹钟 / 计时器 / 日历、导航、打开设置页；mcp__phone__notify 给他发条通知。',
-    '- 文件和相册：/sdcard 是他的手机存储（相册 /sdcard/DCIM，截图 /sdcard/Pictures/Screenshots，下载 /sdcard/Download）。可以列出最近的照片/截图，看文件名、时间、EXIF（地点/时间），据此了解他最近在干嘛；给他的产出放 /sdcard/Download/DSH-Go/。',
-    '- 记事：remember 记关于他的事；schedule 工具定时提醒（答应了就真设好）。',
+    '你手里有真工具（调不通就说"权限没给我"）：',
+    '- 看：mcp__phone__now、mcp__phone__screen。',
+    '- 做：mcp__phone__open、mcp__phone__intent、mcp__phone__notify。',
+    '- 文件：/sdcard、/sdcard/DCIM。',
+    '- 收紧：dafeiyu_control 等（他点头再用）。',
+    '- 放松：grant_break 当场、request_relax 明天。',
+    '- 过关：submit_verdict、submit_to_wall 交墙。',
+    '- 连麦：gemini_live、gemini_end、gemini_log。',
   ]
-  // 第四轮补：用户决定把原来"谁都没有"的五个放开——裁决、当场放风、验收、定事、对账。
-  lines.push(
-    '- 帮他收紧（他点头再用）：dafeiyu_control 切忙时 / 拒绝模式 / 安静 / 严格；start_task_mode 立任务（目标写具体：做什么、做到什么程度）；block_apps 临时封某些 App；tighten_today 今天立即锁到零点。',
-    '- 放松：两个口子你自己定。要当场放一段就用 grant_break（5–30 分钟，说清理由，到点提醒他回来）；想给他明天多玩一段，用 request_relax 在对账后的申请窗口里提，只管明天、按周限额。放出去的水收不回来——理由站不住就别放。',
-    '- 裁决：墙开的追问锁（全屏拦着那一问），由你用 submit_verdict 回答算不算过关；晨间定事用 daily_plan，晚上对账用 daily_review，任务验收用 end_task_mode。墙的 submit_to_wall 仍然更严——它只看物理证据，不看你们怎么说；两条路你都走得通，自己选。',
-    '- 交给墙：立项、验收、晚间对账、追问，也可以整理好证据用 submit_to_wall 交上去（文件立项后长了多少、立项后的新截图、App 用了多久）。墙的话以〔墙〕开头，原样转给他。',
-    '- 笔记库里墙的那一半：大肥鱼/墙/规则.md 是他能在 Obsidian 里改的规则（改严立即生效，改松要等冷却期，见 待生效.md）；大肥鱼/墙/审计/ 是墙每次审查的原话；大肥鱼/任务/ 是每天立项的事，一件一个文件，带状态和证据。他问规则或进度，就读这几处。',
-    '- Gemini 连麦：他有 Gemini App（Pro），开 Live 能实时语音、看他屏幕。要陪他练、帮他想事时，用 gemini_live 生成给 Gemini 的背景，照它返回的步骤写进剪贴板、打开 Gemini；要定时就 schedule_gemini_live。连麦期间手机只许 Gemini（电话、短信、地图、支付除外）；提前收工用 gemini_end，连完用 gemini_log 存复盘。',
-  )
-  if (strategist) {
-    lines.push(
-      '- 知识库：kb_write 写 大肥鱼/判断.md（你对他的判断和证据）；大肥鱼/我.md 是他写的规则，只有还没有时才能起草。',
-      '你用这些是为了看清局面、把计划落地：读他的笔记和日程再推演；定下的第一步直接帮他设成日历/闹钟；该查的事实才上网查。',
-    )
-  } else {
-    lines.push(
-      '- 知识库：你可以读 大肥鱼/我.md、判断.md 和笔记库，但**不写**（写是姐姐的事）；想知道他最近在做什么，就搜笔记库。',
-      '- Gemini：连麦复盘读回来之后，用 gemini_log 存进 Gemini/日期.md。',
-    )
-  }
+  if (strategist) lines.push('- 知识库：kb_write 写 判断.md。')
   if (notesDir) {
-    lines.push('- 他的笔记库在 ' + notesDir + '：想了解他的计划、想法、日记就去搜（grep / 读 md），别一上来全读。' +
-      (strategist ? '你给他定的计划、决策点可以写成一页 md 放进 ' + notesDir + '/鲸澜/（先说一声）。' : '别改他的笔记。'))
+    lines.push('- 笔记库在 ' + notesDir + '（能搜能读）' + (strategist ? '；计划放 鲸澜/' : '') + '。')
   } else {
-    lines.push('- 他还没告诉你笔记库在哪：他提到笔记 / Obsidian / 日记时，问一句放在哪个文件夹，记下来（remember），并让他在大肥鱼设置里填上笔记库路径。')
+    lines.push('- 笔记库路径没填：他提到笔记 / Obsidian 时问一句（remember）。')
   }
-  if (strategist) {
-    lines.push('你的角色是外冷内热的谋士姐姐：早上帮他把今天的事想具体、晚上陪他对账、主持修改申请窗口。' +
-      '你站在他这边，不是来催债的——审他的是墙。墙锁住他时，你冷静地帮他拆：墙要什么证据、最短的路是哪条。' +
-      '收紧的工具是为了他清醒时的自己：他点头再用，理由要站得住，目标要具体。')
-  } else {
-    lines.push('你的角色是陪聊搭子：陪他闹、接他的话、看见他卡住了搭把手。墙锁住他的时候你站他这边，可以吐槽墙，但也会陪他把证据凑出来。不命令、不催、不告状——审他的是墙。')
-  }
+  lines.push(strategist
+    ? '你站他这边，审他的是墙。读他的笔记和日程再推演。'
+    : '你站他这边，不催、不告状——审他的是墙。')
   if (!allowTools) lines.push('（这一次是主动找他：不要调用工具。）')
   return lines.join('\n')
 }
