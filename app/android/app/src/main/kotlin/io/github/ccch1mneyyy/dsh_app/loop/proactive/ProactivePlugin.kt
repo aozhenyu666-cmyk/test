@@ -200,6 +200,20 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String && k != "timeZone") body[k] = v }
                 ProactiveRuntime.fetchPluginRoute(result, "POST", "/wall/appeal", body)
             }
+            // C1：工作记忆挂载卡。action=status 只读；写操作（open/given/step/park/resume/close/accept）原样透传，
+            // 规矩全在插件里（只能是他自己的原话、同时只有一张 open 卡）。GET 只读视图也走这里。
+            "mount" -> {
+                if (call.argument<String>("action") == null) {
+                    ProactiveRuntime.fetchPluginRoute(
+                        result, "GET", "/mount?timeZone=${BeijingClock.ZONE.id}", null,
+                    )
+                } else {
+                    val body = LinkedHashMap<String, Any?>()
+                    body["timeZone"] = BeijingClock.ZONE.id
+                    (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String && k != "timeZone") body[k] = v }
+                    ProactiveRuntime.fetchPluginRoute(result, "POST", "/mount", body)
+                }
+            }
             else -> result.notImplemented()
         }
     }

@@ -55,6 +55,11 @@ import { tide as tideOf, tideGap, tideHourly, vagueStreak } from './tide.js'
 import { FACES, stepTemper, temperLine } from './temper.js'
 import { drillLines, drillOf, pickDrill, scoldLines } from './drills.js'
 import { normalizeTracks, pickTrack, recentTracks, trackStatus } from './tracks.js'
+// C1 挂载卡：纯函数在 mount.js，这里只负责落盘、路由和注入。
+import {
+  MEMORY_LEAK_TRACK, acceptProposal, closeCard, driftOf, mountLine, mountStatus, nextStreak, normalizeCard,
+  openCard, parkCard, propose as proposeMount, proposeCap, resumeCard, scaffold, shouldShowCard, withGiven, withStep,
+} from './mount.js'
 // 第六轮 C：暗思考（后台自己整理，不开口）。
 import { museSweep, museStatus } from './muse.js'
 // 第六轮 D：姐妹自建工作流的护栏（配额 + 试启用 + 到期自动停 + 能力层拦墙）。
@@ -728,7 +733,7 @@ export function apply(ctx) {
         : null
       if (drill) serveType = 'drill'
       // 支线（第六轮 A）：配置里有几条就按"最近三条避开"挑一条。一条都没有 → null，主干不受影响。
-      const track = pickTrack(normalizeTracks(config.tracks).tracks, recentTracks(entries))
+      const track = pickTrack(normalizeTracks(configuredTracks()).tracks, recentTracks(entries))
       const firstToday = recent.counts.generated === 0
       saveBrain(brain)
       // 回合与拍数都从账本重建：进程重启不会丢，也不多存一份状态。
@@ -3064,6 +3069,205 @@ export function apply(ctx) {
     return { ...view(), ok: true, text: '交了「' + (DEPARTMENTS.find((d) => d.key === key) || {}).label + '」' + (rec.ok ? '，和今天的记录对上了（' + rec.why + '）' : '。') }
   }
 
+  // ---------------------------------------------------------------- C1 工作记忆挂载卡
+  /** 卡最多留这么多张（停着的也要能恢复，所以不按张数清空，只留最近几张）。 */
+  const MOUNT_KEEP = 12
+  const loadMount = () => {
+    const raw = readState(stateFile('mount.json'), null)
+    return {
+      v: 1,
+      cards: (Array.isArray(raw?.cards) ? raw.cards : []).map(normalizeCard).filter(Boolean).slice(-MOUNT_KEEP),
+      streak: Math.max(0, Number(raw?.streak) || 0),
+      askAt: Number(raw?.askAt) || 0,
+      pending: raw?.pending && typeof raw.pending === 'object' ? raw.pending : null,
+    }
+  }
+  const saveMount = (m) => writeJson(stateFile('mount.json'), { ...m, cards: (m.cards || []).slice(-MOUNT_KEEP) })
+  const openCardOf = (m) => (m?.cards || []).find((c) => c.status === 'open') || null
+  const lastCardOf = (m) => (m?.cards || [])[m.cards.length - 1] || null
+  // 关掉的是「当前这张」：开着就关开着的，停着就关停着的（关掉之后只读）。
+  const closeCardOf = (m) => openCardOf(m) || lastCardOf(m)
+  const putCard = (m, card) => ({ ...m, cards: m.cards.map((c) => (c.id === card.id ? card : c)).slice(-MOUNT_KEEP) })
+  /** C1：工作记忆漏水是本轮第一条支线——配置里没写过就兜底。
+   *  要关掉它得写一条 `enabled:false`（空数组当「没配」，因为默认配置本来就是 []）。 */
+  const configuredTracks = () => (Array.isArray(config.tracks) && config.tracks.length ? config.tracks : [MEMORY_LEAK_TRACK])
+  /**
+   * C1：挂载卡的手机入口（浮层小卡 + 面板）。
+   *
+   * 只认他自己的话：面板上写的就是他写的（`sources` 传空数组，那是 isUserText 给手写留的那条路），
+   * 工具提议必须带账本行号。这里不生成任何文字——卡里每一条都是他自己的字。
+   */
+  function mountRoute(body) {
+    const now = Date.now()
+    const tz = requestZone(body?.timeZone, config)
+    const action = String(body?.action || 'status')
+    let m = loadMount()
+    const view = () => {
+      // 视图一律现读账本：scaffold 要算上刚才那一条，不然面板永远慢一拍。
+      const entries = readLedger(home(), 800)
+      const last = lastCardOf(m)
+      return {
+        v: 1, ok: true,
+        mount: {
+          ...mountStatus(last, entries),
+          // 恢复要按 id 指认是哪一张，所以当前这张的 id 得带上。
+          id: last ? last.id : '',
+          ask: m.askAt > 0 && now - m.askAt < 30 * 60_000,
+          pending: m.pending ? { text: m.pending.text, slot: m.pending.slot, src: m.pending.src } : null,
+          cards: m.cards.map((c) => ({ id: c.id, status: c.status, goal: c.goal.text, parkedWhy: c.parkedWhy })),
+        },
+      }
+    }
+    const fail = (code, message) => ({ ...view(), ok: false, error: { code, message } })
+    // 改完立刻落盘，视图从落盘后的状态渲染——免得界面和盘上不一致。
+    const commit = (next) => {
+      m = next
+      saveMount(m)
+      return view()
+    }
+    if (action === 'status') return view()
+    if (action === 'open') {
+      // openCard 认的是「一张卡」的形状（{ card }），不是整个 mount 状态。
+      const r = openCard({ card: openCardOf(m) }, { topicId: body?.topicId, goal: body?.goal, at: now, sources: [] })
+      if (!r.ok) return fail(r.code, r.text)
+      record({ state: 'mount', at: now, action: 'open', by: 'user', slot: 'goal' })
+      return commit({ ...m, cards: [...m.cards, r.card].slice(-MOUNT_KEEP), streak: 0, askAt: 0 })
+    }
+    if (action === 'drop-proposal') return commit({ ...m, pending: null })
+    // 断链检测的显式入口：`text` 就是他这一句原话。插件拿不到聊天消息，只能由拿得到的那一层来调。
+    if (action === 'seen') {
+      const cur = openCardOf(m)
+      const d = driftOf(cur, body?.text)
+      const show = Boolean(cur) && shouldShowCard(m.streak, d.drift)
+      const next = { ...m, streak: show ? 0 : nextStreak(m.streak, d.drift), askAt: show ? now : m.askAt }
+      return { ...commit(next), drift: { drift: d.drift, hit: d.hit, need: d.need, ask: show, streak: next.streak } }
+    }
+    // 恢复要在「没有 open 卡」的时候才成立，所以它排在 no-card 那个判断前面。
+    if (action === 'resume') {
+      const want = m.cards.find((c) => c.id === String(body?.id || '')) || null
+      if (!want) return fail('no-card', '没有这张卡。')
+      if (openCardOf(m)) return fail('card-open', '已经有一张开着的卡，先停放或关掉它。')
+      const r = resumeCard(want, { at: now })
+      if (!r.ok) return fail(r.code, r.text)
+      record({ state: 'mount', at: now, action: 'resume', by: 'user' })
+      return commit(putCard(m, r.card))
+    }
+    const cur = openCardOf(m)
+    if (!cur && action !== 'close') return fail('no-card', '现在没有开着的卡：先开一张。')
+    if (action === 'given' || action === 'step') {
+      const r = action === 'given'
+        ? withGiven(cur, { text: body?.text, at: now, src: body?.src, sources: [] })
+        : withStep(cur, { text: body?.text, at: now, from: body?.from, sources: [] })
+      if (!r.ok) return fail(r.code, r.text)
+      record({ state: 'mount', at: now, action: 'add', by: 'user', slot: action })
+      return commit(putCard(m, r.card))
+    }
+    if (action === 'accept') {
+      if (!m.pending) return fail('no-proposal', '没有待确认的提议。')
+      const r = acceptProposal(cur, m.pending, { at: now, from: body?.from })
+      if (!r.ok) return fail(r.code, r.text)
+      record({ state: 'mount', at: now, action: 'add', by: 'her', slot: m.pending.slot })
+      return commit({ ...putCard(m, r.card), pending: null })
+    }
+    if (action === 'park') {
+      const r = parkCard(cur, { at: now, where: body?.where })
+      if (!r.ok) return fail(r.code, r.text)
+      record({ state: 'mount', at: now, action: 'park', by: 'user' })
+      return commit(putCard(m, r.card))
+    }
+    if (action === 'close') {
+      const r = closeCard(closeCardOf(m), { at: now })
+      if (!r.ok) return fail(r.code, r.text)
+      record({ state: 'mount', at: now, action: 'close', by: 'user' })
+      return commit({ ...putCard(m, r.card), streak: 0, askAt: 0 })
+    }
+    return fail('bad-action', 'status|open|seen|given|step|accept|park|resume|close|drop-proposal')
+  }
+  /**
+   * C1：提议挂载。只能把他自己的原话挂上去，而且必须指出账本行号——
+   * 没有出处的提议不受理，因为「她总结他刚才说了什么」正是要防的那件事。
+   * 他点头之后才落卡（浮层里点一下），这里只提议。
+   */
+  function mountProposeTool(role) {
+    return {
+      name: 'mount_propose',
+      description: '把他说过的原话提议挂到工作记忆卡上（他不点头不落卡）。src 必须是他那句话在账本里的行号；' +
+        'slot=given 是已知条件，slot=step 是中间结论（还要 from 指明由哪几条已知推出）。' +
+        '你只能提议、不能替他总结：text 必须是他的原话。他越自己挂卡，你每天能提议的次数越少。',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: '他的原话，≤120 字' },
+          slot: { type: 'string', description: 'given（已知条件）/ step（中间结论）' },
+          src: { type: 'string', description: '账本行号，例：128' },
+          from: { type: 'array', items: { type: 'integer' }, maxItems: 5, description: 'step 必填：由哪几条已知（下标 0 起）推出' },
+        },
+        required: ['text', 'slot', 'src'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        // 行号按整份账本从头数，不随读取窗口滑动（和 revise_stance 同一口径）。
+        const rows = readLedger(home(), 5000).map((e, i) => ({ ...e, seq: i + 1 }))
+        const seq = Number(args.src)
+        const hit = Number.isInteger(seq) && seq > 0 ? rows[seq - 1] : null
+        if (!hit || typeof hit.text !== 'string') return { ok: false, text: '账本里没有第 ' + String(args.src || '') + ' 行原话：提议必须有出处。' }
+        const cap = proposeCap(scaffold(rows).ratio)
+        if (cap <= 0) return { ok: false, text: '今天不再提议了：他一直在自己挂卡，你该少插手。' }
+        const used = rows.filter((e) => e?.state === 'mount-propose' && Number(e.at) >= zoneStartOfDay(now, zoneOr(config.timeZone))).length
+        if (used >= cap) return { ok: false, text: '今天的提议额度用完了（' + cap + ' 次）：剩下的让他自己挂。' }
+        const r = proposeMount({ text: args.text, slot: args.slot, at: now, src: String(seq), sources: [stripInjection(hit.text)] })
+        if (!r.ok) return { ok: false, text: r.text }
+        saveMount({ ...loadMount(), pending: r.proposal })
+        record({ state: 'mount-propose', at: now, by: role, slot: r.proposal.slot, src: String(seq) })
+        return { ok: true, text: '提议挂到「' + (r.proposal.slot === 'given' ? '已知条件' : '中间结论') + '」：' + r.proposal.text + '（他点头才落卡）' }
+      },
+    }
+  }
+  /** C1：停放。开新卡前把旧卡停在哪说一句，不许无声息地扔下。 */
+  function mountParkTool(role) {
+    return {
+      name: 'mount_park',
+      description: '把当前这张工作记忆卡停起来，一句话说清停在哪（下次回来才知道从哪接）。' +
+        '停着的卡他随时能恢复；要彻底不做才用 mount_close（关掉就只读了）。',
+      parameters: {
+        type: 'object',
+        properties: { where: { type: 'string', description: '停在哪：他推到哪一步、回来从哪接' } },
+        required: ['where'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const m = loadMount()
+        const r = parkCard(openCardOf(m), { at: now, where: args.where })
+        if (!r.ok) return { ok: false, text: r.text }
+        saveMount(putCard(m, r.card))
+        record({ state: 'mount-park', at: now, by: role })
+        return { ok: true, text: '停好了：' + r.card.parkedWhy + '。他回来点恢复就能接着推。' }
+      },
+    }
+  }
+  /** C1：关掉。关掉之后只读，卡留着能查，不再进每轮注入。 */
+  function mountCloseTool(role) {
+    return {
+      name: 'mount_close',
+      description: '关掉当前的工作记忆卡：关掉之后只读，卡还在但不再进每轮注入。他没做完的事用 mount_park。',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      output: toolOutput,
+      execute: () => {
+        const now = Date.now()
+        const m = loadMount()
+        const r = closeCard(closeCardOf(m), { at: now })
+        if (!r.ok) return { ok: false, text: r.text }
+        saveMount({ ...putCard(m, r.card), streak: 0, askAt: 0 })
+        record({ state: 'mount-close', at: now, by: role })
+        return { ok: true, text: '关了。卡还在（' + r.card.givens.length + ' 条已知、' + r.card.steps.length + ' 条结论），以后查得到。' }
+      },
+    }
+  }
+
   function eventRoute(body) {
     const now = Date.now()
     const type = String(body?.type || '')
@@ -3526,6 +3730,28 @@ export function apply(ctx) {
     const warn = yieldLine(agreementRate(loadYieldTurns(), 20))
     return [block, warn].filter(Boolean).join('\n')
   }
+  /**
+   * C1：状态层里的挂载卡（状态层最高优先级——卡断了整轮白聊）。
+   *
+   * 只有 open 卡进注入，没卡就一行不占。行本身在 mount.js 里封顶 300 字（先丢已知再截结论），
+   * 所以这里不再截一次。
+   */
+  function mountText() {
+    try {
+      const m = loadMount()
+      const card = openCardOf(m)
+      const hm = Number(card?.touchedAt) > 0 ? zoneHm(Number(card.touchedAt), zoneOr(config.timeZone)) : ''
+      const line = mountLine(card, { hm })
+      if (!line) return ''
+      // 连着两轮他说的和卡上对不上：这一轮只做一件事，亮卡 + 二选一。
+      const ask = m.askAt > 0 && Date.now() - m.askAt < 30 * 60_000
+        ? '他这两轮说的和卡上对不上。这一轮只做一件事：把上面这张卡亮给他，问一句二选一——「继续这张，还是先停放？」，别的都先别说。'
+        : ''
+      return [line, ask].filter(Boolean).join('\n')
+    } catch {
+      return '' // 卡读坏了不能拖垮人设
+    }
+  }
   /** 当前主状态（人设、fish_index、工具子集都用这一个口径，别各算一套）。 */
   function mainStateNow() {    const now = Date.now()
     return resolveState({
@@ -3582,6 +3808,8 @@ export function apply(ctx) {
       { id: 'agenda', layer: 'constraint', priority: 85, text: agendaLines(mainState).join('\n') },
       { id: 'stance', layer: 'constraint', priority: 87, text: stanceText() },
       { id: 'plan', layer: 'constraint', priority: 86, text: planText() },
+      // C1：挂载卡是状态层最高优先级——卡一断这轮就白聊，别的都能让一让。
+      { id: 'mount', layer: 'state', priority: 65, text: mountText() },
       { id: 'trust', layer: 'state', priority: 60, text: trustLines(trustNow()).join('\n') },
       { id: 'rhythm', layer: 'state', priority: 55, text: rhythmLines(lastRhythm).join('\n') },
       { id: 'gear', layer: 'state', priority: 50, text: gearLines(config, Date.now()).join('\n') },
@@ -3638,6 +3866,7 @@ export function apply(ctx) {
         wallTool(role), verdictTool(role), breakTool(role), endTaskTool(role),
         dailyPlanTool(role), dailyReviewTool(role), predictTool(role), workflowTool(role),
         takeStanceTool(role), reviseStanceTool(role),
+        mountProposeTool(role), mountParkTool(role), mountCloseTool(role),
         fishIndexTool(),
       ].filter(Boolean)
       // R7 P0-3：STATE_TABLE 里每个主状态都写了 tools 子集（≤8），toolsFor() 拿得到，
@@ -3726,7 +3955,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/workflows' || path === '/gemini/due')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/workflows' || path === '/gemini/due')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -3793,6 +4022,7 @@ export function apply(ctx) {
         if (path === '/tracks') return send(res, 200, tracksRoute(body.value))
       if (path === '/workflows') return send(res, 200, workflowsRoute(body.value))
         if (path === '/deposit') return send(res, 200, depositRoute(body.value))
+        if (path === '/mount') return send(res, 200, mountRoute(body.value))
         config = mergeConfig(config, body.value)
         writeConfig(config)
         // 换了会话 / 名字 / 人设：马上重挂，不等下一次定时检查。
@@ -3820,6 +4050,10 @@ export function apply(ctx) {
       // A3：审查记录是只读的，所以它是 GET；body 里没东西也照样能查。
       if (req.method === 'GET' && path === '/wall/thread') {
         return send(res, 200, wallThreadRoute({ timeZone: url.searchParams.get('timeZone') || undefined }))
+      }
+      // C1：挂载卡的只读视图（浮层小卡打开时先 GET 一次）。写操作走 POST。
+      if (req.method === 'GET' && path === '/mount') {
+        return send(res, 200, mountRoute({ timeZone: url.searchParams.get('timeZone') || undefined }))
       }
       return send(res, 404, { v: 1, error: { code: 'not-found', message: path } })
     } catch (e) {
@@ -4236,7 +4470,7 @@ export function apply(ctx) {
       // 第六轮 B：今天三次审查各自的最后一条结论（null = 还没审，也不会有"审过了却查不到"）。
       anchors: anchorStatus(now, entries),
       // 第六轮 A：支线底座的状态（几条在跑、最近用过哪几条、哪几条配置不合格被丢掉了）。
-      tracks: trackStatus(config.tracks, recentTracks(entries)),
+      tracks: trackStatus(configuredTracks(), recentTracks(entries)),
       // 第六轮 C：今天暗思考跑了几次、最近一条整理了什么（只记账，没有要发出去的话）。
       muse: museStatus(entries, now),
       // 第六轮 D：自建工作流的配额与到期时间（几条在跑、还能提几条）。
@@ -4362,9 +4596,9 @@ export function apply(ctx) {
         // 这一轮照样生效
       }
       record({ state: 'tracks-set', at: now, from: before.tracks.length, to: after.tracks.length })
-      return { v: 1, ok: true, ...trackStatus(config.tracks, recentTracks(entries)) }
+      return { v: 1, ok: true, ...trackStatus(configuredTracks(), recentTracks(entries)) }
     }
-    return { v: 1, ok: true, ...trackStatus(config.tracks, recentTracks(entries)) }
+    return { v: 1, ok: true, ...trackStatus(configuredTracks(), recentTracks(entries)) }
   }
 
   function sistersRoute(body) {

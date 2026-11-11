@@ -59,7 +59,8 @@ export const STATE_TABLE = [
     tools: ['submit_verdict', 'submit_to_wall', 'revise_stance', 'notes_vault', 'fish_index', 'grant_break', 'vault_search', 'kb_write'] },
   { id: 'sprint', priority: 70, enter: ['sprint'], lock: 'sprint', back: null,
     agenda: '冲刺：少打扰，最多 20 分钟看一眼进展；到点或他点「申请验收」进验收。',
-    tools: ['start_task_mode', 'submit_to_wall', 'end_task_mode', 'block_apps', 'notes_vault', 'fish_index', 'sister_note', 'gemini_live'] },
+    // C1：冲刺是最典型的「推导到一半」，mount_propose 换掉 sister_note（递话不在冲刺里做）。
+    tools: ['start_task_mode', 'submit_to_wall', 'end_task_mode', 'block_apps', 'notes_vault', 'fish_index', 'mount_propose', 'gemini_live'] },
   { id: 'brain', priority: 70, enter: ['brain'], lock: 'brain', back: null,
     agenda: '共脑：在 Gemini 舱里，不插嘴。结束满 3 分钟才会出现追问。',
     tools: ['gemini_end', 'gemini_log', 'gemini_live', 'schedule_gemini_live', 'notes_vault', 'fish_index'] },
@@ -71,7 +72,9 @@ export const STATE_TABLE = [
     tools: ['notes_vault', 'fish_index', 'sister_note', 'grant_break', 'vault_search', 'vault_recent_notes', 'workflow_propose', 'dafeiyu_control'] },
   { id: 'standby', priority: 50, enter: ['always'], lock: 'standby', back: null,
     agenda: '待命：帮他挑下一件事、拆出第一步；10 分钟没动就开追问锁。',
-    tools: ['start_task_mode', 'submit_to_wall', 'end_task_mode', 'block_apps', 'notes_vault', 'fish_index', 'revise_stance', 'gemini_live'] },
+    // C1：挂载卡的三件套在待命里齐（挑下一件事靠的就是「他手上推到哪」）。
+    // 让位的是 block_apps / revise_stance / gemini_live——它们各自在冲刺、追问锁、共脑里有位置。
+    tools: ['start_task_mode', 'submit_to_wall', 'end_task_mode', 'notes_vault', 'fish_index', 'mount_propose', 'mount_park', 'mount_close'] },
 ]
 
 /** 每个主状态最多挂几个工具（规格：任一状态 ≤8）。 */

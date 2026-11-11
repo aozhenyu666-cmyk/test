@@ -432,6 +432,40 @@ class ProactiveChannel {
       return null;
     }
   }
+
+  /// C1：工作记忆挂载卡（插件 `POST /mount`）。
+  ///
+  /// [action] 为空就是只读（GET）；写操作原样透传，规矩全在插件里：
+  /// 卡上每一条都得是他自己的原话、同时只有一张 open 卡、结论必须引用已知。
+  /// 面板手写时 [text] 直接就是他的话（不需要 [src]，那是工具提议才要的账本行号）。
+  ///
+  /// 失败返回 null，页面说「读不到」，不编一张空卡出来。
+  Future<MountView?> mount({
+    String? action,
+    String? goal,
+    String? topicId,
+    String? text,
+    String? src,
+    String? where,
+    String? id,
+    List<int>? from,
+  }) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('mount', {
+        if (action != null) 'action': action,
+        if (goal != null) 'goal': goal,
+        if (topicId != null) 'topicId': topicId,
+        if (text != null) 'text': text,
+        if (src != null) 'src': src,
+        if (where != null) 'where': where,
+        if (id != null) 'id': id,
+        if (from != null) 'from': from,
+      });
+      return MountView.fromWire(raw);
+    } on Exception {
+      return null;
+    }
+  }
 }
 
 /// The host plugin's own view: which session proactive turns go to, and which agents are alive.
@@ -959,3 +993,180 @@ class WallAppeal {
     return WallAppeal(code: code, pass: a is Map && a['pass'] is bool ? a['pass'] as bool : null, text: text, left: left);
   }
 }
+
+/// C1：挂载卡上的一条（目标 / 已知 / 中间结论）。
+///
+/// 卡里只放他自己的话，所以这里没有「她总结了一句」这种字段——`text` 就是他说的那句。
+class MountEntry {
+  const MountEntry({required this.text, this.at = 0, this.src = '', this.from = const []});
+
+  final String text;
+  final int at;
+
+  /// 他这句话在账本里的出处（面板手写的没有）。
+  final String src;
+
+  /// 只对「中间结论」有意义：由哪几条已知（下标 0 起）推出。
+  final List<int> from;
+
+  static MountEntry? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    final text = raw['text'];
+    if (text is! String || text.trim().isEmpty) return null;
+    return MountEntry(
+      text: text,
+      at: raw['at'] is num ? (raw['at'] as num).toInt() : 0,
+      src: raw['src'] is String ? raw['src'] as String : '',
+      from: [
+        if (raw['from'] is List)
+          for (final v in raw['from'] as List)
+            if (v is num) v.toInt(),
+      ],
+    );
+  }
+}
+
+/// C1：一张挂载卡。
+///
+/// 三栏固定：目标 1 条、已知 ≤[maxGivens]、中间结论 ≤[maxSteps]。
+/// `status` 只有 `open` / `parked` / `closed`（卡一点都没有时插件给 `none`）。
+class MountCard {
+  const MountCard({
+    this.status = 'none',
+    this.goal = '',
+    this.givens = const [],
+    this.steps = const [],
+    this.maxGivens = 5,
+    this.maxSteps = 5,
+    this.parkedWhy = '',
+    this.id = '',
+    this.cards = const [],
+  });
+
+  final String status;
+  final String goal;
+  final List<MountEntry> givens;
+  final List<MountEntry> steps;
+  final int maxGivens;
+  final int maxSteps;
+  final String parkedWhy;
+  final String id;
+
+  /// 所有卡的一眼清单（`{id, status, goal, parkedWhy}`），停放的那几张从这里恢复。
+  final List<Map<String, String>> cards;
+
+  bool get hasCard => status != 'none';
+  bool get isOpen => status == 'open';
+  bool get canAddGiven => isOpen && givens.length < maxGivens;
+  bool get canAddStep => isOpen && steps.length < maxSteps && givens.isNotEmpty;
+
+  static MountCard fromWire(Object? raw) {
+    if (raw is! Map) return const MountCard();
+    final status = raw['status'];
+    return MountCard(
+      status: status is String && status.isNotEmpty ? status : 'none',
+      goal: raw['goal'] is String ? raw['goal'] as String : '',
+      givens: _entries(raw['givens']),
+      steps: _entries(raw['steps']),
+      maxGivens: raw['maxGivens'] is num ? (raw['maxGivens'] as num).toInt() : 5,
+      maxSteps: raw['maxSteps'] is num ? (raw['maxSteps'] as num).toInt() : 5,
+      parkedWhy: raw['parkedWhy'] is String ? raw['parkedWhy'] as String : '',
+      id: raw['id'] is String ? raw['id'] as String : '',
+      cards: [
+        if (raw['cards'] is List)
+          for (final c in raw['cards'] as List)
+            if (c is Map)
+              {
+                'id': c['id'] is String ? c['id'] as String : '',
+                'status': c['status'] is String ? c['status'] as String : '',
+                'goal': c['goal'] is String ? c['goal'] as String : '',
+                'parkedWhy': c['parkedWhy'] is String ? c['parkedWhy'] as String : '',
+              },
+      ],
+    );
+  }
+
+  static List<MountEntry> _entries(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <MountEntry>[];
+    for (final one in raw) {
+      final e = MountEntry.fromWire(one);
+      if (e != null) out.add(e);
+    }
+    return out;
+  }
+}
+
+/// C1：一次 `/mount` 的结果。`scaffold` 是脚手架撤除比例：他自己挂的 / 她提议才挂的。
+class MountView {
+  const MountView({
+    this.card = const MountCard(),
+    this.ask = false,
+    this.pendingText,
+    this.pendingSlot,
+    this.pendingSrc,
+    this.scaffoldUser = 0,
+    this.scaffoldHer = 0,
+    this.error,
+    this.message = '',
+  });
+
+  final MountCard card;
+
+  /// 断链检测亮了：这一轮她只该做一件事——把卡亮出来问「继续还是停放」。
+  final bool ask;
+
+  /// 她提议、等他点头的那一条（null 表示没有待确认的提议）。
+  final String? pendingText;
+  final String? pendingSlot;
+  final String? pendingSrc;
+
+  final int scaffoldUser;
+  final int scaffoldHer;
+
+  /// 插件退回来的错误码（`card-open` / `no-card` / `not-user-text` …）；null 表示正常。
+  final String? error;
+  final String message;
+
+  bool get ok => error == null;
+  bool get hasPending => pendingText != null && pendingText!.isNotEmpty;
+
+  /// 主动挂载 / 提议挂载。她提议越少说明他越会自己挂；没有提议过是 null（不是 0）。
+  double? get scaffoldRatio => scaffoldHer > 0 ? scaffoldUser / scaffoldHer : (scaffoldUser > 0 ? null : 0);
+
+  static MountView? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    final m = raw['mount'];
+    final card = MountCard.fromWire(m);
+    final err = raw['error'];
+    var user = 0;
+    var her = 0;
+    if (m is Map && m['scaffold'] is Map) {
+      final s = m['scaffold'] as Map;
+      user = s['user'] is num ? (s['user'] as num).toInt() : 0;
+      her = s['her'] is num ? (s['her'] as num).toInt() : 0;
+    }
+    if (err is Map) {
+      final code = err['code'];
+      final msg = err['message'];
+      return MountView(
+        card: card,
+        scaffoldUser: user,
+        scaffoldHer: her,
+        error: code is String && code.isNotEmpty ? code : 'error',
+        message: msg is String ? msg : '',
+      );
+    }
+    final pending = m is Map ? m['pending'] : null;
+    return MountView(
+      card: card,
+      ask: m is Map && m['ask'] == true,
+      pendingText: pending is Map && pending['text'] is String ? pending['text'] as String : null,
+      pendingSlot: pending is Map && pending['slot'] is String ? pending['slot'] as String : null,
+      pendingSrc: pending is Map && pending['src'] is String ? pending['src'] as String : null,
+      scaffoldUser: user,
+      scaffoldHer: her,
+    );
+  }
+}
+

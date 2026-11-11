@@ -145,6 +145,7 @@ object BuiltinPluginGuest {
                 "lib/budget.js",
                 "lib/stance.js",
                 "lib/wall_voice.js",
+                "lib/mount.js",
             ),
         ),
     )
