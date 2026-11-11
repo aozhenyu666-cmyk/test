@@ -145,6 +145,9 @@ const DEFAULTS = Object.freeze({
   gear: 'free',
   // Gemini 的包名（Gemini App / Google App 里的 Gemini）。
   geminiPackages: GEMINI_PACKAGES,
+  // 连麦舱里"其余第三方 App"的宽限：从白名单 App 跳出去、或者进了一个没见过的 App，
+  // 先放这么多毫秒（只提示不锁），超了才升到 4 级锁。图库/文件/相机走系统应用，不受这个影响。
+  sessionGraceMs: 45_000,
   // 判球可以单独配一个更快的模型；没配就沿用会话自己的 provider/model。
   judgeProvider: undefined,
   judgeModel: undefined,
@@ -1307,6 +1310,8 @@ export function apply(ctx) {
       app: geminiPackages()[0],
       allow: geminiPackages(),
       until: Number(s.until),
+      // R7 P0-1：舱内第三方 App 的宽限。手机侧不再"非白名单一律锁"，按这个秒数先放行再升锁。
+      graceMs: Math.max(0, Number(config.sessionGraceMs) || 45_000),
       topic: String(s.topic || ''),
       mode: String(s.mode || 'think'),
       by: s.by || undefined,
