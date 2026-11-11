@@ -18,6 +18,17 @@ import { join } from 'node:path'
 export const WALL_LABEL = '〔墙〕'
 /** 一份笔记要长多少才算"写了东西"：大约一两百个汉字。改个错别字、加个空行都不够。 */
 export const GROWTH_MIN_BYTES = 300
+/**
+ * A3：墙能给出的每一个判定码。`auditTask` 每加一条分支，都必须同时加进这张表——
+ * `wall_voice.js` 靠它保证「每个码都有一句固定话」，测试遍历这张表，缺一条就失败。
+ * 命名是 `证据类型:原因`，因为同一个「没过」在文件和 App 上要说的话不一样。
+ */
+export const AUDIT_CODES = Object.freeze([
+  'file:pass', 'file:short', 'file:no-file', 'file:stale', 'file:grew0',
+  'screenshot:pass', 'screenshot:none',
+  'app:pass', 'app:short', 'app:not-found', 'app:zero',
+  'none:unverifiable',
+])
 /** 墙审查时报的完成率窗口。 */
 export const RATE_DAYS = 14
 /** 手机里截图的常见位置。 */
@@ -100,7 +111,9 @@ export function baselineFor(tasks, { notesDir, stat }) {
  * 审一件事。
  * ctx: { now, since（立项时间）, notesDir, stat, screenshots: [{name, mtimeMs}], usage: [{label|app, minutes}],
  *        baseline: {path, size} | undefined }
- * @returns {{verdict:'done'|'partial'|'miss', pass:boolean, data:string, missing:string}}
+ * A3：多返回 `code`（`AUDIT_CODES` 里的一个）和 `vars`（模板要用到的数字），
+ * 让 `wall_voice.js` 能说出「要求 X，实测 Y，差 Z」那种冷话，而不用去解析 `data` 里的中文。
+ * @returns {{verdict:'done'|'partial'|'miss', pass:boolean, code:string, vars:object, data:string, missing:string}}
  */
 export function auditTask(task, ctx) {
   const evidence = String(task?.evidence || '')
@@ -109,22 +122,24 @@ export function auditTask(task, ctx) {
   if (type === 'file') {
     const cands = ctx.baseline?.path ? [ctx.baseline.path, ...pathCandidates(evidence, ctx.notesDir)] : pathCandidates(evidence, ctx.notesDir)
     const path = cands.find((p) => ctx.stat(p))
-    if (!path) return miss('文件 ' + pathIn(evidence) + ' 不存在', '把 ' + pathIn(evidence) + ' 写出来')
+    if (!path) return miss('file:no-file', { path: pathIn(evidence), min: GROWTH_MIN_BYTES }, '文件 ' + pathIn(evidence) + ' 不存在', '把 ' + pathIn(evidence) + ' 写出来')
     const st = ctx.stat(path)
     const before = Number(ctx.baseline?.size) || 0
     const now = Number(st.size) || 0
     const grew = now - before
     const data = '文件 ' + shortPath(path) + '：立项时 ' + before + ' 字节，现在 ' + now + ' 字节（' + signed(grew) + '）'
-    if (Number(st.mtimeMs) < since) return miss(data + '，立项后没动过', '立项后在这份文件里写东西')
-    if (grew >= GROWTH_MIN_BYTES) return { verdict: 'done', pass: true, data, missing: '' }
-    if (grew > 0) return { verdict: 'partial', pass: false, data, missing: '还差至少 ' + (GROWTH_MIN_BYTES - grew) + ' 字节的实质内容' }
-    return miss(data, '在这份文件里写实质内容（至少 ' + GROWTH_MIN_BYTES + ' 字节）')
+    const vars = { path: shortPath(path), min: GROWTH_MIN_BYTES, before, now, grew, diff: GROWTH_MIN_BYTES - grew }
+    if (Number(st.mtimeMs) < since) return miss('file:stale', vars, data + '，立项后没动过', '立项后在这份文件里写东西')
+    if (grew >= GROWTH_MIN_BYTES) return { verdict: 'done', pass: true, code: 'file:pass', vars, data, missing: '' }
+    if (grew > 0) return { verdict: 'partial', pass: false, code: 'file:short', vars, data, missing: '还差至少 ' + (GROWTH_MIN_BYTES - grew) + ' 字节的实质内容' }
+    return miss('file:grew0', vars, data, '在这份文件里写实质内容（至少 ' + GROWTH_MIN_BYTES + ' 字节）')
   }
   if (type === 'screenshot') {
     const shots = (ctx.screenshots || []).filter((s) => Number(s.mtimeMs) >= since && Number(s.mtimeMs) <= Number(ctx.now))
     const data = '立项后新截图 ' + shots.length + ' 张'
-    if (shots.length) return { verdict: 'done', pass: true, data, missing: '' }
-    return miss(data, '截一张能看出完成情况的图（立项之后截的才算）')
+    const vars = { n: shots.length }
+    if (shots.length) return { verdict: 'done', pass: true, code: 'screenshot:pass', vars, data, missing: '' }
+    return miss('screenshot:none', vars, data, '截一张能看出完成情况的图（立项之后截的才算）')
   }
   if (type === 'app') {
     const need = Number((evidence.match(MIN_RE) || [])[1]) || 1
@@ -133,18 +148,20 @@ export function auditTask(task, ctx) {
       const label = String(u?.label || u?.app || '')
       return label && words.some((w) => label.includes(w) || w.includes(label))
     })
-    if (!row) return miss('使用记录里没有「' + words.join(' ') + '」', '去用「' + words.join(' ') + '」' + need + ' 分钟')
+    const label = row ? String(row.label || row.app) : words.join(' ')
+    if (!row) return miss('app:not-found', { label, need, got: 0, diff: need }, '使用记录里没有「' + words.join(' ') + '」', '去用「' + words.join(' ') + '」' + need + ' 分钟')
     const got = Math.round(Number(row.minutes) || 0)
     const data = String(row.label || row.app) + ' 今天 ' + got + ' 分钟（要求 ' + need + '）'
-    if (got >= need) return { verdict: 'done', pass: true, data, missing: '' }
-    if (got > 0) return { verdict: 'partial', pass: false, data, missing: '还差 ' + (need - got) + ' 分钟' }
-    return miss(data, '去用够 ' + need + ' 分钟')
+    const vars = { label, need, got, diff: need - got }
+    if (got >= need) return { verdict: 'done', pass: true, code: 'app:pass', vars, data, missing: '' }
+    if (got > 0) return { verdict: 'partial', pass: false, code: 'app:short', vars, data, missing: '还差 ' + (need - got) + ' 分钟' }
+    return miss('app:zero', vars, data, '去用够 ' + need + ' 分钟')
   }
-  return miss('完成物「' + (evidence || '空') + '」墙查不了', HOW)
+  return miss('none:unverifiable', { evidence: evidence || '空' }, '完成物「' + (evidence || '空') + '」墙查不了', HOW)
 }
 
-function miss(data, missing) {
-  return { verdict: 'miss', pass: false, data, missing }
+function miss(code, vars, data, missing) {
+  return { verdict: 'miss', pass: false, code, vars, data, missing }
 }
 
 function signed(n) {

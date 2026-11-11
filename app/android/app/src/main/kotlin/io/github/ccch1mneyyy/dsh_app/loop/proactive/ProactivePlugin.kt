@@ -189,6 +189,17 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String && k != "timeZone") body[k] = v }
                 ProactiveRuntime.fetchPluginRoute(result, "POST", "/deposit", body)
             }
+            // A3：墙的审查记录（只读，GET）。墙不聊天，这里只是把落账的判定倒序摆出来。
+            "wallThread" -> ProactiveRuntime.fetchPluginRoute(
+                result, "GET", "/wall/thread?timeZone=${BeijingClock.ZONE.id}", null,
+            )
+            // A3：申诉。只收「一条具体判定 + 新的物理证据」，每天 2 次；判还是由插件里的墙算。
+            "wallAppeal" -> {
+                val body = LinkedHashMap<String, Any?>()
+                body["timeZone"] = BeijingClock.ZONE.id
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String && k != "timeZone") body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/wall/appeal", body)
+            }
             else -> result.notImplemented()
         }
     }

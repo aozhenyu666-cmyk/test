@@ -83,6 +83,7 @@ import { dailyPath, dayString, keywordsOf, loadDaily, normalizeTasks, reconcile,
 // A2：白天的时间表（纯函数在 daily.js 里；这里只接线和落账）。
 import { DEPTS, TRIGGER_TEXT, blockLine, fixedBlocksOf, lateLine, markBlockDone, planSweep, reschedule as reschedulePlan, schedule, scheduleText } from './daily.js'
 import { DEPARTMENTS, DEPT_DUTY, appendSlot, behaviorReport, completeOf, depositLines, depositOf, missingText, normalizeEntry, reconcileEntry, slotAsk, statusOf, withEntry } from './deposit.js'
+import { AUDIT_CODES, APPEAL_CODES, APPEAL_MAX_PER_DAY, appealLeft, appealVoice, verdictVoice, wallThread } from './wall_voice.js'
 import {
   SCREENSHOT_DIRS, auditTask, baselineFor, checkMorningTasks, evidenceType, listScreenshots, loadWallMemory,
   noteDone, notePromised, pruneMemory, recentRate, statOf, wallText,
@@ -2950,6 +2951,58 @@ export function apply(ctx) {
     return status()
   }
   /**
+   * A3：墙的审查记录（长得像对话，其实是账本）。
+   * 墙不聊天：这里只把已经落账的「提交 / 判定 / 规则变更」还原成倒序气泡，一句话都不新生成。
+   */
+  function wallThreadRoute(body) {
+    const now = Date.now()
+    const tz = requestZone(body?.timeZone, config)
+    const entries = readLedger(home(), 2000)
+    const t = wallThread(entries, { days: 14, limit: 60, now })
+    return {
+      v: 1, ok: true,
+      thread: {
+        bubbles: t.bubbles.map((b) => ({ kind: b.kind, at: b.at, who: b.who, text: b.text, pass: b.pass === undefined ? null : Boolean(b.pass) })),
+        kinds: t.kinds,
+        appealLeft: appealLeft(entries, zoneStartOfDay(now, tz)),
+        appealMax: APPEAL_MAX_PER_DAY,
+      },
+    }
+  }
+  /**
+   * A3：申诉。只收「一条具体判定 + 新的物理证据」，每天 2 次；
+   * 判还是由 wall_auditor 算，这里不自己判，也不许它改主意。
+   */
+  function wallAppealRoute(body) {
+    const now = Date.now()
+    const tz = requestZone(body?.timeZone, config)
+    const entries = readLedger(home(), 2000)
+    const left = appealLeft(entries, zoneStartOfDay(now, tz))
+    const refuse = (code) => ({ v: 1, ok: false, error: { code, message: appealVoice(code) } })
+    if (left <= 0) return refuse('appeal:no-quota')
+    const at = Number(body?.at) || 0
+    const target = entries.find((e) => Number(e.at) === at && (e.state === 'verdict' || e.state === 'wall-audit'))
+    if (!target) return refuse('appeal:not-verdict')
+    // 「新的」= 这条判定下没交过的同一份证据。说第二遍不算新证据。
+    const evidence = String(body?.evidence || '').trim()
+    const said = entries.filter((e) => e.state === 'appeal' && Number(e.target) === at).map((e) => String(e.evidence || ''))
+    if (!evidence || said.includes(evidence)) return refuse('appeal:no-new-evidence')
+    const r = auditTask(
+      { task: String(body?.task || target.kind || ''), evidence },
+      {
+        now, since: at, notesDir: notesDir(), stat: statOf,
+        screenshots: listScreenshots(SCREENSHOT_DIRS, at),
+        usage: Array.isArray(lastPhone?.today) ? lastPhone.today : [],
+        baseline: body?.baseline ? { path: String(body.baseline.path || ''), size: Number(body.baseline.size) || 0 } : undefined,
+      },
+    )
+    record({ state: 'appeal', at: now, target: at, evidence, code: r.code, pass: r.pass })
+    return {
+      v: 1, ok: true,
+      appeal: { code: r.code, pass: r.pass, text: verdictVoice(r.code, r.vars), left: left - 1, appealLeft: left - 1 },
+    }
+  }
+  /**
    * 本周还剩几天放风额度——四部门没交齐的当天归零。
    *
    * 这是「每天必须交」的硬约束落点：不看聊天、不看模型，只看 deposit.json 里今天齐不齐。
@@ -3673,7 +3726,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/sisters' || path === '/deposit' || path === '/workflows' || path === '/gemini/due')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/workflows' || path === '/gemini/due')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -3734,6 +3787,8 @@ export function apply(ctx) {
         if (path === '/event') return send(res, 200, eventRoute(body.value))
         if (path === '/session') return send(res, 200, sessionRoute(body.value))
         if (path === '/wall') return send(res, 200, wallRoute(body.value))
+        if (path === '/wall/thread') return send(res, 200, wallThreadRoute(body.value))
+        if (path === '/wall/appeal') return send(res, 200, wallAppealRoute(body.value))
         if (path === '/sisters') return send(res, 200, sistersRoute(body.value))
         if (path === '/tracks') return send(res, 200, tracksRoute(body.value))
       if (path === '/workflows') return send(res, 200, workflowsRoute(body.value))
@@ -3761,6 +3816,10 @@ export function apply(ctx) {
       }
       if (req.method === 'GET' && path === '/status') {
         return send(res, 200, statusBody())
+      }
+      // A3：审查记录是只读的，所以它是 GET；body 里没东西也照样能查。
+      if (req.method === 'GET' && path === '/wall/thread') {
+        return send(res, 200, wallThreadRoute({ timeZone: url.searchParams.get('timeZone') || undefined }))
       }
       return send(res, 404, { v: 1, error: { code: 'not-found', message: path } })
     } catch (e) {

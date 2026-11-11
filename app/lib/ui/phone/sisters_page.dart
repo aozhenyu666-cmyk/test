@@ -9,6 +9,7 @@ import '../shell/page_frame.dart';
 import '../theme/app_icons.dart';
 import '../theme/theme.dart';
 import 'deposit_page.dart';
+import 'wall_page.dart';
 
 /// 设置 → 手机操控 → 姐妹（R4-5）。
 ///
@@ -203,6 +204,15 @@ class _SistersPageState extends State<SistersPage> {
         ],
         if (audit.text.isNotEmpty)
           ListPageRow(icon: AppIcons.info, title: audit.text, titleMaxLines: 8),
+        // A3：审查记录（提交 / 判定 / 规则变更）和申诉入口。墙不聊天，所以这里只是看一眼。
+        ListPageRow(
+          icon: AppIcons.history,
+          title: '审查记录',
+          value: '看判定',
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const WallPage()),
+          ),
+        ),
       ],
     );
   }

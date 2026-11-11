@@ -352,6 +352,39 @@ class ProactiveChannel {
     }
   }
 
+  /// A3：墙的审查记录（只读）。后端 `GET /wall/thread`。
+  ///
+  /// 墙不聊天：这里拿到的是已经落账的提交 / 判定 / 规则变更，按时间倒序。
+  /// 失败返回 null（页面如实显示「读不到」），不编一个空记录出来。
+  Future<WallThread?> wallThread() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('wallThread');
+      if (raw is! Map) return null;
+      if (raw['error'] is Map) return null;
+      return WallThread.fromWire(raw['thread']);
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// A3：申诉一条判定。后端 `POST /wall/appeal`。
+  ///
+  /// 只收「一条具体判定 + 新的物理证据」，每天 2 次；判还是由插件里的墙算，
+  /// 所以这里既不改主意也不安慰人，只把墙回的那句话原样带回来。
+  Future<WallAppeal?> wallAppeal({required int at, required String evidence, String? task}) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('wallAppeal', {
+        'at': at,
+        'evidence': evidence,
+        if (task != null) 'task': task,
+      });
+      if (raw is! Map) return null;
+      return WallAppeal.fromWire(raw);
+    } on Exception {
+      return null;
+    }
+  }
+
   /// Chooses the target session (`POST /dsh-go-proactive/v1/config`). Null clears it.
   Future<ProactiveAgentSessions> setAgentSession(String? sessionId) async {
     try {
@@ -804,4 +837,125 @@ class DepositView {
   }
 
   static List<Object?> _list(Object? value) => value is List ? value : const [];
+}
+
+/// A3：审查记录里的一条气泡。只有三种：提交、判定、规则变更。
+///
+/// 它不是聊天消息：`who` 只有「他 / 姐妹 / 墙」，`text` 是墙的模板话或者提交的事名，
+/// 没有「正在输入」也没有「她说……」。界面据此分三种排版。
+class WallBubble {
+  const WallBubble({
+    required this.kind,
+    required this.at,
+    required this.who,
+    required this.text,
+    this.pass,
+  });
+
+  /// `submit` / `verdict` / `rule`。插件那边也是这三个，多一个就说明有人加了新气泡类型。
+  final String kind;
+  final int at;
+  final String who;
+  final String text;
+
+  /// 判定的结论：true 过、false 不过、null 不是判定（提交和规则变更都是 null）。
+  final bool? pass;
+
+  bool get isSubmit => kind == 'submit';
+  bool get isVerdict => kind == 'verdict';
+  bool get isRule => kind == 'rule';
+
+  static WallBubble? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    final kind = raw['kind'];
+    final text = raw['text'];
+    if (kind is! String || kind.isEmpty) return null;
+    return WallBubble(
+      kind: kind,
+      at: raw['at'] is num ? (raw['at'] as num).toInt() : 0,
+      who: raw['who'] is String ? raw['who'] as String : '',
+      text: text is String ? text : '',
+      pass: raw['pass'] is bool ? raw['pass'] as bool : null,
+    );
+  }
+}
+
+/// A3：一次 `GET /wall/thread` 的结果。
+class WallThread {
+  const WallThread({
+    this.bubbles = const [],
+    this.kinds = const ['submit', 'verdict', 'rule'],
+    this.appealLeft = 0,
+    this.appealMax = 2,
+  });
+
+  final List<WallBubble> bubbles;
+
+  /// 插件认的气泡类型（界面拿它做断言用，不用自己写死一份）。
+  final List<String> kinds;
+
+  /// 今天还能申诉几次。
+  final int appealLeft;
+  final int appealMax;
+
+  bool get canAppeal => appealLeft > 0;
+  bool get isEmpty => bubbles.isEmpty;
+
+  static WallThread? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    final bubbles = <WallBubble>[];
+    final src = raw['bubbles'];
+    if (src is List) {
+      for (final b in src) {
+        final one = WallBubble.fromWire(b);
+        if (one != null) bubbles.add(one);
+      }
+    }
+    final kinds = <String>[];
+    final k = raw['kinds'];
+    if (k is List) {
+      for (final x in k) {
+        if (x is String) kinds.add(x);
+      }
+    }
+    return WallThread(
+      bubbles: bubbles,
+      kinds: kinds.isEmpty ? const ['submit', 'verdict', 'rule'] : kinds,
+      appealLeft: raw['appealLeft'] is num ? (raw['appealLeft'] as num).toInt() : 0,
+      appealMax: raw['appealMax'] is num ? (raw['appealMax'] as num).toInt() : 2,
+    );
+  }
+}
+
+/// A3：一次申诉的结果。`code` 是插件那边的申诉码，`text` 是墙的原话（模板生成，不改一个字）。
+class WallAppeal {
+  const WallAppeal({this.code, this.pass, this.text = '', this.left = 0, this.error});
+
+  final String? code;
+  final bool? pass;
+  final String text;
+  final int left;
+
+  /// 插件退回来的错误码（`appeal:no-quota` / `appeal:no-new-evidence` / `appeal:not-verdict`）。
+  final String? error;
+
+  bool get ok => error == null;
+
+  static WallAppeal? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    final err = raw['error'];
+    final a = raw['appeal'];
+    final code = a is Map && a['code'] is String ? a['code'] as String : null;
+    final text = a is Map && a['text'] is String ? a['text'] as String : '';
+    final left = a is Map && a['left'] is num ? (a['left'] as num).toInt() : 0;
+    if (err is Map) {
+      final ec = err['code'];
+      final msg = err['message'];
+      return WallAppeal(
+        error: ec is String && ec.isNotEmpty ? ec : 'error',
+        text: msg is String ? msg : '',
+      );
+    }
+    return WallAppeal(code: code, pass: a is Map && a['pass'] is bool ? a['pass'] as bool : null, text: text, left: left);
+  }
 }
