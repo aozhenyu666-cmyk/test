@@ -142,6 +142,7 @@ object BuiltinPluginGuest {
                 "lib/daily.js",
                 "lib/followup.js",
                 "lib/machine.js",
+                "lib/budget.js",
             ),
         ),
     )
