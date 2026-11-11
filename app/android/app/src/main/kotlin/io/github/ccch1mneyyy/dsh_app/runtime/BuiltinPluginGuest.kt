@@ -143,6 +143,7 @@ object BuiltinPluginGuest {
                 "lib/followup.js",
                 "lib/machine.js",
                 "lib/budget.js",
+      "lib/stance.js",
             ),
         ),
     )

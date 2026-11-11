@@ -62,12 +62,13 @@ import { workflowAct, workflowPropose, workflowStatus, workflowSweep } from './w
 import { REQUIRED_FIELDS, WORKFLOW_ALLOW } from './workflows.js'
 import { brainLines, chooseFace, cleanBrain, drillScorer, observe, onReply, onServe, onSilent, revise, updateArm } from './brain.js'
 import { appendPrediction, checkClaim, cleanLedger, dueCount, emptyLedger, predictionLines, settle } from './predict.js'
+import { agreementRate, appendStance, checkStance, cleanStances, hitRate, isYield, reviseStance, settleStances, stanceBlock, stanceDigest, yieldLine } from './stance.js'
 import { buildVibe, pickedArms, renderVibe } from './vibe.js'
 import { decideForce, forceLines, refuseSwitch } from './force.js'
 import { BUSY_CHECK_MS, BUSY_DEFAULT_MIN, BUSY_MAX_MIN, aiTask, applyGear, effectiveGear, gearLines, gearSwitch } from './gear.js'
 import { trustGap, trustLines, trustScore } from './trust.js'
 import { buildSnapshot, sistersView } from './panel.js'
-import { kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
+import { JUDGE_FILE, appendVerdictDaily, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, absentAnchors, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import {
   FOLLOWUP_CAP_MS, FOLLOWUP_PENALTY, STANDBY_LOCK_MS, addObligation, checkVerdict, clearObligation, closeLock, followupView,
@@ -485,6 +486,8 @@ export function apply(ctx) {
   // ---------------------------------------------------------------- 大脑
   // 大脑和脾气各存一个小文件；读坏了就从空的开始，绝不让一轮卡住。
   /** sessionId -> 他最后一次亲口说话的时间：正在聊就不用主动发球。 */
+  // 每个会话上一球发出去的原文：判球用它对上这一拍，改口检测用它比「她前后两句」。
+  const lastServeOf = new Map()
   const lastHumanAt = new Map()
   /** 他说完这么久之内算"正在聊"。 */
   const IN_CONVERSATION_MS = 3 * 60_000
@@ -507,6 +510,13 @@ export function apply(ctx) {
   // 预判账本：模型只写 claim，verdict 由墙的遥测填（predict.js 里 settle 是唯一出口）。
   const loadPredict = () => cleanLedger(readState(stateFile('predict.json'), null))
   const savePredict = (p) => writeJson(stateFile('predict.json'), p)
+  // 立场账本（A1）：她说过的话。status/settleSource 只由 stance.js 的 settleStances 写。
+  const loadStances = () => cleanStances(readState(stateFile('stances.json'), null))
+  const saveStances = (s) => writeJson(stateFile('stances.json'), s)
+  // 最近 20 轮她有没有退让。单独一个文件，不塞 ledger.jsonl：账本有按行位置断言的既有用例，
+  // 每轮加一行的退让记录会把它们挤动。
+  const loadYieldTurns = () => readState(stateFile('stance-yield.json'), null) || []
+  const saveYieldTurns = (t) => writeJson(stateFile('stance-yield.json'), (Array.isArray(t) ? t : []).slice(-20))
   // 上轮注入了哪几个 arm：这一球被拉回来时按它们各自记账（§13.1）。进程重启就丢，可接受。
   let lastVibePicks = []
   let lastVibe = { face: '', turn: 0 }
@@ -848,6 +858,21 @@ export function apply(ctx) {
           saveBrain(b)
         }
         // 发球原文、回合、拍数都留给判球用：回球回来时要能把它和这一球对上。
+        // A1 改口检测：他上一球是拒绝/回避、她这一句就撤回或降低要求 = 退让一次。
+        // 由代码判（isYield），不问她自不觉得自己让步了。
+        try {
+          const prev = lastServeOf.get(String(r.sessionId || ''))
+          const his = readLedger(home(), 12).filter((e) => e.state === 'replied').pop()
+          if (prev && his) {
+            const turns = loadYieldTurns()
+            // 回避/拒绝触发的退让按规则就是没有新证据（「他说不想做」不是事实），这里如实记。
+            turns.push({ yielded: isYield({ verdict: his.verdict, before: prev.text, after: r.text || '' }), hasEvidence: false })
+            saveYieldTurns(turns)
+          }
+          lastServeOf.set(String(r.sessionId || ''), { text: String(r.text || '').slice(0, 400), at: Date.now() })
+        } catch {
+          // 检测坏了不能拦发球
+        }
         setPending(r.sessionId, {
           requestId: r.requestId,
           topicId: r.topicId,
@@ -1948,6 +1973,74 @@ export function apply(ctx) {
     }
     return out.ledger
   }
+  /**
+   * 墙认得的对象：今天早上的任务原话。hard 立场只能绑这些，否则就是「我就是觉得」，没法对账。
+   * 规则项（规则.md）还没接进来，见第七轮进度 A1 一节「没做到的」。
+   */
+  function stanceKnown(now) {
+    try {
+      const state = loadDaily(loadDailyState(), now, zoneOr(config.timeZone))
+      return new Set((state.tasks || []).map((t) => String(t?.task || '').slice(0, 120)).filter(Boolean))
+    } catch {
+      return new Set()
+    }
+  }
+  /** 墙判一个对象做完没有：拿今天的任务对账结果。量不到给 null，不冤枉她也不白送。 */
+  function stanceDoneFn(now) {
+    const tz = zoneOr(config.timeZone)
+    let results = []
+    try {
+      results = reconcile(loadDaily(loadDailyState(), now, tz), { now, tz, notesDir: notesDir(), stat: statOf, check: wallCheck(now) }).results
+    } catch {
+      results = []
+    }
+    return (about) => {
+      const want = String(about || '').slice(0, 120)
+      const hit = results.find((r) => String(r.task || '').slice(0, 120) === want)
+      if (!hit) return null
+      return hit.verdict === 'done' ? true : hit.verdict === 'partial' || hit.verdict === 'miss' ? false : null
+    }
+  }
+  /**
+   * 把到期的立场交给墙的遥测算 kept/broken。status / settleSource 只有 stance.js 的 settleStances
+   * 能写——和 predict.settle 同一套堵法：模型说「我守住了」进不了这个字段。
+   */
+  function settleStanceNow(now) {
+    const cur = loadStances()
+    if (!cur.list.some((r) => r.status === 'held' && Number(r.until) <= now)) return cur
+    const out = settleStances(cur, { now, isDone: stanceDoneFn(now) })
+    if (!out.settled.length) return out.ledger
+    saveStances(out.ledger)
+    const tz = zoneOr(config.timeZone)
+    const kb = vaultKb()
+    for (const r of out.settled) {
+      record({ state: 'stance-settled', at: now, stance: r })
+      if (!kb) continue
+      try {
+        // 当日文件里留一行：她立过什么、守没守住（复用裁决的追加格式，不新造一份）。
+        appendVerdictDaily(kb, now, tz, {
+          kind: '立场结算',
+          satisfied: r.status === 'kept',
+          summary: r.text + '（' + r.id + ' → ' + r.status + '）',
+        })
+      } catch {
+        // 写不进当日文件不影响结算本身
+      }
+    }
+    // 命中率进 判断.md：她立得准不准，下一天的 hard 额度按这个浮动。
+    const digest = stanceDigest(out.ledger.list)
+    const dir = notesDir()
+    if (digest.length && dir) {
+      try {
+        const kbDirNow = kbDir(dir, home())
+        mkdirSync(kbDirNow, { recursive: true })
+        appendFileSync(join(kbDirNow, JUDGE_FILE), '\n' + digest.join('\n') + '\n', 'utf8')
+      } catch {
+        // 笔记库不可写就只留在账本里
+      }
+    }
+    return out.ledger
+  }
   function sprintOrTask(now) {
     return Number(config.sprintUntil) > now || Boolean(aiTask(config, now))
   }
@@ -2625,6 +2718,82 @@ export function apply(ctx) {
       },
     }
   }
+  function takeStanceTool(role) {
+    return {
+      name: 'take_stance',
+      description: '立一条立场：你要求过他什么，白纸黑字记下来，他磨你的时候这些算数。' +
+        'hard = 到期前不可更改，你也没有改它的工具，每天最多 3 条；soft 可以改，但要给理由和一条新证据，每天最多 5 条。' +
+        'about 绑今天早上的任务原话（hard 必须绑墙认得的任务）；evidence 给账本行号或一句原话；untilHours 几小时后到期（≤336）。' +
+        '每天额度有限，挑重要的立。',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: '她的原话，≤120 字' },
+          kind: { type: 'string', description: 'hard（不可改）/ soft（可改，要新证据）' },
+          about: { type: 'string', description: '绑今天哪件事（任务原话）' },
+          untilHours: { type: 'integer', description: '几小时后到期，≤336' },
+          evidence: { type: 'array', maxItems: 5, description: '凭什么立：账本行号或一句原话', items: { type: 'string' } },
+        },
+        required: ['text', 'kind', 'about', 'untilHours', 'evidence'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const tz = zoneOr(config.timeZone)
+        const cur = loadStances()
+        const hours = Number(args.untilHours)
+        const v = checkStance({
+          text: args.text, kind: args.kind, about: args.about, by: role, evidence: args.evidence,
+          until: Number.isFinite(hours) ? now + hours * 3_600_000 : 0,
+        }, { now, day: dayString(now, tz), known: stanceKnown(now), ledger: cur, hitRate: hitRate(cur.list) })
+        if (!v.ok) return { ok: false, text: '这条立场立不起来：\n- ' + v.problems.join('\n- ') }
+        const out = appendStance(cur, v.value)
+        saveStances(out.ledger)
+        record({ state: 'stance-new', at: now, by: role, stance: out.record })
+        return {
+          ok: true,
+          text: '立住了（' + out.record.id + '），' + zoneHm(out.record.until, tz) + ' 到期。' +
+            (out.record.kind === 'hard' ? '到期前谁也改不了，包括你。' : '要改得给一条新证据。'),
+        }
+      },
+    }
+  }
+  function reviseStanceTool(role) {
+    return {
+      name: 'revise_stance',
+      description: '改一条软立场。硬立场到期前改不了（返回 stance-locked）——能让它变的只有到期、墙按证据判定做完、他早上重新定计划。' +
+        '改必须给 reason，并引用一条立完那条立场之后新出现的证据（账本行号或一句原话）。' +
+        '他说不想做、换个话题不算证据，那是回避，不是新事实。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '立场编号，形如 S-20261111-01' },
+          reason: { type: 'string', description: '为什么改' },
+          text: { type: 'string', description: '改后的原话；不给就沿用原来那句' },
+          evidence: { type: 'array', maxItems: 5, description: '新证据：账本行号或一句原话', items: { type: 'string' } },
+        },
+        required: ['id', 'reason', 'evidence'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const cur = loadStances()
+        // 行号按整份账本从头数，不随读取窗口滑动；compact 之后会重来，可接受。
+        const entries = readLedger(home(), 5000).map((e, i) => ({ ...e, seq: i + 1 }))
+        const r = reviseStance(cur, { id: args.id, reason: args.reason, text: args.text, evidence: args.evidence, entries, now })
+        if (!r.ok) {
+          // 每次想改硬立场都留痕：这不是她的工具，试了要能查（stance-cave-attempt）。
+          record({ state: 'stance-cave-attempt', at: now, by: role, id: String(args.id || ''), code: r.code })
+          return { ok: false, text: r.problems.join('\n') }
+        }
+        saveStances(r.ledger)
+        record({ state: 'stance-revised', at: now, by: role, stance: r.record })
+        return { ok: true, text: '改成 ' + r.record.id + ' 了，到期时间没往后推（' + zoneHm(r.record.until, zoneOr(config.timeZone)) + '）。' }
+      },
+    }
+  }
   /**
    * 手机报来的事：overlay-closed（他关掉了聊天窗，聊没聊过）、defied（关窗 30 秒后还在娱乐 App 里）。
    * 违抗按规矩当场升级（不等模型）：开拒绝模式，并让姐姐马上来收尾。
@@ -3185,9 +3354,19 @@ export function apply(ctx) {
     vibeCache = { at: now, role, lines }
     return lines
   }
-  /** 当前主状态（人设、fish_index、工具子集都用这一个口径，别各算一套）。 */
-  function mainStateNow() {
+  /**
+   * 约束层里的立场块：生效中的立场（hard 优先）+ 退让提醒。
+   * 约束层永不裁，所以这里自己封顶（stance.js 的 stanceBlock），别让整轮注入抛错。
+   */
+  function stanceText() {
     const now = Date.now()
+    const tz = zoneOr(config.timeZone)
+    const block = stanceBlock(loadStances(), now, (t) => zoneHm(t, tz))
+    const warn = yieldLine(agreementRate(loadYieldTurns(), 20))
+    return [block, warn].filter(Boolean).join('\n')
+  }
+  /** 当前主状态（人设、fish_index、工具子集都用这一个口径，别各算一套）。 */
+  function mainStateNow() {    const now = Date.now()
     return resolveState({
       now,
       tz: zoneOr(config.timeZone),
@@ -3240,6 +3419,7 @@ export function apply(ctx) {
       { id: 'refuse', layer: 'constraint', priority: 95, text: refuseLines.join('\n') },
       { id: 'capability', layer: 'constraint', priority: 90, text: capabilityLines(role, { notesDir: notesDir() }) },
       { id: 'agenda', layer: 'constraint', priority: 85, text: agendaLines(mainState).join('\n') },
+      { id: 'stance', layer: 'constraint', priority: 87, text: stanceText() },
       { id: 'trust', layer: 'state', priority: 60, text: trustLines(trustNow()).join('\n') },
       { id: 'rhythm', layer: 'state', priority: 55, text: rhythmLines(lastRhythm).join('\n') },
       { id: 'gear', layer: 'state', priority: 50, text: gearLines(config, Date.now()).join('\n') },
@@ -3293,6 +3473,7 @@ export function apply(ctx) {
         controlTool(), startTaskTool(role), blockTool(role), tightenTool(role), relaxTool(role),
         wallTool(role), verdictTool(role), breakTool(role), endTaskTool(role),
         dailyPlanTool(role), dailyReviewTool(role), predictTool(role), workflowTool(role),
+        takeStanceTool(role), reviseStanceTool(role),
         fishIndexTool(),
       ].filter(Boolean)
       // R7 P0-3：STATE_TABLE 里每个主状态都写了 tools 子集（≤8），toolsFor() 拿得到，
@@ -3543,6 +3724,12 @@ export function apply(ctx) {
       settlePredictions(now)
     } catch (error) {
       console.error('[companion] 预判结算失败：' + String((error && error.message) || error))
+    }
+    // A1：到期的立场同样在这一步结算（status/settleSource 只有 settleStances 能写）。
+    try {
+      settleStanceNow(now)
+    } catch (error) {
+      console.error('[companion] 立场结算失败：' + String((error && error.message) || error))
     }
     // 第六轮 B：早/晚/周末到点没结论，由墙补一条缺席记录（只记账，不加锁）。
     try {

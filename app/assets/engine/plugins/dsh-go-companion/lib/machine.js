@@ -50,13 +50,13 @@ export const STATE_TABLE = [
     tools: ['daily_review', 'submit_to_wall', 'submit_verdict', 'request_relax', 'submit_prediction', 'notes_vault', 'fish_index', 'kb_write'] },
   { id: 'morning', priority: 80, enter: ['morning-lock'], lock: 'followup', back: null,
     agenda: '晨间立项：定今天 1–3 件事，每件带完成物；裁决满意且任务校验通过才放。',
-    tools: ['daily_plan', 'notes_vault', 'vault_search', 'fish_index', 'sister_note', 'submit_prediction', 'kb_write', 'dafeiyu_control'] },
+    tools: ['daily_plan', 'take_stance', 'notes_vault', 'vault_search', 'fish_index', 'sister_note', 'kb_write', 'dafeiyu_control'] },
   { id: 'review', priority: 80, enter: ['review-lock'], lock: 'followup', back: null,
     agenda: '验收：对照完成物和笔记库追问，满意才放风。',
     tools: ['submit_verdict', 'end_task_mode', 'submit_to_wall', 'notes_vault', 'fish_index', 'vault_recent_notes', 'kb_write', 'dafeiyu_control'] },
   { id: 'followup', priority: 80, enter: ['followup-other'], lock: 'followup',
     agenda: '追问锁：把当前问题问完，证据凑齐交墙（submit_to_wall）。',
-    tools: ['submit_verdict', 'submit_to_wall', 'notes_vault', 'fish_index', 'grant_break', 'sister_note', 'vault_search', 'kb_write'] },
+    tools: ['submit_verdict', 'submit_to_wall', 'revise_stance', 'notes_vault', 'fish_index', 'grant_break', 'vault_search', 'kb_write'] },
   { id: 'sprint', priority: 70, enter: ['sprint'], lock: 'sprint', back: null,
     agenda: '冲刺：少打扰，最多 20 分钟看一眼进展；到点或他点「申请验收」进验收。',
     tools: ['start_task_mode', 'submit_to_wall', 'end_task_mode', 'block_apps', 'notes_vault', 'fish_index', 'sister_note', 'gemini_live'] },
@@ -71,7 +71,7 @@ export const STATE_TABLE = [
     tools: ['notes_vault', 'fish_index', 'sister_note', 'grant_break', 'vault_search', 'vault_recent_notes', 'workflow_propose', 'dafeiyu_control'] },
   { id: 'standby', priority: 50, enter: ['always'], lock: 'standby', back: null,
     agenda: '待命：帮他挑下一件事、拆出第一步；10 分钟没动就开追问锁。',
-    tools: ['start_task_mode', 'submit_to_wall', 'end_task_mode', 'block_apps', 'notes_vault', 'fish_index', 'sister_note', 'gemini_live'] },
+    tools: ['start_task_mode', 'submit_to_wall', 'end_task_mode', 'block_apps', 'notes_vault', 'fish_index', 'revise_stance', 'gemini_live'] },
 ]
 
 /** 每个主状态最多挂几个工具（规格：任一状态 ≤8）。 */

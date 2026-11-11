@@ -63,6 +63,9 @@ export const WALL_CAPABILITIES = [
   'submit_verdict',
   'daily_plan',
   'daily_review',
+  // A1：立场是她在对话里立的承诺。自建工作流不许碰——能改立场就等于绕过了防同化。
+  'take_stance',
+  'revise_stance',
   'start_task_mode',
   'end_task_mode',
   'dafeiyu_control',

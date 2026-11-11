@@ -8,13 +8,15 @@ export const LAYERS = ['constraint', 'state', 'content']
 
 /**
  * 聊天侧每轮注入的上限。改这里等于改全局默认，逐次覆盖走第二参。
- * 约束层给 1800 而不是规格里写的 900：量出来的底稿本身就有 826（妹妹）/1004（姐姐），
+ * 约束层给 2100 而不是规格里写的 900：量出来的底稿本身就有 826（妹妹）/1004（姐姐），
  * 加上能力说明 354/390 和议程 333 已经到 1513/1727，900 装不下 —— 而约束层「永不裁、超了就抛错」，
- * 装不下等于每轮都抛。总量 2400 是验收硬指标，没动。见 docs/dafeiyu/第七轮进度.md 的 P0-3 一节。
+ * 装不下等于每轮都抛。A1 又往里加了立场块（上限 200 字），姐姐那边只剩 73 字余量会当场抛，
+ * 所以抬到 2100。总量 2400 是验收硬指标，没动：约束层占得多，状态层/内容层就按优先级少装。
+ * 见 docs/dafeiyu/第七轮进度.md 的 P0-3、A1 两节。
  */
 export const DEFAULT_BUDGET = {
   total: 2400,
-  perLayer: { constraint: 1800, state: 1000, content: 500 },
+  perLayer: { constraint: 2100, state: 1000, content: 500 },
 }
 
 const charsOf = (block) => String(block.text).length

@@ -4,11 +4,12 @@ import { fitBudget, DEFAULT_BUDGET, LAYERS, INJECT_OPEN, INJECT_CLOSE, stripInje
 
 const b = (id, layer, priority, n) => ({ id, layer, priority, text: 'x'.repeat(n) })
 
-test('B14 默认预算：总量 2400，三层 1800/1000/500', () => {
+test('B14 默认预算：总量 2400，三层 2100/1000/500', () => {
   assert.equal(DEFAULT_BUDGET.total, 2400)
-  // 约束层默认 1800 而不是规格写的 900：底稿 826/1004 + 能力 354/390 + 议程 333 已经超 900，
-  // 而约束层永不裁、超了抛错 —— 900 会让姐姐每一轮都抛。理由写在 lib/budget.js 的注释里。
-  assert.deepEqual(DEFAULT_BUDGET.perLayer, { constraint: 1800, state: 1000, content: 500 })
+  // 约束层默认 2100 而不是规格写的 900：底稿 826/1004 + 能力 354/390 + 议程 333 已经到 1513/1727，
+  // A1 又加了立场块（上限 200），姐姐那边只剩 73 字余量会每轮抛错（约束层永不裁、超了抛）。
+  // 理由写在 lib/budget.js 的注释里；总量 2400 这个验收硬指标没动。
+  assert.deepEqual(DEFAULT_BUDGET.perLayer, { constraint: 2100, state: 1000, content: 500 })
   assert.deepEqual(LAYERS, ['constraint', 'state', 'content'])
 })
 
@@ -20,23 +21,23 @@ test('B1 约束层永不裁：三个约束块全带', () => {
 })
 
 test('B2 约束层超 perLayer.constraint 就抛错，不悄悄截断', () => {
-  const blocks = [b('c1', 'constraint', 100, 1200), b('c2', 'constraint', 90, 700)]
+  const blocks = [b('c1', 'constraint', 100, 1400), b('c2', 'constraint', 90, 800)]
   assert.throws(() => fitBudget(blocks), (error) => {
     assert.equal(error.reason, 'constraint-over-budget')
-    assert.equal(error.chars, 1900)
-    assert.equal(error.budget, 1800)
+    assert.equal(error.chars, 2200)
+    assert.equal(error.budget, 2100)
     assert.deepEqual(error.blocks, ['c1', 'c2'])
     return true
   })
 })
 
-test('B3 约束层刚好装满不抛错（边界 1800）', () => {
-  const out = fitBudget([b('c1', 'constraint', 100, 1800)])
+test('B3 约束层刚好装满不抛错（边界 2100）', () => {
+  const out = fitBudget([b('c1', 'constraint', 100, 2100)])
   assert.deepEqual(out.kept, ['c1'])
 })
 
-test('B4 约束层 1801 就抛错（边界 +1）', () => {
-  assert.throws(() => fitBudget([b('c1', 'constraint', 100, 1801)]), /约束层超预算/)
+test('B4 约束层 2101 就抛错（边界 +1）', () => {
+  assert.throws(() => fitBudget([b('c1', 'constraint', 100, 2101)]), /约束层超预算/)
 })
 
 test('B5 状态层按 priority 降序装，装不下的整块丢', () => {
