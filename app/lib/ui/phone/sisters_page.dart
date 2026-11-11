@@ -11,6 +11,14 @@ import '../theme/theme.dart';
 import 'deposit_page.dart';
 import 'wall_page.dart';
 
+/// C2：四个基本操作的显示名和图标。键是插件给的 op 码，不在这里造第二套命名。
+const _opLabels = <String, (String, IconData)>{
+  'recall': ('回想', AppIcons.history),
+  'brief': ('精简', AppIcons.edit),
+  'predict': ('预判', AppIcons.info),
+  'ask': ('提问', AppIcons.chat),
+};
+
 /// 设置 → 手机操控 → 姐妹（R4-5）。
 ///
 /// 姐妹两张角色卡，用分段胶囊切换：选中谁就显示谁的一句话定位和人设。
@@ -91,6 +99,8 @@ class _SistersPageState extends State<SistersPage> {
           _timelineCard(view),
           const SizedBox(height: 24),
           _auditCard(view.audit),
+          const SizedBox(height: 12),
+          _opsCard(view.drillOps),
           const SizedBox(height: 12),
           _depositCard(),
         ],
@@ -213,6 +223,32 @@ class _SistersPageState extends State<SistersPage> {
             MaterialPageRoute<void>(builder: (_) => const WallPage()),
           ),
         ),
+      ],
+    );
+  }
+
+  /// C2：四个基本操作的近 14 天通过率。
+  ///
+  /// 只把插件算好的数字摆出来：没练过的操作写「还没练过」，不写成 0%（那会被当成满分）。
+  Widget _opsCard(Map<String, DrillOpStat> stats) {
+    final rows = <Widget>[];
+    for (final e in stats.entries) {
+      final label = _opLabels[e.key];
+      if (label == null) continue;
+      final stat = e.value;
+      rows.add(ListPageRow(
+        icon: label.$2,
+        title: label.$1,
+        value: !stat.tried ? '还没练过' : '${stat.passed}/${stat.asked}（${(stat.rate * 100).round()}%）',
+      ));
+    }
+    return ListPageCard(
+      title: '〔四个基本操作〕近 14 天',
+      children: [
+        if (rows.isEmpty)
+          const ListPageRow(icon: AppIcons.info, title: '还没有练过')
+        else
+          ...rows,
       ],
     );
   }

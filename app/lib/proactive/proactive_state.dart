@@ -466,6 +466,26 @@ class ProactiveChannel {
       return null;
     }
   }
+
+  /// C2：四个基本操作（插件 `/drill-op`）。
+  ///
+  /// [answer] 为空就是只读（GET），读出的是链路该出的那个操作、今天的额度和近 14 天通过率；
+  /// 给 [answer] 才算判卷。判的人是谁、什么算过，全在插件的代码里，这里只透传。
+  /// [blind] 用于回想：卡得先遮住，遮不住就不算想起来。
+  ///
+  /// 失败返回 null，页面说「读不到」，不编一道题出来。
+  Future<DrillOpView?> drillOp({String? op, String? answer, bool? blind}) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('drillOp', {
+        if (op != null) 'op': op,
+        if (answer != null) 'answer': answer,
+        if (blind != null) 'blind': blind,
+      });
+      return DrillOpView.fromWire(raw);
+    } on Exception {
+      return null;
+    }
+  }
 }
 
 /// The host plugin's own view: which session proactive turns go to, and which agents are alive.
@@ -690,6 +710,7 @@ class SistersView {
     this.memory = const [],
     this.timeline = const [],
     this.audit = SistersAudit.empty,
+    this.drillOps = const {},
     this.error,
   });
 
@@ -702,6 +723,10 @@ class SistersView {
   final List<SistersNote> timeline;
 
   final SistersAudit audit;
+
+  /// C2：操作 → 近 14 天通过率（`brief` / `predict` / `ask` / `recall`）。
+  /// 没练过的操作也在表里，`asked` 是 0——没练过 ≠ 满分。
+  final Map<String, DrillOpStat> drillOps;
 
   /// 插件那边的错误码（`no_transport` / `no_answer` / `timeout` …）；null 表示正常。
   final String? error;
@@ -725,7 +750,18 @@ class SistersView {
       memory: _notes(raw['memory']),
       timeline: _notes(raw['timeline']),
       audit: SistersAudit.fromWire(raw['audit']),
+      drillOps: _stats(raw['drillOps']),
     );
+  }
+
+  static Map<String, DrillOpStat> _stats(Object? value) {
+    final out = <String, DrillOpStat>{};
+    if (value is! Map) return out;
+    value.forEach((k, v) {
+      final stat = DrillOpStat.fromWire(v);
+      if (k is String && stat != null) out[k] = stat;
+    });
+    return out;
   }
 
   static List<Object?> _list(Object? value) => value is List ? value : const [];
@@ -1166,6 +1202,129 @@ class MountView {
       pendingSrc: pending is Map && pending['src'] is String ? pending['src'] as String : null,
       scaffoldUser: user,
       scaffoldHer: her,
+    );
+  }
+}
+
+/// C2：一次 `/drill-op` 的结果。
+///
+/// 不带答案只读出什么题（[next]）、今天的额度和近 14 天通过率；带答案才带 [judge]。
+/// 判卷全在插件的代码里，这里不重算也不兜底：插件说没判过，界面就不能显示成过了。
+class DrillOpView {
+  const DrillOpView({
+    this.next,
+    this.name = '',
+    this.ask = '',
+    this.pass = '',
+    this.used = 0,
+    this.max = 0,
+    this.stats = const {},
+    this.judge,
+    this.error,
+    this.message = '',
+  });
+
+  /// 链路该出的那一个是哪个操作（`brief` / `predict` / `ask` / `recall`）；额度用完是 null。
+  final String? next;
+  final String name;
+
+  /// 这一题要他干什么。
+  final String ask;
+
+  /// 合格线原话。界面照抄，不自己解释。
+  final String pass;
+
+  final int used;
+  final int max;
+
+  /// 操作 → 近 14 天通过率。没练过的操作也在表里，`asked` 是 0（不是满分）。
+  final Map<String, DrillOpStat> stats;
+
+  /// 刚判完那一题的结果；只读查询是 null。
+  final DrillOpJudge? judge;
+
+  /// 插件退回来的错误码（`no-quota` / `bad-op` …）；null 表示正常。
+  final String? error;
+  final String message;
+
+  bool get ok => error == null;
+  int get left => max - used < 0 ? 0 : max - used;
+
+  static DrillOpView? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    final op = raw['op'];
+    final m = op is Map ? op : const {};
+    final meta = m['meta'];
+    final quota = m['quota'];
+    final stats = <String, DrillOpStat>{};
+    if (m['stats'] is Map) {
+      (m['stats'] as Map).forEach((k, v) {
+        final s = DrillOpStat.fromWire(v);
+        if (k is String && s != null) stats[k] = s;
+      });
+    }
+    final next = m['next'];
+    final err = raw['error'];
+    return DrillOpView(
+      next: next is String && next.isNotEmpty ? next : null,
+      name: meta is Map && meta['name'] is String ? meta['name'] as String : '',
+      ask: meta is Map && meta['ask'] is String ? meta['ask'] as String : '',
+      pass: meta is Map && meta['pass'] is String ? meta['pass'] as String : '',
+      used: quota is Map && quota['used'] is num ? (quota['used'] as num).toInt() : 0,
+      max: quota is Map && quota['max'] is num ? (quota['max'] as num).toInt() : 0,
+      stats: stats,
+      judge: DrillOpJudge.fromWire(raw['judge']),
+      error: err is Map && err['code'] is String && (err['code'] as String).isNotEmpty
+          ? err['code'] as String
+          : null,
+      message: err is Map && err['message'] is String ? err['message'] as String : '',
+    );
+  }
+}
+
+/// 一个操作在窗口内的通过率。没出过题 `asked` 是 0，`rate` 是 0——没练过 ≠ 满分。
+class DrillOpStat {
+  const DrillOpStat({this.asked = 0, this.passed = 0, this.rate = 0});
+
+  final int asked;
+  final int passed;
+  final double rate;
+
+  bool get tried => asked > 0;
+
+  static DrillOpStat? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    return DrillOpStat(
+      asked: raw['asked'] is num ? (raw['asked'] as num).toInt() : 0,
+      passed: raw['passed'] is num ? (raw['passed'] as num).toInt() : 0,
+      rate: raw['rate'] is num ? (raw['rate'] as num).toDouble() : 0,
+    );
+  }
+}
+
+/// 刚判完那一题。[text] 是插件给的原话（为什么过、为什么不过），界面照抄。
+/// [demo] 只在**第二次**没过时才有：第一次就给示范等于替他答。
+class DrillOpJudge {
+  const DrillOpJudge({this.op = '', this.ok = false, this.code = '', this.text = '', this.demo = ''});
+
+  final String op;
+  final bool ok;
+  final String code;
+  final String text;
+
+  /// 示范答案；第一次没过是空串（不给）。
+  final String demo;
+
+  bool get hasDemo => demo.isNotEmpty;
+
+  static DrillOpJudge? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    return DrillOpJudge(
+      op: raw['op'] is String ? raw['op'] as String : '',
+      ok: raw['ok'] == true,
+      code: raw['code'] is String ? raw['code'] as String : '',
+      text: raw['text'] is String ? raw['text'] as String : '',
+      demo: raw['demo'] is String ? raw['demo'] as String : '',
     );
   }
 }

@@ -53,7 +53,9 @@ import { NOTES_CANDIDATES, agendaLines, capabilityLines, companionChatText, role
 import { fitBudget, stripInjection } from './budget.js'
 import { tide as tideOf, tideGap, tideHourly, vagueStreak } from './tide.js'
 import { FACES, stepTemper, temperLine } from './temper.js'
-import { drillLines, drillOf, pickDrill, scoldLines } from './drills.js'
+// C2 的四个操作判定（judgeOp/nextOp/opQuota/opStats）和九种思维题同一个模块：
+// 判定纯函数在 drills.js，这里只负责收答案、记账、把进度挂进面板。
+import { OP_META, OP_ORDER, demoOf, drillLines, drillOf, failsToday, judgeOp, nextOp, opQuota, opStats, pickDrill, scoldLines } from './drills.js'
 import { normalizeTracks, pickTrack, recentTracks, trackStatus } from './tracks.js'
 // C1 挂载卡：纯函数在 mount.js，这里只负责落盘、路由和注入。
 import {
@@ -728,10 +730,18 @@ export function apply(ctx) {
         : lighter ? 0
         : phone?.fun ? 0.45 + water.level / 200
         : mode === 'coach' ? 0.3 : 0
-      const drill = Math.random() < drillChance
+      // C2：链路说该练哪个操作了。挂载卡开着才有素材，所以它跟着 drillsOn 走。
+      const opDue = drillsOn ? (opQuota(entries, startOfDay(now, config.timeZone)).left > 0
+        ? nextOp(entries, startOfDay(now, config.timeZone))
+        : null) : null
+      const rolled = Math.random() < drillChance
+      // 出题这一球真的命中了才轮得到操作题：欠着的思维题要先补（同一题重问），
+      // 没欠着就让「该练的那个操作」顶掉随机思维题——两者共用一个槽位，不叠着出。
+      const drill = rolled && (!opDue || scold.length)
         ? (scold.length ? drillOf(owed.drill) : pickDrill(entries, drillScorer(brain)))
         : null
-      if (drill) serveType = 'drill'
+      const drillOp = rolled && !drill ? opDue : null
+      if (drill || drillOp) serveType = 'drill'
       // 支线（第六轮 A）：配置里有几条就按"最近三条避开"挑一条。一条都没有 → null，主干不受影响。
       const track = pickTrack(normalizeTracks(configuredTracks()).tracks, recentTracks(entries))
       const firstToday = recent.counts.generated === 0
@@ -759,6 +769,8 @@ export function apply(ctx) {
         allowTools: config.proactiveTools !== false,
         temper: face,
         drill,
+        // C2：这一球练哪个操作（没有思维题时才轮到它，见上面 drillOp 的算法）。
+        drillOp,
         track,
         scold,
         beliefs: brainLines(brain),
@@ -774,6 +786,8 @@ export function apply(ctx) {
       const extra = {
         tide: water.level, band: water.band, face: faceId, surprise: temper.surprise || undefined,
         drill: drill?.id, force: force.level || undefined, track: track?.id,
+        // C2：这一球练的是哪个操作。答案不再交给模型判，回球时按这个码走代码判。
+        drillOp: drillOp || undefined,
       }
       return { text: prompt, prompt, topic, serveType, rallyId: rally.rallyId, shot: rally.shot, silence, extra }
     } finally {
@@ -888,6 +902,8 @@ export function apply(ctx) {
           shot: r.shot,
           serveType: r.serveType,
           drill: r.extra?.drill,
+          // C2：这一球是四操作里的哪一个。回球时要按它判，不能等到回球才发现不知道练的是什么。
+          drillOp: r.extra?.drillOp,
           serve: r.text || '',
           at: Date.now(),
         })
@@ -974,7 +990,10 @@ export function apply(ctx) {
           // 这一球由大肥鱼自己判（6 秒超时或连不上就退回规则），不再按字数。
           const target = judgeTargetOf(ctx, session?.id, config)
           const judgeBegan = Date.now()
-          const judged = await judgeReply({
+          // C2：四个基本操作的合格线在代码里，这一球不问模型——问了她就会开始安慰人。
+          // 判完记一条 drill-op，欠着的下一步要等这一条才放行。
+          const opVerdict = pending.drillOp ? judgeOpNow(pending.drillOp, text, session?.id) : null
+          const judged = opVerdict || await judgeReply({
             stream: streamOf(),
             provider: target?.provider,
             model: target?.model,
@@ -3955,7 +3974,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/workflows' || path === '/gemini/due')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -4023,6 +4042,7 @@ export function apply(ctx) {
       if (path === '/workflows') return send(res, 200, workflowsRoute(body.value))
         if (path === '/deposit') return send(res, 200, depositRoute(body.value))
         if (path === '/mount') return send(res, 200, mountRoute(body.value))
+        if (path === '/drill-op') return send(res, 200, drillOpRoute(body.value))
         config = mergeConfig(config, body.value)
         writeConfig(config)
         // 换了会话 / 名字 / 人设：马上重挂，不等下一次定时检查。
@@ -4054,6 +4074,10 @@ export function apply(ctx) {
       // C1：挂载卡的只读视图（浮层小卡打开时先 GET 一次）。写操作走 POST。
       if (req.method === 'GET' && path === '/mount') {
         return send(res, 200, mountRoute({ timeZone: url.searchParams.get('timeZone') || undefined }))
+      }
+      // C2：今天该出哪个操作、还剩几题、近 14 天通过率。只读，不记账。
+      if (req.method === 'GET' && path === '/drill-op') {
+        return send(res, 200, drillOpView({ timeZone: url.searchParams.get('timeZone') || undefined }))
       }
       return send(res, 404, { v: 1, error: { code: 'not-found', message: path } })
     } catch (e) {
@@ -4601,6 +4625,99 @@ export function apply(ctx) {
     return { v: 1, ok: true, ...trackStatus(configuredTracks(), recentTracks(entries)) }
   }
 
+  /**
+   * C2：四个基本操作（回想 / 精简 / 预判 / 提问）。
+   *
+   * 合格线全在 `drills.js` 的 judge 里，这一层只做三件事：从挂载卡上取素材、把答案交给 `judgeOp`、记账。
+   * **答案不交给模型判**：判的人手里有权，就会开始安慰人；一软，练半年也不知道有没有长进，
+   * 界面还会告诉他已经通过了。
+   */
+  function opMaterial(op, entries) {
+    const card = openCardOf(loadMount())
+    const givens = card ? card.givens.map((g) => g.text) : []
+    const steps = card ? card.steps.map((s) => s.text) : []
+    if (op === 'brief') {
+      // 素材是他最近一段超过 100 字的话：太短的压不出东西，压了也看不出他会不会压。
+      let source = ''
+      for (let i = entries.length - 1; i >= 0; i -= 1) {
+        const e = entries[i]
+        if (e?.state !== 'say-text' || !e.text) continue
+        if (String(e.text).trim().length <= 100) continue
+        source = String(e.text)
+        break
+      }
+      return { source, goal: card ? card.goal.text : '' }
+    }
+    // 回想只认结论（目标在卡顶上，照着目标念不算「想起来推到哪」）。
+    // 素材取**上一张卡**（停放着的也行）：正在用的那张开着的时候他看得见，那不算回想。
+    if (op === 'recall') {
+      const last = lastCardOf(loadMount())
+      return { cardWords: last ? last.steps.map((s) => s.text).join('；') : '', blind: Boolean(last) && last.status !== 'open' }
+    }
+    return { cardWords: [...givens, ...steps].join('；') }
+  }
+
+  /**
+   * C2：聊天里回球时按代码判这一题（`/drill-op` 是另一条路，判的是同一套 judge）。
+   *
+   * 判完立刻记一条 `drill-op`：额度和链路都读账本，不记账下一题会一直卡在同一个操作。
+   * 回给判球链路的结果用 `verdict` 的形状，让「这一球算不算认真回」的老记账不用改。
+   * 判词只用既有的六个（过了 = engaged，没过 = brief）：自造一个词会污染判词白名单，
+   * 而这条路上的 `verdict` 还要进大脑记账。
+   */
+  function judgeOpNow(op, text, sessionId) {
+    const entries = readLedger(home(), 800)
+    const judged = judgeOp(op, text, opMaterial(op, entries))
+    record({ state: 'drill-op', at: Date.now(), op, ok: judged.ok, code: judged.code, sessionId: sessionId || undefined })
+    return { verdict: judged.ok ? 'engaged' : 'brief', judged: true, text: judged.text, next: '' }
+  }
+  function drillOpView(body) {
+    const now = Date.now()
+    const tz = requestZone(body?.timeZone, config)
+    const since = startOfDay(now, tz)
+    const entries = readLedger(home(), 800)
+    const quota = opQuota(entries, since)
+    // 额度用完今天就到此为止：把这个操作练成肌肉记忆比凑够六题重要。
+    const next = quota.left > 0 ? nextOp(entries, since) : null
+    return {
+      v: 1, ok: true,
+      op: {
+        order: OP_ORDER,
+        next,
+        meta: next ? OP_META[next] : null,
+        quota,
+        // 近 14 天，今天算第 1 天。
+        stats: opStats(entries, since - 13 * 86_400_000),
+      },
+    }
+  }
+  function drillOpRoute(body) {
+    const now = Date.now()
+    const tz = requestZone(body?.timeZone, config)
+    const since = startOfDay(now, tz)
+    const result = drillOpView(body)
+    const quota = result.op.quota
+    if (quota.left <= 0) {
+      return { ...result, ok: false, error: { code: 'no-quota', message: '今天的额度用完了（' + quota.max + ' 题）。' } }
+    }
+    // 不出 `op` 就按链路该出的那个判：调用方少一步，链路约束也少一处能绕开的地方。
+    const op = String(body?.op || result.op.next || '')
+    if (!OP_META[op]) {
+      return {
+        ...result, ok: false,
+        error: { code: 'bad-op', message: '只认 ' + OP_ORDER.join(' / ') + ' 四个操作。' },
+      }
+    }
+    const entries = readLedger(home(), 800)
+    const ctx = { ...opMaterial(op, entries), blind: body?.blind === true }
+    const judged = judgeOp(op, body?.answer, ctx)
+    // 第一次没过只说他差在哪条线；第二次没过才给示范（规格原文，见 drills.js 的 demoOf）。
+    const demo = !judged.ok && failsToday(entries, since, op) >= 1 ? demoOf(op) : ''
+    record({ state: 'drill-op', at: now, op, ok: judged.ok, code: judged.code })
+    // 记完再读一次：额度、链路、进度都要算上刚刚这一题。
+    return { ...drillOpView(body), judge: { op, ok: judged.ok, code: judged.code, text: judged.text, demo: demo || undefined } }
+  }
+
   function sistersRoute(body) {
     const now = Date.now()
     const tz = requestZone(body?.timeZone, config)
@@ -4625,6 +4742,8 @@ export function apply(ctx) {
       timeline: Array.isArray(snap.timeline) ? snap.timeline : [],
       wall: snap.wall || null,
       audit: auditOf({ memory: loadWallMem(), auditText, today }),
+      // C2：四个操作近 14 天的通过率。面板和周报都读这一张，不再自己算一遍。
+      drillOps: opStats(readLedger(home(), 800), startOfDay(now, tz) - 13 * 86_400_000),
     }
   }
   function panelSnapshot() {

@@ -214,6 +214,20 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                     ProactiveRuntime.fetchPluginRoute(result, "POST", "/mount", body)
                 }
             }
+            // C2：四个基本操作（精简 / 预判 / 提问 / 回想）。不带 answer 只读出什么题与通过率；
+            // 带 answer 才算判卷。判的人是谁、什么算过，全在插件里，这里只透传。
+            "drillOp" -> {
+                if (call.argument<String>("answer") == null) {
+                    ProactiveRuntime.fetchPluginRoute(
+                        result, "GET", "/drill-op?timeZone=${BeijingClock.ZONE.id}", null,
+                    )
+                } else {
+                    val body = LinkedHashMap<String, Any?>()
+                    body["timeZone"] = BeijingClock.ZONE.id
+                    (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String && k != "timeZone") body[k] = v }
+                    ProactiveRuntime.fetchPluginRoute(result, "POST", "/drill-op", body)
+                }
+            }
             else -> result.notImplemented()
         }
     }
