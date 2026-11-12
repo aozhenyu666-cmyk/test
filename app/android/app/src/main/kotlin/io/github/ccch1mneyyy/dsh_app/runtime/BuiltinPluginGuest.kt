@@ -177,6 +177,10 @@ object BuiltinPluginGuest {
                 "lib/dayplan.js",
                 // R8 P2：全天主动。计划生效后他不再开局，局来开他——换局有额度，「不开」不许说。
                 "lib/autobout.js",
+                // R8 P3：答错只重打、敷衍走升级、混乱只压缩。度量复用 J3 那一套。
+                "lib/reply.js",
+                // R8 P4：升级阶梯。E1/E1′/E2/E3 与 L1/L2/L3 全在代码里，模型无权减免。
+                "lib/escalate.js",
             ),
         ),
     )
