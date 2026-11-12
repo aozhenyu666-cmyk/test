@@ -7,12 +7,19 @@ import android.content.Intent
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import io.github.ccch1mneyyy.dsh_app.phone.Json
 import io.github.ccch1mneyyy.dsh_app.shortcuts.EntryActivity
+import java.io.File
 
 /**
  * Quick Settings tile 「局」: opens the 局 panel (through shortcuts/EntryActivity, kind `bouts`).
- * An action, not a switch: always inactive, with the app's name as its second line (otherwise
+ * An action, not a switch: always inactive, with today's beat count as its second line (otherwise
  * the system writes 「关闭」 there). On the lock screen it asks to unlock first.
+ *
+ * The count comes from a summary the plugin writes whenever it renders a 局 panel
+ * (`bouts-status.json`, see `boutsSnapshot` in dsh-go-companion/lib/index.js): the tile cannot
+ * read the plugin's sqlite, and the plugin cannot push to a tile. Until a 局 panel has been opened
+ * once the file does not exist and the second line falls back to the app's name.
  */
 class BoutsTileService : TileService() {
     override fun onStartListening() {
@@ -21,7 +28,7 @@ class BoutsTileService : TileService() {
         tile.state = Tile.STATE_INACTIVE
         tile.label = AppStrings.get(this, R.string.tile_bouts)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            tile.subtitle = applicationInfo.loadLabel(packageManager)
+            tile.subtitle = todayLine() ?: applicationInfo.loadLabel(packageManager)
         }
         tile.updateTile()
     }
@@ -44,5 +51,34 @@ class BoutsTileService : TileService() {
             }
         } catch (_: Exception) {
         }
+    }
+
+    /**
+     * 「今日 N 拍」, prefixed while a 局 is still running. Null when the plugin never wrote a
+     * summary — the file only appears once a 局 panel has been rendered at least once.
+     */
+    private fun todayLine(): String? {
+        val status = readStatus() ?: return null
+        val beats = (status["beats"] as? Number)?.toInt() ?: return null
+        return if (status["running"] == true) {
+            AppStrings.get(this, R.string.tile_bouts_running, beats)
+        } else {
+            AppStrings.get(this, R.string.tile_bouts_today, beats)
+        }
+    }
+
+    /**
+     * The plugin's `$DSH_HOME/companion/bouts-status.json`. Which `$DSH_HOME` depends on how the
+     * engine was started (runtime/DshProcess sets HOME to filesDir, runtime/DirectLaunch runs
+     * inside the rootfs), so both candidates are tried — the same pair diagnostics resolves.
+     */
+    private fun readStatus(): Map<*, *>? {
+        for (home in listOf(File(filesDir, "runtime/rootfs/root/.dsh"), File(filesDir, ".dsh"))) {
+            val file = File(home, "companion/bouts-status.json")
+            if (!file.isFile || !file.canRead()) continue
+            val parsed = runCatching { Json.parse(file.readText(Charsets.UTF_8)) }.getOrNull()
+            if (parsed is Map<*, *>) return parsed
+        }
+        return null
     }
 }

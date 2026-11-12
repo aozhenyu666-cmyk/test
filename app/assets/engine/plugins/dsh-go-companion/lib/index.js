@@ -84,7 +84,7 @@ import { BUSY_DEFAULT_MIN, BUSY_MAX_MIN, aiTask, applyGear, effectiveGear, gearL
 import { trustGap, trustLines, trustScore } from './trust.js'
 import { buildSnapshot, sistersView } from './panel.js'
 import { boutsBooksView, boutsNowView, boutsProtocolsView, boutsQueueView } from './bouts_view.js'
-import { buildBoutsSnapshot } from './bouts_panel.js'
+import { boutsTileStatus, buildBoutsSnapshot } from './bouts_panel.js'
 import { builtinProtocolOf, builtinProtocols } from './builtin.js'
 import { createOfficial } from './boutrun.js'
 import { listBouts, listVerdicts, openBoutsDb, runningBout } from './bouts.js'
@@ -5114,6 +5114,10 @@ export function apply(ctx) {
         verdicts.push(...rows)
         beats.push(...listBeats(db, bout.id))
       }
+      // 磁贴在 Kotlin 侧，读不了 sqlite：顺手落一份摘要给它（BoutsTileService 读这个文件）。
+      // 拍数和 running 上面都已经算出来了，不额外查库。只在算快照时刷新——定时器自己推进的拍
+      // 要等下次开面板才上磁贴。shortcut: 面板渲染时刷新，介意延迟就在定时器里也调一次。
+      writeJson(stateFile('bouts-status.json'), boutsTileStatus({ now, beats, bouts: all }))
       return buildBoutsSnapshot({
         now,
         bouts: all,

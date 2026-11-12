@@ -43,6 +43,19 @@ export function isPass(verdict) {
 }
 
 /**
+ * 快捷设置磁贴（Kotlin `tile/BoutsTileService.kt`）读的那份摘要：今日拍数 + 有没有局在跑。
+ * 磁贴读不了 sqlite、也收不到推送，所以只能由这里算好，落到 `$DSH_HOME/companion/bouts-status.json`。
+ * 字段名是跨语言契约：改这里必须同时改 BoutsTileService.readStatus() 里取的键。
+ */
+export function boutsTileStatus({ now, beats = [], bouts = [] } = {}) {
+  return {
+    at: Number(now) || 0,
+    beats: beats.length,
+    running: bouts.some((bout) => Boolean(bout) && bout.status === 'running'),
+  }
+}
+
+/**
  * 各招式通过率，按拍数从多到少。
  * 只统计已经有判定结果的拍——没判的拍算进分母就是把「还没测」记成「没通过」。
  * @returns {Array<[string, number, number]>} [招式, 通过率%, 拍数]

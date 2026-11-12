@@ -8,7 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildBoutsSnapshot, isPass, minutesByProtocol, moveRates, todayScore } from '../lib/bouts_panel.js'
+import { boutsTileStatus, buildBoutsSnapshot, isPass, minutesByProtocol, moveRates, todayScore } from '../lib/bouts_panel.js'
 import {
   boutsBooksView,
   boutsNowView,
@@ -421,4 +421,28 @@ test('W1 视图：收局按钮只在现在页', () => {
 test('W1 视图：饼图式的百分比只出现在现在页', () => {
   assert.ok(JSON.stringify(boutsNowView({}, BARE)).includes('data.now.percent'))
   assert.ok(!JSON.stringify(boutsQueueView({}, BARE)).includes('data.now.percent'))
+})
+
+// 磁贴摘要（W3）：字段名是跨语言契约，Kotlin 的 BoutsTileService.readStatus() 按这个名字取。
+// 改名不改 Kotlin 不会报错，磁贴只会静默退回显示 App 名——所以这层必须钉住。
+test('W3 磁贴：今日拍数按拍算，running 只看有没有在跑的局', () => {
+  const status = boutsTileStatus({
+    now: NOW,
+    beats: [{ id: 'beat:1' }, { id: 'beat:2' }, { id: 'beat:3' }],
+    bouts: [{ id: 'bout:1', status: 'closed' }, { id: 'bout:2', status: 'running' }],
+  })
+  assert.deepEqual(status, { at: NOW, beats: 3, running: true })
+})
+
+test('W3 磁贴：没有在跑的局就是 false，没拍就是 0', () => {
+  const status = boutsTileStatus({ now: NOW, beats: [], bouts: [{ id: 'bout:1', status: 'closed' }] })
+  assert.equal(status.beats, 0)
+  assert.equal(status.running, false)
+})
+
+test('W3 磁贴：什么数据都没有时也不抛，字段形状不变', () => {
+  const status = boutsTileStatus()
+  assert.deepEqual(Object.keys(status).sort(), ['at', 'beats', 'running'])
+  assert.equal(status.beats, 0)
+  assert.equal(status.running, false)
 })
