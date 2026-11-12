@@ -181,6 +181,12 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 result, "POST", "/sisters",
                 linkedMapOf("timeZone" to BeijingClock.ZONE.id),
             )
+            // 第八轮 W3：系统分享进来的文字，当成当前这一拍的答案。
+            // 没有在跑的局时插件回 no-bout，手机据此退回「新对话」——分享不会被吞掉。
+            "boutsShare" -> ProactiveRuntime.fetchPluginRoute(
+                result, "POST", "/bouts",
+                linkedMapOf("text" to call.argument<String>("text")),
+            )
             // 每日四部门提交（第五轮）：信息收集 / 谋划思考 / 行为管理 / 统筹规划。
             // action=status 只读，action=submit 交一段（字数不到插件当场退回）。
             "deposit" -> {

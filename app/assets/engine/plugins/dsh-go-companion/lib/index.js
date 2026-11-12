@@ -4251,7 +4251,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -4311,6 +4311,7 @@ export function apply(ctx) {
         if (path === '/gemini/due') return send(res, 200, { v: 1, launch: dueGeminiLaunch(Date.now()) })
         if (path === '/event') return send(res, 200, eventRoute(body.value))
         if (path === '/session') return send(res, 200, sessionRoute(body.value))
+        if (path === '/bouts') return send(res, 200, boutsShareRoute(body.value))
         if (path === '/wall') return send(res, 200, wallRoute(body.value))
         if (path === '/wall/thread') return send(res, 200, wallThreadRoute(body.value))
         if (path === '/wall/appeal') return send(res, 200, wallAppealRoute(body.value))
@@ -5186,6 +5187,34 @@ export function apply(ctx) {
     live.official.close('abandoned')
     dropLive()
     return { ok: true, toast: '收局了，这局记成空局。' }
+  }
+
+  /**
+   * POST /bouts：把从别处分享进来的一段文字，当成当前这一拍的答案。
+   *
+   * 手机那边先问这里，接得住才不把分享丢进新对话。所以「没有局」必须是明确的 no-bout，
+   * 而不是一个静默的空成功——否则这段分享就凭空消失了。
+   *
+   * 答案走 answerBout（→ official.answer → boutrun），不是直接 addBeat：一拍要不要判、判什么、
+   * 记哪个 step_id 都由局官决定；绕过它插一条 beat 会留下一条没有判定的脏数据。
+   * runningBout 读的是库，live 是本进程开的那一局——引擎重启过就会有库里有局、进程里没局，
+   * 这时这一句接不进去，如实回 no-bout 让手机退回新对话。
+   */
+  function boutsShareRoute(body) {
+    const text = String(body?.text ?? '').trim()
+    if (!text) return { v: 1, ok: false, code: 'empty' }
+    const db = openBoutsDb(memoryPath())
+    try {
+      if (!runningBout(db) || !live) return { v: 1, ok: false, code: 'no-bout' }
+    } finally {
+      try {
+        db?.close?.()
+      } catch {
+        // 关不掉不影响这一句的判断
+      }
+    }
+    const r = answerBout(text.slice(0, 2_000), 'text')
+    return { v: 1, ok: Boolean(r.ok), toast: String(r.toast || '') }
   }
 
   /** 一句话发进去，等到回完（最多两分钟）。 */

@@ -420,6 +420,19 @@ class ProactiveChannel {
     }
   }
 
+  /// 第八轮 W3：把系统分享进来的一段文字当成当前这一拍的答案（插件 `POST /bouts`）。
+  ///
+  /// true 表示这句已经被当前这一局接住，分享分流就不再新开对话；false 是「没有在跑的局」
+  /// 或者连不上，分流照旧把文字放进新对话——分享不该因为局没开就被吞掉。
+  Future<bool> shareToBout(String text) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('boutsShare', {'text': text});
+      return raw is Map && raw['ok'] == true;
+    } on Exception {
+      return false;
+    }
+  }
+
   /// 每日四部门提交（插件 `POST /deposit`）。
   ///
   /// [department] 为空就是读状态；给了就是交那一段，[report] / [thought] 一起传。

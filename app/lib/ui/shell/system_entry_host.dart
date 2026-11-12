@@ -3,7 +3,8 @@
 //
 //   share sheet        a lone `.dshgo` file or a share link → the share-code
 //                      importer (as if opened); a hosted conversation link →
-//                      its replay; anything else → 新对话 with the text and
+//                      its replay; plain text while a 局 is running → that
+//                      beat's answer; anything else → 新对话 with the text and
 //                      attachments in the composer, not sent
 //   launcher shortcut  新对话 / 语音输入 → 新对话 (listening) · a recent
 //                      conversation → that conversation, on its host
@@ -26,6 +27,7 @@ import '../../l10n/l10n.dart';
 import '../../links/app_links.dart';
 import '../../links/launcher_entries.dart';
 import '../../links/share_intake.dart';
+import '../../proactive/proactive_state.dart';
 import '../../state/compose_inbox.dart';
 import '../../state/hosts_state.dart';
 import '../../state/sessions_state.dart';
@@ -82,6 +84,12 @@ class _SystemEntryHostState extends ConsumerState<SystemEntryHost> {
     if (share.shareLink case final link?) {
       ref.read(appLinksProvider).add(link.appLink);
       return;
+    }
+    // 第八轮 W3：有一局在跑时，纯文字分享就是这一拍的答案，不新开对话。
+    // 接不住（没有在跑的局、插件连不上）就往下走，照旧进新对话——分享不能凭空丢掉。
+    final shared = share.text?.trim();
+    if (share.files.isEmpty && shared != null && shared.isNotEmpty) {
+      if (await ProactiveChannel().shareToBout(shared)) return;
     }
     final request = await ComposeRequest.fromShare(share);
     if (mounted) await _compose(request);
