@@ -48,9 +48,13 @@ test('J3 能力库：没有同一句话登记在两个类里', () => {
 
 for (const [cls, names] of Object.entries(DOC_TABLE)) {
   for (const name of names) {
-    test(`J3 积木 ${cls}·${name}`, () => {
+    test(`J3 积木 ${cls}·${name}：在`, () => {
       assert.equal(hasCapability(name), true, name + ' 没登记')
+    })
+    test(`J3 积木 ${cls}·${name}：属于${cls}`, () => {
       assert.equal(capabilityOf(name).class, cls)
+    })
+    test(`J3 积木 ${cls}·${name}：执行形态 ${KIND_OF[cls]}`, () => {
       assert.equal(capabilityOf(name).kind, KIND_OF[cls])
     })
   }
