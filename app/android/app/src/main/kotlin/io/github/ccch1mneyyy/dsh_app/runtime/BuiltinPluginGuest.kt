@@ -175,6 +175,8 @@ object BuiltinPluginGuest {
                 "lib/settings.js",
                 // R8 P1：计划模态。候选与规则全在代码里，模型只负责把计划说出来。
                 "lib/dayplan.js",
+                // R8 P2：全天主动。计划生效后他不再开局，局来开他——换局有额度，「不开」不许说。
+                "lib/autobout.js",
             ),
         ),
     )
