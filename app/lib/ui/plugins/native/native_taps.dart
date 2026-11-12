@@ -829,3 +829,26 @@ void _toast(BuildContext context, String text) {
     ?..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(text), duration: const Duration(seconds: 2)));
 }
+
+/// Opens a plugin's panel by id from outside the composer — a launcher shortcut
+/// or the Quick Settings tile (the same destination `{open: panel:<id>}` reaches
+/// from a tap). False when that plugin or panel isn't installed right now, so
+/// the caller can fall back to the chat instead of pushing a blank page.
+Future<bool> openPluginPanel(
+  BuildContext context,
+  WidgetRef ref,
+  String package,
+  String panelId, {
+  String? sessionId,
+}) async {
+  if (!context.mounted) return false;
+  final plugin = ref.read(nativeContributionsProvider).plugin(package);
+  final panel = plugin?.panels.where((p) => p.id == panelId).firstOrNull;
+  if (panel == null) return false;
+  final session = sessionId ?? ref.read(currentSessionProvider);
+  await Navigator.of(
+    context,
+    rootNavigator: true,
+  ).push(NativePanelPage.route(panel: panel, sessionId: session));
+  return true;
+}

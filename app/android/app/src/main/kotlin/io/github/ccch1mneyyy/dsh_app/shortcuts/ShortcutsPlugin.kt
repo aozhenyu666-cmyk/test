@@ -140,7 +140,7 @@ class ShortcutsPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
         // Consumed either way: an entry without our token goes nowhere.
         if (intent.getStringExtra(EXTRA_TOKEN) != token) return true
         val kind = intent.getStringExtra(EXTRA_KIND) ?: return true
-        if (kind != KIND_NEW && kind != KIND_VOICE && kind != KIND_CHAT) return true
+        if (kind != KIND_NEW && kind != KIND_VOICE && kind != KIND_CHAT && kind != KIND_BOUTS) return true
         val sessionId = intent.getStringExtra(EXTRA_SESSION)
         if (kind == KIND_CHAT && sessionId.isNullOrEmpty()) return true
         val event = mapOf(
@@ -164,12 +164,14 @@ class ShortcutsPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
         const val KIND_NEW = "new"
         const val KIND_VOICE = "voice"
         const val KIND_CHAT = "chat"
+        /** 局: the Quick Settings 局 tile and its shortcut open the 局 panel. */
+        const val KIND_BOUTS = "bouts"
 
         const val MAX_RECENT = 3
         const val RECENT_PREFIX = "chat:"
 
-        /** 新对话 and 语音输入 in res/xml/shortcuts.xml. */
-        private const val STATIC_SHORTCUTS = 2
+        /** 新对话, 语音输入 and 局 in res/xml/shortcuts.xml. */
+        private const val STATIC_SHORTCUTS = 3
 
         /** Per process, never leaves it: proves an entry came through [EntryActivity]. */
         val token: String by lazy { UUID.randomUUID().toString() }

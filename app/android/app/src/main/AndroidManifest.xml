@@ -225,6 +225,19 @@
             <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="false" />
         </service>
 
+        <!-- Quick Settings tile 「局」 (tile/BoutsTileService.kt). -->
+        <service
+            android:name=".tile.BoutsTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_new_chat"
+            android:label="@string/tile_bouts"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="false" />
+        </service>
+
         <!-- Keeps the local DSH process alive while the app is in the background. -->
         <service
             android:name=".runtime.DshService"

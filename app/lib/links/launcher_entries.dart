@@ -28,6 +28,7 @@ sealed class LauncherEntry {
     return switch (raw['kind']) {
       'new' => NewChatEntry(text: text),
       'voice' => NewChatEntry(voice: true, text: text),
+      'bouts' => const BoutsEntry(),
       'chat' when sessionId is String && sessionId.isNotEmpty => OpenChatEntry(
         HostRef.decode(host is String ? host : null),
         sessionId,
@@ -44,6 +45,12 @@ class NewChatEntry extends LauncherEntry {
   final String text;
 
   final bool voice;
+}
+
+/// The 局 panel (the Quick Settings tile and its shortcut): the bout that is
+/// running now, or the one to open next.
+class BoutsEntry extends LauncherEntry {
+  const BoutsEntry();
 }
 
 /// One of the recent conversations.

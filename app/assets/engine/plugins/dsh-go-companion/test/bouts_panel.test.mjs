@@ -123,7 +123,8 @@ test('W1 视图：所有 data.* 绑定都能在快照里取到值键', () => {
     protocols: [{ id: 'execute', name: '执行局', steps: [{}] }],
   })
   const keys = [...bindingsOf(boutsView({}, { components: ['form'] }))]
-  assert.ok(keys.length > 10, '视图应当绑了十几处数据')
+  // 拆成四页之后，单页只绑自己那几个字段；四页合起来才是原来那张长卷。
+  assert.ok(keys.length > 5, '现在页应当绑了本拍要用的几个字段')
   for (const key of keys) {
     if (key.startsWith('data.form.')) continue // 表单是动作的入参，不在快照里
     const value = valueAt(snap, key)

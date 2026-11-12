@@ -35,11 +35,54 @@ export function minutesByProtocol(bouts = []) {
   return [...acc.entries()].sort((a, b) => b[1] - a[1])
 }
 
+/** 判过的才算；判词只有这几种写法算「过」。 */
+const PASS_ZH = new Set(['pass', 'ok', 'true', '通过', '对'])
+
+export function isPass(verdict) {
+  return PASS_ZH.has(String(verdict || '').trim().toLowerCase())
+}
+
+/**
+ * 各招式通过率，按拍数从多到少。
+ * 只统计已经有判定结果的拍——没判的拍算进分母就是把「还没测」记成「没通过」。
+ * @returns {Array<[string, number, number]>} [招式, 通过率%, 拍数]
+ */
+export function moveRates(beats = []) {
+  const acc = new Map()
+  for (const beat of beats) {
+    const move = String(beat.stepId ?? beat.step_id ?? '').trim()
+    if (!move) continue
+    const verdict = beat.verdict
+    if (verdict === undefined || verdict === null || String(verdict).trim() === '') continue
+    const row = acc.get(move) || { pass: 0, total: 0 }
+    row.total += 1
+    if (isPass(verdict)) row.pass += 1
+    acc.set(move, row)
+  }
+  return [...acc.entries()]
+    .map(([move, row]) => [move, Math.round((row.pass / row.total) * 100), row.total])
+    .sort((a, b) => b[2] - a[2])
+}
+
+/** 今天判定分的合计。一局都还没判过的时候是 null，面板写「—」而不是 0 分。 */
+export function todayScore(verdicts = []) {
+  let scored = 0
+  let sum = 0
+  for (const verdict of verdicts) {
+    const score = Number(verdict && verdict.score)
+    if (!Number.isFinite(score)) continue
+    scored += 1
+    sum += score
+  }
+  return scored ? Math.round(sum * 10) / 10 : null
+}
+
 /**
  * 拼面板数据。
  * @param {{
  *   now?:number, bouts?:object[], todayBouts?:object[], protocols?:object[],
- *   live?:object|null, escalations?:number, slackBeats?:number, doneToday?:number
+ *   live?:object|null, escalations?:number, slackBeats?:number, doneToday?:number,
+ *   beats?:object[], todayVerdicts?:object[], emptyRows?:string[]
  * }} input
  */
 export function buildBoutsSnapshot(input = {}) {
@@ -97,6 +140,9 @@ export function buildBoutsSnapshot(input = {}) {
     : '还没记上分钟'
   const totalMinutes = byProtocol.reduce((sum, [, m]) => sum + m, 0)
 
+  const rates = moveRates(input.beats || [])
+  const score = todayScore(input.todayVerdicts || [])
+
   return {
     now: now1,
     queue: queueRows,
@@ -113,6 +159,11 @@ export function buildBoutsSnapshot(input = {}) {
       slackCaption: '不算应答的那些回复',
       escalations: String(input.escalations || 0),
       escalationsCaption: '最近 7 天的升级',
+      // 没判过就是「—」：0 分和「还没判」不是一件事。
+      score: score === null ? '—' : String(score),
+      scoreCaption: score === null ? '今天还没有判定分' : '今天判定的合计',
+      moves: rates.map(([move, pass, total]) => move + ' ' + pass + '% · ' + total + ' 拍'),
+      movesNote: rates.length ? '各招式最近的通过率。' : '还没有判过任何一招。',
       rows: input.bookRows || [],
     },
     // 面板动作读这几个字段，别让动作自己再猜一遍状态。

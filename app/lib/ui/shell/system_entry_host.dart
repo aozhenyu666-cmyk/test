@@ -30,6 +30,7 @@ import '../../state/compose_inbox.dart';
 import '../../state/hosts_state.dart';
 import '../../state/sessions_state.dart';
 import '../common/discard_guard.dart';
+import '../plugins/native/native_taps.dart';
 
 /// Draws nothing. Put it once in the home shell's stack, next to [LinkHost].
 class SystemEntryHost extends ConsumerStatefulWidget {
@@ -93,6 +94,11 @@ class _SystemEntryHostState extends ConsumerState<SystemEntryHost> {
         // intent can arrive a beat before Flutter hears it is resumed.
         if (voice) await _untilResumed();
         if (mounted) await _compose(ComposeRequest(text: text, voice: voice));
+      case BoutsEntry():
+        // 局在插件里：先回到对话，再把这个面板推上来。没有装插件就退回对话，
+        // 不给一个空页面。
+        if (!await _showChat() || !mounted) return;
+        if (!await openPluginPanel(context, ref, 'dsh-go-companion', 'bouts')) return;
       case OpenChatEntry(:final host, :final sessionId):
         if (!await _showChat() || !mounted) return;
         final hosts = ref.read(hostsProvider);

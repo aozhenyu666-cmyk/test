@@ -83,7 +83,7 @@ import { decideForce, forceLines, refuseSwitch } from './force.js'
 import { BUSY_DEFAULT_MIN, BUSY_MAX_MIN, aiTask, applyGear, effectiveGear, gearLines, gearSwitch } from './gear.js'
 import { trustGap, trustLines, trustScore } from './trust.js'
 import { buildSnapshot, sistersView } from './panel.js'
-import { boutsView } from './bouts_view.js'
+import { boutsBooksView, boutsNowView, boutsProtocolsView, boutsQueueView } from './bouts_view.js'
 import { buildBoutsSnapshot } from './bouts_panel.js'
 import { builtinProtocolOf, builtinProtocols } from './builtin.js'
 import { createOfficial } from './boutrun.js'
@@ -5106,7 +5106,14 @@ export function apply(ctx) {
       const closedToday = today.filter((x) => x.status === 'closed')
       // 「敷衍」在账上就是代码判没过的那几拍；不另立指标，免得两处口径打架。
       let failed = 0
-      for (const bout of today) failed += listVerdicts(db, bout.id).filter((v) => v.result === 'fail').length
+      const beats = []
+      const verdicts = []
+      for (const bout of today) {
+        const rows = listVerdicts(db, bout.id)
+        failed += rows.filter((v) => v.result === 'fail').length
+        verdicts.push(...rows)
+        beats.push(...listBeats(db, bout.id))
+      }
       return buildBoutsSnapshot({
         now,
         bouts: all,
@@ -5117,6 +5124,8 @@ export function apply(ctx) {
         emptyToday: closedToday.filter((x) => x.closeReason !== 'done').length,
         escalations: closedToday.filter((x) => x.closeReason === 'escalated').length,
         slackBeats: failed,
+        beats,
+        todayVerdicts: verdicts,
       })
     } finally {
       try {
@@ -5232,6 +5241,8 @@ export function apply(ctx) {
         }
         if (typeof d.on === 'function') d.on('sisters-open', () => ({ open: 'panel:sisters' }))
         if (typeof d.on === 'function') d.on('bouts-open', () => ({ open: 'panel:bouts' }))
+        if (typeof d.on === 'function') d.on('bouts-queue-open', () => ({ open: 'panel:bouts-queue' }))
+        if (typeof d.on === 'function') d.on('bouts-books-open', () => ({ open: 'panel:bouts-books' }))
         d.panel('sisters', {
           view: sistersView,
           data: (scope, emit) => {
@@ -5271,36 +5282,45 @@ export function apply(ctx) {
           },
         })
         // 局是独立的一面：两姐妹不在这个面板里说话（W1）。
-        d.panel('bouts', {
-          view: boutsView,
-          data: (scope, emit) => {
-            panelScopes.set(keyOf(scope), scope)
-            emit(boutsSnapshot())
-            return () => panelScopes.delete(keyOf(scope))
+        // 宿主没有分页组件，四页就是四个面板：一个面板只做一件事，翻页也就不需要了。
+        const boutActions = (panelId) => ({
+          'bouts.refresh': (scope) => {
+            d.refresh(panelId, scope)
+            return { toast: '' }
           },
-          actions: {
-            'bouts.refresh': (scope) => {
-              d.refresh('bouts', scope)
-              return { toast: '' }
-            },
-            'bouts.open': (scope, event) => {
-              const r = startBout(values(event)['data.form.protocolId'])
-              d.refresh('bouts', scope)
-              return { toast: r.toast }
-            },
-            'bouts.answer': (scope, event) => {
-              const v = values(event)
-              const r = answerBout(v['data.form.answer'], v['data.form.ref'] ? 'photo' : 'text')
-              d.refresh('bouts', scope)
-              return { toast: r.toast }
-            },
-            'bouts.close': (scope) => {
-              const r = closeBoutNow()
-              d.refresh('bouts', scope)
-              return { toast: r.toast }
-            },
+          'bouts.open': (scope, event) => {
+            const r = startBout(values(event)['data.form.protocolId'])
+            d.refresh(panelId, scope)
+            return { toast: r.toast }
+          },
+          'bouts.answer': (scope, event) => {
+            const v = values(event)
+            const r = answerBout(v['data.form.answer'], v['data.form.ref'] ? 'photo' : 'text')
+            d.refresh(panelId, scope)
+            return { toast: r.toast }
+          },
+          'bouts.close': (scope) => {
+            const r = closeBoutNow()
+            d.refresh(panelId, scope)
+            return { toast: r.toast }
           },
         })
+        for (const [panelId, view] of [
+          ['bouts', boutsNowView],
+          ['bouts-queue', boutsQueueView],
+          ['bouts-protocols', boutsProtocolsView],
+          ['bouts-books', boutsBooksView],
+        ]) {
+          d.panel(panelId, {
+            view,
+            data: (scope, emit) => {
+              panelScopes.set(keyOf(scope), scope)
+              emit(boutsSnapshot())
+              return () => panelScopes.delete(keyOf(scope))
+            },
+            actions: boutActions(panelId),
+          })
+        }
       })
     } catch (error) {
       console.error('[companion] 面板注册失败：' + String((error && error.message) || error))
