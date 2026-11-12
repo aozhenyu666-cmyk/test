@@ -90,6 +90,22 @@ import {
   funBlockedBy, lockActive, lockExpired, obligationOf, obligationsView, openLock, standbyDue, takeReask,
 } from './followup.js'
 import { BRAIN_MIN_MS, SPRINT_LONG_MIN, SPRINT_MIN, resolveState, toolsElsewhere, toolsFor } from './machine.js'
+
+/**
+ * R7 P0-3：主状态是按钟点算的（深夜锁 00:30–07:00、吃饭时段都是钟点条件），而工具子集又跟着
+ * 主状态走。同一份代码在夜里跑和白天跑挂出来的工具不是同一套，单测没法确定自己跑在哪个状态。
+ *
+ * 这里是唯一的测试口子：把主状态钉成某个 id。生产环境永远不会调它（`null` = 真实计算），
+ * 它不改变任何判定逻辑，只是让「挂载时刻是哪个状态」变成用例能声明的东西。
+ */
+let statePin = null
+/** apply() 起来后由它填：钉一次状态就顺手按新子集重挂一遍（走的正是生产那条 syncTools）。 */
+let remountAll = null
+/** 单测用：钉住主状态并立刻重挂工具；传 null / 空值恢复真实计算。 */
+export function setStatePin(id) {
+  statePin = id || null
+  if (typeof remountAll === 'function') remountAll()
+}
 import {
   DEFAULT_WALL, wallConfig, wallDecision, mealNow, activeRelax, tightenActive, relaxRemaining, relaxUsedThisWeek, relaxBonus,
   trackApplyWindow, applyWindowOpen, dayKey, weekKey, WALL_KIND_DEFAULT, wallDefianceText,
@@ -3978,7 +3994,9 @@ export function apply(ctx) {
     }
   }
   /** 当前主状态（人设、fish_index、工具子集都用这一个口径，别各算一套）。 */
-  function mainStateNow() {    const now = Date.now()
+  function mainStateNow() {
+    if (statePin) return statePin
+    const now = Date.now()
     return resolveState({
       now,
       tz: zoneOr(config.timeZone),
@@ -3990,6 +4008,8 @@ export function apply(ctx) {
   }
   function chatPersonaText(role) {
     if (config.personaInChat === false) return ''
+    // R7 P0-3：先把工具子集对齐到当前主状态，再算注入——不然模型拿到的议程和手里的工具会对不上。
+    syncTools(role)
     const mode = effectiveMode(config, Date.now())
     if (config.dual === false) return singlePersonaText(mode)
     const names = roleNames(config)
@@ -4067,6 +4087,8 @@ export function apply(ctx) {
     return fitted.text
   }  /** role -> {sid, agent, off}：两个会话各挂各的人设。 */
   const personaMounts = new Map()
+  /** role -> {sid, all}：本次挂载构造出来的全部工具（全集），状态一变就按新子集重挂。 */
+  const toolBag = new Map()
   function mountOne(role, sid) {
     const cur = personaMounts.get(role) || { sid: '', agent: null, off: null }
     const agent = sid ? liveAgent(ctx, sid) : null
@@ -4092,7 +4114,11 @@ export function apply(ctx) {
       // 第四轮补：按用户决定，把原来"谁都没有"的五个全给她们——裁决（submit_verdict）、
       // 当场放风（grant_break）、验收任务（end_task_mode）、定事（daily_plan）、对账（daily_review）。
       // 墙的权限不低于这些：submit_to_wall 仍然只认物理证据，比她们自己说了算更严。
-      const list = [
+      // R7 P0-3：按当前主状态注册子集（每个状态 ≤8）。被裁掉的工具不是删掉——`fish_index`
+      // 会告诉模型「哪几个能力现在能用、什么时候能用」；状态一变就重新注册（见 syncTools）。
+      const state = mainStateNow()
+      const sub = new Set(toolsFor(state))
+      const all = [
         notesTool(), sisterToolIfDual(role), vaultSearchTool(), vaultRecentTool(), kbTool(role),
         geminiLiveTool(role), geminiEndTool(role), geminiLogTool(role), scheduleGeminiLiveTool(role),
         controlTool(), startTaskTool(role), blockTool(role), tightenTool(role), relaxTool(role),
@@ -4102,11 +4128,8 @@ export function apply(ctx) {
         mountProposeTool(role), mountParkTool(role), mountCloseTool(role),
         fishIndexTool(),
       ].filter(Boolean)
-      // R7 P0-3：STATE_TABLE 里每个主状态都写了 tools 子集（≤8），toolsFor() 拿得到，
-      // fish_index 也按它告诉模型「哪些能力什么时候能用」。但这里仍然挂全集——
-      // 实测按子集挂会让 18 条既有用例红（测试直接拿 t.sis.tools.xxx 调用，
-      // 且挂载时刻的主状态由墙上时钟决定，测试无法预定）。冲突与实测数据写在
-      // docs/dafeiyu/第七轮进度.md 的 P0-3 一节「没做到的」里，不在这里偷偷改断言。
+      const list = all.filter((tool) => sub.has(tool.name))
+      toolBag.set(role, { sid, all, state })
       for (const tool of list) {
         try {
           const off = agent.ctx.tools.register(tool)
@@ -4135,6 +4158,41 @@ export function apply(ctx) {
     const strat = config.dual === false ? '' : config.strategistSessionId || ''
     // 两个角色指向同一个会话时，只挂陪伴那一份，别让模型同时拿到两套人设。
     mountOne('strategist', strat && strat !== config.sessionId ? strat : '')
+  }
+  /**
+   * R7 P0-3：主状态变了就把工具子集换掉。
+   * 不重建工具对象——它们是闭包，重建会丢掉执行期状态；只重做注册/注销。
+   * 每轮注入前调一次（状态只会在 /plan 或时限到期时变，绝大多数轮次在这里是空转）。
+   */
+  function syncTools(role) {
+    const bag = toolBag.get(role)
+    const mount = personaMounts.get(role)
+    if (!bag || !mount?.agent) return
+    const state = mainStateNow()
+    if (bag.state === state) return
+    bag.state = state
+    try {
+      mount.toolOff?.()
+    } catch {
+      // ignore
+    }
+    const offs = []
+    const want = new Set(toolsFor(state))
+    for (const tool of bag.all) {
+      if (!want.has(tool.name)) continue
+      try {
+        const off = mount.agent.ctx.tools.register(tool)
+        if (typeof off === 'function') offs.push(off)
+      } catch (error) {
+        console.error('[companion] 换档重挂工具 ' + tool.name + ' 失败（' + role + '）：' + String((error && error.message) || error))
+      }
+    }
+    mount.toolOff = offs.length ? () => offs.forEach((f) => f()) : null
+  }
+  // 测试口子接上生产那条重挂路径：钉状态后立刻按新子集重挂，不等下一轮注入。
+  remountAll = () => {
+    syncTools('companion')
+    syncTools('strategist')
   }
   try {
     mountPersona()

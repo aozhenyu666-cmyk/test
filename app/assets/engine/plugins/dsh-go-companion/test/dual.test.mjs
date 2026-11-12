@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { apply } from '../lib/index.js'
+import { apply, setStatePin } from '../lib/index.js'
 import { buildPrompt } from '../lib/prompt.js'
 import { companionChatText, strategistChatText, roleNames } from '../lib/roles.js'
 
@@ -24,7 +24,7 @@ function agentOf(id) {
   }
 }
 
-function host(agents) {
+function host(agents, state = 'standby') {
   let handler
   const listeners = new Map()
   const ctx = {
@@ -39,6 +39,7 @@ function host(agents) {
     inject(_d, cb) { cb({ webServer: { register(r) { handler = r.handler } }, effect(fn) { fn() } }) },
     effect(fn) { fn() },
   }
+  setStatePin(state)
   apply(ctx)
   const emit = async (sid, type, data) => { for (const fn of listeners.get('session/event') || []) await fn({ id: sid }, { type, data }) }
   return { handler: () => handler, emit }
@@ -146,7 +147,7 @@ test('姐妹传话：妹妹递急话 → 姐姐每轮看得到 → /plan 让姐�
     writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ sessionId: 'session-sis', strategistSessionId: 'session-big', quietStart: 12, quietEnd: 12 }))
     const sis = agentOf('session-sis')
     const big = agentOf('session-big')
-    const h = host({ 'session-sis': sis, 'session-big': big })
+    const h = host({ 'session-sis': sis, 'session-big': big }, 'morning')
     assert.ok(sis.tools.sister_note && big.tools.sister_note, '两个会话各有自己的传话工具')
     const r = sis.tools.sister_note.execute({ text: '他说找工作好烦，快去管管', urgent: true })
     assert.equal(r.ok, true)

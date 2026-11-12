@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { apply } from '../lib/index.js'
+import { apply, setStatePin } from '../lib/index.js'
 import { STATE_TABLE, MAX_TOOLS_PER_STATE, ALL_TOOLS, toolsFor, toolsElsewhere } from '../lib/machine.js'
 import { DEFAULT_BUDGET, INJECT_OPEN, INJECT_CLOSE, stripInjection } from '../lib/budget.js'
 
@@ -20,7 +20,7 @@ function agentOf(id) {
   }
 }
 
-function host(agents) {
+function host(agents, state = 'standby') {
   let handler
   const listeners = new Map()
   const ctx = {
@@ -35,6 +35,7 @@ function host(agents) {
     inject(_d, cb) { cb({ webServer: { register(r) { handler = r.handler } }, effect(fn) { fn() } }) },
     effect(fn) { fn() },
   }
+  setStatePin(state)
   apply(ctx)
   return { handler: () => handler }
 }
@@ -51,14 +52,14 @@ async function withHome(fn) {
 }
 
 /** 挂一对姐妹，返回两个会话（人设文本从 contexts[0].text() 取）。 */
-function mountPair(home, cfg = {}) {
+function mountPair(home, cfg = {}, state = 'standby') {
   mkdirSync(join(home, 'companion'), { recursive: true })
   writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({
     sessionId: 'session-sis', strategistSessionId: 'session-big', quietStart: 12, quietEnd: 12, ...cfg,
   }))
   const sis = agentOf('session-sis')
   const big = agentOf('session-big')
-  host({ 'session-sis': sis, 'session-big': big })
+  host({ 'session-sis': sis, 'session-big': big }, state)
   return { sis, big }
 }
 
@@ -91,6 +92,31 @@ test('C4 fish_index 在任一状态都拿得到（它是被收起能力的出口
   for (const row of STATE_TABLE) {
     assert.ok(toolsFor(row.id).includes('fish_index'), row.id + ' 没有 fish_index，能力就说不出来')
   }
+})
+
+test('C14 挂出来的工具就是 toolsFor 那一套（表写得对不算，真挂上才算）', async () => {
+  await withHome(async (home) => {
+    for (const row of STATE_TABLE) {
+      const { sis, big } = mountPair(home, {}, row.id)
+      const got = Object.keys(sis.tools).sort()
+      assert.deepEqual(got, [...toolsFor(row.id)].sort(), row.id + ' 挂出来的和表不一致')
+      assert.ok(got.length <= MAX_TOOLS_PER_STATE, row.id + ' 挂了 ' + got.length + ' 个')
+      // 两个会话挂的是同一套（R4-2 的权限一致，逐状态成立）。
+      assert.deepEqual(Object.keys(big.tools).sort(), got, row.id + ' 下两姐妹挂出来的不一样')
+    }
+  })
+})
+
+test('C15 主状态一变，手上的工具跟着换（旧的注销、新的挂上）', async () => {
+  await withHome(async (home) => {
+    const { sis } = mountPair(home, {}, 'standby')
+    assert.ok(sis.tools.mount_close, '待命该有挂载卡三件套')
+    assert.equal(sis.tools.gemini_end, undefined, '待命不该有共脑工具')
+    setStatePin('brain')
+    assert.ok(sis.tools.gemini_end, '切到共脑该挂上 gemini_end')
+    assert.equal(sis.tools.mount_close, undefined, '切到共脑后待命那套要注销')
+    assert.equal(Object.keys(sis.tools).sort().join(','), [...toolsFor('brain')].sort().join(','))
+  })
 })
 
 test('C5 人设每轮不超过 2400 字符（妹妹）', async () => {

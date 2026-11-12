@@ -7,7 +7,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { apply } from '../lib/index.js'
+import { apply, setStatePin } from '../lib/index.js'
 import { appendLedger } from '../lib/ledger.js'
 
 function agentOf(id) {
@@ -24,7 +24,7 @@ function agentOf(id) {
   }
 }
 
-function host(agents) {
+function host(agents, state = 'standby') {
   let handler
   const listeners = new Map()
   const ctx = {
@@ -39,6 +39,7 @@ function host(agents) {
     inject(_d, cb) { cb({ webServer: { register(r) { handler = r.handler } }, effect(fn) { fn() } }) },
     effect(fn) { fn() },
   }
+  setStatePin(state)
   apply(ctx)
   const emit = async (sid, type, data) => { for (const fn of listeners.get('session/event') || []) await fn({ id: sid }, { type, data }) }
   return { handler: () => handler, emit }
@@ -77,11 +78,13 @@ async function withHome(fn) {
 const SIS = 'session-sis'
 const BIG = 'session-big'
 function setup(home, extra = {}) {
+  // R7 P0-3：`state` 钉主状态，不能摊进 config.json（那是真配置）。
+  const { state = 'standby', ...rest } = extra
   mkdirSync(join(home, 'companion'), { recursive: true })
-  writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ sessionId: SIS, strategistSessionId: BIG, quietStart: 12, quietEnd: 12, ...extra }))
+  writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ sessionId: SIS, strategistSessionId: BIG, quietStart: 12, quietEnd: 12, ...rest }))
   const sis = agentOf(SIS)
   const big = agentOf(BIG)
-  const h = host({ [SIS]: sis, [BIG]: big })
+  const h = host({ [SIS]: sis, [BIG]: big }, state)
   const plan = (phone) => call(h.handler(), 'POST', '/dsh-go-companion/v1/plan', { roll: 100, timeZone: 'Asia/Shanghai', phone })
   const say = (sid, text) => h.emit(sid, 'user/message', { id: 'u-' + Math.random(), content: [{ type: 'text', text }], source: { kind: 'user' } })
   const wall = (body) => call(h.handler(), 'POST', '/dsh-go-companion/v1/wall', { timeZone: 'Asia/Shanghai', ...body })
@@ -165,7 +168,8 @@ test('/wall tighten：立即锁今天，status 显示收紧', async () => {
 
 test('第四轮补：request_relax 仍卡在申请窗口；grant_break 现在给了，当场放得开', async () => {
   await withHome(async (home) => {
-    const t = setup(home)
+    // R7 P0-3：明天那段在晚间申请窗口挂（request_relax），当场那段在放风/吃饭/追问锁里挂（grant_break）。
+    const t = setup(home, { state: 'evening' })
     await t.plan({ app: 'com.game', fun: true, screenOn: true, local: '15:00' })
     // 明天那段还是只能走窗口：下午窗口没开，姐妹替他提也批不下来。
     const viaTool = t.big.tools.request_relax.execute({ atHour: 20, minutes: 60, reason: '周末想放松一下' })
@@ -174,6 +178,7 @@ test('第四轮补：request_relax 仍卡在申请窗口；grant_break 现在给
     assert.equal(r.body.ok, false)
     assert.equal(r.body.error.code, 'no-window')
     // 当场那段：grant_break 给了，两边都能放，放完 config 里 breakUntil 在、锁不下发。
+    setStatePin('break')
     for (const role of [t.big, t.sis]) assert.ok(role.tools.grant_break, 'grant_break 给两姐妹')
     const broke = t.sis.tools.grant_break.execute({ minutes: 10, reason: '刚考完试想歇一会儿' })
     assert.equal(broke.ok, true, broke.text)

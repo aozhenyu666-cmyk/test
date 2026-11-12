@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { apply } from '../lib/index.js'
+import { apply, setStatePin } from '../lib/index.js'
 import { appendLedger, readLedger } from '../lib/ledger.js'
 
 function agentOf(id) {
@@ -26,7 +26,7 @@ function agentOf(id) {
   }
 }
 
-function host(agents) {
+function host(agents, state = 'standby') {
   let handler
   const ctx = {
     get(name) {
@@ -40,6 +40,7 @@ function host(agents) {
     inject(_d, cb) { cb({ webServer: { register(r) { handler = r.handler } }, effect(fn) { fn() } }) },
     effect(fn) { fn() },
   }
+  setStatePin(state)
   apply(ctx)
   return { handler: () => handler }
 }

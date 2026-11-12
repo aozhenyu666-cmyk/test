@@ -6,11 +6,12 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { apply } from '../lib/index.js'
+import { apply, setStatePin } from '../lib/index.js'
 import { existsSync, readFileSync } from 'node:fs'
 import { gearSwitch } from '../lib/gear.js'
 import { trustScore } from '../lib/trust.js'
 import { trackGemini } from '../lib/gemini.js'
+import { STATE_TABLE, MAX_TOOLS_PER_STATE, ALL_TOOLS } from '../lib/machine.js'
 
 function agentOf(id) {
   const contexts = []
@@ -26,7 +27,7 @@ function agentOf(id) {
   }
 }
 
-function host(agents) {
+function host(agents, state = 'standby') {
   let handler
   const listeners = new Map()
   const ctx = {
@@ -41,6 +42,7 @@ function host(agents) {
     inject(_d, cb) { cb({ webServer: { register(r) { handler = r.handler } }, effect(fn) { fn() } }) },
     effect(fn) { fn() },
   }
+  setStatePin(state)
   apply(ctx)
   const emit = async (sid, type, data) => { for (const fn of listeners.get('session/event') || []) await fn({ id: sid }, { type, data }) }
   return { handler: () => handler, emit }
@@ -79,11 +81,13 @@ async function withHome(fn) {
 const SIS = 'session-sis'
 const BIG = 'session-big'
 function setup(home, extra = {}) {
+  // R7 P0-3：`state` 钉主状态，不能摊进 config.json（那是真配置）。
+  const { state = 'standby', ...rest } = extra
   mkdirSync(join(home, 'companion'), { recursive: true })
-  writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ sessionId: SIS, strategistSessionId: BIG, quietStart: 12, quietEnd: 12, ...extra }))
+  writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ sessionId: SIS, strategistSessionId: BIG, quietStart: 12, quietEnd: 12, ...rest }))
   const sis = agentOf(SIS)
   const big = agentOf(BIG)
-  const h = host({ [SIS]: sis, [BIG]: big })
+  const h = host({ [SIS]: sis, [BIG]: big }, state)
   const plan = (phone) => call(h.handler(), 'POST', '/dsh-go-companion/v1/plan', { roll: 100, timeZone: 'Asia/Shanghai', phone })
   const request = (id) => call(h.handler(), 'POST', '/dsh-go-companion/v1/request', { v: 1, requestId: id, eventId: 'evt-' + id, kind: 'random_chat', payload: {}, deadlineMs: 30000 })
   const say = (sid, text) => h.emit(sid, 'user/message', { id: 'u-' + Math.random(), content: [{ type: 'text', text }], source: { kind: 'user' } })
@@ -163,21 +167,27 @@ test('忙完：妹妹来迎接一次；"忙完了"提前收工也关掉拒绝模
   })
 })
 
-test('第四轮 R4-2：两姐妹工具完全一致，帮忙和收紧的全有，过关交给墙', async () => {
+test('第四轮 R4-2 + R7 P0-3：两姐妹逐状态工具完全一致；那些能力没被砍，只是按主状态收起', async () => {
   await withHome(async (home) => {
     const t = setup(home)
-    // 第四轮补：用户决定把这五个也放开——裁决、当场放风、验收任务、定事、对账。
-    // 墙的权限不低于这些：submit_to_wall 仍然只认物理证据。
-    for (const name of ['grant_break', 'end_task_mode', 'submit_verdict', 'daily_plan', 'daily_review']) {
-      assert.ok(t.sis.tools[name], '妹妹该有 ' + name)
-      assert.ok(t.big.tools[name], '姐姐该有 ' + name)
+    // P0-3 起工具按主状态挂子集（每态 ≤8 个）。R4-2 的「两边权限一样」照旧成立，
+    // 只是要逐状态核：任何状态下两姐妹挂出来的必须是同一套，且每个能力至少在一个状态下挂得出来
+    // ——挂不出来的就等于被砍了，那是不许的。
+    const want = ['grant_break', 'end_task_mode', 'submit_verdict', 'daily_plan', 'daily_review',
+      'submit_to_wall', 'dafeiyu_control', 'start_task_mode', 'block_apps', 'tighten_today', 'request_relax',
+      'notes_vault', 'vault_search', 'vault_recent_notes', 'gemini_live', 'gemini_end', 'gemini_log', 'schedule_gemini_live']
+    const seen = new Set()
+    for (const state of STATE_TABLE.map((row) => row.id)) {
+      setStatePin(state)
+      const sis = Object.keys(t.sis.tools).sort()
+      assert.deepEqual(sis, Object.keys(t.big.tools).sort(), state + ' 下两姐妹的工具不一致')
+      assert.ok(sis.length <= MAX_TOOLS_PER_STATE, state + ' 挂了 ' + sis.length + ' 个，超过 ' + MAX_TOOLS_PER_STATE)
+      for (const name of sis) seen.add(name)
     }
-    assert.deepEqual(Object.keys(t.sis.tools).sort(), Object.keys(t.big.tools).sort())
-    for (const name of ['submit_to_wall', 'dafeiyu_control', 'start_task_mode', 'block_apps', 'tighten_today', 'request_relax',
-      'notes_vault', 'vault_search', 'vault_recent_notes', 'gemini_live', 'gemini_end', 'gemini_log', 'schedule_gemini_live']) {
-      assert.ok(t.sis.tools[name] && t.big.tools[name], '两边都有 ' + name)
-    }
+    for (const name of want) assert.ok(ALL_TOOLS.includes(name), '权限被砍了：' + name)
+    for (const name of want) assert.ok(seen.has(name), '任何状态下都没挂出 ' + name + '，等于砍了')
     // dafeiyu_control 还是只管收紧那一组：放松走 grant_break / request_relax，不在这个开关里。
+    setStatePin('morning')
     assert.deepEqual(t.big.tools.dafeiyu_control.parameters.properties.action.enum.sort(), ['busy', 'mute', 'refuse', 'strict'])
   })
 })
@@ -201,7 +211,7 @@ test('第四轮 R4-1：没挂着的东西交不了墙；墙的话以〔墙〕开
 
 test('Gemini 去：背景写清他是谁、这次干嘛、怎么盯、怎么复盘；送过去的步骤；连麦中跑去玩会被锁', async () => {
   await withHome(async (home) => {
-    const t = setup(home, { owner: '阿鱼' })
+    const t = setup(home, { owner: '阿鱼', state: 'brain' })
     const r = t.big.tools.gemini_live.execute({ topic: '复习线性代数第三章', minutes: 40, mode: 'study' })
     assert.equal(r.ok, true)
     assert.match(r.brief, /40 分钟你是阿鱼的语音搭档/)
@@ -242,7 +252,7 @@ test('Gemini 回：出来几分钟后姐姐去后台屏读回那段对话、存�
     const now = Date.now()
     const vault = join(home, 'vault')
     mkdirSync(vault)
-    const t = setup(home, { notesPath: vault })
+    const t = setup(home, { notesPath: vault, state: 'brain' })
     // 在 Gemini 里待了 15 分钟，4 分钟前出来
     writeFileSync(join(home, 'companion', 'gemini.json'), JSON.stringify({ inSince: now - 19 * 60_000, lastInAt: now - 4 * 60_000 }))
     const p = await t.plan(wechat)
@@ -366,7 +376,7 @@ test('破窗扣分：默认 15、可按配置改，账本记下这次扣了多�
 
 test('Gemini 互动舱：/plan 带 session 白名单，两个人格都能开、都能收工', async () => {
   await withHome(async (home) => {
-    const t = setup(home)
+    const t = setup(home, { state: 'brain' })
     // 第三轮 C4：两人工具一致，连麦开舱两边都有。
     assert.ok(t.sis.tools.gemini_live && t.sis.tools.gemini_end, '妹妹也能开舱')
     assert.ok(t.sis.tools.gemini_log, '妹妹还能存复盘')
