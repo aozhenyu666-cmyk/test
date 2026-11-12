@@ -52,6 +52,8 @@ import { lastReplyClass, exportImportantMemories, readCommitments, readCorePerso
 import { cleanPhone, funToday, worthObserving } from './phone.js'
 import { NOTES_CANDIDATES, agendaLines, capabilityLines, companionChatText, roleNames, strategistChatText } from './roles.js'
 import { fitBudget, stripInjection } from './budget.js'
+// B3：素材池（例句池 / 关键词卡 / depth 预算系数）。文件在用户笔记库里，缺了用内置种子。
+import { RECENT_SKIP, countWords, depthBudget, keywordCard, pickSamples, readManualKeywords, readSamples, recentNoteTexts } from './samples.js'
 import { tide as tideOf, tideGap, tideHourly, vagueStreak } from './tide.js'
 import { FACES, stepTemper, temperLine } from './temper.js'
 // C2 的四个操作判定（judgeOp/nextOp/opQuota/opStats）和九种思维题同一个模块：
@@ -3800,15 +3802,28 @@ export function apply(ctx) {
       arms: loadBrain().arms,
       state: { last: st.last || {}, streak: st.streak || {} },
     })
+    // B3：例句现抽现给，避开最近 10 句用过的；池子太薄就是 null（这个 arm 当轮不说话）。
+    const pickedSamples = pickSamples(readSamples(notesDir())[temper?.face || ''], st.recentSamples, built.rng) || []
     const lines = renderVibe(built.picks, {
       temperLine: temperLine(temper),
       predictions: predictionLines(loadPredict(), now),
-      keywords: (daily.tasks || []).map((t) => (keywordsOf(t.evidence) || [])[0]).filter(Boolean),
+      // B3：关键词卡三处合并（手写 > B2 的 links > 近 7 天高频词），去重后取前几个。
+      // B2 的 links 还没落地，这里先给空数组——接上时把暗思考的 links 塞进来即可，其余不动。
+      keywords: keywordCard({
+        manual: readManualKeywords(notesDir()),
+        links: [],
+        fresh: countWords(recentNoteTexts(notesDir(), now)),
+      }),
+      samples: pickedSamples,
       stateLines,
       face: temper?.face || '',
       roll: built.rng(),
     })
-    saveVibeState({ v: 1, turn: turn + 1, last: built.state.last, streak: built.state.streak })
+    saveVibeState({
+      v: 1, turn: turn + 1, last: built.state.last, streak: built.state.streak,
+      // B3：记下这一轮用了哪几句，下一轮避开（最多留 RECENT_SKIP 条）。
+      recentSamples: [...(st.recentSamples || []), ...pickedSamples].slice(-RECENT_SKIP),
+    })
     lastVibePicks = pickedArms(built.picks)
     lastVibe = { face: temper?.face || '', turn: built.snapshot.turn }
     // §13.2：每轮落注入快照，真机"前后不一致"时翻快照定位，不靠猜。
@@ -3922,7 +3937,9 @@ export function apply(ctx) {
       { id: 'slot-ask', layer: 'content', priority: 18, text: slotAskNext && Date.now() - slotAskNext.at < 30 * 60_000 ? slotAskNext.text : '' },
       { id: 'notes', layer: 'content', priority: 10, text: noteLines.join('\n') },
     ]
-    const fitted = fitBudget(blocks, config.ctxBudget)
+    // B3：depth 接 P0-3 预算——`config.ctxDepth` 是 low/mid/high（30%/60%/100%），只压内容层。
+    // 默认 high，也就是不传这个配置时行为和以前一字不差。
+    const fitted = fitBudget(blocks, depthBudget(config.ctxDepth, config.ctxBudget))
     // 超预算的块要能被看见（规格第 4 条）。落自己的 ctx-budget.jsonl，不塞 ledger.jsonl：
     // 账本那边有按行位置断言的既有用例，不能被每轮一条的注入记录挤动。
     try {
