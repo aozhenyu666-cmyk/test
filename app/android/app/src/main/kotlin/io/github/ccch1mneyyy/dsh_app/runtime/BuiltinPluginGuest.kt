@@ -193,6 +193,9 @@ object BuiltinPluginGuest {
                 "lib/settings_view.js",
                 // 外接 APP：他自己声明的应用名单（config.apps）压过内置的娱乐类包名表。
                 "lib/apps.js",
+                // R8 J6/J5：题库（格式与完整性）与思维局六招（判定、强度、依据前置检查）。
+                "lib/bank.js",
+                "lib/thinking.js",
             ),
         ),
     )
