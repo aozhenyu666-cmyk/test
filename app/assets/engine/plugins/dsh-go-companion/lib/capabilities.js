@@ -45,10 +45,11 @@ export function countTopics(text) {
 }
 
 /**
- * 具体名词的粗判：先把中文串按连接词切开，再去掉停用词、抽象词，2 字以上去重计数。
+ * 具体名词的粗判：先把中文串按连接词切开，再去掉停用词、抽象词，2 字以上去重。
  * 「哈希表和红黑树」要能数出 2 个，所以不能只按整段中文切。
+ * 保序：混乱提示要按他说的先后列出 A、B、C。
  */
-export function countConcreteNouns(text) {
+export function concreteNouns(text) {
   const seen = new Set()
   const runs = String(text || '').match(/[\u4e00-\u9fa5]{2,}/g) || []
   for (const run of runs) {
@@ -58,7 +59,11 @@ export function countConcreteNouns(text) {
       seen.add(token)
     }
   }
-  return seen.size
+  return [...seen]
+}
+
+export function countConcreteNouns(text) {
+  return concreteNouns(text).length
 }
 
 /** 最后一句里有没有结论性的词。 */

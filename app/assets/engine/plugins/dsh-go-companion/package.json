@@ -43,6 +43,14 @@
             "en": "Sisters"
           },
           "icon": "heart"
+        },
+        {
+          "id": "bouts-open",
+          "label": {
+            "zh": "局",
+            "en": "Bouts"
+          },
+          "icon": "clock"
         }
       ],
       "panels": [
@@ -57,6 +65,18 @@
             "session.tab",
             "features",
             "chat.panel"
+          ]
+        },
+        {
+          "id": "bouts",
+          "title": {
+            "zh": "局",
+            "en": "Bouts"
+          },
+          "icon": "clock",
+          "placement": [
+            "session.tab",
+            "features"
           ]
         }
       ]

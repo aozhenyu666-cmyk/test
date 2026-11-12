@@ -21,7 +21,7 @@ export const TERMINALS = ['收局', '升级']
 export const EXIT_KINDS = ['next', 'retry', 'escalate', 'close']
 
 const TOP_KEYS = new Set(['协议版本', 'id', '名称', '类型', '需要能力', '预算', '步骤', '收局'])
-const STEP_KEYS = new Set(['id', '问', '限时', '过关', '超时', '不过', '触发', '每', '形态', '应答', '监视', '变速'])
+const STEP_KEYS = new Set(['id', '问', '限时', '过关', '超时', '不过', '触发', '每', '形态', '应答', '监视', '变速', '重复至'])
 const BUDGET_KEYS = new Set(['分钟', '来回'])
 const CLOSE_KEYS = new Set(['交', '判定'])
 export const PROTOCOL_TYPES = ['行为', '思维']
@@ -72,6 +72,18 @@ export function parseDuration(value) {
   if (!n) return null
   const unit = (m[2] || 's').toLowerCase()
   return unit === 'h' ? n * 3600 : unit === 'm' ? n * 60 : n
+}
+
+/**
+ * 「重复至」：周期步重复到预算剩多少为止。只认 1/4、1/3、一半 → 比例。
+ * 写别的在加载期就拒绝：收尾时机靠猜的话，学习局（剩 1/4 列点）和
+ * 执行局（剩 1/3 交什么）会错位。
+ */
+const REPEAT_UNTIL = { '1/4': 0.25, '1/3': 1 / 3, '一半': 0.5 }
+
+export function parseRepeatUntil(value) {
+  if (value === undefined || value === null) return undefined
+  return Object.hasOwn(REPEAT_UNTIL, String(value).trim()) ? REPEAT_UNTIL[String(value).trim()] : null
 }
 
 /**
@@ -213,6 +225,14 @@ export function validateProtocol(raw) {
     const limit = parseDuration(step['限时']) ?? parseDuration(step['每'])
     if (limit === null) err('no-limit', at + '.限时', '每一步都必须有限时（限时: 90s，或周期步写 每: 6m）')
 
+    // 重复至：只有周期步（写了 每）才谈得上重复到预算剩多少；比例还得是认得的那个。
+    const repeatUntil = parseRepeatUntil(step['重复至'])
+    if (repeatUntil === null) {
+      err('bad-repeat', at + '.重复至', '重复至只认 1/4 / 1/3 / 一半')
+    } else if (repeatUntil !== undefined && step['每'] === undefined) {
+      err('bad-repeat', at + '.重复至', '重复至只对周期步有意义：这一步没有写 每')
+    }
+
     // 出口：过关走下一拍，超时与不过必须有一个明确的去处
     if (step['过关'] !== undefined) {
       if (!isPlainObject(step['过关'])) err('bad-pass', at + '.过关', '过关必须是对象')
@@ -345,6 +365,7 @@ function normalizeProtocol(raw) {
     ask: String(step['问'] || ''),
     limitSec: parseDuration(step['限时']) ?? parseDuration(step['每']),
     periodSec: step['每'] === undefined ? null : parseDuration(step['每']),
+    repeatUntil: parseRepeatUntil(step['重复至']) ?? null,
     pass: isPlainObject(step['过关']) ? { ...step['过关'] } : null,
     timeout: normalizeExit(step['超时']) || { kind: 'next' },
     fail: normalizeExit(step['不过']) || { kind: 'retry' },
@@ -439,6 +460,7 @@ export function createRunner(protocol, options = {}) {
   const answers = []
   let index = 0
   let retries = 0
+  let lastPass = false
   let askedAt = now()
   let state = 'running'
   let endedAt = 0
@@ -451,7 +473,7 @@ export function createRunner(protocol, options = {}) {
     return { state, reason, index }
   }
 
-  function goExit(exit, why) {
+  function goExit(exit, why, allowRepeat = false) {
     if (!exit) return settle('closed', 'no-exit')
     if (exit.kind === 'close') return settle('closed', why)
     if (exit.kind === 'escalate') return settle('escalated', why)
@@ -461,6 +483,17 @@ export function createRunner(protocol, options = {}) {
       return { state, reason: 'retry', index, retries }
     }
     if (index + 1 >= steps.length) return settle('closed', 'done')
+    // 周期步（每 6m / 每 10m）：过关后预算还剩得多就原地重问，剩到「重复至」那条线才进下一步。
+    // 只在「过关」时重复：超时也重复的话，他不说话这一拍就永远走不出去。
+    // remaining() 由调用方给（它知道预算和开局时间）；没给就按普通步前进，不猜。
+    const here = steps[index]
+    if (allowRepeat && here.repeatUntil !== null && typeof options.remaining === 'function') {
+      if (Number(options.remaining()) > here.repeatUntil) {
+        retries = 0
+        askedAt = now()
+        return { state, reason: 'repeat', index, nextAskAt: askedAt + (here.periodSec || 0) * 1000 }
+      }
+    }
     index += 1
     retries = 0
     askedAt = now()
@@ -477,6 +510,14 @@ export function createRunner(protocol, options = {}) {
     },
     get retries() {
       return retries
+    },
+    /**
+     * 上一次 answer() 过没过关。
+     * 单独一个方法而不是塞进返回值：返回值是「怎么走的」（next / retry / repeat / closed），
+     * 「过没过」是另一件事——不过也可能被协议配成「下一步」，两者不能互相推。
+     */
+    lastPass() {
+      return lastPass
     },
     get endedAt() {
       return endedAt
@@ -501,7 +542,8 @@ export function createRunner(protocol, options = {}) {
       const input = { text: String(text || ''), askedAt, answeredAt: now(), recent: answers.slice(-5) }
       const verdict = checkPass(step.pass || {}, input)
       answers.push(String(text || ''))
-      if (verdict.pass) return goExit({ kind: 'next' }, 'pass')
+      lastPass = verdict.pass
+      if (verdict.pass) return goExit({ kind: 'next' }, 'pass', true)
       return goExit(step.fail, 'fail')
     },
     /** 到点没答：走超时出口。 */
@@ -513,6 +555,13 @@ export function createRunner(protocol, options = {}) {
       if (when - askedAt < step.limitSec * 1000) return { state, reason: 'not-yet', index }
       answers.push('')
       return goExit(step.timeout, 'timeout')
+    },
+    /** 周期步到点重问同一句：只把这一拍的起点挪到 now，不动进度。 */
+    reask(at) {
+      if (state !== 'running') return { state, reason: 'not-running', index }
+      askedAt = Number(at) || now()
+      retries = 0
+      return { state, reason: 'reask', index, askedAt }
     },
     /** 收局（他说停 / 引擎要求）。 */
     abandon(reason = 'abandoned') {

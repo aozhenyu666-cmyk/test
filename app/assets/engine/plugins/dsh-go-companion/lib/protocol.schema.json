@@ -38,6 +38,10 @@
           "问": { "type": "string", "minLength": 1 },
           "限时": { "type": ["string", "number"], "description": "90s / 6m / 1h / 裸数字（秒）。每步必须有：限时 或 每。" },
           "每": { "type": ["string", "number"], "description": "周期步的间隔，可当限时用。" },
+          "重复至": {
+            "enum": ["1/4", "1/3", "一半"],
+            "description": "周期步重复到预算剩多少。只对写了「每」的步骤有意义：学习局剩 1/4 列点，执行局剩 1/3 交什么。"
+          },
           "过关": {
             "type": "object",
             "propertyNames": {

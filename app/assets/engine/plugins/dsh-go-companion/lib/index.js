@@ -83,6 +83,11 @@ import { decideForce, forceLines, refuseSwitch } from './force.js'
 import { BUSY_DEFAULT_MIN, BUSY_MAX_MIN, aiTask, applyGear, effectiveGear, gearLines, gearSwitch } from './gear.js'
 import { trustGap, trustLines, trustScore } from './trust.js'
 import { buildSnapshot, sistersView } from './panel.js'
+import { boutsView } from './bouts_view.js'
+import { buildBoutsSnapshot } from './bouts_panel.js'
+import { builtinProtocolOf, builtinProtocols } from './builtin.js'
+import { createOfficial } from './boutrun.js'
+import { listBouts, listVerdicts, openBoutsDb, runningBout } from './bouts.js'
 import { JUDGE_FILE, SELF_FILE, appendVerdictDaily, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, absentAnchors, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import {
@@ -5084,6 +5089,92 @@ export function apply(ctx) {
       now,
     })
   }
+
+  // ---------------------------------------------------------------- 局（W1/W3）
+  // 本进程开的那一局。数据全在库里（bouts.js 是唯一写入方），这里只留一个指针：
+  // 面板要显示「现在这一拍」，得问局官本人，不能从库里倒推。
+  // db 留在 live 上是为了局官写 beats/verdicts 时不用每次重开；面板读另开一条连接，读完就关。
+  let live = null
+
+  function boutsSnapshot() {
+    const db = openBoutsDb(memoryPath())
+    try {
+      const now = Date.now()
+      const dayStart = startOfDay(now, zoneOr(config.timeZone))
+      const all = listBouts(db, { limit: 200 })
+      const today = listBouts(db, { dayStart, limit: 100 })
+      const closedToday = today.filter((x) => x.status === 'closed')
+      // 「敷衍」在账上就是代码判没过的那几拍；不另立指标，免得两处口径打架。
+      let failed = 0
+      for (const bout of today) failed += listVerdicts(db, bout.id).filter((v) => v.result === 'fail').length
+      return buildBoutsSnapshot({
+        now,
+        bouts: all,
+        todayBouts: today,
+        protocols: builtinProtocols().filter((x) => x.ok).map((x) => x.protocol),
+        live: live ? live.official.view() : null,
+        doneToday: closedToday.filter((x) => x.closeReason === 'done').length,
+        emptyToday: closedToday.filter((x) => x.closeReason !== 'done').length,
+        escalations: closedToday.filter((x) => x.closeReason === 'escalated').length,
+        slackBeats: failed,
+      })
+    } finally {
+      try {
+        db?.close?.()
+      } catch {
+        // 关不掉不影响读出来的数
+      }
+    }
+  }
+
+  function dropLive() {
+    try {
+      live?.db?.close?.()
+    } catch {
+      // 已经关了
+    }
+    live = null
+  }
+
+  function startBout(protocolId) {
+    const protocol = builtinProtocolOf(protocolId)
+    if (!protocol) return { ok: false, toast: '没有这个协议：' + String(protocolId || '') }
+    if (live && !live.official.view().closed) return { ok: false, toast: '已经有一局在跑，先收局。' }
+    dropLive()
+    const db = openBoutsDb(memoryPath())
+    const official = createOfficial({ protocol, db, home: home() })
+    const started = official.start()
+    if (!started.ok) {
+      try {
+        db?.close?.()
+      } catch {
+        // ignore
+      }
+      const why = started.error === 'busy' ? '库里已经有一局在跑。' : '开局失败：' + started.error
+      return { ok: false, toast: why }
+    }
+    live = { official, db }
+    record({ state: 'bout-open', at: Date.now(), protocolId: protocol.id, via: 'panel' })
+    return { ok: true, toast: '开局：' + protocol.name + '。' + String(started.say || '') }
+  }
+
+  function answerBout(text, form = 'text') {
+    if (!live) return { ok: false, toast: '现在没有局。' }
+    const r = live.official.answer(text, { form })
+    if (r.state === 'closed' || r.state === 'escalated') {
+      dropLive()
+      return { ok: true, toast: r.state === 'escalated' ? '升级了，这一局结束。' : '收局。' }
+    }
+    return { ok: r.accepted !== false, toast: String(r.say || '') }
+  }
+
+  function closeBoutNow() {
+    if (!live) return { ok: false, toast: '现在没有局。' }
+    live.official.close('abandoned')
+    dropLive()
+    return { ok: true, toast: '收局了，这局记成空局。' }
+  }
+
   /** 一句话发进去，等到回完（最多两分钟）。 */
   async function sayTo(sid, text) {
     const id = 'say-' + randomUUID().replace(/-/g, '').slice(0, 16)
@@ -5140,6 +5231,7 @@ export function apply(ctx) {
           return v && typeof v === 'object' ? v : {}
         }
         if (typeof d.on === 'function') d.on('sisters-open', () => ({ open: 'panel:sisters' }))
+        if (typeof d.on === 'function') d.on('bouts-open', () => ({ open: 'panel:bouts' }))
         d.panel('sisters', {
           view: sistersView,
           data: (scope, emit) => {
@@ -5175,6 +5267,37 @@ export function apply(ctx) {
               record({ state: 'control', at: Date.now(), action: 'refuse', minutes: 30, by: 'panel' })
               d.refresh('sisters', scope)
               return { toast: '拒绝模式 30 分钟。' }
+            },
+          },
+        })
+        // 局是独立的一面：两姐妹不在这个面板里说话（W1）。
+        d.panel('bouts', {
+          view: boutsView,
+          data: (scope, emit) => {
+            panelScopes.set(keyOf(scope), scope)
+            emit(boutsSnapshot())
+            return () => panelScopes.delete(keyOf(scope))
+          },
+          actions: {
+            'bouts.refresh': (scope) => {
+              d.refresh('bouts', scope)
+              return { toast: '' }
+            },
+            'bouts.open': (scope, event) => {
+              const r = startBout(values(event)['data.form.protocolId'])
+              d.refresh('bouts', scope)
+              return { toast: r.toast }
+            },
+            'bouts.answer': (scope, event) => {
+              const v = values(event)
+              const r = answerBout(v['data.form.answer'], v['data.form.ref'] ? 'photo' : 'text')
+              d.refresh('bouts', scope)
+              return { toast: r.toast }
+            },
+            'bouts.close': (scope) => {
+              const r = closeBoutNow()
+              d.refresh('bouts', scope)
+              return { toast: r.toast }
             },
           },
         })

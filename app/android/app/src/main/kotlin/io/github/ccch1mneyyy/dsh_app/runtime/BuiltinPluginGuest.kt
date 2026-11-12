@@ -158,6 +158,18 @@ object BuiltinPluginGuest {
                 // R8 J2/J3：能力库（可校验的具名积木）+ 协议格式与解释器。
                 "lib/capabilities.js",
                 "lib/protocol.js",
+                // R8 J4/J9：五个内置协议（JSON 也是部署物，漏了真机 readdirSync 直接空目录）、
+                // 协议加载器、局官（一拍一拍推进 + 沟通上限 + 混乱处理）。
+                "lib/builtin.js",
+                "lib/boutrun.js",
+                // R8 W1：局的面板（四页）与它的数据。视图只认 data.* 绑定，措辞来自协议与局官。
+                "lib/bouts_view.js",
+                "lib/bouts_panel.js",
+                "lib/protocols/execute.json",
+                "lib/protocols/study.json",
+                "lib/protocols/outing.json",
+                "lib/protocols/design.json",
+                "lib/protocols/rest.json",
             ),
         ),
     )
