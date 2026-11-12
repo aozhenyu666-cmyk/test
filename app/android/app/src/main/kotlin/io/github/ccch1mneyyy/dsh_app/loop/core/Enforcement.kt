@@ -68,6 +68,7 @@ object LockPriority {
     const val KIND_DEFAULT = "default"   // 墙的默认锁（第二轮）：白天非吃饭时段
     const val KIND_EVENING = "evening"   // 第三轮：晚间对账（状态机 evening）
     const val KIND_FOLLOWUP = "followup" // 第三轮：追问锁（含晨间/验收/违抗/连麦后）
+    const val KIND_PLAN = "plan"         // 第八轮 P1：计划模态（今天的局还没定下来）
 
     /**
      * 第二轮定的顺序：深夜锁 > 晚间对账 > 晨间对线 > 任务模式 > 拒绝模式 > Gemini 互动舱 > 默认锁 > 普通提醒。
@@ -77,7 +78,7 @@ object LockPriority {
      * 老版本的 `review`/`morning` 现在都由状态机按 `followup` 下发，留在这里只为兼容旧快照。
      */
     val ORDER: List<String> = listOf(
-        KIND_NIGHT, KIND_EVENING, KIND_FOLLOWUP, KIND_REVIEW, KIND_MORNING,
+        KIND_NIGHT, KIND_PLAN, KIND_EVENING, KIND_FOLLOWUP, KIND_REVIEW, KIND_MORNING,
         KIND_TASK, KIND_REFUSE, KIND_SESSION, KIND_DEFAULT,
     )
 
@@ -93,6 +94,7 @@ object LockPriority {
         KIND_DEFAULT -> "默认严格：现在不是吃饭/放风时段，娱乐锁着；到点自动开放"
         KIND_EVENING -> "晚上对账：和鲸澜对完今天的账才解锁"
         KIND_FOLLOWUP -> "追问锁：把这一个问题说清楚才解锁"
+        KIND_PLAN -> "计划模态：今天的局还没定下来，10 分钟不确认就自动排"
         else -> "拒绝模式：到点自动解锁"
     }
 

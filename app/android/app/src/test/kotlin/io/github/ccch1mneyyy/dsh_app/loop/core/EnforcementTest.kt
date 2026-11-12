@@ -95,6 +95,17 @@ class EnforcementTest {
         assertEquals("followup", LockPriority.primary(listOf(LockRule("task", 900), LockRule("followup", 10)))?.kind)
     }
 
+    @Test
+    fun plan_modal_sits_between_night_and_evening() {
+        // 第八轮 P1：计划模态 priority 95，仅次于深夜锁。没登记进 ORDER 的话它会掉到默认锁之下，
+        // 锁屏页还会念成"拒绝模式"——所以这条断言盯的是表和文案两头。
+        assertEquals("plan", LockPriority.primary(listOf(LockRule("default", 900), LockRule("plan", 10)))?.kind)
+        assertEquals("plan", LockPriority.primary(listOf(LockRule("evening", 900), LockRule("plan", 10)))?.kind)
+        assertEquals("plan", LockPriority.primary(listOf(LockRule("followup", 900), LockRule("plan", 10)))?.kind)
+        assertEquals("night", LockPriority.primary(listOf(LockRule("plan", 900), LockRule("night", 10)))?.kind)
+        assertTrue(LockPriority.defaultWhy("plan").startsWith("计划模态"))
+    }
+
     // ---------------------------------------------------------------- C4 DefianceWindow
 
     @Test
