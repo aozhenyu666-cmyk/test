@@ -51,7 +51,7 @@ import {
 import { lastReplyClass, exportImportantMemories, readCommitments, readCorePersona, readMood } from './context.js'
 import { cleanPhone, funToday, worthObserving } from './phone.js'
 // 外接 APP：他自己声明的应用名单（config.apps）压过内置的娱乐类包名表。
-import { appsSummary, blockDuringLock, cleanApps, remark } from './apps.js'
+import { blockDuringLock, cleanApps, declaredFun, remark } from './apps.js'
 import { NOTES_CANDIDATES, agendaLines, capabilityLines, companionChatText, roleNames, strategistChatText } from './roles.js'
 import { fitBudget, stripInjection } from './budget.js'
 // B3：素材池（例句池 / 关键词卡 / depth 预算系数）。文件在用户笔记库里，缺了用内置种子。
@@ -98,7 +98,7 @@ import { buildSettingsSnapshot, parseDay, parseLimits, settingsMarkdown } from '
 import { settingsDayView, settingsLimitsView } from './settings_view.js'
 import { builtinProtocolOf, builtinProtocols } from './builtin.js'
 import { createOfficial } from './boutrun.js'
-import { listBouts, listVerdicts, openBoutsDb, runningBout } from './bouts.js'
+import { listBouts, listVerdicts, openBoutsDb, reapRunning, runningBout } from './bouts.js'
 import { JUDGE_FILE, SELF_FILE, appendVerdictDaily, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, absentAnchors, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import {
@@ -1877,6 +1877,15 @@ export function apply(ctx) {
     }
     for (const b of Array.isArray(config.blockExtra) ? config.blockExtra : []) {
       if (b && typeof b.app === 'string' && Number(b.until) > now && !NEVER_BLOCK.includes(b.app)) block[b.app] = Math.round(Number(b.until))
+    }
+    // 外接 APP：他声明成娱乐的那些，手机自己的拦截清单里没有，只能从这里下发（block 是「包名 → 到点」）。
+    // 只发他声明的——内置那批手机已经认识，重复发只会把 Kotlin 那边 50 个名额占满。
+    const untilLock = rules.reduce((m, r) => Math.max(m, r.until), 0)
+    const declared = new Set(declaredFun(appsOf()))
+    if (untilLock > now && declared.size) {
+      // blockDuringLock 已经减掉了紧急应用和舱内放行的包，这里只挑手机不认识的那些。
+      const toBlock = blockDuringLock(appsOf(), { funLocked: true, allow: geminiSessionView(now)?.allow || [] })
+      for (const pkg of toBlock) if (declared.has(pkg) && !NEVER_BLOCK.includes(pkg)) block[pkg] = untilLock
     }
     return { v: 1, at: now, rules, block }
   }
@@ -4255,6 +4264,19 @@ export function apply(ctx) {
   }, 5_000)
   sweeper.unref?.()
   ctx.effect?.(() => () => clearInterval(sweeper))
+
+  // 引擎崩过之后：库里还挂着一局，但这进程里没有它（live 是空的）。
+  // 收成空局，不补。挂在库里的话，手机那头会一直以为「有局在进行」，而这一局永远判不出来。
+  try {
+    const db = openBoutsDb(memoryPath())
+    const r = reapRunning(db, { now: Date.now(), home: home() })
+    if (r.closed) {
+      record({ state: 'bout-reap', at: Date.now(), boutId: r.bout.id, protocolId: r.bout.protocolId || '' })
+    }
+    db?.close?.()
+  } catch (error) {
+    console.error('[companion] 重启收尾失败：' + String((error && error.message) || error))
+  }
 
   // 第八轮 P1/P2：计划的节拍。每分钟一次，只做两件事——把今天的计划维护在文件里，
   // 到点了交给 startBout。引擎挂了一段时间也不会多开一局：过点太久的在 planwire 里

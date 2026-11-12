@@ -122,6 +122,34 @@ test('快照：他点「开始」进冲刺后下发 task 规则，到期就是�
   })
 })
 
+test('外接 APP：他声明成娱乐的包随锁下发到封禁名单，声明成工作的不拦', async () => {
+  await withHome(async (home) => {
+    const t = setup(home, {
+      apps: [{ pkg: 'com.tencent.qqlive', role: 'fun' }, { pkg: 'com.example.editor', role: 'work' }],
+    })
+    await t.plan(at('15:00'))
+    const res = await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/event', { type: 'start', task: '写完周报', minutes: 30 })
+    assert.equal(res.body.ok, true, JSON.stringify(res.body))
+    const r = await t.plan(at('15:01'))
+    const task = r.body.rules.rules.find((x) => x.kind === 'task')
+    assert.ok(task, JSON.stringify(r.body.rules))
+    // 到点就是这一层锁的结束时间——手机那边 block 是「包名 → 到点」。
+    assert.equal(r.body.rules.block['com.tencent.qqlive'], task.until)
+    assert.equal(r.body.rules.block['com.example.editor'], undefined, '工作类不拦')
+  })
+})
+
+test('外接 APP：没声明时封禁名单只有他自己封的那些，不被内置娱乐包塞满', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    await t.plan(at('15:00'))
+    await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/event', { type: 'start', task: '写完周报', minutes: 30 })
+    const r = await t.plan(at('15:01'))
+    assert.ok(r.body.rules.rules.some((x) => x.kind === 'task'))
+    assert.deepEqual(Object.keys(r.body.rules.block), [], '内置那批手机自己认识，不该重复下发')
+  })
+})
+
 test('快照：放风期间不下发任何锁', async () => {
   await withHome(async (home) => {
     const t = setup(home, { refuseUntil: Date.now() + 30 * 60_000, breakUntil: Date.now() + 5 * 60_000 })

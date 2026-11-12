@@ -228,6 +228,19 @@ export function runningBout(db) {
 }
 
 /**
+ * 引擎重启后的收尾：库里有局、进程里没有，说明上一个进程是崩掉的。
+ * 记成 timeout（空局）——不补判、不补产出。补一份等于替人编成果。
+ */
+export function reapRunning(db, input = {}) {
+  if (!db) return { ok: false, error: 'no-db', closed: false }
+  const running = runningBout(db)
+  if (!running) return { ok: true, closed: false, bout: null }
+  const r = closeBout(db, running.id, { now: num(input.now, Date.now()), reason: 'timeout', home: input.home })
+  if (!r.ok) return { ok: false, error: r.error, closed: false, bout: running }
+  return { ok: true, closed: true, bout: running }
+}
+
+/**
  * 列局。status 过滤；day 给了就只列那一天开的局（按 openedAt 落在 [dayStart, dayStart+24h)）。
  */
 export function listBouts(db, query = {}) {
