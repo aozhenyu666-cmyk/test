@@ -50,6 +50,8 @@ import {
 } from './garden.js'
 import { lastReplyClass, exportImportantMemories, readCommitments, readCorePersona, readMood } from './context.js'
 import { cleanPhone, funToday, worthObserving } from './phone.js'
+// 外接 APP：他自己声明的应用名单（config.apps）压过内置的娱乐类包名表。
+import { appsSummary, blockDuringLock, cleanApps, remark } from './apps.js'
 import { NOTES_CANDIDATES, agendaLines, capabilityLines, companionChatText, roleNames, strategistChatText } from './roles.js'
 import { fitBudget, stripInjection } from './budget.js'
 // B3：素材池（例句池 / 关键词卡 / depth 预算系数）。文件在用户笔记库里，缺了用内置种子。
@@ -540,6 +542,11 @@ export function apply(ctx) {
     return undefined
   }
 
+  /** 他声明的应用名单（config.apps）。空数组＝全按内置的娱乐类包名表判。 */
+  const appsOf = () => cleanApps(config.apps)
+  /** 手机现状洗一遍，再按他声明的名单重标娱乐类。三处调用都走这个口，别直接 cleanPhone。 */
+  const phoneOf = (raw) => remark(cleanPhone(raw), appsOf())
+
   function record(entry) {
     appendLedger(home(), { v: 1, ...entry })
   }
@@ -749,7 +756,7 @@ export function apply(ctx) {
           busy: why.digest === true ? { ...(why.busy || {}), digest: why.digestText || (why.digestText = takeDigest()) } : why.busy,
           contact: contactLines(readLedger(home(), 400), now),
           gemini: why.gemini,
-          phone: cleanPhone(req?.phone),
+          phone: phoneOf(req?.phone),
           commitments: readCommitments(home(), now, 3),
           facts: backgroundFacts(candidates, BACKGROUND_LIMIT),
           vault,
@@ -796,7 +803,7 @@ export function apply(ctx) {
       // 模式决定从哪几种球里挑：伙伴偏闲聊/记忆，教练偏观察/挑衅。前三种里挑。
       const mode = effectiveMode(config, now)
       // 手边的情况由手机在 /request 里带来；没带就是不知道，观察球就不打（没东西可观察只能编）。
-      const phone = cleanPhone(req?.phone)
+      const phone = phoneOf(req?.phone)
       const order = modeServeOrder(mode).filter((t) => t !== 'observe' || phone)
       const picked = pickServeType(entries, Math.floor(Math.random() * 100), {
         only: lighter ? LIGHTER_TYPES : order.slice(0, 3),
@@ -4536,7 +4543,7 @@ export function apply(ctx) {
     const recent = summarize(ledger, startOfDay(now, tz))
     const silence = silenceState(ledger, { sessionId, now })
     // 手机每次问 /plan 都带上现状：水位决定节奏和力度，大脑顺带判上一球有没有把他拉回来。
-    const phone = cleanPhone(body?.phone)
+    const phone = phoneOf(body?.phone)
     // 临时封禁名单里的 App 也算娱乐。
     if (phone?.app && blockedNow(now).includes(phone.app)) phone.fun = true
     // 第六轮 C：暗思考。他不在、没发消息也照样按客观变化整理一次；只写账本，不产生任何要发出去的话。

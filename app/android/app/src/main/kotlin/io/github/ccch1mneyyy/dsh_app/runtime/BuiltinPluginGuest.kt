@@ -191,6 +191,8 @@ object BuiltinPluginGuest {
                 "lib/settings_panel.js",
                 // R8 W4：设定两个页面（作息与预算 / 阈值）的视图。
                 "lib/settings_view.js",
+                // 外接 APP：他自己声明的应用名单（config.apps）压过内置的娱乐类包名表。
+                "lib/apps.js",
             ),
         ),
     )

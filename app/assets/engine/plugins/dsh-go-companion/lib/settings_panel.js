@@ -11,6 +11,7 @@
 // L1RestMin / L2Min / L3Min / cellMin）——大小写不一样就等于永远读到默认值。
 
 import { DEFAULT_SETTINGS, settingsOf } from './settings.js'
+import { appsSummary } from './apps.js'
 
 const KINDS = [['workday', '工作日'], ['restday', '休息日'], ['outing', '外出日']]
 const PROTOCOLS = [['study', '学习'], ['execute', '执行'], ['design', '设计'], ['outing', '外出'], ['rest', '休息'], ['thinking', '思维']]
@@ -161,6 +162,8 @@ export function buildSettingsSnapshot(input = {}) {
       row: s.voice && s.voice.provider ? String(s.voice.provider) : '用系统 TTS',
       model: s.judgeModel ? String(s.judgeModel) : '还没选局官模型',
     },
+    // 外接 APP：他自己声明的名单（config.apps）压过内置的娱乐类包名表。
+    apps: { row: appsSummary(src.config && src.config.apps) },
     pending: {
       on: Boolean(pend),
       text: pend ? '有一处改松挂到 ' + clock(pendClock) + ' 才生效。' : '没有挂着的改动。',

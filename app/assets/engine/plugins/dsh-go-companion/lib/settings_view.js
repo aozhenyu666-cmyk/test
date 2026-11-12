@@ -57,6 +57,7 @@ export function settingsLimitsView(_scope, caps = {}) {
     { type: 'text', text: b('limitsNote'), tone: 'muted' },
     { type: 'metric', label: '念出来', value: b('voice.row') },
     { type: 'metric', label: '局官模型', value: b('voice.model') },
+    { type: 'metric', label: '手边应用', value: b('apps.row') },
   ]
   if (Array.isArray(caps.components) && caps.components.includes('form')) {
     children.push({
