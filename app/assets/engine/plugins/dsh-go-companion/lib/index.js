@@ -87,6 +87,10 @@ import { boutsBooksView, boutsNowView, boutsProtocolsView, boutsQueueView } from
 import { boutsTileStatus, buildBoutsSnapshot } from './bouts_panel.js'
 // 第八轮 P1/P2：计划的节拍。草案、到点开局、过点记空局的规则全在 planwire.js，这里只接线。
 import { planLines, planOf, tick } from './planwire.js'
+// 第八轮 W2：墙的面板。数据层自己不含措辞，只读 machine/wall_voice/settings 的现成结论。
+import { buildWallSnapshot } from './wall_panel.js'
+import { wallAuditView, wallView } from './wall_view.js'
+import { settingsOf } from './settings.js'
 import { builtinProtocolOf, builtinProtocols } from './builtin.js'
 import { createOfficial } from './boutrun.js'
 import { listBouts, listVerdicts, openBoutsDb, runningBout } from './bouts.js'
@@ -5194,6 +5198,21 @@ export function apply(ctx) {
     }
   }
 
+  // 第八轮 W2：墙是控制塔。数据全是别的模块算好的——这里只读，不重算，也不措辞。
+  function wallSnapshot(now = Date.now()) {
+    const tz = zoneOr(config.timeZone)
+    const day = startOfDay(now, tz)
+    return buildWallSnapshot({
+      now,
+      tz,
+      state: stateView(now, tz, lastPhone),
+      plan: planOf(readState(stateFile('plan.json'), null), day),
+      entries: readLedger(home(), 600),
+      todayStart: day,
+      settings: settingsOf(config),
+    })
+  }
+
   function dropLive() {
     try {
       live?.db?.close?.()
@@ -5329,6 +5348,8 @@ export function apply(ctx) {
         if (typeof d.on === 'function') d.on('bouts-open', () => ({ open: 'panel:bouts' }))
         if (typeof d.on === 'function') d.on('bouts-queue-open', () => ({ open: 'panel:bouts-queue' }))
         if (typeof d.on === 'function') d.on('bouts-books-open', () => ({ open: 'panel:bouts-books' }))
+        if (typeof d.on === 'function') d.on('wall-open', () => ({ open: 'panel:wall' }))
+        if (typeof d.on === 'function') d.on('wall-audit-open', () => ({ open: 'panel:wall-audit' }))
         d.panel('sisters', {
           view: sistersView,
           data: (scope, emit) => {
@@ -5405,6 +5426,25 @@ export function apply(ctx) {
               return () => panelScopes.delete(keyOf(scope))
             },
             actions: boutActions(panelId),
+          })
+        }
+        // 墙：控制塔。只读、只有刷新——面板不能自己解锁、不能改阈值
+        //（阈值在设定页，改松还要过冷却期，见 settings.js）。申诉走它自己那个入口。
+        const wallActions = (panelId) => ({
+          'wall.refresh': (scope) => {
+            d.refresh(panelId, scope)
+            return { toast: '' }
+          },
+        })
+        for (const [panelId, view] of [['wall', wallView], ['wall-audit', wallAuditView]]) {
+          d.panel(panelId, {
+            view,
+            data: (scope, emit) => {
+              panelScopes.set(keyOf(scope), scope)
+              emit(wallSnapshot())
+              return () => panelScopes.delete(keyOf(scope))
+            },
+            actions: wallActions(panelId),
           })
         }
       })
