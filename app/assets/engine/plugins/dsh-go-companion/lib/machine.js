@@ -25,6 +25,8 @@ export const BRAIN_MIN_MS = 3 * 60_000
  */
 const CONDITIONS = {
   'night-lock': (f) => inNightLock(f.min),
+  // 第八轮 P1：计划模态是主状态，优先级仅次于深夜锁。判定在 dayplan.js，这里只认结果。
+  'plan-lock': (f) => f.plan.active,
   'evening-followup': (f) => f.followup.active && f.followup.reason === 'evening',
   'evening-gate': (f) => f.rhythm.reviewGate === true,
   'morning-lock': (f) => (f.followup.active && f.followup.reason === 'morning') || f.rhythm.morningGate === true,
@@ -45,6 +47,9 @@ export const STATE_TABLE = [
   { id: 'night', priority: 100, enter: ['night-lock'], lock: 'night', back: null,
     agenda: '深夜锁：不主动发球。他还醒着就短、硬地让他去睡。',
     tools: ['notes_vault', 'fish_index', 'dafeiyu_control', 'kb_write'] },
+  { id: 'plan', priority: 95, enter: ['plan-lock'], lock: 'plan', back: null,
+    agenda: '计划模态：先把今天的局定下来。第一句必须是计划，不是问题；他不开口就 10 分钟后自动生效。',
+    tools: ['daily_plan', 'dafeiyu_control', 'notes_vault', 'fish_index', 'kb_write'] },
   { id: 'evening', priority: 90, enter: ['evening-followup', 'evening-gate'], lock: 'evening', back: null,
     agenda: '晚间对账：逐项核对今天的完成物，满意才收；满意后今晚的申请窗口才可能开。',
     tools: ['daily_review', 'submit_to_wall', 'submit_verdict', 'request_relax', 'submit_prediction', 'notes_vault', 'fish_index', 'kb_write'] },
@@ -99,6 +104,7 @@ export function toolsElsewhere(state) {
 /** 锁层怎么说话：界面只显示最高那一项的理由。 */
 const LOCK_WHY = {
   night: '深夜锁：现在是休息时间，娱乐锁到早上 7 点。',
+  plan: '计划模态：今天的局还没定下来，娱乐锁着。',
   evening: '晚间对账：把今天的账对完才解锁。',
   followup: '追问锁：把这一个问题说清楚。',
   sprint: '冲刺中：娱乐锁着，通知收进防波堤。',
@@ -107,7 +113,7 @@ const LOCK_WHY = {
 }
 
 /** 每层锁的优先级（和 STATE_TABLE 的 priority 对齐；open 层不下发成锁）。 */
-export const LAYER_PRIORITY = { night: 100, evening: 90, followup: 80, sprint: 70, brain: 70, standby: 50 }
+export const LAYER_PRIORITY = { night: 100, plan: 95, evening: 90, followup: 80, sprint: 70, brain: 70, standby: 50 }
 
 function factsOf(input) {
   const now = Number(input?.now) || 0
@@ -118,11 +124,17 @@ function factsOf(input) {
   const rhythm = input?.rhythm || {}
   const followup = input?.followup || { active: false, reason: '', until: 0, since: 0 }
   const session = input?.session && typeof input.session === 'object' ? input.session : null
+  const plan = input?.plan && typeof input.plan === 'object' ? input.plan : null
   const relax = activeRelax(config, now, tz)
   const seg = relax ? relax.segments.find((s) => min >= s.from && min < s.to) : null
   return {
     now, tz, config, day, min, rhythm, followup, session,
     relax: seg || null,
+    plan: {
+      active: Boolean(plan && plan.active),
+      until: plan ? Number(plan.until) || 0 : 0,
+      reason: plan ? String(plan.reason || '') : '',
+    },
     sprint: {
       active: config.gear === 'busy' && Number(config.gearUntil) > now,
       until: Number(config.gearUntil) || 0,
@@ -139,6 +151,8 @@ function factsOf(input) {
 /** 这一层什么时候自己到期（引擎挂了手机也按这个松手）。 */
 function untilOf(id, f) {
   if (id === 'night') return f.midnight + NIGHT_LOCK_TO * 60_000
+  // 计划模态自带到期时刻（10 分钟不确认就自动生效），所以这里照抄，不另算。
+  if (id === 'plan') return f.plan.until
   if (id === 'evening') {
     if (f.followup.active && f.followup.reason === 'evening') return Number(f.followup.until) || 0
     const since = Number(f.rhythm?.state?.reviewSince) || f.now

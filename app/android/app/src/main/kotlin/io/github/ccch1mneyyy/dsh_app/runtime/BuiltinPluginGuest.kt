@@ -170,6 +170,11 @@ object BuiltinPluginGuest {
                 "lib/protocols/outing.json",
                 "lib/protocols/design.json",
                 "lib/protocols/rest.json",
+                // R8 W4：设定（作息模板 / 最少局数 / 局型预算 / 升级阈值）。改紧立即生效，
+                // 改松走 24 小时冷却期——P1 排局、P4 升级都从这里读阈值。
+                "lib/settings.js",
+                // R8 P1：计划模态。候选与规则全在代码里，模型只负责把计划说出来。
+                "lib/dayplan.js",
             ),
         ),
     )

@@ -27,8 +27,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   windows: DEFAULT_WINDOWS,
   minBouts: 4,
   minThinking: 1,
-  // 各局型默认预算（分钟）。
-  budget: Object.freeze({ study: 25, execute: 30, thinking: 25, outing: 40 }),
+  // 各局型默认预算（分钟）。键就是协议 id（design/execute/outing/rest/study），
+  // thinking 留给还没落地的思维局（J5）。
+  budget: Object.freeze({ study: 25, execute: 30, design: 30, outing: 40, rest: 20, thinking: 25 }),
   // P4 全部阈值。施工书第 9 节三个待定项先按偏严初值。
   escalate: Object.freeze({
     E1Count: 3,
@@ -85,8 +86,10 @@ export function settingsOf(config) {
     budget: {
       study: int(b.study, 5, 180, d.budget.study),
       execute: int(b.execute, 5, 180, d.budget.execute),
-      thinking: int(b.thinking, 5, 180, d.budget.thinking),
+      design: int(b.design, 5, 180, d.budget.design),
       outing: int(b.outing, 5, 180, d.budget.outing),
+      rest: int(b.rest, 5, 180, d.budget.rest),
+      thinking: int(b.thinking, 5, 180, d.budget.thinking),
     },
     escalate: {
       E1Count: int(e.E1Count, 1, 10, d.escalate.E1Count),
@@ -117,8 +120,10 @@ export function looseness(s) {
     -s.minThinking,
     s.budget.study,
     s.budget.execute,
-    s.budget.thinking,
+    s.budget.design,
     s.budget.outing,
+    s.budget.rest,
+    s.budget.thinking,
     s.escalate.E1Count, // 容许更多次敷衍才算升级
     s.escalate.E1WindowMs, // 窗口更长更松
     -s.escalate.cellMin, // 审讯舱更短更松
