@@ -34,7 +34,8 @@ object AgentWire {
     }
 
     /** 409 codes that mean "he is talking / there is nothing to say now", not "it broke". */
-    private val SKIP_CODES = setOf("no-topic", "agent-busy", "in-conversation", "desk-busy")
+    // skip-no-content：B1 的信息增量守卫判这一句是套话，重写过一次还不过——这一轮不发是决定。
+    private val SKIP_CODES = setOf("no-topic", "agent-busy", "in-conversation", "desk-busy", "skip-no-content")
 
     /**
      * Body of POST /request. Replaying it with the same requestId is safe: the plugin never sends twice.

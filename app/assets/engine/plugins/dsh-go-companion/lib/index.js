@@ -24,7 +24,7 @@ import { plan as decide } from './plan.js'
 import { DEFAULT_TZ, hm as zoneHm, md as zoneMd, minuteOfDay as zoneMinuteOfDay, startOfDay as zoneStartOfDay, weekdayOf, zoneOr } from './tz.js'
 import { classifyReply } from './classify.js'
 import { gardenClass, judgeReply } from './judge.js'
-import { isStock } from './stock.js'
+import { RECENT_WINDOW, SKIP_STATE, contentGate, gateRound, isStock, nounsOf, recentOwnTexts } from './stock.js'
 import { capCount, nextShot, rallyStats } from './rally.js'
 import { pickServeType } from './serve.js'
 import { LIGHTER_TYPES, mutedUntil, serveWeights, silenceState } from './silence.js'
@@ -72,7 +72,7 @@ import { appendPrediction, checkClaim, cleanLedger, dueCount, emptyLedger, predi
 import { agreementRate, appendStance, checkStance, cleanStances, hitRate, isYield, reviseStance, settleStances, stanceBlock, stanceDigest, yieldLine } from './stance.js'
 import { buildVibe, pickedArms, renderVibe } from './vibe.js'
 import { decideForce, forceLines, refuseSwitch } from './force.js'
-import { BUSY_CHECK_MS, BUSY_DEFAULT_MIN, BUSY_MAX_MIN, aiTask, applyGear, effectiveGear, gearLines, gearSwitch } from './gear.js'
+import { BUSY_DEFAULT_MIN, BUSY_MAX_MIN, aiTask, applyGear, effectiveGear, gearLines, gearSwitch } from './gear.js'
 import { trustGap, trustLines, trustScore } from './trust.js'
 import { buildSnapshot, sistersView } from './panel.js'
 import { JUDGE_FILE, SELF_FILE, appendVerdictDaily, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
@@ -532,6 +532,10 @@ export function apply(ctx) {
   let lastVibe = { face: '', turn: 0 }
   /** requestId -> 发球时的现状（generated 时交给大脑开始计"有没有拉回来"）。 */
   const servedContext = new Map()
+  /** B1：sessionId -> 这一轮已经被守卫打回过的判定（只留最近一次，重写只有一个机会）。 */
+  const gateTries = new Map()
+  /** B1：requestId -> 这一轮不发。手机拿到 409 skip-no-content 就静默收尾，不重试。 */
+  const suppressed = new Set()
   /** requestId -> first seen moment, for the median latencies in /status (P6). */
   const startedAt = new Map()
 
@@ -625,10 +629,38 @@ export function apply(ctx) {
   function lastStockBall(entries) {
     for (let i = entries.length - 1; i >= 0; i -= 1) {
       const e = entries[i]
+      // B1：被信息增量守卫打回、没发出去的那一句，也算"上一球等于没说"，下一球要换个写法重写。
+      if (e?.state === 'stock-rewrite' && e.text) return String(e.text)
       if (e?.state !== 'generated' || !e.text) continue
       return e.stock === true ? String(e.text) : null
     }
     return null
+  }
+
+  /**
+   * B1：信息增量守卫。生成出来的句子过两道：和自己最近 5 句的重合率、有没有具体名词。
+   * 一次重写机会（规则见 stock.js 的 gateRound）：重写还重复就这一轮不发（账本 `skip-no-content`），
+   * 只是不沾具体名词则重写一次后照发。两者都不算失败、不重试。
+   * @returns {{action:'send'|'rewrite'|'skip', state?:string, code?:string}}
+   */
+  function gateBall(r) {
+    const sid = String(r.sessionId || '')
+    const served = servedContext.get(String(r.requestId))
+    const tries = [...(gateTries.get(sid) || [])]
+    const own = readLedger(home(), 60).filter((e) => e.sessionId === sid)
+    const verdict = contentGate(r.text, { recent: recentOwnTexts(own, RECENT_WINDOW), nouns: served?.nouns })
+    tries.push(verdict)
+    const round = gateRound(tries)
+    // 只有"还要重写"的那一遍留在 gateTries 里；放行或收摊都清掉，下一轮重新算。
+    if (round.action === 'rewrite') gateTries.set(sid, tries.slice(-1))
+    else gateTries.delete(sid)
+    return {
+      action: round.action,
+      // 放行时不改账本状态（就是 generated）；打回和不发各有自己的状态名。
+      state: round.action === 'send' ? r.state : round.action === 'skip' ? SKIP_STATE : 'stock-rewrite',
+      code: round.code || verdict.code,
+      soft: round.soft,
+    }
   }
 
   async function compose(req, sessionId) {
@@ -749,10 +781,15 @@ export function apply(ctx) {
       // 回合与拍数都从账本重建：进程重启不会丢，也不多存一份状态。
       const rally = nextShot(entries, { sessionId, now })
       const vault = vaultContext(now)
+      // B1：这一球手上有哪些"具体名词"（当前状态 / 记忆 / 暗思考产物 / 立场 / 今天的块）。
+      // 生成后拿它判这一句有没有信息增量——没有就是套话，判据在 stock.js。
+      const facts = backgroundFacts(candidates, BACKGROUND_LIMIT)
+      const episodes = (candidates.episodes || []).map((e) => e.text)
+      const nouns = nounsOf([topic, facts, episodes, commitments, vault, phone, drill, drillOp, track])
       const prompt = buildPrompt({
         topic,
-        facts: backgroundFacts(candidates, BACKGROUND_LIMIT),
-        episodes: (candidates.episodes || []).map((e) => e.text),
+        facts,
+        episodes,
         commitments,
         mood: mood ? mood.mood : undefined,
         replyClass: lastReplyClass(entries),
@@ -782,7 +819,7 @@ export function apply(ctx) {
         owner: config.owner,
         self: config.dual === false ? config.self : roleNames(config).companion,
       })
-      servedContext.set(String(req?.requestId || ''), { phone, band: water.band, face: faceId, drill: drill?.id })
+      servedContext.set(String(req?.requestId || ''), { phone, band: water.band, face: faceId, drill: drill?.id, nouns })
       const extra = {
         tide: water.level, band: water.band, face: faceId, surprise: temper.surprise || undefined,
         drill: drill?.id, force: force.level || undefined, track: track?.id,
@@ -846,6 +883,8 @@ export function apply(ctx) {
       const key = String(r.requestId)
       const began = startedAt.get(key)
       if (r.state === 'accepted') startedAt.set(key, now)
+      // B1：生成出来的这一句先过信息增量守卫，再决定算不算"发出去了"。
+      const ball = r.state === 'generated' ? gateBall(r) : null
       record({
         requestId: r.requestId,
         eventId: r.eventId,
@@ -857,23 +896,33 @@ export function apply(ctx) {
         shot: r.shot ?? undefined,
         silence: r.silence ?? undefined,
         ...(r.extra && (r.state === 'accepted' || r.state === 'generated') ? r.extra : {}),
-        state: r.state,
+        // 打回的那一球账本里不记 generated：它不是"发出去了"，也不是失败。
+        state: ball ? ball.state : r.state,
         at: now,
         ms: began ? now - began : undefined,
         text: r.text ?? undefined,
         // 套话只在生成时判：谁都能说的模板不算开口。判出来就记进账本，
         // 下一球把它打回去，P5 的评测也靠这个数。
         stock: isStock(r.text) || undefined,
+        skip: ball && ball.action !== 'send' ? ball.code : undefined,
+        // 软判据（不沾具体名词）不拦，只记账：P5 的评测靠这个数看"有多少句没信息量"。
+        soft: ball ? ball.soft : undefined,
         failure: r.failure ?? undefined,
         cold: r.cold === true,
       })
       if (r.state !== 'accepted') startedAt.delete(key)
       // 生成成功后等一次人的回应；2 小时内没有就记 none（有限跟进/冷却的依据）。
       if (r.state === 'generated') {
-        lastBall = { role: speakerOf(r.sessionId), at: Date.now() }
-        // 大脑从这一刻开始计：10 分钟内他有没有离开那个娱乐 App。
         const served = servedContext.get(String(r.requestId))
         servedContext.delete(String(r.requestId))
+        // 这一轮不发：账本已经记了 skip-no-content / stock-rewrite，手机侧静默收尾。
+        // 不算失败、不占发球额度、不写 pending（他没收到过这一句，不能拿去判球）。
+        if (ball && ball.action !== 'send') {
+          suppressed.add(key)
+          return
+        }
+        lastBall = { role: speakerOf(r.sessionId), at: Date.now() }
+        // 大脑从这一刻开始计：10 分钟内他有没有离开那个娱乐 App。
         if (served) {
           const b = loadBrain()
           onServe(b, { requestId: r.requestId, phone: served.phone, band: served.band, face: served.face, drill: served.drill, at: Date.now() })
@@ -1495,10 +1544,9 @@ export function apply(ctx) {
     }
     record({ state: 'gear', at: Date.now(), gear: sw.gear, until: sw.until || undefined, what: sw.what || undefined, by })
   }
-  /** 这一球真的要发了：把"报到过 / 迎接过 / 叫回去过 / 读回过"记下，免得下一问又来一遍。 */
+  /** 这一球真的要发了：把"迎接过 / 叫回去过 / 读回过"记下，免得下一问又来一遍。 */
   function markBall(why, now) {
     if (!why) return
-    if (why.reason === 'checkin') saveGearState({ ...loadGearState(), lastCheckAt: now })
     if (why.reason === 'busy-done' || why.reason === 'task-due') saveGearState({ ...loadGearState(), doneFor: Number(config.gearUntil) })
     if (why.reason === 'defied') pendingDefiance = null
     if (why.reason === 'restless') saveGearState({ ...loadGearState(), restlessAt: now })
@@ -1810,7 +1858,7 @@ export function apply(ctx) {
   function controlTool() {
     return {
       name: 'dafeiyu_control',
-      description: '切换对他的管法（只能收紧，不能放松）：busy=忙时（不闲聊、每 25 分钟报到、娱乐 App 一开就锁；时长默认 40 分钟、最长 60，到点只让他报到，不评分不扣分）；' +
+      description: '切换对他的管法（只能收紧，不能放松）：busy=忙时（不闲聊、娱乐 App 一开就锁；时长默认 40 分钟、最长 60，到点只让他报到一次，不评分不扣分）；' +
         'refuse=拒绝模式 minutes 分钟（娱乐 App 一开就锁）；mute=安静 minutes 分钟；strict=严格。他亲口要求或明确同意时才用。' +
         '放松（回到闲时、关拒绝、切回温和）这里不做：他想放松只能等对账后的申请窗口。',
       parameters: {
@@ -1834,7 +1882,7 @@ export function apply(ctx) {
           const busyMinutes = Math.max(10, Math.min(BUSY_MAX_MIN, Math.round(Number(args.minutes) || BUSY_DEFAULT_MIN)))
           const until = now + busyMinutes * 60_000
           setGear({ gear: 'busy', until, what: String(args.what || '正事').slice(0, 20) }, 'tool')
-          text = '已切到忙时（' + (args.what || '正事') + '）' + busyMinutes + ' 分钟，到 ' + hm(until) + '：不闲聊、定时报到、娱乐 App 一开就锁。'
+          text = '已切到忙时（' + (args.what || '正事') + '）' + busyMinutes + ' 分钟，到 ' + hm(until) + '：不闲聊、娱乐 App 一开就锁，到点只让你报到一次。'
         } else if (args.action === 'refuse') {
           const until = now + (Number(args.minutes) ? mins : 120) * 60_000
           config = { ...config, refuseUntil: until, refuseBy: 'tool' }
@@ -1869,7 +1917,7 @@ export function apply(ctx) {
     return {
       name: 'start_task_mode',
       description: '给他立一个任务（**只在他主动要求时**：他说"给我立个任务""盯我 45 分钟""这一个小时别让我玩"）。' +
-        'mode=task 任务模式（有目标，定时报到，娱乐按规则锁，验收合格才结束）；mode=refuse 只锁娱乐不立目标。' +
+        'mode=task 任务模式（有目标，到点报到一次，娱乐按规则锁，验收合格才结束）；mode=refuse 只锁娱乐不立目标。' +
         '他没要求时不要调用——规矩由墙执行，你只在他点名要的时候帮他立。立完告诉他做了什么、为什么、第一步是什么。',
       parameters: {
         type: 'object',
@@ -4056,6 +4104,11 @@ export function apply(ctx) {
       if (req.method === 'GET' && path === '/result') {
         const waitMs = Math.min(Math.max(Number(url.searchParams.get('waitMs') ?? 0) || 0, 0), 25_000)
         const id = String(url.searchParams.get('requestId') ?? '')
+        // B1：这一轮不发是决定，不是失败。回 409 + skip-no-content，手机按既有的
+        // AgentWire.Skip 静默收尾（不计 notDeliveredStreak、不在这一分钟内重试）。
+        if (suppressed.has(id)) {
+          return send(res, 409, { v: 1, error: { code: 'skip-no-content', message: '这一轮不发：句子没有信息增量' } })
+        }
         const r = await (chat.records.has(id) ? chat : desk).wait(id, waitMs)
         // 双人格：话前面标上是谁说的（〔鱼丸〕/〔鲸澜〕），浮层据此显示名字。
         if (config.dual !== false && r?.body?.state === 'generated' && typeof r.body.text === 'string') {
@@ -4351,9 +4404,9 @@ export function apply(ctx) {
       } else if (gearNow === 'free' && restlessSignal(phone, now)) {
         nextSpeaker = { role: 'companion', reason: 'restless', at: now, ...restlessSignal(phone, now) }
       } else if (gearNow === 'busy') {
-        const last = Math.max(Number(config.gearSince) || 0, Number(gs.lastCheckAt) || 0)
-        if (now - last >= BUSY_CHECK_MS) nextSpeaker = { role: thinker, reason: 'checkin', at: now, busy: { what: config.gearWhat, until: Number(config.gearUntil) } }
-        else hold = last + BUSY_CHECK_MS
+        // B1：忙时不催进度——原来这里每 25 分钟发一球问「做到哪了、卡没卡」，撤掉。
+        // 这一档里一句都不发，等到点那一次报到（进度只在 A2 的时间块边界由代码问一次）。
+        hold = Math.max(now + 60_000, Number(config.gearUntil) || 0)
       } else if (config.gear === 'busy' && Number(config.gearUntil) <= now && now - Number(config.gearUntil) < 2 * 3_600_000 &&
         Number(gs.doneFor) !== Number(config.gearUntil) && !lastRhythm?.reviewGate) {
         // 对账门开着时不单独来验收任务：对账会一并清算（C5）。
@@ -4870,7 +4923,7 @@ export function apply(ctx) {
             'sisters.busy': (scope) => {
               setGear({ gear: 'busy', until: Date.now() + BUSY_DEFAULT_MIN * 60_000, what: '正事' }, 'panel')
               d.refresh('sisters', scope)
-              return { toast: '忙时 ' + BUSY_DEFAULT_MIN + ' 分钟：不闲聊、定时报到、娱乐一开就锁。' }
+              return { toast: '忙时 ' + BUSY_DEFAULT_MIN + ' 分钟：不闲聊、娱乐一开就锁，到点只让你报到一次。' }
             },
             'sisters.refuse': (scope) => {
               const until = Math.max(Date.now() + 30 * 60_000, Number(config.refuseUntil) || 0)

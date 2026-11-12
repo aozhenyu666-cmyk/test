@@ -144,13 +144,6 @@ export function strategistBallFrame(owner, names, { reason, note, allowTools = f
       '不要提到"事件""系统""主动""提醒"这些字眼。）',
     toolsLine(allowTools),
   ]
-  if (reason === 'checkin') {
-    const left = busy ? Math.max(1, Math.round((busy.until - Date.now()) / 60_000)) : null
-    lines.push('他在忙「' + (busy?.what || '正事') + '」' + (left ? '（还剩约 ' + left + ' 分钟，他自己定的）' : '') + '，这是一次报到：一句话问进度——做到哪了、卡没卡。' +
-      '他上次报到说过的（记忆里有）就对一下。不闲聊、不推演、不鼓励，30 字以内。')
-    lines.push('这一次不要上网查资料。')
-    return lines
-  }
   if (reason === 'morning-gate') {
     lines.push('早上他刚拿起手机。娱乐先锁着（社交没锁），你来帮他开今天的头：今天最重要的 1–3 件事、各自几点前做完、每件事的完成物是什么。你是他这边的人，帮他把事情想具体，墙收了立项娱乐才解锁。')
     lines.push('一两句，像早上碰面那样，但别寒暄太久；他昨天答应过的事（下面有）可以顺带对一下。' +
@@ -303,8 +296,8 @@ export const NOTES_CANDIDATES = [
 /** 妹妹的几种特殊开场（/plan 定的理由）。 */
 export function companionSpecialLines(special, names, allowTools = false) {
   if (!special) return []
-  // 单人格（没有姐姐）时，报到和连麦复盘也由她来，用姐姐那套说法。
-  if (['checkin', 'gemini-recap', 'patrol', 'task-due', 'morning-gate', 'night', 'notes-chase', 'review'].includes(special.reason)) {
+  // 单人格（没有姐姐）时，忙完报到和连麦复盘也由她来，用姐姐那套说法。
+  if (['gemini-recap', 'patrol', 'task-due', 'morning-gate', 'night', 'notes-chase', 'review'].includes(special.reason)) {
     return strategistBallFrame('他', names, { reason: special.reason, allowTools, busy: special.busy, gemini: special.gemini, note: special.note }).slice(2)
   }
   if (special.reason === 'restless') {

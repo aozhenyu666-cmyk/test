@@ -111,7 +111,7 @@ test('一句话切档：只认明确说法', () => {
   assert.equal(gearSwitch('我觉得做饭这件事其实挺有意思的你说呢，要不要一起研究一下菜谱', now), null, '长句不切')
 })
 
-test('忙时：不闲聊、娱乐一开就锁、到点报到（姐姐）、报到过就等下一次', async () => {
+test('忙时：不闲聊、娱乐一开就锁、不到点不催进度（B1：每 25 分钟报到已撤）', async () => {
   await withHome(async (home) => {
     const t = setup(home)
     await t.say(SIS, '开始学习 1 小时')
@@ -125,20 +125,14 @@ test('忙时：不闲聊、娱乐一开就锁、到点报到（姐姐）、报�
     assert.match(t.sis.contexts[0].text(), /他现在在忙：学习/)
   })
   await withHome(async (home) => {
+    // B1：忙时中途（已经忙了 30 分钟）不再发问进度的球——催人的话是套话的来源。
+    // 进度只在 A2 的时间块边界由代码问一次；这里有块没块都不该冒出一球。
     const now = Date.now()
     const t = setup(home, { gear: 'busy', gearUntil: now + 30 * 60_000, gearSince: now - 30 * 60_000, gearWhat: '写报告' })
-    const due = await t.plan(wechat)
-    assert.equal(due.body.speak, true, JSON.stringify(due.body))
-    assert.equal(due.body.reason, 'checkin')
-    assert.equal(due.body.speaker, 'strategist')
-    const r = await t.request('req-checkin-01')
-    assert.equal(r.status, 202, JSON.stringify(r.body))
-    assert.equal(t.big.sent.length, 1, '报到由姐姐来')
-    assert.match(text(t.big), /写报告.*报到/)
-    assert.match(text(t.big), /30 字以内/)
-    await finishTurn(t.h, t.big, 2, '报告写到哪了？')
-    const after = await t.plan(wechat)
-    assert.equal(after.body.reason, 'busy', '报到过了，等下一次')
+    const mid = await t.plan(wechat)
+    assert.equal(mid.body.speak, false, JSON.stringify(mid.body))
+    assert.notEqual(mid.body.reason, 'checkin', '不再有 checkin 这一球')
+    assert.equal(t.big.sent.length + t.sis.sent.length, 0, '忙时中途一句都不发')
   })
 })
 

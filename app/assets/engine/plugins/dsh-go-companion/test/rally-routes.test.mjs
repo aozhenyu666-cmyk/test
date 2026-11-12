@@ -210,7 +210,9 @@ test('连着两轮：第二轮回球是第四拍，回合不重置', async () =>
       },
     })
     await oneRound({ ...host, agent, requestId: 'req-00000011', reply: '因为周五才出，我还在等', serve: '我猜你在躲申论' })
-    await oneRound({ ...host, agent, requestId: 'req-00000012', reply: '昨天问过了，还没出', serve: '我猜你在躲申论' })
+    // B1 之后两轮不能再用同一句：信息增量守卫会把它判成"和自己刚说过的一样"打回，
+    // 这一轮就不发了，拍数也就接不上。换一句同样带具体名词、但不是复读的球。
+    await oneRound({ ...host, agent, requestId: 'req-00000012', reply: '昨天问过了，还没出', serve: '行测那套你昨天说只错两道，我不信' })
 
     const shots = ledger(home).filter((e) => e.state === 'generated' || e.state === 'replied')
     const rallyIds = new Set(shots.map((e) => e.rallyId))
@@ -291,6 +293,59 @@ test('套话记进账本：下一球把这句原样打回去', async () => {
     assert.match(prompt, /上一球你说的是/)
     assert.match(prompt, /你在做什么呢/)
     assert.match(prompt, /必须换个写法/)
+  } finally {
+    if (oldHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = oldHome
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('B1 信息增量守卫：复读自己 → 先打回一次，再复读就这一轮不发（账本 skip-no-content，409）', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'companion-gate-'))
+  const oldHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+  try {
+    seed(home)
+    const agent = makeAgent()
+    const host = makeHost({
+      home,
+      agent,
+      judge: async function* () {
+        yield { type: 'text-delta', text: '{"verdict":"engaged","why":"有细节","next":"deeper"}' }
+      },
+    })
+    const same = '我猜你在躲申论，那份周五才出'
+    await oneRound({ ...host, agent, requestId: 'req-00000041', reply: '因为周五才出，我在等', serve: same })
+    // 二遍：和上一球几乎一样 → 打回一次，账本记 stock-rewrite，这一轮不发。
+    await oneRound({ ...host, agent, requestId: 'req-00000042', reply: '等着呢', serve: same })
+    // 三遍：还是同一句 → 收摊，账本记 skip-no-content。
+    await oneRound({ ...host, agent, requestId: 'req-00000043', reply: '嗯', serve: same })
+
+    const entries = ledger(home)
+    // 一次请求在账本里有 accepted / claimed 这些过程行；这里只看终态那一行。
+    const END = new Set(['generated', 'stock-rewrite', 'skip-no-content', 'failed'])
+    const of = (id) => entries.filter((e) => e.requestId === id && END.has(e.state))
+    const first = entries.find((e) => e.requestId === 'req-00000041' && e.state === 'generated')
+    assert.ok(first, '第一球正常发')
+    const rewrite = of('req-00000042')
+    assert.equal(rewrite.length, 1, JSON.stringify(entries.map((e) => e.state)))
+    assert.equal(rewrite[0].state, 'stock-rewrite', JSON.stringify(rewrite[0]))
+    assert.equal(rewrite[0].skip, 'dup', '原因是和自己刚说过的一样')
+    assert.equal(rewrite[0].failure, undefined, '打回不算失败')
+
+    const skipped = of('req-00000043')
+    assert.equal(skipped.length, 1, JSON.stringify(entries.map((e) => e.state)))
+    assert.equal(skipped[0].state, 'skip-no-content', JSON.stringify(skipped[0]))
+    assert.equal(skipped[0].failure, undefined, '这一轮不发也不算失败')
+
+    // 手机侧拿到的是 409 + skip-no-content：按既有的 AgentWire.Skip 静默收尾，不重试。
+    const r = await call(host.handler, 'GET', '/dsh-go-companion/v1/result?requestId=req-00000043&waitMs=0')
+    assert.equal(r.status, 409, JSON.stringify(r.body))
+    assert.equal(r.body.error.code, 'skip-no-content')
+
+    // 不发的那两球不写 pending：他没收到过，下一球不能拿去判他的回复。
+    const served = entries.filter((e) => e.state === 'generated')
+    assert.equal(served.length, 1, '只有第一球算发出去了')
   } finally {
     if (oldHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = oldHome
