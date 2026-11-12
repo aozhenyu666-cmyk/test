@@ -25,7 +25,7 @@ import { DEFAULT_TZ, hm as zoneHm, md as zoneMd, minuteOfDay as zoneMinuteOfDay,
 import { classifyReply } from './classify.js'
 import { gardenClass, judgeReply } from './judge.js'
 import { RECENT_WINDOW, SKIP_STATE, contentGate, gateRound, isStock, nounsOf, recentOwnTexts } from './stock.js'
-import { BURST_HOURLY_CAP, behaviorOf, emotionLine, emotionOf } from './emotion.js'
+import { BURST_HOURLY_CAP, behaviorOf, emotionLine, emotionOf, voiceOf } from './emotion.js'
 import { capCount, nextShot, rallyStats } from './rally.js'
 import { pickServeType } from './serve.js'
 import { LIGHTER_TYPES, mutedUntil, serveWeights, silenceState } from './silence.js'
@@ -154,6 +154,8 @@ const DEFAULTS = Object.freeze({
   strategistName: '鲸澜',
   // 他给了高权限：主动找他的那一轮也能动手（设提醒、退出 App、调手机）。DSH 自己的审批照常生效。
   proactiveTools: true,
+  // 念出来（B5）：默认关。关着浮层照常，只是不出声——不联网的系统 TTS 也得他自己点头。
+  voice: false,
   companionCard: '',
   strategistCard: '',
   // 做题模式：默认关，主线是聊天。说"开始做题 / 做题模式"打开，"别出题了"关掉。
@@ -828,12 +830,19 @@ export function apply(ctx) {
       // B4：这一轮怎么发（连发几条、每条多长、间隔多久、发文字还是念出来）。
       // 情绪是账本的纯函数，不另存状态；它只决定"怎么发"，不改任何锁、额度、判定。
       const tzNow = zoneOr(config.timeZone)
+      const quietNow = inQuiet(now, config.quietStart, config.quietEnd, tzNow)
       const emotion = emotionOf(entries, { now, tz: tzNow, quietStart: config.quietStart, quietEnd: config.quietEnd })
       const burst = behaviorOf(emotion, {
         now,
-        quiet: inQuiet(now, config.quietStart, config.quietEnd, tzNow),
+        quiet: quietNow,
         sentLastHour: burstUsedLastHour(entries, now),
       })
+      // B5：这一条念不念（总开关 / 安静时段 / 渠道三道闸都在 voiceOf 里，返回 null 就是不念）。
+      // 渠道那一道：档位要念（hot/blaze/eager），或者漠视阶梯走到了"换渠道"那一级——
+      // 后者从第四轮就在账本里记 stage='channel'，一直没人接。
+      const voice = voiceOf(emotion, {
+        now, enabled: config.voice === true, quiet: quietNow, channel: burst.channel, stage: silence.stage,
+      }) || undefined
       const prompt = buildPrompt({
         topic,
         facts,
@@ -878,6 +887,9 @@ export function apply(ctx) {
         // B4：手机按这个计划发——连发几条、每条多长、间隔多久、发文字还是念出来。
         // 它不改这一球的内容，只改投递方式（内容还是模型按人设写的）。
         burst,
+        // B5：念出来的调子（语速/音高/单条上限）。没有就是不念。
+        // 它和 burst 分开：连发额度只剩 1 条时 burst 是 null，但这一条照样该念。
+        voice,
         // 情绪那一行也带上：浮层/面板要看得到她现在什么状态。
         emotion: emotionLine(emotion, now),
       }
@@ -3457,6 +3469,23 @@ export function apply(ctx) {
       record({ state: 'overlay-closed', at: now, chatted: body?.chatted === true, muted: body?.muted === true, busy: body?.busy === true || undefined, app: typeof body?.app === 'string' ? body.app.slice(0, 120) : undefined })
       return { v: 1, ok: true }
     }
+    if (type === 'voice-out') {
+      // B5：手机报"这一条到底念出来没有"。念了就 ok，没念就带降级原因——这是唯一能知道
+      // 语音有没有真的响过的来源，插件自己不知道手机的音量和勿扰。
+      // 这条不进 silence/emotion 的任何判断（它们只认 generated / replied / human / said），
+      // 所以记在同一个 requestId 下面也不会被当成"回过话"。
+      record({
+        state: 'voice-out',
+        at: now,
+        requestId: typeof body?.requestId === 'string' ? body.requestId.slice(0, 128) : undefined,
+        ok: body?.ok === true,
+        why: body?.ok === true ? undefined : String(body?.why || 'unknown').slice(0, 20),
+        chars: Number.isFinite(Number(body?.chars)) ? Math.max(0, Math.min(200, Number(body.chars))) : undefined,
+        rate: Number.isFinite(Number(body?.rate)) ? Math.round(Number(body.rate) * 100) / 100 : undefined,
+        pitch: Number.isFinite(Number(body?.pitch)) ? Math.round(Number(body.pitch) * 100) / 100 : undefined,
+      })
+      return { v: 1, ok: true }
+    }
     if (type === 'defied') {
       const app = typeof body?.app === 'string' ? body.app.slice(0, 120) : ''
       const label = typeof body?.label === 'string' ? body.label.slice(0, 40) : app
@@ -5137,6 +5166,8 @@ function mergeConfig(current, body) {
     if (typeof body.personaInChat === 'boolean') next.personaInChat = body.personaInChat
     if (typeof body.dual === 'boolean') next.dual = body.dual
     if (typeof body.proactiveTools === 'boolean') next.proactiveTools = body.proactiveTools
+    // B5：念出来。默认关，只认布尔。
+    if (typeof body.voice === 'boolean') next.voice = body.voice
     if (body.strategistSessionId === null) next.strategistSessionId = undefined
     else if (typeof body.strategistSessionId === 'string' && body.strategistSessionId.length <= 256) next.strategistSessionId = body.strategistSessionId || undefined
     for (const k of ['companionName', 'strategistName']) if (typeof body[k] === 'string' && body[k].trim()) next[k] = body[k].trim().slice(0, 20)

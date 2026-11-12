@@ -52,6 +52,8 @@ class _ProactivePageState extends State<ProactivePage> {
   bool _exporting = false;
   bool _foregroundDebug = false;
   bool _foregroundBusy = false;
+  /// B5 试听：念一句要等 TTS 引擎绑好，这期间按钮别连点。
+  bool _voiceBusy = false;
 
   @override
   void initState() {
@@ -278,6 +280,7 @@ class _ProactivePageState extends State<ProactivePage> {
     final gap = _companionInt(gapKey, coach ? 8 * 60000 : 45 * 60000) ~/ 60000;
     final hourly = _companionInt(hourKey, coach ? 6 : 3);
     final daily = _companionInt(dayKey, coach ? 40 : 6);
+    final voiceOn = _sessions.config['voice'] == true;
     return [
       ListPageRow(
         icon: AppIcons.chat,
@@ -315,7 +318,41 @@ class _ProactivePageState extends State<ProactivePage> {
         value: daily <= 0 ? '不限' : '$daily 次',
         onTap: () => unawaited(_companion({dayKey: _nextStep(_dailySteps, daily)})),
       ),
+      // B5：念出来。总开关在插件里（默认关）——关着就只有浮层，手机一句都不出声。
+      // 手机只判它才知道的事（音量 / 勿扰 / 连麦舱），所以这里没有第二个开关。
+      // 和「说话模式」一样点一下换档，不再塞一个 Switch：这一张卡里第二个开关会让
+      // `find.byType(Switch)` 变成两个，也会让人以为它们是一对互斥的开关。
+      ListPageRow(
+        icon: AppIcons.audio,
+        title: '念出来',
+        subtitle: '用手机自带的语音念一遍，不联网不花钱。安静时段、勿扰、媒体音量为 0、连麦舱里自动退回文字',
+        subtitleMaxLines: 3,
+        value: voiceOn ? '念' : '不念',
+        onTap: () => unawaited(_companion({'voice': !voiceOn})),
+      ),
+      ListPageRow(
+        icon: AppIcons.play,
+        title: '试听一下',
+        subtitle: _voiceBusy ? '正在念…' : '听到就说明语音能用；听不到多半是媒体音量或勿扰',
+        subtitleMaxLines: 2,
+        onTap: _voiceBusy ? null : () => unawaited(_tryVoice()),
+      ),
     ];
+  }
+
+  /// B5 试听：绕开插件总开关（关着也能试），用手机自己的 TTS 念一句。
+  /// 回来的 null 表示真的念完了；否则是降级原因（`no-tts` / `dnd` / `muted` / `session`）。
+  Future<void> _tryVoice() async {
+    setState(() => _voiceBusy = true);
+    try {
+      final why = await _channel.tryVoice();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(why == null ? '念完了：语音能用' : '没出声（$why）：检查媒体音量和勿扰')),
+      );
+    } finally {
+      if (mounted) setState(() => _voiceBusy = false);
+    }
   }
 
   /// R4-3 留下的口子：笔记库位置以前只能靠她调用 notes_vault 工具，或者手改 config.json。

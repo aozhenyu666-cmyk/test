@@ -306,6 +306,18 @@ class ProactiveChannel {
     }
   }
 
+  /// B5 试听：让手机用系统 TTS 念一句（`voiceTry`）。
+  ///
+  /// 返回 null = 真的念完了；否则是降级原因（`no-tts` / `dnd` / `muted` / `session`）。
+  /// 它绕开插件的总开关（关了也能试），因为试听就是用来在开之前确认手机上能不能出声的。
+  Future<String?> tryVoice() async {
+    try {
+      return await _methods.invokeMethod<String>('voiceTry');
+    } on Exception {
+      return 'no-channel';
+    }
+  }
+
   /// 应用管理页的「Gemini 互动」：开 / 关一场连麦舱（插件 `POST /session`）。
   ///
   /// 返回进行中的 session（`topic` / `minutes` / `mode` / `until` / `allow`），失败返回 null。

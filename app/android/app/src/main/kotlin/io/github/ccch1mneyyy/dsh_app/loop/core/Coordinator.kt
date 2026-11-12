@@ -128,7 +128,7 @@ class Coordinator(
                 is AgentReply.Claimed -> active = a.copy(agentAcceptedAt = a.agentAcceptedAt ?: now, agentClaimedAt = a.agentClaimedAt ?: now)
                 is AgentReply.Generated -> active = a.copy(
                     stage = Stage.READY, generatedAt = now,
-                    content = Content(reply.text, ContentSource.AGENT, reply.turnId, reply.burst),
+                    content = Content(reply.text, ContentSource.AGENT, reply.turnId, reply.burst, reply.voice),
                 )
                 is AgentReply.Failed -> agentFailed(a, reply.code, now, out)
             }

@@ -103,6 +103,8 @@ data class Content(
     val agentTurnId: String? = null,
     /** 连发计划：非空时 [text] 仍是全文，浮层按 [BurstPlan.segments] 分段上屏。 */
     val burst: BurstPlan? = null,
+    /** 念出来的计划：非空时 [text] 的第一句交给系统 TTS（`proactive/VoiceOut.kt`）。 */
+    val voice: VoicePlan? = null,
 )
 
 /**
@@ -249,8 +251,17 @@ sealed interface AgentReply {
     data object Accepted : AgentReply
     /** The loop claimed it: a turn is running. Still no text. */
     data class Claimed(val turn: Long?) : AgentReply
-    /** [burst] 非空表示这句要分几段连发（插件 `extra.burst` 定的）；null 就是原来的一次说完。 */
-    data class Generated(val text: String, val turnId: String?, val burst: BurstPlan? = null) : AgentReply
+    /**
+     * [burst] 非空表示这句要分几段连发（插件 `extra.burst` 定的）；null 就是原来的一次说完。
+     * [voice] 非空表示这一条还要念出来（插件 `extra.voice`）；和 burst 互不依赖——
+     * 连发额度只剩一条时 burst 是 null，但这条照样该念。
+     */
+    data class Generated(
+        val text: String,
+        val turnId: String?,
+        val burst: BurstPlan? = null,
+        val voice: VoicePlan? = null,
+    ) : AgentReply
     data class Failed(val code: String) : AgentReply
 }
 

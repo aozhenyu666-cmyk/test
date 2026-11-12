@@ -86,6 +86,8 @@ object AgentWire {
                         (m["turn"] as? Number)?.let { "turn:$it" },
                         // B4：连发计划随 result body 一起下来，这里只解析，投递由手机侧排队。
                         BurstPlan.of(m["extra"], text.take(2_000)),
+                        // B5：念不念、念多快，同样是插件定的；真出声在 ProactiveRuntime。
+                        VoicePlan.of(m["extra"], text),
                     ),
                     true,
                 )

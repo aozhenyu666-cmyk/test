@@ -21,6 +21,7 @@ import io.github.ccch1mneyyy.dsh_app.loop.core.AtomicJsonFile
 import io.github.ccch1mneyyy.dsh_app.loop.core.BackgroundCaps
 import io.github.ccch1mneyyy.dsh_app.loop.core.BeijingClock
 import io.github.ccch1mneyyy.dsh_app.loop.core.BurstPlan
+import io.github.ccch1mneyyy.dsh_app.loop.core.VoicePlan
 import io.github.ccch1mneyyy.dsh_app.loop.core.Clocks
 import io.github.ccch1mneyyy.dsh_app.loop.core.Command
 import io.github.ccch1mneyyy.dsh_app.loop.core.Coordinator
@@ -141,6 +142,8 @@ object ProactiveRuntime {
         coordinator?.let { return it }
         app = context.applicationContext
         ProactiveOverlay.install(app)
+        // B5：TTS 只在这里拿 applicationContext，引擎本身第一次要念的时候才绑（默认关，不白占）。
+        VoiceOut.install(app)
         // Load 触发测试's switch before anything reads it: if Flutter starts before the accessibility
         // service, an unloaded LoopEngine would read as "off" and applySwitches would cancel live
         // app-enter events with the wrong reason (review r3, startup race).
@@ -1271,6 +1274,9 @@ object ProactiveRuntime {
                         if (!ok) VisibleSurface.release(VisibleSurface.OWNER_PROACTIVE, cmd.token)
                         // 连发只走浮层：Activity 是一张一次性页面，追加不了话。
                         else if (overlay && plan != null) scheduleBurst(cmd.token, plan)
+                        // B5：念出来。跟浮层成没成功无关——通知兜底时她照样能说话。
+                        // 念不念得出来由 VoiceOut 判（勿扰/音量/连麦舱/TTS 没起），结果回账本。
+                        cmd.content.voice?.let { v -> speakVoice(cmd.token, v) }
                         dispatch(c.onSurface(cmd.token, if (ok) SurfaceReport.Posted else SurfaceReport.Failed("start_failed")))
                     }
                 }
@@ -1308,6 +1314,41 @@ object ProactiveRuntime {
             at += plan.delaysMs.getOrElse(i - 1) { BurstPlan.DEFAULT_DELAY_MS }
             val line = plan.segments[i]
             main.postDelayed({ ProactiveOverlay.say(token, line) }, at)
+        }
+    }
+
+    /**
+     * B5：把这一条念出来，然后把"到底念了没有"记进账本。
+     *
+     * 一球只念第一句（[VoicePlan.brief] 裁好的那一段）：连发后面几段只上屏——QUEUE_FLUSH 会把
+     * 前一段掐掉，几秒内连念三条听着像抢话。这条不在插件那侧判（插件不知道音量和勿扰），
+     * 所以回报走 `/event` 的 `voice-out`，面板在账本里看得到每一次降级的原因。
+     */
+    private fun speakVoice(token: String, plan: VoicePlan) {
+        VoiceOut.speak(plan) { why -> reportVoice(token, plan, why) }
+    }
+
+    /** B5 设置页试听：绕开插件总开关，直接让系统 TTS 念一句。null = 真的念完了。 */
+    fun tryVoice(done: (String?) -> Unit) {
+        if (!::app.isInitialized) {
+            done(VoiceOut.WHY_NO_TTS)
+            return
+        }
+        main.post { VoiceOut.trySay(done) }
+    }
+
+    private fun reportVoice(token: String, plan: VoicePlan, why: String?) {
+        if (!::app.isInitialized) return
+        main.post {
+            fetchPluginRoute(routeCallback { }, "POST", "/event", linkedMapOf(
+                "type" to "voice-out",
+                "requestId" to token,
+                "ok" to (why == null),
+                "why" to (why ?: ""),
+                "chars" to plan.text.length,
+                "rate" to plan.rate,
+                "pitch" to plan.pitch,
+            ))
         }
     }
 

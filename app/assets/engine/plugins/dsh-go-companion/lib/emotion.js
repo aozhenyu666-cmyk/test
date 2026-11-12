@@ -13,6 +13,8 @@
 //   2. 连发每小时硬上限 BURST_HOURLY_CAP 条，安静时段是 0 条；
 //   3. 情绪只产出「档位标签 + 长度/条数/间隔」，一个字都不自己写——不给人格卡里
 //      「能说多狠」的上限之外的空间。
+//   4. 念出来的只有语速和音高两个旋钮（voiceOf），且都取在 TONE_PLAN 已有的档位门槛上，
+//      不另开一张表：情绪能改"怎么听"，不能改"说什么"。
 
 import { inQuiet } from './plan.js'
 
@@ -255,5 +257,36 @@ export function behaviorOf(raw, { now = Date.now(), quiet = false, sentLastHour 
     delayMs: [...plan.delayMs],
     // 安静时段即便档位想要语音也降级成文字；burst 为 0 时渠道没有意义，照给 text。
     channel: burst === 0 ? 'text' : plan.channel,
+  }
+}
+
+/** 念出来的单条上限：再长没人听，也会盖过她本来那句话。 */
+export const VOICE_MAX_CHARS = 60
+
+/**
+ * 这一条念不念、用什么调子（R7 B5）。返回 null = 不念，手机一句都不出声。
+ *
+ * 三道闸全在代码里，不看调用方心情：
+ *   1. 总开关 `enabled`（默认关）——不点开就只是浮层；
+ *   2. `quiet` 安静时段——一条都不念，跟 burst=0 同理；
+ *   3. 渠道：档位要念（`channel === 'voice'`，就是 hot/blaze/eager 三档），
+ *      或者漠视阶梯走到了"换渠道"那一级（`stage === 'channel'`，它等这个实现等了四轮）。
+ *
+ * 调子只有两个旋钮，且都取在 [toneOf] 已有的档位门槛上——火气高（>=60，就是 hot）语速 +15%，
+ * 兴致低（<=25，就是 flat）音高 −10%。不按数值连续插值：TTS 的语速/音高是可听的整数档，
+ * 连续插值的听感差不出来，测试也没法说清"62 分和 65 分该差多少"。
+ *
+ * maxChars 取「档位自己那条的字数」和 60 里小的那个：eager 档允许 90 字的文字，
+ * 但一条念 60 字以上就不是说话了。
+ */
+export function voiceOf(raw, { now = Date.now(), enabled = false, quiet = false, channel = 'text', stage = 'none' } = {}) {
+  if (!enabled || quiet) return null
+  if (channel !== 'voice' && stage !== 'channel') return null
+  const e = decayOf(raw, now)
+  const tone = toneOf(e, now)
+  return {
+    rate: e.anger >= 60 ? 1.15 : 1,
+    pitch: e.interest <= 25 ? 0.9 : 1,
+    maxChars: Math.min(TONE_PLAN[tone].maxChars, VOICE_MAX_CHARS),
   }
 }

@@ -228,6 +228,9 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                     ProactiveRuntime.fetchPluginRoute(result, "POST", "/drill-op", body)
                 }
             }
+            // B5：设置页试听。绕开插件的总开关（关了也能试），但不绕过设备状态——
+            // 回 null 表示真的念完了，否则是降级原因（no-tts / dnd / muted / session）。
+            "voiceTry" -> ProactiveRuntime.tryVoice { why -> result.success(why) }
             else -> result.notImplemented()
         }
     }
