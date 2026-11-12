@@ -5,7 +5,8 @@ package io.github.ccch1mneyyy.dsh_app.loop.core
  *
  * 插件在 `/result` body 的 `extra.voice` 里给「语速 / 音高 / 单条上限」——它只从情绪池的四根轴
  * 算得出来（火气高 → 语速 +15%，兴致低 → 音高 −10%），手机不该自己猜她心情。手机这边只负责
- * 把整段回复裁到第一句、套上限，剩下的（念不念、念不念得出来）在 `proactive/VoiceOut.kt`。
+ * 把整段回复裁到 60 字以内（真超了才裁，裁在句读点上）、套上限，剩下的（念不念、念不念得出来）
+ * 在 `proactive/VoiceOut.kt`。
  *
  * 纯数据 + 纯函数，没有 Context、没有 TextToSpeech：裁字和钳位在真机上能不能念之前就该可测。
  */

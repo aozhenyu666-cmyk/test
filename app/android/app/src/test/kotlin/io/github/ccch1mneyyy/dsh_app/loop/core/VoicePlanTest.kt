@@ -99,7 +99,7 @@ class VoicePlanTest {
         )
         val reply = (AgentWire.decode(200, body) as AgentWire.Decoded.Reply).reply as AgentReply.Generated
         val v = reply.voice!!
-        assertEquals("你又跑了。", v.text)
+        assertEquals("你又跑了。我说了多少次。", v.text)
         assertEquals(1.15, v.rate.toDouble(), 0.0001)
         assertEquals(0.9, v.pitch.toDouble(), 0.0001)
         // 连发和语音互不依赖：同一轮可以既分段又念。
