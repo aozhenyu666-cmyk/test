@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/aozhenyu666-cmyk/test/dsh-go-companion/protocol.schema.json",
+  "title": "局协议 v1",
+  "description": "一种局怎么走。正式格式是 JSON：engine 没有 yaml 依赖，也不许为格式加依赖。每一步只有四样：怎么触发、限时多久、什么算过关、不过或超时去哪。这份 schema 与 lib/protocol.js 里的格式表必须一致，test/protocol.test.mjs 会对全集。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["协议版本", "id", "名称", "类型", "步骤", "收局"],
+  "properties": {
+    "协议版本": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "名称": { "type": "string", "minLength": 1 },
+    "类型": { "enum": ["行为", "思维"] },
+    "需要能力": {
+      "description": "协议用到的全部能力名。名字不在能力库里 → 拒绝加载并生成缺能力提议；墙的能力 → 拒绝加载。",
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "预算": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "分钟": { "type": "number", "exclusiveMinimum": 0 },
+        "来回": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "步骤": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "问": { "type": "string", "minLength": 1 },
+          "限时": { "type": ["string", "number"], "description": "90s / 6m / 1h / 裸数字（秒）。每步必须有：限时 或 每。" },
+          "每": { "type": ["string", "number"], "description": "周期步的间隔，可当限时用。" },
+          "过关": {
+            "type": "object",
+            "propertyNames": {
+              "enum": ["行数", "每行最多字", "字数", "具体名词数", "有无结论句", "问句数", "填充词比例", "应答延迟", "与他近5条的重合率", "不与前次重复"]
+            },
+            "additionalProperties": true
+          },
+          "超时": { "$ref": "#/$defs/exit", "description": "到点没答去哪。不能是「重打」：重打会重置限时，他不说话就永远走不出去。" },
+          "不过": { "$ref": "#/$defs/exit", "description": "没过关去哪。默认「重打」。" },
+          "触发": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "array", "items": { "type": "string" } }
+            ]
+          },
+          "形态": { "type": "string" },
+          "应答": { "type": "string" },
+          "变速": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "array", "items": { "type": "string" } }
+            ]
+          },
+          "监视": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["离开声明应用超过", "则"],
+            "properties": {
+              "离开声明应用超过": { "type": ["string", "number"] },
+              "则": {
+                "description": "二选一的两个出口。",
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": { "$ref": "#/$defs/exit" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "收局": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["交"],
+      "properties": {
+        "交": {
+          "description": "收局时要交的步骤 id，必须都是已声明的步骤。",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "判定": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "exit": { "enum": ["收局", "升级", "重打", "下一步", "继续", "跳步", "跳步并记账"] }
+  }
+}

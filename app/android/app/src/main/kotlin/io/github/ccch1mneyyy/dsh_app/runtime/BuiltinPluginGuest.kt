@@ -155,6 +155,9 @@ object BuiltinPluginGuest {
                 // rebuild.js 是「以账本为准」的重建脚本（node lib/rebuild.js --home <dir>）。
                 "lib/bouts.js",
                 "lib/rebuild.js",
+                // R8 J2/J3：能力库（可校验的具名积木）+ 协议格式与解释器。
+                "lib/capabilities.js",
+                "lib/protocol.js",
             ),
         ),
     )
