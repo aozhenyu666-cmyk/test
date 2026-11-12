@@ -1,0 +1,79 @@
+package io.github.ccch1mneyyy.dsh_app.tile
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
+
+class BoutsTileStatusTest {
+    @get:Rule
+    val dir = TemporaryFolder()
+
+    private fun write(home: String, json: String) {
+        val file = File(File(dir.root, home), "companion/bouts-status.json")
+        file.parentFile.mkdirs()
+        file.writeText(json, Charsets.UTF_8)
+    }
+
+    @Test
+    fun noSummaryYetMeansNoSecondLine() {
+        assertNull(BoutsTileStatus.read(dir.root))
+        assertNull(BoutsTileStatus.beats(null))
+        assertFalse(BoutsTileStatus.running(null))
+    }
+
+    @Test
+    fun readsTheSummaryFromTheRuntimeHome() {
+        write("runtime/rootfs/root/.dsh", """{"at":"2026-11-12T21:00:00Z","beats":5,"running":false}""")
+
+        val status = BoutsTileStatus.read(dir.root)
+
+        assertEquals(5, BoutsTileStatus.beats(status)!!)
+        assertFalse(BoutsTileStatus.running(status))
+    }
+
+    @Test
+    fun fallsBackToTheFlatHome() {
+        write(".dsh", """{"beats":3,"running":true}""")
+
+        val status = BoutsTileStatus.read(dir.root)
+
+        assertEquals(3, BoutsTileStatus.beats(status)!!)
+        assertTrue(BoutsTileStatus.running(status))
+    }
+
+    @Test
+    fun theRuntimeHomeWinsWhenBothExist() {
+        write("runtime/rootfs/root/.dsh", """{"beats":9}""")
+        write(".dsh", """{"beats":1}""")
+
+        assertEquals(9, BoutsTileStatus.beats(BoutsTileStatus.read(dir.root))!!)
+    }
+
+    @Test
+    fun aCorruptSummaryFallsThroughToTheOtherHome() {
+        write("runtime/rootfs/root/.dsh", "{not json")
+        write(".dsh", """{"beats":2}""")
+
+        assertEquals(2, BoutsTileStatus.beats(BoutsTileStatus.read(dir.root))!!)
+    }
+
+    @Test
+    fun aCorruptSummaryAloneMeansNoSecondLine() {
+        write(".dsh", """{"beats":2""")
+
+        assertNull(BoutsTileStatus.read(dir.root))
+    }
+
+    @Test
+    fun looselyTypedFieldsAreIgnored() {
+        // The plugin writes a number and a boolean; anything else must not become「今日 7 拍」.
+        assertNull(BoutsTileStatus.beats(mapOf("beats" to "7")))
+        assertFalse(BoutsTileStatus.running(mapOf("running" to "true")))
+        assertEquals(7, BoutsTileStatus.beats(mapOf("beats" to 7L))!!)
+    }
+}

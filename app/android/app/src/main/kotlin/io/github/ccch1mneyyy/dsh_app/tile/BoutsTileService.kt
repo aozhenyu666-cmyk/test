@@ -7,9 +7,7 @@ import android.content.Intent
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
-import io.github.ccch1mneyyy.dsh_app.phone.Json
 import io.github.ccch1mneyyy.dsh_app.shortcuts.EntryActivity
-import java.io.File
 
 /**
  * Quick Settings tile 「局」: opens the 局 panel (through shortcuts/EntryActivity, kind `bouts`).
@@ -58,27 +56,12 @@ class BoutsTileService : TileService() {
      * summary — the file only appears once a 局 panel has been rendered at least once.
      */
     private fun todayLine(): String? {
-        val status = readStatus() ?: return null
-        val beats = (status["beats"] as? Number)?.toInt() ?: return null
-        return if (status["running"] == true) {
+        val status = BoutsTileStatus.read(filesDir) ?: return null
+        val beats = BoutsTileStatus.beats(status) ?: return null
+        return if (BoutsTileStatus.running(status)) {
             AppStrings.get(this, R.string.tile_bouts_running, beats)
         } else {
             AppStrings.get(this, R.string.tile_bouts_today, beats)
         }
-    }
-
-    /**
-     * The plugin's `$DSH_HOME/companion/bouts-status.json`. Which `$DSH_HOME` depends on how the
-     * engine was started (runtime/DshProcess sets HOME to filesDir, runtime/DirectLaunch runs
-     * inside the rootfs), so both candidates are tried — the same pair diagnostics resolves.
-     */
-    private fun readStatus(): Map<*, *>? {
-        for (home in listOf(File(filesDir, "runtime/rootfs/root/.dsh"), File(filesDir, ".dsh"))) {
-            val file = File(home, "companion/bouts-status.json")
-            if (!file.isFile || !file.canRead()) continue
-            val parsed = runCatching { Json.parse(file.readText(Charsets.UTF_8)) }.getOrNull()
-            if (parsed is Map<*, *>) return parsed
-        }
-        return null
     }
 }
