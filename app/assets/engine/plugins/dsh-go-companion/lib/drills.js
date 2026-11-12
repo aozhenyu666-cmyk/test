@@ -409,12 +409,17 @@ export function demoOf(op) {
   return meta ? '示范：' + meta.demo : ''
 }
 
-/** 拼进 prompt：这一题是哪个操作、合格线是什么。 */
-export function opLines(op) {  const meta = OP_META[String(op || '')]
+/** 拼进 prompt：这一题是哪个操作、合格线是什么。`gaps` 是 B2 整理出来的缺口，有就点一句往那儿出。 */
+export function opLines(op, gaps = []) {
+  const meta = OP_META[String(op || '')]
   if (!meta) return []
-  return [
+  const out = [
     '这一球是「' + meta.name + '」：' + meta.ask,
     '合格线（代码判，你说不算）：' + meta.pass + '。他只答一次，不要提示答案。',
   ]
+  // C2 + B2：缺口只是选题的方向，不改变合格线（合格线永远在代码里）。
+  const gap = (Array.isArray(gaps) ? gaps : []).map((g) => String(g || '').trim()).filter(Boolean)[0]
+  if (gap) out.push('这道题可以往这个缺口上出：' + gap.slice(0, 80))
+  return out
 }
 

@@ -159,12 +159,16 @@ const IRON_RULES = [
  * 那就什么都不注入（不许用空池硬凑一句）。
  * @param {{arm:string}[]} picks
  * @param {{temperLine?:string, predictions?:string[], keywords?:string[],
- *          samples?:string[], stateLines?:string[], face?:string, roll?:number}} feed
+ *          samples?:string[], carry?:string[], stateLines?:string[], face?:string, roll?:number}} feed
  */
 export function renderVibe(picks, feed = {}) {
   const out = []
   for (const p of picks) {
-    if (p.arm === 'innerOS') out.push(INNER_OS)
+    if (p.arm === 'innerOS') {
+      // B2：夜间整理出来的「要带上的事」进这里。空就不加，不硬凑。
+      const carry = (feed.carry || []).filter(Boolean)
+      out.push(carry.length ? INNER_OS + '（你自己记着的：' + carry.join('；') + '）' : INNER_OS)
+    }
     else if (p.arm === 'temper') {
       if (feed.temperLine) out.push(feed.temperLine)
     } else if (p.arm === 'samples') {

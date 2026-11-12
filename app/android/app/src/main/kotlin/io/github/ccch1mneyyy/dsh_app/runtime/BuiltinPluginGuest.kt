@@ -126,7 +126,7 @@ object BuiltinPluginGuest {
                 "lib/brain.js",
                 "lib/predict.js",
                 "lib/vibe.js",
-        "lib/samples.js",
+                "lib/samples.js",
                 "lib/force.js",
                 "lib/roles.js",
                 "lib/gear.js",
@@ -149,6 +149,8 @@ object BuiltinPluginGuest {
                 "lib/mount.js",
                 // R7 B4：情绪池。状态层那一行和 /request 里的 burst 计划都来自它。
                 "lib/emotion.js",
+                // R7 B2：夜间整理。产物是 links/gaps/carry（素材），不是消息。
+                "lib/nightly.js",
             ),
         ),
     )

@@ -148,7 +148,8 @@ export function buildPrompt(input) {
     for (const line of drillLines(input.drill)) lines.push(line)
   } else if (input.drillOp) {
     // C2：这一球练的是四个基本操作里的一个。和九种思维题共用一个槽位，不额外占预算。
-    for (const line of opLines(input.drillOp)) lines.push(line)
+    // B2：缺口交给 opLines，选题有由头；合格线仍然在代码里，不受缺口影响。
+    for (const line of opLines(input.drillOp, input.gaps)) lines.push(line)
   } else if (serveType) {
     lines.push('这一球的类型：' + (companion ? COMPANION_SERVE_RULES[serveType] || SERVE_RULES[serveType] : SERVE_RULES[serveType]))
   }

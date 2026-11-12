@@ -67,6 +67,11 @@ import {
 } from './mount.js'
 // 第六轮 C：暗思考（后台自己整理，不开口）。
 import { museSweep, museStatus } from './muse.js'
+// 第七轮 B2：暗思考的第二层——夜间整理（允许调模型，产物是素材不是消息，走 llm.stream）。
+import {
+  carryTexts, cleanNightly, emptyNightly, gapTexts, linkWords, mergeNightly,
+  nightlyDue, nightlyInputs, nightlyLines, nightlyStatus, resolveNightly, tidyNightly,
+} from './nightly.js'
 // 第六轮 D：姐妹自建工作流的护栏（配额 + 试启用 + 到期自动停 + 能力层拦墙）。
 import { workflowAct, workflowPropose, workflowStatus, workflowSweep } from './workflows.js'
 import { REQUIRED_FIELDS, WORKFLOW_ALLOW } from './workflows.js'
@@ -436,6 +441,17 @@ function judgeTargetOf(ctx, sessionId, config) {
   return undefined
 }
 
+/**
+ * B2 夜间整理用哪个模型：和判球同一套优先级（单独配的优先，否则跟会话自己的）。
+ * 拿不到就返回空对象 —— tidyNightly 会直接返回失败，不会因为没模型卡住 /plan。
+ */
+function nightlyTargetOf(ctx, config) {
+  const np = config?.nightlyProvider
+  const nm = config?.nightlyModel
+  if (typeof np === 'string' && np && typeof nm === 'string' && nm) return { provider: np, model: nm }
+  return judgeTargetOf(ctx, config?.sessionId, config) || {}
+}
+
 function messageText(data) {
   const content = data?.content
   if (!Array.isArray(content)) return ''
@@ -526,6 +542,9 @@ export function apply(ctx) {
   // 立场账本（A1）：她说过的话。status/settleSource 只由 stance.js 的 settleStances 写。
   const loadStances = () => cleanStances(readState(stateFile('stances.json'), null))
   const saveStances = (s) => writeJson(stateFile('stances.json'), s)
+  // B2 夜间整理：产物是素材（links/gaps/carry），不是消息，也不进账本正文。
+  const loadNightly = () => cleanNightly(readState(stateFile('nightly.json'), null))
+  const saveNightly = (s) => writeJson(stateFile('nightly.json'), s)
   // 最近 20 轮她有没有退让。单独一个文件，不塞 ledger.jsonl：账本有按行位置断言的既有用例，
   // 每轮加一行的退让记录会把它们挤动。
   const loadYieldTurns = () => readState(stateFile('stance-yield.json'), null) || []
@@ -533,6 +552,8 @@ export function apply(ctx) {
   // 上轮注入了哪几个 arm：这一球被拉回来时按它们各自记账（§13.1）。进程重启就丢，可接受。
   let lastVibePicks = []
   let lastVibe = { face: '', turn: 0 }
+  /** B2：一次只跑一个夜间整理。/plan 会被频繁问到，不挡一下就会并发发起好几次模型调用。 */
+  let nightlyRunning = false
   /** requestId -> 发球时的现状（generated 时交给大脑开始计"有没有拉回来"）。 */
   const servedContext = new Map()
   /** B1：sessionId -> 这一轮已经被守卫打回过的判定（只留最近一次，重写只有一个机会）。 */
@@ -835,6 +856,8 @@ export function apply(ctx) {
         drill,
         // C2：这一球练哪个操作（没有思维题时才轮到它，见上面 drillOp 的算法）。
         drillOp,
+        // B2：暗思考整理出来的缺口——C 组出题往这儿出，比随机出题有由头。
+        gaps: gapTexts(loadNightly(), now),
         track,
         scold,
         beliefs: brainLines(brain),
@@ -2151,6 +2174,65 @@ export function apply(ctx) {
       }
     }
     return out.ledger
+  }
+  /**
+   * B2：跑一次夜间整理。
+   *
+   * 两条纪律：**不占会话**（走 llm.stream，和判球同一条通道——整理的内容一个字都不会
+   * 变成聊天记录里的一条消息），**不重试**（这一轮不成，明天的槽位还有）。
+   * 产物只有三类：links/gaps/carry，落 nightly.json，由三个去向各自去取。
+   */
+  async function runNightly(now, tz, slot) {
+    const target = nightlyTargetOf(ctx, config)
+    const entries = readLedger(home(), 400)
+    let candidates = { topics: [], facts: [], episodes: [] }
+    const db = openMemoryDb(memoryPath())
+    try {
+      candidates = loadCandidates(db, { sessionId: config.sessionId, now })
+    } finally {
+      try {
+        db?.close?.()
+      } catch {
+        // ignore
+      }
+    }
+    const inputs = nightlyInputs({
+      entries,
+      candidates,
+      stances: loadStances(),
+      notes: tonightNoteNames(now, tz),
+      tz,
+    }, now)
+    record({ state: 'nightly', at: now, slot, stage: 'start', objects: inputs.objects.length })
+    const out = await tidyNightly({ stream: streamOf(), provider: target.provider, model: target.model, inputs })
+    if (!out.ok) {
+      // 不合格就丢弃，不重试。这一条只用来在真机上定位「为什么整晚没产物」。
+      record({ state: 'nightly', at: Date.now(), slot, stage: 'discard', why: String(out.problems?.[0] || '').slice(0, 120) })
+      return null
+    }
+    const resolved = resolveNightly(out.value, { objects: inputs.objects, entries })
+    const merged = mergeNightly(loadNightly(), resolved, Date.now(), { day: dayString(now, tz) })
+    saveNightly(merged.store)
+    record({
+      state: 'nightly', at: Date.now(), slot, stage: 'done', added: merged.added,
+      dropped: Number(out.dropped || 0) + Number(resolved.dropped || 0),
+      links: resolved.links.length, gaps: resolved.gaps.length, carry: resolved.carry.length,
+    })
+    return merged
+  }
+  /**
+   * 今天改过的笔记文件名（只给文件名，不给原文）。
+   * 复用 vaultRecentNotes 的 mtime 排序，只留今天动过的；没有就空——这一项缺了照样能整理。
+   */
+  function tonightNoteNames(now, tz) {
+    try {
+      const day = startOfDay(now, tz)
+      return vaultRecentNotes(notesDir(), { limit: 8, now, exclude: [] })
+        .filter((f) => Number(f.mtime) >= day)
+        .map((f) => String(f.rel).slice(0, 60))
+    } catch {
+      return []
+    }
   }
   /**
    * 墙认得的对象：今天早上的任务原话。hard 立场只能绑这些，否则就是「我就是觉得」，没法对账。
@@ -3804,17 +3886,19 @@ export function apply(ctx) {
     })
     // B3：例句现抽现给，避开最近 10 句用过的；池子太薄就是 null（这个 arm 当轮不说话）。
     const pickedSamples = pickSamples(readSamples(notesDir())[temper?.face || ''], st.recentSamples, built.rng) || []
+    const nightly = loadNightly()
     const lines = renderVibe(built.picks, {
       temperLine: temperLine(temper),
       predictions: predictionLines(loadPredict(), now),
       // B3：关键词卡三处合并（手写 > B2 的 links > 近 7 天高频词），去重后取前几个。
-      // B2 的 links 还没落地，这里先给空数组——接上时把暗思考的 links 塞进来即可，其余不动。
       keywords: keywordCard({
         manual: readManualKeywords(notesDir()),
-        links: [],
+        links: linkWords(nightly, now),
         fresh: countWords(recentNoteTexts(notesDir(), now)),
       }),
       samples: pickedSamples,
+      // B2：innerOS 的素材来源——她夜里自己整理出来、要带上这一轮的事。
+      carry: carryTexts(nightly, now),
       stateLines,
       face: temper?.face || '',
       roll: built.rng(),
@@ -3933,6 +4017,8 @@ export function apply(ctx) {
       { id: 'deposit', layer: 'state', priority: 40, text: depositLines(depositToday(Date.now()), Boolean(lastRhythm?.reviewGate), { tasks: dailyToday().tasks }).join('\n') },
       { id: 'knowledge', layer: 'state', priority: 35, text: knowledgeLines(kbDir(notesDir(), home()), role).join('\n') },
       { id: 'vibe', layer: 'content', priority: 20, text: vibeLines.join('\n') },
+      // B2：夜间整理的底稿。进内容层（可裁）——它是背景素材，不是规矩，不该占状态层的位置。
+      { id: 'nightly', layer: 'content', priority: 16, text: nightlyLines(loadNightly(), Date.now()) },
       // A4：块刚结束的这一句进内容层（可裁），不进约束层——它是随机的一句话，不是规矩。
       { id: 'slot-ask', layer: 'content', priority: 18, text: slotAskNext && Date.now() - slotAskNext.at < 30 * 60_000 ? slotAskNext.text : '' },
       { id: 'notes', layer: 'content', priority: 10, text: noteLines.join('\n') },
@@ -4303,6 +4389,19 @@ export function apply(ctx) {
     } catch (error) {
       console.error('[companion] 暗思考失败：' + String((error && error.message) || error))
     }
+    // 第七轮 B2：暗思考的第二层——夜间整理。午间/睡前各一次，对话中不跑。
+    // 异步跑、不等它：/plan 是手机每次切 App 都要问的，绝不能被一次模型调用卡住。
+    try {
+      const nd = nightlyDue(ledger, now, tz, { busy: inConversation(sessionId, now) })
+      if (nd.due && !nightlyRunning) {
+        nightlyRunning = true
+        runNightly(now, tz, nd.slot)
+          .catch((error) => console.error('[companion] 夜间整理失败：' + String((error && error.message) || error)))
+          .finally(() => { nightlyRunning = false })
+      }
+    } catch (error) {
+      console.error('[companion] 夜间整理判定失败：' + String((error && error.message) || error))
+    }
     // 第六轮 D：自建工作流到期处理。试启用 7 天没可数效果就停；转正的 30 天复核对不上同样停。
     // 和暗思考一样挂在 /plan 上——引擎里没有第二个"后台"面，不自建调度器。
     try {
@@ -4601,6 +4700,8 @@ export function apply(ctx) {
       tracks: trackStatus(configuredTracks(), recentTracks(entries)),
       // 第六轮 C：今天暗思考跑了几次、最近一条整理了什么（只记账，没有要发出去的话）。
       muse: museStatus(entries, now),
+      // 第七轮 B2：夜间整理跑了几次、还剩几条活着的产物（超期就没了）。
+      nightly: nightlyStatus(loadNightly(), entries, now, zoneOr(config.timeZone)),
       // 第六轮 D：自建工作流的配额与到期时间（几条在跑、还能提几条）。
       workflows: workflowStatus(config.workflows, entries, now, config.timeZone),
       // 好坏只看回合：有效回合 = 至少两拍且有一拍接住了（见 rally.js）。
