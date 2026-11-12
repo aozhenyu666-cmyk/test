@@ -181,6 +181,8 @@ object BuiltinPluginGuest {
                 "lib/reply.js",
                 // R8 P4：升级阶梯。E1/E1′/E2/E3 与 L1/L2/L3 全在代码里，模型无权减免。
                 "lib/escalate.js",
+                // R8 P1/P2 接线：计划的节拍。引擎停过之后过点的局记空局、不补开。
+                "lib/planwire.js",
             ),
         ),
     )

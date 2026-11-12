@@ -85,6 +85,8 @@ import { trustGap, trustLines, trustScore } from './trust.js'
 import { buildSnapshot, sistersView } from './panel.js'
 import { boutsBooksView, boutsNowView, boutsProtocolsView, boutsQueueView } from './bouts_view.js'
 import { boutsTileStatus, buildBoutsSnapshot } from './bouts_panel.js'
+// 第八轮 P1/P2：计划的节拍。草案、到点开局、过点记空局的规则全在 planwire.js，这里只接线。
+import { planLines, planOf, tick } from './planwire.js'
 import { builtinProtocolOf, builtinProtocols } from './builtin.js'
 import { createOfficial } from './boutrun.js'
 import { listBouts, listVerdicts, openBoutsDb, runningBout } from './bouts.js'
@@ -1576,19 +1578,23 @@ export function apply(ctx) {
       }
     }
   }
-  /** 约束层里的「此刻」一行：当前时间块，或者到点了还没交墙的那一块。 */
+  /** 约束层里的「此刻」一行：当前时间块，或者到点了还没交墙的那一块；后面接今天的局。 */
   function planText() {
     const now = Date.now()
     const tz = zoneOr(config.timeZone)
-    const state = loadDaily(loadDailyState(), now, tz)
-    if (!state.plan) return ''
     const min = zoneMinuteOfDay(now, tz)
-    const cur = state.plan.blocks.find((b) => min >= b.start && min < b.end)
-    if (cur) return blockLine(cur, min)
-    const late = state.plan.blocks
-      .filter((b) => min >= b.end && !state.plan.submitted?.[b.taskId])
-      .sort((a, b) => b.end - a.end)[0]
-    return late && min < late.end + 10 ? lateLine(late) : ''
+    const state = loadDaily(loadDailyState(), now, tz)
+    let block = ''
+    if (state.plan) {
+      const cur = state.plan.blocks.find((b) => min >= b.start && min < b.end)
+      const late = state.plan.blocks
+        .filter((b) => min >= b.end && !state.plan.submitted?.[b.taskId])
+        .sort((a, b) => b.end - a.end)[0]
+      block = cur ? blockLine(cur, min) : (late && min < late.end + 10 ? lateLine(late) : '')
+    }
+    // 第八轮 P1/P2：今天的局也挂在这一层。计划一定下来，这一层就不许再出现开放问句。
+    const today = planLines(planOf(readState(stateFile('plan.json'), null), startOfDay(now, tz)), { now, min })
+    return [block, ...today].filter(Boolean).join('\n')
   }
   /** A2：一件交墙通过了 → 那块收工，剩下的重排一次（额度由 daily.reschedule 管）。 */
   function planAdvance(now, taskId) {
@@ -4235,6 +4241,49 @@ export function apply(ctx) {
   }, 5_000)
   sweeper.unref?.()
   ctx.effect?.(() => () => clearInterval(sweeper))
+
+  // 第八轮 P1/P2：计划的节拍。每分钟一次，只做两件事——把今天的计划维护在文件里，
+  // 到点了交给 startBout。引擎挂了一段时间也不会多开一局：过点太久的在 planwire 里
+  // 直接记成空局（LATE_SKIP_MIN），追补会把人连着按在椅子上开三局。
+  function planBeat() {
+    const now = Date.now()
+    const tz = zoneOr(config.timeZone)
+    const day = startOfDay(now, tz)
+    const r = tick({
+      now,
+      day,
+      tz,
+      config,
+      min: zoneMinuteOfDay(now, tz),
+      stored: readState(stateFile('plan.json'), null),
+      running: Boolean(live?.official && !live.official.view().closed),
+      known: builtinProtocols().filter((x) => x.ok).map((x) => x.protocol.id),
+    })
+    if (r.action !== 'hold' && r.action !== 'wait-confirm') writeJson(stateFile('plan.json'), r.plan)
+    if (r.action === 'draft' || r.action === 'confirm') record({ state: 'plan-' + r.action, at: now, items: r.plan.items.length })
+    if (r.action === 'skip') record({ state: 'plan-skip', at: now, why: r.why })
+    if (!r.start) return r
+    const started = startBout(r.start)
+    record({ state: 'plan-open', at: now, protocolId: r.start, ok: started.ok })
+    if (!started.ok) {
+      // 开不起来就记成空局：不然后面每一分钟都重试同一局。
+      const plan = planOf(r.plan, day)
+      const item = plan.items.find((i) => !i.openedAt && !i.missed && i.protocolId === r.start)
+      if (item) item.missed = started.toast || '没开起来'
+      writeJson(stateFile('plan.json'), plan)
+    }
+    return r
+  }
+  const planTimer = setInterval(() => {
+    try {
+      planBeat()
+    } catch (error) {
+      // 计划出问题不能把引擎带走：下一分钟再来。
+      console.error('[companion] 计划节拍失败：' + String((error && error.message) || error))
+    }
+  }, 60_000)
+  planTimer.unref?.()
+  ctx.effect?.(() => () => clearInterval(planTimer))
 
   const rejection = (req) => {
     const connection = ctx.get?.('connection')
