@@ -5115,15 +5115,19 @@ export function apply(ctx) {
         verdicts.push(...rows)
         beats.push(...listBeats(db, bout.id))
       }
-      // 磁贴在 Kotlin 侧，读不了 sqlite：顺手落一份摘要给它（BoutsTileService 读这个文件）。
+      // 磁贴和常驻通知在 Kotlin 侧，读不了 sqlite：顺手落一份摘要给它们（BoutsTileService 读这个文件）。
       // 拍数和 running 上面都已经算出来了，不额外查库。只在算快照时刷新——定时器自己推进的拍
       // 要等下次开面板才上磁贴。shortcut: 面板渲染时刷新，介意延迟就在定时器里也调一次。
-      writeJson(stateFile('bouts-status.json'), boutsTileStatus({ now, beats, bouts: all }))
+      const protocols = builtinProtocols().filter((x) => x.ok).map((x) => x.protocol)
+      writeJson(
+        stateFile('bouts-status.json'),
+        boutsTileStatus({ now, beats, bouts: all, protocols, live: live ? live.official.view() : null }),
+      )
       return buildBoutsSnapshot({
         now,
         bouts: all,
         todayBouts: today,
-        protocols: builtinProtocols().filter((x) => x.ok).map((x) => x.protocol),
+        protocols,
         live: live ? live.official.view() : null,
         doneToday: closedToday.filter((x) => x.closeReason === 'done').length,
         emptyToday: closedToday.filter((x) => x.closeReason !== 'done').length,

@@ -18,6 +18,7 @@ import android.os.PowerManager
 import io.github.ccch1mneyyy.dsh_app.MainActivity
 import io.github.ccch1mneyyy.dsh_app.R
 import io.github.ccch1mneyyy.dsh_app.phone.PhoneControl
+import io.github.ccch1mneyyy.dsh_app.tile.BoutsTileStatus
 
 /** Foreground service that keeps the local DSH process alive in the background. */
 class DshService : Service() {
@@ -322,15 +323,33 @@ class DshService : Service() {
                 )
                 builder.addAction(Notification.Action.Builder(null, AppStrings.get(context, R.string.service_stop_phone), stopPhone).build())
             }
-            // Phone control speaks first; then a voice model download (with its bar).
+            // Phone control speaks first; then a voice model download (with its bar); then a 局.
             val voice = if (phoneLine == null) voiceLine else null
             val progress = voiceProgress
             if (voice != null && progress != null) builder.setProgress(100, progress.coerceAtLeast(0), progress < 0)
             if (voice != null) builder.setOnlyAlertOnce(true)
+            // 局在进行时：局名 + 这一拍的问题。剩余时间留给系统的倒计时（setWhen + chronometer
+            // 自己走），不靠定时器推。点开是 App，而 App 现在默认就落在局的「现在」页。
+            // shortcut: 刷新点是引擎状态变化、切回 App、拉开快捷设置；一拍之内不刷新也不碍事。
+            val bouts = if (phoneLine == null && voice == null) BoutsTileStatus.read(context.filesDir) else null
+            val boutLine = if (BoutsTileStatus.running(bouts)) {
+                listOf(BoutsTileStatus.bout(bouts), BoutsTileStatus.ask(bouts))
+                    .filter { it.isNotEmpty() }
+                    .joinToString(" · ")
+                    .takeIf { it.isNotEmpty() }
+            } else {
+                null
+            }
+            val until = if (boutLine != null) BoutsTileStatus.until(bouts) else 0L
+            if (until > System.currentTimeMillis()) {
+                builder.setUsesChronometer(true)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) builder.setChronometerCountDown(true)
+                builder.setWhen(until)
+            }
             return builder
                 .setSmallIcon(R.drawable.ic_stat_dsh)
                 .setContentTitle(AppStrings.APP_NAME)
-                .setContentText(phoneLine ?: voice ?: text)
+                .setContentText(phoneLine ?: voice ?: boutLine ?: text)
                 .setOngoing(true)
                 .setContentIntent(open)
                 .addAction(Notification.Action.Builder(null, AppStrings.get(context, R.string.service_stop), stop).build())

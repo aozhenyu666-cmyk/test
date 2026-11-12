@@ -43,15 +43,25 @@ export function isPass(verdict) {
 }
 
 /**
- * 快捷设置磁贴（Kotlin `tile/BoutsTileService.kt`）读的那份摘要：今日拍数 + 有没有局在跑。
- * 磁贴读不了 sqlite、也收不到推送，所以只能由这里算好，落到 `$DSH_HOME/companion/bouts-status.json`。
- * 字段名是跨语言契约：改这里必须同时改 BoutsTileService.readStatus() 里取的键。
+ * 快捷设置磁贴与常驻通知读的那份摘要：今日拍数、有没有局在跑，以及常驻通知要的三项
+ * （局名 / 当前拍的问题 / 这一拍的截止时刻）。磁贴和通知都读不了 sqlite、也收不到推送，
+ * 所以只能由这里算好，落到 `$DSH_HOME/companion/bouts-status.json`。
+ * 字段名是跨语言契约：改这里必须同时改 BoutsTileStatus.kt 里取的键。
  */
-export function boutsTileStatus({ now, beats = [], bouts = [] } = {}) {
+export function boutsTileStatus({ now, beats = [], bouts = [], live = null, protocols = [] } = {}) {
+  const current = bouts.find((bout) => Boolean(bout) && bout.status === 'running') || null
+  const title = current ? String((protocols.find((p) => p && p.id === current.protocolId) || {}).title || '') : ''
+  // live 是本进程手里那局；进程重启过就是 null，那时只有局名，问和截止都给不出。
+  const mine = current && live && live.boutId === current.id ? live : null
+  const until = mine ? Number(mine.askedAt || 0) + Number(mine.limitSec || 0) * 1000 : 0
   return {
     at: Number(now) || 0,
     beats: beats.length,
-    running: bouts.some((bout) => Boolean(bout) && bout.status === 'running'),
+    running: Boolean(current),
+    bout: title.slice(0, 40),
+    ask: mine ? String(mine.ask || '').slice(0, 80) : '',
+    // 绝对毫秒：系统倒计时（setChronometerCountDown）自己走，不用定时器推。
+    until: until > (Number(now) || 0) ? until : 0,
   }
 }
 

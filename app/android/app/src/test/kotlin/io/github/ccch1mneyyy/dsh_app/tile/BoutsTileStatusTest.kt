@@ -76,4 +76,40 @@ class BoutsTileStatusTest {
         assertFalse(BoutsTileStatus.running(mapOf("running" to "true")))
         assertEquals(7, BoutsTileStatus.beats(mapOf("beats" to 7L))!!)
     }
+
+    @Test
+    fun readsTheOngoingNotificationFields() {
+        write(
+            "runtime/rootfs/root/.dsh",
+            """{"beats":4,"running":true,"bout":"学习局","ask":"这一步要交什么","until":1794497000000}""",
+        )
+
+        val status = BoutsTileStatus.read(dir.root)
+
+        assertTrue(BoutsTileStatus.running(status))
+        assertEquals("学习局", BoutsTileStatus.bout(status))
+        assertEquals("这一步要交什么", BoutsTileStatus.ask(status))
+        assertEquals(1794497000000L, BoutsTileStatus.until(status))
+    }
+
+    @Test
+    fun missingNotificationFieldsFallBackToNothing() {
+        // A summary written before those fields existed, or one whose plugin lost the 局.
+        write(".dsh", """{"beats":2,"running":true}""")
+
+        val status = BoutsTileStatus.read(dir.root)
+
+        assertEquals("", BoutsTileStatus.bout(status))
+        assertEquals("", BoutsTileStatus.ask(status))
+        assertEquals(0L, BoutsTileStatus.until(status))
+    }
+
+    @Test
+    fun aNonNumericUntilIsZeroNotACrash() {
+        val status = mapOf("until" to "soon", "ask" to 7, "bout" to false)
+
+        assertEquals(0L, BoutsTileStatus.until(status))
+        assertEquals("", BoutsTileStatus.ask(status))
+        assertEquals("", BoutsTileStatus.bout(status))
+    }
 }

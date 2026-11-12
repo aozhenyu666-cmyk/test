@@ -19,6 +19,7 @@ import io.github.ccch1mneyyy.dsh_app.launch.LaunchThemeSync
 import io.github.ccch1mneyyy.dsh_app.links.LinksPlugin
 import io.github.ccch1mneyyy.dsh_app.notify.NotifyPlugin
 import io.github.ccch1mneyyy.dsh_app.phone.PhonePlugin
+import io.github.ccch1mneyyy.dsh_app.runtime.DshService
 import io.github.ccch1mneyyy.dsh_app.runtime.LaunchStart
 import io.github.ccch1mneyyy.dsh_app.runtime.RuntimePlugin
 import io.github.ccch1mneyyy.dsh_app.share.SharePlugin
@@ -116,6 +117,9 @@ class MainActivity : FlutterActivity() {
         super.onResume()
         inForeground = true
         preferFastestDisplayMode()
+        // The ongoing notification carries the running 局; back in the app is when that may
+        // have changed (a 局 opened, a beat closed).
+        DshService.updateNotification(this)
     }
 
     /**

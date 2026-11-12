@@ -431,18 +431,66 @@ test('W3 磁贴：今日拍数按拍算，running 只看有没有在跑的局', 
     beats: [{ id: 'beat:1' }, { id: 'beat:2' }, { id: 'beat:3' }],
     bouts: [{ id: 'bout:1', status: 'closed' }, { id: 'bout:2', status: 'running' }],
   })
-  assert.deepEqual(status, { at: NOW, beats: 3, running: true })
+  assert.equal(status.at, NOW)
+  assert.equal(status.beats, 3)
+  assert.equal(status.running, true)
+})
+
+test('W3 常驻通知：局名、当前拍的问题、这一拍的截止时刻', () => {
+  const status = boutsTileStatus({
+    now: NOW,
+    bouts: [{ id: 'bout:2', status: 'running', protocolId: 'study' }],
+    protocols: [{ id: 'study', title: '学习局' }],
+    live: { boutId: 'bout:2', ask: '这一步要交什么', askedAt: NOW - 60_000, limitSec: 300 },
+  })
+  assert.equal(status.bout, '学习局')
+  assert.equal(status.ask, '这一步要交什么')
+  // 截止 = 问的时刻 + 这一拍的限时
+  assert.equal(status.until, NOW - 60_000 + 300_000)
+})
+
+test('W3 常驻通知：进程里没有这局时只报局名，不编问题和截止', () => {
+  const status = boutsTileStatus({
+    now: NOW,
+    bouts: [{ id: 'bout:2', status: 'running', protocolId: 'study' }],
+    protocols: [{ id: 'study', title: '学习局' }],
+    live: null,
+  })
+  assert.equal(status.bout, '学习局')
+  assert.equal(status.ask, '')
+  assert.equal(status.until, 0)
+})
+
+test('W3 常驻通知：已经过期的截止时刻不往系统倒计时里塞', () => {
+  const status = boutsTileStatus({
+    now: NOW,
+    bouts: [{ id: 'bout:2', status: 'running', protocolId: 'study' }],
+    live: { boutId: 'bout:2', ask: '交', askedAt: NOW - 400_000, limitSec: 300 },
+  })
+  assert.equal(status.until, 0)
+})
+
+test('W3 常驻通知：live 是别的局时不算到这一局头上', () => {
+  const status = boutsTileStatus({
+    now: NOW,
+    bouts: [{ id: 'bout:2', status: 'running' }],
+    live: { boutId: 'bout:9', ask: '别的局的问', askedAt: NOW - 1000, limitSec: 300 },
+  })
+  assert.equal(status.ask, '')
+  assert.equal(status.until, 0)
 })
 
 test('W3 磁贴：没有在跑的局就是 false，没拍就是 0', () => {
   const status = boutsTileStatus({ now: NOW, beats: [], bouts: [{ id: 'bout:1', status: 'closed' }] })
   assert.equal(status.beats, 0)
   assert.equal(status.running, false)
+  assert.equal(status.bout, '')
+  assert.equal(status.ask, '')
 })
 
 test('W3 磁贴：什么数据都没有时也不抛，字段形状不变', () => {
   const status = boutsTileStatus()
-  assert.deepEqual(Object.keys(status).sort(), ['at', 'beats', 'running'])
+  assert.deepEqual(Object.keys(status).sort(), ['ask', 'at', 'beats', 'bout', 'running', 'until'])
   assert.equal(status.beats, 0)
   assert.equal(status.running, false)
 })

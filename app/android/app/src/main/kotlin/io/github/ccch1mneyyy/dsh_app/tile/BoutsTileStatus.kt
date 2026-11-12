@@ -31,4 +31,13 @@ object BoutsTileStatus {
 
     /** Strictly `true`: a string "true" is not a running 局. */
     fun running(status: Map<*, *>?): Boolean = status?.get("running") == true
+
+    /** The running 局's name; blank when there is none or the plugin had no title. */
+    fun bout(status: Map<*, *>?): String = (status?.get("bout") as? String).orEmpty()
+
+    /** This beat's question; blank when the plugin process no longer holds the 局. */
+    fun ask(status: Map<*, *>?): String = (status?.get("ask") as? String).orEmpty()
+
+    /** When this beat runs out, in epoch millis; 0 when unknown or already past. */
+    fun until(status: Map<*, *>?): Long = (status?.get("until") as? Number)?.toLong() ?: 0L
 }
