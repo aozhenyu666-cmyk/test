@@ -21,7 +21,9 @@ try {
 }
 
 // 全部是固定 SQL，不接受任何拼接；参数一律走 prepared statement 的占位符。
-const DDL = [
+// 导出只给测试用：dsh-go-companion 的 bouts.js 有一份同样的局表 DDL（它要在记忆插件还没
+// 开过库时也能自己建表），两处写法必须一致，测试拿这份来比对，防止改一处忘一处。
+export const DDL = [
   'CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS facts (id TEXT PRIMARY KEY, scope TEXT NOT NULL, text TEXT NOT NULL, kind TEXT, ' +
     'importance INTEGER, pinned INTEGER, key TEXT, tags TEXT, created_at INTEGER, updated_at INTEGER, ' +
@@ -37,6 +39,33 @@ const DDL = [
   'CREATE INDEX IF NOT EXISTS facts_scope ON facts(scope, status)',
   'CREATE INDEX IF NOT EXISTS topics_scope ON topics(scope, status)',
   'CREATE INDEX IF NOT EXISTS episodes_scope ON episodes(scope, at)',
+  // 局（第八轮 J1）。同一个库里加表，走的就是这里的迁移机制：每次开库把 DDL 全跑一遍，
+  // CREATE TABLE IF NOT EXISTS 幂等，所以老库补表不需要改 schema 版本，也不需要搬数据。
+  // 所有写入只走 dsh-go-companion/lib/bouts.js；这里只负责建表。
+  'CREATE TABLE IF NOT EXISTS bouts (id TEXT PRIMARY KEY, protocol_id TEXT NOT NULL, opened_by TEXT, ' +
+    'planned_at INTEGER, opened_at INTEGER, closed_at INTEGER, close_reason TEXT, status TEXT NOT NULL, department TEXT)',
+  'CREATE TABLE IF NOT EXISTS beats (id TEXT PRIMARY KEY, bout_id TEXT NOT NULL, step_id TEXT, asked_at INTEGER, ' +
+    'channel TEXT, answer TEXT, metrics TEXT, verdict TEXT, retries INTEGER)',
+  'CREATE TABLE IF NOT EXISTS evidence (id TEXT PRIMARY KEY, bout_id TEXT, beat_id TEXT, source_type TEXT, ' +
+    'ref TEXT, content_hash TEXT)',
+  'CREATE TABLE IF NOT EXISTS deliverables (id TEXT PRIMARY KEY, bout_id TEXT, beat_id TEXT, form TEXT, ' +
+    'ref TEXT, text TEXT)',
+  'CREATE TABLE IF NOT EXISTS verdicts (id TEXT PRIMARY KEY, bout_id TEXT, beat_id TEXT, layer TEXT, ' +
+    'result TEXT, score REAL, quote TEXT)',
+  'CREATE TABLE IF NOT EXISTS escalations (id TEXT PRIMARY KEY, reason TEXT, level TEXT, started_at INTEGER, ' +
+    'ended_at INTEGER, ended_by TEXT)',
+  'CREATE TABLE IF NOT EXISTS protocols (id TEXT PRIMARY KEY, version INTEGER, source TEXT, status TEXT, ' +
+    'file_hash TEXT, installed_at INTEGER)',
+  'CREATE TABLE IF NOT EXISTS day_plans (id TEXT PRIMARY KEY, day TEXT NOT NULL, template TEXT, queue TEXT, ' +
+    'edits TEXT, activation TEXT, created_at INTEGER, effective_at INTEGER)',
+  'CREATE INDEX IF NOT EXISTS beats_bout ON beats(bout_id, asked_at)',
+  'CREATE INDEX IF NOT EXISTS evidence_bout ON evidence(bout_id)',
+  'CREATE INDEX IF NOT EXISTS deliverables_bout ON deliverables(bout_id)',
+  'CREATE INDEX IF NOT EXISTS verdicts_bout ON verdicts(bout_id)',
+  'CREATE INDEX IF NOT EXISTS escalations_started ON escalations(started_at)',
+  'CREATE INDEX IF NOT EXISTS day_plans_day ON day_plans(day)',
+  // 引擎内只有一个局处于进行中（J2 第 4 条）：交给数据库保证，不靠调用方自觉。
+  "CREATE UNIQUE INDEX IF NOT EXISTS bouts_one_running ON bouts(status) WHERE status = 'running'",
 ]
 
 const INSERT_FACT = 'INSERT INTO facts (id, scope, text, kind, importance, pinned, key, tags, created_at, updated_at, ' +

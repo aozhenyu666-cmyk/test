@@ -151,6 +151,10 @@ object BuiltinPluginGuest {
                 "lib/emotion.js",
                 // R7 B2：夜间整理。产物是 links/gaps/carry（素材），不是消息。
                 "lib/nightly.js",
+                // R8 J1：局的数据。八张表加在 fish-memory.sqlite 里，写入只走 bouts.js；
+                // rebuild.js 是「以账本为准」的重建脚本（node lib/rebuild.js --home <dir>）。
+                "lib/bouts.js",
+                "lib/rebuild.js",
             ),
         ),
     )
