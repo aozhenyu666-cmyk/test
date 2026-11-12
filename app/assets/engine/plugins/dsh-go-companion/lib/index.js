@@ -20,11 +20,12 @@ import { DEFAULT_LIMITS, Desk, SOURCE_KIND } from './core.js'
 import { BACKGROUND_LIMIT, backgroundFacts, loadCandidates, openMemoryDb } from './topics.js'
 import { buildPrompt } from './prompt.js'
 import { appendLedger, readLedger, summarize } from './ledger.js'
-import { plan as decide } from './plan.js'
+import { plan as decide, inQuiet } from './plan.js'
 import { DEFAULT_TZ, hm as zoneHm, md as zoneMd, minuteOfDay as zoneMinuteOfDay, startOfDay as zoneStartOfDay, weekdayOf, zoneOr } from './tz.js'
 import { classifyReply } from './classify.js'
 import { gardenClass, judgeReply } from './judge.js'
 import { RECENT_WINDOW, SKIP_STATE, contentGate, gateRound, isStock, nounsOf, recentOwnTexts } from './stock.js'
+import { BURST_HOURLY_CAP, behaviorOf, emotionLine, emotionOf } from './emotion.js'
 import { capCount, nextShot, rallyStats } from './rally.js'
 import { pickServeType } from './serve.js'
 import { LIGHTER_TYPES, mutedUntil, serveWeights, silenceState } from './silence.js'
@@ -638,6 +639,19 @@ export function apply(ctx) {
   }
 
   /**
+   * B4：一小时内已经发出去了多少条（连发按条数算，不按"几轮"算）。
+   * 账本里那一条记着当时的 burst 计划，所以重发一轮 burst=3 就占掉 3 条额度。
+   */
+  function burstUsedLastHour(entries, now) {
+    let n = 0
+    for (const e of entries) {
+      if (e?.state !== 'generated' || !(Number(e.at) > now - 3_600_000)) continue
+      n += Math.max(1, Number(e.burst?.burst) || 1)
+    }
+    return n
+  }
+
+  /**
    * B1：信息增量守卫。生成出来的句子过两道：和自己最近 5 句的重合率、有没有具体名词。
    * 一次重写机会（规则见 stock.js 的 gateRound）：重写还重复就这一轮不发（账本 `skip-no-content`），
    * 只是不沾具体名词则重写一次后照发。两者都不算失败、不重试。
@@ -788,6 +802,15 @@ export function apply(ctx) {
       const facts = backgroundFacts(candidates, BACKGROUND_LIMIT)
       const episodes = (candidates.episodes || []).map((e) => e.text)
       const nouns = nounsOf([topic, facts, episodes, commitments, vault, phone, drill, drillOp, track])
+      // B4：这一轮怎么发（连发几条、每条多长、间隔多久、发文字还是念出来）。
+      // 情绪是账本的纯函数，不另存状态；它只决定"怎么发"，不改任何锁、额度、判定。
+      const tzNow = zoneOr(config.timeZone)
+      const emotion = emotionOf(entries, { now, tz: tzNow, quietStart: config.quietStart, quietEnd: config.quietEnd })
+      const burst = behaviorOf(emotion, {
+        now,
+        quiet: inQuiet(now, config.quietStart, config.quietEnd, tzNow),
+        sentLastHour: burstUsedLastHour(entries, now),
+      })
       const prompt = buildPrompt({
         topic,
         facts,
@@ -827,6 +850,11 @@ export function apply(ctx) {
         drill: drill?.id, force: force.level || undefined, track: track?.id,
         // C2：这一球练的是哪个操作。答案不再交给模型判，回球时按这个码走代码判。
         drillOp: drillOp || undefined,
+        // B4：手机按这个计划发——连发几条、每条多长、间隔多久、发文字还是念出来。
+        // 它不改这一球的内容，只改投递方式（内容还是模型按人设写的）。
+        burst,
+        // 情绪那一行也带上：浮层/面板要看得到她现在什么状态。
+        emotion: emotionLine(emotion, now),
       }
       return { text: prompt, prompt, topic, serveType, rallyId: rally.rallyId, shot: rally.shot, silence, extra }
     } finally {
@@ -3880,6 +3908,10 @@ export function apply(ctx) {
       // C1：挂载卡是状态层最高优先级——卡一断这轮就白聊，别的都能让一让。
       { id: 'mount', layer: 'state', priority: 65, text: mountText() },
       { id: 'trust', layer: 'state', priority: 60, text: trustLines(trustNow()).join('\n') },
+      // B4：情绪一行。它是"现在什么状态"，不是规矩，所以是状态层、可裁。
+      { id: 'emotion', layer: 'state', priority: 48, text: emotionLine(emotionOf(readLedger(home(), 400), {
+        now: Date.now(), tz: zoneOr(config.timeZone), quietStart: config.quietStart, quietEnd: config.quietEnd,
+      }), Date.now()) },
       { id: 'rhythm', layer: 'state', priority: 55, text: rhythmLines(lastRhythm).join('\n') },
       { id: 'gear', layer: 'state', priority: 50, text: gearLines(config, Date.now()).join('\n') },
       { id: 'gemini', layer: 'state', priority: 45, text: geminiLines(loadGemini(), Date.now()).join('\n') },

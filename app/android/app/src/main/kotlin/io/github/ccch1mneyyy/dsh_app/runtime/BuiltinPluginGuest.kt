@@ -146,6 +146,8 @@ object BuiltinPluginGuest {
                 "lib/stance.js",
                 "lib/wall_voice.js",
                 "lib/mount.js",
+                // R7 B4：情绪池。状态层那一行和 /request 里的 burst 计划都来自它。
+                "lib/emotion.js",
             ),
         ),
     )

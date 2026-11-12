@@ -20,6 +20,7 @@ import io.github.ccch1mneyyy.dsh_app.loop.core.AgentWire
 import io.github.ccch1mneyyy.dsh_app.loop.core.AtomicJsonFile
 import io.github.ccch1mneyyy.dsh_app.loop.core.BackgroundCaps
 import io.github.ccch1mneyyy.dsh_app.loop.core.BeijingClock
+import io.github.ccch1mneyyy.dsh_app.loop.core.BurstPlan
 import io.github.ccch1mneyyy.dsh_app.loop.core.Clocks
 import io.github.ccch1mneyyy.dsh_app.loop.core.Command
 import io.github.ccch1mneyyy.dsh_app.loop.core.Coordinator
@@ -1262,10 +1263,14 @@ object ProactiveRuntime {
                     } else {
                         // P1: a real window, not an Activity — switching apps must not dismiss it.
                         // The Activity stays as the fallback when no overlay host is available.
-                        val text = cmd.content.text
-                        val ok = runCatching { ProactiveOverlay.show(cmd.token, text, cmd.deadline) }.getOrDefault(false) ||
-                            ProactivePageActivity.start(app, cmd.token, text, cmd.deadline)
+                        // B4：有连发计划就先只上第一段，其余按 delayMs 补进同一个窗口。
+                        val plan = cmd.content.burst
+                        val text = plan?.segments?.firstOrNull() ?: cmd.content.text
+                        val overlay = runCatching { ProactiveOverlay.show(cmd.token, text, cmd.deadline) }.getOrDefault(false)
+                        val ok = overlay || ProactivePageActivity.start(app, cmd.token, cmd.content.text, cmd.deadline)
                         if (!ok) VisibleSurface.release(VisibleSurface.OWNER_PROACTIVE, cmd.token)
+                        // 连发只走浮层：Activity 是一张一次性页面，追加不了话。
+                        else if (overlay && plan != null) scheduleBurst(cmd.token, plan)
                         dispatch(c.onSurface(cmd.token, if (ok) SurfaceReport.Posted else SurfaceReport.Failed("start_failed")))
                     }
                 }
@@ -1288,6 +1293,21 @@ object ProactiveRuntime {
                 VisibleSurface.release(VisibleSurface.OWNER_PROACTIVE, null)
                 notificationPort?.cancelAll()
             }
+        }
+    }
+
+    /**
+     * B4：把第 2 段起的部分按 delayMs 依次补进同一个浮层。
+     *
+     * 窗口换了或事件关掉了，[ProactiveOverlay.say] 返回 false，这一段就丢掉——话已经晚了，
+     * 不能为了一句补白另开一个窗口。这里不取消已排的回调：它们最多一次 no-op。
+     */
+    private fun scheduleBurst(token: String, plan: BurstPlan) {
+        var at = 0L
+        for (i in 1 until plan.segments.size) {
+            at += plan.delaysMs.getOrElse(i - 1) { BurstPlan.DEFAULT_DELAY_MS }
+            val line = plan.segments[i]
+            main.postDelayed({ ProactiveOverlay.say(token, line) }, at)
         }
     }
 

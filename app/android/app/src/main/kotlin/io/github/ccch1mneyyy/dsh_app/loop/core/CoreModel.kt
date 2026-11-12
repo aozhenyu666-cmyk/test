@@ -97,7 +97,13 @@ data class EventRequest(
     val payload: Map<String, String> = emptyMap(),
 )
 
-data class Content(val text: String, val source: ContentSource, val agentTurnId: String? = null)
+data class Content(
+    val text: String,
+    val source: ContentSource,
+    val agentTurnId: String? = null,
+    /** 连发计划：非空时 [text] 仍是全文，浮层按 [BurstPlan.segments] 分段上屏。 */
+    val burst: BurstPlan? = null,
+)
 
 /**
  * One event and everything known about it. Immutable; the coordinator replaces it on every
@@ -243,7 +249,8 @@ sealed interface AgentReply {
     data object Accepted : AgentReply
     /** The loop claimed it: a turn is running. Still no text. */
     data class Claimed(val turn: Long?) : AgentReply
-    data class Generated(val text: String, val turnId: String?) : AgentReply
+    /** [burst] 非空表示这句要分几段连发（插件 `extra.burst` 定的）；null 就是原来的一次说完。 */
+    data class Generated(val text: String, val turnId: String?, val burst: BurstPlan? = null) : AgentReply
     data class Failed(val code: String) : AgentReply
 }
 

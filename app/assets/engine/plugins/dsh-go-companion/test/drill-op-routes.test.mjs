@@ -376,3 +376,29 @@ test('K19 要锁的那一球出思维题：操作题不许顶掉（操作题没�
     assert.equal(served.served.serveType, 'drill')
   })
 })
+
+test('K20 /request 的结果里带这一轮的 burst 计划（手机按它排队发）', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const served = await withForcedDrill(() => serveThenReply(t, '嗯'))
+    const b = served.served.extra?.burst
+    assert.ok(b, '/request 没带 burst 计划：' + JSON.stringify(served.served))
+    assert.ok(typeof b.tone === 'string' && b.tone.length > 0, '档位要给出来')
+    assert.ok(Number.isInteger(b.burst) && b.burst >= 1 && b.burst <= 3, '连发条数 1..3：' + b.burst)
+    assert.ok(Number.isInteger(b.maxChars) && b.maxChars >= 20, '每条上限：' + b.maxChars)
+    assert.ok(Array.isArray(b.delayMs) && b.delayMs.length === 2, '间隔是 [最短, 最长]：' + JSON.stringify(b.delayMs))
+    assert.ok(['text', 'voice'].includes(b.channel), '渠道只有文字/语音：' + b.channel)
+    // 情绪那一行也一起带回去：浮层要看得到她现在什么状态。
+    assert.match(String(served.served.extra?.emotion || ''), /^\[情绪\] 火气 \d+/)
+  })
+})
+
+test('K21 安静时段 burst 是 0（不是少发，是不发）', async () => {
+  await withHome(async (home) => {
+    // quiet 0..24 = 全天都在安静时段
+    const t = setup(home, { quietStart: 0, quietEnd: 24 })
+    const served = await withForcedDrill(() => serveThenReply(t, '嗯'))
+    assert.equal(served.served.extra?.burst?.burst, 0, JSON.stringify(served.served.extra?.burst))
+    assert.equal(served.served.extra?.burst?.channel, 'text')
+  })
+})

@@ -80,7 +80,15 @@ object AgentWire {
             "generated" -> {
                 val text = (m["text"] as? String)?.trim().orEmpty()
                 if (text.isEmpty()) Decoded.Reply(AgentReply.Failed("no_text"), true)
-                else Decoded.Reply(AgentReply.Generated(text.take(2_000), (m["turn"] as? Number)?.let { "turn:$it" }), true)
+                else Decoded.Reply(
+                    AgentReply.Generated(
+                        text.take(2_000),
+                        (m["turn"] as? Number)?.let { "turn:$it" },
+                        // B4：连发计划随 result body 一起下来，这里只解析，投递由手机侧排队。
+                        BurstPlan.of(m["extra"], text.take(2_000)),
+                    ),
+                    true,
+                )
             }
             "failed" -> Decoded.Reply(AgentReply.Failed(((m["failure"] as? Map<*, *>)?.get("code") as? String) ?: "failed"), true)
             "cancelled" -> Decoded.Reply(AgentReply.Failed("cancelled"), true)

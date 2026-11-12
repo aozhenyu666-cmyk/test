@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply } from '../lib/index.js'
@@ -148,8 +148,32 @@ test('C8 每轮落一条 ctx-budget（kept/dropped/chars 都在）', async () =>
   })
 })
 
-test('C9 账本里的 say-text 不带注入标记（出口剥除）', async () => {
+test('C12 B4 情绪以一行进状态层（`[情绪] 火气 N · 耐心 M`），不占约束层', async () => {
   await withHome(async (home) => {
+    const { sis } = mountPair(home)
+    const text = sis.contexts[0].text()
+    assert.match(text, /\[情绪\] 火气 \d+(（[^）]*）)? · 耐心 \d+/, '状态层里没有情绪那一行：' + text.slice(0, 400))
+    const file = join(home, 'companion', 'ctx-budget.jsonl')
+    const last = readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).pop()
+    assert.ok(last.kept.includes('emotion'), '情绪块被裁掉了（它很短，不该被裁）：' + JSON.stringify(last))
+  })
+})
+
+test('C13 B4 账本里有敷衍，情绪那一行跟着变（不是写死的）', async () => {
+  await withHome(async (home) => {
+    const { sis } = mountPair(home)
+    const anger0 = Number((/火气 (\d+)/.exec(sis.contexts[0].text()) || [])[1])
+    assert.equal(anger0, 15, '一开始是日常值')
+    const at = Date.now()
+    appendFileSync(join(home, 'companion', 'ledger.jsonl'), [1, 2, 3].map((i) =>
+      JSON.stringify({ v: 1, sessionId: 'session-sis', state: 'replied', requestId: 'rf' + i, verdict: 'brief', at: at - i * 1000 })).join('\n') + '\n')
+    const after = sis.contexts[0].text()
+    assert.match(after, /（敷衍了 3 次）/, '连击次数要写出来：' + after.slice(0, 400))
+    assert.ok(Number((/火气 (\d+)/.exec(after) || [])[1]) > anger0, '火气该比之前高：' + /火气 \d+/.exec(after))
+  })
+})
+
+test('C9 账本里的 say-text 不带注入标记（出口剥除）', async () => {  await withHome(async (home) => {
     mkdirSync(join(home, 'companion'), { recursive: true })
     const { stripInjection: strip } = await import('../lib/budget.js')
     // 出口剥除是纯函数：模型把标记原样复述回来也不会流进账本

@@ -112,6 +112,16 @@ object ProactiveOverlay {
     fun isShowing(token: String) = live.containsKey(token)
 
     /**
+     * B4 连发的后续一段：追加到同一个窗口，不重置事件状态（[Card.adopt] 是「下一球」用的，
+     * 会把上报标记清掉）。窗口已经不在了返回 false，这一段就丢掉——话已经晚了，不再另开一个窗口。
+     */
+    fun say(token: String, text: String): Boolean {
+        val card = live[token] ?: return false
+        card.say(text)
+        return true
+    }
+
+    /**
      * 执法优先（C1）: a lock page is about to take the screen. Every open card folds into its bubble,
      * which never takes focus, so the lock page can prove it is on screen. Nothing is lost: the
      * conversation stays and the bubble reopens it. Also used when the card had not been answered
@@ -203,6 +213,14 @@ object ProactiveOverlay {
             main.removeCallbacks(shrink)
             if (collapsed) expand() else main.postDelayed(shrink, COLLAPSE_AFTER_MS)
             main.postDelayed({ proveShown() }, 120L)
+        }
+
+        /** B4 连发的后续一段：同一窗口追加一行，事件的上报状态不动。 */
+        fun say(text: String) {
+            val (who, body) = splitSpeaker(text)
+            append(if (who != null) "$who：$body" else body)
+            main.removeCallbacks(shrink)
+            if (collapsed) expand() else main.postDelayed(shrink, COLLAPSE_AFTER_MS)
         }
 
         private fun proveShown() {
