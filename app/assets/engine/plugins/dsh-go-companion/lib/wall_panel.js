@@ -137,10 +137,11 @@ export function buildWallSnapshot(input = {}) {
   const s = input.settings || {}
   const e = s.escalate || {}
   const ruleRows = []
-  if (e.e1Count) ruleRows.push('E1：' + Math.round((Number(e.e1WindowMs) || 0) / 60_000) + ' 分钟内敷衍 ' + e.e1Count + ' 次')
-  if (e.l1WorkMin) ruleRows.push('L1：工作时段娱乐连续 ' + e.l1WorkMin + ' 分钟')
-  if (e.l1RestMin) ruleRows.push('L1：非工作时段娱乐连续 ' + e.l1RestMin + ' 分钟')
-  if (e.l3Min) ruleRows.push('L3：每天娱乐累计 ' + e.l3Min + ' 分钟')
+  // 键名照抄 settings.js（E1Count / E1WindowMs / L1WorkMin / ...）：大小写不一样就等于读不到。
+  if (e.E1Count) ruleRows.push('E1：' + Math.round((Number(e.E1WindowMs) || 0) / 60_000) + ' 分钟内敷衍 ' + e.E1Count + ' 次')
+  if (e.L1WorkMin) ruleRows.push('L1：工作时段娱乐连续 ' + e.L1WorkMin + ' 分钟')
+  if (e.L1RestMin) ruleRows.push('L1：非工作时段娱乐连续 ' + e.L1RestMin + ' 分钟')
+  if (e.L3Min) ruleRows.push('L3：每天娱乐累计 ' + e.L3Min + ' 分钟')
   if (s.minBouts) ruleRows.push('每天最少 ' + s.minBouts + ' 局（至少 ' + (s.minThinking || 0) + ' 个思维局）')
 
   return {

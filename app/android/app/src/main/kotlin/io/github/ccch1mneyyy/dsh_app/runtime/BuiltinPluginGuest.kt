@@ -187,6 +187,10 @@ object BuiltinPluginGuest {
                 "lib/wall_panel.js",
                 // R8 W2：墙与审查两个页面的视图。
                 "lib/wall_view.js",
+                // R8 W4：设定页。解析/渲染/预填在这里，改松的冷却期仍在 settings.js。
+                "lib/settings_panel.js",
+                // R8 W4：设定两个页面（作息与预算 / 阈值）的视图。
+                "lib/settings_view.js",
             ),
         ),
     )

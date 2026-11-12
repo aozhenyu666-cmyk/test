@@ -139,7 +139,7 @@ test('半个月前的不进审查记录', () => {
 test('阈值原样来自设定，不在面板里另写一套数', () => {
   const s = buildWallSnapshot({
     now: NOW, tz: TZ,
-    settings: { minBouts: 4, minThinking: 1, escalate: { e1Count: 3, e1WindowMs: 30 * 60_000, l1WorkMin: 15, l1RestMin: 30, l3Min: 60 } },
+    settings: { minBouts: 4, minThinking: 1, escalate: { E1Count: 3, E1WindowMs: 30 * 60_000, L1WorkMin: 15, L1RestMin: 30, L2Min: 20, L3Min: 60 } },
   })
   assert.ok(s.rules.rows.some((r) => r.includes('30 分钟内敷衍 3 次')), s.rules.rows.join(' / '))
   assert.ok(s.rules.rows.some((r) => r.includes('娱乐连续 15 分钟')))

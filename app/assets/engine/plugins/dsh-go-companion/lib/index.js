@@ -90,7 +90,10 @@ import { planLines, planOf, tick } from './planwire.js'
 // 第八轮 W2：墙的面板。数据层自己不含措辞，只读 machine/wall_voice/settings 的现成结论。
 import { buildWallSnapshot } from './wall_panel.js'
 import { wallAuditView, wallView } from './wall_view.js'
-import { settingsOf } from './settings.js'
+import { settingsOf, applySettings } from './settings.js'
+// 第八轮 W4：设定页。解析、渲染、预填都在 settings_panel.js，这里只接线。
+import { buildSettingsSnapshot, parseDay, parseLimits, settingsMarkdown } from './settings_panel.js'
+import { settingsDayView, settingsLimitsView } from './settings_view.js'
 import { builtinProtocolOf, builtinProtocols } from './builtin.js'
 import { createOfficial } from './boutrun.js'
 import { listBouts, listVerdicts, openBoutsDb, runningBout } from './bouts.js'
@@ -4264,6 +4267,15 @@ export function apply(ctx) {
       known: builtinProtocols().filter((x) => x.ok).map((x) => x.protocol.id),
     })
     if (r.action !== 'hold' && r.action !== 'wait-confirm') writeJson(stateFile('plan.json'), r.plan)
+    // 挂着的「改松」到点了就在这里落地：这是唯一每分钟都跑一次的地方，不另开定时器。
+    const pendAt = Number(config.dayPendingAt) || 0
+    if (pendAt > 0 && now >= pendAt) {
+      try {
+        saveSettings(settingsOf(config.dayPending?.settings || config), '冷却期到点')
+      } catch (error) {
+        console.error('[companion] 冷却期落地失败：' + String((error && error.message) || error))
+      }
+    }
     if (r.action === 'draft' || r.action === 'confirm') record({ state: 'plan-' + r.action, at: now, items: r.plan.items.length })
     if (r.action === 'skip') record({ state: 'plan-skip', at: now, why: r.why })
     if (!r.start) return r
@@ -5213,6 +5225,43 @@ export function apply(ctx) {
     })
   }
 
+  // 第八轮 W4：设定页的数据。设定只存在 config.day 下，挂起的改松在 config.dayPending。
+  function settingsSnapshot(now = Date.now()) {
+    return buildSettingsSnapshot({
+      settings: settingsOf(config),
+      pending: config.dayPending || null,
+      pendingAt: Number(config.dayPendingAt) || 0,
+      now,
+      config,
+    })
+  }
+
+  // 改设定：先过 settings.js（改紧立即生效 / 改松挂一天），再落盘并同步到笔记库。
+  function saveSettings(next, by) {
+    const now = Date.now()
+    const r = applySettings({ now, prev: settingsOf(config), next, pending: config.dayPending || null })
+    config = {
+      ...config,
+      day: r.settings,
+      dayPending: r.pending || undefined,
+      dayPendingAt: r.pendingAt || undefined,
+    }
+    try {
+      writeConfig(config)
+    } catch {
+      // 这一轮照样生效
+    }
+    record({ state: 'rule-change', at: now, by: by || '设定页', effect: r.applied })
+    try {
+      const base = join(kbDir(notesDir(), home()), WALL_DIR)
+      writeVaultText(join(base, '设定.md'), settingsMarkdown(buildSettingsSnapshot({ settings: r.settings, pending: r.pending, pendingAt: r.pendingAt, now, config })))
+    } catch (error) {
+      // 笔记库不可写不影响设定本身
+      console.error('[companion] 设定.md 写不进去：' + String((error && error.message) || error))
+    }
+    return r
+  }
+
   function dropLive() {
     try {
       live?.db?.close?.()
@@ -5445,6 +5494,36 @@ export function apply(ctx) {
               return () => panelScopes.delete(keyOf(scope))
             },
             actions: wallActions(panelId),
+          })
+        }
+        // 设定：只能改数，不能在这里解锁或改判定。解析不出来的整份退回，不做部分提交。
+        const settingsActions = (panelId, parse) => ({
+          'settings.refresh': (scope) => {
+            d.refresh(panelId, scope)
+            return { toast: '' }
+          },
+          'settings.save': (scope, event) => {
+            const r = parse(settingsOf(config), values(event))
+            if (r.error) return { toast: r.error }
+            const saved = saveSettings(r.next, '设定页')
+            d.refresh(panelId, scope)
+            return { toast: saved.applied === 'pending' ? '改松了，挂一天冷却期；这一天先按原来的走。' : '改好了，立即生效。' }
+          },
+        })
+        for (const [panelId, view, parse, id] of [
+          ['settings', settingsDayView, parseDay, 'settings.saveDay'],
+          ['settings-limits', settingsLimitsView, parseLimits, 'settings.saveLimits'],
+        ]) {
+          const actions = settingsActions(panelId, parse)
+          // 表单的 submit 名就是每个页各自那一个（两个页面共用一个保存实现）。
+          d.panel(panelId, {
+            view,
+            data: (scope, emit) => {
+              panelScopes.set(keyOf(scope), scope)
+              emit(settingsSnapshot())
+              return () => panelScopes.delete(keyOf(scope))
+            },
+            actions: { ...actions, [id]: actions['settings.save'] },
           })
         }
       })
