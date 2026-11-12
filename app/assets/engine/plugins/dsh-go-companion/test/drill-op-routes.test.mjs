@@ -278,9 +278,10 @@ async function withForcedDrill(fn) {
 }
 
 /** 走一遍真的发球：请求 → 认领 → 她开口 → 回合结束 → 他回球。 */
-async function serveThenReply(t, answer) {
+async function serveThenReply(t, answer, phone) {
   const req = await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/request', {
     v: 1, requestId: 'req-op-1', eventId: 'evt-op-1', kind: 'random_chat', payload: {}, deadlineMs: 30000,
+    ...(phone ? { phone } : {}),
   })
   assert.equal(req.body?.state, 'accepted', '请求应当被接受：' + JSON.stringify(req.body))
   const turn = 11
@@ -360,5 +361,18 @@ test('K18 第二次没过才给一个示范', async () => {
     const third = await t.submit({ op: 'predict', answer: '我猜 20 分钟能跑通' })
     assert.equal(third.body.judge.ok, true)
     assert.equal(third.body.judge.demo, undefined)
+  })
+})
+
+test('K19 要锁的那一球出思维题：操作题不许顶掉（操作题没有合格线，放不了行）', async () => {
+  await withHome(async (home) => {
+    const t = setup(home, { drills: true, mode: 'coach', modeUntil: Date.now() + 3_600_000 })
+    await withCard(t)
+    // 在王者里泡了 60 分钟：力度到顶，这一球是"要锁的那一球"。
+    const game = { app: 'com.tencent.tmgp.sgame', label: '王者荣耀', minutes: 60, fun: true, screenOn: true, local: '15:00', today: [{ app: 'com.tencent.tmgp.sgame', label: '王者荣耀', minutes: 60, fun: true }] }
+    const served = await withForcedDrill(() => serveThenReply(t, '挺久的吧', game))
+    assert.ok(served.served.extra?.drill, '要锁的那一球必须是思维题：' + JSON.stringify(served.served))
+    assert.equal(served.served.extra?.drillOp, undefined, '操作题不能顶掉锁球：' + JSON.stringify(served.served))
+    assert.equal(served.served.serveType, 'drill')
   })
 })

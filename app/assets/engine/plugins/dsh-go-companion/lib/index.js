@@ -755,10 +755,12 @@ export function apply(ctx) {
       const owed = drillsOn ? lastDrillOutcome(entries, now) : null
       const scold = owed ? scoldLines(drillOf(owed.drill), owed) : []
       if (owed?.silent) onSilent(brain, { requestId: owed.requestId })
+      // 要锁的那一球和欠着的那一题都必须出思维题：操作题没有合格线，放不了行（E2E 挂过在这里）。
+      const mustDrill = force.level >= 3 || scold.length > 0
       // 在娱乐 App 里越陷越可能出题；要锁的那一球一定出题（答过线才放行）。
       // 阶梯在"换更轻的球"时不随机出题（欠着的题除外）；温和模式又不知道他在干嘛时，也不凭空出题。
       const drillChance = !drillsOn ? 0
-        : force.level >= 3 || scold.length ? 1
+        : mustDrill ? 1
         : lighter ? 0
         : phone?.fun ? 0.45 + water.level / 200
         : mode === 'coach' ? 0.3 : 0
@@ -769,7 +771,7 @@ export function apply(ctx) {
       const rolled = Math.random() < drillChance
       // 出题这一球真的命中了才轮得到操作题：欠着的思维题要先补（同一题重问），
       // 没欠着就让「该练的那个操作」顶掉随机思维题——两者共用一个槽位，不叠着出。
-      const drill = rolled && (!opDue || scold.length)
+      const drill = rolled && (!opDue || mustDrill)
         ? (scold.length ? drillOf(owed.drill) : pickDrill(entries, drillScorer(brain)))
         : null
       const drillOp = rolled && !drill ? opDue : null
