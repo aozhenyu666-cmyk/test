@@ -17,10 +17,13 @@ import '../theme/theme.dart';
 ///
 /// 三种气泡：提交 / 判定 / 规则变更。没有第四种。
 class WallPage extends StatefulWidget {
-  const WallPage({super.key, this.channel});
+  const WallPage({super.key, this.channel, this.asTab = false});
 
   /// 测试用：塞一个假的 channel，免得每个用例都要起引擎。
   final ProactiveChannel? channel;
+
+  /// 作为首页的标签页站着：没有可返回的上一页，所以不画返回键。
+  final bool asTab;
 
   @override
   State<WallPage> createState() => _WallPageState();
@@ -60,6 +63,7 @@ class _WallPageState extends State<WallPage> {
     final l = context.l10n;
     return AppPage.list(
       title: l.wallTitle,
+      back: !widget.asTab,
       subtitle: const Text('只收证据和申诉。墙不聊天，也不谈判。'),
       actions: [
         GlassIconButton(icon: AppIcons.refresh, tooltip: l.wallRefresh, onPressed: () => unawaited(_refresh())),

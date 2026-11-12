@@ -34,6 +34,7 @@ class AppPage extends StatefulWidget {
     this.hero,
     this.slivers = const [],
     this.actions = const [],
+    this.back = true,
     this.showLargeTitle = true,
     this.padBottom = true,
     this.solidBar = true,
@@ -54,6 +55,10 @@ class AppPage extends StatefulWidget {
 
   /// Trailing glass buttons in the bar.
   final List<Widget> actions;
+
+  /// The bar's back key. False for a page standing as a tab of the home shell,
+  /// where there is nothing to pop and the key would do nothing.
+  final bool back;
 
   final bool showLargeTitle;
   final bool padBottom;
@@ -78,12 +83,14 @@ class AppPage extends StatefulWidget {
     Widget? subtitle,
     required List<Widget> children,
     List<Widget> actions = const [],
+    bool back = true,
     bool solidBar = true,
   }) => AppPage(
     key: key,
     title: title,
     subtitle: subtitle,
     actions: actions,
+    back: back,
     solidBar: solidBar,
     slivers: [SliverList.list(children: children)],
   );
@@ -227,14 +234,16 @@ class _AppPageState extends State<AppPage> {
                     child: NavigationToolbar(
                       centerMiddle: true,
                       middleSpacing: 8,
-                      leading: Center(
-                        widthFactor: 1,
-                        child: GlassIconButton(
-                          icon: AppIcons.back,
-                          tooltip: l10n.commonBack,
-                          onPressed: () => Navigator.of(context).maybePop(),
-                        ),
-                      ),
+                      leading: widget.back
+                          ? Center(
+                              widthFactor: 1,
+                              child: GlassIconButton(
+                                icon: AppIcons.back,
+                                tooltip: l10n.commonBack,
+                                onPressed: () => Navigator.of(context).maybePop(),
+                              ),
+                            )
+                          : null,
                       middle: ValueListenableBuilder<double>(
                         valueListenable: _offset,
                         builder: (context, offset, child) {

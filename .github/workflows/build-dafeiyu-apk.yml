@@ -230,5 +230,5 @@ jobs:
             dsh-go-fish-arm64.apk APK-SHA256.txt PROOT-VERSION.txt \
             --target "${{ github.sha }}" \
             --title "DSH Go 大肥鱼 · arm64 测试版 #${{ github.run_number }}" \
-            --notes "大肥鱼：闲时/忙时档位（整体高频）、聊天里直接管控、Gemini 连麦搭桥（背景+读回复盘）、姐妹双人格（鱼丸/鲸澜）、引擎被杀自动重启+退出日志、浮层聊天不再被顶掉、拒绝模式、姐妹会用手机/相册/笔记库。不含本地未推送的 P4 语音。独立包名 .fish，可与其他版本并存（数据不共享）。云端临时调试签名。请核对 SHA256 后安装。" \
+            --generate-notes \
             --prerelease
