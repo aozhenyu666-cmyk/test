@@ -12,6 +12,27 @@
 //   题型 / 来源 / 年份   用于统计
 //
 // 只做格式与完整性，不判对错——判在 thinking.js。也不出题。
+//
+// ---- 上游参考（施工书 §3 J6 说的「一手」，已核对过实际字段）--------------------------
+//
+//   changliu/legacy/yishou/app/src/main/java/com/yishou/app/bank/Bank.kt（BankItem + BankParser）
+//   同目录 BankImport.kt、judge/LockedJson.kt；测试夹具见 app/src/test/.../bank/BankTest.kt
+//
+// 上游 BankItem 的真实字段：
+//   Choice: type, material, question, options(List<String>), answer(Int? 0–3),
+//           evidence(Set<Int> 句号序号), explain(String), number(Int?), flaws(Map<Int,String>), points
+//   Essay:  type, material, question, points(List<String>), limit(Int?), explain
+//
+// 上游的导入入口是粘贴文本而不是 JSON，认【题型】【材料】【题目】【答案】【依据】【解析】【要点】
+// 【错因】【字数】这些标签，选项认 A. / A、/ A．/ (A) / A)，分题认 --- 或「第 3 题」「3.」。
+//
+// 本文件当前与上游还有三处不一致，是下一步要改的（不是没想到，是这一轮没改）：
+//   1. 答案：这里存文本（'B' / '600 吨'），上游存选项下标 Int? 0–3。
+//   2. 依据：这里存一句定位句原文，上游存 evidence:Set<Int>——材料第几句。
+//      「定位」这一招真正要比的是句号，不是字符串。
+//   3. 没答案的题：这里整份退回，上游保留（answer=null，做完再点官方答案）。
+//      更贴上游的做法是保留题目、只把「先答后看」对这道题标为不可用。
+// 改这三处要同时改 thinking.js 的判定与两侧测试，所以单开一轮，不夹在这里。
 
 export const BANK_VERSION = 1
 
