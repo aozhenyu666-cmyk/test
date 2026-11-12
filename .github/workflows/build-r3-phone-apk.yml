@@ -64,6 +64,8 @@ jobs:
         run: |
           cd app
           flutter pub get
+          # 合并产物 app_*.arb 不入库，只有 lib/l10n/parts/*.arb；不先合并，gen-l10n 会缺键。
+          python3 tool/l10n_merge.py
           flutter build apk --release --flavor arm64 --target-platform android-arm64 --build-name 1.0.4 --build-number 10311445 --dart-define=DSH_UPDATE_REPO=aozhenyu666-cmyk/dsh-Go
       - name: Verify bundled runtime and package
         run: |

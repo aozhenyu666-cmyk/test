@@ -123,6 +123,10 @@ jobs:
           cd app
           # :app:compileFlutterBuildArm64Debug 需要 .dart_tool/package_config.json。
           flutter pub get
+          # 这一步也会编译 Flutter（compileFlutterBuildArm64Debug），而 gen-l10n 读的是合并后的
+          # app_*.arb。仓库里只有 lib/l10n/parts/*.arb，合并产物不入库，所以这里必须先合并一次：
+          # run 43061525642 就是因为漏了这一步，wall_page.dart 的 19 个键在 L10n 里不存在而失败。
+          python3 tool/l10n_merge.py
           cd android
           # settings.gradle.kts 第 5 行硬读 local.properties 且要求 flutter.sdk 存在；这文件被
           # gitignore 忽略（里面是本机 SDK 路径），平时由 flutter build 自动生成。单测要排在
