@@ -43,7 +43,8 @@ class FakeMount extends ProactiveChannel {
       'id': id,
       'from': from,
     });
-    return reply ?? view;
+    // 首屏那次读（action 为空）看到的还是卡本身：[reply] 只顶替写操作的结果。
+    return action == null ? view : (reply ?? view);
   }
 
   Map<String, Object?> get last => calls.last;
@@ -157,7 +158,8 @@ void main() {
     await tester.tap(find.text('点头，挂上去'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    expect(fake.last['action'], 'accept');
+    // 写成功之后这一页会自己重读一次（那一条的 action 是 null），所以查这一次而不是最后一条。
+    expect(fake.calls.map((c) => c['action']), contains('accept'));
   });
 
   testWidgets('M8 停着的卡：说停在哪，并给「接着推这张」（带着卡号）', (tester) async {
@@ -175,9 +177,9 @@ void main() {
     await tester.tap(find.text('接着推这张'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    expect(fake.last['action'], 'resume');
-    // 恢复要按卡号指认是哪一张，漏了 id 就等于点了个空。
-    expect(fake.last['id'], 'c9');
+    // 恢复要按卡号指认是哪一张，漏了 id 就等于点了个空。同样是「这一次调用」，不是最后一条。
+    final resume = fake.calls.lastWhere((c) => c['action'] == 'resume');
+    expect(resume['id'], 'c9');
   });
 
   testWidgets('M9 关掉的卡只读：还能开新卡，但不给「接着推」也不给再关一次', (tester) async {

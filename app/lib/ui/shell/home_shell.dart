@@ -255,6 +255,8 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
   Widget _tabBar(HomeTab shown, NativePanel? bouts) {
     final l = context.l10n;
     return Padding(
+      // Named so the geometry tests can ask where the page's foot sits.
+      key: const ValueKey('home-tab-bar'),
       padding: EdgeInsets.fromLTRB(16, 8, 16, 8 + MediaQuery.paddingOf(context).bottom),
       child: SegmentedPill<HomeTab>(
         segments: [
