@@ -40,6 +40,10 @@ const CONDITIONS = {
   行数: (input) => String(input.text || '').split('\n').filter((l) => l.trim()).length,
   每行最多字: (input) => Math.max(0, ...String(input.text || '').split('\n').map((l) => l.trim().length)),
   字数: (input) => measure('字数', input),
+  // 字数只比「至少」；要「不超过 N 字」得单独写这一条，比较方向是 ≤。
+  字数上限: (input) => measure('字数', input),
+  模糊词数: (input) => measure('模糊词数', input),
+  因果连接词数: (input) => measure('因果连接词数', input),
   具体名词数: (input) => measure('具体名词数', input),
   有无结论句: (input) => measure('有无结论句', input),
   问句数: (input) => measure('问句数', input),
@@ -463,7 +467,8 @@ export function checkPass(conditions, input = {}) {
 function compareCondition(name, got, want) {
   // 判词比 pass：'pending'（复述交给模型判）在这一层不算过——代码没判过就不许往下走。
   if (name === '招式判定') return String(got) === 'pass'
-  if (name === '每行最多字' || name === '填充词比例' || name === '应答延迟' || name === '与他近5条的重合率') {
+  if (name === '每行最多字' || name === '填充词比例' || name === '应答延迟' || name === '与他近5条的重合率'
+    || name === '字数上限' || name === '模糊词数') {
     return Number(got) <= Number(want)
   }
   if (name === '有无结论句') return Boolean(got) === Boolean(want)

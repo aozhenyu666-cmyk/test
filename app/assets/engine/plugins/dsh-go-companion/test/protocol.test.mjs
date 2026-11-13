@@ -369,6 +369,27 @@ test('J2 过关：条件名表包含施工书示例用到的两个', () => {
   assert.ok(conditionNames().includes('每行最多字'))
 })
 
+// 「15~25 字」这种区间以前写不出来：字数只比「至少」。现在补了一条比「至多」的。
+test('J2 过关：字数上限比的是「不超过」，不是「至少」', () => {
+  assert.equal(checkPass({ 字数上限: 25 }, { text: '十'.repeat(25) }).pass, true)
+  assert.equal(checkPass({ 字数上限: 25 }, { text: '十'.repeat(26) }).pass, false)
+  // 和「字数」同时写才是区间；只写上限时下限不设，一两个字也算过。
+  const range = { 字数: 15, 字数上限: 25 }
+  assert.equal(checkPass(range, { text: '十'.repeat(10) }).pass, false)
+  assert.equal(checkPass(range, { text: '十'.repeat(20) }).pass, true)
+  assert.equal(checkPass(range, { text: '十'.repeat(30) }).pass, false)
+})
+
+test('J2 过关：模糊词数是「越少越好」，期望 0 时出现一个就不过', () => {
+  assert.equal(checkPass({ 模糊词数: 0 }, { text: '哈希表查找是 O(1)' }).pass, true)
+  assert.equal(checkPass({ 模糊词数: 0 }, { text: '大概就是这样' }).pass, false)
+})
+
+test('J2 过关：因果连接词数是「至少几个」，没有连接词就不过', () => {
+  assert.equal(checkPass({ 因果连接词数: 1 }, { text: '因为命中率高，所以延迟低' }).pass, true)
+  assert.equal(checkPass({ 因果连接词数: 1 }, { text: '哈希表查找是 O(1)' }).pass, false)
+})
+
 // ── 解释器 ──────────────────────────────────────────────────
 
 function runnerOf(spec, clock = { now: NOW }) {

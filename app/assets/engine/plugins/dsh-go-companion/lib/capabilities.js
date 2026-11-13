@@ -26,6 +26,14 @@ const STOPWORDS = new Set(['然后', '就是', '那个', '这个', '因为', '�
 const ABSTRACT = new Set(['问题', '事情', '东西', '情况', '方面', '过程', '方法', '意义', '价值', '影响', '结果', '状态'])
 const CONCLUSION_WORDS = ['所以', '因此', '总之', '结论', '可见', '这说明', '总结']
 const FILLERS = ['嗯', '啊', '呃', '那个', '就是', '然后', '这个']
+/**
+ * 模糊词：说了等于没说。
+ * 用一条「长的排前面」的交替正则一次扫完：这样「大概就是」算 1 次，
+ * 不会被拆成「大概」再算一次——同一处含糊不重复罚。
+ */
+const VAGUE_WORDS = ['那个东西', '某种程度上', '大概就是', '大概', '差不多', '基本上', '之类的', '什么的', '反正', '怎么说']
+/** 显式因果/对比连接词。只认写出来的，认不出「隐含的因果」——那是模型的事，不是数出来的。 */
+const CAUSAL_WORDS = ['因为', '所以', '因此', '由于', '导致', '前提是', '漏洞在于', '漏洞是', '否则', '但是', '相比', '对比', '反过来']
 
 /** 去掉空白后的字符数。 */
 export function countChars(text) {
@@ -94,6 +102,27 @@ export function fillerRatio(text) {
   return hits / total
 }
 
+/**
+ * words 里任意一个词出现了几次。长词优先，互不吃掉——
+ * 「大概就是」只算 1 次，不会同时算上「大概」。
+ */
+function countAny(text, words) {
+  const raw = String(text || '')
+  if (!raw || !words.length) return 0
+  const pattern = [...words].sort((a, b) => b.length - a.length).join('|')
+  return (raw.match(new RegExp(pattern, 'g')) || []).length
+}
+
+/** 模糊词出现次数。0 才是「说清楚了」。 */
+export function countVague(text) {
+  return countAny(text, VAGUE_WORDS)
+}
+
+/** 显式因果/对比连接词出现次数。看不出隐含因果，只认写出来的词。 */
+export function countCausal(text) {
+  return countAny(text, CAUSAL_WORDS)
+}
+
 function bigrams(text) {
   const clean = String(text || '').replace(/[\s\p{P}]/gu, '')
   const out = new Set()
@@ -127,6 +156,8 @@ const METRICS = {
   应答延迟: (input) => answerDelay(input),
   填充词比例: (input) => fillerRatio(input.text),
   与他近5条的重合率: (input) => overlapWithRecent(input.text, input.recent),
+  模糊词数: (input) => countVague(input.text),
+  因果连接词数: (input) => countCausal(input.text),
 }
 
 /** 每一项：{ 类, run? }。run 只有度量类有——它是纯函数，零模型。 */
