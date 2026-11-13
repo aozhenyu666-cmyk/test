@@ -68,6 +68,9 @@ export function isFun(pkg) {
   return FUN.has(pkgOf(pkg))
 }
 
+/** 内置娱乐包名表。apps.js 算「锁着要拦哪些」时要它，别在那边抄一份。 */
+export const FUN_PACKAGES = Object.freeze([...FUN].sort())
+
 /**
  * 洗一遍手机带来的现状。认不出来就返回 null，prompt 里不写。
  *

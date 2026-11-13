@@ -10,6 +10,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { dayString } from './daily.js'
+import { hm, ymd } from './tz.js'
 import { AUDIT_DIR, WALL_DIR } from './vault_wall.js'
 
 export const SELF_FILE = '我.md'
@@ -77,7 +78,7 @@ export function kbWrite(dir, file, markdown, now = Date.now()) {
   if (name === SELF_FILE && existsSync(path) && readText(path).trim()) return { ok: false, text: SELF_FILE + ' 已经是他写的了，你不能覆盖；想改哪条就跟他说。' }
   try {
     mkdirSync(dir, { recursive: true })
-    const stamp = '<!-- ' + (name === SELF_FILE ? '鲸澜起草，等他改' : '鲸澜更新') + ' · ' + new Date(now).toISOString().slice(0, 16).replace('T', ' ') + ' UTC -->\n'
+    const stamp = '<!-- ' + (name === SELF_FILE ? '鲸澜起草，等他改' : '鲸澜更新') + ' · ' + ymd(now) + ' ' + hm(now) + ' -->\n'
     writeFileSync(path, stamp + body + '\n', 'utf8')
     return { ok: true, text: '写好了：' + path, file: path }
   } catch (error) {
@@ -264,7 +265,7 @@ function clockIn(now, tz) {
   try {
     return new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(now))
   } catch {
-    return new Date(now).toISOString().slice(11, 16)
+    return hm(now)
   }
 }
 

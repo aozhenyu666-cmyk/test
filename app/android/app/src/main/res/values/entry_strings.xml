@@ -4,5 +4,9 @@
 <resources>
     <string name="shortcut_new_chat">New chat</string>
     <string name="shortcut_voice_input">Voice input</string>
+    <string name="shortcut_bouts">Bouts</string>
     <string name="tile_new_chat">New chat</string>
+    <string name="tile_bouts">Bouts</string>
+    <string name="tile_bouts_today">Today · %1$d beats</string>
+    <string name="tile_bouts_running">Running · today %1$d</string>
 </resources>

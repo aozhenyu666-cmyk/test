@@ -25,6 +25,8 @@ internal object CoreCodec {
         "yields" to e.yields, "agentRequestId" to e.agentRequestId, "agentAttempts" to e.agentAttempts,
         "agentDeadline" to e.agentDeadline, "agentRequestedAt" to e.agentRequestedAt, "agentAcceptedAt" to e.agentAcceptedAt, "agentClaimedAt" to e.agentClaimedAt,
         "generatedAt" to e.generatedAt, "agentError" to e.agentError, "lateResults" to e.lateResults,
+        // B4 的连发计划刻意不存：它只决定"这几秒怎么把话说出去"，进程重启后再恢复出来已经晚了，
+        // 那就整段发一次（读回来 burst 为 null，正好是这个行为）。
         "content" to e.content?.let { linkedMapOf("text" to it.text, "source" to it.source.name, "agentTurnId" to it.agentTurnId) },
         "surface" to e.surface?.name, "token" to e.token, "presentDeadline" to e.presentDeadline,
         "presentedAt" to e.presentedAt, "deliveredAt" to e.deliveredAt, "shownAt" to e.shownAt,

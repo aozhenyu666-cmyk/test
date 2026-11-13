@@ -10,6 +10,8 @@
 
 export const GEMINI_PACKAGES = ['com.google.android.apps.bard', 'com.google.android.googlequicksearchbox']
 
+import { hm, md, ymd } from './tz.js'
+
 export const GEMINI_MODES = {
   study: '学习陪练：围绕主题提问、让他讲给你听、抽查他是不是真懂，讲错了直接指出。',
   think: '共脑：帮他把这件事想清楚——反问、摆出两三个选项、逼他给出判断和理由。',
@@ -134,7 +136,8 @@ export function trackGemini(state, phone, now, packages = GEMINI_PACKAGES) {
 
 /** 一条复盘写成 markdown（追加进笔记库 Gemini/日期.md）。 */
 export function recapMarkdown(r, at) {
-  const t = new Date(Number(at) || Date.now()).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
+  const when = Number(at) || Date.now()
+  const t = ymd(when) + ' ' + hm(when)
   const lines = ['', '## ' + t + (r.topic ? ' · ' + r.topic : ''), '', '- 做了什么：' + r.summary]
   if (r.stuck) lines.push('- 卡在哪：' + r.stuck)
   if (r.next) lines.push('- 下一步：' + r.next)
@@ -151,7 +154,7 @@ export function geminiLines(state, now = Date.now()) {
   }
   const r = Array.isArray(s.recaps) ? s.recaps[s.recaps.length - 1] : null
   if (r && now - Number(r.at) < 3 * 86_400_000) {
-    lines.push('他最近一次跟 Gemini 连麦（' + new Date(Number(r.at)).toISOString().slice(5, 16).replace('T', ' ') + ' UTC' + (r.topic ? '，' + r.topic : '') + '）：' +
+    lines.push('他最近一次跟 Gemini 连麦（' + md(Number(r.at)) + ' ' + hm(Number(r.at)) + (r.topic ? '，' + r.topic : '') + '）：' +
       String(r.summary).slice(0, 200) + (r.stuck ? '；卡在：' + String(r.stuck).slice(0, 80) : '') + (r.next ? '；下一步：' + String(r.next).slice(0, 80) : '') + '。可以接着这个话题。')
   }
   return lines

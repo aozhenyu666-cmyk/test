@@ -276,14 +276,19 @@ DSHAPP url dsh web: http://127.0.0.1:51234/?token=launch-tok
 
     for (final failingPs in [false, true]) {
       test('legacy node-like unrelated process survives (ps fails: $failingPs)', () async {
-        final sleep = Process.runSync('sh', ['-c', 'command -v sleep']).stdout.toString().trim();
-        final alias = Link('${bin.path}/node-unrelated')..createSync(sleep);
-        final other = await Process.start(alias.path, ['30']);
+        // The process is an ordinary sleep; what makes it node-like is its `ps`
+        // line, which is all `ours` has to go on when there is no web.st. (It
+        // cannot be a real process named node-unrelated: this runner's
+        // /usr/bin/sleep is coreutils, which refuses to run under a foreign
+        // name — "Security violation: Requested utility ... does not match".)
+        // Matching loosely on "node" or "dsh web" here would kill it.
+        final other = await Process.start('sleep', ['30']);
         addTearDown(other.kill);
-        if (failingPs) {
-          final ps = File('${bin.path}/ps')..writeAsStringSync('#!/bin/sh\nexit 1\n');
-          Process.runSync('chmod', ['+x', ps.path]);
-        }
+        final ps = File('${bin.path}/ps')
+          ..writeAsStringSync(
+            failingPs ? '#!/bin/sh\nexit 1\n' : '#!/bin/sh\necho "node /usr/lib/node_modules/dsh/bin/dsh web"\n',
+          );
+        Process.runSync('chmod', ['+x', ps.path]);
         final dir = Directory('${home.path}/.dsh-app-remote')..createSync();
         File('${dir.path}/web.pid').writeAsStringSync('${other.pid}\n');
         File('${dir.path}/web.cmd').writeAsStringSync('dsh web');

@@ -20,11 +20,12 @@ import { DEFAULT_LIMITS, Desk, SOURCE_KIND } from './core.js'
 import { BACKGROUND_LIMIT, backgroundFacts, loadCandidates, openMemoryDb } from './topics.js'
 import { buildPrompt } from './prompt.js'
 import { appendLedger, readLedger, summarize } from './ledger.js'
-import { plan as decide } from './plan.js'
-import { DEFAULT_TZ, minuteOfDay as zoneMinuteOfDay, startOfDay as zoneStartOfDay, weekdayOf, zoneOr } from './tz.js'
+import { plan as decide, inQuiet } from './plan.js'
+import { DEFAULT_TZ, hm as zoneHm, md as zoneMd, minuteOfDay as zoneMinuteOfDay, startOfDay as zoneStartOfDay, weekdayOf, zoneOr } from './tz.js'
 import { classifyReply } from './classify.js'
 import { gardenClass, judgeReply } from './judge.js'
-import { isStock } from './stock.js'
+import { RECENT_WINDOW, SKIP_STATE, contentGate, gateRound, isStock, nounsOf, recentOwnTexts } from './stock.js'
+import { BURST_HOURLY_CAP, behaviorOf, emotionLine, emotionOf, voiceOf } from './emotion.js'
 import { capCount, nextShot, rallyStats } from './rally.js'
 import { pickServeType } from './serve.js'
 import { LIGHTER_TYPES, mutedUntil, serveWeights, silenceState } from './silence.js'
@@ -49,36 +50,97 @@ import {
 } from './garden.js'
 import { lastReplyClass, exportImportantMemories, readCommitments, readCorePersona, readMood } from './context.js'
 import { cleanPhone, funToday, worthObserving } from './phone.js'
+// 外接 APP：他自己声明的应用名单（config.apps）压过内置的娱乐类包名表。
+import { blockDuringLock, cleanApps, declaredFun, remark, roleOf } from './apps.js'
 import { NOTES_CANDIDATES, agendaLines, capabilityLines, companionChatText, roleNames, strategistChatText } from './roles.js'
+import { fitBudget, stripInjection } from './budget.js'
+// B3：素材池（例句池 / 关键词卡 / depth 预算系数）。文件在用户笔记库里，缺了用内置种子。
+import { RECENT_SKIP, countWords, depthBudget, keywordCard, pickSamples, readManualKeywords, readSamples, recentNoteTexts } from './samples.js'
 import { tide as tideOf, tideGap, tideHourly, vagueStreak } from './tide.js'
 import { FACES, stepTemper, temperLine } from './temper.js'
-import { drillLines, drillOf, pickDrill, scoldLines } from './drills.js'
+// C2 的四个操作判定（judgeOp/nextOp/opQuota/opStats）和九种思维题同一个模块：
+// 判定纯函数在 drills.js，这里只负责收答案、记账、把进度挂进面板。
+import { OP_META, OP_ORDER, demoOf, drillLines, drillOf, failsToday, judgeOp, nextOp, opQuota, opStats, pickDrill, scoldLines } from './drills.js'
 import { normalizeTracks, pickTrack, recentTracks, trackStatus } from './tracks.js'
+// C1 挂载卡：纯函数在 mount.js，这里只负责落盘、路由和注入。
+import {
+  MEMORY_LEAK_TRACK, acceptProposal, closeCard, driftOf, mountLine, mountStatus, nextStreak, normalizeCard,
+  openCard, parkCard, propose as proposeMount, proposeCap, resumeCard, scaffold, shouldShowCard, withGiven, withStep,
+} from './mount.js'
 // 第六轮 C：暗思考（后台自己整理，不开口）。
 import { museSweep, museStatus } from './muse.js'
+// 第七轮 B2：暗思考的第二层——夜间整理（允许调模型，产物是素材不是消息，走 llm.stream）。
+import {
+  carryTexts, cleanNightly, emptyNightly, gapTexts, linkWords, mergeNightly,
+  nightlyDue, nightlyInputs, nightlyLines, nightlyStatus, resolveNightly, tidyNightly,
+} from './nightly.js'
 // 第六轮 D：姐妹自建工作流的护栏（配额 + 试启用 + 到期自动停 + 能力层拦墙）。
 import { workflowAct, workflowPropose, workflowStatus, workflowSweep } from './workflows.js'
 import { REQUIRED_FIELDS, WORKFLOW_ALLOW } from './workflows.js'
 import { brainLines, chooseFace, cleanBrain, drillScorer, observe, onReply, onServe, onSilent, revise, updateArm } from './brain.js'
 import { appendPrediction, checkClaim, cleanLedger, dueCount, emptyLedger, predictionLines, settle } from './predict.js'
+import { agreementRate, appendStance, checkStance, cleanStances, hitRate, isYield, reviseStance, settleStances, stanceBlock, stanceDigest, yieldLine } from './stance.js'
 import { buildVibe, pickedArms, renderVibe } from './vibe.js'
 import { decideForce, forceLines, refuseSwitch } from './force.js'
-import { BUSY_CHECK_MS, BUSY_DEFAULT_MIN, BUSY_MAX_MIN, aiTask, applyGear, effectiveGear, gearLines, gearSwitch } from './gear.js'
+import { BUSY_DEFAULT_MIN, BUSY_MAX_MIN, aiTask, applyGear, effectiveGear, gearLines, gearSwitch } from './gear.js'
 import { trustGap, trustLines, trustScore } from './trust.js'
 import { buildSnapshot, sistersView } from './panel.js'
-import { kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
+import { boutsBooksView, boutsNowView, boutsProtocolsView, boutsQueueView } from './bouts_view.js'
+import { boutsTileStatus, buildBoutsSnapshot } from './bouts_panel.js'
+// 第八轮 P1/P2：计划的节拍。草案、到点开局、过点记空局的规则全在 planwire.js，这里只接线。
+import { planLines, planOf, tick } from './planwire.js'
+// 第八轮 W2：墙的面板。数据层自己不含措辞，只读 machine/wall_voice/settings 的现成结论。
+import { buildWallSnapshot } from './wall_panel.js'
+import { wallAuditView, wallView } from './wall_view.js'
+import { settingsOf, applySettings, dayKindOf } from './settings.js'
+// 第八轮 W4：设定页。解析、渲染、预填都在 settings_panel.js，这里只接线。
+import { buildSettingsSnapshot, parseDay, parseLimits, settingsMarkdown } from './settings_panel.js'
+import { settingsDayView, settingsLimitsView } from './settings_view.js'
+import { builtinProtocolOf, builtinProtocols } from './builtin.js'
+// 第八轮 P4 的第二条：思维局开局时摊成普通步骤，执行器一行不改。
+import { parseBank } from './bank.js'
+import { expandThinking } from './thinking.js'
+import { loadProtocol } from './protocol.js'
+import { createOfficial } from './boutrun.js'
+// 第八轮 P5：排一段专注之前的必答项。规则在 autobout.js，这里只接线。
+import { answerPrompt, missingAnswers } from './autobout.js'
+import { listBouts, listEscalations, listVerdicts, openBoutsDb, reapRunning, runningBout, startEscalation } from './bouts.js'
+// 第八轮 P4 接线：一条回答 → 分类 → 记敷衍 → 判升级 → 落手机。全部在 ladder.js 里，
+// 这里只负责把状态读写、数据库、手机快照喂给它。
+import { ALL_LOCK, CELL, funStep, landing, rowOf, step as ladderStep } from './ladder.js'
+import { evaluateEPrime } from './escalate.js'
+import { JUDGE_FILE, SELF_FILE, appendVerdictDaily, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, absentAnchors, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import {
   FOLLOWUP_CAP_MS, FOLLOWUP_PENALTY, STANDBY_LOCK_MS, addObligation, checkVerdict, clearObligation, closeLock, followupView,
   funBlockedBy, lockActive, lockExpired, obligationOf, obligationsView, openLock, standbyDue, takeReask,
 } from './followup.js'
-import { BRAIN_MIN_MS, SPRINT_LONG_MIN, SPRINT_MIN, resolveState } from './machine.js'
+import { BRAIN_MIN_MS, SPRINT_LONG_MIN, SPRINT_MIN, resolveState, toolsElsewhere, toolsFor } from './machine.js'
+
+/**
+ * R7 P0-3：主状态是按钟点算的（深夜锁 00:30–07:00、吃饭时段都是钟点条件），而工具子集又跟着
+ * 主状态走。同一份代码在夜里跑和白天跑挂出来的工具不是同一套，单测没法确定自己跑在哪个状态。
+ *
+ * 这里是唯一的测试口子：把主状态钉成某个 id。生产环境永远不会调它（`null` = 真实计算），
+ * 它不改变任何判定逻辑，只是让「挂载时刻是哪个状态」变成用例能声明的东西。
+ */
+let statePin = null
+/** apply() 起来后由它填：钉一次状态就顺手按新子集重挂一遍（走的正是生产那条 syncTools）。 */
+let remountAll = null
+/** 单测用：钉住主状态并立刻重挂工具；传 null / 空值恢复真实计算。 */
+export function setStatePin(id) {
+  statePin = id || null
+  if (typeof remountAll === 'function') remountAll()
+}
 import {
   DEFAULT_WALL, wallConfig, wallDecision, mealNow, activeRelax, tightenActive, relaxRemaining, relaxUsedThisWeek, relaxBonus,
   trackApplyWindow, applyWindowOpen, dayKey, weekKey, WALL_KIND_DEFAULT, wallDefianceText,
 } from './wall.js'
 import { dailyPath, dayString, keywordsOf, loadDaily, normalizeTasks, reconcile, reviewText, writeDaily } from './daily.js'
-import { DEPARTMENTS, completeOf, depositLines, depositOf, missingText, normalizeEntry, statusOf, withEntry } from './deposit.js'
+// A2：白天的时间表（纯函数在 daily.js 里；这里只接线和落账）。
+import { DEPTS, TRIGGER_TEXT, blockLine, fixedBlocksOf, lateLine, markBlockDone, planSweep, reschedule as reschedulePlan, schedule, scheduleText } from './daily.js'
+import { DEPARTMENTS, DEPT_DUTY, appendSlot, behaviorReport, completeOf, depositLines, depositOf, missingText, normalizeEntry, reconcileEntry, slotAsk, statusOf, withEntry } from './deposit.js'
+import { AUDIT_CODES, APPEAL_CODES, APPEAL_MAX_PER_DAY, appealLeft, appealVoice, verdictVoice, wallThread } from './wall_voice.js'
 import {
   SCREENSHOT_DIRS, auditTask, baselineFor, checkMorningTasks, evidenceType, listScreenshots, loadWallMemory,
   noteDone, notePromised, pruneMemory, recentRate, statOf, wallText,
@@ -115,6 +177,9 @@ const DEFAULTS = Object.freeze({
   owner: '主人',
   self: '大肥鱼',
   timeZone: DEFAULT_TZ,
+  // R7 P0-2：时间基准固定北京时间。为真时忽略手机请求里的 timeZone（他出国 / 模拟器设成纽约都不带偏），
+  // 一律按 DEFAULT_TZ 算。关掉才会跟着手机时区走。
+  lockTimeZone: true,
   // 人格卡（口吻、口头禅、兴趣、关系、能说多狠、不碰的话题）和两种模式。
   persona: {},
   mode: 'partner',
@@ -131,6 +196,8 @@ const DEFAULTS = Object.freeze({
   strategistName: '鲸澜',
   // 他给了高权限：主动找他的那一轮也能动手（设提醒、退出 App、调手机）。DSH 自己的审批照常生效。
   proactiveTools: true,
+  // 念出来（B5）：默认关。关着浮层照常，只是不出声——不联网的系统 TTS 也得他自己点头。
+  voice: false,
   companionCard: '',
   strategistCard: '',
   // 做题模式：默认关，主线是聊天。说"开始做题 / 做题模式"打开，"别出题了"关掉。
@@ -145,6 +212,9 @@ const DEFAULTS = Object.freeze({
   gear: 'free',
   // Gemini 的包名（Gemini App / Google App 里的 Gemini）。
   geminiPackages: GEMINI_PACKAGES,
+  // 连麦舱里"其余第三方 App"的宽限：从白名单 App 跳出去、或者进了一个没见过的 App，
+  // 先放这么多毫秒（只提示不锁），超了才升到 4 级锁。图库/文件/相机走系统应用，不受这个影响。
+  sessionGraceMs: 45_000,
   // 判球可以单独配一个更快的模型；没配就沿用会话自己的 provider/model。
   judgeProvider: undefined,
   judgeModel: undefined,
@@ -215,6 +285,9 @@ function readConfig() {
       // no legacy config
     }
   }
+  // R7 P0-2：锁定时区就无视存下来的 timeZone——老配置里可能已经写进了手机时区（比如模拟器的 UTC）。
+  // 这一行兜住所有 `zoneOr(config.timeZone)` 的调用点，不用逐个改。
+  if (merged.lockTimeZone !== false) merged.timeZone = DEFAULT_TZ
   return merged
 }
 
@@ -296,6 +369,12 @@ function writeJson(file, value) {
 
 // 引擎跑在 TZ=GMT，凡是「今天」「零点」都必须按手机时区算，所以这里显式要 tz。
 // /plan 允许每次请求带上 timeZone（APP 那边知道手机时区），其余入口用配置里的。
+// R7 P0-2：`lockTimeZone` 为真（默认）时请求体里的时区一概不认，固定北京时间。
+function requestZone(tzIn, config) {
+  if (config.lockTimeZone !== false) return DEFAULT_TZ
+  return zoneOr(tzIn || config.timeZone)
+}
+
 function startOfDay(now, tz) {
   return zoneStartOfDay(now, zoneOr(tz))
 }
@@ -406,6 +485,17 @@ function judgeTargetOf(ctx, sessionId, config) {
   return undefined
 }
 
+/**
+ * B2 夜间整理用哪个模型：和判球同一套优先级（单独配的优先，否则跟会话自己的）。
+ * 拿不到就返回空对象 —— tidyNightly 会直接返回失败，不会因为没模型卡住 /plan。
+ */
+function nightlyTargetOf(ctx, config) {
+  const np = config?.nightlyProvider
+  const nm = config?.nightlyModel
+  if (typeof np === 'string' && np && typeof nm === 'string' && nm) return { provider: np, model: nm }
+  return judgeTargetOf(ctx, config?.sessionId, config) || {}
+}
+
 function messageText(data) {
   const content = data?.content
   if (!Array.isArray(content)) return ''
@@ -462,6 +552,11 @@ export function apply(ctx) {
     return undefined
   }
 
+  /** 他声明的应用名单（config.apps）。空数组＝全按内置的娱乐类包名表判。 */
+  const appsOf = () => cleanApps(config.apps)
+  /** 手机现状洗一遍，再按他声明的名单重标娱乐类。三处调用都走这个口，别直接 cleanPhone。 */
+  const phoneOf = (raw) => remark(cleanPhone(raw), appsOf())
+
   function record(entry) {
     appendLedger(home(), { v: 1, ...entry })
   }
@@ -469,6 +564,8 @@ export function apply(ctx) {
   // ---------------------------------------------------------------- 大脑
   // 大脑和脾气各存一个小文件；读坏了就从空的开始，绝不让一轮卡住。
   /** sessionId -> 他最后一次亲口说话的时间：正在聊就不用主动发球。 */
+  // 每个会话上一球发出去的原文：判球用它对上这一拍，改口检测用它比「她前后两句」。
+  const lastServeOf = new Map()
   const lastHumanAt = new Map()
   /** 他说完这么久之内算"正在聊"。 */
   const IN_CONVERSATION_MS = 3 * 60_000
@@ -491,11 +588,27 @@ export function apply(ctx) {
   // 预判账本：模型只写 claim，verdict 由墙的遥测填（predict.js 里 settle 是唯一出口）。
   const loadPredict = () => cleanLedger(readState(stateFile('predict.json'), null))
   const savePredict = (p) => writeJson(stateFile('predict.json'), p)
+  // 立场账本（A1）：她说过的话。status/settleSource 只由 stance.js 的 settleStances 写。
+  const loadStances = () => cleanStances(readState(stateFile('stances.json'), null))
+  const saveStances = (s) => writeJson(stateFile('stances.json'), s)
+  // B2 夜间整理：产物是素材（links/gaps/carry），不是消息，也不进账本正文。
+  const loadNightly = () => cleanNightly(readState(stateFile('nightly.json'), null))
+  const saveNightly = (s) => writeJson(stateFile('nightly.json'), s)
+  // 最近 20 轮她有没有退让。单独一个文件，不塞 ledger.jsonl：账本有按行位置断言的既有用例，
+  // 每轮加一行的退让记录会把它们挤动。
+  const loadYieldTurns = () => readState(stateFile('stance-yield.json'), null) || []
+  const saveYieldTurns = (t) => writeJson(stateFile('stance-yield.json'), (Array.isArray(t) ? t : []).slice(-20))
   // 上轮注入了哪几个 arm：这一球被拉回来时按它们各自记账（§13.1）。进程重启就丢，可接受。
   let lastVibePicks = []
   let lastVibe = { face: '', turn: 0 }
+  /** B2：一次只跑一个夜间整理。/plan 会被频繁问到，不挡一下就会并发发起好几次模型调用。 */
+  let nightlyRunning = false
   /** requestId -> 发球时的现状（generated 时交给大脑开始计"有没有拉回来"）。 */
   const servedContext = new Map()
+  /** B1：sessionId -> 这一轮已经被守卫打回过的判定（只留最近一次，重写只有一个机会）。 */
+  const gateTries = new Map()
+  /** B1：requestId -> 这一轮不发。手机拿到 409 skip-no-content 就静默收尾，不重试。 */
+  const suppressed = new Set()
   /** requestId -> first seen moment, for the median latencies in /status (P6). */
   const startedAt = new Map()
 
@@ -589,10 +702,51 @@ export function apply(ctx) {
   function lastStockBall(entries) {
     for (let i = entries.length - 1; i >= 0; i -= 1) {
       const e = entries[i]
+      // B1：被信息增量守卫打回、没发出去的那一句，也算"上一球等于没说"，下一球要换个写法重写。
+      if (e?.state === 'stock-rewrite' && e.text) return String(e.text)
       if (e?.state !== 'generated' || !e.text) continue
       return e.stock === true ? String(e.text) : null
     }
     return null
+  }
+
+  /**
+   * B4：一小时内已经发出去了多少条（连发按条数算，不按"几轮"算）。
+   * 账本里那一条记着当时的 burst 计划，所以重发一轮 burst=3 就占掉 3 条额度。
+   */
+  function burstUsedLastHour(entries, now) {
+    let n = 0
+    for (const e of entries) {
+      if (e?.state !== 'generated' || !(Number(e.at) > now - 3_600_000)) continue
+      n += Math.max(1, Number(e.burst?.burst) || 1)
+    }
+    return n
+  }
+
+  /**
+   * B1：信息增量守卫。生成出来的句子过两道：和自己最近 5 句的重合率、有没有具体名词。
+   * 一次重写机会（规则见 stock.js 的 gateRound）：重写还重复就这一轮不发（账本 `skip-no-content`），
+   * 只是不沾具体名词则重写一次后照发。两者都不算失败、不重试。
+   * @returns {{action:'send'|'rewrite'|'skip', state?:string, code?:string}}
+   */
+  function gateBall(r) {
+    const sid = String(r.sessionId || '')
+    const served = servedContext.get(String(r.requestId))
+    const tries = [...(gateTries.get(sid) || [])]
+    const own = readLedger(home(), 60).filter((e) => e.sessionId === sid)
+    const verdict = contentGate(r.text, { recent: recentOwnTexts(own, RECENT_WINDOW), nouns: served?.nouns })
+    tries.push(verdict)
+    const round = gateRound(tries)
+    // 只有"还要重写"的那一遍留在 gateTries 里；放行或收摊都清掉，下一轮重新算。
+    if (round.action === 'rewrite') gateTries.set(sid, tries.slice(-1))
+    else gateTries.delete(sid)
+    return {
+      action: round.action,
+      // 放行时不改账本状态（就是 generated）；打回和不发各有自己的状态名。
+      state: round.action === 'send' ? r.state : round.action === 'skip' ? SKIP_STATE : 'stock-rewrite',
+      code: round.code || verdict.code,
+      soft: round.soft,
+    }
   }
 
   async function compose(req, sessionId) {
@@ -612,7 +766,7 @@ export function apply(ctx) {
           busy: why.digest === true ? { ...(why.busy || {}), digest: why.digestText || (why.digestText = takeDigest()) } : why.busy,
           contact: contactLines(readLedger(home(), 400), now),
           gemini: why.gemini,
-          phone: cleanPhone(req?.phone),
+          phone: phoneOf(req?.phone),
           commitments: readCommitments(home(), now, 3),
           facts: backgroundFacts(candidates, BACKGROUND_LIMIT),
           vault,
@@ -659,7 +813,7 @@ export function apply(ctx) {
       // 模式决定从哪几种球里挑：伙伴偏闲聊/记忆，教练偏观察/挑衅。前三种里挑。
       const mode = effectiveMode(config, now)
       // 手边的情况由手机在 /request 里带来；没带就是不知道，观察球就不打（没东西可观察只能编）。
-      const phone = cleanPhone(req?.phone)
+      const phone = phoneOf(req?.phone)
       const order = modeServeOrder(mode).filter((t) => t !== 'observe' || phone)
       const picked = pickServeType(entries, Math.floor(Math.random() * 100), {
         only: lighter ? LIGHTER_TYPES : order.slice(0, 3),
@@ -687,28 +841,59 @@ export function apply(ctx) {
       const owed = drillsOn ? lastDrillOutcome(entries, now) : null
       const scold = owed ? scoldLines(drillOf(owed.drill), owed) : []
       if (owed?.silent) onSilent(brain, { requestId: owed.requestId })
+      // 要锁的那一球和欠着的那一题都必须出思维题：操作题没有合格线，放不了行（E2E 挂过在这里）。
+      const mustDrill = force.level >= 3 || scold.length > 0
       // 在娱乐 App 里越陷越可能出题；要锁的那一球一定出题（答过线才放行）。
       // 阶梯在"换更轻的球"时不随机出题（欠着的题除外）；温和模式又不知道他在干嘛时，也不凭空出题。
       const drillChance = !drillsOn ? 0
-        : force.level >= 3 || scold.length ? 1
+        : mustDrill ? 1
         : lighter ? 0
         : phone?.fun ? 0.45 + water.level / 200
         : mode === 'coach' ? 0.3 : 0
-      const drill = Math.random() < drillChance
+      // C2：链路说该练哪个操作了。挂载卡开着才有素材，所以它跟着 drillsOn 走。
+      const opDue = drillsOn ? (opQuota(entries, startOfDay(now, config.timeZone)).left > 0
+        ? nextOp(entries, startOfDay(now, config.timeZone))
+        : null) : null
+      const rolled = Math.random() < drillChance
+      // 出题这一球真的命中了才轮得到操作题：欠着的思维题要先补（同一题重问），
+      // 没欠着就让「该练的那个操作」顶掉随机思维题——两者共用一个槽位，不叠着出。
+      const drill = rolled && (!opDue || mustDrill)
         ? (scold.length ? drillOf(owed.drill) : pickDrill(entries, drillScorer(brain)))
         : null
-      if (drill) serveType = 'drill'
+      const drillOp = rolled && !drill ? opDue : null
+      if (drill || drillOp) serveType = 'drill'
       // 支线（第六轮 A）：配置里有几条就按"最近三条避开"挑一条。一条都没有 → null，主干不受影响。
-      const track = pickTrack(normalizeTracks(config.tracks).tracks, recentTracks(entries))
+      const track = pickTrack(normalizeTracks(configuredTracks()).tracks, recentTracks(entries))
       const firstToday = recent.counts.generated === 0
       saveBrain(brain)
       // 回合与拍数都从账本重建：进程重启不会丢，也不多存一份状态。
       const rally = nextShot(entries, { sessionId, now })
       const vault = vaultContext(now)
+      // B1：这一球手上有哪些"具体名词"（当前状态 / 记忆 / 暗思考产物 / 立场 / 今天的块）。
+      // 生成后拿它判这一句有没有信息增量——没有就是套话，判据在 stock.js。
+      const facts = backgroundFacts(candidates, BACKGROUND_LIMIT)
+      const episodes = (candidates.episodes || []).map((e) => e.text)
+      const nouns = nounsOf([topic, facts, episodes, commitments, vault, phone, drill, drillOp, track])
+      // B4：这一轮怎么发（连发几条、每条多长、间隔多久、发文字还是念出来）。
+      // 情绪是账本的纯函数，不另存状态；它只决定"怎么发"，不改任何锁、额度、判定。
+      const tzNow = zoneOr(config.timeZone)
+      const quietNow = inQuiet(now, config.quietStart, config.quietEnd, tzNow)
+      const emotion = emotionOf(entries, { now, tz: tzNow, quietStart: config.quietStart, quietEnd: config.quietEnd })
+      const burst = behaviorOf(emotion, {
+        now,
+        quiet: quietNow,
+        sentLastHour: burstUsedLastHour(entries, now),
+      })
+      // B5：这一条念不念（总开关 / 安静时段 / 渠道三道闸都在 voiceOf 里，返回 null 就是不念）。
+      // 渠道那一道：档位要念（hot/blaze/eager），或者漠视阶梯走到了"换渠道"那一级——
+      // 后者从第四轮就在账本里记 stage='channel'，一直没人接。
+      const voice = voiceOf(emotion, {
+        now, enabled: config.voice === true, quiet: quietNow, channel: burst.channel, stage: silence.stage,
+      }) || undefined
       const prompt = buildPrompt({
         topic,
-        facts: backgroundFacts(candidates, BACKGROUND_LIMIT),
-        episodes: (candidates.episodes || []).map((e) => e.text),
+        facts,
+        episodes,
         commitments,
         mood: mood ? mood.mood : undefined,
         replyClass: lastReplyClass(entries),
@@ -725,6 +910,10 @@ export function apply(ctx) {
         allowTools: config.proactiveTools !== false,
         temper: face,
         drill,
+        // C2：这一球练哪个操作（没有思维题时才轮到它，见上面 drillOp 的算法）。
+        drillOp,
+        // B2：暗思考整理出来的缺口——C 组出题往这儿出，比随机出题有由头。
+        gaps: gapTexts(loadNightly(), now),
         track,
         scold,
         beliefs: brainLines(brain),
@@ -736,10 +925,20 @@ export function apply(ctx) {
         owner: config.owner,
         self: config.dual === false ? config.self : roleNames(config).companion,
       })
-      servedContext.set(String(req?.requestId || ''), { phone, band: water.band, face: faceId, drill: drill?.id })
+      servedContext.set(String(req?.requestId || ''), { phone, band: water.band, face: faceId, drill: drill?.id, nouns })
       const extra = {
         tide: water.level, band: water.band, face: faceId, surprise: temper.surprise || undefined,
         drill: drill?.id, force: force.level || undefined, track: track?.id,
+        // C2：这一球练的是哪个操作。答案不再交给模型判，回球时按这个码走代码判。
+        drillOp: drillOp || undefined,
+        // B4：手机按这个计划发——连发几条、每条多长、间隔多久、发文字还是念出来。
+        // 它不改这一球的内容，只改投递方式（内容还是模型按人设写的）。
+        burst,
+        // B5：念出来的调子（语速/音高/单条上限）。没有就是不念。
+        // 它和 burst 分开：连发额度只剩 1 条时 burst 是 null，但这一条照样该念。
+        voice,
+        // 情绪那一行也带上：浮层/面板要看得到她现在什么状态。
+        emotion: emotionLine(emotion, now),
       }
       return { text: prompt, prompt, topic, serveType, rallyId: rally.rallyId, shot: rally.shot, silence, extra }
     } finally {
@@ -766,7 +965,7 @@ export function apply(ctx) {
     // 大肥鱼会在中午说"四点了快去睡"（人格测试测出来的）。
     makeMessage: (text) => ({
       id: randomUUID(), role: 'user', content: [{ type: 'text', text }],
-      source: { kind: 'user', rpcId: 'dsh-go-companion-say-' + randomUUID(), clientTimeZone: zoneOr(sayZone || config.timeZone) },
+      source: { kind: 'user', rpcId: 'dsh-go-companion-say-' + randomUUID(), clientTimeZone: requestZone(sayZone, config) },
     }),
     isArchived: (id) => isArchived(ctx, id),
     defaultSession: () => config.sessionId,
@@ -798,6 +997,8 @@ export function apply(ctx) {
       const key = String(r.requestId)
       const began = startedAt.get(key)
       if (r.state === 'accepted') startedAt.set(key, now)
+      // B1：生成出来的这一句先过信息增量守卫，再决定算不算"发出去了"。
+      const ball = r.state === 'generated' ? gateBall(r) : null
       record({
         requestId: r.requestId,
         eventId: r.eventId,
@@ -809,29 +1010,54 @@ export function apply(ctx) {
         shot: r.shot ?? undefined,
         silence: r.silence ?? undefined,
         ...(r.extra && (r.state === 'accepted' || r.state === 'generated') ? r.extra : {}),
-        state: r.state,
+        // 打回的那一球账本里不记 generated：它不是"发出去了"，也不是失败。
+        state: ball ? ball.state : r.state,
         at: now,
         ms: began ? now - began : undefined,
         text: r.text ?? undefined,
         // 套话只在生成时判：谁都能说的模板不算开口。判出来就记进账本，
         // 下一球把它打回去，P5 的评测也靠这个数。
         stock: isStock(r.text) || undefined,
+        skip: ball && ball.action !== 'send' ? ball.code : undefined,
+        // 软判据（不沾具体名词）不拦，只记账：P5 的评测靠这个数看"有多少句没信息量"。
+        soft: ball ? ball.soft : undefined,
         failure: r.failure ?? undefined,
         cold: r.cold === true,
       })
       if (r.state !== 'accepted') startedAt.delete(key)
       // 生成成功后等一次人的回应；2 小时内没有就记 none（有限跟进/冷却的依据）。
       if (r.state === 'generated') {
-        lastBall = { role: speakerOf(r.sessionId), at: Date.now() }
-        // 大脑从这一刻开始计：10 分钟内他有没有离开那个娱乐 App。
         const served = servedContext.get(String(r.requestId))
         servedContext.delete(String(r.requestId))
+        // 这一轮不发：账本已经记了 skip-no-content / stock-rewrite，手机侧静默收尾。
+        // 不算失败、不占发球额度、不写 pending（他没收到过这一句，不能拿去判球）。
+        if (ball && ball.action !== 'send') {
+          suppressed.add(key)
+          return
+        }
+        lastBall = { role: speakerOf(r.sessionId), at: Date.now() }
+        // 大脑从这一刻开始计：10 分钟内他有没有离开那个娱乐 App。
         if (served) {
           const b = loadBrain()
           onServe(b, { requestId: r.requestId, phone: served.phone, band: served.band, face: served.face, drill: served.drill, at: Date.now() })
           saveBrain(b)
         }
         // 发球原文、回合、拍数都留给判球用：回球回来时要能把它和这一球对上。
+        // A1 改口检测：他上一球是拒绝/回避、她这一句就撤回或降低要求 = 退让一次。
+        // 由代码判（isYield），不问她自不觉得自己让步了。
+        try {
+          const prev = lastServeOf.get(String(r.sessionId || ''))
+          const his = readLedger(home(), 12).filter((e) => e.state === 'replied').pop()
+          if (prev && his) {
+            const turns = loadYieldTurns()
+            // 回避/拒绝触发的退让按规则就是没有新证据（「他说不想做」不是事实），这里如实记。
+            turns.push({ yielded: isYield({ verdict: his.verdict, before: prev.text, after: r.text || '' }), hasEvidence: false })
+            saveYieldTurns(turns)
+          }
+          lastServeOf.set(String(r.sessionId || ''), { text: String(r.text || '').slice(0, 400), at: Date.now() })
+        } catch {
+          // 检测坏了不能拦发球
+        }
         setPending(r.sessionId, {
           requestId: r.requestId,
           topicId: r.topicId,
@@ -839,6 +1065,8 @@ export function apply(ctx) {
           shot: r.shot,
           serveType: r.serveType,
           drill: r.extra?.drill,
+          // C2：这一球是四操作里的哪一个。回球时要按它判，不能等到回球才发现不知道练的是什么。
+          drillOp: r.extra?.drillOp,
           serve: r.text || '',
           at: Date.now(),
         })
@@ -925,7 +1153,10 @@ export function apply(ctx) {
           // 这一球由大肥鱼自己判（6 秒超时或连不上就退回规则），不再按字数。
           const target = judgeTargetOf(ctx, session?.id, config)
           const judgeBegan = Date.now()
-          const judged = await judgeReply({
+          // C2：四个基本操作的合格线在代码里，这一球不问模型——问了她就会开始安慰人。
+          // 判完记一条 drill-op，欠着的下一步要等这一条才放行。
+          const opVerdict = pending.drillOp ? judgeOpNow(pending.drillOp, text, session?.id) : null
+          const judged = opVerdict || await judgeReply({
             stream: streamOf(),
             provider: target?.provider,
             model: target?.model,
@@ -1213,11 +1444,45 @@ export function apply(ctx) {
     }
   }
   // ---------------------------------------------------------------- 档位 / Gemini / 控制
+  /**
+   * R7 P0-3：一次返回「有哪些东西可查」，不返回正文（借 dsh-xingxi 的做法）。
+   * 上下文预算之后能常驻的东西有限，细节靠这个目录 + 各自的工具按需去取。
+   */
+  function fishIndexTool() {
+    return {
+      name: 'fish_index',
+      description: '看一眼现在手里有什么：今天定了几件事、四段汇报还缺几段、笔记库最近动过什么、当前状态下哪些能力被收起。不带参数；要正文再用对应的工具去取。',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      output: toolOutput,
+      execute: () => {
+        const now = Date.now()
+        const tz = zoneOr(config.timeZone)
+        const state = mainStateNow()
+        const daily = loadDaily(loadDailyState(), now, tz)
+        const dep = statusOf(depositToday(now))
+        const lines = [
+          '现在的主状态：' + state + '（这个状态挂着 ' + toolsFor(state).length + ' 个工具）',
+          '今天定了 ' + (daily.tasks || []).length + ' 件事' + ((daily.tasks || []).length ? '：' + daily.tasks.map((t) => t.task).join('、').slice(0, 120) : ''),
+          '四段汇报：交了 ' + (DEPARTMENTS.length - dep.missing.length) + '/' + DEPARTMENTS.length + (dep.missing.length ? '，还缺 ' + dep.missing.join('、') : ''),
+        ]
+        const recent = vaultRecentNotes(notesDir(), { limit: 3, now })
+        lines.push('笔记库最近动过 ' + recent.length + ' 个文件' + (recent.length ? '：' + recent.map((n) => n.rel).join('、') : '（没配笔记库或没改动）'))
+        lines.push('立场记录、暗思考产物：这两个仓还没建（后面的工单才有），现在没有东西可查。')
+        const gone = toolsElsewhere(state)
+        lines.push(gone.length
+          ? '当前状态收起的能力（能做，但要等对应状态）：' + gone.map((g) => g.name + '@' + g.when.join('/')).join('、')
+          : '当前状态没有收起任何能力。')
+        return { ok: true, text: lines.join('\n').slice(0, 600) }
+      },
+    }
+  }
   const loadRhythm = () => readState(stateFile('rhythm.json'), {}) || {}
   const saveRhythm = (r) => writeJson(stateFile('rhythm.json'), r)
   /** 最近一次 /plan 算出的作息（早上门 / 晚上门 / 深夜阶段 / 深夜锁到几点）。 */
   let lastRhythm = null
   let lastApplyWindow = null
+  /** A4：块结束时该问的那句「这一块记到哪个部」——内容层，30 分钟内有效。 */
+  let slotAskNext = null
   const loadNotifs = () => readState(stateFile('notifs.json'), {}) || {}
   const saveNotifs = (n) => writeJson(stateFile('notifs.json'), n)
   /** 永远不封的：电话、短信、地图、支付、DSH 自己。 */
@@ -1293,20 +1558,106 @@ export function apply(ctx) {
   // 第二轮·每日文件：今天的事 + 完成物 + 晚上对账的结论（渲染成 大肥鱼/每日/日期.md）。
   const loadDailyState = () => readState(stateFile('daily.json'), {}) || {}
   const saveDailyState = (s) => writeJson(stateFile('daily.json'), s)
+  // A2：我.md 原文——硬安排（「08:00-09:00 上课」）从里面抠，排时间表时要避开。
+  const selfRaw = () => {
+    try {
+      return readFileSync(join(kbDir(notesDir(), home()), SELF_FILE), 'utf8')
+    } catch {
+      return ''
+    }
+  }
+  /** 今天的时间表参数：吃饭时段 + 我.md 里的硬安排，一处算清，别各拼一套。 */
+  const planArgs = (now, tz) => ({ now, tz, meals: wallConfig(config).meals, fixedBlocks: fixedBlocksOf(selfRaw()) })
+  /** 今天的事（A4 要用「某部有任务却没记录」这个对照）。 */
+  const dailyToday = (now = Date.now()) => loadDaily(loadDailyState(), now, zoneOr(config.timeZone))
+  const savePlan = (state) => {
+    saveDailyState(state)
+    writeDaily(kbDir(notesDir(), home()), state)
+  }
+  /**
+   * A2：走一遍今天的时间表。块开始就把这一块立成任务模式（娱乐照规则锁），块结束继续点他交墙。
+   * 挂在 planRoute 上——引擎里没有第二个"后台"面，和不说话就不跑的那几个 sweep 同一限制。
+   */
+  function planSweepNow(now, tz) {
+    const state = loadDaily(loadDailyState(), now, tz)
+    if (!state.tasks.length) return
+    const out = planSweep(state, planArgs(now, tz))
+    if (out.plan && (!state.plan || out.events.length)) savePlan(out.state)
+    for (const ev of out.events) {
+      record({ state: 'plan-' + ev.kind.replace('plan-', ''), at: now, taskId: ev.taskId, task: ev.task, start: ev.start, end: ev.end })
+      if (ev.kind !== 'block-start') continue
+      // 块开始＝自动立任务（目标就是这一块），到点由 gear 那套继续锁着等交墙。
+      const until = zoneStartOfDay(now, tz) + ev.end * 60_000
+      setGear({ gear: 'busy', until, what: ev.task, task: { goal: ev.task, by: 'strategist', reason: '今天排的时间块' } }, 'plan')
+    }
+    // 到点没交＝一个看得见的动作：把剩下的往后挪一次（额度用完就不再挪）。
+    if (out.events.some((e) => e.kind === 'block-end')) {
+      const ended = out.events.filter((e) => e.kind === 'block-end')
+      // A4：块结束时问一句「这一块记到哪个部」——内容层的话，所以按「哪天 + 第几块」挑一种说法。
+      slotAskNext = { text: slotAsk(state.day, ended[ended.length - 1].start), at: now }
+      const r = reschedulePlan(loadDaily(loadDailyState(), now, tz), { ...planArgs(now, tz), trigger: 'overdue' })
+      if (r.ok) {
+        savePlan(r.state)
+        record({ state: 'plan-reschedule', at: now, trigger: 'overdue' })
+      }
+    }
+  }
+  /** 约束层里的「此刻」一行：当前时间块，或者到点了还没交墙的那一块；后面接今天的局。 */
+  function planText() {
+    const now = Date.now()
+    const tz = zoneOr(config.timeZone)
+    const min = zoneMinuteOfDay(now, tz)
+    const state = loadDaily(loadDailyState(), now, tz)
+    let block = ''
+    if (state.plan) {
+      const cur = state.plan.blocks.find((b) => min >= b.start && min < b.end)
+      const late = state.plan.blocks
+        .filter((b) => min >= b.end && !state.plan.submitted?.[b.taskId])
+        .sort((a, b) => b.end - a.end)[0]
+      block = cur ? blockLine(cur, min) : (late && min < late.end + 10 ? lateLine(late) : '')
+    }
+    // 第八轮 P1/P2：今天的局也挂在这一层。计划一定下来，这一层就不许再出现开放问句。
+    const today = planLines(planOf(readState(stateFile('plan.json'), null), startOfDay(now, tz)), { now, min })
+    return [block, ...today].filter(Boolean).join('\n')
+  }
+  /** A2：一件交墙通过了 → 那块收工，剩下的重排一次（额度由 daily.reschedule 管）。 */
+  function planAdvance(now, taskId) {
+    if (!taskId) return null
+    const tz = zoneOr(config.timeZone)
+    const marked = markBlockDone(loadDaily(loadDailyState(), now, tz), taskId, zoneMinuteOfDay(now, tz))
+    if (!marked.plan) return null
+    const r = reschedulePlan(marked, { ...planArgs(now, tz), trigger: 'submitted-early' })
+    const next = r.ok ? r.state : marked
+    savePlan(next)
+    if (r.ok) record({ state: 'plan-reschedule', at: now, trigger: 'submitted-early' })
+    return r.ok ? r.text : null
+  }
   // 第五轮·每日四部门提交：信息收集 / 谋划思考 / 行为管理 / 统筹规划，一天一份，零点复归。
   const loadDepositState = () => readState(stateFile('deposit.json'), {}) || {}
   const saveDepositState = (s) => writeJson(stateFile('deposit.json'), s)
   /** 今天这份提交。没交过就是空的四项。 */
   const depositToday = (now) => depositOf(loadDepositState(), dayString(now, zoneOr(config.timeZone)))
   const geminiPackages = () => (Array.isArray(config.geminiPackages) && config.geminiPackages.length ? config.geminiPackages.map(String) : GEMINI_PACKAGES)
-  /** 正在进行的 Gemini 互动舱：手机据此只许 Gemini（急事底线 App 除外）。 */
+  /**
+   * 正在进行的 Gemini 互动舱：手机据此只许 Gemini（急事底线 App 除外）。
+   *
+   * 第八轮 P4：同一份舱还承担「升级舱」。`session.cell` 有两个值：
+   *   'cell'     E1/E2 的审讯舱——只放行 Gemini，且**不给第三方应用宽限**（施工书「但不给第三方应用宽限」）；
+   *   'all-lock' E1′ 的全机锁——放行名单为空，只剩急事底线和局界面（DSH 自己）。
+   * 不另造字段：手机 applySession 只读 until/allow/graceMs 三个，多一个形态就多一处它不认。
+   */
   const geminiSessionView = (now = Date.now()) => {
     const s = loadGemini().session
     if (!s || !(Number(s.until) > now)) return null
+    const cell = String(s.cell || '')
     return {
       app: geminiPackages()[0],
-      allow: geminiPackages(),
+      allow: cell === 'all-lock' ? [] : geminiPackages(),
       until: Number(s.until),
+      // R7 P0-1：舱内第三方 App 的宽限。手机侧不再"非白名单一律锁"，按这个秒数先放行再升锁。
+      // 升级舱一律 0：等 45 秒才锁，等于给了一次白刷。
+      graceMs: cell ? 0 : Math.max(0, Number(config.sessionGraceMs) || 45_000),
+      cell: cell || undefined,
       topic: String(s.topic || ''),
       mode: String(s.mode || 'think'),
       by: s.by || undefined,
@@ -1321,10 +1672,9 @@ export function apply(ctx) {
     }
     record({ state: 'gear', at: Date.now(), gear: sw.gear, until: sw.until || undefined, what: sw.what || undefined, by })
   }
-  /** 这一球真的要发了：把"报到过 / 迎接过 / 叫回去过 / 读回过"记下，免得下一问又来一遍。 */
+  /** 这一球真的要发了：把"迎接过 / 叫回去过 / 读回过"记下，免得下一问又来一遍。 */
   function markBall(why, now) {
     if (!why) return
-    if (why.reason === 'checkin') saveGearState({ ...loadGearState(), lastCheckAt: now })
     if (why.reason === 'busy-done' || why.reason === 'task-due') saveGearState({ ...loadGearState(), doneFor: Number(config.gearUntil) })
     if (why.reason === 'defied') pendingDefiance = null
     if (why.reason === 'restless') saveGearState({ ...loadGearState(), restlessAt: now })
@@ -1441,6 +1791,10 @@ export function apply(ctx) {
 
   /** 这一刻的全天状态（C2）：主状态只有一项，追问锁是叠在上面的临时层。 */
   function stateView(now, tz, phone) {
+    // 计划模态：machine.js 一直有这一层（priority 95），但这里从来没传过 plan，
+    // 于是「计划锁」永远不进——L1 的「直接锁 + 进计划模态」也就落不下去。
+    // 现在只认升级压下来的那一份（planUntil），没升级就不主动进模态。
+    const doc = loadLadderDoc()
     return resolveState({
       now,
       tz,
@@ -1449,6 +1803,7 @@ export function apply(ctx) {
       rhythm: lastRhythm || {},
       followup: followupView(config.followup, now),
       session: geminiSessionView(now),
+      plan: doc.planUntil > now ? { active: true, until: doc.planUntil, reason: '升级' } : null,
     })
   }
 
@@ -1548,6 +1903,15 @@ export function apply(ctx) {
     for (const b of Array.isArray(config.blockExtra) ? config.blockExtra : []) {
       if (b && typeof b.app === 'string' && Number(b.until) > now && !NEVER_BLOCK.includes(b.app)) block[b.app] = Math.round(Number(b.until))
     }
+    // 外接 APP：他声明成娱乐的那些，手机自己的拦截清单里没有，只能从这里下发（block 是「包名 → 到点」）。
+    // 只发他声明的——内置那批手机已经认识，重复发只会把 Kotlin 那边 50 个名额占满。
+    const untilLock = rules.reduce((m, r) => Math.max(m, r.until), 0)
+    const declared = new Set(declaredFun(appsOf()))
+    if (untilLock > now && declared.size) {
+      // blockDuringLock 已经减掉了紧急应用和舱内放行的包，这里只挑手机不认识的那些。
+      const toBlock = blockDuringLock(appsOf(), { funLocked: true, allow: geminiSessionView(now)?.allow || [] })
+      for (const pkg of toBlock) if (declared.has(pkg) && !NEVER_BLOCK.includes(pkg)) block[pkg] = untilLock
+    }
     return { v: 1, at: now, rules, block }
   }
 
@@ -1636,7 +2000,7 @@ export function apply(ctx) {
   function controlTool() {
     return {
       name: 'dafeiyu_control',
-      description: '切换对他的管法（只能收紧，不能放松）：busy=忙时（不闲聊、每 25 分钟报到、娱乐 App 一开就锁；时长默认 40 分钟、最长 60，到点只让他报到，不评分不扣分）；' +
+      description: '切换对他的管法（只能收紧，不能放松）：busy=忙时（不闲聊、娱乐 App 一开就锁；时长默认 40 分钟、最长 60，到点只让他报到一次，不评分不扣分）；' +
         'refuse=拒绝模式 minutes 分钟（娱乐 App 一开就锁）；mute=安静 minutes 分钟；strict=严格。他亲口要求或明确同意时才用。' +
         '放松（回到闲时、关拒绝、切回温和）这里不做：他想放松只能等对账后的申请窗口。',
       parameters: {
@@ -1653,14 +2017,14 @@ export function apply(ctx) {
       execute: (args = {}) => {
         const now = Date.now()
         const mins = Math.max(5, Math.min(480, Math.round(Number(args.minutes) || 0)))
-        const hm = (at) => new Date(at).toISOString().slice(11, 16) + ' UTC'
+        const hm = (at) => zoneHm(Number(at), zoneOr(config.timeZone))
         let text = ''
         if (args.action === 'busy') {
           // 进入忙时必须有时长：默认 40 分钟，最长 60 分钟（10 分钟起步）。
           const busyMinutes = Math.max(10, Math.min(BUSY_MAX_MIN, Math.round(Number(args.minutes) || BUSY_DEFAULT_MIN)))
           const until = now + busyMinutes * 60_000
           setGear({ gear: 'busy', until, what: String(args.what || '正事').slice(0, 20) }, 'tool')
-          text = '已切到忙时（' + (args.what || '正事') + '）' + busyMinutes + ' 分钟，到 ' + hm(until) + '：不闲聊、定时报到、娱乐 App 一开就锁。'
+          text = '已切到忙时（' + (args.what || '正事') + '）' + busyMinutes + ' 分钟，到 ' + hm(until) + '：不闲聊、娱乐 App 一开就锁，到点只让你报到一次。'
         } else if (args.action === 'refuse') {
           const until = now + (Number(args.minutes) ? mins : 120) * 60_000
           config = { ...config, refuseUntil: until, refuseBy: 'tool' }
@@ -1695,14 +2059,18 @@ export function apply(ctx) {
     return {
       name: 'start_task_mode',
       description: '给他立一个任务（**只在他主动要求时**：他说"给我立个任务""盯我 45 分钟""这一个小时别让我玩"）。' +
-        'mode=task 任务模式（有目标，定时报到，娱乐按规则锁，验收合格才结束）；mode=refuse 只锁娱乐不立目标。' +
-        '他没要求时不要调用——规矩由墙执行，你只在他点名要的时候帮他立。立完告诉他做了什么、为什么、第一步是什么。',
+        'mode=task 任务模式（有目标，到点报到一次，娱乐按规则锁，验收合格才结束）；mode=refuse 只锁娱乐不立目标。' +
+        '他没要求时不要调用——规矩由墙执行，你只在他点名要的时候帮他立。立完告诉他做了什么、为什么、第一步是什么。' +
+        'task 还有三条必答：goal（这一段要交出什么）、domain（涉及哪些领域/范围）、breakAt（什么时候休息）。' +
+        '缺一条工具会返回 field-missing 并点名缺哪条：那就先问他，别自己编一个填上去。',
       parameters: {
         type: 'object',
         properties: {
           mode: { type: 'string', enum: ['task', 'refuse'] },
           minutes: { type: 'integer', minimum: 10, maximum: 180, description: '时长，默认 45' },
           goal: { type: 'string', description: 'task：具体做什么、做到什么程度（例：周报写完第一部分 500 字）' },
+          domain: { type: 'string', description: 'task：这一段涉及哪些领域/范围（例：线性代数第三章、英语阅读）' },
+          breakAt: { type: 'string', description: 'task：什么时候休息（例：做满 50 分钟歇 10 分钟）' },
           reason: { type: 'string', description: '为什么现在立（看到了什么）' },
         },
         required: ['mode', 'reason'],
@@ -1714,7 +2082,7 @@ export function apply(ctx) {
         const minutes = Math.max(10, Math.min(180, Math.round(Number(args.minutes) || 45)))
         const until = now + minutes * 60_000
         const reason = String(args.reason || '').trim().slice(0, 160)
-        const hm = new Date(until).toISOString().slice(11, 16) + ' UTC'
+        const hm = zoneHm(until, zoneOr(config.timeZone))
         if (args.mode === 'refuse') {
           config = { ...config, refuseUntil: Math.max(until, Number(config.refuseUntil) || 0), refuseBy: 'ai' }
           try {
@@ -1726,8 +2094,14 @@ export function apply(ctx) {
           return { ok: true, text: '拒绝模式开到 ' + hm + '，娱乐 App 一开就锁。' }
         }
         const goal = String(args.goal || '').trim().slice(0, 120)
-        if (!goal) return { ok: false, text: '任务要有具体目标（做什么、做到什么程度）。' }
-        setGear({ gear: 'busy', until, what: goal.slice(0, 20), task: { goal, by: role, reason } }, 'ai-' + role)
+        // 必答项：领域、休息时段、交付物缺一项就不排。先问她该问的那几句，
+        // 排到现场再靠发挥，正是这一层要拦掉的东西。
+        const missing = missingAnswers({ domain: args.domain, breakAt: args.breakAt, deliver: goal })
+        if (missing.length) {
+          record({ state: 'task-refused', at: now, by: role, missing })
+          return { ok: false, code: 'field-missing', missing, text: answerPrompt(missing) }
+        }
+        setGear({ gear: 'busy', until, what: goal.slice(0, 20), task: { goal, by: role, reason, domain: String(args.domain).trim().slice(0, 120), breakAt: String(args.breakAt).trim().slice(0, 60) } }, 'ai-' + role)
         record({ state: 'task-start', at: now, mode: 'task', minutes, by: role, goal, reason })
         wallCloseOnStart(now)
         return { ok: true, text: '任务模式立好了：' + goal + '，到 ' + hm + '。娱乐全锁，到点交墙验收（submit_to_wall kind=review）。' }
@@ -1818,7 +2192,7 @@ export function apply(ctx) {
    * 只 record()，绝不 applyVerdict——不加锁、不罚、不扣额度。
    */
   function anchorSweep(now, tzIn) {
-    const tz = zoneOr(tzIn || config.timeZone)
+    const tz = requestZone(tzIn, config)
     const day = startOfDay(now, tz)
     const seen = readLedger(home(), 400).filter((e) => e?.state === 'wall-audit' && Number(e.at) >= day).map((e) => e.kind)
     for (const a of absentAnchors(zoneMinuteOfDay(now, tz), weekdayOf(now, tz), seen)) {
@@ -1894,6 +2268,133 @@ export function apply(ctx) {
         if (r.verdict !== 'miss') continue
         vaultAudit(now, '预判没说中：' + r.claim + '（判据 ' + r.verdictSource + '，实测 ' +
           (r.readings || []).map((x) => x.metric + '=' + (x.value === null ? '量不到' : x.value)).join('、') + '）')
+      }
+    }
+    return out.ledger
+  }
+  /**
+   * B2：跑一次夜间整理。
+   *
+   * 两条纪律：**不占会话**（走 llm.stream，和判球同一条通道——整理的内容一个字都不会
+   * 变成聊天记录里的一条消息），**不重试**（这一轮不成，明天的槽位还有）。
+   * 产物只有三类：links/gaps/carry，落 nightly.json，由三个去向各自去取。
+   */
+  async function runNightly(now, tz, slot) {
+    const target = nightlyTargetOf(ctx, config)
+    const entries = readLedger(home(), 400)
+    let candidates = { topics: [], facts: [], episodes: [] }
+    const db = openMemoryDb(memoryPath())
+    try {
+      candidates = loadCandidates(db, { sessionId: config.sessionId, now })
+    } finally {
+      try {
+        db?.close?.()
+      } catch {
+        // ignore
+      }
+    }
+    const inputs = nightlyInputs({
+      entries,
+      candidates,
+      stances: loadStances(),
+      notes: tonightNoteNames(now, tz),
+      tz,
+    }, now)
+    record({ state: 'nightly', at: now, slot, stage: 'start', objects: inputs.objects.length })
+    const out = await tidyNightly({ stream: streamOf(), provider: target.provider, model: target.model, inputs })
+    if (!out.ok) {
+      // 不合格就丢弃，不重试。这一条只用来在真机上定位「为什么整晚没产物」。
+      record({ state: 'nightly', at: Date.now(), slot, stage: 'discard', why: String(out.problems?.[0] || '').slice(0, 120) })
+      return null
+    }
+    const resolved = resolveNightly(out.value, { objects: inputs.objects, entries })
+    const merged = mergeNightly(loadNightly(), resolved, Date.now(), { day: dayString(now, tz) })
+    saveNightly(merged.store)
+    record({
+      state: 'nightly', at: Date.now(), slot, stage: 'done', added: merged.added,
+      dropped: Number(out.dropped || 0) + Number(resolved.dropped || 0),
+      links: resolved.links.length, gaps: resolved.gaps.length, carry: resolved.carry.length,
+    })
+    return merged
+  }
+  /**
+   * 今天改过的笔记文件名（只给文件名，不给原文）。
+   * 复用 vaultRecentNotes 的 mtime 排序，只留今天动过的；没有就空——这一项缺了照样能整理。
+   */
+  function tonightNoteNames(now, tz) {
+    try {
+      const day = startOfDay(now, tz)
+      return vaultRecentNotes(notesDir(), { limit: 8, now, exclude: [] })
+        .filter((f) => Number(f.mtime) >= day)
+        .map((f) => String(f.rel).slice(0, 60))
+    } catch {
+      return []
+    }
+  }
+  /**
+   * 墙认得的对象：今天早上的任务原话。hard 立场只能绑这些，否则就是「我就是觉得」，没法对账。
+   * 规则项（规则.md）还没接进来，见第七轮进度 A1 一节「没做到的」。
+   */
+  function stanceKnown(now) {
+    try {
+      const state = loadDaily(loadDailyState(), now, zoneOr(config.timeZone))
+      return new Set((state.tasks || []).map((t) => String(t?.task || '').slice(0, 120)).filter(Boolean))
+    } catch {
+      return new Set()
+    }
+  }
+  /** 墙判一个对象做完没有：拿今天的任务对账结果。量不到给 null，不冤枉她也不白送。 */
+  function stanceDoneFn(now) {
+    const tz = zoneOr(config.timeZone)
+    let results = []
+    try {
+      results = reconcile(loadDaily(loadDailyState(), now, tz), { now, tz, notesDir: notesDir(), stat: statOf, check: wallCheck(now) }).results
+    } catch {
+      results = []
+    }
+    return (about) => {
+      const want = String(about || '').slice(0, 120)
+      const hit = results.find((r) => String(r.task || '').slice(0, 120) === want)
+      if (!hit) return null
+      return hit.verdict === 'done' ? true : hit.verdict === 'partial' || hit.verdict === 'miss' ? false : null
+    }
+  }
+  /**
+   * 把到期的立场交给墙的遥测算 kept/broken。status / settleSource 只有 stance.js 的 settleStances
+   * 能写——和 predict.settle 同一套堵法：模型说「我守住了」进不了这个字段。
+   */
+  function settleStanceNow(now) {
+    const cur = loadStances()
+    if (!cur.list.some((r) => r.status === 'held' && Number(r.until) <= now)) return cur
+    const out = settleStances(cur, { now, isDone: stanceDoneFn(now) })
+    if (!out.settled.length) return out.ledger
+    saveStances(out.ledger)
+    const tz = zoneOr(config.timeZone)
+    const kb = vaultKb()
+    for (const r of out.settled) {
+      record({ state: 'stance-settled', at: now, stance: r })
+      if (!kb) continue
+      try {
+        // 当日文件里留一行：她立过什么、守没守住（复用裁决的追加格式，不新造一份）。
+        appendVerdictDaily(kb, now, tz, {
+          kind: '立场结算',
+          satisfied: r.status === 'kept',
+          summary: r.text + '（' + r.id + ' → ' + r.status + '）',
+        })
+      } catch {
+        // 写不进当日文件不影响结算本身
+      }
+    }
+    // 命中率进 判断.md：她立得准不准，下一天的 hard 额度按这个浮动。
+    const digest = stanceDigest(out.ledger.list)
+    const dir = notesDir()
+    if (digest.length && dir) {
+      try {
+        const kbDirNow = kbDir(dir, home())
+        mkdirSync(kbDirNow, { recursive: true })
+        appendFileSync(join(kbDirNow, JUDGE_FILE), '\n' + digest.join('\n') + '\n', 'utf8')
+      } catch {
+        // 笔记库不可写就只留在账本里
       }
     }
     return out.ledger
@@ -2040,6 +2541,12 @@ export function apply(ctx) {
         return done(false, [task.task + '：' + r.data], [r.missing])
       }
       applyVerdict({ ok: true, kind, satisfied: true, summary: task.task + '：' + r.data, nextStep: '放风，回来接着下一件' }, now, 'wall')
+      // A2：这一件提前交了墙 → 时间表里那块收工，剩下的重排一次（每天 2 次额度）。
+      try {
+        planAdvance(now, idx >= 0 ? state.tasks[idx]?.id : undefined)
+      } catch (error) {
+        console.error('[companion] 交墙后重排失败：' + String((error && error.message) || error))
+      }
       if (idx >= 0 || state.tasks.length === 1) vaultTask(now, Math.max(0, idx), task, '完成', r.data)
       return done(true, [task.task + '：' + r.data])
     }
@@ -2194,7 +2701,7 @@ export function apply(ctx) {
           // 这一轮照样生效
         }
         record({ state: 'block', at: now, apps, until, by: role, reason: String(args.reason || '').slice(0, 120) })
-        return { ok: true, text: '封了 ' + apps.join('、') + '，到 ' + new Date(until).toISOString().slice(5, 16).replace('T', ' ') + ' UTC。' + (skipped.length ? '（' + skipped.join('、') + ' 永远不封）' : '') }
+        return { ok: true, text: '封了 ' + apps.join('、') + '，到 ' + zoneMd(until, zoneOr(config.timeZone)) + ' ' + zoneHm(until, zoneOr(config.timeZone)) + '。' + (skipped.length ? '（' + skipped.join('、') + ' 永远不封）' : '') }
       },
     }
   }
@@ -2252,8 +2759,9 @@ export function apply(ctx) {
   function dailyPlanTool(role) {
     return {
       name: 'daily_plan',
-      description: '早上定事：把今天的事和每件事的完成物写进知识库的每日文件（大肥鱼/每日/日期.md）。' +
-        '每件事必须带一个看得见的完成物（笔记路径、Gemini 记录、某个学习 App 今天要用够多少分钟），光写"做完 XX"不算。最多 6 件。',
+      description: '早上定事：把今天的事和每件事的完成物写进知识库的每日文件（大肥鱼/每日/日期.md），并排进当天的时表。' +
+        '每件事必须带：完成物（笔记路径、Gemini 记录、某个学习 App 今天要用够多少分钟）、截止时刻（HH:MM）、预估分钟数、归哪个部' +
+        '（信息收集 / 谋划思考 / 统筹规划 / 行为管理）。墙会避开吃饭时段和你 我.md 里的硬安排排块，排不下的会当场说清是哪一件。最多 6 件。',
       parameters: {
         type: 'object',
         properties: {
@@ -2265,8 +2773,11 @@ export function apply(ctx) {
               properties: {
                 task: { type: 'string', description: '今天要做的事（一句话）' },
                 evidence: { type: 'string', description: '完成物：晚上能去查的东西（笔记路径 / Gemini 记录 / App 用够多少分钟）' },
+                due: { type: 'string', description: '截止时刻 HH:MM（他说的"几点前做完"）' },
+                minutes: { type: 'integer', minimum: 10, maximum: 480, description: '预估要花多少分钟' },
+                dept: { type: 'string', enum: DEPTS, description: '归哪个部（给晚上四段对账用）' },
               },
-              required: ['task', 'evidence'],
+              required: ['task', 'evidence', 'due', 'minutes', 'dept'],
               additionalProperties: false,
             },
           },
@@ -2282,11 +2793,12 @@ export function apply(ctx) {
         if (!norm.ok) return { ok: false, text: norm.text }
         const dir = kbDir(notesDir(), home())
         const state = loadDaily(loadDailyState(), now, tz)
-        const next = { ...state, tasks: norm.tasks, review: state.review }
-        const wrote = writeDaily(dir, next)
-        saveDailyState(next)
-        record({ state: 'daily-plan', at: now, by: role, count: norm.tasks.length, file: wrote.file || undefined })
-        return { ok: true, text: norm.text + ' ' + wrote.text }
+        // 重新定事＝重新排：重排记录归零，昨天的表不带过来。
+        const out = schedule(norm.tasks, { ...planArgs(now, tz) })
+        const next = { ...state, tasks: norm.tasks, plan: { at: now, blocks: out.blocks, overflow: out.overflow, reschedules: [], fired: { start: {}, end: {} }, submitted: {} } }
+        savePlan(next)
+        record({ state: 'daily-plan', at: now, by: role, count: norm.tasks.length, file: dailyPath(dir, now, tz), blocks: out.blocks.length, overflow: out.overflow.length })
+        return { ok: true, text: norm.text + '\n' + scheduleText(out) }
       },
     }
   }
@@ -2565,13 +3077,89 @@ export function apply(ctx) {
         const { ledger, record: rec } = appendPrediction(cur, v.value)
         savePredict(ledger)
         record({ state: 'predict-new', at: now, by: role, id: rec.id, claim: rec.claim })
-        const when = new Date(rec.dueAt).toISOString().slice(5, 16).replace('T', ' ') + ' UTC'
+        const when = zoneMd(rec.dueAt, zoneOr(config.timeZone)) + ' ' + zoneHm(rec.dueAt, zoneOr(config.timeZone))
         return {
           ok: true,
           text: '押上了（' + rec.id + '），' + when + ' 由墙的遥测判。判据：' +
             rec.metrics.map((m) => m.metric + (m.path ? '(' + m.path + ')' : m.app ? '(' + m.app + ')' : '') +
               m.op + m.threshold).join('，且') + '。到点不由你说了算。',
         }
+      },
+    }
+  }
+  function takeStanceTool(role) {
+    return {
+      name: 'take_stance',
+      description: '立一条立场：你要求过他什么，白纸黑字记下来，他磨你的时候这些算数。' +
+        'hard = 到期前不可更改，你也没有改它的工具，每天最多 3 条；soft 可以改，但要给理由和一条新证据，每天最多 5 条。' +
+        'about 绑今天早上的任务原话（hard 必须绑墙认得的任务）；evidence 给账本行号或一句原话；untilHours 几小时后到期（≤336）。' +
+        '每天额度有限，挑重要的立。',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: '她的原话，≤120 字' },
+          kind: { type: 'string', description: 'hard（不可改）/ soft（可改，要新证据）' },
+          about: { type: 'string', description: '绑今天哪件事（任务原话）' },
+          untilHours: { type: 'integer', description: '几小时后到期，≤336' },
+          evidence: { type: 'array', maxItems: 5, description: '凭什么立：账本行号或一句原话', items: { type: 'string' } },
+        },
+        required: ['text', 'kind', 'about', 'untilHours', 'evidence'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const tz = zoneOr(config.timeZone)
+        const cur = loadStances()
+        const hours = Number(args.untilHours)
+        const v = checkStance({
+          text: args.text, kind: args.kind, about: args.about, by: role, evidence: args.evidence,
+          until: Number.isFinite(hours) ? now + hours * 3_600_000 : 0,
+        }, { now, day: dayString(now, tz), known: stanceKnown(now), ledger: cur, hitRate: hitRate(cur.list) })
+        if (!v.ok) return { ok: false, text: '这条立场立不起来：\n- ' + v.problems.join('\n- ') }
+        const out = appendStance(cur, v.value)
+        saveStances(out.ledger)
+        record({ state: 'stance-new', at: now, by: role, stance: out.record })
+        return {
+          ok: true,
+          text: '立住了（' + out.record.id + '），' + zoneHm(out.record.until, tz) + ' 到期。' +
+            (out.record.kind === 'hard' ? '到期前谁也改不了，包括你。' : '要改得给一条新证据。'),
+        }
+      },
+    }
+  }
+  function reviseStanceTool(role) {
+    return {
+      name: 'revise_stance',
+      description: '改一条软立场。硬立场到期前改不了（返回 stance-locked）——能让它变的只有到期、墙按证据判定做完、他早上重新定计划。' +
+        '改必须给 reason，并引用一条立完那条立场之后新出现的证据（账本行号或一句原话）。' +
+        '他说不想做、换个话题不算证据，那是回避，不是新事实。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '立场编号，形如 S-20261111-01' },
+          reason: { type: 'string', description: '为什么改' },
+          text: { type: 'string', description: '改后的原话；不给就沿用原来那句' },
+          evidence: { type: 'array', maxItems: 5, description: '新证据：账本行号或一句原话', items: { type: 'string' } },
+        },
+        required: ['id', 'reason', 'evidence'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const cur = loadStances()
+        // 行号按整份账本从头数，不随读取窗口滑动；compact 之后会重来，可接受。
+        const entries = readLedger(home(), 5000).map((e, i) => ({ ...e, seq: i + 1 }))
+        const r = reviseStance(cur, { id: args.id, reason: args.reason, text: args.text, evidence: args.evidence, entries, now })
+        if (!r.ok) {
+          // 每次想改硬立场都留痕：这不是她的工具，试了要能查（stance-cave-attempt）。
+          record({ state: 'stance-cave-attempt', at: now, by: role, id: String(args.id || ''), code: r.code })
+          return { ok: false, text: r.problems.join('\n') }
+        }
+        saveStances(r.ledger)
+        record({ state: 'stance-revised', at: now, by: role, stance: r.record })
+        return { ok: true, text: '改成 ' + r.record.id + ' 了，到期时间没往后推（' + zoneHm(r.record.until, zoneOr(config.timeZone)) + '）。' }
       },
     }
   }
@@ -2614,7 +3202,7 @@ export function apply(ctx) {
    */
   function wallRoute(body) {
     const now = Date.now()
-    const tz = zoneOr(body?.timeZone || config.timeZone)
+    const tz = requestZone(body?.timeZone, config)
     const action = String(body?.action || 'status')
     const status = () => {
       const wd = wallDecision(config, now, tz)
@@ -2646,6 +3234,58 @@ export function apply(ctx) {
     return status()
   }
   /**
+   * A3：墙的审查记录（长得像对话，其实是账本）。
+   * 墙不聊天：这里只把已经落账的「提交 / 判定 / 规则变更」还原成倒序气泡，一句话都不新生成。
+   */
+  function wallThreadRoute(body) {
+    const now = Date.now()
+    const tz = requestZone(body?.timeZone, config)
+    const entries = readLedger(home(), 2000)
+    const t = wallThread(entries, { days: 14, limit: 60, now })
+    return {
+      v: 1, ok: true,
+      thread: {
+        bubbles: t.bubbles.map((b) => ({ kind: b.kind, at: b.at, who: b.who, text: b.text, pass: b.pass === undefined ? null : Boolean(b.pass) })),
+        kinds: t.kinds,
+        appealLeft: appealLeft(entries, zoneStartOfDay(now, tz)),
+        appealMax: APPEAL_MAX_PER_DAY,
+      },
+    }
+  }
+  /**
+   * A3：申诉。只收「一条具体判定 + 新的物理证据」，每天 2 次；
+   * 判还是由 wall_auditor 算，这里不自己判，也不许它改主意。
+   */
+  function wallAppealRoute(body) {
+    const now = Date.now()
+    const tz = requestZone(body?.timeZone, config)
+    const entries = readLedger(home(), 2000)
+    const left = appealLeft(entries, zoneStartOfDay(now, tz))
+    const refuse = (code) => ({ v: 1, ok: false, error: { code, message: appealVoice(code) } })
+    if (left <= 0) return refuse('appeal:no-quota')
+    const at = Number(body?.at) || 0
+    const target = entries.find((e) => Number(e.at) === at && (e.state === 'verdict' || e.state === 'wall-audit'))
+    if (!target) return refuse('appeal:not-verdict')
+    // 「新的」= 这条判定下没交过的同一份证据。说第二遍不算新证据。
+    const evidence = String(body?.evidence || '').trim()
+    const said = entries.filter((e) => e.state === 'appeal' && Number(e.target) === at).map((e) => String(e.evidence || ''))
+    if (!evidence || said.includes(evidence)) return refuse('appeal:no-new-evidence')
+    const r = auditTask(
+      { task: String(body?.task || target.kind || ''), evidence },
+      {
+        now, since: at, notesDir: notesDir(), stat: statOf,
+        screenshots: listScreenshots(SCREENSHOT_DIRS, at),
+        usage: Array.isArray(lastPhone?.today) ? lastPhone.today : [],
+        baseline: body?.baseline ? { path: String(body.baseline.path || ''), size: Number(body.baseline.size) || 0 } : undefined,
+      },
+    )
+    record({ state: 'appeal', at: now, target: at, evidence, code: r.code, pass: r.pass })
+    return {
+      v: 1, ok: true,
+      appeal: { code: r.code, pass: r.pass, text: verdictVoice(r.code, r.vars), left: left - 1, appealLeft: left - 1 },
+    }
+  }
+  /**
    * 本周还剩几天放风额度——四部门没交齐的当天归零。
    *
    * 这是「每天必须交」的硬约束落点：不看聊天、不看模型，只看 deposit.json 里今天齐不齐。
@@ -2666,22 +3306,244 @@ export function apply(ctx) {
    */
   function depositRoute(body) {
     const now = Date.now()
-    const tz = zoneOr(body?.timeZone || config.timeZone)
+    const tz = requestZone(body?.timeZone, config)
     const action = String(body?.action || 'status')
     const view = () => {
       const s = statusOf(depositToday(now))
       return { v: 1, ok: true, deposit: { ...s, missingText: missingText(depositToday(now)), departments: DEPARTMENTS } }
+    }
+    // A4：白天的记录槽。一条 ≤200 字，带时间戳和关联任务；按部累加。
+    if (action === 'slot') {
+      const r = appendSlot(depositToday(now), { key: String(body?.department || '').trim(), text: body?.text, at: now, taskId: body?.taskId })
+      if (!r.ok) return { ...view(), ok: false, error: { code: 'bad-slot', message: r.text } }
+      saveDepositState(r.state)
+      record({ state: 'deposit-slot', at: now, department: String(body?.department || '').trim(), chars: String(body?.text || '').trim().length })
+      return { ...view(), ok: true, text: r.text }
     }
     if (action !== 'submit') return view()
     const key = String(body?.department || '').trim()
     if (!DEPARTMENTS.some((d) => d.key === key)) {
       return { ...view(), ok: false, error: { code: 'bad-department', message: '没有这个部门：' + key } }
     }
-    const norm = normalizeEntry({ report: body?.report, thought: body?.thought }, now)
+    const today = depositToday(now)
+    // A4：行为管理部的汇报栏由墙生成——用户交的 report 整个不看，只用遥测那一份。
+    const auto = DEPT_DUTY[key].auto ? behaviorReport({ usage: Array.isArray(lastPhone?.today) ? lastPhone.today : [], verdicts: readLedger(home(), 200).filter((e) => e?.state === 'verdict' && Number(e.at) >= zoneStartOfDay(now, tz)) }) : null
+    const norm = normalizeEntry({ report: body?.report, thought: body?.thought }, now, { auto })
     if (!norm.ok) return { ...view(), ok: false, error: { code: 'too-thin', message: norm.text } }
-    const next = withEntry(depositToday(now), key, norm.entry)
+    // A4 晚间对照：汇报里提到的事得在今天的记录槽或证据来源里找到对应，找不到就标「无据」退回。
+    // 证据来源按部取，只摆今天真有的东西：信息收集/谋划思考看今天动过的笔记，统筹规划看当天的时间表。
+    const evidence = (() => {
+      if (key === 'coord') {
+        const p = dailyToday(now).plan || {}
+        return [...(Array.isArray(p.blocks) ? p.blocks : []).map((b) => String(b.task || '')), ...(Array.isArray(p.reschedules) ? p.reschedules : []).map((r) => String(TRIGGER_TEXT[r.trigger] || r.trigger || ''))]
+      }
+      return vaultRecentNotes(notesDir(), { limit: 8, now }).filter((n) => Number(n.mtime) >= zoneStartOfDay(now, tz)).map((n) => String(n.summary || n.rel || ''))
+    })()
+    const rec = reconcileEntry(today, key, norm.entry.report, { evidence })
+    if (rec.unsupported) return { ...view(), ok: false, error: { code: 'unsupported', message: '这一段无据，退回了：' + rec.why } }
+    const next = withEntry(today, key, norm.entry)
     saveDepositState(next)
-    return { ...view(), ok: true, text: '交了「' + (DEPARTMENTS.find((d) => d.key === key) || {}).label + '」。' }
+    record({ state: 'deposit-submit', at: now, department: key, auto: Boolean(auto), reconciled: rec.ok })
+    return { ...view(), ok: true, text: '交了「' + (DEPARTMENTS.find((d) => d.key === key) || {}).label + '」' + (rec.ok ? '，和今天的记录对上了（' + rec.why + '）' : '。') }
+  }
+
+  // ---------------------------------------------------------------- C1 工作记忆挂载卡
+  /** 卡最多留这么多张（停着的也要能恢复，所以不按张数清空，只留最近几张）。 */
+  const MOUNT_KEEP = 12
+  const loadMount = () => {
+    const raw = readState(stateFile('mount.json'), null)
+    return {
+      v: 1,
+      cards: (Array.isArray(raw?.cards) ? raw.cards : []).map(normalizeCard).filter(Boolean).slice(-MOUNT_KEEP),
+      streak: Math.max(0, Number(raw?.streak) || 0),
+      askAt: Number(raw?.askAt) || 0,
+      pending: raw?.pending && typeof raw.pending === 'object' ? raw.pending : null,
+    }
+  }
+  const saveMount = (m) => writeJson(stateFile('mount.json'), { ...m, cards: (m.cards || []).slice(-MOUNT_KEEP) })
+  const openCardOf = (m) => (m?.cards || []).find((c) => c.status === 'open') || null
+  const lastCardOf = (m) => (m?.cards || [])[m.cards.length - 1] || null
+  // 关掉的是「当前这张」：开着就关开着的，停着就关停着的（关掉之后只读）。
+  const closeCardOf = (m) => openCardOf(m) || lastCardOf(m)
+  const putCard = (m, card) => ({ ...m, cards: m.cards.map((c) => (c.id === card.id ? card : c)).slice(-MOUNT_KEEP) })
+  /** C1：工作记忆漏水是本轮第一条支线——配置里没写过就兜底。
+   *  要关掉它得写一条 `enabled:false`（空数组当「没配」，因为默认配置本来就是 []）。 */
+  const configuredTracks = () => (Array.isArray(config.tracks) && config.tracks.length ? config.tracks : [MEMORY_LEAK_TRACK])
+  /**
+   * C1：挂载卡的手机入口（浮层小卡 + 面板）。
+   *
+   * 只认他自己的话：面板上写的就是他写的（`sources` 传空数组，那是 isUserText 给手写留的那条路），
+   * 工具提议必须带账本行号。这里不生成任何文字——卡里每一条都是他自己的字。
+   */
+  function mountRoute(body) {
+    const now = Date.now()
+    const tz = requestZone(body?.timeZone, config)
+    const action = String(body?.action || 'status')
+    let m = loadMount()
+    const view = () => {
+      // 视图一律现读账本：scaffold 要算上刚才那一条，不然面板永远慢一拍。
+      const entries = readLedger(home(), 800)
+      const last = lastCardOf(m)
+      return {
+        v: 1, ok: true,
+        mount: {
+          ...mountStatus(last, entries),
+          // 恢复要按 id 指认是哪一张，所以当前这张的 id 得带上。
+          id: last ? last.id : '',
+          ask: m.askAt > 0 && now - m.askAt < 30 * 60_000,
+          pending: m.pending ? { text: m.pending.text, slot: m.pending.slot, src: m.pending.src } : null,
+          cards: m.cards.map((c) => ({ id: c.id, status: c.status, goal: c.goal.text, parkedWhy: c.parkedWhy })),
+        },
+      }
+    }
+    const fail = (code, message) => ({ ...view(), ok: false, error: { code, message } })
+    // 改完立刻落盘，视图从落盘后的状态渲染——免得界面和盘上不一致。
+    const commit = (next) => {
+      m = next
+      saveMount(m)
+      return view()
+    }
+    if (action === 'status') return view()
+    if (action === 'open') {
+      // openCard 认的是「一张卡」的形状（{ card }），不是整个 mount 状态。
+      const r = openCard({ card: openCardOf(m) }, { topicId: body?.topicId, goal: body?.goal, at: now, sources: [] })
+      if (!r.ok) return fail(r.code, r.text)
+      record({ state: 'mount', at: now, action: 'open', by: 'user', slot: 'goal' })
+      return commit({ ...m, cards: [...m.cards, r.card].slice(-MOUNT_KEEP), streak: 0, askAt: 0 })
+    }
+    if (action === 'drop-proposal') return commit({ ...m, pending: null })
+    // 断链检测的显式入口：`text` 就是他这一句原话。插件拿不到聊天消息，只能由拿得到的那一层来调。
+    if (action === 'seen') {
+      const cur = openCardOf(m)
+      const d = driftOf(cur, body?.text)
+      const show = Boolean(cur) && shouldShowCard(m.streak, d.drift)
+      const next = { ...m, streak: show ? 0 : nextStreak(m.streak, d.drift), askAt: show ? now : m.askAt }
+      return { ...commit(next), drift: { drift: d.drift, hit: d.hit, need: d.need, ask: show, streak: next.streak } }
+    }
+    // 恢复要在「没有 open 卡」的时候才成立，所以它排在 no-card 那个判断前面。
+    if (action === 'resume') {
+      const want = m.cards.find((c) => c.id === String(body?.id || '')) || null
+      if (!want) return fail('no-card', '没有这张卡。')
+      if (openCardOf(m)) return fail('card-open', '已经有一张开着的卡，先停放或关掉它。')
+      const r = resumeCard(want, { at: now })
+      if (!r.ok) return fail(r.code, r.text)
+      record({ state: 'mount', at: now, action: 'resume', by: 'user' })
+      return commit(putCard(m, r.card))
+    }
+    const cur = openCardOf(m)
+    if (!cur && action !== 'close') return fail('no-card', '现在没有开着的卡：先开一张。')
+    if (action === 'given' || action === 'step') {
+      const r = action === 'given'
+        ? withGiven(cur, { text: body?.text, at: now, src: body?.src, sources: [] })
+        : withStep(cur, { text: body?.text, at: now, from: body?.from, sources: [] })
+      if (!r.ok) return fail(r.code, r.text)
+      record({ state: 'mount', at: now, action: 'add', by: 'user', slot: action })
+      return commit(putCard(m, r.card))
+    }
+    if (action === 'accept') {
+      if (!m.pending) return fail('no-proposal', '没有待确认的提议。')
+      const r = acceptProposal(cur, m.pending, { at: now, from: body?.from })
+      if (!r.ok) return fail(r.code, r.text)
+      record({ state: 'mount', at: now, action: 'add', by: 'her', slot: m.pending.slot })
+      return commit({ ...putCard(m, r.card), pending: null })
+    }
+    if (action === 'park') {
+      const r = parkCard(cur, { at: now, where: body?.where })
+      if (!r.ok) return fail(r.code, r.text)
+      record({ state: 'mount', at: now, action: 'park', by: 'user' })
+      return commit(putCard(m, r.card))
+    }
+    if (action === 'close') {
+      const r = closeCard(closeCardOf(m), { at: now })
+      if (!r.ok) return fail(r.code, r.text)
+      record({ state: 'mount', at: now, action: 'close', by: 'user' })
+      return commit({ ...putCard(m, r.card), streak: 0, askAt: 0 })
+    }
+    return fail('bad-action', 'status|open|seen|given|step|accept|park|resume|close|drop-proposal')
+  }
+  /**
+   * C1：提议挂载。只能把他自己的原话挂上去，而且必须指出账本行号——
+   * 没有出处的提议不受理，因为「她总结他刚才说了什么」正是要防的那件事。
+   * 他点头之后才落卡（浮层里点一下），这里只提议。
+   */
+  function mountProposeTool(role) {
+    return {
+      name: 'mount_propose',
+      description: '把他说过的原话提议挂到工作记忆卡上（他不点头不落卡）。src 必须是他那句话在账本里的行号；' +
+        'slot=given 是已知条件，slot=step 是中间结论（还要 from 指明由哪几条已知推出）。' +
+        '你只能提议、不能替他总结：text 必须是他的原话。他越自己挂卡，你每天能提议的次数越少。',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: '他的原话，≤120 字' },
+          slot: { type: 'string', description: 'given（已知条件）/ step（中间结论）' },
+          src: { type: 'string', description: '账本行号，例：128' },
+          from: { type: 'array', items: { type: 'integer' }, maxItems: 5, description: 'step 必填：由哪几条已知（下标 0 起）推出' },
+        },
+        required: ['text', 'slot', 'src'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        // 行号按整份账本从头数，不随读取窗口滑动（和 revise_stance 同一口径）。
+        const rows = readLedger(home(), 5000).map((e, i) => ({ ...e, seq: i + 1 }))
+        const seq = Number(args.src)
+        const hit = Number.isInteger(seq) && seq > 0 ? rows[seq - 1] : null
+        if (!hit || typeof hit.text !== 'string') return { ok: false, text: '账本里没有第 ' + String(args.src || '') + ' 行原话：提议必须有出处。' }
+        const cap = proposeCap(scaffold(rows).ratio)
+        if (cap <= 0) return { ok: false, text: '今天不再提议了：他一直在自己挂卡，你该少插手。' }
+        const used = rows.filter((e) => e?.state === 'mount-propose' && Number(e.at) >= zoneStartOfDay(now, zoneOr(config.timeZone))).length
+        if (used >= cap) return { ok: false, text: '今天的提议额度用完了（' + cap + ' 次）：剩下的让他自己挂。' }
+        const r = proposeMount({ text: args.text, slot: args.slot, at: now, src: String(seq), sources: [stripInjection(hit.text)] })
+        if (!r.ok) return { ok: false, text: r.text }
+        saveMount({ ...loadMount(), pending: r.proposal })
+        record({ state: 'mount-propose', at: now, by: role, slot: r.proposal.slot, src: String(seq) })
+        return { ok: true, text: '提议挂到「' + (r.proposal.slot === 'given' ? '已知条件' : '中间结论') + '」：' + r.proposal.text + '（他点头才落卡）' }
+      },
+    }
+  }
+  /** C1：停放。开新卡前把旧卡停在哪说一句，不许无声息地扔下。 */
+  function mountParkTool(role) {
+    return {
+      name: 'mount_park',
+      description: '把当前这张工作记忆卡停起来，一句话说清停在哪（下次回来才知道从哪接）。' +
+        '停着的卡他随时能恢复；要彻底不做才用 mount_close（关掉就只读了）。',
+      parameters: {
+        type: 'object',
+        properties: { where: { type: 'string', description: '停在哪：他推到哪一步、回来从哪接' } },
+        required: ['where'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const m = loadMount()
+        const r = parkCard(openCardOf(m), { at: now, where: args.where })
+        if (!r.ok) return { ok: false, text: r.text }
+        saveMount(putCard(m, r.card))
+        record({ state: 'mount-park', at: now, by: role })
+        return { ok: true, text: '停好了：' + r.card.parkedWhy + '。他回来点恢复就能接着推。' }
+      },
+    }
+  }
+  /** C1：关掉。关掉之后只读，卡留着能查，不再进每轮注入。 */
+  function mountCloseTool(role) {
+    return {
+      name: 'mount_close',
+      description: '关掉当前的工作记忆卡：关掉之后只读，卡还在但不再进每轮注入。他没做完的事用 mount_park。',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      output: toolOutput,
+      execute: () => {
+        const now = Date.now()
+        const m = loadMount()
+        const r = closeCard(closeCardOf(m), { at: now })
+        if (!r.ok) return { ok: false, text: r.text }
+        saveMount({ ...putCard(m, r.card), streak: 0, askAt: 0 })
+        record({ state: 'mount-close', at: now, by: role })
+        return { ok: true, text: '关了。卡还在（' + r.card.givens.length + ' 条已知、' + r.card.steps.length + ' 条结论），以后查得到。' }
+      },
+    }
   }
 
   function eventRoute(body) {
@@ -2690,6 +3552,23 @@ export function apply(ctx) {
     if (type === 'overlay-closed') {
       // busy = 点了「在忙，晚点回」（C4）：不算回过话、不开安静期，只记一笔。
       record({ state: 'overlay-closed', at: now, chatted: body?.chatted === true, muted: body?.muted === true, busy: body?.busy === true || undefined, app: typeof body?.app === 'string' ? body.app.slice(0, 120) : undefined })
+      return { v: 1, ok: true }
+    }
+    if (type === 'voice-out') {
+      // B5：手机报"这一条到底念出来没有"。念了就 ok，没念就带降级原因——这是唯一能知道
+      // 语音有没有真的响过的来源，插件自己不知道手机的音量和勿扰。
+      // 这条不进 silence/emotion 的任何判断（它们只认 generated / replied / human / said），
+      // 所以记在同一个 requestId 下面也不会被当成"回过话"。
+      record({
+        state: 'voice-out',
+        at: now,
+        requestId: typeof body?.requestId === 'string' ? body.requestId.slice(0, 128) : undefined,
+        ok: body?.ok === true,
+        why: body?.ok === true ? undefined : String(body?.why || 'unknown').slice(0, 20),
+        chars: Number.isFinite(Number(body?.chars)) ? Math.max(0, Math.min(200, Number(body.chars))) : undefined,
+        rate: Number.isFinite(Number(body?.rate)) ? Math.round(Number(body.rate) * 100) / 100 : undefined,
+        pitch: Number.isFinite(Number(body?.pitch)) ? Math.round(Number(body.pitch) * 100) / 100 : undefined,
+      })
       return { v: 1, ok: true }
     }
     if (type === 'defied') {
@@ -3119,15 +3998,30 @@ export function apply(ctx) {
       arms: loadBrain().arms,
       state: { last: st.last || {}, streak: st.streak || {} },
     })
+    // B3：例句现抽现给，避开最近 10 句用过的；池子太薄就是 null（这个 arm 当轮不说话）。
+    const pickedSamples = pickSamples(readSamples(notesDir())[temper?.face || ''], st.recentSamples, built.rng) || []
+    const nightly = loadNightly()
     const lines = renderVibe(built.picks, {
       temperLine: temperLine(temper),
       predictions: predictionLines(loadPredict(), now),
-      keywords: (daily.tasks || []).map((t) => (keywordsOf(t.evidence) || [])[0]).filter(Boolean),
+      // B3：关键词卡三处合并（手写 > B2 的 links > 近 7 天高频词），去重后取前几个。
+      keywords: keywordCard({
+        manual: readManualKeywords(notesDir()),
+        links: linkWords(nightly, now),
+        fresh: countWords(recentNoteTexts(notesDir(), now)),
+      }),
+      samples: pickedSamples,
+      // B2：innerOS 的素材来源——她夜里自己整理出来、要带上这一轮的事。
+      carry: carryTexts(nightly, now),
       stateLines,
       face: temper?.face || '',
       roll: built.rng(),
     })
-    saveVibeState({ v: 1, turn: turn + 1, last: built.state.last, streak: built.state.streak })
+    saveVibeState({
+      v: 1, turn: turn + 1, last: built.state.last, streak: built.state.streak,
+      // B3：记下这一轮用了哪几句，下一轮避开（最多留 RECENT_SKIP 条）。
+      recentSamples: [...(st.recentSamples || []), ...pickedSamples].slice(-RECENT_SKIP),
+    })
     lastVibePicks = pickedArms(built.picks)
     lastVibe = { face: temper?.face || '', turn: built.snapshot.turn }
     // §13.2：每轮落注入快照，真机"前后不一致"时翻快照定位，不靠猜。
@@ -3135,30 +4029,71 @@ export function apply(ctx) {
     vibeCache = { at: now, role, lines }
     return lines
   }
+  /**
+   * 约束层里的立场块：生效中的立场（hard 优先）+ 退让提醒。
+   * 约束层永不裁，所以这里自己封顶（stance.js 的 stanceBlock），别让整轮注入抛错。
+   */
+  function stanceText() {
+    const now = Date.now()
+    const tz = zoneOr(config.timeZone)
+    const block = stanceBlock(loadStances(), now, (t) => zoneHm(t, tz))
+    const warn = yieldLine(agreementRate(loadYieldTurns(), 20))
+    return [block, warn].filter(Boolean).join('\n')
+  }
+  /**
+   * C1：状态层里的挂载卡（状态层最高优先级——卡断了整轮白聊）。
+   *
+   * 只有 open 卡进注入，没卡就一行不占。行本身在 mount.js 里封顶 300 字（先丢已知再截结论），
+   * 所以这里不再截一次。
+   */
+  function mountText() {
+    try {
+      const m = loadMount()
+      const card = openCardOf(m)
+      const hm = Number(card?.touchedAt) > 0 ? zoneHm(Number(card.touchedAt), zoneOr(config.timeZone)) : ''
+      const line = mountLine(card, { hm })
+      if (!line) return ''
+      // 连着两轮他说的和卡上对不上：这一轮只做一件事，亮卡 + 二选一。
+      const ask = m.askAt > 0 && Date.now() - m.askAt < 30 * 60_000
+        ? '他这两轮说的和卡上对不上。这一轮只做一件事：把上面这张卡亮给他，问一句二选一——「继续这张，还是先停放？」，别的都先别说。'
+        : ''
+      return [line, ask].filter(Boolean).join('\n')
+    } catch {
+      return '' // 卡读坏了不能拖垮人设
+    }
+  }
+  /** 当前主状态（人设、fish_index、工具子集都用这一个口径，别各算一套）。 */
+  function mainStateNow() {
+    if (statePin) return statePin
+    const now = Date.now()
+    return resolveState({
+      now,
+      tz: zoneOr(config.timeZone),
+      config,
+      rhythm: lastRhythm || {},
+      followup: followupView(config.followup, now),
+      session: loadGemini().session,
+    }).state
+  }
   function chatPersonaText(role) {
     if (config.personaInChat === false) return ''
+    // R7 P0-3：先把工具子集对齐到当前主状态，再算注入——不然模型拿到的议程和手里的工具会对不上。
+    syncTools(role)
     const mode = effectiveMode(config, Date.now())
     if (config.dual === false) return singlePersonaText(mode)
     const names = roleNames(config)
     const refuseAt = Number(config.refuseUntil) || 0
     const refuseLines = refuseAt > Date.now()
-      ? ['拒绝模式开着（到 ' + new Date(refuseAt).toISOString().slice(11, 16) + ' UTC）：他一打开娱乐 App 手机就会把他赶回桌面锁住。他求你放行，不松；要关只能他自己说"关掉拒绝模式"。']
+      ? ['拒绝模式开着（到 ' + zoneHm(refuseAt, zoneOr(config.timeZone)) + '）：他一打开娱乐 App 手机就会把他赶回桌面锁住。他求你放行，不松；要关只能他自己说"关掉拒绝模式"。']
       : []
     // D6：议程跟当前主状态走（状态机在 machine.js，追问锁是叠在上面的临时层）。
     // 锁的对外形状统一走 followupView（{active,reason,currentQuestion,since,until}），别再自己拼。
-    const mainState = resolveState({
-      now: Date.now(),
-      tz: zoneOr(config.timeZone),
-      config,
-      rhythm: lastRhythm || {},
-      followup: followupView(config.followup, Date.now()),
-      session: loadGemini().session,
-    }).state
+    const mainState = mainStateNow()
     const stateLines = [...trustLines(trustNow()), ...rhythmLines(lastRhythm), ...gearLines(config, Date.now()), ...geminiLines(loadGemini(), Date.now()),
-      ...depositLines(depositToday(Date.now()), Boolean(lastRhythm?.reviewGate)),
+      ...depositLines(depositToday(Date.now()), Boolean(lastRhythm?.reviewGate), { tasks: dailyToday().tasks }),
       ...agendaLines(mainState), ...knowledgeLines(kbDir(notesDir(), home()), role)]
     const notes = notesFor(role).map((n) => (n.from === 'companion' ? names.companion : names.strategist) + '刚跟你递话（' +
-      new Date(Number(n.at)).toISOString().slice(11, 16) + ' UTC）："' + n.text + '"')
+      zoneHm(Number(n.at), zoneOr(config.timeZone)) + '）："' + n.text + '"')
     const noteLines = notes.length ? ['姐妹之间的悄悄话（他看不到，自然地用上就行）：', ...notes.map((t) => '- ' + t)] : []
     // 内容层随机：只加不减，常驻层已经全在 stateLines 里。
     const vibeLines = (() => {
@@ -3168,16 +4103,61 @@ export function apply(ctx) {
         return [] // 随机器坏了不能拖垮人设
       }
     })()
-    if (role === 'strategist') {
-      // 关系库人物卡（价值观/底线/边界）是姐姐的底子。
-      const core = personaLines(mergePersona(readCorePersona(home()), {}), mode).filter((l) => !/^现在是(伙伴|教练)模式/.test(l))
-      return strategistChatText(config, core, [...refuseLines, ...stateLines, ...vibeLines, capabilityLines('strategist', { notesDir: notesDir() }), ...noteLines])
+    // R7 P0-3：不再直接拼字符串——每一块带 layer/priority 进预算，超了按优先级整块裁。
+    // 约束层（人设底稿 + 关系库卡 + 拒绝模式 + 能力说明 + 议程）永不裁，它超了 fitBudget 会抛错；
+    // 状态层（信用分/作息/档位/连麦/四段/知识库）按 priority 装；内容层（随机块/悄悄话）最后装。
+    const core = role === 'strategist'
+      ? personaLines(mergePersona(readCorePersona(home()), {}), mode).filter((l) => !/^现在是(伙伴|教练)模式/.test(l))
+      : []
+    const modeLines = mode === 'coach' ? ['他现在开了严格模式：你可以更凶、更不依不饶，但还是你自己的样子。'] : []
+    const blocks = [
+      {
+        id: 'persona',
+        layer: 'constraint',
+        priority: 100,
+        text: role === 'strategist' ? strategistChatText(config, core, []) : companionChatText(config, modeLines),
+      },
+      { id: 'refuse', layer: 'constraint', priority: 95, text: refuseLines.join('\n') },
+      { id: 'capability', layer: 'constraint', priority: 90, text: capabilityLines(role, { notesDir: notesDir() }) },
+      { id: 'agenda', layer: 'constraint', priority: 85, text: agendaLines(mainState).join('\n') },
+      { id: 'stance', layer: 'constraint', priority: 87, text: stanceText() },
+      { id: 'plan', layer: 'constraint', priority: 86, text: planText() },
+      // C1：挂载卡是状态层最高优先级——卡一断这轮就白聊，别的都能让一让。
+      { id: 'mount', layer: 'state', priority: 65, text: mountText() },
+      { id: 'trust', layer: 'state', priority: 60, text: trustLines(trustNow()).join('\n') },
+      // B4：情绪一行。它是"现在什么状态"，不是规矩，所以是状态层、可裁。
+      { id: 'emotion', layer: 'state', priority: 48, text: emotionLine(emotionOf(readLedger(home(), 400), {
+        now: Date.now(), tz: zoneOr(config.timeZone), quietStart: config.quietStart, quietEnd: config.quietEnd,
+      }), Date.now()) },
+      { id: 'rhythm', layer: 'state', priority: 55, text: rhythmLines(lastRhythm).join('\n') },
+      { id: 'gear', layer: 'state', priority: 50, text: gearLines(config, Date.now()).join('\n') },
+      { id: 'gemini', layer: 'state', priority: 45, text: geminiLines(loadGemini(), Date.now()).join('\n') },
+      { id: 'deposit', layer: 'state', priority: 40, text: depositLines(depositToday(Date.now()), Boolean(lastRhythm?.reviewGate), { tasks: dailyToday().tasks }).join('\n') },
+      { id: 'knowledge', layer: 'state', priority: 35, text: knowledgeLines(kbDir(notesDir(), home()), role).join('\n') },
+      { id: 'vibe', layer: 'content', priority: 20, text: vibeLines.join('\n') },
+      // B2：夜间整理的底稿。进内容层（可裁）——它是背景素材，不是规矩，不该占状态层的位置。
+      { id: 'nightly', layer: 'content', priority: 16, text: nightlyLines(loadNightly(), Date.now()) },
+      // A4：块刚结束的这一句进内容层（可裁），不进约束层——它是随机的一句话，不是规矩。
+      { id: 'slot-ask', layer: 'content', priority: 18, text: slotAskNext && Date.now() - slotAskNext.at < 30 * 60_000 ? slotAskNext.text : '' },
+      { id: 'notes', layer: 'content', priority: 10, text: noteLines.join('\n') },
+    ]
+    // B3：depth 接 P0-3 预算——`config.ctxDepth` 是 low/mid/high（30%/60%/100%），只压内容层。
+    // 默认 high，也就是不传这个配置时行为和以前一字不差。
+    const fitted = fitBudget(blocks, depthBudget(config.ctxDepth, config.ctxBudget))
+    // 超预算的块要能被看见（规格第 4 条）。落自己的 ctx-budget.jsonl，不塞 ledger.jsonl：
+    // 账本那边有按行位置断言的既有用例，不能被每轮一条的注入记录挤动。
+    try {
+      appendFileSync(stateFile('ctx-budget.jsonl'), JSON.stringify({
+        at: Date.now(), role, chars: fitted.chars, kept: fitted.kept, dropped: fitted.dropped,
+      }) + '\n', 'utf8')
+    } catch {
+      // 记不上不能拖垮人设
     }
-    const extra = mode === 'coach' ? ['他现在开了严格模式：你可以更凶、更不依不饶，但还是你自己的样子。'] : []
-    return companionChatText(config, [...extra, ...refuseLines, ...stateLines, ...vibeLines, capabilityLines('companion', { notesDir: notesDir() }), ...noteLines])
-  }
-  /** role -> {sid, agent, off}：两个会话各挂各的人设。 */
+    return fitted.text
+  }  /** role -> {sid, agent, off}：两个会话各挂各的人设。 */
   const personaMounts = new Map()
+  /** role -> {sid, all}：本次挂载构造出来的全部工具（全集），状态一变就按新子集重挂。 */
+  const toolBag = new Map()
   function mountOne(role, sid) {
     const cur = personaMounts.get(role) || { sid: '', agent: null, off: null }
     const agent = sid ? liveAgent(ctx, sid) : null
@@ -3203,13 +4183,22 @@ export function apply(ctx) {
       // 第四轮补：按用户决定，把原来"谁都没有"的五个全给她们——裁决（submit_verdict）、
       // 当场放风（grant_break）、验收任务（end_task_mode）、定事（daily_plan）、对账（daily_review）。
       // 墙的权限不低于这些：submit_to_wall 仍然只认物理证据，比她们自己说了算更严。
-      const list = [
+      // R7 P0-3：按当前主状态注册子集（每个状态 ≤8）。被裁掉的工具不是删掉——`fish_index`
+      // 会告诉模型「哪几个能力现在能用、什么时候能用」；状态一变就重新注册（见 syncTools）。
+      const state = mainStateNow()
+      const sub = new Set(toolsFor(state))
+      const all = [
         notesTool(), sisterToolIfDual(role), vaultSearchTool(), vaultRecentTool(), kbTool(role),
         geminiLiveTool(role), geminiEndTool(role), geminiLogTool(role), scheduleGeminiLiveTool(role),
         controlTool(), startTaskTool(role), blockTool(role), tightenTool(role), relaxTool(role),
         wallTool(role), verdictTool(role), breakTool(role), endTaskTool(role),
         dailyPlanTool(role), dailyReviewTool(role), predictTool(role), workflowTool(role),
+        takeStanceTool(role), reviseStanceTool(role),
+        mountProposeTool(role), mountParkTool(role), mountCloseTool(role),
+        fishIndexTool(),
       ].filter(Boolean)
+      const list = all.filter((tool) => sub.has(tool.name))
+      toolBag.set(role, { sid, all, state })
       for (const tool of list) {
         try {
           const off = agent.ctx.tools.register(tool)
@@ -3238,6 +4227,41 @@ export function apply(ctx) {
     const strat = config.dual === false ? '' : config.strategistSessionId || ''
     // 两个角色指向同一个会话时，只挂陪伴那一份，别让模型同时拿到两套人设。
     mountOne('strategist', strat && strat !== config.sessionId ? strat : '')
+  }
+  /**
+   * R7 P0-3：主状态变了就把工具子集换掉。
+   * 不重建工具对象——它们是闭包，重建会丢掉执行期状态；只重做注册/注销。
+   * 每轮注入前调一次（状态只会在 /plan 或时限到期时变，绝大多数轮次在这里是空转）。
+   */
+  function syncTools(role) {
+    const bag = toolBag.get(role)
+    const mount = personaMounts.get(role)
+    if (!bag || !mount?.agent) return
+    const state = mainStateNow()
+    if (bag.state === state) return
+    bag.state = state
+    try {
+      mount.toolOff?.()
+    } catch {
+      // ignore
+    }
+    const offs = []
+    const want = new Set(toolsFor(state))
+    for (const tool of bag.all) {
+      if (!want.has(tool.name)) continue
+      try {
+        const off = mount.agent.ctx.tools.register(tool)
+        if (typeof off === 'function') offs.push(off)
+      } catch (error) {
+        console.error('[companion] 换档重挂工具 ' + tool.name + ' 失败（' + role + '）：' + String((error && error.message) || error))
+      }
+    }
+    mount.toolOff = offs.length ? () => offs.forEach((f) => f()) : null
+  }
+  // 测试口子接上生产那条重挂路径：钉状态后立刻按新子集重挂，不等下一轮注入。
+  remountAll = () => {
+    syncTools('companion')
+    syncTools('strategist')
   }
   try {
     mountPersona()
@@ -3276,6 +4300,319 @@ export function apply(ctx) {
   sweeper.unref?.()
   ctx.effect?.(() => () => clearInterval(sweeper))
 
+  // 引擎崩过之后：库里还挂着一局，但这进程里没有它（live 是空的）。
+  // 收成空局，不补。挂在库里的话，手机那头会一直以为「有局在进行」，而这一局永远判不出来。
+  try {
+    const db = openBoutsDb(memoryPath())
+    const r = reapRunning(db, { now: Date.now(), home: home() })
+    if (r.closed) {
+      record({ state: 'bout-reap', at: Date.now(), boutId: r.bout.id, protocolId: r.bout.protocolId || '' })
+    }
+    db?.close?.()
+  } catch (error) {
+    console.error('[companion] 重启收尾失败：' + String((error && error.message) || error))
+  }
+
+  // 第八轮 P1/P2：计划的节拍。每分钟一次，只做两件事——把今天的计划维护在文件里，
+  // 到点了交给 startBout。引擎挂了一段时间也不会多开一局：过点太久的在 planwire 里
+  // 直接记成空局（LATE_SKIP_MIN），追补会把人连着按在椅子上开三局。
+  // ---- 第八轮 P4：升级阶梯接线 ---------------------------------------------------------------
+  //
+  // 上一批把 reply.js / escalate.js 写完了，但两个模块一条 import 都没有——规则全在、接线没有。
+  // 这一段就是那条接线，三个入口：
+  //   ladderAnswer  局官每收到一条回答（含超时、含 RETRY_LIMIT 打满）
+  //   ladderTick    /plan 每分钟拿手机快照算沉迷那一串
+  //   ladderE1Prime E1′：舱发出 60 秒 Gemini 没进前台 → 全机锁
+  //
+  // 状态只放一个文件（escalate.json），里面两块：`ladder` 是 escalate.js 的当天状态，
+  // 另外几个是「这个动作现在在手机上长什么样」（cell / cellUntil / planUntil / escalationId / tickAt）。
+  // 不另开表：escalate.js 的计数已经有了，再造一份就是两份账对不上。
+
+  function loadLadderDoc() {
+    const d = readState(stateFile('escalate.json'), null)
+    const src = d && typeof d === 'object' ? d : {}
+    return {
+      ladder: src.ladder && typeof src.ladder === 'object' ? src.ladder : {},
+      cell: String(src.cell || ''),
+      cellUntil: Number(src.cellUntil) || 0,
+      planUntil: Number(src.planUntil) || 0,
+      escalationId: String(src.escalationId || ''),
+      tickAt: Number(src.tickAt) || 0,
+    }
+  }
+  const saveLadderDoc = (d) => writeJson(stateFile('escalate.json'), d)
+
+  /** 他声明成工作/工具的那些包：L2 只问「既不是娱乐也不是这些」的 App。 */
+  const declaredApps = () => appsOf().filter((a) => a && a.role && a.role !== 'fun').map((a) => a.pkg)
+
+  /** 记一次升级。写进 escalations 表——墙的「今日升级」读的就是这张表。 */
+  // shortcut: 只写开、不写关（bouts.js 的 endEscalation 目前没被调用），所以墙只看开始时间，
+  // 那一行不显示「几点结束」。什么时候该补：复盘要按「这一轮怎么结束的」分类统计的那天。
+  function fileEscalation(verdict, now) {
+    const row = rowOf(verdict)
+    let db = null
+    try {
+      db = openBoutsDb(memoryPath())
+      const r = startEscalation(db, { reason: row.reason || row.level, level: row.level, now, home: home() })
+      return r.ok ? r.id : ''
+    } catch (error) {
+      // 记账失败不能让这一条升级不生效：锁还是要下发。
+      console.error('[companion] 升级落账失败：' + String((error && error.message) || error))
+      return ''
+    } finally {
+      try {
+        db?.close?.()
+      } catch {
+        // 关不掉不影响这一条
+      }
+    }
+  }
+
+  /**
+   * 把一条升级动作落到手机。手机只认两处（见 ladder.js 头注释）：连麦舱和墙的收紧。
+   * @returns {string} 这一条为什么落在那儿（给 record 用）
+   */
+  function applyLanding(verdict, now) {
+    const tz = zoneOr(config.timeZone)
+    const endOfDay = startOfDay(now, tz) + 86_400_000
+    const l = landing(verdict, { now, endOfDay })
+    if (!l) return ''
+    const doc = loadLadderDoc()
+    const next = { ...doc }
+    if (l.cell) {
+      const minutes = Math.max(1, Math.round((l.until - now) / 60_000))
+      saveGemini({
+        ...loadGemini(),
+        session: {
+          topic: String(verdict?.why || '').slice(0, 100), mode: 'interrogate', minutes,
+          startedAt: now, until: l.until, by: 'ladder', cell: l.cell,
+        },
+      })
+      // 拉起 Gemini 沿用 R4-4 的预约：手机到点自己调 /gemini/due 取简报并打开。
+      // 只有 cell 要拉——all-lock 是他不肯进舱，再拉一次没有意义。
+      if (l.cell === 'cell') {
+        saveGeminiSchedule({ at: now + 500, topic: String(verdict?.why || '').slice(0, 100), minutes, mode: 'interrogate', by: 'ladder' })
+      }
+      next.cell = l.cell
+      next.cellUntil = l.until
+    }
+    if (l.tighten) tightenNow(now, tz, { reason: String(verdict?.why || '升级').slice(0, 100), by: 'ladder' })
+    if (l.plan) next.planUntil = l.until
+    if (l.block) {
+      const keep = (Array.isArray(config.blockExtra) ? config.blockExtra : []).filter((b) => b && b.app !== l.block)
+      commit({ blockExtra: [...keep, { app: l.block, until: l.until, by: 'ladder' }].slice(-30) })
+    }
+    if (l.ask) {
+      // L2 核对：先问一句。2 分钟不答由下一拍自己升级成「锁那个包」，这里不预判。
+      // 不说包名：代码认不出「抖音」这种中文名，硬拼一个英文包名给他看比不说更糟。
+      openFollowup('standby', '你在局里用的是没声明的应用。回去，还是收局？', now)
+    }
+    saveLadderDoc(next)
+    return [l.cell, l.tighten ? '墙收紧' : '', l.plan ? '计划模态' : '', l.block ? '锁 ' + l.block : '', l.ask ? '核对' : '']
+      .filter(Boolean).join('+')
+  }
+
+  /** 升级了：落账 + 落手机 + 记一笔。三件事一起做，少一件就是「说升级了其实没动」。 */
+  function raiseEscalation(verdict, now) {
+    const id = fileEscalation(verdict, now)
+    const landed = applyLanding(verdict, now)
+    record({
+      state: 'escalate', at: now, rule: verdict.rule, track: verdict.track || '',
+      action: String(verdict.action?.type || ''), landed, why: String(verdict.why || '').slice(0, 200),
+      escalationId: id || undefined,
+    })
+    if (id) saveLadderDoc({ ...loadLadderDoc(), escalationId: id })
+    return { id, landed }
+  }
+
+  /**
+   * 局官每收到一条回答。先分类，只有敷衍才记一次、才判升级。
+   * @param {{text?:string, timedOut?:boolean, passed?:boolean|null, recent?:string[],
+   *          now?:number, countIt?:boolean}} input
+   */
+  function ladderAnswer(text, input = {}) {
+    const now = Number(input.now) || Date.now()
+    const tz = zoneOr(config.timeZone)
+    const doc = loadLadderDoc()
+    const r = ladderStep(doc.ladder, {
+      text,
+      timedOut: input.timedOut === true,
+      passed: input.passed,
+      recent: Array.isArray(input.recent) ? input.recent : [],
+      now,
+      day: startOfDay(now, tz),
+      min: zoneMinuteOfDay(now, tz),
+      dayKind: dayKindOf(now, tz, config),
+      settings: settingsOf(config),
+      countIt: input.countIt !== false,
+    })
+    saveLadderDoc({ ...doc, ladder: r.state })
+    if (!r.verdict) return { kind: r.kind, verdict: null, note: r.note }
+    raiseEscalation(r.verdict, now)
+    return { kind: r.kind, verdict: r.verdict, note: r.note }
+  }
+
+  /**
+   * E1′：舱发出宽限期之后 Gemini 还没进前台（或手机上没有 Gemini）→ 全机锁。
+   * 由 /plan 每分钟兜一次——手机不一定每次都报 gemini-start，不能只等它。
+   */
+  function ladderE1Prime(now = Date.now()) {
+    const doc = loadLadderDoc()
+    if (doc.cell !== CELL || !(doc.cellUntil > now)) return null
+    const gem = geminiSessionView(now)
+    const fg = String(lastPhone?.app || '')
+    const r = evaluateEPrime({
+      now,
+      cellAt: Number(loadGemini().session?.startedAt) || 0,
+      geminiForeground: Boolean(gem && fg && gem.allow.includes(fg)),
+      hasGemini: geminiPackages().length > 0,
+    })
+    if (!r.rule) return null
+    // 先把舱标成 all-lock：不然下一分钟还会再判一次 E1′，一天能刷出几十条升级账。
+    saveLadderDoc({ ...doc, cell: ALL_LOCK })
+    const verdict = { rule: r.rule, track: 'E', action: r.action, why: r.why }
+    raiseEscalation(verdict, now)
+    return verdict
+  }
+
+  /**
+   * 沉迷那一串：每分钟拿手机快照算 L1–L3。
+   * 没有手机快照就什么都不算——不知道他在哪个 App 就判「在刷视频」，等于凭空造一次锁。
+   */
+  function ladderTick(now = Date.now()) {
+    const phone = lastPhone
+    const fg = String(phone?.app || '')
+    const doc = loadLadderDoc()
+    const last = doc.tickAt
+    saveLadderDoc({ ...doc, tickAt: now })
+    if (!phone || !fg) return null
+    const tz = zoneOr(config.timeZone)
+    const fun = roleOf(appsOf(), fg) === 'fun'
+    // 增量只算「上一拍也在这条路上」的那一段，且单拍最多算 3 分钟（引擎睡醒不该追补一小时）。
+    const funDeltaMs = fun && last > 0 && now > last ? Math.min(now - last, 3 * 60_000) : 0
+    const r = funStep(doc.ladder, {
+      now,
+      day: startOfDay(now, tz),
+      min: zoneMinuteOfDay(now, tz),
+      dayKind: dayKindOf(now, tz, config),
+      settings: settingsOf(config),
+      foreground: fg,
+      funPackage: fun,
+      declared: declaredApps(),
+      funDeltaMs,
+      // 局在跑：L2 的「用了没声明的应用就核对」不再等进工作时段。
+      inBout: Boolean(live && !live.official.view().closed),
+    })
+    saveLadderDoc({ ...loadLadderDoc(), ladder: r.state })
+    if (!r.verdict) return null
+    raiseEscalation(r.verdict, now)
+    return r.verdict
+  }
+
+  /**
+   * 局内的节拍：每分钟一次，只做两件事。
+   *
+   *   1. 这一拍的限时到了没有（official.tick）。到点没交就走协议写明的超时出口，
+   *      并按「没交」在升级阶梯上记一次。这一步以前没有任何调用方——「限时」因此只是
+   *      面板上的一个数字，到点什么都不发生，局会一直停在那一拍上等他。
+   *   2. 还没到点、但快到点了：先催一句（official.nudge），由常驻通知显示出来。
+   *      只催一次；到点才说话已经晚了，那一刻已经按超时出口走掉了。
+   *
+   * shortcut: 跟着 planBeat 的 60 秒节拍走，所以最晚会比限时晚 60 秒发现他超时。
+   * 要更准就单独起一个 15 秒的定时器——代价是这一套每 15 秒醒一次。
+   */
+  function boutBeat(now) {
+    if (!live) return null
+    const t = live.official.tick(now)
+    if (t.state === 'closed' || t.state === 'escalated') {
+      const boutId = live.official.boutId
+      record({ state: 'bout-timeout', at: now, boutId, result: String(t.state), reason: String(t.reason || '') })
+      // 到点没交＝这一拍没接：跟「答错重打」分开记，升级阶梯按 timedOut 分类。
+      try {
+        ladderAnswer('', { timedOut: true, now })
+      } catch (error) {
+        console.error('[companion] 超时记阶梯失败：' + String((error && error.message) || error))
+      }
+      dropLive()
+      return t
+    }
+    const n = live.official.nudge(now)
+    if (n.due) {
+      record({ state: 'bout-nudge', at: now, boutId: live.official.boutId, stepId: String(n.stepId || ''), leftSec: Number(n.leftSec) || 0 })
+    }
+    return n.due ? n : t
+  }
+
+  // 第八轮 P1/P2：计划的节拍。每分钟一次，只做两件事——把今天的计划维护在文件里，
+  // 到点了交给 startBout。引擎挂了一段时间也不会多开一局：过点太久的在 planwire 里
+  // 直接记成空局（LATE_SKIP_MIN），追补会把人连着按在椅子上开三局。
+  function planBeat() {
+    const now = Date.now()
+    const tz = zoneOr(config.timeZone)
+    // P4：每分钟先补两件事——E1′（舱发出后没人进舱）和沉迷那一串（L1/L2/L3）。
+    // 两件都只读手机快照；没有快照就都不动（不凭空判一次锁）。
+    try {
+      ladderE1Prime(now)
+      ladderTick(now)
+    } catch (error) {
+      console.error('[companion] 升级阶梯失败：' + String((error && error.message) || error))
+    }
+    try {
+      boutBeat(now)
+    } catch (error) {
+      console.error('[companion] 局内节拍失败：' + String((error && error.message) || error))
+    }
+    const day = startOfDay(now, tz)
+    const r = tick({
+      now,
+      day,
+      tz,
+      config,
+      min: zoneMinuteOfDay(now, tz),
+      stored: readState(stateFile('plan.json'), null),
+      running: Boolean(live?.official && !live.official.view().closed),
+      known: [...builtinProtocols().filter((x) => x.ok).map((x) => x.protocol.id), ...(thinkingProtocol() ? ['thinking'] : [])],
+    })
+    if (r.action !== 'hold' && r.action !== 'wait-confirm') writeJson(stateFile('plan.json'), r.plan)
+    // 挂着的「改松」到点了就在这里落地：这是唯一每分钟都跑一次的地方，不另开定时器。
+    const pendAt = Number(config.dayPendingAt) || 0
+    if (pendAt > 0 && now >= pendAt) {
+      try {
+        saveSettings(settingsOf(config.dayPending?.settings || config), '冷却期到点')
+      } catch (error) {
+        console.error('[companion] 冷却期落地失败：' + String((error && error.message) || error))
+      }
+    }
+    if (r.action === 'draft' || r.action === 'confirm') record({ state: 'plan-' + r.action, at: now, items: r.plan.items.length })
+    if (r.action === 'skip') record({ state: 'plan-skip', at: now, why: r.why })
+    if (!r.start) return r
+    const started = startBout(r.start)
+    record({ state: 'plan-open', at: now, protocolId: r.start, ok: started.ok })
+    // 局开了＝他已经回到轨道上：L1 压下来的计划模态到这里结束（施工书 P1「只能以一份计划生效结束」）。
+    if (started.ok) {
+      const doc = loadLadderDoc()
+      if (doc.planUntil) saveLadderDoc({ ...doc, planUntil: 0 })
+    }
+    if (!started.ok) {
+      // 开不起来就记成空局：不然后面每一分钟都重试同一局。
+      const plan = planOf(r.plan, day)
+      const item = plan.items.find((i) => !i.openedAt && !i.missed && i.protocolId === r.start)
+      if (item) item.missed = started.toast || '没开起来'
+      writeJson(stateFile('plan.json'), plan)
+    }
+    return r
+  }
+  const planTimer = setInterval(() => {
+    try {
+      planBeat()
+    } catch (error) {
+      // 计划出问题不能把引擎带走：下一分钟再来。
+      console.error('[companion] 计划节拍失败：' + String((error && error.message) || error))
+    }
+  }, 60_000)
+  planTimer.unref?.()
+  ctx.effect?.(() => () => clearInterval(planTimer))
+
   const rejection = (req) => {
     const connection = ctx.get?.('connection')
     return connection === undefined ? 503 : connection.requestRejection(req)
@@ -3291,7 +4628,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/sisters' || path === '/deposit' || path === '/workflows' || path === '/gemini/due')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -3340,7 +4677,7 @@ export function apply(ctx) {
           // user/message 事件先到；不先记上就会再发一球，把浮层里正在聊的窗口顶掉。
           const target = toStrategist ? config.strategistSessionId : config.sessionId
           if (target) lastHumanAt.set(String(target), Date.now())
-          record({ state: 'say-text', at: Date.now(), to: toStrategist ? 'strategist' : 'companion', text: said.slice(0, 300), via: 'overlay' })
+          record({ state: 'say-text', at: Date.now(), to: toStrategist ? 'strategist' : 'companion', text: stripInjection(said).slice(0, 300), via: 'overlay' })
           const r = await chat.request({
             v: 1, requestId: id, eventId: id, kind: 'say', payload: { text: said.slice(0, 2_000) }, deadlineMs: 120_000,
             ...(toStrategist ? { sessionId: config.strategistSessionId } : {}),
@@ -3351,11 +4688,16 @@ export function apply(ctx) {
         if (path === '/gemini/due') return send(res, 200, { v: 1, launch: dueGeminiLaunch(Date.now()) })
         if (path === '/event') return send(res, 200, eventRoute(body.value))
         if (path === '/session') return send(res, 200, sessionRoute(body.value))
+        if (path === '/bouts') return send(res, 200, boutsRoute(body.value))
         if (path === '/wall') return send(res, 200, wallRoute(body.value))
+        if (path === '/wall/thread') return send(res, 200, wallThreadRoute(body.value))
+        if (path === '/wall/appeal') return send(res, 200, wallAppealRoute(body.value))
         if (path === '/sisters') return send(res, 200, sistersRoute(body.value))
         if (path === '/tracks') return send(res, 200, tracksRoute(body.value))
       if (path === '/workflows') return send(res, 200, workflowsRoute(body.value))
         if (path === '/deposit') return send(res, 200, depositRoute(body.value))
+        if (path === '/mount') return send(res, 200, mountRoute(body.value))
+        if (path === '/drill-op') return send(res, 200, drillOpRoute(body.value))
         config = mergeConfig(config, body.value)
         writeConfig(config)
         // 换了会话 / 名字 / 人设：马上重挂，不等下一次定时检查。
@@ -3369,6 +4711,11 @@ export function apply(ctx) {
       if (req.method === 'GET' && path === '/result') {
         const waitMs = Math.min(Math.max(Number(url.searchParams.get('waitMs') ?? 0) || 0, 0), 25_000)
         const id = String(url.searchParams.get('requestId') ?? '')
+        // B1：这一轮不发是决定，不是失败。回 409 + skip-no-content，手机按既有的
+        // AgentWire.Skip 静默收尾（不计 notDeliveredStreak、不在这一分钟内重试）。
+        if (suppressed.has(id)) {
+          return send(res, 409, { v: 1, error: { code: 'skip-no-content', message: '这一轮不发：句子没有信息增量' } })
+        }
         const r = await (chat.records.has(id) ? chat : desk).wait(id, waitMs)
         // 双人格：话前面标上是谁说的（〔鱼丸〕/〔鲸澜〕），浮层据此显示名字。
         if (config.dual !== false && r?.body?.state === 'generated' && typeof r.body.text === 'string') {
@@ -3379,6 +4726,18 @@ export function apply(ctx) {
       }
       if (req.method === 'GET' && path === '/status') {
         return send(res, 200, statusBody())
+      }
+      // A3：审查记录是只读的，所以它是 GET；body 里没东西也照样能查。
+      if (req.method === 'GET' && path === '/wall/thread') {
+        return send(res, 200, wallThreadRoute({ timeZone: url.searchParams.get('timeZone') || undefined }))
+      }
+      // C1：挂载卡的只读视图（浮层小卡打开时先 GET 一次）。写操作走 POST。
+      if (req.method === 'GET' && path === '/mount') {
+        return send(res, 200, mountRoute({ timeZone: url.searchParams.get('timeZone') || undefined }))
+      }
+      // C2：今天该出哪个操作、还剩几题、近 14 天通过率。只读，不记账。
+      if (req.method === 'GET' && path === '/drill-op') {
+        return send(res, 200, drillOpView({ timeZone: url.searchParams.get('timeZone') || undefined }))
       }
       return send(res, 404, { v: 1, error: { code: 'not-found', message: path } })
     } catch (e) {
@@ -3441,7 +4800,7 @@ export function apply(ctx) {
 
   function planRoute(body) {
     const now = Date.now()
-    const tz = zoneOr(body?.timeZone || config.timeZone)
+    const tz = requestZone(body?.timeZone, config)
     try {
       syncVaultRules(now)
     } catch (error) {
@@ -3453,6 +4812,18 @@ export function apply(ctx) {
       settlePredictions(now)
     } catch (error) {
       console.error('[companion] 预判结算失败：' + String((error && error.message) || error))
+    }
+    // A1：到期的立场同样在这一步结算（status/settleSource 只有 settleStances 能写）。
+    try {
+      settleStanceNow(now)
+    } catch (error) {
+      console.error('[companion] 立场结算失败：' + String((error && error.message) || error))
+    }
+    // A2：今天的时间表在这一步往前走——块开始自动立任务、块结束要求交墙，不靠她"想起来"。
+    try {
+      planSweepNow(now, tz)
+    } catch (error) {
+      console.error('[companion] 时间表推进失败：' + String((error && error.message) || error))
     }
     // 第六轮 B：早/晚/周末到点没结论，由墙补一条缺席记录（只记账，不加锁）。
     try {
@@ -3477,7 +4848,7 @@ export function apply(ctx) {
     const recent = summarize(ledger, startOfDay(now, tz))
     const silence = silenceState(ledger, { sessionId, now })
     // 手机每次问 /plan 都带上现状：水位决定节奏和力度，大脑顺带判上一球有没有把他拉回来。
-    const phone = cleanPhone(body?.phone)
+    const phone = phoneOf(body?.phone)
     // 临时封禁名单里的 App 也算娱乐。
     if (phone?.app && blockedNow(now).includes(phone.app)) phone.fun = true
     // 第六轮 C：暗思考。他不在、没发消息也照样按客观变化整理一次；只写账本，不产生任何要发出去的话。
@@ -3487,6 +4858,19 @@ export function apply(ctx) {
       if (mused) record(mused)
     } catch (error) {
       console.error('[companion] 暗思考失败：' + String((error && error.message) || error))
+    }
+    // 第七轮 B2：暗思考的第二层——夜间整理。午间/睡前各一次，对话中不跑。
+    // 异步跑、不等它：/plan 是手机每次切 App 都要问的，绝不能被一次模型调用卡住。
+    try {
+      const nd = nightlyDue(ledger, now, tz, { busy: inConversation(sessionId, now) })
+      if (nd.due && !nightlyRunning) {
+        nightlyRunning = true
+        runNightly(now, tz, nd.slot)
+          .catch((error) => console.error('[companion] 夜间整理失败：' + String((error && error.message) || error)))
+          .finally(() => { nightlyRunning = false })
+      }
+    } catch (error) {
+      console.error('[companion] 夜间整理判定失败：' + String((error && error.message) || error))
     }
     // 第六轮 D：自建工作流到期处理。试启用 7 天没可数效果就停；转正的 30 天复核对不上同样停。
     // 和暗思考一样挂在 /plan 上——引擎里没有第二个"后台"面，不自建调度器。
@@ -3640,9 +5024,9 @@ export function apply(ctx) {
       } else if (gearNow === 'free' && restlessSignal(phone, now)) {
         nextSpeaker = { role: 'companion', reason: 'restless', at: now, ...restlessSignal(phone, now) }
       } else if (gearNow === 'busy') {
-        const last = Math.max(Number(config.gearSince) || 0, Number(gs.lastCheckAt) || 0)
-        if (now - last >= BUSY_CHECK_MS) nextSpeaker = { role: thinker, reason: 'checkin', at: now, busy: { what: config.gearWhat, until: Number(config.gearUntil) } }
-        else hold = last + BUSY_CHECK_MS
+        // B1：忙时不催进度——原来这里每 25 分钟发一球问「做到哪了、卡没卡」，撤掉。
+        // 这一档里一句都不发，等到点那一次报到（进度只在 A2 的时间块边界由代码问一次）。
+        hold = Math.max(now + 60_000, Number(config.gearUntil) || 0)
       } else if (config.gear === 'busy' && Number(config.gearUntil) <= now && now - Number(config.gearUntil) < 2 * 3_600_000 &&
         Number(gs.doneFor) !== Number(config.gearUntil) && !lastRhythm?.reviewGate) {
         // 对账门开着时不单独来验收任务：对账会一并清算（C5）。
@@ -3783,9 +5167,11 @@ export function apply(ctx) {
       // 第六轮 B：今天三次审查各自的最后一条结论（null = 还没审，也不会有"审过了却查不到"）。
       anchors: anchorStatus(now, entries),
       // 第六轮 A：支线底座的状态（几条在跑、最近用过哪几条、哪几条配置不合格被丢掉了）。
-      tracks: trackStatus(config.tracks, recentTracks(entries)),
+      tracks: trackStatus(configuredTracks(), recentTracks(entries)),
       // 第六轮 C：今天暗思考跑了几次、最近一条整理了什么（只记账，没有要发出去的话）。
       muse: museStatus(entries, now),
+      // 第七轮 B2：夜间整理跑了几次、还剩几条活着的产物（超期就没了）。
+      nightly: nightlyStatus(loadNightly(), entries, now, zoneOr(config.timeZone)),
       // 第六轮 D：自建工作流的配额与到期时间（几条在跑、还能提几条）。
       workflows: workflowStatus(config.workflows, entries, now, config.timeZone),
       // 好坏只看回合：有效回合 = 至少两拍且有一拍接住了（见 rally.js）。
@@ -3840,7 +5226,7 @@ export function apply(ctx) {
    */
   function workflowsRoute(body) {
     const now = Date.now()
-    const tz = zoneOr(body?.timeZone || config.timeZone)
+    const tz = requestZone(body?.timeZone, config)
     const entries = readLedger(home(), 300)
     const read = () => ({ v: 1, ok: true, workflows: workflowStatus(config.workflows, entries, now, tz) })
     const save = () => {
@@ -3909,14 +5295,107 @@ export function apply(ctx) {
         // 这一轮照样生效
       }
       record({ state: 'tracks-set', at: now, from: before.tracks.length, to: after.tracks.length })
-      return { v: 1, ok: true, ...trackStatus(config.tracks, recentTracks(entries)) }
+      return { v: 1, ok: true, ...trackStatus(configuredTracks(), recentTracks(entries)) }
     }
-    return { v: 1, ok: true, ...trackStatus(config.tracks, recentTracks(entries)) }
+    return { v: 1, ok: true, ...trackStatus(configuredTracks(), recentTracks(entries)) }
+  }
+
+  /**
+   * C2：四个基本操作（回想 / 精简 / 预判 / 提问）。
+   *
+   * 合格线全在 `drills.js` 的 judge 里，这一层只做三件事：从挂载卡上取素材、把答案交给 `judgeOp`、记账。
+   * **答案不交给模型判**：判的人手里有权，就会开始安慰人；一软，练半年也不知道有没有长进，
+   * 界面还会告诉他已经通过了。
+   */
+  function opMaterial(op, entries) {
+    const card = openCardOf(loadMount())
+    const givens = card ? card.givens.map((g) => g.text) : []
+    const steps = card ? card.steps.map((s) => s.text) : []
+    if (op === 'brief') {
+      // 素材是他最近一段超过 100 字的话：太短的压不出东西，压了也看不出他会不会压。
+      let source = ''
+      for (let i = entries.length - 1; i >= 0; i -= 1) {
+        const e = entries[i]
+        if (e?.state !== 'say-text' || !e.text) continue
+        if (String(e.text).trim().length <= 100) continue
+        source = String(e.text)
+        break
+      }
+      return { source, goal: card ? card.goal.text : '' }
+    }
+    // 回想只认结论（目标在卡顶上，照着目标念不算「想起来推到哪」）。
+    // 素材取**上一张卡**（停放着的也行）：正在用的那张开着的时候他看得见，那不算回想。
+    if (op === 'recall') {
+      const last = lastCardOf(loadMount())
+      return { cardWords: last ? last.steps.map((s) => s.text).join('；') : '', blind: Boolean(last) && last.status !== 'open' }
+    }
+    return { cardWords: [...givens, ...steps].join('；') }
+  }
+
+  /**
+   * C2：聊天里回球时按代码判这一题（`/drill-op` 是另一条路，判的是同一套 judge）。
+   *
+   * 判完立刻记一条 `drill-op`：额度和链路都读账本，不记账下一题会一直卡在同一个操作。
+   * 回给判球链路的结果用 `verdict` 的形状，让「这一球算不算认真回」的老记账不用改。
+   * 判词只用既有的六个（过了 = engaged，没过 = brief）：自造一个词会污染判词白名单，
+   * 而这条路上的 `verdict` 还要进大脑记账。
+   */
+  function judgeOpNow(op, text, sessionId) {
+    const entries = readLedger(home(), 800)
+    const judged = judgeOp(op, text, opMaterial(op, entries))
+    record({ state: 'drill-op', at: Date.now(), op, ok: judged.ok, code: judged.code, sessionId: sessionId || undefined })
+    return { verdict: judged.ok ? 'engaged' : 'brief', judged: true, text: judged.text, next: '' }
+  }
+  function drillOpView(body) {
+    const now = Date.now()
+    const tz = requestZone(body?.timeZone, config)
+    const since = startOfDay(now, tz)
+    const entries = readLedger(home(), 800)
+    const quota = opQuota(entries, since)
+    // 额度用完今天就到此为止：把这个操作练成肌肉记忆比凑够六题重要。
+    const next = quota.left > 0 ? nextOp(entries, since) : null
+    return {
+      v: 1, ok: true,
+      op: {
+        order: OP_ORDER,
+        next,
+        meta: next ? OP_META[next] : null,
+        quota,
+        // 近 14 天，今天算第 1 天。
+        stats: opStats(entries, since - 13 * 86_400_000),
+      },
+    }
+  }
+  function drillOpRoute(body) {
+    const now = Date.now()
+    const tz = requestZone(body?.timeZone, config)
+    const since = startOfDay(now, tz)
+    const result = drillOpView(body)
+    const quota = result.op.quota
+    if (quota.left <= 0) {
+      return { ...result, ok: false, error: { code: 'no-quota', message: '今天的额度用完了（' + quota.max + ' 题）。' } }
+    }
+    // 不出 `op` 就按链路该出的那个判：调用方少一步，链路约束也少一处能绕开的地方。
+    const op = String(body?.op || result.op.next || '')
+    if (!OP_META[op]) {
+      return {
+        ...result, ok: false,
+        error: { code: 'bad-op', message: '只认 ' + OP_ORDER.join(' / ') + ' 四个操作。' },
+      }
+    }
+    const entries = readLedger(home(), 800)
+    const ctx = { ...opMaterial(op, entries), blind: body?.blind === true }
+    const judged = judgeOp(op, body?.answer, ctx)
+    // 第一次没过只说他差在哪条线；第二次没过才给示范（规格原文，见 drills.js 的 demoOf）。
+    const demo = !judged.ok && failsToday(entries, since, op) >= 1 ? demoOf(op) : ''
+    record({ state: 'drill-op', at: now, op, ok: judged.ok, code: judged.code })
+    // 记完再读一次：额度、链路、进度都要算上刚刚这一题。
+    return { ...drillOpView(body), judge: { op, ok: judged.ok, code: judged.code, text: judged.text, demo: demo || undefined } }
   }
 
   function sistersRoute(body) {
     const now = Date.now()
-    const tz = zoneOr(body?.timeZone || config.timeZone)
+    const tz = requestZone(body?.timeZone, config)
     const today = dayString(now, tz)
     const snap = panelSnapshot()
     const dir = notesDir()
@@ -3938,6 +5417,8 @@ export function apply(ctx) {
       timeline: Array.isArray(snap.timeline) ? snap.timeline : [],
       wall: snap.wall || null,
       audit: auditOf({ memory: loadWallMem(), auditText, today }),
+      // C2：四个操作近 14 天的通过率。面板和周报都读这一张，不再自己算一遍。
+      drillOps: opStats(readLedger(home(), 800), startOfDay(now, tz) - 13 * 86_400_000),
     }
   }
   function panelSnapshot() {
@@ -3986,6 +5467,298 @@ export function apply(ctx) {
       now,
     })
   }
+
+  // ---------------------------------------------------------------- 局（W1/W3）
+  // 本进程开的那一局。数据全在库里（bouts.js 是唯一写入方），这里只留一个指针：
+  // 面板要显示「现在这一拍」，得问局官本人，不能从库里倒推。
+  // db 留在 live 上是为了局官写 beats/verdicts 时不用每次重开；面板读另开一条连接，读完就关。
+  let live = null
+
+  function boutsSnapshot() {
+    const db = openBoutsDb(memoryPath())
+    try {
+      const now = Date.now()
+      const dayStart = startOfDay(now, zoneOr(config.timeZone))
+      const all = listBouts(db, { limit: 200 })
+      const today = listBouts(db, { dayStart, limit: 100 })
+      const closedToday = today.filter((x) => x.status === 'closed')
+      // 「敷衍」在账上就是代码判没过的那几拍；不另立指标，免得两处口径打架。
+      let failed = 0
+      const beats = []
+      const verdicts = []
+      for (const bout of today) {
+        const rows = listVerdicts(db, bout.id)
+        failed += rows.filter((v) => v.result === 'fail').length
+        verdicts.push(...rows)
+        beats.push(...listBeats(db, bout.id))
+      }
+      // 磁贴和常驻通知在 Kotlin 侧，读不了 sqlite：顺手落一份摘要给它们（BoutsTileService 读这个文件）。
+      // 拍数和 running 上面都已经算出来了，不额外查库。只在算快照时刷新——定时器自己推进的拍
+      // 要等下次开面板才上磁贴。shortcut: 面板渲染时刷新，介意延迟就在定时器里也调一次。
+      const protocols = builtinProtocols().filter((x) => x.ok).map((x) => x.protocol)
+      writeJson(
+        stateFile('bouts-status.json'),
+        boutsTileStatus({ now, beats, bouts: all, protocols, live: live ? live.official.view() : null }),
+      )
+      return buildBoutsSnapshot({
+        now,
+        bouts: all,
+        todayBouts: today,
+        protocols,
+        live: live ? live.official.view() : null,
+        doneToday: closedToday.filter((x) => x.closeReason === 'done').length,
+        emptyToday: closedToday.filter((x) => x.closeReason !== 'done').length,
+        escalations: closedToday.filter((x) => x.closeReason === 'escalated').length,
+        slackBeats: failed,
+        beats,
+        todayVerdicts: verdicts,
+      })
+    } finally {
+      try {
+        db?.close?.()
+      } catch {
+        // 关不掉不影响读出来的数
+      }
+    }
+  }
+
+  // 第八轮 W2：墙是控制塔。数据全是别的模块算好的——这里只读，不重算，也不措辞。
+  function wallSnapshot(now = Date.now()) {
+    const tz = zoneOr(config.timeZone)
+    const day = startOfDay(now, tz)
+    // P4：「今日升级」读 escalations 表，不读账本。升级是引擎判的、有开有关的一件事，
+    // 账本里那几条 escalate 只是事后的一行注记，拿它当数据源会漏掉 level 和结束时间。
+    let escalations = []
+    let db = null
+    try {
+      db = openBoutsDb(memoryPath())
+      escalations = listEscalations(db, { limit: 60 })
+    } catch (error) {
+      console.error('[companion] 读升级表失败：' + String((error && error.message) || error))
+    } finally {
+      try {
+        db?.close?.()
+      } catch {
+        // 关不掉不影响这一屏
+      }
+    }
+    return buildWallSnapshot({
+      now,
+      tz,
+      state: stateView(now, tz, lastPhone),
+      plan: planOf(readState(stateFile('plan.json'), null), day),
+      entries: readLedger(home(), 600),
+      escalations,
+      todayStart: day,
+      settings: settingsOf(config),
+    })
+  }
+
+  // 第八轮 W4：设定页的数据。设定只存在 config.day 下，挂起的改松在 config.dayPending。
+  function settingsSnapshot(now = Date.now()) {
+    return buildSettingsSnapshot({
+      settings: settingsOf(config),
+      pending: config.dayPending || null,
+      pendingAt: Number(config.dayPendingAt) || 0,
+      now,
+      config,
+    })
+  }
+
+  // 改设定：先过 settings.js（改紧立即生效 / 改松挂一天），再落盘并同步到笔记库。
+  function saveSettings(next, by) {
+    const now = Date.now()
+    const r = applySettings({ now, prev: settingsOf(config), next, pending: config.dayPending || null })
+    config = {
+      ...config,
+      day: r.settings,
+      dayPending: r.pending || undefined,
+      dayPendingAt: r.pendingAt || undefined,
+    }
+    try {
+      writeConfig(config)
+    } catch {
+      // 这一轮照样生效
+    }
+    record({ state: 'rule-change', at: now, by: by || '设定页', effect: r.applied })
+    try {
+      const base = join(kbDir(notesDir(), home()), WALL_DIR)
+      writeVaultText(join(base, '设定.md'), settingsMarkdown(buildSettingsSnapshot({ settings: r.settings, pending: r.pending, pendingAt: r.pendingAt, now, config })))
+    } catch (error) {
+      // 笔记库不可写不影响设定本身
+      console.error('[companion] 设定.md 写不进去：' + String((error && error.message) || error))
+    }
+    return r
+  }
+
+  function dropLive() {
+    try {
+      live?.db?.close?.()
+    } catch {
+      // 已经关了
+    }
+    live = null
+  }
+
+  /**
+   * 思维局：题库（stateFile('bank.json')）+ 一份思维协议（config.thinkingProtocol 的四样：
+   * 题库 / 招式 / 强度 / 题数）在开局时展开成普通步骤，再交给 J2 的 loadProtocol 校验。
+   *
+   * 摊不出完整的局就返回 null —— planwire 照旧把它记成「这一型还没装」，不拿别的局顶替。
+   * 这道题站不住某一招、题不够、招式靠模型判，全都属于「摊不出来」。
+   */
+  function thinkingProtocol() {
+    const raw = config.thinkingProtocol
+    if (!raw || typeof raw !== 'object') return null
+    const parsed = parseBank(readState(stateFile('bank.json'), null) || [])
+    if (!parsed.ok) return null
+    const expanded = expandThinking(raw, { questions: parsed.bank.questions })
+    if (!expanded.ok) return null
+    const loaded = loadProtocol(expanded.protocol)
+    return loaded.ok ? loaded.protocol : null
+  }
+
+  function startBout(protocolId) {
+    const protocol = builtinProtocolOf(protocolId) ||
+      (String(protocolId) === 'thinking' ? thinkingProtocol() : null)
+    if (!protocol) return { ok: false, toast: '没有这个协议：' + String(protocolId || '') }
+    if (live && !live.official.view().closed) return { ok: false, toast: '已经有一局在跑，先收局。' }
+    dropLive()
+    const db = openBoutsDb(memoryPath())
+    const official = createOfficial({ protocol, db, home: home() })
+    const started = official.start()
+    if (!started.ok) {
+      try {
+        db?.close?.()
+      } catch {
+        // ignore
+      }
+      const why = started.error === 'busy' ? '库里已经有一局在跑。' : '开局失败：' + started.error
+      return { ok: false, toast: why }
+    }
+    live = { official, db }
+    record({ state: 'bout-open', at: Date.now(), protocolId: protocol.id, via: 'panel' })
+    return { ok: true, toast: '开局：' + protocol.name + '。' + String(started.say || '') }
+  }
+
+  function answerBout(text, form = 'text', channel = 'text', hold = false) {
+    if (!live) return { ok: false, toast: '现在没有局。', state: 'none' }
+    const r = live.official.answer(text, { form, channel })
+    const v = live.official.view()
+    const now = Date.now()
+    // P4：局官每收到一条回答都先过一遍阶梯。敷衍记一次并可能升级；答错、混乱只回一句处置。
+    if (r.accepted !== false) {
+      if (r.state === 'escalated' || r.escalated) {
+        // RETRY_LIMIT 打满：同一拍重打三次还不过，这一拍就是敷衍。按升级办，不许只关局了事。
+        ladderAnswer('', { now })
+      } else {
+        ladderAnswer(text, { passed: r.passed === undefined ? null : r.passed, now })
+      }
+    }
+    if (r.state === 'closed' || r.state === 'escalated') {
+      dropLive()
+      return { ok: true, state: r.state, accepted: r.accepted !== false, say: '', toast: r.state === 'escalated' ? '升级了，这一局结束。' : '收局。' }
+    }
+    const say = String(r.say || '')
+    // 语音这一路（hold）：下一句已经在返回里了，说明局官马上要念。
+    // 先冻住应答时限，等他念完由 spoken 起算——不然这句话还没念完，计时已经跑掉一大截。
+    // 面板那条文字路径不开这个：它没有 spoken 那一步，冻住就没人解冻了。
+    if (hold && say) live.official.hold(now)
+    return {
+      ok: r.accepted !== false,
+      state: String(r.state || 'running'),
+      accepted: r.accepted !== false,
+      say,
+      toast: say,
+      stepId: String(v.stepId || ''),
+      limitSec: Number(v.limitSec) || 0,
+      nextAskAt: Number(r.nextAskAt || v.nextAskAt) || 0,
+    }
+  }
+
+  function closeBoutNow() {
+    if (!live) return { ok: false, toast: '现在没有局。' }
+    live.official.close('abandoned')
+    dropLive()
+    return { ok: true, toast: '收局了，这局记成空局。' }
+  }
+
+  /**
+   * POST /bouts：把从别处分享进来的一段文字，当成当前这一拍的答案。
+   *
+   * 手机那边先问这里，接得住才不把分享丢进新对话。所以「没有局」必须是明确的 no-bout，
+   * 而不是一个静默的空成功——否则这段分享就凭空消失了。
+   *
+   * 答案走 answerBout（→ official.answer → boutrun），不是直接 addBeat：一拍要不要判、判什么、
+   * 记哪个 step_id 都由局官决定；绕过它插一条 beat 会留下一条没有判定的脏数据。
+   * runningBout 读的是库，live 是本进程开的那一局——引擎重启过就会有库里有局、进程里没局，
+   * 这时这一句接不进去，如实回 no-bout 让手机退回新对话。
+   */
+  function boutsShareRoute(body) {
+    const text = String(body?.text ?? '').trim()
+    if (!text) return { v: 1, ok: false, code: 'empty' }
+    const db = openBoutsDb(memoryPath())
+    try {
+      if (!runningBout(db) || !live) return { v: 1, ok: false, code: 'no-bout' }
+    } finally {
+      try {
+        db?.close?.()
+      } catch {
+        // 关不掉不影响这一句的判断
+      }
+    }
+    const r = answerBout(text.slice(0, 2_000), 'text')
+    return { v: 1, ok: Boolean(r.ok), toast: String(r.toast || '') }
+  }
+
+  /**
+   * POST /bouts 的语音这一路（J9）：念、听、判、下一拍，四步都由手机驱动，状态机还在局官手里。
+   *
+   * 四个动作：
+   *   ask     这一拍现在该念哪一句。顺手把应答时限冻住——念的这一段不算他的时间。
+   *   spoken  念完了（或退回文字，字已经在他眼前）：从一个明确的时刻开始计应答时限。
+   *   answer  识别出来的话当答案。带 hold，所以局官下一句也先冻着，等他念完再计。
+   *   fallback 声音或识别用不了，退回文字/浮层。记账，面板能看见为什么退回。
+   *
+   * 没有 action 的请求还是原来的「分享进来的一段话」，一个字没改。
+   */
+  function boutsRoute(body) {
+    const action = String(body?.action || '')
+    if (!action) return boutsShareRoute(body)
+    if (!['ask', 'spoken', 'answer', 'fallback'].includes(action)) {
+      return { v: 1, ok: false, code: 'bad-action' }
+    }
+    // fallback 不需要有局在跑：声音配不上这件事本身就要记下来。
+    if (action === 'fallback') {
+      const reason = String(body?.reason || 'unknown').slice(0, 120)
+      record({ state: 'bout-voice-fallback', at: Date.now(), reason, via: 'phone' })
+      return { v: 1, ok: true, code: 'noted' }
+    }
+    if (!live) return { v: 1, ok: false, code: 'no-bout' }
+    const now = Date.now()
+    if (action === 'ask') {
+      // 周期步到点：先把同一句问出来，免得每一拍都念上一拍的旧句子。
+      live.official.due(now)
+      const v = live.official.view()
+      if (v.closed || !v.ask) return { v: 1, ok: false, code: v.closed ? 'closed' : 'nothing-to-ask' }
+      live.official.hold(now)
+      return {
+        v: 1, ok: true, say: String(v.ask), stepId: String(v.stepId || ''),
+        limitSec: Number(v.limitSec) || 0, index: Number(v.index) || 0,
+      }
+    }
+    if (action === 'spoken') {
+      const at = Number(body?.at) || now
+      const r = live.official.spoken(at)
+      const v = live.official.view()
+      return { v: 1, ok: true, at: Number(r.at) || at, stepId: String(r.stepId || ''), limitSec: Number(v.limitSec) || 0 }
+    }
+    const text = String(body?.text ?? '').trim()
+    if (!text) return { v: 1, ok: false, code: 'empty' }
+    const r = answerBout(text.slice(0, 2_000), 'text', 'voice', true)
+    return { v: 1, ...r, code: r.ok ? '' : 'refused' }
+  }
+
   /** 一句话发进去，等到回完（最多两分钟）。 */
   async function sayTo(sid, text) {
     const id = 'say-' + randomUUID().replace(/-/g, '').slice(0, 16)
@@ -4001,7 +5774,8 @@ export function apply(ctx) {
     return null
   }
   /**
-   * 家庭群：发给一个人，或者一起——鱼丸先回，鲸澜看到她的回答再接着说（可以接，也可以反驳她）。
+   * 家庭群：发给一个人，或者一起——鱼丸先回，鲸澜随后收到她的原话接着说。
+   * 两人拿到的开场是同一句，只多一条聊天记录；不给模型发导演提示（见 sisters.js groupPrompts）。
    * 在后台跑，面板先返回，回复到了自动刷新。
    */
   function groupSay(text, to) {
@@ -4010,7 +5784,7 @@ export function apply(ctx) {
     if (!said) return '说点什么再发。'
     const sis = config.sessionId
     const big = config.dual !== false ? config.strategistSessionId : ''
-    record({ state: 'say-text', at: Date.now(), to, text: said.slice(0, 300), via: 'panel' })
+    record({ state: 'say-text', at: Date.now(), to, text: stripInjection(said).slice(0, 300), via: 'panel' })
     if (to === 'strategist' && !big) return '还没设谋士会话。'
     if (to === 'companion' || (to === 'both' && !big)) {
       if (!sis) return '还没设陪伴会话。'
@@ -4041,6 +5815,11 @@ export function apply(ctx) {
           return v && typeof v === 'object' ? v : {}
         }
         if (typeof d.on === 'function') d.on('sisters-open', () => ({ open: 'panel:sisters' }))
+        if (typeof d.on === 'function') d.on('bouts-open', () => ({ open: 'panel:bouts' }))
+        if (typeof d.on === 'function') d.on('bouts-queue-open', () => ({ open: 'panel:bouts-queue' }))
+        if (typeof d.on === 'function') d.on('bouts-books-open', () => ({ open: 'panel:bouts-books' }))
+        if (typeof d.on === 'function') d.on('wall-open', () => ({ open: 'panel:wall' }))
+        if (typeof d.on === 'function') d.on('wall-audit-open', () => ({ open: 'panel:wall-audit' }))
         d.panel('sisters', {
           view: sistersView,
           data: (scope, emit) => {
@@ -4063,7 +5842,7 @@ export function apply(ctx) {
             'sisters.busy': (scope) => {
               setGear({ gear: 'busy', until: Date.now() + BUSY_DEFAULT_MIN * 60_000, what: '正事' }, 'panel')
               d.refresh('sisters', scope)
-              return { toast: '忙时 ' + BUSY_DEFAULT_MIN + ' 分钟：不闲聊、定时报到、娱乐一开就锁。' }
+              return { toast: '忙时 ' + BUSY_DEFAULT_MIN + ' 分钟：不闲聊、娱乐一开就锁，到点只让你报到一次。' }
             },
             'sisters.refuse': (scope) => {
               const until = Math.max(Date.now() + 30 * 60_000, Number(config.refuseUntil) || 0)
@@ -4079,6 +5858,95 @@ export function apply(ctx) {
             },
           },
         })
+        // 局是独立的一面：两姐妹不在这个面板里说话（W1）。
+        // 宿主没有分页组件，四页就是四个面板：一个面板只做一件事，翻页也就不需要了。
+        const boutActions = (panelId) => ({
+          'bouts.refresh': (scope) => {
+            d.refresh(panelId, scope)
+            return { toast: '' }
+          },
+          'bouts.open': (scope, event) => {
+            const r = startBout(values(event)['data.form.protocolId'])
+            d.refresh(panelId, scope)
+            return { toast: r.toast }
+          },
+          'bouts.answer': (scope, event) => {
+            const v = values(event)
+            const r = answerBout(v['data.form.answer'], v['data.form.ref'] ? 'photo' : 'text')
+            d.refresh(panelId, scope)
+            return { toast: r.toast }
+          },
+          'bouts.close': (scope) => {
+            const r = closeBoutNow()
+            d.refresh(panelId, scope)
+            return { toast: r.toast }
+          },
+        })
+        for (const [panelId, view] of [
+          ['bouts', boutsNowView],
+          ['bouts-queue', boutsQueueView],
+          ['bouts-protocols', boutsProtocolsView],
+          ['bouts-books', boutsBooksView],
+        ]) {
+          d.panel(panelId, {
+            view,
+            data: (scope, emit) => {
+              panelScopes.set(keyOf(scope), scope)
+              emit(boutsSnapshot())
+              return () => panelScopes.delete(keyOf(scope))
+            },
+            actions: boutActions(panelId),
+          })
+        }
+        // 墙：控制塔。只读、只有刷新——面板不能自己解锁、不能改阈值
+        //（阈值在设定页，改松还要过冷却期，见 settings.js）。申诉走它自己那个入口。
+        const wallActions = (panelId) => ({
+          'wall.refresh': (scope) => {
+            d.refresh(panelId, scope)
+            return { toast: '' }
+          },
+        })
+        for (const [panelId, view] of [['wall', wallView], ['wall-audit', wallAuditView]]) {
+          d.panel(panelId, {
+            view,
+            data: (scope, emit) => {
+              panelScopes.set(keyOf(scope), scope)
+              emit(wallSnapshot())
+              return () => panelScopes.delete(keyOf(scope))
+            },
+            actions: wallActions(panelId),
+          })
+        }
+        // 设定：只能改数，不能在这里解锁或改判定。解析不出来的整份退回，不做部分提交。
+        const settingsActions = (panelId, parse) => ({
+          'settings.refresh': (scope) => {
+            d.refresh(panelId, scope)
+            return { toast: '' }
+          },
+          'settings.save': (scope, event) => {
+            const r = parse(settingsOf(config), values(event))
+            if (r.error) return { toast: r.error }
+            const saved = saveSettings(r.next, '设定页')
+            d.refresh(panelId, scope)
+            return { toast: saved.applied === 'pending' ? '改松了，挂一天冷却期；这一天先按原来的走。' : '改好了，立即生效。' }
+          },
+        })
+        for (const [panelId, view, parse, id] of [
+          ['settings', settingsDayView, parseDay, 'settings.saveDay'],
+          ['settings-limits', settingsLimitsView, parseLimits, 'settings.saveLimits'],
+        ]) {
+          const actions = settingsActions(panelId, parse)
+          // 表单的 submit 名就是每个页各自那一个（两个页面共用一个保存实现）。
+          d.panel(panelId, {
+            view,
+            data: (scope, emit) => {
+              panelScopes.set(keyOf(scope), scope)
+              emit(settingsSnapshot())
+              return () => panelScopes.delete(keyOf(scope))
+            },
+            actions: { ...actions, [id]: actions['settings.save'] },
+          })
+        }
       })
     } catch (error) {
       console.error('[companion] 面板注册失败：' + String((error && error.message) || error))
@@ -4125,13 +5993,16 @@ function mergeConfig(current, body) {
     if (typeof body.personaInChat === 'boolean') next.personaInChat = body.personaInChat
     if (typeof body.dual === 'boolean') next.dual = body.dual
     if (typeof body.proactiveTools === 'boolean') next.proactiveTools = body.proactiveTools
+    // B5：念出来。默认关，只认布尔。
+    if (typeof body.voice === 'boolean') next.voice = body.voice
     if (body.strategistSessionId === null) next.strategistSessionId = undefined
     else if (typeof body.strategistSessionId === 'string' && body.strategistSessionId.length <= 256) next.strategistSessionId = body.strategistSessionId || undefined
     for (const k of ['companionName', 'strategistName']) if (typeof body[k] === 'string' && body[k].trim()) next[k] = body[k].trim().slice(0, 20)
     for (const k of ['companionCard', 'strategistCard']) if (typeof body[k] === 'string') next[k] = body[k].slice(0, 4000)
     if (typeof body.owner === 'string' && body.owner.trim()) next.owner = body.owner.trim().slice(0, 40)
     if (typeof body.self === 'string' && body.self.trim()) next.self = body.self.trim().slice(0, 40)
-    if (typeof body.timeZone === 'string' && body.timeZone.trim()) next.timeZone = zoneOr(body.timeZone)
+    if (typeof body.lockTimeZone === 'boolean') next.lockTimeZone = body.lockTimeZone
+    if (typeof body.timeZone === 'string' && body.timeZone.trim() && next.lockTimeZone === false) next.timeZone = zoneOr(body.timeZone)
     // 判球模型：空字符串 = 清掉，回到沿用会话。
     if (typeof body.judgeProvider === 'string') next.judgeProvider = body.judgeProvider.trim().slice(0, 80) || undefined
     if (typeof body.judgeModel === 'string') next.judgeModel = body.judgeModel.trim().slice(0, 120) || undefined

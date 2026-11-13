@@ -56,6 +56,7 @@ class EntryActivity : Activity() {
         const val ACTION_NEW_CHAT = "io.github.ccch1mneyyy.dsh_app.action.NEW_CHAT"
         const val ACTION_VOICE = "io.github.ccch1mneyyy.dsh_app.action.VOICE_INPUT"
         const val ACTION_OPEN_CHAT = "io.github.ccch1mneyyy.dsh_app.action.OPEN_CHAT"
+        const val ACTION_BOUTS = "io.github.ccch1mneyyy.dsh_app.action.BOUTS"
         private const val ACTION_OPEN_APP = "io.github.ccch1mneyyy.dsh_app.action.OPEN_APP"
         const val EXTRA_PET_GENERATION = "pet_generation"
         const val EXTRA_SESSION = "session_id"
@@ -67,12 +68,15 @@ class EntryActivity : Activity() {
             ACTION_NEW_CHAT -> ShortcutsPlugin.KIND_NEW
             ACTION_VOICE -> ShortcutsPlugin.KIND_VOICE
             ACTION_OPEN_CHAT -> ShortcutsPlugin.KIND_CHAT
+            ACTION_BOUTS -> ShortcutsPlugin.KIND_BOUTS
             else -> null
         }
 
         fun newChat(context: Context): Intent = Intent(context, EntryActivity::class.java).setAction(ACTION_NEW_CHAT)
 
         fun voice(context: Context): Intent = Intent(context, EntryActivity::class.java).setAction(ACTION_VOICE)
+
+        fun bouts(context: Context): Intent = Intent(context, EntryActivity::class.java).setAction(ACTION_BOUTS)
 
         fun openApp(context: Context): Intent = Intent(context, EntryActivity::class.java).setAction(ACTION_OPEN_APP)
 

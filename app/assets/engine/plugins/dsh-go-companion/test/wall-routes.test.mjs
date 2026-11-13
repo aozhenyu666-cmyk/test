@@ -7,7 +7,8 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { apply } from '../lib/index.js'
+import { apply, setStatePin } from '../lib/index.js'
+import { appendLedger } from '../lib/ledger.js'
 
 function agentOf(id) {
   const contexts = []
@@ -23,7 +24,7 @@ function agentOf(id) {
   }
 }
 
-function host(agents) {
+function host(agents, state = 'standby') {
   let handler
   const listeners = new Map()
   const ctx = {
@@ -38,6 +39,7 @@ function host(agents) {
     inject(_d, cb) { cb({ webServer: { register(r) { handler = r.handler } }, effect(fn) { fn() } }) },
     effect(fn) { fn() },
   }
+  setStatePin(state)
   apply(ctx)
   const emit = async (sid, type, data) => { for (const fn of listeners.get('session/event') || []) await fn({ id: sid }, { type, data }) }
   return { handler: () => handler, emit }
@@ -76,24 +78,33 @@ async function withHome(fn) {
 const SIS = 'session-sis'
 const BIG = 'session-big'
 function setup(home, extra = {}) {
+  // R7 P0-3：`state` 钉主状态，不能摊进 config.json（那是真配置）。
+  const { state = 'standby', ...rest } = extra
   mkdirSync(join(home, 'companion'), { recursive: true })
-  writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ sessionId: SIS, strategistSessionId: BIG, quietStart: 12, quietEnd: 12, ...extra }))
+  writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ sessionId: SIS, strategistSessionId: BIG, quietStart: 12, quietEnd: 12, ...rest }))
   const sis = agentOf(SIS)
   const big = agentOf(BIG)
-  const h = host({ [SIS]: sis, [BIG]: big })
+  const h = host({ [SIS]: sis, [BIG]: big }, state)
   const plan = (phone) => call(h.handler(), 'POST', '/dsh-go-companion/v1/plan', { roll: 100, timeZone: 'Asia/Shanghai', phone })
   const say = (sid, text) => h.emit(sid, 'user/message', { id: 'u-' + Math.random(), content: [{ type: 'text', text }], source: { kind: 'user' } })
   const wall = (body) => call(h.handler(), 'POST', '/dsh-go-companion/v1/wall', { timeZone: 'Asia/Shanghai', ...body })
   const sisters = () => call(h.handler(), 'POST', '/dsh-go-companion/v1/sisters', { timeZone: 'Asia/Shanghai' })
   const deposit = (body) => call(h.handler(), 'POST', '/dsh-go-companion/v1/deposit', { timeZone: 'Asia/Shanghai', ...body })
   const status = () => call(h.handler(), 'GET', '/dsh-go-companion/v1/status')
-  // 四段交齐（硬约束：交齐才有放风额度）。每段正文故意不一样，免得被判成「复读」。
+  // A3：墙的审查记录（只读，GET）与申诉。
+  const thread = (query = '') => call(h.handler(), 'GET', '/dsh-go-companion/v1/wall/thread' + query)
+  const appeal = (body) => call(h.handler(), 'POST', '/dsh-go-companion/v1/wall/appeal', { timeZone: 'Asia/Shanghai', ...body })
+  // A4：白天的记录槽。晚间的汇报要能对得上今天记的东西，所以这里先记再交。
+  const note = (department, text) => deposit({ action: 'slot', department, text })
+  // 四段交齐（硬约束：交齐才有放风额度）。每段正文故意不一样，免得被判成「复读」；
+  // A4 起正文还要和当天的一条记录对得上，否则会被「无据」退回——所以每段先记一条。
   const fillAll = async () => {
     for (const key of ['intel', 'thinking', 'behavior', 'coord']) {
-      await deposit({ action: 'submit', department: key, report: '字'.repeat(200) + key, thought: '想'.repeat(80) + key })
+      await note(key, '关于 ' + key + ' 的一条日间记录')
+      await deposit({ action: 'submit', department: key, report: '字'.repeat(200) + '，关于 ' + key, thought: '想'.repeat(80) + key })
     }
   }
-  return { sis, big, h, plan, say, wall, sisters, deposit, status, fillAll }
+  return { sis, big, h, plan, say, wall, sisters, deposit, note, status, fillAll, thread, appeal }
 }
 
 const openWindow = () => ({ day: 1, openAt: Date.now() - 60_000, closeAt: Date.now() + 10 * 60_000, notified: true, used: false })
@@ -157,7 +168,8 @@ test('/wall tighten：立即锁今天，status 显示收紧', async () => {
 
 test('第四轮补：request_relax 仍卡在申请窗口；grant_break 现在给了，当场放得开', async () => {
   await withHome(async (home) => {
-    const t = setup(home)
+    // R7 P0-3：明天那段在晚间申请窗口挂（request_relax），当场那段在放风/吃饭/追问锁里挂（grant_break）。
+    const t = setup(home, { state: 'evening' })
     await t.plan({ app: 'com.game', fun: true, screenOn: true, local: '15:00' })
     // 明天那段还是只能走窗口：下午窗口没开，姐妹替他提也批不下来。
     const viaTool = t.big.tools.request_relax.execute({ atHour: 20, minutes: 60, reason: '周末想放松一下' })
@@ -166,6 +178,7 @@ test('第四轮补：request_relax 仍卡在申请窗口；grant_break 现在给
     assert.equal(r.body.ok, false)
     assert.equal(r.body.error.code, 'no-window')
     // 当场那段：grant_break 给了，两边都能放，放完 config 里 breakUntil 在、锁不下发。
+    setStatePin('break')
     for (const role of [t.big, t.sis]) assert.ok(role.tools.grant_break, 'grant_break 给两姐妹')
     const broke = t.sis.tools.grant_break.execute({ minutes: 10, reason: '刚考完试想歇一会儿' })
     assert.equal(broke.ok, true, broke.text)
@@ -252,8 +265,9 @@ test('第五轮 /deposit：一开始四段全缺，交一段就少一段', async
     assert.equal(first.body.deposit.done, 0)
     assert.equal(first.body.deposit.total, 4)
     assert.deepEqual(first.body.deposit.missing, ['信息收集', '谋划思考', '行为管理', '统筹规划'])
-    // 只传一段，别的照旧
-    const one = await t.deposit({ action: 'submit', department: 'intel', report: report(), thought: '想'.repeat(80) })
+    // 只传一段，别的照旧。A4 起先记一条记录，不然会被「无据」退回。
+    await t.note('intel', '关于 intel 的一条日间记录')
+    const one = await t.deposit({ action: 'submit', department: 'intel', report: report() + '，关于 intel', thought: '想'.repeat(80) })
     assert.equal(one.body.ok, true, JSON.stringify(one.body))
     assert.equal(one.body.deposit.done, 1)
     assert.deepEqual(one.body.deposit.missing, ['谋划思考', '行为管理', '统筹规划'])
@@ -281,7 +295,9 @@ test('第五轮 硬约束：四段没交齐，当天没有放风额度；交齐�
     const before = await t.wall({ action: 'status' })
     assert.equal(before.body.wall.relaxRemaining, 0, '没交齐就该是 0')
     for (const key of ['intel', 'thinking', 'behavior', 'coord']) {
-      const r = await t.deposit({ action: 'submit', department: key, report: report(), thought: '想'.repeat(80) + key })
+      // A4：每段正文要先有一条当天记录对得上（见「晚间对照」）。
+      await t.note(key, '关于 ' + key + ' 的一条日间记录')
+      const r = await t.deposit({ action: 'submit', department: key, report: report() + '，关于 ' + key, thought: '想'.repeat(80) + key })
       assert.equal(r.body.ok, true, JSON.stringify(r.body))
     }
     const after = await t.wall({ action: 'status' })
@@ -330,4 +346,122 @@ test('第五轮 墙的界面：额度为 0 时要说清是四段没交齐，交�
     assert.equal(after.body.wall.depositDone, 4)
     assert.equal(after.body.wall.depositMissing, '')
   })
+})
+
+// ------------------------------------------------------------------ A3：墙的审查记录与申诉
+
+test('A3 GET /wall/thread：空账本给空气泡，三种气泡类型和申诉额度照样给界面', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const r = await t.thread()
+    assert.equal(r.status, 200)
+    assert.equal(r.body.ok, true)
+    assert.deepEqual(r.body.thread.bubbles, [])
+    assert.deepEqual(r.body.thread.kinds, ['submit', 'verdict', 'rule'])
+    assert.equal(r.body.thread.appealLeft, 2)
+    assert.equal(r.body.thread.appealMax, 2)
+  })
+})
+
+test('A3 GET /wall/thread：把落账的提交和判定还原成倒序气泡', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const now = Date.now()
+    appendLedger(home, { state: 'wall-audit', at: now - 60_000, kind: '写周报', pass: true, by: 'companion' })
+    appendLedger(home, { state: 'wall-audit', at: now - 30_000, kind: '刷题', pass: false, by: '他', missing: ['还差 28 分钟'] })
+    const r = await t.thread()
+    const b = r.body.thread.bubbles
+    assert.ok(b.length >= 4, JSON.stringify(b))
+    const kinds = new Set(b.map((x) => x.kind))
+    assert.ok(kinds.has('submit'), [...kinds].join(','))
+    assert.ok(kinds.has('verdict'), [...kinds].join(','))
+    // 倒序
+    for (let i = 1; i < b.length; i += 1) assert.ok(b[i - 1].at >= b[i].at, '不是倒序')
+    // 没过的那条要把「还缺」说出来
+    assert.ok(b.some((x) => x.kind === 'verdict' && String(x.text).includes('还差 28 分钟')), JSON.stringify(b))
+    // pass 给的是布尔或 null，不是 undefined（界面不用猜）
+    for (const x of b) assert.ok(x.pass === null || typeof x.pass === 'boolean', JSON.stringify(x))
+  })
+})
+
+test('A3 POST /wall/appeal：没有这条判定就驳回', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const r = await t.appeal({ at: 1, evidence: '截图' })
+    assert.equal(r.body.ok, false)
+    assert.equal(r.body.error.code, 'appeal:not-verdict')
+    assert.ok(r.body.error.message.includes('驳回'), r.body.error.message)
+  })
+})
+
+test('A3 POST /wall/appeal：同一份证据说第二遍不算新证据', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const now = Date.now()
+    appendLedger(home, { state: 'wall-audit', at: now - 60_000, kind: '写周报', pass: false, by: '他', missing: ['还差 188 字节'] })
+    const at = now - 60_000
+    const first = await t.appeal({ at, evidence: '大肥鱼/周报.md' })
+    // 第一次收下了（虽然文件不存在，结论是 file:no-file，但申诉流程走通了）
+    assert.equal(first.body.ok, true, JSON.stringify(first.body))
+    assert.equal(first.body.appeal.left, 1)
+    const again = await t.appeal({ at, evidence: '大肥鱼/周报.md' })
+    assert.equal(again.body.ok, false)
+    assert.equal(again.body.error.code, 'appeal:no-new-evidence')
+    // 空证据也一样驳回
+    const blank = await t.appeal({ at, evidence: '   ' })
+    assert.equal(blank.body.error.code, 'appeal:no-new-evidence')
+  })
+})
+
+test('A3 POST /wall/appeal：每天 2 次，用完就驳回（额度按申诉次数算，不按判定数）', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const now = Date.now()
+    const at = now - 60_000
+    appendLedger(home, { state: 'wall-audit', at, kind: '写周报', pass: false, by: '他' })
+    assert.equal((await t.appeal({ at, evidence: '证据一' })).body.ok, true)
+    assert.equal((await t.appeal({ at, evidence: '证据二' })).body.ok, true)
+    const third = await t.appeal({ at, evidence: '证据三' })
+    assert.equal(third.body.ok, false)
+    assert.equal(third.body.error.code, 'appeal:no-quota')
+    assert.ok(third.body.error.message.includes('2'), third.body.error.message)
+    // 线程里也能看到额度是 0
+    assert.equal((await t.thread()).body.thread.appealLeft, 0)
+  })
+})
+
+test('A3 POST /wall/appeal：结论仍由 wall_auditor 算——够长的文件就过，话里带数字', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const now = Date.now()
+    const at = now - 60_000
+    appendLedger(home, { state: 'wall-audit', at, kind: '写周报', pass: false, by: '他' })
+    const proof = join(home, 'proof.md')
+    writeFileSync(proof, 'x'.repeat(400))
+    const r = await t.appeal({ at, evidence: proof, task: '写周报' })
+    assert.equal(r.body.ok, true, JSON.stringify(r.body))
+    assert.equal(r.body.appeal.code, 'file:pass')
+    assert.equal(r.body.appeal.pass, true)
+    assert.ok(r.body.appeal.text.includes('通过'), r.body.appeal.text)
+    assert.ok(r.body.appeal.text.includes('要求'), r.body.appeal.text)
+    assert.ok(r.body.appeal.text.includes('实测'), r.body.appeal.text)
+    assert.equal(r.body.appeal.left, 1)
+  })
+})
+
+test('A3 源码扫描：/wall/* 路由里不出现任何模型调用', async () => {
+  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  // 只截出两个 wall 相关的路由函数看，别把整个 index.js（里面本来就有 chat.request）算进来。
+  const pick = (name) => {
+    const i = src.indexOf('function ' + name)
+    assert.ok(i > 0, '找不到 ' + name)
+    const j = src.indexOf('\n  function ', i + 10)
+    return src.slice(i, j > 0 ? j : i + 3000)
+  }
+  for (const name of ['wallThreadRoute', 'wallAppealRoute']) {
+    const body = pick(name)
+    for (const re of [/askModel/, /chat\.request/, /chatCompletion/i, /\bllm\b/i, /gemini/i, /fetch\s*\(/]) {
+      assert.ok(!re.test(body), name + ' 里出现了模型/网络调用：' + re)
+    }
+  }
 })

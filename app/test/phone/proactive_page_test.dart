@@ -155,15 +155,22 @@ void main() {
       // match the composed line rather than the fragment.
       expect(find.textContaining('正在让路：DSH 正在操作手机'), findsOneWidget);
       expect(find.textContaining('限制了后台唤醒'), findsOneWidget);
-      expect(find.text('你回应了'), findsWidgets);
       expect(find.textContaining('排队中：2 条'), findsOneWidget);
+      // 回执是这一页最后一张卡，手机屏上要滚下去才看得见。
+      final responded = find.text('你回应了');
+      await tester.scrollUntilVisible(responded, 300, scrollable: find.byType(Scrollable).first);
+      expect(responded, findsWidgets);
     });
 
     testWidgets('the switch, gaps, quiet hours and daily limit write config', (tester) async {
-      final native = FakeProactiveNative()..install();
+      // 插件不在线时这几行才由手机侧兜底（写 setConfig）；在线时它们换成大肥鱼自己的参数。
+      final native = FakeProactiveNative()
+        ..transport = false
+        ..install();
       await pumpPhone(tester, const ProactivePage());
 
-      await tester.tap(find.byType(Switch));
+      // 诊断卡里还有「前台包名记录（调试）」的开关，这一张是总开关。
+      await tester.tap(find.byType(Switch).first);
       await tester.pumpAndSettle();
       expect(native.argsOf('setConfig').last, containsPair('enabled', true));
 
@@ -195,7 +202,9 @@ void main() {
     });
 
     testWidgets('a typed gap outside the range is refused, not sent', (tester) async {
-      final native = FakeProactiveNative()..install();
+      final native = FakeProactiveNative()
+        ..transport = false
+        ..install();
       await pumpPhone(tester, const ProactivePage());
       await tester.tap(find.text('最短间隔'));
       await tester.pumpAndSettle();
@@ -216,6 +225,7 @@ void main() {
 
     testWidgets('the gaps can never cross', (tester) async {
       final native = FakeProactiveNative()
+        ..transport = false
         ..config = {
           ...FakeProactiveNative().config,
           'minIntervalMs': 10 * 60000,

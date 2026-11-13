@@ -10,6 +10,7 @@
 // 视图只认 data.* 绑定；数据由 index.js 推。没有任何"放松管控"的按钮——面板只能收紧（开忙时 / 拒绝模式）。
 
 import { trustLabel } from './trust.js'
+import { hm as zoneHm } from './tz.js'
 
 const b = (key) => ({ $: `data.${key}` })
 
@@ -78,7 +79,7 @@ export function sistersView(_scope, caps = {}) {
 
 const clamp = (n) => Math.max(0, Math.min(100, Math.round(n)))
 const toneOf = (n) => (n >= 75 ? 'good' : n >= 50 ? 'info' : n >= 30 ? 'warn' : 'bad')
-const hm = (at) => new Date(Number(at)).toISOString().slice(11, 16)
+const hm = (at) => zoneHm(Number(at))
 
 /**
  * 今日四项评分（0–100）。entries 是今天的账本，phone 是最近一次手机现状。
@@ -166,15 +167,15 @@ export function buildSnapshot({ entries = [], todayEntries = [], trust, phone, n
   const state = []
   let tone = 'info'
   if (config.gear === 'busy' && Number(config.gearUntil) > now) {
-    state.push((config.taskBy ? '任务模式：' + (config.taskGoal || config.gearWhat) : '忙时：' + (config.gearWhat || '正事')) + '，到 ' + hm(config.gearUntil) + ' UTC')
+    state.push((config.taskBy ? '任务模式：' + (config.taskGoal || config.gearWhat) : '忙时：' + (config.gearWhat || '正事')) + '，到 ' + hm(config.gearUntil))
     tone = 'warn'
   } else state.push('闲时：高频陪聊')
   if (Number(config.refuseUntil) > now) {
-    state.push('拒绝模式到 ' + hm(config.refuseUntil) + ' UTC')
+    state.push('拒绝模式到 ' + hm(config.refuseUntil))
     tone = 'warn'
   }
   if (Number(config.breakUntil) > now) {
-    state.push('放风到 ' + hm(config.breakUntil) + ' UTC')
+    state.push('放风到 ' + hm(config.breakUntil))
     tone = 'good'
   }
   if (gemini.session && Number(gemini.session.until) > now) state.push('Gemini 连麦中：' + (gemini.session.topic || ''))
@@ -201,7 +202,7 @@ export function buildSnapshot({ entries = [], todayEntries = [], trust, phone, n
   const wallLine = !wall ? '墙还没上报（等下一次 /plan）'
     : wall.locked
       ? '现在锁着：' + (wall.kind === 'night' ? '深夜锁' : '默认严格') + (wall.applyWindowOpen ? ' · 申请窗口开着' : '')
-      : '现在开放' + (wall.openUntil ? '到 ' + hm(wall.openUntil) + ' UTC' : '') + (wall.applyWindowOpen ? ' · 申请窗口开着' : '')
+      : '现在开放' + (wall.openUntil ? '到 ' + hm(wall.openUntil) : '') + (wall.applyWindowOpen ? ' · 申请窗口开着' : '')
   return {
     wall: {
       text: wallLine,

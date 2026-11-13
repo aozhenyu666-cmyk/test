@@ -2,11 +2,14 @@ package io.github.ccch1mneyyy.dsh_app.phone
 
 import io.github.ccch1mneyyy.dsh_app.i18n.AppStrings
 import android.app.Activity
+import android.app.AppOpsManager
 import android.app.Application
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -18,6 +21,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.provider.Settings
@@ -369,6 +373,64 @@ class SystemActions(private val app: Context) : SystemApi {
         return SysResult(true, "剪贴板内容：\n$shown")
     }
 
+    /**
+     * 系统的使用记录。扫一遍事件就同时得到分钟数、打开次数和切换序列——比 queryUsageStats
+     * 的按天分桶准，分桶会把查询窗口以外的用量也算进来。
+     * shortcut: 只能回溯系统自己的保留期（约 7 天）；要看更长的趋势得自己按天落盘。
+     */
+    override fun usage(minutes: Int, now: Long): UsageReport? {
+        val ops = app.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+        @Suppress("DEPRECATION")
+        val mode = ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), app.packageName)
+        if (mode != AppOpsManager.MODE_ALLOWED) return null
+        val usm = app.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        val start = now - minutes.coerceIn(1, MAX_USAGE_MINUTES) * 60_000L
+        val minutes = HashMap<String, Long>()
+        val opens = HashMap<String, Int>()
+        val switches = ArrayList<UsageSwitch>()
+        var open: String? = null
+        var since = 0L
+        var lastOpened: String? = null
+        val e = UsageEvents.Event()
+        fun close(at: Long) {
+            val p = open ?: return
+            if (at > since) minutes[p] = (minutes[p] ?: 0L) + (at - since)
+            open = null
+        }
+        val events = usm.queryEvents(start, now)
+        while (events.hasNextEvent()) {
+            events.getNextEvent(e)
+            when (e.eventType) {
+                // ACTIVITY_RESUMED（老名字 MOVE_TO_FOREGROUND，同一个值 1）
+                1 -> {
+                    close(e.timeStamp)
+                    open = e.packageName
+                    since = e.timeStamp
+                    switches.add(UsageSwitch(e.timeStamp, e.packageName))
+                    // 同一个 App 里换页面不算「又打开一次」
+                    if (e.packageName != lastOpened) {
+                        opens[e.packageName] = (opens[e.packageName] ?: 0) + 1
+                        lastOpened = e.packageName
+                    }
+                }
+                // ACTIVITY_PAUSED：只认当前这个 App 自己的暂停，别被别人事件截断
+                2 -> if (e.packageName == open) close(e.timeStamp)
+                // 灭屏 / 锁屏：手离开手机了，账就停在这里
+                16, 17 -> close(e.timeStamp)
+            }
+        }
+        // 仍在前台的是最后那条还没被 PAUSED / 灭屏截断的 App。得在 close(now) 之前抓，
+        // close 会把 open 清掉。窗口里一条事件都没有时这里是 null。
+        val current = open
+        val currentSince = since
+        close(now)
+        val rows = minutes.entries
+            .sortedByDescending { it.value }
+            .take(MAX_USAGE_ROWS)
+            .map { AppUsage(it.key, labelOf(it.key), it.value / 60_000L, opens[it.key] ?: 0) }
+        return UsageReport(rows, switches.takeLast(MAX_USAGE_SWITCHES).reversed(), current, currentSince)
+    }
+
     private fun <T> onMain(block: () -> T): T? {
         if (Looper.myLooper() == Looper.getMainLooper()) return runCatching(block).getOrNull()
         var out: T? = null
@@ -399,5 +461,10 @@ class SystemActions(private val app: Context) : SystemApi {
         private const val TAG = "dsh-phone-sys"
         const val CHANNEL_NOTIFY = "dsh-phone-notify"
         const val CHANNEL_OPEN = "dsh-phone-open"
+
+        /** 系统保留期上限：再往前的账系统自己就丢了。 */
+        private const val MAX_USAGE_MINUTES = 7 * 24 * 60
+        private const val MAX_USAGE_ROWS = 12
+        private const val MAX_USAGE_SWITCHES = 40
     }
 }

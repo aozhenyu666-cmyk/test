@@ -35,6 +35,9 @@ object FrontChange {
         selfPkgs = pkgs
     }
 
+    /** The IMEs the system reported, for callers that judge with their own list (SessionPolicy). */
+    fun imePackages(): Set<String> = imePkgs
+
     /** A welcome side effect: a new IME is picked up from the name rules without a refresh. */
     fun isLayer(pkg: String, ime: Collection<String>, self: Collection<String>): Boolean {
         if (pkg in LAYER_PKGS || pkg in ime || pkg in self) return true

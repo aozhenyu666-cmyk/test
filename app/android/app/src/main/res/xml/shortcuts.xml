@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Long-press on the launcher icon: 新对话 and 语音输入 (static), then up to three recent
+<!-- Long-press on the launcher icon: 新对话, 语音输入 and 局 (static), then up to three recent
      conversations (dynamic, shortcuts/ShortcutsPlugin.kt). All go through the non-exported
      shortcuts/EntryActivity; launchers start shortcuts as this app, so it needs no export.
      targetPackage is the applicationId (no build-type suffix today; add one and this breaks). -->
@@ -23,6 +23,17 @@
         android:shortcutLongLabel="@string/shortcut_voice_input">
         <intent
             android:action="io.github.ccch1mneyyy.dsh_app.action.VOICE_INPUT"
+            android:targetClass="io.github.ccch1mneyyy.dsh_app.shortcuts.EntryActivity"
+            android:targetPackage="io.github.ccch1mneyyy.dsh_app" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="bouts"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_new_chat"
+        android:shortcutShortLabel="@string/shortcut_bouts"
+        android:shortcutLongLabel="@string/shortcut_bouts">
+        <intent
+            android:action="io.github.ccch1mneyyy.dsh_app.action.BOUTS"
             android:targetClass="io.github.ccch1mneyyy.dsh_app.shortcuts.EntryActivity"
             android:targetPackage="io.github.ccch1mneyyy.dsh_app" />
     </shortcut>

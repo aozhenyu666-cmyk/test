@@ -131,10 +131,13 @@ class NativePanelView extends ConsumerWidget {
 /// A panel as a page of its own: its title in the bar, the signed panel
 /// under it.
 class NativePanelPage extends StatelessWidget {
-  const NativePanelPage({super.key, required this.panel, this.sessionId});
+  const NativePanelPage({super.key, required this.panel, this.sessionId, this.back = true});
 
   final NativePanel panel;
   final String? sessionId;
+
+  /// False when the panel stands as a tab of the home shell (no back key).
+  final bool back;
 
   static Route<void> route({required NativePanel panel, String? sessionId}) => MaterialPageRoute<void>(
     builder: (_) => NativePanelPage(panel: panel, sessionId: sessionId),
@@ -143,6 +146,7 @@ class NativePanelPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) => AppPage.list(
     title: panel.title,
+    back: back,
     children: [
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),

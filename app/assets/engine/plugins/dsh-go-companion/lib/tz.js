@@ -57,6 +57,30 @@ export function minuteOfDay(now, tz) {
   return p.h * 60 + p.mi
 }
 
+const pad2 = (n) => String(n).padStart(2, '0')
+
+/**
+ * 目标时区下的 `HH:MM`。R7 P0-2：提示词里所有时刻都走这里。
+ * 原来各处是把 ISO 串切片再拼上时区名（UTC），给模型的是 UTC 时刻，
+ * 跟用户看的北京时间差 8 小时，这是她「说错时间」的直接来源。
+ */
+export function hm(now, tz = DEFAULT_TZ) {
+  const p = parts(now, tz)
+  return pad2(p.h) + ':' + pad2(p.mi)
+}
+
+/** 目标时区下的 `MM-DD`（连麦复盘那种「11-11 21:00」）。 */
+export function md(now, tz = DEFAULT_TZ) {
+  const p = parts(now, tz)
+  return pad2(p.mo) + '-' + pad2(p.d)
+}
+
+/** 目标时区下的 `YYYY-MM-DD`。 */
+export function ymd(now, tz = DEFAULT_TZ) {
+  const p = parts(now, tz)
+  return p.y + '-' + pad2(p.mo) + '-' + pad2(p.d)
+}
+
 // 该时刻目标时区相对 UTC 的偏移（毫秒）。秒级精度足够，调用方都会先归整到秒。
 function offsetAt(now, tz) {
   const p = parts(now, tz)

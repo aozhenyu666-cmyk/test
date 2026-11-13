@@ -300,6 +300,10 @@ class _WebEntryHostState extends ConsumerState<WebEntryHost> {
       case NewChatEntry():
         // Dictation is the native composer's; the page starts a conversation.
         if (mounted) await _compose(null);
+      case BoutsEntry():
+        // 局面板只在原生壳里（lib/ui/plugins/native）。web 首页没有它，
+        // 按「新对话」处理，不给一个打不开的入口。
+        if (mounted) await _compose(null);
       case OpenChatEntry(:final host, :final sessionId):
         if (!mounted || !await DiscardGuard.confirmLeave(context) || !mounted) return;
         final hosts = ref.read(hostsProvider);

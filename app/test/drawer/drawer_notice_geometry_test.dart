@@ -163,12 +163,13 @@ void main() {
     final messenger = _showNotice(tester);
     await _settle(tester);
     final view = tester.view.physicalSize / tester.view.devicePixelRatio;
-    final bottomInset = tester.view.padding.bottom / tester.view.devicePixelRatio;
+    // 局 / 墙 / 对话 那条 tab bar 占着页脚，主题把提示摆在它上面 16。
+    final foot = tester.getRect(find.byKey(const ValueKey('home-tab-bar'))).top;
     Rect closed() {
       final notice = _notice(tester);
       expect(notice.left, moreOrLessEquals(16, epsilon: 0.5));
       expect(view.width - notice.right, moreOrLessEquals(16, epsilon: 0.5));
-      expect(view.height - bottomInset - notice.bottom, moreOrLessEquals(16, epsilon: 0.5));
+      expect(foot - notice.bottom, moreOrLessEquals(16, epsilon: 0.5));
       return notice;
     }
 

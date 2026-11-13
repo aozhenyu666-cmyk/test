@@ -11,6 +11,7 @@ import 'package:dsh_app/ui/phone/dnd_mode_page.dart';
 import 'package:dsh_app/ui/phone/phone_widgets.dart';
 import 'package:dsh_app/ui/phone/restricted_settings_guide.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -266,6 +267,14 @@ void main() {
     });
 
     testWidgets('adds an app by package name', (tester) async {
+      // An empty `apps` reply is what a phone with no readable list sends; an
+      // unhandled channel would never answer and the dialog would spin forever.
+      final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(
+        const MethodChannel('dsh/loop'),
+        (call) async => call.method == 'apps' ? const <Object?>[] : null,
+      );
+      addTearDown(() => messenger.setMockMethodCallHandler(const MethodChannel('dsh/loop'), null));
       final h = await pumpPhone(tester, const PhoneAppRulesPage());
       await tester.tap(find.text('添加 App'));
       await tester.pumpAndSettle();

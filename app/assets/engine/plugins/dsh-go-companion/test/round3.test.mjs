@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { apply } from '../lib/index.js'
+import { apply, setStatePin } from '../lib/index.js'
 import { appendVerdictDaily, longPlanDigest, syncVerdicts, vaultRecentNotes, vaultSearch } from '../lib/notes.js'
 import { exportImportantMemories } from '../lib/context.js'
 import { agendaLines } from '../lib/roles.js'
@@ -212,7 +212,7 @@ function agentOf(id) {
   }
 }
 
-function host(agents) {
+function host(agents, state = 'standby') {
   let handler
   const listeners = new Map()
   const ctx = {
@@ -227,6 +227,7 @@ function host(agents) {
     inject(_d, cb) { cb({ webServer: { register(r) { handler = r.handler } }, effect(fn) { fn() } }) },
     effect(fn) { fn() },
   }
+  setStatePin(state)
   apply(ctx)
   return { handler: () => handler }
 }
@@ -255,15 +256,17 @@ const SIS = 'session-sis'
 const BIG = 'session-big'
 
 function setup(home, extra = {}) {
+  // R7 P0-3：`state` 钉主状态，不能摊进 config.json（那是真配置）。
+  const { state = 'standby', ...rest } = extra
   mkdirSync(join(home, 'companion'), { recursive: true })
   const notes = join(home, 'vault')
   vault(notes)
   writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({
-    sessionId: SIS, strategistSessionId: BIG, notesPath: notes, ...extra,
+    sessionId: SIS, strategistSessionId: BIG, notesPath: notes, ...rest,
   }))
   const sis = agentOf(SIS)
   const big = agentOf(BIG)
-  const h = host({ [SIS]: sis, [BIG]: big })
+  const h = host({ [SIS]: sis, [BIG]: big }, state)
   const plan = (phone) => call(h.handler(), 'POST', '/dsh-go-companion/v1/plan', { roll: 100, timeZone: 'Asia/Shanghai', phone })
   const due = () => call(h.handler(), 'POST', '/dsh-go-companion/v1/gemini/due', {})
   return { sis, big, h, plan, due, notes }
@@ -271,11 +274,14 @@ function setup(home, extra = {}) {
 
 test('D4 工具：schedule_gemini_live 两个角色都有，到点出 launch 并进共舱', async () => {
   await withHome(async (home) => {
-    const t = setup(home)
+    // R7 P0-3：约连麦只在共脑（brain）状态下挂；两把检索工具在吃饭时段一起挂着，顺路核对共用。
+    const t = setup(home, { state: 'brain' })
     assert.ok(t.sis.tools.schedule_gemini_live, '鱼丸也能约')
     assert.ok(t.big.tools.schedule_gemini_live, '鲸澜也能约')
+    setStatePin('meal')
     assert.ok(t.sis.tools.vault_search, '检索是共用的')
     assert.ok(t.big.tools.vault_recent_notes, '检索是共用的')
+    setStatePin('brain')
 
     const r = await t.sis.tools.schedule_gemini_live.execute({ delayMinutes: 5, topic: '把简历改完', minutes: 15 })
     assert.equal(r.ok, true, JSON.stringify(r))
@@ -312,7 +318,7 @@ test('D4 工具：schedule_gemini_live 两个角色都有，到点出 launch 并
 
 test('D4 时间：at 用当地 HH:MM，过去的时间顺延到明天', async () => {
   await withHome(async (home) => {
-    const t = setup(home)
+    const t = setup(home, { state: 'brain' })
     const r = await t.sis.tools.schedule_gemini_live.execute({ at: '07:00', topic: '早上过一遍计划' })
     assert.equal(r.ok, true, JSON.stringify(r))
     const sched = JSON.parse(readFileSync(join(home, 'companion', 'gemini-schedule.json'), 'utf8'))

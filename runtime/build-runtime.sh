@@ -214,10 +214,27 @@ termux_deb() {  # $1 = package, $2 = version, $3 = termux arch; echoes path
 # ubuntu-archive-keyring.gpg from the checksum-verified Ubuntu Base tarball -> Packages.xz hash
 # -> each .deb hash. The resolved set is pinned in runtime/locks/ubuntu-noble-<arch>.json
 # (re-resolve with UPDATE_DEB_LOCK=1).
+# 镜像会删掉被新版本取代的 .deb：pin 的 filename 一旦过期就永久 404，重试 5 次也没用
+# （实测 libperl5.38t64_5.38.2-3.2ubuntu0.6 在 tuna 和 ports.ubuntu.com 上都没了，整步
+# "Build arm64 Linux runtime" 硬失败，后面 Kotlin 单测/打包 6 步全被跳过）。
+# 所以下载前先探一遍 pin 的文件还在不在；缺了就按同一套信任链重新解析一次 lock。
+pinned_debs_reachable() {  # $1 = mirror, $2 = lock file
+  local file
+  while read -r file; do
+    curl -fsI --connect-timeout 15 --max-time 60 -o /dev/null "$1/$file" || return 1
+  done < <(python3 -I -c 'import json,sys; [print(p["filename"]) for p in json.load(open(sys.argv[1]))["packages"]]' "$2")
+}
+
 ubuntu_extra_debs() {  # $1 = ubuntu arch, $2 = verified base tarball; echoes deb paths, one per line
   local arch="$1" base="$2" lock="$LOCKS/ubuntu-noble-$1.json" mirror
   [[ "$arch" == amd64 ]] && mirror="$UBUNTU_ARCHIVE_AMD64" || mirror="$UBUNTU_ARCHIVE_ARM64"
-  if [[ ! -f "$lock" || "${UPDATE_DEB_LOCK:-0}" == 1 ]] || \
+  # lock 过期（镜像把这个版本删了）和 want 变了是同一件事：都得重新解析。
+  local stale=0
+  if [[ -f "$lock" ]] && ! pinned_debs_reachable "$mirror" "$lock"; then
+    stale=1
+    log "pinned .deb is gone from the mirror; re-resolving $lock"
+  fi
+  if [[ ! -f "$lock" || "${UPDATE_DEB_LOCK:-0}" == 1 || "$stale" == 1 ]] || \
      ! python3 -I -c 'import json,sys; sys.exit(json.load(open(sys.argv[1]))["want"] != sys.argv[2].split())' "$lock" "$UBUNTU_EXTRA"; then
     command -v gpgv >/dev/null || die "gpgv is required to resolve Ubuntu packages"
     local dir="$CACHE/ubuntu/dists-$arch"; rm -rf "$dir"; mkdir -p "$dir"

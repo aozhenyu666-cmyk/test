@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { apply } from '../lib/index.js'
+import { apply, setStatePin } from '../lib/index.js'
 
 function agentOf(id) {
   const contexts = []
@@ -26,7 +26,7 @@ function agentOf(id) {
   }
 }
 
-function host(agents) {
+function host(agents, state = 'standby') {
   let handler
   const listeners = new Map()
   const ctx = {
@@ -41,6 +41,7 @@ function host(agents) {
     inject(_d, cb) { cb({ webServer: { register(r) { handler = r.handler } }, effect(fn) { fn() } }) },
     effect(fn) { fn() },
   }
+  setStatePin(state)
   apply(ctx)
   return { handler: () => handler }
 }
@@ -77,7 +78,8 @@ function setup(home) {
   }))
   const sis = agentOf(SIS)
   const big = agentOf(BIG)
-  const h = host({ [SIS]: sis, [BIG]: big })
+  // R7 P0-3：工具按主状态挂子集，submit_prediction 只在晚间挂着——这个文件测的全是它。
+  const h = host({ [SIS]: sis, [BIG]: big }, 'evening')
   const plan = (phone) => call(h.handler(), 'POST', '/dsh-go-companion/v1/plan', { roll: 100, timeZone: 'Asia/Shanghai', phone })
   const predictFile = join(home, 'companion', 'predict.json')
   const predict = () => JSON.parse(readFileSync(predictFile, 'utf8'))

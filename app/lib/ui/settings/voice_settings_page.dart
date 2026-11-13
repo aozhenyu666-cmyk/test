@@ -3,12 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../companion/companion_voice_source.dart';
+import '../../companion/voice_roles.dart';
 import '../../l10n/l10n.dart';
 import '../../state/voice_model_state.dart';
 import '../../state/voice_settings.dart';
 import '../shell/page_frame.dart';
 import '../theme/app_icons.dart';
 import '../theme/theme.dart';
+import '../workspace/text_prompt.dart';
 import 'settings_widgets.dart';
 
 String voiceModeLabel(L10n l10n, VoiceMode mode) => switch (mode) {
@@ -19,6 +22,13 @@ String voiceModeLabel(L10n l10n, VoiceMode mode) => switch (mode) {
 
 /// The model's name as its authors write it (not translated).
 const voiceModelName = 'SenseVoice'; // l10n:keep model name
+
+/// 谁在说话，在设置里叫什么（施工书用的是「局官 / 大鱼 / 小鱼」）。
+String _roleTitle(L10n l10n, VoiceRole role) => switch (role) {
+  VoiceRole.official => l10n.voiceOutOfficial,
+  VoiceRole.strategist => l10n.voiceOutStrategist,
+  VoiceRole.companion => l10n.voiceOutCompanion,
+};
 
 /// Why a model download stopped, as one short sentence.
 String voiceModelFailureText(L10n l10n, VoiceModelFailure? failure, {int? neededBytes}) => switch (failure) {
@@ -100,6 +110,7 @@ class _VoiceSettingsPageState extends ConsumerState<VoiceSettingsPage> {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final selected = ref.watch(voiceSettingsProvider);
+    final spoken = ref.watch(companionVoiceSettingsProvider);
     return AppPage.list(
       title: l10n.voiceSettingsTitle,
       children: [
@@ -132,10 +143,151 @@ class _VoiceSettingsPageState extends ConsumerState<VoiceSettingsPage> {
           footer: Text(l10n.voiceModelFooter),
           children: const [VoiceModelCard()],
         ),
+        // null = 还没从磁盘读出来；这一档的行不显示，免得把默认值写回去盖掉已存的密钥。
+        if (spoken case final settings?) _VoiceOutSection(settings),
       ],
     );
   }
 }
+
+/// 第八轮 U2：局官、大鱼、小鱼共用的一档外接声音。服务、密钥、开关只有一份，
+/// 三个角色只分开选音色；没配置（或关掉）就退回手机自带语音。
+class _VoiceOutSection extends ConsumerWidget {
+  const _VoiceOutSection(this.settings);
+
+  final CompanionVoiceSettings settings;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = context.l10n;
+    final voices = ref.watch(voiceRoleProvider);
+    return SettingsSection(
+      title: l10n.voiceOutSection,
+      footer: Text(l10n.voiceOutFooter),
+      children: [
+        SettingsSwitchTile(
+          key: const ValueKey('voice-out-enable'),
+          title: l10n.voiceOutEnable,
+          subtitle: l10n.voiceOutEnableHint,
+          value: settings.on,
+          onChanged: (on) => unawaited(_save(ref, settings.copyWith(on: on))),
+        ),
+        SettingsTile(
+          key: const ValueKey('voice-out-service'),
+          title: l10n.voiceOutService,
+          value: Text(settings.presetInfo.name),
+          onTap: () => unawaited(_pickService(context, ref)),
+        ),
+        SettingsTile(
+          key: const ValueKey('voice-out-key'),
+          title: l10n.voiceOutKey,
+          value: Text(settings.presetKey.isEmpty ? l10n.voiceOutKeyUnset : l10n.voiceOutKeySet),
+          onTap: () => unawaited(_pickKey(context, ref)),
+        ),
+        for (final role in VoiceRole.values)
+          SettingsTile(
+            key: ValueKey('voice-out-role-${role.name}'),
+            title: _roleTitle(l10n, role),
+            value: Text(voices[role] ?? l10n.voiceOutVoiceFollow),
+            trailing: IconButton(
+              key: ValueKey('voice-out-preview-${role.name}'),
+              icon: const Icon(AppIcons.play, size: 20),
+              tooltip: l10n.voiceOutPreview,
+              onPressed: () => unawaited(_preview(context, ref, role)),
+            ),
+            onTap: () => unawaited(_pickVoice(context, ref, role)),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _save(WidgetRef ref, CompanionVoiceSettings next) =>
+      ref.read(companionVoiceSettingsProvider.notifier).update(next);
+
+  Future<void> _pickService(BuildContext context, WidgetRef ref) async {
+    final id = await _choose<String>(
+      context,
+      title: context.l10n.voiceOutService,
+      current: settings.preset,
+      options: [for (final preset in companionVoicePresets) (preset.id, preset.name)],
+    );
+    if (id == null || !context.mounted || id == settings.preset) return;
+    await _save(ref, settings.copyWith(source: CompanionVoiceSource.preset, preset: id));
+    // 音色 id 只在它那家服务里有效：换服务后旧音色清掉、回到服务默认。留着的话下一句会
+    // 拿别家的 id 去请求，失败再退回手机语音——白等一次，还听不出为什么。
+    final known = {for (final voice in companionVoicePreset(id).voices) voice.id};
+    for (final MapEntry(key: role, value: voice) in ref.read(voiceRoleProvider).entries.toList()) {
+      if (!known.contains(voice)) await ref.read(voiceRoleProvider.notifier).set(role, '');
+    }
+  }
+
+  Future<void> _pickKey(BuildContext context, WidgetRef ref) async {
+    final l10n = context.l10n;
+    final key = await showTextPrompt(
+      context,
+      title: l10n.voiceOutKey,
+      initial: settings.presetKey,
+      hint: settings.presetInfo.site,
+      confirm: l10n.commonSave,
+    );
+    if (key == null || !context.mounted) return;
+    await _save(ref, settings.copyWith(presetKeys: {...settings.presetKeys, settings.preset: key}));
+  }
+
+  Future<void> _pickVoice(BuildContext context, WidgetRef ref, VoiceRole role) async {
+    final l10n = context.l10n;
+    final id = await _choose<String>(
+      context,
+      title: _roleTitle(l10n, role),
+      current: ref.read(voiceRoleProvider)[role] ?? '',
+      options: [
+        ('', l10n.voiceOutVoiceFollow),
+        for (final voice in settings.presetInfo.voices) (voice.id, voice.id),
+      ],
+    );
+    if (id == null || !context.mounted) return;
+    await ref.read(voiceRoleProvider.notifier).set(role, id);
+  }
+
+  Future<void> _preview(BuildContext context, WidgetRef ref, VoiceRole role) async {
+    final l10n = context.l10n;
+    final failed = await ref.read(companionRolesProvider).preview(role, l10n.voiceOutPreviewText);
+    if (failed == null || !context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(l10n.voiceOutPreviewFailed)));
+  }
+}
+
+/// 二到十几选一的对话框，圆点和「识别方式」那几行一致；点一行就关掉。
+Future<T?> _choose<T>(
+  BuildContext context, {
+  required String title,
+  required T current,
+  required List<(T, String)> options,
+}) => showDialog<T>(
+  context: context,
+  builder: (dialog) => AlertDialog(
+    title: Text(title),
+    contentPadding: const EdgeInsets.symmetric(vertical: 8),
+    content: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final (value, label) in options)
+            Semantics(
+              checked: value == current,
+              inMutuallyExclusiveGroup: true,
+              child: ListTile(
+                title: Text(label),
+                trailing: Icon(value == current ? AppIcons.radioOn : AppIcons.radioOff, size: 24),
+                onTap: () => Navigator.pop(dialog, value),
+              ),
+            ),
+        ],
+      ),
+    ),
+    actions: [TextButton(onPressed: () => Navigator.pop(dialog), child: Text(context.l10n.commonCancel))],
+  ),
+);
 
 /// The model's status, progress and actions, inside the settings card.
 class VoiceModelCard extends ConsumerWidget {

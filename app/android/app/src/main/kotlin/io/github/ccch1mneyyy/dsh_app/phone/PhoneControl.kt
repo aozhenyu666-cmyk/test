@@ -21,6 +21,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import io.github.ccch1mneyyy.dsh_app.MainActivity
 import io.github.ccch1mneyyy.dsh_app.R
+import io.github.ccch1mneyyy.dsh_app.loop.proactive.ProactiveRuntime
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.A11yKeeper
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.A11yWatchdogService
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.PhoneA11yService
@@ -623,6 +624,9 @@ class PhoneControl private constructor(private val app: Context) : PhoneEnv, Con
     }
 
     override fun system(): SystemApi = system
+
+    override fun workMode(mode: String, allow: List<String>, minutes: Int, why: String?): String =
+        ProactiveRuntime.workMode(mode, allow, minutes, why)
 
     override fun zone(): ZoneId = ZoneId.systemDefault()
 

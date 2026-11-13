@@ -25,6 +25,8 @@ export const BRAIN_MIN_MS = 3 * 60_000
  */
 const CONDITIONS = {
   'night-lock': (f) => inNightLock(f.min),
+  // 第八轮 P1：计划模态是主状态，优先级仅次于深夜锁。判定在 dayplan.js，这里只认结果。
+  'plan-lock': (f) => f.plan.active,
   'evening-followup': (f) => f.followup.active && f.followup.reason === 'evening',
   'evening-gate': (f) => f.rhythm.reviewGate === true,
   'morning-lock': (f) => (f.followup.active && f.followup.reason === 'morning') || f.rhythm.morningGate === true,
@@ -43,30 +45,66 @@ const CONDITIONS = {
  */
 export const STATE_TABLE = [
   { id: 'night', priority: 100, enter: ['night-lock'], lock: 'night', back: null,
-    agenda: '深夜锁：不主动发球。他还醒着就短、硬地让他去睡。' },
+    agenda: '深夜锁：不主动发球。他还醒着就短、硬地让他去睡。',
+    tools: ['notes_vault', 'fish_index', 'dafeiyu_control', 'kb_write'] },
+  { id: 'plan', priority: 95, enter: ['plan-lock'], lock: 'plan', back: null,
+    agenda: '计划模态：先把今天的局定下来。第一句必须是计划，不是问题；他不开口就 10 分钟后自动生效。',
+    tools: ['daily_plan', 'dafeiyu_control', 'notes_vault', 'fish_index', 'kb_write'] },
   { id: 'evening', priority: 90, enter: ['evening-followup', 'evening-gate'], lock: 'evening', back: null,
-    agenda: '晚间对账：逐项核对今天的完成物，满意才收；满意后今晚的申请窗口才可能开。' },
+    agenda: '晚间对账：逐项核对今天的完成物，满意才收；满意后今晚的申请窗口才可能开。',
+    tools: ['daily_review', 'submit_to_wall', 'submit_verdict', 'request_relax', 'submit_prediction', 'notes_vault', 'fish_index', 'kb_write'] },
   { id: 'morning', priority: 80, enter: ['morning-lock'], lock: 'followup', back: null,
-    agenda: '晨间立项：定今天 1–3 件事，每件带完成物；裁决满意且任务校验通过才放。' },
+    agenda: '晨间立项：定今天 1–3 件事，每件带完成物；裁决满意且任务校验通过才放。',
+    tools: ['daily_plan', 'take_stance', 'notes_vault', 'vault_search', 'fish_index', 'sister_note', 'kb_write', 'dafeiyu_control'] },
   { id: 'review', priority: 80, enter: ['review-lock'], lock: 'followup', back: null,
-    agenda: '验收：对照完成物和笔记库追问，满意才放风。' },
+    agenda: '验收：对照完成物和笔记库追问，满意才放风。',
+    tools: ['submit_verdict', 'end_task_mode', 'submit_to_wall', 'notes_vault', 'fish_index', 'vault_recent_notes', 'kb_write', 'dafeiyu_control'] },
   { id: 'followup', priority: 80, enter: ['followup-other'], lock: 'followup',
-    agenda: '追问锁：把当前问题问完，证据凑齐交墙（submit_to_wall）。' },
+    agenda: '追问锁：把当前问题问完，证据凑齐交墙（submit_to_wall）。',
+    tools: ['submit_verdict', 'submit_to_wall', 'revise_stance', 'notes_vault', 'fish_index', 'grant_break', 'vault_search', 'kb_write'] },
   { id: 'sprint', priority: 70, enter: ['sprint'], lock: 'sprint', back: null,
-    agenda: '冲刺：少打扰，最多 20 分钟看一眼进展；到点或他点「申请验收」进验收。' },
+    agenda: '冲刺：少打扰，最多 20 分钟看一眼进展；到点或他点「申请验收」进验收。',
+    // C1：冲刺是最典型的「推导到一半」，mount_propose 换掉 sister_note（递话不在冲刺里做）。
+    tools: ['start_task_mode', 'submit_to_wall', 'end_task_mode', 'block_apps', 'notes_vault', 'fish_index', 'mount_propose', 'gemini_live'] },
   { id: 'brain', priority: 70, enter: ['brain'], lock: 'brain', back: null,
-    agenda: '共脑：在 Gemini 舱里，不插嘴。结束满 3 分钟才会出现追问。' },
+    agenda: '共脑：在 Gemini 舱里，不插嘴。结束满 3 分钟才会出现追问。',
+    tools: ['gemini_end', 'gemini_log', 'gemini_live', 'schedule_gemini_live', 'notes_vault', 'fish_index'] },
   { id: 'meal', priority: 60, enter: ['meal'], lock: 'open', back: null,
-    agenda: '吃饭时段：娱乐开放，纯陪聊。' },
+    agenda: '吃饭时段：娱乐开放，纯陪聊。',
+    tools: ['notes_vault', 'fish_index', 'sister_note', 'grant_break', 'vault_search', 'vault_recent_notes', 'tighten_today', 'workflow_propose'] },
   { id: 'break', priority: 60, enter: ['break'], lock: 'open', back: null,
-    agenda: '放风：纯陪聊，到点回待命。' },
+    agenda: '放风：纯陪聊，到点回待命。',
+    tools: ['notes_vault', 'fish_index', 'sister_note', 'grant_break', 'vault_search', 'vault_recent_notes', 'workflow_propose', 'dafeiyu_control'] },
   { id: 'standby', priority: 50, enter: ['always'], lock: 'standby', back: null,
-    agenda: '待命：帮他挑下一件事、拆出第一步；10 分钟没动就开追问锁。' },
+    agenda: '待命：帮他挑下一件事、拆出第一步；10 分钟没动就开追问锁。',
+    // C1：挂载卡的三件套在待命里齐（挑下一件事靠的就是「他手上推到哪」）。
+    // 让位的是 block_apps / revise_stance / gemini_live——它们各自在冲刺、追问锁、共脑里有位置。
+    tools: ['start_task_mode', 'submit_to_wall', 'end_task_mode', 'notes_vault', 'fish_index', 'mount_propose', 'mount_park', 'mount_close'] },
 ]
+
+/** 每个主状态最多挂几个工具（规格：任一状态 ≤8）。 */
+export const MAX_TOOLS_PER_STATE = 8
+
+/** 全部工具的并集：任一工具至少在一个状态下可达，测试拿它核对覆盖率。 */
+export const ALL_TOOLS = [...new Set(STATE_TABLE.flatMap((row) => row.tools || []))]
+
+/** 这个主状态该挂哪几个工具。给 mountOne 与 fish_index 用；未知状态按待命算。 */
+export function toolsFor(state) {
+  const row = STATE_TABLE.find((r) => r.id === state) || STATE_TABLE.find((r) => r.id === 'standby')
+  return [...(row?.tools || [])]
+}
+
+/** 当前状态下调不了的工具，以及它什么时候能用（fish_index 原样说给模型听）。 */
+export function toolsElsewhere(state) {
+  const here = new Set(toolsFor(state))
+  return ALL_TOOLS.filter((name) => !here.has(name))
+    .map((name) => ({ name, when: STATE_TABLE.filter((r) => r.tools?.includes(name)).map((r) => r.id) }))
+}
 
 /** 锁层怎么说话：界面只显示最高那一项的理由。 */
 const LOCK_WHY = {
   night: '深夜锁：现在是休息时间，娱乐锁到早上 7 点。',
+  plan: '计划模态：今天的局还没定下来，娱乐锁着。',
   evening: '晚间对账：把今天的账对完才解锁。',
   followup: '追问锁：把这一个问题说清楚。',
   sprint: '冲刺中：娱乐锁着，通知收进防波堤。',
@@ -75,7 +113,7 @@ const LOCK_WHY = {
 }
 
 /** 每层锁的优先级（和 STATE_TABLE 的 priority 对齐；open 层不下发成锁）。 */
-export const LAYER_PRIORITY = { night: 100, evening: 90, followup: 80, sprint: 70, brain: 70, standby: 50 }
+export const LAYER_PRIORITY = { night: 100, plan: 95, evening: 90, followup: 80, sprint: 70, brain: 70, standby: 50 }
 
 function factsOf(input) {
   const now = Number(input?.now) || 0
@@ -86,11 +124,17 @@ function factsOf(input) {
   const rhythm = input?.rhythm || {}
   const followup = input?.followup || { active: false, reason: '', until: 0, since: 0 }
   const session = input?.session && typeof input.session === 'object' ? input.session : null
+  const plan = input?.plan && typeof input.plan === 'object' ? input.plan : null
   const relax = activeRelax(config, now, tz)
   const seg = relax ? relax.segments.find((s) => min >= s.from && min < s.to) : null
   return {
     now, tz, config, day, min, rhythm, followup, session,
     relax: seg || null,
+    plan: {
+      active: Boolean(plan && plan.active),
+      until: plan ? Number(plan.until) || 0 : 0,
+      reason: plan ? String(plan.reason || '') : '',
+    },
     sprint: {
       active: config.gear === 'busy' && Number(config.gearUntil) > now,
       until: Number(config.gearUntil) || 0,
@@ -107,6 +151,8 @@ function factsOf(input) {
 /** 这一层什么时候自己到期（引擎挂了手机也按这个松手）。 */
 function untilOf(id, f) {
   if (id === 'night') return f.midnight + NIGHT_LOCK_TO * 60_000
+  // 计划模态自带到期时刻（10 分钟不确认就自动生效），所以这里照抄，不另算。
+  if (id === 'plan') return f.plan.until
   if (id === 'evening') {
     if (f.followup.active && f.followup.reason === 'evening') return Number(f.followup.until) || 0
     const since = Number(f.rhythm?.state?.reviewSince) || f.now

@@ -11,7 +11,7 @@
 // 墙只认两样东西：config 里的规则表，和「生效中的修改记录」（relax / tighten，都带当天 daykey）。
 // 聊天里的任何话都改不动墙——这是底线 1。
 
-import { dayNumber, minuteOfDay, startOfDay } from './tz.js'
+import { dayNumber, hm, minuteOfDay, startOfDay } from './tz.js'
 import { NIGHT_LOCK_FROM, NIGHT_LOCK_TO } from './rhythm.js'
 
 /** 墙规则的锁类型（和 index.js 下发给手机的 kind、手机端 LockPriority 对齐）。 */
@@ -217,7 +217,7 @@ export function wallWhy(kind, { until, tz, tightened } = {}) {
  */
 export function wallDefianceText(label, until) {
   const who = String(label || '').slice(0, 40) || '娱乐 App'
-  const at = Number(until) > 0 ? new Date(Number(until)).toISOString().slice(11, 16) + ' UTC' : '到点'
+  const at = Number(until) > 0 ? hm(Number(until)) : '到点'
   return '关掉提醒还在用' + who + '：墙按规则当场升级，娱乐锁到 ' + at + '。这是你清醒时定下的规则，聊天里改不了。'
 }
 

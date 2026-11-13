@@ -1,0 +1,105 @@
+name: flutter-full
+
+# 整仓 Dart 检查：analyze + 除 golden 以外的全部测试。
+#
+# 为什么排除 golden：14 处 matchesGoldenFile 的基线（949 张 PNG）是在 Windows 上生成的，
+# Linux 的字体渲染有像素差，搬过来会红一片；要搬就得在 Linux 重生成一套，
+# 那反过来让 Windows 本机失败。所以这里只跑不比图的用例。
+# 判据是「文件里比不比图」——matchesGoldenFile，或调 harness 里的 goldenBoth。
+# 只 import golden_harness 不算：几何测试只是借它的 goldenApp 拿一层外壳，
+# 断的是 closeTo 的数字，那些该在这里跑。
+# 不用名单：新加一个 golden 文件自动被排除，不会漏。
+#
+# 和 shell-widgets 的分工：那一份只跑壳层三个文件，回答「这一轮改的壳层还对不对」，
+# 几十秒出结果；这一份回答「整仓还能不能编、别的测试有没有被改坏」，慢，但一次管全部。
+
+on:
+  push:
+    branches: [deepseek/round8]
+    paths:
+      - ".github/workflows/flutter-full.yml"
+      - "app/lib/**"
+      - "app/test/**"
+      - "app/pubspec.yaml"
+      - "app/l10n.yaml"
+  workflow_dispatch:
+    inputs:
+      # 只跑某几个文件（空格分隔），用来在修失败时把一轮从 10 分钟压到 2 分钟。
+      # 留空就是 normal 的全量（golden 除外）。
+      files:
+        description: "只跑这些测试文件（空格分隔，相对 app/）"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.7
+          channel: stable
+          cache: true
+
+      - name: pub get
+        run: flutter pub get
+
+      # gen-l10n 读合并后的 app_*.arb，字符串只写在 lib/l10n/parts/ 里。
+      - name: merge l10n parts
+        run: python3 tool/l10n_merge.py
+
+      # 只回答「有没有编译错误」。info 和 warning 不卡，否则第一次跑就是几百条历史债，
+      # 真正的错误被淹掉。要收紧 lint 另开一条，别混进来。
+      - name: flutter analyze
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+  tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.7
+          channel: stable
+          cache: true
+
+      - name: pub get
+        run: flutter pub get
+
+      # 和 shell-widgets 同一步：漏了它 parts 里的键在 L10n 里不存在，编不过。
+      - name: merge l10n parts
+        run: python3 tool/l10n_merge.py
+
+      # test/support/test_fonts.dart 的默认目录是 /usr/share/fonts/noto-cjk，
+      # runner 上没有；Regular/Bold 在 fonts-noto-cjk，Light 在 -extra。
+      - name: CJK fonts for the test engine
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-noto-cjk fonts-noto-cjk-extra
+
+      - name: widget / unit tests (golden 除外)
+        env:
+          DSH_TEST_FONT_DIR: /usr/share/fonts/opentype/noto
+        run: |
+          set -eu
+          if [ -n "${{ inputs.files }}" ]; then
+            echo "只跑指定文件: ${{ inputs.files }}"
+            flutter test ${{ inputs.files }}
+          else
+            grep -rL -e 'matchesGoldenFile' -e 'goldenBoth(' \
+              --include='*_test.dart' test > /tmp/nogolden.txt
+            echo "跑 $(wc -l < /tmp/nogolden.txt) 个测试文件，排除 $(grep -rl -e 'matchesGoldenFile' -e 'goldenBoth(' --include='*_test.dart' test | wc -l) 个比图的"
+            flutter test $(cat /tmp/nogolden.txt)
+          fi

@@ -11,6 +11,8 @@ package io.github.ccch1mneyyy.dsh_app.phone
 object PhoneToolCatalog {
     const val APPS = "apps"
     const val NOW = "now"
+    const val USAGE = "usage"
+    const val FOCUS = "focus"
     const val OPEN = "open"
     const val INTENT = "intent"
     const val NOTIFY = "notify"
@@ -64,6 +66,26 @@ object PhoneToolCatalog {
             "列出这台手机上能打开的应用（名称 · 包名）。",
             // l10n:keep agent tool catalog
             linkedMapOf("query" to str("按名称或包名筛选，可省略")),
+            emptyList(),
+        ),
+        Tool(
+            USAGE,
+            // l10n:keep agent tool catalog
+            "读这台手机的使用账。minutes 往回看几分钟（问「这会儿」就用它，比 hours 准），hours 往回看几小时" +
+                // l10n:keep agent tool catalog
+                "（默认 24，最多 168）。给三样：现在在哪个 App 已连续多久、每个 App 的前台分钟数与打开次数、" +
+                // l10n:keep agent tool catalog
+                "最近的切换序列（新→旧，相邻两条的时刻差就是前一个 App 待了多久）。" +
+                // l10n:keep agent tool catalog
+                "判断走神看的是这个序列：先看当下在做什么，再看切换是不是在两个 App 之间来回跳、" +
+                // l10n:keep agent tool catalog
+                "以及在娱乐 App 上停留了多久——同一个 App 在不同任务里意义不同，" +
+                // l10n:keep agent tool catalog
+                "所以别只看总时长下结论。要「使用情况访问」授权，没授权会告诉用户怎么开。",
+            linkedMapOf(
+                "minutes" to int("往回看几分钟（优先用它）", 1, 7 * 24 * 60),
+                "hours" to int("往回看几小时，默认 24", 1, 168),
+            ),
             emptyList(),
         ),
         Tool(
@@ -269,6 +291,32 @@ object PhoneToolCatalog {
             // l10n:keep agent tool catalog
             linkedMapOf("reason" to str("要用户做什么，一句话")),
             listOf("reason"),
+        ),
+        Tool(
+            FOCUS,
+            // l10n:keep agent tool catalog
+            "工作模式：说好计划之后把计划钉住——allow 里的 App 照常用，其余第三方 App 一进就被全屏锁页挡住。" +
+                // l10n:keep agent tool catalog
+                "mode=on 开始（要 allow + minutes）；mode=off 立刻结束；不传 mode 就是查现在还剩多久、允许哪些。" +
+                // l10n:keep agent tool catalog
+                "allow 写包名或应用名，先用 apps 查准。电话、短信、地图、支付、桌面、输入法永远不锁；" +
+                // l10n:keep agent tool catalog
+                "允许名单外的娱乐 App 到点自动解锁，用户也能用拦截页自己放行。",
+            linkedMapOf(
+                // l10n:keep agent tool catalog
+                "mode" to enum(listOf("on", "off"), "on 开始，off 结束"),
+                "allow" to linkedMapOf(
+                    "type" to "array",
+                    "items" to linkedMapOf("type" to "string"),
+                    // l10n:keep agent tool catalog
+                    "description" to "on：这期间允许使用的 App（包名或应用名），至少一个",
+                ),
+                // l10n:keep agent tool catalog
+                "minutes" to int("on：持续多少分钟", 5, 720),
+                // l10n:keep agent tool catalog
+                "why" to str("on：为什么锁（锁页上会显示这句，一句话）"),
+            ),
+            emptyList(),
         ),
     )
 

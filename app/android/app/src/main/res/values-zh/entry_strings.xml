@@ -4,5 +4,9 @@
 <resources>
     <string name="shortcut_new_chat">新对话</string>
     <string name="shortcut_voice_input">语音输入</string>
+    <string name="shortcut_bouts">局</string>
     <string name="tile_new_chat">新对话</string>
+    <string name="tile_bouts">局</string>
+    <string name="tile_bouts_today">今日 %1$d 拍</string>
+    <string name="tile_bouts_running">局中 · 今日 %1$d</string>
 </resources>

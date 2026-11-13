@@ -13,6 +13,7 @@ import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import io.github.ccch1mneyyy.dsh_app.loop.core.BeijingClock
 import io.github.ccch1mneyyy.dsh_app.loop.core.CoreCodecPublic
 import io.github.ccch1mneyyy.dsh_app.loop.core.ProactiveScheduler
 import io.github.ccch1mneyyy.dsh_app.loop.core.SchedulerConfig
@@ -173,21 +174,77 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
             // 墙不谈判：这里没有「放松」按钮，放松只能走晚上对账后的申请窗口。
             "wallStatus" -> ProactiveRuntime.fetchPluginRoute(
                 result, "POST", "/wall",
-                linkedMapOf("action" to "status", "timeZone" to java.util.TimeZone.getDefault().id),
+                linkedMapOf("action" to "status", "timeZone" to BeijingClock.ZONE.id),
             )
             // 姐妹界面（R4-5）：两张角色卡 + 今日审计面板。只读，放松规则的入口不在这里。
             "sisters" -> ProactiveRuntime.fetchPluginRoute(
                 result, "POST", "/sisters",
-                linkedMapOf("timeZone" to java.util.TimeZone.getDefault().id),
+                linkedMapOf("timeZone" to BeijingClock.ZONE.id),
             )
+            // 第八轮 W3：系统分享进来的文字，当成当前这一拍的答案。
+            // 没有在跑的局时插件回 no-bout，手机据此退回「新对话」——分享不会被吞掉。
+            "boutsShare" -> ProactiveRuntime.fetchPluginRoute(
+                result, "POST", "/bouts",
+                linkedMapOf("text" to call.argument<String>("text")),
+            )
+            // 第八轮 J9：语音闭环的四个动作（ask / spoken / answer / fallback）。
+            // 和分享共用插件的 POST /bouts，由插件按 action 分发；这里只透传，不判——
+            // 念到第几句、要不要收局都由局官决定，手机不另存一份状态。
+            "boutsVoice" -> {
+                val body = LinkedHashMap<String, Any?>()
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/bouts", body)
+            }
             // 每日四部门提交（第五轮）：信息收集 / 谋划思考 / 行为管理 / 统筹规划。
             // action=status 只读，action=submit 交一段（字数不到插件当场退回）。
             "deposit" -> {
                 val body = LinkedHashMap<String, Any?>()
-                body["timeZone"] = java.util.TimeZone.getDefault().id
+                body["timeZone"] = BeijingClock.ZONE.id
                 (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String && k != "timeZone") body[k] = v }
                 ProactiveRuntime.fetchPluginRoute(result, "POST", "/deposit", body)
             }
+            // A3：墙的审查记录（只读，GET）。墙不聊天，这里只是把落账的判定倒序摆出来。
+            "wallThread" -> ProactiveRuntime.fetchPluginRoute(
+                result, "GET", "/wall/thread?timeZone=${BeijingClock.ZONE.id}", null,
+            )
+            // A3：申诉。只收「一条具体判定 + 新的物理证据」，每天 2 次；判还是由插件里的墙算。
+            "wallAppeal" -> {
+                val body = LinkedHashMap<String, Any?>()
+                body["timeZone"] = BeijingClock.ZONE.id
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String && k != "timeZone") body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/wall/appeal", body)
+            }
+            // C1：工作记忆挂载卡。action=status 只读；写操作（open/given/step/park/resume/close/accept）原样透传，
+            // 规矩全在插件里（只能是他自己的原话、同时只有一张 open 卡）。GET 只读视图也走这里。
+            "mount" -> {
+                if (call.argument<String>("action") == null) {
+                    ProactiveRuntime.fetchPluginRoute(
+                        result, "GET", "/mount?timeZone=${BeijingClock.ZONE.id}", null,
+                    )
+                } else {
+                    val body = LinkedHashMap<String, Any?>()
+                    body["timeZone"] = BeijingClock.ZONE.id
+                    (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String && k != "timeZone") body[k] = v }
+                    ProactiveRuntime.fetchPluginRoute(result, "POST", "/mount", body)
+                }
+            }
+            // C2：四个基本操作（精简 / 预判 / 提问 / 回想）。不带 answer 只读出什么题与通过率；
+            // 带 answer 才算判卷。判的人是谁、什么算过，全在插件里，这里只透传。
+            "drillOp" -> {
+                if (call.argument<String>("answer") == null) {
+                    ProactiveRuntime.fetchPluginRoute(
+                        result, "GET", "/drill-op?timeZone=${BeijingClock.ZONE.id}", null,
+                    )
+                } else {
+                    val body = LinkedHashMap<String, Any?>()
+                    body["timeZone"] = BeijingClock.ZONE.id
+                    (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String && k != "timeZone") body[k] = v }
+                    ProactiveRuntime.fetchPluginRoute(result, "POST", "/drill-op", body)
+                }
+            }
+            // B5：设置页试听。绕开插件的总开关（关了也能试），但不绕过设备状态——
+            // 回 null 表示真的念完了，否则是降级原因（no-tts / dnd / muted / session）。
+            "voiceTry" -> ProactiveRuntime.tryVoice { why -> result.success(why) }
             else -> result.notImplemented()
         }
     }

@@ -3,7 +3,8 @@
 //
 //   share sheet        a lone `.dshgo` file or a share link → the share-code
 //                      importer (as if opened); a hosted conversation link →
-//                      its replay; anything else → 新对话 with the text and
+//                      its replay; plain text while a 局 is running → that
+//                      beat's answer; anything else → 新对话 with the text and
 //                      attachments in the composer, not sent
 //   launcher shortcut  新对话 / 语音输入 → 新对话 (listening) · a recent
 //                      conversation → that conversation, on its host
@@ -26,10 +27,12 @@ import '../../l10n/l10n.dart';
 import '../../links/app_links.dart';
 import '../../links/launcher_entries.dart';
 import '../../links/share_intake.dart';
+import '../../proactive/proactive_state.dart';
 import '../../state/compose_inbox.dart';
 import '../../state/hosts_state.dart';
 import '../../state/sessions_state.dart';
 import '../common/discard_guard.dart';
+import '../plugins/native/native_taps.dart';
 
 /// Draws nothing. Put it once in the home shell's stack, next to [LinkHost].
 class SystemEntryHost extends ConsumerStatefulWidget {
@@ -82,6 +85,12 @@ class _SystemEntryHostState extends ConsumerState<SystemEntryHost> {
       ref.read(appLinksProvider).add(link.appLink);
       return;
     }
+    // 第八轮 W3：有一局在跑时，纯文字分享就是这一拍的答案，不新开对话。
+    // 接不住（没有在跑的局、插件连不上）就往下走，照旧进新对话——分享不能凭空丢掉。
+    final shared = share.text?.trim();
+    if (share.files.isEmpty && shared != null && shared.isNotEmpty) {
+      if (await ProactiveChannel().shareToBout(shared)) return;
+    }
     final request = await ComposeRequest.fromShare(share);
     if (mounted) await _compose(request);
   }
@@ -93,6 +102,11 @@ class _SystemEntryHostState extends ConsumerState<SystemEntryHost> {
         // intent can arrive a beat before Flutter hears it is resumed.
         if (voice) await _untilResumed();
         if (mounted) await _compose(ComposeRequest(text: text, voice: voice));
+      case BoutsEntry():
+        // 局在插件里：先回到对话，再把这个面板推上来。没有装插件就退回对话，
+        // 不给一个空页面。
+        if (!await _showChat() || !mounted) return;
+        if (!await openPluginPanel(context, ref, 'dsh-go-companion', 'bouts')) return;
       case OpenChatEntry(:final host, :final sessionId):
         if (!await _showChat() || !mounted) return;
         final hosts = ref.read(hostsProvider);

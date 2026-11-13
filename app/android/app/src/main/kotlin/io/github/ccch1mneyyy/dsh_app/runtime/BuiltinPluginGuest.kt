@@ -126,6 +126,7 @@ object BuiltinPluginGuest {
                 "lib/brain.js",
                 "lib/predict.js",
                 "lib/vibe.js",
+                "lib/samples.js",
                 "lib/force.js",
                 "lib/roles.js",
                 "lib/gear.js",
@@ -142,6 +143,61 @@ object BuiltinPluginGuest {
                 "lib/daily.js",
                 "lib/followup.js",
                 "lib/machine.js",
+                "lib/budget.js",
+                "lib/stance.js",
+                "lib/wall_voice.js",
+                "lib/mount.js",
+                // R7 B4：情绪池。状态层那一行和 /request 里的 burst 计划都来自它。
+                "lib/emotion.js",
+                // R7 B2：夜间整理。产物是 links/gaps/carry（素材），不是消息。
+                "lib/nightly.js",
+                // R8 J1：局的数据。八张表加在 fish-memory.sqlite 里，写入只走 bouts.js；
+                // rebuild.js 是「以账本为准」的重建脚本（node lib/rebuild.js --home <dir>）。
+                "lib/bouts.js",
+                "lib/rebuild.js",
+                // R8 J2/J3：能力库（可校验的具名积木）+ 协议格式与解释器。
+                "lib/capabilities.js",
+                "lib/protocol.js",
+                // R8 J4/J9：五个内置协议（JSON 也是部署物，漏了真机 readdirSync 直接空目录）、
+                // 协议加载器、局官（一拍一拍推进 + 沟通上限 + 混乱处理）。
+                "lib/builtin.js",
+                "lib/boutrun.js",
+                // R8 W1：局的面板（四页）与它的数据。视图只认 data.* 绑定，措辞来自协议与局官。
+                "lib/bouts_view.js",
+                "lib/bouts_panel.js",
+                "lib/protocols/execute.json",
+                "lib/protocols/study.json",
+                "lib/protocols/outing.json",
+                "lib/protocols/design.json",
+                "lib/protocols/rest.json",
+                // R8 W4：设定（作息模板 / 最少局数 / 局型预算 / 升级阈值）。改紧立即生效，
+                // 改松走 24 小时冷却期——P1 排局、P4 升级都从这里读阈值。
+                "lib/settings.js",
+                // R8 P1：计划模态。候选与规则全在代码里，模型只负责把计划说出来。
+                "lib/dayplan.js",
+                // R8 P2：全天主动。计划生效后他不再开局，局来开他——换局有额度，「不开」不许说。
+                "lib/autobout.js",
+                // R8 P3：答错只重打、敷衍走升级、混乱只压缩。度量复用 J3 那一套。
+                "lib/reply.js",
+                // R8 P4：升级阶梯。E1/E1′/E2/E3 与 L1/L2/L3 全在代码里，模型无权减免。
+                "lib/escalate.js",
+                // R8 P1/P2 接线：计划的节拍。引擎停过之后过点的局记空局、不补开。
+                "lib/planwire.js",
+                // R8 W2：墙的面板。数据只读 machine/wall_voice/settings 的现成结论。
+                "lib/wall_panel.js",
+                // R8 W2：墙与审查两个页面的视图。
+                "lib/wall_view.js",
+                // R8 W4：设定页。解析/渲染/预填在这里，改松的冷却期仍在 settings.js。
+                "lib/settings_panel.js",
+                // R8 W4：设定两个页面（作息与预算 / 阈值）的视图。
+                "lib/settings_view.js",
+                // 外接 APP：他自己声明的应用名单（config.apps）压过内置的娱乐类包名表。
+                "lib/apps.js",
+                // R8 J6/J5：题库（格式与完整性）与思维局六招（判定、强度、依据前置检查）。
+                "lib/bank.js",
+                "lib/thinking.js",
+                // R8 P4：升级阶梯的接线（分类 → 记敷衍 → 判升级 → 落手机）。
+                "lib/ladder.js",
             ),
         ),
     )

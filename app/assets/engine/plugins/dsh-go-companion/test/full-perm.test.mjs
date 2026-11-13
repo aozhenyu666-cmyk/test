@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { apply } from '../lib/index.js'
+import { apply, setStatePin } from '../lib/index.js'
 
 function agentOf(id) {
   const contexts = []
@@ -24,7 +24,7 @@ function agentOf(id) {
   }
 }
 
-function host(agents) {
+function host(agents, state = 'standby') {
   let handler
   const listeners = new Map()
   const ctx = {
@@ -39,6 +39,7 @@ function host(agents) {
     inject(_d, cb) { cb({ webServer: { register(r) { handler = r.handler } }, effect(fn) { fn() } }) },
     effect(fn) { fn() },
   }
+  setStatePin(state)
   apply(ctx)
   const emit = async (sid, type, data) => { for (const fn of listeners.get('session/event') || []) await fn({ id: sid }, { type, data }) }
   return { handler: () => handler, emit }
@@ -67,15 +68,17 @@ async function withHome(fn) {
 const SIS = 'session-sis'
 const BIG = 'session-big'
 function setup(home, extra = {}) {
+  // R7 P0-3：`state` 钉主状态，不能摊进 config.json（那是真配置）。
+  const { state = 'standby', ...rest } = extra
   mkdirSync(join(home, 'companion'), { recursive: true })
   const vault = join(home, 'vault')
   mkdirSync(vault, { recursive: true })
   writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({
-    sessionId: SIS, strategistSessionId: BIG, quietStart: 12, quietEnd: 12, notesPath: vault, ...extra,
+    sessionId: SIS, strategistSessionId: BIG, quietStart: 12, quietEnd: 12, notesPath: vault, ...rest,
   }))
   const sis = agentOf(SIS)
   const big = agentOf(BIG)
-  const h = host({ [SIS]: sis, [BIG]: big })
+  const h = host({ [SIS]: sis, [BIG]: big }, state)
   const plan = (phone) => call(h.handler(), 'POST', '/dsh-go-companion/v1/plan', { roll: 100, timeZone: 'Asia/Shanghai', phone })
   const ledger = () => readFileSync(join(home, 'companion', 'ledger.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
   const cfg = () => JSON.parse(readFileSync(join(home, 'companion', 'config.json'), 'utf8'))
@@ -86,7 +89,7 @@ const game = { app: 'com.game', label: '王者', fun: true, minutes: 0, screenOn
 
 test('submit_verdict：格式不对当场退回；满足就落地并关锁，账本记的是谁裁的', async () => {
   await withHome(async (home) => {
-    const t = setup(home)
+    const t = setup(home, { state: 'evening' })
     await t.plan(wechat)
     const v = t.sis.tools.submit_verdict
     assert.equal(v.execute({ kind: '瞎写的', satisfied: true }).ok, false, '认不出的 kind 退回')
@@ -107,7 +110,7 @@ test('submit_verdict：格式不对当场退回；满足就落地并关锁，账
 
 test('submit_verdict：晨间立项过关要带 1–3 件完成物，带了就写进每日文件', async () => {
   await withHome(async (home) => {
-    const t = setup(home)
+    const t = setup(home, { state: 'evening' })
     await t.plan(wechat)
     const v = t.sis.tools.submit_verdict
     const bad = v.execute({ kind: 'morning', satisfied: true, summary: '说清了', nextStep: '开始做' })
@@ -147,34 +150,47 @@ test('end_task_mode：没立任务时调用是空话；立了才验得过、才�
   })
 })
 
-test('daily_plan：没给完成物不落盘；给了才写进每日文件', async () => {
+test('daily_plan：没给完成物不落盘；给了才写进每日文件并排进时间表', async (ctx) => {
   await withHome(async (home) => {
-    const t = setup(home)
-    await t.plan(wechat)
+    const t = setup(home, { state: 'morning' })
+    // 锁在 2026-11-08 08:00 +08:00：排程要"现在几点"，不锁就只能碰运气。
+    ctx.mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 10, 8, 0, 0, 0) })
+    await t.plan({ ...wechat, local: '08:00' })
     const p = t.big.tools.daily_plan
     const bad = p.execute({ tasks: [{ task: '写周报' }] })
     assert.equal(bad.ok, false, '没有完成物')
-    const ok = p.execute({ tasks: [{ task: '写周报', evidence: '大肥鱼/周报.md' }] })
+    // A2 起截止时刻 / 预估分钟 / 归哪个部也必填（排不出表就没人按块走）。
+    const noDue = p.execute({ tasks: [{ task: '写周报', evidence: '大肥鱼/周报.md' }] })
+    assert.equal(noDue.ok, false)
+    assert.match(noDue.text, /截止时刻/)
+    const ok = p.execute({ tasks: [{ task: '写周报', evidence: '大肥鱼/周报.md', due: '18:00', minutes: 45, dept: '统筹规划' }] })
     assert.equal(ok.ok, true, ok.text)
+    assert.match(ok.text, /- \d{2}:\d{2}–\d{2}:\d{2} 写周报（统筹规划部，估 45 分）/, '回话里要给出排到哪一块')
     const daily = JSON.parse(readFileSync(join(home, 'companion', 'daily.json'), 'utf8'))
     assert.equal(daily.tasks.length, 1)
     assert.equal(daily.tasks[0].evidence, '大肥鱼/周报.md')
+    assert.equal(daily.plan.blocks.length, 1, '时间表落盘了')
+    assert.ok(daily.plan.blocks[0].start >= 7 * 60, '不排进深夜窗口')
     assert.ok(existsSync(join(t.vault, '大肥鱼', '每日')) || true)
+    ctx.mock.timers.reset()
   })
 })
 
 test('daily_review：早上没定事就没账可对；定了就按完成物逐项核，结论作用于明天额度', async () => {
   await withHome(async (home) => {
-    const t = setup(home)
+    // 这一天真的先是早上、再是晚上：定事在晨间状态，对账在晚间状态。
+    const t = setup(home, { state: 'evening' })
     await t.plan(wechat)
     const no = t.big.tools.daily_review.execute({})
     assert.equal(no.ok, false)
     assert.match(no.text, /没定事/)
     // 定两件，都没做（证据文件不存在、App 没时长）。
+    setStatePin('morning')
     t.big.tools.daily_plan.execute({ tasks: [
-      { task: '写周报', evidence: '大肥鱼/周报.md' },
-      { task: '复习线代', evidence: '线代 App 40 分钟' },
+      { task: '写周报', evidence: '大肥鱼/周报.md', due: '18:00', minutes: 45, dept: '统筹规划' },
+      { task: '复习线代', evidence: '线代 App 40 分钟', due: '21:00', minutes: 60, dept: '信息收集' },
     ] })
+    setStatePin('evening')
     const r = t.big.tools.daily_review.execute({})
     assert.equal(r.ok, true, r.text)
     const rows = t.ledger()
@@ -189,7 +205,8 @@ test('daily_review：早上没定事就没账可对；定了就按完成物逐�
 
 test('grant_break 与 request_relax 是两条路：前者当场，后者只管明天且要窗口', async () => {
   await withHome(async (home) => {
-    const t = setup(home)
+    // 当场放风在追问锁里给，明天那段只在晚间申请窗口——两个状态各挂各的。
+    const t = setup(home, { state: 'followup' })
     await t.plan(game)
     assert.ok(t.big.tools.grant_break && t.sis.tools.grant_break)
     // 当场放风：立刻生效。
@@ -197,6 +214,7 @@ test('grant_break 与 request_relax 是两条路：前者当场，后者只管�
     assert.equal(b.ok, true, b.text)
     assert.ok(t.cfg().breakUntil > Date.now() + 14 * 60_000)
     // 明天那段：窗口没开还是批不下来。
+    setStatePin('evening')
     const r = t.sis.tools.request_relax.execute({ atHour: 20, minutes: 60, reason: '明天想歇' })
     assert.equal(r.ok, false)
   })
@@ -204,7 +222,7 @@ test('grant_break 与 request_relax 是两条路：前者当场，后者只管�
 
 test('墙的权限不低于两姐妹：submit_to_wall 仍然只认证据，说得好听也过不了', async () => {
   await withHome(async (home) => {
-    const t = setup(home)
+    const t = setup(home, { state: 'evening' })
     await t.plan(wechat)
     // 没有挂着的立项：交上去被打回，说得多好都不算。
     const r = t.big.tools.submit_to_wall.execute({
@@ -215,5 +233,40 @@ test('墙的权限不低于两姐妹：submit_to_wall 仍然只认证据，说�
     // 同一个动作，姐妹自己裁决就能过——两条路的差别就在这，墙没被削弱。
     const v = t.big.tools.submit_verdict.execute({ kind: 'morning', satisfied: true, summary: '他说清了', nextStep: '先写周报', tasks: [{ task: '写周报', evidence: '大肥鱼/周报.md' }] })
     assert.equal(v.ok, true)
+  })
+})
+
+test('A2 时间块边界由 /plan 驱动：一整天轮询，每块只开始一次、只收尾一次', async (ctx) => {
+  await withHome(async (home) => {
+    const t = setup(home, { state: 'morning' })
+    // 2026-11-08 08:00 +08:00 起，锁住 Date，这一天就真的"从早上开始过"。
+    const day = Date.UTC(2026, 10, 8, 0, 0, 0)
+    ctx.mock.timers.enable({ apis: ['Date'], now: day })
+    await t.plan({ ...wechat, local: '08:00' })
+    const p = t.big.tools.daily_plan
+    const ok = p.execute({ tasks: [{ task: '写周报', evidence: '大肥鱼/周报.md', due: '18:00', minutes: 60, dept: '统筹规划' }] })
+    assert.equal(ok.ok, true, ok.text)
+    // 8:00–9:00 一块。
+    await t.plan({ ...wechat, local: '08:00' })
+    const started = () => t.ledger().filter((r) => r.state === 'plan-block-start')
+    assert.equal(started().length, 1, '块开始自动立任务，恰好一次')
+    assert.equal(t.cfg().taskBy, 'strategist', '块开始＝立任务模式（娱乐照规则锁）')
+    // 同一分钟再问几遍，不重复触发。
+    await t.plan({ ...wechat, local: '08:00' })
+    await t.plan({ ...wechat, local: '08:30' })
+    assert.equal(started().length, 1, '同一块不会开两次')
+    // 到 9:00 收尾一次；再到 9:30 不重复。
+    ctx.mock.timers.tick(60 * 60_000)
+    await t.plan({ ...wechat, local: '09:00' })
+    const ended = () => t.ledger().filter((r) => r.state === 'plan-block-end')
+    assert.equal(ended().length, 1, '块结束要求交墙，恰好一次')
+    ctx.mock.timers.tick(30 * 60_000)
+    await t.plan({ ...wechat, local: '09:30' })
+    assert.equal(ended().length, 1, '同一个块不会收两次尾')
+    // 块收尾是一个看得见的动作 → 触发一次重排（额度 1/2）。
+    const re = t.ledger().filter((r) => r.state === 'plan-reschedule' && r.trigger === 'overdue')
+    assert.equal(re.length, 1, '到点没交只重排一次')
+    assert.equal(JSON.parse(readFileSync(join(home, 'companion', 'daily.json'), 'utf8')).plan.reschedules.length, 1)
+    ctx.mock.timers.reset()
   })
 })

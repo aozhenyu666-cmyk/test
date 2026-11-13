@@ -43,6 +43,30 @@
             "en": "Sisters"
           },
           "icon": "heart"
+        },
+        {
+          "id": "bouts-open",
+          "label": {
+            "zh": "局",
+            "en": "Bouts"
+          },
+          "icon": "clock"
+        },
+        {
+          "id": "bouts-queue-open",
+          "label": {
+            "zh": "队列",
+            "en": "Queue"
+          },
+          "icon": "list"
+        },
+        {
+          "id": "bouts-books-open",
+          "label": {
+            "zh": "账",
+            "en": "Ledger"
+          },
+          "icon": "chart"
         }
       ],
       "panels": [
@@ -57,6 +81,51 @@
             "session.tab",
             "features",
             "chat.panel"
+          ]
+        },
+        {
+          "id": "bouts",
+          "title": {
+            "zh": "局",
+            "en": "Bouts"
+          },
+          "icon": "clock",
+          "placement": [
+            "session.tab",
+            "features"
+          ]
+        },
+        {
+          "id": "bouts-queue",
+          "title": {
+            "zh": "局 · 队列",
+            "en": "Bouts · Queue"
+          },
+          "icon": "list",
+          "placement": [
+            "session.tab"
+          ]
+        },
+        {
+          "id": "bouts-protocols",
+          "title": {
+            "zh": "局 · 协议库",
+            "en": "Bouts · Protocols"
+          },
+          "icon": "book",
+          "placement": [
+            "session.tab"
+          ]
+        },
+        {
+          "id": "bouts-books",
+          "title": {
+            "zh": "局 · 账",
+            "en": "Bouts · Ledger"
+          },
+          "icon": "chart",
+          "placement": [
+            "session.tab"
           ]
         }
       ]

@@ -34,7 +34,8 @@ object AgentWire {
     }
 
     /** 409 codes that mean "he is talking / there is nothing to say now", not "it broke". */
-    private val SKIP_CODES = setOf("no-topic", "agent-busy", "in-conversation", "desk-busy")
+    // skip-no-content：B1 的信息增量守卫判这一句是套话，重写过一次还不过——这一轮不发是决定。
+    private val SKIP_CODES = setOf("no-topic", "agent-busy", "in-conversation", "desk-busy", "skip-no-content")
 
     /**
      * Body of POST /request. Replaying it with the same requestId is safe: the plugin never sends twice.
@@ -79,7 +80,17 @@ object AgentWire {
             "generated" -> {
                 val text = (m["text"] as? String)?.trim().orEmpty()
                 if (text.isEmpty()) Decoded.Reply(AgentReply.Failed("no_text"), true)
-                else Decoded.Reply(AgentReply.Generated(text.take(2_000), (m["turn"] as? Number)?.let { "turn:$it" }), true)
+                else Decoded.Reply(
+                    AgentReply.Generated(
+                        text.take(2_000),
+                        (m["turn"] as? Number)?.let { "turn:$it" },
+                        // B4：连发计划随 result body 一起下来，这里只解析，投递由手机侧排队。
+                        BurstPlan.of(m["extra"], text.take(2_000)),
+                        // B5：念不念、念多快，同样是插件定的；真出声在 ProactiveRuntime。
+                        VoicePlan.of(m["extra"], text),
+                    ),
+                    true,
+                )
             }
             "failed" -> Decoded.Reply(AgentReply.Failed(((m["failure"] as? Map<*, *>)?.get("code") as? String) ?: "failed"), true)
             "cancelled" -> Decoded.Reply(AgentReply.Failed("cancelled"), true)

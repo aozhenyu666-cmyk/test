@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { apply } from '../lib/index.js'
+import { apply, setStatePin } from '../lib/index.js'
 import { existsSync, readFileSync } from 'node:fs'
 
 function agentOf(id) {
@@ -23,7 +23,7 @@ function agentOf(id) {
   }
 }
 
-function host(agents) {
+function host(agents, state = 'standby') {
   let handler
   const listeners = new Map()
   const ctx = {
@@ -38,6 +38,7 @@ function host(agents) {
     inject(_d, cb) { cb({ webServer: { register(r) { handler = r.handler } }, effect(fn) { fn() } }) },
     effect(fn) { fn() },
   }
+  setStatePin(state)
   apply(ctx)
   const emit = async (sid, type, data) => { for (const fn of listeners.get('session/event') || []) await fn({ id: sid }, { type, data }) }
   return { handler: () => handler, emit }
@@ -118,6 +119,38 @@ test('快照：他点「开始」进冲刺后下发 task 规则，到期就是�
     assert.match(task[0].why, /验收合格/)
     assert.ok(r.body.rules.block['com.ss.android.ugc.aweme'] > Date.now())
     assert.equal(r.body.rules.block['com.android.dialer'], undefined, '电话永不进封禁名单')
+  })
+})
+
+test('外接 APP：他声明成娱乐的包随锁下发到封禁名单，声明成工作的不拦', async () => {
+  await withHome(async (home) => {
+    const t = setup(home, {
+      apps: [{ pkg: 'com.tencent.qqlive', role: 'fun' }, { pkg: 'com.example.editor', role: 'work' }],
+    })
+    await t.plan(at('15:00'))
+    const res = await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/event', { type: 'start', task: '写完周报', minutes: 30 })
+    assert.equal(res.body.ok, true, JSON.stringify(res.body))
+    const r = await t.plan(at('15:01'))
+    const task = r.body.rules.rules.find((x) => x.kind === 'task')
+    assert.ok(task, JSON.stringify(r.body.rules))
+    // 到点就是这一层锁的结束时间——手机那边 block 是「包名 → 到点」。
+    // 取的是**所有生效锁里最晚的那个**：白天默认锁（到下一段吃饭）通常比任务锁更晚，
+    // 只盯任务锁会让这条断言在饭点之外必然失败（真的踩到过）。等下一次 /plan 重算时自然收窄。
+    const untilLock = Math.max(...r.body.rules.rules.map((x) => Number(x.until) || 0))
+    assert.ok(untilLock >= task.until, '最晚的锁至少不比任务锁早')
+    assert.equal(r.body.rules.block['com.tencent.qqlive'], untilLock)
+    assert.equal(r.body.rules.block['com.example.editor'], undefined, '工作类不拦')
+  })
+})
+
+test('外接 APP：没声明时封禁名单只有他自己封的那些，不被内置娱乐包塞满', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    await t.plan(at('15:00'))
+    await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/event', { type: 'start', task: '写完周报', minutes: 30 })
+    const r = await t.plan(at('15:01'))
+    assert.ok(r.body.rules.rules.some((x) => x.kind === 'task'))
+    assert.deepEqual(Object.keys(r.body.rules.block), [], '内置那批手机自己认识，不该重复下发')
   })
 })
 

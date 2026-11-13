@@ -13,11 +13,15 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
+import android.widget.Toast
 import io.github.ccch1mneyyy.dsh_app.loop.LoopRuntime
 import io.github.ccch1mneyyy.dsh_app.loop.core.AgentReply
 import io.github.ccch1mneyyy.dsh_app.loop.core.AgentWire
 import io.github.ccch1mneyyy.dsh_app.loop.core.AtomicJsonFile
 import io.github.ccch1mneyyy.dsh_app.loop.core.BackgroundCaps
+import io.github.ccch1mneyyy.dsh_app.loop.core.BeijingClock
+import io.github.ccch1mneyyy.dsh_app.loop.core.BurstPlan
+import io.github.ccch1mneyyy.dsh_app.loop.core.VoicePlan
 import io.github.ccch1mneyyy.dsh_app.loop.core.Clocks
 import io.github.ccch1mneyyy.dsh_app.loop.core.Command
 import io.github.ccch1mneyyy.dsh_app.loop.core.Coordinator
@@ -45,10 +49,11 @@ import io.github.ccch1mneyyy.dsh_app.phone.PhoneTasks
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.FrontChange
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.NowFeed
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.PhoneA11yService
+import io.github.ccch1mneyyy.dsh_app.phone.a11y.SessionFactsOf
+import io.github.ccch1mneyyy.dsh_app.phone.a11y.SessionPolicy
+import io.github.ccch1mneyyy.dsh_app.phone.a11y.SessionVerdict
 import io.github.ccch1mneyyy.dsh_app.loop.intercept.InterceptRuntime
 import java.io.File
-import java.util.Calendar
-import java.util.TimeZone
 import java.util.UUID
 
 /** Carries agent commands to the engine. Implemented over Flutter (Dart holds the engine cookie). */
@@ -137,6 +142,8 @@ object ProactiveRuntime {
         coordinator?.let { return it }
         app = context.applicationContext
         ProactiveOverlay.install(app)
+        // B5：TTS 只在这里拿 applicationContext，引擎本身第一次要念的时候才绑（默认关，不白占）。
+        VoiceOut.install(app)
         // Load 触发测试's switch before anything reads it: if Flutter starts before the accessibility
         // service, an unloaded LoopEngine would read as "off" and applySwitches would cancel live
         // app-enter events with the wrong reason (review r3, startup race).
@@ -363,7 +370,7 @@ object ProactiveRuntime {
         fetchPluginRoute(routeCallback { m ->
             val error = ((m["error"] as? Map<*, *>)?.get("code") as? String)
             if (error != null) done(null, error) else pollSay(id, deadline, done)
-        }, "POST", "/say", linkedMapOf("v" to 1, "requestId" to id, "text" to text, "timeZone" to TimeZone.getDefault().id))
+        }, "POST", "/say", linkedMapOf("v" to 1, "requestId" to id, "text" to text, "timeZone" to BeijingClock.ZONE.id))
     }
 
     private fun pollSay(id: String, deadline: Long, done: (String?, String?) -> Unit) {
@@ -422,7 +429,7 @@ object ProactiveRuntime {
             "/plan",
             // 不带 roll：骰子由插件自己掷。以前带 roll=100（只拿 /plan 定时间时的写法），
             // 在"插件说开口才开口"之后等于永远掷不中，大肥鱼就不主动说话了。
-            linkedMapOf<String, Any?>("timeZone" to TimeZone.getDefault().id)
+            linkedMapOf<String, Any?>("timeZone" to BeijingClock.ZONE.id)
                 .also { body -> phoneContext()?.let { body["phone"] = it } },
         )
     }
@@ -476,7 +483,7 @@ object ProactiveRuntime {
         val list = ArrayList(ruleBook()?.active(now).orEmpty())
         val r = refuseUntil()
         if (r > now && list.none { it.until >= r }) list.add(LockRule(LockPriority.KIND_REFUSE, r))
-        if (sessionActive()) list.add(LockRule(LockPriority.KIND_SESSION, sessionUntil, null))
+        if (sessionActive()) list.add(LockRule(LockPriority.KIND_SESSION, sessionUntil, if (sessionOwner == OWNER_WORK) workWhy else null))
         return LockPriority.primary(list)
     }
 
@@ -496,25 +503,92 @@ object ProactiveRuntime {
 
     private fun listed(pkg: String): Boolean {
         if (pkg in NEVER_LOCK) return false
-        // Gemini 互动舱：只许白名单里的 Gemini，其他 App 一律算"要拦的"。
-        if (sessionActive()) return !sessionAllows(pkg)
+        // Gemini 互动舱：按分级策略判——只有 LOCK 才算"要拦的"，宽限期里的 GRACE 不锁。
+        if (sessionActive()) return sessionVerdict(pkg) == SessionVerdict.LOCK
         if (pkg in blockedNow()) return true
         return runCatching { InterceptRuntime.config().targets.any { it.packageName == pkg } }.getOrDefault(false)
     }
 
-    /** 电话、短信、地图、支付：任何模式都不锁（真急事的底线）。 */
-    private val NEVER_LOCK = setOf(
-        "com.android.dialer", "com.google.android.dialer", "com.android.phone", "com.android.server.telecom", "com.android.mms",
-        "com.google.android.apps.messaging", "com.android.contacts", "com.autonavi.minimap", "com.baidu.BaiduMap",
-        "com.google.android.apps.maps", "com.tencent.map", "com.eg.android.AlipayGphone", "com.unionpay",
-    )
+    /**
+     * R7 P0-1：舱内这一包的判定。事实由 [SessionFactsOf] 查（Android 那边），规则在 [SessionPolicy]。
+     */
+    private fun sessionVerdict(pkg: String): SessionVerdict {
+        val dwell = if (pkg == frontPkg) (System.currentTimeMillis() - frontSince).coerceAtLeast(0L) else 0L
+        val cfg = runCatching { InterceptRuntime.config() }.getOrNull()
+        return SessionPolicy.judge(pkg, SessionFactsOf.of(
+            app, pkg,
+            allow = sessionAllow,
+            whitelist = cfg?.whitelist ?: emptySet(),
+            entertainment = blockedNow() + cfg?.targets?.map { it.packageName }?.toSet().orEmpty(),
+            dwellMs = dwell,
+            graceMs = sessionGrace,
+            breakGlass = breaking(),
+        ))
+    }
 
-    /** 桌面 / 系统界面：连麦舱里不算"别的 App"，否则他连回 Gemini 的那一下都点不到。 */
-    private val NEUTRAL = setOf(
-        "android", "com.android.systemui", "com.miui.home", "com.google.android.apps.nexuslauncher",
-        "com.android.launcher3", "com.oppo.launcher", "com.huawei.android.launcher",
-        "com.sec.android.app.launcher", "com.vivo.launcher", "com.bbk.launcher2",
-    )
+    /**
+     * 舱内前台变了：同一份判定给两条调用路（前台事件、/plan 回调）用，逻辑只留这一处。
+     * ALLOW 清零去抖，GRACE 只发一条不打断的提示，LOCK 才上 4 级。
+     */
+    private fun sessionFront(pkg: String?): Boolean {
+        if (pkg == null || !FrontChange.switched(pkg)) return false
+        if (pkg != frontPkg) {
+            frontPkg = pkg
+            frontSince = System.currentTimeMillis()
+            graceHinted = false
+        }
+        if (!sessionActive()) return false
+        return when (sessionVerdict(pkg)) {
+            SessionVerdict.ALLOW -> {
+                // 回到 Gemini / 桌面 / 图库：去抖清掉，下回再进来要重新锁。
+                forcedApp = null
+                false
+            }
+            SessionVerdict.GRACE -> {
+                graceHint(pkg)
+                false
+            }
+            SessionVerdict.LOCK -> lockInSession(pkg)
+        }
+    }
+
+    /** 4 级锁：同一个 App 启动时连发的窗口事件只锁一次（输入法已由 FrontChange 排除）。 */
+    private fun lockInSession(pkg: String): Boolean {
+        if (breaking()) return false
+        val now = System.currentTimeMillis()
+        if (forcedApp == pkg && now - forcedAt < SESSION_LOCK_DEBOUNCE_MS) return true
+        forcedApp = pkg
+        forcedAt = now
+        val f = Force(4, pkg, lockWhy() ?: "Gemini 互动中，只许 Gemini", now + FORCE_HOLD_MS, refuse = true)
+        force = f
+        enforce(f, fresh = true)
+        return true
+    }
+
+    /** 宽限期里的那一条：不弹锁屏页，只提示一声，并在宽限到点时复查一次。 */
+    private fun graceHint(pkg: String) {
+        val secs = (sessionGrace / 1000).coerceAtLeast(1)
+        if (!graceHinted) {
+            graceHinted = true
+            // 提示走主线程：这里可能是无障碍事件的线程。
+            main.post {
+                runCatching { Toast.makeText(app, "连麦还开着，" + secs + " 秒内回去", Toast.LENGTH_SHORT).show() }
+                    .onFailure { Log.w(TAG, "grace hint", it) }
+            }
+        }
+        // 一次性复查：到点还没回去才锁，不轮询。
+        graceRecheck?.let { main.removeCallbacks(it) }
+        val again = Runnable { sessionFront(pkg) }
+        graceRecheck = again
+        main.postDelayed(again, sessionGrace.coerceAtLeast(1_000L) + 1_000L)
+        Log.i(TAG, "session grace $pkg for ${secs}s")
+    }
+
+    /**
+     * 急事底线（电话/短信/地图/支付）搬到 [SessionPolicy] 了：定义只有一份，判定在 JVM 上单测。
+     * 这里保留同名别名，别处照旧引用。
+     */
+    private val NEVER_LOCK = SessionPolicy.NEVER_LOCK
 
     /** 插件的临时封禁名单（/plan 的 block）：这些也当娱乐 App 管。 */
     @Volatile private var blocked: Set<String> = emptySet()
@@ -545,12 +619,29 @@ object ProactiveRuntime {
     }
 
     /**
-     * Gemini 互动舱（/plan 的 session）：连麦期间只许 allow 里的包名。
+     * Gemini 互动舱（/plan 的 session）：舱内只许 allow 里的包名，外加图库/文件/相机这类系统窗口。
      * 存 prefs，App 进程重启后锁还在；到点自己失效。
      */
     @Volatile private var sessionUntil: Long = -1L
     @Volatile private var sessionAllow: Set<String> = emptySet()
     @Volatile private var sessionPkg: String? = null
+    /**
+     * 这场 session 是谁开的。插件开的（连麦舱）任何时候都能被 /plan 改写；
+     * 他自己跟 AI 谈定、由 AI 用 focus 工具开的「工作模式」不许被 /plan 悄悄解掉。
+     */
+    @Volatile private var sessionOwner: String = OWNER_PLUGIN
+    @Volatile private var workWhy: String? = null
+    private const val OWNER_PLUGIN = "plugin"
+    private const val OWNER_WORK = "work"
+    private const val MIN_WORK_MINUTES = 5
+    private const val MAX_WORK_MINUTES = 720
+    /** 插件下发的宽限（`session.graceMs`）；没给就 45 秒。 */
+    @Volatile private var sessionGrace: Long = SessionPolicy.DEFAULT_GRACE_MS
+    /** 当前舱内前台和它连续待了多久——宽限期按"连续停留"算，回白名单 App 就清零。 */
+    @Volatile private var frontPkg: String? = null
+    @Volatile private var frontSince: Long = 0L
+    @Volatile private var graceHinted = false
+    private var graceRecheck: Runnable? = null
     private fun loadSession() {
         if (sessionUntil >= 0) return
         val p = app.getSharedPreferences(REFUSE_PREFS, Context.MODE_PRIVATE)
@@ -558,7 +649,11 @@ object ProactiveRuntime {
         sessionAllow = runCatching { p.getString("sessionAllow", "").orEmpty() }.getOrDefault("")
             .split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
         sessionPkg = runCatching { p.getString("sessionApp", "").orEmpty() }.getOrDefault("").ifBlank { null }
+        sessionOwner = runCatching { p.getString("sessionOwner", "").orEmpty() }.getOrDefault("").ifBlank { OWNER_PLUGIN }
+        workWhy = runCatching { p.getString("workWhy", "").orEmpty() }.getOrDefault("").ifBlank { null }
         sessionSince = runCatching { p.getLong("sessionSince", 0L) }.getOrDefault(0L)
+        sessionGrace = runCatching { p.getLong("sessionGraceMs", SessionPolicy.DEFAULT_GRACE_MS) }
+            .getOrDefault(SessionPolicy.DEFAULT_GRACE_MS)
     }
     fun sessionActive(): Boolean {
         if (!::app.isInitialized) return false
@@ -570,33 +665,60 @@ object ProactiveRuntime {
         loadSession()
         return sessionPkg ?: sessionAllow.firstOrNull()
     }
-    private fun sessionAllows(pkg: String): Boolean {
-        loadSession()
-        if (pkg in sessionAllow) return true
-        // 桌面 / 系统界面 / DSH 自己不算"别的 App"，不然他连"回 Gemini"都点不到。
-        if (pkg in NEUTRAL) return true
-        // R4-0: 用户自己的放行名单在连麦舱期间同样作数（原来只读插件白名单，所以"放行都不行"）。
-        if (runCatching { pkg in InterceptRuntime.config().whitelist }.getOrDefault(false)) return true
-        return pkg == app.packageName || pkg == app.packageName + ".fish"
-    }
-    private fun setSession(until: Long, allow: Set<String>, pkg: String?) {
+    private fun setSession(until: Long, allow: Set<String>, pkg: String?, graceMs: Long, owner: String = OWNER_PLUGIN, why: String? = null) {
         // 连麦开始时间：手机要在结束时报 gemini-end 的 minutes，而插件的 until 是我们唯一的时间来源。
         if (until > 0 && sessionUntil <= 0) sessionSince = System.currentTimeMillis()
         if (until <= 0) sessionSince = 0L
         sessionUntil = until
         sessionAllow = allow
         sessionPkg = pkg
+        sessionOwner = owner
+        workWhy = why
+        // 0 是合法值，不是「没给」：R8 P4 的升级舱要求「不给第三方应用宽限」，
+        // 46 秒的宽限等于让他先白刷一分钟。缺省（没有这个键）由 applySession 填默认值。
+        sessionGrace = if (graceMs >= 0) graceMs else SessionPolicy.DEFAULT_GRACE_MS
+        // 新一场连麦：上一次的前台停留不算数。
+        frontPkg = null
+        frontSince = 0L
+        graceHinted = false
         runCatching {
             app.getSharedPreferences(REFUSE_PREFS, Context.MODE_PRIVATE).edit()
                 .putLong("sessionUntil", until)
                 .putLong("sessionSince", sessionSince)
                 .putString("sessionAllow", allow.joinToString(","))
                 .putString("sessionApp", pkg.orEmpty())
+                .putLong("sessionGraceMs", sessionGrace)
+                .putString("sessionOwner", owner)
+                .putString("workWhy", why.orEmpty())
                 .apply()
         }
     }
 
     @Volatile private var sessionSince: Long = 0L
+
+    /** `/session` 和 `/plan` 解的是同一份 session：解析只写这一处。 */
+    /**
+     * `/session` 和 `/plan` 解的是同一份 session：解析只写这一处。
+     *
+     * [force] 是用户自己在界面上点的那一下（开一场 / 结束连麦）：人的动作永远算数，连 AI 钉住的
+     * 工作模式也照改。插件自己的 `/plan` 不能 force，否则每次巡检都会把刚锁上的悄悄解开。
+     */
+    private fun applySession(s: Map<*, *>?, force: Boolean = false) {
+        loadSession()
+        // 他自己跟 AI 谈定的工作模式还没到期：插件每次 /plan 都带着 session:null，
+        // 不挡住的话「刚锁上」会被下一次巡检悄悄解掉。
+        if (!force && sessionOwner == OWNER_WORK && System.currentTimeMillis() < sessionUntil) return
+        if (s == null) {
+            setSession(0L, emptySet(), null, SessionPolicy.DEFAULT_GRACE_MS)
+            return
+        }
+        setSession(
+            (s["until"] as? Number)?.toLong() ?: 0L,
+            (s["allow"] as? List<*>)?.mapNotNull { it as? String }?.toSet() ?: emptySet(),
+            s["app"] as? String,
+            (s["graceMs"] as? Number)?.toLong() ?: SessionPolicy.DEFAULT_GRACE_MS,
+        )
+    }
 
     /** 这一场连麦已经过了多少分钟（结束时报给插件；不知道就 0，插件按"不足 3 分钟"处理）。 */
     private fun sessionMinutes(): Int {
@@ -604,6 +726,59 @@ object ProactiveRuntime {
         val since = sessionSince
         if (since <= 0) return 0
         return ((System.currentTimeMillis() - since) / 60_000L).toInt().coerceAtLeast(0)
+    }
+
+    /**
+     * 工作模式：AI 把跟他谈好的计划钉住的唯一入口。
+     *
+     * 执行不另写一套——复用 [sessionFront] 那条白名单锁（电话/短信/地图/支付/桌面/输入法永远放行，
+     * 名单外第三方 App 立刻锁页）。区别只有两点：宽限给 0 分钟，且 [sessionOwner] 标成 work，
+     * 于是插件的 /plan 不会把它解掉。
+     *
+     * @param mode "on" 开始 / "off" 结束 / 其他一律按「查状态」处理
+     */
+    fun workMode(mode: String, allow: List<String>, minutes: Int, why: String?): String {
+        // l10n:keep agent tool result
+        if (!::app.isInitialized) return "DSH 还没启动好，稍后再说。"
+        loadSession()
+        val now = System.currentTimeMillis()
+        if (mode == "off") {
+            return if (sessionOwner == OWNER_WORK) {
+                setSession(0L, emptySet(), null, SessionPolicy.DEFAULT_GRACE_MS)
+                // l10n:keep agent tool result
+                "工作模式已结束，App 现在随便用。"
+            } else if (now < sessionUntil) {
+                // l10n:keep agent tool result
+                "现在开着的是连麦舱，不是工作模式；要停掉它得在 DSH 的管理页里结束连麦。"
+            } else {
+                // l10n:keep agent tool result
+                "现在没有工作模式。"
+            }
+        }
+        if (mode == "on") {
+            // l10n:keep agent tool result
+            if (minutes <= 0) return "开工作模式要说清多久（minutes，5–720）。"
+            val mins = minutes.coerceIn(MIN_WORK_MINUTES, MAX_WORK_MINUTES)
+            val allowed = allow.filter { it.isNotBlank() }.toSet()
+            // l10n:keep agent tool result
+            if (allowed.isEmpty()) return "开工作模式要先给 allow：至少一个允许使用的 App 包名（用 apps 查）。"
+            setSession(now + mins * 60_000L, allowed, null, 0L, OWNER_WORK, why?.take(80))
+            // 现在就判一次：他可能已经停在名单外的 App 里，不该等到下次切换才锁。
+            sessionFront(NowFeed.snapshot(SystemClock.elapsedRealtime()).app)
+            // l10n:keep agent tool result
+            return "已进入工作模式，$mins 分钟后自动结束：只有 ${allowed.joinToString("、")} 能用，" +
+                "其余第三方 App 一进去就被锁页挡住；电话、短信、地图、支付和桌面不受影响。"
+        }
+        return if (now < sessionUntil) {
+            val left = ((sessionUntil - now) / 60_000L).coerceAtLeast(1L)
+            // l10n:keep agent tool result
+            val who = if (sessionOwner == OWNER_WORK) "工作模式" else "连麦舱"
+            // l10n:keep agent tool result
+            "${who}进行中：还剩 $left 分钟，允许 ${sessionAllow.joinToString("、")}。"
+        } else {
+            // l10n:keep agent tool result
+            "现在没有工作模式，也没有连麦舱。"
+        }
     }
 
     /** 管控期间：设置页自卫和破窗只在此时生效（拒绝模式、锁 / 赶、任务模式、防波堤）。 */
@@ -847,26 +1022,12 @@ object ProactiveRuntime {
     }
 
     /**
-     * 前台换了：Gemini 互动舱里，非白名单 App 立刻锁，不等下一次 /plan（/plan 有 60 秒节流）。
+     * 前台换了：Gemini 互动舱里按分级判定处理，不等下一次 /plan（/plan 有 60 秒节流）。
+     * 娱乐 App 立刻锁；系统窗口/桌面/白名单放行；其余第三方 App 先宽限，超时才锁。
      */
     fun onFrontChanged(pkg: String?) {
         if (!::app.isInitialized) return
-        if (pkg == null || !FrontChange.switched(pkg)) return
-        if (!sessionActive()) return
-        if (!listed(pkg)) {
-            // 离开被拦的 App（回桌面、进 DSH）：去抖清掉，下次再进来要重新锁。
-            forcedApp = null
-            return
-        }
-        if (breaking()) return
-        val now = System.currentTimeMillis()
-        // 去抖：同一个 App 启动时连发的窗口事件只锁一次（输入法已由 FrontChange 排除）。
-        if (forcedApp == pkg && now - forcedAt < SESSION_LOCK_DEBOUNCE_MS) return
-        forcedApp = pkg
-        forcedAt = now
-        val f = Force(4, pkg, lockWhy() ?: "Gemini 互动中，只许 Gemini", now + FORCE_HOLD_MS, refuse = true)
-        force = f
-        enforce(f, fresh = true)
+        sessionFront(pkg)
     }
 
     /** 应用管理页的「Gemini 互动」：开 / 关一场连麦舱（POST /session）。 */
@@ -876,13 +1037,9 @@ object ProactiveRuntime {
         if (action == "end") onGeminiEnd(sessionMinutes())
         main.post {
             fetchPluginRoute(routeCallback { m ->
-                val s = m["session"] as? Map<*, *>
-                if (action == "end" || s == null) setSession(0L, emptySet(), null)
-                else {
-                    val until = (s["until"] as? Number)?.toLong() ?: 0L
-                    val allow = (s["allow"] as? List<*>)?.mapNotNull { it as? String }?.toSet() ?: emptySet()
-                    setSession(until, allow, s["app"] as? String)
-                }
+                // `/session` 和 `/plan` 解的是同一份 session：解析只写一次（见 applySession）。
+                // 这里是用户自己点的：force=true，AI 钉住的工作模式也能被他亲手结束。
+                applySession(if (action == "end") null else m["session"] as? Map<*, *>, force = true)
                 consultPlanSoon(minGapMs = 0L)
                 done(m)
             }, "POST", "/session", linkedMapOf(
@@ -992,13 +1149,7 @@ object ProactiveRuntime {
         setShieldUntil(((map["shield"] as? Map<*, *>)?.get("until") as? Number)?.toLong() ?: 0L)
         blocked = (map["block"] as? List<*>)?.mapNotNull { it as? String }?.filter { it !in NEVER_LOCK }?.toSet() ?: emptySet()
         // Gemini 互动舱：插件给 allow 就进入"只许 Gemini"，null 就退出。
-        val s = map["session"] as? Map<*, *>
-        if (s == null) setSession(0L, emptySet(), null)
-        else {
-            val until = (s["until"] as? Number)?.toLong() ?: 0L
-            val allow = (s["allow"] as? List<*>)?.mapNotNull { it as? String }?.toSet() ?: emptySet()
-            setSession(until, allow, s["app"] as? String)
-        }
+        applySession(map["session"] as? Map<*, *>)
         val refusing = System.currentTimeMillis() < lockUntil()
         force = if (level >= 3 && !target.isNullOrBlank()) {
             // C5: while a rule lock is in force the page names only the primary lock's requirement.
@@ -1008,20 +1159,8 @@ object ProactiveRuntime {
         // 赶回桌面后前台是桌面，插件看到的力度本来就是 0——那时解锁等于锁几秒就自己打开游戏。
         if (level < 3 && f?.get("release") == true) releaseCompanionLock()
         force?.let { enforce(it) }
-        // 连麦舱：插件判的 force 只管娱乐 App；这里把"非 Gemini"的其他 App 一并锁掉。
-        if (sessionActive()) {
-            val front = NowFeed.snapshot(SystemClock.elapsedRealtime()).app
-            if (front != null && FrontChange.switched(front) && listed(front)) {
-                val now = System.currentTimeMillis()
-                if (forcedApp != front || now - forcedAt >= SESSION_LOCK_DEBOUNCE_MS) {
-                    forcedApp = front
-                    forcedAt = now
-                    val sf = Force(4, front, lockWhy() ?: "Gemini 互动中，只许 Gemini", now + FORCE_HOLD_MS, refuse = true)
-                    force = sf
-                    enforce(sf, fresh = true)
-                }
-            }
-        }
+        // 连麦舱：同一份分级判定（sessionFront），不再各写一份"非白名单就锁"。
+        if (sessionActive()) sessionFront(NowFeed.snapshot(SystemClock.elapsedRealtime()).app)
         val at = (map["nextCheckAt"] as? Number)?.toLong() ?: 0L
         // 接口约定 §2: a layer's `until` running out changes the lock by itself, and the phone is the
         // one holding that cache. Wake at the earlier of the two and ask again, instead of polling or
@@ -1209,10 +1348,17 @@ object ProactiveRuntime {
                     } else {
                         // P1: a real window, not an Activity — switching apps must not dismiss it.
                         // The Activity stays as the fallback when no overlay host is available.
-                        val text = cmd.content.text
-                        val ok = runCatching { ProactiveOverlay.show(cmd.token, text, cmd.deadline) }.getOrDefault(false) ||
-                            ProactivePageActivity.start(app, cmd.token, text, cmd.deadline)
+                        // B4：有连发计划就先只上第一段，其余按 delayMs 补进同一个窗口。
+                        val plan = cmd.content.burst
+                        val text = plan?.segments?.firstOrNull() ?: cmd.content.text
+                        val overlay = runCatching { ProactiveOverlay.show(cmd.token, text, cmd.deadline) }.getOrDefault(false)
+                        val ok = overlay || ProactivePageActivity.start(app, cmd.token, cmd.content.text, cmd.deadline)
                         if (!ok) VisibleSurface.release(VisibleSurface.OWNER_PROACTIVE, cmd.token)
+                        // 连发只走浮层：Activity 是一张一次性页面，追加不了话。
+                        else if (overlay && plan != null) scheduleBurst(cmd.token, plan)
+                        // B5：念出来。跟浮层成没成功无关——通知兜底时她照样能说话。
+                        // 念不念得出来由 VoiceOut 判（勿扰/音量/连麦舱/TTS 没起），结果回账本。
+                        cmd.content.voice?.let { v -> speakVoice(cmd.token, v) }
                         dispatch(c.onSurface(cmd.token, if (ok) SurfaceReport.Posted else SurfaceReport.Failed("start_failed")))
                     }
                 }
@@ -1235,6 +1381,56 @@ object ProactiveRuntime {
                 VisibleSurface.release(VisibleSurface.OWNER_PROACTIVE, null)
                 notificationPort?.cancelAll()
             }
+        }
+    }
+
+    /**
+     * B4：把第 2 段起的部分按 delayMs 依次补进同一个浮层。
+     *
+     * 窗口换了或事件关掉了，[ProactiveOverlay.say] 返回 false，这一段就丢掉——话已经晚了，
+     * 不能为了一句补白另开一个窗口。这里不取消已排的回调：它们最多一次 no-op。
+     */
+    private fun scheduleBurst(token: String, plan: BurstPlan) {
+        var at = 0L
+        for (i in 1 until plan.segments.size) {
+            at += plan.delaysMs.getOrElse(i - 1) { BurstPlan.DEFAULT_DELAY_MS }
+            val line = plan.segments[i]
+            main.postDelayed({ ProactiveOverlay.say(token, line) }, at)
+        }
+    }
+
+    /**
+     * B5：把这一条念出来，然后把"到底念了没有"记进账本。
+     *
+     * 一球只念第一句（[VoicePlan.brief] 裁好的那一段）：连发后面几段只上屏——QUEUE_FLUSH 会把
+     * 前一段掐掉，几秒内连念三条听着像抢话。这条不在插件那侧判（插件不知道音量和勿扰），
+     * 所以回报走 `/event` 的 `voice-out`，面板在账本里看得到每一次降级的原因。
+     */
+    private fun speakVoice(token: String, plan: VoicePlan) {
+        VoiceOut.speak(plan) { why -> reportVoice(token, plan, why) }
+    }
+
+    /** B5 设置页试听：绕开插件总开关，直接让系统 TTS 念一句。null = 真的念完了。 */
+    fun tryVoice(done: (String?) -> Unit) {
+        if (!::app.isInitialized) {
+            done(VoiceOut.WHY_NO_TTS)
+            return
+        }
+        main.post { VoiceOut.trySay(done) }
+    }
+
+    private fun reportVoice(token: String, plan: VoicePlan, why: String?) {
+        if (!::app.isInitialized) return
+        main.post {
+            fetchPluginRoute(routeCallback { }, "POST", "/event", linkedMapOf(
+                "type" to "voice-out",
+                "requestId" to token,
+                "ok" to (why == null),
+                "why" to (why ?: ""),
+                "chars" to plan.text.length,
+                "rate" to plan.rate,
+                "pitch" to plan.pitch,
+            ))
         }
     }
 
@@ -1398,9 +1594,7 @@ object ProactiveRuntime {
         val mode = ops.checkOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), app.packageName)
         if (mode != android.app.AppOpsManager.MODE_ALLOWED) return@runCatching null
         val usm = app.getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
-        val start = Calendar.getInstance(TimeZone.getDefault()).run {
-            timeInMillis = wall; set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0); timeInMillis
-        }
+        val start = BeijingClock.startOfDay(wall)
         val events = usm.queryEvents(start, wall)
         val e = android.app.usage.UsageEvents.Event()
         val counts = HashMap<String, Int>()
@@ -1417,11 +1611,7 @@ object ProactiveRuntime {
         counts
     }.getOrNull()
 
-    private fun minuteOfDay(wall: Long): Int = Calendar.getInstance(TimeZone.getDefault()).run {
-        timeInMillis = wall; get(Calendar.HOUR_OF_DAY) * 60 + get(Calendar.MINUTE)
-    }
+    private fun minuteOfDay(wall: Long): Int = BeijingClock.minuteOfDay(wall)
 
-    private fun dayOf(wall: Long): Long = Calendar.getInstance(TimeZone.getDefault()).run {
-        timeInMillis = wall; get(Calendar.YEAR) * 1000L + get(Calendar.DAY_OF_YEAR)
-    }
+    private fun dayOf(wall: Long): Long = BeijingClock.dayOf(wall)
 }

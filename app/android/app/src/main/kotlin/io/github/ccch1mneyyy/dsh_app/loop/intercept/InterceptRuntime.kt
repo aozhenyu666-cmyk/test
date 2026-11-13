@@ -7,6 +7,7 @@ import android.os.Looper
 import android.util.Log
 import io.github.ccch1mneyyy.dsh_app.loop.LoopRuntime
 import io.github.ccch1mneyyy.dsh_app.loop.core.AtomicJsonFile
+import io.github.ccch1mneyyy.dsh_app.loop.core.BeijingClock
 import io.github.ccch1mneyyy.dsh_app.loop.core.InterceptConfig
 import io.github.ccch1mneyyy.dsh_app.loop.core.InterceptDecision
 import io.github.ccch1mneyyy.dsh_app.loop.core.InterceptDrill
@@ -19,8 +20,6 @@ import io.github.ccch1mneyyy.dsh_app.loop.core.Switches
 import io.github.ccch1mneyyy.dsh_app.loop.core.VisibleSurface
 import io.github.ccch1mneyyy.dsh_app.phone.PhoneControl
 import java.io.File
-import java.util.Calendar
-import java.util.TimeZone
 import java.util.UUID
 
 /**
@@ -340,11 +339,7 @@ object InterceptRuntime {
         )
     }
 
-    private fun minuteOfDay(wall: Long): Int = Calendar.getInstance(TimeZone.getDefault()).run {
-        timeInMillis = wall; get(Calendar.HOUR_OF_DAY) * 60 + get(Calendar.MINUTE)
-    }
+    private fun minuteOfDay(wall: Long): Int = BeijingClock.minuteOfDay(wall)
 
-    private fun dayOf(wall: Long): Long = Calendar.getInstance(TimeZone.getDefault()).run {
-        timeInMillis = wall; get(Calendar.YEAR) * 1000L + get(Calendar.DAY_OF_YEAR)
-    }
+    private fun dayOf(wall: Long): Long = BeijingClock.dayOf(wall)
 }

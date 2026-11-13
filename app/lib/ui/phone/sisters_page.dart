@@ -9,6 +9,15 @@ import '../shell/page_frame.dart';
 import '../theme/app_icons.dart';
 import '../theme/theme.dart';
 import 'deposit_page.dart';
+import 'wall_page.dart';
+
+/// C2：四个基本操作的显示名和图标。键是插件给的 op 码，不在这里造第二套命名。
+const _opLabels = <String, (String, IconData)>{
+  'recall': ('回想', AppIcons.history),
+  'brief': ('精简', AppIcons.edit),
+  'predict': ('预判', AppIcons.info),
+  'ask': ('提问', AppIcons.chat),
+};
 
 /// 设置 → 手机操控 → 姐妹（R4-5）。
 ///
@@ -90,6 +99,8 @@ class _SistersPageState extends State<SistersPage> {
           _timelineCard(view),
           const SizedBox(height: 24),
           _auditCard(view.audit),
+          const SizedBox(height: 12),
+          _opsCard(view.drillOps),
           const SizedBox(height: 12),
           _depositCard(),
         ],
@@ -203,6 +214,41 @@ class _SistersPageState extends State<SistersPage> {
         ],
         if (audit.text.isNotEmpty)
           ListPageRow(icon: AppIcons.info, title: audit.text, titleMaxLines: 8),
+        // A3：审查记录（提交 / 判定 / 规则变更）和申诉入口。墙不聊天，所以这里只是看一眼。
+        ListPageRow(
+          icon: AppIcons.history,
+          title: '审查记录',
+          value: '看判定',
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const WallPage()),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// C2：四个基本操作的近 14 天通过率。
+  ///
+  /// 只把插件算好的数字摆出来：没练过的操作写「还没练过」，不写成 0%（那会被当成满分）。
+  Widget _opsCard(Map<String, DrillOpStat> stats) {
+    final rows = <Widget>[];
+    for (final e in stats.entries) {
+      final label = _opLabels[e.key];
+      if (label == null) continue;
+      final stat = e.value;
+      rows.add(ListPageRow(
+        icon: label.$2,
+        title: label.$1,
+        value: !stat.tried ? '还没练过' : '${stat.passed}/${stat.asked}（${(stat.rate * 100).round()}%）',
+      ));
+    }
+    return ListPageCard(
+      title: '〔四个基本操作〕近 14 天',
+      children: [
+        if (rows.isEmpty)
+          const ListPageRow(icon: AppIcons.info, title: '还没有练过')
+        else
+          ...rows,
       ],
     );
   }

@@ -1,6 +1,8 @@
 package io.github.ccch1mneyyy.dsh_app.phone
 
+import java.time.Instant
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.NowFeed
 
@@ -27,6 +29,11 @@ interface PhoneEnv {
      * without destroying its content so the app comes to the main screen. A sentence for the model, or null.
      */
     fun beforeHandoff(screen: PhoneScreen): String? = null
+    /**
+     * 工作模式（把谈好的计划钉住）：[mode] 是 "on" / "off" / ""（只查状态）。
+     * 返回给模型的一句话；这个环境没有工作模式就返回 null。
+     */
+    fun workMode(mode: String, allow: List<String>, minutes: Int, why: String?): String? = null
     fun sleep(ms: Long) = Thread.sleep(ms)
 }
 
@@ -153,6 +160,8 @@ class PhoneCore(
         return when (name) {
             PhoneToolCatalog.APPS -> apps(a)
             PhoneToolCatalog.NOW -> now()
+            PhoneToolCatalog.USAGE -> usage(a)
+            PhoneToolCatalog.FOCUS -> focus(a)
             PhoneToolCatalog.OPEN -> open(a, scope)
             PhoneToolCatalog.INTENT -> intent(a)
             PhoneToolCatalog.NOTIFY -> notify(a)
@@ -186,6 +195,89 @@ class PhoneCore(
             append("充电：").append(if (snapshot.charging) "是" else "否")
         }
         return Out(text, summary = "读取手机状态")
+    }
+
+    /**
+     * 系统的使用账：时长、打开次数、切换序列。不要求无障碍——它读的是系统自己的记录，
+     * 只要用户给过「使用情况访问」。
+     */
+    private fun usage(a: Args): Out {
+        // minutes 优先：问「近 20 分钟」比问「近 1 小时」更贴近「这会儿有没有走神」。
+        val minutes = (a.int("minutes") ?: ((a.int("hours") ?: DEFAULT_USAGE_HOURS) * 60))
+            .coerceIn(1, MAX_USAGE_MINUTES)
+        val zone = env.zone()
+        val now = System.currentTimeMillis()
+        val report = env.system().usage(minutes, now)
+            // l10n:keep agent tool result
+            ?: return Out(
+                "读不到使用记录：DSH 没有「使用情况访问」权限。请用户在 系统设置 → 应用 → 特殊权限 → 使用情况访问 里允许 DSH（有的机型叫「有权查看使用情况」），然后重试。",
+                error = true,
+                summary = "读使用时长",
+            )
+        val window = if (minutes % 60 == 0) "${minutes / 60} 小时" else "$minutes 分钟"
+        if (report.rows.isEmpty() && report.switches.isEmpty()) {
+            // l10n:keep agent tool result
+            return Out("最近 $window 没有使用记录。要么真的没怎么用，要么系统刚清过统计。", summary = "读使用时长")
+        }
+        val text = buildString {
+            // 先给「现在在哪个 App、这一段多久」：判断走神要的是当下，不是总量。
+            val current = report.current
+            if (current != null && report.currentSince > 0) {
+                val label = report.rows.firstOrNull { it.packageName == current }?.label ?: current
+                val staying = (now - report.currentSince) / 60_000L
+                // l10n:keep agent tool result
+                append("现在在：").append(label).append("（").append(current).append("），已连续 ")
+                    .append(staying).append(" 分钟\n\n")
+            }
+            // l10n:keep agent tool result
+            append("最近 ").append(window).append("（按前台分钟数排）：\n")
+            // l10n:keep agent tool result
+            if (report.rows.isEmpty()) append("（没有满一分钟的记录）\n")
+            report.rows.forEach {
+                append(it.label ?: it.packageName).append(" · ").append(it.packageName)
+                    // l10n:keep agent tool result
+                    .append(" · ").append(it.minutes).append(" 分钟 · 打开 ").append(it.opens).append(" 次\n")
+            }
+            if (report.switches.isNotEmpty()) {
+                // l10n:keep agent tool result
+                append("\n最近的切换（新→旧，相邻两条的时刻差就是前一个 App 待了多久）：\n")
+                report.switches.take(MAX_USAGE_SWITCHES).forEach {
+                    append(Instant.ofEpochMilli(it.at).atZone(zone).format(SWITCH_AT)).append(' ').append(it.packageName).append('\n')
+                }
+            }
+        }.trimEnd()
+        return Out(text, summary = "读使用时长")
+    }
+
+    /** 工作模式：把谈好的计划钉住，靠引擎已有的白名单锁执行，这里只做参数和包名解析。 */
+    private fun focus(a: Args): Out {
+        val mode = a.str("mode")?.lowercase()
+        // l10n:keep agent tool result
+        if (mode != null && mode !in FOCUS_MODES) return Out("mode 只能是 on 或 off（不传就是查状态）。", error = true, summary = "工作模式")
+        val pkgs = LinkedHashSet<String>()
+        val missing = ArrayList<String>()
+        for (q in a.strList("allow").orEmpty()) {
+            when (val r = AppMatch.resolve(env.system().apps(), q)) {
+                is AppMatch.Result.Found -> pkgs += r.app.packageName
+                is AppMatch.Result.Ambiguous -> {
+                    // l10n:keep agent tool result
+                    return Out(
+                        "「$q」对应多个应用，请用包名指定：" + r.candidates.joinToString("；") { "${it.label} · ${it.packageName}" },
+                        error = true,
+                        summary = "工作模式",
+                    )
+                }
+                AppMatch.Result.NotFound -> missing += q
+            }
+        }
+        if (missing.isNotEmpty()) {
+            // l10n:keep agent tool result
+            return Out("没找到应用：" + missing.joinToString("、") + "。用 apps 查一下名称或包名。", error = true, summary = "工作模式")
+        }
+        val text = env.workMode(mode ?: "", pkgs.toList(), a.int("minutes") ?: 0, a.str("why"))
+            // l10n:keep agent tool result
+            ?: return Out("这台手机现在没有工作模式。", error = true, summary = "工作模式")
+        return Out(text, summary = "工作模式")
     }
 
     private fun apps(a: Args): Out {
@@ -669,6 +761,13 @@ class PhoneCore(
         const val MAX_APPS = 150
         const val MAX_COLLECT_CHARS = 16_000
 
+        /** `usage` 不给窗口就看 24 小时；最长到系统自己保留的 7 天。 */
+        private const val DEFAULT_USAGE_HOURS = 24
+        private const val MAX_USAGE_MINUTES = 7 * 24 * 60
+        private const val MAX_USAGE_SWITCHES = 12
+        private val SWITCH_AT: DateTimeFormatter = DateTimeFormatter.ofPattern("MM-dd HH:mm")
+        private val FOCUS_MODES = setOf("on", "off")
+
         /** The call's own time, not counting waits for the person. */
         fun budgetMs(tool: String): Long = when (tool) {
             PhoneToolCatalog.APPS -> 15_000L
@@ -677,6 +776,8 @@ class PhoneCore(
             PhoneToolCatalog.SCREEN -> 12_000L
             PhoneToolCatalog.COLLECT -> 120_000L
             PhoneToolCatalog.HANDOFF -> 30_000L
+            PhoneToolCatalog.USAGE -> 20_000L
+            PhoneToolCatalog.FOCUS -> 20_000L
             else -> 30_000L
         }
     }

@@ -10,6 +10,8 @@
 // 所以这文件只做三件事：分组抽样、防抖、落快照。
 
 import { betaSample } from './brain.js'
+// B3：只给了脸、没给句子时的兜底种子（正式路径由调用方现抽现给，见 samples.js）。
+import { SEED } from './samples.js'
 
 /**
  * 常驻只读：没有 probability 字段，不进 GROUPS，手滑改不动。
@@ -147,32 +149,35 @@ const IRON_RULES = [
   '答应他的事要真做到；做不到的（比如替他数着打了几把）就别答应。',
 ]
 
-/** 例句池：按这一球的脸给两条示范，学语气不是学台词。 */
-const SAMPLES = {
-  coax: ['例句：（凑过去）你把手停一下嘛，就一分钟，我给你看个东西。', '例句：你今天都没怎么理我哦，我记着了。'],
-  tease: ['例句：哟，又划上了？划出什么了，给我也开开眼。', '例句：你这手指头比脑子勤快多了。'],
-  cool: ['例句：嗯，你继续。', '例句：我等着，不急。'],
-  jab: ['例句：嘴上说累，手上倒挺诚实的。', '例句：你不是累，你是不想开始。'],
-  scold: ['例句：这条我记下来了——刷完这半小时，今天那件事还是空的。', '例句：别跟我演，你心里清楚现在该干什么。'],
-}
-
 // ---------------------------------------------------------------- 渲染
 
 /**
- * 把抽中的 arm 渲染成几行。素材由调用方给（它已经有这些数据），池子在上面。
+ * 把抽中的 arm 渲染成几行。素材由调用方给（它已经有这些数据），池子在上面的 SEED 里。
+ *
+ * B3：例句和关键词改成**由调用方现抽现给**——`feed.samples` 是这一轮挑中的句子，
+ * `feed.keywords` 是已经合并去重的关键词卡。空数组表示这一轮这个 arm 没素材，
+ * 那就什么都不注入（不许用空池硬凑一句）。
  * @param {{arm:string}[]} picks
- * @param {{temperLine?:string, predictions?:string[], keywords?:string[], stateLines?:string[]}} feed
+ * @param {{temperLine?:string, predictions?:string[], keywords?:string[],
+ *          samples?:string[], carry?:string[], stateLines?:string[], face?:string, roll?:number}} feed
  */
 export function renderVibe(picks, feed = {}) {
   const out = []
   for (const p of picks) {
-    if (p.arm === 'innerOS') out.push(INNER_OS)
+    if (p.arm === 'innerOS') {
+      // B2：夜间整理出来的「要带上的事」进这里。空就不加，不硬凑。
+      const carry = (feed.carry || []).filter(Boolean)
+      out.push(carry.length ? INNER_OS + '（你自己记着的：' + carry.join('；') + '）' : INNER_OS)
+    }
     else if (p.arm === 'temper') {
       if (feed.temperLine) out.push(feed.temperLine)
     } else if (p.arm === 'samples') {
-      // 用这一球的脸选池子；脸不在池子里就跳过，不硬编一条语气。
-      const pool = SAMPLES[feed.face]
-      if (pool) out.push('这一球的语气示范（学味道，别照抄）：' + pool.join('　'))
+      // B3：优先用调用方现抽的句子（已去重、已避开最近用过的）。
+      // 只给了 face 没给句子时退回内置种子取两句——这条兜底是既有行为，不能因为接了素材池就没。
+      const picked = (feed.samples || []).filter(Boolean).length
+        ? (feed.samples || []).filter(Boolean)
+        : (SEED[feed.face] || []).slice(0, 2)
+      if (picked.length) out.push('这一球的语气参考（学味道，不许照抄）：' + picked.join('　'))
     } else if (p.arm === 'keywordCard') {
       const words = (feed.keywords || []).filter(Boolean)
       if (words.length) out.push('话头合适的话，把他今天定的「' + words[0] + '」拎出来提一句，别硬塞。')

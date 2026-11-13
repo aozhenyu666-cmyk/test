@@ -220,7 +220,8 @@ void main() {
         const PhoneControlScreen(),
         native: FakePhoneNative(status: phoneStatus(a11y: true, serviceConnected: false)),
       );
-      expect(find.text('服务没连上，关掉再打开一次'), findsOneWidget);
+      // 顶上那行状态也这么说；这条问的是「无障碍服务」这一行。
+      expect(inTile('无障碍服务', find.text('服务没连上，关掉再打开一次')), findsOneWidget);
       expect(inTile('无障碍服务', find.text('去设置')), findsOneWidget);
     });
 

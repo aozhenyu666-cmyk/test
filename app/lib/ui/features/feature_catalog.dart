@@ -18,6 +18,7 @@ import '../common/feature_tile.dart';
 import '../agents/team_page.dart';
 import '../bots/bots_page.dart';
 import '../community/community_page.dart';
+import '../companion/bout_voice_page.dart';
 import '../cordis/cordis_page.dart';
 import '../files/files_page.dart';
 import '../forum/forum_home_page.dart';
@@ -318,6 +319,14 @@ final featureSections = <FeatureSection>[
       action: _backToChat,
       // l10n:keep DSH Web plugin title aliases used for deep-link matching
       web: const DshWebTarget(pluginItem: ['语音输入', 'Voice input']),
+    ),
+    // 第八轮 J9：局官念题、他出声答。不需要会话，这一屏只跟局有关。
+    FeatureItem.localized(
+      id: 'bout-voice',
+      title: (l10n) => l10n.catalogBoutVoice,
+      summary: (l10n) => l10n.catalogBoutVoiceSummary,
+      icon: AppIcons.voice,
+      native: (_) => const BoutVoicePage(),
     ),
   ]),
   FeatureSection.localized((l10n) => l10n.catalogCommunitySharingSection, [
