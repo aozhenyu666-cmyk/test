@@ -281,14 +281,19 @@ DSHAPP url dsh web: http://127.0.0.1:51234/?token=launch-tok
             report.writeln('$label exit=${r.exitCode} out=「${r.stdout.toString().trim()}」 err=「${r.stderr.toString().trim()}」');
         final sleep = Process.runSync('sh', ['-c', 'command -v sleep']).stdout.toString().trim();
         final alias = Link('${bin.path}/node-unrelated')..createSync(sleep);
+        final plain = Link('${bin.path}/plain-alias')..createSync(sleep);
         report.writeln('sleep=「$sleep」 alias=${alias.path}');
         // Same duration, plain name: tells "the runner killed our child" apart
         // from "only a node-like process disappears".
         final control = await Process.start(sleep, ['30']);
         addTearDown(control.kill);
+        final plainRun = await Process.start(plain.path, ['30']);
+        addTearDown(plainRun.kill);
         final other = await Process.start(alias.path, ['30']);
         addTearDown(other.kill);
-        report.writeln('control=${control.pid} other=${other.pid}');
+        final otherErr = <int>[];
+        other.stderr.listen(otherErr.addAll);
+        report.writeln('control=${control.pid} plain=${plainRun.pid} other=${other.pid}');
         if (failingPs) {
           final ps = File('${bin.path}/ps')..writeAsStringSync('#!/bin/sh\nexit 1\n');
           Process.runSync('chmod', ['+x', ps.path]);
@@ -299,13 +304,19 @@ DSHAPP url dsh web: http://127.0.0.1:51234/?token=launch-tok
         File('${dir.path}/web.log').writeAsStringSync('dsh web: http://127.0.0.1:1/?token=old\n');
         expect(File('${dir.path}/web.st').existsSync(), isFalse);
         await Future<void>.delayed(const Duration(milliseconds: 300));
+        final otherExit = await other.exitCode.timeout(const Duration(milliseconds: 200), onTimeout: () => -1);
+        final plainExit = await plainRun.exitCode.timeout(const Duration(milliseconds: 200), onTimeout: () => -1);
+        report.writeln(
+          'other exit=$otherExit stderr=「${String.fromCharCodes(otherErr)}」 '
+          'plain exit=$plainExit ls=「${Process.runSync('ls', ['-l', alias.path]).stdout.toString().trim()}」',
+        );
         dump('ps control', Process.runSync('ps', ['-p', '${control.pid}', '-o', 'pid=,stat=,args=']));
         dump('ps other', Process.runSync('ps', ['-p', '${other.pid}', '-o', 'pid=,stat=,args=']));
         dump(
           'ps grep',
           Process.runSync('sh', [
             '-c',
-            "ps -eo pid,ppid,stat,args | grep -E 'node-unrelated|sleep 30' | grep -v grep",
+            "ps -eo pid,ppid,stat,args | grep -E 'node-unrelated|plain-alias|sleep 30' | grep -v grep",
           ]),
         );
         final started = await bootstrap().ensureRunning();
