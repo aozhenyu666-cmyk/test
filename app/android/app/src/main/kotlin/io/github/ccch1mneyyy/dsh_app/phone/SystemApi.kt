@@ -16,6 +16,16 @@ class SysResult(val ok: Boolean, val message: String, val packageName: String? =
 /** Where a URL would open; [error] when it may not be opened at all. */
 class UrlTarget(val error: String? = null, val packageName: String? = null, val appLabel: String? = null)
 
+/** 一个 App 在一段时间里的前台账：分钟数 + 打开次数（都来自系统的使用记录）。 */
+class AppUsage(val packageName: String, val label: String?, val minutes: Long, val opens: Int)
+
+/** 一次前台切换：什么时刻到了哪个 App。 */
+class UsageSwitch(val at: Long, val packageName: String)
+
+/** `usage` 读出来的账；`null`（接口返回空）表示没开「使用情况访问」。 */
+class UsageReport(val rows: List<AppUsage>, val switches: List<UsageSwitch>)
+
+
 /**
  * The system actions seen from the core: Intents, deep links, notifications, the
  * clipboard, the app list. Implemented by [SystemActions] on Android, faked in the JVM tests.
@@ -30,6 +40,8 @@ interface SystemApi {
     fun notify(title: String, text: String): SysResult
     fun clipboardSet(text: String): SysResult
     fun clipboardGet(): SysResult
+    /** 最近 [hours] 小时的使用记录；没开「使用情况访问」返回 null。 */
+    fun usage(hours: Int, now: Long): UsageReport? = null
 }
 
 /** The fixed `intent` kinds (no arbitrary Intents: they could carry any component or extra). */
@@ -315,5 +327,12 @@ class Args(private val map: Map<String, Any?>) {
         val v = map[key] ?: return null
         val list = v as? List<*> ?: return listOfNotNull(Args(mapOf("x" to v)).int("x"))
         return list.mapNotNull { Args(mapOf("x" to it)).int("x") }
+    }
+
+    /** 一个字符串或一组字符串（模型有时给 "a"，有时给 ["a"]）。 */
+    fun strList(key: String): List<String>? {
+        val v = map[key] ?: return null
+        val list = v as? List<*> ?: listOf(v)
+        return list.mapNotNull { it?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() } }
     }
 }

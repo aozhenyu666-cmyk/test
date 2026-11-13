@@ -11,6 +11,8 @@ package io.github.ccch1mneyyy.dsh_app.phone
 object PhoneToolCatalog {
     const val APPS = "apps"
     const val NOW = "now"
+    const val USAGE = "usage"
+    const val FOCUS = "focus"
     const val OPEN = "open"
     const val INTENT = "intent"
     const val NOTIFY = "notify"
@@ -64,6 +66,17 @@ object PhoneToolCatalog {
             "列出这台手机上能打开的应用（名称 · 包名）。",
             // l10n:keep agent tool catalog
             linkedMapOf("query" to str("按名称或包名筛选，可省略")),
+            emptyList(),
+        ),
+        Tool(
+            USAGE,
+            // l10n:keep agent tool catalog
+            "读这台手机最近的使用账（hours 往回看几小时，默认 24，最多 168）：每个 App 的前台分钟数、打开次数，" +
+                // l10n:keep agent tool catalog
+                "再加上最近的切换序列（新→旧）。回答「我某 App 用了多久」、算时间账、判断有没有走神都用它；" +
+                // l10n:keep agent tool catalog
+                "要「使用情况访问」授权，没授权会告诉用户怎么开。",
+            linkedMapOf("hours" to int("往回看几小时，默认 24", 1, 168)),
             emptyList(),
         ),
         Tool(
@@ -269,6 +282,32 @@ object PhoneToolCatalog {
             // l10n:keep agent tool catalog
             linkedMapOf("reason" to str("要用户做什么，一句话")),
             listOf("reason"),
+        ),
+        Tool(
+            FOCUS,
+            // l10n:keep agent tool catalog
+            "工作模式：说好计划之后把计划钉住——allow 里的 App 照常用，其余第三方 App 一进就被全屏锁页挡住。" +
+                // l10n:keep agent tool catalog
+                "mode=on 开始（要 allow + minutes）；mode=off 立刻结束；不传 mode 就是查现在还剩多久、允许哪些。" +
+                // l10n:keep agent tool catalog
+                "allow 写包名或应用名，先用 apps 查准。电话、短信、地图、支付、桌面、输入法永远不锁；" +
+                // l10n:keep agent tool catalog
+                "允许名单外的娱乐 App 到点自动解锁，用户也能用拦截页自己放行。",
+            linkedMapOf(
+                // l10n:keep agent tool catalog
+                "mode" to enum(listOf("on", "off"), "on 开始，off 结束"),
+                "allow" to linkedMapOf(
+                    "type" to "array",
+                    "items" to linkedMapOf("type" to "string"),
+                    // l10n:keep agent tool catalog
+                    "description" to "on：这期间允许使用的 App（包名或应用名），至少一个",
+                ),
+                // l10n:keep agent tool catalog
+                "minutes" to int("on：持续多少分钟", 5, 720),
+                // l10n:keep agent tool catalog
+                "why" to str("on：为什么锁（锁页上会显示这句，一句话）"),
+            ),
+            emptyList(),
         ),
     )
 

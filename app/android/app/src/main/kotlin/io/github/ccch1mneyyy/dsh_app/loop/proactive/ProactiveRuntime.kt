@@ -483,7 +483,7 @@ object ProactiveRuntime {
         val list = ArrayList(ruleBook()?.active(now).orEmpty())
         val r = refuseUntil()
         if (r > now && list.none { it.until >= r }) list.add(LockRule(LockPriority.KIND_REFUSE, r))
-        if (sessionActive()) list.add(LockRule(LockPriority.KIND_SESSION, sessionUntil, null))
+        if (sessionActive()) list.add(LockRule(LockPriority.KIND_SESSION, sessionUntil, if (sessionOwner == OWNER_WORK) workWhy else null))
         return LockPriority.primary(list)
     }
 
@@ -625,6 +625,16 @@ object ProactiveRuntime {
     @Volatile private var sessionUntil: Long = -1L
     @Volatile private var sessionAllow: Set<String> = emptySet()
     @Volatile private var sessionPkg: String? = null
+    /**
+     * 这场 session 是谁开的。插件开的（连麦舱）任何时候都能被 /plan 改写；
+     * 他自己跟 AI 谈定、由 AI 用 focus 工具开的「工作模式」不许被 /plan 悄悄解掉。
+     */
+    @Volatile private var sessionOwner: String = OWNER_PLUGIN
+    @Volatile private var workWhy: String? = null
+    private const val OWNER_PLUGIN = "plugin"
+    private const val OWNER_WORK = "work"
+    private const val MIN_WORK_MINUTES = 5
+    private const val MAX_WORK_MINUTES = 720
     /** 插件下发的宽限（`session.graceMs`）；没给就 45 秒。 */
     @Volatile private var sessionGrace: Long = SessionPolicy.DEFAULT_GRACE_MS
     /** 当前舱内前台和它连续待了多久——宽限期按"连续停留"算，回白名单 App 就清零。 */
@@ -639,6 +649,8 @@ object ProactiveRuntime {
         sessionAllow = runCatching { p.getString("sessionAllow", "").orEmpty() }.getOrDefault("")
             .split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
         sessionPkg = runCatching { p.getString("sessionApp", "").orEmpty() }.getOrDefault("").ifBlank { null }
+        sessionOwner = runCatching { p.getString("sessionOwner", "") }.getOrDefault("").ifBlank { OWNER_PLUGIN }
+        workWhy = runCatching { p.getString("workWhy", "") }.getOrDefault("").ifBlank { null }
         sessionSince = runCatching { p.getLong("sessionSince", 0L) }.getOrDefault(0L)
         sessionGrace = runCatching { p.getLong("sessionGraceMs", SessionPolicy.DEFAULT_GRACE_MS) }
             .getOrDefault(SessionPolicy.DEFAULT_GRACE_MS)
@@ -653,13 +665,15 @@ object ProactiveRuntime {
         loadSession()
         return sessionPkg ?: sessionAllow.firstOrNull()
     }
-    private fun setSession(until: Long, allow: Set<String>, pkg: String?, graceMs: Long) {
+    private fun setSession(until: Long, allow: Set<String>, pkg: String?, graceMs: Long, owner: String = OWNER_PLUGIN, why: String? = null) {
         // 连麦开始时间：手机要在结束时报 gemini-end 的 minutes，而插件的 until 是我们唯一的时间来源。
         if (until > 0 && sessionUntil <= 0) sessionSince = System.currentTimeMillis()
         if (until <= 0) sessionSince = 0L
         sessionUntil = until
         sessionAllow = allow
         sessionPkg = pkg
+        sessionOwner = owner
+        workWhy = why
         // 0 是合法值，不是「没给」：R8 P4 的升级舱要求「不给第三方应用宽限」，
         // 46 秒的宽限等于让他先白刷一分钟。缺省（没有这个键）由 applySession 填默认值。
         sessionGrace = if (graceMs >= 0) graceMs else SessionPolicy.DEFAULT_GRACE_MS
@@ -674,6 +688,8 @@ object ProactiveRuntime {
                 .putString("sessionAllow", allow.joinToString(","))
                 .putString("sessionApp", pkg.orEmpty())
                 .putLong("sessionGraceMs", sessionGrace)
+                .putString("sessionOwner", owner)
+                .putString("workWhy", why.orEmpty())
                 .apply()
         }
     }
@@ -681,7 +697,17 @@ object ProactiveRuntime {
     @Volatile private var sessionSince: Long = 0L
 
     /** `/session` 和 `/plan` 解的是同一份 session：解析只写这一处。 */
-    private fun applySession(s: Map<*, *>?) {
+    /**
+     * `/session` 和 `/plan` 解的是同一份 session：解析只写这一处。
+     *
+     * [force] 是用户自己在界面上点的那一下（开一场 / 结束连麦）：人的动作永远算数，连 AI 钉住的
+     * 工作模式也照改。插件自己的 `/plan` 不能 force，否则每次巡检都会把刚锁上的悄悄解开。
+     */
+    private fun applySession(s: Map<*, *>?, force: Boolean = false) {
+        loadSession()
+        // 他自己跟 AI 谈定的工作模式还没到期：插件每次 /plan 都带着 session:null，
+        // 不挡住的话「刚锁上」会被下一次巡检悄悄解掉。
+        if (!force && sessionOwner == OWNER_WORK && System.currentTimeMillis() < sessionUntil) return
         if (s == null) {
             setSession(0L, emptySet(), null, SessionPolicy.DEFAULT_GRACE_MS)
             return
@@ -700,6 +726,59 @@ object ProactiveRuntime {
         val since = sessionSince
         if (since <= 0) return 0
         return ((System.currentTimeMillis() - since) / 60_000L).toInt().coerceAtLeast(0)
+    }
+
+    /**
+     * 工作模式：AI 把跟他谈好的计划钉住的唯一入口。
+     *
+     * 执行不另写一套——复用 [sessionFront] 那条白名单锁（电话/短信/地图/支付/桌面/输入法永远放行，
+     * 名单外第三方 App 立刻锁页）。区别只有两点：宽限给 0 分钟，且 [sessionOwner] 标成 work，
+     * 于是插件的 /plan 不会把它解掉。
+     *
+     * @param mode "on" 开始 / "off" 结束 / 其他一律按「查状态」处理
+     */
+    fun workMode(mode: String, allow: List<String>, minutes: Int, why: String?): String {
+        // l10n:keep agent tool result
+        if (!::app.isInitialized) return "DSH 还没启动好，稍后再说。"
+        loadSession()
+        val now = System.currentTimeMillis()
+        if (mode == "off") {
+            return if (sessionOwner == OWNER_WORK) {
+                setSession(0L, emptySet(), null, SessionPolicy.DEFAULT_GRACE_MS)
+                // l10n:keep agent tool result
+                "工作模式已结束，App 现在随便用。"
+            } else if (now < sessionUntil) {
+                // l10n:keep agent tool result
+                "现在开着的是连麦舱，不是工作模式；要停掉它得在 DSH 的管理页里结束连麦。"
+            } else {
+                // l10n:keep agent tool result
+                "现在没有工作模式。"
+            }
+        }
+        if (mode == "on") {
+            // l10n:keep agent tool result
+            if (minutes <= 0) return "开工作模式要说清多久（minutes，5–720）。"
+            val mins = minutes.coerceIn(MIN_WORK_MINUTES, MAX_WORK_MINUTES)
+            val allowed = allow.filter { it.isNotBlank() }.toSet()
+            // l10n:keep agent tool result
+            if (allowed.isEmpty()) return "开工作模式要先给 allow：至少一个允许使用的 App 包名（用 apps 查）。"
+            setSession(now + mins * 60_000L, allowed, null, 0L, OWNER_WORK, why?.take(80))
+            // 现在就判一次：他可能已经停在名单外的 App 里，不该等到下次切换才锁。
+            sessionFront(NowFeed.snapshot(SystemClock.elapsedRealtime()).app)
+            // l10n:keep agent tool result
+            return "已进入工作模式，$mins 分钟后自动结束：只有 ${allowed.joinToString("、")} 能用，" +
+                "其余第三方 App 一进去就被锁页挡住；电话、短信、地图、支付和桌面不受影响。"
+        }
+        return if (now < sessionUntil) {
+            val left = ((sessionUntil - now) / 60_000L).coerceAtLeast(1L)
+            // l10n:keep agent tool result
+            val who = if (sessionOwner == OWNER_WORK) "工作模式" else "连麦舱"
+            // l10n:keep agent tool result
+            "$who进行中：还剩 $left 分钟，允许 ${sessionAllow.joinToString("、")}。"
+        } else {
+            // l10n:keep agent tool result
+            "现在没有工作模式，也没有连麦舱。"
+        }
     }
 
     /** 管控期间：设置页自卫和破窗只在此时生效（拒绝模式、锁 / 赶、任务模式、防波堤）。 */
@@ -959,7 +1038,8 @@ object ProactiveRuntime {
         main.post {
             fetchPluginRoute(routeCallback { m ->
                 // `/session` 和 `/plan` 解的是同一份 session：解析只写一次（见 applySession）。
-                applySession(if (action == "end") null else m["session"] as? Map<*, *>)
+                // 这里是用户自己点的：force=true，AI 钉住的工作模式也能被他亲手结束。
+                applySession(if (action == "end") null else m["session"] as? Map<*, *>, force = true)
                 consultPlanSoon(minGapMs = 0L)
                 done(m)
             }, "POST", "/session", linkedMapOf(
