@@ -202,22 +202,35 @@ class PhoneCore(
      * 只要用户给过「使用情况访问」。
      */
     private fun usage(a: Args): Out {
-        val hours = (a.int("hours") ?: DEFAULT_USAGE_HOURS).coerceIn(1, MAX_USAGE_HOURS)
+        // minutes 优先：问「近 20 分钟」比问「近 1 小时」更贴近「这会儿有没有走神」。
+        val minutes = (a.int("minutes") ?: ((a.int("hours") ?: DEFAULT_USAGE_HOURS) * 60))
+            .coerceIn(1, MAX_USAGE_MINUTES)
         val zone = env.zone()
-        val report = env.system().usage(hours, System.currentTimeMillis())
+        val now = System.currentTimeMillis()
+        val report = env.system().usage(minutes, now)
             // l10n:keep agent tool result
             ?: return Out(
                 "读不到使用记录：DSH 没有「使用情况访问」权限。请用户在 系统设置 → 应用 → 特殊权限 → 使用情况访问 里允许 DSH（有的机型叫「有权查看使用情况」），然后重试。",
                 error = true,
                 summary = "读使用时长",
             )
+        val window = if (minutes % 60 == 0) "${minutes / 60} 小时" else "$minutes 分钟"
         if (report.rows.isEmpty() && report.switches.isEmpty()) {
             // l10n:keep agent tool result
-            return Out("最近 $hours 小时没有使用记录。要么真的没怎么用，要么系统刚清过统计。", summary = "读使用时长")
+            return Out("最近 $window 没有使用记录。要么真的没怎么用，要么系统刚清过统计。", summary = "读使用时长")
         }
         val text = buildString {
+            // 先给「现在在哪个 App、这一段多久」：判断走神要的是当下，不是总量。
+            val current = report.current
+            if (current != null && report.currentSince > 0) {
+                val label = report.rows.firstOrNull { it.packageName == current }?.label ?: current
+                val staying = (now - report.currentSince) / 60_000L
+                // l10n:keep agent tool result
+                append("现在在：").append(label).append("（").append(current).append("），已连续 ")
+                    .append(staying).append(" 分钟\n\n")
+            }
             // l10n:keep agent tool result
-            append("最近 ").append(hours).append(" 小时（按前台分钟数排）：\n")
+            append("最近 ").append(window).append("（按前台分钟数排）：\n")
             // l10n:keep agent tool result
             if (report.rows.isEmpty()) append("（没有满一分钟的记录）\n")
             report.rows.forEach {
@@ -227,7 +240,7 @@ class PhoneCore(
             }
             if (report.switches.isNotEmpty()) {
                 // l10n:keep agent tool result
-                append("\n最近的切换（新→旧）：\n")
+                append("\n最近的切换（新→旧，相邻两条的时刻差就是前一个 App 待了多久）：\n")
                 report.switches.take(MAX_USAGE_SWITCHES).forEach {
                     append(Instant.ofEpochMilli(it.at).atZone(zone).format(SWITCH_AT)).append(' ').append(it.packageName).append('\n')
                 }
@@ -748,9 +761,9 @@ class PhoneCore(
         const val MAX_APPS = 150
         const val MAX_COLLECT_CHARS = 16_000
 
-        /** `usage` 现在只看 24 小时，最长到系统自己保留的 7 天。 */
+        /** `usage` 不给窗口就看 24 小时；最长到系统自己保留的 7 天。 */
         private const val DEFAULT_USAGE_HOURS = 24
-        private const val MAX_USAGE_HOURS = 168
+        private const val MAX_USAGE_MINUTES = 7 * 24 * 60
         private const val MAX_USAGE_SWITCHES = 12
         private val SWITCH_AT: DateTimeFormatter = DateTimeFormatter.ofPattern("MM-dd HH:mm")
         private val FOCUS_MODES = setOf("on", "off")

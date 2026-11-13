@@ -71,12 +71,21 @@ object PhoneToolCatalog {
         Tool(
             USAGE,
             // l10n:keep agent tool catalog
-            "读这台手机最近的使用账（hours 往回看几小时，默认 24，最多 168）：每个 App 的前台分钟数、打开次数，" +
+            "读这台手机的使用账。minutes 往回看几分钟（问「这会儿」就用它，比 hours 准），hours 往回看几小时" +
                 // l10n:keep agent tool catalog
-                "再加上最近的切换序列（新→旧）。回答「我某 App 用了多久」、算时间账、判断有没有走神都用它；" +
+                "（默认 24，最多 168）。给三样：现在在哪个 App 已连续多久、每个 App 的前台分钟数与打开次数、" +
                 // l10n:keep agent tool catalog
-                "要「使用情况访问」授权，没授权会告诉用户怎么开。",
-            linkedMapOf("hours" to int("往回看几小时，默认 24", 1, 168)),
+                "最近的切换序列（新→旧，相邻两条的时刻差就是前一个 App 待了多久）。" +
+                // l10n:keep agent tool catalog
+                "判断走神看的是这个序列：先看当下在做什么，再看切换是不是在两个 App 之间来回跳、" +
+                // l10n:keep agent tool catalog
+                "以及在娱乐 App 上停留了多久——同一个 App 在不同任务里意义不同，" +
+                // l10n:keep agent tool catalog
+                "所以别只看总时长下结论。要「使用情况访问」授权，没授权会告诉用户怎么开。",
+            linkedMapOf(
+                "minutes" to int("往回看几分钟（优先用它）", 1, 7 * 24 * 60),
+                "hours" to int("往回看几小时，默认 24", 1, 168),
+            ),
             emptyList(),
         ),
         Tool(

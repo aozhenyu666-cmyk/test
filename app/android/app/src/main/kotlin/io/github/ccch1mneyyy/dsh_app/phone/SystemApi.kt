@@ -22,8 +22,18 @@ class AppUsage(val packageName: String, val label: String?, val minutes: Long, v
 /** 一次前台切换：什么时刻到了哪个 App。 */
 class UsageSwitch(val at: Long, val packageName: String)
 
-/** `usage` 读出来的账；`null`（接口返回空）表示没开「使用情况访问」。 */
-class UsageReport(val rows: List<AppUsage>, val switches: List<UsageSwitch>)
+/**
+ * `usage` 读出来的账；`null`（接口返回空）表示没开「使用情况访问」。
+ *
+ * `current` 是「现在前台是谁」、`currentSince` 是这一段从什么时候开始（毫秒）。
+ * 窗口里最后一条事件之后没有暂停或灭屏，才算还在前台；否则是 null。
+ */
+class UsageReport(
+    val rows: List<AppUsage>,
+    val switches: List<UsageSwitch>,
+    val current: String? = null,
+    val currentSince: Long = 0L,
+)
 
 
 /**
@@ -40,8 +50,8 @@ interface SystemApi {
     fun notify(title: String, text: String): SysResult
     fun clipboardSet(text: String): SysResult
     fun clipboardGet(): SysResult
-    /** 最近 [hours] 小时的使用记录；没开「使用情况访问」返回 null。 */
-    fun usage(hours: Int, now: Long): UsageReport? = null
+    /** 最近 [minutes] 分钟的使用记录；没开「使用情况访问」返回 null。 */
+    fun usage(minutes: Int, now: Long): UsageReport? = null
 }
 
 /** The fixed `intent` kinds (no arbitrary Intents: they could carry any component or extra). */

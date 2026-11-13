@@ -236,7 +236,7 @@ export function capabilityLines(role, { notesDir = '', allowTools = true } = {})
   const strategist = role === 'strategist'
   const lines = [
     '你手里有真工具（调不通就说"权限没给我"）：',
-    '- 看：mcp__phone__now、mcp__phone__screen、mcp__phone__usage（每个 App 今天多少分钟、什么时候切的）。',
+    '- 看：mcp__phone__now、mcp__phone__screen、mcp__phone__usage（现在在哪个 App 已多久、各 App 分钟数、切换序列；问"这会儿"传 minutes）。',
     '- 做：mcp__phone__open、mcp__phone__intent、mcp__phone__notify。',
     '- 管：mcp__phone__focus（跟他谈好计划就钉住：只许这几个 App，到点自己解）。',
     '- 文件：/sdcard、/sdcard/DCIM。',

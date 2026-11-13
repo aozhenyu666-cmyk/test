@@ -17,7 +17,7 @@ class PhoneUsageFocusTest {
     )
 
     private var report: UsageReport? = UsageReport(emptyList(), emptyList())
-    private var usageHours = -1
+    private var usageMinutes = -1
     private var workCall: Triple<String, List<String>, Int>? = null
     private var workAnswer: String? = "已进入工作模式。"
 
@@ -42,8 +42,8 @@ class PhoneUsageFocusTest {
             override fun notify(title: String, text: String) = error("unexpected notify")
             override fun clipboardSet(text: String) = error("unexpected clipboard")
             override fun clipboardGet() = error("unexpected clipboard")
-            override fun usage(hours: Int, now: Long): UsageReport? {
-                usageHours = hours
+            override fun usage(minutes: Int, now: Long): UsageReport? {
+                usageMinutes = minutes
                 return report
             }
         }
@@ -63,13 +63,48 @@ class PhoneUsageFocusTest {
     @Test
     fun `usage asks the system for the default window`() {
         core.call(PhoneToolCatalog.USAGE, emptyMap())
-        assertEquals(24, usageHours)
+        assertEquals(24 * 60, usageMinutes)
+    }
+
+    @Test
+    fun `usage takes minutes when the question is about right now`() {
+        core.call(PhoneToolCatalog.USAGE, mapOf("minutes" to 20))
+        assertEquals(20, usageMinutes)
     }
 
     @Test
     fun `usage caps the window at a week`() {
+        core.call(PhoneToolCatalog.USAGE, mapOf("minutes" to 999_999))
+        assertEquals(7 * 24 * 60, usageMinutes)
+    }
+
+    @Test
+    fun `usage caps hours the same way`() {
         core.call(PhoneToolCatalog.USAGE, mapOf("hours" to 9999))
-        assertEquals(168, usageHours)
+        assertEquals(7 * 24 * 60, usageMinutes)
+    }
+
+    @Test
+    fun `usage puts what is on screen right now before the totals`() {
+        val now = System.currentTimeMillis()
+        report = UsageReport(
+            listOf(AppUsage("com.baidu.netdisk", "百度网盘", 30, 2)),
+            emptyList(),
+            current = "com.baidu.netdisk",
+            currentSince = now - 7 * 60_000L,
+        )
+        val text = core.call(PhoneToolCatalog.USAGE, emptyMap()).text
+        assertTrue(text, text.contains("现在在：百度网盘"))
+        assertTrue(text, text.contains("已连续"))
+        // 当下这一段必须在总量之前：判断走神先看现在。
+        assertTrue(text, text.indexOf("现在在") < text.indexOf("按前台分钟数排"))
+    }
+
+    @Test
+    fun `usage says nothing about now when the phone is not in use`() {
+        report = UsageReport(listOf(AppUsage("com.tencent.mm", "微信", 5, 1)), emptyList())
+        val text = core.call(PhoneToolCatalog.USAGE, emptyMap()).text
+        assertFalse(text, text.contains("现在在"))
     }
 
     @Test
