@@ -111,6 +111,9 @@ import { ALL_LOCK, CELL, funStep, landing, rowOf, step as ladderStep } from './l
 import { evaluateEPrime } from './escalate.js'
 // 第九轮 A 组：预案。锁只来自生效中的预案；规则在 presets.js，接线在 presetwire.js。
 import { createPresetRuntime } from './presetwire.js'
+// 行为大脑第一版（K1 记录 / K2 发现 / K3 模式卡）与法典视图。
+import { createBrainRuntime } from './brainwire.js'
+import { buildCodex } from './codex.js'
 import { classify as classifyAnswer } from './reply.js'
 import { JUDGE_FILE, SELF_FILE, appendVerdictDaily, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, absentAnchors, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
@@ -1666,22 +1669,24 @@ export function apply(ctx) {
       by: s.by || undefined,
     }
   }
+  /** 正在跑的局（预案和行为大脑共用）。live 在插件体后面才声明；启动途中被问到就当没有局。 */
+  function runningBoutNow() {
+    let cur = null
+    try {
+      cur = live
+    } catch {
+      return null
+    }
+    if (!cur || cur.official.view().closed) return null
+    return { id: String(cur.official.view().boutId || ''), kind: String(cur.protocol?.name || cur.protocol?.id || ''),
+      protocolId: String(cur.protocol?.id || ''), openedAt: cur.openedAt }
+  }
   // 第九轮 A 组：预案运行时。落手机的几条路都复用阶梯已有的那几处（舱、封禁、墙收紧、计划模态）。
   const presetRt = createPresetRuntime({
     load: () => readState(stateFile('presets.json'), null),
     save: (d) => writeJson(stateFile('presets.json'), d),
     record,
-    runningBout: () => {
-      // live 在插件体后面才声明；启动途中被问到就当没有局。
-      let cur = null
-      try {
-        cur = live
-      } catch {
-        return null
-      }
-      if (!cur || cur.official.view().closed) return null
-      return { id: String(cur.official.view().boutId || ''), kind: String(cur.protocol?.name || cur.protocol?.id || ''), openedAt: cur.openedAt }
-    },
+    runningBout: () => runningBoutNow(),
     ignore: () => [...NEVER_BLOCK],
     day: (now) => dayString(now, zoneOr(config.timeZone)),
     minute: (now) => zoneMinuteOfDay(now, zoneOr(config.timeZone)),
@@ -1710,6 +1715,19 @@ export function apply(ctx) {
   const wallCfgNow = () => (presetRt.isActive('default-lock') ? config : { ...config, wall: { ...(config.wall || {}), defaultLock: false } })
   /** 手机的 session 槽：连麦舱 / 升级舱优先，其次是预案的严格模式。 */
   const sessionNow = (now) => geminiSessionView(now) || presetRt.sessionView(now)
+  // 行为大脑：片段与日摘要、模式卡。只看见、只记住；不自动立规则（K4 以后再接）。
+  const brainRt = createBrainRuntime({
+    loadEpisodes: () => readState(stateFile('episodes.json'), null),
+    saveEpisodes: (s) => writeJson(stateFile('episodes.json'), s),
+    loadCards: () => readState(stateFile('cards.json'), null),
+    saveCards: (c) => writeJson(stateFile('cards.json'), c),
+    record,
+    day: (now) => dayString(now, zoneOr(config.timeZone)),
+    minute: (now) => zoneMinuteOfDay(now, zoneOr(config.timeZone)),
+    hourOf: (ms) => Math.floor(zoneMinuteOfDay(ms, zoneOr(config.timeZone)) / 60),
+    // 有生效预案以它为依据的卡，状态记「有对策」。
+    backed: () => presetRt.list(Date.now()).presets.filter((p) => p.status === '生效' && p.basis).map((p) => p.basis),
+  })
 
   function setGear(sw, by) {
     config = applyGear(config, sw, Date.now())
@@ -3072,7 +3090,65 @@ export function apply(ctx) {
     if (action === 'apps') return { v: 1, ...presetRt.setApps(String(body.boutId || 'current'), { need: body.need, allow: body.allow }, now, 'user') }
     if (action === 'strict') return { v: 1, ...presetRt.strictNow(now, String(body.why || ''), 'user') }
     if (action === 'history') return { v: 1, ok: true, history: presetRt.history(String(body.id || '')) }
+    if (action === 'renew') return { v: 1, ...presetRt.renew(String(body.id || ''), now, 'user') }
     return { v: 1, ok: true, ...presetRt.list(now) }
+  }
+
+  /**
+   * 行为大脑（第一版）：GET 看全部；POST action=scan 现在就扫一遍 / note 他写自己的说法。
+   * 解释只有鲸澜能写，走 brain 工具，不走这里。
+   */
+  function brainRoute(body = {}) {
+    const now = Date.now()
+    const action = String(body?.action || 'view')
+    if (action === 'scan') return { v: 1, ok: true, ...brainRt.scanNow(now), ...brainRt.view(now) }
+    if (action === 'note') return { v: 1, ...brainRt.note(String(body.cardId || ''), String(body.text || ''), now) }
+    return { v: 1, ok: true, ...brainRt.view(now) }
+  }
+
+  /** 法典：把散在各处的规则收成一张有编号的表（只读）。 */
+  function codexView(now) {
+    const ledger = readLedger(home(), 1500)
+    const verdicts = ledger.filter((e) => e?.state === 'wall-audit')
+      .map((e) => ({ id: 'wa' + e.at, at: e.at, result: e.pass ? '过' : '不过', quote: [e.kind, ...(e.missing || [])].filter(Boolean).join('：') }))
+    const appeals = ledger.filter((e) => e?.state === 'appeal')
+      .map((e) => ({ at: e.at, result: e.pass ? '申诉成立' : '申诉驳回', reason: String(e.code || '') }))
+    return { v: 1, ok: true, ...buildCodex({ settings: settingsOf(config), wall: wallConfig(config), presets: presetRt.list(now).presets, verdicts, appeals, now }) }
+  }
+
+  /**
+   * 行为大脑工具：看模式卡、给卡写解释（只有鲸澜）。解释必须引用卡上证据里的日期或片段号，
+   * 引不到的编号会被去掉，一个都没有就标「猜测」。立预案时在「依据」里写卡号（preset 工具）。
+   */
+  function brainTool(role) {
+    return {
+      name: 'brain',
+      description: '行为大脑：代码每晚从他的手机使用里找重复出现的模式，记成模式卡（M-xx）。action=cards 看卡片和证据；' +
+        'action=explain 给一张卡写你的解释（只有鲸澜能写；text ≤ 200 字；refs 填你引用的证据编号——卡上的日期或片段号，引不到的会被去掉）。' +
+        '要针对一张卡立规则：用 preset 工具，在预案里写「依据」: 卡号。卡上的数字是代码算的，照着说，不要自己估。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['cards', 'explain'] },
+          cardId: { type: 'string', description: 'explain：卡号，如 M-03' },
+          text: { type: 'string', description: 'explain：我认为是因为……' },
+          refs: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'explain：引用的证据编号' },
+        },
+        required: ['action'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        if (args.action === 'explain') return brainRt.explain(String(args.cardId || ''), { text: args.text, refs: args.refs }, now, role)
+        const v = brainRt.view(now)
+        if (!v.cards.length) return { ok: true, text: '还没有模式卡：数据还不够（至少要攒几天）。' }
+        const lines = v.cards.map((c) => c.id + '［' + c.status + '］' + c.title +
+          '\n  证据：' + (c.evidence?.days || []).join('、') + (c.explain ? '\n  你上次的解释：' + c.explain.text : '') +
+          (c.notes?.length ? '\n  他说：' + c.notes[c.notes.length - 1].text : ''))
+        return { ok: true, text: lines.join('\n') }
+      },
+    }
   }
 
   function workflowTool(role) {
@@ -4307,7 +4383,7 @@ export function apply(ctx) {
         dailyPlanTool(role), dailyReviewTool(role), predictTool(role), workflowTool(role),
         takeStanceTool(role), reviseStanceTool(role),
         mountProposeTool(role), mountParkTool(role), mountCloseTool(role),
-        fishIndexTool(), presetTool(role),
+        fishIndexTool(), presetTool(role), brainTool(role),
       ].filter(Boolean)
       const list = all.filter((tool) => sub.has(tool.name))
       toolBag.set(role, { sid, all, state })
@@ -4529,6 +4605,11 @@ export function apply(ctx) {
   function raiseEscalation(verdict, now) {
     const id = fileEscalation(verdict, now)
     const landed = applyLanding(verdict, now)
+    try {
+      brainRt.noteLock(now)
+    } catch {
+      // 记不上不影响升级本身
+    }
     record({
       state: 'escalate', at: now, rule: verdict.rule, track: verdict.track || '',
       action: String(verdict.action?.type || ''), landed, why: String(verdict.why || '').slice(0, 200),
@@ -4647,6 +4728,7 @@ export function apply(ctx) {
       } catch (error) {
         console.error('[companion] 超时记阶梯失败：' + String((error && error.message) || error))
       }
+      brainRt.noteBout({ protocolId: live.protocol?.id, outcome: 'bad' }, now)
       dropLive()
       return t
     }
@@ -4701,7 +4783,7 @@ export function apply(ctx) {
     if (r.action === 'draft' || r.action === 'confirm') record({ state: 'plan-' + r.action, at: now, items: r.plan.items.length })
     if (r.action === 'skip') record({ state: 'plan-skip', at: now, why: r.why })
     if (!r.start) return r
-    const started = startBout(r.start)
+    const started = startBout(r.start, { by: 'plan' })
     record({ state: 'plan-open', at: now, protocolId: r.start, ok: started.ok })
     // 局开了＝他已经回到轨道上：L1 压下来的计划模态到这里结束（施工书 P1「只能以一份计划生效结束」）。
     if (started.ok) {
@@ -4743,7 +4825,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/brain')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -4813,6 +4895,7 @@ export function apply(ctx) {
         if (path === '/deposit') return send(res, 200, depositRoute(body.value))
         if (path === '/mount') return send(res, 200, mountRoute(body.value))
         if (path === '/presets') return send(res, 200, presetsRoute(body.value))
+        if (path === '/brain') return send(res, 200, brainRoute(body.value))
         if (path === '/drill-op') return send(res, 200, drillOpRoute(body.value))
         config = mergeConfig(config, body.value)
         writeConfig(config)
@@ -4841,6 +4924,8 @@ export function apply(ctx) {
         return send(res, r.status, r.body)
       }
       if (req.method === 'GET' && path === '/presets') return send(res, 200, presetsRoute({ action: 'list' }))
+      if (req.method === 'GET' && path === '/brain') return send(res, 200, brainRoute({ action: 'view' }))
+      if (req.method === 'GET' && path === '/codex') return send(res, 200, codexView(Date.now()))
       if (req.method === 'GET' && path === '/status') {
         return send(res, 200, statusBody())
       }
@@ -5011,9 +5096,16 @@ export function apply(ctx) {
     if (phone) lastPhone = phone
     // 第九轮：预案。手机一切 App 就会来问一次 /plan，所以严格模式能在这一问的回答里就落下去。
     try {
-      presetRt.tick(phone, now)
+      const pr = presetRt.tick(phone, now)
+      // 真的落了锁（不是影子、不只是说一句）：行为大脑记一笔，接下来 5 分钟的片段前因是「刚被锁」。
+      if (pr.fires.some((f) => !f.shadow && f.ops.some((o) => o !== 'say' && o !== 'log'))) brainRt.noteLock(now)
     } catch (error) {
       console.error('[companion] 预案失败：' + String((error && error.message) || error))
+    }
+    try {
+      brainRt.tick(phone, now, { bout: runningBoutNow(), night: lastRhythm?.night === 'lock', todayFun: phone ? funToday(phone) : undefined })
+    } catch (error) {
+      console.error('[companion] 行为记录失败：' + String((error && error.message) || error))
     }
     // 作息：早上门、晚上门、深夜阶段（先算，力度和拒绝要用）。
     {
@@ -5762,6 +5854,8 @@ export function apply(ctx) {
     }
     live = { official, db, protocol, openedAt: Date.now() }
     record({ state: 'bout-open', at: Date.now(), protocolId: protocol.id, via: 'panel' })
+    // 行为大脑：谁开的局。计划到点自动开的不算他自己开（主动开局比的分母和分子）。
+    brainRt.noteBout({ protocolId: protocol.id, outcome: 'open', self: opts.by !== 'plan' }, Date.now())
     // 第九轮：开局时带了 App 要求就记下（严格模式和「切出」都按它判）。
     if (opts.apps && typeof opts.apps === 'object') presetRt.setApps('current', opts.apps, Date.now(), String(opts.by || 'panel'))
     return { ok: true, toast: '开局：' + protocol.name + '。' + String(started.say || '') }
@@ -5786,6 +5880,7 @@ export function apply(ctx) {
       if (kind === 'perfunctory') presetRt.perfunctory(now, lastPhone)
     }
     if (r.state === 'closed' || r.state === 'escalated') {
+      brainRt.noteBout({ protocolId: live.protocol?.id, outcome: r.state === 'closed' ? 'done' : 'bad' }, now)
       dropLive()
       return { ok: true, state: r.state, accepted: r.accepted !== false, say: '', toast: r.state === 'escalated' ? '升级了，这一局结束。' : '收局。' }
     }

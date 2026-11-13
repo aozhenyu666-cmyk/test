@@ -12,7 +12,7 @@
 
 import {
   allPresets, boutAppsOf, cancelPending, clearStrict, enterStrict, explain, historyOf, isActive, match,
-  normalizeDoc, observe, plan, presetOf, proposeChange, rawOf, setBoutApps, settlePending, strictView,
+  normalizeDoc, observe, plan, presetOf, proposeChange, rawOf, renew, setBoutApps, settlePending, settleSunset, strictView,
 } from './presets.js'
 
 /**
@@ -105,6 +105,9 @@ export function createPresetRuntime(deps) {
     const settled = settlePending(d, now)
     d = settled.doc
     for (const id of settled.applied) deps.record({ state: 'preset-loosened', at: now, presetId: id })
+    const sunset = settleSunset(d, now)
+    d = sunset.doc
+    for (const id of sunset.expired) deps.record({ state: 'preset-sunset', at: now, presetId: id })
     const bout = deps.runningBout()
     const apps = boutAppsOf(d, bout?.id || '')
     const o = observe(d.obs, {
@@ -184,6 +187,16 @@ export function createPresetRuntime(deps) {
     return { ok: r.ok, code: r.code, kind: r.kind, text: r.message, pendingId: r.pendingId, effectiveAt: r.effectiveAt }
   }
 
+  /** 续期（日落前再给 30 天）。这一版只有他能续。 */
+  function renewPreset(id, now, by) {
+    const r = renew(load(), id, now, by)
+    if (r.ok) {
+      save(r.doc)
+      deps.record({ state: 'preset-renew', at: now, by, presetId: id, sunsetAt: r.sunsetAt })
+    }
+    return { ok: r.ok, code: r.code, text: r.message, sunsetAt: r.sunsetAt }
+  }
+
   function cancel(pendingId, now, by) {
     const r = cancelPending(load(), pendingId)
     if (r.ok) {
@@ -200,7 +213,7 @@ export function createPresetRuntime(deps) {
     return {
       presets: allPresets(d).map((p) => ({
         id: p.id, name: p.name, status: p.status, builtin: p.builtin, fixed: p.fixed, version: p.version,
-        explain: explain(p), note: p.note, raw: rawOf(p),
+        explain: explain(p), note: p.note, raw: rawOf(p), basis: p.basis || '', by: p.by || '', sunsetAt: p.sunsetAt || 0,
       })),
       pending: d.pending.map((x) => ({ id: x.id, presetId: x.presetId, effectiveAt: x.effectiveAt, raw: x.raw })),
       strict: strictView(d, now, bout?.id || null),
@@ -218,6 +231,7 @@ export function createPresetRuntime(deps) {
     setApps,
     propose,
     cancel,
+    renew: renewPreset,
     list,
     history: (id) => historyOf(load(), id),
     isActive: (id) => isActive(load(), id),
