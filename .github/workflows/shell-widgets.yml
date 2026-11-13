@@ -22,6 +22,7 @@ on:
       - "app/lib/ui/shell/**"
       - "app/lib/ui/common/**"
       - "app/lib/notify/**"
+      - "app/lib/l10n/**"
       - "app/test/shell/**"
       - "app/test/tiles/**"
       - "app/test/notify/**"
@@ -49,6 +50,13 @@ jobs:
 
       - name: pub get
         run: flutter pub get
+
+      # 跟另外三个 workflow 同一步，别省：gen-l10n 读的是合并后的 app_*.arb，字符串只写在
+      # lib/l10n/parts/<area>_{zh,en}.arb 里，不合并的话 parts 里新增的键在 L10n 里根本不存在。
+      # 漏这一步的代价：run 43356129766 编译失败，wall_page.dart 的 wallTitle 等键全都找不到
+      # （build-dafeiyu-apk.yml 也踩过同一个坑，见那里的 run 43061525642）。
+      - name: merge l10n parts
+        run: python3 tool/l10n_merge.py
 
       - name: Widget tests (bottom nav / tiles / notify)
         run: |
