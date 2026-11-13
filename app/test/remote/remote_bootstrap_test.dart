@@ -280,6 +280,20 @@ DSHAPP url dsh web: http://127.0.0.1:51234/?token=launch-tok
         final alias = Link('${bin.path}/node-unrelated')..createSync(sleep);
         final other = await Process.start(alias.path, ['30']);
         addTearDown(other.kill);
+        final sw = Stopwatch()..start();
+        void checkpoint(String where) {
+          final ps = Process.runSync('ps', ['-p', '${other.pid}', '-o', 'pid=,ppid=,stat=,args=']);
+          if (ps.exitCode != 0) {
+            final args = File('${home.path}/dsh-args.txt');
+            fail(
+              'DEBUG $where pid=${other.pid} ms=${sw.elapsedMilliseconds} psExit=${ps.exitCode} '
+              'log=${File('${home.path}/.dsh-app-remote/web.log').readAsStringSync()} '
+              'pidFile=${File('${home.path}/.dsh-app-remote/web.pid').existsSync()} '
+              'dshArgs=${args.existsSync() ? args.readAsStringSync() : ''}',
+            );
+          }
+        }
+        checkpoint('after spawn');
         if (failingPs) {
           final ps = File('${bin.path}/ps')..writeAsStringSync('#!/bin/sh\nexit 1\n');
           Process.runSync('chmod', ['+x', ps.path]);
@@ -290,6 +304,7 @@ DSHAPP url dsh web: http://127.0.0.1:51234/?token=launch-tok
         File('${dir.path}/web.log').writeAsStringSync('dsh web: http://127.0.0.1:1/?token=old\n');
         expect(File('${dir.path}/web.st').existsSync(), isFalse);
         final started = await bootstrap().ensureRunning();
+        checkpoint('after ensureRunning');
         expect(started.reused, isFalse);
         expect(started.token, isNot('old'));
         expect(

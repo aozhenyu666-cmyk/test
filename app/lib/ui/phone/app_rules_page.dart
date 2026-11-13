@@ -226,16 +226,11 @@ class _AddAppDialogState extends State<_AddAppDialog> {
   }
 
   Future<void> _loadApps() async {
-    // 列不出来（原生通道缺失、插件没装）就直接进手输，别给一个永远转圈的空列表。
-    List<LoopApp> apps;
-    try {
-      apps = await LoopChannel().apps();
-    } on Object {
-      apps = const [];
-    }
+    final apps = await LoopChannel().apps();
     if (!mounted) return;
     setState(() {
       _apps = apps;
+      // 列不出来（原生通道缺失）就直接进手输，别给一个永远转圈的空列表。
       if (apps.isEmpty) _manual = true;
     });
   }
