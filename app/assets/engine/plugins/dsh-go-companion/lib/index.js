@@ -4635,7 +4635,7 @@ export function apply(ctx) {
         if (path === '/gemini/due') return send(res, 200, { v: 1, launch: dueGeminiLaunch(Date.now()) })
         if (path === '/event') return send(res, 200, eventRoute(body.value))
         if (path === '/session') return send(res, 200, sessionRoute(body.value))
-        if (path === '/bouts') return send(res, 200, boutsShareRoute(body.value))
+        if (path === '/bouts') return send(res, 200, boutsRoute(body.value))
         if (path === '/wall') return send(res, 200, wallRoute(body.value))
         if (path === '/wall/thread') return send(res, 200, wallThreadRoute(body.value))
         if (path === '/wall/appeal') return send(res, 200, wallAppealRoute(body.value))
@@ -5588,9 +5588,10 @@ export function apply(ctx) {
     return { ok: true, toast: '开局：' + protocol.name + '。' + String(started.say || '') }
   }
 
-  function answerBout(text, form = 'text') {
-    if (!live) return { ok: false, toast: '现在没有局。' }
-    const r = live.official.answer(text, { form })
+  function answerBout(text, form = 'text', channel = 'text', hold = false) {
+    if (!live) return { ok: false, toast: '现在没有局。', state: 'none' }
+    const r = live.official.answer(text, { form, channel })
+    const v = live.official.view()
     const now = Date.now()
     // P4：局官每收到一条回答都先过一遍阶梯。敷衍记一次并可能升级；答错、混乱只回一句处置。
     if (r.accepted !== false) {
@@ -5603,9 +5604,23 @@ export function apply(ctx) {
     }
     if (r.state === 'closed' || r.state === 'escalated') {
       dropLive()
-      return { ok: true, toast: r.state === 'escalated' ? '升级了，这一局结束。' : '收局。' }
+      return { ok: true, state: r.state, accepted: r.accepted !== false, say: '', toast: r.state === 'escalated' ? '升级了，这一局结束。' : '收局。' }
     }
-    return { ok: r.accepted !== false, toast: String(r.say || '') }
+    const say = String(r.say || '')
+    // 语音这一路（hold）：下一句已经在返回里了，说明局官马上要念。
+    // 先冻住应答时限，等他念完由 spoken 起算——不然这句话还没念完，计时已经跑掉一大截。
+    // 面板那条文字路径不开这个：它没有 spoken 那一步，冻住就没人解冻了。
+    if (hold && say) live.official.hold(now)
+    return {
+      ok: r.accepted !== false,
+      state: String(r.state || 'running'),
+      accepted: r.accepted !== false,
+      say,
+      toast: say,
+      stepId: String(v.stepId || ''),
+      limitSec: Number(v.limitSec) || 0,
+      nextAskAt: Number(r.nextAskAt || v.nextAskAt) || 0,
+    }
   }
 
   function closeBoutNow() {
@@ -5641,6 +5656,54 @@ export function apply(ctx) {
     }
     const r = answerBout(text.slice(0, 2_000), 'text')
     return { v: 1, ok: Boolean(r.ok), toast: String(r.toast || '') }
+  }
+
+  /**
+   * POST /bouts 的语音这一路（J9）：念、听、判、下一拍，四步都由手机驱动，状态机还在局官手里。
+   *
+   * 四个动作：
+   *   ask     这一拍现在该念哪一句。顺手把应答时限冻住——念的这一段不算他的时间。
+   *   spoken  念完了（或退回文字，字已经在他眼前）：从一个明确的时刻开始计应答时限。
+   *   answer  识别出来的话当答案。带 hold，所以局官下一句也先冻着，等他念完再计。
+   *   fallback 声音或识别用不了，退回文字/浮层。记账，面板能看见为什么退回。
+   *
+   * 没有 action 的请求还是原来的「分享进来的一段话」，一个字没改。
+   */
+  function boutsRoute(body) {
+    const action = String(body?.action || '')
+    if (!action) return boutsShareRoute(body)
+    if (!['ask', 'spoken', 'answer', 'fallback'].includes(action)) {
+      return { v: 1, ok: false, code: 'bad-action' }
+    }
+    // fallback 不需要有局在跑：声音配不上这件事本身就要记下来。
+    if (action === 'fallback') {
+      const reason = String(body?.reason || 'unknown').slice(0, 120)
+      record({ state: 'bout-voice-fallback', at: Date.now(), reason, via: 'phone' })
+      return { v: 1, ok: true, code: 'noted' }
+    }
+    if (!live) return { v: 1, ok: false, code: 'no-bout' }
+    const now = Date.now()
+    if (action === 'ask') {
+      // 周期步到点：先把同一句问出来，免得每一拍都念上一拍的旧句子。
+      live.official.due(now)
+      const v = live.official.view()
+      if (v.closed || !v.ask) return { v: 1, ok: false, code: v.closed ? 'closed' : 'nothing-to-ask' }
+      live.official.hold(now)
+      return {
+        v: 1, ok: true, say: String(v.ask), stepId: String(v.stepId || ''),
+        limitSec: Number(v.limitSec) || 0, index: Number(v.index) || 0,
+      }
+    }
+    if (action === 'spoken') {
+      const at = Number(body?.at) || now
+      const r = live.official.spoken(at)
+      const v = live.official.view()
+      return { v: 1, ok: true, at: Number(r.at) || at, stepId: String(r.stepId || ''), limitSec: Number(v.limitSec) || 0 }
+    }
+    const text = String(body?.text ?? '').trim()
+    if (!text) return { v: 1, ok: false, code: 'empty' }
+    const r = answerBout(text.slice(0, 2_000), 'text', 'voice', true)
+    return { v: 1, ...r, code: r.ok ? '' : 'refused' }
   }
 
   /** 一句话发进去，等到回完（最多两分钟）。 */

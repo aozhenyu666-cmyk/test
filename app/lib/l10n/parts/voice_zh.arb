@@ -152,5 +152,20 @@
   "voiceOutVoiceFollow": "跟随服务默认",
   "voiceOutPreview": "试听",
   "voiceOutPreviewText": "这一局，我记下了。",
-  "voiceOutPreviewFailed": "没能念出来，换个服务或音色再试"
+  "voiceOutPreviewFailed": "没能念出来，换个服务或音色再试",
+  "boutVoiceIntro": "局官念一句，你出声答一句。念的时候不算你的时间，念完才开始计时。",
+  "boutVoiceStart": "开始",
+  "boutVoiceStop": "停",
+  "boutVoiceSpeaking": "局官在念",
+  "boutVoiceListening": "在听你说",
+  "boutVoiceJudging": "在判这一句",
+  "boutVoiceWaitAsk": "等下一拍",
+  "boutVoiceWaitText": "没听见。打一句也行，或者按停。",
+  "boutVoiceDone": "这一局结束了。",
+  "boutVoiceFallbackOut": "声音用不了，这一句改成文字。",
+  "boutVoiceFallbackIn": "这次没听清，改成打字。",
+  "boutVoiceSayLabel": "局官",
+  "boutVoiceHeardLabel": "你刚才说",
+  "boutVoiceSubmit": "交这句",
+  "boutVoiceNoBout": "现在没有在跑的局。先在局里开一局，再回来按开始。"
 }

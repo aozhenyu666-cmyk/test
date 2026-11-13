@@ -6,6 +6,8 @@
 
 import 'package:flutter/services.dart';
 
+import '../companion/bout_voice.dart';
+
 /// `SchedulerConfig` as the settings page edits it. The kernel clamps on its side too.
 class ProactiveConfig {
   const ProactiveConfig({
@@ -434,8 +436,6 @@ class ProactiveChannel {
   }
 
   /// 每日四部门提交（插件 `POST /deposit`）。
-  ///
-  /// [department] 为空就是读状态；给了就是交那一段，[report] / [thought] 一起传。
   /// 字数不够插件会退回并带上错误码，界面照着说，不在这里自己判。
   ///
   /// A4：白天先记一条短记录用 [text]（action=slot，一条 ≤200 字）。行为管理那一部的汇报栏
@@ -511,6 +511,55 @@ class ProactiveChannel {
       return null;
     }
   }
+}
+
+/// 第八轮 J9：局官这一侧的端口（插件 `POST /bouts` 的四个 action）。
+///
+/// 只搬数据：哪个 action、带什么字段，由 [BoutVoiceLoop] 决定；这里不加判断，
+/// 也不缓存「现在第几拍」——那份状态在插件的局官手里，手机再存一份就会跟它走散。
+class ProactiveBouts implements BoutVoicePort {
+  ProactiveBouts({MethodChannel? methods}) : _methods = methods ?? const MethodChannel('dsh/proactive');
+
+  final MethodChannel _methods;
+
+  Future<Map<Object?, Object?>?> _post(Map<String, Object?> body) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('boutsVoice', body);
+      return raw is Map ? raw : null;
+    } on Exception {
+      return null;
+    }
+  }
+
+  @override
+  Future<BoutAsk?> ask() async {
+    final raw = await _post({'action': 'ask'});
+    if (raw == null || raw['ok'] != true) return null;
+    return BoutAsk(
+      say: '${raw['say'] ?? ''}',
+      stepId: '${raw['stepId'] ?? ''}',
+      limitSec: (raw['limitSec'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  @override
+  Future<void> spoken(int at) => _post({'action': 'spoken', 'at': at});
+
+  @override
+  Future<BoutAnswer?> answer(String text) async {
+    final raw = await _post({'action': 'answer', 'text': text});
+    if (raw == null) return null;
+    final state = '${raw['state'] ?? ''}';
+    return BoutAnswer(
+      accepted: raw['accepted'] == true,
+      say: '${raw['say'] ?? ''}',
+      nextAskAt: (raw['nextAskAt'] as num?)?.toInt() ?? 0,
+      closed: state == 'closed' || state == 'escalated',
+    );
+  }
+
+  @override
+  Future<void> fallback(String reason) => _post({'action': 'fallback', 'reason': reason});
 }
 
 /// The host plugin's own view: which session proactive turns go to, and which agents are alive.

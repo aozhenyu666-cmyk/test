@@ -149,6 +149,25 @@ export function createOfficial(options = {}) {
     },
 
     /**
+     * J9：这一拍要念出来了。念的这段不算他的应答时间——
+     * 不 hold 的话，局官一句 40 字的话念到一半，限时已经走掉一半，等于罚他听。
+     */
+    hold(at) {
+      if (closed) return { state: 'closed' }
+      return { state: runner.state, holdUntil: runner.speakHold(at === undefined ? now() : at) }
+    },
+
+    /**
+     * 念完了（或退回文字、字已经到了他眼前）：应答时限从现在开始算。
+     * 返回这一刻，调用方拿它当这一拍的 askedAt——beats 里的「应答延迟」也就从念完算起。
+     */
+    spoken(at) {
+      if (closed) return { state: 'closed' }
+      const when = runner.spoken(at === undefined ? now() : at)
+      return { state: runner.state, at: when, stepId: (runner.current() || {}).id || '' }
+    },
+
+    /**
      * 他答了（文字）。返回局官接下来说什么。
      * accepted=false 表示这一条没被当成应答（超字数 / 混乱 / 写模式下发的文字），这一拍没往前走。
      */

@@ -86,5 +86,20 @@
   "voiceOutVoiceFollow": "The service’s default",
   "voiceOutPreview": "Listen",
   "voiceOutPreviewText": "This bout is on the record.",
-  "voiceOutPreviewFailed": "Couldn’t be played. Try another service or voice."
+  "voiceOutPreviewFailed": "Couldn’t be played. Try another service or voice.",
+  "boutVoiceIntro": "The official says one line, you answer out loud. Being read to doesn’t count against your time; the clock starts when it finishes.",
+  "boutVoiceStart": "Start",
+  "boutVoiceStop": "Stop",
+  "boutVoiceSpeaking": "The official is speaking",
+  "boutVoiceListening": "Listening",
+  "boutVoiceJudging": "Judging that answer",
+  "boutVoiceWaitAsk": "Waiting for the next line",
+  "boutVoiceWaitText": "Didn’t hear that. Type it instead, or stop.",
+  "boutVoiceDone": "This bout is over.",
+  "boutVoiceFallbackOut": "No voice available, so this line is shown as text.",
+  "boutVoiceFallbackIn": "Didn’t catch that one, so type it instead.",
+  "boutVoiceSayLabel": "The official",
+  "boutVoiceHeardLabel": "You said",
+  "boutVoiceSubmit": "Send this",
+  "boutVoiceNoBout": "No bout is running. Open Bouts and start one, then come back and press Start."
 }

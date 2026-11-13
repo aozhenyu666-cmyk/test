@@ -18,6 +18,13 @@ import { judgeAnswer } from './thinking.js'
 
 export const PROTOCOL_VERSION = 1
 
+/**
+ * 念一段最多算这么久（J9）。
+ * 「念完了才开始计应答时限」如果无条件生效，声音卡住（TTS 不返回）就成了一拍永远不计时，
+ * 他坐着等，局等不到任何判定。所以给「在念」一个上限，到点按念完算，从那一刻开始计时。
+ */
+export const SPEAK_HOLD_MAX = 60_000
+
 /** 收局/升级这两个出口是终结的；协议不能自定义别的终点。 */
 export const TERMINALS = ['收局', '升级']
 export const EXIT_KINDS = ['next', 'retry', 'escalate', 'close']
@@ -477,6 +484,8 @@ export function createRunner(protocol, options = {}) {
   let retries = 0
   let lastPass = false
   let askedAt = now()
+  // >0：这一拍正在被念出来，到这一刻为止先不计时（J9「念完才开始计」）。
+  let speakBy = 0
   let state = 'running'
   let endedAt = 0
   let endReason = ''
@@ -550,6 +559,23 @@ export function createRunner(protocol, options = {}) {
     askedAt() {
       return askedAt
     },
+    /**
+     * 这一拍开始念了：先不计时，最多到 [at] + SPEAK_HOLD_MAX。
+     * 和 spoken() 成对；只念不返回（声音卡住）由上面的上限兜住。
+     */
+    speakHold(at) {
+      speakBy = (Number(at) || now()) + SPEAK_HOLD_MAX
+      return speakBy
+    },
+    /**
+     * 念完了：应答时限从这一刻开始算，且不动进度和重打次数。
+     * 「文字退回」走同一条——指令显示在屏幕上（或浮层里）也算送到他面前了。
+     */
+    spoken(at) {
+      askedAt = Number(at) || now()
+      speakBy = 0
+      return askedAt
+    },
     /** 他答了。 */
     answer(text) {
       if (state !== 'running') return { state, reason: 'not-running', index }
@@ -567,6 +593,13 @@ export function createRunner(protocol, options = {}) {
       const step = steps[index]
       const when = Number(at) || now()
       if (!step.limitSec) return { state, reason: 'no-limit', index }
+      // 还在念：这一拍还没送到他面前，不算他没接。
+      if (speakBy) {
+        if (when < speakBy) return { state, reason: 'speaking', index }
+        // 念超了上限（声音卡住）：按这一刻念完算，从这里开始计时，不吞掉他的应答时间。
+        askedAt = speakBy
+        speakBy = 0
+      }
       if (when - askedAt < step.limitSec * 1000) return { state, reason: 'not-yet', index }
       answers.push('')
       return goExit(step.timeout, 'timeout')
@@ -575,6 +608,8 @@ export function createRunner(protocol, options = {}) {
     reask(at) {
       if (state !== 'running') return { state, reason: 'not-running', index }
       askedAt = Number(at) || now()
+      // 同一句要重新念一遍：不带上一次的「在念」状态。
+      speakBy = 0
       retries = 0
       return { state, reason: 'reask', index, askedAt }
     },

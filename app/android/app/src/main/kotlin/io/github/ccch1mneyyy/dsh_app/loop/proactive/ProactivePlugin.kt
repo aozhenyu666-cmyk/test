@@ -187,6 +187,14 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 result, "POST", "/bouts",
                 linkedMapOf("text" to call.argument<String>("text")),
             )
+            // 第八轮 J9：语音闭环的四个动作（ask / spoken / answer / fallback）。
+            // 和分享共用插件的 POST /bouts，由插件按 action 分发；这里只透传，不判——
+            // 念到第几句、要不要收局都由局官决定，手机不另存一份状态。
+            "boutsVoice" -> {
+                val body = LinkedHashMap<String, Any?>()
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/bouts", body)
+            }
             // 每日四部门提交（第五轮）：信息收集 / 谋划思考 / 行为管理 / 统筹规划。
             // action=status 只读，action=submit 交一段（字数不到插件当场退回）。
             "deposit" -> {

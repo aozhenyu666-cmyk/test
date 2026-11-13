@@ -76,6 +76,9 @@ class CompanionRoles {
   final CompanionVoiceSettings? _settings;
   final Map<VoiceRole, String> _voices;
 
+  /// [say] 的序号：同一句由同一个角色说两次，也要是两条不同的进度事件。
+  int _said = 0;
+
   /// 这一句会不会走外接服务。false 就是手机自带语音（B5 的兜底路）。
   bool get external {
     final settings = _settings;
@@ -117,10 +120,57 @@ class CompanionRoles {
 
   void stop() => _speaker.stop();
 
+  /// 让 [role] 说一句，**等它念完**（J9：念完才开始计应答时限）。
+  /// null 表示念完了；否则是没念成的原因（'voice-out'）。
+  ///
+  /// 为什么不直接 await [CompanionSpeaker.speak]：那个只等到「开始播」。
+  /// 完成事件和按字数估的时间谁先到算谁，见 [awaitCompanionSpoken]。
+  Future<String?> say(VoiceRole role, String text, {String? style}) async {
+    final said = text.trim();
+    if (said.isEmpty) return null;
+    final id = '${role.name}-${++_said}';
+    final waiting = awaitCompanionSpoken(events, id, said);
+    speak(role, said, style: style, id: id);
+    return waiting;
+  }
+
   Stream<CompanionVoiceEvent> get events => _speaker.events;
 
   /// 设置页试听：按 [role] 的音色念一句。null 表示真念了，否则是不能念的原因。
   Future<String?> preview(VoiceRole role, String text) => _speaker.preview(settingsFor(role), text);
+}
+
+/// 等 [id] 这一句念完。null＝念完了（或按字数估的那段时间到了）；'voice-out'＝报错了。
+///
+/// 为什么要估：手机自带语音（系统 TTS）不一定会报完成事件。真等一条可能永远不来的事件，
+/// 每一拍就得干等整整一个超时；而「念完才开始计应答时限」又必须有个时刻。
+/// 完成事件先到就按它，估的时间先到就按估的——两者都只是起点，判定还在局官那边。
+///
+/// [estimate] 不给就按字数估：中文一眼四五个字，220ms/字，长句封顶 120 字（约 26 秒）。
+Future<String?> awaitCompanionSpoken(
+  Stream<CompanionVoiceEvent> events,
+  String id,
+  String text, {
+  Duration? estimate,
+}) async {
+  final chars = text.length > 120 ? 120 : text.length;
+  final guess = estimate ?? Duration(milliseconds: 120 + 220 * chars);
+  final done = Completer<String?>();
+  final sub = events.listen((event) {
+    if (event.id != id || done.isCompleted) return;
+    final type = event.type;
+    if (type == CompanionVoiceEventType.done || type == CompanionVoiceEventType.stopped) {
+      done.complete(null);
+    } else if (type == CompanionVoiceEventType.error) {
+      done.complete('voice-out');
+    }
+    // 剩下三种不算念完：fallback（外接没取到、手机自己在念）、start、range（路过的进度）。
+  });
+  try {
+    return await Future.any([done.future, Future<String?>.delayed(guess, () => null)]);
+  } finally {
+    await sub.cancel();
+  }
 }
 
 final companionRolesProvider = Provider<CompanionRoles>((ref) {
