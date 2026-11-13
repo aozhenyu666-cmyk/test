@@ -1,0 +1,58 @@
+name: shell-widgets
+
+# 只跑壳层三个组件的 widget 测试：底部导航、磁贴、通知。
+#
+# 为什么不跑全仓：全仓的 `flutter test` 里有大批 golden 用例（app/test/**/goldens/*.png），
+# 它们要预生成的截图和固定的字体/排版环境，在 CI 上重新跑等于把 noise 当失败信号。
+# 这个 workflow 只回答一个问题——这一轮改的三块壳层还对不对。
+#
+# 名单里的三个文件都确认过没有一处 matchesGoldenFile（改名单之前先 grep 一遍）：
+#   test/shell/bottom_nav_test.dart    底部导航（局 / 墙 / 对话）
+#   test/tiles/tile_grid_test.dart     磁贴（网格布局 + 卡片行为）
+#   test/notify/chat_alerts_test.dart  通知
+#
+# 磁贴和通知的 Android 侧（BoutsTileStatus / 常驻通知）是 JUnit，不在这一份里，
+# 它跟着 build-dafeiyu-apk.yml 的 :app:testArm64DebugUnitTest 跑。
+
+on:
+  push:
+    branches: [deepseek/round8]
+    paths:
+      - ".github/workflows/shell-widgets.yml"
+      - "app/lib/ui/shell/**"
+      - "app/lib/ui/common/**"
+      - "app/lib/notify/**"
+      - "app/test/shell/**"
+      - "app/test/tiles/**"
+      - "app/test/notify/**"
+      - "app/pubspec.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  widgets:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # test/support/test_fonts.dart loads assets/fonts/... by relative path.
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.7
+          channel: stable
+          cache: true
+
+      - name: pub get
+        run: flutter pub get
+
+      - name: Widget tests (bottom nav / tiles / notify)
+        run: |
+          flutter test \
+            test/shell/bottom_nav_test.dart \
+            test/tiles/tile_grid_test.dart \
+            test/notify/chat_alerts_test.dart
