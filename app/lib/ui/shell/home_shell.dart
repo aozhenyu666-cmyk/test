@@ -290,6 +290,10 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
       sidebarOpen: prefs.sidebarOpen,
       panelOpen: prefs.panelOpen,
     );
+    // A phone on its side with the keyboard up: the tabs step aside for the chat,
+    // as the header and the dock do (chat_screen.dart's `typing`).
+    final typing =
+        MediaQuery.sizeOf(context).height < WindowClass.compactHeight && MediaQuery.viewInsetsOf(context).bottom > 0;
     final chat = widget.chatBuilder?.call(_onMenu) ?? ChatScreen(onOpenDrawer: _onMenu, backdrop: false);
     // The floating pet outside the app hears every pet state.
     ref.listen<void>(petOverlayBridgeProvider, (_, _) {});
@@ -319,7 +323,9 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
                   // The chat screen handles the keyboard itself.
                   resizeToAvoidBottomInset: false,
                   // The pulled-over drawer covers the screen: no tabs under it.
-                  bottomNavigationBar: _open ? null : _tabBar(shown, bouts),
+                  // Neither while a phone on its side types: they would leave
+                  // the keyboard and the composer a single row of chat.
+                  bottomNavigationBar: _open || typing ? null : _tabBar(shown, bouts),
                   body: Stack(
                     fit: StackFit.expand,
                     children: [

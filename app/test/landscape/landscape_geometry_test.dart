@@ -126,10 +126,9 @@ void main() {
         await pumpFrames(tester, 8);
 
         final composer = tester.getRect(find.byType(Composer));
-        // 8 above the keyboard plus the composer's own 8; the keyboard stops at
-        // the shell's tab bar, which still holds the page's foot.
-        final foot = tester.getRect(find.byKey(const ValueKey('home-tab-bar'))).top;
-        expect(composer.bottom, _near(foot - 200 - 16));
+        // 8 above the keyboard plus the composer's own 8. The keyboard reaches the
+        // window's foot here: the tabs step aside while a phone on its side types.
+        expect(composer.bottom, _near(win.size.height - 200 - 16));
         // Folded to nothing toward the composer (still mounted, unseen).
         final fold = tester.widget<Align>(find.ancestor(of: find.byType(ChatDock), matching: find.byType(Align)).first);
         expect(fold.heightFactor, 0);

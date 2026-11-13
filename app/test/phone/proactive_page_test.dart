@@ -158,7 +158,7 @@ void main() {
       expect(find.textContaining('排队中：2 条'), findsOneWidget);
       // 回执是这一页最后一张卡，手机屏上要滚下去才看得见。
       final responded = find.text('你回应了');
-      await tester.scrollUntilVisible(responded.first, 300, scrollable: find.byType(Scrollable).first);
+      await tester.scrollUntilVisible(responded, 300, scrollable: find.byType(Scrollable).first);
       expect(responded, findsWidgets);
     });
 
