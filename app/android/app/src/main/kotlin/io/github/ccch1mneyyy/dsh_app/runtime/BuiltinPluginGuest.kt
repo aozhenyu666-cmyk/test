@@ -177,6 +177,12 @@ object BuiltinPluginGuest {
                 "lib/jsonlogic.js",
                 "lib/presets.js",
                 "lib/presetwire.js",
+                // 行为大脑第一版（K1 片段 / K2 发现 / K3 模式卡）与法典视图。
+                "lib/episodes.js",
+                "lib/patterns.js",
+                "lib/cards.js",
+                "lib/brainwire.js",
+                "lib/codex.js",
                 // R8 P1：计划模态。候选与规则全在代码里，模型只负责把计划说出来。
                 "lib/dayplan.js",
                 // R8 P2：全天主动。计划生效后他不再开局，局来开他——换局有额度，「不开」不许说。

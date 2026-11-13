@@ -27,6 +27,8 @@ const STATUS_RANK = { 停用: 0, 影子: 1, 生效: 2 }
 export const LOOSEN_COOLDOWN_MS = 2 * 3_600_000
 /** AI 新建的预案至少跑这么久影子，AI 才能把它转成生效。 */
 export const SHADOW_MIN_MS = 24 * 3_600_000
+/** AI 立的预案 30 天后自动失效（日落），除非他续期。 */
+export const SUNSET_MS = 30 * 86_400_000
 /** 每条预案保留的历史版本数（回退用）。 */
 export const HISTORY_KEEP = 20
 /** 「直到：本局结束」时，万一一直收不到收局，最多挂这么久。 */
@@ -300,6 +302,10 @@ export function validatePreset(raw, opts = {}) {
   // 破窗永远是出口之一：他任何时候都能付代价离开，不能写一条连破窗都解不开的预案。
   const exitList = exits.includes('破窗') ? exits : [...exits, '破窗']
 
+  // 依据：这条预案是冲着哪张模式卡立的（行为大脑 K3）。可以不写；写了就得是 M-xx。
+  const basis = raw['依据'] === undefined || raw['依据'] === null || raw['依据'] === '' ? '' : String(raw['依据'])
+  if (basis && !/^M-\d{2,4}$/.test(basis)) err('bad-basis', '依据', '依据写模式卡编号，比如 M-03')
+
   if (errors.length) return { ok: false, errors }
   return {
     ok: true,
@@ -315,6 +321,7 @@ export function validatePreset(raw, opts = {}) {
       note: String(raw['说明'] ?? '').slice(0, 120),
       fixed: builtin && raw.fixed === true,
       builtin,
+      basis,
       source: String(raw['来源'] ?? (builtin ? '内置' : '')).slice(0, 20),
     },
   }
@@ -342,6 +349,7 @@ export function rawOf(p) {
   if (p.cond !== null && p.cond !== undefined) out['条件'] = p.cond
   if (p.note) out['说明'] = p.note
   if (p.source) out['来源'] = p.source
+  if (p.basis) out['依据'] = p.basis
   return out
 }
 
@@ -379,7 +387,10 @@ export function allPresets(doc) {
   for (const [id, raw] of Object.entries(d.custom)) {
     if (BUILTIN_IDS.has(id)) continue
     const v = validatePreset({ ...raw, id })
-    if (v.ok) out.push({ ...v.preset, version: num(d.versions[id], 1), createdAt: num(raw.createdAt), shadowSince: num(raw.shadowSince), by: String(raw.by || '') })
+    if (v.ok) {
+      out.push({ ...v.preset, version: num(d.versions[id], 1), createdAt: num(raw.createdAt), shadowSince: num(raw.shadowSince),
+        by: String(raw.by || ''), sunsetAt: num(raw.sunsetAt) })
+    }
   }
   return out
 }
@@ -453,7 +464,10 @@ function writePreset(d, preset, raw, now, by) {
     const shadowSince = preset.status === '影子'
       ? (prev && prev.status === '影子' ? num(keep.shadowSince, now) : now)
       : num(keep.shadowSince)
-    d.custom[id] = { ...raw, id, createdAt: num(keep.createdAt, now), shadowSince, by: keep.by || by }
+    // AI 立的才有日落；他自己立的不会自动失效。续期只改 sunsetAt，不在这里动。
+    const owner = keep.by || by
+    const sunsetAt = num(keep.sunsetAt) || (owner === 'ai' ? now + SUNSET_MS : 0)
+    d.custom[id] = { ...raw, id, createdAt: num(keep.createdAt, now), shadowSince, by: owner, sunsetAt }
   }
 }
 
@@ -539,6 +553,33 @@ export function settlePending(doc, now) {
   }
   d.pending = d.pending.filter((x) => num(x.effectiveAt) > now)
   return { doc: d, applied }
+}
+
+/**
+ * 日落：AI 立的预案到了 30 天还没续期，自动停用。这不是「放宽」——是这条规则本来就只立了 30 天。
+ * @returns {{doc:object, expired:string[]}}
+ */
+export function settleSunset(doc, now) {
+  const d = normalizeDoc(doc)
+  const expired = []
+  for (const p of allPresets(d)) {
+    if (p.builtin || !p.sunsetAt || p.sunsetAt > now || p.status === '停用') continue
+    writePreset(d, { ...p, status: '停用' }, rawOf({ ...p, status: '停用' }), now, p.by || 'ai')
+    expired.push(p.id)
+  }
+  return { doc: d, expired }
+}
+
+/**
+ * 续期：再给 30 天。这一版只有他能续；等实验评估（K5）接上以后，评估有效的才允许鲸澜自己续。
+ */
+export function renew(doc, id, now, by) {
+  const d = normalizeDoc(doc)
+  const raw = d.custom[id]
+  if (!isPlain(raw) || !num(raw.sunsetAt)) return { ok: false, code: 'no-sunset', message: '这条预案没有日落', doc: d }
+  if (by !== 'user') return { ok: false, code: 'needs-user', message: '续期现在只有他能做', doc: d }
+  d.custom[id] = { ...raw, sunsetAt: now + SUNSET_MS }
+  return { ok: true, message: '续了 30 天', doc: d, sunsetAt: now + SUNSET_MS }
 }
 
 /** 某条预案的历史版本（新的在前）。 */
