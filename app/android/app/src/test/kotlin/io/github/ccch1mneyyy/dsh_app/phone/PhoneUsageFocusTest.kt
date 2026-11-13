@@ -84,15 +84,17 @@ class PhoneUsageFocusTest {
     fun `usage reports minutes, opens and the switch order`() {
         report = UsageReport(
             listOf(AppUsage("tv.danmaku.bili", "哔哩哔哩", 12, 3)),
-            listOf(UsageSwitch(0L, "tv.danmaku.bili"), UsageSwitch(60_000L, "com.tencent.mm")),
+            // SystemActions 交给上层时已经是新→旧
+            listOf(UsageSwitch(60_000L, "com.tencent.mm"), UsageSwitch(0L, "tv.danmaku.bili")),
         )
         val text = core.call(PhoneToolCatalog.USAGE, emptyMap()).text
         assertTrue(text, text.contains("哔哩哔哩"))
         assertTrue(text, text.contains("tv.danmaku.bili"))
         assertTrue(text, text.contains("12 分钟"))
         assertTrue(text, text.contains("打开 3 次"))
-        // 新→旧：最后一条事件排在最前面
-        assertTrue(text, text.indexOf("com.tencent.mm") < text.indexOf("tv.danmaku.bili"))
+        // 新→旧：最后一条事件排在最前面（只看切换段，上面的时长行也含包名）
+        val switches = text.substringAfter("最近的切换")
+        assertTrue(text, switches.indexOf("com.tencent.mm") < switches.indexOf("tv.danmaku.bili"))
     }
 
     @Test
