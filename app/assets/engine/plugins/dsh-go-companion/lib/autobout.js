@@ -66,6 +66,29 @@ export function swapBout(input) {
   }
 }
 
+/**
+ * 排一段专注之前必须问清的三件事。缺一项就不排——不问清就排出来的「接下来两小时刷题」
+ * 到了现场只能靠发挥，而发挥正是这一层要拦掉的东西。
+ *
+ * 三项不是随便挑的：领域决定这一局里哪些 App 算在任务里（同一 App 在不同任务里意义不同），
+ * 休息时段决定什么时候该停（不写就没人叫停），交付物决定这一局怎么算完（没它就是一串没有终点的拍）。
+ */
+export const REQUIRED_ANSWERS = ['domain', 'breakAt', 'deliver']
+const ANSWER_LABEL = { domain: '今天刷哪些领域', breakAt: '什么时候休息', deliver: '这一段要交出什么' }
+
+/** 还没答的必答项。空数组＝可以排。 */
+export function missingAnswers(input) {
+  const a = input && typeof input === 'object' ? input : {}
+  return REQUIRED_ANSWERS.filter((k) => !String(a[k] == null ? '' : a[k]).trim())
+}
+
+/** 缺项时叫她去问的那一句。都答了返回空串。 */
+export function answerPrompt(missing) {
+  const list = (Array.isArray(missing) ? missing : []).map((k) => ANSWER_LABEL[k]).filter(Boolean)
+  if (!list.length) return ''
+  return '先问清：' + list.join('、') + '。缺一项不排。'
+}
+
 /** 「不开」不许说。命中就给他一条别的路，而不是拦住不回应。 */
 const NO_OPEN = ['不开', '不想开', '今天不开了', '不做了', '免了', '跳过这局']
 

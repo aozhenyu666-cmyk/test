@@ -490,7 +490,7 @@ test('W3 磁贴：没有在跑的局就是 false，没拍就是 0', () => {
 
 test('W3 磁贴：什么数据都没有时也不抛，字段形状不变', () => {
   const status = boutsTileStatus()
-  assert.deepEqual(Object.keys(status).sort(), ['ask', 'at', 'beats', 'bout', 'running', 'until'])
+  assert.deepEqual(Object.keys(status).sort(), ['ask', 'at', 'beats', 'bout', 'nudge', 'running', 'until'])
   assert.equal(status.beats, 0)
   assert.equal(status.running, false)
 })

@@ -14,7 +14,7 @@ import { join } from 'node:path'
 
 import { builtinProtocolOf, builtinProtocols, brokenBuiltins } from '../lib/builtin.js'
 import { openBoutsDb, listBeats, listVerdicts, runningBout } from '../lib/bouts.js'
-import { createOfficial, judgeReply, checkPhrase, hisLimitOf, RETRY_LIMIT, OUTING_LIMIT, HIS_LIMIT, OFFICIAL_LIMIT } from '../lib/boutrun.js'
+import { createOfficial, judgeReply, checkPhrase, hisLimitOf, RETRY_LIMIT, OUTING_LIMIT, HIS_LIMIT, OFFICIAL_LIMIT, NUDGE_LEAD_SEC } from '../lib/boutrun.js'
 import { loadProtocol } from '../lib/protocol.js'
 
 const BUILTIN_IDS = ['execute', 'study', 'outing', 'design', 'rest']
@@ -366,5 +366,97 @@ test('J4 收支：收局后不再接受应答', () => {
     official.close('abandoned')
     assert.equal(official.view().closed, true)
     assert.equal(official.answer('还有一句话').accepted, false)
+  })
+})
+
+// ---------------------------------------------------------------- P5 双信号提醒（一）
+//
+// 信号一：这一拍限时到点没交。到点由 tick 走超时出口（这个出口以前没有任何调用方，
+// 所以「限时」在代码里只是一块面板上的数字）；nudge 负责在到点之前先催一句。
+// 到点那一刻才说话已经晚了——那一刻这一拍已经按超时出口走掉。
+
+const CLOCK0 = Date.parse('2026-11-12T09:00:00+08:00')
+
+/** 让局的时钟走到开局后 offsetSec 秒，连催 times 次。 */
+function nudgeAfter(protocolId, offsetSec, times = 1) {
+  const protocol = openWith(protocolId)
+  return withDb(({ home, db }) => {
+    const clock = { v: CLOCK0 }
+    const official = createOfficial({ protocol, db, home, now: () => clock.v })
+    official.start()
+    const limitSec = Number(protocol.steps[0].limitSec)
+    clock.v = CLOCK0 + offsetSec * 1000
+    const out = []
+    for (let i = 0; i < times; i += 1) out.push(official.nudge(clock.v))
+    return { limitSec, out, view: official.view() }
+  })
+}
+
+test('P5 催：离到点还远就不吵他', () => {
+  const r = nudgeAfter('execute', 30)
+  assert.equal(r.limitSec, 120)
+  assert.equal(r.out[0].due, false)
+  assert.equal(r.out[0].say, '')
+  assert.equal(r.view.nudge, '')
+})
+
+test('P5 催：剩不到 NUDGE_LEAD_SEC 秒才催，并且说清还剩多少秒', () => {
+  const r = nudgeAfter('execute', 120 - NUDGE_LEAD_SEC + 1, 1)
+  assert.equal(r.out[0].due, true)
+  assert.equal(r.out[0].leftSec, NUDGE_LEAD_SEC - 1)
+  assert.match(r.out[0].say, /还剩 \d+ 秒。交。/)
+})
+
+test('P5 催：同一拍只催一次（每 minute 说一遍就成了复读机）', () => {
+  const r = nudgeAfter('execute', 61, 2)
+  assert.equal(r.out[0].due, true)
+  assert.equal(r.out[1].due, false)
+})
+
+test('P5 催：催过的那一句留在 view 上，常驻通知读它', () => {
+  const r = nudgeAfter('execute', 61, 1)
+  assert.equal(r.view.nudge, r.out[0].say)
+  assert.notEqual(r.view.nudge, '')
+})
+
+test('P5 催：已经过点不催——那是 tick 的活，这一拍已经算没交', () => {
+  const r = nudgeAfter('execute', 120, 1)
+  assert.equal(r.out[0].due, false)
+  assert.equal(r.view.nudge, '')
+})
+
+test('P5 到点没交：这一拍落成一条 timeout，账上看得见', () => {
+  const protocol = openWith('execute')
+  withDb(({ home, db }) => {
+    let clock = CLOCK0
+    const official = createOfficial({ protocol, db, home, now: () => clock })
+    official.start()
+    const stepId = official.view().stepId
+    clock = CLOCK0 + 121 * 1000
+    const r = official.tick(clock)
+    assert.equal(r.state, 'running', 'execute 的超时出口是下一步，不是收局')
+    const bout = runningBout(db)
+    const beats = listBeats(db, bout.id)
+    assert.equal(beats.length, 1, '没交也是一拍，不能凭空消失')
+    assert.equal(beats[0].stepId, stepId)
+    assert.equal(beats[0].verdict, 'timeout')
+    assert.equal(beats[0].channel, 'none')
+    const verdicts = listVerdicts(db, bout.id)
+    assert.equal(verdicts.length, 1)
+    assert.equal(verdicts[0].result, 'timeout')
+    assert.equal(verdicts[0].score, 0)
+  })
+})
+
+test('P5 还没到点不落账：催和记是两回事', () => {
+  const protocol = openWith('execute')
+  withDb(({ home, db }) => {
+    let clock = CLOCK0
+    const official = createOfficial({ protocol, db, home, now: () => clock })
+    official.start()
+    clock = CLOCK0 + 30 * 1000
+    assert.equal(official.nudge(clock).due, false)
+    official.tick(clock)
+    assert.equal(listBeats(db, runningBout(db).id).length, 0)
   })
 })

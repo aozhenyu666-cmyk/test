@@ -40,4 +40,7 @@ object BoutsTileStatus {
 
     /** When this beat runs out, in epoch millis; 0 when unknown or already past. */
     fun until(status: Map<*, *>?): Long = (status?.get("until") as? Number)?.toLong() ?: 0L
+
+    /** The 「还剩 N 秒。交。」 line the plugin writes just before a beat runs out; blank when there is nothing to nudge about. */
+    fun nudge(status: Map<*, *>?): String = (status?.get("nudge") as? String).orEmpty()
 }

@@ -62,6 +62,8 @@ export function boutsTileStatus({ now, beats = [], bouts = [], live = null, prot
     ask: mine ? String(mine.ask || '').slice(0, 80) : '',
     // 绝对毫秒：系统倒计时（setChronometerCountDown）自己走，不用定时器推。
     until: until > (Number(now) || 0) ? until : 0,
+    // 到点前先催的那一句。空＝这一拍没什么可催的。
+    nudge: mine ? String(mine.nudge || '').slice(0, 60) : '',
   }
 }
 

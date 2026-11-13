@@ -332,11 +332,17 @@ class DshService : Service() {
             // 自己走），不靠定时器推。点开是 App，而 App 现在默认就落在局的「现在」页。
             // shortcut: 刷新点是引擎状态变化、切回 App、拉开快捷设置；一拍之内不刷新也不碍事。
             val bouts = if (phoneLine == null && voice == null) BoutsTileStatus.read(context.filesDir) else null
+            // 快到点了先催一句：这一句比局名和问题都急，有它就只显示它。
+            val nudge = if (BoutsTileStatus.running(bouts)) BoutsTileStatus.nudge(bouts) else ""
             val boutLine = if (BoutsTileStatus.running(bouts)) {
-                listOf(BoutsTileStatus.bout(bouts), BoutsTileStatus.ask(bouts))
-                    .filter { it.isNotEmpty() }
-                    .joinToString(" · ")
-                    .takeIf { it.isNotEmpty() }
+                if (nudge.isNotEmpty()) {
+                    nudge
+                } else {
+                    listOf(BoutsTileStatus.bout(bouts), BoutsTileStatus.ask(bouts))
+                        .filter { it.isNotEmpty() }
+                        .joinToString(" · ")
+                        .takeIf { it.isNotEmpty() }
+                }
             } else {
                 null
             }

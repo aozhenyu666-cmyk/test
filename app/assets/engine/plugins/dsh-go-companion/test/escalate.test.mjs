@@ -243,6 +243,43 @@ test('P4 L2：非工作时段不核对', () => {
   assert.equal(evaluateL({ state: s, now, min: MIN(13), day: DAY, kind: DAY_WORKDAY, settings: S, foreground: 'com.bilibili' }).rule, '')
 })
 
+// ---------------------------------------------------------------- P5 双信号提醒（二）
+//
+// 信号二：前台偏离任务外的 App。局在跑的时候不管几点，开了没声明的应用就是偏离
+// ——局本来就规定了这一段做什么。这里只放宽 L2 的观察窗口，work 不动：
+// work 还管着 L1/L3 的阈值和娱乐累计，那两档在局里一起放宽就是另一件事了。
+
+test('P5 局里偏离：非工作时段，局在跑时核对照常触发', () => {
+  const now = at(13)
+  const s = { ...fresh(), l2: { pkg: 'com.bilibili', since: now - 20 * 60_000, askedAt: 0 } }
+  const r = evaluateL({
+    state: s, now, min: MIN(13), day: DAY, kind: DAY_WORKDAY, settings: S,
+    foreground: 'com.bilibili', declared: ['com.work'], inBout: true,
+  })
+  assert.equal(r.rule, 'L2')
+  assert.equal(r.action.type, 'confirm')
+})
+
+test('P5 局里偏离：局在跑但用的是声明过的应用，不核对', () => {
+  const now = at(13)
+  const s = { ...fresh(), l2: { pkg: 'com.work', since: now - 40 * 60_000, askedAt: 0 } }
+  const r = evaluateL({
+    state: s, now, min: MIN(13), day: DAY, kind: DAY_WORKDAY, settings: S,
+    foreground: 'com.work', declared: ['com.work'], inBout: true,
+  })
+  assert.equal(r.rule, '')
+})
+
+test('P5 局里偏离：局在跑不放宽 L1（娱乐累计按原来的时段算）', () => {
+  const now = at(13)
+  const s = { ...fresh(), funRun: { pkg: 'com.douyin', since: now - 16 * 60_000 } }
+  const r = evaluateL({
+    state: s, now, min: MIN(13), day: DAY, kind: DAY_WORKDAY, settings: S,
+    foreground: 'com.douyin', funPackage: true, declared: [], inBout: true,
+  })
+  assert.equal(r.rule, '', '非工作时段 16 分钟不该按工作时段 15 分钟锁')
+})
+
 test('P4 L3：当天娱乐累计 60 分钟 → 剩余全天锁', () => {
   const now = at(10)
   const s = { ...fresh(), funToday: 50 * 60_000 }

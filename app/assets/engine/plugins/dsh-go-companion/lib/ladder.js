@@ -110,6 +110,7 @@ export function funStep(state, input) {
     declared: input?.declared,
     funDeltaMs: Number(input?.funDeltaMs) || 0,
     answeredAt: Number(input?.answeredAt) || 0,
+    inBout: input?.inBout === true,
   })
   return { state: v.state, verdict: v.rule ? v : null }
 }

@@ -399,3 +399,49 @@ test('Gemini 互动舱：/plan 带 session 白名单，两个人格都能开、�
     assert.equal(t.big.tools.gemini_end.execute({}).ok, false, '没开的时候收工要拒绝')
   })
 })
+
+// ---------------------------------------------------------------- P5 必答项接线
+//
+// 规则在 autobout.js（missingAnswers），这里验的是接线：工具真的会挡住、真的点名缺哪条，
+// 答了的真的进提示——不然问完就丢，等于没问。
+
+test('P5 排局前先问必答项：缺项工具点名，不排', async () => {
+  await withHome(async (home) => {
+    const t = setup(home, { state: 'standby' })
+    const tool = t.sis.tools.start_task_mode
+    assert.ok(tool, '待命状态下要挂 start_task_mode')
+
+    const r1 = tool.execute({ mode: 'task', reason: '他说接下来两小时刷题', goal: '做完 40 题' })
+    assert.equal(r1.ok, false)
+    assert.equal(r1.code, 'field-missing')
+    assert.deepEqual(r1.missing, ['domain', 'breakAt'])
+    assert.match(r1.text, /今天刷哪些领域/)
+    assert.match(r1.text, /什么时候休息/)
+    assert.doesNotMatch(r1.text, /这一段要交出什么/, '目标已经给了，不该再问一遍')
+  })
+})
+
+test('P5 三项齐了就排上，领域和休息时段进提示', async () => {
+  await withHome(async (home) => {
+    const t = setup(home, { state: 'standby' })
+    const r = t.sis.tools.start_task_mode.execute({
+      mode: 'task', reason: '他说接下来两小时刷题', goal: '做完 40 题',
+      domain: '线性代数第三章', breakAt: '做满 50 分钟歇 10 分钟',
+    })
+    assert.equal(r.ok, true, JSON.stringify(r))
+    assert.match(r.text, /做完 40 题/)
+
+    const config = JSON.parse(readFileSync(join(home, 'companion', 'config.json'), 'utf8'))
+    assert.equal(config.gear, 'busy')
+    assert.equal(config.taskDomain, '线性代数第三章')
+    assert.equal(config.taskBreakAt, '做满 50 分钟歇 10 分钟')
+  })
+})
+
+test('P5 拒绝模式不用必答项：它不排局，只锁娱乐', async () => {
+  await withHome(async (home) => {
+    const t = setup(home, { state: 'standby' })
+    const r = t.sis.tools.start_task_mode.execute({ mode: 'refuse', reason: '他说别让我玩', minutes: 30 })
+    assert.equal(r.ok, true, JSON.stringify(r))
+  })
+})

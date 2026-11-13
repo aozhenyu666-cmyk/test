@@ -56,6 +56,9 @@ export function applyGear(config, sw, now = Date.now()) {
     c.taskGoal = sw.task ? String(sw.task.goal || c.gearWhat).slice(0, 120) : undefined
     c.taskBy = sw.task ? String(sw.task.by || 'ai') : undefined
     c.taskReason = sw.task ? String(sw.task.reason || '').slice(0, 160) || undefined : undefined
+    // 必答项里另外两条：范围与什么时候休息。排进去就得进提示，否则问过就丢了。
+    c.taskDomain = sw.task ? String(sw.task.domain || '').slice(0, 120) || undefined : undefined
+    c.taskBreakAt = sw.task ? String(sw.task.breakAt || '').slice(0, 60) || undefined : undefined
     if (!(Number(c.refuseUntil) > sw.until)) {
       c.refuseUntil = sw.until
       c.refuseBy = 'gear'
@@ -66,6 +69,8 @@ export function applyGear(config, sw, now = Date.now()) {
     c.taskGoal = undefined
     c.taskBy = undefined
     c.taskReason = undefined
+    c.taskDomain = undefined
+    c.taskBreakAt = undefined
     if (c.refuseBy === 'gear') {
       c.refuseUntil = 0
       c.refuseBy = undefined
@@ -93,6 +98,8 @@ export function gearLines(config, now = Date.now()) {
   if (config.taskBy) {
     return ['任务模式（' + (config.taskBy === 'strategist' ? '鲸澜' : config.taskBy === 'companion' ? '鱼丸' : '你们') + '立的）：' + (config.taskGoal || config.gearWhat) +
       '，还剩约 ' + left + ' 分钟' + (config.taskReason ? '；立的理由：' + config.taskReason : '') + '。娱乐全锁。' +
+      (config.taskDomain ? '这一段的范围：' + config.taskDomain + '。' : '') +
+      (config.taskBreakAt ? '休息安排：' + config.taskBreakAt + '。' : '') +
       '他说做完了：要证据（讲清做到哪 / 截图 / 你读屏看），姐姐验收合格才 end_task_mode；他求情、讲条件都不松。']
   }
   return ['他现在在忙：' + (config.gearWhat || '正事') + '，还剩约 ' + left + ' 分钟（他自己定的）。他来找你闲扯就短回一句、催他回去；正事照常聊。娱乐 App 现在一开就会被锁。']

@@ -3,8 +3,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  OFFHOUR_GRACE_MS, OFFHOUR_IDLE_MIN, SWAP_QUOTA,
-  nextDue, offhour, refuseOpen, swapBout, swapQuota,
+  OFFHOUR_GRACE_MS, OFFHOUR_IDLE_MIN, REQUIRED_ANSWERS, SWAP_QUOTA,
+  answerPrompt, missingAnswers, nextDue, offhour, refuseOpen, swapBout, swapQuota,
 } from '../lib/autobout.js'
 import { DAY_RESTDAY, DAY_WORKDAY, settingsOf } from '../lib/settings.js'
 
@@ -148,6 +148,43 @@ test('P2 正在局里就不再提议', () => {
   const r = offhour({ now: at(13) + 40 * 60_000, min: MIN(13, 40), kind: DAY_WORKDAY, settings: S, running: { id: 'x' } })
   assert.equal(r.act, 'none')
   assert.equal(r.why, 'already-running')
+})
+
+// ---------------------------------------------------------------- P5 必答项
+//
+// 「接下来两小时刷题」这句话本身不是计划：领域、休息时段、交付物缺一条，
+// 排出来的就是一张到现场只能靠发挥的表。规则在这里，接线在 index.js 的 start_task_mode。
+
+test('P5 三项都答了才让排', () => {
+  assert.deepEqual(REQUIRED_ANSWERS, ['domain', 'breakAt', 'deliver'])
+  assert.deepEqual(missingAnswers({ domain: '线性代数第三章', breakAt: '做满 50 分钟歇 10 分钟', deliver: '做完 40 题' }), [])
+  assert.equal(answerPrompt([]), '')
+})
+
+test('P5 缺一项就点出是哪一项', () => {
+  const missing = missingAnswers({ domain: '线性代数第三章', deliver: '做完 40 题' })
+  assert.deepEqual(missing, ['breakAt'])
+  assert.match(answerPrompt(missing), /什么时候休息/)
+})
+
+test('P5 三条全缺时按固定顺序点，不重不漏', () => {
+  const missing = missingAnswers({})
+  assert.deepEqual(missing, ['domain', 'breakAt', 'deliver'])
+  const prompt = answerPrompt(missing)
+  assert.match(prompt, /今天刷哪些领域/)
+  assert.match(prompt, /什么时候休息/)
+  assert.match(prompt, /这一段要交出什么/)
+  assert.match(prompt, /缺一项不排/)
+})
+
+test('P5 只写了空白的算没答', () => {
+  assert.deepEqual(missingAnswers({ domain: '   ', breakAt: '\n', deliver: '做完 40 题' }), ['domain', 'breakAt'])
+})
+
+test('P5 参数不是对象也不抛', () => {
+  assert.deepEqual(missingAnswers(null), ['domain', 'breakAt', 'deliver'])
+  assert.deepEqual(missingAnswers(undefined), ['domain', 'breakAt', 'deliver'])
+  assert.equal(answerPrompt(['不认识的字段']), '')
 })
 
 test('P2 休息日也算非工作时段', () => {

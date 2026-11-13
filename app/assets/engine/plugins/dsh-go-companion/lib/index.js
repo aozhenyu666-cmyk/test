@@ -102,6 +102,8 @@ import { parseBank } from './bank.js'
 import { expandThinking } from './thinking.js'
 import { loadProtocol } from './protocol.js'
 import { createOfficial } from './boutrun.js'
+// 第八轮 P5：排一段专注之前的必答项。规则在 autobout.js，这里只接线。
+import { answerPrompt, missingAnswers } from './autobout.js'
 import { listBouts, listEscalations, listVerdicts, openBoutsDb, reapRunning, runningBout, startEscalation } from './bouts.js'
 // 第八轮 P4 接线：一条回答 → 分类 → 记敷衍 → 判升级 → 落手机。全部在 ladder.js 里，
 // 这里只负责把状态读写、数据库、手机快照喂给它。
@@ -2058,13 +2060,17 @@ export function apply(ctx) {
       name: 'start_task_mode',
       description: '给他立一个任务（**只在他主动要求时**：他说"给我立个任务""盯我 45 分钟""这一个小时别让我玩"）。' +
         'mode=task 任务模式（有目标，到点报到一次，娱乐按规则锁，验收合格才结束）；mode=refuse 只锁娱乐不立目标。' +
-        '他没要求时不要调用——规矩由墙执行，你只在他点名要的时候帮他立。立完告诉他做了什么、为什么、第一步是什么。',
+        '他没要求时不要调用——规矩由墙执行，你只在他点名要的时候帮他立。立完告诉他做了什么、为什么、第一步是什么。' +
+        'task 还有三条必答：goal（这一段要交出什么）、domain（涉及哪些领域/范围）、breakAt（什么时候休息）。' +
+        '缺一条工具会返回 field-missing 并点名缺哪条：那就先问他，别自己编一个填上去。',
       parameters: {
         type: 'object',
         properties: {
           mode: { type: 'string', enum: ['task', 'refuse'] },
           minutes: { type: 'integer', minimum: 10, maximum: 180, description: '时长，默认 45' },
           goal: { type: 'string', description: 'task：具体做什么、做到什么程度（例：周报写完第一部分 500 字）' },
+          domain: { type: 'string', description: 'task：这一段涉及哪些领域/范围（例：线性代数第三章、英语阅读）' },
+          breakAt: { type: 'string', description: 'task：什么时候休息（例：做满 50 分钟歇 10 分钟）' },
           reason: { type: 'string', description: '为什么现在立（看到了什么）' },
         },
         required: ['mode', 'reason'],
@@ -2088,8 +2094,14 @@ export function apply(ctx) {
           return { ok: true, text: '拒绝模式开到 ' + hm + '，娱乐 App 一开就锁。' }
         }
         const goal = String(args.goal || '').trim().slice(0, 120)
-        if (!goal) return { ok: false, text: '任务要有具体目标（做什么、做到什么程度）。' }
-        setGear({ gear: 'busy', until, what: goal.slice(0, 20), task: { goal, by: role, reason } }, 'ai-' + role)
+        // 必答项：领域、休息时段、交付物缺一项就不排。先问她该问的那几句，
+        // 排到现场再靠发挥，正是这一层要拦掉的东西。
+        const missing = missingAnswers({ domain: args.domain, breakAt: args.breakAt, deliver: goal })
+        if (missing.length) {
+          record({ state: 'task-refused', at: now, by: role, missing })
+          return { ok: false, code: 'field-missing', missing, text: answerPrompt(missing) }
+        }
+        setGear({ gear: 'busy', until, what: goal.slice(0, 20), task: { goal, by: role, reason, domain: String(args.domain).trim().slice(0, 120), breakAt: String(args.breakAt).trim().slice(0, 60) } }, 'ai-' + role)
         record({ state: 'task-start', at: now, mode: 'task', minutes, by: role, goal, reason })
         wallCloseOnStart(now)
         return { ok: true, text: '任务模式立好了：' + goal + '，到 ' + hm + '。娱乐全锁，到点交墙验收（submit_to_wall kind=review）。' }
@@ -4488,11 +4500,47 @@ export function apply(ctx) {
       funPackage: fun,
       declared: declaredApps(),
       funDeltaMs,
+      // 局在跑：L2 的「用了没声明的应用就核对」不再等进工作时段。
+      inBout: Boolean(live && !live.official.view().closed),
     })
     saveLadderDoc({ ...loadLadderDoc(), ladder: r.state })
     if (!r.verdict) return null
     raiseEscalation(r.verdict, now)
     return r.verdict
+  }
+
+  /**
+   * 局内的节拍：每分钟一次，只做两件事。
+   *
+   *   1. 这一拍的限时到了没有（official.tick）。到点没交就走协议写明的超时出口，
+   *      并按「没交」在升级阶梯上记一次。这一步以前没有任何调用方——「限时」因此只是
+   *      面板上的一个数字，到点什么都不发生，局会一直停在那一拍上等他。
+   *   2. 还没到点、但快到点了：先催一句（official.nudge），由常驻通知显示出来。
+   *      只催一次；到点才说话已经晚了，那一刻已经按超时出口走掉了。
+   *
+   * shortcut: 跟着 planBeat 的 60 秒节拍走，所以最晚会比限时晚 60 秒发现他超时。
+   * 要更准就单独起一个 15 秒的定时器——代价是这一套每 15 秒醒一次。
+   */
+  function boutBeat(now) {
+    if (!live) return null
+    const t = live.official.tick(now)
+    if (t.state === 'closed' || t.state === 'escalated') {
+      const boutId = live.official.boutId
+      record({ state: 'bout-timeout', at: now, boutId, result: String(t.state), reason: String(t.reason || '') })
+      // 到点没交＝这一拍没接：跟「答错重打」分开记，升级阶梯按 timedOut 分类。
+      try {
+        ladderAnswer('', { timedOut: true, now })
+      } catch (error) {
+        console.error('[companion] 超时记阶梯失败：' + String((error && error.message) || error))
+      }
+      dropLive()
+      return t
+    }
+    const n = live.official.nudge(now)
+    if (n.due) {
+      record({ state: 'bout-nudge', at: now, boutId: live.official.boutId, stepId: String(n.stepId || ''), leftSec: Number(n.leftSec) || 0 })
+    }
+    return n.due ? n : t
   }
 
   // 第八轮 P1/P2：计划的节拍。每分钟一次，只做两件事——把今天的计划维护在文件里，
@@ -4508,6 +4556,11 @@ export function apply(ctx) {
       ladderTick(now)
     } catch (error) {
       console.error('[companion] 升级阶梯失败：' + String((error && error.message) || error))
+    }
+    try {
+      boutBeat(now)
+    } catch (error) {
+      console.error('[companion] 局内节拍失败：' + String((error && error.message) || error))
     }
     const day = startOfDay(now, tz)
     const r = tick({

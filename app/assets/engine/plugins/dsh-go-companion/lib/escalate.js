@@ -162,7 +162,11 @@ export function evaluateL(input) {
   }
 
   // L2：工作时段内，当前局没声明的应用连续用到阈值 → 局官核对；2 分钟不答就锁它。
-  if (work && input.foreground && !(Array.isArray(input.declared) && input.declared.includes(input.foreground))) {
+  // 局在跑的时候也算：局里本来就规定了这一段做什么，这时候开个没声明的 App 就是偏离，
+  // 跟几点钟无关。注意这里只放宽 L2 的观察窗口，不动 work——work 还管着 L1/L3 两档的阈值
+  // 和娱乐累计，局里把它们一起放宽就是另一件事了。
+  const watch = work || input.inBout === true
+  if (watch && input.foreground && !(Array.isArray(input.declared) && input.declared.includes(input.foreground))) {
     const pkg = String(input.foreground)
     const since = next.l2?.pkg === pkg ? num(next.l2.since) : now
     const askedAt = next.l2?.pkg === pkg ? num(next.l2.askedAt) : 0

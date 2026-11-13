@@ -112,4 +112,26 @@ class BoutsTileStatusTest {
         assertEquals("", BoutsTileStatus.ask(status))
         assertEquals("", BoutsTileStatus.bout(status))
     }
+
+    @Test
+    fun readsTheNudgeLineJustBeforeABeatRunsOut() {
+        write(
+            "runtime/rootfs/root/.dsh",
+            """{"beats":4,"running":true,"bout":"学习局","ask":"这一步要交什么","nudge":"还剩 40 秒。交。"}""",
+        )
+
+        val status = BoutsTileStatus.read(dir.root)
+
+        assertEquals("还剩 40 秒。交。", BoutsTileStatus.nudge(status))
+    }
+
+    @Test
+    fun aMissingNudgeIsBlankRatherThanCrashing() {
+        // Written before the field existed, or between beats: the notification just shows the question again.
+        write(".dsh", """{"beats":2,"running":true,"ask":"这一步要交什么"}""")
+
+        assertEquals("", BoutsTileStatus.nudge(BoutsTileStatus.read(dir.root)))
+        assertEquals("", BoutsTileStatus.nudge(mapOf("nudge" to 7)))
+        assertEquals("", BoutsTileStatus.nudge(null))
+    }
 }

@@ -30,6 +30,11 @@ export const CHAOS_TOPICS = 3
 export const CHAOS_LONG = 80
 /** 同一拍重打这么多次还不过 → 升级（敷衍的成本必须高于认真）。 */
 export const RETRY_LIMIT = 3
+/**
+ * 这一拍还剩这么多秒的时候先催一句。
+ * 到点那一刻才说「你没交」已经晚了：他还没来得及交，这一拍就按超时出口走掉了。
+ */
+export const NUDGE_LEAD_SEC = 60
 
 export function hisLimitOf(protocol) {
   return protocol && protocol.id === 'outing' ? OUTING_LIMIT : HIS_LIMIT
@@ -115,6 +120,8 @@ export function createOfficial(options = {}) {
   let closed = false
   /** 周期步下一句该在什么时候问；0 表示不等，随时可以问。 */
   let nextAskAt = 0
+  /** 上一次催过的拍（stepId@askedAt）与那句催的话。同一拍只催一次。 */
+  let nudged = { key: '', say: '' }
 
   function sayNow() {
     const step = runner.current()
@@ -239,7 +246,22 @@ export function createOfficial(options = {}) {
     /** 到点没答：走这一拍的超时出口。 */
     tick(at) {
       if (closed) return { state: 'closed', say: '' }
-      const result = runner.tick(at === undefined ? now() : at)
+      const when = at === undefined ? now() : Number(at)
+      // 这一拍的身份得在 tick 之前拿：tick 会推进 index，之后就变成下一拍了。
+      const stepId = (protocol.steps[runner.index] || {}).id || ''
+      const askedAt = runner.askedAt()
+      const result = runner.tick(when)
+      // 真超时才落账。「还没到点」「这一拍本来没限时」「还在念」都不算他没交。
+      const missed = !['not-yet', 'no-limit', 'speaking', 'not-running'].includes(String(result.reason || ''))
+      if (missed && boutId && db) {
+        const beat = addBeat(db, {
+          boutId, stepId, askedAt, channel: 'none', answer: '', metrics: {}, verdict: 'timeout',
+          retries: runner.retries, now: when, home,
+        })
+        addVerdict(db, {
+          boutId, beatId: beat.ok ? beat.id : '', layer: 'code', result: 'timeout', score: 0, quote: '', now: when, home,
+        })
+      }
       if (result.state === 'closed') return finish('timeout')
       if (result.state === 'escalated') return finish('escalated')
       return { ...result, say: sayNow() }
@@ -264,9 +286,36 @@ export function createOfficial(options = {}) {
       return { due: true, askAt: when, say: sayNow() }
     },
 
+    /**
+     * 这一拍快到点了、还没交：先催一句。
+     * 到点那一刻才说话就已经晚了（到点由 tick 走超时出口，那一拍直接算没交），
+     * 所以催的时间点定在「还剩 NUDGE_LEAD_SEC 秒」。同一拍只催一次——
+     * 每一分钟都说一遍就成了复读机，他会开始不理。
+     * @returns {{due:boolean, stepId?:string, leftSec?:number, say:string}}
+     */
+    nudge(at) {
+      if (closed) return { due: false, say: '' }
+      const step = runner.current()
+      const limitSec = Number(step && step.limitSec) || 0
+      if (!step || !limitSec) return { due: false, say: '' }
+      const when = at === undefined ? now() : Number(at)
+      const askedAt = runner.askedAt()
+      const leftMs = askedAt + limitSec * 1000 - when
+      // 已经过点：这是 tick 管的事（走超时出口），不是催。
+      if (leftMs <= 0) return { due: false, stepId: step.id, leftSec: 0, say: '' }
+      const leftSec = Math.ceil(leftMs / 1000)
+      if (leftMs > NUDGE_LEAD_SEC * 1000) return { due: false, stepId: step.id, leftSec, say: '' }
+      const key = String(step.id) + '@' + askedAt
+      if (nudged.key === key) return { due: false, stepId: step.id, leftSec, say: '' }
+      const say = '还剩 ' + leftSec + ' 秒。交。'
+      nudged = { key, say }
+      return { due: true, stepId: step.id, leftSec, say }
+    },
+
     /** 面板要的东西：现在这一拍、剩多少、有没有在写模式。 */
     view() {
       const step = runner.current()
+      const key = step ? String(step.id) + '@' + runner.askedAt() : ''
       return {
         boutId,
         state: runner.state,
@@ -280,6 +329,8 @@ export function createOfficial(options = {}) {
         chaosStreak,
         writeMode,
         nextAskAt,
+        // 只在这一拍还没换的时候给：换拍了旧的那句催已经不作数。
+        nudge: key && nudged.key === key ? nudged.say : '',
       }
     },
   }
