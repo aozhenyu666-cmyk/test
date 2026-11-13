@@ -1,9 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  INTENSITY, JUDGE, MIN_QUOTE, MOVES, RULE_RETEST_MS, archiveRule, codeMajority, faultStep,
+  INTENSITY, JUDGE, MIN_QUOTE, MOVES, RULE_RETEST_MS, archiveRule, codeMajority, expandThinking, faultStep,
   judgeAnswer, missingFor, movesOf, ready, route, rulesDue, scoreSheet, usableMoves, validateThinking,
 } from '../lib/thinking.js'
+// 展开出来的局交给 J2 的执行器跑：这两个就是五个行为局在用的那一路，没有改写。
+import { checkPass, createRunner, loadProtocol } from '../lib/protocol.js'
 
 const DAY = 86_400_000
 const NOW = Date.parse('2026-11-12T09:00:00+08:00')
@@ -273,3 +275,113 @@ test('思维局协议：不许声明墙的能力（升级和锁由引擎定）',
   assert.equal(r.ok, false)
   assert.ok(r.errors.some((e) => e.code === 'unknown-key'))
 })
+
+// ---- 展开成普通步骤 -------------------------------------------------------------
+//
+// 这一节的验收是「执行器一行不改」：展开出来的东西交给 J2 的 loadProtocol + createRunner，
+// 走的就是五个行为局那条路。下面的 10 题是一路真跑过去的，不是拿假 runner 顶。
+
+/** 十道行测题：三招（先答后看 / 定位 / 续接）各轮着来。 */
+const QUESTIONS = Array.from({ length: 10 }, (_, i) => {
+  const n = i + 1
+  return {
+    id: 'q' + n,
+    stem: '第' + n + '题的题干：去年为 500 吨，今年增长两成，今年是多少吨',
+    options: ['A. 520 吨', 'B. 600 吨'],
+    answer: 'B',
+    analysis: ['去年是基数。', '增长两成就是乘以 1.2。'],
+    locate: '去年为 500 吨',
+    // 「续接」要比的是他的记录里有具体名词，所以记录里留一个「和」让名词切得开。
+    record: '材料里的数据和图表',
+    type: '资料分析',
+  }
+})
+
+const THINKING_PROTOCOL = {
+  协议版本: 1,
+  id: 'xingce',
+  名称: '行测三招',
+  类型: '思维',
+  题库: 'xingce-2026',
+  招式: ['先答后看', '定位', '续接'],
+  强度: '中',
+  题数: 10,
+}
+
+test('展开：一题一拍，招数轮着来，摊出来的就是 J2 认的行为局', () => {
+  const r = expandThinking(THINKING_PROTOCOL, { questions: QUESTIONS })
+  assert.equal(r.ok, true, JSON.stringify(r.errors))
+  assert.equal(r.protocol.类型, '行为', '摊完就是行为局')
+  assert.equal(r.protocol.步骤.length, 10)
+  assert.deepEqual(r.plan.map((p) => p.move), ['先答后看', '定位', '续接', '先答后看', '定位', '续接', '先答后看', '定位', '续接', '先答后看'])
+  // 摊出来的东西必须过 J2 的校验（限时、出口、可终止性、条件名都在这一关查）。
+  const loaded = loadProtocol(r.protocol)
+  assert.equal(loaded.ok, true, JSON.stringify(loaded.errors))
+})
+
+test('展开：摊不出来的局整份拒绝，不拿别的招顶替', () => {
+  const one = { ...QUESTIONS[0], locate: '' }
+  const bad = expandThinking({ ...THINKING_PROTOCOL, 招式: ['定位'], 强度: '低', 题数: 1 }, { questions: [one] })
+  assert.equal(bad.ok, false)
+  assert.ok(bad.errors.some((e) => e.code === 'no-move'), '没定位句就该说这题站不住定位')
+
+  const few = expandThinking(THINKING_PROTOCOL, { questions: QUESTIONS.slice(0, 3) })
+  assert.equal(few.ok, false)
+  assert.ok(few.errors.some((e) => e.code === 'not-enough-questions'))
+
+  // 复述靠模型判，摊进普通步骤没有判它的入口。
+  const model = expandThinking({ ...THINKING_PROTOCOL, 招式: ['先答后看', '定位', '续接', '复述'], 强度: '中' }, { questions: QUESTIONS })
+  assert.equal(model.ok, false)
+  assert.ok(model.errors.some((e) => e.code === 'need-code-judge'))
+})
+
+test('展开后跑十题：行测三招一路走到底，收局是 done', () => {
+  const r = expandThinking(THINKING_PROTOCOL, { questions: QUESTIONS })
+  const protocol = loadProtocol(r.protocol).protocol
+  let now = NOW
+  const runner = createRunner(protocol, { now: () => now, remaining: () => 99 })
+
+  const answerFor = (move) => (move === '先答后看' ? 'B' : move === '定位' ? '去年为 500 吨' : '接下来看图表')
+
+  let asked = 0
+  while (runner.state === 'running') {
+    const step = runner.current()
+    const move = r.plan.find((p) => p.id === step.id).move
+    const got = runner.answer(answerFor(move))
+    asked += 1
+    now += 30_000
+    assert.ok(got.state === 'running' || got.state === 'closed', '第 ' + asked + ' 题走下去了')
+    assert.equal(runner.lastPass(), true, '第 ' + asked + ' 题（' + move + '）应该判过')
+  }
+  assert.equal(asked, 10)
+  assert.equal(runner.state, 'closed')
+  assert.equal(runner.endReason, 'done')
+})
+
+test('展开后答错一拍：走「不过」，重打这一拍而不是升级', () => {
+  const r = expandThinking({ ...THINKING_PROTOCOL, 题数: 1 }, { questions: QUESTIONS })
+  const protocol = loadProtocol(r.protocol).protocol
+  const runner = createRunner(protocol, { now: () => NOW })
+  const got = runner.answer('A')
+  assert.equal(got.reason, 'retry')
+  assert.equal(runner.state, 'running')
+  assert.equal(runner.lastPass(), false)
+})
+
+test('招式判定：期望值就是招式名，判词比 pass', () => {
+  const ok = checkPass({ 招式判定: '先答后看' }, { text: 'B', question: Q })
+  assert.equal(ok.pass, true, JSON.stringify(ok.results))
+  assert.equal(ok.results[0].got, 'pass')
+
+  const wrong = checkPass({ 招式判定: '先答后看' }, { text: 'A', question: Q })
+  assert.equal(wrong.pass, false)
+  assert.equal(wrong.results[0].got, 'wrong')
+
+  // 期望值也可以写成对象：题和「他的记录」跟着这一拍走，执行器不需要知道题从哪来。
+  const continued = checkPass({ 招式判定: { move: '续接', question: Q, record: '材料里的数据和图表' } }, { text: '接下来看图表' })
+  assert.equal(continued.pass, true, JSON.stringify(continued.results))
+  // 复述只剩模型判，代码这一层不算过。
+  assert.equal(checkPass({ 招式判定: '复述' }, { text: '去年五百吨今年六百吨', question: Q }).pass, false)
+})
+
+

@@ -290,3 +290,101 @@ export function validateThinking(raw) {
   }
   return { ok: !errors.length, errors }
 }
+
+// ---- 展开成普通步骤（第八轮 P4 的第二条）------------------------------------------------------
+//
+// 思维局的单位是「一题」，J2 的执行器单位是「一步」。两者不打架的办法是：开局时把一题摊成一步，
+// 摊完的局跟学习局、执行局长得一模一样，执行器一行不改。
+//
+// 摊出来的每一步只多一样东西：过关条件是一张「招式判定」，期望值是这一招的名字，
+// 再带上这道题和「他的记录」（checkPass 只把 text 交出去，题从哪来它不需要知道）。
+
+/** 展开出来的协议版本：跟 J2 是同一个 1。这里不 import protocol.js——它 import 本文件，会成环。 */
+const EXPANDED_VERSION = 1
+/** 一拍的限时：默认 2 分钟。答一题够了，也不给他拖到下一局。 */
+export const DEFAULT_STEP_SEC = 120
+
+/** 这一拍问什么：题干，有选项就把选项另起一行附上。 */
+function askOf(question) {
+  const stem = String(question?.stem ?? '').trim()
+  const options = Array.isArray(question?.options)
+    ? question.options.map((o) => String(o ?? '').trim()).filter(Boolean)
+    : []
+  return options.length ? stem + '\n' + options.join('\n') : stem
+}
+
+/**
+ * 把一份思维局协议展开成普通步骤（J2 的格式）。
+ *
+ * 一题一拍，第 i 题用 招式[i % 招数]。这一招在这道题上站不住（没答案 / 没定位句 / 没他的记录）
+ * 就换一招；一招都站不住就整份拒绝——不拿别的招顶替这道题，也不让它带着缺口上场。
+ *
+ * @param {object} raw 思维局协议（题库 / 招式 / 强度 / 题数）
+ * @param {{questions?:object[], limitSec?:number}} options
+ *   questions：题库洗过的题（cleanQuestion 的输出）；`record` 字段是「他的记录」（续接要用）
+ * @returns {{ok:true, protocol:object, plan:{id:string,questionId:string,move:string}[]}|
+ *           {ok:false, errors:{code:string,where:string,message:string}[]}}
+ */
+export function expandThinking(raw, options = {}) {
+  const check = validateThinking(raw)
+  if (!check.ok) return { ok: false, errors: check.errors }
+  const errors = []
+  const err = (code, where, message) => errors.push({ code, where, message })
+
+  const moves = raw['招式'].map((m) => String(m))
+  // shortcut: 靠模型判的招式（复述）摊不进普通步骤——那一层没有「等模型判」的入口，
+  // 摊出去只会让这一拍永远 pending。什么时候该补：boutrun 把模型判词接回步骤流转那天。
+  const byModel = moves.filter((m) => JUDGE[m] === 'model')
+  if (byModel.length) {
+    err('need-code-judge', '招式', '这些招靠模型判，展开成普通步骤没有判它的入口：' + byModel.join('、'))
+  }
+
+  const count = Number(raw['题数'])
+  const pool = (Array.isArray(options.questions) ? options.questions : [])
+    .filter((q) => q && typeof q === 'object' && String(q.stem ?? '').trim())
+  if (pool.length < count) {
+    err('not-enough-questions', '题库', '这一局要 ' + count + ' 道题，库里只有 ' + pool.length + ' 道')
+  }
+  const limitSec = Math.max(10, Math.round(Number(options.limitSec) || DEFAULT_STEP_SEC))
+  if (errors.length) return { ok: false, errors }
+
+  const steps = []
+  const plan = []
+  for (let i = 0; i < count; i += 1) {
+    const question = pool[i]
+    const record = String(question.record ?? '')
+    const preferred = moves[i % moves.length]
+    const move = ready(question, preferred, { record }).ok
+      ? preferred
+      : moves.find((m) => ready(question, m, { record }).ok)
+    if (!move) {
+      err('no-move', '题目[' + i + ']', '这道题没有一招站得住：' + String(question.id ?? ''))
+      continue
+    }
+    const id = 'q' + (i + 1) + '-' + move
+    steps.push({
+      id,
+      问: askOf(question),
+      限时: limitSec + 's',
+      过关: { 招式判定: { move, question, record } },
+      不过: '重打',
+      超时: '升级',
+    })
+    plan.push({ id, questionId: String(question.id ?? ''), move })
+  }
+  if (errors.length) return { ok: false, errors }
+
+  return {
+    ok: true,
+    plan,
+    protocol: {
+      协议版本: EXPANDED_VERSION,
+      id: String(raw.id) + '-expanded',
+      名称: String(raw['名称']),
+      类型: '行为',
+      步骤: steps,
+      收局: { 判定: '按评分单收：每题一条参考链，逐拍对照' },
+    },
+  }
+}
+

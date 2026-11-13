@@ -13,6 +13,8 @@
 // 4. 引擎内只有一个局处于进行中——由 J1 的 bouts_one_running 唯一索引保证，runner 开局也要过它。
 
 import { WALL_CAPABILITIES, capabilityOf, hasCapability, isWallCapability, measure, missingCapabilityProposal } from './capabilities.js'
+// 「招式判定」这一条条件要用 J5 的判招。thinking.js 只 import capabilities.js，不成环。
+import { judgeAnswer } from './thinking.js'
 
 export const PROTOCOL_VERSION = 1
 
@@ -42,6 +44,16 @@ const CONDITIONS = {
     const norm = (s) => String(s || '').replace(/\s+/g, '')
     return (input.recent || []).slice(0, 1).some((r) => norm(r) === norm(input.text))
   },
+  // 思维局展开成普通步骤后，每一拍「这一招答得对不对」就靠这一条。
+  // 期望值就是这个条件唯一要的东西：用哪一招（也可以写成 {move, question, record}，
+  // 那样这道题和「他的记录」都跟着这一步走，执行器不用知道题从哪来）。
+  // 别的条件都是「数比数」，这一条是「判词比 pass」，所以比较规则在 compareCondition 里单独写。
+  招式判定: (input, want) => judgeAnswer({
+    move: String(want && typeof want === 'object' ? want.move : want ?? ''),
+    question: (want && typeof want === 'object' && want.question) || input.question || {},
+    answer: input.text,
+    record: want && typeof want === 'object' ? want.record : undefined,
+  }).verdict,
 }
 
 export function conditionNames() {
@@ -432,7 +444,8 @@ export function checkPass(conditions, input = {}) {
       pass = false
       continue
     }
-    const got = fn(input)
+    // 期望值也传进去：多数条件只拿它比自己算出来的数，但「招式判定」要用它当招式名。
+    const got = fn(input, want)
     const ok = compareCondition(name, got, want)
     if (!ok) pass = false
     results.push({ name, want, got, ok })
@@ -441,6 +454,8 @@ export function checkPass(conditions, input = {}) {
 }
 
 function compareCondition(name, got, want) {
+  // 判词比 pass：'pending'（复述交给模型判）在这一层不算过——代码没判过就不许往下走。
+  if (name === '招式判定') return String(got) === 'pass'
   if (name === '每行最多字' || name === '填充词比例' || name === '应答延迟' || name === '与他近5条的重合率') {
     return Number(got) <= Number(want)
   }

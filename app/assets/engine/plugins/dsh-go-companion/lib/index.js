@@ -97,6 +97,10 @@ import { settingsOf, applySettings, dayKindOf } from './settings.js'
 import { buildSettingsSnapshot, parseDay, parseLimits, settingsMarkdown } from './settings_panel.js'
 import { settingsDayView, settingsLimitsView } from './settings_view.js'
 import { builtinProtocolOf, builtinProtocols } from './builtin.js'
+// 第八轮 P4 的第二条：思维局开局时摊成普通步骤，执行器一行不改。
+import { parseBank } from './bank.js'
+import { expandThinking } from './thinking.js'
+import { loadProtocol } from './protocol.js'
 import { createOfficial } from './boutrun.js'
 import { listBouts, listEscalations, listVerdicts, openBoutsDb, reapRunning, runningBout, startEscalation } from './bouts.js'
 // 第八轮 P4 接线：一条回答 → 分类 → 记敷衍 → 判升级 → 落手机。全部在 ladder.js 里，
@@ -4514,7 +4518,7 @@ export function apply(ctx) {
       min: zoneMinuteOfDay(now, tz),
       stored: readState(stateFile('plan.json'), null),
       running: Boolean(live?.official && !live.official.view().closed),
-      known: builtinProtocols().filter((x) => x.ok).map((x) => x.protocol.id),
+      known: [...builtinProtocols().filter((x) => x.ok).map((x) => x.protocol.id), ...(thinkingProtocol() ? ['thinking'] : [])],
     })
     if (r.action !== 'hold' && r.action !== 'wait-confirm') writeJson(stateFile('plan.json'), r.plan)
     // 挂着的「改松」到点了就在这里落地：这是唯一每分钟都跑一次的地方，不另开定时器。
@@ -5543,8 +5547,27 @@ export function apply(ctx) {
     live = null
   }
 
+  /**
+   * 思维局：题库（stateFile('bank.json')）+ 一份思维协议（config.thinkingProtocol 的四样：
+   * 题库 / 招式 / 强度 / 题数）在开局时展开成普通步骤，再交给 J2 的 loadProtocol 校验。
+   *
+   * 摊不出完整的局就返回 null —— planwire 照旧把它记成「这一型还没装」，不拿别的局顶替。
+   * 这道题站不住某一招、题不够、招式靠模型判，全都属于「摊不出来」。
+   */
+  function thinkingProtocol() {
+    const raw = config.thinkingProtocol
+    if (!raw || typeof raw !== 'object') return null
+    const parsed = parseBank(readState(stateFile('bank.json'), null) || [])
+    if (!parsed.ok) return null
+    const expanded = expandThinking(raw, { questions: parsed.bank.questions })
+    if (!expanded.ok) return null
+    const loaded = loadProtocol(expanded.protocol)
+    return loaded.ok ? loaded.protocol : null
+  }
+
   function startBout(protocolId) {
-    const protocol = builtinProtocolOf(protocolId)
+    const protocol = builtinProtocolOf(protocolId) ||
+      (String(protocolId) === 'thinking' ? thinkingProtocol() : null)
     if (!protocol) return { ok: false, toast: '没有这个协议：' + String(protocolId || '') }
     if (live && !live.official.view().closed) return { ok: false, toast: '已经有一局在跑，先收局。' }
     dropLive()
